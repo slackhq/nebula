@@ -1,0 +1,10 @@
+/nebula
+/nebula-cert
+/nebula-arm
+/nebula-arm6
+/nebula-darwin
+/nebula.exe
+/cert/*.crt
+/cert/*.key
+/coverage.out
+/cpu.pprof

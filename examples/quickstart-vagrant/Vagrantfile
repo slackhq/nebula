@@ -1,0 +1,40 @@
+Vagrant.require_version ">= 2.2.6"
+
+nodes = [
+  { :hostname => 'generic1.vagrant', :ip => '172.11.91.210', :box => 'bento/ubuntu-18.04', :ram => '512', :cpus => 1},
+  { :hostname => 'generic2.vagrant', :ip => '172.11.91.220', :box => 'bento/ubuntu-18.04', :ram => '512', :cpus => 1},
+  { :hostname => 'lighthouse1.vagrant', :ip => '172.11.91.230', :box => 'bento/ubuntu-18.04', :ram => '512', :cpus => 1},
+]
+
+Vagrant.configure("2") do |config|
+
+  config.ssh.insert_key = false
+
+  if Vagrant.has_plugin?('vagrant-cachier')
+    config.cache.enable :apt
+  else
+    printf("** Install vagrant-cachier plugin to speedup deploy: `vagrant plugin install vagrant-cachier`.**\n")
+  end
+
+  if Vagrant.has_plugin?('vagrant-hostmanager')
+    config.hostmanager.enabled = true
+    config.hostmanager.manage_host = true
+    config.hostmanager.include_offline = true
+  else
+    config.vagrant.plugins = "vagrant-hostmanager"
+  end
+
+ nodes.each do |node|
+    config.vm.define node[:hostname] do |node_config|
+      node_config.vm.box = node[:box]
+      node_config.vm.hostname = node[:hostname]
+      node_config.vm.network :private_network, ip: node[:ip]
+      node_config.vm.provider :virtualbox do |vb|
+        vb.memory = node[:ram]
+        vb.cpus = node[:cpus]
+        vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+        vb.customize ['guestproperty', 'set', :id, '/VirtualBox/GuestAdd/VBoxService/--timesync-set-threshold', 10000]
+      end
+    end
+  end
+end

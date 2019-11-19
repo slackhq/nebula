@@ -1,0 +1,160 @@
+# This is the nebula example configuration file. You must edit, at a minimum, the static_host_map, lighthouse, and firewall sections
+
+
+# PKI defines the location of credentials for this node. Each of these can also be inlined by using the yaml ": |" syntax.
+pki:
+  ca: /etc/nebula/ca.crt
+  cert: /etc/nebula/host.crt
+  key: /etc/nebula/host.key
+  #blacklist is a list of certificate fingerprints that we will refuse to talk to
+  #blacklist:
+  #  - c99d4e650533b92061b09918e838a5a0a6aaee21eed1d12fd937682865936c72
+
+# The static host map defines a set of hosts with with fixed IP addresses on the internet (or any network).
+# A host can have multiple fixed IP addresses defined here, and nebula will try each when establishing a tunnel.
+# The syntax is:
+#   "{nebula ip}": ["{routable ip/dns name}:{routable port}"]
+# Example, if your lighthouse has the nebula IP of 192.168.100.1 and has the real ip address of 100.64.22.11 and runs on port 4242:
+static_host_map:
+  "192.168.100.1": ["100.64.22.11:4242"]
+
+
+lighthouse:
+  # am_lighthouse is used to enable lighthouse functionality for a node. This should ONLY be true on nodes
+  # you have configured to be lighthouses in your network
+  am_lighthouse: false
+  # serve_dns optionally starts a dns listener that responds to various queries and can even be
+  # delegated to for resolution
+  #serve_dns: false
+  # interval is the number of seconds between updates from this node to a lighthouse.
+  # during updates, a node sends information about its current IP addresses to each node.
+  interval: 60
+  # hosts is a list of lighthouse hosts this node should report to and query from
+  # IMPORTANT: THIS SHOULD BE EMPTY ON LIGHTHOUSE NODES
+  hosts:
+    - "192.168.100.1"
+
+# Port Nebula will be listening on. The default here is 4242. For a lighthouse node, the port should be defined,
+# however using port 0 will dynamically assign a port and is recommended for roaming nodes.
+listen:
+  host: 0.0.0.0
+  port: 4242
+  # Sets the max number of packets to pull from the kernel for each syscall (under systems that support recvmmsg)
+  # default is 64, does not support reload
+  #batch: 64
+  # Configure socket buffers for the udp side (outside), leave unset to use the system defaults. Values will be doubled by the kernel
+  # Default is net.core.rmem_default and net.core.wmem_default (/proc/sys/net/core/rmem_default and /proc/sys/net/core/rmem_default)
+  # Maximum is limited by memory in the system, SO_RCVBUFFORCE and SO_SNDBUFFORCE is used to avoid having to raise the system wide
+  # max, net.core.rmem_max and net.core.wmem_max
+  #read_buffer: 10485760
+  #write_buffer: 10485760
+
+
+# Local range is used to define a hint about the local network range, which speeds up discovering the fastest
+# path to a network adjacent nebula node.
+#local_range: "172.16.0.0/24"
+
+# Handshake mac is an optional network-wide handshake authentication step that is used to prevent nebula from
+# responding to handshakes from nodes not in possession of the shared secret. This is primarily used to prevent
+# detection of nebula nodes when someone is scanning a network.
+#handshake_mac:
+  #key: "DONOTUSETHISKEY"
+  # You can define multiple accepted keys
+  #accepted_keys:
+    #- "DONOTUSETHISKEY"
+    #- "dontusethiseither"
+
+# sshd can expose informational and administrative functions via ssh this is a
+#sshd:
+  # Toggles the feature
+  #enabled: true
+  # Host and port to listen on, port 22 is not allowed for your safety
+  #listen: 127.0.0.1:2222
+  # A file containing the ssh host private key to use
+  # A decent way to generate one: ssh-keygen -t ed25519 -f ssh_host_ed25519_key -N "" < /dev/null
+  #host_key: ./ssh_host_ed25519_key
+  # A file containing a list of authorized public keys
+  #authorized_users:
+    #- user: steeeeve
+      # keys can be an array of strings or single string
+      #keys:
+        #- "ssh public key string"
+
+# Configure the private interface. Note: addr is baked into the nebula certificate
+tun:
+  # Name of the device
+  dev: nebula1
+  # Toggles forwarding of local broadcast packets, the address of which depends on the ip/mask encoded in pki.cert
+  drop_local_broadcast: false
+  # Toggles forwarding of multicast packets
+  drop_multicast: false
+  # Sets the transmit queue length, if you notice lots of transmit drops on the tun it may help to raise this number. Default is 500
+  tx_queue: 500
+  # Default MTU for every packet, safe setting is (and the default) 1300 for internet based traffic
+  mtu: 1300
+  # Route based MTU overrides, you have known vpn ip paths that can support larger MTUs you can increase/decrease them here
+  routes:
+    #- mtu: 8800
+    #  route: 10.0.0.0/16
+
+# TODO
+# Configure logging level
+logging:
+  # panic, fatal, error, warning, info, or debug. Default is info
+  level: info
+  # json or text formats currently available. Default is text
+  format: text
+
+#stats:
+  #type: graphite
+  #prefix: nebula
+  #protocol: tcp
+  #host: 127.0.0.1:9999
+  #interval: 10s
+
+  #type: prometheus
+  #listen: 127.0.0.1:8080
+  #path: /metrics
+  #namespace: prometheusns
+  #subsystem: nebula
+  #interval: 10s
+
+# Nebula security group configuration
+firewall:
+  conntrack:
+    tcp_timeout: 120h
+    udp_timeout: 3m
+    default_timeout: 10m
+    max_connections: 100000
+
+  # The firewall is default deny. There is no way to write a deny rule.
+  # Rules are comprised of a protocol, port, and one or more of host, group, or CIDR
+  # Logical evaluation is roughly: port AND proto AND ca_sha AND ca_name AND (host OR group OR groups OR cidr)
+  # - port: Takes `0` or `any` as any, a single number `80`, a range `200-901`, or `fragment` to match second and further fragments of fragmented packets (since there is no port available).
+  #   code: same as port but makes more sense when talking about ICMP, TODO: this is not currently implemented in a way that works, use `any`
+  #   proto: `any`, `tcp`, `udp`, or `icmp`
+  #   host: `any` or a literal hostname, ie `test-host`
+  #   group: `any` or a literal group name, ie `default-group`
+  #   groups: Same as group but accepts a list of values. Multiple values are AND'd together and a certificate would have to contain all groups to pass
+  #   cidr: a CIDR, `0.0.0.0/0` is any.
+  #   ca_name: An issuing CA name
+  #   ca_sha: An issuing CA shasum
+
+  outbound:
+    # Allow all outbound traffic from this node
+    - port: any
+      proto: any
+      host: any
+
+  inbound:
+    # Allow icmp between any nebula hosts
+    - port: any
+      proto: icmp
+      host: any
+
+    # Allow tcp/443 from any host with BOTH laptop and home group
+    - port: 443
+      proto: tcp
+      groups:
+        - laptop
+        - home

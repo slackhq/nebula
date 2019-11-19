@@ -1,0 +1,27 @@
+syntax = "proto3";
+package cert;
+
+//import "google/protobuf/timestamp.proto";
+
+message RawNebulaCertificate {
+    RawNebulaCertificateDetails Details = 1;
+    bytes Signature = 2;
+}
+
+message RawNebulaCertificateDetails {
+    string Name = 1;
+
+    // Ips and Subnets are in big endian 32 bit pairs, 1st the ip, 2nd the mask
+    repeated uint32 Ips = 2;
+    repeated uint32 Subnets = 3;
+
+    repeated string Groups = 4;
+    int64 NotBefore = 5;
+    int64 NotAfter = 6;
+    bytes PublicKey = 7;
+
+    bool IsCA = 8;
+
+    // sha-256 of the issuer certificate, if this field is blank the cert is self-signed
+    bytes Issuer = 9;
+}

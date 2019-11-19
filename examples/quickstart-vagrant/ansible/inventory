@@ -1,0 +1,11 @@
+[all]
+generic1.vagrant
+generic2.vagrant
+lighthouse1.vagrant
+
+[generic]
+generic1.vagrant
+generic2.vagrant
+
+[lighthouse]
+lighthouse1.vagrant 

@@ -1,0 +1,7 @@
+---
+# vars file for nebula
+
+nebula_users:
+  - name: user1
+    ssh_auth_keys: 
+      - "ed25519 place-your-ssh-public-key-here"

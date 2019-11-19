@@ -1,0 +1,59 @@
+syntax = "proto3";
+package nebula;
+
+message NebulaMeta {
+  enum MessageType {
+    None = 0;
+    HostQuery = 1;
+    HostQueryReply = 2;
+    HostUpdateNotification = 3;
+    HostMovedNotification = 4;
+    HostPunchNotification = 5;
+    HostWhoami = 6;
+    HostWhoamiReply = 7;
+    PathCheck = 8;
+    PathCheckReply = 9;
+
+  }
+
+  MessageType Type = 1;
+  NebulaMetaDetails Details = 2;
+}
+
+
+message NebulaMetaDetails {
+
+  uint32 VpnIp = 1;
+  repeated IpAndPort IpAndPorts = 2;
+  uint32 counter = 3;
+}
+
+message IpAndPort {
+  uint32 Ip = 1;
+  uint32 Port = 2;
+}
+
+
+message NebulaPing {
+  enum MessageType {
+		Ping = 0;
+		Reply = 1;
+	}
+
+	MessageType Type = 1;
+	uint64 Time = 2;
+}
+
+message NebulaHandshake {
+  NebulaHandshakeDetails Details = 1;
+  bytes Hmac = 2;
+}
+
+message NebulaHandshakeDetails {
+  bytes Cert = 1;
+  uint32 InitiatorIndex = 2;
+  uint32 ResponderIndex = 3;
+  uint64 Cookie = 4;
+  uint64 Time = 5;
+}
+
