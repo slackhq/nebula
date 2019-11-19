@@ -1,55 +1,56 @@
+NEBULA_CMD_PATH = "./cmd/nebula"
 BUILD_NUMBER ?= dev+$(shell date -u '+%Y%m%d%H%M%S')
 GO111MODULE = on
 export GO111MODULE
 
 all:
-	make bin-linux
-	make bin-arm
-	make bin-arm6
-	make bin-arm64
-	make bin-darwin
-	make bin-windows
+	make NEBULA_CMD_PATH=${NEBULA_CMD_PATH} bin-linux
+	make NEBULA_CMD_PATH=${NEBULA_CMD_PATH} bin-arm
+	make NEBULA_CMD_PATH=${NEBULA_CMD_PATH} bin-arm6
+	make NEBULA_CMD_PATH=${NEBULA_CMD_PATH} bin-arm64
+	make NEBULA_CMD_PATH=${NEBULA_CMD_PATH} bin-darwin
+	make NEBULA_CMD_PATH=${NEBULA_CMD_PATH} bin-windows
 
 bin:
 	go build -ldflags "-X main.Build=$(BUILD_NUMBER)" -o ./nebula ./cmd/nebula
 	go build -ldflags "-X main.Build=$(BUILD_NUMBER)" -o ./nebula-cert ./cmd/nebula-cert
 
 install:
-	go install -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula
+	go install -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
 	go install -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
 
 bin-arm:
 	mkdir -p build/arm
-	GOARCH=arm GOOS=linux go build -o build/arm/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula
+	GOARCH=arm GOOS=linux go build -o build/arm/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
 	GOARCH=arm GOOS=linux go build -o build/arm/nebula-cert -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
 
 bin-arm6:
 	mkdir -p build/arm6
-	GOARCH=arm GOARM=6 GOOS=linux go build -o build/arm6/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula
+	GOARCH=arm GOARM=6 GOOS=linux go build -o build/arm6/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
 	GOARCH=arm GOARM=6 GOOS=linux go build -o build/arm6/nebula-cert -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
 
 bin-arm64:
 	mkdir -p build/arm64
-	GOARCH=arm64 GOOS=linux go build -o build/arm64/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula
+	GOARCH=arm64 GOOS=linux go build -o build/arm64/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
 	GOARCH=arm64 GOOS=linux go build -o build/arm64/nebula-cert -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
 
 bin-vagrant:
-	GOARCH=amd64 GOOS=linux go build -o nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula
+	GOARCH=amd64 GOOS=linux go build -o nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
 	GOARCH=amd64 GOOS=linux go build -ldflags "-X main.Build=$(BUILD_NUMBER)" -o ./nebula-cert ./cmd/nebula-cert
 
 bin-darwin:
 	mkdir -p build/darwin
-	GOARCH=amd64 GOOS=darwin go build -o build/darwin/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula
+	GOARCH=amd64 GOOS=darwin go build -o build/darwin/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
 	GOARCH=amd64 GOOS=darwin go build -o build/darwin/nebula-cert -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
 
 bin-windows:
 	mkdir -p build/windows
-	GOARCH=amd64 GOOS=windows go build -o build/windows/nebula.exe -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula
+	GOARCH=amd64 GOOS=windows go build -o build/windows/nebula.exe -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
 	GOARCH=amd64 GOOS=windows go build -o build/windows/nebula-cert.exe -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
 
 bin-linux:
 	mkdir -p build/linux
-	GOARCH=amd64 GOOS=linux go build -o build/linux/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula
+	GOARCH=amd64 GOOS=linux go build -o build/linux/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
 	GOARCH=amd64 GOOS=linux go build -o build/linux/nebula-cert -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
 
 release: all
@@ -91,6 +92,13 @@ nebula.pb.go: nebula.proto .FORCE
 cert/cert.pb.go: cert/cert.proto .FORCE
 	$(MAKE) -C cert cert.pb.go
 
+service:
+	@echo > /dev/null
+	$(eval NEBULA_CMD_PATH := "./cmd/nebula-service")
+ifeq ($(words $(MAKECMDGOALS)),1)
+	$(MAKE) service ${.DEFAULT_GOAL} --no-print-directory
+endif
+
 .FORCE:
-.PHONY: test test-cov-html bench bench-cpu bench-cpu-long bin proto release
+.PHONY: test test-cov-html bench bench-cpu bench-cpu-long bin proto release service
 .DEFAULT_GOAL := bin
