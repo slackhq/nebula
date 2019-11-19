@@ -41,7 +41,7 @@ func main() {
 	args := flag.Args()
 
 	if *printVersion {
-		fmt.Printf("Version: %v", Build)
+		fmt.Printf("Version: %v\n", Build)
 		os.Exit(0)
 	}
 
