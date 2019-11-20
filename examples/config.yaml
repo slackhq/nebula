@@ -49,6 +49,12 @@ listen:
   #read_buffer: 10485760
   #write_buffer: 10485760
 
+# Punchy continues to punch inbound/outbound at a regular interval to avoid expiration of firewall nat mappings
+punchy: true
+# punch_back means that a node you are trying to reach will connect back out to you if your hole punching fails
+# this is extremely useful if one node is behind a difficult nat, such as symmetric
+#punch_back: true
+
 
 # Local range is used to define a hint about the local network range, which speeds up discovering the fastest
 # path to a network adjacent nebula node.
