@@ -106,7 +106,7 @@ func handleDnsRequest(w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func dnsMain(hostMap *HostMap) {
+func dnsMain(listenPort int, hostMap *HostMap) {
 
 	dnsR = newDnsRecords(hostMap)
 
@@ -114,7 +114,7 @@ func dnsMain(hostMap *HostMap) {
 	dns.HandleFunc(".", handleDnsRequest)
 
 	// start server
-	port := 53
+	port := listenPort
 	server := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "udp"}
 	l.Debugf("Starting DNS responder at %d\n", port)
 	err := server.ListenAndServe()

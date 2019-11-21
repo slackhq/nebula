@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"gopkg.in/yaml.v2"
 	"github.com/slackhq/nebula/sshd"
+	"gopkg.in/yaml.v2"
 )
 
 var l = logrus.New()
@@ -189,6 +189,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	punchBack := config.GetBool("punch_back", false)
 	amLighthouse := config.GetBool("lighthouse.am_lighthouse", false)
 	serveDns := config.GetBool("lighthouse.serve_dns", false)
+	dnsListenPort := config.GetInt("lighthouse.dns_listen_port", 53)
 	lightHouse := NewLightHouse(
 		amLighthouse,
 		ip2int(tunCidr.IP),
@@ -202,7 +203,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 
 	if amLighthouse && serveDns {
 		l.Debugln("Starting dns server")
-		go dnsMain(hostMap)
+		go dnsMain(dnsListenPort, hostMap)
 	}
 
 	for k, v := range config.GetMap("static_host_map", map[interface{}]interface{}{}) {
