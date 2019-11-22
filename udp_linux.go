@@ -63,25 +63,18 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 
 	if err != nil {
 		syscall.Close(fd)
-		return nil, err
+		return nil, fmt.Errorf("unable to open socket: %s", err)
 	}
 
 	var lip [4]byte
 	copy(lip[:], net.ParseIP(ip).To4())
 
-	if err = syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, 0x0F, 1); err != nil {
-		return nil, err
+	if err = syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
+		return nil, fmt.Errorf("unable to set SO_REUSEPORT: %s", err)
 	}
 
 	if err = syscall.Bind(fd, &syscall.SockaddrInet4{Port: port}); err != nil {
-		return nil, err
-	}
-
-	// SO_REUSEADDR does not load balance so we use PORT
-	if multi {
-		if err = syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
-			return nil, err
-		}
+		return nil, fmt.Errorf("unable to bind to socket: %s", err)
 	}
 
 	//TODO: this may be useful for forcing threads into specific cores
