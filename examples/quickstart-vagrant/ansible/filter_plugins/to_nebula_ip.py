@@ -16,6 +16,6 @@ class FilterModule(object):
         return ip
 
     def map_to_nebula_ips(self, ip_strs):
-	ip_list = [ self.to_nebula_ip(ip_str) for ip_str in ip_strs ]
-	ips = ', '.join(ip_list)
+        ip_list = [ self.to_nebula_ip(ip_str) for ip_str in ip_strs ]
+        ips = ', '.join(ip_list)
         return ips
