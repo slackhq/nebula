@@ -40,6 +40,10 @@ func (c *Config) Load(path string) error {
 		return err
 	}
 
+	if len(c.files) == 0 {
+		return fmt.Errorf("no config files found at %s", path)
+	}
+
 	sort.Strings(c.files)
 
 	err = c.parse()
