@@ -3,7 +3,7 @@ BUILD_NUMBER ?= dev+$(shell date -u '+%Y%m%d%H%M%S')
 GO111MODULE = on
 export GO111MODULE
 
-all: bin-linux bin-arm bin-arm6 bin-arm64 bin-darwin bin-windows
+all: bin-linux bin-arm bin-arm6 bin-arm64 bin-darwin bin-windows bin-mips64
 
 bin:
 	go build -ldflags "-X main.Build=$(BUILD_NUMBER)" -o ./nebula ${NEBULA_CMD_PATH}
@@ -47,6 +47,11 @@ bin-linux:
 	GOARCH=amd64 GOOS=linux go build -o build/linux/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
 	GOARCH=amd64 GOOS=linux go build -o build/linux/nebula-cert -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
 
+bin-mips64:
+	mkdir -p build/mips64
+	GOARCH=mips64 GOOS=linux go build -o build/mips64/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula
+	GOARCH=mips64 GOOS=linux go build -o build/mips64/nebula-cert -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
+
 release: all
 	tar -zcv -C build/arm/ -f nebula-linux-arm.tar.gz nebula nebula-cert
 	tar -zcv -C build/arm6/ -f nebula-linux-arm6.tar.gz nebula nebula-cert
@@ -54,6 +59,7 @@ release: all
 	tar -zcv -C build/darwin/ -f nebula-darwin-amd64.tar.gz nebula nebula-cert
 	tar -zcv -C build/windows/ -f nebula-windows-amd64.tar.gz nebula.exe nebula-cert.exe
 	tar -zcv -C build/linux/ -f nebula-linux-amd64.tar.gz nebula nebula-cert
+	tar -zcv -C build/mips64/ -f nebula-linux-mips64.tar.gz nebula nebula-cert
 
 vet:
 	go vet -v ./...
