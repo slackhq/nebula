@@ -8,3 +8,5 @@
 /cert/*.key
 /coverage.out
 /cpu.pprof
+/build
+/*.tar.gz

@@ -22,6 +22,12 @@
     - vagrant-test-ca.key
     - vagrant-test-ca.crt
 
+- name: remove previously signed host certificate
+  file: dest=/etc/nebula/{{ item }} state=absent
+  with_items:
+    - host.crt
+    - host.key
+
 - name: sign using the root key
   command: nebula-cert sign -ca-crt /opt/vagrant-test-ca.crt -ca-key /opt/vagrant-test-ca.key -duration 4320h -groups vagrant -ip {{ hostvars[inventory_hostname][vagrant_ifce]['ipv4']['address'] | to_nebula_ip }}/9 -name {{ ansible_hostname }}.nebula -out-crt /etc/nebula/host.crt -out-key /etc/nebula/host.key
 
