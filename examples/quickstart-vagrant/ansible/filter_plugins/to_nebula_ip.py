@@ -9,7 +9,7 @@ class FilterModule(object):
         }
 
     def to_nebula_ip(self, ip_str):
-        ip_list = map(int, ip_str.split("."))
+        ip_list = list(map(int, ip_str.split(".")))
         ip_list[0] = 10
         ip_list[1] = 168
         ip = '.'.join(map(str, ip_list))
