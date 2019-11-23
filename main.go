@@ -261,9 +261,17 @@ func Main(configPath string, configTest bool, buildVersion string) {
 
 	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpServer)
 
-	//TODO: These will be reused for psk
-	//handshakeMACKey := config.GetString("handshake_mac.key", "")
-	//handshakeAcceptedMACKeys := config.GetStringSlice("handshake_mac.accepted_keys", []string{})
+	//TODO: Add support for multiple psk/rotation
+	pskString := config.GetString("psk.key", "")
+	psk := []byte{}
+	if pskString != "" {
+		psk, err = sha256KdfFromString(pskString)
+		if err != nil {
+			l.Fatal(err)
+		}
+	} else {
+		psk = nil
+	}
 
 	serveDns := config.GetBool("lighthouse.serve_dns", false)
 	checkInterval := config.GetInt("timers.connection_alive_interval", 5)
@@ -282,6 +290,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		pendingDeletionInterval: pendingDeletionInterval,
 		DropLocalBroadcast:      config.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:           config.GetBool("tun.drop_multicast", false),
+		PSK:                     psk,
 		UDPBatchSize:            config.GetInt("listen.batch", 64),
 	}
 

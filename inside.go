@@ -73,7 +73,7 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 
 	if ci == nil {
 		// if we don't have a connection state, then send a handshake initiation
-		ci = f.newConnectionState(true, noise.HandshakeIX, []byte{}, 0)
+		ci = f.newConnectionState(true, noise.HandshakeIX, f.PSK, 0)
 		// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
 		//ci = f.newConnectionState(true, noise.HandshakeXX, []byte{}, 0)
 		hostinfo.ConnectionState = ci

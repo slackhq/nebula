@@ -2,10 +2,14 @@ package nebula
 
 import (
 	"crypto/cipher"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"io"
 
 	"github.com/flynn/noise"
+	"golang.org/x/crypto/hkdf"
 )
 
 type endiannes interface {
@@ -57,4 +61,20 @@ func (s *NebulaCipherState) DecryptDanger(out, ad, ciphertext []byte, n uint64, 
 	} else {
 		return []byte{}, nil
 	}
+}
+
+func sha256KdfFromString(secret string) ([]byte, error) {
+	if len(secret) < 8 {
+		err := ("PSK too short!")
+		return nil, fmt.Errorf("%s", err)
+	}
+	hmacKey := make([]byte, sha256.Size)
+	hash := sha256.New
+	hkdfer := hkdf.New(hash, []byte(secret), nil, nil)
+	n, err := io.ReadFull(hkdfer, hmacKey)
+	if n != len(hmacKey) || err != nil {
+		l.Errorln("KDF Failed!")
+		return nil, fmt.Errorf("%s", err)
+	}
+	return hmacKey, nil
 }

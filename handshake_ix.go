@@ -73,7 +73,7 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet []byte, h *Header) bool {
 	var ip uint32
 	if h.RemoteIndex == 0 {
-		ci := f.newConnectionState(false, noise.HandshakeIX, []byte{}, 0)
+		ci := f.newConnectionState(false, noise.HandshakeIX, f.PSK, 0)
 		// Mark packet 1 as seen so it doesn't show up as missed
 		ci.window.Update(1)
 

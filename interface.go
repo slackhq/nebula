@@ -25,6 +25,7 @@ type InterfaceConfig struct {
 	DropLocalBroadcast      bool
 	DropMulticast           bool
 	UDPBatchSize            int
+	PSK                     []byte
 }
 
 type Interface struct {
@@ -43,6 +44,7 @@ type Interface struct {
 	dropLocalBroadcast bool
 	dropMulticast      bool
 	udpBatchSize       int
+	PSK                []byte
 	version            string
 
 	metricRxRecvError metrics.Counter
@@ -79,6 +81,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		dropLocalBroadcast: c.DropLocalBroadcast,
 		dropMulticast:      c.DropMulticast,
 		udpBatchSize:       c.UDPBatchSize,
+		PSK:                c.PSK,
 
 		metricRxRecvError: metrics.GetOrRegisterCounter("messages.rx.recv_error", nil),
 		metricTxRecvError: metrics.GetOrRegisterCounter("messages.tx.recv_error", nil),
