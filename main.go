@@ -205,6 +205,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		go dnsMain(hostMap)
 	}
 
+	//TODO: Move all of this inside functions in lighthouse.go
 	for k, v := range config.GetMap("static_host_map", map[interface{}]interface{}{}) {
 		vpnIp := net.ParseIP(fmt.Sprintf("%v", k))
 		vals, ok := v.([]interface{})
@@ -236,9 +237,9 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		}
 	}
 
-	_, err = lightHouse.ValidateLHStaticEntries()
+	err = lightHouse.ValidateLHStaticEntries()
 	if err != nil {
-		l.Error(err)
+		l.WithError(err).Error("Lighthouse unreachable")
 	}
 
 	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpServer)
