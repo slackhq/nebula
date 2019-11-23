@@ -236,6 +236,11 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		}
 	}
 
+	_, err = lightHouse.ValidateLHStaticEntries()
+	if err != nil {
+		l.Error(err)
+	}
+
 	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpServer)
 
 	//TODO: These will be reused for psk
