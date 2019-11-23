@@ -67,9 +67,6 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 	hostinfo.HandshakePacket[0] = msg
 	hostinfo.HandshakeReady = true
 	hostinfo.handshakeStart = time.Now()
-	/*
-		l.Debugln("ZZZZZZZZZZREMOTE: ", hostinfo.remote)
-	*/
 
 }
 
@@ -236,11 +233,6 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	}
 
 	f.hostMap.AddRemote(ip, addr)
-	/*
-		l.Debugln("111 ZZZZZZZZZZADDR: ", addr)
-		l.Debugln("111 ZZZZZZZZZZREMOTE: ", hostinfo.remote)
-		l.Debugln("111 ZZZZZZZZZZREMOTEs: ", hostinfo.Remotes[0].addr)
-	*/
 	return false
 }
 
@@ -349,7 +341,4 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	}
 
 	return false
-	/*
-		l.Debugln("222 ZZZZZZZZZZREMOTE: ", hostinfo.remote)
-	*/
 }
