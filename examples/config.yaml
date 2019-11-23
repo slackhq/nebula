@@ -61,16 +61,6 @@ punchy: true
 # path to a network adjacent nebula node.
 #local_range: "172.16.0.0/24"
 
-# Handshake mac is an optional network-wide handshake authentication step that is used to prevent nebula from
-# responding to handshakes from nodes not in possession of the shared secret. This is primarily used to prevent
-# detection of nebula nodes when someone is scanning a network.
-#handshake_mac:
-  #key: "DONOTUSETHISKEY"
-  # You can define multiple accepted keys
-  #accepted_keys:
-    #- "DONOTUSETHISKEY"
-    #- "dontusethiseither"
-
 # sshd can expose informational and administrative functions via ssh this is a
 #sshd:
   # Toggles the feature

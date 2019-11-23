@@ -1,57 +1,49 @@
 package nebula
 
 import (
-	"crypto/sha256"
 	"errors"
-	"fmt"
-	"io"
 	"os"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
-	"golang.org/x/crypto/hkdf"
 )
 
 const mtu = 9001
 
 type InterfaceConfig struct {
-	HostMap                  *HostMap
-	Outside                  *udpConn
-	Inside                   *Tun
-	certState                *CertState
-	Cipher                   string
-	Firewall                 *Firewall
-	ServeDns                 bool
-	HandshakeManager         *HandshakeManager
-	lightHouse               *LightHouse
-	checkInterval            int
-	pendingDeletionInterval  int
-	handshakeMACKey          string
-	handshakeAcceptedMACKeys []string
-	DropLocalBroadcast       bool
-	DropMulticast            bool
-	UDPBatchSize             int
+	HostMap                 *HostMap
+	Outside                 *udpConn
+	Inside                  *Tun
+	certState               *CertState
+	Cipher                  string
+	Firewall                *Firewall
+	ServeDns                bool
+	HandshakeManager        *HandshakeManager
+	lightHouse              *LightHouse
+	checkInterval           int
+	pendingDeletionInterval int
+	DropLocalBroadcast      bool
+	DropMulticast           bool
+	UDPBatchSize            int
 }
 
 type Interface struct {
-	hostMap                  *HostMap
-	outside                  *udpConn
-	inside                   *Tun
-	certState                *CertState
-	cipher                   string
-	firewall                 *Firewall
-	connectionManager        *connectionManager
-	handshakeManager         *HandshakeManager
-	serveDns                 bool
-	createTime               time.Time
-	lightHouse               *LightHouse
-	handshakeMACKey          []byte
-	handshakeAcceptedMACKeys [][]byte
-	localBroadcast           uint32
-	dropLocalBroadcast       bool
-	dropMulticast            bool
-	udpBatchSize             int
-	version                  string
+	hostMap            *HostMap
+	outside            *udpConn
+	inside             *Tun
+	certState          *CertState
+	cipher             string
+	firewall           *Firewall
+	connectionManager  *connectionManager
+	handshakeManager   *HandshakeManager
+	serveDns           bool
+	createTime         time.Time
+	lightHouse         *LightHouse
+	localBroadcast     uint32
+	dropLocalBroadcast bool
+	dropMulticast      bool
+	udpBatchSize       int
+	version            string
 
 	metricRxRecvError metrics.Counter
 	metricTxRecvError metrics.Counter
@@ -72,54 +64,21 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		return nil, errors.New("no firewall rules")
 	}
 
-	// Use KDF to make this useful
-	hmacKey, err := sha256KdfFromString(c.handshakeMACKey)
-	if err != nil {
-		l.Debugln(err)
-	}
-
-	allowedMacs := make([][]byte, 0)
-	//allowedMacs = append(allowedMacs, mac)
-	if len(c.handshakeAcceptedMACKeys) > 0 {
-		for _, k := range c.handshakeAcceptedMACKeys {
-			// Use KDF to make these useful too
-			hmacKey, err := sha256KdfFromString(k)
-			if err != nil {
-				l.Debugln(err)
-			}
-			allowedMacs = append(allowedMacs, hmacKey)
-		}
-	} else {
-		if len(c.handshakeMACKey) > 0 {
-			l.Warnln("You have set an outgoing MAC but do not accept any incoming. This is probably not what you want.")
-		} else {
-			// This else is a fallback if we have not set any mac keys at all
-			hmacKey, err := sha256KdfFromString("")
-			if err != nil {
-				l.Debugln(err)
-			}
-			allowedMacs = append(allowedMacs, hmacKey)
-
-		}
-	}
-
 	ifce := &Interface{
-		hostMap:                  c.HostMap,
-		outside:                  c.Outside,
-		inside:                   c.Inside,
-		certState:                c.certState,
-		cipher:                   c.Cipher,
-		firewall:                 c.Firewall,
-		serveDns:                 c.ServeDns,
-		handshakeManager:         c.HandshakeManager,
-		createTime:               time.Now(),
-		lightHouse:               c.lightHouse,
-		handshakeMACKey:          hmacKey,
-		handshakeAcceptedMACKeys: allowedMacs,
-		localBroadcast:           ip2int(c.certState.certificate.Details.Ips[0].IP) | ^ip2int(c.certState.certificate.Details.Ips[0].Mask),
-		dropLocalBroadcast:       c.DropLocalBroadcast,
-		dropMulticast:            c.DropMulticast,
-		udpBatchSize:             c.UDPBatchSize,
+		hostMap:            c.HostMap,
+		outside:            c.Outside,
+		inside:             c.Inside,
+		certState:          c.certState,
+		cipher:             c.Cipher,
+		firewall:           c.Firewall,
+		serveDns:           c.ServeDns,
+		handshakeManager:   c.HandshakeManager,
+		createTime:         time.Now(),
+		lightHouse:         c.lightHouse,
+		localBroadcast:     ip2int(c.certState.certificate.Details.Ips[0].IP) | ^ip2int(c.certState.certificate.Details.Ips[0].Mask),
+		dropLocalBroadcast: c.DropLocalBroadcast,
+		dropMulticast:      c.DropMulticast,
+		udpBatchSize:       c.UDPBatchSize,
 
 		metricRxRecvError: metrics.GetOrRegisterCounter("messages.rx.recv_error", nil),
 		metricTxRecvError: metrics.GetOrRegisterCounter("messages.tx.recv_error", nil),
@@ -260,18 +219,4 @@ func (f *Interface) emitStats(i time.Duration) {
 		f.firewall.EmitStats()
 		f.handshakeManager.EmitStats()
 	}
-}
-
-func sha256KdfFromString(secret string) ([]byte, error) {
-	// Use KDF to make this useful
-	mac := []byte(secret)
-	hmacKey := make([]byte, sha256.BlockSize)
-	hash := sha256.New
-	hkdfer := hkdf.New(hash, []byte(mac), nil, nil)
-	n, err := io.ReadFull(hkdfer, hmacKey)
-	if n != len(hmacKey) || err != nil {
-		l.Errorln("KDF Failed!")
-		return nil, fmt.Errorf("%s", err)
-	}
-	return hmacKey, nil
 }
