@@ -1,8 +1,9 @@
 # This is the nebula example configuration file. You must edit, at a minimum, the static_host_map, lighthouse, and firewall sections
-
+# Some options in this file are HUPable, including the pki section. (A HUP will reload credentials from disk without affecting existing tunnels)
 
 # PKI defines the location of credentials for this node. Each of these can also be inlined by using the yaml ": |" syntax.
 pki:
+  # The CAs that are accepted by this node. Must contain one or more certificates created by 'nebula-cert ca'
   ca: /etc/nebula/ca.crt
   cert: /etc/nebula/host.crt
   key: /etc/nebula/host.key
@@ -10,7 +11,7 @@ pki:
   #blacklist:
   #  - c99d4e650533b92061b09918e838a5a0a6aaee21eed1d12fd937682865936c72
 
-# The static host map defines a set of hosts with with fixed IP addresses on the internet (or any network).
+# The static host map defines a set of hosts with fixed IP addresses on the internet (or any network).
 # A host can have multiple fixed IP addresses defined here, and nebula will try each when establishing a tunnel.
 # The syntax is:
 #   "{nebula ip}": ["{routable ip/dns name}:{routable port}"]
@@ -55,20 +56,13 @@ punchy: true
 # this is extremely useful if one node is behind a difficult nat, such as symmetric
 #punch_back: true
 
+# Cipher allows you to choose between the available ciphers for your network.
+# IMPORTANT: this value must be identical on ALL NODES/LIGHTHOUSES. We do not/will not support use of different ciphers simultaneously!
+#cipher: chachapoly
 
 # Local range is used to define a hint about the local network range, which speeds up discovering the fastest
 # path to a network adjacent nebula node.
 #local_range: "172.16.0.0/24"
-
-# Handshake mac is an optional network-wide handshake authentication step that is used to prevent nebula from
-# responding to handshakes from nodes not in possession of the shared secret. This is primarily used to prevent
-# detection of nebula nodes when someone is scanning a network.
-#handshake_mac:
-  #key: "DONOTUSETHISKEY"
-  # You can define multiple accepted keys
-  #accepted_keys:
-    #- "DONOTUSETHISKEY"
-    #- "dontusethiseither"
 
 # sshd can expose informational and administrative functions via ssh this is a
 #sshd:

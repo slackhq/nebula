@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"gopkg.in/yaml.v2"
 	"github.com/slackhq/nebula/sshd"
+	"gopkg.in/yaml.v2"
 )
 
 var l = logrus.New()
@@ -112,14 +112,14 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		config.GetInt("tun.tx_queue", 500),
 	)
 	if err != nil {
-		l.Fatal(err)
+		l.WithError(err).Fatal("Failed to get a tun/tap device")
 	}
 
 	// set up our UDP listener
 	udpQueues := config.GetInt("listen.routines", 1)
 	udpServer, err := NewListener(config.GetString("listen.host", "0.0.0.0"), config.GetInt("listen.port", 0), udpQueues > 1)
 	if err != nil {
-		l.Fatal(err)
+		l.WithError(err).Fatal("Failed to open udp listener")
 	}
 	udpServer.reloadConfig(config)
 
@@ -238,28 +238,27 @@ func Main(configPath string, configTest bool, buildVersion string) {
 
 	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpServer)
 
-	handshakeMACKey := config.GetString("handshake_mac.key", "")
-	handshakeAcceptedMACKeys := config.GetStringSlice("handshake_mac.accepted_keys", []string{})
+	//TODO: These will be reused for psk
+	//handshakeMACKey := config.GetString("handshake_mac.key", "")
+	//handshakeAcceptedMACKeys := config.GetStringSlice("handshake_mac.accepted_keys", []string{})
 
 	checkInterval := config.GetInt("timers.connection_alive_interval", 5)
 	pendingDeletionInterval := config.GetInt("timers.pending_deletion_interval", 10)
 	ifConfig := &InterfaceConfig{
-		HostMap:                  hostMap,
-		Inside:                   tun,
-		Outside:                  udpServer,
-		certState:                cs,
-		Cipher:                   config.GetString("cipher", "aes"),
-		Firewall:                 fw,
-		ServeDns:                 serveDns,
-		HandshakeManager:         handshakeManager,
-		lightHouse:               lightHouse,
-		checkInterval:            checkInterval,
-		pendingDeletionInterval:  pendingDeletionInterval,
-		handshakeMACKey:          handshakeMACKey,
-		handshakeAcceptedMACKeys: handshakeAcceptedMACKeys,
-		DropLocalBroadcast:       config.GetBool("tun.drop_local_broadcast", false),
-		DropMulticast:            config.GetBool("tun.drop_multicast", false),
-		UDPBatchSize:             config.GetInt("listen.batch", 64),
+		HostMap:                 hostMap,
+		Inside:                  tun,
+		Outside:                 udpServer,
+		certState:               cs,
+		Cipher:                  config.GetString("cipher", "aes"),
+		Firewall:                fw,
+		ServeDns:                serveDns,
+		HandshakeManager:        handshakeManager,
+		lightHouse:              lightHouse,
+		checkInterval:           checkInterval,
+		pendingDeletionInterval: pendingDeletionInterval,
+		DropLocalBroadcast:      config.GetBool("tun.drop_local_broadcast", false),
+		DropMulticast:           config.GetBool("tun.drop_multicast", false),
+		UDPBatchSize:            config.GetInt("listen.batch", 64),
 	}
 
 	switch ifConfig.Cipher {
