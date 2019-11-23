@@ -188,6 +188,13 @@ func Main(configPath string, configTest bool, buildVersion string) {
 
 	punchBack := config.GetBool("punch_back", false)
 	amLighthouse := config.GetBool("lighthouse.am_lighthouse", false)
+
+	// warn if am_lighthouse is enabled but upstream lighthouses exists
+	lighthouseHosts := config.GetStringSlice("lighthouse.hosts", []string{})
+	if amLighthouse && len(lighthouseHosts) != 0 {
+		l.Warn("am_lighthouse enabled on node but upstream lighthouses exist in config")
+	}
+
 	serveDns := config.GetBool("lighthouse.serve_dns", false)
 	lightHouse := NewLightHouse(
 		amLighthouse,
