@@ -19,11 +19,7 @@ type program struct {
 }
 
 func (p *program) Start(s service.Service) error {
-	if service.Interactive() {
-		logger.Info("Running in terminal.")
-	} else {
-		logger.Info("Running under service manager.")
-	}
+	logger.Info("Nebula service starting.")
 	p.exit = make(chan struct{})
 
 	// Start should not block. Do the actual work async.
@@ -38,7 +34,7 @@ func (p *program) run() error {
 
 func (p *program) Stop(s service.Service) error {
 	// Any work in Stop should be quick, usually a few seconds at most.
-	logger.Info("I'm Stopping!")
+	logger.Info("Nebula service stopping.")
 	close(p.exit)
 	return nil
 }
