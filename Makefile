@@ -12,7 +12,7 @@ all:
 	make NEBULA_CMD_PATH=${NEBULA_CMD_PATH} bin-windows
 
 bin:
-	go build -ldflags "-X main.Build=$(BUILD_NUMBER)" -o ./nebula ./cmd/nebula
+	go build -ldflags "-X main.Build=$(BUILD_NUMBER)" -o ./nebula ${NEBULA_CMD_PATH}
 	go build -ldflags "-X main.Build=$(BUILD_NUMBER)" -o ./nebula-cert ./cmd/nebula-cert
 
 install:
