@@ -112,14 +112,14 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		config.GetInt("tun.tx_queue", 500),
 	)
 	if err != nil {
-		l.Fatal(err)
+		l.WithError(err).Fatal("Failed to get a tun/tap device")
 	}
 
 	// set up our UDP listener
 	udpQueues := config.GetInt("listen.routines", 1)
 	udpServer, err := NewListener(config.GetString("listen.host", "0.0.0.0"), config.GetInt("listen.port", 0), udpQueues > 1)
 	if err != nil {
-		l.Fatal(err)
+		l.WithError(err).Fatal("Failed to open udp listener")
 	}
 	udpServer.reloadConfig(config)
 
