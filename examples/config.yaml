@@ -1,5 +1,5 @@
 # This is the nebula example configuration file. You must edit, at a minimum, the static_host_map, lighthouse, and firewall sections
-
+# Some options in this file are HUPable, including the pki section. (A HUP will reload credentials from disk without affecting existing tunnels)
 
 # PKI defines the location of credentials for this node. Each of these can also be inlined by using the yaml ": |" syntax.
 pki:
@@ -56,6 +56,9 @@ punchy: true
 # this is extremely useful if one node is behind a difficult nat, such as symmetric
 #punch_back: true
 
+# Cipher allows you to choose between the available ciphers for your network.
+# IMPORTANT: this value must be identical on ALL NODES/LIGHTHOUSES. We do not/will not support use of different ciphers simultaneously!
+#cipher: chachapoly
 
 # Local range is used to define a hint about the local network range, which speeds up discovering the fastest
 # path to a network adjacent nebula node.
