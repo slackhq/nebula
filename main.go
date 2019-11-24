@@ -278,12 +278,12 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	altPSKs := [][]byte{}
 	altPSKStrings := config.GetStringSlice("psk.accepted_keys", []string{})
 	if len(altPSKStrings) > 0 {
-		for i, aps := range altPSKStrings {
+		for _, aps := range altPSKStrings {
 			altpsk, err := sha256KdfFromString(aps)
 			if err != nil {
 				l.WithError(err).Fatal("PSK Error")
 			}
-			altPSKs[i] = make([]byte{altpsk})
+			altPSKs = append(altPSKs, altpsk)
 		}
 	}
 

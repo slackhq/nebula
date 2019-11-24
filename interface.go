@@ -84,6 +84,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		dropMulticast:      c.DropMulticast,
 		udpBatchSize:       c.UDPBatchSize,
 		PSK:                c.PSK,
+		AltPSKs:            c.AltPSKs,
 
 		metricRxRecvError: metrics.GetOrRegisterCounter("messages.rx.recv_error", nil),
 		metricTxRecvError: metrics.GetOrRegisterCounter("messages.tx.recv_error", nil),
