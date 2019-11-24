@@ -83,14 +83,15 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 				msg, _, _, err = ci.H.ReadMessage(nil, packet[HeaderLen:])
 				if err != nil {
-					l.WithError(err).WithField("udpAddr", addr).
-						WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.ReadMessage")
+					//l.WithError(err).WithField("udpAddr", addr).
+					//	WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.ReadMessage")
 				} else {
 					break
 				}
 			}
-			return true
+			//return true
 		}
+
 		// Mark packet 1 as seen so it doesn't show up as missed
 		ci.window.Update(1)
 
