@@ -73,7 +73,6 @@ func sha256KdfFromString(secret string) ([]byte, error) {
 	hkdfer := hkdf.New(hash, []byte(secret), nil, nil)
 	n, err := io.ReadFull(hkdfer, hmacKey)
 	if n != len(hmacKey) || err != nil {
-		l.Errorln("KDF Failed!")
 		return nil, fmt.Errorf("%s", err)
 	}
 	return hmacKey, nil
