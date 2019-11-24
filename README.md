@@ -1,11 +1,10 @@
 ## What is Nebula?
 Nebula is a scalable overlay networking tool with a focus on performance, simplicity and security.
-It lets you seamlessly connect computers anywhere in the world. Nebula is portable, and runs on Linux, OSX, and Windows.
+The networking tool allows seamless connection of computers globally. Nebula is portable, and runs on Linux, OSX, and Windows.
 (Also: keep this quiet, but we have an early prototype running on iOS).
-It can be used to connect a small number of computers, but is also able to connect tens of thousands of computers.
+Nebula can be used to connect up to tens of thousands of computers
 
-Nebula incorporates a number of existing concepts like encryption, security groups, certificates,
-and tunneling, and each of those individual pieces existed before Nebula in various forms.
+Nebula incorporates concepts like encryption, security groups, certificates and tunneling where each concept existed before Nebula.
 What makes Nebula different to existing offerings is that it brings all of these ideas together,
 resulting in a sum that is greater than its individual parts.
 
@@ -21,7 +20,7 @@ Users can move data between nodes in any number of cloud service providers, data
 
 Nebula uses elliptic curve Diffie-Hellman key exchange, and AES-256-GCM in its default configuration.
 
-Nebula was created to provide a mechanism for groups hosts to communicate securely, even across the internet, while enabling expressive firewall definitions similar in style to cloud security groups.
+Nebula was created to provide a mechanism for group hosts to communicate securely, even across the internet, while enabling expressive firewall definitions similar in style to cloud security groups.
 
 ## Getting started (quickly)
 
@@ -31,7 +30,7 @@ To set up a Nebula network, you'll need:
 
 #### 2. (Optional, but you really should..) At least one discovery node with a routable IP address, which we call a lighthouse.
 
-Nebula lighthouses allow nodes to find each other, anywhere in the world. A lighthouse is the only node in a Nebula network whose IP should not change. Running a lighthouse requires very few compute resources, and you can easily use the least expensive option from a cloud hosting provider. If you're not sure which provider to use, a number of us have used $5/mo [DigitalOcean](https://digitalocean.com) droplets as lighthouses.
+Nebula lighthouses allow nodes to find each other. A lighthouse is the only node in a Nebula network whose IP should not change. Running a lighthouse requires very few compute resources, and you can easily use the least expensive option from a cloud hosting provider. If you're not sure which provider to use, a number of us have used $5/mo [DigitalOcean](https://digitalocean.com) droplets as lighthouses.
 
   Once you have launched an instance, ensure that Nebula udp traffic (default port udp/4242) can reach it over the internet.
 
