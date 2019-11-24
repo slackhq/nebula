@@ -53,6 +53,18 @@ func NewLightHouse(amLighthouse bool, myIp uint32, ips []string, interval int, n
 	return &h
 }
 
+func (lh *LightHouse) ValidateLHStaticEntries() error {
+	for lhIP, _ := range lh.lighthouses {
+		for ip, _ := range lh.staticList {
+			if lhIP == ip {
+				continue
+			}
+			return fmt.Errorf("Lighthouse %s does not have a static_host_map entry", IntIp(lhIP))
+		}
+	}
+	return nil
+}
+
 func (lh *LightHouse) Query(ip uint32, f EncWriter) ([]udpAddr, error) {
 	if !lh.IsLighthouseIP(ip) {
 		lh.QueryServer(ip, f)
