@@ -267,7 +267,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	if pskString != "" {
 		psk, err = sha256KdfFromString(pskString)
 		if err != nil {
-			l.WithError(err).Fatal(err)
+			l.WithError(err).Fatal("PSK Error")
 		}
 	} else {
 		psk = nil
