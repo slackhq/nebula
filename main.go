@@ -192,7 +192,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	// warn if am_lighthouse is enabled but upstream lighthouses exists
 	lighthouseHosts := config.GetStringSlice("lighthouse.hosts", []string{})
 	if amLighthouse && len(lighthouseHosts) != 0 {
-		l.Warn("am_lighthouse enabled on node but upstream lighthouses exist in config")
+		l.Warn("lighthouse.am_lighthouse enabled on node but upstream lighthouses exist in config")
 	}
 
 	serveDns := config.GetBool("lighthouse.serve_dns", false)
