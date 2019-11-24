@@ -26,6 +26,7 @@ type InterfaceConfig struct {
 	DropMulticast           bool
 	UDPBatchSize            int
 	PSK                     []byte
+	AltPSKs                 [][]byte
 }
 
 type Interface struct {
@@ -45,6 +46,7 @@ type Interface struct {
 	dropMulticast      bool
 	udpBatchSize       int
 	PSK                []byte
+	AltPSKs            [][]byte
 	version            string
 
 	metricRxRecvError metrics.Counter

@@ -75,14 +75,24 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	if h.RemoteIndex == 0 {
 		ci := f.newConnectionState(false, noise.HandshakeIX, f.PSK, 0)
 		// Mark packet 1 as seen so it doesn't show up as missed
-		ci.window.Update(1)
 
 		msg, _, _, err := ci.H.ReadMessage(nil, packet[HeaderLen:])
 		if err != nil {
 			l.WithError(err).WithField("udpAddr", addr).
 				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.ReadMessage")
+			//return true
+			for _, key := range f.AltPSKs {
+				ci = f.newConnectionState(false, noise.HandshakeIX, key, 0)
+				// Mark packet 1 as seen so it doesn't show up as missed
+
+				msg, _, _, err = ci.H.ReadMessage(nil, packet[HeaderLen:])
+				if err == nil {
+					continue
+				}
+			}
 			return true
 		}
+		ci.window.Update(1)
 
 		hs := &NebulaHandshake{}
 		err = proto.Unmarshal(msg, hs)
