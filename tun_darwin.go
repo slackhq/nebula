@@ -46,6 +46,13 @@ func (c *Tun) Activate() error {
 	if err = exec.Command("route", "-n", "add", "-net", c.Cidr.String(), "-interface", c.Device).Run(); err != nil {
 		return fmt.Errorf("failed to run 'route add': %s", err)
 	}
+	if err = exec.Command("route", "-n", "delete", c.Cidr.IP.String()).Run(); err != nil {
+		return fmt.Errorf("failed to run 'route delete': %s", err)
+	}
+	if err = exec.Command("route", "-n", "add", fmt.Sprintf("%s/32", c.Cidr.IP.String()), "127.0.0.1").Run(); err != nil {
+		return fmt.Errorf("failed to run 'route add': %s", err)
+	}
+
 	if err = exec.Command("ifconfig", c.Device, "mtu", strconv.Itoa(c.MTU)).Run(); err != nil {
 		return fmt.Errorf("failed to run 'ifconfig': %s", err)
 	}
