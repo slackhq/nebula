@@ -65,7 +65,7 @@ type ifreqAddr struct {
 
 type ifreqMTU struct {
 	Name [16]byte
-	MTU  int
+	MTU  int32
 	pad  [8]byte
 }
 
@@ -184,7 +184,7 @@ func (c Tun) Activate() error {
 	}
 
 	// Set the MTU on the device
-	ifm := ifreqMTU{Name: devName, MTU: c.MaxMTU}
+	ifm := ifreqMTU{Name: devName, MTU: int32(c.MaxMTU)}
 	if err = ioctl(fd, syscall.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
 		return fmt.Errorf("failed to set tun mtu: %s", err)
 	}
