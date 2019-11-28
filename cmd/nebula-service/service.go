@@ -21,8 +21,7 @@ type program struct {
 func (p *program) Start(s service.Service) error {
 	logger.Info("Nebula service starting.")
 	p.exit = make(chan struct{})
-
-	// Start should not block. Do the actual work async.
+	// Start should not block.
 	go p.run()
 	return nil
 }
@@ -33,7 +32,6 @@ func (p *program) run() error {
 }
 
 func (p *program) Stop(s service.Service) error {
-	// Any work in Stop should be quick, usually a few seconds at most.
 	logger.Info("Nebula service stopping.")
 	close(p.exit)
 	return nil
@@ -82,7 +80,6 @@ func doService(configPath *string, configTest *bool, build string, serviceFlag *
 		}
 	}()
 
-	//if len(*serviceFlag) != 0 {
 	switch *serviceFlag {
 	case "run":
 		err = s.Run()
@@ -96,7 +93,6 @@ func doService(configPath *string, configTest *bool, build string, serviceFlag *
 			log.Fatal(err)
 		}
 		return
-		//}
 	}
 
 }

@@ -25,7 +25,7 @@ func main() {
 	flag.Parse()
 
 	if *printVersion {
-		fmt.Printf("Build: %s\n", Build)
+		fmt.Printf("Version: %s\n", Build)
 		os.Exit(0)
 	}
 
