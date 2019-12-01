@@ -3,7 +3,7 @@ BUILD_NUMBER ?= dev+$(shell date -u '+%Y%m%d%H%M%S')
 GO111MODULE = on
 export GO111MODULE
 
-all: bin-linux bin-arm bin-arm6 bin-arm64 bin-darwin bin-windows bin-mips bin-mipsle bin-mips64 bin-mips64le
+all: bin-linux bin-linux-386 bin-linux-ppc64le bin-arm bin-arm6 bin-arm64 bin-darwin bin-windows bin-mips bin-mipsle bin-mips64 bin-mips64le
 
 bin:
 	go build -ldflags "-X main.Build=$(BUILD_NUMBER)" -o ./nebula ${NEBULA_CMD_PATH}
@@ -47,6 +47,15 @@ bin-linux:
 	GOARCH=amd64 GOOS=linux go build -o build/linux/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
 	GOARCH=amd64 GOOS=linux go build -o build/linux/nebula-cert -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
 
+bin-linux-386:
+	mkdir -p build/linux-386
+	GOARCH=386 GOOS=linux go build -o build/linux-386/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula
+	GOARCH=386 GOOS=linux go build -o build/linux-386/nebula-cert -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
+
+bin-linux-ppc64le:
+	mkdir -p build/linux-ppc64le
+	GOARCH=ppc64le GOOS=linux go build -o build/linux-ppc64le/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula
+	GOARCH=ppc64le GOOS=linux go build -o build/linux-ppc64le/nebula-cert -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
 
 bin-mips:
 	mkdir -p build/mips
@@ -76,6 +85,8 @@ release: all
 	tar -zcv -C build/darwin/ -f nebula-darwin-amd64.tar.gz nebula nebula-cert
 	tar -zcv -C build/windows/ -f nebula-windows-amd64.tar.gz nebula.exe nebula-cert.exe
 	tar -zcv -C build/linux/ -f nebula-linux-amd64.tar.gz nebula nebula-cert
+	tar -zcv -C build/linux-386/ -f nebula-linux-386.tar.gz nebula nebula-cert
+	tar -zcv -C build/linux-ppc64le/ -f nebula-linux-ppc64le.tar.gz nebula nebula-cert
 	tar -zcv -C build/mips/ -f nebula-linux-mips.tar.gz nebula nebula-cert
 	tar -zcv -C build/mipsle/ -f nebula-linux-mipsle.tar.gz nebula nebula-cert
 	tar -zcv -C build/mips64/ -f nebula-linux-mips64.tar.gz nebula nebula-cert
