@@ -53,7 +53,7 @@ This assumes you have three nodes, named lighthouse1, host1, host3. You can name
 ```
 
 #### 5. Configuration files for each host
-Download a copy of the nebula [example configuration](https://github.com/slackhq/nebula/blob/master/examples/config.yaml).
+Download a copy of the nebula [example configuration](https://github.com/slackhq/nebula/blob/master/examples/config.yml).
 
 * On the lighthouse node, you'll need to ensure `am_lighthouse: true` is set.
 
