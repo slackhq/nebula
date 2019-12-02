@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slackhq/nebula/cert"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/ed25519"
-	"github.com/slackhq/nebula/cert"
 )
 
 //TODO: test file permissions
@@ -39,12 +39,14 @@ func Test_signHelp(t *testing.T) {
 			"    \tRequired: ip and network in CIDR notation to assign the cert\n"+
 			"  -name string\n"+
 			"    \tRequired: name of the cert, usually a hostname\n"+
+			"  -out string\n"+
+			"    \tOptional (if out-key or out-crt not set): directory to write generated public and private keys\n"+
 			"  -out-crt string\n"+
 			"    \tOptional: path to write the certificate to\n"+
 			"  -out-key string\n"+
 			"    \tOptional (if in-pub not set): path to write the private key to\n"+
 			"  -subnets string\n"+
-			"    \tOptional: comma seperated list of subnet this cert can serve for\n",
+			"    \tOptional: comma separated list of subnet this cert can serve for\n",
 		ob.String(),
 	)
 }

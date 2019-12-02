@@ -8,11 +8,12 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/curve25519"
 	"github.com/slackhq/nebula/cert"
+	"golang.org/x/crypto/curve25519"
 )
 
 type signFlags struct {
@@ -23,6 +24,7 @@ type signFlags struct {
 	ip          *string
 	duration    *time.Duration
 	inPubPath   *string
+	outDir      *string
 	outKeyPath  *string
 	outCertPath *string
 	groups      *string
@@ -38,10 +40,11 @@ func newSignFlags() *signFlags {
 	sf.ip = sf.set.String("ip", "", "Required: ip and network in CIDR notation to assign the cert")
 	sf.duration = sf.set.Duration("duration", 0, "Required: how long the cert should be valid for. Valid time units are seconds: \"s\", minutes: \"m\", hours: \"h\"")
 	sf.inPubPath = sf.set.String("in-pub", "", "Optional (if out-key not set): path to read a previously generated public key")
+	sf.outDir = sf.set.String("out", "", "Optional (if out-key or out-crt not set): directory to write generated public and private keys")
 	sf.outKeyPath = sf.set.String("out-key", "", "Optional (if in-pub not set): path to write the private key to")
 	sf.outCertPath = sf.set.String("out-crt", "", "Optional: path to write the certificate to")
 	sf.groups = sf.set.String("groups", "", "Optional: comma separated list of groups")
-	sf.subnets = sf.set.String("subnets", "", "Optional: comma seperated list of subnet this cert can serve for")
+	sf.subnets = sf.set.String("subnets", "", "Optional: comma separated list of subnet this cert can serve for")
 	return &sf
 
 }
@@ -165,12 +168,19 @@ func signCert(args []string, out io.Writer, errOut io.Writer) error {
 		},
 	}
 
+	if *sf.outDir != "" {
+		err = os.MkdirAll(*sf.outDir, 0755)
+		if err != nil {
+			return fmt.Errorf("error while creating output directory: %s", err)
+		}
+	}
+
 	if *sf.outKeyPath == "" {
-		*sf.outKeyPath = *sf.name + ".key"
+		*sf.outKeyPath = filepath.Join(*sf.outDir, *sf.name+".key")
 	}
 
 	if *sf.outCertPath == "" {
-		*sf.outCertPath = *sf.name + ".crt"
+		*sf.outCertPath = filepath.Join(*sf.outDir, *sf.name+".crt")
 	}
 
 	if _, err := os.Stat(*sf.outKeyPath); err == nil {
