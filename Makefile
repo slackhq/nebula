@@ -3,13 +3,7 @@ BUILD_NUMBER ?= dev+$(shell date -u '+%Y%m%d%H%M%S')
 GO111MODULE = on
 export GO111MODULE
 
-all:
-	make NEBULA_CMD_PATH=${NEBULA_CMD_PATH} bin-linux
-	make NEBULA_CMD_PATH=${NEBULA_CMD_PATH} bin-arm
-	make NEBULA_CMD_PATH=${NEBULA_CMD_PATH} bin-arm6
-	make NEBULA_CMD_PATH=${NEBULA_CMD_PATH} bin-arm64
-	make NEBULA_CMD_PATH=${NEBULA_CMD_PATH} bin-darwin
-	make NEBULA_CMD_PATH=${NEBULA_CMD_PATH} bin-windows
+all: bin-linux bin-arm bin-arm6 bin-arm64 bin-darwin bin-windows
 
 bin:
 	go build -ldflags "-X main.Build=$(BUILD_NUMBER)" -o ./nebula ${NEBULA_CMD_PATH}
