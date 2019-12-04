@@ -215,6 +215,17 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	//TODO: Move all of this inside functions in lighthouse.go
 	for k, v := range config.GetMap("static_host_map", map[interface{}]interface{}{}) {
 		vpnIp := net.ParseIP(fmt.Sprintf("%v", k))
+		// Was not a valid IP, maybe it's a hostname that needs looking up in DNS?
+		if vpnIp == nil {
+			ips, dnserr := net.LookupIP(fmt.Sprintf("%v", k))
+			if dnserr != nil {
+				l.Fatalf("Could not resolve lighthouse DNS: %v\n", err)
+				os.Exit(1)
+			} else {
+				// We're just going to take the first one if it's multiple
+				vpnIp = net.ParseIP(ips[0].String())
+			}
+		}
 		vals, ok := v.([]interface{})
 		if ok {
 			for _, v := range vals {
