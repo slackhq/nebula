@@ -106,7 +106,7 @@ func handleDnsRequest(w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func dnsMain(hostMap *HostMap) {
+func dnsMain(hostMap *HostMap, c *Config) {
 
 	dnsR = newDnsRecords(hostMap)
 
@@ -114,9 +114,9 @@ func dnsMain(hostMap *HostMap) {
 	dns.HandleFunc(".", handleDnsRequest)
 
 	// start server
-	port := 53
-	server := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "udp"}
-	l.Debugf("Starting DNS responder at %d\n", port)
+	addr := c.GetString("lighthouse.dns.host", "") + ":" + strconv.Itoa(c.GetInt("lighthouse.dns.port", 53))
+	server := &dns.Server{Addr: addr, Net: "udp"}
+	l.Debugf("Starting DNS responder at %s\n", addr)
 	err := server.ListenAndServe()
 	defer server.Shutdown()
 	if err != nil {

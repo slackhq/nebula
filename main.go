@@ -195,7 +195,6 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		l.Warn("lighthouse.am_lighthouse enabled on node but upstream lighthouses exist in config")
 	}
 
-	serveDns := config.GetBool("lighthouse.serve_dns", false)
 	lightHouse := NewLightHouse(
 		amLighthouse,
 		ip2int(tunCidr.IP),
@@ -206,11 +205,6 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		udpServer,
 		punchBack,
 	)
-
-	if amLighthouse && serveDns {
-		l.Debugln("Starting dns server")
-		go dnsMain(hostMap)
-	}
 
 	//TODO: Move all of this inside functions in lighthouse.go
 	for k, v := range config.GetMap("static_host_map", map[interface{}]interface{}{}) {
@@ -255,6 +249,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	//handshakeMACKey := config.GetString("handshake_mac.key", "")
 	//handshakeAcceptedMACKeys := config.GetStringSlice("handshake_mac.accepted_keys", []string{})
 
+	serveDns := config.GetBool("lighthouse.serve_dns", false)
 	checkInterval := config.GetInt("timers.connection_alive_interval", 5)
 	pendingDeletionInterval := config.GetInt("timers.pending_deletion_interval", 10)
 	ifConfig := &InterfaceConfig{
@@ -303,6 +298,12 @@ func Main(configPath string, configTest bool, buildVersion string) {
 
 	attachCommands(ssh, hostMap, handshakeManager.pendingHostMap, lightHouse, ifce)
 	ifce.Run(config.GetInt("tun.routines", 1), udpQueues, buildVersion)
+
+	// Start DNS server last to allow using the nebula IP as lighthouse.dns.host
+	if amLighthouse && serveDns {
+		l.Debugln("Starting dns server")
+		go dnsMain(hostMap, config)
+	}
 
 	// Just sit here and be friendly, main thread.
 	shutdownBlock(ifce)
