@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/flynn/noise"
-	"github.com/stretchr/testify/assert"
 	"github.com/slackhq/nebula/cert"
+	"github.com/stretchr/testify/assert"
 )
 
 var vpnIP uint32 = uint32(12341234)
@@ -27,7 +27,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 		rawCertificateNoKey: []byte{},
 	}
 
-	lh := NewLightHouse(false, 0, []string{}, 1000, 0, &udpConn{}, false)
+	lh := NewLightHouse(false, 0, []uint32{}, 1000, 0, &udpConn{}, false)
 	ifce := &Interface{
 		hostMap:          hostMap,
 		inside:           &Tun{},
@@ -90,7 +90,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 		rawCertificateNoKey: []byte{},
 	}
 
-	lh := NewLightHouse(false, 0, []string{}, 1000, 0, &udpConn{}, false)
+	lh := NewLightHouse(false, 0, []uint32{}, 1000, 0, &udpConn{}, false)
 	ifce := &Interface{
 		hostMap:          hostMap,
 		inside:           &Tun{},
