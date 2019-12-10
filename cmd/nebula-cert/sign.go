@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/curve25519"
 	"github.com/slackhq/nebula/cert"
+	"golang.org/x/crypto/curve25519"
 )
 
 type signFlags struct {
@@ -173,10 +173,6 @@ func signCert(args []string, out io.Writer, errOut io.Writer) error {
 		*sf.outCertPath = *sf.name + ".crt"
 	}
 
-	if _, err := os.Stat(*sf.outKeyPath); err == nil {
-		return fmt.Errorf("refusing to overwrite existing key: %s", *sf.outKeyPath)
-	}
-
 	if _, err := os.Stat(*sf.outCertPath); err == nil {
 		return fmt.Errorf("refusing to overwrite existing cert: %s", *sf.outCertPath)
 	}
@@ -187,6 +183,10 @@ func signCert(args []string, out io.Writer, errOut io.Writer) error {
 	}
 
 	if *sf.inPubPath == "" {
+		if _, err := os.Stat(*sf.outKeyPath); err == nil {
+			return fmt.Errorf("refusing to overwrite existing key: %s", *sf.outKeyPath)
+		}
+
 		err = ioutil.WriteFile(*sf.outKeyPath, cert.MarshalX25519PrivateKey(rawPriv), 0600)
 		if err != nil {
 			return fmt.Errorf("error while writing out-key: %s", err)
