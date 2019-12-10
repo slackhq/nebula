@@ -190,15 +190,24 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	amLighthouse := config.GetBool("lighthouse.am_lighthouse", false)
 
 	// warn if am_lighthouse is enabled but upstream lighthouses exists
-	lighthouseHosts := config.GetStringSlice("lighthouse.hosts", []string{})
-	if amLighthouse && len(lighthouseHosts) != 0 {
+	rawLighthouseHosts := config.GetStringSlice("lighthouse.hosts", []string{})
+	if amLighthouse && len(rawLighthouseHosts) != 0 {
 		l.Warn("lighthouse.am_lighthouse enabled on node but upstream lighthouses exist in config")
+	}
+
+	lighthouseHosts := make([]uint32, len(rawLighthouseHosts))
+	for i, host := range rawLighthouseHosts {
+		ip := net.ParseIP(host)
+		if ip == nil {
+			l.WithField("host", host).Fatalf("Unable to parse lighthouse host entry %v", i+1)
+		}
+		lighthouseHosts[i] = ip2int(ip)
 	}
 
 	lightHouse := NewLightHouse(
 		amLighthouse,
 		ip2int(tunCidr.IP),
-		config.GetStringSlice("lighthouse.hosts", []string{}),
+		lighthouseHosts,
 		//TODO: change to a duration
 		config.GetInt("lighthouse.interval", 10),
 		port,

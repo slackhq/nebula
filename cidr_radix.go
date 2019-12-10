@@ -100,6 +100,29 @@ func (tree *CIDRTree) Contains(ip uint32) (value interface{}) {
 }
 
 // Finds the most specific match
+func (tree *CIDRTree) MostSpecificContains(ip uint32) (value interface{}) {
+	bit := startbit
+	node := tree.root
+
+	for node != nil {
+		if node.value != nil {
+			value = node.value
+		}
+
+		if ip&bit != 0 {
+			node = node.right
+		} else {
+			node = node.left
+		}
+
+		bit >>= 1
+
+	}
+
+	return value
+}
+
+// Finds the most specific match
 func (tree *CIDRTree) Match(ip uint32) (value interface{}) {
 	bit := startbit
 	node := tree.root

@@ -48,18 +48,19 @@ func TestNewipandportsfromudpaddrs(t *testing.T) {
 
 func Test_lhStaticMapping(t *testing.T) {
 	lh1 := "10.128.0.2"
-
 	lh1IP := net.ParseIP(lh1)
 
 	udpServer, _ := NewListener("0.0.0.0", 0, true)
 
-	meh := NewLightHouse(true, 1, []string{lh1}, 10, 10003, udpServer, false)
+	meh := NewLightHouse(true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false)
 	meh.AddRemote(ip2int(lh1IP), NewUDPAddr(ip2int(lh1IP), uint16(4242)), true)
 	err := meh.ValidateLHStaticEntries()
 	assert.Nil(t, err)
 
 	lh2 := "10.128.0.3"
-	meh = NewLightHouse(true, 1, []string{lh1, lh2}, 10, 10003, udpServer, false)
+	lh2IP := net.ParseIP(lh2)
+
+	meh = NewLightHouse(true, 1, []uint32{ip2int(lh1IP), ip2int(lh2IP)}, 10, 10003, udpServer, false)
 	meh.AddRemote(ip2int(lh1IP), NewUDPAddr(ip2int(lh1IP), uint16(4242)), true)
 	err = meh.ValidateLHStaticEntries()
 	assert.EqualError(t, err, "Lighthouse 10.128.0.3 does not have a static_host_map entry")
