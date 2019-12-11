@@ -65,13 +65,13 @@ type ifreqAddr struct {
 
 type ifreqMTU struct {
 	Name [16]byte
-	MTU  int
+	MTU  int32
 	pad  [8]byte
 }
 
 type ifreqQLEN struct {
 	Name  [16]byte
-	Value int
+	Value int32
 	pad   [8]byte
 }
 
@@ -168,43 +168,43 @@ func (c Tun) Activate() error {
 
 	// Set the device ip address
 	if err = ioctl(fd, syscall.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra))); err != nil {
-		return err
+		return fmt.Errorf("failed to set tun address: %s", err)
 	}
 
 	// Set the device network
 	ifra.Addr.Addr = mask
 	if err = ioctl(fd, syscall.SIOCSIFNETMASK, uintptr(unsafe.Pointer(&ifra))); err != nil {
-		return err
+		return fmt.Errorf("failed to set tun netmask: %s", err)
 	}
 
 	// Set the device name
 	ifrf := ifReq{Name: devName}
 	if err = ioctl(fd, syscall.SIOCGIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
-		return err
+		return fmt.Errorf("failed to set tun device name: %s", err)
 	}
 
 	// Set the MTU on the device
-	ifm := ifreqMTU{Name: devName, MTU: c.MaxMTU}
+	ifm := ifreqMTU{Name: devName, MTU: int32(c.MaxMTU)}
 	if err = ioctl(fd, syscall.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
-		return err
+		return fmt.Errorf("failed to set tun mtu: %s", err)
 	}
 
 	// Set the transmit queue length
-	ifrq := ifreqQLEN{Name: devName, Value: c.TXQueueLen}
+	ifrq := ifreqQLEN{Name: devName, Value: int32(c.TXQueueLen)}
 	if err = ioctl(fd, syscall.SIOCSIFTXQLEN, uintptr(unsafe.Pointer(&ifrq))); err != nil {
-		return err
+		return fmt.Errorf("failed to set tun tx queue length: %s", err)
 	}
 
 	// Bring up the interface
 	ifrf.Flags = ifrf.Flags | syscall.IFF_UP
 	if err = ioctl(fd, syscall.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
-		return err
+		return fmt.Errorf("failed to bring the tun device up: %s", err)
 	}
 
 	// Set the routes
 	link, err := netlink.LinkByName(c.Device)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get tun device link: %s", err)
 	}
 
 	// Default route
@@ -242,7 +242,7 @@ func (c Tun) Activate() error {
 	// Run the interface
 	ifrf.Flags = ifrf.Flags | syscall.IFF_UP | syscall.IFF_RUNNING
 	if err = ioctl(fd, syscall.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
-		return err
+		return fmt.Errorf("failed to run tun device: %s", err)
 	}
 
 	return nil

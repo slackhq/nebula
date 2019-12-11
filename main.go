@@ -59,20 +59,20 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	trustedCAs, err = loadCAFromConfig(config)
 	if err != nil {
 		//The errors coming out of loadCA are already nicely formatted
-		l.Fatal(err)
+		l.WithError(err).Fatal("Failed to load ca from config")
 	}
 	l.WithField("fingerprints", trustedCAs.GetFingerprints()).Debug("Trusted CA fingerprints")
 
 	cs, err := NewCertStateFromConfig(config)
 	if err != nil {
 		//The errors coming out of NewCertStateFromConfig are already nicely formatted
-		l.Fatal(err)
+		l.WithError(err).Fatal("Failed to load certificate from config")
 	}
 	l.WithField("cert", cs.certificate).Debug("Client nebula certificate")
 
 	fw, err := NewFirewallFromConfig(cs.certificate, config)
 	if err != nil {
-		l.Fatal("Error while loading firewall rules: ", err)
+		l.WithError(err).Fatal("Error while loading firewall rules")
 	}
 	l.WithField("firewallHash", fw.GetRuleHash()).Info("Firewall started")
 
@@ -131,7 +131,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		for _, rawPreferredRange := range rawPreferredRanges {
 			_, preferredRange, err := net.ParseCIDR(rawPreferredRange)
 			if err != nil {
-				l.Fatal(err)
+				l.WithError(err).Fatal("Failed to parse preferred ranges")
 			}
 			preferredRanges = append(preferredRanges, preferredRange)
 		}
@@ -144,7 +144,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	if rawLocalRange != "" {
 		_, localRange, err := net.ParseCIDR(rawLocalRange)
 		if err != nil {
-			l.Fatal(err)
+			l.WithError(err).Fatal("Failed to parse local range")
 		}
 
 		// Check if the entry for local_range was already specified in
@@ -294,7 +294,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 
 	ifce, err := NewInterface(ifConfig)
 	if err != nil {
-		l.Fatal(err)
+		l.WithError(err).Fatal("Failed to initialize interface")
 	}
 
 	ifce.RegisterConfigChangeCallbacks(config)
@@ -304,7 +304,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 
 	err = startStats(config)
 	if err != nil {
-		l.Fatal(err)
+		l.WithError(err).Fatal("Failed to start stats emitter")
 	}
 
 	//TODO: check if we _should_ be emitting stats
