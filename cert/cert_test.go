@@ -44,7 +44,7 @@ func TestMarshalingNebulaCertificate(t *testing.T) {
 
 	b, err := nc.Marshal()
 	assert.Nil(t, err)
-	t.Log("Cert size:", len(b))
+	//t.Log("Cert size:", len(b))
 
 	nc2, err := UnmarshalNebulaCertificate(b)
 	assert.Nil(t, err)
@@ -103,9 +103,9 @@ func TestNebulaCertificate_Sign(t *testing.T) {
 	assert.Nil(t, nc.Sign(priv))
 	assert.True(t, nc.CheckSignature(pub))
 
-	b, err := nc.Marshal()
+	_, err = nc.Marshal()
 	assert.Nil(t, err)
-	t.Log("Cert size:", len(b))
+	//t.Log("Cert size:", len(b))
 }
 
 func TestNebulaCertificate_Expired(t *testing.T) {
@@ -292,12 +292,12 @@ func TestMarshalingNebulaCertificateConsistency(t *testing.T) {
 
 	b, err := nc.Marshal()
 	assert.Nil(t, err)
-	t.Log("Cert size:", len(b))
+	//t.Log("Cert size:", len(b))
 	assert.Equal(t, "0aa2010a0774657374696e67121b8182845080feffff0f828284508080fcff0f8382845080fe83f80f1a1b8182844880fe83f80f8282844880feffff0f838284488080fcff0f220b746573742d67726f757031220b746573742d67726f757032220b746573742d67726f75703328f0e0e7d70430a08681c4053a20313233343536373839306162636564666768696a3132333435363738393061624a081234567890abcedf1220313233343536373839306162636564666768696a313233343536373839306162", fmt.Sprintf("%x", b))
 
 	b, err = proto.Marshal(nc.getRawDetails())
 	assert.Nil(t, err)
-	t.Log("Raw cert size:", len(b))
+	//t.Log("Raw cert size:", len(b))
 	assert.Equal(t, "0a0774657374696e67121b8182845080feffff0f828284508080fcff0f8382845080fe83f80f1a1b8182844880fe83f80f8282844880feffff0f838284488080fcff0f220b746573742d67726f757031220b746573742d67726f757032220b746573742d67726f75703328f0e0e7d70430a08681c4053a20313233343536373839306162636564666768696a3132333435363738393061624a081234567890abcedf", fmt.Sprintf("%x", b))
 }
 
