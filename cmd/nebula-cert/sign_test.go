@@ -1,3 +1,5 @@
+// +build !windows
+
 package main
 
 import (
@@ -262,12 +264,19 @@ func Test_signCert(t *testing.T) {
 	assert.Nil(t, signCert(args, ob, eb))
 
 	// test that we won't overwrite existing key file
+	os.Remove(crtF.Name())
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", crtF.Name(), "-out-key", keyF.Name(), "-duration", "100m", "-subnets", "10.1.1.1/32, ,   10.2.2.2/32   ,   ,  ,, 10.5.5.5/32", "-groups", "1,,   2    ,        ,,,3,4,5"}
 	assert.EqualError(t, signCert(args, ob, eb), "refusing to overwrite existing key: "+keyF.Name())
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
+
+	// create valid cert/key for overwrite tests
+	os.Remove(keyF.Name())
+	os.Remove(crtF.Name())
+	args = []string{"-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", crtF.Name(), "-out-key", keyF.Name(), "-duration", "100m", "-subnets", "10.1.1.1/32, ,   10.2.2.2/32   ,   ,  ,, 10.5.5.5/32", "-groups", "1,,   2    ,        ,,,3,4,5"}
+	assert.Nil(t, signCert(args, ob, eb))
 
 	// test that we won't overwrite existing certificate file
 	os.Remove(keyF.Name())
