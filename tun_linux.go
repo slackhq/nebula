@@ -71,7 +71,7 @@ type ifreqMTU struct {
 
 type ifreqQLEN struct {
 	Name  [16]byte
-	Value int
+	Value int32
 	pad   [8]byte
 }
 
@@ -190,7 +190,7 @@ func (c Tun) Activate() error {
 	}
 
 	// Set the transmit queue length
-	ifrq := ifreqQLEN{Name: devName, Value: c.TXQueueLen}
+	ifrq := ifreqQLEN{Name: devName, Value: int32(c.TXQueueLen)}
 	if err = ioctl(fd, syscall.SIOCSIFTXQLEN, uintptr(unsafe.Pointer(&ifrq))); err != nil {
 		return fmt.Errorf("failed to set tun tx queue length: %s", err)
 	}
