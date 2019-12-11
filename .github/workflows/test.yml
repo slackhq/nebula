@@ -1,0 +1,49 @@
+name: Build and test
+on: [push]
+jobs:
+
+  test-linux:
+    name: Build all and test on ubuntu-linux
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Set up Go 1.13
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.13
+      id: go
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v1
+
+    - name: Build
+      run: make all
+
+    - name: Test
+      run: make test
+
+  test:
+    name: Build and test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, macOS-latest]
+    steps:
+
+    - name: Set up Go 1.13
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.13
+      id: go
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v1
+
+    - name: Build nebula
+      run: go build ./cmd/nebula
+
+    - name: Build nebula-cert
+      run: go build ./cmd/nebula-cert
+
+    - name: Test
+      run: go test -v ./...
