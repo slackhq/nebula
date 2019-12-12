@@ -46,7 +46,10 @@ func NewUDPAddrFromString(s string) *udpAddr {
 	}
 }
 
-func NewListener(ip string, port int, multi bool) (*udpConn, error) {
+func NewListener(ip string, port int, multi, pathMTUDiscovery bool) (*udpConn, error) {
+	if pathMTUDiscovery {
+		return nil, fmt.Errorf("path_mtu_discovery is not supported on this os")
+	}
 	lc := NewListenConfig(multi)
 	pc, err := lc.ListenPacket(context.TODO(), "udp4", fmt.Sprintf("%s:%d", ip, port))
 	if err != nil {
@@ -63,6 +66,10 @@ func (ua *udpAddr) Equals(t *udpAddr) bool {
 		return t == nil && ua == nil
 	}
 	return ua.IP.Equal(t.IP) && ua.Port == t.Port
+}
+
+func (ua *udpAddr) IPEquals(t *udpAddr) bool {
+	return ua.IP.Equal(t.IP)
 }
 
 func (uc *udpConn) WriteTo(b []byte, addr *udpAddr) error {
@@ -108,6 +115,13 @@ func (u *udpConn) ListenOut(f *Interface) {
 		udpAddr.UDPAddr = *rua
 		f.readOutsidePackets(udpAddr, plaintext[:0], buffer[:n], header, fwPacket, nb)
 	}
+}
+
+func GetKnownMTU(target net.IP) (int, error) {
+	return 0, nil
+}
+
+func (u *udpConn) HandleErrQueue(f *Interface) {
 }
 
 func udp2ip(addr *udpAddr) net.IP {

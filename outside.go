@@ -141,16 +141,16 @@ func (f *Interface) closeTunnel(hostInfo *HostInfo) {
 }
 
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {
-	if hostDidRoam(hostinfo.remote, addr) {
-		if !hostinfo.lastRoam.IsZero() && addr.Equals(hostinfo.lastRoamRemote) && time.Since(hostinfo.lastRoam) < RoamingSupressSeconds*time.Second {
+	if hostDidRoam(hostinfo.remote.addr, addr) {
+		if !hostinfo.lastRoam.IsZero() && addr.Equals(hostinfo.lastRoamRemote.addr) && time.Since(hostinfo.lastRoam) < RoamingSupressSeconds*time.Second {
 			if l.Level >= logrus.DebugLevel {
-				l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
+				l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", hostinfo.remote.addr).WithField("newAddr", addr).
 					Debugf("Supressing roam back to previous remote for %d seconds", RoamingSupressSeconds)
 			}
 			return
 		}
 
-		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
+		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", hostinfo.remote.addr).WithField("newAddr", addr).
 			Info("Host roamed to new udp ip/port.")
 		hostinfo.lastRoam = time.Now()
 		remoteCopy := *hostinfo.remote
@@ -329,8 +329,8 @@ func (f *Interface) handleRecvError(addr *udpAddr, h *Header) {
 	if !hostinfo.RecvErrorExceeded() {
 		return
 	}
-	if hostinfo.remote != nil && hostinfo.remote.String() != addr.String() {
-		l.Infoln("Someone spoofing recv_errors? ", addr, hostinfo.remote)
+	if hostinfo.remote != nil && !hostinfo.remote.addr.Equals(addr) {
+		l.Infoln("Someone spoofing recv_errors? ", addr, hostinfo.remote.addr)
 		return
 	}
 

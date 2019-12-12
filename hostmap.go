@@ -21,6 +21,24 @@ const MaxRemotes = 10
 // This helps prevent flapping due to packets already in flight
 const RoamingSupressSeconds = 2
 
+// The total Nebula packet overhead is:
+// - HeaderLen bytes for the Nebula header.
+// - 16 bytes for the encryption cipher's AEAD 128-bit tag.
+//     NOTE: both AESGCM and ChaChaPoly have a 16 byte tag, but if we add other
+//       ciphers in the future we could calculate this based on the cipher,
+//       returned by (cipher.AEAD).Overhead().
+// - 20 bytes for our IPv4 header.
+//     (max is 60 bytes, but we don't use IPv4 options)
+//     TODO: Could routers along the path inject a larger IPv4 header? If so,
+//       we may need to increase this.
+// - 8 bytes for our UDP header.
+const NebulaHeaderOverhead = HeaderLen + 16 + 20 + 8
+
+// TODO make configurable
+// NOTE: This is only used when the experimental `tun.path_mtu_discovery`
+// feature is enabled
+const MTUTimeoutSeconds = 60
+
 type HostMap struct {
 	sync.RWMutex    //Because we concurrently read and write to our maps
 	name            string
@@ -32,7 +50,7 @@ type HostMap struct {
 }
 
 type HostInfo struct {
-	remote            *udpAddr
+	remote            *HostInfoDest
 	Remotes           []*HostInfoDest
 	promoteCounter    uint32
 	ConnectionState   *ConnectionState
@@ -48,7 +66,7 @@ type HostInfo struct {
 	recvError         int
 
 	lastRoam       time.Time
-	lastRoamRemote *udpAddr
+	lastRoamRemote *HostInfoDest
 }
 
 type cachedPacket struct {
@@ -61,10 +79,13 @@ type cachedPacket struct {
 type packetCallback func(t NebulaMessageType, st NebulaMessageSubType, h *HostInfo, p, nb, out []byte)
 
 type HostInfoDest struct {
-	active bool
-	addr   *udpAddr
+	addr *udpAddr
 	//probes       [ProbeLen]bool
 	probeCounter int
+
+	// The discovered mtu to use for the chosen remote.
+	MTU          int
+	MTUTimestamp time.Time
 }
 
 type Probe struct {
@@ -253,6 +274,27 @@ func (hm *HostMap) QueryReverseIndex(index uint32) (*HostInfo, error) {
 	return nil, fmt.Errorf("unable to find reverse index or connectionstate nil in %s hostmap", hm.name)
 }
 
+// This function needs to range because we don't keep a map of remote IPs
+// TODO: maintain a map of remoteIP -> HostInfo in the HostMap.
+// Returns a slice since mulitple "hosts" could have the same remote IP (different ports)
+func (hm *HostMap) QueryRemoteIP(remoteNoPort *udpAddr) []*HostInfo {
+	hm.RLock()
+
+	var hosts []*HostInfo
+
+	for _, h := range hm.Hosts {
+
+		for _, r := range h.Remotes {
+			if r != nil && r.addr.IPEquals(remoteNoPort) {
+				hosts = append(hosts, h)
+				break
+			}
+		}
+	}
+	hm.RUnlock()
+	return hosts
+}
+
 func (hm *HostMap) AddRemote(vpnIp uint32, remote *udpAddr) *HostInfo {
 	hm.Lock()
 	i, v := hm.Hosts[vpnIp]
@@ -265,7 +307,7 @@ func (hm *HostMap) AddRemote(vpnIp uint32, remote *udpAddr) *HostInfo {
 			hostId:          vpnIp,
 			HandshakePacket: make(map[uint8][]byte, 0),
 		}
-		i.remote = i.Remotes[0].addr
+		i.setRemote(i.Remotes[0])
 		hm.Hosts[vpnIp] = i
 		l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(vpnIp), "udpAddr": remote, "mapTotalSize": len(hm.Hosts)}).
 			Debug("Hostmap remote ip added")
@@ -353,8 +395,7 @@ func (hm *HostMap) ClearRemotes(vpnIP uint32) {
 		hm.Unlock()
 		return
 	}
-	i.remote = nil
-	i.Remotes = nil
+	i.ClearRemotes()
 	hm.Unlock()
 }
 
@@ -421,7 +462,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 	i.promoteCounter++
 	if i.promoteCounter%PromoteEvery == 0 {
 		// return early if we are already on a preferred remote
-		rIP := udp2ip(i.remote)
+		rIP := udp2ip(i.remote.addr)
 		for _, l := range preferredRanges {
 			if l.Contains(rIP) {
 				return
@@ -436,7 +477,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		}
 
 		best, preferred := i.getBestRemote(preferredRanges)
-		if preferred && !best.Equals(i.remote) {
+		if preferred && !best.addr.Equals(i.remote.addr) {
 			// Try to send a test packet to that host, this should
 			// cause it to detect a roaming event and switch remotes
 			ifce.send(test, testRequest, i.ConnectionState, i, best, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
@@ -447,23 +488,23 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 func (i *HostInfo) ForcePromoteBest(preferredRanges []*net.IPNet) {
 	best, _ := i.getBestRemote(preferredRanges)
 	if best != nil {
-		i.remote = best
+		i.setRemote(best)
 	}
 }
 
-func (i *HostInfo) getBestRemote(preferredRanges []*net.IPNet) (best *udpAddr, preferred bool) {
+func (i *HostInfo) getBestRemote(preferredRanges []*net.IPNet) (best *HostInfoDest, preferred bool) {
 	if len(i.Remotes) > 0 {
 		for _, r := range i.Remotes {
 			rIP := udp2ip(r.addr)
 
 			for _, l := range preferredRanges {
 				if l.Contains(rIP) {
-					return r.addr, true
+					return r, true
 				}
 			}
 
 			if best == nil || !PrivateIP(rIP) {
-				best = r.addr
+				best = r
 			}
 			/*
 				for _, r := range i.Remotes {
@@ -496,21 +537,21 @@ func (i *HostInfo) rotateRemote() {
 	}
 
 	if i.remote == nil {
-		i.remote = i.Remotes[0].addr
+		i.remote = i.Remotes[0]
 		return
 	}
 
 	// We want to look at all but the very last entry since that is handled at the end
 	for x := 0; x < len(i.Remotes)-1; x++ {
 		// Find our current position and move to the next one in the list
-		if i.Remotes[x].addr.Equals(i.remote) {
-			i.remote = i.Remotes[x+1].addr
+		if i.Remotes[x].addr.Equals(i.remote.addr) {
+			i.setRemote(i.Remotes[x+1])
 			return
 		}
 	}
 
 	// Our current position was likely the last in the list, start over at 0
-	i.remote = i.Remotes[0].addr
+	i.setRemote(i.Remotes[0])
 }
 
 func (i *HostInfo) cachePacket(t NebulaMessageType, st NebulaMessageSubType, packet []byte, f packetCallback) {
@@ -571,12 +612,13 @@ func (i *HostInfo) GetCert() *cert.NebulaCertificate {
 	return nil
 }
 
-func (i *HostInfo) AddRemote(r udpAddr) *udpAddr {
+func (i *HostInfo) AddRemote(r udpAddr) *HostInfoDest {
 	remote := &r
+
 	//add := true
 	for _, r := range i.Remotes {
 		if r.addr.Equals(remote) {
-			return r.addr
+			return r
 			//add = false
 		}
 	}
@@ -584,13 +626,38 @@ func (i *HostInfo) AddRemote(r udpAddr) *udpAddr {
 	if len(i.Remotes) > MaxRemotes {
 		i.Remotes = i.Remotes[len(i.Remotes)-MaxRemotes:]
 	}
-	i.Remotes = append(i.Remotes, NewHostInfoDest(remote))
-	return remote
+	rd := NewHostInfoDest(remote)
+	i.Remotes = append(i.Remotes, rd)
+	return rd
 	//l.Debugf("Added remote %s for vpn ip", remote)
 }
 
 func (i *HostInfo) SetRemote(remote udpAddr) {
-	i.remote = i.AddRemote(remote)
+	i.setRemote(i.AddRemote(remote))
+}
+
+// setRemote should only be called with a reference to an entry inside of the
+// i.Remotes map.
+//
+// External callers should use i.SetRemote
+func (i *HostInfo) setRemote(remote *HostInfoDest) {
+	i.remote = remote
+}
+
+// NOTE: This is only used when the experimental `tun.path_mtu_discovery`
+// feature is enabled
+func (i *HostInfo) SetRemoteMTU(remoteNoPort *udpAddr, mtu int) {
+	for _, r := range i.Remotes {
+		if r.addr.IPEquals(remoteNoPort) {
+			r.MTUTimestamp = time.Now()
+			r.MTU = mtu - NebulaHeaderOverhead
+			l.WithField("udpAddr", r.addr).WithField("mtu", mtu).Debug("Updated MTU")
+		}
+	}
+}
+
+func (i *HostInfo) CurrentRemote() *HostInfoDest {
+	return i.remote
 }
 
 func (i *HostInfo) ClearRemotes() {
@@ -620,11 +687,31 @@ func NewHostInfoDest(addr *udpAddr) *HostInfoDest {
 }
 
 func (hid *HostInfoDest) MarshalJSON() ([]byte, error) {
-	return json.Marshal(m{
-		"active":      hid.active,
+	out := m{
 		"address":     hid.addr,
 		"probe_count": hid.probeCounter,
-	})
+	}
+	if !hid.MTUTimestamp.IsZero() {
+		out["mtu"] = hid.MTU
+		out["mtu_timestamp"] = hid.MTUTimestamp.UnixNano() / 1e6
+	}
+	return json.Marshal(out)
+}
+
+// NOTE: This is only used when the experimental `tun.path_mtu_discovery`
+// feature is enabled
+func (hid *HostInfoDest) GetMTU() int {
+	if hid.MTUTimestamp.IsZero() || time.Since(hid.MTUTimestamp) > MTUTimeoutSeconds*time.Second {
+		hid.MTUTimestamp = time.Now()
+
+		var err error
+		hid.MTU, err = GetKnownMTU(udp2ip(hid.addr))
+		if err != nil {
+			l.WithField("udpAddr", hid.addr).WithError(err).Error("Failed to lookup current IP_MTU")
+		}
+		l.WithField("udpAddr", hid.addr).WithField("mtu", hid.MTU).Debug("Lookup Known MTU")
+	}
+	return hid.MTU
 }
 
 /*

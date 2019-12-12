@@ -115,9 +115,14 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		l.WithError(err).Fatal("Failed to get a tun/tap device")
 	}
 
+	pathMTUDiscovery := config.GetBool("tun.path_mtu_discovery", false)
+	if pathMTUDiscovery {
+		l.Info("Path MTU discovery enabled")
+	}
+
 	// set up our UDP listener
 	udpQueues := config.GetInt("listen.routines", 1)
-	udpServer, err := NewListener(config.GetString("listen.host", "0.0.0.0"), config.GetInt("listen.port", 0), udpQueues > 1)
+	udpServer, err := NewListener(config.GetString("listen.host", "0.0.0.0"), config.GetInt("listen.port", 0), udpQueues > 1, pathMTUDiscovery)
 	if err != nil {
 		l.WithError(err).Fatal("Failed to open udp listener")
 	}
@@ -276,6 +281,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		DropLocalBroadcast:      config.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:           config.GetBool("tun.drop_multicast", false),
 		UDPBatchSize:            config.GetInt("listen.batch", 64),
+		PathMTUDiscovery:        pathMTUDiscovery,
 	}
 
 	switch ifConfig.Cipher {
@@ -332,7 +338,7 @@ func shutdownBlock(ifce *Interface) {
 	for _, h := range ifce.hostMap.Hosts {
 		if h.ConnectionState.ready {
 			ifce.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
-			l.WithField("vpnIp", IntIp(h.hostId)).WithField("udpAddr", h.remote).
+			l.WithField("vpnIp", IntIp(h.hostId)).WithField("udpAddr", h.remote.addr).
 				Debug("Sending close tunnel message")
 		}
 	}

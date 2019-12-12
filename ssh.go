@@ -345,9 +345,18 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 				"vpnIp":         int2ip(v.hostId),
 				"localIndex":    v.localIndexId,
 				"remoteIndex":   v.remoteIndexId,
-				"remoteAddrs":   v.RemoteUDPAddrs(),
+				"remotes":       v.Remotes,
 				"cachedPackets": len(v.packetStore),
 				"cert":          v.GetCert(),
+			}
+			if r := v.lastRoam; !v.lastRoam.IsZero() {
+				h["lastRoam"] = r
+			}
+			if r := v.lastRoamRemote; r != nil {
+				h["lastRoamRemote"] = r.addr.String()
+			}
+			if r := v.remote; r != nil {
+				h["remote"] = r.addr.String()
 			}
 
 			if v.ConnectionState != nil {
