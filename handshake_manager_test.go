@@ -11,12 +11,13 @@ import (
 var indexes []uint32 = []uint32{1000, 2000, 3000, 4000}
 
 //var ips []uint32 = []uint32{9000, 9999999, 3, 292394923}
-var ips []uint32 = []uint32{9000}
+var ips []uint32
 
 func Test_NewHandshakeManagerIndex(t *testing.T) {
-	_, tuncidr, _ := net.ParseCIDR("1.1.1.1/24")
+	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
+	ips = []uint32{ip2int(net.ParseIP("172.1.1.2"))}
 	preferredRanges := []*net.IPNet{localrange}
 	mainHM := NewHostMap("test", vpncidr, preferredRanges)
 
@@ -54,9 +55,10 @@ func Test_NewHandshakeManagerIndex(t *testing.T) {
 }
 
 func Test_NewHandshakeManagerVpnIP(t *testing.T) {
-	_, tuncidr, _ := net.ParseCIDR("1.1.1.1/24")
+	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
+	ips = []uint32{ip2int(net.ParseIP("172.1.1.2"))}
 	preferredRanges := []*net.IPNet{localrange}
 	mw := &mockEncWriter{}
 	mainHM := NewHostMap("test", vpncidr, preferredRanges)
@@ -102,9 +104,10 @@ func Test_NewHandshakeManagerVpnIP(t *testing.T) {
 }
 
 func Test_NewHandshakeManagerVpnIPcleanup(t *testing.T) {
-	_, tuncidr, _ := net.ParseCIDR("1.1.1.1/24")
+	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
+	vpnIP = ip2int(net.ParseIP("172.1.1.2"))
 	preferredRanges := []*net.IPNet{localrange}
 	mw := &mockEncWriter{}
 	mainHM := NewHostMap("test", vpncidr, preferredRanges)
@@ -114,7 +117,7 @@ func Test_NewHandshakeManagerVpnIPcleanup(t *testing.T) {
 	now := time.Now()
 	blah.NextOutboundHandshakeTimerTick(now, mw)
 
-	hostinfo := blah.AddVpnIP(101010)
+	hostinfo := blah.AddVpnIP(vpnIP)
 	// Pretned we have an index too
 	blah.AddIndexHostInfo(12341234, hostinfo)
 	assert.Contains(t, blah.pendingHostMap.Indexes, uint32(12341234))
@@ -147,12 +150,12 @@ func Test_NewHandshakeManagerVpnIPcleanup(t *testing.T) {
 		l.Infoln(cumulative, next_tick)
 		blah.NextOutboundHandshakeTimerTick(next_tick)
 	*/
-	assert.NotContains(t, blah.pendingHostMap.Hosts, uint32(101010))
+	assert.NotContains(t, blah.pendingHostMap.Hosts, uint32(vpnIP))
 	assert.NotContains(t, blah.pendingHostMap.Indexes, uint32(12341234))
 }
 
 func Test_NewHandshakeManagerIndexcleanup(t *testing.T) {
-	_, tuncidr, _ := net.ParseCIDR("1.1.1.1/24")
+	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
 	preferredRanges := []*net.IPNet{localrange}

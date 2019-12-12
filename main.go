@@ -82,6 +82,10 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	if err != nil {
 		l.WithError(err).Fatal("Could not parse tun.routes")
 	}
+	unsafeRoutes, err := parseUnsafeRoutes(config, tunCidr)
+	if err != nil {
+		l.WithError(err).Fatal("Could not parse tun.unsafe_routes")
+	}
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
 	wireSSHReload(ssh, config)
@@ -107,8 +111,9 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	tun, err := newTun(
 		config.GetString("tun.dev", ""),
 		tunCidr,
-		config.GetInt("tun.mtu", 1300),
+		config.GetInt("tun.mtu", DEFAULT_MTU),
 		routes,
+		unsafeRoutes,
 		config.GetInt("tun.tx_queue", 500),
 	)
 	if err != nil {
@@ -163,6 +168,8 @@ func Main(configPath string, configTest bool, buildVersion string) {
 
 	hostMap := NewHostMap("main", tunCidr, preferredRanges)
 	hostMap.SetDefaultRoute(ip2int(net.ParseIP(config.GetString("default_route", "0.0.0.0"))))
+	hostMap.addUnsafeRoutes(&unsafeRoutes)
+
 	l.WithField("network", hostMap.vpnCIDR).WithField("preferredRanges", hostMap.preferredRanges).Info("Main HostMap created")
 
 	/*

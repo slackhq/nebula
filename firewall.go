@@ -343,10 +343,15 @@ func AddFirewallRulesFromConfig(inbound bool, config *Config, fw FirewallInterfa
 	return nil
 }
 
-func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, c *cert.NebulaCertificate, caPool *cert.NebulaCAPool) bool {
+func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool) bool {
 	// Check if we spoke to this tuple, if we did then allow this packet
 	if f.inConns(packet, fp, incoming) {
 		return false
+	}
+
+	// Make sure remote address matches nebula certificate
+	if h.remoteCidr.Contains(fp.RemoteIP) == nil {
+		return true
 	}
 
 	// Make sure we are supposed to be handling this local ip address
@@ -360,7 +365,7 @@ func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, c *cert
 	}
 
 	// We now know which firewall table to check against
-	if !table.match(fp, incoming, c, caPool) {
+	if !table.match(fp, incoming, h.ConnectionState.peerCert, caPool) {
 		return true
 	}
 

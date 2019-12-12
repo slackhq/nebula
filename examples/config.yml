@@ -100,6 +100,13 @@ tun:
   routes:
     #- mtu: 8800
     #  route: 10.0.0.0/16
+  # Unsafe routes allows you to route traffic over nebula to non-nebula nodes
+  # Unsafe routes should be avoided unless you have hosts/services that cannot run nebula
+  # NOTE: The nebula certificate of the "via" node *MUST* have the "route" defined as a subnet in its certificate
+  unsafe_routes:
+    - route: 172.16.1.0/24
+      via: 192.168.100.99
+
 
 # TODO
 # Configure logging level

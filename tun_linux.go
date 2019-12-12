@@ -14,13 +14,14 @@ import (
 
 type Tun struct {
 	io.ReadWriteCloser
-	fd         int
-	Device     string
-	Cidr       *net.IPNet
-	MaxMTU     int
-	DefaultMTU int
-	TXQueueLen int
-	Routes     []route
+	fd           int
+	Device       string
+	Cidr         *net.IPNet
+	MaxMTU       int
+	DefaultMTU   int
+	TXQueueLen   int
+	Routes       []route
+	UnsafeRoutes []route
 }
 
 type ifReq struct {
@@ -74,7 +75,7 @@ type ifreqQLEN struct {
 	pad   [8]byte
 }
 
-func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		return nil, err
@@ -106,6 +107,7 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 		DefaultMTU:      defaultMTU,
 		TXQueueLen:      txQueueLen,
 		Routes:          routes,
+		UnsafeRoutes:    unsafeRoutes,
 	}
 	return
 }
@@ -225,6 +227,21 @@ func (c Tun) Activate() error {
 
 	// Path routes
 	for _, r := range c.Routes {
+		nr := netlink.Route{
+			LinkIndex: link.Attrs().Index,
+			Dst:       r.route,
+			MTU:       r.mtu,
+			Scope:     unix.RT_SCOPE_LINK,
+		}
+
+		err = netlink.RouteAdd(&nr)
+		if err != nil {
+			return fmt.Errorf("failed to set mtu %v on route %v; %v", r.mtu, r.route, err)
+		}
+	}
+
+	// Unsafe path routes
+	for _, r := range c.UnsafeRoutes {
 		nr := netlink.Route{
 			LinkIndex: link.Attrs().Index,
 			Dst:       r.route,

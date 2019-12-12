@@ -74,26 +74,26 @@ func TestHostmap(t *testing.T) {
 	a := NewUDPAddrFromString("10.127.0.3:11111")
 	b := NewUDPAddrFromString("1.0.0.1:22222")
 	y := NewUDPAddrFromString("10.128.0.3:11111")
-	m.AddRemote(ip2int(net.ParseIP("127.0.0.1")), a)
-	m.AddRemote(ip2int(net.ParseIP("127.0.0.1")), b)
-	m.AddRemote(ip2int(net.ParseIP("127.0.0.1")), y)
+	m.AddRemote(ip2int(net.ParseIP("10.128.1.1")), a)
+	m.AddRemote(ip2int(net.ParseIP("10.128.1.1")), b)
+	m.AddRemote(ip2int(net.ParseIP("10.128.1.1")), y)
 
-	info, _ := m.QueryVpnIP(ip2int(net.ParseIP("127.0.0.1")))
+	info, _ := m.QueryVpnIP(ip2int(net.ParseIP("10.128.1.1")))
 
 	// There should be three remotes in the host map
 	assert.Equal(t, 3, len(info.Remotes))
 
 	// Adding an identical remote should not change the count
-	m.AddRemote(ip2int(net.ParseIP("127.0.0.1")), y)
+	m.AddRemote(ip2int(net.ParseIP("10.128.1.1")), y)
 	assert.Equal(t, 3, len(info.Remotes))
 
 	// Adding a fresh remote should add one
 	y = NewUDPAddrFromString("10.18.0.3:11111")
-	m.AddRemote(ip2int(net.ParseIP("127.0.0.1")), y)
+	m.AddRemote(ip2int(net.ParseIP("10.128.1.1")), y)
 	assert.Equal(t, 4, len(info.Remotes))
 
 	// Query and reference remote should get the first one (and not nil)
-	info, _ = m.QueryVpnIP(ip2int(net.ParseIP("127.0.0.1")))
+	info, _ = m.QueryVpnIP(ip2int(net.ParseIP("10.128.1.1")))
 	assert.NotNil(t, info.remote)
 
 	// Promotion should ensure that the best remote is chosen (y)
@@ -111,9 +111,9 @@ func TestHostmapdebug(t *testing.T) {
 	a := NewUDPAddrFromString("10.127.0.3:11111")
 	b := NewUDPAddrFromString("1.0.0.1:22222")
 	y := NewUDPAddrFromString("10.128.0.3:11111")
-	m.AddRemote(ip2int(net.ParseIP("127.0.0.1")), a)
-	m.AddRemote(ip2int(net.ParseIP("127.0.0.1")), b)
-	m.AddRemote(ip2int(net.ParseIP("127.0.0.1")), y)
+	m.AddRemote(ip2int(net.ParseIP("10.128.1.1")), a)
+	m.AddRemote(ip2int(net.ParseIP("10.128.1.1")), b)
+	m.AddRemote(ip2int(net.ParseIP("10.128.1.1")), y)
 
 	//t.Errorf("%s", m.DebugRemotes(1))
 }
@@ -157,9 +157,9 @@ func BenchmarkHostmappromote2(b *testing.B) {
 		y := NewUDPAddrFromString("10.128.0.3:11111")
 		a := NewUDPAddrFromString("10.127.0.3:11111")
 		g := NewUDPAddrFromString("1.0.0.1:22222")
-		m.AddRemote(ip2int(net.ParseIP("127.0.0.1")), a)
-		m.AddRemote(ip2int(net.ParseIP("127.0.0.1")), g)
-		m.AddRemote(ip2int(net.ParseIP("127.0.0.1")), y)
+		m.AddRemote(ip2int(net.ParseIP("10.128.1.1")), a)
+		m.AddRemote(ip2int(net.ParseIP("10.128.1.1")), g)
+		m.AddRemote(ip2int(net.ParseIP("10.128.1.1")), y)
 	}
 	b.Errorf("hi")
 
