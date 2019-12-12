@@ -3,10 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/slackhq/nebula/cert"
 	"io"
 	"io/ioutil"
 	"os"
-	"github.com/slackhq/nebula/cert"
 	"strings"
 	"time"
 )

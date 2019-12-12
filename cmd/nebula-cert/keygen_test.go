@@ -6,8 +6,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/slackhq/nebula/cert"
+	"github.com/stretchr/testify/assert"
 )
 
 //TODO: test file permissions

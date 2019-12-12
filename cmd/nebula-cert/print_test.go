@@ -2,10 +2,10 @@ package main
 
 import (
 	"bytes"
+	"github.com/slackhq/nebula/cert"
 	"github.com/stretchr/testify/assert"
 	"io/ioutil"
 	"os"
-	"github.com/slackhq/nebula/cert"
 	"testing"
 	"time"
 )
