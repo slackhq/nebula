@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"strings"
-	"syscall"
 	"unsafe"
 
 	"github.com/vishvananda/netlink"
@@ -31,7 +30,7 @@ type ifReq struct {
 }
 
 func ioctl(a1, a2, a3 uintptr) error {
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, a1, a2, a3)
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, a1, a2, a3)
 	if errno != 0 {
 		return errno
 	}
@@ -59,7 +58,7 @@ const (
 
 type ifreqAddr struct {
 	Name [16]byte
-	Addr syscall.RawSockaddrInet4
+	Addr unix.RawSockaddrInet4
 	pad  [8]byte
 }
 
@@ -84,7 +83,7 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 	var req ifReq
 	req.Flags = uint16(cIFF_TUN | cIFF_NO_PI)
 	copy(req.Name[:], deviceName)
-	if err = ioctl(uintptr(fd), uintptr(syscall.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
+	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
 		return
 	}
 	name := strings.Trim(string(req.Name[:]), "\x00")
@@ -115,7 +114,7 @@ func (c *Tun) WriteRaw(b []byte) error {
 	var nn int
 	for {
 		max := len(b)
-		n, err := syscall.Write(c.fd, b[nn:max])
+		n, err := unix.Write(c.fd, b[nn:max])
 		if n > 0 {
 			nn += n
 		}
@@ -148,10 +147,10 @@ func (c Tun) Activate() error {
 	copy(addr[:], c.Cidr.IP.To4())
 	copy(mask[:], c.Cidr.Mask)
 
-	s, err := syscall.Socket(
-		syscall.AF_INET,
-		syscall.SOCK_DGRAM,
-		syscall.IPPROTO_IP,
+	s, err := unix.Socket(
+		unix.AF_INET,
+		unix.SOCK_DGRAM,
+		unix.IPPROTO_IP,
 	)
 	if err != nil {
 		return err
@@ -160,44 +159,44 @@ func (c Tun) Activate() error {
 
 	ifra := ifreqAddr{
 		Name: devName,
-		Addr: syscall.RawSockaddrInet4{
-			Family: syscall.AF_INET,
+		Addr: unix.RawSockaddrInet4{
+			Family: unix.AF_INET,
 			Addr:   addr,
 		},
 	}
 
 	// Set the device ip address
-	if err = ioctl(fd, syscall.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra))); err != nil {
+	if err = ioctl(fd, unix.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra))); err != nil {
 		return fmt.Errorf("failed to set tun address: %s", err)
 	}
 
 	// Set the device network
 	ifra.Addr.Addr = mask
-	if err = ioctl(fd, syscall.SIOCSIFNETMASK, uintptr(unsafe.Pointer(&ifra))); err != nil {
+	if err = ioctl(fd, unix.SIOCSIFNETMASK, uintptr(unsafe.Pointer(&ifra))); err != nil {
 		return fmt.Errorf("failed to set tun netmask: %s", err)
 	}
 
 	// Set the device name
 	ifrf := ifReq{Name: devName}
-	if err = ioctl(fd, syscall.SIOCGIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
+	if err = ioctl(fd, unix.SIOCGIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
 		return fmt.Errorf("failed to set tun device name: %s", err)
 	}
 
 	// Set the MTU on the device
 	ifm := ifreqMTU{Name: devName, MTU: int32(c.MaxMTU)}
-	if err = ioctl(fd, syscall.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
+	if err = ioctl(fd, unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
 		return fmt.Errorf("failed to set tun mtu: %s", err)
 	}
 
 	// Set the transmit queue length
 	ifrq := ifreqQLEN{Name: devName, Value: int32(c.TXQueueLen)}
-	if err = ioctl(fd, syscall.SIOCSIFTXQLEN, uintptr(unsafe.Pointer(&ifrq))); err != nil {
+	if err = ioctl(fd, unix.SIOCSIFTXQLEN, uintptr(unsafe.Pointer(&ifrq))); err != nil {
 		return fmt.Errorf("failed to set tun tx queue length: %s", err)
 	}
 
 	// Bring up the interface
-	ifrf.Flags = ifrf.Flags | syscall.IFF_UP
-	if err = ioctl(fd, syscall.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
+	ifrf.Flags = ifrf.Flags | unix.IFF_UP
+	if err = ioctl(fd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
 		return fmt.Errorf("failed to bring the tun device up: %s", err)
 	}
 
@@ -240,8 +239,8 @@ func (c Tun) Activate() error {
 	}
 
 	// Run the interface
-	ifrf.Flags = ifrf.Flags | syscall.IFF_UP | syscall.IFF_RUNNING
-	if err = ioctl(fd, syscall.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
+	ifrf.Flags = ifrf.Flags | unix.IFF_UP | unix.IFF_RUNNING
+	if err = ioctl(fd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
 		return fmt.Errorf("failed to run tun device: %s", err)
 	}
 
