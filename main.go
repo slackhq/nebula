@@ -79,9 +79,12 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	// TODO: make sure mask is 4 bytes
 	tunCidr := cs.certificate.Details.Ips[0]
 	routes, err := parseRoutes(config, tunCidr)
-	unsafeRoutes, err := parseUnsafeRoutes(config, tunCidr)
 	if err != nil {
 		l.WithError(err).Fatal("Could not parse tun.routes")
+	}
+	unsafeRoutes, err := parseUnsafeRoutes(config, tunCidr)
+	if err != nil {
+		l.WithError(err).Fatal("Could not parse tun.unsafe_routes")
 	}
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
