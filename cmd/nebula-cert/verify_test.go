@@ -3,11 +3,11 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"github.com/slackhq/nebula/cert"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/ed25519"
 	"io/ioutil"
 	"os"
-	"github.com/slackhq/nebula/cert"
 	"testing"
 	"time"
 )

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/ed25519"
 	"github.com/slackhq/nebula/cert"
+	"golang.org/x/crypto/ed25519"
 )
 
 type caFlags struct {

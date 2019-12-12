@@ -4,10 +4,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"github.com/rcrowley/go-metrics"
+	"github.com/slackhq/nebula/cert"
 	"github.com/stretchr/testify/assert"
 	"math"
 	"net"
-	"github.com/slackhq/nebula/cert"
 	"testing"
 	"time"
 )

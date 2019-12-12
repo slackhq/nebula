@@ -6,12 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/sshd"
 	"io/ioutil"
 	"net"
 	"os"
 	"reflect"
 	"runtime/pprof"
-	"github.com/slackhq/nebula/sshd"
 	"strings"
 	"syscall"
 )
