@@ -1,9 +1,10 @@
 package nebula
 
 import (
-	"github.com/sirupsen/logrus"
 	"sync"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 // TODO: incount and outcount are intended as a shortcut to locking the mutexes for every single packet

@@ -79,6 +79,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	// TODO: make sure mask is 4 bytes
 	tunCidr := cs.certificate.Details.Ips[0]
 	routes, err := parseRoutes(config, tunCidr)
+	unsafeRoutes, err := parseUnsafeRoutes(config, tunCidr)
 	if err != nil {
 		l.WithError(err).Fatal("Could not parse tun.routes")
 	}
@@ -109,6 +110,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		tunCidr,
 		config.GetInt("tun.mtu", 1300),
 		routes,
+		unsafeRoutes,
 		config.GetInt("tun.tx_queue", 500),
 	)
 	if err != nil {
@@ -163,6 +165,8 @@ func Main(configPath string, configTest bool, buildVersion string) {
 
 	hostMap := NewHostMap("main", tunCidr, preferredRanges)
 	hostMap.SetDefaultRoute(ip2int(net.ParseIP(config.GetString("default_route", "0.0.0.0"))))
+	hostMap.addUnsafeRoutes(&unsafeRoutes)
+
 	l.WithField("network", hostMap.vpnCIDR).WithField("preferredRanges", hostMap.preferredRanges).Info("Main HostMap created")
 
 	/*

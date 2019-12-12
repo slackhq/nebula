@@ -255,13 +255,6 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *FirewallPacket, nb []byte) {
 	var err error
 
-	// TODO: This breaks subnet routing and needs to also check range of ip subnet
-	/*
-		if len(res) > 16 && binary.BigEndian.Uint32(res[12:16]) != ip2int(ci.peerCert.Details.Ips[0].IP) {
-			l.Debugf("Host %s tried to spoof packet as %s.", ci.peerCert.Details.Ips[0].IP, IntIp(binary.BigEndian.Uint32(res[12:16])))
-		}
-	*/
-
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:HeaderLen], packet[HeaderLen:], messageCounter, nb)
 	if err != nil {
 		l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).Error("Failed to decrypt packet")
@@ -283,7 +276,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return
 	}
 
-	if f.firewall.Drop(out, *fwPacket, true, hostinfo.ConnectionState.peerCert, trustedCAs) {
+	if f.firewall.Drop(out, *fwPacket, true, hostinfo, trustedCAs) {
 		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("fwPacket", fwPacket).
 			Debugln("dropping inbound packet")
 		return

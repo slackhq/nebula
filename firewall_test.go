@@ -3,13 +3,14 @@ package nebula
 import (
 	"encoding/binary"
 	"errors"
-	"github.com/rcrowley/go-metrics"
-	"github.com/slackhq/nebula/cert"
-	"github.com/stretchr/testify/assert"
 	"math"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/rcrowley/go-metrics"
+	"github.com/slackhq/nebula/cert"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewFirewall(t *testing.T) {
@@ -134,7 +135,7 @@ func TestFirewall_AddRule(t *testing.T) {
 func TestFirewall_Drop(t *testing.T) {
 	p := FirewallPacket{
 		ip2int(net.IPv4(1, 2, 3, 4)),
-		101,
+		ip2int(net.IPv4(1, 2, 3, 4)),
 		10,
 		90,
 		fwProtoUDP,
@@ -154,39 +155,51 @@ func TestFirewall_Drop(t *testing.T) {
 			Issuer: "signer-shasum",
 		},
 	}
+	h := HostInfo{
+		ConnectionState: &ConnectionState{
+			peerCert: &c,
+		},
+	}
+	h.CreateRemoteCIDR(&c)
 
 	fw := NewFirewall(time.Second, time.Minute, time.Hour, &c)
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"any"}, "", nil, "", ""))
 	cp := cert.NewCAPool()
 
 	// Drop outbound
-	assert.True(t, fw.Drop([]byte{}, p, false, &c, cp))
+	assert.True(t, fw.Drop([]byte{}, p, false, &h, cp))
 	// Allow inbound
-	assert.False(t, fw.Drop([]byte{}, p, true, &c, cp))
+	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
 	// Allow outbound because conntrack
-	assert.False(t, fw.Drop([]byte{}, p, false, &c, cp))
+	assert.False(t, fw.Drop([]byte{}, p, false, &h, cp))
+
+	// test remote mismatch
+	oldRemote := p.RemoteIP
+	p.RemoteIP = ip2int(net.IPv4(1, 2, 3, 10))
+	assert.True(t, fw.Drop([]byte{}, p, false, &h, cp))
+	p.RemoteIP = oldRemote
 
 	// test caSha assertions true
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"any"}, "", nil, "", "signer-shasum"))
-	assert.False(t, fw.Drop([]byte{}, p, true, &c, cp))
+	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
 
 	// test caSha assertions false
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"any"}, "", nil, "", "signer-shasum-nope"))
-	assert.True(t, fw.Drop([]byte{}, p, true, &c, cp))
+	assert.True(t, fw.Drop([]byte{}, p, true, &h, cp))
 
 	// test caName true
 	cp.CAs["signer-shasum"] = &cert.NebulaCertificate{Details: cert.NebulaCertificateDetails{Name: "ca-good"}}
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"any"}, "", nil, "ca-good", ""))
-	assert.False(t, fw.Drop([]byte{}, p, true, &c, cp))
+	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
 
 	// test caName false
 	cp.CAs["signer-shasum"] = &cert.NebulaCertificate{Details: cert.NebulaCertificateDetails{Name: "ca-good"}}
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"any"}, "", nil, "ca-bad", ""))
-	assert.True(t, fw.Drop([]byte{}, p, true, &c, cp))
+	assert.True(t, fw.Drop([]byte{}, p, true, &h, cp))
 }
 
 func BenchmarkFirewallTable_match(b *testing.B) {
@@ -286,7 +299,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 func TestFirewall_Drop2(t *testing.T) {
 	p := FirewallPacket{
 		ip2int(net.IPv4(1, 2, 3, 4)),
-		101,
+		ip2int(net.IPv4(1, 2, 3, 4)),
 		10,
 		90,
 		fwProtoUDP,
@@ -305,6 +318,12 @@ func TestFirewall_Drop2(t *testing.T) {
 			InvertedGroups: map[string]struct{}{"default-group": {}, "test-group": {}},
 		},
 	}
+	h := HostInfo{
+		ConnectionState: &ConnectionState{
+			peerCert: &c,
+		},
+	}
+	h.CreateRemoteCIDR(&c)
 
 	c1 := cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
@@ -313,15 +332,21 @@ func TestFirewall_Drop2(t *testing.T) {
 			InvertedGroups: map[string]struct{}{"default-group": {}, "test-group-not": {}},
 		},
 	}
+	h1 := HostInfo{
+		ConnectionState: &ConnectionState{
+			peerCert: &c1,
+		},
+	}
+	h1.CreateRemoteCIDR(&c1)
 
 	fw := NewFirewall(time.Second, time.Minute, time.Hour, &c)
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group", "test-group"}, "", nil, "", ""))
 	cp := cert.NewCAPool()
 
-	// c1 lacks the proper groups
-	assert.True(t, fw.Drop([]byte{}, p, true, &c1, cp))
+	// h1/c1 lacks the proper groups
+	assert.True(t, fw.Drop([]byte{}, p, true, &h1, cp))
 	// c has the proper groups
-	assert.False(t, fw.Drop([]byte{}, p, true, &c, cp))
+	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
 }
 
 func BenchmarkLookup(b *testing.B) {

@@ -39,7 +39,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 		ci.queueLock.Unlock()
 	}
 
-	if !f.firewall.Drop(packet, *fwPacket, false, ci.peerCert, trustedCAs) {
+	if !f.firewall.Drop(packet, *fwPacket, false, hostinfo, trustedCAs) {
 		f.send(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out)
 		if f.lightHouse != nil && *ci.messageCounter%5000 == 0 {
 			f.lightHouse.Query(fwPacket.RemoteIP, f)
@@ -52,6 +52,9 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 }
 
 func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
+	if f.hostMap.vpnCIDR.Contains(int2ip(vpnIp)) == false {
+		vpnIp = f.hostMap.queryUnsafeRoute(vpnIp)
+	}
 	hostinfo, err := f.hostMap.PromoteBestQueryVpnIP(vpnIp, f)
 
 	//if err != nil || hostinfo.ConnectionState == nil {
@@ -97,7 +100,7 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 	}
 
 	// check if packet is in outbound fw rules
-	if f.firewall.Drop(p, *fp, false, hostInfo.ConnectionState.peerCert, trustedCAs) {
+	if f.firewall.Drop(p, *fp, false, hostInfo, trustedCAs) {
 		l.WithField("fwPacket", fp).Debugln("dropping cached packet")
 		return
 	}

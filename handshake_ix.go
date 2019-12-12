@@ -205,6 +205,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 			//hostinfo.ClearRemotes()
 			hostinfo.AddRemote(*addr)
+			hostinfo.CreateRemoteCIDR(remoteCert)
 			f.lightHouse.AddRemoteAndReset(ip, addr)
 			if f.serveDns {
 				dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ips[0].IP.String())
@@ -314,6 +315,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 		//hostinfo.ClearRemotes()
 		f.hostMap.AddRemote(ip, addr)
+		hostinfo.CreateRemoteCIDR(remoteCert)
 		f.lightHouse.AddRemoteAndReset(ip, addr)
 		if f.serveDns {
 			dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ips[0].IP.String())

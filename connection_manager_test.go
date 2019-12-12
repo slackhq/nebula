@@ -10,12 +10,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var vpnIP uint32 = uint32(12341234)
+var vpnIP uint32
 
 func Test_NewConnectionManagerTest(t *testing.T) {
 	//_, tuncidr, _ := net.ParseCIDR("1.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
+	vpnIP = ip2int(net.ParseIP("172.1.1.2"))
 	preferredRanges := []*net.IPNet{localrange}
 
 	// Very incomplete mock objects

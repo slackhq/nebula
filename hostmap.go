@@ -29,6 +29,7 @@ type HostMap struct {
 	preferredRanges []*net.IPNet
 	vpnCIDR         *net.IPNet
 	defaultRoute    uint32
+	unsafeRoutes    *CIDRTree
 }
 
 type HostInfo struct {
@@ -46,6 +47,7 @@ type HostInfo struct {
 	localIndexId      uint32
 	hostId            uint32
 	recvError         int
+	remoteCidr        *CIDRTree
 
 	lastRoam       time.Time
 	lastRoamRemote *udpAddr
@@ -82,6 +84,7 @@ func NewHostMap(name string, vpnCIDR *net.IPNet, preferredRanges []*net.IPNet) *
 		preferredRanges: preferredRanges,
 		vpnCIDR:         vpnCIDR,
 		defaultRoute:    0,
+		unsafeRoutes:    NewCIDRTree(),
 	}
 	return &m
 }
@@ -286,13 +289,6 @@ func (hm *HostMap) PromoteBestQueryVpnIP(vpnIp uint32, ifce *Interface) (*HostIn
 }
 
 func (hm *HostMap) queryVpnIP(vpnIp uint32, promoteIfce *Interface) (*HostInfo, error) {
-	if hm.vpnCIDR.Contains(int2ip(vpnIp)) == false && hm.defaultRoute != 0 {
-		// FIXME: this shouldn't ship
-		d := hm.Hosts[hm.defaultRoute]
-		if d != nil {
-			return hm.Hosts[hm.defaultRoute], nil
-		}
-	}
 	hm.RLock()
 	if h, ok := hm.Hosts[vpnIp]; ok {
 		if promoteIfce != nil {
@@ -311,6 +307,15 @@ func (hm *HostMap) queryVpnIP(vpnIp uint32, promoteIfce *Interface) (*HostInfo, 
 			}
 		*/
 		return nil, errors.New("unable to find host")
+	}
+}
+
+func (hm *HostMap) queryUnsafeRoute(ip uint32) uint32 {
+	r := hm.unsafeRoutes.MostSpecificContains(ip)
+	if r != nil {
+		return r.(uint32)
+	} else {
+		return 0
 	}
 }
 
@@ -384,6 +389,13 @@ func (hm *HostMap) Punchy(conn *udpConn) {
 			conn.WriteTo([]byte{1}, addr)
 		}
 		time.Sleep(time.Second * 30)
+	}
+}
+
+func (hm *HostMap) addUnsafeRoutes(routes *[]route) {
+	for _, r := range *routes {
+		l.WithField("route", r.route).WithField("via", r.via).Error("Adding UNSAFE Route")
+		hm.unsafeRoutes.AddCIDR(r.route, ip2int(*r.via))
 	}
 }
 
@@ -608,6 +620,18 @@ func (i *HostInfo) RecvErrorExceeded() bool {
 		return false
 	}
 	return true
+}
+
+func (i *HostInfo) CreateRemoteCIDR(c *cert.NebulaCertificate) {
+	remoteCidr := NewCIDRTree()
+	for _, ip := range c.Details.Ips {
+		remoteCidr.AddCIDR(&net.IPNet{IP: ip.IP, Mask: net.IPMask{255, 255, 255, 255}}, struct{}{})
+	}
+
+	for _, n := range c.Details.Subnets {
+		remoteCidr.AddCIDR(n, struct{}{})
+	}
+	i.remoteCidr = remoteCidr
 }
 
 //########################
