@@ -50,7 +50,7 @@ func Test_lhStaticMapping(t *testing.T) {
 	lh1 := "10.128.0.2"
 	lh1IP := net.ParseIP(lh1)
 
-	udpServer, _ := NewListener("0.0.0.0", 0, true)
+	udpServer, _ := NewListener("0.0.0.0", 0, true, false)
 
 	meh := NewLightHouse(true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false)
 	meh.AddRemote(ip2int(lh1IP), NewUDPAddr(ip2int(lh1IP), uint16(4242)), true)

@@ -96,6 +96,16 @@ tun:
   tx_queue: 500
   # Default MTU for every packet, safe setting is (and the default) 1300 for internet based traffic
   mtu: 1300
+  # NOTE: EXPERIMENTAL
+  # Enable discovery of path MTU. This is meant for situations like on AWS
+  # where you have a default interface with mtu 9001 that only supports 1500 to
+  # internet destinations. This feature will allow the mtu to automatically be
+  # set as high as possible for both local connections and internet
+  # connections. Set `tun.mtu` to the highest mtu supported minus 60 (for AWS,
+  # when using Transit Gateway, use 8440, otherwise use 8941).
+  # Nebula will check for DontFragment on outgoing packets and respond with
+  # ICMP FragmentationNeeded if the packet is too large.
+  path_mtu_discovery: false
   # Route based MTU overrides, you have known vpn ip paths that can support larger MTUs you can increase/decrease them here
   routes:
     #- mtu: 8800

@@ -25,6 +25,7 @@ type InterfaceConfig struct {
 	DropLocalBroadcast      bool
 	DropMulticast           bool
 	UDPBatchSize            int
+	PathMTUDiscovery        bool
 }
 
 type Interface struct {
@@ -44,6 +45,7 @@ type Interface struct {
 	dropMulticast      bool
 	udpBatchSize       int
 	version            string
+	pathMTUDiscovery   bool
 
 	metricRxRecvError metrics.Counter
 	metricTxRecvError metrics.Counter
@@ -79,6 +81,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		dropLocalBroadcast: c.DropLocalBroadcast,
 		dropMulticast:      c.DropMulticast,
 		udpBatchSize:       c.UDPBatchSize,
+		pathMTUDiscovery:   c.PathMTUDiscovery,
 
 		metricRxRecvError: metrics.GetOrRegisterCounter("messages.rx.recv_error", nil),
 		metricTxRecvError: metrics.GetOrRegisterCounter("messages.tx.recv_error", nil),
@@ -110,6 +113,10 @@ func (f *Interface) Run(tunRoutines, udpRoutines int, buildVersion string) {
 	for i := 0; i < tunRoutines; i++ {
 		go f.listenIn(i)
 	}
+
+	if f.pathMTUDiscovery {
+		go f.outside.HandleErrQueue(f)
+	}
 }
 
 func (f *Interface) listenOut(i int) {
@@ -122,7 +129,7 @@ func (f *Interface) listenOut(i int) {
 	var li *udpConn
 	if i > 0 {
 		//TODO: handle error
-		li, err = NewListener(udp2ip(addr).String(), int(addr.Port), i > 0)
+		li, err = NewListener(udp2ip(addr).String(), int(addr.Port), i > 0, f.pathMTUDiscovery)
 		if err != nil {
 			l.WithError(err).Error("failed to make a new udp listener")
 		}

@@ -5,18 +5,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"unsafe"
 
+	"github.com/google/gopacket/layers"
 	"golang.org/x/sys/unix"
 )
 
 //TODO: make it support reload as best you can!
 
+// NOTE: This is only used when the experimental `tun.path_mtu_discovery`
+// feature is enabled.
+var mtuLookupSockets sync.Pool
+
 type udpConn struct {
-	sysFd int
+	sysFd            int
+	pathMTUDiscovery bool
 }
 
 type udpAddr struct {
@@ -53,7 +61,7 @@ type rawSockaddrAny struct {
 
 var x int
 
-func NewListener(ip string, port int, multi bool) (*udpConn, error) {
+func NewListener(ip string, port int, multi, pathMTUDiscovery bool) (*udpConn, error) {
 	syscall.ForkLock.RLock()
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
 	if err == nil {
@@ -73,6 +81,12 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 		return nil, fmt.Errorf("unable to set SO_REUSEPORT: %s", err)
 	}
 
+	if pathMTUDiscovery {
+		if err = syscall.SetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_RECVERR, 1); err != nil {
+			return nil, err
+		}
+	}
+
 	if err = unix.Bind(fd, &unix.SockaddrInet4{Port: port}); err != nil {
 		return nil, fmt.Errorf("unable to bind to socket: %s", err)
 	}
@@ -82,7 +96,7 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 	//v, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU)
 	//l.Println(v, err)
 
-	return &udpConn{sysFd: fd}, err
+	return &udpConn{sysFd: fd, pathMTUDiscovery: pathMTUDiscovery}, err
 }
 
 func (u *udpConn) SetRecvBuffer(n int) error {
@@ -141,6 +155,13 @@ func (u *udpConn) ListenOut(f *Interface) {
 	for {
 		n, err := u.ReadMulti(msgs)
 		if err != nil {
+			ee, ok := err.(*net.OpError)
+			if u.pathMTUDiscovery && ok && (ee.Err == syscall.EMSGSIZE || ee.Err == syscall.ECONNREFUSED) {
+				// This is probably an error from a previous call to sendto()
+				// that is being returned asynchronously. Let HandleErrQueue
+				// handle it.
+				continue
+			}
 			l.WithError(err).Error("Failed to read packets")
 			continue
 		}
@@ -151,6 +172,153 @@ func (u *udpConn) ListenOut(f *Interface) {
 			udpAddr.Port = binary.BigEndian.Uint16(names[i][2:4])
 
 			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, nb)
+		}
+	}
+}
+
+// GetKnownMTU reads IP_MTU to discover what MTU Linux has cached for this
+// route.
+//
+// NOTE: This is only used when the experimental `tun.path_mtu_discovery`
+// feature is enabled.
+func GetKnownMTU(target net.IP) (int, error) {
+	// the recommended way to lookup the current MTU for a host is to create a
+	// new datagram socket and check IP_MTU on it. This will not send any packets.
+	raw := mtuLookupSockets.Get()
+	if raw == nil {
+		s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, 0)
+		if err != nil {
+			return 0, err
+		}
+		raw = &s
+		runtime.SetFinalizer(raw, func(i *int) {
+			if err := syscall.Close(*i); err != nil {
+				l.WithError(err).Errorf("failed to close MTU lookup socket: %d", *i)
+			} else {
+				l.Debugf("closed MTU lookup socket: %d", *i)
+			}
+		})
+		l.Debugf("opened MTU lookup socket: %d", s)
+	}
+	ss := raw.(*int)
+
+	if ss != nil {
+		return 0, nil
+	}
+
+	var addr syscall.SockaddrInet4
+	copy(addr.Addr[:], target.To4())
+	if err := syscall.Connect(*ss, &addr); err != nil {
+		return 0, err
+	}
+
+	ipMTU, err := unix.GetsockoptInt(*ss, syscall.IPPROTO_IP, syscall.IP_MTU)
+	if err != nil {
+		return 0, err
+	}
+
+	mtuLookupSockets.Put(ss)
+
+	return ipMTU, nil
+}
+
+// HandleErrQueue processes MSG_ERRQUEUE for the socket
+//
+// NOTE: This is only used when the experimental `tun.path_mtu_discovery`
+// feature is enabled.
+func (u *udpConn) HandleErrQueue(f *Interface) {
+	p := make([]byte, mtu)
+	oob := make([]byte, unix.CmsgSpace(mtu))
+
+	for {
+		_, oobn, recvflags, fromRaw, err := unix.Recvmsg(u.sysFd, p, oob, unix.MSG_ERRQUEUE)
+		if err != nil {
+			if err == unix.EAGAIN {
+				// Note: Events is 0 because we are waiting for POLLERR
+				fds := []unix.PollFd{{Fd: int32(u.sysFd), Events: 0}}
+				_, err := unix.Poll(fds, 60000)
+				if err != nil {
+					l.WithError(err).Error("Failed to poll() for MSG_ERRQUEUE")
+				}
+				continue
+			}
+			l.WithError(err).Error("Failed to read MSG_ERRQUEUE")
+			continue
+		}
+		if recvflags&unix.MSG_CTRUNC != 0 {
+			l.WithField("oobn", oobn).Error("MSG_CTRUNC")
+		}
+
+		if oobn > 0 {
+			cbuf := oob[:oobn]
+			cmsgs, err := unix.ParseSocketControlMessage(cbuf)
+			if err != nil {
+				l.WithError(err).Error("Failed to read control message")
+				continue
+			}
+
+			for _, cmsg := range cmsgs {
+				var from *unix.SockaddrInet4
+				if fromRaw != nil {
+					from = fromRaw.(*unix.SockaddrInet4)
+				}
+
+				switch cmsg.Header.Level {
+				case unix.IPPROTO_IP:
+					switch cmsg.Header.Type {
+					case unix.IP_RECVERR:
+						// struct sock_extended_err {
+						//     __u32   ee_errno;
+						//     __u8    ee_origin;
+						//     __u8    ee_type;
+						//     __u8    ee_code;
+						//     __u8    ee_pad;
+						//     __u32   ee_info;
+						//     __u32   ee_data;
+						// };
+						errno := binary.LittleEndian.Uint32(cmsg.Data[0:4])
+						eeOrigin := cmsg.Data[4]
+						eeType := cmsg.Data[5]
+						eeCode := cmsg.Data[6]
+
+						switch syscall.Errno(errno) {
+						case syscall.EMSGSIZE:
+							if eeOrigin == unix.SO_EE_ORIGIN_ICMP &&
+								eeType == layers.ICMPv4TypeDestinationUnreachable &&
+								eeCode == layers.ICMPv4CodeFragmentationNeeded {
+								// ICMP packet contains the mtu in ee_info
+								mtu := binary.LittleEndian.Uint32(cmsg.Data[8:12])
+
+								l.WithField("mtu", mtu).
+									WithField("from", from).
+									Debug("ICMP update for MTU")
+								ipInt := uint32(from.Addr[0])<<24 + uint32(from.Addr[1])<<16 + uint32(from.Addr[2])<<8 + uint32(from.Addr[3])
+								ipOnly := &udpAddr{IP: ipInt}
+								hosts := f.hostMap.QueryRemoteIP(ipOnly)
+								for _, host := range hosts {
+									host.SetRemoteMTU(ipOnly, int(mtu))
+								}
+								continue
+							}
+						case syscall.ECONNREFUSED:
+							// Nothing listening on port or firewall blocking
+							// with Reject. Ignore.
+							continue
+						}
+
+						l.WithField("from", from).
+							WithField("errno", errno).
+							WithField("eeOrigin", eeOrigin).WithField("eeType", eeType).WithField("eeCode", eeCode).
+							Warn("Unexpected IP_RECVERR message")
+						continue
+					}
+				}
+
+				l.WithField("header", cmsg.Header).
+					WithField("from", from).
+					WithField("data", fmt.Sprintf("%x", cmsg.Data)).
+					Warn("Unexpected control message")
+			}
 		}
 	}
 }
@@ -199,6 +367,9 @@ func (u *udpConn) ReadMulti(msgs []rawMessage) (int, error) {
 		)
 
 		if err != 0 {
+			// if u.pathMTUDiscovery && (err == syscall.EMSGSIZE || err == syscall.ECONNREFUSED) {
+			// 	return 0, err
+			// }
 			return 0, &net.OpError{Op: "recvmmsg", Err: err}
 		}
 
@@ -220,6 +391,7 @@ func (u *udpConn) WriteTo(b []byte, addr *udpAddr) error {
 	rsa.Addr[2] = byte(addr.IP & 0x0000ff00 >> 8)
 	rsa.Addr[3] = byte(addr.IP & 0x000000ff)
 
+	var tryCount int
 	for {
 		_, _, err := unix.Syscall6(
 			unix.SYS_SENDTO,
@@ -232,6 +404,15 @@ func (u *udpConn) WriteTo(b []byte, addr *udpAddr) error {
 		)
 
 		if err != 0 {
+			if u.pathMTUDiscovery && (err == syscall.EMSGSIZE || err == syscall.ECONNREFUSED) && tryCount < 10 {
+				// This is probably an error from a previous call to sendto()
+				// that is being returned asynchronously. Let HandleErrQueue
+				// handle it.
+
+				// Retry the send
+				tryCount++
+				continue
+			}
 			return &net.OpError{Op: "sendto", Err: err}
 		}
 
@@ -278,6 +459,10 @@ func (ua *udpAddr) Equals(t *udpAddr) bool {
 		return t == nil && ua == nil
 	}
 	return ua.IP == t.IP && ua.Port == t.Port
+}
+
+func (ua *udpAddr) IPEquals(t *udpAddr) bool {
+	return ua.IP == t.IP
 }
 
 func (ua *udpAddr) Copy() *udpAddr {

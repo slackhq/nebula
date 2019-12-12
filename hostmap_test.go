@@ -98,7 +98,7 @@ func TestHostmap(t *testing.T) {
 
 	// Promotion should ensure that the best remote is chosen (y)
 	info.ForcePromoteBest(myNets)
-	assert.True(t, myNet.Contains(udp2ip(info.remote)))
+	assert.True(t, myNet.Contains(udp2ip(info.remote.addr)))
 
 }
 
@@ -127,7 +127,7 @@ func TestHostMap_rotateRemote(t *testing.T) {
 	// 1 remote, no panic
 	h.AddRemote(*NewUDPAddr(ip2int(net.IP{1, 1, 1, 1}), 0))
 	h.rotateRemote()
-	assert.Equal(t, udp2ipInt(h.remote), ip2int(net.IP{1, 1, 1, 1}))
+	assert.Equal(t, udp2ipInt(h.remote.addr), ip2int(net.IP{1, 1, 1, 1}))
 
 	h.AddRemote(*NewUDPAddr(ip2int(net.IP{1, 1, 1, 2}), 0))
 	h.AddRemote(*NewUDPAddr(ip2int(net.IP{1, 1, 1, 3}), 0))
@@ -135,17 +135,17 @@ func TestHostMap_rotateRemote(t *testing.T) {
 
 	// Rotate through those 3
 	h.rotateRemote()
-	assert.Equal(t, udp2ipInt(h.remote), ip2int(net.IP{1, 1, 1, 2}))
+	assert.Equal(t, udp2ipInt(h.remote.addr), ip2int(net.IP{1, 1, 1, 2}))
 
 	h.rotateRemote()
-	assert.Equal(t, udp2ipInt(h.remote), ip2int(net.IP{1, 1, 1, 3}))
+	assert.Equal(t, udp2ipInt(h.remote.addr), ip2int(net.IP{1, 1, 1, 3}))
 
 	h.rotateRemote()
-	assert.Equal(t, udp2ipInt(h.remote), ip2int(net.IP{1, 1, 1, 4}))
+	assert.Equal(t, udp2ipInt(h.remote.addr), ip2int(net.IP{1, 1, 1, 4}))
 
 	// Finally, we should start over
 	h.rotateRemote()
-	assert.Equal(t, udp2ipInt(h.remote), ip2int(net.IP{1, 1, 1, 1}))
+	assert.Equal(t, udp2ipInt(h.remote.addr), ip2int(net.IP{1, 1, 1, 1}))
 }
 
 func BenchmarkHostmappromote2(b *testing.B) {
