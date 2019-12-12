@@ -273,8 +273,6 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		psk = nil
 	}
 
-	serveDns := config.GetBool("lighthouse.serve_dns", false)
-
 	altPSKs := [][]byte{}
 	altPSKStrings := config.GetStringSlice("psk.accepted_keys", []string{})
 	if len(altPSKStrings) > 0 {
@@ -286,6 +284,8 @@ func Main(configPath string, configTest bool, buildVersion string) {
 			altPSKs = append(altPSKs, altpsk)
 		}
 	}
+
+	serveDns := config.GetBool("lighthouse.serve_dns", false)
 
 	checkInterval := config.GetInt("timers.connection_alive_interval", 5)
 	pendingDeletionInterval := config.GetInt("timers.pending_deletion_interval", 10)
