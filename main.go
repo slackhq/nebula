@@ -111,7 +111,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	tun, err := newTun(
 		config.GetString("tun.dev", ""),
 		tunCidr,
-		config.GetInt("tun.mtu", 1300),
+		config.GetInt("tun.mtu", DEFAULT_MTU),
 		routes,
 		unsafeRoutes,
 		config.GetInt("tun.tx_queue", 500),

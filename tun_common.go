@@ -6,6 +6,8 @@ import (
 	"strconv"
 )
 
+const DEFAULT_MTU = 1300
+
 type route struct {
 	mtu   int
 	route *net.IPNet
@@ -104,6 +106,23 @@ func parseUnsafeRoutes(config *Config, network *net.IPNet) ([]route, error) {
 		m, ok := r.(map[interface{}]interface{})
 		if !ok {
 			return nil, fmt.Errorf("entry %v in tun.unsafe_routes is invalid", i+1)
+		}
+
+		rMtu, ok := m["mtu"]
+		if !ok {
+			rMtu = config.GetInt("tun.mtu", DEFAULT_MTU)
+		}
+
+		mtu, ok := rMtu.(int)
+		if !ok {
+			mtu, err = strconv.Atoi(rMtu.(string))
+			if err != nil {
+				return nil, fmt.Errorf("entry %v.mtu in tun.unsafe_routes is not an integer: %v", i+1, err)
+			}
+		}
+
+		if mtu < 500 {
+			return nil, fmt.Errorf("entry %v.mtu in tun.unsafe_routes is below 500: %v", i+1, mtu)
 		}
 
 		rVia, ok := m["via"]

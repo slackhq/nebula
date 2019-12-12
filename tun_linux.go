@@ -245,6 +245,7 @@ func (c Tun) Activate() error {
 		nr := netlink.Route{
 			LinkIndex: link.Attrs().Index,
 			Dst:       r.route,
+			MTU:       r.mtu,
 			Scope:     unix.RT_SCOPE_LINK,
 		}
 
