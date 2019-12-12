@@ -104,8 +104,9 @@ tun:
   # Unsafe routes should be avoided unless you have hosts/services that cannot run nebula
   # NOTE: The nebula certificate of the "via" node *MUST* have the "route" defined as a subnet in its certificate
   unsafe_routes:
-    - route: 172.16.1.0/24
-      via: 192.168.100.99
+    #- route: 172.16.1.0/24
+    #  via: 192.168.100.99
+    #  mtu: 1300 #mtu will default to tun mtu if this option is not sepcified
 
 
 # TODO
