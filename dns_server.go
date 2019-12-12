@@ -12,6 +12,8 @@ import (
 // This whole thing should be rewritten to use context
 
 var dnsR *dnsRecords
+var dnsServer *dns.Server
+var dnsAddr string
 
 type dnsRecords struct {
 	sync.RWMutex
@@ -106,20 +108,38 @@ func handleDnsRequest(w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func dnsMain(hostMap *HostMap) {
-
+func dnsMain(hostMap *HostMap, c *Config) {
 	dnsR = newDnsRecords(hostMap)
 
 	// attach request handler func
 	dns.HandleFunc(".", handleDnsRequest)
 
-	// start server
-	port := 53
-	server := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "udp"}
-	l.Debugf("Starting DNS responder at %d\n", port)
-	err := server.ListenAndServe()
-	defer server.Shutdown()
+	c.RegisterReloadCallback(reloadDns)
+	startDns(c)
+}
+
+func getDnsServerAddr(c *Config) string {
+	return c.GetString("lighthouse.dns.host", "") + ":" + strconv.Itoa(c.GetInt("lighthouse.dns.port", 53))
+}
+
+func startDns(c *Config) {
+	dnsAddr = getDnsServerAddr(c)
+	dnsServer = &dns.Server{Addr: dnsAddr, Net: "udp"}
+	l.Debugf("Starting DNS responder at %s\n", dnsAddr)
+	err := dnsServer.ListenAndServe()
+	defer dnsServer.Shutdown()
 	if err != nil {
 		l.Errorf("Failed to start server: %s\n ", err.Error())
 	}
+}
+
+func reloadDns(c *Config) {
+	if dnsAddr == getDnsServerAddr(c) {
+		l.Debug("No DNS server config change detected")
+		return
+	}
+
+	l.Debug("Restarting DNS server")
+	dnsServer.Shutdown()
+	go startDns(c)
 }
