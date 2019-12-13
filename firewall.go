@@ -272,7 +272,7 @@ func AddFirewallRulesFromConfig(inbound bool, config *Config, fw FirewallInterfa
 
 	for i, t := range rs {
 		var groups []string
-		r, err := convertRule(t)
+		r, err := convertRule(t, table, i)
 		if err != nil {
 			return fmt.Errorf("%s rule #%v; %s", table, i, err)
 		}
@@ -664,7 +664,7 @@ type rule struct {
 	CASha  string
 }
 
-func convertRule(p interface{}) (rule, error) {
+func convertRule(p interface{}, table string, i int) (rule, error) {
 	r := rule{}
 
 	m, ok := p.(map[interface{}]interface{})
@@ -684,10 +684,20 @@ func convertRule(p interface{}) (rule, error) {
 	r.Code = toString("code", m)
 	r.Proto = toString("proto", m)
 	r.Host = toString("host", m)
-	r.Group = toString("group", m)
 	r.Cidr = toString("cidr", m)
 	r.CAName = toString("ca_name", m)
 	r.CASha = toString("ca_sha", m)
+
+	// Make sure group isn't an array
+	if v, ok := m["group"].([]interface{}); ok {
+		if len(v) > 1 {
+			return r, errors.New("group should contain a single value, an array with more than one entry was provided")
+		}
+
+		l.Warnf("%s rule #%v; group was an array with a single value, converting to simple value", table, i)
+		m["group"] = v[0]
+	}
+	r.Group = toString("group", m)
 
 	if rg, ok := m["groups"]; ok {
 		switch reflect.TypeOf(rg).Kind() {

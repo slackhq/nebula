@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"math"
@@ -674,6 +675,43 @@ func TestTCPRTTTracking(t *testing.T) {
 	binary.BigEndian.PutUint32(b[60+8:60+12], ^uint32(0)/2)
 	assert.True(t, f.checkTCPRTT(c, b))
 	assert.Equal(t, uint32(0), c.Seq)
+}
+
+func TestFirewall_convertRule(t *testing.T) {
+	ob := &bytes.Buffer{}
+	out := l.Out
+	l.SetOutput(ob)
+	defer l.SetOutput(out)
+
+	// Ensure group array of 1 is converted and a warning is printed
+	c := map[interface{}]interface{}{
+		"group": []interface{}{"group1"},
+	}
+
+	r, err := convertRule(c, "test", 1)
+	assert.Contains(t, ob.String(), "test rule #1; group was an array with a single value, converting to simple value")
+	assert.Nil(t, err)
+	assert.Equal(t, "group1", r.Group)
+
+	// Ensure group array of > 1 is errord
+	ob.Reset()
+	c = map[interface{}]interface{}{
+		"group": []interface{}{"group1", "group2"},
+	}
+
+	r, err = convertRule(c, "test", 1)
+	assert.Equal(t, "", ob.String())
+	assert.Error(t, err, "group should contain a single value, an array with more than one entry was provided")
+
+	// Make sure a well formed group is alright
+	ob.Reset()
+	c = map[interface{}]interface{}{
+		"group": "group1",
+	}
+
+	r, err = convertRule(c, "test", 1)
+	assert.Nil(t, err)
+	assert.Equal(t, "group1", r.Group)
 }
 
 type addRuleCall struct {
