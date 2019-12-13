@@ -394,7 +394,7 @@ func (hm *HostMap) Punchy(conn *udpConn) {
 
 func (hm *HostMap) addUnsafeRoutes(routes *[]route) {
 	for _, r := range *routes {
-		l.WithField("route", r.route).WithField("via", r.via).Error("Adding UNSAFE Route")
+		l.WithField("route", r.route).WithField("via", r.via).Warn("Adding UNSAFE Route")
 		hm.unsafeRoutes.AddCIDR(r.route, ip2int(*r.via))
 	}
 }
