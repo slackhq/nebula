@@ -57,7 +57,7 @@ func (lh *LightHouse) ValidateLHStaticEntries() error {
 	for lhIP, _ := range lh.lighthouses {
 		for ip, _ := range lh.staticList {
 			if lhIP == ip {
-				continue
+				break
 			}
 			return fmt.Errorf("Lighthouse %s does not have a static_host_map entry", IntIp(lhIP))
 		}
