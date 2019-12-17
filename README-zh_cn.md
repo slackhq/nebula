@@ -65,17 +65,17 @@ Nebula 的 发现节点(lighthouse) 允许各个节点互相发现。 一个发�
 ./nebula -config /path/to/config.yaml
 ```
 
-## Building Nebula from source
+## 从源码编译 Nebula
 
-Download go and clone this repo. Change to the nebula directory.
+下载 golang 和 clone 此仓库，并进入 nebula 目录。
 
-To build nebula for all platforms:
+构建适用于所有平台的 nebula:
 `make all`
 
-To build nebula for a specific platform (ex, Windows):
+构建适用于某个平台的 nebula(比如说, Windows):
 `make bin-windows`
 
-See the [Makefile](Makefile) for more details on build targets
+查看 [Makefile](Makefile) 以获取关于构建目标的更多信息。
 
 ## Credits
 
