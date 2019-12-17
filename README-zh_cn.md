@@ -1,7 +1,6 @@
 ## 什么是 Nebula?
 Nebula是一种可扩展的覆盖网络工具，专注于性能，简单性和安全性。
 它使您可以无缝连接世界各地的计算机。 Nebula是便携式的，并且可以在Linux，OSX和Windows上运行。
-（也：保持安静，但是我们有一个在iOS上运行的早期原型）。
 它可以用于连接少量计算机，但也可以连接数万台计算机。
 
 Nebula 结合了许多现代技术，如： 加密，安全组，证书，和连接隧道。而每个单独的技术都以各种形式存在于其他项目。
@@ -25,7 +24,7 @@ Nebula 在默认配置中使用 ``elliptic curve Diffie-Hellman``秘钥交换，
 
 #### 1. Nebula 在您平台的[二进制文件](https://github.com/slackhq/nebula/releases)。 具体来说，您需要为每个使用的平台提供 ``nebula-cert`` 和特定的 ``nebula`` 二进制文件。
 
-#### 2. (选择性操作, 但是你真的应该需要..) 至少一个 发现节点 和一个可路由的IP地址。(我们叫: lighthouse[灯塔])
+#### 2. (选择性, 但是你真的应该准备..) 至少一个 发现节点 和一个可路由的IP地址。(称为: lighthouse[灯塔])
 
 Nebula 的 发现节点(lighthouse) 允许各个节点互相发现。 一个发现节点是唯一一个IP地址应该不变的节点。一个发现节点需要非常少的资源，你可以使用最便宜的VPS在某个云平台上。
 当你启动你的服务器，确保 nebula的端口(默认 UDP/4242) 是通的。
@@ -36,7 +35,7 @@ Nebula 的 发现节点(lighthouse) 允许各个节点互相发现。 一个发�
   ```
   ./nebula-cert ca -name "Myorganization, Inc"
   ```
-  这个命令将会创建名为 `ca.key` 和 `ca.cert` 的秘钥以及证书在当前目录。`ca.key`文件是您将创建的最敏感的文件，因为您将使用此文件去给其他nebula网络的节点签发证书。请将此文件存储在安全的地方，最好使用强加密。
+  这个命令将会创建名为 `ca.key` 和 `ca.cert` 的秘钥以及证书文件在当前目录。`ca.key`文件是您将创建的最敏感的文件，因为您将使用此文件去给其他nebula网络的节点签发证书。请将此文件存储在安全的地方，最好使用强加密。
 #### 4. 使用根证书生成的 Nebula 节点秘钥和证书 
 假设您有四个节点，它们名为: lighthouse1, laptop, server1, host3。 你可以随心所欲地使用任何名字，包括 FQDN。 你也需要为每一个节点分配它们的局域网IP地址。在这个例子中，我们创建一个一个 192.168.100.x/24 的 nebula 网络。此示例还演示了 nebula group，以后可将其用于定义 nebula网络 中的流量规则。
 ```
@@ -47,11 +46,11 @@ Nebula 的 发现节点(lighthouse) 允许各个节点互相发现。 一个发�
 ```
 
 #### 5. 配置每个节点的配置文件
-下载这个 [示例配置文件](https://github.com/slackhq/nebula/blob/master/examples/config.yml).
+下载 [示例配置文件](https://github.com/slackhq/nebula/blob/master/examples/config.yml).
 
 * 在 发现节点(灯塔 lighthouse), 你需要设置 `am_lighthouse: true`.
 
-* 在每一个节点, 确保在灯塔中正确定义了灯塔 `static_host_map` 部分, 和 被添加到灯塔的 `host` 部分。
+* 在每一个节点, 确保在灯塔中正确定义了 lighthouse `static_host_map` 部分, 和 添加到 lighthouse 的 `host` 部分。
 
 
 #### 6. 将nebula证书，配置和二进制文件复制到每个主机
