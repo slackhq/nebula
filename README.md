@@ -1,3 +1,5 @@
+English | [Chinese](README-zh-cn.md)
+
 ## What is Nebula?
 Nebula is a scalable overlay networking tool with a focus on performance, simplicity and security.
 It lets you seamlessly connect computers anywhere in the world. Nebula is portable, and runs on Linux, OSX, and Windows.
