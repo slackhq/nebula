@@ -1,28 +1,24 @@
-## What is Nebula?
-Nebula is a scalable overlay networking tool with a focus on performance, simplicity and security.
-It lets you seamlessly connect computers anywhere in the world. Nebula is portable, and runs on Linux, OSX, and Windows.
-(Also: keep this quiet, but we have an early prototype running on iOS).
-It can be used to connect a small number of computers, but is also able to connect tens of thousands of computers.
+## 什么是 Nebula?
+Nebula是一种可扩展的覆盖网络工具，专注于性能，简单性和安全性。
+它使您可以无缝连接世界各地的计算机。 Nebula是便携式的，并且可以在Linux，OSX和Windows上运行。
+（也：保持安静，但是我们有一个在iOS上运行的早期原型）。
+它可以用于连接少量计算机，但也可以连接数万台计算机。
 
-Nebula incorporates a number of existing concepts like encryption, security groups, certificates,
-and tunneling, and each of those individual pieces existed before Nebula in various forms.
-What makes Nebula different to existing offerings is that it brings all of these ideas together,
-resulting in a sum that is greater than its individual parts.
+Nebula 结合了许多现代技术，如： 加密，安全组，证书，和连接隧道。而每个单独的技术都以各种形式存在于其他项目。
+使 Nebula 与现有产品不同的是，Nebula 将所有这些技术融合在一起。
 
-You can read more about Nebula [here](https://medium.com/p/884110a5579).
+在[这里](https://medium.com/p/884110a5579)查看更多关于 Nebula 的信息
 
-## Technical Overview
+## 技术概述
+Nebula 是一个基于 [Noise Protocol Framework](https://noiseprotocol.org/) 的点对点认证软件。
+Nebula 使用证书来分配节点的IP地址，名称和用户定义组内的成员身份。
+Nebula的用户定义组允许在节点之间进行提供商不可知的流量过滤。
+发现节点允许各个对等方找到彼此，并且可以选择使用UDP打洞来从大多数防火墙或NAT后面建立连接。
+用户可以在任意数量的云服务提供商，数据中心和端点的节点之间移动数据，而无需维护特定的寻址方案。
 
-Nebula is a mutually authenticated peer-to-peer software defined network based on the [Noise Protocol Framework](https://noiseprotocol.org/).
-Nebula uses certificates to assert a node's IP address, name, and membership within user-defined groups.
-Nebula's user-defined groups allow for provider agnostic traffic filtering between nodes.
-Discovery nodes allow individual peers to find each other and optionally use UDP hole punching to establish connections from behind most firewalls or NATs.
-Users can move data between nodes in any number of cloud service providers, datacenters, and endpoints, without needing to maintain a particular addressing scheme.
+Nebula 在默认配置中使用 ``elliptic curve Diffie-Hellman``秘钥交换，和 ``AES-256-GCM``。
 
-Nebula uses elliptic curve Diffie-Hellman key exchange, and AES-256-GCM in its default configuration.
-
-Nebula was created to provide a mechanism for groups hosts to communicate securely, even across the internet, while enabling expressive firewall definitions similar in style to cloud security groups.
-
+创建 Nebula 的目的是为主机托管组提供安全的通信机制，甚至可以跨Internet进行通信，同时启用与云安全组风格相似的表达性防火墙定义。
 ## Getting started (quickly)
 
 To set up a Nebula network, you'll need:
@@ -89,3 +85,5 @@ Nebula was created at Slack Technologies, Inc by Nate Brown and Ryan Huber, with
 
 
 
+
+ 
