@@ -18,8 +18,8 @@ Nebula的用户定义组允许在节点之间进行提供商不可知的流量�
 
 Nebula 在默认配置中使用 ``elliptic curve Diffie-Hellman``秘钥交换，和 ``AES-256-GCM``。
 
-创建 Nebula 的目的是为主机托管组提供安全的通信机制，甚至可以跨Internet进行通信，同时启用与云安全组风格相似的表达性防火墙定义。
-## Getting started (quickly)
+创建 Nebula 的目的是为主机托管组提供安全的通信机制，甚至可以跨网络进行通信，同时启用与云安全组风格相似的表达性防火墙定义。
+## Getting started (qui
 
 To set up a Nebula network, you'll need:
 
