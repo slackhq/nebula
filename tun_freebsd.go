@@ -47,7 +47,7 @@ func (c *Tun) Activate() error {
 	if err = exec.Command("ifconfig", c.Device, c.Cidr.String(), c.Cidr.IP.String()).Run(); err != nil {
 		return fmt.Errorf("failed to run 'ifconfig': %s", err)
 	}
-	/* This is not needed on FreeBSD 
+	/* This is not needed on FreeBSD
 	fmt.Println("command: route", "-n", "add", "-net", c.Cidr.String(), "-interface", c.Device)
 	if err = exec.Command("route", "-n", "add", "-net", c.Cidr.String(), "-interface", c.Device).Run(); err != nil {
 		return fmt.Errorf("failed to run 'route add': %s", err)
