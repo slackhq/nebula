@@ -19,28 +19,26 @@ Nebula的用户定义组允许在节点之间进行提供商不可知的流量�
 Nebula 在默认配置中使用 ``elliptic curve Diffie-Hellman``秘钥交换，和 ``AES-256-GCM``。
 
 创建 Nebula 的目的是为主机托管组提供安全的通信机制，甚至可以跨网络进行通信，同时启用与云安全组风格相似的表达性防火墙定义。
-## Getting started (qui
 
-To set up a Nebula network, you'll need:
+## 快速上手
+你需要以下内容来配置 nebula。
 
-#### 1. The [Nebula binaries](https://github.com/slackhq/nebula/releases) for your specific platform. Specifically you'll need `nebula-cert` and the specific nebula binary for each platform you use.
+#### 1. Nebula 在您平台的[二进制文件](https://github.com/slackhq/nebula/releases)。 具体来说，您需要为每个使用的平台提供 ``nebula-cert`` 和特定的 ``nebula`` 二进制文件。
 
-#### 2. (Optional, but you really should..) At least one discovery node with a routable IP address, which we call a lighthouse.
+#### 2. (选择性操作, 但是你真的应该需要..) 至少一个 发现节点 和一个可路由的IP地址。(我们叫: lighthouse[灯塔])
 
-Nebula lighthouses allow nodes to find each other, anywhere in the world. A lighthouse is the only node in a Nebula network whose IP should not change. Running a lighthouse requires very few compute resources, and you can easily use the least expensive option from a cloud hosting provider. If you're not sure which provider to use, a number of us have used $5/mo [DigitalOcean](https://digitalocean.com) droplets as lighthouses.
+Nebula 的 发现节点(lighthouse) 允许各个节点互相发现。 一个发现节点是唯一一个IP地址应该不变的节点。一个发现节点需要非常少的资源，你可以使用最便宜的VPS在某个云平台上。
+当你启动你的服务器，确保 nebula的端口(默认 UDP/4242) 是通的。
 
-  Once you have launched an instance, ensure that Nebula udp traffic (default port udp/4242) can reach it over the internet.
-
-
-#### 3. A Nebula certificate authority, which will be the root of trust for a particular Nebula network.
+#### 3. 一个 nebula 的授权证书。这是整个nebula网络的根证书。
+  执行以下命令来创建一个ca证书
 
   ```
   ./nebula-cert ca -name "Myorganization, Inc"
   ```
-  This will create files named `ca.key` and `ca.cert` in the current directory. The `ca.key` file is the most sensitive file you'll create, because it is the key used to sign the certificates for individual nebula nodes/hosts. Please store this file somewhere safe, preferably with strong encryption.
-
-#### 4. Nebula host keys and certificates generated from that certificate authority
-This assumes you have four nodes, named lighthouse1, laptop, server1, host3. You can name the nodes any way you'd like, including FQDN. You'll also need to choose IP addresses and the associated subnet. In this example, we are creating a nebula network that will use 192.168.100.x/24 as its network range. This example also demonstrates nebula groups, which can later be used to define traffic rules in a nebula network.
+  这个命令将会创建名为 `ca.key` 和 `ca.cert` 的秘钥以及证书在当前目录。`ca.key`文件是您将创建的最敏感的文件，因为您将使用此文件去给其他nebula网络的节点签发证书。请将此文件存储在安全的地方，最好使用强加密。
+#### 4. 使用根证书生成的 Nebula 节点秘钥和证书 
+假设您有四个节点，它们名为: lighthouse1, laptop, server1, host3。 你可以随心所欲地使用任何名字，包括 FQDN。 你也需要为每一个节点分配它们的局域网IP地址。在这个例子中，我们创建一个一个 192.168.100.x/24 的 nebula 网络。此示例还演示了 nebula group，以后可将其用于定义 nebula网络 中的流量规则。
 ```
 ./nebula-cert sign -name "lighthouse1" -ip "192.168.100.1/24"
 ./nebula-cert sign -name "laptop" -ip "192.168.100.2/24" -groups "laptop,home,ssh"
@@ -48,21 +46,21 @@ This assumes you have four nodes, named lighthouse1, laptop, server1, host3. You
 ./nebula-cert sign -name "host3" -ip "192.168.100.9/24"
 ```
 
-#### 5. Configuration files for each host
-Download a copy of the nebula [example configuration](https://github.com/slackhq/nebula/blob/master/examples/config.yml).
+#### 5. 配置每个节点的配置文件
+下载这个 [示例配置文件](https://github.com/slackhq/nebula/blob/master/examples/config.yml).
 
-* On the lighthouse node, you'll need to ensure `am_lighthouse: true` is set.
+* 在 发现节点(灯塔 lighthouse), 你需要设置 `am_lighthouse: true`.
 
-* On the individual hosts, ensure the lighthouse is defined properly in the `static_host_map` section, and is added to the lighthouse `hosts` section.
+* 在每一个节点, 确保在灯塔中正确定义了灯塔 `static_host_map` 部分, 和 被添加到灯塔的 `host` 部分。
 
 
-#### 6. Copy nebula credentials, configuration, and binaries to each host
+#### 6. 将nebula证书，配置和二进制文件复制到每个主机
 
-For each host, copy the nebula binary to the host, along with `config.yaml` from step 5, and the files `ca.crt`, `{host}.crt`, and `{host}.key` from step 4.
+为每一个主机， 复制 nebula 的二进制文件并保证将 #5 的 `config.yaml` 和 #4 的 `ca.crt`, `{host}.crt`, 和 `{host}.key` 文件在同一目录。
 
-**DO NOT COPY `ca.key` TO INDIVIDUAL NODES.**
+**请勿 将发现节点的 `ca.key` 文件复制到任何主机**
 
-#### 7. Run nebula on each host
+#### 7. 启动每个节点的 nebula
 ```
 ./nebula -config /path/to/config.yaml
 ```
