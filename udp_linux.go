@@ -73,7 +73,7 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 		return nil, fmt.Errorf("unable to set SO_REUSEPORT: %s", err)
 	}
 
-	if err = unix.Bind(fd, &unix.SockaddrInet4{Port: port}); err != nil {
+	if err = unix.Bind(fd, &unix.SockaddrInet4{Addr: lip, Port: port}); err != nil {
 		return nil, fmt.Errorf("unable to bind to socket: %s", err)
 	}
 
