@@ -1,0 +1,34 @@
+name: smoke
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+jobs:
+
+  smoke:
+    name: Run 3 node smoke test
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Set up Go 1.13
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.13
+      id: go
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v1
+
+    - name: build
+      run: make
+
+    - name: setup docker image
+      working-directory: ./.github/workflows/smoke
+      run: ./build.sh
+
+    - name: run smoke
+      working-directory: ./.github/workflows/smoke
+      run: ./smoke.sh
+
+    timeout-minutes: 10
