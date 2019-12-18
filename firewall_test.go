@@ -119,7 +119,6 @@ func TestFirewall_AddRule(t *testing.T) {
 	assert.Nil(t, fw.OutRules.AnyProto[0].Any.CIDR.root.left)
 	assert.Nil(t, fw.OutRules.AnyProto[0].Any.CIDR.root.right)
 	assert.Nil(t, fw.OutRules.AnyProto[0].Any.CIDR.root.value)
-	fmt.Printf("%+v\n", fw.OutRules.AnyProto[0])
 
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
 	assert.Nil(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{}, "any", nil, "", ""))
