@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"net"
 	"testing"
@@ -61,37 +62,37 @@ func TestFirewall_AddRule(t *testing.T) {
 	assert.Nil(t, fw.AddRule(true, fwProtoTCP, 1, 1, []string{}, "", nil, "", ""))
 	// Make sure an empty rule creates structure but doesn't allow anything to flow
 	//TODO: ideally an empty rule would return an error
-	assert.False(t, fw.InRules.TCP[1].Any)
-	assert.Empty(t, fw.InRules.TCP[1].Groups)
-	assert.Empty(t, fw.InRules.TCP[1].Hosts)
-	assert.Nil(t, fw.InRules.TCP[1].CIDR.root.left)
-	assert.Nil(t, fw.InRules.TCP[1].CIDR.root.right)
-	assert.Nil(t, fw.InRules.TCP[1].CIDR.root.value)
+	assert.False(t, fw.InRules.TCP[1].Any.Any)
+	assert.Empty(t, fw.InRules.TCP[1].Any.Groups)
+	assert.Empty(t, fw.InRules.TCP[1].Any.Hosts)
+	assert.Nil(t, fw.InRules.TCP[1].Any.CIDR.root.left)
+	assert.Nil(t, fw.InRules.TCP[1].Any.CIDR.root.right)
+	assert.Nil(t, fw.InRules.TCP[1].Any.CIDR.root.value)
 
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
 	assert.Nil(t, fw.AddRule(true, fwProtoUDP, 1, 1, []string{"g1"}, "", nil, "", ""))
-	assert.False(t, fw.InRules.UDP[1].Any)
-	assert.Contains(t, fw.InRules.UDP[1].Groups[0], "g1")
-	assert.Empty(t, fw.InRules.UDP[1].Hosts)
-	assert.Nil(t, fw.InRules.UDP[1].CIDR.root.left)
-	assert.Nil(t, fw.InRules.UDP[1].CIDR.root.right)
-	assert.Nil(t, fw.InRules.UDP[1].CIDR.root.value)
+	assert.False(t, fw.InRules.UDP[1].Any.Any)
+	assert.Contains(t, fw.InRules.UDP[1].Any.Groups[0], "g1")
+	assert.Empty(t, fw.InRules.UDP[1].Any.Hosts)
+	assert.Nil(t, fw.InRules.UDP[1].Any.CIDR.root.left)
+	assert.Nil(t, fw.InRules.UDP[1].Any.CIDR.root.right)
+	assert.Nil(t, fw.InRules.UDP[1].Any.CIDR.root.value)
 
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
 	assert.Nil(t, fw.AddRule(true, fwProtoICMP, 1, 1, []string{}, "h1", nil, "", ""))
-	assert.False(t, fw.InRules.ICMP[1].Any)
-	assert.Empty(t, fw.InRules.ICMP[1].Groups)
-	assert.Contains(t, fw.InRules.ICMP[1].Hosts, "h1")
-	assert.Nil(t, fw.InRules.ICMP[1].CIDR.root.left)
-	assert.Nil(t, fw.InRules.ICMP[1].CIDR.root.right)
-	assert.Nil(t, fw.InRules.ICMP[1].CIDR.root.value)
+	assert.False(t, fw.InRules.ICMP[1].Any.Any)
+	assert.Empty(t, fw.InRules.ICMP[1].Any.Groups)
+	assert.Contains(t, fw.InRules.ICMP[1].Any.Hosts, "h1")
+	assert.Nil(t, fw.InRules.ICMP[1].Any.CIDR.root.left)
+	assert.Nil(t, fw.InRules.ICMP[1].Any.CIDR.root.right)
+	assert.Nil(t, fw.InRules.ICMP[1].Any.CIDR.root.value)
 
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
 	assert.Nil(t, fw.AddRule(false, fwProtoAny, 1, 1, []string{}, "", ti, "", ""))
-	assert.False(t, fw.OutRules.AnyProto[1].Any)
-	assert.Empty(t, fw.OutRules.AnyProto[1].Groups)
-	assert.Empty(t, fw.OutRules.AnyProto[1].Hosts)
-	assert.NotNil(t, fw.OutRules.AnyProto[1].CIDR.Match(ip2int(ti.IP)))
+	assert.False(t, fw.OutRules.AnyProto[1].Any.Any)
+	assert.Empty(t, fw.OutRules.AnyProto[1].Any.Groups)
+	assert.Empty(t, fw.OutRules.AnyProto[1].Any.Hosts)
+	assert.NotNil(t, fw.OutRules.AnyProto[1].Any.CIDR.Match(ip2int(ti.IP)))
 
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
 	assert.Nil(t, fw.AddRule(true, fwProtoUDP, 1, 1, []string{"g1"}, "", nil, "ca-name", ""))
@@ -104,28 +105,30 @@ func TestFirewall_AddRule(t *testing.T) {
 	// Set any and clear fields
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
 	assert.Nil(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{"g1", "g2"}, "h1", ti, "", ""))
-	assert.Equal(t, []string{"g1", "g2"}, fw.OutRules.AnyProto[0].Groups[0])
-	assert.Contains(t, fw.OutRules.AnyProto[0].Hosts, "h1")
-	assert.NotNil(t, fw.OutRules.AnyProto[0].CIDR.Match(ip2int(ti.IP)))
+	assert.Equal(t, []string{"g1", "g2"}, fw.OutRules.AnyProto[0].Any.Groups[0])
+	assert.Contains(t, fw.OutRules.AnyProto[0].Any.Hosts, "h1")
+	assert.NotNil(t, fw.OutRules.AnyProto[0].Any.CIDR.Match(ip2int(ti.IP)))
 
 	// run twice just to make sure
+	//TODO: these ANY rules should clear the CA firewall portion
 	assert.Nil(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{"any"}, "", nil, "", ""))
 	assert.Nil(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{}, "any", nil, "", ""))
-	assert.True(t, fw.OutRules.AnyProto[0].Any)
-	assert.Empty(t, fw.OutRules.AnyProto[0].Groups)
-	assert.Empty(t, fw.OutRules.AnyProto[0].Hosts)
-	assert.Nil(t, fw.OutRules.AnyProto[0].CIDR.root.left)
-	assert.Nil(t, fw.OutRules.AnyProto[0].CIDR.root.right)
-	assert.Nil(t, fw.OutRules.AnyProto[0].CIDR.root.value)
+	assert.True(t, fw.OutRules.AnyProto[0].Any.Any)
+	assert.Empty(t, fw.OutRules.AnyProto[0].Any.Groups)
+	assert.Empty(t, fw.OutRules.AnyProto[0].Any.Hosts)
+	assert.Nil(t, fw.OutRules.AnyProto[0].Any.CIDR.root.left)
+	assert.Nil(t, fw.OutRules.AnyProto[0].Any.CIDR.root.right)
+	assert.Nil(t, fw.OutRules.AnyProto[0].Any.CIDR.root.value)
+	fmt.Printf("%+v\n", fw.OutRules.AnyProto[0])
 
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
 	assert.Nil(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{}, "any", nil, "", ""))
-	assert.True(t, fw.OutRules.AnyProto[0].Any)
+	assert.True(t, fw.OutRules.AnyProto[0].Any.Any)
 
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
 	_, anyIp, _ := net.ParseCIDR("0.0.0.0/0")
 	assert.Nil(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{}, "", anyIp, "", ""))
-	assert.True(t, fw.OutRules.AnyProto[0].Any)
+	assert.True(t, fw.OutRules.AnyProto[0].Any.Any)
 
 	// Test error conditions
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
@@ -209,11 +212,11 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 	}
 
 	_, n, _ := net.ParseCIDR("172.1.1.1/32")
-	ft.TCP.addRule(10, 10, []string{"good-group"}, "good-host", n, "", "")
-	ft.TCP.addRule(10, 10, []string{"good-group2"}, "good-host", n, "", "")
-	ft.TCP.addRule(10, 10, []string{"good-group3"}, "good-host", n, "", "")
-	ft.TCP.addRule(10, 10, []string{"good-group4"}, "good-host", n, "", "")
-	ft.TCP.addRule(10, 10, []string{"good-group, good-group1"}, "good-host", n, "", "")
+	_ = ft.TCP.addRule(10, 10, []string{"good-group"}, "good-host", n, "", "")
+	_ = ft.TCP.addRule(10, 10, []string{"good-group2"}, "good-host", n, "", "")
+	_ = ft.TCP.addRule(10, 10, []string{"good-group3"}, "good-host", n, "", "")
+	_ = ft.TCP.addRule(10, 10, []string{"good-group4"}, "good-host", n, "", "")
+	_ = ft.TCP.addRule(10, 10, []string{"good-group, good-group1"}, "good-host", n, "", "")
 	cp := cert.NewCAPool()
 
 	b.Run("fail on proto", func(b *testing.B) {
@@ -281,7 +284,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 		}
 	})
 
-	ft.TCP.addRule(0, 0, []string{"good-group"}, "good-host", n, "", "")
+	_ = ft.TCP.addRule(0, 0, []string{"good-group"}, "good-host", n, "", "")
 
 	b.Run("pass on ip with any port", func(b *testing.B) {
 		ip := ip2int(net.IPv4(172, 1, 1, 1))
