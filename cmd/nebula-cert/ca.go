@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -21,6 +22,8 @@ type caFlags struct {
 	outKeyPath  *string
 	outCertPath *string
 	groups      *string
+	ips         *string
+	subnets     *string
 }
 
 func newCaFlags() *caFlags {
@@ -31,6 +34,8 @@ func newCaFlags() *caFlags {
 	cf.outKeyPath = cf.set.String("out-key", "ca.key", "Optional: path to write the private key to")
 	cf.outCertPath = cf.set.String("out-crt", "ca.crt", "Optional: path to write the certificate to")
 	cf.groups = cf.set.String("groups", "", "Optional: comma separated list of groups. This will limit which groups subordinate certs can use")
+	cf.ips = cf.set.String("ips", "", "Optional: comma separated list of ip and network in CIDR notation. This will limit which ip addresses and networks subordinate certs can use")
+	cf.subnets = cf.set.String("subnets", "", "Optional: comma separated list of ip and network in CIDR notation. This will limit which subnet addresses and networks subordinate certs can use")
 	return &cf
 }
 
@@ -55,12 +60,42 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 		return &helpError{"-duration must be greater than 0"}
 	}
 
-	groups := []string{}
+	var groups []string
 	if *cf.groups != "" {
 		for _, rg := range strings.Split(*cf.groups, ",") {
 			g := strings.TrimSpace(rg)
 			if g != "" {
 				groups = append(groups, g)
+			}
+		}
+	}
+
+	var ips []*net.IPNet
+	if *cf.ips != "" {
+		for _, rs := range strings.Split(*cf.ips, ",") {
+			rs := strings.Trim(rs, " ")
+			if rs != "" {
+				ip, ipNet, err := net.ParseCIDR(rs)
+				if err != nil {
+					return newHelpErrorf("invalid ip definition: %s", err)
+				}
+
+				ipNet.IP = ip
+				ips = append(ips, ipNet)
+			}
+		}
+	}
+
+	var subnets []*net.IPNet
+	if *cf.subnets != "" {
+		for _, rs := range strings.Split(*cf.subnets, ",") {
+			rs := strings.Trim(rs, " ")
+			if rs != "" {
+				_, s, err := net.ParseCIDR(rs)
+				if err != nil {
+					return newHelpErrorf("invalid subnet definition: %s", err)
+				}
+				subnets = append(subnets, s)
 			}
 		}
 	}
@@ -74,6 +109,8 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 		Details: cert.NebulaCertificateDetails{
 			Name:      *cf.name,
 			Groups:    groups,
+			Ips:       ips,
+			Subnets:   subnets,
 			NotBefore: time.Now(),
 			NotAfter:  time.Now().Add(*cf.duration),
 			PublicKey: pub,

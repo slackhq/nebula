@@ -267,11 +267,30 @@ func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error
 		return false, fmt.Errorf("certificate signature did not match")
 	}
 
+	if err := nc.CheckRootConstrains(signer); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// CheckRootConstrains returns an error if the certificate violates constraints set on the root (groups, ips, subnets)
+func (nc *NebulaCertificate) CheckRootConstrains(signer *NebulaCertificate) error {
+	// Make sure this cert wasn't valid before the root
+	if signer.Details.NotAfter.Before(nc.Details.NotAfter) {
+		return fmt.Errorf("certificate expires after signing certificate")
+	}
+
+	// Make sure this cert isn't valid after the root
+	if signer.Details.NotBefore.After(nc.Details.NotBefore) {
+		return fmt.Errorf("certificate is valid before the signing certificate")
+	}
+
 	// If the signer has a limited set of groups make sure the cert only contains a subset
 	if len(signer.Details.InvertedGroups) > 0 {
 		for _, g := range nc.Details.Groups {
 			if _, ok := signer.Details.InvertedGroups[g]; !ok {
-				return false, fmt.Errorf("certificate contained a group not present on the signing ca: %s", g)
+				return fmt.Errorf("certificate contained a group not present on the signing ca: %s", g)
 			}
 		}
 	}
@@ -280,7 +299,7 @@ func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error
 	if len(signer.Details.Ips) > 0 {
 		for _, ip := range nc.Details.Ips {
 			if !netMatch(ip, signer.Details.Ips) {
-				return false, fmt.Errorf("certificate contained an ip assignment outside the limitations of the signing ca: %s", ip.String())
+				return fmt.Errorf("certificate contained an ip assignment outside the limitations of the signing ca: %s", ip.String())
 			}
 		}
 	}
@@ -289,12 +308,12 @@ func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error
 	if len(signer.Details.Subnets) > 0 {
 		for _, subnet := range nc.Details.Subnets {
 			if !netMatch(subnet, signer.Details.Subnets) {
-				return false, fmt.Errorf("certificate contained a subnet assignment outside the limitations of the signing ca: %s", subnet)
+				return fmt.Errorf("certificate contained a subnet assignment outside the limitations of the signing ca: %s", subnet)
 			}
 		}
 	}
 
-	return true, nil
+	return nil
 }
 
 // VerifyPrivateKey checks that the public key in the Nebula certificate and a supplied private key match

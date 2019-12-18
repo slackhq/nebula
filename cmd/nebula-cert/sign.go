@@ -103,10 +103,6 @@ func signCert(args []string, out io.Writer, errOut io.Writer) error {
 		*sf.duration = time.Until(caCert.Details.NotAfter) - time.Second*1
 	}
 
-	if caCert.Details.NotAfter.Before(time.Now().Add(*sf.duration)) {
-		return fmt.Errorf("refusing to generate certificate with duration beyond root expiration: %s", caCert.Details.NotAfter)
-	}
-
 	ip, ipNet, err := net.ParseCIDR(*sf.ip)
 	if err != nil {
 		return newHelpErrorf("invalid ip definition: %s", err)
@@ -163,6 +159,10 @@ func signCert(args []string, out io.Writer, errOut io.Writer) error {
 			IsCA:      false,
 			Issuer:    issuer,
 		},
+	}
+
+	if err := nc.CheckRootConstrains(caCert); err != nil {
+		return fmt.Errorf("refusing to sign, root certificate constraints violated: %s", err)
 	}
 
 	if *sf.outKeyPath == "" {
