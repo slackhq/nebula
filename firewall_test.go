@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"math"
 	"net"
 	"testing"
@@ -52,6 +51,11 @@ func TestNewFirewall(t *testing.T) {
 }
 
 func TestFirewall_AddRule(t *testing.T) {
+	ob := &bytes.Buffer{}
+	out := l.Out
+	l.SetOutput(ob)
+	defer l.SetOutput(out)
+
 	c := &cert.NebulaCertificate{}
 	fw := NewFirewall(time.Second, time.Minute, time.Hour, c)
 	assert.NotNil(t, fw.InRules)
@@ -136,6 +140,11 @@ func TestFirewall_AddRule(t *testing.T) {
 }
 
 func TestFirewall_Drop(t *testing.T) {
+	ob := &bytes.Buffer{}
+	out := l.Out
+	l.SetOutput(ob)
+	defer l.SetOutput(out)
+
 	p := FirewallPacket{
 		ip2int(net.IPv4(1, 2, 3, 4)),
 		ip2int(net.IPv4(1, 2, 3, 4)),
@@ -152,10 +161,11 @@ func TestFirewall_Drop(t *testing.T) {
 
 	c := cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
-			Name:   "host1",
-			Ips:    []*net.IPNet{&ipNet},
-			Groups: []string{"default-group"},
-			Issuer: "signer-shasum",
+			Name:           "host1",
+			Ips:            []*net.IPNet{&ipNet},
+			Groups:         []string{"default-group"},
+			InvertedGroups: map[string]struct{}{"default-group": {}},
+			Issuer:         "signer-shasum",
 		},
 	}
 	h := HostInfo{
@@ -182,27 +192,31 @@ func TestFirewall_Drop(t *testing.T) {
 	assert.True(t, fw.Drop([]byte{}, p, false, &h, cp))
 	p.RemoteIP = oldRemote
 
-	// test caSha assertions true
+	// ensure signer doesn't get in the way of group checks
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"any"}, "", nil, "", "signer-shasum"))
-	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
-
-	// test caSha assertions false
-	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"any"}, "", nil, "", "signer-shasum-nope"))
+	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "", "signer-shasum"))
+	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "", "signer-shasum-bad"))
 	assert.True(t, fw.Drop([]byte{}, p, true, &h, cp))
 
-	// test caName true
-	cp.CAs["signer-shasum"] = &cert.NebulaCertificate{Details: cert.NebulaCertificateDetails{Name: "ca-good"}}
+	// test caSha doesn't drop on match
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"any"}, "", nil, "ca-good", ""))
+	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "", "signer-shasum-bad"))
+	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "", "signer-shasum"))
 	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
 
-	// test caName false
+	// ensure ca name doesn't get in the way of group checks
 	cp.CAs["signer-shasum"] = &cert.NebulaCertificate{Details: cert.NebulaCertificateDetails{Name: "ca-good"}}
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"any"}, "", nil, "ca-bad", ""))
+	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "ca-good", ""))
+	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "ca-good-bad", ""))
 	assert.True(t, fw.Drop([]byte{}, p, true, &h, cp))
+
+	// test caName doesn't drop on match
+	cp.CAs["signer-shasum"] = &cert.NebulaCertificate{Details: cert.NebulaCertificateDetails{Name: "ca-good"}}
+	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
+	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "ca-good-bad", ""))
+	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "ca-good", ""))
+	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
 }
 
 func BenchmarkFirewallTable_match(b *testing.B) {
@@ -300,6 +314,11 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 }
 
 func TestFirewall_Drop2(t *testing.T) {
+	ob := &bytes.Buffer{}
+	out := l.Out
+	l.SetOutput(ob)
+	defer l.SetOutput(out)
+
 	p := FirewallPacket{
 		ip2int(net.IPv4(1, 2, 3, 4)),
 		ip2int(net.IPv4(1, 2, 3, 4)),
