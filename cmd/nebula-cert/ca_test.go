@@ -29,12 +29,16 @@ func Test_caHelp(t *testing.T) {
 			"    \tOptional: amount of time the certificate should be valid for. Valid time units are seconds: \"s\", minutes: \"m\", hours: \"h\" (default 8760h0m0s)\n"+
 			"  -groups string\n"+
 			"    \tOptional: comma separated list of groups. This will limit which groups subordinate certs can use\n"+
+			"  -ips string\n"+
+			"    \tOptional: comma separated list of ip and network in CIDR notation. This will limit which ip addresses and networks subordinate certs can use\n"+
 			"  -name string\n"+
 			"    \tRequired: name of the certificate authority\n"+
 			"  -out-crt string\n"+
 			"    \tOptional: path to write the certificate to (default \"ca.crt\")\n"+
 			"  -out-key string\n"+
-			"    \tOptional: path to write the private key to (default \"ca.key\")\n",
+			"    \tOptional: path to write the private key to (default \"ca.key\")\n"+
+			"  -subnets string\n"+
+			"    \tOptional: comma separated list of ip and network in CIDR notation. This will limit which subnet addresses and networks subordinate certs can use\n",
 		ob.String(),
 	)
 }

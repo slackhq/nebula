@@ -267,16 +267,53 @@ func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error
 		return false, fmt.Errorf("certificate signature did not match")
 	}
 
+	if err := nc.CheckRootConstrains(signer); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// CheckRootConstrains returns an error if the certificate violates constraints set on the root (groups, ips, subnets)
+func (nc *NebulaCertificate) CheckRootConstrains(signer *NebulaCertificate) error {
+	// Make sure this cert wasn't valid before the root
+	if signer.Details.NotAfter.Before(nc.Details.NotAfter) {
+		return fmt.Errorf("certificate expires after signing certificate")
+	}
+
+	// Make sure this cert isn't valid after the root
+	if signer.Details.NotBefore.After(nc.Details.NotBefore) {
+		return fmt.Errorf("certificate is valid before the signing certificate")
+	}
+
 	// If the signer has a limited set of groups make sure the cert only contains a subset
 	if len(signer.Details.InvertedGroups) > 0 {
 		for _, g := range nc.Details.Groups {
 			if _, ok := signer.Details.InvertedGroups[g]; !ok {
-				return false, fmt.Errorf("certificate contained a group not present on the signing ca; %s", g)
+				return fmt.Errorf("certificate contained a group not present on the signing ca: %s", g)
 			}
 		}
 	}
 
-	return true, nil
+	// If the signer has a limited set of ip ranges to issue from make sure the cert only contains a subset
+	if len(signer.Details.Ips) > 0 {
+		for _, ip := range nc.Details.Ips {
+			if !netMatch(ip, signer.Details.Ips) {
+				return fmt.Errorf("certificate contained an ip assignment outside the limitations of the signing ca: %s", ip.String())
+			}
+		}
+	}
+
+	// If the signer has a limited set of subnet ranges to issue from make sure the cert only contains a subset
+	if len(signer.Details.Subnets) > 0 {
+		for _, subnet := range nc.Details.Subnets {
+			if !netMatch(subnet, signer.Details.Subnets) {
+				return fmt.Errorf("certificate contained a subnet assignment outside the limitations of the signing ca: %s", subnet)
+			}
+		}
+	}
+
+	return nil
 }
 
 // VerifyPrivateKey checks that the public key in the Nebula certificate and a supplied private key match
@@ -429,6 +466,55 @@ func (nc *NebulaCertificate) MarshalJSON() ([]byte, error) {
 		"signature":   fmt.Sprintf("%x", nc.Signature),
 	}
 	return json.Marshal(jc)
+}
+
+func netMatch(certIp *net.IPNet, rootIps []*net.IPNet) bool {
+	for _, net := range rootIps {
+		if net.Contains(certIp.IP) && maskContains(net.Mask, certIp.Mask) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func maskContains(caMask, certMask net.IPMask) bool {
+	caM := maskTo4(caMask)
+	cM := maskTo4(certMask)
+	// Make sure forcing to ipv4 didn't nuke us
+	if caM == nil || cM == nil {
+		return false
+	}
+
+	// Make sure the cert mask is not greater than the ca mask
+	for i := 0; i < len(caMask); i++ {
+		if caM[i] > cM[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func maskTo4(ip net.IPMask) net.IPMask {
+	if len(ip) == net.IPv4len {
+		return ip
+	}
+
+	if len(ip) == net.IPv6len && isZeros(ip[0:10]) && ip[10] == 0xff && ip[11] == 0xff {
+		return ip[12:16]
+	}
+
+	return nil
+}
+
+func isZeros(b []byte) bool {
+	for i := 0; i < len(b); i++ {
+		if b[i] != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func ip2int(ip []byte) uint32 {
