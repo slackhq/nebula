@@ -295,6 +295,85 @@ func TestNebulaCertificate_Verify_IPs(t *testing.T) {
 	assert.Nil(t, err)
 }
 
+func TestNebulaCertificate_Verify_Subnets(t *testing.T) {
+	_, caIp1, _ := net.ParseCIDR("10.0.0.0/16")
+	_, caIp2, _ := net.ParseCIDR("192.168.0.0/24")
+	ca, _, caKey, err := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{caIp1, caIp2}, []string{"test"})
+	assert.Nil(t, err)
+
+	caPem, err := ca.MarshalToPEM()
+	assert.Nil(t, err)
+
+	caPool := NewCAPool()
+	caPool.AddCACertificate(caPem)
+
+	// ip is outside the network
+	cIp1 := &net.IPNet{IP: net.ParseIP("10.1.0.0"), Mask: []byte{255, 255, 255, 0}}
+	cIp2 := &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 0, 0}}
+	c, _, _, err := newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{cIp1, cIp2}, []string{"test"})
+	assert.Nil(t, err)
+	v, err := c.Verify(time.Now(), caPool)
+	assert.False(t, v)
+	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.1.0.0/24")
+
+	// ip is outside the network reversed order of above
+	cIp1 = &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 255, 0}}
+	cIp2 = &net.IPNet{IP: net.ParseIP("10.1.0.0"), Mask: []byte{255, 255, 255, 0}}
+	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{cIp1, cIp2}, []string{"test"})
+	assert.Nil(t, err)
+	v, err = c.Verify(time.Now(), caPool)
+	assert.False(t, v)
+	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.1.0.0/24")
+
+	// ip is within the network but mask is outside
+	cIp1 = &net.IPNet{IP: net.ParseIP("10.0.1.0"), Mask: []byte{255, 254, 0, 0}}
+	cIp2 = &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 255, 0}}
+	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{cIp1, cIp2}, []string{"test"})
+	assert.Nil(t, err)
+	v, err = c.Verify(time.Now(), caPool)
+	assert.False(t, v)
+	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.0.1.0/15")
+
+	// ip is within the network but mask is outside reversed order of above
+	cIp1 = &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 255, 0}}
+	cIp2 = &net.IPNet{IP: net.ParseIP("10.0.1.0"), Mask: []byte{255, 254, 0, 0}}
+	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{cIp1, cIp2}, []string{"test"})
+	assert.Nil(t, err)
+	v, err = c.Verify(time.Now(), caPool)
+	assert.False(t, v)
+	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.0.1.0/15")
+
+	// ip and mask are within the network
+	cIp1 = &net.IPNet{IP: net.ParseIP("10.0.1.0"), Mask: []byte{255, 255, 0, 0}}
+	cIp2 = &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 255, 128}}
+	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{cIp1, cIp2}, []string{"test"})
+	assert.Nil(t, err)
+	v, err = c.Verify(time.Now(), caPool)
+	assert.True(t, v)
+	assert.Nil(t, err)
+
+	// Exact matches
+	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{caIp1, caIp2}, []string{"test"})
+	assert.Nil(t, err)
+	v, err = c.Verify(time.Now(), caPool)
+	assert.True(t, v)
+	assert.Nil(t, err)
+
+	// Exact matches reversed
+	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{caIp2, caIp1}, []string{"test"})
+	assert.Nil(t, err)
+	v, err = c.Verify(time.Now(), caPool)
+	assert.True(t, v)
+	assert.Nil(t, err)
+
+	// Exact matches reversed with just 1
+	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{caIp1}, []string{"test"})
+	assert.Nil(t, err)
+	v, err = c.Verify(time.Now(), caPool)
+	assert.True(t, v)
+	assert.Nil(t, err)
+}
+
 func TestNebulaVerifyPrivateKey(t *testing.T) {
 	ca, _, caKey, err := newTestCaCert(time.Time{}, time.Time{}, []*net.IPNet{}, []*net.IPNet{}, []string{})
 	assert.Nil(t, err)
