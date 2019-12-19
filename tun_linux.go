@@ -187,7 +187,8 @@ func (c Tun) Activate() error {
 	// Set the MTU on the device
 	ifm := ifreqMTU{Name: devName, MTU: int32(c.MaxMTU)}
 	if err = ioctl(fd, unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
-		return fmt.Errorf("failed to set tun mtu: %s", err)
+		// This is currently a non fatal condition because the route table must have the MTU set appropriately as well
+		l.WithError(err).Error("Failed to set tun mtu")
 	}
 
 	// Set the transmit queue length
