@@ -1,6 +1,7 @@
 NEBULA_CMD_PATH = "./cmd/nebula"
 BUILD_NUMBER ?= dev+$(shell date -u '+%Y%m%d%H%M%S')
 GO111MODULE = on
+TEAMID = BQR82RBBHL
 export GO111MODULE
 
 all: bin-linux bin-linux-386 bin-linux-ppc64le bin-arm bin-arm6 bin-arm64 bin-darwin bin-windows bin-mips bin-mipsle bin-mips64 bin-mips64le
@@ -37,6 +38,10 @@ bin-darwin:
 	GOARCH=amd64 GOOS=darwin go build -o build/darwin/nebula -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
 	GOARCH=amd64 GOOS=darwin go build -o build/darwin/nebula-cert -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
 
+sign-darwin:
+	codesign -s $(TEAMID) --prefix "com.tinyspeck." --options=runtime --timestamp --force build/darwin/nebula
+	codesign -s $(TEAMID) --prefix "com.tinyspeck." --options=runtime --timestamp --force build/darwin/nebula-cert
+	
 bin-windows:
 	mkdir -p build/windows
 	GOARCH=amd64 GOOS=windows go build -o build/windows/nebula.exe -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
