@@ -32,7 +32,7 @@ func Test_signHelp(t *testing.T) {
 			"  -ca-key string\n"+
 			"    \tOptional: path to the signing CA key (default \"ca.key\")\n"+
 			"  -duration duration\n"+
-			"    \tRequired: how long the cert should be valid for. Valid time units are seconds: \"s\", minutes: \"m\", hours: \"h\"\n"+
+			"    \tOptional: how long the cert should be valid for. Valid time units are seconds: \"s\", minutes: \"m\", hours: \"h\"\n"+
 			"  -groups string\n"+
 			"    \tOptional: comma separated list of groups\n"+
 			"  -in-pub string\n"+
