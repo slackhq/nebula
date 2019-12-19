@@ -64,9 +64,8 @@ func TestFirewall_AddRule(t *testing.T) {
 	_, ti, _ := net.ParseCIDR("1.2.3.4/32")
 
 	assert.Nil(t, fw.AddRule(true, fwProtoTCP, 1, 1, []string{}, "", nil, "", ""))
-	// Make sure an empty rule creates structure but doesn't allow anything to flow
-	//TODO: ideally an empty rule would return an error
-	assert.False(t, fw.InRules.TCP[1].Any.Any)
+	// An empty rule is any
+	assert.True(t, fw.InRules.TCP[1].Any.Any)
 	assert.Empty(t, fw.InRules.TCP[1].Any.Groups)
 	assert.Empty(t, fw.InRules.TCP[1].Any.Hosts)
 	assert.Nil(t, fw.InRules.TCP[1].Any.CIDR.root.left)
@@ -182,6 +181,7 @@ func TestFirewall_Drop(t *testing.T) {
 	// Drop outbound
 	assert.True(t, fw.Drop([]byte{}, p, false, &h, cp))
 	// Allow inbound
+	resetConntrack(fw)
 	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
 	// Allow outbound because conntrack
 	assert.False(t, fw.Drop([]byte{}, p, false, &h, cp))
@@ -368,7 +368,92 @@ func TestFirewall_Drop2(t *testing.T) {
 	// h1/c1 lacks the proper groups
 	assert.True(t, fw.Drop([]byte{}, p, true, &h1, cp))
 	// c has the proper groups
+	resetConntrack(fw)
 	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
+}
+
+func TestFirewall_Drop3(t *testing.T) {
+	ob := &bytes.Buffer{}
+	out := l.Out
+	l.SetOutput(ob)
+	defer l.SetOutput(out)
+
+	p := FirewallPacket{
+		ip2int(net.IPv4(1, 2, 3, 4)),
+		ip2int(net.IPv4(1, 2, 3, 4)),
+		1,
+		1,
+		fwProtoUDP,
+		false,
+	}
+
+	ipNet := net.IPNet{
+		IP:   net.IPv4(1, 2, 3, 4),
+		Mask: net.IPMask{255, 255, 255, 0},
+	}
+
+	c := cert.NebulaCertificate{
+		Details: cert.NebulaCertificateDetails{
+			Name: "host-owner",
+			Ips:  []*net.IPNet{&ipNet},
+		},
+	}
+
+	c1 := cert.NebulaCertificate{
+		Details: cert.NebulaCertificateDetails{
+			Name:   "host1",
+			Ips:    []*net.IPNet{&ipNet},
+			Issuer: "signer-sha-bad",
+		},
+	}
+	h1 := HostInfo{
+		ConnectionState: &ConnectionState{
+			peerCert: &c1,
+		},
+	}
+	h1.CreateRemoteCIDR(&c1)
+
+	c2 := cert.NebulaCertificate{
+		Details: cert.NebulaCertificateDetails{
+			Name:   "host2",
+			Ips:    []*net.IPNet{&ipNet},
+			Issuer: "signer-sha",
+		},
+	}
+	h2 := HostInfo{
+		ConnectionState: &ConnectionState{
+			peerCert: &c2,
+		},
+	}
+	h2.CreateRemoteCIDR(&c2)
+
+	c3 := cert.NebulaCertificate{
+		Details: cert.NebulaCertificateDetails{
+			Name:   "host3",
+			Ips:    []*net.IPNet{&ipNet},
+			Issuer: "signer-sha-bad",
+		},
+	}
+	h3 := HostInfo{
+		ConnectionState: &ConnectionState{
+			peerCert: &c3,
+		},
+	}
+	h3.CreateRemoteCIDR(&c3)
+
+	fw := NewFirewall(time.Second, time.Minute, time.Hour, &c)
+	assert.Nil(t, fw.AddRule(true, fwProtoAny, 1, 1, []string{}, "host1", nil, "", ""))
+	assert.Nil(t, fw.AddRule(true, fwProtoAny, 1, 1, []string{}, "", nil, "", "signer-sha"))
+	cp := cert.NewCAPool()
+
+	// c1 should pass because host match
+	assert.False(t, fw.Drop([]byte{}, p, true, &h1, cp))
+	// c2 should pass because ca sha match
+	resetConntrack(fw)
+	assert.False(t, fw.Drop([]byte{}, p, true, &h2, cp))
+	// c3 should fail because no match
+	resetConntrack(fw)
+	assert.True(t, fw.Drop([]byte{}, p, true, &h3, cp))
 }
 
 func BenchmarkLookup(b *testing.B) {
@@ -768,4 +853,10 @@ func (mf *mockFirewall) AddRule(incoming bool, proto uint8, startPort int32, end
 	err := mf.nextCallReturn
 	mf.nextCallReturn = nil
 	return err
+}
+
+func resetConntrack(fw *Firewall) {
+	fw.connMutex.Lock()
+	fw.Conns = map[FirewallPacket]*conn{}
+	fw.connMutex.Unlock()
 }

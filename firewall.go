@@ -541,11 +541,6 @@ func (fp firewallPort) match(p FirewallPacket, incoming bool, c *cert.NebulaCert
 }
 
 func (fc *FirewallCA) addRule(groups []string, host string, ip *net.IPNet, caName, caSha string) error {
-	// If there is an any rule then there is no need to establish specific ca rules
-	if fc.Any != nil {
-		return fc.Any.addRule(groups, host, ip)
-	}
-
 	fr := func() *FirewallRule {
 		return &FirewallRule{
 			Hosts:  make(map[string]struct{}),
@@ -554,19 +549,11 @@ func (fc *FirewallCA) addRule(groups []string, host string, ip *net.IPNet, caNam
 		}
 	}
 
-	any := false
 	if caSha == "" && caName == "" {
-		any = true
-	}
-
-	if any {
 		if fc.Any == nil {
 			fc.Any = fr()
 		}
 
-		// If it's any we need to wipe out any pre-existing rules to save on memory
-		fc.CAShas = make(map[string]*FirewallRule)
-		fc.CANames = make(map[string]*FirewallRule)
 		return fc.Any.addRule(groups, host, ip)
 	}
 
@@ -598,8 +585,8 @@ func (fc *FirewallCA) match(p FirewallPacket, c *cert.NebulaCertificate, caPool 
 		return false
 	}
 
-	if fc.Any != nil {
-		return fc.Any.match(p, c)
+	if fc.Any.match(p, c) {
+		return true
 	}
 
 	if t, ok := fc.CAShas[c.Details.Issuer]; ok {
@@ -645,6 +632,10 @@ func (fr *FirewallRule) addRule(groups []string, host string, ip *net.IPNet) err
 }
 
 func (fr *FirewallRule) isAny(groups []string, host string, ip *net.IPNet) bool {
+	if len(groups) == 0 && host == "" && ip == nil {
+		return true
+	}
+
 	for _, group := range groups {
 		if group == "any" {
 			return true
