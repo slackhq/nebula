@@ -194,7 +194,8 @@ func (c Tun) Activate() error {
 	// Set the transmit queue length
 	ifrq := ifreqQLEN{Name: devName, Value: int32(c.TXQueueLen)}
 	if err = ioctl(fd, unix.SIOCSIFTXQLEN, uintptr(unsafe.Pointer(&ifrq))); err != nil {
-		return fmt.Errorf("failed to set tun tx queue length: %s", err)
+		// If we can't set the queue length nebula will still work but it may lead to packet loss
+		l.WithError(err).Error("Failed to set tun tx queue length")
 	}
 
 	// Bring up the interface
