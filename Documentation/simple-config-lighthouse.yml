@@ -1,0 +1,48 @@
+pki:
+  ca: /etc/nebula/ca.crt
+  cert: /etc/nebula/lighthouse.crt
+  key: /etc/nebula/lighthouse.key
+static_host_map:
+
+lighthouse:
+  am_lighthouse: true
+  serve_dns: true
+  dns:
+    host: 192.0.2.1
+    port: 53
+  interval: 60
+  hosts:
+
+listen:
+  host: 0.0.0.0
+  port: 4242
+
+punchy: true
+punch_back: true
+
+local_range: "198.51.100.0/24"
+
+tun:
+  dev: nebula1
+
+logging:
+  level: info
+  format: text
+
+firewall:
+  conntrack:
+    tcp_timeout: 120h
+    udp_timeout: 3m
+    default_timeout: 10m
+    max_connections: 100000
+
+  outbound:
+    - proto: icmp
+      host: any
+      
+  inbound:
+    - proto: icmp
+      host: any
+    - port: 53
+      proto: any
+      host: any
