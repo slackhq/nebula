@@ -6,8 +6,9 @@ export GO111MODULE
 ALL = linux-amd64 \
 	linux-386 \
 	linux-ppc64le \
-	linux-arm \
+	linux-arm-5 \
 	linux-arm-6 \
+	linux-arm-7 \
 	linux-arm64 \
 	linux-mips \
 	linux-mipsle \
