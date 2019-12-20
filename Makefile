@@ -4,17 +4,17 @@ GO111MODULE = on
 export GO111MODULE
 
 ALL = linux-amd64 \
-	  linux-386 \
-	  linux-ppc64le \
-	  linux-arm \
-	  linux-arm-6 \
-	  linux-arm64 \
-	  linux-mips \
-	  linux-mipsle \
-	  linux-mips64 \
-	  linux-mips64le \
-	  darwin-amd64 \
-	  windows-amd64
+	linux-386 \
+	linux-ppc64le \
+	linux-arm \
+	linux-arm-6 \
+	linux-arm64 \
+	linux-mips \
+	linux-mipsle \
+	linux-mips64 \
+	linux-mips64le \
+	darwin-amd64 \
+	windows-amd64
 
 all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
 
@@ -30,15 +30,15 @@ install:
 
 build/%/nebula: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
-		 GOARCH=$(word 2, $(subst -, ,$*)) \
-		 GOARM=$(word 3, $(subst -, ,$*)) \
-		 go build -trimpath -o $@ -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
+		GOARCH=$(word 2, $(subst -, ,$*)) \
+		GOARM=$(word 3, $(subst -, ,$*)) \
+		go build -trimpath -o $@ -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
 
 build/%/nebula-cert: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
-		 GOARCH=$(word 2, $(subst -, ,$*)) \
-		 GOARM=$(word 3, $(subst -, ,$*)) \
-		 go build -trimpath -o $@ -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
+		GOARCH=$(word 2, $(subst -, ,$*)) \
+		GOARM=$(word 3, $(subst -, ,$*)) \
+		go build -trimpath -o $@ -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
 
 build/nebula-%.tar.gz: build/%/nebula build/%/nebula-cert
 	tar -zcv -C build/$* -f $@ nebula nebula-cert
