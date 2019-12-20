@@ -11,6 +11,8 @@ resulting in a sum that is greater than its individual parts.
 
 You can read more about Nebula [here](https://medium.com/p/884110a5579).
 
+You can also join the NebulaOSS Slack group [here](https://join.slack.com/t/nebulaoss/shared_invite/enQtODY1OTg4MDkwMDM0LWI0ZmI5NDMxOTI2OGM5NzVhYjQxOTZlY2U1NWJlMDhkODJkYThhN2VkMTJjMGEzZjM5Y2YxMDhmYWMxNWE3YmY)
+
 ## Technical Overview
 
 Nebula is a mutually authenticated peer-to-peer software defined network based on the [Noise Protocol Framework](https://noiseprotocol.org/).
