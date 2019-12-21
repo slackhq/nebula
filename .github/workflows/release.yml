@@ -1,7 +1,6 @@
 on:
-  push:
-    tags:
-    - 'v*'
+  release:
+    types: [published,prereleased]
 
 name: Create release and upload binaries
 
@@ -83,7 +82,7 @@ jobs:
     needs: [build-linux, build-darwin, build-windows]
     runs-on: ubuntu-latest
     steps:
-      - name: Download ubuntu artifacts
+      - name: Download Linux artifacts
         uses: actions/download-artifact@v1
         with:
           name: linux-latest
