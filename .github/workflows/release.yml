@@ -98,10 +98,10 @@ jobs:
         with:
           name: windows-latest
 
-      - name: Tar Windows
+      - name: Zip Windows
         run: |
           cd windows-latest
-          tar -zcv -f nebula-windows-amd64.tar.gz nebula.exe nebula-cert.exe
+          zip nebula-windows-amd64.zip nebula.exe nebula-cert.exe
 
       - name: Create sha256sum
         run: |
@@ -109,11 +109,18 @@ jobs:
           do
             (
               cd $dir
-              for v in *.tar.gz
-              do
-                sha256sum $v
-                tar zxf $v --to-command='sh -c "sha256sum | sed s=-$='$v'/$TAR_FILENAME="'
-              done
+              if [ "$dir" = windows-latest ]
+              then
+                sha256sum <nebula.exe | sed 's=-$=nebula-windows-amd64.zip/nebula.exe='
+                sha256sum <nebula-cert.exe | sed 's=-$=nebula-windows-amd64.zip/nebula-cert.exe='
+                sha256sum nebula-windows-amd64.zip
+              else
+                  for v in *.tar.gz
+                  do
+                    sha256sum $v
+                    tar zxf $v --to-command='sh -c "sha256sum | sed s=-$='$v'/$TAR_FILENAME="'
+                  done
+              fi
             )
           done | sort -k 2 >SHASUM256.txt
 
@@ -158,9 +165,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./windows-latest/nebula-windows-amd64.tar.gz
-          asset_name: nebula-windows-amd64.tar.gz
-          asset_content_type: application/gzip
+          asset_path: ./windows-latest/nebula-windows-amd64.zip
+          asset_name: nebula-windows-amd64.zip
+          asset_content_type: application/zip
 
       - name: Upload linux-amd64
         uses: actions/upload-release-asset@v1.0.1
