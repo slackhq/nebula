@@ -68,7 +68,7 @@ jobs:
 
       - name: Build
         run: |
-          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" build/nebula-darwin-amd64.tar.gz
+          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" service build/nebula-darwin-amd64.tar.gz
           mkdir release
           mv build/*.tar.gz release
 
