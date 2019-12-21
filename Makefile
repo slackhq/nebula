@@ -3,7 +3,7 @@ BUILD_NUMBER ?= dev+$(shell date -u '+%Y%m%d%H%M%S')
 GO111MODULE = on
 export GO111MODULE
 
-ALL = linux-amd64 \
+ALL_LINUX = linux-amd64 \
 	linux-386 \
 	linux-ppc64le \
 	linux-arm-5 \
@@ -13,13 +13,17 @@ ALL = linux-amd64 \
 	linux-mips \
 	linux-mipsle \
 	linux-mips64 \
-	linux-mips64le \
+	linux-mips64le
+
+ALL = $(ALL_LINUX) \
 	darwin-amd64 \
 	windows-amd64
 
 all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
 
 release: $(ALL:%=build/nebula-%.tar.gz)
+
+release-linux: $(ALL_LINUX:%=build/nebula-%.tar.gz)
 
 bin:
 	go build -trimpath -ldflags "-X main.Build=$(BUILD_NUMBER)" -o ./nebula ${NEBULA_CMD_PATH}
