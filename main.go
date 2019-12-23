@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,16 +21,27 @@ var l = logrus.New()
 
 type m map[string]interface{}
 
-func Main(configPath string, configTest bool, buildVersion string) {
+func Main(configPath string, configTest bool, buildVersion string, tunFd int) {
+
 	l.Out = os.Stdout
 	l.Formatter = &logrus.TextFormatter{
 		FullTimestamp: true,
 	}
 
+  if tunFd != 0 {
+    l.Println(tunFd)
+  }
+
 	config := NewConfig()
-	err := config.Load(configPath)
+	var err error
+	if (runtime.GOOS == "android" || runtime.GOOS == "ios") {
+	  err = config.LoadString(configPath)
+	} else {
+    err = config.Load(configPath)
+	}
 	if err != nil {
 		l.WithError(err).Error("Failed to load config")
+	  time.Sleep(time.Minute * 1)
 		os.Exit(1)
 	}
 
@@ -108,16 +120,28 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	config.CatchHUP()
 
 	// set up our tun dev
-	tun, err := newTun(
-		config.GetString("tun.dev", ""),
-		tunCidr,
-		config.GetInt("tun.mtu", DEFAULT_MTU),
-		routes,
-		unsafeRoutes,
-		config.GetInt("tun.tx_queue", 500),
-	)
-	if err != nil {
-		l.WithError(err).Fatal("Failed to get a tun/tap device")
+	var tun *Tun
+	if tunFd != 0 {
+    tun, err = newTunFromFd(
+      tunFd,
+      tunCidr,
+      config.GetInt("tun.mtu", DEFAULT_MTU),
+      routes,
+      unsafeRoutes,
+      config.GetInt("tun.tx_queue", 500),
+    )
+	} else {
+    tun, err = newTun(
+      config.GetString("tun.dev", ""),
+      tunCidr,
+      config.GetInt("tun.mtu", DEFAULT_MTU),
+      routes,
+      unsafeRoutes,
+      config.GetInt("tun.tx_queue", 500),
+    )
+    if err != nil {
+      l.WithError(err).Fatal("Failed to get a tun/tap device")
+    }
 	}
 
 	// set up our UDP listener

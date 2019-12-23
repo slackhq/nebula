@@ -93,7 +93,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 func (f *Interface) Run(tunRoutines, udpRoutines int, buildVersion string) {
 	// actually turn on tun dev
 	if err := f.inside.Activate(); err != nil {
-		l.Fatal(err)
+		//l.Fatal(err)
 	}
 
 	f.version = buildVersion

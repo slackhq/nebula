@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"errors"
 	"fmt"
 	"github.com/imdario/mergo"
 	"github.com/sirupsen/logrus"
@@ -52,6 +53,13 @@ func (c *Config) Load(path string) error {
 	}
 
 	return nil
+}
+
+func (c *Config) LoadString(raw string) error {
+  if raw == "" {
+    return errors.New("Empty configuration")
+  }
+  return c.parseRaw([]byte(raw))
 }
 
 // RegisterReloadCallback stores a function to be called when a config reload is triggered. The functions registered
@@ -274,6 +282,18 @@ func (c *Config) addFile(path string) error {
 
 	c.files = append(c.files, ap)
 	return nil
+}
+
+func (c *Config) parseRaw(b []byte) error {
+  var m map[interface{}]interface{}
+
+  err := yaml.Unmarshal(b, &m)
+  if err != nil {
+    return err
+  }
+
+  c.Settings = m
+  return nil
 }
 
 func (c *Config) parse() error {

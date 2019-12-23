@@ -75,6 +75,23 @@ type ifreqQLEN struct {
 	pad   [8]byte
 }
 
+func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+
+	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
+
+	ifce = &Tun{
+		ReadWriteCloser: file,
+		fd:              int(file.Fd()),
+		Device:          "tun0",
+		Cidr:            cidr,
+		DefaultMTU:      defaultMTU,
+		TXQueueLen:      txQueueLen,
+		Routes:          routes,
+		UnsafeRoutes:    unsafeRoutes,
+	}
+	return
+}
+
 func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
