@@ -21,27 +21,23 @@ var l = logrus.New()
 
 type m map[string]interface{}
 
-func Main(configPath string, configTest bool, buildVersion string, tunFd int) {
+func Main(configPath string, configTest bool, buildVersion string, tunFd *int) {
 
 	l.Out = os.Stdout
 	l.Formatter = &logrus.TextFormatter{
 		FullTimestamp: true,
 	}
 
-  if tunFd != 0 {
-    l.Println(tunFd)
-  }
-
 	config := NewConfig()
 	var err error
-	if (runtime.GOOS == "android" || runtime.GOOS == "ios") {
-	  err = config.LoadString(configPath)
+	if runtime.GOOS == "android" || runtime.GOOS == "ios" {
+		err = config.LoadString(configPath)
 	} else {
-    err = config.Load(configPath)
+		err = config.Load(configPath)
 	}
 	if err != nil {
 		l.WithError(err).Error("Failed to load config")
-	  time.Sleep(time.Minute * 1)
+		time.Sleep(time.Minute * 1)
 		os.Exit(1)
 	}
 
@@ -115,9 +111,9 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd int) {
 
 	var tun *Tun
 	if !configTest {
-		if tunFd != 0 {
+		if tunFd != nil {
 			tun, err = newTunFromFd(
-				tunFd,
+				*tunFd,
 				tunCidr,
 				config.GetInt("tun.mtu", DEFAULT_MTU),
 				routes,

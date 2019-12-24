@@ -212,10 +212,10 @@ func TestBitsLostCounter(t *testing.T) {
 func BenchmarkBits(b *testing.B) {
 	z := NewBits(10)
 	for n := 0; n < b.N; n++ {
-		for i, _ := range z.bits {
+		for i := range z.bits {
 			z.bits[i] = true
 		}
-		for i, _ := range z.bits {
+		for i := range z.bits {
 			z.bits[i] = false
 		}
 
