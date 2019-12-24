@@ -1,4 +1,4 @@
-// +build !linux
+// +build !linux android
 
 // udp_generic implements the nebula UDP interface in pure Go stdlib. This
 // means it can be used on platforms like Darwin and Windows.
