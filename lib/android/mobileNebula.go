@@ -5,5 +5,5 @@ import (
 )
 
 func Main(configData string, tunFd int) {
-	nebula.Main(configData, false, "", tunFd)
+	nebula.Main(configData, false, "", &tunFd)
 }
