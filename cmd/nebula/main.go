@@ -39,5 +39,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	nebula.Main(*configPath, *configTest, Build, nil)
+	err := nebula.Main(*configPath, *configTest, Build, nil)
+	if err != nil {
+		os.Exit(1)
+	}
 }
