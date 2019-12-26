@@ -197,7 +197,7 @@ func NewIpAndPortsFromNetIps(ips []udpAddr) *[]*IpAndPort {
 }
 
 func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
-	if lh.amLighthouse {
+	if lh.amLighthouse || lh.interval == 0 {
 		return
 	}
 
