@@ -2,10 +2,10 @@ package mobileNebula
 
 import (
 	"fmt"
+	"net"
+
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
-	"net"
-	"strconv"
 )
 
 type ConfigStuff struct {
