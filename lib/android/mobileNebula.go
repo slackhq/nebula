@@ -2,6 +2,7 @@ package mobileNebula
 
 import (
 	"fmt"
+	"net"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
 )
@@ -44,3 +45,21 @@ func GetHostCertMask(configData string) (int) {
 	return pre
 	//return "HI"
 }
+
+
+func GetHostCertNet(configData string) (string) {
+	c := GetConfigSetting(configData, "pki.cert")
+	rawCert := []byte(c)
+	crt, _, err := cert.UnmarshalNebulaCertificateFromPEM(rawCert)
+	if err != nil {
+		fmt.Println(err)
+		return ""
+	}
+
+  _, ipnet, _ := net.ParseCIDR(crt.Details.Ips[0].String())
+
+	return ipnet.String()
+	//return "HI"
+}
+
+
