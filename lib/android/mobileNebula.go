@@ -2,10 +2,17 @@ package mobileNebula
 
 import (
 	"fmt"
-	"net"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
+	"net"
+	"strconv"
 )
+
+type ConfigStuff struct {
+	IP      string
+	Mask    int
+	RawCert string
+}
 
 func Main(configData string, tunFd int) string {
 	err := nebula.Main(configData, false, "", &tunFd)
@@ -18,48 +25,26 @@ func GetConfigSetting(configData string, setting string) string {
 	return config.GetString(setting, "")
 }
 
-func GetHostCertIP(configData string) (string) {
+func ParseConfig(configData string) *ConfigStuff {
+	config := nebula.NewConfig()
+	config.LoadString(configData)
+
 	c := GetConfigSetting(configData, "pki.cert")
 	rawCert := []byte(c)
 	crt, _, err := cert.UnmarshalNebulaCertificateFromPEM(rawCert)
 	if err != nil {
-		fmt.Println(err)
-		return ""
+		return nil
 	}
-
-	return crt.Details.Ips[0].IP.String()
-	//return "HI"
-}
-
-func GetHostCertMask(configData string) (int) {
-	c := GetConfigSetting(configData, "pki.cert")
-	rawCert := []byte(c)
-	crt, _, err := cert.UnmarshalNebulaCertificateFromPEM(rawCert)
+	addr, ipNet, err := net.ParseCIDR(crt.Details.Ips[0].String())
 	if err != nil {
-		fmt.Println(err)
-		return 0 
+		return &ConfigStuff{}
 	}
+	mask, _ := ipNet.Mask.Size()
 
-  _, pre := crt.Details.Ips[0].Mask.Size()
-
-	return pre
-	//return "HI"
-}
-
-
-func GetHostCertNet(configData string) (string) {
-	c := GetConfigSetting(configData, "pki.cert")
-	rawCert := []byte(c)
-	crt, _, err := cert.UnmarshalNebulaCertificateFromPEM(rawCert)
-	if err != nil {
-		fmt.Println(err)
-		return ""
+	cs := &ConfigStuff{
+		IP:      addr.String(),
+		Mask:    mask,
+		RawCert: c,
 	}
-
-  _, ipnet, _ := net.ParseCIDR(crt.Details.Ips[0].String())
-
-	return ipnet.String()
-	//return "HI"
+	return cs
 }
-
-
