@@ -10,10 +10,10 @@ import (
 )
 
 type Tun struct {
-	Device string
-	Cidr   *net.IPNet
-	MTU    int
-    UnsafeRoutes []route
+	Device       string
+	Cidr         *net.IPNet
+	MTU          int
+	UnsafeRoutes []route
 
 	*water.Interface
 }
@@ -24,9 +24,9 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 	}
 	// NOTE: You cannot set the deviceName under Darwin, so you must check tun.Device after calling .Activate()
 	return &Tun{
-		Cidr: cidr,
-		MTU:  defaultMTU,
-        UnsafeRoutes: unsafeRoutes,
+		Cidr:         cidr,
+		MTU:          defaultMTU,
+		UnsafeRoutes: unsafeRoutes,
 	}, nil
 }
 
@@ -54,7 +54,7 @@ func (c *Tun) Activate() error {
 	// Unsafe path routes
 	for _, r := range c.UnsafeRoutes {
 		if err = exec.Command("route", "-n", "add", "-net", r.route.String(), "-interface", c.Device).Run(); err != nil {
-            return fmt.Errorf("failed to run 'route add' for unsafe_route %s: %s", r.route.String(), err)
+			return fmt.Errorf("failed to run 'route add' for unsafe_route %s: %s", r.route.String(), err)
 		}
 	}
 
