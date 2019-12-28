@@ -10,6 +10,13 @@ pki:
   #blacklist is a list of certificate fingerprints that we will refuse to talk to
   #blacklist:
   #  - c99d4e650533b92061b09918e838a5a0a6aaee21eed1d12fd937682865936c72
+  #expiry_check looks at the in-memory cert and will begin alerting in logs if the host nebula certificate is close to expiry
+  expiry_check:
+    enabled: true
+    # time remaining on the nebula certificate before expiry alerts appear in logs
+    time_left: 72h
+    # how often the alerting will appear in logs
+    log_interval: 60m
 
 # The static host map defines a set of hosts with fixed IP addresses on the internet (or any network).
 # A host can have multiple fixed IP addresses defined here, and nebula will try each when establishing a tunnel.

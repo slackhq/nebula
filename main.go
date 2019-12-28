@@ -299,6 +299,12 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		l.WithError(err).Fatal("Failed to initialize interface")
 	}
 
+	expiryCheck := NewCertExpiryCheck(config, ifce)
+	if expiryCheck.Enabled {
+		expiryCheck.logExpiryCert()
+	}
+
+	expiryCheck.RegisterConfigChangeCallbacks(config)
 	ifce.RegisterConfigChangeCallbacks(config)
 
 	go handshakeManager.Run(ifce)
