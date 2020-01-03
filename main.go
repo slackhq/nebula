@@ -2,12 +2,9 @@ package nebula
 
 import (
 	"encoding/binary"
-	"fmt"
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -193,70 +190,14 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		port = int(uPort.Port)
 	}
 
-	punchBack := config.GetBool("punch_back", false)
-	amLighthouse := config.GetBool("lighthouse.am_lighthouse", false)
-
-	// warn if am_lighthouse is enabled but upstream lighthouses exists
-	rawLighthouseHosts := config.GetStringSlice("lighthouse.hosts", []string{})
-	if amLighthouse && len(rawLighthouseHosts) != 0 {
-		l.Warn("lighthouse.am_lighthouse enabled on node but upstream lighthouses exist in config")
-	}
-
-	lighthouseHosts := make([]uint32, len(rawLighthouseHosts))
-	for i, host := range rawLighthouseHosts {
-		ip := net.ParseIP(host)
-		if ip == nil {
-			l.WithField("host", host).Fatalf("Unable to parse lighthouse host entry %v", i+1)
-		}
-		lighthouseHosts[i] = ip2int(ip)
-	}
-
-	lightHouse := NewLightHouse(
-		amLighthouse,
+	lightHouse, err := NewLightHouseFromConfig(
+		config,
 		ip2int(tunCidr.IP),
-		lighthouseHosts,
-		//TODO: change to a duration
-		config.GetInt("lighthouse.interval", 10),
 		port,
 		udpServer,
-		punchBack,
 	)
-
-	//TODO: Move all of this inside functions in lighthouse.go
-	for k, v := range config.GetMap("static_host_map", map[interface{}]interface{}{}) {
-		vpnIp := net.ParseIP(fmt.Sprintf("%v", k))
-		vals, ok := v.([]interface{})
-		if ok {
-			for _, v := range vals {
-				parts := strings.Split(fmt.Sprintf("%v", v), ":")
-				addr, err := net.ResolveIPAddr("ip", parts[0])
-				if err == nil {
-					ip := addr.IP
-					port, err := strconv.Atoi(parts[1])
-					if err != nil {
-						l.Fatalf("Static host address for %s could not be parsed: %s", vpnIp, v)
-					}
-					lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip2int(ip), uint16(port)), true)
-				}
-			}
-		} else {
-			//TODO: make this all a helper
-			parts := strings.Split(fmt.Sprintf("%v", v), ":")
-			addr, err := net.ResolveIPAddr("ip", parts[0])
-			if err == nil {
-				ip := addr.IP
-				port, err := strconv.Atoi(parts[1])
-				if err != nil {
-					l.Fatalf("Static host address for %s could not be parsed: %s", vpnIp, v)
-				}
-				lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip2int(ip), uint16(port)), true)
-			}
-		}
-	}
-
-	err = lightHouse.ValidateLHStaticEntries()
 	if err != nil {
-		l.WithError(err).Error("Lighthouse unreachable")
+		l.Fatalf("Failed to initialize lighthouse handler: %v", err)
 	}
 
 	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpServer)
@@ -316,7 +257,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	ifce.Run(config.GetInt("tun.routines", 1), udpQueues, buildVersion)
 
 	// Start DNS server last to allow using the nebula IP as lighthouse.dns.host
-	if amLighthouse && serveDns {
+	if lightHouse.amLighthouse && serveDns {
 		l.Debugln("Starting dns server")
 		go dnsMain(hostMap, config)
 	}
