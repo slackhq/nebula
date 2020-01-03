@@ -68,8 +68,19 @@ func NewLightHouseFromConfig(config *Config, myIp uint32, nebulaPort int, pc *ud
 		punchBack:    config.GetBool("punch_back", false),
 	}
 
+	err := h.loadStaticHosts(config)
+	if err != nil {
+		return nil, err
+	}
+
+	config.RegisterReloadCallback(h.reload)
+
+	return &h, nil
+}
+
+func (lh *LightHouse) loadStaticHosts(config *Config) error {
 	rawLighthouseHosts := config.GetStringSlice("lighthouse.hosts", []string{})
-	if h.amLighthouse && len(rawLighthouseHosts) != 0 {
+	if lh.amLighthouse && len(rawLighthouseHosts) != 0 {
 		l.Warn("lighthouse.am_lighthouse enabled on node but upstream lighthouses exist in config")
 	}
 
@@ -78,7 +89,7 @@ func NewLightHouseFromConfig(config *Config, myIp uint32, nebulaPort int, pc *ud
 		if ip == nil {
 			l.WithField("host", host).Fatalf("Unable to parse lighthouse host entry %v", i+1)
 		}
-		h.lighthouses[ip2int(ip)] = struct{}{}
+		lh.lighthouses[ip2int(ip)] = struct{}{}
 	}
 
 	for k, v := range config.GetMap("static_host_map", map[interface{}]interface{}{}) {
@@ -86,25 +97,70 @@ func NewLightHouseFromConfig(config *Config, myIp uint32, nebulaPort int, pc *ud
 		vals, ok := v.([]interface{})
 		if ok {
 			for _, v := range vals {
-				err := h.addStaticRemote(vpnIp, v)
+				err := lh.addStaticRemote(vpnIp, v)
 				if err != nil {
-					return nil, err
+					return err
 				}
 			}
 		} else {
-			err := h.addStaticRemote(vpnIp, v)
+			err := lh.addStaticRemote(vpnIp, v)
 			if err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
 
-	err := h.ValidateLHStaticEntries()
+	err := lh.ValidateLHStaticEntries()
 	if err != nil {
 		l.WithError(err).Error("Lighthouse unreachable")
 	}
 
-	return &h, nil
+	return nil
+}
+
+func (lh *LightHouse) reload(config *Config) {
+	if config.GetBool("lighthouse.am_lighthouse", false) != lh.amLighthouse {
+		l.Warn("Changing lighthouse.am_lighthouse with SIGHUP not supported. Ignored.")
+	}
+	lh.interval = config.GetInt("lighthouse.interval", 10)
+	lh.punchBack = config.GetBool("punch_back", false)
+
+	err := lh.loadStaticHosts(config)
+	if err != nil {
+		l.WithError(err).Error("failed to reload static hosts")
+	}
+
+	// Check for removed lighthouses / static entries. load the new config
+	// into a fresh LightHouse and then see which entries are no longer there.
+
+	newLh := LightHouse{
+		addrMap:     make(map[uint32][]udpAddr),
+		lighthouses: make(map[uint32]struct{}),
+		staticList:  make(map[uint32]struct{}),
+	}
+	newLh.loadStaticHosts(config)
+
+	var removedStatic, removedLighthouses []uint32
+	for vpnIP := range lh.staticList {
+		if _, ok := newLh.staticList[vpnIP]; !ok {
+			removedStatic = append(removedStatic, vpnIP)
+		}
+	}
+	for vpnIP := range lh.lighthouses {
+		if _, ok := newLh.lighthouses[vpnIP]; !ok {
+			removedLighthouses = append(removedLighthouses, vpnIP)
+		}
+	}
+
+	for _, vpnIP := range removedLighthouses {
+		l.Infof("lighthouse.hosts entry removed: %s", IntIp(vpnIP))
+		delete(lh.lighthouses, vpnIP)
+	}
+	for _, vpnIP := range removedStatic {
+		l.Infof("static_host_map entry removed: %s", IntIp(vpnIP))
+		delete(lh.staticList, vpnIP)
+		lh.DeleteVpnIP(vpnIP)
+	}
 }
 
 func (lh *LightHouse) ValidateLHStaticEntries() error {
