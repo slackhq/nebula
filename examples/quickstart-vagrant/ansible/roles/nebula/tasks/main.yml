@@ -8,7 +8,7 @@
     - nebula-conf
   
 - name: install built nebula binary
-  copy: src=../../../../../{{ item }} dest=/usr/local/bin mode=0755
+  copy: src="../../../../../build/linux-amd64/{{ item }}" dest="/usr/local/bin" mode=0755
   with_items:
     - nebula
     - nebula-cert

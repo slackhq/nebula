@@ -2,22 +2,7 @@
 
 This guide is intended to bring up a vagrant environment with 1 lighthouse and 2 generic hosts running nebula.
 
-## Pre-requisites
-
-There are two pre-requisites prior to bringing up the vagrant environment
-
-  - build the binaries locally for the vagrant deploy
-  - create a virtualenv for ansible
-
-### Building the binaries
-
-Build the `nebula` and `nebula-cert` binaries for vagrant by doing the following
-
-`make bin-vagrant` (under the src directory with Makefile)
-
-For convenience, ansible will run this for you in every deploy (see `ansible/playbook.yml`)
-
-### Creating the virtualenv
+## Creating the virtualenv for ansible
 
 Within the `quickstart/` directory, do the following
 
