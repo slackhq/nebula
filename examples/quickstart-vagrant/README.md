@@ -13,7 +13,7 @@ There are two pre-requisites prior to bringing up the vagrant environment
 
 Build the `nebula` and `nebula-cert` binaries for vagrant by doing the following
 
-`make bin-vagrant` (under the src directory with Makefile)
+`make build/linux-amd64/nebula*` (under the src directory with Makefile)
 
 For convenience, ansible will run this for you in every deploy (see `ansible/playbook.yml`)
 
