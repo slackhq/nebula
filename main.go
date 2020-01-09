@@ -76,8 +76,23 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	}
 	l.WithField("firewallHash", fw.GetRuleHash()).Info("Firewall started")
 
-	// TODO: make sure mask is 4 bytes
-	tunCidr := cs.certificate.Details.Ips[0]
+	var tunCidr *net.IPNet
+	listenIP := config.GetString("listen.host", "0.0.0.0")
+	if listenIP != "0.0.0.0" {
+		ip, ipNet, err := net.ParseCIDR(listenIP)
+		if err != nil {
+			l.WithError(err).Fatal("Error while configuring listening IP")
+		}
+		for _, i := range cs.certificate.Details.Ips {
+			ipNet.IP = ip
+			if i.IP.Equal(ipNet.IP) {
+				tunCidr = ipNet
+			}
+		}
+	} else {
+		tunCidr = cs.certificate.Details.Ips[0]
+	}
+
 	routes, err := parseRoutes(config, tunCidr)
 	if err != nil {
 		l.WithError(err).Fatal("Could not parse tun.routes")

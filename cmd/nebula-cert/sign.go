@@ -103,11 +103,22 @@ func signCert(args []string, out io.Writer, errOut io.Writer) error {
 		*sf.duration = time.Until(caCert.Details.NotAfter) - time.Second*1
 	}
 
-	ip, ipNet, err := net.ParseCIDR(*sf.ip)
-	if err != nil {
-		return newHelpErrorf("invalid ip definition: %s", err)
+	if caCert.Details.NotAfter.Before(time.Now().Add(*sf.duration)) {
+		return fmt.Errorf("refusing to generate certificate with duration beyond root expiration: %s", caCert.Details.NotAfter)
 	}
-	ipNet.IP = ip
+
+	ips := []*net.IPNet{}
+	if *sf.ip != "" {
+		for _, rip := range strings.Split(*sf.ip, ",") {
+			ipRaw := strings.TrimSpace(rip)
+			ip, ipNet, err := net.ParseCIDR(ipRaw)
+			if err != nil {
+				return newHelpErrorf("invalid ip definition: %s", err)
+			}
+			ipNet.IP = ip
+			ips = append(ips, ipNet)
+		}
+	}
 
 	groups := []string{}
 	if *sf.groups != "" {
@@ -150,7 +161,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer) error {
 	nc := cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
 			Name:      *sf.name,
-			Ips:       []*net.IPNet{ipNet},
+			Ips:       ips,
 			Groups:    groups,
 			Subnets:   subnets,
 			NotBefore: time.Now(),
