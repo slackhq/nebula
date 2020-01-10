@@ -3,10 +3,14 @@ package mobileNebula
 import (
 	"fmt"
 	"net"
+	"os"
+	"time"
 
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
 )
+
+var exiter bool = false
 
 type ConfigStuff struct {
 	IP      string
@@ -15,6 +19,16 @@ type ConfigStuff struct {
 }
 
 func Main(configData string, tunFd int) string {
+	go func() {
+	  for {
+	    time.Sleep(time.Second * 1)
+	    if exiter == true {
+	      fmt.Println("Exiter")
+	      time.Sleep(time.Second * 4)
+	      os.Exit(0)
+	    }
+	  }
+	}()
 	err := nebula.Main(configData, false, "", &tunFd)
 	return fmt.Sprintf("%s", err)
 }
@@ -47,4 +61,8 @@ func ParseConfig(configData string) *ConfigStuff {
 		RawCert: c,
 	}
 	return cs
+}
+
+func Exit() {
+  exiter = true
 }
