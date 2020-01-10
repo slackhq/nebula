@@ -24,7 +24,6 @@ func Main(configData string, tunFd int) string {
 	    time.Sleep(time.Second * 1)
 	    if exiter == true {
 	      fmt.Println("Exiter")
-	      time.Sleep(time.Second * 4)
 	      os.Exit(0)
 	    }
 	  }
