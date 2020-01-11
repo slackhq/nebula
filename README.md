@@ -51,7 +51,7 @@ This assumes you have four nodes, named lighthouse1, laptop, server1, host3. You
 ./nebula-cert sign -name "lighthouse1" -ip "192.168.100.1/24"
 ./nebula-cert sign -name "laptop" -ip "192.168.100.2/24" -groups "laptop,home,ssh"
 ./nebula-cert sign -name "server1" -ip "192.168.100.9/24" -groups "servers"
-./nebula-cert sign -name "host3" -ip "192.168.100.9/24"
+./nebula-cert sign -name "host3" -ip "192.168.100.10/24"
 ```
 
 #### 5. Configuration files for each host

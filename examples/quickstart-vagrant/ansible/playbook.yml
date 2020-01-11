@@ -8,7 +8,10 @@
   connection: local
   hosts: localhost
   tasks:
-    - command: chdir=../../../ make bin-vagrant
+    - command: chdir=../../../ make build/linux-amd64/"{{ item }}"
+      with_items:
+        - nebula
+        - nebula-cert
   tags:
     - build-nebula
    
