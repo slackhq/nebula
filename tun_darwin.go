@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"sync"
 	"syscall"
 	"unsafe"
 
@@ -20,10 +19,6 @@ type Tun struct {
 	DefaultMTU   int
 	TXQueueLen   int
 	UnsafeRoutes []route
-	rMu          sync.Mutex
-	rBuf         []byte
-	wMu          sync.Mutex
-	wBuf         []byte
 }
 
 type sockaddrCtl struct {
@@ -198,7 +193,6 @@ func (t *Tun) Activate() error {
 	// Set the MTU on the device
 	ifm := ifreqMTU{Name: devName, MTU: int32(t.DefaultMTU)}
 	if err = ioctl(fd, unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
-		// This is currently a non fatal condition because the route table must have the MTU set appropriately as well
 		return fmt.Errorf("Failed to set tun mtu: %v", err)
 	}
 
@@ -271,17 +265,12 @@ func (t *Tun) WriteRaw(b []byte) error {
 var _ io.ReadWriteCloser = (*Tun)(nil)
 
 func (t *Tun) Read(to []byte) (int, error) {
-	t.rMu.Lock()
-	defer t.rMu.Unlock()
 
-	if cap(t.rBuf) < len(to)+4 {
-		t.rBuf = make([]byte, len(to)+4)
-	}
-	t.rBuf = t.rBuf[:len(to)+4]
+	buf := make([]byte, len(to)+4)
 
-	n, err := t.ReadWriteCloser.Read(t.rBuf)
+	n, err := t.ReadWriteCloser.Read(buf)
 
-	copy(to, t.rBuf[4:])
+	copy(to, buf[4:])
 	return n - 4, err
 }
 
@@ -291,26 +280,20 @@ func (t *Tun) Write(from []byte) (int, error) {
 		return 0, syscall.EIO
 	}
 
-	t.wMu.Lock()
-	defer t.wMu.Unlock()
-
-	if cap(t.wBuf) < len(from)+4 {
-		t.wBuf = make([]byte, len(from)+4)
-	}
-	t.wBuf = t.wBuf[:len(from)+4]
+	buf := make([]byte, len(from)+4)
 
 	// Determine the IP Family for the NULL L2 Header
 	ipVer := from[0] >> 4
 	if ipVer == 4 {
-		t.wBuf[3] = syscall.AF_INET
+		buf[3] = syscall.AF_INET
 	} else if ipVer == 6 {
-		t.wBuf[3] = syscall.AF_INET6
+		buf[3] = syscall.AF_INET6
 	} else {
 		return 0, fmt.Errorf("Unable to determine IP version from packet")
 	}
 
-	copy(t.wBuf[4:], from)
+	copy(buf[4:], from)
 
-	n, err := t.ReadWriteCloser.Write(t.wBuf)
+	n, err := t.ReadWriteCloser.Write(buf)
 	return n - 4, err
 }
