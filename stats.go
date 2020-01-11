@@ -67,12 +67,12 @@ func startPrometheusStats(i time.Duration, c *Config) error {
 
 	listen := c.GetString("stats.listen", "")
 	if listen == "" {
-		return fmt.Errorf("stats.listen should not be emtpy")
+		return fmt.Errorf("stats.listen should not be empty")
 	}
 
 	path := c.GetString("stats.path", "")
 	if path == "" {
-		return fmt.Errorf("stats.path should not be emtpy")
+		return fmt.Errorf("stats.path should not be empty")
 	}
 
 	pr := prometheus.NewRegistry()
