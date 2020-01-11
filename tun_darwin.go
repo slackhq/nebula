@@ -56,7 +56,6 @@ const (
 	_AF_SYS_CONTROL   = 2              //#define AF_SYS_CONTROL 2 /* corresponding sub address type */
 	_PF_SYSTEM        = unix.AF_SYSTEM //#define PF_SYSTEM AF_SYSTEM
 	_CTLIOCGINFO      = 3227799043     //#define CTLIOCGINFO     _IOWR('N', 3, struct ctl_info)
-	_UTUN_OPT_IFNAME  = 2
 	utunControlName   = "com.apple.net.utun_control"
 )
 
@@ -145,7 +144,7 @@ func newTun(name string, cidr *net.IPNet, defaultMTU int, routes []route, unsafe
 	return tun, nil
 }
 
-func (t Tun) deviceBytes() (o [16]byte) {
+func (t *Tun) deviceBytes() (o [16]byte) {
 	for i, c := range t.Device {
 		o[i] = byte(c)
 	}
@@ -217,14 +216,6 @@ func (t *Tun) Activate() error {
 	if err = ioctl(fd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
 		return fmt.Errorf("failed to bring the tun device up: %s", err)
 	}
-
-	/*
-		    rfd, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, unix.AF_UNSPEC)
-			if err != nil {
-		        t.Close()
-		        return err
-			}
-	*/
 
 	if err = exec.Command("route", "-n", "add", "-net", t.Cidr.String(), "-interface", t.Device).Run(); err != nil {
 		return fmt.Errorf("failed to run 'route add': %s", err)
