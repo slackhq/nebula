@@ -76,7 +76,7 @@ func newTun(name string, cidr *net.IPNet, defaultMTU int, routes []route, unsafe
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("Route MTU not supported in Darwin")
 	}
-  	ifIndex := -1
+	ifIndex := -1
 	if name != "utun" {
 		_, err := fmt.Sscanf(name, "utun%d", &ifIndex)
 		if err != nil || ifIndex < 0 {
@@ -220,9 +220,10 @@ func (t *Tun) Activate() error {
 	if err = ioctl(fd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
 		return fmt.Errorf("failed to run tun device: %s", err)
 	}
+
 	// Unsafe path routes
-	for _, r := range c.UnsafeRoutes {
-		if err = exec.Command("route", "-n", "add", "-net", r.route.String(), "-interface", c.Device).Run(); err != nil {
+	for _, r := range t.UnsafeRoutes {
+		if err = exec.Command("route", "-n", "add", "-net", r.route.String(), "-interface", t.Device).Run(); err != nil {
 			return fmt.Errorf("failed to run 'route add' for unsafe_route %s: %s", r.route.String(), err)
 		}
 	}
