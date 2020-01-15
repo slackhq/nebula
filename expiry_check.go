@@ -35,7 +35,7 @@ func (e *CertExpiryCheck) logExpiryCert() {
 			select {
 			case <-e.Ticker.C:
 				if CertTTLInvalid(e.Interface.certState.certificate, e.TimeLeft) {
-					ttl:=e.Interface.certState.certificate.Details.NotAfter.Sub(time.Now()).String()
+					ttl := e.Interface.certState.certificate.Details.NotAfter.Sub(time.Now()).String()
 					l.WithField("cert", e.Interface.certState.certificate).WithField("time_left", ttl).Info("nebula certificate is close to expiry")
 				}
 			case <-e.EndCheckInterval:
