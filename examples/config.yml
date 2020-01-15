@@ -14,8 +14,10 @@ pki:
   expiry_check:
     enabled: true
     # time remaining on the nebula certificate before expiry alerts appear in logs
+    # default is 5d
     time_left: 72h
     # how often the alerting will appear in logs
+    # default is 60m
     log_interval: 60m
 
 # The static host map defines a set of hosts with fixed IP addresses on the internet (or any network).
