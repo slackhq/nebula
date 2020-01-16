@@ -10,8 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For macOS and Windows, build a special version of the binary that can manage
   its own service config. You can use this with `nebula -service`. If you are
   building from source, use `make service` to build this feature.
-- Support for `mips` processors.
-- Support for `linux-386` and `linux-ppc64le` 
+- Support for `mips`, `mips64`, `386` and `ppc64le` processors on Linux.
 - You can now configure the DNS listen host and port with `lighthouse.dns.host`
   and `lighthouse.dns.port`.
 - Subnet and routing support. You can now add a `unsafe_routes` section to your
@@ -23,11 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the certificate lifespan does not exceed the lifespan of the root CA. This
   could cause issues if you have signed certificates with expirations beyond
   the expiration of your CA, and you will need to reissue your certificates.
+- If lighthouse interval is set to `0`, never update the lighthouse (mobile
+  optimization).
 - Various documentation and example fixes.
 - Improved error messages.
 - Dependencies updated.
-- If lighthouse interval is set to `0`, never update the lighthouse (mobile
-  optimization).
 
 ### Fixed
 - If you have a firewall rule with `group: ["one-group"]`, this will
