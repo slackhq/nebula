@@ -32,8 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - If you have a firewall rule with `group: ["one-group"]`, this will
   now be accepted, with a warning to use `group: "one-group"` instead.
-- The `listen.host` configuration option was previously ignored (the host was
-  always 0.0.0.0. This option will now be honored.
+- The `listen.host` configuration option was previously ignored (the bind host
+  was always 0.0.0.0). This option will now be honored.
 - The `ca_sha` and `ca_name` firewall rule options should now work correctly.
 
 ## [1.0.0] - 2019-11-19
