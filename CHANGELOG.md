@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- For macOS and Windows, build a special version of the binary that can manage
-  its own service config. You can use this with `nebula -service`. If you are
-  building from source, use `make service` to build this feature.
+- For macOS and Windows, build a special version of the binary that can install
+  and manage its own service configuration. You can use this with `nebula
+  -service`.  If you are building from source, use `make service` to build this feature.
 - Support for `mips`, `mips64`, `386` and `ppc64le` processors on Linux.
 - You can now configure the DNS listen host and port with `lighthouse.dns.host`
   and `lighthouse.dns.port`.
