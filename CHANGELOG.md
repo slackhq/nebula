@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2020-01-17
+
 ### Added
 
 - For macOS and Windows, build a special version of the binary that can install
@@ -45,5 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/slackhq/nebula/releases/tag/v1.1.0
 [1.0.0]: https://github.com/slackhq/nebula/releases/tag/v1.0.0
