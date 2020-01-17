@@ -3,6 +3,8 @@ package nebula
 import (
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,6 +53,114 @@ func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, n
 	}
 
 	return &h
+}
+
+func NewLightHouseFromConfig(config *Config, myIp uint32, nebulaPort int, pc *udpConn) (*LightHouse, error) {
+	h := LightHouse{
+		amLighthouse: config.GetBool("lighthouse.am_lighthouse", false),
+		myIp:         myIp,
+		addrMap:      make(map[uint32][]udpAddr),
+		nebulaPort:   nebulaPort,
+		lighthouses:  make(map[uint32]struct{}),
+		staticList:   make(map[uint32]struct{}),
+		interval:     config.GetInt("lighthouse.interval", 10),
+		punchConn:    pc,
+		punchBack:    config.GetBool("punch_back", false),
+	}
+
+	err := h.loadStaticHosts(config)
+	if err != nil {
+		return nil, err
+	}
+
+	config.RegisterReloadCallback(h.reload)
+
+	return &h, nil
+}
+
+func (lh *LightHouse) loadStaticHosts(config *Config) error {
+	rawLighthouseHosts := config.GetStringSlice("lighthouse.hosts", []string{})
+	if lh.amLighthouse && len(rawLighthouseHosts) != 0 {
+		l.Warn("lighthouse.am_lighthouse enabled on node but upstream lighthouses exist in config")
+	}
+
+	for i, host := range rawLighthouseHosts {
+		ip := net.ParseIP(host)
+		if ip == nil {
+			l.WithField("host", host).Fatalf("Unable to parse lighthouse host entry %v", i+1)
+		}
+		lh.lighthouses[ip2int(ip)] = struct{}{}
+	}
+
+	for k, v := range config.GetMap("static_host_map", map[interface{}]interface{}{}) {
+		vpnIp := net.ParseIP(fmt.Sprintf("%v", k))
+		vals, ok := v.([]interface{})
+		if ok {
+			for _, v := range vals {
+				err := lh.addStaticRemote(vpnIp, v)
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			err := lh.addStaticRemote(vpnIp, v)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	err := lh.ValidateLHStaticEntries()
+	if err != nil {
+		l.WithError(err).Error("Lighthouse unreachable")
+	}
+
+	return nil
+}
+
+func (lh *LightHouse) reload(config *Config) {
+	if config.GetBool("lighthouse.am_lighthouse", false) != lh.amLighthouse {
+		l.Warn("Changing lighthouse.am_lighthouse with SIGHUP not supported. Ignored.")
+	}
+	lh.interval = config.GetInt("lighthouse.interval", 10)
+	lh.punchBack = config.GetBool("punch_back", false)
+
+	err := lh.loadStaticHosts(config)
+	if err != nil {
+		l.WithError(err).Error("failed to reload static hosts")
+	}
+
+	// Check for removed lighthouses / static entries. load the new config
+	// into a fresh LightHouse and then see which entries are no longer there.
+
+	newLh := LightHouse{
+		addrMap:     make(map[uint32][]udpAddr),
+		lighthouses: make(map[uint32]struct{}),
+		staticList:  make(map[uint32]struct{}),
+	}
+	newLh.loadStaticHosts(config)
+
+	var removedStatic, removedLighthouses []uint32
+	for vpnIP := range lh.staticList {
+		if _, ok := newLh.staticList[vpnIP]; !ok {
+			removedStatic = append(removedStatic, vpnIP)
+		}
+	}
+	for vpnIP := range lh.lighthouses {
+		if _, ok := newLh.lighthouses[vpnIP]; !ok {
+			removedLighthouses = append(removedLighthouses, vpnIP)
+		}
+	}
+
+	for _, vpnIP := range removedLighthouses {
+		l.Infof("lighthouse.hosts entry removed: %s", IntIp(vpnIP))
+		delete(lh.lighthouses, vpnIP)
+	}
+	for _, vpnIP := range removedStatic {
+		l.Infof("static_host_map entry removed: %s", IntIp(vpnIP))
+		delete(lh.staticList, vpnIP)
+		lh.DeleteVpnIP(vpnIP)
+	}
 }
 
 func (lh *LightHouse) ValidateLHStaticEntries() error {
@@ -115,6 +225,23 @@ func (lh *LightHouse) DeleteVpnIP(vpnIP uint32) {
 	delete(lh.addrMap, vpnIP)
 	l.Debugf("deleting %s from lighthouse.", IntIp(vpnIP))
 	lh.Unlock()
+}
+
+func (lh *LightHouse) addStaticRemote(vpnIp net.IP, v interface{}) error {
+	parts := strings.Split(fmt.Sprintf("%v", v), ":")
+	addr, err := net.ResolveIPAddr("ip", parts[0])
+	if err != nil {
+		return err
+	}
+
+	ip := addr.IP
+	port, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return fmt.Errorf("Static host address for %s could not be parsed: %s", vpnIp, v)
+	}
+
+	lh.AddRemote(ip2int(vpnIp), NewUDPAddr(ip2int(ip), uint16(port)), true)
+	return nil
 }
 
 func (lh *LightHouse) AddRemote(vpnIP uint32, toIp *udpAddr, static bool) {
