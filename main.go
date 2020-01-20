@@ -208,6 +208,9 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		if ip == nil {
 			l.WithField("host", host).Fatalf("Unable to parse lighthouse host entry %v", i+1)
 		}
+		if !tunCidr.Contains(ip) {
+			l.WithField("vpnIp", ip).WithField("network", tunCidr.String()).Fatalf("lighthouse host is not in our subnet, invalid")
+		}
 		lighthouseHosts[i] = ip2int(ip)
 	}
 
@@ -225,6 +228,9 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	//TODO: Move all of this inside functions in lighthouse.go
 	for k, v := range config.GetMap("static_host_map", map[interface{}]interface{}{}) {
 		vpnIp := net.ParseIP(fmt.Sprintf("%v", k))
+		if !tunCidr.Contains(vpnIp) {
+			l.WithField("vpnIp", vpnIp).WithField("network", tunCidr.String()).Fatalf("static_host_map key is not in our subnet, invalid")
+		}
 		vals, ok := v.([]interface{})
 		if ok {
 			for _, v := range vals {
