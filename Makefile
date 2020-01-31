@@ -17,6 +17,7 @@ ALL_LINUX = linux-amd64 \
 
 ALL = $(ALL_LINUX) \
 	darwin-amd64 \
+	freebsd-amd64 \
 	windows-amd64
 
 all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
@@ -29,6 +30,9 @@ bin-windows: build/windows-amd64/nebula.exe build/windows-amd64/nebula-cert.exe
 	mv $? .
 
 bin-darwin: build/darwin-amd64/nebula build/darwin-amd64/nebula-cert
+	mv $? .
+
+bin-freebsd: build/freebsd-amd64/nebula build/freebsd-amd64/nebula-cert
 	mv $? .
 
 bin:
