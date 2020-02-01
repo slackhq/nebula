@@ -36,7 +36,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 		certState:        cs,
 		firewall:         &Firewall{},
 		lightHouse:       lh,
-		handshakeManager: NewHandshakeManager(vpncidr, preferredRanges, hostMap, lh, &udpConn{}),
+		handshakeManager: NewHandshakeManager(vpncidr, preferredRanges, hostMap, lh, &udpConn{}, defaultHandshakeConfig),
 	}
 	now := time.Now()
 
@@ -99,7 +99,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 		certState:        cs,
 		firewall:         &Firewall{},
 		lightHouse:       lh,
-		handshakeManager: NewHandshakeManager(vpncidr, preferredRanges, hostMap, lh, &udpConn{}),
+		handshakeManager: NewHandshakeManager(vpncidr, preferredRanges, hostMap, lh, &udpConn{}, defaultHandshakeConfig),
 	}
 	now := time.Now()
 
