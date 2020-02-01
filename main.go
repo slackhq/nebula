@@ -115,6 +115,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		routes,
 		unsafeRoutes,
 		config.GetInt("tun.tx_queue", 500),
+		config.GetString("tun.interface_name", ""),
 	)
 	if err != nil {
 		l.WithError(err).Fatal("Failed to get a tun/tap device")

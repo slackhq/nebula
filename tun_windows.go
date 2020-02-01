@@ -12,11 +12,12 @@ type Tun struct {
 	Device string
 	Cidr   *net.IPNet
 	MTU    int
+	InterfaceName string
 
 	*water.Interface
 }
 
-func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, interfaceName string) (ifce *Tun, err error) {
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("Route MTU not supported in Windows")
 	}
@@ -27,6 +28,7 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 	return &Tun{
 		Cidr: cidr,
 		MTU:  defaultMTU,
+		InterfaceName: interfaceName,
 	}, nil
 }
 
@@ -37,6 +39,7 @@ func (c *Tun) Activate() error {
 		PlatformSpecificParams: water.PlatformSpecificParams{
 			ComponentID: "tap0901",
 			Network:     c.Cidr.String(),
+			InterfaceName: c.InterfaceName,
 		},
 	})
 	if err != nil {
@@ -55,7 +58,7 @@ func (c *Tun) Activate() error {
 		"gateway=none",
 	).Run()
 	if err != nil {
-		return fmt.Errorf("failed to run 'netsh' to set address: %s", err)
+		return fmt.Errorf("failed to run 'netsh' to set address: %s %s %s %s", err, c.Device,c.Cidr.IP,net.IP(c.Cidr.Mask))
 	}
 	err = exec.Command(
 		"netsh", "interface", "ipv4", "set", "interface",
