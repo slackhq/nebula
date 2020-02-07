@@ -42,8 +42,10 @@ func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainH
 }
 
 func (c *HandshakeManager) Run(f EncWriter) {
-	clockSource := time.Tick(HandshakeTryInterval)
-	for now := range clockSource {
+	clockSource := time.NewTicker(HandshakeTryInterval)
+	defer clockSource.Stop()
+
+	for now := range clockSource.C {
 		c.NextOutboundHandshakeTimerTick(now, f)
 		c.NextInboundHandshakeTimerTick(now)
 	}

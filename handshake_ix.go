@@ -41,13 +41,10 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 		Cert:           ci.certState.rawCertificateNoKey,
 	}
 
-	hsBytes := []byte{}
-
 	hs := &NebulaHandshake{
 		Details: hsProto,
 	}
-	hsBytes, err = proto.Marshal(hs)
-
+	hsBytes, err := proto.Marshal(hs)
 	if err != nil {
 		l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to marshal handshake message")

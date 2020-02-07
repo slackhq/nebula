@@ -332,7 +332,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 }
 
 func shutdownBlock(ifce *Interface) {
-	var sigChan = make(chan os.Signal)
+	var sigChan = make(chan os.Signal, 8)
 	signal.Notify(sigChan, syscall.SIGTERM)
 	signal.Notify(sigChan, syscall.SIGINT)
 

@@ -140,9 +140,10 @@ func (n *connectionManager) Start() {
 }
 
 func (n *connectionManager) Run() {
-	clockSource := time.Tick(500 * time.Millisecond)
+	clockSource := time.NewTicker(500 * time.Millisecond)
+	defer clockSource.Stop()
 
-	for now := range clockSource {
+	for now := range clockSource.C {
 		n.HandleMonitorTick(now)
 		n.HandleDeletionTick(now)
 	}
