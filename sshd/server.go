@@ -155,11 +155,10 @@ func (s *SSHServer) Stop() {
 	}
 
 	s.l.Info("SSH server stopped listening")
-	return
 }
 
 func (s *SSHServer) matchPubKey(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
-	pk := string(pubKey.Marshal())
+	pk := pubKey.Marshal()
 	fp := ssh.FingerprintSHA256(pubKey)
 
 	tk, ok := s.trustedKeys[c.User()]
@@ -167,8 +166,7 @@ func (s *SSHServer) matchPubKey(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.
 		return nil, fmt.Errorf("unknown user %s", c.User())
 	}
 
-	_, ok = tk[pk]
-	if !ok {
+	if _, ok := tk[string(pk)]; !ok {
 		return nil, fmt.Errorf("unknown public key for %s (%s)", c.User(), fp)
 	}
 

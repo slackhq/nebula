@@ -178,7 +178,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	*/
 
 	punchy := config.GetBool("punchy", false)
-	if punchy == true {
+	if punchy {
 		l.Info("UDP hole punching enabled")
 		go hostMap.Punchy(udpServer)
 	}
@@ -344,7 +344,7 @@ func shutdownBlock(ifce *Interface) {
 	ifce.hostMap.Lock()
 	for _, h := range ifce.hostMap.Hosts {
 		if h.ConnectionState.ready {
-			ifce.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+			ifce.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12), make([]byte, mtu))
 			l.WithField("vpnIp", IntIp(h.hostId)).WithField("udpAddr", h.remote).
 				Debug("Sending close tunnel message")
 		}

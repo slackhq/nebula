@@ -19,10 +19,8 @@ import (
 // |-----------------------------------------------------------------------|
 // |                               payload...                              |
 
-const (
-	Version   uint8 = 1
-	HeaderLen       = 16
-)
+const Version uint8 = 1
+const HeaderLen = 16
 
 type NebulaMessageType uint8
 type NebulaMessageSubType uint8

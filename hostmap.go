@@ -129,22 +129,21 @@ func (hm *HostMap) Add(ip uint32, hostinfo *HostInfo) {
 }
 
 func (hm *HostMap) AddVpnIP(vpnIP uint32) *HostInfo {
-	h := &HostInfo{}
 	hm.RLock()
 	if _, ok := hm.Hosts[vpnIP]; !ok {
 		hm.RUnlock()
-		h = &HostInfo{
+		h := &HostInfo{
 			Remotes:         []*HostInfoDest{},
 			promoteCounter:  0,
 			hostId:          vpnIP,
-			HandshakePacket: make(map[uint8][]byte, 0),
+			HandshakePacket: make(map[uint8][]byte),
 		}
 		hm.Lock()
 		hm.Hosts[vpnIP] = h
 		hm.Unlock()
 		return h
 	} else {
-		h = hm.Hosts[vpnIP]
+		h := hm.Hosts[vpnIP]
 		hm.RUnlock()
 		return h
 	}
@@ -171,7 +170,7 @@ func (hm *HostMap) AddIndex(index uint32, ci *ConnectionState) (*HostInfo, error
 			ConnectionState: ci,
 			Remotes:         []*HostInfoDest{},
 			localIndexId:    index,
-			HandshakePacket: make(map[uint8][]byte, 0),
+			HandshakePacket: make(map[uint8][]byte),
 		}
 		hm.Indexes[index] = h
 		l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes),
@@ -266,7 +265,7 @@ func (hm *HostMap) AddRemote(vpnIp uint32, remote *udpAddr) *HostInfo {
 			Remotes:         []*HostInfoDest{NewHostInfoDest(remote)},
 			promoteCounter:  0,
 			hostId:          vpnIp,
-			HandshakePacket: make(map[uint8][]byte, 0),
+			HandshakePacket: make(map[uint8][]byte),
 		}
 		i.remote = i.Remotes[0].addr
 		hm.Hosts[vpnIp] = i
@@ -451,7 +450,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		if preferred && !best.Equals(i.remote) {
 			// Try to send a test packet to that host, this should
 			// cause it to detect a roaming event and switch remotes
-			ifce.send(test, testRequest, i.ConnectionState, i, best, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			ifce.send(test, testRequest, i.ConnectionState, i, best, []byte(""), make([]byte, 12), make([]byte, mtu))
 		}
 	}
 }
@@ -557,7 +556,7 @@ func (i *HostInfo) handshakeComplete() {
 	// Clamping it to 2 gets us out of the woods for now
 	*i.ConnectionState.messageCounter = 2
 	l.WithField("vpnIp", IntIp(i.hostId)).Debugf("Sending %d stored packets", len(i.packetStore))
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 	out := make([]byte, mtu)
 	for _, cp := range i.packetStore {
 		cp.callback(cp.messageType, cp.messageSubType, i, cp.packet, nb, out)
@@ -749,7 +748,7 @@ func localIps() *[]net.IP {
 			case *net.IPAddr:
 				ip = v.IP
 			}
-			if ip.To4() != nil && ip.IsLoopback() == false {
+			if ip.To4() != nil && !ip.IsLoopback() {
 				ips = append(ips, ip)
 			}
 		}

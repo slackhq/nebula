@@ -188,9 +188,5 @@ func ipWithin(o *net.IPNet, i *net.IPNet) bool {
 	}
 
 	// Make sure o contains the max
-	if !o.Contains(last) {
-		return false
-	}
-
-	return true
+	return o.Contains(last)
 }
