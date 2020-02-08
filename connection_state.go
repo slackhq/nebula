@@ -21,7 +21,6 @@ type ConnectionState struct {
 	messageCounter *uint64
 	window         *Bits
 	queueLock      sync.Mutex
-	writeLock      sync.Mutex
 	ready          bool
 }
 

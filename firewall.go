@@ -63,7 +63,6 @@ type Firewall struct {
 	connMutex sync.Mutex
 	rules     string
 
-	trackTCPRTT  bool
 	metricTCPRTT metrics.Histogram
 }
 

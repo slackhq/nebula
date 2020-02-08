@@ -16,11 +16,10 @@ type SSHServer struct {
 	trustedKeys map[string]map[string]bool
 
 	// List of available commands
-	helpCommand *Command
-	commands    *radix.Tree
-	listener    net.Listener
-	conns       map[int]*session
-	counter     int
+	commands *radix.Tree
+	listener net.Listener
+	conns    map[int]*session
+	counter  int
 }
 
 // NewSSHServer creates a new ssh server rigged with default commands and prepares to listen

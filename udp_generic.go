@@ -85,10 +85,6 @@ func (u *udpConn) reloadConfig(c *Config) {
 	// TODO
 }
 
-type rawMessage struct {
-	Len uint32
-}
-
 func (u *udpConn) ListenOut(f *Interface) {
 	plaintext := make([]byte, mtu)
 	buffer := make([]byte, mtu)
