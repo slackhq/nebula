@@ -50,7 +50,7 @@ func Test_newPacket(t *testing.T) {
 	b = append(b, []byte{0, 3, 0, 4}...)
 	err = newPacket(b, true, p)
 
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, p.Protocol, uint8(fwProtoTCP))
 	assert.Equal(t, p.LocalIP, ip2int(net.IPv4(10, 0, 0, 2)))
 	assert.Equal(t, p.RemoteIP, ip2int(net.IPv4(10, 0, 0, 1)))
@@ -71,7 +71,7 @@ func Test_newPacket(t *testing.T) {
 	b = append(b, []byte{0, 5, 0, 6}...)
 	err = newPacket(b, false, p)
 
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, p.Protocol, uint8(2))
 	assert.Equal(t, p.LocalIP, ip2int(net.IPv4(10, 0, 0, 1)))
 	assert.Equal(t, p.RemoteIP, ip2int(net.IPv4(10, 0, 0, 2)))

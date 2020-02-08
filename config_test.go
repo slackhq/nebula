@@ -11,21 +11,21 @@ import (
 
 func TestConfig_Load(t *testing.T) {
 	dir, err := ioutil.TempDir("", "config-test")
+	assert.NoError(t, err, "ioutil.TempDir")
+
 	// invalid yaml
 	c := NewConfig()
-	ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte(" invalid yaml"), 0644)
+	assert.NoError(t, ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte(" invalid yaml"), 0644), "ioutil.WriteFile")
 	assert.EqualError(t, c.Load(dir), "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[interface {}]interface {}")
 
 	// simple multi config merge
 	c = NewConfig()
-	os.RemoveAll(dir)
-	os.Mkdir(dir, 0755)
+	assert.NoError(t, os.RemoveAll(dir), "os.RemoveAll")
+	assert.NoError(t, os.Mkdir(dir, 0755), "os.Mkdir")
 
-	assert.Nil(t, err)
-
-	ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
-	ioutil.WriteFile(filepath.Join(dir, "02.yml"), []byte("outer:\n  inner: override\nnew: hi"), 0644)
-	assert.Nil(t, c.Load(dir))
+	assert.NoError(t, ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644), "ioutil.WriteFile")
+	assert.NoError(t, ioutil.WriteFile(filepath.Join(dir, "02.yml"), []byte("outer:\n  inner: override\nnew: hi"), 0644), "ioutil.WriteFile")
+	assert.NoError(t, c.Load(dir))
 	expected := map[interface{}]interface{}{
 		"outer": map[interface{}]interface{}{
 			"inner": "override",
@@ -108,28 +108,30 @@ func TestConfig_HasChanged(t *testing.T) {
 }
 
 func TestConfig_ReloadConfig(t *testing.T) {
+	assert := assert.New(t)
+
 	done := make(chan bool, 1)
 	dir, err := ioutil.TempDir("", "config-test")
-	assert.Nil(t, err)
-	ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
+	assert.NoError(err, "ioutil.TempDir")
+	assert.NoError(ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644), "ioutil.WriteFile")
 
 	c := NewConfig()
-	assert.Nil(t, c.Load(dir))
+	assert.NoError(c.Load(dir), "Config.Load")
 
-	assert.False(t, c.HasChanged("outer.inner"))
-	assert.False(t, c.HasChanged("outer"))
-	assert.False(t, c.HasChanged(""))
+	assert.False(c.HasChanged("outer.inner"))
+	assert.False(c.HasChanged("outer"))
+	assert.False(c.HasChanged(""))
 
-	ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: ho"), 0644)
+	assert.NoError(ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: ho"), 0644), "ioutil.WriteFile")
 
 	c.RegisterReloadCallback(func(c *Config) {
 		done <- true
 	})
 
 	c.ReloadConfig()
-	assert.True(t, c.HasChanged("outer.inner"))
-	assert.True(t, c.HasChanged("outer"))
-	assert.True(t, c.HasChanged(""))
+	assert.True(c.HasChanged("outer.inner"))
+	assert.True(c.HasChanged("outer"))
+	assert.True(c.HasChanged(""))
 
 	// Make sure we call the callbacks
 	select {

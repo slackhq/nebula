@@ -62,7 +62,7 @@ func Test_ca(t *testing.T) {
 
 	// create temp key file
 	keyF, err := ioutil.TempFile("", "test.key")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	os.Remove(keyF.Name())
 
 	// failed cert write
@@ -75,7 +75,7 @@ func Test_ca(t *testing.T) {
 
 	// create temp cert file
 	crtF, err := ioutil.TempFile("", "test.crt")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	os.Remove(crtF.Name())
 	os.Remove(keyF.Name())
 
@@ -83,7 +83,7 @@ func Test_ca(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.Nil(t, ca(args, ob, eb))
+	assert.NoError(t, ca(args, ob, eb))
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 
@@ -91,13 +91,13 @@ func Test_ca(t *testing.T) {
 	rb, _ := ioutil.ReadFile(keyF.Name())
 	lKey, b, err := cert.UnmarshalEd25519PrivateKey(rb)
 	assert.Len(t, b, 0)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Len(t, lKey, 64)
 
 	rb, _ = ioutil.ReadFile(crtF.Name())
 	lCrt, b, err := cert.UnmarshalNebulaCertificateFromPEM(rb)
 	assert.Len(t, b, 0)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	assert.Equal(t, "test", lCrt.Details.Name)
 	assert.Len(t, lCrt.Details.Ips, 0)
@@ -115,7 +115,7 @@ func Test_ca(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.Nil(t, ca(args, ob, eb))
+	assert.NoError(t, ca(args, ob, eb))
 
 	// test that we won't overwrite existing certificate file
 	ob.Reset()
@@ -134,5 +134,4 @@ func Test_ca(t *testing.T) {
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 	os.Remove(keyF.Name())
-
 }

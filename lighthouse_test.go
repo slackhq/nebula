@@ -20,12 +20,12 @@ func TestNewLhQuery(t *testing.T) {
 
 	// It should also Marshal fine
 	b, err := proto.Marshal(a)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// and then Unmarshal fine
 	n := &NebulaMeta{}
 	err = proto.Unmarshal(b, n)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 }
 
@@ -55,7 +55,7 @@ func Test_lhStaticMapping(t *testing.T) {
 	meh := NewLightHouse(true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false)
 	meh.AddRemote(ip2int(lh1IP), NewUDPAddr(ip2int(lh1IP), uint16(4242)), true)
 	err := meh.ValidateLHStaticEntries()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	lh2 := "10.128.0.3"
 	lh2IP := net.ParseIP(lh2)

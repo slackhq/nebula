@@ -63,7 +63,7 @@ func TestFirewall_AddRule(t *testing.T) {
 
 	_, ti, _ := net.ParseCIDR("1.2.3.4/32")
 
-	assert.Nil(t, fw.AddRule(true, fwProtoTCP, 1, 1, []string{}, "", nil, "", ""))
+	assert.NoError(t, fw.AddRule(true, fwProtoTCP, 1, 1, []string{}, "", nil, "", ""))
 	// An empty rule is any
 	assert.True(t, fw.InRules.TCP[1].Any.Any)
 	assert.Empty(t, fw.InRules.TCP[1].Any.Groups)
@@ -73,7 +73,7 @@ func TestFirewall_AddRule(t *testing.T) {
 	assert.Nil(t, fw.InRules.TCP[1].Any.CIDR.root.value)
 
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
-	assert.Nil(t, fw.AddRule(true, fwProtoUDP, 1, 1, []string{"g1"}, "", nil, "", ""))
+	assert.NoError(t, fw.AddRule(true, fwProtoUDP, 1, 1, []string{"g1"}, "", nil, "", ""))
 	assert.False(t, fw.InRules.UDP[1].Any.Any)
 	assert.Contains(t, fw.InRules.UDP[1].Any.Groups[0], "g1")
 	assert.Empty(t, fw.InRules.UDP[1].Any.Hosts)
@@ -82,7 +82,7 @@ func TestFirewall_AddRule(t *testing.T) {
 	assert.Nil(t, fw.InRules.UDP[1].Any.CIDR.root.value)
 
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
-	assert.Nil(t, fw.AddRule(true, fwProtoICMP, 1, 1, []string{}, "h1", nil, "", ""))
+	assert.NoError(t, fw.AddRule(true, fwProtoICMP, 1, 1, []string{}, "h1", nil, "", ""))
 	assert.False(t, fw.InRules.ICMP[1].Any.Any)
 	assert.Empty(t, fw.InRules.ICMP[1].Any.Groups)
 	assert.Contains(t, fw.InRules.ICMP[1].Any.Hosts, "h1")
@@ -91,31 +91,31 @@ func TestFirewall_AddRule(t *testing.T) {
 	assert.Nil(t, fw.InRules.ICMP[1].Any.CIDR.root.value)
 
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
-	assert.Nil(t, fw.AddRule(false, fwProtoAny, 1, 1, []string{}, "", ti, "", ""))
+	assert.NoError(t, fw.AddRule(false, fwProtoAny, 1, 1, []string{}, "", ti, "", ""))
 	assert.False(t, fw.OutRules.AnyProto[1].Any.Any)
 	assert.Empty(t, fw.OutRules.AnyProto[1].Any.Groups)
 	assert.Empty(t, fw.OutRules.AnyProto[1].Any.Hosts)
 	assert.NotNil(t, fw.OutRules.AnyProto[1].Any.CIDR.Match(ip2int(ti.IP)))
 
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
-	assert.Nil(t, fw.AddRule(true, fwProtoUDP, 1, 1, []string{"g1"}, "", nil, "ca-name", ""))
+	assert.NoError(t, fw.AddRule(true, fwProtoUDP, 1, 1, []string{"g1"}, "", nil, "ca-name", ""))
 	assert.Contains(t, fw.InRules.UDP[1].CANames, "ca-name")
 
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
-	assert.Nil(t, fw.AddRule(true, fwProtoUDP, 1, 1, []string{"g1"}, "", nil, "", "ca-sha"))
+	assert.NoError(t, fw.AddRule(true, fwProtoUDP, 1, 1, []string{"g1"}, "", nil, "", "ca-sha"))
 	assert.Contains(t, fw.InRules.UDP[1].CAShas, "ca-sha")
 
 	// Set any and clear fields
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
-	assert.Nil(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{"g1", "g2"}, "h1", ti, "", ""))
+	assert.NoError(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{"g1", "g2"}, "h1", ti, "", ""))
 	assert.Equal(t, []string{"g1", "g2"}, fw.OutRules.AnyProto[0].Any.Groups[0])
 	assert.Contains(t, fw.OutRules.AnyProto[0].Any.Hosts, "h1")
 	assert.NotNil(t, fw.OutRules.AnyProto[0].Any.CIDR.Match(ip2int(ti.IP)))
 
 	// run twice just to make sure
 	//TODO: these ANY rules should clear the CA firewall portion
-	assert.Nil(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{"any"}, "", nil, "", ""))
-	assert.Nil(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{}, "any", nil, "", ""))
+	assert.NoError(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{"any"}, "", nil, "", ""))
+	assert.NoError(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{}, "any", nil, "", ""))
 	assert.True(t, fw.OutRules.AnyProto[0].Any.Any)
 	assert.Empty(t, fw.OutRules.AnyProto[0].Any.Groups)
 	assert.Empty(t, fw.OutRules.AnyProto[0].Any.Hosts)
@@ -124,12 +124,12 @@ func TestFirewall_AddRule(t *testing.T) {
 	assert.Nil(t, fw.OutRules.AnyProto[0].Any.CIDR.root.value)
 
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
-	assert.Nil(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{}, "any", nil, "", ""))
+	assert.NoError(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{}, "any", nil, "", ""))
 	assert.True(t, fw.OutRules.AnyProto[0].Any.Any)
 
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, c)
 	_, anyIp, _ := net.ParseCIDR("0.0.0.0/0")
-	assert.Nil(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{}, "", anyIp, "", ""))
+	assert.NoError(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{}, "", anyIp, "", ""))
 	assert.True(t, fw.OutRules.AnyProto[0].Any.Any)
 
 	// Test error conditions
@@ -175,7 +175,7 @@ func TestFirewall_Drop(t *testing.T) {
 	h.CreateRemoteCIDR(&c)
 
 	fw := NewFirewall(time.Second, time.Minute, time.Hour, &c)
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"any"}, "", nil, "", ""))
+	assert.NoError(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"any"}, "", nil, "", ""))
 	cp := cert.NewCAPool()
 
 	// Drop outbound
@@ -194,28 +194,28 @@ func TestFirewall_Drop(t *testing.T) {
 
 	// ensure signer doesn't get in the way of group checks
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "", "signer-shasum"))
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "", "signer-shasum-bad"))
+	assert.NoError(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "", "signer-shasum"))
+	assert.NoError(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "", "signer-shasum-bad"))
 	assert.True(t, fw.Drop([]byte{}, p, true, &h, cp))
 
 	// test caSha doesn't drop on match
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "", "signer-shasum-bad"))
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "", "signer-shasum"))
+	assert.NoError(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "", "signer-shasum-bad"))
+	assert.NoError(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "", "signer-shasum"))
 	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
 
 	// ensure ca name doesn't get in the way of group checks
 	cp.CAs["signer-shasum"] = &cert.NebulaCertificate{Details: cert.NebulaCertificateDetails{Name: "ca-good"}}
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "ca-good", ""))
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "ca-good-bad", ""))
+	assert.NoError(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "ca-good", ""))
+	assert.NoError(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "ca-good-bad", ""))
 	assert.True(t, fw.Drop([]byte{}, p, true, &h, cp))
 
 	// test caName doesn't drop on match
 	cp.CAs["signer-shasum"] = &cert.NebulaCertificate{Details: cert.NebulaCertificateDetails{Name: "ca-good"}}
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "ca-good-bad", ""))
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "ca-good", ""))
+	assert.NoError(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "ca-good-bad", ""))
+	assert.NoError(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "ca-good", ""))
 	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
 }
 
@@ -224,7 +224,8 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 		TCP: firewallPort{},
 	}
 
-	_, n, _ := net.ParseCIDR("172.1.1.1/32")
+	_, n, err := net.ParseCIDR("172.1.1.1/32")
+	assert.NoError(b, err, "ParseCIDR")
 	_ = ft.TCP.addRule(10, 10, []string{"good-group"}, "good-host", n, "", "")
 	_ = ft.TCP.addRule(10, 10, []string{"good-group2"}, "good-host", n, "", "")
 	_ = ft.TCP.addRule(10, 10, []string{"good-group3"}, "good-host", n, "", "")
@@ -247,7 +248,8 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 	})
 
 	b.Run("fail all group, name, and cidr", func(b *testing.B) {
-		_, ip, _ := net.ParseCIDR("9.254.254.254/32")
+		_, ip, err := net.ParseCIDR("9.254.254.254/32")
+		assert.NoError(b, err, "ParseCIDR")
 		c := &cert.NebulaCertificate{
 			Details: cert.NebulaCertificateDetails{
 				InvertedGroups: map[string]struct{}{"nope": {}},
@@ -362,7 +364,7 @@ func TestFirewall_Drop2(t *testing.T) {
 	h1.CreateRemoteCIDR(&c1)
 
 	fw := NewFirewall(time.Second, time.Minute, time.Hour, &c)
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group", "test-group"}, "", nil, "", ""))
+	assert.NoError(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group", "test-group"}, "", nil, "", ""))
 	cp := cert.NewCAPool()
 
 	// h1/c1 lacks the proper groups
@@ -442,8 +444,8 @@ func TestFirewall_Drop3(t *testing.T) {
 	h3.CreateRemoteCIDR(&c3)
 
 	fw := NewFirewall(time.Second, time.Minute, time.Hour, &c)
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 1, 1, []string{}, "host1", nil, "", ""))
-	assert.Nil(t, fw.AddRule(true, fwProtoAny, 1, 1, []string{}, "", nil, "", "signer-sha"))
+	assert.NoError(t, fw.AddRule(true, fwProtoAny, 1, 1, []string{}, "host1", nil, "", ""))
+	assert.NoError(t, fw.AddRule(true, fwProtoAny, 1, 1, []string{}, "", nil, "", "signer-sha"))
 	cp := cert.NewCAPool()
 
 	// c1 should pass because host match
@@ -553,22 +555,22 @@ func Test_parsePort(t *testing.T) {
 	s, e, err := parsePort(" 1 - 2    ")
 	assert.Equal(t, int32(1), s)
 	assert.Equal(t, int32(2), e)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	s, e, err = parsePort("0-1")
 	assert.Equal(t, int32(0), s)
 	assert.Equal(t, int32(0), e)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	s, e, err = parsePort("9919")
 	assert.Equal(t, int32(9919), s)
 	assert.Equal(t, int32(9919), e)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	s, e, err = parsePort("any")
 	assert.Equal(t, int32(0), s)
 	assert.Equal(t, int32(0), e)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 }
 
 func TestNewFirewallFromConfig(t *testing.T) {
@@ -625,63 +627,63 @@ func TestAddFirewallRulesFromConfig(t *testing.T) {
 	conf := NewConfig()
 	mf := &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "tcp", "host": "a"}}}
-	assert.Nil(t, AddFirewallRulesFromConfig(false, conf, mf))
+	assert.NoError(t, AddFirewallRulesFromConfig(false, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: false, proto: fwProtoTCP, startPort: 1, endPort: 1, groups: nil, host: "a", ip: nil}, mf.lastCall)
 
 	// Test adding udp rule
 	conf = NewConfig()
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "udp", "host": "a"}}}
-	assert.Nil(t, AddFirewallRulesFromConfig(false, conf, mf))
+	assert.NoError(t, AddFirewallRulesFromConfig(false, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: false, proto: fwProtoUDP, startPort: 1, endPort: 1, groups: nil, host: "a", ip: nil}, mf.lastCall)
 
 	// Test adding icmp rule
 	conf = NewConfig()
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "icmp", "host": "a"}}}
-	assert.Nil(t, AddFirewallRulesFromConfig(false, conf, mf))
+	assert.NoError(t, AddFirewallRulesFromConfig(false, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: false, proto: fwProtoICMP, startPort: 1, endPort: 1, groups: nil, host: "a", ip: nil}, mf.lastCall)
 
 	// Test adding any rule
 	conf = NewConfig()
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "host": "a"}}}
-	assert.Nil(t, AddFirewallRulesFromConfig(true, conf, mf))
+	assert.NoError(t, AddFirewallRulesFromConfig(true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: fwProtoAny, startPort: 1, endPort: 1, groups: nil, host: "a", ip: nil}, mf.lastCall)
 
 	// Test adding rule with ca_sha
 	conf = NewConfig()
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "ca_sha": "12312313123"}}}
-	assert.Nil(t, AddFirewallRulesFromConfig(true, conf, mf))
+	assert.NoError(t, AddFirewallRulesFromConfig(true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: fwProtoAny, startPort: 1, endPort: 1, groups: nil, ip: nil, caSha: "12312313123"}, mf.lastCall)
 
 	// Test adding rule with ca_name
 	conf = NewConfig()
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "ca_name": "root01"}}}
-	assert.Nil(t, AddFirewallRulesFromConfig(true, conf, mf))
+	assert.NoError(t, AddFirewallRulesFromConfig(true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: fwProtoAny, startPort: 1, endPort: 1, groups: nil, ip: nil, caName: "root01"}, mf.lastCall)
 
 	// Test single group
 	conf = NewConfig()
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "group": "a"}}}
-	assert.Nil(t, AddFirewallRulesFromConfig(true, conf, mf))
+	assert.NoError(t, AddFirewallRulesFromConfig(true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: fwProtoAny, startPort: 1, endPort: 1, groups: []string{"a"}, ip: nil}, mf.lastCall)
 
 	// Test single groups
 	conf = NewConfig()
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "groups": "a"}}}
-	assert.Nil(t, AddFirewallRulesFromConfig(true, conf, mf))
+	assert.NoError(t, AddFirewallRulesFromConfig(true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: fwProtoAny, startPort: 1, endPort: 1, groups: []string{"a"}, ip: nil}, mf.lastCall)
 
 	// Test multiple AND groups
 	conf = NewConfig()
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "groups": []string{"a", "b"}}}}
-	assert.Nil(t, AddFirewallRulesFromConfig(true, conf, mf))
+	assert.NoError(t, AddFirewallRulesFromConfig(true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: fwProtoAny, startPort: 1, endPort: 1, groups: []string{"a", "b"}, ip: nil}, mf.lastCall)
 
 	// Test Add error
@@ -796,7 +798,7 @@ func TestFirewall_convertRule(t *testing.T) {
 
 	r, err := convertRule(c, "test", 1)
 	assert.Contains(t, ob.String(), "test rule #1; group was an array with a single value, converting to simple value")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, "group1", r.Group)
 
 	// Ensure group array of > 1 is errord
@@ -816,7 +818,7 @@ func TestFirewall_convertRule(t *testing.T) {
 	}
 
 	r, err = convertRule(c, "test", 1)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, "group1", r.Group)
 }
 

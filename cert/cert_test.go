@@ -43,11 +43,11 @@ func TestMarshalingNebulaCertificate(t *testing.T) {
 	}
 
 	b, err := nc.Marshal()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	//t.Log("Cert size:", len(b))
 
 	nc2, err := UnmarshalNebulaCertificate(b)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	assert.Equal(t, nc.Signature, nc2.Signature)
 	assert.Equal(t, nc.Details.Name, nc2.Details.Name)
@@ -98,13 +98,13 @@ func TestNebulaCertificate_Sign(t *testing.T) {
 	}
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.False(t, nc.CheckSignature(pub))
-	assert.Nil(t, nc.Sign(priv))
+	assert.NoError(t, nc.Sign(priv))
 	assert.True(t, nc.CheckSignature(pub))
 
 	_, err = nc.Marshal()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	//t.Log("Cert size:", len(b))
 }
 
@@ -149,7 +149,7 @@ func TestNebulaCertificate_MarshalJSON(t *testing.T) {
 	}
 
 	b, err := nc.MarshalJSON()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(
 		t,
 		"{\"details\":{\"groups\":[\"test-group1\",\"test-group2\",\"test-group3\"],\"ips\":[\"10.1.1.1/24\",\"10.1.1.2/16\",\"10.1.1.3/ff00ff00\"],\"isCa\":false,\"issuer\":\"1234567890abcedfghij1234567890ab\",\"name\":\"testing\",\"notAfter\":\"0000-11-30T02:00:00Z\",\"notBefore\":\"0000-11-30T01:00:00Z\",\"publicKey\":\"313233343536373839306162636564666768696a313233343536373839306162\",\"subnets\":[\"9.1.1.1/ff00ff00\",\"9.1.1.2/24\",\"9.1.1.3/16\"]},\"fingerprint\":\"26cb1c30ad7872c804c166b5150fa372f437aa3856b04edb4334b4470ec728e4\",\"signature\":\"313233343536373839306162636564666768696a313233343536373839306162\"}",
@@ -159,19 +159,19 @@ func TestNebulaCertificate_MarshalJSON(t *testing.T) {
 
 func TestNebulaCertificate_Verify(t *testing.T) {
 	ca, _, caKey, err := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	c, _, _, err := newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	h, err := ca.Sha256Sum()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	caPool := NewCAPool()
 	caPool.CAs[h] = ca
 
 	f, err := c.Sha256Sum()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	caPool.BlacklistFingerprint(f)
 
 	v, err := c.Verify(time.Now(), caPool)
@@ -181,58 +181,60 @@ func TestNebulaCertificate_Verify(t *testing.T) {
 	caPool.ResetCertBlacklist()
 	v, err = c.Verify(time.Now(), caPool)
 	assert.True(t, v)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	v, err = c.Verify(time.Now().Add(time.Hour*1000), caPool)
 	assert.False(t, v)
 	assert.EqualError(t, err, "root certificate is expired")
 
 	c, _, _, err = newTestCert(ca, caKey, time.Time{}, time.Time{}, []*net.IPNet{}, []*net.IPNet{}, []string{})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now().Add(time.Minute*6), caPool)
 	assert.False(t, v)
 	assert.EqualError(t, err, "certificate is expired")
 
 	// Test group assertion
 	ca, _, caKey, err = newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{"test1", "test2"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	caPem, err := ca.MarshalToPEM()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	caPool = NewCAPool()
-	caPool.AddCACertificate(caPem)
+	_, err = caPool.AddCACertificate(caPem)
+	assert.NoError(t, err, "AddCACertificate")
 
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{"test1", "bad"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.False(t, v)
 	assert.EqualError(t, err, "certificate contained a group not present on the signing ca: bad")
 
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{"test1"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.True(t, v)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 }
 
 func TestNebulaCertificate_Verify_IPs(t *testing.T) {
 	_, caIp1, _ := net.ParseCIDR("10.0.0.0/16")
 	_, caIp2, _ := net.ParseCIDR("192.168.0.0/24")
 	ca, _, caKey, err := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{caIp1, caIp2}, []*net.IPNet{}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	caPem, err := ca.MarshalToPEM()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	caPool := NewCAPool()
-	caPool.AddCACertificate(caPem)
+	_, err = caPool.AddCACertificate(caPem)
+	assert.NoError(t, err, "AddCACertificate")
 
 	// ip is outside the network
 	cIp1 := &net.IPNet{IP: net.ParseIP("10.1.0.0"), Mask: []byte{255, 255, 255, 0}}
 	cIp2 := &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 0, 0}}
 	c, _, _, err := newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{cIp1, cIp2}, []*net.IPNet{}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err := c.Verify(time.Now(), caPool)
 	assert.False(t, v)
 	assert.EqualError(t, err, "certificate contained an ip assignment outside the limitations of the signing ca: 10.1.0.0/24")
@@ -241,7 +243,7 @@ func TestNebulaCertificate_Verify_IPs(t *testing.T) {
 	cIp1 = &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 255, 0}}
 	cIp2 = &net.IPNet{IP: net.ParseIP("10.1.0.0"), Mask: []byte{255, 255, 255, 0}}
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{cIp1, cIp2}, []*net.IPNet{}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.False(t, v)
 	assert.EqualError(t, err, "certificate contained an ip assignment outside the limitations of the signing ca: 10.1.0.0/24")
@@ -250,7 +252,7 @@ func TestNebulaCertificate_Verify_IPs(t *testing.T) {
 	cIp1 = &net.IPNet{IP: net.ParseIP("10.0.1.0"), Mask: []byte{255, 254, 0, 0}}
 	cIp2 = &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 255, 0}}
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{cIp1, cIp2}, []*net.IPNet{}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.False(t, v)
 	assert.EqualError(t, err, "certificate contained an ip assignment outside the limitations of the signing ca: 10.0.1.0/15")
@@ -259,7 +261,7 @@ func TestNebulaCertificate_Verify_IPs(t *testing.T) {
 	cIp1 = &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 255, 0}}
 	cIp2 = &net.IPNet{IP: net.ParseIP("10.0.1.0"), Mask: []byte{255, 254, 0, 0}}
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{cIp1, cIp2}, []*net.IPNet{}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.False(t, v)
 	assert.EqualError(t, err, "certificate contained an ip assignment outside the limitations of the signing ca: 10.0.1.0/15")
@@ -268,50 +270,51 @@ func TestNebulaCertificate_Verify_IPs(t *testing.T) {
 	cIp1 = &net.IPNet{IP: net.ParseIP("10.0.1.0"), Mask: []byte{255, 255, 0, 0}}
 	cIp2 = &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 255, 128}}
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{cIp1, cIp2}, []*net.IPNet{}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.True(t, v)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// Exact matches
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{caIp1, caIp2}, []*net.IPNet{}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.True(t, v)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// Exact matches reversed
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{caIp2, caIp1}, []*net.IPNet{}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.True(t, v)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// Exact matches reversed with just 1
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{caIp1}, []*net.IPNet{}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.True(t, v)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 }
 
 func TestNebulaCertificate_Verify_Subnets(t *testing.T) {
 	_, caIp1, _ := net.ParseCIDR("10.0.0.0/16")
 	_, caIp2, _ := net.ParseCIDR("192.168.0.0/24")
 	ca, _, caKey, err := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{caIp1, caIp2}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	caPem, err := ca.MarshalToPEM()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	caPool := NewCAPool()
-	caPool.AddCACertificate(caPem)
+	_, err = caPool.AddCACertificate(caPem)
+	assert.NoError(t, err, "AddCACertificate")
 
 	// ip is outside the network
 	cIp1 := &net.IPNet{IP: net.ParseIP("10.1.0.0"), Mask: []byte{255, 255, 255, 0}}
 	cIp2 := &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 0, 0}}
 	c, _, _, err := newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{cIp1, cIp2}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err := c.Verify(time.Now(), caPool)
 	assert.False(t, v)
 	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.1.0.0/24")
@@ -320,7 +323,7 @@ func TestNebulaCertificate_Verify_Subnets(t *testing.T) {
 	cIp1 = &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 255, 0}}
 	cIp2 = &net.IPNet{IP: net.ParseIP("10.1.0.0"), Mask: []byte{255, 255, 255, 0}}
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{cIp1, cIp2}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.False(t, v)
 	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.1.0.0/24")
@@ -329,7 +332,7 @@ func TestNebulaCertificate_Verify_Subnets(t *testing.T) {
 	cIp1 = &net.IPNet{IP: net.ParseIP("10.0.1.0"), Mask: []byte{255, 254, 0, 0}}
 	cIp2 = &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 255, 0}}
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{cIp1, cIp2}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.False(t, v)
 	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.0.1.0/15")
@@ -338,7 +341,7 @@ func TestNebulaCertificate_Verify_Subnets(t *testing.T) {
 	cIp1 = &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 255, 0}}
 	cIp2 = &net.IPNet{IP: net.ParseIP("10.0.1.0"), Mask: []byte{255, 254, 0, 0}}
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{cIp1, cIp2}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.False(t, v)
 	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.0.1.0/15")
@@ -347,44 +350,46 @@ func TestNebulaCertificate_Verify_Subnets(t *testing.T) {
 	cIp1 = &net.IPNet{IP: net.ParseIP("10.0.1.0"), Mask: []byte{255, 255, 0, 0}}
 	cIp2 = &net.IPNet{IP: net.ParseIP("192.168.0.1"), Mask: []byte{255, 255, 255, 128}}
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{cIp1, cIp2}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.True(t, v)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// Exact matches
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{caIp1, caIp2}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.True(t, v)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// Exact matches reversed
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{caIp2, caIp1}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.True(t, v)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// Exact matches reversed with just 1
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{caIp1}, []string{"test"})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	v, err = c.Verify(time.Now(), caPool)
 	assert.True(t, v)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 }
 
 func TestNebulaVerifyPrivateKey(t *testing.T) {
 	ca, _, caKey, err := newTestCaCert(time.Time{}, time.Time{}, []*net.IPNet{}, []*net.IPNet{}, []string{})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	c, _, priv, err := newTestCert(ca, caKey, time.Time{}, time.Time{}, []*net.IPNet{}, []*net.IPNet{}, []string{})
+	assert.NoError(t, err)
+
 	err = c.VerifyPrivateKey(priv)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	_, priv2 := x25519Keypair()
 	err = c.VerifyPrivateKey(priv2)
-	assert.NotNil(t, err)
+	assert.Error(t, err)
 }
 
 func TestNewCAPoolFromBytes(t *testing.T) {
@@ -436,12 +441,12 @@ BVG+oJpAoqokUBbI4U0N8CSfpUABEkB/Pm5A2xyH/nc8mg/wvGUWG3pZ7nHzaDMf
 	}
 
 	p, err := NewCAPoolFromBytes([]byte(noNewLines))
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, p.CAs[string("c9bfaf7ce8e84b2eeda2e27b469f4b9617bde192efd214b68891ecda6ed49522")].Details.Name, rootCA.Details.Name)
 	assert.Equal(t, p.CAs[string("5c9c3f23e7ee7fe97637cbd3a0a5b854154d1d9aaaf7b566a51f4a88f76b64cd")].Details.Name, rootCA01.Details.Name)
 
 	pp, err := NewCAPoolFromBytes([]byte(withNewLines))
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, pp.CAs[string("c9bfaf7ce8e84b2eeda2e27b469f4b9617bde192efd214b68891ecda6ed49522")].Details.Name, rootCA.Details.Name)
 	assert.Equal(t, pp.CAs[string("5c9c3f23e7ee7fe97637cbd3a0a5b854154d1d9aaaf7b566a51f4a88f76b64cd")].Details.Name, rootCA01.Details.Name)
 }
@@ -477,18 +482,21 @@ func TestMarshalingNebulaCertificateConsistency(t *testing.T) {
 	}
 
 	b, err := nc.Marshal()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	//t.Log("Cert size:", len(b))
 	assert.Equal(t, "0aa2010a0774657374696e67121b8182845080feffff0f828284508080fcff0f8382845080fe83f80f1a1b8182844880fe83f80f8282844880feffff0f838284488080fcff0f220b746573742d67726f757031220b746573742d67726f757032220b746573742d67726f75703328f0e0e7d70430a08681c4053a20313233343536373839306162636564666768696a3132333435363738393061624a081234567890abcedf1220313233343536373839306162636564666768696a313233343536373839306162", fmt.Sprintf("%x", b))
 
 	b, err = proto.Marshal(nc.getRawDetails())
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	//t.Log("Raw cert size:", len(b))
 	assert.Equal(t, "0a0774657374696e67121b8182845080feffff0f828284508080fcff0f8382845080fe83f80f1a1b8182844880fe83f80f8282844880feffff0f838284488080fcff0f220b746573742d67726f757031220b746573742d67726f757032220b746573742d67726f75703328f0e0e7d70430a08681c4053a20313233343536373839306162636564666768696a3132333435363738393061624a081234567890abcedf", fmt.Sprintf("%x", b))
 }
 
 func newTestCaCert(before, after time.Time, ips, subnets []*net.IPNet, groups []string) (*NebulaCertificate, []byte, []byte, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	if before.IsZero() {
 		before = time.Now().Add(time.Second * -60).Round(time.Second)
 	}
