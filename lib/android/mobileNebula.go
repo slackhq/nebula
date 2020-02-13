@@ -20,13 +20,13 @@ type ConfigStuff struct {
 
 func Main(configData string, tunFd int) string {
 	go func() {
-	  for {
-	    time.Sleep(time.Second * 1)
-	    if exiter == true {
-	      fmt.Println("Exiter")
-	      os.Exit(0)
-	    }
-	  }
+		for {
+			time.Sleep(time.Second * 1)
+			if exiter == true {
+				fmt.Println("Exiter")
+				os.Exit(0)
+			}
+		}
 	}()
 	err := nebula.Main(configData, false, "", &tunFd)
 	return fmt.Sprintf("%s", err)
@@ -63,5 +63,5 @@ func ParseConfig(configData string) *ConfigStuff {
 }
 
 func Exit() {
-  exiter = true
+	exiter = true
 }
