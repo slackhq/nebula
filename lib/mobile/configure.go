@@ -5,7 +5,7 @@ import (
     "net/http"
 )
 
-var msg := "empty"
+var msg = "empty"
 
 func ConfigHTTPServer() {
     fmt.Println("webserver start")
