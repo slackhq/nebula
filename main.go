@@ -31,9 +31,9 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int) e
 
 	config := NewConfig()
 	var err error
-	if runtime.GOOS == "android" || (runtime.GOOS == "darwin" && (runtime.GOARCH == "arm"|| runtime.GOARCH == "arm64")) {
-    // Log writing is a mess with gomobile, so just use this writer hack.
-    l.Out = log.Writer()
+	if runtime.GOOS == "android" || (runtime.GOOS == "darwin" && (runtime.GOARCH == "arm" || runtime.GOARCH == "arm64")) {
+		// Log writing is a mess with gomobile, so just use this writer hack.
+		l.Out = log.Writer()
 		err = config.LoadString(configPath)
 	} else {
 		err = config.Load(configPath)
