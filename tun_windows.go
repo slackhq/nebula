@@ -47,7 +47,7 @@ func (c *Tun) Activate() error {
 
 	// TODO use syscalls instead of exec.Command
 	err = exec.Command(
-		"netsh", "interface", "ipv4", "set", "address",
+		`C:\Windows\System32\netsh.exe`, "interface", "ipv4", "set", "address",
 		fmt.Sprintf("name=%s", c.Device),
 		"source=static",
 		fmt.Sprintf("addr=%s", c.Cidr.IP),
@@ -58,7 +58,7 @@ func (c *Tun) Activate() error {
 		return fmt.Errorf("failed to run 'netsh' to set address: %s", err)
 	}
 	err = exec.Command(
-		"netsh", "interface", "ipv4", "set", "interface",
+		`C:\Windows\System32\netsh.exe`, "interface", "ipv4", "set", "interface",
 		c.Device,
 		fmt.Sprintf("mtu=%d", c.MTU),
 	).Run()
