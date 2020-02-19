@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"time"
+	"runtime"
 
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
@@ -19,17 +19,17 @@ type ConfigStuff struct {
 }
 
 func Main(configData string, tunFd int) string {
-	go func() {
-		for {
-			time.Sleep(time.Second * 1)
-			if exiter == true {
-				fmt.Println("Exiter")
-				os.Exit(0)
-			}
-		}
-	}()
-	err := nebula.Main(configData, false, "", &tunFd)
-	return fmt.Sprintf("%s", err)
+	if runtime.GOOS == "android" {
+		err := nebula.Main(configData, false, "", &tunFd)
+		return fmt.Sprintf("%s", err)
+	} else if runtime.GOOS == "darwin" && (runtime.GOARCH == "arm" || runtime.GOARCH == "arm64") {
+		go nebula.Main(configData, false, "", &tunFd)
+	}
+	return fmt.Sprintf("%s", "started")
+}
+
+func Stop() {
+	os.Exit(0)
 }
 
 func GetConfigSetting(configData string, setting string) string {
