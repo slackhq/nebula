@@ -87,6 +87,10 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 	return &udpConn{sysFd: fd}, err
 }
 
+func (u *udpConn) Rebind() {
+	return
+}
+
 func (u *udpConn) SetRecvBuffer(n int) error {
 	return unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_RCVBUFFORCE, n)
 }
