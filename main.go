@@ -23,7 +23,7 @@ var l = logrus.New()
 
 type m map[string]interface{}
 
-func Main(configPath string, configTest bool, buildVersion string, tunFd *int) error {
+func Main(configPath string, configTest bool, buildVersion string, tunFd *int, rebind <-chan struct{}) error {
 
 	l.Out = os.Stdout
 	l.Formatter = &logrus.TextFormatter{
@@ -162,6 +162,16 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int) e
 		return err
 	}
 	udpServer.reloadConfig(config)
+
+	if rebind != nil {
+		go func() {
+			for {
+				<-rebind
+				udpServer.Rebind()
+				l.Infof("Rebind called")
+			}
+		}()
+	}
 
 	// Set up my internal host map
 	var preferredRanges []*net.IPNet

@@ -3,7 +3,6 @@ package mobileNebula
 import (
 	"fmt"
 	"net"
-	"os"
 	"runtime"
 
 	"github.com/slackhq/nebula"
@@ -11,6 +10,7 @@ import (
 )
 
 var exiter bool = false
+var rebind chan struct{}
 
 type ConfigStuff struct {
 	IP      string
@@ -19,17 +19,18 @@ type ConfigStuff struct {
 }
 
 func Main(configData string, tunFd int) string {
+  rebind = make(chan struct{})
 	if runtime.GOOS == "android" {
-		err := nebula.Main(configData, false, "", &tunFd)
+		err := nebula.Main(configData, false, "", &tunFd, rebind)
 		return fmt.Sprintf("%s", err)
 	} else if runtime.GOOS == "darwin" && (runtime.GOARCH == "arm" || runtime.GOARCH == "arm64") {
-		go nebula.Main(configData, false, "", &tunFd)
+		go nebula.Main(configData, false, "", &tunFd, rebind)
 	}
 	return fmt.Sprintf("%s", "started")
 }
 
-func Stop() {
-	os.Exit(0)
+func Rebind() {
+	rebind <- struct{}{}
 }
 
 func GetConfigSetting(configData string, setting string) string {
