@@ -13,36 +13,53 @@ import (
 const (
 	// Total time to try a handshake = sequence of HandshakeTryInterval * HandshakeRetries
 	// With 100ms interval and 20 retries is 23.5 seconds
-	HandshakeTryInterval = time.Millisecond * 100
-	HandshakeRetries     = 20
-	// HandshakeWaitRotation is the number of handshake attempts to do before starting to use other ips addresses
-	HandshakeWaitRotation = 5
+	DefaultHandshakeTryInterval = time.Millisecond * 100
+	DefaultHandshakeRetries     = 20
+	// DefaultHandshakeWaitRotation is the number of handshake attempts to do before starting to use other ips addresses
+	DefaultHandshakeWaitRotation = 5
 )
+
+var (
+	defaultHandshakeConfig = HandshakeConfig{
+		tryInterval:  DefaultHandshakeTryInterval,
+		retries:      DefaultHandshakeRetries,
+		waitRotation: DefaultHandshakeWaitRotation,
+	}
+)
+
+type HandshakeConfig struct {
+	tryInterval  time.Duration
+	retries      int
+	waitRotation int
+}
 
 type HandshakeManager struct {
 	pendingHostMap *HostMap
 	mainHostMap    *HostMap
 	lightHouse     *LightHouse
 	outside        *udpConn
+	config         HandshakeConfig
 
 	OutboundHandshakeTimer *SystemTimerWheel
 	InboundHandshakeTimer  *SystemTimerWheel
 }
 
-func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udpConn) *HandshakeManager {
+func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udpConn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
 		pendingHostMap: NewHostMap("pending", tunCidr, preferredRanges),
 		mainHostMap:    mainHostMap,
 		lightHouse:     lightHouse,
 		outside:        outside,
 
-		OutboundHandshakeTimer: NewSystemTimerWheel(HandshakeTryInterval, HandshakeTryInterval*HandshakeRetries),
-		InboundHandshakeTimer:  NewSystemTimerWheel(HandshakeTryInterval, HandshakeTryInterval*HandshakeRetries),
+		config: config,
+
+		OutboundHandshakeTimer: NewSystemTimerWheel(config.tryInterval, config.tryInterval*time.Duration(config.retries)),
+		InboundHandshakeTimer:  NewSystemTimerWheel(config.tryInterval, config.tryInterval*time.Duration(config.retries)),
 	}
 }
 
 func (c *HandshakeManager) Run(f EncWriter) {
-	clockSource := time.Tick(HandshakeTryInterval)
+	clockSource := time.Tick(c.config.tryInterval)
 	for now := range clockSource {
 		c.NextOutboundHandshakeTimerTick(now, f)
 		c.NextInboundHandshakeTimerTick(now)
@@ -70,7 +87,7 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 
 		// If we haven't finished the handshake and we haven't hit max retries, query
 		// lighthouse and then send the handshake packet again.
-		if hostinfo.HandshakeCounter < HandshakeRetries && !hostinfo.HandshakeComplete {
+		if hostinfo.HandshakeCounter < c.config.retries && !hostinfo.HandshakeComplete {
 			if hostinfo.remote == nil {
 				// We continue to query the lighthouse because hosts may
 				// come online during handshake retries. If the query
@@ -88,7 +105,7 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 
 			// We want to use the "best" calculated ip for the first 5 attempts, after that we just blindly rotate through
 			// all the others until we can stand up a connection.
-			if hostinfo.HandshakeCounter > HandshakeWaitRotation {
+			if hostinfo.HandshakeCounter > c.config.waitRotation {
 				hostinfo.rotateRemote()
 			}
 
@@ -114,7 +131,7 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 
 			// Readd to the timer wheel so we continue trying wait HandshakeTryInterval * counter longer for next try
 			//l.Infoln("Interval: ", HandshakeTryInterval*time.Duration(hostinfo.HandshakeCounter))
-			c.OutboundHandshakeTimer.Add(vpnIP, HandshakeTryInterval*time.Duration(hostinfo.HandshakeCounter))
+			c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval*time.Duration(hostinfo.HandshakeCounter))
 		} else {
 			c.pendingHostMap.DeleteVpnIP(vpnIP)
 			c.pendingHostMap.DeleteIndex(index)
@@ -144,7 +161,7 @@ func (c *HandshakeManager) AddVpnIP(vpnIP uint32) *HostInfo {
 	hostinfo := c.pendingHostMap.AddVpnIP(vpnIP)
 	// We lock here and use an array to insert items to prevent locking the
 	// main receive thread for very long by waiting to add items to the pending map
-	c.OutboundHandshakeTimer.Add(vpnIP, HandshakeTryInterval)
+	c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval)
 	return hostinfo
 }
 

@@ -265,7 +265,13 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		l.WithError(err).Error("Lighthouse unreachable")
 	}
 
-	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpServer)
+	handshakeConfig := HandshakeConfig{
+		tryInterval:  config.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
+		retries:      config.GetInt("handshakes.retries", DefaultHandshakeRetries),
+		waitRotation: config.GetInt("handshakes.wait_rotation", DefaultHandshakeWaitRotation),
+	}
+
+	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpServer, handshakeConfig)
 
 	//TODO: These will be reused for psk
 	//handshakeMACKey := config.GetString("handshake_mac.key", "")

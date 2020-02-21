@@ -139,6 +139,15 @@ logging:
   #subsystem: nebula
   #interval: 10s
 
+# Handshake Manger Settings
+#handshakes:
+  # Total time to try a handshake = sequence of `try_interval * retries`
+  # With 100ms interval and 20 retries it is 23.5 seconds
+  #try_interval: 100ms
+  #retries: 20
+  # wait_rotation is the number of handshake attempts to do before starting to try non-local IP addresses
+  #wait_rotation: 5
+
 # Nebula security group configuration
 firewall:
   conntrack:
