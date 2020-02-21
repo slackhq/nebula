@@ -34,7 +34,7 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, r
 	var err error
 	if runtime.GOOS == "android" || (runtime.GOOS == "darwin" && (runtime.GOARCH == "arm" || runtime.GOARCH == "arm64")) {
 		// GC more often, largely for iOS due to extension 15mb limit
-		debug.SetGCPercent(50)
+		debug.SetGCPercent(20)
 		// Log writing is a mess with gomobile, so just use this writer hack.
 		l.Out = log.Writer()
 		err = config.LoadString(configPath)
