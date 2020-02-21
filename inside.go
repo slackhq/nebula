@@ -19,6 +19,11 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 		return
 	}
 
+	// Ignore packets from self to self
+	if fwPacket.RemoteIP == f.lightHouse.myIp {
+		return
+	}
+
 	// Ignore broadcast packets
 	if f.dropMulticast && isMulticast(fwPacket.RemoteIP) {
 		return
