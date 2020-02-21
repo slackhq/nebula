@@ -15,6 +15,7 @@ var rebind chan struct{}
 type ConfigStuff struct {
 	IP       string
 	Mask     int
+	Network  string
 	MaskCIDR string
 	RawCert  string
 }
@@ -65,6 +66,7 @@ func ParseConfig(configData string) *ConfigStuff {
 	cs := &ConfigStuff{
 		IP:       addr.String(),
 		Mask:     mask,
+		Network:  ipNet.IP.String(),
 		MaskCIDR: mcidr,
 		RawCert:  c,
 	}
