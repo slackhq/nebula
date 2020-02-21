@@ -13,13 +13,14 @@ var exiter bool = false
 var rebind chan struct{}
 
 type ConfigStuff struct {
-	IP      string
-	Mask    int
-	RawCert string
+	IP       string
+	Mask     int
+	MaskCIDR string
+	RawCert  string
 }
 
 func Main(configData string, tunFd int) string {
-  rebind = make(chan struct{})
+	rebind = make(chan struct{})
 	if runtime.GOOS == "android" {
 		err := nebula.Main(configData, false, "", &tunFd, rebind)
 		return fmt.Sprintf("%s", err)
@@ -55,10 +56,17 @@ func ParseConfig(configData string) *ConfigStuff {
 	}
 	mask, _ := ipNet.Mask.Size()
 
+	if len(ipNet.Mask) != 4 {
+		panic("ipv4Mask: len must be 4 bytes")
+	}
+
+	mcidr := fmt.Sprintf("%d.%d.%d.%d", ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
+
 	cs := &ConfigStuff{
-		IP:      addr.String(),
-		Mask:    mask,
-		RawCert: c,
+		IP:       addr.String(),
+		Mask:     mask,
+		MaskCIDR: mcidr,
+		RawCert:  c,
 	}
 	return cs
 }
