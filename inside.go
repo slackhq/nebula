@@ -27,7 +27,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 	hostinfo := f.getOrHandshake(fwPacket.RemoteIP)
 	ci := hostinfo.ConnectionState
 
-	if ci.ready == false {
+	if !ci.ready {
 		// Because we might be sending stored packets, lock here to stop new things going to
 		// the packet queue.
 		ci.queueLock.Lock()
@@ -52,7 +52,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 }
 
 func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
-	if f.hostMap.vpnCIDR.Contains(int2ip(vpnIp)) == false {
+	if !f.hostMap.vpnCIDR.Contains(int2ip(vpnIp)) {
 		vpnIp = f.hostMap.queryUnsafeRoute(vpnIp)
 	}
 	hostinfo, err := f.hostMap.PromoteBestQueryVpnIP(vpnIp, f)
@@ -128,7 +128,6 @@ func (f *Interface) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubT
 	}
 
 	f.sendMessageToVpnIp(t, st, hostInfo, p, nb, out)
-	return
 }
 
 func (f *Interface) sendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, hostInfo *HostInfo, p, nb, out []byte) {
@@ -139,7 +138,7 @@ func (f *Interface) sendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubT
 func (f *Interface) SendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
 	hostInfo := f.getOrHandshake(vpnIp)
 
-	if hostInfo.ConnectionState.ready == false {
+	if !hostInfo.ConnectionState.ready {
 		// Because we might be sending stored packets, lock here to stop new things going to
 		// the packet queue.
 		hostInfo.ConnectionState.queueLock.Lock()
@@ -152,7 +151,6 @@ func (f *Interface) SendMessageToAll(t NebulaMessageType, st NebulaMessageSubTyp
 	}
 
 	f.sendMessageToAll(t, st, hostInfo, p, nb, out)
-	return
 }
 
 func (f *Interface) sendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, hostInfo *HostInfo, p, nb, b []byte) {
@@ -196,9 +194,5 @@ func (f *Interface) send(t NebulaMessageType, st NebulaMessageSubType, ci *Conne
 
 func isMulticast(ip uint32) bool {
 	// Class D multicast
-	if (((ip >> 24) & 0xff) & 0xf0) == 0xe0 {
-		return true
-	}
-
-	return false
+	return (((ip >> 24) & 0xff) & 0xf0) == 0xe0
 }

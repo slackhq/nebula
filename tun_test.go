@@ -12,7 +12,7 @@ func Test_parseRoutes(t *testing.T) {
 
 	// test no routes config
 	routes, err := parseRoutes(c, n)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Len(t, routes, 0)
 
 	// not an array
@@ -24,7 +24,7 @@ func Test_parseRoutes(t *testing.T) {
 	// no routes
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{}}
 	routes, err = parseRoutes(c, n)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Len(t, routes, 0)
 
 	// weird route
@@ -81,7 +81,7 @@ func Test_parseRoutes(t *testing.T) {
 		map[interface{}]interface{}{"mtu": "8000", "route": "10.0.0.1/32"},
 	}}
 	routes, err = parseRoutes(c, n)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Len(t, routes, 2)
 
 	tested := 0

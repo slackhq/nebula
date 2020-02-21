@@ -42,7 +42,7 @@ func TestParse(t *testing.T) {
 	for _, tt := range headerBigEndianTests {
 		b := tt.expectedBytes
 		parsedHeader := &Header{}
-		parsedHeader.Parse(b)
+		assert.NoError(t, parsedHeader.Parse(b), "Header.Parse")
 
 		if !reflect.DeepEqual(tt.Header, parsedHeader) {
 			t.Fatalf("got %#v; want %#v", parsedHeader, tt.Header)
@@ -109,7 +109,7 @@ func TestHeader_String(t *testing.T) {
 
 func TestHeader_MarshalJSON(t *testing.T) {
 	b, err := (&Header{100, test, testRequest, 99, 98, 97}).MarshalJSON()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(
 		t,
 		"{\"messageCounter\":97,\"remoteIndex\":98,\"reserved\":99,\"subType\":\"testRequest\",\"type\":\"test\",\"version\":100}",

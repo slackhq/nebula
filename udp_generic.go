@@ -85,17 +85,13 @@ func (u *udpConn) reloadConfig(c *Config) {
 	// TODO
 }
 
-type rawMessage struct {
-	Len uint32
-}
-
 func (u *udpConn) ListenOut(f *Interface) {
 	plaintext := make([]byte, mtu)
 	buffer := make([]byte, mtu)
 	header := &Header{}
 	fwPacket := &FirewallPacket{}
 	udpAddr := &udpAddr{}
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 
 	for {
 		// Just read one packet at a time

@@ -173,7 +173,6 @@ func (s *session) dispatchCommand(line string, w StringWriter) {
 	if err != nil {
 		//TODO: log the error
 	}
-	return
 }
 
 func (s *session) Close() {

@@ -28,7 +28,8 @@ func Test_NewHandshakeManagerIndex(t *testing.T) {
 
 	// Add four indexes
 	for _, v := range indexes {
-		blah.AddIndex(v, &ConnectionState{})
+		_, err := blah.AddIndex(v, &ConnectionState{})
+		assert.NoError(t, err, "AddIndex")
 	}
 	// Confirm they are in the pending index list
 	for _, v := range indexes {
@@ -186,9 +187,7 @@ type mockEncWriter struct {
 }
 
 func (mw *mockEncWriter) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
-	return
 }
 
 func (mw *mockEncWriter) SendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
-	return
 }

@@ -453,7 +453,7 @@ func sshStartCpuProfile(fs interface{}, a []string, w sshd.StringWriter) error {
 }
 
 func sshVersion(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
-	return w.WriteLine(fmt.Sprintf("%s", ifce.version))
+	return w.WriteLine(ifce.version)
 }
 
 func sshQueryLighthouse(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
@@ -499,7 +499,7 @@ func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 			hostInfo,
 			hostInfo.remote,
 			[]byte{},
-			make([]byte, 12, 12),
+			make([]byte, 12),
 			make([]byte, mtu),
 		)
 	}

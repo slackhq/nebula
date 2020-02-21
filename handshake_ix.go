@@ -41,13 +41,10 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 		Cert:           ci.certState.rawCertificateNoKey,
 	}
 
-	hsBytes := []byte{}
-
 	hs := &NebulaHandshake{
 		Details: hsProto,
 	}
-	hsBytes, err = proto.Marshal(hs)
-
+	hsBytes, err := proto.Marshal(hs)
 	if err != nil {
 		l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to marshal handshake message")
@@ -171,7 +168,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 				Info("Prevented a handshake race")
 
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
-			f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12), make([]byte, mtu))
 			return true
 		}
 

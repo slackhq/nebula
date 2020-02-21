@@ -31,39 +31,42 @@ func Test_verifyHelp(t *testing.T) {
 }
 
 func Test_verify(t *testing.T) {
+	assert := assert.New(t)
+
 	time.Local = time.UTC
 	ob := &bytes.Buffer{}
 	eb := &bytes.Buffer{}
 
 	// required args
 	assertHelpError(t, verify([]string{"-ca", "derp"}, ob, eb), "-crt is required")
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Equal("", ob.String())
+	assert.Equal("", eb.String())
 
 	assertHelpError(t, verify([]string{"-crt", "derp"}, ob, eb), "-ca is required")
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Equal("", ob.String())
+	assert.Equal("", eb.String())
 
 	// no ca at path
 	ob.Reset()
 	eb.Reset()
 	err := verify([]string{"-ca", "does_not_exist", "-crt", "does_not_exist"}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
-	assert.EqualError(t, err, "error while reading ca: open does_not_exist: "+NoSuchFileError)
+	assert.Equal("", ob.String())
+	assert.Equal("", eb.String())
+	assert.EqualError(err, "error while reading ca: open does_not_exist: "+NoSuchFileError)
 
 	// invalid ca at path
 	ob.Reset()
 	eb.Reset()
 	caFile, err := ioutil.TempFile("", "verify-ca")
-	assert.Nil(t, err)
+	assert.NoError(err, "ioutil.TempFile")
 	defer os.Remove(caFile.Name())
 
-	caFile.WriteString("-----BEGIN NOPE-----")
+	_, err = caFile.WriteString("-----BEGIN NOPE-----")
+	assert.NoError(err, "WriteString")
 	err = verify([]string{"-ca", caFile.Name(), "-crt", "does_not_exist"}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
-	assert.EqualError(t, err, "error while adding ca cert to pool: input did not contain a valid PEM encoded block")
+	assert.Equal("", ob.String())
+	assert.Equal("", eb.String())
+	assert.EqualError(err, "error while adding ca cert to pool: input did not contain a valid PEM encoded block")
 
 	// make a ca for later
 	caPub, caPriv, _ := ed25519.GenerateKey(rand.Reader)
@@ -76,30 +79,29 @@ func Test_verify(t *testing.T) {
 			IsCA:      true,
 		},
 	}
-	ca.Sign(caPriv)
-	b, _ := ca.MarshalToPEM()
-	caFile.Truncate(0)
-	caFile.Seek(0, 0)
-	caFile.Write(b)
+	err = ca.Sign(caPriv)
+	assert.NoError(err, "ca.Sign")
+	marshalPEM(t, ca, caFile)
 
 	// no crt at path
 	err = verify([]string{"-ca", caFile.Name(), "-crt", "does_not_exist"}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
-	assert.EqualError(t, err, "unable to read crt; open does_not_exist: "+NoSuchFileError)
+	assert.Equal("", ob.String())
+	assert.Equal("", eb.String())
+	assert.EqualError(err, "unable to read crt; open does_not_exist: "+NoSuchFileError)
 
 	// invalid crt at path
 	ob.Reset()
 	eb.Reset()
 	certFile, err := ioutil.TempFile("", "verify-cert")
-	assert.Nil(t, err)
+	assert.NoError(err)
 	defer os.Remove(certFile.Name())
 
-	certFile.WriteString("-----BEGIN NOPE-----")
+	_, err = certFile.WriteString("-----BEGIN NOPE-----")
+	assert.NoError(err, "certFile.WriteString")
 	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
-	assert.EqualError(t, err, "error while parsing crt: input did not contain a valid PEM encoded block")
+	assert.Equal("", ob.String())
+	assert.Equal("", eb.String())
+	assert.EqualError(err, "error while parsing crt: input did not contain a valid PEM encoded block")
 
 	// unverifiable cert at path
 	_, badPriv, _ := ed25519.GenerateKey(rand.Reader)
@@ -116,26 +118,33 @@ func Test_verify(t *testing.T) {
 		},
 	}
 
-	crt.Sign(badPriv)
-	b, _ = crt.MarshalToPEM()
-	certFile.Truncate(0)
-	certFile.Seek(0, 0)
-	certFile.Write(b)
+	err = crt.Sign(badPriv)
+	assert.NoError(err, "crt.Sign")
+	marshalPEM(t, crt, certFile)
 
 	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
-	assert.EqualError(t, err, "certificate signature did not match")
+	assert.Equal("", ob.String())
+	assert.Equal("", eb.String())
+	assert.EqualError(err, "certificate signature did not match")
 
 	// verified cert at path
-	crt.Sign(caPriv)
-	b, _ = crt.MarshalToPEM()
-	certFile.Truncate(0)
-	certFile.Seek(0, 0)
-	certFile.Write(b)
+	err = crt.Sign(caPriv)
+	assert.NoError(err, "crt.Sign")
+	marshalPEM(t, crt, certFile)
 
 	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
-	assert.Nil(t, err)
+	assert.Equal("", ob.String())
+	assert.Equal("", eb.String())
+	assert.NoError(err)
+}
+
+func marshalPEM(t *testing.T, crt cert.NebulaCertificate, f *os.File) {
+	b, err := crt.MarshalToPEM()
+	assert.NoError(t, err, "crt.MarshalToPEM")
+	err = f.Truncate(0)
+	assert.NoError(t, err, "certFile.Truncate")
+	_, err = f.Seek(0, 0)
+	assert.NoError(t, err, "certFile.Seek")
+	_, err = f.Write(b)
+	assert.NoError(t, err, "certFile.Write")
 }

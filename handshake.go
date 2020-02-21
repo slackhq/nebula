@@ -2,7 +2,6 @@ package nebula
 
 const (
 	handshakeIXPSK0 = 0
-	handshakeXXPSK0 = 1
 )
 
 func HandleIncomingHandshake(f *Interface, addr *udpAddr, packet []byte, h *Header, hostinfo *HostInfo) {

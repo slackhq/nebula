@@ -60,7 +60,7 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 			out.Write([]byte("\n"))
 		}
 
-		if rawCert == nil || len(rawCert) == 0 || strings.TrimSpace(string(rawCert)) == "" {
+		if len(rawCert) == 0 || strings.TrimSpace(string(rawCert)) == "" {
 			break
 		}
 	}

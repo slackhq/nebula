@@ -51,7 +51,7 @@ func verify(args []string, out io.Writer, errOut io.Writer) error {
 			return fmt.Errorf("error while adding ca cert to pool: %s", err)
 		}
 
-		if rawCACert == nil || len(rawCACert) == 0 || strings.TrimSpace(string(rawCACert)) == "" {
+		if len(rawCACert) == 0 || strings.TrimSpace(string(rawCACert)) == "" {
 			break
 		}
 	}

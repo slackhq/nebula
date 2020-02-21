@@ -29,7 +29,7 @@ func NewCAPoolFromBytes(caPEMs []byte) (*NebulaCAPool, error) {
 		if err != nil {
 			return nil, err
 		}
-		if caPEMs == nil || len(caPEMs) == 0 || strings.TrimSpace(string(caPEMs)) == "" {
+		if len(caPEMs) == 0 || strings.TrimSpace(string(caPEMs)) == "" {
 			break
 		}
 	}
