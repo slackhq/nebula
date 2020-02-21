@@ -42,18 +42,18 @@ func (c *Tun) Activate() error {
 	c.Device = c.Interface.Name()
 
 	// TODO use syscalls instead of exec.Command
-	if err = exec.Command("ifconfig", c.Device, c.Cidr.String(), c.Cidr.IP.String()).Run(); err != nil {
+	if err = exec.Command("/sbin/ifconfig", c.Device, c.Cidr.String(), c.Cidr.IP.String()).Run(); err != nil {
 		return fmt.Errorf("failed to run 'ifconfig': %s", err)
 	}
-	if err = exec.Command("route", "-n", "add", "-net", c.Cidr.String(), "-interface", c.Device).Run(); err != nil {
+	if err = exec.Command("/sbin/route", "-n", "add", "-net", c.Cidr.String(), "-interface", c.Device).Run(); err != nil {
 		return fmt.Errorf("failed to run 'route add': %s", err)
 	}
-	if err = exec.Command("ifconfig", c.Device, "mtu", strconv.Itoa(c.MTU)).Run(); err != nil {
+	if err = exec.Command("/sbin/ifconfig", c.Device, "mtu", strconv.Itoa(c.MTU)).Run(); err != nil {
 		return fmt.Errorf("failed to run 'ifconfig': %s", err)
 	}
 	// Unsafe path routes
 	for _, r := range c.UnsafeRoutes {
-		if err = exec.Command("route", "-n", "add", "-net", r.route.String(), "-interface", c.Device).Run(); err != nil {
+		if err = exec.Command("/sbin/route", "-n", "add", "-net", r.route.String(), "-interface", c.Device).Run(); err != nil {
 			return fmt.Errorf("failed to run 'route add' for unsafe_route %s: %s", r.route.String(), err)
 		}
 	}
