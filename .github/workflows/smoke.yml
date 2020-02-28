@@ -3,7 +3,21 @@ on:
   push:
     branches:
       - master
+    paths:
+      - '.github/workflows/smoke**'
+      - '**Makefile'
+      - '**.go'
+      - '**.proto'
+      - 'go.mod'
+      - 'go.sum'
   pull_request:
+    paths:
+      - '.github/workflows/smoke**'
+      - '**Makefile'
+      - '**.go'
+      - '**.proto'
+      - 'go.mod'
+      - 'go.sum'
 jobs:
 
   smoke:
