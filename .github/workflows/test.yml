@@ -3,13 +3,6 @@ on:
   push:
     branches:
       - master
-    paths:
-      - '.github/workflows/test.yml'
-      - '**Makefile'
-      - '**.go'
-      - '**.proto'
-      - 'go.mod'
-      - 'go.sum'
   pull_request:
     paths:
       - '.github/workflows/test.yml'

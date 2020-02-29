@@ -3,9 +3,6 @@ on:
   push:
     branches:
       - master
-    paths:
-      - '.github/workflows/gofmt.yml'
-      - '**.go'
   pull_request:
     paths:
       - '.github/workflows/gofmt.yml'
