@@ -623,6 +623,11 @@ func (i *HostInfo) RecvErrorExceeded() bool {
 }
 
 func (i *HostInfo) CreateRemoteCIDR(c *cert.NebulaCertificate) {
+	if len(c.Details.Ips) == 1 && len(c.Details.Subnets) == 0 {
+		// Simple case, no CIDRTree needed
+		return
+	}
+
 	remoteCidr := NewCIDRTree()
 	for _, ip := range c.Details.Ips {
 		remoteCidr.AddCIDR(&net.IPNet{IP: ip.IP, Mask: net.IPMask{255, 255, 255, 255}}, struct{}{})

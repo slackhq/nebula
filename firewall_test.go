@@ -171,6 +171,7 @@ func TestFirewall_Drop(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c,
 		},
+		hostId: ip2int(ipNet.IP),
 	}
 	h.CreateRemoteCIDR(&c)
 
@@ -344,6 +345,7 @@ func TestFirewall_Drop2(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c,
 		},
+		hostId: ip2int(ipNet.IP),
 	}
 	h.CreateRemoteCIDR(&c)
 
@@ -410,6 +412,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c1,
 		},
+		hostId: ip2int(ipNet.IP),
 	}
 	h1.CreateRemoteCIDR(&c1)
 
@@ -424,6 +427,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c2,
 		},
+		hostId: ip2int(ipNet.IP),
 	}
 	h2.CreateRemoteCIDR(&c2)
 
@@ -438,6 +442,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c3,
 		},
+		hostId: ip2int(ipNet.IP),
 	}
 	h3.CreateRemoteCIDR(&c3)
 
