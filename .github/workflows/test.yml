@@ -4,6 +4,13 @@ on:
     branches:
       - master
   pull_request:
+    paths:
+      - '.github/workflows/test.yml'
+      - '**Makefile'
+      - '**.go'
+      - '**.proto'
+      - 'go.mod'
+      - 'go.sum'
 jobs:
 
   test-linux:
@@ -19,6 +26,13 @@ jobs:
 
     - name: Check out code into the Go module directory
       uses: actions/checkout@v1
+
+    - uses: actions/cache@v1
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
 
     - name: Build
       run: make all
@@ -42,6 +56,13 @@ jobs:
 
     - name: Check out code into the Go module directory
       uses: actions/checkout@v1
+
+    - uses: actions/cache@v1
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
 
     - name: Build nebula
       run: go build ./cmd/nebula

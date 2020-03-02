@@ -4,6 +4,13 @@ on:
     branches:
       - master
   pull_request:
+    paths:
+      - '.github/workflows/smoke**'
+      - '**Makefile'
+      - '**.go'
+      - '**.proto'
+      - 'go.mod'
+      - 'go.sum'
 jobs:
 
   smoke:
@@ -19,6 +26,13 @@ jobs:
 
     - name: Check out code into the Go module directory
       uses: actions/checkout@v1
+
+    - uses: actions/cache@v1
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
 
     - name: build
       run: make

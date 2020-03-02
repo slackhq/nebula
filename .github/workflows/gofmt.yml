@@ -4,6 +4,9 @@ on:
     branches:
       - master
   pull_request:
+    paths:
+      - '.github/workflows/gofmt.yml'
+      - '**.go'
 jobs:
 
   gofmt:
