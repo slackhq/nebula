@@ -23,7 +23,7 @@ var l = logrus.New()
 
 type m map[string]interface{}
 
-func Main(configPath string, configTest bool, buildVersion string, tunFd *int, rebind <-chan struct{}) error {
+func Main(configPath string, configTest bool, buildVersion string, tunFd *int, commandChan <-chan string) error {
 
 	l.Out = os.Stdout
 	l.Formatter = &logrus.TextFormatter{
@@ -161,12 +161,19 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, r
 		udpServer.reloadConfig(config)
 	}
 
-	if rebind != nil {
+	sigChan := make(chan os.Signal)
+	if commandChan != nil {
 		go func() {
+			cmd := ""
 			for {
-				<-rebind
-				udpServer.Rebind()
-				l.Infof("Rebind called")
+				cmd = <-commandChan
+				switch cmd {
+				case "rebind":
+					udpServer.Rebind()
+					l.Infof("Rebind called")
+				case "exit":
+					sigChan <- os.Interrupt
+				}
 			}
 		}()
 	}
@@ -412,12 +419,11 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, r
 	}
 
 	// Just sit here and be friendly, main thread.
-	shutdownBlock(ifce)
+	shutdownBlock(ifce, sigChan)
 	return nil
 }
 
-func shutdownBlock(ifce *Interface) {
-	var sigChan = make(chan os.Signal)
+func shutdownBlock(ifce *Interface, sigChan chan os.Signal) {
 	signal.Notify(sigChan, syscall.SIGTERM)
 	signal.Notify(sigChan, syscall.SIGINT)
 
