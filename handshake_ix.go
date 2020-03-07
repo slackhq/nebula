@@ -7,7 +7,7 @@ import (
 	"bytes"
 
 	"github.com/flynn/noise"
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 // NOISE IX Handshakes

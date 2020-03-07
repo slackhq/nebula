@@ -87,7 +87,7 @@ bench-cpu-long:
 proto: nebula.pb.go cert/cert.pb.go
 
 nebula.pb.go: nebula.proto .FORCE
-	go build github.com/golang/protobuf/protoc-gen-go
+	go build google.golang.org/protobuf/cmd/protoc-gen-go
 	PATH="$(PWD):$(PATH)" protoc --go_out=. $<
 	rm protoc-gen-go
 

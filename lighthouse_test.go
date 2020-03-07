@@ -4,8 +4,8 @@ import (
 	"net"
 	"testing"
 
-	proto "github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestNewLhQuery(t *testing.T) {

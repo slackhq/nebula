@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/slackhq/nebula/cert"
+	"google.golang.org/protobuf/proto"
 )
 
 type LightHouse struct {
