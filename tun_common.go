@@ -132,7 +132,7 @@ func parseUnsafeRoutes(config *Config, network *net.IPNet) ([]route, error) {
 
 		via, ok := rVia.(string)
 		if !ok {
-			return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes is not a string: %v", i+1, err)
+			return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes is not a string: found %T", i+1, rVia)
 		}
 
 		nVia := net.ParseIP(via)
@@ -147,6 +147,7 @@ func parseUnsafeRoutes(config *Config, network *net.IPNet) ([]route, error) {
 
 		r := route{
 			via: &nVia,
+			mtu: mtu,
 		}
 
 		_, r.route, err = net.ParseCIDR(fmt.Sprintf("%v", rRoute))
