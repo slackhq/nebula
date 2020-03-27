@@ -331,10 +331,7 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 			vpnPeer := NewUDPAddr(a.Ip, uint16(a.Port))
 			go func() {
 				time.Sleep(time.Second * time.Duration(lh.punchDelay))
-				for i := 0; i < 5; i++ {
-					lh.punchConn.WriteTo(empty, vpnPeer)
-					time.Sleep(time.Second * 1)
-				}
+				lh.punchConn.WriteTo(empty, vpnPeer)
 
 			}()
 			l.Debugf("Punching %s on %d for %s", IntIp(a.Ip), a.Port, IntIp(n.Details.VpnIp))
