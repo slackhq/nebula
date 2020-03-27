@@ -177,8 +177,8 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		go hostMap.Promoter(config.GetInt("promoter.interval"))
 	*/
 
-	punchy := config.GetBool("punchy", false)
-	if punchy == true {
+	punchy := NewPunchyFromConfig(config)
+	if punchy.Punch {
 		l.Info("UDP hole punching enabled")
 		go hostMap.Punchy(udpServer)
 	}
@@ -193,7 +193,6 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		port = int(uPort.Port)
 	}
 
-	punchBack := config.GetBool("punch_back", false)
 	amLighthouse := config.GetBool("lighthouse.am_lighthouse", false)
 
 	// warn if am_lighthouse is enabled but upstream lighthouses exists
@@ -222,7 +221,8 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		config.GetInt("lighthouse.interval", 10),
 		port,
 		udpServer,
-		punchBack,
+		punchy.Respond,
+		punchy.Delay,
 	)
 
 	//TODO: Move all of this inside functions in lighthouse.go

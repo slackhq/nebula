@@ -217,6 +217,10 @@ func (c *Config) Get(k string) interface{} {
 	return c.get(k, c.Settings)
 }
 
+func (c *Config) IsSet(k string) bool {
+	return c.get(k, c.Settings) != nil
+}
+
 func (c *Config) get(k string, v interface{}) interface{} {
 	parts := strings.Split(k, ".")
 	for _, p := range parts {

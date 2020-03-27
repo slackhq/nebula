@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Added a delay to punching via lighthouse signal to deal with race conditions in some linux conntrack implementations.
+
+    See deprecated, this also adds a new `punchy.delay` option that defaults to `1s`
+    
+  
+### Deprecated
+
+- `punchy`, `punch_back` configuration options have been collapsed under the now top level `punchy` config directive.
+
+    `punchy.punch` - This is the old `punchy` option. Should we perform NAT hole punching (default false)?
+    
+    `punchy.respond` - This is the old `punch_back` option, Should we respond to hole punching by hole punching back (default false)?
+
 ## [1.1.0] - 2020-01-17
 
 ### Added

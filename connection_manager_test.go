@@ -28,7 +28,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 		rawCertificateNoKey: []byte{},
 	}
 
-	lh := NewLightHouse(false, 0, []uint32{}, 1000, 0, &udpConn{}, false)
+	lh := NewLightHouse(false, 0, []uint32{}, 1000, 0, &udpConn{}, false, 1)
 	ifce := &Interface{
 		hostMap:          hostMap,
 		inside:           &Tun{},
@@ -91,7 +91,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 		rawCertificateNoKey: []byte{},
 	}
 
-	lh := NewLightHouse(false, 0, []uint32{}, 1000, 0, &udpConn{}, false)
+	lh := NewLightHouse(false, 0, []uint32{}, 1000, 0, &udpConn{}, false, 1)
 	ifce := &Interface{
 		hostMap:          hostMap,
 		inside:           &Tun{},
