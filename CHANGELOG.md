@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Added a delay to punching via lighthouse signal to deal with race conditions in
+  conntrack implementations.
+
 ## [1.1.0] - 2020-01-17
 
 ### Added
