@@ -218,7 +218,7 @@ func (c *Config) Get(k string) interface{} {
 }
 
 func (c *Config) IsSet(k string) bool {
-	return c.get(k, c.Settings) == nil
+	return c.get(k, c.Settings) != nil
 }
 
 func (c *Config) get(k string, v interface{}) interface{} {
