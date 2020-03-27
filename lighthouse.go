@@ -26,7 +26,7 @@ type LightHouse struct {
 	interval    int
 	nebulaPort  int
 	punchBack   bool
-	punchDelay  int
+	punchDelay  time.Duration
 }
 
 type EncWriter interface {
@@ -34,7 +34,7 @@ type EncWriter interface {
 	SendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte)
 }
 
-func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, nebulaPort int, pc *udpConn, punchBack bool, punchDelay int) *LightHouse {
+func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, nebulaPort int, pc *udpConn, punchBack bool, punchDelay time.Duration) *LightHouse {
 	h := LightHouse{
 		amLighthouse: amLighthouse,
 		myIp:         myIp,
@@ -330,7 +330,7 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 		for _, a := range n.Details.IpAndPorts {
 			vpnPeer := NewUDPAddr(a.Ip, uint16(a.Port))
 			go func() {
-				time.Sleep(time.Second * time.Duration(lh.punchDelay))
+				time.Sleep(lh.punchDelay)
 				lh.punchConn.WriteTo(empty, vpnPeer)
 
 			}()

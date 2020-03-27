@@ -55,11 +55,17 @@ listen:
   #read_buffer: 10485760
   #write_buffer: 10485760
 
-# Punchy continues to punch inbound/outbound at a regular interval to avoid expiration of firewall nat mappings
-punchy: true
-# punch_back means that a node you are trying to reach will connect back out to you if your hole punching fails
-# this is extremely useful if one node is behind a difficult nat, such as symmetric
-#punch_back: true
+punchy:
+  # Continues to punch inbound/outbound at a regular interval to avoid expiration of firewall nat mappings
+  punch: true
+
+  # respond means that a node you are trying to reach will connect back out to you if your hole punching fails
+  # this is extremely useful if one node is behind a difficult nat, such as a symmetric NAT
+  # Default is false
+  #respond: true
+
+  # delays a punch response for misbehaving NATs, default is 1 second, respond must be true to take effect
+  #delay: 1s
 
 # Cipher allows you to choose between the available ciphers for your network.
 # IMPORTANT: this value must be identical on ALL NODES/LIGHTHOUSES. We do not/will not support use of different ciphers simultaneously!
