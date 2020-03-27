@@ -214,6 +214,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		lighthouseHosts[i] = ip2int(ip)
 	}
 
+	punchDelay := config.GetInt("lighthouse.punch_delay", 1)
 	lightHouse := NewLightHouse(
 		amLighthouse,
 		ip2int(tunCidr.IP),
@@ -223,6 +224,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		port,
 		udpServer,
 		punchBack,
+		punchDelay,
 	)
 
 	//TODO: Move all of this inside functions in lighthouse.go
