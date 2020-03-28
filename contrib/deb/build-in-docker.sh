@@ -11,3 +11,4 @@ docker build $* -t "$IMAGE_" .
 container_id_=$(docker run -dt "$IMAGE_")
 
 docker cp "$container_id_":/out/ ../
+docker stop "$container_id_"
