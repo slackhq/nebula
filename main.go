@@ -299,9 +299,9 @@ func Main(configPath string, configTest bool, buildVersion string) {
 
 	switch ifConfig.Cipher {
 	case "aes":
-		noiseEndiannes = binary.BigEndian
+		noiseEndianness = binary.BigEndian
 	case "chachapoly":
-		noiseEndiannes = binary.LittleEndian
+		noiseEndianness = binary.LittleEndian
 	default:
 		l.Fatalf("Unknown cipher: %v", ifConfig.Cipher)
 	}
