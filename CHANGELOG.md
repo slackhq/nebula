@@ -7,20 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `logging.timestamp_format` config option. The primary purpose of this
+  change is to allow logging timestamps with millisecond precision.
+
+- Support `unsafe_routes` on Windows.
+
 ### Changed
 
-- Added a delay to punching via lighthouse signal to deal with race conditions in some linux conntrack implementations.
+- Added a delay to punching via lighthouse signal to deal with race conditions
+  in some linux conntrack implementations.
 
-    See deprecated, this also adds a new `punchy.delay` option that defaults to `1s`
-    
-  
+  See deprecated, this also adds a new `punchy.delay` option that defaults to `1s`.
+
+- Validate all `lighthouse.hosts` and `static_host_map` VPN IPs are in the
+  subnet defined in our cert. Exit with a fatal error if they are not in our
+  subnet, as this is an invalid configuration (we will not have the proper
+  routes set up to communicate with these hosts).
+
+- Use absolute paths to system binaries on macOS and Windows.
+
+- Add configuration options for `handshakes`. This includes options to tweak
+  `try_interval`, `retries` and `wait_rotation`. See example config for
+  descriptions.
+
+- Allow `-config` file to not end in `.yaml` or `yml`. Useful when using
+  `-test` and automated tools like Ansible that create temporary files without
+  suffixes.
+
+- Various documentation and example fixes.
+
+- Improved log messages.
+
+- Dependencies updated.
+
 ### Deprecated
 
-- `punchy`, `punch_back` configuration options have been collapsed under the now top level `punchy` config directive.
+- `punchy`, `punch_back` configuration options have been collapsed under the
+  now top level `punchy` config directive.
 
-    `punchy.punch` - This is the old `punchy` option. Should we perform NAT hole punching (default false)?
-    
-    `punchy.respond` - This is the old `punch_back` option, Should we respond to hole punching by hole punching back (default false)?
+  `punchy.punch` - This is the old `punchy` option. Should we perform NAT hole
+  punching (default false)?
+
+  `punchy.respond` - This is the old `punch_back` option, Should we respond to
+  hole punching by hole punching back (default false)?
+
+### Fixed
+
+- Reduce memory allocations when not using `unsafe_routes`.
+
+- Ignore packets from self to self.
 
 ## [1.1.0] - 2020-01-17
 
