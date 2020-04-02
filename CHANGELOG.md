@@ -10,42 +10,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add `logging.timestamp_format` config option. The primary purpose of this
-  change is to allow logging timestamps with millisecond precision.
+  change is to allow logging timestamps with millisecond precision. (#187)
 
-- Support `unsafe_routes` on Windows.
+- Support `unsafe_routes` on Windows. (#184)
 
 ### Changed
 
 - Added a delay to punching via lighthouse signal to deal with race conditions
-  in some linux conntrack implementations.
+  in some linux conntrack implementations. (#210)
 
   See deprecated, this also adds a new `punchy.delay` option that defaults to `1s`.
 
 - Validate all `lighthouse.hosts` and `static_host_map` VPN IPs are in the
   subnet defined in our cert. Exit with a fatal error if they are not in our
   subnet, as this is an invalid configuration (we will not have the proper
-  routes set up to communicate with these hosts).
+  routes set up to communicate with these hosts). (#170)
 
-- Use absolute paths to system binaries on macOS and Windows.
+- Use absolute paths to system binaries on macOS and Windows. (#191)
 
 - Add configuration options for `handshakes`. This includes options to tweak
   `try_interval`, `retries` and `wait_rotation`. See example config for
-  descriptions.
+  descriptions. (#179)
 
 - Allow `-config` file to not end in `.yaml` or `yml`. Useful when using
   `-test` and automated tools like Ansible that create temporary files without
-  suffixes.
+  suffixes. (#189)
 
-- Various documentation and example fixes.
+- Various documentation and example fixes. (#196)
 
-- Improved log messages.
+- Improved log messages. (#181)
 
-- Dependencies updated.
+- Dependencies updated. (#188)
 
 ### Deprecated
 
 - `punchy`, `punch_back` configuration options have been collapsed under the
-  now top level `punchy` config directive.
+  now top level `punchy` config directive. (#210)
 
   `punchy.punch` - This is the old `punchy` option. Should we perform NAT hole
   punching (default false)?
@@ -55,9 +55,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Reduce memory allocations when not using `unsafe_routes`.
+- Reduce memory allocations when not using `unsafe_routes`. (#198)
 
-- Ignore packets from self to self.
+- Ignore packets from self to self. (#192)
 
 ## [1.1.0] - 2020-01-17
 
