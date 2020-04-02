@@ -35,7 +35,7 @@ func (c *Config) Load(path string) error {
 	c.path = path
 	c.files = make([]string, 0)
 
-	err := c.resolve(path)
+	err := c.resolve(path, true)
 	if err != nil {
 		return err
 	}
@@ -217,6 +217,10 @@ func (c *Config) Get(k string) interface{} {
 	return c.get(k, c.Settings)
 }
 
+func (c *Config) IsSet(k string) bool {
+	return c.get(k, c.Settings) != nil
+}
+
 func (c *Config) get(k string, v interface{}) interface{} {
 	parts := strings.Split(k, ".")
 	for _, p := range parts {
@@ -234,14 +238,16 @@ func (c *Config) get(k string, v interface{}) interface{} {
 	return v
 }
 
-func (c *Config) resolve(path string) error {
+// direct signifies if this is the config path directly specified by the user,
+// versus a file/dir found by recursing into that path
+func (c *Config) resolve(path string, direct bool) error {
 	i, err := os.Stat(path)
 	if err != nil {
 		return nil
 	}
 
 	if !i.IsDir() {
-		c.addFile(path)
+		c.addFile(path, direct)
 		return nil
 	}
 
@@ -251,7 +257,7 @@ func (c *Config) resolve(path string) error {
 	}
 
 	for _, p := range paths {
-		err := c.resolve(filepath.Join(path, p))
+		err := c.resolve(filepath.Join(path, p), false)
 		if err != nil {
 			return err
 		}
@@ -260,10 +266,10 @@ func (c *Config) resolve(path string) error {
 	return nil
 }
 
-func (c *Config) addFile(path string) error {
+func (c *Config) addFile(path string, direct bool) error {
 	ext := filepath.Ext(path)
 
-	if ext != ".yaml" && ext != ".yml" {
+	if !direct && ext != ".yaml" && ext != ".yml" {
 		return nil
 	}
 
@@ -328,12 +334,23 @@ func configLogger(c *Config) error {
 	}
 	l.SetLevel(logLevel)
 
+	timestampFormat := c.GetString("logging.timestamp_format", "")
+	fullTimestamp := (timestampFormat != "")
+	if timestampFormat == "" {
+		timestampFormat = time.RFC3339
+	}
+
 	logFormat := strings.ToLower(c.GetString("logging.format", "text"))
 	switch logFormat {
 	case "text":
-		l.Formatter = &logrus.TextFormatter{}
+		l.Formatter = &logrus.TextFormatter{
+			TimestampFormat: timestampFormat,
+			FullTimestamp:   fullTimestamp,
+		}
 	case "json":
-		l.Formatter = &logrus.JSONFormatter{}
+		l.Formatter = &logrus.JSONFormatter{
+			TimestampFormat: timestampFormat,
+		}
 	default:
 		return fmt.Errorf("unknown log format `%s`. possible formats: %s", logFormat, []string{"text", "json"})
 	}

@@ -97,8 +97,13 @@ func (f *Interface) Run(tunRoutines, udpRoutines int, buildVersion string) {
 	}
 
 	f.version = buildVersion
+	addr, err := f.outside.LocalAddr()
+	if err != nil {
+		l.WithError(err).Error("Failed to get udp listen address")
+	}
+
 	l.WithField("interface", f.inside.Device).WithField("network", f.inside.Cidr.String()).
-		WithField("build", buildVersion).
+		WithField("build", buildVersion).WithField("udpAddr", addr).
 		Info("Nebula interface is active")
 
 	// Launch n queues to read packets from udp

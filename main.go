@@ -180,8 +180,8 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		go hostMap.Promoter(config.GetInt("promoter.interval"))
 	*/
 
-	punchy := config.GetBool("punchy", false)
-	if punchy == true && !configTest {
+	punchy := NewPunchyFromConfig(config)
+	if punchy.Punch && !configTest {
 		l.Info("UDP hole punching enabled")
 		go hostMap.Punchy(udpServer)
 	}
@@ -196,7 +196,6 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		port = int(uPort.Port)
 	}
 
-	punchBack := config.GetBool("punch_back", false)
 	amLighthouse := config.GetBool("lighthouse.am_lighthouse", false)
 
 	// warn if am_lighthouse is enabled but upstream lighthouses exists
@@ -225,7 +224,8 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		config.GetInt("lighthouse.interval", 10),
 		port,
 		udpServer,
-		punchBack,
+		punchy.Respond,
+		punchy.Delay,
 	)
 
 	//TODO: Move all of this inside functions in lighthouse.go
@@ -268,7 +268,13 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		l.WithError(err).Error("Lighthouse unreachable")
 	}
 
-	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpServer)
+	handshakeConfig := HandshakeConfig{
+		tryInterval:  config.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
+		retries:      config.GetInt("handshakes.retries", DefaultHandshakeRetries),
+		waitRotation: config.GetInt("handshakes.wait_rotation", DefaultHandshakeWaitRotation),
+	}
+
+	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpServer, handshakeConfig)
 
 	//TODO: These will be reused for psk
 	//handshakeMACKey := config.GetString("handshake_mac.key", "")
@@ -296,9 +302,9 @@ func Main(configPath string, configTest bool, buildVersion string) {
 
 	switch ifConfig.Cipher {
 	case "aes":
-		noiseEndiannes = binary.BigEndian
+		noiseEndianness = binary.BigEndian
 	case "chachapoly":
-		noiseEndiannes = binary.LittleEndian
+		noiseEndianness = binary.LittleEndian
 	default:
 		l.Fatalf("Unknown cipher: %v", ifConfig.Cipher)
 	}
