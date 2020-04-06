@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func startStats(c *Config) error {
+func startStats(c *Config, configTest bool) error {
 	mType := c.GetString("stats.type", "")
 	if mType == "" || mType == "none" {
 		return nil
@@ -27,9 +27,9 @@ func startStats(c *Config) error {
 
 	switch mType {
 	case "graphite":
-		startGraphiteStats(interval, c)
+		startGraphiteStats(interval, c, configTest)
 	case "prometheus":
-		startPrometheusStats(interval, c)
+		startPrometheusStats(interval, c, configTest)
 	default:
 		return fmt.Errorf("stats.type was not understood: %s", mType)
 	}
@@ -43,7 +43,7 @@ func startStats(c *Config) error {
 	return nil
 }
 
-func startGraphiteStats(i time.Duration, c *Config) error {
+func startGraphiteStats(i time.Duration, c *Config, configTest bool) error {
 	proto := c.GetString("stats.protocol", "tcp")
 	host := c.GetString("stats.host", "")
 	if host == "" {
@@ -57,11 +57,13 @@ func startGraphiteStats(i time.Duration, c *Config) error {
 	}
 
 	l.Infof("Starting graphite. Interval: %s, prefix: %s, addr: %s", i, prefix, addr)
-	go graphite.Graphite(metrics.DefaultRegistry, i, prefix, addr)
+	if !configTest {
+		go graphite.Graphite(metrics.DefaultRegistry, i, prefix, addr)
+	}
 	return nil
 }
 
-func startPrometheusStats(i time.Duration, c *Config) error {
+func startPrometheusStats(i time.Duration, c *Config, configTest bool) error {
 	namespace := c.GetString("stats.namespace", "")
 	subsystem := c.GetString("stats.subsystem", "")
 
@@ -79,11 +81,13 @@ func startPrometheusStats(i time.Duration, c *Config) error {
 	pClient := mp.NewPrometheusProvider(metrics.DefaultRegistry, namespace, subsystem, pr, i)
 	go pClient.UpdatePrometheusMetrics()
 
-	go func() {
-		l.Infof("Prometheus stats listening on %s at %s", listen, path)
-		http.Handle(path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: l}))
-		log.Fatal(http.ListenAndServe(listen, nil))
-	}()
+	if !configTest {
+		go func() {
+			l.Infof("Prometheus stats listening on %s at %s", listen, path)
+			http.Handle(path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: l}))
+			log.Fatal(http.ListenAndServe(listen, nil))
+		}()
+	}
 
 	return nil
 }
