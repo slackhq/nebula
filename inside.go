@@ -51,7 +51,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 		}
 
 	} else if l.Level >= logrus.DebugLevel {
-		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("fwPacket", fwPacket).
+		hostinfo.logger().WithField("fwPacket", fwPacket).
 			Debugln("dropping outbound packet")
 	}
 }
@@ -185,7 +185,7 @@ func (f *Interface) send(t NebulaMessageType, st NebulaMessageSubType, ci *Conne
 	//TODO: see above note on lock
 	//ci.writeLock.Unlock()
 	if err != nil {
-		l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).
+		hostinfo.logger().WithError(err).
 			WithField("udpAddr", remote).WithField("counter", c).
 			WithField("attemptedCounter", ci.messageCounter).
 			Error("Failed to encrypt outgoing packet")
@@ -194,7 +194,7 @@ func (f *Interface) send(t NebulaMessageType, st NebulaMessageSubType, ci *Conne
 
 	err = f.outside.WriteTo(out, remote)
 	if err != nil {
-		l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).
+		hostinfo.logger().WithError(err).
 			WithField("udpAddr", remote).Error("Failed to write outgoing packet")
 	}
 }

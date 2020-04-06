@@ -113,7 +113,7 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 			if hostinfo.HandshakeReady && hostinfo.remote != nil {
 				err := c.outside.WriteTo(hostinfo.HandshakePacket[0], hostinfo.remote)
 				if err != nil {
-					l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", hostinfo.remote).
+					hostinfo.logger().WithField("udpAddr", hostinfo.remote).
 						WithField("initiatorIndex", hostinfo.localIndexId).
 						WithField("remoteIndex", hostinfo.remoteIndexId).
 						WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
@@ -121,7 +121,7 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 				} else {
 					//TODO: this log line is assuming a lot of stuff around the cached stage 0 handshake packet, we should
 					// keep the real packet struct around for logging purposes
-					l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", hostinfo.remote).
+					hostinfo.logger().WithField("udpAddr", hostinfo.remote).
 						WithField("initiatorIndex", hostinfo.localIndexId).
 						WithField("remoteIndex", hostinfo.remoteIndexId).
 						WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).

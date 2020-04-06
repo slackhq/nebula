@@ -532,13 +532,13 @@ func (i *HostInfo) cachePacket(t NebulaMessageType, st NebulaMessageSubType, pac
 		copy(tempPacket, packet)
 		//l.WithField("trace", string(debug.Stack())).Error("Caching packet", tempPacket)
 		i.packetStore = append(i.packetStore, &cachedPacket{t, st, f, tempPacket})
-		l.WithField("vpnIp", IntIp(i.hostId)).
+		i.logger().
 			WithField("length", len(i.packetStore)).
 			WithField("stored", true).
 			Debugf("Packet store")
 
 	} else if l.Level >= logrus.DebugLevel {
-		l.WithField("vpnIp", IntIp(i.hostId)).
+		i.logger().
 			WithField("length", len(i.packetStore)).
 			WithField("stored", false).
 			Debugf("Packet store")
@@ -556,7 +556,7 @@ func (i *HostInfo) handshakeComplete() {
 	//TODO: this should be managed by the handshake state machine to set it based on how many handshake were seen.
 	// Clamping it to 2 gets us out of the woods for now
 	*i.ConnectionState.messageCounter = 2
-	l.WithField("vpnIp", IntIp(i.hostId)).Debugf("Sending %d stored packets", len(i.packetStore))
+	i.logger().Debugf("Sending %d stored packets", len(i.packetStore))
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)
 	for _, cp := range i.packetStore {
@@ -637,6 +637,22 @@ func (i *HostInfo) CreateRemoteCIDR(c *cert.NebulaCertificate) {
 		remoteCidr.AddCIDR(n, struct{}{})
 	}
 	i.remoteCidr = remoteCidr
+}
+
+func (i *HostInfo) logger() *logrus.Entry {
+	if i == nil {
+		return logrus.NewEntry(l)
+	}
+
+	li := l.WithField("vpnIp", IntIp(i.hostId))
+
+	if connState := i.ConnectionState; connState != nil {
+		if peerCert := connState.peerCert; peerCert != nil {
+			li = li.WithField("certName", peerCert.Details.Name)
+		}
+	}
+
+	return li
 }
 
 //########################
