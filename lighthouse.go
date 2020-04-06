@@ -161,7 +161,7 @@ func (lh *LightHouse) AddRemote(vpnIP uint32, toIp *udpAddr, static bool) {
 	}
 
 	allow := lh.remoteAllowList.Allow(udp2ipInt(toIp))
-	l.WithField("remoteIp", toIp).WithField("allow", allow).Debug("remoteAllowList")
+	l.WithField("remoteIp", toIp).WithField("allow", allow).Debug("remoteAllowList.Allow")
 	if !allow {
 		return
 	}

@@ -760,6 +760,11 @@ func localIps(allowList *AllowList) *[]net.IP {
 	var ips []net.IP
 	ifaces, _ := net.Interfaces()
 	for _, i := range ifaces {
+		allow := allowList.AllowName(i.Name)
+		l.WithField("interfaceName", i.Name).WithField("allow", allow).Debug("localAllowList.AllowName")
+		if !allow {
+			continue
+		}
 		addrs, _ := i.Addrs()
 		for _, addr := range addrs {
 			var ip net.IP
@@ -771,8 +776,8 @@ func localIps(allowList *AllowList) *[]net.IP {
 				ip = v.IP
 			}
 			if ip.To4() != nil && ip.IsLoopback() == false {
-				allow := allowList.AllowNamed(i.Name, ip2int(ip))
-				l.WithField("localIp", ip).WithField("allow", allow).Debug("localAllowList")
+				allow := allowList.Allow(ip2int(ip))
+				l.WithField("localIp", ip).WithField("allow", allow).Debug("localAllowList.Allow")
 				if !allow {
 					continue
 				}

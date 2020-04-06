@@ -9,6 +9,7 @@ type AllowList struct {
 	// The values of this cidrTree are `bool`, signifying allow/deny
 	cidrTree *CIDRTree
 
+	// To avoid ambiguity, all rules must be true, or all rules must be false.
 	nameRules []AllowListNameRule
 }
 
@@ -31,29 +32,17 @@ func (al *AllowList) Allow(ip uint32) bool {
 	}
 }
 
-func (al *AllowList) AllowNamed(name string, ip uint32) bool {
-	if al == nil {
+func (al *AllowList) AllowName(name string) bool {
+	if al == nil || len(al.nameRules) == 0 {
 		return true
 	}
 
-	if len(al.nameRules) > 0 {
-		var allowName bool
-		defaultRule := !al.nameRules[0].Allow
-
-		for _, rule := range al.nameRules {
-			if rule.Name.MatchString(name) {
-				if rule.Allow {
-					allowName = true
-					break
-				} else {
-					return false
-				}
-			}
-			if !defaultRule && !allowName {
-				return false
-			}
+	for _, rule := range al.nameRules {
+		if rule.Name.MatchString(name) {
+			return rule.Allow
 		}
 	}
 
-	return al.Allow(ip)
+	// If no rules match, return the default, which is the inverse of the rules
+	return !al.nameRules[0].Allow
 }

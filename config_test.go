@@ -92,21 +92,21 @@ func TestConfig_GetAllowList(t *testing.T) {
 		"192.168.0.0": true,
 	}
 	r, err := c.GetAllowList("allowlist", false)
-	assert.EqualError(t, err, "Config `allowlist` has invalid CIDR: 192.168.0.0")
+	assert.EqualError(t, err, "config `allowlist` has invalid CIDR: 192.168.0.0")
 	assert.Nil(t, r)
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"192.168.0.0/16": "abc",
 	}
 	r, err = c.GetAllowList("allowlist", false)
-	assert.EqualError(t, err, "Config `allowlist` has invalid value (type string): abc")
+	assert.EqualError(t, err, "config `allowlist` has invalid value (type string): abc")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"192.168.0.0/16": true,
 		"10.0.0.0/8":     false,
 	}
 	r, err = c.GetAllowList("allowlist", false)
-	assert.EqualError(t, err, "Config `allowlist` contains both true and false rules, but no default set for 0.0.0.0/0")
+	assert.EqualError(t, err, "config `allowlist` contains both true and false rules, but no default set for 0.0.0.0/0")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"0.0.0.0/0":     true,
@@ -126,7 +126,7 @@ func TestConfig_GetAllowList(t *testing.T) {
 		},
 	}
 	r, err = c.GetAllowList("allowlist", false)
-	assert.EqualError(t, err, "Config `allowlist` does not support `interfaces`")
+	assert.EqualError(t, err, "config `allowlist` does not support `interfaces`")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"interfaces": map[interface{}]interface{}{
@@ -134,7 +134,7 @@ func TestConfig_GetAllowList(t *testing.T) {
 		},
 	}
 	r, err = c.GetAllowList("allowlist", true)
-	assert.EqualError(t, err, "Config `allowlist.interfaces` has invalid value (type string): foo")
+	assert.EqualError(t, err, "config `allowlist.interfaces` has invalid value (type string): foo")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"interfaces": map[interface{}]interface{}{
@@ -143,7 +143,7 @@ func TestConfig_GetAllowList(t *testing.T) {
 		},
 	}
 	r, err = c.GetAllowList("allowlist", true)
-	assert.EqualError(t, err, "Config `allowlist.interfaces` values must all be the same true/false value")
+	assert.EqualError(t, err, "config `allowlist.interfaces` values must all be the same true/false value")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"interfaces": map[interface{}]interface{}{

@@ -223,7 +223,7 @@ func (c *Config) GetAllowList(k string, allowInterfaces bool) (*AllowList, error
 
 	rawMap, ok := r.(map[interface{}]interface{})
 	if !ok {
-		return nil, fmt.Errorf("Config `%s` has invalid type: %T", k, r)
+		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, r)
 	}
 
 	tree := NewCIDRTree()
@@ -237,13 +237,13 @@ func (c *Config) GetAllowList(k string, allowInterfaces bool) (*AllowList, error
 	for rawKey, rawValue := range rawMap {
 		rawCIDR, ok := rawKey.(string)
 		if !ok {
-			return nil, fmt.Errorf("Config `%s` has invalid key (type %T): %v", k, rawKey, rawKey)
+			return nil, fmt.Errorf("config `%s` has invalid key (type %T): %v", k, rawKey, rawKey)
 		}
 
 		// Special rule for interface names
 		if rawCIDR == "interfaces" {
 			if !allowInterfaces {
-				return nil, fmt.Errorf("Config `%s` does not support `interfaces`", k)
+				return nil, fmt.Errorf("config `%s` does not support `interfaces`", k)
 			}
 			var err error
 			nameRules, err = c.getAllowListInterfaces(k, rawValue)
@@ -256,12 +256,12 @@ func (c *Config) GetAllowList(k string, allowInterfaces bool) (*AllowList, error
 
 		value, ok := rawValue.(bool)
 		if !ok {
-			return nil, fmt.Errorf("Config `%s` has invalid value (type %T): %v", k, rawValue, rawValue)
+			return nil, fmt.Errorf("config `%s` has invalid value (type %T): %v", k, rawValue, rawValue)
 		}
 
 		_, cidr, err := net.ParseCIDR(rawCIDR)
 		if err != nil {
-			return nil, fmt.Errorf("Config `%s` has invalid CIDR: %s", k, rawCIDR)
+			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s", k, rawCIDR)
 		}
 
 		// TODO: should we error on duplicate CIDRs in the config?
@@ -288,7 +288,7 @@ func (c *Config) GetAllowList(k string, allowInterfaces bool) (*AllowList, error
 			_, zeroCIDR, _ := net.ParseCIDR("0.0.0.0/0")
 			tree.AddCIDR(zeroCIDR, !allValues)
 		} else {
-			return nil, fmt.Errorf("Config `%s` contains both true and false rules, but no default set for 0.0.0.0/0", k)
+			return nil, fmt.Errorf("config `%s` contains both true and false rules, but no default set for 0.0.0.0/0", k)
 		}
 	}
 
@@ -300,7 +300,7 @@ func (c *Config) getAllowListInterfaces(k string, v interface{}) ([]AllowListNam
 
 	rawRules, ok := v.(map[interface{}]interface{})
 	if !ok {
-		return nil, fmt.Errorf("Config `%s.interfaces` is invalid (type %T): %v", k, v, v)
+		return nil, fmt.Errorf("config `%s.interfaces` is invalid (type %T): %v", k, v, v)
 	}
 
 	firstEntry := true
@@ -308,16 +308,16 @@ func (c *Config) getAllowListInterfaces(k string, v interface{}) ([]AllowListNam
 	for rawName, rawAllow := range rawRules {
 		name, ok := rawName.(string)
 		if !ok {
-			return nil, fmt.Errorf("Config `%s.interfaces` has invalid key (type %T): %v", k, rawName, rawName)
+			return nil, fmt.Errorf("config `%s.interfaces` has invalid key (type %T): %v", k, rawName, rawName)
 		}
 		allow, ok := rawAllow.(bool)
 		if !ok {
-			return nil, fmt.Errorf("Config `%s.interfaces` has invalid value (type %T): %v", k, rawAllow, rawAllow)
+			return nil, fmt.Errorf("config `%s.interfaces` has invalid value (type %T): %v", k, rawAllow, rawAllow)
 		}
 
 		nameRE, err := regexp.Compile("^" + name + "$")
 		if err != nil {
-			return nil, fmt.Errorf("Config `%s.interfaces` has invalid key: %s: %v", k, name, err)
+			return nil, fmt.Errorf("config `%s.interfaces` has invalid key: %s: %v", k, name, err)
 		}
 
 		nameRules = append(nameRules, AllowListNameRule{
@@ -330,7 +330,7 @@ func (c *Config) getAllowListInterfaces(k string, v interface{}) ([]AllowListNam
 			firstEntry = false
 		} else {
 			if allow != allValues {
-				return nil, fmt.Errorf("Config `%s.interfaces` values must all be the same true/false value", k)
+				return nil, fmt.Errorf("config `%s.interfaces` values must all be the same true/false value", k)
 			}
 		}
 	}

@@ -22,30 +22,26 @@ func TestAllowList_Allow(t *testing.T) {
 	assert.Equal(t, true, al.Allow(ip2int(net.ParseIP("10.42.42.42"))))
 }
 
-func TestAllowList_AllowNamed(t *testing.T) {
-	assert.Equal(t, true, ((*AllowList)(nil)).AllowNamed("docker0", ip2int(net.ParseIP("1.1.1.1"))))
+func TestAllowList_AllowName(t *testing.T) {
+	assert.Equal(t, true, ((*AllowList)(nil)).AllowName("docker0"))
 
-	tree := NewCIDRTree()
-	tree.AddCIDR(getCIDR("0.0.0.0/0"), true)
-	tree.AddCIDR(getCIDR("10.0.0.0/8"), false)
-	tree.AddCIDR(getCIDR("10.42.42.0/24"), true)
 	rules := []AllowListNameRule{
 		{Name: regexp.MustCompile("^docker.*$"), Allow: false},
+		{Name: regexp.MustCompile("^tun.*$"), Allow: false},
 	}
-	al := &AllowList{cidrTree: tree, nameRules: rules}
+	al := &AllowList{nameRules: rules}
 
-	assert.Equal(t, false, al.AllowNamed("docker0", ip2int(net.ParseIP("1.1.1.1"))))
-	assert.Equal(t, true, al.AllowNamed("eth0", ip2int(net.ParseIP("1.1.1.1"))))
-	assert.Equal(t, false, al.AllowNamed("eth0", ip2int(net.ParseIP("10.0.0.4"))))
-	assert.Equal(t, true, al.AllowNamed("eth0", ip2int(net.ParseIP("10.42.42.42"))))
+	assert.Equal(t, false, al.AllowName("docker0"))
+	assert.Equal(t, false, al.AllowName("tun0"))
+	assert.Equal(t, true, al.AllowName("eth0"))
 
 	rules = []AllowListNameRule{
 		{Name: regexp.MustCompile("^eth.*$"), Allow: true},
+		{Name: regexp.MustCompile("^ens.*$"), Allow: true},
 	}
-	al = &AllowList{cidrTree: tree, nameRules: rules}
+	al = &AllowList{nameRules: rules}
 
-	assert.Equal(t, false, al.AllowNamed("docker0", ip2int(net.ParseIP("1.1.1.1"))))
-	assert.Equal(t, true, al.AllowNamed("eth0", ip2int(net.ParseIP("1.1.1.1"))))
-	assert.Equal(t, false, al.AllowNamed("eth0", ip2int(net.ParseIP("10.0.0.4"))))
-	assert.Equal(t, true, al.AllowNamed("eth0", ip2int(net.ParseIP("10.42.42.42"))))
+	assert.Equal(t, false, al.AllowName("docker0"))
+	assert.Equal(t, true, al.AllowName("eth0"))
+	assert.Equal(t, true, al.AllowName("ens5"))
 }
