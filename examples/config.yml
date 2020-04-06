@@ -64,8 +64,9 @@ lighthouse:
   # the inverse). CIDR rules are matched after interface name rules.
   # Default is all local IP addresses.
   #localAllowList:
-    # Example to blacklist docker interfaces.
+    # Example to blacklist tun0 and all docker interfaces.
     #interfaces:
+      #tun0: false
       #'docker.*': false
     # Example to only advertise this subnet to the lighthouse.
     #"10.0.0.0/8": true
