@@ -228,6 +228,18 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		punchy.Delay,
 	)
 
+	remoteAllowList, err := config.GetAllowList("lighthouse.remoteAllowList", false)
+	if err != nil {
+		l.WithError(err).Fatal("Invalid lighthouse.remoteAllowList")
+	}
+	lightHouse.SetRemoteAllowList(remoteAllowList)
+
+	localAllowList, err := config.GetAllowList("lighthouse.localAllowList", true)
+	if err != nil {
+		l.WithError(err).Fatal("Invalid lighthouse.localAllowList")
+	}
+	lightHouse.SetLocalAllowList(localAllowList)
+
 	//TODO: Move all of this inside functions in lighthouse.go
 	for k, v := range config.GetMap("static_host_map", map[interface{}]interface{}{}) {
 		vpnIp := net.ParseIP(fmt.Sprintf("%v", k))
