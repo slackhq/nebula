@@ -13,6 +13,10 @@ func HandleIncomingHandshake(f *Interface, addr *udpAddr, packet []byte, h *Head
 	//	return
 	//}
 
+	if !f.lightHouse.remoteAllowList.Allow(udp2ipInt(addr)) {
+		return
+	}
+
 	tearDown := false
 	switch h.Subtype {
 	case handshakeIXPSK0:
