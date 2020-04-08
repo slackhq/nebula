@@ -57,15 +57,15 @@ func (c *Tun) Activate() error {
 
 	// TODO use syscalls instead of exec.Command
 	l.Debug("command: ifconfig", c.Device, c.Cidr.String(), c.Cidr.IP.String())
-	if err = exec.Command("ifconfig", c.Device, c.Cidr.String(), c.Cidr.IP.String()).Run(); err != nil {
+	if err = exec.Command("/sbin/ifconfig", c.Device, c.Cidr.String(), c.Cidr.IP.String()).Run(); err != nil {
 		return fmt.Errorf("failed to run 'ifconfig': %s", err)
 	}
 	l.Debug("command: route", "-n", "add", "-net", c.Cidr.String(), "-interface", c.Device)
-	if err = exec.Command("route", "-n", "add", "-net", c.Cidr.String(), "-interface", c.Device).Run(); err != nil {
+	if err = exec.Command("/sbin/route", "-n", "add", "-net", c.Cidr.String(), "-interface", c.Device).Run(); err != nil {
 		return fmt.Errorf("failed to run 'route add': %s", err)
 	}
 	l.Debug("command: ifconfig", c.Device, "mtu", strconv.Itoa(c.MTU))
-	if err = exec.Command("ifconfig", c.Device, "mtu", strconv.Itoa(c.MTU)).Run(); err != nil {
+	if err = exec.Command("/sbin/ifconfig", c.Device, "mtu", strconv.Itoa(c.MTU)).Run(); err != nil {
 		return fmt.Errorf("failed to run 'ifconfig': %s", err)
 	}
 
