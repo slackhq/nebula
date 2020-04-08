@@ -7,20 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2020-04-08
+
+### Added
+
+- Add `logging.timestamp_format` config option. The primary purpose of this
+  change is to allow logging timestamps with millisecond precision. (#187)
+
+- Support `unsafe_routes` on Windows. (#184)
+
+- Add `lighthouse.remote_allow_list` to filter which subnets we will use to
+  handshake with other hosts. See the example config for more details. (#217)
+
+- Add `lighthouse.local_allow_list` to filter which local IP addresses and/or
+  interfaces we advertise to the lighthouses. See the example config for more
+  details. (#217)
+
+- Wireshark dissector plugin. Add this file in `dist/wireshark` to your
+  Wireshark plugins folder to see Nebula packet headers decoded. (#216)
+
+- systemd unit for Arch, so it can be built entirely from this repo. (#216)
+
 ### Changed
 
-- Added a delay to punching via lighthouse signal to deal with race conditions in some linux conntrack implementations.
+- Added a delay to punching via lighthouse signal to deal with race conditions
+  in some linux conntrack implementations. (#210)
 
-    See deprecated, this also adds a new `punchy.delay` option that defaults to `1s`
-    
-  
+  See deprecated, this also adds a new `punchy.delay` option that defaults to `1s`.
+
+- Validate all `lighthouse.hosts` and `static_host_map` VPN IPs are in the
+  subnet defined in our cert. Exit with a fatal error if they are not in our
+  subnet, as this is an invalid configuration (we will not have the proper
+  routes set up to communicate with these hosts). (#170)
+
+- Use absolute paths to system binaries on macOS and Windows. (#191)
+
+- Add configuration options for `handshakes`. This includes options to tweak
+  `try_interval`, `retries` and `wait_rotation`. See example config for
+  descriptions. (#179)
+
+- Allow `-config` file to not end in `.yaml` or `yml`. Useful when using
+  `-test` and automated tools like Ansible that create temporary files without
+  suffixes. (#189)
+
+- The config test mode, `-test`, is now more thorough and catches more parsing
+  issues. (#177)
+
+- Various documentation and example fixes. (#196)
+
+- Improved log messages. (#181, #200)
+
+- Dependencies updated. (#188)
+
 ### Deprecated
 
-- `punchy`, `punch_back` configuration options have been collapsed under the now top level `punchy` config directive.
+- `punchy`, `punch_back` configuration options have been collapsed under the
+  now top level `punchy` config directive. (#210)
 
-    `punchy.punch` - This is the old `punchy` option. Should we perform NAT hole punching (default false)?
-    
-    `punchy.respond` - This is the old `punch_back` option, Should we respond to hole punching by hole punching back (default false)?
+  `punchy.punch` - This is the old `punchy` option. Should we perform NAT hole
+  punching (default false)?
+
+  `punchy.respond` - This is the old `punch_back` option. Should we respond to
+  hole punching by hole punching back (default false)?
+
+### Fixed
+
+- Reduce memory allocations when not using `unsafe_routes`. (#198)
+
+- Ignore packets from self to self. (#192)
+
+- MTU fixed for `unsafe_routes`. (#209)
 
 ## [1.1.0] - 2020-01-17
 
@@ -62,6 +118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/slackhq/nebula/releases/tag/v1.2.0
 [1.1.0]: https://github.com/slackhq/nebula/releases/tag/v1.1.0
 [1.0.0]: https://github.com/slackhq/nebula/releases/tag/v1.0.0
