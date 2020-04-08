@@ -3,6 +3,8 @@ BUILD_NUMBER ?= dev+$(shell date -u '+%Y%m%d%H%M%S')
 GO111MODULE = on
 export GO111MODULE
 
+LDFLAGS = -X main.Build=$(BUILD_NUMBER)
+
 ALL_LINUX = linux-amd64 \
 	linux-386 \
 	linux-ppc64le \
@@ -13,7 +15,8 @@ ALL_LINUX = linux-amd64 \
 	linux-mips \
 	linux-mipsle \
 	linux-mips64 \
-	linux-mips64le
+	linux-mips64le \
+	linux-mips-softfloat
 
 ALL = $(ALL_LINUX) \
 	darwin-amd64 \
@@ -38,24 +41,28 @@ bin-freebsd: build/freebsd-amd64/nebula build/freebsd-amd64/nebula-cert
 	mv $? .
 
 bin:
-	go build -trimpath -ldflags "-X main.Build=$(BUILD_NUMBER)" -o ./nebula ${NEBULA_CMD_PATH}
-	go build -trimpath -ldflags "-X main.Build=$(BUILD_NUMBER)" -o ./nebula-cert ./cmd/nebula-cert
+	go build -trimpath -ldflags "$(LDFLAGS)" -o ./nebula ${NEBULA_CMD_PATH}
+	go build -trimpath -ldflags "$(LDFLAGS)" -o ./nebula-cert ./cmd/nebula-cert
 
 install:
-	go install -trimpath -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
-	go install -trimpath -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
+	go install -trimpath -ldflags "$(LDFLAGS)" ${NEBULA_CMD_PATH}
+	go install -trimpath -ldflags "$(LDFLAGS)" ./cmd/nebula-cert
+
+build/linux-arm-%: GOENV += GOARM=$(word 3, $(subst -, ,$*))
+build/linux-mips-%: GOENV += GOMIPS=$(word 3, $(subst -, ,$*))
+
+# Build an extra small binary for mips-softfloat
+build/linux-mips-softfloat/%: LDFLAGS += -s -w
 
 build/%/nebula: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
-		GOARCH=$(word 2, $(subst -, ,$*)) \
-		GOARM=$(word 3, $(subst -, ,$*)) \
-		go build -trimpath -o $@ -ldflags "-X main.Build=$(BUILD_NUMBER)" ${NEBULA_CMD_PATH}
+		GOARCH=$(word 2, $(subst -, ,$*)) $(GOENV) \
+		go build -trimpath -o $@ -ldflags "$(LDFLAGS)" ${NEBULA_CMD_PATH}
 
 build/%/nebula-cert: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
-		GOARCH=$(word 2, $(subst -, ,$*)) \
-		GOARM=$(word 3, $(subst -, ,$*)) \
-		go build -trimpath -o $@ -ldflags "-X main.Build=$(BUILD_NUMBER)" ./cmd/nebula-cert
+		GOARCH=$(word 2, $(subst -, ,$*)) $(GOENV) \
+		go build -trimpath -o $@ -ldflags "$(LDFLAGS)" ./cmd/nebula-cert
 
 build/%/nebula.exe: build/%/nebula
 	mv $< $@
