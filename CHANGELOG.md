@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2020-04-08
+
 ### Added
 
 - Add `logging.timestamp_format` config option. The primary purpose of this
@@ -116,6 +118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/slackhq/nebula/releases/tag/v1.2.0
 [1.1.0]: https://github.com/slackhq/nebula/releases/tag/v1.1.0
 [1.0.0]: https://github.com/slackhq/nebula/releases/tag/v1.0.0
