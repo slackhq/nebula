@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Support `unsafe_routes` on Windows. (#184)
 
+- Wireshark dissector plugin. Add this file in `dist/wireshark` to your
+  Wireshark plugins folder to see Nebula packet headers decoded. (#216)
+
 ### Changed
 
 - Added a delay to punching via lighthouse signal to deal with race conditions
@@ -36,9 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `-test` and automated tools like Ansible that create temporary files without
   suffixes. (#189)
 
+- The config test mode, `-test`, is now more thorough and catches more parsing
+  issues. (#177)
+
 - Various documentation and example fixes. (#196)
 
-- Improved log messages. (#181)
+- Improved log messages. (#181, #200)
 
 - Dependencies updated. (#188)
 
@@ -58,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reduce memory allocations when not using `unsafe_routes`. (#198)
 
 - Ignore packets from self to self. (#192)
+
+- MTU fixed for `unsafe_routes`. (#209)
 
 ## [1.1.0] - 2020-01-17
 
