@@ -354,8 +354,15 @@ func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *Host
 	}
 
 	// Make sure remote address matches nebula certificate
-	if h.remoteCidr.Contains(fp.RemoteIP) == nil {
-		return true
+	if remoteCidr := h.remoteCidr; remoteCidr != nil {
+		if remoteCidr.Contains(fp.RemoteIP) == nil {
+			return true
+		}
+	} else {
+		// Simple case: Certificate has one IP and no subnets
+		if fp.RemoteIP != h.hostId {
+			return true
+		}
 	}
 
 	// Make sure we are supposed to be handling this local ip address

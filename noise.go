@@ -8,11 +8,11 @@ import (
 	"github.com/flynn/noise"
 )
 
-type endiannes interface {
+type endianness interface {
 	PutUint64(b []byte, v uint64)
 }
 
-var noiseEndiannes endiannes = binary.BigEndian
+var noiseEndianness endianness = binary.BigEndian
 
 type NebulaCipherState struct {
 	c noise.Cipher
@@ -37,7 +37,7 @@ func (s *NebulaCipherState) EncryptDanger(out, ad, plaintext []byte, n uint64, n
 		nb[1] = 0
 		nb[2] = 0
 		nb[3] = 0
-		noiseEndiannes.PutUint64(nb[4:], n)
+		noiseEndianness.PutUint64(nb[4:], n)
 		out = s.c.(cipher.AEAD).Seal(out, nb, plaintext, ad)
 		//l.Debugf("Encryption: outlen: %d, nonce: %d, ad: %s, plainlen %d", len(out), n, ad, len(plaintext))
 		return out, nil
@@ -52,7 +52,7 @@ func (s *NebulaCipherState) DecryptDanger(out, ad, ciphertext []byte, n uint64, 
 		nb[1] = 0
 		nb[2] = 0
 		nb[3] = 0
-		noiseEndiannes.PutUint64(nb[4:], n)
+		noiseEndianness.PutUint64(nb[4:], n)
 		return s.c.(cipher.AEAD).Open(out, nb, ciphertext, ad)
 	} else {
 		return []byte{}, nil

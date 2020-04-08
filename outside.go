@@ -60,7 +60,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 
 		d, err := f.decrypt(hostinfo, header.MessageCounter, out, packet, header, nb)
 		if err != nil {
-			l.WithError(err).WithField("udpAddr", addr).WithField("vpnIp", IntIp(hostinfo.hostId)).
+			hostinfo.logger().WithError(err).WithField("udpAddr", addr).
 				WithField("packet", packet).
 				Error("Failed to decrypt lighthouse packet")
 
@@ -80,7 +80,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 
 		d, err := f.decrypt(hostinfo, header.MessageCounter, out, packet, header, nb)
 		if err != nil {
-			l.WithError(err).WithField("udpAddr", addr).WithField("vpnIp", IntIp(hostinfo.hostId)).
+			hostinfo.logger().WithError(err).WithField("udpAddr", addr).
 				WithField("packet", packet).
 				Error("Failed to decrypt test packet")
 
@@ -115,14 +115,14 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 			return
 		}
 
-		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
+		hostinfo.logger().WithField("udpAddr", addr).
 			Info("Close tunnel received, tearing down.")
 
 		f.closeTunnel(hostinfo)
 		return
 
 	default:
-		l.Debugf("Unexpected packet received from %s", addr)
+		hostinfo.logger().Debugf("Unexpected packet received from %s", addr)
 		return
 	}
 
@@ -144,13 +144,13 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {
 	if hostDidRoam(hostinfo.remote, addr) {
 		if !hostinfo.lastRoam.IsZero() && addr.Equals(hostinfo.lastRoamRemote) && time.Since(hostinfo.lastRoam) < RoamingSupressSeconds*time.Second {
 			if l.Level >= logrus.DebugLevel {
-				l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
+				hostinfo.logger().WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
 					Debugf("Supressing roam back to previous remote for %d seconds", RoamingSupressSeconds)
 			}
 			return
 		}
 
-		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
+		hostinfo.logger().WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
 			Info("Host roamed to new udp ip/port.")
 		hostinfo.lastRoam = time.Now()
 		remoteCopy := *hostinfo.remote
@@ -244,7 +244,7 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	}
 
 	if !hostinfo.ConnectionState.window.Update(mc) {
-		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("header", header).
+		hostinfo.logger().WithField("header", header).
 			Debugln("dropping out of window packet")
 		return nil, errors.New("out of window packet")
 	}
@@ -257,7 +257,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:HeaderLen], packet[HeaderLen:], messageCounter, nb)
 	if err != nil {
-		l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).Error("Failed to decrypt packet")
+		hostinfo.logger().WithError(err).Error("Failed to decrypt packet")
 		//TODO: maybe after build 64 is out? 06/14/2018 - NB
 		//f.sendRecvError(hostinfo.remote, header.RemoteIndex)
 		return
@@ -265,19 +265,19 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 
 	err = newPacket(out, true, fwPacket)
 	if err != nil {
-		l.WithError(err).WithField("packet", out).WithField("hostInfo", IntIp(hostinfo.hostId)).
+		hostinfo.logger().WithError(err).WithField("packet", out).
 			Warnf("Error while validating inbound packet")
 		return
 	}
 
 	if !hostinfo.ConnectionState.window.Update(messageCounter) {
-		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("fwPacket", fwPacket).
+		hostinfo.logger().WithField("fwPacket", fwPacket).
 			Debugln("dropping out of window packet")
 		return
 	}
 
 	if f.firewall.Drop(out, *fwPacket, true, hostinfo, trustedCAs) {
-		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("fwPacket", fwPacket).
+		hostinfo.logger().WithField("fwPacket", fwPacket).
 			Debugln("dropping inbound packet")
 		return
 	}
