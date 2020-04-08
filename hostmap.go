@@ -755,11 +755,16 @@ func (d *HostInfoDest) ProbeReceived(probeCount int) {
 
 // Utility functions
 
-func localIps() *[]net.IP {
+func localIps(allowList *AllowList) *[]net.IP {
 	//FIXME: This function is pretty garbage
 	var ips []net.IP
 	ifaces, _ := net.Interfaces()
 	for _, i := range ifaces {
+		allow := allowList.AllowName(i.Name)
+		l.WithField("interfaceName", i.Name).WithField("allow", allow).Debug("localAllowList.AllowName")
+		if !allow {
+			continue
+		}
 		addrs, _ := i.Addrs()
 		for _, addr := range addrs {
 			var ip net.IP
@@ -771,6 +776,12 @@ func localIps() *[]net.IP {
 				ip = v.IP
 			}
 			if ip.To4() != nil && ip.IsLoopback() == false {
+				allow := allowList.Allow(ip2int(ip))
+				l.WithField("localIp", ip).WithField("allow", allow).Debug("localAllowList.Allow")
+				if !allow {
+					continue
+				}
+
 				ips = append(ips, ip)
 			}
 		}

@@ -19,6 +19,16 @@ type LightHouse struct {
 	// Local cache of answers from light houses
 	addrMap map[uint32][]udpAddr
 
+	// filters remote addresses allowed for each host
+	// - When we are a lighthouse, this filters what addresses we store and
+	// respond with.
+	// - When we are not a lighthouse, this filters which addresses we accept
+	// from lighthouses.
+	remoteAllowList *AllowList
+
+	// filters local addresses that we advertise to lighthouses
+	localAllowList *AllowList
+
 	// staticList exists to avoid having a bool in each addrMap entry
 	// since static should be rare
 	staticList  map[uint32]struct{}
@@ -53,6 +63,20 @@ func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, n
 	}
 
 	return &h
+}
+
+func (lh *LightHouse) SetRemoteAllowList(allowList *AllowList) {
+	lh.Lock()
+	defer lh.Unlock()
+
+	lh.remoteAllowList = allowList
+}
+
+func (lh *LightHouse) SetLocalAllowList(allowList *AllowList) {
+	lh.Lock()
+	defer lh.Unlock()
+
+	lh.localAllowList = allowList
 }
 
 func (lh *LightHouse) ValidateLHStaticEntries() error {
@@ -135,6 +159,13 @@ func (lh *LightHouse) AddRemote(vpnIP uint32, toIp *udpAddr, static bool) {
 			return
 		}
 	}
+
+	allow := lh.remoteAllowList.Allow(udp2ipInt(toIp))
+	l.WithField("remoteIp", toIp).WithField("allow", allow).Debug("remoteAllowList.Allow")
+	if !allow {
+		return
+	}
+
 	//l.Debugf("Adding reply of %s as %s\n", IntIp(vpnIP), toIp)
 	if static {
 		lh.staticList[vpnIP] = struct{}{}
@@ -203,7 +234,7 @@ func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
 	for {
 		ipp := []*IpAndPort{}
 
-		for _, e := range *localIps() {
+		for _, e := range *localIps(lh.localAllowList) {
 			// Only add IPs that aren't my VPN/tun IP
 			if ip2int(e) != lh.myIp {
 				ipp = append(ipp, &IpAndPort{Ip: ip2int(e), Port: uint32(lh.nebulaPort)})
