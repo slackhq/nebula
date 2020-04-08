@@ -4,10 +4,14 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/yggdrasil-network/water"
 )
+
+var deviceNameRE = regexp.MustCompile(`^/dev/tun[0-9]+$`)
 
 type Tun struct {
 	Device string
@@ -24,10 +28,16 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 	if len(unsafeRoutes) > 0 {
 		return nil, fmt.Errorf("unsafeRoutes not supported in FreeBSD")
 	}
-	// NOTE: You cannot set the deviceName under FreeBSD, so you must check tun.Device after calling .Activate()
+	if !strings.HasPrefix(deviceName, "/dev/") {
+		deviceName = "/dev/" + deviceName
+	}
+	if !deviceNameRE.MatchString(deviceName) {
+		return nil, fmt.Errorf("tun.dev must match `tun[0-9]+`")
+	}
 	return &Tun{
-		Cidr: cidr,
-		MTU:  defaultMTU,
+		Device: deviceName,
+		Cidr:   cidr,
+		MTU:    defaultMTU,
 	}, nil
 }
 
@@ -35,6 +45,9 @@ func (c *Tun) Activate() error {
 	var err error
 	c.Interface, err = water.New(water.Config{
 		DeviceType: water.TUN,
+		PlatformSpecificParams: water.PlatformSpecificParams{
+			Name: c.Device,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("Activate failed: %v", err)
@@ -47,12 +60,10 @@ func (c *Tun) Activate() error {
 	if err = exec.Command("ifconfig", c.Device, c.Cidr.String(), c.Cidr.IP.String()).Run(); err != nil {
 		return fmt.Errorf("failed to run 'ifconfig': %s", err)
 	}
-	/* This is not needed on FreeBSD
 	fmt.Println("command: route", "-n", "add", "-net", c.Cidr.String(), "-interface", c.Device)
 	if err = exec.Command("route", "-n", "add", "-net", c.Cidr.String(), "-interface", c.Device).Run(); err != nil {
 		return fmt.Errorf("failed to run 'route add': %s", err)
 	}
-	*/
 	fmt.Println("command: ifconfig", c.Device, "mtu", strconv.Itoa(c.MTU))
 	if err = exec.Command("ifconfig", c.Device, "mtu", strconv.Itoa(c.MTU)).Run(); err != nil {
 		return fmt.Errorf("failed to run 'ifconfig': %s", err)
