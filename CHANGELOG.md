@@ -14,8 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Support `unsafe_routes` on Windows. (#184)
 
+- Add `lighthouse.remoteAllowList` to filter which subnets we will use to
+  handshake with other hosts. See the example config for more details. (#217)
+
+- Add `lighthouse.localAllowList` to filter which local IP addresses and/or
+  interfaces we advertise to the lighthouses. See the example config for more
+  details. (#217)
+
 - Wireshark dissector plugin. Add this file in `dist/wireshark` to your
   Wireshark plugins folder to see Nebula packet headers decoded. (#216)
+
+- systemd unit for Arch, so it can be built entirely from this repo. (#216)
 
 ### Changed
 
