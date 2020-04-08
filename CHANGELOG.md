@@ -14,10 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Support `unsafe_routes` on Windows. (#184)
 
-- Add `lighthouse.remoteAllowList` to filter which subnets we will use to
+- Add `lighthouse.remote_allow_list` to filter which subnets we will use to
   handshake with other hosts. See the example config for more details. (#217)
 
-- Add `lighthouse.localAllowList` to filter which local IP addresses and/or
+- Add `lighthouse.local_allow_list` to filter which local IP addresses and/or
   interfaces we advertise to the lighthouses. See the example config for more
   details. (#217)
 
