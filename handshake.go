@@ -14,7 +14,7 @@ func HandleIncomingHandshake(f *Interface, addr *udpAddr, packet []byte, h *Head
 	//}
 
 	if !f.lightHouse.remoteAllowList.Allow(udp2ipInt(addr)) {
-		l.WithField("udpAddr", addr).Debug("lighthouse.remoteAllowList denied incoming handshake")
+		l.WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
 		return
 	}
 

@@ -228,15 +228,15 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		punchy.Delay,
 	)
 
-	remoteAllowList, err := config.GetAllowList("lighthouse.remoteAllowList", false)
+	remoteAllowList, err := config.GetAllowList("lighthouse.remote_allow_list", false)
 	if err != nil {
-		l.WithError(err).Fatal("Invalid lighthouse.remoteAllowList")
+		l.WithError(err).Fatal("Invalid lighthouse.remote_allow_list")
 	}
 	lightHouse.SetRemoteAllowList(remoteAllowList)
 
-	localAllowList, err := config.GetAllowList("lighthouse.localAllowList", true)
+	localAllowList, err := config.GetAllowList("lighthouse.local_allow_list", true)
 	if err != nil {
-		l.WithError(err).Fatal("Invalid lighthouse.localAllowList")
+		l.WithError(err).Fatal("Invalid lighthouse.local_allow_list")
 	}
 	lightHouse.SetLocalAllowList(localAllowList)
 

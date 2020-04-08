@@ -40,14 +40,14 @@ lighthouse:
   hosts:
     - "192.168.100.1"
 
-  # remoteAllowList allows you to control ip ranges that this node will
+  # remote_allow_list allows you to control ip ranges that this node will
   # consider when handshaking to another node. By default, any remote IPs are
   # allowed. You can provide CIDRs here with `true` to allow and `false` to
   # deny. The most specific CIDR rule applies to each remote. If all rules are
   # "allow", the default will be "deny", and vice-versa. If both "allow" and
   # "deny" rules are present, then you MUST set a rule for "0.0.0.0/0" as the
   # default.
-  #remoteAllowList:
+  #remote_allow_list:
     # Example to block IPs from this subnet from being used for remote IPs.
     #"172.16.0.0/12": false
 
@@ -56,14 +56,14 @@ lighthouse:
     #"10.0.0.0/8": false
     #"10.42.42.0/24": true
 
-  # localAllowList allows you to filter which local IP addresses we advertise
-  # to the lighthouses. This uses the same logic as `remoteAllowList`, but
+  # local_allow_list allows you to filter which local IP addresses we advertise
+  # to the lighthouses. This uses the same logic as `remote_allow_list`, but
   # additionally, you can specify an `interfaces` map of regular expressions
   # to match against interface names. The regexp must match the entire name.
   # All interface rules must be either true or false (and the default will be
   # the inverse). CIDR rules are matched after interface name rules.
   # Default is all local IP addresses.
-  #localAllowList:
+  #local_allow_list:
     # Example to blacklist tun0 and all docker interfaces.
     #interfaces:
       #tun0: false
