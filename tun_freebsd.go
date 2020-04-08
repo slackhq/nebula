@@ -56,15 +56,15 @@ func (c *Tun) Activate() error {
 	c.Device = c.Interface.Name()
 
 	// TODO use syscalls instead of exec.Command
-	fmt.Println("command: ifconfig", c.Device, c.Cidr.String(), c.Cidr.IP.String())
+	l.Debug("command: ifconfig", c.Device, c.Cidr.String(), c.Cidr.IP.String())
 	if err = exec.Command("ifconfig", c.Device, c.Cidr.String(), c.Cidr.IP.String()).Run(); err != nil {
 		return fmt.Errorf("failed to run 'ifconfig': %s", err)
 	}
-	fmt.Println("command: route", "-n", "add", "-net", c.Cidr.String(), "-interface", c.Device)
+	l.Debug("command: route", "-n", "add", "-net", c.Cidr.String(), "-interface", c.Device)
 	if err = exec.Command("route", "-n", "add", "-net", c.Cidr.String(), "-interface", c.Device).Run(); err != nil {
 		return fmt.Errorf("failed to run 'route add': %s", err)
 	}
-	fmt.Println("command: ifconfig", c.Device, "mtu", strconv.Itoa(c.MTU))
+	l.Debug("command: ifconfig", c.Device, "mtu", strconv.Itoa(c.MTU))
 	if err = exec.Command("ifconfig", c.Device, "mtu", strconv.Itoa(c.MTU)).Run(); err != nil {
 		return fmt.Errorf("failed to run 'ifconfig': %s", err)
 	}
