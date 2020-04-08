@@ -65,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `punchy.punch` - This is the old `punchy` option. Should we perform NAT hole
   punching (default false)?
 
-  `punchy.respond` - This is the old `punch_back` option, Should we respond to
+  `punchy.respond` - This is the old `punch_back` option. Should we respond to
   hole punching by hole punching back (default false)?
 
 ### Fixed
