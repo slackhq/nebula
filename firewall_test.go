@@ -180,44 +180,44 @@ func TestFirewall_Drop(t *testing.T) {
 	cp := cert.NewCAPool()
 
 	// Drop outbound
-	assert.True(t, fw.Drop([]byte{}, p, false, &h, cp))
+	assert.Equal(t, fw.Drop([]byte{}, p, false, &h, cp), ErrNoMatchingRule)
 	// Allow inbound
 	resetConntrack(fw)
-	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
+	assert.NoError(t, fw.Drop([]byte{}, p, true, &h, cp))
 	// Allow outbound because conntrack
-	assert.False(t, fw.Drop([]byte{}, p, false, &h, cp))
+	assert.NoError(t, fw.Drop([]byte{}, p, false, &h, cp))
 
 	// test remote mismatch
 	oldRemote := p.RemoteIP
 	p.RemoteIP = ip2int(net.IPv4(1, 2, 3, 10))
-	assert.True(t, fw.Drop([]byte{}, p, false, &h, cp))
+	assert.Equal(t, fw.Drop([]byte{}, p, false, &h, cp), ErrInvalidRemoteIP)
 	p.RemoteIP = oldRemote
 
 	// ensure signer doesn't get in the way of group checks
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "", "signer-shasum"))
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "", "signer-shasum-bad"))
-	assert.True(t, fw.Drop([]byte{}, p, true, &h, cp))
+	assert.Equal(t, fw.Drop([]byte{}, p, true, &h, cp), ErrNoMatchingRule)
 
 	// test caSha doesn't drop on match
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "", "signer-shasum-bad"))
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "", "signer-shasum"))
-	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
+	assert.NoError(t, fw.Drop([]byte{}, p, true, &h, cp))
 
 	// ensure ca name doesn't get in the way of group checks
 	cp.CAs["signer-shasum"] = &cert.NebulaCertificate{Details: cert.NebulaCertificateDetails{Name: "ca-good"}}
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "ca-good", ""))
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "ca-good-bad", ""))
-	assert.True(t, fw.Drop([]byte{}, p, true, &h, cp))
+	assert.Equal(t, fw.Drop([]byte{}, p, true, &h, cp), ErrNoMatchingRule)
 
 	// test caName doesn't drop on match
 	cp.CAs["signer-shasum"] = &cert.NebulaCertificate{Details: cert.NebulaCertificateDetails{Name: "ca-good"}}
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"nope"}, "", nil, "ca-good-bad", ""))
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"default-group"}, "", nil, "ca-good", ""))
-	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
+	assert.NoError(t, fw.Drop([]byte{}, p, true, &h, cp))
 }
 
 func BenchmarkFirewallTable_match(b *testing.B) {
@@ -368,10 +368,10 @@ func TestFirewall_Drop2(t *testing.T) {
 	cp := cert.NewCAPool()
 
 	// h1/c1 lacks the proper groups
-	assert.True(t, fw.Drop([]byte{}, p, true, &h1, cp))
+	assert.Error(t, fw.Drop([]byte{}, p, true, &h1, cp), ErrNoMatchingRule)
 	// c has the proper groups
 	resetConntrack(fw)
-	assert.False(t, fw.Drop([]byte{}, p, true, &h, cp))
+	assert.NoError(t, fw.Drop([]byte{}, p, true, &h, cp))
 }
 
 func TestFirewall_Drop3(t *testing.T) {
@@ -452,13 +452,13 @@ func TestFirewall_Drop3(t *testing.T) {
 	cp := cert.NewCAPool()
 
 	// c1 should pass because host match
-	assert.False(t, fw.Drop([]byte{}, p, true, &h1, cp))
+	assert.NoError(t, fw.Drop([]byte{}, p, true, &h1, cp))
 	// c2 should pass because ca sha match
 	resetConntrack(fw)
-	assert.False(t, fw.Drop([]byte{}, p, true, &h2, cp))
+	assert.NoError(t, fw.Drop([]byte{}, p, true, &h2, cp))
 	// c3 should fail because no match
 	resetConntrack(fw)
-	assert.True(t, fw.Drop([]byte{}, p, true, &h3, cp))
+	assert.Equal(t, fw.Drop([]byte{}, p, true, &h3, cp), ErrNoMatchingRule)
 }
 
 func BenchmarkLookup(b *testing.B) {

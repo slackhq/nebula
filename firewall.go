@@ -347,27 +347,33 @@ func AddFirewallRulesFromConfig(inbound bool, config *Config, fw FirewallInterfa
 	return nil
 }
 
-func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool) bool {
+var ErrInvalidRemoteIP = errors.New("remote IP is not in remote certificate subnets")
+var ErrInvalidLocalIP = errors.New("local IP is not in list of handled local IPs")
+var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
+
+// Drop returns an error if the packet should be dropped, explaining why. It
+// returns nil if the packet should not be dropped.
+func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool) error {
 	// Check if we spoke to this tuple, if we did then allow this packet
 	if f.inConns(packet, fp, incoming) {
-		return false
+		return nil
 	}
 
 	// Make sure remote address matches nebula certificate
 	if remoteCidr := h.remoteCidr; remoteCidr != nil {
 		if remoteCidr.Contains(fp.RemoteIP) == nil {
-			return true
+			return ErrInvalidRemoteIP
 		}
 	} else {
 		// Simple case: Certificate has one IP and no subnets
 		if fp.RemoteIP != h.hostId {
-			return true
+			return ErrInvalidRemoteIP
 		}
 	}
 
 	// Make sure we are supposed to be handling this local ip address
 	if f.localIps.Contains(fp.LocalIP) == nil {
-		return true
+		return ErrInvalidLocalIP
 	}
 
 	table := f.OutRules
@@ -377,13 +383,13 @@ func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *Host
 
 	// We now know which firewall table to check against
 	if !table.match(fp, incoming, h.ConnectionState.peerCert, caPool) {
-		return true
+		return ErrNoMatchingRule
 	}
 
 	// We always want to conntrack since it is a faster operation
 	f.addConn(packet, fp, incoming)
 
-	return false
+	return nil
 }
 
 // Destroy cleans up any known cyclical references so the object can be free'd my GC. This should be called if a new
