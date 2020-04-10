@@ -280,8 +280,10 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return
 	}
 
-	if f.firewall.Drop(out, *fwPacket, true, hostinfo, trustedCAs) {
+	dropReason := f.firewall.Drop(out, *fwPacket, true, hostinfo, trustedCAs)
+	if dropReason != nil && l.Level >= logrus.DebugLevel {
 		hostinfo.logger().WithField("fwPacket", fwPacket).
+			WithField("reason", dropReason).
 			Debugln("dropping inbound packet")
 		return
 	}
