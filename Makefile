@@ -69,6 +69,8 @@ e2evvvv: e2ev
 e2e-bench: TEST_FLAGS = -bench=. -benchmem -run=^$
 e2e-bench: e2e
 
+DOCKER_BIN = build/linux-amd64/nebula build/linux-amd64/nebula-cert
+
 all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
 
 release: $(ALL:%=build/nebula-%.tar.gz)
@@ -178,6 +180,10 @@ smoke-relay-docker: bin-docker
 smoke-docker-race: BUILD_ARGS = -race
 smoke-docker-race: smoke-docker
 
+smoke-vagrant/%: bin-docker build/%/nebula
+	cd .github/workflows/smoke/ && ./build.sh $*
+	cd .github/workflows/smoke/ && ./smoke-vagrant.sh $*
+
 .FORCE:
-.PHONY: e2e e2ev e2evv e2evvv e2evvvv test test-cov-html bench bench-cpu bench-cpu-long bin proto release service smoke-docker smoke-docker-race
+.PHONY: e2e e2ev e2evv e2evvv e2evvvv test test-cov-html bench bench-cpu bench-cpu-long bin proto release service smoke-docker smoke-docker-race smoke-vagrant/%
 .DEFAULT_GOAL := bin

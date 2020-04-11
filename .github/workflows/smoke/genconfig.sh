@@ -47,7 +47,7 @@ listen:
   port: ${LISTEN_PORT:-4242}
 
 tun:
-  dev: ${TUN_DEV:-nebula1}
+  dev: ${TUN_DEV:-tun0}
 
 firewall:
   outbound: ${OUTBOUND:-$FIREWALL_ALL}

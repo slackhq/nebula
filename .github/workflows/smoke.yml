@@ -35,7 +35,7 @@ jobs:
           ${{ runner.os }}-go1.19-
 
     - name: build
-      run: make bin-docker
+      run: make build/linux-amd64/nebula build/linux-amd64/nebula-cert
 
     - name: setup docker image
       working-directory: ./.github/workflows/smoke
