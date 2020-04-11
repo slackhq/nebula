@@ -2,23 +2,23 @@ package nebula
 
 import (
 	"fmt"
+	"io"
 	"net"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
-
-	"github.com/yggdrasil-network/water"
 )
 
-var deviceNameRE = regexp.MustCompile(`^/dev/tun[0-9]+$`)
+var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
 
 type Tun struct {
 	Device string
 	Cidr   *net.IPNet
 	MTU    int
 
-	*water.Interface
+	io.ReadWriteCloser
 }
 
 func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
@@ -28,8 +28,8 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 	if len(unsafeRoutes) > 0 {
 		return nil, fmt.Errorf("unsafeRoutes not supported in FreeBSD")
 	}
-	if !strings.HasPrefix(deviceName, "/dev/") {
-		deviceName = "/dev/" + deviceName
+	if strings.HasPrefix(deviceName, "/dev/") {
+		deviceName = strings.TrimPrefix(deviceName, "/dev/")
 	}
 	if !deviceNameRE.MatchString(deviceName) {
 		return nil, fmt.Errorf("tun.dev must match `tun[0-9]+`")
@@ -43,17 +43,10 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 
 func (c *Tun) Activate() error {
 	var err error
-	c.Interface, err = water.New(water.Config{
-		DeviceType: water.TUN,
-		PlatformSpecificParams: water.PlatformSpecificParams{
-			Name: c.Device,
-		},
-	})
+	c.ReadWriteCloser, err = os.OpenFile("/dev/"+c.Device, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("Activate failed: %v", err)
 	}
-
-	c.Device = c.Interface.Name()
 
 	// TODO use syscalls instead of exec.Command
 	l.Debug("command: ifconfig", c.Device, c.Cidr.String(), c.Cidr.IP.String())
