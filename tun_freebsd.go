@@ -14,9 +14,10 @@ import (
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
 
 type Tun struct {
-	Device string
-	Cidr   *net.IPNet
-	MTU    int
+	Device       string
+	Cidr         *net.IPNet
+	MTU          int
+	UnsafeRoutes []route
 
 	io.ReadWriteCloser
 }
@@ -25,9 +26,6 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("Route MTU not supported in FreeBSD")
 	}
-	if len(unsafeRoutes) > 0 {
-		return nil, fmt.Errorf("unsafeRoutes not supported in FreeBSD")
-	}
 	if strings.HasPrefix(deviceName, "/dev/") {
 		deviceName = strings.TrimPrefix(deviceName, "/dev/")
 	}
@@ -35,9 +33,10 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 		return nil, fmt.Errorf("tun.dev must match `tun[0-9]+`")
 	}
 	return &Tun{
-		Device: deviceName,
-		Cidr:   cidr,
-		MTU:    defaultMTU,
+		Device:       deviceName,
+		Cidr:         cidr,
+		MTU:          defaultMTU,
+		UnsafeRoutes: unsafeRoutes,
 	}, nil
 }
 
@@ -60,6 +59,13 @@ func (c *Tun) Activate() error {
 	l.Debug("command: ifconfig", c.Device, "mtu", strconv.Itoa(c.MTU))
 	if err = exec.Command("/sbin/ifconfig", c.Device, "mtu", strconv.Itoa(c.MTU)).Run(); err != nil {
 		return fmt.Errorf("failed to run 'ifconfig': %s", err)
+	}
+	// Unsafe path routes
+	for _, r := range c.UnsafeRoutes {
+		l.Debug("command: route", "-n", "add", "-net", r.route.String(), "-interface", c.Device)
+		if err = exec.Command("/sbin/route", "-n", "add", "-net", r.route.String(), "-interface", c.Device).Run(); err != nil {
+			return fmt.Errorf("failed to run 'route add' for unsafe_route %s: %s", r.route.String(), err)
+		}
 	}
 
 	return nil
