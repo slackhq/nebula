@@ -88,7 +88,7 @@ proto: nebula.pb.go cert/cert.pb.go
 
 nebula.pb.go: nebula.proto .FORCE
 	go build google.golang.org/protobuf/cmd/protoc-gen-go
-	PATH="$(PWD):$(PATH)" protoc --go_out=. $<
+	PATH="$(CURDIR):$(PATH)" protoc --go_out=. $<
 	rm protoc-gen-go
 
 cert/cert.pb.go: cert/cert.proto .FORCE
