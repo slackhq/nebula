@@ -41,25 +41,23 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, c
 		err = config.Load(configPath)
 	}
 	if err != nil {
-		l.WithError(err).Error("Failed to load config")
-		//time.Sleep(time.Minute * 1)
-		return err
+		return fmt.Errorf("failed to load config: %s", err)
 	}
 
 	// Print the config if in test, the exit comes later
 	if configTest {
 		b, err := yaml.Marshal(config.Settings)
 		if err != nil {
-			l.Println(err)
 			return err
 		}
+
+		// Print the final config
 		l.Println(string(b))
 	}
 
 	err = configLogger(config)
 	if err != nil {
-		l.WithError(err).Error("Failed to configure the logger")
-		return err
+		return fmt.Errorf("failed to configure the logger: %s", err)
 	}
 
 	config.RegisterReloadCallback(func(c *Config) {
@@ -73,23 +71,20 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, c
 	trustedCAs, err = loadCAFromConfig(config)
 	if err != nil {
 		//The errors coming out of loadCA are already nicely formatted
-		l.WithError(err).Error("Failed to load ca from config")
-		return err
+		return fmt.Errorf("failed to load ca from config: %s", err)
 	}
 	l.WithField("fingerprints", trustedCAs.GetFingerprints()).Debug("Trusted CA fingerprints")
 
 	cs, err := NewCertStateFromConfig(config)
 	if err != nil {
 		//The errors coming out of NewCertStateFromConfig are already nicely formatted
-		l.WithError(err).Error("Failed to load certificate from config")
-		return err
+		return fmt.Errorf("failed to load certificate from config: %s", err)
 	}
 	l.WithField("cert", cs.certificate).Debug("Client nebula certificate")
 
 	fw, err := NewFirewallFromConfig(cs.certificate, config)
 	if err != nil {
-		l.WithError(err).Error("Error while loading firewall rules")
-		return err
+		return fmt.Errorf("error while loading firewall rules: %s", err)
 	}
 	l.WithField("firewallHash", fw.GetRuleHash()).Info("Firewall started")
 
@@ -97,13 +92,11 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, c
 	tunCidr := cs.certificate.Details.Ips[0]
 	routes, err := parseRoutes(config, tunCidr)
 	if err != nil {
-		l.WithError(err).Error("Could not parse tun.routes")
-		return err
+		return fmt.Errorf("could not parse tun.routes: %s", err)
 	}
 	unsafeRoutes, err := parseUnsafeRoutes(config, tunCidr)
 	if err != nil {
-		l.WithError(err).Error("Could not parse tun.unsafe_routes")
-		return err
+		return fmt.Errorf("could not parse tun.unsafe_routes: %s", err)
 	}
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
@@ -111,8 +104,7 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, c
 	if config.GetBool("sshd.enabled", false) {
 		err = configSSH(ssh, config)
 		if err != nil {
-			l.WithError(err).Error("Error while configuring the sshd")
-			return err
+			return fmt.Errorf("error while configuring the sshd: %s", err)
 		}
 	}
 
@@ -141,9 +133,10 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, c
 				unsafeRoutes,
 				config.GetInt("tun.tx_queue", 500),
 			)
-			if err != nil {
-				l.WithError(err).Fatal("Failed to get a tun/tap device")
-			}
+		}
+
+		if err != nil {
+			return fmt.Errorf("failed to get a tun/tap device: %s", err)
 		}
 	}
 
@@ -154,8 +147,7 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, c
 	if !configTest {
 		udpServer, err = NewListener(config.GetString("listen.host", "0.0.0.0"), config.GetInt("listen.port", 0), udpQueues > 1)
 		if err != nil {
-			l.WithError(err).Error("Failed to open udp listener")
-			return err
+			return fmt.Errorf("failed to open udp listener: %s", err)
 		}
 		udpServer.reloadConfig(config)
 	}
@@ -185,8 +177,7 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, c
 		for _, rawPreferredRange := range rawPreferredRanges {
 			_, preferredRange, err := net.ParseCIDR(rawPreferredRange)
 			if err != nil {
-				l.WithError(err).Error("Failed to parse preferred ranges")
-				return err
+				return fmt.Errorf("failed to parse preferred_ranges: %s", err)
 			}
 			preferredRanges = append(preferredRanges, preferredRange)
 		}
@@ -199,8 +190,7 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, c
 	if rawLocalRange != "" {
 		_, localRange, err := net.ParseCIDR(rawLocalRange)
 		if err != nil {
-			l.WithError(err).Error("Failed to parse local range")
-			return err
+			return fmt.Errorf("failed to parse local_range: %s", err)
 		}
 
 		// Check if the entry for local_range was already specified in
@@ -240,8 +230,7 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, c
 	if port == 0 && !configTest {
 		uPort, err := udpServer.LocalAddr()
 		if err != nil {
-			l.WithError(err).Error("Failed to get listening port")
-			return err
+			return fmt.Errorf("failed to get listening port: %s", err)
 		}
 		port = int(uPort.Port)
 	}
@@ -381,13 +370,12 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, c
 	default:
 		l.Errorf("Unknown cipher: %v", ifConfig.Cipher)
 	}
-	
+
 	var ifce *Interface
 	if !configTest {
 		ifce, err = NewInterface(ifConfig)
 		if err != nil {
-			l.WithError(err).Error("Failed to initialize interface")
-			return err
+			return fmt.Errorf("failed to initialize interface: %s", err)
 		}
 
 		ifce.RegisterConfigChangeCallbacks(config)

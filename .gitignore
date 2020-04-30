@@ -10,5 +10,3 @@
 /cpu.pprof
 /build
 /*.tar.gz
-lib/mobile/mobileNebula.aar
-lib/mobile/MobileNebula.Framework
