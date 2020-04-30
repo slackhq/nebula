@@ -3,6 +3,9 @@ package nebula
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/sshd"
+	"gopkg.in/yaml.v2"
 	"log"
 	"net"
 	"os"
@@ -13,10 +16,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/sshd"
-	"gopkg.in/yaml.v2"
 )
 
 var l = logrus.New()
@@ -43,7 +42,7 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, c
 	}
 	if err != nil {
 		l.WithError(err).Error("Failed to load config")
-		time.Sleep(time.Minute * 1)
+		//time.Sleep(time.Minute * 1)
 		return err
 	}
 
