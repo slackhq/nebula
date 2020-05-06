@@ -128,7 +128,12 @@ collection of certificates we MUST NOT talk to - typically compromised or lost
 machines. Those machines must not be able to talk to the network, and so should
 be added as a list of "fingerprints" to ignore.
 
-<!-- TODO: Document how to get the fingerprints -->
+To find the fingerprint to blacklist, run this command:
+
+`./nebula-cert print -path /path/to/the/cert.crt | grep Fingerprint | awk {'print $2'}`
+
+This probably means that you'd need to keep all your issued certs, or prepare
+a list of fingerprints in-advance.
 
 [For extra credit, have a look at how to store multiple CA files or 
 certificates inline or in their own single 
