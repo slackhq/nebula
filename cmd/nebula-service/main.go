@@ -45,5 +45,5 @@ func main() {
 		os.Exit(1)
 	}
 
-	nebula.Main(*configPath, *configTest, Build, nil, nil)
+	nebula.Main(*configPath, *configTest, Build, "", nil, nil)
 }

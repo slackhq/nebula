@@ -22,9 +22,20 @@ var l = logrus.New()
 
 type m map[string]interface{}
 
-func Main(configPath string, configTest bool, buildVersion string, tunFd *int, commandChan <-chan string) error {
+func Main(configPath string, configTest bool, buildVersion string, logFile string, tunFd *int, commandChan <-chan string) error {
 
-	l.Out = os.Stdout
+	if logFile == "" {
+		l.Out = os.Stdout
+	} else {
+		f, err := os.OpenFile(logFile, os.O_WRONLY | os.O_CREATE, 0644)
+		if err != nil {
+			return err
+		}
+
+		log.Printf("SET OUTPUT TO %s", logFile)
+		l.SetOutput(f)
+	}
+
 	l.Formatter = &logrus.TextFormatter{
 		FullTimestamp: true,
 	}
@@ -34,8 +45,6 @@ func Main(configPath string, configTest bool, buildVersion string, tunFd *int, c
 	if runtime.GOOS == "android" || (runtime.GOOS == "darwin" && (runtime.GOARCH == "arm" || runtime.GOARCH == "arm64")) {
 		// GC more often, largely for iOS due to extension 15mb limit
 		debug.SetGCPercent(20)
-		// Log writing is a mess with gomobile, so just use this writer hack.
-		l.Out = log.Writer()
 		err = config.LoadString(configPath)
 	} else {
 		err = config.Load(configPath)

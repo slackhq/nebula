@@ -27,7 +27,7 @@ func (p *program) Start(s service.Service) error {
 }
 
 func (p *program) run() error {
-	nebula.Main(*p.configPath, *p.configTest, Build, nil, nil)
+	nebula.Main(*p.configPath, *p.configTest, Build, "",nil, nil)
 	return nil
 }
 
