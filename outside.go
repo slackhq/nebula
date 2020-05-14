@@ -54,6 +54,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		// Fallthrough to the bottom to record incoming traffic
 
 	case lightHouse:
+		f.metricMessageRx[lightHouse].Inc(1)
 		if !f.handleEncrypted(ci, addr, header) {
 			return
 		}
@@ -74,6 +75,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		// Fallthrough to the bottom to record incoming traffic
 
 	case test:
+		f.metricMessageRx[test].Inc(1)
 		if !f.handleEncrypted(ci, addr, header) {
 			return
 		}
@@ -102,15 +104,18 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		// are unauthenticated
 
 	case handshake:
+		f.metricMessageRx[handshake].Inc(1)
 		HandleIncomingHandshake(f, addr, packet, header, hostinfo)
 		return
 
 	case recvError:
+		f.metricMessageRx[recvError].Inc(1)
 		// TODO: Remove this with recv_error deprecation
 		f.handleRecvError(addr, header)
 		return
 
 	case closeTunnel:
+		f.metricMessageRx[closeTunnel].Inc(1)
 		if !f.handleEncrypted(ci, addr, header) {
 			return
 		}
@@ -296,7 +301,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 }
 
 func (f *Interface) sendRecvError(endpoint *udpAddr, index uint32) {
-	f.metricTxRecvError.Inc(1)
+	f.metricMessageTx[recvError].Inc(1)
 
 	//TODO: this should be a signed message so we can trust that we should drop the index
 	b := HeaderEncode(make([]byte, HeaderLen), Version, uint8(recvError), 0, index, 0)
@@ -309,8 +314,6 @@ func (f *Interface) sendRecvError(endpoint *udpAddr, index uint32) {
 }
 
 func (f *Interface) handleRecvError(addr *udpAddr, h *Header) {
-	f.metricRxRecvError.Inc(1)
-
 	// This flag is to stop caring about recv_error from old versions
 	// This should go away when the old version is gone from prod
 	if l.Level >= logrus.DebugLevel {

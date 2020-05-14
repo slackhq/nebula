@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 )
 
@@ -37,6 +38,9 @@ type LightHouse struct {
 	nebulaPort  int
 	punchBack   bool
 	punchDelay  time.Duration
+
+	metricLighthouseRx [10]metrics.Counter
+	metricLighthouseTx [10]metrics.Counter
 }
 
 type EncWriter interface {
@@ -56,6 +60,11 @@ func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, n
 		punchConn:    pc,
 		punchBack:    punchBack,
 		punchDelay:   punchDelay,
+	}
+
+	for i, name := range NebulaMeta_MessageType_name {
+		h.metricLighthouseRx[i] = metrics.GetOrRegisterCounter(fmt.Sprintf("messages.rx.lighthouse.%s", name), nil)
+		h.metricLighthouseTx[i] = metrics.GetOrRegisterCounter(fmt.Sprintf("messages.tx.lighthouse.%s", name), nil)
 	}
 
 	for _, ip := range ips {
@@ -111,6 +120,7 @@ func (lh *LightHouse) QueryServer(ip uint32, f EncWriter) {
 			return
 		}
 
+		lh.metricLighthouseTx[NebulaMeta_HostQuery].Inc(int64(len(lh.lighthouses)))
 		nb := make([]byte, 12, 12)
 		out := make([]byte, mtu)
 		for n := range lh.lighthouses {
@@ -249,6 +259,7 @@ func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
 			},
 		}
 
+		lh.metricLighthouseTx[NebulaMeta_HostUpdateNotification].Inc(int64(len(lh.lighthouses)))
 		nb := make([]byte, 12, 12)
 		out := make([]byte, mtu)
 		for vpnIp := range lh.lighthouses {
@@ -281,6 +292,8 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 		return
 	}
 
+	lh.metricLighthouseRx[n.Type].Inc(1)
+
 	switch n.Type {
 	case NebulaMeta_HostQuery:
 		// Exit if we don't answer queries
@@ -308,6 +321,7 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 				l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).Error("Failed to marshal lighthouse host query reply")
 				return
 			}
+			lh.metricLighthouseTx[NebulaMeta_HostQueryReply].Inc(1)
 			f.SendMessageToVpnIp(lightHouse, 0, vpnIp, reply, make([]byte, 12, 12), make([]byte, mtu))
 
 			// This signals the other side to punch some zero byte udp packets
@@ -326,6 +340,7 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 					},
 				}
 				reply, _ := proto.Marshal(answer)
+				lh.metricLighthouseTx[NebulaMeta_HostPunchNotification].Inc(1)
 				f.SendMessageToVpnIp(lightHouse, 0, n.Details.VpnIp, reply, make([]byte, 12, 12), make([]byte, mtu))
 			}
 			//fmt.Println(reply, remoteaddr)

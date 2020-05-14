@@ -46,7 +46,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 
 	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, trustedCAs)
 	if dropReason == nil {
-		f.send(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out)
+		f.sendNoMetrics(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out)
 		if f.lightHouse != nil && *ci.messageCounter%5000 == 0 {
 			f.lightHouse.Query(fwPacket.RemoteIP, f)
 		}
@@ -116,7 +116,7 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 		return
 	}
 
-	f.send(message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out)
+	f.sendNoMetrics(message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out)
 	if f.lightHouse != nil && *hostInfo.ConnectionState.messageCounter%5000 == 0 {
 		f.lightHouse.Query(fp.RemoteIP, f)
 	}
@@ -173,6 +173,11 @@ func (f *Interface) sendMessageToAll(t NebulaMessageType, st NebulaMessageSubTyp
 }
 
 func (f *Interface) send(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte) {
+	f.metricMessageTx[t].Inc(1)
+	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out)
+}
+
+func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte) {
 	if ci.eKey == nil {
 		//TODO: log warning
 		return

@@ -45,9 +45,10 @@ type Interface struct {
 	udpBatchSize       int
 	version            string
 
-	metricRxRecvError metrics.Counter
-	metricTxRecvError metrics.Counter
-	metricHandshakes  metrics.Histogram
+	metricHandshakes metrics.Histogram
+
+	metricMessageRx [6]metrics.Counter
+	metricMessageTx [6]metrics.Counter
 }
 
 func NewInterface(c *InterfaceConfig) (*Interface, error) {
@@ -62,6 +63,23 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 	}
 	if c.Firewall == nil {
 		return nil, errors.New("no firewall rules")
+	}
+
+	metricMessageRx := [6]metrics.Counter{
+		metrics.GetOrRegisterCounter("messages.rx.handshake", nil),
+		metrics.NilCounter{},
+		metrics.GetOrRegisterCounter("messages.rx.recv_error", nil),
+		metrics.GetOrRegisterCounter("messages.rx.lighthouse", nil),
+		metrics.GetOrRegisterCounter("messages.rx.test", nil),
+		metrics.GetOrRegisterCounter("messages.rx.close_tunnel", nil),
+	}
+	metricMessageTx := [6]metrics.Counter{
+		metrics.GetOrRegisterCounter("messages.tx.handshake", nil),
+		metrics.NilCounter{},
+		metrics.GetOrRegisterCounter("messages.tx.recv_error", nil),
+		metrics.GetOrRegisterCounter("messages.tx.lighthouse", nil),
+		metrics.GetOrRegisterCounter("messages.tx.test", nil),
+		metrics.GetOrRegisterCounter("messages.tx.close_tunnel", nil),
 	}
 
 	ifce := &Interface{
@@ -80,9 +98,10 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		dropMulticast:      c.DropMulticast,
 		udpBatchSize:       c.UDPBatchSize,
 
-		metricRxRecvError: metrics.GetOrRegisterCounter("messages.rx.recv_error", nil),
-		metricTxRecvError: metrics.GetOrRegisterCounter("messages.tx.recv_error", nil),
-		metricHandshakes:  metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
+		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
+
+		metricMessageRx: metricMessageRx,
+		metricMessageTx: metricMessageTx,
 	}
 
 	ifce.connectionManager = newConnectionManager(ifce, c.checkInterval, c.pendingDeletionInterval)
