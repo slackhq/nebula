@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rcrowley/go-metrics"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -21,7 +22,7 @@ func Test_NewHandshakeManagerIndex(t *testing.T) {
 	preferredRanges := []*net.IPNet{localrange}
 	mainHM := NewHostMap("test", vpncidr, preferredRanges)
 
-	blah := NewHandshakeManager(tuncidr, preferredRanges, mainHM, &LightHouse{}, &udpConn{}, defaultHandshakeConfig)
+	blah := NewHandshakeManager(tuncidr, preferredRanges, mainHM, newTestLighthouse(), &udpConn{}, defaultHandshakeConfig)
 
 	now := time.Now()
 	blah.NextInboundHandshakeTimerTick(now)
@@ -63,7 +64,7 @@ func Test_NewHandshakeManagerVpnIP(t *testing.T) {
 	mw := &mockEncWriter{}
 	mainHM := NewHostMap("test", vpncidr, preferredRanges)
 
-	blah := NewHandshakeManager(tuncidr, preferredRanges, mainHM, &LightHouse{}, &udpConn{}, defaultHandshakeConfig)
+	blah := NewHandshakeManager(tuncidr, preferredRanges, mainHM, newTestLighthouse(), &udpConn{}, defaultHandshakeConfig)
 
 	now := time.Now()
 	blah.NextOutboundHandshakeTimerTick(now, mw)
@@ -112,7 +113,7 @@ func Test_NewHandshakeManagerVpnIPcleanup(t *testing.T) {
 	mw := &mockEncWriter{}
 	mainHM := NewHostMap("test", vpncidr, preferredRanges)
 
-	blah := NewHandshakeManager(tuncidr, preferredRanges, mainHM, &LightHouse{}, &udpConn{}, defaultHandshakeConfig)
+	blah := NewHandshakeManager(tuncidr, preferredRanges, mainHM, newTestLighthouse(), &udpConn{}, defaultHandshakeConfig)
 
 	now := time.Now()
 	blah.NextOutboundHandshakeTimerTick(now, mw)
@@ -161,7 +162,7 @@ func Test_NewHandshakeManagerIndexcleanup(t *testing.T) {
 	preferredRanges := []*net.IPNet{localrange}
 	mainHM := NewHostMap("test", vpncidr, preferredRanges)
 
-	blah := NewHandshakeManager(tuncidr, preferredRanges, mainHM, &LightHouse{}, &udpConn{}, defaultHandshakeConfig)
+	blah := NewHandshakeManager(tuncidr, preferredRanges, mainHM, newTestLighthouse(), &udpConn{}, defaultHandshakeConfig)
 
 	now := time.Now()
 	blah.NextInboundHandshakeTimerTick(now)
@@ -191,4 +192,13 @@ func (mw *mockEncWriter) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessag
 
 func (mw *mockEncWriter) SendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
 	return
+}
+
+func newTestLighthouse() *LightHouse {
+	l := &LightHouse{}
+	for i := range NebulaMeta_MessageType_name {
+		l.metricLighthouseRx[i] = metrics.NilCounter{}
+		l.metricLighthouseTx[i] = metrics.NilCounter{}
+	}
+	return l
 }
