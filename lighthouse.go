@@ -41,6 +41,7 @@ type LightHouse struct {
 
 	metricLighthouseRx [10]metrics.Counter
 	metricLighthouseTx [10]metrics.Counter
+	metricHolepunchTx  metrics.Counter
 }
 
 type EncWriter interface {
@@ -66,6 +67,8 @@ func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, n
 		h.metricLighthouseRx[i] = metrics.GetOrRegisterCounter(fmt.Sprintf("messages.rx.lighthouse.%s", name), nil)
 		h.metricLighthouseTx[i] = metrics.GetOrRegisterCounter(fmt.Sprintf("messages.tx.lighthouse.%s", name), nil)
 	}
+
+	h.metricHolepunchTx = metrics.GetOrRegisterCounter("messages.tx.holepunch", nil)
 
 	for _, ip := range ips {
 		h.lighthouses[ip] = struct{}{}
@@ -377,6 +380,7 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 			vpnPeer := NewUDPAddr(a.Ip, uint16(a.Port))
 			go func() {
 				time.Sleep(lh.punchDelay)
+				lh.metricHolepunchTx.Inc(1)
 				lh.punchConn.WriteTo(empty, vpnPeer)
 
 			}()

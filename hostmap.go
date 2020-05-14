@@ -384,8 +384,10 @@ func (hm *HostMap) PunchList() []*udpAddr {
 }
 
 func (hm *HostMap) Punchy(conn *udpConn) {
+	metricsTxPunchy := metrics.GetOrRegisterCounter("messages.tx.punchy", nil)
 	for {
 		for _, addr := range hm.PunchList() {
+			metricsTxPunchy.Inc(1)
 			conn.WriteTo([]byte{1}, addr)
 		}
 		time.Sleep(time.Second * 30)
