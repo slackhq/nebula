@@ -64,8 +64,8 @@ func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, n
 	}
 
 	for i, name := range NebulaMeta_MessageType_name {
-		h.metricLighthouseRx[i] = metrics.GetOrRegisterCounter(fmt.Sprintf("messages.rx.lighthouse.%s", name), nil)
-		h.metricLighthouseTx[i] = metrics.GetOrRegisterCounter(fmt.Sprintf("messages.tx.lighthouse.%s", name), nil)
+		h.metricLighthouseRx[i] = metrics.GetOrRegisterCounter(fmt.Sprintf("lighthouse.rx.%s", name), nil)
+		h.metricLighthouseTx[i] = metrics.GetOrRegisterCounter(fmt.Sprintf("lighthouse.tx.%s", name), nil)
 	}
 
 	h.metricHolepunchTx = metrics.GetOrRegisterCounter("messages.tx.holepunch", nil)
@@ -123,7 +123,7 @@ func (lh *LightHouse) QueryServer(ip uint32, f EncWriter) {
 			return
 		}
 
-		lh.metricLighthouseTx[NebulaMeta_HostQuery].Inc(int64(len(lh.lighthouses)))
+		lh.metricTx(NebulaMeta_HostQuery, int64(len(lh.lighthouses)))
 		nb := make([]byte, 12, 12)
 		out := make([]byte, mtu)
 		for n := range lh.lighthouses {
@@ -262,7 +262,7 @@ func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
 			},
 		}
 
-		lh.metricLighthouseTx[NebulaMeta_HostUpdateNotification].Inc(int64(len(lh.lighthouses)))
+		lh.metricTx(NebulaMeta_HostUpdateNotification, int64(len(lh.lighthouses)))
 		nb := make([]byte, 12, 12)
 		out := make([]byte, mtu)
 		for vpnIp := range lh.lighthouses {
@@ -295,7 +295,7 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 		return
 	}
 
-	lh.metricLighthouseRx[n.Type].Inc(1)
+	lh.metricRx(n.Type, 1)
 
 	switch n.Type {
 	case NebulaMeta_HostQuery:
@@ -324,7 +324,7 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 				l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).Error("Failed to marshal lighthouse host query reply")
 				return
 			}
-			lh.metricLighthouseTx[NebulaMeta_HostQueryReply].Inc(1)
+			lh.metricTx(NebulaMeta_HostQueryReply, 1)
 			f.SendMessageToVpnIp(lightHouse, 0, vpnIp, reply, make([]byte, 12, 12), make([]byte, mtu))
 
 			// This signals the other side to punch some zero byte udp packets
@@ -343,7 +343,7 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 					},
 				}
 				reply, _ := proto.Marshal(answer)
-				lh.metricLighthouseTx[NebulaMeta_HostPunchNotification].Inc(1)
+				lh.metricTx(NebulaMeta_HostPunchNotification, 1)
 				f.SendMessageToVpnIp(lightHouse, 0, n.Details.VpnIp, reply, make([]byte, 12, 12), make([]byte, mtu))
 			}
 			//fmt.Println(reply, remoteaddr)
@@ -396,6 +396,17 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 				f.SendMessageToVpnIp(test, testRequest, n.Details.VpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 			}()
 		}
+	}
+}
+
+func (lh *LightHouse) metricRx(t NebulaMeta_MessageType, i int64) {
+	if t >= 0 && t < 10 {
+		lh.metricLighthouseRx[t].Inc(i)
+	}
+}
+func (lh *LightHouse) metricTx(t NebulaMeta_MessageType, i int64) {
+	if t >= 0 && t < 10 {
+		lh.metricLighthouseTx[t].Inc(i)
 	}
 }
 

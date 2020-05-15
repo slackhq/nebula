@@ -244,3 +244,14 @@ func (f *Interface) emitStats(i time.Duration) {
 		f.handshakeManager.EmitStats()
 	}
 }
+
+func (f *Interface) metricRx(t NebulaMessageType, i int64) {
+	if t >= 0 && t < 6 {
+		f.metricMessageRx[t].Inc(i)
+	}
+}
+func (f *Interface) metricTx(t NebulaMessageType, i int64) {
+	if t >= 0 && t < 6 {
+		f.metricMessageTx[t].Inc(i)
+	}
+}

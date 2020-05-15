@@ -98,7 +98,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		hostinfo, _ := f.handshakeManager.pendingHostMap.QueryReverseIndex(hs.Details.InitiatorIndex)
 		if hostinfo != nil && bytes.Equal(hostinfo.HandshakePacket[0], packet[HeaderLen:]) {
 			if msg, ok := hostinfo.HandshakePacket[2]; ok {
-				f.metricMessageTx[handshake].Inc(1)
+				f.metricTx(handshake, 1)
 				err := f.outside.WriteTo(msg, addr)
 				if err != nil {
 					l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
@@ -192,7 +192,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			hostinfo.HandshakePacket[2] = make([]byte, len(msg))
 			copy(hostinfo.HandshakePacket[2], msg)
 
-			f.metricMessageTx[handshake].Inc(1)
+			f.metricTx(handshake, 1)
 			err := f.outside.WriteTo(msg, addr)
 			if err != nil {
 				l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
