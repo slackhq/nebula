@@ -17,37 +17,39 @@ import (
 func TestNewFirewall(t *testing.T) {
 	c := &cert.NebulaCertificate{}
 	fw := NewFirewall(time.Second, time.Minute, time.Hour, c)
-	assert.NotNil(t, fw.Conns)
+	conntrack := fw.Conntrack
+	assert.NotNil(t, conntrack)
+	assert.NotNil(t, conntrack.Conns)
+	assert.NotNil(t, conntrack.TimerWheel)
 	assert.NotNil(t, fw.InRules)
 	assert.NotNil(t, fw.OutRules)
-	assert.NotNil(t, fw.TimerWheel)
 	assert.Equal(t, time.Second, fw.TCPTimeout)
 	assert.Equal(t, time.Minute, fw.UDPTimeout)
 	assert.Equal(t, time.Hour, fw.DefaultTimeout)
 
-	assert.Equal(t, time.Hour, fw.TimerWheel.wheelDuration)
-	assert.Equal(t, time.Hour, fw.TimerWheel.wheelDuration)
-	assert.Equal(t, 3601, fw.TimerWheel.wheelLen)
+	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
+	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
+	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
 
 	fw = NewFirewall(time.Second, time.Hour, time.Minute, c)
-	assert.Equal(t, time.Hour, fw.TimerWheel.wheelDuration)
-	assert.Equal(t, 3601, fw.TimerWheel.wheelLen)
+	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
+	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
 
 	fw = NewFirewall(time.Hour, time.Second, time.Minute, c)
-	assert.Equal(t, time.Hour, fw.TimerWheel.wheelDuration)
-	assert.Equal(t, 3601, fw.TimerWheel.wheelLen)
+	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
+	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
 
 	fw = NewFirewall(time.Hour, time.Minute, time.Second, c)
-	assert.Equal(t, time.Hour, fw.TimerWheel.wheelDuration)
-	assert.Equal(t, 3601, fw.TimerWheel.wheelLen)
+	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
+	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
 
 	fw = NewFirewall(time.Minute, time.Hour, time.Second, c)
-	assert.Equal(t, time.Hour, fw.TimerWheel.wheelDuration)
-	assert.Equal(t, 3601, fw.TimerWheel.wheelLen)
+	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
+	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
 
 	fw = NewFirewall(time.Minute, time.Second, time.Hour, c)
-	assert.Equal(t, time.Hour, fw.TimerWheel.wheelDuration)
-	assert.Equal(t, 3601, fw.TimerWheel.wheelLen)
+	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
+	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
 }
 
 func TestFirewall_AddRule(t *testing.T) {
@@ -861,7 +863,7 @@ func (mf *mockFirewall) AddRule(incoming bool, proto uint8, startPort int32, end
 }
 
 func resetConntrack(fw *Firewall) {
-	fw.connMutex.Lock()
-	fw.Conns = map[FirewallPacket]*conn{}
-	fw.connMutex.Unlock()
+	fw.Conntrack.Lock()
+	fw.Conntrack.Conns = map[FirewallPacket]*conn{}
+	fw.Conntrack.Unlock()
 }

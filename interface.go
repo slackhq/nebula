@@ -210,12 +210,11 @@ func (f *Interface) reloadFirewall(c *Config) {
 	}
 
 	oldFw := f.firewall
-	oldFw.connMutex.Lock()
-	defer oldFw.connMutex.Unlock()
+	conntrack := oldFw.Conntrack
+	conntrack.Lock()
+	defer conntrack.Unlock()
 
-	fw.Conns = oldFw.Conns
-	fw.TimerWheel = oldFw.TimerWheel
-	fw.connMutex = oldFw.connMutex
+	fw.Conntrack = conntrack
 
 	f.firewall = fw
 

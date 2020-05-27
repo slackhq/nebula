@@ -50,7 +50,7 @@ type conn struct {
 
 // TODO: need conntrack max tracked connections handling
 type Firewall struct {
-	Conns map[FirewallPacket]*conn
+	Conntrack *FirewallConntrack
 
 	InRules  *FirewallTable
 	OutRules *FirewallTable
@@ -61,17 +61,21 @@ type Firewall struct {
 	UDPTimeout     time.Duration //linux: 180s max
 	DefaultTimeout time.Duration //linux: 600s
 
-	TimerWheel *TimerWheel
-
 	// Used to ensure we don't emit local packets for ips we don't own
 	localIps *CIDRTree
 
-	connMutex *sync.Mutex
 	rules     string
 	rulesHash string
 
 	trackTCPRTT  bool
 	metricTCPRTT metrics.Histogram
+}
+
+type FirewallConntrack struct {
+	sync.Mutex
+
+	Conns      map[FirewallPacket]*conn
+	TimerWheel *TimerWheel
 }
 
 type FirewallTable struct {
@@ -179,11 +183,12 @@ func NewFirewall(tcpTimeout, UDPTimeout, defaultTimeout time.Duration, c *cert.N
 	}
 
 	return &Firewall{
-		Conns:          make(map[FirewallPacket]*conn),
-		connMutex:      &sync.Mutex{},
+		Conntrack: &FirewallConntrack{
+			Conns:      make(map[FirewallPacket]*conn),
+			TimerWheel: NewTimerWheel(min, max),
+		},
 		InRules:        newFirewallTable(),
 		OutRules:       newFirewallTable(),
-		TimerWheel:     NewTimerWheel(min, max),
 		TCPTimeout:     tcpTimeout,
 		UDPTimeout:     UDPTimeout,
 		DefaultTimeout: defaultTimeout,
@@ -409,23 +414,27 @@ func (f *Firewall) Destroy() {
 }
 
 func (f *Firewall) EmitStats() {
-	conntrackCount := len(f.Conns)
+	conntrack := f.Conntrack
+	conntrack.Lock()
+	conntrackCount := len(conntrack.Conns)
 	metrics.GetOrRegisterGauge("firewall.conntrack.count", nil).Update(int64(conntrackCount))
+	conntrack.Unlock()
 }
 
 func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool) bool {
-	f.connMutex.Lock()
+	conntrack := f.Conntrack
+	conntrack.Lock()
 
 	// Purge every time we test
-	ep, has := f.TimerWheel.Purge()
+	ep, has := conntrack.TimerWheel.Purge()
 	if has {
 		f.evict(ep)
 	}
 
-	c, ok := f.Conns[fp]
+	c, ok := conntrack.Conns[fp]
 
 	if !ok {
-		f.connMutex.Unlock()
+		conntrack.Unlock()
 		return false
 	}
 
@@ -474,7 +483,7 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 		c.Expires = time.Now().Add(f.DefaultTimeout)
 	}
 
-	f.connMutex.Unlock()
+	conntrack.Unlock()
 
 	return true
 }
@@ -495,15 +504,16 @@ func (f *Firewall) addConn(packet []byte, fp FirewallPacket, incoming bool) {
 		timeout = f.DefaultTimeout
 	}
 
-	f.connMutex.Lock()
-	if _, ok := f.Conns[fp]; !ok {
-		f.TimerWheel.Add(fp, timeout)
+	conntrack := f.Conntrack
+	conntrack.Lock()
+	if _, ok := conntrack.Conns[fp]; !ok {
+		conntrack.TimerWheel.Add(fp, timeout)
 	}
 
 	c.Expires = time.Now().Add(timeout)
 	c.rulesHash = &f.rulesHash
-	f.Conns[fp] = c
-	f.connMutex.Unlock()
+	conntrack.Conns[fp] = c
+	conntrack.Unlock()
 }
 
 // Evict checks if a conntrack entry has expired, if so it is removed, if not it is re-added to the wheel
@@ -511,7 +521,8 @@ func (f *Firewall) addConn(packet []byte, fp FirewallPacket, incoming bool) {
 func (f *Firewall) evict(p FirewallPacket) {
 	//TODO: report a stat if the tcp rtt tracking was never resolved?
 	// Are we still tracking this conn?
-	t, ok := f.Conns[p]
+	conntrack := f.Conntrack
+	t, ok := conntrack.Conns[p]
 	if !ok {
 		return
 	}
@@ -520,12 +531,12 @@ func (f *Firewall) evict(p FirewallPacket) {
 
 	// Timeout is in the future, re-add the timer
 	if newT > 0 {
-		f.TimerWheel.Add(p, newT)
+		conntrack.TimerWheel.Add(p, newT)
 		return
 	}
 
 	// This conn is done
-	delete(f.Conns, p)
+	delete(conntrack.Conns, p)
 }
 
 func (ft *FirewallTable) match(p FirewallPacket, incoming bool, c *cert.NebulaCertificate, caPool *cert.NebulaCAPool) bool {
