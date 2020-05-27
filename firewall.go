@@ -451,6 +451,7 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 			if l.Level >= logrus.DebugLevel {
 				h.logger().
 					WithField("fwPacket", fp).
+					WithField("incoming", c.incoming).
 					WithField("firewallHash", f.rulesHash).
 					WithField("oldFirewallHash", *c.rulesHash).
 					Debugln("dropping old conntrack entry, does not match new ruleset")
@@ -461,6 +462,7 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 		if l.Level >= logrus.DebugLevel {
 			h.logger().
 				WithField("fwPacket", fp).
+				WithField("incoming", c.incoming).
 				WithField("firewallHash", f.rulesHash).
 				WithField("oldFirewallHash", *c.rulesHash).
 				Debugln("keeping old conntrack entry, does match new ruleset")
