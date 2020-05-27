@@ -20,7 +20,7 @@ jobs:
 
       - name: Build
         run: |
-          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" release-linux
+          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" release-linux release-freebsd
           mkdir release
           mv build/*.tar.gz release
 
@@ -277,4 +277,14 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./linux-latest/nebula-linux-mips64le.tar.gz
           asset_name: nebula-linux-mips64le.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload freebsd-amd64
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./linux-latest/nebula-freebsd-amd64.tar.gz
+          asset_name: nebula-freebsd-amd64.tar.gz
           asset_content_type: application/gzip
