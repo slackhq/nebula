@@ -463,6 +463,72 @@ func TestFirewall_Drop3(t *testing.T) {
 	assert.Equal(t, fw.Drop([]byte{}, p, true, &h3, cp), ErrNoMatchingRule)
 }
 
+func TestFirewall_DropConntrackReload(t *testing.T) {
+	ob := &bytes.Buffer{}
+	out := l.Out
+	l.SetOutput(ob)
+	defer l.SetOutput(out)
+
+	p := FirewallPacket{
+		ip2int(net.IPv4(1, 2, 3, 4)),
+		ip2int(net.IPv4(1, 2, 3, 4)),
+		10,
+		90,
+		fwProtoUDP,
+		false,
+	}
+
+	ipNet := net.IPNet{
+		IP:   net.IPv4(1, 2, 3, 4),
+		Mask: net.IPMask{255, 255, 255, 0},
+	}
+
+	c := cert.NebulaCertificate{
+		Details: cert.NebulaCertificateDetails{
+			Name:           "host1",
+			Ips:            []*net.IPNet{&ipNet},
+			Groups:         []string{"default-group"},
+			InvertedGroups: map[string]struct{}{"default-group": {}},
+			Issuer:         "signer-shasum",
+		},
+	}
+	h := HostInfo{
+		ConnectionState: &ConnectionState{
+			peerCert: &c,
+		},
+		hostId: ip2int(ipNet.IP),
+	}
+	h.CreateRemoteCIDR(&c)
+
+	fw := NewFirewall(time.Second, time.Minute, time.Hour, &c)
+	assert.Nil(t, fw.AddRule(true, fwProtoAny, 0, 0, []string{"any"}, "", nil, "", ""))
+	cp := cert.NewCAPool()
+
+	// Drop outbound
+	assert.Equal(t, fw.Drop([]byte{}, p, false, &h, cp), ErrNoMatchingRule)
+	// Allow inbound
+	resetConntrack(fw)
+	assert.NoError(t, fw.Drop([]byte{}, p, true, &h, cp))
+	// Allow outbound because conntrack
+	assert.NoError(t, fw.Drop([]byte{}, p, false, &h, cp))
+
+	oldFw := fw
+	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
+	assert.Nil(t, fw.AddRule(true, fwProtoAny, 10, 10, []string{"any"}, "", nil, "", ""))
+	fw.Conntrack = oldFw.Conntrack
+
+	// Allow outbound because conntrack and new rules allow port 10
+	assert.NoError(t, fw.Drop([]byte{}, p, false, &h, cp))
+
+	oldFw = fw
+	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
+	assert.Nil(t, fw.AddRule(true, fwProtoAny, 11, 11, []string{"any"}, "", nil, "", ""))
+	fw.Conntrack = oldFw.Conntrack
+
+	// Drop outbound because conntrack doesn't match new ruleset
+	assert.Equal(t, fw.Drop([]byte{}, p, false, &h, cp), ErrNoMatchingRule)
+}
+
 func BenchmarkLookup(b *testing.B) {
 	ml := func(m map[string]struct{}, a [][]string) {
 		for n := 0; n < b.N; n++ {
