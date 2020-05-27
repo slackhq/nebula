@@ -161,6 +161,4 @@ func BenchmarkHostmappromote2(b *testing.B) {
 		m.AddRemote(ip2int(net.ParseIP("10.128.1.1")), g)
 		m.AddRemote(ip2int(net.ParseIP("10.128.1.1")), y)
 	}
-	b.Errorf("hi")
-
 }
