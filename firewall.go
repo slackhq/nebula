@@ -510,8 +510,11 @@ func (f *Firewall) addConn(packet []byte, fp FirewallPacket, incoming bool) {
 		conntrack.TimerWheel.Add(fp, timeout)
 	}
 
-	c.Expires = time.Now().Add(timeout)
+	// Record which rulesHash allowed this connection, so we can retest after
+	// firewall reload
+	c.incoming = incoming
 	c.rulesHash = &f.rulesHash
+	c.Expires = time.Now().Add(timeout)
 	conntrack.Conns[fp] = c
 	conntrack.Unlock()
 }
