@@ -516,6 +516,7 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 10, 10, []string{"any"}, "", nil, "", ""))
 	fw.Conntrack = oldFw.Conntrack
+	fw.rulesVersion = oldFw.rulesVersion + 1
 
 	// Allow outbound because conntrack and new rules allow port 10
 	assert.NoError(t, fw.Drop([]byte{}, p, false, &h, cp))
@@ -524,6 +525,7 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 	fw = NewFirewall(time.Second, time.Minute, time.Hour, &c)
 	assert.Nil(t, fw.AddRule(true, fwProtoAny, 11, 11, []string{"any"}, "", nil, "", ""))
 	fw.Conntrack = oldFw.Conntrack
+	fw.rulesVersion = oldFw.rulesVersion + 1
 
 	// Drop outbound because conntrack doesn't match new ruleset
 	assert.Equal(t, fw.Drop([]byte{}, p, false, &h, cp), ErrNoMatchingRule)

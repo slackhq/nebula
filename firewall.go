@@ -39,13 +39,14 @@ type FirewallInterface interface {
 
 type conn struct {
 	Expires time.Time // Time when this conntrack entry will expire
-	Seq     uint32    // If tcp rtt tracking is enabled this will be the seq we are looking for an ack
 	Sent    time.Time // If tcp rtt tracking is enabled this will be when Seq was last set
+	Seq     uint32    // If tcp rtt tracking is enabled this will be the seq we are looking for an ack
 
 	// record why the original connection passed the firewall, so we can re-validate
-	// after ruleset changes
-	incoming  bool
-	rulesHash *string
+	// after ruleset changes. Note, rulesVersion is a uint16 so that these two
+	// fields pack for free after the uint32 above
+	incoming     bool
+	rulesVersion uint16
 }
 
 // TODO: need conntrack max tracked connections handling
@@ -64,8 +65,8 @@ type Firewall struct {
 	// Used to ensure we don't emit local packets for ips we don't own
 	localIps *CIDRTree
 
-	rules     string
-	rulesHash string
+	rules        string
+	rulesVersion uint16
 
 	trackTCPRTT  bool
 	metricTCPRTT metrics.Histogram
@@ -215,8 +216,6 @@ func NewFirewallFromConfig(nc *cert.NebulaCertificate, c *Config) (*Firewall, er
 	if err != nil {
 		return nil, err
 	}
-
-	fw.rulesHash = fw.GetRuleHash()
 
 	return fw, nil
 }
@@ -438,7 +437,7 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 		return false
 	}
 
-	if c.rulesHash != &f.rulesHash {
+	if c.rulesVersion != f.rulesVersion {
 		// This conntrack entry was for an older rule set, validate
 		// it still passes with the current rule set
 		table := f.OutRules
@@ -452,8 +451,8 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 				h.logger().
 					WithField("fwPacket", fp).
 					WithField("incoming", c.incoming).
-					WithField("firewallHash", f.rulesHash).
-					WithField("oldFirewallHash", *c.rulesHash).
+					WithField("rulesVersion", f.rulesVersion).
+					WithField("oldRulesVersion", c.rulesVersion).
 					Debugln("dropping old conntrack entry, does not match new ruleset")
 			}
 			return false
@@ -463,12 +462,12 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 			h.logger().
 				WithField("fwPacket", fp).
 				WithField("incoming", c.incoming).
-				WithField("firewallHash", f.rulesHash).
-				WithField("oldFirewallHash", *c.rulesHash).
+				WithField("rulesVersion", f.rulesVersion).
+				WithField("oldRulesVersion", c.rulesVersion).
 				Debugln("keeping old conntrack entry, does match new ruleset")
 		}
 
-		c.rulesHash = &f.rulesHash
+		c.rulesVersion = f.rulesVersion
 	}
 
 	switch fp.Protocol {
@@ -512,10 +511,10 @@ func (f *Firewall) addConn(packet []byte, fp FirewallPacket, incoming bool) {
 		conntrack.TimerWheel.Add(fp, timeout)
 	}
 
-	// Record which rulesHash allowed this connection, so we can retest after
+	// Record which rulesVersion allowed this connection, so we can retest after
 	// firewall reload
 	c.incoming = incoming
-	c.rulesHash = &f.rulesHash
+	c.rulesVersion = f.rulesVersion
 	c.Expires = time.Now().Add(timeout)
 	conntrack.Conns[fp] = c
 	conntrack.Unlock()

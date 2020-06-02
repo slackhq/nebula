@@ -215,12 +215,14 @@ func (f *Interface) reloadFirewall(c *Config) {
 	defer conntrack.Unlock()
 
 	fw.Conntrack = conntrack
+	fw.rulesVersion = oldFw.rulesVersion + 1
 
 	f.firewall = fw
 
 	oldFw.Destroy()
 	l.WithField("firewallHash", fw.GetRuleHash()).
 		WithField("oldFirewallHash", oldFw.GetRuleHash()).
+		WithField("rulesVersion", fw.rulesVersion).
 		Info("New firewall has been installed")
 }
 
