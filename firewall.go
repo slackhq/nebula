@@ -416,8 +416,8 @@ func (f *Firewall) EmitStats() {
 	conntrack := f.Conntrack
 	conntrack.Lock()
 	conntrackCount := len(conntrack.Conns)
-	metrics.GetOrRegisterGauge("firewall.conntrack.count", nil).Update(int64(conntrackCount))
 	conntrack.Unlock()
+	metrics.GetOrRegisterGauge("firewall.conntrack.count", nil).Update(int64(conntrackCount))
 }
 
 func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool) bool {
