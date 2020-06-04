@@ -189,7 +189,7 @@ logging:
 # Nebula security group configuration
 firewall:
   conntrack:
-    tcp_timeout: 120h
+    tcp_timeout: 12m
     udp_timeout: 3m
     default_timeout: 10m
     max_connections: 100000
