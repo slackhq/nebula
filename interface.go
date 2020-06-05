@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"time"
 
@@ -25,6 +26,7 @@ type InterfaceConfig struct {
 	DropLocalBroadcast      bool
 	DropMulticast           bool
 	UDPBatchSize            int
+	MessageMetrics          bool
 }
 
 type Interface struct {
@@ -65,22 +67,8 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		return nil, errors.New("no firewall rules")
 	}
 
-	metricMessageRx := [6]metrics.Counter{
-		metrics.GetOrRegisterCounter("messages.rx.handshake", nil),
-		metrics.NilCounter{},
-		metrics.GetOrRegisterCounter("messages.rx.recv_error", nil),
-		metrics.GetOrRegisterCounter("messages.rx.lighthouse", nil),
-		metrics.GetOrRegisterCounter("messages.rx.test", nil),
-		metrics.GetOrRegisterCounter("messages.rx.close_tunnel", nil),
-	}
-	metricMessageTx := [6]metrics.Counter{
-		metrics.GetOrRegisterCounter("messages.tx.handshake", nil),
-		metrics.NilCounter{},
-		metrics.GetOrRegisterCounter("messages.tx.recv_error", nil),
-		metrics.GetOrRegisterCounter("messages.tx.lighthouse", nil),
-		metrics.GetOrRegisterCounter("messages.tx.test", nil),
-		metrics.GetOrRegisterCounter("messages.tx.close_tunnel", nil),
-	}
+	metricMessageRx := newMessageMetrics(c, "rx")
+	metricMessageTx := newMessageMetrics(c, "tx")
 
 	ifce := &Interface{
 		hostMap:            c.HostMap,
@@ -253,5 +241,28 @@ func (f *Interface) metricRx(t NebulaMessageType, i int64) {
 func (f *Interface) metricTx(t NebulaMessageType, i int64) {
 	if t >= 0 && t < 6 {
 		f.metricMessageTx[t].Inc(i)
+	}
+}
+
+func newMessageMetrics(c *InterfaceConfig, t string) [6]metrics.Counter {
+	if c.MessageMetrics {
+		return [6]metrics.Counter{
+			metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake", t), nil),
+			metrics.NilCounter{},
+			metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.recv_error", t), nil),
+			metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.lighthouse", t), nil),
+			metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.test", t), nil),
+			metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.close_tunnel", t), nil),
+		}
+	} else {
+		// We always record recv_error metrics
+		return [6]metrics.Counter{
+			metrics.NilCounter{},
+			metrics.NilCounter{},
+			metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.recv_error", t), nil),
+			metrics.NilCounter{},
+			metrics.NilCounter{},
+			metrics.NilCounter{},
+		}
 	}
 }

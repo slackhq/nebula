@@ -32,6 +32,8 @@ type HandshakeConfig struct {
 	tryInterval  time.Duration
 	retries      int
 	waitRotation int
+
+	metricsEnabled bool
 }
 
 type HandshakeManager struct {
@@ -48,7 +50,7 @@ type HandshakeManager struct {
 }
 
 func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udpConn, config HandshakeConfig) *HandshakeManager {
-	return &HandshakeManager{
+	h := &HandshakeManager{
 		pendingHostMap: NewHostMap("pending", tunCidr, preferredRanges),
 		mainHostMap:    mainHostMap,
 		lightHouse:     lightHouse,
@@ -58,9 +60,15 @@ func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainH
 
 		OutboundHandshakeTimer: NewSystemTimerWheel(config.tryInterval, config.tryInterval*time.Duration(config.retries)),
 		InboundHandshakeTimer:  NewSystemTimerWheel(config.tryInterval, config.tryInterval*time.Duration(config.retries)),
-
-		metricHandshakeTx: metrics.GetOrRegisterCounter("messages.tx.handshake", nil),
 	}
+
+	if config.metricsEnabled {
+		h.metricHandshakeTx = metrics.GetOrRegisterCounter("messages.tx.handshake", nil)
+	} else {
+		h.metricHandshakeTx = metrics.NilCounter{}
+	}
+
+	return h
 }
 
 func (c *HandshakeManager) Run(f EncWriter) {

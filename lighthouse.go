@@ -49,7 +49,7 @@ type EncWriter interface {
 	SendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte)
 }
 
-func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, nebulaPort int, pc *udpConn, punchBack bool, punchDelay time.Duration) *LightHouse {
+func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, nebulaPort int, pc *udpConn, punchBack bool, punchDelay time.Duration, metricsEnabled bool) *LightHouse {
 	h := LightHouse{
 		amLighthouse: amLighthouse,
 		myIp:         myIp,
@@ -63,12 +63,21 @@ func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, n
 		punchDelay:   punchDelay,
 	}
 
-	for i, name := range NebulaMeta_MessageType_name {
-		h.metricLighthouseRx[i] = metrics.GetOrRegisterCounter(fmt.Sprintf("lighthouse.rx.%s", name), nil)
-		h.metricLighthouseTx[i] = metrics.GetOrRegisterCounter(fmt.Sprintf("lighthouse.tx.%s", name), nil)
-	}
+	if metricsEnabled {
+		for i, name := range NebulaMeta_MessageType_name {
+			h.metricLighthouseRx[i] = metrics.GetOrRegisterCounter(fmt.Sprintf("lighthouse.rx.%s", name), nil)
+			h.metricLighthouseTx[i] = metrics.GetOrRegisterCounter(fmt.Sprintf("lighthouse.tx.%s", name), nil)
+		}
 
-	h.metricHolepunchTx = metrics.GetOrRegisterCounter("messages.tx.holepunch", nil)
+		h.metricHolepunchTx = metrics.GetOrRegisterCounter("messages.tx.holepunch", nil)
+	} else {
+		for i := range NebulaMeta_MessageType_name {
+			h.metricLighthouseRx[i] = metrics.NilCounter{}
+			h.metricLighthouseTx[i] = metrics.NilCounter{}
+		}
+
+		h.metricHolepunchTx = metrics.NilCounter{}
+	}
 
 	for _, ip := range ips {
 		h.lighthouses[ip] = struct{}{}
