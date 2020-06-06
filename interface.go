@@ -26,7 +26,7 @@ type InterfaceConfig struct {
 	DropLocalBroadcast      bool
 	DropMulticast           bool
 	UDPBatchSize            int
-	MessageMetrics          bool
+	MessageMetrics          *MessageMetrics
 }
 
 type Interface struct {
@@ -49,8 +49,7 @@ type Interface struct {
 
 	metricHandshakes metrics.Histogram
 
-	metricMessageRx [6]metrics.Counter
-	metricMessageTx [6]metrics.Counter
+	messageMetrics *MessageMetrics
 }
 
 func NewInterface(c *InterfaceConfig) (*Interface, error) {
@@ -66,9 +65,6 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 	if c.Firewall == nil {
 		return nil, errors.New("no firewall rules")
 	}
-
-	metricMessageRx := newMessageMetrics(c, "rx")
-	metricMessageTx := newMessageMetrics(c, "tx")
 
 	ifce := &Interface{
 		hostMap:            c.HostMap,
@@ -88,8 +84,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 
-		metricMessageRx: metricMessageRx,
-		metricMessageTx: metricMessageTx,
+		messageMetrics: c.MessageMetrics,
 	}
 
 	ifce.connectionManager = newConnectionManager(ifce, c.checkInterval, c.pendingDeletionInterval)
@@ -233,36 +228,55 @@ func (f *Interface) emitStats(i time.Duration) {
 	}
 }
 
-func (f *Interface) metricRx(t NebulaMessageType, i int64) {
-	if t >= 0 && t < 6 {
-		f.metricMessageRx[t].Inc(i)
+type MessageMetrics struct {
+	rx [][]metrics.Counter
+	tx [][]metrics.Counter
+
+	rxUnknown metrics.Counter
+	txUnknown metrics.Counter
+}
+
+func (f *MessageMetrics) Rx(t NebulaMessageType, s NebulaMessageSubType, i int64) {
+	if f != nil {
+		if t >= 0 && int(t) < len(f.rx) && s >= 0 && int(s) < len(f.rx[t]) {
+			f.rx[t][s].Inc(i)
+		} else {
+			f.rxUnknown.Inc(i)
+		}
 	}
 }
-func (f *Interface) metricTx(t NebulaMessageType, i int64) {
-	if t >= 0 && t < 6 {
-		f.metricMessageTx[t].Inc(i)
+func (f *MessageMetrics) Tx(t NebulaMessageType, s NebulaMessageSubType, i int64) {
+	if f != nil {
+		if t >= 0 && int(t) < len(f.tx) && s >= 0 && int(s) < len(f.tx[t]) {
+			f.tx[t][s].Inc(i)
+		} else {
+			f.txUnknown.Inc(i)
+		}
 	}
 }
 
-func newMessageMetrics(c *InterfaceConfig, t string) [6]metrics.Counter {
-	if c.MessageMetrics {
-		return [6]metrics.Counter{
-			metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake", t), nil),
-			metrics.NilCounter{},
-			metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.recv_error", t), nil),
-			metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.lighthouse", t), nil),
-			metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.test", t), nil),
-			metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.close_tunnel", t), nil),
+func newMessageMetrics() *MessageMetrics {
+	gen := func(t string) [][]metrics.Counter {
+		return [][]metrics.Counter{
+			{
+				metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_stage1", t), nil),
+				metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_stage2", t), nil),
+			},
+			{metrics.NilCounter{}},
+			{metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.recv_error", t), nil)},
+			{metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.lighthouse", t), nil)},
+			{
+				metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.test_request", t), nil),
+				metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.test_response", t), nil),
+			},
+			{metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.close_tunnel", t), nil)},
 		}
-	} else {
-		// We always record recv_error metrics
-		return [6]metrics.Counter{
-			metrics.NilCounter{},
-			metrics.NilCounter{},
-			metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.recv_error", t), nil),
-			metrics.NilCounter{},
-			metrics.NilCounter{},
-			metrics.NilCounter{},
-		}
+	}
+	return &MessageMetrics{
+		rx: gen("rx"),
+		tx: gen("tx"),
+
+		rxUnknown: metrics.GetOrRegisterCounter("messages.rx.other", nil),
+		txUnknown: metrics.GetOrRegisterCounter("messages.tx.other", nil),
 	}
 }

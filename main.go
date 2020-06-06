@@ -282,12 +282,17 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		l.WithError(err).Error("Lighthouse unreachable")
 	}
 
+	var messageMetrics *MessageMetrics
+	if config.GetBool("stats.message_metrics", false) {
+		messageMetrics = newMessageMetrics()
+	}
+
 	handshakeConfig := HandshakeConfig{
 		tryInterval:  config.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
 		retries:      config.GetInt("handshakes.retries", DefaultHandshakeRetries),
 		waitRotation: config.GetInt("handshakes.wait_rotation", DefaultHandshakeWaitRotation),
 
-		metricsEnabled: config.GetBool("stats.message_metrics", false),
+		messageMetrics: messageMetrics,
 	}
 
 	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpServer, handshakeConfig)
@@ -314,7 +319,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		DropLocalBroadcast:      config.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:           config.GetBool("tun.drop_multicast", false),
 		UDPBatchSize:            config.GetInt("listen.batch", 64),
-		MessageMetrics:          config.GetBool("stats.message_metrics", false),
+		MessageMetrics:          messageMetrics,
 	}
 
 	switch ifConfig.Cipher {

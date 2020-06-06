@@ -54,7 +54,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		// Fallthrough to the bottom to record incoming traffic
 
 	case lightHouse:
-		f.metricRx(lightHouse, 1)
+		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		if !f.handleEncrypted(ci, addr, header) {
 			return
 		}
@@ -75,7 +75,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		// Fallthrough to the bottom to record incoming traffic
 
 	case test:
-		f.metricRx(test, 1)
+		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		if !f.handleEncrypted(ci, addr, header) {
 			return
 		}
@@ -104,18 +104,18 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		// are unauthenticated
 
 	case handshake:
-		f.metricRx(handshake, 1)
+		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		HandleIncomingHandshake(f, addr, packet, header, hostinfo)
 		return
 
 	case recvError:
-		f.metricRx(recvError, 1)
+		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		// TODO: Remove this with recv_error deprecation
 		f.handleRecvError(addr, header)
 		return
 
 	case closeTunnel:
-		f.metricRx(closeTunnel, 1)
+		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		if !f.handleEncrypted(ci, addr, header) {
 			return
 		}
@@ -301,7 +301,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 }
 
 func (f *Interface) sendRecvError(endpoint *udpAddr, index uint32) {
-	f.metricTx(recvError, 1)
+	f.messageMetrics.Tx(recvError, 0, 1)
 
 	//TODO: this should be a signed message so we can trust that we should drop the index
 	b := HeaderEncode(make([]byte, HeaderLen), Version, uint8(recvError), 0, index, 0)
