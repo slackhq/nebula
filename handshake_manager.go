@@ -49,7 +49,7 @@ type HandshakeManager struct {
 }
 
 func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udpConn, config HandshakeConfig) *HandshakeManager {
-	h := &HandshakeManager{
+	return &HandshakeManager{
 		pendingHostMap: NewHostMap("pending", tunCidr, preferredRanges),
 		mainHostMap:    mainHostMap,
 		lightHouse:     lightHouse,
@@ -62,8 +62,6 @@ func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainH
 
 		messageMetrics: config.messageMetrics,
 	}
-
-	return h
 }
 
 func (c *HandshakeManager) Run(f EncWriter) {
