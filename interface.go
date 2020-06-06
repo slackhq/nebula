@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"time"
 
@@ -225,58 +224,5 @@ func (f *Interface) emitStats(i time.Duration) {
 	for range ticker.C {
 		f.firewall.EmitStats()
 		f.handshakeManager.EmitStats()
-	}
-}
-
-type MessageMetrics struct {
-	rx [][]metrics.Counter
-	tx [][]metrics.Counter
-
-	rxUnknown metrics.Counter
-	txUnknown metrics.Counter
-}
-
-func (f *MessageMetrics) Rx(t NebulaMessageType, s NebulaMessageSubType, i int64) {
-	if f != nil {
-		if t >= 0 && int(t) < len(f.rx) && s >= 0 && int(s) < len(f.rx[t]) {
-			f.rx[t][s].Inc(i)
-		} else {
-			f.rxUnknown.Inc(i)
-		}
-	}
-}
-func (f *MessageMetrics) Tx(t NebulaMessageType, s NebulaMessageSubType, i int64) {
-	if f != nil {
-		if t >= 0 && int(t) < len(f.tx) && s >= 0 && int(s) < len(f.tx[t]) {
-			f.tx[t][s].Inc(i)
-		} else {
-			f.txUnknown.Inc(i)
-		}
-	}
-}
-
-func newMessageMetrics() *MessageMetrics {
-	gen := func(t string) [][]metrics.Counter {
-		return [][]metrics.Counter{
-			{
-				metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_stage1", t), nil),
-				metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_stage2", t), nil),
-			},
-			{metrics.NilCounter{}},
-			{metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.recv_error", t), nil)},
-			{metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.lighthouse", t), nil)},
-			{
-				metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.test_request", t), nil),
-				metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.test_response", t), nil),
-			},
-			{metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.close_tunnel", t), nil)},
-		}
-	}
-	return &MessageMetrics{
-		rx: gen("rx"),
-		tx: gen("tx"),
-
-		rxUnknown: metrics.GetOrRegisterCounter("messages.rx.other", nil),
-		txUnknown: metrics.GetOrRegisterCounter("messages.tx.other", nil),
 	}
 }

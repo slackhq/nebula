@@ -39,9 +39,8 @@ type LightHouse struct {
 	punchBack   bool
 	punchDelay  time.Duration
 
-	metricLighthouseRx [10]metrics.Counter
-	metricLighthouseTx [10]metrics.Counter
-	metricHolepunchTx  metrics.Counter
+	metrics           *MessageMetrics
+	metricHolepunchTx metrics.Counter
 }
 
 type EncWriter interface {
@@ -64,18 +63,10 @@ func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, n
 	}
 
 	if metricsEnabled {
-		for i, name := range NebulaMeta_MessageType_name {
-			h.metricLighthouseRx[i] = metrics.GetOrRegisterCounter(fmt.Sprintf("lighthouse.rx.%s", name), nil)
-			h.metricLighthouseTx[i] = metrics.GetOrRegisterCounter(fmt.Sprintf("lighthouse.tx.%s", name), nil)
-		}
+		h.metrics = newLighthouseMetrics()
 
 		h.metricHolepunchTx = metrics.GetOrRegisterCounter("messages.tx.holepunch", nil)
 	} else {
-		for i := range NebulaMeta_MessageType_name {
-			h.metricLighthouseRx[i] = metrics.NilCounter{}
-			h.metricLighthouseTx[i] = metrics.NilCounter{}
-		}
-
 		h.metricHolepunchTx = metrics.NilCounter{}
 	}
 
@@ -409,14 +400,10 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 }
 
 func (lh *LightHouse) metricRx(t NebulaMeta_MessageType, i int64) {
-	if t >= 0 && t < 10 {
-		lh.metricLighthouseRx[t].Inc(i)
-	}
+	lh.metrics.Rx(NebulaMessageType(t), 0, i)
 }
 func (lh *LightHouse) metricTx(t NebulaMeta_MessageType, i int64) {
-	if t >= 0 && t < 10 {
-		lh.metricLighthouseTx[t].Inc(i)
-	}
+	lh.metrics.Tx(NebulaMessageType(t), 0, i)
 }
 
 /*

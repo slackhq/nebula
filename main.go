@@ -285,6 +285,8 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	var messageMetrics *MessageMetrics
 	if config.GetBool("stats.message_metrics", false) {
 		messageMetrics = newMessageMetrics()
+	} else {
+		messageMetrics = newMessageMetricsOnlyRecvError()
 	}
 
 	handshakeConfig := HandshakeConfig{
