@@ -179,6 +179,7 @@ logging:
 
   # enables counter metrics for meta packets
   #   e.g.: `messages.tx.handshake`
+  # NOTE: `message.{tx,rx}.recv_error` is always emitted
   #message_metrics: false
 
   # enables detailed counter metrics for lighthouse packets

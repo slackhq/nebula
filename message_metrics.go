@@ -14,21 +14,21 @@ type MessageMetrics struct {
 	txUnknown metrics.Counter
 }
 
-func (f *MessageMetrics) Rx(t NebulaMessageType, s NebulaMessageSubType, i int64) {
-	if f != nil {
-		if t >= 0 && int(t) < len(f.rx) && s >= 0 && int(s) < len(f.rx[t]) {
-			f.rx[t][s].Inc(i)
-		} else if f.rxUnknown != nil {
-			f.rxUnknown.Inc(i)
+func (m *MessageMetrics) Rx(t NebulaMessageType, s NebulaMessageSubType, i int64) {
+	if m != nil {
+		if t >= 0 && int(t) < len(m.rx) && s >= 0 && int(s) < len(m.rx[t]) {
+			m.rx[t][s].Inc(i)
+		} else if m.rxUnknown != nil {
+			m.rxUnknown.Inc(i)
 		}
 	}
 }
-func (f *MessageMetrics) Tx(t NebulaMessageType, s NebulaMessageSubType, i int64) {
-	if f != nil {
-		if t >= 0 && int(t) < len(f.tx) && s >= 0 && int(s) < len(f.tx[t]) {
-			f.tx[t][s].Inc(i)
-		} else if f.txUnknown != nil {
-			f.txUnknown.Inc(i)
+func (m *MessageMetrics) Tx(t NebulaMessageType, s NebulaMessageSubType, i int64) {
+	if m != nil {
+		if t >= 0 && int(t) < len(m.tx) && s >= 0 && int(s) < len(m.tx[t]) {
+			m.tx[t][s].Inc(i)
+		} else if m.txUnknown != nil {
+			m.txUnknown.Inc(i)
 		}
 	}
 }
@@ -61,17 +61,16 @@ func newMessageMetrics() *MessageMetrics {
 
 // Historically we only recorded recv_error, so this is backwards compat
 func newMessageMetricsOnlyRecvError() *MessageMetrics {
+	gen := func(t string) [][]metrics.Counter {
+		return [][]metrics.Counter{
+			nil,
+			nil,
+			{metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.recv_error", t), nil)},
+		}
+	}
 	return &MessageMetrics{
-		rx: [][]metrics.Counter{
-			nil,
-			nil,
-			{metrics.GetOrRegisterCounter("messages.rx.recv_error", nil)},
-		},
-		tx: [][]metrics.Counter{
-			nil,
-			nil,
-			{metrics.GetOrRegisterCounter("messages.tx.recv_error", nil)},
-		},
+		rx: gen("rx"),
+		tx: gen("tx"),
 	}
 }
 
