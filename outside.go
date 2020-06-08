@@ -127,6 +127,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		return
 
 	default:
+		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		hostinfo.logger().Debugf("Unexpected packet received from %s", addr)
 		return
 	}
