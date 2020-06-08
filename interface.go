@@ -47,8 +47,7 @@ type Interface struct {
 	version            string
 
 	metricHandshakes metrics.Histogram
-
-	messageMetrics *MessageMetrics
+	messageMetrics   *MessageMetrics
 }
 
 func NewInterface(c *InterfaceConfig) (*Interface, error) {
@@ -82,8 +81,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		udpBatchSize:       c.UDPBatchSize,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
-
-		messageMetrics: c.MessageMetrics,
+		messageMetrics:   c.MessageMetrics,
 	}
 
 	ifce.connectionManager = newConnectionManager(ifce, c.checkInterval, c.pendingDeletionInterval)
