@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/sshd"
 	"io/ioutil"
 	"net"
 	"os"
@@ -14,6 +12,10 @@ import (
 	"runtime/pprof"
 	"strings"
 	"syscall"
+
+	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/sshd"
 )
 
 type sshListHostMapFlags struct {
@@ -328,8 +330,33 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 		return nil
 	}
 
+	type hostInfo struct {
+		VpnIP          net.IP                  `json:"vpnIp"`
+		LocalIndex     uint32                  `json:"localIndex"`
+		RemoteIndex    uint32                  `json:"remoteIndex"`
+		RemoteAddrs    []*udpAddr              `json:"remoteAddrs"`
+		CachedPackets  int                     `json:"cachedPackets"`
+		Cert           *cert.NebulaCertificate `json:"cert"`
+		MessageCounter *uint64                 `json:"messageCounter"`
+	}
+
 	hostMap.RLock()
-	defer hostMap.RUnlock()
+	hosts := make(map[uint32]hostInfo, len(hostMap.Hosts))
+	for k, v := range hostMap.Hosts {
+		info := hostInfo{
+			VpnIP:         int2ip(v.hostId),
+			LocalIndex:    v.localIndexId,
+			RemoteIndex:   v.remoteIndexId,
+			RemoteAddrs:   v.RemoteUDPAddrs(),
+			CachedPackets: len(v.packetStore),
+			Cert:          v.GetCert(),
+		}
+		if v.ConnectionState != nil {
+			info.MessageCounter = v.ConnectionState.messageCounter
+		}
+		hosts[k] = info
+	}
+	hostMap.RUnlock()
 
 	if fs.Json || fs.Pretty {
 		js := json.NewEncoder(w.GetWriter())
@@ -337,35 +364,13 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 			js.SetIndent("", "    ")
 		}
 
-		d := make([]m, len(hostMap.Hosts))
-		x := 0
-		var h m
-		for _, v := range hostMap.Hosts {
-			h = m{
-				"vpnIp":         int2ip(v.hostId),
-				"localIndex":    v.localIndexId,
-				"remoteIndex":   v.remoteIndexId,
-				"remoteAddrs":   v.RemoteUDPAddrs(),
-				"cachedPackets": len(v.packetStore),
-				"cert":          v.GetCert(),
-			}
-
-			if v.ConnectionState != nil {
-				h["messageCounter"] = v.ConnectionState.messageCounter
-			}
-
-			d[x] = h
-			x++
-		}
-
-		err := js.Encode(d)
+		err := js.Encode(hosts)
 		if err != nil {
-			//TODO
-			return nil
+			return err
 		}
 	} else {
-		for i, v := range hostMap.Hosts {
-			err := w.WriteLine(fmt.Sprintf("%s: %s", int2ip(i), v.RemoteUDPAddrs()))
+		for _, h := range hosts {
+			err := w.WriteLine(fmt.Sprintf("%s: %s", h.VpnIP, h.RemoteAddrs))
 			if err != nil {
 				return err
 			}
@@ -382,8 +387,25 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 		return nil
 	}
 
+	type lighthouseInfo struct {
+		VpnIP net.IP   `json:"vpnIp"`
+		Addrs []string `json:"addrs"`
+	}
+
 	lightHouse.RLock()
-	defer lightHouse.RUnlock()
+	lighthouses := make([]lighthouseInfo, 0, len(lightHouse.addrMap))
+	for k, v := range lightHouse.addrMap {
+		addrs := make([]string, 0, len(v))
+		for _, addr := range v {
+			addrs = append(addrs, addr.String())
+		}
+		info := lighthouseInfo{
+			VpnIP: int2ip(k),
+			Addrs: addrs,
+		}
+		lighthouses = append(lighthouses, info)
+	}
+	lightHouse.RUnlock()
 
 	if fs.Json || fs.Pretty {
 		js := json.NewEncoder(w.GetWriter())
@@ -391,36 +413,14 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 			js.SetIndent("", "    ")
 		}
 
-		d := make([]m, len(lightHouse.addrMap))
-		x := 0
-		var h m
-		for vpnIp, v := range lightHouse.addrMap {
-			ips := make([]string, len(v))
-			for i, ip := range v {
-				ips[i] = ip.String()
-			}
-
-			h = m{
-				"vpnIp": int2ip(vpnIp),
-				"addrs": ips,
-			}
-
-			d[x] = h
-			x++
-		}
-
-		err := js.Encode(d)
+		err := js.Encode(lighthouses)
 		if err != nil {
 			//TODO
 			return nil
 		}
 	} else {
-		for vpnIp, v := range lightHouse.addrMap {
-			ips := make([]string, len(v))
-			for i, ip := range v {
-				ips[i] = ip.String()
-			}
-			err := w.WriteLine(fmt.Sprintf("%s: %s", int2ip(vpnIp), ips))
+		for _, lighthouse := range lighthouses {
+			err := w.WriteLine(fmt.Sprintf("%s: %s", lighthouse.VpnIP, lighthouse.Addrs))
 			if err != nil {
 				return err
 			}
