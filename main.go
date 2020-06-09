@@ -27,7 +27,7 @@ func Main(configPath string, configTest bool, buildVersion string, logFile strin
 	if logFile == "" {
 		l.Out = os.Stdout
 	} else {
-		f, err := os.OpenFile(logFile, os.O_WRONLY | os.O_CREATE, 0644)
+		f, err := os.OpenFile(logFile, os.O_WRONLY | os.O_CREATE | os.O_TRUNC, 0644)
 		if err != nil {
 			return err
 		}
