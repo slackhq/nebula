@@ -326,8 +326,7 @@ func attachCommands(ssh *sshd.SSHServer, hostMap *HostMap, pendingHostMap *HostM
 func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error {
 	fs, ok := a.(*sshListHostMapFlags)
 	if !ok {
-		//TODO: error
-		return nil
+		return fmt.Errorf("flags not of type *sshListHostMapFlags")
 	}
 
 	type hostInfo struct {
@@ -383,8 +382,7 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWriter) error {
 	fs, ok := a.(*sshListHostMapFlags)
 	if !ok {
-		//TODO: error
-		return nil
+		return fmt.Errorf("flags not of type *sshListHostMapFlags")
 	}
 
 	type lighthouseInfo struct {
@@ -415,8 +413,7 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 
 		err := js.Encode(lighthouses)
 		if err != nil {
-			//TODO
-			return nil
+			return err
 		}
 	} else {
 		for _, lighthouse := range lighthouses {
@@ -473,8 +470,7 @@ func sshQueryLighthouse(ifce *Interface, fs interface{}, a []string, w sshd.Stri
 func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
 	flags, ok := fs.(*sshCloseTunnelFlags)
 	if !ok {
-		//TODO: error
-		return nil
+		return fmt.Errorf("flags not of type *sshCloseTunnelFlags")
 	}
 
 	if len(a) == 0 {
@@ -511,8 +507,7 @@ func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
 	flags, ok := fs.(*sshCreateTunnelFlags)
 	if !ok {
-		//TODO: error
-		return nil
+		return fmt.Errorf("flags not of type *sshCreateTunnelFlags")
 	}
 
 	if len(a) == 0 {
@@ -554,8 +549,7 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 func sshChangeRemote(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
 	flags, ok := fs.(*sshChangeRemoteFlags)
 	if !ok {
-		//TODO: error
-		return nil
+		return fmt.Errorf("flags not of type *sshChangeRemoteFlags")
 	}
 
 	if len(a) == 0 {
@@ -641,8 +635,7 @@ func sshLogFormat(fs interface{}, a []string, w sshd.StringWriter) error {
 func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
 	args, ok := fs.(*sshPrintCertFlags)
 	if !ok {
-		//TODO: error
-		return nil
+		return fmt.Errorf("flags not of type *sshPrintCertFlags")
 	}
 
 	cert := ifce.certState.certificate
@@ -686,8 +679,7 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
 	args, ok := fs.(*sshPrintTunnelFlags)
 	if !ok {
-		//TODO: error
-		return nil
+		return fmt.Errorf("flags not of type *sshPrintTunnelFlags")
 	}
 
 	if len(a) == 0 {
@@ -716,12 +708,10 @@ func sshReload(fs interface{}, a []string, w sshd.StringWriter) error {
 	p, err := os.FindProcess(os.Getpid())
 	if err != nil {
 		return w.WriteLine(err.Error())
-		//TODO
 	}
 	err = p.Signal(syscall.SIGHUP)
 	if err != nil {
 		return w.WriteLine(err.Error())
-		//TODO
 	}
 	return w.WriteLine("HUP sent")
 }
