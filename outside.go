@@ -7,7 +7,6 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
-
 	// "github.com/google/gopacket"
 	// "github.com/google/gopacket/layers"
 	// 	"encoding/binary"
