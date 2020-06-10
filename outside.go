@@ -7,6 +7,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+
 	// "github.com/google/gopacket"
 	// "github.com/google/gopacket/layers"
 	// 	"encoding/binary"
@@ -281,10 +282,12 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	}
 
 	dropReason := f.firewall.Drop(out, *fwPacket, true, hostinfo, trustedCAs)
-	if dropReason != nil && l.Level >= logrus.DebugLevel {
-		hostinfo.logger().WithField("fwPacket", fwPacket).
-			WithField("reason", dropReason).
-			Debugln("dropping inbound packet")
+	if dropReason != nil {
+		if l.Level >= logrus.DebugLevel {
+			hostinfo.logger().WithField("fwPacket", fwPacket).
+				WithField("reason", dropReason).
+				Debugln("dropping inbound packet")
+		}
 		return
 	}
 

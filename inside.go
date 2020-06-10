@@ -109,10 +109,12 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 
 	// check if packet is in outbound fw rules
 	dropReason := f.firewall.Drop(p, *fp, false, hostInfo, trustedCAs)
-	if dropReason != nil && l.Level >= logrus.DebugLevel {
-		l.WithField("fwPacket", fp).
-			WithField("reason", dropReason).
-			Debugln("dropping cached packet")
+	if dropReason != nil {
+		if l.Level >= logrus.DebugLevel {
+			l.WithField("fwPacket", fp).
+				WithField("reason", dropReason).
+				Debugln("dropping cached packet")
+		}
 		return
 	}
 
