@@ -37,8 +37,7 @@ func newMessageMetrics() *MessageMetrics {
 	gen := func(t string) [][]metrics.Counter {
 		return [][]metrics.Counter{
 			{
-				metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_stage1", t), nil),
-				metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_stage2", t), nil),
+				metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.handshake_ixpsk0", t), nil),
 			},
 			nil,
 			{metrics.GetOrRegisterCounter(fmt.Sprintf("messages.%s.recv_error", t), nil)},
