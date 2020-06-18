@@ -39,7 +39,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	err := nebula.Main(*configPath, *configTest, Build, "", nil, nil)
+	config := nebula.NewConfig()
+	err := config.Load(*configPath)
+	if err != nil {
+		fmt.Printf("failed to load config: %s", err)
+		os.Exit(1)
+	}
+
+	err = nebula.Main(config, *configTest, true, Build, "", nil, nil)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)

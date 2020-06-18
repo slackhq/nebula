@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -27,8 +28,13 @@ func (p *program) Start(s service.Service) error {
 }
 
 func (p *program) run() error {
-	nebula.Main(*p.configPath, *p.configTest, Build, "",nil, nil)
-	return nil
+	config := nebula.NewConfig()
+	err := config.Load(*p.configPath)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %s", err)
+	}
+
+	return nebula.Main(config, *p.configTest, true, Build, "", nil, nil)
 }
 
 func (p *program) Stop(s service.Service) error {

@@ -6,12 +6,9 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/sshd"
 	"gopkg.in/yaml.v2"
-	"log"
 	"net"
 	"os"
 	"os/signal"
-	"runtime"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,35 +19,24 @@ var l = logrus.New()
 
 type m map[string]interface{}
 
-func Main(configPath string, configTest bool, buildVersion string, logFile string, tunFd *int, commandChan <-chan string) error {
+type CommandRequest struct {
+	Command string
+	Callback chan error
+}
 
+func Main(config *Config, configTest bool, block bool, buildVersion string, logFile string, tunFd *int, commandChan <-chan CommandRequest) error {
 	if logFile == "" {
 		l.Out = os.Stdout
 	} else {
-		f, err := os.OpenFile(logFile, os.O_WRONLY | os.O_CREATE | os.O_TRUNC, 0644)
+		f, err := os.OpenFile(logFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 		if err != nil {
 			return err
 		}
-
-		log.Printf("SET OUTPUT TO %s", logFile)
 		l.SetOutput(f)
 	}
 
 	l.Formatter = &logrus.TextFormatter{
 		FullTimestamp: true,
-	}
-
-	config := NewConfig()
-	var err error
-	if runtime.GOOS == "android" || (runtime.GOOS == "darwin" && (runtime.GOARCH == "arm" || runtime.GOARCH == "arm64")) {
-		// GC more often, largely for iOS due to extension 15mb limit
-		debug.SetGCPercent(20)
-		err = config.LoadString(configPath)
-	} else {
-		err = config.Load(configPath)
-	}
-	if err != nil {
-		return fmt.Errorf("failed to load config: %s", err)
 	}
 
 	// Print the config if in test, the exit comes later
@@ -64,7 +50,7 @@ func Main(configPath string, configTest bool, buildVersion string, logFile strin
 		l.Println(string(b))
 	}
 
-	err = configLogger(config)
+	err := configLogger(config)
 	if err != nil {
 		return fmt.Errorf("failed to configure the logger: %s", err)
 	}
@@ -162,17 +148,17 @@ func Main(configPath string, configTest bool, buildVersion string, logFile strin
 	}
 
 	sigChan := make(chan os.Signal)
+	killChan := make(chan CommandRequest)
 	if commandChan != nil {
 		go func() {
-			cmd := ""
+			cmd := CommandRequest{}
 			for {
 				cmd = <-commandChan
-				switch cmd {
+				switch cmd.Command {
 				case "rebind":
 					udpServer.Rebind()
-					l.Infof("Rebind called")
 				case "exit":
-					sigChan <- os.Interrupt
+					killChan <- cmd
 				}
 			}
 		}()
@@ -414,19 +400,33 @@ func Main(configPath string, configTest bool, buildVersion string, logFile strin
 		go dnsMain(hostMap, config)
 	}
 
-	// Just sit here and be friendly, main thread.
-	shutdownBlock(ifce, sigChan)
+	if block {
+		// Just sit here and be friendly, main thread.
+		shutdownBlock(ifce, sigChan, killChan)
+	} else {
+		// Even though we aren't blocking we still want to shutdown gracefully
+		go shutdownBlock(ifce, sigChan, killChan)
+	}
 	return nil
 }
 
-func shutdownBlock(ifce *Interface, sigChan chan os.Signal) {
+func shutdownBlock(ifce *Interface, sigChan chan os.Signal, killChan chan CommandRequest) {
+	var cmd CommandRequest
+	var sig string
+
 	signal.Notify(sigChan, syscall.SIGTERM)
 	signal.Notify(sigChan, syscall.SIGINT)
 
-	sig := <-sigChan
+	select {
+		case rawSig := <-sigChan:
+			sig = rawSig.String()
+		case cmd = <-killChan:
+			sig = "controlling app"
+	}
+
 	l.WithField("signal", sig).Info("Caught signal, shutting down")
 
-	//TODO: stop tun and udp routines, the lock on hostMap does effectively does that though
+	//TODO: stop tun and udp routines, the lock on hostMap effectively does that though
 	//TODO: this is probably better as a function in ConnectionManager or HostMap directly
 	ifce.hostMap.Lock()
 	for _, h := range ifce.hostMap.Hosts {
@@ -439,4 +439,9 @@ func shutdownBlock(ifce *Interface, sigChan chan os.Signal) {
 	ifce.hostMap.Unlock()
 
 	l.WithField("signal", sig).Info("Goodbye")
+	if cmd.Callback != nil {
+		select {
+			case cmd.Callback <- nil:
+		}
+	}
 }
