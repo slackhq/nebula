@@ -216,6 +216,7 @@ func (c Tun) Activate() error {
 		LinkIndex: link.Attrs().Index,
 		Dst:       dr,
 		MTU:       c.DefaultMTU,
+		AdvMSS:    c.advMSS(route{}),
 		Scope:     unix.RT_SCOPE_LINK,
 		Src:       c.Cidr.IP,
 		Protocol:  unix.RTPROT_KERNEL,
@@ -233,6 +234,7 @@ func (c Tun) Activate() error {
 			LinkIndex: link.Attrs().Index,
 			Dst:       r.route,
 			MTU:       r.mtu,
+			AdvMSS:    c.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
 		}
 
@@ -248,6 +250,7 @@ func (c Tun) Activate() error {
 			LinkIndex: link.Attrs().Index,
 			Dst:       r.route,
 			MTU:       r.mtu,
+			AdvMSS:    c.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
 		}
 
@@ -264,4 +267,30 @@ func (c Tun) Activate() error {
 	}
 
 	return nil
+}
+
+func (c Tun) advMSS(r route) int {
+	// We only need to set advmss if the MTU varies across routes
+	if c.mtuVaries() {
+		mtu := r.mtu
+		if r.mtu == 0 {
+			mtu = c.DefaultMTU
+		}
+		return mtu - 40
+	}
+	return 0
+}
+
+func (c Tun) mtuVaries() bool {
+	for _, r := range c.Routes {
+		if r.mtu != 0 && r.mtu != c.DefaultMTU {
+			return true
+		}
+	}
+	for _, r := range c.UnsafeRoutes {
+		if r.mtu != 0 && r.mtu != c.DefaultMTU {
+			return true
+		}
+	}
+	return false
 }
