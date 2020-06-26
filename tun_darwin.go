@@ -27,8 +27,8 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 
 	// NOTE: You cannot set the deviceName under Darwin, so you must check tun.Device after calling .Activate()
 	return &Tun{
-		Cidr: cidr,
-		MTU:  defaultMTU,
+		Cidr:         cidr,
+		MTU:          defaultMTU,
 		UnsafeRoutes: unsafeRoutes,
 	}, nil
 }
