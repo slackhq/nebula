@@ -194,6 +194,9 @@ logging:
   #retries: 20
   # wait_rotation is the number of handshake attempts to do before starting to try non-local IP addresses
   #wait_rotation: 5
+  # trigger_buffer is the size of the buffer channel for quickly sending handshakes
+  # after receiving the response for lighthouse queries
+  #trigger_buffer: 64
 
 # Nebula security group configuration
 firewall:

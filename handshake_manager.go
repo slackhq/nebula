@@ -16,21 +16,24 @@ const (
 	DefaultHandshakeTryInterval = time.Millisecond * 100
 	DefaultHandshakeRetries     = 20
 	// DefaultHandshakeWaitRotation is the number of handshake attempts to do before starting to use other ips addresses
-	DefaultHandshakeWaitRotation = 5
+	DefaultHandshakeWaitRotation  = 5
+	DefaultHandshakeTriggerBuffer = 64
 )
 
 var (
 	defaultHandshakeConfig = HandshakeConfig{
-		tryInterval:  DefaultHandshakeTryInterval,
-		retries:      DefaultHandshakeRetries,
-		waitRotation: DefaultHandshakeWaitRotation,
+		tryInterval:   DefaultHandshakeTryInterval,
+		retries:       DefaultHandshakeRetries,
+		waitRotation:  DefaultHandshakeWaitRotation,
+		triggerBuffer: DefaultHandshakeTriggerBuffer,
 	}
 )
 
 type HandshakeConfig struct {
-	tryInterval  time.Duration
-	retries      int
-	waitRotation int
+	tryInterval   time.Duration
+	retries       int
+	waitRotation  int
+	triggerBuffer int
 
 	messageMetrics *MessageMetrics
 }
@@ -41,6 +44,9 @@ type HandshakeManager struct {
 	lightHouse     *LightHouse
 	outside        *udpConn
 	config         HandshakeConfig
+
+	// can be used to trigger outbound handshake for the given vpnIP
+	trigger chan uint32
 
 	OutboundHandshakeTimer *SystemTimerWheel
 	InboundHandshakeTimer  *SystemTimerWheel
@@ -57,6 +63,8 @@ func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainH
 
 		config: config,
 
+		trigger: make(chan uint32, config.triggerBuffer),
+
 		OutboundHandshakeTimer: NewSystemTimerWheel(config.tryInterval, config.tryInterval*time.Duration(config.retries)),
 		InboundHandshakeTimer:  NewSystemTimerWheel(config.tryInterval, config.tryInterval*time.Duration(config.retries)),
 
@@ -66,9 +74,15 @@ func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainH
 
 func (c *HandshakeManager) Run(f EncWriter) {
 	clockSource := time.Tick(c.config.tryInterval)
-	for now := range clockSource {
-		c.NextOutboundHandshakeTimerTick(now, f)
-		c.NextInboundHandshakeTimerTick(now)
+	for {
+		select {
+		case vpnIP := <-c.trigger:
+			l.WithField("vpnIp", IntIp(vpnIP)).Debug("HandshakeManager: triggered")
+			c.handleOutbound(vpnIP, f, true)
+		case now := <-clockSource:
+			c.NextOutboundHandshakeTimerTick(now, f)
+			c.NextInboundHandshakeTimerTick(now)
+		}
 	}
 }
 
@@ -80,17 +94,15 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 			break
 		}
 		vpnIP := ep.(uint32)
-
-		c.handleOutbound(vpnIP, f)
+		c.handleOutbound(vpnIP, f, false)
 	}
 }
 
-func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter) {
+func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseTriggered bool) {
 	index, err := c.pendingHostMap.GetIndexByVpnIP(vpnIP)
 	if err != nil {
 		return
 	}
-
 	hostinfo, err := c.pendingHostMap.QueryVpnIP(vpnIP)
 	if err != nil {
 		return
@@ -103,13 +115,26 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter) {
 			// We continue to query the lighthouse because hosts may
 			// come online during handshake retries. If the query
 			// succeeds (no error), add the lighthouse info to hostinfo
-			ips, err := c.lightHouse.Query(vpnIP, f)
+			ips := c.lightHouse.QueryCache(vpnIP)
+			// If we have no responses yet, or only one IP (the host hadn't
+			// finished reporting its own IPs yet), then send another query to
+			// the LH.
+			if len(ips) <= 1 {
+				ips, err = c.lightHouse.Query(vpnIP, f)
+			}
 			if err == nil {
 				for _, ip := range ips {
 					hostinfo.AddRemote(ip)
 				}
 				hostinfo.ForcePromoteBest(c.mainHostMap.preferredRanges)
 			}
+		} else if lighthouseTriggered {
+			// We were triggered by a lighthouse HostQueryReply packet, but
+			// we have already picked a remote for this host (this can happen
+			// if we are configured with multiple lighthouses). So we can skip
+			// this trigger and let the timerwheel handle the rest of the
+			// process
+			return
 		}
 
 		hostinfo.HandshakeCounter++
@@ -142,8 +167,10 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter) {
 		}
 
 		// Readd to the timer wheel so we continue trying wait HandshakeTryInterval * counter longer for next try
-		//l.Infoln("Interval: ", HandshakeTryInterval*time.Duration(hostinfo.HandshakeCounter))
-		c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval*time.Duration(hostinfo.HandshakeCounter))
+		if !lighthouseTriggered {
+			//l.Infoln("Interval: ", HandshakeTryInterval*time.Duration(hostinfo.HandshakeCounter))
+			c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval*time.Duration(hostinfo.HandshakeCounter))
+		}
 	} else {
 		c.pendingHostMap.DeleteVpnIP(vpnIP)
 		c.pendingHostMap.DeleteIndex(index)
