@@ -270,27 +270,14 @@ func (c Tun) Activate() error {
 }
 
 func (c Tun) advMSS(r route) int {
-	// We only need to set advmss if the MTU varies across routes
-	if c.mtuVaries() {
-		mtu := r.mtu
-		if r.mtu == 0 {
-			mtu = c.DefaultMTU
-		}
+	mtu := r.mtu
+	if r.mtu == 0 {
+		mtu = c.DefaultMTU
+	}
+
+	// We only need to set advmss if the route MTU does not match the device MTU
+	if mtu != c.MaxMTU {
 		return mtu - 40
 	}
 	return 0
-}
-
-func (c Tun) mtuVaries() bool {
-	for _, r := range c.Routes {
-		if r.mtu != 0 && r.mtu != c.DefaultMTU {
-			return true
-		}
-	}
-	for _, r := range c.UnsafeRoutes {
-		if r.mtu != 0 && r.mtu != c.DefaultMTU {
-			return true
-		}
-	}
-	return false
 }
