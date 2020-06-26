@@ -172,6 +172,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 	hostMap := NewHostMap("main", tunCidr, preferredRanges)
 	hostMap.SetDefaultRoute(ip2int(net.ParseIP(config.GetString("default_route", "0.0.0.0"))))
 	hostMap.addUnsafeRoutes(&unsafeRoutes)
+	hostMap.metricsEnabled = config.GetBool("stats.message_metrics", false)
 
 	l.WithField("network", hostMap.vpnCIDR).WithField("preferredRanges", hostMap.preferredRanges).Info("Main HostMap created")
 
@@ -226,6 +227,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		udpServer,
 		punchy.Respond,
 		punchy.Delay,
+		config.GetBool("stats.lighthouse_metrics", false),
 	)
 
 	remoteAllowList, err := config.GetAllowList("lighthouse.remote_allow_list", false)
@@ -280,10 +282,19 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		l.WithError(err).Error("Lighthouse unreachable")
 	}
 
+	var messageMetrics *MessageMetrics
+	if config.GetBool("stats.message_metrics", false) {
+		messageMetrics = newMessageMetrics()
+	} else {
+		messageMetrics = newMessageMetricsOnlyRecvError()
+	}
+
 	handshakeConfig := HandshakeConfig{
 		tryInterval:  config.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
 		retries:      config.GetInt("handshakes.retries", DefaultHandshakeRetries),
 		waitRotation: config.GetInt("handshakes.wait_rotation", DefaultHandshakeWaitRotation),
+
+		messageMetrics: messageMetrics,
 	}
 
 	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpServer, handshakeConfig)
@@ -310,6 +321,7 @@ func Main(configPath string, configTest bool, buildVersion string) {
 		DropLocalBroadcast:      config.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:           config.GetBool("tun.drop_multicast", false),
 		UDPBatchSize:            config.GetInt("listen.batch", 64),
+		MessageMetrics:          messageMetrics,
 	}
 
 	switch ifConfig.Cipher {

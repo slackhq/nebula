@@ -30,6 +30,7 @@ type HostMap struct {
 	vpnCIDR         *net.IPNet
 	defaultRoute    uint32
 	unsafeRoutes    *CIDRTree
+	metricsEnabled  bool
 }
 
 type HostInfo struct {
@@ -384,8 +385,16 @@ func (hm *HostMap) PunchList() []*udpAddr {
 }
 
 func (hm *HostMap) Punchy(conn *udpConn) {
+	var metricsTxPunchy metrics.Counter
+	if hm.metricsEnabled {
+		metricsTxPunchy = metrics.GetOrRegisterCounter("messages.tx.punchy", nil)
+	} else {
+		metricsTxPunchy = metrics.NilCounter{}
+	}
+
 	for {
 		for _, addr := range hm.PunchList() {
+			metricsTxPunchy.Inc(1)
 			conn.WriteTo([]byte{1}, addr)
 		}
 		time.Sleep(time.Second * 30)

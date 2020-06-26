@@ -25,6 +25,7 @@ type InterfaceConfig struct {
 	DropLocalBroadcast      bool
 	DropMulticast           bool
 	UDPBatchSize            int
+	MessageMetrics          *MessageMetrics
 }
 
 type Interface struct {
@@ -45,9 +46,8 @@ type Interface struct {
 	udpBatchSize       int
 	version            string
 
-	metricRxRecvError metrics.Counter
-	metricTxRecvError metrics.Counter
-	metricHandshakes  metrics.Histogram
+	metricHandshakes metrics.Histogram
+	messageMetrics   *MessageMetrics
 }
 
 func NewInterface(c *InterfaceConfig) (*Interface, error) {
@@ -80,9 +80,8 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		dropMulticast:      c.DropMulticast,
 		udpBatchSize:       c.UDPBatchSize,
 
-		metricRxRecvError: metrics.GetOrRegisterCounter("messages.rx.recv_error", nil),
-		metricTxRecvError: metrics.GetOrRegisterCounter("messages.tx.recv_error", nil),
-		metricHandshakes:  metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
+		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
+		messageMetrics:   c.MessageMetrics,
 	}
 
 	ifce.connectionManager = newConnectionManager(ifce, c.checkInterval, c.pendingDeletionInterval)

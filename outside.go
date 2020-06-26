@@ -54,6 +54,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		// Fallthrough to the bottom to record incoming traffic
 
 	case lightHouse:
+		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		if !f.handleEncrypted(ci, addr, header) {
 			return
 		}
@@ -74,6 +75,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		// Fallthrough to the bottom to record incoming traffic
 
 	case test:
+		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		if !f.handleEncrypted(ci, addr, header) {
 			return
 		}
@@ -102,15 +104,18 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		// are unauthenticated
 
 	case handshake:
+		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		HandleIncomingHandshake(f, addr, packet, header, hostinfo)
 		return
 
 	case recvError:
+		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		// TODO: Remove this with recv_error deprecation
 		f.handleRecvError(addr, header)
 		return
 
 	case closeTunnel:
+		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		if !f.handleEncrypted(ci, addr, header) {
 			return
 		}
@@ -122,6 +127,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		return
 
 	default:
+		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		hostinfo.logger().Debugf("Unexpected packet received from %s", addr)
 		return
 	}
@@ -298,7 +304,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 }
 
 func (f *Interface) sendRecvError(endpoint *udpAddr, index uint32) {
-	f.metricTxRecvError.Inc(1)
+	f.messageMetrics.Tx(recvError, 0, 1)
 
 	//TODO: this should be a signed message so we can trust that we should drop the index
 	b := HeaderEncode(make([]byte, HeaderLen), Version, uint8(recvError), 0, index, 0)
@@ -311,8 +317,6 @@ func (f *Interface) sendRecvError(endpoint *udpAddr, index uint32) {
 }
 
 func (f *Interface) handleRecvError(addr *udpAddr, h *Header) {
-	f.metricRxRecvError.Inc(1)
-
 	// This flag is to stop caring about recv_error from old versions
 	// This should go away when the old version is gone from prod
 	if l.Level >= logrus.DebugLevel {

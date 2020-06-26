@@ -177,6 +177,15 @@ logging:
   #subsystem: nebula
   #interval: 10s
 
+  # enables counter metrics for meta packets
+  #   e.g.: `messages.tx.handshake`
+  # NOTE: `message.{tx,rx}.recv_error` is always emitted
+  #message_metrics: false
+
+  # enables detailed counter metrics for lighthouse packets
+  #   e.g.: `lighthouse.rx.HostQuery`
+  #lighthouse_metrics: false
+
 # Handshake Manger Settings
 #handshakes:
   # Total time to try a handshake = sequence of `try_interval * retries`

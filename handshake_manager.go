@@ -31,6 +31,8 @@ type HandshakeConfig struct {
 	tryInterval  time.Duration
 	retries      int
 	waitRotation int
+
+	messageMetrics *MessageMetrics
 }
 
 type HandshakeManager struct {
@@ -42,6 +44,8 @@ type HandshakeManager struct {
 
 	OutboundHandshakeTimer *SystemTimerWheel
 	InboundHandshakeTimer  *SystemTimerWheel
+
+	messageMetrics *MessageMetrics
 }
 
 func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udpConn, config HandshakeConfig) *HandshakeManager {
@@ -55,6 +59,8 @@ func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainH
 
 		OutboundHandshakeTimer: NewSystemTimerWheel(config.tryInterval, config.tryInterval*time.Duration(config.retries)),
 		InboundHandshakeTimer:  NewSystemTimerWheel(config.tryInterval, config.tryInterval*time.Duration(config.retries)),
+
+		messageMetrics: config.messageMetrics,
 	}
 }
 
@@ -111,6 +117,7 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 
 			// Ensure the handshake is ready to avoid a race in timer tick and stage 0 handshake generation
 			if hostinfo.HandshakeReady && hostinfo.remote != nil {
+				c.messageMetrics.Tx(handshake, NebulaMessageSubType(hostinfo.HandshakePacket[0][1]), 1)
 				err := c.outside.WriteTo(hostinfo.HandshakePacket[0], hostinfo.remote)
 				if err != nil {
 					hostinfo.logger().WithField("udpAddr", hostinfo.remote).
