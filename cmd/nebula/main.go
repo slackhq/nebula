@@ -16,7 +16,7 @@ import (
 var Build string
 
 func main() {
-	configPath := flag.String("config", "", "Path to either a file or directory to load configuration from")
+	configPath := flag.String("config", "config.yaml", "Path to either a file or directory to load configuration from")
 	configTest := flag.Bool("test", false, "Test the config and print the end result. Non zero exit indicates a faulty config")
 	printVersion := flag.Bool("version", false, "Print version")
 	printUsage := flag.Bool("help", false, "Print command line usage")
@@ -31,12 +31,6 @@ func main() {
 	if *printUsage {
 		flag.Usage()
 		os.Exit(0)
-	}
-
-	if *configPath == "" {
-		fmt.Println("-config flag must be set")
-		flag.Usage()
-		os.Exit(1)
 	}
 
 	nebula.Main(*configPath, *configTest, Build)
