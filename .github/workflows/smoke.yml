@@ -14,7 +14,7 @@ on:
 jobs:
 
   smoke:
-    name: Run 3 node smoke test
+    name: Run multi node smoke test
     runs-on: ubuntu-latest
     steps:
 

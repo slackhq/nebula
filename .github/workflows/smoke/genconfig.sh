@@ -2,6 +2,7 @@
 
 set -e
 
+FIREWALL_ALL='[{"port": "any", "proto": "any", "host": "any"}]'
 
 if [ "$STATIC_HOSTS" ] || [ "$LIGHTHOUSES" ]
 then
@@ -48,13 +49,6 @@ tun:
   dev: ${TUN_DEV:-nebula1}
 
 firewall:
-  outbound:
-    - port: any
-      proto: any
-      host: any
-
-  inbound:
-    - port: any
-      proto: any
-      host: any
+  outbound: ${OUTBOUND:-$FIREWALL_ALL}
+  inbound: ${INBOUND:-$FIREWALL_ALL}
 EOF
