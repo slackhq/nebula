@@ -19,12 +19,12 @@ type Tun struct {
 }
 
 func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
-	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
+	return nil, fmt.Errorf("newTunFromFd not supported in Windows")
 }
 
 func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
 	if len(routes) > 0 {
-		return nil, fmt.Errorf("Route MTU not supported in Windows")
+		return nil, fmt.Errorf("route MTU not supported in Windows")
 	}
 
 	// NOTE: You cannot set the deviceName under Windows, so you must check tun.Device after calling .Activate()

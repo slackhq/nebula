@@ -20,7 +20,7 @@ var l = logrus.New()
 type m map[string]interface{}
 
 type CommandRequest struct {
-	Command string
+	Command  string
 	Callback chan error
 }
 
@@ -418,10 +418,10 @@ func shutdownBlock(ifce *Interface, sigChan chan os.Signal, killChan chan Comman
 	signal.Notify(sigChan, syscall.SIGINT)
 
 	select {
-		case rawSig := <-sigChan:
-			sig = rawSig.String()
-		case cmd = <-killChan:
-			sig = "controlling app"
+	case rawSig := <-sigChan:
+		sig = rawSig.String()
+	case cmd = <-killChan:
+		sig = "controlling app"
 	}
 
 	l.WithField("signal", sig).Info("Caught signal, shutting down")
@@ -441,7 +441,7 @@ func shutdownBlock(ifce *Interface, sigChan chan os.Signal, killChan chan Comman
 	l.WithField("signal", sig).Info("Goodbye")
 	if cmd.Callback != nil {
 		select {
-			case cmd.Callback <- nil:
+		case cmd.Callback <- nil:
 		}
 	}
 }
