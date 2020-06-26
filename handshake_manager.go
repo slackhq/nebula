@@ -81,68 +81,72 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 		}
 		vpnIP := ep.(uint32)
 
-		index, err := c.pendingHostMap.GetIndexByVpnIP(vpnIP)
-		if err != nil {
-			continue
-		}
+		c.handleOutbound(vpnIP, f)
+	}
+}
 
-		hostinfo, err := c.pendingHostMap.QueryVpnIP(vpnIP)
-		if err != nil {
-			continue
-		}
+func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter) {
+	index, err := c.pendingHostMap.GetIndexByVpnIP(vpnIP)
+	if err != nil {
+		return
+	}
 
-		// If we haven't finished the handshake and we haven't hit max retries, query
-		// lighthouse and then send the handshake packet again.
-		if hostinfo.HandshakeCounter < c.config.retries && !hostinfo.HandshakeComplete {
-			if hostinfo.remote == nil {
-				// We continue to query the lighthouse because hosts may
-				// come online during handshake retries. If the query
-				// succeeds (no error), add the lighthouse info to hostinfo
-				ips, err := c.lightHouse.Query(vpnIP, f)
-				if err == nil {
-					for _, ip := range ips {
-						hostinfo.AddRemote(ip)
-					}
-					hostinfo.ForcePromoteBest(c.mainHostMap.preferredRanges)
+	hostinfo, err := c.pendingHostMap.QueryVpnIP(vpnIP)
+	if err != nil {
+		return
+	}
+
+	// If we haven't finished the handshake and we haven't hit max retries, query
+	// lighthouse and then send the handshake packet again.
+	if hostinfo.HandshakeCounter < c.config.retries && !hostinfo.HandshakeComplete {
+		if hostinfo.remote == nil {
+			// We continue to query the lighthouse because hosts may
+			// come online during handshake retries. If the query
+			// succeeds (no error), add the lighthouse info to hostinfo
+			ips, err := c.lightHouse.Query(vpnIP, f)
+			if err == nil {
+				for _, ip := range ips {
+					hostinfo.AddRemote(ip)
 				}
+				hostinfo.ForcePromoteBest(c.mainHostMap.preferredRanges)
 			}
-
-			hostinfo.HandshakeCounter++
-
-			// We want to use the "best" calculated ip for the first 5 attempts, after that we just blindly rotate through
-			// all the others until we can stand up a connection.
-			if hostinfo.HandshakeCounter > c.config.waitRotation {
-				hostinfo.rotateRemote()
-			}
-
-			// Ensure the handshake is ready to avoid a race in timer tick and stage 0 handshake generation
-			if hostinfo.HandshakeReady && hostinfo.remote != nil {
-				c.messageMetrics.Tx(handshake, NebulaMessageSubType(hostinfo.HandshakePacket[0][1]), 1)
-				err := c.outside.WriteTo(hostinfo.HandshakePacket[0], hostinfo.remote)
-				if err != nil {
-					hostinfo.logger().WithField("udpAddr", hostinfo.remote).
-						WithField("initiatorIndex", hostinfo.localIndexId).
-						WithField("remoteIndex", hostinfo.remoteIndexId).
-						WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-						WithError(err).Error("Failed to send handshake message")
-				} else {
-					//TODO: this log line is assuming a lot of stuff around the cached stage 0 handshake packet, we should
-					// keep the real packet struct around for logging purposes
-					hostinfo.logger().WithField("udpAddr", hostinfo.remote).
-						WithField("initiatorIndex", hostinfo.localIndexId).
-						WithField("remoteIndex", hostinfo.remoteIndexId).
-						WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-						Info("Handshake message sent")
-				}
-			}
-
-			// Readd to the timer wheel so we continue trying wait HandshakeTryInterval * counter longer for next try
-			//l.Infoln("Interval: ", HandshakeTryInterval*time.Duration(hostinfo.HandshakeCounter))
-			c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval*time.Duration(hostinfo.HandshakeCounter))
-		} else {
-			c.pendingHostMap.DeleteVpnIP(vpnIP)
-			c.pendingHostMap.DeleteIndex(index)
 		}
+
+		hostinfo.HandshakeCounter++
+
+		// We want to use the "best" calculated ip for the first 5 attempts, after that we just blindly rotate through
+		// all the others until we can stand up a connection.
+		if hostinfo.HandshakeCounter > c.config.waitRotation {
+			hostinfo.rotateRemote()
+		}
+
+		// Ensure the handshake is ready to avoid a race in timer tick and stage 0 handshake generation
+		if hostinfo.HandshakeReady && hostinfo.remote != nil {
+			c.messageMetrics.Tx(handshake, NebulaMessageSubType(hostinfo.HandshakePacket[0][1]), 1)
+			err := c.outside.WriteTo(hostinfo.HandshakePacket[0], hostinfo.remote)
+			if err != nil {
+				hostinfo.logger().WithField("udpAddr", hostinfo.remote).
+					WithField("initiatorIndex", hostinfo.localIndexId).
+					WithField("remoteIndex", hostinfo.remoteIndexId).
+					WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+					WithError(err).Error("Failed to send handshake message")
+			} else {
+				//TODO: this log line is assuming a lot of stuff around the cached stage 0 handshake packet, we should
+				// keep the real packet struct around for logging purposes
+				hostinfo.logger().WithField("udpAddr", hostinfo.remote).
+					WithField("initiatorIndex", hostinfo.localIndexId).
+					WithField("remoteIndex", hostinfo.remoteIndexId).
+					WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+					Info("Handshake message sent")
+			}
+		}
+
+		// Readd to the timer wheel so we continue trying wait HandshakeTryInterval * counter longer for next try
+		//l.Infoln("Interval: ", HandshakeTryInterval*time.Duration(hostinfo.HandshakeCounter))
+		c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval*time.Duration(hostinfo.HandshakeCounter))
+	} else {
+		c.pendingHostMap.DeleteVpnIP(vpnIP)
+		c.pendingHostMap.DeleteIndex(index)
 	}
 }
 
