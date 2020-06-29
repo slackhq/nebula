@@ -15,7 +15,8 @@ import (
 	"time"
 )
 
-var l *logrus.Logger
+// The caller should provide a real logger, we have one just in case
+var l = logrus.New()
 
 type m map[string]interface{}
 
@@ -281,7 +282,7 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logg
 					ip := addr.IP
 					port, err := strconv.Atoi(parts[1])
 					if err != nil {
-						return NewContextualError("Static host address for %s could not be parsed", m{"vpnIp": vpnIp}, err)
+						return NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
 					}
 					lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip2int(ip), uint16(port)), true)
 				}
