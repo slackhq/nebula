@@ -32,3 +32,12 @@ func NewListenConfig(multi bool) net.ListenConfig {
 		},
 	}
 }
+
+func (u *udpConn) Rebind() error {
+	file, err := u.File()
+	if err != nil {
+		return err
+	}
+
+	return syscall.SetsockoptInt(int(file.Fd()), unix.IPPROTO_IP, unix.IP_BOUND_IF, 0)
+}

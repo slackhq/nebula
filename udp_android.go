@@ -32,3 +32,7 @@ func NewListenConfig(multi bool) net.ListenConfig {
 		},
 	}
 }
+
+func (u *udpConn) Rebind() {
+	return
+}

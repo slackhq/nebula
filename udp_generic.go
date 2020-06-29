@@ -12,7 +12,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"syscall"
 )
 
 type udpAddr struct {
@@ -121,12 +120,4 @@ func udp2ipInt(addr *udpAddr) uint32 {
 
 func hostDidRoam(addr *udpAddr, newaddr *udpAddr) bool {
 	return !addr.Equals(newaddr)
-}
-
-func (u *udpConn) Rebind() error {
-	file, err := u.File()
-	if err != nil {
-		return err
-	}
-	return syscall.SetsockoptInt(int(file.Fd()), syscall.IPPROTO_IP, 0x19, 0)
 }
