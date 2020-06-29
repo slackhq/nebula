@@ -22,6 +22,10 @@ type Tun struct {
 	io.ReadWriteCloser
 }
 
+func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+	return nil, fmt.Errorf("newTunFromFd not supported in FreeBSD")
+}
+
 func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("Route MTU not supported in FreeBSD")
