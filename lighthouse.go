@@ -361,12 +361,10 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 			ans := NewUDPAddr(a.Ip, uint16(a.Port))
 			lh.AddRemote(n.Details.VpnIp, ans, false)
 		}
-		if lh.handshakeTrigger != nil {
-			// Non-blocking attempt to trigger, skip if it would block
-			select {
-			case lh.handshakeTrigger <- n.Details.VpnIp:
-			default:
-			}
+		// Non-blocking attempt to trigger, skip if it would block
+		select {
+		case lh.handshakeTrigger <- n.Details.VpnIp:
+		default:
 		}
 
 	case NebulaMeta_HostUpdateNotification:
