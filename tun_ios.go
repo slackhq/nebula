@@ -30,13 +30,13 @@ func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route,
 	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
 	ifce = &Tun{
 		Cidr:            cidr,
+		Device:          "iOS",
 		ReadWriteCloser: &tunReadCloser{f: file},
 	}
 	return
 }
 
 func (c *Tun) Activate() error {
-	c.Device = "iOS"
 	return nil
 }
 
@@ -102,4 +102,12 @@ func (t *tunReadCloser) Write(from []byte) (int, error) {
 
 func (t *tunReadCloser) Close() error {
 	return t.f.Close()
+}
+
+func (c *Tun) CidrNet() *net.IPNet {
+	return c.Cidr
+}
+
+func (c *Tun) DeviceName() string {
+	return c.Device
 }

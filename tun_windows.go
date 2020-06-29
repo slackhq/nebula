@@ -88,6 +88,14 @@ func (c *Tun) Activate() error {
 	return nil
 }
 
+func (c *Tun) CidrNet() *net.IPNet {
+	return c.Cidr
+}
+
+func (c *Tun) DeviceName() string {
+	return c.Device
+}
+
 func (c *Tun) WriteRaw(b []byte) error {
 	_, err := c.Write(b)
 	return err
