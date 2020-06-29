@@ -11,7 +11,6 @@ import (
 )
 
 type Tun struct {
-	// We have our own
 	Device       string
 	Cidr         *net.IPNet
 	MTU          int

@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-var l = logrus.New()
+var l *logrus.Logger
 
 type m map[string]interface{}
 
@@ -24,17 +24,8 @@ type CommandRequest struct {
 	Callback chan error
 }
 
-func Main(config *Config, configTest bool, block bool, buildVersion string, logFile string, tunFd *int, commandChan <-chan CommandRequest) error {
-	if logFile == "" {
-		l.Out = os.Stdout
-	} else {
-		f, err := os.OpenFile(logFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-		if err != nil {
-			return err
-		}
-		l.SetOutput(f)
-	}
-
+func Main(config *Config, configTest bool, block bool, buildVersion string, logger *logrus.Logger, tunFd *int, commandChan <-chan CommandRequest) error {
+	l = logger
 	l.Formatter = &logrus.TextFormatter{
 		FullTimestamp: true,
 	}
@@ -52,7 +43,7 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 
 	err := configLogger(config)
 	if err != nil {
-		return fmt.Errorf("failed to configure the logger: %s", err)
+		return NewContextualError("Failed to configure the logger", nil, err)
 	}
 
 	config.RegisterReloadCallback(func(c *Config) {
@@ -66,20 +57,20 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 	trustedCAs, err = loadCAFromConfig(config)
 	if err != nil {
 		//The errors coming out of loadCA are already nicely formatted
-		return fmt.Errorf("failed to load ca from config: %s", err)
+		return NewContextualError("Failed to load ca from config", nil, err)
 	}
 	l.WithField("fingerprints", trustedCAs.GetFingerprints()).Debug("Trusted CA fingerprints")
 
 	cs, err := NewCertStateFromConfig(config)
 	if err != nil {
 		//The errors coming out of NewCertStateFromConfig are already nicely formatted
-		return fmt.Errorf("failed to load certificate from config: %s", err)
+		return NewContextualError("Failed to load certificate from config", nil, err)
 	}
 	l.WithField("cert", cs.certificate).Debug("Client nebula certificate")
 
 	fw, err := NewFirewallFromConfig(cs.certificate, config)
 	if err != nil {
-		return fmt.Errorf("error while loading firewall rules: %s", err)
+		return NewContextualError("Error while loading firewall rules", nil, err)
 	}
 	l.WithField("firewallHash", fw.GetRuleHash()).Info("Firewall started")
 
@@ -87,11 +78,11 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 	tunCidr := cs.certificate.Details.Ips[0]
 	routes, err := parseRoutes(config, tunCidr)
 	if err != nil {
-		return fmt.Errorf("could not parse tun.routes: %s", err)
+		return NewContextualError("Could not parse tun.routes", nil, err)
 	}
 	unsafeRoutes, err := parseUnsafeRoutes(config, tunCidr)
 	if err != nil {
-		return fmt.Errorf("could not parse tun.unsafe_routes: %s", err)
+		return NewContextualError("Could not parse tun.unsafe_routes", nil, err)
 	}
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
@@ -99,7 +90,7 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 	if config.GetBool("sshd.enabled", false) {
 		err = configSSH(ssh, config)
 		if err != nil {
-			return fmt.Errorf("error while configuring the sshd: %s", err)
+			return NewContextualError("Error while configuring the sshd", nil, err)
 		}
 	}
 
@@ -131,7 +122,7 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 		}
 
 		if err != nil {
-			return fmt.Errorf("failed to get a tun/tap device: %s", err)
+			return NewContextualError("Failed to get a tun/tap device", nil, err)
 		}
 	}
 
@@ -142,7 +133,7 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 	if !configTest {
 		udpServer, err = NewListener(config.GetString("listen.host", "0.0.0.0"), config.GetInt("listen.port", 0), udpQueues > 1)
 		if err != nil {
-			return fmt.Errorf("failed to open udp listener: %s", err)
+			return NewContextualError("Failed to open udp listener", nil, err)
 		}
 		udpServer.reloadConfig(config)
 	}
@@ -172,7 +163,7 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 		for _, rawPreferredRange := range rawPreferredRanges {
 			_, preferredRange, err := net.ParseCIDR(rawPreferredRange)
 			if err != nil {
-				return fmt.Errorf("failed to parse preferred_ranges: %s", err)
+				return NewContextualError("Failed to parse preferred ranges", nil, err)
 			}
 			preferredRanges = append(preferredRanges, preferredRange)
 		}
@@ -185,7 +176,7 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 	if rawLocalRange != "" {
 		_, localRange, err := net.ParseCIDR(rawLocalRange)
 		if err != nil {
-			return fmt.Errorf("failed to parse local_range: %s", err)
+			return NewContextualError("Failed to parse local_range", nil, err)
 		}
 
 		// Check if the entry for local_range was already specified in
@@ -225,7 +216,7 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 	if port == 0 && !configTest {
 		uPort, err := udpServer.LocalAddr()
 		if err != nil {
-			return fmt.Errorf("failed to get listening port: %s", err)
+			return NewContextualError("Failed to get listening port", nil, err)
 		}
 		port = int(uPort.Port)
 	}
@@ -242,10 +233,10 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 	for i, host := range rawLighthouseHosts {
 		ip := net.ParseIP(host)
 		if ip == nil {
-			l.WithField("host", host).Errorf("Unable to parse lighthouse host entry %v", i+1)
+			return NewContextualError("Unable to parse lighthouse host entry", m{"host": host, "entry": i + 1}, nil)
 		}
 		if !tunCidr.Contains(ip) {
-			l.WithField("vpnIp", ip).WithField("network", tunCidr.String()).Fatalf("lighthouse host is not in our subnet, invalid")
+			return NewContextualError("lighthouse host is not in our subnet, invalid", m{"vpnIp": ip, "network": tunCidr.String()}, nil)
 		}
 		lighthouseHosts[i] = ip2int(ip)
 	}
@@ -265,13 +256,13 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 
 	remoteAllowList, err := config.GetAllowList("lighthouse.remote_allow_list", false)
 	if err != nil {
-		l.WithError(err).Fatal("Invalid lighthouse.remote_allow_list")
+		return NewContextualError("Invalid lighthouse.remote_allow_list", nil, err)
 	}
 	lightHouse.SetRemoteAllowList(remoteAllowList)
 
 	localAllowList, err := config.GetAllowList("lighthouse.local_allow_list", true)
 	if err != nil {
-		l.WithError(err).Fatal("Invalid lighthouse.local_allow_list")
+		return NewContextualError("Invalid lighthouse.local_allow_list", nil, err)
 	}
 	lightHouse.SetLocalAllowList(localAllowList)
 
@@ -279,7 +270,7 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 	for k, v := range config.GetMap("static_host_map", map[interface{}]interface{}{}) {
 		vpnIp := net.ParseIP(fmt.Sprintf("%v", k))
 		if !tunCidr.Contains(vpnIp) {
-			l.WithField("vpnIp", vpnIp).WithField("network", tunCidr.String()).Fatalf("static_host_map key is not in our subnet, invalid")
+			return NewContextualError("static_host_map key is not in our subnet, invalid", m{"vpnIp": vpnIp, "network": tunCidr.String()}, nil)
 		}
 		vals, ok := v.([]interface{})
 		if ok {
@@ -290,7 +281,7 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 					ip := addr.IP
 					port, err := strconv.Atoi(parts[1])
 					if err != nil {
-						l.Errorf("Static host address for %s could not be parsed: %s", vpnIp, v)
+						return NewContextualError("Static host address for %s could not be parsed", m{"vpnIp": vpnIp}, err)
 					}
 					lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip2int(ip), uint16(port)), true)
 				}
@@ -303,7 +294,7 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 				ip := addr.IP
 				port, err := strconv.Atoi(parts[1])
 				if err != nil {
-					l.Errorf("Static host address for %s could not be parsed: %s", vpnIp, v)
+					return NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
 				}
 				lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip2int(ip), uint16(port)), true)
 			}
@@ -363,7 +354,7 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 	case "chachapoly":
 		noiseEndianness = binary.LittleEndian
 	default:
-		l.Errorf("Unknown cipher: %v", ifConfig.Cipher)
+		return fmt.Errorf("unknown cipher: %v", ifConfig.Cipher)
 	}
 
 	var ifce *Interface
@@ -381,11 +372,11 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logF
 
 	err = startStats(config, configTest)
 	if err != nil {
-		l.WithError(err).Error("Failed to start stats emitter")
+		return NewContextualError("Failed to start stats emitter", nil, err)
 	}
 
 	if configTest {
-		os.Exit(0)
+		return nil
 	}
 
 	//TODO: check if we _should_ be emitting stats

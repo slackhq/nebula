@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"log"
 	"os"
 	"path/filepath"
@@ -34,7 +35,9 @@ func (p *program) run() error {
 		return fmt.Errorf("failed to load config: %s", err)
 	}
 
-	return nebula.Main(config, *p.configTest, true, Build, "", nil, nil)
+	l := logrus.New()
+	l.Out = os.Stdout
+	return nebula.Main(config, *p.configTest, true, Build, l, nil, nil)
 }
 
 func (p *program) Stop(s service.Service) error {
