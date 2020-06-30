@@ -3,13 +3,14 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
-	"github.com/slackhq/nebula/cert"
-	"github.com/stretchr/testify/assert"
-	"golang.org/x/crypto/ed25519"
 	"io/ioutil"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/slackhq/nebula/cert"
+	"github.com/stretchr/testify/assert"
+	"golang.org/x/crypto/ed25519"
 )
 
 func Test_verifySummary(t *testing.T) {

@@ -2,9 +2,10 @@ package nebula
 
 import (
 	"errors"
+	"testing"
+
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 type TestLogWriter struct {

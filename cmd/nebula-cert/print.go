@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/slackhq/nebula/cert"
 	"io"
 	"io/ioutil"
 	"os"
 	"strings"
+
+	"github.com/slackhq/nebula/cert"
 )
 
 type printFlags struct {

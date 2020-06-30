@@ -3,15 +3,16 @@ package nebula
 import (
 	"errors"
 	"fmt"
-	"github.com/cyberdelia/go-metrics-graphite"
-	mp "github.com/nbrownus/go-metrics-prometheus"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/rcrowley/go-metrics"
 	"log"
 	"net"
 	"net/http"
 	"time"
+
+	graphite "github.com/cyberdelia/go-metrics-graphite"
+	mp "github.com/nbrownus/go-metrics-prometheus"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rcrowley/go-metrics"
 )
 
 func startStats(c *Config, configTest bool) error {

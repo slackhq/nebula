@@ -3,9 +3,6 @@ package nebula
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/sshd"
-	"gopkg.in/yaml.v2"
 	"net"
 	"os"
 	"os/signal"
@@ -13,6 +10,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/sshd"
+	"gopkg.in/yaml.v2"
 )
 
 // The caller should provide a real logger, we have one just in case

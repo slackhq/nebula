@@ -2,18 +2,14 @@ package nebula
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
+	"time"
 
 	"github.com/flynn/noise"
 	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
-	// "github.com/google/gopacket"
-	// "github.com/google/gopacket/layers"
-	// 	"encoding/binary"
-	"errors"
-	"fmt"
-	"time"
-
 	"golang.org/x/net/ipv4"
 )
 

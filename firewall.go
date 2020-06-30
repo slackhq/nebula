@@ -1,19 +1,18 @@
 package nebula
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
-	"sync"
-	"time"
-
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"

@@ -2,12 +2,13 @@ package main
 
 import (
 	"bytes"
-	"github.com/slackhq/nebula/cert"
-	"github.com/stretchr/testify/assert"
 	"io/ioutil"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/slackhq/nebula/cert"
+	"github.com/stretchr/testify/assert"
 )
 
 func Test_printSummary(t *testing.T) {

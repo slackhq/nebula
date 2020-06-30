@@ -4,10 +4,11 @@ package nebula
 
 import (
 	"fmt"
-	"github.com/songgao/water"
 	"net"
 	"os/exec"
 	"strconv"
+
+	"github.com/songgao/water"
 )
 
 type Tun struct {
