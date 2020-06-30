@@ -433,9 +433,8 @@ func shutdownBlock(ifce *Interface, sigChan chan os.Signal, killChan chan Comman
 	ifce.hostMap.Unlock()
 
 	l.WithField("signal", sig).Info("Goodbye")
-	if cmd.Callback != nil {
-		select {
-		case cmd.Callback <- nil:
-		}
+	select {
+	case cmd.Callback <- nil:
+	default:
 	}
 }

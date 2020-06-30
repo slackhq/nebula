@@ -18,6 +18,10 @@ func (ce ContextualError) Error() string {
 	return ce.RealError.Error()
 }
 
+func (ce ContextualError) Unwrap() error {
+	return ce.RealError
+}
+
 func (ce *ContextualError) Log(lr *logrus.Logger) {
 	if ce.RealError != nil {
 		lr.WithFields(ce.Fields).WithError(ce.RealError).Error(ce.Context)
