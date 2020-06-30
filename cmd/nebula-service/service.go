@@ -2,12 +2,12 @@ package main
 
 import (
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"log"
 	"os"
 	"path/filepath"
 
 	"github.com/kardianos/service"
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 )
 

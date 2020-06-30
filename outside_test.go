@@ -1,10 +1,11 @@
 package nebula
 
 import (
-	"github.com/stretchr/testify/assert"
-	"golang.org/x/net/ipv4"
 	"net"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"golang.org/x/net/ipv4"
 )
 
 func Test_newPacket(t *testing.T) {

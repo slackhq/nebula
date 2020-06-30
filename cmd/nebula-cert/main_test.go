@@ -3,10 +3,11 @@ package main
 import (
 	"bytes"
 	"errors"
-	"github.com/stretchr/testify/assert"
 	"io"
 	"os"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 //TODO: all flag parsing continueOnError will print to stderr on its own currently

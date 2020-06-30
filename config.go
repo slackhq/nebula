@@ -3,9 +3,6 @@ package nebula
 import (
 	"errors"
 	"fmt"
-	"github.com/imdario/mergo"
-	"github.com/sirupsen/logrus"
-	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"net"
 	"os"
@@ -17,6 +14,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/imdario/mergo"
+	"github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v2"
 )
 
 type Config struct {

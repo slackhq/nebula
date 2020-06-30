@@ -1,9 +1,10 @@
 package nebula
 
 import (
-	"github.com/stretchr/testify/assert"
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 type headerTest struct {

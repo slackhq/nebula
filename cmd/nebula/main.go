@@ -3,9 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"os"
 
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 )
 

@@ -1,12 +1,13 @@
 package nebula
 
 import (
-	"github.com/stretchr/testify/assert"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestConfig_Load(t *testing.T) {

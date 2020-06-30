@@ -1,10 +1,9 @@
 package nebula
 
 import (
+	"bytes"
 	"sync/atomic"
 	"time"
-
-	"bytes"
 
 	"github.com/flynn/noise"
 	"github.com/golang/protobuf/proto"

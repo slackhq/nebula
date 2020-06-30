@@ -3,9 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
-	"os"
 )
 
 // A version string that can be set with

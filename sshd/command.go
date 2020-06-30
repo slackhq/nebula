@@ -4,9 +4,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/armon/go-radix"
 	"sort"
 	"strings"
+
+	"github.com/armon/go-radix"
 )
 
 // CommandFlags is a function called before help or command execution to parse command line flags

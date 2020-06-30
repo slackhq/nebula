@@ -2,13 +2,14 @@ package sshd
 
 import (
 	"fmt"
+	"sort"
+	"strings"
+
 	"github.com/anmitsu/go-shlex"
 	"github.com/armon/go-radix"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/terminal"
-	"sort"
-	"strings"
 )
 
 type session struct {

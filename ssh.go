@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/sshd"
 	"io/ioutil"
 	"net"
 	"os"
@@ -14,6 +12,9 @@ import (
 	"runtime/pprof"
 	"strings"
 	"syscall"
+
+	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/sshd"
 )
 
 type sshListHostMapFlags struct {

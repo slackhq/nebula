@@ -1,18 +1,18 @@
 package cert
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net"
 	"time"
 
-	"bytes"
-	"encoding/json"
 	"github.com/golang/protobuf/proto"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ed25519"
