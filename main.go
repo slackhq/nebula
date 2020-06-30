@@ -102,6 +102,8 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logg
 
 	var tun *Tun
 	if !configTest {
+		config.CatchHUP()
+
 		if tunFd != nil {
 			tun, err = newTunFromFd(
 				*tunFd,

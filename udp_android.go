@@ -1,7 +1,5 @@
 package nebula
 
-// Darwin support is primarily implemented in udp_generic, besides NewListenConfig
-
 import (
 	"fmt"
 	"net"
