@@ -1,3 +1,5 @@
+// +build !android
+
 package nebula
 
 import (
@@ -83,6 +85,10 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 	//l.Println(v, err)
 
 	return &udpConn{sysFd: fd}, err
+}
+
+func (u *udpConn) Rebind() {
+	return
 }
 
 func (u *udpConn) SetRecvBuffer(n int) error {

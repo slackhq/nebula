@@ -1,7 +1,5 @@
 package nebula
 
-// Darwin support is primarily implemented in udp_generic, besides NewListenConfig
-
 import (
 	"fmt"
 	"net"
@@ -33,11 +31,6 @@ func NewListenConfig(multi bool) net.ListenConfig {
 	}
 }
 
-func (u *udpConn) Rebind() error {
-	file, err := u.File()
-	if err != nil {
-		return err
-	}
-
-	return syscall.SetsockoptInt(int(file.Fd()), unix.IPPROTO_IP, unix.IP_BOUND_IF, 0)
+func (u *udpConn) Rebind() {
+	return
 }
