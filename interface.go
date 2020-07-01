@@ -3,6 +3,8 @@ package nebula
 import (
 	"errors"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -26,6 +28,7 @@ type InterfaceConfig struct {
 	DropMulticast           bool
 	UDPBatchSize            int
 	MessageMetrics          *MessageMetrics
+	version                 string
 }
 
 type Interface struct {
@@ -46,8 +49,19 @@ type Interface struct {
 	udpBatchSize       int
 	version            string
 
+	sigChan chan os.Signal
+
 	metricHandshakes metrics.Histogram
 	messageMetrics   *MessageMetrics
+}
+
+type killSignal struct {
+	cb chan struct{}
+}
+
+func (s killSignal) Signal() {}
+func (s killSignal) String() string {
+	return "controlling app"
 }
 
 func NewInterface(c *InterfaceConfig) (*Interface, error) {
@@ -79,6 +93,8 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		dropLocalBroadcast: c.DropLocalBroadcast,
 		dropMulticast:      c.DropMulticast,
 		udpBatchSize:       c.UDPBatchSize,
+		sigChan:            make(chan os.Signal),
+		version:            c.version,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -89,55 +105,63 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 	return ifce, nil
 }
 
-func (f *Interface) Run(tunRoutines, udpRoutines int, buildVersion string) {
+func (f *Interface) ShutdownBlock() {
+	signal.Notify(f.sigChan, syscall.SIGTERM)
+	signal.Notify(f.sigChan, syscall.SIGINT)
+
+	rawSig := <-f.sigChan
+	sig := rawSig.String()
+	l.WithField("signal", sig).Info("Caught signal, shutting down")
+
+	//TODO: stop tun and udp routines, the lock on hostMap effectively does that though
+	//TODO: this is probably better as a function in ConnectionManager or HostMap directly
+	f.hostMap.Lock()
+	for _, h := range f.hostMap.Hosts {
+		if h.ConnectionState.ready {
+			f.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+			l.WithField("vpnIp", IntIp(h.hostId)).WithField("udpAddr", h.remote).
+				Debug("Sending close tunnel message")
+		}
+	}
+	f.hostMap.Unlock()
+
+	//TODO: move goodbye to cmd
+	l.WithField("signal", sig).Info("Goodbye")
+	if s, ok := rawSig.(killSignal); ok {
+		s.cb <- struct{}{}
+	}
+}
+
+func (f *Interface) Run() {
 	// actually turn on tun dev
 	if err := f.inside.Activate(); err != nil {
 		l.Fatal(err)
 	}
 
-	f.version = buildVersion
 	addr, err := f.outside.LocalAddr()
 	if err != nil {
 		l.WithError(err).Error("Failed to get udp listen address")
 	}
 
 	l.WithField("interface", f.inside.Device).WithField("network", f.inside.Cidr.String()).
-		WithField("build", buildVersion).WithField("udpAddr", addr).
+		WithField("build", f.version).WithField("udpAddr", addr).
 		Info("Nebula interface is active")
 
-	// Launch n queues to read packets from udp
-	for i := 0; i < udpRoutines; i++ {
-		go f.listenOut(i)
-	}
+	// Listen on for incoming packets from the world
+	go f.outside.ListenOut(f)
 
-	// Launch n queues to read packets from tun dev
-	for i := 0; i < tunRoutines; i++ {
-		go f.listenIn(i)
-	}
+	// Listen for incoming packets from this machine
+	go f.listenIn()
 }
 
-func (f *Interface) listenOut(i int) {
-	//TODO: handle error
-	addr, err := f.outside.LocalAddr()
-	if err != nil {
-		l.WithError(err).Error("failed to discover udp listening address")
-	}
-
-	var li *udpConn
-	if i > 0 {
-		//TODO: handle error
-		li, err = NewListener(udp2ip(addr).String(), int(addr.Port), i > 0)
-		if err != nil {
-			l.WithError(err).Error("failed to make a new udp listener")
-		}
-	} else {
-		li = f.outside
-	}
-
-	li.ListenOut(f)
+func (f *Interface) Stop() {
+	cb := make(chan struct{})
+	//TODO: instead of blocking on ShutdownBlock ending we should have a channel for each goroutine to block on returning
+	f.sigChan <- killSignal{cb: cb}
+	<-cb
 }
 
-func (f *Interface) listenIn(i int) {
+func (f *Interface) listenIn() {
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &FirewallPacket{}
