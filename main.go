@@ -18,12 +18,7 @@ var l = logrus.New()
 
 type m map[string]interface{}
 
-type CommandRequest struct {
-	Command  string
-	Callback chan error
-}
-
-func Main(config *Config, configTest bool, buildVersion string, logger *logrus.Logger, tunFd *int, commandChan <-chan CommandRequest) (*Interface, error) {
+func Main(config *Config, configTest bool, buildVersion string, logger *logrus.Logger, tunFd *int) (*Control, error) {
 	l = logger
 	l.Formatter = &logrus.TextFormatter{
 		FullTimestamp: true,
@@ -136,22 +131,6 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 			return nil, NewContextualError("Failed to open udp listener", nil, err)
 		}
 		udpServer.reloadConfig(config)
-	}
-
-	killChan := make(chan CommandRequest)
-	if commandChan != nil {
-		go func() {
-			cmd := CommandRequest{}
-			for {
-				cmd = <-commandChan
-				switch cmd.Command {
-				case "rebind":
-					udpServer.Rebind()
-				case "exit":
-					killChan <- cmd
-				}
-			}
-		}()
 	}
 
 	// Set up my internal host map
@@ -390,5 +369,5 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		go dnsMain(hostMap, config)
 	}
 
-	return ifce, nil
+	return &Control{ifce}, nil
 }
