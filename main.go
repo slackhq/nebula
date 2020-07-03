@@ -374,5 +374,5 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		go dnsMain(hostMap, config)
 	}
 
-	return &Control{ifce}, nil
+	return &Control{ifce, l}, nil
 }

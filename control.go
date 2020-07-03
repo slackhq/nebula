@@ -6,11 +6,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 )
 
 type Control struct {
 	f *Interface
+	l *logrus.Logger
 }
 
 type ControlHostInfo struct {
@@ -37,11 +39,12 @@ func (c *Control) Stop() {
 	for _, h := range c.f.hostMap.Hosts {
 		if h.ConnectionState.ready {
 			c.f.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
-			l.WithField("vpnIp", IntIp(h.hostId)).WithField("udpAddr", h.remote).
+			c.l.WithField("vpnIp", IntIp(h.hostId)).WithField("udpAddr", h.remote).
 				Debug("Sending close tunnel message")
 		}
 	}
 	c.f.hostMap.Unlock()
+	c.l.Info("Goodbye")
 }
 
 // ShutdownBlock will listen for and block on term and interrupt signals, calling Control.Stop() once signalled
@@ -52,11 +55,8 @@ func (c *Control) ShutdownBlock() {
 
 	rawSig := <-sigChan
 	sig := rawSig.String()
-	l.WithField("signal", sig).Info("Caught signal, shutting down")
-
+	c.l.WithField("signal", sig).Info("Caught signal, shutting down")
 	c.Stop()
-	//TODO: move goodbye to cmd
-	l.WithField("signal", sig).Info("Goodbye")
 }
 
 // RebindUDPServer asks the UDP listener to rebind it's listener. Mainly used on mobile clients when interfaces change
