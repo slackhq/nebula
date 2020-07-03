@@ -24,62 +24,7 @@ const (
 	HeaderLen       = 16
 )
 
-type NebulaMessageType uint8
-type NebulaMessageSubType uint8
-
-const (
-	handshake   NebulaMessageType = 0
-	message     NebulaMessageType = 1
-	recvError   NebulaMessageType = 2
-	lightHouse  NebulaMessageType = 3
-	test        NebulaMessageType = 4
-	closeTunnel NebulaMessageType = 5
-
-	//TODO These are deprecated as of 06/12/2018 - NB
-	testRemote      NebulaMessageType = 6
-	testRemoteReply NebulaMessageType = 7
-)
-
-var typeMap = map[NebulaMessageType]string{
-	handshake:   "handshake",
-	message:     "message",
-	recvError:   "recvError",
-	lightHouse:  "lightHouse",
-	test:        "test",
-	closeTunnel: "closeTunnel",
-
-	//TODO These are deprecated as of 06/12/2018 - NB
-	testRemote:      "testRemote",
-	testRemoteReply: "testRemoteReply",
-}
-
-const (
-	testRequest NebulaMessageSubType = 0
-	testReply   NebulaMessageSubType = 1
-)
-
 var eHeaderTooShort = errors.New("header is too short")
-
-var subTypeTestMap = map[NebulaMessageSubType]string{
-	testRequest: "testRequest",
-	testReply:   "testReply",
-}
-
-var subTypeNoneMap = map[NebulaMessageSubType]string{0: "none"}
-
-var subTypeMap = map[NebulaMessageType]*map[NebulaMessageSubType]string{
-	message:     &subTypeNoneMap,
-	recvError:   &subTypeNoneMap,
-	lightHouse:  &subTypeNoneMap,
-	test:        &subTypeTestMap,
-	closeTunnel: &subTypeNoneMap,
-	handshake: {
-		handshakeIXPSK0: "ix_psk0",
-	},
-	//TODO: these are deprecated
-	testRemote:      &subTypeNoneMap,
-	testRemoteReply: &subTypeNoneMap,
-}
 
 type Header struct {
 	Version        uint8
@@ -153,29 +98,9 @@ func (h *Header) TypeName() string {
 	return TypeName(h.Type)
 }
 
-// TypeName will transform a nebula message type into a human string
-func TypeName(t NebulaMessageType) string {
-	if n, ok := typeMap[t]; ok {
-		return n
-	}
-
-	return "unknown"
-}
-
 // SubTypeName will transform the headers message sub type into a human string
 func (h *Header) SubTypeName() string {
 	return SubTypeName(h.Type, h.Subtype)
-}
-
-// SubTypeName will transform a nebula message sub type into a human string
-func SubTypeName(t NebulaMessageType, s NebulaMessageSubType) string {
-	if n, ok := subTypeMap[t]; ok {
-		if x, ok := (*n)[s]; ok {
-			return x
-		}
-	}
-
-	return "unknown"
 }
 
 // NewHeader turns bytes into a header

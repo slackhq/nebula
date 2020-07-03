@@ -26,8 +26,9 @@ require (
 	github.com/vishvananda/netlink v1.0.1-0.20190522153524-00009fb8606a
 	github.com/vishvananda/netns v0.0.0-20191106174202-0a2b9b5464df // indirect
 	golang.org/x/crypto v0.0.0-20200220183623-bac4c82f6975
-	golang.org/x/net v0.0.0-20191209160850-c0dbc17a3553
+	golang.org/x/net v0.0.0-20200226121028-0de0cce0169b
 	golang.org/x/sys v0.0.0-20191210023423-ac6580df4449
+	golang.org/x/tools v0.0.0-20200702044944-0cc1aa72b347
 	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
 	gopkg.in/yaml.v2 v2.2.7
 )

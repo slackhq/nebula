@@ -1,10 +1,5 @@
 package nebula
 
-const (
-	handshakeIXPSK0 = 0
-	handshakeXXPSK0 = 1
-)
-
 func HandleIncomingHandshake(f *Interface, addr *udpAddr, packet []byte, h *Header, hostinfo *HostInfo) {
 	newHostinfo, _ := f.handshakeManager.QueryIndex(h.RemoteIndex)
 	//TODO: For stage 1 we won't have hostinfo yet but stage 2 and above would require it, this check may be helpful in those cases

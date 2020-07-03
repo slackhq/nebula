@@ -53,7 +53,7 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 		return
 	}
 
-	header := HeaderEncode(make([]byte, HeaderLen), Version, uint8(handshake), handshakeIXPSK0, 0, 1)
+	header := HeaderEncode(make([]byte, HeaderLen), Version, uint8(handshake), uint8(handshakeIXPSK0), 0, 1)
 	atomic.AddUint64(ci.messageCounter, 1)
 
 	msg, _, _, err := ci.H.WriteMessage(header, hsBytes)
@@ -161,7 +161,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			return true
 		}
 
-		header := HeaderEncode(make([]byte, HeaderLen), Version, uint8(handshake), handshakeIXPSK0, hs.Details.InitiatorIndex, 2)
+		header := HeaderEncode(make([]byte, HeaderLen), Version, uint8(handshake), uint8(handshakeIXPSK0), hs.Details.InitiatorIndex, 2)
 		msg, dKey, eKey, err := ci.H.WriteMessage(header, hsBytes)
 		if err != nil {
 			l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).

@@ -55,8 +55,8 @@ func TestTypeName(t *testing.T) {
 	assert.Equal(t, "test", TypeName(test))
 	assert.Equal(t, "test", (&Header{Type: test}).TypeName())
 
-	assert.Equal(t, "unknown", TypeName(99))
-	assert.Equal(t, "unknown", (&Header{Type: 99}).TypeName())
+	assert.Equal(t, "unknown(99)", TypeName(99))
+	assert.Equal(t, "unknown(99)", (&Header{Type: 99}).TypeName())
 }
 
 func TestSubTypeName(t *testing.T) {
@@ -71,33 +71,6 @@ func TestSubTypeName(t *testing.T) {
 
 	assert.Equal(t, "none", SubTypeName(message, 0))
 	assert.Equal(t, "none", (&Header{Type: message, Subtype: 0}).SubTypeName())
-}
-
-func TestTypeMap(t *testing.T) {
-	// Force people to document this stuff
-	assert.Equal(t, map[NebulaMessageType]string{
-		handshake:       "handshake",
-		message:         "message",
-		recvError:       "recvError",
-		lightHouse:      "lightHouse",
-		test:            "test",
-		closeTunnel:     "closeTunnel",
-		testRemote:      "testRemote",
-		testRemoteReply: "testRemoteReply",
-	}, typeMap)
-
-	assert.Equal(t, map[NebulaMessageType]*map[NebulaMessageSubType]string{
-		message:     &subTypeNoneMap,
-		recvError:   &subTypeNoneMap,
-		lightHouse:  &subTypeNoneMap,
-		test:        &subTypeTestMap,
-		closeTunnel: &subTypeNoneMap,
-		handshake: {
-			handshakeIXPSK0: "ix_psk0",
-		},
-		testRemote:      &subTypeNoneMap,
-		testRemoteReply: &subTypeNoneMap,
-	}, subTypeMap)
 }
 
 func TestHeader_String(t *testing.T) {
