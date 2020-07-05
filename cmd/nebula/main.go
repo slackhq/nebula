@@ -21,6 +21,7 @@ func main() {
 	configTest := flag.Bool("test", false, "Test the config and print the end result. Non zero exit indicates a faulty config")
 	printVersion := flag.Bool("version", false, "Print version")
 	printUsage := flag.Bool("help", false, "Print command line usage")
+	watchConfig := flag.Bool("watch-config", false, "[EXPERIMENTAL] Reload the pki section of the config when the config and cert files change")
 
 	flag.Parse()
 
@@ -46,7 +47,9 @@ func main() {
 		fmt.Printf("failed to load config: %s", err)
 		os.Exit(1)
 	}
-
+	if watchConfig != nil {
+		config.WatchConfig = *watchConfig
+	}
 	l := logrus.New()
 	l.Out = os.Stdout
 	err = nebula.Main(config, *configTest, true, Build, l, nil, nil)

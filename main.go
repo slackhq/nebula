@@ -104,7 +104,13 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logg
 	var tun *Tun
 	if !configTest {
 		config.CatchHUP()
-
+		if config.WatchConfig {
+			close, err := config.CatchFileChanges()
+			if err != nil {
+				return NewContextualError("--watch-config error while setup up watchers", nil, err)
+			}
+			defer close()
+		}
 		if tunFd != nil {
 			tun, err = newTunFromFd(
 				*tunFd,

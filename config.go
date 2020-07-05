@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/imdario/mergo"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
@@ -26,6 +27,8 @@ type Config struct {
 	Settings    map[interface{}]interface{}
 	oldSettings map[interface{}]interface{}
 	callbacks   []func(*Config)
+	// Sets up file watchers that reload the config when set to true
+	WatchConfig bool
 }
 
 func NewConfig() *Config {
@@ -122,6 +125,88 @@ func (c *Config) CatchHUP() {
 			c.ReloadConfig()
 		}
 	}()
+}
+
+// CatchFileChanges will listen to file changes of the config file and the certificate files in a go routine
+// and reload all configs found in the original path provided to Load. The old settings are shallow copied for
+// change detection after the reload.
+// Returns a closer that can be called to gracefully shut down the watcher.
+func (c *Config) CatchFileChanges() (closer func(), err error) {
+	l.Debug("--watch-config enabled")
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
+	}
+	closer = func() {
+		l.Debug("--watch-config closing")
+		err := watcher.Close()
+		if err != nil {
+			l.Error(err)
+		}
+	}
+	// filePaths that should be watched
+	var toWatch []string
+	go func() {
+		checksumCache := map[string]string{}
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					// The file change events channel closed, perhaps we should throw a fatal error here?
+					l.Info("--watch-config event channel closed, no longer watching config")
+					return
+				}
+				for _, f := range toWatch {
+					if filepath.Base(f) == filepath.Base(event.Name) {
+						checksum, err := md5sum(f)
+						if err != nil {
+							l.WithError(err).Error("--watch-config md5 error")
+						}
+						if err != nil || checksumCache[f] != checksum {
+							l.WithField("event", event).Debug("--watch-config caught modified file, reloading config")
+							c.ReloadConfig()
+							if checksum != "" {
+								checksumCache[f] = checksum
+							}
+						}
+
+					}
+				}
+
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					// The errors channel closed, perhaps we should throw a fatal error here?
+					l.Error("--watch-config errors channel closed")
+					return
+				}
+				l.WithError(err).Error("--watch-config error")
+			}
+		}
+	}()
+	// Add yaml configuration files
+	toWatch = append(toWatch, c.files...)
+	// Add the pki files (TODO: Still support x509.ca?)
+	filesOrPem := []string{
+		c.GetString("pki.ca", ""),
+		c.GetString("pki.cert", ""),
+		c.GetString("pki.key", "")}
+	for _, fileOrPem := range filesOrPem {
+		if !strings.Contains(fileOrPem, "-----BEGIN") {
+			//	toWatch = append(toWatch, fmt.Sprintf("%s%s",c.path, fileOrPem))
+			toWatch = append(toWatch, fileOrPem)
+		}
+	}
+	// Start watching on the directories of the toWatch files
+	for _, f := range toWatch {
+		dir := filepath.Dir(f)
+		if err = watcher.Add(dir); err != nil {
+			closer()
+			return nil, fmt.Errorf("(%s) %w", f, err)
+		}
+		l.WithField("dir", dir).WithField("filePath", f).Debug("--watch-config watching")
+	}
+
+	return closer, nil
 }
 
 func (c *Config) ReloadConfig() {
@@ -481,7 +566,7 @@ func configLogger(c *Config) error {
 	l.SetLevel(logLevel)
 
 	timestampFormat := c.GetString("logging.timestamp_format", "")
-	fullTimestamp := (timestampFormat != "")
+	fullTimestamp := timestampFormat != ""
 	if timestampFormat == "" {
 		timestampFormat = time.RFC3339
 	}
