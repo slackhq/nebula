@@ -15,6 +15,10 @@ Current state:
   * `nebula-node.key`
 * Since created certs are placed in `/var/snap/nebula` the cert-functionality needs sudo permissions. Not optimal perhaps, but necessary.
 
+To bypass the above restrictions the snap can be installed with `--devmode`, thereby circumventing the sandboxing in place:
+
+`sudo snap install --devmode nebula`
+
 ## Usage
 
 ### Starting Nebula
@@ -27,9 +31,6 @@ See [here](https://arstechnica.com/gadgets/2019/12/how-to-set-up-your-own-nebula
 
 You can NOT provide a location for the config.yaml file. It is hardcoded to `/var/snap/nebula/config`
 
-#### Start the daemon:
-`sudo snap start nebula.daemon`
-
 :warning: There seems to be an issue with the daemon after a reboot **if the address to the lighthouse is stated as a domain name (e g lighthouse.example.com)**. The daemon is supposed to be started automatically on boot and it gets started. However, Nebula does not get a connection to the lighthouse. A **manual restart of the daemon** fixes this: `sudo snap restart nebula.daemon`
 This problem does not, however, occur if the ip of the lighthouse is put into the config file. (See [here](https://github.com/slackhq/nebula/issues/206))
 
@@ -38,6 +39,9 @@ To check if the daemon started as expected:
 
 or using systemd:s logging facilities:
 `sudo journalctl -r -u snap.nebula.daemon.service`
+
+#### Enable daemon to start at boot
+`sudo snap enable nebula.daemon`
 
 ### Certificate creation
 
