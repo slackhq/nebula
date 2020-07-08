@@ -39,9 +39,6 @@ To check if the daemon started as expected:
 or using systemd:s logging facilities:
 `sudo journalctl -r -u snap.nebula.daemon.service`
 
-#### Enable daemon to start at boot
-`sudo snap enable nebula.daemon`
-
 ### Certificate creation
 
 #### Generate a Certificate Authority:
