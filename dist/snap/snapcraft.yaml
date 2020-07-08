@@ -1,0 +1,57 @@
+name: nebula
+version: v1.2.0
+
+summary: A scalable overlay networking tool.
+
+description: |
+  Nebula is a scalable overlay networking tool with a focus on performance, simplicity and security.
+  It lets you seamlessly connect computers anywhere in the world. Nebula is portable, and runs on Linux, OSX, and Windows.
+  (Also: keep this quiet, but we have an early prototype running on iOS).
+  It can be used to connect a small number of computers, but is also able to connect tens of thousands of computers.
+
+  Nebula incorporates a number of existing concepts like encryption, security groups, certificates,
+  and tunneling, and each of those individual pieces existed before Nebula in various forms.
+  What makes Nebula different to existing offerings is that it brings all of these ideas together,
+  resulting in a sum that is greater than its individual parts.
+
+  More info on Nebula https://github.com/slackhq/nebula
+
+  For issues and other matters on this snap https://github.com/jwallden/nebula-snap
+
+grade: stable
+confinement: strict
+
+base: core18
+
+parts:
+  nebula:
+    plugin: go
+    source: https://github.com/slackhq/nebula.git
+    source-tag: $SNAPCRAFT_PROJECT_VERSION
+    source-type: git
+    build-packages:
+      - gcc
+
+apps:
+  nebula:
+    command: bin/nebula -config $SNAP_COMMON/config/config.yaml
+    plugs:
+      - network
+      - network-control
+  
+  cert-ca:
+    command: bin/nebula-cert ca -out-crt $SNAP_COMMON/certs/ca.crt -out-key $SNAP_COMMON/certs/ca.key
+
+  cert-sign:
+    command: bin/nebula-cert sign -ca-crt $SNAP_COMMON/certs/ca.crt -ca-key $SNAP_COMMON/certs/ca.key -out-crt $SNAP_COMMON/certs/nebula-node.crt -out-key $SNAP_COMMON/certs/nebula-node.key
+
+  daemon:
+    command: bin/nebula -config $SNAP_COMMON/config/config.yaml
+    daemon: simple
+    plugs:
+      - network
+      - network-control
+
+layout:
+  /etc/nebula:
+    bind: $SNAP_COMMON
