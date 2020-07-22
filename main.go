@@ -318,14 +318,16 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logg
 	}
 
 	handshakeConfig := HandshakeConfig{
-		tryInterval:  config.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
-		retries:      config.GetInt("handshakes.retries", DefaultHandshakeRetries),
-		waitRotation: config.GetInt("handshakes.wait_rotation", DefaultHandshakeWaitRotation),
+		tryInterval:   config.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
+		retries:       config.GetInt("handshakes.retries", DefaultHandshakeRetries),
+		waitRotation:  config.GetInt("handshakes.wait_rotation", DefaultHandshakeWaitRotation),
+		triggerBuffer: config.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
 
 		messageMetrics: messageMetrics,
 	}
 
 	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpServer, handshakeConfig)
+	lightHouse.handshakeTrigger = handshakeManager.trigger
 
 	//TODO: These will be reused for psk
 	//handshakeMACKey := config.GetString("handshake_mac.key", "")

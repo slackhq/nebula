@@ -30,6 +30,9 @@ type LightHouse struct {
 	// filters local addresses that we advertise to lighthouses
 	localAllowList *AllowList
 
+	// used to trigger the HandshakeManager when we receive HostQueryReply
+	handshakeTrigger chan<- uint32
+
 	// staticList exists to avoid having a bool in each addrMap entry
 	// since static should be rare
 	staticList  map[uint32]struct{}
@@ -357,6 +360,11 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 			//first := n.Details.IpAndPorts[0]
 			ans := NewUDPAddr(a.Ip, uint16(a.Port))
 			lh.AddRemote(n.Details.VpnIp, ans, false)
+		}
+		// Non-blocking attempt to trigger, skip if it would block
+		select {
+		case lh.handshakeTrigger <- n.Details.VpnIp:
+		default:
 		}
 
 	case NebulaMeta_HostUpdateNotification:
