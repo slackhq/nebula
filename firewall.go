@@ -455,6 +455,8 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 					WithField("oldRulesVersion", c.rulesVersion).
 					Debugln("dropping old conntrack entry, does not match new ruleset")
 			}
+			delete(conntrack.Conns, fp)
+			conntrack.Unlock()
 			return false
 		}
 
