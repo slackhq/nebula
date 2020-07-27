@@ -96,6 +96,14 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logg
 		}
 	}
 
+	plugins, err := NewPluginsFromConfig(config)
+	if err != nil {
+		return NewContextualError("Error while loading plugins", nil, err)
+	}
+	for k, v := range plugins {
+		l.WithField("messageSubType", k).WithField("name", v.Name()).Info("Registered plugin")
+	}
+
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// All non system modifying configuration consumption should live above this line
 	// tun config, listeners, anything modifying the computer should be below
@@ -338,6 +346,7 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logg
 		HostMap:                 hostMap,
 		Inside:                  tun,
 		Outside:                 udpServer,
+		Plugins:                 plugins,
 		certState:               cs,
 		Cipher:                  config.GetString("cipher", "aes"),
 		Firewall:                fw,
@@ -393,6 +402,10 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logg
 	if amLighthouse && serveDns {
 		l.Debugln("Starting dns server")
 		go dnsMain(hostMap, config)
+	}
+
+	for t, p := range ifce.plugins {
+		p.Run(ifce.pluginSender(t))
 	}
 
 	if block {

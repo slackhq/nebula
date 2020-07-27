@@ -45,7 +45,18 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 			return
 		}
 
-		f.decryptToTun(hostinfo, header.MessageCounter, out, packet, fwPacket, nb)
+		insideWriter := f.inside.WriteRaw
+		if header.Subtype != 0 {
+			handler, ok := f.plugins[header.Subtype]
+			if !ok {
+				f.messageMetrics.Rx(header.Type, header.Subtype, 1)
+				hostinfo.logger().Debugf("Unhandled message packet type (%d) received from %s", header.Subtype, addr)
+				return
+			}
+			insideWriter = handler.Receive
+		}
+
+		f.decryptToInside(insideWriter, hostinfo, header.MessageCounter, out, packet, fwPacket, nb)
 
 		// Fallthrough to the bottom to record incoming traffic
 
@@ -258,7 +269,7 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	return out, nil
 }
 
-func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *FirewallPacket, nb []byte) {
+func (f *Interface) decryptToInside(write func([]byte) error, hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *FirewallPacket, nb []byte) {
 	var err error
 
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:HeaderLen], packet[HeaderLen:], messageCounter, nb)
@@ -293,9 +304,9 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	}
 
 	f.connectionManager.In(hostinfo.hostId)
-	err = f.inside.WriteRaw(out)
+	err = write(out)
 	if err != nil {
-		l.WithError(err).Error("Failed to write to tun")
+		l.WithError(err).Error("Failed to write to inside")
 	}
 }
 

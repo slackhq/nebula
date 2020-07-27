@@ -14,6 +14,7 @@ type InterfaceConfig struct {
 	HostMap                 *HostMap
 	Outside                 *udpConn
 	Inside                  *Tun
+	Plugins                 map[NebulaMessageSubType]Plugin
 	certState               *CertState
 	Cipher                  string
 	Firewall                *Firewall
@@ -32,6 +33,7 @@ type Interface struct {
 	hostMap            *HostMap
 	outside            *udpConn
 	inside             *Tun
+	plugins            map[NebulaMessageSubType]Plugin
 	certState          *CertState
 	cipher             string
 	firewall           *Firewall
@@ -68,6 +70,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		hostMap:            c.HostMap,
 		outside:            c.Outside,
 		inside:             c.Inside,
+		plugins:            c.Plugins,
 		certState:          c.certState,
 		cipher:             c.Cipher,
 		firewall:           c.Firewall,
