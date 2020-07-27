@@ -186,6 +186,30 @@ func (c *Config) GetMap(k string, d map[interface{}]interface{}) map[interface{}
 	return v
 }
 
+// GetMapSlice will get the slice of maps for k or return the default d if not found or invalid
+func (c *Config) GetMapSlice(k string, d []map[interface{}]interface{}) []map[interface{}]interface{} {
+	r := c.Get(k)
+	if r == nil {
+		return d
+	}
+
+	rv, ok := r.([]interface{})
+	if !ok {
+		return d
+	}
+
+	v := make([]map[interface{}]interface{}, len(rv))
+	for i := 0; i < len(v); i++ {
+		vv, ok := rv[i].(map[interface{}]interface{})
+		if !ok {
+			return d
+		}
+		v[i] = vv
+	}
+
+	return v
+}
+
 // GetInt will get the int for k or return the default d if not found or invalid
 func (c *Config) GetInt(k string, d int) int {
 	r := c.GetString(k, strconv.Itoa(d))
