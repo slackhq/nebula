@@ -2,6 +2,8 @@ package nebula
 
 import (
 	"errors"
+	"io"
+	"net"
 	"os"
 	"time"
 
@@ -10,10 +12,18 @@ import (
 
 const mtu = 9001
 
+type Inside interface {
+	io.ReadWriteCloser
+	Activate() error
+	CidrNet() *net.IPNet
+	DeviceName() string
+	WriteRaw([]byte) error
+}
+
 type InterfaceConfig struct {
 	HostMap                 *HostMap
 	Outside                 *udpConn
-	Inside                  *Tun
+	Inside                  Inside
 	certState               *CertState
 	Cipher                  string
 	Firewall                *Firewall
@@ -31,7 +41,7 @@ type InterfaceConfig struct {
 type Interface struct {
 	hostMap            *HostMap
 	outside            *udpConn
-	inside             *Tun
+	inside             Inside
 	certState          *CertState
 	cipher             string
 	firewall           *Firewall
@@ -101,7 +111,7 @@ func (f *Interface) Run(tunRoutines, udpRoutines int, buildVersion string) {
 		l.WithError(err).Error("Failed to get udp listen address")
 	}
 
-	l.WithField("interface", f.inside.Device).WithField("network", f.inside.Cidr.String()).
+	l.WithField("interface", f.inside.DeviceName()).WithField("network", f.inside.CidrNet().String()).
 		WithField("build", buildVersion).WithField("udpAddr", addr).
 		Info("Nebula interface is active")
 

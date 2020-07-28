@@ -27,7 +27,7 @@ func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route,
 	ifce = &Tun{
 		ReadWriteCloser: file,
 		fd:              int(file.Fd()),
-		Device:          "tun0",
+		Device:          "android",
 		Cidr:            cidr,
 		DefaultMTU:      defaultMTU,
 		TXQueueLen:      txQueueLen,
@@ -64,6 +64,13 @@ func (c *Tun) WriteRaw(b []byte) error {
 }
 
 func (c Tun) Activate() error {
-	c.Device = "android"
 	return nil
+}
+
+func (c *Tun) CidrNet() *net.IPNet {
+	return c.Cidr
+}
+
+func (c *Tun) DeviceName() string {
+	return c.Device
 }
