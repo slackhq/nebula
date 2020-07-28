@@ -3,7 +3,6 @@
 package nebula
 
 import (
-	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -112,23 +111,4 @@ func BenchmarkInsideHotPath(b *testing.B) {
 		}
 		b.SetBytes(1500)
 	})
-}
-
-func testHotPathCipherState(t testing.TB, c noise.CipherFunc) *NebulaCipherState {
-	cs := noise.NewCipherSuite(noise.DH25519, c, noise.HashSHA256)
-	rng := rand.Reader
-	staticR, _ := cs.GenerateKeypair(rng)
-	hs, err := noise.NewHandshakeState(noise.Config{
-		CipherSuite: cs,
-		Random:      rng,
-		Pattern:     noise.HandshakeN,
-		Initiator:   true,
-		PeerStatic:  staticR.Public,
-	})
-	require.NoError(t, err)
-
-	_, eKey, _, err := hs.WriteMessage(nil, nil)
-	require.NoError(t, err)
-
-	return NewNebulaCipherState(eKey)
 }
