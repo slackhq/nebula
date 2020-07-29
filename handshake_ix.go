@@ -126,11 +126,13 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		}
 		vpnIP := ip2int(remoteCert.Details.Ips[0].IP)
 		certName := remoteCert.Details.Name
+		fingerprint, _ := remoteCert.Sha256Sum()
 
 		myIndex, err := generateIndex()
 		if err != nil {
 			l.WithError(err).WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 				WithField("certName", certName).
+				WithField("fingerprint", fingerprint).
 				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to generate index")
 			return true
 		}
@@ -139,12 +141,14 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		if err != nil {
 			l.WithError(err).WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 				WithField("certName", certName).
+				WithField("fingerprint", fingerprint).
 				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Error adding index to connection manager")
 
 			return true
 		}
 		l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 			WithField("certName", certName).
+			WithField("fingerprint", fingerprint).
 			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
 			Info("Handshake message received")
@@ -157,6 +161,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		if err != nil {
 			l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 				WithField("certName", certName).
+				WithField("fingerprint", fingerprint).
 				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to marshal handshake message")
 			return true
 		}
@@ -166,6 +171,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		if err != nil {
 			l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 				WithField("certName", certName).
+				WithField("fingerprint", fingerprint).
 				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.WriteMessage")
 			return true
 		}
@@ -173,6 +179,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		if f.hostMap.CheckHandshakeCompleteIP(vpnIP) && vpnIP < ip2int(f.certState.certificate.Details.Ips[0].IP) {
 			l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 				WithField("certName", certName).
+				WithField("fingerprint", fingerprint).
 				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
 				Info("Prevented a handshake race")
@@ -196,12 +203,14 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			if err != nil {
 				l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 					WithField("certName", certName).
+					WithField("fingerprint", fingerprint).
 					WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 					WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 					WithError(err).Error("Failed to send handshake")
 			} else {
 				l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 					WithField("certName", certName).
+					WithField("fingerprint", fingerprint).
 					WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 					WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 					Info("Handshake message sent")
@@ -225,6 +234,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			if err == nil && ho.localIndexId != 0 {
 				l.WithField("vpnIp", vpnIP).
 					WithField("certName", certName).
+					WithField("fingerprint", fingerprint).
 					WithField("action", "removing stale index").
 					WithField("index", ho.localIndexId).
 					Debug("Handshake processing")
@@ -238,6 +248,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		} else {
 			l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 				WithField("certName", certName).
+				WithField("fingerprint", fingerprint).
 				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
 				Error("Noise did not arrive at a key")
 			return true
@@ -297,10 +308,12 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	}
 	vpnIP := ip2int(remoteCert.Details.Ips[0].IP)
 	certName := remoteCert.Details.Name
+	fingerprint, _ := remoteCert.Sha256Sum()
 
 	duration := time.Since(hostinfo.handshakeStart).Nanoseconds()
 	l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 		WithField("certName", certName).
+		WithField("fingerprint", fingerprint).
 		WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 		WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 		WithField("durationNs", duration).
@@ -339,6 +352,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		if err == nil && ho.localIndexId != 0 {
 			l.WithField("vpnIp", vpnIP).
 				WithField("certName", certName).
+				WithField("fingerprint", fingerprint).
 				WithField("action", "removing stale index").
 				WithField("index", ho.localIndexId).
 				Debug("Handshake processing")
@@ -353,6 +367,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	} else {
 		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 			WithField("certName", certName).
+			WithField("fingerprint", fingerprint).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 			Error("Noise did not arrive at a key")
 		return true
