@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rcrowley/go-metrics"
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 )
 
@@ -37,13 +38,19 @@ type FirewallInterface interface {
 
 type conn struct {
 	Expires time.Time // Time when this conntrack entry will expire
-	Seq     uint32    // If tcp rtt tracking is enabled this will be the seq we are looking for an ack
 	Sent    time.Time // If tcp rtt tracking is enabled this will be when Seq was last set
+	Seq     uint32    // If tcp rtt tracking is enabled this will be the seq we are looking for an ack
+
+	// record why the original connection passed the firewall, so we can re-validate
+	// after ruleset changes. Note, rulesVersion is a uint16 so that these two
+	// fields pack for free after the uint32 above
+	incoming     bool
+	rulesVersion uint16
 }
 
 // TODO: need conntrack max tracked connections handling
 type Firewall struct {
-	Conns map[FirewallPacket]*conn
+	Conntrack *FirewallConntrack
 
 	InRules  *FirewallTable
 	OutRules *FirewallTable
@@ -54,16 +61,21 @@ type Firewall struct {
 	UDPTimeout     time.Duration //linux: 180s max
 	DefaultTimeout time.Duration //linux: 600s
 
-	TimerWheel *TimerWheel
-
 	// Used to ensure we don't emit local packets for ips we don't own
 	localIps *CIDRTree
 
-	connMutex sync.Mutex
-	rules     string
+	rules        string
+	rulesVersion uint16
 
 	trackTCPRTT  bool
 	metricTCPRTT metrics.Histogram
+}
+
+type FirewallConntrack struct {
+	sync.Mutex
+
+	Conns      map[FirewallPacket]*conn
+	TimerWheel *TimerWheel
 }
 
 type FirewallTable struct {
@@ -171,10 +183,12 @@ func NewFirewall(tcpTimeout, UDPTimeout, defaultTimeout time.Duration, c *cert.N
 	}
 
 	return &Firewall{
-		Conns:          make(map[FirewallPacket]*conn),
+		Conntrack: &FirewallConntrack{
+			Conns:      make(map[FirewallPacket]*conn),
+			TimerWheel: NewTimerWheel(min, max),
+		},
 		InRules:        newFirewallTable(),
 		OutRules:       newFirewallTable(),
-		TimerWheel:     NewTimerWheel(min, max),
 		TCPTimeout:     tcpTimeout,
 		UDPTimeout:     UDPTimeout,
 		DefaultTimeout: defaultTimeout,
@@ -354,7 +368,7 @@ var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 // returns nil if the packet should not be dropped.
 func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool) error {
 	// Check if we spoke to this tuple, if we did then allow this packet
-	if f.inConns(packet, fp, incoming) {
+	if f.inConns(packet, fp, incoming, h, caPool) {
 		return nil
 	}
 
@@ -398,24 +412,64 @@ func (f *Firewall) Destroy() {
 }
 
 func (f *Firewall) EmitStats() {
-	conntrackCount := len(f.Conns)
+	conntrack := f.Conntrack
+	conntrack.Lock()
+	conntrackCount := len(conntrack.Conns)
+	conntrack.Unlock()
 	metrics.GetOrRegisterGauge("firewall.conntrack.count", nil).Update(int64(conntrackCount))
+	metrics.GetOrRegisterGauge("firewall.rules.version", nil).Update(int64(f.rulesVersion))
 }
 
-func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool) bool {
-	f.connMutex.Lock()
+func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool) bool {
+	conntrack := f.Conntrack
+	conntrack.Lock()
 
 	// Purge every time we test
-	ep, has := f.TimerWheel.Purge()
+	ep, has := conntrack.TimerWheel.Purge()
 	if has {
 		f.evict(ep)
 	}
 
-	c, ok := f.Conns[fp]
+	c, ok := conntrack.Conns[fp]
 
 	if !ok {
-		f.connMutex.Unlock()
+		conntrack.Unlock()
 		return false
+	}
+
+	if c.rulesVersion != f.rulesVersion {
+		// This conntrack entry was for an older rule set, validate
+		// it still passes with the current rule set
+		table := f.OutRules
+		if c.incoming {
+			table = f.InRules
+		}
+
+		// We now know which firewall table to check against
+		if !table.match(fp, c.incoming, h.ConnectionState.peerCert, caPool) {
+			if l.Level >= logrus.DebugLevel {
+				h.logger().
+					WithField("fwPacket", fp).
+					WithField("incoming", c.incoming).
+					WithField("rulesVersion", f.rulesVersion).
+					WithField("oldRulesVersion", c.rulesVersion).
+					Debugln("dropping old conntrack entry, does not match new ruleset")
+			}
+			delete(conntrack.Conns, fp)
+			conntrack.Unlock()
+			return false
+		}
+
+		if l.Level >= logrus.DebugLevel {
+			h.logger().
+				WithField("fwPacket", fp).
+				WithField("incoming", c.incoming).
+				WithField("rulesVersion", f.rulesVersion).
+				WithField("oldRulesVersion", c.rulesVersion).
+				Debugln("keeping old conntrack entry, does match new ruleset")
+		}
+
+		c.rulesVersion = f.rulesVersion
 	}
 
 	switch fp.Protocol {
@@ -432,7 +486,7 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool) bool
 		c.Expires = time.Now().Add(f.DefaultTimeout)
 	}
 
-	f.connMutex.Unlock()
+	conntrack.Unlock()
 
 	return true
 }
@@ -453,14 +507,19 @@ func (f *Firewall) addConn(packet []byte, fp FirewallPacket, incoming bool) {
 		timeout = f.DefaultTimeout
 	}
 
-	f.connMutex.Lock()
-	if _, ok := f.Conns[fp]; !ok {
-		f.TimerWheel.Add(fp, timeout)
+	conntrack := f.Conntrack
+	conntrack.Lock()
+	if _, ok := conntrack.Conns[fp]; !ok {
+		conntrack.TimerWheel.Add(fp, timeout)
 	}
 
+	// Record which rulesVersion allowed this connection, so we can retest after
+	// firewall reload
+	c.incoming = incoming
+	c.rulesVersion = f.rulesVersion
 	c.Expires = time.Now().Add(timeout)
-	f.Conns[fp] = c
-	f.connMutex.Unlock()
+	conntrack.Conns[fp] = c
+	conntrack.Unlock()
 }
 
 // Evict checks if a conntrack entry has expired, if so it is removed, if not it is re-added to the wheel
@@ -468,7 +527,8 @@ func (f *Firewall) addConn(packet []byte, fp FirewallPacket, incoming bool) {
 func (f *Firewall) evict(p FirewallPacket) {
 	//TODO: report a stat if the tcp rtt tracking was never resolved?
 	// Are we still tracking this conn?
-	t, ok := f.Conns[p]
+	conntrack := f.Conntrack
+	t, ok := conntrack.Conns[p]
 	if !ok {
 		return
 	}
@@ -477,12 +537,12 @@ func (f *Firewall) evict(p FirewallPacket) {
 
 	// Timeout is in the future, re-add the timer
 	if newT > 0 {
-		f.TimerWheel.Add(p, newT)
+		conntrack.TimerWheel.Add(p, newT)
 		return
 	}
 
 	// This conn is done
-	delete(f.Conns, p)
+	delete(conntrack.Conns, p)
 }
 
 func (ft *FirewallTable) match(p FirewallPacket, incoming bool, c *cert.NebulaCertificate, caPool *cert.NebulaCAPool) bool {
