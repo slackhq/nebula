@@ -29,7 +29,15 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 		return
 	}
 
-	hostinfo := f.getOrHandshake(fwPacket.RemoteIP)
+	hostinfo, valid := f.getOrHandshake(fwPacket.RemoteIP)
+	if !valid {
+		if l.Level >= logrus.DebugLevel {
+			l.WithField("vpnIp", IntIp(fwPacket.RemoteIP)).
+				WithField("fwPacket", fwPacket).
+				Debugln("dropping outbound packet, vpnIp not in our CIDR or in unsafe routes")
+		}
+		return
+	}
 	ci := hostinfo.ConnectionState
 
 	if ci.ready == false {
@@ -59,9 +67,12 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 	}
 }
 
-func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
+func (f *Interface) getOrHandshake(vpnIp uint32) (*HostInfo, bool) {
 	if f.hostMap.vpnCIDR.Contains(int2ip(vpnIp)) == false {
 		vpnIp = f.hostMap.queryUnsafeRoute(vpnIp)
+		if vpnIp == 0 {
+			return nil, false
+		}
 	}
 	hostinfo, err := f.hostMap.PromoteBestQueryVpnIP(vpnIp, f)
 
@@ -76,7 +87,7 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 	ci := hostinfo.ConnectionState
 
 	if ci != nil && ci.eKey != nil && ci.ready {
-		return hostinfo
+		return hostinfo, true
 	}
 
 	if ci == nil {
@@ -105,7 +116,7 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 		}
 	}
 
-	return hostinfo
+	return hostinfo, true
 }
 
 func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType, hostInfo *HostInfo, p, nb, out []byte) {
@@ -135,7 +146,14 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
 func (f *Interface) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
-	hostInfo := f.getOrHandshake(vpnIp)
+	hostInfo, valid := f.getOrHandshake(vpnIp)
+	if !valid {
+		if l.Level >= logrus.DebugLevel {
+			l.WithField("vpnIp", IntIp(vpnIp)).
+				Debugln("dropping SendMessageToVpnIp, vpnIp not in our CIDR or in unsafe routes")
+		}
+		return
+	}
 
 	if !hostInfo.ConnectionState.ready {
 		// Because we might be sending stored packets, lock here to stop new things going to
@@ -159,7 +177,14 @@ func (f *Interface) sendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubT
 
 // SendMessageToAll handles real ip:port lookup and sends to all known addresses for vpnIp
 func (f *Interface) SendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
-	hostInfo := f.getOrHandshake(vpnIp)
+	hostInfo, valid := f.getOrHandshake(vpnIp)
+	if !valid {
+		if l.Level >= logrus.DebugLevel {
+			l.WithField("vpnIp", IntIp(vpnIp)).
+				Debugln("dropping SendMessageToAll, vpnIp not in our CIDR or in unsafe routes")
+		}
+		return
+	}
 
 	if hostInfo.ConnectionState.ready == false {
 		// Because we might be sending stored packets, lock here to stop new things going to
