@@ -201,14 +201,6 @@ func (c *HandshakeManager) AddVpnIP(vpnIP uint32) *HostInfo {
 	// main receive thread for very long by waiting to add items to the pending map
 	c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval)
 
-	// If this is a static host, we don't need to wait for the HostQueryReply
-	// We can trigger the handshake right now
-	if _, ok := c.lightHouse.staticList[vpnIP]; ok {
-		select {
-		case c.trigger <- vpnIP:
-		default:
-		}
-	}
 	return hostinfo
 }
 

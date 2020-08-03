@@ -94,6 +94,15 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 		ixHandshakeStage0(f, vpnIp, hostinfo)
 		// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
 		//xx_handshakeStage0(f, ip, hostinfo)
+
+		// If this is a static host, we don't need to wait for the HostQueryReply
+		// We can trigger the handshake right now
+		if _, ok := f.lightHouse.staticList[vpnIp]; ok {
+			select {
+			case f.handshakeManager.trigger <- vpnIp:
+			default:
+			}
+		}
 	}
 
 	return hostinfo
