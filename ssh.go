@@ -66,10 +66,11 @@ func configSSH(ssh *sshd.SSHServer, c *Config) error {
 		return fmt.Errorf("sshd.listen must be provided")
 	}
 
-	port := strings.Split(listen, ":")
-	if len(port) < 2 {
-		return fmt.Errorf("sshd.listen does not have a port")
-	} else if port[1] == "22" {
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return fmt.Errorf("invalid sshd.listen address: %s", err)
+	}
+	if port == "22" {
 		return fmt.Errorf("sshd.listen can not use port 22")
 	}
 
