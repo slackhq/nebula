@@ -1,7 +1,7 @@
 [Unit]
 Description=nebula
-Wants=basic.target
-After=basic.target network.target
+Wants=basic.target network-online.target
+After=basic.target network.target network-online.target
 
 [Service]
 SyslogIdentifier=nebula
