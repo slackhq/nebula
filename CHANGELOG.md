@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- You can emit statistics about non-message packets by setting the option
+  `stats.message_metrics`. You can similarly emit detailed statistics about
+  lighthouse packets by setting the option `stats.lighthouse_metrics`. See
+  the example config for more details. (#230)
+
+- We now support freebsd/amd64. This is experimental, please give us feedback.
+  (#103)
+
+- We now release a binary for `linux/mips-softfloat` which has also been
+  stripped to reduce filesize and hopefully have a better chance on running on
+  small mips devices. (#231)
+
+### Changed
+
+- Handshakes should now trigger faster, as we try to be proactive with sending
+  them instead of waiting for the next timer tick in most cases. (#246, #265)
+
+- Previously, we would drop the conntrack table whenever firewall rules were
+  changed during a SIGHUP. Now, we will maintain the table and just validate
+  that an entry still matches with the new rule set. (#233)
+
+- Debug logs for firewall drops now include the reason. (#220, #239)
+
+- Logs for handshakes now include the fingerprint of the remote host. (#262)
+
+### Fixed
+
+- `advmss` is now set correctly for each route table entry when `tun.routes`
+  is configured to have some routes with higher MTU. (#245)
+
 ## [1.2.0] - 2020-04-08
 
 ### Added
