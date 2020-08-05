@@ -20,8 +20,20 @@ type Plugin interface {
 
 func NewPluginsFromConfig(c *Config) (map[NebulaMessageSubType]Plugin, error) {
 	conf := c.GetMapSlice("experimental.plugins", nil)
-	if conf == nil {
+	if len(conf) == 0 {
 		return nil, nil
+	}
+
+	token := c.GetString("experimental.privileged_plugins", "")
+	accept := "I understand the risks and really want to allow plugins to run as root"
+	allowPrivileged := token == accept
+
+	root, err := privileged()
+	if err != nil {
+		return nil, fmt.Errorf("could not check admin privileges while loading plugins: %w", err)
+	}
+	if root && !allowPrivileged {
+		return nil, fmt.Errorf("plugins disabled when running as a privileged account")
 	}
 
 	plugins := make(map[NebulaMessageSubType]Plugin)
