@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `advmss` is now set correctly for each route table entry when `tun.routes`
   is configured to have some routes with higher MTU. (#245)
 
+- Packets that arrive on the tun device with an unroutable destination IP are
+  now dropped correctly, instead of wasting time making queries to the
+  lighthouses for IP `0.0.0.0` (#267)
+
 ## [1.2.0] - 2020-04-08
 
 ### Added
