@@ -30,6 +30,14 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 	}
 
 	hostinfo := f.getOrHandshake(fwPacket.RemoteIP)
+	if hostinfo == nil {
+		if l.Level >= logrus.DebugLevel {
+			l.WithField("vpnIp", IntIp(fwPacket.RemoteIP)).
+				WithField("fwPacket", fwPacket).
+				Debugln("dropping outbound packet, vpnIp not in our CIDR or in unsafe routes")
+		}
+		return
+	}
 	ci := hostinfo.ConnectionState
 
 	if ci.ready == false {
@@ -59,9 +67,13 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 	}
 }
 
+// getOrHandshake returns nil if the vpnIp is not routable
 func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 	if f.hostMap.vpnCIDR.Contains(int2ip(vpnIp)) == false {
 		vpnIp = f.hostMap.queryUnsafeRoute(vpnIp)
+		if vpnIp == 0 {
+			return nil
+		}
 	}
 	hostinfo, err := f.hostMap.PromoteBestQueryVpnIP(vpnIp, f)
 
@@ -136,6 +148,13 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
 func (f *Interface) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
 	hostInfo := f.getOrHandshake(vpnIp)
+	if hostInfo == nil {
+		if l.Level >= logrus.DebugLevel {
+			l.WithField("vpnIp", IntIp(vpnIp)).
+				Debugln("dropping SendMessageToVpnIp, vpnIp not in our CIDR or in unsafe routes")
+		}
+		return
+	}
 
 	if !hostInfo.ConnectionState.ready {
 		// Because we might be sending stored packets, lock here to stop new things going to
@@ -160,6 +179,13 @@ func (f *Interface) sendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubT
 // SendMessageToAll handles real ip:port lookup and sends to all known addresses for vpnIp
 func (f *Interface) SendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
 	hostInfo := f.getOrHandshake(vpnIp)
+	if hostInfo == nil {
+		if l.Level >= logrus.DebugLevel {
+			l.WithField("vpnIp", IntIp(vpnIp)).
+				Debugln("dropping SendMessageToAll, vpnIp not in our CIDR or in unsafe routes")
+		}
+		return
+	}
 
 	if hostInfo.ConnectionState.ready == false {
 		// Because we might be sending stored packets, lock here to stop new things going to
