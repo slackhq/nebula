@@ -124,6 +124,8 @@ punchy:
 
 # Configure the private interface. Note: addr is baked into the nebula certificate
 tun:
+  # When tun is disabled, a lighthouse can be started without a local tun interface (and therefore without root)
+  disabled: false
   # Name of the device
   dev: nebula1
   # Toggles forwarding of local broadcast packets, the address of which depends on the ip/mask encoded in pki.cert
