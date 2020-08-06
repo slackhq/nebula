@@ -244,10 +244,10 @@ func (nc *NebulaCertificate) Expired(t time.Time) bool {
 	return nc.Details.NotBefore.After(t) || nc.Details.NotAfter.Before(t)
 }
 
-// Verify will ensure a certificate is good in all respects (expiry, group membership, signature, cert blacklist, etc)
+// Verify will ensure a certificate is good in all respects (expiry, group membership, signature, cert blocklist, etc)
 func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error) {
-	if ncp.IsBlacklisted(nc) {
-		return false, fmt.Errorf("certificate has been blacklisted")
+	if ncp.IsBlocklisted(nc) {
+		return false, fmt.Errorf("certificate has been blocked")
 	}
 
 	signer, err := ncp.GetCAForCert(nc)

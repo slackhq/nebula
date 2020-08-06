@@ -149,10 +149,16 @@ func loadCAFromConfig(c *Config) (*cert.NebulaCAPool, error) {
 		return nil, fmt.Errorf("error while adding CA certificate to CA trust store: %s", err)
 	}
 
-	// pki.blacklist entered the scene at about the same time we aliased x509 to pki, not supporting backwards compat
+	for _, fp := range c.GetStringSlice("pki.blocklist", []string{}) {
+		l.WithField("fingerprint", fp).Infof("Blocklisting cert")
+		CAs.BlocklistFingerprint(fp)
+	}
+
+	// Support deprecated config for at leaast one minor release to allow for migrations
 	for _, fp := range c.GetStringSlice("pki.blacklist", []string{}) {
-		l.WithField("fingerprint", fp).Infof("Blacklisting cert")
-		CAs.BlacklistFingerprint(fp)
+		l.WithField("fingerprint", fp).Infof("Blocklisting cert")
+		l.Warn("pki.blacklist is deprecated and will not be supported in a future release. Please migrate your config to use pki.blocklist")
+		CAs.BlocklistFingerprint(fp)
 	}
 
 	return CAs, nil
