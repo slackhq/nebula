@@ -172,13 +172,13 @@ func TestNebulaCertificate_Verify(t *testing.T) {
 
 	f, err := c.Sha256Sum()
 	assert.Nil(t, err)
-	caPool.BlacklistFingerprint(f)
+	caPool.BlocklistFingerprint(f)
 
 	v, err := c.Verify(time.Now(), caPool)
 	assert.False(t, v)
-	assert.EqualError(t, err, "certificate has been blacklisted")
+	assert.EqualError(t, err, "certificate has been blocked")
 
-	caPool.ResetCertBlacklist()
+	caPool.ResetCertBlocklist()
 	v, err = c.Verify(time.Now(), caPool)
 	assert.True(t, v)
 	assert.Nil(t, err)

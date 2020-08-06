@@ -8,14 +8,14 @@ import (
 
 type NebulaCAPool struct {
 	CAs           map[string]*NebulaCertificate
-	certBlacklist map[string]struct{}
+	certBlocklist map[string]struct{}
 }
 
 // NewCAPool creates a CAPool
 func NewCAPool() *NebulaCAPool {
 	ca := NebulaCAPool{
 		CAs:           make(map[string]*NebulaCertificate),
-		certBlacklist: make(map[string]struct{}),
+		certBlocklist: make(map[string]struct{}),
 	}
 
 	return &ca
@@ -67,24 +67,24 @@ func (ncp *NebulaCAPool) AddCACertificate(pemBytes []byte) ([]byte, error) {
 	return pemBytes, nil
 }
 
-// BlacklistFingerprint adds a cert fingerprint to the blacklist
-func (ncp *NebulaCAPool) BlacklistFingerprint(f string) {
-	ncp.certBlacklist[f] = struct{}{}
+// BlocklistFingerprint adds a cert fingerprint to the blocklist
+func (ncp *NebulaCAPool) BlocklistFingerprint(f string) {
+	ncp.certBlocklist[f] = struct{}{}
 }
 
-// ResetCertBlacklist removes all previously blacklisted cert fingerprints
-func (ncp *NebulaCAPool) ResetCertBlacklist() {
-	ncp.certBlacklist = make(map[string]struct{})
+// ResetCertBlocklist removes all previously blocklisted cert fingerprints
+func (ncp *NebulaCAPool) ResetCertBlocklist() {
+	ncp.certBlocklist = make(map[string]struct{})
 }
 
-// IsBlacklisted returns true if the fingerprint fails to generate or has been explicitly blacklisted
-func (ncp *NebulaCAPool) IsBlacklisted(c *NebulaCertificate) bool {
+// IsBlocklisted returns true if the fingerprint fails to generate or has been explicitly blocklisted
+func (ncp *NebulaCAPool) IsBlocklisted(c *NebulaCertificate) bool {
 	h, err := c.Sha256Sum()
 	if err != nil {
 		return true
 	}
 
-	if _, ok := ncp.certBlacklist[h]; ok {
+	if _, ok := ncp.certBlocklist[h]; ok {
 		return true
 	}
 

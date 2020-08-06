@@ -7,8 +7,8 @@ pki:
   ca: /etc/nebula/ca.crt
   cert: /etc/nebula/host.crt
   key: /etc/nebula/host.key
-  #blacklist is a list of certificate fingerprints that we will refuse to talk to
-  #blacklist:
+  #blocklist is a list of certificate fingerprints that we will refuse to talk to
+  #blocklist:
   #  - c99d4e650533b92061b09918e838a5a0a6aaee21eed1d12fd937682865936c72
 
 # The static host map defines a set of hosts with fixed IP addresses on the internet (or any network).
@@ -64,7 +64,7 @@ lighthouse:
   # the inverse). CIDR rules are matched after interface name rules.
   # Default is all local IP addresses.
   #local_allow_list:
-    # Example to blacklist tun0 and all docker interfaces.
+    # Example to block tun0 and all docker interfaces.
     #interfaces:
       #tun0: false
       #'docker.*': false
