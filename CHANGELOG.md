@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Logs for handshakes now include the fingerprint of the remote host. (#262)
 
+- Config item `pki.blacklist` is now `pki.blocklist`. (#272)
+
+### Deprecated
+
+- `pki.blacklist` is deprecated in favor of `pki.blocklist` with the same
+   functionality. Existing configs will continue to load for this release to
+   allow for migrations. (#272)
+
 ### Fixed
 
 - `advmss` is now set correctly for each route table entry when `tun.routes`
