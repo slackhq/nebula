@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stripped to reduce filesize and hopefully have a better chance on running on
   small mips devices. (#231)
 
+- You can set `tun.disabled` to true to run a standalone lighthouse without a
+  tun device (and thus, without root). (#269)
+
 ### Changed
 
 - Handshakes should now trigger faster, as we try to be proactive with sending
