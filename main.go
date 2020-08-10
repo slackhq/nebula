@@ -101,11 +101,14 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logg
 	// tun config, listeners, anything modifying the computer should be below
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-	var tun *Tun
+	var tun Inside
 	if !configTest {
 		config.CatchHUP()
 
-		if tunFd != nil {
+		switch {
+		case config.GetBool("tun.disabled", false):
+			tun = newDisabledTun(tunCidr, l)
+		case tunFd != nil:
 			tun, err = newTunFromFd(
 				*tunFd,
 				tunCidr,
@@ -114,7 +117,7 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logg
 				unsafeRoutes,
 				config.GetInt("tun.tx_queue", 500),
 			)
-		} else {
+		default:
 			tun, err = newTun(
 				config.GetString("tun.dev", ""),
 				tunCidr,
