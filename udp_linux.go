@@ -71,8 +71,10 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 	var lip [4]byte
 	copy(lip[:], net.ParseIP(ip).To4())
 
-	if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
-		return nil, fmt.Errorf("unable to set SO_REUSEPORT: %s", err)
+	if multi {
+		if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
+			return nil, fmt.Errorf("unable to set SO_REUSEPORT: %s", err)
+		}
 	}
 
 	if err = unix.Bind(fd, &unix.SockaddrInet4{Addr: lip, Port: port}); err != nil {
@@ -143,9 +145,13 @@ func (u *udpConn) ListenOut(f *Interface) {
 	//TODO: should we track this?
 	//metric := metrics.GetOrRegisterHistogram("test.batch_read", nil, metrics.NewExpDecaySample(1028, 0.015))
 	msgs, buffers, names := u.PrepareRawMessages(f.udpBatchSize)
+	read := u.ReadMulti
+	if f.udpBatchSize == 1 {
+		read = u.ReadSingle
+	}
 
 	for {
-		n, err := u.ReadMulti(msgs)
+		n, err := read(msgs)
 		if err != nil {
 			l.WithError(err).Error("Failed to read packets")
 			continue
@@ -158,6 +164,27 @@ func (u *udpConn) ListenOut(f *Interface) {
 
 			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, nb)
 		}
+	}
+}
+
+func (u *udpConn) ReadSingle(msgs []rawMessage) (int, error) {
+	for {
+		n, _, err := unix.Syscall6(
+			unix.SYS_RECVMSG,
+			uintptr(u.sysFd),
+			uintptr(unsafe.Pointer(&(msgs[0].Hdr))),
+			0,
+			0,
+			0,
+			0,
+		)
+
+		if err != 0 {
+			return 0, &net.OpError{Op: "recvmsg", Err: err}
+		}
+
+		msgs[0].Len = uint32(n)
+		return 1, nil
 	}
 }
 
