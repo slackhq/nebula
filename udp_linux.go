@@ -161,37 +161,6 @@ func (u *udpConn) ListenOut(f *Interface) {
 	}
 }
 
-func (u *udpConn) Read(addr *udpAddr, b []byte) ([]byte, error) {
-	var rsa rawSockaddrAny
-	var rLen = unix.SizeofSockaddrAny
-
-	for {
-		n, _, err := unix.Syscall6(
-			unix.SYS_RECVFROM,
-			uintptr(u.sysFd),
-			uintptr(unsafe.Pointer(&b[0])),
-			uintptr(len(b)),
-			uintptr(0),
-			uintptr(unsafe.Pointer(&rsa)),
-			uintptr(unsafe.Pointer(&rLen)),
-		)
-
-		if err != 0 {
-			return nil, &net.OpError{Op: "read", Err: err}
-		}
-
-		if rsa.Addr.Family == unix.AF_INET {
-			addr.Port = uint16(rsa.Addr.Data[0])<<8 + uint16(rsa.Addr.Data[1])
-			addr.IP = uint32(rsa.Addr.Data[2])<<24 + uint32(rsa.Addr.Data[3])<<16 + uint32(rsa.Addr.Data[4])<<8 + uint32(rsa.Addr.Data[5])
-		} else {
-			addr.Port = 0
-			addr.IP = 0
-		}
-
-		return b[:n], nil
-	}
-}
-
 func (u *udpConn) ReadMulti(msgs []rawMessage) (int, error) {
 	for {
 		n, _, err := unix.Syscall6(
