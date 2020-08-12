@@ -93,7 +93,7 @@ func (u *udpConn) Rebind() error {
 
 func (ua *udpAddr) Copy() udpAddr {
 	nu := udpAddr{
-		IP: ua.IP,
+		IP:   ua.IP,
 		Port: ua.Port,
 	}
 
