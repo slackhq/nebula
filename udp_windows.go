@@ -21,6 +21,6 @@ func NewListenConfig(multi bool) net.ListenConfig {
 	}
 }
 
-func (u *udpConn) Rebind() {
-	return
+func (u *udpConn) Rebind() error {
+	return nil
 }
