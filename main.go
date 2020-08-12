@@ -199,7 +199,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		if err != nil {
 			return nil, NewContextualError("Failed to get listening port", nil, err)
 		}
-		port = uPort.Port
+		port = int(uPort.Port)
 	}
 
 	amLighthouse := config.GetBool("lighthouse.am_lighthouse", false)
