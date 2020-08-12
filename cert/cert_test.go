@@ -511,8 +511,8 @@ func newTestCaCert(before, after time.Time, ips, subnets []*net.IPNet, groups []
 	nc := &NebulaCertificate{
 		Details: NebulaCertificateDetails{
 			Name:           "test ca",
-			NotBefore:      before,
-			NotAfter:       after,
+			NotBefore:      time.Unix(before.Unix(), 0),
+			NotAfter:       time.Unix(after.Unix(), 0),
 			PublicKey:      pub,
 			IsCA:           true,
 			InvertedGroups: make(map[string]struct{}),
