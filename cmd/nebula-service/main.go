@@ -55,7 +55,7 @@ func main() {
 
 	l := logrus.New()
 	l.Out = os.Stdout
-	err = nebula.Main(config, *configTest, true, Build, l, nil, nil)
+	c, err := nebula.Main(config, *configTest, Build, l, nil)
 
 	switch v := err.(type) {
 	case nebula.ContextualError:
@@ -65,6 +65,9 @@ func main() {
 		l.WithError(err).Error("Failed to start")
 		os.Exit(1)
 	}
+
+	c.Start()
+	c.ShutdownBlock()
 
 	os.Exit(0)
 }

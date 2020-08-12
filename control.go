@@ -10,6 +10,9 @@ import (
 	"github.com/slackhq/nebula/cert"
 )
 
+// Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
+// core. This means copying IP objects, slices, de-referencing pointers and taking the actual value, etc
+
 type Control struct {
 	f *Interface
 	l *logrus.Logger
@@ -19,11 +22,11 @@ type ControlHostInfo struct {
 	VpnIP          net.IP                  `json:"vpnIp"`
 	LocalIndex     uint32                  `json:"localIndex"`
 	RemoteIndex    uint32                  `json:"remoteIndex"`
-	RemoteAddrs    []*udpAddr              `json:"remoteAddrs"`
+	RemoteAddrs    []udpAddr               `json:"remoteAddrs"`
 	CachedPackets  int                     `json:"cachedPackets"`
 	Cert           *cert.NebulaCertificate `json:"cert"`
-	MessageCounter *uint64                 `json:"messageCounter"`
-	CurrentRemote  *udpAddr                `json:"currentRemote"`
+	MessageCounter uint64                  `json:"messageCounter"`
+	CurrentRemote  udpAddr                 `json:"currentRemote"`
 }
 
 // Start actually runs nebula, this is a nonblocking call. To block use Control.ShutdownBlock()
@@ -61,7 +64,7 @@ func (c *Control) ShutdownBlock() {
 
 // RebindUDPServer asks the UDP listener to rebind it's listener. Mainly used on mobile clients when interfaces change
 func (c *Control) RebindUDPServer() {
-	c.f.outside.Rebind()
+	_ = c.f.outside.Rebind()
 }
 
 // ListHostmap returns details about the actual or pending (handshaking) hostmap
@@ -77,7 +80,7 @@ func (c *Control) ListHostmap(pendingMap bool) []ControlHostInfo {
 	hosts := make([]ControlHostInfo, len(hm.Hosts))
 	i := 0
 	for _, v := range hm.Hosts {
-		hosts[i] = c.copyHostInfo(v)
+		hosts[i] = copyHostInfo(v)
 		i++
 	}
 	hm.RUnlock()
@@ -85,8 +88,8 @@ func (c *Control) ListHostmap(pendingMap bool) []ControlHostInfo {
 	return hosts
 }
 
-// GetHostInfoByVpnIp returns a single tunnels hostInfo, or null if not found
-func (c *Control) GetHostInfoByVpnIp(vpnIp uint32, pending bool) *ControlHostInfo {
+// GetHostInfoByVpnIP returns a single tunnels hostInfo, or nil if not found
+func (c *Control) GetHostInfoByVpnIP(vpnIP uint32, pending bool) *ControlHostInfo {
 	var hm *HostMap
 	if pending {
 		hm = c.f.handshakeManager.pendingHostMap
@@ -94,36 +97,35 @@ func (c *Control) GetHostInfoByVpnIp(vpnIp uint32, pending bool) *ControlHostInf
 		hm = c.f.hostMap
 	}
 
-	h, err := hm.QueryVpnIP(vpnIp)
+	h, err := hm.QueryVpnIP(vpnIP)
 	if err != nil {
 		return nil
 	}
 
-	ch := c.copyHostInfo(h)
+	ch := copyHostInfo(h)
 	return &ch
 }
 
 // SetRemoteForTunnel forces a tunnel to use a specific remote
-func (c *Control) SetRemoteForTunnel(vpnIp uint32, addr udpAddr) *ControlHostInfo {
-	hostInfo, err := c.f.hostMap.QueryVpnIP(vpnIp)
+func (c *Control) SetRemoteForTunnel(vpnIP uint32, addr udpAddr) *ControlHostInfo {
+	hostInfo, err := c.f.hostMap.QueryVpnIP(vpnIP)
 	if err != nil {
 		return nil
 	}
 
-	hostInfo.SetRemote(addr)
-
-	ch := c.copyHostInfo(hostInfo)
+	hostInfo.SetRemote(addr.Copy())
+	ch := copyHostInfo(hostInfo)
 	return &ch
 }
 
 // CloseTunnel closes a fully established tunnel. If localOnly is false it will notify the remote end as well.
-func (c *Control) CloseTunnel(vpnIp uint32, localOnly bool) bool {
-	hostInfo, err := c.f.hostMap.QueryVpnIP(vpnIp)
+func (c *Control) CloseTunnel(vpnIP uint32, localOnly bool) bool {
+	hostInfo, err := c.f.hostMap.QueryVpnIP(vpnIP)
 	if err != nil {
 		return false
 	}
 
-	if localOnly {
+	if !localOnly {
 		c.f.send(
 			closeTunnel,
 			0,
@@ -140,15 +142,22 @@ func (c *Control) CloseTunnel(vpnIp uint32, localOnly bool) bool {
 	return true
 }
 
-func (c *Control) copyHostInfo(h *HostInfo) ControlHostInfo {
-	return ControlHostInfo{
+func copyHostInfo(h *HostInfo) ControlHostInfo {
+	addrs := h.RemoteUDPAddrs()
+	chi := ControlHostInfo{
 		VpnIP:          int2ip(h.hostId),
 		LocalIndex:     h.localIndexId,
 		RemoteIndex:    h.remoteIndexId,
-		RemoteAddrs:    h.RemoteUDPAddrs(),
+		RemoteAddrs:    make([]udpAddr, len(addrs), len(addrs)),
 		CachedPackets:  len(h.packetStore),
-		Cert:           h.GetCert(),
-		CurrentRemote:  h.remote,
-		MessageCounter: h.ConnectionState.messageCounter,
+		Cert:           h.GetCert().Copy(),
+		CurrentRemote:  *h.remote,
+		MessageCounter: *h.ConnectionState.messageCounter,
 	}
+
+	for i, addr := range addrs {
+		chi.RemoteAddrs[i] = addr.Copy()
+	}
+
+	return chi
 }

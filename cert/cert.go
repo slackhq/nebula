@@ -468,6 +468,63 @@ func (nc *NebulaCertificate) MarshalJSON() ([]byte, error) {
 	return json.Marshal(jc)
 }
 
+//func (nc *NebulaCertificate) Copy() *NebulaCertificate {
+//	r, err := nc.Marshal()
+//	if err != nil {
+//		//TODO
+//		return nil
+//	}
+//
+//	c, err := UnmarshalNebulaCertificate(r)
+//	return c
+//}
+
+func (nc *NebulaCertificate) Copy() *NebulaCertificate {
+	c := &NebulaCertificate{
+		Details: NebulaCertificateDetails{
+			Name:           nc.Details.Name,
+			Groups:         make([]string, len(nc.Details.Groups)),
+			Ips:            make([]*net.IPNet, len(nc.Details.Ips)),
+			Subnets:        make([]*net.IPNet, len(nc.Details.Subnets)),
+			NotBefore:      nc.Details.NotBefore,
+			NotAfter:       nc.Details.NotAfter,
+			PublicKey:      make([]byte, len(nc.Details.PublicKey)),
+			IsCA:           nc.Details.IsCA,
+			Issuer:         nc.Details.Issuer,
+			InvertedGroups: make(map[string]struct{}, len(nc.Details.InvertedGroups)),
+		},
+		Signature: make([]byte, len(nc.Signature)),
+	}
+
+	copy(c.Signature, nc.Signature)
+	copy(c.Details.Groups, nc.Details.Groups)
+	copy(c.Details.PublicKey, nc.Details.PublicKey)
+
+	for i, p := range nc.Details.Ips {
+		c.Details.Ips[i] = &net.IPNet{
+			IP:   make(net.IP, len(p.IP)),
+			Mask: make(net.IPMask, len(p.Mask)),
+		}
+		copy(c.Details.Ips[i].IP, p.IP)
+		copy(c.Details.Ips[i].Mask, p.Mask)
+	}
+
+	for i, p := range nc.Details.Subnets {
+		c.Details.Subnets[i] = &net.IPNet{
+			IP:   make(net.IP, len(p.IP)),
+			Mask: make(net.IPMask, len(p.Mask)),
+		}
+		copy(c.Details.Subnets[i].IP, p.IP)
+		copy(c.Details.Subnets[i].Mask, p.Mask)
+	}
+
+	for g := range nc.Details.InvertedGroups {
+		c.Details.InvertedGroups[g] = struct{}{}
+	}
+
+	return c
+}
+
 func netMatch(certIp *net.IPNet, rootIps []*net.IPNet) bool {
 	for _, net := range rootIps {
 		if net.Contains(certIp.IP) && maskContains(net.Mask, certIp.Mask) {

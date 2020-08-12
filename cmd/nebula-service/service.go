@@ -14,21 +14,16 @@ import (
 var logger service.Logger
 
 type program struct {
-	exit       chan struct{}
 	configPath *string
 	configTest *bool
 	build      string
+	control    *nebula.Control
 }
 
 func (p *program) Start(s service.Service) error {
-	logger.Info("Nebula service starting.")
-	p.exit = make(chan struct{})
 	// Start should not block.
-	go p.run()
-	return nil
-}
+	logger.Info("Nebula service starting.")
 
-func (p *program) run() error {
 	config := nebula.NewConfig()
 	err := config.Load(*p.configPath)
 	if err != nil {
@@ -37,17 +32,22 @@ func (p *program) run() error {
 
 	l := logrus.New()
 	l.Out = os.Stdout
-	return nebula.Main(config, *p.configTest, true, Build, l, nil, nil)
+	p.control, err = nebula.Main(config, *p.configTest, Build, l, nil)
+	if err != nil {
+		return err
+	}
+
+	p.control.Start()
+	return nil
 }
 
 func (p *program) Stop(s service.Service) error {
 	logger.Info("Nebula service stopping.")
-	close(p.exit)
+	p.control.Stop()
 	return nil
 }
 
 func doService(configPath *string, configTest *bool, build string, serviceFlag *string) {
-
 	if *configPath == "" {
 		ex, err := os.Executable()
 		if err != nil {
