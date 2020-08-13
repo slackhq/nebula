@@ -66,8 +66,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	c.Start()
-	c.ShutdownBlock()
+	if !*configTest {
+		c.Start()
+		c.ShutdownBlock()
+	}
 
 	os.Exit(0)
 }
