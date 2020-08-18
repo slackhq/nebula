@@ -1,6 +1,8 @@
 package nebula
 
 import (
+	"errors"
+
 	"github.com/sirupsen/logrus"
 )
 
@@ -15,10 +17,16 @@ func NewContextualError(msg string, fields map[string]interface{}, realError err
 }
 
 func (ce ContextualError) Error() string {
+	if ce.RealError == nil {
+		return ce.Context
+	}
 	return ce.RealError.Error()
 }
 
 func (ce ContextualError) Unwrap() error {
+	if ce.RealError == nil {
+		return errors.New(ce.Context)
+	}
 	return ce.RealError
 }
 
