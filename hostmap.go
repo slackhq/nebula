@@ -34,6 +34,7 @@ type HostMap struct {
 }
 
 type HostInfo struct {
+	sync.RWMutex
 	remote            *udpAddr
 	Remotes           []*HostInfoDest
 	promoteCounter    uint32
@@ -104,7 +105,9 @@ func (hm *HostMap) EmitStats(name string) {
 func (hm *HostMap) GetIndexByVpnIP(vpnIP uint32) (uint32, error) {
 	hm.RLock()
 	if i, ok := hm.Hosts[vpnIP]; ok {
+		i.RLock()
 		index := i.localIndexId
+		i.RUnlock()
 		hm.RUnlock()
 		return index, nil
 	}
@@ -188,7 +191,9 @@ func (hm *HostMap) AddIndex(index uint32, ci *ConnectionState) (*HostInfo, error
 
 func (hm *HostMap) AddIndexHostInfo(index uint32, h *HostInfo) {
 	hm.Lock()
+	h.Lock()
 	h.localIndexId = index
+	h.Unlock()
 	hm.Indexes[index] = h
 	hm.Unlock()
 
