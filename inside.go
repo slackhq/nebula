@@ -55,7 +55,8 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, trustedCAs)
 	if dropReason == nil {
 		f.sendNoMetrics(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out)
-		if f.lightHouse != nil && *ci.messageCounter%5000 == 0 {
+		mc := atomic.LoadUint64(ci.messageCounter)
+		if f.lightHouse != nil && mc%5000 == 0 {
 			f.lightHouse.Query(fwPacket.RemoteIP, f)
 		}
 
