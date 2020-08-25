@@ -480,6 +480,7 @@ func configLogger(c *Config) error {
 	}
 	l.SetLevel(logLevel)
 
+	disableTimestamp := c.GetBool("logging.disable_timestamp", false)
 	timestampFormat := c.GetString("logging.timestamp_format", "")
 	fullTimestamp := (timestampFormat != "")
 	if timestampFormat == "" {
@@ -490,12 +491,14 @@ func configLogger(c *Config) error {
 	switch logFormat {
 	case "text":
 		l.Formatter = &logrus.TextFormatter{
-			TimestampFormat: timestampFormat,
-			FullTimestamp:   fullTimestamp,
+			TimestampFormat:  timestampFormat,
+			FullTimestamp:    fullTimestamp,
+			DisableTimestamp: disableTimestamp,
 		}
 	case "json":
 		l.Formatter = &logrus.JSONFormatter{
-			TimestampFormat: timestampFormat,
+			TimestampFormat:  timestampFormat,
+			DisableTimestamp: disableTimestamp,
 		}
 	default:
 		return fmt.Errorf("unknown log format `%s`. possible formats: %s", logFormat, []string{"text", "json"})
