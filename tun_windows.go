@@ -48,12 +48,12 @@ func (c *Tun) Activate() error {
 		return fmt.Errorf("Activate failed: %v", err)
 	}
 
-	c.Device = c.Interface.Name()
+	c.Device = "nebula1"
 
 	// TODO use syscalls instead of exec.Command
 	err = exec.Command(
 		`C:\Windows\System32\netsh.exe`, "interface", "ipv4", "set", "address",
-		fmt.Sprintf("name=%s", "nebula1"),
+		fmt.Sprintf("name=%s", c.Device),
 		"source=static",
 		fmt.Sprintf("addr=%s", c.Cidr.IP),
 		fmt.Sprintf("mask=%s", net.IP(c.Cidr.Mask)),
