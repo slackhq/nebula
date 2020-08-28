@@ -53,7 +53,7 @@ func (c *Tun) Activate() error {
 	// TODO use syscalls instead of exec.Command
 	err = exec.Command(
 		`C:\Windows\System32\netsh.exe`, "interface", "ipv4", "set", "address",
-		fmt.Sprintf("name=%s", c.Device),
+		fmt.Sprintf("name=%s", "nebula1"),
 		"source=static",
 		fmt.Sprintf("addr=%s", c.Cidr.IP),
 		fmt.Sprintf("mask=%s", net.IP(c.Cidr.Mask)),
