@@ -35,6 +35,7 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 	}, nil
 }
 
+// TODO: Add rpooley's source code in here.
 func (c *Tun) Activate() error {
 	var err error
 	c.Interface, err = water.New(water.Config{
