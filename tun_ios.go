@@ -22,7 +22,7 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 	return nil, fmt.Errorf("newTun not supported in iOS")
 }
 
-func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, interfaceName string) (ifce *Tun, err error) {
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("route MTU not supported in Darwin")
 	}
