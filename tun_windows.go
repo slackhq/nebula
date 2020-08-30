@@ -48,7 +48,18 @@ func (c *Tun) Activate() error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("Activate failed: %v", err)
+		// NOTE: OpenVPN creates TUN adapters with ComponentId "root/tap0901" which causes the previous check to fail. This should work.
+		c.Interface, err = water.New(water.Config{
+			DeviceType: water.TUN,
+			PlatformSpecificParams: water.PlatformSpecificParams{
+				ComponentID:   "root/tap0901",
+				Network:       c.Cidr.String(),
+				InterfaceName: c.InterfaceName,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("Activate failed: %v", err)
+		}
 	}
 
 	c.Device = c.Interface.Name()

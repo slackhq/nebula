@@ -128,6 +128,8 @@ tun:
   disabled: false
   # Name of the device
   dev: nebula1
+  # Toggle this command and label after TUN device. This is a fix for Windows.
+  #interface_name: "nebula1"
   # Toggles forwarding of local broadcast packets, the address of which depends on the ip/mask encoded in pki.cert
   drop_local_broadcast: false
   # Toggles forwarding of multicast packets
