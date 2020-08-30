@@ -58,7 +58,7 @@ func (c *Tun) Activate() error {
 				InterfaceName: c.InterfaceName,
 			},
 		})
-		if err != nil {
+		if err2 != nil {
 			return fmt.Errorf("Activate failed: \n%v\n%v", err, err2)
 		}
 	}
