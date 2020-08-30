@@ -129,9 +129,18 @@ func Main(config *Config, configTest bool, block bool, buildVersion string, logg
 			)
 		}
 
-		if err != nil {
-			return NewContextualError("Failed to get a tun/tap device", nil, err)
-		}
+	// set up our tun dev
+	tun, err := newTun(
+		config.GetString("tun.dev", ""),
+		tunCidr,
+		config.GetInt("tun.mtu", DEFAULT_MTU),
+		routes,
+		unsafeRoutes,
+		config.GetInt("tun.tx_queue", 500),
+		config.GetString("tun.interface_name", ""),
+	)
+	if err != nil {
+		l.WithError(err).Fatal("Failed to get a tun/tap device")
 	}
 
 	// set up our UDP listener
