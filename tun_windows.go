@@ -59,7 +59,7 @@ func (c *Tun) Activate() error {
 			},
 		})
 		if err2 != nil {
-			return fmt.Errorf("Activate failed: \n%v\n%v", err, err2)
+			return fmt.Errorf("Activate failed: 1:%v 2:%v", err, err2)
 		}
 	}
 
