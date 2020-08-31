@@ -150,9 +150,15 @@ func copyHostInfo(h *HostInfo) ControlHostInfo {
 		RemoteIndex:    h.remoteIndexId,
 		RemoteAddrs:    make([]udpAddr, len(addrs), len(addrs)),
 		CachedPackets:  len(h.packetStore),
-		Cert:           h.GetCert().Copy(),
-		CurrentRemote:  *h.remote,
 		MessageCounter: *h.ConnectionState.messageCounter,
+	}
+
+	if c := h.GetCert(); c != nil {
+		chi.Cert = c.Copy()
+	}
+
+	if h.remote != nil {
+		chi.CurrentRemote = *h.remote
 	}
 
 	for i, addr := range addrs {

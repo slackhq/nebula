@@ -23,6 +23,11 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 		Mask: net.IPMask{255, 255, 255, 0},
 	}
 
+	ipNet2 := net.IPNet{
+		IP:   net.IPv4(1, 2, 3, 5),
+		Mask: net.IPMask{255, 255, 255, 0},
+	}
+
 	crt := &cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
 			Name:           "test",
@@ -53,6 +58,18 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 		hostId:        ip2int(ipNet.IP),
 	})
 
+	hm.Add(ip2int(ipNet2.IP), &HostInfo{
+		remote:  remote1,
+		Remotes: remotes,
+		ConnectionState: &ConnectionState{
+			peerCert:       nil,
+			messageCounter: &counter,
+		},
+		remoteIndexId: 200,
+		localIndexId:  201,
+		hostId:        ip2int(ipNet2.IP),
+	})
+
 	c := Control{
 		f: &Interface{
 			hostMap: hm,
@@ -76,6 +93,11 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 	// Make sure we don't have any unexpected fields
 	assertFields(t, []string{"VpnIP", "LocalIndex", "RemoteIndex", "RemoteAddrs", "CachedPackets", "Cert", "MessageCounter", "CurrentRemote"}, thi)
 	util.AssertDeepCopyEqual(t, &expectedInfo, thi)
+
+	// Make sure we don't panic if the host info doesn't have a cert yet
+	assert.NotPanics(t, func() {
+		thi = c.GetHostInfoByVpnIP(ip2int(ipNet2.IP), false)
+	})
 }
 
 func assertFields(t *testing.T, expected []string, actualStruct interface{}) {
