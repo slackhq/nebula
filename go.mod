@@ -25,9 +25,11 @@ require (
 	github.com/stretchr/testify v1.6.1
 	github.com/vishvananda/netlink v1.0.1-0.20190522153524-00009fb8606a
 	github.com/vishvananda/netns v0.0.0-20191106174202-0a2b9b5464df // indirect
-	golang.org/x/crypto v0.0.0-20200220183623-bac4c82f6975
-	golang.org/x/net v0.0.0-20191209160850-c0dbc17a3553
-	golang.org/x/sys v0.0.0-20191210023423-ac6580df4449
+	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad
+	golang.org/x/net v0.0.0-20210119194325-5f4716e94777
+	golang.org/x/sys v0.0.0-20210124154548-22da62e12c0c
+	golang.zx2c4.com/wireguard v0.0.20201119-0.20201209004655-310ae107c346
+	golang.zx2c4.com/wireguard/windows v0.3.4
 	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
 	gopkg.in/yaml.v2 v2.2.7
 )

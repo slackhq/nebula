@@ -47,6 +47,9 @@ func (c *Control) Stop() {
 		}
 	}
 	c.f.hostMap.Unlock()
+	if err := c.f.Close(); err != nil {
+		c.l.WithError(err).Error("Close interface failed")
+	}
 	c.l.Info("Goodbye")
 }
 
