@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - You can set `tun.disabled` to true to run a standalone lighthouse without a
   tun device (and thus, without root). (#269)
 
+- You can set `logging.disable_timestamp` to remove timestamps from log lines,
+  which is useful when output is redirected to a logging system that already
+  adds timestamps. (#288)
+
 ### Changed
 
 - Handshakes should now trigger faster, as we try to be proactive with sending
