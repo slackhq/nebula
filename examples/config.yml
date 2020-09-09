@@ -156,6 +156,8 @@ logging:
   level: info
   # json or text formats currently available. Default is text
   format: text
+  # Disable timestamp logging. useful when output is redirected to logging system that already adds timestamps. Default is false
+  #disable_timestamp: true
   # timestamp format is specified in Go time format, see:
   #     https://golang.org/pkg/time/#pkg-constants
   # default when `format: json`: "2006-01-02T15:04:05Z07:00" (RFC3339)
