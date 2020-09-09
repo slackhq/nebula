@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Config item `pki.blacklist` is now `pki.blocklist`. (#272)
 
+- Better support for older Linux kernels. We now only set `SO_REUSEPORT` if
+  `tun.routines` is greater than 1 (default is 1). We also only use the
+  `recvmmsg` syscall if `listen.batch` is greater than 1 (default is 64).
+  (#275)
+
 ### Deprecated
 
 - `pki.blacklist` is deprecated in favor of `pki.blocklist` with the same
