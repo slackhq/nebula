@@ -1,0 +1,42 @@
+name: generate
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    paths:
+      - '.github/workflows/generate.yml'
+      - '**.go'
+jobs:
+
+  gogenerate:
+    name: Run go generate
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Set up Go 1.14
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.14
+      id: go
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v1
+
+    - uses: actions/cache@v1
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-gogenerate-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-gogenerate-
+
+    - name: Check for generated type drift
+      run: |
+        go generate ./...
+        git add -N .
+        set +e
+        git --no-pager diff HEAD | grep '^diff'
+        if [ $? -eq 0 ]; then
+          echo "Generated types appear to have changed. Please run go generate."
+          exit 1
+        fi
