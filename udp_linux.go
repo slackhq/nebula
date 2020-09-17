@@ -92,12 +92,7 @@ func (u *udpConn) Rebind() error {
 }
 
 func (ua *udpAddr) Copy() udpAddr {
-	nu := udpAddr{
-		IP:   ua.IP,
-		Port: ua.Port,
-	}
-
-	return nu
+	return *ua
 }
 
 func (u *udpConn) SetRecvBuffer(n int) error {
