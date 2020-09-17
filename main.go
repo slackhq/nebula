@@ -126,10 +126,11 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	}
 
 	// set up our UDP listener
+	udpQueues := config.GetInt("listen.routines", 1)
 	var udpServer *udpConn
 
 	if !configTest {
-		udpServer, err = NewListener(config.GetString("listen.host", "0.0.0.0"), config.GetInt("listen.port", 0), false)
+		udpServer, err = NewListener(config.GetString("listen.host", "0.0.0.0"), config.GetInt("listen.port", 0), udpQueues > 1)
 		if err != nil {
 			return nil, NewContextualError("Failed to open udp listener", nil, err)
 		}
@@ -328,6 +329,8 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		DropLocalBroadcast:      config.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:           config.GetBool("tun.drop_multicast", false),
 		UDPBatchSize:            config.GetInt("listen.batch", 64),
+		udpQueues:               udpQueues,
+		tunQueues:               config.GetInt("tun.routines", 1),
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
 	}

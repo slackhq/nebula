@@ -35,6 +35,8 @@ type InterfaceConfig struct {
 	DropLocalBroadcast      bool
 	DropMulticast           bool
 	UDPBatchSize            int
+	udpQueues               int
+	tunQueues               int
 	MessageMetrics          *MessageMetrics
 	version                 string
 }
@@ -55,6 +57,8 @@ type Interface struct {
 	dropLocalBroadcast bool
 	dropMulticast      bool
 	udpBatchSize       int
+	udpQueues          int
+	tunQueues          int
 	version            string
 
 	metricHandshakes metrics.Histogram
@@ -90,6 +94,8 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		dropLocalBroadcast: c.DropLocalBroadcast,
 		dropMulticast:      c.DropMulticast,
 		udpBatchSize:       c.UDPBatchSize,
+		udpQueues:          c.udpQueues,
+		tunQueues:          c.tunQueues,
 		version:            c.version,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
@@ -116,14 +122,39 @@ func (f *Interface) run() {
 		WithField("build", f.version).WithField("udpAddr", addr).
 		Info("Nebula interface is active")
 
-	// Listen on for incoming packets from the world
-	go f.outside.ListenOut(f)
+	// Launch n queues to read packets from udp
+	for i := 0; i < f.udpQueues; i++ {
+		go f.listenOut(i)
+	}
 
-	// Listen for incoming packets from this machine
-	go f.listenIn()
+	// Launch n queues to read packets from tun dev
+	for i := 0; i < f.tunQueues; i++ {
+		go f.listenIn(i)
+	}
 }
 
-func (f *Interface) listenIn() {
+func (f *Interface) listenOut(i int) {
+	//TODO: handle error
+	addr, err := f.outside.LocalAddr()
+	if err != nil {
+		l.WithError(err).Error("failed to discover udp listening address")
+	}
+
+	var li *udpConn
+	if i > 0 {
+		//TODO: handle error
+		li, err = NewListener(udp2ip(addr).String(), int(addr.Port), i > 0)
+		if err != nil {
+			l.WithError(err).Error("failed to make a new udp listener")
+		}
+	} else {
+		li = f.outside
+	}
+
+	li.ListenOut(f)
+}
+
+func (f *Interface) listenIn(i int) {
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &FirewallPacket{}
