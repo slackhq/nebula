@@ -44,16 +44,19 @@ func qr(args []string, out io.Writer, errOut io.Writer) error {
 		*qf.outFile = inFile[0:len(inFile)-len(ext)] + ".png"
 	}
 
-	b, err := ioutil.ReadFile(*qf.inFile)
+	raw, err := ioutil.ReadFile(*qf.inFile)
+	if err != nil {
+		return fmt.Errorf("error while reading in file: %s", err)
+	}
 
-	b, err = qrcode.Encode(string(b), qrcode.Medium, -*qf.bitSize)
+	enc, err := qrcode.Encode(string(raw), qrcode.Medium, -*qf.bitSize)
 	if err != nil {
 		return fmt.Errorf("error while encoding as a qr code: %s", err)
 	}
 
-	err = ioutil.WriteFile(*qf.outFile, b, 0600)
+	err = ioutil.WriteFile(*qf.outFile, enc, 0600)
 	if err != nil {
-		return fmt.Errorf("error while writing out: %s", err)
+		return fmt.Errorf("error while writing out file: %s", err)
 	}
 
 	return nil
