@@ -37,6 +37,8 @@ func Test_caHelp(t *testing.T) {
 			"    \tOptional: path to write the certificate to (default \"ca.crt\")\n"+
 			"  -out-key string\n"+
 			"    \tOptional: path to write the private key to (default \"ca.key\")\n"+
+			"  -qr\n"+
+			"    \tOptional: output a qr code image of the certificate\n"+
 			"  -subnets string\n"+
 			"    \tOptional: comma separated list of ip and network in CIDR notation. This will limit which subnet addresses and networks subordinate certs can use\n",
 		ob.String(),

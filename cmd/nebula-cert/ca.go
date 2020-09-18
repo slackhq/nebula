@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skip2/go-qrcode"
 	"github.com/slackhq/nebula/cert"
 	"golang.org/x/crypto/ed25519"
 )
@@ -24,6 +25,7 @@ type caFlags struct {
 	groups      *string
 	ips         *string
 	subnets     *string
+	qr          *bool
 }
 
 func newCaFlags() *caFlags {
@@ -33,6 +35,7 @@ func newCaFlags() *caFlags {
 	cf.duration = cf.set.Duration("duration", time.Duration(time.Hour*8760), "Optional: amount of time the certificate should be valid for. Valid time units are seconds: \"s\", minutes: \"m\", hours: \"h\"")
 	cf.outKeyPath = cf.set.String("out-key", "ca.key", "Optional: path to write the private key to")
 	cf.outCertPath = cf.set.String("out-crt", "ca.crt", "Optional: path to write the certificate to")
+	cf.qr = cf.set.Bool("qr", false, "Optional: output a qr code image of the certificate")
 	cf.groups = cf.set.String("groups", "", "Optional: comma separated list of groups. This will limit which groups subordinate certs can use")
 	cf.ips = cf.set.String("ips", "", "Optional: comma separated list of ip and network in CIDR notation. This will limit which ip addresses and networks subordinate certs can use")
 	cf.subnets = cf.set.String("subnets", "", "Optional: comma separated list of ip and network in CIDR notation. This will limit which subnet addresses and networks subordinate certs can use")
@@ -122,6 +125,10 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 		return fmt.Errorf("refusing to overwrite existing CA key: %s", *cf.outKeyPath)
 	}
 
+	if *cf.qr && *cf.outCertPath == "ca.crt" {
+		*cf.outCertPath = "ca.png"
+	}
+
 	if _, err := os.Stat(*cf.outCertPath); err == nil {
 		return fmt.Errorf("refusing to overwrite existing CA cert: %s", *cf.outCertPath)
 	}
@@ -139,6 +146,13 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 	b, err := nc.MarshalToPEM()
 	if err != nil {
 		return fmt.Errorf("error while marshalling certificate: %s", err)
+	}
+
+	if *cf.qr {
+		b, err = qrcode.Encode(string(b), qrcode.Medium, -5)
+		if err != nil {
+			return fmt.Errorf("error while encoding cert as a qr code: %s", err)
+		}
 	}
 
 	err = ioutil.WriteFile(*cf.outCertPath, b, 0600)
