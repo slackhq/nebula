@@ -65,6 +65,17 @@ func (ua *udpAddr) Equals(t *udpAddr) bool {
 	return ua.IP.Equal(t.IP) && ua.Port == t.Port
 }
 
+func (ua *udpAddr) Copy() udpAddr {
+	nu := udpAddr{net.UDPAddr{
+		Port: ua.Port,
+		Zone: ua.Zone,
+		IP:   make(net.IP, len(ua.IP)),
+	}}
+
+	copy(nu.IP, ua.IP)
+	return nu
+}
+
 func (uc *udpConn) WriteTo(b []byte, addr *udpAddr) error {
 	_, err := uc.UDPConn.WriteToUDP(b, &addr.UDPAddr)
 	return err

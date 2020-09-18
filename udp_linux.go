@@ -89,8 +89,12 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 	return &udpConn{sysFd: fd}, err
 }
 
-func (u *udpConn) Rebind() {
-	return
+func (u *udpConn) Rebind() error {
+	return nil
+}
+
+func (ua *udpAddr) Copy() udpAddr {
+	return *ua
 }
 
 func (u *udpConn) SetRecvBuffer(n int) error {
@@ -280,13 +284,6 @@ func (ua *udpAddr) Equals(t *udpAddr) bool {
 		return t == nil && ua == nil
 	}
 	return ua.IP == t.IP && ua.Port == t.Port
-}
-
-func (ua *udpAddr) Copy() *udpAddr {
-	return &udpAddr{
-		Port: ua.Port,
-		IP:   ua.IP,
-	}
 }
 
 func (ua *udpAddr) String() string {

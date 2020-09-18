@@ -35,7 +35,10 @@ type InterfaceConfig struct {
 	DropLocalBroadcast      bool
 	DropMulticast           bool
 	UDPBatchSize            int
+	udpQueues               int
+	tunQueues               int
 	MessageMetrics          *MessageMetrics
+	version                 string
 }
 
 type Interface struct {
@@ -54,6 +57,8 @@ type Interface struct {
 	dropLocalBroadcast bool
 	dropMulticast      bool
 	udpBatchSize       int
+	udpQueues          int
+	tunQueues          int
 	version            string
 
 	metricHandshakes metrics.Histogram
@@ -89,6 +94,9 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		dropLocalBroadcast: c.DropLocalBroadcast,
 		dropMulticast:      c.DropMulticast,
 		udpBatchSize:       c.UDPBatchSize,
+		udpQueues:          c.udpQueues,
+		tunQueues:          c.tunQueues,
+		version:            c.version,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -99,29 +107,28 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 	return ifce, nil
 }
 
-func (f *Interface) Run(tunRoutines, udpRoutines int, buildVersion string) {
+func (f *Interface) run() {
 	// actually turn on tun dev
 	if err := f.inside.Activate(); err != nil {
 		l.Fatal(err)
 	}
 
-	f.version = buildVersion
 	addr, err := f.outside.LocalAddr()
 	if err != nil {
 		l.WithError(err).Error("Failed to get udp listen address")
 	}
 
 	l.WithField("interface", f.inside.DeviceName()).WithField("network", f.inside.CidrNet().String()).
-		WithField("build", buildVersion).WithField("udpAddr", addr).
+		WithField("build", f.version).WithField("udpAddr", addr).
 		Info("Nebula interface is active")
 
 	// Launch n queues to read packets from udp
-	for i := 0; i < udpRoutines; i++ {
+	for i := 0; i < f.udpQueues; i++ {
 		go f.listenOut(i)
 	}
 
 	// Launch n queues to read packets from tun dev
-	for i := 0; i < tunRoutines; i++ {
+	for i := 0; i < f.tunQueues; i++ {
 		go f.listenIn(i)
 	}
 }
