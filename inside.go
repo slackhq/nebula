@@ -54,8 +54,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 
 	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, trustedCAs)
 	if dropReason == nil {
-		f.sendNoMetrics(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out)
-		mc := atomic.LoadUint64(ci.messageCounter)
+		mc := f.sendNoMetrics(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out)
 		if f.lightHouse != nil && mc%5000 == 0 {
 			f.lightHouse.Query(fwPacket.RemoteIP, f)
 		}
@@ -215,10 +214,10 @@ func (f *Interface) send(t NebulaMessageType, st NebulaMessageSubType, ci *Conne
 	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out)
 }
 
-func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte) {
+func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte) uint64 {
 	if ci.eKey == nil {
 		//TODO: log warning
-		return
+		return 0
 	}
 
 	var err error
@@ -238,7 +237,7 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 			WithField("udpAddr", remote).WithField("counter", c).
 			WithField("attemptedCounter", ci.messageCounter).
 			Error("Failed to encrypt outgoing packet")
-		return
+		return c
 	}
 
 	err = f.outside.WriteTo(out, remote)
@@ -246,6 +245,7 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 		hostinfo.logger().WithError(err).
 			WithField("udpAddr", remote).Error("Failed to write outgoing packet")
 	}
+	return c
 }
 
 func isMulticast(ip uint32) bool {
