@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `recvmmsg` syscall if `listen.batch` is greater than 1 (default is 64).
   (#275)
 
+- It is possible to run Nebula as a library inside of another process now.
+  Note that this is still experimental and the internal APIs around this might
+  change in minor version releases. (#279)
+
 ### Deprecated
 
 - `pki.blacklist` is deprecated in favor of `pki.blocklist` with the same
