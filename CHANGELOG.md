@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2020-09-22
+
+### Added
+
+- You can emit statistics about non-message packets by setting the option
+  `stats.message_metrics`. You can similarly emit detailed statistics about
+  lighthouse packets by setting the option `stats.lighthouse_metrics`. See
+  the example config for more details. (#230)
+
+- We now support freebsd/amd64. This is experimental, please give us feedback.
+  (#103)
+
+- We now release a binary for `linux/mips-softfloat` which has also been
+  stripped to reduce filesize and hopefully have a better chance on running on
+  small mips devices. (#231)
+
+- You can set `tun.disabled` to true to run a standalone lighthouse without a
+  tun device (and thus, without root). (#269)
+
+- You can set `logging.disable_timestamp` to remove timestamps from log lines,
+  which is useful when output is redirected to a logging system that already
+  adds timestamps. (#288)
+
+### Changed
+
+- Handshakes should now trigger faster, as we try to be proactive with sending
+  them instead of waiting for the next timer tick in most cases. (#246, #265)
+
+- Previously, we would drop the conntrack table whenever firewall rules were
+  changed during a SIGHUP. Now, we will maintain the table and just validate
+  that an entry still matches with the new rule set. (#233)
+
+- Debug logs for firewall drops now include the reason. (#220, #239)
+
+- Logs for handshakes now include the fingerprint of the remote host. (#262)
+
+- Config item `pki.blacklist` is now `pki.blocklist`. (#272)
+
+- Better support for older Linux kernels. We now only set `SO_REUSEPORT` if
+  `tun.routines` is greater than 1 (default is 1). We also only use the
+  `recvmmsg` syscall if `listen.batch` is greater than 1 (default is 64).
+  (#275)
+
+- It is possible to run Nebula as a library inside of another process now.
+  Note that this is still experimental and the internal APIs around this might
+  change in minor version releases. (#279)
+
+### Deprecated
+
+- `pki.blacklist` is deprecated in favor of `pki.blocklist` with the same
+   functionality. Existing configs will continue to load for this release to
+   allow for migrations. (#272)
+
+### Fixed
+
+- `advmss` is now set correctly for each route table entry when `tun.routes`
+  is configured to have some routes with higher MTU. (#245)
+
+- Packets that arrive on the tun device with an unroutable destination IP are
+  now dropped correctly, instead of wasting time making queries to the
+  lighthouses for IP `0.0.0.0` (#267)
+
 ## [1.2.0] - 2020-04-08
 
 ### Added
@@ -118,7 +180,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/slackhq/nebula/releases/tag/v1.3.0
 [1.2.0]: https://github.com/slackhq/nebula/releases/tag/v1.2.0
 [1.1.0]: https://github.com/slackhq/nebula/releases/tag/v1.1.0
 [1.0.0]: https://github.com/slackhq/nebula/releases/tag/v1.0.0
