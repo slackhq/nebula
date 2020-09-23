@@ -19,7 +19,7 @@ const MaxRemotes = 10
 
 // How long we should prevent roaming back to the previous IP.
 // This helps prevent flapping due to packets already in flight
-const RoamingSupressSeconds = 2
+const RoamingSuppressSeconds = 2
 
 type HostMap struct {
 	sync.RWMutex    //Because we concurrently read and write to our maps

@@ -46,7 +46,7 @@ func Test_signHelp(t *testing.T) {
 			"  -out-key string\n"+
 			"    \tOptional (if in-pub not set): path to write the private key to\n"+
 			"  -subnets string\n"+
-			"    \tOptional: comma seperated list of subnet this cert can serve for\n",
+			"    \tOptional: comma separated list of subnet this cert can serve for\n",
 		ob.String(),
 	)
 }
