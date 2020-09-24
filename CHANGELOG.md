@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the kardianos/service go library from 1.0.0 to 1.1.0, which
+  now creates launchd plist to write stdout/stderr to files by default.
+
 ## [1.3.0] - 2020-09-22
 
 ### Added
