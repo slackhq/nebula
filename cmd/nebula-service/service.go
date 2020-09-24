@@ -61,7 +61,6 @@ func doService(configPath *string, configTest *bool, build string, serviceFlag *
 		DisplayName: "Nebula Network Service",
 		Description: "Nebula network connectivity daemon for encrypted communications",
 		Arguments:   []string{"-service", "run", "-config", *configPath},
-		LogOutput:   true,
 	}
 
 	prg := &program{
