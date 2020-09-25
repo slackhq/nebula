@@ -468,17 +468,6 @@ func (nc *NebulaCertificate) MarshalJSON() ([]byte, error) {
 	return json.Marshal(jc)
 }
 
-//func (nc *NebulaCertificate) Copy() *NebulaCertificate {
-//	r, err := nc.Marshal()
-//	if err != nil {
-//		//TODO
-//		return nil
-//	}
-//
-//	c, err := UnmarshalNebulaCertificate(r)
-//	return c
-//}
-
 func (nc *NebulaCertificate) Copy() *NebulaCertificate {
 	c := &NebulaCertificate{
 		Details: NebulaCertificateDetails{
