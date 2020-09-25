@@ -28,7 +28,7 @@ type signFlags struct {
 	outCertPath *string
 	groups      *string
 	subnets     *string
-	qr          *bool
+	outQRPath   *string
 }
 
 func newSignFlags() *signFlags {
@@ -42,7 +42,7 @@ func newSignFlags() *signFlags {
 	sf.inPubPath = sf.set.String("in-pub", "", "Optional (if out-key not set): path to read a previously generated public key")
 	sf.outKeyPath = sf.set.String("out-key", "", "Optional (if in-pub not set): path to write the private key to")
 	sf.outCertPath = sf.set.String("out-crt", "", "Optional: path to write the certificate to")
-	sf.qr = sf.set.Bool("qr", false, "Optional: output a qr code image of the certificate")
+	sf.outQRPath = sf.set.String("out-qr", "", "Optional: output a qr code image (png) of the certificate")
 	sf.groups = sf.set.String("groups", "", "Optional: comma separated list of groups")
 	sf.subnets = sf.set.String("subnets", "", "Optional: comma seperated list of subnet this cert can serve for")
 	return &sf
@@ -173,11 +173,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer) error {
 	}
 
 	if *sf.outCertPath == "" {
-		if *sf.qr {
-			*sf.outCertPath = *sf.name + ".png"
-		} else {
-			*sf.outCertPath = *sf.name + ".crt"
-		}
+		*sf.outCertPath = *sf.name + ".crt"
 	}
 
 	if _, err := os.Stat(*sf.outCertPath); err == nil {
@@ -205,16 +201,21 @@ func signCert(args []string, out io.Writer, errOut io.Writer) error {
 		return fmt.Errorf("error while marshalling certificate: %s", err)
 	}
 
-	if *sf.qr {
-		b, err = qrcode.Encode(string(b), qrcode.Medium, -5)
-		if err != nil {
-			return fmt.Errorf("error while writing cert as a qr code: %s", err)
-		}
-	}
-
 	err = ioutil.WriteFile(*sf.outCertPath, b, 0600)
 	if err != nil {
 		return fmt.Errorf("error while writing out-crt: %s", err)
+	}
+
+	if *sf.outQRPath != "" {
+		b, err = qrcode.Encode(string(b), qrcode.Medium, -5)
+		if err != nil {
+			return fmt.Errorf("error while generating qr code: %s", err)
+		}
+
+		err = ioutil.WriteFile(*sf.outQRPath, b, 0600)
+		if err != nil {
+			return fmt.Errorf("error while writing out-qr: %s", err)
+		}
 	}
 
 	return nil

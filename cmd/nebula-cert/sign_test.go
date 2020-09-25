@@ -45,8 +45,8 @@ func Test_signHelp(t *testing.T) {
 			"    \tOptional: path to write the certificate to\n"+
 			"  -out-key string\n"+
 			"    \tOptional (if in-pub not set): path to write the private key to\n"+
-			"  -qr\n"+
-			"    \tOptional: output a qr code image of the certificate\n"+
+			"  -out-qr string\n"+
+			"    \tOptional: output a qr code image (png) of the certificate\n"+
 			"  -subnets string\n"+
 			"    \tOptional: comma seperated list of subnet this cert can serve for\n",
 		ob.String(),
