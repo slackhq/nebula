@@ -41,7 +41,7 @@ func (c *Control) Stop() {
 	c.f.hostMap.Lock()
 	for _, h := range c.f.hostMap.Hosts {
 		if h.ConnectionState.ready {
-			c.f.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+			c.f.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12), make([]byte, mtu))
 			c.l.WithField("vpnIp", IntIp(h.hostId)).WithField("udpAddr", h.remote).
 				Debug("Sending close tunnel message")
 		}
@@ -78,10 +78,8 @@ func (c *Control) ListHostmap(pendingMap bool) []ControlHostInfo {
 
 	hm.RLock()
 	hosts := make([]ControlHostInfo, len(hm.Hosts))
-	i := 0
-	for _, v := range hm.Hosts {
+	for i, v := range hm.Hosts {
 		hosts[i] = copyHostInfo(v)
-		i++
 	}
 	hm.RUnlock()
 
@@ -133,7 +131,7 @@ func (c *Control) CloseTunnel(vpnIP uint32, localOnly bool) bool {
 			hostInfo,
 			hostInfo.remote,
 			[]byte{},
-			make([]byte, 12, 12),
+			make([]byte, 12),
 			make([]byte, mtu),
 		)
 	}
@@ -148,7 +146,7 @@ func copyHostInfo(h *HostInfo) ControlHostInfo {
 		VpnIP:          int2ip(h.hostId),
 		LocalIndex:     h.localIndexId,
 		RemoteIndex:    h.remoteIndexId,
-		RemoteAddrs:    make([]udpAddr, len(addrs), len(addrs)),
+		RemoteAddrs:    make([]udpAddr, len(addrs)),
 		CachedPackets:  len(h.packetStore),
 		MessageCounter: *h.ConnectionState.messageCounter,
 	}

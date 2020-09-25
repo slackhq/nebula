@@ -460,7 +460,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		if preferred && !best.Equals(i.remote) {
 			// Try to send a test packet to that host, this should
 			// cause it to detect a roaming event and switch remotes
-			ifce.send(test, testRequest, i.ConnectionState, i, best, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			ifce.send(test, testRequest, i.ConnectionState, i, best, []byte(""), make([]byte, 12), make([]byte, mtu))
 		}
 	}
 }
@@ -566,7 +566,7 @@ func (i *HostInfo) handshakeComplete() {
 	// Clamping it to 2 gets us out of the woods for now
 	*i.ConnectionState.messageCounter = 2
 	i.logger().Debugf("Sending %d stored packets", len(i.packetStore))
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 	out := make([]byte, mtu)
 	for _, cp := range i.packetStore {
 		cp.callback(cp.messageType, cp.messageSubType, i, cp.packet, nb, out)

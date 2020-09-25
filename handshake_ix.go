@@ -185,7 +185,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 				Info("Prevented a handshake race")
 
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
-			f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12), make([]byte, mtu))
 			return true
 		}
 
