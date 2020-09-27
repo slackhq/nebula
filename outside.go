@@ -39,98 +39,15 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		ci = hostinfo.ConnectionState
 	}
 
-	switch header.Type {
-	case message:
-		if !f.handleEncrypted(ci, addr, header) {
-			return
-		}
+	handle := f.handlers[header.Version][header.Type][header.Subtype]
 
-		f.decryptToTun(hostinfo, header.MessageCounter, out, packet, fwPacket, nb)
-
-		// Fallthrough to the bottom to record incoming traffic
-
-	case lightHouse:
-		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
-		if !f.handleEncrypted(ci, addr, header) {
-			return
-		}
-
-		d, err := f.decrypt(hostinfo, header.MessageCounter, out, packet, header, nb)
-		if err != nil {
-			hostinfo.logger().WithError(err).WithField("udpAddr", addr).
-				WithField("packet", packet).
-				Error("Failed to decrypt lighthouse packet")
-
-			//TODO: maybe after build 64 is out? 06/14/2018 - NB
-			//f.sendRecvError(net.Addr(addr), header.RemoteIndex)
-			return
-		}
-
-		f.lightHouse.HandleRequest(addr, hostinfo.hostId, d, hostinfo.GetCert(), f)
-
-		// Fallthrough to the bottom to record incoming traffic
-
-	case test:
-		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
-		if !f.handleEncrypted(ci, addr, header) {
-			return
-		}
-
-		d, err := f.decrypt(hostinfo, header.MessageCounter, out, packet, header, nb)
-		if err != nil {
-			hostinfo.logger().WithError(err).WithField("udpAddr", addr).
-				WithField("packet", packet).
-				Error("Failed to decrypt test packet")
-
-			//TODO: maybe after build 64 is out? 06/14/2018 - NB
-			//f.sendRecvError(net.Addr(addr), header.RemoteIndex)
-			return
-		}
-
-		if header.Subtype == testRequest {
-			// This testRequest might be from TryPromoteBest, so we should roam
-			// to the new IP address before responding
-			f.handleHostRoaming(hostinfo, addr)
-			f.send(test, testReply, ci, hostinfo, hostinfo.remote, d, nb, out)
-		}
-
-		// Fallthrough to the bottom to record incoming traffic
-
-		// Non encrypted messages below here, they should not fall through to avoid tracking incoming traffic since they
-		// are unauthenticated
-
-	case handshake:
-		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
-		HandleIncomingHandshake(f, addr, packet, header, hostinfo)
-		return
-
-	case recvError:
-		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
-		// TODO: Remove this with recv_error deprecation
-		f.handleRecvError(addr, header)
-		return
-
-	case closeTunnel:
-		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
-		if !f.handleEncrypted(ci, addr, header) {
-			return
-		}
-
-		hostinfo.logger().WithField("udpAddr", addr).
-			Info("Close tunnel received, tearing down.")
-
-		f.closeTunnel(hostinfo)
-		return
-
-	default:
+	if handle == nil {
 		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		hostinfo.logger().Debugf("Unexpected packet received from %s", addr)
 		return
 	}
 
-	f.handleHostRoaming(hostinfo, addr)
-
-	f.connectionManager.In(hostinfo.hostId)
+	handle(hostinfo, ci, addr, header, out, packet, fwPacket, nb)
 }
 
 func (f *Interface) closeTunnel(hostInfo *HostInfo) {
