@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - master
+      - interface-hooks
   pull_request:
     paths:
       - '.github/workflows/smoke**'
