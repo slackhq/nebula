@@ -111,23 +111,23 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 	ifce.handlers = map[uint8]map[NebulaMessageType]map[NebulaMessageSubType]InsideHandler{
 		Version: {
 			handshake: {
-				handshakeIXPSK0: ifce.handleHandshakePacket,
+				handshakeIXPSK0: ifce.rxMetrics(ifce.handleHandshakePacket),
 			},
 			message: {
-				subTypeNone: ifce.handleMessagePacket,
+				subTypeNone: ifce.encrypted(ifce.handleMessagePacket),
 			},
 			recvError: {
-				subTypeNone: ifce.handleRecvErrorPacket,
+				subTypeNone: ifce.rxMetrics(ifce.handleRecvErrorPacket),
 			},
 			lightHouse: {
-				subTypeNone: ifce.handleLighthousePacket,
+				subTypeNone: ifce.rxMetrics(ifce.encrypted(ifce.handleLighthousePacket)),
 			},
 			test: {
-				testRequest: ifce.handleTestPacket,
-				testReply:   ifce.handleTestPacket,
+				testRequest: ifce.rxMetrics(ifce.encrypted(ifce.handleTestPacket)),
+				testReply:   ifce.rxMetrics(ifce.encrypted(ifce.handleTestPacket)),
 			},
 			closeTunnel: {
-				subTypeNone: ifce.handleCloseTunnelPacket,
+				subTypeNone: ifce.rxMetrics(ifce.encrypted(ifce.handleCloseTunnelPacket)),
 			},
 		},
 	}
