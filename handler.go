@@ -1,5 +1,12 @@
 package nebula
 
+func (f *Interface) newHook(w func([]byte) error) InsideHandler {
+	fn := func(hostInfo *HostInfo, ci *ConnectionState, addr *udpAddr, header *Header, out []byte, packet []byte, fwPacket *FirewallPacket, nb []byte) {
+		f.decryptTo(w, hostInfo, header.MessageCounter, out, packet, fwPacket, nb)
+	}
+	return f.encrypted(fn)
+}
+
 func (f *Interface) encrypted(h InsideHandler) InsideHandler {
 	return func(hostInfo *HostInfo, ci *ConnectionState, addr *udpAddr, header *Header, out []byte, packet []byte, fwPacket *FirewallPacket, nb []byte) {
 		if !f.handleEncrypted(ci, addr, header) {
@@ -21,7 +28,7 @@ func (f *Interface) rxMetrics(h InsideHandler) InsideHandler {
 }
 
 func (f *Interface) handleMessagePacket(hostInfo *HostInfo, ci *ConnectionState, addr *udpAddr, header *Header, out []byte, packet []byte, fwPacket *FirewallPacket, nb []byte) {
-	f.decryptToTun(hostInfo, header.MessageCounter, out, packet, fwPacket, nb)
+	f.decryptTo(f.inside.WriteRaw, hostInfo, header.MessageCounter, out, packet, fwPacket, nb)
 }
 
 func (f *Interface) handleLighthousePacket(hostInfo *HostInfo, ci *ConnectionState, addr *udpAddr, header *Header, out []byte, packet []byte, fwPacket *FirewallPacket, nb []byte) {

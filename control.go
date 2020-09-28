@@ -1,6 +1,8 @@
 package nebula
 
 import (
+	"encoding/binary"
+	"fmt"
 	"net"
 	"os"
 	"os/signal"
@@ -8,6 +10,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"golang.org/x/net/ipv4"
 )
 
 // Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
@@ -166,4 +169,42 @@ func copyHostInfo(h *HostInfo) ControlHostInfo {
 	}
 
 	return chi
+}
+
+// Hook provides the ability to hook into the network path for a particular
+// message sub type. Any received message of that subtype that is allowed by
+// the firewall will be written to the provided write func instead of the
+// inside interface.
+// TODO: make this an io.Writer
+func (c *Control) Hook(t NebulaMessageSubType, w func([]byte) error) error {
+	if t == 0 {
+		return fmt.Errorf("non-default message subtype must be specified")
+	}
+	if _, ok := c.f.handlers[Version][message][t]; ok {
+		return fmt.Errorf("message subtype %d already hooked", t)
+	}
+
+	c.f.handlers[Version][message][t] = c.f.newHook(w)
+	return nil
+}
+
+// Send provides the ability to send arbitrary message packets to peer nodes.
+// The provided payload will be encapsulated in an IPv4 packet from the
+// node IP to the provided destination nebula IP. Any protocol handling
+// above layer 3 (IP) must be managed by the caller.
+func (c *Control) Send(ip uint32, t NebulaMessageSubType, payload []byte) {
+	hostinfo := c.f.getOrHandshake(ip)
+	ci := hostinfo.ConnectionState
+
+	length := ipv4.HeaderLen + len(payload)
+	packet := make([]byte, length)
+	packet[0] = 0x45
+	binary.BigEndian.PutUint16(packet[2:4], uint16(length))
+	binary.BigEndian.PutUint32(packet[12:16], ip2int(c.f.inside.CidrNet().IP.To4()))
+	binary.BigEndian.PutUint32(packet[16:20], ip)
+	copy(packet[ipv4.HeaderLen:], payload)
+
+	nb := make([]byte, 12)
+	out := make([]byte, mtu)
+	c.f.sendNoMetrics(message, t, ci, hostinfo, hostinfo.remote, packet, nb, out)
 }
