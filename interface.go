@@ -196,7 +196,7 @@ func (f *Interface) listenIn(i int) {
 			os.Exit(2)
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out)
+		f.consumeInsidePacket(subTypeNone, packet[:n], fwPacket, nb, out)
 	}
 }
 

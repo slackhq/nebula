@@ -192,10 +192,7 @@ func (c *Control) Hook(t NebulaMessageSubType, w func([]byte) error) error {
 // The provided payload will be encapsulated in a Nebula Firewall packet
 // (IPv4 plus ports) from the node IP to the provided destination nebula IP.
 // Any protocol handling above layer 3 (IP) must be managed by the caller.
-func (c *Control) Send(ip uint32, port uint16, t NebulaMessageSubType, payload []byte) {
-	hostinfo := c.f.getOrHandshake(ip)
-	ci := hostinfo.ConnectionState
-
+func (c *Control) Send(ip uint32, port uint16, st NebulaMessageSubType, payload []byte) {
 	headerLen := ipv4.HeaderLen + minFwPacketLen
 	length := headerLen + len(payload)
 	packet := make([]byte, length)
@@ -206,13 +203,14 @@ func (c *Control) Send(ip uint32, port uint16, t NebulaMessageSubType, payload [
 	binary.BigEndian.PutUint32(packet[16:20], ip)
 
 	// Set identical values for src and dst port as they're only
-	// used for nebula firewall rule mataching.
+	// used for nebula firewall rule/conntrack matching.
 	binary.BigEndian.PutUint16(packet[20:22], port)
 	binary.BigEndian.PutUint16(packet[22:24], port)
 
 	copy(packet[headerLen:], payload)
 
+	fp := &FirewallPacket{}
 	nb := make([]byte, 12)
 	out := make([]byte, mtu)
-	c.f.sendNoMetrics(message, t, ci, hostinfo, hostinfo.remote, packet, nb, out)
+	c.f.consumeInsidePacket(st, packet, fp, nb, out)
 }
