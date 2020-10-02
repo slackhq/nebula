@@ -189,20 +189,23 @@ func (c *Control) Hook(t NebulaMessageSubType, w func([]byte) error) error {
 }
 
 // Send provides the ability to send arbitrary message packets to peer nodes.
-// The provided payload will be encapsulated in an IPv4 packet from the
-// node IP to the provided destination nebula IP. Any protocol handling
-// above layer 3 (IP) must be managed by the caller.
-func (c *Control) Send(ip uint32, t NebulaMessageSubType, payload []byte) {
+// The provided payload will be encapsulated in a Nebula Firewall packet
+// (IPv4 plus ports) from the node IP to the provided destination nebula IP.
+// Any protocol handling above layer 3 (IP) must be managed by the caller.
+func (c *Control) Send(ip uint32, port uint16, t NebulaMessageSubType, payload []byte) {
 	hostinfo := c.f.getOrHandshake(ip)
 	ci := hostinfo.ConnectionState
 
-	length := ipv4.HeaderLen + len(payload)
+	headerLen := ipv4.HeaderLen + minFwPacketLen
+	length := headerLen + len(payload)
 	packet := make([]byte, length)
-	packet[0] = 0x45
+	packet[0] = 0x45 // IPv4 HL=20
+	packet[9] = 114  // Declare as arbitrary 0-hop protocol
 	binary.BigEndian.PutUint16(packet[2:4], uint16(length))
 	binary.BigEndian.PutUint32(packet[12:16], ip2int(c.f.inside.CidrNet().IP.To4()))
 	binary.BigEndian.PutUint32(packet[16:20], ip)
-	copy(packet[ipv4.HeaderLen:], payload)
+	binary.BigEndian.PutUint16(packet[22:24], port)
+	copy(packet[headerLen:], payload)
 
 	nb := make([]byte, 12)
 	out := make([]byte, mtu)
