@@ -204,7 +204,12 @@ func (c *Control) Send(ip uint32, port uint16, t NebulaMessageSubType, payload [
 	binary.BigEndian.PutUint16(packet[2:4], uint16(length))
 	binary.BigEndian.PutUint32(packet[12:16], ip2int(c.f.inside.CidrNet().IP.To4()))
 	binary.BigEndian.PutUint32(packet[16:20], ip)
+
+	// Set identical values for src and dst port as they're only
+	// used for nebula firewall rule mataching.
+	binary.BigEndian.PutUint16(packet[20:22], port)
 	binary.BigEndian.PutUint16(packet[22:24], port)
+
 	copy(packet[headerLen:], payload)
 
 	nb := make([]byte, 12)
