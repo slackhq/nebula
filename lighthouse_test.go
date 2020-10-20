@@ -85,6 +85,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	mw := &mockEncWriter{}
 
 	b.Run("notfound", func(b *testing.B) {
+		lhh := lh.NewRequestHandler()
 		req := &NebulaMeta{
 			Type: NebulaMeta_HostQuery,
 			Details: &NebulaMetaDetails{
@@ -95,10 +96,11 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 		p, err := proto.Marshal(req)
 		assert.NoError(b, err)
 		for n := 0; n < b.N; n++ {
-			lh.HandleRequest(rAddr, 2, p, nil, mw)
+			lhh.HandleRequest(rAddr, 2, p, nil, mw)
 		}
 	})
 	b.Run("found", func(b *testing.B) {
+		lhh := lh.NewRequestHandler()
 		req := &NebulaMeta{
 			Type: NebulaMeta_HostQuery,
 			Details: &NebulaMetaDetails{
@@ -110,7 +112,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 		assert.NoError(b, err)
 
 		for n := 0; n < b.N; n++ {
-			lh.HandleRequest(rAddr, 2, p, nil, mw)
+			lhh.HandleRequest(rAddr, 2, p, nil, mw)
 		}
 	})
 }
