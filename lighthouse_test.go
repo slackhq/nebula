@@ -36,12 +36,13 @@ func TestNewipandportfromudpaddr(t *testing.T) {
 	assert.Equal(t, uint32(12345), meh.Port)
 }
 
-func TestNewipandportsfromudpaddrs(t *testing.T) {
+func TestSetipandportsfromudpaddrs(t *testing.T) {
 	blah := NewUDPAddrFromString("1.2.2.3:12345")
 	blah2 := NewUDPAddrFromString("9.9.9.9:47828")
 	group := []udpAddr{*blah, *blah2}
-	hah := NewIpAndPortsFromNetIps(group)
-	assert.IsType(t, &[]*IpAndPort{}, hah)
+	hah := make([]IpAndPort, len(group))
+	SetIpAndPortsFromNetIps(group, hah)
+	assert.IsType(t, []IpAndPort{}, hah)
 	//t.Error(reflect.TypeOf(hah))
 
 }
