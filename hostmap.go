@@ -105,7 +105,9 @@ func (hm *HostMap) EmitStats(name string) {
 func (hm *HostMap) GetIndexByVpnIP(vpnIP uint32) (uint32, error) {
 	hm.RLock()
 	if i, ok := hm.Hosts[vpnIP]; ok {
+		i.RLock()
 		index := i.localIndexId
+		i.RUnlock()
 		hm.RUnlock()
 		return index, nil
 	}
