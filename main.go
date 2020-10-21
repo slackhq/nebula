@@ -79,15 +79,6 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		return nil, NewContextualError("Could not parse tun.unsafe_routes", nil, err)
 	}
 
-	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
-	wireSSHReload(ssh, config)
-	if config.GetBool("sshd.enabled", false) {
-		err = configSSH(ssh, config)
-		if err != nil {
-			return nil, NewContextualError("Error while configuring the sshd", nil, err)
-		}
-	}
-
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// All non system modifying configuration consumption should live above this line
 	// tun config, listeners, anything modifying the computer should be below
@@ -368,6 +359,17 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 
 	//TODO: check if we _should_ be emitting stats
 	go ifce.emitStats(config.GetDuration("stats.interval", time.Second*10))
+
+	// must be done here so that we can only listen on the nebula ip otherwise
+	// if done earlier needed interfaces aren't setup
+	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
+	wireSSHReload(ssh, config)
+	if config.GetBool("sshd.enabled", false) {
+		err = configSSH(ssh, config)
+		if err != nil {
+			return nil, NewContextualError("Error while configuring the sshd", nil, err)
+		}
+	}
 
 	attachCommands(ssh, hostMap, handshakeManager.pendingHostMap, lightHouse, ifce)
 
