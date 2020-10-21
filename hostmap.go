@@ -34,6 +34,7 @@ type HostMap struct {
 }
 
 type HostInfo struct {
+	sync.RWMutex
 	remote            *udpAddr
 	Remotes           []*HostInfoDest
 	promoteCounter    uint32
@@ -188,7 +189,9 @@ func (hm *HostMap) AddIndex(index uint32, ci *ConnectionState) (*HostInfo, error
 
 func (hm *HostMap) AddIndexHostInfo(index uint32, h *HostInfo) {
 	hm.Lock()
+	h.Lock()
 	h.localIndexId = index
+	h.Unlock()
 	hm.Indexes[index] = h
 	hm.Unlock()
 
