@@ -12,7 +12,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 )
 
-var ErrQueryHostNotFound = errors.New("No host found")
+var ErrHostNotKnown = errors.New("host not known")
 
 type LightHouse struct {
 	sync.RWMutex //Because we concurrently read and write to our maps
@@ -116,7 +116,7 @@ func (lh *LightHouse) Query(ip uint32, f EncWriter) ([]udpAddr, error) {
 		return v, nil
 	}
 	lh.RUnlock()
-	return nil, ErrQueryHostNotFound
+	return nil, ErrHostNotKnown
 }
 
 // This is asynchronous so no reply should be expected
@@ -320,7 +320,7 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 }
 
 func (lhh *LightHouseHandler) resetIpAndPorts(n int) []*IpAndPort {
-	if len(lhh.iap) < n {
+	if cap(lhh.iap) < n {
 		lhh.iap = make([]IpAndPort, n)
 		lhh.iapp = make([]*IpAndPort, n)
 
