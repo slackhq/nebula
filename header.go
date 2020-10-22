@@ -1,3 +1,5 @@
+//lint:file-ignore SA9004 this is fine
+
 package nebula
 
 import (
@@ -58,7 +60,7 @@ const (
 	testReply   NebulaMessageSubType = 1
 )
 
-var eHeaderTooShort = errors.New("header is too short")
+var errHeaderTooShort = errors.New("header is too short")
 
 var subTypeTestMap = map[NebulaMessageSubType]string{
 	testRequest: "testRequest",
@@ -135,7 +137,7 @@ func (h *Header) Encode(b []byte) ([]byte, error) {
 // Parse is a helper function to parses given bytes into new Header struct
 func (h *Header) Parse(b []byte) error {
 	if len(b) < HeaderLen {
-		return eHeaderTooShort
+		return errHeaderTooShort
 	}
 	// get upper 4 bytes
 	h.Version = uint8((b[0] >> 4) & 0x0f)
