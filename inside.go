@@ -101,9 +101,11 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 		//ci = f.newConnectionState(true, noise.HandshakeXX, []byte{}, 0)
 		hostinfo.ConnectionState = ci
 	}
-
+	hostinfo.RLock()
+	ready = hostinfo.HandshakeReady
+	hostinfo.RUnlock()
 	// If we have already created the handshake packet, we don't want to call the function at all.
-	if !hostinfo.HandshakeReady {
+	if !ready {
 		ixHandshakeStage0(f, vpnIp, hostinfo)
 		// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
 		//xx_handshakeStage0(f, ip, hostinfo)
