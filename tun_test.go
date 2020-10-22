@@ -185,6 +185,7 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	// no mtu
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "route": "1.0.0.0/8"}}}
 	routes, err = parseUnsafeRoutes(c, n)
+	assert.NoError(t, err)
 	assert.Len(t, routes, 1)
 	assert.Equal(t, DEFAULT_MTU, routes[0].mtu)
 
