@@ -86,10 +86,11 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 		}
 	}
 
-	ci := hostinfo.ConnectionState
 	hostinfo.RLock()
+	ci := hostinfo.ConnectionState
 	ready := ci.IsReady()
 	hostinfo.RUnlock()
+
 	if ready {
 		return hostinfo
 	}
