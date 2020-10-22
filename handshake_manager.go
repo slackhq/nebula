@@ -73,13 +73,14 @@ func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainH
 }
 
 func (c *HandshakeManager) Run(f EncWriter) {
-	clockSource := time.Tick(c.config.tryInterval)
+	clockSource := time.NewTicker(c.config.tryInterval)
+	defer clockSource.Stop()
 	for {
 		select {
 		case vpnIP := <-c.trigger:
 			l.WithField("vpnIp", IntIp(vpnIP)).Debug("HandshakeManager: triggered")
 			c.handleOutbound(vpnIP, f, true)
-		case now := <-clockSource:
+		case now := <-clockSource.C:
 			c.NextOutboundHandshakeTimerTick(now, f)
 			c.NextInboundHandshakeTimerTick(now)
 		}
@@ -212,7 +213,7 @@ func (c *HandshakeManager) DeleteVpnIP(vpnIP uint32) {
 func (c *HandshakeManager) AddIndex(index uint32, ci *ConnectionState) (*HostInfo, error) {
 	hostinfo, err := c.pendingHostMap.AddIndex(index, ci)
 	if err != nil {
-		return nil, fmt.Errorf("Issue adding index: %d", index)
+		return nil, fmt.Errorf("issue adding index: %d", index)
 	}
 	//c.mainHostMap.AddIndexHostInfo(index, hostinfo)
 	c.InboundHandshakeTimer.Add(index, time.Second*10)
