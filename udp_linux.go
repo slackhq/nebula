@@ -53,8 +53,6 @@ type rawSockaddrAny struct {
 	Pad  [96]int8
 }
 
-var x int
-
 func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 	syscall.ForkLock.RLock()
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
@@ -144,7 +142,7 @@ func (u *udpConn) ListenOut(f *Interface) {
 	header := &Header{}
 	fwPacket := &FirewallPacket{}
 	udpAddr := &udpAddr{}
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 
 	//TODO: should we track this?
 	//metric := metrics.GetOrRegisterHistogram("test.batch_read", nil, metrics.NewExpDecaySample(1028, 0.015))
@@ -172,44 +170,40 @@ func (u *udpConn) ListenOut(f *Interface) {
 }
 
 func (u *udpConn) ReadSingle(msgs []rawMessage) (int, error) {
-	for {
-		n, _, err := unix.Syscall6(
-			unix.SYS_RECVMSG,
-			uintptr(u.sysFd),
-			uintptr(unsafe.Pointer(&(msgs[0].Hdr))),
-			0,
-			0,
-			0,
-			0,
-		)
+	n, _, err := unix.Syscall6(
+		unix.SYS_RECVMSG,
+		uintptr(u.sysFd),
+		uintptr(unsafe.Pointer(&(msgs[0].Hdr))),
+		0,
+		0,
+		0,
+		0,
+	)
 
-		if err != 0 {
-			return 0, &net.OpError{Op: "recvmsg", Err: err}
-		}
-
-		msgs[0].Len = uint32(n)
-		return 1, nil
+	if err != 0 {
+		return 0, &net.OpError{Op: "recvmsg", Err: err}
 	}
+
+	msgs[0].Len = uint32(n)
+	return 1, nil
 }
 
 func (u *udpConn) ReadMulti(msgs []rawMessage) (int, error) {
-	for {
-		n, _, err := unix.Syscall6(
-			unix.SYS_RECVMMSG,
-			uintptr(u.sysFd),
-			uintptr(unsafe.Pointer(&msgs[0])),
-			uintptr(len(msgs)),
-			unix.MSG_WAITFORONE,
-			0,
-			0,
-		)
+	n, _, err := unix.Syscall6(
+		unix.SYS_RECVMMSG,
+		uintptr(u.sysFd),
+		uintptr(unsafe.Pointer(&msgs[0])),
+		uintptr(len(msgs)),
+		unix.MSG_WAITFORONE,
+		0,
+		0,
+	)
 
-		if err != 0 {
-			return 0, &net.OpError{Op: "recvmmsg", Err: err}
-		}
-
-		return int(n), nil
+	if err != 0 {
+		return 0, &net.OpError{Op: "recvmmsg", Err: err}
 	}
+
+	return int(n), nil
 }
 
 func (u *udpConn) WriteTo(b []byte, addr *udpAddr) error {
@@ -226,25 +220,23 @@ func (u *udpConn) WriteTo(b []byte, addr *udpAddr) error {
 	rsa.Addr[2] = byte(addr.IP & 0x0000ff00 >> 8)
 	rsa.Addr[3] = byte(addr.IP & 0x000000ff)
 
-	for {
-		_, _, err := unix.Syscall6(
-			unix.SYS_SENDTO,
-			uintptr(u.sysFd),
-			uintptr(unsafe.Pointer(&b[0])),
-			uintptr(len(b)),
-			uintptr(0),
-			uintptr(unsafe.Pointer(&rsa)),
-			uintptr(unix.SizeofSockaddrInet4),
-		)
+	_, _, err := unix.Syscall6(
+		unix.SYS_SENDTO,
+		uintptr(u.sysFd),
+		uintptr(unsafe.Pointer(&b[0])),
+		uintptr(len(b)),
+		uintptr(0),
+		uintptr(unsafe.Pointer(&rsa)),
+		uintptr(unix.SizeofSockaddrInet4),
+	)
 
-		if err != 0 {
-			return &net.OpError{Op: "sendto", Err: err}
-		}
-
-		//TODO: handle incomplete writes
-
-		return nil
+	if err != 0 {
+		return &net.OpError{Op: "sendto", Err: err}
 	}
+
+	//TODO: handle incomplete writes
+
+	return nil
 }
 
 func (u *udpConn) reloadConfig(c *Config) {
