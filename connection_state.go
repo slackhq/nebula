@@ -74,6 +74,9 @@ func (cs *ConnectionState) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// IsReady allows checking if the connection is in a ready state
+// caller must take care to lock connection state, and any
+// wrapping data types accordingly
 func (cs *ConnectionState) IsReady() bool {
 	if cs != nil && cs.eKey != nil && cs.ready {
 		return true
