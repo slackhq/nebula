@@ -100,6 +100,7 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 }
 
 func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseTriggered bool) {
+
 	index, err := c.pendingHostMap.GetIndexByVpnIP(vpnIP)
 	if err != nil {
 		return
@@ -108,7 +109,8 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 	if err != nil {
 		return
 	}
-
+	hostinfo.RWMutex.Lock()
+	defer hostinfo.RWMutex.Unlock()
 	// If we haven't finished the handshake and we haven't hit max retries, query
 	// lighthouse and then send the handshake packet again.
 	if hostinfo.HandshakeCounter < c.config.retries && !hostinfo.HandshakeComplete {
@@ -148,8 +150,10 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 
 		// Ensure the handshake is ready to avoid a race in timer tick and stage 0 handshake generation
 		if hostinfo.HandshakeReady && hostinfo.remote != nil {
+
 			c.messageMetrics.Tx(handshake, NebulaMessageSubType(hostinfo.HandshakePacket[0][1]), 1)
 			err := c.outside.WriteTo(hostinfo.HandshakePacket[0], hostinfo.remote)
+
 			if err != nil {
 				hostinfo.logger().WithField("udpAddr", hostinfo.remote).
 					WithField("initiatorIndex", hostinfo.localIndexId).

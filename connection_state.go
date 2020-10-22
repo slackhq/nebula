@@ -21,8 +21,8 @@ type ConnectionState struct {
 	messageCounter *uint64
 	window         *Bits
 	queueLock      sync.Mutex
-	// writeLock      sync.Mutex
-	ready bool
+	lock           sync.RWMutex
+	ready          bool
 }
 
 func (f *Interface) newConnectionState(initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {

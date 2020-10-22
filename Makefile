@@ -41,8 +41,8 @@ bin-freebsd: build/freebsd-amd64/nebula build/freebsd-amd64/nebula-cert
 	mv $? .
 
 bin:
-	go build -trimpath -ldflags "$(LDFLAGS)" -o ./nebula ${NEBULA_CMD_PATH}
-	go build -trimpath -ldflags "$(LDFLAGS)" -o ./nebula-cert ./cmd/nebula-cert
+	go build $(GOFLAGS) -trimpath -ldflags "$(LDFLAGS)" -o ./nebula ${NEBULA_CMD_PATH}
+	go build $(GOFLAGS) -trimpath -ldflags "$(LDFLAGS)" -o ./nebula-cert ./cmd/nebula-cert
 
 install:
 	go install -trimpath -ldflags "$(LDFLAGS)" ${NEBULA_CMD_PATH}

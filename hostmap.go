@@ -434,7 +434,9 @@ func (i *HostInfo) MarshalJSON() ([]byte, error) {
 }
 
 func (i *HostInfo) BindConnectionState(cs *ConnectionState) {
+	i.RWMutex.Lock()
 	i.ConnectionState = cs
+	i.RWMutex.Unlock()
 }
 
 func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface) {
@@ -464,7 +466,9 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		if preferred && !best.Equals(i.remote) {
 			// Try to send a test packet to that host, this should
 			// cause it to detect a roaming event and switch remotes
+			i.RWMutex.Lock()
 			ifce.send(test, testRequest, i.ConnectionState, i, best, []byte(""), make([]byte, 12), make([]byte, mtu))
+			i.RWMutex.Unlock()
 		}
 	}
 }
@@ -565,6 +569,8 @@ func (i *HostInfo) handshakeComplete() {
 	//TODO: if the transition from HandhsakeComplete to ConnectionState.ready happens all within this function they are identical
 
 	i.ConnectionState.queueLock.Lock()
+	i.RWMutex.Lock()
+	defer i.RWMutex.Unlock()
 	i.HandshakeComplete = true
 	//TODO: this should be managed by the handshake state machine to set it based on how many handshake were seen.
 	// Clamping it to 2 gets us out of the woods for now
@@ -577,8 +583,9 @@ func (i *HostInfo) handshakeComplete() {
 	}
 	i.packetStore = make([]*cachedPacket, 0)
 	i.ConnectionState.ready = true
-	i.ConnectionState.queueLock.Unlock()
 	i.ConnectionState.certState = nil
+	i.ConnectionState.queueLock.Unlock()
+
 }
 
 func (i *HostInfo) RemoteUDPAddrs() []*udpAddr {
@@ -658,7 +665,8 @@ func (i *HostInfo) logger() *logrus.Entry {
 	}
 
 	li := l.WithField("vpnIp", IntIp(i.hostId))
-
+	i.ConnectionState.lock.RLock()
+	defer i.ConnectionState.lock.RUnlock()
 	if connState := i.ConnectionState; connState != nil {
 		if peerCert := connState.peerCert; peerCert != nil {
 			li = li.WithField("certName", peerCert.Details.Name)
