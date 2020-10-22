@@ -118,7 +118,9 @@ func (hm *HostMap) GetIndexByVpnIP(vpnIP uint32) (uint32, error) {
 func (hm *HostMap) GetVpnIPByIndex(index uint32) (uint32, error) {
 	hm.RLock()
 	if i, ok := hm.Indexes[index]; ok {
+		i.RLock()
 		vpnIP := i.hostId
+		i.RUnlock()
 		hm.RUnlock()
 		return vpnIP, nil
 	}
