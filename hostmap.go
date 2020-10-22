@@ -444,7 +444,8 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		i.ForcePromoteBest(preferredRanges)
 		return
 	}
-
+	i.RWMutex.Lock()
+	defer i.RWMutex.Unlock()
 	i.promoteCounter++
 	if i.promoteCounter%PromoteEvery == 0 {
 		// return early if we are already on a preferred remote
@@ -466,9 +467,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		if preferred && !best.Equals(i.remote) {
 			// Try to send a test packet to that host, this should
 			// cause it to detect a roaming event and switch remotes
-			i.RWMutex.Lock()
 			ifce.send(test, testRequest, i.ConnectionState, i, best, []byte(""), make([]byte, 12), make([]byte, mtu))
-			i.RWMutex.Unlock()
 		}
 	}
 }
