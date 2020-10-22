@@ -99,15 +99,19 @@ func TestConfig_GetAllowList(t *testing.T) {
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"192.168.0.0/16": "abc",
 	}
+
 	r, err = c.GetAllowList("allowlist", false)
 	assert.EqualError(t, err, "config `allowlist` has invalid value (type string): abc")
+	assert.Nil(t, r)
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"192.168.0.0/16": true,
 		"10.0.0.0/8":     false,
 	}
+
 	r, err = c.GetAllowList("allowlist", false)
 	assert.EqualError(t, err, "config `allowlist` contains both true and false rules, but no default set for 0.0.0.0/0")
+	assert.Nil(t, r)
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"0.0.0.0/0":     true,
@@ -128,14 +132,17 @@ func TestConfig_GetAllowList(t *testing.T) {
 	}
 	r, err = c.GetAllowList("allowlist", false)
 	assert.EqualError(t, err, "config `allowlist` does not support `interfaces`")
+	assert.Nil(t, r)
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"interfaces": map[interface{}]interface{}{
 			`docker.*`: "foo",
 		},
 	}
+
 	r, err = c.GetAllowList("allowlist", true)
 	assert.EqualError(t, err, "config `allowlist.interfaces` has invalid value (type string): foo")
+	assert.Nil(t, r)
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"interfaces": map[interface{}]interface{}{
@@ -143,8 +150,10 @@ func TestConfig_GetAllowList(t *testing.T) {
 			`eth.*`:    true,
 		},
 	}
+
 	r, err = c.GetAllowList("allowlist", true)
 	assert.EqualError(t, err, "config `allowlist.interfaces` values must all be the same true/false value")
+	assert.Nil(t, r)
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"interfaces": map[interface{}]interface{}{
