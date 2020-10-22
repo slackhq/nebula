@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/anmitsu/go-shlex"
 	"github.com/armon/go-radix"
@@ -13,6 +14,7 @@ import (
 )
 
 type session struct {
+	sync.RWMutex
 	l        *logrus.Entry
 	c        *ssh.ServerConn
 	term     *terminal.Terminal
@@ -66,7 +68,9 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 		switch req.Type {
 		case "shell":
 			if s.term == nil {
+				s.Lock()
 				s.term = s.createTerm(channel)
+				s.Unlock()
 				err = req.Reply(true, nil)
 			} else {
 				err = req.Reply(false, nil)
@@ -126,6 +130,8 @@ func (s *session) createTerm(channel ssh.Channel) *terminal.Terminal {
 
 func (s *session) handleInput(channel ssh.Channel) {
 	defer s.Close()
+	s.Lock()
+	defer s.Unlock()
 	w := &stringWriter{w: s.term}
 	for {
 		line, err := s.term.ReadLine()
