@@ -95,9 +95,9 @@ func (lh *LightHouse) SetLocalAllowList(allowList *AllowList) {
 }
 
 func (lh *LightHouse) ValidateLHStaticEntries() error {
-	for lhIP, _ := range lh.lighthouses {
+	for lhIP := range lh.lighthouses {
 		if _, ok := lh.staticList[lhIP]; !ok {
-			return fmt.Errorf("Lighthouse %s does not have a static_host_map entry", IntIp(lhIP))
+			return fmt.Errorf("lighthouse %s does not have a static_host_map entry", IntIp(lhIP))
 		}
 	}
 	return nil
@@ -127,7 +127,7 @@ func (lh *LightHouse) QueryServer(ip uint32, f EncWriter) {
 		}
 
 		lh.metricTx(NebulaMeta_HostQuery, int64(len(lh.lighthouses)))
-		nb := make([]byte, 12, 12)
+		nb := make([]byte, 12)
 		out := make([]byte, mtu)
 		for n := range lh.lighthouses {
 			f.SendMessageToVpnIp(lightHouse, 0, n, query, nb, out)
@@ -162,7 +162,7 @@ func (lh *LightHouse) DeleteVpnIP(vpnIP uint32) {
 func (lh *LightHouse) AddRemote(vpnIP uint32, toIp *udpAddr, static bool) {
 	// First we check if the sender thinks this is a static entry
 	// and do nothing if it is not, but should be considered static
-	if static == false {
+	if !static {
 		if _, ok := lh.staticList[vpnIP]; ok {
 			return
 		}
@@ -266,7 +266,7 @@ func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
 		}
 
 		lh.metricTx(NebulaMeta_HostUpdateNotification, int64(len(lh.lighthouses)))
-		nb := make([]byte, 12, 12)
+		nb := make([]byte, 12)
 		out := make([]byte, mtu)
 		for vpnIp := range lh.lighthouses {
 			mm, err := proto.Marshal(m)
@@ -328,7 +328,7 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 				return
 			}
 			lh.metricTx(NebulaMeta_HostQueryReply, 1)
-			f.SendMessageToVpnIp(lightHouse, 0, vpnIp, reply, make([]byte, 12, 12), make([]byte, mtu))
+			f.SendMessageToVpnIp(lightHouse, 0, vpnIp, reply, make([]byte, 12), make([]byte, mtu))
 
 			// This signals the other side to punch some zero byte udp packets
 			ips, err = lh.Query(vpnIp, f)
@@ -347,7 +347,7 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 				}
 				reply, _ := proto.Marshal(answer)
 				lh.metricTx(NebulaMeta_HostPunchNotification, 1)
-				f.SendMessageToVpnIp(lightHouse, 0, n.Details.VpnIp, reply, make([]byte, 12, 12), make([]byte, mtu))
+				f.SendMessageToVpnIp(lightHouse, 0, n.Details.VpnIp, reply, make([]byte, 12), make([]byte, mtu))
 			}
 			//fmt.Println(reply, remoteaddr)
 		}
@@ -401,7 +401,7 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 			go func() {
 				time.Sleep(time.Second * 5)
 				l.Debugf("Sending a nebula test packet to vpn ip %s", IntIp(n.Details.VpnIp))
-				f.SendMessageToVpnIp(test, testRequest, n.Details.VpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+				f.SendMessageToVpnIp(test, testRequest, n.Details.VpnIp, []byte(""), make([]byte, 12), make([]byte, mtu))
 			}()
 		}
 	}

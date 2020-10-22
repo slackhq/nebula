@@ -63,7 +63,7 @@ func Test_lhStaticMapping(t *testing.T) {
 	meh = NewLightHouse(true, 1, []uint32{ip2int(lh1IP), ip2int(lh2IP)}, 10, 10003, udpServer, false, 1, false)
 	meh.AddRemote(ip2int(lh1IP), NewUDPAddr(ip2int(lh1IP), uint16(4242)), true)
 	err = meh.ValidateLHStaticEntries()
-	assert.EqualError(t, err, "Lighthouse 10.128.0.3 does not have a static_host_map entry")
+	assert.EqualError(t, err, "lighthouse 10.128.0.3 does not have a static_host_map entry")
 }
 
 //func NewLightHouse(amLighthouse bool, myIp uint32, ips []string, interval int, nebulaPort int, pc *udpConn, punchBack bool) *LightHouse {
