@@ -21,7 +21,7 @@ type ConnectionState struct {
 	messageCounter *uint64
 	window         *Bits
 	queueLock      sync.Mutex
-	lock           sync.RWMutex
+	mx             sync.RWMutex
 	ready          bool
 }
 
@@ -72,4 +72,11 @@ func (cs *ConnectionState) MarshalJSON() ([]byte, error) {
 		"message_counter": cs.messageCounter,
 		"ready":           cs.ready,
 	})
+}
+
+func (cs *ConnectionState) IsReady() bool {
+	if cs != nil && cs.eKey != nil && cs.ready {
+		return true
+	}
+	return false
 }

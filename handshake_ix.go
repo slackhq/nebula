@@ -337,11 +337,11 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	// and complete standing up the connection.
 	if dKey != nil && eKey != nil {
 		ip := ip2int(remoteCert.Details.Ips[0].IP)
-		ci.lock.Lock()
+		ci.mx.Lock()
 		ci.peerCert = remoteCert
 		ci.dKey = NewNebulaCipherState(dKey)
 		ci.eKey = NewNebulaCipherState(eKey)
-		ci.lock.Unlock()
+		ci.mx.Unlock()
 		//l.Debugln("got symmetric pairs")
 
 		//hostinfo.ClearRemotes()

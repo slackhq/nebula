@@ -89,11 +89,11 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 
 	ci := hostinfo.ConnectionState
 	hostinfo.RWMutex.RLock()
-	if ci != nil && ci.eKey != nil && ci.ready {
-		hostinfo.RWMutex.RUnlock()
+	ready := ci.IsReady()
+	hostinfo.RWMutex.RUnlock()
+	if ready {
 		return hostinfo
 	}
-	hostinfo.RWMutex.RUnlock()
 	if ci == nil {
 		// if we don't have a connection state, then send a handshake initiation
 		ci = f.newConnectionState(true, noise.HandshakeIX, []byte{}, 0)

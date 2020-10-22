@@ -664,8 +664,8 @@ func (i *HostInfo) logger() *logrus.Entry {
 	}
 
 	li := l.WithField("vpnIp", IntIp(i.hostId))
-	i.ConnectionState.lock.RLock()
-	defer i.ConnectionState.lock.RUnlock()
+	i.ConnectionState.mx.RLock()
+	defer i.ConnectionState.mx.RUnlock()
 	if connState := i.ConnectionState; connState != nil {
 		if peerCert := connState.peerCert; peerCert != nil {
 			li = li.WithField("certName", peerCert.Details.Name)
