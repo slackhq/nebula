@@ -455,7 +455,7 @@ func sshStartCpuProfile(fs interface{}, a []string, w sshd.StringWriter) error {
 }
 
 func sshVersion(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
-	return w.WriteLine(fmt.Sprintf("%s", ifce.version))
+	return w.WriteLine(ifce.version)
 }
 
 func sshQueryLighthouse(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
@@ -511,7 +511,7 @@ func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 			hostInfo,
 			hostInfo.remote,
 			[]byte{},
-			make([]byte, 12, 12),
+			make([]byte, 12),
 			make([]byte, mtu),
 		)
 	}
@@ -543,12 +543,12 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 
 	hostInfo, _ := ifce.hostMap.QueryVpnIP(uint32(vpnIp))
 	if hostInfo != nil {
-		return w.WriteLine(fmt.Sprintf("Tunnel already exists"))
+		return w.WriteLine("Tunnel already exists")
 	}
 
 	hostInfo, _ = ifce.handshakeManager.pendingHostMap.QueryVpnIP(uint32(vpnIp))
 	if hostInfo != nil {
-		return w.WriteLine(fmt.Sprintf("Tunnel already handshaking"))
+		return w.WriteLine("Tunnel already handshaking")
 	}
 
 	var addr *udpAddr
