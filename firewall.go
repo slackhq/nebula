@@ -67,7 +67,7 @@ type Firewall struct {
 	rules        string
 	rulesVersion uint16
 
-	trackTCPRTT  bool
+	// trackTCPRTT  bool
 	metricTCPRTT metrics.Histogram
 }
 
@@ -539,7 +539,7 @@ func (f *Firewall) evict(p FirewallPacket) {
 		return
 	}
 
-	newT := t.Expires.Sub(time.Now())
+	newT := time.Until(t.Expires)
 
 	// Timeout is in the future, re-add the timer
 	if newT > 0 {

@@ -34,22 +34,27 @@ func TestNewFirewall(t *testing.T) {
 	fw = NewFirewall(time.Second, time.Hour, time.Minute, c)
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
 	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
+	assert.NotNil(t, fw)
 
 	fw = NewFirewall(time.Hour, time.Second, time.Minute, c)
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
 	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
+	assert.NotNil(t, fw)
 
 	fw = NewFirewall(time.Hour, time.Minute, time.Second, c)
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
 	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
+	assert.NotNil(t, fw)
 
 	fw = NewFirewall(time.Minute, time.Hour, time.Second, c)
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
 	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
+	assert.NotNil(t, fw)
 
 	fw = NewFirewall(time.Minute, time.Second, time.Hour, c)
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
 	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
+	assert.NotNil(t, fw)
 }
 
 func TestFirewall_AddRule(t *testing.T) {
