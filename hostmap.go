@@ -396,7 +396,7 @@ func (hm *HostMap) PunchList() []*udpAddr {
 	hm.RLock()
 	for _, v := range hm.Hosts {
 		for _, r := range v.Remotes {
-			list = append(list, r.addr)
+			list = append(list, &udpAddr{IP: r.addr.IP, Port: r.addr.Port})
 		}
 		//	if h, ok := hm.Hosts[vpnIp]; ok {
 		//		hm.Hosts[vpnIp].PromoteBest(hm.preferredRanges, false)
