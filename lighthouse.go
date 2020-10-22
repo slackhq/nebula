@@ -236,13 +236,6 @@ func NewIpAndPortFromUDPAddr(addr udpAddr) IpAndPort {
 	return IpAndPort{Ip: udp2ipInt(&addr), Port: uint32(addr.Port)}
 }
 
-func SetIpAndPortsFromNetIps(ips []udpAddr, iap []IpAndPort) {
-	for i, e := range ips {
-		// Only add IPs that aren't my VPN/tun IP
-		iap[i] = NewIpAndPortFromUDPAddr(e)
-	}
-}
-
 func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
 	if lh.amLighthouse || lh.interval == 0 {
 		return
@@ -334,6 +327,14 @@ func (lhh *LightHouseHandler) resetIpAndPorts(n int) []*IpAndPort {
 	return lhh.iapp
 }
 
+func (lhh *LightHouseHandler) setIpAndPortsFromNetIps(ips []udpAddr) []*IpAndPort {
+	lhh.resetIpAndPorts(len(ips))
+	for i, e := range ips {
+		lhh.iap[i] = NewIpAndPortFromUDPAddr(e)
+	}
+	return lhh.iapp
+}
+
 func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *cert.NebulaCertificate, f EncWriter) {
 	lh := lhh.lh
 	n := lhh.resetMeta()
@@ -372,8 +373,7 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 			n = lhh.resetMeta()
 			n.Type = NebulaMeta_HostQueryReply
 			n.Details.VpnIp = reqVpnIP
-			n.Details.IpAndPorts = lhh.resetIpAndPorts(len(ips))
-			SetIpAndPortsFromNetIps(ips, lhh.iap)
+			n.Details.IpAndPorts = lhh.setIpAndPortsFromNetIps(ips)
 			reply, err := proto.Marshal(n)
 			if err != nil {
 				l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).Error("Failed to marshal lighthouse host query reply")
@@ -392,8 +392,7 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 				n = lhh.resetMeta()
 				n.Type = NebulaMeta_HostPunchNotification
 				n.Details.VpnIp = vpnIp
-				n.Details.IpAndPorts = lhh.resetIpAndPorts(len(ips))
-				SetIpAndPortsFromNetIps(ips, lhh.iap)
+				n.Details.IpAndPorts = lhh.setIpAndPortsFromNetIps(ips)
 				reply, _ := proto.Marshal(n)
 				lh.metricTx(NebulaMeta_HostPunchNotification, 1)
 				f.SendMessageToVpnIp(lightHouse, 0, reqVpnIP, reply, lhh.nb, lhh.out[:0])

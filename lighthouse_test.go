@@ -40,9 +40,15 @@ func TestSetipandportsfromudpaddrs(t *testing.T) {
 	blah := NewUDPAddrFromString("1.2.2.3:12345")
 	blah2 := NewUDPAddrFromString("9.9.9.9:47828")
 	group := []udpAddr{*blah, *blah2}
-	hah := make([]IpAndPort, len(group))
-	SetIpAndPortsFromNetIps(group, hah)
-	assert.IsType(t, []IpAndPort{}, hah)
+	var lh *LightHouse
+	lhh := lh.NewRequestHandler()
+	result := lhh.setIpAndPortsFromNetIps(group)
+	assert.IsType(t, []*IpAndPort{}, result)
+	assert.Len(t, result, 2)
+	assert.Equal(t, uint32(0x01020203), result[0].Ip)
+	assert.Equal(t, uint32(12345), result[0].Port)
+	assert.Equal(t, uint32(0x09090909), result[1].Ip)
+	assert.Equal(t, uint32(47828), result[1].Port)
 	//t.Error(reflect.TypeOf(hah))
 
 }
