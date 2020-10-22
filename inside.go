@@ -40,7 +40,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 	}
 	ci := hostinfo.ConnectionState
 
-	if ci.ready == false {
+	if !ci.ready {
 		// Because we might be sending stored packets, lock here to stop new things going to
 		// the packet queue.
 		ci.queueLock.Lock()
@@ -69,7 +69,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 
 // getOrHandshake returns nil if the vpnIp is not routable
 func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
-	if f.hostMap.vpnCIDR.Contains(int2ip(vpnIp)) == false {
+	if !f.hostMap.vpnCIDR.Contains(int2ip(vpnIp)) {
 		vpnIp = f.hostMap.queryUnsafeRoute(vpnIp)
 		if vpnIp == 0 {
 			return nil
@@ -97,8 +97,6 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 		// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
 		//ci = f.newConnectionState(true, noise.HandshakeXX, []byte{}, 0)
 		hostinfo.ConnectionState = ci
-	} else if ci.eKey == nil {
-		// if we don't have any state at all, create it
 	}
 
 	// If we have already created the handshake packet, we don't want to call the function at all.
@@ -169,7 +167,6 @@ func (f *Interface) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubT
 	}
 
 	f.sendMessageToVpnIp(t, st, hostInfo, p, nb, out)
-	return
 }
 
 func (f *Interface) sendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, hostInfo *HostInfo, p, nb, out []byte) {
@@ -187,7 +184,7 @@ func (f *Interface) SendMessageToAll(t NebulaMessageType, st NebulaMessageSubTyp
 		return
 	}
 
-	if hostInfo.ConnectionState.ready == false {
+	if !hostInfo.ConnectionState.ready {
 		// Because we might be sending stored packets, lock here to stop new things going to
 		// the packet queue.
 		hostInfo.ConnectionState.queueLock.Lock()
@@ -200,7 +197,6 @@ func (f *Interface) SendMessageToAll(t NebulaMessageType, st NebulaMessageSubTyp
 	}
 
 	f.sendMessageToAll(t, st, hostInfo, p, nb, out)
-	return
 }
 
 func (f *Interface) sendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, hostInfo *HostInfo, p, nb, b []byte) {
@@ -250,9 +246,5 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 
 func isMulticast(ip uint32) bool {
 	// Class D multicast
-	if (((ip >> 24) & 0xff) & 0xf0) == 0xe0 {
-		return true
-	}
-
-	return false
+	return (((ip >> 24) & 0xff) & 0xf0) == 0xe0
 }
