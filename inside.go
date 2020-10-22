@@ -45,13 +45,13 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 	if !ci.ready {
 		// Because we might be sending stored packets, lock here to stop new things going to
 		// the packet queue.
-		ci.queueLock.Lock()
-		if !ci.ready {
+		ci.mx.RLock()
+		ready := ci.ready
+		ci.mx.RUnlock()
+		if !ready {
 			hostinfo.cachePacket(message, 0, packet, f.sendMessageNow)
-			ci.queueLock.Unlock()
 			return
 		}
-		ci.queueLock.Unlock()
 	}
 
 	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, trustedCAs)
