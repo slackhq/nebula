@@ -89,7 +89,7 @@ func UnmarshalNebulaCertificate(b []byte) (*NebulaCertificate, error) {
 	nc.Details.Issuer = hex.EncodeToString(rc.Details.Issuer)
 
 	if len(rc.Details.PublicKey) < publicKeyLen {
-		return nil, fmt.Errorf("Public key was fewer than 32 bytes; %v", len(rc.Details.PublicKey))
+		return nil, fmt.Errorf("public key was fewer than 32 bytes; %v", len(rc.Details.PublicKey))
 	}
 	copy(nc.Details.PublicKey, rc.Details.PublicKey)
 

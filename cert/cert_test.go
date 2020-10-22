@@ -380,6 +380,7 @@ func TestNebulaVerifyPrivateKey(t *testing.T) {
 	assert.Nil(t, err)
 
 	c, _, priv, err := newTestCert(ca, caKey, time.Time{}, time.Time{}, []*net.IPNet{}, []*net.IPNet{}, []string{})
+	assert.NoError(t, err)
 	err = c.VerifyPrivateKey(priv)
 	assert.Nil(t, err)
 
@@ -501,6 +502,9 @@ func TestNebulaCertificate_Copy(t *testing.T) {
 
 func newTestCaCert(before, after time.Time, ips, subnets []*net.IPNet, groups []string) (*NebulaCertificate, []byte, []byte, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	if before.IsZero() {
 		before = time.Now().Add(time.Second * -60).Round(time.Second)
 	}
