@@ -585,9 +585,7 @@ func (i *HostInfo) handshakeComplete() {
 	//TODO: HandshakeComplete means send stored packets and ConnectionState.ready means we are ready to send
 	//TODO: if the transition from HandhsakeComplete to ConnectionState.ready happens all within this function they are identical
 
-	i.ConnectionState.queueLock.Lock()
 	i.Lock()
-	defer i.Unlock()
 	i.HandshakeComplete = true
 	//TODO: this should be managed by the handshake state machine to set it based on how many handshake were seen.
 	// Clamping it to 2 gets us out of the woods for now
@@ -599,10 +597,11 @@ func (i *HostInfo) handshakeComplete() {
 		cp.callback(cp.messageType, cp.messageSubType, i, cp.packet, nb, out)
 	}
 	i.packetStore = make([]*cachedPacket, 0)
+	i.ConnectionState.queueLock.Lock()
 	i.ConnectionState.ready = true
 	i.ConnectionState.certState = nil
 	i.ConnectionState.queueLock.Unlock()
-
+	i.Unlock()
 }
 
 func (i *HostInfo) RemoteUDPAddrs() []*udpAddr {
