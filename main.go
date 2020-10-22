@@ -363,6 +363,9 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	// must be done here so that we can only listen on the nebula ip otherwise
 	// if done earlier needed interfaces aren't setup
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
+	if err != nil {
+		return nil, NewContextualError("Failed to start ssh server", nil, err)
+	}
 	wireSSHReload(ssh, config)
 	if config.GetBool("sshd.enabled", false) {
 		err = configSSH(ssh, config)
