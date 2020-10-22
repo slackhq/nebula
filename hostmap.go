@@ -640,7 +640,9 @@ func (i *HostInfo) AddRemote(r udpAddr) *udpAddr {
 }
 
 func (i *HostInfo) SetRemote(remote udpAddr) {
+	i.Lock()
 	i.remote = i.AddRemote(remote)
+	i.Unlock()
 }
 
 func (i *HostInfo) ClearRemotes() {
