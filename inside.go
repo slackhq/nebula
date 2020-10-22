@@ -38,8 +38,8 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 		}
 		return
 	}
-	hostinfo.RWMutex.Lock()
-	defer hostinfo.RWMutex.Unlock()
+	hostinfo.Lock()
+	defer hostinfo.Unlock()
 	ci := hostinfo.ConnectionState
 
 	if !ci.ready {
@@ -88,9 +88,9 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 	}
 
 	ci := hostinfo.ConnectionState
-	hostinfo.RWMutex.RLock()
+	hostinfo.RLock()
 	ready := ci.IsReady()
-	hostinfo.RWMutex.RUnlock()
+	hostinfo.RUnlock()
 	if ready {
 		return hostinfo
 	}

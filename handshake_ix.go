@@ -60,11 +60,11 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to call noise.WriteMessage")
 		return
 	}
-	hostinfo.RWMutex.Lock()
+	hostinfo.Lock()
 	hostinfo.HandshakePacket[0] = msg
 	hostinfo.HandshakeReady = true
 	hostinfo.handshakeStart = time.Now()
-	hostinfo.RWMutex.Unlock()
+	hostinfo.Unlock()
 
 }
 
@@ -267,22 +267,22 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	if hostinfo == nil {
 		return true
 	}
-	hostinfo.RWMutex.RLock()
+	hostinfo.RLock()
 	if bytes.Equal(hostinfo.HandshakePacket[2], packet[HeaderLen:]) {
-		hostinfo.RWMutex.RUnlock()
+		hostinfo.RUnlock()
 		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("header", h).
 			Error("Already seen this handshake packet")
 		return false
 	}
-	hostinfo.RWMutex.RUnlock()
+	hostinfo.RUnlock()
 	ci := hostinfo.ConnectionState
 	// Mark packet 2 as seen so it doesn't show up as missed
 	ci.window.Update(2)
-	hostinfo.RWMutex.Lock()
+	hostinfo.Lock()
 	hostinfo.HandshakePacket[2] = make([]byte, len(packet[HeaderLen:]))
 	copy(hostinfo.HandshakePacket[2], packet[HeaderLen:])
-	hostinfo.RWMutex.Unlock()
+	hostinfo.Unlock()
 	msg, eKey, dKey, err := ci.H.ReadMessage(nil, packet[HeaderLen:])
 	if err != nil {
 		l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).

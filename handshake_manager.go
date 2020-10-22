@@ -109,8 +109,8 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 	if err != nil {
 		return
 	}
-	hostinfo.RWMutex.Lock()
-	defer hostinfo.RWMutex.Unlock()
+	hostinfo.Lock()
+	defer hostinfo.Unlock()
 	// If we haven't finished the handshake and we haven't hit max retries, query
 	// lighthouse and then send the handshake packet again.
 	if hostinfo.HandshakeCounter < c.config.retries && !hostinfo.HandshakeComplete {
