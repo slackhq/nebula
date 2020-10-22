@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 
@@ -64,7 +65,7 @@ func dumpCommands(c *radix.Tree, w StringWriter) {
 	sort.Strings(cmds)
 	err = w.Write(strings.Join(cmds, "\n") + "\n\n")
 	if err != nil {
-		//TODO: log
+		log.Println("dupCommands write error: ", err)
 	}
 }
 

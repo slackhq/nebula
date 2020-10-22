@@ -84,7 +84,7 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			if cErr == nil {
 				s.dispatchCommand(payload.Value, &stringWriter{channel})
 			} else {
-				//TODO: log it
+				s.l.Error(cErr)
 			}
 			channel.Close()
 			return
@@ -172,9 +172,8 @@ func (s *session) dispatchCommand(line string, w StringWriter) {
 
 	err = execCommand(c, args[1:], w)
 	if err != nil {
-		//TODO: log the error
+		s.l.Error(err)
 	}
-	return
 }
 
 func (s *session) Close() {

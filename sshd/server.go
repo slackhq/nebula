@@ -17,11 +17,11 @@ type SSHServer struct {
 	trustedKeys map[string]map[string]bool
 
 	// List of available commands
-	helpCommand *Command
-	commands    *radix.Tree
-	listener    net.Listener
-	conns       map[int]*session
-	counter     int
+	// helpCommand *Command
+	commands *radix.Tree
+	listener net.Listener
+	conns    map[int]*session
+	counter  int
 }
 
 // NewSSHServer creates a new ssh server rigged with default commands and prepares to listen
@@ -37,7 +37,7 @@ func NewSSHServer(l *logrus.Entry) (*SSHServer, error) {
 		PublicKeyCallback: s.matchPubKey,
 		//TODO: AuthLogCallback: s.authAttempt,
 		//TODO: version string
-		ServerVersion: fmt.Sprintf("SSH-2.0-Nebula???"),
+		ServerVersion: "SSH-2.0-Nebula???",
 	}
 
 	s.RegisterCommand(&Command{
@@ -156,7 +156,6 @@ func (s *SSHServer) Stop() {
 	}
 
 	s.l.Info("SSH server stopped listening")
-	return
 }
 
 func (s *SSHServer) matchPubKey(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
