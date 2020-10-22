@@ -16,7 +16,7 @@ type MessageMetrics struct {
 
 func (m *MessageMetrics) Rx(t NebulaMessageType, s NebulaMessageSubType, i int64) {
 	if m != nil {
-		if t >= 0 && int(t) < len(m.rx) && s >= 0 && int(s) < len(m.rx[t]) {
+		if int(t) < len(m.rx) && int(s) < len(m.rx[t]) {
 			m.rx[t][s].Inc(i)
 		} else if m.rxUnknown != nil {
 			m.rxUnknown.Inc(i)
@@ -25,7 +25,7 @@ func (m *MessageMetrics) Rx(t NebulaMessageType, s NebulaMessageSubType, i int64
 }
 func (m *MessageMetrics) Tx(t NebulaMessageType, s NebulaMessageSubType, i int64) {
 	if m != nil {
-		if t >= 0 && int(t) < len(m.tx) && s >= 0 && int(s) < len(m.tx[t]) {
+		if int(t) < len(m.tx) && int(s) < len(m.tx[t]) {
 			m.tx[t][s].Inc(i)
 		} else if m.txUnknown != nil {
 			m.txUnknown.Inc(i)
