@@ -621,6 +621,8 @@ func (i *HostInfo) GetCert() *cert.NebulaCertificate {
 	return nil
 }
 
+// AddRemote is used to add the given udpAddr as a remote host
+// caller must take care to lock accordingly
 func (i *HostInfo) AddRemote(r udpAddr) *udpAddr {
 	remote := &r
 	//add := true
