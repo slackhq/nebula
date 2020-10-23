@@ -64,12 +64,13 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 			f.lightHouse.Query(fwPacket.RemoteIP, f)
 		}
 
+	} else {
+		hostinfo.logger().Debug(
+			"dropping outbound packet",
+			zap.Any("fwPacket", fwPacket),
+			zap.String("reason", dropReason.Error()),
+		)
 	}
-	hostinfo.logger().Debug(
-		"dropping outbound packet",
-		zap.Any("fwPacket", fwPacket),
-		zap.String("reason", dropReason.Error()),
-	)
 
 }
 
