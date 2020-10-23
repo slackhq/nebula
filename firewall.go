@@ -1,7 +1,7 @@
 package nebula
 
 import (
-	"crypto/sha256"
+	"crypto/md5"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -281,7 +281,12 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 
 // GetRuleHash returns a hash representation of all inbound and outbound rules
 func (f *Firewall) GetRuleHash() string {
-	sum := sha256.Sum256([]byte(f.rules))
+	// should be fine, although md5 sum is insecure
+	// we are simply getting a checksum of the current firewall ruleset
+	// this doesn't seem very likely to be exploitable, in the same manner
+	// how software like rsync uses md5 for calculating deltas
+	sum := md5.Sum([]byte(f.rules))
+	// sum := sha256.Sum256([]byte(f.rules))
 	return hex.EncodeToString(sum[:])
 }
 
