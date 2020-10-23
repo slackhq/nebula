@@ -80,6 +80,7 @@ type FirewallConntrack struct {
 }
 
 type FirewallTable struct {
+	sync.RWMutex
 	TCP      firewallPort
 	UDP      firewallPort
 	ICMP     firewallPort
@@ -467,18 +468,19 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 	}
 
 	f.RLock()
-	defer f.RUnlock()
-	conntrack.Lock()
-	defer conntrack.Unlock()
+	// defer f.RUnlock()
+	conntrack.RLock()
+	table := f.OutRules
+	if c.incoming {
+		table = f.InRules
+	}
+	cRulesVersion := c.rulesVersion
+	fRulesVersion := f.rulesVersion
+	f.RUnlock()
+	conntrack.RUnlock()
+	//defer conntrack.Unlock()
 
-	if c.rulesVersion != f.rulesVersion {
-		// This conntrack entry was for an older rule set, validate
-		// it still passes with the current rule set
-		table := f.OutRules
-		if c.incoming {
-			table = f.InRules
-		}
-
+	if cRulesVersion != fRulesVersion {
 		// We now know which firewall table to check against
 		if !table.match(fp, c.incoming, h.ConnectionState.peerCert, caPool) {
 			l.Debug(
@@ -488,7 +490,9 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 				zap.Uint16("rulesVersion", f.rulesVersion),
 				zap.Uint16("oldRulesVersion", c.rulesVersion),
 			)
+			conntrack.Lock()
 			delete(conntrack.Conns, fp)
+			conntrack.Unlock()
 			return false
 		}
 		l.Debug(
@@ -500,7 +504,10 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 		)
 		c.rulesVersion = f.rulesVersion
 	}
-
+	f.RLock()
+	conntrack.Lock()
+	defer conntrack.Unlock()
+	defer f.RUnlock()
 	switch fp.Protocol {
 	case fwProtoTCP:
 		c.Expires = time.Now().Add(f.TCPTimeout)
@@ -573,6 +580,8 @@ func (f *Firewall) evict(p FirewallPacket) {
 }
 
 func (ft *FirewallTable) match(p FirewallPacket, incoming bool, c *cert.NebulaCertificate, caPool *cert.NebulaCAPool) bool {
+	ft.RLock()
+	defer ft.RUnlock()
 	if ft.AnyProto.match(p, incoming, c, caPool) {
 		return true
 	}
