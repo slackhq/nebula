@@ -440,11 +440,14 @@ func (f *Firewall) Destroy() {
 
 func (f *Firewall) EmitStats() {
 	conntrack := f.Conntrack
-	conntrack.Lock()
+	conntrack.RLock()
 	conntrackCount := len(conntrack.Conns)
-	conntrack.Unlock()
+	conntrack.RUnlock()
+	f.RLock()
+	rulesVersion := f.rulesVersion
+	f.RUnlock()
 	metrics.GetOrRegisterGauge("firewall.conntrack.count", nil).Update(int64(conntrackCount))
-	metrics.GetOrRegisterGauge("firewall.rules.version", nil).Update(int64(f.rulesVersion))
+	metrics.GetOrRegisterGauge("firewall.rules.version", nil).Update(int64(rulesVersion))
 }
 
 func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool) bool {
