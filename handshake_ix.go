@@ -60,10 +60,11 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to call noise.WriteMessage")
 		return
 	}
-
+	hostinfo.Lock()
 	hostinfo.HandshakePacket[0] = msg
 	hostinfo.HandshakeReady = true
 	hostinfo.handshakeStart = time.Now()
+	hostinfo.Unlock()
 
 }
 
@@ -93,26 +94,30 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		}
 
 		hostinfo, _ := f.handshakeManager.pendingHostMap.QueryReverseIndex(hs.Details.InitiatorIndex)
-		if hostinfo != nil && bytes.Equal(hostinfo.HandshakePacket[0], packet[HeaderLen:]) {
-			if msg, ok := hostinfo.HandshakePacket[2]; ok {
-				f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
-				err := f.outside.WriteTo(msg, addr)
-				if err != nil {
-					l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-						WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-						WithError(err).Error("Failed to send handshake message")
-				} else {
-					l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-						WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-						Info("Handshake message sent")
+		if hostinfo != nil {
+			hostinfo.Lock()
+			if bytes.Equal(hostinfo.HandshakePacket[0], packet[HeaderLen:]) {
+				if msg, ok := hostinfo.HandshakePacket[2]; ok {
+					f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
+					err := f.outside.WriteTo(msg, addr)
+					if err != nil {
+						l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
+							WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
+							WithError(err).Error("Failed to send handshake message")
+					} else {
+						l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
+							WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
+							Info("Handshake message sent")
+					}
+					hostinfo.Unlock()
+					return false
 				}
-				return false
+				l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
+					WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).WithField("cached", true).
+					WithField("packets", hostinfo.HandshakePacket).
+					Error("Seen this handshake packet already but don't have a cached packet to return")
 			}
-
-			l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).WithField("cached", true).
-				WithField("packets", hostinfo.HandshakePacket).
-				Error("Seen this handshake packet already but don't have a cached packet to return")
+			hostinfo.Unlock()
 		}
 
 		remoteCert, err := RecombineCertAndValidate(ci.H, hs.Details.Cert)
@@ -262,21 +267,22 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	if hostinfo == nil {
 		return true
 	}
-
+	hostinfo.RLock()
 	if bytes.Equal(hostinfo.HandshakePacket[2], packet[HeaderLen:]) {
+		hostinfo.RUnlock()
 		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("header", h).
 			Error("Already seen this handshake packet")
 		return false
 	}
-
+	hostinfo.RUnlock()
 	ci := hostinfo.ConnectionState
 	// Mark packet 2 as seen so it doesn't show up as missed
 	ci.window.Update(2)
-
+	hostinfo.Lock()
 	hostinfo.HandshakePacket[2] = make([]byte, len(packet[HeaderLen:]))
 	copy(hostinfo.HandshakePacket[2], packet[HeaderLen:])
-
+	hostinfo.Unlock()
 	msg, eKey, dKey, err := ci.H.ReadMessage(nil, packet[HeaderLen:])
 	if err != nil {
 		l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
@@ -333,9 +339,11 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	// and complete standing up the connection.
 	if dKey != nil && eKey != nil {
 		ip := ip2int(remoteCert.Details.Ips[0].IP)
+		ci.mx.Lock()
 		ci.peerCert = remoteCert
 		ci.dKey = NewNebulaCipherState(dKey)
 		ci.eKey = NewNebulaCipherState(eKey)
+		ci.mx.Unlock()
 		//l.Debugln("got symmetric pairs")
 
 		//hostinfo.ClearRemotes()

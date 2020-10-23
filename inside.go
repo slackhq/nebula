@@ -38,18 +38,19 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 		}
 		return
 	}
+	hostinfo.Lock()
+	defer hostinfo.Unlock()
 	ci := hostinfo.ConnectionState
 
-	if !ci.ready {
+	ci.mx.RLock()
+	ready := ci.ready
+	ci.mx.RUnlock()
+
+	if !ready {
 		// Because we might be sending stored packets, lock here to stop new things going to
 		// the packet queue.
-		ci.queueLock.Lock()
-		if !ci.ready {
-			hostinfo.cachePacket(message, 0, packet, f.sendMessageNow)
-			ci.queueLock.Unlock()
-			return
-		}
-		ci.queueLock.Unlock()
+		hostinfo.cachePacket(message, 0, packet, f.sendMessageNow)
+		return
 	}
 
 	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, trustedCAs)
@@ -85,12 +86,14 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 		}
 	}
 
+	hostinfo.RLock()
 	ci := hostinfo.ConnectionState
+	ready := ci.IsReady()
+	hostinfo.RUnlock()
 
-	if ci != nil && ci.eKey != nil && ci.ready {
+	if ready {
 		return hostinfo
 	}
-
 	if ci == nil {
 		// if we don't have a connection state, then send a handshake initiation
 		ci = f.newConnectionState(true, noise.HandshakeIX, []byte{}, 0)
@@ -98,9 +101,11 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 		//ci = f.newConnectionState(true, noise.HandshakeXX, []byte{}, 0)
 		hostinfo.ConnectionState = ci
 	}
-
+	hostinfo.RLock()
+	ready = hostinfo.HandshakeReady
+	hostinfo.RUnlock()
 	// If we have already created the handshake packet, we don't want to call the function at all.
-	if !hostinfo.HandshakeReady {
+	if !ready {
 		ixHandshakeStage0(f, vpnIp, hostinfo)
 		// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
 		//xx_handshakeStage0(f, ip, hostinfo)

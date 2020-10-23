@@ -740,8 +740,12 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 	if args.Pretty {
 		enc.SetIndent("", "    ")
 	}
-
-	return enc.Encode(hostInfo)
+	// need to lock as enc.Encode will call hostInfo.MarshalJSON()
+	// which needs a read lock
+	hostInfo.RLock()
+	err = enc.Encode(hostInfo)
+	hostInfo.RUnlock()
+	return err
 }
 
 func sshReload(fs interface{}, a []string, w sshd.StringWriter) error {

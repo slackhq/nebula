@@ -118,7 +118,9 @@ func (hm *HostMap) GetIndexByVpnIP(vpnIP uint32) (uint32, error) {
 func (hm *HostMap) GetVpnIPByIndex(index uint32) (uint32, error) {
 	hm.RLock()
 	if i, ok := hm.Indexes[index]; ok {
+		i.RLock()
 		vpnIP := i.hostId
+		i.RUnlock()
 		hm.RUnlock()
 		return vpnIP, nil
 	}
@@ -162,8 +164,10 @@ func (hm *HostMap) DeleteVpnIP(vpnIP uint32) {
 	hm.Unlock()
 
 	if l.Level >= logrus.DebugLevel {
+		hm.RLock()
 		l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(vpnIP), "mapTotalSize": len(hm.Hosts)}).
 			Debug("Hostmap vpnIp deleted")
+		hm.RUnlock()
 	}
 }
 
@@ -177,11 +181,12 @@ func (hm *HostMap) AddIndex(index uint32, ci *ConnectionState) (*HostInfo, error
 			HandshakePacket: make(map[uint8][]byte),
 		}
 		hm.Indexes[index] = h
+		hm.Unlock()
+		hm.RLock()
 		l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes),
 			"hostinfo": m{"existing": false, "localIndexId": h.localIndexId, "hostId": IntIp(h.hostId)}}).
 			Debug("Hostmap index added")
-
-		hm.Unlock()
+		hm.RUnlock()
 		return h, nil
 	}
 	hm.Unlock()
@@ -197,22 +202,32 @@ func (hm *HostMap) AddIndexHostInfo(index uint32, h *HostInfo) {
 	hm.Unlock()
 
 	if l.Level > logrus.DebugLevel {
+		h.RLock()
+		hm.RLock()
 		l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes),
 			"hostinfo": m{"existing": true, "localIndexId": h.localIndexId, "hostId": IntIp(h.hostId)}}).
 			Debug("Hostmap index added")
+		h.RUnlock()
+		hm.RUnlock()
 	}
 }
 
 func (hm *HostMap) AddVpnIPHostInfo(vpnIP uint32, h *HostInfo) {
 	hm.Lock()
+	h.Lock()
 	h.hostId = vpnIP
+	h.Unlock()
 	hm.Hosts[vpnIP] = h
 	hm.Unlock()
 
 	if l.Level > logrus.DebugLevel {
+		h.RLock()
+		hm.RLock()
 		l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(vpnIP), "mapTotalSize": len(hm.Hosts),
 			"hostinfo": m{"existing": true, "localIndexId": h.localIndexId, "hostId": IntIp(h.hostId)}}).
 			Debug("Hostmap vpnIp added")
+		h.RUnlock()
+		hm.RUnlock()
 	}
 }
 
@@ -225,8 +240,10 @@ func (hm *HostMap) DeleteIndex(index uint32) {
 	hm.Unlock()
 
 	if l.Level >= logrus.DebugLevel {
+		hm.RLock()
 		l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes)}).
 			Debug("Hostmap index deleted")
+		hm.RUnlock()
 	}
 }
 
@@ -369,7 +386,9 @@ func (hm *HostMap) ClearRemotes(vpnIP uint32) {
 }
 
 func (hm *HostMap) SetDefaultRoute(ip uint32) {
+	hm.Lock()
 	hm.defaultRoute = ip
+	hm.Unlock()
 }
 
 func (hm *HostMap) PunchList() []*udpAddr {
@@ -377,7 +396,8 @@ func (hm *HostMap) PunchList() []*udpAddr {
 	hm.RLock()
 	for _, v := range hm.Hosts {
 		for _, r := range v.Remotes {
-			list = append(list, r.addr)
+			uaddr := r.addr.Copy()
+			list = append(list, &uaddr)
 		}
 		//	if h, ok := hm.Hosts[vpnIp]; ok {
 		//		hm.Hosts[vpnIp].PromoteBest(hm.preferredRanges, false)
@@ -390,6 +410,7 @@ func (hm *HostMap) PunchList() []*udpAddr {
 
 func (hm *HostMap) Punchy(conn *udpConn) {
 	var metricsTxPunchy metrics.Counter
+
 	if hm.metricsEnabled {
 		metricsTxPunchy = metrics.GetOrRegisterCounter("messages.tx.punchy", nil)
 	} else {
@@ -434,7 +455,9 @@ func (i *HostInfo) MarshalJSON() ([]byte, error) {
 }
 
 func (i *HostInfo) BindConnectionState(cs *ConnectionState) {
+	i.Lock()
 	i.ConnectionState = cs
+	i.Unlock()
 }
 
 func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface) {
@@ -442,7 +465,8 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		i.ForcePromoteBest(preferredRanges)
 		return
 	}
-
+	i.Lock()
+	defer i.Unlock()
 	i.promoteCounter++
 	if i.promoteCounter%PromoteEvery == 0 {
 		// return early if we are already on a preferred remote
@@ -564,7 +588,7 @@ func (i *HostInfo) handshakeComplete() {
 	//TODO: HandshakeComplete means send stored packets and ConnectionState.ready means we are ready to send
 	//TODO: if the transition from HandhsakeComplete to ConnectionState.ready happens all within this function they are identical
 
-	i.ConnectionState.queueLock.Lock()
+	i.Lock()
 	i.HandshakeComplete = true
 	//TODO: this should be managed by the handshake state machine to set it based on how many handshake were seen.
 	// Clamping it to 2 gets us out of the woods for now
@@ -576,9 +600,11 @@ func (i *HostInfo) handshakeComplete() {
 		cp.callback(cp.messageType, cp.messageSubType, i, cp.packet, nb, out)
 	}
 	i.packetStore = make([]*cachedPacket, 0)
+	i.ConnectionState.queueLock.Lock()
 	i.ConnectionState.ready = true
-	i.ConnectionState.queueLock.Unlock()
 	i.ConnectionState.certState = nil
+	i.ConnectionState.queueLock.Unlock()
+	i.Unlock()
 }
 
 func (i *HostInfo) RemoteUDPAddrs() []*udpAddr {
@@ -596,6 +622,8 @@ func (i *HostInfo) GetCert() *cert.NebulaCertificate {
 	return nil
 }
 
+// AddRemote is used to add the given udpAddr as a remote host
+// caller must take care to lock accordingly
 func (i *HostInfo) AddRemote(r udpAddr) *udpAddr {
 	remote := &r
 	//add := true
@@ -615,7 +643,9 @@ func (i *HostInfo) AddRemote(r udpAddr) *udpAddr {
 }
 
 func (i *HostInfo) SetRemote(remote udpAddr) {
+	i.Lock()
 	i.remote = i.AddRemote(remote)
+	i.Unlock()
 }
 
 func (i *HostInfo) ClearRemotes() {
@@ -658,7 +688,8 @@ func (i *HostInfo) logger() *logrus.Entry {
 	}
 
 	li := l.WithField("vpnIp", IntIp(i.hostId))
-
+	i.ConnectionState.mx.RLock()
+	defer i.ConnectionState.mx.RUnlock()
 	if connState := i.ConnectionState; connState != nil {
 		if peerCert := connState.peerCert; peerCert != nil {
 			li = li.WithField("certName", peerCert.Details.Name)
