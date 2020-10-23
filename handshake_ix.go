@@ -353,7 +353,6 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	}
 	hostinfo.RLock()
 	if bytes.Equal(hostinfo.HandshakePacket[2], packet[HeaderLen:]) {
-		hostinfo.RUnlock()
 		l.Error(
 			"already seen this handshake packet",
 			zap.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
@@ -362,6 +361,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			zap.Uint16("udpPort", addr.Port),
 			zap.Any("header", h),
 		)
+		hostinfo.RUnlock()
 		return false
 	}
 	hostinfo.RUnlock()
