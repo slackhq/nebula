@@ -476,7 +476,7 @@ func readDirNames(path string) ([]string, error) {
 func configLogger(c *Config) error {
 	var err error
 	l, err = zapx.New(
-		c.GetString("logging.log_path", "/tmp/nebula.log"),
+		c.GetString("logging.log_path", ""),
 		c.GetBool("logging.dev", true),
 		zapx.WithDebug(c.GetBool("logging.debug", false)),
 	)

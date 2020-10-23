@@ -152,20 +152,13 @@ tun:
 # TODO
 # Configure logging level
 logging:
-  # panic, fatal, error, warning, info, or debug. Default is info
-  level: info
-  # json or text formats currently available. Default is text
-  format: text
-  # Disable timestamp logging. useful when output is redirected to logging system that already adds timestamps. Default is false
-  #disable_timestamp: true
-  # timestamp format is specified in Go time format, see:
-  #     https://golang.org/pkg/time/#pkg-constants
-  # default when `format: json`: "2006-01-02T15:04:05Z07:00" (RFC3339)
-  # default when `format: text`:
-  #     when TTY attached: seconds since beginning of execution
-  #     otherwise: "2006-01-02T15:04:05Z07:00" (RFC3339)
-  # As an example, to log as RFC3339 with millisecond precision, set to:
-  #timestamp_format: "2006-01-02T15:04:05.000Z07:00"
+  # file to store logs in, default is "" which logs to stdout only
+  logging.log_path: ""
+  # enable development logging, default is true
+  dev: true
+  # enable debug level logs
+  # defaualt is false
+  debug: false
 
 #stats:
   #type: graphite
