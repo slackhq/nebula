@@ -234,7 +234,10 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 		"incoming: %v, proto: %v, startPort: %v, endPort: %v, groups: %v, host: %v, ip: %v, caName: %v, caSha: %s",
 		incoming, proto, startPort, endPort, groups, host, sIp, caName, caSha,
 	)
+
+	f.Lock()
 	f.rules += ruleString + "\n"
+	f.Unlock()
 
 	direction := "incoming"
 	if !incoming {
@@ -258,11 +261,13 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 		fp firewallPort
 	)
 
+	f.RLock()
 	if incoming {
 		ft = f.InRules
 	} else {
 		ft = f.OutRules
 	}
+	f.RUnlock()
 
 	switch proto {
 	case fwProtoTCP:
