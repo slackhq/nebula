@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"sync"
 	"time"
 )
 
@@ -10,6 +11,7 @@ const timerCacheMax = 50000
 var emptyFWPacket = FirewallPacket{}
 
 type TimerWheel struct {
+	sync.RWMutex
 	// Current tick
 	current int
 
@@ -75,6 +77,7 @@ func NewTimerWheel(min, max time.Duration) *TimerWheel {
 
 // Add will add a FirewallPacket to the wheel in it's proper timeout
 func (tw *TimerWheel) Add(v FirewallPacket, timeout time.Duration) *TimeoutItem {
+	tw.Lock()
 	// Check and see if we should progress the tick
 	tw.advance(time.Now())
 
@@ -99,12 +102,14 @@ func (tw *TimerWheel) Add(v FirewallPacket, timeout time.Duration) *TimeoutItem 
 		tw.wheel[i].Tail.Next = ti
 		tw.wheel[i].Tail = ti
 	}
-
+	tw.Unlock()
 	return ti
 }
 
 func (tw *TimerWheel) Purge() (FirewallPacket, bool) {
+	tw.Lock()
 	if tw.expired.Head == nil {
+		tw.Unlock()
 		return emptyFWPacket, false
 	}
 
@@ -124,7 +129,7 @@ func (tw *TimerWheel) Purge() (FirewallPacket, bool) {
 		tw.itemCache = ti
 		tw.itemsCached++
 	}
-
+	tw.Unlock()
 	return ti.Packet, true
 }
 
@@ -151,7 +156,7 @@ func (tw *TimerWheel) findWheel(timeout time.Duration) (i int) {
 	return tick
 }
 
-// advance will lock and move the wheel forward by proper number of ticks.
+// advance will lock and move the wheel forward by proper number of ticks. caller _should_ lock the wheel before calling this
 func (tw *TimerWheel) advance(now time.Time) {
 	if tw.lastTick == nil {
 		tw.lastTick = &now

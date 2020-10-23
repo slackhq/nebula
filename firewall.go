@@ -50,6 +50,7 @@ type conn struct {
 
 // TODO: need conntrack max tracked connections handling
 type Firewall struct {
+	sync.RWMutex
 	Conntrack *FirewallConntrack
 
 	InRules  *FirewallTable
@@ -72,7 +73,7 @@ type Firewall struct {
 }
 
 type FirewallConntrack struct {
-	sync.Mutex
+	sync.RWMutex
 
 	Conns      map[FirewallPacket]*conn
 	TimerWheel *TimerWheel
@@ -443,20 +444,24 @@ func (f *Firewall) EmitStats() {
 
 func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool) bool {
 	conntrack := f.Conntrack
-	conntrack.Lock()
-
 	// Purge every time we test
 	ep, has := conntrack.TimerWheel.Purge()
 	if has {
+		f.Lock()
 		f.evict(ep)
+		f.Unlock()
 	}
-
+	conntrack.RLock()
 	c, ok := conntrack.Conns[fp]
-
+	conntrack.RUnlock()
 	if !ok {
-		conntrack.Unlock()
 		return false
 	}
+
+	f.RLock()
+	defer f.RUnlock()
+	conntrack.Lock()
+	defer conntrack.Unlock()
 
 	if c.rulesVersion != f.rulesVersion {
 		// This conntrack entry was for an older rule set, validate
@@ -476,7 +481,6 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 				zap.Uint16("oldRulesVersion", c.rulesVersion),
 			)
 			delete(conntrack.Conns, fp)
-			conntrack.Unlock()
 			return false
 		}
 		l.Debug(
@@ -502,8 +506,6 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 	default:
 		c.Expires = time.Now().Add(f.DefaultTimeout)
 	}
-
-	conntrack.Unlock()
 
 	return true
 }
