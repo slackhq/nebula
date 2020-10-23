@@ -6,8 +6,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"go.uber.org/zap"
 )
 
 // Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
@@ -15,7 +15,7 @@ import (
 
 type Control struct {
 	f *Interface
-	l *logrus.Logger
+	l *zap.Logger
 }
 
 type ControlHostInfo struct {
@@ -42,8 +42,12 @@ func (c *Control) Stop() {
 	for _, h := range c.f.hostMap.Hosts {
 		if h.ConnectionState.ready {
 			c.f.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12), make([]byte, mtu))
-			c.l.WithField("vpnIp", IntIp(h.hostId)).WithField("udpAddr", h.remote).
-				Debug("Sending close tunnel message")
+			c.l.Debug(
+				"sending close tunnel message",
+				zap.Uint32("vpnIp", uint32(IntIp(h.hostId))),
+				zap.Uint32("udpIp", h.remote.IP),
+				zap.Uint16("udpPort", h.remote.Port),
+			)
 		}
 	}
 	c.f.hostMap.Unlock()
@@ -58,7 +62,10 @@ func (c *Control) ShutdownBlock() {
 
 	rawSig := <-sigChan
 	sig := rawSig.String()
-	c.l.WithField("signal", sig).Info("Caught signal, shutting down")
+	c.l.Info(
+		"caught signal, shutting down",
+		zap.String("signal", sig),
+	)
 	c.Stop()
 }
 

@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 )
 
 func TestControl_GetHostInfoByVpnIP(t *testing.T) {
@@ -74,7 +74,7 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 		f: &Interface{
 			hostMap: hm,
 		},
-		l: logrus.New(),
+		l: zap.NewExample(),
 	}
 
 	thi := c.GetHostInfoByVpnIP(ip2int(ipNet.IP), false)

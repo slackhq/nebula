@@ -17,15 +17,11 @@ import (
 /*// The caller should provide a real logger, we have one just in case
 var l = logrus.New()
 */
-var l *zap.Logger
+var l = zap.NewExample()
 
 type m map[string]interface{}
 
 func Main(config *Config, configTest bool, buildVersion string, logger *logrus.Logger, tunFd *int) (*Control, error) {
-	l = logger
-	l.Formatter = &logrus.TextFormatter{
-		FullTimestamp: true,
-	}
 
 	// Print the config if in test, the exit comes later
 	if configTest {
@@ -35,7 +31,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		}
 
 		// Print the final config
-		l.Println(string(b))
+		fmt.Println(string(b))
 	}
 
 	err := configLogger(config)
@@ -46,7 +42,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	config.RegisterReloadCallback(func(c *Config) {
 		err := configLogger(c)
 		if err != nil {
-			l.WithError(err).Error("Failed to configure the logger")
+			l.Error("Failed to configure the logger", zap.Error(err))
 		}
 	})
 
@@ -56,20 +52,29 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		//The errors coming out of loadCA are already nicely formatted
 		return nil, NewContextualError("Failed to load ca from config", nil, err)
 	}
-	l.WithField("fingerprints", trustedCAs.GetFingerprints()).Debug("Trusted CA fingerprints")
+	l.Debug(
+		"trusted CA fingerprints",
+		zap.Strings("fingerprints", trustedCAs.GetFingerprints()),
+	)
 
 	cs, err := NewCertStateFromConfig(config)
 	if err != nil {
 		//The errors coming out of NewCertStateFromConfig are already nicely formatted
 		return nil, NewContextualError("Failed to load certificate from config", nil, err)
 	}
-	l.WithField("cert", cs.certificate).Debug("Client nebula certificate")
+	l.Debug(
+		"client nebula certificate",
+		zap.Any("cert", cs.certificate),
+	)
 
 	fw, err := NewFirewallFromConfig(cs.certificate, config)
 	if err != nil {
 		return nil, NewContextualError("Error while loading firewall rules", nil, err)
 	}
-	l.WithField("firewallHash", fw.GetRuleHash()).Info("Firewall started")
+	l.Info(
+		"firewall started",
+		zap.String("firewallHash", fw.GetRuleHash()),
+	)
 
 	// TODO: make sure mask is 4 bytes
 	tunCidr := cs.certificate.Details.Ips[0]
@@ -173,8 +178,11 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	hostMap.SetDefaultRoute(ip2int(net.ParseIP(config.GetString("default_route", "0.0.0.0"))))
 	hostMap.addUnsafeRoutes(&unsafeRoutes)
 	hostMap.metricsEnabled = config.GetBool("stats.message_metrics", false)
-
-	l.WithField("network", hostMap.vpnCIDR).WithField("preferredRanges", hostMap.preferredRanges).Info("Main HostMap created")
+	l.Info(
+		"main hostmap created",
+		zap.Any("network", hostMap.vpnCIDR),
+		zap.Any("preferredRanges", hostMap.preferredRanges),
+	)
 
 	/*
 		config.SetDefault("promoter.interval", 10)
@@ -279,7 +287,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 
 	err = lightHouse.ValidateLHStaticEntries()
 	if err != nil {
-		l.WithError(err).Error("Lighthouse unreachable")
+		l.Error("Lighthouse unreachable", zap.Error(err))
 	}
 
 	var messageMetrics *MessageMetrics
@@ -365,7 +373,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 
 	// must be done here so that we can only listen on the nebula ip otherwise
 	// if done earlier needed interfaces aren't setup
-	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
+	ssh, err := sshd.NewSSHServer(l.With(zap.String("subsystem", "sshd")))
 	if err != nil {
 		return nil, NewContextualError("Failed to start ssh server", nil, err)
 	}
@@ -381,7 +389,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 
 	// Start DNS server last to allow using the nebula IP as lighthouse.dns.host
 	if amLighthouse && serveDns {
-		l.Debugln("Starting dns server")
+		l.Debug("Starting dns server")
 		go dnsMain(hostMap, config)
 	}
 

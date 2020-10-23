@@ -5,13 +5,13 @@ import (
 	"net"
 
 	"github.com/armon/go-radix"
-	"github.com/sirupsen/logrus"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
 )
 
 type SSHServer struct {
 	config *ssh.ServerConfig
-	l      *logrus.Entry
+	l      *zap.Logger
 
 	// Map of user -> authorized keys
 	trustedKeys map[string]map[string]bool
@@ -25,7 +25,7 @@ type SSHServer struct {
 }
 
 // NewSSHServer creates a new ssh server rigged with default commands and prepares to listen
-func NewSSHServer(l *logrus.Entry) (*SSHServer, error) {
+func NewSSHServer(l *zap.Logger) (*SSHServer, error) {
 	s := &SSHServer{
 		trustedKeys: make(map[string]map[string]bool),
 		l:           l,
@@ -79,7 +79,11 @@ func (s *SSHServer) AddAuthorizedKey(user, pubKey string) error {
 	}
 
 	tk[string(pk.Marshal())] = true
-	s.l.WithField("sshKey", pubKey).WithField("sshUser", user).Info("Authorized ssh key")
+	s.l.Info(
+		"authorized ssh key",
+		zap.String("sshKey", pubKey),
+		zap.String("sshUser", user),
+	)
 	return nil
 }
 
@@ -95,12 +99,14 @@ func (s *SSHServer) Run(addr string) error {
 	if err != nil {
 		return err
 	}
-
-	s.l.WithField("sshListener", addr).Info("SSH server is listening")
+	s.l.Info(
+		"ssh server is listening",
+		zap.String("sshListener", addr),
+	)
 	for {
 		c, err := s.listener.Accept()
 		if err != nil {
-			s.l.WithError(err).Warn("Error in listener, shutting down")
+			s.l.Warn("Error in listener, shutting down", zap.Error(err))
 			return nil
 		}
 
@@ -111,22 +117,26 @@ func (s *SSHServer) Run(addr string) error {
 		}
 
 		if err != nil {
-			l := s.l.WithError(err).WithField("remoteAddress", c.RemoteAddr())
+			l := s.l.With(zap.Any("remoteAddress", c.RemoteAddr()))
 			if conn != nil {
-				l = l.WithField("sshUser", conn.User())
+				l = l.With(zap.String("sshUser", conn.User()))
 				conn.Close()
 			}
 			if fp != "" {
-				l = l.WithField("sshFingerprint", fp)
+				l = l.With(zap.String("sshFingerprint", fp))
 			}
 			l.Warn("failed to handshake")
 			continue
 		}
 
-		l := s.l.WithField("sshUser", conn.User())
-		l.WithField("remoteAddress", c.RemoteAddr()).WithField("sshFingerprint", fp).Info("ssh user logged in")
+		l := s.l.With(zap.String("sshUser", conn.User()))
+		l.Info(
+			"ssh user logged in",
+			zap.Any("remoteAddress", c.RemoteAddr()),
+			zap.String("sshFingerprint", fp),
+		)
 
-		session := NewSession(s.commands, conn, chans, l.WithField("subsystem", "sshd.session"))
+		session := NewSession(s.commands, conn, chans, l.With(zap.String("subsystem", "sshd.session")))
 		s.counter++
 		counter := s.counter
 		s.conns[counter] = session
@@ -134,7 +144,10 @@ func (s *SSHServer) Run(addr string) error {
 		go ssh.DiscardRequests(reqs)
 		go func() {
 			<-session.exitChan
-			s.l.WithField("id", counter).Debug("closing conn")
+			s.l.Debug(
+				"closing conn",
+				zap.Int("id", counter),
+			)
 			delete(s.conns, counter)
 		}()
 	}
@@ -151,7 +164,7 @@ func (s *SSHServer) Stop() {
 
 	err := s.listener.Close()
 	if err != nil {
-		s.l.WithError(err).Warn("Failed to close the sshd listener")
+		s.l.Warn("Failed to close the sshd listener", zap.Error(err))
 		return
 	}
 

@@ -8,21 +8,21 @@ import (
 
 	"github.com/anmitsu/go-shlex"
 	"github.com/armon/go-radix"
-	"github.com/sirupsen/logrus"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/terminal"
 )
 
 type session struct {
 	sync.RWMutex
-	l        *logrus.Entry
+	l        *zap.Logger
 	c        *ssh.ServerConn
 	term     *terminal.Terminal
 	commands *radix.Tree
 	exitChan chan bool
 }
 
-func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.NewChannel, l *logrus.Entry) *session {
+func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.NewChannel, l *zap.Logger) *session {
 	s := &session{
 		commands: radix.NewFromMap(commands.ToMap()),
 		l:        l,
@@ -46,14 +46,17 @@ func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.New
 func (s *session) handleChannels(chans <-chan ssh.NewChannel) {
 	for newChannel := range chans {
 		if newChannel.ChannelType() != "session" {
-			s.l.WithField("sshChannelType", newChannel.ChannelType()).Error("unknown channel type")
+			s.l.Error(
+				"unknown channel type",
+				zap.String("sshChannelType", newChannel.ChannelType()),
+			)
 			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
 			continue
 		}
 
 		channel, requests, err := newChannel.Accept()
 		if err != nil {
-			s.l.WithError(err).Warn("could not accept channel")
+			s.l.Warn("could not accept channel", zap.Error(err))
 			continue
 		}
 
@@ -88,18 +91,21 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			if cErr == nil {
 				s.dispatchCommand(payload.Value, &stringWriter{channel})
 			} else {
-				s.l.Error(cErr)
+				s.l.Error(cErr.Error())
 			}
 			channel.Close()
 			return
 
 		default:
-			s.l.WithField("sshRequest", req.Type).Debug("Rejected unknown request")
+			s.l.Debug(
+				"rejected unknown request",
+				zap.String("sshRequest", req.Type),
+			)
 			err = req.Reply(false, nil)
 		}
 
 		if err != nil {
-			s.l.WithError(err).Info("Error handling ssh session requests")
+			s.l.Info("Error handling ssh session requests", zap.Error(err))
 			s.Close()
 			return
 		}
@@ -178,7 +184,7 @@ func (s *session) dispatchCommand(line string, w StringWriter) {
 
 	err = execCommand(c, args[1:], w)
 	if err != nil {
-		s.l.Error(err)
+		s.l.Error(err.Error())
 	}
 }
 
