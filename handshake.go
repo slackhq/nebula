@@ -1,5 +1,7 @@
 package nebula
 
+import "go.uber.org/zap"
+
 const (
 	handshakeIXPSK0 = 0
 	handshakeXXPSK0 = 1
@@ -14,7 +16,11 @@ func HandleIncomingHandshake(f *Interface, addr *udpAddr, packet []byte, h *Head
 	//}
 
 	if !f.lightHouse.remoteAllowList.Allow(udp2ipInt(addr)) {
-		l.WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
+		l.Debug(
+			"lighthouse.remote_allow_list denied incoming handshake",
+			zap.Uint32("udpIp", addr.IP),
+			zap.Uint16("udpPort", addr.Port),
+		)
 		return
 	}
 

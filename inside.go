@@ -4,13 +4,17 @@ import (
 	"sync/atomic"
 
 	"github.com/flynn/noise"
-	"github.com/sirupsen/logrus"
+	"go.uber.org/zap"
 )
 
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket, nb, out []byte) {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
-		l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
+		l.Debug(
+			"failed to validate outbound packet",
+			zap.Error(err),
+			zap.Any("packet", packet),
+		)
 		return
 	}
 
@@ -31,11 +35,11 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 
 	hostinfo := f.getOrHandshake(fwPacket.RemoteIP)
 	if hostinfo == nil {
-		if l.Level >= logrus.DebugLevel {
-			l.WithField("vpnIp", IntIp(fwPacket.RemoteIP)).
-				WithField("fwPacket", fwPacket).
-				Debugln("dropping outbound packet, vpnIp not in our CIDR or in unsafe routes")
-		}
+		l.Debug(
+			"dropping outbound packet, vpnIp not in our CIDR or in unsafe routes",
+			zap.Uint32("vpnIp", uint32(IntIp(fwPacket.RemoteIP))),
+			zap.Any("fwPacket", fwPacket),
+		)
 		return
 	}
 	hostinfo.Lock()
@@ -60,12 +64,13 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 			f.lightHouse.Query(fwPacket.RemoteIP, f)
 		}
 
-	} else if l.Level >= logrus.DebugLevel {
-		hostinfo.logger().
-			WithField("fwPacket", fwPacket).
-			WithField("reason", dropReason).
-			Debugln("dropping outbound packet")
 	}
+	hostinfo.logger().Debug(
+		"dropping outbound packet",
+		zap.Any("fwPacket", fwPacket),
+		zap.String("reason", dropReason.Error()),
+	)
+
 }
 
 // getOrHandshake returns nil if the vpnIp is not routable
@@ -127,18 +132,18 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 	fp := &FirewallPacket{}
 	err := newPacket(p, false, fp)
 	if err != nil {
-		l.Warnf("error while parsing outgoing packet for firewall check; %v", err)
+		l.Sugar().Warnf("error while parsing outgoing packet for firewall check; %v", err)
 		return
 	}
 
 	// check if packet is in outbound fw rules
 	dropReason := f.firewall.Drop(p, *fp, false, hostInfo, trustedCAs)
 	if dropReason != nil {
-		if l.Level >= logrus.DebugLevel {
-			l.WithField("fwPacket", fp).
-				WithField("reason", dropReason).
-				Debugln("dropping cached packet")
-		}
+		l.Debug(
+			"dropping cached packet",
+			zap.Any("fwPacket", fp),
+			zap.String("reason", dropReason.Error()),
+		)
 		return
 	}
 
@@ -152,10 +157,10 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 func (f *Interface) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
 	hostInfo := f.getOrHandshake(vpnIp)
 	if hostInfo == nil {
-		if l.Level >= logrus.DebugLevel {
-			l.WithField("vpnIp", IntIp(vpnIp)).
-				Debugln("dropping SendMessageToVpnIp, vpnIp not in our CIDR or in unsafe routes")
-		}
+		l.Debug(
+			"dropping SendMessageToVpnIp, vpnIp not in our CIDR or in unsafe routes",
+			zap.Uint32("vpnIp", uint32(IntIp(vpnIp))),
+		)
 		return
 	}
 
@@ -182,10 +187,10 @@ func (f *Interface) sendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubT
 func (f *Interface) SendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
 	hostInfo := f.getOrHandshake(vpnIp)
 	if hostInfo == nil {
-		if l.Level >= logrus.DebugLevel {
-			l.WithField("vpnIp", IntIp(vpnIp)).
-				Debugln("dropping SendMessageToAll, vpnIp not in our CIDR or in unsafe routes")
-		}
+		l.Debug(
+			"dropping SendMessageToAll, vpnIp not in our CIDR or in unsafe routes",
+			zap.Uint32("vpnIp", uint32(IntIp(vpnIp))),
+		)
 		return
 	}
 
@@ -234,17 +239,25 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 	//TODO: see above note on lock
 	//ci.writeLock.Unlock()
 	if err != nil {
-		hostinfo.logger().WithError(err).
-			WithField("udpAddr", remote).WithField("counter", c).
-			WithField("attemptedCounter", ci.messageCounter).
-			Error("Failed to encrypt outgoing packet")
+		hostinfo.logger().Error(
+			"failed to encrypt outgoing packet",
+			zap.Uint32("udpIp", remote.IP),
+			zap.Uint16("udpPort", remote.Port),
+			zap.Uint64("counter", c),
+			zap.Uint64("attemptedCounter", *ci.messageCounter),
+			zap.Error(err),
+		)
 		return c
 	}
 
 	err = f.outside.WriteTo(out, remote)
 	if err != nil {
-		hostinfo.logger().WithError(err).
-			WithField("udpAddr", remote).Error("Failed to write outgoing packet")
+		hostinfo.logger().Error(
+			"failed to write outgoing packet",
+			zap.Uint32("udpIp", remote.IP),
+			zap.Uint16("udpPort", remote.Port),
+			zap.Error(err),
+		)
 	}
 	return c
 }

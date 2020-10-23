@@ -223,11 +223,11 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 			if hostinfo.ConnectionState != nil && hostinfo.ConnectionState.peerCert != nil {
 				cn = hostinfo.ConnectionState.peerCert.Details.Name
 			}
-			hostinfo.logger().
-				WithField("tunnelCheck", m{"state": "dead", "method": "active"}).
-				WithField("certName", cn).
-				Info("Tunnel status")
-
+			hostinfo.logger().Info(
+				"tunnel status check",
+				zap.Any("tunnelCheck", m{"state": "dead", "method": "active"}),
+				zap.String("certName", cn),
+			)
 			n.ClearIP(vpnIP)
 			n.ClearPendingDeletion(vpnIP)
 			// TODO: This is only here to let tests work. Should do proper mocking
