@@ -8,13 +8,11 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
-	"reflect"
 	"runtime/pprof"
-	"strings"
 	"syscall"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/sshd"
+	"go.uber.org/zap"
 )
 
 type sshListHostMapFlags struct {
@@ -48,7 +46,7 @@ func wireSSHReload(ssh *sshd.SSHServer, c *Config) {
 		if c.GetBool("sshd.enabled", false) {
 			err := configSSH(ssh, c)
 			if err != nil {
-				l.WithError(err).Error("Failed to reconfigure the sshd")
+				l.Error("Failed to reconfigure the sshd", zap.Error(err))
 				ssh.Stop()
 			}
 		} else {
@@ -96,13 +94,13 @@ func configSSH(ssh *sshd.SSHServer, c *Config) error {
 		for _, rk := range keys {
 			kDef, ok := rk.(map[interface{}]interface{})
 			if !ok {
-				l.WithField("sshKeyConfig", rk).Warn("Authorized user had an error, ignoring")
+				l.Warn("Authorized user had an error, ignoring", zap.Any("sshKeyConfig", rk))
 				continue
 			}
 
 			user, ok := kDef["user"].(string)
 			if !ok {
-				l.WithField("sshKeyConfig", rk).Warn("Authorized user is missing the user field")
+				l.Warn("Authorized user is missing the user field", zap.Any("sshKeyConfig", rk))
 				continue
 			}
 
@@ -111,7 +109,12 @@ func configSSH(ssh *sshd.SSHServer, c *Config) error {
 			case string:
 				err := ssh.AddAuthorizedKey(user, v)
 				if err != nil {
-					l.WithError(err).WithField("sshKeyConfig", rk).WithField("sshKey", v).Warn("Failed to authorize key")
+					l.Warn(
+						"failed to authorize key",
+						zap.Any("sshKeyConfig", rk),
+						zap.String("sshKey", v),
+						zap.Error(err),
+					)
 					continue
 				}
 
@@ -119,19 +122,30 @@ func configSSH(ssh *sshd.SSHServer, c *Config) error {
 				for _, subK := range v {
 					sk, ok := subK.(string)
 					if !ok {
-						l.WithField("sshKeyConfig", rk).WithField("sshKey", subK).Warn("Did not understand ssh key")
+						l.Warn(
+							"did not understand ssh key",
+							zap.Any("sshKeyConfig", rk),
+							zap.Any("sshKey", subK),
+						)
 						continue
 					}
 
 					err := ssh.AddAuthorizedKey(user, sk)
 					if err != nil {
-						l.WithError(err).WithField("sshKeyConfig", sk).Warn("Failed to authorize key")
+						l.Warn(
+							"failed to authorize key",
+							zap.Error(err),
+							zap.String("sshKeyConfig", sk),
+						)
 						continue
 					}
 				}
 
 			default:
-				l.WithField("sshKeyConfig", rk).Warn("Authorized user is missing the keys field or was not understood")
+				l.Warn(
+					"authorized user is missing the keys field or was not understood",
+					zap.Any("sshKeyConfig", rk),
+				)
 			}
 		}
 	} else {
@@ -629,8 +643,9 @@ func sshGetHeapProfile(fs interface{}, a []string, w sshd.StringWriter) error {
 }
 
 func sshLogLevel(fs interface{}, a []string, w sshd.StringWriter) error {
-	if len(a) == 0 {
-		return w.WriteLine(fmt.Sprintf("Log level is: %s", l.Level))
+	return w.WriteLine("this function is now deprecated")
+	/*if len(a) == 0 {
+		return w.WriteLine("depreca")
 	}
 
 	level, err := logrus.ParseLevel(a[0])
@@ -639,11 +654,12 @@ func sshLogLevel(fs interface{}, a []string, w sshd.StringWriter) error {
 	}
 
 	l.SetLevel(level)
-	return w.WriteLine(fmt.Sprintf("Log level is: %s", l.Level))
+	return w.WriteLine(fmt.Sprintf("Log level is: %s", l.Level))*/
 }
 
 func sshLogFormat(fs interface{}, a []string, w sshd.StringWriter) error {
-	if len(a) == 0 {
+	return w.WriteLine("this function is now deprecated")
+	/*if len(a) == 0 {
 		return w.WriteLine(fmt.Sprintf("Log format is: %s", reflect.TypeOf(l.Formatter)))
 	}
 
@@ -657,7 +673,7 @@ func sshLogFormat(fs interface{}, a []string, w sshd.StringWriter) error {
 		return fmt.Errorf("unknown log format `%s`. possible formats: %s", logFormat, []string{"text", "json"})
 	}
 
-	return w.WriteLine(fmt.Sprintf("Log format is: %s", reflect.TypeOf(l.Formatter)))
+	return w.WriteLine(fmt.Sprintf("Log format is: %s", reflect.TypeOf(l.Formatter)))*/
 }
 
 func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {

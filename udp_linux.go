@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 )
 
@@ -155,7 +156,7 @@ func (u *udpConn) ListenOut(f *Interface) {
 	for {
 		n, err := read(msgs)
 		if err != nil {
-			l.WithError(err).Error("Failed to read packets")
+			l.Error("Failed to read packets", zap.Error(err))
 			continue
 		}
 
@@ -246,12 +247,12 @@ func (u *udpConn) reloadConfig(c *Config) {
 		if err == nil {
 			s, err := u.GetRecvBuffer()
 			if err == nil {
-				l.WithField("size", s).Info("listen.read_buffer was set")
+				l.Info("listen.read_buffer was set", zap.Int("size", s))
 			} else {
-				l.WithError(err).Warn("Failed to get listen.read_buffer")
+				l.Warn("Failed to get listen.read_buffer", zap.Error(err))
 			}
 		} else {
-			l.WithError(err).Error("Failed to set listen.read_buffer")
+			l.Error("Failed to set listen.read_buffer", zap.Error(err))
 		}
 	}
 
@@ -261,12 +262,12 @@ func (u *udpConn) reloadConfig(c *Config) {
 		if err == nil {
 			s, err := u.GetSendBuffer()
 			if err == nil {
-				l.WithField("size", s).Info("listen.write_buffer was set")
+				l.Info("listen.write_buffer was set", zap.Int("size", s))
 			} else {
-				l.WithError(err).Warn("Failed to get listen.write_buffer")
+				l.Warn("Failed to get listen.write_buffer", zap.Error(err))
 			}
 		} else {
-			l.WithError(err).Error("Failed to set listen.write_buffer")
+			l.Error("Failed to set listen.write_buffer", zap.Error(err))
 		}
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/vishvananda/netlink"
+	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 )
 
@@ -207,14 +208,14 @@ func (c Tun) Activate() error {
 	ifm := ifreqMTU{Name: devName, MTU: int32(c.MaxMTU)}
 	if err = ioctl(fd, unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
 		// This is currently a non fatal condition because the route table must have the MTU set appropriately as well
-		l.WithError(err).Error("Failed to set tun mtu")
+		l.Error("Failed to set tun mtu", zap.Error(err))
 	}
 
 	// Set the transmit queue length
 	ifrq := ifreqQLEN{Name: devName, Value: int32(c.TXQueueLen)}
 	if err = ioctl(fd, unix.SIOCSIFTXQLEN, uintptr(unsafe.Pointer(&ifrq))); err != nil {
 		// If we can't set the queue length nebula will still work but it may lead to packet loss
-		l.WithError(err).Error("Failed to set tun tx queue length")
+		l.Error("Failed to set tun tx queue length", zap.Error(err))
 	}
 
 	// Bring up the interface
