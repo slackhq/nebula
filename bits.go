@@ -2,7 +2,7 @@ package nebula
 
 import (
 	"github.com/rcrowley/go-metrics"
-	"github.com/sirupsen/logrus"
+	"go.uber.org/zap"
 )
 
 type Bits struct {
@@ -43,7 +43,7 @@ func (b *Bits) Check(i uint64) bool {
 	}
 
 	// Not within the window
-	l.Debugf("rejected a packet (top) %d %d\n", b.current, i)
+	l.Sugar().Debugf("rejected a packet (top) %d %d\n", b.current, i)
 	return false
 }
 
@@ -93,11 +93,13 @@ func (b *Bits) Update(i uint64) bool {
 		}
 
 		b.lostCounter.Inc(lost)
-
-		if l.Level >= logrus.DebugLevel {
-			l.WithField("receiveWindow", m{"accepted": true, "currentCounter": b.current, "incomingCounter": i, "reason": "window shifting"}).
-				Debug("Receive window")
-		}
+		l.Debug(
+			"receive window",
+			zap.Bool("accepted", true),
+			zap.Uint64("currentCounter", b.current),
+			zap.Uint64("incomingCounter", i),
+			zap.String("reason", "window shifting"),
+		)
 		b.bits[i%b.length] = true
 		b.current = i
 		return true
@@ -114,19 +116,25 @@ func (b *Bits) Update(i uint64) bool {
 	// allow it and flip to true but to NOT change current. We also have to account for the first window
 	if ((b.current >= b.length && i > b.current-b.length) || (b.current < b.length && i < b.length)) && i <= b.current {
 		if b.current == i {
-			if l.Level >= logrus.DebugLevel {
-				l.WithField("receiveWindow", m{"accepted": false, "currentCounter": b.current, "incomingCounter": i, "reason": "duplicate"}).
-					Debug("Receive window")
-			}
+			l.Debug(
+				"receive window",
+				zap.Bool("accepted", false),
+				zap.Uint64("currentCounter", b.current),
+				zap.Uint64("incomingCounter", i),
+				zap.String("reason", "duplicate"),
+			)
 			b.dupeCounter.Inc(1)
 			return false
 		}
 
 		if b.bits[i%b.length] {
-			if l.Level >= logrus.DebugLevel {
-				l.WithField("receiveWindow", m{"accepted": false, "currentCounter": b.current, "incomingCounter": i, "reason": "old duplicate"}).
-					Debug("Receive window")
-			}
+			l.Debug(
+				"receive window",
+				zap.Bool("accepted", false),
+				zap.Uint64("currentCounter", b.current),
+				zap.Uint64("incomingCounter", i),
+				zap.String("reason", "duplicate"),
+			)
 			b.dupeCounter.Inc(1)
 			return false
 		}
@@ -138,13 +146,13 @@ func (b *Bits) Update(i uint64) bool {
 
 	// In all other cases, fail and don't change current.
 	b.outOfWindowCounter.Inc(1)
-	if l.Level >= logrus.DebugLevel {
-		l.WithField("accepted", false).
-			WithField("currentCounter", b.current).
-			WithField("incomingCounter", i).
-			WithField("reason", "nonsense").
-			Debug("Receive window")
-	}
+	l.Debug(
+		"receive window",
+		zap.Bool("accepted", false),
+		zap.Uint64("currentCounter", b.current),
+		zap.Uint64("incomingCounter", i),
+		zap.String("reason", "nonsense"),
+	)
 	return false
 }
 

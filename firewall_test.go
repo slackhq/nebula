@@ -58,10 +58,10 @@ func TestNewFirewall(t *testing.T) {
 }
 
 func TestFirewall_AddRule(t *testing.T) {
-	ob := &bytes.Buffer{}
-	out := l.Out
-	l.SetOutput(ob)
-	defer l.SetOutput(out)
+	// ob := &bytes.Buffer{}
+	// out := l.Out
+	// l.SetOutput(ob)
+	// defer l.SetOutput(out)
 
 	c := &cert.NebulaCertificate{}
 	fw := NewFirewall(time.Second, time.Minute, time.Hour, c)
@@ -146,10 +146,10 @@ func TestFirewall_AddRule(t *testing.T) {
 }
 
 func TestFirewall_Drop(t *testing.T) {
-	ob := &bytes.Buffer{}
+	/*ob := &bytes.Buffer{}
 	out := l.Out
 	l.SetOutput(ob)
-	defer l.SetOutput(out)
+	defer l.SetOutput(out)*/
 
 	p := FirewallPacket{
 		ip2int(net.IPv4(1, 2, 3, 4)),
@@ -322,11 +322,11 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 }
 
 func TestFirewall_Drop2(t *testing.T) {
-	ob := &bytes.Buffer{}
+	/*ob := &bytes.Buffer{}
 	out := l.Out
 	l.SetOutput(ob)
 	defer l.SetOutput(out)
-
+	*/
 	p := FirewallPacket{
 		ip2int(net.IPv4(1, 2, 3, 4)),
 		ip2int(net.IPv4(1, 2, 3, 4)),
@@ -382,10 +382,10 @@ func TestFirewall_Drop2(t *testing.T) {
 }
 
 func TestFirewall_Drop3(t *testing.T) {
-	ob := &bytes.Buffer{}
+	/*ob := &bytes.Buffer{}
 	out := l.Out
 	l.SetOutput(ob)
-	defer l.SetOutput(out)
+	defer l.SetOutput(out)*/
 
 	p := FirewallPacket{
 		ip2int(net.IPv4(1, 2, 3, 4)),
@@ -469,10 +469,10 @@ func TestFirewall_Drop3(t *testing.T) {
 }
 
 func TestFirewall_DropConntrackReload(t *testing.T) {
-	ob := &bytes.Buffer{}
+	/*ob := &bytes.Buffer{}
 	out := l.Out
 	l.SetOutput(ob)
-	defer l.SetOutput(out)
+	defer l.SetOutput(out)*/
 
 	p := FirewallPacket{
 		ip2int(net.IPv4(1, 2, 3, 4)),
@@ -865,9 +865,9 @@ func TestTCPRTTTracking(t *testing.T) {
 
 func TestFirewall_convertRule(t *testing.T) {
 	ob := &bytes.Buffer{}
-	out := l.Out
+	/*out := l.Out
 	l.SetOutput(ob)
-	defer l.SetOutput(out)
+	defer l.SetOutput(out)*/
 
 	// Ensure group array of 1 is converted and a warning is printed
 	c := map[interface{}]interface{}{

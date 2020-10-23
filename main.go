@@ -10,11 +10,14 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/sshd"
+	"go.uber.org/zap"
 	"gopkg.in/yaml.v2"
 )
 
-// The caller should provide a real logger, we have one just in case
+/*// The caller should provide a real logger, we have one just in case
 var l = logrus.New()
+*/
+var l *zap.Logger
 
 type m map[string]interface{}
 
