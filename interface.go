@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rcrowley/go-metrics"
+	"go.uber.org/zap"
 )
 
 const mtu = 9001
@@ -110,17 +111,21 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 func (f *Interface) run() {
 	// actually turn on tun dev
 	if err := f.inside.Activate(); err != nil {
-		l.Fatal(err)
+		l.Fatal(err.Error())
 	}
 
 	addr, err := f.outside.LocalAddr()
 	if err != nil {
-		l.WithError(err).Error("Failed to get udp listen address")
+		l.Error("failed to get udp listen address", zap.Error(err))
 	}
-
-	l.WithField("interface", f.inside.DeviceName()).WithField("network", f.inside.CidrNet().String()).
-		WithField("build", f.version).WithField("udpAddr", addr).
-		Info("Nebula interface is active")
+	l.Info(
+		"nebula interface is active",
+		zap.String("interface", f.inside.DeviceName()),
+		zap.Any("network", f.inside.CidrNet().String()),
+		zap.String("build", f.version),
+		zap.Uint32("udpIp", addr.IP),
+		zap.Uint16("udpPort", addr.Port),
+	)
 
 	// Launch n queues to read packets from udp
 	for i := 0; i < f.udpQueues; i++ {
@@ -137,7 +142,7 @@ func (f *Interface) listenOut(i int) {
 	//TODO: handle error
 	addr, err := f.outside.LocalAddr()
 	if err != nil {
-		l.WithError(err).Error("failed to discover udp listening address")
+		l.Error("failed to discover udp listening address", zap.Error(err))
 	}
 
 	var li *udpConn
@@ -145,7 +150,7 @@ func (f *Interface) listenOut(i int) {
 		//TODO: handle error
 		li, err = NewListener(udp2ip(addr).String(), int(addr.Port), i > 0)
 		if err != nil {
-			l.WithError(err).Error("failed to make a new udp listener")
+			l.Error("failed to make a new udp listener", zap.Error(err))
 		}
 	} else {
 		li = f.outside
@@ -163,7 +168,7 @@ func (f *Interface) listenIn(i int) {
 	for {
 		n, err := f.inside.Read(packet)
 		if err != nil {
-			l.WithError(err).Error("Error while reading outbound packet")
+			l.Error("failed to read outbound packet", zap.Error(err))
 			// This only seems to happen when something fatal happens to the fd, so exit.
 			os.Exit(2)
 		}
@@ -184,19 +189,22 @@ func (f *Interface) reloadCA(c *Config) {
 	// todo: need mutex?
 	newCAs, err := loadCAFromConfig(c)
 	if err != nil {
-		l.WithError(err).Error("Could not refresh trusted CA certificates")
+		l.Error("Could not refresh trusted CA certificates", zap.Error(err))
 		return
 	}
 
 	trustedCAs = newCAs
-	l.WithField("fingerprints", trustedCAs.GetFingerprints()).Info("Trusted CA certificates refreshed")
+	l.Info(
+		"trusted CA certificates refreshed",
+		zap.Strings("fingerprints", trustedCAs.GetFingerprints()),
+	)
 }
 
 func (f *Interface) reloadCertKey(c *Config) {
 	// reload and check in all cases
 	cs, err := NewCertStateFromConfig(c)
 	if err != nil {
-		l.WithError(err).Error("Could not refresh client cert")
+		l.Error("Could not refresh client cert", zap.Error(err))
 		return
 	}
 
@@ -204,12 +212,19 @@ func (f *Interface) reloadCertKey(c *Config) {
 	oldIPs := f.certState.certificate.Details.Ips
 	newIPs := cs.certificate.Details.Ips
 	if len(oldIPs) > 0 && len(newIPs) > 0 && oldIPs[0].String() != newIPs[0].String() {
-		l.WithField("new_ip", newIPs[0]).WithField("old_ip", oldIPs[0]).Error("IP in new cert was different from old")
+		l.Error(
+			"ip in new cert was different from old",
+			zap.Any("new_ip", newIPs[0]),
+			zap.Any("old_ip", oldIPs[0]),
+		)
 		return
 	}
 
 	f.certState = cs
-	l.WithField("cert", cs.certificate).Info("Client cert refreshed from disk")
+	l.Info(
+		"client cert refreshed from disk",
+		zap.Any("cert", cs.certificate),
+	)
 }
 
 func (f *Interface) reloadFirewall(c *Config) {
@@ -221,7 +236,10 @@ func (f *Interface) reloadFirewall(c *Config) {
 
 	fw, err := NewFirewallFromConfig(f.certState.certificate, c)
 	if err != nil {
-		l.WithError(err).Error("Error while creating firewall during reload")
+		l.Error(
+			"failed creating firewall during reload",
+			zap.Error(err),
+		)
 		return
 	}
 
@@ -234,10 +252,12 @@ func (f *Interface) reloadFirewall(c *Config) {
 	// If rulesVersion is back to zero, we have wrapped all the way around. Be
 	// safe and just reset conntrack in this case.
 	if fw.rulesVersion == 0 {
-		l.WithField("firewallHash", fw.GetRuleHash()).
-			WithField("oldFirewallHash", oldFw.GetRuleHash()).
-			WithField("rulesVersion", fw.rulesVersion).
-			Warn("firewall rulesVersion has overflowed, resetting conntrack")
+		l.Warn(
+			"firewall rulesVersion has overflowed, resetting conntrack",
+			zap.String("firewallHash", fw.GetRuleHash()),
+			zap.String("oldFirewallHash", oldFw.GetRuleHash()),
+			zap.Uint16("rulesVersion", fw.rulesVersion),
+		)
 	} else {
 		fw.Conntrack = conntrack
 	}
@@ -245,10 +265,12 @@ func (f *Interface) reloadFirewall(c *Config) {
 	f.firewall = fw
 
 	oldFw.Destroy()
-	l.WithField("firewallHash", fw.GetRuleHash()).
-		WithField("oldFirewallHash", oldFw.GetRuleHash()).
-		WithField("rulesVersion", fw.rulesVersion).
-		Info("New firewall has been installed")
+	l.Info(
+		"new firewall has been installed",
+		zap.String("firewallHash", fw.GetRuleHash()),
+		zap.String("oldFirewallHash", oldFw.GetRuleHash()),
+		zap.Uint16("rulesVersion", fw.rulesVersion),
+	)
 }
 
 func (f *Interface) emitStats(i time.Duration) {

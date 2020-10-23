@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/slackhq/nebula/cert"
+	"go.uber.org/zap"
 )
 
 var trustedCAs *cert.NebulaCAPool
@@ -150,13 +151,13 @@ func loadCAFromConfig(c *Config) (*cert.NebulaCAPool, error) {
 	}
 
 	for _, fp := range c.GetStringSlice("pki.blocklist", []string{}) {
-		l.WithField("fingerprint", fp).Infof("Blocklisting cert")
+		l.Info("blocklisting cert", zap.String("fingerprint", fp))
 		CAs.BlocklistFingerprint(fp)
 	}
 
 	// Support deprecated config for at leaast one minor release to allow for migrations
 	for _, fp := range c.GetStringSlice("pki.blacklist", []string{}) {
-		l.WithField("fingerprint", fp).Infof("Blocklisting cert")
+		l.Info("blocklisting cert", zap.String("fingerprint", fp))
 		l.Warn("pki.blacklist is deprecated and will not be supported in a future release. Please migrate your config to use pki.blocklist")
 		CAs.BlocklistFingerprint(fp)
 	}

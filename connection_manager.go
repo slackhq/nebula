@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirupsen/logrus"
+	"go.uber.org/zap"
 )
 
 // TODO: incount and outcount are intended as a shortcut to locking the mutexes for every single packet
@@ -163,11 +163,7 @@ func (n *connectionManager) HandleMonitorTick(now time.Time) {
 
 		// If we saw incoming packets from this ip, just return
 		if traf {
-			if l.Level >= logrus.DebugLevel {
-				l.WithField("vpnIp", IntIp(vpnIP)).
-					WithField("tunnelCheck", m{"state": "alive", "method": "passive"}).
-					Debug("Tunnel status")
-			}
+			l.Debug("tunnel status check", zap.String("state", "alive"), zap.String("method", "passive"))
 			n.ClearIP(vpnIP)
 			n.ClearPendingDeletion(vpnIP)
 			continue
@@ -176,22 +172,18 @@ func (n *connectionManager) HandleMonitorTick(now time.Time) {
 		// If we didn't we may need to probe or destroy the conn
 		hostinfo, err := n.hostMap.QueryVpnIP(vpnIP)
 		if err != nil {
-			l.Debugf("Not found in hostmap: %s", IntIp(vpnIP))
+			l.Debug("not found in hostmap", zap.Uint32("vpnIp", uint32(IntIp(vpnIP))))
 			n.ClearIP(vpnIP)
 			n.ClearPendingDeletion(vpnIP)
 			continue
 		}
-
-		hostinfo.logger().
-			WithField("tunnelCheck", m{"state": "testing", "method": "active"}).
-			Debug("Tunnel status")
-
+		l.Debug("tunnel status check", zap.String("state", "testing"), zap.String("method", "active"))
 		if hostinfo != nil && hostinfo.ConnectionState != nil {
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
 			n.intf.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12), make([]byte, mtu))
 
 		} else {
-			hostinfo.logger().Debugf("Hostinfo sadness: %s", IntIp(vpnIP))
+			l.Debug("host info sadness", zap.Uint32("vpnIp", uint32(IntIp(vpnIP))))
 		}
 		n.AddPendingDeletion(vpnIP)
 	}
@@ -211,9 +203,7 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 		// If we saw incoming packets from this ip, just return
 		traf := n.CheckIn(vpnIP)
 		if traf {
-			l.WithField("vpnIp", IntIp(vpnIP)).
-				WithField("tunnelCheck", m{"state": "alive", "method": "active"}).
-				Debug("Tunnel status")
+			l.Debug("tunnel status check", zap.String("state", "alive"), zap.String("method", "active"))
 			n.ClearIP(vpnIP)
 			n.ClearPendingDeletion(vpnIP)
 			continue
@@ -223,7 +213,7 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 		if err != nil {
 			n.ClearIP(vpnIP)
 			n.ClearPendingDeletion(vpnIP)
-			l.Debugf("Not found in hostmap: %s", IntIp(vpnIP))
+			l.Debug("not found in hostmap", zap.Uint32("vpnIp", uint32(IntIp(vpnIP))))
 			continue
 		}
 
@@ -233,11 +223,11 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 			if hostinfo.ConnectionState != nil && hostinfo.ConnectionState.peerCert != nil {
 				cn = hostinfo.ConnectionState.peerCert.Details.Name
 			}
-			hostinfo.logger().
-				WithField("tunnelCheck", m{"state": "dead", "method": "active"}).
-				WithField("certName", cn).
-				Info("Tunnel status")
-
+			hostinfo.logger().Info(
+				"tunnel status check",
+				zap.Any("tunnelCheck", m{"state": "dead", "method": "active"}),
+				zap.String("certName", cn),
+			)
 			n.ClearIP(vpnIP)
 			n.ClearPendingDeletion(vpnIP)
 			// TODO: This is only here to let tests work. Should do proper mocking

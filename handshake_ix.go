@@ -7,6 +7,7 @@ import (
 
 	"github.com/flynn/noise"
 	"github.com/golang/protobuf/proto"
+	"go.uber.org/zap"
 )
 
 // NOISE IX Handshakes
@@ -18,7 +19,7 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 	if hostinfo.remote == nil {
 		ips, err := f.lightHouse.Query(vpnIp, f)
 		if err != nil {
-			l.Debugln(err)
+			l.Debug(err.Error())
 		}
 		for _, ip := range ips {
 			hostinfo.AddRemote(ip)
@@ -27,8 +28,10 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 
 	myIndex, err := generateIndex()
 	if err != nil {
-		l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).
-			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to generate index")
+		l.Error(
+			"failed to generate index",
+			zap.Any("handshake", m{"stage": 0, "style": "ix_psk0"}),
+		)
 		return
 	}
 	ci := hostinfo.ConnectionState
@@ -46,8 +49,11 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 	hsBytes, err := proto.Marshal(hs)
 
 	if err != nil {
-		l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).
-			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to marshal handshake message")
+		l.Error(
+			"failed to marshal handshake message",
+			zap.Uint32("vpnIp", uint32(IntIp(vpnIp))),
+			zap.Any("handshake", m{"stage": 0, "style": "ix_psk0"}),
+		)
 		return
 	}
 
@@ -56,8 +62,11 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 
 	msg, _, _, err := ci.H.WriteMessage(header, hsBytes)
 	if err != nil {
-		l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).
-			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to call noise.WriteMessage")
+		l.Error(
+			"failed to call noise.WriteMessage",
+			zap.Uint32("vpnIp", uint32(IntIp(vpnIp))),
+			zap.Any("handshake", m{"stage": 0, "style": "ix_psk0"}),
+		)
 		return
 	}
 	hostinfo.Lock()
@@ -77,8 +86,12 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 		msg, _, _, err := ci.H.ReadMessage(nil, packet[HeaderLen:])
 		if err != nil {
-			l.WithError(err).WithField("udpAddr", addr).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.ReadMessage")
+			l.Error(
+				"failed to call noise.WriteMessage",
+				zap.Uint32("udpIP", addr.IP),
+				zap.Uint16("udpPort", addr.Port),
+				zap.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+			)
 			return true
 		}
 
@@ -88,8 +101,12 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			l.Debugln("GOT INDEX: ", hs.Details.InitiatorIndex)
 		*/
 		if err != nil || hs.Details == nil {
-			l.WithError(err).WithField("udpAddr", addr).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed unmarshal handshake message")
+			l.Error(
+				"failed to unmarshal handshake message",
+				zap.Uint32("udpIP", addr.IP),
+				zap.Uint16("udpPort", addr.Port),
+				zap.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+			)
 			return true
 		}
 
@@ -101,30 +118,49 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 					f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
 					err := f.outside.WriteTo(msg, addr)
 					if err != nil {
-						l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-							WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-							WithError(err).Error("Failed to send handshake message")
+						l.Error(
+							"failed to send handshake message",
+							zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+							zap.Uint32("udpIP", addr.IP),
+							zap.Uint16("udpPort", addr.Port),
+							zap.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+							zap.Bool("cached", true),
+						)
 					} else {
-						l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-							WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-							Info("Handshake message sent")
+						l.Error(
+							"handshake message sent",
+							zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+							zap.Uint32("udpIP", addr.IP),
+							zap.Uint16("udpPort", addr.Port),
+							zap.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+							zap.Bool("cached", true),
+						)
 					}
 					hostinfo.Unlock()
 					return false
 				}
-				l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-					WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).WithField("cached", true).
-					WithField("packets", hostinfo.HandshakePacket).
-					Error("Seen this handshake packet already but don't have a cached packet to return")
+				l.Error(
+					"seen this handshake packet already but don't have a cached packet to return",
+					zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+					zap.Uint32("udpIP", addr.IP),
+					zap.Uint16("udpPort", addr.Port),
+					zap.Any("packets", hostinfo.HandshakePacket),
+					zap.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+					zap.Bool("cached", true),
+				)
 			}
 			hostinfo.Unlock()
 		}
 
 		remoteCert, err := RecombineCertAndValidate(ci.H, hs.Details.Cert)
 		if err != nil {
-			l.WithError(err).WithField("udpAddr", addr).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).WithField("cert", remoteCert).
-				Info("Invalid certificate from host")
+			l.Info(
+				"invalid certificate from host",
+				zap.Uint32("udpIP", addr.IP),
+				zap.Uint16("udpPort", addr.Port),
+				zap.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+				zap.Any("cert", remoteCert),
+			)
 			return true
 		}
 		vpnIP := ip2int(remoteCert.Details.Ips[0].IP)
@@ -133,28 +169,44 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 		myIndex, err := generateIndex()
 		if err != nil {
-			l.WithError(err).WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to generate index")
+			l.Error(
+				"failed to generate index",
+				zap.Uint32("udpIP", addr.IP),
+				zap.Uint16("udpPort", addr.Port),
+				zap.Uint32("vpnIp", uint32(IntIp(vpnIP))),
+				zap.String("certName", certName),
+				zap.String("fingerprint", fingerprint),
+				zap.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+			)
 			return true
 		}
 
 		hostinfo, err = f.handshakeManager.AddIndex(myIndex, ci)
 		if err != nil {
-			l.WithError(err).WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Error adding index to connection manager")
-
+			l.Error(
+				"failed adding index to connection manager",
+				zap.Uint32("udpIP", addr.IP),
+				zap.Uint16("udpPort", addr.Port),
+				zap.Uint32("vpnIp", uint32(IntIp(vpnIP))),
+				zap.String("certName", certName),
+				zap.String("fingerprint", fingerprint),
+				zap.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+			)
 			return true
 		}
-		l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-			WithField("certName", certName).
-			WithField("fingerprint", fingerprint).
-			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Info("Handshake message received")
+
+		l.Info(
+			"handshake message received",
+			zap.Uint32("udpIP", addr.IP),
+			zap.Uint16("udpPort", addr.Port),
+			zap.Uint32("vpnIp", uint32(IntIp(vpnIP))),
+			zap.String("certName", certName),
+			zap.String("fingerprint", fingerprint),
+			zap.Uint32("initiatorIndex", hs.Details.InitiatorIndex),
+			zap.Uint32("responderIndex", hs.Details.ResponderIndex),
+			zap.Uint32("remoteIndex", h.RemoteIndex),
+			zap.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+		)
 
 		hostinfo.remoteIndexId = hs.Details.InitiatorIndex
 		hs.Details.ResponderIndex = myIndex
@@ -162,30 +214,44 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 		hsBytes, err := proto.Marshal(hs)
 		if err != nil {
-			l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to marshal handshake message")
+			l.Error(
+				"failed to marshal handshake message",
+				zap.Uint32("udpIP", addr.IP),
+				zap.Uint16("udpPort", addr.Port),
+				zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+				zap.String("certName", certName),
+				zap.String("fingerprint", fingerprint),
+				zap.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+			)
 			return true
 		}
 
 		header := HeaderEncode(make([]byte, HeaderLen), Version, uint8(handshake), handshakeIXPSK0, hs.Details.InitiatorIndex, 2)
 		msg, dKey, eKey, err := ci.H.WriteMessage(header, hsBytes)
 		if err != nil {
-			l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.WriteMessage")
+			l.Error(
+				"failed to call noise.WriteMessage",
+				zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+				zap.String("certName", certName),
+				zap.String("fingerprint", fingerprint),
+				zap.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+			)
 			return true
 		}
 
 		if f.hostMap.CheckHandshakeCompleteIP(vpnIP) && vpnIP < ip2int(f.certState.certificate.Details.Ips[0].IP) {
-			l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-				Info("Prevented a handshake race")
+			l.Info(
+				"prevented a handshake race",
+				zap.Uint32("udpIP", addr.IP),
+				zap.Uint16("udpPort", addr.Port),
+				zap.Uint32("vpnIp", uint32(IntIp(vpnIP))),
+				zap.String("certName", certName),
+				zap.String("fingerprint", fingerprint),
+				zap.Uint32("initiatorIndex", hs.Details.InitiatorIndex),
+				zap.Uint32("responderIndex", hs.Details.ResponderIndex),
+				zap.Uint32("remoteIndex", h.RemoteIndex),
+				zap.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+			)
 
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
 			f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12), make([]byte, mtu))
@@ -204,19 +270,27 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
 			err := f.outside.WriteTo(msg, addr)
 			if err != nil {
-				l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-					WithField("certName", certName).
-					WithField("fingerprint", fingerprint).
-					WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-					WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-					WithError(err).Error("Failed to send handshake")
+				l.Error(
+					"failed to send handshake message",
+					zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+					zap.Uint32("udpIP", addr.IP),
+					zap.Uint16("udpPort", addr.Port),
+					zap.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+					zap.Uint32("initiatorIndex", hs.Details.InitiatorIndex),
+					zap.Uint32("responderIndex", hs.Details.ResponderIndex),
+					zap.Uint32("remoteIndex", h.RemoteIndex),
+				)
 			} else {
-				l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-					WithField("certName", certName).
-					WithField("fingerprint", fingerprint).
-					WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-					WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-					Info("Handshake message sent")
+				l.Info(
+					"handshake message sent",
+					zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+					zap.Uint32("udpIP", addr.IP),
+					zap.Uint16("udpPort", addr.Port),
+					zap.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+					zap.Uint32("initiatorIndex", hs.Details.InitiatorIndex),
+					zap.Uint32("responderIndex", hs.Details.ResponderIndex),
+					zap.Uint32("remoteIndex", h.RemoteIndex),
+				)
 			}
 
 			ip = ip2int(remoteCert.Details.Ips[0].IP)
@@ -235,12 +309,18 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 			ho, err := f.hostMap.QueryVpnIP(vpnIP)
 			if err == nil && ho.localIndexId != 0 {
-				l.WithField("vpnIp", vpnIP).
-					WithField("certName", certName).
-					WithField("fingerprint", fingerprint).
-					WithField("action", "removing stale index").
-					WithField("index", ho.localIndexId).
-					Debug("Handshake processing")
+
+				l.Debug(
+					"handshake processing",
+					zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+					zap.Uint32("udpIP", addr.IP),
+					zap.Uint16("udpPort", addr.Port),
+					zap.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+					zap.String("fingerprint", fingerprint),
+					zap.String("certName", certName),
+					zap.Uint32("index", ho.localIndexId),
+					zap.String("action", "removing stale index"),
+				)
 				f.hostMap.DeleteIndex(ho.localIndexId)
 			}
 
@@ -249,11 +329,15 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 			hostinfo.handshakeComplete()
 		} else {
-			l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-				Error("Noise did not arrive at a key")
+			l.Error(
+				"noise did not arrive at key",
+				zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+				zap.Uint32("udpIP", addr.IP),
+				zap.Uint16("udpPort", addr.Port),
+				zap.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+				zap.String("fingerprint", fingerprint),
+				zap.String("certName", certName),
+			)
 			return true
 		}
 
@@ -270,9 +354,14 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	hostinfo.RLock()
 	if bytes.Equal(hostinfo.HandshakePacket[2], packet[HeaderLen:]) {
 		hostinfo.RUnlock()
-		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("header", h).
-			Error("Already seen this handshake packet")
+		l.Error(
+			"already seen this handshake packet",
+			zap.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+			zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+			zap.Uint32("udpIP", addr.IP),
+			zap.Uint16("udpPort", addr.Port),
+			zap.Any("header", h),
+		)
 		return false
 	}
 	hostinfo.RUnlock()
@@ -285,9 +374,15 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	hostinfo.Unlock()
 	msg, eKey, dKey, err := ci.H.ReadMessage(nil, packet[HeaderLen:])
 	if err != nil {
-		l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("header", h).
-			Error("Failed to call noise.ReadMessage")
+
+		l.Error(
+			"failed to call noise.ReadMessage",
+			zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+			zap.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+			zap.Uint32("udpIP", addr.IP),
+			zap.Uint16("udpPort", addr.Port),
+			zap.Any("header", h),
+		)
 
 		// We don't want to tear down the connection on a bad ReadMessage because it could be an attacker trying
 		// to DOS us. Every other error condition after should to allow a possible good handshake to complete in the
@@ -298,16 +393,28 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	hs := &NebulaHandshake{}
 	err = proto.Unmarshal(msg, hs)
 	if err != nil || hs.Details == nil {
-		l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).Error("Failed unmarshal handshake message")
+
+		l.Error(
+			"failed unmarshal handshake message",
+			zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+			zap.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+			zap.Uint32("udpIP", addr.IP),
+			zap.Uint16("udpPort", addr.Port),
+			zap.Any("header", h),
+		)
 		return true
 	}
 
 	remoteCert, err := RecombineCertAndValidate(ci.H, hs.Details.Cert)
 	if err != nil {
-		l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-			WithField("cert", remoteCert).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			Error("Invalid certificate from host")
+		l.Error(
+			"invalid certificate from host",
+			zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+			zap.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+			zap.Uint32("udpIP", addr.IP),
+			zap.Uint16("udpPort", addr.Port),
+			zap.Any("cert", remoteCert),
+		)
 		return true
 	}
 	vpnIP := ip2int(remoteCert.Details.Ips[0].IP)
@@ -315,13 +422,20 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	fingerprint, _ := remoteCert.Sha256Sum()
 
 	duration := time.Since(hostinfo.handshakeStart).Nanoseconds()
-	l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-		WithField("certName", certName).
-		WithField("fingerprint", fingerprint).
-		WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-		WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-		WithField("durationNs", duration).
-		Info("Handshake message received")
+
+	l.Info(
+		"handshake message received",
+		zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+		zap.Uint32("udpIP", addr.IP),
+		zap.Uint16("udpPort", addr.Port),
+		zap.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+		zap.Uint32("initiatorIndex", hs.Details.InitiatorIndex),
+		zap.Uint32("responderIndex", hs.Details.ResponderIndex),
+		zap.Uint32("remoteIndex", h.RemoteIndex),
+		zap.Int64("durationNs", duration),
+		zap.String("fingerprint", fingerprint),
+		zap.String("certName", certName),
+	)
 
 	//ci.remoteIndex = hs.ResponderIndex
 	hostinfo.remoteIndexId = hs.Details.ResponderIndex
@@ -356,12 +470,16 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 		ho, err := f.hostMap.QueryVpnIP(vpnIP)
 		if err == nil && ho.localIndexId != 0 {
-			l.WithField("vpnIp", vpnIP).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("action", "removing stale index").
-				WithField("index", ho.localIndexId).
-				Debug("Handshake processing")
+			l.Debug(
+				"handshake processing",
+				zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+				zap.Uint32("udpIP", addr.IP),
+				zap.Uint16("udpPort", addr.Port),
+				zap.String("fingerprint", fingerprint),
+				zap.String("certName", certName),
+				zap.Uint32("index", ho.localIndexId),
+				zap.String("action", "removing stale index"),
+			)
 			f.hostMap.DeleteIndex(ho.localIndexId)
 		}
 
@@ -371,11 +489,15 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		hostinfo.handshakeComplete()
 		f.metricHandshakes.Update(duration)
 	} else {
-		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-			WithField("certName", certName).
-			WithField("fingerprint", fingerprint).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			Error("Noise did not arrive at a key")
+		l.Error(
+			"noise did not arrive at key",
+			zap.Uint32("vpnIp", uint32(IntIp(hostinfo.hostId))),
+			zap.Uint32("udpIP", addr.IP),
+			zap.Uint16("udpPort", addr.Port),
+			zap.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+			zap.String("fingerprint", fingerprint),
+			zap.String("certName", certName),
+		)
 		return true
 	}
 

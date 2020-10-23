@@ -6,16 +6,16 @@ import (
 	"net"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
+	"go.uber.org/zap"
 )
 
 type disabledTun struct {
 	block  chan struct{}
 	cidr   *net.IPNet
-	logger *log.Logger
+	logger *zap.Logger
 }
 
-func newDisabledTun(cidr *net.IPNet, l *log.Logger) *disabledTun {
+func newDisabledTun(cidr *net.IPNet, l *zap.Logger) *disabledTun {
 	return &disabledTun{
 		cidr:   cidr,
 		block:  make(chan struct{}),
@@ -41,7 +41,10 @@ func (t *disabledTun) Read(b []byte) (int, error) {
 }
 
 func (t *disabledTun) Write(b []byte) (int, error) {
-	t.logger.WithField("raw", prettyPacket(b)).Debugf("Disabled tun received unexpected payload")
+	t.logger.Debug(
+		"disabled tun received unexpected payload",
+		zap.Any("raw", prettyPacket(b)),
+	)
 	return len(b), nil
 }
 

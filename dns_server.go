@@ -67,7 +67,7 @@ func parseQuery(m *dns.Msg, w dns.ResponseWriter) {
 	for _, q := range m.Question {
 		switch q.Qtype {
 		case dns.TypeA:
-			l.Debugf("Query for A %s", q.Name)
+			l.Sugar().Debugf("Query for A %s", q.Name)
 			ip := dnsR.Query(q.Name)
 			if ip != "" {
 				rr, err := dns.NewRR(fmt.Sprintf("%s A %s", q.Name, ip))
@@ -83,7 +83,7 @@ func parseQuery(m *dns.Msg, w dns.ResponseWriter) {
 			if !dnsR.hostMap.vpnCIDR.Contains(b) && a != "127.0.0.1" {
 				return
 			}
-			l.Debugf("Query for TXT %s", q.Name)
+			l.Sugar().Debugf("Query for TXT %s", q.Name)
 			ip := dnsR.QueryCert(q.Name)
 			if ip != "" {
 				rr, err := dns.NewRR(fmt.Sprintf("%s TXT %s", q.Name, ip))
@@ -125,11 +125,11 @@ func getDnsServerAddr(c *Config) string {
 func startDns(c *Config) {
 	dnsAddr = getDnsServerAddr(c)
 	dnsServer = &dns.Server{Addr: dnsAddr, Net: "udp"}
-	l.Debugf("Starting DNS responder at %s\n", dnsAddr)
+	l.Sugar().Debugf("Starting DNS responder at %s\n", dnsAddr)
 	err := dnsServer.ListenAndServe()
 	defer dnsServer.Shutdown()
 	if err != nil {
-		l.Errorf("Failed to start server: %s\n ", err.Error())
+		l.Sugar().Errorf("Failed to start server: %s\n ", err.Error())
 	}
 }
 

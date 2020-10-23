@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/rcrowley/go-metrics"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"go.uber.org/zap"
 )
 
 const (
@@ -239,8 +239,18 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 	if !incoming {
 		direction = "outgoing"
 	}
-	l.WithField("firewallRule", m{"direction": direction, "proto": proto, "startPort": startPort, "endPort": endPort, "groups": groups, "host": host, "ip": sIp, "caName": caName, "caSha": caSha}).
-		Info("Firewall rule added")
+	l.Info(
+		"firewall rule added",
+		zap.String("direction", direction),
+		zap.Uint8("proto", proto),
+		zap.Int32("startPort", startPort),
+		zap.Int32("endPort", endPort),
+		zap.Strings("groups", groups),
+		zap.String("host", host),
+		zap.String("ip", sIp),
+		zap.String("caName", caName),
+		zap.String("caSha", caSha),
+	)
 
 	var (
 		ft *FirewallTable
@@ -453,28 +463,24 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 
 		// We now know which firewall table to check against
 		if !table.match(fp, c.incoming, h.ConnectionState.peerCert, caPool) {
-			if l.Level >= logrus.DebugLevel {
-				h.logger().
-					WithField("fwPacket", fp).
-					WithField("incoming", c.incoming).
-					WithField("rulesVersion", f.rulesVersion).
-					WithField("oldRulesVersion", c.rulesVersion).
-					Debugln("dropping old conntrack entry, does not match new ruleset")
-			}
+			l.Debug(
+				"dropping old conntrack entry, does not match new ruleset",
+				zap.Any("fwPacket", fp),
+				zap.Bool("incoming", c.incoming),
+				zap.Uint16("rulesVersion", f.rulesVersion),
+				zap.Uint16("oldRulesVersion", c.rulesVersion),
+			)
 			delete(conntrack.Conns, fp)
 			conntrack.Unlock()
 			return false
 		}
-
-		if l.Level >= logrus.DebugLevel {
-			h.logger().
-				WithField("fwPacket", fp).
-				WithField("incoming", c.incoming).
-				WithField("rulesVersion", f.rulesVersion).
-				WithField("oldRulesVersion", c.rulesVersion).
-				Debugln("keeping old conntrack entry, does match new ruleset")
-		}
-
+		l.Debug(
+			"keeping old conntrack entry, does match new ruleset",
+			zap.Any("fwPacket", fp),
+			zap.Bool("incoming", c.incoming),
+			zap.Uint16("rulesVersion", f.rulesVersion),
+			zap.Uint16("oldRulesVersion", c.rulesVersion),
+		)
 		c.rulesVersion = f.rulesVersion
 	}
 
@@ -815,7 +821,7 @@ func convertRule(p interface{}, table string, i int) (rule, error) {
 			return r, errors.New("group should contain a single value, an array with more than one entry was provided")
 		}
 
-		l.Warnf("%s rule #%v; group was an array with a single value, converting to simple value", table, i)
+		l.Sugar().Warnf("%s rule #%v; group was an array with a single value, converting to simple value", table, i)
 		m["group"] = v[0]
 	}
 	r.Group = toString("group", m)

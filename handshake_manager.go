@@ -7,7 +7,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/sirupsen/logrus"
+	"go.uber.org/zap"
 )
 
 const (
@@ -78,7 +78,10 @@ func (c *HandshakeManager) Run(f EncWriter) {
 	for {
 		select {
 		case vpnIP := <-c.trigger:
-			l.WithField("vpnIp", IntIp(vpnIP)).Debug("HandshakeManager: triggered")
+			l.Debug(
+				"handshake triggered (handshake manager)",
+				zap.Uint32("vpnIp", uint32(IntIp(vpnIP))),
+			)
 			c.handleOutbound(vpnIP, f, true)
 		case now := <-clockSource.C:
 			c.NextOutboundHandshakeTimerTick(now, f)
@@ -155,19 +158,25 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 			err := c.outside.WriteTo(hostinfo.HandshakePacket[0], hostinfo.remote)
 
 			if err != nil {
-				hostinfo.logger().WithField("udpAddr", hostinfo.remote).
-					WithField("initiatorIndex", hostinfo.localIndexId).
-					WithField("remoteIndex", hostinfo.remoteIndexId).
-					WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-					WithError(err).Error("Failed to send handshake message")
+				hostinfo.logger().Error(
+					"failed to send handshake message",
+					zap.Uint32("udpIp", hostinfo.remote.IP),
+					zap.Uint16("udpPort", hostinfo.remote.Port),
+					zap.Uint32("initiatorIndex", hostinfo.localIndexId),
+					zap.Uint32("remoteIndex", hostinfo.remoteIndexId),
+					zap.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+				)
 			} else {
 				//TODO: this log line is assuming a lot of stuff around the cached stage 0 handshake packet, we should
 				// keep the real packet struct around for logging purposes
-				hostinfo.logger().WithField("udpAddr", hostinfo.remote).
-					WithField("initiatorIndex", hostinfo.localIndexId).
-					WithField("remoteIndex", hostinfo.remoteIndexId).
-					WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-					Info("Handshake message sent")
+				hostinfo.logger().Info(
+					"handshake message sent",
+					zap.Uint32("udpIp", hostinfo.remote.IP),
+					zap.Uint16("udpPort", hostinfo.remote.Port),
+					zap.Uint32("initiatorIndex", hostinfo.localIndexId),
+					zap.Uint32("remoteIndex", hostinfo.remoteIndexId),
+					zap.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+				)
 			}
 		}
 
@@ -248,14 +257,14 @@ func generateIndex() (uint32, error) {
 	b := make([]byte, 4)
 	_, err := rand.Read(b)
 	if err != nil {
-		l.Errorln(err)
+		l.Error(err.Error())
 		return 0, err
 	}
 
 	index := binary.BigEndian.Uint32(b)
-	if l.Level >= logrus.DebugLevel {
-		l.WithField("index", index).
-			Debug("Generated index")
-	}
+	l.Debug(
+		"generated index",
+		zap.Uint32("index", index),
+	)
 	return index, nil
 }

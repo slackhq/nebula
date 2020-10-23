@@ -57,7 +57,7 @@ func startGraphiteStats(i time.Duration, c *Config, configTest bool) error {
 		return fmt.Errorf("error while setting up graphite sink: %s", err)
 	}
 
-	l.Infof("Starting graphite. Interval: %s, prefix: %s, addr: %s", i, prefix, addr)
+	l.Sugar().Infof("Starting graphite. Interval: %s, prefix: %s, addr: %s", i, prefix, addr)
 	if !configTest {
 		go graphite.Graphite(metrics.DefaultRegistry, i, prefix, addr)
 	}
@@ -84,8 +84,8 @@ func startPrometheusStats(i time.Duration, c *Config, configTest bool) error {
 
 	if !configTest {
 		go func() {
-			l.Infof("Prometheus stats listening on %s at %s", listen, path)
-			http.Handle(path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: l}))
+			l.Sugar().Infof("Prometheus stats listening on %s at %s", listen, path)
+			http.Handle(path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{}))
 			log.Fatal(http.ListenAndServe(listen, nil))
 		}()
 	}

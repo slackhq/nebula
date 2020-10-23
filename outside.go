@@ -8,8 +8,8 @@ import (
 
 	"github.com/flynn/noise"
 	"github.com/golang/protobuf/proto"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"go.uber.org/zap"
 	"golang.org/x/net/ipv4"
 )
 
@@ -24,7 +24,12 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		// TODO: Might be better to send the literal []byte("holepunch") packet and ignore that?
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
 		if len(packet) > 1 {
-			l.WithField("packet", packet).Infof("Error while parsing inbound packet from %s: %s", addr, err)
+			l.Info(
+				"error parsing inbound packet",
+				zap.Any("packet", packet),
+				zap.Error(err),
+				zap.Any("from", addr),
+			)
 		}
 		return
 	}
@@ -57,9 +62,12 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 
 		d, err := f.decrypt(hostinfo, header.MessageCounter, out, packet, header, nb)
 		if err != nil {
-			hostinfo.logger().WithError(err).WithField("udpAddr", addr).
-				WithField("packet", packet).
-				Error("Failed to decrypt lighthouse packet")
+			hostinfo.logger().Error(
+				"failed to decrypt lighthouse packet",
+				zap.Any("packet", packet),
+				zap.Uint32("udpIp", addr.IP),
+				zap.Uint16("udpPort", addr.Port),
+			)
 
 			//TODO: maybe after build 64 is out? 06/14/2018 - NB
 			//f.sendRecvError(net.Addr(addr), header.RemoteIndex)
@@ -78,9 +86,12 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 
 		d, err := f.decrypt(hostinfo, header.MessageCounter, out, packet, header, nb)
 		if err != nil {
-			hostinfo.logger().WithError(err).WithField("udpAddr", addr).
-				WithField("packet", packet).
-				Error("Failed to decrypt test packet")
+			hostinfo.logger().Error(
+				"failed to decrypt test packet",
+				zap.Any("packet", packet),
+				zap.Uint32("udpIp", addr.IP),
+				zap.Uint16("udpPort", addr.Port),
+			)
 
 			//TODO: maybe after build 64 is out? 06/14/2018 - NB
 			//f.sendRecvError(net.Addr(addr), header.RemoteIndex)
@@ -115,16 +126,17 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		if !f.handleEncrypted(ci, addr, header) {
 			return
 		}
-
-		hostinfo.logger().WithField("udpAddr", addr).
-			Info("Close tunnel received, tearing down.")
-
+		hostinfo.logger().Info(
+			"close tunnel received, tearing down",
+			zap.Uint32("udpIp", addr.IP),
+			zap.Uint16("udpPort", addr.Port),
+		)
 		f.closeTunnel(hostinfo)
 		return
 
 	default:
 		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
-		hostinfo.logger().Debugf("Unexpected packet received from %s", addr)
+		hostinfo.logger().Sugar().Debugf("Unexpected packet received from %s", addr)
 		return
 	}
 
@@ -145,19 +157,26 @@ func (f *Interface) closeTunnel(hostInfo *HostInfo) {
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {
 	if hostDidRoam(hostinfo.remote, addr) {
 		if !f.lightHouse.remoteAllowList.Allow(udp2ipInt(addr)) {
-			hostinfo.logger().WithField("newAddr", addr).Debug("lighthouse.remote_allow_list denied roaming")
+			hostinfo.logger().Debug("lighthouse.remote_allow_list denied roaming", zap.Any("newAddr", addr))
 			return
 		}
 		if !hostinfo.lastRoam.IsZero() && addr.Equals(hostinfo.lastRoamRemote) && time.Since(hostinfo.lastRoam) < RoamingSupressSeconds*time.Second {
-			if l.Level >= logrus.DebugLevel {
-				hostinfo.logger().WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
-					Debugf("Supressing roam back to previous remote for %d seconds", RoamingSupressSeconds)
-			}
+			l.Debug(
+				"suppressing roam back to previous remote",
+				zap.Any("supressDurationSecs", RoamingSupressSeconds),
+				zap.Uint32("udpIp", hostinfo.remote.IP),
+				zap.Uint16("udpPort", hostinfo.remote.Port),
+			)
 			return
 		}
+		l.Info(
+			"host roamed to new udp ip/port",
+			zap.Uint32("udpIp", hostinfo.remote.IP),
+			zap.Uint16("udpPort", hostinfo.remote.Port),
+			zap.Uint32("newAddrIp", addr.IP),
+			zap.Uint16("newAddrPort", addr.Port),
+		)
 
-		hostinfo.logger().WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
-			Info("Host roamed to new udp ip/port.")
 		hostinfo.lastRoam = time.Now()
 		remoteCopy := *hostinfo.remote
 		hostinfo.lastRoamRemote = &remoteCopy
@@ -250,8 +269,10 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	}
 
 	if !hostinfo.ConnectionState.window.Update(mc) {
-		hostinfo.logger().WithField("header", header).
-			Debugln("dropping out of window packet")
+		hostinfo.logger().Debug(
+			"dropping out of window packet",
+			zap.Any("header", header),
+		)
 		return nil, errors.New("out of window packet")
 	}
 
@@ -263,7 +284,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:HeaderLen], packet[HeaderLen:], messageCounter, nb)
 	if err != nil {
-		hostinfo.logger().WithError(err).Error("Failed to decrypt packet")
+		hostinfo.logger().Error("Failed to decrypt packet", zap.Error(err))
 		//TODO: maybe after build 64 is out? 06/14/2018 - NB
 		//f.sendRecvError(hostinfo.remote, header.RemoteIndex)
 		return
@@ -271,31 +292,36 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 
 	err = newPacket(out, true, fwPacket)
 	if err != nil {
-		hostinfo.logger().WithError(err).WithField("packet", out).
-			Warnf("Error while validating inbound packet")
+		hostinfo.logger().Error(
+			"failed to validate inbound packet",
+			zap.Error(err),
+			zap.Any("packet", out),
+		)
 		return
 	}
 
 	if !hostinfo.ConnectionState.window.Update(messageCounter) {
-		hostinfo.logger().WithField("fwPacket", fwPacket).
-			Debugln("dropping out of window packet")
+		hostinfo.logger().Debug(
+			"dropping out of window packet",
+			zap.Any("fwPacket", fwPacket),
+		)
 		return
 	}
 
 	dropReason := f.firewall.Drop(out, *fwPacket, true, hostinfo, trustedCAs)
 	if dropReason != nil {
-		if l.Level >= logrus.DebugLevel {
-			hostinfo.logger().WithField("fwPacket", fwPacket).
-				WithField("reason", dropReason).
-				Debugln("dropping inbound packet")
-		}
+		hostinfo.logger().Debug(
+			"dropping inbound packet",
+			zap.String("reason", dropReason.Error()),
+			zap.Any("fwPacket", fwPacket),
+		)
 		return
 	}
 
 	f.connectionManager.In(hostinfo.hostId)
 	err = f.inside.WriteRaw(out)
 	if err != nil {
-		l.WithError(err).Error("Failed to write to tun")
+		l.Error("Failed to write to tun", zap.Error(err))
 	}
 }
 
@@ -305,25 +331,26 @@ func (f *Interface) sendRecvError(endpoint *udpAddr, index uint32) {
 	//TODO: this should be a signed message so we can trust that we should drop the index
 	b := HeaderEncode(make([]byte, HeaderLen), Version, uint8(recvError), 0, index, 0)
 	f.outside.WriteTo(b, endpoint)
-	if l.Level >= logrus.DebugLevel {
-		l.WithField("index", index).
-			WithField("udpAddr", endpoint).
-			Debug("Recv error sent")
-	}
+	l.Debug(
+		"recv error sent",
+		zap.Uint32("index", index),
+		zap.Uint32("udpIp", endpoint.IP),
+		zap.Uint16("udpPort", endpoint.Port),
+	)
 }
 
 func (f *Interface) handleRecvError(addr *udpAddr, h *Header) {
 	// This flag is to stop caring about recv_error from old versions
 	// This should go away when the old version is gone from prod
-	if l.Level >= logrus.DebugLevel {
-		l.WithField("index", h.RemoteIndex).
-			WithField("udpAddr", addr).
-			Debug("Recv error received")
-	}
-
+	l.Debug(
+		"recv error received",
+		zap.Uint32("index", h.RemoteIndex),
+		zap.Uint32("udpIp", addr.IP),
+		zap.Uint16("udpPort", addr.Port),
+	)
 	hostinfo, err := f.hostMap.QueryReverseIndex(h.RemoteIndex)
 	if err != nil {
-		l.Debugln(err, ": ", h.RemoteIndex)
+		l.Debug(err.Error(), zap.Uint32("index", h.RemoteIndex))
 		return
 	}
 
@@ -331,7 +358,13 @@ func (f *Interface) handleRecvError(addr *udpAddr, h *Header) {
 		return
 	}
 	if hostinfo.remote != nil && hostinfo.remote.String() != addr.String() {
-		l.Infoln("Someone spoofing recv_errors? ", addr, hostinfo.remote)
+		l.Warn(
+			"someone spoofing recv_errors??",
+			zap.Uint32("udpIp", addr.IP),
+			zap.Uint16("udpPort", addr.Port),
+			zap.Uint32("remoteIp", addr.IP),
+			zap.Uint16("remotePort", addr.Port),
+		)
 		return
 	}
 
