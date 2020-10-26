@@ -295,7 +295,7 @@ func (lh *LightHouse) NewRequestHandler() *LightHouseHandler {
 		},
 	}
 
-	lhh.resetIpAndPorts(10)
+	lhh.resizeIpAndPorts(10)
 
 	return lhh
 }
@@ -312,7 +312,7 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	return lhh.meta
 }
 
-func (lhh *LightHouseHandler) resetIpAndPorts(n int) []*IpAndPort {
+func (lhh *LightHouseHandler) resizeIpAndPorts(n int) {
 	if cap(lhh.iap) < n {
 		lhh.iap = make([]IpAndPort, n)
 		lhh.iapp = make([]*IpAndPort, n)
@@ -323,12 +323,10 @@ func (lhh *LightHouseHandler) resetIpAndPorts(n int) []*IpAndPort {
 	}
 	lhh.iap = lhh.iap[:n]
 	lhh.iapp = lhh.iapp[:n]
-
-	return lhh.iapp
 }
 
 func (lhh *LightHouseHandler) setIpAndPortsFromNetIps(ips []udpAddr) []*IpAndPort {
-	lhh.resetIpAndPorts(len(ips))
+	lhh.resizeIpAndPorts(len(ips))
 	for i, e := range ips {
 		lhh.iap[i] = NewIpAndPortFromUDPAddr(e)
 	}
