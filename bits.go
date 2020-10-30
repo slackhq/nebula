@@ -28,7 +28,7 @@ func NewBits(bits uint64) *Bits {
 
 func (b *Bits) Check(i uint64) bool {
 	// If i is the next number, return true.
-	if i > b.current || (i == 0 && b.firstSeen == false && b.current < b.length) {
+	if i > b.current || (i == 0 && !b.firstSeen && b.current < b.length) {
 		return true
 	}
 
@@ -51,7 +51,7 @@ func (b *Bits) Update(i uint64) bool {
 	// If i is the next number, return true and update current.
 	if i == b.current+1 {
 		// Report missed packets, we can only understand what was missed after the first window has been gone through
-		if i > b.length && b.bits[i%b.length] == false {
+		if i > b.length && !b.bits[i%b.length] {
 			b.lostCounter.Inc(1)
 		}
 		b.bits[i%b.length] = true
@@ -104,7 +104,7 @@ func (b *Bits) Update(i uint64) bool {
 	}
 
 	// Allow for the 0 packet to come in within the first window
-	if i == 0 && b.firstSeen == false && b.current < b.length {
+	if i == 0 && !b.firstSeen && b.current < b.length {
 		b.firstSeen = true
 		b.bits[i%b.length] = true
 		return true
@@ -122,7 +122,7 @@ func (b *Bits) Update(i uint64) bool {
 			return false
 		}
 
-		if b.bits[i%b.length] == true {
+		if b.bits[i%b.length] {
 			if l.Level >= logrus.DebugLevel {
 				l.WithField("receiveWindow", m{"accepted": false, "currentCounter": b.current, "incomingCounter": i, "reason": "old duplicate"}).
 					Debug("Receive window")
