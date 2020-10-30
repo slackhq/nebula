@@ -162,7 +162,7 @@ func (lh *LightHouse) DeleteVpnIP(vpnIP uint32) {
 func (lh *LightHouse) AddRemote(vpnIP uint32, toIp *udpAddr, static bool) {
 	// First we check if the sender thinks this is a static entry
 	// and do nothing if it is not, but should be considered static
-	if static == false {
+	if !static {
 		if _, ok := lh.staticList[vpnIP]; ok {
 			return
 		}

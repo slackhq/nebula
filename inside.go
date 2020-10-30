@@ -40,7 +40,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 	}
 	ci := hostinfo.ConnectionState
 
-	if ci.ready == false {
+	if !ci.ready {
 		// Because we might be sending stored packets, lock here to stop new things going to
 		// the packet queue.
 		ci.queueLock.Lock()
@@ -69,7 +69,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 
 // getOrHandshake returns nil if the vpnIp is not routable
 func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
-	if f.hostMap.vpnCIDR.Contains(int2ip(vpnIp)) == false {
+	if !f.hostMap.vpnCIDR.Contains(int2ip(vpnIp)) {
 		vpnIp = f.hostMap.queryUnsafeRoute(vpnIp)
 		if vpnIp == 0 {
 			return nil
@@ -187,7 +187,7 @@ func (f *Interface) SendMessageToAll(t NebulaMessageType, st NebulaMessageSubTyp
 		return
 	}
 
-	if hostInfo.ConnectionState.ready == false {
+	if !hostInfo.ConnectionState.ready {
 		// Because we might be sending stored packets, lock here to stop new things going to
 		// the packet queue.
 		hostInfo.ConnectionState.queueLock.Lock()
