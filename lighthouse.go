@@ -379,27 +379,29 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 		}
 	case NebulaMeta_HostMovedNotification:
 	case NebulaMeta_HostPunchNotification:
-		if !lh.IsLighthouseIP(vpnIp) {
-			return
-		}
+		/*
+			if !lh.IsLighthouseIP(vpnIp) {
+				return
+			}
 
-		empty := []byte{0}
-		for _, a := range n.Details.IpAndPorts {
-			vpnPeer := NewUDPAddr(a.Ip, uint16(a.Port))
-			go func() {
-				time.Sleep(lh.punchDelay)
-				lh.metricHolepunchTx.Inc(1)
-				lh.punchConn.WriteTo(empty, vpnPeer)
+			empty := []byte{0}
+			for _, a := range n.Details.IpAndPorts {
+				vpnPeer := NewUDPAddr(a.Ip, uint16(a.Port))
+				go func() {
+					time.Sleep(lh.punchDelay)
+					lh.metricHolepunchTx.Inc(1)
+					lh.punchConn.WriteTo(empty, vpnPeer)
 
-			}()
-			l.Debugf("Punching %s on %d for %s", IntIp(a.Ip), a.Port, IntIp(n.Details.VpnIp))
-		}
+				}()
+				l.Debugf("Punching %s on %d for %s", IntIp(a.Ip), a.Port, IntIp(n.Details.VpnIp))
+			}
+		*/
 		// This sends a nebula test packet to the host trying to contact us. In the case
 		// of a double nat or other difficult scenario, this may help establish
 		// a tunnel.
 		if lh.punchBack {
 			go func() {
-				time.Sleep(time.Second * 5)
+				time.Sleep(time.Second * 2)
 				l.Debugf("Sending a nebula test packet to vpn ip %s", IntIp(n.Details.VpnIp))
 				f.SendMessageToVpnIp(test, testRequest, n.Details.VpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 			}()
