@@ -543,12 +543,12 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 
 	hostInfo, _ := ifce.hostMap.QueryVpnIP(uint32(vpnIp))
 	if hostInfo != nil {
-		return w.WriteLine(fmt.Sprintf("Tunnel already exists"))
+		return w.WriteLine("Tunnel already exists")
 	}
 
 	hostInfo, _ = ifce.handshakeManager.pendingHostMap.QueryVpnIP(uint32(vpnIp))
 	if hostInfo != nil {
-		return w.WriteLine(fmt.Sprintf("Tunnel already handshaking"))
+		return w.WriteLine("Tunnel already handshaking")
 	}
 
 	var addr *udpAddr
