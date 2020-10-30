@@ -2,6 +2,7 @@
 Description=nebula
 Wants=basic.target
 After=basic.target network.target
+Before=sshd.service
 
 [Service]
 SyslogIdentifier=nebula
