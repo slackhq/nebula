@@ -64,8 +64,7 @@ type cachedPacket struct {
 type packetCallback func(t NebulaMessageType, st NebulaMessageSubType, h *HostInfo, p, nb, out []byte)
 
 type HostInfoDest struct {
-	active bool
-	addr   *udpAddr
+	addr *udpAddr
 	//probes       [ProbeLen]bool
 	probeCounter int
 }
@@ -675,7 +674,6 @@ func NewHostInfoDest(addr *udpAddr) *HostInfoDest {
 
 func (hid *HostInfoDest) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m{
-		"active":      hid.active,
 		"address":     hid.addr,
 		"probe_count": hid.probeCounter,
 	})
