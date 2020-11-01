@@ -383,6 +383,7 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 		if !lh.IsLighthouseIP(vpnIp) {
 			return
 		}
+		// Start tracking hosts we are punching to and don't duplicate effort here anymore
 		go func() {
 			fi := lh.punchConn.sysFd
 			//time.Sleep(time.Second * 2)
