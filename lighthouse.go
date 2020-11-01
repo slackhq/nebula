@@ -395,7 +395,7 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 					lh.metricHolepunchTx.Inc(1)
 					// If we can lock the socket just for hole punches, we can probably just reuse this
 					// instead of gopacket magic and/or reuseport/addr magic
-					syscall.SetsockoptInt(fi, 0x0, syscall.IP_TTL, 3)
+					syscall.SetsockoptInt(fi, 0x0, syscall.IP_TTL, 5)
 					lh.punchConn.WriteTo(empty, vpnPeer)
 					syscall.SetsockoptInt(fi, 0x0, syscall.IP_TTL, -1)
 
