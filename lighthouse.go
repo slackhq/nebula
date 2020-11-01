@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/golang/protobuf/proto"
@@ -383,14 +384,17 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 			return
 		}
 		go func() {
-			time.Sleep(time.Second * 2)
+			fi := lh.punchConn.sysFd
+			//time.Sleep(time.Second * 2)
 			empty := []byte{0}
 			for _, a := range n.Details.IpAndPorts {
 				vpnPeer := NewUDPAddr(a.Ip, uint16(a.Port))
 				go func() {
 					time.Sleep(lh.punchDelay)
 					lh.metricHolepunchTx.Inc(1)
+					syscall.SetsockoptInt(fi, 0x0, syscall.IP_TTL, 3)
 					lh.punchConn.WriteTo(empty, vpnPeer)
+					syscall.SetsockoptInt(fi, 0x0, syscall.IP_TTL, -1)
 
 				}()
 				l.Debugf("Punching %s on %d for %s", IntIp(a.Ip), a.Port, IntIp(n.Details.VpnIp))
