@@ -395,7 +395,8 @@ func (hm *HostMap) Punchy(conn *udpConn) {
 	for {
 		for _, addr := range hm.PunchList() {
 			metricsTxPunchy.Inc(1)
-			conn.WriteTo([]byte{1}, addr)
+			_ = addr
+			//conn.WriteTo([]byte{1}, addr)
 		}
 		time.Sleep(time.Second * 30)
 	}

@@ -387,7 +387,7 @@ func (lh *LightHouse) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *c
 		go func() {
 			fi := lh.punchConn.sysFd
 			//time.Sleep(time.Second * 2)
-			empty := []byte{0}
+			empty := []byte{0, 1, 2}
 			for _, a := range n.Details.IpAndPorts {
 				vpnPeer := NewUDPAddr(a.Ip, uint16(a.Port))
 				go func() {
