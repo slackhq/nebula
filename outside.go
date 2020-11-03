@@ -138,8 +138,7 @@ func (f *Interface) closeTunnel(hostInfo *HostInfo) {
 	f.connectionManager.ClearIP(hostInfo.hostId)
 	f.connectionManager.ClearPendingDeletion(hostInfo.hostId)
 	f.lightHouse.DeleteVpnIP(hostInfo.hostId)
-	f.hostMap.DeleteVpnIP(hostInfo.hostId)
-	f.hostMap.DeleteIndex(hostInfo.localIndexId)
+	f.hostMap.DeleteHostInfo(hostInfo)
 }
 
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {
@@ -335,17 +334,13 @@ func (f *Interface) handleRecvError(addr *udpAddr, h *Header) {
 		return
 	}
 
-	id := hostinfo.localIndexId
-	host := hostinfo.hostId
 	// We delete this host from the main hostmap
-	f.hostMap.DeleteIndex(id)
-	f.hostMap.DeleteVpnIP(host)
+	f.hostMap.DeleteHostInfo(hostinfo)
 	// We also delete it from pending to allow for
 	// fast reconnect. We must null the connectionstate
 	// or a counter reuse may happen
 	hostinfo.ConnectionState = nil
-	f.handshakeManager.DeleteIndex(id)
-	f.handshakeManager.DeleteVpnIP(host)
+	f.handshakeManager.DeleteHostInfo(hostinfo)
 }
 
 /*

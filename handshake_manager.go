@@ -99,10 +99,6 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 }
 
 func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseTriggered bool) {
-	index, err := c.pendingHostMap.GetIndexByVpnIP(vpnIP)
-	if err != nil {
-		return
-	}
 	hostinfo, err := c.pendingHostMap.QueryVpnIP(vpnIP)
 	if err != nil {
 		return
@@ -172,8 +168,7 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 			c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval*time.Duration(hostinfo.HandshakeCounter))
 		}
 	} else {
-		c.pendingHostMap.DeleteVpnIP(vpnIP)
-		c.pendingHostMap.DeleteIndex(index)
+		c.pendingHostMap.DeleteHostInfo(hostinfo)
 	}
 }
 
@@ -186,12 +181,11 @@ func (c *HandshakeManager) NextInboundHandshakeTimerTick(now time.Time) {
 		}
 		index := ep.(uint32)
 
-		vpnIP, err := c.pendingHostMap.GetVpnIPByIndex(index)
+		hostinfo, err := c.pendingHostMap.QueryIndex(index)
 		if err != nil {
 			continue
 		}
-		c.pendingHostMap.DeleteIndex(index)
-		c.pendingHostMap.DeleteVpnIP(vpnIP)
+		c.pendingHostMap.DeleteHostInfo(hostinfo)
 	}
 }
 
@@ -202,11 +196,6 @@ func (c *HandshakeManager) AddVpnIP(vpnIP uint32) *HostInfo {
 	c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval)
 
 	return hostinfo
-}
-
-func (c *HandshakeManager) DeleteVpnIP(vpnIP uint32) {
-	//l.Debugln("Deleting pending vpn ip :", IntIp(vpnIP))
-	c.pendingHostMap.DeleteVpnIP(vpnIP)
 }
 
 func (c *HandshakeManager) AddIndex(index uint32, ci *ConnectionState) (*HostInfo, error) {
@@ -223,9 +212,13 @@ func (c *HandshakeManager) AddIndexHostInfo(index uint32, h *HostInfo) {
 	c.pendingHostMap.AddIndexHostInfo(index, h)
 }
 
-func (c *HandshakeManager) DeleteIndex(index uint32) {
-	//l.Debugln("Deleting pending index :", index)
-	c.pendingHostMap.DeleteIndex(index)
+func (c *HandshakeManager) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
+	c.pendingHostMap.addRemoteIndexHostInfo(index, h)
+}
+
+func (c *HandshakeManager) DeleteHostInfo(hostinfo *HostInfo) {
+	//l.Debugln("Deleting pending hostinfo :", hostinfo)
+	c.pendingHostMap.DeleteHostInfo(hostinfo)
 }
 
 func (c *HandshakeManager) QueryIndex(index uint32) (*HostInfo, error) {
@@ -241,13 +234,19 @@ func (c *HandshakeManager) EmitStats() {
 
 func generateIndex() (uint32, error) {
 	b := make([]byte, 4)
-	_, err := rand.Read(b)
-	if err != nil {
-		l.Errorln(err)
-		return 0, err
+
+	// Let zero mean we don't know the ID, so don't generate zero
+	var index uint32
+	for index == 0 {
+		_, err := rand.Read(b)
+		if err != nil {
+			l.Errorln(err)
+			return 0, err
+		}
+
+		index = binary.BigEndian.Uint32(b)
 	}
 
-	index := binary.BigEndian.Uint32(b)
 	if l.Level >= logrus.DebugLevel {
 		l.WithField("index", index).
 			Debug("Generated index")

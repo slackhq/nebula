@@ -153,7 +153,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
 			Info("Handshake message received")
 
-		hostinfo.remoteIndexId = hs.Details.InitiatorIndex
+		f.handshakeManager.addRemoteIndexHostInfo(hs.Details.InitiatorIndex, hostinfo)
 		hs.Details.ResponderIndex = myIndex
 		hs.Details.Cert = ci.certState.rawCertificateNoKey
 
@@ -237,11 +237,11 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 					WithField("fingerprint", fingerprint).
 					WithField("action", "removing stale index").
 					WithField("index", ho.localIndexId).
+					WithField("remoteIndex", ho.remoteIndexId).
 					Debug("Handshake processing")
-				f.hostMap.DeleteIndex(ho.localIndexId)
+				f.hostMap.DeleteHostInfo(ho)
 			}
 
-			f.hostMap.AddIndexHostInfo(hostinfo.localIndexId, hostinfo)
 			f.hostMap.AddVpnIPHostInfo(vpnIP, hostinfo)
 
 			hostinfo.handshakeComplete()
@@ -355,12 +355,12 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 				WithField("fingerprint", fingerprint).
 				WithField("action", "removing stale index").
 				WithField("index", ho.localIndexId).
+				WithField("remoteIndex", ho.remoteIndexId).
 				Debug("Handshake processing")
-			f.hostMap.DeleteIndex(ho.localIndexId)
+			f.hostMap.DeleteHostInfo(ho)
 		}
 
 		f.hostMap.AddVpnIPHostInfo(vpnIP, hostinfo)
-		f.hostMap.AddIndexHostInfo(hostinfo.localIndexId, hostinfo)
 
 		hostinfo.handshakeComplete()
 		f.metricHandshakes.Update(duration)
