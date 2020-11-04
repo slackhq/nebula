@@ -9,7 +9,9 @@ import (
 	"net"
 	"os"
 	"reflect"
+	"runtime"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -219,6 +221,18 @@ func attachCommands(ssh *sshd.SSHServer, hostMap *HostMap, pendingHostMap *HostM
 		Name:             "save-heap-profile",
 		ShortDescription: "Saves a heap profile to the provided path",
 		Callback:         sshGetHeapProfile,
+	})
+
+	ssh.RegisterCommand(&sshd.Command{
+		Name:             "mutex-profile-fraction",
+		ShortDescription: "Gets or sets runtime.SetMutexProfileFraction",
+		Callback:         sshMutexProfileFraction,
+	})
+
+	ssh.RegisterCommand(&sshd.Command{
+		Name:             "save-mutex-profile",
+		ShortDescription: "Saves a mutex profile to the provided path",
+		Callback:         sshGetMutexProfile,
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
@@ -625,6 +639,49 @@ func sshGetHeapProfile(fs interface{}, a []string, w sshd.StringWriter) error {
 	}
 
 	err = w.WriteLine(fmt.Sprintf("Mem profile created at %s", a))
+	return err
+}
+
+func sshMutexProfileFraction(fs interface{}, a []string, w sshd.StringWriter) error {
+	if len(a) == 0 {
+		rate := runtime.SetMutexProfileFraction(-1)
+		return w.WriteLine(fmt.Sprintf("Current value: %d", rate))
+	}
+
+	newRate, err := strconv.Atoi(a[0])
+	if err != nil {
+		return w.WriteLine(fmt.Sprintf("Invalid argument: %s", a[0]))
+	}
+
+	oldRate := runtime.SetMutexProfileFraction(newRate)
+	return w.WriteLine(fmt.Sprintf("New value: %d. Old value: %d", newRate, oldRate))
+}
+
+func sshGetMutexProfile(fs interface{}, a []string, w sshd.StringWriter) error {
+	if len(a) == 0 {
+		return w.WriteLine("No path to write profile provided")
+	}
+
+	file, err := os.Create(a[0])
+	if err != nil {
+		err = w.WriteLine(fmt.Sprintf("Unable to create profile file: %s", err))
+		return err
+	}
+	defer file.Close()
+
+	mutexProfile := pprof.Lookup("mutex")
+	if mutexProfile == nil {
+		err = w.WriteLine("Unable to get pprof.Lookup(\"mutex\")")
+		return err
+	}
+
+	err = mutexProfile.WriteTo(file, 0)
+	if err != nil {
+		err = w.WriteLine(fmt.Sprintf("Unable to write profile: %s", err))
+		return err
+	}
+
+	err = w.WriteLine(fmt.Sprintf("Mutex profile created at %s", a))
 	return err
 }
 
