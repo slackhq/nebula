@@ -63,6 +63,10 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 		return
 	}
 
+	// We are sending handshake packet 1, so we don't expect to receive
+	// handshake packet 1 from the responder
+	ci.window.Update(1)
+
 	hostinfo.HandshakePacket[0] = msg
 	hostinfo.HandshakeReady = true
 	hostinfo.handshakeStart = time.Now()
@@ -197,6 +201,10 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		if dKey != nil && eKey != nil {
 			hostinfo.HandshakePacket[2] = make([]byte, len(msg))
 			copy(hostinfo.HandshakePacket[2], msg)
+
+			// We are sending handshake packet 2, so we don't expect to receive
+			// handshake packet 2 from the initiator.
+			ci.window.Update(2)
 
 			f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
 			err := f.outside.WriteTo(msg, addr)
