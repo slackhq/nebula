@@ -188,7 +188,7 @@ func (n *connectionManager) HandleMonitorTick(now time.Time) {
 
 		if hostinfo != nil && hostinfo.ConnectionState != nil {
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
-			n.intf.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			n.intf.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12), make([]byte, mtu))
 
 		} else {
 			hostinfo.logger().Debugf("Hostinfo sadness: %s", IntIp(vpnIP))

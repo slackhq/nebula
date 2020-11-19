@@ -144,7 +144,7 @@ func (u *udpConn) ListenOut(f *Interface) {
 	header := &Header{}
 	fwPacket := &FirewallPacket{}
 	udpAddr := &udpAddr{}
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 
 	//TODO: should we track this?
 	//metric := metrics.GetOrRegisterHistogram("test.batch_read", nil, metrics.NewExpDecaySample(1028, 0.015))

@@ -106,7 +106,7 @@ func (u *udpConn) ListenOut(f *Interface) {
 	header := &Header{}
 	fwPacket := &FirewallPacket{}
 	udpAddr := &udpAddr{}
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 
 	for {
 		// Just read one packet at a time

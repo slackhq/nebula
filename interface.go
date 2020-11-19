@@ -158,7 +158,7 @@ func (f *Interface) listenIn(i int) {
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &FirewallPacket{}
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 
 	for {
 		n, err := f.inside.Read(packet)

@@ -8,7 +8,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
-	"github.com/slackhq/nebula/util"
+	ourassert "github.com/slackhq/nebula/internal/assert"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -92,7 +92,7 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 
 	// Make sure we don't have any unexpected fields
 	assertFields(t, []string{"VpnIP", "LocalIndex", "RemoteIndex", "RemoteAddrs", "CachedPackets", "Cert", "MessageCounter", "CurrentRemote"}, thi)
-	util.AssertDeepCopyEqual(t, &expectedInfo, thi)
+	ourassert.DeepCopyEqual(t, &expectedInfo, thi)
 
 	// Make sure we don't panic if the host info doesn't have a cert yet
 	assert.NotPanics(t, func() {
