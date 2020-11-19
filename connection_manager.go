@@ -141,14 +141,17 @@ func (n *connectionManager) Start() {
 
 func (n *connectionManager) Run() {
 	clockSource := time.Tick(500 * time.Millisecond)
+	p := []byte("")
+	nb := make([]byte, 12, 12)
+	out := make([]byte, mtu)
 
 	for now := range clockSource {
-		n.HandleMonitorTick(now)
+		n.HandleMonitorTick(now, p, nb, out)
 		n.HandleDeletionTick(now)
 	}
 }
 
-func (n *connectionManager) HandleMonitorTick(now time.Time) {
+func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) {
 	n.TrafficTimer.advance(now)
 	for {
 		ep := n.TrafficTimer.Purge()
@@ -188,7 +191,7 @@ func (n *connectionManager) HandleMonitorTick(now time.Time) {
 
 		if hostinfo != nil && hostinfo.ConnectionState != nil {
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
-			n.intf.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			n.intf.SendMessageToVpnIp(test, testRequest, vpnIP, p, nb, out)
 
 		} else {
 			hostinfo.logger().Debugf("Hostinfo sadness: %s", IntIp(vpnIP))
