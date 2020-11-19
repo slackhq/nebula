@@ -20,6 +20,8 @@ type Inside interface {
 	WriteRaw([]byte) error
 }
 
+type InsideHandler func(hostInfo *HostInfo, ci *ConnectionState, addr *udpAddr, header *Header, out []byte, packet []byte, fp *FirewallPacket, nb []byte)
+
 type InterfaceConfig struct {
 	HostMap                 *HostMap
 	Outside                 *udpConn
@@ -60,6 +62,9 @@ type Interface struct {
 	udpQueues          int
 	tunQueues          int
 	version            string
+
+	// handlers are mapped by protocol version -> type -> subtype
+	handlers map[uint8]map[NebulaMessageType]map[NebulaMessageSubType]InsideHandler
 
 	metricHandshakes metrics.Histogram
 	messageMetrics   *MessageMetrics
@@ -103,6 +108,29 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 	}
 
 	ifce.connectionManager = newConnectionManager(ifce, c.checkInterval, c.pendingDeletionInterval)
+	ifce.handlers = map[uint8]map[NebulaMessageType]map[NebulaMessageSubType]InsideHandler{
+		Version: {
+			handshake: {
+				handshakeIXPSK0: ifce.rxMetrics(ifce.handleHandshakePacket),
+			},
+			message: {
+				subTypeNone: ifce.encrypted(ifce.handleMessagePacket),
+			},
+			recvError: {
+				subTypeNone: ifce.rxMetrics(ifce.handleRecvErrorPacket),
+			},
+			lightHouse: {
+				subTypeNone: ifce.rxMetrics(ifce.encrypted(ifce.handleLighthousePacket)),
+			},
+			test: {
+				testRequest: ifce.rxMetrics(ifce.encrypted(ifce.handleTestPacket)),
+				testReply:   ifce.rxMetrics(ifce.encrypted(ifce.handleTestPacket)),
+			},
+			closeTunnel: {
+				subTypeNone: ifce.rxMetrics(ifce.encrypted(ifce.handleCloseTunnelPacket)),
+			},
+		},
+	}
 
 	return ifce, nil
 }
@@ -168,7 +196,7 @@ func (f *Interface) listenIn(i int) {
 			os.Exit(2)
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out)
+		f.consumeInsidePacket(subTypeNone, packet[:n], fwPacket, nb, out)
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket, nb, out []byte) {
+func (f *Interface) consumeInsidePacket(st NebulaMessageSubType, packet []byte, fwPacket *FirewallPacket, nb, out []byte) {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
 		l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
@@ -45,7 +45,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 		// the packet queue.
 		ci.queueLock.Lock()
 		if !ci.ready {
-			hostinfo.cachePacket(message, 0, packet, f.sendMessageNow)
+			hostinfo.cachePacket(message, st, packet, f.sendMessageNow)
 			ci.queueLock.Unlock()
 			return
 		}
@@ -54,7 +54,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 
 	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, trustedCAs)
 	if dropReason == nil {
-		mc := f.sendNoMetrics(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out)
+		mc := f.sendNoMetrics(message, st, ci, hostinfo, hostinfo.remote, packet, nb, out)
 		if f.lightHouse != nil && mc%5000 == 0 {
 			f.lightHouse.Query(fwPacket.RemoteIP, f)
 		}

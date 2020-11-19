@@ -54,6 +54,7 @@ var typeMap = map[NebulaMessageType]string{
 }
 
 const (
+	subTypeNone NebulaMessageSubType = 0
 	testRequest NebulaMessageSubType = 0
 	testReply   NebulaMessageSubType = 1
 )
