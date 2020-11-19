@@ -61,6 +61,10 @@ func UnmarshalNebulaCertificate(b []byte) (*NebulaCertificate, error) {
 		return nil, err
 	}
 
+	if rc.Details == nil {
+		return nil, fmt.Errorf("encoded Details was nil")
+	}
+
 	if len(rc.Details.Ips)%2 != 0 {
 		return nil, fmt.Errorf("encoded IPs should be in pairs, an odd number was found")
 	}
