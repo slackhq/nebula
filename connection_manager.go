@@ -141,18 +141,18 @@ func (n *connectionManager) Start() {
 
 func (n *connectionManager) Run() {
 	clockSource := time.Tick(500 * time.Millisecond)
+	p := []byte("")
+	nb := make([]byte, 12, 12)
+	out := make([]byte, mtu)
 
 	for now := range clockSource {
-		n.HandleMonitorTick(now)
+		n.HandleMonitorTick(now, p, nb, out)
 		n.HandleDeletionTick(now)
 	}
 }
 
-func (n *connectionManager) HandleMonitorTick(now time.Time) {
+func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) {
 	n.TrafficTimer.advance(now)
-	p := []byte("")
-	nb := make([]byte, 12, 12)
-	out := make([]byte, mtu)
 	for {
 		ep := n.TrafficTimer.Purge()
 		if ep == nil {

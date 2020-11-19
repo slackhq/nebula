@@ -42,7 +42,10 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 
 	// Create manager
 	nc := newConnectionManager(ifce, 5, 10)
-	nc.HandleMonitorTick(now)
+	p := []byte("")
+	nb := make([]byte, 12, 12)
+	out := make([]byte, mtu)
+	nc.HandleMonitorTick(now, p, nb, out)
 	// Add an ip we have established a connection w/ to hostmap
 	hostinfo := nc.hostMap.AddVpnIP(vpnIP)
 	hostinfo.ConnectionState = &ConnectionState{
@@ -57,18 +60,18 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	assert.Contains(t, nc.hostMap.Hosts, vpnIP)
 	// Move ahead 5s. Nothing should happen
 	next_tick := now.Add(5 * time.Second)
-	nc.HandleMonitorTick(next_tick)
+	nc.HandleMonitorTick(next_tick, p, nb, out)
 	nc.HandleDeletionTick(next_tick)
 	// Move ahead 6s. We haven't heard back
 	next_tick = now.Add(6 * time.Second)
-	nc.HandleMonitorTick(next_tick)
+	nc.HandleMonitorTick(next_tick, p, nb, out)
 	nc.HandleDeletionTick(next_tick)
 	// This host should now be up for deletion
 	assert.Contains(t, nc.pendingDeletion, vpnIP)
 	assert.Contains(t, nc.hostMap.Hosts, vpnIP)
 	// Move ahead some more
 	next_tick = now.Add(45 * time.Second)
-	nc.HandleMonitorTick(next_tick)
+	nc.HandleMonitorTick(next_tick, p, nb, out)
 	nc.HandleDeletionTick(next_tick)
 	// The host should be evicted
 	assert.NotContains(t, nc.pendingDeletion, vpnIP)
@@ -105,7 +108,10 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 
 	// Create manager
 	nc := newConnectionManager(ifce, 5, 10)
-	nc.HandleMonitorTick(now)
+	p := []byte("")
+	nb := make([]byte, 12, 12)
+	out := make([]byte, mtu)
+	nc.HandleMonitorTick(now, p, nb, out)
 	// Add an ip we have established a connection w/ to hostmap
 	hostinfo := nc.hostMap.AddVpnIP(vpnIP)
 	hostinfo.ConnectionState = &ConnectionState{
@@ -120,11 +126,11 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	assert.Contains(t, nc.hostMap.Hosts, vpnIP)
 	// Move ahead 5s. Nothing should happen
 	next_tick := now.Add(5 * time.Second)
-	nc.HandleMonitorTick(next_tick)
+	nc.HandleMonitorTick(next_tick, p, nb, out)
 	nc.HandleDeletionTick(next_tick)
 	// Move ahead 6s. We haven't heard back
 	next_tick = now.Add(6 * time.Second)
-	nc.HandleMonitorTick(next_tick)
+	nc.HandleMonitorTick(next_tick, p, nb, out)
 	nc.HandleDeletionTick(next_tick)
 	// This host should now be up for deletion
 	assert.Contains(t, nc.pendingDeletion, vpnIP)
@@ -133,7 +139,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	nc.In(vpnIP)
 	// Move ahead some more
 	next_tick = now.Add(45 * time.Second)
-	nc.HandleMonitorTick(next_tick)
+	nc.HandleMonitorTick(next_tick, p, nb, out)
 	nc.HandleDeletionTick(next_tick)
 	// The host should be evicted
 	assert.NotContains(t, nc.pendingDeletion, vpnIP)
