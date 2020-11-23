@@ -247,8 +247,7 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 			if n.intf.lightHouse != nil {
 				n.intf.lightHouse.DeleteVpnIP(vpnIP)
 			}
-			n.hostMap.DeleteVpnIP(vpnIP)
-			n.hostMap.DeleteIndex(hostinfo.localIndexId)
+			n.hostMap.DeleteHostInfo(hostinfo)
 		} else {
 			n.ClearIP(vpnIP)
 			n.ClearPendingDeletion(vpnIP)

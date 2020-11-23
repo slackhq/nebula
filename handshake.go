@@ -30,7 +30,6 @@ func HandleIncomingHandshake(f *Interface, addr *udpAddr, packet []byte, h *Head
 	}
 
 	if tearDown && newHostinfo != nil {
-		f.handshakeManager.DeleteIndex(newHostinfo.localIndexId)
-		f.handshakeManager.DeleteVpnIP(newHostinfo.hostId)
+		f.handshakeManager.DeleteHostInfo(newHostinfo)
 	}
 }
