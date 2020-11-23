@@ -58,6 +58,10 @@ func (t *disabledTun) Read(b []byte) (int, error) {
 		return 0, io.EOF
 	}
 
+	if len(r) > len(b) {
+		return 0, fmt.Errorf("packet larger than mtu: %d > %d bytes", len(r), len(b))
+	}
+
 	t.tx.Inc(1)
 	if l.Level >= logrus.DebugLevel {
 		t.logger.WithField("raw", prettyPacket(r)).Debugf("Write payload")
@@ -68,7 +72,7 @@ func (t *disabledTun) Read(b []byte) (int, error) {
 
 func (t *disabledTun) handleICMPEchoRequest(b []byte) bool {
 	// Return early if this is not a simple ICMP Echo Request
-	if !(len(b) > 20 && b[0] == 0x45 && b[9] == 0x01 && b[20] == 0x08) {
+	if !(len(b) >= 28 && len(b) <= mtu && b[0] == 0x45 && b[9] == 0x01 && b[20] == 0x08) {
 		return false
 	}
 
@@ -80,7 +84,7 @@ func (t *disabledTun) handleICMPEchoRequest(b []byte) bool {
 	buf := make([]byte, len(b))
 	copy(buf, b)
 
-	// Swap dest / src IPs and recalcualte checksum
+	// Swap dest / src IPs and recalculate checksum
 	ipv4 := buf[0:20]
 	copy(ipv4[12:16], b[16:20])
 	copy(ipv4[16:20], b[12:16])
