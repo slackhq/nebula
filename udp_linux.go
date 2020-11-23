@@ -146,6 +146,8 @@ func (u *udpConn) ListenOut(f *Interface) {
 	udpAddr := &udpAddr{}
 	nb := make([]byte, 12, 12)
 
+	lhh := f.lightHouse.NewRequestHandler()
+
 	//TODO: should we track this?
 	//metric := metrics.GetOrRegisterHistogram("test.batch_read", nil, metrics.NewExpDecaySample(1028, 0.015))
 	msgs, buffers, names := u.PrepareRawMessages(f.udpBatchSize)
@@ -166,7 +168,7 @@ func (u *udpConn) ListenOut(f *Interface) {
 			udpAddr.IP = binary.BigEndian.Uint32(names[i][4:8])
 			udpAddr.Port = binary.BigEndian.Uint16(names[i][2:4])
 
-			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, nb)
+			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb)
 		}
 	}
 }
