@@ -320,6 +320,9 @@ func (f *Interface) handleRecvError(addr *udpAddr, h *Header) {
 			Debug("Recv error received")
 	}
 
+	// First, clean up in the pending hostmap
+	f.handshakeManager.pendingHostMap.DeleteReverseIndex(h.RemoteIndex)
+
 	hostinfo, err := f.hostMap.QueryReverseIndex(h.RemoteIndex)
 	if err != nil {
 		l.Debugln(err, ": ", h.RemoteIndex)
