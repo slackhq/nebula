@@ -139,6 +139,12 @@ func (n *connectionManager) Start() {
 	go n.Run()
 }
 
+func memsetZero(a []byte) {
+	for i := range a {
+		a[i] = 0
+	}
+}
+
 func (n *connectionManager) Run() {
 	clockSource := time.Tick(500 * time.Millisecond)
 	p := []byte("")
@@ -147,6 +153,9 @@ func (n *connectionManager) Run() {
 
 	for now := range clockSource {
 		n.HandleMonitorTick(now, p, nb, out)
+		memsetZero(p)
+		memsetZero(nb)
+		memsetZero(out)
 		n.HandleDeletionTick(now)
 	}
 }
