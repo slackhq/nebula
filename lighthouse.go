@@ -447,7 +447,10 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 			go func() {
 				time.Sleep(time.Second * 5)
 				l.Debugf("Sending a nebula test packet to vpn ip %s", IntIp(n.Details.VpnIp))
-				f.SendMessageToVpnIp(test, testRequest, n.Details.VpnIp, []byte(""), lhh.nb, lhh.out[:0])
+				// TODO we have to allocate a new output buffer here since we are spawning a new goroutine
+				// for each punchBack packet. We should move this into a timerwheel or a single goroutine
+				// managed by a channel.
+				f.SendMessageToVpnIp(test, testRequest, n.Details.VpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 			}()
 		}
 	}
