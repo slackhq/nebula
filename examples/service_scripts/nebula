@@ -1,0 +1,17 @@
+#!/bin/sh
+
+. /etc/rc.subr
+
+name="nebula"
+rcvar="nebula_enable"
+
+load_rc_config $name
+
+: ${nebula_log_file:="/var/log/nebula.log"}
+: ${config:="/usr/local/etc/nebula/config.yml"}
+: ${pidfile:="/var/run/nebula.pid"}
+
+command="/usr/sbin/daemon"
+command_args="-c -f -o ${nebula_log_file} -P ${pidfile} -r /usr/local/sbin/nebula -config ${config}"
+
+run_rc_command "$1"
