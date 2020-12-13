@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 )
 
 const DEFAULT_MTU = 1300
@@ -12,6 +13,7 @@ type route struct {
 	mtu   int
 	route *net.IPNet
 	via   *net.IP
+	overrides []net.IPNet
 }
 
 func parseRoutes(config *Config, network *net.IPNet) ([]route, error) {
@@ -164,6 +166,25 @@ func parseUnsafeRoutes(config *Config, network *net.IPNet) ([]route, error) {
 			)
 		}
 
+		s := config.GetMap("static_host_map", map[interface{}]interface{}{})[via]
+
+		// TODO: Currently assuming we're using first provided IP for host in static_host_map
+		
+		viaRealIps := s.([]interface{})[0].(string)
+		viaRealIps = strings.Split(viaRealIps, ":")[0] + "/32"
+
+		fmt.Printf("%s\n", viaRealIps)
+
+		_, viaRealIpNet, err := net.ParseCIDR(viaRealIps)
+
+		if err != nil {
+			return nil, fmt.Errorf("Error parsing: %s",	err)
+		}
+		
+		if ipWithin(r.route, viaRealIpNet) {
+			r.overrides = []net.IPNet{*viaRealIpNet}
+		}
+		
 		routes[i] = r
 	}
 

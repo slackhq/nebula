@@ -265,6 +265,33 @@ func (c Tun) Activate() error {
 
 	// Unsafe path routes
 	for _, r := range c.UnsafeRoutes {
+
+		// Add direct route to static host IP _before_ adding unsafe route		
+		if(r.overrides != nil){
+
+			// TODO: Assumes main link with path to static host IP is 
+			// first device after loopback
+			dlink, err := netlink.LinkByIndex(2)
+
+			fmt.Printf("adding override to link %s", dlink.Attrs().Name)
+			
+			ovr := netlink.Route{
+				LinkIndex: dlink.Attrs().Index,
+				// TODO: assumes only 1 static host to override
+				Dst:       &r.overrides[0],
+				// TODO: assumes my LAN gateway IP (figure out way to acquire default)
+				Gw:		   net.IPv4(192, 168, 0, 1),
+			}
+
+			err = netlink.RouteAdd(&ovr)
+
+			// TODO: figure out how to tidy up this route on exit
+			
+			if err != nil {
+				return fmt.Errorf("failed to set override route %v on route %v; %v", r.overrides[0], r.route, err)
+			}
+		}
+
 		nr := netlink.Route{
 			LinkIndex: link.Attrs().Index,
 			Dst:       r.route,
