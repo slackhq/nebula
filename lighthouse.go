@@ -98,7 +98,7 @@ func (lh *LightHouse) SetLocalAllowList(allowList *AllowList) {
 }
 
 func (lh *LightHouse) ValidateLHStaticEntries() error {
-	for lhIP, _ := range lh.lighthouses {
+	for lhIP := range lh.lighthouses {
 		if _, ok := lh.staticList[lhIP]; !ok {
 			return fmt.Errorf("Lighthouse %s does not have a static_host_map entry", IntIp(lhIP))
 		}

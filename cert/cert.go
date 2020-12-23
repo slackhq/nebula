@@ -406,7 +406,7 @@ func (nc *NebulaCertificate) getRawDetails() *RawNebulaCertificateDetails {
 		rd.Subnets = append(rd.Subnets, ip2int(ipNet.IP), ip2int(ipNet.Mask))
 	}
 
-	copy(rd.PublicKey, nc.Details.PublicKey[:])
+	copy(rd.PublicKey, nc.Details.PublicKey)
 
 	// I know, this is terrible
 	rd.Issuer, _ = hex.DecodeString(nc.Details.Issuer)
