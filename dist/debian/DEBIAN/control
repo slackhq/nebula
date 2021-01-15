@@ -1,0 +1,6 @@
+Package: nebula
+Version: VERSION
+Architecture: ARCHITECTURE
+Maintainer: Freifunk München <hilfe@ffmuc.net>
+Description: Nebula network connectivity daemon for encrypted communications
+ More details in https://github.com/slackhq/nebula

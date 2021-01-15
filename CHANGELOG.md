@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add Build target to build Debian packages. (#514)
+
 ## [1.5.2] - 2021-12-14
 
 ### Added
