@@ -1,5 +1,5 @@
 [Unit]
-Description=nebula
+Description=nebula for %I
 Wants=basic.target
 After=basic.target network.target
 Before=sshd.service
@@ -9,7 +9,7 @@ SyslogIdentifier=nebula
 StandardOutput=syslog
 StandardError=syslog
 ExecReload=/bin/kill -HUP $MAINPID
-ExecStart=/usr/local/bin/nebula -config /etc/nebula/config.yml
+ExecStart=/usr/local/bin/nebula -config /etc/nebula/%i.yml
 Restart=always
 
 [Install]
