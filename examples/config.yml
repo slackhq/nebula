@@ -160,6 +160,8 @@ tun:
   tx_queue: 500
   # Default MTU for every packet, safe setting is (and the default) 1300 for internet based traffic
   mtu: 1300
+  # Switch to this user after configuring the tun device (useful for running nebula as non-root)
+  #su: nebula
   # Route based MTU overrides, you have known vpn ip paths that can support larger MTUs you can increase/decrease them here
   routes:
     #- mtu: 8800

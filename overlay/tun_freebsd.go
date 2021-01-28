@@ -64,7 +64,7 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 	}, nil
 }
 
-func (t *tun) Activate() error {
+func (t *tun) Activate(changeToUser string) error {
 	var err error
 	t.ReadWriteCloser, err = os.OpenFile("/dev/"+t.Device, os.O_RDWR, 0)
 	if err != nil {
@@ -97,7 +97,11 @@ func (t *tun) Activate() error {
 		}
 	}
 
-	return nil
+	if err = ChangeToUser(t.l, changeToUser); err != nil {
+		return fmt.Errorf("failed to change users: %s", err)
+	}
+
+    return nil
 }
 
 func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {

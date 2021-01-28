@@ -73,7 +73,7 @@ func newWinTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU 
 	}, nil
 }
 
-func (t *winTun) Activate() error {
+func (t *winTun) Activate(changeToUser string) error {
 	luid := winipcfg.LUID(t.tun.LUID())
 
 	if err := luid.SetIPAddresses([]net.IPNet{*t.cidr}); err != nil {

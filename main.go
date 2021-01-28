@@ -364,6 +364,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,
+		ChangeToUser:          c.GetString("tun.su", ""),
 	}
 
 	switch ifConfig.Cipher {

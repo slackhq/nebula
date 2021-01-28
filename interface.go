@@ -43,6 +43,7 @@ type InterfaceConfig struct {
 
 	ConntrackCacheTimeout time.Duration
 	l                     *logrus.Logger
+	ChangeToUser          string
 }
 
 type Interface struct {
@@ -74,6 +75,7 @@ type Interface struct {
 
 	writers []*udp.Conn
 	readers []io.ReadWriteCloser
+	changeToUser       string
 
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
@@ -120,6 +122,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		myVpnIp:            myVpnIp,
 
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
+		changeToUser:       c.ChangeToUser,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -140,8 +143,6 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 // other services that want to bind listeners to its IP may do so successfully. However,
 // the interface isn't going to process anything until run() is called.
 func (f *Interface) activate() {
-	// actually turn on tun dev
-
 	addr, err := f.outside.LocalAddr()
 	if err != nil {
 		f.l.WithError(err).Error("Failed to get udp listen address")
@@ -165,7 +166,7 @@ func (f *Interface) activate() {
 		f.readers[i] = reader
 	}
 
-	if err := f.inside.Activate(); err != nil {
+	if err := f.inside.Activate(f.changeToUser); err != nil {
 		f.inside.Close()
 		f.l.Fatal(err)
 	}

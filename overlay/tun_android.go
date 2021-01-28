@@ -44,7 +44,7 @@ func (t *tun) RouteFor(iputil.VpnIp) iputil.VpnIp {
 	return 0
 }
 
-func (t tun) Activate() error {
+func (t tun) Activate(changeToUser string) error {
 	return nil
 }
 

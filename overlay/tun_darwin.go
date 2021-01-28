@@ -181,7 +181,7 @@ func (t *tun) Close() error {
 	return nil
 }
 
-func (t *tun) Activate() error {
+func (t *tun) Activate(changeToUser string) error {
 	devName := t.deviceBytes()
 
 	var addr, mask [4]byte
@@ -306,6 +306,10 @@ func (t *tun) Activate() error {
 		}
 
 		// TODO how to set metric
+	}
+
+	if err = ChangeToUser(t.l, changeToUser); err != nil {
+		return fmt.Errorf("failed to change users: %s", err)
 	}
 
 	return nil

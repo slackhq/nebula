@@ -38,7 +38,7 @@ func newWaterTun(l *logrus.Logger, cidr *net.IPNet, defaultMTU int, routes []Rou
 	}, nil
 }
 
-func (t *waterTun) Activate() error {
+func (t *waterTun) Activate(changeToUser string) error {
 	var err error
 	t.Interface, err = water.New(water.Config{
 		DeviceType: water.TUN,

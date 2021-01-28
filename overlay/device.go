@@ -9,7 +9,7 @@ import (
 
 type Device interface {
 	io.ReadWriteCloser
-	Activate() error
+	Activate(string) error
 	Cidr() *net.IPNet
 	Name() string
 	RouteFor(iputil.VpnIp) iputil.VpnIp

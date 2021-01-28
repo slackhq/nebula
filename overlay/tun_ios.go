@@ -38,7 +38,7 @@ func newTunFromFd(_ *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes
 	}, nil
 }
 
-func (t *tun) Activate() error {
+func (t *tun) Activate(changeToUser string) error {
 	return nil
 }
 

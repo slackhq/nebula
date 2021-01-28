@@ -82,7 +82,7 @@ func (t *TestTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
 	return 0
 }
 
-func (t *TestTun) Activate() error {
+func (t *TestTun) Activate(changeToUser string) error {
 	return nil
 }
 

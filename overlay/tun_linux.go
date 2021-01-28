@@ -190,7 +190,7 @@ func (t tun) deviceBytes() (o [16]byte) {
 	return
 }
 
-func (t tun) Activate() error {
+func (t tun) Activate(changeToUser string) error {
 	devName := t.deviceBytes()
 
 	var addr, mask [4]byte
@@ -301,6 +301,10 @@ func (t tun) Activate() error {
 	ifrf.Flags = ifrf.Flags | unix.IFF_UP | unix.IFF_RUNNING
 	if err = ioctl(fd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
 		return fmt.Errorf("failed to run tun device: %s", err)
+	}
+
+	if err = ChangeToUser(t.l, changeToUser); err != nil {
+		return fmt.Errorf("failed to change users: %s", err)
 	}
 
 	return nil
