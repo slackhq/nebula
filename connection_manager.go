@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cert"
 )
 
 // TODO: incount and outcount are intended as a shortcut to locking the mutexes for every single packet
@@ -153,6 +154,22 @@ func (n *connectionManager) Run() {
 	}
 }
 
+// Check if peer's certificate is not expired or invalid.
+func (n *connectionManager) checkToDisconnect(now time.Time, hostinfo *HostInfo) (bool, *cert.NebulaCertificate) {
+	if !n.intf.disconnectInvalid {
+		return false, nil
+	}
+
+	if remoteCert := hostinfo.GetCert(); remoteCert != nil {
+		valid, _ := remoteCert.Verify(now, n.intf.caPool)
+		if !valid {
+			return true, remoteCert
+		}
+	}
+
+	return false, nil
+}
+
 func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) {
 	n.TrafficTimer.advance(now)
 	for {
@@ -166,22 +183,36 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 		// Check for traffic coming back in from this host.
 		traf := n.CheckIn(vpnIP)
 
-		// If we saw incoming packets from this ip, just return
+		hostinfo, err := n.hostMap.QueryVpnIP(vpnIP)
+		if err != nil {
+			n.l.Debugf("Not found in hostmap: %s", IntIp(vpnIP))
+
+			if !n.intf.disconnectInvalid {
+				n.ClearIP(vpnIP)
+				n.ClearPendingDeletion(vpnIP)
+				continue
+			}
+		}
+
+		// If we set `pki.disconnect_invalid` and peer's cert is invalid,
+		// expired, etc. - disconnect immediately.
+		disconnect, remoteCert := n.checkToDisconnect(now, hostinfo)
+		if disconnect {
+			n.l.WithField("vpnIp", IntIp(vpnIP)).
+				WithField("certName", remoteCert.Details.Name).
+				Info("Invalid certificate status")
+			n.intf.closeTunnel(hostinfo, false)
+			continue
+		}
+
+		// If we saw an incoming packets from this ip and peer's certificate is not
+		// expired, just ignore.
 		if traf {
 			if n.l.Level >= logrus.DebugLevel {
 				n.l.WithField("vpnIp", IntIp(vpnIP)).
 					WithField("tunnelCheck", m{"state": "alive", "method": "passive"}).
 					Debug("Tunnel status")
 			}
-			n.ClearIP(vpnIP)
-			n.ClearPendingDeletion(vpnIP)
-			continue
-		}
-
-		// If we didn't we may need to probe or destroy the conn
-		hostinfo, err := n.hostMap.QueryVpnIP(vpnIP)
-		if err != nil {
-			n.l.Debugf("Not found in hostmap: %s", IntIp(vpnIP))
 			n.ClearIP(vpnIP)
 			n.ClearPendingDeletion(vpnIP)
 			continue
@@ -213,22 +244,37 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 
 		vpnIP := ep.(uint32)
 
-		// If we saw incoming packets from this ip, just return
+		hostinfo, err := n.hostMap.QueryVpnIP(vpnIP)
+		if err != nil {
+			n.l.Debugf("Not found in hostmap: %s", IntIp(vpnIP))
+
+			if !n.intf.disconnectInvalid {
+				n.ClearIP(vpnIP)
+				n.ClearPendingDeletion(vpnIP)
+				continue
+			}
+		}
+
+		// If we set `pki.disconnect_invalid` and peer's cert is invalid,
+		// expired, etc. - disconnect immediately.
+		disconnect, _ := n.checkToDisconnect(now, hostinfo)
+		if disconnect {
+			n.l.WithField("vpnIp", IntIp(vpnIP)).
+				Info("Invalid certificate status")
+			n.intf.closeTunnel(hostinfo, false)
+			continue
+		}
+
+		// If we saw an incoming packets from this ip and peer's certificate is not
+		// expired, just ignore.
 		traf := n.CheckIn(vpnIP)
 		if traf {
 			n.l.WithField("vpnIp", IntIp(vpnIP)).
 				WithField("tunnelCheck", m{"state": "alive", "method": "active"}).
 				Debug("Tunnel status")
-			n.ClearIP(vpnIP)
-			n.ClearPendingDeletion(vpnIP)
-			continue
-		}
 
-		hostinfo, err := n.hostMap.QueryVpnIP(vpnIP)
-		if err != nil {
 			n.ClearIP(vpnIP)
 			n.ClearPendingDeletion(vpnIP)
-			n.l.Debugf("Not found in hostmap: %s", IntIp(vpnIP))
 			continue
 		}
 
