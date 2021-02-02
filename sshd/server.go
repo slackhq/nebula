@@ -3,7 +3,7 @@ package sshd
 import (
 	"fmt"
 	"net"
-
+	
 	"github.com/armon/go-radix"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
@@ -93,6 +93,7 @@ func (s *SSHServer) Run(addr string) error {
 	var err error
 	s.listener, err = net.Listen("tcp", addr)
 	if err != nil {
+		s.l.WithField("err", err).Warn("Error starting SSH server listener, shutting down")
 		return err
 	}
 
@@ -141,21 +142,20 @@ func (s *SSHServer) Run(addr string) error {
 }
 
 func (s *SSHServer) Stop() {
+	// Close the listener first, to prevent any new connections being accepted.
+	if s.listener != nil {
+		if err := s.listener.Close(); err != nil {
+			s.l.WithError(err).Warn("Failed to close the sshd listener")
+		} else {
+			s.l.Info("SSH server stopped listening")
+		}
+	}
+
+	// Force close all existing connections.
 	for _, c := range s.conns {
 		c.Close()
 	}
 
-	if s.listener == nil {
-		return
-	}
-
-	err := s.listener.Close()
-	if err != nil {
-		s.l.WithError(err).Warn("Failed to close the sshd listener")
-		return
-	}
-
-	s.l.Info("SSH server stopped listening")
 	return
 }
 

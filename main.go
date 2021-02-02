@@ -73,10 +73,11 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		return nil, NewContextualError("Could not parse tun.unsafe_routes", nil, err)
 	}
 
+	var sshRun func()
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
 	wireSSHReload(l, ssh, config)
 	if config.GetBool("sshd.enabled", false) {
-		err = configSSH(l, ssh, config)
+		sshRun, err = configSSH(l, ssh, config)
 		if err != nil {
 			return nil, NewContextualError("Error while configuring the sshd", nil, err)
 		}
@@ -383,6 +384,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize interface: %s", err)
 		}
+		ifce.activate()
 
 		// TODO: Better way to attach these, probably want a new interface in InterfaceConfig
 		// I don't want to make this initial commit too far-reaching though
@@ -408,6 +410,10 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 
 	attachCommands(l, ssh, hostMap, handshakeManager.pendingHostMap, lightHouse, ifce)
 
+	// Start the SSH server after the nebula IP has been created
+	if sshRun != nil {
+		go sshRun()
+	}
 	// Start DNS server last to allow using the nebula IP as lighthouse.dns.host
 	if amLighthouse && serveDns {
 		l.Debugln("Starting dns server")

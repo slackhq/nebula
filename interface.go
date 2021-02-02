@@ -130,7 +130,10 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 	return ifce, nil
 }
 
-func (f *Interface) run() {
+// activate will create the interface on the host. After the interface is created, any
+// other services that want to bind to it may do so successfully. However, the interface
+// isn't going to process anything until run() is called.
+func (f *Interface) activate() {
 	// actually turn on tun dev
 
 	addr, err := f.outside.LocalAddr()
@@ -159,7 +162,9 @@ func (f *Interface) run() {
 	if err := f.inside.Activate(); err != nil {
 		f.l.Fatal(err)
 	}
+}
 
+func (f *Interface) run() {
 	// Launch n queues to read packets from udp
 	for i := 0; i < f.routines; i++ {
 		go f.listenOut(i)
