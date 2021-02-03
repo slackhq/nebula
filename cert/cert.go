@@ -127,6 +127,9 @@ func UnmarshalNebulaCertificateFromPEM(b []byte) (*NebulaCertificate, []byte, er
 	if p == nil {
 		return nil, r, fmt.Errorf("input did not contain a valid PEM encoded block")
 	}
+	if p.Type != CertBanner {
+		return nil, r, fmt.Errorf("bytes did not contain a proper nebula certificate banner")
+	}
 	nc, err := UnmarshalNebulaCertificate(p.Bytes)
 	return nc, r, err
 }
