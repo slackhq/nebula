@@ -3,7 +3,7 @@ package sshd
 import (
 	"fmt"
 	"net"
-	
+
 	"github.com/armon/go-radix"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"

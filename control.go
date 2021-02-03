@@ -14,9 +14,15 @@ import (
 // Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
 // core. This means copying IP objects, slices, de-referencing pointers and taking the actual value, etc
 
+// StartFunc accepts no arguments and returns nothing. Different services can use this to register
+// work to execute after the Interface is activated by appending their specific calls to the Control.sf field.
+// Control.Start() will invoke each function in its own goroutine, so it can be a blocking call or not.
+type StartFunc func()
+
 type Control struct {
-	f *Interface
-	l *logrus.Logger
+	f  *Interface
+	l  *logrus.Logger
+	sf []StartFunc // funcs to execute after the interface is created.
 }
 
 type ControlHostInfo struct {
@@ -32,6 +38,19 @@ type ControlHostInfo struct {
 
 // Start actually runs nebula, this is a nonblocking call. To block use Control.ShutdownBlock()
 func (c *Control) Start() {
+	// Activate the interface
+	c.f.activate()
+
+	// Call all the delayed funcs that waited patiently for the interface to be created.
+	for _, callMe := range c.sf {
+		if callMe != nil {
+			go callMe()
+		}
+	}
+	// Let the GC know we don't need these things anymore.
+	c.sf = nil
+
+	// Start reading packets.
 	c.f.run()
 }
 

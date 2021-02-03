@@ -130,9 +130,9 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 	return ifce, nil
 }
 
-// activate will create the interface on the host. After the interface is created, any
-// other services that want to bind to it may do so successfully. However, the interface
-// isn't going to process anything until run() is called.
+// activate creates the interface on the host. After the interface is created, any
+// other services that want to bind listeners to its IP may do so successfully. However,
+// the interface isn't going to process anything until run() is called.
 func (f *Interface) activate() {
 	// actually turn on tun dev
 

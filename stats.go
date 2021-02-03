@@ -17,15 +17,18 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func startStats(l *logrus.Logger, c *Config, buildVersion string, configTest bool) error {
+// startStats initializes stats from config. On success, if any futher work
+// is needed to serve stats, it returns a func to handle that work. If no
+// work is needed, it'll return nil. On failure, it returns nil, error.
+func startStats(l *logrus.Logger, c *Config, buildVersion string, configTest bool) (StartFunc, error) {
 	mType := c.GetString("stats.type", "")
 	if mType == "" || mType == "none" {
-		return nil
+		return nil, nil
 	}
 
 	interval := c.GetDuration("stats.interval", 0)
 	if interval == 0 {
-		return fmt.Errorf("stats.interval was an invalid duration: %s", c.GetString("stats.interval", ""))
+		return nil, fmt.Errorf("stats.interval was an invalid duration: %s", c.GetString("stats.interval", ""))
 	}
 
 	switch mType {
@@ -34,16 +37,16 @@ func startStats(l *logrus.Logger, c *Config, buildVersion string, configTest boo
 	case "prometheus":
 		startPrometheusStats(l, interval, c, buildVersion, configTest)
 	default:
-		return fmt.Errorf("stats.type was not understood: %s", mType)
+		return nil, fmt.Errorf("stats.type was not understood: %s", mType)
 	}
 
 	metrics.RegisterDebugGCStats(metrics.DefaultRegistry)
 	metrics.RegisterRuntimeMemStats(metrics.DefaultRegistry)
 
-	go metrics.CaptureDebugGCStats(metrics.DefaultRegistry, interval)
-	go metrics.CaptureRuntimeMemStats(metrics.DefaultRegistry, interval)
-
-	return nil
+	return func() {
+		go metrics.CaptureDebugGCStats(metrics.DefaultRegistry, interval)
+		go metrics.CaptureRuntimeMemStats(metrics.DefaultRegistry, interval)
+	}, nil
 }
 
 func startGraphiteStats(l *logrus.Logger, i time.Duration, c *Config, configTest bool) error {
