@@ -152,6 +152,8 @@ func (s *SSHServer) Stop() {
 	}
 
 	// Force close all existing connections.
+	// TODO I believe this has a slight race if the listener has just accepted
+	// a connection. Can fix by moving this to the goroutine that's accepting.
 	for _, c := range s.conns {
 		c.Close()
 	}
