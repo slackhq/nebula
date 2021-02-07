@@ -214,7 +214,7 @@ func (f *Interface) reloadCertKey(c *Config) {
 
 func (f *Interface) reloadFirewall(c *Config) {
 	//TODO: need to trigger/detect if the certificate changed too
-	if c.HasChanged("firewall") == false {
+	if !c.HasChanged("firewall") {
 		l.Debug("No firewall config change detected")
 		return
 	}

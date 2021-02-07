@@ -807,7 +807,7 @@ func localIps(allowList *AllowList) *[]net.IP {
 			case *net.IPAddr:
 				ip = v.IP
 			}
-			if ip.To4() != nil && ip.IsLoopback() == false {
+			if ip.To4() != nil && !ip.IsLoopback() {
 				allow := allowList.Allow(ip2int(ip))
 				l.WithField("localIp", ip).WithField("allow", allow).Debug("localAllowList.Allow")
 				if !allow {
