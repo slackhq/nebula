@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -142,6 +143,8 @@ func (f *Interface) run() {
 }
 
 func (f *Interface) listenOut(i int) {
+	runtime.LockOSThread()
+
 	//TODO: handle error
 	addr, err := f.outside.LocalAddr()
 	if err != nil {
@@ -163,6 +166,8 @@ func (f *Interface) listenOut(i int) {
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
+	runtime.LockOSThread()
+
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &FirewallPacket{}
