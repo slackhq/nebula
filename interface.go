@@ -101,7 +101,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		udpQueues:          c.udpQueues,
 		tunQueues:          c.tunQueues,
 		version:            c.version,
-		writers: []*udpConn{},
+		writers: make([]*udpConn, c.udpQueues),
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
