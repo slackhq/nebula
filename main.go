@@ -93,6 +93,8 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	// tun config, listeners, anything modifying the computer should be below
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+	tunQueues := config.GetInt("tun.routines", 1)
+
 	var tun Inside
 	if !configTest {
 		config.CatchHUP()
@@ -117,6 +119,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 				routes,
 				unsafeRoutes,
 				config.GetInt("tun.tx_queue", 500),
+				tunQueues > 1,
 			)
 		}
 
@@ -330,7 +333,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		DropMulticast:           config.GetBool("tun.drop_multicast", false),
 		UDPBatchSize:            config.GetInt("listen.batch", 64),
 		udpQueues:               udpQueues,
-		tunQueues:               config.GetInt("tun.routines", 1),
+		tunQueues:               tunQueues,
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
 	}

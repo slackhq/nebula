@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os/exec"
 	"strconv"
@@ -99,4 +100,8 @@ func (c *Tun) DeviceName() string {
 func (c *Tun) WriteRaw(b []byte) error {
 	_, err := c.Write(b)
 	return err
+}
+
+func (t *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
 }

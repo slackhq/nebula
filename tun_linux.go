@@ -55,8 +55,9 @@ func ipv4(addr string) (o [4]byte, err error) {
 */
 
 const (
-	cIFF_TUN   = 0x0001
-	cIFF_NO_PI = 0x1000
+	cIFF_TUN         = 0x0001
+	cIFF_NO_PI       = 0x1000
+	cIFF_MULTI_QUEUE = 0x0100
 )
 
 type ifreqAddr struct {
@@ -94,7 +95,7 @@ func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route,
 	return
 }
 
-func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		return nil, err
@@ -102,9 +103,12 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 
 	var req ifReq
 	req.Flags = uint16(cIFF_TUN | cIFF_NO_PI)
+	if multiqueue {
+		req.Flags |= cIFF_MULTI_QUEUE
+	}
 	copy(req.Name[:], deviceName)
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
-		return
+		return nil, err
 	}
 	name := strings.Trim(string(req.Name[:]), "\x00")
 
@@ -129,6 +133,24 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 		UnsafeRoutes:    unsafeRoutes,
 	}
 	return
+}
+
+func (c *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var req ifReq
+	req.Flags = uint16(cIFF_TUN | cIFF_NO_PI | cIFF_MULTI_QUEUE)
+	copy(req.Name[:], c.Device)
+	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
+		return nil, err
+	}
+
+	file := os.NewFile(uintptr(fd), "/dev/net/tun")
+
+	return file, nil
 }
 
 func (c *Tun) WriteRaw(b []byte) error {

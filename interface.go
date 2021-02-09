@@ -18,6 +18,7 @@ type Inside interface {
 	CidrNet() *net.IPNet
 	DeviceName() string
 	WriteRaw([]byte) error
+	NewMultiQueueReader() (io.ReadWriteCloser, error)
 }
 
 type InterfaceConfig struct {
@@ -128,8 +129,15 @@ func (f *Interface) run() {
 	}
 
 	// Launch n queues to read packets from tun dev
+	var reader io.ReadWriteCloser = f.inside
 	for i := 0; i < f.tunQueues; i++ {
-		go f.listenIn(i)
+		if i > 0 {
+			reader, err = f.inside.NewMultiQueueReader()
+			if err != nil {
+				l.Fatal(err)
+			}
+		}
+		go f.listenIn(reader, i)
 	}
 }
 
@@ -154,14 +162,14 @@ func (f *Interface) listenOut(i int) {
 	li.ListenOut(f)
 }
 
-func (f *Interface) listenIn(i int) {
+func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &FirewallPacket{}
 	nb := make([]byte, 12, 12)
 
 	for {
-		n, err := f.inside.Read(packet)
+		n, err := reader.Read(packet)
 		if err != nil {
 			l.WithError(err).Error("Error while reading outbound packet")
 			// This only seems to happen when something fatal happens to the fd, so exit.
