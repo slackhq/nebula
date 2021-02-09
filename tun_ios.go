@@ -18,7 +18,7 @@ type Tun struct {
 	Cidr   *net.IPNet
 }
 
-func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	return nil, fmt.Errorf("newTun not supported in iOS")
 }
 
