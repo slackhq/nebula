@@ -63,6 +63,8 @@ type Interface struct {
 	tunQueues          int
 	version            string
 
+	writers []*udpConn
+
 	metricHandshakes metrics.Histogram
 	messageMetrics   *MessageMetrics
 }
@@ -99,6 +101,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		udpQueues:          c.udpQueues,
 		tunQueues:          c.tunQueues,
 		version:            c.version,
+		writers: []*udpConn{},
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -162,6 +165,7 @@ func (f *Interface) listenOut(i int) {
 		li = f.outside
 	}
 
+	f.writers[i] = li
 	li.ListenOut(f)
 }
 
@@ -181,7 +185,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 			os.Exit(2)
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out)
+		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i)
 	}
 }
 
