@@ -139,7 +139,7 @@ func (u *udpConn) LocalAddr() (*udpAddr, error) {
 	return addr, nil
 }
 
-func (u *udpConn) ListenOut(f *Interface) {
+func (u *udpConn) ListenOut(f *Interface, q int) {
 	plaintext := make([]byte, mtu)
 	header := &Header{}
 	fwPacket := &FirewallPacket{}
@@ -168,7 +168,7 @@ func (u *udpConn) ListenOut(f *Interface) {
 			udpAddr.IP = binary.BigEndian.Uint32(names[i][4:8])
 			udpAddr.Port = binary.BigEndian.Uint16(names[i][2:4])
 
-			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb)
+			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb, q)
 		}
 	}
 }

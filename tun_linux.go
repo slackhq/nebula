@@ -174,6 +174,11 @@ func (c *Tun) WriteRaw(b []byte) error {
 	}
 }
 
+func (c *Tun) Write(b []byte) (int, error) {
+	c.WriteRaw(b)
+	return len(b), nil
+}
+
 func (c Tun) deviceBytes() (o [16]byte) {
 	for i, c := range c.Device {
 		o[i] = byte(c)
