@@ -102,8 +102,8 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		udpQueues:          c.udpQueues,
 		tunQueues:          c.tunQueues,
 		version:            c.version,
-		writers: make([]*udpConn, c.udpQueues),
-		readers: make([]io.ReadWriteCloser, c.tunQueues),
+		writers:            make([]*udpConn, c.udpQueues),
+		readers:            make([]io.ReadWriteCloser, c.tunQueues),
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -116,7 +116,6 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 
 func (f *Interface) run() {
 	// actually turn on tun dev
-
 
 	addr, err := f.outside.LocalAddr()
 	if err != nil {
