@@ -114,9 +114,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 
 func (f *Interface) run() {
 	// actually turn on tun dev
-	if err := f.inside.Activate(); err != nil {
-		l.Fatal(err)
-	}
+
 
 	addr, err := f.outside.LocalAddr()
 	if err != nil {
@@ -142,6 +140,10 @@ func (f *Interface) run() {
 			}
 		}
 		go f.listenIn(reader, i)
+	}
+
+	if err := f.inside.Activate(); err != nil {
+		l.Fatal(err)
 	}
 }
 
