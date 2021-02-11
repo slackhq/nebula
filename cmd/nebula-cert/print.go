@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
-	"path"
 	"strings"
 
 	"github.com/skip2/go-qrcode"
@@ -48,6 +47,7 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 	}
 
 	var c *cert.NebulaCertificate
+	var qrBytes []byte
 	part := 0
 
 	for {
@@ -71,16 +71,7 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 			if err != nil {
 				return fmt.Errorf("error while marshalling cert to PEM: %s", err)
 			}
-
-			b, err = qrcode.Encode(string(b), qrcode.Medium, -5)
-			if err != nil {
-				return fmt.Errorf("error while generating qr code: %s", err)
-			}
-
-			err = ioutil.WriteFile(formatFileName(*pf.outQRPath, part), b, 0600)
-			if err != nil {
-				return fmt.Errorf("error while writing out-qr: %s", err)
-			}
+			qrBytes = append(qrBytes, b...)
 		}
 
 		if rawCert == nil || len(rawCert) == 0 || strings.TrimSpace(string(rawCert)) == "" {
@@ -88,6 +79,18 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 		}
 
 		part++
+	}
+
+	if *pf.outQRPath != "" {
+		b, err := qrcode.Encode(string(qrBytes), qrcode.Medium, -5)
+		if err != nil {
+			return fmt.Errorf("error while generating qr code: %s", err)
+		}
+
+		err = ioutil.WriteFile(*pf.outQRPath, b, 0600)
+		if err != nil {
+			return fmt.Errorf("error while writing out-qr: %s", err)
+		}
 	}
 
 	return nil
@@ -102,14 +105,4 @@ func printHelp(out io.Writer) {
 	out.Write([]byte("Usage of " + os.Args[0] + " " + printSummary() + "\n"))
 	pf.set.SetOutput(out)
 	pf.set.PrintDefaults()
-}
-
-func formatFileName(file string, part int) string {
-	if part == 0 {
-		return file
-	}
-
-	partFile := file
-	ext := path.Ext(partFile)
-	return fmt.Sprintf("%v.%v%v", partFile[0:len(partFile)-len(ext)], part, ext)
 }
