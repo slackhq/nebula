@@ -26,9 +26,9 @@ type signFlags struct {
 	inPubPath   *string
 	outKeyPath  *string
 	outCertPath *string
+	outQRPath   *string
 	groups      *string
 	subnets     *string
-	outQRPath   *string
 }
 
 func newSignFlags() *signFlags {

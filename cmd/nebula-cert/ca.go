@@ -22,10 +22,10 @@ type caFlags struct {
 	duration    *time.Duration
 	outKeyPath  *string
 	outCertPath *string
+	outQRPath   *string
 	groups      *string
 	ips         *string
 	subnets     *string
-	outQRPath   *string
 }
 
 func newCaFlags() *caFlags {
