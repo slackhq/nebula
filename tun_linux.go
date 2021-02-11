@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"unsafe"
 
 	"github.com/vishvananda/netlink"
@@ -103,13 +104,13 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 	var req ifReq
 	req.Flags = uint16(cIFF_TUN | cIFF_NO_PI)
 	if multiqueue {
-		l.Error("SETTING MULTI")
 		req.Flags |= cIFF_MULTI_QUEUE
 	}
 	copy(req.Name[:], deviceName)
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
 		return nil, err
 	}
+	name := strings.Trim(string(req.Name[:]), "\x00")
 
 	file := os.NewFile(uintptr(fd), "/dev/net/tun")
 
@@ -123,7 +124,7 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 	ifce = &Tun{
 		ReadWriteCloser: file,
 		fd:              int(file.Fd()),
-		Device:          deviceName,
+		Device:          name,
 		Cidr:            cidr,
 		MaxMTU:          maxMTU,
 		DefaultMTU:      defaultMTU,
@@ -175,8 +176,7 @@ func (c *Tun) WriteRaw(b []byte) error {
 }
 
 func (c *Tun) Write(b []byte) (int, error) {
-	c.WriteRaw(b)
-	return len(b), nil
+	return len(b), c.WriteRaw(b)
 }
 
 func (c Tun) deviceBytes() (o [16]byte) {
