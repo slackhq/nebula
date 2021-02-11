@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -93,7 +94,35 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	// tun config, listeners, anything modifying the computer should be below
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-	tunQueues := config.GetInt("tun.routines", 1)
+	var tunQueues, udpQueues int
+
+	// If `routines` is set, use that and ignore the specific values
+	if routinesString := config.GetString("routines", ""); routinesString != "" {
+		var routines int
+		if routinesString == "auto" {
+			routines = (runtime.NumCPU() - 1) / 2
+			if routines < 1 {
+				routines = 1
+			}
+		} else {
+			routines = config.GetInt("routines", 1)
+		}
+		tunQueues, udpQueues = routines, routines
+		if routines > 1 {
+			l.WithField("routines", routines).Info("using multiple routines")
+		}
+	} else {
+		tunQueues = config.GetInt("tun.routines", 1)
+		udpQueues = config.GetInt("listen.routines", 1)
+		if tunQueues > udpQueues {
+			udpQueues = tunQueues
+		} else {
+			tunQueues = udpQueues
+		}
+		if tunQueues != 1 {
+			l.WithField("routines", tunQueues).Warn("setting tun.routines and listen.routines is deprecated. use `routines` instead.")
+		}
+	}
 
 	var tun Inside
 	if !configTest {
@@ -129,7 +158,6 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	}
 
 	// set up our UDP listener
-	udpQueues := config.GetInt("listen.routines", 1)
 	var udpServer *udpConn
 
 	if !configTest {
