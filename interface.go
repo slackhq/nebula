@@ -152,24 +152,13 @@ func (f *Interface) run() {
 func (f *Interface) listenOut(i int) {
 	runtime.LockOSThread()
 
-	//TODO: handle error
-	addr, err := f.outside.LocalAddr()
-	if err != nil {
-		l.WithError(err).Error("failed to discover udp listening address")
-	}
-
 	var li *udpConn
+	// TODO clean this up with a coherent interface for each outside connection
 	if i > 0 {
-		//TODO: handle error
-		li, err = NewListener(udp2ip(addr).String(), int(addr.Port), i > 0)
-		if err != nil {
-			l.WithError(err).Error("failed to make a new udp listener")
-		}
+		li = f.writers[i]
 	} else {
 		li = f.outside
 	}
-
-	f.writers[i] = li
 	li.ListenOut(f, i)
 }
 
@@ -197,7 +186,9 @@ func (f *Interface) RegisterConfigChangeCallbacks(c *Config) {
 	c.RegisterReloadCallback(f.reloadCA)
 	c.RegisterReloadCallback(f.reloadCertKey)
 	c.RegisterReloadCallback(f.reloadFirewall)
-	c.RegisterReloadCallback(f.outside.reloadConfig)
+	for _, udpConn := range f.writers {
+		c.RegisterReloadCallback(udpConn.reloadConfig)
+	}
 }
 
 func (f *Interface) reloadCA(c *Config) {
