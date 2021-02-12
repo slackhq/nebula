@@ -23,6 +23,8 @@ func Test_printHelp(t *testing.T) {
 		"Usage of "+os.Args[0]+" print <flags>: prints details about a certificate\n"+
 			"  -json\n"+
 			"    \tOptional: outputs certificates in json format\n"+
+			"  -out-qr string\n"+
+			"    \tOptional: output a qr code image (png) of the certificate\n"+
 			"  -path string\n"+
 			"    \tRequired: path to the certificate\n",
 		ob.String(),

@@ -45,6 +45,8 @@ func Test_signHelp(t *testing.T) {
 			"    \tOptional: path to write the certificate to\n"+
 			"  -out-key string\n"+
 			"    \tOptional (if in-pub not set): path to write the private key to\n"+
+			"  -out-qr string\n"+
+			"    \tOptional: output a qr code image (png) of the certificate\n"+
 			"  -subnets string\n"+
 			"    \tOptional: comma seperated list of subnet this cert can serve for\n",
 		ob.String(),
@@ -286,5 +288,4 @@ func Test_signCert(t *testing.T) {
 	assert.EqualError(t, signCert(args, ob, eb), "refusing to overwrite existing cert: "+crtF.Name())
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
-
 }
