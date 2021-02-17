@@ -1,7 +1,15 @@
+GOMINVERSION = 1.16
 NEBULA_CMD_PATH = "./cmd/nebula"
 BUILD_NUMBER ?= dev+$(shell date -u '+%Y%m%d%H%M%S')
 GO111MODULE = on
 export GO111MODULE
+
+# Ensure the version of go we are using is at least what is defined in GOMINVERSION at the top of this file
+GOVERSION := $(shell go version | awk '{print substr($$3, 3)}')
+GOISMIN := $(shell expr "$(GOVERSION)" ">=" "$(GOMINVERSION)")
+ifneq "$(GOISMIN)" "1"
+$(error "go version $(GOVERSION) is not supported, upgrade to $(GOMINVERSION) or above")
+endif
 
 LDFLAGS = -X main.Build=$(BUILD_NUMBER)
 
@@ -23,6 +31,8 @@ ALL = $(ALL_LINUX) \
 	darwin-arm64 \
 	freebsd-amd64 \
 	windows-amd64
+
+
 
 all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
 
