@@ -94,33 +94,35 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	// tun config, listeners, anything modifying the computer should be below
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-	var tunQueues, udpQueues int
+	var routines int
 
 	// If `routines` is set, use that and ignore the specific values
 	if routinesString := config.GetString("routines", ""); routinesString != "" {
-		var routines int
 		if routinesString == "auto" {
-			routines = (runtime.NumCPU() - 1) / 2
-			if routines < 1 {
-				routines = 1
-			}
+			routines = 0
 		} else {
 			routines = config.GetInt("routines", 1)
 		}
-		tunQueues, udpQueues = routines, routines
+
+		if routines == 0 {
+			routines = (runtime.NumCPU() - 1) / 2
+		}
+		if routines < 1 {
+			routines = 1
+		}
 		if routines > 1 {
 			l.WithField("routines", routines).Info("using multiple routines")
 		}
 	} else {
-		tunQueues = config.GetInt("tun.routines", 1)
-		udpQueues = config.GetInt("listen.routines", 1)
+		tunQueues := config.GetInt("tun.routines", 1)
+		udpQueues := config.GetInt("listen.routines", 1)
 		if tunQueues > udpQueues {
-			udpQueues = tunQueues
+			routines = tunQueues
 		} else {
-			tunQueues = udpQueues
+			routines = udpQueues
 		}
-		if tunQueues != 1 {
-			l.WithField("routines", tunQueues).Warn("setting tun.routines and listen.routines is deprecated. use `routines` instead.")
+		if routines != 1 {
+			l.WithField("routines", routines).Warn("setting tun.routines and listen.routines is deprecated. use `routines` instead.")
 		}
 	}
 
@@ -148,7 +150,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 				routes,
 				unsafeRoutes,
 				config.GetInt("tun.tx_queue", 500),
-				tunQueues > 1,
+				routines > 1,
 			)
 		}
 
@@ -158,12 +160,12 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	}
 
 	// set up our UDP listener
-	udpConns := make([]*udpConn, udpQueues)
+	udpConns := make([]*udpConn, routines)
 	port := config.GetInt("listen.port", 0)
 
 	if !configTest {
-		for i := 0; i < udpQueues; i++ {
-			udpServer, err := NewListener(config.GetString("listen.host", "0.0.0.0"), port, udpQueues > 1)
+		for i := 0; i < routines; i++ {
+			udpServer, err := NewListener(config.GetString("listen.host", "0.0.0.0"), port, routines > 1)
 			if err != nil {
 				return nil, NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
@@ -363,8 +365,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		DropLocalBroadcast:      config.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:           config.GetBool("tun.drop_multicast", false),
 		UDPBatchSize:            config.GetInt("listen.batch", 64),
-		udpQueues:               udpQueues,
-		tunQueues:               tunQueues,
+		routines:                routines,
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
 	}

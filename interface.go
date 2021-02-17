@@ -37,8 +37,7 @@ type InterfaceConfig struct {
 	DropLocalBroadcast      bool
 	DropMulticast           bool
 	UDPBatchSize            int
-	udpQueues               int
-	tunQueues               int
+	routines                int
 	MessageMetrics          *MessageMetrics
 	version                 string
 }
@@ -59,8 +58,7 @@ type Interface struct {
 	dropLocalBroadcast bool
 	dropMulticast      bool
 	udpBatchSize       int
-	udpQueues          int
-	tunQueues          int
+	routines           int
 	version            string
 
 	writers []*udpConn
@@ -99,11 +97,10 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		dropLocalBroadcast: c.DropLocalBroadcast,
 		dropMulticast:      c.DropMulticast,
 		udpBatchSize:       c.UDPBatchSize,
-		udpQueues:          c.udpQueues,
-		tunQueues:          c.tunQueues,
+		routines:           c.routines,
 		version:            c.version,
-		writers:            make([]*udpConn, c.udpQueues),
-		readers:            make([]io.ReadWriteCloser, c.tunQueues),
+		writers:            make([]*udpConn, c.routines),
+		readers:            make([]io.ReadWriteCloser, c.routines),
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -127,13 +124,13 @@ func (f *Interface) run() {
 		Info("Nebula interface is active")
 
 	// Launch n queues to read packets from udp
-	for i := 0; i < f.udpQueues; i++ {
+	for i := 0; i < f.routines; i++ {
 		go f.listenOut(i)
 	}
 
 	// Launch n queues to read packets from tun dev
 	var reader io.ReadWriteCloser = f.inside
-	for i := 0; i < f.tunQueues; i++ {
+	for i := 0; i < f.routines; i++ {
 		if i > 0 {
 			reader, err = f.inside.NewMultiQueueReader()
 			if err != nil {
