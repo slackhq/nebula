@@ -18,10 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
 
-    - name: Set up Go 1.15
+    - name: Set up Go 1.16
       uses: actions/setup-go@v1
       with:
-        go-version: 1.15
+        go-version: 1.16
       id: go
 
     - name: Check out code into the Go module directory
@@ -30,9 +30,9 @@ jobs:
     - uses: actions/cache@v1
       with:
         path: ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        key: ${{ runner.os }}-go1.16-${{ hashFiles('**/go.sum') }}
         restore-keys: |
-          ${{ runner.os }}-go-
+          ${{ runner.os }}-go1.16-
 
     - name: Build
       run: make all
@@ -48,10 +48,10 @@ jobs:
         os: [windows-latest, macOS-latest]
     steps:
 
-    - name: Set up Go 1.15
+    - name: Set up Go 1.16
       uses: actions/setup-go@v1
       with:
-        go-version: 1.15
+        go-version: 1.16
       id: go
 
     - name: Check out code into the Go module directory
@@ -60,9 +60,9 @@ jobs:
     - uses: actions/cache@v1
       with:
         path: ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        key: ${{ runner.os }}-go1.16-${{ hashFiles('**/go.sum') }}
         restore-keys: |
-          ${{ runner.os }}-go-
+          ${{ runner.os }}-go1.16-
 
     - name: Build nebula
       run: go build ./cmd/nebula
