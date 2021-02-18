@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -169,6 +170,17 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	fwPacket := &FirewallPacket{}
 	nb := make([]byte, 12, 12)
 
+	var cacheV uint64
+	cacheTick := new(uint64)
+	localCache := map[FirewallPacket]struct{}{}
+
+	go func() {
+		for {
+			time.Sleep(1 * time.Second)
+			atomic.AddUint64(cacheTick, 1)
+		}
+	}()
+
 	for {
 		n, err := reader.Read(packet)
 		if err != nil {
@@ -177,7 +189,12 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 			os.Exit(2)
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i)
+		if tick := atomic.LoadUint64(cacheTick); tick != cacheV {
+			cacheV = tick
+			localCache = map[FirewallPacket]struct{}{}
+		}
+
+		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, localCache)
 	}
 }
 

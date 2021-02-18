@@ -372,9 +372,9 @@ var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
 // Drop returns an error if the packet should be dropped, explaining why. It
 // returns nil if the packet should not be dropped.
-func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool) error {
+func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool, localCache map[FirewallPacket]struct{}) error {
 	// Check if we spoke to this tuple, if we did then allow this packet
-	if f.inConns(packet, fp, incoming, h, caPool) {
+	if f.inConns(packet, fp, incoming, h, caPool, localCache) {
 		return nil
 	}
 
@@ -426,7 +426,12 @@ func (f *Firewall) EmitStats() {
 	metrics.GetOrRegisterGauge("firewall.rules.version", nil).Update(int64(f.rulesVersion))
 }
 
-func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool) bool {
+func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool, localCache map[FirewallPacket]struct{}) bool {
+	if localCache != nil {
+		if _, ok := localCache[fp]; ok {
+			return true
+		}
+	}
 	conntrack := f.Conntrack
 	conntrack.Lock()
 
@@ -493,6 +498,10 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 	}
 
 	conntrack.Unlock()
+
+	if localCache != nil {
+		localCache[fp] = struct{}{}
+	}
 
 	return true
 }
