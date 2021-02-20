@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -60,6 +61,7 @@ type Interface struct {
 	udpQueues          int
 	tunQueues          int
 	version            string
+	closed             int32
 
 	metricHandshakes metrics.Histogram
 	messageMetrics   *MessageMetrics
@@ -163,6 +165,10 @@ func (f *Interface) listenIn(i int) {
 	for {
 		n, err := f.inside.Read(packet)
 		if err != nil {
+			if errors.Is(err, os.ErrClosed) && atomic.LoadInt32(&f.closed) != 0 {
+				return
+			}
+
 			l.WithError(err).Error("Error while reading outbound packet")
 			// This only seems to happen when something fatal happens to the fd, so exit.
 			os.Exit(2)
@@ -257,4 +263,11 @@ func (f *Interface) emitStats(i time.Duration) {
 		f.firewall.EmitStats()
 		f.handshakeManager.EmitStats()
 	}
+}
+
+func (f *Interface) Close() error {
+	atomic.StoreInt32(&f.closed, 1)
+
+	// Release the tun device
+	return f.inside.Close()
 }
