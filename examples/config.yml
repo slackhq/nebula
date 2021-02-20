@@ -98,7 +98,7 @@ punchy:
   # delays a punch response for misbehaving NATs, default is 1 second, respond must be true to take effect
   #delay: 1s
 
-# Cipher allows you to choose between the available ciphers for your network.
+# Cipher allows you to choose between the available ciphers for your network. Options are chachapoly or aes
 # IMPORTANT: this value must be identical on ALL NODES/LIGHTHOUSES. We do not/will not support use of different ciphers simultaneously!
 #cipher: chachapoly
 
