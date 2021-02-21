@@ -117,6 +117,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 				routes,
 				unsafeRoutes,
 				config.GetInt("tun.tx_queue", 500),
+				config.GetString("tun.interface_name", ""),
 			)
 		}
 
