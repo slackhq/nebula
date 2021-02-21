@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -21,11 +22,12 @@ import (
 const publicKeyLen = 32
 
 const (
-	CertBanner              = "NEBULA CERTIFICATE"
-	X25519PrivateKeyBanner  = "NEBULA X25519 PRIVATE KEY"
-	X25519PublicKeyBanner   = "NEBULA X25519 PUBLIC KEY"
-	Ed25519PrivateKeyBanner = "NEBULA ED25519 PRIVATE KEY"
-	Ed25519PublicKeyBanner  = "NEBULA ED25519 PUBLIC KEY"
+	CertBanner                       = "NEBULA CERTIFICATE"
+	X25519PrivateKeyBanner           = "NEBULA X25519 PRIVATE KEY"
+	X25519PublicKeyBanner            = "NEBULA X25519 PUBLIC KEY"
+	EncryptedEd25519PrivateKeyBanner = "NEBULA ED25519 ENCRYPTED PRIVATE KEY"
+	Ed25519PrivateKeyBanner          = "NEBULA ED25519 PRIVATE KEY"
+	Ed25519PublicKeyBanner           = "NEBULA ED25519 PUBLIC KEY"
 )
 
 type NebulaCertificate struct {
@@ -49,6 +51,9 @@ type NebulaCertificateDetails struct {
 }
 
 type m map[string]interface{}
+
+// Returned if we try to unmarshal an encrypted private key without a passphrase
+var ErrPrivateKeyEncrypted = errors.New("private key must be decrypted")
 
 // UnmarshalNebulaCertificate will unmarshal a protobuf byte representation of a nebula cert
 func UnmarshalNebulaCertificate(b []byte) (*NebulaCertificate, error) {
@@ -144,6 +149,15 @@ func MarshalEd25519PrivateKey(key ed25519.PrivateKey) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: Ed25519PrivateKeyBanner, Bytes: key})
 }
 
+// EncryptAndMarshalX25519PrivateKey is a simple helper to encrypt and PEM encode an X25519 private key
+func EncryptAndMarshalEd25519PrivateKey(passphrase, b []byte) ([]byte, error) {
+	b, err := encrypt(passphrase, b)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: EncryptedEd25519PrivateKeyBanner, Bytes: b}), nil
+}
+
 // UnmarshalX25519PrivateKey will try to pem decode an X25519 private key, returning any other bytes b
 // or an error on failure
 func UnmarshalX25519PrivateKey(b []byte) ([]byte, []byte, error) {
@@ -168,14 +182,43 @@ func UnmarshalEd25519PrivateKey(b []byte) (ed25519.PrivateKey, []byte, error) {
 	if k == nil {
 		return nil, r, fmt.Errorf("input did not contain a valid PEM encoded block")
 	}
-	if k.Type != Ed25519PrivateKeyBanner {
+
+	if k.Type == EncryptedEd25519PrivateKeyBanner {
+		return nil, r, ErrPrivateKeyEncrypted
+	} else if k.Type != Ed25519PrivateKeyBanner {
 		return nil, r, fmt.Errorf("bytes did not contain a proper nebula Ed25519 private key banner")
 	}
+
 	if len(k.Bytes) != ed25519.PrivateKeySize {
 		return nil, r, fmt.Errorf("key was not 64 bytes, is invalid ed25519 private key")
 	}
 
 	return k.Bytes, r, nil
+}
+
+func DecryptAndUnmarshalEd25519PrivateKey(passphrase, b []byte) (ed25519.PrivateKey, []byte, error) {
+	k, r := pem.Decode(b)
+	if k == nil {
+		return nil, r, fmt.Errorf("input did not contain a valid PEM encoded block")
+	}
+
+	var bytes []byte
+	var err error
+
+	if k.Type != EncryptedEd25519PrivateKeyBanner {
+		return nil, r, fmt.Errorf("bytes did not contain a proper nebula encrypted Ed25519 private key banner")
+	}
+
+	bytes, err = decrypt(passphrase, k.Bytes)
+	if err != nil {
+		return nil, r, err
+	}
+
+	if len(bytes) != ed25519.PrivateKeySize {
+		return nil, r, fmt.Errorf("key was not 64 bytes, is invalid ed25519 private key")
+	}
+
+	return bytes, r, nil
 }
 
 // MarshalX25519PublicKey is a simple helper to PEM encode an X25519 public key

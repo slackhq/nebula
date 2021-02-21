@@ -578,6 +578,92 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 	assert.EqualError(t, err, "input did not contain a valid PEM encoded block")
 }
 
+func TestDecryptAndUnmarshalEd25519PrivateKey(t *testing.T) {
+	passphrase := []byte("passphrase")
+	privKey := []byte(`# A good key
+-----BEGIN NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
+JGFyZ29uMmlkJHY9MTkkbT02NTUzNix0PTI0LHA9OCRYZkdMUmwzQ0JyMHg5ajlo
+bHZsVDBNVUc3NTEyUDB6bW1IcC9FeUFKR01ZJOoRtDa9ZGvjcgNw6Ifjrw4eSNaW
+UpNiMgP+hu7R5AMgWvDKbWNSnbkl5JyG7pJbFI2jpqTbSuLCsVcyloyv8aSRDLw3
+/2QGKeh00rJuJrQyOkPrsx9Y/FPfz3QF
+-----END NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
+`)
+	shortKey := []byte(`# A key which, once decrypted, is too short
+-----BEGIN NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
+JGFyZ29uMmlkJHY9MTkkbT02NTUzNix0PTI0LHA9OCR2S0lmeE9iMlZTeWtjNWNO
+eXdRY0oyZ0hIcTEzNzBEZXZycXFQYXZjeFpRJAdfsGJFQkuEYvpNhvEyau20W2eG
+ZMgcU2e9GsX883mSTy26+oPpLAWq1cv84WP1WPVcVBrr2H970BNrc4fUD9tPfW4W
+Lz0kg/F75xLcWOSM2XAkV3lTwDEvp3w=
+-----END NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
+`)
+	invalidBanner := []byte(`# Invalid banner (not encrypted)
+-----BEGIN NEBULA ED25519 PRIVATE KEY-----
+JGFyZ29uMmlkJHY9MTkkbT02NTUzNix0PTI0LHA9OCRYZkdMUmwzQ0JyMHg5ajlo
+bHZsVDBNVUc3NTEyUDB6bW1IcC9FeUFKR01ZJOoRtDa9ZGvjcgNw6Ifjrw4eSNaW
+UpNiMgP+hu7R5AMgWvDKbWNSnbkl5JyG7pJbFI2jpqTbSuLCsVcyloyv8aSRDLw3
+/2QGKeh00rJuJrQyOkPrsx9Y/FPfz3QF
+-----END NEBULA ED25519 PRIVATE KEY-----
+`)
+	invalidPem := []byte(`# Not a valid PEM format
+-BEGIN NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
+JGFyZ29uMmlkJHY9MTkkbT02NTUzNix0PTI0LHA9OCRYZkdMUmwzQ0JyMHg5ajlo
+bHZsVDBNVUc3NTEyUDB6bW1IcC9FeUFKR01ZJOoRtDa9ZGvjcgNw6Ifjrw4eSNaW
+UpNiMgP+hu7R5AMgWvDKbWNSnbkl5JyG7pJbFI2jpqTbSuLCsVcyloyv8aSRDLw3
+/2QGKeh00rJuJrQyOkPrsx9Y/FPfz3QF
+-END NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
+`)
+
+	keyBundle := appendByteSlices(privKey, shortKey, invalidBanner, invalidPem)
+
+	// Success test case
+	k, rest, err := DecryptAndUnmarshalEd25519PrivateKey(passphrase, keyBundle)
+	assert.Len(t, k, 64)
+	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
+	assert.Nil(t, err)
+
+	// Fail due to short key
+	k, rest, err = DecryptAndUnmarshalEd25519PrivateKey(passphrase, rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, appendByteSlices(invalidBanner, invalidPem))
+	assert.EqualError(t, err, "key was not 64 bytes, is invalid ed25519 private key")
+
+	// Fail due to invalid banner
+	k, rest, err = DecryptAndUnmarshalEd25519PrivateKey(passphrase, rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, invalidPem)
+	assert.EqualError(t, err, "bytes did not contain a proper nebula encrypted Ed25519 private key banner")
+
+	// Fail due to ivalid PEM format, because
+	// it's missing the requisite pre-encapsulation boundary.
+	k, rest, err = DecryptAndUnmarshalEd25519PrivateKey(passphrase, rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, invalidPem)
+	assert.EqualError(t, err, "input did not contain a valid PEM encoded block")
+
+	// Fail due to invalid passphrase
+	k, rest, err = DecryptAndUnmarshalEd25519PrivateKey([]byte("invalid passphrase"), privKey)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, []byte{})
+	assert.EqualError(t, err, "invalid passphrase or corrupt private key")
+}
+
+func TestEncryptAndMarshalEd25519PrivateKey(t *testing.T) {
+	// Having proved that decryption works correctly above, we can test the
+	// encryption function produces a value which can be decrypted
+	passphrase := []byte("passphrase")
+	bytes := []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	key, err := EncryptAndMarshalEd25519PrivateKey(passphrase, bytes)
+	assert.Nil(t, err)
+
+	// Verify the "key" can be decrypted successfully
+	k, rest, err := DecryptAndUnmarshalEd25519PrivateKey(passphrase, key)
+	assert.Len(t, k, 64)
+	assert.Equal(t, rest, []byte{})
+	assert.Nil(t, err)
+
+	// EncryptAndMarshalEd25519PrivateKey does not create any errors itself
+}
+
 func TestUnmarshalX25519PrivateKey(t *testing.T) {
 	privKey := []byte(`# A good key
 -----BEGIN NEBULA X25519 PRIVATE KEY-----

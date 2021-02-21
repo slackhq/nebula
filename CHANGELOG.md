@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `nebula-cert ca` now defaults to asking for a passphrase with which to
+  encrypt the CA's private key. You may pass `-no-encryption` to avoid a prompt
+  (e.g. for scripting.) An empty passphrase will skip encryption. The same
+  passphrase must be entered in future calls to `nebula-cert sign`. (#8)
+
 ## [1.6.1] - 2022-09-26
 
 ### Fixed

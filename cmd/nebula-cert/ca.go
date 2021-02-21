@@ -14,18 +14,20 @@ import (
 	"github.com/skip2/go-qrcode"
 	"github.com/slackhq/nebula/cert"
 	"golang.org/x/crypto/ed25519"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 type caFlags struct {
-	set         *flag.FlagSet
-	name        *string
-	duration    *time.Duration
-	outKeyPath  *string
-	outCertPath *string
-	outQRPath   *string
-	groups      *string
-	ips         *string
-	subnets     *string
+	set          *flag.FlagSet
+	name         *string
+	duration     *time.Duration
+	outKeyPath   *string
+	outCertPath  *string
+	outQRPath    *string
+	groups       *string
+	ips          *string
+	subnets      *string
+	noEncryption *bool
 }
 
 func newCaFlags() *caFlags {
@@ -39,6 +41,7 @@ func newCaFlags() *caFlags {
 	cf.groups = cf.set.String("groups", "", "Optional: comma separated list of groups. This will limit which groups subordinate certs can use")
 	cf.ips = cf.set.String("ips", "", "Optional: comma separated list of ipv4 address and network in CIDR notation. This will limit which ipv4 addresses and networks subordinate certs can use for ip addresses")
 	cf.subnets = cf.set.String("subnets", "", "Optional: comma separated list of ipv4 address and network in CIDR notation. This will limit which ipv4 addresses and networks subordinate certs can use in subnets")
+	cf.noEncryption = cf.set.Bool("no-encryption", false, "Optional: do not prompt for a passphrase, write private key in plaintext")
 	return &cf
 }
 
@@ -109,6 +112,26 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 		}
 	}
 
+	var passphrase []byte
+	if !*cf.noEncryption {
+		if !terminal.IsTerminal(int(os.Stdin.Fd())) {
+			return fmt.Errorf(
+				"out-key must be encrypted interactively, run with -no-encryption to write in plaintext")
+		}
+
+		fmt.Printf("Enter a passphrase (or empty for none): ")
+		passphrase, err = terminal.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+
+		if err != nil {
+			return fmt.Errorf("error reading password: %s", err)
+		}
+	}
+
+	if len(passphrase) == 0 {
+		fmt.Println("Warning: no passphrase specified, out-key will be written in plaintext")
+	}
+
 	pub, rawPriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return fmt.Errorf("error while generating ed25519 keys: %s", err)
@@ -140,7 +163,17 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 		return fmt.Errorf("error while signing: %s", err)
 	}
 
-	err = ioutil.WriteFile(*cf.outKeyPath, cert.MarshalEd25519PrivateKey(rawPriv), 0600)
+	if len(passphrase) > 0 {
+		b, err := cert.EncryptAndMarshalEd25519PrivateKey(passphrase, rawPriv)
+		if err != nil {
+			return fmt.Errorf("error while encrypting out-key: %s", err)
+		}
+
+		err = ioutil.WriteFile(*cf.outKeyPath, b, 0600)
+	} else {
+		err = ioutil.WriteFile(*cf.outKeyPath, cert.MarshalEd25519PrivateKey(rawPriv), 0600)
+	}
+
 	if err != nil {
 		return fmt.Errorf("error while writing out-key: %s", err)
 	}
