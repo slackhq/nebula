@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"flag"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/skip2/go-qrcode"
 	"github.com/slackhq/nebula/cert"
 	"golang.org/x/crypto/curve25519"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 type signFlags struct {
@@ -77,8 +79,36 @@ func signCert(args []string, out io.Writer, errOut io.Writer) error {
 		return fmt.Errorf("error while reading ca-key: %s", err)
 	}
 
-	caKey, _, err := cert.UnmarshalEd25519PrivateKey(rawCAKey)
-	if err != nil {
+	var caKey ed25519.PrivateKey
+
+	// naively attempt to decode the private key as though it is not encrypted
+	caKey, _, err = cert.UnmarshalEd25519PrivateKey(rawCAKey)
+	if err == cert.ErrPrivateKeyEncrypted {
+		if !terminal.IsTerminal(int(os.Stdin.Fd())) {
+			return fmt.Errorf("ca-key is encrypted and must be decrypted interactively")
+		}
+
+		// ask for a passphrase and try decrypting
+		var passphrase []byte
+		for {
+			fmt.Printf("Enter passphrase: ")
+			passphrase, err = terminal.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Println()
+
+			if err != nil {
+				return fmt.Errorf("error reading password: %s", err)
+			}
+
+			if len(passphrase) > 0 {
+				break
+			}
+		}
+
+		caKey, _, err = cert.DecryptAndUnmarshalEd25519PrivateKey(passphrase, rawCAKey)
+		if err != nil {
+			return fmt.Errorf("error while parsing encrypted ca-key: %s", err)
+		}
+	} else if err != nil {
 		return fmt.Errorf("error while parsing ca-key: %s", err)
 	}
 

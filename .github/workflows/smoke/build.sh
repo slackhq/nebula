@@ -29,7 +29,7 @@ mkdir ./build
         OUTBOUND='[{"port": "any", "proto": "icmp", "group": "lighthouse"}]' \
         ../genconfig.sh >host4.yml
 
-    ../../../../nebula-cert ca -name "Smoke Test"
+    ../../../../nebula-cert ca -no-encryption -name "Smoke Test"
     ../../../../nebula-cert sign -name "lighthouse1" -groups "lighthouse,lighthouse1" -ip "192.168.100.1/24"
     ../../../../nebula-cert sign -name "host2" -groups "host,host2" -ip "192.168.100.2/24"
     ../../../../nebula-cert sign -name "host3" -groups "host,host3" -ip "192.168.100.3/24"
