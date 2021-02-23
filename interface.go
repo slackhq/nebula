@@ -123,6 +123,8 @@ func (f *Interface) run() {
 		WithField("build", f.version).WithField("udpAddr", addr).
 		Info("Nebula interface is active")
 
+	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
+
 	// Launch n queues to read packets from udp
 	for i := 0; i < f.routines; i++ {
 		go f.listenOut(i)
