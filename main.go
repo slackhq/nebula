@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -97,16 +96,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	var routines int
 
 	// If `routines` is set, use that and ignore the specific values
-	if routinesString := config.GetString("routines", ""); routinesString != "" {
-		if routinesString == "auto" {
-			routines = 0
-		} else {
-			routines = config.GetInt("routines", 1)
-		}
-
-		if routines == 0 {
-			routines = (runtime.NumCPU() - 1) / 2
-		}
+	if routines = config.GetInt("routines", 0); routines != 0 {
 		if routines < 1 {
 			routines = 1
 		}
@@ -114,6 +104,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 			l.WithField("routines", routines).Info("using multiple routines")
 		}
 	} else {
+		// deprecated and undocumented
 		tunQueues := config.GetInt("tun.routines", 1)
 		udpQueues := config.GetInt("listen.routines", 1)
 		if tunQueues > udpQueues {
