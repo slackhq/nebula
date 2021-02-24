@@ -110,6 +110,8 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 
 	lhh := f.lightHouse.NewRequestHandler()
 
+	conntrackCache := NewConntrackCache(f.conntrackCache)
+
 	for {
 		// Just read one packet at a time
 		n, rua, err := u.ReadFromUDP(buffer)
@@ -119,7 +121,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 		}
 
 		udpAddr.UDPAddr = *rua
-		f.readOutsidePackets(udpAddr, plaintext[:0], buffer[:n], header, fwPacket, lhh, nb, q, nil)
+		f.readOutsidePackets(udpAddr, plaintext[:0], buffer[:n], header, fwPacket, lhh, nb, q, conntrackCache.Get())
 	}
 }
 

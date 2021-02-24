@@ -182,9 +182,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 			os.Exit(2)
 		}
 
-		conntrackCache.CheckTick()
-
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Cache)
+		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get())
 	}
 }
 

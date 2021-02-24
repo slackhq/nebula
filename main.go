@@ -117,10 +117,16 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		}
 	}
 
+	// EXPERIMENTAL
+	// Intentionally not documented yet while we do more testing and determine
+	// a good default value.
 	conntrackCache := config.GetDuration("firewall.conntrack.routine_cache", 0)
-	if routines > 1 && conntrackCache == 0 {
+	if routines > 1 && !config.IsSet("firewall.conntrack.routine_cache") {
 		// Use a different default if we are running with multiple routines
 		conntrackCache = 1 * time.Second
+	}
+	if conntrackCache > 0 {
+		l.WithField("duration", conntrackCache).Info("Using routine-local conntrack cache")
 	}
 
 	var tun Inside

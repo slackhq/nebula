@@ -962,12 +962,19 @@ func (c *ConntrackCache) tick(d time.Duration) {
 	}
 }
 
-func (c *ConntrackCache) CheckTick() {
+// Get checks if the cache ticker has moved to the next version before returning
+// the map. If it has moved, we reset the map.
+func (c *ConntrackCache) Get() map[FirewallPacket]struct{} {
 	if c == nil {
-		return
+		return nil
 	}
 	if tick := atomic.LoadUint64(&c.cacheTick); tick != c.cacheV {
 		c.cacheV = tick
-		c.Cache = make(map[FirewallPacket]struct{}, len(c.Cache))
+		if ll := len(c.Cache); ll > 0 {
+			l.WithField("len", ll).Info("resetting conntrack cache")
+			c.Cache = make(map[FirewallPacket]struct{}, len(c.Cache))
+		}
 	}
+
+	return c.Cache
 }

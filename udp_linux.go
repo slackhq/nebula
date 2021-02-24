@@ -165,14 +165,12 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 			continue
 		}
 
-		conntrackCache.CheckTick()
-
 		//metric.Update(int64(n))
 		for i := 0; i < n; i++ {
 			udpAddr.IP = binary.BigEndian.Uint32(names[i][4:8])
 			udpAddr.Port = binary.BigEndian.Uint16(names[i][2:4])
 
-			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb, q, conntrackCache.Cache)
+			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb, q, conntrackCache.Get())
 		}
 	}
 }
