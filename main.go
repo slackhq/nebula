@@ -101,7 +101,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 			routines = 1
 		}
 		if routines > 1 {
-			l.WithField("routines", routines).Info("using multiple routines")
+			l.WithField("routines", routines).Info("Using multiple routines")
 		}
 	} else {
 		// deprecated and undocumented
@@ -113,7 +113,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 			routines = udpQueues
 		}
 		if routines != 1 {
-			l.WithField("routines", routines).Warn("setting tun.routines and listen.routines is deprecated. use `routines` instead.")
+			l.WithField("routines", routines).Warn("Setting tun.routines and listen.routines is deprecated. Use `routines` instead")
 		}
 	}
 
