@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -931,4 +932,42 @@ func (f *Firewall) checkTCPRTT(c *conn, p []byte) bool {
 	f.metricTCPRTT.Update(time.Since(c.Sent).Nanoseconds())
 	c.Seq = 0
 	return true
+}
+
+type ConntrackCache struct {
+	cacheV    uint64
+	cacheTick uint64
+
+	Cache map[FirewallPacket]struct{}
+}
+
+func NewConntrackCache(d time.Duration) *ConntrackCache {
+	if d == 0 {
+		return nil
+	}
+
+	c := &ConntrackCache{
+		Cache: map[FirewallPacket]struct{}{},
+	}
+
+	go c.tick(d)
+
+	return c
+}
+
+func (c *ConntrackCache) tick(d time.Duration) {
+	for {
+		time.Sleep(d)
+		atomic.AddUint64(&c.cacheTick, 1)
+	}
+}
+
+func (c *ConntrackCache) CheckTick() {
+	if c == nil {
+		return
+	}
+	if tick := atomic.LoadUint64(&c.cacheTick); tick != c.cacheV {
+		c.cacheV = tick
+		c.Cache = make(map[FirewallPacket]struct{}, len(c.Cache))
+	}
 }

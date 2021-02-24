@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"runtime"
-	"sync/atomic"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -39,6 +38,7 @@ type InterfaceConfig struct {
 	DropMulticast           bool
 	UDPBatchSize            int
 	routines                int
+	ConntrackCache          time.Duration
 	MessageMetrics          *MessageMetrics
 	version                 string
 }
@@ -60,6 +60,7 @@ type Interface struct {
 	dropMulticast      bool
 	udpBatchSize       int
 	routines           int
+	conntrackCache     time.Duration
 	version            string
 
 	writers []*udpConn
@@ -99,6 +100,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		dropMulticast:      c.DropMulticast,
 		udpBatchSize:       c.UDPBatchSize,
 		routines:           c.routines,
+		conntrackCache:     c.ConntrackCache,
 		version:            c.version,
 		writers:            make([]*udpConn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
@@ -170,16 +172,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	fwPacket := &FirewallPacket{}
 	nb := make([]byte, 12, 12)
 
-	var cacheV uint64
-	cacheTick := new(uint64)
-	localCache := map[FirewallPacket]struct{}{}
-
-	go func() {
-		for {
-			time.Sleep(1 * time.Second)
-			atomic.AddUint64(cacheTick, 1)
-		}
-	}()
+	conntrackCache := NewConntrackCache(f.conntrackCache)
 
 	for {
 		n, err := reader.Read(packet)
@@ -189,12 +182,9 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 			os.Exit(2)
 		}
 
-		if tick := atomic.LoadUint64(cacheTick); tick != cacheV {
-			cacheV = tick
-			localCache = map[FirewallPacket]struct{}{}
-		}
+		conntrackCache.CheckTick()
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, localCache)
+		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Cache)
 	}
 }
 

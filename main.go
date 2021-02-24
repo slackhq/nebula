@@ -117,6 +117,12 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		}
 	}
 
+	conntrackCache := config.GetDuration("firewall.conntrack.routine_cache", 0)
+	if routines > 1 && conntrackCache == 0 {
+		// Use a different default if we are running with multiple routines
+		conntrackCache = 1 * time.Second
+	}
+
 	var tun Inside
 	if !configTest {
 		config.CatchHUP()
@@ -357,6 +363,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		DropMulticast:           config.GetBool("tun.drop_multicast", false),
 		UDPBatchSize:            config.GetInt("listen.batch", 64),
 		routines:                routines,
+		ConntrackCache:          conntrackCache,
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
 	}

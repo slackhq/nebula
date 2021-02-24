@@ -9,9 +9,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
-	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -158,16 +156,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 		read = u.ReadSingle
 	}
 
-	var cacheV uint64
-	cacheTick := new(uint64)
-	localCache := map[FirewallPacket]struct{}{}
-
-	go func() {
-		for {
-			time.Sleep(1 * time.Second)
-			atomic.AddUint64(cacheTick, 1)
-		}
-	}()
+	conntrackCache := NewConntrackCache(f.conntrackCache)
 
 	for {
 		n, err := read(msgs)
@@ -176,17 +165,14 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 			continue
 		}
 
-		if tick := atomic.LoadUint64(cacheTick); tick != cacheV {
-			cacheV = tick
-			localCache = map[FirewallPacket]struct{}{}
-		}
+		conntrackCache.CheckTick()
 
 		//metric.Update(int64(n))
 		for i := 0; i < n; i++ {
 			udpAddr.IP = binary.BigEndian.Uint32(names[i][4:8])
 			udpAddr.Port = binary.BigEndian.Uint16(names[i][2:4])
 
-			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb, q, localCache)
+			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb, q, conntrackCache.Cache)
 		}
 	}
 }
