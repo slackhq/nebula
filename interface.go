@@ -290,12 +290,10 @@ func (f *Interface) emitStats(i time.Duration) {
 		f.firewall.EmitStats()
 		f.handshakeManager.EmitStats()
 
-		if udpGauges != nil {
-			for i, w := range f.writers {
-				if err := w.getMemInfo(&meminfo); err == nil {
-					for j := 0; j < _SK_MEMINFO_VARS; j++ {
-						udpGauges[i][j].Update(int64(meminfo[j]))
-					}
+		for i, gauges := range udpGauges {
+			if err := f.writers[i].getMemInfo(&meminfo); err == nil {
+				for j := 0; j < _SK_MEMINFO_VARS; j++ {
+					gauges[j].Update(int64(meminfo[j]))
 				}
 			}
 		}
