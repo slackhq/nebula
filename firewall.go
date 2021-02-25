@@ -971,8 +971,10 @@ func (c *ConntrackCache) Get() map[FirewallPacket]struct{} {
 	if tick := atomic.LoadUint64(&c.cacheTick); tick != c.cacheV {
 		c.cacheV = tick
 		if ll := len(c.Cache); ll > 0 {
-			l.WithField("len", ll).Info("resetting conntrack cache")
-			c.Cache = make(map[FirewallPacket]struct{}, len(c.Cache))
+			if l.GetLevel() == logrus.DebugLevel {
+				l.WithField("len", ll).Debug("resetting conntrack cache")
+			}
+			c.Cache = make(map[FirewallPacket]struct{}, ll)
 		}
 	}
 
