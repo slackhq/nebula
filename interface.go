@@ -264,8 +264,41 @@ func (f *Interface) reloadFirewall(c *Config) {
 
 func (f *Interface) emitStats(i time.Duration) {
 	ticker := time.NewTicker(i)
+
+	// Check if our kernel supports SO_MEMINFO before registering the gauges
+	var udpGauges [_SK_MEMINFO_VARS]metrics.Gauge
+	var meminfo _SK_MEMINFO
+	if err := f.writers[0].getMemInfo(&meminfo); err == nil {
+		udpGauges = [_SK_MEMINFO_VARS]metrics.Gauge{
+			metrics.GetOrRegisterGauge("udp.rmem_alloc", nil),
+			metrics.GetOrRegisterGauge("udp.rcvbuf", nil),
+			metrics.GetOrRegisterGauge("udp.wmem_alloc", nil),
+			metrics.GetOrRegisterGauge("udp.sndbuf", nil),
+			metrics.GetOrRegisterGauge("udp.fwd_alloc", nil),
+			metrics.GetOrRegisterGauge("udp.wmem_queued", nil),
+			metrics.GetOrRegisterGauge("udp.optmem", nil),
+			metrics.GetOrRegisterGauge("udp.backlog", nil),
+			metrics.GetOrRegisterGauge("udp.drops", nil),
+		}
+	}
+
 	for range ticker.C {
 		f.firewall.EmitStats()
 		f.handshakeManager.EmitStats()
+
+		if udpGauges[0] != nil {
+			var totals [_SK_MEMINFO_VARS]int64
+			for _, w := range f.writers {
+				if err := w.getMemInfo(&meminfo); err == nil {
+					for i := 0; i < _SK_MEMINFO_VARS; i++ {
+						totals[i] += int64(meminfo[i])
+					}
+				}
+			}
+
+			for i := 0; i < _SK_MEMINFO_VARS; i++ {
+				udpGauges[i].Update(totals[i])
+			}
+		}
 	}
 }

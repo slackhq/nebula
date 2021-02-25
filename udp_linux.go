@@ -55,6 +55,23 @@ type rawSockaddrAny struct {
 
 var x int
 
+// From linux/sock_diag.h
+const (
+	_SK_MEMINFO_RMEM_ALLOC = iota
+	_SK_MEMINFO_RCVBUF
+	_SK_MEMINFO_WMEM_ALLOC
+	_SK_MEMINFO_SNDBUF
+	_SK_MEMINFO_FWD_ALLOC
+	_SK_MEMINFO_WMEM_QUEUED
+	_SK_MEMINFO_OPTMEM
+	_SK_MEMINFO_BACKLOG
+	_SK_MEMINFO_DROPS
+
+	_SK_MEMINFO_VARS
+)
+
+type _SK_MEMINFO [_SK_MEMINFO_VARS]uint32
+
 func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 	syscall.ForkLock.RLock()
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
@@ -279,6 +296,15 @@ func (u *udpConn) reloadConfig(c *Config) {
 			l.WithError(err).Error("Failed to set listen.write_buffer")
 		}
 	}
+}
+
+func (u *udpConn) getMemInfo(meminfo *_SK_MEMINFO) error {
+	var vallen uint32 = 4 * _SK_MEMINFO_VARS
+	_, _, err := unix.Syscall6(unix.SYS_GETSOCKOPT, uintptr(u.sysFd), uintptr(unix.SOL_SOCKET), uintptr(unix.SO_MEMINFO), uintptr(unsafe.Pointer(meminfo)), uintptr(unsafe.Pointer(&vallen)), 0)
+	if err != 0 {
+		return err
+	}
+	return nil
 }
 
 func (ua *udpAddr) Equals(t *udpAddr) bool {
