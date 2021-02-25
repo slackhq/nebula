@@ -100,7 +100,7 @@ type rawMessage struct {
 	Len uint32
 }
 
-func (u *udpConn) ListenOut(f *Interface) {
+func (u *udpConn) ListenOut(f *Interface, q int) {
 	plaintext := make([]byte, mtu)
 	buffer := make([]byte, mtu)
 	header := &Header{}
@@ -119,7 +119,7 @@ func (u *udpConn) ListenOut(f *Interface) {
 		}
 
 		udpAddr.UDPAddr = *rua
-		f.readOutsidePackets(udpAddr, plaintext[:0], buffer[:n], header, fwPacket, lhh, nb)
+		f.readOutsidePackets(udpAddr, plaintext[:0], buffer[:n], header, fwPacket, lhh, nb, q)
 	}
 }
 

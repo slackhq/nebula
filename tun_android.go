@@ -37,7 +37,7 @@ func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route,
 	return
 }
 
-func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	return nil, fmt.Errorf("newTun not supported in Android")
 }
 
@@ -73,4 +73,8 @@ func (c *Tun) CidrNet() *net.IPNet {
 
 func (c *Tun) DeviceName() string {
 	return c.Device
+}
+
+func (t *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+	return nil, fmt.Errorf("TODO: multiqueue not implemented for android")
 }

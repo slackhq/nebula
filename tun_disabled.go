@@ -50,6 +50,10 @@ func (t *disabledTun) WriteRaw(b []byte) error {
 	return err
 }
 
+func (t *disabledTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+	return t, nil
+}
+
 func (t *disabledTun) Close() error {
 	if t.block != nil {
 		close(t.block)

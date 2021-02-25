@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -18,6 +19,7 @@ type Inside interface {
 	CidrNet() *net.IPNet
 	DeviceName() string
 	WriteRaw([]byte) error
+	NewMultiQueueReader() (io.ReadWriteCloser, error)
 }
 
 type InterfaceConfig struct {
@@ -35,8 +37,7 @@ type InterfaceConfig struct {
 	DropLocalBroadcast      bool
 	DropMulticast           bool
 	UDPBatchSize            int
-	udpQueues               int
-	tunQueues               int
+	routines                int
 	MessageMetrics          *MessageMetrics
 	version                 string
 }
@@ -57,9 +58,11 @@ type Interface struct {
 	dropLocalBroadcast bool
 	dropMulticast      bool
 	udpBatchSize       int
-	udpQueues          int
-	tunQueues          int
+	routines           int
 	version            string
+
+	writers []*udpConn
+	readers []io.ReadWriteCloser
 
 	metricHandshakes metrics.Histogram
 	messageMetrics   *MessageMetrics
@@ -94,9 +97,10 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		dropLocalBroadcast: c.DropLocalBroadcast,
 		dropMulticast:      c.DropMulticast,
 		udpBatchSize:       c.UDPBatchSize,
-		udpQueues:          c.udpQueues,
-		tunQueues:          c.tunQueues,
+		routines:           c.routines,
 		version:            c.version,
+		writers:            make([]*udpConn, c.routines),
+		readers:            make([]io.ReadWriteCloser, c.routines),
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -109,9 +113,6 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 
 func (f *Interface) run() {
 	// actually turn on tun dev
-	if err := f.inside.Activate(); err != nil {
-		l.Fatal(err)
-	}
 
 	addr, err := f.outside.LocalAddr()
 	if err != nil {
@@ -122,53 +123,61 @@ func (f *Interface) run() {
 		WithField("build", f.version).WithField("udpAddr", addr).
 		Info("Nebula interface is active")
 
+	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
+
 	// Launch n queues to read packets from udp
-	for i := 0; i < f.udpQueues; i++ {
+	for i := 0; i < f.routines; i++ {
 		go f.listenOut(i)
 	}
 
 	// Launch n queues to read packets from tun dev
-	for i := 0; i < f.tunQueues; i++ {
-		go f.listenIn(i)
+	var reader io.ReadWriteCloser = f.inside
+	for i := 0; i < f.routines; i++ {
+		if i > 0 {
+			reader, err = f.inside.NewMultiQueueReader()
+			if err != nil {
+				l.Fatal(err)
+			}
+		}
+		f.readers[i] = reader
+		go f.listenIn(reader, i)
+	}
+
+	if err := f.inside.Activate(); err != nil {
+		l.Fatal(err)
 	}
 }
 
 func (f *Interface) listenOut(i int) {
-	//TODO: handle error
-	addr, err := f.outside.LocalAddr()
-	if err != nil {
-		l.WithError(err).Error("failed to discover udp listening address")
-	}
+	runtime.LockOSThread()
 
 	var li *udpConn
+	// TODO clean this up with a coherent interface for each outside connection
 	if i > 0 {
-		//TODO: handle error
-		li, err = NewListener(udp2ip(addr).String(), int(addr.Port), i > 0)
-		if err != nil {
-			l.WithError(err).Error("failed to make a new udp listener")
-		}
+		li = f.writers[i]
 	} else {
 		li = f.outside
 	}
-
-	li.ListenOut(f)
+	li.ListenOut(f, i)
 }
 
-func (f *Interface) listenIn(i int) {
+func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
+	runtime.LockOSThread()
+
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &FirewallPacket{}
 	nb := make([]byte, 12, 12)
 
 	for {
-		n, err := f.inside.Read(packet)
+		n, err := reader.Read(packet)
 		if err != nil {
 			l.WithError(err).Error("Error while reading outbound packet")
 			// This only seems to happen when something fatal happens to the fd, so exit.
 			os.Exit(2)
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out)
+		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i)
 	}
 }
 
@@ -176,7 +185,9 @@ func (f *Interface) RegisterConfigChangeCallbacks(c *Config) {
 	c.RegisterReloadCallback(f.reloadCA)
 	c.RegisterReloadCallback(f.reloadCertKey)
 	c.RegisterReloadCallback(f.reloadFirewall)
-	c.RegisterReloadCallback(f.outside.reloadConfig)
+	for _, udpConn := range f.writers {
+		c.RegisterReloadCallback(udpConn.reloadConfig)
+	}
 }
 
 func (f *Interface) reloadCA(c *Config) {

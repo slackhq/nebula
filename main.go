@@ -93,6 +93,30 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	// tun config, listeners, anything modifying the computer should be below
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+	var routines int
+
+	// If `routines` is set, use that and ignore the specific values
+	if routines = config.GetInt("routines", 0); routines != 0 {
+		if routines < 1 {
+			routines = 1
+		}
+		if routines > 1 {
+			l.WithField("routines", routines).Info("Using multiple routines")
+		}
+	} else {
+		// deprecated and undocumented
+		tunQueues := config.GetInt("tun.routines", 1)
+		udpQueues := config.GetInt("listen.routines", 1)
+		if tunQueues > udpQueues {
+			routines = tunQueues
+		} else {
+			routines = udpQueues
+		}
+		if routines != 1 {
+			l.WithField("routines", routines).Warn("Setting tun.routines and listen.routines is deprecated. Use `routines` instead")
+		}
+	}
+
 	var tun Inside
 	if !configTest {
 		config.CatchHUP()
@@ -117,6 +141,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 				routes,
 				unsafeRoutes,
 				config.GetInt("tun.tx_queue", 500),
+				routines > 1,
 			)
 		}
 
@@ -126,15 +151,27 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	}
 
 	// set up our UDP listener
-	udpQueues := config.GetInt("listen.routines", 1)
-	var udpServer *udpConn
+	udpConns := make([]*udpConn, routines)
+	port := config.GetInt("listen.port", 0)
 
 	if !configTest {
-		udpServer, err = NewListener(config.GetString("listen.host", "0.0.0.0"), config.GetInt("listen.port", 0), udpQueues > 1)
-		if err != nil {
-			return nil, NewContextualError("Failed to open udp listener", nil, err)
+		for i := 0; i < routines; i++ {
+			udpServer, err := NewListener(config.GetString("listen.host", "0.0.0.0"), port, routines > 1)
+			if err != nil {
+				return nil, NewContextualError("Failed to open udp listener", m{"queue": i}, err)
+			}
+			udpServer.reloadConfig(config)
+			udpConns[i] = udpServer
+
+			// If port is dynamic, discover it
+			if port == 0 {
+				uPort, err := udpServer.LocalAddr()
+				if err != nil {
+					return nil, NewContextualError("Failed to get listening port", nil, err)
+				}
+				port = int(uPort.Port)
+			}
 		}
-		udpServer.reloadConfig(config)
 	}
 
 	// Set up my internal host map
@@ -190,17 +227,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	punchy := NewPunchyFromConfig(config)
 	if punchy.Punch && !configTest {
 		l.Info("UDP hole punching enabled")
-		go hostMap.Punchy(udpServer)
-	}
-
-	port := config.GetInt("listen.port", 0)
-	// If port is dynamic, discover it
-	if port == 0 && !configTest {
-		uPort, err := udpServer.LocalAddr()
-		if err != nil {
-			return nil, NewContextualError("Failed to get listening port", nil, err)
-		}
-		port = int(uPort.Port)
+		go hostMap.Punchy(udpConns[0])
 	}
 
 	amLighthouse := config.GetBool("lighthouse.am_lighthouse", false)
@@ -230,7 +257,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		//TODO: change to a duration
 		config.GetInt("lighthouse.interval", 10),
 		port,
-		udpServer,
+		udpConns[0],
 		punchy.Respond,
 		punchy.Delay,
 		config.GetBool("stats.lighthouse_metrics", false),
@@ -304,7 +331,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		messageMetrics: messageMetrics,
 	}
 
-	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpServer, handshakeConfig)
+	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
 
 	//TODO: These will be reused for psk
@@ -317,7 +344,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	ifConfig := &InterfaceConfig{
 		HostMap:                 hostMap,
 		Inside:                  tun,
-		Outside:                 udpServer,
+		Outside:                 udpConns[0],
 		certState:               cs,
 		Cipher:                  config.GetString("cipher", "aes"),
 		Firewall:                fw,
@@ -329,8 +356,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		DropLocalBroadcast:      config.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:           config.GetBool("tun.drop_multicast", false),
 		UDPBatchSize:            config.GetInt("listen.batch", 64),
-		udpQueues:               udpQueues,
-		tunQueues:               config.GetInt("tun.routines", 1),
+		routines:                routines,
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
 	}
@@ -350,6 +376,10 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize interface: %s", err)
 		}
+
+		// TODO: Better way to attach these, probably want a new interface in InterfaceConfig
+		// I don't want to make this initial commit too far-reaching though
+		ifce.writers = udpConns
 
 		ifce.RegisterConfigChangeCallbacks(config)
 
