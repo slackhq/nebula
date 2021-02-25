@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -266,19 +267,22 @@ func (f *Interface) emitStats(i time.Duration) {
 	ticker := time.NewTicker(i)
 
 	// Check if our kernel supports SO_MEMINFO before registering the gauges
-	var udpGauges [_SK_MEMINFO_VARS]metrics.Gauge
+	var udpGauges [][_SK_MEMINFO_VARS]metrics.Gauge
 	var meminfo _SK_MEMINFO
 	if err := f.writers[0].getMemInfo(&meminfo); err == nil {
-		udpGauges = [_SK_MEMINFO_VARS]metrics.Gauge{
-			metrics.GetOrRegisterGauge("udp.rmem_alloc", nil),
-			metrics.GetOrRegisterGauge("udp.rcvbuf", nil),
-			metrics.GetOrRegisterGauge("udp.wmem_alloc", nil),
-			metrics.GetOrRegisterGauge("udp.sndbuf", nil),
-			metrics.GetOrRegisterGauge("udp.fwd_alloc", nil),
-			metrics.GetOrRegisterGauge("udp.wmem_queued", nil),
-			metrics.GetOrRegisterGauge("udp.optmem", nil),
-			metrics.GetOrRegisterGauge("udp.backlog", nil),
-			metrics.GetOrRegisterGauge("udp.drops", nil),
+		udpGauges = make([][_SK_MEMINFO_VARS]metrics.Gauge, f.routines)
+		for i := range f.writers {
+			udpGauges[i] = [_SK_MEMINFO_VARS]metrics.Gauge{
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.rmem_alloc", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.rcvbuf", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.wmem_alloc", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.sndbuf", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.fwd_alloc", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.wmem_queued", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.optmem", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.backlog", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.drops", i), nil),
+			}
 		}
 	}
 
@@ -286,18 +290,13 @@ func (f *Interface) emitStats(i time.Duration) {
 		f.firewall.EmitStats()
 		f.handshakeManager.EmitStats()
 
-		if udpGauges[0] != nil {
-			var totals [_SK_MEMINFO_VARS]int64
-			for _, w := range f.writers {
+		if udpGauges != nil {
+			for i, w := range f.writers {
 				if err := w.getMemInfo(&meminfo); err == nil {
-					for i := 0; i < _SK_MEMINFO_VARS; i++ {
-						totals[i] += int64(meminfo[i])
+					for j := 0; j < _SK_MEMINFO_VARS; j++ {
+						udpGauges[i][j].Update(int64(meminfo[j]))
 					}
 				}
-			}
-
-			for i := 0; i < _SK_MEMINFO_VARS; i++ {
-				udpGauges[i].Update(totals[i])
 			}
 		}
 	}
