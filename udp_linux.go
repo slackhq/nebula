@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/rcrowley/go-metrics"
 	"golang.org/x/sys/unix"
 )
 
@@ -305,6 +306,38 @@ func (u *udpConn) getMemInfo(meminfo *_SK_MEMINFO) error {
 		return err
 	}
 	return nil
+}
+
+func NewUDPStatsEmitter(udpConns []*udpConn) func() {
+	// Check if our kernel supports SO_MEMINFO before registering the gauges
+	var udpGauges [][_SK_MEMINFO_VARS]metrics.Gauge
+	var meminfo _SK_MEMINFO
+	if err := udpConns[0].getMemInfo(&meminfo); err == nil {
+		udpGauges = make([][_SK_MEMINFO_VARS]metrics.Gauge, len(udpConns))
+		for i := range udpConns {
+			udpGauges[i] = [_SK_MEMINFO_VARS]metrics.Gauge{
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.rmem_alloc", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.rcvbuf", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.wmem_alloc", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.sndbuf", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.fwd_alloc", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.wmem_queued", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.optmem", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.backlog", i), nil),
+				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.drops", i), nil),
+			}
+		}
+	}
+
+	return func() {
+		for i, gauges := range udpGauges {
+			if err := udpConns[i].getMemInfo(&meminfo); err == nil {
+				for j := 0; j < _SK_MEMINFO_VARS; j++ {
+					gauges[j].Update(int64(meminfo[j]))
+				}
+			}
+		}
+	}
 }
 
 func (ua *udpAddr) Equals(t *udpAddr) bool {

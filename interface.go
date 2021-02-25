@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -266,36 +265,12 @@ func (f *Interface) reloadFirewall(c *Config) {
 func (f *Interface) emitStats(i time.Duration) {
 	ticker := time.NewTicker(i)
 
-	// Check if our kernel supports SO_MEMINFO before registering the gauges
-	var udpGauges [][_SK_MEMINFO_VARS]metrics.Gauge
-	var meminfo _SK_MEMINFO
-	if err := f.writers[0].getMemInfo(&meminfo); err == nil {
-		udpGauges = make([][_SK_MEMINFO_VARS]metrics.Gauge, f.routines)
-		for i := range f.writers {
-			udpGauges[i] = [_SK_MEMINFO_VARS]metrics.Gauge{
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.rmem_alloc", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.rcvbuf", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.wmem_alloc", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.sndbuf", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.fwd_alloc", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.wmem_queued", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.optmem", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.backlog", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.drops", i), nil),
-			}
-		}
-	}
+	udpStats := NewUDPStatsEmitter(f.writers)
 
 	for range ticker.C {
 		f.firewall.EmitStats()
 		f.handshakeManager.EmitStats()
 
-		for i, gauges := range udpGauges {
-			if err := f.writers[i].getMemInfo(&meminfo); err == nil {
-				for j := 0; j < _SK_MEMINFO_VARS; j++ {
-					gauges[j].Update(int64(meminfo[j]))
-				}
-			}
-		}
+		udpStats()
 	}
 }
