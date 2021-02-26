@@ -14,7 +14,7 @@ resulting in a sum that is greater than its individual parts.
 
 Nebula runs on Linux, MacOS, Windows, iOS, and Android.
 
-Visit the [Downloading Nebula](https://www.defined.net/nebula/quick-start/#downloading-nebula) page to find links to nebula releases and mobile apps.
+Visit the [Downloading Nebula](https://www.defined.net/nebula/quick-start/#downloading-nebula) page to find links to Nebula releases and mobile apps.
 
 ## Getting started (quickly)
 
@@ -32,12 +32,12 @@ You can join the [NebulaOSS Slack Group](https://join.slack.com/t/nebulaoss/shar
 
 ## Building Nebula from source
 
-Download go and clone this repo. Change to the nebula directory.
+Download go and clone this repo. Change to the Nebula directory.
 
-To build nebula for all platforms:
+To build Nebula for all platforms:
 `make all`
 
-To build nebula for a specific platform (ex, Windows):
+To build Nebula for a specific platform (ex, Windows):
 `make bin-windows`
 
 See the [Makefile](Makefile) for more details on build targets
