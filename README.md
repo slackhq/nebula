@@ -22,7 +22,7 @@ Take a look at our [Quick Start](https://www.defined.net/nebula/quick-start/) to
 
 Learn all about the [Nebula](https://www.defined.net/nebula/introduction/) project.
 
-Explorle to [Configuration Reference](https://www.defined.net/nebula/config/) to learn about the numerous options and tunable paramaters you can set in the Nebula configuration file.
+Explore the [Configuration Reference](https://www.defined.net/nebula/config/) for details on Nebula configuration and tuning.
 
 ## Nebula Slack discussion
 
