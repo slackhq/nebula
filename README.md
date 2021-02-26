@@ -30,13 +30,26 @@ You can join the [NebulaOSS Slack Group](https://join.slack.com/t/nebulaoss/shar
 
 ## Building Nebula from source
 
-Download go and clone this repo. Change to the Nebula directory.
+You'll need to download the [`go`](https://golang.org/dl/) programming language to build Nebula yourself.
 
-To build Nebula for all platforms:
-`make all`
+Clone the current version of Nebula:
+```shell
+git clone https://github.com/slackhq/nebula
+```
+Build Nebula for your current OS:
+```shell
+make
+```
+
+Build Nebula for all available platforms:
+```shell
+make all
+```
 
 To build Nebula for a specific platform (ex, Windows):
-`make bin-windows`
+```shell
+make bin-windows
+```
 
 See the [Makefile](Makefile) for more details on build targets
 
