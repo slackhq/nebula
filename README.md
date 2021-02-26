@@ -9,7 +9,6 @@ What makes Nebula different to existing offerings is that it brings all of these
 resulting in a sum that is greater than its individual parts.
 
 
-You can join the NebulaOSS Slack discussion [here](https://join.slack.com/t/nebulaoss/shared_invite/enQtOTA5MDI4NDg3MTg4LTkwY2EwNTI4NzQyMzc0M2ZlODBjNWI3NTY1MzhiOThiMmZlZjVkMTI0NGY4YTMyNjUwMWEyNzNkZTJmYzQxOGU)
 
 ## Downloading Nebula
 
@@ -26,6 +25,10 @@ Take a look at our [Quick Start](https://www.defined.net/nebula/quick-start/) to
 Learn all about the [Nebula](https://www.defined.net/nebula/introduction/) project.
 
 Explorle to [Configuration Reference](https://www.defined.net/nebula/config/) to learn about the numerous options and tunable paramaters you can set in the Nebula configuration file.
+
+## Nebula Slack discussion
+
+You can join the [NebulaOSS Slack Group](https://join.slack.com/t/nebulaoss/shared_invite/enQtOTA5MDI4NDg3MTg4LTkwY2EwNTI4NzQyMzc0M2ZlODBjNWI3NTY1MzhiOThiMmZlZjVkMTI0NGY4YTMyNjUwMWEyNzNkZTJmYzQxOGU) to connect with the maintainers of Nebula and our user community.
 
 ## Building Nebula from source
 
