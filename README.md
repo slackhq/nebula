@@ -19,11 +19,11 @@ Visit the [Downloading Nebula](https://www.defined.net/nebula/quick-start/#downl
 
 ## Getting started (quickly)
 
-Take a look at our [Quick Start](https://www.defined.net/nebula/quick-start/) to dive right in.
+Take a look at our [Quick Start](https://www.defined.net/nebula/quick-start/) to dive right in and create your first Nebula network.
 
 ## Documentation
 
-Learn about the [Nebula](https://www.defined.net/nebula/introduction/) project.
+Learn all about the [Nebula](https://www.defined.net/nebula/introduction/) project.
 
 Explorle to [Configuration Reference](https://www.defined.net/nebula/config/) to learn about the numerous options and tunable paramaters you can set in the Nebula configuration file.
 
