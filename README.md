@@ -30,7 +30,7 @@ You can join the [NebulaOSS Slack Group](https://join.slack.com/t/nebulaoss/shar
 
 ## Building Nebula from source
 
-You'll need to download the [`go`](https://golang.org/dl/) programming language to build Nebula yourself.
+You'll need the [`go`](https://golang.org/dl/) programming language to build Nebula yourself.
 
 Clone the current version of Nebula:
 ```shell
