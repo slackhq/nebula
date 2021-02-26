@@ -16,11 +16,9 @@ Nebula runs on Linux, MacOS, Windows, iOS, and Android.
 
 Visit the [Downloading Nebula](https://www.defined.net/nebula/quick-start/#downloading-nebula) page to find links to Nebula releases and mobile apps.
 
-## Getting started (quickly)
+## Documentation
 
 Take a look at our [Quick Start](https://www.defined.net/nebula/quick-start/) to dive right in and create your first Nebula network.
-
-## Documentation
 
 Learn all about the [Nebula](https://www.defined.net/nebula/introduction/) project.
 
