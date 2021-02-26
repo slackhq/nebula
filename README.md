@@ -18,7 +18,7 @@ Visit the [Downloading Nebula](https://www.defined.net/nebula/quick-start/#downl
 
 ## Documentation
 
-Take a look at our [Quick Start](https://www.defined.net/nebula/quick-start/) to dive right in and create your first Nebula network.
+Check out our [Quick Start](https://www.defined.net/nebula/quick-start/) to dive right in and start building your first Nebula network.
 
 Learn all about the [Nebula](https://www.defined.net/nebula/introduction/) project.
 
