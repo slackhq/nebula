@@ -41,7 +41,7 @@ type LightHouse struct {
 	staticList  map[uint32]struct{}
 	lighthouses map[uint32]struct{}
 	interval    int
-	nebulaPort  int
+	nebulaPort  uint32
 	punchBack   bool
 	punchDelay  time.Duration
 
@@ -54,7 +54,7 @@ type EncWriter interface {
 	SendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte)
 }
 
-func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, nebulaPort int, pc *udpConn, punchBack bool, punchDelay time.Duration, metricsEnabled bool) *LightHouse {
+func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, nebulaPort uint32, pc *udpConn, punchBack bool, punchDelay time.Duration, metricsEnabled bool) *LightHouse {
 	h := LightHouse{
 		amLighthouse: amLighthouse,
 		myIp:         myIp,
@@ -208,12 +208,6 @@ func (lh *LightHouse) IsLighthouseIP(vpnIP uint32) bool {
 	return false
 }
 
-// Quick generators for protobuf
-
-func NewLhQueryByIpString(VpnIp string) *NebulaMeta {
-	return NewLhQueryByInt(ip2int(net.ParseIP(VpnIp)))
-}
-
 func NewLhQueryByInt(VpnIp uint32) *NebulaMeta {
 	return &NebulaMeta{
 		Type: NebulaMeta_HostQuery,
@@ -223,14 +217,9 @@ func NewLhQueryByInt(VpnIp uint32) *NebulaMeta {
 	}
 }
 
-func NewLhWhoami() *NebulaMeta {
-	return &NebulaMeta{
-		Type:    NebulaMeta_HostWhoami,
-		Details: &NebulaMetaDetails{},
-	}
+func NewIpAndPort(ip net.IP, port uint32) IpAndPort {
+	return IpAndPort{Ip: ip2int(ip), Port: port}
 }
-
-// End Quick generators for protobuf
 
 func NewIpAndPortFromUDPAddr(addr udpAddr) IpAndPort {
 	return IpAndPort{Ip: udp2ipInt(&addr), Port: uint32(addr.Port)}
@@ -272,6 +261,38 @@ func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
 
 		}
 		time.Sleep(time.Second * time.Duration(lh.interval))
+	}
+}
+
+func (lh *LightHouse) SendUpdate(f EncWriter) {
+	var ipps []*IpAndPort
+
+	for _, e := range *localIps(lh.localAllowList) {
+		// Only add IPs that aren't my VPN/tun IP
+		if ip2int(e) != lh.myIp {
+			ipp := NewIpAndPort(e, lh.nebulaPort)
+			ipps = append(ipps, &ipp)
+		}
+	}
+	m := &NebulaMeta{
+		Type: NebulaMeta_HostUpdateNotification,
+		Details: &NebulaMetaDetails{
+			VpnIp:      lh.myIp,
+			IpAndPorts: ipps,
+		},
+	}
+
+	lh.metricTx(NebulaMeta_HostUpdateNotification, int64(len(lh.lighthouses)))
+	nb := make([]byte, 12, 12)
+	out := make([]byte, mtu)
+	for vpnIp := range lh.lighthouses {
+		mm, err := proto.Marshal(m)
+		if err != nil {
+			l.Debugf("Invalid marshal to update")
+		}
+		//l.Error("LIGHTHOUSE PACKET SEND", mm)
+		f.SendMessageToVpnIp(lightHouse, 0, vpnIp, mm, nb, out)
+
 	}
 }
 

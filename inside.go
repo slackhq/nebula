@@ -229,6 +229,18 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 	out = HeaderEncode(out, Version, uint8(t), uint8(st), hostinfo.remoteIndexId, c)
 	f.connectionManager.Out(hostinfo.hostId)
 
+	// Query our LH if we haven't since the last time we've been rebound, this will cause the remote to punch against
+	// all our IPs and enable a faster roaming.
+	if hostinfo.lastRebindCount != f.rebindCount {
+		//NOTE: there is an update hole if a tunnel isn't used and exactly 256 rebinds occur before the tunnel is
+		// finally used again. This tunnel would eventually be torn down and recreated if this action didn't help.
+		f.lightHouse.Query(hostinfo.hostId, f)
+		hostinfo.lastRebindCount = f.rebindCount
+		if l.Level >= logrus.DebugLevel {
+			l.WithField("vpnIp", hostinfo.hostId).Debug("Lighthouse update triggered for punch due to rebind counter")
+		}
+	}
+
 	out, err = ci.eKey.EncryptDanger(out, out, p, c, nb)
 	//TODO: see above note on lock
 	//ci.writeLock.Unlock()

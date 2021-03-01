@@ -256,7 +256,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		lighthouseHosts,
 		//TODO: change to a duration
 		config.GetInt("lighthouse.interval", 10),
-		port,
+		uint32(port),
 		udpConns[0],
 		punchy.Respond,
 		punchy.Delay,

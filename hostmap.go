@@ -51,6 +51,11 @@ type HostInfo struct {
 	recvError         int
 	remoteCidr        *CIDRTree
 
+	// lastRebindCount is the other side of Interface.rebindCount, if these values don't match then we need to ask LH
+	// for a punch from the remote end of this tunnel. The goal being to prime their conntrack for our traffic just like
+	// with a handshake
+	lastRebindCount int8
+
 	lastRoam       time.Time
 	lastRoamRemote *udpAddr
 }
