@@ -110,7 +110,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 
 	lhh := f.lightHouse.NewRequestHandler()
 
-	conntrackCache := NewConntrackCache(f.conntrackCache)
+	conntrackCache := NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
 	for {
 		// Just read one packet at a time
