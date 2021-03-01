@@ -130,7 +130,7 @@ func (f *Interface) run() {
 		go f.listenOut(i)
 	}
 
-	// Launch n queues to read packets from tun dev
+	// Prepare n tun queues
 	var reader io.ReadWriteCloser = f.inside
 	for i := 0; i < f.routines; i++ {
 		if i > 0 {
@@ -140,11 +140,15 @@ func (f *Interface) run() {
 			}
 		}
 		f.readers[i] = reader
-		go f.listenIn(reader, i)
 	}
 
 	if err := f.inside.Activate(); err != nil {
 		l.Fatal(err)
+	}
+
+	// Launch n queues to read packets from tun dev
+	for i := 0; i < f.routines; i++ {
+		go f.listenIn(f.readers[i], i)
 	}
 }
 
