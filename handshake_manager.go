@@ -181,11 +181,7 @@ func (c *HandshakeManager) NextInboundHandshakeTimerTick(now time.Time) {
 		}
 		index := ep.(uint32)
 
-		hostinfo, err := c.pendingHostMap.QueryIndex(index)
-		if err != nil {
-			continue
-		}
-		c.pendingHostMap.DeleteHostInfo(hostinfo)
+		c.pendingHostMap.DeleteIndex(index)
 	}
 }
 

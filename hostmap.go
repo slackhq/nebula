@@ -221,11 +221,21 @@ func (hm *HostMap) AddVpnIPHostInfo(vpnIP uint32, h *HostInfo) {
 	}
 }
 
+// This is only called in pendingHostmap, to cleanup an inbound handshake
 func (hm *HostMap) DeleteIndex(index uint32) {
 	hm.Lock()
-	delete(hm.Indexes, index)
-	if len(hm.Indexes) == 0 {
-		hm.Indexes = map[uint32]*HostInfo{}
+	hostinfo, ok := hm.Indexes[index]
+	if ok {
+		delete(hm.Indexes, index)
+		delete(hm.RemoteIndexes, hostinfo.remoteIndexId)
+
+		// Check if we have an entry under hostId that matches the same hostinfo
+		// instance. Clean it up as well if we do.
+		var hostinfo2 *HostInfo
+		hostinfo2, ok = hm.Hosts[hostinfo.hostId]
+		if ok && hostinfo2 == hostinfo {
+			delete(hm.Hosts, hostinfo.hostId)
+		}
 	}
 	hm.Unlock()
 
@@ -235,8 +245,43 @@ func (hm *HostMap) DeleteIndex(index uint32) {
 	}
 }
 
+// This is used to cleanup on recv_error
+func (hm *HostMap) DeleteReverseIndex(index uint32) {
+	hm.Lock()
+	hostinfo, ok := hm.RemoteIndexes[index]
+	if ok {
+		delete(hm.Indexes, hostinfo.localIndexId)
+		delete(hm.RemoteIndexes, index)
+
+		// Check if we have an entry under hostId that matches the same hostinfo
+		// instance. Clean it up as well if we do (they might not match in pendingHostmap)
+		var hostinfo2 *HostInfo
+		hostinfo2, ok = hm.Hosts[hostinfo.hostId]
+		if ok && hostinfo2 == hostinfo {
+			delete(hm.Hosts, hostinfo.hostId)
+		}
+	}
+	hm.Unlock()
+
+	if l.Level >= logrus.DebugLevel {
+		l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes)}).
+			Debug("Hostmap remote index deleted")
+	}
+}
+
 func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 	hm.Lock()
+
+	// Check if this same hostId is in the hostmap with a different instance.
+	// This could happen if we have an entry in the pending hostmap with different
+	// index values than the one in the main hostmap.
+	hostinfo2, ok := hm.Hosts[hostinfo.hostId]
+	if ok && hostinfo2 != hostinfo {
+		delete(hm.Hosts, hostinfo2.hostId)
+		delete(hm.Indexes, hostinfo2.localIndexId)
+		delete(hm.RemoteIndexes, hostinfo2.remoteIndexId)
+	}
+
 	delete(hm.Hosts, hostinfo.hostId)
 	if len(hm.Hosts) == 0 {
 		hm.Hosts = map[uint32]*HostInfo{}
