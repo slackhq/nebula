@@ -231,35 +231,7 @@ func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
 	}
 
 	for {
-		ipp := []*IpAndPort{}
-
-		for _, e := range *localIps(lh.localAllowList) {
-			// Only add IPs that aren't my VPN/tun IP
-			if ip2int(e) != lh.myIp {
-				ipp = append(ipp, &IpAndPort{Ip: ip2int(e), Port: uint32(lh.nebulaPort)})
-				//fmt.Println(e)
-			}
-		}
-		m := &NebulaMeta{
-			Type: NebulaMeta_HostUpdateNotification,
-			Details: &NebulaMetaDetails{
-				VpnIp:      lh.myIp,
-				IpAndPorts: ipp,
-			},
-		}
-
-		lh.metricTx(NebulaMeta_HostUpdateNotification, int64(len(lh.lighthouses)))
-		nb := make([]byte, 12, 12)
-		out := make([]byte, mtu)
-		for vpnIp := range lh.lighthouses {
-			mm, err := proto.Marshal(m)
-			if err != nil {
-				l.Debugf("Invalid marshal to update")
-			}
-			//l.Error("LIGHTHOUSE PACKET SEND", mm)
-			f.SendMessageToVpnIp(lightHouse, 0, vpnIp, mm, nb, out)
-
-		}
+		lh.SendUpdate(f)
 		time.Sleep(time.Second * time.Duration(lh.interval))
 	}
 }
