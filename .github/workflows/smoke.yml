@@ -35,7 +35,7 @@ jobs:
           ${{ runner.os }}-go1.16-
 
     - name: build
-      run: make
+      run: make bin-docker
 
     - name: setup docker image
       working-directory: ./.github/workflows/smoke
