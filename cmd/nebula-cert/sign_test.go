@@ -48,7 +48,7 @@ func Test_signHelp(t *testing.T) {
 			"  -out-qr string\n"+
 			"    \tOptional: output a qr code image (png) of the certificate\n"+
 			"  -subnets string\n"+
-			"    \tOptional: comma seperated list of subnet this cert can serve for\n",
+			"    \tOptional: comma separated list of subnet this cert can serve for\n",
 		ob.String(),
 	)
 }

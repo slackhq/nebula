@@ -44,7 +44,7 @@ func newSignFlags() *signFlags {
 	sf.outCertPath = sf.set.String("out-crt", "", "Optional: path to write the certificate to")
 	sf.outQRPath = sf.set.String("out-qr", "", "Optional: output a qr code image (png) of the certificate")
 	sf.groups = sf.set.String("groups", "", "Optional: comma separated list of groups")
-	sf.subnets = sf.set.String("subnets", "", "Optional: comma seperated list of subnet this cert can serve for")
+	sf.subnets = sf.set.String("subnets", "", "Optional: comma separated list of subnet this cert can serve for")
 	return &sf
 
 }
