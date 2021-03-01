@@ -120,13 +120,13 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	// EXPERIMENTAL
 	// Intentionally not documented yet while we do more testing and determine
 	// a good default value.
-	conntrackCache := config.GetDuration("firewall.conntrack.routine_cache", 0)
-	if routines > 1 && !config.IsSet("firewall.conntrack.routine_cache") {
+	conntrackCacheTimeout := config.GetDuration("firewall.conntrack.routine_cache_timeout", 0)
+	if routines > 1 && !config.IsSet("firewall.conntrack.routine_cache_timeout") {
 		// Use a different default if we are running with multiple routines
-		conntrackCache = 1 * time.Second
+		conntrackCacheTimeout = 1 * time.Second
 	}
-	if conntrackCache > 0 {
-		l.WithField("duration", conntrackCache).Info("Using routine-local conntrack cache")
+	if conntrackCacheTimeout > 0 {
+		l.WithField("duration", conntrackCacheTimeout).Info("Using routine-local conntrack cache")
 	}
 
 	var tun Inside
@@ -369,9 +369,10 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		DropMulticast:           config.GetBool("tun.drop_multicast", false),
 		UDPBatchSize:            config.GetInt("listen.batch", 64),
 		routines:                routines,
-		ConntrackCache:          conntrackCache,
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
+
+		ConntrackCacheTimeout: conntrackCacheTimeout,
 	}
 
 	switch ifConfig.Cipher {

@@ -156,7 +156,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 		read = u.ReadSingle
 	}
 
-	conntrackCache := NewConntrackCache(f.conntrackCache)
+	conntrackCache := NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
 	for {
 		n, err := read(msgs)

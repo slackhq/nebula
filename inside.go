@@ -7,7 +7,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket, nb, out []byte, q int, localCache map[FirewallPacket]struct{}) {
+func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket, nb, out []byte, q int, localCache ConntrackCache) {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
 		l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)

@@ -373,7 +373,7 @@ var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
 // Drop returns an error if the packet should be dropped, explaining why. It
 // returns nil if the packet should not be dropped.
-func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool, localCache map[FirewallPacket]struct{}) error {
+func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool, localCache ConntrackCache) error {
 	// Check if we spoke to this tuple, if we did then allow this packet
 	if f.inConns(packet, fp, incoming, h, caPool, localCache) {
 		return nil
@@ -427,7 +427,7 @@ func (f *Firewall) EmitStats() {
 	metrics.GetOrRegisterGauge("firewall.rules.version", nil).Update(int64(f.rulesVersion))
 }
 
-func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool, localCache map[FirewallPacket]struct{}) bool {
+func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool, localCache ConntrackCache) bool {
 	if localCache != nil {
 		if _, ok := localCache[fp]; ok {
 			return true
@@ -934,20 +934,24 @@ func (f *Firewall) checkTCPRTT(c *conn, p []byte) bool {
 	return true
 }
 
-type ConntrackCache struct {
+// ConntrackCache is used as a local routine cache to know if a given flow
+// has been seen in the conntrack table.
+type ConntrackCache map[FirewallPacket]struct{}
+
+type ConntrackCacheTicker struct {
 	cacheV    uint64
 	cacheTick uint64
 
-	Cache map[FirewallPacket]struct{}
+	cache ConntrackCache
 }
 
-func NewConntrackCache(d time.Duration) *ConntrackCache {
+func NewConntrackCacheTicker(d time.Duration) *ConntrackCacheTicker {
 	if d == 0 {
 		return nil
 	}
 
-	c := &ConntrackCache{
-		Cache: map[FirewallPacket]struct{}{},
+	c := &ConntrackCacheTicker{
+		cache: ConntrackCache{},
 	}
 
 	go c.tick(d)
@@ -955,7 +959,7 @@ func NewConntrackCache(d time.Duration) *ConntrackCache {
 	return c
 }
 
-func (c *ConntrackCache) tick(d time.Duration) {
+func (c *ConntrackCacheTicker) tick(d time.Duration) {
 	for {
 		time.Sleep(d)
 		atomic.AddUint64(&c.cacheTick, 1)
@@ -964,19 +968,19 @@ func (c *ConntrackCache) tick(d time.Duration) {
 
 // Get checks if the cache ticker has moved to the next version before returning
 // the map. If it has moved, we reset the map.
-func (c *ConntrackCache) Get() map[FirewallPacket]struct{} {
+func (c *ConntrackCacheTicker) Get() ConntrackCache {
 	if c == nil {
 		return nil
 	}
 	if tick := atomic.LoadUint64(&c.cacheTick); tick != c.cacheV {
 		c.cacheV = tick
-		if ll := len(c.Cache); ll > 0 {
+		if ll := len(c.cache); ll > 0 {
 			if l.GetLevel() == logrus.DebugLevel {
 				l.WithField("len", ll).Debug("resetting conntrack cache")
 			}
-			c.Cache = make(map[FirewallPacket]struct{}, ll)
+			c.cache = make(ConntrackCache, ll)
 		}
 	}
 
-	return c.Cache
+	return c.cache
 }
