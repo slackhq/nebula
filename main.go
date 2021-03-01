@@ -123,7 +123,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 
 		switch {
 		case config.GetBool("tun.disabled", false):
-			tun = newDisabledTun(tunCidr, l)
+			tun = newDisabledTun(tunCidr, config.GetInt("tun.tx_queue", 500), config.GetBool("stats.message_metrics", false), l)
 		case tunFd != nil:
 			tun, err = newTunFromFd(
 				*tunFd,
