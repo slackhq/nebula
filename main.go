@@ -117,6 +117,18 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		}
 	}
 
+	// EXPERIMENTAL
+	// Intentionally not documented yet while we do more testing and determine
+	// a good default value.
+	conntrackCacheTimeout := config.GetDuration("firewall.conntrack.routine_cache_timeout", 0)
+	if routines > 1 && !config.IsSet("firewall.conntrack.routine_cache_timeout") {
+		// Use a different default if we are running with multiple routines
+		conntrackCacheTimeout = 1 * time.Second
+	}
+	if conntrackCacheTimeout > 0 {
+		l.WithField("duration", conntrackCacheTimeout).Info("Using routine-local conntrack cache")
+	}
+
 	var tun Inside
 	if !configTest {
 		config.CatchHUP()
@@ -359,6 +371,8 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		routines:                routines,
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
+
+		ConntrackCacheTimeout: conntrackCacheTimeout,
 	}
 
 	switch ifConfig.Cipher {

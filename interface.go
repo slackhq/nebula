@@ -40,6 +40,8 @@ type InterfaceConfig struct {
 	routines                int
 	MessageMetrics          *MessageMetrics
 	version                 string
+
+	ConntrackCacheTimeout time.Duration
 }
 
 type Interface struct {
@@ -60,6 +62,8 @@ type Interface struct {
 	udpBatchSize       int
 	routines           int
 	version            string
+
+	conntrackCacheTimeout time.Duration
 
 	writers []*udpConn
 	readers []io.ReadWriteCloser
@@ -101,6 +105,8 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		version:            c.version,
 		writers:            make([]*udpConn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
+
+		conntrackCacheTimeout: c.ConntrackCacheTimeout,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -173,6 +179,8 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	fwPacket := &FirewallPacket{}
 	nb := make([]byte, 12, 12)
 
+	conntrackCache := NewConntrackCacheTicker(f.conntrackCacheTimeout)
+
 	for {
 		n, err := reader.Read(packet)
 		if err != nil {
@@ -181,7 +189,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 			os.Exit(2)
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i)
+		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get())
 	}
 }
 

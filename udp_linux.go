@@ -174,6 +174,8 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 		read = u.ReadSingle
 	}
 
+	conntrackCache := NewConntrackCacheTicker(f.conntrackCacheTimeout)
+
 	for {
 		n, err := read(msgs)
 		if err != nil {
@@ -186,7 +188,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 			udpAddr.IP = binary.BigEndian.Uint32(names[i][4:8])
 			udpAddr.Port = binary.BigEndian.Uint16(names[i][2:4])
 
-			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb, q)
+			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb, q, conntrackCache.Get())
 		}
 	}
 }
