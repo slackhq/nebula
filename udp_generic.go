@@ -96,6 +96,11 @@ func (u *udpConn) reloadConfig(c *Config) {
 	// TODO
 }
 
+func NewUDPStatsEmitter(udpConns []*udpConn) func() {
+	// No UDP stats for non-linux
+	return func() {}
+}
+
 type rawMessage struct {
 	Len uint32
 }

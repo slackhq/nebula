@@ -268,8 +268,13 @@ func (f *Interface) reloadFirewall(c *Config) {
 
 func (f *Interface) emitStats(i time.Duration) {
 	ticker := time.NewTicker(i)
+
+	udpStats := NewUDPStatsEmitter(f.writers)
+
 	for range ticker.C {
 		f.firewall.EmitStats()
 		f.handshakeManager.EmitStats()
+
+		udpStats()
 	}
 }
