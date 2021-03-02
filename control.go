@@ -65,6 +65,12 @@ func (c *Control) ShutdownBlock() {
 // RebindUDPServer asks the UDP listener to rebind it's listener. Mainly used on mobile clients when interfaces change
 func (c *Control) RebindUDPServer() {
 	_ = c.f.outside.Rebind()
+
+	// Trigger a lighthouse update, useful for mobile clients that should have an update interval of 0
+	c.f.lightHouse.SendUpdate(c.f)
+
+	// Let the main interface know that we rebound so that underlying tunnels know to trigger punches from their remotes
+	c.f.rebindCount++
 }
 
 // ListHostmap returns details about the actual or pending (handshaking) hostmap
