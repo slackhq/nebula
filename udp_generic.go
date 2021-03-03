@@ -7,48 +7,17 @@ package nebula
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"net"
-	"strconv"
-	"strings"
 )
-
-type udpAddr struct {
-	net.UDPAddr
-}
 
 type udpConn struct {
 	*net.UDPConn
 }
 
-func NewUDPAddr(ip uint32, port uint16) *udpAddr {
-	return &udpAddr{
-		UDPAddr: net.UDPAddr{
-			IP:   int2ip(ip),
-			Port: int(port),
-		},
-	}
-}
-
-func NewUDPAddrFromString(s string) *udpAddr {
-	p := strings.Split(s, ":")
-	if len(p) < 2 {
-		return nil
-	}
-
-	port, _ := strconv.Atoi(p[1])
-	return &udpAddr{
-		UDPAddr: net.UDPAddr{
-			IP:   net.ParseIP(p[0]),
-			Port: port,
-		},
-	}
-}
-
 func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 	lc := NewListenConfig(multi)
-	pc, err := lc.ListenPacket(context.TODO(), "udp4", fmt.Sprintf("%s:%d", ip, port))
+	pc, err := lc.ListenPacket(context.TODO(), "udp", fmt.Sprintf("%s:%d", ip, port))
 	if err != nil {
 		return nil, err
 	}
@@ -58,26 +27,9 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 	return nil, fmt.Errorf("Unexpected PacketConn: %T %#v", pc, pc)
 }
 
-func (ua *udpAddr) Equals(t *udpAddr) bool {
-	if t == nil || ua == nil {
-		return t == nil && ua == nil
-	}
-	return ua.IP.Equal(t.IP) && ua.Port == t.Port
-}
-
-func (ua *udpAddr) Copy() udpAddr {
-	nu := udpAddr{net.UDPAddr{
-		Port: ua.Port,
-		Zone: ua.Zone,
-		IP:   make(net.IP, len(ua.IP)),
-	}}
-
-	copy(nu.IP, ua.IP)
-	return nu
-}
-
 func (uc *udpConn) WriteTo(b []byte, addr *udpAddr) error {
-	_, err := uc.UDPConn.WriteToUDP(b, &addr.UDPAddr)
+	//TODO: Maybe we just ditch our custom udpAddr entirely
+	_, err := uc.UDPConn.WriteToUDP(b, &net.UDPAddr{IP: addr.IP, Port: int(addr.Port)})
 	return err
 }
 
@@ -86,7 +38,11 @@ func (uc *udpConn) LocalAddr() (*udpAddr, error) {
 
 	switch v := a.(type) {
 	case *net.UDPAddr:
-		return &udpAddr{UDPAddr: *v}, nil
+		addr := &udpAddr{IP: make([]byte, len(v.IP))}
+		copy(addr.IP, v.IP)
+		addr.Port = uint16(v.Port)
+		return addr, nil
+
 	default:
 		return nil, fmt.Errorf("LocalAddr returned: %#v", a)
 	}
@@ -110,7 +66,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 	buffer := make([]byte, mtu)
 	header := &Header{}
 	fwPacket := &FirewallPacket{}
-	udpAddr := &udpAddr{}
+	udpAddr := &udpAddr{IP: make([]byte, 16)}
 	nb := make([]byte, 12, 12)
 
 	lhh := f.lightHouse.NewRequestHandler()
@@ -125,17 +81,10 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 			continue
 		}
 
-		udpAddr.UDPAddr = *rua
+		udpAddr.IP = rua.IP
+		udpAddr.Port = uint16(rua.Port)
 		f.readOutsidePackets(udpAddr, plaintext[:0], buffer[:n], header, fwPacket, lhh, nb, q, conntrackCache.Get())
 	}
-}
-
-func udp2ip(addr *udpAddr) net.IP {
-	return addr.IP
-}
-
-func udp2ipInt(addr *udpAddr) uint32 {
-	return binary.BigEndian.Uint32(addr.IP.To4())
 }
 
 func hostDidRoam(addr *udpAddr, newaddr *udpAddr) bool {

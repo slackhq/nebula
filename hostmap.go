@@ -303,7 +303,7 @@ func (hm *HostMap) AddRemote(vpnIp uint32, remote *udpAddr) *HostInfo {
 	hm.Lock()
 	i, v := hm.Hosts[vpnIp]
 	if v {
-		i.AddRemote(*remote)
+		i.AddRemote(remote)
 	} else {
 		i = &HostInfo{
 			Remotes:         []*HostInfoDest{NewHostInfoDest(remote)},
@@ -424,10 +424,11 @@ func (hm *HostMap) Punchy(conn *udpConn) {
 		metricsTxPunchy = metrics.NilCounter{}
 	}
 
+	b := []byte{1}
 	for {
 		for _, addr := range hm.PunchList() {
 			metricsTxPunchy.Inc(1)
-			conn.WriteTo([]byte{1}, addr)
+			conn.WriteTo(b, addr)
 		}
 		time.Sleep(time.Second * 30)
 	}
@@ -473,7 +474,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 
 	if atomic.AddUint32(&i.promoteCounter, 1)&PromoteEvery == 0 {
 		// return early if we are already on a preferred remote
-		rIP := udp2ip(i.remote)
+		rIP := i.remote.IP
 		for _, l := range preferredRanges {
 			if l.Contains(rIP) {
 				return
@@ -506,7 +507,7 @@ func (i *HostInfo) ForcePromoteBest(preferredRanges []*net.IPNet) {
 func (i *HostInfo) getBestRemote(preferredRanges []*net.IPNet) (best *udpAddr, preferred bool) {
 	if len(i.Remotes) > 0 {
 		for _, r := range i.Remotes {
-			rIP := udp2ip(r.addr)
+			rIP := r.addr.IP
 
 			for _, l := range preferredRanges {
 				if l.Contains(rIP) {
@@ -625,8 +626,7 @@ func (i *HostInfo) GetCert() *cert.NebulaCertificate {
 	return nil
 }
 
-func (i *HostInfo) AddRemote(r udpAddr) *udpAddr {
-	remote := &r
+func (i *HostInfo) AddRemote(remote *udpAddr) *udpAddr {
 	//add := true
 	for _, r := range i.Remotes {
 		if r.addr.Equals(remote) {
@@ -638,12 +638,13 @@ func (i *HostInfo) AddRemote(r udpAddr) *udpAddr {
 	if len(i.Remotes) > MaxRemotes {
 		i.Remotes = i.Remotes[len(i.Remotes)-MaxRemotes:]
 	}
-	i.Remotes = append(i.Remotes, NewHostInfoDest(remote))
-	return remote
+	r := NewHostInfoDest(remote)
+	i.Remotes = append(i.Remotes, r)
+	return r.addr
 	//l.Debugf("Added remote %s for vpn ip", remote)
 }
 
-func (i *HostInfo) SetRemote(remote udpAddr) {
+func (i *HostInfo) SetRemote(remote *udpAddr) {
 	i.remote = i.AddRemote(remote)
 }
 
@@ -701,7 +702,7 @@ func (i *HostInfo) logger() *logrus.Entry {
 
 func NewHostInfoDest(addr *udpAddr) *HostInfoDest {
 	i := &HostInfoDest{
-		addr: addr,
+		addr: addr.Copy(),
 	}
 	return i
 }
@@ -816,8 +817,11 @@ func localIps(allowList *AllowList) *[]net.IP {
 			case *net.IPAddr:
 				ip = v.IP
 			}
-			if ip.To4() != nil && ip.IsLoopback() == false {
-				allow := allowList.Allow(ip2int(ip))
+
+			//TODO: Filtering out link local for now, this is probably the most correct thing
+			//TODO: Would be nice to filter out SLAAC MAC based ips as well
+			if ip.IsLoopback() == false && !ip.IsLinkLocalUnicast() {
+				allow := allowList.Allow(ip)
 				l.WithField("localIp", ip).WithField("allow", allow).Debug("localAllowList.Allow")
 				if !allow {
 					continue
@@ -831,6 +835,7 @@ func localIps(allowList *AllowList) *[]net.IP {
 }
 
 func PrivateIP(ip net.IP) bool {
+	//TODO: Private for ipv6 or just let it ride?
 	private := false
 	_, private24BitBlock, _ := net.ParseCIDR("10.0.0.0/8")
 	_, private20BitBlock, _ := net.ParseCIDR("172.16.0.0/12")

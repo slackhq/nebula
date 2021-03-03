@@ -186,7 +186,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 	//l.Debugln("got symmetric pairs")
 
 	//hostinfo.ClearRemotes()
-	hostinfo.AddRemote(*addr)
+	hostinfo.AddRemote(addr)
 	hostinfo.ForcePromoteBest(f.hostMap.preferredRanges)
 	hostinfo.CreateRemoteCIDR(remoteCert)
 
@@ -358,7 +358,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	ci.eKey = NewNebulaCipherState(eKey)
 	//l.Debugln("got symmetric pairs")
 
-	hostinfo.SetRemote(*addr)
+	hostinfo.SetRemote(addr)
 	hostinfo.CreateRemoteCIDR(remoteCert)
 
 	f.handshakeManager.Complete(hostinfo, f)

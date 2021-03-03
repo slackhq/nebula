@@ -4,11 +4,8 @@ package nebula
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"net"
-	"strconv"
-	"strings"
 	"syscall"
 	"unsafe"
 
@@ -20,38 +17,6 @@ import (
 
 type udpConn struct {
 	sysFd int
-}
-
-type udpAddr struct {
-	IP   uint32
-	Port uint16
-}
-
-func NewUDPAddr(ip uint32, port uint16) *udpAddr {
-	return &udpAddr{IP: ip, Port: port}
-}
-
-func NewUDPAddrFromString(s string) *udpAddr {
-	p := strings.Split(s, ":")
-	if len(p) < 2 {
-		return nil
-	}
-
-	port, _ := strconv.Atoi(p[1])
-	return &udpAddr{
-		IP:   ip2int(net.ParseIP(p[0])),
-		Port: uint16(port),
-	}
-}
-
-type rawSockaddr struct {
-	Family uint16
-	Data   [14]uint8
-}
-
-type rawSockaddrAny struct {
-	Addr rawSockaddr
-	Pad  [96]int8
 }
 
 var x int
@@ -75,7 +40,7 @@ type _SK_MEMINFO [_SK_MEMINFO_VARS]uint32
 
 func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 	syscall.ForkLock.RLock()
-	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
+	fd, err := unix.Socket(unix.AF_INET6, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
 	if err == nil {
 		unix.CloseOnExec(fd)
 	}
@@ -86,8 +51,8 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 		return nil, fmt.Errorf("unable to open socket: %s", err)
 	}
 
-	var lip [4]byte
-	copy(lip[:], net.ParseIP(ip).To4())
+	var lip [16]byte
+	copy(lip[:], net.ParseIP(ip))
 
 	if multi {
 		if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
@@ -95,7 +60,8 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 		}
 	}
 
-	if err = unix.Bind(fd, &unix.SockaddrInet4{Addr: lip, Port: port}); err != nil {
+	//TODO: support multiple listening IPs (for limiting ipv6)
+	if err = unix.Bind(fd, &unix.SockaddrInet6{Addr: lip, Port: port}); err != nil {
 		return nil, fmt.Errorf("unable to bind to socket: %s", err)
 	}
 
@@ -109,10 +75,6 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 
 func (u *udpConn) Rebind() error {
 	return nil
-}
-
-func (ua *udpAddr) Copy() udpAddr {
-	return *ua
 }
 
 func (u *udpConn) SetRecvBuffer(n int) error {
@@ -132,7 +94,7 @@ func (u *udpConn) GetSendBuffer() (int, error) {
 }
 
 func (u *udpConn) LocalAddr() (*udpAddr, error) {
-	var rsa rawSockaddrAny
+	var rsa unix.RawSockaddrAny
 	var rLen = unix.SizeofSockaddrAny
 
 	_, _, err := unix.Syscall(
@@ -148,12 +110,24 @@ func (u *udpConn) LocalAddr() (*udpAddr, error) {
 
 	addr := &udpAddr{}
 	if rsa.Addr.Family == unix.AF_INET {
+		pp := (*unix.RawSockaddrInet4)(unsafe.Pointer(&rsa))
 		addr.Port = uint16(rsa.Addr.Data[0])<<8 + uint16(rsa.Addr.Data[1])
-		addr.IP = uint32(rsa.Addr.Data[2])<<24 + uint32(rsa.Addr.Data[3])<<16 + uint32(rsa.Addr.Data[4])<<8 + uint32(rsa.Addr.Data[5])
+		copy(addr.IP, pp.Addr[:])
+
+	} else if rsa.Addr.Family == unix.AF_INET6 {
+		//TODO: this cast sucks and we can do better
+		pp := (*unix.RawSockaddrInet6)(unsafe.Pointer(&rsa))
+		addr.Port = uint16(rsa.Addr.Data[0])<<8 + uint16(rsa.Addr.Data[1])
+		copy(addr.IP, pp.Addr[:])
+
 	} else {
 		addr.Port = 0
-		addr.IP = 0
+		addr.IP = []byte{}
 	}
+
+	//TODO: Just use this instead?
+	//a, b := unix.Getsockname(u.sysFd)
+
 	return addr, nil
 }
 
@@ -185,9 +159,8 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 
 		//metric.Update(int64(n))
 		for i := 0; i < n; i++ {
-			udpAddr.IP = binary.BigEndian.Uint32(names[i][4:8])
+			udpAddr.IP = names[i][8:24]
 			udpAddr.Port = binary.BigEndian.Uint16(names[i][2:4])
-
 			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb, q, conntrackCache.Get())
 		}
 	}
@@ -235,18 +208,13 @@ func (u *udpConn) ReadMulti(msgs []rawMessage) (int, error) {
 }
 
 func (u *udpConn) WriteTo(b []byte, addr *udpAddr) error {
-	var rsa unix.RawSockaddrInet4
 
-	//TODO: sometimes addr is nil!
-	rsa.Family = unix.AF_INET
+	var rsa unix.RawSockaddrInet6
+	rsa.Family = unix.AF_INET6
 	p := (*[2]byte)(unsafe.Pointer(&rsa.Port))
 	p[0] = byte(addr.Port >> 8)
 	p[1] = byte(addr.Port)
-
-	rsa.Addr[0] = byte(addr.IP & 0xff000000 >> 24)
-	rsa.Addr[1] = byte(addr.IP & 0x00ff0000 >> 16)
-	rsa.Addr[2] = byte(addr.IP & 0x0000ff00 >> 8)
-	rsa.Addr[3] = byte(addr.IP & 0x000000ff)
+	copy(rsa.Addr[:], addr.IP)
 
 	for {
 		_, _, err := unix.Syscall6(
@@ -256,7 +224,7 @@ func (u *udpConn) WriteTo(b []byte, addr *udpAddr) error {
 			uintptr(len(b)),
 			uintptr(0),
 			uintptr(unsafe.Pointer(&rsa)),
-			uintptr(unix.SizeofSockaddrInet4),
+			uintptr(unix.SizeofSockaddrInet6),
 		)
 
 		if err != 0 {
@@ -340,29 +308,6 @@ func NewUDPStatsEmitter(udpConns []*udpConn) func() {
 			}
 		}
 	}
-}
-
-func (ua *udpAddr) Equals(t *udpAddr) bool {
-	if t == nil || ua == nil {
-		return t == nil && ua == nil
-	}
-	return ua.IP == t.IP && ua.Port == t.Port
-}
-
-func (ua *udpAddr) String() string {
-	return fmt.Sprintf("%s:%v", int2ip(ua.IP), ua.Port)
-}
-
-func (ua *udpAddr) MarshalJSON() ([]byte, error) {
-	return json.Marshal(m{"ip": int2ip(ua.IP), "port": ua.Port})
-}
-
-func udp2ip(addr *udpAddr) net.IP {
-	return int2ip(addr.IP)
-}
-
-func udp2ipInt(addr *udpAddr) uint32 {
-	return addr.IP
 }
 
 func hostDidRoam(addr *udpAddr, newaddr *udpAddr) bool {

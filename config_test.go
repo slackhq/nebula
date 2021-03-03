@@ -115,6 +115,15 @@ func TestConfig_GetAllowList(t *testing.T) {
 		"10.42.42.0/24": true,
 	}
 	r, err = c.GetAllowList("allowlist", false)
+	assert.EqualError(t, err, "config `allowlist` contains both true and false rules, but no default set for ::/0")
+
+	c.Settings["allowlist"] = map[interface{}]interface{}{
+		"0.0.0.0/0":     true,
+		"10.0.0.0/8":    false,
+		"10.42.42.0/24": true,
+		"::/0":          false,
+	}
+	r, err = c.GetAllowList("allowlist", false)
 	if assert.NoError(t, err) {
 		assert.NotNil(t, r)
 	}

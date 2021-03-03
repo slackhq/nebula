@@ -28,6 +28,7 @@ func NewListenConfig(multi bool) net.ListenConfig {
 					return controlErr
 				}
 			}
+
 			return nil
 		},
 	}
@@ -39,5 +40,5 @@ func (u *udpConn) Rebind() error {
 		return err
 	}
 
-	return syscall.SetsockoptInt(int(file.Fd()), unix.IPPROTO_IP, unix.IP_BOUND_IF, 0)
+	return syscall.SetsockoptInt(int(file.Fd()), unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, 0)
 }

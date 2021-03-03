@@ -235,12 +235,13 @@ func (c *Config) GetAllowList(k string, allowInterfaces bool) (*AllowList, error
 		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, r)
 	}
 
-	tree := NewCIDRTree()
+	tree := NewCIDR6Tree()
 	var nameRules []AllowListNameRule
 
 	firstValue := true
 	allValuesMatch := true
-	defaultSet := false
+	defaultSet4 := false
+	defaultSet6 := false
 	var allValues bool
 
 	for rawKey, rawValue := range rawMap {
@@ -287,17 +288,30 @@ func (c *Config) GetAllowList(k string, allowInterfaces bool) (*AllowList, error
 
 		// Check if this is 0.0.0.0/0
 		bits, size := cidr.Mask.Size()
-		if bits == 0 && size == 32 {
-			defaultSet = true
+		if bits == 0 {
+			if size == 32 {
+				defaultSet4 = true
+			} else if size == 128 {
+				defaultSet6 = true
+			}
 		}
 	}
 
-	if !defaultSet {
+	if !defaultSet4 {
 		if allValuesMatch {
 			_, zeroCIDR, _ := net.ParseCIDR("0.0.0.0/0")
 			tree.AddCIDR(zeroCIDR, !allValues)
 		} else {
 			return nil, fmt.Errorf("config `%s` contains both true and false rules, but no default set for 0.0.0.0/0", k)
+		}
+	}
+
+	if !defaultSet6 {
+		if allValuesMatch {
+			_, zeroCIDR, _ := net.ParseCIDR("::/0")
+			tree.AddCIDR(zeroCIDR, !allValues)
+		} else {
+			return nil, fmt.Errorf("config `%s` contains both true and false rules, but no default set for ::/0", k)
 		}
 	}
 
