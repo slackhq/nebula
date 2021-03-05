@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/sirupsen/logrus"
@@ -156,7 +157,7 @@ func copyHostInfo(h *HostInfo) ControlHostInfo {
 		RemoteIndex:    h.remoteIndexId,
 		RemoteAddrs:    make([]udpAddr, len(addrs), len(addrs)),
 		CachedPackets:  len(h.packetStore),
-		MessageCounter: *h.ConnectionState.messageCounter,
+		MessageCounter: atomic.LoadUint64(&h.ConnectionState.atomicMessageCounter),
 	}
 
 	if c := h.GetCert(); c != nil {

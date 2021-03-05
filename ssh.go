@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"runtime/pprof"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/sirupsen/logrus"
@@ -353,7 +354,7 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 			}
 
 			if v.ConnectionState != nil {
-				h["messageCounter"] = v.ConnectionState.messageCounter
+				h["messageCounter"] = atomic.LoadUint64(&v.ConnectionState.atomicMessageCounter)
 			}
 
 			d[x] = h

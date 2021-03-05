@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 
 	"github.com/flynn/noise"
 	"github.com/slackhq/nebula/cert"
@@ -12,17 +13,17 @@ import (
 const ReplayWindow = 1024
 
 type ConnectionState struct {
-	eKey           *NebulaCipherState
-	dKey           *NebulaCipherState
-	H              *noise.HandshakeState
-	certState      *CertState
-	peerCert       *cert.NebulaCertificate
-	initiator      bool
-	messageCounter *uint64
-	window         *Bits
-	queueLock      sync.Mutex
-	writeLock      sync.Mutex
-	ready          bool
+	eKey                 *NebulaCipherState
+	dKey                 *NebulaCipherState
+	H                    *noise.HandshakeState
+	certState            *CertState
+	peerCert             *cert.NebulaCertificate
+	initiator            bool
+	atomicMessageCounter uint64
+	window               *Bits
+	queueLock            sync.Mutex
+	writeLock            sync.Mutex
+	ready                bool
 }
 
 func (f *Interface) newConnectionState(initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {
@@ -54,12 +55,11 @@ func (f *Interface) newConnectionState(initiator bool, pattern noise.HandshakePa
 	// The queue and ready params prevent a counter race that would happen when
 	// sending stored packets and simultaneously accepting new traffic.
 	ci := &ConnectionState{
-		H:              hs,
-		initiator:      initiator,
-		window:         b,
-		ready:          false,
-		certState:      curCertState,
-		messageCounter: new(uint64),
+		H:         hs,
+		initiator: initiator,
+		window:    b,
+		ready:     false,
+		certState: curCertState,
 	}
 
 	return ci
@@ -69,7 +69,7 @@ func (cs *ConnectionState) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m{
 		"certificate":     cs.peerCert,
 		"initiator":       cs.initiator,
-		"message_counter": cs.messageCounter,
+		"message_counter": atomic.LoadUint64(&cs.atomicMessageCounter),
 		"ready":           cs.ready,
 	})
 }

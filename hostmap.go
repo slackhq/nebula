@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -35,6 +36,8 @@ type HostMap struct {
 }
 
 type HostInfo struct {
+	sync.RWMutex
+
 	remote            *udpAddr
 	Remotes           []*HostInfoDest
 	promoteCounter    uint32
@@ -231,6 +234,9 @@ func (hm *HostMap) DeleteIndex(index uint32) {
 	hm.Lock()
 	hostinfo, ok := hm.Indexes[index]
 	if ok {
+		hostinfo.Lock()
+		defer hostinfo.Unlock()
+
 		delete(hm.Indexes, index)
 		delete(hm.RemoteIndexes, hostinfo.remoteIndexId)
 
@@ -513,8 +519,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		return
 	}
 
-	i.promoteCounter++
-	if i.promoteCounter%PromoteEvery == 0 {
+	if atomic.AddUint32(&i.promoteCounter, 1)&PromoteEvery == 0 {
 		// return early if we are already on a preferred remote
 		rIP := udp2ip(i.remote)
 		for _, l := range preferredRanges {
@@ -615,10 +620,12 @@ func (i *HostInfo) cachePacket(t NebulaMessageType, st NebulaMessageSubType, pac
 		copy(tempPacket, packet)
 		//l.WithField("trace", string(debug.Stack())).Error("Caching packet", tempPacket)
 		i.packetStore = append(i.packetStore, &cachedPacket{t, st, f, tempPacket})
-		i.logger().
-			WithField("length", len(i.packetStore)).
-			WithField("stored", true).
-			Debugf("Packet store")
+		if l.Level >= logrus.DebugLevel {
+			i.logger().
+				WithField("length", len(i.packetStore)).
+				WithField("stored", true).
+				Debugf("Packet store")
+		}
 
 	} else if l.Level >= logrus.DebugLevel {
 		i.logger().
@@ -638,7 +645,7 @@ func (i *HostInfo) handshakeComplete() {
 	i.HandshakeComplete = true
 	//TODO: this should be managed by the handshake state machine to set it based on how many handshake were seen.
 	// Clamping it to 2 gets us out of the woods for now
-	*i.ConnectionState.messageCounter = 2
+	atomic.StoreUint64(&i.ConnectionState.atomicMessageCounter, 2)
 	i.logger().Debugf("Sending %d stored packets", len(i.packetStore))
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)

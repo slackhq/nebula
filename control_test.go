@@ -43,15 +43,13 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 		},
 		Signature: []byte{1, 2, 1, 2, 1, 3},
 	}
-	counter := uint64(0)
 
 	remotes := []*HostInfoDest{NewHostInfoDest(remote1), NewHostInfoDest(remote2)}
 	hm.Add(ip2int(ipNet.IP), &HostInfo{
 		remote:  remote1,
 		Remotes: remotes,
 		ConnectionState: &ConnectionState{
-			peerCert:       crt,
-			messageCounter: &counter,
+			peerCert: crt,
 		},
 		remoteIndexId: 200,
 		localIndexId:  201,
@@ -62,8 +60,7 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 		remote:  remote1,
 		Remotes: remotes,
 		ConnectionState: &ConnectionState{
-			peerCert:       nil,
-			messageCounter: &counter,
+			peerCert: nil,
 		},
 		remoteIndexId: 200,
 		localIndexId:  201,
