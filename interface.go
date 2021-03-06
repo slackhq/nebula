@@ -134,11 +134,6 @@ func (f *Interface) run() {
 
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
 
-	// Launch n queues to read packets from udp
-	for i := 0; i < f.routines; i++ {
-		go f.listenOut(i)
-	}
-
 	// Prepare n tun queues
 	var reader io.ReadWriteCloser = f.inside
 	for i := 0; i < f.routines; i++ {
@@ -153,6 +148,11 @@ func (f *Interface) run() {
 
 	if err := f.inside.Activate(); err != nil {
 		l.Fatal(err)
+	}
+
+	// Launch n queues to read packets from udp
+	for i := 0; i < f.routines; i++ {
+		go f.listenOut(i)
 	}
 
 	// Launch n queues to read packets from tun dev

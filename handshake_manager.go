@@ -103,6 +103,8 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 	if err != nil {
 		return
 	}
+	hostinfo.Lock()
+	defer hostinfo.Unlock()
 
 	// If we haven't finished the handshake and we haven't hit max retries, query
 	// lighthouse and then send the handshake packet again.

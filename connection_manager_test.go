@@ -49,9 +49,8 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	// Add an ip we have established a connection w/ to hostmap
 	hostinfo := nc.hostMap.AddVpnIP(vpnIP)
 	hostinfo.ConnectionState = &ConnectionState{
-		certState:      cs,
-		H:              &noise.HandshakeState{},
-		messageCounter: new(uint64),
+		certState: cs,
+		H:         &noise.HandshakeState{},
 	}
 
 	// We saw traffic out to vpnIP
@@ -115,9 +114,8 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	// Add an ip we have established a connection w/ to hostmap
 	hostinfo := nc.hostMap.AddVpnIP(vpnIP)
 	hostinfo.ConnectionState = &ConnectionState{
-		certState:      cs,
-		H:              &noise.HandshakeState{},
-		messageCounter: new(uint64),
+		certState: cs,
+		H:         &noise.HandshakeState{},
 	}
 
 	// We saw traffic out to vpnIP

@@ -103,16 +103,21 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 
 	// If we have already created the handshake packet, we don't want to call the function at all.
 	if !hostinfo.HandshakeReady {
-		ixHandshakeStage0(f, vpnIp, hostinfo)
-		// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
-		//xx_handshakeStage0(f, ip, hostinfo)
+		hostinfo.Lock()
+		defer hostinfo.Unlock()
 
-		// If this is a static host, we don't need to wait for the HostQueryReply
-		// We can trigger the handshake right now
-		if _, ok := f.lightHouse.staticList[vpnIp]; ok {
-			select {
-			case f.handshakeManager.trigger <- vpnIp:
-			default:
+		if !hostinfo.HandshakeReady {
+			ixHandshakeStage0(f, vpnIp, hostinfo)
+			// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
+			//xx_handshakeStage0(f, ip, hostinfo)
+
+			// If this is a static host, we don't need to wait for the HostQueryReply
+			// We can trigger the handshake right now
+			if _, ok := f.lightHouse.staticList[vpnIp]; ok {
+				select {
+				case f.handshakeManager.trigger <- vpnIp:
+				default:
+				}
 			}
 		}
 	}
@@ -139,8 +144,8 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 		return
 	}
 
-	f.sendNoMetrics(message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out, 0)
-	if f.lightHouse != nil && *hostInfo.ConnectionState.messageCounter%5000 == 0 {
+	messageCounter := f.sendNoMetrics(message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out, 0)
+	if f.lightHouse != nil && messageCounter%5000 == 0 {
 		f.lightHouse.Query(fp.RemoteIP, f)
 	}
 }
@@ -223,7 +228,7 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 	var err error
 	//TODO: enable if we do more than 1 tun queue
 	//ci.writeLock.Lock()
-	c := atomic.AddUint64(ci.messageCounter, 1)
+	c := atomic.AddUint64(&ci.atomicMessageCounter, 1)
 
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
 	out = HeaderEncode(out, Version, uint8(t), uint8(st), hostinfo.remoteIndexId, c)
@@ -247,7 +252,7 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 	if err != nil {
 		hostinfo.logger().WithError(err).
 			WithField("udpAddr", remote).WithField("counter", c).
-			WithField("attemptedCounter", ci.messageCounter).
+			WithField("attemptedCounter", c).
 			Error("Failed to encrypt outgoing packet")
 		return c
 	}
