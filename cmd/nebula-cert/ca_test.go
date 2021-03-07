@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io/ioutil"
 	"os"
 	"testing"
@@ -52,28 +53,49 @@ func Test_ca(t *testing.T) {
 	ob := &bytes.Buffer{}
 	eb := &bytes.Buffer{}
 
+	nopw := &StubPasswordReader{
+		password: []byte(""),
+		err:      nil,
+	}
+
+	errpw := &StubPasswordReader{
+		password: []byte(""),
+		err:      errors.New("stub error"),
+	}
+
+	passphrase := []byte("DO NOT USE THIS KEY")
+	testpw := &StubPasswordReader{
+		password: passphrase,
+		err:      nil,
+	}
+
+	expectedOb := "Enter a passphrase (or empty for none): "
+	expectedErrOb := "Warning: no passphrase specified, out-key will be written in plaintext"
+
 	// required args
-	assertHelpError(t, ca([]string{"-no-encryption", "-out-key", "nope", "-out-crt", "nope", "duration", "100m"}, ob, eb), "-name is required")
+	assertHelpError(t, ca(
+		[]string{"-out-key", "nope", "-out-crt", "nope", "duration", "100m"}, ob, eb, nopw,
+	), "-name is required")
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 
 	// ipv4 only ips
-	assertHelpError(t, ca([]string{"-name", "ipv6", "-ips", "100::100/100"}, ob, eb), "invalid ip definition: can only be ipv4, have 100::100/100")
+	assertHelpError(t, ca([]string{"-name", "ipv6", "-ips", "100::100/100"}, ob, eb, nopw), "invalid ip definition: can only be ipv4, have 100::100/100")
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 
 	// ipv4 only subnets
-	assertHelpError(t, ca([]string{"-name", "ipv6", "-subnets", "100::100/100"}, ob, eb), "invalid subnet definition: can only be ipv4, have 100::100/100")
+	assertHelpError(t, ca([]string{"-name", "ipv6", "-subnets", "100::100/100"}, ob, eb, nopw), "invalid subnet definition: can only be ipv4, have 100::100/100")
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 
 	// failed key write
 	ob.Reset()
 	eb.Reset()
-	args := []string{"-no-encryption", "-name", "test", "-duration", "100m", "-out-crt", "/do/not/write/pleasecrt", "-out-key", "/do/not/write/pleasekey"}
-	assert.EqualError(t, ca(args, ob, eb), "error while writing out-key: open /do/not/write/pleasekey: "+NoSuchDirError)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	args := []string{"-name", "test", "-duration", "100m", "-out-crt", "/do/not/write/pleasecrt", "-out-key", "/do/not/write/pleasekey"}
+	assert.EqualError(t, ca(args, ob, eb, nopw), "error while writing out-key: open /do/not/write/pleasekey: "+NoSuchDirError)
+	assert.Equal(t, expectedOb, ob.String())
+	assert.Equal(t, expectedErrOb, eb.String())
 
 	// create temp key file
 	keyF, err := ioutil.TempFile("", "test.key")
@@ -83,10 +105,10 @@ func Test_ca(t *testing.T) {
 	// failed cert write
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-no-encryption", "-name", "test", "-duration", "100m", "-out-crt", "/do/not/write/pleasecrt", "-out-key", keyF.Name()}
-	assert.EqualError(t, ca(args, ob, eb), "error while writing out-crt: open /do/not/write/pleasecrt: "+NoSuchDirError)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	args = []string{"-name", "test", "-duration", "100m", "-out-crt", "/do/not/write/pleasecrt", "-out-key", keyF.Name()}
+	assert.EqualError(t, ca(args, ob, eb, nopw), "error while writing out-crt: open /do/not/write/pleasecrt: "+NoSuchDirError)
+	assert.Equal(t, expectedOb, ob.String())
+	assert.Equal(t, expectedErrOb, eb.String())
 
 	// create temp cert file
 	crtF, err := ioutil.TempFile("", "test.crt")
@@ -97,10 +119,10 @@ func Test_ca(t *testing.T) {
 	// test proper cert with removed empty groups and subnets
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-no-encryption", "-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.Nil(t, ca(args, ob, eb))
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	args = []string{"-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
+	assert.Nil(t, ca(args, ob, eb, nopw))
+	assert.Equal(t, expectedOb, ob.String())
+	assert.Equal(t, expectedErrOb, eb.String())
 
 	// read cert and key files
 	rb, _ := ioutil.ReadFile(keyF.Name())
@@ -124,30 +146,65 @@ func Test_ca(t *testing.T) {
 	assert.Equal(t, "", lCrt.Details.Issuer)
 	assert.True(t, lCrt.CheckSignature(lCrt.Details.PublicKey))
 
+	// test encrypted key
+	os.Remove(keyF.Name())
+	os.Remove(crtF.Name())
+	ob.Reset()
+	eb.Reset()
+	args = []string{"-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
+	assert.Nil(t, ca(args, ob, eb, testpw))
+	assert.Equal(t, expectedOb, ob.String())
+	assert.Equal(t, "", eb.String())
+
+	// read encrypted key file
+	rb, _ = ioutil.ReadFile(keyF.Name())
+	lKey, b, err = cert.DecryptAndUnmarshalEd25519PrivateKey(passphrase, rb)
+	assert.Len(t, b, 0)
+	assert.Nil(t, err)
+	assert.Len(t, lKey, 64)
+
+	// reading passsword results in an error, but with -no-encryption, the PasswordReader shouldn't be called
+	os.Remove(keyF.Name())
+	os.Remove(crtF.Name())
+	ob.Reset()
+	eb.Reset()
+	args = []string{"-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
+	assert.Error(t, ca(args, ob, eb, errpw))
+	assert.Equal(t, expectedOb, ob.String())
+	assert.Equal(t, "", eb.String())
+
+	// passing -no-encryption...
+	ob.Reset()
+	eb.Reset()
+	args = []string{"-no-encryption", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
+	assert.Nil(t, ca(args, ob, eb, errpw))
+	assert.Equal(t, "", ob.String()) // no prompt
+	assert.Equal(t, expectedErrOb, eb.String())
+
 	// create valid cert/key for overwrite tests
 	os.Remove(keyF.Name())
 	os.Remove(crtF.Name())
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-no-encryption", "-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.Nil(t, ca(args, ob, eb))
+	args = []string{"-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
+	assert.Nil(t, ca(args, ob, eb, nopw))
 
 	// test that we won't overwrite existing certificate file
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-no-encryption", "-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.EqualError(t, ca(args, ob, eb), "refusing to overwrite existing CA key: "+keyF.Name())
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	args = []string{"-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
+	assert.EqualError(t, ca(args, ob, eb, nopw), "refusing to overwrite existing CA key: "+keyF.Name())
+	assert.Equal(t, expectedOb, ob.String())
+	assert.Equal(t, expectedErrOb, eb.String())
 
 	// test that we won't overwrite existing key file
 	os.Remove(keyF.Name())
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-no-encryption", "-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.EqualError(t, ca(args, ob, eb), "refusing to overwrite existing CA cert: "+crtF.Name())
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	args = []string{"-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
+	assert.EqualError(t, ca(args, ob, eb, nopw), "refusing to overwrite existing CA cert: "+crtF.Name())
+	assert.Equal(t, expectedOb, ob.String())
+	assert.Equal(t, expectedErrOb, eb.String())
 	os.Remove(keyF.Name())
 
 }

@@ -14,7 +14,6 @@ import (
 	"github.com/skip2/go-qrcode"
 	"github.com/slackhq/nebula/cert"
 	"golang.org/x/crypto/ed25519"
-	"golang.org/x/crypto/ssh/terminal"
 )
 
 type caFlags struct {
@@ -45,7 +44,7 @@ func newCaFlags() *caFlags {
 	return &cf
 }
 
-func ca(args []string, out io.Writer, errOut io.Writer) error {
+func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error {
 	cf := newCaFlags()
 	err := cf.set.Parse(args)
 	if err != nil {
@@ -114,22 +113,18 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 
 	var passphrase []byte
 	if !*cf.noEncryption {
-		if !terminal.IsTerminal(int(os.Stdin.Fd())) {
-			return fmt.Errorf(
-				"out-key must be encrypted interactively, run with -no-encryption to write in plaintext")
-		}
+		out.Write([]byte("Enter a passphrase (or empty for none): "))
+		passphrase, err = pr.ReadPassword()
 
-		fmt.Printf("Enter a passphrase (or empty for none): ")
-		passphrase, err = terminal.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Println()
-
-		if err != nil {
-			return fmt.Errorf("error reading password: %s", err)
+		if err == ErrNoTerminal {
+			return fmt.Errorf("out-key must be encrypted interactively, run with -no-encryption to write in plaintext")
+		} else if err != nil {
+			return fmt.Errorf("error reading passphrase: %s", err)
 		}
 	}
 
 	if len(passphrase) == 0 {
-		fmt.Println("Warning: no passphrase specified, out-key will be written in plaintext")
+		errOut.Write([]byte("Warning: no passphrase specified, out-key will be written in plaintext"))
 	}
 
 	pub, rawPriv, err := ed25519.GenerateKey(rand.Reader)
