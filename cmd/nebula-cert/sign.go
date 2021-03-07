@@ -15,7 +15,6 @@ import (
 	"github.com/skip2/go-qrcode"
 	"github.com/slackhq/nebula/cert"
 	"golang.org/x/crypto/curve25519"
-	"golang.org/x/crypto/ssh/terminal"
 )
 
 type signFlags struct {
@@ -51,7 +50,7 @@ func newSignFlags() *signFlags {
 
 }
 
-func signCert(args []string, out io.Writer, errOut io.Writer) error {
+func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error {
 	sf := newSignFlags()
 	err := sf.set.Parse(args)
 	if err != nil {
@@ -84,24 +83,24 @@ func signCert(args []string, out io.Writer, errOut io.Writer) error {
 	// naively attempt to decode the private key as though it is not encrypted
 	caKey, _, err = cert.UnmarshalEd25519PrivateKey(rawCAKey)
 	if err == cert.ErrPrivateKeyEncrypted {
-		if !terminal.IsTerminal(int(os.Stdin.Fd())) {
-			return fmt.Errorf("ca-key is encrypted and must be decrypted interactively")
-		}
-
-		// ask for a passphrase and try decrypting
+		// ask for a passphrase until we get one
 		var passphrase []byte
-		for {
-			fmt.Printf("Enter passphrase: ")
-			passphrase, err = terminal.ReadPassword(int(os.Stdin.Fd()))
-			fmt.Println()
+		for i := 0; i < 5; i++ {
+			out.Write([]byte("Enter passphrase: "))
+			passphrase, err = pr.ReadPassword()
 
-			if err != nil {
+			if err == ErrNoTerminal {
+				return fmt.Errorf("ca-key is encrypted and must be decrypted interactively")
+			} else if err != nil {
 				return fmt.Errorf("error reading password: %s", err)
 			}
 
 			if len(passphrase) > 0 {
 				break
 			}
+		}
+		if len(passphrase) == 0 {
+			return fmt.Errorf("cannot open encrypted ca-key without passphrase")
 		}
 
 		caKey, _, err = cert.DecryptAndUnmarshalEd25519PrivateKey(passphrase, rawCAKey)

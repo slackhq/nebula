@@ -62,11 +62,11 @@ func main() {
 
 	switch args[0] {
 	case "ca":
-		err = ca(args[1:], os.Stdout, os.Stderr)
+		err = ca(args[1:], os.Stdout, os.Stderr, StdinPasswordReader{})
 	case "keygen":
 		err = keygen(args[1:], os.Stdout, os.Stderr)
 	case "sign":
-		err = signCert(args[1:], os.Stdout, os.Stderr)
+		err = signCert(args[1:], os.Stdout, os.Stderr, StdinPasswordReader{})
 	case "print":
 		err = printCert(args[1:], os.Stdout, os.Stderr)
 	case "verify":
