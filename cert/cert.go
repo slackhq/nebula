@@ -151,10 +151,19 @@ func MarshalEd25519PrivateKey(key ed25519.PrivateKey) []byte {
 
 // EncryptAndMarshalX25519PrivateKey is a simple helper to encrypt and PEM encode an X25519 private key
 func EncryptAndMarshalEd25519PrivateKey(passphrase, b []byte) ([]byte, error) {
-	b, err := encrypt(passphrase, b)
+	ciphertext, kdfParams, err := aes256Encrypt(passphrase, b)
 	if err != nil {
 		return nil, err
 	}
+
+	b, err = proto.Marshal(&RawNebulaEncryptedData{
+		EncryptionMetadata: &RawNebulaEncryptedDataMetadata{
+			EncryptionAlgorithm:     "AES-256-GCM",
+			KeyDerivationParameters: kdfParams,
+		},
+		Ciphertext: ciphertext,
+	})
+
 	return pem.EncodeToMemory(&pem.Block{Type: EncryptedEd25519PrivateKeyBanner, Bytes: b}), nil
 }
 
@@ -196,22 +205,48 @@ func UnmarshalEd25519PrivateKey(b []byte) (ed25519.PrivateKey, []byte, error) {
 	return k.Bytes, r, nil
 }
 
+func UnmarshalRawNebulaEncryptedData(b []byte) (*RawNebulaEncryptedData, error) {
+	if len(b) == 0 {
+		return nil, fmt.Errorf("nil byte array")
+	}
+
+	var red RawNebulaEncryptedData
+	err := proto.Unmarshal(b, &red)
+	if err != nil {
+		return nil, err
+	}
+
+	if red.EncryptionMetadata == nil {
+		return nil, fmt.Errorf("encoded EncryptionMetadata was nil")
+	}
+
+	return &red, nil
+}
+
 func DecryptAndUnmarshalEd25519PrivateKey(passphrase, b []byte) (ed25519.PrivateKey, []byte, error) {
 	k, r := pem.Decode(b)
 	if k == nil {
 		return nil, r, fmt.Errorf("input did not contain a valid PEM encoded block")
 	}
 
-	var bytes []byte
-	var err error
-
 	if k.Type != EncryptedEd25519PrivateKeyBanner {
 		return nil, r, fmt.Errorf("bytes did not contain a proper nebula encrypted Ed25519 private key banner")
 	}
 
-	bytes, err = decrypt(passphrase, k.Bytes)
+	red, err := UnmarshalRawNebulaEncryptedData(k.Bytes)
 	if err != nil {
 		return nil, r, err
+	}
+
+	var bytes []byte
+	switch red.EncryptionMetadata.EncryptionAlgorithm {
+	case "AES-256-GCM":
+		bytes, err = aes256Decrypt(passphrase, red.Ciphertext, red.EncryptionMetadata.KeyDerivationParameters)
+		if err != nil {
+			return nil, r, err
+		}
+	default:
+		return nil, r, fmt.Errorf("unsupported encryption algorithm: %s", red.EncryptionMetadata.EncryptionAlgorithm)
 	}
 
 	if len(bytes) != ed25519.PrivateKeySize {

@@ -27,3 +27,13 @@ message RawNebulaCertificateDetails {
     // sha-256 of the issuer certificate, if this field is blank the cert is self-signed
     bytes Issuer = 9;
 }
+
+message RawNebulaEncryptedData {
+	RawNebulaEncryptedDataMetadata EncryptionMetadata = 1;
+	bytes Ciphertext = 2;
+}
+
+message RawNebulaEncryptedDataMetadata {
+	string EncryptionAlgorithm = 1;
+	string KeyDerivationParameters = 2;
+}
