@@ -246,7 +246,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 
 	// fatal if am_lighthouse is enabled but we are using an ephemeral port
 	if amLighthouse && (config.GetInt("listen.port", 0) == 0) {
-		return nil, NewContextualError("lighthouse.am_lighthouse enabled on node but no port number is set in config", nil, err)
+		return nil, errors.New("lighthouse.am_lighthouse enabled on node but no port number is set in config")
 	}
 
 	// warn if am_lighthouse is enabled but upstream lighthouses exists
