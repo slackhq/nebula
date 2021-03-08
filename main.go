@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net"
 	"strconv"
