@@ -91,6 +91,17 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 		return hostinfo
 	}
 
+	// Handshake is not ready, we need to grab the lock now before we start
+	// the handshake process
+	hostinfo.Lock()
+	defer hostinfo.Unlock()
+
+	// Double check, now that we have the lock
+	ci = hostinfo.ConnectionState
+	if ci != nil && ci.eKey != nil && ci.ready {
+		return hostinfo
+	}
+
 	if ci == nil {
 		// if we don't have a connection state, then send a handshake initiation
 		ci = f.newConnectionState(true, noise.HandshakeIX, []byte{}, 0)
@@ -103,21 +114,16 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 
 	// If we have already created the handshake packet, we don't want to call the function at all.
 	if !hostinfo.HandshakeReady {
-		hostinfo.Lock()
-		defer hostinfo.Unlock()
+		ixHandshakeStage0(f, vpnIp, hostinfo)
+		// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
+		//xx_handshakeStage0(f, ip, hostinfo)
 
-		if !hostinfo.HandshakeReady {
-			ixHandshakeStage0(f, vpnIp, hostinfo)
-			// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
-			//xx_handshakeStage0(f, ip, hostinfo)
-
-			// If this is a static host, we don't need to wait for the HostQueryReply
-			// We can trigger the handshake right now
-			if _, ok := f.lightHouse.staticList[vpnIp]; ok {
-				select {
-				case f.handshakeManager.trigger <- vpnIp:
-				default:
-				}
+		// If this is a static host, we don't need to wait for the HostQueryReply
+		// We can trigger the handshake right now
+		if _, ok := f.lightHouse.staticList[vpnIp]; ok {
+			select {
+			case f.handshakeManager.trigger <- vpnIp:
+			default:
 			}
 		}
 	}

@@ -329,6 +329,9 @@ func (f *Interface) handleRecvError(addr *udpAddr, h *Header) {
 		return
 	}
 
+	hostinfo.Lock()
+	defer hostinfo.Unlock()
+
 	if !hostinfo.RecvErrorExceeded() {
 		return
 	}
