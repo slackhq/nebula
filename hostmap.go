@@ -253,7 +253,7 @@ func (hm *HostMap) DeleteIndex(index uint32) {
 			// instance. Clean it up as well if we do.
 			hostinfo2, ok := hm.Hosts[hostId]
 			if ok && hostinfo2 == hostinfo {
-				delete(hm.Hosts, hostinfo.hostId)
+				delete(hm.Hosts, hostId)
 			}
 		}
 	}
