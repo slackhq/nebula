@@ -76,13 +76,6 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 // Note we always return `false` in ixHandshakeStage1 because there is nothing
 // to tear down.
 func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet []byte, h *Header) bool {
-	var ip uint32
-	if h.RemoteIndex != 0 {
-		// We already have this index, add the new remote addr
-		f.hostMap.AddRemote(ip, addr)
-		return false
-	}
-
 	ci := f.newConnectionState(false, noise.HandshakeIX, []byte{}, 0)
 	// Mark packet 1 as seen so it doesn't show up as missed
 	ci.window.Update(1)
@@ -212,7 +205,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			Info("Handshake message sent")
 	}
 
-	ip = ip2int(remoteCert.Details.Ips[0].IP)
+	ip := ip2int(remoteCert.Details.Ips[0].IP)
 	ci.peerCert = remoteCert
 	ci.dKey = NewNebulaCipherState(dKey)
 	ci.eKey = NewNebulaCipherState(eKey)
