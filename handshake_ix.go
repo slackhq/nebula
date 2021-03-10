@@ -160,19 +160,6 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 		return
 	}
 
-	if f.hostMap.CheckHandshakeCompleteIP(vpnIP) && vpnIP < ip2int(f.certState.certificate.Details.Ips[0].IP) {
-		l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-			WithField("certName", certName).
-			WithField("fingerprint", fingerprint).
-			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Info("Prevented a handshake race")
-
-		// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
-		f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
-		return
-	}
-
 	hostinfo.HandshakePacket[0] = make([]byte, len(packet[HeaderLen:]))
 	copy(hostinfo.HandshakePacket[0], packet[HeaderLen:])
 
@@ -185,6 +172,43 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 	// handshake packet 2 from the initiator.
 	ci.window.Update(2)
 
+	ci.peerCert = remoteCert
+	ci.dKey = NewNebulaCipherState(dKey)
+	ci.eKey = NewNebulaCipherState(eKey)
+	//l.Debugln("got symmetric pairs")
+
+	//hostinfo.ClearRemotes()
+	hostinfo.AddRemote(*addr)
+	hostinfo.ForcePromoteBest(f.hostMap.preferredRanges)
+	hostinfo.CreateRemoteCIDR(remoteCert)
+
+	hostinfo.Lock()
+	defer hostinfo.Unlock()
+
+	// Only overwrite existing record if we should win the handshake race
+	overwrite := vpnIP > ip2int(f.certState.certificate.Details.Ips[0].IP)
+	existing, completed := f.hostMap.CheckAndAddHostInfo(hostinfo, overwrite, f)
+	if !completed {
+		// This means there was an existing tunnel and we didn't win
+		// handshake avoidance
+		if bytes.Equal(existing.HandshakePacket[0], hostinfo.HandshakePacket[0]) {
+			// Fall down below and resend the existing handshake packet
+			msg = existing.HandshakePacket[2]
+		} else {
+			l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
+				WithField("certName", certName).
+				WithField("fingerprint", fingerprint).
+				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
+				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+				Info("Prevented a handshake race")
+
+			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
+			f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			return
+		}
+	}
+
+	// Do the send
 	f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
 	err = f.outside.WriteTo(msg, addr)
 	if err != nil {
@@ -203,35 +227,10 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 			Info("Handshake message sent")
 	}
 
-	ip := ip2int(remoteCert.Details.Ips[0].IP)
-	ci.peerCert = remoteCert
-	ci.dKey = NewNebulaCipherState(dKey)
-	ci.eKey = NewNebulaCipherState(eKey)
-	//l.Debugln("got symmetric pairs")
-
-	//hostinfo.ClearRemotes()
-	hostinfo.AddRemote(*addr)
-	hostinfo.ForcePromoteBest(f.hostMap.preferredRanges)
-	hostinfo.CreateRemoteCIDR(remoteCert)
-	f.lightHouse.AddRemoteAndReset(ip, addr)
-	if f.serveDns {
-		dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ips[0].IP.String())
+	if completed {
+		hostinfo.handshakeComplete()
 	}
 
-	ho, err := f.hostMap.QueryVpnIP(vpnIP)
-	if err == nil && ho.localIndexId != 0 {
-		l.WithField("vpnIp", vpnIP).
-			WithField("certName", certName).
-			WithField("fingerprint", fingerprint).
-			WithField("action", "removing stale index").
-			WithField("index", ho.localIndexId).
-			WithField("remoteIndex", ho.remoteIndexId).
-			Debug("Handshake processing")
-		f.hostMap.DeleteHostInfo(ho)
-	}
-
-	hostinfo.handshakeComplete()
-	f.hostMap.AddVpnIPHostInfo(vpnIP, hostinfo)
 	return
 }
 
@@ -311,34 +310,17 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	// Regardless of whether you are the sender or receiver, you should arrive here
 	// and complete standing up the connection.
 	if dKey != nil && eKey != nil {
-		ip := ip2int(remoteCert.Details.Ips[0].IP)
 		ci.peerCert = remoteCert
 		ci.dKey = NewNebulaCipherState(dKey)
 		ci.eKey = NewNebulaCipherState(eKey)
 		//l.Debugln("got symmetric pairs")
 
 		//hostinfo.ClearRemotes()
-		f.hostMap.AddRemote(ip, addr)
+		hostinfo.AddRemote(*addr)
+		hostinfo.ForcePromoteBest(f.hostMap.preferredRanges)
 		hostinfo.CreateRemoteCIDR(remoteCert)
-		f.lightHouse.AddRemoteAndReset(ip, addr)
-		if f.serveDns {
-			dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ips[0].IP.String())
-		}
 
-		ho, err := f.hostMap.QueryVpnIP(vpnIP)
-		if err == nil && ho.localIndexId != 0 {
-			l.WithField("vpnIp", vpnIP).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("action", "removing stale index").
-				WithField("index", ho.localIndexId).
-				WithField("remoteIndex", ho.remoteIndexId).
-				Debug("Handshake processing")
-			f.hostMap.DeleteHostInfo(ho)
-		}
-
-		f.hostMap.AddVpnIPHostInfo(vpnIP, hostinfo)
-
+		f.hostMap.CheckAndAddHostInfo(hostinfo, true, f)
 		hostinfo.handshakeComplete()
 		f.metricHandshakes.Update(duration)
 	} else {

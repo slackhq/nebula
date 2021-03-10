@@ -396,36 +396,48 @@ func (hm *HostMap) queryUnsafeRoute(ip uint32) uint32 {
 	}
 }
 
-func (hm *HostMap) CheckHandshakeCompleteIP(vpnIP uint32) bool {
-	hm.RLock()
-	if i, ok := hm.Hosts[vpnIP]; ok {
-		if i == nil {
-			hm.RUnlock()
-			return false
+// CheckAndCompleteHandshake returns the existing hostinfo entry if this
+// hostId already has a complete handshake. If completed is true and
+// existing is non-nil, then we overwrote the old existing tunnel.
+func (hm *HostMap) CheckAndAddHostInfo(hostinfo *HostInfo, overwrite bool, f *Interface) (existing *HostInfo, completed bool) {
+	hm.Lock()
+	existing, ok := hm.Hosts[hostinfo.hostId]
+	if ok && existing != nil {
+		if !overwrite {
+			hm.Unlock()
+			return existing, false
 		}
-		complete := i.HandshakeComplete
-		hm.RUnlock()
-		return complete
 
+		delete(hm.Hosts, hostinfo.hostId)
+		delete(hm.Indexes, hostinfo.localIndexId)
+		delete(hm.RemoteIndexes, hostinfo.remoteIndexId)
 	}
-	hm.RUnlock()
-	return false
+
+	hm.addHostInfo(hostinfo, f)
+	hm.Unlock()
+	return existing, true
 }
 
-func (hm *HostMap) CheckHandshakeCompleteIndex(index uint32) bool {
-	hm.RLock()
-	if i, ok := hm.Indexes[index]; ok {
-		if i == nil {
-			hm.RUnlock()
-			return false
-		}
-		complete := i.HandshakeComplete
-		hm.RUnlock()
-		return complete
+// We already have the hm Lock when this is called, so make sure to not call
+// any other methods that might try to grab it again
+func (hm *HostMap) addHostInfo(hostinfo *HostInfo, f *Interface) {
+	remoteCert := hostinfo.ConnectionState.peerCert
+	ip := ip2int(remoteCert.Details.Ips[0].IP)
 
+	f.lightHouse.AddRemoteAndReset(ip, hostinfo.remote)
+	if f.serveDns {
+		dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ips[0].IP.String())
 	}
-	hm.RUnlock()
-	return false
+
+	hm.Hosts[hostinfo.hostId] = hostinfo
+	hm.Indexes[hostinfo.localIndexId] = hostinfo
+	hm.RemoteIndexes[hostinfo.remoteIndexId] = hostinfo
+
+	if l.Level > logrus.DebugLevel {
+		l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(hostinfo.hostId), "mapTotalSize": len(hm.Hosts),
+			"hostinfo": m{"existing": true, "localIndexId": hostinfo.localIndexId, "hostId": IntIp(hostinfo.hostId)}}).
+			Debug("Hostmap vpnIp added")
+	}
 }
 
 func (hm *HostMap) ClearRemotes(vpnIP uint32) {
