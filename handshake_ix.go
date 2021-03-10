@@ -156,7 +156,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 			WithField("certName", certName).
 			WithField("fingerprint", fingerprint).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Noise did not complete and generate keys")
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Noise did not arrive at a key")
 		return
 	}
 
@@ -265,6 +265,11 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		// to DOS us. Every other error condition after should to allow a possible good handshake to complete in the
 		// near future
 		return false
+	} else if dKey == nil || eKey == nil {
+		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
+			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+			Error("Noise did not arrive at a key")
+		return true
 	}
 
 	hs := &NebulaHandshake{}
@@ -309,28 +314,20 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 	// Regardless of whether you are the sender or receiver, you should arrive here
 	// and complete standing up the connection.
-	if dKey != nil && eKey != nil {
-		ci.peerCert = remoteCert
-		ci.dKey = NewNebulaCipherState(dKey)
-		ci.eKey = NewNebulaCipherState(eKey)
-		//l.Debugln("got symmetric pairs")
 
-		//hostinfo.ClearRemotes()
-		hostinfo.AddRemote(*addr)
-		hostinfo.ForcePromoteBest(f.hostMap.preferredRanges)
-		hostinfo.CreateRemoteCIDR(remoteCert)
+	ci.peerCert = remoteCert
+	ci.dKey = NewNebulaCipherState(dKey)
+	ci.eKey = NewNebulaCipherState(eKey)
+	//l.Debugln("got symmetric pairs")
 
-		f.hostMap.CheckAndAddHostInfo(hostinfo, true, f)
-		hostinfo.handshakeComplete()
-		f.metricHandshakes.Update(duration)
-	} else {
-		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-			WithField("certName", certName).
-			WithField("fingerprint", fingerprint).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			Error("Noise did not arrive at a key")
-		return true
-	}
+	//hostinfo.ClearRemotes()
+	hostinfo.AddRemote(*addr)
+	hostinfo.ForcePromoteBest(f.hostMap.preferredRanges)
+	hostinfo.CreateRemoteCIDR(remoteCert)
+
+	f.hostMap.CheckAndAddHostInfo(hostinfo, true, f)
+	hostinfo.handshakeComplete()
+	f.metricHandshakes.Update(duration)
 
 	return false
 }
