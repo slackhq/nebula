@@ -146,14 +146,13 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			return true
 		}
 
-		hostinfo, err = f.handshakeManager.AddIndex(myIndex, ci)
-		if err != nil {
-			l.WithError(err).WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Error adding index to connection manager")
-
-			return true
+		hostinfo = &HostInfo{
+			ConnectionState: ci,
+			Remotes:         []*HostInfoDest{},
+			localIndexId:    myIndex,
+			remoteIndexId:   hs.Details.InitiatorIndex,
+			hostId:          vpnIP,
+			HandshakePacket: make(map[uint8][]byte, 0),
 		}
 		hostinfo.Lock()
 		defer hostinfo.Unlock()
