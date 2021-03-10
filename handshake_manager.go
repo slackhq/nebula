@@ -196,8 +196,8 @@ func (c *HandshakeManager) AddVpnIP(vpnIP uint32) *HostInfo {
 	return hostinfo
 }
 
-func (c *HandshakeManager) AddIndex(hostId, index, remoteIndex uint32, ci *ConnectionState) (*HostInfo, error) {
-	hostinfo, err := c.pendingHostMap.AddIndex(hostId, index, remoteIndex, ci)
+func (c *HandshakeManager) AddIndex(index uint32, ci *ConnectionState) (*HostInfo, error) {
+	hostinfo, err := c.pendingHostMap.AddIndex(index, ci)
 	if err != nil {
 		return nil, fmt.Errorf("Issue adding index: %d", index)
 	}
@@ -208,6 +208,10 @@ func (c *HandshakeManager) AddIndex(hostId, index, remoteIndex uint32, ci *Conne
 
 func (c *HandshakeManager) AddIndexHostInfo(index uint32, h *HostInfo) {
 	c.pendingHostMap.AddIndexHostInfo(index, h)
+}
+
+func (c *HandshakeManager) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
+	c.pendingHostMap.addRemoteIndexHostInfo(index, h)
 }
 
 func (c *HandshakeManager) DeleteHostInfo(hostinfo *HostInfo) {

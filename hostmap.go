@@ -166,19 +166,16 @@ func (hm *HostMap) DeleteVpnIP(vpnIP uint32) {
 	}
 }
 
-func (hm *HostMap) AddIndex(hostId, index, remoteIndex uint32, ci *ConnectionState) (*HostInfo, error) {
+func (hm *HostMap) AddIndex(index uint32, ci *ConnectionState) (*HostInfo, error) {
 	hm.Lock()
 	if _, ok := hm.Indexes[index]; !ok {
 		h := &HostInfo{
 			ConnectionState: ci,
 			Remotes:         []*HostInfoDest{},
 			localIndexId:    index,
-			remoteIndexId:   remoteIndex,
-			hostId:          hostId,
 			HandshakePacket: make(map[uint8][]byte, 0),
 		}
 		hm.Indexes[index] = h
-		hm.RemoteIndexes[remoteIndex] = h
 		l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes),
 			"hostinfo": m{"existing": false, "localIndexId": h.localIndexId, "hostId": IntIp(h.hostId)}}).
 			Debug("Hostmap index added")
@@ -203,15 +200,30 @@ func (hm *HostMap) AddIndexHostInfo(index uint32, h *HostInfo) {
 	}
 }
 
-func (hm *HostMap) AddVpnIPHostInfo(h *HostInfo) {
+// Only used by pendingHostMap when the remote index is not initially known
+func (hm *HostMap) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
 	hm.Lock()
-	hm.Hosts[h.hostId] = h
+	h.remoteIndexId = index
+	hm.RemoteIndexes[index] = h
+	hm.Unlock()
+
+	if l.Level > logrus.DebugLevel {
+		l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes),
+			"hostinfo": m{"existing": true, "localIndexId": h.localIndexId, "hostId": IntIp(h.hostId)}}).
+			Debug("Hostmap remoteIndex added")
+	}
+}
+
+func (hm *HostMap) AddVpnIPHostInfo(vpnIP uint32, h *HostInfo) {
+	hm.Lock()
+	h.hostId = vpnIP
+	hm.Hosts[vpnIP] = h
 	hm.Indexes[h.localIndexId] = h
 	hm.RemoteIndexes[h.remoteIndexId] = h
 	hm.Unlock()
 
 	if l.Level > logrus.DebugLevel {
-		l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(h.hostId), "mapTotalSize": len(hm.Hosts),
+		l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(vpnIP), "mapTotalSize": len(hm.Hosts),
 			"hostinfo": m{"existing": true, "localIndexId": h.localIndexId, "hostId": IntIp(h.hostId)}}).
 			Debug("Hostmap vpnIp added")
 	}

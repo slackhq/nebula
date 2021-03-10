@@ -28,8 +28,7 @@ func Test_NewHandshakeManagerIndex(t *testing.T) {
 
 	// Add four indexes
 	for _, v := range indexes {
-		// We don't care what the hostId and remoteIndex are, so just use the same value
-		blah.AddIndex(v, v, v, &ConnectionState{})
+		blah.AddIndex(v, &ConnectionState{})
 	}
 	// Confirm they are in the pending index list
 	for _, v := range indexes {
@@ -217,9 +216,9 @@ func Test_NewHandshakeManagerIndexcleanup(t *testing.T) {
 	now := time.Now()
 	blah.NextInboundHandshakeTimerTick(now)
 
-	hostinfo, _ := blah.AddIndex(101010, 12341234, 456, &ConnectionState{})
+	hostinfo, _ := blah.AddIndex(12341234, &ConnectionState{})
 	// Pretned we have an index too
-	blah.pendingHostMap.AddVpnIPHostInfo(hostinfo)
+	blah.pendingHostMap.AddVpnIPHostInfo(101010, hostinfo)
 	assert.Contains(t, blah.pendingHostMap.Hosts, uint32(101010))
 
 	for i := 1; i <= DefaultHandshakeRetries+2; i++ {

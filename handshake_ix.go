@@ -146,7 +146,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			return true
 		}
 
-		hostinfo, err = f.handshakeManager.AddIndex(vpnIP, myIndex, hs.Details.InitiatorIndex, ci)
+		hostinfo, err = f.handshakeManager.AddIndex(myIndex, ci)
 		if err != nil {
 			l.WithError(err).WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 				WithField("certName", certName).
@@ -257,7 +257,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 				f.hostMap.DeleteHostInfo(ho)
 			}
 
-			f.hostMap.AddVpnIPHostInfo(hostinfo)
+			f.hostMap.AddVpnIPHostInfo(vpnIP, hostinfo)
 
 			hostinfo.handshakeComplete()
 		} else {
@@ -324,13 +324,6 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		return true
 	}
 	vpnIP := ip2int(remoteCert.Details.Ips[0].IP)
-	if vpnIP != hostinfo.hostId {
-		l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-			WithField("cert", remoteCert).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			WithField("certificateVpnIP", IntIp(vpnIP)).
-			Error("IP in certificate does not match expected vpnIp")
-		return true
-	}
 	certName := remoteCert.Details.Name
 	fingerprint, _ := remoteCert.Sha256Sum()
 
@@ -384,7 +377,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			f.hostMap.DeleteHostInfo(ho)
 		}
 
-		f.hostMap.AddVpnIPHostInfo(hostinfo)
+		f.hostMap.AddVpnIPHostInfo(vpnIP, hostinfo)
 
 		hostinfo.handshakeComplete()
 		f.metricHandshakes.Update(duration)
