@@ -408,9 +408,9 @@ func (hm *HostMap) CheckAndAddHostInfo(hostinfo *HostInfo, overwrite bool, f *In
 			return existing, false
 		}
 
-		delete(hm.Hosts, hostinfo.hostId)
-		delete(hm.Indexes, hostinfo.localIndexId)
-		delete(hm.RemoteIndexes, hostinfo.remoteIndexId)
+		delete(hm.Hosts, existing.hostId)
+		delete(hm.Indexes, existing.localIndexId)
+		delete(hm.RemoteIndexes, existing.remoteIndexId)
 	}
 
 	hm.addHostInfo(hostinfo, f)
