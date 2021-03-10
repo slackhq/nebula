@@ -154,8 +154,6 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			hostId:          vpnIP,
 			HandshakePacket: make(map[uint8][]byte, 0),
 		}
-		hostinfo.Lock()
-		defer hostinfo.Unlock()
 
 		l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 			WithField("certName", certName).
@@ -238,6 +236,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 			//hostinfo.ClearRemotes()
 			hostinfo.AddRemote(*addr)
+			hostinfo.ForcePromoteBest(f.hostMap.preferredRanges)
 			hostinfo.CreateRemoteCIDR(remoteCert)
 			f.lightHouse.AddRemoteAndReset(ip, addr)
 			if f.serveDns {
@@ -256,9 +255,9 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 				f.hostMap.DeleteHostInfo(ho)
 			}
 
-			f.hostMap.AddVpnIPHostInfo(vpnIP, hostinfo)
-
 			hostinfo.handshakeComplete()
+			f.hostMap.AddVpnIPHostInfo(vpnIP, hostinfo)
+			return false
 		} else {
 			l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 				WithField("certName", certName).
