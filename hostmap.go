@@ -236,19 +236,19 @@ func (hm *HostMap) DeleteIndex(index uint32) {
 	if ok {
 		delete(hm.Indexes, index)
 		delete(hm.RemoteIndexes, hostinfo.remoteIndexId)
-	}
-	hm.Unlock()
+		hm.Unlock()
 
-	hostinfo.RLock()
-	hostId := hostinfo.hostId
-	hostinfo.RUnlock()
+		hostinfo.RLock()
+		hostId := hostinfo.hostId
+		hostinfo.RUnlock()
 
-	// Check if we have an entry under hostId that matches the same hostinfo
-	// instance. Clean it up as well if we do.
-	hm.Lock()
-	hostinfo2, ok := hm.Hosts[hostId]
-	if ok && hostinfo2 == hostinfo {
-		delete(hm.Hosts, hostinfo.hostId)
+		// Check if we have an entry under hostId that matches the same hostinfo
+		// instance. Clean it up as well if we do.
+		hm.Lock()
+		hostinfo2, ok := hm.Hosts[hostId]
+		if ok && hostinfo2 == hostinfo {
+			delete(hm.Hosts, hostinfo.hostId)
+		}
 	}
 	hm.Unlock()
 
