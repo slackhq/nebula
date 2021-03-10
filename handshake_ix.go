@@ -73,9 +73,7 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 
 }
 
-// Note we always return `false` in ixHandshakeStage1 because there is nothing
-// to tear down.
-func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet []byte, h *Header) bool {
+func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 	ci := f.newConnectionState(false, noise.HandshakeIX, []byte{}, 0)
 	// Mark packet 1 as seen so it doesn't show up as missed
 	ci.window.Update(1)
@@ -84,7 +82,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	if err != nil {
 		l.WithError(err).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.ReadMessage")
-		return false
+		return
 	}
 
 	hs := &NebulaHandshake{}
@@ -95,7 +93,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	if err != nil || hs.Details == nil {
 		l.WithError(err).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed unmarshal handshake message")
-		return false
+		return
 	}
 
 	remoteCert, err := RecombineCertAndValidate(ci.H, hs.Details.Cert)
@@ -103,7 +101,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		l.WithError(err).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).WithField("cert", remoteCert).
 			Info("Invalid certificate from host")
-		return false
+		return
 	}
 	vpnIP := ip2int(remoteCert.Details.Ips[0].IP)
 	certName := remoteCert.Details.Name
@@ -115,10 +113,10 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			WithField("certName", certName).
 			WithField("fingerprint", fingerprint).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to generate index")
-		return false
+		return
 	}
 
-	hostinfo = &HostInfo{
+	hostinfo := &HostInfo{
 		ConnectionState: ci,
 		Remotes:         []*HostInfoDest{},
 		localIndexId:    myIndex,
@@ -143,7 +141,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			WithField("certName", certName).
 			WithField("fingerprint", fingerprint).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to marshal handshake message")
-		return false
+		return
 	}
 
 	header := HeaderEncode(make([]byte, HeaderLen), Version, uint8(handshake), handshakeIXPSK0, hs.Details.InitiatorIndex, 2)
@@ -153,13 +151,13 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			WithField("certName", certName).
 			WithField("fingerprint", fingerprint).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.WriteMessage")
-		return false
+		return
 	} else if dKey == nil || eKey == nil {
 		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 			WithField("certName", certName).
 			WithField("fingerprint", fingerprint).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Noise did not complete and generate keys")
-		return false
+		return
 	}
 
 	if f.hostMap.CheckHandshakeCompleteIP(vpnIP) && vpnIP < ip2int(f.certState.certificate.Details.Ips[0].IP) {
@@ -172,7 +170,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 		// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
 		f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
-		return false
+		return
 	}
 
 	hostinfo.HandshakePacket[0] = make([]byte, len(packet[HeaderLen:]))
@@ -234,7 +232,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 	hostinfo.handshakeComplete()
 	f.hostMap.AddVpnIPHostInfo(vpnIP, hostinfo)
-	return false
+	return
 }
 
 func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet []byte, h *Header) bool {
