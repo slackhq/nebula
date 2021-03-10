@@ -98,34 +98,6 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			return true
 		}
 
-		hostinfo, _ := f.handshakeManager.pendingHostMap.QueryReverseIndex(hs.Details.InitiatorIndex)
-		if hostinfo != nil {
-			hostinfo.RLock()
-			defer hostinfo.RUnlock()
-
-			if bytes.Equal(hostinfo.HandshakePacket[0], packet[HeaderLen:]) {
-				if msg, ok := hostinfo.HandshakePacket[2]; ok {
-					f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
-					err := f.outside.WriteTo(msg, addr)
-					if err != nil {
-						l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-							WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-							WithError(err).Error("Failed to send handshake message")
-					} else {
-						l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-							WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-							Info("Handshake message sent")
-					}
-					return false
-				}
-
-				l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-					WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).WithField("cached", true).
-					WithField("packets", hostinfo.HandshakePacket).
-					Error("Seen this handshake packet already but don't have a cached packet to return")
-			}
-		}
-
 		remoteCert, err := RecombineCertAndValidate(ci.H, hs.Details.Cert)
 		if err != nil {
 			l.WithError(err).WithField("udpAddr", addr).
@@ -146,7 +118,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			return true
 		}
 
-		hostinfo = &HostInfo{
+		hostinfo := &HostInfo{
 			ConnectionState: ci,
 			Remotes:         []*HostInfoDest{},
 			localIndexId:    myIndex,
