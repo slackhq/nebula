@@ -367,11 +367,14 @@ var (
 	ErrLocalIndexCollision = errors.New("local index collision")
 )
 
-// CheckAndAddHostInfo returns the existing hostinfo entry if this
-// hostId already has a complete handshake. If completed is true and
-// existing is non-nil, then we overwrote the old existing tunnel.
-// If completed is false and existing is nil, that means there was a collision
-// on localIndexId so we didn't do the insert
+// CheckAndAddHostInfo checks for any conflicts in the main and pending hostmap
+// before adding it. If err is nil, it was added. Otherwise err will be:
+//
+// ErrExistingHostInfo if we already have an
+// entry in the hostmap for this VpnIP and overwrite was false.
+//
+// ErrLocalIndexCollision if we already have an entry in the main or pending
+// hostmap for the hostinfo.localIndexId.
 func (hm *HostMap) CheckAndAddHostInfo(hostinfo *HostInfo, overwrite bool, f *Interface) (*HostInfo, error) {
 	f.handshakeManager.pendingHostMap.RLock()
 	defer f.handshakeManager.pendingHostMap.RUnlock()
