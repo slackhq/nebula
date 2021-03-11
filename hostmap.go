@@ -166,40 +166,6 @@ func (hm *HostMap) DeleteVpnIP(vpnIP uint32) {
 	}
 }
 
-func (hm *HostMap) AddIndex(index uint32, ci *ConnectionState) (*HostInfo, error) {
-	hm.Lock()
-	if _, ok := hm.Indexes[index]; !ok {
-		h := &HostInfo{
-			ConnectionState: ci,
-			Remotes:         []*HostInfoDest{},
-			localIndexId:    index,
-			HandshakePacket: make(map[uint8][]byte, 0),
-		}
-		hm.Indexes[index] = h
-		l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes),
-			"hostinfo": m{"existing": false, "localIndexId": h.localIndexId, "hostId": IntIp(h.hostId)}}).
-			Debug("Hostmap index added")
-
-		hm.Unlock()
-		return h, nil
-	}
-	hm.Unlock()
-	return nil, fmt.Errorf("refusing to overwrite existing index: %d", index)
-}
-
-func (hm *HostMap) AddIndexHostInfo(index uint32, h *HostInfo) {
-	hm.Lock()
-	h.localIndexId = index
-	hm.Indexes[index] = h
-	hm.Unlock()
-
-	if l.Level > logrus.DebugLevel {
-		l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes),
-			"hostinfo": m{"existing": true, "localIndexId": h.localIndexId, "hostId": IntIp(h.hostId)}}).
-			Debug("Hostmap index added")
-	}
-}
-
 // Only used by pendingHostMap when the remote index is not initially known
 func (hm *HostMap) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
 	hm.Lock()
@@ -396,26 +362,55 @@ func (hm *HostMap) queryUnsafeRoute(ip uint32) uint32 {
 	}
 }
 
-// CheckAndCompleteHandshake returns the existing hostinfo entry if this
+var (
+	ErrExistingHostInfo    = errors.New("existing hostinfo")
+	ErrLocalIndexCollision = errors.New("local index collision")
+)
+
+// CheckAndAddHostInfo returns the existing hostinfo entry if this
 // hostId already has a complete handshake. If completed is true and
 // existing is non-nil, then we overwrote the old existing tunnel.
-func (hm *HostMap) CheckAndAddHostInfo(hostinfo *HostInfo, overwrite bool, f *Interface) (existing *HostInfo, completed bool) {
+// If completed is false and existing is nil, that means there was a collision
+// on localIndexId so we didn't do the insert
+func (hm *HostMap) CheckAndAddHostInfo(hostinfo *HostInfo, overwrite bool, f *Interface) (*HostInfo, error) {
+	f.handshakeManager.pendingHostMap.RLock()
+	defer f.handshakeManager.pendingHostMap.RUnlock()
 	hm.Lock()
-	existing, ok := hm.Hosts[hostinfo.hostId]
-	if ok && existing != nil {
+	defer hm.Unlock()
+
+	existingHostInfo, found := hm.Hosts[hostinfo.hostId]
+	if found && existingHostInfo != nil {
 		if !overwrite {
-			hm.Unlock()
-			return existing, false
+			return existingHostInfo, ErrExistingHostInfo
 		}
 
-		delete(hm.Hosts, existing.hostId)
-		delete(hm.Indexes, existing.localIndexId)
-		delete(hm.RemoteIndexes, existing.remoteIndexId)
+		delete(hm.Hosts, existingHostInfo.hostId)
+		delete(hm.Indexes, existingHostInfo.localIndexId)
+		delete(hm.RemoteIndexes, existingHostInfo.remoteIndexId)
+	}
+
+	existingIndex, found := hm.Indexes[hostinfo.localIndexId]
+	if found {
+		// We have a collision, but for a different hostinfo
+		return existingIndex, ErrLocalIndexCollision
+	}
+	existingIndex, found = f.handshakeManager.pendingHostMap.Indexes[hostinfo.localIndexId]
+	if found && existingIndex != hostinfo {
+		// We have a collision, but for a different hostinfo
+		return existingIndex, ErrLocalIndexCollision
+	}
+
+	existingRemoteIndex, found := hm.RemoteIndexes[hostinfo.remoteIndexId]
+	if found && existingRemoteIndex != nil {
+		// We have a collision, but this can happen since we can't control
+		// the remote ID. Just log about the situation as a note.
+		hostinfo.logger().
+			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", IntIp(existingRemoteIndex.hostId)).
+			Info("New host shadows existing host remoteIndex")
 	}
 
 	hm.addHostInfo(hostinfo, f)
-	hm.Unlock()
-	return existing, true
+	return existingHostInfo, nil
 }
 
 // We already have the hm Lock when this is called, so make sure to not call

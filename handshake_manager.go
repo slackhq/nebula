@@ -3,7 +3,6 @@ package nebula
 import (
 	"crypto/rand"
 	"encoding/binary"
-	"fmt"
 	"net"
 	"time"
 
@@ -196,18 +195,31 @@ func (c *HandshakeManager) AddVpnIP(vpnIP uint32) *HostInfo {
 	return hostinfo
 }
 
-func (c *HandshakeManager) AddIndex(index uint32, ci *ConnectionState) (*HostInfo, error) {
-	hostinfo, err := c.pendingHostMap.AddIndex(index, ci)
-	if err != nil {
-		return nil, fmt.Errorf("Issue adding index: %d", index)
-	}
-	//c.mainHostMap.AddIndexHostInfo(index, hostinfo)
-	c.InboundHandshakeTimer.Add(index, time.Second*10)
-	return hostinfo, nil
-}
+func (c *HandshakeManager) AddIndexHostInfo(h *HostInfo) error {
+	for {
+		index, err := generateIndex()
+		if err != nil {
+			return err
+		}
 
-func (c *HandshakeManager) AddIndexHostInfo(index uint32, h *HostInfo) {
-	c.pendingHostMap.AddIndexHostInfo(index, h)
+		c.pendingHostMap.Lock()
+		c.mainHostMap.RLock()
+
+		_, inPending := c.pendingHostMap.Indexes[index]
+		_, inMain := c.mainHostMap.Indexes[index]
+
+		if !inMain && !inPending {
+			h.localIndexId = index
+			c.pendingHostMap.Indexes[index] = h
+
+			c.mainHostMap.RUnlock()
+			c.pendingHostMap.Unlock()
+			return nil
+		}
+
+		c.mainHostMap.RUnlock()
+		c.pendingHostMap.Unlock()
+	}
 }
 
 func (c *HandshakeManager) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
