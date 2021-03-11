@@ -187,7 +187,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 
 	// Only overwrite existing record if we should win the handshake race
 	overwrite := vpnIP > ip2int(f.certState.certificate.Details.Ips[0].IP)
-	existing, err := f.hostMap.CheckAndAddHostInfo(hostinfo, overwrite, f)
+	existing, err := f.handshakeManager.CheckAndComplete(hostinfo, overwrite, f)
 	if err != nil {
 		switch err {
 		case ErrExistingHostInfo:
@@ -220,7 +220,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 				Info("Failed to add HostInfo due to localIndex collision")
 			return
 		default:
-			// Shouldn't happen, but just in case someone adds a new error type to CheckAndAddHostInfo
+			// Shouldn't happen, but just in case someone adds a new error type to CheckAndComplete
 			// And we forget to update it here
 			l.WithError(err).WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 				WithField("certName", certName).
@@ -351,9 +351,9 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	hostinfo.ForcePromoteBest(f.hostMap.preferredRanges)
 	hostinfo.CreateRemoteCIDR(remoteCert)
 
-	_, err = f.hostMap.CheckAndAddHostInfo(hostinfo, true, f)
+	_, err = f.handshakeManager.CheckAndComplete(hostinfo, true, f)
 	if err != nil {
-		// Shouldn't happen, since we tell CheckAndAddHostInfo to overwrite,
+		// Shouldn't happen, since we tell CheckAndComplete to overwrite,
 		// and we shouldn't have a localIndex collision because we reserved
 		// it in pending hostmap.
 		l.WithError(err).WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).

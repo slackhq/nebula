@@ -362,60 +362,6 @@ func (hm *HostMap) queryUnsafeRoute(ip uint32) uint32 {
 	}
 }
 
-var (
-	ErrExistingHostInfo    = errors.New("existing hostinfo")
-	ErrLocalIndexCollision = errors.New("local index collision")
-)
-
-// CheckAndAddHostInfo checks for any conflicts in the main and pending hostmap
-// before adding it. If err is nil, it was added. Otherwise err will be:
-//
-// ErrExistingHostInfo if we already have an
-// entry in the hostmap for this VpnIP and overwrite was false.
-//
-// ErrLocalIndexCollision if we already have an entry in the main or pending
-// hostmap for the hostinfo.localIndexId.
-func (hm *HostMap) CheckAndAddHostInfo(hostinfo *HostInfo, overwrite bool, f *Interface) (*HostInfo, error) {
-	f.handshakeManager.pendingHostMap.RLock()
-	defer f.handshakeManager.pendingHostMap.RUnlock()
-	hm.Lock()
-	defer hm.Unlock()
-
-	existingHostInfo, found := hm.Hosts[hostinfo.hostId]
-	if found && existingHostInfo != nil {
-		if !overwrite {
-			return existingHostInfo, ErrExistingHostInfo
-		}
-
-		delete(hm.Hosts, existingHostInfo.hostId)
-		delete(hm.Indexes, existingHostInfo.localIndexId)
-		delete(hm.RemoteIndexes, existingHostInfo.remoteIndexId)
-	}
-
-	existingIndex, found := hm.Indexes[hostinfo.localIndexId]
-	if found {
-		// We have a collision, but for a different hostinfo
-		return existingIndex, ErrLocalIndexCollision
-	}
-	existingIndex, found = f.handshakeManager.pendingHostMap.Indexes[hostinfo.localIndexId]
-	if found && existingIndex != hostinfo {
-		// We have a collision, but for a different hostinfo
-		return existingIndex, ErrLocalIndexCollision
-	}
-
-	existingRemoteIndex, found := hm.RemoteIndexes[hostinfo.remoteIndexId]
-	if found && existingRemoteIndex != nil {
-		// We have a collision, but this can happen since we can't control
-		// the remote ID. Just log about the situation as a note.
-		hostinfo.logger().
-			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", IntIp(existingRemoteIndex.hostId)).
-			Info("New host shadows existing host remoteIndex")
-	}
-
-	hm.addHostInfo(hostinfo, f)
-	return existingHostInfo, nil
-}
-
 // We already have the hm Lock when this is called, so make sure to not call
 // any other methods that might try to grab it again
 func (hm *HostMap) addHostInfo(hostinfo *HostInfo, f *Interface) {

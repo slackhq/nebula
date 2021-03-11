@@ -3,6 +3,7 @@ package nebula
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"net"
 	"time"
 
@@ -193,6 +194,60 @@ func (c *HandshakeManager) AddVpnIP(vpnIP uint32) *HostInfo {
 	c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval)
 
 	return hostinfo
+}
+
+var (
+	ErrExistingHostInfo    = errors.New("existing hostinfo")
+	ErrLocalIndexCollision = errors.New("local index collision")
+)
+
+// CheckAndComplete checks for any conflicts in the main and pending hostmap
+// before adding hostinfo to main. If err is nil, it was added. Otherwise err will be:
+//
+// ErrExistingHostInfo if we already have an
+// entry in the hostmap for this VpnIP and overwrite was false.
+//
+// ErrLocalIndexCollision if we already have an entry in the main or pending
+// hostmap for the hostinfo.localIndexId.
+func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, overwrite bool, f *Interface) (*HostInfo, error) {
+	c.pendingHostMap.RLock()
+	defer c.pendingHostMap.RUnlock()
+	c.mainHostMap.Lock()
+	defer c.mainHostMap.Unlock()
+
+	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.hostId]
+	if found && existingHostInfo != nil {
+		if !overwrite {
+			return existingHostInfo, ErrExistingHostInfo
+		}
+
+		delete(c.mainHostMap.Hosts, existingHostInfo.hostId)
+		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
+		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
+	}
+
+	existingIndex, found := c.mainHostMap.Indexes[hostinfo.localIndexId]
+	if found {
+		// We have a collision, but for a different hostinfo
+		return existingIndex, ErrLocalIndexCollision
+	}
+	existingIndex, found = c.pendingHostMap.Indexes[hostinfo.localIndexId]
+	if found && existingIndex != hostinfo {
+		// We have a collision, but for a different hostinfo
+		return existingIndex, ErrLocalIndexCollision
+	}
+
+	existingRemoteIndex, found := c.mainHostMap.RemoteIndexes[hostinfo.remoteIndexId]
+	if found && existingRemoteIndex != nil {
+		// We have a collision, but this can happen since we can't control
+		// the remote ID. Just log about the situation as a note.
+		hostinfo.logger().
+			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", IntIp(existingRemoteIndex.hostId)).
+			Info("New host shadows existing host remoteIndex")
+	}
+
+	c.mainHostMap.addHostInfo(hostinfo, f)
+	return existingHostInfo, nil
 }
 
 func (c *HandshakeManager) AddIndexHostInfo(h *HostInfo) error {
