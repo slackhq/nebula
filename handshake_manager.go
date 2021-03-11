@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -217,7 +218,8 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, overwrite bool, 
 
 	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.hostId]
 	if found && existingHostInfo != nil {
-		if !overwrite {
+		// Check if dont want to overwrite, or if we already have a completed tunnel for this same packet
+		if !overwrite || bytes.Equal(hostinfo.HandshakePacket[0], existingHostInfo.HandshakePacket[0]) {
 			return existingHostInfo, ErrExistingHostInfo
 		}
 
