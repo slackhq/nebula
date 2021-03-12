@@ -242,7 +242,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 	}
 
 	existingRemoteIndex, found := c.mainHostMap.RemoteIndexes[hostinfo.remoteIndexId]
-	if found && existingRemoteIndex != nil {
+	if found && existingRemoteIndex != nil && existingRemoteIndex.hostId != hostinfo.hostId {
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
 		hostinfo.logger().
@@ -259,6 +259,33 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 
 	c.mainHostMap.addHostInfo(hostinfo, f)
 	return existingHostInfo, nil
+}
+
+// Complete is a simpler version of CheckAndComplete when we already know we
+// won't have a localIndexId collision because we already have an entry in the
+// pendingHostMap
+func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
+	c.mainHostMap.Lock()
+	defer c.mainHostMap.Unlock()
+
+	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.hostId]
+	if found && existingHostInfo != nil {
+		// We are going to overwrite this entry, so remove the old references
+		delete(c.mainHostMap.Hosts, existingHostInfo.hostId)
+		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
+		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
+	}
+
+	existingRemoteIndex, found := c.mainHostMap.RemoteIndexes[hostinfo.remoteIndexId]
+	if found && existingRemoteIndex != nil {
+		// We have a collision, but this can happen since we can't control
+		// the remote ID. Just log about the situation as a note.
+		hostinfo.logger().
+			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", IntIp(existingRemoteIndex.hostId)).
+			Info("New host shadows existing host remoteIndex")
+	}
+
+	c.mainHostMap.addHostInfo(hostinfo, f)
 }
 
 // AddIndexHostInfo generates a unique localIndexId for this HostInfo

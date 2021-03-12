@@ -355,21 +355,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	hostinfo.ForcePromoteBest(f.hostMap.preferredRanges)
 	hostinfo.CreateRemoteCIDR(remoteCert)
 
-	_, err = f.handshakeManager.CheckAndComplete(hostinfo, 2, true, f)
-	if err != nil {
-		// Shouldn't happen, since we tell CheckAndComplete to overwrite,
-		// and we shouldn't have a localIndex collision because we reserved
-		// it in pending hostmap.
-		l.WithError(err).WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-			WithField("certName", certName).
-			WithField("fingerprint", fingerprint).
-			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Error("Failed to add HostInfo to HostMap")
-
-		return true
-	}
-
+	f.handshakeManager.Complete(hostinfo, f)
 	hostinfo.handshakeComplete()
 	f.metricHandshakes.Update(duration)
 
