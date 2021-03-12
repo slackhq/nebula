@@ -96,30 +96,6 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 		return
 	}
 
-	// Check if we already have a hostinfo for this host, and resend our cached response
-	hostinfo, _ := f.hostMap.QueryReverseIndex(hs.Details.InitiatorIndex)
-	if hostinfo != nil && bytes.Equal(hostinfo.HandshakePacket[0], packet[HeaderLen:]) {
-		if msg, ok := hostinfo.HandshakePacket[2]; ok {
-			f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
-			err := f.outside.WriteTo(msg, addr)
-			if err != nil {
-				l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-					WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-					WithError(err).Error("Failed to send handshake message")
-			} else {
-				l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-					WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-					Info("Handshake message sent")
-			}
-			return
-		}
-
-		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).WithField("cached", true).
-			WithField("packets", hostinfo.HandshakePacket).
-			Error("Seen this handshake packet already but don't have a cached packet to return")
-	}
-
 	remoteCert, err := RecombineCertAndValidate(ci.H, hs.Details.Cert)
 	if err != nil {
 		l.WithError(err).WithField("udpAddr", addr).
@@ -140,7 +116,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 		return
 	}
 
-	hostinfo = &HostInfo{
+	hostinfo := &HostInfo{
 		ConnectionState: ci,
 		Remotes:         []*HostInfoDest{},
 		localIndexId:    myIndex,
@@ -211,38 +187,36 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 
 	// Only overwrite existing record if we should win the handshake race
 	overwrite := vpnIP > ip2int(f.certState.certificate.Details.Ips[0].IP)
-	existing, err := f.handshakeManager.CheckAndComplete(hostinfo, overwrite, f)
+	existing, err := f.handshakeManager.CheckAndComplete(hostinfo, 0, overwrite, f)
 	if err != nil {
 		switch err {
+		case ErrAlreadySeen:
+			msg = existing.HandshakePacket[2]
+			f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
+			err := f.outside.WriteTo(msg, addr)
+			if err != nil {
+				l.WithField("vpnIp", IntIp(existing.hostId)).WithField("udpAddr", addr).
+					WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
+					WithError(err).Error("Failed to send handshake message")
+			} else {
+				l.WithField("vpnIp", IntIp(existing.hostId)).WithField("udpAddr", addr).
+					WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
+					Info("Handshake message sent")
+			}
+			return
 		case ErrExistingHostInfo:
 			// This means there was an existing tunnel and we didn't win
 			// handshake avoidance
-			if bytes.Equal(existing.HandshakePacket[0], hostinfo.HandshakePacket[0]) {
-				msg = existing.HandshakePacket[2]
-				f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
-				err := f.outside.WriteTo(msg, addr)
-				if err != nil {
-					l.WithField("vpnIp", IntIp(existing.hostId)).WithField("udpAddr", addr).
-						WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-						WithError(err).Error("Failed to send handshake message")
-				} else {
-					l.WithField("vpnIp", IntIp(existing.hostId)).WithField("udpAddr", addr).
-						WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-						Info("Handshake message sent")
-				}
-				return
-			} else {
-				l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-					WithField("certName", certName).
-					WithField("fingerprint", fingerprint).
-					WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-					WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-					Info("Prevented a handshake race")
+			l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
+				WithField("certName", certName).
+				WithField("fingerprint", fingerprint).
+				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
+				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+				Info("Prevented a handshake race")
 
-				// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
-				f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
-				return
-			}
+			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
+			f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			return
 		case ErrLocalIndexCollision:
 			// This means we failed to insert because of collision on localIndexId. Just let the next handshake packet retry
 			l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
@@ -251,7 +225,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
 				WithField("localIndex", hostinfo.localIndexId).WithField("collision", IntIp(existing.hostId)).
-				Info("Failed to add HostInfo due to localIndex collision")
+				Error("Failed to add HostInfo due to localIndex collision")
 			return
 		default:
 			// Shouldn't happen, but just in case someone adds a new error type to CheckAndComplete
@@ -261,8 +235,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 				WithField("fingerprint", fingerprint).
 				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-				Info("Failed to add HostInfo to HostMap")
-
+				Error("Failed to add HostInfo to HostMap")
 			return
 		}
 	}
@@ -301,7 +274,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	if bytes.Equal(hostinfo.HandshakePacket[2], packet[HeaderLen:]) {
 		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("header", h).
-			Error("Already seen this handshake packet")
+			Info("Already seen this handshake packet")
 		return false
 	}
 
@@ -382,7 +355,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	hostinfo.ForcePromoteBest(f.hostMap.preferredRanges)
 	hostinfo.CreateRemoteCIDR(remoteCert)
 
-	_, err = f.handshakeManager.CheckAndComplete(hostinfo, true, f)
+	_, err = f.handshakeManager.CheckAndComplete(hostinfo, 2, true, f)
 	if err != nil {
 		// Shouldn't happen, since we tell CheckAndComplete to overwrite,
 		// and we shouldn't have a localIndex collision because we reserved

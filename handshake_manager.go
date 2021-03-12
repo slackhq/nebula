@@ -199,18 +199,22 @@ func (c *HandshakeManager) AddVpnIP(vpnIP uint32) *HostInfo {
 
 var (
 	ErrExistingHostInfo    = errors.New("existing hostinfo")
+	ErrAlreadySeen         = errors.New("already seen")
 	ErrLocalIndexCollision = errors.New("local index collision")
 )
 
 // CheckAndComplete checks for any conflicts in the main and pending hostmap
 // before adding hostinfo to main. If err is nil, it was added. Otherwise err will be:
+
+// ErrAlreadySeen if we already have an entry in the hostmap that has seen the
+// exact same handshake packet
 //
-// ErrExistingHostInfo if we already have an
-// entry in the hostmap for this VpnIP and overwrite was false.
+// ErrExistingHostInfo if we already have an entry in the hostmap for this
+// VpnIP and overwrite was false.
 //
 // ErrLocalIndexCollision if we already have an entry in the main or pending
 // hostmap for the hostinfo.localIndexId.
-func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, overwrite bool, f *Interface) (*HostInfo, error) {
+func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket uint8, overwrite bool, f *Interface) (*HostInfo, error) {
 	c.pendingHostMap.RLock()
 	defer c.pendingHostMap.RUnlock()
 	c.mainHostMap.Lock()
@@ -218,11 +222,14 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, overwrite bool, 
 
 	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.hostId]
 	if found && existingHostInfo != nil {
-		// Check if dont want to overwrite, or if we already have a completed tunnel for this same packet
-		if !overwrite || bytes.Equal(hostinfo.HandshakePacket[0], existingHostInfo.HandshakePacket[0]) {
+		if bytes.Equal(hostinfo.HandshakePacket[handshakePacket], existingHostInfo.HandshakePacket[handshakePacket]) {
+			return existingHostInfo, ErrAlreadySeen
+		}
+		if !overwrite {
 			return existingHostInfo, ErrExistingHostInfo
 		}
 
+		// We are going to overwrite this entry, so remove the old references
 		delete(c.mainHostMap.Hosts, existingHostInfo.hostId)
 		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
 		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
@@ -252,15 +259,20 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, overwrite bool, 
 	return existingHostInfo, nil
 }
 
+// AddIndexHostInfo generates a unique localIndexId for this HostInfo
+// and adds it to the pendingHostMap. Will error if we are unable to generate
+// a unique localIndexId
 func (c *HandshakeManager) AddIndexHostInfo(h *HostInfo) error {
-	for {
+	c.pendingHostMap.Lock()
+	defer c.pendingHostMap.Unlock()
+	c.mainHostMap.RLock()
+	defer c.mainHostMap.RUnlock()
+
+	for i := 0; i < 32; i++ {
 		index, err := generateIndex()
 		if err != nil {
 			return err
 		}
-
-		c.pendingHostMap.Lock()
-		c.mainHostMap.RLock()
 
 		_, inPending := c.pendingHostMap.Indexes[index]
 		_, inMain := c.mainHostMap.Indexes[index]
@@ -268,15 +280,11 @@ func (c *HandshakeManager) AddIndexHostInfo(h *HostInfo) error {
 		if !inMain && !inPending {
 			h.localIndexId = index
 			c.pendingHostMap.Indexes[index] = h
-
-			c.mainHostMap.RUnlock()
-			c.pendingHostMap.Unlock()
 			return nil
 		}
-
-		c.mainHostMap.RUnlock()
-		c.pendingHostMap.Unlock()
 	}
+
+	return errors.New("failed to generate unique localIndexId")
 }
 
 func (c *HandshakeManager) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
