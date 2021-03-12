@@ -228,11 +228,6 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 		if !overwrite {
 			return existingHostInfo, ErrExistingHostInfo
 		}
-
-		// We are going to overwrite this entry, so remove the old references
-		delete(c.mainHostMap.Hosts, existingHostInfo.hostId)
-		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
-		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
 	}
 
 	existingIndex, found := c.mainHostMap.Indexes[hostinfo.localIndexId]
@@ -253,6 +248,13 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 		hostinfo.logger().
 			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", IntIp(existingRemoteIndex.hostId)).
 			Info("New host shadows existing host remoteIndex")
+	}
+
+	if existingHostInfo != nil {
+		// We are going to overwrite this entry, so remove the old references
+		delete(c.mainHostMap.Hosts, existingHostInfo.hostId)
+		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
+		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
 	}
 
 	c.mainHostMap.addHostInfo(hostinfo, f)
