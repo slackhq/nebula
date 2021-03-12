@@ -166,40 +166,6 @@ func (hm *HostMap) DeleteVpnIP(vpnIP uint32) {
 	}
 }
 
-func (hm *HostMap) AddIndex(index uint32, ci *ConnectionState) (*HostInfo, error) {
-	hm.Lock()
-	if _, ok := hm.Indexes[index]; !ok {
-		h := &HostInfo{
-			ConnectionState: ci,
-			Remotes:         []*HostInfoDest{},
-			localIndexId:    index,
-			HandshakePacket: make(map[uint8][]byte, 0),
-		}
-		hm.Indexes[index] = h
-		l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes),
-			"hostinfo": m{"existing": false, "localIndexId": h.localIndexId, "hostId": IntIp(h.hostId)}}).
-			Debug("Hostmap index added")
-
-		hm.Unlock()
-		return h, nil
-	}
-	hm.Unlock()
-	return nil, fmt.Errorf("refusing to overwrite existing index: %d", index)
-}
-
-func (hm *HostMap) AddIndexHostInfo(index uint32, h *HostInfo) {
-	hm.Lock()
-	h.localIndexId = index
-	hm.Indexes[index] = h
-	hm.Unlock()
-
-	if l.Level > logrus.DebugLevel {
-		l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes),
-			"hostinfo": m{"existing": true, "localIndexId": h.localIndexId, "hostId": IntIp(h.hostId)}}).
-			Debug("Hostmap index added")
-	}
-}
-
 // Only used by pendingHostMap when the remote index is not initially known
 func (hm *HostMap) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
 	hm.Lock()
@@ -234,16 +200,12 @@ func (hm *HostMap) DeleteIndex(index uint32) {
 	hm.Lock()
 	hostinfo, ok := hm.Indexes[index]
 	if ok {
-		hostinfo.Lock()
-		defer hostinfo.Unlock()
-
 		delete(hm.Indexes, index)
 		delete(hm.RemoteIndexes, hostinfo.remoteIndexId)
 
 		// Check if we have an entry under hostId that matches the same hostinfo
 		// instance. Clean it up as well if we do.
-		var hostinfo2 *HostInfo
-		hostinfo2, ok = hm.Hosts[hostinfo.hostId]
+		hostinfo2, ok := hm.Hosts[hostinfo.hostId]
 		if ok && hostinfo2 == hostinfo {
 			delete(hm.Hosts, hostinfo.hostId)
 		}
@@ -400,36 +362,26 @@ func (hm *HostMap) queryUnsafeRoute(ip uint32) uint32 {
 	}
 }
 
-func (hm *HostMap) CheckHandshakeCompleteIP(vpnIP uint32) bool {
-	hm.RLock()
-	if i, ok := hm.Hosts[vpnIP]; ok {
-		if i == nil {
-			hm.RUnlock()
-			return false
-		}
-		complete := i.HandshakeComplete
-		hm.RUnlock()
-		return complete
+// We already have the hm Lock when this is called, so make sure to not call
+// any other methods that might try to grab it again
+func (hm *HostMap) addHostInfo(hostinfo *HostInfo, f *Interface) {
+	remoteCert := hostinfo.ConnectionState.peerCert
+	ip := ip2int(remoteCert.Details.Ips[0].IP)
 
+	f.lightHouse.AddRemoteAndReset(ip, hostinfo.remote)
+	if f.serveDns {
+		dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ips[0].IP.String())
 	}
-	hm.RUnlock()
-	return false
-}
 
-func (hm *HostMap) CheckHandshakeCompleteIndex(index uint32) bool {
-	hm.RLock()
-	if i, ok := hm.Indexes[index]; ok {
-		if i == nil {
-			hm.RUnlock()
-			return false
-		}
-		complete := i.HandshakeComplete
-		hm.RUnlock()
-		return complete
+	hm.Hosts[hostinfo.hostId] = hostinfo
+	hm.Indexes[hostinfo.localIndexId] = hostinfo
+	hm.RemoteIndexes[hostinfo.remoteIndexId] = hostinfo
 
+	if l.Level >= logrus.DebugLevel {
+		l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(hostinfo.hostId), "mapTotalSize": len(hm.Hosts),
+			"hostinfo": m{"existing": true, "localIndexId": hostinfo.localIndexId, "hostId": IntIp(hostinfo.hostId)}}).
+			Debug("Hostmap vpnIp added")
 	}
-	hm.RUnlock()
-	return false
 }
 
 func (hm *HostMap) ClearRemotes(vpnIP uint32) {

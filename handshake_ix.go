@@ -25,17 +25,17 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 		}
 	}
 
-	myIndex, err := generateIndex()
+	err := f.handshakeManager.AddIndexHostInfo(hostinfo)
 	if err != nil {
 		l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to generate index")
 		return
 	}
+
 	ci := hostinfo.ConnectionState
-	f.handshakeManager.AddIndexHostInfo(myIndex, hostinfo)
 
 	hsProto := &NebulaHandshakeDetails{
-		InitiatorIndex: myIndex,
+		InitiatorIndex: hostinfo.localIndexId,
 		Time:           uint64(time.Now().Unix()),
 		Cert:           ci.certState.rawCertificateNoKey,
 	}
@@ -73,122 +73,140 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 
 }
 
-func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet []byte, h *Header) bool {
-	var ip uint32
-	if h.RemoteIndex == 0 {
-		ci := f.newConnectionState(false, noise.HandshakeIX, []byte{}, 0)
-		// Mark packet 1 as seen so it doesn't show up as missed
-		ci.window.Update(1)
+func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
+	ci := f.newConnectionState(false, noise.HandshakeIX, []byte{}, 0)
+	// Mark packet 1 as seen so it doesn't show up as missed
+	ci.window.Update(1)
 
-		msg, _, _, err := ci.H.ReadMessage(nil, packet[HeaderLen:])
-		if err != nil {
-			l.WithError(err).WithField("udpAddr", addr).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.ReadMessage")
-			return true
-		}
+	msg, _, _, err := ci.H.ReadMessage(nil, packet[HeaderLen:])
+	if err != nil {
+		l.WithError(err).WithField("udpAddr", addr).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.ReadMessage")
+		return
+	}
 
-		hs := &NebulaHandshake{}
-		err = proto.Unmarshal(msg, hs)
-		/*
-			l.Debugln("GOT INDEX: ", hs.Details.InitiatorIndex)
-		*/
-		if err != nil || hs.Details == nil {
-			l.WithError(err).WithField("udpAddr", addr).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed unmarshal handshake message")
-			return true
-		}
+	hs := &NebulaHandshake{}
+	err = proto.Unmarshal(msg, hs)
+	/*
+		l.Debugln("GOT INDEX: ", hs.Details.InitiatorIndex)
+	*/
+	if err != nil || hs.Details == nil {
+		l.WithError(err).WithField("udpAddr", addr).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed unmarshal handshake message")
+		return
+	}
 
-		hostinfo, _ := f.handshakeManager.pendingHostMap.QueryReverseIndex(hs.Details.InitiatorIndex)
-		if hostinfo != nil {
-			hostinfo.RLock()
-			defer hostinfo.RUnlock()
+	remoteCert, err := RecombineCertAndValidate(ci.H, hs.Details.Cert)
+	if err != nil {
+		l.WithError(err).WithField("udpAddr", addr).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).WithField("cert", remoteCert).
+			Info("Invalid certificate from host")
+		return
+	}
+	vpnIP := ip2int(remoteCert.Details.Ips[0].IP)
+	certName := remoteCert.Details.Name
+	fingerprint, _ := remoteCert.Sha256Sum()
 
-			if bytes.Equal(hostinfo.HandshakePacket[0], packet[HeaderLen:]) {
-				if msg, ok := hostinfo.HandshakePacket[2]; ok {
-					f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
-					err := f.outside.WriteTo(msg, addr)
-					if err != nil {
-						l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-							WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-							WithError(err).Error("Failed to send handshake message")
-					} else {
-						l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-							WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-							Info("Handshake message sent")
-					}
-					return false
-				}
-
-				l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-					WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).WithField("cached", true).
-					WithField("packets", hostinfo.HandshakePacket).
-					Error("Seen this handshake packet already but don't have a cached packet to return")
-			}
-		}
-
-		remoteCert, err := RecombineCertAndValidate(ci.H, hs.Details.Cert)
-		if err != nil {
-			l.WithError(err).WithField("udpAddr", addr).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).WithField("cert", remoteCert).
-				Info("Invalid certificate from host")
-			return true
-		}
-		vpnIP := ip2int(remoteCert.Details.Ips[0].IP)
-		certName := remoteCert.Details.Name
-		fingerprint, _ := remoteCert.Sha256Sum()
-
-		myIndex, err := generateIndex()
-		if err != nil {
-			l.WithError(err).WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to generate index")
-			return true
-		}
-
-		hostinfo, err = f.handshakeManager.AddIndex(myIndex, ci)
-		if err != nil {
-			l.WithError(err).WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Error adding index to connection manager")
-
-			return true
-		}
-		hostinfo.Lock()
-		defer hostinfo.Unlock()
-
-		l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
+	myIndex, err := generateIndex()
+	if err != nil {
+		l.WithError(err).WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 			WithField("certName", certName).
 			WithField("fingerprint", fingerprint).
-			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Info("Handshake message received")
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to generate index")
+		return
+	}
 
-		f.handshakeManager.addRemoteIndexHostInfo(hs.Details.InitiatorIndex, hostinfo)
-		hs.Details.ResponderIndex = myIndex
-		hs.Details.Cert = ci.certState.rawCertificateNoKey
+	hostinfo := &HostInfo{
+		ConnectionState: ci,
+		Remotes:         []*HostInfoDest{},
+		localIndexId:    myIndex,
+		remoteIndexId:   hs.Details.InitiatorIndex,
+		hostId:          vpnIP,
+		HandshakePacket: make(map[uint8][]byte, 0),
+	}
 
-		hsBytes, err := proto.Marshal(hs)
-		if err != nil {
-			l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to marshal handshake message")
-			return true
-		}
+	l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
+		WithField("certName", certName).
+		WithField("fingerprint", fingerprint).
+		WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
+		WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+		Info("Handshake message received")
 
-		header := HeaderEncode(make([]byte, HeaderLen), Version, uint8(handshake), handshakeIXPSK0, hs.Details.InitiatorIndex, 2)
-		msg, dKey, eKey, err := ci.H.WriteMessage(header, hsBytes)
-		if err != nil {
-			l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.WriteMessage")
-			return true
-		}
+	hs.Details.ResponderIndex = myIndex
+	hs.Details.Cert = ci.certState.rawCertificateNoKey
 
-		if f.hostMap.CheckHandshakeCompleteIP(vpnIP) && vpnIP < ip2int(f.certState.certificate.Details.Ips[0].IP) {
+	hsBytes, err := proto.Marshal(hs)
+	if err != nil {
+		l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
+			WithField("certName", certName).
+			WithField("fingerprint", fingerprint).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to marshal handshake message")
+		return
+	}
+
+	header := HeaderEncode(make([]byte, HeaderLen), Version, uint8(handshake), handshakeIXPSK0, hs.Details.InitiatorIndex, 2)
+	msg, dKey, eKey, err := ci.H.WriteMessage(header, hsBytes)
+	if err != nil {
+		l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
+			WithField("certName", certName).
+			WithField("fingerprint", fingerprint).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.WriteMessage")
+		return
+	} else if dKey == nil || eKey == nil {
+		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
+			WithField("certName", certName).
+			WithField("fingerprint", fingerprint).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Noise did not arrive at a key")
+		return
+	}
+
+	hostinfo.HandshakePacket[0] = make([]byte, len(packet[HeaderLen:]))
+	copy(hostinfo.HandshakePacket[0], packet[HeaderLen:])
+
+	// Regardless of whether you are the sender or receiver, you should arrive here
+	// and complete standing up the connection.
+	hostinfo.HandshakePacket[2] = make([]byte, len(msg))
+	copy(hostinfo.HandshakePacket[2], msg)
+
+	// We are sending handshake packet 2, so we don't expect to receive
+	// handshake packet 2 from the initiator.
+	ci.window.Update(2)
+
+	ci.peerCert = remoteCert
+	ci.dKey = NewNebulaCipherState(dKey)
+	ci.eKey = NewNebulaCipherState(eKey)
+	//l.Debugln("got symmetric pairs")
+
+	//hostinfo.ClearRemotes()
+	hostinfo.AddRemote(*addr)
+	hostinfo.ForcePromoteBest(f.hostMap.preferredRanges)
+	hostinfo.CreateRemoteCIDR(remoteCert)
+
+	hostinfo.Lock()
+	defer hostinfo.Unlock()
+
+	// Only overwrite existing record if we should win the handshake race
+	overwrite := vpnIP > ip2int(f.certState.certificate.Details.Ips[0].IP)
+	existing, err := f.handshakeManager.CheckAndComplete(hostinfo, 0, overwrite, f)
+	if err != nil {
+		switch err {
+		case ErrAlreadySeen:
+			msg = existing.HandshakePacket[2]
+			f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
+			err := f.outside.WriteTo(msg, addr)
+			if err != nil {
+				l.WithField("vpnIp", IntIp(existing.hostId)).WithField("udpAddr", addr).
+					WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
+					WithError(err).Error("Failed to send handshake message")
+			} else {
+				l.WithField("vpnIp", IntIp(existing.hostId)).WithField("udpAddr", addr).
+					WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
+					Info("Handshake message sent")
+			}
+			return
+		case ErrExistingHostInfo:
+			// This means there was an existing tunnel and we didn't win
+			// handshake avoidance
 			l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 				WithField("certName", certName).
 				WithField("fingerprint", fingerprint).
@@ -198,82 +216,52 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
 			f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
-			return true
-		}
-
-		hostinfo.HandshakePacket[0] = make([]byte, len(packet[HeaderLen:]))
-		copy(hostinfo.HandshakePacket[0], packet[HeaderLen:])
-
-		// Regardless of whether you are the sender or receiver, you should arrive here
-		// and complete standing up the connection.
-		if dKey != nil && eKey != nil {
-			hostinfo.HandshakePacket[2] = make([]byte, len(msg))
-			copy(hostinfo.HandshakePacket[2], msg)
-
-			// We are sending handshake packet 2, so we don't expect to receive
-			// handshake packet 2 from the initiator.
-			ci.window.Update(2)
-
-			f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
-			err := f.outside.WriteTo(msg, addr)
-			if err != nil {
-				l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-					WithField("certName", certName).
-					WithField("fingerprint", fingerprint).
-					WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-					WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-					WithError(err).Error("Failed to send handshake")
-			} else {
-				l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
-					WithField("certName", certName).
-					WithField("fingerprint", fingerprint).
-					WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-					WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-					Info("Handshake message sent")
-			}
-
-			ip = ip2int(remoteCert.Details.Ips[0].IP)
-			ci.peerCert = remoteCert
-			ci.dKey = NewNebulaCipherState(dKey)
-			ci.eKey = NewNebulaCipherState(eKey)
-			//l.Debugln("got symmetric pairs")
-
-			//hostinfo.ClearRemotes()
-			hostinfo.AddRemote(*addr)
-			hostinfo.CreateRemoteCIDR(remoteCert)
-			f.lightHouse.AddRemoteAndReset(ip, addr)
-			if f.serveDns {
-				dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ips[0].IP.String())
-			}
-
-			ho, err := f.hostMap.QueryVpnIP(vpnIP)
-			if err == nil && ho.localIndexId != 0 {
-				l.WithField("vpnIp", vpnIP).
-					WithField("certName", certName).
-					WithField("fingerprint", fingerprint).
-					WithField("action", "removing stale index").
-					WithField("index", ho.localIndexId).
-					WithField("remoteIndex", ho.remoteIndexId).
-					Debug("Handshake processing")
-				f.hostMap.DeleteHostInfo(ho)
-			}
-
-			f.hostMap.AddVpnIPHostInfo(vpnIP, hostinfo)
-
-			hostinfo.handshakeComplete()
-		} else {
-			l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
+			return
+		case ErrLocalIndexCollision:
+			// This means we failed to insert because of collision on localIndexId. Just let the next handshake packet retry
+			l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 				WithField("certName", certName).
 				WithField("fingerprint", fingerprint).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-				Error("Noise did not arrive at a key")
-			return true
+				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
+				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+				WithField("localIndex", hostinfo.localIndexId).WithField("collision", IntIp(existing.hostId)).
+				Error("Failed to add HostInfo due to localIndex collision")
+			return
+		default:
+			// Shouldn't happen, but just in case someone adds a new error type to CheckAndComplete
+			// And we forget to update it here
+			l.WithError(err).WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
+				WithField("certName", certName).
+				WithField("fingerprint", fingerprint).
+				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
+				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+				Error("Failed to add HostInfo to HostMap")
+			return
 		}
-
 	}
 
-	f.hostMap.AddRemote(ip, addr)
-	return false
+	// Do the send
+	f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
+	err = f.outside.WriteTo(msg, addr)
+	if err != nil {
+		l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
+			WithField("certName", certName).
+			WithField("fingerprint", fingerprint).
+			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
+			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+			WithError(err).Error("Failed to send handshake")
+	} else {
+		l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
+			WithField("certName", certName).
+			WithField("fingerprint", fingerprint).
+			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
+			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+			Info("Handshake message sent")
+	}
+
+	hostinfo.handshakeComplete()
+
+	return
 }
 
 func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet []byte, h *Header) bool {
@@ -286,7 +274,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	if bytes.Equal(hostinfo.HandshakePacket[2], packet[HeaderLen:]) {
 		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("header", h).
-			Error("Already seen this handshake packet")
+			Info("Already seen this handshake packet")
 		return false
 	}
 
@@ -307,6 +295,11 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		// to DOS us. Every other error condition after should to allow a possible good handshake to complete in the
 		// near future
 		return false
+	} else if dKey == nil || eKey == nil {
+		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
+			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+			Error("Noise did not arrive at a key")
+		return true
 	}
 
 	hs := &NebulaHandshake{}
@@ -351,45 +344,20 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 	// Regardless of whether you are the sender or receiver, you should arrive here
 	// and complete standing up the connection.
-	if dKey != nil && eKey != nil {
-		ip := ip2int(remoteCert.Details.Ips[0].IP)
-		ci.peerCert = remoteCert
-		ci.dKey = NewNebulaCipherState(dKey)
-		ci.eKey = NewNebulaCipherState(eKey)
-		//l.Debugln("got symmetric pairs")
 
-		//hostinfo.ClearRemotes()
-		f.hostMap.AddRemote(ip, addr)
-		hostinfo.CreateRemoteCIDR(remoteCert)
-		f.lightHouse.AddRemoteAndReset(ip, addr)
-		if f.serveDns {
-			dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ips[0].IP.String())
-		}
+	ci.peerCert = remoteCert
+	ci.dKey = NewNebulaCipherState(dKey)
+	ci.eKey = NewNebulaCipherState(eKey)
+	//l.Debugln("got symmetric pairs")
 
-		ho, err := f.hostMap.QueryVpnIP(vpnIP)
-		if err == nil && ho.localIndexId != 0 {
-			l.WithField("vpnIp", vpnIP).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("action", "removing stale index").
-				WithField("index", ho.localIndexId).
-				WithField("remoteIndex", ho.remoteIndexId).
-				Debug("Handshake processing")
-			f.hostMap.DeleteHostInfo(ho)
-		}
+	//hostinfo.ClearRemotes()
+	hostinfo.AddRemote(*addr)
+	hostinfo.ForcePromoteBest(f.hostMap.preferredRanges)
+	hostinfo.CreateRemoteCIDR(remoteCert)
 
-		f.hostMap.AddVpnIPHostInfo(vpnIP, hostinfo)
-
-		hostinfo.handshakeComplete()
-		f.metricHandshakes.Update(duration)
-	} else {
-		l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
-			WithField("certName", certName).
-			WithField("fingerprint", fingerprint).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			Error("Noise did not arrive at a key")
-		return true
-	}
+	f.handshakeManager.Complete(hostinfo, f)
+	hostinfo.handshakeComplete()
+	f.metricHandshakes.Update(duration)
 
 	return false
 }

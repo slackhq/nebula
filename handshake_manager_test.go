@@ -8,12 +8,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var indexes []uint32 = []uint32{1000, 2000, 3000, 4000}
-
 //var ips []uint32 = []uint32{9000, 9999999, 3, 292394923}
 var ips []uint32
 
 func Test_NewHandshakeManagerIndex(t *testing.T) {
+
 	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
@@ -26,9 +25,18 @@ func Test_NewHandshakeManagerIndex(t *testing.T) {
 	now := time.Now()
 	blah.NextInboundHandshakeTimerTick(now)
 
+	var indexes = make([]uint32, 4)
+	var hostinfo = make([]*HostInfo, len(indexes))
+	for i := range indexes {
+		hostinfo[i] = &HostInfo{ConnectionState: &ConnectionState{}}
+	}
+
 	// Add four indexes
-	for _, v := range indexes {
-		blah.AddIndex(v, &ConnectionState{})
+	for i := range indexes {
+		err := blah.AddIndexHostInfo(hostinfo[i])
+		assert.NoError(t, err)
+		indexes[i] = hostinfo[i].localIndexId
+		blah.InboundHandshakeTimer.Add(indexes[i], time.Second*10)
 	}
 	// Confirm they are in the pending index list
 	for _, v := range indexes {
@@ -169,8 +177,11 @@ func Test_NewHandshakeManagerVpnIPcleanup(t *testing.T) {
 
 	hostinfo := blah.AddVpnIP(vpnIP)
 	// Pretned we have an index too
-	blah.AddIndexHostInfo(12341234, hostinfo)
-	assert.Contains(t, blah.pendingHostMap.Indexes, uint32(12341234))
+	err := blah.AddIndexHostInfo(hostinfo)
+	assert.NoError(t, err)
+	blah.InboundHandshakeTimer.Add(hostinfo.localIndexId, time.Second*10)
+	assert.NotZero(t, hostinfo.localIndexId)
+	assert.Contains(t, blah.pendingHostMap.Indexes, hostinfo.localIndexId)
 
 	// Jump ahead `HandshakeRetries` ticks. Eviction should happen in pending
 	// but not main hostmap
@@ -216,7 +227,10 @@ func Test_NewHandshakeManagerIndexcleanup(t *testing.T) {
 	now := time.Now()
 	blah.NextInboundHandshakeTimerTick(now)
 
-	hostinfo, _ := blah.AddIndex(12341234, &ConnectionState{})
+	hostinfo := &HostInfo{ConnectionState: &ConnectionState{}}
+	err := blah.AddIndexHostInfo(hostinfo)
+	assert.NoError(t, err)
+	blah.InboundHandshakeTimer.Add(hostinfo.localIndexId, time.Second*10)
 	// Pretned we have an index too
 	blah.pendingHostMap.AddVpnIPHostInfo(101010, hostinfo)
 	assert.Contains(t, blah.pendingHostMap.Hosts, uint32(101010))
@@ -229,7 +243,7 @@ func Test_NewHandshakeManagerIndexcleanup(t *testing.T) {
 	next_tick := now.Add(DefaultHandshakeTryInterval*DefaultHandshakeRetries + 3)
 	blah.NextInboundHandshakeTimerTick(next_tick)
 	assert.NotContains(t, blah.pendingHostMap.Hosts, uint32(101010))
-	assert.NotContains(t, blah.pendingHostMap.Indexes, uint32(12341234))
+	assert.NotContains(t, blah.pendingHostMap.Indexes, uint32(hostinfo.localIndexId))
 }
 
 type mockEncWriter struct {

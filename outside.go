@@ -106,7 +106,6 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 
 	case recvError:
 		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
-		// TODO: Remove this with recv_error deprecation
 		f.handleRecvError(addr, header)
 		return
 
@@ -312,8 +311,6 @@ func (f *Interface) sendRecvError(endpoint *udpAddr, index uint32) {
 }
 
 func (f *Interface) handleRecvError(addr *udpAddr, h *Header) {
-	// This flag is to stop caring about recv_error from old versions
-	// This should go away when the old version is gone from prod
 	if l.Level >= logrus.DebugLevel {
 		l.WithField("index", h.RemoteIndex).
 			WithField("udpAddr", addr).
