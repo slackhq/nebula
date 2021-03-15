@@ -107,6 +107,14 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 	certName := remoteCert.Details.Name
 	fingerprint, _ := remoteCert.Sha256Sum()
 
+	if vpnIP == ip2int(f.certState.certificate.Details.Ips[0].IP) {
+		l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
+			WithField("certName", certName).
+			WithField("fingerprint", fingerprint).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Refusing to handshake with myself")
+		return
+	}
+
 	myIndex, err := generateIndex()
 	if err != nil {
 		l.WithError(err).WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
