@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"runtime"
 	"time"
 
 	graphite "github.com/cyberdelia/go-metrics-graphite"
@@ -15,7 +16,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 )
 
-func startStats(c *Config, configTest bool) error {
+func startStats(c *Config, buildVersion string, configTest bool) error {
 	mType := c.GetString("stats.type", "")
 	if mType == "" || mType == "none" {
 		return nil
@@ -30,7 +31,7 @@ func startStats(c *Config, configTest bool) error {
 	case "graphite":
 		startGraphiteStats(interval, c, configTest)
 	case "prometheus":
-		startPrometheusStats(interval, c, configTest)
+		startPrometheusStats(interval, c, buildVersion, configTest)
 	default:
 		return fmt.Errorf("stats.type was not understood: %s", mType)
 	}
@@ -64,7 +65,7 @@ func startGraphiteStats(i time.Duration, c *Config, configTest bool) error {
 	return nil
 }
 
-func startPrometheusStats(i time.Duration, c *Config, configTest bool) error {
+func startPrometheusStats(i time.Duration, c *Config, buildVersion string, configTest bool) error {
 	namespace := c.GetString("stats.namespace", "")
 	subsystem := c.GetString("stats.subsystem", "")
 
@@ -81,6 +82,20 @@ func startPrometheusStats(i time.Duration, c *Config, configTest bool) error {
 	pr := prometheus.NewRegistry()
 	pClient := mp.NewPrometheusProvider(metrics.DefaultRegistry, namespace, subsystem, pr, i)
 	go pClient.UpdatePrometheusMetrics()
+
+	// Export our version information as labels on a static gauge
+	g := prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "info",
+		Help:      "Version information for the Nebula binary",
+		ConstLabels: prometheus.Labels{
+			"version":   buildVersion,
+			"goversion": runtime.Version(),
+		},
+	})
+	pr.MustRegister(g)
+	g.Set(1)
 
 	if !configTest {
 		go func() {
