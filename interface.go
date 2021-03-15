@@ -289,7 +289,3 @@ func (f *Interface) emitStats(i time.Duration) {
 		udpStats()
 	}
 }
-
-func (f *Interface) GetVpnIP() uint32 {
-	return ip2int(f.inside.CidrNet().IP)
-}
