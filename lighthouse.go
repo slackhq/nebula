@@ -172,9 +172,9 @@ func (lh *LightHouse) AddRemote(vpnIP uint32, toIp *udpAddr, static bool) {
 	}
 
 	lh.Lock()
+	defer lh.Unlock()
 	for _, v := range lh.addrMap[vpnIP] {
 		if v.Equals(toIp) {
-			lh.Unlock()
 			return
 		}
 	}
@@ -190,7 +190,6 @@ func (lh *LightHouse) AddRemote(vpnIP uint32, toIp *udpAddr, static bool) {
 		lh.staticList[vpnIP] = struct{}{}
 	}
 	lh.addrMap[vpnIP] = append(lh.addrMap[vpnIP], *toIp)
-	lh.Unlock()
 }
 
 func (lh *LightHouse) AddRemoteAndReset(vpnIP uint32, toIp *udpAddr) {
