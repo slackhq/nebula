@@ -124,6 +124,35 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	})
 }
 
+func Test_lhRemoteAllowList(t *testing.T) {
+	c := NewConfig()
+	c.Settings["remoteallowlist"] = map[interface{}]interface{}{
+		"10.20.0.0/12": false,
+	}
+	allowList, err := c.GetAllowList("remoteallowlist", false)
+	assert.Nil(t, err)
+
+	lh1 := "10.128.0.2"
+	lh1IP := net.ParseIP(lh1)
+
+	udpServer, _ := NewListener("0.0.0.0", 0, true)
+
+	lh := NewLightHouse(true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
+	lh.SetRemoteAllowList(allowList)
+
+	remote1 := "10.20.0.3"
+	remote1IP := net.ParseIP(remote1)
+	lh.AddRemote(ip2int(remote1IP), NewUDPAddr(ip2int(remote1IP), uint16(4242)), true)
+	assert.Nil(t, lh.addrMap[ip2int(remote1IP)])
+
+	remote2 := "10.128.0.3"
+	remote2IP := net.ParseIP(remote2)
+	remote2UDPAddr := NewUDPAddr(ip2int(remote2IP), uint16(4242))
+
+	lh.AddRemote(ip2int(remote2IP), remote2UDPAddr, true)
+	assert.Equal(t, remote2UDPAddr, &lh.addrMap[ip2int(remote2IP)][0])
+}
+
 //func NewLightHouse(amLighthouse bool, myIp uint32, ips []string, interval int, nebulaPort int, pc *udpConn, punchBack bool) *LightHouse {
 
 /*
