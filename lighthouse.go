@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/golang/protobuf/proto"
@@ -420,24 +421,33 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 		if !lh.IsLighthouseIP(vpnIp) {
 			return
 		}
+		// Start tracking hosts we are punching to and don't duplicate effort here anymore
+		go func() {
+			fi := lh.punchConn.sysFd
+			//time.Sleep(time.Second * 2)
+			empty := []byte{0, 1, 2}
+			for _, a := range n.Details.IpAndPorts {
+				vpnPeer := NewUDPAddr(a.Ip, uint16(a.Port))
+				go func() {
+					time.Sleep(lh.punchDelay)
+					lh.metricHolepunchTx.Inc(1)
+					// If we can lock the socket just for hole punches, we can probably just reuse this
+					// instead of gopacket magic and/or reuseport/addr magic
+					syscall.SetsockoptInt(fi, 0x0, syscall.IP_TTL, 5)
+					lh.punchConn.WriteTo(empty, vpnPeer)
+					syscall.SetsockoptInt(fi, 0x0, syscall.IP_TTL, -1)
 
-		empty := []byte{0}
-		for _, a := range n.Details.IpAndPorts {
-			vpnPeer := NewUDPAddr(a.Ip, uint16(a.Port))
-			go func() {
-				time.Sleep(lh.punchDelay)
-				lh.metricHolepunchTx.Inc(1)
-				lh.punchConn.WriteTo(empty, vpnPeer)
+				}()
+				l.Debugf("Punching %s on %d for %s", IntIp(a.Ip), a.Port, IntIp(n.Details.VpnIp))
+			}
+		}()
 
-			}()
-			l.Debugf("Punching %s on %d for %s", IntIp(a.Ip), a.Port, IntIp(n.Details.VpnIp))
-		}
 		// This sends a nebula test packet to the host trying to contact us. In the case
 		// of a double nat or other difficult scenario, this may help establish
 		// a tunnel.
 		if lh.punchBack {
 			go func() {
-				time.Sleep(time.Second * 5)
+				time.Sleep(time.Second * 2)
 				l.Debugf("Sending a nebula test packet to vpn ip %s", IntIp(n.Details.VpnIp))
 				// TODO we have to allocate a new output buffer here since we are spawning a new goroutine
 				// for each punchBack packet. We should move this into a timerwheel or a single goroutine
