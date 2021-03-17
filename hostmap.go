@@ -75,7 +75,7 @@ type cachedPacket struct {
 	packet         []byte
 }
 
-type packetCallback func(t NebulaMessageType, st NebulaMessageSubType, h *HostInfo, p, nb, out []byte)
+type packetCallback func(t NebulaMessageType, st NebulaMessageSubType, h *HostInfo, p, nb, out []byte, q int)
 
 type HostInfoDest struct {
 	addr *udpAddr
@@ -500,7 +500,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		if preferred && !best.Equals(i.remote) {
 			// Try to send a test packet to that host, this should
 			// cause it to detect a roaming event and switch remotes
-			ifce.send(test, testRequest, i.ConnectionState, i, best, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			ifce.send(test, testRequest, i.ConnectionState, i, best, []byte(""), make([]byte, 12, 12), make([]byte, mtu), 0)
 		}
 	}
 }
@@ -595,7 +595,7 @@ func (i *HostInfo) cachePacket(l *logrus.Logger, t NebulaMessageType, st NebulaM
 }
 
 // handshakeComplete will set the connection as ready to communicate, as well as flush any stored packets
-func (i *HostInfo) handshakeComplete(l *logrus.Logger) {
+func (i *HostInfo) handshakeComplete(l *logrus.Logger, q int) {
 	//TODO: I'm not certain the distinction between handshake complete and ConnectionState being ready matters because:
 	//TODO: HandshakeComplete means send stored packets and ConnectionState.ready means we are ready to send
 	//TODO: if the transition from HandhsakeComplete to ConnectionState.ready happens all within this function they are identical
@@ -614,7 +614,7 @@ func (i *HostInfo) handshakeComplete(l *logrus.Logger) {
 		nb := make([]byte, 12, 12)
 		out := make([]byte, mtu)
 		for _, cp := range i.packetStore {
-			cp.callback(cp.messageType, cp.messageSubType, i, cp.packet, nb, out)
+			cp.callback(cp.messageType, cp.messageSubType, i, cp.packet, nb, out, q)
 		}
 	}
 

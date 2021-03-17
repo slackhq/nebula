@@ -121,7 +121,7 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 			// finished reporting its own IPs yet), then send another query to
 			// the LH.
 			if len(ips) <= 1 {
-				ips, err = c.lightHouse.Query(vpnIP, f)
+				ips, err = c.lightHouse.Query(vpnIP, f, 0)
 			}
 			if err == nil {
 				for _, ip := range ips {

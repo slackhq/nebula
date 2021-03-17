@@ -469,7 +469,7 @@ func sshQueryLighthouse(ifce *Interface, fs interface{}, a []string, w sshd.Stri
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	ips, _ := ifce.lightHouse.Query(vpnIp, ifce)
+	ips, _ := ifce.lightHouse.Query(vpnIp, ifce, 0)
 	return json.NewEncoder(w.GetWriter()).Encode(ips)
 }
 
@@ -509,6 +509,7 @@ func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 			[]byte{},
 			make([]byte, 12, 12),
 			make([]byte, mtu),
+			0,
 		)
 	}
 
@@ -559,7 +560,7 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 	if addr != nil {
 		hostInfo.SetRemote(addr)
 	}
-	ifce.getOrHandshake(vpnIp)
+	ifce.getOrHandshake(vpnIp, 0)
 
 	return w.WriteLine("Created")
 }
