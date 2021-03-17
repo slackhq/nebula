@@ -153,15 +153,17 @@ func Test_lhRemoteAllowList(t *testing.T) {
 
 	remote1 := "10.20.0.3"
 	remote1IP := net.ParseIP(remote1)
-	lh.AddRemote(ip2int(remote1IP), NewUDPAddr(ip2int(remote1IP), uint16(4242)), true)
+	lh.AddRemote(ip2int(remote1IP), NewUDPAddr(remote1IP, uint16(4242)), true)
 	assert.Nil(t, lh.addrMap[ip2int(remote1IP)])
 
 	remote2 := "10.128.0.3"
 	remote2IP := net.ParseIP(remote2)
-	remote2UDPAddr := NewUDPAddr(ip2int(remote2IP), uint16(4242))
+	remote2UDPAddr := NewUDPAddr(remote2IP, uint16(4242))
 
 	lh.AddRemote(ip2int(remote2IP), remote2UDPAddr, true)
-	assert.Equal(t, remote2UDPAddr, &lh.addrMap[ip2int(remote2IP)][0])
+	// Make sure the pointers are different but the contents are equal since we are using slices
+	assert.False(t, remote2UDPAddr == lh.addrMap[ip2int(remote2IP)][0])
+	assert.Equal(t, remote2UDPAddr, lh.addrMap[ip2int(remote2IP)][0])
 }
 
 //func NewLightHouse(amLighthouse bool, myIp uint32, ips []string, interval int, nebulaPort int, pc *udpConn, punchBack bool) *LightHouse {
