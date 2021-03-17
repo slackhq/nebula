@@ -15,7 +15,7 @@ require (
 	github.com/konsorten/go-windows-terminal-sequences v1.0.2 // indirect
 	github.com/kr/pretty v0.1.0 // indirect
 	github.com/miekg/dns v1.1.25
-	github.com/nbrownus/go-metrics-prometheus v0.0.0-20180622211546-6e6d5173d99c
+	github.com/nbrownus/go-metrics-prometheus v0.0.0-20210317214817-64743030013d
 	github.com/prometheus/client_golang v1.2.1
 	github.com/prometheus/client_model v0.0.0-20191202183732-d1d2010b5bee // indirect
 	github.com/prometheus/procfs v0.0.8 // indirect
