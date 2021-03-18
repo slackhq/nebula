@@ -1,6 +1,6 @@
 // +build !android
 
-package nebula
+package udp
 
 import (
 	"encoding/binary"
@@ -51,14 +51,19 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 		return nil, fmt.Errorf("unable to open socket: %s", err)
 	}
 
-	var lip [16]byte
-	copy(lip[:], net.ParseIP(ip))
+	if err = syscall.SetNonblock(fd, true); err != nil {
+		unix.Close(fd)
+		return nil, os.NewSyscallError("setnonblock", err)
+	}
 
 	if multi {
 		if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
 			return nil, fmt.Errorf("unable to set SO_REUSEPORT: %s", err)
 		}
 	}
+
+	var lip [16]byte
+	copy(lip[:], net.ParseIP(ip))
 
 	//TODO: support multiple listening IPs (for limiting ipv6)
 	if err = unix.Bind(fd, &unix.SockaddrInet6{Addr: lip, Port: port}); err != nil {
@@ -143,9 +148,9 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 	//TODO: should we track this?
 	//metric := metrics.GetOrRegisterHistogram("test.batch_read", nil, metrics.NewExpDecaySample(1028, 0.015))
 	msgs, buffers, names := u.PrepareRawMessages(f.udpBatchSize)
-	read := u.ReadMulti
+	read := u.readMulti
 	if f.udpBatchSize == 1 {
-		read = u.ReadSingle
+		read = u.readSingle
 	}
 
 	conntrackCache := NewConntrackCacheTicker(f.conntrackCacheTimeout)
@@ -166,7 +171,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 	}
 }
 
-func (u *udpConn) ReadSingle(msgs []rawMessage) (int, error) {
+func (u *udpConn) readSingle(msgs []rawMessage) (int, error) {
 	for {
 		n, _, err := unix.Syscall6(
 			unix.SYS_RECVMSG,
@@ -187,7 +192,7 @@ func (u *udpConn) ReadSingle(msgs []rawMessage) (int, error) {
 	}
 }
 
-func (u *udpConn) ReadMulti(msgs []rawMessage) (int, error) {
+func (u *udpConn) readMulti(msgs []rawMessage) (int, error) {
 	for {
 		n, _, err := unix.Syscall6(
 			unix.SYS_RECVMMSG,

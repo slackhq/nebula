@@ -1,52 +1,50 @@
 // +build linux
-// +build amd64 arm64 ppc64 ppc64le mips64 mips64le s390x
+// +build 386 amd64p32 arm mips mipsle
 // +build !android
 
-package nebula
+package udp
 
 import (
+	"github.com/slackhq/nebula"
 	"golang.org/x/sys/unix"
 )
 
 type iovec struct {
 	Base *byte
-	Len  uint64
+	Len  uint32
 }
 
 type msghdr struct {
 	Name       *byte
 	Namelen    uint32
-	Pad0       [4]byte
 	Iov        *iovec
-	Iovlen     uint64
+	Iovlen     uint32
 	Control    *byte
-	Controllen uint64
+	Controllen uint32
 	Flags      int32
-	Pad1       [4]byte
 }
 
 type rawMessage struct {
-	Hdr  msghdr
-	Len  uint32
-	Pad0 [4]byte
+	Hdr msghdr
+	Len uint32
 }
 
-func (u *udpConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
+func (u *nebula.udpConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
 	msgs := make([]rawMessage, n)
 	buffers := make([][]byte, n)
 	names := make([][]byte, n)
 
 	for i := range msgs {
-		buffers[i] = make([]byte, mtu)
+		buffers[i] = make([]byte, nebula.mtu)
 		names[i] = make([]byte, unix.SizeofSockaddrInet6)
 
 		//TODO: this is still silly, no need for an array
 		vs := []iovec{
-			{Base: &buffers[i][0], Len: uint64(len(buffers[i]))},
+			{Base: &buffers[i][0], Len: uint32(len(buffers[i]))},
 		}
 
 		msgs[i].Hdr.Iov = &vs[0]
-		msgs[i].Hdr.Iovlen = uint64(len(vs))
+		msgs[i].Hdr.Iovlen = uint32(len(vs))
 
 		msgs[i].Hdr.Name = &names[i][0]
 		msgs[i].Hdr.Namelen = uint32(len(names[i]))

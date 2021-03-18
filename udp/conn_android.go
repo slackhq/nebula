@@ -1,6 +1,4 @@
-package nebula
-
-// FreeBSD support is primarily implemented in udp_generic, besides NewListenConfig
+package udp
 
 import (
 	"fmt"

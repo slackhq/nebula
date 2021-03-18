@@ -1,4 +1,4 @@
-package nebula
+package udp
 
 import (
 	"encoding/json"
@@ -7,42 +7,43 @@ import (
 	"strconv"
 )
 
-//TODO: we should deprecate this and just use net.UDPAddr
-type udpAddr struct {
+type m map[string]interface{}
+
+type Addr struct {
 	IP   net.IP
 	Port uint16
 }
 
-func NewUDPAddr(ip net.IP, port uint16) *udpAddr {
-	addr := udpAddr{IP: make([]byte, len(ip)), Port: port}
+func NewAddr(ip net.IP, port uint16) *Addr {
+	addr := Addr{IP: make([]byte, len(ip)), Port: port}
 	copy(addr.IP, ip)
 	return &addr
 }
 
-func NewUDPAddrFromString(s string) *udpAddr {
+func NewAddrFromString(s string) *Addr {
 	ip, port, err := parseIPAndPort(s)
 	//TODO: handle err
 	_ = err
-	return &udpAddr{IP: ip, Port: port}
+	return &Addr{IP: ip, Port: port}
 }
 
-func (ua *udpAddr) Equals(t *udpAddr) bool {
+func (ua *Addr) Equals(t *Addr) bool {
 	if t == nil || ua == nil {
 		return t == nil && ua == nil
 	}
 	return ua.IP.Equal(t.IP) && ua.Port == t.Port
 }
 
-func (ua *udpAddr) String() string {
+func (ua *Addr) String() string {
 	return net.JoinHostPort(ua.IP.String(), fmt.Sprintf("%v", ua.Port))
 }
 
-func (ua *udpAddr) MarshalJSON() ([]byte, error) {
+func (ua *Addr) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m{"ip": ua.IP, "port": ua.Port})
 }
 
-func (ua *udpAddr) Copy() *udpAddr {
-	nu := udpAddr{
+func (ua *Addr) Copy() *Addr {
+	nu := Addr{
 		Port: ua.Port,
 		IP:   make(net.IP, len(ua.IP)),
 	}
