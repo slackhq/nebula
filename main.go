@@ -168,7 +168,15 @@ func Main(config *c.Config, configTest bool, buildVersion string, logger *logrus
 
 	if !configTest {
 		for i := 0; i < routines; i++ {
-			udpServer, err := udp.NewConn(config.GetString("listen.host", "0.0.0.0"), port, routines > 1, mtu, l)
+			udpServer, err := udp.NewConn(
+				config.GetString("listen.host", "0.0.0.0"),
+				port,
+				config.GetInt("listen.batch", 64),
+				routines > 1,
+				mtu,
+				l,
+			)
+
 			if err != nil {
 				return nil, NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
@@ -364,7 +372,6 @@ func Main(config *c.Config, configTest bool, buildVersion string, logger *logrus
 		pendingDeletionInterval: pendingDeletionInterval,
 		DropLocalBroadcast:      config.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:           config.GetBool("tun.drop_multicast", false),
-		UDPBatchSize:            config.GetInt("listen.batch", 64),
 		routines:                routines,
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,

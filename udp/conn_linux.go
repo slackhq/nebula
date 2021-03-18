@@ -9,14 +9,18 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/rcrowley/go-metrics"
+	"github.com/sirupsen/logrus"
+	c "github.com/slackhq/nebula/config"
 	"golang.org/x/sys/unix"
 )
 
 //TODO: make it support reload as best you can!
 
-type udpConn struct {
-	sysFd int
+type linuxConn struct {
+	fd    int
+	l     *logrus.Logger
+	mtu   int
+	batch int
 }
 
 var x int
@@ -38,7 +42,7 @@ const (
 
 type _SK_MEMINFO [_SK_MEMINFO_VARS]uint32
 
-func NewListener(ip string, port int, multi bool) (*udpConn, error) {
+func NewConn(ip string, port int, batch int, multi bool, mtu int, l *logrus.Logger) (*linuxConn, error) {
 	syscall.ForkLock.RLock()
 	fd, err := unix.Socket(unix.AF_INET6, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
 	if err == nil {
@@ -49,11 +53,6 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 	if err != nil {
 		unix.Close(fd)
 		return nil, fmt.Errorf("unable to open socket: %s", err)
-	}
-
-	if err = syscall.SetNonblock(fd, true); err != nil {
-		unix.Close(fd)
-		return nil, os.NewSyscallError("setnonblock", err)
 	}
 
 	if multi {
@@ -75,107 +74,82 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 	//v, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU)
 	//l.Println(v, err)
 
-	return &udpConn{sysFd: fd}, err
+	return &linuxConn{fd: fd, l: l, batch: batch, mtu: mtu}, err
 }
 
-func (u *udpConn) Rebind() error {
+func (lc *linuxConn) Rebind() error {
 	return nil
 }
 
-func (u *udpConn) SetRecvBuffer(n int) error {
-	return unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_RCVBUFFORCE, n)
+func (lc *linuxConn) SetRecvBuffer(n int) error {
+	return unix.SetsockoptInt(lc.fd, unix.SOL_SOCKET, unix.SO_RCVBUFFORCE, n)
 }
 
-func (u *udpConn) SetSendBuffer(n int) error {
-	return unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_SNDBUFFORCE, n)
+func (lc *linuxConn) SetSendBuffer(n int) error {
+	return unix.SetsockoptInt(lc.fd, unix.SOL_SOCKET, unix.SO_SNDBUFFORCE, n)
 }
 
-func (u *udpConn) GetRecvBuffer() (int, error) {
-	return unix.GetsockoptInt(int(u.sysFd), unix.SOL_SOCKET, unix.SO_RCVBUF)
+func (lc *linuxConn) GetRecvBuffer() (int, error) {
+	return unix.GetsockoptInt(lc.fd, unix.SOL_SOCKET, unix.SO_RCVBUF)
 }
 
-func (u *udpConn) GetSendBuffer() (int, error) {
-	return unix.GetsockoptInt(int(u.sysFd), unix.SOL_SOCKET, unix.SO_SNDBUF)
+func (lc *linuxConn) GetSendBuffer() (int, error) {
+	return unix.GetsockoptInt(lc.fd, unix.SOL_SOCKET, unix.SO_SNDBUF)
 }
 
-func (u *udpConn) LocalAddr() (*udpAddr, error) {
-	var rsa unix.RawSockaddrAny
-	var rLen = unix.SizeofSockaddrAny
-
-	_, _, err := unix.Syscall(
-		unix.SYS_GETSOCKNAME,
-		uintptr(u.sysFd),
-		uintptr(unsafe.Pointer(&rsa)),
-		uintptr(unsafe.Pointer(&rLen)),
-	)
-
-	if err != 0 {
+func (lc *linuxConn) LocalAddr() (*Addr, error) {
+	sa, err := unix.Getsockname(lc.fd)
+	if err != nil {
 		return nil, err
 	}
 
-	addr := &udpAddr{}
-	if rsa.Addr.Family == unix.AF_INET {
-		pp := (*unix.RawSockaddrInet4)(unsafe.Pointer(&rsa))
-		addr.Port = uint16(rsa.Addr.Data[0])<<8 + uint16(rsa.Addr.Data[1])
-		copy(addr.IP, pp.Addr[:])
-
-	} else if rsa.Addr.Family == unix.AF_INET6 {
-		//TODO: this cast sucks and we can do better
-		pp := (*unix.RawSockaddrInet6)(unsafe.Pointer(&rsa))
-		addr.Port = uint16(rsa.Addr.Data[0])<<8 + uint16(rsa.Addr.Data[1])
-		copy(addr.IP, pp.Addr[:])
-
-	} else {
-		addr.Port = 0
-		addr.IP = []byte{}
+	addr := &Addr{}
+	switch sa := sa.(type) {
+	case *unix.SockaddrInet4:
+		addr.IP = sa.Addr[0:]
+		addr.Port = uint16(sa.Port)
+	case *unix.SockaddrInet6:
+		addr.IP = sa.Addr[0:]
+		addr.Port = uint16(sa.Port)
 	}
-
-	//TODO: Just use this instead?
-	//a, b := unix.Getsockname(u.sysFd)
 
 	return addr, nil
 }
 
-func (u *udpConn) ListenOut(f *Interface, q int) {
-	plaintext := make([]byte, mtu)
+func (lc *linuxConn) ListenOut(reader EncReader, lhf LightHouseHandlerFunc, cache *ConntrackCacheTicker, q int) error {
+	plaintext := make([]byte, lc.mtu)
 	header := &Header{}
 	fwPacket := &FirewallPacket{}
-	udpAddr := &udpAddr{}
+	addr := &Addr{}
 	nb := make([]byte, 12, 12)
 
-	lhh := f.lightHouse.NewRequestHandler()
-
-	//TODO: should we track this?
-	//metric := metrics.GetOrRegisterHistogram("test.batch_read", nil, metrics.NewExpDecaySample(1028, 0.015))
-	msgs, buffers, names := u.PrepareRawMessages(f.udpBatchSize)
-	read := u.readMulti
-	if f.udpBatchSize == 1 {
-		read = u.readSingle
+	msgs, buffers, names := lc.PrepareRawMessages(lc.batch)
+	read := lc.readMulti
+	if lc.batch == 1 {
+		read = lc.readSingle
 	}
-
-	conntrackCache := NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
 	for {
 		n, err := read(msgs)
 		if err != nil {
-			l.WithError(err).Error("Failed to read packets")
+			lc.l.WithError(err).Error("Failed to read packets")
 			continue
 		}
 
 		//metric.Update(int64(n))
 		for i := 0; i < n; i++ {
-			udpAddr.IP = names[i][8:24]
-			udpAddr.Port = binary.BigEndian.Uint16(names[i][2:4])
-			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb, q, conntrackCache.Get())
+			addr.IP = names[i][8:24]
+			addr.Port = binary.BigEndian.Uint16(names[i][2:4])
+			reader(addr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhf, nb, q, cache.Get())
 		}
 	}
 }
 
-func (u *udpConn) readSingle(msgs []rawMessage) (int, error) {
+func (lc *linuxConn) readSingle(msgs []rawMessage) (int, error) {
 	for {
 		n, _, err := unix.Syscall6(
 			unix.SYS_RECVMSG,
-			uintptr(u.sysFd),
+			uintptr(lc.fd),
 			uintptr(unsafe.Pointer(&(msgs[0].Hdr))),
 			0,
 			0,
@@ -192,11 +166,11 @@ func (u *udpConn) readSingle(msgs []rawMessage) (int, error) {
 	}
 }
 
-func (u *udpConn) readMulti(msgs []rawMessage) (int, error) {
+func (lc *linuxConn) readMulti(msgs []rawMessage) (int, error) {
 	for {
 		n, _, err := unix.Syscall6(
 			unix.SYS_RECVMMSG,
-			uintptr(u.sysFd),
+			uintptr(lc.fd),
 			uintptr(unsafe.Pointer(&msgs[0])),
 			uintptr(len(msgs)),
 			unix.MSG_WAITFORONE,
@@ -212,8 +186,7 @@ func (u *udpConn) readMulti(msgs []rawMessage) (int, error) {
 	}
 }
 
-func (u *udpConn) WriteTo(b []byte, addr *udpAddr) error {
-
+func (lc *linuxConn) WriteTo(b []byte, addr *Addr) error {
 	var rsa unix.RawSockaddrInet6
 	rsa.Family = unix.AF_INET6
 	p := (*[2]byte)(unsafe.Pointer(&rsa.Port))
@@ -224,7 +197,7 @@ func (u *udpConn) WriteTo(b []byte, addr *udpAddr) error {
 	for {
 		_, _, err := unix.Syscall6(
 			unix.SYS_SENDTO,
-			uintptr(u.sysFd),
+			uintptr(lc.fd),
 			uintptr(unsafe.Pointer(&b[0])),
 			uintptr(len(b)),
 			uintptr(0),
@@ -242,75 +215,63 @@ func (u *udpConn) WriteTo(b []byte, addr *udpAddr) error {
 	}
 }
 
-func (u *udpConn) reloadConfig(c *Config) {
-	b := c.GetInt("listen.read_buffer", 0)
-	if b > 0 {
-		err := u.SetRecvBuffer(b)
-		if err == nil {
-			s, err := u.GetRecvBuffer()
-			if err == nil {
-				l.WithField("size", s).Info("listen.read_buffer was set")
-			} else {
-				l.WithError(err).Warn("Failed to get listen.read_buffer")
-			}
-		} else {
-			l.WithError(err).Error("Failed to set listen.read_buffer")
-		}
-	}
-
-	b = c.GetInt("listen.write_buffer", 0)
-	if b > 0 {
-		err := u.SetSendBuffer(b)
-		if err == nil {
-			s, err := u.GetSendBuffer()
-			if err == nil {
-				l.WithField("size", s).Info("listen.write_buffer was set")
-			} else {
-				l.WithError(err).Warn("Failed to get listen.write_buffer")
-			}
-		} else {
-			l.WithError(err).Error("Failed to set listen.write_buffer")
-		}
-	}
+func (lc *linuxConn) ReloadConfig(c *c.Config) {
+	configSetBuffers(lc, c)
 }
 
-func (u *udpConn) getMemInfo(meminfo *_SK_MEMINFO) error {
+func (lc *linuxConn) getMemInfo(meminfo *_SK_MEMINFO) error {
 	var vallen uint32 = 4 * _SK_MEMINFO_VARS
-	_, _, err := unix.Syscall6(unix.SYS_GETSOCKOPT, uintptr(u.sysFd), uintptr(unix.SOL_SOCKET), uintptr(unix.SO_MEMINFO), uintptr(unsafe.Pointer(meminfo)), uintptr(unsafe.Pointer(&vallen)), 0)
+	_, _, err := unix.Syscall6(
+		unix.SYS_GETSOCKOPT,
+		uintptr(lc.fd),
+		uintptr(unix.SOL_SOCKET),
+		uintptr(unix.SO_MEMINFO),
+		uintptr(unsafe.Pointer(meminfo)),
+		uintptr(unsafe.Pointer(&vallen)),
+		0,
+	)
 	if err != 0 {
 		return err
 	}
 	return nil
 }
 
-func NewUDPStatsEmitter(udpConns []*udpConn) func() {
-	// Check if our kernel supports SO_MEMINFO before registering the gauges
-	var udpGauges [][_SK_MEMINFO_VARS]metrics.Gauge
-	var meminfo _SK_MEMINFO
-	if err := udpConns[0].getMemInfo(&meminfo); err == nil {
-		udpGauges = make([][_SK_MEMINFO_VARS]metrics.Gauge, len(udpConns))
-		for i := range udpConns {
-			udpGauges[i] = [_SK_MEMINFO_VARS]metrics.Gauge{
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.rmem_alloc", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.rcvbuf", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.wmem_alloc", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.sndbuf", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.fwd_alloc", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.wmem_queued", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.optmem", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.backlog", i), nil),
-				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.drops", i), nil),
-			}
-		}
-	}
-
-	return func() {
-		for i, gauges := range udpGauges {
-			if err := udpConns[i].getMemInfo(&meminfo); err == nil {
-				for j := 0; j < _SK_MEMINFO_VARS; j++ {
-					gauges[j].Update(int64(meminfo[j]))
-				}
-			}
-		}
-	}
+func (lc *linuxConn) logger() *logrus.Logger {
+	return lc.l
 }
+
+func (lc *linuxConn) EmitStats() {
+	//TODO
+}
+
+//func NewUDPStatsEmitter(udpConns []*udpConn) func() {
+//	// Check if our kernel supports SO_MEMINFO before registering the gauges
+//	var udpGauges [][_SK_MEMINFO_VARS]metrics.Gauge
+//	var meminfo _SK_MEMINFO
+//	if err := udpConns[0].getMemInfo(&meminfo); err == nil {
+//		udpGauges = make([][_SK_MEMINFO_VARS]metrics.Gauge, len(udpConns))
+//		for i := range udpConns {
+//			udpGauges[i] = [_SK_MEMINFO_VARS]metrics.Gauge{
+//				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.rmem_alloc", i), nil),
+//				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.rcvbuf", i), nil),
+//				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.wmem_alloc", i), nil),
+//				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.sndbuf", i), nil),
+//				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.fwd_alloc", i), nil),
+//				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.wmem_queued", i), nil),
+//				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.optmem", i), nil),
+//				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.backlog", i), nil),
+//				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.drops", i), nil),
+//			}
+//		}
+//	}
+//
+//	return func() {
+//		for i, gauges := range udpGauges {
+//			if err := udpConns[i].getMemInfo(&meminfo); err == nil {
+//				for j := 0; j < _SK_MEMINFO_VARS; j++ {
+//					gauges[j].Update(int64(meminfo[j]))
+//				}
+//			}
+//		}
+//	}
+//}

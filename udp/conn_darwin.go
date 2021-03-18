@@ -13,16 +13,13 @@ import (
 )
 
 type darwinConn struct {
-	fd  int
-	l   *logrus.Logger
-	mtu int
+	fd    int
+	l     *logrus.Logger
+	mtu   int
+	batch int
 }
 
-type rawMessage struct {
-	Len uint32
-}
-
-func NewConn(ip string, port int, multi bool, mtu int, l *logrus.Logger) (*darwinConn, error) {
+func NewConn(ip string, port int, batch int, multi bool, mtu int, l *logrus.Logger) (*darwinConn, error) {
 	syscall.ForkLock.RLock()
 	fd, err := syscall.Socket(unix.AF_INET6, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
 	if err == nil {
@@ -47,7 +44,7 @@ func NewConn(ip string, port int, multi bool, mtu int, l *logrus.Logger) (*darwi
 		return nil, fmt.Errorf("unable to bind to socket: %s", err)
 	}
 
-	return &darwinConn{fd: fd, mtu: mtu, l: l}, nil
+	return &darwinConn{fd: fd, mtu: mtu, l: l, batch: batch}, nil
 }
 
 func (dc *darwinConn) WriteTo(b []byte, addr *Addr) error {
@@ -106,35 +103,7 @@ func (dc *darwinConn) LocalAddr() (*Addr, error) {
 }
 
 func (dc *darwinConn) ReloadConfig(c *c.Config) {
-	b := c.GetInt("listen.read_buffer", 0)
-	if b > 0 {
-		err := dc.setRecvBuffer(b)
-		if err != nil {
-			dc.l.WithError(err).Error("Failed to set listen.read_buffer")
-		}
-	}
-
-	s, err := dc.getRecvBuffer()
-	if err == nil {
-		dc.l.WithField("size", s).Info("listen.read_buffer")
-	} else {
-		dc.l.WithError(err).Warn("Failed to get listen.read_buffer")
-	}
-
-	b = c.GetInt("listen.write_buffer", 0)
-	if b > 0 {
-		err := dc.setSendBuffer(b)
-		if err != nil {
-			dc.l.WithError(err).Error("Failed to set listen.write_buffer")
-		}
-	}
-
-	s, err = dc.getSendBuffer()
-	if err == nil {
-		dc.l.WithField("size", s).Info("listen.write_buffer")
-	} else {
-		dc.l.WithError(err).Warn("Failed to get listen.write_buffer")
-	}
+	configSetBuffers(dc, c)
 }
 
 func (dc *darwinConn) ListenOut(reader EncReader, lhh LightHouseHandlerFunc, cache *ConntrackCacheTicker, q int) error {
@@ -203,23 +172,26 @@ func (dc *darwinConn) Rebind() error {
 	return syscall.SetsockoptInt(dc.fd, unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, 0)
 }
 
-func (dc *darwinConn) EmitStats() error {
+func (dc *darwinConn) EmitStats() {
 	//TODO
-	return nil
 }
 
-func (dc *darwinConn) setRecvBuffer(n int) error {
+func (dc *darwinConn) SetRecvBuffer(n int) error {
 	return unix.SetsockoptInt(dc.fd, unix.SOL_SOCKET, unix.SO_RCVBUF, n)
 }
 
-func (dc *darwinConn) setSendBuffer(n int) error {
+func (dc *darwinConn) SetSendBuffer(n int) error {
 	return unix.SetsockoptInt(dc.fd, unix.SOL_SOCKET, unix.SO_SNDBUF, n)
 }
 
-func (dc *darwinConn) getRecvBuffer() (int, error) {
+func (dc *darwinConn) GetRecvBuffer() (int, error) {
 	return unix.GetsockoptInt(dc.fd, unix.SOL_SOCKET, unix.SO_RCVBUF)
 }
 
-func (dc *darwinConn) getSendBuffer() (int, error) {
+func (dc *darwinConn) GetSendBuffer() (int, error) {
 	return unix.GetsockoptInt(dc.fd, unix.SOL_SOCKET, unix.SO_SNDBUF)
+}
+
+func (dc *darwinConn) logger() *logrus.Logger {
+	return dc.l
 }

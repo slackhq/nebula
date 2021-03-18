@@ -5,7 +5,6 @@
 package udp
 
 import (
-	"github.com/slackhq/nebula"
 	"golang.org/x/sys/unix"
 )
 
@@ -29,13 +28,13 @@ type rawMessage struct {
 	Len uint32
 }
 
-func (u *nebula.udpConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
+func (lc *linuxConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
 	msgs := make([]rawMessage, n)
 	buffers := make([][]byte, n)
 	names := make([][]byte, n)
 
 	for i := range msgs {
-		buffers[i] = make([]byte, nebula.mtu)
+		buffers[i] = make([]byte, lc.mtu)
 		names[i] = make([]byte, unix.SizeofSockaddrInet6)
 
 		//TODO: this is still silly, no need for an array
