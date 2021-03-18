@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/sirupsen/logrus"
+	c "github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/udp"
 )
@@ -45,8 +46,8 @@ type sshCreateTunnelFlags struct {
 	Address string
 }
 
-func wireSSHReload(ssh *sshd.SSHServer, c *Config) {
-	c.RegisterReloadCallback(func(c *Config) {
+func wireSSHReload(ssh *sshd.SSHServer, config *c.Config) {
+	config.RegisterReloadCallback(func(c *c.Config) {
 		if c.GetBool("sshd.enabled", false) {
 			err := configSSH(ssh, c)
 			if err != nil {
@@ -59,7 +60,7 @@ func wireSSHReload(ssh *sshd.SSHServer, c *Config) {
 	})
 }
 
-func configSSH(ssh *sshd.SSHServer, c *Config) error {
+func configSSH(ssh *sshd.SSHServer, c *c.Config) error {
 	//TODO conntrack list
 	//TODO print firewall rules or hash?
 

@@ -16,6 +16,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	c "github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -150,7 +151,7 @@ func NewFirewall(tcpTimeout, UDPTimeout, defaultTimeout time.Duration, c *cert.N
 	}
 }
 
-func NewFirewallFromConfig(nc *cert.NebulaCertificate, c *Config) (*Firewall, error) {
+func NewFirewallFromConfig(nc *cert.NebulaCertificate, c *c.Config) (*Firewall, error) {
 	fw := NewFirewall(
 		c.GetDuration("firewall.conntrack.tcp_timeout", time.Minute*12),
 		c.GetDuration("firewall.conntrack.udp_timeout", time.Minute*3),
@@ -228,7 +229,7 @@ func (f *Firewall) GetRuleHash() string {
 	return hex.EncodeToString(sum[:])
 }
 
-func AddFirewallRulesFromConfig(inbound bool, config *Config, fw FirewallInterface) error {
+func AddFirewallRulesFromConfig(inbound bool, config *c.Config, fw FirewallInterface) error {
 	var table string
 	if inbound {
 		table = "firewall.inbound"

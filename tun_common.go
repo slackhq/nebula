@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+
+	c "github.com/slackhq/nebula/config"
 )
 
 const DEFAULT_MTU = 1300
@@ -14,7 +16,7 @@ type route struct {
 	via   *net.IP
 }
 
-func parseRoutes(config *Config, network *net.IPNet) ([]route, error) {
+func parseRoutes(config *c.Config, network *net.IPNet) ([]route, error) {
 	var err error
 
 	r := config.Get("tun.routes")
@@ -84,7 +86,7 @@ func parseRoutes(config *Config, network *net.IPNet) ([]route, error) {
 	return routes, nil
 }
 
-func parseUnsafeRoutes(config *Config, network *net.IPNet) ([]route, error) {
+func parseUnsafeRoutes(config *c.Config, network *net.IPNet) ([]route, error) {
 	var err error
 
 	r := config.Get("tun.unsafe_routes")

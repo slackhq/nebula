@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	c "github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/udp"
 	"gopkg.in/yaml.v2"
@@ -17,7 +18,7 @@ var l = logrus.New()
 
 type m map[string]interface{}
 
-func Main(config *Config, configTest bool, buildVersion string, logger *logrus.Logger, tunFd *int) (*Control, error) {
+func Main(config *c.Config, configTest bool, buildVersion string, logger *logrus.Logger, tunFd *int) (*Control, error) {
 	l = logger
 	l.Formatter = &logrus.TextFormatter{
 		FullTimestamp: true,
@@ -39,7 +40,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		return nil, NewContextualError("Failed to configure the logger", nil, err)
 	}
 
-	config.RegisterReloadCallback(func(c *Config) {
+	config.RegisterReloadCallback(func(c *c.Config) {
 		err := configLogger(c)
 		if err != nil {
 			l.WithError(err).Error("Failed to configure the logger")
@@ -172,7 +173,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 				return nil, NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
 			//TODO:
-			//udpServer.reloadConfig(config)
+			udpServer.ReloadConfig(config)
 			udpConns[i] = udpServer
 
 			// If port is dynamic, discover it
@@ -280,13 +281,13 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		config.GetBool("stats.lighthouse_metrics", false),
 	)
 
-	remoteAllowList, err := config.GetAllowList("lighthouse.remote_allow_list", false)
+	remoteAllowList, err := getAllowList(config, "lighthouse.remote_allow_list", false)
 	if err != nil {
 		return nil, NewContextualError("Invalid lighthouse.remote_allow_list", nil, err)
 	}
 	lightHouse.SetRemoteAllowList(remoteAllowList)
 
-	localAllowList, err := config.GetAllowList("lighthouse.local_allow_list", true)
+	localAllowList, err := getAllowList(config, "lighthouse.local_allow_list", true)
 	if err != nil {
 		return nil, NewContextualError("Invalid lighthouse.local_allow_list", nil, err)
 	}

@@ -1,6 +1,10 @@
 package nebula
 
-import "time"
+import (
+	"time"
+
+	c "github.com/slackhq/nebula/config"
+)
 
 type Punchy struct {
 	Punch   bool
@@ -8,7 +12,7 @@ type Punchy struct {
 	Delay   time.Duration
 }
 
-func NewPunchyFromConfig(c *Config) *Punchy {
+func NewPunchyFromConfig(c *c.Config) *Punchy {
 	p := &Punchy{}
 
 	if c.IsSet("punchy.punch") {

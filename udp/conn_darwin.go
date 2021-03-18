@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
+	c "github.com/slackhq/nebula/config"
 	"golang.org/x/sys/unix"
 )
 
@@ -102,9 +103,37 @@ func (dc *darwinConn) LocalAddr() (*Addr, error) {
 	return nil, nil
 }
 
-//func (dc *darwinConn) ReloadConfig(c *nebula.Config) {
-//	// TODO
-//}
+func (dc *darwinConn) ReloadConfig(c *c.Config) {
+	b := c.GetInt("listen.read_buffer", 0)
+	if b > 0 {
+		err := dc.SetRecvBuffer(b)
+		if err != nil {
+			dc.l.WithError(err).Error("Failed to set listen.read_buffer")
+		}
+	}
+
+	s, err := dc.GetRecvBuffer()
+	if err == nil {
+		dc.l.WithField("size", s).Info("listen.read_buffer was set")
+	} else {
+		dc.l.WithError(err).Warn("Failed to get listen.read_buffer")
+	}
+
+	b = c.GetInt("listen.write_buffer", 0)
+	if b > 0 {
+		err := dc.SetSendBuffer(b)
+		if err != nil {
+			dc.l.WithError(err).Error("Failed to set listen.write_buffer")
+		}
+	}
+
+	s, err = dc.GetSendBuffer()
+	if err == nil {
+		dc.l.WithField("size", s).Info("listen.write_buffer was set")
+	} else {
+		dc.l.WithError(err).Warn("Failed to get listen.write_buffer")
+	}
+}
 
 func (dc *darwinConn) ListenOut(reader EncReader, lhh LightHouseHandlerFunc, cache *ConntrackCacheTicker, q int) error {
 	plaintext := make([]byte, dc.mtu)

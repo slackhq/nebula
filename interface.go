@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rcrowley/go-metrics"
+	c "github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -199,7 +200,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	}
 }
 
-func (f *Interface) RegisterConfigChangeCallbacks(c *Config) {
+func (f *Interface) RegisterConfigChangeCallbacks(c *c.Config) {
 	c.RegisterReloadCallback(f.reloadCA)
 	c.RegisterReloadCallback(f.reloadCertKey)
 	c.RegisterReloadCallback(f.reloadFirewall)
@@ -209,7 +210,7 @@ func (f *Interface) RegisterConfigChangeCallbacks(c *Config) {
 	//}
 }
 
-func (f *Interface) reloadCA(c *Config) {
+func (f *Interface) reloadCA(c *c.Config) {
 	// reload and check regardless
 	// todo: need mutex?
 	newCAs, err := loadCAFromConfig(c)
@@ -222,7 +223,7 @@ func (f *Interface) reloadCA(c *Config) {
 	l.WithField("fingerprints", trustedCAs.GetFingerprints()).Info("Trusted CA certificates refreshed")
 }
 
-func (f *Interface) reloadCertKey(c *Config) {
+func (f *Interface) reloadCertKey(c *c.Config) {
 	// reload and check in all cases
 	cs, err := NewCertStateFromConfig(c)
 	if err != nil {
@@ -242,7 +243,7 @@ func (f *Interface) reloadCertKey(c *Config) {
 	l.WithField("cert", cs.certificate).Info("Client cert refreshed from disk")
 }
 
-func (f *Interface) reloadFirewall(c *Config) {
+func (f *Interface) reloadFirewall(c *c.Config) {
 	//TODO: need to trigger/detect if the certificate changed too
 	if c.HasChanged("firewall") == false {
 		l.Debug("No firewall config change detected")

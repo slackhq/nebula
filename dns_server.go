@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/miekg/dns"
+	c "github.com/slackhq/nebula/config"
 )
 
 // This whole thing should be rewritten to use context
@@ -108,7 +109,7 @@ func handleDnsRequest(w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func dnsMain(hostMap *HostMap, c *Config) {
+func dnsMain(hostMap *HostMap, c *c.Config) {
 	dnsR = newDnsRecords(hostMap)
 
 	// attach request handler func
@@ -118,11 +119,11 @@ func dnsMain(hostMap *HostMap, c *Config) {
 	startDns(c)
 }
 
-func getDnsServerAddr(c *Config) string {
+func getDnsServerAddr(c *c.Config) string {
 	return c.GetString("lighthouse.dns.host", "") + ":" + strconv.Itoa(c.GetInt("lighthouse.dns.port", 53))
 }
 
-func startDns(c *Config) {
+func startDns(c *c.Config) {
 	dnsAddr = getDnsServerAddr(c)
 	dnsServer = &dns.Server{Addr: dnsAddr, Net: "udp"}
 	l.Debugf("Starting DNS responder at %s\n", dnsAddr)
@@ -133,7 +134,7 @@ func startDns(c *Config) {
 	}
 }
 
-func reloadDns(c *Config) {
+func reloadDns(c *c.Config) {
 	if dnsAddr == getDnsServerAddr(c) {
 		l.Debug("No DNS server config change detected")
 		return

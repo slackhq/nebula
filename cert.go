@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/slackhq/nebula/cert"
+	c "github.com/slackhq/nebula/config"
 )
 
 var trustedCAs *cert.NebulaCAPool
@@ -46,7 +47,7 @@ func NewCertState(certificate *cert.NebulaCertificate, privateKey []byte) (*Cert
 	return cs, nil
 }
 
-func NewCertStateFromConfig(c *Config) (*CertState, error) {
+func NewCertStateFromConfig(c *c.Config) (*CertState, error) {
 	var pemPrivateKey []byte
 	var err error
 
@@ -119,7 +120,7 @@ func NewCertStateFromConfig(c *Config) (*CertState, error) {
 	return NewCertState(nebulaCert, rawKey)
 }
 
-func loadCAFromConfig(c *Config) (*cert.NebulaCAPool, error) {
+func loadCAFromConfig(c *c.Config) (*cert.NebulaCAPool, error) {
 	var rawCA []byte
 	var err error
 

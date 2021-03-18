@@ -1,5 +1,7 @@
 package udp
 
+import c "github.com/slackhq/nebula/config"
+
 type EncReader func(
 	addr *Addr,
 	out []byte,
@@ -22,6 +24,6 @@ type Conn interface {
 	ListenOut(reader EncReader, lhh LightHouseHandlerFunc, cache *ConntrackCacheTicker, q int) error
 	WriteTo(b []byte, addr *Addr) error
 	//TODO: last stragler, needs an interface
-	//ReloadConfig(c *nebula.Config)
+	ReloadConfig(config *c.Config)
 	EmitStats() error
 }
