@@ -218,35 +218,41 @@ func NewLhQueryByInt(VpnIp uint32) *NebulaMeta {
 	}
 }
 
-func NewIpAndPort(ip net.IP, port uint32) IpAndPort {
-	ipp := IpAndPort{Port: port}
+type ip4Or6 struct {
+	v4 IpAndPort
+	v6 Ip6AndPort
+}
+
+func NewIpAndPort(ip net.IP, port uint32) ip4Or6 {
+	ipp := ip4Or6{}
 
 	if ipv4 := ip.To4(); ipv4 != nil {
-		ipp.IpAny = &IpAndPort_Ip{Ip: ip2int(ip)}
+		ipp.v4 = IpAndPort{Port: port}
+		ipp.v4.Ip = ip2int(ip)
 
 	} else {
-		ipc := make([]byte, len(ip))
-		copy(ipc, ip)
-		ipp.IpAny = &IpAndPort_Ipv6{Ipv6: ipc}
+		ipp.v6 = Ip6AndPort{Port: port}
+		ipp.v6.Ip = make([]byte, len(ip))
+		copy(ipp.v6.Ip, ip)
 	}
 
 	return ipp
 }
 
-func NewIpAndPortFromUDPAddr(addr *udpAddr) IpAndPort {
+func NewIpAndPortFromUDPAddr(addr *udpAddr) ip4Or6 {
 	return NewIpAndPort(addr.IP, uint32(addr.Port))
 }
 
-func NewUDPAddrFromLH(ipp *IpAndPort) *udpAddr {
-	if ipv6 := ipp.GetIpv6(); len(ipv6) > 0 {
-		return NewUDPAddr(ipv6, uint16(ipp.Port))
-	}
-
-	ip := ipp.GetIp()
+func NewUDPAddrFromLH4(ipp *IpAndPort) *udpAddr {
+	ip := ipp.Ip
 	return NewUDPAddr(
 		net.IPv4(byte(ip&0xff000000>>24), byte(ip&0x00ff0000>>16), byte(ip&0x0000ff00>>8), byte(ip&0x000000ff)),
 		uint16(ipp.Port),
 	)
+}
+
+func NewUDPAddrFromLH6(ipp *Ip6AndPort) *udpAddr {
+	return NewUDPAddr(ipp.Ip, uint16(ipp.Port))
 }
 
 func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
@@ -261,20 +267,27 @@ func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
 }
 
 func (lh *LightHouse) SendUpdate(f EncWriter) {
-	var ipps []*IpAndPort
+	var v4 []*IpAndPort
+	var v6 []*Ip6AndPort
 
 	for _, e := range *localIps(lh.localAllowList) {
 		// Only add IPs that aren't my VPN/tun IP
 		if ip2int(e) != lh.myIp {
 			ipp := NewIpAndPort(e, lh.nebulaPort)
-			ipps = append(ipps, &ipp)
+			if len(ipp.v6.Ip) > 0 {
+				v6 = append(v6, &ipp.v6)
+			} else {
+				v4 = append(v4, &ipp.v4)
+			}
+
 		}
 	}
 	m := &NebulaMeta{
 		Type: NebulaMeta_HostUpdateNotification,
 		Details: &NebulaMetaDetails{
-			VpnIp:      lh.myIp,
-			IpAndPorts: ipps,
+			VpnIp:       lh.myIp,
+			IpAndPorts:  v4,
+			Ip6AndPorts: v6,
 		},
 	}
 
@@ -297,8 +310,8 @@ type LightHouseHandler struct {
 	nb   []byte
 	out  []byte
 	meta *NebulaMeta
-	iap  []IpAndPort
-	iapp []*IpAndPort
+	iap  []ip4Or6
+	iapp []*ip4Or6
 }
 
 func (lh *LightHouse) NewRequestHandler() *LightHouseHandler {
@@ -331,8 +344,8 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 
 func (lhh *LightHouseHandler) resizeIpAndPorts(n int) {
 	if cap(lhh.iap) < n {
-		lhh.iap = make([]IpAndPort, n)
-		lhh.iapp = make([]*IpAndPort, n)
+		lhh.iap = make([]ip4Or6, n)
+		lhh.iapp = make([]*ip4Or6, n)
 
 		for i := range lhh.iap {
 			lhh.iapp[i] = &lhh.iap[i]
@@ -342,7 +355,7 @@ func (lhh *LightHouseHandler) resizeIpAndPorts(n int) {
 	lhh.iapp = lhh.iapp[:n]
 }
 
-func (lhh *LightHouseHandler) setIpAndPortsFromNetIps(ips []*udpAddr) []*IpAndPort {
+func (lhh *LightHouseHandler) setIpAndPortsFromNetIps(ips []*udpAddr) []*ip4Or6 {
 	lhh.resizeIpAndPorts(len(ips))
 	for i, e := range ips {
 		lhh.iap[i] = NewIpAndPortFromUDPAddr(e)
@@ -388,7 +401,25 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 			n = lhh.resetMeta()
 			n.Type = NebulaMeta_HostQueryReply
 			n.Details.VpnIp = reqVpnIP
-			n.Details.IpAndPorts = lhh.setIpAndPortsFromNetIps(ips)
+
+			v4s := make([]*IpAndPort, 0)
+			v6s := make([]*Ip6AndPort, 0)
+			for _, v := range lhh.setIpAndPortsFromNetIps(ips) {
+				if len(v.v6.Ip) > 0 {
+					v6s = append(v6s, &v.v6)
+				} else {
+					v4s = append(v4s, &v.v4)
+				}
+			}
+
+			if len(v4s) > 0 {
+				n.Details.IpAndPorts = v4s
+			}
+
+			if len(v6s) > 0 {
+				n.Details.Ip6AndPorts = v6s
+			}
+
 			reply, err := proto.Marshal(n)
 			if err != nil {
 				l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).Error("Failed to marshal lighthouse host query reply")
@@ -407,7 +438,25 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 				n = lhh.resetMeta()
 				n.Type = NebulaMeta_HostPunchNotification
 				n.Details.VpnIp = vpnIp
-				n.Details.IpAndPorts = lhh.setIpAndPortsFromNetIps(ips)
+
+				v4s := make([]*IpAndPort, 0)
+				v6s := make([]*Ip6AndPort, 0)
+				for _, v := range lhh.setIpAndPortsFromNetIps(ips) {
+					if len(v.v6.Ip) > 0 {
+						v6s = append(v6s, &v.v6)
+					} else {
+						v4s = append(v4s, &v.v4)
+					}
+				}
+
+				if len(v4s) > 0 {
+					n.Details.IpAndPorts = v4s
+				}
+
+				if len(v6s) > 0 {
+					n.Details.Ip6AndPorts = v6s
+				}
+
 				reply, _ := proto.Marshal(n)
 				lh.metricTx(NebulaMeta_HostPunchNotification, 1)
 				f.SendMessageToVpnIp(lightHouse, 0, reqVpnIP, reply, lhh.nb, lhh.out[:0])
@@ -421,8 +470,17 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 		}
 
 		for _, a := range n.Details.IpAndPorts {
-			ans := NewUDPAddrFromLH(a)
-			lh.AddRemote(n.Details.VpnIp, ans, false)
+			ans := NewUDPAddrFromLH4(a)
+			if ans != nil {
+				lh.AddRemote(n.Details.VpnIp, ans, false)
+			}
+		}
+
+		for _, a := range n.Details.Ip6AndPorts {
+			ans := NewUDPAddrFromLH6(a)
+			if ans != nil {
+				lh.AddRemote(n.Details.VpnIp, ans, false)
+			}
 		}
 
 		// Non-blocking attempt to trigger, skip if it would block
@@ -439,8 +497,17 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 		}
 
 		for _, a := range n.Details.IpAndPorts {
-			ans := NewUDPAddrFromLH(a)
-			lh.AddRemote(n.Details.VpnIp, ans, false)
+			ans := NewUDPAddrFromLH4(a)
+			if ans != nil {
+				lh.AddRemote(n.Details.VpnIp, ans, false)
+			}
+		}
+
+		for _, a := range n.Details.Ip6AndPorts {
+			ans := NewUDPAddrFromLH6(a)
+			if ans != nil {
+				lh.AddRemote(n.Details.VpnIp, ans, false)
+			}
 		}
 
 	case NebulaMeta_HostMovedNotification:
@@ -451,7 +518,30 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 
 		empty := []byte{0}
 		for _, a := range n.Details.IpAndPorts {
-			vpnPeer := NewUDPAddrFromLH(a)
+			vpnPeer := NewUDPAddrFromLH4(a)
+			if vpnPeer == nil {
+				continue
+			}
+
+			go func() {
+				time.Sleep(lh.punchDelay)
+				lh.metricHolepunchTx.Inc(1)
+				lh.punchConn.WriteTo(empty, vpnPeer)
+
+			}()
+
+			if l.Level >= logrus.DebugLevel {
+				//TODO: lacking the ip we are actually punching on, old: l.Debugf("Punching %s on %d for %s", IntIp(a.Ip), a.Port, IntIp(n.Details.VpnIp))
+				l.Debugf("Punching on %d for %s", a.Port, IntIp(n.Details.VpnIp))
+			}
+		}
+
+		for _, a := range n.Details.Ip6AndPorts {
+			vpnPeer := NewUDPAddrFromLH6(a)
+			if vpnPeer == nil {
+				continue
+			}
+
 			go func() {
 				time.Sleep(lh.punchDelay)
 				lh.metricHolepunchTx.Inc(1)
