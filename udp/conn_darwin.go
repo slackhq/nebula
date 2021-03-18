@@ -114,7 +114,7 @@ func (dc *darwinConn) ReloadConfig(c *c.Config) {
 
 	s, err := dc.GetRecvBuffer()
 	if err == nil {
-		dc.l.WithField("size", s).Info("listen.read_buffer was set")
+		dc.l.WithField("size", s).Info("listen.read_buffer")
 	} else {
 		dc.l.WithError(err).Warn("Failed to get listen.read_buffer")
 	}
@@ -129,7 +129,7 @@ func (dc *darwinConn) ReloadConfig(c *c.Config) {
 
 	s, err = dc.GetSendBuffer()
 	if err == nil {
-		dc.l.WithField("size", s).Info("listen.write_buffer was set")
+		dc.l.WithField("size", s).Info("listen.write_buffer")
 	} else {
 		dc.l.WithError(err).Warn("Failed to get listen.write_buffer")
 	}
@@ -192,6 +192,11 @@ func (dc *darwinConn) readFrom(msg *syscall.Msghdr) (int, error) {
 		return int(n), nil
 	}
 }
+
+//TODO: It seems like we can use SYS_RECVMSG_X to do the same thing that recvmmsg does on linux
+//func (dc *darwinConn) readMulti(msg *syscall.Msghdr) (int, error) {
+//	unix.SYS_RECVMSG_X
+//}
 
 func (dc *darwinConn) Rebind() error {
 	return syscall.SetsockoptInt(dc.fd, unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, 0)

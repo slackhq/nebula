@@ -9,6 +9,7 @@ import (
 	"github.com/kardianos/service"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
+	c "github.com/slackhq/nebula/config"
 )
 
 var logger service.Logger
@@ -24,14 +25,15 @@ func (p *program) Start(s service.Service) error {
 	// Start should not block.
 	logger.Info("Nebula service starting.")
 
-	config := nebula.NewConfig()
+	l := logrus.New()
+	l.Out = os.Stdout
+
+	config := c.NewConfig(l)
 	err := config.Load(*p.configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %s", err)
 	}
 
-	l := logrus.New()
-	l.Out = os.Stdout
 	p.control, err = nebula.Main(config, *p.configTest, Build, l, nil)
 	if err != nil {
 		return err
