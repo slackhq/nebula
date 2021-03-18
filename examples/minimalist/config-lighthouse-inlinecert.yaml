@@ -1,0 +1,44 @@
+# This is the nebula lighthouse example configuration file.
+# For a complete list of options and settings, see https://www.defined.net/nebula/config/ and see the full config.yml example.
+#
+
+pki:
+  # These files are generated with `nebula-cert`. See https://www.defined.net/nebula/quick-start/ for an example.
+  ca: |
+    -----BEGIN NEBULA CERTIFICATE-----
+    THIS_IS_NOT_A_REAL_CERTIFICATE+THIS_IS_NOT_A_REAL_CERTIFICATE+TH
+    IS_IS_NOT_A_REAL_CERTIFICATE+THIS_IS_NOT_A_REAL_CERTIFICATE+THIS
+    THIS_IS_NOT_A_REAL_CERTIFICATE+THIS_IS_+
+    -----END NEBULA CERTIFICATE-----
+  cert: /etc/nebula/host.crt
+  key: /etc/nebula/host.key
+
+listen:
+  # Set the local listener options for the udp socket used by the Nebula daemon
+  host: 0.0.0.0
+  port: 4242
+
+tun:
+  # Name the Nebula network device.
+  dev: nebula1
+
+firewall:
+  outbound:
+    # Allow all outbound traffic from this node
+    - port: any
+      proto: any
+      host: any
+
+  inbound:
+    # Allow icmp between any nebula hosts
+    - port: any
+      proto: icmp
+      host: any
+
+lighthouse:
+  # Configure this Nebula host to be a Nebula lighthouse.
+  am_lighthouse: yes
+
+punchy:
+  # Enables ongoing UDP hole punching to ensure that tunnels aren't interrupted by NAT timeouts.
+  punch: true
