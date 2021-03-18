@@ -8,6 +8,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/sshd"
+	"github.com/slackhq/nebula/udp"
 	"gopkg.in/yaml.v2"
 )
 
@@ -161,16 +162,17 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	}
 
 	// set up our UDP listener
-	udpConns := make([]*udpConn, routines)
+	udpConns := make([]udp.Conn, routines)
 	port := config.GetInt("listen.port", 0)
 
 	if !configTest {
 		for i := 0; i < routines; i++ {
-			udpServer, err := NewListener(config.GetString("listen.host", "0.0.0.0"), port, routines > 1)
+			udpServer, err := udp.NewConn(config.GetString("listen.host", "0.0.0.0"), port, routines > 1, mtu, l)
 			if err != nil {
 				return nil, NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
-			udpServer.reloadConfig(config)
+			//TODO:
+			//udpServer.reloadConfig(config)
 			udpConns[i] = udpServer
 
 			// If port is dynamic, discover it
@@ -299,17 +301,17 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		vals, ok := v.([]interface{})
 		if ok {
 			for _, v := range vals {
-				ip, port, err := parseIPAndPort(fmt.Sprintf("%v", v))
+				ip, port, err := udp.ParseIPAndPort(fmt.Sprintf("%v", v))
 				if err == nil {
-					lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip, port), true)
+					lightHouse.AddRemote(ip2int(vpnIp), udp.NewAddr(ip, port), true)
 				} else {
 					return nil, NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
 				}
 			}
 		} else {
-			ip, port, err := parseIPAndPort(fmt.Sprintf("%v", v))
+			ip, port, err := udp.ParseIPAndPort(fmt.Sprintf("%v", v))
 			if err == nil {
-				lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip, port), true)
+				lightHouse.AddRemote(ip2int(vpnIp), udp.NewAddr(ip, port), true)
 			} else {
 				return nil, NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
 			}

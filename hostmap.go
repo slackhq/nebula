@@ -12,6 +12,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/udp"
 )
 
 //const ProbeLen = 100
@@ -38,7 +39,7 @@ type HostMap struct {
 type HostInfo struct {
 	sync.RWMutex
 
-	remote            *udpAddr
+	remote            *udp.Addr
 	Remotes           []*HostInfoDest
 	promoteCounter    uint32
 	ConnectionState   *ConnectionState
@@ -60,20 +61,20 @@ type HostInfo struct {
 	lastRebindCount int8
 
 	lastRoam       time.Time
-	lastRoamRemote *udpAddr
+	lastRoamRemote *udp.Addr
 }
 
 type cachedPacket struct {
-	messageType    NebulaMessageType
-	messageSubType NebulaMessageSubType
+	messageType    udp.NebulaMessageType
+	messageSubType udp.NebulaMessageSubType
 	callback       packetCallback
 	packet         []byte
 }
 
-type packetCallback func(t NebulaMessageType, st NebulaMessageSubType, h *HostInfo, p, nb, out []byte)
+type packetCallback func(t udp.NebulaMessageType, st udp.NebulaMessageSubType, h *HostInfo, p, nb, out []byte)
 
 type HostInfoDest struct {
-	addr *udpAddr
+	addr *udp.Addr
 	//probes       [ProbeLen]bool
 	probeCounter int
 }
@@ -299,7 +300,7 @@ func (hm *HostMap) QueryReverseIndex(index uint32) (*HostInfo, error) {
 	}
 }
 
-func (hm *HostMap) AddRemote(vpnIp uint32, remote *udpAddr) *HostInfo {
+func (hm *HostMap) AddRemote(vpnIp uint32, remote *udp.Addr) *HostInfo {
 	hm.Lock()
 	i, v := hm.Hosts[vpnIp]
 	if v {
@@ -400,8 +401,8 @@ func (hm *HostMap) SetDefaultRoute(ip uint32) {
 	hm.defaultRoute = ip
 }
 
-func (hm *HostMap) PunchList() []*udpAddr {
-	var list []*udpAddr
+func (hm *HostMap) PunchList() []*udp.Addr {
+	var list []*udp.Addr
 	hm.RLock()
 	for _, v := range hm.Hosts {
 		for _, r := range v.Remotes {
@@ -416,7 +417,7 @@ func (hm *HostMap) PunchList() []*udpAddr {
 	return list
 }
 
-func (hm *HostMap) Punchy(conn *udpConn) {
+func (hm *HostMap) Punchy(conn udp.Conn) {
 	var metricsTxPunchy metrics.Counter
 	if hm.metricsEnabled {
 		metricsTxPunchy = metrics.GetOrRegisterCounter("messages.tx.punchy", nil)
@@ -492,7 +493,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		if preferred && !best.Equals(i.remote) {
 			// Try to send a test packet to that host, this should
 			// cause it to detect a roaming event and switch remotes
-			ifce.send(test, testRequest, i.ConnectionState, i, best, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			ifce.send(udp.Test, udp.TestRequest, i.ConnectionState, i, best, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 		}
 	}
 }
@@ -504,7 +505,7 @@ func (i *HostInfo) ForcePromoteBest(preferredRanges []*net.IPNet) {
 	}
 }
 
-func (i *HostInfo) getBestRemote(preferredRanges []*net.IPNet) (best *udpAddr, preferred bool) {
+func (i *HostInfo) getBestRemote(preferredRanges []*net.IPNet) (best *udp.Addr, preferred bool) {
 	if len(i.Remotes) > 0 {
 		for _, r := range i.Remotes {
 			rIP := r.addr.IP
@@ -566,7 +567,7 @@ func (i *HostInfo) rotateRemote() {
 	i.remote = i.Remotes[0].addr
 }
 
-func (i *HostInfo) cachePacket(t NebulaMessageType, st NebulaMessageSubType, packet []byte, f packetCallback) {
+func (i *HostInfo) cachePacket(t udp.NebulaMessageType, st udp.NebulaMessageSubType, packet []byte, f packetCallback) {
 	//TODO: return the error so we can log with more context
 	if len(i.packetStore) < 100 {
 		tempPacket := make([]byte, len(packet))
@@ -611,8 +612,8 @@ func (i *HostInfo) handshakeComplete() {
 	i.ConnectionState.certState = nil
 }
 
-func (i *HostInfo) RemoteUDPAddrs() []*udpAddr {
-	var addrs []*udpAddr
+func (i *HostInfo) RemoteUDPAddrs() []*udp.Addr {
+	var addrs []*udp.Addr
 	for _, r := range i.Remotes {
 		addrs = append(addrs, r.addr)
 	}
@@ -626,7 +627,7 @@ func (i *HostInfo) GetCert() *cert.NebulaCertificate {
 	return nil
 }
 
-func (i *HostInfo) AddRemote(remote *udpAddr) *udpAddr {
+func (i *HostInfo) AddRemote(remote *udp.Addr) *udp.Addr {
 	//add := true
 	for _, r := range i.Remotes {
 		if r.addr.Equals(remote) {
@@ -644,7 +645,7 @@ func (i *HostInfo) AddRemote(remote *udpAddr) *udpAddr {
 	//l.Debugf("Added remote %s for vpn ip", remote)
 }
 
-func (i *HostInfo) SetRemote(remote *udpAddr) {
+func (i *HostInfo) SetRemote(remote *udp.Addr) {
 	i.remote = i.AddRemote(remote)
 }
 
@@ -700,7 +701,7 @@ func (i *HostInfo) logger() *logrus.Entry {
 
 //########################
 
-func NewHostInfoDest(addr *udpAddr) *HostInfoDest {
+func NewHostInfoDest(addr *udp.Addr) *HostInfoDest {
 	i := &HostInfoDest{
 		addr: addr.Copy(),
 	}

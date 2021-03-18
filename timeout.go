@@ -2,12 +2,14 @@ package nebula
 
 import (
 	"time"
+
+	"github.com/slackhq/nebula/udp"
 )
 
 // How many timer objects should be cached
 const timerCacheMax = 50000
 
-var emptyFWPacket = FirewallPacket{}
+var emptyFWPacket = udp.FirewallPacket{}
 
 type TimerWheel struct {
 	// Current tick
@@ -42,7 +44,7 @@ type TimeoutList struct {
 
 // Represents an item within a tick
 type TimeoutItem struct {
-	Packet FirewallPacket
+	Packet udp.FirewallPacket
 	Next   *TimeoutItem
 }
 
@@ -74,7 +76,7 @@ func NewTimerWheel(min, max time.Duration) *TimerWheel {
 }
 
 // Add will add a FirewallPacket to the wheel in it's proper timeout
-func (tw *TimerWheel) Add(v FirewallPacket, timeout time.Duration) *TimeoutItem {
+func (tw *TimerWheel) Add(v udp.FirewallPacket, timeout time.Duration) *TimeoutItem {
 	// Check and see if we should progress the tick
 	tw.advance(time.Now())
 
@@ -103,7 +105,7 @@ func (tw *TimerWheel) Add(v FirewallPacket, timeout time.Duration) *TimeoutItem 
 	return ti
 }
 
-func (tw *TimerWheel) Purge() (FirewallPacket, bool) {
+func (tw *TimerWheel) Purge() (udp.FirewallPacket, bool) {
 	if tw.expired.Head == nil {
 		return emptyFWPacket, false
 	}

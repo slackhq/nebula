@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/rcrowley/go-metrics"
+	"github.com/slackhq/nebula/udp"
 )
 
 type MessageMetrics struct {
@@ -14,7 +15,7 @@ type MessageMetrics struct {
 	txUnknown metrics.Counter
 }
 
-func (m *MessageMetrics) Rx(t NebulaMessageType, s NebulaMessageSubType, i int64) {
+func (m *MessageMetrics) Rx(t udp.NebulaMessageType, s udp.NebulaMessageSubType, i int64) {
 	if m != nil {
 		if t >= 0 && int(t) < len(m.rx) && s >= 0 && int(s) < len(m.rx[t]) {
 			m.rx[t][s].Inc(i)
@@ -23,7 +24,7 @@ func (m *MessageMetrics) Rx(t NebulaMessageType, s NebulaMessageSubType, i int64
 		}
 	}
 }
-func (m *MessageMetrics) Tx(t NebulaMessageType, s NebulaMessageSubType, i int64) {
+func (m *MessageMetrics) Tx(t udp.NebulaMessageType, s udp.NebulaMessageSubType, i int64) {
 	if m != nil {
 		if t >= 0 && int(t) < len(m.tx) && s >= 0 && int(s) < len(m.tx[t]) {
 			m.tx[t][s].Inc(i)

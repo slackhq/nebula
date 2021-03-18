@@ -1,28 +1,27 @@
 package udp
 
-import "github.com/slackhq/nebula"
-
 type EncReader func(
 	addr *Addr,
 	out []byte,
 	packet []byte,
-	header *nebula.Header,
-	fwPacket *firewall.FirewallPacket,
-	lhh *nebula.LightHouseHandler,
+	header *Header,
+	fwPacket *FirewallPacket,
+	lhh LightHouseHandlerFunc,
 	nb []byte,
 	q int,
-	localCache nebula.ConntrackCache,
+	localCache ConntrackCache,
 )
 
 type Conn interface {
 	Rebind() error
-	SetRecvBuffer() error
-	SetSendBuffer() error
+	SetRecvBuffer(n int) error
+	SetSendBuffer(n int) error
 	GetRecvBuffer() (int, error)
 	GetSendBuffer() (int, error)
 	LocalAddr() (*Addr, error)
-	ListenOut(reader EncReader, lhh *nebula.LightHouseHandler, cache *nebula.ConntrackCacheTicker, q int) error
+	ListenOut(reader EncReader, lhh LightHouseHandlerFunc, cache *ConntrackCacheTicker, q int) error
 	WriteTo(b []byte, addr *Addr) error
-	ReloadConfig(c *nebula.Config)
+	//TODO: last stragler, needs an interface
+	//ReloadConfig(c *nebula.Config)
 	EmitStats() error
 }

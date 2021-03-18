@@ -10,6 +10,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/udp"
 	"golang.org/x/net/ipv4"
 )
 
@@ -17,7 +18,7 @@ const (
 	minFwPacketLen = 4
 )
 
-func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte, header *Header, fwPacket *FirewallPacket, lhh *LightHouseHandler, nb []byte, q int, localCache ConntrackCache) {
+func (f *Interface) readOutsidePackets(addr *udp.Addr, out []byte, packet []byte, header *udp.Header, fwPacket *udp.FirewallPacket, lhf udp.LightHouseHandlerFunc, nb []byte, q int, localCache udp.ConntrackCache) {
 	err := header.Parse(packet)
 	if err != nil {
 		// TODO: best if we return this and let caller log
@@ -40,7 +41,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 	}
 
 	switch header.Type {
-	case message:
+	case udp.Message:
 		if !f.handleEncrypted(ci, addr, header) {
 			return
 		}
@@ -49,7 +50,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 
 		// Fallthrough to the bottom to record incoming traffic
 
-	case lightHouse:
+	case udp.LightHouse:
 		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		if !f.handleEncrypted(ci, addr, header) {
 			return
@@ -66,11 +67,11 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 			return
 		}
 
-		lhh.HandleRequest(addr, hostinfo.hostId, d, hostinfo.GetCert(), f)
+		lhf(addr, hostinfo.hostId, d, hostinfo.GetCert(), f)
 
 		// Fallthrough to the bottom to record incoming traffic
 
-	case test:
+	case udp.Test:
 		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		if !f.handleEncrypted(ci, addr, header) {
 			return
@@ -87,11 +88,11 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 			return
 		}
 
-		if header.Subtype == testRequest {
+		if header.Subtype == udp.TestRequest {
 			// This testRequest might be from TryPromoteBest, so we should roam
 			// to the new IP address before responding
 			f.handleHostRoaming(hostinfo, addr)
-			f.send(test, testReply, ci, hostinfo, hostinfo.remote, d, nb, out)
+			f.send(udp.Test, udp.TestReply, ci, hostinfo, hostinfo.remote, d, nb, out)
 		}
 
 		// Fallthrough to the bottom to record incoming traffic
@@ -99,17 +100,17 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		// Non encrypted messages below here, they should not fall through to avoid tracking incoming traffic since they
 		// are unauthenticated
 
-	case handshake:
+	case udp.Handshake:
 		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		HandleIncomingHandshake(f, addr, packet, header, hostinfo)
 		return
 
-	case recvError:
+	case udp.RecvError:
 		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		f.handleRecvError(addr, header)
 		return
 
-	case closeTunnel:
+	case udp.CloseTunnel:
 		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
 		if !f.handleEncrypted(ci, addr, header) {
 			return
@@ -140,8 +141,8 @@ func (f *Interface) closeTunnel(hostInfo *HostInfo) {
 	f.hostMap.DeleteHostInfo(hostInfo)
 }
 
-func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {
-	if hostDidRoam(hostinfo.remote, addr) {
+func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udp.Addr) {
+	if !hostinfo.remote.Equals(addr) {
 		if !f.lightHouse.remoteAllowList.Allow(addr.IP) {
 			hostinfo.logger().WithField("newAddr", addr).Debug("lighthouse.remote_allow_list denied roaming")
 			return
@@ -167,7 +168,7 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {
 
 }
 
-func (f *Interface) handleEncrypted(ci *ConnectionState, addr *udpAddr, header *Header) bool {
+func (f *Interface) handleEncrypted(ci *ConnectionState, addr *udp.Addr, header *udp.Header) bool {
 	// If connectionstate exists and the replay protector allows, process packet
 	// Else, send recv errors for 300 seconds after a restart to allow fast reconnection.
 	if ci == nil || !ci.window.Check(header.MessageCounter) {
@@ -179,7 +180,7 @@ func (f *Interface) handleEncrypted(ci *ConnectionState, addr *udpAddr, header *
 }
 
 // newPacket validates and parses the interesting bits for the firewall out of the ip and sub protocol headers
-func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
+func newPacket(data []byte, incoming bool, fp *udp.FirewallPacket) error {
 	// Do we at least have an ipv4 header worth of data?
 	if len(data) < ipv4.HeaderLen {
 		return fmt.Errorf("packet is less than %v bytes", ipv4.HeaderLen)
@@ -207,7 +208,7 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 
 	// Accounting for a variable header length, do we have enough data for our src/dst tuples?
 	minLen := ihl
-	if !fp.Fragment && fp.Protocol != fwProtoICMP {
+	if !fp.Fragment && fp.Protocol != udp.ProtoICMP {
 		minLen += minFwPacketLen
 	}
 	if len(data) < minLen {
@@ -218,7 +219,7 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 	if incoming {
 		fp.RemoteIP = binary.BigEndian.Uint32(data[12:16])
 		fp.LocalIP = binary.BigEndian.Uint32(data[16:20])
-		if fp.Fragment || fp.Protocol == fwProtoICMP {
+		if fp.Fragment || fp.Protocol == udp.ProtoICMP {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
 		} else {
@@ -228,7 +229,7 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 	} else {
 		fp.LocalIP = binary.BigEndian.Uint32(data[12:16])
 		fp.RemoteIP = binary.BigEndian.Uint32(data[16:20])
-		if fp.Fragment || fp.Protocol == fwProtoICMP {
+		if fp.Fragment || fp.Protocol == udp.ProtoICMP {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
 		} else {
@@ -240,9 +241,9 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 	return nil
 }
 
-func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []byte, header *Header, nb []byte) ([]byte, error) {
+func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []byte, header *udp.Header, nb []byte) ([]byte, error) {
 	var err error
-	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:HeaderLen], packet[HeaderLen:], mc, nb)
+	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:udp.HeaderLen], packet[udp.HeaderLen:], mc, nb)
 	if err != nil {
 		return nil, err
 	}
@@ -256,10 +257,10 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	return out, nil
 }
 
-func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *FirewallPacket, nb []byte, q int, localCache ConntrackCache) {
+func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *udp.FirewallPacket, nb []byte, q int, localCache udp.ConntrackCache) {
 	var err error
 
-	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:HeaderLen], packet[HeaderLen:], messageCounter, nb)
+	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:udp.HeaderLen], packet[udp.HeaderLen:], messageCounter, nb)
 	if err != nil {
 		hostinfo.logger().WithError(err).Error("Failed to decrypt packet")
 		//TODO: maybe after build 64 is out? 06/14/2018 - NB
@@ -297,11 +298,11 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	}
 }
 
-func (f *Interface) sendRecvError(endpoint *udpAddr, index uint32) {
-	f.messageMetrics.Tx(recvError, 0, 1)
+func (f *Interface) sendRecvError(endpoint *udp.Addr, index uint32) {
+	f.messageMetrics.Tx(udp.RecvError, 0, 1)
 
 	//TODO: this should be a signed message so we can trust that we should drop the index
-	b := HeaderEncode(make([]byte, HeaderLen), Version, uint8(recvError), 0, index, 0)
+	b := udp.HeaderEncode(make([]byte, udp.HeaderLen), udp.Version, uint8(udp.RecvError), 0, index, 0)
 	f.outside.WriteTo(b, endpoint)
 	if l.Level >= logrus.DebugLevel {
 		l.WithField("index", index).
@@ -310,7 +311,7 @@ func (f *Interface) sendRecvError(endpoint *udpAddr, index uint32) {
 	}
 }
 
-func (f *Interface) handleRecvError(addr *udpAddr, h *Header) {
+func (f *Interface) handleRecvError(addr *udp.Addr, h *udp.Header) {
 	if l.Level >= logrus.DebugLevel {
 		l.WithField("index", h.RemoteIndex).
 			WithField("udpAddr", addr).

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/udp"
 )
 
 // TODO: incount and outcount are intended as a shortcut to locking the mutexes for every single packet
@@ -191,7 +192,7 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 
 		if hostinfo != nil && hostinfo.ConnectionState != nil {
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
-			n.intf.SendMessageToVpnIp(test, testRequest, vpnIP, p, nb, out)
+			n.intf.SendMessageToVpnIp(udp.Test, udp.TestRequest, vpnIP, p, nb, out)
 
 		} else {
 			hostinfo.logger().Debugf("Hostinfo sadness: %s", IntIp(vpnIP))

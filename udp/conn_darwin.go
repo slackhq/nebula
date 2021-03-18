@@ -1,7 +1,6 @@
 package udp
 
 import (
-	"encoding/binary"
 	"fmt"
 	"net"
 	"os"
@@ -9,12 +8,11 @@ import (
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula"
 	"golang.org/x/sys/unix"
 )
 
 type darwinConn struct {
-	fd int
+	fd  int
 	l   *logrus.Logger
 	mtu int
 }
@@ -36,18 +34,11 @@ func NewConn(ip string, port int, multi bool, mtu int, l *logrus.Logger) (*darwi
 		return nil, fmt.Errorf("unable to open socket: %s", err)
 	}
 
-	if err = syscall.SetNonblock(fd, true); err != nil {
-		unix.Close(fd)
-		return nil, os.NewSyscallError("setnonblock", err)
-	}
-
 	var lip [16]byte
 	copy(lip[:], net.ParseIP(ip))
 
 	if multi {
-		if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
-			return nil, fmt.Errorf("unable to set SO_REUSEPORT: %s", err)
-		}
+		l.Error("Darwin does not support multiple udp queues at this time")
 	}
 
 	//TODO: this should be in another stage?
@@ -55,38 +46,71 @@ func NewConn(ip string, port int, multi bool, mtu int, l *logrus.Logger) (*darwi
 		return nil, fmt.Errorf("unable to bind to socket: %s", err)
 	}
 
-	return &darwinConn{fd: fd, mtu: mtu, l: l},  nil
+	return &darwinConn{fd: fd, mtu: mtu, l: l}, nil
 }
 
 func (dc *darwinConn) WriteTo(b []byte, addr *Addr) error {
-	_, err := dc.UDPConn.WriteToUDP(b, &net.UDPAddr{IP: addr.IP, Port: int(addr.Port)})
-	return err
-}
+	var rsa unix.RawSockaddrInet6
+	rsa.Family = unix.AF_INET6
+	p := (*[2]byte)(unsafe.Pointer(&rsa.Port))
+	p[0] = byte(addr.Port >> 8)
+	p[1] = byte(addr.Port)
+	copy(rsa.Addr[:], addr.IP)
 
-func (dc *darwinConn) LocalAddr() (*Addr, error) {
-	a := dc.UDPConn.LocalAddr()
+	var msg unix.Msghdr
+	msg.Name = (*byte)(unsafe.Pointer(&rsa))
+	msg.Namelen = unix.SizeofSockaddrInet6
+	var iov unix.Iovec
+	if len(p) > 0 {
+		iov.Base = (*byte)(unsafe.Pointer(&b[0]))
+		iov.SetLen(len(b))
+	}
+	msg.Iov = &iov
+	msg.Iovlen = 1
 
-	switch v := a.(type) {
-	case *net.UDPAddr:
-		addr := &Addr{IP: make([]byte, len(v.IP))}
-		copy(addr.IP, v.IP)
-		addr.Port = uint16(v.Port)
-		return addr, nil
+	for {
+		//dc.l.Error("NATE WRITE START", msg)
+		_, _, err := unix.Syscall(
+			unix.SYS_SENDMSG,
+			uintptr(dc.fd),
+			uintptr(unsafe.Pointer(&msg)),
+			0,
+		)
+		if err != 0 {
+			dc.l.Error("NATE WRITE ERR", err)
+			return os.NewSyscallError("sendmsg", err)
+		}
 
-	default:
-		return nil, fmt.Errorf("LocalAddr returned: %#v", a)
+		return nil
 	}
 }
 
-func (dc *darwinConn) ReloadConfig(c *nebula.Config) {
-	// TODO
+func (dc *darwinConn) LocalAddr() (*Addr, error) {
+	//TODO:
+	//a := dc.UDPConn.LocalAddr()
+	//
+	//switch v := a.(type) {
+	//case *net.UDPAddr:
+	//	addr := &Addr{IP: make([]byte, len(v.IP))}
+	//	copy(addr.IP, v.IP)
+	//	addr.Port = uint16(v.Port)
+	//	return addr, nil
+	//
+	//default:
+	//	return nil, fmt.Errorf("LocalAddr returned: %#v", a)
+	//}
+	return nil, nil
 }
 
-func (dc *darwinConn) ListenOut(reader EncReader, lhh *nebula.LightHouseHandler, cache *nebula.ConntrackCacheTicker, q int) error {
+//func (dc *darwinConn) ReloadConfig(c *nebula.Config) {
+//	// TODO
+//}
+
+func (dc *darwinConn) ListenOut(reader EncReader, lhh LightHouseHandlerFunc, cache *ConntrackCacheTicker, q int) error {
 	plaintext := make([]byte, dc.mtu)
 	buffer := make([]byte, dc.mtu)
-	header := &nebula.Header{}
-	fwPacket := &nebula.FirewallPacket{}
+	header := &Header{}
+	fwPacket := &FirewallPacket{}
 	udpAddr := &Addr{IP: make([]byte, 16)}
 	//TODO we don't need this if we just copy below
 	udpAddr.IP = udpAddr.IP.To16()
@@ -103,7 +127,7 @@ func (dc *darwinConn) ListenOut(reader EncReader, lhh *nebula.LightHouseHandler,
 	msg.Iovlen = 1
 
 	for {
-		n, err := dc.readFrom(msg)
+		n, err := dc.readFrom(&msg)
 		if err != nil {
 			dc.l.WithError(err).Error("Failed to read packets")
 			continue
@@ -121,12 +145,12 @@ func (dc *darwinConn) ListenOut(reader EncReader, lhh *nebula.LightHouseHandler,
 	}
 }
 
-func (dc *darwinConn) readFrom(msg syscall.Msghdr) (int, error) {
+func (dc *darwinConn) readFrom(msg *syscall.Msghdr) (int, error) {
 	for {
 		n, _, err := unix.Syscall6(
 			unix.SYS_RECVMSG,
 			uintptr(dc.fd),
-			uintptr(unsafe.Pointer(&(msgs[0].Hdr))),
+			uintptr(unsafe.Pointer(msg)),
 			0,
 			0,
 			0,
@@ -136,19 +160,12 @@ func (dc *darwinConn) readFrom(msg syscall.Msghdr) (int, error) {
 		if err != 0 {
 			return 0, &net.OpError{Op: "recvmsg", Err: err}
 		}
-
-		msgs[0].Len = uint32(n)
-		return 1, nil
+		return int(n), nil
 	}
 }
 
 func (dc *darwinConn) Rebind() error {
-	file, err := dc.File()
-	if err != nil {
-		return err
-	}
-
-	return syscall.SetsockoptInt(int(file.Fd()), unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, 0)
+	return syscall.SetsockoptInt(dc.fd, unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, 0)
 }
 
 func (dc *darwinConn) EmitStats() error {

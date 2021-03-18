@@ -1,4 +1,4 @@
-package nebula
+package udp
 
 import (
 	"encoding/binary"
@@ -28,57 +28,62 @@ type NebulaMessageType uint8
 type NebulaMessageSubType uint8
 
 const (
-	handshake   NebulaMessageType = 0
-	message     NebulaMessageType = 1
-	recvError   NebulaMessageType = 2
-	lightHouse  NebulaMessageType = 3
-	test        NebulaMessageType = 4
-	closeTunnel NebulaMessageType = 5
+	Handshake   NebulaMessageType = 0
+	Message     NebulaMessageType = 1
+	RecvError   NebulaMessageType = 2
+	LightHouse  NebulaMessageType = 3
+	Test        NebulaMessageType = 4
+	CloseTunnel NebulaMessageType = 5
 
 	//TODO These are deprecated as of 06/12/2018 - NB
-	testRemote      NebulaMessageType = 6
-	testRemoteReply NebulaMessageType = 7
+	TestRemote      NebulaMessageType = 6
+	TestRemoteReply NebulaMessageType = 7
 )
 
 var typeMap = map[NebulaMessageType]string{
-	handshake:   "handshake",
-	message:     "message",
-	recvError:   "recvError",
-	lightHouse:  "lightHouse",
-	test:        "test",
-	closeTunnel: "closeTunnel",
+	Handshake:   "handshake",
+	Message:     "message",
+	RecvError:   "recvError",
+	LightHouse:  "lightHouse",
+	Test:        "test",
+	CloseTunnel: "closeTunnel",
 
 	//TODO These are deprecated as of 06/12/2018 - NB
-	testRemote:      "testRemote",
-	testRemoteReply: "testRemoteReply",
+	TestRemote:      "testRemote",
+	TestRemoteReply: "testRemoteReply",
 }
 
 const (
-	testRequest NebulaMessageSubType = 0
-	testReply   NebulaMessageSubType = 1
+	TestRequest NebulaMessageSubType = 0
+	TestReply   NebulaMessageSubType = 1
+)
+
+const (
+	HandshakeIXPSK0 = 0
+	HandshakeXXPSK0 = 1
 )
 
 var eHeaderTooShort = errors.New("header is too short")
 
 var subTypeTestMap = map[NebulaMessageSubType]string{
-	testRequest: "testRequest",
-	testReply:   "testReply",
+	TestRequest: "testRequest",
+	TestReply:   "testReply",
 }
 
 var subTypeNoneMap = map[NebulaMessageSubType]string{0: "none"}
 
 var subTypeMap = map[NebulaMessageType]*map[NebulaMessageSubType]string{
-	message:     &subTypeNoneMap,
-	recvError:   &subTypeNoneMap,
-	lightHouse:  &subTypeNoneMap,
-	test:        &subTypeTestMap,
-	closeTunnel: &subTypeNoneMap,
-	handshake: {
-		handshakeIXPSK0: "ix_psk0",
+	Message:     &subTypeNoneMap,
+	RecvError:   &subTypeNoneMap,
+	LightHouse:  &subTypeNoneMap,
+	Test:        &subTypeTestMap,
+	CloseTunnel: &subTypeNoneMap,
+	Handshake: {
+		HandshakeIXPSK0: "ix_psk0",
 	},
 	//TODO: these are deprecated
-	testRemote:      &subTypeNoneMap,
-	testRemoteReply: &subTypeNoneMap,
+	TestRemote:      &subTypeNoneMap,
+	TestRemoteReply: &subTypeNoneMap,
 }
 
 type Header struct {

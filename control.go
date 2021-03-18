@@ -9,6 +9,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/udp"
 )
 
 // Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
@@ -23,11 +24,11 @@ type ControlHostInfo struct {
 	VpnIP          net.IP                  `json:"vpnIp"`
 	LocalIndex     uint32                  `json:"localIndex"`
 	RemoteIndex    uint32                  `json:"remoteIndex"`
-	RemoteAddrs    []*udpAddr              `json:"remoteAddrs"`
+	RemoteAddrs    []*udp.Addr             `json:"remoteAddrs"`
 	CachedPackets  int                     `json:"cachedPackets"`
 	Cert           *cert.NebulaCertificate `json:"cert"`
 	MessageCounter uint64                  `json:"messageCounter"`
-	CurrentRemote  *udpAddr                `json:"currentRemote"`
+	CurrentRemote  *udp.Addr               `json:"currentRemote"`
 }
 
 // Start actually runs nebula, this is a nonblocking call. To block use Control.ShutdownBlock()
@@ -105,7 +106,7 @@ func (c *Control) GetHostInfoByVpnIP(vpnIP uint32, pending bool) *ControlHostInf
 }
 
 // SetRemoteForTunnel forces a tunnel to use a specific remote
-func (c *Control) SetRemoteForTunnel(vpnIP uint32, addr udpAddr) *ControlHostInfo {
+func (c *Control) SetRemoteForTunnel(vpnIP uint32, addr udp.Addr) *ControlHostInfo {
 	hostInfo, err := c.f.hostMap.QueryVpnIP(vpnIP)
 	if err != nil {
 		return nil
@@ -125,7 +126,7 @@ func (c *Control) CloseTunnel(vpnIP uint32, localOnly bool) bool {
 
 	if !localOnly {
 		c.f.send(
-			closeTunnel,
+			udp.CloseTunnel,
 			0,
 			hostInfo.ConnectionState,
 			hostInfo,
@@ -153,7 +154,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 		}
 
 		if h.ConnectionState.ready {
-			c.f.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+			c.f.send(udp.CloseTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 			c.l.WithField("vpnIp", IntIp(h.hostId)).WithField("udpAddr", h.remote).
 				Debug("Sending close tunnel message")
 			closed++
@@ -169,7 +170,7 @@ func copyHostInfo(h *HostInfo) ControlHostInfo {
 		VpnIP:          int2ip(h.hostId),
 		LocalIndex:     h.localIndexId,
 		RemoteIndex:    h.remoteIndexId,
-		RemoteAddrs:    make([]*udpAddr, len(addrs), len(addrs)),
+		RemoteAddrs:    make([]*udp.Addr, len(addrs), len(addrs)),
 		CachedPackets:  len(h.packetStore),
 		MessageCounter: atomic.LoadUint64(&h.ConnectionState.atomicMessageCounter),
 	}

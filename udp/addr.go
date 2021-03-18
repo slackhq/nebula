@@ -21,7 +21,7 @@ func NewAddr(ip net.IP, port uint16) *Addr {
 }
 
 func NewAddrFromString(s string) *Addr {
-	ip, port, err := parseIPAndPort(s)
+	ip, port, err := ParseIPAndPort(s)
 	//TODO: handle err
 	_ = err
 	return &Addr{IP: ip, Port: port}
@@ -52,7 +52,7 @@ func (ua *Addr) Copy() *Addr {
 	return &nu
 }
 
-func parseIPAndPort(s string) (net.IP, uint16, error) {
+func ParseIPAndPort(s string) (net.IP, uint16, error) {
 	rIp, sPort, err := net.SplitHostPort(s)
 	if err != nil {
 		return nil, 0, err

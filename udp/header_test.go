@@ -1,4 +1,4 @@
-package nebula
+package udp
 
 import (
 	"reflect"

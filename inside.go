@@ -5,9 +5,10 @@ import (
 
 	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/udp"
 )
 
-func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket, nb, out []byte, q int, localCache ConntrackCache) {
+func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *udp.FirewallPacket, nb, out []byte, q int, localCache udp.ConntrackCache) {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
 		l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
@@ -45,7 +46,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 		// the packet queue.
 		ci.queueLock.Lock()
 		if !ci.ready {
-			hostinfo.cachePacket(message, 0, packet, f.sendMessageNow)
+			hostinfo.cachePacket(udp.Message, 0, packet, f.sendMessageNow)
 			ci.queueLock.Unlock()
 			return
 		}
@@ -54,7 +55,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 
 	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, trustedCAs, localCache)
 	if dropReason == nil {
-		mc := f.sendNoMetrics(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out, q)
+		mc := f.sendNoMetrics(udp.Message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out, q)
 		if f.lightHouse != nil && mc%5000 == 0 {
 			f.lightHouse.Query(fwPacket.RemoteIP, f)
 		}
@@ -131,8 +132,8 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 	return hostinfo
 }
 
-func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType, hostInfo *HostInfo, p, nb, out []byte) {
-	fp := &FirewallPacket{}
+func (f *Interface) sendMessageNow(t udp.NebulaMessageType, st udp.NebulaMessageSubType, hostInfo *HostInfo, p, nb, out []byte) {
+	fp := &udp.FirewallPacket{}
 	err := newPacket(p, false, fp)
 	if err != nil {
 		l.Warnf("error while parsing outgoing packet for firewall check; %v", err)
@@ -150,14 +151,14 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 		return
 	}
 
-	messageCounter := f.sendNoMetrics(message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out, 0)
+	messageCounter := f.sendNoMetrics(udp.Message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out, 0)
 	if f.lightHouse != nil && messageCounter%5000 == 0 {
 		f.lightHouse.Query(fp.RemoteIP, f)
 	}
 }
 
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
-func (f *Interface) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
+func (f *Interface) SendMessageToVpnIp(t udp.NebulaMessageType, st udp.NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
 	hostInfo := f.getOrHandshake(vpnIp)
 	if hostInfo == nil {
 		if l.Level >= logrus.DebugLevel {
@@ -183,12 +184,12 @@ func (f *Interface) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubT
 	return
 }
 
-func (f *Interface) sendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, hostInfo *HostInfo, p, nb, out []byte) {
+func (f *Interface) sendMessageToVpnIp(t udp.NebulaMessageType, st udp.NebulaMessageSubType, hostInfo *HostInfo, p, nb, out []byte) {
 	f.send(t, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out)
 }
 
 // SendMessageToAll handles real ip:port lookup and sends to all known addresses for vpnIp
-func (f *Interface) SendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
+func (f *Interface) SendMessageToAll(t udp.NebulaMessageType, st udp.NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
 	hostInfo := f.getOrHandshake(vpnIp)
 	if hostInfo == nil {
 		if l.Level >= logrus.DebugLevel {
@@ -214,18 +215,18 @@ func (f *Interface) SendMessageToAll(t NebulaMessageType, st NebulaMessageSubTyp
 	return
 }
 
-func (f *Interface) sendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, hostInfo *HostInfo, p, nb, b []byte) {
+func (f *Interface) sendMessageToAll(t udp.NebulaMessageType, st udp.NebulaMessageSubType, hostInfo *HostInfo, p, nb, b []byte) {
 	for _, r := range hostInfo.RemoteUDPAddrs() {
 		f.send(t, st, hostInfo.ConnectionState, hostInfo, r, p, nb, b)
 	}
 }
 
-func (f *Interface) send(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte) {
+func (f *Interface) send(t udp.NebulaMessageType, st udp.NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udp.Addr, p, nb, out []byte) {
 	f.messageMetrics.Tx(t, st, 1)
 	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
 }
 
-func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte, q int) uint64 {
+func (f *Interface) sendNoMetrics(t udp.NebulaMessageType, st udp.NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udp.Addr, p, nb, out []byte, q int) uint64 {
 	if ci.eKey == nil {
 		//TODO: log warning
 		return 0
@@ -237,7 +238,7 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 	c := atomic.AddUint64(&ci.atomicMessageCounter, 1)
 
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
-	out = HeaderEncode(out, Version, uint8(t), uint8(st), hostinfo.remoteIndexId, c)
+	out = udp.HeaderEncode(out, udp.Version, uint8(t), uint8(st), hostinfo.remoteIndexId, c)
 	f.connectionManager.Out(hostinfo.hostId)
 
 	// Query our LH if we haven't since the last time we've been rebound, this will cause the remote to punch against

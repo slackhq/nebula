@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/udp"
 )
 
 const (
@@ -43,7 +44,7 @@ type HandshakeManager struct {
 	pendingHostMap *HostMap
 	mainHostMap    *HostMap
 	lightHouse     *LightHouse
-	outside        *udpConn
+	outside        udp.Conn
 	config         HandshakeConfig
 
 	// can be used to trigger outbound handshake for the given vpnIP
@@ -55,7 +56,7 @@ type HandshakeManager struct {
 	messageMetrics *MessageMetrics
 }
 
-func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udpConn, config HandshakeConfig) *HandshakeManager {
+func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
 		pendingHostMap: NewHostMap("pending", tunCidr, preferredRanges),
 		mainHostMap:    mainHostMap,
@@ -73,7 +74,7 @@ func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainH
 	}
 }
 
-func (c *HandshakeManager) Run(f EncWriter) {
+func (c *HandshakeManager) Run(f udp.EncWriter) {
 	clockSource := time.Tick(c.config.tryInterval)
 	for {
 		select {
@@ -87,7 +88,7 @@ func (c *HandshakeManager) Run(f EncWriter) {
 	}
 }
 
-func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWriter) {
+func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f udp.EncWriter) {
 	c.OutboundHandshakeTimer.advance(now)
 	for {
 		ep := c.OutboundHandshakeTimer.Purge()
@@ -99,7 +100,7 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 	}
 }
 
-func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseTriggered bool) {
+func (c *HandshakeManager) handleOutbound(vpnIP uint32, f udp.EncWriter, lighthouseTriggered bool) {
 	hostinfo, err := c.pendingHostMap.QueryVpnIP(vpnIP)
 	if err != nil {
 		return
@@ -146,7 +147,7 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 
 		// Ensure the handshake is ready to avoid a race in timer tick and stage 0 handshake generation
 		if hostinfo.HandshakeReady && hostinfo.remote != nil {
-			c.messageMetrics.Tx(handshake, NebulaMessageSubType(hostinfo.HandshakePacket[0][1]), 1)
+			c.messageMetrics.Tx(udp.Handshake, udp.NebulaMessageSubType(hostinfo.HandshakePacket[0][1]), 1)
 			err := c.outside.WriteTo(hostinfo.HandshakePacket[0], hostinfo.remote)
 			if err != nil {
 				hostinfo.logger().WithField("udpAddr", hostinfo.remote).
