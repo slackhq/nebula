@@ -43,8 +43,8 @@ func TestNewLhQuery(t *testing.T) {
 func TestNewipandportfromudpaddr(t *testing.T) {
 	blah := NewUDPAddrFromString("1.2.2.3:12345")
 	meh := NewIpAndPortFromUDPAddr(blah)
-	assert.Equal(t, uint32(16908803), meh.GetIp())
-	assert.Equal(t, uint32(12345), meh.Port)
+	assert.Equal(t, uint32(16908803), meh.v4.Ip)
+	assert.Equal(t, uint32(12345), meh.v4.Port)
 }
 
 func TestSetipandportsfromudpaddrs(t *testing.T) {
@@ -54,12 +54,12 @@ func TestSetipandportsfromudpaddrs(t *testing.T) {
 	var lh *LightHouse
 	lhh := lh.NewRequestHandler()
 	result := lhh.setIpAndPortsFromNetIps(group)
-	assert.IsType(t, []*IpAndPort{}, result)
+	assert.IsType(t, []*ip4Or6{}, result)
 	assert.Len(t, result, 2)
-	assert.Equal(t, uint32(0x01020203), result[0].GetIp())
-	assert.Equal(t, uint32(12345), result[0].Port)
-	assert.Equal(t, uint32(0x09090909), result[1].GetIp())
-	assert.Equal(t, uint32(47828), result[1].Port)
+	assert.Equal(t, uint32(0x01020203), result[0].v4.Ip)
+	assert.Equal(t, uint32(12345), result[0].v4.Port)
+	assert.Equal(t, uint32(0x09090909), result[1].v4.Ip)
+	assert.Equal(t, uint32(47828), result[1].v4.Port)
 	//t.Error(reflect.TypeOf(hah))
 
 }
