@@ -16,14 +16,10 @@ type EncReader func(
 
 type Conn interface {
 	Rebind() error
-	SetRecvBuffer(n int) error
-	SetSendBuffer(n int) error
-	GetRecvBuffer() (int, error)
-	GetSendBuffer() (int, error)
 	LocalAddr() (*Addr, error)
 	ListenOut(reader EncReader, lhh LightHouseHandlerFunc, cache *ConntrackCacheTicker, q int) error
 	WriteTo(b []byte, addr *Addr) error
-	//TODO: last stragler, needs an interface
+	//TODO: an interface is going to be a lot cleaner than this
 	ReloadConfig(config *c.Config)
 	EmitStats() error
 }

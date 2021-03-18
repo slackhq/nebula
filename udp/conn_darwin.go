@@ -87,32 +87,34 @@ func (dc *darwinConn) WriteTo(b []byte, addr *Addr) error {
 }
 
 func (dc *darwinConn) LocalAddr() (*Addr, error) {
-	//TODO:
-	//a := dc.UDPConn.LocalAddr()
-	//
-	//switch v := a.(type) {
-	//case *net.UDPAddr:
-	//	addr := &Addr{IP: make([]byte, len(v.IP))}
-	//	copy(addr.IP, v.IP)
-	//	addr.Port = uint16(v.Port)
-	//	return addr, nil
-	//
-	//default:
-	//	return nil, fmt.Errorf("LocalAddr returned: %#v", a)
-	//}
-	return nil, nil
+	sa, err := unix.Getsockname(dc.fd)
+	if err != nil {
+		return nil, err
+	}
+
+	addr := &Addr{}
+	switch sa := sa.(type) {
+	case *unix.SockaddrInet4:
+		addr.IP = sa.Addr[0:]
+		addr.Port = uint16(sa.Port)
+	case *unix.SockaddrInet6:
+		addr.IP = sa.Addr[0:]
+		addr.Port = uint16(sa.Port)
+	}
+
+	return addr, nil
 }
 
 func (dc *darwinConn) ReloadConfig(c *c.Config) {
 	b := c.GetInt("listen.read_buffer", 0)
 	if b > 0 {
-		err := dc.SetRecvBuffer(b)
+		err := dc.setRecvBuffer(b)
 		if err != nil {
 			dc.l.WithError(err).Error("Failed to set listen.read_buffer")
 		}
 	}
 
-	s, err := dc.GetRecvBuffer()
+	s, err := dc.getRecvBuffer()
 	if err == nil {
 		dc.l.WithField("size", s).Info("listen.read_buffer")
 	} else {
@@ -121,13 +123,13 @@ func (dc *darwinConn) ReloadConfig(c *c.Config) {
 
 	b = c.GetInt("listen.write_buffer", 0)
 	if b > 0 {
-		err := dc.SetSendBuffer(b)
+		err := dc.setSendBuffer(b)
 		if err != nil {
 			dc.l.WithError(err).Error("Failed to set listen.write_buffer")
 		}
 	}
 
-	s, err = dc.GetSendBuffer()
+	s, err = dc.getSendBuffer()
 	if err == nil {
 		dc.l.WithField("size", s).Info("listen.write_buffer")
 	} else {
@@ -150,7 +152,7 @@ func (dc *darwinConn) ListenOut(reader EncReader, lhh LightHouseHandlerFunc, cac
 	msg.Name = (*byte)(unsafe.Pointer(&rsa))
 	msg.Namelen = uint32(syscall.SizeofSockaddrAny)
 	var iov syscall.Iovec
-	iov.Base = (*byte)(unsafe.Pointer(&buffer[0]))
+	iov.Base = &buffer[0]
 	iov.SetLen(len(buffer))
 	msg.Iov = &iov
 	msg.Iovlen = 1
@@ -165,7 +167,6 @@ func (dc *darwinConn) ListenOut(reader EncReader, lhh LightHouseHandlerFunc, cac
 		pp := (*syscall.RawSockaddrInet6)(unsafe.Pointer(&rsa))
 		p := (*[2]byte)(unsafe.Pointer(&pp.Port))
 		udpAddr.Port = uint16(p[0])<<8 + uint16(p[1])
-		//sa.ZoneId = pp.Scope_id
 		for i := 0; i < len(udpAddr.IP); i++ {
 			udpAddr.IP[i] = pp.Addr[i]
 		}
@@ -207,18 +208,18 @@ func (dc *darwinConn) EmitStats() error {
 	return nil
 }
 
-func (dc *darwinConn) SetRecvBuffer(n int) error {
+func (dc *darwinConn) setRecvBuffer(n int) error {
 	return unix.SetsockoptInt(dc.fd, unix.SOL_SOCKET, unix.SO_RCVBUF, n)
 }
 
-func (dc *darwinConn) SetSendBuffer(n int) error {
+func (dc *darwinConn) setSendBuffer(n int) error {
 	return unix.SetsockoptInt(dc.fd, unix.SOL_SOCKET, unix.SO_SNDBUF, n)
 }
 
-func (dc *darwinConn) GetRecvBuffer() (int, error) {
+func (dc *darwinConn) getRecvBuffer() (int, error) {
 	return unix.GetsockoptInt(dc.fd, unix.SOL_SOCKET, unix.SO_RCVBUF)
 }
 
-func (dc *darwinConn) GetSendBuffer() (int, error) {
+func (dc *darwinConn) getSendBuffer() (int, error) {
 	return unix.GetsockoptInt(dc.fd, unix.SOL_SOCKET, unix.SO_SNDBUF)
 }
