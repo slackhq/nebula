@@ -13,7 +13,7 @@ import (
 func TestOldIPv4Only(t *testing.T) {
 	// This test ensures our new ipv6 enabled LH protobuf IpAndPorts works with the old style to enable backwards compatibility
 	b := []byte{8, 129, 130, 132, 80, 16, 10}
-	var m IpAndPort
+	var m Ip4AndPort
 	err := proto.Unmarshal(b, &m)
 	assert.NoError(t, err)
 	assert.Equal(t, "10.1.1.1", int2ip(m.GetIp()).String())
@@ -37,30 +37,6 @@ func TestNewLhQuery(t *testing.T) {
 	n := &NebulaMeta{}
 	err = proto.Unmarshal(b, n)
 	assert.Nil(t, err)
-
-}
-
-func TestNewipandportfromudpaddr(t *testing.T) {
-	blah := NewUDPAddrFromString("1.2.2.3:12345")
-	meh := NewIpAndPortFromUDPAddr(blah)
-	assert.Equal(t, uint32(16908803), meh.v4.Ip)
-	assert.Equal(t, uint32(12345), meh.v4.Port)
-}
-
-func TestSetipandportsfromudpaddrs(t *testing.T) {
-	blah := NewUDPAddrFromString("1.2.2.3:12345")
-	blah2 := NewUDPAddrFromString("9.9.9.9:47828")
-	group := []*udpAddr{blah, blah2}
-	var lh *LightHouse
-	lhh := lh.NewRequestHandler()
-	result := lhh.setIpAndPortsFromNetIps(group)
-	assert.IsType(t, []*ip4Or6{}, result)
-	assert.Len(t, result, 2)
-	assert.Equal(t, uint32(0x01020203), result[0].v4.Ip)
-	assert.Equal(t, uint32(12345), result[0].v4.Port)
-	assert.Equal(t, uint32(0x09090909), result[1].v4.Ip)
-	assert.Equal(t, uint32(47828), result[1].v4.Port)
-	//t.Error(reflect.TypeOf(hah))
 
 }
 
@@ -96,11 +72,17 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 
 	hAddr := NewUDPAddrFromString("4.5.6.7:12345")
 	hAddr2 := NewUDPAddrFromString("4.5.6.7:12346")
-	lh.addrMap[3] = []*udpAddr{hAddr, hAddr2}
+	lh.addrMap[3] = &ip4And6{v4: []*Ip4AndPort{
+		NewIp4AndPort(hAddr.IP, uint32(hAddr.Port)),
+		NewIp4AndPort(hAddr2.IP, uint32(hAddr2.Port))},
+	}
 
 	rAddr := NewUDPAddrFromString("1.2.2.3:12345")
 	rAddr2 := NewUDPAddrFromString("1.2.2.3:12346")
-	lh.addrMap[2] = []*udpAddr{rAddr, rAddr2}
+	lh.addrMap[2] = &ip4And6{v4: []*Ip4AndPort{
+		NewIp4AndPort(rAddr.IP, uint32(rAddr.Port)),
+		NewIp4AndPort(rAddr2.IP, uint32(rAddr2.Port))},
+	}
 
 	mw := &mockEncWriter{}
 
@@ -109,8 +91,8 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 		req := &NebulaMeta{
 			Type: NebulaMeta_HostQuery,
 			Details: &NebulaMetaDetails{
-				VpnIp:      4,
-				IpAndPorts: nil,
+				VpnIp:       4,
+				Ip4AndPorts: nil,
 			},
 		}
 		p, err := proto.Marshal(req)
@@ -124,8 +106,8 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 		req := &NebulaMeta{
 			Type: NebulaMeta_HostQuery,
 			Details: &NebulaMetaDetails{
-				VpnIp:      3,
-				IpAndPorts: nil,
+				VpnIp:       3,
+				Ip4AndPorts: nil,
 			},
 		}
 		p, err := proto.Marshal(req)
@@ -164,9 +146,7 @@ func Test_lhRemoteAllowList(t *testing.T) {
 	remote2UDPAddr := NewUDPAddr(remote2IP, uint16(4242))
 
 	lh.AddRemote(ip2int(remote2IP), remote2UDPAddr, true)
-	// Make sure the pointers are different but the contents are equal since we are using slices
-	assert.False(t, remote2UDPAddr == lh.addrMap[ip2int(remote2IP)][0])
-	assert.Equal(t, remote2UDPAddr, lh.addrMap[ip2int(remote2IP)][0])
+	assert.Equal(t, NewIp4AndPort(remote2UDPAddr.IP, uint32(remote2UDPAddr.Port)), lh.addrMap[ip2int(remote2IP)].v4[0])
 }
 
 //func NewLightHouse(amLighthouse bool, myIp uint32, ips []string, interval int, nebulaPort int, pc *udpConn, punchBack bool) *LightHouse {

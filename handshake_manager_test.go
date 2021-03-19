@@ -142,8 +142,11 @@ func Test_NewHandshakeManagerTrigger(t *testing.T) {
 	hi := blah.pendingHostMap.Hosts[ip]
 	assert.Nil(t, hi.remote)
 
-	lh.addrMap = map[uint32][]*udpAddr{
-		ip: {NewUDPAddrFromString("10.1.1.1:4242")},
+	uaddr := NewUDPAddrFromString("10.1.1.1:4242")
+	lh.addrMap = map[uint32]*ip4And6{}
+	lh.addrMap[ip] = &ip4And6{
+		v4: []*Ip4AndPort{NewIp4AndPort(uaddr.IP, uint32(uaddr.Port))},
+		v6: []*Ip6AndPort{},
 	}
 
 	// This should trigger the hostmap to populate the hostinfo
