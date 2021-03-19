@@ -28,7 +28,6 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 }
 
 func (uc *udpConn) WriteTo(b []byte, addr *udpAddr) error {
-	//TODO: Maybe we just ditch our custom udpAddr entirely
 	_, err := uc.UDPConn.WriteToUDP(b, &net.UDPAddr{IP: addr.IP, Port: int(addr.Port)})
 	return err
 }

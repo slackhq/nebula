@@ -7,7 +7,6 @@ import (
 	"strconv"
 )
 
-//TODO: we should deprecate this and just use net.UDPAddr
 type udpAddr struct {
 	IP   net.IP
 	Port uint16

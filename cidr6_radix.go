@@ -5,8 +5,6 @@ import (
 	"net"
 )
 
-//TODO: Re-read and re-verify all this code before merging!
-
 type CIDR6Tree struct {
 	root4 *CIDRNode
 	root6 *CIDRNode
