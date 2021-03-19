@@ -314,6 +314,7 @@ type LightHouseHandler struct {
 	meta *NebulaMeta
 	iap  []ip4Or6
 	iapp []*ip4Or6
+	l    *logrus.Logger
 }
 
 func (lh *LightHouse) NewRequestHandler() *LightHouseHandler {
@@ -321,7 +322,7 @@ func (lh *LightHouse) NewRequestHandler() *LightHouseHandler {
 		lh:  lh,
 		nb:  make([]byte, 12, 12),
 		out: make([]byte, mtu),
-
+		l:   lh.l,
 		meta: &NebulaMeta{
 			Details: &NebulaMetaDetails{},
 		},
@@ -365,44 +366,95 @@ func (lhh *LightHouseHandler) setIpAndPortsFromNetIps(ips []*udpAddr) []*ip4Or6 
 	return lhh.iapp
 }
 
-func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *cert.NebulaCertificate, f EncWriter) {
-	lh := lhh.lh
+func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *cert.NebulaCertificate, w EncWriter) {
 	n := lhh.resetMeta()
 	err := proto.UnmarshalMerge(p, n)
 	if err != nil {
-		lh.l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).WithField("udpAddr", rAddr).
+		lhh.l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).WithField("udpAddr", rAddr).
 			Error("Failed to unmarshal lighthouse packet")
 		//TODO: send recv_error?
 		return
 	}
 
 	if n.Details == nil {
-		lh.l.WithField("vpnIp", IntIp(vpnIp)).WithField("udpAddr", rAddr).
+		lhh.l.WithField("vpnIp", IntIp(vpnIp)).WithField("udpAddr", rAddr).
 			Error("Invalid lighthouse update")
 		//TODO: send recv_error?
 		return
 	}
 
-	lh.metricRx(n.Type, 1)
+	lhh.lh.metricRx(n.Type, 1)
 
 	switch n.Type {
 	case NebulaMeta_HostQuery:
-		// Exit if we don't answer queries
-		if !lh.amLighthouse {
-			lh.l.Debugln("I don't answer queries, but received from: ", rAddr)
-			return
+		lhh.handleHostQuery(n, vpnIp, rAddr, w)
+
+	case NebulaMeta_HostQueryReply:
+		lhh.handleHostQueryReply(n, vpnIp)
+
+	case NebulaMeta_HostUpdateNotification:
+		lhh.handleHostUpdateNotification(n, vpnIp)
+
+	case NebulaMeta_HostMovedNotification:
+	case NebulaMeta_HostPunchNotification:
+		lhh.handleHostPunchNotification(n, vpnIp, w)
+	}
+}
+
+func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp uint32, addr *udpAddr, w EncWriter) {
+	// Exit if we don't answer queries
+	if !lhh.lh.amLighthouse {
+		lhh.l.Debugln("I don't answer queries, but received from: ", addr)
+		return
+	}
+
+	//l.Debugln("Got Query")
+	ips, err := lhh.lh.Query(n.Details.VpnIp, w)
+	if err != nil {
+		//l.Debugf("Can't answer query %s from %s because error: %s", IntIp(n.Details.VpnIp), rAddr, err)
+		return
+	} else {
+		reqVpnIP := n.Details.VpnIp
+		n = lhh.resetMeta()
+		n.Type = NebulaMeta_HostQueryReply
+		n.Details.VpnIp = reqVpnIP
+
+		v4s := make([]*IpAndPort, 0)
+		v6s := make([]*Ip6AndPort, 0)
+		for _, v := range lhh.setIpAndPortsFromNetIps(ips) {
+			if len(v.v6.Ip) > 0 {
+				v6s = append(v6s, &v.v6)
+			} else {
+				v4s = append(v4s, &v.v4)
+			}
 		}
 
-		//l.Debugln("Got Query")
-		ips, err := lh.Query(n.Details.VpnIp, f)
+		if len(v4s) > 0 {
+			n.Details.IpAndPorts = v4s
+		}
+
+		if len(v6s) > 0 {
+			n.Details.Ip6AndPorts = v6s
+		}
+
+		reply, err := proto.Marshal(n)
 		if err != nil {
-			//l.Debugf("Can't answer query %s from %s because error: %s", IntIp(n.Details.VpnIp), rAddr, err)
+			lhh.l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).Error("Failed to marshal lighthouse host query reply")
+			return
+		}
+		lhh.lh.metricTx(NebulaMeta_HostQueryReply, 1)
+		w.SendMessageToVpnIp(lightHouse, 0, vpnIp, reply, lhh.nb, lhh.out[:0])
+
+		// This signals the other side to punch some zero byte udp packets
+		ips, err = lhh.lh.Query(vpnIp, w)
+		if err != nil {
+			lhh.l.WithField("vpnIp", IntIp(vpnIp)).Debugln("Can't notify host to punch")
 			return
 		} else {
-			reqVpnIP := n.Details.VpnIp
+			//l.Debugln("Notify host to punch", iap)
 			n = lhh.resetMeta()
-			n.Type = NebulaMeta_HostQueryReply
-			n.Details.VpnIp = reqVpnIP
+			n.Type = NebulaMeta_HostPunchNotification
+			n.Details.VpnIp = vpnIp
 
 			v4s := make([]*IpAndPort, 0)
 			v6s := make([]*Ip6AndPort, 0)
@@ -422,187 +474,125 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 				n.Details.Ip6AndPorts = v6s
 			}
 
-			reply, err := proto.Marshal(n)
-			if err != nil {
-				lh.l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).Error("Failed to marshal lighthouse host query reply")
-				return
-			}
-			lh.metricTx(NebulaMeta_HostQueryReply, 1)
-			f.SendMessageToVpnIp(lightHouse, 0, vpnIp, reply, lhh.nb, lhh.out[:0])
+			reply, _ := proto.Marshal(n)
+			lhh.lh.metricTx(NebulaMeta_HostPunchNotification, 1)
+			w.SendMessageToVpnIp(lightHouse, 0, reqVpnIP, reply, lhh.nb, lhh.out[:0])
+		}
+		//fmt.Println(reply, remoteaddr)
+	}
+}
 
-			// This signals the other side to punch some zero byte udp packets
-			ips, err = lh.Query(vpnIp, f)
-			if err != nil {
-				lh.l.WithField("vpnIp", IntIp(vpnIp)).Debugln("Can't notify host to punch")
-				return
-			} else {
-				//l.Debugln("Notify host to punch", iap)
-				n = lhh.resetMeta()
-				n.Type = NebulaMeta_HostPunchNotification
-				n.Details.VpnIp = vpnIp
+func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp uint32) {
+	if !lhh.lh.IsLighthouseIP(vpnIp) {
+		return
+	}
 
-				v4s := make([]*IpAndPort, 0)
-				v6s := make([]*Ip6AndPort, 0)
-				for _, v := range lhh.setIpAndPortsFromNetIps(ips) {
-					if len(v.v6.Ip) > 0 {
-						v6s = append(v6s, &v.v6)
-					} else {
-						v4s = append(v4s, &v.v4)
-					}
-				}
+	for _, a := range n.Details.IpAndPorts {
+		ans := NewUDPAddrFromLH4(a)
+		if ans != nil {
+			lhh.lh.AddRemote(n.Details.VpnIp, ans, false)
+		}
+	}
 
-				if len(v4s) > 0 {
-					n.Details.IpAndPorts = v4s
-				}
+	for _, a := range n.Details.Ip6AndPorts {
+		ans := NewUDPAddrFromLH6(a)
+		if ans != nil {
+			lhh.lh.AddRemote(n.Details.VpnIp, ans, false)
+		}
+	}
 
-				if len(v6s) > 0 {
-					n.Details.Ip6AndPorts = v6s
-				}
+	// Non-blocking attempt to trigger, skip if it would block
+	select {
+	case lhh.lh.handshakeTrigger <- n.Details.VpnIp:
+	default:
+	}
+}
 
-				reply, _ := proto.Marshal(n)
-				lh.metricTx(NebulaMeta_HostPunchNotification, 1)
-				f.SendMessageToVpnIp(lightHouse, 0, reqVpnIP, reply, lhh.nb, lhh.out[:0])
-			}
-			//fmt.Println(reply, remoteaddr)
+func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp uint32) {
+	//Simple check that the host sent this not someone else
+	if n.Details.VpnIp != vpnIp {
+		lhh.l.WithField("vpnIp", IntIp(vpnIp)).WithField("answer", IntIp(n.Details.VpnIp)).Debugln("Host sent invalid update")
+		return
+	}
+
+	for _, a := range n.Details.IpAndPorts {
+		ans := NewUDPAddrFromLH4(a)
+		if ans != nil {
+			lhh.lh.AddRemote(n.Details.VpnIp, ans, false)
+		}
+	}
+
+	for _, a := range n.Details.Ip6AndPorts {
+		ans := NewUDPAddrFromLH6(a)
+		if ans != nil {
+			lhh.lh.AddRemote(n.Details.VpnIp, ans, false)
+		}
+	}
+}
+
+func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp uint32, w EncWriter) {
+	if !lhh.lh.IsLighthouseIP(vpnIp) {
+		return
+	}
+
+	empty := []byte{0}
+	for _, a := range n.Details.IpAndPorts {
+		vpnPeer := NewUDPAddrFromLH4(a)
+		if vpnPeer == nil {
+			continue
 		}
 
-	case NebulaMeta_HostQueryReply:
-		if !lh.IsLighthouseIP(vpnIp) {
-			return
+		go func() {
+			time.Sleep(lhh.lh.punchDelay)
+			lhh.lh.metricHolepunchTx.Inc(1)
+			lhh.lh.punchConn.WriteTo(empty, vpnPeer)
+
+		}()
+
+		if lhh.l.Level >= logrus.DebugLevel {
+			//TODO: lacking the ip we are actually punching on, old: l.Debugf("Punching %s on %d for %s", IntIp(a.Ip), a.Port, IntIp(n.Details.VpnIp))
+			lhh.l.Debugf("Punching on %d for %s", a.Port, IntIp(n.Details.VpnIp))
+		}
+	}
+
+	for _, a := range n.Details.Ip6AndPorts {
+		vpnPeer := NewUDPAddrFromLH6(a)
+		if vpnPeer == nil {
+			continue
 		}
 
-		for _, a := range n.Details.IpAndPorts {
-			ans := NewUDPAddrFromLH4(a)
-			if ans != nil {
-				lh.AddRemote(n.Details.VpnIp, ans, false)
-			}
+		go func() {
+			time.Sleep(lhh.lh.punchDelay)
+			lhh.lh.metricHolepunchTx.Inc(1)
+			lhh.lh.punchConn.WriteTo(empty, vpnPeer)
+
+		}()
+
+		if lhh.l.Level >= logrus.DebugLevel {
+			//TODO: lacking the ip we are actually punching on, old: l.Debugf("Punching %s on %d for %s", IntIp(a.Ip), a.Port, IntIp(n.Details.VpnIp))
+			lhh.l.Debugf("Punching on %d for %s", a.Port, IntIp(n.Details.VpnIp))
 		}
+	}
 
-		for _, a := range n.Details.Ip6AndPorts {
-			ans := NewUDPAddrFromLH6(a)
-			if ans != nil {
-				lh.AddRemote(n.Details.VpnIp, ans, false)
-			}
-		}
-
-		// Non-blocking attempt to trigger, skip if it would block
-		select {
-		case lh.handshakeTrigger <- n.Details.VpnIp:
-		default:
-		}
-
-	case NebulaMeta_HostUpdateNotification:
-		//Simple check that the host sent this not someone else
-		if n.Details.VpnIp != vpnIp {
-			lh.l.WithField("vpnIp", IntIp(vpnIp)).WithField("answer", IntIp(n.Details.VpnIp)).Debugln("Host sent invalid update")
-			return
-		}
-
-		for _, a := range n.Details.IpAndPorts {
-			ans := NewUDPAddrFromLH4(a)
-			if ans != nil {
-				lh.AddRemote(n.Details.VpnIp, ans, false)
-			}
-		}
-
-		for _, a := range n.Details.Ip6AndPorts {
-			ans := NewUDPAddrFromLH6(a)
-			if ans != nil {
-				lh.AddRemote(n.Details.VpnIp, ans, false)
-			}
-		}
-
-	case NebulaMeta_HostMovedNotification:
-	case NebulaMeta_HostPunchNotification:
-		if !lh.IsLighthouseIP(vpnIp) {
-			return
-		}
-
-		empty := []byte{0}
-		for _, a := range n.Details.IpAndPorts {
-			vpnPeer := NewUDPAddrFromLH4(a)
-			if vpnPeer == nil {
-				continue
-			}
-
-			go func() {
-				time.Sleep(lh.punchDelay)
-				lh.metricHolepunchTx.Inc(1)
-				lh.punchConn.WriteTo(empty, vpnPeer)
-
-			}()
-
-			if lh.l.Level >= logrus.DebugLevel {
-				//TODO: lacking the ip we are actually punching on, old: l.Debugf("Punching %s on %d for %s", IntIp(a.Ip), a.Port, IntIp(n.Details.VpnIp))
-				lh.l.Debugf("Punching on %d for %s", a.Port, IntIp(n.Details.VpnIp))
-			}
-		}
-
-		for _, a := range n.Details.Ip6AndPorts {
-			vpnPeer := NewUDPAddrFromLH6(a)
-			if vpnPeer == nil {
-				continue
-			}
-
-			go func() {
-				time.Sleep(lh.punchDelay)
-				lh.metricHolepunchTx.Inc(1)
-				lh.punchConn.WriteTo(empty, vpnPeer)
-
-			}()
-
-			if lh.l.Level >= logrus.DebugLevel {
-				//TODO: lacking the ip we are actually punching on, old: l.Debugf("Punching %s on %d for %s", IntIp(a.Ip), a.Port, IntIp(n.Details.VpnIp))
-				lh.l.Debugf("Punching on %d for %s", a.Port, IntIp(n.Details.VpnIp))
-			}
-		}
-
-		// This sends a nebula test packet to the host trying to contact us. In the case
-		// of a double nat or other difficult scenario, this may help establish
-		// a tunnel.
-		if lh.punchBack {
-			go func() {
-				time.Sleep(time.Second * 5)
-				lh.l.Debugf("Sending a nebula test packet to vpn ip %s", IntIp(n.Details.VpnIp))
-				// TODO we have to allocate a new output buffer here since we are spawning a new goroutine
-				// for each punchBack packet. We should move this into a timerwheel or a single goroutine
-				// managed by a channel.
-				f.SendMessageToVpnIp(test, testRequest, n.Details.VpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
-			}()
-		}
+	// This sends a nebula test packet to the host trying to contact us. In the case
+	// of a double nat or other difficult scenario, this may help establish
+	// a tunnel.
+	if lhh.lh.punchBack {
+		go func() {
+			time.Sleep(time.Second * 5)
+			lhh.l.Debugf("Sending a nebula test packet to vpn ip %s", IntIp(n.Details.VpnIp))
+			// TODO we have to allocate a new output buffer here since we are spawning a new goroutine
+			// for each punchBack packet. We should move this into a timerwheel or a single goroutine
+			// managed by a channel.
+			w.SendMessageToVpnIp(test, testRequest, n.Details.VpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+		}()
 	}
 }
 
 func (lh *LightHouse) metricRx(t NebulaMeta_MessageType, i int64) {
 	lh.metrics.Rx(NebulaMessageType(t), 0, i)
 }
+
 func (lh *LightHouse) metricTx(t NebulaMeta_MessageType, i int64) {
 	lh.metrics.Tx(NebulaMessageType(t), 0, i)
 }
-
-/*
-func (f *Interface) sendPathCheck(ci *ConnectionState, endpoint *net.UDPAddr, counter int) {
-	c := ci.messageCounter
-    b := HeaderEncode(nil, Version, uint8(path_check), 0, ci.remoteIndex, c)
-	ci.messageCounter++
-
-	if ci.eKey != nil {
-		msg := ci.eKey.EncryptDanger(b, nil, []byte(strconv.Itoa(counter)), c)
-		//msg := ci.eKey.EncryptDanger(b, nil, []byte(fmt.Sprintf("%d", counter)), c)
-		f.outside.WriteTo(msg, endpoint)
-		l.Debugf("path_check sent, remote index: %d, pathCounter %d", ci.remoteIndex, counter)
-	}
-}
-
-func (f *Interface) sendPathCheckReply(ci *ConnectionState, endpoint *net.UDPAddr, counter []byte) {
-	c := ci.messageCounter
-    b := HeaderEncode(nil, Version, uint8(path_check_reply), 0, ci.remoteIndex, c)
-	ci.messageCounter++
-
-	if ci.eKey != nil {
-		msg := ci.eKey.EncryptDanger(b, nil, counter, c)
-		f.outside.WriteTo(msg, endpoint)
-		l.Debugln("path_check sent, remote index: ", ci.remoteIndex)
-	}
-}
-*/
