@@ -98,7 +98,7 @@ func TestHostmap(t *testing.T) {
 
 	// Promotion should ensure that the best remote is chosen (y)
 	info.ForcePromoteBest(myNets)
-	assert.True(t, myNet.Contains(udp2ip(info.remote)))
+	assert.True(t, myNet.Contains(info.remote.IP))
 
 }
 
@@ -125,27 +125,29 @@ func TestHostMap_rotateRemote(t *testing.T) {
 	assert.Nil(t, h.remote)
 
 	// 1 remote, no panic
-	h.AddRemote(*NewUDPAddr(ip2int(net.IP{1, 1, 1, 1}), 0))
+	h.AddRemote(NewUDPAddr(net.IP{1, 1, 1, 1}, 0))
 	h.rotateRemote()
-	assert.Equal(t, udp2ipInt(h.remote), ip2int(net.IP{1, 1, 1, 1}))
+	assert.Equal(t, h.remote.IP, net.IP{1, 1, 1, 1})
 
-	h.AddRemote(*NewUDPAddr(ip2int(net.IP{1, 1, 1, 2}), 0))
-	h.AddRemote(*NewUDPAddr(ip2int(net.IP{1, 1, 1, 3}), 0))
-	h.AddRemote(*NewUDPAddr(ip2int(net.IP{1, 1, 1, 4}), 0))
+	h.AddRemote(NewUDPAddr(net.IP{1, 1, 1, 2}, 0))
+	h.AddRemote(NewUDPAddr(net.IP{1, 1, 1, 3}, 0))
+	h.AddRemote(NewUDPAddr(net.IP{1, 1, 1, 4}, 0))
+
+	//TODO: ensure we are copying and not storing the slice!
 
 	// Rotate through those 3
 	h.rotateRemote()
-	assert.Equal(t, udp2ipInt(h.remote), ip2int(net.IP{1, 1, 1, 2}))
+	assert.Equal(t, h.remote.IP, net.IP{1, 1, 1, 2})
 
 	h.rotateRemote()
-	assert.Equal(t, udp2ipInt(h.remote), ip2int(net.IP{1, 1, 1, 3}))
+	assert.Equal(t, h.remote.IP, net.IP{1, 1, 1, 3})
 
 	h.rotateRemote()
-	assert.Equal(t, udp2ipInt(h.remote), ip2int(net.IP{1, 1, 1, 4}))
+	assert.Equal(t, h.remote, &udpAddr{IP: net.IP{1, 1, 1, 4}, Port: 0})
 
 	// Finally, we should start over
 	h.rotateRemote()
-	assert.Equal(t, udp2ipInt(h.remote), ip2int(net.IP{1, 1, 1, 1}))
+	assert.Equal(t, h.remote, &udpAddr{IP: net.IP{1, 1, 1, 1}, Port: 0})
 }
 
 func BenchmarkHostmappromote2(b *testing.B) {

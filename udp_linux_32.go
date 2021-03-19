@@ -4,7 +4,9 @@
 
 package nebula
 
-import "unsafe"
+import (
+	"golang.org/x/sys/unix"
+)
 
 type iovec struct {
 	Base *byte
@@ -33,17 +35,17 @@ func (u *udpConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
 
 	for i := range msgs {
 		buffers[i] = make([]byte, mtu)
-		names[i] = make([]byte, 0x1c) //TODO = sizeofSockaddrInet6
+		names[i] = make([]byte, unix.SizeofSockaddrInet6)
 
 		//TODO: this is still silly, no need for an array
 		vs := []iovec{
-			{Base: (*byte)(unsafe.Pointer(&buffers[i][0])), Len: uint32(len(buffers[i]))},
+			{Base: &buffers[i][0], Len: uint32(len(buffers[i]))},
 		}
 
 		msgs[i].Hdr.Iov = &vs[0]
 		msgs[i].Hdr.Iovlen = uint32(len(vs))
 
-		msgs[i].Hdr.Name = (*byte)(unsafe.Pointer(&names[i][0]))
+		msgs[i].Hdr.Name = &names[i][0]
 		msgs[i].Hdr.Namelen = uint32(len(names[i]))
 	}
 

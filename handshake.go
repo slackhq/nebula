@@ -6,7 +6,7 @@ const (
 )
 
 func HandleIncomingHandshake(f *Interface, addr *udpAddr, packet []byte, h *Header, hostinfo *HostInfo) {
-	if !f.lightHouse.remoteAllowList.Allow(udp2ipInt(addr)) {
+	if !f.lightHouse.remoteAllowList.Allow(addr.IP) {
 		l.WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
 		return
 	}

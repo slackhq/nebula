@@ -8,6 +8,17 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+//TODO: Add a test to ensure udpAddr is copied and not reused
+
+func TestOldIPv4Only(t *testing.T) {
+	// This test ensures our new ipv6 enabled LH protobuf IpAndPorts works with the old style to enable backwards compatibility
+	b := []byte{8, 129, 130, 132, 80, 16, 10}
+	var m IpAndPort
+	err := proto.Unmarshal(b, &m)
+	assert.NoError(t, err)
+	assert.Equal(t, "10.1.1.1", int2ip(m.GetIp()).String())
+}
+
 func TestNewLhQuery(t *testing.T) {
 	myIp := net.ParseIP("192.1.1.1")
 	myIpint := ip2int(myIp)
@@ -31,24 +42,24 @@ func TestNewLhQuery(t *testing.T) {
 
 func TestNewipandportfromudpaddr(t *testing.T) {
 	blah := NewUDPAddrFromString("1.2.2.3:12345")
-	meh := NewIpAndPortFromUDPAddr(*blah)
-	assert.Equal(t, uint32(16908803), meh.Ip)
-	assert.Equal(t, uint32(12345), meh.Port)
+	meh := NewIpAndPortFromUDPAddr(blah)
+	assert.Equal(t, uint32(16908803), meh.v4.Ip)
+	assert.Equal(t, uint32(12345), meh.v4.Port)
 }
 
 func TestSetipandportsfromudpaddrs(t *testing.T) {
 	blah := NewUDPAddrFromString("1.2.2.3:12345")
 	blah2 := NewUDPAddrFromString("9.9.9.9:47828")
-	group := []udpAddr{*blah, *blah2}
+	group := []*udpAddr{blah, blah2}
 	var lh *LightHouse
 	lhh := lh.NewRequestHandler()
 	result := lhh.setIpAndPortsFromNetIps(group)
-	assert.IsType(t, []*IpAndPort{}, result)
+	assert.IsType(t, []*ip4Or6{}, result)
 	assert.Len(t, result, 2)
-	assert.Equal(t, uint32(0x01020203), result[0].Ip)
-	assert.Equal(t, uint32(12345), result[0].Port)
-	assert.Equal(t, uint32(0x09090909), result[1].Ip)
-	assert.Equal(t, uint32(47828), result[1].Port)
+	assert.Equal(t, uint32(0x01020203), result[0].v4.Ip)
+	assert.Equal(t, uint32(12345), result[0].v4.Port)
+	assert.Equal(t, uint32(0x09090909), result[1].v4.Ip)
+	assert.Equal(t, uint32(47828), result[1].v4.Port)
 	//t.Error(reflect.TypeOf(hah))
 
 }
@@ -60,7 +71,7 @@ func Test_lhStaticMapping(t *testing.T) {
 	udpServer, _ := NewListener("0.0.0.0", 0, true)
 
 	meh := NewLightHouse(true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
-	meh.AddRemote(ip2int(lh1IP), NewUDPAddr(ip2int(lh1IP), uint16(4242)), true)
+	meh.AddRemote(ip2int(lh1IP), NewUDPAddr(lh1IP, uint16(4242)), true)
 	err := meh.ValidateLHStaticEntries()
 	assert.Nil(t, err)
 
@@ -68,7 +79,7 @@ func Test_lhStaticMapping(t *testing.T) {
 	lh2IP := net.ParseIP(lh2)
 
 	meh = NewLightHouse(true, 1, []uint32{ip2int(lh1IP), ip2int(lh2IP)}, 10, 10003, udpServer, false, 1, false)
-	meh.AddRemote(ip2int(lh1IP), NewUDPAddr(ip2int(lh1IP), uint16(4242)), true)
+	meh.AddRemote(ip2int(lh1IP), NewUDPAddr(lh1IP, uint16(4242)), true)
 	err = meh.ValidateLHStaticEntries()
 	assert.EqualError(t, err, "Lighthouse 10.128.0.3 does not have a static_host_map entry")
 }
@@ -83,11 +94,11 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 
 	hAddr := NewUDPAddrFromString("4.5.6.7:12345")
 	hAddr2 := NewUDPAddrFromString("4.5.6.7:12346")
-	lh.addrMap[3] = []udpAddr{*hAddr, *hAddr2}
+	lh.addrMap[3] = []*udpAddr{hAddr, hAddr2}
 
 	rAddr := NewUDPAddrFromString("1.2.2.3:12345")
 	rAddr2 := NewUDPAddrFromString("1.2.2.3:12346")
-	lh.addrMap[2] = []udpAddr{*rAddr, *rAddr2}
+	lh.addrMap[2] = []*udpAddr{rAddr, rAddr2}
 
 	mw := &mockEncWriter{}
 
@@ -142,15 +153,17 @@ func Test_lhRemoteAllowList(t *testing.T) {
 
 	remote1 := "10.20.0.3"
 	remote1IP := net.ParseIP(remote1)
-	lh.AddRemote(ip2int(remote1IP), NewUDPAddr(ip2int(remote1IP), uint16(4242)), true)
+	lh.AddRemote(ip2int(remote1IP), NewUDPAddr(remote1IP, uint16(4242)), true)
 	assert.Nil(t, lh.addrMap[ip2int(remote1IP)])
 
 	remote2 := "10.128.0.3"
 	remote2IP := net.ParseIP(remote2)
-	remote2UDPAddr := NewUDPAddr(ip2int(remote2IP), uint16(4242))
+	remote2UDPAddr := NewUDPAddr(remote2IP, uint16(4242))
 
 	lh.AddRemote(ip2int(remote2IP), remote2UDPAddr, true)
-	assert.Equal(t, remote2UDPAddr, &lh.addrMap[ip2int(remote2IP)][0])
+	// Make sure the pointers are different but the contents are equal since we are using slices
+	assert.False(t, remote2UDPAddr == lh.addrMap[ip2int(remote2IP)][0])
+	assert.Equal(t, remote2UDPAddr, lh.addrMap[ip2int(remote2IP)][0])
 }
 
 //func NewLightHouse(amLighthouse bool, myIp uint32, ips []string, interval int, nebulaPort int, pc *udpConn, punchBack bool) *LightHouse {
