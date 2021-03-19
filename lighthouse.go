@@ -192,6 +192,9 @@ func (lh *LightHouse) AddRemote(vpnIP uint32, toIp *udpAddr, static bool) {
 	}
 
 	lh.addrMap[vpnIP] = append(lh.addrMap[vpnIP], toIp.Copy())
+	if len(lh.addrMap[vpnIP]) > MaxRemotes {
+		lh.addrMap[vpnIP] = lh.addrMap[vpnIP][len(lh.addrMap[vpnIP])-MaxRemotes:]
+	}
 }
 
 func (lh *LightHouse) AddRemoteAndReset(vpnIP uint32, toIp *udpAddr) {

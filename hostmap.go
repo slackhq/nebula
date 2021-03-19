@@ -16,7 +16,7 @@ import (
 
 //const ProbeLen = 100
 const PromoteEvery = 1000
-const MaxRemotes = 10
+const MaxRemotes = 20
 
 // How long we should prevent roaming back to the previous IP.
 // This helps prevent flapping due to packets already in flight
