@@ -402,21 +402,9 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 		x := 0
 		var h m
 		for vpnIp, v := range lightHouse.addrMap {
-			ips := make([]string, len(v.v4)+len(v.v6))
-			i := 0
-			for _, ip := range v.v4 {
-				ips[i] = NewUDPAddrFromLH4(ip).String()
-				i++
-			}
-
-			for _, ip := range v.v6 {
-				ips[i] = NewUDPAddrFromLH6(ip).String()
-				i++
-			}
-
 			h = m{
 				"vpnIp": int2ip(vpnIp),
-				"addrs": ips,
+				"addrs": TransformLHReplyToUdpAddrs(v),
 			}
 
 			d[x] = h
@@ -430,19 +418,7 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 		}
 	} else {
 		for vpnIp, v := range lightHouse.addrMap {
-			ips := make([]string, len(v.v4)+len(v.v6))
-			i := 0
-			for _, ip := range v.v4 {
-				ips[i] = NewUDPAddrFromLH4(ip).String()
-				i++
-			}
-
-			for _, ip := range v.v6 {
-				ips[i] = NewUDPAddrFromLH6(ip).String()
-				i++
-			}
-
-			err := w.WriteLine(fmt.Sprintf("%s: %s", int2ip(vpnIp), ips))
+			err := w.WriteLine(fmt.Sprintf("%s: %s", int2ip(vpnIp), TransformLHReplyToUdpAddrs(v)))
 			if err != nil {
 				return err
 			}

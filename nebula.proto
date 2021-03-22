@@ -1,8 +1,6 @@
 syntax = "proto3";
 package nebula;
 
-option go_package = "github.com/slackhq/nebula";
-
 message NebulaMeta {
   enum MessageType {
     None = 0;

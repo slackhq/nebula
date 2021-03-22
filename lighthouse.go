@@ -14,14 +14,28 @@ import (
 	"github.com/slackhq/nebula/cert"
 )
 
+//TODO: if the pb code for ipv6 used a fixed data type we could save more work
+//TODO: nodes are roaming lighthouses, this is bad. How are they learning?
+
 var ErrHostNotKnown = errors.New("host not known")
 
+// The maximum number of ip addresses to store for a given vpnIp per address family
+const maxAddrs = 10
+
 type ip4And6 struct {
+	//TODO: adding a lock here could allow us to release the lock on lh.addrMap quicker
+
+	// v4 and v6 store addresses that have been self reported by the client
 	v4 []*Ip4AndPort
 	v6 []*Ip6AndPort
+
+	// Learned addresses are ones that a client does not know about but a lighthouse learned from as a result of the received packet
+	learnedV4 []*Ip4AndPort
+	learnedV6 []*Ip6AndPort
 }
 
 type LightHouse struct {
+	//TODO: We need a timer wheel to kick out vpnIps that haven't reported in a long time
 	sync.RWMutex //Because we concurrently read and write to our maps
 	amLighthouse bool
 	myIp         uint32
@@ -116,13 +130,14 @@ func (lh *LightHouse) ValidateLHStaticEntries() error {
 }
 
 func (lh *LightHouse) Query(ip uint32, f EncWriter) ([]*udpAddr, error) {
+	//TODO: we need to hold the lock through the next func
 	if !lh.IsLighthouseIP(ip) {
 		lh.QueryServer(ip, f)
 	}
 	lh.RLock()
 	if v, ok := lh.addrMap[ip]; ok {
 		lh.RUnlock()
-		return transformLHReplyToUdpAddrs(v), nil
+		return TransformLHReplyToUdpAddrs(v), nil
 	}
 	lh.RUnlock()
 	return nil, ErrHostNotKnown
@@ -148,25 +163,26 @@ func (lh *LightHouse) QueryServer(ip uint32, f EncWriter) {
 }
 
 func (lh *LightHouse) QueryCache(ip uint32) []*udpAddr {
+	//TODO: we need to hold the lock through the next func
 	lh.RLock()
 	if v, ok := lh.addrMap[ip]; ok {
 		lh.RUnlock()
-		return transformLHReplyToUdpAddrs(v)
+		return TransformLHReplyToUdpAddrs(v)
 	}
 	lh.RUnlock()
 	return nil
 }
 
 //
-func (lh *LightHouse) queryAndPrepMessage(ip uint32, f func(*ip4And6) ([]byte, error)) (bool, []byte, error) {
+func (lh *LightHouse) queryAndPrepMessage(ip uint32, f func(*ip4And6) (int, error)) (bool, int, error) {
 	lh.RLock()
 	if v, ok := lh.addrMap[ip]; ok {
-		r, err := f(v)
+		n, err := f(v)
 		lh.RUnlock()
-		return true, r, err
+		return true, n, err
 	}
 	lh.RUnlock()
-	return false, nil, nil
+	return false, 0, nil
 }
 
 func (lh *LightHouse) DeleteVpnIP(vpnIP uint32) {
@@ -186,31 +202,44 @@ func (lh *LightHouse) DeleteVpnIP(vpnIP uint32) {
 	lh.Unlock()
 }
 
+// AddRemote is correct way for non LightHouse members to add an address. toAddr will be placed in the learned map
+// static means this is a static host entry from the config file, it should only be used on start up
 func (lh *LightHouse) AddRemote(vpnIP uint32, toAddr *udpAddr, static bool) {
+	if ipv4 := toAddr.IP.To4(); ipv4 != nil {
+		lh.addRemoteV4(vpnIP, NewIp4AndPort(ipv4, uint32(toAddr.Port)), static, true)
+	} else {
+		lh.addRemoteV6(vpnIP, NewIp6AndPort(toAddr.IP, uint32(toAddr.Port)), static, true)
+	}
+
+	//TODO: if we do not add due to a config filter we may end up not having any addresses here
+	if static {
+		lh.staticList[vpnIP] = struct{}{}
+	}
+}
+
+// unsafeGetAddrs assumes you have the lh lock
+func (lh *LightHouse) unsafeGetAddrs(vpnIP uint32) *ip4And6 {
+	am, ok := lh.addrMap[vpnIP]
+	if !ok {
+		am = &ip4And6{
+			v4:        make([]*Ip4AndPort, 0),
+			v6:        make([]*Ip6AndPort, 0),
+			learnedV4: make([]*Ip4AndPort, 0),
+			learnedV6: make([]*Ip6AndPort, 0),
+		}
+		lh.addrMap[vpnIP] = am
+	}
+	return am
+}
+
+// addRemoteV4 is a lighthouse internal function to cache client updates or server responses for ipv4 addresses
+func (lh *LightHouse) addRemoteV4(vpnIP uint32, to *Ip4AndPort, static bool, learned bool) {
 	// First we check if the sender thinks this is a static entry
 	// and do nothing if it is not, but should be considered static
 	if static == false {
 		if _, ok := lh.staticList[vpnIP]; ok {
 			return
 		}
-	}
-
-	if ipv4 := toAddr.IP.To4(); ipv4 != nil {
-		lh.addRemoteV4(vpnIP, NewIp4AndPort(ipv4, uint32(toAddr.Port)))
-	} else {
-		lh.addRemoteV6(vpnIP, NewIp6AndPort(toAddr.IP, uint32(toAddr.Port)))
-	}
-
-	if static {
-		lh.staticList[vpnIP] = struct{}{}
-	}
-}
-
-// addRemoteV4 is a lighthouse internal function to cache client updates or server responses for ipv4 addresses
-func (lh *LightHouse) addRemoteV4(vpnIP uint32, to *Ip4AndPort) {
-	// We shouldn't be bothering with updates from static hosts
-	if _, ok := lh.staticList[vpnIP]; ok {
-		return
 	}
 
 	ip := int2ip(to.Ip)
@@ -225,32 +254,39 @@ func (lh *LightHouse) addRemoteV4(vpnIP uint32, to *Ip4AndPort) {
 
 	lh.Lock()
 	defer lh.Unlock()
-
-	//TODO: we have no 10 ip limits here
-	am := lh.addrMap[vpnIP]
-	if am == nil {
-		am = &ip4And6{
-			v4: make([]*Ip4AndPort, 0),
-			v6: make([]*Ip6AndPort, 0),
-		}
-		lh.addrMap[vpnIP] = am
+	am := lh.unsafeGetAddrs(vpnIP)
+	if learned {
+		am.learnedV4 = lh.unsafeAddRemoteV4(am.learnedV4, to)
 	} else {
-		// Do a dupe check and quit if we already have this addr
-		for _, v := range am.v4 {
-			if v.Ip == to.Ip && v.Port == to.Port {
-				return
-			}
+		am.v4 = lh.unsafeAddRemoteV4(am.v4, to)
+	}
+}
+
+// unsafeAddRemoteV4 assumes there is already an addrMap entry and that you have the lh lock
+func (lh *LightHouse) unsafeAddRemoteV4(am []*Ip4AndPort, to *Ip4AndPort) []*Ip4AndPort {
+	for _, v := range am {
+		if v.Ip == to.Ip && v.Port == to.Port {
+			return am
 		}
 	}
-
-	am.v4 = append(am.v4, to)
+	// prepend to keep things fresh
+	am = append(am, nil)
+	copy(am[1:], am)
+	am[0] = to
+	if len(am) > maxAddrs {
+		am = am[:maxAddrs]
+	}
+	return am
 }
 
 // addRemoteV6 is a lighthouse internal function to cache client updates or server responses for ipv6 addresses
-func (lh *LightHouse) addRemoteV6(vpnIP uint32, to *Ip6AndPort) {
-	// We shouldn't be bothering with updates from static hosts
-	if _, ok := lh.staticList[vpnIP]; ok {
-		return
+func (lh *LightHouse) addRemoteV6(vpnIP uint32, to *Ip6AndPort, static bool, learned bool) {
+	// First we check if the sender thinks this is a static entry
+	// and do nothing if it is not, but should be considered static
+	if static == false {
+		if _, ok := lh.staticList[vpnIP]; ok {
+			return
+		}
 	}
 
 	ip := net.IP(to.Ip)
@@ -265,25 +301,29 @@ func (lh *LightHouse) addRemoteV6(vpnIP uint32, to *Ip6AndPort) {
 
 	lh.Lock()
 	defer lh.Unlock()
-
-	//TODO: we have no 10 ip limits here
-	am := lh.addrMap[vpnIP]
-	if am == nil {
-		am = &ip4And6{
-			v4: make([]*Ip4AndPort, 0),
-			v6: make([]*Ip6AndPort, 0),
-		}
-		lh.addrMap[vpnIP] = am
+	am := lh.unsafeGetAddrs(vpnIP)
+	if learned {
+		am.learnedV6 = lh.unsafeAddRemoteV6(am.learnedV6, to)
 	} else {
-		// Do a dupe check and quit if we already have this addr
-		for _, v := range am.v6 {
-			if bytes.Equal(v.Ip, to.Ip) && v.Port == to.Port {
-				return
-			}
+		am.v6 = lh.unsafeAddRemoteV6(am.v6, to)
+	}
+}
+
+// unsafeAddRemoteV6 assumes there is already an addrMap entry and that you have the lh lock
+func (lh *LightHouse) unsafeAddRemoteV6(am []*Ip6AndPort, to *Ip6AndPort) []*Ip6AndPort {
+	for _, v := range am {
+		if bytes.Equal(v.Ip, to.Ip) && v.Port == to.Port {
+			return am
 		}
 	}
-
-	am.v6 = append(am.v6, to)
+	// prepend to keep things fresh
+	am = append(am, nil)
+	copy(am[1:], am)
+	am[0] = to
+	if len(am) > maxAddrs {
+		am = am[:maxAddrs]
+	}
+	return am
 }
 
 func (lh *LightHouse) AddRemoteAndReset(vpnIP uint32, toIp *udpAddr) {
@@ -384,6 +424,7 @@ type LightHouseHandler struct {
 	lh   *LightHouse
 	nb   []byte
 	out  []byte
+	pb   []byte
 	meta *NebulaMeta
 	l    *logrus.Logger
 
@@ -397,6 +438,8 @@ func (lh *LightHouse) NewRequestHandler() *LightHouseHandler {
 		nb:  make([]byte, 12, 12),
 		out: make([]byte, mtu),
 		l:   lh.l,
+		pb:  make([]byte, mtu),
+
 		meta: &NebulaMeta{
 			Details: &NebulaMetaDetails{},
 		},
@@ -417,17 +460,20 @@ func (lh *LightHouse) metricTx(t NebulaMeta_MessageType, i int64) {
 // so that we don't have to re-allocate them
 func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	details := lhh.meta.Details
-
-	details.Reset()
 	lhh.meta.Reset()
+
+	// Keep the array memory around
+	details.Ip4AndPorts = details.Ip4AndPorts[:0]
+	details.Ip6AndPorts = details.Ip6AndPorts[:0]
 	lhh.meta.Details = details
 
 	return lhh.meta
 }
 
+//TODO: do we need c here?
 func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []byte, c *cert.NebulaCertificate, w EncWriter) {
 	n := lhh.resetMeta()
-	err := proto.UnmarshalMerge(p, n)
+	err := n.Unmarshal(p)
 	if err != nil {
 		lhh.l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).WithField("udpAddr", rAddr).
 			Error("Failed to unmarshal lighthouse packet")
@@ -471,15 +517,16 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp uint32, addr 
 
 	//TODO: we can DRY this further
 	reqVpnIP := n.Details.VpnIp
-	found, reply, err := lhh.lh.queryAndPrepMessage(n.Details.VpnIp, func(cache *ip4And6) ([]byte, error) {
+	//TODO: Maybe instead of marshalling into n we marshal into a new `r` to not nuke our current request data
+	//TODO: If we use a lock on cache we can avoid holding it on lh.addrMap and keep things moving better
+	found, ln, err := lhh.lh.queryAndPrepMessage(n.Details.VpnIp, func(cache *ip4And6) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostQueryReply
 		n.Details.VpnIp = reqVpnIP
 
 		n.Details.Ip4AndPorts = cache.v4
 		n.Details.Ip6AndPorts = cache.v6
-
-		return proto.Marshal(n)
+		return n.MarshalTo(lhh.pb)
 	})
 
 	if !found {
@@ -492,10 +539,10 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp uint32, addr 
 	}
 
 	lhh.lh.metricTx(NebulaMeta_HostQueryReply, 1)
-	w.SendMessageToVpnIp(lightHouse, 0, vpnIp, reply, lhh.nb, lhh.out[:0])
+	w.SendMessageToVpnIp(lightHouse, 0, vpnIp, lhh.pb[:ln], lhh.nb, lhh.out[:0])
 
 	// This signals the other side to punch some zero byte udp packets
-	found, reply, err = lhh.lh.queryAndPrepMessage(vpnIp, func(cache *ip4And6) ([]byte, error) {
+	found, ln, err = lhh.lh.queryAndPrepMessage(vpnIp, func(cache *ip4And6) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostPunchNotification
 		n.Details.VpnIp = vpnIp
@@ -503,7 +550,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp uint32, addr 
 		n.Details.Ip4AndPorts = cache.v4
 		n.Details.Ip6AndPorts = cache.v6
 
-		return proto.Marshal(n)
+		return n.MarshalTo(lhh.pb)
 	})
 
 	if !found {
@@ -516,7 +563,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp uint32, addr 
 	}
 
 	lhh.lh.metricTx(NebulaMeta_HostPunchNotification, 1)
-	w.SendMessageToVpnIp(lightHouse, 0, reqVpnIP, reply, lhh.nb, lhh.out[:0])
+	w.SendMessageToVpnIp(lightHouse, 0, reqVpnIP, lhh.pb[:ln], lhh.nb, lhh.out[:0])
 }
 
 func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp uint32) {
@@ -526,11 +573,11 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp uint32) 
 
 	// We can't just slam the responses in as they may come from multiple lighthouses and we should coalesce the answers
 	for _, to := range n.Details.Ip4AndPorts {
-		lhh.lh.addRemoteV4(n.Details.VpnIp, to)
+		lhh.lh.addRemoteV4(n.Details.VpnIp, to, false, false)
 	}
 
 	for _, to := range n.Details.Ip6AndPorts {
-		lhh.lh.addRemoteV6(n.Details.VpnIp, to)
+		lhh.lh.addRemoteV6(n.Details.VpnIp, to, false, false)
 	}
 
 	// Non-blocking attempt to trigger, skip if it would block
@@ -556,25 +603,23 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 		return
 	}
 
-	// We don't take updates for static hosts
-	if _, ok := lhh.lh.staticList[vpnIp]; ok {
-		return
-	}
-
 	lhh.lh.Lock()
-	am := lhh.lh.addrMap[vpnIp]
-	if am == nil {
-		am = &ip4And6{
-			v4: make([]*Ip4AndPort, 0),
-			v6: make([]*Ip6AndPort, 0),
-		}
-		lhh.lh.addrMap[vpnIp] = am
+	defer lhh.lh.Unlock()
+	am := lhh.lh.unsafeGetAddrs(vpnIp)
+
+	//TODO: other note on a lock for am so we can release more quickly and lock our real unit of change which is far less contended
+	//TODO: we are not filtering by local or remote allowed addrs here, is this an ok change to make?
+
+	//NOTE: The underlying protobuf code allocates a new Ip4AndPorts and Ip6AndPorts each time so we don't need to copy here
+	// Horribly things will happen if that ever changes
+	for _, v := range n.Details.Ip4AndPorts {
+		am.v4 = lhh.lh.unsafeAddRemoteV4(am.v4, v)
 	}
 
-	//TODO: If we want to filter at the lighthouse too then we can't use this optimization
-	am.v4 = n.Details.Ip4AndPorts
-	am.v6 = n.Details.Ip6AndPorts
-	lhh.lh.Unlock()
+	//NOTE: unlike ipv4, which reuses the []Ip4AndPort memory safely, Ip6AndPort renders into a []byte and is not reused
+	for _, v := range n.Details.Ip6AndPorts {
+		am.v6 = lhh.lh.unsafeAddRemoteV6(am.v6, v)
+	}
 }
 
 func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp uint32, w EncWriter) {
@@ -625,12 +670,22 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp u
 	}
 }
 
-func transformLHReplyToUdpAddrs(ips *ip4And6) []*udpAddr {
-	addrs := make([]*udpAddr, len(ips.v4)+len(ips.v6))
+func TransformLHReplyToUdpAddrs(ips *ip4And6) []*udpAddr {
+	addrs := make([]*udpAddr, len(ips.v4)+len(ips.v6)+len(ips.learnedV4)+len(ips.learnedV6))
 	i := 0
+
+	for _, v := range ips.learnedV4 {
+		addrs[i] = NewUDPAddrFromLH4(v)
+		i++
+	}
 
 	for _, v := range ips.v4 {
 		addrs[i] = NewUDPAddrFromLH4(v)
+		i++
+	}
+
+	for _, v := range ips.learnedV6 {
+		addrs[i] = NewUDPAddrFromLH6(v)
 		i++
 	}
 

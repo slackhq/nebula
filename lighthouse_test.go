@@ -136,17 +136,22 @@ func Test_lhRemoteAllowList(t *testing.T) {
 	lh := NewLightHouse(l, true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
 	lh.SetRemoteAllowList(allowList)
 
-	remote1 := "10.20.0.3"
-	remote1IP := net.ParseIP(remote1)
+	remote1IP := net.ParseIP("10.20.0.3")
 	lh.AddRemote(ip2int(remote1IP), NewUDPAddr(remote1IP, uint16(4242)), true)
 	assert.Nil(t, lh.addrMap[ip2int(remote1IP)])
 
-	remote2 := "10.128.0.3"
-	remote2IP := net.ParseIP(remote2)
+	remote2IP := net.ParseIP("10.128.0.3")
 	remote2UDPAddr := NewUDPAddr(remote2IP, uint16(4242))
 
 	lh.AddRemote(ip2int(remote2IP), remote2UDPAddr, true)
-	assert.Equal(t, NewIp4AndPort(remote2UDPAddr.IP, uint32(remote2UDPAddr.Port)), lh.addrMap[ip2int(remote2IP)].v4[0])
+	assert.Equal(t, NewIp4AndPort(remote2UDPAddr.IP, uint32(remote2UDPAddr.Port)), lh.addrMap[ip2int(remote2IP)].learnedV4[0])
+
+	remote3IP := net.ParseIP("10.128.0.4")
+	remote3UDPAddr := NewUDPAddr(remote3IP, uint16(4243))
+
+	lh.AddRemote(ip2int(remote2IP), remote3UDPAddr, true)
+	assert.Equal(t, NewIp4AndPort(remote3UDPAddr.IP, uint32(remote3UDPAddr.Port)), lh.addrMap[ip2int(remote2IP)].learnedV4[0])
+	assert.Equal(t, NewIp4AndPort(remote2UDPAddr.IP, uint32(remote2UDPAddr.Port)), lh.addrMap[ip2int(remote2IP)].learnedV4[1])
 }
 
 //func NewLightHouse(amLighthouse bool, myIp uint32, ips []string, interval int, nebulaPort int, pc *udpConn, punchBack bool) *LightHouse {
