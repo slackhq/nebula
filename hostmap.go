@@ -599,12 +599,19 @@ func (i *HostInfo) handshakeComplete() {
 	//TODO: this should be managed by the handshake state machine to set it based on how many handshake were seen.
 	// Clamping it to 2 gets us out of the woods for now
 	atomic.StoreUint64(&i.ConnectionState.atomicMessageCounter, 2)
-	i.logger().Debugf("Sending %d stored packets", len(i.packetStore))
-	nb := make([]byte, 12, 12)
-	out := make([]byte, mtu)
-	for _, cp := range i.packetStore {
-		cp.callback(cp.messageType, cp.messageSubType, i, cp.packet, nb, out)
+
+	if l.Level >= logrus.DebugLevel {
+		i.logger().Debugf("Sending %d stored packets", len(i.packetStore))
 	}
+
+	if len(i.packetStore) > 0 {
+		nb := make([]byte, 12, 12)
+		out := make([]byte, mtu)
+		for _, cp := range i.packetStore {
+			cp.callback(cp.messageType, cp.messageSubType, i, cp.packet, nb, out)
+		}
+	}
+
 	i.packetStore = make([]*cachedPacket, 0)
 	i.ConnectionState.ready = true
 	i.ConnectionState.queueLock.Unlock()
