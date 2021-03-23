@@ -287,12 +287,6 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	}
 
 	ci := hostinfo.ConnectionState
-	// Mark packet 2 as seen so it doesn't show up as missed
-	ci.window.Update(2)
-
-	hostinfo.HandshakePacket[2] = make([]byte, len(packet[HeaderLen:]))
-	copy(hostinfo.HandshakePacket[2], packet[HeaderLen:])
-
 	msg, eKey, dKey, err := ci.H.ReadMessage(nil, packet[HeaderLen:])
 	if err != nil {
 		l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
@@ -325,7 +319,24 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			Error("Invalid certificate from host")
 		return true
 	}
+
 	vpnIP := ip2int(remoteCert.Details.Ips[0].IP)
+	if vpnIP != hostinfo.hostId {
+		l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
+			WithField("cert", remoteCert).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+			Error("Incorrect host responded to handshake")
+
+		//TODO: remove this udpAddr from our cache
+		// We don't want to tear down because maybe we can succeed with another ip address
+		return false
+	}
+
+	hostinfo.HandshakePacket[2] = make([]byte, len(packet[HeaderLen:]))
+	copy(hostinfo.HandshakePacket[2], packet[HeaderLen:])
+
+	// Mark packet 2 as seen so it doesn't show up as missed
+	ci.window.Update(2)
+
 	certName := remoteCert.Details.Name
 	fingerprint, _ := remoteCert.Sha256Sum()
 
