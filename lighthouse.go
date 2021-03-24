@@ -163,6 +163,25 @@ func (lh *LightHouse) DeleteVpnIP(vpnIP uint32) {
 	lh.Unlock()
 }
 
+func (lh *LightHouse) DeleteRemote(vpnIP uint32, addr *udpAddr) {
+	// First we check the static mapping
+	// and do nothing if it is there
+	if _, ok := lh.staticList[vpnIP]; ok {
+		return
+	}
+	lh.Lock()
+	defer lh.Unlock()
+
+	am := lh.addrMap[vpnIP]
+	for k, v := range am {
+		if v.Equals(addr) {
+			am[k] = am[len(am)-1]
+			lh.addrMap[vpnIP] = am[:len(am)-1]
+			return
+		}
+	}
+}
+
 func (lh *LightHouse) AddRemote(vpnIP uint32, toIp *udpAddr, static bool) {
 	// First we check if the sender thinks this is a static entry
 	// and do nothing if it is not, but should be considered static

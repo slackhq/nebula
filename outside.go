@@ -101,7 +101,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 
 	case handshake:
 		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
-		HandleIncomingHandshake(f, addr, packet, header, hostinfo)
+		HandleIncomingHandshake(f, addr, packet, header)
 		return
 
 	case recvError:

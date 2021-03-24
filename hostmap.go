@@ -655,6 +655,19 @@ func (i *HostInfo) SetRemote(remote *udpAddr) {
 	i.remote = i.AddRemote(remote)
 }
 
+func (i *HostInfo) DeleteRemote(remote *udpAddr) {
+	i.Lock()
+	defer i.Unlock()
+
+	for k, v := range i.Remotes {
+		if v.addr.Equals(remote) {
+			i.Remotes[k] = i.Remotes[len(i.Remotes)-1]
+			i.Remotes = i.Remotes[:len(i.Remotes)-1]
+			return
+		}
+	}
+}
+
 func (i *HostInfo) ClearRemotes() {
 	i.remote = nil
 	i.Remotes = []*HostInfoDest{}
