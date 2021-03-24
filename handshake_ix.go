@@ -343,14 +343,10 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 			Info("Incorrect host responded to handshake")
 
-		ho, err := f.hostMap.QueryVpnIP(vpnIP)
-		if err == nil && ho.localIndexId != 0 {
-			l.WithField("vpnIp", vpnIP).WithField("certName", certName).
-				WithField("fingerprint", fingerprint).WithField("action", "removing stale index").
-				WithField("index", ho.localIndexId).
-				Debug("Handshake processing")
-			//TODO: do we need this?
-			f.handshakeManager.pendingHostMap.DeleteIndex(ho.localIndexId)
+		ho, _ := f.handshakeManager.pendingHostMap.QueryVpnIP(vpnIP)
+		if ho != nil {
+			// We might have a pending tunnel to this host already, clear out that attempt since we have a tunnel now
+			f.handshakeManager.pendingHostMap.DeleteHostInfo(ho)
 		}
 
 		// Delete our pending entry because we have bad info there
@@ -358,9 +354,13 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		f.lightHouse.DeleteRemote(hostinfo.hostId, addr)
 
 		// Create a new handshake but try to correct the error
+		//TODO: this adds it to the timer wheel in a way that aggressively retries
 		newHostInfo := f.getOrHandshake(hostinfo.hostId)
-		newHostInfo.packetStore = hostinfo.packetStore
+		//TODO: I do not believe we have populated Remotes yet so we are relying on a race condition with the local lighthouse
 		newHostInfo.DeleteRemote(addr)
+
+		// Swap the packet store to benefit the original intended recipient
+		newHostInfo.packetStore = hostinfo.packetStore
 		hostinfo.packetStore = []*cachedPacket{}
 
 		// Set the current hostId to the new vpnIp
@@ -391,7 +391,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	// Build up the radix for the firewall if we have subnets in the cert
 	hostinfo.CreateRemoteCIDR(remoteCert)
 
-	// Complete our handshake and update metrics
+	// Complete our handshake and update metrics, this will replace any existing tunnels for this vpnIp
 	f.handshakeManager.Complete(hostinfo, f)
 	hostinfo.handshakeComplete()
 	f.metricHandshakes.Update(duration)

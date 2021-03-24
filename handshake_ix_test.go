@@ -39,12 +39,6 @@ func Test_ixHandshake(t *testing.T) {
 	evilVpnIp := ip2int(evilIpNet.IP)
 	evilCert, _, evilPrivKey := newTestCert(ca, caKey, "evil", time.Now(), time.Now().Add(5*time.Minute), evilIpNet, nil, []string{})
 
-	//TODO: remove
-	_ = evilAddr
-	_ = evilVpnIp
-	_ = evilCert
-	_ = evilPrivKey
-
 	// Test a well behaving handshake between 2 parties
 	t.Run("well behaved", func(t *testing.T) {
 		myF := newTestInterface(t, myCert, myPrivKey)
@@ -99,10 +93,12 @@ func Test_ixHandshake(t *testing.T) {
 		ixHandshakeStage1(theirF, myAddr, theirHi.HandshakePacket[0], &Header{}, newTestWriter(&stage1, nil))
 
 		// I will eat multiple stage 1 packets, duplicated or not
-		assert.False(t, ixHandshakeStage2(myF, theirAddr, theirHi, stage1, &Header{}))
-		assert.False(t, ixHandshakeStage2(myF, theirAddr, theirHi, stage1, &Header{}))
-		// This last one is a junk packet
-		assert.False(t, ixHandshakeStage2(myF, theirAddr, theirHi, stage1[HeaderLen:], &Header{}))
+		assert.False(t, ixHandshakeStage2(myF, theirAddr, theirHi, append(stage1, 3), &Header{}))              // junk: added garbage
+		assert.False(t, ixHandshakeStage2(myF, theirAddr, theirHi, stage1[HeaderLen+20:], &Header{}))          // junk: missing the start
+		assert.False(t, ixHandshakeStage2(myF, theirAddr, theirHi, stage1[:len(stage1)-HeaderLen], &Header{})) // junk: missing the end
+		assert.False(t, ixHandshakeStage2(myF, theirAddr, theirHi, stage1, &Header{}))                         // good
+
+		//assert.False(t, ixHandshakeStage2(myF, theirAddr, theirHi, stage1, &Header{})) // duplicate good
 
 		// Lets see if it works
 		assertHostMapPair(t, myF.hostMap, theirF.hostMap, myVpnIp, theirVpnIp, myAddr, theirAddr)
@@ -159,7 +155,9 @@ func Test_ixHandshake(t *testing.T) {
 		// Generate our stage 0
 		evilHi := myF.getOrHandshake(theirVpnIp)
 
+		//TODO: add a pending entry for evil to make sure it gets cleaned up
 		// Make sure we are going to use the evil address
+		myF.handshakeManager.pendingHostMap.AddVpnIP(evilVpnIp)
 		assert.Equal(t, evilHi.Remotes[0].addr, evilAddr, "Our host info for them should have the evil addr")
 		assert.Contains(t, myF.lightHouse.QueryCache(theirVpnIp), evilAddr, "Our lighthouse should have the evil addr for their vpn ip")
 
@@ -192,6 +190,11 @@ func Test_ixHandshake(t *testing.T) {
 		assert.False(t, ixHandshakeStage2(myF, theirAddr, theirHi, stage1, &Header{}), "Our stage 2 failed unexpectedly")
 
 		// Make sure my hostmap looks good
+		assert.Len(t, myF.handshakeManager.pendingHostMap.Hosts, 1)
+		assert.Len(t, myF.handshakeManager.pendingHostMap.Indexes, 1)
+		for _, v := range myF.handshakeManager.pendingHostMap.Hosts {
+			t.Log(IntIp(v.hostId))
+		}
 		assertHostMapEntries(t, myF.hostMap, evilHi, theirHi)
 
 		// Make sure evil and their hostmap is the correct size
@@ -249,9 +252,9 @@ func testTunnel(t *testing.T, fA, fB *Interface, vpnA, vpnB uint32) {
 }
 
 func assertHostMapSize(t *testing.T, hm *HostMap, l int) {
-	assert.Len(t, hm.Hosts, l)
-	assert.Len(t, hm.RemoteIndexes, l)
-	assert.Len(t, hm.Indexes, l)
+	assert.Len(t, hm.Hosts, l, "Hosts was not the correct size")
+	assert.Len(t, hm.RemoteIndexes, l, "RemoteIndexes was not the correct size")
+	assert.Len(t, hm.Indexes, l, "Indexes was not the correct size")
 }
 
 func assertHostMapEntries(t *testing.T, hm *HostMap, entries ...*HostInfo) {

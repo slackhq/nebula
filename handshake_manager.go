@@ -276,6 +276,9 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
 	}
 
+	// We can clean up pending too, the outbound ticker would do it for us though
+	c.pendingHostMap.DeleteHostInfo(hostinfo)
+
 	existingRemoteIndex, found := c.mainHostMap.RemoteIndexes[hostinfo.remoteIndexId]
 	if found && existingRemoteIndex != nil {
 		// We have a collision, but this can happen since we can't control
