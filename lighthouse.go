@@ -16,6 +16,7 @@ import (
 
 //TODO: if the pb code for ipv6 used a fixed data type we could save more work
 //TODO: nodes are roaming lighthouses, this is bad. How are they learning?
+//TODO: as a lh client, ignore any address within my nebula network?????
 
 var ErrHostNotKnown = errors.New("host not known")
 
@@ -232,6 +233,22 @@ func (lh *LightHouse) unsafeGetAddrs(vpnIP uint32) *ip4And6 {
 	return am
 }
 
+func (lh *LightHouse) copyIp4AndPort(ip *Ip4AndPort) *Ip4AndPort {
+	return &Ip4AndPort{
+		Ip:   ip.Ip,
+		Port: ip.Port,
+	}
+}
+
+func (lh *LightHouse) copyIp6AndPort(ip *Ip6AndPort) *Ip6AndPort {
+	newIp := &Ip6AndPort{
+		Ip:   make([]byte, len(ip.Ip)),
+		Port: ip.Port,
+	}
+	copy(newIp.Ip, ip.Ip)
+	return newIp
+}
+
 // addRemoteV4 is a lighthouse internal function to cache client updates or server responses for ipv4 addresses
 func (lh *LightHouse) addRemoteV4(vpnIP uint32, to *Ip4AndPort, static bool, learned bool) {
 	// First we check if the sender thinks this is a static entry
@@ -269,10 +286,11 @@ func (lh *LightHouse) unsafeAddRemoteV4(am []*Ip4AndPort, to *Ip4AndPort) []*Ip4
 			return am
 		}
 	}
+
 	// prepend to keep things fresh
 	am = append(am, nil)
 	copy(am[1:], am)
-	am[0] = to
+	am[0] = lh.copyIp4AndPort(to)
 	if len(am) > maxAddrs {
 		am = am[:maxAddrs]
 	}
@@ -316,10 +334,12 @@ func (lh *LightHouse) unsafeAddRemoteV6(am []*Ip6AndPort, to *Ip6AndPort) []*Ip6
 			return am
 		}
 	}
+
 	// prepend to keep things fresh
 	am = append(am, nil)
 	copy(am[1:], am)
-	am[0] = to
+	am[0] = lh.copyIp6AndPort(to)
+
 	if len(am) > maxAddrs {
 		am = am[:maxAddrs]
 	}
@@ -390,6 +410,10 @@ func (lh *LightHouse) SendUpdate(f EncWriter) {
 	var v6 []*Ip6AndPort
 
 	for _, e := range *localIps(lh.l, lh.localAllowList) {
+		if ip2int(e) == lh.myIp {
+			continue
+		}
+
 		// Only add IPs that aren't my VPN/tun IP
 		if ip := e.To4(); ip != nil {
 			v4 = append(v4, NewIp4AndPort(e, lh.nebulaPort))
@@ -427,9 +451,6 @@ type LightHouseHandler struct {
 	pb   []byte
 	meta *NebulaMeta
 	l    *logrus.Logger
-
-	v4   []*Ip4AndPort
-	v6   []*Ip6AndPort
 }
 
 func (lh *LightHouse) NewRequestHandler() *LightHouseHandler {
@@ -524,8 +545,8 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp uint32, addr 
 		n.Type = NebulaMeta_HostQueryReply
 		n.Details.VpnIp = reqVpnIP
 
-		n.Details.Ip4AndPorts = cache.v4
-		n.Details.Ip6AndPorts = cache.v6
+		lhh.coalesceAnswers(cache, n)
+
 		return n.MarshalTo(lhh.pb)
 	})
 
@@ -547,8 +568,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp uint32, addr 
 		n.Type = NebulaMeta_HostPunchNotification
 		n.Details.VpnIp = vpnIp
 
-		n.Details.Ip4AndPorts = cache.v4
-		n.Details.Ip6AndPorts = cache.v6
+		lhh.coalesceAnswers(cache, n)
 
 		return n.MarshalTo(lhh.pb)
 	})
@@ -564,6 +584,14 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp uint32, addr 
 
 	lhh.lh.metricTx(NebulaMeta_HostPunchNotification, 1)
 	w.SendMessageToVpnIp(lightHouse, 0, reqVpnIP, lhh.pb[:ln], lhh.nb, lhh.out[:0])
+}
+
+func (lhh *LightHouseHandler) coalesceAnswers(cache *ip4And6, n *NebulaMeta) {
+	n.Details.Ip4AndPorts = append(n.Details.Ip4AndPorts, cache.v4...)
+	n.Details.Ip4AndPorts = append(n.Details.Ip4AndPorts, cache.learnedV4...)
+
+	n.Details.Ip6AndPorts = append(n.Details.Ip6AndPorts, cache.v6...)
+	n.Details.Ip6AndPorts = append(n.Details.Ip6AndPorts, cache.learnedV6...)
 }
 
 func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp uint32) {
