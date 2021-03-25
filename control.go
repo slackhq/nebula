@@ -105,13 +105,14 @@ func (c *Control) GetHostInfoByVpnIP(vpnIP uint32, pending bool) *ControlHostInf
 }
 
 // SetRemoteForTunnel forces a tunnel to use a specific remote
+//TODO: rename to unlockedSetRemoteForTunnel
 func (c *Control) SetRemoteForTunnel(vpnIP uint32, addr udpAddr) *ControlHostInfo {
 	hostInfo, err := c.f.hostMap.QueryVpnIP(vpnIP)
 	if err != nil {
 		return nil
 	}
 
-	hostInfo.SetRemote(addr.Copy())
+	hostInfo.unlockedSetRemote(addr.Copy())
 	ch := copyHostInfo(hostInfo)
 	return &ch
 }
@@ -164,12 +165,11 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 }
 
 func copyHostInfo(h *HostInfo) ControlHostInfo {
-	addrs := h.RemoteUDPAddrs()
 	chi := ControlHostInfo{
 		VpnIP:          int2ip(h.hostId),
 		LocalIndex:     h.localIndexId,
 		RemoteIndex:    h.remoteIndexId,
-		RemoteAddrs:    make([]*udpAddr, len(addrs), len(addrs)),
+		RemoteAddrs:    h.CopyRemotes(),
 		CachedPackets:  len(h.packetStore),
 		MessageCounter: atomic.LoadUint64(&h.ConnectionState.atomicMessageCounter),
 	}
@@ -180,10 +180,6 @@ func copyHostInfo(h *HostInfo) ControlHostInfo {
 
 	if h.remote != nil {
 		chi.CurrentRemote = h.remote.Copy()
-	}
-
-	for i, addr := range addrs {
-		chi.RemoteAddrs[i] = addr.Copy()
 	}
 
 	return chi

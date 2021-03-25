@@ -125,13 +125,13 @@ func TestHostMap_rotateRemote(t *testing.T) {
 	assert.Nil(t, h.remote)
 
 	// 1 remote, no panic
-	h.AddRemote(NewUDPAddr(net.IP{1, 1, 1, 1}, 0))
+	h.unlockedAddRemote(NewUDPAddr(net.IP{1, 1, 1, 1}, 0))
 	h.rotateRemote()
 	assert.Equal(t, h.remote.IP, net.IP{1, 1, 1, 1})
 
-	h.AddRemote(NewUDPAddr(net.IP{1, 1, 1, 2}, 0))
-	h.AddRemote(NewUDPAddr(net.IP{1, 1, 1, 3}, 0))
-	h.AddRemote(NewUDPAddr(net.IP{1, 1, 1, 4}, 0))
+	h.unlockedAddRemote(NewUDPAddr(net.IP{1, 1, 1, 2}, 0))
+	h.unlockedAddRemote(NewUDPAddr(net.IP{1, 1, 1, 3}, 0))
+	h.unlockedAddRemote(NewUDPAddr(net.IP{1, 1, 1, 4}, 0))
 
 	//TODO: ensure we are copying and not storing the slice!
 

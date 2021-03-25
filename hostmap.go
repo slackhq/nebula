@@ -39,7 +39,7 @@ type HostInfo struct {
 	sync.RWMutex
 
 	remote            *udpAddr
-	Remotes           []*HostInfoDest
+	Remotes           []*udpAddr
 	promoteCounter    uint32
 	ConnectionState   *ConnectionState
 	handshakeStart    time.Time
@@ -53,6 +53,10 @@ type HostInfo struct {
 	hostId            uint32
 	recvError         int
 	remoteCidr        *CIDRTree
+
+	// This is a list of remotes that we have tried to handshake with and have returned from the wrong vpn ip.
+	// They should not be tried again during a handshake
+	badRemotes []*udpAddr
 
 	// lastRebindCount is the other side of Interface.rebindCount, if these values don't match then we need to ask LH
 	// for a punch from the remote end of this tunnel. The goal being to prime their conntrack for our traffic just like
@@ -136,7 +140,7 @@ func (hm *HostMap) AddVpnIP(vpnIP uint32) *HostInfo {
 	if _, ok := hm.Hosts[vpnIP]; !ok {
 		hm.RUnlock()
 		h = &HostInfo{
-			Remotes:         []*HostInfoDest{},
+			Remotes:         []*udpAddr{},
 			promoteCounter:  0,
 			hostId:          vpnIP,
 			HandshakePacket: make(map[uint8][]byte, 0),
@@ -303,15 +307,17 @@ func (hm *HostMap) AddRemote(vpnIp uint32, remote *udpAddr) *HostInfo {
 	hm.Lock()
 	i, v := hm.Hosts[vpnIp]
 	if v {
-		i.AddRemote(remote)
+		i.Lock()
+		i.unlockedAddRemote(remote)
+		i.Unlock()
 	} else {
 		i = &HostInfo{
-			Remotes:         []*HostInfoDest{NewHostInfoDest(remote)},
+			Remotes:         []*udpAddr{remote},
 			promoteCounter:  0,
 			hostId:          vpnIp,
 			HandshakePacket: make(map[uint8][]byte, 0),
 		}
-		i.remote = i.Remotes[0].addr
+		i.remote = i.Remotes[0]
 		hm.Hosts[vpnIp] = i
 		l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(vpnIp), "udpAddr": remote, "mapTotalSize": len(hm.Hosts)}).
 			Debug("Hostmap remote ip added")
@@ -405,7 +411,7 @@ func (hm *HostMap) PunchList() []*udpAddr {
 	hm.RLock()
 	for _, v := range hm.Hosts {
 		for _, r := range v.Remotes {
-			list = append(list, r.addr)
+			list = append(list, r)
 		}
 		//	if h, ok := hm.Hosts[vpnIp]; ok {
 		//		hm.Hosts[vpnIp].PromoteBest(hm.preferredRanges, false)
@@ -466,13 +472,14 @@ func (i *HostInfo) BindConnectionState(cs *ConnectionState) {
 	i.ConnectionState = cs
 }
 
+//TODO: rename to unlockedTryPromoteBest
 func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface) {
 	if i.remote == nil {
 		i.ForcePromoteBest(preferredRanges)
 		return
 	}
 
-	if atomic.AddUint32(&i.promoteCounter, 1)&PromoteEvery == 0 {
+	if atomic.AddUint32(&i.promoteCounter, 1)%PromoteEvery == 0 {
 		// return early if we are already on a preferred remote
 		rIP := i.remote.IP
 		for _, l := range preferredRanges {
@@ -485,7 +492,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		// check for new remotes in our local lighthouse cache
 		ips := ifce.lightHouse.QueryCache(i.hostId)
 		for _, ip := range ips {
-			i.AddRemote(ip)
+			i.unlockedAddRemote(ip)
 		}
 
 		best, preferred := i.getBestRemote(preferredRanges)
@@ -507,16 +514,14 @@ func (i *HostInfo) ForcePromoteBest(preferredRanges []*net.IPNet) {
 func (i *HostInfo) getBestRemote(preferredRanges []*net.IPNet) (best *udpAddr, preferred bool) {
 	if len(i.Remotes) > 0 {
 		for _, r := range i.Remotes {
-			rIP := r.addr.IP
-
 			for _, l := range preferredRanges {
-				if l.Contains(rIP) {
-					return r.addr, true
+				if l.Contains(r.IP) {
+					return r, true
 				}
 			}
 
-			if best == nil || !PrivateIP(rIP) {
-				best = r.addr
+			if best == nil || !PrivateIP(r.IP) {
+				best = r
 			}
 			/*
 				for _, r := range i.Remotes {
@@ -549,21 +554,21 @@ func (i *HostInfo) rotateRemote() {
 	}
 
 	if i.remote == nil {
-		i.remote = i.Remotes[0].addr
+		i.remote = i.Remotes[0]
 		return
 	}
 
 	// We want to look at all but the very last entry since that is handled at the end
 	for x := 0; x < len(i.Remotes)-1; x++ {
 		// Find our current position and move to the next one in the list
-		if i.Remotes[x].addr.Equals(i.remote) {
-			i.remote = i.Remotes[x+1].addr
+		if i.Remotes[x].Equals(i.remote) {
+			i.remote = i.Remotes[x+1]
 			return
 		}
 	}
 
 	// Our current position was likely the last in the list, start over at 0
-	i.remote = i.Remotes[0].addr
+	i.remote = i.Remotes[0]
 }
 
 func (i *HostInfo) cachePacket(t NebulaMessageType, st NebulaMessageSubType, packet []byte, f packetCallback) {
@@ -588,8 +593,8 @@ func (i *HostInfo) cachePacket(t NebulaMessageType, st NebulaMessageSubType, pac
 	}
 }
 
-// handshakeComplete will set the connection as ready to communicate, as well as flush any stored packets
-func (i *HostInfo) handshakeComplete() {
+// unlockedHandshakeComplete will set the connection as ready to communicate, as well as flush any stored packets
+func (i *HostInfo) unlockedHandshakeComplete() {
 	//TODO: I'm not certain the distinction between handshake complete and ConnectionState being ready matters because:
 	//TODO: HandshakeComplete means send stored packets and ConnectionState.ready means we are ready to send
 	//TODO: if the transition from HandhsakeComplete to ConnectionState.ready happens all within this function they are identical
@@ -612,18 +617,21 @@ func (i *HostInfo) handshakeComplete() {
 		}
 	}
 
+	i.badRemotes = make([]*udpAddr, 0)
 	i.packetStore = make([]*cachedPacket, 0)
 	i.ConnectionState.ready = true
 	i.ConnectionState.queueLock.Unlock()
 	i.ConnectionState.certState = nil
 }
 
-func (i *HostInfo) RemoteUDPAddrs() []*udpAddr {
-	var addrs []*udpAddr
-	for _, r := range i.Remotes {
-		addrs = append(addrs, r.addr)
+func (i *HostInfo) CopyRemotes() []*udpAddr {
+	i.RLock()
+	rc := make([]*udpAddr, len(i.Remotes), len(i.Remotes))
+	for x, addr := range i.Remotes {
+		rc[x] = addr.Copy()
 	}
-	return addrs
+	i.RUnlock()
+	return rc
 }
 
 func (i *HostInfo) GetCert() *cert.NebulaCertificate {
@@ -633,34 +641,45 @@ func (i *HostInfo) GetCert() *cert.NebulaCertificate {
 	return nil
 }
 
-func (i *HostInfo) AddRemote(remote *udpAddr) *udpAddr {
-	//add := true
+func (i *HostInfo) unlockedAddRemote(remote *udpAddr) *udpAddr {
+	if i.unlockedIsBadRemote(remote) {
+		return i.remote
+	}
+
 	for _, r := range i.Remotes {
-		if r.addr.Equals(remote) {
-			return r.addr
-			//add = false
+		if r.Equals(remote) {
+			return r
 		}
 	}
 	// Trim this down if necessary
 	if len(i.Remotes) > MaxRemotes {
 		i.Remotes = i.Remotes[len(i.Remotes)-MaxRemotes:]
 	}
-	r := NewHostInfoDest(remote)
-	i.Remotes = append(i.Remotes, r)
-	return r.addr
-	//l.Debugf("Added remote %s for vpn ip", remote)
+
+	// We copy here because we are taking something else's memory and we can't trust everything
+	rc := remote.Copy()
+	i.Remotes = append(i.Remotes, rc)
+	return rc
 }
 
 func (i *HostInfo) SetRemote(remote *udpAddr) {
-	i.remote = i.AddRemote(remote)
-}
-
-func (i *HostInfo) DeleteRemote(remote *udpAddr) {
 	i.Lock()
 	defer i.Unlock()
+	i.unlockedSetRemote(remote)
+}
+
+func (i *HostInfo) unlockedSetRemote(remote *udpAddr) {
+	i.remote = i.unlockedAddRemote(remote)
+}
+
+func (i *HostInfo) unlockedBlockRemote(remote *udpAddr) {
+	if !i.unlockedIsBadRemote(remote) {
+		// We copy here because we are taking something else's memory and we can't trust everything
+		i.badRemotes = append(i.badRemotes, remote.Copy())
+	}
 
 	for k, v := range i.Remotes {
-		if v.addr.Equals(remote) {
+		if v.Equals(remote) {
 			i.Remotes[k] = i.Remotes[len(i.Remotes)-1]
 			i.Remotes = i.Remotes[:len(i.Remotes)-1]
 			return
@@ -668,9 +687,18 @@ func (i *HostInfo) DeleteRemote(remote *udpAddr) {
 	}
 }
 
+func (i *HostInfo) unlockedIsBadRemote(remote *udpAddr) bool {
+	for _, v := range i.badRemotes {
+		if v.Equals(remote) {
+			return true
+		}
+	}
+	return false
+}
+
 func (i *HostInfo) ClearRemotes() {
 	i.remote = nil
-	i.Remotes = []*HostInfoDest{}
+	i.Remotes = []*udpAddr{}
 }
 
 func (i *HostInfo) ClearConnectionState() {
@@ -716,22 +744,6 @@ func (i *HostInfo) logger() *logrus.Entry {
 	}
 
 	return li
-}
-
-//########################
-
-func NewHostInfoDest(addr *udpAddr) *HostInfoDest {
-	i := &HostInfoDest{
-		addr: addr.Copy(),
-	}
-	return i
-}
-
-func (hid *HostInfoDest) MarshalJSON() ([]byte, error) {
-	return json.Marshal(m{
-		"address":     hid.addr,
-		"probe_count": hid.probeCounter,
-	})
 }
 
 /*

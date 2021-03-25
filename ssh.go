@@ -344,11 +344,12 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 		x := 0
 		var h m
 		for _, v := range hostMap.Hosts {
+			v.RLock()
 			h = m{
 				"vpnIp":         int2ip(v.hostId),
 				"localIndex":    v.localIndexId,
 				"remoteIndex":   v.remoteIndexId,
-				"remoteAddrs":   v.RemoteUDPAddrs(),
+				"remoteAddrs":   v.CopyRemotes(),
 				"cachedPackets": len(v.packetStore),
 				"cert":          v.GetCert(),
 			}
@@ -368,7 +369,9 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 		}
 	} else {
 		for i, v := range hostMap.Hosts {
-			err := w.WriteLine(fmt.Sprintf("%s: %s", int2ip(i), v.RemoteUDPAddrs()))
+			v.RLock()
+			err := w.WriteLine(fmt.Sprintf("%s: %s", int2ip(i), v.CopyRemotes()))
+			v.RUnlock()
 			if err != nil {
 				return err
 			}
@@ -542,12 +545,12 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	hostInfo, _ := ifce.hostMap.QueryVpnIP(uint32(vpnIp))
+	hostInfo, _ := ifce.hostMap.QueryVpnIP(vpnIp)
 	if hostInfo != nil {
 		return w.WriteLine(fmt.Sprintf("Tunnel already exists"))
 	}
 
-	hostInfo, _ = ifce.handshakeManager.pendingHostMap.QueryVpnIP(uint32(vpnIp))
+	hostInfo, _ = ifce.handshakeManager.pendingHostMap.QueryVpnIP(vpnIp)
 	if hostInfo != nil {
 		return w.WriteLine(fmt.Sprintf("Tunnel already handshaking"))
 	}
@@ -560,6 +563,7 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		}
 	}
 
+	//TODO: likely better off just calling getOrHandshake and adding the remote, avoiding all the above and parts of the below
 	hostInfo = ifce.handshakeManager.AddVpnIP(vpnIp)
 	if addr != nil {
 		hostInfo.SetRemote(addr)

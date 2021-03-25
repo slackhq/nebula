@@ -85,7 +85,3 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 		f.readOutsidePackets(udpAddr, plaintext[:0], buffer[:n], header, fwPacket, lhh, nb, q, conntrackCache.Get())
 	}
 }
-
-func hostDidRoam(addr *udpAddr, newaddr *udpAddr) bool {
-	return !addr.Equals(newaddr)
-}

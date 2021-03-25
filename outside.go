@@ -141,11 +141,15 @@ func (f *Interface) closeTunnel(hostInfo *HostInfo) {
 }
 
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {
-	if hostDidRoam(hostinfo.remote, addr) {
+	if !hostinfo.remote.Equals(addr) {
 		if !f.lightHouse.remoteAllowList.Allow(addr.IP) {
 			hostinfo.logger().WithField("newAddr", addr).Debug("lighthouse.remote_allow_list denied roaming")
 			return
 		}
+
+		hostinfo.Lock()
+		defer hostinfo.Unlock()
+
 		if !hostinfo.lastRoam.IsZero() && addr.Equals(hostinfo.lastRoamRemote) && time.Since(hostinfo.lastRoam) < RoamingSuppressSeconds*time.Second {
 			if l.Level >= logrus.DebugLevel {
 				hostinfo.logger().WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
@@ -157,9 +161,8 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {
 		hostinfo.logger().WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
 			Info("Host roamed to new udp ip/port.")
 		hostinfo.lastRoam = time.Now()
-		remoteCopy := *hostinfo.remote
-		hostinfo.lastRoamRemote = &remoteCopy
-		hostinfo.SetRemote(addr)
+		hostinfo.lastRoamRemote = hostinfo.remote.Copy()
+		hostinfo.unlockedSetRemote(addr)
 		if f.lightHouse.amLighthouse {
 			f.lightHouse.AddRemote(hostinfo.hostId, addr, false)
 		}
@@ -332,7 +335,7 @@ func (f *Interface) handleRecvError(addr *udpAddr, h *Header) {
 	if !hostinfo.RecvErrorExceeded() {
 		return
 	}
-	if hostinfo.remote != nil && hostinfo.remote.String() != addr.String() {
+	if hostinfo.remote != nil && !hostinfo.remote.Equals(addr) {
 		l.Infoln("Someone spoofing recv_errors? ", addr, hostinfo.remote)
 		return
 	}

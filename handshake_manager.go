@@ -123,7 +123,7 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 			}
 			if err == nil {
 				for _, ip := range ips {
-					hostinfo.AddRemote(ip)
+					hostinfo.unlockedAddRemote(ip)
 				}
 				hostinfo.ForcePromoteBest(c.mainHostMap.preferredRanges)
 			}
