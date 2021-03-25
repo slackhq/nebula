@@ -48,6 +48,7 @@ type LightHouse struct {
 
 	metrics           *MessageMetrics
 	metricHolepunchTx metrics.Counter
+	l                 *logrus.Logger
 }
 
 type EncWriter interface {
@@ -55,7 +56,7 @@ type EncWriter interface {
 	SendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte)
 }
 
-func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, nebulaPort uint32, pc *udpConn, punchBack bool, punchDelay time.Duration, metricsEnabled bool) *LightHouse {
+func NewLightHouse(l *logrus.Logger, amLighthouse bool, myIp uint32, ips []uint32, interval int, nebulaPort uint32, pc *udpConn, punchBack bool, punchDelay time.Duration, metricsEnabled bool) *LightHouse {
 	h := LightHouse{
 		amLighthouse: amLighthouse,
 		myIp:         myIp,
@@ -67,6 +68,7 @@ func NewLightHouse(amLighthouse bool, myIp uint32, ips []uint32, interval int, n
 		punchConn:    pc,
 		punchBack:    punchBack,
 		punchDelay:   punchDelay,
+		l:            l,
 	}
 
 	if metricsEnabled {
@@ -126,7 +128,7 @@ func (lh *LightHouse) QueryServer(ip uint32, f EncWriter) {
 		// Send a query to the lighthouses and hope for the best next time
 		query, err := proto.Marshal(NewLhQueryByInt(ip))
 		if err != nil {
-			l.WithError(err).WithField("vpnIp", IntIp(ip)).Error("Failed to marshal lighthouse query payload")
+			lh.l.WithError(err).WithField("vpnIp", IntIp(ip)).Error("Failed to marshal lighthouse query payload")
 			return
 		}
 
@@ -159,7 +161,7 @@ func (lh *LightHouse) DeleteVpnIP(vpnIP uint32) {
 	lh.Lock()
 	//l.Debugln(lh.addrMap)
 	delete(lh.addrMap, vpnIP)
-	l.Debugf("deleting %s from lighthouse.", IntIp(vpnIP))
+	lh.l.Debugf("deleting %s from lighthouse.", IntIp(vpnIP))
 	lh.Unlock()
 }
 
@@ -181,7 +183,7 @@ func (lh *LightHouse) AddRemote(vpnIP uint32, toIp *udpAddr, static bool) {
 	}
 
 	allow := lh.remoteAllowList.Allow(toIp.IP)
-	l.WithField("remoteIp", toIp).WithField("allow", allow).Debug("remoteAllowList.Allow")
+	lh.l.WithField("remoteIp", toIp).WithField("allow", allow).Debug("remoteAllowList.Allow")
 	if !allow {
 		return
 	}
@@ -270,7 +272,7 @@ func (lh *LightHouse) SendUpdate(f EncWriter) {
 	var v4 []*IpAndPort
 	var v6 []*Ip6AndPort
 
-	for _, e := range *localIps(lh.localAllowList) {
+	for _, e := range *localIps(lh.l, lh.localAllowList) {
 		// Only add IPs that aren't my VPN/tun IP
 		if ip2int(e) != lh.myIp {
 			ipp := NewIpAndPort(e, lh.nebulaPort)
@@ -297,7 +299,7 @@ func (lh *LightHouse) SendUpdate(f EncWriter) {
 	for vpnIp := range lh.lighthouses {
 		mm, err := proto.Marshal(m)
 		if err != nil {
-			l.Debugf("Invalid marshal to update")
+			lh.l.Debugf("Invalid marshal to update")
 		}
 		//l.Error("LIGHTHOUSE PACKET SEND", mm)
 		f.SendMessageToVpnIp(lightHouse, 0, vpnIp, mm, nb, out)
@@ -368,14 +370,14 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 	n := lhh.resetMeta()
 	err := proto.UnmarshalMerge(p, n)
 	if err != nil {
-		l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).WithField("udpAddr", rAddr).
+		lh.l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).WithField("udpAddr", rAddr).
 			Error("Failed to unmarshal lighthouse packet")
 		//TODO: send recv_error?
 		return
 	}
 
 	if n.Details == nil {
-		l.WithField("vpnIp", IntIp(vpnIp)).WithField("udpAddr", rAddr).
+		lh.l.WithField("vpnIp", IntIp(vpnIp)).WithField("udpAddr", rAddr).
 			Error("Invalid lighthouse update")
 		//TODO: send recv_error?
 		return
@@ -387,7 +389,7 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 	case NebulaMeta_HostQuery:
 		// Exit if we don't answer queries
 		if !lh.amLighthouse {
-			l.Debugln("I don't answer queries, but received from: ", rAddr)
+			lh.l.Debugln("I don't answer queries, but received from: ", rAddr)
 			return
 		}
 
@@ -422,7 +424,7 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 
 			reply, err := proto.Marshal(n)
 			if err != nil {
-				l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).Error("Failed to marshal lighthouse host query reply")
+				lh.l.WithError(err).WithField("vpnIp", IntIp(vpnIp)).Error("Failed to marshal lighthouse host query reply")
 				return
 			}
 			lh.metricTx(NebulaMeta_HostQueryReply, 1)
@@ -431,7 +433,7 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 			// This signals the other side to punch some zero byte udp packets
 			ips, err = lh.Query(vpnIp, f)
 			if err != nil {
-				l.WithField("vpnIp", IntIp(vpnIp)).Debugln("Can't notify host to punch")
+				lh.l.WithField("vpnIp", IntIp(vpnIp)).Debugln("Can't notify host to punch")
 				return
 			} else {
 				//l.Debugln("Notify host to punch", iap)
@@ -492,7 +494,7 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 	case NebulaMeta_HostUpdateNotification:
 		//Simple check that the host sent this not someone else
 		if n.Details.VpnIp != vpnIp {
-			l.WithField("vpnIp", IntIp(vpnIp)).WithField("answer", IntIp(n.Details.VpnIp)).Debugln("Host sent invalid update")
+			lh.l.WithField("vpnIp", IntIp(vpnIp)).WithField("answer", IntIp(n.Details.VpnIp)).Debugln("Host sent invalid update")
 			return
 		}
 
@@ -530,9 +532,9 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 
 			}()
 
-			if l.Level >= logrus.DebugLevel {
+			if lh.l.Level >= logrus.DebugLevel {
 				//TODO: lacking the ip we are actually punching on, old: l.Debugf("Punching %s on %d for %s", IntIp(a.Ip), a.Port, IntIp(n.Details.VpnIp))
-				l.Debugf("Punching on %d for %s", a.Port, IntIp(n.Details.VpnIp))
+				lh.l.Debugf("Punching on %d for %s", a.Port, IntIp(n.Details.VpnIp))
 			}
 		}
 
@@ -549,9 +551,9 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 
 			}()
 
-			if l.Level >= logrus.DebugLevel {
+			if lh.l.Level >= logrus.DebugLevel {
 				//TODO: lacking the ip we are actually punching on, old: l.Debugf("Punching %s on %d for %s", IntIp(a.Ip), a.Port, IntIp(n.Details.VpnIp))
-				l.Debugf("Punching on %d for %s", a.Port, IntIp(n.Details.VpnIp))
+				lh.l.Debugf("Punching on %d for %s", a.Port, IntIp(n.Details.VpnIp))
 			}
 		}
 
@@ -561,7 +563,7 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp uint32, p []by
 		if lh.punchBack {
 			go func() {
 				time.Sleep(time.Second * 5)
-				l.Debugf("Sending a nebula test packet to vpn ip %s", IntIp(n.Details.VpnIp))
+				lh.l.Debugf("Sending a nebula test packet to vpn ip %s", IntIp(n.Details.VpnIp))
 				// TODO we have to allocate a new output buffer here since we are spawning a new goroutine
 				// for each punchBack packet. We should move this into a timerwheel or a single goroutine
 				// managed by a channel.

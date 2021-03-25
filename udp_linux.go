@@ -1,4 +1,5 @@
 // +build !android
+// +build !e2e_testing
 
 package nebula
 
@@ -10,6 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/rcrowley/go-metrics"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 )
 
@@ -17,6 +19,7 @@ import (
 
 type udpConn struct {
 	sysFd int
+	l     *logrus.Logger
 }
 
 var x int
@@ -38,7 +41,7 @@ const (
 
 type _SK_MEMINFO [_SK_MEMINFO_VARS]uint32
 
-func NewListener(ip string, port int, multi bool) (*udpConn, error) {
+func NewListener(l *logrus.Logger, ip string, port int, multi bool) (*udpConn, error) {
 	syscall.ForkLock.RLock()
 	fd, err := unix.Socket(unix.AF_INET6, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
 	if err == nil {
@@ -70,7 +73,7 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 	//v, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU)
 	//l.Println(v, err)
 
-	return &udpConn{sysFd: fd}, err
+	return &udpConn{sysFd: fd, l: l}, err
 }
 
 func (u *udpConn) Rebind() error {
@@ -153,7 +156,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 	for {
 		n, err := read(msgs)
 		if err != nil {
-			l.WithError(err).Error("Failed to read packets")
+			u.l.WithError(err).Error("Failed to read packets")
 			continue
 		}
 
@@ -161,7 +164,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 		for i := 0; i < n; i++ {
 			udpAddr.IP = names[i][8:24]
 			udpAddr.Port = binary.BigEndian.Uint16(names[i][2:4])
-			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb, q, conntrackCache.Get())
+			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb, q, conntrackCache.Get(u.l))
 		}
 	}
 }
@@ -244,12 +247,12 @@ func (u *udpConn) reloadConfig(c *Config) {
 		if err == nil {
 			s, err := u.GetRecvBuffer()
 			if err == nil {
-				l.WithField("size", s).Info("listen.read_buffer was set")
+				u.l.WithField("size", s).Info("listen.read_buffer was set")
 			} else {
-				l.WithError(err).Warn("Failed to get listen.read_buffer")
+				u.l.WithError(err).Warn("Failed to get listen.read_buffer")
 			}
 		} else {
-			l.WithError(err).Error("Failed to set listen.read_buffer")
+			u.l.WithError(err).Error("Failed to set listen.read_buffer")
 		}
 	}
 
@@ -259,12 +262,12 @@ func (u *udpConn) reloadConfig(c *Config) {
 		if err == nil {
 			s, err := u.GetSendBuffer()
 			if err == nil {
-				l.WithField("size", s).Info("listen.write_buffer was set")
+				u.l.WithField("size", s).Info("listen.write_buffer was set")
 			} else {
-				l.WithError(err).Warn("Failed to get listen.write_buffer")
+				u.l.WithError(err).Warn("Failed to get listen.write_buffer")
 			}
 		} else {
-			l.WithError(err).Error("Failed to set listen.write_buffer")
+			u.l.WithError(err).Error("Failed to set listen.write_buffer")
 		}
 	}
 }

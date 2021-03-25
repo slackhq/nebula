@@ -8,7 +8,8 @@ import (
 )
 
 func TestNewPunchyFromConfig(t *testing.T) {
-	c := NewConfig()
+	l := NewTestLogger()
+	c := NewConfig(l)
 
 	// Test defaults
 	p := NewPunchyFromConfig(c)

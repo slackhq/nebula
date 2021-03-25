@@ -26,11 +26,13 @@ type Config struct {
 	Settings    map[interface{}]interface{}
 	oldSettings map[interface{}]interface{}
 	callbacks   []func(*Config)
+	l           *logrus.Logger
 }
 
-func NewConfig() *Config {
+func NewConfig(l *logrus.Logger) *Config {
 	return &Config{
 		Settings: make(map[interface{}]interface{}),
+		l:        l,
 	}
 }
 
@@ -99,12 +101,12 @@ func (c *Config) HasChanged(k string) bool {
 
 	newVals, err := yaml.Marshal(nv)
 	if err != nil {
-		l.WithField("config_path", k).WithError(err).Error("Error while marshaling new config")
+		c.l.WithField("config_path", k).WithError(err).Error("Error while marshaling new config")
 	}
 
 	oldVals, err := yaml.Marshal(ov)
 	if err != nil {
-		l.WithField("config_path", k).WithError(err).Error("Error while marshaling old config")
+		c.l.WithField("config_path", k).WithError(err).Error("Error while marshaling old config")
 	}
 
 	return string(newVals) != string(oldVals)
@@ -118,7 +120,7 @@ func (c *Config) CatchHUP() {
 
 	go func() {
 		for range ch {
-			l.Info("Caught HUP, reloading config")
+			c.l.Info("Caught HUP, reloading config")
 			c.ReloadConfig()
 		}
 	}()
@@ -132,7 +134,7 @@ func (c *Config) ReloadConfig() {
 
 	err := c.Load(c.path)
 	if err != nil {
-		l.WithField("config_path", c.path).WithError(err).Error("Error occurred while reloading config")
+		c.l.WithField("config_path", c.path).WithError(err).Error("Error occurred while reloading config")
 		return
 	}
 
@@ -500,7 +502,7 @@ func configLogger(c *Config) error {
 	if err != nil {
 		return fmt.Errorf("%s; possible levels: %s", err, logrus.AllLevels)
 	}
-	l.SetLevel(logLevel)
+	c.l.SetLevel(logLevel)
 
 	disableTimestamp := c.GetBool("logging.disable_timestamp", false)
 	timestampFormat := c.GetString("logging.timestamp_format", "")
@@ -512,13 +514,13 @@ func configLogger(c *Config) error {
 	logFormat := strings.ToLower(c.GetString("logging.format", "text"))
 	switch logFormat {
 	case "text":
-		l.Formatter = &logrus.TextFormatter{
+		c.l.Formatter = &logrus.TextFormatter{
 			TimestampFormat:  timestampFormat,
 			FullTimestamp:    fullTimestamp,
 			DisableTimestamp: disableTimestamp,
 		}
 	case "json":
-		l.Formatter = &logrus.JSONFormatter{
+		c.l.Formatter = &logrus.JSONFormatter{
 			TimestampFormat:  timestampFormat,
 			DisableTimestamp: disableTimestamp,
 		}

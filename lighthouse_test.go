@@ -65,12 +65,13 @@ func TestSetipandportsfromudpaddrs(t *testing.T) {
 }
 
 func Test_lhStaticMapping(t *testing.T) {
+	l := NewTestLogger()
 	lh1 := "10.128.0.2"
 	lh1IP := net.ParseIP(lh1)
 
-	udpServer, _ := NewListener("0.0.0.0", 0, true)
+	udpServer, _ := NewListener(l, "0.0.0.0", 0, true)
 
-	meh := NewLightHouse(true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
+	meh := NewLightHouse(l, true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
 	meh.AddRemote(ip2int(lh1IP), NewUDPAddr(lh1IP, uint16(4242)), true)
 	err := meh.ValidateLHStaticEntries()
 	assert.Nil(t, err)
@@ -78,19 +79,20 @@ func Test_lhStaticMapping(t *testing.T) {
 	lh2 := "10.128.0.3"
 	lh2IP := net.ParseIP(lh2)
 
-	meh = NewLightHouse(true, 1, []uint32{ip2int(lh1IP), ip2int(lh2IP)}, 10, 10003, udpServer, false, 1, false)
+	meh = NewLightHouse(l, true, 1, []uint32{ip2int(lh1IP), ip2int(lh2IP)}, 10, 10003, udpServer, false, 1, false)
 	meh.AddRemote(ip2int(lh1IP), NewUDPAddr(lh1IP, uint16(4242)), true)
 	err = meh.ValidateLHStaticEntries()
 	assert.EqualError(t, err, "Lighthouse 10.128.0.3 does not have a static_host_map entry")
 }
 
 func BenchmarkLighthouseHandleRequest(b *testing.B) {
+	l := NewTestLogger()
 	lh1 := "10.128.0.2"
 	lh1IP := net.ParseIP(lh1)
 
-	udpServer, _ := NewListener("0.0.0.0", 0, true)
+	udpServer, _ := NewListener(l, "0.0.0.0", 0, true)
 
-	lh := NewLightHouse(true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
+	lh := NewLightHouse(l, true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
 
 	hAddr := NewUDPAddrFromString("4.5.6.7:12345")
 	hAddr2 := NewUDPAddrFromString("4.5.6.7:12346")
@@ -136,7 +138,8 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 }
 
 func Test_lhRemoteAllowList(t *testing.T) {
-	c := NewConfig()
+	l := NewTestLogger()
+	c := NewConfig(l)
 	c.Settings["remoteallowlist"] = map[interface{}]interface{}{
 		"10.20.0.0/12": false,
 	}
@@ -146,9 +149,9 @@ func Test_lhRemoteAllowList(t *testing.T) {
 	lh1 := "10.128.0.2"
 	lh1IP := net.ParseIP(lh1)
 
-	udpServer, _ := NewListener("0.0.0.0", 0, true)
+	udpServer, _ := NewListener(l, "0.0.0.0", 0, true)
 
-	lh := NewLightHouse(true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
+	lh := NewLightHouse(l, true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
 	lh.SetRemoteAllowList(allowList)
 
 	remote1 := "10.20.0.3"

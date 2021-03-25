@@ -1,6 +1,7 @@
 // +build linux
 // +build 386 amd64p32 arm mips mipsle
 // +build !android
+// +build !e2e_testing
 
 package nebula
 

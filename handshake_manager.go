@@ -53,11 +53,12 @@ type HandshakeManager struct {
 	InboundHandshakeTimer  *SystemTimerWheel
 
 	messageMetrics *MessageMetrics
+	l              *logrus.Logger
 }
 
-func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udpConn, config HandshakeConfig) *HandshakeManager {
+func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udpConn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
-		pendingHostMap: NewHostMap("pending", tunCidr, preferredRanges),
+		pendingHostMap: NewHostMap(l, "pending", tunCidr, preferredRanges),
 		mainHostMap:    mainHostMap,
 		lightHouse:     lightHouse,
 		outside:        outside,
@@ -70,6 +71,7 @@ func NewHandshakeManager(tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainH
 		InboundHandshakeTimer:  NewSystemTimerWheel(config.tryInterval, config.tryInterval*time.Duration(config.retries)),
 
 		messageMetrics: config.messageMetrics,
+		l:              l,
 	}
 }
 
@@ -78,7 +80,7 @@ func (c *HandshakeManager) Run(f EncWriter) {
 	for {
 		select {
 		case vpnIP := <-c.trigger:
-			l.WithField("vpnIp", IntIp(vpnIP)).Debug("HandshakeManager: triggered")
+			c.l.WithField("vpnIp", IntIp(vpnIP)).Debug("HandshakeManager: triggered")
 			c.handleOutbound(vpnIP, f, true)
 		case now := <-clockSource:
 			c.NextOutboundHandshakeTimerTick(now, f)
@@ -149,7 +151,7 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 			c.messageMetrics.Tx(handshake, NebulaMessageSubType(hostinfo.HandshakePacket[0][1]), 1)
 			err := c.outside.WriteTo(hostinfo.HandshakePacket[0], hostinfo.remote)
 			if err != nil {
-				hostinfo.logger().WithField("udpAddr", hostinfo.remote).
+				hostinfo.logger(c.l).WithField("udpAddr", hostinfo.remote).
 					WithField("initiatorIndex", hostinfo.localIndexId).
 					WithField("remoteIndex", hostinfo.remoteIndexId).
 					WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
@@ -157,7 +159,7 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 			} else {
 				//TODO: this log line is assuming a lot of stuff around the cached stage 0 handshake packet, we should
 				// keep the real packet struct around for logging purposes
-				hostinfo.logger().WithField("udpAddr", hostinfo.remote).
+				hostinfo.logger(c.l).WithField("udpAddr", hostinfo.remote).
 					WithField("initiatorIndex", hostinfo.localIndexId).
 					WithField("remoteIndex", hostinfo.remoteIndexId).
 					WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
@@ -245,7 +247,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 	if found && existingRemoteIndex != nil && existingRemoteIndex.hostId != hostinfo.hostId {
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
-		hostinfo.logger().
+		hostinfo.logger(c.l).
 			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", IntIp(existingRemoteIndex.hostId)).
 			Info("New host shadows existing host remoteIndex")
 	}
@@ -280,7 +282,7 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 	if found && existingRemoteIndex != nil {
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
-		hostinfo.logger().
+		hostinfo.logger(c.l).
 			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", IntIp(existingRemoteIndex.hostId)).
 			Info("New host shadows existing host remoteIndex")
 	}
@@ -298,7 +300,7 @@ func (c *HandshakeManager) AddIndexHostInfo(h *HostInfo) error {
 	defer c.mainHostMap.RUnlock()
 
 	for i := 0; i < 32; i++ {
-		index, err := generateIndex()
+		index, err := generateIndex(c.l)
 		if err != nil {
 			return err
 		}
@@ -336,7 +338,7 @@ func (c *HandshakeManager) EmitStats() {
 
 // Utility functions below
 
-func generateIndex() (uint32, error) {
+func generateIndex(l *logrus.Logger) (uint32, error) {
 	b := make([]byte, 4)
 
 	// Let zero mean we don't know the ID, so don't generate zero

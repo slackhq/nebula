@@ -9,7 +9,8 @@ import (
 )
 
 func Test_parseRoutes(t *testing.T) {
-	c := NewConfig()
+	l := NewTestLogger()
+	c := NewConfig(l)
 	_, n, _ := net.ParseCIDR("10.0.0.0/24")
 
 	// test no routes config
@@ -104,7 +105,8 @@ func Test_parseRoutes(t *testing.T) {
 }
 
 func Test_parseUnsafeRoutes(t *testing.T) {
-	c := NewConfig()
+	l := NewTestLogger()
+	c := NewConfig(l)
 	_, n, _ := net.ParseCIDR("10.0.0.0/24")
 
 	// test no routes config

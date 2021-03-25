@@ -13,9 +13,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rcrowley/go-metrics"
+	"github.com/sirupsen/logrus"
 )
 
-func startStats(c *Config, configTest bool) error {
+func startStats(l *logrus.Logger, c *Config, configTest bool) error {
 	mType := c.GetString("stats.type", "")
 	if mType == "" || mType == "none" {
 		return nil
@@ -28,9 +29,9 @@ func startStats(c *Config, configTest bool) error {
 
 	switch mType {
 	case "graphite":
-		startGraphiteStats(interval, c, configTest)
+		startGraphiteStats(l, interval, c, configTest)
 	case "prometheus":
-		startPrometheusStats(interval, c, configTest)
+		startPrometheusStats(l, interval, c, configTest)
 	default:
 		return fmt.Errorf("stats.type was not understood: %s", mType)
 	}
@@ -44,7 +45,7 @@ func startStats(c *Config, configTest bool) error {
 	return nil
 }
 
-func startGraphiteStats(i time.Duration, c *Config, configTest bool) error {
+func startGraphiteStats(l *logrus.Logger, i time.Duration, c *Config, configTest bool) error {
 	proto := c.GetString("stats.protocol", "tcp")
 	host := c.GetString("stats.host", "")
 	if host == "" {
@@ -64,7 +65,7 @@ func startGraphiteStats(i time.Duration, c *Config, configTest bool) error {
 	return nil
 }
 
-func startPrometheusStats(i time.Duration, c *Config, configTest bool) error {
+func startPrometheusStats(l *logrus.Logger, i time.Duration, c *Config, configTest bool) error {
 	namespace := c.GetString("stats.namespace", "")
 	subsystem := c.GetString("stats.subsystem", "")
 

@@ -64,12 +64,13 @@ func TestHostInfoDestProbe(t *testing.T) {
 */
 
 func TestHostmap(t *testing.T) {
+	l := NewTestLogger()
 	_, myNet, _ := net.ParseCIDR("10.128.0.0/16")
 	_, localToMe, _ := net.ParseCIDR("192.168.1.0/24")
 	myNets := []*net.IPNet{myNet}
 	preferredRanges := []*net.IPNet{localToMe}
 
-	m := NewHostMap("test", myNet, preferredRanges)
+	m := NewHostMap(l, "test", myNet, preferredRanges)
 
 	a := NewUDPAddrFromString("10.127.0.3:11111")
 	b := NewUDPAddrFromString("1.0.0.1:22222")
@@ -103,10 +104,11 @@ func TestHostmap(t *testing.T) {
 }
 
 func TestHostmapdebug(t *testing.T) {
+	l := NewTestLogger()
 	_, myNet, _ := net.ParseCIDR("10.128.0.0/16")
 	_, localToMe, _ := net.ParseCIDR("192.168.1.0/24")
 	preferredRanges := []*net.IPNet{localToMe}
-	m := NewHostMap("test", myNet, preferredRanges)
+	m := NewHostMap(l, "test", myNet, preferredRanges)
 
 	a := NewUDPAddrFromString("10.127.0.3:11111")
 	b := NewUDPAddrFromString("1.0.0.1:22222")
@@ -151,11 +153,12 @@ func TestHostMap_rotateRemote(t *testing.T) {
 }
 
 func BenchmarkHostmappromote2(b *testing.B) {
+	l := NewTestLogger()
 	for n := 0; n < b.N; n++ {
 		_, myNet, _ := net.ParseCIDR("10.128.0.0/16")
 		_, localToMe, _ := net.ParseCIDR("192.168.1.0/24")
 		preferredRanges := []*net.IPNet{localToMe}
-		m := NewHostMap("test", myNet, preferredRanges)
+		m := NewHostMap(l, "test", myNet, preferredRanges)
 		y := NewUDPAddrFromString("10.128.0.3:11111")
 		a := NewUDPAddrFromString("10.127.0.3:11111")
 		g := NewUDPAddrFromString("1.0.0.1:22222")
