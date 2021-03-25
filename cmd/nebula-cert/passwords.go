@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 )
 
 var ErrNoTerminal = errors.New("cannot read password from nonexistent terminal")
@@ -17,11 +17,11 @@ type PasswordReader interface {
 type StdinPasswordReader struct{}
 
 func (pr StdinPasswordReader) ReadPassword() ([]byte, error) {
-	if !terminal.IsTerminal(int(os.Stdin.Fd())) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return nil, ErrNoTerminal
 	}
 
-	password, err := terminal.ReadPassword(int(os.Stdin.Fd()))
+	password, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println()
 
 	return password, err
