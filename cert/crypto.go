@@ -136,10 +136,14 @@ func aes256Decrypt(passphrase, data []byte, kdfParams string) ([]byte, error) {
 
 func aes256DeriveKey(passphrase []byte, params *argon2Parameters) ([]byte, *argon2Parameters, error) {
 	if params == nil {
+		// Benchmarking results...
+		// - AMD FX-4300 (4) @ 3.800GHz => 3.169s
+		// - Intel i7-7820HQ (8) @ 3.900GHz => 2.197s
+		// - Intel i9-9880H (16) @ 2.30GHz => 1.858s
 		params = &argon2Parameters{
 			version:     argon2.Version,
-			memory:      2 * 1024 * 1024, // 2 GiB
-			iterations:  3,
+			memory:      1 * 1024 * 1024, // 1 GiB
+			iterations:  8,
 			parallelism: 4,
 		}
 	}
