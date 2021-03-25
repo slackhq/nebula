@@ -52,10 +52,6 @@ func argon2ParametersFromString(data string) (*argon2Parameters, error) {
 		return nil, fmt.Errorf("invalid data while scanning: %s", err)
 	}
 
-	if params.version != argon2.Version {
-		return nil, fmt.Errorf("incompatible Argon2 version: %d", params.version)
-	}
-
 	_, err = fmt.Sscanf(vals[3], "m=%d,t=%d,p=%d", &params.memory, &params.iterations, &params.parallelism)
 	if err != nil {
 		return nil, fmt.Errorf("invalid data while scanning: %s", err)
@@ -72,19 +68,15 @@ func argon2ParametersFromString(data string) (*argon2Parameters, error) {
 
 // Encrypts data using AES-256-GCM and the Argon2id key derivation function
 func aes256Encrypt(passphrase, data []byte) ([]byte, string, error) {
-	// KDF factors - roughly 250ms on a 2019 Macbook Pro
-	params := argon2Parameters{
-		version:     argon2.Version,
-		memory:      64 * 1024,
-		iterations:  24,
-		parallelism: 8,
-	}
-
-	// keySize of 32 will result in AES-256 encryption.
-	// This function call will set params.salt if unset
-	key, err := deriveKey(passphrase, 32, &params)
+	key, params, err := aes256DeriveKey(passphrase, nil)
 	if err != nil {
 		return nil, "", err
+	}
+
+	// this should never happen, but since this dictates how our calls into the
+	// aes package behave and could be catastraphic, let's sanity check this
+	if len(key) != 32 {
+		return nil, "", fmt.Errorf("invalid AES-256 key length (%d) - cowardly refusing to encrypt", len(key))
 	}
 
 	block, err := aes.NewCipher(key)
@@ -117,8 +109,7 @@ func aes256Decrypt(passphrase, data []byte, kdfParams string) ([]byte, error) {
 		return nil, fmt.Errorf("error parsing parameters for decryption: %s", err)
 	}
 
-	// keySize of 32 will result in AES-256 decryption.
-	key, err := deriveKey(passphrase, 32, params)
+	key, params, err := aes256DeriveKey(passphrase, params)
 	if err != nil {
 		return nil, err
 	}
@@ -143,13 +134,40 @@ func aes256Decrypt(passphrase, data []byte, kdfParams string) ([]byte, error) {
 	return plaintext, nil
 }
 
-// Derives a key from a passphrase using Argon2id
-func deriveKey(passphrase []byte, keySize uint32, params *argon2Parameters) ([]byte, error) {
+func aes256DeriveKey(passphrase []byte, params *argon2Parameters) ([]byte, *argon2Parameters, error) {
+	if params == nil {
+		params = &argon2Parameters{
+			version:     argon2.Version,
+			memory:      2 * 1024 * 1024, // 2 GiB
+			iterations:  3,
+			parallelism: 4,
+		}
+	}
+
 	if params.salt == nil {
 		params.salt = make([]byte, 32)
 		if _, err := rand.Read(params.salt); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+	}
+
+	// keySize of 32 bytes will result in AES-256 encryption
+	key, err := deriveKey(passphrase, 32, params)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return key, params, nil
+}
+
+// Derives a key from a passphrase using Argon2id
+func deriveKey(passphrase []byte, keySize uint32, params *argon2Parameters) ([]byte, error) {
+	if params.version != argon2.Version {
+		return nil, fmt.Errorf("incompatible Argon2 version: %d", params.version)
+	}
+
+	if params.salt == nil {
+		return nil, fmt.Errorf("salt must be set in argon2Parameters")
 	}
 
 	key := argon2.IDKey(passphrase, params.salt, params.iterations, params.memory, params.parallelism, keySize)
