@@ -4,8 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -13,13 +11,10 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// The caller should provide a real logger, we have one just in case
-var l = logrus.New()
-
 type m map[string]interface{}
 
 func Main(config *Config, configTest bool, buildVersion string, logger *logrus.Logger, tunFd *int) (*Control, error) {
-	l = logger
+	l := logger
 	l.Formatter = &logrus.TextFormatter{
 		FullTimestamp: true,
 	}
@@ -48,7 +43,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	})
 
 	// trustedCAs is currently a global, so loadCA operates on that global directly
-	trustedCAs, err = loadCAFromConfig(config)
+	trustedCAs, err = loadCAFromConfig(l, config)
 	if err != nil {
 		//The errors coming out of loadCA are already nicely formatted
 		return nil, NewContextualError("Failed to load ca from config", nil, err)
@@ -62,7 +57,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	}
 	l.WithField("cert", cs.certificate).Debug("Client nebula certificate")
 
-	fw, err := NewFirewallFromConfig(cs.certificate, config)
+	fw, err := NewFirewallFromConfig(l, cs.certificate, config)
 	if err != nil {
 		return nil, NewContextualError("Error while loading firewall rules", nil, err)
 	}
@@ -80,9 +75,9 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	}
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
-	wireSSHReload(ssh, config)
+	wireSSHReload(l, ssh, config)
 	if config.GetBool("sshd.enabled", false) {
-		err = configSSH(ssh, config)
+		err = configSSH(l, ssh, config)
 		if err != nil {
 			return nil, NewContextualError("Error while configuring the sshd", nil, err)
 		}
@@ -138,6 +133,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 			tun = newDisabledTun(tunCidr, config.GetInt("tun.tx_queue", 500), config.GetBool("stats.message_metrics", false), l)
 		case tunFd != nil:
 			tun, err = newTunFromFd(
+				l,
 				*tunFd,
 				tunCidr,
 				config.GetInt("tun.mtu", DEFAULT_MTU),
@@ -147,6 +143,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 			)
 		default:
 			tun, err = newTun(
+				l,
 				config.GetString("tun.dev", ""),
 				tunCidr,
 				config.GetInt("tun.mtu", DEFAULT_MTU),
@@ -168,7 +165,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 
 	if !configTest {
 		for i := 0; i < routines; i++ {
-			udpServer, err := NewListener(config.GetString("listen.host", "0.0.0.0"), port, routines > 1)
+			udpServer, err := NewListener(l, config.GetString("listen.host", "0.0.0.0"), port, routines > 1)
 			if err != nil {
 				return nil, NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
@@ -224,7 +221,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		}
 	}
 
-	hostMap := NewHostMap("main", tunCidr, preferredRanges)
+	hostMap := NewHostMap(l, "main", tunCidr, preferredRanges)
 	hostMap.SetDefaultRoute(ip2int(net.ParseIP(config.GetString("default_route", "0.0.0.0"))))
 	hostMap.addUnsafeRoutes(&unsafeRoutes)
 	hostMap.metricsEnabled = config.GetBool("stats.message_metrics", false)
@@ -268,6 +265,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	}
 
 	lightHouse := NewLightHouse(
+		l,
 		amLighthouse,
 		ip2int(tunCidr.IP),
 		lighthouseHosts,
@@ -301,28 +299,19 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		vals, ok := v.([]interface{})
 		if ok {
 			for _, v := range vals {
-				parts := strings.Split(fmt.Sprintf("%v", v), ":")
-				addr, err := net.ResolveIPAddr("ip", parts[0])
+				ip, port, err := parseIPAndPort(fmt.Sprintf("%v", v))
 				if err == nil {
-					ip := addr.IP
-					port, err := strconv.Atoi(parts[1])
-					if err != nil {
-						return nil, NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
-					}
-					lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip2int(ip), uint16(port)), true)
+					lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip, port), true)
+				} else {
+					return nil, NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
 				}
 			}
 		} else {
-			//TODO: make this all a helper
-			parts := strings.Split(fmt.Sprintf("%v", v), ":")
-			addr, err := net.ResolveIPAddr("ip", parts[0])
+			ip, port, err := parseIPAndPort(fmt.Sprintf("%v", v))
 			if err == nil {
-				ip := addr.IP
-				port, err := strconv.Atoi(parts[1])
-				if err != nil {
-					return nil, NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
-				}
-				lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip2int(ip), uint16(port)), true)
+				lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip, port), true)
+			} else {
+				return nil, NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
 			}
 		}
 	}
@@ -348,7 +337,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		messageMetrics: messageMetrics,
 	}
 
-	handshakeManager := NewHandshakeManager(tunCidr, preferredRanges, hostMap, lightHouse, udpConns[0], handshakeConfig)
+	handshakeManager := NewHandshakeManager(l, tunCidr, preferredRanges, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
 
 	//TODO: These will be reused for psk
@@ -378,6 +367,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		version:                 buildVersion,
 
 		ConntrackCacheTimeout: conntrackCacheTimeout,
+		l:                     l,
 	}
 
 	switch ifConfig.Cipher {
@@ -406,7 +396,8 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		go lightHouse.LhUpdateWorker(ifce)
 	}
 
-	err = startStats(config, buildVersion, configTest)
+
+	err = startStats(l, config, buildVersion, configTest)
 	if err != nil {
 		return nil, NewContextualError("Failed to start stats emitter", nil, err)
 	}
@@ -418,12 +409,12 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	//TODO: check if we _should_ be emitting stats
 	go ifce.emitStats(config.GetDuration("stats.interval", time.Second*10))
 
-	attachCommands(ssh, hostMap, handshakeManager.pendingHostMap, lightHouse, ifce)
+	attachCommands(l, ssh, hostMap, handshakeManager.pendingHostMap, lightHouse, ifce)
 
 	// Start DNS server last to allow using the nebula IP as lighthouse.dns.host
 	if amLighthouse && serveDns {
 		l.Debugln("Starting dns server")
-		go dnsMain(hostMap, config)
+		go dnsMain(l, hostMap, config)
 	}
 
 	return &Control{ifce, l}, nil

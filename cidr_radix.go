@@ -76,7 +76,7 @@ func (tree *CIDRTree) AddCIDR(cidr *net.IPNet, val interface{}) {
 	node.value = val
 }
 
-// Finds the first match, which way be the least specific
+// Finds the first match, which may be the least specific
 func (tree *CIDRTree) Contains(ip uint32) (value interface{}) {
 	bit := startbit
 	node := tree.root

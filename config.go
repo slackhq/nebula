@@ -26,11 +26,13 @@ type Config struct {
 	Settings    map[interface{}]interface{}
 	oldSettings map[interface{}]interface{}
 	callbacks   []func(*Config)
+	l           *logrus.Logger
 }
 
-func NewConfig() *Config {
+func NewConfig(l *logrus.Logger) *Config {
 	return &Config{
 		Settings: make(map[interface{}]interface{}),
+		l:        l,
 	}
 }
 
@@ -99,12 +101,12 @@ func (c *Config) HasChanged(k string) bool {
 
 	newVals, err := yaml.Marshal(nv)
 	if err != nil {
-		l.WithField("config_path", k).WithError(err).Error("Error while marshaling new config")
+		c.l.WithField("config_path", k).WithError(err).Error("Error while marshaling new config")
 	}
 
 	oldVals, err := yaml.Marshal(ov)
 	if err != nil {
-		l.WithField("config_path", k).WithError(err).Error("Error while marshaling old config")
+		c.l.WithField("config_path", k).WithError(err).Error("Error while marshaling old config")
 	}
 
 	return string(newVals) != string(oldVals)
@@ -118,7 +120,7 @@ func (c *Config) CatchHUP() {
 
 	go func() {
 		for range ch {
-			l.Info("Caught HUP, reloading config")
+			c.l.Info("Caught HUP, reloading config")
 			c.ReloadConfig()
 		}
 	}()
@@ -132,7 +134,7 @@ func (c *Config) ReloadConfig() {
 
 	err := c.Load(c.path)
 	if err != nil {
-		l.WithField("config_path", c.path).WithError(err).Error("Error occurred while reloading config")
+		c.l.WithField("config_path", c.path).WithError(err).Error("Error occurred while reloading config")
 		return
 	}
 
@@ -235,13 +237,18 @@ func (c *Config) GetAllowList(k string, allowInterfaces bool) (*AllowList, error
 		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, r)
 	}
 
-	tree := NewCIDRTree()
+	tree := NewCIDR6Tree()
 	var nameRules []AllowListNameRule
 
-	firstValue := true
-	allValuesMatch := true
-	defaultSet := false
-	var allValues bool
+	// Keep track of the rules we have added for both ipv4 and ipv6
+	type allowListRules struct {
+		firstValue     bool
+		allValuesMatch bool
+		defaultSet     bool
+		allValues      bool
+	}
+	rules4 := allowListRules{firstValue: true, allValuesMatch: true, defaultSet: false}
+	rules6 := allowListRules{firstValue: true, allValuesMatch: true, defaultSet: false}
 
 	for rawKey, rawValue := range rawMap {
 		rawCIDR, ok := rawKey.(string)
@@ -276,28 +283,45 @@ func (c *Config) GetAllowList(k string, allowInterfaces bool) (*AllowList, error
 		// TODO: should we error on duplicate CIDRs in the config?
 		tree.AddCIDR(cidr, value)
 
-		if firstValue {
-			allValues = value
-			firstValue = false
+		maskBits, maskSize := cidr.Mask.Size()
+
+		var rules *allowListRules
+		if maskSize == 32 {
+			rules = &rules4
 		} else {
-			if value != allValues {
-				allValuesMatch = false
+			rules = &rules6
+		}
+
+		if rules.firstValue {
+			rules.allValues = value
+			rules.firstValue = false
+		} else {
+			if value != rules.allValues {
+				rules.allValuesMatch = false
 			}
 		}
 
-		// Check if this is 0.0.0.0/0
-		bits, size := cidr.Mask.Size()
-		if bits == 0 && size == 32 {
-			defaultSet = true
+		// Check if this is 0.0.0.0/0 or ::/0
+		if maskBits == 0 {
+			rules.defaultSet = true
 		}
 	}
 
-	if !defaultSet {
-		if allValuesMatch {
+	if !rules4.defaultSet {
+		if rules4.allValuesMatch {
 			_, zeroCIDR, _ := net.ParseCIDR("0.0.0.0/0")
-			tree.AddCIDR(zeroCIDR, !allValues)
+			tree.AddCIDR(zeroCIDR, !rules4.allValues)
 		} else {
 			return nil, fmt.Errorf("config `%s` contains both true and false rules, but no default set for 0.0.0.0/0", k)
+		}
+	}
+
+	if !rules6.defaultSet {
+		if rules6.allValuesMatch {
+			_, zeroCIDR, _ := net.ParseCIDR("::/0")
+			tree.AddCIDR(zeroCIDR, !rules6.allValues)
+		} else {
+			return nil, fmt.Errorf("config `%s` contains both true and false rules, but no default set for ::/0", k)
 		}
 	}
 
@@ -478,7 +502,7 @@ func configLogger(c *Config) error {
 	if err != nil {
 		return fmt.Errorf("%s; possible levels: %s", err, logrus.AllLevels)
 	}
-	l.SetLevel(logLevel)
+	c.l.SetLevel(logLevel)
 
 	disableTimestamp := c.GetBool("logging.disable_timestamp", false)
 	timestampFormat := c.GetString("logging.timestamp_format", "")
@@ -490,13 +514,13 @@ func configLogger(c *Config) error {
 	logFormat := strings.ToLower(c.GetString("logging.format", "text"))
 	switch logFormat {
 	case "text":
-		l.Formatter = &logrus.TextFormatter{
+		c.l.Formatter = &logrus.TextFormatter{
 			TimestampFormat:  timestampFormat,
 			FullTimestamp:    fullTimestamp,
 			DisableTimestamp: disableTimestamp,
 		}
 	case "json":
-		l.Formatter = &logrus.JSONFormatter{
+		c.l.Formatter = &logrus.JSONFormatter{
 			TimestampFormat:  timestampFormat,
 			DisableTimestamp: disableTimestamp,
 		}

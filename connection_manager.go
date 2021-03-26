@@ -28,10 +28,11 @@ type connectionManager struct {
 	checkInterval           int
 	pendingDeletionInterval int
 
+	l *logrus.Logger
 	// I wanted to call one matLock
 }
 
-func newConnectionManager(intf *Interface, checkInterval, pendingDeletionInterval int) *connectionManager {
+func newConnectionManager(l *logrus.Logger, intf *Interface, checkInterval, pendingDeletionInterval int) *connectionManager {
 	nc := &connectionManager{
 		hostMap:                 intf.hostMap,
 		in:                      make(map[uint32]struct{}),
@@ -47,6 +48,7 @@ func newConnectionManager(intf *Interface, checkInterval, pendingDeletionInterva
 		pendingDeletionTimer:    NewSystemTimerWheel(time.Millisecond*500, time.Second*60),
 		checkInterval:           checkInterval,
 		pendingDeletionInterval: pendingDeletionInterval,
+		l:                       l,
 	}
 	nc.Start()
 	return nc
@@ -166,8 +168,8 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 
 		// If we saw incoming packets from this ip, just return
 		if traf {
-			if l.Level >= logrus.DebugLevel {
-				l.WithField("vpnIp", IntIp(vpnIP)).
+			if n.l.Level >= logrus.DebugLevel {
+				n.l.WithField("vpnIp", IntIp(vpnIP)).
 					WithField("tunnelCheck", m{"state": "alive", "method": "passive"}).
 					Debug("Tunnel status")
 			}
@@ -179,13 +181,13 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 		// If we didn't we may need to probe or destroy the conn
 		hostinfo, err := n.hostMap.QueryVpnIP(vpnIP)
 		if err != nil {
-			l.Debugf("Not found in hostmap: %s", IntIp(vpnIP))
+			n.l.Debugf("Not found in hostmap: %s", IntIp(vpnIP))
 			n.ClearIP(vpnIP)
 			n.ClearPendingDeletion(vpnIP)
 			continue
 		}
 
-		hostinfo.logger().
+		hostinfo.logger(n.l).
 			WithField("tunnelCheck", m{"state": "testing", "method": "active"}).
 			Debug("Tunnel status")
 
@@ -194,7 +196,7 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 			n.intf.SendMessageToVpnIp(test, testRequest, vpnIP, p, nb, out)
 
 		} else {
-			hostinfo.logger().Debugf("Hostinfo sadness: %s", IntIp(vpnIP))
+			hostinfo.logger(n.l).Debugf("Hostinfo sadness: %s", IntIp(vpnIP))
 		}
 		n.AddPendingDeletion(vpnIP)
 	}
@@ -214,7 +216,7 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 		// If we saw incoming packets from this ip, just return
 		traf := n.CheckIn(vpnIP)
 		if traf {
-			l.WithField("vpnIp", IntIp(vpnIP)).
+			n.l.WithField("vpnIp", IntIp(vpnIP)).
 				WithField("tunnelCheck", m{"state": "alive", "method": "active"}).
 				Debug("Tunnel status")
 			n.ClearIP(vpnIP)
@@ -226,7 +228,7 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 		if err != nil {
 			n.ClearIP(vpnIP)
 			n.ClearPendingDeletion(vpnIP)
-			l.Debugf("Not found in hostmap: %s", IntIp(vpnIP))
+			n.l.Debugf("Not found in hostmap: %s", IntIp(vpnIP))
 			continue
 		}
 
@@ -236,7 +238,7 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 			if hostinfo.ConnectionState != nil && hostinfo.ConnectionState.peerCert != nil {
 				cn = hostinfo.ConnectionState.peerCert.Details.Name
 			}
-			hostinfo.logger().
+			hostinfo.logger(n.l).
 				WithField("tunnelCheck", m{"state": "dead", "method": "active"}).
 				WithField("certName", cn).
 				Info("Tunnel status")

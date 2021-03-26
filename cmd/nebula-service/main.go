@@ -46,15 +46,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	config := nebula.NewConfig()
+	l := logrus.New()
+	l.Out = os.Stdout
+
+	config := nebula.NewConfig(l)
 	err := config.Load(*configPath)
 	if err != nil {
 		fmt.Printf("failed to load config: %s", err)
 		os.Exit(1)
 	}
 
-	l := logrus.New()
-	l.Out = os.Stdout
 	c, err := nebula.Main(config, *configTest, Build, l, nil)
 
 	switch v := err.(type) {

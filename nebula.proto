@@ -1,6 +1,8 @@
 syntax = "proto3";
 package nebula;
 
+option go_package = "github.com/slackhq/nebula";
+
 message NebulaMeta {
   enum MessageType {
     None = 0;
@@ -20,11 +22,10 @@ message NebulaMeta {
   NebulaMetaDetails Details = 2;
 }
 
-
 message NebulaMetaDetails {
-
   uint32 VpnIp = 1;
   repeated IpAndPort IpAndPorts = 2;
+  repeated Ip6AndPort Ip6AndPorts = 4;
   uint32 counter = 3;
 }
 
@@ -33,6 +34,10 @@ message IpAndPort {
   uint32 Port = 2;
 }
 
+message Ip6AndPort {
+  bytes Ip = 1;
+  uint32 Port = 2;
+}
 
 message NebulaPing {
   enum MessageType {

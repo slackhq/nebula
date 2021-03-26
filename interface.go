@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rcrowley/go-metrics"
+	"github.com/sirupsen/logrus"
 )
 
 const mtu = 9001
@@ -42,6 +43,7 @@ type InterfaceConfig struct {
 	version                 string
 
 	ConntrackCacheTimeout time.Duration
+	l                     *logrus.Logger
 }
 
 type Interface struct {
@@ -73,6 +75,7 @@ type Interface struct {
 
 	metricHandshakes metrics.Histogram
 	messageMetrics   *MessageMetrics
+	l                *logrus.Logger
 }
 
 func NewInterface(c *InterfaceConfig) (*Interface, error) {
@@ -113,9 +116,10 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
+		l:                c.l,
 	}
 
-	ifce.connectionManager = newConnectionManager(ifce, c.checkInterval, c.pendingDeletionInterval)
+	ifce.connectionManager = newConnectionManager(c.l, ifce, c.checkInterval, c.pendingDeletionInterval)
 
 	return ifce, nil
 }
@@ -125,10 +129,10 @@ func (f *Interface) run() {
 
 	addr, err := f.outside.LocalAddr()
 	if err != nil {
-		l.WithError(err).Error("Failed to get udp listen address")
+		f.l.WithError(err).Error("Failed to get udp listen address")
 	}
 
-	l.WithField("interface", f.inside.DeviceName()).WithField("network", f.inside.CidrNet().String()).
+	f.l.WithField("interface", f.inside.DeviceName()).WithField("network", f.inside.CidrNet().String()).
 		WithField("build", f.version).WithField("udpAddr", addr).
 		Info("Nebula interface is active")
 
@@ -140,14 +144,14 @@ func (f *Interface) run() {
 		if i > 0 {
 			reader, err = f.inside.NewMultiQueueReader()
 			if err != nil {
-				l.Fatal(err)
+				f.l.Fatal(err)
 			}
 		}
 		f.readers[i] = reader
 	}
 
 	if err := f.inside.Activate(); err != nil {
-		l.Fatal(err)
+		f.l.Fatal(err)
 	}
 
 	// Launch n queues to read packets from udp
@@ -187,12 +191,12 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	for {
 		n, err := reader.Read(packet)
 		if err != nil {
-			l.WithError(err).Error("Error while reading outbound packet")
+			f.l.WithError(err).Error("Error while reading outbound packet")
 			// This only seems to happen when something fatal happens to the fd, so exit.
 			os.Exit(2)
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get())
+		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
 	}
 }
 
@@ -208,21 +212,21 @@ func (f *Interface) RegisterConfigChangeCallbacks(c *Config) {
 func (f *Interface) reloadCA(c *Config) {
 	// reload and check regardless
 	// todo: need mutex?
-	newCAs, err := loadCAFromConfig(c)
+	newCAs, err := loadCAFromConfig(f.l, c)
 	if err != nil {
-		l.WithError(err).Error("Could not refresh trusted CA certificates")
+		f.l.WithError(err).Error("Could not refresh trusted CA certificates")
 		return
 	}
 
 	trustedCAs = newCAs
-	l.WithField("fingerprints", trustedCAs.GetFingerprints()).Info("Trusted CA certificates refreshed")
+	f.l.WithField("fingerprints", trustedCAs.GetFingerprints()).Info("Trusted CA certificates refreshed")
 }
 
 func (f *Interface) reloadCertKey(c *Config) {
 	// reload and check in all cases
 	cs, err := NewCertStateFromConfig(c)
 	if err != nil {
-		l.WithError(err).Error("Could not refresh client cert")
+		f.l.WithError(err).Error("Could not refresh client cert")
 		return
 	}
 
@@ -230,24 +234,24 @@ func (f *Interface) reloadCertKey(c *Config) {
 	oldIPs := f.certState.certificate.Details.Ips
 	newIPs := cs.certificate.Details.Ips
 	if len(oldIPs) > 0 && len(newIPs) > 0 && oldIPs[0].String() != newIPs[0].String() {
-		l.WithField("new_ip", newIPs[0]).WithField("old_ip", oldIPs[0]).Error("IP in new cert was different from old")
+		f.l.WithField("new_ip", newIPs[0]).WithField("old_ip", oldIPs[0]).Error("IP in new cert was different from old")
 		return
 	}
 
 	f.certState = cs
-	l.WithField("cert", cs.certificate).Info("Client cert refreshed from disk")
+	f.l.WithField("cert", cs.certificate).Info("Client cert refreshed from disk")
 }
 
 func (f *Interface) reloadFirewall(c *Config) {
 	//TODO: need to trigger/detect if the certificate changed too
 	if c.HasChanged("firewall") == false {
-		l.Debug("No firewall config change detected")
+		f.l.Debug("No firewall config change detected")
 		return
 	}
 
-	fw, err := NewFirewallFromConfig(f.certState.certificate, c)
+	fw, err := NewFirewallFromConfig(f.l, f.certState.certificate, c)
 	if err != nil {
-		l.WithError(err).Error("Error while creating firewall during reload")
+		f.l.WithError(err).Error("Error while creating firewall during reload")
 		return
 	}
 
@@ -260,7 +264,7 @@ func (f *Interface) reloadFirewall(c *Config) {
 	// If rulesVersion is back to zero, we have wrapped all the way around. Be
 	// safe and just reset conntrack in this case.
 	if fw.rulesVersion == 0 {
-		l.WithField("firewallHash", fw.GetRuleHash()).
+		f.l.WithField("firewallHash", fw.GetRuleHash()).
 			WithField("oldFirewallHash", oldFw.GetRuleHash()).
 			WithField("rulesVersion", fw.rulesVersion).
 			Warn("firewall rulesVersion has overflowed, resetting conntrack")
@@ -271,7 +275,7 @@ func (f *Interface) reloadFirewall(c *Config) {
 	f.firewall = fw
 
 	oldFw.Destroy()
-	l.WithField("firewallHash", fw.GetRuleHash()).
+	f.l.WithField("firewallHash", fw.GetRuleHash()).
 		WithField("oldFirewallHash", oldFw.GetRuleHash()).
 		WithField("rulesVersion", fw.rulesVersion).
 		Info("New firewall has been installed")

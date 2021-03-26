@@ -44,10 +44,10 @@ type sshCreateTunnelFlags struct {
 	Address string
 }
 
-func wireSSHReload(ssh *sshd.SSHServer, c *Config) {
+func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) {
 	c.RegisterReloadCallback(func(c *Config) {
 		if c.GetBool("sshd.enabled", false) {
-			err := configSSH(ssh, c)
+			err := configSSH(l, ssh, c)
 			if err != nil {
 				l.WithError(err).Error("Failed to reconfigure the sshd")
 				ssh.Stop()
@@ -58,7 +58,7 @@ func wireSSHReload(ssh *sshd.SSHServer, c *Config) {
 	})
 }
 
-func configSSH(ssh *sshd.SSHServer, c *Config) error {
+func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) error {
 	//TODO conntrack list
 	//TODO print firewall rules or hash?
 
@@ -149,7 +149,7 @@ func configSSH(ssh *sshd.SSHServer, c *Config) error {
 	return nil
 }
 
-func attachCommands(ssh *sshd.SSHServer, hostMap *HostMap, pendingHostMap *HostMap, lightHouse *LightHouse, ifce *Interface) {
+func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pendingHostMap *HostMap, lightHouse *LightHouse, ifce *Interface) {
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "list-hostmap",
 		ShortDescription: "List all known previously connected hosts",
@@ -225,13 +225,17 @@ func attachCommands(ssh *sshd.SSHServer, hostMap *HostMap, pendingHostMap *HostM
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "log-level",
 		ShortDescription: "Gets or sets the current log level",
-		Callback:         sshLogLevel,
+		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
+			return sshLogLevel(l, fs, a, w)
+		},
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "log-format",
 		ShortDescription: "Gets or sets the current log format",
-		Callback:         sshLogFormat,
+		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
+			return sshLogFormat(l, fs, a, w)
+		},
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
@@ -562,7 +566,7 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 
 	hostInfo = ifce.handshakeManager.AddVpnIP(vpnIp)
 	if addr != nil {
-		hostInfo.SetRemote(*addr)
+		hostInfo.SetRemote(addr)
 	}
 	ifce.getOrHandshake(vpnIp)
 
@@ -604,7 +608,7 @@ func sshChangeRemote(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn ip: %v", a[0]))
 	}
 
-	hostInfo.SetRemote(*addr)
+	hostInfo.SetRemote(addr)
 	return w.WriteLine("Changed")
 }
 
@@ -629,7 +633,7 @@ func sshGetHeapProfile(fs interface{}, a []string, w sshd.StringWriter) error {
 	return err
 }
 
-func sshLogLevel(fs interface{}, a []string, w sshd.StringWriter) error {
+func sshLogLevel(l *logrus.Logger, fs interface{}, a []string, w sshd.StringWriter) error {
 	if len(a) == 0 {
 		return w.WriteLine(fmt.Sprintf("Log level is: %s", l.Level))
 	}
@@ -643,7 +647,7 @@ func sshLogLevel(fs interface{}, a []string, w sshd.StringWriter) error {
 	return w.WriteLine(fmt.Sprintf("Log level is: %s", l.Level))
 }
 
-func sshLogFormat(fs interface{}, a []string, w sshd.StringWriter) error {
+func sshLogFormat(l *logrus.Logger, fs interface{}, a []string, w sshd.StringWriter) error {
 	if len(a) == 0 {
 		return w.WriteLine(fmt.Sprintf("Log format is: %s", reflect.TypeOf(l.Formatter)))
 	}

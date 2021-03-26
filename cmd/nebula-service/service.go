@@ -24,14 +24,15 @@ func (p *program) Start(s service.Service) error {
 	// Start should not block.
 	logger.Info("Nebula service starting.")
 
-	config := nebula.NewConfig()
+	l := logrus.New()
+	l.Out = os.Stdout
+
+	config := nebula.NewConfig(l)
 	err := config.Load(*p.configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %s", err)
 	}
 
-	l := logrus.New()
-	l.Out = os.Stdout
 	p.control, err = nebula.Main(config, *p.configTest, Build, l, nil)
 	if err != nil {
 		return err

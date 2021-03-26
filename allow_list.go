@@ -2,12 +2,13 @@ package nebula
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 )
 
 type AllowList struct {
 	// The values of this cidrTree are `bool`, signifying allow/deny
-	cidrTree *CIDRTree
+	cidrTree *CIDR6Tree
 
 	// To avoid ambiguity, all rules must be true, or all rules must be false.
 	nameRules []AllowListNameRule
@@ -18,7 +19,7 @@ type AllowListNameRule struct {
 	Allow bool
 }
 
-func (al *AllowList) Allow(ip uint32) bool {
+func (al *AllowList) Allow(ip net.IP) bool {
 	if al == nil {
 		return true
 	}

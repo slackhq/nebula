@@ -12,15 +12,15 @@ import (
 var ips []uint32
 
 func Test_NewHandshakeManagerIndex(t *testing.T) {
-
+	l := NewTestLogger()
 	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
 	ips = []uint32{ip2int(net.ParseIP("172.1.1.2"))}
 	preferredRanges := []*net.IPNet{localrange}
-	mainHM := NewHostMap("test", vpncidr, preferredRanges)
+	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
 
-	blah := NewHandshakeManager(tuncidr, preferredRanges, mainHM, &LightHouse{}, &udpConn{}, defaultHandshakeConfig)
+	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, &LightHouse{}, &udpConn{}, defaultHandshakeConfig)
 
 	now := time.Now()
 	blah.NextInboundHandshakeTimerTick(now)
@@ -63,15 +63,16 @@ func Test_NewHandshakeManagerIndex(t *testing.T) {
 }
 
 func Test_NewHandshakeManagerVpnIP(t *testing.T) {
+	l := NewTestLogger()
 	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
 	ips = []uint32{ip2int(net.ParseIP("172.1.1.2"))}
 	preferredRanges := []*net.IPNet{localrange}
 	mw := &mockEncWriter{}
-	mainHM := NewHostMap("test", vpncidr, preferredRanges)
+	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
 
-	blah := NewHandshakeManager(tuncidr, preferredRanges, mainHM, &LightHouse{}, &udpConn{}, defaultHandshakeConfig)
+	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, &LightHouse{}, &udpConn{}, defaultHandshakeConfig)
 
 	now := time.Now()
 	blah.NextOutboundHandshakeTimerTick(now, mw)
@@ -112,16 +113,17 @@ func Test_NewHandshakeManagerVpnIP(t *testing.T) {
 }
 
 func Test_NewHandshakeManagerTrigger(t *testing.T) {
+	l := NewTestLogger()
 	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
 	ip := ip2int(net.ParseIP("172.1.1.2"))
 	preferredRanges := []*net.IPNet{localrange}
 	mw := &mockEncWriter{}
-	mainHM := NewHostMap("test", vpncidr, preferredRanges)
+	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
 	lh := &LightHouse{}
 
-	blah := NewHandshakeManager(tuncidr, preferredRanges, mainHM, lh, &udpConn{}, defaultHandshakeConfig)
+	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, lh, &udpConn{}, defaultHandshakeConfig)
 
 	now := time.Now()
 	blah.NextOutboundHandshakeTimerTick(now, mw)
@@ -140,8 +142,8 @@ func Test_NewHandshakeManagerTrigger(t *testing.T) {
 	hi := blah.pendingHostMap.Hosts[ip]
 	assert.Nil(t, hi.remote)
 
-	lh.addrMap = map[uint32][]udpAddr{
-		ip: {*NewUDPAddrFromString("10.1.1.1:4242")},
+	lh.addrMap = map[uint32][]*udpAddr{
+		ip: {NewUDPAddrFromString("10.1.1.1:4242")},
 	}
 
 	// This should trigger the hostmap to populate the hostinfo
@@ -162,15 +164,16 @@ func testCountTimerWheelEntries(tw *SystemTimerWheel) (c int) {
 }
 
 func Test_NewHandshakeManagerVpnIPcleanup(t *testing.T) {
+	l := NewTestLogger()
 	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
 	vpnIP = ip2int(net.ParseIP("172.1.1.2"))
 	preferredRanges := []*net.IPNet{localrange}
 	mw := &mockEncWriter{}
-	mainHM := NewHostMap("test", vpncidr, preferredRanges)
+	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
 
-	blah := NewHandshakeManager(tuncidr, preferredRanges, mainHM, &LightHouse{}, &udpConn{}, defaultHandshakeConfig)
+	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, &LightHouse{}, &udpConn{}, defaultHandshakeConfig)
 
 	now := time.Now()
 	blah.NextOutboundHandshakeTimerTick(now, mw)
@@ -216,13 +219,14 @@ func Test_NewHandshakeManagerVpnIPcleanup(t *testing.T) {
 }
 
 func Test_NewHandshakeManagerIndexcleanup(t *testing.T) {
+	l := NewTestLogger()
 	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
 	preferredRanges := []*net.IPNet{localrange}
-	mainHM := NewHostMap("test", vpncidr, preferredRanges)
+	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
 
-	blah := NewHandshakeManager(tuncidr, preferredRanges, mainHM, &LightHouse{}, &udpConn{}, defaultHandshakeConfig)
+	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, &LightHouse{}, &udpConn{}, defaultHandshakeConfig)
 
 	now := time.Now()
 	blah.NextInboundHandshakeTimerTick(now)

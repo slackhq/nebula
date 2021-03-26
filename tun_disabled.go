@@ -9,24 +9,23 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
-	log "github.com/sirupsen/logrus"
 )
 
 type disabledTun struct {
-	read   chan []byte
-	cidr   *net.IPNet
-	logger *log.Logger
+	read chan []byte
+	cidr *net.IPNet
 
 	// Track these metrics since we don't have the tun device to do it for us
 	tx metrics.Counter
 	rx metrics.Counter
+	l  *logrus.Logger
 }
 
-func newDisabledTun(cidr *net.IPNet, queueLen int, metricsEnabled bool, l *log.Logger) *disabledTun {
+func newDisabledTun(cidr *net.IPNet, queueLen int, metricsEnabled bool, l *logrus.Logger) *disabledTun {
 	tun := &disabledTun{
-		cidr:   cidr,
-		read:   make(chan []byte, queueLen),
-		logger: l,
+		cidr: cidr,
+		read: make(chan []byte, queueLen),
+		l:    l,
 	}
 
 	if metricsEnabled {
@@ -63,8 +62,8 @@ func (t *disabledTun) Read(b []byte) (int, error) {
 	}
 
 	t.tx.Inc(1)
-	if l.Level >= logrus.DebugLevel {
-		t.logger.WithField("raw", prettyPacket(r)).Debugf("Write payload")
+	if t.l.Level >= logrus.DebugLevel {
+		t.l.WithField("raw", prettyPacket(r)).Debugf("Write payload")
 	}
 
 	return copy(b, r), nil
@@ -103,7 +102,7 @@ func (t *disabledTun) handleICMPEchoRequest(b []byte) bool {
 	select {
 	case t.read <- buf:
 	default:
-		t.logger.Debugf("tun_disabled: dropped ICMP Echo Reply response")
+		t.l.Debugf("tun_disabled: dropped ICMP Echo Reply response")
 	}
 
 	return true
@@ -114,11 +113,11 @@ func (t *disabledTun) Write(b []byte) (int, error) {
 
 	// Check for ICMP Echo Request before spending time doing the full parsing
 	if t.handleICMPEchoRequest(b) {
-		if l.Level >= logrus.DebugLevel {
-			t.logger.WithField("raw", prettyPacket(b)).Debugf("Disabled tun responded to ICMP Echo Request")
+		if t.l.Level >= logrus.DebugLevel {
+			t.l.WithField("raw", prettyPacket(b)).Debugf("Disabled tun responded to ICMP Echo Request")
 		}
-	} else if l.Level >= logrus.DebugLevel {
-		t.logger.WithField("raw", prettyPacket(b)).Debugf("Disabled tun received unexpected payload")
+	} else if t.l.Level >= logrus.DebugLevel {
+		t.l.WithField("raw", prettyPacket(b)).Debugf("Disabled tun received unexpected payload")
 	}
 	return len(b), nil
 }
