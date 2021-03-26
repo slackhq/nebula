@@ -1,4 +1,5 @@
 // +build !linux android
+// +build !e2e_testing
 
 // udp_generic implements the nebula UDP interface in pure Go stdlib. This
 // means it can be used on platforms like Darwin and Windows.
@@ -9,20 +10,23 @@ import (
 	"context"
 	"fmt"
 	"net"
+
+	"github.com/sirupsen/logrus"
 )
 
 type udpConn struct {
 	*net.UDPConn
+	l *logrus.Logger
 }
 
-func NewListener(ip string, port int, multi bool) (*udpConn, error) {
+func NewListener(l *logrus.Logger, ip string, port int, multi bool) (*udpConn, error) {
 	lc := NewListenConfig(multi)
 	pc, err := lc.ListenPacket(context.TODO(), "udp", fmt.Sprintf("%s:%d", ip, port))
 	if err != nil {
 		return nil, err
 	}
 	if uc, ok := pc.(*net.UDPConn); ok {
-		return &udpConn{UDPConn: uc}, nil
+		return &udpConn{UDPConn: uc, l: l}, nil
 	}
 	return nil, fmt.Errorf("Unexpected PacketConn: %T %#v", pc, pc)
 }
@@ -76,13 +80,13 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 		// Just read one packet at a time
 		n, rua, err := u.ReadFromUDP(buffer)
 		if err != nil {
-			l.WithError(err).Error("Failed to read packets")
+			f.l.WithError(err).Error("Failed to read packets")
 			continue
 		}
 
 		udpAddr.IP = rua.IP
 		udpAddr.Port = uint16(rua.Port)
-		f.readOutsidePackets(udpAddr, plaintext[:0], buffer[:n], header, fwPacket, lhh, nb, q, conntrackCache.Get())
+		f.readOutsidePackets(udpAddr, plaintext[:0], buffer[:n], header, fwPacket, lhh, nb, q, conntrackCache.Get(f.l))
 	}
 }
 

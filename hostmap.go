@@ -33,6 +33,7 @@ type HostMap struct {
 	defaultRoute    uint32
 	unsafeRoutes    *CIDRTree
 	metricsEnabled  bool
+	l               *logrus.Logger
 }
 
 type HostInfo struct {
@@ -83,7 +84,7 @@ type Probe struct {
 	Counter int
 }
 
-func NewHostMap(name string, vpnCIDR *net.IPNet, preferredRanges []*net.IPNet) *HostMap {
+func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRanges []*net.IPNet) *HostMap {
 	h := map[uint32]*HostInfo{}
 	i := map[uint32]*HostInfo{}
 	r := map[uint32]*HostInfo{}
@@ -96,6 +97,7 @@ func NewHostMap(name string, vpnCIDR *net.IPNet, preferredRanges []*net.IPNet) *
 		vpnCIDR:         vpnCIDR,
 		defaultRoute:    0,
 		unsafeRoutes:    NewCIDRTree(),
+		l:               l,
 	}
 	return &m
 }
@@ -160,8 +162,8 @@ func (hm *HostMap) DeleteVpnIP(vpnIP uint32) {
 	}
 	hm.Unlock()
 
-	if l.Level >= logrus.DebugLevel {
-		l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(vpnIP), "mapTotalSize": len(hm.Hosts)}).
+	if hm.l.Level >= logrus.DebugLevel {
+		hm.l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(vpnIP), "mapTotalSize": len(hm.Hosts)}).
 			Debug("Hostmap vpnIp deleted")
 	}
 }
@@ -173,8 +175,8 @@ func (hm *HostMap) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
 	hm.RemoteIndexes[index] = h
 	hm.Unlock()
 
-	if l.Level > logrus.DebugLevel {
-		l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes),
+	if hm.l.Level > logrus.DebugLevel {
+		hm.l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes),
 			"hostinfo": m{"existing": true, "localIndexId": h.localIndexId, "hostId": IntIp(h.hostId)}}).
 			Debug("Hostmap remoteIndex added")
 	}
@@ -188,8 +190,8 @@ func (hm *HostMap) AddVpnIPHostInfo(vpnIP uint32, h *HostInfo) {
 	hm.RemoteIndexes[h.remoteIndexId] = h
 	hm.Unlock()
 
-	if l.Level > logrus.DebugLevel {
-		l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(vpnIP), "mapTotalSize": len(hm.Hosts),
+	if hm.l.Level > logrus.DebugLevel {
+		hm.l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(vpnIP), "mapTotalSize": len(hm.Hosts),
 			"hostinfo": m{"existing": true, "localIndexId": h.localIndexId, "hostId": IntIp(h.hostId)}}).
 			Debug("Hostmap vpnIp added")
 	}
@@ -212,8 +214,8 @@ func (hm *HostMap) DeleteIndex(index uint32) {
 	}
 	hm.Unlock()
 
-	if l.Level >= logrus.DebugLevel {
-		l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes)}).
+	if hm.l.Level >= logrus.DebugLevel {
+		hm.l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes)}).
 			Debug("Hostmap index deleted")
 	}
 }
@@ -236,8 +238,8 @@ func (hm *HostMap) DeleteReverseIndex(index uint32) {
 	}
 	hm.Unlock()
 
-	if l.Level >= logrus.DebugLevel {
-		l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes)}).
+	if hm.l.Level >= logrus.DebugLevel {
+		hm.l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes)}).
 			Debug("Hostmap remote index deleted")
 	}
 }
@@ -269,8 +271,8 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 	}
 	hm.Unlock()
 
-	if l.Level >= logrus.DebugLevel {
-		l.WithField("hostMap", m{"mapName": hm.name, "mapTotalSize": len(hm.Hosts),
+	if hm.l.Level >= logrus.DebugLevel {
+		hm.l.WithField("hostMap", m{"mapName": hm.name, "mapTotalSize": len(hm.Hosts),
 			"vpnIp": IntIp(hostinfo.hostId), "indexNumber": hostinfo.localIndexId, "remoteIndexNumber": hostinfo.remoteIndexId}).
 			Debug("Hostmap hostInfo deleted")
 	}
@@ -313,8 +315,10 @@ func (hm *HostMap) AddRemote(vpnIp uint32, remote *udpAddr) *HostInfo {
 		}
 		i.remote = i.Remotes[0].addr
 		hm.Hosts[vpnIp] = i
-		l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(vpnIp), "udpAddr": remote, "mapTotalSize": len(hm.Hosts)}).
-			Debug("Hostmap remote ip added")
+		if hm.l.Level >= logrus.DebugLevel {
+			hm.l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(vpnIp), "udpAddr": remote, "mapTotalSize": len(hm.Hosts)}).
+				Debug("Hostmap remote ip added")
+		}
 	}
 	i.ForcePromoteBest(hm.preferredRanges)
 	hm.Unlock()
@@ -377,8 +381,8 @@ func (hm *HostMap) addHostInfo(hostinfo *HostInfo, f *Interface) {
 	hm.Indexes[hostinfo.localIndexId] = hostinfo
 	hm.RemoteIndexes[hostinfo.remoteIndexId] = hostinfo
 
-	if l.Level >= logrus.DebugLevel {
-		l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(hostinfo.hostId), "mapTotalSize": len(hm.Hosts),
+	if hm.l.Level >= logrus.DebugLevel {
+		hm.l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(hostinfo.hostId), "mapTotalSize": len(hm.Hosts),
 			"hostinfo": m{"existing": true, "localIndexId": hostinfo.localIndexId, "hostId": IntIp(hostinfo.hostId)}}).
 			Debug("Hostmap vpnIp added")
 	}
@@ -436,7 +440,7 @@ func (hm *HostMap) Punchy(conn *udpConn) {
 
 func (hm *HostMap) addUnsafeRoutes(routes *[]route) {
 	for _, r := range *routes {
-		l.WithField("route", r.route).WithField("via", r.via).Warn("Adding UNSAFE Route")
+		hm.l.WithField("route", r.route).WithField("via", r.via).Warn("Adding UNSAFE Route")
 		hm.unsafeRoutes.AddCIDR(r.route, ip2int(*r.via))
 	}
 }
@@ -566,7 +570,7 @@ func (i *HostInfo) rotateRemote() {
 	i.remote = i.Remotes[0].addr
 }
 
-func (i *HostInfo) cachePacket(t NebulaMessageType, st NebulaMessageSubType, packet []byte, f packetCallback) {
+func (i *HostInfo) cachePacket(l *logrus.Logger, t NebulaMessageType, st NebulaMessageSubType, packet []byte, f packetCallback) {
 	//TODO: return the error so we can log with more context
 	if len(i.packetStore) < 100 {
 		tempPacket := make([]byte, len(packet))
@@ -574,14 +578,14 @@ func (i *HostInfo) cachePacket(t NebulaMessageType, st NebulaMessageSubType, pac
 		//l.WithField("trace", string(debug.Stack())).Error("Caching packet", tempPacket)
 		i.packetStore = append(i.packetStore, &cachedPacket{t, st, f, tempPacket})
 		if l.Level >= logrus.DebugLevel {
-			i.logger().
+			i.logger(l).
 				WithField("length", len(i.packetStore)).
 				WithField("stored", true).
 				Debugf("Packet store")
 		}
 
 	} else if l.Level >= logrus.DebugLevel {
-		i.logger().
+		i.logger(l).
 			WithField("length", len(i.packetStore)).
 			WithField("stored", false).
 			Debugf("Packet store")
@@ -589,7 +593,7 @@ func (i *HostInfo) cachePacket(t NebulaMessageType, st NebulaMessageSubType, pac
 }
 
 // handshakeComplete will set the connection as ready to communicate, as well as flush any stored packets
-func (i *HostInfo) handshakeComplete() {
+func (i *HostInfo) handshakeComplete(l *logrus.Logger) {
 	//TODO: I'm not certain the distinction between handshake complete and ConnectionState being ready matters because:
 	//TODO: HandshakeComplete means send stored packets and ConnectionState.ready means we are ready to send
 	//TODO: if the transition from HandhsakeComplete to ConnectionState.ready happens all within this function they are identical
@@ -601,7 +605,7 @@ func (i *HostInfo) handshakeComplete() {
 	atomic.StoreUint64(&i.ConnectionState.atomicMessageCounter, 2)
 
 	if l.Level >= logrus.DebugLevel {
-		i.logger().Debugf("Sending %d stored packets", len(i.packetStore))
+		i.logger(l).Debugf("Sending %d stored packets", len(i.packetStore))
 	}
 
 	if len(i.packetStore) > 0 {
@@ -689,7 +693,7 @@ func (i *HostInfo) CreateRemoteCIDR(c *cert.NebulaCertificate) {
 	i.remoteCidr = remoteCidr
 }
 
-func (i *HostInfo) logger() *logrus.Entry {
+func (i *HostInfo) logger(l *logrus.Logger) *logrus.Entry {
 	if i == nil {
 		return logrus.NewEntry(l)
 	}
@@ -804,7 +808,7 @@ func (d *HostInfoDest) ProbeReceived(probeCount int) {
 
 // Utility functions
 
-func localIps(allowList *AllowList) *[]net.IP {
+func localIps(l *logrus.Logger, allowList *AllowList) *[]net.IP {
 	//FIXME: This function is pretty garbage
 	var ips []net.IP
 	ifaces, _ := net.Interfaces()

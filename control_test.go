@@ -13,9 +13,10 @@ import (
 )
 
 func TestControl_GetHostInfoByVpnIP(t *testing.T) {
+	l := NewTestLogger()
 	// Special care must be taken to re-use all objects provided to the hostmap and certificate in the expectedInfo object
 	// To properly ensure we are not exposing core memory to the caller
-	hm := NewHostMap("test", &net.IPNet{}, make([]*net.IPNet, 0))
+	hm := NewHostMap(l, "test", &net.IPNet{}, make([]*net.IPNet, 0))
 	remote1 := NewUDPAddr(int2ip(100), 4444)
 	remote2 := NewUDPAddr(net.ParseIP("1:2:3:4:5:6:7:8"), 4444)
 	ipNet := net.IPNet{

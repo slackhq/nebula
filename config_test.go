@@ -11,14 +11,15 @@ import (
 )
 
 func TestConfig_Load(t *testing.T) {
+	l := NewTestLogger()
 	dir, err := ioutil.TempDir("", "config-test")
 	// invalid yaml
-	c := NewConfig()
+	c := NewConfig(l)
 	ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte(" invalid yaml"), 0644)
 	assert.EqualError(t, c.Load(dir), "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[interface {}]interface {}")
 
 	// simple multi config merge
-	c = NewConfig()
+	c = NewConfig(l)
 	os.RemoveAll(dir)
 	os.Mkdir(dir, 0755)
 
@@ -40,8 +41,9 @@ func TestConfig_Load(t *testing.T) {
 }
 
 func TestConfig_Get(t *testing.T) {
+	l := NewTestLogger()
 	// test simple type
-	c := NewConfig()
+	c := NewConfig(l)
 	c.Settings["firewall"] = map[interface{}]interface{}{"outbound": "hi"}
 	assert.Equal(t, "hi", c.Get("firewall.outbound"))
 
@@ -55,13 +57,15 @@ func TestConfig_Get(t *testing.T) {
 }
 
 func TestConfig_GetStringSlice(t *testing.T) {
-	c := NewConfig()
+	l := NewTestLogger()
+	c := NewConfig(l)
 	c.Settings["slice"] = []interface{}{"one", "two"}
 	assert.Equal(t, []string{"one", "two"}, c.GetStringSlice("slice", []string{}))
 }
 
 func TestConfig_GetBool(t *testing.T) {
-	c := NewConfig()
+	l := NewTestLogger()
+	c := NewConfig(l)
 	c.Settings["bool"] = true
 	assert.Equal(t, true, c.GetBool("bool", false))
 
@@ -88,7 +92,8 @@ func TestConfig_GetBool(t *testing.T) {
 }
 
 func TestConfig_GetAllowList(t *testing.T) {
-	c := NewConfig()
+	l := NewTestLogger()
+	c := NewConfig(l)
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"192.168.0.0": true,
 	}
@@ -181,20 +186,21 @@ func TestConfig_GetAllowList(t *testing.T) {
 }
 
 func TestConfig_HasChanged(t *testing.T) {
+	l := NewTestLogger()
 	// No reload has occurred, return false
-	c := NewConfig()
+	c := NewConfig(l)
 	c.Settings["test"] = "hi"
 	assert.False(t, c.HasChanged(""))
 
 	// Test key change
-	c = NewConfig()
+	c = NewConfig(l)
 	c.Settings["test"] = "hi"
 	c.oldSettings = map[interface{}]interface{}{"test": "no"}
 	assert.True(t, c.HasChanged("test"))
 	assert.True(t, c.HasChanged(""))
 
 	// No key change
-	c = NewConfig()
+	c = NewConfig(l)
 	c.Settings["test"] = "hi"
 	c.oldSettings = map[interface{}]interface{}{"test": "hi"}
 	assert.False(t, c.HasChanged("test"))
@@ -202,12 +208,13 @@ func TestConfig_HasChanged(t *testing.T) {
 }
 
 func TestConfig_ReloadConfig(t *testing.T) {
+	l := NewTestLogger()
 	done := make(chan bool, 1)
 	dir, err := ioutil.TempDir("", "config-test")
 	assert.Nil(t, err)
 	ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
 
-	c := NewConfig()
+	c := NewConfig(l)
 	assert.Nil(t, c.Load(dir))
 
 	assert.False(t, c.HasChanged("outer.inner"))

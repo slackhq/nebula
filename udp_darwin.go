@@ -1,3 +1,5 @@
+// +build !e2e_testing
+
 package nebula
 
 // Darwin support is primarily implemented in udp_generic, besides NewListenConfig
