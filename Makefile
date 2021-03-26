@@ -33,7 +33,19 @@ ALL = $(ALL_LINUX) \
 	windows-amd64
 
 e2e:
-	go test -v -tags=e2e_testing ./e2e
+	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
+
+e2ev: TEST_FLAGS = -v
+e2ev: e2e
+
+e2evv: TEST_ENV += TEST_LOGS=1
+e2evv: e2ev
+
+e2evvv: TEST_ENV += TEST_LOGS=2
+e2evvv: e2ev
+
+e2evvvv: TEST_ENV += TEST_LOGS=3
+e2evvvv: e2ev
 
 all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
 
@@ -138,5 +150,5 @@ smoke-docker-race: BUILD_ARGS = -race
 smoke-docker-race: smoke-docker
 
 .FORCE:
-.PHONY: e2e test test-cov-html bench bench-cpu bench-cpu-long bin proto release service smoke-docker smoke-docker-race
+.PHONY: e2e e2ev e2evv e2evvv e2evvvv test test-cov-html bench bench-cpu bench-cpu-long bin proto release service smoke-docker smoke-docker-race
 .DEFAULT_GOAL := bin

@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"bytes"
 	"sync/atomic"
 	"time"
 
@@ -126,7 +125,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 
 	hostinfo := &HostInfo{
 		ConnectionState: ci,
-		Remotes:         []*HostInfoDest{},
+		Remotes:         []*udpAddr{},
 		localIndexId:    myIndex,
 		remoteIndexId:   hs.Details.InitiatorIndex,
 		hostId:          vpnIP,
@@ -274,25 +273,24 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 
 func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet []byte, h *Header) bool {
 	if hostinfo == nil {
+		// Nothing here to tear down, got a bogus stage 2 packet
 		return true
 	}
+
 	hostinfo.Lock()
 	defer hostinfo.Unlock()
 
-	if bytes.Equal(hostinfo.HandshakePacket[2], packet[HeaderLen:]) {
+	ci := hostinfo.ConnectionState
+	if ci.ready {
 		f.l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("header", h).
-			Info("Already seen this handshake packet")
+			Info("Handshake is already complete")
+
+		// We already have a complete tunnel, there is nothing that can be done by processing further stage 1 packets
 		return false
 	}
 
-	ci := hostinfo.ConnectionState
-	// Mark packet 2 as seen so it doesn't show up as missed
-	ci.window.Update(f.l, 2)
-
-	hostinfo.HandshakePacket[2] = make([]byte, len(packet[HeaderLen:]))
-	copy(hostinfo.HandshakePacket[2], packet[HeaderLen:])
-
+	//TODO: we need this to merge in https://github.com/flynn/noise/pull/39
 	msg, eKey, dKey, err := ci.H.ReadMessage(nil, packet[HeaderLen:])
 	if err != nil {
 		f.l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
@@ -307,6 +305,9 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		f.l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 			Error("Noise did not arrive at a key")
+
+		// This should be impossible in IX but just in case, if we get here then there is no chance to recover
+		// the handshake state machine. Tear it down
 		return true
 	}
 
@@ -315,6 +316,8 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	if err != nil || hs.Details == nil {
 		f.l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).Error("Failed unmarshal handshake message")
+
+		// The handshake state machine is complete, if things break now there is no chance to recover. Tear down and start again
 		return true
 	}
 
@@ -323,11 +326,57 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		f.l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 			WithField("cert", remoteCert).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 			Error("Invalid certificate from host")
+
+		// The handshake state machine is complete, if things break now there is no chance to recover. Tear down and start again
 		return true
 	}
+
 	vpnIP := ip2int(remoteCert.Details.Ips[0].IP)
 	certName := remoteCert.Details.Name
 	fingerprint, _ := remoteCert.Sha256Sum()
+
+	if vpnIP != hostinfo.hostId {
+		f.l.WithField("intendedVpnIp", IntIp(hostinfo.hostId)).WithField("haveVpnIp", IntIp(vpnIP)).
+			WithField("udpAddr", addr).WithField("certName", certName).
+			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+			Info("Incorrect host responded to handshake")
+
+		if ho, _ := f.handshakeManager.pendingHostMap.QueryVpnIP(vpnIP); ho != nil {
+			// We might have a pending tunnel to this host already, clear out that attempt since we have a tunnel now
+			f.handshakeManager.pendingHostMap.DeleteHostInfo(ho)
+		}
+
+		// Create a new hostinfo/handshake for the intended vpn ip, but first release the lock
+		f.handshakeManager.pendingHostMap.DeleteHostInfo(hostinfo)
+		//TODO: this adds it to the timer wheel in a way that aggressively retries
+		newHostInfo := f.getOrHandshake(hostinfo.hostId)
+		newHostInfo.Lock()
+
+		// Block the current used address
+		newHostInfo.unlockedBlockRemote(addr)
+
+		// If this is an ongoing issue our previous hostmap will have some bad ips too
+		for _, v := range hostinfo.badRemotes {
+			newHostInfo.unlockedBlockRemote(v)
+		}
+		//TODO: this is me enabling tests
+		newHostInfo.ForcePromoteBest(f.hostMap.preferredRanges)
+
+		f.l.WithField("blockedUdpAddrs", newHostInfo.badRemotes).WithField("vpnIp", IntIp(vpnIP)).
+			WithField("remotes", newHostInfo.Remotes).
+			Info("Blocked addresses for handshakes")
+
+		// Swap the packet store to benefit the original intended recipient
+		newHostInfo.packetStore = hostinfo.packetStore
+		hostinfo.packetStore = []*cachedPacket{}
+
+		// Set the current hostId to the new vpnIp
+		hostinfo.hostId = vpnIP
+		newHostInfo.Unlock()
+	}
+
+	// Mark packet 2 as seen so it doesn't show up as missed
+	ci.window.Update(f.l, 2)
 
 	duration := time.Since(hostinfo.handshakeStart).Nanoseconds()
 	f.l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
@@ -338,29 +387,22 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		WithField("durationNs", duration).
 		Info("Handshake message received")
 
-	//ci.remoteIndex = hs.ResponderIndex
 	hostinfo.remoteIndexId = hs.Details.ResponderIndex
 	hs.Details.Cert = ci.certState.rawCertificateNoKey
 
-	/*
-		hsBytes, err := proto.Marshal(hs)
-		if err != nil {
-			l.Debugln("Failed to marshal handshake: ", err)
-			return
-		}
-	*/
-
-	// Regardless of whether you are the sender or receiver, you should arrive here
-	// and complete standing up the connection.
-
+	// Store their cert and our symmetric keys
 	ci.peerCert = remoteCert
 	ci.dKey = NewNebulaCipherState(dKey)
 	ci.eKey = NewNebulaCipherState(eKey)
-	//l.Debugln("got symmetric pairs")
 
+	// Make sure the current udpAddr being used is set for responding
 	hostinfo.SetRemote(addr)
+
+	// Build up the radix for the firewall if we have subnets in the cert
 	hostinfo.CreateRemoteCIDR(remoteCert)
 
+	// Complete our handshake and update metrics, this will replace any existing tunnels for this vpnIp
+	//TODO: Complete here does not do a race avoidance, it will just take the new tunnel. Is this ok?
 	f.handshakeManager.Complete(hostinfo, f)
 	hostinfo.handshakeComplete(f.l)
 	f.metricHandshakes.Update(duration)

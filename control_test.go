@@ -45,7 +45,7 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 		Signature: []byte{1, 2, 1, 2, 1, 3},
 	}
 
-	remotes := []*HostInfoDest{NewHostInfoDest(remote1), NewHostInfoDest(remote2)}
+	remotes := []*udpAddr{remote1, remote2}
 	hm.Add(ip2int(ipNet.IP), &HostInfo{
 		remote:  remote1,
 		Remotes: remotes,

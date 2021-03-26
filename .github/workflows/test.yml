@@ -40,6 +40,9 @@ jobs:
     - name: Test
       run: make test
 
+    - name: End 2 end
+      run: make e2e
+
   test:
     name: Build and test on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -72,3 +75,6 @@ jobs:
 
     - name: Test
       run: go test -v ./...
+
+    - name: End 2 end
+      run: go test -tags=e2e_testing -count=1 ./e2e
