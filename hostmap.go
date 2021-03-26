@@ -472,7 +472,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		return
 	}
 
-	if atomic.AddUint32(&i.promoteCounter, 1)&PromoteEvery == 0 {
+	if atomic.AddUint32(&i.promoteCounter, 1)%PromoteEvery == 0 {
 		// return early if we are already on a preferred remote
 		rIP := i.remote.IP
 		for _, l := range preferredRanges {
