@@ -17,7 +17,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-
 func startStats(l *logrus.Logger, c *Config, buildVersion string, configTest bool) error {
 	mType := c.GetString("stats.type", "")
 	if mType == "" || mType == "none" {
