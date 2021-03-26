@@ -11,8 +11,6 @@ import (
 	"github.com/slackhq/nebula/cert"
 )
 
-var trustedCAs *cert.NebulaCAPool
-
 type CertState struct {
 	certificate         *cert.NebulaCertificate
 	rawCertificate      []byte
