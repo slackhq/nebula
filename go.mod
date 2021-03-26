@@ -10,6 +10,7 @@ require (
 	github.com/flynn/go-shlex v0.0.0-20150515145356-3f9db97f8568 // indirect
 	github.com/flynn/noise v0.0.0-20180327030543-2492fe189ae6
 	github.com/golang/protobuf v1.5.0
+	github.com/google/gopacket v1.1.19 // indirect
 	github.com/imdario/mergo v0.3.8
 	github.com/kardianos/service v1.1.0
 	github.com/konsorten/go-windows-terminal-sequences v1.0.2 // indirect
