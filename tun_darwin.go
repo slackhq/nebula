@@ -1,4 +1,5 @@
 // +build !ios
+// +build !e2e_testing
 
 package nebula
 

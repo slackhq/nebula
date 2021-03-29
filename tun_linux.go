@@ -1,4 +1,5 @@
 // +build !android
+// +build !e2e_testing
 
 package nebula
 

@@ -32,7 +32,8 @@ ALL = $(ALL_LINUX) \
 	freebsd-amd64 \
 	windows-amd64
 
-
+e2e:
+	go test -v -tags=e2e_testing ./e2e
 
 all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
 
@@ -137,5 +138,5 @@ smoke-docker-race: BUILD_ARGS = -race
 smoke-docker-race: smoke-docker
 
 .FORCE:
-.PHONY: test test-cov-html bench bench-cpu bench-cpu-long bin proto release service smoke-docker smoke-docker-race
+.PHONY: e2e test test-cov-html bench bench-cpu bench-cpu-long bin proto release service smoke-docker smoke-docker-race
 .DEFAULT_GOAL := bin
