@@ -21,7 +21,7 @@ type Tun struct {
 	txPackets chan []byte // Packets transmitted outside by nebula
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, _ []route, unsafeRoutes []route, _ int, _ bool) (ifce *Tun, err error) {
 	return &Tun{
 		Device:       deviceName,
 		Cidr:         cidr,
@@ -33,8 +33,8 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 	}, nil
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
-	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
+func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []route, _ []route, _ int) (ifce *Tun, err error) {
+	return nil, fmt.Errorf("newTunFromFd not supported")
 }
 
 // Send will place a byte array onto the receive queue for nebula to consume
@@ -99,5 +99,5 @@ func (c *Tun) Read(b []byte) (int, error) {
 }
 
 func (c *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
+	return nil, fmt.Errorf("TODO: multiqueue not implemented")
 }

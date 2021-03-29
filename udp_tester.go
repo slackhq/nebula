@@ -25,7 +25,7 @@ type udpConn struct {
 	l *logrus.Logger
 }
 
-func NewListener(l *logrus.Logger, ip string, port int, multi bool) (*udpConn, error) {
+func NewListener(l *logrus.Logger, ip string, port int, _ bool) (*udpConn, error) {
 	return &udpConn{
 		addr:      &udpAddr{net.ParseIP(ip), uint16(port)},
 		rxPackets: make(chan *UdpPacket, 1),
@@ -98,7 +98,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 
 func (u *udpConn) reloadConfig(*Config) {}
 
-func NewUDPStatsEmitter([]*udpConn) func() {
+func NewUDPStatsEmitter(_ []*udpConn) func() {
 	// No UDP stats for non-linux
 	return func() {}
 }
