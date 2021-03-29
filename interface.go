@@ -10,6 +10,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cert"
 )
 
 const mtu = 9001
@@ -41,6 +42,7 @@ type InterfaceConfig struct {
 	routines                int
 	MessageMetrics          *MessageMetrics
 	version                 string
+	caPool                  *cert.NebulaCAPool
 
 	ConntrackCacheTimeout time.Duration
 	l                     *logrus.Logger
@@ -63,6 +65,7 @@ type Interface struct {
 	dropMulticast      bool
 	udpBatchSize       int
 	routines           int
+	caPool             *cert.NebulaCAPool
 
 	// rebindCount is used to decide if an active tunnel should trigger a punch notification through a lighthouse
 	rebindCount int8
@@ -111,6 +114,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		version:            c.version,
 		writers:            make([]*udpConn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
+		caPool:             c.caPool,
 
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
 
@@ -218,8 +222,8 @@ func (f *Interface) reloadCA(c *Config) {
 		return
 	}
 
-	trustedCAs = newCAs
-	f.l.WithField("fingerprints", trustedCAs.GetFingerprints()).Info("Trusted CA certificates refreshed")
+	f.caPool = newCAs
+	f.l.WithField("fingerprints", f.caPool.GetFingerprints()).Info("Trusted CA certificates refreshed")
 }
 
 func (f *Interface) reloadCertKey(c *Config) {

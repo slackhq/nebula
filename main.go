@@ -42,13 +42,12 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		}
 	})
 
-	// trustedCAs is currently a global, so loadCA operates on that global directly
-	trustedCAs, err = loadCAFromConfig(l, config)
+	caPool, err := loadCAFromConfig(l, config)
 	if err != nil {
 		//The errors coming out of loadCA are already nicely formatted
 		return nil, NewContextualError("Failed to load ca from config", nil, err)
 	}
-	l.WithField("fingerprints", trustedCAs.GetFingerprints()).Debug("Trusted CA fingerprints")
+	l.WithField("fingerprints", caPool.GetFingerprints()).Debug("Trusted CA fingerprints")
 
 	cs, err := NewCertStateFromConfig(config)
 	if err != nil {
@@ -365,6 +364,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		routines:                routines,
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
+		caPool:                  caPool,
 
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,
