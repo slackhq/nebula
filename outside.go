@@ -66,7 +66,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 			return
 		}
 
-		lhh.HandleRequest(addr, hostinfo.hostId, d, hostinfo.GetCert(), f)
+		lhh.HandleRequest(addr, hostinfo.hostId, d, f)
 
 		// Fallthrough to the bottom to record incoming traffic
 
