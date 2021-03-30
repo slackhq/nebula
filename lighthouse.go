@@ -1,7 +1,7 @@
 package nebula
 
 import (
-	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -328,7 +328,7 @@ func prependAndLimitV6(cache []*Ip6AndPort, to *Ip6AndPort) []*Ip6AndPort {
 
 // unlockedShouldAddV6 checks if to is allowed by our allow list and is not already present in the cache
 func (lh *LightHouse) unlockedShouldAddV6(am []*Ip6AndPort, to *Ip6AndPort) bool {
-	ip := net.IP(to.Ip)
+	ip := lhIp6ToIp(to)
 	allow := lh.remoteAllowList.Allow(ip)
 	if lh.l.Level >= logrus.DebugLevel {
 		lh.l.WithField("remoteIp", ip).WithField("allow", allow).Debug("remoteAllowList.Allow")
@@ -339,12 +339,19 @@ func (lh *LightHouse) unlockedShouldAddV6(am []*Ip6AndPort, to *Ip6AndPort) bool
 	}
 
 	for _, v := range am {
-		if bytes.Equal(v.Ip, to.Ip) && v.Port == to.Port {
+		if v.Hi == to.Hi && v.Lo == to.Lo && v.Port == to.Port {
 			return false
 		}
 	}
 
 	return true
+}
+
+func lhIp6ToIp(v *Ip6AndPort) net.IP {
+	ip := make(net.IP, 16)
+	binary.BigEndian.PutUint64(ip[:8], v.Hi)
+	binary.BigEndian.PutUint64(ip[8:], v.Lo)
+	return ip
 }
 
 func (lh *LightHouse) AddRemoteAndReset(vpnIP uint32, toIp *udpAddr) {
@@ -377,10 +384,11 @@ func NewIp4AndPort(ip net.IP, port uint32) *Ip4AndPort {
 }
 
 func NewIp6AndPort(ip net.IP, port uint32) *Ip6AndPort {
-	ipp := Ip6AndPort{Port: port}
-	ipp.Ip = make([]byte, len(ip))
-	copy(ipp.Ip, ip)
-	return &ipp
+	return &Ip6AndPort{
+		Hi: binary.BigEndian.Uint64(ip[:8]),
+		Lo: binary.BigEndian.Uint64(ip[8:]),
+		Port: port,
+	}
 }
 
 func NewUDPAddrFromLH4(ipp *Ip4AndPort) *udpAddr {
@@ -392,7 +400,7 @@ func NewUDPAddrFromLH4(ipp *Ip4AndPort) *udpAddr {
 }
 
 func NewUDPAddrFromLH6(ipp *Ip6AndPort) *udpAddr {
-	return NewUDPAddr(ipp.Ip, uint16(ipp.Port))
+	return NewUDPAddr(lhIp6ToIp(ipp), uint16(ipp.Port))
 }
 
 func (lh *LightHouse) LhUpdateWorker(f EncWriter) {

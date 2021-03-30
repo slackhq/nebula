@@ -33,8 +33,9 @@ message Ip4AndPort {
 }
 
 message Ip6AndPort {
-  bytes Ip = 1;
-  uint32 Port = 2;
+  uint64 Hi = 1;
+  uint64 Lo = 2;
+  uint32 Port = 3;
 }
 
 message NebulaPing {
