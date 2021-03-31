@@ -31,7 +31,7 @@ type m map[string]interface{}
 func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, udpIp net.IP) (*nebula.Control, net.IP, *net.UDPAddr) {
 	l := NewTestLogger()
 
-	vpnIpNet := &net.IPNet{IP: make([]byte, len(udpIp)), Mask: net.IPMask{0, 0, 0, 0}}
+	vpnIpNet := &net.IPNet{IP: make([]byte, len(udpIp)), Mask: net.IPMask{255, 255, 255, 0}}
 	copy(vpnIpNet.IP, udpIp)
 	vpnIpNet.IP[1] += 128
 	udpAddr := net.UDPAddr{

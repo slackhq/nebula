@@ -13,9 +13,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-//TODO: if the pb code for ipv6 used a fixed data type we could save more work
 //TODO: nodes are roaming lighthouses, this is bad. How are they learning?
-//TODO: as a lh client, ignore any address within my nebula network?????
 
 var ErrHostNotKnown = errors.New("host not known")
 
@@ -25,11 +23,12 @@ const maxAddrs = 10
 type ip4And6 struct {
 	//TODO: adding a lock here could allow us to release the lock on lh.addrMap quicker
 
-	// v4 and v6 store addresses that have been self reported by the client
+	// v4 and v6 store addresses that have been self reported by the client in a server or where all addresses are stored on a client
 	v4 []*Ip4AndPort
 	v6 []*Ip6AndPort
 
 	// Learned addresses are ones that a client does not know about but a lighthouse learned from as a result of the received packet
+	// This is only used if you are a lighthouse server
 	learnedV4 []*Ip4AndPort
 	learnedV6 []*Ip6AndPort
 }
@@ -81,7 +80,7 @@ func NewLightHouse(l *logrus.Logger, amLighthouse bool, myVpnIpNet *net.IPNet, i
 	h := LightHouse{
 		amLighthouse: amLighthouse,
 		myVpnIp:      ip2int(myVpnIpNet.IP),
-		myVpnOnes:    uint32(ones),
+		myVpnOnes:    uint32(32 - ones),
 		addrMap:      make(map[uint32]*ip4And6),
 		nebulaPort:   nebulaPort,
 		lighthouses:  make(map[uint32]struct{}),
@@ -219,16 +218,11 @@ func (lh *LightHouse) AddRemote(vpnIP uint32, toAddr *udpAddr, static bool) {
 	}
 }
 
-// unsafeGetAddrs assumes you have the lh lock
-func (lh *LightHouse) unsafeGetAddrs(vpnIP uint32) *ip4And6 {
+// unlockedGetAddrs assumes you have the lh lock
+func (lh *LightHouse) unlockedGetAddrs(vpnIP uint32) *ip4And6 {
 	am, ok := lh.addrMap[vpnIP]
 	if !ok {
-		am = &ip4And6{
-			v4:        make([]*Ip4AndPort, 0),
-			v6:        make([]*Ip6AndPort, 0),
-			learnedV4: make([]*Ip4AndPort, 0),
-			learnedV6: make([]*Ip6AndPort, 0),
-		}
+		am = &ip4And6{}
 		lh.addrMap[vpnIP] = am
 	}
 	return am
@@ -246,7 +240,7 @@ func (lh *LightHouse) addRemoteV4(vpnIP uint32, to *Ip4AndPort, static bool, lea
 
 	lh.Lock()
 	defer lh.Unlock()
-	am := lh.unsafeGetAddrs(vpnIP)
+	am := lh.unlockedGetAddrs(vpnIP)
 
 	if learned {
 		if !lh.unlockedShouldAddV4(am.learnedV4, to) {
@@ -274,8 +268,8 @@ func prependAndLimitV4(cache []*Ip4AndPort, to *Ip4AndPort) []*Ip4AndPort {
 // unlockedShouldAddV4 checks if to is allowed by our allow list and is not already present in the cache
 func (lh *LightHouse) unlockedShouldAddV4(am []*Ip4AndPort, to *Ip4AndPort) bool {
 	allow := lh.remoteAllowList.AllowLH4(to)
-	if lh.l.Level >= logrus.DebugLevel {
-		lh.l.WithField("remoteIp", IntIp(to.Ip)).WithField("allow", allow).Debug("remoteAllowList.Allow")
+	if lh.l.Level >= logrus.TraceLevel {
+		lh.l.WithField("remoteIp", IntIp(to.Ip)).WithField("allow", allow).Trace("remoteAllowList.Allow")
 	}
 
 	if !allow || ipMaskContains(lh.myVpnIp, lh.myVpnOnes, to.Ip) {
@@ -303,7 +297,7 @@ func (lh *LightHouse) addRemoteV6(vpnIP uint32, to *Ip6AndPort, static bool, lea
 
 	lh.Lock()
 	defer lh.Unlock()
-	am := lh.unsafeGetAddrs(vpnIP)
+	am := lh.unlockedGetAddrs(vpnIP)
 
 	if learned {
 		if !lh.unlockedShouldAddV6(am.learnedV6, to) {
@@ -331,8 +325,8 @@ func prependAndLimitV6(cache []*Ip6AndPort, to *Ip6AndPort) []*Ip6AndPort {
 // unlockedShouldAddV6 checks if to is allowed by our allow list and is not already present in the cache
 func (lh *LightHouse) unlockedShouldAddV6(am []*Ip6AndPort, to *Ip6AndPort) bool {
 	allow := lh.remoteAllowList.AllowLH6(to)
-	if lh.l.Level >= logrus.DebugLevel {
-		lh.l.WithField("remoteIp", lhIp6ToIp(to)).WithField("allow", allow).Debug("remoteAllowList.Allow")
+	if lh.l.Level >= logrus.TraceLevel {
+		lh.l.WithField("remoteIp", lhIp6ToIp(to)).WithField("allow", allow).Trace("remoteAllowList.Allow")
 	}
 
 	if !allow {
@@ -443,14 +437,15 @@ func (lh *LightHouse) SendUpdate(f EncWriter) {
 	lh.metricTx(NebulaMeta_HostUpdateNotification, int64(len(lh.lighthouses)))
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)
-	for vpnIp := range lh.lighthouses {
-		mm, err := proto.Marshal(m)
-		if err != nil && lh.l.Level >= logrus.DebugLevel {
-			lh.l.Debugf("Invalid marshal to update")
-		}
-		//l.Error("LIGHTHOUSE PACKET SEND", mm)
-		f.SendMessageToVpnIp(lightHouse, 0, vpnIp, mm, nb, out)
 
+	mm, err := proto.Marshal(m)
+	if err != nil && lh.l.Level >= logrus.DebugLevel {
+		lh.l.WithError(err).Error("Error while marshaling for lighthouse update")
+		return
+	}
+
+	for vpnIp := range lh.lighthouses {
+		f.SendMessageToVpnIp(lightHouse, 0, vpnIp, mm, nb, out)
 	}
 }
 
@@ -643,10 +638,9 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 
 	lhh.lh.Lock()
 	defer lhh.lh.Unlock()
-	am := lhh.lh.unsafeGetAddrs(vpnIp)
+	am := lhh.lh.unlockedGetAddrs(vpnIp)
 
 	//TODO: other note on a lock for am so we can release more quickly and lock our real unit of change which is far less contended
-	//TODO: we are not filtering by local or remote allowed addrs here, is this an ok change to make?
 
 	// We don't accumulate addresses being told to us
 	am.v4 = am.v4[:0]
@@ -749,6 +743,8 @@ func TransformLHReplyToUdpAddrs(ips *ip4And6) []*udpAddr {
 	return addrs
 }
 
-func ipMaskContains(ip uint32, ones uint32, testIp uint32) bool {
-	return (testIp^ip)>>ones == 0
+// ipMaskContains checks if testIp is contained by ip after applying a cidr
+// zeros is 32 - bits from net.IPMask.Size()
+func ipMaskContains(ip uint32, zeros uint32, testIp uint32) bool {
+	return (testIp^ip)>>zeros == 0
 }
