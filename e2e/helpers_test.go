@@ -7,7 +7,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/e2e/router"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ed25519"
@@ -25,9 +28,17 @@ import (
 type m map[string]interface{}
 
 // newSimpleServer creates a nebula instance with many assumptions
-func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, listenAddr *net.UDPAddr, vpnIp *net.IPNet) *nebula.Control {
-	l := logrus.New()
-	_, _, myPrivKey, myPEM := newTestCert(caCrt, caKey, name, time.Now(), time.Now().Add(5*time.Minute), vpnIp, nil, []string{})
+func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, udpIp net.IP) (*nebula.Control, net.IP, *net.UDPAddr) {
+	l := NewTestLogger()
+
+	vpnIpNet := &net.IPNet{IP: make([]byte, len(udpIp)), Mask: net.IPMask{0, 0, 0, 0}}
+	copy(vpnIpNet.IP, udpIp)
+	vpnIpNet.IP[1] += 128
+	udpAddr := net.UDPAddr{
+		IP:   udpIp,
+		Port: 4242,
+	}
+	_, _, myPrivKey, myPEM := newTestCert(caCrt, caKey, name, time.Now(), time.Now().Add(5*time.Minute), vpnIpNet, nil, []string{})
 
 	caB, err := caCrt.MarshalToPEM()
 	if err != nil {
@@ -54,12 +65,12 @@ func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, l
 			}},
 		},
 		"listen": m{
-			"host": listenAddr.IP.String(),
-			"port": listenAddr.Port,
+			"host": udpAddr.IP.String(),
+			"port": udpAddr.Port,
 		},
 		"logging": m{
 			"timestamp_format": fmt.Sprintf("%v 15:04:05.000000", name),
-			"level":            "info",
+			"level":            l.Level.String(),
 		},
 	}
 	cb, err := yaml.Marshal(mc)
@@ -76,7 +87,7 @@ func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, l
 		panic(err)
 	}
 
-	return control
+	return control, vpnIpNet.IP, &udpAddr
 }
 
 // newTestCaCert will generate a CA cert
@@ -193,6 +204,36 @@ func int2ip(nn uint32) net.IP {
 	return ip
 }
 
+type doneCb func()
+
+func deadline(t *testing.T, seconds time.Duration) doneCb {
+	timeout := time.After(seconds * time.Second)
+	done := make(chan bool)
+	go func() {
+		select {
+		case <-timeout:
+			t.Fatal("Test did not finish in time")
+		case <-done:
+		}
+	}()
+
+	return func() {
+		done <- true
+	}
+}
+
+func assertTunnel(t *testing.T, vpnIpA, vpnIpB net.IP, controlA, controlB *nebula.Control, r *router.R) {
+	// Send a packet from them to me
+	controlB.InjectTunUDPPacket(vpnIpA, 80, 90, []byte("Hi from B"))
+	bPacket := r.RouteUntilTxTun(controlB, controlA)
+	assertUdpPacket(t, []byte("Hi from B"), bPacket, vpnIpB, vpnIpA, 90, 80)
+
+	// And once more from me to them
+	controlA.InjectTunUDPPacket(vpnIpB, 80, 90, []byte("Hello from A"))
+	aPacket := r.RouteUntilTxTun(controlA, controlB)
+	assertUdpPacket(t, []byte("Hello from A"), aPacket, vpnIpA, vpnIpB, 90, 80)
+}
+
 func assertHostInfoPair(t *testing.T, addrA, addrB *net.UDPAddr, vpnIpA, vpnIpB net.IP, controlA, controlB *nebula.Control) {
 	// Get both host infos
 	hBinA := controlA.GetHostInfoByVpnIP(ip2int(vpnIpB), false)
@@ -202,14 +243,14 @@ func assertHostInfoPair(t *testing.T, addrA, addrB *net.UDPAddr, vpnIpA, vpnIpB 
 	assert.NotNil(t, hAinB, "Host A was not found by vpnIP in controlB")
 
 	// Check that both vpn and real addr are correct
-	assert.Equal(t, vpnIpB, hBinA.VpnIP, "HostA VpnIp is wrong in controlB")
-	assert.Equal(t, vpnIpA, hAinB.VpnIP, "HostB VpnIp is wrong in controlA")
+	assert.Equal(t, vpnIpB, hBinA.VpnIP, "Host B VpnIp is wrong in control A")
+	assert.Equal(t, vpnIpA, hAinB.VpnIP, "Host A VpnIp is wrong in control B")
 
-	assert.Equal(t, addrB.IP.To16(), hBinA.CurrentRemote.IP.To16(), "HostA remote ip is wrong in controlB")
-	assert.Equal(t, addrA.IP.To16(), hAinB.CurrentRemote.IP.To16(), "HostB remote ip is wrong in controlA")
+	assert.Equal(t, addrB.IP.To16(), hBinA.CurrentRemote.IP.To16(), "Host B remote ip is wrong in control A")
+	assert.Equal(t, addrA.IP.To16(), hAinB.CurrentRemote.IP.To16(), "Host A remote ip is wrong in control B")
 
-	assert.Equal(t, uint16(addrA.Port), hBinA.CurrentRemote.Port, "HostA remote ip is wrong in controlB")
-	assert.Equal(t, uint16(addrB.Port), hAinB.CurrentRemote.Port, "HostB remote ip is wrong in controlA")
+	assert.Equal(t, addrB.Port, int(hBinA.CurrentRemote.Port), "Host B remote port is wrong in control A")
+	assert.Equal(t, addrA.Port, int(hAinB.CurrentRemote.Port), "Host A remote port is wrong in control B")
 
 	// Check that our indexes match
 	assert.Equal(t, hBinA.LocalIndex, hAinB.RemoteIndex, "Host B local index does not match host A remote index")
@@ -249,4 +290,25 @@ func assertUdpPacket(t *testing.T, expected, b []byte, fromIp, toIp net.IP, from
 	data := packet.ApplicationLayer()
 	assert.NotNil(t, data)
 	assert.Equal(t, expected, data.Payload(), "Data was incorrect")
+}
+
+func NewTestLogger() *logrus.Logger {
+	l := logrus.New()
+
+	v := os.Getenv("TEST_LOGS")
+	if v == "" {
+		l.SetOutput(ioutil.Discard)
+		return l
+	}
+
+	switch v {
+	case "2":
+		l.SetLevel(logrus.DebugLevel)
+	case "3":
+		l.SetLevel(logrus.TraceLevel)
+	default:
+		l.SetLevel(logrus.InfoLevel)
+	}
+
+	return l
 }

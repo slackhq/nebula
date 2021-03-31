@@ -164,12 +164,11 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 }
 
 func copyHostInfo(h *HostInfo) ControlHostInfo {
-	addrs := h.RemoteUDPAddrs()
 	chi := ControlHostInfo{
 		VpnIP:          int2ip(h.hostId),
 		LocalIndex:     h.localIndexId,
 		RemoteIndex:    h.remoteIndexId,
-		RemoteAddrs:    make([]*udpAddr, len(addrs), len(addrs)),
+		RemoteAddrs:    h.CopyRemotes(),
 		CachedPackets:  len(h.packetStore),
 		MessageCounter: atomic.LoadUint64(&h.ConnectionState.atomicMessageCounter),
 	}
@@ -180,10 +179,6 @@ func copyHostInfo(h *HostInfo) ControlHostInfo {
 
 	if h.remote != nil {
 		chi.CurrentRemote = h.remote.Copy()
-	}
-
-	for i, addr := range addrs {
-		chi.RemoteAddrs[i] = addr.Copy()
 	}
 
 	return chi

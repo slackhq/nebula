@@ -215,9 +215,11 @@ func (f *Interface) SendMessageToAll(t NebulaMessageType, st NebulaMessageSubTyp
 }
 
 func (f *Interface) sendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, hostInfo *HostInfo, p, nb, b []byte) {
-	for _, r := range hostInfo.RemoteUDPAddrs() {
+	hostInfo.RLock()
+	for _, r := range hostInfo.Remotes {
 		f.send(t, st, hostInfo.ConnectionState, hostInfo, r, p, nb, b)
 	}
+	hostInfo.RUnlock()
 }
 
 func (f *Interface) send(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte) {

@@ -352,7 +352,7 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 				"vpnIp":         int2ip(v.hostId),
 				"localIndex":    v.localIndexId,
 				"remoteIndex":   v.remoteIndexId,
-				"remoteAddrs":   v.RemoteUDPAddrs(),
+				"remoteAddrs":   v.CopyRemotes(),
 				"cachedPackets": len(v.packetStore),
 				"cert":          v.GetCert(),
 			}
@@ -372,7 +372,7 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 		}
 	} else {
 		for i, v := range hostMap.Hosts {
-			err := w.WriteLine(fmt.Sprintf("%s: %s", int2ip(i), v.RemoteUDPAddrs()))
+			err := w.WriteLine(fmt.Sprintf("%s: %s", int2ip(i), v.CopyRemotes()))
 			if err != nil {
 				return err
 			}

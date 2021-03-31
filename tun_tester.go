@@ -28,8 +28,8 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 		MTU:          defaultMTU,
 		UnsafeRoutes: unsafeRoutes,
 		l:            l,
-		rxPackets:    make(chan []byte, 100),
-		txPackets:    make(chan []byte, 100),
+		rxPackets:    make(chan []byte, 1),
+		txPackets:    make(chan []byte, 1),
 	}, nil
 }
 
@@ -41,6 +41,9 @@ func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []route, _ []r
 // These are unencrypted ip layer frames destined for another nebula node.
 // packets should exit the udp side, capture them with udpConn.Get
 func (c *Tun) Send(packet []byte) {
+	if c.l.Level >= logrus.DebugLevel {
+		c.l.Debug("Tun injecting packet")
+	}
 	c.rxPackets <- packet
 }
 

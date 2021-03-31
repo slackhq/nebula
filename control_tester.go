@@ -57,6 +57,14 @@ func (c *Control) GetFromUDP(block bool) *UdpPacket {
 	return c.f.outside.Get(block)
 }
 
+func (c *Control) GetUDPTxChan() <-chan *UdpPacket {
+	return c.f.outside.txPackets
+}
+
+func (c *Control) GetTunTxChan() <-chan []byte {
+	return c.f.inside.(*Tun).txPackets
+}
+
 // InjectUDPPacket will inject a packet into the udp side of nebula
 func (c *Control) InjectUDPPacket(p *UdpPacket) {
 	c.f.outside.Send(p)
@@ -89,4 +97,8 @@ func (c *Control) InjectTunUDPPacket(toIp net.IP, toPort uint16, fromPort uint16
 	}
 
 	c.f.inside.(*Tun).Send(buffer.Bytes())
+}
+
+func (c *Control) GetUDPAddr() string {
+	return c.f.outside.addr.String()
 }
