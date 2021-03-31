@@ -66,11 +66,11 @@ func TestWrongResponderHandshake(t *testing.T) {
 	theirControl, theirVpnIp, theirUdpAddr := newSimpleServer(ca, caKey, "them", net.IP{10, 0, 0, 2})
 	evilControl, evilVpnIp, evilUdpAddr := newSimpleServer(ca, caKey, "evil", net.IP{10, 0, 0, 99})
 
-	// Put the evil udp addr in for their vpn Ip, this is a case of being lied to by the lighthouse
-	myControl.InjectLightHouseAddr(theirVpnIp, evilUdpAddr)
-
-	// But also add their real udp addr, which should be tried after evil
+	// Add their real udp addr, which should be tried after evil. Doing this first because learned addresses are prepended
 	myControl.InjectLightHouseAddr(theirVpnIp, theirUdpAddr)
+
+	// Put the evil udp addr in for their vpn Ip, this is a case of being lied to by the lighthouse. This will now be the first attempted ip
+	myControl.InjectLightHouseAddr(theirVpnIp, evilUdpAddr)
 
 	// Build a router so we don't have to reason who gets which packet
 	r := router.NewR(myControl, theirControl, evilControl)
