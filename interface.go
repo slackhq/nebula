@@ -61,6 +61,7 @@ type Interface struct {
 	createTime         time.Time
 	lightHouse         *LightHouse
 	localBroadcast     uint32
+	myVpnIp            uint32
 	dropLocalBroadcast bool
 	dropMulticast      bool
 	udpBatchSize       int
@@ -115,6 +116,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		writers:            make([]*udpConn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
 		caPool:             c.caPool,
+		myVpnIp:            ip2int(c.certState.certificate.Details.Ips[0].IP),
 
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
 

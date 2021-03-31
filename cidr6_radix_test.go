@@ -101,6 +101,26 @@ func TestCIDR6Tree_MostSpecificContains(t *testing.T) {
 	assert.Equal(t, "cool6", tree.Contains(net.ParseIP("1:2:3:4:5:6:7:8")))
 }
 
+func TestCIDR6Tree_MostSpecificContainsLH6(t *testing.T) {
+	tree := NewCIDR6Tree()
+	tree.AddCIDR(getCIDR("1:2:0:4:5:0:0:0/64"), "6a")
+	tree.AddCIDR(getCIDR("1:2:0:4:5:0:0:0/80"), "6b")
+	tree.AddCIDR(getCIDR("1:2:0:4:5:0:0:0/96"), "6c")
+
+	tests := []struct {
+		Result interface{}
+		IP     string
+	}{
+		{"6a", "1:2:0:4:1:1:1:1"},
+		{"6b", "1:2:0:4:5:1:1:1"},
+		{"6c", "1:2:0:4:5:0:0:0"},
+	}
+
+	for _, tt := range tests {
+		assert.Equal(t, tt.Result, tree.MostSpecificContainsLH6(NewIp6AndPort(net.ParseIP(tt.IP), 0)))
+	}
+}
+
 func TestCIDR6Tree_Match(t *testing.T) {
 	tree := NewCIDR6Tree()
 	tree.AddCIDR(getCIDR("4.1.1.0/32"), "1a")

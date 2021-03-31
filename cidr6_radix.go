@@ -5,6 +5,8 @@ import (
 	"net"
 )
 
+const startbit6 = uint64(0x8000000000000000)
+
 type CIDR6Tree struct {
 	root4 *CIDRNode
 	root6 *CIDRNode
@@ -142,6 +144,58 @@ func (tree *CIDR6Tree) MostSpecificContains(ip net.IP) (value interface{}) {
 
 			bit >>= 1
 		}
+	}
+
+	return value
+}
+
+func (tree *CIDR6Tree) MostSpecificContainsLH4(addr *Ip4AndPort) (value interface{}) {
+	bit := startbit
+	node := tree.root4
+
+	for node != nil {
+		if node.value != nil {
+			value = node.value
+		}
+
+		if addr.Ip&bit != 0 {
+			node = node.right
+		} else {
+			node = node.left
+		}
+
+		bit >>= 1
+	}
+
+	return value
+}
+
+func (tree *CIDR6Tree) MostSpecificContainsLH6(addr *Ip6AndPort) (value interface{}) {
+	ip := addr.Hi
+	node := tree.root6
+
+	for i := 0; i < 2; i++ {
+		bit := startbit6
+
+		for node != nil {
+			if node.value != nil {
+				value = node.value
+			}
+
+			if bit == 0 {
+				break
+			}
+
+			if ip&bit != 0 {
+				node = node.right
+			} else {
+				node = node.left
+			}
+
+			bit >>= 1
+		}
+
+		ip = addr.Lo
 	}
 
 	return value

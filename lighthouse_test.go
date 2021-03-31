@@ -48,7 +48,7 @@ func Test_lhStaticMapping(t *testing.T) {
 
 	udpServer, _ := NewListener(l, "0.0.0.0", 0, true)
 
-	meh := NewLightHouse(l, true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
+	meh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{0, 0, 0, 0}}, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
 	meh.AddRemote(ip2int(lh1IP), NewUDPAddr(lh1IP, uint16(4242)), true)
 	err := meh.ValidateLHStaticEntries()
 	assert.Nil(t, err)
@@ -56,7 +56,7 @@ func Test_lhStaticMapping(t *testing.T) {
 	lh2 := "10.128.0.3"
 	lh2IP := net.ParseIP(lh2)
 
-	meh = NewLightHouse(l, true, 1, []uint32{ip2int(lh1IP), ip2int(lh2IP)}, 10, 10003, udpServer, false, 1, false)
+	meh = NewLightHouse(l, true, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{0, 0, 0, 0}}, []uint32{ip2int(lh1IP), ip2int(lh2IP)}, 10, 10003, udpServer, false, 1, false)
 	meh.AddRemote(ip2int(lh1IP), NewUDPAddr(lh1IP, uint16(4242)), true)
 	err = meh.ValidateLHStaticEntries()
 	assert.EqualError(t, err, "Lighthouse 10.128.0.3 does not have a static_host_map entry")
@@ -69,7 +69,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 
 	udpServer, _ := NewListener(l, "0.0.0.0", 0, true)
 
-	lh := NewLightHouse(l, true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
+	lh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{0, 0, 0, 0}}, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
 
 	hAddr := NewUDPAddrFromString("4.5.6.7:12345")
 	hAddr2 := NewUDPAddrFromString("4.5.6.7:12346")
@@ -146,7 +146,7 @@ func TestLighthouse_Memory(t *testing.T) {
 
 	lhIP := net.ParseIP("10.128.0.1")
 	udpServer, _ := NewListener(l, "0.0.0.0", 0, true)
-	lh := NewLightHouse(l, true, 1, []uint32{ip2int(lhIP)}, 10, 10003, udpServer, false, 1, false)
+	lh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{0, 0, 0, 0}}, []uint32{ip2int(lhIP)}, 10, 10003, udpServer, false, 1, false)
 	lhh := lh.NewRequestHandler()
 
 	// Test that my first update responds with just that
@@ -254,7 +254,7 @@ func Test_lhRemoteAllowList(t *testing.T) {
 
 	udpServer, _ := NewListener(l, "0.0.0.0", 0, true)
 
-	lh := NewLightHouse(l, true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
+	lh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{0, 0, 0, 0}}, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
 	lh.SetRemoteAllowList(allowList)
 
 	// A disallowed ip should not enter the cache but we should end up with an empty entry in the addrMap
@@ -304,6 +304,11 @@ func Test_lhRemoteAllowList(t *testing.T) {
 		addedAddrs[ln-9],
 		addedAddrs[ln-10],
 	)
+}
+
+func Test_ipMaskContains(t *testing.T) {
+	assert.True(t, ipMaskContains(ip2int(net.ParseIP("10.0.0.1")), 8, ip2int(net.ParseIP("10.0.0.255"))))
+	assert.False(t, ipMaskContains(ip2int(net.ParseIP("10.0.0.1")), 8, ip2int(net.ParseIP("10.0.1.1"))))
 }
 
 type testLhReply struct {

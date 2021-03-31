@@ -38,7 +38,8 @@ type LightHouse struct {
 	//TODO: We need a timer wheel to kick out vpnIps that haven't reported in a long time
 	sync.RWMutex //Because we concurrently read and write to our maps
 	amLighthouse bool
-	myIp         uint32
+	myVpnIp      uint32
+	myVpnOnes    uint32
 	punchConn    *udpConn
 
 	// Local cache of answers from light houses
@@ -75,10 +76,12 @@ type EncWriter interface {
 	SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte)
 }
 
-func NewLightHouse(l *logrus.Logger, amLighthouse bool, myIp uint32, ips []uint32, interval int, nebulaPort uint32, pc *udpConn, punchBack bool, punchDelay time.Duration, metricsEnabled bool) *LightHouse {
+func NewLightHouse(l *logrus.Logger, amLighthouse bool, myVpnIpNet *net.IPNet, ips []uint32, interval int, nebulaPort uint32, pc *udpConn, punchBack bool, punchDelay time.Duration, metricsEnabled bool) *LightHouse {
+	ones, _ := myVpnIpNet.Mask.Size()
 	h := LightHouse{
 		amLighthouse: amLighthouse,
-		myIp:         myIp,
+		myVpnIp:      ip2int(myVpnIpNet.IP),
+		myVpnOnes:    uint32(ones),
 		addrMap:      make(map[uint32]*ip4And6),
 		nebulaPort:   nebulaPort,
 		lighthouses:  make(map[uint32]struct{}),
@@ -270,13 +273,12 @@ func prependAndLimitV4(cache []*Ip4AndPort, to *Ip4AndPort) []*Ip4AndPort {
 
 // unlockedShouldAddV4 checks if to is allowed by our allow list and is not already present in the cache
 func (lh *LightHouse) unlockedShouldAddV4(am []*Ip4AndPort, to *Ip4AndPort) bool {
-	ip := int2ip(to.Ip)
-	allow := lh.remoteAllowList.Allow(ip)
+	allow := lh.remoteAllowList.AllowLH4(to)
 	if lh.l.Level >= logrus.DebugLevel {
-		lh.l.WithField("remoteIp", ip).WithField("allow", allow).Debug("remoteAllowList.Allow")
+		lh.l.WithField("remoteIp", IntIp(to.Ip)).WithField("allow", allow).Debug("remoteAllowList.Allow")
 	}
 
-	if !allow {
+	if !allow || ipMaskContains(lh.myVpnIp, lh.myVpnOnes, to.Ip) {
 		return false
 	}
 
@@ -328,10 +330,9 @@ func prependAndLimitV6(cache []*Ip6AndPort, to *Ip6AndPort) []*Ip6AndPort {
 
 // unlockedShouldAddV6 checks if to is allowed by our allow list and is not already present in the cache
 func (lh *LightHouse) unlockedShouldAddV6(am []*Ip6AndPort, to *Ip6AndPort) bool {
-	ip := lhIp6ToIp(to)
-	allow := lh.remoteAllowList.Allow(ip)
+	allow := lh.remoteAllowList.AllowLH6(to)
 	if lh.l.Level >= logrus.DebugLevel {
-		lh.l.WithField("remoteIp", ip).WithField("allow", allow).Debug("remoteAllowList.Allow")
+		lh.l.WithField("remoteIp", lhIp6ToIp(to)).WithField("allow", allow).Debug("remoteAllowList.Allow")
 	}
 
 	if !allow {
@@ -385,8 +386,8 @@ func NewIp4AndPort(ip net.IP, port uint32) *Ip4AndPort {
 
 func NewIp6AndPort(ip net.IP, port uint32) *Ip6AndPort {
 	return &Ip6AndPort{
-		Hi: binary.BigEndian.Uint64(ip[:8]),
-		Lo: binary.BigEndian.Uint64(ip[8:]),
+		Hi:   binary.BigEndian.Uint64(ip[:8]),
+		Lo:   binary.BigEndian.Uint64(ip[8:]),
 		Port: port,
 	}
 }
@@ -419,7 +420,7 @@ func (lh *LightHouse) SendUpdate(f EncWriter) {
 	var v6 []*Ip6AndPort
 
 	for _, e := range *localIps(lh.l, lh.localAllowList) {
-		if ip2int(e) == lh.myIp {
+		if ip4 := e.To4(); ip4 != nil && ipMaskContains(lh.myVpnIp, lh.myVpnOnes, ip2int(ip4)) {
 			continue
 		}
 
@@ -433,7 +434,7 @@ func (lh *LightHouse) SendUpdate(f EncWriter) {
 	m := &NebulaMeta{
 		Type: NebulaMeta_HostUpdateNotification,
 		Details: &NebulaMetaDetails{
-			VpnIp:       lh.myIp,
+			VpnIp:       lh.myVpnIp,
 			Ip4AndPorts: v4,
 			Ip6AndPorts: v6,
 		},
@@ -746,4 +747,8 @@ func TransformLHReplyToUdpAddrs(ips *ip4And6) []*udpAddr {
 	}
 
 	return addrs
+}
+
+func ipMaskContains(ip uint32, ones uint32, testIp uint32) bool {
+	return (testIp^ip)>>ones == 0
 }
