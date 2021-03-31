@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"fmt"
 	"net"
 	"testing"
 
@@ -13,7 +14,7 @@ import (
 func TestOldIPv4Only(t *testing.T) {
 	// This test ensures our new ipv6 enabled LH protobuf IpAndPorts works with the old style to enable backwards compatibility
 	b := []byte{8, 129, 130, 132, 80, 16, 10}
-	var m IpAndPort
+	var m Ip4AndPort
 	err := proto.Unmarshal(b, &m)
 	assert.NoError(t, err)
 	assert.Equal(t, "10.1.1.1", int2ip(m.GetIp()).String())
@@ -37,30 +38,6 @@ func TestNewLhQuery(t *testing.T) {
 	n := &NebulaMeta{}
 	err = proto.Unmarshal(b, n)
 	assert.Nil(t, err)
-
-}
-
-func TestNewipandportfromudpaddr(t *testing.T) {
-	blah := NewUDPAddrFromString("1.2.2.3:12345")
-	meh := NewIpAndPortFromUDPAddr(blah)
-	assert.Equal(t, uint32(16908803), meh.v4.Ip)
-	assert.Equal(t, uint32(12345), meh.v4.Port)
-}
-
-func TestSetipandportsfromudpaddrs(t *testing.T) {
-	blah := NewUDPAddrFromString("1.2.2.3:12345")
-	blah2 := NewUDPAddrFromString("9.9.9.9:47828")
-	group := []*udpAddr{blah, blah2}
-	var lh *LightHouse
-	lhh := lh.NewRequestHandler()
-	result := lhh.setIpAndPortsFromNetIps(group)
-	assert.IsType(t, []*ip4Or6{}, result)
-	assert.Len(t, result, 2)
-	assert.Equal(t, uint32(0x01020203), result[0].v4.Ip)
-	assert.Equal(t, uint32(12345), result[0].v4.Port)
-	assert.Equal(t, uint32(0x09090909), result[1].v4.Ip)
-	assert.Equal(t, uint32(47828), result[1].v4.Port)
-	//t.Error(reflect.TypeOf(hah))
 
 }
 
@@ -96,11 +73,17 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 
 	hAddr := NewUDPAddrFromString("4.5.6.7:12345")
 	hAddr2 := NewUDPAddrFromString("4.5.6.7:12346")
-	lh.addrMap[3] = []*udpAddr{hAddr, hAddr2}
+	lh.addrMap[3] = &ip4And6{v4: []*Ip4AndPort{
+		NewIp4AndPort(hAddr.IP, uint32(hAddr.Port)),
+		NewIp4AndPort(hAddr2.IP, uint32(hAddr2.Port))},
+	}
 
 	rAddr := NewUDPAddrFromString("1.2.2.3:12345")
 	rAddr2 := NewUDPAddrFromString("1.2.2.3:12346")
-	lh.addrMap[2] = []*udpAddr{rAddr, rAddr2}
+	lh.addrMap[2] = &ip4And6{v4: []*Ip4AndPort{
+		NewIp4AndPort(rAddr.IP, uint32(rAddr.Port)),
+		NewIp4AndPort(rAddr2.IP, uint32(rAddr2.Port))},
+	}
 
 	mw := &mockEncWriter{}
 
@@ -109,14 +92,14 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 		req := &NebulaMeta{
 			Type: NebulaMeta_HostQuery,
 			Details: &NebulaMetaDetails{
-				VpnIp:      4,
-				IpAndPorts: nil,
+				VpnIp:       4,
+				Ip4AndPorts: nil,
 			},
 		}
 		p, err := proto.Marshal(req)
 		assert.NoError(b, err)
 		for n := 0; n < b.N; n++ {
-			lhh.HandleRequest(rAddr, 2, p, nil, mw)
+			lhh.HandleRequest(rAddr, 2, p, mw)
 		}
 	})
 	b.Run("found", func(b *testing.B) {
@@ -124,17 +107,137 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 		req := &NebulaMeta{
 			Type: NebulaMeta_HostQuery,
 			Details: &NebulaMetaDetails{
-				VpnIp:      3,
-				IpAndPorts: nil,
+				VpnIp:       3,
+				Ip4AndPorts: nil,
 			},
 		}
 		p, err := proto.Marshal(req)
 		assert.NoError(b, err)
 
 		for n := 0; n < b.N; n++ {
-			lhh.HandleRequest(rAddr, 2, p, nil, mw)
+			lhh.HandleRequest(rAddr, 2, p, mw)
 		}
 	})
+}
+
+func TestLighthouse_Memory(t *testing.T) {
+	l := NewTestLogger()
+
+	myUdpAddr0 := &udpAddr{IP: net.ParseIP("10.0.0.2"), Port: 4242}
+	myUdpAddr1 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4242}
+	myUdpAddr2 := &udpAddr{IP: net.ParseIP("172.16.0.2"), Port: 4242}
+	myUdpAddr3 := &udpAddr{IP: net.ParseIP("100.152.0.2"), Port: 4242}
+	myUdpAddr4 := &udpAddr{IP: net.ParseIP("24.15.0.2"), Port: 4242}
+	myUdpAddr5 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4243}
+	myUdpAddr6 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4244}
+	myUdpAddr7 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4245}
+	myUdpAddr8 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4246}
+	myUdpAddr9 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4247}
+	myUdpAddr10 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4248}
+	myUdpAddr11 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4249}
+	myVpnIp := ip2int(net.ParseIP("10.128.0.2"))
+
+	theirUdpAddr0 := &udpAddr{IP: net.ParseIP("10.0.0.3"), Port: 4242}
+	theirUdpAddr1 := &udpAddr{IP: net.ParseIP("192.168.0.3"), Port: 4242}
+	theirUdpAddr2 := &udpAddr{IP: net.ParseIP("172.16.0.3"), Port: 4242}
+	theirUdpAddr3 := &udpAddr{IP: net.ParseIP("100.152.0.3"), Port: 4242}
+	theirUdpAddr4 := &udpAddr{IP: net.ParseIP("24.15.0.3"), Port: 4242}
+	theirVpnIp := ip2int(net.ParseIP("10.128.0.3"))
+
+	lhIP := net.ParseIP("10.128.0.1")
+	udpServer, _ := NewListener(l, "0.0.0.0", 0, true)
+	lh := NewLightHouse(l, true, 1, []uint32{ip2int(lhIP)}, 10, 10003, udpServer, false, 1, false)
+	lhh := lh.NewRequestHandler()
+
+	// Test that my first update responds with just that
+	newLHHostUpdate(myUdpAddr0, myVpnIp, []*udpAddr{myUdpAddr1, myUdpAddr2}, lhh)
+	r := newLHHostRequest(myUdpAddr0, myVpnIp, myVpnIp, lhh)
+	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, myUdpAddr1, myUdpAddr2)
+
+	// Ensure we don't accumulate addresses
+	newLHHostUpdate(myUdpAddr0, myVpnIp, []*udpAddr{myUdpAddr3}, lhh)
+	r = newLHHostRequest(myUdpAddr0, myVpnIp, myVpnIp, lhh)
+	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, myUdpAddr3)
+
+	// Grow it back to 2
+	newLHHostUpdate(myUdpAddr0, myVpnIp, []*udpAddr{myUdpAddr1, myUdpAddr4}, lhh)
+	r = newLHHostRequest(myUdpAddr0, myVpnIp, myVpnIp, lhh)
+	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, myUdpAddr1, myUdpAddr4)
+
+	// Update a different host
+	newLHHostUpdate(theirUdpAddr0, theirVpnIp, []*udpAddr{theirUdpAddr1, theirUdpAddr2, theirUdpAddr3, theirUdpAddr4}, lhh)
+	r = newLHHostRequest(theirUdpAddr0, theirVpnIp, myVpnIp, lhh)
+	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, theirUdpAddr1, theirUdpAddr2, theirUdpAddr3, theirUdpAddr4)
+
+	// Make sure we didn't get changed
+	r = newLHHostRequest(myUdpAddr0, myVpnIp, myVpnIp, lhh)
+	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, myUdpAddr1, myUdpAddr4)
+
+	// Finally ensure proper ordering and limiting
+	// Send 12 addrs, get 10 back, one removed on a dupe check the other by limiting
+	newLHHostUpdate(
+		myUdpAddr0,
+		myVpnIp,
+		[]*udpAddr{
+			myUdpAddr1,
+			myUdpAddr2,
+			myUdpAddr3,
+			myUdpAddr4,
+			myUdpAddr5,
+			myUdpAddr5, //Duplicated on purpose
+			myUdpAddr6,
+			myUdpAddr7,
+			myUdpAddr8,
+			myUdpAddr9,
+			myUdpAddr10,
+			myUdpAddr11, // This should get cut
+		}, lhh)
+	r = newLHHostRequest(myUdpAddr0, myVpnIp, myVpnIp, lhh)
+	assertIp4InArray(
+		t,
+		r.msg.Details.Ip4AndPorts,
+		myUdpAddr1, myUdpAddr2, myUdpAddr3, myUdpAddr4, myUdpAddr5, myUdpAddr6, myUdpAddr7, myUdpAddr8, myUdpAddr9, myUdpAddr10,
+	)
+}
+
+func newLHHostRequest(fromAddr *udpAddr, myVpnIp, queryVpnIp uint32, lhh *LightHouseHandler) testLhReply {
+	req := &NebulaMeta{
+		Type: NebulaMeta_HostQuery,
+		Details: &NebulaMetaDetails{
+			VpnIp: queryVpnIp,
+		},
+	}
+
+	b, err := req.Marshal()
+	if err != nil {
+		panic(err)
+	}
+
+	w := &testEncWriter{}
+	lhh.HandleRequest(fromAddr, myVpnIp, b, w)
+	return w.lastReply
+}
+
+func newLHHostUpdate(fromAddr *udpAddr, vpnIp uint32, addrs []*udpAddr, lhh *LightHouseHandler) {
+	req := &NebulaMeta{
+		Type: NebulaMeta_HostUpdateNotification,
+		Details: &NebulaMetaDetails{
+			VpnIp:       vpnIp,
+			Ip4AndPorts: make([]*Ip4AndPort, len(addrs)),
+		},
+	}
+
+	for k, v := range addrs {
+		req.Details.Ip4AndPorts[k] = &Ip4AndPort{Ip: ip2int(v.IP), Port: uint32(v.Port)}
+	}
+
+	b, err := req.Marshal()
+	if err != nil {
+		panic(err)
+	}
+
+	w := &testEncWriter{}
+	lhh.HandleRequest(fromAddr, vpnIp, b, w)
 }
 
 func Test_lhRemoteAllowList(t *testing.T) {
@@ -154,48 +257,94 @@ func Test_lhRemoteAllowList(t *testing.T) {
 	lh := NewLightHouse(l, true, 1, []uint32{ip2int(lh1IP)}, 10, 10003, udpServer, false, 1, false)
 	lh.SetRemoteAllowList(allowList)
 
-	remote1 := "10.20.0.3"
-	remote1IP := net.ParseIP(remote1)
+	// A disallowed ip should not enter the cache but we should end up with an empty entry in the addrMap
+	remote1IP := net.ParseIP("10.20.0.3")
 	lh.AddRemote(ip2int(remote1IP), NewUDPAddr(remote1IP, uint16(4242)), true)
-	assert.Nil(t, lh.addrMap[ip2int(remote1IP)])
+	assert.NotNil(t, lh.addrMap[ip2int(remote1IP)])
+	assert.Empty(t, lh.addrMap[ip2int(remote1IP)].v4)
+	assert.Empty(t, lh.addrMap[ip2int(remote1IP)].v6)
 
-	remote2 := "10.128.0.3"
-	remote2IP := net.ParseIP(remote2)
+	// Make sure a good ip enters the cache and addrMap
+	remote2IP := net.ParseIP("10.128.0.3")
 	remote2UDPAddr := NewUDPAddr(remote2IP, uint16(4242))
-
 	lh.AddRemote(ip2int(remote2IP), remote2UDPAddr, true)
-	// Make sure the pointers are different but the contents are equal since we are using slices
-	assert.False(t, remote2UDPAddr == lh.addrMap[ip2int(remote2IP)][0])
-	assert.Equal(t, remote2UDPAddr, lh.addrMap[ip2int(remote2IP)][0])
-}
+	assertIp4InArray(t, lh.addrMap[ip2int(remote2IP)].learnedV4, remote2UDPAddr)
 
-//func NewLightHouse(amLighthouse bool, myIp uint32, ips []string, interval int, nebulaPort int, pc *udpConn, punchBack bool) *LightHouse {
+	// Another good ip gets into the cache, ordering is inverted
+	remote3IP := net.ParseIP("10.128.0.4")
+	remote3UDPAddr := NewUDPAddr(remote3IP, uint16(4243))
+	lh.AddRemote(ip2int(remote2IP), remote3UDPAddr, true)
+	assertIp4InArray(t, lh.addrMap[ip2int(remote2IP)].learnedV4, remote3UDPAddr, remote2UDPAddr)
 
-/*
-func TestLHQuery(t *testing.T) {
-	//n := NewLhQueryByIpString("10.128.0.3")
-	_, myNet, _ := net.ParseCIDR("10.128.0.0/16")
-	m := NewHostMap(myNet)
-	y, _ := net.ResolveUDPAddr("udp", "10.128.0.3:11111")
-	m.Add(ip2int(net.ParseIP("127.0.0.1")), y)
-	//t.Errorf("%s", m)
-	_ = m
-
-	_, n, _ := net.ParseCIDR("127.0.0.1/8")
-
-	/*udpServer, err := net.ListenUDP("udp", &net.UDPAddr{Port: 10009})
-	if err != nil {
-		t.Errorf("%s", err)
+	// If we exceed the length limit we should only have the most recent addresses
+	addedAddrs := []*udpAddr{}
+	for i := 0; i < 11; i++ {
+		remoteUDPAddr := NewUDPAddr(net.IP{10, 128, 0, 4}, uint16(4243+i))
+		lh.AddRemote(ip2int(remote2IP), remoteUDPAddr, true)
+		// The first entry here is a duplicate, don't add it to the assert list
+		if i != 0 {
+			addedAddrs = append(addedAddrs, remoteUDPAddr)
+		}
 	}
 
-	meh := NewLightHouse(n, m, []string{"10.128.0.2"}, false, 10, 10003, 10004)
-	//t.Error(m.Hosts)
-	meh2, err := meh.Query(ip2int(net.ParseIP("10.128.0.3")))
-	t.Error(err)
-	if err != nil {
-		return
-	}
-	t.Errorf("%s", meh2)
-	t.Errorf("%s", n)
+	// We should only have the last 10 of what we tried to add
+	assert.True(t, len(addedAddrs) >= 10, "We should have tried to add at least 10 addresses")
+	ln := len(addedAddrs)
+	assertIp4InArray(
+		t,
+		lh.addrMap[ip2int(remote2IP)].learnedV4,
+		addedAddrs[ln-1],
+		addedAddrs[ln-2],
+		addedAddrs[ln-3],
+		addedAddrs[ln-4],
+		addedAddrs[ln-5],
+		addedAddrs[ln-6],
+		addedAddrs[ln-7],
+		addedAddrs[ln-8],
+		addedAddrs[ln-9],
+		addedAddrs[ln-10],
+	)
 }
-*/
+
+type testLhReply struct {
+	nebType    NebulaMessageType
+	nebSubType NebulaMessageSubType
+	vpnIp      uint32
+	msg        *NebulaMeta
+}
+
+type testEncWriter struct {
+	lastReply testLhReply
+}
+
+func (tw *testEncWriter) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, _, _ []byte) {
+	tw.lastReply = testLhReply{
+		nebType:    t,
+		nebSubType: st,
+		vpnIp:      vpnIp,
+		msg:        &NebulaMeta{},
+	}
+
+	err := proto.Unmarshal(p, tw.lastReply.msg)
+	if err != nil {
+		panic(err)
+	}
+}
+
+// assertIp4InArray asserts every address in want is at the same position in have and that the lengths match
+func assertIp4InArray(t *testing.T, have []*Ip4AndPort, want ...*udpAddr) {
+	assert.Len(t, have, len(want))
+	for k, w := range want {
+		if !(have[k].Ip == ip2int(w.IP) && have[k].Port == uint32(w.Port)) {
+			assert.Fail(t, fmt.Sprintf("Response did not contain: %v:%v at %v; %v", w.IP, w.Port, k, translateV4toUdpAddr(have)))
+		}
+	}
+}
+
+func translateV4toUdpAddr(ips []*Ip4AndPort) []*udpAddr {
+	addrs := make([]*udpAddr, len(ips))
+	for k, v := range ips {
+		addrs[k] = NewUDPAddrFromLH4(v)
+	}
+	return addrs
+}

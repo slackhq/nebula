@@ -402,14 +402,9 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 		x := 0
 		var h m
 		for vpnIp, v := range lightHouse.addrMap {
-			ips := make([]string, len(v))
-			for i, ip := range v {
-				ips[i] = ip.String()
-			}
-
 			h = m{
 				"vpnIp": int2ip(vpnIp),
-				"addrs": ips,
+				"addrs": TransformLHReplyToUdpAddrs(v),
 			}
 
 			d[x] = h
@@ -423,11 +418,7 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 		}
 	} else {
 		for vpnIp, v := range lightHouse.addrMap {
-			ips := make([]string, len(v))
-			for i, ip := range v {
-				ips[i] = ip.String()
-			}
-			err := w.WriteLine(fmt.Sprintf("%s: %s", int2ip(vpnIp), ips))
+			err := w.WriteLine(fmt.Sprintf("%s: %s", int2ip(vpnIp), TransformLHReplyToUdpAddrs(v)))
 			if err != nil {
 				return err
 			}
