@@ -16,6 +16,21 @@ type UdpPacket struct {
 	Data     []byte
 }
 
+func (u *UdpPacket) Copy() *UdpPacket {
+	n := &UdpPacket{
+		ToIp:     make(net.IP, len(u.ToIp)),
+		ToPort:   u.ToPort,
+		FromIp:   make(net.IP, len(u.FromIp)),
+		FromPort: u.FromPort,
+		Data:     make([]byte, len(u.Data)),
+	}
+
+	copy(n.ToIp, u.ToIp)
+	copy(n.FromIp, u.FromIp)
+	copy(n.Data, u.Data)
+	return n
+}
+
 type udpConn struct {
 	addr *udpAddr
 
