@@ -290,7 +290,6 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		return false
 	}
 
-	//TODO: we need this to merge in https://github.com/flynn/noise/pull/39
 	msg, eKey, dKey, err := ci.H.ReadMessage(nil, packet[HeaderLen:])
 	if err != nil {
 		f.l.WithError(err).WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
@@ -346,8 +345,10 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			f.handshakeManager.pendingHostMap.DeleteHostInfo(ho)
 		}
 
-		// Create a new hostinfo/handshake for the intended vpn ip, but first release the lock
+		// Release our old handshake from pending, it should not continue
 		f.handshakeManager.pendingHostMap.DeleteHostInfo(hostinfo)
+
+		// Create a new hostinfo/handshake for the intended vpn ip
 		//TODO: this adds it to the timer wheel in a way that aggressively retries
 		newHostInfo := f.getOrHandshake(hostinfo.hostId)
 		newHostInfo.Lock()

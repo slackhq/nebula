@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/e2e/router"
 )
 
@@ -28,8 +29,17 @@ func TestGoodHandshake(t *testing.T) {
 	// Have them consume my stage 0 packet. They have a tunnel now
 	theirControl.InjectUDPPacket(myControl.GetFromUDP(true))
 
-	// Have me consume their stage 1 packet. I have a tunnel now
-	myControl.InjectUDPPacket(theirControl.GetFromUDP(true))
+	// Get their stage 1 packet so that we can play with it
+	stage1Packet := theirControl.GetFromUDP(true)
+
+	// I consume a garbage packet with a proper nebula header for our tunnel
+	// this should log a statement and get ignored, allowing the real handshake packet to complete the tunnel
+	badPacket := stage1Packet.Copy()
+	badPacket.Data = badPacket.Data[:len(badPacket.Data)-nebula.HeaderLen]
+	myControl.InjectUDPPacket(badPacket)
+
+	// Have me consume their real stage 1 packet. I have a tunnel now
+	myControl.InjectUDPPacket(stage1Packet)
 
 	// Wait until we see my cached packet come through
 	myControl.WaitForType(1, 0, theirControl)
