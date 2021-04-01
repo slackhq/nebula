@@ -145,7 +145,7 @@ func TestLighthouse_Memory(t *testing.T) {
 	theirVpnIp := ip2int(net.ParseIP("10.128.0.3"))
 
 	udpServer, _ := NewListener(l, "0.0.0.0", 0, true)
-	lh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{1, 0, 0, 1}, Mask: net.IPMask{255, 255, 255, 0}}, []uint32{}, 10, 10003, udpServer, false, 1, false)
+	lh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{10, 128, 0, 1}, Mask: net.IPMask{255, 255, 255, 0}}, []uint32{}, 10, 10003, udpServer, false, 1, false)
 	lhh := lh.NewRequestHandler()
 
 	// Test that my first update responds with just that
@@ -172,7 +172,7 @@ func TestLighthouse_Memory(t *testing.T) {
 	r = newLHHostRequest(myUdpAddr0, myVpnIp, myVpnIp, lhh)
 	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, myUdpAddr1, myUdpAddr4)
 
-	// Finally ensure proper ordering and limiting
+	// Ensure proper ordering and limiting
 	// Send 12 addrs, get 10 back, one removed on a dupe check the other by limiting
 	newLHHostUpdate(
 		myUdpAddr0,
@@ -197,6 +197,14 @@ func TestLighthouse_Memory(t *testing.T) {
 		r.msg.Details.Ip4AndPorts,
 		myUdpAddr1, myUdpAddr2, myUdpAddr3, myUdpAddr4, myUdpAddr5, myUdpAddr6, myUdpAddr7, myUdpAddr8, myUdpAddr9, myUdpAddr10,
 	)
+
+	// Make sure we won't add ips in our vpn network
+	bad1 := &udpAddr{IP: net.ParseIP("10.128.0.99"), Port: 4242}
+	bad2 := &udpAddr{IP: net.ParseIP("10.128.0.100"), Port: 4242}
+	good := &udpAddr{IP: net.ParseIP("1.128.0.99"), Port: 4242}
+	newLHHostUpdate(myUdpAddr0, myVpnIp, []*udpAddr{bad1, bad2, good}, lhh)
+	r = newLHHostRequest(myUdpAddr0, myVpnIp, myVpnIp, lhh)
+	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, good)
 }
 
 func newLHHostRequest(fromAddr *udpAddr, myVpnIp, queryVpnIp uint32, lhh *LightHouseHandler) testLhReply {

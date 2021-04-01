@@ -33,12 +33,12 @@ func (al *AllowList) Allow(ip net.IP) bool {
 	}
 }
 
-func (al *AllowList) AllowLH4(ip *Ip4AndPort) bool {
+func (al *AllowList) AllowIpV4(ip uint32) bool {
 	if al == nil {
 		return true
 	}
 
-	result := al.cidrTree.MostSpecificContainsLH4(ip)
+	result := al.cidrTree.MostSpecificContainsIpV4(ip)
 	switch v := result.(type) {
 	case bool:
 		return v
@@ -47,12 +47,12 @@ func (al *AllowList) AllowLH4(ip *Ip4AndPort) bool {
 	}
 }
 
-func (al *AllowList) AllowLH6(ip *Ip6AndPort) bool {
+func (al *AllowList) AllowIpV6(hi, lo uint64) bool {
 	if al == nil {
 		return true
 	}
 
-	result := al.cidrTree.MostSpecificContainsLH6(ip)
+	result := al.cidrTree.MostSpecificContainsIpV6(hi, lo)
 	switch v := result.(type) {
 	case bool:
 		return v
