@@ -5,7 +5,7 @@ import (
 	"net"
 )
 
-const startbit6 = uint64(0x8000000000000000)
+const startbit6 = uint64(1 << 63)
 
 type CIDR6Tree struct {
 	root4 *CIDRNode
