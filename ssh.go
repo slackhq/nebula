@@ -65,7 +65,7 @@ func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) {
 // updates the passed-in SSHServer. On success, it returns a function
 // that callers may invoke to run the configured ssh server. On
 // failure, it returns nil, error.
-func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) (StartFunc, error) {
+func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) (func(), error) {
 	//TODO conntrack list
 	//TODO print firewall rules or hash?
 
@@ -146,7 +146,7 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) (StartFunc, err
 		l.Info("no ssh users to authorize")
 	}
 
-	var runner StartFunc
+	var runner func()
 	if c.GetBool("sshd.enabled", false) {
 		ssh.Stop()
 		runner = func() { ssh.Run(listen) }

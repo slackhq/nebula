@@ -20,7 +20,7 @@ import (
 // startStats initializes stats from config. On success, if any futher work
 // is needed to serve stats, it returns a func to handle that work. If no
 // work is needed, it'll return nil. On failure, it returns nil, error.
-func startStats(l *logrus.Logger, c *Config, buildVersion string, configTest bool) (StartFunc, error) {
+func startStats(l *logrus.Logger, c *Config, buildVersion string, configTest bool) (func(), error) {
 	mType := c.GetString("stats.type", "")
 	if mType == "" || mType == "none" {
 		return nil, nil

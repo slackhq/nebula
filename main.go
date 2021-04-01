@@ -19,7 +19,6 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		FullTimestamp: true,
 	}
 
-	startupCbs := make([]StartFunc, 0, 3)
 	// Print the config if in test, the exit comes later
 	if configTest {
 		b, err := yaml.Marshal(config.Settings)
@@ -76,13 +75,11 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
 	wireSSHReload(l, ssh, config)
+	var sshStart func()
 	if config.GetBool("sshd.enabled", false) {
-		sshRun, err = configSSH(l, ssh, config)
+		sshStart, err = configSSH(l, ssh, config)
 		if err != nil {
 			return nil, NewContextualError("Error while configuring the sshd", nil, err)
-		}
-		if sshRun != nil {
-			startupCbs = append(startupCbs, sshRun)
 		}
 	}
 
@@ -398,12 +395,9 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		go lightHouse.LhUpdateWorker(ifce)
 	}
 
-	statsCb, err = startStats(l, config, buildVersion, configTest)
+	statsStart, err := startStats(l, config, buildVersion, configTest)
 	if err != nil {
 		return nil, NewContextualError("Failed to start stats emitter", nil, err)
-	}
-	if statsCb != nil {
-		startupCbs = append(startupCbs, statsCb)
 	}
 
 	if configTest {
@@ -416,13 +410,11 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	attachCommands(l, ssh, hostMap, handshakeManager.pendingHostMap, lightHouse, ifce)
 
 	// Start DNS server last to allow using the nebula IP as lighthouse.dns.host
+	var dnsStart func()
 	if amLighthouse && serveDns {
 		l.Debugln("Starting dns server")
-		dnsCb := dnsMain(l, hostMap, config)
-		if dnsCb != nil {
-			startupCbs = append(startupCbs, dnsCb)
-		}
+		dnsStart = dnsMain(l, hostMap, config)
 	}
 
-	return &Control{ifce, l, startupCbs}, nil
+	return &Control{ifce, l, sshStart, statsStart, dnsStart}, nil
 }

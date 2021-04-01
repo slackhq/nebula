@@ -109,7 +109,7 @@ func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func dnsMain(l *logrus.Logger, hostMap *HostMap, c *Config) StartFunc {
+func dnsMain(l *logrus.Logger, hostMap *HostMap, c *Config) func() {
 	dnsR = newDnsRecords(hostMap)
 
 	// attach request handler func
@@ -122,7 +122,7 @@ func dnsMain(l *logrus.Logger, hostMap *HostMap, c *Config) StartFunc {
 	})
 
 	return func() {
-		startDns(c)
+		startDns(l, c)
 	}
 }
 
