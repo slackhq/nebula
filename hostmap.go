@@ -77,17 +77,6 @@ type cachedPacket struct {
 
 type packetCallback func(t NebulaMessageType, st NebulaMessageSubType, h *HostInfo, p, nb, out []byte)
 
-type HostInfoDest struct {
-	addr *udpAddr
-	//probes       [ProbeLen]bool
-	probeCounter int
-}
-
-type Probe struct {
-	Addr    *net.UDPAddr
-	Counter int
-}
-
 func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRanges []*net.IPNet) *HostMap {
 	h := map[uint32]*HostInfo{}
 	i := map[uint32]*HostInfo{}
@@ -755,40 +744,6 @@ func (hm *HostMap) DebugRemotes(vpnIp uint32) string {
 	return s
 }
 
-
-func (d *HostInfoDest) Grade() float64 {
-	c1 := ProbeLen
-	for n := len(d.probes) - 1; n >= 0; n-- {
-		if d.probes[n] == true {
-			c1 -= 1
-		}
-	}
-	return float64(c1) / float64(ProbeLen)
-}
-
-func (d *HostInfoDest) Grade() (float64, float64, float64) {
-	c1 := ProbeLen
-	c2 := ProbeLen / 2
-	c2c := ProbeLen - ProbeLen/2
-	c3 := ProbeLen / 5
-	c3c := ProbeLen - ProbeLen/5
-	for n := len(d.probes) - 1; n >= 0; n-- {
-		if d.probes[n] == true {
-			c1 -= 1
-			if n >= c2c {
-				c2 -= 1
-				if n >= c3c {
-					c3 -= 1
-				}
-			}
-		}
-		//if n >= d {
-	}
-	return float64(c3) / float64(ProbeLen/5), float64(c2) / float64(ProbeLen/2), float64(c1) / float64(ProbeLen)
-	//return float64(c1) / float64(ProbeLen), float64(c2) / float64(ProbeLen/2), float64(c3) / float64(ProbeLen/5)
-}
-
-
 func (i *HostInfo) HandleReply(addr *net.UDPAddr, counter int) {
 	for _, r := range i.Remotes {
 		if r.addr.IP.Equal(addr.IP) && r.addr.Port == addr.Port {
@@ -803,23 +758,6 @@ func (i *HostInfo) Probes() []*Probe {
 		p = append(p, &Probe{Addr: d.addr, Counter: d.Probe()})
 	}
 	return p
-}
-
-
-func (d *HostInfoDest) Probe() int {
-	//d.probes = append(d.probes, true)
-	d.probeCounter++
-	d.probes[d.probeCounter%ProbeLen] = true
-	return d.probeCounter
-	//return d.probeCounter
-}
-
-func (d *HostInfoDest) ProbeReceived(probeCount int) {
-	if probeCount >= (d.probeCounter - ProbeLen) {
-		//fmt.Println("PROBE WORKED", probeCount)
-		//fmt.Println(d.addr, d.Grade())
-		d.probes[probeCount%ProbeLen] = false
-	}
 }
 
 */
