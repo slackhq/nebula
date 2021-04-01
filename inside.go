@@ -20,7 +20,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 	}
 
 	// Ignore packets from self to self
-	if fwPacket.RemoteIP == f.lightHouse.myIp {
+	if fwPacket.RemoteIP == f.myVpnIp {
 		return
 	}
 

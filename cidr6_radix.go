@@ -5,6 +5,8 @@ import (
 	"net"
 )
 
+const startbit6 = uint64(1 << 63)
+
 type CIDR6Tree struct {
 	root4 *CIDRNode
 	root6 *CIDRNode
@@ -71,45 +73,6 @@ func (tree *CIDR6Tree) AddCIDR(cidr *net.IPNet, val interface{}) {
 	node.value = val
 }
 
-// Finds the first match, which may be the least specific
-func (tree *CIDR6Tree) Contains(ip net.IP) (value interface{}) {
-	var node *CIDRNode
-
-	wholeIP, ipv4 := isIPV4(ip)
-	if ipv4 {
-		node = tree.root4
-	} else {
-		node = tree.root6
-	}
-
-	for i := 0; i < len(wholeIP); i += 4 {
-		ip := ip2int(wholeIP[i : i+4])
-		bit := startbit
-
-		for node != nil {
-			if node.value != nil {
-				return node.value
-			}
-
-			// Check if we have reached the end and the above return did not trigger, move to the next uint32 if available
-			if bit == 0 {
-				break
-			}
-
-			if ip&bit != 0 {
-				node = node.right
-			} else {
-				node = node.left
-			}
-
-			bit >>= 1
-		}
-	}
-
-	// Nothing found
-	return
-}
-
 // Finds the most specific match
 func (tree *CIDR6Tree) MostSpecificContains(ip net.IP) (value interface{}) {
 	var node *CIDRNode
@@ -147,23 +110,43 @@ func (tree *CIDR6Tree) MostSpecificContains(ip net.IP) (value interface{}) {
 	return value
 }
 
-// Finds the most specific match
-func (tree *CIDR6Tree) Match(ip net.IP) (value interface{}) {
-	var node *CIDRNode
-	var bit uint32
+func (tree *CIDR6Tree) MostSpecificContainsIpV4(ip uint32) (value interface{}) {
+	bit := startbit
+	node := tree.root4
 
-	wholeIP, ipv4 := isIPV4(ip)
-	if ipv4 {
-		node = tree.root4
-	} else {
-		node = tree.root6
+	for node != nil {
+		if node.value != nil {
+			value = node.value
+		}
+
+		if ip&bit != 0 {
+			node = node.right
+		} else {
+			node = node.left
+		}
+
+		bit >>= 1
 	}
 
-	for i := 0; i < len(wholeIP); i += 4 {
-		ip := ip2int(wholeIP[i : i+4])
-		bit = startbit
+	return value
+}
 
-		for node != nil && bit > 0 {
+func (tree *CIDR6Tree) MostSpecificContainsIpV6(hi, lo uint64) (value interface{}) {
+	ip := hi
+	node := tree.root6
+
+	for i := 0; i < 2; i++ {
+		bit := startbit6
+
+		for node != nil {
+			if node.value != nil {
+				value = node.value
+			}
+
+			if bit == 0 {
+				break
+			}
+
 			if ip&bit != 0 {
 				node = node.right
 			} else {
@@ -172,10 +155,8 @@ func (tree *CIDR6Tree) Match(ip net.IP) (value interface{}) {
 
 			bit >>= 1
 		}
-	}
 
-	if bit == 0 && node != nil {
-		value = node.value
+		ip = lo
 	}
 
 	return value

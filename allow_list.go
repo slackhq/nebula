@@ -33,6 +33,34 @@ func (al *AllowList) Allow(ip net.IP) bool {
 	}
 }
 
+func (al *AllowList) AllowIpV4(ip uint32) bool {
+	if al == nil {
+		return true
+	}
+
+	result := al.cidrTree.MostSpecificContainsIpV4(ip)
+	switch v := result.(type) {
+	case bool:
+		return v
+	default:
+		panic(fmt.Errorf("invalid state, allowlist returned: %T %v", result, result))
+	}
+}
+
+func (al *AllowList) AllowIpV6(hi, lo uint64) bool {
+	if al == nil {
+		return true
+	}
+
+	result := al.cidrTree.MostSpecificContainsIpV6(hi, lo)
+	switch v := result.(type) {
+	case bool:
+		return v
+	default:
+		panic(fmt.Errorf("invalid state, allowlist returned: %T %v", result, result))
+	}
+}
+
 func (al *AllowList) AllowName(name string) bool {
 	if al == nil || len(al.nameRules) == 0 {
 		return true

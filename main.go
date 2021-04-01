@@ -266,7 +266,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	lightHouse := NewLightHouse(
 		l,
 		amLighthouse,
-		ip2int(tunCidr.IP),
+		tunCidr,
 		lighthouseHosts,
 		//TODO: change to a duration
 		config.GetInt("lighthouse.interval", 10),

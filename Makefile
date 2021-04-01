@@ -127,7 +127,7 @@ proto: nebula.pb.go cert/cert.pb.go
 
 nebula.pb.go: nebula.proto .FORCE
 	go build github.com/gogo/protobuf/protoc-gen-gogofaster
-	PATH="$(CURDIR):$(PATH)" protoc --gogofaster_out=. $<
+	PATH="$(CURDIR):$(PATH)" protoc --gogofaster_out=paths=source_relative:. $<
 	rm protoc-gen-gogofaster
 
 cert/cert.pb.go: cert/cert.proto .FORCE

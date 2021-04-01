@@ -116,7 +116,6 @@ func (tree *CIDRTree) MostSpecificContains(ip uint32) (value interface{}) {
 		}
 
 		bit >>= 1
-
 	}
 
 	return value
