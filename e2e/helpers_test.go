@@ -64,6 +64,9 @@ func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, u
 				"host":  "any",
 			}},
 		},
+		//"handshakes": m{
+		//	"try_interval": "1s",
+		//},
 		"listen": m{
 			"host": udpAddr.IP.String(),
 			"port": udpAddr.Port,

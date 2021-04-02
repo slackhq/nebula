@@ -53,7 +53,11 @@ func NewListener(l *logrus.Logger, ip string, port int, _ bool) (*udpConn, error
 // this is an encrypted packet or a handshake message in most cases
 // packets were transmitted from another nebula node, you can send them with Tun.Send
 func (u *udpConn) Send(packet *UdpPacket) {
-	u.l.Infof("UDP injecting packet %+v", packet)
+	h := &Header{}
+	if err := h.Parse(packet.Data); err != nil {
+		panic(err)
+	}
+	u.l.Infof("UDP receiving packet from: %v:%v; %+v", packet.FromIp, packet.FromPort, h)
 	u.rxPackets <- packet
 }
 

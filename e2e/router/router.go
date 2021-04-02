@@ -5,6 +5,7 @@ package router
 import (
 	"fmt"
 	"net"
+	"reflect"
 	"strconv"
 	"sync"
 
@@ -28,18 +29,18 @@ type R struct {
 	sync.Mutex
 }
 
-type exitType int
+type ExitType int
 
 const (
 	// Keeps routing, the function will get called again on the next packet
-	keepRouting exitType = 0
+	KeepRouting ExitType = 0
 	// Does not route this packet and exits immediately
-	exitNow exitType = 1
+	ExitNow ExitType = 1
 	// Routes this packet and exits immediately afterwards
-	routeAndExit exitType = 2
+	RouteAndExit ExitType = 2
 )
 
-type ExitFunc func(packet *nebula.UdpPacket, receiver *nebula.Control) exitType
+type ExitFunc func(packet *nebula.UdpPacket, receiver *nebula.Control) ExitType
 
 func NewR(controls ...*nebula.Control) *R {
 	r := &R{
@@ -77,8 +78,8 @@ func (r *R) AddRoute(ip net.IP, port uint16, c *nebula.Control) {
 // OnceFrom will route a single packet from sender then return
 // If the router doesn't have the nebula controller for that address, we panic
 func (r *R) OnceFrom(sender *nebula.Control) {
-	r.RouteExitFunc(sender, func(*nebula.UdpPacket, *nebula.Control) exitType {
-		return routeAndExit
+	r.RouteExitFunc(sender, func(*nebula.UdpPacket, *nebula.Control) ExitType {
+		return RouteAndExit
 	})
 }
 
@@ -136,16 +137,16 @@ func (r *R) RouteExitFunc(sender *nebula.Control, whatDo ExitFunc) {
 
 		e := whatDo(p, receiver)
 		switch e {
-		case exitNow:
+		case ExitNow:
 			r.Unlock()
 			return
 
-		case routeAndExit:
+		case RouteAndExit:
 			receiver.InjectUDPPacket(p)
 			r.Unlock()
 			return
 
-		case keepRouting:
+		case KeepRouting:
 			receiver.InjectUDPPacket(p)
 
 		default:
@@ -160,32 +161,32 @@ func (r *R) RouteExitFunc(sender *nebula.Control, whatDo ExitFunc) {
 // If the router doesn't have the nebula controller for that address, we panic
 func (r *R) RouteUntilAfterMsgType(sender *nebula.Control, msgType nebula.NebulaMessageType, subType nebula.NebulaMessageSubType) {
 	h := &nebula.Header{}
-	r.RouteExitFunc(sender, func(p *nebula.UdpPacket, r *nebula.Control) exitType {
+	r.RouteExitFunc(sender, func(p *nebula.UdpPacket, r *nebula.Control) ExitType {
 		if err := h.Parse(p.Data); err != nil {
 			panic(err)
 		}
 		if h.Type == msgType && h.Subtype == subType {
-			return routeAndExit
+			return RouteAndExit
 		}
 
-		return keepRouting
+		return KeepRouting
 	})
 }
 
 // RouteForUntilAfterToAddr will route for sender and return only after it sees and sends a packet destined for toAddr
 // finish can be any of the exitType values except `keepRouting`, the default value is `routeAndExit`
 // If the router doesn't have the nebula controller for that address, we panic
-func (r *R) RouteForUntilAfterToAddr(sender *nebula.Control, toAddr *net.UDPAddr, finish exitType) {
-	if finish == keepRouting {
-		finish = routeAndExit
+func (r *R) RouteForUntilAfterToAddr(sender *nebula.Control, toAddr *net.UDPAddr, finish ExitType) {
+	if finish == KeepRouting {
+		finish = RouteAndExit
 	}
 
-	r.RouteExitFunc(sender, func(p *nebula.UdpPacket, r *nebula.Control) exitType {
+	r.RouteExitFunc(sender, func(p *nebula.UdpPacket, r *nebula.Control) ExitType {
 		if p.ToIp.Equal(toAddr.IP) && p.ToPort == uint16(toAddr.Port) {
 			return finish
 		}
 
-		return keepRouting
+		return KeepRouting
 	})
 }
 
@@ -218,4 +219,56 @@ func (r *R) getControl(fromAddr, toAddr string, p *nebula.UdpPacket) *nebula.Con
 
 	//TODO: call receive hooks!
 	return r.controls[toAddr]
+}
+
+func (r *R) RouteForAllUntilFunc(whatDo ExitFunc) {
+	sc := make([]reflect.SelectCase, len(r.controls))
+	cm := make([]*nebula.Control, len(r.controls))
+
+	i := 0
+	for _, c := range r.controls {
+		sc[i] = reflect.SelectCase{
+			Dir: reflect.SelectRecv,
+			Chan: reflect.ValueOf(c.GetUDPTxChan()),
+			Send: reflect.Value{},
+		}
+
+		cm[i] = c
+		i++
+	}
+
+	for {
+		x, rx, _ := reflect.Select(sc)
+		r.Lock()
+
+		p := rx.Interface().(*nebula.UdpPacket)
+
+		outAddr := cm[x].GetUDPAddr()
+		inAddr := net.JoinHostPort(p.ToIp.String(), fmt.Sprintf("%v", p.ToPort))
+		receiver := r.getControl(outAddr, inAddr, p)
+		if receiver == nil {
+			r.Unlock()
+			panic("Can't route for host: " + inAddr)
+		}
+
+		e := whatDo(p, receiver)
+		switch e {
+		case ExitNow:
+			r.Unlock()
+			return
+
+		case RouteAndExit:
+			receiver.InjectUDPPacket(p)
+			r.Unlock()
+			return
+
+		case KeepRouting:
+			receiver.InjectUDPPacket(p)
+
+		default:
+			panic(fmt.Sprintf("Unknown exitFunc return: %v", e))
+		}
+		r.Unlock()
+	}
+
 }

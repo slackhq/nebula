@@ -10,8 +10,8 @@ import (
 	"os"
 	"reflect"
 	"runtime/pprof"
+	"sort"
 	"strings"
-	"sync/atomic"
 	"syscall"
 
 	"github.com/sirupsen/logrus"
@@ -335,8 +335,10 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 		return nil
 	}
 
-	hostMap.RLock()
-	defer hostMap.RUnlock()
+	hm := listHostMap(hostMap)
+	sort.Slice(hm, func(i, j int) bool {
+		return bytes.Compare(hm[i].VpnIP, hm[j].VpnIP) < 0
+	})
 
 	if fs.Json || fs.Pretty {
 		js := json.NewEncoder(w.GetWriter())
@@ -344,35 +346,15 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 			js.SetIndent("", "    ")
 		}
 
-		d := make([]m, len(hostMap.Hosts))
-		x := 0
-		var h m
-		for _, v := range hostMap.Hosts {
-			h = m{
-				"vpnIp":         int2ip(v.hostId),
-				"localIndex":    v.localIndexId,
-				"remoteIndex":   v.remoteIndexId,
-				"remoteAddrs":   v.CopyRemotes(),
-				"cachedPackets": len(v.packetStore),
-				"cert":          v.GetCert(),
-			}
-
-			if v.ConnectionState != nil {
-				h["messageCounter"] = atomic.LoadUint64(&v.ConnectionState.atomicMessageCounter)
-			}
-
-			d[x] = h
-			x++
-		}
-
-		err := js.Encode(d)
+		err := js.Encode(hm)
 		if err != nil {
 			//TODO
 			return nil
 		}
+
 	} else {
-		for i, v := range hostMap.Hosts {
-			err := w.WriteLine(fmt.Sprintf("%s: %s", int2ip(i), v.CopyRemotes()))
+		for _, v := range hm {
+			err := w.WriteLine(fmt.Sprintf("%s: %s", v.VpnIP, v.RemoteAddrs))
 			if err != nil {
 				return err
 			}
@@ -389,8 +371,26 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 		return nil
 	}
 
+	type lighthouseInfo struct {
+		VpnIP net.IP    `json:"vpnIp"`
+		Addrs *CacheMap `json:"addrs"`
+	}
+
 	lightHouse.RLock()
-	defer lightHouse.RUnlock()
+	addrMap := make([]lighthouseInfo, len(lightHouse.addrMap))
+	x := 0
+	for k, v := range lightHouse.addrMap {
+		addrMap[x] = lighthouseInfo{
+			VpnIP: int2ip(k),
+			Addrs: v.CopyCache(),
+		}
+		x++
+	}
+	lightHouse.RUnlock()
+
+	sort.Slice(addrMap, func(i, j int) bool {
+		return bytes.Compare(addrMap[i].VpnIP, addrMap[j].VpnIP) < 0
+	})
 
 	if fs.Json || fs.Pretty {
 		js := json.NewEncoder(w.GetWriter())
@@ -398,27 +398,19 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 			js.SetIndent("", "    ")
 		}
 
-		d := make([]m, len(lightHouse.addrMap))
-		x := 0
-		var h m
-		for vpnIp, v := range lightHouse.addrMap {
-			h = m{
-				"vpnIp": int2ip(vpnIp),
-				"addrs": TransformLHReplyToUdpAddrs(v),
-			}
-
-			d[x] = h
-			x++
-		}
-
-		err := js.Encode(d)
+		err := js.Encode(addrMap)
 		if err != nil {
 			//TODO
 			return nil
 		}
+
 	} else {
-		for vpnIp, v := range lightHouse.addrMap {
-			err := w.WriteLine(fmt.Sprintf("%s: %s", int2ip(vpnIp), TransformLHReplyToUdpAddrs(v)))
+		for _, v := range addrMap {
+			b, err := json.Marshal(v.Addrs)
+			if err != nil {
+				return err
+			}
+			err = w.WriteLine(fmt.Sprintf("%s: %s", v.VpnIP, string(b)))
 			if err != nil {
 				return err
 			}
@@ -469,8 +461,7 @@ func sshQueryLighthouse(ifce *Interface, fs interface{}, a []string, w sshd.Stri
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	ips, _ := ifce.lightHouse.Query(vpnIp, ifce)
-	return json.NewEncoder(w.GetWriter()).Encode(ips)
+	return json.NewEncoder(w.GetWriter()).Encode(ifce.lightHouse.Query(vpnIp, ifce).CopyCache())
 }
 
 func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
@@ -727,7 +718,7 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	hostInfo, err := ifce.hostMap.QueryVpnIP(uint32(vpnIp))
+	hostInfo, err := ifce.hostMap.QueryVpnIP(vpnIp)
 	if err != nil {
 		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn ip: %v", a[0]))
 	}
@@ -737,7 +728,7 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		enc.SetIndent("", "    ")
 	}
 
-	return enc.Encode(hostInfo)
+	return enc.Encode(copyHostInfo(hostInfo, ifce.hostMap.preferredRanges))
 }
 
 func sshReload(fs interface{}, a []string, w sshd.StringWriter) error {

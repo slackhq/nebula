@@ -23,35 +23,35 @@ func TestGoodHandshake(t *testing.T) {
 	myControl.Start()
 	theirControl.Start()
 
-	// Send a udp packet through to begin standing up the tunnel, this should come out the other side
+	t.Log("Send a udp packet through to begin standing up the tunnel, this should come out the other side")
 	myControl.InjectTunUDPPacket(theirVpnIp, 80, 80, []byte("Hi from me"))
 
-	// Have them consume my stage 0 packet. They have a tunnel now
+	t.Log("Have them consume my stage 0 packet. They have a tunnel now")
 	theirControl.InjectUDPPacket(myControl.GetFromUDP(true))
 
-	// Get their stage 1 packet so that we can play with it
+	t.Log("Get their stage 1 packet so that we can play with it")
 	stage1Packet := theirControl.GetFromUDP(true)
 
-	// I consume a garbage packet with a proper nebula header for our tunnel
+	t.Log("I consume a garbage packet with a proper nebula header for our tunnel")
 	// this should log a statement and get ignored, allowing the real handshake packet to complete the tunnel
 	badPacket := stage1Packet.Copy()
 	badPacket.Data = badPacket.Data[:len(badPacket.Data)-nebula.HeaderLen]
 	myControl.InjectUDPPacket(badPacket)
 
-	// Have me consume their real stage 1 packet. I have a tunnel now
+	t.Log("Have me consume their real stage 1 packet. I have a tunnel now")
 	myControl.InjectUDPPacket(stage1Packet)
 
-	// Wait until we see my cached packet come through
+	t.Log("Wait until we see my cached packet come through")
 	myControl.WaitForType(1, 0, theirControl)
 
-	// Make sure our host infos are correct
+	t.Log("Make sure our host infos are correct")
 	assertHostInfoPair(t, myUdpAddr, theirUdpAddr, myVpnIp, theirVpnIp, myControl, theirControl)
 
-	// Get that cached packet and make sure it looks right
+	t.Log("Get that cached packet and make sure it looks right")
 	myCachedPacket := theirControl.GetFromTun(true)
 	assertUdpPacket(t, []byte("Hi from me"), myCachedPacket, myVpnIp, theirVpnIp, 80, 80)
 
-	// Do a bidirectional tunnel test
+	t.Log("Do a bidirectional tunnel test")
 	assertTunnel(t, myVpnIp, theirVpnIp, myControl, theirControl, router.NewR(myControl, theirControl))
 
 	myControl.Stop()
@@ -62,14 +62,19 @@ func TestGoodHandshake(t *testing.T) {
 func TestWrongResponderHandshake(t *testing.T) {
 	ca, _, caKey, _ := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
 
-	myControl, myVpnIp, myUdpAddr := newSimpleServer(ca, caKey, "me", net.IP{10, 0, 0, 1})
-	theirControl, theirVpnIp, theirUdpAddr := newSimpleServer(ca, caKey, "them", net.IP{10, 0, 0, 2})
-	evilControl, evilVpnIp, evilUdpAddr := newSimpleServer(ca, caKey, "evil", net.IP{10, 0, 0, 99})
+	// The IPs here are chosen on purpose:
+	// The current remote handling will sort by preference, public, and then lexically.
+	// So we need them to have a higher address than evil (we could apply a preference though)
+	//TODO: we enter race avoidance if my ip is less than theirs as a result of blasting handshakes out into the world.
+	// This means it takes longer to resolve, really wish our handshakes had a "who I think you are hint", which we can add going forward because protobufs
+	myControl, myVpnIp, myUdpAddr := newSimpleServer(ca, caKey, "me", net.IP{10, 0, 0, 100})
+	theirControl, theirVpnIp, theirUdpAddr := newSimpleServer(ca, caKey, "them", net.IP{10, 0, 0, 99})
+	evilControl, evilVpnIp, evilUdpAddr := newSimpleServer(ca, caKey, "evil", net.IP{10, 0, 0, 2})
 
-	// Add their real udp addr, which should be tried after evil. Doing this first because learned addresses are prepended
+	// Add their real udp addr, which should be tried after evil.
 	myControl.InjectLightHouseAddr(theirVpnIp, theirUdpAddr)
 
-	// Put the evil udp addr in for their vpn Ip, this is a case of being lied to by the lighthouse. This will now be the first attempted ip
+	// Put the evil udp addr in for their vpn Ip, this is a case of being lied to by the lighthouse.
 	myControl.InjectLightHouseAddr(theirVpnIp, evilUdpAddr)
 
 	// Build a router so we don't have to reason who gets which packet
@@ -80,27 +85,34 @@ func TestWrongResponderHandshake(t *testing.T) {
 	theirControl.Start()
 	evilControl.Start()
 
-	t.Log("Stand up the tunnel with evil (because the lighthouse cache is lying to us about who it is)")
+	t.Log("Start the handshake process, we will route until we see our cached packet get sent to them")
 	myControl.InjectTunUDPPacket(theirVpnIp, 80, 80, []byte("Hi from me"))
-	r.OnceFrom(myControl)
-	r.OnceFrom(evilControl)
+	r.RouteForAllUntilFunc(func(p *nebula.UdpPacket, c *nebula.Control) router.ExitType {
+		h := &nebula.Header{}
+		err := h.Parse(p.Data)
+		if err != nil {
+			panic(err)
+		}
 
+		if p.ToIp.Equal(theirUdpAddr.IP) && p.ToPort == uint16(theirUdpAddr.Port) && h.Type == 1 {
+			return router.RouteAndExit
+		}
+
+		return router.KeepRouting
+	})
+
+	//TODO: we are racing to this point, we either need greater control over packet flow or much much less
 	t.Log("I should have a tunnel with evil now and there should not be a cached packet waiting for us")
 	assertTunnel(t, myVpnIp, evilVpnIp, myControl, evilControl, r)
 	assertHostInfoPair(t, myUdpAddr, evilUdpAddr, myVpnIp, evilVpnIp, myControl, evilControl)
 
 	//TODO: Assert pending hostmap - I should have a correct hostinfo for them now
 
-	t.Log("Lets let the messages fly, this time we should have a tunnel with them")
-	r.OnceFrom(myControl)
-	r.OnceFrom(theirControl)
-
-	t.Log("I should now have a tunnel with them now and my original packet should get there")
-	r.RouteUntilAfterMsgType(myControl, 1, 0)
+	t.Log("My cached packet should be received by them")
 	myCachedPacket := theirControl.GetFromTun(true)
 	assertUdpPacket(t, []byte("Hi from me"), myCachedPacket, myVpnIp, theirVpnIp, 80, 80)
 
-	t.Log("I should now have a proper tunnel with them")
+	t.Log("Test the tunnel with them")
 	assertHostInfoPair(t, myUdpAddr, theirUdpAddr, myVpnIp, theirVpnIp, myControl, theirControl)
 	assertTunnel(t, myVpnIp, theirVpnIp, myControl, theirControl, r)
 

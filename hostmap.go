@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -16,6 +15,7 @@ import (
 
 //const ProbeLen = 100
 const PromoteEvery = 1000
+const ReQueryEvery = 5000
 const MaxRemotes = 10
 
 // How long we should prevent roaming back to the previous IP.
@@ -30,7 +30,6 @@ type HostMap struct {
 	Hosts           map[uint32]*HostInfo
 	preferredRanges []*net.IPNet
 	vpnCIDR         *net.IPNet
-	defaultRoute    uint32
 	unsafeRoutes    *CIDRTree
 	metricsEnabled  bool
 	l               *logrus.Logger
@@ -40,24 +39,20 @@ type HostInfo struct {
 	sync.RWMutex
 
 	remote            *udpAddr
-	Remotes           []*udpAddr
+	remotes           *RemoteList
 	promoteCounter    uint32
 	ConnectionState   *ConnectionState
-	handshakeStart    time.Time
-	HandshakeReady    bool
-	HandshakeCounter  int
-	HandshakeComplete bool
-	HandshakePacket   map[uint8][]byte
-	packetStore       []*cachedPacket
+	handshakeStart    time.Time        //todo: this an entry in the handshake manager
+	HandshakeReady    bool             //todo: being in the manager means you are ready
+	HandshakeCounter  int              //todo: another handshake manager entry
+	HandshakeComplete bool             //todo: this should go away in favor of ConnectionState.ready
+	HandshakePacket   map[uint8][]byte //todo: this is other handshake manager entry
+	packetStore       []*cachedPacket  //todo: this is other handshake manager entry
 	remoteIndexId     uint32
 	localIndexId      uint32
 	hostId            uint32
 	recvError         int
 	remoteCidr        *CIDRTree
-
-	// This is a list of remotes that we have tried to handshake with and have returned from the wrong vpn ip.
-	// They should not be tried again during a handshake
-	badRemotes []*udpAddr
 
 	// lastRebindCount is the other side of Interface.rebindCount, if these values don't match then we need to ask LH
 	// for a punch from the remote end of this tunnel. The goal being to prime their conntrack for our traffic just like
@@ -88,7 +83,6 @@ func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRang
 		Hosts:           h,
 		preferredRanges: preferredRanges,
 		vpnCIDR:         vpnCIDR,
-		defaultRoute:    0,
 		unsafeRoutes:    NewCIDRTree(),
 		l:               l,
 	}
@@ -131,7 +125,6 @@ func (hm *HostMap) AddVpnIP(vpnIP uint32) *HostInfo {
 	if _, ok := hm.Hosts[vpnIP]; !ok {
 		hm.RUnlock()
 		h = &HostInfo{
-			Remotes:         []*udpAddr{},
 			promoteCounter:  0,
 			hostId:          vpnIP,
 			HandshakePacket: make(map[uint8][]byte, 0),
@@ -294,30 +287,6 @@ func (hm *HostMap) QueryReverseIndex(index uint32) (*HostInfo, error) {
 	}
 }
 
-func (hm *HostMap) AddRemote(vpnIp uint32, remote *udpAddr) *HostInfo {
-	hm.Lock()
-	i, v := hm.Hosts[vpnIp]
-	if v {
-		i.AddRemote(remote)
-	} else {
-		i = &HostInfo{
-			Remotes:         []*udpAddr{remote.Copy()},
-			promoteCounter:  0,
-			hostId:          vpnIp,
-			HandshakePacket: make(map[uint8][]byte, 0),
-		}
-		i.remote = i.Remotes[0]
-		hm.Hosts[vpnIp] = i
-		if hm.l.Level >= logrus.DebugLevel {
-			hm.l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": IntIp(vpnIp), "udpAddr": remote, "mapTotalSize": len(hm.Hosts)}).
-				Debug("Hostmap remote ip added")
-		}
-	}
-	i.ForcePromoteBest(hm.preferredRanges)
-	hm.Unlock()
-	return i
-}
-
 func (hm *HostMap) QueryVpnIP(vpnIp uint32) (*HostInfo, error) {
 	return hm.queryVpnIP(vpnIp, nil)
 }
@@ -331,12 +300,13 @@ func (hm *HostMap) PromoteBestQueryVpnIP(vpnIp uint32, ifce *Interface) (*HostIn
 func (hm *HostMap) queryVpnIP(vpnIp uint32, promoteIfce *Interface) (*HostInfo, error) {
 	hm.RLock()
 	if h, ok := hm.Hosts[vpnIp]; ok {
-		if promoteIfce != nil {
+		// Do not attempt promotion if you are a lighthouse
+		if promoteIfce != nil && !promoteIfce.lightHouse.amLighthouse {
 			h.TryPromoteBest(hm.preferredRanges, promoteIfce)
 		}
-		//fmt.Println(h.remote)
 		hm.RUnlock()
 		return h, nil
+
 	} else {
 		//return &net.UDPAddr{}, nil, errors.New("Unable to find host")
 		hm.RUnlock()
@@ -362,11 +332,8 @@ func (hm *HostMap) queryUnsafeRoute(ip uint32) uint32 {
 // We already have the hm Lock when this is called, so make sure to not call
 // any other methods that might try to grab it again
 func (hm *HostMap) addHostInfo(hostinfo *HostInfo, f *Interface) {
-	remoteCert := hostinfo.ConnectionState.peerCert
-	ip := ip2int(remoteCert.Details.Ips[0].IP)
-
-	f.lightHouse.AddRemoteAndReset(ip, hostinfo.remote)
 	if f.serveDns {
+		remoteCert := hostinfo.ConnectionState.peerCert
 		dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ips[0].IP.String())
 	}
 
@@ -381,38 +348,22 @@ func (hm *HostMap) addHostInfo(hostinfo *HostInfo, f *Interface) {
 	}
 }
 
-func (hm *HostMap) ClearRemotes(vpnIP uint32) {
-	hm.Lock()
-	i := hm.Hosts[vpnIP]
-	if i == nil {
-		hm.Unlock()
-		return
-	}
-	i.remote = nil
-	i.Remotes = nil
-	hm.Unlock()
-}
-
-func (hm *HostMap) SetDefaultRoute(ip uint32) {
-	hm.defaultRoute = ip
-}
-
-func (hm *HostMap) PunchList() []*udpAddr {
-	var list []*udpAddr
+// punchList assembles a list of all non nil RemoteList pointer entries in this hostmap
+// The caller can then do the its work outside of the read lock
+func (hm *HostMap) punchList() []*RemoteList {
 	hm.RLock()
+	defer hm.RUnlock()
+	var list []*RemoteList
+
 	for _, v := range hm.Hosts {
-		for _, r := range v.Remotes {
-			list = append(list, r)
+		if v.remotes != nil {
+			list = append(list, v.remotes)
 		}
-		//	if h, ok := hm.Hosts[vpnIp]; ok {
-		//		hm.Hosts[vpnIp].PromoteBest(hm.preferredRanges, false)
-		//fmt.Println(h.remote)
-		//	}
 	}
-	hm.RUnlock()
 	return list
 }
 
+// Punchy iterates through the result of punchList() to assemble all known addresses and sends a hole punch packet to them
 func (hm *HostMap) Punchy(conn *udpConn) {
 	var metricsTxPunchy metrics.Counter
 	if hm.metricsEnabled {
@@ -423,9 +374,12 @@ func (hm *HostMap) Punchy(conn *udpConn) {
 
 	b := []byte{1}
 	for {
-		for _, addr := range hm.PunchList() {
-			metricsTxPunchy.Inc(1)
-			conn.WriteTo(b, addr)
+		list := hm.punchList()
+		for _, remotes := range list {
+			for _, addr := range remotes.CopyAddrs(hm.preferredRanges) {
+				metricsTxPunchy.Inc(1)
+				conn.WriteTo(b, addr)
+			}
 		}
 		time.Sleep(time.Second * 30)
 	}
@@ -438,38 +392,15 @@ func (hm *HostMap) addUnsafeRoutes(routes *[]route) {
 	}
 }
 
-func (i *HostInfo) MarshalJSON() ([]byte, error) {
-	return json.Marshal(m{
-		"remote":             i.remote,
-		"remotes":            i.Remotes,
-		"promote_counter":    i.promoteCounter,
-		"connection_state":   i.ConnectionState,
-		"handshake_start":    i.handshakeStart,
-		"handshake_ready":    i.HandshakeReady,
-		"handshake_counter":  i.HandshakeCounter,
-		"handshake_complete": i.HandshakeComplete,
-		"handshake_packet":   i.HandshakePacket,
-		"packet_store":       i.packetStore,
-		"remote_index":       i.remoteIndexId,
-		"local_index":        i.localIndexId,
-		"host_id":            int2ip(i.hostId),
-		"receive_errors":     i.recvError,
-		"last_roam":          i.lastRoam,
-		"last_roam_remote":   i.lastRoamRemote,
-	})
-}
-
 func (i *HostInfo) BindConnectionState(cs *ConnectionState) {
 	i.ConnectionState = cs
 }
 
+// TryPromoteBest handles re-querying lighthouses and probing for better paths
+// NOTE: It is an error to call this if you are a lighthouse since they should not roam clients!
 func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface) {
-	if i.remote == nil {
-		i.ForcePromoteBest(preferredRanges)
-		return
-	}
-
-	if atomic.AddUint32(&i.promoteCounter, 1)%PromoteEvery == 0 {
+	c := atomic.AddUint32(&i.promoteCounter, 1)
+	if c%PromoteEvery == 0 {
 		// return early if we are already on a preferred remote
 		rIP := i.remote.IP
 		for _, l := range preferredRanges {
@@ -478,87 +409,21 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 			}
 		}
 
-		// We re-query the lighthouse periodically while sending packets, so
-		// check for new remotes in our local lighthouse cache
-		ips := ifce.lightHouse.QueryCache(i.hostId)
-		for _, ip := range ips {
-			i.AddRemote(ip)
-		}
+		i.remotes.ForEach(preferredRanges, func(addr *udpAddr, preferred bool) {
+			if addr == nil || !preferred {
+				return
+			}
 
-		best, preferred := i.getBestRemote(preferredRanges)
-		if preferred && !best.Equals(i.remote) {
 			// Try to send a test packet to that host, this should
 			// cause it to detect a roaming event and switch remotes
-			ifce.send(test, testRequest, i.ConnectionState, i, best, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
-		}
-	}
-}
-
-func (i *HostInfo) ForcePromoteBest(preferredRanges []*net.IPNet) {
-	best, _ := i.getBestRemote(preferredRanges)
-	if best != nil {
-		i.remote = best
-	}
-}
-
-func (i *HostInfo) getBestRemote(preferredRanges []*net.IPNet) (best *udpAddr, preferred bool) {
-	if len(i.Remotes) > 0 {
-		for _, r := range i.Remotes {
-			for _, l := range preferredRanges {
-				if l.Contains(r.IP) {
-					return r, true
-				}
-			}
-
-			if best == nil || !PrivateIP(r.IP) {
-				best = r
-			}
-			/*
-				for _, r := range i.Remotes {
-					// Must have > 80% probe success to be considered.
-					//fmt.Println("GRADE:", r.addr.IP, r.Grade())
-					if r.Grade() > float64(.8) {
-						if localToMe.Contains(r.addr.IP) == true {
-							best = r.addr
-							break
-							//i.remote = i.Remotes[c].addr
-						} else {
-								//}
-					}
-			*/
-		}
-		return best, false
+			ifce.send(test, testRequest, i.ConnectionState, i, addr, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+		})
 	}
 
-	return nil, false
-}
-
-// rotateRemote will move remote to the next ip in the list of remote ips for this host
-// This is different than PromoteBest in that what is algorithmically best may not actually work.
-// Only known use case is when sending a stage 0 handshake.
-// It may be better to just send stage 0 handshakes to all known ips and sort it out in the receiver.
-func (i *HostInfo) rotateRemote() {
-	// We have 0, can't rotate
-	if len(i.Remotes) < 1 {
-		return
+	// Re query our lighthouses for new remotes occasionally
+	if c%ReQueryEvery == 0 && ifce.lightHouse != nil {
+		ifce.lightHouse.QueryServer(i.hostId, ifce)
 	}
-
-	if i.remote == nil {
-		i.remote = i.Remotes[0]
-		return
-	}
-
-	// We want to look at all but the very last entry since that is handled at the end
-	for x := 0; x < len(i.Remotes)-1; x++ {
-		// Find our current position and move to the next one in the list
-		if i.Remotes[x].Equals(i.remote) {
-			i.remote = i.Remotes[x+1]
-			return
-		}
-	}
-
-	// Our current position was likely the last in the list, start over at 0
-	i.remote = i.Remotes[0]
 }
 
 func (i *HostInfo) cachePacket(l *logrus.Logger, t NebulaMessageType, st NebulaMessageSubType, packet []byte, f packetCallback) {
@@ -607,21 +472,11 @@ func (i *HostInfo) handshakeComplete(l *logrus.Logger) {
 		}
 	}
 
-	i.badRemotes = make([]*udpAddr, 0)
+	i.remotes.ResetBlockedRemotes()
 	i.packetStore = make([]*cachedPacket, 0)
 	i.ConnectionState.ready = true
 	i.ConnectionState.queueLock.Unlock()
 	i.ConnectionState.certState = nil
-}
-
-func (i *HostInfo) CopyRemotes() []*udpAddr {
-	i.RLock()
-	rc := make([]*udpAddr, len(i.Remotes), len(i.Remotes))
-	for x, addr := range i.Remotes {
-		rc[x] = addr.Copy()
-	}
-	i.RUnlock()
-	return rc
 }
 
 func (i *HostInfo) GetCert() *cert.NebulaCertificate {
@@ -631,58 +486,12 @@ func (i *HostInfo) GetCert() *cert.NebulaCertificate {
 	return nil
 }
 
-func (i *HostInfo) AddRemote(remote *udpAddr) *udpAddr {
-	if i.unlockedIsBadRemote(remote) {
-		return i.remote
-	}
-
-	for _, r := range i.Remotes {
-		if r.Equals(remote) {
-			return r
-		}
-	}
-
-	// Trim this down if necessary
-	if len(i.Remotes) > MaxRemotes {
-		i.Remotes = i.Remotes[len(i.Remotes)-MaxRemotes:]
-	}
-
-	rc := remote.Copy()
-	i.Remotes = append(i.Remotes, rc)
-	return rc
-}
-
 func (i *HostInfo) SetRemote(remote *udpAddr) {
-	i.remote = i.AddRemote(remote)
-}
-
-func (i *HostInfo) unlockedBlockRemote(remote *udpAddr) {
-	if !i.unlockedIsBadRemote(remote) {
-		// We copy here because we are taking something else's memory and we can't trust everything
-		i.badRemotes = append(i.badRemotes, remote.Copy())
+	// We copy here because we likely got this remote from a source that reuses the object
+	if !i.remote.Equals(remote) {
+		i.remote = remote.Copy()
+		i.remotes.LearnRemote(i.hostId, remote.Copy())
 	}
-
-	for k, v := range i.Remotes {
-		if v.Equals(remote) {
-			i.Remotes[k] = i.Remotes[len(i.Remotes)-1]
-			i.Remotes = i.Remotes[:len(i.Remotes)-1]
-			return
-		}
-	}
-}
-
-func (i *HostInfo) unlockedIsBadRemote(remote *udpAddr) bool {
-	for _, v := range i.badRemotes {
-		if v.Equals(remote) {
-			return true
-		}
-	}
-	return false
-}
-
-func (i *HostInfo) ClearRemotes() {
-	i.remote = nil
-	i.Remotes = []*udpAddr{}
 }
 
 func (i *HostInfo) ClearConnectionState() {
@@ -804,14 +613,4 @@ func localIps(l *logrus.Logger, allowList *AllowList) *[]net.IP {
 		}
 	}
 	return &ips
-}
-
-func PrivateIP(ip net.IP) bool {
-	//TODO: Private for ipv6 or just let it ride?
-	private := false
-	_, private24BitBlock, _ := net.ParseCIDR("10.0.0.0/8")
-	_, private20BitBlock, _ := net.ParseCIDR("172.16.0.0/12")
-	_, private16BitBlock, _ := net.ParseCIDR("192.168.0.0/16")
-	private = private24BitBlock.Contains(ip) || private20BitBlock.Contains(ip) || private16BitBlock.Contains(ip)
-	return private
 }

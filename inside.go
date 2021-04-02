@@ -54,10 +54,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 
 	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, f.caPool, localCache)
 	if dropReason == nil {
-		mc := f.sendNoMetrics(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out, q)
-		if f.lightHouse != nil && mc%5000 == 0 {
-			f.lightHouse.Query(fwPacket.RemoteIP, f)
-		}
+		f.sendNoMetrics(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out, q)
 
 	} else if f.l.Level >= logrus.DebugLevel {
 		hostinfo.logger(f.l).
@@ -84,15 +81,13 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 			hostinfo = f.handshakeManager.AddVpnIP(vpnIp)
 		}
 	}
-
 	ci := hostinfo.ConnectionState
 
 	if ci != nil && ci.eKey != nil && ci.ready {
 		return hostinfo
 	}
 
-	// Handshake is not ready, we need to grab the lock now before we start
-	// the handshake process
+	// Handshake is not ready, we need to grab the lock now before we start the handshake process
 	hostinfo.Lock()
 	defer hostinfo.Unlock()
 
@@ -150,10 +145,7 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 		return
 	}
 
-	messageCounter := f.sendNoMetrics(message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out, 0)
-	if f.lightHouse != nil && messageCounter%5000 == 0 {
-		f.lightHouse.Query(fp.RemoteIP, f)
-	}
+	f.sendNoMetrics(message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out, 0)
 }
 
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
@@ -187,50 +179,15 @@ func (f *Interface) sendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubT
 	f.send(t, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out)
 }
 
-// SendMessageToAll handles real ip:port lookup and sends to all known addresses for vpnIp
-func (f *Interface) SendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
-	hostInfo := f.getOrHandshake(vpnIp)
-	if hostInfo == nil {
-		if f.l.Level >= logrus.DebugLevel {
-			f.l.WithField("vpnIp", IntIp(vpnIp)).
-				Debugln("dropping SendMessageToAll, vpnIp not in our CIDR or in unsafe routes")
-		}
-		return
-	}
-
-	if hostInfo.ConnectionState.ready == false {
-		// Because we might be sending stored packets, lock here to stop new things going to
-		// the packet queue.
-		hostInfo.ConnectionState.queueLock.Lock()
-		if !hostInfo.ConnectionState.ready {
-			hostInfo.cachePacket(f.l, t, st, p, f.sendMessageToAll)
-			hostInfo.ConnectionState.queueLock.Unlock()
-			return
-		}
-		hostInfo.ConnectionState.queueLock.Unlock()
-	}
-
-	f.sendMessageToAll(t, st, hostInfo, p, nb, out)
-	return
-}
-
-func (f *Interface) sendMessageToAll(t NebulaMessageType, st NebulaMessageSubType, hostInfo *HostInfo, p, nb, b []byte) {
-	hostInfo.RLock()
-	for _, r := range hostInfo.Remotes {
-		f.send(t, st, hostInfo.ConnectionState, hostInfo, r, p, nb, b)
-	}
-	hostInfo.RUnlock()
-}
-
 func (f *Interface) send(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte) {
 	f.messageMetrics.Tx(t, st, 1)
 	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
 }
 
-func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte, q int) uint64 {
+func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte, q int) {
 	if ci.eKey == nil {
 		//TODO: log warning
-		return 0
+		return
 	}
 
 	var err error
@@ -262,7 +219,7 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 			WithField("udpAddr", remote).WithField("counter", c).
 			WithField("attemptedCounter", c).
 			Error("Failed to encrypt outgoing packet")
-		return c
+		return
 	}
 
 	err = f.writers[q].WriteTo(out, remote)
@@ -270,7 +227,7 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 		hostinfo.logger(f.l).WithError(err).
 			WithField("udpAddr", remote).Error("Failed to write outgoing packet")
 	}
-	return c
+	return
 }
 
 func isMulticast(ip uint32) bool {
