@@ -56,7 +56,15 @@ func parseIPAndPort(s string) (net.IP, uint16, error) {
 		return nil, 0, err
 	}
 
+	addr, err := net.ResolveIPAddr("ip", rIp)
+	if err != nil {
+		return nil, 0, err
+	}
+
 	iPort, err := strconv.Atoi(sPort)
-	ip := net.ParseIP(rIp)
-	return ip, uint16(iPort), nil
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return addr.IP, uint16(iPort), nil
 }
