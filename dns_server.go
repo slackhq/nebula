@@ -133,7 +133,7 @@ func getDnsServerAddr(c *Config) string {
 func startDns(l *logrus.Logger, c *Config) {
 	dnsAddr = getDnsServerAddr(c)
 	dnsServer = &dns.Server{Addr: dnsAddr, Net: "udp"}
-	l.Debugf("Starting DNS responder at %s\n", dnsAddr)
+	l.Infof("Starting DNS responder at %s\n", dnsAddr)
 	err := dnsServer.ListenAndServe()
 	defer dnsServer.Shutdown()
 	if err != nil {

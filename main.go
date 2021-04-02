@@ -341,7 +341,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	//handshakeMACKey := config.GetString("handshake_mac.key", "")
 	//handshakeAcceptedMACKeys := config.GetStringSlice("handshake_mac.accepted_keys", []string{})
 
-	serveDns := config.GetBool("lighthouse.serve_dns", false)
+	serveDns := config.GetBool("lighthouse.am_lighthouse", false) && config.GetBool("lighthouse.serve_dns", false)
 	checkInterval := config.GetInt("timers.connection_alive_interval", 5)
 	pendingDeletionInterval := config.GetInt("timers.pending_deletion_interval", 10)
 	ifConfig := &InterfaceConfig{
