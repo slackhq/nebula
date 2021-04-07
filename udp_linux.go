@@ -97,39 +97,20 @@ func (u *udpConn) GetSendBuffer() (int, error) {
 }
 
 func (u *udpConn) LocalAddr() (*udpAddr, error) {
-	var rsa unix.RawSockaddrAny
-	var rLen = unix.SizeofSockaddrAny
-
-	_, _, err := unix.Syscall(
-		unix.SYS_GETSOCKNAME,
-		uintptr(u.sysFd),
-		uintptr(unsafe.Pointer(&rsa)),
-		uintptr(unsafe.Pointer(&rLen)),
-	)
-
-	if err != 0 {
+	sa, err := unix.Getsockname(u.sysFd)
+	if err != nil {
 		return nil, err
 	}
 
 	addr := &udpAddr{}
-	if rsa.Addr.Family == unix.AF_INET {
-		pp := (*unix.RawSockaddrInet4)(unsafe.Pointer(&rsa))
-		addr.Port = uint16(rsa.Addr.Data[0])<<8 + uint16(rsa.Addr.Data[1])
-		copy(addr.IP, pp.Addr[:])
-
-	} else if rsa.Addr.Family == unix.AF_INET6 {
-		//TODO: this cast sucks and we can do better
-		pp := (*unix.RawSockaddrInet6)(unsafe.Pointer(&rsa))
-		addr.Port = uint16(rsa.Addr.Data[0])<<8 + uint16(rsa.Addr.Data[1])
-		copy(addr.IP, pp.Addr[:])
-
-	} else {
-		addr.Port = 0
-		addr.IP = []byte{}
+	switch sa := sa.(type) {
+	case *unix.SockaddrInet4:
+		addr.IP = sa.Addr[0:]
+		addr.Port = uint16(sa.Port)
+	case *unix.SockaddrInet6:
+		addr.IP = sa.Addr[0:]
+		addr.Port = uint16(sa.Port)
 	}
-
-	//TODO: Just use this instead?
-	//a, b := unix.Getsockname(u.sysFd)
 
 	return addr, nil
 }
