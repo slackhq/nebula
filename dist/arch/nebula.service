@@ -5,8 +5,6 @@ After=basic.target network.target network-online.target
 
 [Service]
 SyslogIdentifier=nebula
-StandardOutput=syslog
-StandardError=syslog
 ExecReload=/bin/kill -HUP $MAINPID
 ExecStart=/usr/bin/nebula -config /etc/nebula/config.yml
 Restart=always
