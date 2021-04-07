@@ -232,7 +232,11 @@ func (hm *HostMap) DeleteReverseIndex(index uint32) {
 
 func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 	hm.Lock()
+	defer hm.Unlock()
+	hm.unlockedDeleteHostInfo(hostinfo)
+}
 
+func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 	// Check if this same hostId is in the hostmap with a different instance.
 	// This could happen if we have an entry in the pending hostmap with different
 	// index values than the one in the main hostmap.
@@ -255,7 +259,6 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 	if len(hm.RemoteIndexes) == 0 {
 		hm.RemoteIndexes = map[uint32]*HostInfo{}
 	}
-	hm.Unlock()
 
 	if hm.l.Level >= logrus.DebugLevel {
 		hm.l.WithField("hostMap", m{"mapName": hm.name, "mapTotalSize": len(hm.Hosts),

@@ -132,12 +132,18 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 	f.connectionManager.In(hostinfo.hostId)
 }
 
+// closeTunnel closes a tunnel locally, it does not send a closeTunnel packet to the remote
 func (f *Interface) closeTunnel(hostInfo *HostInfo) {
 	//TODO: this would be better as a single function in ConnectionManager that handled locks appropriately
 	f.connectionManager.ClearIP(hostInfo.hostId)
 	f.connectionManager.ClearPendingDeletion(hostInfo.hostId)
 	f.lightHouse.DeleteVpnIP(hostInfo.hostId)
 	f.hostMap.DeleteHostInfo(hostInfo)
+}
+
+// sendCloseTunnel is a helper function to send a proper close tunnel packet to a remote
+func (f *Interface) sendCloseTunnel(h *HostInfo) {
+	f.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 }
 
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {

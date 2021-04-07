@@ -117,7 +117,6 @@ func (r *R) RouteUntilTxTun(sender *nebula.Control, receiver *nebula.Control) []
 //   - exitNow: the packet will not be routed and this call will return immediately
 //   - routeAndExit: this call will return immediately after routing the last packet from sender
 //   - keepRouting: the packet will be routed and whatDo will be called again on the next packet from sender
-//TODO: is this RouteWhile?
 func (r *R) RouteExitFunc(sender *nebula.Control, whatDo ExitFunc) {
 	h := &nebula.Header{}
 	for {
@@ -190,38 +189,12 @@ func (r *R) RouteForUntilAfterToAddr(sender *nebula.Control, toAddr *net.UDPAddr
 	})
 }
 
-// getControl performs or seeds NAT translation and returns the control for toAddr, p from fields may change
-// This is an internal router function, the caller must hold the lock
-func (r *R) getControl(fromAddr, toAddr string, p *nebula.UdpPacket) *nebula.Control {
-	if newAddr, ok := r.outNat[fromAddr+":"+toAddr]; ok {
-		p.FromIp = newAddr.IP
-		p.FromPort = uint16(newAddr.Port)
-	}
-
-	c, ok := r.inNat[toAddr]
-	if ok {
-		sHost, sPort, err := net.SplitHostPort(toAddr)
-		if err != nil {
-			panic(err)
-		}
-
-		port, err := strconv.Atoi(sPort)
-		if err != nil {
-			panic(err)
-		}
-
-		r.outNat[c.GetUDPAddr()+":"+fromAddr] = net.UDPAddr{
-			IP:   net.ParseIP(sHost),
-			Port: port,
-		}
-		return c
-	}
-
-	//TODO: call receive hooks!
-	return r.controls[toAddr]
-}
-
-func (r *R) RouteForAllUntilFunc(whatDo ExitFunc) {
+// RouteForAllExitFunc will route for every registered controller and calls the whatDo func with each udp packet from
+// whatDo can return:
+//   - exitNow: the packet will not be routed and this call will return immediately
+//   - routeAndExit: this call will return immediately after routing the last packet from sender
+//   - keepRouting: the packet will be routed and whatDo will be called again on the next packet from sender
+func (r *R) RouteForAllExitFunc(whatDo ExitFunc) {
 	sc := make([]reflect.SelectCase, len(r.controls))
 	cm := make([]*nebula.Control, len(r.controls))
 
@@ -270,5 +243,78 @@ func (r *R) RouteForAllUntilFunc(whatDo ExitFunc) {
 		}
 		r.Unlock()
 	}
+}
 
+// FlushAll will route for every registered controller, exiting once there are no packets left to route
+func (r *R) FlushAll() {
+	sc := make([]reflect.SelectCase, len(r.controls))
+	cm := make([]*nebula.Control, len(r.controls))
+
+	i := 0
+	for _, c := range r.controls {
+		sc[i] = reflect.SelectCase{
+			Dir: reflect.SelectRecv,
+			Chan: reflect.ValueOf(c.GetUDPTxChan()),
+			Send: reflect.Value{},
+		}
+
+		cm[i] = c
+		i++
+	}
+
+	// Add a default case to exit when nothing is left to send
+	sc = append(sc, reflect.SelectCase{
+		Dir: reflect.SelectDefault,
+		Chan: reflect.Value{},
+		Send: reflect.Value{},
+	})
+
+	for {
+		x, rx, ok := reflect.Select(sc)
+		if !ok {
+			return
+		}
+		r.Lock()
+
+		p := rx.Interface().(*nebula.UdpPacket)
+
+		outAddr := cm[x].GetUDPAddr()
+		inAddr := net.JoinHostPort(p.ToIp.String(), fmt.Sprintf("%v", p.ToPort))
+		receiver := r.getControl(outAddr, inAddr, p)
+		if receiver == nil {
+			r.Unlock()
+			panic("Can't route for host: " + inAddr)
+		}
+		r.Unlock()
+	}
+}
+
+// getControl performs or seeds NAT translation and returns the control for toAddr, p from fields may change
+// This is an internal router function, the caller must hold the lock
+func (r *R) getControl(fromAddr, toAddr string, p *nebula.UdpPacket) *nebula.Control {
+	if newAddr, ok := r.outNat[fromAddr+":"+toAddr]; ok {
+		p.FromIp = newAddr.IP
+		p.FromPort = uint16(newAddr.Port)
+	}
+
+	c, ok := r.inNat[toAddr]
+	if ok {
+		sHost, sPort, err := net.SplitHostPort(toAddr)
+		if err != nil {
+			panic(err)
+		}
+
+		port, err := strconv.Atoi(sPort)
+		if err != nil {
+			panic(err)
+		}
+
+		r.outNat[c.GetUDPAddr()+":"+fromAddr] = net.UDPAddr{
+			IP:   net.ParseIP(sHost),
+			Port: port,
+		}
+		return c
+	}
+
+	return r.controls[toAddr]
 }

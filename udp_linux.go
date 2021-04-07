@@ -105,7 +105,7 @@ func (u *udpConn) LocalAddr() (*udpAddr, error) {
 	addr := &udpAddr{}
 	switch sa := sa.(type) {
 	case *unix.SockaddrInet4:
-		addr.IP = sa.Addr[0:]
+		addr.IP = net.IP{sa.Addr[0], sa.Addr[1], sa.Addr[2], sa.Addr[3]}.To16()
 		addr.Port = uint16(sa.Port)
 	case *unix.SockaddrInet6:
 		addr.IP = sa.Addr[0:]

@@ -188,6 +188,7 @@ var (
 	ErrExistingHostInfo    = errors.New("existing hostinfo")
 	ErrAlreadySeen         = errors.New("already seen")
 	ErrLocalIndexCollision = errors.New("local index collision")
+	ErrExistingHandshake   = errors.New("existing handshake")
 )
 
 // CheckAndComplete checks for any conflicts in the main and pending hostmap
@@ -207,12 +208,16 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 	c.mainHostMap.Lock()
 	defer c.mainHostMap.Unlock()
 
+	// Check if we already have a tunnel with this vpn ip
 	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.hostId]
 	if found && existingHostInfo != nil {
+		// Is it just a delayed handshake packet?
 		if bytes.Equal(hostinfo.HandshakePacket[handshakePacket], existingHostInfo.HandshakePacket[handshakePacket]) {
 			return existingHostInfo, ErrAlreadySeen
 		}
+
 		if !overwrite {
+			// It's a new handshake and we lost the race
 			return existingHostInfo, ErrExistingHostInfo
 		}
 	}
@@ -222,6 +227,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 		// We have a collision, but for a different hostinfo
 		return existingIndex, ErrLocalIndexCollision
 	}
+
 	existingIndex, found = c.pendingHostMap.Indexes[hostinfo.localIndexId]
 	if found && existingIndex != hostinfo {
 		// We have a collision, but for a different hostinfo
@@ -235,6 +241,20 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 		hostinfo.logger(c.l).
 			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", IntIp(existingRemoteIndex.hostId)).
 			Info("New host shadows existing host remoteIndex")
+	}
+
+	// Check if we are also handshaking with this vpn ip
+	pendingHostInfo, found := c.pendingHostMap.Hosts[hostinfo.hostId]
+	if found && pendingHostInfo != nil {
+		if !overwrite {
+			// We won, let our pending handshake win
+			return pendingHostInfo, ErrExistingHandshake
+		}
+
+		// We lost, take this handshake and move any cached packets over so they get sent
+		hostinfo.packetStore = append(hostinfo.packetStore, pendingHostInfo.packetStore...)
+		c.pendingHostMap.unlockedDeleteHostInfo(pendingHostInfo)
+		pendingHostInfo.logger(c.l).Info("Handshake race lost, replacing pending handshake with completed tunnel")
 	}
 
 	if existingHostInfo != nil {

@@ -205,6 +205,10 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 		case ErrExistingHostInfo:
 			// This means there was an existing tunnel and we didn't win
 			// handshake avoidance
+
+			//TODO: sprinkle the new protobuf stuff in here, send a reply to get the recv_errors flowing
+			//TODO: if not new send a test packet like old
+
 			f.l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 				WithField("certName", certName).
 				WithField("fingerprint", fingerprint).
@@ -224,6 +228,15 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
 				WithField("localIndex", hostinfo.localIndexId).WithField("collision", IntIp(existing.hostId)).
 				Error("Failed to add HostInfo due to localIndex collision")
+			return
+		case ErrExistingHandshake:
+			// We have a race where both parties think they are an initiator and this tunnel lost, let the other one finish
+			f.l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
+				WithField("certName", certName).
+				WithField("fingerprint", fingerprint).
+				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
+				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+				Error("Prevented a pending handshake race")
 			return
 		default:
 			// Shouldn't happen, but just in case someone adds a new error type to CheckAndComplete
@@ -327,16 +340,12 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	certName := remoteCert.Details.Name
 	fingerprint, _ := remoteCert.Sha256Sum()
 
+	// Ensure the right host reponded
 	if vpnIP != hostinfo.hostId {
 		f.l.WithField("intendedVpnIp", IntIp(hostinfo.hostId)).WithField("haveVpnIp", IntIp(vpnIP)).
 			WithField("udpAddr", addr).WithField("certName", certName).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 			Info("Incorrect host responded to handshake")
-
-		if ho, _ := f.handshakeManager.pendingHostMap.QueryVpnIP(vpnIP); ho != nil {
-			// We might have a pending tunnel to this host already, clear out that attempt since we have a tunnel now
-			f.handshakeManager.pendingHostMap.DeleteHostInfo(ho)
-		}
 
 		// Release our old handshake from pending, it should not continue
 		f.handshakeManager.pendingHostMap.DeleteHostInfo(hostinfo)
@@ -361,9 +370,12 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		newHostInfo.packetStore = hostinfo.packetStore
 		hostinfo.packetStore = []*cachedPacket{}
 
-		// Set the current hostId to the new vpnIp
+		// Finally, put the correct vpn ip in the host info, tell them to close the tunnel, and return true to tear down
 		hostinfo.hostId = vpnIP
+		f.sendCloseTunnel(hostinfo)
 		newHostInfo.Unlock()
+
+		return true
 	}
 
 	// Mark packet 2 as seen so it doesn't show up as missed

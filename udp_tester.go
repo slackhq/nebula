@@ -3,6 +3,7 @@
 package nebula
 
 import (
+	"fmt"
 	"net"
 
 	"github.com/sirupsen/logrus"
@@ -57,7 +58,10 @@ func (u *udpConn) Send(packet *UdpPacket) {
 	if err := h.Parse(packet.Data); err != nil {
 		panic(err)
 	}
-	u.l.Infof("UDP receiving packet from: %v:%v; %+v", packet.FromIp, packet.FromPort, h)
+	u.l.WithField("header", h).
+		WithField("udpAddr", fmt.Sprintf("%v:%v", packet.FromIp, packet.FromPort)).
+		WithField("dataLen", len(packet.Data)).
+		Info("UDP receiving injected packet")
 	u.rxPackets <- packet
 }
 
