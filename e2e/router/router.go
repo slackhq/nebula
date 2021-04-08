@@ -201,7 +201,7 @@ func (r *R) RouteForAllExitFunc(whatDo ExitFunc) {
 	i := 0
 	for _, c := range r.controls {
 		sc[i] = reflect.SelectCase{
-			Dir: reflect.SelectRecv,
+			Dir:  reflect.SelectRecv,
 			Chan: reflect.ValueOf(c.GetUDPTxChan()),
 			Send: reflect.Value{},
 		}
@@ -253,7 +253,7 @@ func (r *R) FlushAll() {
 	i := 0
 	for _, c := range r.controls {
 		sc[i] = reflect.SelectCase{
-			Dir: reflect.SelectRecv,
+			Dir:  reflect.SelectRecv,
 			Chan: reflect.ValueOf(c.GetUDPTxChan()),
 			Send: reflect.Value{},
 		}
@@ -264,7 +264,7 @@ func (r *R) FlushAll() {
 
 	// Add a default case to exit when nothing is left to send
 	sc = append(sc, reflect.SelectCase{
-		Dir: reflect.SelectDefault,
+		Dir:  reflect.SelectDefault,
 		Chan: reflect.Value{},
 		Send: reflect.Value{},
 	})

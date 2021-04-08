@@ -116,3 +116,13 @@ func (c *Control) InjectTunUDPPacket(toIp net.IP, toPort uint16, fromPort uint16
 func (c *Control) GetUDPAddr() string {
 	return c.f.outside.addr.String()
 }
+
+func (c *Control) KillPendingTunnel(vpnIp net.IP) bool {
+	hostinfo, ok := c.f.handshakeManager.pendingHostMap.Hosts[ip2int(vpnIp)]
+	if !ok {
+		return false
+	}
+
+	c.f.handshakeManager.pendingHostMap.DeleteHostInfo(hostinfo)
+	return true
+}

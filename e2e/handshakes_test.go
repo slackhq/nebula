@@ -124,7 +124,7 @@ func TestWrongResponderHandshake(t *testing.T) {
 	theirControl.Stop()
 }
 
-func TestBothInitiatorRace(t *testing.T) {
+func Test_Case1_Stage1Race(t *testing.T) {
 	ca, _, caKey, _ := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
 	myControl, myVpnIp, myUdpAddr := newSimpleServer(ca, caKey, "me  ", net.IP{10, 0, 0, 1})
 	theirControl, theirVpnIp, theirUdpAddr := newSimpleServer(ca, caKey, "them", net.IP{10, 0, 0, 2})
@@ -151,6 +151,7 @@ func TestBothInitiatorRace(t *testing.T) {
 	t.Log("Now inject both stage 1 handshake packets")
 	myControl.InjectUDPPacket(theirHsForMe)
 	theirControl.InjectUDPPacket(myHsForThem)
+	//TODO: they should win, grab their index for me and make sure I use it in the end.
 
 	t.Log("They should not have a stage 2 (won the race) but I should send one")
 	theirControl.InjectUDPPacket(myControl.GetFromUDP(true))

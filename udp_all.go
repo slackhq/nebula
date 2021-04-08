@@ -13,8 +13,8 @@ type udpAddr struct {
 }
 
 func NewUDPAddr(ip net.IP, port uint16) *udpAddr {
-	addr := udpAddr{IP: make([]byte, len(ip)), Port: port}
-	copy(addr.IP, ip)
+	addr := udpAddr{IP: make([]byte, net.IPv6len), Port: port}
+	copy(addr.IP, ip.To16())
 	return &addr
 }
 
@@ -22,7 +22,7 @@ func NewUDPAddrFromString(s string) *udpAddr {
 	ip, port, err := parseIPAndPort(s)
 	//TODO: handle err
 	_ = err
-	return &udpAddr{IP: ip, Port: port}
+	return &udpAddr{IP: ip.To16(), Port: port}
 }
 
 func (ua *udpAddr) Equals(t *udpAddr) bool {

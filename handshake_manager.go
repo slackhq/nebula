@@ -258,6 +258,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 	}
 
 	if existingHostInfo != nil {
+		hostinfo.logger(c.l).Info("Race lost, taking new handshake")
 		// We are going to overwrite this entry, so remove the old references
 		delete(c.mainHostMap.Hosts, existingHostInfo.hostId)
 		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
@@ -272,6 +273,8 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 // won't have a localIndexId collision because we already have an entry in the
 // pendingHostMap
 func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
+	c.pendingHostMap.RLock()
+	defer c.pendingHostMap.RUnlock()
 	c.mainHostMap.Lock()
 	defer c.mainHostMap.Unlock()
 
@@ -293,6 +296,7 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 	}
 
 	c.mainHostMap.addHostInfo(hostinfo, f)
+	c.pendingHostMap.unlockedDeleteHostInfo(hostinfo)
 }
 
 // AddIndexHostInfo generates a unique localIndexId for this HostInfo
