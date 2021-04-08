@@ -16,7 +16,7 @@ import (
 
 //const ProbeLen = 100
 const PromoteEvery = 1000
-const MaxRemotes = 10
+const MaxRemotes = 25
 
 // How long we should prevent roaming back to the previous IP.
 // This helps prevent flapping due to packets already in flight
@@ -644,6 +644,7 @@ func (i *HostInfo) AddRemote(remote *udpAddr) *udpAddr {
 
 	// Trim this down if necessary
 	if len(i.Remotes) > MaxRemotes {
+		l.WithField("delRemote", i.Remotes[0].addr).Warn("Reached MaxRemotes; skipping first entry")
 		i.Remotes = i.Remotes[len(i.Remotes)-MaxRemotes:]
 	}
 
