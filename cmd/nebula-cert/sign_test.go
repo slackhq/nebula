@@ -358,7 +358,8 @@ func Test_signCert(t *testing.T) {
 
 	// generate the encrypted key
 	caPub, caPriv, _ = ed25519.GenerateKey(rand.Reader)
-	b, _ = cert.EncryptAndMarshalEd25519PrivateKey(passphrase, caPriv)
+	kdfParams := cert.NewArgon2Parameters(64*1024, 4, 3)
+	b, _ = cert.EncryptAndMarshalEd25519PrivateKey(caPriv, passphrase, kdfParams)
 	caKeyF.Write(b)
 
 	ca = cert.NebulaCertificate{

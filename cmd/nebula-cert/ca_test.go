@@ -5,14 +5,19 @@ package main
 
 import (
 	"bytes"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"os"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/slackhq/nebula/cert"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/crypto/argon2"
 )
 
 //TODO: test file permissions
@@ -27,16 +32,22 @@ func Test_caHelp(t *testing.T) {
 	assert.Equal(
 		t,
 		"Usage of "+os.Args[0]+" ca <flags>: create a self signed certificate authority\n"+
+			"  -argon-iterations uint\n"+
+			"    \tOptional: Argon2 iterations parameter used for encrypted private key passphrase (default 1)\n"+
+			"  -argon-memory uint\n"+
+			"    \tOptional: Argon2 memory parameter (in KiB) used for encrypted private key passphrase (default 2097152)\n"+
+			"  -argon-parallelism uint\n"+
+			"    \tOptional: Argon2 parallelism parameter used for encrypted private key passphrase (default 4)\n"+
 			"  -duration duration\n"+
 			"    \tOptional: amount of time the certificate should be valid for. Valid time units are seconds: \"s\", minutes: \"m\", hours: \"h\" (default 8760h0m0s)\n"+
+			"  -encrypt\n"+
+			"    \tOptional: prompt for passphrase and write out-key in an encrypted format\n"+
 			"  -groups string\n"+
 			"    \tOptional: comma separated list of groups. This will limit which groups subordinate certs can use\n"+
 			"  -ips string\n"+
 			"    \tOptional: comma separated list of ipv4 address and network in CIDR notation. This will limit which ipv4 addresses and networks subordinate certs can use for ip addresses\n"+
 			"  -name string\n"+
 			"    \tRequired: name of the certificate authority\n"+
-			"  -no-encryption\n"+
-			"    \tOptional: do not prompt for a passphrase, write private key in plaintext\n"+
 			"  -out-crt string\n"+
 			"    \tOptional: path to write the certificate to (default \"ca.crt\")\n"+
 			"  -out-key string\n"+
@@ -69,8 +80,7 @@ func Test_ca(t *testing.T) {
 		err:      nil,
 	}
 
-	expectedOb := "Enter a passphrase (or empty for none): "
-	expectedErrOb := "Warning: no passphrase specified, out-key will be written in plaintext"
+	pwPromptOb := "Enter a passphrase: "
 
 	// required args
 	assertHelpError(t, ca(
@@ -94,8 +104,8 @@ func Test_ca(t *testing.T) {
 	eb.Reset()
 	args := []string{"-name", "test", "-duration", "100m", "-out-crt", "/do/not/write/pleasecrt", "-out-key", "/do/not/write/pleasekey"}
 	assert.EqualError(t, ca(args, ob, eb, nopw), "error while writing out-key: open /do/not/write/pleasekey: "+NoSuchDirError)
-	assert.Equal(t, expectedOb, ob.String())
-	assert.Equal(t, expectedErrOb, eb.String())
+	assert.Equal(t, "", ob.String())
+	assert.Equal(t, "", eb.String())
 
 	// create temp key file
 	keyF, err := ioutil.TempFile("", "test.key")
@@ -107,8 +117,8 @@ func Test_ca(t *testing.T) {
 	eb.Reset()
 	args = []string{"-name", "test", "-duration", "100m", "-out-crt", "/do/not/write/pleasecrt", "-out-key", keyF.Name()}
 	assert.EqualError(t, ca(args, ob, eb, nopw), "error while writing out-crt: open /do/not/write/pleasecrt: "+NoSuchDirError)
-	assert.Equal(t, expectedOb, ob.String())
-	assert.Equal(t, expectedErrOb, eb.String())
+	assert.Equal(t, "", ob.String())
+	assert.Equal(t, "", eb.String())
 
 	// create temp cert file
 	crtF, err := ioutil.TempFile("", "test.crt")
@@ -121,8 +131,8 @@ func Test_ca(t *testing.T) {
 	eb.Reset()
 	args = []string{"-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
 	assert.Nil(t, ca(args, ob, eb, nopw))
-	assert.Equal(t, expectedOb, ob.String())
-	assert.Equal(t, expectedErrOb, eb.String())
+	assert.Equal(t, "", ob.String())
+	assert.Equal(t, "", eb.String())
 
 	// read cert and key files
 	rb, _ := ioutil.ReadFile(keyF.Name())
@@ -151,35 +161,45 @@ func Test_ca(t *testing.T) {
 	os.Remove(crtF.Name())
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
+	args = []string{"-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
 	assert.Nil(t, ca(args, ob, eb, testpw))
-	assert.Equal(t, expectedOb, ob.String())
+	assert.Equal(t, pwPromptOb, ob.String())
 	assert.Equal(t, "", eb.String())
 
-	// read encrypted key file
+	// read encrypted key file and verify default params
 	rb, _ = ioutil.ReadFile(keyF.Name())
-	lKey, b, err = cert.DecryptAndUnmarshalEd25519PrivateKey(passphrase, rb)
-	assert.Len(t, b, 0)
+	k, _ := pem.Decode(rb)
+	red, err := cert.UnmarshalRawNebulaEncryptedData(k.Bytes)
 	assert.Nil(t, err)
+	// we won't know salt in advance, so just check start of string
+	expectedParams := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$", argon2.Version, 2*1024*1024, 1, 4) // TODO un-stringify
+	assert.Regexp(t, "^"+regexp.QuoteMeta(expectedParams), red.EncryptionMetadata.KeyDerivationParameters)
+
+	// verify the key is valid and decrypt-able
+	lKey, b, err = cert.DecryptAndUnmarshalEd25519PrivateKey(passphrase, rb)
+	assert.Nil(t, err)
+	assert.Len(t, b, 0)
 	assert.Len(t, lKey, 64)
 
-	// reading passsword results in an error, but with -no-encryption, the PasswordReader shouldn't be called
+	// test when reading passsword results in an error
 	os.Remove(keyF.Name())
 	os.Remove(crtF.Name())
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
+	args = []string{"-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
 	assert.Error(t, ca(args, ob, eb, errpw))
-	assert.Equal(t, expectedOb, ob.String())
+	assert.Equal(t, pwPromptOb, ob.String())
 	assert.Equal(t, "", eb.String())
 
-	// passing -no-encryption...
+	// test when user fails to enter a password
+	os.Remove(keyF.Name())
+	os.Remove(crtF.Name())
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-no-encryption", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.Nil(t, ca(args, ob, eb, errpw))
-	assert.Equal(t, "", ob.String()) // no prompt
-	assert.Equal(t, expectedErrOb, eb.String())
+	args = []string{"-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
+	assert.EqualError(t, ca(args, ob, eb, nopw), "no passphrase specified, remove -encrypt flag to write out-key in plaintext")
+	assert.Equal(t, strings.Repeat(pwPromptOb, 5), ob.String()) // prompts 5 times before giving up
+	assert.Equal(t, "", eb.String())
 
 	// create valid cert/key for overwrite tests
 	os.Remove(keyF.Name())
@@ -194,8 +214,8 @@ func Test_ca(t *testing.T) {
 	eb.Reset()
 	args = []string{"-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
 	assert.EqualError(t, ca(args, ob, eb, nopw), "refusing to overwrite existing CA key: "+keyF.Name())
-	assert.Equal(t, expectedOb, ob.String())
-	assert.Equal(t, expectedErrOb, eb.String())
+	assert.Equal(t, "", ob.String())
+	assert.Equal(t, "", eb.String())
 
 	// test that we won't overwrite existing key file
 	os.Remove(keyF.Name())
@@ -203,8 +223,8 @@ func Test_ca(t *testing.T) {
 	eb.Reset()
 	args = []string{"-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
 	assert.EqualError(t, ca(args, ob, eb, nopw), "refusing to overwrite existing CA cert: "+crtF.Name())
-	assert.Equal(t, expectedOb, ob.String())
-	assert.Equal(t, expectedErrOb, eb.String())
+	assert.Equal(t, "", ob.String())
+	assert.Equal(t, "", eb.String())
 	os.Remove(keyF.Name())
 
 }

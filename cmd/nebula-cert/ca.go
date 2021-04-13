@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"net"
 	"os"
 	"strings"
@@ -17,16 +18,19 @@ import (
 )
 
 type caFlags struct {
-	set          *flag.FlagSet
-	name         *string
-	duration     *time.Duration
-	outKeyPath   *string
-	outCertPath  *string
-	outQRPath    *string
-	groups       *string
-	ips          *string
-	subnets      *string
-	noEncryption *bool
+	set              *flag.FlagSet
+	name             *string
+	duration         *time.Duration
+	outKeyPath       *string
+	outCertPath      *string
+	outQRPath        *string
+	groups           *string
+	ips              *string
+	subnets          *string
+	argonMemory      *uint
+	argonIterations  *uint
+	argonParallelism *uint
+	encryption       *bool
 }
 
 func newCaFlags() *caFlags {
@@ -40,8 +44,25 @@ func newCaFlags() *caFlags {
 	cf.groups = cf.set.String("groups", "", "Optional: comma separated list of groups. This will limit which groups subordinate certs can use")
 	cf.ips = cf.set.String("ips", "", "Optional: comma separated list of ipv4 address and network in CIDR notation. This will limit which ipv4 addresses and networks subordinate certs can use for ip addresses")
 	cf.subnets = cf.set.String("subnets", "", "Optional: comma separated list of ipv4 address and network in CIDR notation. This will limit which ipv4 addresses and networks subordinate certs can use in subnets")
-	cf.noEncryption = cf.set.Bool("no-encryption", false, "Optional: do not prompt for a passphrase, write private key in plaintext")
+	cf.argonMemory = cf.set.Uint("argon-memory", 2*1024*1024, "Optional: Argon2 memory parameter (in KiB) used for encrypted private key passphrase")
+	cf.argonParallelism = cf.set.Uint("argon-parallelism", 4, "Optional: Argon2 parallelism parameter used for encrypted private key passphrase")
+	cf.argonIterations = cf.set.Uint("argon-iterations", 1, "Optional: Argon2 iterations parameter used for encrypted private key passphrase")
+	cf.encryption = cf.set.Bool("encrypt", false, "Optional: prompt for passphrase and write out-key in an encrypted format")
 	return &cf
+}
+
+func parseArgonParameters(memory uint, parallelism uint, iterations uint) (*cert.Argon2Parameters, error) {
+	if memory <= 0 || memory > math.MaxUint32 {
+		return nil, newHelpErrorf("-argon-memory must be be greater than 0 and no more than %d KiB", math.MaxUint32)
+	}
+	if parallelism <= 0 || parallelism > math.MaxUint8 {
+		return nil, newHelpErrorf("-argon-parallelism must be be greater than 0 and no more than %d", math.MaxUint8)
+	}
+	if iterations <= 0 || iterations > math.MaxUint32 {
+		return nil, newHelpErrorf("-argon-iterations must be be greater than 0 and no more than %d", math.MaxUint32)
+	}
+
+	return cert.NewArgon2Parameters(uint32(memory), uint8(parallelism), uint32(iterations)), nil
 }
 
 func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error {
@@ -59,6 +80,12 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	}
 	if err := mustFlagString("out-crt", cf.outCertPath); err != nil {
 		return err
+	}
+	var kdfParams *cert.Argon2Parameters
+	if *cf.encryption {
+		if kdfParams, err = parseArgonParameters(*cf.argonMemory, *cf.argonParallelism, *cf.argonIterations); err != nil {
+			return err
+		}
 	}
 
 	if *cf.duration <= 0 {
@@ -112,19 +139,25 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	}
 
 	var passphrase []byte
-	if !*cf.noEncryption {
-		out.Write([]byte("Enter a passphrase (or empty for none): "))
-		passphrase, err = pr.ReadPassword()
+	if *cf.encryption {
+		for i := 0; i < 5; i++ {
+			out.Write([]byte("Enter a passphrase: "))
+			passphrase, err = pr.ReadPassword()
 
-		if err == ErrNoTerminal {
-			return fmt.Errorf("out-key must be encrypted interactively, run with -no-encryption to write in plaintext")
-		} else if err != nil {
-			return fmt.Errorf("error reading passphrase: %s", err)
+			if err == ErrNoTerminal {
+				return fmt.Errorf("out-key must be encrypted interactively")
+			} else if err != nil {
+				return fmt.Errorf("error reading passphrase: %s", err)
+			}
+
+			if len(passphrase) > 0 {
+				break
+			}
 		}
-	}
 
-	if len(passphrase) == 0 {
-		errOut.Write([]byte("Warning: no passphrase specified, out-key will be written in plaintext"))
+		if len(passphrase) == 0 {
+			return fmt.Errorf("no passphrase specified, remove -encrypt flag to write out-key in plaintext")
+		}
 	}
 
 	pub, rawPriv, err := ed25519.GenerateKey(rand.Reader)
@@ -158,8 +191,8 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		return fmt.Errorf("error while signing: %s", err)
 	}
 
-	if len(passphrase) > 0 {
-		b, err := cert.EncryptAndMarshalEd25519PrivateKey(passphrase, rawPriv)
+	if *cf.encryption {
+		b, err := cert.EncryptAndMarshalEd25519PrivateKey(rawPriv, passphrase, kdfParams)
 		if err != nil {
 			return fmt.Errorf("error while encrypting out-key: %s", err)
 		}

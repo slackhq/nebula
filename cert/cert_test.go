@@ -652,7 +652,8 @@ func TestEncryptAndMarshalEd25519PrivateKey(t *testing.T) {
 	// encryption function produces a value which can be decrypted
 	passphrase := []byte("passphrase")
 	bytes := []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-	key, err := EncryptAndMarshalEd25519PrivateKey(passphrase, bytes)
+	kdfParams := NewArgon2Parameters(64*1024, 4, 3)
+	key, err := EncryptAndMarshalEd25519PrivateKey(bytes, passphrase, kdfParams)
 	assert.Nil(t, err)
 
 	// Verify the "key" can be decrypted successfully

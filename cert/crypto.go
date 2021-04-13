@@ -13,7 +13,7 @@ import (
 )
 
 // KDF factors
-type argon2Parameters struct {
+type Argon2Parameters struct {
 	version     rune
 	memory      uint32 // KiB
 	iterations  uint32
@@ -21,8 +21,17 @@ type argon2Parameters struct {
 	salt        []byte
 }
 
+func NewArgon2Parameters(memory uint32, parallelism uint8, iterations uint32) *Argon2Parameters {
+	return &Argon2Parameters{
+		version:     argon2.Version,
+		memory:      memory, // KiB
+		iterations:  iterations,
+		parallelism: parallelism,
+	}
+}
+
 // Encodes Argon2Parameters, used for deriving a key, as a string
-func (p *argon2Parameters) String() string {
+func (p *Argon2Parameters) String() string {
 	b64Salt := base64.RawStdEncoding.EncodeToString(p.salt)
 
 	// This format can be found in the Argon2 CLI tool and other libraries.
@@ -35,7 +44,7 @@ func (p *argon2Parameters) String() string {
 }
 
 // Decode Argon2Parameters, used for deriving a key, from a string
-func argon2ParametersFromString(data string) (*argon2Parameters, error) {
+func argon2ParametersFromString(data string) (*Argon2Parameters, error) {
 	vals := strings.SplitN(data, "$", 5)
 	if len(vals) != 5 {
 		return nil, fmt.Errorf("invalid data - does not contain enough parameters for Argon2id")
@@ -45,7 +54,7 @@ func argon2ParametersFromString(data string) (*argon2Parameters, error) {
 		return nil, fmt.Errorf("unexpected data - algorithm is not argon2id: %s", vals[1])
 	}
 
-	var params argon2Parameters
+	var params Argon2Parameters
 
 	_, err := fmt.Sscanf(vals[2], "v=%d", &params.version)
 	if err != nil {
@@ -67,8 +76,8 @@ func argon2ParametersFromString(data string) (*argon2Parameters, error) {
 }
 
 // Encrypts data using AES-256-GCM and the Argon2id key derivation function
-func aes256Encrypt(passphrase, data []byte) ([]byte, string, error) {
-	key, params, err := aes256DeriveKey(passphrase, nil)
+func aes256Encrypt(passphrase []byte, kdfParams *Argon2Parameters, data []byte) ([]byte, string, error) {
+	key, params, err := aes256DeriveKey(passphrase, kdfParams)
 	if err != nil {
 		return nil, "", err
 	}
@@ -134,20 +143,7 @@ func aes256Decrypt(passphrase, data []byte, kdfParams string) ([]byte, error) {
 	return plaintext, nil
 }
 
-func aes256DeriveKey(passphrase []byte, params *argon2Parameters) ([]byte, *argon2Parameters, error) {
-	if params == nil {
-		// Benchmarking results...
-		// - AMD FX-4300 (4) @ 3.800GHz => 3.169s
-		// - Intel i7-7820HQ (8) @ 3.900GHz => 2.197s
-		// - Intel i9-9880H (16) @ 2.30GHz => 1.858s
-		params = &argon2Parameters{
-			version:     argon2.Version,
-			memory:      1 * 1024 * 1024, // 1 GiB
-			iterations:  8,
-			parallelism: 4,
-		}
-	}
-
+func aes256DeriveKey(passphrase []byte, params *Argon2Parameters) ([]byte, *Argon2Parameters, error) {
 	if params.salt == nil {
 		params.salt = make([]byte, 32)
 		if _, err := rand.Read(params.salt); err != nil {
@@ -165,7 +161,7 @@ func aes256DeriveKey(passphrase []byte, params *argon2Parameters) ([]byte, *argo
 }
 
 // Derives a key from a passphrase using Argon2id
-func deriveKey(passphrase []byte, keySize uint32, params *argon2Parameters) ([]byte, error) {
+func deriveKey(passphrase []byte, keySize uint32, params *Argon2Parameters) ([]byte, error) {
 	if params.version != argon2.Version {
 		return nil, fmt.Errorf("incompatible Argon2 version: %d", params.version)
 	}
@@ -179,14 +175,15 @@ func deriveKey(passphrase []byte, keySize uint32, params *argon2Parameters) ([]b
 	return key, nil
 }
 
+// Prepends nonce to ciphertext
 func joinNonceCiphertext(nonce []byte, ciphertext []byte) []byte {
 	return append(nonce, ciphertext...)
 }
 
-// Splits nonce from ciphertext on data which has had KDF params removed
+// Splits nonce from ciphertext
 func splitNonceCiphertext(blob []byte, nonceSize int) ([]byte, []byte, error) {
 	if len(blob) <= nonceSize {
-		return nil, nil, fmt.Errorf("ciphertext blob does not contain nonce")
+		return nil, nil, fmt.Errorf("invalid ciphertext blob - blob shorter than nonce length")
 	}
 
 	return blob[:nonceSize], blob[nonceSize:], nil
