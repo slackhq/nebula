@@ -353,17 +353,16 @@ func (hm *HostMap) addHostInfo(hostinfo *HostInfo, f *Interface) {
 
 // punchList assembles a list of all non nil RemoteList pointer entries in this hostmap
 // The caller can then do the its work outside of the read lock
-func (hm *HostMap) punchList() []*RemoteList {
+func (hm *HostMap) punchList(rl []*RemoteList) []*RemoteList {
 	hm.RLock()
 	defer hm.RUnlock()
-	var list []*RemoteList
 
 	for _, v := range hm.Hosts {
 		if v.remotes != nil {
-			list = append(list, v.remotes)
+			rl = append(rl, v.remotes)
 		}
 	}
-	return list
+	return rl
 }
 
 // Punchy iterates through the result of punchList() to assemble all known addresses and sends a hole punch packet to them
@@ -375,16 +374,18 @@ func (hm *HostMap) Punchy(conn *udpConn) {
 		metricsTxPunchy = metrics.NilCounter{}
 	}
 
+	var remotes []*RemoteList
 	b := []byte{1}
 	for {
-		for _, remotes := range hm.punchList() {
+		remotes = hm.punchList(remotes[:0])
+		for _, rl := range remotes {
 			//TODO: CopyAddrs generates garbage but ForEach locks for the work here, figure out which way is better
-			for _, addr := range remotes.CopyAddrs(hm.preferredRanges) {
+			for _, addr := range rl.CopyAddrs(hm.preferredRanges) {
 				metricsTxPunchy.Inc(1)
 				conn.WriteTo(b, addr)
 			}
 		}
-		time.Sleep(time.Second * 30)
+		time.Sleep(time.Second * 10)
 	}
 }
 

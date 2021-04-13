@@ -14,8 +14,9 @@ import (
 // Sending is done by the handshake manager
 func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 	// This queries the lighthouse if we don't know a remote for the host
+	// We do it here to provoke the lighthouse to preempt our timer wheel and trigger the stage 1 packet to send
+	// more quickly, effect is a quicker handshake.
 	if hostinfo.remote == nil {
-		//TODO: do we even need this here???
 		f.lightHouse.QueryServer(vpnIp, f)
 	}
 
