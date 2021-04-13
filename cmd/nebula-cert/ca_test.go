@@ -7,17 +7,14 @@ import (
 	"bytes"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"io/ioutil"
 	"os"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/slackhq/nebula/cert"
 	"github.com/stretchr/testify/assert"
-	"golang.org/x/crypto/argon2"
 )
 
 //TODO: test file permissions
@@ -169,11 +166,12 @@ func Test_ca(t *testing.T) {
 	// read encrypted key file and verify default params
 	rb, _ = ioutil.ReadFile(keyF.Name())
 	k, _ := pem.Decode(rb)
-	red, err := cert.UnmarshalRawNebulaEncryptedData(k.Bytes)
+	ned, err := cert.UnmarshalNebulaEncryptedData(k.Bytes)
 	assert.Nil(t, err)
 	// we won't know salt in advance, so just check start of string
-	expectedParams := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$", argon2.Version, 2*1024*1024, 1, 4) // TODO un-stringify
-	assert.Regexp(t, "^"+regexp.QuoteMeta(expectedParams), red.EncryptionMetadata.KeyDerivationParameters)
+	assert.Equal(t, uint32(2*1024*1024), ned.EncryptionMetadata.Argon2Parameters.Memory)
+	assert.Equal(t, uint8(4), ned.EncryptionMetadata.Argon2Parameters.Parallelism)
+	assert.Equal(t, uint32(1), ned.EncryptionMetadata.Argon2Parameters.Iterations)
 
 	// verify the key is valid and decrypt-able
 	lKey, b, err = cert.DecryptAndUnmarshalEd25519PrivateKey(passphrase, rb)

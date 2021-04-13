@@ -582,34 +582,32 @@ func TestDecryptAndUnmarshalEd25519PrivateKey(t *testing.T) {
 	passphrase := []byte("DO NOT USE THIS KEY")
 	privKey := []byte(`# A good key
 -----BEGIN NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
-CloKC0FFUy0yNTYtR0NNEkskYXJnb24yaWQkdj0xOSRtPTY1NTM2LHQ9MjQscD04
-JG51VytlSEduQmdQd29aOWI0aEVwRURrNWUwTThWR1ZVT2JRNjJxKy9DenMSXKpP
-X1hq6ogRAFxqYtD5zgrML8D7E0goqgPkapbAI+kQuJkN9UP8jjJlDF8oJkzhYbIK
-HhxBzxLqkWNZHQAY/Cx1aKn6UsiYWR1NBVK3dFzqZy0jraGf2w+cHcZz
+CjwKC0FFUy0yNTYtR0NNEi0IExCAgIABGAEgBCognnjujd67Vsv99p22wfAjQaDT
+oCMW1mdjkU3gACKNW4MSXOWR9Sts4C81yk1RUku2gvGKs3TB9LYoklLsIizSYOLl
++Vs//O1T0I1Xbml2XBAROsb/VSoDln/6LMqR4B6fn6B3GOsLBBqRI8daDl9lRMPB
+qrlJ69wer3ZUHFXA
 -----END NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
 `)
 	shortKey := []byte(`# A key which, once decrypted, is too short
 -----BEGIN NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
-CloKC0FFUy0yNTYtR0NNEkskYXJnb24yaWQkdj0xOSRtPTY1NTM2LHQ9MjQscD04
-JFl1NFRYdTk0T0RVTWQxQ2J5Z2wxMzNBQlNGd2x0cEVjekFPeFlaQk1nMnMSW3bY
-r5rJ4DvQWTZOTgkqAfQg/rGFrGQyko7zTVCYwoDvIqW07gIWXG85EbhTfajPCs/n
-c9k+SWe5C3oOhfjIDHu9ZA1SW8DJv+XjsjgKW0s6oMF20+bem99pWrc=
+CjwKC0FFUy0yNTYtR0NNEi0IExCAgIABGAEgBCoga5h8owMEBWRSMMJKzuUvWce7
+k0qlBkQmCxiuLh80MuASW70YcKt8jeEIS2axo2V6zAKA9TSMcCsJW1kDDXEtL/xe
+GLF5T7sDl5COp4LU3pGxpV+KoeQ/S3gQCAAcnaOtnJQX+aSDnbO3jCHyP7U9CHbs
+rQr3bdH3Oy/WiYU=
 -----END NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
 `)
 	invalidBanner := []byte(`# Invalid banner (not encrypted)
 -----BEGIN NEBULA ED25519 PRIVATE KEY-----
-CloKC0FFUy0yNTYtR0NNEkskYXJnb24yaWQkdj0xOSRtPTY1NTM2LHQ9MjQscD04
-JG51VytlSEduQmdQd29aOWI0aEVwRURrNWUwTThWR1ZVT2JRNjJxKy9DenMSXKpP
-X1hq6ogRAFxqYtD5zgrML8D7E0goqgPkapbAI+kQuJkN9UP8jjJlDF8oJkzhYbIK
-HhxBzxLqkWNZHQAY/Cx1aKn6UsiYWR1NBVK3dFzqZy0jraGf2w+cHcZz
+bWRp2CTVFhW9HD/qCd28ltDgK3w8VXSeaEYczDWos8sMUBqDb9jP3+NYwcS4lURG
+XgLvodMXZJuaFPssp+WwtA==
 -----END NEBULA ED25519 PRIVATE KEY-----
 `)
 	invalidPem := []byte(`# Not a valid PEM format
 -BEGIN NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
-CloKC0FFUy0yNTYtR0NNEkskYXJnb24yaWQkdj0xOSRtPTY1NTM2LHQ9MjQscD04
-JG51VytlSEduQmdQd29aOWI0aEVwRURrNWUwTThWR1ZVT2JRNjJxKy9DenMSXKpP
-X1hq6ogRAFxqYtD5zgrML8D7E0goqgPkapbAI+kQuJkN9UP8jjJlDF8oJkzhYbIK
-HhxBzxLqkWNZHQAY/Cx1aKn6UsiYWR1NBVK3dFzqZy0jraGf2w+cHcZz
+CjwKC0FFUy0yNTYtR0NNEi0IExCAgIABGAEgBCognnjujd67Vsv99p22wfAjQaDT
+oCMW1mdjkU3gACKNW4MSXOWR9Sts4C81yk1RUku2gvGKs3TB9LYoklLsIizSYOLl
++Vs//O1T0I1Xbml2XBAROsb/VSoDln/6LMqR4B6fn6B3GOsLBBqRI8daDl9lRMPB
+qrlJ69wer3ZUHFXA
 -END NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
 `)
 
@@ -617,34 +615,34 @@ HhxBzxLqkWNZHQAY/Cx1aKn6UsiYWR1NBVK3dFzqZy0jraGf2w+cHcZz
 
 	// Success test case
 	k, rest, err := DecryptAndUnmarshalEd25519PrivateKey(passphrase, keyBundle)
+	assert.Nil(t, err)
 	assert.Len(t, k, 64)
 	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
-	assert.Nil(t, err)
 
 	// Fail due to short key
 	k, rest, err = DecryptAndUnmarshalEd25519PrivateKey(passphrase, rest)
+	assert.EqualError(t, err, "key was not 64 bytes, is invalid ed25519 private key")
 	assert.Nil(t, k)
 	assert.Equal(t, rest, appendByteSlices(invalidBanner, invalidPem))
-	assert.EqualError(t, err, "key was not 64 bytes, is invalid ed25519 private key")
 
 	// Fail due to invalid banner
 	k, rest, err = DecryptAndUnmarshalEd25519PrivateKey(passphrase, rest)
+	assert.EqualError(t, err, "bytes did not contain a proper nebula encrypted Ed25519 private key banner")
 	assert.Nil(t, k)
 	assert.Equal(t, rest, invalidPem)
-	assert.EqualError(t, err, "bytes did not contain a proper nebula encrypted Ed25519 private key banner")
 
 	// Fail due to ivalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
 	k, rest, err = DecryptAndUnmarshalEd25519PrivateKey(passphrase, rest)
+	assert.EqualError(t, err, "input did not contain a valid PEM encoded block")
 	assert.Nil(t, k)
 	assert.Equal(t, rest, invalidPem)
-	assert.EqualError(t, err, "input did not contain a valid PEM encoded block")
 
 	// Fail due to invalid passphrase
 	k, rest, err = DecryptAndUnmarshalEd25519PrivateKey([]byte("invalid passphrase"), privKey)
+	assert.EqualError(t, err, "invalid passphrase or corrupt private key")
 	assert.Nil(t, k)
 	assert.Equal(t, rest, []byte{})
-	assert.EqualError(t, err, "invalid passphrase or corrupt private key")
 }
 
 func TestEncryptAndMarshalEd25519PrivateKey(t *testing.T) {

@@ -53,13 +53,13 @@ func newCaFlags() *caFlags {
 
 func parseArgonParameters(memory uint, parallelism uint, iterations uint) (*cert.Argon2Parameters, error) {
 	if memory <= 0 || memory > math.MaxUint32 {
-		return nil, newHelpErrorf("-argon-memory must be be greater than 0 and no more than %d KiB", math.MaxUint32)
+		return nil, newHelpErrorf("-argon-memory must be be greater than 0 and no more than %d KiB", uint32(math.MaxUint32))
 	}
 	if parallelism <= 0 || parallelism > math.MaxUint8 {
 		return nil, newHelpErrorf("-argon-parallelism must be be greater than 0 and no more than %d", math.MaxUint8)
 	}
 	if iterations <= 0 || iterations > math.MaxUint32 {
-		return nil, newHelpErrorf("-argon-iterations must be be greater than 0 and no more than %d", math.MaxUint32)
+		return nil, newHelpErrorf("-argon-iterations must be be greater than 0 and no more than %d", uint32(math.MaxUint32))
 	}
 
 	return cert.NewArgon2Parameters(uint32(memory), uint8(parallelism), uint32(iterations)), nil

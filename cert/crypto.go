@@ -4,10 +4,8 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"io"
-	"strings"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -15,110 +13,60 @@ import (
 // KDF factors
 type Argon2Parameters struct {
 	version     rune
-	memory      uint32 // KiB
-	iterations  uint32
-	parallelism uint8
+	Memory      uint32 // KiB
+	Parallelism uint8
+	Iterations  uint32
 	salt        []byte
 }
 
+// Returns a new Argon2Parameters object with current version set
 func NewArgon2Parameters(memory uint32, parallelism uint8, iterations uint32) *Argon2Parameters {
 	return &Argon2Parameters{
 		version:     argon2.Version,
-		memory:      memory, // KiB
-		iterations:  iterations,
-		parallelism: parallelism,
+		Memory:      memory, // KiB
+		Parallelism: parallelism,
+		Iterations:  iterations,
 	}
-}
-
-// Encodes Argon2Parameters, used for deriving a key, as a string
-func (p *Argon2Parameters) String() string {
-	b64Salt := base64.RawStdEncoding.EncodeToString(p.salt)
-
-	// This format can be found in the Argon2 CLI tool and other libraries.
-	// For password storage, the password hash would appear at the end as well.
-	// In our case, since the hash is our decryption key, we do not include it.
-	return fmt.Sprintf(
-		"$argon2id$v=%d$m=%d,t=%d,p=%d$%s",
-		p.version, p.memory, p.iterations, p.parallelism, b64Salt,
-	)
-}
-
-// Decode Argon2Parameters, used for deriving a key, from a string
-func argon2ParametersFromString(data string) (*Argon2Parameters, error) {
-	vals := strings.SplitN(data, "$", 5)
-	if len(vals) != 5 {
-		return nil, fmt.Errorf("invalid data - does not contain enough parameters for Argon2id")
-	}
-
-	if vals[1] != "argon2id" {
-		return nil, fmt.Errorf("unexpected data - algorithm is not argon2id: %s", vals[1])
-	}
-
-	var params Argon2Parameters
-
-	_, err := fmt.Sscanf(vals[2], "v=%d", &params.version)
-	if err != nil {
-		return nil, fmt.Errorf("invalid data while scanning: %s", err)
-	}
-
-	_, err = fmt.Sscanf(vals[3], "m=%d,t=%d,p=%d", &params.memory, &params.iterations, &params.parallelism)
-	if err != nil {
-		return nil, fmt.Errorf("invalid data while scanning: %s", err)
-	}
-
-	salt, err := base64.RawStdEncoding.DecodeString(vals[4])
-	if err != nil {
-		return nil, fmt.Errorf("error parsing salt: %s", err)
-	}
-	params.salt = salt
-
-	return &params, nil
 }
 
 // Encrypts data using AES-256-GCM and the Argon2id key derivation function
-func aes256Encrypt(passphrase []byte, kdfParams *Argon2Parameters, data []byte) ([]byte, string, error) {
-	key, params, err := aes256DeriveKey(passphrase, kdfParams)
+func aes256Encrypt(passphrase []byte, kdfParams *Argon2Parameters, data []byte) ([]byte, error) {
+	key, err := aes256DeriveKey(passphrase, kdfParams)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	// this should never happen, but since this dictates how our calls into the
 	// aes package behave and could be catastraphic, let's sanity check this
 	if len(key) != 32 {
-		return nil, "", fmt.Errorf("invalid AES-256 key length (%d) - cowardly refusing to encrypt", len(key))
+		return nil, fmt.Errorf("invalid AES-256 key length (%d) - cowardly refusing to encrypt", len(key))
 	}
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	ciphertext := gcm.Seal(nil, nonce, data, nil)
 	blob := joinNonceCiphertext(nonce, ciphertext)
 
-	// Results in something like: nonceCIPHERTEXT, $argon2id$v=19$m=65536,t=24,p=8$SALT
-	return blob, params.String(), nil
+	return blob, nil
 }
 
 // Decrypts data using AES-256-GCM and the Argon2id key derivation function
 // Expects the data to include an Argon2id parameter string before the encrypted data
-func aes256Decrypt(passphrase, data []byte, kdfParams string) ([]byte, error) {
-	params, err := argon2ParametersFromString(kdfParams)
-	if err != nil {
-		return nil, fmt.Errorf("error parsing parameters for decryption: %s", err)
-	}
-
-	key, params, err := aes256DeriveKey(passphrase, params)
+func aes256Decrypt(passphrase []byte, kdfParams *Argon2Parameters, data []byte) ([]byte, error) {
+	key, err := aes256DeriveKey(passphrase, kdfParams)
 	if err != nil {
 		return nil, err
 	}
@@ -143,21 +91,21 @@ func aes256Decrypt(passphrase, data []byte, kdfParams string) ([]byte, error) {
 	return plaintext, nil
 }
 
-func aes256DeriveKey(passphrase []byte, params *Argon2Parameters) ([]byte, *Argon2Parameters, error) {
+func aes256DeriveKey(passphrase []byte, params *Argon2Parameters) ([]byte, error) {
 	if params.salt == nil {
 		params.salt = make([]byte, 32)
 		if _, err := rand.Read(params.salt); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
 
 	// keySize of 32 bytes will result in AES-256 encryption
 	key, err := deriveKey(passphrase, 32, params)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	return key, params, nil
+	return key, nil
 }
 
 // Derives a key from a passphrase using Argon2id
@@ -168,9 +116,11 @@ func deriveKey(passphrase []byte, keySize uint32, params *Argon2Parameters) ([]b
 
 	if params.salt == nil {
 		return nil, fmt.Errorf("salt must be set in argon2Parameters")
+	} else if len(params.salt) < 16 {
+		return nil, fmt.Errorf("salt must be at least 128  bits")
 	}
 
-	key := argon2.IDKey(passphrase, params.salt, params.iterations, params.memory, params.parallelism, keySize)
+	key := argon2.IDKey(passphrase, params.salt, params.Iterations, params.Memory, params.Parallelism, keySize)
 
 	return key, nil
 }
