@@ -1,0 +1,35 @@
+@startuml
+title Case 3b: Wrong responder wins the race
+
+!pragma teoz true
+skinparam sequenceMessageAlign center
+
+actor "Wrong Responder" as rw
+actor Initiator as i
+actor "Good Responder" as rg
+
+?-> i: tun rx
+i -> i: Stage 0: Prepare handshake
+
+i o-> rw: stage 1 packet
+& i o-> rg: stage 1 packet
+
+rg -> rg: Stage1: Stand up tunnel
+& rw -> rw: Stage1: Stand up tunnel
+
+rw -> i: Stage 2
+i ->x i: Rejected, incorrect responder\nblock their address
+i -> rw: close tunnel
+rw -> rw: Tear down tunnel
+
+rg -> i: Stage 2 packet
+i ->x i: Rejected, tunnel does not exist
+
+i -> i: Stage 0: Prepare handshake
+i -> rg: stage 1 packet
+
+rg -> rg: Stage 1: Stand up tunnel
+
+rg -> i: Stage 2 packet
+i -> i: Stage 2: Stand up tunnel
+@enduml
