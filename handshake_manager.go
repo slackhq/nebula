@@ -253,8 +253,10 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 		}
 
 		// We lost, take this handshake and move any cached packets over so they get sent
+		pendingHostInfo.ConnectionState.queueLock.Lock()
 		hostinfo.packetStore = append(hostinfo.packetStore, pendingHostInfo.packetStore...)
 		c.pendingHostMap.unlockedDeleteHostInfo(pendingHostInfo)
+		pendingHostInfo.ConnectionState.queueLock.Unlock()
 		pendingHostInfo.logger(c.l).Info("Handshake race lost, replacing pending handshake with completed tunnel")
 	}
 

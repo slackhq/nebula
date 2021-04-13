@@ -368,8 +368,10 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			Info("Blocked addresses for handshakes")
 
 		// Swap the packet store to benefit the original intended recipient
+		hostinfo.ConnectionState.queueLock.Lock()
 		newHostInfo.packetStore = hostinfo.packetStore
 		hostinfo.packetStore = []*cachedPacket{}
+		hostinfo.ConnectionState.queueLock.Unlock()
 
 		// Finally, put the correct vpn ip in the host info, tell them to close the tunnel, and return true to tear down
 		hostinfo.hostId = vpnIP
