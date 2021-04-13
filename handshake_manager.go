@@ -104,7 +104,7 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 	// Check if we have a handshake packet to transmit yet
 	if !hostinfo.HandshakeReady {
 		// There is currently a slight race in getOrHandshake due to ConnectionState not being part of the HostInfo directly
-		// Our hostinfo hear was added to the pending map and the wheel may have ticked to us before we created ConnectionState
+		// Our hostinfo here was added to the pending map and the wheel may have ticked to us before we created ConnectionState
 		return
 	}
 
@@ -203,8 +203,8 @@ var (
 // ErrLocalIndexCollision if we already have an entry in the main or pending
 // hostmap for the hostinfo.localIndexId.
 func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket uint8, overwrite bool, f *Interface) (*HostInfo, error) {
-	c.pendingHostMap.RLock()
-	defer c.pendingHostMap.RUnlock()
+	c.pendingHostMap.Lock()
+	defer c.pendingHostMap.Unlock()
 	c.mainHostMap.Lock()
 	defer c.mainHostMap.Unlock()
 
@@ -273,8 +273,8 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 // won't have a localIndexId collision because we already have an entry in the
 // pendingHostMap
 func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
-	c.pendingHostMap.RLock()
-	defer c.pendingHostMap.RUnlock()
+	c.pendingHostMap.Lock()
+	defer c.pendingHostMap.Unlock()
 	c.mainHostMap.Lock()
 	defer c.mainHostMap.Unlock()
 

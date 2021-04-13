@@ -546,12 +546,12 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp uint32) 
 
 	lhh.lh.Lock()
 	am := lhh.lh.unlockedGetRemoteList(n.Details.VpnIp)
-	am.RLock()
+	am.Lock()
 	lhh.lh.Unlock()
 
 	am.unlockedSetV4(vpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(vpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
-	am.RUnlock()
+	am.Unlock()
 
 	// Non-blocking attempt to trigger, skip if it would block
 	select {
@@ -578,12 +578,12 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 
 	lhh.lh.Lock()
 	am := lhh.lh.unlockedGetRemoteList(vpnIp)
-	am.RLock()
+	am.Lock()
 	lhh.lh.Unlock()
 
 	am.unlockedSetV4(vpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(vpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
-	am.RUnlock()
+	am.Unlock()
 }
 
 func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp uint32, w EncWriter) {
