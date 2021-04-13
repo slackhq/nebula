@@ -150,8 +150,8 @@ func MarshalEd25519PrivateKey(key ed25519.PrivateKey) []byte {
 }
 
 // EncryptAndMarshalX25519PrivateKey is a simple helper to encrypt and PEM encode an X25519 private key
-func EncryptAndMarshalEd25519PrivateKey(passphrase, b []byte) ([]byte, error) {
-	ciphertext, kdfParams, err := aes256Encrypt(passphrase, b)
+func EncryptAndMarshalEd25519PrivateKey(b []byte, passphrase []byte, kdfParams *Argon2Parameters) ([]byte, error) {
+	ciphertext, params, err := aes256Encrypt(passphrase, kdfParams, b)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,7 @@ func EncryptAndMarshalEd25519PrivateKey(passphrase, b []byte) ([]byte, error) {
 	b, err = proto.Marshal(&RawNebulaEncryptedData{
 		EncryptionMetadata: &RawNebulaEncryptedDataMetadata{
 			EncryptionAlgorithm:     "AES-256-GCM",
-			KeyDerivationParameters: kdfParams,
+			KeyDerivationParameters: params,
 		},
 		Ciphertext: ciphertext,
 	})
