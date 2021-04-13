@@ -1,0 +1,45 @@
+name: generate plantuml
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    paths:
+      - '.github/workflows/gofmt.yml'
+      - '**.plantuml'
+      - '**.puml'
+
+jobs:
+  generate_plantuml:
+    runs-on: ubuntu-latest
+    name: plantuml
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name: Get changed UML files
+        id: getfile
+        run: |
+          git diff-tree -r --no-commit-id --summary ${{ github.sha }} \
+          | awk -F' ' '{
+            # ensure we are not trying to process deleted files
+            # only process puml files
+            # do not try to process our theme or custom config
+            if ( $1 !~ /^delete$/ && $4 ~ /\.puml$/ && $4 !~ /(theme|config)\.(plantuml|puml)$/ )
+            {
+              # only print the file name and strip newlines for spaces
+              printf "::set-output name=files::" "%s ", $4
+            }
+          }
+          END { print "" } # ensure we do print a newline at the end
+          '
+
+      - name: Generate SVG Diagrams
+          uses: cloudbees/plantuml-github-action@master
+          with:
+            args: -v -tsvg ${{ steps.getfile.outputs.files }} -o plantgen/
+
+      - uses: actions/upload-artifact@v2
+        with:
+          name: plantuml
+          path: plantgen/

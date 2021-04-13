@@ -1,0 +1,159 @@
+@startuml
+title Stage 1 race
+
+!pragma teoz true
+skinparam sequenceMessageAlign center
+
+actor "Initiator\nvpn ip: 1.1.1.2\nudp 10.1.1.2:4242\nudp 192.168.1.2:4242\nudp 172.16.1.2:4242" as i
+box "Responder\nvpn ip: 1.1.1.1\nudp 10.1.1.1:4242\nudp 192.168.1.1:4242\nudp 172.16.1.1:4242"
+control "thread 1" as r1
+control "thread 2" as r2
+control "thread 3" as r3
+end box
+
+i -> i: Stage 0: Prepare handshake
+
+i -> r1: unique stage 1 packet to 192.168.1.1:4242\n
+r1 -> r1: Stage 1: stand up tunnel
+r1 -> i: Stage 2 packet
+i -> i: Stage 2: Stand up tunnel
+
+i -> r2: unique stage 1 packet to 10.1.1.1:4242\n
+r2 -> r2: Stage 1: existing tunnel\nthey win the race\nreplace tunnel
+r2 -> i: Stage 2 packet
+i -> i: Stage 2: Tunnel completed, ignore
+
+i -> r3: unique stage 1 packet to 192.168.1.1:4242\n
+r3 -> r3: Stage 1: existing tunnel\nthey win the race\nreplace tunnel
+r3 -> i: Stage 2 packet
+i -> i: Stage 2: Tunnel completed, ignore
+
+note across: we end up with initiator using the first stage 2 index\nand the responder using the last stage 1 index.
+
+
+@enduml
+
+@startuml
+title Unclean Shutdown - Race Winner
+
+!pragma teoz true
+skinparam sequenceMessageAlign center
+
+actor "Initiator" as i
+actor "Responder" as r
+
+note over i: Process restarted\nwithout closing tunnels
+i -> i: Stage 0: Prepare handshake
+i -> r: stage 1 packet
+
+r -> r: Stage 1: Existing tunnel, race won\nreplace tunnel
+
+r -> i: Stage 2 packet
+i -> i: Stage 2: Stand up tunnel
+@enduml
+
+//TODO: write a test and implement the code!
+@startuml
+title Unclean Shutdown - Race Loser
+
+!pragma teoz true
+skinparam sequenceMessageAlign center
+
+actor "Initiator" as i
+actor "Responder" as r
+
+note over i: Process restarted\nwithout closing tunnels
+i -> i: Stage 0: Prepare handshake
+i -> r: stage 1 packet
+
+r -> r: Stage 1: Existing tunnel\nif the pb was not good (pre 1.4) throw away
+
+r -> i: Stage 2 packet with existing index
+i -> i: existing tunnel\nnot found
+i -> r: recv_error to that index
+i -> r: recv_error to that index
+i -> r: recv_error to that index
+r -> r: tear down tunnel
+note across: now do a real handshake
+@enduml
+
+//TODO: add notes about how recv_error might break (nat change or dynamic listen port)
+@startuml
+title Unclean Shutdown - Race Loser
+
+!pragma teoz true
+skinparam sequenceMessageAlign center
+
+actor "Initiator" as i
+actor "Responder" as r
+
+note over i: Process restarted\nwithout closing tunnels
+i -> i: Stage 0: Prepare handshake
+i -> r: stage 1 packet
+
+r -> r: Stage 1: Existing tunnel\ndon't save state but reply
+
+r -> i: Stage 2 no fuck off
+
+@enduml
+
+@startuml
+title Wrong responder wins the race, Initiator wins races with Good
+!pragma teoz true
+
+participant "Wrong Responder" as rw
+actor Initiator as i
+participant "Good Reposponder" as rg
+
+note across: The send order from intiator does not matter
+i o-> rw: stage 0
+& i o-> rg: stage 0
+
+rw -> rw: Stage1: Stand up tunnel
+& rg -> rg: Stage1: Stand up tunnel
+
+rw -> i: Stage 2
+i -> i: Wrong responder\nKeep the tunnel and\nre-handshake with Good
+
+rg -> i: Stage 2
+i ->x i: Rejected, handshake complete
+
+i->rg: New stage 0
+rg -> rg: Stage1: I lost the race\nReplace tunnel
+rg -> i: Stage 2
+i -> i: Stage 2: Stand up tunnel
+
+note over i: We lucked out that Initiator wins races against Good
+@enduml
+
+@startuml
+title Wrong responder wins the race, Initiator loses races with Good
+!pragma teoz true
+
+participant "Wrong Responder" as rw
+actor Initiator as i
+participant "Good Reposponder" as rg
+
+note across: The send order from intiator does not matter
+i o-> rw: stage 0
+& i o-> rg: stage 0
+
+rw -> rw: Stage1: Stand up tunnel
+& rg -> rg: Stage1: Stand up tunnel
+
+rw -> i: Stage 2
+i -> i: Wrong responder\nKeep the tunnel and\nre-handshake with Good
+
+rg -> i: Stage 2
+i ->x i: Rejected, handshake complete
+
+i->rg: New stage 0
+rg ->x rg: Stage1: I won the race\nreject and use existing tunnel
+
+i->rg: New stage 0
+rg ->x rg: Stage1: I won the race\nreject and use existing tunnel
+i->rg: New stage 0
+rg ->x rg: Stage1: I won the race\nreject and use existing tunnel
+
+note over i: We lucked out that Initiator wins races against Good
+@enduml
