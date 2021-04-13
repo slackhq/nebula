@@ -377,8 +377,8 @@ func (hm *HostMap) Punchy(conn *udpConn) {
 
 	b := []byte{1}
 	for {
-		list := hm.punchList()
-		for _, remotes := range list {
+		for _, remotes := range hm.punchList() {
+			//TODO: CopyAddrs generates garbage but ForEach locks for the work here, figure out which way is better
 			for _, addr := range remotes.CopyAddrs(hm.preferredRanges) {
 				metricsTxPunchy.Inc(1)
 				conn.WriteTo(b, addr)

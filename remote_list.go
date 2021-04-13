@@ -212,13 +212,15 @@ func (r *RemoteList) Rebuild(preferredRanges []*net.IPNet) {
 	r.Lock()
 	defer r.Unlock()
 
-	// Only rebuild if we must
-	if !r.shouldRebuild {
-		return
+	// Only rebuild if the cache changed
+	//TODO: shouldRebuild is probably pointless as we don't check for actual change when lighthouse updates come in
+	if r.shouldRebuild {
+		r.unlockedCollect()
+		r.shouldRebuild = false
 	}
-	r.unlockedCollect()
+
+	// Always re-sort, preferredRanges can change via HUP
 	r.unlockedSort(preferredRanges)
-	r.shouldRebuild = false
 }
 
 // unlockedIsBad assumes you have the write lock and checks if the remote matches any entry in the blocked address list
@@ -336,7 +338,7 @@ func (r *RemoteList) unlockedGetOrMakeV6(ownerVpnIp uint32) *cacheV6 {
 }
 
 // unlockedCollect assumes you have the write lock and collects/transforms the cache into the deduped address list.
-// The result of this function likely contains duplicates. unlockedSort handles cleaning it.
+// The result of this function can contain duplicates. unlockedSort handles cleaning it.
 func (r *RemoteList) unlockedCollect() {
 	addrs := r.addrs[:0]
 
@@ -391,62 +393,65 @@ func (r *RemoteList) unlockedSort(preferredRanges []*net.IPNet) {
 
 		aPref := isPreferred(a.IP, preferredRanges)
 		bPref := isPreferred(b.IP, preferredRanges)
-
-		if aPref && !bPref {
+		switch {
+		case aPref && !bPref:
 			// If i is preferred and j is not, i is less than j
 			return true
 
-		} else if bPref {
+		case !aPref && bPref:
 			// If j is preferred then i is not due to the else, i is not less than j
 			return false
+
+		default:
+			// Both i an j are either preferred or not, sort within that
 		}
-		// Both i an j are either preferred or not, sort within that
 
 		// ipv6 addresses 2nd
 		a4 := a.IP.To4()
 		b4 := b.IP.To4()
-		if a4 == nil && b4 != nil {
+		switch {
+		case a4 == nil && b4 != nil:
 			// If i is v6 and j is v4, i is less than j
 			return true
 
-		} else if b4 == nil {
-			// If j is v6 then i is v4 due to the else, i is not less than j
-			return false
-
-		} else {
+		case a4 != nil && b4 != nil:
 			// Special case for ipv4, a4 and b4 are not nil
 			aPrivate := isPrivateIP(a4)
 			bPrivate := isPrivateIP(b4)
-			if !aPrivate && bPrivate {
+			switch {
+			case !aPrivate && bPrivate:
 				// If i is a public ip (not private) and j is a private ip, i is less then j
 				return true
 
-			} else if !bPrivate {
+			case aPrivate && !bPrivate:
 				// If j is public (not private) then i is private due to the else, i is not less than j
 				return false
+
+			default:
+				// Both i an j are either public or private, sort within that
 			}
-		}
-		// Both i an j are either v4 and public or private, or v6, sort within that
 
-		// Finally, lexical order of ips
+		default:
+			// Both i an j are either ipv4 or ipv6, sort within that
+		}
+
+		// lexical order of ips 3rd
 		c := bytes.Compare(a.IP, b.IP)
-		if c < 0 {
-			return true
+		if c == 0 {
+			// Ips are the same, Lexical order of ports 4th
+			return a.Port < b.Port
 		}
-		//TODO: do I need an else there? blarg
 
-		// Lexical order of ports
-		return a.Port < b.Port
+		// Ip wasn't the same
+		return c < 0
 	}
 
-	// Sort it, translate so the caller can reason about individual entries
+	// Sort it
 	sort.Slice(r.addrs, lessFunc)
 
 	// Deduplicate
 	a, b := 0, 1
 	for b < n {
-		//TODO: you aren't smart enough to figure out if less func is needed here or not in your head. Work it out
-		//if lessFunc(a, b) {
 		if !r.addrs[a].Equals(r.addrs[b]) {
 			a++
 			if a != b {

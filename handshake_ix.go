@@ -340,7 +340,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	certName := remoteCert.Details.Name
 	fingerprint, _ := remoteCert.Sha256Sum()
 
-	// Ensure the right host reponded
+	// Ensure the right host responded
 	if vpnIP != hostinfo.hostId {
 		f.l.WithField("intendedVpnIp", IntIp(hostinfo.hostId)).WithField("haveVpnIp", IntIp(vpnIP)).
 			WithField("udpAddr", addr).WithField("certName", certName).
