@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"time"
 
@@ -48,6 +49,16 @@ type NebulaCertificateDetails struct {
 
 	// Map of groups for faster lookup
 	InvertedGroups map[string]struct{}
+}
+
+type NebulaEncryptedData struct {
+	EncryptionMetadata NebulaEncryptionMetadata
+	Ciphertext         []byte
+}
+
+type NebulaEncryptionMetadata struct {
+	EncryptionAlgorithm string
+	Argon2Parameters    Argon2Parameters
 }
 
 type m map[string]interface{}
@@ -151,15 +162,21 @@ func MarshalEd25519PrivateKey(key ed25519.PrivateKey) []byte {
 
 // EncryptAndMarshalX25519PrivateKey is a simple helper to encrypt and PEM encode an X25519 private key
 func EncryptAndMarshalEd25519PrivateKey(b []byte, passphrase []byte, kdfParams *Argon2Parameters) ([]byte, error) {
-	ciphertext, params, err := aes256Encrypt(passphrase, kdfParams, b)
+	ciphertext, err := aes256Encrypt(passphrase, kdfParams, b)
 	if err != nil {
 		return nil, err
 	}
 
 	b, err = proto.Marshal(&RawNebulaEncryptedData{
-		EncryptionMetadata: &RawNebulaEncryptedDataMetadata{
-			EncryptionAlgorithm:     "AES-256-GCM",
-			KeyDerivationParameters: params,
+		EncryptionMetadata: &RawNebulaEncryptionMetadata{
+			EncryptionAlgorithm: "AES-256-GCM",
+			Argon2Parameters: &RawNebulaArgon2Parameters{
+				Version:     kdfParams.version,
+				Memory:      kdfParams.Memory,
+				Parallelism: uint32(kdfParams.Parallelism),
+				Iterations:  kdfParams.Iterations,
+				Salt:        kdfParams.salt,
+			},
 		},
 		Ciphertext: ciphertext,
 	})
@@ -207,22 +224,62 @@ func UnmarshalEd25519PrivateKey(b []byte) (ed25519.PrivateKey, []byte, error) {
 
 // UnmarshalNebulaCertificate will unmarshal a protobuf byte representation of a nebula cert into its
 // protobuf-generated struct.
-func UnmarshalRawNebulaEncryptedData(b []byte) (*RawNebulaEncryptedData, error) {
+func UnmarshalNebulaEncryptedData(b []byte) (*NebulaEncryptedData, error) {
 	if len(b) == 0 {
 		return nil, fmt.Errorf("nil byte array")
 	}
-
-	var red RawNebulaEncryptedData
-	err := proto.Unmarshal(b, &red)
+	var rned RawNebulaEncryptedData
+	err := proto.Unmarshal(b, &rned)
 	if err != nil {
 		return nil, err
 	}
 
-	if red.EncryptionMetadata == nil {
+	if rned.EncryptionMetadata == nil {
 		return nil, fmt.Errorf("encoded EncryptionMetadata was nil")
 	}
 
-	return &red, nil
+	if rned.EncryptionMetadata.Argon2Parameters == nil {
+		return nil, fmt.Errorf("encoded Argon2Parameters was nil")
+	}
+
+	params, err := unmarshalArgon2Parameters(rned.EncryptionMetadata.Argon2Parameters)
+	if err != nil {
+		return nil, err
+	}
+
+	ned := NebulaEncryptedData{
+		EncryptionMetadata: NebulaEncryptionMetadata{
+			EncryptionAlgorithm: rned.EncryptionMetadata.EncryptionAlgorithm,
+			Argon2Parameters:    *params,
+		},
+		Ciphertext: rned.Ciphertext,
+	}
+
+	return &ned, nil
+}
+
+func unmarshalArgon2Parameters(params *RawNebulaArgon2Parameters) (*Argon2Parameters, error) {
+	if params.Version < math.MinInt32 || params.Version > math.MaxInt32 {
+		return nil, fmt.Errorf("Argon2Parameters Version must be at least %d and no more than %d", math.MinInt32, math.MaxInt32)
+	}
+	if params.Memory <= 0 || params.Memory > math.MaxUint32 {
+		return nil, fmt.Errorf("Argon2Parameters Memory must be be greater than 0 and no more than %d KiB", uint32(math.MaxUint32))
+	}
+	if params.Parallelism <= 0 || params.Parallelism > math.MaxUint8 {
+		return nil, fmt.Errorf("Argon2Parameters Parallelism must be be greater than 0 and no more than %d", math.MaxUint8)
+	}
+	if params.Iterations <= 0 || params.Iterations > math.MaxUint32 {
+		return nil, fmt.Errorf("-argon-iterations must be be greater than 0 and no more than %d", uint32(math.MaxUint32))
+	}
+
+	return &Argon2Parameters{
+		version:     rune(params.Version),
+		Memory:      uint32(params.Memory),
+		Parallelism: uint8(params.Parallelism),
+		Iterations:  uint32(params.Iterations),
+		salt:        params.Salt,
+	}, nil
+
 }
 
 // DecryptAndUnmarshalEd25519PrivateKey will try to pem decode and decrypt an Ed25519 private key with
@@ -237,20 +294,20 @@ func DecryptAndUnmarshalEd25519PrivateKey(passphrase, b []byte) (ed25519.Private
 		return nil, r, fmt.Errorf("bytes did not contain a proper nebula encrypted Ed25519 private key banner")
 	}
 
-	red, err := UnmarshalRawNebulaEncryptedData(k.Bytes)
+	ned, err := UnmarshalNebulaEncryptedData(k.Bytes)
 	if err != nil {
 		return nil, r, err
 	}
 
 	var bytes []byte
-	switch red.EncryptionMetadata.EncryptionAlgorithm {
+	switch ned.EncryptionMetadata.EncryptionAlgorithm {
 	case "AES-256-GCM":
-		bytes, err = aes256Decrypt(passphrase, red.Ciphertext, red.EncryptionMetadata.KeyDerivationParameters)
+		bytes, err = aes256Decrypt(passphrase, &ned.EncryptionMetadata.Argon2Parameters, ned.Ciphertext)
 		if err != nil {
 			return nil, r, err
 		}
 	default:
-		return nil, r, fmt.Errorf("unsupported encryption algorithm: %s", red.EncryptionMetadata.EncryptionAlgorithm)
+		return nil, r, fmt.Errorf("unsupported encryption algorithm: %s", ned.EncryptionMetadata.EncryptionAlgorithm)
 	}
 
 	if len(bytes) != ed25519.PrivateKeySize {
