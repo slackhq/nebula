@@ -22,7 +22,6 @@ type NebulaCipherState struct {
 
 func NewNebulaCipherState(s *noise.CipherState) *NebulaCipherState {
 	return &NebulaCipherState{c: s.Cipher()}
-
 }
 
 func (s *NebulaCipherState) EncryptDanger(out, ad, plaintext []byte, n uint64, nb []byte) ([]byte, error) {

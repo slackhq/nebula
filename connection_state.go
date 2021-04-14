@@ -27,7 +27,7 @@ type ConnectionState struct {
 	ready                bool
 }
 
-func (f *Interface) newConnectionState(l *logrus.Logger, initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {
+func (f *Interface) newConnectionState(l *logrus.Logger, initiator bool, p []byte) (*ConnectionState, error) {
 	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashSHA256)
 	if f.cipher == "chachapoly" {
 		cs = noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
@@ -43,14 +43,15 @@ func (f *Interface) newConnectionState(l *logrus.Logger, initiator bool, pattern
 	hs, err := noise.NewHandshakeState(noise.Config{
 		CipherSuite:           cs,
 		Random:                rand.Reader,
-		Pattern:               pattern,
+		Pattern:               noise.HandshakeIX,
 		Initiator:             initiator,
 		StaticKeypair:         static,
-		PresharedKey:          psk,
-		PresharedKeyPlacement: pskStage,
+		PresharedKey:          p,
+		PresharedKeyPlacement: 0,
 	})
+
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	// The queue and ready params prevent a counter race that would happen when
@@ -63,7 +64,7 @@ func (f *Interface) newConnectionState(l *logrus.Logger, initiator bool, pattern
 		certState: curCertState,
 	}
 
-	return ci
+	return ci, nil
 }
 
 func (cs *ConnectionState) MarshalJSON() ([]byte, error) {
