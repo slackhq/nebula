@@ -221,7 +221,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	}
 
 	hostMap := NewHostMap(l, "main", tunCidr, preferredRanges)
-	hostMap.SetDefaultRoute(ip2int(net.ParseIP(config.GetString("default_route", "0.0.0.0"))))
+
 	hostMap.addUnsafeRoutes(&unsafeRoutes)
 	hostMap.metricsEnabled = config.GetBool("stats.message_metrics", false)
 
@@ -302,14 +302,14 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 				if err != nil {
 					return nil, NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
 				}
-				lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip, port), true)
+				lightHouse.AddStaticRemote(ip2int(vpnIp), NewUDPAddr(ip, port))
 			}
 		} else {
 			ip, port, err := parseIPAndPort(fmt.Sprintf("%v", v))
 			if err != nil {
 				return nil, NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
 			}
-			lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip, port), true)
+			lightHouse.AddStaticRemote(ip2int(vpnIp), NewUDPAddr(ip, port))
 		}
 	}
 
@@ -328,7 +328,6 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	handshakeConfig := HandshakeConfig{
 		tryInterval:   config.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
 		retries:       config.GetInt("handshakes.retries", DefaultHandshakeRetries),
-		waitRotation:  config.GetInt("handshakes.wait_rotation", DefaultHandshakeWaitRotation),
 		triggerBuffer: config.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
 
 		messageMetrics: messageMetrics,

@@ -3,6 +3,7 @@
 package nebula
 
 import (
+	"fmt"
 	"net"
 
 	"github.com/sirupsen/logrus"
@@ -53,7 +54,14 @@ func NewListener(l *logrus.Logger, ip string, port int, _ bool) (*udpConn, error
 // this is an encrypted packet or a handshake message in most cases
 // packets were transmitted from another nebula node, you can send them with Tun.Send
 func (u *udpConn) Send(packet *UdpPacket) {
-	u.l.Infof("UDP injecting packet %+v", packet)
+	h := &Header{}
+	if err := h.Parse(packet.Data); err != nil {
+		panic(err)
+	}
+	u.l.WithField("header", h).
+		WithField("udpAddr", fmt.Sprintf("%v:%v", packet.FromIp, packet.FromPort)).
+		WithField("dataLen", len(packet.Data)).
+		Info("UDP receiving injected packet")
 	u.rxPackets <- packet
 }
 

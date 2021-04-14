@@ -67,23 +67,11 @@ func (c *Control) RebindUDPServer() {
 
 // ListHostmap returns details about the actual or pending (handshaking) hostmap
 func (c *Control) ListHostmap(pendingMap bool) []ControlHostInfo {
-	var hm *HostMap
 	if pendingMap {
-		hm = c.f.handshakeManager.pendingHostMap
+		return listHostMap(c.f.handshakeManager.pendingHostMap)
 	} else {
-		hm = c.f.hostMap
+		return listHostMap(c.f.hostMap)
 	}
-
-	hm.RLock()
-	hosts := make([]ControlHostInfo, len(hm.Hosts))
-	i := 0
-	for _, v := range hm.Hosts {
-		hosts[i] = copyHostInfo(v)
-		i++
-	}
-	hm.RUnlock()
-
-	return hosts
 }
 
 // GetHostInfoByVpnIP returns a single tunnels hostInfo, or nil if not found
@@ -100,7 +88,7 @@ func (c *Control) GetHostInfoByVpnIP(vpnIP uint32, pending bool) *ControlHostInf
 		return nil
 	}
 
-	ch := copyHostInfo(h)
+	ch := copyHostInfo(h, c.f.hostMap.preferredRanges)
 	return &ch
 }
 
@@ -112,7 +100,7 @@ func (c *Control) SetRemoteForTunnel(vpnIP uint32, addr udpAddr) *ControlHostInf
 	}
 
 	hostInfo.SetRemote(addr.Copy())
-	ch := copyHostInfo(hostInfo)
+	ch := copyHostInfo(hostInfo, c.f.hostMap.preferredRanges)
 	return &ch
 }
 
@@ -163,14 +151,17 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	return
 }
 
-func copyHostInfo(h *HostInfo) ControlHostInfo {
+func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 	chi := ControlHostInfo{
-		VpnIP:          int2ip(h.hostId),
-		LocalIndex:     h.localIndexId,
-		RemoteIndex:    h.remoteIndexId,
-		RemoteAddrs:    h.CopyRemotes(),
-		CachedPackets:  len(h.packetStore),
-		MessageCounter: atomic.LoadUint64(&h.ConnectionState.atomicMessageCounter),
+		VpnIP:         int2ip(h.hostId),
+		LocalIndex:    h.localIndexId,
+		RemoteIndex:   h.remoteIndexId,
+		RemoteAddrs:   h.remotes.CopyAddrs(preferredRanges),
+		CachedPackets: len(h.packetStore),
+	}
+
+	if h.ConnectionState != nil {
+		chi.MessageCounter = atomic.LoadUint64(&h.ConnectionState.atomicMessageCounter)
 	}
 
 	if c := h.GetCert(); c != nil {
@@ -182,4 +173,17 @@ func copyHostInfo(h *HostInfo) ControlHostInfo {
 	}
 
 	return chi
+}
+
+func listHostMap(hm *HostMap) []ControlHostInfo {
+	hm.RLock()
+	hosts := make([]ControlHostInfo, len(hm.Hosts))
+	i := 0
+	for _, v := range hm.Hosts {
+		hosts[i] = copyHostInfo(v, hm.preferredRanges)
+		i++
+	}
+	hm.RUnlock()
+
+	return hosts
 }

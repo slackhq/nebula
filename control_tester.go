@@ -44,7 +44,18 @@ func (c *Control) WaitForTypeByIndex(toIndex uint32, msgType NebulaMessageType, 
 // InjectLightHouseAddr will push toAddr into the local lighthouse cache for the vpnIp
 // This is necessary if you did not configure static hosts or are not running a lighthouse
 func (c *Control) InjectLightHouseAddr(vpnIp net.IP, toAddr *net.UDPAddr) {
-	c.f.lightHouse.AddRemote(ip2int(vpnIp), &udpAddr{IP: toAddr.IP, Port: uint16(toAddr.Port)}, false)
+	c.f.lightHouse.Lock()
+	remoteList := c.f.lightHouse.unlockedGetRemoteList(ip2int(vpnIp))
+	remoteList.Lock()
+	defer remoteList.Unlock()
+	c.f.lightHouse.Unlock()
+
+	iVpnIp := ip2int(vpnIp)
+	if v4 := toAddr.IP.To4(); v4 != nil {
+		remoteList.unlockedPrependV4(iVpnIp, NewIp4AndPort(v4, uint32(toAddr.Port)))
+	} else {
+		remoteList.unlockedPrependV6(iVpnIp, NewIp6AndPort(toAddr.IP, uint32(toAddr.Port)))
+	}
 }
 
 // GetFromTun will pull a packet off the tun side of nebula
@@ -84,14 +95,17 @@ func (c *Control) InjectTunUDPPacket(toIp net.IP, toPort uint16, fromPort uint16
 		SrcPort: layers.UDPPort(fromPort),
 		DstPort: layers.UDPPort(toPort),
 	}
-	udp.SetNetworkLayerForChecksum(&ip)
+	err := udp.SetNetworkLayerForChecksum(&ip)
+	if err != nil {
+		panic(err)
+	}
 
 	buffer := gopacket.NewSerializeBuffer()
 	opt := gopacket.SerializeOptions{
 		ComputeChecksums: true,
 		FixLengths:       true,
 	}
-	err := gopacket.SerializeLayers(buffer, opt, &ip, &udp, gopacket.Payload(data))
+	err = gopacket.SerializeLayers(buffer, opt, &ip, &udp, gopacket.Payload(data))
 	if err != nil {
 		panic(err)
 	}
@@ -101,4 +115,14 @@ func (c *Control) InjectTunUDPPacket(toIp net.IP, toPort uint16, fromPort uint16
 
 func (c *Control) GetUDPAddr() string {
 	return c.f.outside.addr.String()
+}
+
+func (c *Control) KillPendingTunnel(vpnIp net.IP) bool {
+	hostinfo, ok := c.f.handshakeManager.pendingHostMap.Hosts[ip2int(vpnIp)]
+	if !ok {
+		return false
+	}
+
+	c.f.handshakeManager.pendingHostMap.DeleteHostInfo(hostinfo)
+	return true
 }
