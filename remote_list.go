@@ -414,6 +414,10 @@ func (r *RemoteList) unlockedSort(preferredRanges []*net.IPNet) {
 			// If i is v6 and j is v4, i is less than j
 			return true
 
+		case a4 != nil && b4 == nil:
+			// If j is v6 and i is v4, i is not less than j
+			return false
+
 		case a4 != nil && b4 != nil:
 			// Special case for ipv4, a4 and b4 are not nil
 			aPrivate := isPrivateIP(a4)
