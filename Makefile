@@ -1,12 +1,22 @@
 GOMINVERSION = 1.16
 NEBULA_CMD_PATH = "./cmd/nebula"
-BUILD_NUMBER ?= dev+$(shell date -u '+%Y%m%d%H%M%S')
+NEBULA_CMD_SUFFIX =
+BUILD_NUMBER ?= $(shell git describe --abbrev=0 --match 'v*' | cut -dv -f2)-$(shell git branch --show-current)-$(shell git describe --dirty | cut -d- -f2-)
+
+ifeq ($(OS),Windows_NT)
+	#TODO: we should be able to ditch awk as well
+	GOVERSION := $(shell go version | awk "{print substr($$3, 3)}")
+	GOISMIN := $(shell IF "$(GOVERSION)" GEQ "$(GOMINVERSION)" ECHO 1)
+	NEBULA_CMD_SUFFIX = .exe
+else
+	GOVERSION := $(shell go version | awk '{print substr($$3, 3)}')
+	GOISMIN := $(shell expr "$(GOVERSION)" ">=" "$(GOMINVERSION)")
+endif
+
 GO111MODULE = on
 export GO111MODULE
 
 # Ensure the version of go we are using is at least what is defined in GOMINVERSION at the top of this file
-GOVERSION := $(shell go version | awk '{print substr($$3, 3)}')
-GOISMIN := $(shell expr "$(GOVERSION)" ">=" "$(GOMINVERSION)")
 ifneq "$(GOISMIN)" "1"
 $(error "go version $(GOVERSION) is not supported, upgrade to $(GOMINVERSION) or above")
 endif
@@ -67,8 +77,8 @@ bin-freebsd: build/freebsd-amd64/nebula build/freebsd-amd64/nebula-cert
 	mv $? .
 
 bin:
-	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula ${NEBULA_CMD_PATH}
-	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula-cert ./cmd/nebula-cert
+	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula${NEBULA_CMD_SUFFIX} ${NEBULA_CMD_PATH}
+	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula-cert${NEBULA_CMD_SUFFIX} ./cmd/nebula-cert
 
 install:
 	go install $(BUILD_ARGS) -ldflags "$(LDFLAGS)" ${NEBULA_CMD_PATH}
@@ -134,10 +144,15 @@ cert/cert.pb.go: cert/cert.proto .FORCE
 	$(MAKE) -C cert cert.pb.go
 
 service:
+ifeq ($(OS),Windows_NT)
+	@echo > nul
+else
 	@echo > /dev/null
+endif
+
 	$(eval NEBULA_CMD_PATH := "./cmd/nebula-service")
 ifeq ($(words $(MAKECMDGOALS)),1)
-	$(MAKE) service ${.DEFAULT_GOAL} --no-print-directory
+	@$(MAKE) service ${.DEFAULT_GOAL} --no-print-directory
 endif
 
 bin-docker: bin build/linux-amd64/nebula build/linux-amd64/nebula-cert
@@ -150,5 +165,5 @@ smoke-docker-race: BUILD_ARGS = -race
 smoke-docker-race: smoke-docker
 
 .FORCE:
-.PHONY: e2e e2ev e2evv e2evvv e2evvvv test test-cov-html bench bench-cpu bench-cpu-long bin proto release service smoke-docker smoke-docker-race
+.PHONY: e2e e2ev e2evv e2evvv e2evvvv test test-cov-html bench bench-cpu bench-cpu-long bin proto release service smoke-docker smoke-docker-race bin
 .DEFAULT_GOAL := bin
