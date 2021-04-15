@@ -461,7 +461,12 @@ func sshQueryLighthouse(ifce *Interface, fs interface{}, a []string, w sshd.Stri
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	return json.NewEncoder(w.GetWriter()).Encode(ifce.lightHouse.Query(vpnIp, ifce).CopyCache())
+	var cm *CacheMap
+	rl := ifce.lightHouse.Query(vpnIp, ifce)
+	if rl != nil {
+		cm = rl.CopyCache()
+	}
+	return json.NewEncoder(w.GetWriter()).Encode(cm)
 }
 
 func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
