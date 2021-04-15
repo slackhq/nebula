@@ -190,36 +190,68 @@ func TestPSK(t *testing.T) {
 		myPskMode    nebula.PskMode
 		theirPskMode nebula.PskMode
 	}{
+		// None and transitional-accepting both ways
 		{
-			name:         "none to transitional",
+			name:         "none to transitional-accepting",
 			myPskMode:    nebula.PskNone,
-			theirPskMode: nebula.PskTransitional,
+			theirPskMode: nebula.PskTransitionalAccepting,
 		},
 		{
-			name:         "transitional to none",
-			myPskMode:    nebula.PskTransitional,
+			name:         "transitional-accepting to none",
+			myPskMode:    nebula.PskTransitionalAccepting,
 			theirPskMode: nebula.PskNone,
 		},
+
+		// All transitional-accepting
 		{
-			name:         "both transitional",
-			myPskMode:    nebula.PskTransitional,
-			theirPskMode: nebula.PskTransitional,
+			name:         "both transitional-accepting",
+			myPskMode:    nebula.PskTransitionalAccepting,
+			theirPskMode: nebula.PskTransitionalAccepting,
 		},
 
+		// transitional-accepting and transitional-sending both ways
 		{
-			name:         "enforced to transitional",
-			myPskMode:    nebula.PskEnforced,
-			theirPskMode: nebula.PskTransitional,
+			name:         "transitional-accepting to transitional-sending",
+			myPskMode:    nebula.PskTransitionalAccepting,
+			theirPskMode: nebula.PskTransitionalSending,
 		},
 		{
-			name:         "transitional to enforced",
-			myPskMode:    nebula.PskTransitional,
+			name:         "transitional-sending to transitional-accepting",
+			myPskMode:    nebula.PskTransitionalSending,
+			theirPskMode: nebula.PskTransitionalAccepting,
+		},
+
+		// All transitional-sending
+		{
+			name:         "transitional-sending to transitional-sending",
+			myPskMode:    nebula.PskTransitionalSending,
+			theirPskMode: nebula.PskTransitionalSending,
+		},
+
+		// enforced and transitional-sending both ways
+		{
+			name:         "enforced to transitional-sending",
+			myPskMode:    nebula.PskEnforced,
+			theirPskMode: nebula.PskTransitionalSending,
+		},
+		{
+			name:         "transitional-sending to enforced",
+			myPskMode:    nebula.PskTransitionalSending,
 			theirPskMode: nebula.PskEnforced,
 		},
+
+		// All enforced
 		{
 			name:         "both enforced",
 			myPskMode:    nebula.PskEnforced,
 			theirPskMode: nebula.PskEnforced,
+		},
+
+		// Enforced can technically handshake with a traditional-accepting but it is bad to be in this state
+		{
+			name:         "enforced to traditional-accepting",
+			myPskMode:    nebula.PskEnforced,
+			theirPskMode: nebula.PskTransitionalAccepting,
 		},
 	}
 
@@ -230,8 +262,10 @@ func TestPSK(t *testing.T) {
 			switch test.myPskMode {
 			case nebula.PskNone:
 				myPskSettings = &m{"handshakes": &m{"psk": &m{"mode": "none"}}}
-			case nebula.PskTransitional:
-				myPskSettings = &m{"handshakes": &m{"psk": &m{"mode": "transitional", "keys": []string{"this is a key"}}}}
+			case nebula.PskTransitionalAccepting:
+				myPskSettings = &m{"handshakes": &m{"psk": &m{"mode": "transitional-accepting", "keys": []string{"this is a key"}}}}
+			case nebula.PskTransitionalSending:
+				myPskSettings = &m{"handshakes": &m{"psk": &m{"mode": "transitional-sending", "keys": []string{"this is a key"}}}}
 			case nebula.PskEnforced:
 				myPskSettings = &m{"handshakes": &m{"psk": &m{"mode": "enforced", "keys": []string{"this is a key"}}}}
 			}
@@ -239,8 +273,10 @@ func TestPSK(t *testing.T) {
 			switch test.theirPskMode {
 			case nebula.PskNone:
 				theirPskSettings = &m{"handshakes": &m{"psk": &m{"mode": "none"}}}
-			case nebula.PskTransitional:
-				theirPskSettings = &m{"handshakes": &m{"psk": &m{"mode": "transitional", "keys": []string{"this is a key"}}}}
+			case nebula.PskTransitionalAccepting:
+				theirPskSettings = &m{"handshakes": &m{"psk": &m{"mode": "transitional-accepting", "keys": []string{"this is a key"}}}}
+			case nebula.PskTransitionalSending:
+				theirPskSettings = &m{"handshakes": &m{"psk": &m{"mode": "transitional-sending", "keys": []string{"this is a key"}}}}
 			case nebula.PskEnforced:
 				theirPskSettings = &m{"handshakes": &m{"psk": &m{"mode": "enforced", "keys": []string{"this is a key"}}}}
 			}
@@ -265,10 +301,12 @@ func TestPSK(t *testing.T) {
 					panic(err)
 				}
 
-				// If this is the stage 1 handshake packet and I am configured to enforce psk, my cert name should not appear.
-				// It would likely be more obvious to unmarshal the payload
-				if test.myPskMode == nebula.PskEnforced && h.Type == 0 && h.MessageCounter == 1 {
-					assert.NotContains(t, string(p.Data), "test me")
+				// If this is the stage 1 handshake packet and I am configured to send with a psk, my cert name should
+				// not appear. It would likely be more obvious to unmarshal the payload and check but this works fine for now
+				if test.myPskMode == nebula.PskEnforced || test.myPskMode == nebula.PskTransitionalSending {
+					if h.Type == 0 && h.MessageCounter == 1 {
+						assert.NotContains(t, string(p.Data), "test me")
+					}
 				}
 
 				if p.ToIp.Equal(theirUdpAddr.IP) && p.ToPort == uint16(theirUdpAddr.Port) && h.Type == 1 {

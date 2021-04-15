@@ -20,16 +20,16 @@ func TestNewPsk(t *testing.T) {
 		assert.Equal(t, []byte{}, b)
 	})
 
-	t.Run("mode transitional", func(t *testing.T) {
-		p, err := NewPsk(PskTransitional, nil, 1)
+	t.Run("mode transitional-accepting", func(t *testing.T) {
+		p, err := NewPsk(PskTransitionalAccepting, nil, 1)
 		assert.Error(t, ErrNotEnoughPskKeys, err)
 
-		p, err = NewPsk(PskTransitional, []string{"1234567"}, 1)
+		p, err = NewPsk(PskTransitionalAccepting, []string{"1234567"}, 1)
 		assert.Error(t, ErrKeyTooShort)
 
-		p, err = NewPsk(PskTransitional, []string{"hi there friends"}, 1)
+		p, err = NewPsk(PskTransitionalAccepting, []string{"hi there friends"}, 1)
 		assert.NoError(t, err)
-		assert.Equal(t, PskTransitional, p.mode)
+		assert.Equal(t, PskTransitionalAccepting, p.mode)
 		assert.Empty(t, p.key)
 
 		assert.Len(t, p.Cache, 2)
@@ -40,6 +40,31 @@ func TestNewPsk(t *testing.T) {
 
 		b, err := p.MakeFor(0)
 		assert.Equal(t, []byte{}, b)
+	})
+
+	t.Run("mode transitional-sending", func(t *testing.T) {
+		p, err := NewPsk(PskTransitionalSending, nil, 1)
+		assert.Error(t, ErrNotEnoughPskKeys, err)
+
+		p, err = NewPsk(PskTransitionalSending, []string{"1234567"}, 1)
+		assert.Error(t, ErrKeyTooShort)
+
+		p, err = NewPsk(PskTransitionalSending, []string{"hi there friends"}, 1)
+		assert.NoError(t, err)
+		assert.Equal(t, PskTransitionalSending, p.mode)
+
+		expectedKey := []byte{0x9c, 0x67, 0xab, 0x58, 0x79, 0x5c, 0x8a, 0xf0, 0xaa, 0xf0, 0x4c, 0x6c, 0x9a, 0x42, 0x6b, 0xe, 0xe2, 0x94, 0xb1, 0x0, 0x28, 0x1c, 0xdc, 0x88, 0x44, 0x35, 0x3f, 0xb7, 0xd5, 0x9, 0xc0, 0xda}
+		assert.Equal(t, expectedKey, p.key)
+
+		assert.Len(t, p.Cache, 2)
+		assert.Nil(t, p.Cache[0])
+
+		expectedCache := []byte{146, 120, 135, 31, 158, 102, 45, 189, 128, 190, 37, 101, 58, 254, 6, 166, 91, 209, 148, 131, 27, 193, 24, 25, 170, 65, 130, 189, 7, 179, 255, 17}
+		assert.Equal(t, expectedCache, p.Cache[1])
+
+		expectedPsk := []byte{0xd9, 0x16, 0xa3, 0x66, 0x6a, 0x20, 0x26, 0xcf, 0x5d, 0x93, 0xad, 0xa3, 0x88, 0x2d, 0x57, 0xac, 0x9b, 0xc3, 0x5a, 0xb7, 0x8f, 0x6, 0x71, 0xc4, 0x3e, 0x5, 0x9e, 0xbc, 0x4e, 0xc8, 0x24, 0x17}
+		b, err := p.MakeFor(0)
+		assert.Equal(t, expectedPsk, b)
 	})
 
 	t.Run("mode enforced", func(t *testing.T) {

@@ -228,19 +228,22 @@ handshakes:
   #trigger_buffer: 64
 
   # pki can be used to mask the contents of handshakes and makes handshaking with unintended recipients more difficult
+  # all settings respond to a reload
   psk:
     # mode defines the how pre shared keys can be used in a handshake
-    # `none` (the default) does not send or receive using a psk. Ideally `enforced` is used.
-    # `transitional` can receive handshakes using a psk that we know about, but we will not send any handshakes using a psk.
-    #    This is helpful for transitioning to `enforced` and should be changed to `enforced` as soon as possible.
-    #    Move every node in your mesh to `transitional` then you can move every node in your mesh to `enforced` without having to stop the world
-    #    This assumes `keys` is the same on every node in your mesh
-    # `enforced` enforces the use of a psk for all tunnels. Any node not also using `enforced` or `transitional` will not be able to handshake with us
+    # `none` (the default) does not send or receive using a psk. Ideally `enforced` is used
+    # `transitional-accepting` will send handshakes without using a psk and can receive handshakes using a psk we know about
+    # `transitional-sending` will send handshakes using a psk but will still accept handshakes without them
+    # `enforced` enforces the use of a psk for all tunnels. Any node not also using `enforced` or `transitional-sending` can not handshake with us
+    #
+    # When moving from `none` to `enforced` you will want to change every node in the mesh to `transitional-accepting` and reload
+    # then move every node to `transitional-sending` then reload, and finally `enforced` then reload. This allows you to
+    # avoid stopping the world to use psk. You must ensure at `transitional-accepting` that all nodes have the same psks.
     #mode: none
 
-    # In `transitional` and `enforced` modes, the keys provided here are sent through hkdf with the intended recipients
-    # ip used in the info section. This helps guard against handshaking with the wrong host if your static_host_map or
-    # lighthouse(s) has incorrect information.
+    # In `transitional-accepting`, `transitional-sending` and `enforced` modes, the keys provided here are sent through
+    # hkdf with the intended recipients ip used in the info section. This helps guard against handshaking with the wrong
+    # host if your static_host_map or lighthouse(s) has incorrect information.
     #
     # Setting keys if mode is `none` has no effect.
     #
