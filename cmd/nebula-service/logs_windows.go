@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
-	"github.com/kardianos/service"
-	"github.com/sirupsen/logrus"
 	"io/ioutil"
 	"os"
+
+	"github.com/kardianos/service"
+	"github.com/sirupsen/logrus"
 )
 
 // HookLogger routes the logrus logs through the service logger so that they end up in the Windows Event Viewer
