@@ -1,24 +1,29 @@
 GOMINVERSION = 1.16
 NEBULA_CMD_PATH = "./cmd/nebula"
-NEBULA_CMD_SUFFIX =
-BUILD_NUMBER ?= $(shell git describe --abbrev=0 --match "v*" | cut -dv -f2)-$(shell git branch --show-current)-$(shell git describe --long --dirty | cut -d- -f2-)
+GO111MODULE = on
+export GO111MODULE
 
+# Set up OS specific bits
 ifeq ($(OS),Windows_NT)
 	#TODO: we should be able to ditch awk as well
 	GOVERSION := $(shell go version | awk "{print substr($$3, 3)}")
 	GOISMIN := $(shell IF "$(GOVERSION)" GEQ "$(GOMINVERSION)" ECHO 1)
 	NEBULA_CMD_SUFFIX = .exe
+	NULL_FILE = nul
 else
 	GOVERSION := $(shell go version | awk '{print substr($$3, 3)}')
 	GOISMIN := $(shell expr "$(GOVERSION)" ">=" "$(GOMINVERSION)")
+	NEBULA_CMD_SUFFIX =
+	NULL_FILE = /dev/null
 endif
 
-GO111MODULE = on
-export GO111MODULE
-
-# Ensure the version of go we are using is at least what is defined in GOMINVERSION at the top of this file
-ifneq "$(GOISMIN)" "1"
-$(error "go version $(GOVERSION) is not supported, upgrade to $(GOMINVERSION) or above")
+# Only defined the build number if we haven't already, stop
+ifndef BUILD_NUMBER
+	ifeq ($(shell git describe --exact-match > $(NULL_FILE) 2>&1; echo $$?),0)
+		BUILD_NUMBER ?= $(shell git describe --exact-match --dirty | cut -dv -f2)
+	else
+		BUILD_NUMBER ?= $(shell git describe --abbrev=0 --match "v*" | cut -dv -f2)-$(shell git branch --show-current)-$(shell git describe --long --dirty | cut -d- -f2-)
+	endif
 endif
 
 LDFLAGS = -X main.Build=$(BUILD_NUMBER)
@@ -144,12 +149,7 @@ cert/cert.pb.go: cert/cert.proto .FORCE
 	$(MAKE) -C cert cert.pb.go
 
 service:
-ifeq ($(OS),Windows_NT)
-	@echo > nul
-else
-	@echo > /dev/null
-endif
-
+	@echo > $(NULL_FILE)
 	$(eval NEBULA_CMD_PATH := "./cmd/nebula-service")
 ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) service ${.DEFAULT_GOAL} --no-print-directory
