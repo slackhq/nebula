@@ -1,7 +1,7 @@
 GOMINVERSION = 1.16
 NEBULA_CMD_PATH = "./cmd/nebula"
 NEBULA_CMD_SUFFIX =
-BUILD_NUMBER ?= $(shell git describe --abbrev=0 --match "v*" | cut -dv -f2)-$(shell git branch --show-current)-$(shell git describe --dirty | cut -d- -f2-)
+BUILD_NUMBER ?= $(shell git describe --abbrev=0 --match "v*" | cut -dv -f2)-$(shell git branch --show-current)-$(shell git describe --long --dirty | cut -d- -f2-)
 
 ifeq ($(OS),Windows_NT)
 	#TODO: we should be able to ditch awk as well
