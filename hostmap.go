@@ -40,7 +40,6 @@ type HostInfo struct {
 
 	remote            *udpAddr
 	remotes           *RemoteList
-	promoteCounter    uint32
 	ConnectionState   *ConnectionState
 	handshakeStart    time.Time        //todo: this an entry in the handshake manager
 	HandshakeReady    bool             //todo: being in the manager means you are ready
@@ -125,7 +124,6 @@ func (hm *HostMap) AddVpnIP(vpnIP uint32) *HostInfo {
 	if _, ok := hm.Hosts[vpnIP]; !ok {
 		hm.RUnlock()
 		h = &HostInfo{
-			promoteCounter:  0,
 			hostId:          vpnIP,
 			HandshakePacket: make(map[uint8][]byte, 0),
 		}
@@ -403,7 +401,7 @@ func (i *HostInfo) BindConnectionState(cs *ConnectionState) {
 // TryPromoteBest handles re-querying lighthouses and probing for better paths
 // NOTE: It is an error to call this if you are a lighthouse since they should not roam clients!
 func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface) {
-	c := atomic.AddUint32(&i.promoteCounter, 1)
+	c := atomic.LoadUint64(&i.ConnectionState.atomicMessageCounter)
 	if c%PromoteEvery == 0 {
 		// return early if we are already on a preferred remote
 		rIP := i.remote.IP
