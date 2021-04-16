@@ -141,21 +141,22 @@ func (s *SSHServer) Run(addr string) error {
 }
 
 func (s *SSHServer) Stop() {
+	// Close the listener first, to prevent any new connections being accepted.
+	if s.listener != nil {
+		if err := s.listener.Close(); err != nil {
+			s.l.WithError(err).Warn("Failed to close the sshd listener")
+		} else {
+			s.l.Info("SSH server stopped listening")
+		}
+	}
+
+	// Force close all existing connections.
+	// TODO I believe this has a slight race if the listener has just accepted
+	// a connection. Can fix by moving this to the goroutine that's accepting.
 	for _, c := range s.conns {
 		c.Close()
 	}
 
-	if s.listener == nil {
-		return
-	}
-
-	err := s.listener.Close()
-	if err != nil {
-		s.l.WithError(err).Warn("Failed to close the sshd listener")
-		return
-	}
-
-	s.l.Info("SSH server stopped listening")
 	return
 }
 

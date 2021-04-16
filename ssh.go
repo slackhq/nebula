@@ -47,10 +47,13 @@ type sshCreateTunnelFlags struct {
 func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) {
 	c.RegisterReloadCallback(func(c *Config) {
 		if c.GetBool("sshd.enabled", false) {
-			err := configSSH(l, ssh, c)
+			sshRun, err := configSSH(l, ssh, c)
 			if err != nil {
 				l.WithError(err).Error("Failed to reconfigure the sshd")
 				ssh.Stop()
+			}
+			if sshRun != nil {
+				go sshRun()
 			}
 		} else {
 			ssh.Stop()
@@ -58,37 +61,41 @@ func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) {
 	})
 }
 
-func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) error {
+// configSSH reads the ssh info out of the passed-in Config and
+// updates the passed-in SSHServer. On success, it returns a function
+// that callers may invoke to run the configured ssh server. On
+// failure, it returns nil, error.
+func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) (func(), error) {
 	//TODO conntrack list
 	//TODO print firewall rules or hash?
 
 	listen := c.GetString("sshd.listen", "")
 	if listen == "" {
-		return fmt.Errorf("sshd.listen must be provided")
+		return nil, fmt.Errorf("sshd.listen must be provided")
 	}
 
 	_, port, err := net.SplitHostPort(listen)
 	if err != nil {
-		return fmt.Errorf("invalid sshd.listen address: %s", err)
+		return nil, fmt.Errorf("invalid sshd.listen address: %s", err)
 	}
 	if port == "22" {
-		return fmt.Errorf("sshd.listen can not use port 22")
+		return nil, fmt.Errorf("sshd.listen can not use port 22")
 	}
 
 	//TODO: no good way to reload this right now
 	hostKeyFile := c.GetString("sshd.host_key", "")
 	if hostKeyFile == "" {
-		return fmt.Errorf("sshd.host_key must be provided")
+		return nil, fmt.Errorf("sshd.host_key must be provided")
 	}
 
 	hostKeyBytes, err := ioutil.ReadFile(hostKeyFile)
 	if err != nil {
-		return fmt.Errorf("error while loading sshd.host_key file: %s", err)
+		return nil, fmt.Errorf("error while loading sshd.host_key file: %s", err)
 	}
 
 	err = ssh.SetHostKey(hostKeyBytes)
 	if err != nil {
-		return fmt.Errorf("error while adding sshd.host_key: %s", err)
+		return nil, fmt.Errorf("error while adding sshd.host_key: %s", err)
 	}
 
 	rawKeys := c.Get("sshd.authorized_users")
@@ -139,14 +146,19 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) error {
 		l.Info("no ssh users to authorize")
 	}
 
+	var runner func()
 	if c.GetBool("sshd.enabled", false) {
 		ssh.Stop()
-		go ssh.Run(listen)
+		runner = func() {
+			if err := ssh.Run(listen); err != nil {
+				l.WithField("err", err).Warn("Failed to run the SSH server")
+			}
+		}
 	} else {
 		ssh.Stop()
 	}
 
-	return nil
+	return runner, nil
 }
 
 func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pendingHostMap *HostMap, lightHouse *LightHouse, ifce *Interface) {

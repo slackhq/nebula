@@ -15,8 +15,11 @@ import (
 // core. This means copying IP objects, slices, de-referencing pointers and taking the actual value, etc
 
 type Control struct {
-	f *Interface
-	l *logrus.Logger
+	f          *Interface
+	l          *logrus.Logger
+	sshStart   func()
+	statsStart func()
+	dnsStart   func()
 }
 
 type ControlHostInfo struct {
@@ -32,6 +35,21 @@ type ControlHostInfo struct {
 
 // Start actually runs nebula, this is a nonblocking call. To block use Control.ShutdownBlock()
 func (c *Control) Start() {
+	// Activate the interface
+	c.f.activate()
+
+	// Call all the delayed funcs that waited patiently for the interface to be created.
+	if c.sshStart != nil {
+		go c.sshStart()
+	}
+	if c.statsStart != nil {
+		go c.statsStart()
+	}
+	if c.dnsStart != nil {
+		go c.dnsStart()
+	}
+
+	// Start reading packets.
 	c.f.run()
 }
 

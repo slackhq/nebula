@@ -75,8 +75,9 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
 	wireSSHReload(l, ssh, config)
+	var sshStart func()
 	if config.GetBool("sshd.enabled", false) {
-		err = configSSH(l, ssh, config)
+		sshStart, err = configSSH(l, ssh, config)
 		if err != nil {
 			return nil, NewContextualError("Error while configuring the sshd", nil, err)
 		}
@@ -393,7 +394,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		go lightHouse.LhUpdateWorker(ifce)
 	}
 
-	err = startStats(l, config, buildVersion, configTest)
+	statsStart, err := startStats(l, config, buildVersion, configTest)
 	if err != nil {
 		return nil, NewContextualError("Failed to start stats emitter", nil, err)
 	}
@@ -408,10 +409,11 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	attachCommands(l, ssh, hostMap, handshakeManager.pendingHostMap, lightHouse, ifce)
 
 	// Start DNS server last to allow using the nebula IP as lighthouse.dns.host
+	var dnsStart func()
 	if amLighthouse && serveDns {
 		l.Debugln("Starting dns server")
-		go dnsMain(l, hostMap, config)
+		dnsStart = dnsMain(l, hostMap, config)
 	}
 
-	return &Control{ifce, l}, nil
+	return &Control{ifce, l, sshStart, statsStart, dnsStart}, nil
 }
