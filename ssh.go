@@ -149,7 +149,11 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) (func(), error)
 	var runner func()
 	if c.GetBool("sshd.enabled", false) {
 		ssh.Stop()
-		runner = func() { ssh.Run(listen) }
+		runner = func() {
+			if err := ssh.Run(listen); err != nil {
+				l.WithField("err", err).Warn("Failed to run the SSH server")
+			}
+		}
 	} else {
 		ssh.Stop()
 	}

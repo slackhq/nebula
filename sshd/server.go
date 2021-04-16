@@ -93,7 +93,6 @@ func (s *SSHServer) Run(addr string) error {
 	var err error
 	s.listener, err = net.Listen("tcp", addr)
 	if err != nil {
-		s.l.WithField("err", err).Warn("Error starting SSH server listener, shutting down")
 		return err
 	}
 
