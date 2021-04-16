@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/imdario/mergo"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
@@ -28,7 +29,7 @@ import (
 type m map[string]interface{}
 
 // newSimpleServer creates a nebula instance with many assumptions
-func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, udpIp net.IP) (*nebula.Control, net.IP, *net.UDPAddr) {
+func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, udpIp net.IP, customConfig *m) (*nebula.Control, net.IP, *net.UDPAddr) {
 	l := NewTestLogger()
 
 	vpnIpNet := &net.IPNet{IP: make([]byte, len(udpIp)), Mask: net.IPMask{255, 255, 255, 0}}
@@ -38,7 +39,7 @@ func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, u
 		IP:   udpIp,
 		Port: 4242,
 	}
-	_, _, myPrivKey, myPEM := newTestCert(caCrt, caKey, name, time.Now(), time.Now().Add(5*time.Minute), vpnIpNet, nil, []string{})
+	_, _, myPrivKey, myPEM := newTestCert(caCrt, caKey, "test "+name, time.Now(), time.Now().Add(5*time.Minute), vpnIpNet, nil, []string{})
 
 	caB, err := caCrt.MarshalToPEM()
 	if err != nil {
@@ -83,6 +84,23 @@ func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, u
 
 	config := nebula.NewConfig(l)
 	config.LoadString(string(cb))
+	if customConfig != nil {
+		ccb, err := yaml.Marshal(customConfig)
+		if err != nil {
+			panic(err)
+		}
+
+		ccm := map[interface{}]interface{}{}
+		err = yaml.Unmarshal(ccb, &ccm)
+		if err != nil {
+			panic(err)
+		}
+
+		err = mergo.Merge(&config.Settings, ccm, mergo.WithAppendSlice)
+		if err != nil {
+			panic(err)
+		}
+	}
 
 	control, err := nebula.Main(config, false, "e2e-test", l, nil)
 
