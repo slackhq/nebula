@@ -369,7 +369,7 @@ func (lh *LightHouse) SendUpdate(f EncWriter) {
 	out := make([]byte, mtu)
 
 	mm, err := proto.Marshal(m)
-	if err != nil && lh.l.Level >= logrus.DebugLevel {
+	if err != nil {
 		lh.l.WithError(err).Error("Error while marshaling for lighthouse update")
 		return
 	}
