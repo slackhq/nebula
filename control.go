@@ -142,7 +142,7 @@ func (c *Control) CloseTunnel(vpnIP uint32, localOnly bool) bool {
 		)
 	}
 
-	c.f.closeTunnel(hostInfo)
+	c.f.closeTunnel(hostInfo, false)
 	return true
 }
 
@@ -160,6 +160,8 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 
 		if h.ConnectionState.ready {
 			c.f.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+			c.f.closeTunnel(h, true)
+
 			c.l.WithField("vpnIp", IntIp(h.hostId)).WithField("udpAddr", h.remote).
 				Debug("Sending close tunnel message")
 			closed++
