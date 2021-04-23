@@ -3,6 +3,7 @@ package sshd
 import (
 	"fmt"
 	"net"
+	"sync"
 
 	"github.com/armon/go-radix"
 	"github.com/sirupsen/logrus"
@@ -20,8 +21,11 @@ type SSHServer struct {
 	helpCommand *Command
 	commands    *radix.Tree
 	listener    net.Listener
-	conns       map[int]*session
-	counter     int
+
+	// Locks the conns/counter to avoid concurrent map access
+	connsLock sync.Mutex
+	conns     map[int]*session
+	counter   int
 }
 
 // NewSSHServer creates a new ssh server rigged with default commands and prepares to listen
@@ -127,15 +131,19 @@ func (s *SSHServer) Run(addr string) error {
 		l.WithField("remoteAddress", c.RemoteAddr()).WithField("sshFingerprint", fp).Info("ssh user logged in")
 
 		session := NewSession(s.commands, conn, chans, l.WithField("subsystem", "sshd.session"))
+		s.connsLock.Lock()
 		s.counter++
 		counter := s.counter
 		s.conns[counter] = session
+		s.connsLock.Unlock()
 
 		go ssh.DiscardRequests(reqs)
 		go func() {
 			<-session.exitChan
 			s.l.WithField("id", counter).Debug("closing conn")
+			s.connsLock.Lock()
 			delete(s.conns, counter)
+			s.connsLock.Unlock()
 		}()
 	}
 }
@@ -151,11 +159,11 @@ func (s *SSHServer) Stop() {
 	}
 
 	// Force close all existing connections.
-	// TODO I believe this has a slight race if the listener has just accepted
-	// a connection. Can fix by moving this to the goroutine that's accepting.
+	s.connsLock.Lock()
 	for _, c := range s.conns {
 		c.Close()
 	}
+	s.connsLock.Unlock()
 
 	return
 }
