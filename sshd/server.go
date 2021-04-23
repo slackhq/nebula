@@ -1,6 +1,7 @@
 package sshd
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -101,11 +102,24 @@ func (s *SSHServer) Run(addr string) error {
 	}
 
 	s.l.WithField("sshListener", addr).Info("SSH server is listening")
+
+	// Run loops until there is an error
+	s.run()
+	s.closeSessions()
+
+	s.l.Info("SSH server stopped listening")
+	// We don't return an error because run logs for us
+	return nil
+}
+
+func (s *SSHServer) run() {
 	for {
 		c, err := s.listener.Accept()
 		if err != nil {
-			s.l.WithError(err).Warn("Error in listener, shutting down")
-			return nil
+			if !errors.Is(err, net.ErrClosed) {
+				s.l.WithError(err).Warn("Error in listener, shutting down")
+			}
+			return
 		}
 
 		conn, chans, reqs, err := ssh.NewServerConn(c, s.config)
@@ -149,23 +163,20 @@ func (s *SSHServer) Run(addr string) error {
 }
 
 func (s *SSHServer) Stop() {
-	// Close the listener first, to prevent any new connections being accepted.
+	// Close the listener, this will cause all session to terminate as well, see SSHServer.Run
 	if s.listener != nil {
 		if err := s.listener.Close(); err != nil {
 			s.l.WithError(err).Warn("Failed to close the sshd listener")
-		} else {
-			s.l.Info("SSH server stopped listening")
 		}
 	}
+}
 
-	// Force close all existing connections.
+func (s *SSHServer) closeSessions() {
 	s.connsLock.Lock()
 	for _, c := range s.conns {
 		c.Close()
 	}
 	s.connsLock.Unlock()
-
-	return
 }
 
 func (s *SSHServer) matchPubKey(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
