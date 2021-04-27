@@ -59,6 +59,11 @@ type HostInfo struct {
 	// with a handshake
 	lastRebindCount int8
 
+	// lastHandshakeTime records the time the remote side told us about at the stage when the handshake was completed locally
+	// Stage 1 packet will contain it if I am a responder, stage 2 packet if I am an initiator
+	// This is used to avoid an attack where a handshake packet is replayed after some time
+	lastHandshakeTime uint64
+
 	lastRoam       time.Time
 	lastRoamRemote *udpAddr
 }

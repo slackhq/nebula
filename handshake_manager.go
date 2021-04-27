@@ -199,7 +199,7 @@ var (
 // exact same handshake packet
 //
 // ErrExistingHostInfo if we already have an entry in the hostmap for this
-// VpnIP and overwrite was false.
+// VpnIP and the new handshake was older than the one we currently have
 //
 // ErrLocalIndexCollision if we already have an entry in the main or pending
 // hostmap for the hostinfo.localIndexId.
@@ -217,10 +217,12 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 			return existingHostInfo, ErrAlreadySeen
 		}
 
-		if !overwrite {
-			// It's a new handshake and we lost the race
+		// Is this a newer handshake?
+		if existingHostInfo.lastHandshakeTime >= hostinfo.lastHandshakeTime {
 			return existingHostInfo, ErrExistingHostInfo
 		}
+
+		existingHostInfo.logger(c.l).Info("Taking new handshake")
 	}
 
 	existingIndex, found := c.mainHostMap.Indexes[hostinfo.localIndexId]
@@ -261,7 +263,6 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 	}
 
 	if existingHostInfo != nil {
-		hostinfo.logger(c.l).Info("Race lost, taking new handshake")
 		// We are going to overwrite this entry, so remove the old references
 		delete(c.mainHostMap.Hosts, existingHostInfo.hostId)
 		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
