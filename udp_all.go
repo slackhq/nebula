@@ -33,14 +33,26 @@ func (ua *udpAddr) Equals(t *udpAddr) bool {
 }
 
 func (ua *udpAddr) String() string {
+	if ua == nil {
+		return "<nil>"
+	}
+
 	return net.JoinHostPort(ua.IP.String(), fmt.Sprintf("%v", ua.Port))
 }
 
 func (ua *udpAddr) MarshalJSON() ([]byte, error) {
+	if ua == nil {
+		return nil, nil
+	}
+
 	return json.Marshal(m{"ip": ua.IP, "port": ua.Port})
 }
 
 func (ua *udpAddr) Copy() *udpAddr {
+	if ua == nil {
+		return nil
+	}
+
 	nu := udpAddr{
 		Port: ua.Port,
 		IP:   make(net.IP, len(ua.IP)),

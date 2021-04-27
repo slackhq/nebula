@@ -99,6 +99,10 @@ func (r *RemoteList) ForEach(preferredRanges []*net.IPNet, forEach forEachFunc) 
 // CopyAddrs locks and makes a deep copy of the deduplicated address list
 // The deduplication work may need to occur here, so you must pass preferredRanges
 func (r *RemoteList) CopyAddrs(preferredRanges []*net.IPNet) []*udpAddr {
+	if r == nil {
+		return nil
+	}
+
 	r.Rebuild(preferredRanges)
 
 	r.RLock()
