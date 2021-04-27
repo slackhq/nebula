@@ -71,6 +71,10 @@ type Firewall struct {
 	trackTCPRTT  bool
 	metricTCPRTT metrics.Histogram
 	l            *logrus.Logger
+
+	metricDroppedRemoteIP metrics.Counter
+	metricDroppedLocalIP  metrics.Counter
+	metricDroppedNoRule   metrics.Counter
 }
 
 type FirewallConntrack struct {
@@ -195,8 +199,12 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		UDPTimeout:     UDPTimeout,
 		DefaultTimeout: defaultTimeout,
 		localIps:       localIps,
-		metricTCPRTT:   metrics.GetOrRegisterHistogram("network.tcp.rtt", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		l:              l,
+
+		metricTCPRTT:          metrics.GetOrRegisterHistogram("network.tcp.rtt", nil, metrics.NewExpDecaySample(1028, 0.015)),
+		metricDroppedLocalIP:  metrics.GetOrRegisterCounter("firewall.dropped.local_ip", nil),
+		metricDroppedRemoteIP: metrics.GetOrRegisterCounter("firewall.dropped.remote_ip", nil),
+		metricDroppedNoRule:   metrics.GetOrRegisterCounter("firewall.dropped.no_rule", nil),
 	}
 }
 
@@ -385,17 +393,20 @@ func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *Host
 	// Make sure remote address matches nebula certificate
 	if remoteCidr := h.remoteCidr; remoteCidr != nil {
 		if remoteCidr.Contains(fp.RemoteIP) == nil {
+			f.metricDroppedRemoteIP.Inc(1)
 			return ErrInvalidRemoteIP
 		}
 	} else {
 		// Simple case: Certificate has one IP and no subnets
 		if fp.RemoteIP != h.hostId {
+			f.metricDroppedRemoteIP.Inc(1)
 			return ErrInvalidRemoteIP
 		}
 	}
 
 	// Make sure we are supposed to be handling this local ip address
 	if f.localIps.Contains(fp.LocalIP) == nil {
+		f.metricDroppedLocalIP.Inc(1)
 		return ErrInvalidLocalIP
 	}
 
@@ -406,6 +417,7 @@ func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *Host
 
 	// We now know which firewall table to check against
 	if !table.match(fp, incoming, h.ConnectionState.peerCert, caPool) {
+		f.metricDroppedNoRule.Inc(1)
 		return ErrNoMatchingRule
 	}
 

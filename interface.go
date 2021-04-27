@@ -77,9 +77,11 @@ type Interface struct {
 	writers []*udpConn
 	readers []io.ReadWriteCloser
 
-	metricHandshakes metrics.Histogram
-	messageMetrics   *MessageMetrics
-	l                *logrus.Logger
+	metricHandshakes    metrics.Histogram
+	messageMetrics      *MessageMetrics
+	cachedPacketMetrics *cachedPacketMetrics
+
+	l *logrus.Logger
 }
 
 func NewInterface(c *InterfaceConfig) (*Interface, error) {
@@ -122,7 +124,12 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
-		l:                c.l,
+		cachedPacketMetrics: &cachedPacketMetrics{
+			sent:    metrics.GetOrRegisterCounter("hostinfo.cached_packets.sent", nil),
+			dropped: metrics.GetOrRegisterCounter("hostinfo.cached_packets.dropped", nil),
+		},
+
+		l: c.l,
 	}
 
 	ifce.connectionManager = newConnectionManager(c.l, ifce, c.checkInterval, c.pendingDeletionInterval)
