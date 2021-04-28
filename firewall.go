@@ -77,11 +77,9 @@ type Firewall struct {
 }
 
 type firewallMetrics struct {
-	droppedLocalIP   metrics.Counter
-	droppedRemoteIP  metrics.Counter
-	droppedNoRule    metrics.Counter
-	allowedConntrack metrics.Counter
-	allowedRule      metrics.Counter
+	droppedLocalIP  metrics.Counter
+	droppedRemoteIP metrics.Counter
+	droppedNoRule   metrics.Counter
 }
 
 type FirewallConntrack struct {
@@ -210,18 +208,14 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 
 		metricTCPRTT: metrics.GetOrRegisterHistogram("network.tcp.rtt", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		incomingMetrics: &firewallMetrics{
-			droppedLocalIP:   metrics.GetOrRegisterCounter("firewall.incoming.dropped.local_ip", nil),
-			droppedRemoteIP:  metrics.GetOrRegisterCounter("firewall.incoming.dropped.remote_ip", nil),
-			droppedNoRule:    metrics.GetOrRegisterCounter("firewall.incoming.dropped.no_rule", nil),
-			allowedConntrack: metrics.GetOrRegisterCounter("firewall.incoming.allowed.conntrack", nil),
-			allowedRule:      metrics.GetOrRegisterCounter("firewall.incoming.allowed.rule", nil),
+			droppedLocalIP:  metrics.GetOrRegisterCounter("firewall.incoming.dropped.local_ip", nil),
+			droppedRemoteIP: metrics.GetOrRegisterCounter("firewall.incoming.dropped.remote_ip", nil),
+			droppedNoRule:   metrics.GetOrRegisterCounter("firewall.incoming.dropped.no_rule", nil),
 		},
 		outgoingMetrics: &firewallMetrics{
-			droppedLocalIP:   metrics.GetOrRegisterCounter("firewall.outgoing.dropped.local_ip", nil),
-			droppedRemoteIP:  metrics.GetOrRegisterCounter("firewall.outgoing.dropped.remote_ip", nil),
-			droppedNoRule:    metrics.GetOrRegisterCounter("firewall.outgoing.dropped.no_rule", nil),
-			allowedConntrack: metrics.GetOrRegisterCounter("firewall.outgoing.allowed.conntrack", nil),
-			allowedRule:      metrics.GetOrRegisterCounter("firewall.outgoing.allowed.rule", nil),
+			droppedLocalIP:  metrics.GetOrRegisterCounter("firewall.outgoing.dropped.local_ip", nil),
+			droppedRemoteIP: metrics.GetOrRegisterCounter("firewall.outgoing.dropped.remote_ip", nil),
+			droppedNoRule:   metrics.GetOrRegisterCounter("firewall.outgoing.dropped.no_rule", nil),
 		},
 	}
 }
@@ -408,25 +402,23 @@ func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *Host
 		return nil
 	}
 
-	metrics := f.metrics(incoming)
-
 	// Make sure remote address matches nebula certificate
 	if remoteCidr := h.remoteCidr; remoteCidr != nil {
 		if remoteCidr.Contains(fp.RemoteIP) == nil {
-			metrics.droppedRemoteIP.Inc(1)
+			f.metrics(incoming).droppedRemoteIP.Inc(1)
 			return ErrInvalidRemoteIP
 		}
 	} else {
 		// Simple case: Certificate has one IP and no subnets
 		if fp.RemoteIP != h.hostId {
-			metrics.droppedRemoteIP.Inc(1)
+			f.metrics(incoming).droppedRemoteIP.Inc(1)
 			return ErrInvalidRemoteIP
 		}
 	}
 
 	// Make sure we are supposed to be handling this local ip address
 	if f.localIps.Contains(fp.LocalIP) == nil {
-		metrics.droppedLocalIP.Inc(1)
+		f.metrics(incoming).droppedLocalIP.Inc(1)
 		return ErrInvalidLocalIP
 	}
 
@@ -437,13 +429,12 @@ func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *Host
 
 	// We now know which firewall table to check against
 	if !table.match(fp, incoming, h.ConnectionState.peerCert, caPool) {
-		metrics.droppedNoRule.Inc(1)
+		f.metrics(incoming).droppedNoRule.Inc(1)
 		return ErrNoMatchingRule
 	}
 
 	// We always want to conntrack since it is a faster operation
 	f.addConn(packet, fp, incoming)
-	metrics.allowedRule.Inc(1)
 
 	return nil
 }
@@ -474,7 +465,6 @@ func (f *Firewall) EmitStats() {
 func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool, localCache ConntrackCache) bool {
 	if localCache != nil {
 		if _, ok := localCache[fp]; ok {
-			// NOTE: no firewall allowed metrics when using the local cache
 			return true
 		}
 	}
@@ -549,11 +539,6 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 		localCache[fp] = struct{}{}
 	}
 
-	if c.incoming == incoming {
-		f.metrics(incoming).allowedRule.Inc(1)
-	} else {
-		f.metrics(incoming).allowedConntrack.Inc(1)
-	}
 	return true
 }
 
