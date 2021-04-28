@@ -268,10 +268,11 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 			WithField("fingerprint", fingerprint).
 			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+			WithField("sentCachedPackets", len(hostinfo.packetStore)).
 			Info("Handshake message sent")
 	}
 
-	hostinfo.handshakeComplete(f.l)
+	hostinfo.handshakeComplete(f.l, f.cachedPacketMetrics)
 
 	return
 }
@@ -391,6 +392,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 		WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 		WithField("durationNs", duration).
+		WithField("sentCachedPackets", len(hostinfo.packetStore)).
 		Info("Handshake message received")
 
 	hostinfo.remoteIndexId = hs.Details.ResponderIndex
@@ -410,7 +412,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	// Complete our handshake and update metrics, this will replace any existing tunnels for this vpnIp
 	//TODO: Complete here does not do a race avoidance, it will just take the new tunnel. Is this ok?
 	f.handshakeManager.Complete(hostinfo, f)
-	hostinfo.handshakeComplete(f.l)
+	hostinfo.handshakeComplete(f.l, f.cachedPacketMetrics)
 	f.metricHandshakes.Update(duration)
 
 	return false

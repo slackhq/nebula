@@ -77,6 +77,11 @@ type cachedPacket struct {
 
 type packetCallback func(t NebulaMessageType, st NebulaMessageSubType, h *HostInfo, p, nb, out []byte)
 
+type cachedPacketMetrics struct {
+	sent    metrics.Counter
+	dropped metrics.Counter
+}
+
 func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRanges []*net.IPNet) *HostMap {
 	h := map[uint32]*HostInfo{}
 	i := map[uint32]*HostInfo{}
@@ -435,7 +440,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 	}
 }
 
-func (i *HostInfo) cachePacket(l *logrus.Logger, t NebulaMessageType, st NebulaMessageSubType, packet []byte, f packetCallback) {
+func (i *HostInfo) cachePacket(l *logrus.Logger, t NebulaMessageType, st NebulaMessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
 	//TODO: return the error so we can log with more context
 	if len(i.packetStore) < 100 {
 		tempPacket := make([]byte, len(packet))
@@ -450,6 +455,7 @@ func (i *HostInfo) cachePacket(l *logrus.Logger, t NebulaMessageType, st NebulaM
 		}
 
 	} else if l.Level >= logrus.DebugLevel {
+		m.dropped.Inc(1)
 		i.logger(l).
 			WithField("length", len(i.packetStore)).
 			WithField("stored", false).
@@ -458,7 +464,7 @@ func (i *HostInfo) cachePacket(l *logrus.Logger, t NebulaMessageType, st NebulaM
 }
 
 // handshakeComplete will set the connection as ready to communicate, as well as flush any stored packets
-func (i *HostInfo) handshakeComplete(l *logrus.Logger) {
+func (i *HostInfo) handshakeComplete(l *logrus.Logger, m *cachedPacketMetrics) {
 	//TODO: I'm not certain the distinction between handshake complete and ConnectionState being ready matters because:
 	//TODO: HandshakeComplete means send stored packets and ConnectionState.ready means we are ready to send
 	//TODO: if the transition from HandhsakeComplete to ConnectionState.ready happens all within this function they are identical
@@ -479,6 +485,7 @@ func (i *HostInfo) handshakeComplete(l *logrus.Logger) {
 		for _, cp := range i.packetStore {
 			cp.callback(cp.messageType, cp.messageSubType, i, cp.packet, nb, out)
 		}
+		m.sent.Inc(int64(len(i.packetStore)))
 	}
 
 	i.remotes.ResetBlockedRemotes()

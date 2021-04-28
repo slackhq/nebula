@@ -8,6 +8,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 )
 
@@ -41,6 +42,8 @@ type HandshakeManager struct {
 	config                 HandshakeConfig
 	OutboundHandshakeTimer *SystemTimerWheel
 	messageMetrics         *MessageMetrics
+	metricInitiated        metrics.Counter
+	metricTimedOut         metrics.Counter
 	l                      *logrus.Logger
 
 	// can be used to trigger outbound handshake for the given vpnIP
@@ -57,6 +60,8 @@ func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges [
 		trigger:                make(chan uint32, config.triggerBuffer),
 		OutboundHandshakeTimer: NewSystemTimerWheel(config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
 		messageMetrics:         config.messageMetrics,
+		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
+		metricTimedOut:         metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),
 		l:                      l,
 	}
 }
@@ -117,7 +122,7 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
 			WithField("durationNs", time.Since(hostinfo.handshakeStart).Nanoseconds()).
 			Info("Handshake timed out")
-		//TODO: emit metrics
+		c.metricTimedOut.Inc(1)
 		c.pendingHostMap.DeleteHostInfo(hostinfo)
 		return
 	}
@@ -181,6 +186,7 @@ func (c *HandshakeManager) AddVpnIP(vpnIP uint32) *HostInfo {
 	// main receive thread for very long by waiting to add items to the pending map
 	//TODO: what lock?
 	c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval)
+	c.metricInitiated.Inc(1)
 
 	return hostinfo
 }
