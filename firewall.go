@@ -70,8 +70,8 @@ type Firewall struct {
 
 	trackTCPRTT     bool
 	metricTCPRTT    metrics.Histogram
-	incomingMetrics *firewallMetrics
-	outgoingMetrics *firewallMetrics
+	incomingMetrics firewallMetrics
+	outgoingMetrics firewallMetrics
 
 	l *logrus.Logger
 }
@@ -207,12 +207,12 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		l:              l,
 
 		metricTCPRTT: metrics.GetOrRegisterHistogram("network.tcp.rtt", nil, metrics.NewExpDecaySample(1028, 0.015)),
-		incomingMetrics: &firewallMetrics{
+		incomingMetrics: firewallMetrics{
 			droppedLocalIP:  metrics.GetOrRegisterCounter("firewall.incoming.dropped.local_ip", nil),
 			droppedRemoteIP: metrics.GetOrRegisterCounter("firewall.incoming.dropped.remote_ip", nil),
 			droppedNoRule:   metrics.GetOrRegisterCounter("firewall.incoming.dropped.no_rule", nil),
 		},
-		outgoingMetrics: &firewallMetrics{
+		outgoingMetrics: firewallMetrics{
 			droppedLocalIP:  metrics.GetOrRegisterCounter("firewall.outgoing.dropped.local_ip", nil),
 			droppedRemoteIP: metrics.GetOrRegisterCounter("firewall.outgoing.dropped.remote_ip", nil),
 			droppedNoRule:   metrics.GetOrRegisterCounter("firewall.outgoing.dropped.no_rule", nil),
@@ -439,7 +439,7 @@ func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *Host
 	return nil
 }
 
-func (f *Firewall) metrics(incoming bool) *firewallMetrics {
+func (f *Firewall) metrics(incoming bool) firewallMetrics {
 	if incoming {
 		return f.incomingMetrics
 	} else {
