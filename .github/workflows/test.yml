@@ -77,4 +77,4 @@ jobs:
       run: go test -v ./...
 
     - name: End 2 end
-      run: go test -tags=e2e_testing -count=1 ./e2e
+      run: make e2evv
