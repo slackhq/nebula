@@ -160,10 +160,13 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 		}
 	})
 
-	hostinfo.logger(c.l).WithField("udpAddrs", sentTo).
-		WithField("initiatorIndex", hostinfo.localIndexId).
-		WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-		Info("Handshake message sent")
+	// Don't be too noisy or confusing if we fail to send a handshake - if we don't get through we'll eventually log a timeout
+	if len(sentTo) > 0 {
+		hostinfo.logger(c.l).WithField("udpAddrs", sentTo).
+			WithField("initiatorIndex", hostinfo.localIndexId).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+			Info("Handshake message sent")
+	}
 
 	// Increment the counter to increase our delay, linear backoff
 	hostinfo.HandshakeCounter++
