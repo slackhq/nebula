@@ -41,7 +41,7 @@ jobs:
       run: make test
 
     - name: End 2 end
-      run: make e2e
+      run: make e2evv
 
   test:
     name: Build and test on ${{ matrix.os }}
