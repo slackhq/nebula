@@ -165,5 +165,5 @@ smoke-docker-race: BUILD_ARGS = -race
 smoke-docker-race: smoke-docker
 
 .FORCE:
-.PHONY: e2e e2ev e2evv e2evvv e2evvvv test test-cov-html bench bench-cpu bench-cpu-long bin proto release service smoke-docker smoke-docker-race bin
+.PHONY: e2e e2ev e2evv e2evvv e2evvvv test test-cov-html bench bench-cpu bench-cpu-long bin proto release service smoke-docker smoke-docker-race
 .DEFAULT_GOAL := bin
