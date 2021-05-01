@@ -31,7 +31,7 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 
 	hsProto := &NebulaHandshakeDetails{
 		InitiatorIndex: hostinfo.localIndexId,
-		Time:           uint64(time.Now().Unix()),
+		Time:           uint64(time.Now().UnixNano()),
 		Cert:           ci.certState.rawCertificateNoKey,
 	}
 
@@ -140,7 +140,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 	hs.Details.ResponderIndex = myIndex
 	hs.Details.Cert = ci.certState.rawCertificateNoKey
 	// Update the time in case their clock is way off from ours
-	hs.Details.Time = uint64(time.Now().Unix())
+	hs.Details.Time = uint64(time.Now().UnixNano())
 
 	hsBytes, err := proto.Marshal(hs)
 	if err != nil {
