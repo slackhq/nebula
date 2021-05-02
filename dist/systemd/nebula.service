@@ -1,0 +1,17 @@
+# This is a mostly empty service, but allows commands like stop, start, reload
+# to propagate to all nebula@ service instances.
+[Unit]
+Description=Nebula VPN
+Documentation=info:nebula
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecReload=/bin/true
+WorkingDirectory=/etc/nebula
+
+[Install]
+WantedBy=multi-user.target

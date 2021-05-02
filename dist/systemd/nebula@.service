@@ -1,0 +1,20 @@
+# This unit allows for multiple Nebula to be configured in /etc/nebula/<network_name>
+# It assumes the configuration is located at /etc/nebula/<network_name>/config.yml
+[Unit]
+Description=Nebula net %i
+Documentation=info:nebula
+PartOf=nebula.service
+ReloadPropagatedFrom=nebula.service
+
+[Service]
+Type=simple
+WorkingDirectory=/etc/nebula/%i
+ExecStart=/usr/sbin/nebula -config /etc/nebula/%i/config.yml
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=5
+
+[Install]
+WantedBy=nebula.service
