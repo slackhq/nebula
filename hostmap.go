@@ -313,24 +313,17 @@ func (hm *HostMap) PromoteBestQueryVpnIP(vpnIp uint32, ifce *Interface) (*HostIn
 func (hm *HostMap) queryVpnIP(vpnIp uint32, promoteIfce *Interface) (*HostInfo, error) {
 	hm.RLock()
 	if h, ok := hm.Hosts[vpnIp]; ok {
+		hm.RUnlock()
 		// Do not attempt promotion if you are a lighthouse
 		if promoteIfce != nil && !promoteIfce.lightHouse.amLighthouse {
 			h.TryPromoteBest(hm.preferredRanges, promoteIfce)
 		}
-		hm.RUnlock()
 		return h, nil
 
-	} else {
-		//return &net.UDPAddr{}, nil, errors.New("Unable to find host")
-		hm.RUnlock()
-		/*
-			if lightHouse != nil {
-				lightHouse.Query(vpnIp)
-				return nil, errors.New("Unable to find host")
-			}
-		*/
-		return nil, errors.New("unable to find host")
 	}
+
+	hm.RUnlock()
+	return nil, errors.New("unable to find host")
 }
 
 func (hm *HostMap) queryUnsafeRoute(ip uint32) uint32 {
@@ -415,6 +408,10 @@ func (i *HostInfo) BindConnectionState(cs *ConnectionState) {
 func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface) {
 	c := atomic.AddUint32(&i.promoteCounter, 1)
 	if c%PromoteEvery == 0 {
+		// The lock here is currently protecting i.remote access
+		i.RLock()
+		defer i.RUnlock()
+
 		// return early if we are already on a preferred remote
 		rIP := i.remote.IP
 		for _, l := range preferredRanges {
