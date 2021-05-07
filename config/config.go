@@ -1,14 +1,12 @@
-package nebula
+package config
 
 import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,24 +18,24 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-type Config struct {
+type C struct {
 	path        string
 	files       []string
 	Settings    map[interface{}]interface{}
 	oldSettings map[interface{}]interface{}
-	callbacks   []func(*Config)
+	callbacks   []func(*C)
 	l           *logrus.Logger
 }
 
-func NewConfig(l *logrus.Logger) *Config {
-	return &Config{
+func NewC(l *logrus.Logger) *C {
+	return &C{
 		Settings: make(map[interface{}]interface{}),
 		l:        l,
 	}
 }
 
 // Load will find all yaml files within path and load them in lexical order
-func (c *Config) Load(path string) error {
+func (c *C) Load(path string) error {
 	c.path = path
 	c.files = make([]string, 0)
 
@@ -60,7 +58,7 @@ func (c *Config) Load(path string) error {
 	return nil
 }
 
-func (c *Config) LoadString(raw string) error {
+func (c *C) LoadString(raw string) error {
 	if raw == "" {
 		return errors.New("Empty configuration")
 	}
@@ -71,7 +69,7 @@ func (c *Config) LoadString(raw string) error {
 // here should decide if they need to make a change to the current process before making the change. HasChanged can be
 // used to help decide if a change is necessary.
 // These functions should return quickly or spawn their own go routine if they will take a while
-func (c *Config) RegisterReloadCallback(f func(*Config)) {
+func (c *C) RegisterReloadCallback(f func(*C)) {
 	c.callbacks = append(c.callbacks, f)
 }
 
@@ -80,7 +78,7 @@ func (c *Config) RegisterReloadCallback(f func(*Config)) {
 // If k is an empty string the entire config is tested.
 // It's important to note that this is very rudimentary and susceptible to configuration ordering issues indicating
 // there is change when there actually wasn't any.
-func (c *Config) HasChanged(k string) bool {
+func (c *C) HasChanged(k string) bool {
 	if c.oldSettings == nil {
 		return false
 	}
@@ -114,7 +112,7 @@ func (c *Config) HasChanged(k string) bool {
 
 // CatchHUP will listen for the HUP signal in a go routine and reload all configs found in the
 // original path provided to Load. The old settings are shallow copied for change detection after the reload.
-func (c *Config) CatchHUP() {
+func (c *C) CatchHUP() {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGHUP)
 
@@ -126,7 +124,7 @@ func (c *Config) CatchHUP() {
 	}()
 }
 
-func (c *Config) ReloadConfig() {
+func (c *C) ReloadConfig() {
 	c.oldSettings = make(map[interface{}]interface{})
 	for k, v := range c.Settings {
 		c.oldSettings[k] = v
@@ -144,7 +142,7 @@ func (c *Config) ReloadConfig() {
 }
 
 // GetString will get the string for k or return the default d if not found or invalid
-func (c *Config) GetString(k, d string) string {
+func (c *C) GetString(k, d string) string {
 	r := c.Get(k)
 	if r == nil {
 		return d
@@ -154,7 +152,7 @@ func (c *Config) GetString(k, d string) string {
 }
 
 // GetStringSlice will get the slice of strings for k or return the default d if not found or invalid
-func (c *Config) GetStringSlice(k string, d []string) []string {
+func (c *C) GetStringSlice(k string, d []string) []string {
 	r := c.Get(k)
 	if r == nil {
 		return d
@@ -174,7 +172,7 @@ func (c *Config) GetStringSlice(k string, d []string) []string {
 }
 
 // GetMap will get the map for k or return the default d if not found or invalid
-func (c *Config) GetMap(k string, d map[interface{}]interface{}) map[interface{}]interface{} {
+func (c *C) GetMap(k string, d map[interface{}]interface{}) map[interface{}]interface{} {
 	r := c.Get(k)
 	if r == nil {
 		return d
@@ -189,7 +187,7 @@ func (c *Config) GetMap(k string, d map[interface{}]interface{}) map[interface{}
 }
 
 // GetInt will get the int for k or return the default d if not found or invalid
-func (c *Config) GetInt(k string, d int) int {
+func (c *C) GetInt(k string, d int) int {
 	r := c.GetString(k, strconv.Itoa(d))
 	v, err := strconv.Atoi(r)
 	if err != nil {
@@ -200,7 +198,7 @@ func (c *Config) GetInt(k string, d int) int {
 }
 
 // GetBool will get the bool for k or return the default d if not found or invalid
-func (c *Config) GetBool(k string, d bool) bool {
+func (c *C) GetBool(k string, d bool) bool {
 	r := strings.ToLower(c.GetString(k, fmt.Sprintf("%v", d)))
 	v, err := strconv.ParseBool(r)
 	if err != nil {
@@ -217,7 +215,7 @@ func (c *Config) GetBool(k string, d bool) bool {
 }
 
 // GetDuration will get the duration for k or return the default d if not found or invalid
-func (c *Config) GetDuration(k string, d time.Duration) time.Duration {
+func (c *C) GetDuration(k string, d time.Duration) time.Duration {
 	r := c.GetString(k, "")
 	v, err := time.ParseDuration(r)
 	if err != nil {
@@ -226,160 +224,15 @@ func (c *Config) GetDuration(k string, d time.Duration) time.Duration {
 	return v
 }
 
-func (c *Config) GetAllowList(k string, allowInterfaces bool) (*AllowList, error) {
-	r := c.Get(k)
-	if r == nil {
-		return nil, nil
-	}
-
-	rawMap, ok := r.(map[interface{}]interface{})
-	if !ok {
-		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, r)
-	}
-
-	tree := NewCIDR6Tree()
-	var nameRules []AllowListNameRule
-
-	// Keep track of the rules we have added for both ipv4 and ipv6
-	type allowListRules struct {
-		firstValue     bool
-		allValuesMatch bool
-		defaultSet     bool
-		allValues      bool
-	}
-	rules4 := allowListRules{firstValue: true, allValuesMatch: true, defaultSet: false}
-	rules6 := allowListRules{firstValue: true, allValuesMatch: true, defaultSet: false}
-
-	for rawKey, rawValue := range rawMap {
-		rawCIDR, ok := rawKey.(string)
-		if !ok {
-			return nil, fmt.Errorf("config `%s` has invalid key (type %T): %v", k, rawKey, rawKey)
-		}
-
-		// Special rule for interface names
-		if rawCIDR == "interfaces" {
-			if !allowInterfaces {
-				return nil, fmt.Errorf("config `%s` does not support `interfaces`", k)
-			}
-			var err error
-			nameRules, err = c.getAllowListInterfaces(k, rawValue)
-			if err != nil {
-				return nil, err
-			}
-
-			continue
-		}
-
-		value, ok := rawValue.(bool)
-		if !ok {
-			return nil, fmt.Errorf("config `%s` has invalid value (type %T): %v", k, rawValue, rawValue)
-		}
-
-		_, cidr, err := net.ParseCIDR(rawCIDR)
-		if err != nil {
-			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s", k, rawCIDR)
-		}
-
-		// TODO: should we error on duplicate CIDRs in the config?
-		tree.AddCIDR(cidr, value)
-
-		maskBits, maskSize := cidr.Mask.Size()
-
-		var rules *allowListRules
-		if maskSize == 32 {
-			rules = &rules4
-		} else {
-			rules = &rules6
-		}
-
-		if rules.firstValue {
-			rules.allValues = value
-			rules.firstValue = false
-		} else {
-			if value != rules.allValues {
-				rules.allValuesMatch = false
-			}
-		}
-
-		// Check if this is 0.0.0.0/0 or ::/0
-		if maskBits == 0 {
-			rules.defaultSet = true
-		}
-	}
-
-	if !rules4.defaultSet {
-		if rules4.allValuesMatch {
-			_, zeroCIDR, _ := net.ParseCIDR("0.0.0.0/0")
-			tree.AddCIDR(zeroCIDR, !rules4.allValues)
-		} else {
-			return nil, fmt.Errorf("config `%s` contains both true and false rules, but no default set for 0.0.0.0/0", k)
-		}
-	}
-
-	if !rules6.defaultSet {
-		if rules6.allValuesMatch {
-			_, zeroCIDR, _ := net.ParseCIDR("::/0")
-			tree.AddCIDR(zeroCIDR, !rules6.allValues)
-		} else {
-			return nil, fmt.Errorf("config `%s` contains both true and false rules, but no default set for ::/0", k)
-		}
-	}
-
-	return &AllowList{cidrTree: tree, nameRules: nameRules}, nil
-}
-
-func (c *Config) getAllowListInterfaces(k string, v interface{}) ([]AllowListNameRule, error) {
-	var nameRules []AllowListNameRule
-
-	rawRules, ok := v.(map[interface{}]interface{})
-	if !ok {
-		return nil, fmt.Errorf("config `%s.interfaces` is invalid (type %T): %v", k, v, v)
-	}
-
-	firstEntry := true
-	var allValues bool
-	for rawName, rawAllow := range rawRules {
-		name, ok := rawName.(string)
-		if !ok {
-			return nil, fmt.Errorf("config `%s.interfaces` has invalid key (type %T): %v", k, rawName, rawName)
-		}
-		allow, ok := rawAllow.(bool)
-		if !ok {
-			return nil, fmt.Errorf("config `%s.interfaces` has invalid value (type %T): %v", k, rawAllow, rawAllow)
-		}
-
-		nameRE, err := regexp.Compile("^" + name + "$")
-		if err != nil {
-			return nil, fmt.Errorf("config `%s.interfaces` has invalid key: %s: %v", k, name, err)
-		}
-
-		nameRules = append(nameRules, AllowListNameRule{
-			Name:  nameRE,
-			Allow: allow,
-		})
-
-		if firstEntry {
-			allValues = allow
-			firstEntry = false
-		} else {
-			if allow != allValues {
-				return nil, fmt.Errorf("config `%s.interfaces` values must all be the same true/false value", k)
-			}
-		}
-	}
-
-	return nameRules, nil
-}
-
-func (c *Config) Get(k string) interface{} {
+func (c *C) Get(k string) interface{} {
 	return c.get(k, c.Settings)
 }
 
-func (c *Config) IsSet(k string) bool {
+func (c *C) IsSet(k string) bool {
 	return c.get(k, c.Settings) != nil
 }
 
-func (c *Config) get(k string, v interface{}) interface{} {
+func (c *C) get(k string, v interface{}) interface{} {
 	parts := strings.Split(k, ".")
 	for _, p := range parts {
 		m, ok := v.(map[interface{}]interface{})
@@ -398,7 +251,7 @@ func (c *Config) get(k string, v interface{}) interface{} {
 
 // direct signifies if this is the config path directly specified by the user,
 // versus a file/dir found by recursing into that path
-func (c *Config) resolve(path string, direct bool) error {
+func (c *C) resolve(path string, direct bool) error {
 	i, err := os.Stat(path)
 	if err != nil {
 		return nil
@@ -424,7 +277,7 @@ func (c *Config) resolve(path string, direct bool) error {
 	return nil
 }
 
-func (c *Config) addFile(path string, direct bool) error {
+func (c *C) addFile(path string, direct bool) error {
 	ext := filepath.Ext(path)
 
 	if !direct && ext != ".yaml" && ext != ".yml" {
@@ -440,7 +293,7 @@ func (c *Config) addFile(path string, direct bool) error {
 	return nil
 }
 
-func (c *Config) parseRaw(b []byte) error {
+func (c *C) parseRaw(b []byte) error {
 	var m map[interface{}]interface{}
 
 	err := yaml.Unmarshal(b, &m)
@@ -452,7 +305,7 @@ func (c *Config) parseRaw(b []byte) error {
 	return nil
 }
 
-func (c *Config) parse() error {
+func (c *C) parse() error {
 	var m map[interface{}]interface{}
 
 	for _, path := range c.files {
@@ -494,39 +347,4 @@ func readDirNames(path string) ([]string, error) {
 
 	sort.Strings(paths)
 	return paths, nil
-}
-
-func configLogger(c *Config) error {
-	// set up our logging level
-	logLevel, err := logrus.ParseLevel(strings.ToLower(c.GetString("logging.level", "info")))
-	if err != nil {
-		return fmt.Errorf("%s; possible levels: %s", err, logrus.AllLevels)
-	}
-	c.l.SetLevel(logLevel)
-
-	disableTimestamp := c.GetBool("logging.disable_timestamp", false)
-	timestampFormat := c.GetString("logging.timestamp_format", "")
-	fullTimestamp := (timestampFormat != "")
-	if timestampFormat == "" {
-		timestampFormat = time.RFC3339
-	}
-
-	logFormat := strings.ToLower(c.GetString("logging.format", "text"))
-	switch logFormat {
-	case "text":
-		c.l.Formatter = &logrus.TextFormatter{
-			TimestampFormat:  timestampFormat,
-			FullTimestamp:    fullTimestamp,
-			DisableTimestamp: disableTimestamp,
-		}
-	case "json":
-		c.l.Formatter = &logrus.JSONFormatter{
-			TimestampFormat:  timestampFormat,
-			DisableTimestamp: disableTimestamp,
-		}
-	default:
-		return fmt.Errorf("unknown log format `%s`. possible formats: %s", logFormat, []string{"text", "json"})
-	}
-
-	return nil
 }

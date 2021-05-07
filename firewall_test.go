@@ -11,12 +11,14 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNewFirewall(t *testing.T) {
-	l := NewTestLogger()
+	l := util.NewTestLogger()
 	c := &cert.NebulaCertificate{}
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 	conntrack := fw.Conntrack
@@ -55,7 +57,7 @@ func TestNewFirewall(t *testing.T) {
 }
 
 func TestFirewall_AddRule(t *testing.T) {
-	l := NewTestLogger()
+	l := util.NewTestLogger()
 	ob := &bytes.Buffer{}
 	l.SetOutput(ob)
 
@@ -142,7 +144,7 @@ func TestFirewall_AddRule(t *testing.T) {
 }
 
 func TestFirewall_Drop(t *testing.T) {
-	l := NewTestLogger()
+	l := util.NewTestLogger()
 	ob := &bytes.Buffer{}
 	l.SetOutput(ob)
 
@@ -317,7 +319,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 }
 
 func TestFirewall_Drop2(t *testing.T) {
-	l := NewTestLogger()
+	l := util.NewTestLogger()
 	ob := &bytes.Buffer{}
 	l.SetOutput(ob)
 
@@ -376,7 +378,7 @@ func TestFirewall_Drop2(t *testing.T) {
 }
 
 func TestFirewall_Drop3(t *testing.T) {
-	l := NewTestLogger()
+	l := util.NewTestLogger()
 	ob := &bytes.Buffer{}
 	l.SetOutput(ob)
 
@@ -462,7 +464,7 @@ func TestFirewall_Drop3(t *testing.T) {
 }
 
 func TestFirewall_DropConntrackReload(t *testing.T) {
-	l := NewTestLogger()
+	l := util.NewTestLogger()
 	ob := &bytes.Buffer{}
 	l.SetOutput(ob)
 
@@ -644,28 +646,28 @@ func Test_parsePort(t *testing.T) {
 }
 
 func TestNewFirewallFromConfig(t *testing.T) {
-	l := NewTestLogger()
+	l := util.NewTestLogger()
 	// Test a bad rule definition
 	c := &cert.NebulaCertificate{}
-	conf := NewConfig(l)
+	conf := config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": "asdf"}
 	_, err := NewFirewallFromConfig(l, c, conf)
 	assert.EqualError(t, err, "firewall.outbound failed to parse, should be an array of rules")
 
 	// Test both port and code
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"port": "1", "code": "2"}}}
 	_, err = NewFirewallFromConfig(l, c, conf)
 	assert.EqualError(t, err, "firewall.outbound rule #0; only one of port or code should be provided")
 
 	// Test missing host, group, cidr, ca_name and ca_sha
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{}}}
 	_, err = NewFirewallFromConfig(l, c, conf)
 	assert.EqualError(t, err, "firewall.outbound rule #0; at least one of host, group, cidr, ca_name, or ca_sha must be provided")
 
 	// Test code/port error
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"code": "a", "host": "testh"}}}
 	_, err = NewFirewallFromConfig(l, c, conf)
 	assert.EqualError(t, err, "firewall.outbound rule #0; code was not a number; `a`")
@@ -675,91 +677,91 @@ func TestNewFirewallFromConfig(t *testing.T) {
 	assert.EqualError(t, err, "firewall.outbound rule #0; port was not a number; `a`")
 
 	// Test proto error
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"code": "1", "host": "testh"}}}
 	_, err = NewFirewallFromConfig(l, c, conf)
 	assert.EqualError(t, err, "firewall.outbound rule #0; proto was not understood; ``")
 
 	// Test cidr parse error
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"code": "1", "cidr": "testh", "proto": "any"}}}
 	_, err = NewFirewallFromConfig(l, c, conf)
 	assert.EqualError(t, err, "firewall.outbound rule #0; cidr did not parse; invalid CIDR address: testh")
 
 	// Test both group and groups
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "group": "a", "groups": []string{"b", "c"}}}}
 	_, err = NewFirewallFromConfig(l, c, conf)
 	assert.EqualError(t, err, "firewall.inbound rule #0; only one of group or groups should be defined, both provided")
 }
 
 func TestAddFirewallRulesFromConfig(t *testing.T) {
-	l := NewTestLogger()
+	l := util.NewTestLogger()
 	// Test adding tcp rule
-	conf := NewConfig(l)
+	conf := config.NewC(l)
 	mf := &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "tcp", "host": "a"}}}
 	assert.Nil(t, AddFirewallRulesFromConfig(l, false, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: false, proto: fwProtoTCP, startPort: 1, endPort: 1, groups: nil, host: "a", ip: nil}, mf.lastCall)
 
 	// Test adding udp rule
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "udp", "host": "a"}}}
 	assert.Nil(t, AddFirewallRulesFromConfig(l, false, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: false, proto: fwProtoUDP, startPort: 1, endPort: 1, groups: nil, host: "a", ip: nil}, mf.lastCall)
 
 	// Test adding icmp rule
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "icmp", "host": "a"}}}
 	assert.Nil(t, AddFirewallRulesFromConfig(l, false, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: false, proto: fwProtoICMP, startPort: 1, endPort: 1, groups: nil, host: "a", ip: nil}, mf.lastCall)
 
 	// Test adding any rule
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "host": "a"}}}
 	assert.Nil(t, AddFirewallRulesFromConfig(l, true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: fwProtoAny, startPort: 1, endPort: 1, groups: nil, host: "a", ip: nil}, mf.lastCall)
 
 	// Test adding rule with ca_sha
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "ca_sha": "12312313123"}}}
 	assert.Nil(t, AddFirewallRulesFromConfig(l, true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: fwProtoAny, startPort: 1, endPort: 1, groups: nil, ip: nil, caSha: "12312313123"}, mf.lastCall)
 
 	// Test adding rule with ca_name
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "ca_name": "root01"}}}
 	assert.Nil(t, AddFirewallRulesFromConfig(l, true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: fwProtoAny, startPort: 1, endPort: 1, groups: nil, ip: nil, caName: "root01"}, mf.lastCall)
 
 	// Test single group
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "group": "a"}}}
 	assert.Nil(t, AddFirewallRulesFromConfig(l, true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: fwProtoAny, startPort: 1, endPort: 1, groups: []string{"a"}, ip: nil}, mf.lastCall)
 
 	// Test single groups
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "groups": "a"}}}
 	assert.Nil(t, AddFirewallRulesFromConfig(l, true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: fwProtoAny, startPort: 1, endPort: 1, groups: []string{"a"}, ip: nil}, mf.lastCall)
 
 	// Test multiple AND groups
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "groups": []string{"a", "b"}}}}
 	assert.Nil(t, AddFirewallRulesFromConfig(l, true, conf, mf))
 	assert.Equal(t, addRuleCall{incoming: true, proto: fwProtoAny, startPort: 1, endPort: 1, groups: []string{"a", "b"}, ip: nil}, mf.lastCall)
 
 	// Test Add error
-	conf = NewConfig(l)
+	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	mf.nextCallReturn = errors.New("test error")
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "host": "a"}}}
@@ -858,7 +860,7 @@ func TestTCPRTTTracking(t *testing.T) {
 }
 
 func TestFirewall_convertRule(t *testing.T) {
-	l := NewTestLogger()
+	l := util.NewTestLogger()
 	ob := &bytes.Buffer{}
 	l.SetOutput(ob)
 

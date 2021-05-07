@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/sshd"
@@ -47,8 +48,8 @@ type sshCreateTunnelFlags struct {
 	Address string
 }
 
-func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) {
-	c.RegisterReloadCallback(func(c *Config) {
+func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) {
+	c.RegisterReloadCallback(func(c *config.C) {
 		if c.GetBool("sshd.enabled", false) {
 			sshRun, err := configSSH(l, ssh, c)
 			if err != nil {
@@ -68,7 +69,7 @@ func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) {
 // updates the passed-in SSHServer. On success, it returns a function
 // that callers may invoke to run the configured ssh server. On
 // failure, it returns nil, error.
-func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) (func(), error) {
+func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error) {
 	//TODO conntrack list
 	//TODO print firewall rules or hash?
 

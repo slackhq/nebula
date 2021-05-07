@@ -1,4 +1,4 @@
-package nebula
+package util
 
 import (
 	"io/ioutil"
@@ -17,13 +17,12 @@ func NewTestLogger() *logrus.Logger {
 	}
 
 	switch v {
-	case "1":
-		// This is the default level but we are being explicit
-		l.SetLevel(logrus.InfoLevel)
 	case "2":
 		l.SetLevel(logrus.DebugLevel)
 	case "3":
 		l.SetLevel(logrus.TraceLevel)
+	default:
+		l.SetLevel(logrus.InfoLevel)
 	}
 
 	return l
