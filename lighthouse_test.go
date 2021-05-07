@@ -8,6 +8,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -44,7 +45,7 @@ func TestNewLhQuery(t *testing.T) {
 }
 
 func Test_lhStaticMapping(t *testing.T) {
-	l := NewTestLogger()
+	l := util.NewTestLogger()
 	lh1 := "10.128.0.2"
 	lh1IP := net.ParseIP(lh1)
 
@@ -65,7 +66,7 @@ func Test_lhStaticMapping(t *testing.T) {
 }
 
 func BenchmarkLighthouseHandleRequest(b *testing.B) {
-	l := NewTestLogger()
+	l := util.NewTestLogger()
 	lh1 := "10.128.0.2"
 	lh1IP := net.ParseIP(lh1)
 
@@ -133,7 +134,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 }
 
 func TestLighthouse_Memory(t *testing.T) {
-	l := NewTestLogger()
+	l := util.NewTestLogger()
 
 	myUdpAddr0 := &udpAddr{IP: net.ParseIP("10.0.0.2"), Port: 4242}
 	myUdpAddr1 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4242}

@@ -17,6 +17,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/e2e/router"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/stretchr/testify/assert"
@@ -81,10 +82,10 @@ func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, u
 		panic(err)
 	}
 
-	config := nebula.NewConfig(l)
-	config.LoadString(string(cb))
+	c := config.NewC(l)
+	c.LoadString(string(cb))
 
-	control, err := nebula.Main(config, false, "e2e-test", l, nil)
+	control, err := nebula.Main(c, false, "e2e-test", l, nil)
 
 	if err != nil {
 		panic(err)

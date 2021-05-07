@@ -12,6 +12,7 @@ import (
 	"net"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 )
 
@@ -52,7 +53,7 @@ func (uc *udpConn) LocalAddr() (*udpAddr, error) {
 	}
 }
 
-func (u *udpConn) reloadConfig(c *Config) {
+func (u *udpConn) reloadConfig(c *config.C) {
 	// TODO
 }
 

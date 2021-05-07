@@ -5,12 +5,14 @@ import (
 	"net"
 	"testing"
 
+	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 )
 
 func Test_parseRoutes(t *testing.T) {
-	l := NewTestLogger()
-	c := NewConfig(l)
+	l := util.NewTestLogger()
+	c := config.NewC(l)
 	_, n, _ := net.ParseCIDR("10.0.0.0/24")
 
 	// test no routes config
@@ -105,8 +107,8 @@ func Test_parseRoutes(t *testing.T) {
 }
 
 func Test_parseUnsafeRoutes(t *testing.T) {
-	l := NewTestLogger()
-	c := NewConfig(l)
+	l := util.NewTestLogger()
+	c := config.NewC(l)
 	_, n, _ := net.ParseCIDR("10.0.0.0/24")
 
 	// test no routes config
