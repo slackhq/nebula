@@ -1,4 +1,4 @@
-package nebula
+package cidr
 
 import (
 	"net"
@@ -6,28 +6,28 @@ import (
 	"github.com/slackhq/nebula/iputil"
 )
 
-type CIDRNode struct {
-	left   *CIDRNode
-	right  *CIDRNode
-	parent *CIDRNode
+type Node struct {
+	left   *Node
+	right  *Node
+	parent *Node
 	value  interface{}
 }
 
-type CIDRTree struct {
-	root *CIDRNode
+type Tree4 struct {
+	root *Node
 }
 
 const (
 	startbit = iputil.VpnIp(0x80000000)
 )
 
-func NewCIDRTree() *CIDRTree {
-	tree := new(CIDRTree)
-	tree.root = &CIDRNode{}
+func NewTree4() *Tree4 {
+	tree := new(Tree4)
+	tree.root = &Node{}
 	return tree
 }
 
-func (tree *CIDRTree) AddCIDR(cidr *net.IPNet, val interface{}) {
+func (tree *Tree4) AddCIDR(cidr *net.IPNet, val interface{}) {
 	bit := startbit
 	node := tree.root
 	next := tree.root
@@ -59,7 +59,7 @@ func (tree *CIDRTree) AddCIDR(cidr *net.IPNet, val interface{}) {
 
 	// Build up the rest of the tree we don't already have
 	for bit&mask != 0 {
-		next = &CIDRNode{}
+		next = &Node{}
 		next.parent = node
 
 		if ip&bit != 0 {
@@ -77,7 +77,7 @@ func (tree *CIDRTree) AddCIDR(cidr *net.IPNet, val interface{}) {
 }
 
 // Finds the first match, which may be the least specific
-func (tree *CIDRTree) Contains(ip iputil.VpnIp) (value interface{}) {
+func (tree *Tree4) Contains(ip iputil.VpnIp) (value interface{}) {
 	bit := startbit
 	node := tree.root
 
@@ -100,7 +100,7 @@ func (tree *CIDRTree) Contains(ip iputil.VpnIp) (value interface{}) {
 }
 
 // Finds the most specific match
-func (tree *CIDRTree) MostSpecificContains(ip iputil.VpnIp) (value interface{}) {
+func (tree *Tree4) MostSpecificContains(ip iputil.VpnIp) (value interface{}) {
 	bit := startbit
 	node := tree.root
 
@@ -122,7 +122,7 @@ func (tree *CIDRTree) MostSpecificContains(ip iputil.VpnIp) (value interface{}) 
 }
 
 // Finds the most specific match
-func (tree *CIDRTree) Match(ip iputil.VpnIp) (value interface{}) {
+func (tree *Tree4) Match(ip iputil.VpnIp) (value interface{}) {
 	bit := startbit
 	node := tree.root
 	lastNode := node

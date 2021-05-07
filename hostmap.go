@@ -11,6 +11,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 )
@@ -32,7 +33,7 @@ type HostMap struct {
 	Hosts           map[iputil.VpnIp]*HostInfo
 	preferredRanges []*net.IPNet
 	vpnCIDR         *net.IPNet
-	unsafeRoutes    *CIDRTree
+	unsafeRoutes    *cidr.Tree4
 	metricsEnabled  bool
 	l               *logrus.Logger
 }
@@ -54,7 +55,7 @@ type HostInfo struct {
 	localIndexId      uint32
 	vpnIp             iputil.VpnIp
 	recvError         int
-	remoteCidr        *CIDRTree
+	remoteCidr        *cidr.Tree4
 
 	// lastRebindCount is the other side of Interface.rebindCount, if these values don't match then we need to ask LH
 	// for a punch from the remote end of this tunnel. The goal being to prime their conntrack for our traffic just like
@@ -95,7 +96,7 @@ func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRang
 		Hosts:           h,
 		preferredRanges: preferredRanges,
 		vpnCIDR:         vpnCIDR,
-		unsafeRoutes:    NewCIDRTree(),
+		unsafeRoutes:    cidr.NewTree4(),
 		l:               l,
 	}
 	return &m
@@ -527,7 +528,7 @@ func (i *HostInfo) CreateRemoteCIDR(c *cert.NebulaCertificate) {
 		return
 	}
 
-	remoteCidr := NewCIDRTree()
+	remoteCidr := cidr.NewTree4()
 	for _, ip := range c.Details.Ips {
 		remoteCidr.AddCIDR(&net.IPNet{IP: ip.IP, Mask: net.IPMask{255, 255, 255, 255}}, struct{}{})
 	}

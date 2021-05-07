@@ -1,22 +1,23 @@
-package nebula
+package cidr
 
 import (
 	"net"
 	"testing"
 
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCIDRTree_Contains(t *testing.T) {
-	tree := NewCIDRTree()
-	tree.AddCIDR(getCIDR("1.0.0.0/8"), "1")
-	tree.AddCIDR(getCIDR("2.1.0.0/16"), "2")
-	tree.AddCIDR(getCIDR("3.1.1.0/24"), "3")
-	tree.AddCIDR(getCIDR("4.1.1.0/24"), "4a")
-	tree.AddCIDR(getCIDR("4.1.1.1/32"), "4b")
-	tree.AddCIDR(getCIDR("4.1.2.1/32"), "4c")
-	tree.AddCIDR(getCIDR("254.0.0.0/4"), "5")
+	tree := NewTree4()
+	tree.AddCIDR(util.GetCIDR("1.0.0.0/8"), "1")
+	tree.AddCIDR(util.GetCIDR("2.1.0.0/16"), "2")
+	tree.AddCIDR(util.GetCIDR("3.1.1.0/24"), "3")
+	tree.AddCIDR(util.GetCIDR("4.1.1.0/24"), "4a")
+	tree.AddCIDR(util.GetCIDR("4.1.1.1/32"), "4b")
+	tree.AddCIDR(util.GetCIDR("4.1.2.1/32"), "4c")
+	tree.AddCIDR(util.GetCIDR("254.0.0.0/4"), "5")
 
 	tests := []struct {
 		Result interface{}
@@ -40,21 +41,21 @@ func TestCIDRTree_Contains(t *testing.T) {
 		assert.Equal(t, tt.Result, tree.Contains(iputil.Ip2VpnIp(net.ParseIP(tt.IP))))
 	}
 
-	tree = NewCIDRTree()
-	tree.AddCIDR(getCIDR("1.1.1.1/0"), "cool")
+	tree = NewTree4()
+	tree.AddCIDR(util.GetCIDR("1.1.1.1/0"), "cool")
 	assert.Equal(t, "cool", tree.Contains(iputil.Ip2VpnIp(net.ParseIP("0.0.0.0"))))
 	assert.Equal(t, "cool", tree.Contains(iputil.Ip2VpnIp(net.ParseIP("255.255.255.255"))))
 }
 
 func TestCIDRTree_MostSpecificContains(t *testing.T) {
-	tree := NewCIDRTree()
-	tree.AddCIDR(getCIDR("1.0.0.0/8"), "1")
-	tree.AddCIDR(getCIDR("2.1.0.0/16"), "2")
-	tree.AddCIDR(getCIDR("3.1.1.0/24"), "3")
-	tree.AddCIDR(getCIDR("4.1.1.0/24"), "4a")
-	tree.AddCIDR(getCIDR("4.1.1.0/30"), "4b")
-	tree.AddCIDR(getCIDR("4.1.1.1/32"), "4c")
-	tree.AddCIDR(getCIDR("254.0.0.0/4"), "5")
+	tree := NewTree4()
+	tree.AddCIDR(util.GetCIDR("1.0.0.0/8"), "1")
+	tree.AddCIDR(util.GetCIDR("2.1.0.0/16"), "2")
+	tree.AddCIDR(util.GetCIDR("3.1.1.0/24"), "3")
+	tree.AddCIDR(util.GetCIDR("4.1.1.0/24"), "4a")
+	tree.AddCIDR(util.GetCIDR("4.1.1.0/30"), "4b")
+	tree.AddCIDR(util.GetCIDR("4.1.1.1/32"), "4c")
+	tree.AddCIDR(util.GetCIDR("254.0.0.0/4"), "5")
 
 	tests := []struct {
 		Result interface{}
@@ -79,16 +80,16 @@ func TestCIDRTree_MostSpecificContains(t *testing.T) {
 		assert.Equal(t, tt.Result, tree.MostSpecificContains(iputil.Ip2VpnIp(net.ParseIP(tt.IP))))
 	}
 
-	tree = NewCIDRTree()
-	tree.AddCIDR(getCIDR("1.1.1.1/0"), "cool")
+	tree = NewTree4()
+	tree.AddCIDR(util.GetCIDR("1.1.1.1/0"), "cool")
 	assert.Equal(t, "cool", tree.MostSpecificContains(iputil.Ip2VpnIp(net.ParseIP("0.0.0.0"))))
 	assert.Equal(t, "cool", tree.MostSpecificContains(iputil.Ip2VpnIp(net.ParseIP("255.255.255.255"))))
 }
 
 func TestCIDRTree_Match(t *testing.T) {
-	tree := NewCIDRTree()
-	tree.AddCIDR(getCIDR("4.1.1.0/32"), "1a")
-	tree.AddCIDR(getCIDR("4.1.1.1/32"), "1b")
+	tree := NewTree4()
+	tree.AddCIDR(util.GetCIDR("4.1.1.0/32"), "1a")
+	tree.AddCIDR(util.GetCIDR("4.1.1.1/32"), "1b")
 
 	tests := []struct {
 		Result interface{}
@@ -102,18 +103,18 @@ func TestCIDRTree_Match(t *testing.T) {
 		assert.Equal(t, tt.Result, tree.Match(iputil.Ip2VpnIp(net.ParseIP(tt.IP))))
 	}
 
-	tree = NewCIDRTree()
-	tree.AddCIDR(getCIDR("1.1.1.1/0"), "cool")
+	tree = NewTree4()
+	tree.AddCIDR(util.GetCIDR("1.1.1.1/0"), "cool")
 	assert.Equal(t, "cool", tree.Contains(iputil.Ip2VpnIp(net.ParseIP("0.0.0.0"))))
 	assert.Equal(t, "cool", tree.Contains(iputil.Ip2VpnIp(net.ParseIP("255.255.255.255"))))
 }
 
 func BenchmarkCIDRTree_Contains(b *testing.B) {
-	tree := NewCIDRTree()
-	tree.AddCIDR(getCIDR("1.1.0.0/16"), "1")
-	tree.AddCIDR(getCIDR("1.2.1.1/32"), "1")
-	tree.AddCIDR(getCIDR("192.2.1.1/32"), "1")
-	tree.AddCIDR(getCIDR("172.2.1.1/32"), "1")
+	tree := NewTree4()
+	tree.AddCIDR(util.GetCIDR("1.1.0.0/16"), "1")
+	tree.AddCIDR(util.GetCIDR("1.2.1.1/32"), "1")
+	tree.AddCIDR(util.GetCIDR("192.2.1.1/32"), "1")
+	tree.AddCIDR(util.GetCIDR("172.2.1.1/32"), "1")
 
 	ip := iputil.Ip2VpnIp(net.ParseIP("1.2.1.1"))
 	b.Run("found", func(b *testing.B) {
@@ -131,11 +132,11 @@ func BenchmarkCIDRTree_Contains(b *testing.B) {
 }
 
 func BenchmarkCIDRTree_Match(b *testing.B) {
-	tree := NewCIDRTree()
-	tree.AddCIDR(getCIDR("1.1.0.0/16"), "1")
-	tree.AddCIDR(getCIDR("1.2.1.1/32"), "1")
-	tree.AddCIDR(getCIDR("192.2.1.1/32"), "1")
-	tree.AddCIDR(getCIDR("172.2.1.1/32"), "1")
+	tree := NewTree4()
+	tree.AddCIDR(util.GetCIDR("1.1.0.0/16"), "1")
+	tree.AddCIDR(util.GetCIDR("1.2.1.1/32"), "1")
+	tree.AddCIDR(util.GetCIDR("192.2.1.1/32"), "1")
+	tree.AddCIDR(util.GetCIDR("172.2.1.1/32"), "1")
 
 	ip := iputil.Ip2VpnIp(net.ParseIP("1.2.1.1"))
 	b.Run("found", func(b *testing.B) {
@@ -150,9 +151,4 @@ func BenchmarkCIDRTree_Match(b *testing.B) {
 			tree.Match(ip)
 		}
 	})
-}
-
-func getCIDR(s string) *net.IPNet {
-	_, c, _ := net.ParseCIDR(s)
-	return c
 }
