@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/header"
 )
 
 type UdpPacket struct {
@@ -54,7 +55,7 @@ func NewListener(l *logrus.Logger, ip string, port int, _ bool) (*udpConn, error
 // this is an encrypted packet or a handshake message in most cases
 // packets were transmitted from another nebula node, you can send them with Tun.Send
 func (u *udpConn) Send(packet *UdpPacket) {
-	h := &Header{}
+	h := &header.H{}
 	if err := h.Parse(packet.Data); err != nil {
 		panic(err)
 	}
@@ -104,7 +105,7 @@ func (u *udpConn) WriteTo(b []byte, addr *udpAddr) error {
 
 func (u *udpConn) ListenOut(f *Interface, q int) {
 	plaintext := make([]byte, mtu)
-	header := &Header{}
+	h := &header.H{}
 	fwPacket := &FirewallPacket{}
 	ua := &udpAddr{IP: make([]byte, 16)}
 	nb := make([]byte, 12, 12)
@@ -116,7 +117,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 		p := <-u.rxPackets
 		ua.Port = p.FromPort
 		copy(ua.IP, p.FromIp.To16())
-		f.readOutsidePackets(ua, plaintext[:0], p.Data, header, fwPacket, lhh, nb, q, conntrackCache.Get(u.l))
+		f.readOutsidePackets(ua, plaintext[:0], p.Data, h, fwPacket, lhh, nb, q, conntrackCache.Get(u.l))
 	}
 }
 

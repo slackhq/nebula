@@ -7,13 +7,14 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 )
 
 // WaitForTypeByIndex will pipe all messages from this control device into the pipeTo control device
 // returning after a message matching the criteria has been piped
-func (c *Control) WaitForType(msgType NebulaMessageType, subType NebulaMessageSubType, pipeTo *Control) {
-	h := &Header{}
+func (c *Control) WaitForType(msgType header.MessageType, subType header.MessageSubType, pipeTo *Control) {
+	h := &header.H{}
 	for {
 		p := c.f.outside.Get(true)
 		if err := h.Parse(p.Data); err != nil {
@@ -28,8 +29,8 @@ func (c *Control) WaitForType(msgType NebulaMessageType, subType NebulaMessageSu
 
 // WaitForTypeByIndex is similar to WaitForType except it adds an index check
 // Useful if you have many nodes communicating and want to wait to find a specific nodes packet
-func (c *Control) WaitForTypeByIndex(toIndex uint32, msgType NebulaMessageType, subType NebulaMessageSubType, pipeTo *Control) {
-	h := &Header{}
+func (c *Control) WaitForTypeByIndex(toIndex uint32, msgType header.MessageType, subType header.MessageSubType, pipeTo *Control) {
+	h := &header.H{}
 	for {
 		p := c.f.outside.Get(true)
 		if err := h.Parse(p.Data); err != nil {

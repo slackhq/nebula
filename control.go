@@ -9,6 +9,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 )
 
@@ -132,7 +133,7 @@ func (c *Control) CloseTunnel(vpnIp iputil.VpnIp, localOnly bool) bool {
 
 	if !localOnly {
 		c.f.send(
-			closeTunnel,
+			header.CloseTunnel,
 			0,
 			hostInfo.ConnectionState,
 			hostInfo,
@@ -160,7 +161,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 		}
 
 		if h.ConnectionState.ready {
-			c.f.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+			c.f.send(header.CloseTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 			c.f.closeTunnel(h, true)
 
 			c.l.WithField("vpnIp", h.vpnIp).WithField("udpAddr", h.remote).

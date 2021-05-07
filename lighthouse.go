@@ -11,6 +11,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 )
 
@@ -59,7 +60,7 @@ type LightHouse struct {
 }
 
 type EncWriter interface {
-	SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp iputil.VpnIp, p, nb, out []byte)
+	SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, nb, out []byte)
 }
 
 func NewLightHouse(l *logrus.Logger, amLighthouse bool, myVpnIpNet *net.IPNet, ips []iputil.VpnIp, interval int, nebulaPort uint32, pc *udpConn, punchBack bool, punchDelay time.Duration, metricsEnabled bool) *LightHouse {
@@ -151,7 +152,7 @@ func (lh *LightHouse) QueryServer(ip iputil.VpnIp, f EncWriter) {
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)
 	for n := range lh.lighthouses {
-		f.SendMessageToVpnIp(lightHouse, 0, n, query, nb, out)
+		f.SendMessageToVpnIp(header.LightHouse, 0, n, query, nb, out)
 	}
 }
 
@@ -377,7 +378,7 @@ func (lh *LightHouse) SendUpdate(f EncWriter) {
 	}
 
 	for vpnIp := range lh.lighthouses {
-		f.SendMessageToVpnIp(lightHouse, 0, vpnIp, mm, nb, out)
+		f.SendMessageToVpnIp(header.LightHouse, 0, vpnIp, mm, nb, out)
 	}
 }
 
@@ -407,11 +408,11 @@ func (lh *LightHouse) NewRequestHandler() *LightHouseHandler {
 }
 
 func (lh *LightHouse) metricRx(t NebulaMeta_MessageType, i int64) {
-	lh.metrics.Rx(NebulaMessageType(t), 0, i)
+	lh.metrics.Rx(header.MessageType(t), 0, i)
 }
 
 func (lh *LightHouse) metricTx(t NebulaMeta_MessageType, i int64) {
-	lh.metrics.Tx(NebulaMessageType(t), 0, i)
+	lh.metrics.Tx(header.MessageType(t), 0, i)
 }
 
 // This method is similar to Reset(), but it re-uses the pointer structs
@@ -495,7 +496,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp,
 	}
 
 	lhh.lh.metricTx(NebulaMeta_HostQueryReply, 1)
-	w.SendMessageToVpnIp(lightHouse, 0, vpnIp, lhh.pb[:ln], lhh.nb, lhh.out[:0])
+	w.SendMessageToVpnIp(header.LightHouse, 0, vpnIp, lhh.pb[:ln], lhh.nb, lhh.out[:0])
 
 	// This signals the other side to punch some zero byte udp packets
 	found, ln, err = lhh.lh.queryAndPrepMessage(vpnIp, func(c *cache) (int, error) {
@@ -518,7 +519,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp,
 	}
 
 	lhh.lh.metricTx(NebulaMeta_HostPunchNotification, 1)
-	w.SendMessageToVpnIp(lightHouse, 0, iputil.VpnIp(reqVpnIp), lhh.pb[:ln], lhh.nb, lhh.out[:0])
+	w.SendMessageToVpnIp(header.LightHouse, 0, iputil.VpnIp(reqVpnIp), lhh.pb[:ln], lhh.nb, lhh.out[:0])
 }
 
 func (lhh *LightHouseHandler) coalesceAnswers(c *cache, n *NebulaMeta) {
@@ -631,7 +632,7 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp i
 			//NOTE: we have to allocate a new output buffer here since we are spawning a new goroutine
 			// for each punchBack packet. We should move this into a timerwheel or a single goroutine
 			// managed by a channel.
-			w.SendMessageToVpnIp(test, testRequest, iputil.VpnIp(n.Details.VpnIp), []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			w.SendMessageToVpnIp(header.Test, header.TestRequest, iputil.VpnIp(n.Details.VpnIp), []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 		}()
 	}
 }

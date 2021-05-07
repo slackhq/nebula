@@ -12,6 +12,7 @@ import (
 	"net"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/header"
 )
 
 type udpConn struct {
@@ -67,7 +68,7 @@ type rawMessage struct {
 func (u *udpConn) ListenOut(f *Interface, q int) {
 	plaintext := make([]byte, mtu)
 	buffer := make([]byte, mtu)
-	header := &Header{}
+	h := &header.H{}
 	fwPacket := &FirewallPacket{}
 	udpAddr := &udpAddr{IP: make([]byte, 16)}
 	nb := make([]byte, 12, 12)
@@ -86,7 +87,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 
 		udpAddr.IP = rua.IP
 		udpAddr.Port = uint16(rua.Port)
-		f.readOutsidePackets(udpAddr, plaintext[:0], buffer[:n], header, fwPacket, lhh, nb, q, conntrackCache.Get(f.l))
+		f.readOutsidePackets(udpAddr, plaintext[:0], buffer[:n], h, fwPacket, lhh, nb, q, conntrackCache.Get(f.l))
 	}
 }
 

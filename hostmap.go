@@ -11,6 +11,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 )
 
@@ -70,13 +71,13 @@ type HostInfo struct {
 }
 
 type cachedPacket struct {
-	messageType    NebulaMessageType
-	messageSubType NebulaMessageSubType
+	messageType    header.MessageType
+	messageSubType header.MessageSubType
 	callback       packetCallback
 	packet         []byte
 }
 
-type packetCallback func(t NebulaMessageType, st NebulaMessageSubType, h *HostInfo, p, nb, out []byte)
+type packetCallback func(t header.MessageType, st header.MessageSubType, h *HostInfo, p, nb, out []byte)
 
 type cachedPacketMetrics struct {
 	sent    metrics.Counter
@@ -428,7 +429,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 
 			// Try to send a test packet to that host, this should
 			// cause it to detect a roaming event and switch remotes
-			ifce.send(test, testRequest, i.ConnectionState, i, addr, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			ifce.send(header.Test, header.TestRequest, i.ConnectionState, i, addr, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 		})
 	}
 
@@ -438,7 +439,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 	}
 }
 
-func (i *HostInfo) cachePacket(l *logrus.Logger, t NebulaMessageType, st NebulaMessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
+func (i *HostInfo) cachePacket(l *logrus.Logger, t header.MessageType, st header.MessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
 	//TODO: return the error so we can log with more context
 	if len(i.packetStore) < 100 {
 		tempPacket := make([]byte, len(packet))

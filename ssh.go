@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/sshd"
 )
@@ -510,7 +511,7 @@ func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 
 	if !flags.LocalOnly {
 		ifce.send(
-			closeTunnel,
+			header.CloseTunnel,
 			0,
 			hostInfo.ConnectionState,
 			hostInfo,
