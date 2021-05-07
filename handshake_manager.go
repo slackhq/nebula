@@ -47,7 +47,7 @@ type HandshakeManager struct {
 	metricTimedOut         metrics.Counter
 	l                      *logrus.Logger
 
-	// can be used to trigger outbound handshake for the given vpnIP
+	// can be used to trigger outbound handshake for the given vpnIp
 	trigger chan iputil.VpnIp
 }
 
@@ -92,8 +92,8 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 	}
 }
 
-func (c *HandshakeManager) handleOutbound(vpnIP iputil.VpnIp, f EncWriter, lighthouseTriggered bool) {
-	hostinfo, err := c.pendingHostMap.QueryVpnIP(vpnIP)
+func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f EncWriter, lighthouseTriggered bool) {
+	hostinfo, err := c.pendingHostMap.QueryVpnIp(vpnIp)
 	if err != nil {
 		return
 	}
@@ -111,7 +111,7 @@ func (c *HandshakeManager) handleOutbound(vpnIP iputil.VpnIp, f EncWriter, light
 	if !hostinfo.HandshakeReady {
 		// There is currently a slight race in getOrHandshake due to ConnectionState not being part of the HostInfo directly
 		// Our hostinfo here was added to the pending map and the wheel may have ticked to us before we created ConnectionState
-		c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval*time.Duration(hostinfo.HandshakeCounter))
+		c.OutboundHandshakeTimer.Add(vpnIp, c.config.tryInterval*time.Duration(hostinfo.HandshakeCounter))
 		return
 	}
 
@@ -139,15 +139,15 @@ func (c *HandshakeManager) handleOutbound(vpnIP iputil.VpnIp, f EncWriter, light
 	// Get a remotes object if we don't already have one.
 	// This is mainly to protect us as this should never be the case
 	if hostinfo.remotes == nil {
-		hostinfo.remotes = c.lightHouse.QueryCache(vpnIP)
+		hostinfo.remotes = c.lightHouse.QueryCache(vpnIp)
 	}
 
 	//TODO: this will generate a load of queries for hosts with only 1 ip (i'm not using a lighthouse, static mapped)
 	if hostinfo.remotes.Len(c.pendingHostMap.preferredRanges) <= 1 {
 		// If we only have 1 remote it is highly likely our query raced with the other host registered within the lighthouse
-		// Our vpnIP here has a tunnel with a lighthouse but has yet to send a host update packet there so we only know about
+		// Our vpnIp here has a tunnel with a lighthouse but has yet to send a host update packet there so we only know about
 		// the learned public ip for them. Query again to short circuit the promotion counter
-		c.lightHouse.QueryServer(vpnIP, f)
+		c.lightHouse.QueryServer(vpnIp, f)
 	}
 
 	// Send a the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
@@ -180,12 +180,12 @@ func (c *HandshakeManager) handleOutbound(vpnIP iputil.VpnIp, f EncWriter, light
 	// If a lighthouse triggered this attempt then we are still in the timer wheel and do not need to re-add
 	if !lighthouseTriggered {
 		//TODO: feel like we dupe handshake real fast in a tight loop, why?
-		c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval*time.Duration(hostinfo.HandshakeCounter))
+		c.OutboundHandshakeTimer.Add(vpnIp, c.config.tryInterval*time.Duration(hostinfo.HandshakeCounter))
 	}
 }
 
-func (c *HandshakeManager) AddVpnIP(vpnIp iputil.VpnIp) *HostInfo {
-	hostinfo := c.pendingHostMap.AddVpnIP(vpnIp)
+func (c *HandshakeManager) AddVpnIp(vpnIp iputil.VpnIp) *HostInfo {
+	hostinfo := c.pendingHostMap.AddVpnIp(vpnIp)
 	// We lock here and use an array to insert items to prevent locking the
 	// main receive thread for very long by waiting to add items to the pending map
 	//TODO: what lock?
@@ -204,12 +204,12 @@ var (
 
 // CheckAndComplete checks for any conflicts in the main and pending hostmap
 // before adding hostinfo to main. If err is nil, it was added. Otherwise err will be:
-
+//
 // ErrAlreadySeen if we already have an entry in the hostmap that has seen the
 // exact same handshake packet
 //
 // ErrExistingHostInfo if we already have an entry in the hostmap for this
-// VpnIP and the new handshake was older than the one we currently have
+// VpnIp and the new handshake was older than the one we currently have
 //
 // ErrLocalIndexCollision if we already have an entry in the main or pending
 // hostmap for the hostinfo.localIndexId.

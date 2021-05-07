@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestControl_GetHostInfoByVpnIP(t *testing.T) {
+func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	l := NewTestLogger()
 	// Special care must be taken to re-use all objects provided to the hostmap and certificate in the expectedInfo object
 	// To properly ensure we are not exposing core memory to the caller
@@ -78,10 +78,10 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 		l: logrus.New(),
 	}
 
-	thi := c.GetHostInfoByVpnIP(iputil.Ip2VpnIp(ipNet.IP), false)
+	thi := c.GetHostInfoByVpnIp(iputil.Ip2VpnIp(ipNet.IP), false)
 
 	expectedInfo := ControlHostInfo{
-		VpnIP:          net.IPv4(1, 2, 3, 4).To4(),
+		VpnIp:          net.IPv4(1, 2, 3, 4).To4(),
 		LocalIndex:     201,
 		RemoteIndex:    200,
 		RemoteAddrs:    []*udpAddr{remote2, remote1},
@@ -92,12 +92,12 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 	}
 
 	// Make sure we don't have any unexpected fields
-	assertFields(t, []string{"VpnIP", "LocalIndex", "RemoteIndex", "RemoteAddrs", "CachedPackets", "Cert", "MessageCounter", "CurrentRemote"}, thi)
+	assertFields(t, []string{"VpnIp", "LocalIndex", "RemoteIndex", "RemoteAddrs", "CachedPackets", "Cert", "MessageCounter", "CurrentRemote"}, thi)
 	util.AssertDeepCopyEqual(t, &expectedInfo, thi)
 
 	// Make sure we don't panic if the host info doesn't have a cert yet
 	assert.NotPanics(t, func() {
-		thi = c.GetHostInfoByVpnIP(iputil.Ip2VpnIp(ipNet2.IP), false)
+		thi = c.GetHostInfoByVpnIp(iputil.Ip2VpnIp(ipNet2.IP), false)
 	})
 }
 

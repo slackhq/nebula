@@ -24,7 +24,7 @@ type Control struct {
 }
 
 type ControlHostInfo struct {
-	VpnIP          net.IP                  `json:"vpnIp"`
+	VpnIp          net.IP                  `json:"vpnIp"`
 	LocalIndex     uint32                  `json:"localIndex"`
 	RemoteIndex    uint32                  `json:"remoteIndex"`
 	RemoteAddrs    []*udpAddr              `json:"remoteAddrs"`
@@ -93,8 +93,8 @@ func (c *Control) ListHostmap(pendingMap bool) []ControlHostInfo {
 	}
 }
 
-// GetHostInfoByVpnIP returns a single tunnels hostInfo, or nil if not found
-func (c *Control) GetHostInfoByVpnIP(vpnIP iputil.VpnIp, pending bool) *ControlHostInfo {
+// GetHostInfoByVpnIp returns a single tunnels hostInfo, or nil if not found
+func (c *Control) GetHostInfoByVpnIp(vpnIp iputil.VpnIp, pending bool) *ControlHostInfo {
 	var hm *HostMap
 	if pending {
 		hm = c.f.handshakeManager.pendingHostMap
@@ -102,7 +102,7 @@ func (c *Control) GetHostInfoByVpnIP(vpnIP iputil.VpnIp, pending bool) *ControlH
 		hm = c.f.hostMap
 	}
 
-	h, err := hm.QueryVpnIP(vpnIP)
+	h, err := hm.QueryVpnIp(vpnIp)
 	if err != nil {
 		return nil
 	}
@@ -112,8 +112,8 @@ func (c *Control) GetHostInfoByVpnIP(vpnIP iputil.VpnIp, pending bool) *ControlH
 }
 
 // SetRemoteForTunnel forces a tunnel to use a specific remote
-func (c *Control) SetRemoteForTunnel(vpnIP iputil.VpnIp, addr udpAddr) *ControlHostInfo {
-	hostInfo, err := c.f.hostMap.QueryVpnIP(vpnIP)
+func (c *Control) SetRemoteForTunnel(vpnIp iputil.VpnIp, addr udpAddr) *ControlHostInfo {
+	hostInfo, err := c.f.hostMap.QueryVpnIp(vpnIp)
 	if err != nil {
 		return nil
 	}
@@ -124,8 +124,8 @@ func (c *Control) SetRemoteForTunnel(vpnIP iputil.VpnIp, addr udpAddr) *ControlH
 }
 
 // CloseTunnel closes a fully established tunnel. If localOnly is false it will notify the remote end as well.
-func (c *Control) CloseTunnel(vpnIP iputil.VpnIp, localOnly bool) bool {
-	hostInfo, err := c.f.hostMap.QueryVpnIP(vpnIP)
+func (c *Control) CloseTunnel(vpnIp iputil.VpnIp, localOnly bool) bool {
+	hostInfo, err := c.f.hostMap.QueryVpnIp(vpnIp)
 	if err != nil {
 		return false
 	}
@@ -174,7 +174,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 
 func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 	chi := ControlHostInfo{
-		VpnIP:         h.vpnIp.ToIP(),
+		VpnIp:         h.vpnIp.ToIP(),
 		LocalIndex:    h.localIndexId,
 		RemoteIndex:   h.remoteIndexId,
 		RemoteAddrs:   h.remotes.CopyAddrs(preferredRanges),
