@@ -7,10 +7,11 @@ import (
 	"sync"
 
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 )
 
 // forEachFunc is used to benefit folks that want to do work inside the lock
-type forEachFunc func(addr *udpAddr, preferred bool)
+type forEachFunc func(addr *udp.Addr, preferred bool)
 
 // The checkFuncs here are to simplify bulk importing LH query response logic into a single function (reset slice and iterate)
 type checkFuncV4 func(to *Ip4AndPort) bool
@@ -23,8 +24,8 @@ type CacheMap map[string]*Cache
 // Cache is the other part of CacheMap to better represent the lighthouse cache for humans
 // We don't reason about ipv4 vs ipv6 here
 type Cache struct {
-	Learned  []*udpAddr `json:"learned,omitempty"`
-	Reported []*udpAddr `json:"reported,omitempty"`
+	Learned  []*udp.Addr `json:"learned,omitempty"`
+	Reported []*udp.Addr `json:"reported,omitempty"`
 }
 
 //TODO: Seems like we should plop static host entries in here too since the are protected by the lighthouse from deletion
@@ -55,7 +56,7 @@ type RemoteList struct {
 	sync.RWMutex
 
 	// A deduplicated set of addresses. Any accessor should lock beforehand.
-	addrs []*udpAddr
+	addrs []*udp.Addr
 
 	// These are maps to store v4 and v6 addresses per lighthouse
 	// Map key is the vpnIp of the person that told us about this the cached entries underneath.
@@ -64,7 +65,7 @@ type RemoteList struct {
 
 	// This is a list of remotes that we have tried to handshake with and have returned from the wrong vpn ip.
 	// They should not be tried again during a handshake
-	badRemotes []*udpAddr
+	badRemotes []*udp.Addr
 
 	// A flag that the cache may have changed and addrs needs to be rebuilt
 	shouldRebuild bool
@@ -73,7 +74,7 @@ type RemoteList struct {
 // NewRemoteList creates a new empty RemoteList
 func NewRemoteList() *RemoteList {
 	return &RemoteList{
-		addrs: make([]*udpAddr, 0),
+		addrs: make([]*udp.Addr, 0),
 		cache: make(map[iputil.VpnIp]*cache),
 	}
 }
@@ -100,7 +101,7 @@ func (r *RemoteList) ForEach(preferredRanges []*net.IPNet, forEach forEachFunc) 
 
 // CopyAddrs locks and makes a deep copy of the deduplicated address list
 // The deduplication work may need to occur here, so you must pass preferredRanges
-func (r *RemoteList) CopyAddrs(preferredRanges []*net.IPNet) []*udpAddr {
+func (r *RemoteList) CopyAddrs(preferredRanges []*net.IPNet) []*udp.Addr {
 	if r == nil {
 		return nil
 	}
@@ -109,7 +110,7 @@ func (r *RemoteList) CopyAddrs(preferredRanges []*net.IPNet) []*udpAddr {
 
 	r.RLock()
 	defer r.RUnlock()
-	c := make([]*udpAddr, len(r.addrs))
+	c := make([]*udp.Addr, len(r.addrs))
 	for i, v := range r.addrs {
 		c[i] = v.Copy()
 	}
@@ -120,7 +121,7 @@ func (r *RemoteList) CopyAddrs(preferredRanges []*net.IPNet) []*udpAddr {
 // Currently this is only needed when HostInfo.SetRemote is called as that should cover both handshaking and roaming.
 // It will mark the deduplicated address list as dirty, so do not call it unless new information is available
 //TODO: this needs to support the allow list list
-func (r *RemoteList) LearnRemote(ownerVpnIp iputil.VpnIp, addr *udpAddr) {
+func (r *RemoteList) LearnRemote(ownerVpnIp iputil.VpnIp, addr *udp.Addr) {
 	r.Lock()
 	defer r.Unlock()
 	if v4 := addr.IP.To4(); v4 != nil {
@@ -141,8 +142,8 @@ func (r *RemoteList) CopyCache() *CacheMap {
 		c := cm[vpnIp]
 		if c == nil {
 			c = &Cache{
-				Learned:  make([]*udpAddr, 0),
-				Reported: make([]*udpAddr, 0),
+				Learned:  make([]*udp.Addr, 0),
+				Reported: make([]*udp.Addr, 0),
 			}
 			cm[vpnIp] = c
 		}
@@ -177,7 +178,7 @@ func (r *RemoteList) CopyCache() *CacheMap {
 }
 
 // BlockRemote locks and records the address as bad, it will be excluded from the deduplicated address list
-func (r *RemoteList) BlockRemote(bad *udpAddr) {
+func (r *RemoteList) BlockRemote(bad *udp.Addr) {
 	r.Lock()
 	defer r.Unlock()
 
@@ -194,11 +195,11 @@ func (r *RemoteList) BlockRemote(bad *udpAddr) {
 }
 
 // CopyBlockedRemotes locks and makes a deep copy of the blocked remotes list
-func (r *RemoteList) CopyBlockedRemotes() []*udpAddr {
+func (r *RemoteList) CopyBlockedRemotes() []*udp.Addr {
 	r.RLock()
 	defer r.RUnlock()
 
-	c := make([]*udpAddr, len(r.badRemotes))
+	c := make([]*udp.Addr, len(r.badRemotes))
 	for i, v := range r.badRemotes {
 		c[i] = v.Copy()
 	}
@@ -230,7 +231,7 @@ func (r *RemoteList) Rebuild(preferredRanges []*net.IPNet) {
 }
 
 // unlockedIsBad assumes you have the write lock and checks if the remote matches any entry in the blocked address list
-func (r *RemoteList) unlockedIsBad(remote *udpAddr) bool {
+func (r *RemoteList) unlockedIsBad(remote *udp.Addr) bool {
 	for _, v := range r.badRemotes {
 		if v.Equals(remote) {
 			return true

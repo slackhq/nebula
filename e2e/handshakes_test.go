@@ -11,6 +11,7 @@ import (
 	"github.com/slackhq/nebula/e2e/router"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -88,7 +89,7 @@ func TestWrongResponderHandshake(t *testing.T) {
 
 	t.Log("Start the handshake process, we will route until we see our cached packet get sent to them")
 	myControl.InjectTunUDPPacket(theirVpnIp, 80, 80, []byte("Hi from me"))
-	r.RouteForAllExitFunc(func(p *nebula.UdpPacket, c *nebula.Control) router.ExitType {
+	r.RouteForAllExitFunc(func(p *udp.Packet, c *nebula.Control) router.ExitType {
 		h := &header.H{}
 		err := h.Parse(p.Data)
 		if err != nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 )
 
 //const ProbeLen = 100
@@ -41,7 +42,7 @@ type HostMap struct {
 type HostInfo struct {
 	sync.RWMutex
 
-	remote            *udpAddr
+	remote            *udp.Addr
 	remotes           *RemoteList
 	promoteCounter    uint32
 	ConnectionState   *ConnectionState
@@ -68,7 +69,7 @@ type HostInfo struct {
 	lastHandshakeTime uint64
 
 	lastRoam       time.Time
-	lastRoamRemote *udpAddr
+	lastRoamRemote *udp.Addr
 }
 
 type cachedPacket struct {
@@ -372,7 +373,7 @@ func (hm *HostMap) punchList(rl []*RemoteList) []*RemoteList {
 }
 
 // Punchy iterates through the result of punchList() to assemble all known addresses and sends a hole punch packet to them
-func (hm *HostMap) Punchy(conn *udpConn) {
+func (hm *HostMap) Punchy(conn *udp.Conn) {
 	var metricsTxPunchy metrics.Counter
 	if hm.metricsEnabled {
 		metricsTxPunchy = metrics.GetOrRegisterCounter("messages.tx.punchy", nil)
@@ -423,7 +424,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 			}
 		}
 
-		i.remotes.ForEach(preferredRanges, func(addr *udpAddr, preferred bool) {
+		i.remotes.ForEach(preferredRanges, func(addr *udp.Addr, preferred bool) {
 			if addr == nil || !preferred {
 				return
 			}
@@ -502,7 +503,7 @@ func (i *HostInfo) GetCert() *cert.NebulaCertificate {
 	return nil
 }
 
-func (i *HostInfo) SetRemote(remote *udpAddr) {
+func (i *HostInfo) SetRemote(remote *udp.Addr) {
 	// We copy here because we likely got this remote from a source that reuses the object
 	if !i.remote.Equals(remote) {
 		i.remote = remote.Copy()

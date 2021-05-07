@@ -11,6 +11,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 )
 
 // Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
@@ -28,11 +29,11 @@ type ControlHostInfo struct {
 	VpnIp          net.IP                  `json:"vpnIp"`
 	LocalIndex     uint32                  `json:"localIndex"`
 	RemoteIndex    uint32                  `json:"remoteIndex"`
-	RemoteAddrs    []*udpAddr              `json:"remoteAddrs"`
+	RemoteAddrs    []*udp.Addr             `json:"remoteAddrs"`
 	CachedPackets  int                     `json:"cachedPackets"`
 	Cert           *cert.NebulaCertificate `json:"cert"`
 	MessageCounter uint64                  `json:"messageCounter"`
-	CurrentRemote  *udpAddr                `json:"currentRemote"`
+	CurrentRemote  *udp.Addr               `json:"currentRemote"`
 }
 
 // Start actually runs nebula, this is a nonblocking call. To block use Control.ShutdownBlock()
@@ -113,7 +114,7 @@ func (c *Control) GetHostInfoByVpnIp(vpnIp iputil.VpnIp, pending bool) *ControlH
 }
 
 // SetRemoteForTunnel forces a tunnel to use a specific remote
-func (c *Control) SetRemoteForTunnel(vpnIp iputil.VpnIp, addr udpAddr) *ControlHostInfo {
+func (c *Control) SetRemoteForTunnel(vpnIp iputil.VpnIp, addr udp.Addr) *ControlHostInfo {
 	hostInfo, err := c.f.hostMap.QueryVpnIp(vpnIp)
 	if err != nil {
 		return nil

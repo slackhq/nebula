@@ -13,6 +13,7 @@ import (
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 	"golang.org/x/net/ipv4"
 )
 
@@ -20,7 +21,7 @@ const (
 	minFwPacketLen = 4
 )
 
-func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhh *LightHouseHandler, nb []byte, q int, localCache ConntrackCache) {
+func (f *Interface) readOutsidePackets(addr *udp.Addr, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf udp.LightHouseHandlerFunc, nb []byte, q int, localCache firewall.ConntrackCache) {
 	err := h.Parse(packet)
 	if err != nil {
 		// TODO: best if we return this and let caller log
@@ -69,7 +70,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 			return
 		}
 
-		lhh.HandleRequest(addr, hostinfo.vpnIp, d, f)
+		lhf(addr, hostinfo.vpnIp, d, f)
 
 		// Fallthrough to the bottom to record incoming traffic
 
@@ -154,8 +155,8 @@ func (f *Interface) sendCloseTunnel(h *HostInfo) {
 	f.send(header.CloseTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 }
 
-func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {
-	if hostDidRoam(hostinfo.remote, addr) {
+func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udp.Addr) {
+	if !hostinfo.remote.Equals(addr) {
 		if !f.lightHouse.remoteAllowList.Allow(addr.IP) {
 			hostinfo.logger(f.l).WithField("newAddr", addr).Debug("lighthouse.remote_allow_list denied roaming")
 			return
@@ -178,7 +179,7 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {
 
 }
 
-func (f *Interface) handleEncrypted(ci *ConnectionState, addr *udpAddr, h *header.H) bool {
+func (f *Interface) handleEncrypted(ci *ConnectionState, addr *udp.Addr, h *header.H) bool {
 	// If connectionstate exists and the replay protector allows, process packet
 	// Else, send recv errors for 300 seconds after a restart to allow fast reconnection.
 	if ci == nil || !ci.window.Check(f.l, h.MessageCounter) {
@@ -267,7 +268,7 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	return out, nil
 }
 
-func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache ConntrackCache) {
+func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) {
 	var err error
 
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], messageCounter, nb)
@@ -308,7 +309,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	}
 }
 
-func (f *Interface) sendRecvError(endpoint *udpAddr, index uint32) {
+func (f *Interface) sendRecvError(endpoint *udp.Addr, index uint32) {
 	f.messageMetrics.Tx(header.RecvError, 0, 1)
 
 	//TODO: this should be a signed message so we can trust that we should drop the index
@@ -321,7 +322,7 @@ func (f *Interface) sendRecvError(endpoint *udpAddr, index uint32) {
 	}
 }
 
-func (f *Interface) handleRecvError(addr *udpAddr, h *header.H) {
+func (f *Interface) handleRecvError(addr *udp.Addr, h *header.H) {
 	if f.l.Level >= logrus.DebugLevel {
 		f.l.WithField("index", h.RemoteIndex).
 			WithField("udpAddr", addr).

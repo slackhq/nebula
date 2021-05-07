@@ -14,6 +14,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 )
 
 const mtu = 9001
@@ -29,7 +30,7 @@ type Inside interface {
 
 type InterfaceConfig struct {
 	HostMap                 *HostMap
-	Outside                 *udpConn
+	Outside                 *udp.Conn
 	Inside                  Inside
 	certState               *CertState
 	Cipher                  string
@@ -53,7 +54,7 @@ type InterfaceConfig struct {
 
 type Interface struct {
 	hostMap            *HostMap
-	outside            *udpConn
+	outside            *udp.Conn
 	inside             Inside
 	certState          *CertState
 	cipher             string
@@ -77,7 +78,7 @@ type Interface struct {
 
 	conntrackCacheTimeout time.Duration
 
-	writers []*udpConn
+	writers []*udp.Conn
 	readers []io.ReadWriteCloser
 
 	metricHandshakes    metrics.Histogram
@@ -119,7 +120,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		udpBatchSize:       c.UDPBatchSize,
 		routines:           c.routines,
 		version:            c.version,
-		writers:            make([]*udpConn, c.routines),
+		writers:            make([]*udp.Conn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
 		caPool:             c.caPool,
 		myVpnIp:            myVpnIp,
@@ -190,14 +191,17 @@ func (f *Interface) run() {
 func (f *Interface) listenOut(i int) {
 	runtime.LockOSThread()
 
-	var li *udpConn
+	var li *udp.Conn
 	// TODO clean this up with a coherent interface for each outside connection
 	if i > 0 {
 		li = f.writers[i]
 	} else {
 		li = f.outside
 	}
-	li.ListenOut(f, i)
+
+	lhh := f.lightHouse.NewRequestHandler()
+	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
+	li.ListenOut(f.readOutsidePackets, lhh.HandleRequest, conntrackCache, i)
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
@@ -208,7 +212,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
-	conntrackCache := NewConntrackCacheTicker(f.conntrackCacheTimeout)
+	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
 	for {
 		n, err := reader.Read(packet)
@@ -227,7 +231,7 @@ func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
 	c.RegisterReloadCallback(f.reloadCertKey)
 	c.RegisterReloadCallback(f.reloadFirewall)
 	for _, udpConn := range f.writers {
-		c.RegisterReloadCallback(udpConn.reloadConfig)
+		c.RegisterReloadCallback(udpConn.ReloadConfig)
 	}
 }
 
@@ -306,7 +310,7 @@ func (f *Interface) reloadFirewall(c *config.C) {
 func (f *Interface) emitStats(i time.Duration) {
 	ticker := time.NewTicker(i)
 
-	udpStats := NewUDPStatsEmitter(f.writers)
+	udpStats := udp.NewUDPStatsEmitter(f.writers)
 
 	for range ticker.C {
 		f.firewall.EmitStats()
