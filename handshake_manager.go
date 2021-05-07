@@ -12,6 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 )
 
 const (
@@ -40,7 +41,7 @@ type HandshakeManager struct {
 	pendingHostMap         *HostMap
 	mainHostMap            *HostMap
 	lightHouse             *LightHouse
-	outside                *udpConn
+	outside                *udp.Conn
 	config                 HandshakeConfig
 	OutboundHandshakeTimer *SystemTimerWheel
 	messageMetrics         *MessageMetrics
@@ -52,7 +53,7 @@ type HandshakeManager struct {
 	trigger chan iputil.VpnIp
 }
 
-func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udpConn, config HandshakeConfig) *HandshakeManager {
+func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udp.Conn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
 		pendingHostMap:         NewHostMap(l, "pending", tunCidr, preferredRanges),
 		mainHostMap:            mainHostMap,
@@ -68,7 +69,7 @@ func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges [
 	}
 }
 
-func (c *HandshakeManager) Run(f EncWriter) {
+func (c *HandshakeManager) Run(f udp.EncWriter) {
 	clockSource := time.Tick(c.config.tryInterval)
 	for {
 		select {
@@ -81,7 +82,7 @@ func (c *HandshakeManager) Run(f EncWriter) {
 	}
 }
 
-func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWriter) {
+func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f udp.EncWriter) {
 	c.OutboundHandshakeTimer.advance(now)
 	for {
 		ep := c.OutboundHandshakeTimer.Purge()
@@ -93,7 +94,7 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 	}
 }
 
-func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f EncWriter, lighthouseTriggered bool) {
+func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, lighthouseTriggered bool) {
 	hostinfo, err := c.pendingHostMap.QueryVpnIp(vpnIp)
 	if err != nil {
 		return
@@ -152,8 +153,8 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f EncWriter, light
 	}
 
 	// Send a the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
-	var sentTo []*udpAddr
-	hostinfo.remotes.ForEach(c.pendingHostMap.preferredRanges, func(addr *udpAddr, _ bool) {
+	var sentTo []*udp.Addr
+	hostinfo.remotes.ForEach(c.pendingHostMap.preferredRanges, func(addr *udp.Addr, _ bool) {
 		c.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
 		err = c.outside.WriteTo(hostinfo.HandshakePacket[0], addr)
 		if err != nil {

@@ -8,6 +8,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 )
 
 // NOISE IX Handshakes
@@ -69,7 +70,7 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 	hostinfo.handshakeStart = time.Now()
 }
 
-func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *header.H) {
+func ixHandshakeStage1(f *Interface, addr *udp.Addr, packet []byte, h *header.H) {
 	ci := f.newConnectionState(f.l, false, noise.HandshakeIX, []byte{}, 0)
 	// Mark packet 1 as seen so it doesn't show up as missed
 	ci.window.Update(f.l, 1)
@@ -279,7 +280,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *header.H) 
 	return
 }
 
-func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet []byte, h *header.H) bool {
+func ixHandshakeStage2(f *Interface, addr *udp.Addr, hostinfo *HostInfo, packet []byte, h *header.H) bool {
 	if hostinfo == nil {
 		// Nothing here to tear down, got a bogus stage 2 packet
 		return true

@@ -9,6 +9,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 )
@@ -18,8 +19,8 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	// Special care must be taken to re-use all objects provided to the hostmap and certificate in the expectedInfo object
 	// To properly ensure we are not exposing core memory to the caller
 	hm := NewHostMap(l, "test", &net.IPNet{}, make([]*net.IPNet, 0))
-	remote1 := NewUDPAddr(net.ParseIP("0.0.0.100"), 4444)
-	remote2 := NewUDPAddr(net.ParseIP("1:2:3:4:5:6:7:8"), 4444)
+	remote1 := udp.NewAddr(net.ParseIP("0.0.0.100"), 4444)
+	remote2 := udp.NewAddr(net.ParseIP("1:2:3:4:5:6:7:8"), 4444)
 	ipNet := net.IPNet{
 		IP:   net.IPv4(1, 2, 3, 4),
 		Mask: net.IPMask{255, 255, 255, 0},
@@ -84,11 +85,11 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		VpnIp:          net.IPv4(1, 2, 3, 4).To4(),
 		LocalIndex:     201,
 		RemoteIndex:    200,
-		RemoteAddrs:    []*udpAddr{remote2, remote1},
+		RemoteAddrs:    []*udp.Addr{remote2, remote1},
 		CachedPackets:  0,
 		Cert:           crt.Copy(),
 		MessageCounter: 0,
-		CurrentRemote:  NewUDPAddr(net.ParseIP("0.0.0.100"), 4444),
+		CurrentRemote:  udp.NewAddr(net.ParseIP("0.0.0.100"), 4444),
 	}
 
 	// Make sure we don't have any unexpected fields

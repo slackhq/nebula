@@ -19,6 +19,7 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/sshd"
+	"github.com/slackhq/nebula/udp"
 )
 
 type sshListHostMapFlags struct {
@@ -560,9 +561,9 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		return w.WriteLine(fmt.Sprintf("Tunnel already handshaking"))
 	}
 
-	var addr *udpAddr
+	var addr *udp.Addr
 	if flags.Address != "" {
-		addr = NewUDPAddrFromString(flags.Address)
+		addr = udp.NewAddrFromString(flags.Address)
 		if addr == nil {
 			return w.WriteLine("Address could not be parsed")
 		}
@@ -592,7 +593,7 @@ func sshChangeRemote(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		return w.WriteLine("No address was provided")
 	}
 
-	addr := NewUDPAddrFromString(flags.Address)
+	addr := udp.NewAddrFromString(flags.Address)
 	if addr == nil {
 		return w.WriteLine("Address could not be parsed")
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 )
@@ -21,7 +22,7 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	mw := &mockEncWriter{}
 	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
 
-	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, &LightHouse{}, &udpConn{}, defaultHandshakeConfig)
+	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, &LightHouse{}, &udp.Conn{}, defaultHandshakeConfig)
 
 	now := time.Now()
 	blah.NextOutboundHandshakeTimerTick(now, mw)
@@ -63,7 +64,7 @@ func Test_NewHandshakeManagerTrigger(t *testing.T) {
 	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
 	lh := &LightHouse{addrMap: make(map[iputil.VpnIp]*RemoteList), l: l}
 
-	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, lh, &udpConn{}, defaultHandshakeConfig)
+	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, lh, &udp.Conn{}, defaultHandshakeConfig)
 
 	now := time.Now()
 	blah.NextOutboundHandshakeTimerTick(now, mw)
@@ -83,7 +84,7 @@ func Test_NewHandshakeManagerTrigger(t *testing.T) {
 	// Make sure the trigger doesn't double schedule the timer entry
 	assert.Equal(t, 1, testCountTimerWheelEntries(blah.OutboundHandshakeTimer))
 
-	uaddr := NewUDPAddrFromString("10.1.1.1:4242")
+	uaddr := udp.NewAddrFromString("10.1.1.1:4242")
 	hi.remotes.unlockedPrependV4(ip, NewIp4AndPort(uaddr.IP, uint32(uaddr.Port)))
 
 	// We now have remotes but only the first trigger should have pushed things forward

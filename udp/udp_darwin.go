@@ -1,8 +1,8 @@
 // +build !e2e_testing
 
-package nebula
+package udp
 
-// FreeBSD support is primarily implemented in udp_generic, besides NewListenConfig
+// Darwin support is primarily implemented in udp_generic, besides NewListenConfig
 
 import (
 	"fmt"
@@ -30,11 +30,17 @@ func NewListenConfig(multi bool) net.ListenConfig {
 					return controlErr
 				}
 			}
+
 			return nil
 		},
 	}
 }
 
-func (u *udpConn) Rebind() error {
-	return nil
+func (u *Conn) Rebind() error {
+	file, err := u.File()
+	if err != nil {
+		return err
+	}
+
+	return syscall.SetsockoptInt(int(file.Fd()), unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, 0)
 }

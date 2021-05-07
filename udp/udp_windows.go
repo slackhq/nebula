@@ -1,6 +1,6 @@
 // +build !e2e_testing
 
-package nebula
+package udp
 
 // Windows support is primarily implemented in udp_generic, besides NewListenConfig
 
@@ -23,6 +23,6 @@ func NewListenConfig(multi bool) net.ListenConfig {
 	}
 }
 
-func (u *udpConn) Rebind() error {
+func (u *Conn) Rebind() error {
 	return nil
 }

@@ -1,8 +1,11 @@
 package nebula
 
-import "github.com/slackhq/nebula/header"
+import (
+	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/udp"
+)
 
-func HandleIncomingHandshake(f *Interface, addr *udpAddr, packet []byte, h *header.H, hostinfo *HostInfo) {
+func HandleIncomingHandshake(f *Interface, addr *udp.Addr, packet []byte, h *header.H, hostinfo *HostInfo) {
 	if !f.lightHouse.remoteAllowList.Allow(addr.IP) {
 		f.l.WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
 		return

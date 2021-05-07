@@ -13,6 +13,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 )
 
 //TODO: if a lighthouse doesn't have an answer, clients AGGRESSIVELY REQUERY.. why? handshake manager and/or getOrHandshake?
@@ -26,7 +27,7 @@ type LightHouse struct {
 	amLighthouse bool
 	myVpnIp      iputil.VpnIp
 	myVpnZeros   iputil.VpnIp
-	punchConn    *udpConn
+	punchConn    *udp.Conn
 
 	// Local cache of answers from light houses
 	// map of vpn Ip to answers
@@ -59,11 +60,7 @@ type LightHouse struct {
 	l                 *logrus.Logger
 }
 
-type EncWriter interface {
-	SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, nb, out []byte)
-}
-
-func NewLightHouse(l *logrus.Logger, amLighthouse bool, myVpnIpNet *net.IPNet, ips []iputil.VpnIp, interval int, nebulaPort uint32, pc *udpConn, punchBack bool, punchDelay time.Duration, metricsEnabled bool) *LightHouse {
+func NewLightHouse(l *logrus.Logger, amLighthouse bool, myVpnIpNet *net.IPNet, ips []iputil.VpnIp, interval int, nebulaPort uint32, pc *udp.Conn, punchBack bool, punchDelay time.Duration, metricsEnabled bool) *LightHouse {
 	ones, _ := myVpnIpNet.Mask.Size()
 	h := LightHouse{
 		amLighthouse: amLighthouse,
@@ -118,7 +115,7 @@ func (lh *LightHouse) ValidateLHStaticEntries() error {
 	return nil
 }
 
-func (lh *LightHouse) Query(ip iputil.VpnIp, f EncWriter) *RemoteList {
+func (lh *LightHouse) Query(ip iputil.VpnIp, f udp.EncWriter) *RemoteList {
 	if !lh.IsLighthouseIP(ip) {
 		lh.QueryServer(ip, f)
 	}
@@ -132,7 +129,7 @@ func (lh *LightHouse) Query(ip iputil.VpnIp, f EncWriter) *RemoteList {
 }
 
 // This is asynchronous so no reply should be expected
-func (lh *LightHouse) QueryServer(ip iputil.VpnIp, f EncWriter) {
+func (lh *LightHouse) QueryServer(ip iputil.VpnIp, f udp.EncWriter) {
 	if lh.amLighthouse {
 		return
 	}
@@ -216,7 +213,7 @@ func (lh *LightHouse) DeleteVpnIp(vpnIp iputil.VpnIp) {
 // AddStaticRemote adds a static host entry for vpnIp as ourselves as the owner
 // We are the owner because we don't want a lighthouse server to advertise for static hosts it was configured with
 // And we don't want a lighthouse query reply to interfere with our learned cache if we are a client
-func (lh *LightHouse) AddStaticRemote(vpnIp iputil.VpnIp, toAddr *udpAddr) {
+func (lh *LightHouse) AddStaticRemote(vpnIp iputil.VpnIp, toAddr *udp.Addr) {
 	lh.Lock()
 	am := lh.unlockedGetRemoteList(vpnIp)
 	am.Lock()
@@ -319,19 +316,19 @@ func NewIp6AndPort(ip net.IP, port uint32) *Ip6AndPort {
 	}
 }
 
-func NewUDPAddrFromLH4(ipp *Ip4AndPort) *udpAddr {
+func NewUDPAddrFromLH4(ipp *Ip4AndPort) *udp.Addr {
 	ip := ipp.Ip
-	return NewUDPAddr(
+	return udp.NewAddr(
 		net.IPv4(byte(ip&0xff000000>>24), byte(ip&0x00ff0000>>16), byte(ip&0x0000ff00>>8), byte(ip&0x000000ff)),
 		uint16(ipp.Port),
 	)
 }
 
-func NewUDPAddrFromLH6(ipp *Ip6AndPort) *udpAddr {
-	return NewUDPAddr(lhIp6ToIp(ipp), uint16(ipp.Port))
+func NewUDPAddrFromLH6(ipp *Ip6AndPort) *udp.Addr {
+	return udp.NewAddr(lhIp6ToIp(ipp), uint16(ipp.Port))
 }
 
-func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
+func (lh *LightHouse) LhUpdateWorker(f udp.EncWriter) {
 	if lh.amLighthouse || lh.interval == 0 {
 		return
 	}
@@ -342,7 +339,7 @@ func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
 	}
 }
 
-func (lh *LightHouse) SendUpdate(f EncWriter) {
+func (lh *LightHouse) SendUpdate(f udp.EncWriter) {
 	var v4 []*Ip4AndPort
 	var v6 []*Ip6AndPort
 
@@ -429,7 +426,7 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	return lhh.meta
 }
 
-func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp iputil.VpnIp, p []byte, w EncWriter) {
+func (lhh *LightHouseHandler) HandleRequest(rAddr *udp.Addr, vpnIp iputil.VpnIp, p []byte, w udp.EncWriter) {
 	n := lhh.resetMeta()
 	err := n.Unmarshal(p)
 	if err != nil {
@@ -464,7 +461,7 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udpAddr, vpnIp iputil.VpnIp, 
 	}
 }
 
-func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp, addr *udpAddr, w EncWriter) {
+func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp, addr *udp.Addr, w udp.EncWriter) {
 	// Exit if we don't answer queries
 	if !lhh.lh.amLighthouse {
 		if lhh.l.Level >= logrus.DebugLevel {
@@ -589,13 +586,13 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 	am.Unlock()
 }
 
-func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp iputil.VpnIp, w EncWriter) {
+func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp iputil.VpnIp, w udp.EncWriter) {
 	if !lhh.lh.IsLighthouseIP(vpnIp) {
 		return
 	}
 
 	empty := []byte{0}
-	punch := func(vpnPeer *udpAddr) {
+	punch := func(vpnPeer *udp.Addr) {
 		if vpnPeer == nil {
 			return
 		}

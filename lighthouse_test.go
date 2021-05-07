@@ -8,6 +8,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 )
@@ -49,10 +50,10 @@ func Test_lhStaticMapping(t *testing.T) {
 	lh1 := "10.128.0.2"
 	lh1IP := net.ParseIP(lh1)
 
-	udpServer, _ := NewListener(l, "0.0.0.0", 0, true)
+	udpServer, _ := udp.NewListener(l, "0.0.0.0", 0, 2)
 
 	meh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{255, 255, 255, 255}}, []iputil.VpnIp{iputil.Ip2VpnIp(lh1IP)}, 10, 10003, udpServer, false, 1, false)
-	meh.AddStaticRemote(iputil.Ip2VpnIp(lh1IP), NewUDPAddr(lh1IP, uint16(4242)))
+	meh.AddStaticRemote(iputil.Ip2VpnIp(lh1IP), udp.NewAddr(lh1IP, uint16(4242)))
 	err := meh.ValidateLHStaticEntries()
 	assert.Nil(t, err)
 
@@ -60,7 +61,7 @@ func Test_lhStaticMapping(t *testing.T) {
 	lh2IP := net.ParseIP(lh2)
 
 	meh = NewLightHouse(l, true, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{255, 255, 255, 255}}, []iputil.VpnIp{iputil.Ip2VpnIp(lh1IP), iputil.Ip2VpnIp(lh2IP)}, 10, 10003, udpServer, false, 1, false)
-	meh.AddStaticRemote(iputil.Ip2VpnIp(lh1IP), NewUDPAddr(lh1IP, uint16(4242)))
+	meh.AddStaticRemote(iputil.Ip2VpnIp(lh1IP), udp.NewAddr(lh1IP, uint16(4242)))
 	err = meh.ValidateLHStaticEntries()
 	assert.EqualError(t, err, "Lighthouse 10.128.0.3 does not have a static_host_map entry")
 }
@@ -70,12 +71,12 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	lh1 := "10.128.0.2"
 	lh1IP := net.ParseIP(lh1)
 
-	udpServer, _ := NewListener(l, "0.0.0.0", 0, true)
+	udpServer, _ := udp.NewListener(l, "0.0.0.0", 0, 2)
 
 	lh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{0, 0, 0, 0}}, []iputil.VpnIp{iputil.Ip2VpnIp(lh1IP)}, 10, 10003, udpServer, false, 1, false)
 
-	hAddr := NewUDPAddrFromString("4.5.6.7:12345")
-	hAddr2 := NewUDPAddrFromString("4.5.6.7:12346")
+	hAddr := udp.NewAddrFromString("4.5.6.7:12345")
+	hAddr2 := udp.NewAddrFromString("4.5.6.7:12346")
 	lh.addrMap[3] = NewRemoteList()
 	lh.addrMap[3].unlockedSetV4(
 		3,
@@ -86,8 +87,8 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 		func(*Ip4AndPort) bool { return true },
 	)
 
-	rAddr := NewUDPAddrFromString("1.2.2.3:12345")
-	rAddr2 := NewUDPAddrFromString("1.2.2.3:12346")
+	rAddr := udp.NewAddrFromString("1.2.2.3:12345")
+	rAddr2 := udp.NewAddrFromString("1.2.2.3:12346")
 	lh.addrMap[2] = NewRemoteList()
 	lh.addrMap[2].unlockedSetV4(
 		3,
@@ -136,48 +137,48 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 func TestLighthouse_Memory(t *testing.T) {
 	l := util.NewTestLogger()
 
-	myUdpAddr0 := &udpAddr{IP: net.ParseIP("10.0.0.2"), Port: 4242}
-	myUdpAddr1 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4242}
-	myUdpAddr2 := &udpAddr{IP: net.ParseIP("172.16.0.2"), Port: 4242}
-	myUdpAddr3 := &udpAddr{IP: net.ParseIP("100.152.0.2"), Port: 4242}
-	myUdpAddr4 := &udpAddr{IP: net.ParseIP("24.15.0.2"), Port: 4242}
-	myUdpAddr5 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4243}
-	myUdpAddr6 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4244}
-	myUdpAddr7 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4245}
-	myUdpAddr8 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4246}
-	myUdpAddr9 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4247}
-	myUdpAddr10 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4248}
-	myUdpAddr11 := &udpAddr{IP: net.ParseIP("192.168.0.2"), Port: 4249}
+	myUdpAddr0 := &udp.Addr{IP: net.ParseIP("10.0.0.2"), Port: 4242}
+	myUdpAddr1 := &udp.Addr{IP: net.ParseIP("192.168.0.2"), Port: 4242}
+	myUdpAddr2 := &udp.Addr{IP: net.ParseIP("172.16.0.2"), Port: 4242}
+	myUdpAddr3 := &udp.Addr{IP: net.ParseIP("100.152.0.2"), Port: 4242}
+	myUdpAddr4 := &udp.Addr{IP: net.ParseIP("24.15.0.2"), Port: 4242}
+	myUdpAddr5 := &udp.Addr{IP: net.ParseIP("192.168.0.2"), Port: 4243}
+	myUdpAddr6 := &udp.Addr{IP: net.ParseIP("192.168.0.2"), Port: 4244}
+	myUdpAddr7 := &udp.Addr{IP: net.ParseIP("192.168.0.2"), Port: 4245}
+	myUdpAddr8 := &udp.Addr{IP: net.ParseIP("192.168.0.2"), Port: 4246}
+	myUdpAddr9 := &udp.Addr{IP: net.ParseIP("192.168.0.2"), Port: 4247}
+	myUdpAddr10 := &udp.Addr{IP: net.ParseIP("192.168.0.2"), Port: 4248}
+	myUdpAddr11 := &udp.Addr{IP: net.ParseIP("192.168.0.2"), Port: 4249}
 	myVpnIp := iputil.Ip2VpnIp(net.ParseIP("10.128.0.2"))
 
-	theirUdpAddr0 := &udpAddr{IP: net.ParseIP("10.0.0.3"), Port: 4242}
-	theirUdpAddr1 := &udpAddr{IP: net.ParseIP("192.168.0.3"), Port: 4242}
-	theirUdpAddr2 := &udpAddr{IP: net.ParseIP("172.16.0.3"), Port: 4242}
-	theirUdpAddr3 := &udpAddr{IP: net.ParseIP("100.152.0.3"), Port: 4242}
-	theirUdpAddr4 := &udpAddr{IP: net.ParseIP("24.15.0.3"), Port: 4242}
+	theirUdpAddr0 := &udp.Addr{IP: net.ParseIP("10.0.0.3"), Port: 4242}
+	theirUdpAddr1 := &udp.Addr{IP: net.ParseIP("192.168.0.3"), Port: 4242}
+	theirUdpAddr2 := &udp.Addr{IP: net.ParseIP("172.16.0.3"), Port: 4242}
+	theirUdpAddr3 := &udp.Addr{IP: net.ParseIP("100.152.0.3"), Port: 4242}
+	theirUdpAddr4 := &udp.Addr{IP: net.ParseIP("24.15.0.3"), Port: 4242}
 	theirVpnIp := iputil.Ip2VpnIp(net.ParseIP("10.128.0.3"))
 
-	udpServer, _ := NewListener(l, "0.0.0.0", 0, true)
+	udpServer, _ := udp.NewListener(l, "0.0.0.0", 0, 2)
 	lh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{10, 128, 0, 1}, Mask: net.IPMask{255, 255, 255, 0}}, []iputil.VpnIp{}, 10, 10003, udpServer, false, 1, false)
 	lhh := lh.NewRequestHandler()
 
 	// Test that my first update responds with just that
-	newLHHostUpdate(myUdpAddr0, myVpnIp, []*udpAddr{myUdpAddr1, myUdpAddr2}, lhh)
+	newLHHostUpdate(myUdpAddr0, myVpnIp, []*udp.Addr{myUdpAddr1, myUdpAddr2}, lhh)
 	r := newLHHostRequest(myUdpAddr0, myVpnIp, myVpnIp, lhh)
 	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, myUdpAddr1, myUdpAddr2)
 
 	// Ensure we don't accumulate addresses
-	newLHHostUpdate(myUdpAddr0, myVpnIp, []*udpAddr{myUdpAddr3}, lhh)
+	newLHHostUpdate(myUdpAddr0, myVpnIp, []*udp.Addr{myUdpAddr3}, lhh)
 	r = newLHHostRequest(myUdpAddr0, myVpnIp, myVpnIp, lhh)
 	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, myUdpAddr3)
 
 	// Grow it back to 2
-	newLHHostUpdate(myUdpAddr0, myVpnIp, []*udpAddr{myUdpAddr1, myUdpAddr4}, lhh)
+	newLHHostUpdate(myUdpAddr0, myVpnIp, []*udp.Addr{myUdpAddr1, myUdpAddr4}, lhh)
 	r = newLHHostRequest(myUdpAddr0, myVpnIp, myVpnIp, lhh)
 	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, myUdpAddr1, myUdpAddr4)
 
 	// Update a different host
-	newLHHostUpdate(theirUdpAddr0, theirVpnIp, []*udpAddr{theirUdpAddr1, theirUdpAddr2, theirUdpAddr3, theirUdpAddr4}, lhh)
+	newLHHostUpdate(theirUdpAddr0, theirVpnIp, []*udp.Addr{theirUdpAddr1, theirUdpAddr2, theirUdpAddr3, theirUdpAddr4}, lhh)
 	r = newLHHostRequest(theirUdpAddr0, theirVpnIp, myVpnIp, lhh)
 	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, theirUdpAddr1, theirUdpAddr2, theirUdpAddr3, theirUdpAddr4)
 
@@ -190,7 +191,7 @@ func TestLighthouse_Memory(t *testing.T) {
 	newLHHostUpdate(
 		myUdpAddr0,
 		myVpnIp,
-		[]*udpAddr{
+		[]*udp.Addr{
 			myUdpAddr1,
 			myUdpAddr2,
 			myUdpAddr3,
@@ -213,15 +214,15 @@ func TestLighthouse_Memory(t *testing.T) {
 	)
 
 	// Make sure we won't add ips in our vpn network
-	bad1 := &udpAddr{IP: net.ParseIP("10.128.0.99"), Port: 4242}
-	bad2 := &udpAddr{IP: net.ParseIP("10.128.0.100"), Port: 4242}
-	good := &udpAddr{IP: net.ParseIP("1.128.0.99"), Port: 4242}
-	newLHHostUpdate(myUdpAddr0, myVpnIp, []*udpAddr{bad1, bad2, good}, lhh)
+	bad1 := &udp.Addr{IP: net.ParseIP("10.128.0.99"), Port: 4242}
+	bad2 := &udp.Addr{IP: net.ParseIP("10.128.0.100"), Port: 4242}
+	good := &udp.Addr{IP: net.ParseIP("1.128.0.99"), Port: 4242}
+	newLHHostUpdate(myUdpAddr0, myVpnIp, []*udp.Addr{bad1, bad2, good}, lhh)
 	r = newLHHostRequest(myUdpAddr0, myVpnIp, myVpnIp, lhh)
 	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, good)
 }
 
-func newLHHostRequest(fromAddr *udpAddr, myVpnIp, queryVpnIp iputil.VpnIp, lhh *LightHouseHandler) testLhReply {
+func newLHHostRequest(fromAddr *udp.Addr, myVpnIp, queryVpnIp iputil.VpnIp, lhh *LightHouseHandler) testLhReply {
 	req := &NebulaMeta{
 		Type: NebulaMeta_HostQuery,
 		Details: &NebulaMetaDetails{
@@ -239,7 +240,7 @@ func newLHHostRequest(fromAddr *udpAddr, myVpnIp, queryVpnIp iputil.VpnIp, lhh *
 	return w.lastReply
 }
 
-func newLHHostUpdate(fromAddr *udpAddr, vpnIp iputil.VpnIp, addrs []*udpAddr, lhh *LightHouseHandler) {
+func newLHHostUpdate(fromAddr *udp.Addr, vpnIp iputil.VpnIp, addrs []*udp.Addr, lhh *LightHouseHandler) {
 	req := &NebulaMeta{
 		Type: NebulaMeta_HostUpdateNotification,
 		Details: &NebulaMetaDetails{
@@ -359,7 +360,7 @@ func (tw *testEncWriter) SendMessageToVpnIp(t header.MessageType, st header.Mess
 }
 
 // assertIp4InArray asserts every address in want is at the same position in have and that the lengths match
-func assertIp4InArray(t *testing.T, have []*Ip4AndPort, want ...*udpAddr) {
+func assertIp4InArray(t *testing.T, have []*Ip4AndPort, want ...*udp.Addr) {
 	assert.Len(t, have, len(want))
 	for k, w := range want {
 		if !(have[k].Ip == uint32(iputil.Ip2VpnIp(w.IP)) && have[k].Port == uint32(w.Port)) {
@@ -369,7 +370,7 @@ func assertIp4InArray(t *testing.T, have []*Ip4AndPort, want ...*udpAddr) {
 }
 
 // assertUdpAddrInArray asserts every address in want is at the same position in have and that the lengths match
-func assertUdpAddrInArray(t *testing.T, have []*udpAddr, want ...*udpAddr) {
+func assertUdpAddrInArray(t *testing.T, have []*udp.Addr, want ...*udp.Addr) {
 	assert.Len(t, have, len(want))
 	for k, w := range want {
 		if !(have[k].IP.Equal(w.IP) && have[k].Port == w.Port) {
@@ -378,8 +379,8 @@ func assertUdpAddrInArray(t *testing.T, have []*udpAddr, want ...*udpAddr) {
 	}
 }
 
-func translateV4toUdpAddr(ips []*Ip4AndPort) []*udpAddr {
-	addrs := make([]*udpAddr, len(ips))
+func translateV4toUdpAddr(ips []*Ip4AndPort) []*udp.Addr {
+	addrs := make([]*udp.Addr, len(ips))
 	for k, v := range ips {
 		addrs[k] = NewUDPAddrFromLH4(v)
 	}
