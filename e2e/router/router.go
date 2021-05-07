@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/slackhq/nebula"
+	"github.com/slackhq/nebula/header"
 )
 
 type R struct {
@@ -118,7 +119,7 @@ func (r *R) RouteUntilTxTun(sender *nebula.Control, receiver *nebula.Control) []
 //   - routeAndExit: this call will return immediately after routing the last packet from sender
 //   - keepRouting: the packet will be routed and whatDo will be called again on the next packet from sender
 func (r *R) RouteExitFunc(sender *nebula.Control, whatDo ExitFunc) {
-	h := &nebula.Header{}
+	h := &header.H{}
 	for {
 		p := sender.GetFromUDP(true)
 		r.Lock()
@@ -158,8 +159,8 @@ func (r *R) RouteExitFunc(sender *nebula.Control, whatDo ExitFunc) {
 
 // RouteUntilAfterMsgType will route for sender until a message type is seen and sent from sender
 // If the router doesn't have the nebula controller for that address, we panic
-func (r *R) RouteUntilAfterMsgType(sender *nebula.Control, msgType nebula.NebulaMessageType, subType nebula.NebulaMessageSubType) {
-	h := &nebula.Header{}
+func (r *R) RouteUntilAfterMsgType(sender *nebula.Control, msgType header.MessageType, subType header.MessageSubType) {
+	h := &header.H{}
 	r.RouteExitFunc(sender, func(p *nebula.UdpPacket, r *nebula.Control) ExitType {
 		if err := h.Parse(p.Data); err != nil {
 			panic(err)

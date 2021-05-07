@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 )
 
@@ -194,7 +195,7 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 
 		if hostinfo != nil && hostinfo.ConnectionState != nil {
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
-			n.intf.SendMessageToVpnIp(test, testRequest, vpnIp, p, nb, out)
+			n.intf.SendMessageToVpnIp(header.Test, header.TestRequest, vpnIp, p, nb, out)
 
 		} else {
 			hostinfo.logger(n.l).Debugf("Hostinfo sadness: %s", vpnIp)

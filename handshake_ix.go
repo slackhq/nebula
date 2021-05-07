@@ -6,6 +6,7 @@ import (
 
 	"github.com/flynn/noise"
 	"github.com/golang/protobuf/proto"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 )
 
@@ -49,10 +50,10 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 		return
 	}
 
-	header := HeaderEncode(make([]byte, HeaderLen), Version, uint8(handshake), handshakeIXPSK0, 0, 1)
+	h := header.Encode(make([]byte, header.Len), header.Version, header.Handshake, header.HandshakeIXPSK0, 0, 1)
 	atomic.AddUint64(&ci.atomicMessageCounter, 1)
 
-	msg, _, _, err := ci.H.WriteMessage(header, hsBytes)
+	msg, _, _, err := ci.H.WriteMessage(h, hsBytes)
 	if err != nil {
 		f.l.WithError(err).WithField("vpnIp", vpnIp).
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to call noise.WriteMessage")
@@ -68,12 +69,12 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 	hostinfo.handshakeStart = time.Now()
 }
 
-func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
+func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *header.H) {
 	ci := f.newConnectionState(f.l, false, noise.HandshakeIX, []byte{}, 0)
 	// Mark packet 1 as seen so it doesn't show up as missed
 	ci.window.Update(f.l, 1)
 
-	msg, _, _, err := ci.H.ReadMessage(nil, packet[HeaderLen:])
+	msg, _, _, err := ci.H.ReadMessage(nil, packet[header.Len:])
 	if err != nil {
 		f.l.WithError(err).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.ReadMessage")
@@ -152,8 +153,8 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 		return
 	}
 
-	header := HeaderEncode(make([]byte, HeaderLen), Version, uint8(handshake), handshakeIXPSK0, hs.Details.InitiatorIndex, 2)
-	msg, dKey, eKey, err := ci.H.WriteMessage(header, hsBytes)
+	nh := header.Encode(make([]byte, header.Len), header.Version, header.Handshake, header.HandshakeIXPSK0, hs.Details.InitiatorIndex, 2)
+	msg, dKey, eKey, err := ci.H.WriteMessage(nh, hsBytes)
 	if err != nil {
 		f.l.WithError(err).WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).
 			WithField("certName", certName).
@@ -168,8 +169,8 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 		return
 	}
 
-	hostinfo.HandshakePacket[0] = make([]byte, len(packet[HeaderLen:]))
-	copy(hostinfo.HandshakePacket[0], packet[HeaderLen:])
+	hostinfo.HandshakePacket[0] = make([]byte, len(packet[header.Len:]))
+	copy(hostinfo.HandshakePacket[0], packet[header.Len:])
 
 	// Regardless of whether you are the sender or receiver, you should arrive here
 	// and complete standing up the connection.
@@ -195,7 +196,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 		switch err {
 		case ErrAlreadySeen:
 			msg = existing.HandshakePacket[2]
-			f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
+			f.messageMetrics.Tx(header.Handshake, header.MessageSubType(msg[1]), 1)
 			err := f.outside.WriteTo(msg, addr)
 			if err != nil {
 				f.l.WithField("vpnIp", existing.vpnIp).WithField("udpAddr", addr).
@@ -219,7 +220,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 				Info("Handshake too old")
 
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
-			f.SendMessageToVpnIp(test, testRequest, vpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			f.SendMessageToVpnIp(header.Test, header.TestRequest, vpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 			return
 		case ErrLocalIndexCollision:
 			// This means we failed to insert because of collision on localIndexId. Just let the next handshake packet retry
@@ -254,7 +255,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 	}
 
 	// Do the send
-	f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
+	f.messageMetrics.Tx(header.Handshake, header.MessageSubType(msg[1]), 1)
 	err = f.outside.WriteTo(msg, addr)
 	if err != nil {
 		f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).
@@ -278,7 +279,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 	return
 }
 
-func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet []byte, h *Header) bool {
+func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet []byte, h *header.H) bool {
 	if hostinfo == nil {
 		// Nothing here to tear down, got a bogus stage 2 packet
 		return true
@@ -299,7 +300,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		return false
 	}
 
-	msg, eKey, dKey, err := ci.H.ReadMessage(nil, packet[HeaderLen:])
+	msg, eKey, dKey, err := ci.H.ReadMessage(nil, packet[header.Len:])
 	if err != nil {
 		f.l.WithError(err).WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("header", h).
