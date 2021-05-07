@@ -12,6 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/iputil"
 )
 
@@ -204,7 +205,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
-	fwPacket := &FirewallPacket{}
+	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
 	conntrackCache := NewConntrackCacheTicker(f.conntrackCacheTimeout)

@@ -10,6 +10,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"golang.org/x/net/ipv4"
@@ -19,7 +20,7 @@ const (
 	minFwPacketLen = 4
 )
 
-func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte, h *header.H, fwPacket *FirewallPacket, lhh *LightHouseHandler, nb []byte, q int, localCache ConntrackCache) {
+func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhh *LightHouseHandler, nb []byte, q int, localCache ConntrackCache) {
 	err := h.Parse(packet)
 	if err != nil {
 		// TODO: best if we return this and let caller log
@@ -189,7 +190,7 @@ func (f *Interface) handleEncrypted(ci *ConnectionState, addr *udpAddr, h *heade
 }
 
 // newPacket validates and parses the interesting bits for the firewall out of the ip and sub protocol headers
-func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
+func newPacket(data []byte, incoming bool, fp *firewall.Packet) error {
 	// Do we at least have an ipv4 header worth of data?
 	if len(data) < ipv4.HeaderLen {
 		return fmt.Errorf("packet is less than %v bytes", ipv4.HeaderLen)
@@ -217,7 +218,7 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 
 	// Accounting for a variable header length, do we have enough data for our src/dst tuples?
 	minLen := ihl
-	if !fp.Fragment && fp.Protocol != fwProtoICMP {
+	if !fp.Fragment && fp.Protocol != firewall.ProtoICMP {
 		minLen += minFwPacketLen
 	}
 	if len(data) < minLen {
@@ -228,7 +229,7 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 	if incoming {
 		fp.RemoteIP = iputil.Ip2VpnIp(data[12:16])
 		fp.LocalIP = iputil.Ip2VpnIp(data[16:20])
-		if fp.Fragment || fp.Protocol == fwProtoICMP {
+		if fp.Fragment || fp.Protocol == firewall.ProtoICMP {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
 		} else {
@@ -238,7 +239,7 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 	} else {
 		fp.LocalIP = iputil.Ip2VpnIp(data[12:16])
 		fp.RemoteIP = iputil.Ip2VpnIp(data[16:20])
-		if fp.Fragment || fp.Protocol == fwProtoICMP {
+		if fp.Fragment || fp.Protocol == firewall.ProtoICMP {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
 		} else {
@@ -266,7 +267,7 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	return out, nil
 }
 
-func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *FirewallPacket, nb []byte, q int, localCache ConntrackCache) {
+func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache ConntrackCache) {
 	var err error
 
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], messageCounter, nb)
