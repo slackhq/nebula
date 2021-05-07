@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -20,17 +19,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/iputil"
-)
-
-const (
-	fwProtoAny  = 0 // When we want to handle HOPOPT (0) we can change this, if ever
-	fwProtoTCP  = 6
-	fwProtoUDP  = 17
-	fwProtoICMP = 1
-
-	fwPortAny      = 0  // Special value for matching `port: any`
-	fwPortFragment = -1 // Special value for matching `port: fragment`
+	"github.com/slackhq/nebula/firewall"
 )
 
 const tcpACK = 0x10
@@ -88,7 +77,7 @@ type firewallMetrics struct {
 type FirewallConntrack struct {
 	sync.Mutex
 
-	Conns      map[FirewallPacket]*conn
+	Conns      map[firewall.Packet]*conn
 	TimerWheel *TimerWheel
 }
 
@@ -126,48 +115,6 @@ type FirewallRule struct {
 // Plus we can use `-1` for fragment rules
 type firewallPort map[int32]*FirewallCA
 
-type FirewallPacket struct {
-	LocalIP    iputil.VpnIp
-	RemoteIP   iputil.VpnIp
-	LocalPort  uint16
-	RemotePort uint16
-	Protocol   uint8
-	Fragment   bool
-}
-
-func (fp *FirewallPacket) Copy() *FirewallPacket {
-	return &FirewallPacket{
-		LocalIP:    fp.LocalIP,
-		RemoteIP:   fp.RemoteIP,
-		LocalPort:  fp.LocalPort,
-		RemotePort: fp.RemotePort,
-		Protocol:   fp.Protocol,
-		Fragment:   fp.Fragment,
-	}
-}
-
-func (fp FirewallPacket) MarshalJSON() ([]byte, error) {
-	var proto string
-	switch fp.Protocol {
-	case fwProtoTCP:
-		proto = "tcp"
-	case fwProtoICMP:
-		proto = "icmp"
-	case fwProtoUDP:
-		proto = "udp"
-	default:
-		proto = fmt.Sprintf("unknown %v", fp.Protocol)
-	}
-	return json.Marshal(m{
-		"LocalIP":    fp.LocalIP.String(),
-		"RemoteIP":   fp.RemoteIP.String(),
-		"LocalPort":  fp.LocalPort,
-		"RemotePort": fp.RemotePort,
-		"Protocol":   proto,
-		"Fragment":   fp.Fragment,
-	})
-}
-
 // NewFirewall creates a new Firewall object. A TimerWheel is created for you from the provided timeouts.
 func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Duration, c *cert.NebulaCertificate) *Firewall {
 	//TODO: error on 0 duration
@@ -198,7 +145,7 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 
 	return &Firewall{
 		Conntrack: &FirewallConntrack{
-			Conns:      make(map[FirewallPacket]*conn),
+			Conns:      make(map[firewall.Packet]*conn),
 			TimerWheel: NewTimerWheel(min, max),
 		},
 		InRules:        newFirewallTable(),
@@ -281,13 +228,13 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 	}
 
 	switch proto {
-	case fwProtoTCP:
+	case firewall.ProtoTCP:
 		fp = ft.TCP
-	case fwProtoUDP:
+	case firewall.ProtoUDP:
 		fp = ft.UDP
-	case fwProtoICMP:
+	case firewall.ProtoICMP:
 		fp = ft.ICMP
-	case fwProtoAny:
+	case firewall.ProtoAny:
 		fp = ft.AnyProto
 	default:
 		return fmt.Errorf("unknown protocol %v", proto)
@@ -365,13 +312,13 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 		var proto uint8
 		switch r.Proto {
 		case "any":
-			proto = fwProtoAny
+			proto = firewall.ProtoAny
 		case "tcp":
-			proto = fwProtoTCP
+			proto = firewall.ProtoTCP
 		case "udp":
-			proto = fwProtoUDP
+			proto = firewall.ProtoUDP
 		case "icmp":
-			proto = fwProtoICMP
+			proto = firewall.ProtoICMP
 		default:
 			return fmt.Errorf("%s rule #%v; proto was not understood; `%s`", table, i, r.Proto)
 		}
@@ -399,7 +346,7 @@ var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
 // Drop returns an error if the packet should be dropped, explaining why. It
 // returns nil if the packet should not be dropped.
-func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool, localCache ConntrackCache) error {
+func (f *Firewall) Drop(packet []byte, fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool, localCache ConntrackCache) error {
 	// Check if we spoke to this tuple, if we did then allow this packet
 	if f.inConns(packet, fp, incoming, h, caPool, localCache) {
 		return nil
@@ -465,7 +412,7 @@ func (f *Firewall) EmitStats() {
 	metrics.GetOrRegisterGauge("firewall.rules.version", nil).Update(int64(f.rulesVersion))
 }
 
-func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool, localCache ConntrackCache) bool {
+func (f *Firewall) inConns(packet []byte, fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool, localCache ConntrackCache) bool {
 	if localCache != nil {
 		if _, ok := localCache[fp]; ok {
 			return true
@@ -523,14 +470,14 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 	}
 
 	switch fp.Protocol {
-	case fwProtoTCP:
+	case firewall.ProtoTCP:
 		c.Expires = time.Now().Add(f.TCPTimeout)
 		if incoming {
 			f.checkTCPRTT(c, packet)
 		} else {
 			setTCPRTTTracking(c, packet)
 		}
-	case fwProtoUDP:
+	case firewall.ProtoUDP:
 		c.Expires = time.Now().Add(f.UDPTimeout)
 	default:
 		c.Expires = time.Now().Add(f.DefaultTimeout)
@@ -545,17 +492,17 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 	return true
 }
 
-func (f *Firewall) addConn(packet []byte, fp FirewallPacket, incoming bool) {
+func (f *Firewall) addConn(packet []byte, fp firewall.Packet, incoming bool) {
 	var timeout time.Duration
 	c := &conn{}
 
 	switch fp.Protocol {
-	case fwProtoTCP:
+	case firewall.ProtoTCP:
 		timeout = f.TCPTimeout
 		if !incoming {
 			setTCPRTTTracking(c, packet)
 		}
-	case fwProtoUDP:
+	case firewall.ProtoUDP:
 		timeout = f.UDPTimeout
 	default:
 		timeout = f.DefaultTimeout
@@ -578,7 +525,7 @@ func (f *Firewall) addConn(packet []byte, fp FirewallPacket, incoming bool) {
 
 // Evict checks if a conntrack entry has expired, if so it is removed, if not it is re-added to the wheel
 // Caller must own the connMutex lock!
-func (f *Firewall) evict(p FirewallPacket) {
+func (f *Firewall) evict(p firewall.Packet) {
 	//TODO: report a stat if the tcp rtt tracking was never resolved?
 	// Are we still tracking this conn?
 	conntrack := f.Conntrack
@@ -599,21 +546,21 @@ func (f *Firewall) evict(p FirewallPacket) {
 	delete(conntrack.Conns, p)
 }
 
-func (ft *FirewallTable) match(p FirewallPacket, incoming bool, c *cert.NebulaCertificate, caPool *cert.NebulaCAPool) bool {
+func (ft *FirewallTable) match(p firewall.Packet, incoming bool, c *cert.NebulaCertificate, caPool *cert.NebulaCAPool) bool {
 	if ft.AnyProto.match(p, incoming, c, caPool) {
 		return true
 	}
 
 	switch p.Protocol {
-	case fwProtoTCP:
+	case firewall.ProtoTCP:
 		if ft.TCP.match(p, incoming, c, caPool) {
 			return true
 		}
-	case fwProtoUDP:
+	case firewall.ProtoUDP:
 		if ft.UDP.match(p, incoming, c, caPool) {
 			return true
 		}
-	case fwProtoICMP:
+	case firewall.ProtoICMP:
 		if ft.ICMP.match(p, incoming, c, caPool) {
 			return true
 		}
@@ -643,7 +590,7 @@ func (fp firewallPort) addRule(startPort int32, endPort int32, groups []string, 
 	return nil
 }
 
-func (fp firewallPort) match(p FirewallPacket, incoming bool, c *cert.NebulaCertificate, caPool *cert.NebulaCAPool) bool {
+func (fp firewallPort) match(p firewall.Packet, incoming bool, c *cert.NebulaCertificate, caPool *cert.NebulaCAPool) bool {
 	// We don't have any allowed ports, bail
 	if fp == nil {
 		return false
@@ -652,7 +599,7 @@ func (fp firewallPort) match(p FirewallPacket, incoming bool, c *cert.NebulaCert
 	var port int32
 
 	if p.Fragment {
-		port = fwPortFragment
+		port = firewall.PortFragment
 	} else if incoming {
 		port = int32(p.LocalPort)
 	} else {
@@ -663,7 +610,7 @@ func (fp firewallPort) match(p FirewallPacket, incoming bool, c *cert.NebulaCert
 		return true
 	}
 
-	return fp[fwPortAny].match(p, c, caPool)
+	return fp[firewall.PortAny].match(p, c, caPool)
 }
 
 func (fc *FirewallCA) addRule(groups []string, host string, ip *net.IPNet, caName, caSha string) error {
@@ -706,7 +653,7 @@ func (fc *FirewallCA) addRule(groups []string, host string, ip *net.IPNet, caNam
 	return nil
 }
 
-func (fc *FirewallCA) match(p FirewallPacket, c *cert.NebulaCertificate, caPool *cert.NebulaCAPool) bool {
+func (fc *FirewallCA) match(p firewall.Packet, c *cert.NebulaCertificate, caPool *cert.NebulaCAPool) bool {
 	if fc == nil {
 		return false
 	}
@@ -779,7 +726,7 @@ func (fr *FirewallRule) isAny(groups []string, host string, ip *net.IPNet) bool 
 	return false
 }
 
-func (fr *FirewallRule) match(p FirewallPacket, c *cert.NebulaCertificate) bool {
+func (fr *FirewallRule) match(p firewall.Packet, c *cert.NebulaCertificate) bool {
 	if fr == nil {
 		return false
 	}
@@ -888,12 +835,12 @@ func convertRule(l *logrus.Logger, p interface{}, table string, i int) (rule, er
 
 func parsePort(s string) (startPort, endPort int32, err error) {
 	if s == "any" {
-		startPort = fwPortAny
-		endPort = fwPortAny
+		startPort = firewall.PortAny
+		endPort = firewall.PortAny
 
 	} else if s == "fragment" {
-		startPort = fwPortFragment
-		endPort = fwPortFragment
+		startPort = firewall.PortFragment
+		endPort = firewall.PortFragment
 
 	} else if strings.Contains(s, `-`) {
 		sPorts := strings.SplitN(s, `-`, 2)
@@ -917,8 +864,8 @@ func parsePort(s string) (startPort, endPort int32, err error) {
 		startPort = int32(rStartPort)
 		endPort = int32(rEndPort)
 
-		if startPort == fwPortAny {
-			endPort = fwPortAny
+		if startPort == firewall.PortAny {
+			endPort = firewall.PortAny
 		}
 
 	} else {
@@ -974,7 +921,7 @@ func (f *Firewall) checkTCPRTT(c *conn, p []byte) bool {
 
 // ConntrackCache is used as a local routine cache to know if a given flow
 // has been seen in the conntrack table.
-type ConntrackCache map[FirewallPacket]struct{}
+type ConntrackCache map[firewall.Packet]struct{}
 
 type ConntrackCacheTicker struct {
 	cacheV    uint64

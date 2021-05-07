@@ -13,6 +13,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"golang.org/x/sys/unix"
 )
@@ -120,7 +121,7 @@ func (u *udpConn) LocalAddr() (*udpAddr, error) {
 func (u *udpConn) ListenOut(f *Interface, q int) {
 	plaintext := make([]byte, mtu)
 	h := &header.H{}
-	fwPacket := &FirewallPacket{}
+	fwPacket := &firewall.Packet{}
 	udpAddr := &udpAddr{}
 	nb := make([]byte, 12, 12)
 
