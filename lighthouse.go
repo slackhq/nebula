@@ -195,18 +195,18 @@ func (lh *LightHouse) queryAndPrepMessage(vpnIp iputil.VpnIp, f func(*cache) (in
 	return false, 0, nil
 }
 
-func (lh *LightHouse) DeleteVpnIP(vpnIP iputil.VpnIp) {
+func (lh *LightHouse) DeleteVpnIp(vpnIp iputil.VpnIp) {
 	// First we check the static mapping
 	// and do nothing if it is there
-	if _, ok := lh.staticList[vpnIP]; ok {
+	if _, ok := lh.staticList[vpnIp]; ok {
 		return
 	}
 	lh.Lock()
 	//l.Debugln(lh.addrMap)
-	delete(lh.addrMap, vpnIP)
+	delete(lh.addrMap, vpnIp)
 
 	if lh.l.Level >= logrus.DebugLevel {
-		lh.l.Debugf("deleting %s from lighthouse.", vpnIP)
+		lh.l.Debugf("deleting %s from lighthouse.", vpnIp)
 	}
 
 	lh.Unlock()
@@ -242,11 +242,11 @@ func (lh *LightHouse) AddStaticRemote(vpnIp iputil.VpnIp, toAddr *udpAddr) {
 }
 
 // unlockedGetRemoteList assumes you have the lh lock
-func (lh *LightHouse) unlockedGetRemoteList(vpnIP iputil.VpnIp) *RemoteList {
-	am, ok := lh.addrMap[vpnIP]
+func (lh *LightHouse) unlockedGetRemoteList(vpnIp iputil.VpnIp) *RemoteList {
+	am, ok := lh.addrMap[vpnIp]
 	if !ok {
 		am = NewRemoteList()
-		lh.addrMap[vpnIP] = am
+		lh.addrMap[vpnIp] = am
 	}
 	return am
 }
@@ -288,8 +288,8 @@ func lhIp6ToIp(v *Ip6AndPort) net.IP {
 	return ip
 }
 
-func (lh *LightHouse) IsLighthouseIP(vpnIP iputil.VpnIp) bool {
-	if _, ok := lh.lighthouses[vpnIP]; ok {
+func (lh *LightHouse) IsLighthouseIP(vpnIp iputil.VpnIp) bool {
+	if _, ok := lh.lighthouses[vpnIp]; ok {
 		return true
 	}
 	return false
@@ -473,12 +473,12 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp,
 	}
 
 	//TODO: we can DRY this further
-	reqVpnIP := n.Details.VpnIp
+	reqVpnIp := n.Details.VpnIp
 	//TODO: Maybe instead of marshalling into n we marshal into a new `r` to not nuke our current request data
 	found, ln, err := lhh.lh.queryAndPrepMessage(iputil.VpnIp(n.Details.VpnIp), func(c *cache) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostQueryReply
-		n.Details.VpnIp = reqVpnIP
+		n.Details.VpnIp = reqVpnIp
 
 		lhh.coalesceAnswers(c, n)
 
@@ -518,7 +518,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp,
 	}
 
 	lhh.lh.metricTx(NebulaMeta_HostPunchNotification, 1)
-	w.SendMessageToVpnIp(lightHouse, 0, iputil.VpnIp(reqVpnIP), lhh.pb[:ln], lhh.nb, lhh.out[:0])
+	w.SendMessageToVpnIp(lightHouse, 0, iputil.VpnIp(reqVpnIp), lhh.pb[:ln], lhh.nb, lhh.out[:0])
 }
 
 func (lhh *LightHouseHandler) coalesceAnswers(c *cache, n *NebulaMeta) {

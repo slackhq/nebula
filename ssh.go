@@ -352,7 +352,7 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 
 	hm := listHostMap(hostMap)
 	sort.Slice(hm, func(i, j int) bool {
-		return bytes.Compare(hm[i].VpnIP, hm[j].VpnIP) < 0
+		return bytes.Compare(hm[i].VpnIp, hm[j].VpnIp) < 0
 	})
 
 	if fs.Json || fs.Pretty {
@@ -369,7 +369,7 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 
 	} else {
 		for _, v := range hm {
-			err := w.WriteLine(fmt.Sprintf("%s: %s", v.VpnIP, v.RemoteAddrs))
+			err := w.WriteLine(fmt.Sprintf("%s: %s", v.VpnIp, v.RemoteAddrs))
 			if err != nil {
 				return err
 			}
@@ -387,7 +387,7 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 	}
 
 	type lighthouseInfo struct {
-		VpnIP string    `json:"vpnIp"`
+		VpnIp string    `json:"vpnIp"`
 		Addrs *CacheMap `json:"addrs"`
 	}
 
@@ -396,7 +396,7 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 	x := 0
 	for k, v := range lightHouse.addrMap {
 		addrMap[x] = lighthouseInfo{
-			VpnIP: k.String(),
+			VpnIp: k.String(),
 			Addrs: v.CopyCache(),
 		}
 		x++
@@ -404,7 +404,7 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 	lightHouse.RUnlock()
 
 	sort.Slice(addrMap, func(i, j int) bool {
-		return strings.Compare(addrMap[i].VpnIP, addrMap[j].VpnIP) < 0
+		return strings.Compare(addrMap[i].VpnIp, addrMap[j].VpnIp) < 0
 	})
 
 	if fs.Json || fs.Pretty {
@@ -425,7 +425,7 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 			if err != nil {
 				return err
 			}
-			err = w.WriteLine(fmt.Sprintf("%s: %s", v.VpnIP, string(b)))
+			err = w.WriteLine(fmt.Sprintf("%s: %s", v.VpnIp, string(b)))
 			if err != nil {
 				return err
 			}
@@ -505,7 +505,7 @@ func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	hostInfo, err := ifce.hostMap.QueryVpnIP(vpnIp)
+	hostInfo, err := ifce.hostMap.QueryVpnIp(vpnIp)
 	if err != nil {
 		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn ip: %v", a[0]))
 	}
@@ -548,12 +548,12 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	hostInfo, _ := ifce.hostMap.QueryVpnIP(vpnIp)
+	hostInfo, _ := ifce.hostMap.QueryVpnIp(vpnIp)
 	if hostInfo != nil {
 		return w.WriteLine(fmt.Sprintf("Tunnel already exists"))
 	}
 
-	hostInfo, _ = ifce.handshakeManager.pendingHostMap.QueryVpnIP(vpnIp)
+	hostInfo, _ = ifce.handshakeManager.pendingHostMap.QueryVpnIp(vpnIp)
 	if hostInfo != nil {
 		return w.WriteLine(fmt.Sprintf("Tunnel already handshaking"))
 	}
@@ -566,7 +566,7 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		}
 	}
 
-	hostInfo = ifce.handshakeManager.AddVpnIP(vpnIp)
+	hostInfo = ifce.handshakeManager.AddVpnIp(vpnIp)
 	if addr != nil {
 		hostInfo.SetRemote(addr)
 	}
@@ -605,7 +605,7 @@ func sshChangeRemote(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	hostInfo, err := ifce.hostMap.QueryVpnIP(vpnIp)
+	hostInfo, err := ifce.hostMap.QueryVpnIp(vpnIp)
 	if err != nil {
 		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn ip: %v", a[0]))
 	}
@@ -686,7 +686,7 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 			return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 		}
 
-		hostInfo, err := ifce.hostMap.QueryVpnIP(vpnIp)
+		hostInfo, err := ifce.hostMap.QueryVpnIp(vpnIp)
 		if err != nil {
 			return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn ip: %v", a[0]))
 		}
@@ -748,7 +748,7 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	hostInfo, err := ifce.hostMap.QueryVpnIP(vpnIp)
+	hostInfo, err := ifce.hostMap.QueryVpnIp(vpnIp)
 	if err != nil {
 		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn ip: %v", a[0]))
 	}

@@ -138,7 +138,7 @@ func (f *Interface) closeTunnel(hostInfo *HostInfo, hasHostMapLock bool) {
 	//TODO: this would be better as a single function in ConnectionManager that handled locks appropriately
 	f.connectionManager.ClearIP(hostInfo.vpnIp)
 	f.connectionManager.ClearPendingDeletion(hostInfo.vpnIp)
-	f.lightHouse.DeleteVpnIP(hostInfo.vpnIp)
+	f.lightHouse.DeleteVpnIp(hostInfo.vpnIp)
 
 	if hasHostMapLock {
 		f.hostMap.unlockedDeleteHostInfo(hostInfo)

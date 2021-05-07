@@ -74,13 +74,13 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 			return nil
 		}
 	}
-	hostinfo, err := f.hostMap.PromoteBestQueryVpnIP(vpnIp, f)
+	hostinfo, err := f.hostMap.PromoteBestQueryVpnIp(vpnIp, f)
 
 	//if err != nil || hostinfo.ConnectionState == nil {
 	if err != nil {
-		hostinfo, err = f.handshakeManager.pendingHostMap.QueryVpnIP(vpnIp)
+		hostinfo, err = f.handshakeManager.pendingHostMap.QueryVpnIp(vpnIp)
 		if err != nil {
-			hostinfo = f.handshakeManager.AddVpnIP(vpnIp)
+			hostinfo = f.handshakeManager.AddVpnIp(vpnIp)
 		}
 	}
 	ci := hostinfo.ConnectionState

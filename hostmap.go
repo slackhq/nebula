@@ -113,7 +113,7 @@ func (hm *HostMap) EmitStats(name string) {
 	metrics.GetOrRegisterGauge("hostmap."+name+".remoteIndexes", nil).Update(int64(remoteIndexLen))
 }
 
-func (hm *HostMap) GetIndexByVpnIP(vpnIp iputil.VpnIp) (uint32, error) {
+func (hm *HostMap) GetIndexByVpnIp(vpnIp iputil.VpnIp) (uint32, error) {
 	hm.RLock()
 	if i, ok := hm.Hosts[vpnIp]; ok {
 		index := i.localIndexId
@@ -130,7 +130,7 @@ func (hm *HostMap) Add(ip iputil.VpnIp, hostinfo *HostInfo) {
 	hm.Unlock()
 }
 
-func (hm *HostMap) AddVpnIP(vpnIp iputil.VpnIp) *HostInfo {
+func (hm *HostMap) AddVpnIp(vpnIp iputil.VpnIp) *HostInfo {
 	h := &HostInfo{}
 	hm.RLock()
 	if _, ok := hm.Hosts[vpnIp]; !ok {
@@ -151,7 +151,7 @@ func (hm *HostMap) AddVpnIP(vpnIp iputil.VpnIp) *HostInfo {
 	}
 }
 
-func (hm *HostMap) DeleteVpnIP(vpnIp iputil.VpnIp) {
+func (hm *HostMap) DeleteVpnIp(vpnIp iputil.VpnIp) {
 	hm.Lock()
 	delete(hm.Hosts, vpnIp)
 	if len(hm.Hosts) == 0 {
@@ -179,7 +179,7 @@ func (hm *HostMap) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
 	}
 }
 
-func (hm *HostMap) AddVpnIPHostInfo(vpnIp iputil.VpnIp, h *HostInfo) {
+func (hm *HostMap) AddVpnIpHostInfo(vpnIp iputil.VpnIp, h *HostInfo) {
 	hm.Lock()
 	h.vpnIp = vpnIp
 	hm.Hosts[vpnIp] = h
@@ -301,17 +301,17 @@ func (hm *HostMap) QueryReverseIndex(index uint32) (*HostInfo, error) {
 	}
 }
 
-func (hm *HostMap) QueryVpnIP(vpnIp iputil.VpnIp) (*HostInfo, error) {
-	return hm.queryVpnIP(vpnIp, nil)
+func (hm *HostMap) QueryVpnIp(vpnIp iputil.VpnIp) (*HostInfo, error) {
+	return hm.queryVpnIp(vpnIp, nil)
 }
 
-// PromoteBestQueryVpnIP will attempt to lazily switch to the best remote every
+// PromoteBestQueryVpnIp will attempt to lazily switch to the best remote every
 // `PromoteEvery` calls to this function for a given host.
-func (hm *HostMap) PromoteBestQueryVpnIP(vpnIp iputil.VpnIp, ifce *Interface) (*HostInfo, error) {
-	return hm.queryVpnIP(vpnIp, ifce)
+func (hm *HostMap) PromoteBestQueryVpnIp(vpnIp iputil.VpnIp, ifce *Interface) (*HostInfo, error) {
+	return hm.queryVpnIp(vpnIp, ifce)
 }
 
-func (hm *HostMap) queryVpnIP(vpnIp iputil.VpnIp, promoteIfce *Interface) (*HostInfo, error) {
+func (hm *HostMap) queryVpnIp(vpnIp iputil.VpnIp, promoteIfce *Interface) (*HostInfo, error) {
 	hm.RLock()
 	if h, ok := hm.Hosts[vpnIp]; ok {
 		hm.RUnlock()

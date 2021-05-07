@@ -87,9 +87,9 @@ func (n *connectionManager) Out(ip iputil.VpnIp) {
 	n.outLock.Unlock()
 }
 
-func (n *connectionManager) CheckIn(vpnIP iputil.VpnIp) bool {
+func (n *connectionManager) CheckIn(vpnIp iputil.VpnIp) bool {
 	n.inLock.RLock()
-	if _, ok := n.in[vpnIP]; ok {
+	if _, ok := n.in[vpnIp]; ok {
 		n.inLock.RUnlock()
 		return true
 	}
@@ -134,8 +134,8 @@ func (n *connectionManager) checkPendingDeletion(ip iputil.VpnIp) bool {
 	return false
 }
 
-func (n *connectionManager) AddTrafficWatch(vpnIP iputil.VpnIp, seconds int) {
-	n.TrafficTimer.Add(vpnIP, time.Second*time.Duration(seconds))
+func (n *connectionManager) AddTrafficWatch(vpnIp iputil.VpnIp, seconds int) {
+	n.TrafficTimer.Add(vpnIp, time.Second*time.Duration(seconds))
 }
 
 func (n *connectionManager) Start() {
@@ -162,29 +162,29 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 			break
 		}
 
-		vpnIP := ep.(iputil.VpnIp)
+		vpnIp := ep.(iputil.VpnIp)
 
 		// Check for traffic coming back in from this host.
-		traf := n.CheckIn(vpnIP)
+		traf := n.CheckIn(vpnIp)
 
 		// If we saw incoming packets from this ip, just return
 		if traf {
 			if n.l.Level >= logrus.DebugLevel {
-				n.l.WithField("vpnIp", vpnIP).
+				n.l.WithField("vpnIp", vpnIp).
 					WithField("tunnelCheck", m{"state": "alive", "method": "passive"}).
 					Debug("Tunnel status")
 			}
-			n.ClearIP(vpnIP)
-			n.ClearPendingDeletion(vpnIP)
+			n.ClearIP(vpnIp)
+			n.ClearPendingDeletion(vpnIp)
 			continue
 		}
 
 		// If we didn't we may need to probe or destroy the conn
-		hostinfo, err := n.hostMap.QueryVpnIP(vpnIP)
+		hostinfo, err := n.hostMap.QueryVpnIp(vpnIp)
 		if err != nil {
-			n.l.Debugf("Not found in hostmap: %s", vpnIP)
-			n.ClearIP(vpnIP)
-			n.ClearPendingDeletion(vpnIP)
+			n.l.Debugf("Not found in hostmap: %s", vpnIp)
+			n.ClearIP(vpnIp)
+			n.ClearPendingDeletion(vpnIp)
 			continue
 		}
 
@@ -194,12 +194,12 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 
 		if hostinfo != nil && hostinfo.ConnectionState != nil {
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
-			n.intf.SendMessageToVpnIp(test, testRequest, vpnIP, p, nb, out)
+			n.intf.SendMessageToVpnIp(test, testRequest, vpnIp, p, nb, out)
 
 		} else {
-			hostinfo.logger(n.l).Debugf("Hostinfo sadness: %s", vpnIP)
+			hostinfo.logger(n.l).Debugf("Hostinfo sadness: %s", vpnIp)
 		}
-		n.AddPendingDeletion(vpnIP)
+		n.AddPendingDeletion(vpnIp)
 	}
 
 }
@@ -212,29 +212,29 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 			break
 		}
 
-		vpnIP := ep.(iputil.VpnIp)
+		vpnIp := ep.(iputil.VpnIp)
 
 		// If we saw incoming packets from this ip, just return
-		traf := n.CheckIn(vpnIP)
+		traf := n.CheckIn(vpnIp)
 		if traf {
-			n.l.WithField("vpnIp", vpnIP).
+			n.l.WithField("vpnIp", vpnIp).
 				WithField("tunnelCheck", m{"state": "alive", "method": "active"}).
 				Debug("Tunnel status")
-			n.ClearIP(vpnIP)
-			n.ClearPendingDeletion(vpnIP)
+			n.ClearIP(vpnIp)
+			n.ClearPendingDeletion(vpnIp)
 			continue
 		}
 
-		hostinfo, err := n.hostMap.QueryVpnIP(vpnIP)
+		hostinfo, err := n.hostMap.QueryVpnIp(vpnIp)
 		if err != nil {
-			n.ClearIP(vpnIP)
-			n.ClearPendingDeletion(vpnIP)
-			n.l.Debugf("Not found in hostmap: %s", vpnIP)
+			n.ClearIP(vpnIp)
+			n.ClearPendingDeletion(vpnIp)
+			n.l.Debugf("Not found in hostmap: %s", vpnIp)
 			continue
 		}
 
 		// If it comes around on deletion wheel and hasn't resolved itself, delete
-		if n.checkPendingDeletion(vpnIP) {
+		if n.checkPendingDeletion(vpnIp) {
 			cn := ""
 			if hostinfo.ConnectionState != nil && hostinfo.ConnectionState.peerCert != nil {
 				cn = hostinfo.ConnectionState.peerCert.Details.Name
@@ -244,16 +244,16 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 				WithField("certName", cn).
 				Info("Tunnel status")
 
-			n.ClearIP(vpnIP)
-			n.ClearPendingDeletion(vpnIP)
+			n.ClearIP(vpnIp)
+			n.ClearPendingDeletion(vpnIp)
 			// TODO: This is only here to let tests work. Should do proper mocking
 			if n.intf.lightHouse != nil {
-				n.intf.lightHouse.DeleteVpnIP(vpnIP)
+				n.intf.lightHouse.DeleteVpnIp(vpnIp)
 			}
 			n.hostMap.DeleteHostInfo(hostinfo)
 		} else {
-			n.ClearIP(vpnIP)
-			n.ClearPendingDeletion(vpnIP)
+			n.ClearIP(vpnIp)
+			n.ClearPendingDeletion(vpnIp)
 		}
 	}
 }

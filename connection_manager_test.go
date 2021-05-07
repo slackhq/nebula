@@ -50,13 +50,13 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	out := make([]byte, mtu)
 	nc.HandleMonitorTick(now, p, nb, out)
 	// Add an ip we have established a connection w/ to hostmap
-	hostinfo := nc.hostMap.AddVpnIP(vpnIp)
+	hostinfo := nc.hostMap.AddVpnIp(vpnIp)
 	hostinfo.ConnectionState = &ConnectionState{
 		certState: cs,
 		H:         &noise.HandshakeState{},
 	}
 
-	// We saw traffic out to vpnIP
+	// We saw traffic out to vpnIp
 	nc.Out(vpnIp)
 	assert.NotContains(t, nc.pendingDeletion, vpnIp)
 	assert.Contains(t, nc.hostMap.Hosts, vpnIp)
@@ -117,13 +117,13 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	out := make([]byte, mtu)
 	nc.HandleMonitorTick(now, p, nb, out)
 	// Add an ip we have established a connection w/ to hostmap
-	hostinfo := nc.hostMap.AddVpnIP(vpnIp)
+	hostinfo := nc.hostMap.AddVpnIp(vpnIp)
 	hostinfo.ConnectionState = &ConnectionState{
 		certState: cs,
 		H:         &noise.HandshakeState{},
 	}
 
-	// We saw traffic out to vpnIP
+	// We saw traffic out to vpnIp
 	nc.Out(vpnIp)
 	assert.NotContains(t, nc.pendingDeletion, vpnIp)
 	assert.Contains(t, nc.hostMap.Hosts, vpnIp)
