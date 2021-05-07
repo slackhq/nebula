@@ -11,6 +11,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/iputil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -97,7 +98,7 @@ func TestFirewall_AddRule(t *testing.T) {
 	assert.False(t, fw.OutRules.AnyProto[1].Any.Any)
 	assert.Empty(t, fw.OutRules.AnyProto[1].Any.Groups)
 	assert.Empty(t, fw.OutRules.AnyProto[1].Any.Hosts)
-	assert.NotNil(t, fw.OutRules.AnyProto[1].Any.CIDR.Match(ip2int(ti.IP)))
+	assert.NotNil(t, fw.OutRules.AnyProto[1].Any.CIDR.Match(iputil.Ip2VpnIp(ti.IP)))
 
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 	assert.Nil(t, fw.AddRule(true, fwProtoUDP, 1, 1, []string{"g1"}, "", nil, "ca-name", ""))
@@ -112,7 +113,7 @@ func TestFirewall_AddRule(t *testing.T) {
 	assert.Nil(t, fw.AddRule(false, fwProtoAny, 0, 0, []string{"g1", "g2"}, "h1", ti, "", ""))
 	assert.Equal(t, []string{"g1", "g2"}, fw.OutRules.AnyProto[0].Any.Groups[0])
 	assert.Contains(t, fw.OutRules.AnyProto[0].Any.Hosts, "h1")
-	assert.NotNil(t, fw.OutRules.AnyProto[0].Any.CIDR.Match(ip2int(ti.IP)))
+	assert.NotNil(t, fw.OutRules.AnyProto[0].Any.CIDR.Match(iputil.Ip2VpnIp(ti.IP)))
 
 	// run twice just to make sure
 	//TODO: these ANY rules should clear the CA firewall portion
@@ -146,8 +147,8 @@ func TestFirewall_Drop(t *testing.T) {
 	l.SetOutput(ob)
 
 	p := FirewallPacket{
-		ip2int(net.IPv4(1, 2, 3, 4)),
-		ip2int(net.IPv4(1, 2, 3, 4)),
+		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
+		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
 		10,
 		90,
 		fwProtoUDP,
@@ -172,7 +173,7 @@ func TestFirewall_Drop(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c,
 		},
-		hostId: ip2int(ipNet.IP),
+		vpnIp: iputil.Ip2VpnIp(ipNet.IP),
 	}
 	h.CreateRemoteCIDR(&c)
 
@@ -190,7 +191,7 @@ func TestFirewall_Drop(t *testing.T) {
 
 	// test remote mismatch
 	oldRemote := p.RemoteIP
-	p.RemoteIP = ip2int(net.IPv4(1, 2, 3, 10))
+	p.RemoteIP = iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 10))
 	assert.Equal(t, fw.Drop([]byte{}, p, false, &h, cp, nil), ErrInvalidRemoteIP)
 	p.RemoteIP = oldRemote
 
@@ -287,7 +288,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 	})
 
 	b.Run("pass on ip", func(b *testing.B) {
-		ip := ip2int(net.IPv4(172, 1, 1, 1))
+		ip := iputil.Ip2VpnIp(net.IPv4(172, 1, 1, 1))
 		c := &cert.NebulaCertificate{
 			Details: cert.NebulaCertificateDetails{
 				InvertedGroups: map[string]struct{}{"nope": {}},
@@ -302,7 +303,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 	_ = ft.TCP.addRule(0, 0, []string{"good-group"}, "good-host", n, "", "")
 
 	b.Run("pass on ip with any port", func(b *testing.B) {
-		ip := ip2int(net.IPv4(172, 1, 1, 1))
+		ip := iputil.Ip2VpnIp(net.IPv4(172, 1, 1, 1))
 		c := &cert.NebulaCertificate{
 			Details: cert.NebulaCertificateDetails{
 				InvertedGroups: map[string]struct{}{"nope": {}},
@@ -321,8 +322,8 @@ func TestFirewall_Drop2(t *testing.T) {
 	l.SetOutput(ob)
 
 	p := FirewallPacket{
-		ip2int(net.IPv4(1, 2, 3, 4)),
-		ip2int(net.IPv4(1, 2, 3, 4)),
+		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
+		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
 		10,
 		90,
 		fwProtoUDP,
@@ -345,7 +346,7 @@ func TestFirewall_Drop2(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c,
 		},
-		hostId: ip2int(ipNet.IP),
+		vpnIp: iputil.Ip2VpnIp(ipNet.IP),
 	}
 	h.CreateRemoteCIDR(&c)
 
@@ -380,8 +381,8 @@ func TestFirewall_Drop3(t *testing.T) {
 	l.SetOutput(ob)
 
 	p := FirewallPacket{
-		ip2int(net.IPv4(1, 2, 3, 4)),
-		ip2int(net.IPv4(1, 2, 3, 4)),
+		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
+		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
 		1,
 		1,
 		fwProtoUDP,
@@ -411,7 +412,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c1,
 		},
-		hostId: ip2int(ipNet.IP),
+		vpnIp: iputil.Ip2VpnIp(ipNet.IP),
 	}
 	h1.CreateRemoteCIDR(&c1)
 
@@ -426,7 +427,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c2,
 		},
-		hostId: ip2int(ipNet.IP),
+		vpnIp: iputil.Ip2VpnIp(ipNet.IP),
 	}
 	h2.CreateRemoteCIDR(&c2)
 
@@ -441,7 +442,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c3,
 		},
-		hostId: ip2int(ipNet.IP),
+		vpnIp: iputil.Ip2VpnIp(ipNet.IP),
 	}
 	h3.CreateRemoteCIDR(&c3)
 
@@ -466,8 +467,8 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 	l.SetOutput(ob)
 
 	p := FirewallPacket{
-		ip2int(net.IPv4(1, 2, 3, 4)),
-		ip2int(net.IPv4(1, 2, 3, 4)),
+		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
+		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
 		10,
 		90,
 		fwProtoUDP,
@@ -492,7 +493,7 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c,
 		},
-		hostId: ip2int(ipNet.IP),
+		vpnIp: iputil.Ip2VpnIp(ipNet.IP),
 	}
 	h.CreateRemoteCIDR(&c)
 

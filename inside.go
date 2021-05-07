@@ -5,6 +5,7 @@ import (
 
 	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/iputil"
 )
 
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket, nb, out []byte, q int, localCache ConntrackCache) {
@@ -32,7 +33,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 	hostinfo := f.getOrHandshake(fwPacket.RemoteIP)
 	if hostinfo == nil {
 		if f.l.Level >= logrus.DebugLevel {
-			f.l.WithField("vpnIp", IntIp(fwPacket.RemoteIP)).
+			f.l.WithField("vpnIp", fwPacket.RemoteIP).
 				WithField("fwPacket", fwPacket).
 				Debugln("dropping outbound packet, vpnIp not in our CIDR or in unsafe routes")
 		}
@@ -65,8 +66,9 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 }
 
 // getOrHandshake returns nil if the vpnIp is not routable
-func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
-	if f.hostMap.vpnCIDR.Contains(int2ip(vpnIp)) == false {
+func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
+	//TODO: we can find contains without converting back to bytes
+	if f.hostMap.vpnCIDR.Contains(vpnIp.ToIP()) == false {
 		vpnIp = f.hostMap.queryUnsafeRoute(vpnIp)
 		if vpnIp == 0 {
 			return nil
@@ -149,11 +151,11 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 }
 
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
-func (f *Interface) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
+func (f *Interface) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp iputil.VpnIp, p, nb, out []byte) {
 	hostInfo := f.getOrHandshake(vpnIp)
 	if hostInfo == nil {
 		if f.l.Level >= logrus.DebugLevel {
-			f.l.WithField("vpnIp", IntIp(vpnIp)).
+			f.l.WithField("vpnIp", vpnIp).
 				Debugln("dropping SendMessageToVpnIp, vpnIp not in our CIDR or in unsafe routes")
 		}
 		return
@@ -197,17 +199,17 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
 	out = HeaderEncode(out, Version, uint8(t), uint8(st), hostinfo.remoteIndexId, c)
-	f.connectionManager.Out(hostinfo.hostId)
+	f.connectionManager.Out(hostinfo.vpnIp)
 
 	// Query our LH if we haven't since the last time we've been rebound, this will cause the remote to punch against
 	// all our IPs and enable a faster roaming.
 	if t != closeTunnel && hostinfo.lastRebindCount != f.rebindCount {
 		//NOTE: there is an update hole if a tunnel isn't used and exactly 256 rebinds occur before the tunnel is
 		// finally used again. This tunnel would eventually be torn down and recreated if this action didn't help.
-		f.lightHouse.QueryServer(hostinfo.hostId, f)
+		f.lightHouse.QueryServer(hostinfo.vpnIp, f)
 		hostinfo.lastRebindCount = f.rebindCount
 		if f.l.Level >= logrus.DebugLevel {
-			f.l.WithField("vpnIp", hostinfo.hostId).Debug("Lighthouse update triggered for punch due to rebind counter")
+			f.l.WithField("vpnIp", hostinfo.vpnIp).Debug("Lighthouse update triggered for punch due to rebind counter")
 		}
 	}
 
@@ -230,7 +232,7 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 	return
 }
 
-func isMulticast(ip uint32) bool {
+func isMulticast(ip iputil.VpnIp) bool {
 	// Class D multicast
 	if (((ip >> 24) & 0xff) & 0xf0) == 0xe0 {
 		return true

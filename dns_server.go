@@ -8,6 +8,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/iputil"
 )
 
 // This whole thing should be rewritten to use context
@@ -44,7 +45,7 @@ func (d *dnsRecords) QueryCert(data string) string {
 	if ip == nil {
 		return ""
 	}
-	iip := ip2int(ip)
+	iip := iputil.Ip2VpnIp(ip)
 	hostinfo, err := d.hostMap.QueryVpnIP(iip)
 	if err != nil {
 		return ""

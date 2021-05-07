@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -19,6 +18,7 @@ import (
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/e2e/router"
+	"github.com/slackhq/nebula/iputil"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ed25519"
@@ -194,19 +194,6 @@ func x25519Keypair() ([]byte, []byte) {
 	return pubkey[:], privkey[:]
 }
 
-func ip2int(ip []byte) uint32 {
-	if len(ip) == 16 {
-		return binary.BigEndian.Uint32(ip[12:16])
-	}
-	return binary.BigEndian.Uint32(ip)
-}
-
-func int2ip(nn uint32) net.IP {
-	ip := make(net.IP, 4)
-	binary.BigEndian.PutUint32(ip, nn)
-	return ip
-}
-
 type doneCb func()
 
 func deadline(t *testing.T, seconds time.Duration) doneCb {
@@ -239,10 +226,10 @@ func assertTunnel(t *testing.T, vpnIpA, vpnIpB net.IP, controlA, controlB *nebul
 
 func assertHostInfoPair(t *testing.T, addrA, addrB *net.UDPAddr, vpnIpA, vpnIpB net.IP, controlA, controlB *nebula.Control) {
 	// Get both host infos
-	hBinA := controlA.GetHostInfoByVpnIP(ip2int(vpnIpB), false)
+	hBinA := controlA.GetHostInfoByVpnIP(iputil.Ip2VpnIp(vpnIpB), false)
 	assert.NotNil(t, hBinA, "Host B was not found by vpnIP in controlA")
 
-	hAinB := controlB.GetHostInfoByVpnIP(ip2int(vpnIpA), false)
+	hAinB := controlB.GetHostInfoByVpnIP(iputil.Ip2VpnIp(vpnIpA), false)
 	assert.NotNil(t, hAinB, "Host A was not found by vpnIP in controlB")
 
 	// Check that both vpn and real addr are correct

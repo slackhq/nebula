@@ -10,6 +10,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/iputil"
 )
 
 const (
@@ -47,7 +48,7 @@ type HandshakeManager struct {
 	l                      *logrus.Logger
 
 	// can be used to trigger outbound handshake for the given vpnIP
-	trigger chan uint32
+	trigger chan iputil.VpnIp
 }
 
 func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udpConn, config HandshakeConfig) *HandshakeManager {
@@ -57,7 +58,7 @@ func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges [
 		lightHouse:             lightHouse,
 		outside:                outside,
 		config:                 config,
-		trigger:                make(chan uint32, config.triggerBuffer),
+		trigger:                make(chan iputil.VpnIp, config.triggerBuffer),
 		OutboundHandshakeTimer: NewSystemTimerWheel(config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
 		messageMetrics:         config.messageMetrics,
 		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
@@ -70,9 +71,9 @@ func (c *HandshakeManager) Run(f EncWriter) {
 	clockSource := time.Tick(c.config.tryInterval)
 	for {
 		select {
-		case vpnIP := <-c.trigger:
-			c.l.WithField("vpnIp", IntIp(vpnIP)).Debug("HandshakeManager: triggered")
-			c.handleOutbound(vpnIP, f, true)
+		case vpnIp := <-c.trigger:
+			c.l.WithField("vpnIp", vpnIp).Debug("HandshakeManager: triggered")
+			c.handleOutbound(vpnIp, f, true)
 		case now := <-clockSource:
 			c.NextOutboundHandshakeTimerTick(now, f)
 		}
@@ -86,12 +87,12 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 		if ep == nil {
 			break
 		}
-		vpnIP := ep.(uint32)
-		c.handleOutbound(vpnIP, f, false)
+		vpnIp := ep.(iputil.VpnIp)
+		c.handleOutbound(vpnIp, f, false)
 	}
 }
 
-func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseTriggered bool) {
+func (c *HandshakeManager) handleOutbound(vpnIP iputil.VpnIp, f EncWriter, lighthouseTriggered bool) {
 	hostinfo, err := c.pendingHostMap.QueryVpnIP(vpnIP)
 	if err != nil {
 		return
@@ -183,12 +184,12 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 	}
 }
 
-func (c *HandshakeManager) AddVpnIP(vpnIP uint32) *HostInfo {
-	hostinfo := c.pendingHostMap.AddVpnIP(vpnIP)
+func (c *HandshakeManager) AddVpnIP(vpnIp iputil.VpnIp) *HostInfo {
+	hostinfo := c.pendingHostMap.AddVpnIP(vpnIp)
 	// We lock here and use an array to insert items to prevent locking the
 	// main receive thread for very long by waiting to add items to the pending map
 	//TODO: what lock?
-	c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval)
+	c.OutboundHandshakeTimer.Add(vpnIp, c.config.tryInterval)
 	c.metricInitiated.Inc(1)
 
 	return hostinfo
@@ -219,7 +220,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 	defer c.mainHostMap.Unlock()
 
 	// Check if we already have a tunnel with this vpn ip
-	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.hostId]
+	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.vpnIp]
 	if found && existingHostInfo != nil {
 		// Is it just a delayed handshake packet?
 		if bytes.Equal(hostinfo.HandshakePacket[handshakePacket], existingHostInfo.HandshakePacket[handshakePacket]) {
@@ -247,16 +248,16 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 	}
 
 	existingRemoteIndex, found := c.mainHostMap.RemoteIndexes[hostinfo.remoteIndexId]
-	if found && existingRemoteIndex != nil && existingRemoteIndex.hostId != hostinfo.hostId {
+	if found && existingRemoteIndex != nil && existingRemoteIndex.vpnIp != hostinfo.vpnIp {
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
 		hostinfo.logger(c.l).
-			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", IntIp(existingRemoteIndex.hostId)).
+			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", existingRemoteIndex.vpnIp).
 			Info("New host shadows existing host remoteIndex")
 	}
 
 	// Check if we are also handshaking with this vpn ip
-	pendingHostInfo, found := c.pendingHostMap.Hosts[hostinfo.hostId]
+	pendingHostInfo, found := c.pendingHostMap.Hosts[hostinfo.vpnIp]
 	if found && pendingHostInfo != nil {
 		if !overwrite {
 			// We won, let our pending handshake win
@@ -273,7 +274,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 
 	if existingHostInfo != nil {
 		// We are going to overwrite this entry, so remove the old references
-		delete(c.mainHostMap.Hosts, existingHostInfo.hostId)
+		delete(c.mainHostMap.Hosts, existingHostInfo.vpnIp)
 		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
 		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
 	}
@@ -291,10 +292,10 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 	c.mainHostMap.Lock()
 	defer c.mainHostMap.Unlock()
 
-	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.hostId]
+	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.vpnIp]
 	if found && existingHostInfo != nil {
 		// We are going to overwrite this entry, so remove the old references
-		delete(c.mainHostMap.Hosts, existingHostInfo.hostId)
+		delete(c.mainHostMap.Hosts, existingHostInfo.vpnIp)
 		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
 		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
 	}
@@ -304,7 +305,7 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
 		hostinfo.logger(c.l).
-			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", IntIp(existingRemoteIndex.hostId)).
+			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", existingRemoteIndex.vpnIp).
 			Info("New host shadows existing host remoteIndex")
 	}
 

@@ -13,19 +13,19 @@ const maxIPv4StringLen = len("255.255.255.255")
 func (ip VpnIp) String() string {
 	b := make([]byte, maxIPv4StringLen)
 
-	n := ubtoa(b, 0, byte(ip >> 24))
+	n := ubtoa(b, 0, byte(ip>>24))
 	b[n] = '.'
 	n++
 
-	n += ubtoa(b, n, byte(ip >> 16 & 255))
+	n += ubtoa(b, n, byte(ip>>16&255))
 	b[n] = '.'
 	n++
 
-	n += ubtoa(b, n, byte(ip >> 8 & 255))
+	n += ubtoa(b, n, byte(ip>>8&255))
 	b[n] = '.'
 	n++
 
-	n += ubtoa(b, n, byte(ip & 255))
+	n += ubtoa(b, n, byte(ip&255))
 	return string(b[:n])
 }
 

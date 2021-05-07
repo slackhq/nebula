@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/slackhq/nebula/iputil"
 )
 
 // WaitForTypeByIndex will pipe all messages from this control device into the pipeTo control device
@@ -45,12 +46,12 @@ func (c *Control) WaitForTypeByIndex(toIndex uint32, msgType NebulaMessageType, 
 // This is necessary if you did not configure static hosts or are not running a lighthouse
 func (c *Control) InjectLightHouseAddr(vpnIp net.IP, toAddr *net.UDPAddr) {
 	c.f.lightHouse.Lock()
-	remoteList := c.f.lightHouse.unlockedGetRemoteList(ip2int(vpnIp))
+	remoteList := c.f.lightHouse.unlockedGetRemoteList(iputil.Ip2VpnIp(vpnIp))
 	remoteList.Lock()
 	defer remoteList.Unlock()
 	c.f.lightHouse.Unlock()
 
-	iVpnIp := ip2int(vpnIp)
+	iVpnIp := iputil.Ip2VpnIp(vpnIp)
 	if v4 := toAddr.IP.To4(); v4 != nil {
 		remoteList.unlockedPrependV4(iVpnIp, NewIp4AndPort(v4, uint32(toAddr.Port)))
 	} else {
@@ -118,7 +119,7 @@ func (c *Control) GetUDPAddr() string {
 }
 
 func (c *Control) KillPendingTunnel(vpnIp net.IP) bool {
-	hostinfo, ok := c.f.handshakeManager.pendingHostMap.Hosts[ip2int(vpnIp)]
+	hostinfo, ok := c.f.handshakeManager.pendingHostMap.Hosts[iputil.Ip2VpnIp(vpnIp)]
 	if !ok {
 		return false
 	}

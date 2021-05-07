@@ -11,6 +11,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/iputil"
 )
 
 const mtu = 9001
@@ -60,8 +61,8 @@ type Interface struct {
 	serveDns           bool
 	createTime         time.Time
 	lightHouse         *LightHouse
-	localBroadcast     uint32
-	myVpnIp            uint32
+	localBroadcast     iputil.VpnIp
+	myVpnIp            iputil.VpnIp
 	dropLocalBroadcast bool
 	dropMulticast      bool
 	udpBatchSize       int
@@ -98,6 +99,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		return nil, errors.New("no firewall rules")
 	}
 
+	myVpnIp := iputil.Ip2VpnIp(c.certState.certificate.Details.Ips[0].IP)
 	ifce := &Interface{
 		hostMap:            c.HostMap,
 		outside:            c.Outside,
@@ -109,7 +111,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		handshakeManager:   c.HandshakeManager,
 		createTime:         time.Now(),
 		lightHouse:         c.lightHouse,
-		localBroadcast:     ip2int(c.certState.certificate.Details.Ips[0].IP) | ^ip2int(c.certState.certificate.Details.Ips[0].Mask),
+		localBroadcast:     myVpnIp | ^iputil.Ip2VpnIp(c.certState.certificate.Details.Ips[0].Mask),
 		dropLocalBroadcast: c.DropLocalBroadcast,
 		dropMulticast:      c.DropMulticast,
 		udpBatchSize:       c.UDPBatchSize,
@@ -118,7 +120,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		writers:            make([]*udpConn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
 		caPool:             c.caPool,
-		myVpnIp:            ip2int(c.certState.certificate.Details.Ips[0].IP),
+		myVpnIp:            myVpnIp,
 
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
 

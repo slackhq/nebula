@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+
+	"github.com/slackhq/nebula/iputil"
 )
 
 type AllowList struct {
@@ -33,7 +35,7 @@ func (al *AllowList) Allow(ip net.IP) bool {
 	}
 }
 
-func (al *AllowList) AllowIpV4(ip uint32) bool {
+func (al *AllowList) AllowIpV4(ip iputil.VpnIp) bool {
 	if al == nil {
 		return true
 	}
