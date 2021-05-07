@@ -9,6 +9,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/iputil"
 )
 
 // Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
@@ -93,7 +94,7 @@ func (c *Control) ListHostmap(pendingMap bool) []ControlHostInfo {
 }
 
 // GetHostInfoByVpnIP returns a single tunnels hostInfo, or nil if not found
-func (c *Control) GetHostInfoByVpnIP(vpnIP uint32, pending bool) *ControlHostInfo {
+func (c *Control) GetHostInfoByVpnIP(vpnIP iputil.VpnIp, pending bool) *ControlHostInfo {
 	var hm *HostMap
 	if pending {
 		hm = c.f.handshakeManager.pendingHostMap
@@ -111,7 +112,7 @@ func (c *Control) GetHostInfoByVpnIP(vpnIP uint32, pending bool) *ControlHostInf
 }
 
 // SetRemoteForTunnel forces a tunnel to use a specific remote
-func (c *Control) SetRemoteForTunnel(vpnIP uint32, addr udpAddr) *ControlHostInfo {
+func (c *Control) SetRemoteForTunnel(vpnIP iputil.VpnIp, addr udpAddr) *ControlHostInfo {
 	hostInfo, err := c.f.hostMap.QueryVpnIP(vpnIP)
 	if err != nil {
 		return nil
@@ -123,7 +124,7 @@ func (c *Control) SetRemoteForTunnel(vpnIP uint32, addr udpAddr) *ControlHostInf
 }
 
 // CloseTunnel closes a fully established tunnel. If localOnly is false it will notify the remote end as well.
-func (c *Control) CloseTunnel(vpnIP uint32, localOnly bool) bool {
+func (c *Control) CloseTunnel(vpnIP iputil.VpnIp, localOnly bool) bool {
 	hostInfo, err := c.f.hostMap.QueryVpnIP(vpnIP)
 	if err != nil {
 		return false
@@ -153,7 +154,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	c.f.hostMap.Lock()
 	for _, h := range c.f.hostMap.Hosts {
 		if excludeLighthouses {
-			if _, ok := c.f.lightHouse.lighthouses[h.hostId]; ok {
+			if _, ok := c.f.lightHouse.lighthouses[h.vpnIp]; ok {
 				continue
 			}
 		}
@@ -162,7 +163,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 			c.f.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 			c.f.closeTunnel(h, true)
 
-			c.l.WithField("vpnIp", IntIp(h.hostId)).WithField("udpAddr", h.remote).
+			c.l.WithField("vpnIp", h.vpnIp).WithField("udpAddr", h.remote).
 				Debug("Sending close tunnel message")
 			closed++
 		}
@@ -173,7 +174,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 
 func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 	chi := ControlHostInfo{
-		VpnIP:         int2ip(h.hostId),
+		VpnIP:         h.vpnIp.ToIP(),
 		LocalIndex:    h.localIndexId,
 		RemoteIndex:   h.remoteIndexId,
 		RemoteAddrs:   h.remotes.CopyAddrs(preferredRanges),
