@@ -5,13 +5,14 @@ import (
 	"net"
 	"regexp"
 
+	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/iputil"
 )
 
 type AllowList struct {
 	// The values of this cidrTree are `bool`, signifying allow/deny
-	cidrTree *CIDR6Tree
+	cidrTree *cidr.Tree6
 
 	// To avoid ambiguity, all rules must be true, or all rules must be false.
 	nameRules []AllowListNameRule
@@ -28,7 +29,7 @@ func NewAllowListFromConfig(c *config.C, k string, allowInterfaces bool) (*Allow
 		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, r)
 	}
 
-	tree := NewCIDR6Tree()
+	tree := cidr.NewTree6()
 	var nameRules []AllowListNameRule
 
 	// Keep track of the rules we have added for both ipv4 and ipv6

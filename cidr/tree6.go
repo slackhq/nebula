@@ -1,4 +1,4 @@
-package nebula
+package cidr
 
 import (
 	"net"
@@ -8,20 +8,20 @@ import (
 
 const startbit6 = uint64(1 << 63)
 
-type CIDR6Tree struct {
-	root4 *CIDRNode
-	root6 *CIDRNode
+type Tree6 struct {
+	root4 *Node
+	root6 *Node
 }
 
-func NewCIDR6Tree() *CIDR6Tree {
-	tree := new(CIDR6Tree)
-	tree.root4 = &CIDRNode{}
-	tree.root6 = &CIDRNode{}
+func NewTree6() *Tree6 {
+	tree := new(Tree6)
+	tree.root4 = &Node{}
+	tree.root6 = &Node{}
 	return tree
 }
 
-func (tree *CIDR6Tree) AddCIDR(cidr *net.IPNet, val interface{}) {
-	var node, next *CIDRNode
+func (tree *Tree6) AddCIDR(cidr *net.IPNet, val interface{}) {
+	var node, next *Node
 
 	cidrIP, ipv4 := isIPV4(cidr.IP)
 	if ipv4 {
@@ -56,7 +56,7 @@ func (tree *CIDR6Tree) AddCIDR(cidr *net.IPNet, val interface{}) {
 
 		// Build up the rest of the tree we don't already have
 		for bit&mask != 0 {
-			next = &CIDRNode{}
+			next = &Node{}
 			next.parent = node
 
 			if ip&bit != 0 {
@@ -75,8 +75,8 @@ func (tree *CIDR6Tree) AddCIDR(cidr *net.IPNet, val interface{}) {
 }
 
 // Finds the most specific match
-func (tree *CIDR6Tree) MostSpecificContains(ip net.IP) (value interface{}) {
-	var node *CIDRNode
+func (tree *Tree6) MostSpecificContains(ip net.IP) (value interface{}) {
+	var node *Node
 
 	wholeIP, ipv4 := isIPV4(ip)
 	if ipv4 {
@@ -111,7 +111,7 @@ func (tree *CIDR6Tree) MostSpecificContains(ip net.IP) (value interface{}) {
 	return value
 }
 
-func (tree *CIDR6Tree) MostSpecificContainsIpV4(ip iputil.VpnIp) (value interface{}) {
+func (tree *Tree6) MostSpecificContainsIpV4(ip iputil.VpnIp) (value interface{}) {
 	bit := startbit
 	node := tree.root4
 
@@ -132,7 +132,7 @@ func (tree *CIDR6Tree) MostSpecificContainsIpV4(ip iputil.VpnIp) (value interfac
 	return value
 }
 
-func (tree *CIDR6Tree) MostSpecificContainsIpV6(hi, lo uint64) (value interface{}) {
+func (tree *Tree6) MostSpecificContainsIpV6(hi, lo uint64) (value interface{}) {
 	ip := hi
 	node := tree.root6
 
