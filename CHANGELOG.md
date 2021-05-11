@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.4.0] - 2021-05-??
+## [1.4.0] - 2021-05-11
 
 ### Added
 
@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Run smoke tests via `make smoke-docker`. (#287)
 
-- More reported stats, udp memory use on linux, build version (when using prometheus), firewall, 
+- More reported stats, udp memory use on linux, build version (when using Prometheus), firewall, 
   handshake, and cached packet stats. (#390, #405, #450, #453)
 
 - IPv6 support for the underlay network. (#369)
