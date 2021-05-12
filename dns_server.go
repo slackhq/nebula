@@ -71,9 +71,9 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) error {
 		switch q.Qtype {
 		case dns.TypeA:
 			if !strings.HasSuffix(strings.TrimRight(q.Name, "."), dnsDomain) {
-				return fmt.Errorf("Rejected Query for A %s", q.Name)
+				return fmt.Errorf("Dropped Query for A %s", q.Name)
 			}
-			l.Debugf("Query for A %s", q.Name)
+			l.Debugf("Accepted Query for A %s", q.Name)
 			ip := dnsR.Query(q.Name)
 			if ip != "" {
 				rr, err := dns.NewRR(fmt.Sprintf("%s A %s", q.Name, ip))
@@ -87,9 +87,9 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) error {
 			// We don't answer these queries from non nebula nodes or localhost
 			//l.Debugf("Does %s contain %s", b, dnsR.hostMap.vpnCIDR)
 			if !dnsR.hostMap.vpnCIDR.Contains(b) && a != "127.0.0.1" {
-				return fmt.Errorf("Rejected Query for TXT %s", q.Name)
+				return fmt.Errorf("Dropped Query for TXT %s", q.Name)
 			}
-			l.Debugf("Query for TXT %s", q.Name)
+			l.Debugf("Accepted Query for TXT %s", q.Name)
 			ip := dnsR.QueryCert(q.Name)
 			if ip != "" {
 				rr, err := dns.NewRR(fmt.Sprintf("%s TXT %s", q.Name, ip))
@@ -97,6 +97,11 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) error {
 					m.Answer = append(m.Answer, rr)
 				}
 			}
+		default:
+			if !strings.HasSuffix(strings.TrimRight(q.Name, "."), dnsDomain) {
+				return fmt.Errorf("Dropped Query for %s %s", dns.Type(q.Qtype).String(), q.Name)
+			}
+			l.Debugf("Unsupported Query for %s %s", dns.Type(q.Qtype).String(), q.Name)
 		}
 	}
 	return nil
@@ -111,7 +116,7 @@ func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
 	case dns.OpcodeQuery:
 		err := parseQuery(l, m, w)
 		if err != nil {
-		       l.Debugf(err.Error())
+		       l.Debug(err.Error())
 		       return
 		}
 	}
