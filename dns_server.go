@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"strings"
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
@@ -15,6 +16,7 @@ import (
 var dnsR *dnsRecords
 var dnsServer *dns.Server
 var dnsAddr string
+var dnsDomain string
 
 type dnsRecords struct {
 	sync.RWMutex
@@ -64,10 +66,13 @@ func (d *dnsRecords) Add(host, data string) {
 	d.Unlock()
 }
 
-func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
+func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) error {
 	for _, q := range m.Question {
 		switch q.Qtype {
 		case dns.TypeA:
+			if !strings.HasSuffix(strings.TrimRight(q.Name, "."), dnsDomain) {
+				return fmt.Errorf("Rejected Query for A %s", q.Name)
+			}
 			l.Debugf("Query for A %s", q.Name)
 			ip := dnsR.Query(q.Name)
 			if ip != "" {
@@ -82,7 +87,7 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
 			// We don't answer these queries from non nebula nodes or localhost
 			//l.Debugf("Does %s contain %s", b, dnsR.hostMap.vpnCIDR)
 			if !dnsR.hostMap.vpnCIDR.Contains(b) && a != "127.0.0.1" {
-				return
+				return fmt.Errorf("Rejected Query for TXT %s", q.Name)
 			}
 			l.Debugf("Query for TXT %s", q.Name)
 			ip := dnsR.QueryCert(q.Name)
@@ -94,6 +99,7 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
 			}
 		}
 	}
+	return nil
 }
 
 func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
@@ -103,7 +109,11 @@ func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
 
 	switch r.Opcode {
 	case dns.OpcodeQuery:
-		parseQuery(l, m, w)
+		err := parseQuery(l, m, w)
+		if err != nil {
+		       l.Debugf(err.Error())
+		       return
+		}
 	}
 
 	w.WriteMsg(m)
@@ -130,8 +140,13 @@ func getDnsServerAddr(c *Config) string {
 	return c.GetString("lighthouse.dns.host", "") + ":" + strconv.Itoa(c.GetInt("lighthouse.dns.port", 53))
 }
 
+func getDnsDomain(c *Config) string {
+	return c.GetString("lighthouse.dns.domain", "")
+}
+
 func startDns(l *logrus.Logger, c *Config) {
 	dnsAddr = getDnsServerAddr(c)
+	dnsDomain = getDnsDomain(c)
 	dnsServer = &dns.Server{Addr: dnsAddr, Net: "udp"}
 	l.WithField("dnsListener", dnsAddr).Infof("Starting DNS responder")
 	err := dnsServer.ListenAndServe()

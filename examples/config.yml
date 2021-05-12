@@ -29,8 +29,10 @@ lighthouse:
   #serve_dns: false
   #dns:
     # The DNS host defines the IP to bind the dns listener to. This also allows binding to the nebula node IP.
+    # Use domain to filter DNS A responses to those ending with domain.
     #host: 0.0.0.0
     #port: 53
+    #domain:
   # interval is the number of seconds between updates from this node to a lighthouse.
   # during updates, a node sends information about its current IP addresses to each node.
   interval: 60
