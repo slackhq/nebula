@@ -16,7 +16,7 @@ import (
 var dnsR *dnsRecords
 var dnsServer *dns.Server
 var dnsAddr string
-var dnsZones []string
+var dnsZones Zones
 var dnsRespondToFiltered bool
 
 type dnsRecords struct {
@@ -67,9 +67,11 @@ func (d *dnsRecords) Add(host, data string) {
 	d.Unlock()
 }
 
-func zoneMatches(zones []string, qname string) string {
+type Zones []string
+
+func (z Zones) Matches(qname string) string {
 	zone := ""
-	for _, zname := range zones {
+	for _, zname := range z {
 		if dns.IsSubDomain(zname, qname) {
 			if len(zname) > len(zone) {
 				zone = zname
@@ -79,9 +81,21 @@ func zoneMatches(zones []string, qname string) string {
 	return zone
 }
 
+func (z Zones) Equal(b []string) bool {
+	if len(z) != len(b) {
+		return false
+	}
+	for i, v := range z {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) error {
 	for _, q := range m.Question {
-		zone := zoneMatches(dnsZones, q.Name)
+		zone := dnsZones.Matches(q.Name)
 		qtype := dns.Type(q.Qtype).String()
 		entry := l.WithField("from", w.RemoteAddr().String()).WithField("name", q.Name).WithField("type", qtype)
 		// Only respond to requests with name matching the correct zone
@@ -162,10 +176,10 @@ func getDnsServerAddr(c *Config) string {
 	return c.GetString("lighthouse.dns.host", "") + ":" + strconv.Itoa(c.GetInt("lighthouse.dns.port", 53))
 }
 
-func getDnsZones(c *Config) []string {
+func getDnsZones(c *Config) Zones {
 	zones := c.GetStringSlice("lighthouse.dns.zones", []string{})
 	for i := range zones {
-		zones[i] = strings.ToLower(dns.Fqdn(zones[i]))
+		zones[i] = strings.ToLower(dns.Fqdn(zones[i]))  // equivalent to dns.CanonicalName in latest version of dns
 	}
 	return zones
 }
@@ -187,20 +201,8 @@ func startDns(l *logrus.Logger, c *Config) {
 	}
 }
 
-func Equal(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func reloadDns(l *logrus.Logger, c *Config) {
-	if dnsAddr == getDnsServerAddr(c) && Equal(dnsZones, getDnsZones(c)) && dnsRespondToFiltered == getDnsFilterResponse(c) {
+	if dnsAddr == getDnsServerAddr(c) && dnsZones.Equal(getDnsZones(c)) && dnsRespondToFiltered == getDnsFilterResponse(c) {
 		l.Debug("No DNS server config change detected")
 		return
 	}
