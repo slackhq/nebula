@@ -16,7 +16,7 @@ import (
 var dnsR *dnsRecords
 var dnsServer *dns.Server
 var dnsAddr string
-var dnsDomain string
+var dnsZones []string
 
 type dnsRecords struct {
 	sync.RWMutex
@@ -66,14 +66,31 @@ func (d *dnsRecords) Add(host, data string) {
 	d.Unlock()
 }
 
+func zoneMatches(zones []string, qname string) string {
+	zone := ""
+	for _, zname := range zones {
+		if dns.IsSubDomain(zname, qname) {
+			if len(zname) > len(zone) {
+				zone = zname
+			}
+		}
+	}
+	return zone
+}
+
 func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) error {
 	for _, q := range m.Question {
+		zone := zoneMatches(dnsZones, q.Name)
+		qtype := dns.Type(q.Qtype).String()
+		entry := l.WithField("from", w.RemoteAddr().String()).WithField("name", q.Name).WithField("type", qtype)
+		// Only respond to requests with name matching the correct zone
+		// Exception is responding to TXT records for a nebula IP
+		if len(dnsZones) > 0 && zone == "" && q.Qtype != dns.TypeTXT {
+			entry.Debug("Rejected DNS query")
+			return fmt.Errorf("Rejected query")
+		}
 		switch q.Qtype {
 		case dns.TypeA:
-			if !strings.HasSuffix(strings.TrimRight(q.Name, "."), dnsDomain) {
-				return fmt.Errorf("Dropped Query for A %s", q.Name)
-			}
-			l.Debugf("Accepted Query for A %s", q.Name)
 			ip := dnsR.Query(q.Name)
 			if ip != "" {
 				rr, err := dns.NewRR(fmt.Sprintf("%s A %s", q.Name, ip))
@@ -87,9 +104,9 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) error {
 			// We don't answer these queries from non nebula nodes or localhost
 			//l.Debugf("Does %s contain %s", b, dnsR.hostMap.vpnCIDR)
 			if !dnsR.hostMap.vpnCIDR.Contains(b) && a != "127.0.0.1" {
-				return fmt.Errorf("Dropped Query for TXT %s", q.Name)
+				entry.Debug("Rejected DNS query")
+				return fmt.Errorf("Rejected query")
 			}
-			l.Debugf("Accepted Query for TXT %s", q.Name)
 			ip := dnsR.QueryCert(q.Name)
 			if ip != "" {
 				rr, err := dns.NewRR(fmt.Sprintf("%s TXT %s", q.Name, ip))
@@ -97,12 +114,8 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) error {
 					m.Answer = append(m.Answer, rr)
 				}
 			}
-		default:
-			if !strings.HasSuffix(strings.TrimRight(q.Name, "."), dnsDomain) {
-				return fmt.Errorf("Dropped Query for %s %s", dns.Type(q.Qtype).String(), q.Name)
-			}
-			l.Debugf("Unsupported Query for %s %s", dns.Type(q.Qtype).String(), q.Name)
 		}
+		entry.Debug("Accepted DNS query")
 	}
 	return nil
 }
@@ -116,9 +129,10 @@ func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
 	case dns.OpcodeQuery:
 		err := parseQuery(l, m, w)
 		if err != nil {
-		       l.Debug(err.Error())
 		       return
 		}
+	default:
+		return
 	}
 
 	w.WriteMsg(m)
@@ -145,14 +159,19 @@ func getDnsServerAddr(c *Config) string {
 	return c.GetString("lighthouse.dns.host", "") + ":" + strconv.Itoa(c.GetInt("lighthouse.dns.port", 53))
 }
 
-func getDnsDomain(c *Config) string {
-	return c.GetString("lighthouse.dns.domain", "")
+func getDnsZones(c *Config) []string {
+	zones := c.GetStringSlice("lighthouse.dns.zones", []string{})
+	for i := range zones {
+		zones[i] = strings.ToLower(dns.Fqdn(zones[i]))
+	}
+	return zones
 }
 
 func startDns(l *logrus.Logger, c *Config) {
 	dnsAddr = getDnsServerAddr(c)
-	dnsDomain = getDnsDomain(c)
+	dnsZones = getDnsZones(c)
 	dnsServer = &dns.Server{Addr: dnsAddr, Net: "udp"}
+	dnsRespondToFiltered = getDnsFilterResponse(c)
 	l.WithField("dnsListener", dnsAddr).Infof("Starting DNS responder")
 	err := dnsServer.ListenAndServe()
 	defer dnsServer.Shutdown()
@@ -161,8 +180,20 @@ func startDns(l *logrus.Logger, c *Config) {
 	}
 }
 
+func Equal(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func reloadDns(l *logrus.Logger, c *Config) {
-	if dnsAddr == getDnsServerAddr(c) {
+	if dnsAddr == getDnsServerAddr(c) && Equal(dnsZones, getDnsZones(c)) {
 		l.Debug("No DNS server config change detected")
 		return
 	}
