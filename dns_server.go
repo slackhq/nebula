@@ -95,11 +95,10 @@ func (z Zones) Equal(b []string) bool {
 
 func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) error {
 	for _, q := range m.Question {
+		entry := l.WithField("from", w.RemoteAddr().String()).WithField("name", q.Name).
+			WithField("type", dns.Type(q.Qtype).String())
+		// If zones are set, reject names not matching any zone (except for TXT queries)
 		zone := dnsZones.Matches(q.Name)
-		qtype := dns.Type(q.Qtype).String()
-		entry := l.WithField("from", w.RemoteAddr().String()).WithField("name", q.Name).WithField("type", qtype)
-		// Only respond to requests with name matching the correct zone
-		// Exception is responding to TXT records for a nebula IP
 		if len(dnsZones) > 0 && zone == "" && q.Qtype != dns.TypeTXT {
 			entry.Debug("Rejected DNS query")
 			return fmt.Errorf("Rejected query")
@@ -140,16 +139,14 @@ func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
 	m.SetReply(r)
 	m.Compress = false
 
+	filtered := true
 	switch r.Opcode {
 	case dns.OpcodeQuery:
 		err := parseQuery(l, m, w)
-		if err != nil && !dnsRespondToFiltered {
-		       return
-		}
-	default:
-		if !dnsRespondToFiltered {
-			return
-		}
+		filtered = (err != nil)
+	}
+	if filtered && !dnsRespondToFiltered {
+		return
 	}
 
 	w.WriteMsg(m)
