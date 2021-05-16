@@ -17,6 +17,7 @@ var dnsR *dnsRecords
 var dnsServer *dns.Server
 var dnsAddr string
 var dnsZones []string
+var dnsRespondToFiltered bool
 
 type dnsRecords struct {
 	sync.RWMutex
@@ -128,11 +129,13 @@ func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
 	switch r.Opcode {
 	case dns.OpcodeQuery:
 		err := parseQuery(l, m, w)
-		if err != nil {
+		if err != nil && !dnsRespondToFiltered {
 		       return
 		}
 	default:
-		return
+		if !dnsRespondToFiltered {
+			return
+		}
 	}
 
 	w.WriteMsg(m)
@@ -167,6 +170,10 @@ func getDnsZones(c *Config) []string {
 	return zones
 }
 
+func getDnsFilterResponse(c *Config) bool {
+	return c.GetBool("lighthouse.dns.respond_to_filtered", true)
+}
+
 func startDns(l *logrus.Logger, c *Config) {
 	dnsAddr = getDnsServerAddr(c)
 	dnsZones = getDnsZones(c)
@@ -193,7 +200,7 @@ func Equal(a, b []string) bool {
 }
 
 func reloadDns(l *logrus.Logger, c *Config) {
-	if dnsAddr == getDnsServerAddr(c) && Equal(dnsZones, getDnsZones(c)) {
+	if dnsAddr == getDnsServerAddr(c) && Equal(dnsZones, getDnsZones(c)) && dnsRespondToFiltered == getDnsFilterResponse(c) {
 		l.Debug("No DNS server config change detected")
 		return
 	}

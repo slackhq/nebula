@@ -35,6 +35,8 @@ lighthouse:
     # Use zones to filter DNS responses
     #zones:
     #  - nebula.example.com
+    # If respond_to_filtered is false, drop queries that do not match any of the zones.
+    #respond_to_filtered: false
   # interval is the number of seconds between updates from this node to a lighthouse.
   # during updates, a node sends information about its current IP addresses to each node.
   interval: 60
