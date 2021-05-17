@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"sync"
 	"strings"
+	"sync"
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
@@ -176,7 +176,7 @@ func getDnsServerAddr(c *Config) string {
 func getDnsZones(c *Config) Zones {
 	zones := c.GetStringSlice("lighthouse.dns.zones", []string{})
 	for i := range zones {
-		zones[i] = strings.ToLower(dns.Fqdn(zones[i]))  // equivalent to dns.CanonicalName in latest version of dns
+		zones[i] = strings.ToLower(dns.Fqdn(zones[i])) // equivalent to dns.CanonicalName in latest version of dns
 	}
 	return zones
 }
