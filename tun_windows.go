@@ -92,7 +92,7 @@ func (c *Tun) Activate() error {
 
 	for _, r := range c.UnsafeRoutes {
 		err = exec.Command(
-			"C:\\Windows\\System32\\route.exe", "add", r.route.String(), r.via.String(), "IF", strconv.Itoa(iface.Index),
+			"C:\\Windows\\System32\\route.exe", "add", r.route.String(), r.via.String(), "IF", strconv.Itoa(iface.Index), "METRIC", strconv.Itoa(r.metric),
 		).Run()
 		if err != nil {
 			return fmt.Errorf("failed to add the unsafe_route %s: %v", r.route.String(), err)

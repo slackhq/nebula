@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"strconv"
 )
@@ -9,9 +10,10 @@ import (
 const DEFAULT_MTU = 1300
 
 type route struct {
-	mtu   int
-	route *net.IPNet
-	via   *net.IP
+	mtu    int
+	metric int
+	route  *net.IPNet
+	via    *net.IP
 }
 
 func parseRoutes(config *Config, network *net.IPNet) ([]route, error) {
@@ -125,6 +127,23 @@ func parseUnsafeRoutes(config *Config, network *net.IPNet) ([]route, error) {
 			return nil, fmt.Errorf("entry %v.mtu in tun.unsafe_routes is below 500: %v", i+1, mtu)
 		}
 
+		rMetric, ok := m["metric"]
+		if !ok {
+			rMetric = 0
+		}
+
+		metric, ok := rMetric.(int)
+		if !ok {
+			_, err = strconv.ParseInt(rMetric.(string), 10, 32)
+			if err != nil {
+				return nil, fmt.Errorf("entry %v.metric in tun.unsafe_routes is not an integer: %v", i+1, err)
+			}
+		}
+
+		if metric < 0 || metric > math.MaxInt32 {
+			return nil, fmt.Errorf("entry %v.metric in tun.unsafe_routes is not in range (0-%d) : %v", i+1, math.MaxInt32, metric)
+		}
+
 		rVia, ok := m["via"]
 		if !ok {
 			return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes is not present", i+1)
@@ -146,8 +165,9 @@ func parseUnsafeRoutes(config *Config, network *net.IPNet) ([]route, error) {
 		}
 
 		r := route{
-			via: &nVia,
-			mtu: mtu,
+			via:    &nVia,
+			mtu:    mtu,
+			metric: metric,
 		}
 
 		_, r.route, err = net.ParseCIDR(fmt.Sprintf("%v", rRoute))
