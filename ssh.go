@@ -565,7 +565,7 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		}
 	}
 
-	hostInfo = ifce.handshakeManager.AddVpnIP(vpnIp)
+	hostInfo = ifce.handshakeManager.AddVpnIP(vpnIp, ifce.initHostInfo)
 	if addr != nil {
 		hostInfo.SetRemote(addr)
 	}

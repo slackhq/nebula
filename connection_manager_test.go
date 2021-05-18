@@ -49,7 +49,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	out := make([]byte, mtu)
 	nc.HandleMonitorTick(now, p, nb, out)
 	// Add an ip we have established a connection w/ to hostmap
-	hostinfo := nc.hostMap.AddVpnIP(vpnIP)
+	hostinfo, _ := nc.hostMap.AddVpnIP(vpnIP, nil)
 	hostinfo.ConnectionState = &ConnectionState{
 		certState: cs,
 		H:         &noise.HandshakeState{},
@@ -116,7 +116,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	out := make([]byte, mtu)
 	nc.HandleMonitorTick(now, p, nb, out)
 	// Add an ip we have established a connection w/ to hostmap
-	hostinfo := nc.hostMap.AddVpnIP(vpnIP)
+	hostinfo, _ := nc.hostMap.AddVpnIP(vpnIP, nil)
 	hostinfo.ConnectionState = &ConnectionState{
 		certState: cs,
 		H:         &noise.HandshakeState{},

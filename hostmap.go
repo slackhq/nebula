@@ -129,24 +129,25 @@ func (hm *HostMap) Add(ip uint32, hostinfo *HostInfo) {
 	hm.Unlock()
 }
 
-func (hm *HostMap) AddVpnIP(vpnIP uint32) *HostInfo {
-	h := &HostInfo{}
+func (hm *HostMap) AddVpnIP(vpnIP uint32, init func(hostinfo *HostInfo)) (hostinfo *HostInfo, created bool) {
 	hm.RLock()
-	if _, ok := hm.Hosts[vpnIP]; !ok {
+	if h, ok := hm.Hosts[vpnIP]; !ok {
 		hm.RUnlock()
 		h = &HostInfo{
 			promoteCounter:  0,
 			hostId:          vpnIP,
 			HandshakePacket: make(map[uint8][]byte, 0),
 		}
+		if init != nil {
+			init(h)
+		}
 		hm.Lock()
 		hm.Hosts[vpnIP] = h
 		hm.Unlock()
-		return h
+		return h, true
 	} else {
-		h = hm.Hosts[vpnIP]
 		hm.RUnlock()
-		return h
+		return h, false
 	}
 }
 
