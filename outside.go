@@ -340,7 +340,7 @@ func (f *Interface) handleRecvError(addr *udpAddr, h *Header) {
 	if !hostinfo.RecvErrorExceeded() {
 		return
 	}
-	if hostinfo.remote != nil && hostinfo.remote.Equals(addr) {
+	if hostinfo.remote != nil && ! hostinfo.remote.Equals(addr) {
 		f.l.Infoln("Someone spoofing recv_errors? ", addr, hostinfo.remote)
 		return
 	}
