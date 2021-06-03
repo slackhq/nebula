@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Valid recv_error packets were incorrectly marked as "spoofing" and ignored. (#482)
+
 ## [1.4.0] - 2021-05-11
 
 ### Added
