@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- SSH `print-cert` has a new `-raw` flag to get the PEM representation of a certificate. (#483)
+
 ### Fixed
 
 - Valid recv_error packets were incorrectly marked as "spoofing" and ignored. (#482)
+
+- SSH server handles single `exec` requests correctly. (#483)
 
 ## [1.4.0] - 2021-05-11
 

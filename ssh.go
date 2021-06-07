@@ -26,6 +26,7 @@ type sshListHostMapFlags struct {
 type sshPrintCertFlags struct {
 	Json   bool
 	Pretty bool
+	Raw    bool
 }
 
 type sshPrintTunnelFlags struct {
@@ -266,6 +267,7 @@ func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pen
 			s := sshPrintCertFlags{}
 			fl.BoolVar(&s.Json, "json", false, "outputs as json")
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
+			fl.BoolVar(&s.Raw, "raw", false, "raw prints the PEM encoded certificate, not compatible with -json or -pretty")
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
@@ -706,6 +708,16 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 				//TODO: handle it
 				return nil
 			}
+		}
+
+		return w.WriteBytes(b)
+	}
+
+	if args.Raw {
+		b, err := cert.MarshalToPEM()
+		if err != nil {
+			//TODO: handle it
+			return nil
 		}
 
 		return w.WriteBytes(b)
