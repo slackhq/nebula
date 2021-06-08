@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/miekg/dns"
@@ -15,6 +16,8 @@ import (
 var dnsR *dnsRecords
 var dnsServer *dns.Server
 var dnsAddr string
+var dnsZones Zones
+var dnsDropFiltered bool
 
 type dnsRecords struct {
 	sync.RWMutex
@@ -64,11 +67,44 @@ func (d *dnsRecords) Add(host, data string) {
 	d.Unlock()
 }
 
-func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
+type Zones []string
+
+func (z Zones) Matches(qname string) string {
+	zone := ""
+	for _, zname := range z {
+		if dns.IsSubDomain(zname, qname) {
+			if len(zname) > len(zone) {
+				zone = zname
+			}
+		}
+	}
+	return zone
+}
+
+func (z Zones) Equal(b []string) bool {
+	if len(z) != len(b) {
+		return false
+	}
+	for i, v := range z {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) error {
 	for _, q := range m.Question {
+		entry := l.WithField("from", w.RemoteAddr().String()).WithField("name", q.Name).
+			WithField("type", dns.Type(q.Qtype).String())
+		// If zones are set, reject names not matching any zone (except for TXT queries)
+		zone := dnsZones.Matches(q.Name)
+		if len(dnsZones) > 0 && zone == "" && q.Qtype != dns.TypeTXT {
+			entry.Debug("Rejected DNS query")
+			return fmt.Errorf("Rejected query")
+		}
 		switch q.Qtype {
 		case dns.TypeA:
-			l.Debugf("Query for A %s", q.Name)
 			ip := dnsR.Query(q.Name)
 			if ip != "" {
 				rr, err := dns.NewRR(fmt.Sprintf("%s A %s", q.Name, ip))
@@ -82,9 +118,9 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
 			// We don't answer these queries from non nebula nodes or localhost
 			//l.Debugf("Does %s contain %s", b, dnsR.hostMap.vpnCIDR)
 			if !dnsR.hostMap.vpnCIDR.Contains(b) && a != "127.0.0.1" {
-				return
+				entry.Debug("Rejected DNS query")
+				return fmt.Errorf("Rejected query")
 			}
-			l.Debugf("Query for TXT %s", q.Name)
 			ip := dnsR.QueryCert(q.Name)
 			if ip != "" {
 				rr, err := dns.NewRR(fmt.Sprintf("%s TXT %s", q.Name, ip))
@@ -93,7 +129,9 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
 				}
 			}
 		}
+		entry.Debug("Accepted DNS query")
 	}
+	return nil
 }
 
 func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
@@ -101,9 +139,14 @@ func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
 	m.SetReply(r)
 	m.Compress = false
 
+	filtered := true
 	switch r.Opcode {
 	case dns.OpcodeQuery:
-		parseQuery(l, m, w)
+		err := parseQuery(l, m, w)
+		filtered = (err != nil)
+	}
+	if filtered && dnsDropFiltered {
+		return
 	}
 
 	w.WriteMsg(m)
@@ -130,9 +173,23 @@ func getDnsServerAddr(c *Config) string {
 	return c.GetString("lighthouse.dns.host", "") + ":" + strconv.Itoa(c.GetInt("lighthouse.dns.port", 53))
 }
 
+func getDnsZones(c *Config) Zones {
+	zones := c.GetStringSlice("lighthouse.dns.zones", []string{})
+	for i := range zones {
+		zones[i] = strings.ToLower(dns.Fqdn(zones[i])) // equivalent to dns.CanonicalName in latest version of dns
+	}
+	return zones
+}
+
+func getDnsDropFiltered(c *Config) bool {
+	return c.GetBool("lighthouse.dns.drop_filtered", true)
+}
+
 func startDns(l *logrus.Logger, c *Config) {
 	dnsAddr = getDnsServerAddr(c)
+	dnsZones = getDnsZones(c)
 	dnsServer = &dns.Server{Addr: dnsAddr, Net: "udp"}
+	dnsDropFiltered = getDnsDropFiltered(c)
 	l.WithField("dnsListener", dnsAddr).Infof("Starting DNS responder")
 	err := dnsServer.ListenAndServe()
 	defer dnsServer.Shutdown()
@@ -142,7 +199,7 @@ func startDns(l *logrus.Logger, c *Config) {
 }
 
 func reloadDns(l *logrus.Logger, c *Config) {
-	if dnsAddr == getDnsServerAddr(c) {
+	if dnsAddr == getDnsServerAddr(c) && dnsZones.Equal(getDnsZones(c)) && dnsDropFiltered == getDnsDropFiltered(c) {
 		l.Debug("No DNS server config change detected")
 		return
 	}
