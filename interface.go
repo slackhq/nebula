@@ -43,6 +43,7 @@ type InterfaceConfig struct {
 	MessageMetrics          *MessageMetrics
 	version                 string
 	caPool                  *cert.NebulaCAPool
+	disconnectInvalid       bool
 
 	ConntrackCacheTimeout time.Duration
 	l                     *logrus.Logger
@@ -67,6 +68,7 @@ type Interface struct {
 	udpBatchSize       int
 	routines           int
 	caPool             *cert.NebulaCAPool
+	disconnectInvalid  bool
 
 	// rebindCount is used to decide if an active tunnel should trigger a punch notification through a lighthouse
 	rebindCount int8
@@ -118,6 +120,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		writers:            make([]*udpConn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
 		caPool:             c.caPool,
+		disconnectInvalid:  c.disconnectInvalid,
 		myVpnIp:            ip2int(c.certState.certificate.Details.Ips[0].IP),
 
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,

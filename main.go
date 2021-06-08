@@ -371,6 +371,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
 		caPool:                  caPool,
+		disconnectInvalid:       config.GetBool("pki.disconnect_invalid", false),
 
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,
