@@ -1,0 +1,16 @@
+[Unit]
+Description=nebula
+Wants=basic.target
+After=basic.target network.target
+ConditionPathExists=/etc/nebula/config.yml
+
+[Service]
+SyslogIdentifier=nebula
+#StandardOutput=syslog
+#StandardError=syslog
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=/usr/sbin/nebula -config /etc/nebula/config.yml
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
