@@ -1,0 +1,44 @@
+# This is the Nebula host example configuration file.
+# At a minimum, you will need to edit the static_host_map and lighthouse: hosts variables to match your environment.
+# For a complete list of options and settings, see https://www.defined.net/nebula/config/ and see the full config.yml example.
+
+pki:
+  # These files are generated with `nebula-cert`. See https://www.defined.net/nebula/quick-start/ for an example.
+  ca: /etc/nebula/ca.crt
+  cert: /etc/nebula/host.crt
+  key: /etc/nebula/host.key
+
+listen:
+  # Set the local listener options for the udp socket used by the Nebula daemon
+  host: 0.0.0.0
+  port: 0
+
+tun:
+  # Name the Nebula network device.
+  dev: nebula1
+
+firewall:
+  outbound:
+    # Allow all outbound traffic from this node
+    - port: any
+      proto: any
+      host: any
+
+  inbound:
+    # Allow icmp between any Nebula hosts
+    - port: any
+      proto: icmp
+      host: any
+
+static_host_map:
+  # List of Nebula IPs -> real IPs, which allows a host to find one or more lighthouses.
+  "192.168.100.1": ["100.64.22.11:4242"]
+
+lighthouse:
+  # A list of the Nebula lighthouses this host should report into, listed by the lighthouse Nebula IP
+  hosts:
+    - "192.168.100.1"
+
+punchy:
+  # Enables ongoing UDP hole punching to ensure that tunnels aren't interrupted by NAT timeouts.
+  punch: true
