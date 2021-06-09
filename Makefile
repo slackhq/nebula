@@ -70,7 +70,7 @@ release-linux: $(ALL_LINUX:%=build/nebula-%.tar.gz)
 
 release-freebsd: build/nebula-freebsd-amd64.tar.gz
 
-BUILD_ARGS = -trimpath
+BUILD_ARGS = -trimpath -tags netgo
 
 bin-windows: build/windows-amd64/nebula.exe build/windows-amd64/nebula-cert.exe
 	mv $? .
