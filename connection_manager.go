@@ -163,6 +163,13 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 
 		vpnIP := ep.(uint32)
 
+		// Don't probe lighthouses since recv_error should naturally catch this.
+		if n.intf.lightHouse.IsLighthouseIP(vpnIP) {
+			n.ClearIP(vpnIP)
+			n.ClearPendingDeletion(vpnIP)
+			continue
+		}
+
 		// Check for traffic coming back in from this host.
 		traf := n.CheckIn(vpnIP)
 
