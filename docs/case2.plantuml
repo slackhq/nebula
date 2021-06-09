@@ -1,0 +1,22 @@
+@startuml
+title Case 2: Stage 1 Race
+
+!pragma teoz true
+skinparam sequenceMessageAlign center
+
+actor "Initiator 10.0.0.1" as i1
+actor "Initiator 10.0.0.2" as i2
+
+-> i1: tun rx
+& i2 <- : tun rx
+i1 -> i1: Stage 0: Prepare handshake
+& i2 -> i2: Stage 0: Prepare handshake
+
+i1 o<->o i2: Both send a stage 1
+
+i1 -> i1: Stage 1: They won the race\nStand up tunnel\ndelete my pending attempt
+& i2 ->x i2: Stage 1: I won the race\nIgnore this packet
+
+i1 -> i2: Stage 2
+i2 -> i2: Stage 2: Stand up tunnel
+@enduml

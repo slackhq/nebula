@@ -155,6 +155,9 @@ ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) service ${.DEFAULT_GOAL} --no-print-directory
 endif
 
+plantuml:
+	plantuml -tpng '**.plantuml'
+
 bin-docker: bin build/linux-amd64/nebula build/linux-amd64/nebula-cert
 
 smoke-docker: bin-docker
@@ -165,5 +168,5 @@ smoke-docker-race: BUILD_ARGS = -race
 smoke-docker-race: smoke-docker
 
 .FORCE:
-.PHONY: e2e e2ev e2evv e2evvv e2evvvv test test-cov-html bench bench-cpu bench-cpu-long bin proto release service smoke-docker smoke-docker-race
+.PHONY: e2e e2ev e2evv e2evvv e2evvvv test test-cov-html bench bench-cpu bench-cpu-long bin proto release service smoke-docker smoke-docker-race plantuml
 .DEFAULT_GOAL := bin
