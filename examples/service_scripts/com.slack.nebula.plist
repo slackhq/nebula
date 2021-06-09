@@ -1,0 +1,35 @@
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Edit paths to match your environment
+    Copy to /Library/LaunchDaemons/com.slack.nebula.plist
+    To enable 'sudo launchctl load /Library/LaunchDaemons/com.slack.nebula.plist'
+-->
+<plist version="1.0">
+<dict>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+    <key>NetworkState</key>
+    <true/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+  <key>Label</key>
+  <string>com.slack.nebula</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/nebula</string>
+    <string>-config</string>
+    <string>/etc/nebula/config.yml</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>UserName</key>
+  <string>root</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/nebula.err</string>
+  <key>StandardOutPath</key>
+  <string>/var/log/nebula.log</string>
+</dict>
+</plist>
