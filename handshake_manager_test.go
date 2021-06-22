@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func Test_NewHandshakeManagerVpnIP(t *testing.T) {
+func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	l := NewTestLogger()
 	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
@@ -24,7 +24,7 @@ func Test_NewHandshakeManagerVpnIP(t *testing.T) {
 	now := time.Now()
 	blah.NextOutboundHandshakeTimerTick(now, mw)
 
-	i := blah.AddVpnIP(ip)
+	i := blah.AddVpnIp(ip)
 	i.remotes = NewRemoteList()
 	i.HandshakeReady = true
 
@@ -68,7 +68,7 @@ func Test_NewHandshakeManagerTrigger(t *testing.T) {
 
 	assert.Equal(t, 0, testCountTimerWheelEntries(blah.OutboundHandshakeTimer))
 
-	hi := blah.AddVpnIP(ip)
+	hi := blah.AddVpnIp(ip)
 	hi.HandshakeReady = true
 	assert.Equal(t, 1, testCountTimerWheelEntries(blah.OutboundHandshakeTimer))
 	assert.Equal(t, 0, hi.HandshakeCounter, "Should not have attempted a handshake yet")
