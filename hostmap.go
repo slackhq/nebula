@@ -433,7 +433,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 
 	// Re query our lighthouses for new remotes occasionally
 	if c%ReQueryEvery == 0 && ifce.lightHouse != nil {
-		ifce.lightHouse.QueryServer(i.hostId, ifce)
+		ifce.lightHouse.QueryServer(i.hostId, ifce, 0)
 	}
 }
 

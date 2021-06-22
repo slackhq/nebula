@@ -146,7 +146,7 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 		// If we only have 1 remote it is highly likely our query raced with the other host registered within the lighthouse
 		// Our vpnIP here has a tunnel with a lighthouse but has yet to send a host update packet there so we only know about
 		// the learned public ip for them. Query again to short circuit the promotion counter
-		c.lightHouse.QueryServer(vpnIP, f)
+		c.lightHouse.QueryServer(vpnIP, f, 0)
 	}
 
 	// Send a the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
