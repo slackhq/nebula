@@ -5,22 +5,21 @@ import (
 	"net"
 	"testing"
 
-	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCIDR6Tree_MostSpecificContains(t *testing.T) {
 	tree := NewTree6()
-	tree.AddCIDR(util.GetCIDR("1.0.0.0/8"), "1")
-	tree.AddCIDR(util.GetCIDR("2.1.0.0/16"), "2")
-	tree.AddCIDR(util.GetCIDR("3.1.1.0/24"), "3")
-	tree.AddCIDR(util.GetCIDR("4.1.1.1/24"), "4a")
-	tree.AddCIDR(util.GetCIDR("4.1.1.1/30"), "4b")
-	tree.AddCIDR(util.GetCIDR("4.1.1.1/32"), "4c")
-	tree.AddCIDR(util.GetCIDR("254.0.0.0/4"), "5")
-	tree.AddCIDR(util.GetCIDR("1:2:0:4:5:0:0:0/64"), "6a")
-	tree.AddCIDR(util.GetCIDR("1:2:0:4:5:0:0:0/80"), "6b")
-	tree.AddCIDR(util.GetCIDR("1:2:0:4:5:0:0:0/96"), "6c")
+	tree.AddCIDR(Parse("1.0.0.0/8"), "1")
+	tree.AddCIDR(Parse("2.1.0.0/16"), "2")
+	tree.AddCIDR(Parse("3.1.1.0/24"), "3")
+	tree.AddCIDR(Parse("4.1.1.1/24"), "4a")
+	tree.AddCIDR(Parse("4.1.1.1/30"), "4b")
+	tree.AddCIDR(Parse("4.1.1.1/32"), "4c")
+	tree.AddCIDR(Parse("254.0.0.0/4"), "5")
+	tree.AddCIDR(Parse("1:2:0:4:5:0:0:0/64"), "6a")
+	tree.AddCIDR(Parse("1:2:0:4:5:0:0:0/80"), "6b")
+	tree.AddCIDR(Parse("1:2:0:4:5:0:0:0/96"), "6c")
 
 	tests := []struct {
 		Result interface{}
@@ -49,8 +48,8 @@ func TestCIDR6Tree_MostSpecificContains(t *testing.T) {
 	}
 
 	tree = NewTree6()
-	tree.AddCIDR(util.GetCIDR("1.1.1.1/0"), "cool")
-	tree.AddCIDR(util.GetCIDR("::/0"), "cool6")
+	tree.AddCIDR(Parse("1.1.1.1/0"), "cool")
+	tree.AddCIDR(Parse("::/0"), "cool6")
 	assert.Equal(t, "cool", tree.MostSpecificContains(net.ParseIP("0.0.0.0")))
 	assert.Equal(t, "cool", tree.MostSpecificContains(net.ParseIP("255.255.255.255")))
 	assert.Equal(t, "cool6", tree.MostSpecificContains(net.ParseIP("::")))
@@ -59,9 +58,9 @@ func TestCIDR6Tree_MostSpecificContains(t *testing.T) {
 
 func TestCIDR6Tree_MostSpecificContainsIpV6(t *testing.T) {
 	tree := NewTree6()
-	tree.AddCIDR(util.GetCIDR("1:2:0:4:5:0:0:0/64"), "6a")
-	tree.AddCIDR(util.GetCIDR("1:2:0:4:5:0:0:0/80"), "6b")
-	tree.AddCIDR(util.GetCIDR("1:2:0:4:5:0:0:0/96"), "6c")
+	tree.AddCIDR(Parse("1:2:0:4:5:0:0:0/64"), "6a")
+	tree.AddCIDR(Parse("1:2:0:4:5:0:0:0/80"), "6b")
+	tree.AddCIDR(Parse("1:2:0:4:5:0:0:0/96"), "6c")
 
 	tests := []struct {
 		Result interface{}

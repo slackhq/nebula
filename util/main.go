@@ -2,7 +2,6 @@ package util
 
 import (
 	"io/ioutil"
-	"net"
 	"os"
 
 	"github.com/sirupsen/logrus"
@@ -27,9 +26,4 @@ func NewTestLogger() *logrus.Logger {
 	}
 
 	return l
-}
-
-func GetCIDR(s string) *net.IPNet {
-	_, c, _ := net.ParseCIDR(s)
-	return c
 }

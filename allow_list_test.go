@@ -109,14 +109,14 @@ func TestAllowList_Allow(t *testing.T) {
 	assert.Equal(t, true, ((*AllowList)(nil)).Allow(net.ParseIP("1.1.1.1")))
 
 	tree := cidr.NewTree6()
-	tree.AddCIDR(util.GetCIDR("0.0.0.0/0"), true)
-	tree.AddCIDR(util.GetCIDR("10.0.0.0/8"), false)
-	tree.AddCIDR(util.GetCIDR("10.42.42.42/32"), true)
-	tree.AddCIDR(util.GetCIDR("10.42.0.0/16"), true)
-	tree.AddCIDR(util.GetCIDR("10.42.42.0/24"), true)
-	tree.AddCIDR(util.GetCIDR("10.42.42.0/24"), false)
-	tree.AddCIDR(util.GetCIDR("::1/128"), true)
-	tree.AddCIDR(util.GetCIDR("::2/128"), false)
+	tree.AddCIDR(cidr.Parse("0.0.0.0/0"), true)
+	tree.AddCIDR(cidr.Parse("10.0.0.0/8"), false)
+	tree.AddCIDR(cidr.Parse("10.42.42.42/32"), true)
+	tree.AddCIDR(cidr.Parse("10.42.0.0/16"), true)
+	tree.AddCIDR(cidr.Parse("10.42.42.0/24"), true)
+	tree.AddCIDR(cidr.Parse("10.42.42.0/24"), false)
+	tree.AddCIDR(cidr.Parse("::1/128"), true)
+	tree.AddCIDR(cidr.Parse("::2/128"), false)
 	al := &AllowList{cidrTree: tree}
 
 	assert.Equal(t, true, al.Allow(net.ParseIP("1.1.1.1")))
