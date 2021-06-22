@@ -9,6 +9,7 @@ import (
 
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/e2e/router"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/stretchr/testify/assert"
 )
@@ -37,7 +38,7 @@ func TestGoodHandshake(t *testing.T) {
 	t.Log("I consume a garbage packet with a proper nebula header for our tunnel")
 	// this should log a statement and get ignored, allowing the real handshake packet to complete the tunnel
 	badPacket := stage1Packet.Copy()
-	badPacket.Data = badPacket.Data[:len(badPacket.Data)-nebula.HeaderLen]
+	badPacket.Data = badPacket.Data[:len(badPacket.Data)-header.Len]
 	myControl.InjectUDPPacket(badPacket)
 
 	t.Log("Have me consume their real stage 1 packet. I have a tunnel now")
@@ -88,7 +89,7 @@ func TestWrongResponderHandshake(t *testing.T) {
 	t.Log("Start the handshake process, we will route until we see our cached packet get sent to them")
 	myControl.InjectTunUDPPacket(theirVpnIp, 80, 80, []byte("Hi from me"))
 	r.RouteForAllExitFunc(func(p *nebula.UdpPacket, c *nebula.Control) router.ExitType {
-		h := &nebula.Header{}
+		h := &header.H{}
 		err := h.Parse(p.Data)
 		if err != nil {
 			panic(err)

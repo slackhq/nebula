@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/stretchr/testify/assert"
 )
@@ -332,8 +333,8 @@ func Test_ipMaskContains(t *testing.T) {
 }
 
 type testLhReply struct {
-	nebType    NebulaMessageType
-	nebSubType NebulaMessageSubType
+	nebType    header.MessageType
+	nebSubType header.MessageSubType
 	vpnIp      iputil.VpnIp
 	msg        *NebulaMeta
 }
@@ -342,7 +343,7 @@ type testEncWriter struct {
 	lastReply testLhReply
 }
 
-func (tw *testEncWriter) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp iputil.VpnIp, p, _, _ []byte) {
+func (tw *testEncWriter) SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, _, _ []byte) {
 	tw.lastReply = testLhReply{
 		nebType:    t,
 		nebSubType: st,

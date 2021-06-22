@@ -12,6 +12,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/header"
 	"golang.org/x/sys/unix"
 )
 
@@ -117,7 +118,7 @@ func (u *udpConn) LocalAddr() (*udpAddr, error) {
 
 func (u *udpConn) ListenOut(f *Interface, q int) {
 	plaintext := make([]byte, mtu)
-	header := &Header{}
+	h := &header.H{}
 	fwPacket := &FirewallPacket{}
 	udpAddr := &udpAddr{}
 	nb := make([]byte, 12, 12)
@@ -145,7 +146,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 		for i := 0; i < n; i++ {
 			udpAddr.IP = names[i][8:24]
 			udpAddr.Port = binary.BigEndian.Uint16(names[i][2:4])
-			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb, q, conntrackCache.Get(u.l))
+			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], h, fwPacket, lhh, nb, q, conntrackCache.Get(u.l))
 		}
 	}
 }
