@@ -18,6 +18,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/iputil"
 )
 
 const (
@@ -124,8 +125,8 @@ type FirewallRule struct {
 type firewallPort map[int32]*FirewallCA
 
 type FirewallPacket struct {
-	LocalIP    uint32
-	RemoteIP   uint32
+	LocalIP    iputil.VpnIp
+	RemoteIP   iputil.VpnIp
 	LocalPort  uint16
 	RemotePort uint16
 	Protocol   uint8
@@ -156,8 +157,8 @@ func (fp FirewallPacket) MarshalJSON() ([]byte, error) {
 		proto = fmt.Sprintf("unknown %v", fp.Protocol)
 	}
 	return json.Marshal(m{
-		"LocalIP":    int2ip(fp.LocalIP).String(),
-		"RemoteIP":   int2ip(fp.RemoteIP).String(),
+		"LocalIP":    fp.LocalIP.String(),
+		"RemoteIP":   fp.RemoteIP.String(),
 		"LocalPort":  fp.LocalPort,
 		"RemotePort": fp.RemotePort,
 		"Protocol":   proto,
@@ -410,7 +411,7 @@ func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *Host
 		}
 	} else {
 		// Simple case: Certificate has one IP and no subnets
-		if fp.RemoteIP != h.hostId {
+		if fp.RemoteIP != h.vpnIp {
 			f.metrics(incoming).droppedRemoteIP.Inc(1)
 			return ErrInvalidRemoteIP
 		}

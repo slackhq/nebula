@@ -10,6 +10,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/iputil"
 	"golang.org/x/net/ipv4"
 )
 
@@ -66,7 +67,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 			return
 		}
 
-		lhh.HandleRequest(addr, hostinfo.hostId, d, f)
+		lhh.HandleRequest(addr, hostinfo.vpnIp, d, f)
 
 		// Fallthrough to the bottom to record incoming traffic
 
@@ -129,15 +130,15 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 
 	f.handleHostRoaming(hostinfo, addr)
 
-	f.connectionManager.In(hostinfo.hostId)
+	f.connectionManager.In(hostinfo.vpnIp)
 }
 
 // closeTunnel closes a tunnel locally, it does not send a closeTunnel packet to the remote
 func (f *Interface) closeTunnel(hostInfo *HostInfo, hasHostMapLock bool) {
 	//TODO: this would be better as a single function in ConnectionManager that handled locks appropriately
-	f.connectionManager.ClearIP(hostInfo.hostId)
-	f.connectionManager.ClearPendingDeletion(hostInfo.hostId)
-	f.lightHouse.DeleteVpnIP(hostInfo.hostId)
+	f.connectionManager.ClearIP(hostInfo.vpnIp)
+	f.connectionManager.ClearPendingDeletion(hostInfo.vpnIp)
+	f.lightHouse.DeleteVpnIP(hostInfo.vpnIp)
 
 	if hasHostMapLock {
 		f.hostMap.unlockedDeleteHostInfo(hostInfo)
@@ -224,8 +225,8 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 
 	// Firewall packets are locally oriented
 	if incoming {
-		fp.RemoteIP = binary.BigEndian.Uint32(data[12:16])
-		fp.LocalIP = binary.BigEndian.Uint32(data[16:20])
+		fp.RemoteIP = iputil.Ip2VpnIp(data[12:16])
+		fp.LocalIP = iputil.Ip2VpnIp(data[16:20])
 		if fp.Fragment || fp.Protocol == fwProtoICMP {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
@@ -234,8 +235,8 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4])
 		}
 	} else {
-		fp.LocalIP = binary.BigEndian.Uint32(data[12:16])
-		fp.RemoteIP = binary.BigEndian.Uint32(data[16:20])
+		fp.LocalIP = iputil.Ip2VpnIp(data[12:16])
+		fp.RemoteIP = iputil.Ip2VpnIp(data[16:20])
 		if fp.Fragment || fp.Protocol == fwProtoICMP {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
@@ -298,7 +299,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return
 	}
 
-	f.connectionManager.In(hostinfo.hostId)
+	f.connectionManager.In(hostinfo.vpnIp)
 	_, err = f.readers[q].Write(out)
 	if err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")

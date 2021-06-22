@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/sshd"
 	"gopkg.in/yaml.v2"
 )
@@ -252,7 +253,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		l.Warn("lighthouse.am_lighthouse enabled on node but upstream lighthouses exist in config")
 	}
 
-	lighthouseHosts := make([]uint32, len(rawLighthouseHosts))
+	lighthouseHosts := make([]iputil.VpnIp, len(rawLighthouseHosts))
 	for i, host := range rawLighthouseHosts {
 		ip := net.ParseIP(host)
 		if ip == nil {
@@ -261,7 +262,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		if !tunCidr.Contains(ip) {
 			return nil, NewContextualError("lighthouse host is not in our subnet, invalid", m{"vpnIp": ip, "network": tunCidr.String()}, nil)
 		}
-		lighthouseHosts[i] = ip2int(ip)
+		lighthouseHosts[i] = iputil.Ip2VpnIp(ip)
 	}
 
 	lightHouse := NewLightHouse(
@@ -292,8 +293,9 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 
 	//TODO: Move all of this inside functions in lighthouse.go
 	for k, v := range config.GetMap("static_host_map", map[interface{}]interface{}{}) {
-		vpnIp := net.ParseIP(fmt.Sprintf("%v", k))
-		if !tunCidr.Contains(vpnIp) {
+		ip := net.ParseIP(fmt.Sprintf("%v", k))
+		vpnIp := iputil.Ip2VpnIp(ip)
+		if !tunCidr.Contains(ip) {
 			return nil, NewContextualError("static_host_map key is not in our subnet, invalid", m{"vpnIp": vpnIp, "network": tunCidr.String()}, nil)
 		}
 		vals, ok := v.([]interface{})
@@ -303,14 +305,14 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 				if err != nil {
 					return nil, NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
 				}
-				lightHouse.AddStaticRemote(ip2int(vpnIp), NewUDPAddr(ip, port))
+				lightHouse.AddStaticRemote(vpnIp, NewUDPAddr(ip, port))
 			}
 		} else {
 			ip, port, err := parseIPAndPort(fmt.Sprintf("%v", v))
 			if err != nil {
 				return nil, NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
 			}
-			lightHouse.AddStaticRemote(ip2int(vpnIp), NewUDPAddr(ip, port))
+			lightHouse.AddStaticRemote(vpnIp, NewUDPAddr(ip, port))
 		}
 	}
 

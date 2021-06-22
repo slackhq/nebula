@@ -1,8 +1,9 @@
 package nebula
 
 import (
-	"encoding/binary"
 	"net"
+
+	"github.com/slackhq/nebula/iputil"
 )
 
 const startbit6 = uint64(1 << 63)
@@ -33,8 +34,8 @@ func (tree *CIDR6Tree) AddCIDR(cidr *net.IPNet, val interface{}) {
 	}
 
 	for i := 0; i < len(cidrIP); i += 4 {
-		ip := binary.BigEndian.Uint32(cidrIP[i : i+4])
-		mask := binary.BigEndian.Uint32(cidr.Mask[i : i+4])
+		ip := iputil.Ip2VpnIp(cidrIP[i : i+4])
+		mask := iputil.Ip2VpnIp(cidr.Mask[i : i+4])
 		bit := startbit
 
 		// Find our last ancestor in the tree
@@ -85,7 +86,7 @@ func (tree *CIDR6Tree) MostSpecificContains(ip net.IP) (value interface{}) {
 	}
 
 	for i := 0; i < len(wholeIP); i += 4 {
-		ip := ip2int(wholeIP[i : i+4])
+		ip := iputil.Ip2VpnIp(wholeIP[i : i+4])
 		bit := startbit
 
 		for node != nil {
@@ -110,7 +111,7 @@ func (tree *CIDR6Tree) MostSpecificContains(ip net.IP) (value interface{}) {
 	return value
 }
 
-func (tree *CIDR6Tree) MostSpecificContainsIpV4(ip uint32) (value interface{}) {
+func (tree *CIDR6Tree) MostSpecificContainsIpV4(ip iputil.VpnIp) (value interface{}) {
 	bit := startbit
 	node := tree.root4
 
