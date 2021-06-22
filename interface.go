@@ -77,9 +77,11 @@ type Interface struct {
 	writers []*udpConn
 	readers []io.ReadWriteCloser
 
-	metricHandshakes metrics.Histogram
-	messageMetrics   *MessageMetrics
-	l                *logrus.Logger
+	metricHandshakes    metrics.Histogram
+	messageMetrics      *MessageMetrics
+	cachedPacketMetrics *cachedPacketMetrics
+
+	l *logrus.Logger
 }
 
 func NewInterface(c *InterfaceConfig) (*Interface, error) {
@@ -122,7 +124,12 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
-		l:                c.l,
+		cachedPacketMetrics: &cachedPacketMetrics{
+			sent:    metrics.GetOrRegisterCounter("hostinfo.cached_packets.sent", nil),
+			dropped: metrics.GetOrRegisterCounter("hostinfo.cached_packets.dropped", nil),
+		},
+
+		l: c.l,
 	}
 
 	ifce.connectionManager = newConnectionManager(c.l, ifce, c.checkInterval, c.pendingDeletionInterval)
@@ -130,7 +137,10 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 	return ifce, nil
 }
 
-func (f *Interface) run() {
+// activate creates the interface on the host. After the interface is created, any
+// other services that want to bind listeners to its IP may do so successfully. However,
+// the interface isn't going to process anything until run() is called.
+func (f *Interface) activate() {
 	// actually turn on tun dev
 
 	addr, err := f.outside.LocalAddr()
@@ -159,7 +169,9 @@ func (f *Interface) run() {
 	if err := f.inside.Activate(); err != nil {
 		f.l.Fatal(err)
 	}
+}
 
+func (f *Interface) run() {
 	// Launch n queues to read packets from udp
 	for i := 0; i < f.routines; i++ {
 		go f.listenOut(i)

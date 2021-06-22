@@ -11,6 +11,8 @@ import (
 	"os"
 	"sync"
 	"syscall"
+
+	"github.com/sirupsen/logrus"
 )
 
 type Tun struct {
@@ -19,11 +21,11 @@ type Tun struct {
 	Cidr   *net.IPNet
 }
 
-func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	return nil, fmt.Errorf("newTun not supported in iOS")
 }
 
-func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("route MTU not supported in Darwin")
 	}

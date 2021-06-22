@@ -68,9 +68,18 @@ type Firewall struct {
 	rules        string
 	rulesVersion uint16
 
-	trackTCPRTT  bool
-	metricTCPRTT metrics.Histogram
-	l            *logrus.Logger
+	trackTCPRTT     bool
+	metricTCPRTT    metrics.Histogram
+	incomingMetrics firewallMetrics
+	outgoingMetrics firewallMetrics
+
+	l *logrus.Logger
+}
+
+type firewallMetrics struct {
+	droppedLocalIP  metrics.Counter
+	droppedRemoteIP metrics.Counter
+	droppedNoRule   metrics.Counter
 }
 
 type FirewallConntrack struct {
@@ -195,8 +204,19 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		UDPTimeout:     UDPTimeout,
 		DefaultTimeout: defaultTimeout,
 		localIps:       localIps,
-		metricTCPRTT:   metrics.GetOrRegisterHistogram("network.tcp.rtt", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		l:              l,
+
+		metricTCPRTT: metrics.GetOrRegisterHistogram("network.tcp.rtt", nil, metrics.NewExpDecaySample(1028, 0.015)),
+		incomingMetrics: firewallMetrics{
+			droppedLocalIP:  metrics.GetOrRegisterCounter("firewall.incoming.dropped.local_ip", nil),
+			droppedRemoteIP: metrics.GetOrRegisterCounter("firewall.incoming.dropped.remote_ip", nil),
+			droppedNoRule:   metrics.GetOrRegisterCounter("firewall.incoming.dropped.no_rule", nil),
+		},
+		outgoingMetrics: firewallMetrics{
+			droppedLocalIP:  metrics.GetOrRegisterCounter("firewall.outgoing.dropped.local_ip", nil),
+			droppedRemoteIP: metrics.GetOrRegisterCounter("firewall.outgoing.dropped.remote_ip", nil),
+			droppedNoRule:   metrics.GetOrRegisterCounter("firewall.outgoing.dropped.no_rule", nil),
+		},
 	}
 }
 
@@ -385,17 +405,20 @@ func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *Host
 	// Make sure remote address matches nebula certificate
 	if remoteCidr := h.remoteCidr; remoteCidr != nil {
 		if remoteCidr.Contains(fp.RemoteIP) == nil {
+			f.metrics(incoming).droppedRemoteIP.Inc(1)
 			return ErrInvalidRemoteIP
 		}
 	} else {
 		// Simple case: Certificate has one IP and no subnets
 		if fp.RemoteIP != h.hostId {
+			f.metrics(incoming).droppedRemoteIP.Inc(1)
 			return ErrInvalidRemoteIP
 		}
 	}
 
 	// Make sure we are supposed to be handling this local ip address
 	if f.localIps.Contains(fp.LocalIP) == nil {
+		f.metrics(incoming).droppedLocalIP.Inc(1)
 		return ErrInvalidLocalIP
 	}
 
@@ -406,6 +429,7 @@ func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *Host
 
 	// We now know which firewall table to check against
 	if !table.match(fp, incoming, h.ConnectionState.peerCert, caPool) {
+		f.metrics(incoming).droppedNoRule.Inc(1)
 		return ErrNoMatchingRule
 	}
 
@@ -413,6 +437,14 @@ func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *Host
 	f.addConn(packet, fp, incoming)
 
 	return nil
+}
+
+func (f *Firewall) metrics(incoming bool) firewallMetrics {
+	if incoming {
+		return f.incomingMetrics
+	} else {
+		return f.outgoingMetrics
+	}
 }
 
 // Destroy cleans up any known cyclical references so the object can be free'd my GC. This should be called if a new

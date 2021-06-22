@@ -10,8 +10,8 @@ import (
 	"os"
 	"reflect"
 	"runtime/pprof"
+	"sort"
 	"strings"
-	"sync/atomic"
 	"syscall"
 
 	"github.com/sirupsen/logrus"
@@ -26,6 +26,7 @@ type sshListHostMapFlags struct {
 type sshPrintCertFlags struct {
 	Json   bool
 	Pretty bool
+	Raw    bool
 }
 
 type sshPrintTunnelFlags struct {
@@ -47,10 +48,13 @@ type sshCreateTunnelFlags struct {
 func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) {
 	c.RegisterReloadCallback(func(c *Config) {
 		if c.GetBool("sshd.enabled", false) {
-			err := configSSH(l, ssh, c)
+			sshRun, err := configSSH(l, ssh, c)
 			if err != nil {
 				l.WithError(err).Error("Failed to reconfigure the sshd")
 				ssh.Stop()
+			}
+			if sshRun != nil {
+				go sshRun()
 			}
 		} else {
 			ssh.Stop()
@@ -58,37 +62,41 @@ func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) {
 	})
 }
 
-func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) error {
+// configSSH reads the ssh info out of the passed-in Config and
+// updates the passed-in SSHServer. On success, it returns a function
+// that callers may invoke to run the configured ssh server. On
+// failure, it returns nil, error.
+func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) (func(), error) {
 	//TODO conntrack list
 	//TODO print firewall rules or hash?
 
 	listen := c.GetString("sshd.listen", "")
 	if listen == "" {
-		return fmt.Errorf("sshd.listen must be provided")
+		return nil, fmt.Errorf("sshd.listen must be provided")
 	}
 
 	_, port, err := net.SplitHostPort(listen)
 	if err != nil {
-		return fmt.Errorf("invalid sshd.listen address: %s", err)
+		return nil, fmt.Errorf("invalid sshd.listen address: %s", err)
 	}
 	if port == "22" {
-		return fmt.Errorf("sshd.listen can not use port 22")
+		return nil, fmt.Errorf("sshd.listen can not use port 22")
 	}
 
 	//TODO: no good way to reload this right now
 	hostKeyFile := c.GetString("sshd.host_key", "")
 	if hostKeyFile == "" {
-		return fmt.Errorf("sshd.host_key must be provided")
+		return nil, fmt.Errorf("sshd.host_key must be provided")
 	}
 
 	hostKeyBytes, err := ioutil.ReadFile(hostKeyFile)
 	if err != nil {
-		return fmt.Errorf("error while loading sshd.host_key file: %s", err)
+		return nil, fmt.Errorf("error while loading sshd.host_key file: %s", err)
 	}
 
 	err = ssh.SetHostKey(hostKeyBytes)
 	if err != nil {
-		return fmt.Errorf("error while adding sshd.host_key: %s", err)
+		return nil, fmt.Errorf("error while adding sshd.host_key: %s", err)
 	}
 
 	rawKeys := c.Get("sshd.authorized_users")
@@ -139,14 +147,19 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *Config) error {
 		l.Info("no ssh users to authorize")
 	}
 
+	var runner func()
 	if c.GetBool("sshd.enabled", false) {
 		ssh.Stop()
-		go ssh.Run(listen)
+		runner = func() {
+			if err := ssh.Run(listen); err != nil {
+				l.WithField("err", err).Warn("Failed to run the SSH server")
+			}
+		}
 	} else {
 		ssh.Stop()
 	}
 
-	return nil
+	return runner, nil
 }
 
 func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pendingHostMap *HostMap, lightHouse *LightHouse, ifce *Interface) {
@@ -254,6 +267,7 @@ func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pen
 			s := sshPrintCertFlags{}
 			fl.BoolVar(&s.Json, "json", false, "outputs as json")
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
+			fl.BoolVar(&s.Raw, "raw", false, "raw prints the PEM encoded certificate, not compatible with -json or -pretty")
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
@@ -335,8 +349,10 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 		return nil
 	}
 
-	hostMap.RLock()
-	defer hostMap.RUnlock()
+	hm := listHostMap(hostMap)
+	sort.Slice(hm, func(i, j int) bool {
+		return bytes.Compare(hm[i].VpnIP, hm[j].VpnIP) < 0
+	})
 
 	if fs.Json || fs.Pretty {
 		js := json.NewEncoder(w.GetWriter())
@@ -344,35 +360,15 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 			js.SetIndent("", "    ")
 		}
 
-		d := make([]m, len(hostMap.Hosts))
-		x := 0
-		var h m
-		for _, v := range hostMap.Hosts {
-			h = m{
-				"vpnIp":         int2ip(v.hostId),
-				"localIndex":    v.localIndexId,
-				"remoteIndex":   v.remoteIndexId,
-				"remoteAddrs":   v.CopyRemotes(),
-				"cachedPackets": len(v.packetStore),
-				"cert":          v.GetCert(),
-			}
-
-			if v.ConnectionState != nil {
-				h["messageCounter"] = atomic.LoadUint64(&v.ConnectionState.atomicMessageCounter)
-			}
-
-			d[x] = h
-			x++
-		}
-
-		err := js.Encode(d)
+		err := js.Encode(hm)
 		if err != nil {
 			//TODO
 			return nil
 		}
+
 	} else {
-		for i, v := range hostMap.Hosts {
-			err := w.WriteLine(fmt.Sprintf("%s: %s", int2ip(i), v.CopyRemotes()))
+		for _, v := range hm {
+			err := w.WriteLine(fmt.Sprintf("%s: %s", v.VpnIP, v.RemoteAddrs))
 			if err != nil {
 				return err
 			}
@@ -389,8 +385,26 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 		return nil
 	}
 
+	type lighthouseInfo struct {
+		VpnIP net.IP    `json:"vpnIp"`
+		Addrs *CacheMap `json:"addrs"`
+	}
+
 	lightHouse.RLock()
-	defer lightHouse.RUnlock()
+	addrMap := make([]lighthouseInfo, len(lightHouse.addrMap))
+	x := 0
+	for k, v := range lightHouse.addrMap {
+		addrMap[x] = lighthouseInfo{
+			VpnIP: int2ip(k),
+			Addrs: v.CopyCache(),
+		}
+		x++
+	}
+	lightHouse.RUnlock()
+
+	sort.Slice(addrMap, func(i, j int) bool {
+		return bytes.Compare(addrMap[i].VpnIP, addrMap[j].VpnIP) < 0
+	})
 
 	if fs.Json || fs.Pretty {
 		js := json.NewEncoder(w.GetWriter())
@@ -398,27 +412,19 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 			js.SetIndent("", "    ")
 		}
 
-		d := make([]m, len(lightHouse.addrMap))
-		x := 0
-		var h m
-		for vpnIp, v := range lightHouse.addrMap {
-			h = m{
-				"vpnIp": int2ip(vpnIp),
-				"addrs": TransformLHReplyToUdpAddrs(v),
-			}
-
-			d[x] = h
-			x++
-		}
-
-		err := js.Encode(d)
+		err := js.Encode(addrMap)
 		if err != nil {
 			//TODO
 			return nil
 		}
+
 	} else {
-		for vpnIp, v := range lightHouse.addrMap {
-			err := w.WriteLine(fmt.Sprintf("%s: %s", int2ip(vpnIp), TransformLHReplyToUdpAddrs(v)))
+		for _, v := range addrMap {
+			b, err := json.Marshal(v.Addrs)
+			if err != nil {
+				return err
+			}
+			err = w.WriteLine(fmt.Sprintf("%s: %s", v.VpnIP, string(b)))
 			if err != nil {
 				return err
 			}
@@ -469,8 +475,12 @@ func sshQueryLighthouse(ifce *Interface, fs interface{}, a []string, w sshd.Stri
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	ips, _ := ifce.lightHouse.Query(vpnIp, ifce, 0)
-	return json.NewEncoder(w.GetWriter()).Encode(ips)
+	var cm *CacheMap
+	rl := ifce.lightHouse.Query(vpnIp, ifce, 0)
+	if rl != nil {
+		cm = rl.CopyCache()
+	}
+	return json.NewEncoder(w.GetWriter()).Encode(cm)
 }
 
 func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
@@ -513,7 +523,7 @@ func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		)
 	}
 
-	ifce.closeTunnel(hostInfo)
+	ifce.closeTunnel(hostInfo, false)
 	return w.WriteLine("Closed")
 }
 
@@ -704,6 +714,16 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 		return w.WriteBytes(b)
 	}
 
+	if args.Raw {
+		b, err := cert.MarshalToPEM()
+		if err != nil {
+			//TODO: handle it
+			return nil
+		}
+
+		return w.WriteBytes(b)
+	}
+
 	return w.WriteLine(cert.String())
 }
 
@@ -728,7 +748,7 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	hostInfo, err := ifce.hostMap.QueryVpnIP(uint32(vpnIp))
+	hostInfo, err := ifce.hostMap.QueryVpnIP(vpnIp)
 	if err != nil {
 		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn ip: %v", a[0]))
 	}
@@ -738,7 +758,7 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		enc.SetIndent("", "    ")
 	}
 
-	return enc.Encode(hostInfo)
+	return enc.Encode(copyHostInfo(hostInfo, ifce.hostMap.preferredRanges))
 }
 
 func sshReload(fs interface{}, a []string, w sshd.StringWriter) error {

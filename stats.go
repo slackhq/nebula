@@ -17,24 +17,35 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func startStats(l *logrus.Logger, c *Config, buildVersion string, configTest bool) error {
+// startStats initializes stats from config. On success, if any futher work
+// is needed to serve stats, it returns a func to handle that work. If no
+// work is needed, it'll return nil. On failure, it returns nil, error.
+func startStats(l *logrus.Logger, c *Config, buildVersion string, configTest bool) (func(), error) {
 	mType := c.GetString("stats.type", "")
 	if mType == "" || mType == "none" {
-		return nil
+		return nil, nil
 	}
 
 	interval := c.GetDuration("stats.interval", 0)
 	if interval == 0 {
-		return fmt.Errorf("stats.interval was an invalid duration: %s", c.GetString("stats.interval", ""))
+		return nil, fmt.Errorf("stats.interval was an invalid duration: %s", c.GetString("stats.interval", ""))
 	}
 
+	var startFn func()
 	switch mType {
 	case "graphite":
-		startGraphiteStats(l, interval, c, configTest)
+		err := startGraphiteStats(l, interval, c, configTest)
+		if err != nil {
+			return nil, err
+		}
 	case "prometheus":
-		startPrometheusStats(l, interval, c, buildVersion, configTest)
+		var err error
+		startFn, err = startPrometheusStats(l, interval, c, buildVersion, configTest)
+		if err != nil {
+			return nil, err
+		}
 	default:
-		return fmt.Errorf("stats.type was not understood: %s", mType)
+		return nil, fmt.Errorf("stats.type was not understood: %s", mType)
 	}
 
 	metrics.RegisterDebugGCStats(metrics.DefaultRegistry)
@@ -43,7 +54,7 @@ func startStats(l *logrus.Logger, c *Config, buildVersion string, configTest boo
 	go metrics.CaptureDebugGCStats(metrics.DefaultRegistry, interval)
 	go metrics.CaptureRuntimeMemStats(metrics.DefaultRegistry, interval)
 
-	return nil
+	return startFn, nil
 }
 
 func startGraphiteStats(l *logrus.Logger, i time.Duration, c *Config, configTest bool) error {
@@ -59,25 +70,25 @@ func startGraphiteStats(l *logrus.Logger, i time.Duration, c *Config, configTest
 		return fmt.Errorf("error while setting up graphite sink: %s", err)
 	}
 
-	l.Infof("Starting graphite. Interval: %s, prefix: %s, addr: %s", i, prefix, addr)
 	if !configTest {
+		l.Infof("Starting graphite. Interval: %s, prefix: %s, addr: %s", i, prefix, addr)
 		go graphite.Graphite(metrics.DefaultRegistry, i, prefix, addr)
 	}
 	return nil
 }
 
-func startPrometheusStats(l *logrus.Logger, i time.Duration, c *Config, buildVersion string, configTest bool) error {
+func startPrometheusStats(l *logrus.Logger, i time.Duration, c *Config, buildVersion string, configTest bool) (func(), error) {
 	namespace := c.GetString("stats.namespace", "")
 	subsystem := c.GetString("stats.subsystem", "")
 
 	listen := c.GetString("stats.listen", "")
 	if listen == "" {
-		return fmt.Errorf("stats.listen should not be empty")
+		return nil, fmt.Errorf("stats.listen should not be empty")
 	}
 
 	path := c.GetString("stats.path", "")
 	if path == "" {
-		return fmt.Errorf("stats.path should not be empty")
+		return nil, fmt.Errorf("stats.path should not be empty")
 	}
 
 	pr := prometheus.NewRegistry()
@@ -98,13 +109,14 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *Config, buildVer
 	pr.MustRegister(g)
 	g.Set(1)
 
+	var startFn func()
 	if !configTest {
-		go func() {
+		startFn = func() {
 			l.Infof("Prometheus stats listening on %s at %s", listen, path)
 			http.Handle(path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: l}))
 			log.Fatal(http.ListenAndServe(listen, nil))
-		}()
+		}
 	}
 
-	return nil
+	return startFn, nil
 }

@@ -109,7 +109,7 @@ func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func dnsMain(l *logrus.Logger, hostMap *HostMap, c *Config) {
+func dnsMain(l *logrus.Logger, hostMap *HostMap, c *Config) func() {
 	dnsR = newDnsRecords(hostMap)
 
 	// attach request handler func
@@ -120,7 +120,10 @@ func dnsMain(l *logrus.Logger, hostMap *HostMap, c *Config) {
 	c.RegisterReloadCallback(func(c *Config) {
 		reloadDns(l, c)
 	})
-	startDns(l, c)
+
+	return func() {
+		startDns(l, c)
+	}
 }
 
 func getDnsServerAddr(c *Config) string {
@@ -130,7 +133,7 @@ func getDnsServerAddr(c *Config) string {
 func startDns(l *logrus.Logger, c *Config) {
 	dnsAddr = getDnsServerAddr(c)
 	dnsServer = &dns.Server{Addr: dnsAddr, Net: "udp"}
-	l.Debugf("Starting DNS responder at %s\n", dnsAddr)
+	l.WithField("dnsListener", dnsAddr).Infof("Starting DNS responder")
 	err := dnsServer.ListenAndServe()
 	defer dnsServer.Shutdown()
 	if err != nil {

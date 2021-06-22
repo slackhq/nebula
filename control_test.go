@@ -45,10 +45,12 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 		Signature: []byte{1, 2, 1, 2, 1, 3},
 	}
 
-	remotes := []*udpAddr{remote1, remote2}
+	remotes := NewRemoteList()
+	remotes.unlockedPrependV4(0, NewIp4AndPort(remote1.IP, uint32(remote1.Port)))
+	remotes.unlockedPrependV6(0, NewIp6AndPort(remote2.IP, uint32(remote2.Port)))
 	hm.Add(ip2int(ipNet.IP), &HostInfo{
 		remote:  remote1,
-		Remotes: remotes,
+		remotes: remotes,
 		ConnectionState: &ConnectionState{
 			peerCert: crt,
 		},
@@ -59,7 +61,7 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 
 	hm.Add(ip2int(ipNet2.IP), &HostInfo{
 		remote:  remote1,
-		Remotes: remotes,
+		remotes: remotes,
 		ConnectionState: &ConnectionState{
 			peerCert: nil,
 		},
@@ -81,7 +83,7 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 		VpnIP:          net.IPv4(1, 2, 3, 4).To4(),
 		LocalIndex:     201,
 		RemoteIndex:    200,
-		RemoteAddrs:    []*udpAddr{remote1, remote2},
+		RemoteAddrs:    []*udpAddr{remote2, remote1},
 		CachedPackets:  0,
 		Cert:           crt.Copy(),
 		MessageCounter: 0,

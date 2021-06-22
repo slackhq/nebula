@@ -14,14 +14,10 @@ import (
 // Sending is done by the handshake manager
 func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo, q int) {
 	// This queries the lighthouse if we don't know a remote for the host
+	// We do it here to provoke the lighthouse to preempt our timer wheel and trigger the stage 1 packet to send
+	// more quickly, effect is a quicker handshake.
 	if hostinfo.remote == nil {
-		ips, err := f.lightHouse.Query(vpnIp, f, q)
-		if err != nil {
-			//l.Debugln(err)
-		}
-		for _, ip := range ips {
-			hostinfo.AddRemote(ip)
-		}
+		f.lightHouse.QueryServer(vpnIp, f, q)
 	}
 
 	err := f.handshakeManager.AddIndexHostInfo(hostinfo)
@@ -35,7 +31,7 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo, q int) {
 
 	hsProto := &NebulaHandshakeDetails{
 		InitiatorIndex: hostinfo.localIndexId,
-		Time:           uint64(time.Now().Unix()),
+		Time:           uint64(time.Now().UnixNano()),
 		Cert:           ci.certState.rawCertificateNoKey,
 	}
 
@@ -69,7 +65,6 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo, q int) {
 	hostinfo.HandshakePacket[0] = msg
 	hostinfo.HandshakeReady = true
 	hostinfo.handshakeStart = time.Now()
-
 }
 
 func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header, q int) {
@@ -124,13 +119,16 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header, q 
 	}
 
 	hostinfo := &HostInfo{
-		ConnectionState: ci,
-		Remotes:         []*udpAddr{},
-		localIndexId:    myIndex,
-		remoteIndexId:   hs.Details.InitiatorIndex,
-		hostId:          vpnIP,
-		HandshakePacket: make(map[uint8][]byte, 0),
+		ConnectionState:   ci,
+		localIndexId:      myIndex,
+		remoteIndexId:     hs.Details.InitiatorIndex,
+		hostId:            vpnIP,
+		HandshakePacket:   make(map[uint8][]byte, 0),
+		lastHandshakeTime: hs.Details.Time,
 	}
+
+	hostinfo.Lock()
+	defer hostinfo.Unlock()
 
 	f.l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 		WithField("certName", certName).
@@ -141,6 +139,8 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header, q 
 
 	hs.Details.ResponderIndex = myIndex
 	hs.Details.Cert = ci.certState.rawCertificateNoKey
+	// Update the time in case their clock is way off from ours
+	hs.Details.Time = uint64(time.Now().UnixNano())
 
 	hsBytes, err := proto.Marshal(hs)
 	if err != nil {
@@ -182,15 +182,10 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header, q 
 	ci.peerCert = remoteCert
 	ci.dKey = NewNebulaCipherState(dKey)
 	ci.eKey = NewNebulaCipherState(eKey)
-	//l.Debugln("got symmetric pairs")
 
-	//hostinfo.ClearRemotes()
-	hostinfo.AddRemote(addr)
-	hostinfo.ForcePromoteBest(f.hostMap.preferredRanges)
+	hostinfo.remotes = f.lightHouse.QueryCache(vpnIP)
+	hostinfo.SetRemote(addr)
 	hostinfo.CreateRemoteCIDR(remoteCert)
-
-	hostinfo.Lock()
-	defer hostinfo.Unlock()
 
 	// Only overwrite existing record if we should win the handshake race
 	overwrite := vpnIP > ip2int(f.certState.certificate.Details.Ips[0].IP)
@@ -212,14 +207,15 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header, q 
 			}
 			return
 		case ErrExistingHostInfo:
-			// This means there was an existing tunnel and we didn't win
-			// handshake avoidance
+			// This means there was an existing tunnel and this handshake was older than the one we are currently based on
 			f.l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 				WithField("certName", certName).
+				WithField("oldHandshakeTime", existing.lastHandshakeTime).
+				WithField("newHandshakeTime", hostinfo.lastHandshakeTime).
 				WithField("fingerprint", fingerprint).
 				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-				Info("Prevented a handshake race")
+				Info("Handshake too old")
 
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
 			f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12, 12), make([]byte, mtu), q)
@@ -233,6 +229,15 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header, q 
 				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
 				WithField("localIndex", hostinfo.localIndexId).WithField("collision", IntIp(existing.hostId)).
 				Error("Failed to add HostInfo due to localIndex collision")
+			return
+		case ErrExistingHandshake:
+			// We have a race where both parties think they are an initiator and this tunnel lost, let the other one finish
+			f.l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
+				WithField("certName", certName).
+				WithField("fingerprint", fingerprint).
+				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
+				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+				Error("Prevented a pending handshake race")
 			return
 		default:
 			// Shouldn't happen, but just in case someone adds a new error type to CheckAndComplete
@@ -263,10 +268,12 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header, q 
 			WithField("fingerprint", fingerprint).
 			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+			WithField("sentCachedPackets", len(hostinfo.packetStore)).
 			Info("Handshake message sent")
 	}
 
-	hostinfo.handshakeComplete(f.l, q)
+	hostinfo.handshakeComplete(f.l, q, f.cachedPacketMetrics)
+
 	return
 }
 
@@ -284,6 +291,8 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		f.l.WithField("vpnIp", IntIp(hostinfo.hostId)).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("header", h).
 			Info("Handshake is already complete")
+
+		//TODO: evaluate addr for preference, if we handshook with a less preferred addr we can correct quickly here
 
 		// We already have a complete tunnel, there is nothing that can be done by processing further stage 1 packets
 		return false
@@ -333,16 +342,12 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	certName := remoteCert.Details.Name
 	fingerprint, _ := remoteCert.Sha256Sum()
 
+	// Ensure the right host responded
 	if vpnIP != hostinfo.hostId {
 		f.l.WithField("intendedVpnIp", IntIp(hostinfo.hostId)).WithField("haveVpnIp", IntIp(vpnIP)).
 			WithField("udpAddr", addr).WithField("certName", certName).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 			Info("Incorrect host responded to handshake")
-
-		if ho, _ := f.handshakeManager.pendingHostMap.QueryVpnIP(vpnIP); ho != nil {
-			// We might have a pending tunnel to this host already, clear out that attempt since we have a tunnel now
-			f.handshakeManager.pendingHostMap.DeleteHostInfo(ho)
-		}
 
 		// Release our old handshake from pending, it should not continue
 		f.handshakeManager.pendingHostMap.DeleteHostInfo(hostinfo)
@@ -353,26 +358,28 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		newHostInfo.Lock()
 
 		// Block the current used address
-		newHostInfo.unlockedBlockRemote(addr)
+		newHostInfo.remotes = hostinfo.remotes
+		newHostInfo.remotes.BlockRemote(addr)
 
-		// If this is an ongoing issue our previous hostmap will have some bad ips too
-		for _, v := range hostinfo.badRemotes {
-			newHostInfo.unlockedBlockRemote(v)
-		}
-		//TODO: this is me enabling tests
-		newHostInfo.ForcePromoteBest(f.hostMap.preferredRanges)
+		// Get the correct remote list for the host we did handshake with
+		hostinfo.remotes = f.lightHouse.QueryCache(vpnIP)
 
-		f.l.WithField("blockedUdpAddrs", newHostInfo.badRemotes).WithField("vpnIp", IntIp(vpnIP)).
-			WithField("remotes", newHostInfo.Remotes).
+		f.l.WithField("blockedUdpAddrs", newHostInfo.remotes.CopyBlockedRemotes()).WithField("vpnIp", IntIp(vpnIP)).
+			WithField("remotes", newHostInfo.remotes.CopyAddrs(f.hostMap.preferredRanges)).
 			Info("Blocked addresses for handshakes")
 
 		// Swap the packet store to benefit the original intended recipient
+		hostinfo.ConnectionState.queueLock.Lock()
 		newHostInfo.packetStore = hostinfo.packetStore
 		hostinfo.packetStore = []*cachedPacket{}
+		hostinfo.ConnectionState.queueLock.Unlock()
 
-		// Set the current hostId to the new vpnIp
+		// Finally, put the correct vpn ip in the host info, tell them to close the tunnel, and return true to tear down
 		hostinfo.hostId = vpnIP
+		f.sendCloseTunnel(hostinfo)
 		newHostInfo.Unlock()
+
+		return true
 	}
 
 	// Mark packet 2 as seen so it doesn't show up as missed
@@ -385,10 +392,11 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 		WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 		WithField("durationNs", duration).
+		WithField("sentCachedPackets", len(hostinfo.packetStore)).
 		Info("Handshake message received")
 
 	hostinfo.remoteIndexId = hs.Details.ResponderIndex
-	hs.Details.Cert = ci.certState.rawCertificateNoKey
+	hostinfo.lastHandshakeTime = hs.Details.Time
 
 	// Store their cert and our symmetric keys
 	ci.peerCert = remoteCert
@@ -404,7 +412,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	// Complete our handshake and update metrics, this will replace any existing tunnels for this vpnIp
 	//TODO: Complete here does not do a race avoidance, it will just take the new tunnel. Is this ok?
 	f.handshakeManager.Complete(hostinfo, f)
-	hostinfo.handshakeComplete(f.l, q)
+	hostinfo.handshakeComplete(f.l, q, f.cachedPacketMetrics)
 	f.metricHandshakes.Update(duration)
 
 	return false

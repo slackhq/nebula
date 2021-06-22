@@ -7,10 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- SSH `print-cert` has a new `-raw` flag to get the PEM representation of a certificate. (#483)
+
+### Fixed
+
+- Valid recv_error packets were incorrectly marked as "spoofing" and ignored. (#482)
+
+- SSH server handles single `exec` requests correctly. (#483)
+
+## [1.4.0] - 2021-05-11
+
+### Added
+
+- Ability to output qr code images in `print`, `ca`, and `sign` modes for `nebula-cert`.
+  This is useful when configuring mobile clients. (#297)
+
+- Experimental: Nebula can now do work on more than 2 cpu cores in send and receive paths via
+  the new `routines` config option. (#382, #391, #395)
+  
+- ICMP ping requests can be responded to when the `tun.disabled` is `true`.
+  This is useful so that you can "ping" a lighthouse running in this mode. (#342)
+
+- Run smoke tests via `make smoke-docker`. (#287)
+
+- More reported stats, udp memory use on linux, build version (when using Prometheus), firewall, 
+  handshake, and cached packet stats. (#390, #405, #450, #453)
+
+- IPv6 support for the underlay network. (#369)
+
+- End to end testing, run with `make e2e`. (#425, #427, #428)
+
 ### Changed
 
-- Updated the kardianos/service go library from 1.0.0 to 1.1.0, which
-  now creates launchd plist to write stdout/stderr to files by default.
+- Darwin will now log stdout/stderr to a file when using `-service` mode. (#303)
+
+- Example systemd unit file now better arranged startup order when using `sshd`
+  and other fixes. (#317, #412, #438)
+  
+- Reduced memory utilization/garbage collection. (#320, #323, #340)
+
+- Reduced CPU utilization. (#329)
+
+- Build against go 1.16. (#381)
+
+- Refactored handshakes to improve performance and correctness. (#401, #402, #404, #416, #451)
+
+- Improved roaming support for mobile clients. (#394, #457)
+
+- Lighthouse performance and correctness improvements. (#406, #418, #429, #433, #437, #442, #449)
+
+- Better ordered startup to enable `sshd`, `stats`, and `dns` subsystems to listen on
+  the nebula interface. (#375)
+
+### Fixed
+
+- No longer report handshake packets as `lost` in stats. (#331)
+
+- Error handling in the `cert` package. (#339, #373)
+
+- Orphaned pending hostmap entries are cleaned up. (#344)
+
+- Most known data races are now resolved. (#396, #400, #424)
+
+- Refuse to run a lighthouse on an ephemeral port. (#399)
+
+- Removed the global references. (#423, #426, #446)
+
+- Reloading via ssh command avoids a panic. (#447)
+
+- Shutdown is now performed in a cleaner way. (#448)
+
+- Logs will now find their way to Windows event viewer when running under `-service` mode
+  in Windows. (#443)
 
 ## [1.3.0] - 2020-09-22
 
@@ -185,7 +255,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/slackhq/nebula/releases/tag/v1.4.0
 [1.3.0]: https://github.com/slackhq/nebula/releases/tag/v1.3.0
 [1.2.0]: https://github.com/slackhq/nebula/releases/tag/v1.2.0
 [1.1.0]: https://github.com/slackhq/nebula/releases/tag/v1.1.0

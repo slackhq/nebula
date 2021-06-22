@@ -118,7 +118,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		hostinfo.logger(f.l).WithField("udpAddr", addr).
 			Info("Close tunnel received, tearing down.")
 
-		f.closeTunnel(hostinfo)
+		f.closeTunnel(hostinfo, false)
 		return
 
 	default:
@@ -132,12 +132,23 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 	f.connectionManager.In(hostinfo.hostId)
 }
 
-func (f *Interface) closeTunnel(hostInfo *HostInfo) {
+// closeTunnel closes a tunnel locally, it does not send a closeTunnel packet to the remote
+func (f *Interface) closeTunnel(hostInfo *HostInfo, hasHostMapLock bool) {
 	//TODO: this would be better as a single function in ConnectionManager that handled locks appropriately
 	f.connectionManager.ClearIP(hostInfo.hostId)
 	f.connectionManager.ClearPendingDeletion(hostInfo.hostId)
 	f.lightHouse.DeleteVpnIP(hostInfo.hostId)
-	f.hostMap.DeleteHostInfo(hostInfo)
+
+	if hasHostMapLock {
+		f.hostMap.unlockedDeleteHostInfo(hostInfo)
+	} else {
+		f.hostMap.DeleteHostInfo(hostInfo)
+	}
+}
+
+// sendCloseTunnel is a helper function to send a proper close tunnel packet to a remote
+func (f *Interface) sendCloseTunnel(h *HostInfo) {
+	f.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 }
 
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {
@@ -160,9 +171,6 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {
 		remoteCopy := *hostinfo.remote
 		hostinfo.lastRoamRemote = &remoteCopy
 		hostinfo.SetRemote(addr)
-		if f.lightHouse.amLighthouse {
-			f.lightHouse.AddRemote(hostinfo.hostId, addr, false)
-		}
 	}
 
 }
@@ -332,7 +340,7 @@ func (f *Interface) handleRecvError(addr *udpAddr, h *Header) {
 	if !hostinfo.RecvErrorExceeded() {
 		return
 	}
-	if hostinfo.remote != nil && hostinfo.remote.String() != addr.String() {
+	if hostinfo.remote != nil && !hostinfo.remote.Equals(addr) {
 		f.l.Infoln("Someone spoofing recv_errors? ", addr, hostinfo.remote)
 		return
 	}

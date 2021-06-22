@@ -75,8 +75,9 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
 	wireSSHReload(l, ssh, config)
+	var sshStart func()
 	if config.GetBool("sshd.enabled", false) {
-		err = configSSH(l, ssh, config)
+		sshStart, err = configSSH(l, ssh, config)
 		if err != nil {
 			return nil, NewContextualError("Error while configuring the sshd", nil, err)
 		}
@@ -221,7 +222,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	}
 
 	hostMap := NewHostMap(l, "main", tunCidr, preferredRanges)
-	hostMap.SetDefaultRoute(ip2int(net.ParseIP(config.GetString("default_route", "0.0.0.0"))))
+
 	hostMap.addUnsafeRoutes(&unsafeRoutes)
 	hostMap.metricsEnabled = config.GetBool("stats.message_metrics", false)
 
@@ -299,19 +300,17 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		if ok {
 			for _, v := range vals {
 				ip, port, err := parseIPAndPort(fmt.Sprintf("%v", v))
-				if err == nil {
-					lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip, port), true)
-				} else {
+				if err != nil {
 					return nil, NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
 				}
+				lightHouse.AddStaticRemote(ip2int(vpnIp), NewUDPAddr(ip, port))
 			}
 		} else {
 			ip, port, err := parseIPAndPort(fmt.Sprintf("%v", v))
-			if err == nil {
-				lightHouse.AddRemote(ip2int(vpnIp), NewUDPAddr(ip, port), true)
-			} else {
+			if err != nil {
 				return nil, NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
 			}
+			lightHouse.AddStaticRemote(ip2int(vpnIp), NewUDPAddr(ip, port))
 		}
 	}
 
@@ -330,7 +329,6 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	handshakeConfig := HandshakeConfig{
 		tryInterval:   config.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
 		retries:       config.GetInt("handshakes.retries", DefaultHandshakeRetries),
-		waitRotation:  config.GetInt("handshakes.wait_rotation", DefaultHandshakeWaitRotation),
 		triggerBuffer: config.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
 
 		messageMetrics: messageMetrics,
@@ -343,7 +341,15 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	//handshakeMACKey := config.GetString("handshake_mac.key", "")
 	//handshakeAcceptedMACKeys := config.GetStringSlice("handshake_mac.accepted_keys", []string{})
 
-	serveDns := config.GetBool("lighthouse.serve_dns", false)
+	serveDns := false
+	if config.GetBool("lighthouse.serve_dns", false) {
+		if config.GetBool("lighthouse.am_lighthouse", false) {
+			serveDns = true
+		} else {
+			l.Warn("DNS server refusing to run because this host is not a lighthouse.")
+		}
+	}
+
 	checkInterval := config.GetInt("timers.connection_alive_interval", 5)
 	pendingDeletionInterval := config.GetInt("timers.pending_deletion_interval", 10)
 	ifConfig := &InterfaceConfig{
@@ -396,7 +402,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		go lightHouse.LhUpdateWorker(ifce)
 	}
 
-	err = startStats(l, config, buildVersion, configTest)
+	statsStart, err := startStats(l, config, buildVersion, configTest)
 	if err != nil {
 		return nil, NewContextualError("Failed to start stats emitter", nil, err)
 	}
@@ -411,10 +417,11 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	attachCommands(l, ssh, hostMap, handshakeManager.pendingHostMap, lightHouse, ifce)
 
 	// Start DNS server last to allow using the nebula IP as lighthouse.dns.host
+	var dnsStart func()
 	if amLighthouse && serveDns {
 		l.Debugln("Starting dns server")
-		go dnsMain(l, hostMap, config)
+		dnsStart = dnsMain(l, hostMap, config)
 	}
 
-	return &Control{ifce, l}, nil
+	return &Control{ifce, l, sshStart, statsStart, dnsStart}, nil
 }
