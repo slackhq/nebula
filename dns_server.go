@@ -8,6 +8,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/iputil"
 )
 
@@ -110,7 +111,7 @@ func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func dnsMain(l *logrus.Logger, hostMap *HostMap, c *Config) func() {
+func dnsMain(l *logrus.Logger, hostMap *HostMap, c *config.C) func() {
 	dnsR = newDnsRecords(hostMap)
 
 	// attach request handler func
@@ -118,7 +119,7 @@ func dnsMain(l *logrus.Logger, hostMap *HostMap, c *Config) func() {
 		handleDnsRequest(l, w, r)
 	})
 
-	c.RegisterReloadCallback(func(c *Config) {
+	c.RegisterReloadCallback(func(c *config.C) {
 		reloadDns(l, c)
 	})
 
@@ -127,11 +128,11 @@ func dnsMain(l *logrus.Logger, hostMap *HostMap, c *Config) func() {
 	}
 }
 
-func getDnsServerAddr(c *Config) string {
+func getDnsServerAddr(c *config.C) string {
 	return c.GetString("lighthouse.dns.host", "") + ":" + strconv.Itoa(c.GetInt("lighthouse.dns.port", 53))
 }
 
-func startDns(l *logrus.Logger, c *Config) {
+func startDns(l *logrus.Logger, c *config.C) {
 	dnsAddr = getDnsServerAddr(c)
 	dnsServer = &dns.Server{Addr: dnsAddr, Net: "udp"}
 	l.WithField("dnsListener", dnsAddr).Infof("Starting DNS responder")
@@ -142,7 +143,7 @@ func startDns(l *logrus.Logger, c *Config) {
 	}
 }
 
-func reloadDns(l *logrus.Logger, c *Config) {
+func reloadDns(l *logrus.Logger, c *config.C) {
 	if dnsAddr == getDnsServerAddr(c) {
 		l.Debug("No DNS server config change detected")
 		return

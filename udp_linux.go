@@ -12,6 +12,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"golang.org/x/sys/unix"
 )
@@ -222,7 +223,7 @@ func (u *udpConn) WriteTo(b []byte, addr *udpAddr) error {
 	}
 }
 
-func (u *udpConn) reloadConfig(c *Config) {
+func (u *udpConn) reloadConfig(c *config.C) {
 	b := c.GetInt("listen.read_buffer", 0)
 	if b > 0 {
 		err := u.SetRecvBuffer(b)

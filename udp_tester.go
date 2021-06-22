@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 )
 
@@ -121,7 +122,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 	}
 }
 
-func (u *udpConn) reloadConfig(*Config) {}
+func (u *udpConn) reloadConfig(*config.C) {}
 
 func NewUDPStatsEmitter(_ []*udpConn) func() {
 	// No UDP stats for non-linux
