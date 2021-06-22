@@ -18,6 +18,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/iputil"
 )
@@ -65,7 +66,7 @@ type Firewall struct {
 	DefaultTimeout time.Duration //linux: 600s
 
 	// Used to ensure we don't emit local packets for ips we don't own
-	localIps *CIDRTree
+	localIps *cidr.Tree4
 
 	rules        string
 	rulesVersion uint16
@@ -118,7 +119,7 @@ type FirewallRule struct {
 	Any    bool
 	Hosts  map[string]struct{}
 	Groups [][]string
-	CIDR   *CIDRTree
+	CIDR   *cidr.Tree4
 }
 
 // Even though ports are uint16, int32 maps are faster for lookup
@@ -186,7 +187,7 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		max = defaultTimeout
 	}
 
-	localIps := NewCIDRTree()
+	localIps := cidr.NewTree4()
 	for _, ip := range c.Details.Ips {
 		localIps.AddCIDR(&net.IPNet{IP: ip.IP, Mask: net.IPMask{255, 255, 255, 255}}, struct{}{})
 	}
@@ -670,7 +671,7 @@ func (fc *FirewallCA) addRule(groups []string, host string, ip *net.IPNet, caNam
 		return &FirewallRule{
 			Hosts:  make(map[string]struct{}),
 			Groups: make([][]string, 0),
-			CIDR:   NewCIDRTree(),
+			CIDR:   cidr.NewTree4(),
 		}
 	}
 
@@ -738,7 +739,7 @@ func (fr *FirewallRule) addRule(groups []string, host string, ip *net.IPNet) err
 		// If it's any we need to wipe out any pre-existing rules to save on memory
 		fr.Groups = make([][]string, 0)
 		fr.Hosts = make(map[string]struct{})
-		fr.CIDR = NewCIDRTree()
+		fr.CIDR = cidr.NewTree4()
 	} else {
 		if len(groups) > 0 {
 			fr.Groups = append(fr.Groups, groups)

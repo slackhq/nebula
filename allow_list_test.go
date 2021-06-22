@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
@@ -107,15 +108,15 @@ func TestNewAllowListFromConfig(t *testing.T) {
 func TestAllowList_Allow(t *testing.T) {
 	assert.Equal(t, true, ((*AllowList)(nil)).Allow(net.ParseIP("1.1.1.1")))
 
-	tree := NewCIDR6Tree()
-	tree.AddCIDR(getCIDR("0.0.0.0/0"), true)
-	tree.AddCIDR(getCIDR("10.0.0.0/8"), false)
-	tree.AddCIDR(getCIDR("10.42.42.42/32"), true)
-	tree.AddCIDR(getCIDR("10.42.0.0/16"), true)
-	tree.AddCIDR(getCIDR("10.42.42.0/24"), true)
-	tree.AddCIDR(getCIDR("10.42.42.0/24"), false)
-	tree.AddCIDR(getCIDR("::1/128"), true)
-	tree.AddCIDR(getCIDR("::2/128"), false)
+	tree := cidr.NewTree6()
+	tree.AddCIDR(cidr.Parse("0.0.0.0/0"), true)
+	tree.AddCIDR(cidr.Parse("10.0.0.0/8"), false)
+	tree.AddCIDR(cidr.Parse("10.42.42.42/32"), true)
+	tree.AddCIDR(cidr.Parse("10.42.0.0/16"), true)
+	tree.AddCIDR(cidr.Parse("10.42.42.0/24"), true)
+	tree.AddCIDR(cidr.Parse("10.42.42.0/24"), false)
+	tree.AddCIDR(cidr.Parse("::1/128"), true)
+	tree.AddCIDR(cidr.Parse("::2/128"), false)
 	al := &AllowList{cidrTree: tree}
 
 	assert.Equal(t, true, al.Allow(net.ParseIP("1.1.1.1")))
