@@ -12,12 +12,12 @@ import (
 
 // This function constructs a handshake packet, but does not actually send it
 // Sending is done by the handshake manager
-func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
+func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo, q int) {
 	// This queries the lighthouse if we don't know a remote for the host
 	// We do it here to provoke the lighthouse to preempt our timer wheel and trigger the stage 1 packet to send
 	// more quickly, effect is a quicker handshake.
 	if hostinfo.remote == nil {
-		f.lightHouse.QueryServer(vpnIp, f)
+		f.lightHouse.QueryServer(vpnIp, f, q)
 	}
 
 	err := f.handshakeManager.AddIndexHostInfo(hostinfo)
@@ -67,7 +67,7 @@ func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
 	hostinfo.handshakeStart = time.Now()
 }
 
-func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
+func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header, q int) {
 	ci := f.newConnectionState(f.l, false, noise.HandshakeIX, []byte{}, 0)
 	// Mark packet 1 as seen so it doesn't show up as missed
 	ci.window.Update(f.l, 1)
@@ -195,7 +195,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 		case ErrAlreadySeen:
 			msg = existing.HandshakePacket[2]
 			f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
-			err := f.outside.WriteTo(msg, addr)
+			err = f.writers[q].WriteTo(msg, addr)
 			if err != nil {
 				f.l.WithField("vpnIp", IntIp(existing.hostId)).WithField("udpAddr", addr).
 					WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
@@ -218,7 +218,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 				Info("Handshake too old")
 
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
-			f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12, 12), make([]byte, mtu), q)
 			return
 		case ErrLocalIndexCollision:
 			// This means we failed to insert because of collision on localIndexId. Just let the next handshake packet retry
@@ -254,7 +254,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 
 	// Do the send
 	f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
-	err = f.outside.WriteTo(msg, addr)
+	err = f.writers[q].WriteTo(msg, addr)
 	if err != nil {
 		f.l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 			WithField("certName", certName).
@@ -272,12 +272,12 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 			Info("Handshake message sent")
 	}
 
-	hostinfo.handshakeComplete(f.l, f.cachedPacketMetrics)
+	hostinfo.handshakeComplete(f.l, q, f.cachedPacketMetrics)
 
 	return
 }
 
-func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet []byte, h *Header) bool {
+func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet []byte, h *Header, q int) bool {
 	if hostinfo == nil {
 		// Nothing here to tear down, got a bogus stage 2 packet
 		return true
@@ -354,7 +354,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 
 		// Create a new hostinfo/handshake for the intended vpn ip
 		//TODO: this adds it to the timer wheel in a way that aggressively retries
-		newHostInfo := f.getOrHandshake(hostinfo.hostId)
+		newHostInfo := f.getOrHandshake(hostinfo.hostId, q)
 		newHostInfo.Lock()
 
 		// Block the current used address
@@ -412,7 +412,7 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 	// Complete our handshake and update metrics, this will replace any existing tunnels for this vpnIp
 	//TODO: Complete here does not do a race avoidance, it will just take the new tunnel. Is this ok?
 	f.handshakeManager.Complete(hostinfo, f)
-	hostinfo.handshakeComplete(f.l, f.cachedPacketMetrics)
+	hostinfo.handshakeComplete(f.l, q, f.cachedPacketMetrics)
 	f.metricHandshakes.Update(duration)
 
 	return false

@@ -29,7 +29,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 		return
 	}
 
-	hostinfo := f.getOrHandshake(fwPacket.RemoteIP)
+	hostinfo := f.getOrHandshake(fwPacket.RemoteIP, q)
 	if hostinfo == nil {
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("vpnIp", IntIp(fwPacket.RemoteIP)).
@@ -55,7 +55,6 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, f.caPool, localCache)
 	if dropReason == nil {
 		f.sendNoMetrics(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out, q)
-
 	} else if f.l.Level >= logrus.DebugLevel {
 		hostinfo.logger(f.l).
 			WithField("fwPacket", fwPacket).
@@ -65,7 +64,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 }
 
 // getOrHandshake returns nil if the vpnIp is not routable
-func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
+func (f *Interface) getOrHandshake(vpnIp uint32, q int) *HostInfo {
 	if f.hostMap.vpnCIDR.Contains(int2ip(vpnIp)) == false {
 		vpnIp = f.hostMap.queryUnsafeRoute(vpnIp)
 		if vpnIp == 0 {
@@ -109,7 +108,7 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 
 	// If we have already created the handshake packet, we don't want to call the function at all.
 	if !hostinfo.HandshakeReady {
-		ixHandshakeStage0(f, vpnIp, hostinfo)
+		ixHandshakeStage0(f, vpnIp, hostinfo, q)
 		// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
 		//xx_handshakeStage0(f, ip, hostinfo)
 
@@ -126,7 +125,7 @@ func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
 	return hostinfo
 }
 
-func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType, hostInfo *HostInfo, p, nb, out []byte) {
+func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType, hostInfo *HostInfo, p, nb, out []byte, q int) {
 	fp := &FirewallPacket{}
 	err := newPacket(p, false, fp)
 	if err != nil {
@@ -145,12 +144,12 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 		return
 	}
 
-	f.sendNoMetrics(message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out, 0)
+	f.sendNoMetrics(message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out, q)
 }
 
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
-func (f *Interface) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
-	hostInfo := f.getOrHandshake(vpnIp)
+func (f *Interface) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte, q int) {
+	hostInfo := f.getOrHandshake(vpnIp, q)
 	if hostInfo == nil {
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("vpnIp", IntIp(vpnIp)).
@@ -171,17 +170,17 @@ func (f *Interface) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubT
 		hostInfo.ConnectionState.queueLock.Unlock()
 	}
 
-	f.sendMessageToVpnIp(t, st, hostInfo, p, nb, out)
+	f.sendMessageToVpnIp(t, st, hostInfo, p, nb, out, q)
 	return
 }
 
-func (f *Interface) sendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, hostInfo *HostInfo, p, nb, out []byte) {
-	f.send(t, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out)
+func (f *Interface) sendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, hostInfo *HostInfo, p, nb, out []byte, q int) {
+	f.send(t, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out, q)
 }
 
-func (f *Interface) send(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte) {
+func (f *Interface) send(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte, q int) {
 	f.messageMetrics.Tx(t, st, 1)
-	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
+	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, q)
 }
 
 func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte, q int) {
@@ -204,7 +203,7 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 	if t != closeTunnel && hostinfo.lastRebindCount != f.rebindCount {
 		//NOTE: there is an update hole if a tunnel isn't used and exactly 256 rebinds occur before the tunnel is
 		// finally used again. This tunnel would eventually be torn down and recreated if this action didn't help.
-		f.lightHouse.QueryServer(hostinfo.hostId, f)
+		f.lightHouse.QueryServer(hostinfo.hostId, f, q)
 		hostinfo.lastRebindCount = f.rebindCount
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("vpnIp", hostinfo.hostId).Debug("Lighthouse update triggered for punch due to rebind counter")

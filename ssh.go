@@ -476,7 +476,7 @@ func sshQueryLighthouse(ifce *Interface, fs interface{}, a []string, w sshd.Stri
 	}
 
 	var cm *CacheMap
-	rl := ifce.lightHouse.Query(vpnIp, ifce)
+	rl := ifce.lightHouse.Query(vpnIp, ifce, 0)
 	if rl != nil {
 		cm = rl.CopyCache()
 	}
@@ -519,6 +519,7 @@ func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 			[]byte{},
 			make([]byte, 12, 12),
 			make([]byte, mtu),
+			0,
 		)
 	}
 
@@ -569,7 +570,7 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 	if addr != nil {
 		hostInfo.SetRemote(addr)
 	}
-	ifce.getOrHandshake(vpnIp)
+	ifce.getOrHandshake(vpnIp, 0)
 
 	return w.WriteLine("Created")
 }

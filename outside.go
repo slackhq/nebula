@@ -66,7 +66,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 			return
 		}
 
-		lhh.HandleRequest(addr, hostinfo.hostId, d, f)
+		lhh.HandleRequest(addr, hostinfo.hostId, d, f, q)
 
 		// Fallthrough to the bottom to record incoming traffic
 
@@ -91,7 +91,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 			// This testRequest might be from TryPromoteBest, so we should roam
 			// to the new IP address before responding
 			f.handleHostRoaming(hostinfo, addr)
-			f.send(test, testReply, ci, hostinfo, hostinfo.remote, d, nb, out)
+			f.send(test, testReply, ci, hostinfo, hostinfo.remote, d, nb, out, q)
 		}
 
 		// Fallthrough to the bottom to record incoming traffic
@@ -101,7 +101,7 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 
 	case handshake:
 		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
-		HandleIncomingHandshake(f, addr, packet, header, hostinfo)
+		HandleIncomingHandshake(f, addr, packet, header, q)
 		return
 
 	case recvError:
@@ -148,7 +148,7 @@ func (f *Interface) closeTunnel(hostInfo *HostInfo, hasHostMapLock bool) {
 
 // sendCloseTunnel is a helper function to send a proper close tunnel packet to a remote
 func (f *Interface) sendCloseTunnel(h *HostInfo) {
-	f.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+	f.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu), 0)
 }
 
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {

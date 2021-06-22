@@ -109,7 +109,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 		p, err := proto.Marshal(req)
 		assert.NoError(b, err)
 		for n := 0; n < b.N; n++ {
-			lhh.HandleRequest(rAddr, 2, p, mw)
+			lhh.HandleRequest(rAddr, 2, p, mw, 0)
 		}
 	})
 	b.Run("found", func(b *testing.B) {
@@ -125,7 +125,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 		assert.NoError(b, err)
 
 		for n := 0; n < b.N; n++ {
-			lhh.HandleRequest(rAddr, 2, p, mw)
+			lhh.HandleRequest(rAddr, 2, p, mw, 0)
 		}
 	})
 }
@@ -232,7 +232,7 @@ func newLHHostRequest(fromAddr *udpAddr, myVpnIp, queryVpnIp uint32, lhh *LightH
 	}
 
 	w := &testEncWriter{}
-	lhh.HandleRequest(fromAddr, myVpnIp, b, w)
+	lhh.HandleRequest(fromAddr, myVpnIp, b, w, 0)
 	return w.lastReply
 }
 
@@ -255,7 +255,7 @@ func newLHHostUpdate(fromAddr *udpAddr, vpnIp uint32, addrs []*udpAddr, lhh *Lig
 	}
 
 	w := &testEncWriter{}
-	lhh.HandleRequest(fromAddr, vpnIp, b, w)
+	lhh.HandleRequest(fromAddr, vpnIp, b, w, 0)
 }
 
 //TODO: this is a RemoteList test
@@ -341,7 +341,7 @@ type testEncWriter struct {
 	lastReply testLhReply
 }
 
-func (tw *testEncWriter) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, _, _ []byte) {
+func (tw *testEncWriter) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, _, _ []byte, _ int) {
 	tw.lastReply = testLhReply{
 		nebType:    t,
 		nebSubType: st,
