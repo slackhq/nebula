@@ -44,7 +44,7 @@ type Conn struct {
 	l *logrus.Logger
 }
 
-func NewListener(l *logrus.Logger, ip string, port int, _ int) (*Conn, error) {
+func NewListener(l *logrus.Logger, ip string, port int, _ bool, _ int) (*Conn, error) {
 	return &Conn{
 		Addr:      &Addr{net.ParseIP(ip), uint16(port)},
 		RxPackets: make(chan *Packet, 1),

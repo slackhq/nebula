@@ -45,7 +45,7 @@ const (
 
 type _SK_MEMINFO [_SK_MEMINFO_VARS]uint32
 
-func NewListener(l *logrus.Logger, ip string, port int, batch int) (*Conn, error) {
+func NewListener(l *logrus.Logger, ip string, port int, multi bool, batch int) (*Conn, error) {
 	syscall.ForkLock.RLock()
 	fd, err := unix.Socket(unix.AF_INET6, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
 	if err == nil {
@@ -61,7 +61,7 @@ func NewListener(l *logrus.Logger, ip string, port int, batch int) (*Conn, error
 	var lip [16]byte
 	copy(lip[:], net.ParseIP(ip))
 
-	if batch > 1 {
+	if multi {
 		if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
 			return nil, fmt.Errorf("unable to set SO_REUSEPORT: %s", err)
 		}

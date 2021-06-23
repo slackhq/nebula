@@ -50,7 +50,7 @@ func Test_lhStaticMapping(t *testing.T) {
 	lh1 := "10.128.0.2"
 	lh1IP := net.ParseIP(lh1)
 
-	udpServer, _ := udp.NewListener(l, "0.0.0.0", 0, 2)
+	udpServer, _ := udp.NewListener(l, "0.0.0.0", 0, true, 2)
 
 	meh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{255, 255, 255, 255}}, []iputil.VpnIp{iputil.Ip2VpnIp(lh1IP)}, 10, 10003, udpServer, false, 1, false)
 	meh.AddStaticRemote(iputil.Ip2VpnIp(lh1IP), udp.NewAddr(lh1IP, uint16(4242)))
@@ -71,7 +71,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	lh1 := "10.128.0.2"
 	lh1IP := net.ParseIP(lh1)
 
-	udpServer, _ := udp.NewListener(l, "0.0.0.0", 0, 2)
+	udpServer, _ := udp.NewListener(l, "0.0.0.0", 0, true, 2)
 
 	lh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{0, 0, 0, 0}}, []iputil.VpnIp{iputil.Ip2VpnIp(lh1IP)}, 10, 10003, udpServer, false, 1, false)
 
@@ -158,7 +158,7 @@ func TestLighthouse_Memory(t *testing.T) {
 	theirUdpAddr4 := &udp.Addr{IP: net.ParseIP("24.15.0.3"), Port: 4242}
 	theirVpnIp := iputil.Ip2VpnIp(net.ParseIP("10.128.0.3"))
 
-	udpServer, _ := udp.NewListener(l, "0.0.0.0", 0, 2)
+	udpServer, _ := udp.NewListener(l, "0.0.0.0", 0, true, 2)
 	lh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{10, 128, 0, 1}, Mask: net.IPMask{255, 255, 255, 0}}, []iputil.VpnIp{}, 10, 10003, udpServer, false, 1, false)
 	lhh := lh.NewRequestHandler()
 
