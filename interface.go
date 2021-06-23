@@ -42,7 +42,6 @@ type InterfaceConfig struct {
 	pendingDeletionInterval int
 	DropLocalBroadcast      bool
 	DropMulticast           bool
-	UDPBatchSize            int
 	routines                int
 	MessageMetrics          *MessageMetrics
 	version                 string
@@ -68,7 +67,6 @@ type Interface struct {
 	myVpnIp            iputil.VpnIp
 	dropLocalBroadcast bool
 	dropMulticast      bool
-	udpBatchSize       int
 	routines           int
 	caPool             *cert.NebulaCAPool
 
@@ -117,7 +115,6 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		localBroadcast:     myVpnIp | ^iputil.Ip2VpnIp(c.certState.certificate.Details.Ips[0].Mask),
 		dropLocalBroadcast: c.DropLocalBroadcast,
 		dropMulticast:      c.DropMulticast,
-		udpBatchSize:       c.UDPBatchSize,
 		routines:           c.routines,
 		version:            c.version,
 		writers:            make([]*udp.Conn, c.routines),

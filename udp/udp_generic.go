@@ -22,8 +22,8 @@ type Conn struct {
 	l *logrus.Logger
 }
 
-func NewListener(l *logrus.Logger, ip string, port int, batch int) (*Conn, error) {
-	lc := NewListenConfig(batch > 1)
+func NewListener(l *logrus.Logger, ip string, port int, multi bool, batch int) (*Conn, error) {
+	lc := NewListenConfig(multi)
 	pc, err := lc.ListenPacket(context.TODO(), "udp", fmt.Sprintf("%s:%d", ip, port))
 	if err != nil {
 		return nil, err
