@@ -4,13 +4,14 @@ import (
 	"net"
 	"testing"
 
+	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/net/ipv4"
 )
 
 func Test_newPacket(t *testing.T) {
-	p := &FirewallPacket{}
+	p := &firewall.Packet{}
 
 	// length fail
 	err := newPacket([]byte{0, 1}, true, p)
@@ -45,7 +46,7 @@ func Test_newPacket(t *testing.T) {
 		Src:      net.IPv4(10, 0, 0, 1),
 		Dst:      net.IPv4(10, 0, 0, 2),
 		Options:  []byte{0, 1, 0, 2},
-		Protocol: fwProtoTCP,
+		Protocol: firewall.ProtoTCP,
 	}
 
 	b, _ = h.Marshal()
@@ -53,7 +54,7 @@ func Test_newPacket(t *testing.T) {
 	err = newPacket(b, true, p)
 
 	assert.Nil(t, err)
-	assert.Equal(t, p.Protocol, uint8(fwProtoTCP))
+	assert.Equal(t, p.Protocol, uint8(firewall.ProtoTCP))
 	assert.Equal(t, p.LocalIP, iputil.Ip2VpnIp(net.IPv4(10, 0, 0, 2)))
 	assert.Equal(t, p.RemoteIP, iputil.Ip2VpnIp(net.IPv4(10, 0, 0, 1)))
 	assert.Equal(t, p.RemotePort, uint16(3))

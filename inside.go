@@ -5,11 +5,12 @@ import (
 
 	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 )
 
-func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket, nb, out []byte, q int, localCache ConntrackCache) {
+func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache ConntrackCache) {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
 		f.l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
@@ -130,7 +131,7 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 }
 
 func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubType, hostInfo *HostInfo, p, nb, out []byte) {
-	fp := &FirewallPacket{}
+	fp := &firewall.Packet{}
 	err := newPacket(p, false, fp)
 	if err != nil {
 		f.l.Warnf("error while parsing outgoing packet for firewall check; %v", err)
