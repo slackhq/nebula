@@ -1,4 +1,4 @@
-package nebula
+package udp
 
 import (
 	"encoding/json"
@@ -7,32 +7,34 @@ import (
 	"strconv"
 )
 
-type udpAddr struct {
+type m map[string]interface{}
+
+type Addr struct {
 	IP   net.IP
 	Port uint16
 }
 
-func NewUDPAddr(ip net.IP, port uint16) *udpAddr {
-	addr := udpAddr{IP: make([]byte, net.IPv6len), Port: port}
+func NewAddr(ip net.IP, port uint16) *Addr {
+	addr := Addr{IP: make([]byte, net.IPv6len), Port: port}
 	copy(addr.IP, ip.To16())
 	return &addr
 }
 
-func NewUDPAddrFromString(s string) *udpAddr {
-	ip, port, err := parseIPAndPort(s)
+func NewAddrFromString(s string) *Addr {
+	ip, port, err := ParseIPAndPort(s)
 	//TODO: handle err
 	_ = err
-	return &udpAddr{IP: ip.To16(), Port: port}
+	return &Addr{IP: ip.To16(), Port: port}
 }
 
-func (ua *udpAddr) Equals(t *udpAddr) bool {
+func (ua *Addr) Equals(t *Addr) bool {
 	if t == nil || ua == nil {
 		return t == nil && ua == nil
 	}
 	return ua.IP.Equal(t.IP) && ua.Port == t.Port
 }
 
-func (ua *udpAddr) String() string {
+func (ua *Addr) String() string {
 	if ua == nil {
 		return "<nil>"
 	}
@@ -40,7 +42,7 @@ func (ua *udpAddr) String() string {
 	return net.JoinHostPort(ua.IP.String(), fmt.Sprintf("%v", ua.Port))
 }
 
-func (ua *udpAddr) MarshalJSON() ([]byte, error) {
+func (ua *Addr) MarshalJSON() ([]byte, error) {
 	if ua == nil {
 		return nil, nil
 	}
@@ -48,12 +50,12 @@ func (ua *udpAddr) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m{"ip": ua.IP, "port": ua.Port})
 }
 
-func (ua *udpAddr) Copy() *udpAddr {
+func (ua *Addr) Copy() *Addr {
 	if ua == nil {
 		return nil
 	}
 
-	nu := udpAddr{
+	nu := Addr{
 		Port: ua.Port,
 		IP:   make(net.IP, len(ua.IP)),
 	}
@@ -62,7 +64,7 @@ func (ua *udpAddr) Copy() *udpAddr {
 	return &nu
 }
 
-func parseIPAndPort(s string) (net.IP, uint16, error) {
+func ParseIPAndPort(s string) (net.IP, uint16, error) {
 	rIp, sPort, err := net.SplitHostPort(s)
 	if err != nil {
 		return nil, 0, err

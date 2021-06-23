@@ -1,4 +1,4 @@
-package nebula
+package header
 
 import (
 	"encoding/binary"
@@ -19,82 +19,78 @@ import (
 // |-----------------------------------------------------------------------|
 // |                               payload...                              |
 
-const (
-	Version   uint8 = 1
-	HeaderLen       = 16
-)
-
-type NebulaMessageType uint8
-type NebulaMessageSubType uint8
+type m map[string]interface{}
 
 const (
-	handshake   NebulaMessageType = 0
-	message     NebulaMessageType = 1
-	recvError   NebulaMessageType = 2
-	lightHouse  NebulaMessageType = 3
-	test        NebulaMessageType = 4
-	closeTunnel NebulaMessageType = 5
-
-	//TODO These are deprecated as of 06/12/2018 - NB
-	testRemote      NebulaMessageType = 6
-	testRemoteReply NebulaMessageType = 7
+	Version uint8 = 1
+	Len           = 16
 )
 
-var typeMap = map[NebulaMessageType]string{
-	handshake:   "handshake",
-	message:     "message",
-	recvError:   "recvError",
-	lightHouse:  "lightHouse",
-	test:        "test",
-	closeTunnel: "closeTunnel",
+type MessageType uint8
+type MessageSubType uint8
 
-	//TODO These are deprecated as of 06/12/2018 - NB
-	testRemote:      "testRemote",
-	testRemoteReply: "testRemoteReply",
+const (
+	Handshake   MessageType = 0
+	Message     MessageType = 1
+	RecvError   MessageType = 2
+	LightHouse  MessageType = 3
+	Test        MessageType = 4
+	CloseTunnel MessageType = 5
+)
+
+var typeMap = map[MessageType]string{
+	Handshake:   "handshake",
+	Message:     "message",
+	RecvError:   "recvError",
+	LightHouse:  "lightHouse",
+	Test:        "test",
+	CloseTunnel: "closeTunnel",
 }
 
 const (
-	testRequest NebulaMessageSubType = 0
-	testReply   NebulaMessageSubType = 1
+	TestRequest MessageSubType = 0
+	TestReply   MessageSubType = 1
 )
 
-var eHeaderTooShort = errors.New("header is too short")
+const (
+	HandshakeIXPSK0 MessageSubType = 0
+	HandshakeXXPSK0 MessageSubType = 1
+)
 
-var subTypeTestMap = map[NebulaMessageSubType]string{
-	testRequest: "testRequest",
-	testReply:   "testReply",
+var ErrHeaderTooShort = errors.New("header is too short")
+
+var subTypeTestMap = map[MessageSubType]string{
+	TestRequest: "testRequest",
+	TestReply:   "testReply",
 }
 
-var subTypeNoneMap = map[NebulaMessageSubType]string{0: "none"}
+var subTypeNoneMap = map[MessageSubType]string{0: "none"}
 
-var subTypeMap = map[NebulaMessageType]*map[NebulaMessageSubType]string{
-	message:     &subTypeNoneMap,
-	recvError:   &subTypeNoneMap,
-	lightHouse:  &subTypeNoneMap,
-	test:        &subTypeTestMap,
-	closeTunnel: &subTypeNoneMap,
-	handshake: {
-		handshakeIXPSK0: "ix_psk0",
+var subTypeMap = map[MessageType]*map[MessageSubType]string{
+	Message:     &subTypeNoneMap,
+	RecvError:   &subTypeNoneMap,
+	LightHouse:  &subTypeNoneMap,
+	Test:        &subTypeTestMap,
+	CloseTunnel: &subTypeNoneMap,
+	Handshake: {
+		HandshakeIXPSK0: "ix_psk0",
 	},
-	//TODO: these are deprecated
-	testRemote:      &subTypeNoneMap,
-	testRemoteReply: &subTypeNoneMap,
 }
 
-type Header struct {
+type H struct {
 	Version        uint8
-	Type           NebulaMessageType
-	Subtype        NebulaMessageSubType
+	Type           MessageType
+	Subtype        MessageSubType
 	Reserved       uint16
 	RemoteIndex    uint32
 	MessageCounter uint64
 }
 
-// HeaderEncode uses the provided byte array to encode the provided header values into.
+// Encode uses the provided byte array to encode the provided header values into.
 // Byte array must be capped higher than HeaderLen or this will panic
-func HeaderEncode(b []byte, v uint8, t uint8, st uint8, ri uint32, c uint64) []byte {
-	b = b[:HeaderLen]
-	b[0] = byte(v<<4 | (t & 0x0f))
+func Encode(b []byte, v uint8, t MessageType, st MessageSubType, ri uint32, c uint64) []byte {
+	b = b[:Len]
+	b[0] = v<<4 | byte(t&0x0f)
 	b[1] = byte(st)
 	binary.BigEndian.PutUint16(b[2:4], 0)
 	binary.BigEndian.PutUint32(b[4:8], ri)
@@ -103,7 +99,7 @@ func HeaderEncode(b []byte, v uint8, t uint8, st uint8, ri uint32, c uint64) []b
 }
 
 // String creates a readable string representation of a header
-func (h *Header) String() string {
+func (h *H) String() string {
 	if h == nil {
 		return "<nil>"
 	}
@@ -112,7 +108,7 @@ func (h *Header) String() string {
 }
 
 // MarshalJSON creates a json string representation of a header
-func (h *Header) MarshalJSON() ([]byte, error) {
+func (h *H) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m{
 		"version":        h.Version,
 		"type":           h.TypeName(),
@@ -124,24 +120,24 @@ func (h *Header) MarshalJSON() ([]byte, error) {
 }
 
 // Encode turns header into bytes
-func (h *Header) Encode(b []byte) ([]byte, error) {
+func (h *H) Encode(b []byte) ([]byte, error) {
 	if h == nil {
 		return nil, errors.New("nil header")
 	}
 
-	return HeaderEncode(b, h.Version, uint8(h.Type), uint8(h.Subtype), h.RemoteIndex, h.MessageCounter), nil
+	return Encode(b, h.Version, h.Type, h.Subtype, h.RemoteIndex, h.MessageCounter), nil
 }
 
 // Parse is a helper function to parses given bytes into new Header struct
-func (h *Header) Parse(b []byte) error {
-	if len(b) < HeaderLen {
-		return eHeaderTooShort
+func (h *H) Parse(b []byte) error {
+	if len(b) < Len {
+		return ErrHeaderTooShort
 	}
 	// get upper 4 bytes
 	h.Version = uint8((b[0] >> 4) & 0x0f)
 	// get lower 4 bytes
-	h.Type = NebulaMessageType(b[0] & 0x0f)
-	h.Subtype = NebulaMessageSubType(b[1])
+	h.Type = MessageType(b[0] & 0x0f)
+	h.Subtype = MessageSubType(b[1])
 	h.Reserved = binary.BigEndian.Uint16(b[2:4])
 	h.RemoteIndex = binary.BigEndian.Uint32(b[4:8])
 	h.MessageCounter = binary.BigEndian.Uint64(b[8:16])
@@ -149,12 +145,12 @@ func (h *Header) Parse(b []byte) error {
 }
 
 // TypeName will transform the headers message type into a human string
-func (h *Header) TypeName() string {
+func (h *H) TypeName() string {
 	return TypeName(h.Type)
 }
 
 // TypeName will transform a nebula message type into a human string
-func TypeName(t NebulaMessageType) string {
+func TypeName(t MessageType) string {
 	if n, ok := typeMap[t]; ok {
 		return n
 	}
@@ -163,12 +159,12 @@ func TypeName(t NebulaMessageType) string {
 }
 
 // SubTypeName will transform the headers message sub type into a human string
-func (h *Header) SubTypeName() string {
+func (h *H) SubTypeName() string {
 	return SubTypeName(h.Type, h.Subtype)
 }
 
 // SubTypeName will transform a nebula message sub type into a human string
-func SubTypeName(t NebulaMessageType, s NebulaMessageSubType) string {
+func SubTypeName(t MessageType, s MessageSubType) string {
 	if n, ok := subTypeMap[t]; ok {
 		if x, ok := (*n)[s]; ok {
 			return x
@@ -179,8 +175,8 @@ func SubTypeName(t NebulaMessageType, s NebulaMessageSubType) string {
 }
 
 // NewHeader turns bytes into a header
-func NewHeader(b []byte) (*Header, error) {
-	h := new(Header)
+func NewHeader(b []byte) (*H, error) {
+	h := new(H)
 	if err := h.Parse(b); err != nil {
 		return nil, err
 	}

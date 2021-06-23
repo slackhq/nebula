@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slackhq/nebula/iputil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -51,7 +52,7 @@ func TestSystemTimerWheel_findWheel(t *testing.T) {
 func TestSystemTimerWheel_Add(t *testing.T) {
 	tw := NewSystemTimerWheel(time.Second, time.Second*10)
 
-	fp1 := ip2int(net.ParseIP("1.2.3.4"))
+	fp1 := iputil.Ip2VpnIp(net.ParseIP("1.2.3.4"))
 	tw.Add(fp1, time.Second*1)
 
 	// Make sure we set head and tail properly
@@ -62,7 +63,7 @@ func TestSystemTimerWheel_Add(t *testing.T) {
 	assert.Nil(t, tw.wheel[2].Tail.Next)
 
 	// Make sure we only modify head
-	fp2 := ip2int(net.ParseIP("1.2.3.4"))
+	fp2 := iputil.Ip2VpnIp(net.ParseIP("1.2.3.4"))
 	tw.Add(fp2, time.Second*1)
 	assert.Equal(t, fp2, tw.wheel[2].Head.Item)
 	assert.Equal(t, fp1, tw.wheel[2].Head.Next.Item)
@@ -85,7 +86,7 @@ func TestSystemTimerWheel_Purge(t *testing.T) {
 	assert.NotNil(t, tw.lastTick)
 	assert.Equal(t, 0, tw.current)
 
-	fps := []uint32{9, 10, 11, 12}
+	fps := []iputil.VpnIp{9, 10, 11, 12}
 
 	//fp1 := ip2int(net.ParseIP("1.2.3.4"))
 

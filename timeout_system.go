@@ -3,6 +3,8 @@ package nebula
 import (
 	"sync"
 	"time"
+
+	"github.com/slackhq/nebula/iputil"
 )
 
 // How many timer objects should be cached
@@ -43,7 +45,7 @@ type SystemTimeoutList struct {
 
 // Represents an item within a tick
 type SystemTimeoutItem struct {
-	Item uint32
+	Item iputil.VpnIp
 	Next *SystemTimeoutItem
 }
 
@@ -74,7 +76,7 @@ func NewSystemTimerWheel(min, max time.Duration) *SystemTimerWheel {
 	return &tw
 }
 
-func (tw *SystemTimerWheel) Add(v uint32, timeout time.Duration) *SystemTimeoutItem {
+func (tw *SystemTimerWheel) Add(v iputil.VpnIp, timeout time.Duration) *SystemTimeoutItem {
 	tw.lock.Lock()
 	defer tw.lock.Unlock()
 
