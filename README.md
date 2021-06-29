@@ -21,7 +21,7 @@ Check the [releases](https://github.com/slackhq/nebula/releases/latest) page for
 - Linux - 64 and 32 bit, arm, and others 
 - Windows
 - MacOS
-- Freebsd
+- FreeBSD
 
 #### Mobile
 
