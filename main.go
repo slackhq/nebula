@@ -159,7 +159,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		}
 	}
 
-	// set up our UDP listener
+	// set up our UDP listeners
 	udpConns := make([]*udpConn, routines)
 	port := config.GetInt("listen.port", 0)
 
@@ -179,6 +179,29 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 					return nil, NewContextualError("Failed to get listening port", nil, err)
 				}
 				port = int(uPort.Port)
+			}
+		}
+	}
+
+	// set up conns used for sending, including optionally binding to extra sender ports
+	// the listener socket is always the 0th element used to send.
+	sendPorts := config.GetInt("send.ports", 1)
+	sendConns := make([][]*udpConn, routines)
+	for i := 0; i < routines; i++ {
+		sendConns[i] = make([]*udpConn, sendPorts)
+		sendConns[i][0] = udpConns[i]
+	}
+
+	if sendPorts > 1 {
+		for i := 0; i < routines; i++ {
+			for offset := 1; offset < sendPorts; offset++ {
+				udpConn, err := NewListener(l, config.GetString("listen.host", "0.0.0.0"), port+offset, routines > 1)
+				if err != nil {
+					return nil, NewContextualError("Failed to open udp listener", m{"queue": i}, err)
+				}
+				udpConn.reloadConfig(config)
+
+				sendConns[i][offset] = udpConn
 			}
 		}
 	}
@@ -394,7 +417,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 
 		// TODO: Better way to attach these, probably want a new interface in InterfaceConfig
 		// I don't want to make this initial commit too far-reaching though
-		ifce.writers = udpConns
+		ifce.writers = sendConns
 
 		ifce.RegisterConfigChangeCallbacks(config)
 

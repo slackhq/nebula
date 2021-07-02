@@ -74,7 +74,10 @@ type Interface struct {
 
 	conntrackCacheTimeout time.Duration
 
-	writers []*udpConn
+	// writers is a 2 level table, indexed first by the routine and then by the sending port
+	writers   [][]*udpConn
+	sendPorts int
+
 	readers []io.ReadWriteCloser
 
 	metricHandshakes    metrics.Histogram
@@ -115,7 +118,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		udpBatchSize:       c.UDPBatchSize,
 		routines:           c.routines,
 		version:            c.version,
-		writers:            make([]*udpConn, c.routines),
+		writers:            make([][]*udpConn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
 		caPool:             c.caPool,
 		myVpnIp:            ip2int(c.certState.certificate.Details.Ips[0].IP),
@@ -189,7 +192,7 @@ func (f *Interface) listenOut(i int) {
 	var li *udpConn
 	// TODO clean this up with a coherent interface for each outside connection
 	if i > 0 {
-		li = f.writers[i]
+		li = f.writers[i][0]
 	} else {
 		li = f.outside
 	}
@@ -222,8 +225,10 @@ func (f *Interface) RegisterConfigChangeCallbacks(c *Config) {
 	c.RegisterReloadCallback(f.reloadCA)
 	c.RegisterReloadCallback(f.reloadCertKey)
 	c.RegisterReloadCallback(f.reloadFirewall)
-	for _, udpConn := range f.writers {
-		c.RegisterReloadCallback(udpConn.reloadConfig)
+	for _, udpConns := range f.writers {
+		for _, udpConn := range udpConns {
+			c.RegisterReloadCallback(udpConn.reloadConfig)
+		}
 	}
 }
 
@@ -302,7 +307,7 @@ func (f *Interface) reloadFirewall(c *Config) {
 func (f *Interface) emitStats(i time.Duration) {
 	ticker := time.NewTicker(i)
 
-	udpStats := NewUDPStatsEmitter(f.writers)
+	udpStats := NewUDPStatsEmitter(f.writers[0])
 
 	for range ticker.C {
 		f.firewall.EmitStats()
