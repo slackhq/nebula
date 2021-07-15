@@ -91,5 +91,5 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 }
 
 func hostDidRoam(addr *udpAddr, newaddr *udpAddr) bool {
-	return !addr.IP.Equal(newaddr.IP)
+	return !addr.Equals(newaddr)
 }

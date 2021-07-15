@@ -136,5 +136,5 @@ func (u *udpConn) Rebind() error {
 }
 
 func hostDidRoam(addr *udpAddr, newaddr *udpAddr) bool {
-	return !addr.IP.Equal(newaddr.IP)
+	return !addr.Equals(newaddr)
 }

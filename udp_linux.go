@@ -295,5 +295,5 @@ func NewUDPStatsEmitter(udpConns []*udpConn) func() {
 }
 
 func hostDidRoam(addr *udpAddr, newaddr *udpAddr) bool {
-	return !addr.IP.Equal(newaddr.IP)
+	return !addr.Equals(newaddr)
 }
