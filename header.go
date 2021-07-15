@@ -56,6 +56,8 @@ var typeMap = map[NebulaMessageType]string{
 const (
 	testRequest NebulaMessageSubType = 0
 	testReply   NebulaMessageSubType = 1
+
+	nonCanonicalSource NebulaMessageSubType = 1
 )
 
 var eHeaderTooShort = errors.New("header is too short")

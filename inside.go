@@ -55,7 +55,11 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, f.caPool, localCache)
 	if dropReason == nil {
 		s := fwPacket.HashPorts(f.sendPorts)
-		f.sendNoMetrics(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out, q, s)
+		var subType NebulaMessageSubType
+		if s != 0 {
+			subType = nonCanonicalSource
+		}
+		f.sendNoMetrics(message, subType, ci, hostinfo, hostinfo.remote, packet, nb, out, q, s)
 
 	} else if f.l.Level >= logrus.DebugLevel {
 		hostinfo.logger(f.l).
