@@ -54,7 +54,12 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 
 	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, f.caPool, localCache)
 	if dropReason == nil {
-		f.sendNoMetrics(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out, q)
+		s := fwPacket.HashPorts(f.sendPorts)
+		var subType NebulaMessageSubType
+		if s != 0 {
+			subType = nonCanonicalSource
+		}
+		f.sendNoMetrics(message, subType, ci, hostinfo, hostinfo.remote, packet, nb, out, q, s)
 
 	} else if f.l.Level >= logrus.DebugLevel {
 		hostinfo.logger(f.l).
@@ -145,7 +150,7 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 		return
 	}
 
-	f.sendNoMetrics(message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out, 0)
+	f.sendNoMetrics(message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out, 0, 0)
 }
 
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
@@ -181,10 +186,10 @@ func (f *Interface) sendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubT
 
 func (f *Interface) send(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte) {
 	f.messageMetrics.Tx(t, st, 1)
-	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
+	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0, 0)
 }
 
-func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte, q int) {
+func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte, q, s int) {
 	if ci.eKey == nil {
 		//TODO: log warning
 		return
@@ -222,7 +227,7 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 		return
 	}
 
-	err = f.writers[q].WriteTo(out, remote)
+	err = f.writers[q][s].WriteTo(out, remote)
 	if err != nil {
 		hostinfo.logger(f.l).WithError(err).
 			WithField("udpAddr", remote).Error("Failed to write outgoing packet")

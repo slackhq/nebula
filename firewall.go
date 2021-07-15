@@ -165,6 +165,21 @@ func (fp FirewallPacket) MarshalJSON() ([]byte, error) {
 	})
 }
 
+const (
+	prime1 uint16 = 173
+	prime2 uint16 = 3313
+	prime3 uint16 = 5387
+)
+
+func (fp FirewallPacket) HashPorts(numBuckets int) int {
+	if numBuckets <= 1 {
+		return 0
+	}
+
+	// super lame but fast mixing
+	return int((fp.LocalPort^prime1)+(fp.RemotePort^prime2)+prime3) % numBuckets
+}
+
 // NewFirewall creates a new Firewall object. A TimerWheel is created for you from the provided timeouts.
 func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Duration, c *cert.NebulaCertificate) *Firewall {
 	//TODO: error on 0 duration

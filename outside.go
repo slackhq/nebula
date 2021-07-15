@@ -127,7 +127,9 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		return
 	}
 
-	f.handleHostRoaming(hostinfo, addr)
+	if !(header.Type == message && header.Subtype == nonCanonicalSource) {
+		f.handleHostRoaming(hostinfo, addr)
+	}
 
 	f.connectionManager.In(hostinfo.hostId)
 }
