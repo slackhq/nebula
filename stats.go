@@ -93,7 +93,9 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *Config, buildVer
 
 	pr := prometheus.NewRegistry()
 	pClient := mp.NewPrometheusProvider(metrics.DefaultRegistry, namespace, subsystem, pr, i)
-	go pClient.UpdatePrometheusMetrics()
+	if !configTest {
+		go pClient.UpdatePrometheusMetrics()
+	}
 
 	// Export our version information as labels on a static gauge
 	g := prometheus.NewGauge(prometheus.GaugeOpts{

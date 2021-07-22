@@ -41,6 +41,13 @@ func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU in
 	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
 }
 
+func (c *Tun) Close() error {
+	if c.Interface != nil {
+		return c.Interface.Close()
+	}
+	return nil
+}
+
 func (c *Tun) Activate() error {
 	var err error
 	c.Interface, err = water.New(water.Config{
