@@ -167,6 +167,20 @@ func Test_signCert(t *testing.T) {
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 
+	// mismatched ca key
+	_, caPriv2, _ := ed25519.GenerateKey(rand.Reader)
+	caKeyF2, err := ioutil.TempFile("", "sign-cert-2.key")
+	assert.Nil(t, err)
+	defer os.Remove(caKeyF2.Name())
+	caKeyF2.Write(cert.MarshalEd25519PrivateKey(caPriv2))
+
+	ob.Reset()
+	eb.Reset()
+	args = []string{"-ca-crt", caCrtF.Name(), "-ca-key", caKeyF2.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m", "-subnets", "a"}
+	assert.EqualError(t, signCert(args, ob, eb), "refusing to sign, root certificate does not match private key")
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
+
 	// failed key write
 	ob.Reset()
 	eb.Reset()
