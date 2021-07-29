@@ -230,6 +230,13 @@ func x25519Keypair() ([]byte, []byte) {
 	return pubkey[:], privkey[:]
 }
 
+func x25519PubKey(privkey []byte) []byte {
+	var pubkey, priv32 [32]byte
+	copy(priv32[:], privkey)
+	curve25519.ScalarBaseMult(&pubkey, &priv32)
+	return pubkey[:]
+}
+
 func signSummary() string {
 	return "sign <flags>: create and sign a certificate"
 }

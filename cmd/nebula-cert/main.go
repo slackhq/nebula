@@ -71,6 +71,8 @@ func main() {
 		err = printCert(args[1:], os.Stdout, os.Stderr)
 	case "verify":
 		err = verify(args[1:], os.Stdout, os.Stderr)
+	case "gen-pub":
+		err = genPub(args[1:], os.Stdout, os.Stderr)
 	default:
 		err = fmt.Errorf("unknown mode: %s", args[0])
 	}
@@ -104,7 +106,10 @@ func handleError(mode string, e error, out io.Writer) int {
 			printHelp(out)
 		case "verify":
 			verifyHelp(out)
+		case "gen-pub":
+			genPubHelp(out)
 		}
+
 	}
 
 	return code
@@ -127,6 +132,8 @@ func help(err string, out io.Writer) {
 	fmt.Fprintln(out, "    "+signSummary())
 	fmt.Fprintln(out, "    "+printSummary())
 	fmt.Fprintln(out, "    "+verifySummary())
+	fmt.Fprintln(out, "    "+genPubSummary())
+
 }
 
 func mustFlagString(name string, val *string) error {

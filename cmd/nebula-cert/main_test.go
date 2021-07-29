@@ -22,7 +22,8 @@ func Test_help(t *testing.T) {
 		"    " + keygenSummary() + "\n" +
 		"    " + signSummary() + "\n" +
 		"    " + printSummary() + "\n" +
-		"    " + verifySummary() + "\n"
+		"    " + verifySummary() + "\n" +
+		"    " + genPubSummary() + "\n"
 
 	ob := &bytes.Buffer{}
 
