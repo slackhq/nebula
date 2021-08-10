@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -335,7 +336,9 @@ func (hm *HostMap) queryVpnIp(vpnIp iputil.VpnIp, promoteIfce *Interface) (*Host
 func (hm *HostMap) addHostInfo(hostinfo *HostInfo, f *Interface) {
 	if f.serveDns {
 		remoteCert := hostinfo.ConnectionState.peerCert
-		dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ips[0].IP.String())
+		for _, hostname := range strings.Split(remoteCert.Details.Name, " ") {
+			dnsR.Add(hostname+".", remoteCert.Details.Ips[0].IP.String())
+		}
 	}
 
 	hm.Hosts[hostinfo.vpnIp] = hostinfo
