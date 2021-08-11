@@ -75,12 +75,13 @@ Nebula lighthouses allow nodes to find each other, anywhere in the world. A ligh
   This will create files named `ca.key` and `ca.cert` in the current directory. The `ca.key` file is the most sensitive file you'll create, because it is the key used to sign the certificates for individual nebula nodes/hosts. Please store this file somewhere safe, preferably with strong encryption.
 
 #### 4. Nebula host keys and certificates generated from that certificate authority
-This assumes you have four nodes, named lighthouse1, laptop, server1, host3. You can name the nodes any way you'd like, including FQDN.  You can also assign multiple hostnames, separated by spaces, to the same node - in this case server1 and homeserver are the same node. You'll also need to choose IP addresses and the associated subnet. In this example, we are creating a nebula network that will use 192.168.100.x/24 as its network range. This example also demonstrates nebula groups, which can later be used to define traffic rules in a nebula network.
+This assumes you have five nodes, named lighthouse1, laptop, server1, host3 and webserver. You can name the nodes any way you'd like, including FQDN.  You can also assign multiple hostnames, separated by spaces, to the same node - in this case server1 and homeserver are the same node.  Additionally you can use wildcard domains like `*.webserver` which will resolve `<anything>.webserver`. You'll also need to choose IP addresses and the associated subnet. In this example, we are creating a nebula network that will use 192.168.100.x/24 as its network range. This example also demonstrates nebula groups, which can later be used to define traffic rules in a nebula network.
 ```
 ./nebula-cert sign -name "lighthouse1" -ip "192.168.100.1/24"
 ./nebula-cert sign -name "laptop" -ip "192.168.100.2/24" -groups "laptop,home,ssh"
 ./nebula-cert sign -name "server1 homeserver" -ip "192.168.100.9/24" -groups "servers"
 ./nebula-cert sign -name "host3" -ip "192.168.100.10/24"
+./nebula-cert sign -name "*.webserver webserver" -ip "192.168.100.20/24"
 ```
 
 #### 5. Configuration files for each host

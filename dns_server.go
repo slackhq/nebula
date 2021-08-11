@@ -3,7 +3,9 @@ package nebula
 import (
 	"fmt"
 	"net"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/miekg/dns"
@@ -36,6 +38,19 @@ func (d *dnsRecords) Query(data string) string {
 	if r, ok := d.dnsMap[data]; ok {
 		d.RUnlock()
 		return r
+	} else {
+		// No match found, let's try wildcards
+		for key, value := range d.dnsMap {
+			if key[0:1] == "*" {
+				// This is a wildcard record
+				// Tell the regexp that dots are literal dots and then see if it matches
+				matched, _ := regexp.MatchString("."+strings.Replace(key, ".", "\\.", -1), data)
+				if matched {
+					d.RUnlock()
+					return value
+				}
+			}
+		}
 	}
 	d.RUnlock()
 	return ""
