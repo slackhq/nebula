@@ -130,6 +130,8 @@ build/nebula-%.deb: build/%/nebula build/%/nebula-cert
 	cp -av build/$*/nebula build/$*/nebula-cert build/$*/debian/usr/bin
 	mkdir -p build/$*/debian/lib/systemd/system
 	cp -v dist/arch/nebula.service build/$*/debian/lib/systemd/system
+	mkdir -p build/$*/debian/etc/nebula
+	cp -v examples/config.yml build/$*/debian/etc/nebula
 	dpkg-deb --build --root-owner-group build/$*/debian build/nebula-$*.deb
 
 build/nebula-%.tar.gz: build/%/nebula build/%/nebula-cert
