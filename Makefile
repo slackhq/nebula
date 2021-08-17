@@ -31,6 +31,7 @@ endif
 LDFLAGS = -X main.Build=$(BUILD_NUMBER)
 
 ALL_DEBIAN = linux-amd64 \
+	linux-arm-7 \
 	linux-arm64
 ALL_LINUX = linux-amd64 \
 	linux-386 \
@@ -125,6 +126,10 @@ build/%/nebula-cert.exe: build/%/nebula-cert
 build/nebula-%.deb: build/%/nebula build/%/nebula-cert
 	cp -av dist/debian/ build/$*
 	sed -i "s/ARCHITECTURE/$(word 2, $(subst -, ,$*))/" build/$*/debian/DEBIAN/control
+	# fix package name
+	if [ "$*" = "linux-arm-7" ]; then \
+	    sed -i "s/arm$$/armhf/" build/$*/debian/DEBIAN/control; \
+	fi
 	sed -i "s/VERSION/$(BUILD_NUMBER)/" build/$*/debian/DEBIAN/control
 	mkdir -p build/$*/debian/usr/bin
 	cp -av build/$*/nebula build/$*/nebula-cert build/$*/debian/usr/bin

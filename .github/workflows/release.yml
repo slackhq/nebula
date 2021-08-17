@@ -49,7 +49,7 @@ jobs:
           mv build/*.deb release
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v2
         with:
           name: debian-latest
           path: release
@@ -248,7 +248,17 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./debian-latest/nebula-linux-amd64.deb
           asset_name: nebula-linux-amd64.deb
-          asset_content_type: application/gzip
+          asset_content_type: application/octet-stream
+
+      - name: Upload debian-arm-7
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./debian-latest/nebula-linux-arm-7.deb
+          asset_name: nebula-linux-arm-7.deb
+          asset_content_type: application/octet-stream
 
       - name: Upload debian-arm64
         uses: actions/upload-release-asset@v1.0.1
@@ -258,7 +268,7 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./debian-latest/nebula-linux-arm64.deb
           asset_name: nebula-linux-arm64.deb
-          asset_content_type: application/gzip
+          asset_content_type: application/octet-stream
 
       - name: Upload linux-amd64
         uses: actions/upload-release-asset@v1.0.1
