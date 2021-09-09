@@ -48,7 +48,7 @@ To set up a Nebula network, you'll need:
 
 #### 2. (Optional, but you really should..) At least one discovery node with a routable IP address, which we call a lighthouse.
 
-Nebula lighthouses allow nodes to find each other, anywhere in the world. A lighthouse is the only node in a Nebula network whose IP should not change. Running a lighthouse requires very few compute resources, and you can easily use the least expensive option from a cloud hosting provider. If you're not sure which provider to use, a number of us have used $5/mo [DigitalOcean](https://digitalocean.com) droplets as lighthouses.
+Nebula lighthouses allow nodes to find each other, anywhere in the world. A lighthouse is the only node in a Nebula network whose IP should not change (a FQDN can be used, but a nebula restart is required to resolve the latest DNS record). Running a lighthouse requires very few compute resources, and you can easily use the least expensive option from a cloud hosting provider. If you're not sure which provider to use, a number of us have used $5/mo [DigitalOcean](https://digitalocean.com) droplets as lighthouses.
 
   Once you have launched an instance, ensure that Nebula udp traffic (default port udp/4242) can reach it over the internet.
 
