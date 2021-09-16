@@ -200,7 +200,7 @@ logging:
   #   e.g.: `lighthouse.rx.HostQuery`
   #lighthouse_metrics: false
 
-# Handshake Manger Settings
+# Handshake Manager Settings
 #handshakes:
   # Handshakes are sent to all known addresses at each interval with a linear backoff,
   # Wait try_interval after the 1st attempt, 2 * try_interval after the 2nd, etc, until the handshake is older than timeout
