@@ -507,6 +507,39 @@ func (i *HostInfo) SetRemote(remote *udpAddr) {
 	}
 }
 
+// SetRemoteIfPreferred returns true if the remote was changed
+func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udpAddr) bool {
+	currentRemote := i.remote
+	if currentRemote == nil {
+		i.SetRemote(newRemote)
+		return true
+	}
+
+	newIsPreferred := false
+	for _, l := range hm.preferredRanges {
+		// return early if we are already on a preferred remote
+		if l.Contains(currentRemote.IP) {
+			return false
+		}
+
+		if l.Contains(newRemote.IP) {
+			newIsPreferred = true
+		}
+	}
+
+	if newIsPreferred {
+		// Consider this a roaming event
+		i.lastRoam = time.Now()
+		i.lastRoamRemote = currentRemote.Copy()
+
+		i.SetRemote(newRemote)
+
+		return true
+	}
+
+	return false
+}
+
 func (i *HostInfo) ClearConnectionState() {
 	i.ConnectionState = nil
 }
