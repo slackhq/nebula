@@ -222,12 +222,17 @@ func signCert(args []string, out io.Writer, errOut io.Writer) error {
 }
 
 func x25519Keypair() ([]byte, []byte) {
-	var pubkey, privkey [32]byte
-	if _, err := io.ReadFull(rand.Reader, privkey[:]); err != nil {
+	privkey := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, privkey); err != nil {
 		panic(err)
 	}
-	curve25519.ScalarBaseMult(&pubkey, &privkey)
-	return pubkey[:], privkey[:]
+
+	pubkey, err := curve25519.X25519(privkey, curve25519.Basepoint)
+	if err != nil {
+		panic(err)
+	}
+
+	return pubkey, privkey
 }
 
 func signSummary() string {
