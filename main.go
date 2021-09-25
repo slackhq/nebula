@@ -14,6 +14,10 @@ import (
 type m map[string]interface{}
 
 func Main(config *Config, configTest bool, buildVersion string, logger *logrus.Logger, tunFd *int) (*Control, error) {
+	return MainWithProvidedTUN(config, configTest, buildVersion, logger, tunFd, nil)
+}
+
+func MainWithProvidedTUN(config *Config, configTest bool, buildVersion string, logger *logrus.Logger, tunFd *int, setTun Inside) (*Control, error) {
 	l := logger
 	l.Formatter = &logrus.TextFormatter{
 		FullTimestamp: true,
@@ -125,7 +129,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 	}
 
 	var tun Inside
-	if !configTest {
+	if setTun == nil && !configTest {
 		config.CatchHUP()
 
 		switch {
@@ -157,6 +161,8 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		if err != nil {
 			return nil, NewContextualError("Failed to get a tun/tap device", nil, err)
 		}
+	} else {
+		tun = setTun
 	}
 
 	// set up our UDP listener
