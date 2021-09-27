@@ -11,8 +11,8 @@ import (
 type forEachFunc func(addr *udpAddr, preferred bool)
 
 // The checkFuncs here are to simplify bulk importing LH query response logic into a single function (reset slice and iterate)
-type checkFuncV4 func(to *Ip4AndPort) bool
-type checkFuncV6 func(to *Ip6AndPort) bool
+type checkFuncV4 func(vpnIp uint32, to *Ip4AndPort) bool
+type checkFuncV6 func(vpnIp uint32, to *Ip6AndPort) bool
 
 // CacheMap is a struct that better represents the lighthouse cache for humans
 // The string key is the owners vpnIp
@@ -246,7 +246,7 @@ func (r *RemoteList) unlockedSetLearnedV4(ownerVpnIp uint32, to *Ip4AndPort) {
 
 // unlockedSetV4 assumes you have the write lock and resets the reported list of ips for this owner to the list provided
 // and marks the deduplicated address list as dirty
-func (r *RemoteList) unlockedSetV4(ownerVpnIp uint32, to []*Ip4AndPort, check checkFuncV4) {
+func (r *RemoteList) unlockedSetV4(ownerVpnIp uint32, vpnIp uint32, to []*Ip4AndPort, check checkFuncV4) {
 	r.shouldRebuild = true
 	c := r.unlockedGetOrMakeV4(ownerVpnIp)
 
@@ -255,7 +255,7 @@ func (r *RemoteList) unlockedSetV4(ownerVpnIp uint32, to []*Ip4AndPort, check ch
 
 	// We can't take their array but we can take their pointers
 	for _, v := range to[:minInt(len(to), MaxRemotes)] {
-		if check(v) {
+		if check(vpnIp, v) {
 			c.reported = append(c.reported, v)
 		}
 	}
@@ -283,7 +283,7 @@ func (r *RemoteList) unlockedSetLearnedV6(ownerVpnIp uint32, to *Ip6AndPort) {
 
 // unlockedSetV6 assumes you have the write lock and resets the reported list of ips for this owner to the list provided
 // and marks the deduplicated address list as dirty
-func (r *RemoteList) unlockedSetV6(ownerVpnIp uint32, to []*Ip6AndPort, check checkFuncV6) {
+func (r *RemoteList) unlockedSetV6(ownerVpnIp uint32, vpnIp uint32, to []*Ip6AndPort, check checkFuncV6) {
 	r.shouldRebuild = true
 	c := r.unlockedGetOrMakeV6(ownerVpnIp)
 
@@ -292,7 +292,7 @@ func (r *RemoteList) unlockedSetV6(ownerVpnIp uint32, to []*Ip6AndPort, check ch
 
 	// We can't take their array but we can take their pointers
 	for _, v := range to[:minInt(len(to), MaxRemotes)] {
-		if check(v) {
+		if check(vpnIp, v) {
 			c.reported = append(c.reported, v)
 		}
 	}
