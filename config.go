@@ -248,6 +248,18 @@ func (c *Config) GetLocalAllowList(k string) (*LocalAllowList, error) {
 	return &LocalAllowList{AllowList: al, nameRules: nameRules}, nil
 }
 
+func (c *Config) GetRemoteAllowList(k, rangesKey string) (*RemoteAllowList, error) {
+	al, err := c.GetAllowList(k, nil)
+	if err != nil {
+		return nil, err
+	}
+	remoteAllowRanges, err := c.getRemoteAllowRanges(rangesKey)
+	if err != nil {
+		return nil, err
+	}
+	return &RemoteAllowList{AllowList: al, insideAllowLists: remoteAllowRanges}, nil
+}
+
 func (c *Config) getRemoteAllowRanges(k string) (*CIDR6Tree, error) {
 	value := c.Get(k)
 	if value == nil {
@@ -280,18 +292,6 @@ func (c *Config) getRemoteAllowRanges(k string) (*CIDR6Tree, error) {
 	}
 
 	return remoteAllowRanges, nil
-}
-
-func (c *Config) GetRemoteAllowList(k, rangesKey string) (*RemoteAllowList, error) {
-	al, err := c.GetAllowList(k, nil)
-	if err != nil {
-		return nil, err
-	}
-	remoteAllowRanges, err := c.getRemoteAllowRanges(rangesKey)
-	if err != nil {
-		return nil, err
-	}
-	return &RemoteAllowList{AllowList: al, insideAllowLists: remoteAllowRanges}, nil
 }
 
 // If the handleKey func returns true, the rest of the parsing is skipped
