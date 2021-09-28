@@ -12,7 +12,7 @@ type AllowList struct {
 }
 
 type RemoteAllowList struct {
-	AllowList AllowList
+	AllowList *AllowList
 
 	// Inside Range Specific, keys of this tree are inside CIDRs and values
 	// are *AllowList
@@ -20,7 +20,7 @@ type RemoteAllowList struct {
 }
 
 type LocalAllowList struct {
-	AllowList AllowList
+	AllowList *AllowList
 
 	// To avoid ambiguity, all rules must be true, or all rules must be false.
 	nameRules []AllowListNameRule
@@ -103,9 +103,6 @@ func (al *RemoteAllowList) AllowUnknownVpnIp(ip net.IP) bool {
 }
 
 func (al *RemoteAllowList) Allow(vpnIp uint32, ip net.IP) bool {
-	if al == nil {
-		return true
-	}
 	if !al.getInsideAllowList(vpnIp).Allow(ip) {
 		return false
 	}

@@ -278,7 +278,7 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		config.GetBool("stats.lighthouse_metrics", false),
 	)
 
-	remoteAllowList, err := config.GetRemoteAllowList("lighthouse.remote_allow_list")
+	remoteAllowList, err := config.GetRemoteAllowList("lighthouse.remote_allow_list", "lighthouse.remote_allow_ranges")
 	if err != nil {
 		return nil, NewContextualError("Invalid lighthouse.remote_allow_list", nil, err)
 	}

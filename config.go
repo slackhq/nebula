@@ -242,50 +242,56 @@ func (c *Config) GetLocalAllowList(k string) (*LocalAllowList, error) {
 	}
 
 	al, err := c.GetAllowList(k, handleKey)
-	if err != nil || al == nil {
+	if err != nil {
 		return nil, err
 	}
-	return &LocalAllowList{AllowList: *al, nameRules: nameRules}, nil
+	return &LocalAllowList{AllowList: al, nameRules: nameRules}, nil
 }
 
-func (c *Config) GetRemoteAllowList(k string) (*RemoteAllowList, error) {
-	var insideAllowLists *CIDR6Tree
-	handleKey := func(key string, value interface{}) (bool, error) {
-		if key == "inside" {
-			insideAllowLists = NewCIDR6Tree()
-
-			rawMap, ok := value.(map[interface{}]interface{})
-			if !ok {
-				return false, fmt.Errorf("config `%s.inside` has invalid type: %T", k, value)
-			}
-			for rawKey, rawValue := range rawMap {
-				rawCIDR, ok := rawKey.(string)
-				if !ok {
-					return false, fmt.Errorf("config `%s.inside` has invalid key (type %T): %v", k, rawKey, rawKey)
-				}
-
-				allowList, err := c.getAllowList(fmt.Sprintf("%s.inside.%s", k, rawCIDR), rawValue, nil)
-				if err != nil {
-					return false, err
-				}
-
-				_, cidr, err := net.ParseCIDR(rawCIDR)
-				if err != nil {
-					return false, fmt.Errorf("config `%s` has invalid CIDR: %s", k, rawCIDR)
-				}
-
-				insideAllowLists.AddCIDR(cidr, allowList)
-			}
-
-			return true, nil
-		}
-		return false, nil
+func (c *Config) getRemoteAllowRanges(k string) (*CIDR6Tree, error) {
+	value := c.Get(k)
+	if value == nil {
+		return nil, nil
 	}
-	al, err := c.GetAllowList(k, handleKey)
-	if err != nil || al == nil {
+
+	remoteAllowRanges := NewCIDR6Tree()
+
+	rawMap, ok := value.(map[interface{}]interface{})
+	if !ok {
+		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, value)
+	}
+	for rawKey, rawValue := range rawMap {
+		rawCIDR, ok := rawKey.(string)
+		if !ok {
+			return nil, fmt.Errorf("config `%s` has invalid key (type %T): %v", k, rawKey, rawKey)
+		}
+
+		allowList, err := c.getAllowList(fmt.Sprintf("%s.%s", k, rawCIDR), rawValue, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		_, cidr, err := net.ParseCIDR(rawCIDR)
+		if err != nil {
+			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s", k, rawCIDR)
+		}
+
+		remoteAllowRanges.AddCIDR(cidr, allowList)
+	}
+
+	return remoteAllowRanges, nil
+}
+
+func (c *Config) GetRemoteAllowList(k, rangesKey string) (*RemoteAllowList, error) {
+	al, err := c.GetAllowList(k, nil)
+	if err != nil {
 		return nil, err
 	}
-	return &RemoteAllowList{AllowList: *al, insideAllowLists: insideAllowLists}, nil
+	remoteAllowRanges, err := c.getRemoteAllowRanges(rangesKey)
+	if err != nil {
+		return nil, err
+	}
+	return &RemoteAllowList{AllowList: al, insideAllowLists: remoteAllowRanges}, nil
 }
 
 // If the handleKey func returns true, the rest of the parsing is skipped
