@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - SSH server handles single `exec` requests correctly. (#483)
 
+- Signing a certificate with `nebula-cert sign` now verifies that the supplied
+  ca-key matches the ca-crt. (#503)
+
 ## [1.4.0] - 2021-05-11
 
 ### Added
