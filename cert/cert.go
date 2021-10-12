@@ -337,10 +337,11 @@ func (nc *NebulaCertificate) VerifyPrivateKey(key []byte) error {
 		return nil
 	}
 
-	var dst, key32 [32]byte
-	copy(key32[:], key)
-	curve25519.ScalarBaseMult(&dst, &key32)
-	if !bytes.Equal(dst[:], nc.Details.PublicKey) {
+	pub, err := curve25519.X25519(key, curve25519.Basepoint)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(pub, nc.Details.PublicKey) {
 		return fmt.Errorf("public key in cert and private key supplied don't match")
 	}
 
