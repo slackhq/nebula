@@ -325,6 +325,18 @@ func (nc *NebulaCertificate) CheckRootConstrains(signer *NebulaCertificate) erro
 
 // VerifyPrivateKey checks that the public key in the Nebula certificate and a supplied private key match
 func (nc *NebulaCertificate) VerifyPrivateKey(key []byte) error {
+	if nc.Details.IsCA {
+		// the call to PublicKey below will panic slice bounds out of range otherwise
+		if len(key) != ed25519.PrivateKeySize {
+			return fmt.Errorf("key was not 64 bytes, is invalid ed25519 private key")
+		}
+
+		if !ed25519.PublicKey(nc.Details.PublicKey).Equal(ed25519.PrivateKey(key).Public()) {
+			return fmt.Errorf("public key in cert and private key supplied don't match")
+		}
+		return nil
+	}
+
 	pub, err := curve25519.X25519(key, curve25519.Basepoint)
 	if err != nil {
 		return err
@@ -332,6 +344,7 @@ func (nc *NebulaCertificate) VerifyPrivateKey(key []byte) error {
 	if !bytes.Equal(pub, nc.Details.PublicKey) {
 		return fmt.Errorf("public key in cert and private key supplied don't match")
 	}
+
 	return nil
 }
 
