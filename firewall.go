@@ -18,6 +18,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"inet.af/netaddr"
 )
 
 const (
@@ -124,8 +125,8 @@ type FirewallRule struct {
 type firewallPort map[int32]*FirewallCA
 
 type FirewallPacket struct {
-	LocalIP    uint32
-	RemoteIP   uint32
+	LocalIP    netaddr.IP
+	RemoteIP   netaddr.IP
 	LocalPort  uint16
 	RemotePort uint16
 	Protocol   uint8
@@ -156,8 +157,8 @@ func (fp FirewallPacket) MarshalJSON() ([]byte, error) {
 		proto = fmt.Sprintf("unknown %v", fp.Protocol)
 	}
 	return json.Marshal(m{
-		"LocalIP":    int2ip(fp.LocalIP).String(),
-		"RemoteIP":   int2ip(fp.RemoteIP).String(),
+		"LocalIP":    fp.LocalIP.String(),
+		"RemoteIP":   fp.RemoteIP.String(),
 		"LocalPort":  fp.LocalPort,
 		"RemotePort": fp.RemotePort,
 		"Protocol":   proto,

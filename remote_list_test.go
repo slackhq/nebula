@@ -5,12 +5,15 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"inet.af/netaddr"
 )
 
 func TestRemoteList_Rebuild(t *testing.T) {
 	rl := NewRemoteList()
+	p1, _ := netaddr.ParseIP("0")
+	p2, _ := netaddr.ParseIP("1")
 	rl.unlockedSetV4(
-		0,
+		p1,
 		[]*Ip4AndPort{
 			{Ip: ip2int(net.ParseIP("70.199.182.92")), Port: 1475}, // this is duped
 			{Ip: ip2int(net.ParseIP("172.17.0.182")), Port: 10101},
@@ -27,7 +30,7 @@ func TestRemoteList_Rebuild(t *testing.T) {
 	)
 
 	rl.unlockedSetV6(
-		1,
+		p2,
 		[]*Ip6AndPort{
 			NewIp6AndPort(net.ParseIP("1::1"), 1), // this is duped
 			NewIp6AndPort(net.ParseIP("1::1"), 2), // almost dupe of 0 with a diff port, also gets duped
@@ -100,8 +103,9 @@ func TestRemoteList_Rebuild(t *testing.T) {
 
 func BenchmarkFullRebuild(b *testing.B) {
 	rl := NewRemoteList()
+	p1, _ := netaddr.ParseIP("0")
 	rl.unlockedSetV4(
-		0,
+		p1,
 		[]*Ip4AndPort{
 			{Ip: ip2int(net.ParseIP("70.199.182.92")), Port: 1475},
 			{Ip: ip2int(net.ParseIP("172.17.0.182")), Port: 10101},
@@ -116,7 +120,7 @@ func BenchmarkFullRebuild(b *testing.B) {
 	)
 
 	rl.unlockedSetV6(
-		0,
+		p1,
 		[]*Ip6AndPort{
 			NewIp6AndPort(net.ParseIP("1::1"), 1),
 			NewIp6AndPort(net.ParseIP("1::1"), 2), // dupe of 0 with a diff port
@@ -163,8 +167,9 @@ func BenchmarkFullRebuild(b *testing.B) {
 
 func BenchmarkSortRebuild(b *testing.B) {
 	rl := NewRemoteList()
+	p1, _ := netaddr.ParseIP("0")
 	rl.unlockedSetV4(
-		0,
+		p1,
 		[]*Ip4AndPort{
 			{Ip: ip2int(net.ParseIP("70.199.182.92")), Port: 1475},
 			{Ip: ip2int(net.ParseIP("172.17.0.182")), Port: 10101},
@@ -179,7 +184,7 @@ func BenchmarkSortRebuild(b *testing.B) {
 	)
 
 	rl.unlockedSetV6(
-		0,
+		p1,
 		[]*Ip6AndPort{
 			NewIp6AndPort(net.ParseIP("1::1"), 1),
 			NewIp6AndPort(net.ParseIP("1::1"), 2), // dupe of 0 with a diff port

@@ -3,6 +3,8 @@ package nebula
 import (
 	"sync"
 	"time"
+
+	"inet.af/netaddr"
 )
 
 // How many timer objects should be cached
@@ -43,7 +45,7 @@ type SystemTimeoutList struct {
 
 // Represents an item within a tick
 type SystemTimeoutItem struct {
-	Item uint32
+	Item netaddr.IP
 	Next *SystemTimeoutItem
 }
 
@@ -74,7 +76,7 @@ func NewSystemTimerWheel(min, max time.Duration) *SystemTimerWheel {
 	return &tw
 }
 
-func (tw *SystemTimerWheel) Add(v uint32, timeout time.Duration) *SystemTimeoutItem {
+func (tw *SystemTimerWheel) Add(v netaddr.IP, timeout time.Duration) *SystemTimeoutItem {
 	tw.lock.Lock()
 	defer tw.lock.Unlock()
 
@@ -123,7 +125,7 @@ func (tw *SystemTimerWheel) Purge() interface{} {
 	p := ti.Item
 
 	// Clear out the items references
-	ti.Item = 0
+	ti.Item = netaddr.IP{}
 	ti.Next = nil
 
 	// Maybe cache it for later

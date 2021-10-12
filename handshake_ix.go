@@ -6,13 +6,14 @@ import (
 
 	"github.com/flynn/noise"
 	"github.com/golang/protobuf/proto"
+	"inet.af/netaddr"
 )
 
 // NOISE IX Handshakes
 
 // This function constructs a handshake packet, but does not actually send it
 // Sending is done by the handshake manager
-func ixHandshakeStage0(f *Interface, vpnIp uint32, hostinfo *HostInfo) {
+func ixHandshakeStage0(f *Interface, vpnIp netaddr.IP, hostinfo *HostInfo) {
 	// This queries the lighthouse if we don't know a remote for the host
 	// We do it here to provoke the lighthouse to preempt our timer wheel and trigger the stage 1 packet to send
 	// more quickly, effect is a quicker handshake.
@@ -97,12 +98,13 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 			Info("Invalid certificate from host")
 		return
 	}
-	vpnIP := ip2int(remoteCert.Details.Ips[0].IP)
+	vpnIPint := ip2int(remoteCert.Details.Ips[0].IP)
+	vpnIP := uint32Tonetaddr(vpnIPint)
 	certName := remoteCert.Details.Name
 	fingerprint, _ := remoteCert.Sha256Sum()
 	issuer := remoteCert.Details.Issuer
 
-	if vpnIP == ip2int(f.certState.certificate.Details.Ips[0].IP) {
+	if vpnIPint == ip2int(f.certState.certificate.Details.Ips[0].IP) {
 		f.l.WithField("vpnIp", IntIp(vpnIP)).WithField("udpAddr", addr).
 			WithField("certName", certName).
 			WithField("fingerprint", fingerprint).
@@ -195,7 +197,7 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 	hostinfo.CreateRemoteCIDR(remoteCert)
 
 	// Only overwrite existing record if we should win the handshake race
-	overwrite := vpnIP > ip2int(f.certState.certificate.Details.Ips[0].IP)
+	overwrite := vpnIPint > ip2int(f.certState.certificate.Details.Ips[0].IP)
 	existing, err := f.handshakeManager.CheckAndComplete(hostinfo, 0, overwrite, f)
 	if err != nil {
 		switch err {
@@ -351,7 +353,8 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 		return true
 	}
 
-	vpnIP := ip2int(remoteCert.Details.Ips[0].IP)
+	vpnIPint := ip2int(remoteCert.Details.Ips[0].IP)
+	vpnIP := uint32Tonetaddr(vpnIPint)
 	certName := remoteCert.Details.Name
 	fingerprint, _ := remoteCert.Sha256Sum()
 	issuer := remoteCert.Details.Issuer

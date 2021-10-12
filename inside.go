@@ -1,10 +1,12 @@
 package nebula
 
 import (
+	"net"
 	"sync/atomic"
 
 	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
+	"inet.af/netaddr"
 )
 
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket, nb, out []byte, q int, localCache ConntrackCache) {
@@ -15,17 +17,19 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 	}
 
 	// Ignore local broadcast packets
-	if f.dropLocalBroadcast && fwPacket.RemoteIP == f.localBroadcast {
+	localBroadcast := uint32Tonetaddr(f.localBroadcast)
+	if f.dropLocalBroadcast && fwPacket.RemoteIP == localBroadcast {
 		return
 	}
 
 	// Ignore packets from self to self
-	if fwPacket.RemoteIP == f.myVpnIp {
+	myVpnIp := uint32Tonetaddr(f.myVpnIp)
+	if fwPacket.RemoteIP == myVpnIp {
 		return
 	}
 
 	// Ignore broadcast packets
-	if f.dropMulticast && isMulticast(fwPacket.RemoteIP) {
+	if f.dropMulticast && fwPacket.RemoteIP.IsMulticast() {
 		return
 	}
 
@@ -65,10 +69,10 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 }
 
 // getOrHandshake returns nil if the vpnIp is not routable
-func (f *Interface) getOrHandshake(vpnIp uint32) *HostInfo {
-	if f.hostMap.vpnCIDR.Contains(int2ip(vpnIp)) == false {
+func (f *Interface) getOrHandshake(vpnIp netaddr.IP) *HostInfo {
+	if f.hostMap.vpnCIDR.Contains(netaddr2ip(vpnIp)) == false {
 		vpnIp = f.hostMap.queryUnsafeRoute(vpnIp)
-		if vpnIp == 0 {
+		if vpnIp.IsZero() {
 			return nil
 		}
 	}
@@ -149,7 +153,7 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 }
 
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
-func (f *Interface) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp uint32, p, nb, out []byte) {
+func (f *Interface) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessageSubType, vpnIp netaddr.IP, p, nb, out []byte) {
 	hostInfo := f.getOrHandshake(vpnIp)
 	if hostInfo == nil {
 		if f.l.Level >= logrus.DebugLevel {
@@ -230,9 +234,9 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 	return
 }
 
-func isMulticast(ip uint32) bool {
+func isMulticast(ip net.IP) bool {
 	// Class D multicast
-	if (((ip >> 24) & 0xff) & 0xf0) == 0xe0 {
+	if (((ip2int(ip) >> 24) & 0xff) & 0xf0) == 0xe0 {
 		return true
 	}
 

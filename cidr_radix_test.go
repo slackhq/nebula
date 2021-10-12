@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"inet.af/netaddr"
 )
 
 func TestCIDRTree_Contains(t *testing.T) {
@@ -36,13 +37,16 @@ func TestCIDRTree_Contains(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		assert.Equal(t, tt.Result, tree.Contains(ip2int(net.ParseIP(tt.IP))))
+		ip, _ := netaddr.ParseIP(tt.IP)
+		assert.Equal(t, tt.Result, tree.Contains(ip))
 	}
 
 	tree = NewCIDRTree()
 	tree.AddCIDR(getCIDR("1.1.1.1/0"), "cool")
-	assert.Equal(t, "cool", tree.Contains(ip2int(net.ParseIP("0.0.0.0"))))
-	assert.Equal(t, "cool", tree.Contains(ip2int(net.ParseIP("255.255.255.255"))))
+	ipAll, _ := netaddr.ParseIP("0.0.0.0")
+	ipNone, _ := netaddr.ParseIP("255.255.255.255")
+	assert.Equal(t, "cool", tree.Contains(ipAll))
+	assert.Equal(t, "cool", tree.Contains(ipNone))
 }
 
 func TestCIDRTree_MostSpecificContains(t *testing.T) {
@@ -75,13 +79,16 @@ func TestCIDRTree_MostSpecificContains(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		assert.Equal(t, tt.Result, tree.MostSpecificContains(ip2int(net.ParseIP(tt.IP))))
+		ip, _ := netaddr.ParseIP(tt.IP)
+		assert.Equal(t, tt.Result, tree.MostSpecificContains(ip))
 	}
 
 	tree = NewCIDRTree()
 	tree.AddCIDR(getCIDR("1.1.1.1/0"), "cool")
-	assert.Equal(t, "cool", tree.MostSpecificContains(ip2int(net.ParseIP("0.0.0.0"))))
-	assert.Equal(t, "cool", tree.MostSpecificContains(ip2int(net.ParseIP("255.255.255.255"))))
+	ipAll, _ := netaddr.ParseIP("0.0.0.0")
+	ipZero, _ := netaddr.ParseIP("255.255.255.255")
+	assert.Equal(t, "cool", tree.MostSpecificContains(ipAll))
+	assert.Equal(t, "cool", tree.MostSpecificContains(ipZero))
 }
 
 func TestCIDRTree_Match(t *testing.T) {
@@ -103,8 +110,10 @@ func TestCIDRTree_Match(t *testing.T) {
 
 	tree = NewCIDRTree()
 	tree.AddCIDR(getCIDR("1.1.1.1/0"), "cool")
-	assert.Equal(t, "cool", tree.Contains(ip2int(net.ParseIP("0.0.0.0"))))
-	assert.Equal(t, "cool", tree.Contains(ip2int(net.ParseIP("255.255.255.255"))))
+	ipAll, _ := netaddr.ParseIP("0.0.0.0")
+	ipNone, _ := netaddr.ParseIP("255.255.255.255")
+	assert.Equal(t, "cool", tree.Contains(ipAll))
+	assert.Equal(t, "cool", tree.Contains(ipNone))
 }
 
 func BenchmarkCIDRTree_Contains(b *testing.B) {
@@ -114,14 +123,16 @@ func BenchmarkCIDRTree_Contains(b *testing.B) {
 	tree.AddCIDR(getCIDR("192.2.1.1/32"), "1")
 	tree.AddCIDR(getCIDR("172.2.1.1/32"), "1")
 
-	ip := ip2int(net.ParseIP("1.2.1.1"))
+
+	ip, _ := netaddr.ParseIP("1.2.1.1")
 	b.Run("found", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			tree.Contains(ip)
 		}
 	})
 
-	ip = ip2int(net.ParseIP("1.2.1.255"))
+
+	ip, _ = netaddr.ParseIP("1.2.1.255")
 	b.Run("not found", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			tree.Contains(ip)

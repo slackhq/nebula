@@ -1,11 +1,11 @@
 package nebula
 
 import (
-	"net"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"inet.af/netaddr"
 )
 
 func TestNewSystemTimerWheel(t *testing.T) {
@@ -51,7 +51,7 @@ func TestSystemTimerWheel_findWheel(t *testing.T) {
 func TestSystemTimerWheel_Add(t *testing.T) {
 	tw := NewSystemTimerWheel(time.Second, time.Second*10)
 
-	fp1 := ip2int(net.ParseIP("1.2.3.4"))
+	fp1, _ := netaddr.ParseIP("1.2.3.4")
 	tw.Add(fp1, time.Second*1)
 
 	// Make sure we set head and tail properly
@@ -62,7 +62,7 @@ func TestSystemTimerWheel_Add(t *testing.T) {
 	assert.Nil(t, tw.wheel[2].Tail.Next)
 
 	// Make sure we only modify head
-	fp2 := ip2int(net.ParseIP("1.2.3.4"))
+	fp2, _ := netaddr.ParseIP("1.2.3.4")
 	tw.Add(fp2, time.Second*1)
 	assert.Equal(t, fp2, tw.wheel[2].Head.Item)
 	assert.Equal(t, fp1, tw.wheel[2].Head.Next.Item)
@@ -85,9 +85,12 @@ func TestSystemTimerWheel_Purge(t *testing.T) {
 	assert.NotNil(t, tw.lastTick)
 	assert.Equal(t, 0, tw.current)
 
-	fps := []uint32{9, 10, 11, 12}
+	fp1, _ := netaddr.ParseIP("9")
+	fp2, _ := netaddr.ParseIP("10")
+	fp3, _ := netaddr.ParseIP("11")
+	fp4, _ := netaddr.ParseIP("12")
 
-	//fp1 := ip2int(net.ParseIP("1.2.3.4"))
+	fps := []netaddr.IP{fp1, fp2, fp3, fp4}
 
 	tw.Add(fps[0], time.Second*1)
 	tw.Add(fps[1], time.Second*1)

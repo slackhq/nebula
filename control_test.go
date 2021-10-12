@@ -8,8 +8,8 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
-	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
+	"inet.af/netaddr"
 )
 
 func TestControl_GetHostInfoByVpnIP(t *testing.T) {
@@ -23,11 +23,13 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 		IP:   net.IPv4(1, 2, 3, 4),
 		Mask: net.IPMask{255, 255, 255, 0},
 	}
+	prefix1, _ := netaddr.FromStdIPNet(&ipNet)
 
 	ipNet2 := net.IPNet{
 		IP:   net.ParseIP("1:2:3:4:5:6:7:8"),
 		Mask: net.IPMask{255, 255, 255, 0},
 	}
+	prefix2, _ := netaddr.FromStdIPNet(&ipNet2)
 
 	crt := &cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
@@ -46,9 +48,9 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 	}
 
 	remotes := NewRemoteList()
-	remotes.unlockedPrependV4(0, NewIp4AndPort(remote1.IP, uint32(remote1.Port)))
-	remotes.unlockedPrependV6(0, NewIp6AndPort(remote2.IP, uint32(remote2.Port)))
-	hm.Add(ip2int(ipNet.IP), &HostInfo{
+	remotes.unlockedPrependV4(uint32Tonetaddr(0), NewIp4AndPort(remote1.IP, uint32(remote1.Port)))
+	remotes.unlockedPrependV6(uint32Tonetaddr(0), NewIp6AndPort(remote2.IP, uint32(remote2.Port)))
+	hm.Add(prefix1.IP(), &HostInfo{
 		remote:  remote1,
 		remotes: remotes,
 		ConnectionState: &ConnectionState{
@@ -56,10 +58,10 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 		},
 		remoteIndexId: 200,
 		localIndexId:  201,
-		hostId:        ip2int(ipNet.IP),
+		hostId:        prefix1.IP(),
 	})
 
-	hm.Add(ip2int(ipNet2.IP), &HostInfo{
+	hm.Add(prefix2.IP(), &HostInfo{
 		remote:  remote1,
 		remotes: remotes,
 		ConnectionState: &ConnectionState{
@@ -67,7 +69,7 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 		},
 		remoteIndexId: 200,
 		localIndexId:  201,
-		hostId:        ip2int(ipNet2.IP),
+		hostId:        prefix2.IP(),
 	})
 
 	c := Control{
@@ -77,10 +79,10 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 		l: logrus.New(),
 	}
 
-	thi := c.GetHostInfoByVpnIP(ip2int(ipNet.IP), false)
+	thi := c.GetHostInfoByVpnIP(prefix1.IP(), false)
 
 	expectedInfo := ControlHostInfo{
-		VpnIP:          net.IPv4(1, 2, 3, 4).To4(),
+		VpnIP:          netaddr.IPv4(1, 2, 3, 4),
 		LocalIndex:     201,
 		RemoteIndex:    200,
 		RemoteAddrs:    []*udpAddr{remote2, remote1},
@@ -92,11 +94,11 @@ func TestControl_GetHostInfoByVpnIP(t *testing.T) {
 
 	// Make sure we don't have any unexpected fields
 	assertFields(t, []string{"VpnIP", "LocalIndex", "RemoteIndex", "RemoteAddrs", "CachedPackets", "Cert", "MessageCounter", "CurrentRemote"}, thi)
-	util.AssertDeepCopyEqual(t, &expectedInfo, thi)
+	assert.Equal(t, &expectedInfo, thi)
 
 	// Make sure we don't panic if the host info doesn't have a cert yet
 	assert.NotPanics(t, func() {
-		thi = c.GetHostInfoByVpnIP(ip2int(ipNet2.IP), false)
+		thi = c.GetHostInfoByVpnIP(prefix2.IP(), false)
 	})
 }
 

@@ -2,8 +2,9 @@ package nebula
 
 import (
 	"encoding/binary"
-	"fmt"
 	"net"
+
+	"inet.af/netaddr"
 )
 
 type CIDRNode struct {
@@ -77,16 +78,17 @@ func (tree *CIDRTree) AddCIDR(cidr *net.IPNet, val interface{}) {
 }
 
 // Finds the first match, which may be the least specific
-func (tree *CIDRTree) Contains(ip uint32) (value interface{}) {
+func (tree *CIDRTree) Contains(ip netaddr.IP) (value interface{}) {
 	bit := startbit
 	node := tree.root
+	address := ip.IPAddr()
 
 	for node != nil {
 		if node.value != nil {
 			return node.value
 		}
 
-		if ip&bit != 0 {
+		if ip2int(address.IP)&bit != 0 {
 			node = node.right
 		} else {
 			node = node.left
@@ -100,9 +102,10 @@ func (tree *CIDRTree) Contains(ip uint32) (value interface{}) {
 }
 
 // Finds the most specific match
-func (tree *CIDRTree) MostSpecificContains(ip uint32) (value interface{}) {
+func (tree *CIDRTree) MostSpecificContains(addr netaddr.IP) (value interface{}) {
 	bit := startbit
 	node := tree.root
+	ip := netaddrTouint32(addr)
 
 	for node != nil {
 		if node.value != nil {
@@ -145,15 +148,7 @@ func (tree *CIDRTree) Match(ip uint32) (value interface{}) {
 }
 
 // A helper type to avoid converting to IP when logging
-type IntIp uint32
-
-func (ip IntIp) String() string {
-	return fmt.Sprintf("%v", int2ip(uint32(ip)))
-}
-
-func (ip IntIp) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf("\"%s\"", int2ip(uint32(ip)).String())), nil
-}
+type IntIp netaddr.IP
 
 func ip2int(ip []byte) uint32 {
 	if len(ip) == 16 {
@@ -166,4 +161,29 @@ func int2ip(nn uint32) net.IP {
 	ip := make(net.IP, 4)
 	binary.BigEndian.PutUint32(ip, nn)
 	return ip
+}
+
+func netaddrTouint32(ip netaddr.IP) uint32 {
+	var addr uint32
+
+	addr = 0
+	if ip.Is4() {
+		addr = ip2int(ip.IPAddr().IP)
+	}
+
+	return addr
+}
+
+func uint32Tonetaddr(ip uint32) netaddr.IP {
+	var addr netaddr.IP
+
+	if ip > 0 {
+		addr, _ = netaddr.FromStdIP(int2ip(ip))
+	}
+
+	return addr
+}
+
+func netaddr2ip(ip netaddr.IP) net.IP {
+	return net.ParseIP(ip.String())
 }

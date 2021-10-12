@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"inet.af/netaddr"
 )
 
 func TestNewTimerWheel(t *testing.T) {
@@ -85,10 +86,10 @@ func TestTimerWheel_Purge(t *testing.T) {
 	assert.Equal(t, 0, tw.current)
 
 	fps := []FirewallPacket{
-		{LocalIP: 1},
-		{LocalIP: 2},
-		{LocalIP: 3},
-		{LocalIP: 4},
+		{LocalIP: netaddr.IPv4(0, 0, 0, 1)},
+		{LocalIP: netaddr.IPv4(0, 0, 0, 2)},
+		{LocalIP: netaddr.IPv4(0, 0, 0, 3)},
+		{LocalIP: netaddr.IPv4(0, 0, 0, 4)},
 	}
 
 	tw.Add(fps[0], time.Second*1)

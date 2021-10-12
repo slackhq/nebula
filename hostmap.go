@@ -11,6 +11,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"inet.af/netaddr"
 )
 
 //const ProbeLen = 100
@@ -27,7 +28,7 @@ type HostMap struct {
 	name            string
 	Indexes         map[uint32]*HostInfo
 	RemoteIndexes   map[uint32]*HostInfo
-	Hosts           map[uint32]*HostInfo
+	Hosts           map[netaddr.IP]*HostInfo
 	preferredRanges []*net.IPNet
 	vpnCIDR         *net.IPNet
 	unsafeRoutes    *CIDRTree
@@ -50,7 +51,7 @@ type HostInfo struct {
 	packetStore       []*cachedPacket  //todo: this is other handshake manager entry
 	remoteIndexId     uint32
 	localIndexId      uint32
-	hostId            uint32
+	hostId            netaddr.IP
 	recvError         int
 	remoteCidr        *CIDRTree
 
@@ -83,7 +84,7 @@ type cachedPacketMetrics struct {
 }
 
 func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRanges []*net.IPNet) *HostMap {
-	h := map[uint32]*HostInfo{}
+	h := map[netaddr.IP]*HostInfo{}
 	i := map[uint32]*HostInfo{}
 	r := map[uint32]*HostInfo{}
 	m := HostMap{
@@ -112,7 +113,7 @@ func (hm *HostMap) EmitStats(name string) {
 	metrics.GetOrRegisterGauge("hostmap."+name+".remoteIndexes", nil).Update(int64(remoteIndexLen))
 }
 
-func (hm *HostMap) GetIndexByVpnIP(vpnIP uint32) (uint32, error) {
+func (hm *HostMap) GetIndexByVpnIP(vpnIP netaddr.IP) (uint32, error) {
 	hm.RLock()
 	if i, ok := hm.Hosts[vpnIP]; ok {
 		index := i.localIndexId
@@ -123,13 +124,13 @@ func (hm *HostMap) GetIndexByVpnIP(vpnIP uint32) (uint32, error) {
 	return 0, errors.New("vpn IP not found")
 }
 
-func (hm *HostMap) Add(ip uint32, hostinfo *HostInfo) {
+func (hm *HostMap) Add(ip netaddr.IP, hostinfo *HostInfo) {
 	hm.Lock()
 	hm.Hosts[ip] = hostinfo
 	hm.Unlock()
 }
 
-func (hm *HostMap) AddVpnIP(vpnIP uint32) *HostInfo {
+func (hm *HostMap) AddVpnIP(vpnIP netaddr.IP) *HostInfo {
 	h := &HostInfo{}
 	hm.RLock()
 	if _, ok := hm.Hosts[vpnIP]; !ok {
@@ -150,11 +151,11 @@ func (hm *HostMap) AddVpnIP(vpnIP uint32) *HostInfo {
 	}
 }
 
-func (hm *HostMap) DeleteVpnIP(vpnIP uint32) {
+func (hm *HostMap) DeleteVpnIP(vpnIP netaddr.IP) {
 	hm.Lock()
 	delete(hm.Hosts, vpnIP)
 	if len(hm.Hosts) == 0 {
-		hm.Hosts = map[uint32]*HostInfo{}
+		hm.Hosts = map[netaddr.IP]*HostInfo{}
 	}
 	hm.Unlock()
 
@@ -178,7 +179,7 @@ func (hm *HostMap) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
 	}
 }
 
-func (hm *HostMap) AddVpnIPHostInfo(vpnIP uint32, h *HostInfo) {
+func (hm *HostMap) AddVpnIPHostInfo(vpnIP netaddr.IP, h *HostInfo) {
 	hm.Lock()
 	h.hostId = vpnIP
 	hm.Hosts[vpnIP] = h
@@ -259,7 +260,7 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 
 	delete(hm.Hosts, hostinfo.hostId)
 	if len(hm.Hosts) == 0 {
-		hm.Hosts = map[uint32]*HostInfo{}
+		hm.Hosts = map[netaddr.IP]*HostInfo{}
 	}
 	delete(hm.Indexes, hostinfo.localIndexId)
 	if len(hm.Indexes) == 0 {
@@ -300,17 +301,17 @@ func (hm *HostMap) QueryReverseIndex(index uint32) (*HostInfo, error) {
 	}
 }
 
-func (hm *HostMap) QueryVpnIP(vpnIp uint32) (*HostInfo, error) {
+func (hm *HostMap) QueryVpnIP(vpnIp netaddr.IP) (*HostInfo, error) {
 	return hm.queryVpnIP(vpnIp, nil)
 }
 
 // PromoteBestQueryVpnIP will attempt to lazily switch to the best remote every
 // `PromoteEvery` calls to this function for a given host.
-func (hm *HostMap) PromoteBestQueryVpnIP(vpnIp uint32, ifce *Interface) (*HostInfo, error) {
+func (hm *HostMap) PromoteBestQueryVpnIP(vpnIp netaddr.IP, ifce *Interface) (*HostInfo, error) {
 	return hm.queryVpnIP(vpnIp, ifce)
 }
 
-func (hm *HostMap) queryVpnIP(vpnIp uint32, promoteIfce *Interface) (*HostInfo, error) {
+func (hm *HostMap) queryVpnIP(vpnIp netaddr.IP, promoteIfce *Interface) (*HostInfo, error) {
 	hm.RLock()
 	if h, ok := hm.Hosts[vpnIp]; ok {
 		hm.RUnlock()
@@ -326,12 +327,12 @@ func (hm *HostMap) queryVpnIP(vpnIp uint32, promoteIfce *Interface) (*HostInfo, 
 	return nil, errors.New("unable to find host")
 }
 
-func (hm *HostMap) queryUnsafeRoute(ip uint32) uint32 {
+func (hm *HostMap) queryUnsafeRoute(ip netaddr.IP) netaddr.IP {
 	r := hm.unsafeRoutes.MostSpecificContains(ip)
 	if r != nil {
-		return r.(uint32)
+		return r.(netaddr.IP)
 	} else {
-		return 0
+		return netaddr.IP{}
 	}
 }
 

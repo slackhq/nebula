@@ -8,6 +8,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
+	"inet.af/netaddr"
 )
 
 // This whole thing should be rewritten to use context
@@ -40,12 +41,8 @@ func (d *dnsRecords) Query(data string) string {
 }
 
 func (d *dnsRecords) QueryCert(data string) string {
-	ip := net.ParseIP(data[:len(data)-1])
-	if ip == nil {
-		return ""
-	}
-	iip := ip2int(ip)
-	hostinfo, err := d.hostMap.QueryVpnIP(iip)
+	ip, _ := netaddr.ParseIP(data[:len(data)-1])
+	hostinfo, err := d.hostMap.QueryVpnIP(ip)
 	if err != nil {
 		return ""
 	}

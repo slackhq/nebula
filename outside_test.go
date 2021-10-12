@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/net/ipv4"
+	"inet.af/netaddr"
 )
 
 func Test_newPacket(t *testing.T) {
@@ -53,8 +54,8 @@ func Test_newPacket(t *testing.T) {
 
 	assert.Nil(t, err)
 	assert.Equal(t, p.Protocol, uint8(fwProtoTCP))
-	assert.Equal(t, p.LocalIP, ip2int(net.IPv4(10, 0, 0, 2)))
-	assert.Equal(t, p.RemoteIP, ip2int(net.IPv4(10, 0, 0, 1)))
+	assert.Equal(t, p.LocalIP, netaddr.IPv4(10, 0, 0, 2))
+	assert.Equal(t, p.RemoteIP, netaddr.IPv4(10, 0, 0, 1))
 	assert.Equal(t, p.RemotePort, uint16(3))
 	assert.Equal(t, p.LocalPort, uint16(4))
 
@@ -74,8 +75,8 @@ func Test_newPacket(t *testing.T) {
 
 	assert.Nil(t, err)
 	assert.Equal(t, p.Protocol, uint8(2))
-	assert.Equal(t, p.LocalIP, ip2int(net.IPv4(10, 0, 0, 1)))
-	assert.Equal(t, p.RemoteIP, ip2int(net.IPv4(10, 0, 0, 2)))
+	assert.Equal(t, p.LocalIP, netaddr.IPv4(10, 0, 0, 1))
+	assert.Equal(t, p.RemoteIP, netaddr.IPv4(10, 0, 0, 2))
 	assert.Equal(t, p.RemotePort, uint16(6))
 	assert.Equal(t, p.LocalPort, uint16(5))
 }

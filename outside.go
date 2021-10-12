@@ -223,9 +223,11 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 	}
 
 	// Firewall packets are locally oriented
+	remoteIP := uint32Tonetaddr(binary.BigEndian.Uint32(data[12:16]))
+	localIP := uint32Tonetaddr(binary.BigEndian.Uint32(data[16:20]))
 	if incoming {
-		fp.RemoteIP = binary.BigEndian.Uint32(data[12:16])
-		fp.LocalIP = binary.BigEndian.Uint32(data[16:20])
+		fp.RemoteIP = remoteIP
+		fp.LocalIP = localIP
 		if fp.Fragment || fp.Protocol == fwProtoICMP {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
@@ -234,8 +236,8 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4])
 		}
 	} else {
-		fp.LocalIP = binary.BigEndian.Uint32(data[12:16])
-		fp.RemoteIP = binary.BigEndian.Uint32(data[16:20])
+		fp.LocalIP = remoteIP
+		fp.RemoteIP = localIP
 		if fp.Fragment || fp.Protocol == fwProtoICMP {
 			fp.RemotePort = 0
 			fp.LocalPort = 0

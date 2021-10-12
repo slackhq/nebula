@@ -10,6 +10,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"inet.af/netaddr"
 )
 
 const (
@@ -47,7 +48,7 @@ type HandshakeManager struct {
 	l                      *logrus.Logger
 
 	// can be used to trigger outbound handshake for the given vpnIP
-	trigger chan uint32
+	trigger chan netaddr.IP
 }
 
 func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udpConn, config HandshakeConfig) *HandshakeManager {
@@ -57,7 +58,7 @@ func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges [
 		lightHouse:             lightHouse,
 		outside:                outside,
 		config:                 config,
-		trigger:                make(chan uint32, config.triggerBuffer),
+		trigger:                make(chan netaddr.IP, config.triggerBuffer),
 		OutboundHandshakeTimer: NewSystemTimerWheel(config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
 		messageMetrics:         config.messageMetrics,
 		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
@@ -86,12 +87,12 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 		if ep == nil {
 			break
 		}
-		vpnIP := ep.(uint32)
+		vpnIP := ep.(netaddr.IP)
 		c.handleOutbound(vpnIP, f, false)
 	}
 }
 
-func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseTriggered bool) {
+func (c *HandshakeManager) handleOutbound(vpnIP netaddr.IP, f EncWriter, lighthouseTriggered bool) {
 	hostinfo, err := c.pendingHostMap.QueryVpnIP(vpnIP)
 	if err != nil {
 		return
@@ -183,7 +184,7 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 	}
 }
 
-func (c *HandshakeManager) AddVpnIP(vpnIP uint32) *HostInfo {
+func (c *HandshakeManager) AddVpnIP(vpnIP netaddr.IP) *HostInfo {
 	hostinfo := c.pendingHostMap.AddVpnIP(vpnIP)
 	// We lock here and use an array to insert items to prevent locking the
 	// main receive thread for very long by waiting to add items to the pending map

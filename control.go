@@ -9,6 +9,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"inet.af/netaddr"
 )
 
 // Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
@@ -23,7 +24,7 @@ type Control struct {
 }
 
 type ControlHostInfo struct {
-	VpnIP          net.IP                  `json:"vpnIp"`
+	VpnIP          netaddr.IP              `json:"vpnIp"`
 	LocalIndex     uint32                  `json:"localIndex"`
 	RemoteIndex    uint32                  `json:"remoteIndex"`
 	RemoteAddrs    []*udpAddr              `json:"remoteAddrs"`
@@ -93,7 +94,7 @@ func (c *Control) ListHostmap(pendingMap bool) []ControlHostInfo {
 }
 
 // GetHostInfoByVpnIP returns a single tunnels hostInfo, or nil if not found
-func (c *Control) GetHostInfoByVpnIP(vpnIP uint32, pending bool) *ControlHostInfo {
+func (c *Control) GetHostInfoByVpnIP(vpnIP netaddr.IP, pending bool) *ControlHostInfo {
 	var hm *HostMap
 	if pending {
 		hm = c.f.handshakeManager.pendingHostMap
@@ -111,7 +112,7 @@ func (c *Control) GetHostInfoByVpnIP(vpnIP uint32, pending bool) *ControlHostInf
 }
 
 // SetRemoteForTunnel forces a tunnel to use a specific remote
-func (c *Control) SetRemoteForTunnel(vpnIP uint32, addr udpAddr) *ControlHostInfo {
+func (c *Control) SetRemoteForTunnel(vpnIP netaddr.IP, addr udpAddr) *ControlHostInfo {
 	hostInfo, err := c.f.hostMap.QueryVpnIP(vpnIP)
 	if err != nil {
 		return nil
@@ -123,7 +124,7 @@ func (c *Control) SetRemoteForTunnel(vpnIP uint32, addr udpAddr) *ControlHostInf
 }
 
 // CloseTunnel closes a fully established tunnel. If localOnly is false it will notify the remote end as well.
-func (c *Control) CloseTunnel(vpnIP uint32, localOnly bool) bool {
+func (c *Control) CloseTunnel(vpnIP netaddr.IP, localOnly bool) bool {
 	hostInfo, err := c.f.hostMap.QueryVpnIP(vpnIP)
 	if err != nil {
 		return false
@@ -173,7 +174,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 
 func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 	chi := ControlHostInfo{
-		VpnIP:         int2ip(h.hostId),
+		VpnIP:         h.hostId,
 		LocalIndex:    h.localIndexId,
 		RemoteIndex:   h.remoteIndexId,
 		RemoteAddrs:   h.remotes.CopyAddrs(preferredRanges),
