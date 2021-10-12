@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 )
 
 type m map[string]interface{}
@@ -64,13 +65,35 @@ func (ua *Addr) Copy() *Addr {
 	return &nu
 }
 
+func resolveIPAddr(s string) (*net.IPAddr, error) {
+	var addr *net.IPAddr
+
+	addr, err := net.ResolveIPAddr("ip", s)
+	if err != nil {
+		return &net.IPAddr{}, err
+	}
+
+	return addr, nil
+}
+
 func ParseIPAndPort(s string) (net.IP, uint16, error) {
+	var addr *net.IPAddr
+	var sleep time.Duration = time.Second
+
 	rIp, sPort, err := net.SplitHostPort(s)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	addr, err := net.ResolveIPAddr("ip", rIp)
+	for i := 0; i < 10; i++ {
+		addr, err = resolveIPAddr(rIp)
+		if err == nil {
+			break
+		}
+		time.Sleep(sleep)
+		sleep *= 2
+	}
+
 	if err != nil {
 		return nil, 0, err
 	}
