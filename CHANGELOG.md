@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - SSH `print-cert` has a new `-raw` flag to get the PEM representation of a certificate. (#483)
+- New build architecture: Linux `riscv64`. (#542)
 
 ### Fixed
 

@@ -1,5 +1,5 @@
 // +build linux
-// +build amd64 arm64 ppc64 ppc64le mips64 mips64le s390x
+// +build amd64 arm64 ppc64 ppc64le mips64 mips64le s390x riscv64
 // +build !android
 // +build !e2e_testing
 

@@ -39,7 +39,8 @@ ALL_LINUX = linux-amd64 \
 	linux-mipsle \
 	linux-mips64 \
 	linux-mips64le \
-	linux-mips-softfloat
+	linux-mips-softfloat \
+	linux-riscv64
 
 ALL = $(ALL_LINUX) \
 	darwin-amd64 \
