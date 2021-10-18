@@ -507,7 +507,8 @@ func (i *HostInfo) SetRemote(remote *udpAddr) {
 	}
 }
 
-// SetRemoteIfPreferred returns true if the remote was changed
+// SetRemoteIfPreferred returns true if the remote was changed. The lastRoam
+// time on the HostInfo will also be updated.
 func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udpAddr) bool {
 	currentRemote := i.remote
 	if currentRemote == nil {
@@ -515,6 +516,8 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udpAddr) bool {
 		return true
 	}
 
+	// NOTE: We do this loop here instead of calling `isPreferred` in
+	// remote_list.go so that we only have to loop over preferredRanges once.
 	newIsPreferred := false
 	for _, l := range hm.preferredRanges {
 		// return early if we are already on a preferred remote
