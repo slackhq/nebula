@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Deprecated
 
 - The `preferred_ranges` option has been supported as a replacement for
-  `local_ranges` since v1.0.0. It has now been documented and `local_ranges`
+  `local_range` since v1.0.0. It has now been documented and `local_range`
   has been officially deprecated. (#541)
 
 ### Fixed
