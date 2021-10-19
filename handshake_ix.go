@@ -200,6 +200,20 @@ func ixHandshakeStage1(f *Interface, addr *udpAddr, packet []byte, h *Header) {
 	if err != nil {
 		switch err {
 		case ErrAlreadySeen:
+			// Update remote if preferred (Note we have to switch to locking
+			// the existing hostinfo, and then switch back so the defer Unlock
+			// higher in this function still works)
+			hostinfo.Unlock()
+			existing.Lock()
+			// Update remote if preferred
+			if existing.SetRemoteIfPreferred(f.hostMap, addr) {
+				// Send a test packet to ensure the other side has also switched to
+				// the preferred remote
+				f.SendMessageToVpnIp(test, testRequest, vpnIP, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			}
+			existing.Unlock()
+			hostinfo.Lock()
+
 			msg = existing.HandshakePacket[2]
 			f.messageMetrics.Tx(handshake, NebulaMessageSubType(msg[1]), 1)
 			err := f.outside.WriteTo(msg, addr)
@@ -305,7 +319,12 @@ func ixHandshakeStage2(f *Interface, addr *udpAddr, hostinfo *HostInfo, packet [
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("header", h).
 			Info("Handshake is already complete")
 
-		//TODO: evaluate addr for preference, if we handshook with a less preferred addr we can correct quickly here
+		// Update remote if preferred
+		if hostinfo.SetRemoteIfPreferred(f.hostMap, addr) {
+			// Send a test packet to ensure the other side has also switched to
+			// the preferred remote
+			f.SendMessageToVpnIp(test, testRequest, hostinfo.hostId, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+		}
 
 		// We already have a complete tunnel, there is nothing that can be done by processing further stage 1 packets
 		return false
