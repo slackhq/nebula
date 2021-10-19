@@ -56,6 +56,14 @@ lighthouse:
     #"10.0.0.0/8": false
     #"10.42.42.0/24": true
 
+  # EXPERIMENTAL: This option my change or disappear in the future.
+  # Optionally allows the definition of remote_allow_list blocks
+  # specific to an inside VPN IP CIDR.
+  #remote_allow_ranges:
+    # This rule would only allow only private IPs for this VPN range
+    #"10.42.42.0/24":
+      #"192.168.0.0/16": true
+
   # local_allow_list allows you to filter which local IP addresses we advertise
   # to the lighthouses. This uses the same logic as `remote_allow_list`, but
   # additionally, you can specify an `interfaces` map of regular expressions

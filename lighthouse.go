@@ -35,10 +35,10 @@ type LightHouse struct {
 	// respond with.
 	// - When we are not a lighthouse, this filters which addresses we accept
 	// from lighthouses.
-	remoteAllowList *AllowList
+	remoteAllowList *RemoteAllowList
 
 	// filters local addresses that we advertise to lighthouses
-	localAllowList *AllowList
+	localAllowList *LocalAllowList
 
 	// used to trigger the HandshakeManager when we receive HostQueryReply
 	handshakeTrigger chan<- uint32
@@ -93,14 +93,14 @@ func NewLightHouse(l *logrus.Logger, amLighthouse bool, myVpnIpNet *net.IPNet, i
 	return &h
 }
 
-func (lh *LightHouse) SetRemoteAllowList(allowList *AllowList) {
+func (lh *LightHouse) SetRemoteAllowList(allowList *RemoteAllowList) {
 	lh.Lock()
 	defer lh.Unlock()
 
 	lh.remoteAllowList = allowList
 }
 
-func (lh *LightHouse) SetLocalAllowList(allowList *AllowList) {
+func (lh *LightHouse) SetLocalAllowList(allowList *LocalAllowList) {
 	lh.Lock()
 	defer lh.Unlock()
 
@@ -223,14 +223,14 @@ func (lh *LightHouse) AddStaticRemote(vpnIp uint32, toAddr *udpAddr) {
 
 	if ipv4 := toAddr.IP.To4(); ipv4 != nil {
 		to := NewIp4AndPort(ipv4, uint32(toAddr.Port))
-		if !lh.unlockedShouldAddV4(to) {
+		if !lh.unlockedShouldAddV4(vpnIp, to) {
 			return
 		}
 		am.unlockedPrependV4(lh.myVpnIp, to)
 
 	} else {
 		to := NewIp6AndPort(toAddr.IP, uint32(toAddr.Port))
-		if !lh.unlockedShouldAddV6(to) {
+		if !lh.unlockedShouldAddV6(vpnIp, to) {
 			return
 		}
 		am.unlockedPrependV6(lh.myVpnIp, to)
@@ -251,8 +251,8 @@ func (lh *LightHouse) unlockedGetRemoteList(vpnIP uint32) *RemoteList {
 }
 
 // unlockedShouldAddV4 checks if to is allowed by our allow list
-func (lh *LightHouse) unlockedShouldAddV4(to *Ip4AndPort) bool {
-	allow := lh.remoteAllowList.AllowIpV4(to.Ip)
+func (lh *LightHouse) unlockedShouldAddV4(vpnIp uint32, to *Ip4AndPort) bool {
+	allow := lh.remoteAllowList.AllowIpV4(vpnIp, to.Ip)
 	if lh.l.Level >= logrus.TraceLevel {
 		lh.l.WithField("remoteIp", IntIp(to.Ip)).WithField("allow", allow).Trace("remoteAllowList.Allow")
 	}
@@ -265,8 +265,8 @@ func (lh *LightHouse) unlockedShouldAddV4(to *Ip4AndPort) bool {
 }
 
 // unlockedShouldAddV6 checks if to is allowed by our allow list
-func (lh *LightHouse) unlockedShouldAddV6(to *Ip6AndPort) bool {
-	allow := lh.remoteAllowList.AllowIpV6(to.Hi, to.Lo)
+func (lh *LightHouse) unlockedShouldAddV6(vpnIp uint32, to *Ip6AndPort) bool {
+	allow := lh.remoteAllowList.AllowIpV6(vpnIp, to.Hi, to.Lo)
 	if lh.l.Level >= logrus.TraceLevel {
 		lh.l.WithField("remoteIp", lhIp6ToIp(to)).WithField("allow", allow).Trace("remoteAllowList.Allow")
 	}
@@ -549,8 +549,8 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp uint32) 
 	am.Lock()
 	lhh.lh.Unlock()
 
-	am.unlockedSetV4(vpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
-	am.unlockedSetV6(vpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
+	am.unlockedSetV4(vpnIp, n.Details.VpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
+	am.unlockedSetV6(vpnIp, n.Details.VpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
 	am.Unlock()
 
 	// Non-blocking attempt to trigger, skip if it would block
@@ -581,8 +581,8 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 	am.Lock()
 	lhh.lh.Unlock()
 
-	am.unlockedSetV4(vpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
-	am.unlockedSetV6(vpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
+	am.unlockedSetV4(vpnIp, n.Details.VpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
+	am.unlockedSetV6(vpnIp, n.Details.VpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
 	am.Unlock()
 }
 

@@ -278,13 +278,13 @@ func Main(config *Config, configTest bool, buildVersion string, logger *logrus.L
 		config.GetBool("stats.lighthouse_metrics", false),
 	)
 
-	remoteAllowList, err := config.GetAllowList("lighthouse.remote_allow_list", false)
+	remoteAllowList, err := config.GetRemoteAllowList("lighthouse.remote_allow_list", "lighthouse.remote_allow_ranges")
 	if err != nil {
 		return nil, NewContextualError("Invalid lighthouse.remote_allow_list", nil, err)
 	}
 	lightHouse.SetRemoteAllowList(remoteAllowList)
 
-	localAllowList, err := config.GetAllowList("lighthouse.local_allow_list", true)
+	localAllowList, err := config.GetLocalAllowList("lighthouse.local_allow_list")
 	if err != nil {
 		return nil, NewContextualError("Invalid lighthouse.local_allow_list", nil, err)
 	}

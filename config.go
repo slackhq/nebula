@@ -226,19 +226,94 @@ func (c *Config) GetDuration(k string, d time.Duration) time.Duration {
 	return v
 }
 
-func (c *Config) GetAllowList(k string, allowInterfaces bool) (*AllowList, error) {
+func (c *Config) GetLocalAllowList(k string) (*LocalAllowList, error) {
+	var nameRules []AllowListNameRule
+	handleKey := func(key string, value interface{}) (bool, error) {
+		if key == "interfaces" {
+			var err error
+			nameRules, err = c.getAllowListInterfaces(k, value)
+			if err != nil {
+				return false, err
+			}
+
+			return true, nil
+		}
+		return false, nil
+	}
+
+	al, err := c.GetAllowList(k, handleKey)
+	if err != nil {
+		return nil, err
+	}
+	return &LocalAllowList{AllowList: al, nameRules: nameRules}, nil
+}
+
+func (c *Config) GetRemoteAllowList(k, rangesKey string) (*RemoteAllowList, error) {
+	al, err := c.GetAllowList(k, nil)
+	if err != nil {
+		return nil, err
+	}
+	remoteAllowRanges, err := c.getRemoteAllowRanges(rangesKey)
+	if err != nil {
+		return nil, err
+	}
+	return &RemoteAllowList{AllowList: al, insideAllowLists: remoteAllowRanges}, nil
+}
+
+func (c *Config) getRemoteAllowRanges(k string) (*CIDR6Tree, error) {
+	value := c.Get(k)
+	if value == nil {
+		return nil, nil
+	}
+
+	remoteAllowRanges := NewCIDR6Tree()
+
+	rawMap, ok := value.(map[interface{}]interface{})
+	if !ok {
+		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, value)
+	}
+	for rawKey, rawValue := range rawMap {
+		rawCIDR, ok := rawKey.(string)
+		if !ok {
+			return nil, fmt.Errorf("config `%s` has invalid key (type %T): %v", k, rawKey, rawKey)
+		}
+
+		allowList, err := c.getAllowList(fmt.Sprintf("%s.%s", k, rawCIDR), rawValue, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		_, cidr, err := net.ParseCIDR(rawCIDR)
+		if err != nil {
+			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s", k, rawCIDR)
+		}
+
+		remoteAllowRanges.AddCIDR(cidr, allowList)
+	}
+
+	return remoteAllowRanges, nil
+}
+
+// If the handleKey func returns true, the rest of the parsing is skipped
+// for this key. This allows parsing of special values like `interfaces`.
+func (c *Config) GetAllowList(k string, handleKey func(key string, value interface{}) (bool, error)) (*AllowList, error) {
 	r := c.Get(k)
 	if r == nil {
 		return nil, nil
 	}
 
-	rawMap, ok := r.(map[interface{}]interface{})
+	return c.getAllowList(k, r, handleKey)
+}
+
+// If the handleKey func returns true, the rest of the parsing is skipped
+// for this key. This allows parsing of special values like `interfaces`.
+func (c *Config) getAllowList(k string, raw interface{}, handleKey func(key string, value interface{}) (bool, error)) (*AllowList, error) {
+	rawMap, ok := raw.(map[interface{}]interface{})
 	if !ok {
-		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, r)
+		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, raw)
 	}
 
 	tree := NewCIDR6Tree()
-	var nameRules []AllowListNameRule
 
 	// Keep track of the rules we have added for both ipv4 and ipv6
 	type allowListRules struct {
@@ -256,18 +331,14 @@ func (c *Config) GetAllowList(k string, allowInterfaces bool) (*AllowList, error
 			return nil, fmt.Errorf("config `%s` has invalid key (type %T): %v", k, rawKey, rawKey)
 		}
 
-		// Special rule for interface names
-		if rawCIDR == "interfaces" {
-			if !allowInterfaces {
-				return nil, fmt.Errorf("config `%s` does not support `interfaces`", k)
-			}
-			var err error
-			nameRules, err = c.getAllowListInterfaces(k, rawValue)
+		if handleKey != nil {
+			handled, err := handleKey(rawCIDR, rawValue)
 			if err != nil {
 				return nil, err
 			}
-
-			continue
+			if handled {
+				continue
+			}
 		}
 
 		value, ok := rawValue.(bool)
@@ -325,7 +396,7 @@ func (c *Config) GetAllowList(k string, allowInterfaces bool) (*AllowList, error
 		}
 	}
 
-	return &AllowList{cidrTree: tree, nameRules: nameRules}, nil
+	return &AllowList{cidrTree: tree}, nil
 }
 
 func (c *Config) getAllowListInterfaces(k string, v interface{}) ([]AllowListNameRule, error) {

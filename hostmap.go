@@ -622,7 +622,7 @@ func (i *HostInfo) Probes() []*Probe {
 
 // Utility functions
 
-func localIps(l *logrus.Logger, allowList *AllowList) *[]net.IP {
+func localIps(l *logrus.Logger, allowList *LocalAllowList) *[]net.IP {
 	//FIXME: This function is pretty garbage
 	var ips []net.IP
 	ifaces, _ := net.Interfaces()

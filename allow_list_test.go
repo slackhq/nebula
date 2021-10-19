@@ -31,14 +31,14 @@ func TestAllowList_Allow(t *testing.T) {
 	assert.Equal(t, false, al.Allow(net.ParseIP("::2")))
 }
 
-func TestAllowList_AllowName(t *testing.T) {
-	assert.Equal(t, true, ((*AllowList)(nil)).AllowName("docker0"))
+func TestLocalAllowList_AllowName(t *testing.T) {
+	assert.Equal(t, true, ((*LocalAllowList)(nil)).AllowName("docker0"))
 
 	rules := []AllowListNameRule{
 		{Name: regexp.MustCompile("^docker.*$"), Allow: false},
 		{Name: regexp.MustCompile("^tun.*$"), Allow: false},
 	}
-	al := &AllowList{nameRules: rules}
+	al := &LocalAllowList{nameRules: rules}
 
 	assert.Equal(t, false, al.AllowName("docker0"))
 	assert.Equal(t, false, al.AllowName("tun0"))
@@ -48,7 +48,7 @@ func TestAllowList_AllowName(t *testing.T) {
 		{Name: regexp.MustCompile("^eth.*$"), Allow: true},
 		{Name: regexp.MustCompile("^ens.*$"), Allow: true},
 	}
-	al = &AllowList{nameRules: rules}
+	al = &LocalAllowList{nameRules: rules}
 
 	assert.Equal(t, false, al.AllowName("docker0"))
 	assert.Equal(t, true, al.AllowName("eth0"))
