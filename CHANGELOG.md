@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - New experimental config option `remote_allow_ranges`. (#540)
 
+- New config option `pki.disconnect_invalid` that will tear down tunnels when they become invalid (through expiry or
+  removal of root trust). Default is `false`. Note, this will not currently recognize if a remote has changed
+  certificates since the last handshake. (#370)
+
 ### Deprecated
 
 - The `preferred_ranges` option has been supported as a replacement for
