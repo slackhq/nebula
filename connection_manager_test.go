@@ -221,6 +221,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 
 	// Create manager
 	nc := newConnectionManager(l, ifce, 5, 10)
+	ifce.connectionManager = nc
 	hostinfo := nc.hostMap.AddVpnIP(vpnIP)
 	hostinfo.ConnectionState = &ConnectionState{
 		certState: cs,
@@ -231,14 +232,14 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	// Move ahead 45s.
 	// Check if to disconnect with invalid certificate.
 	// Should be alive.
-	next_tick := now.Add(45 * time.Second)
-	disconnect, _ := nc.checkToDisconnect(next_tick, hostinfo)
-	assert.False(t, disconnect)
+	nextTick := now.Add(45 * time.Second)
+	destroyed := nc.handleInvalidCertificate(nextTick, vpnIP, hostinfo)
+	assert.False(t, destroyed)
 
 	// Move ahead 61s.
 	// Check if to disconnect with invalid certificate.
 	// Should be disconnected.
-	next_tick = now.Add(61 * time.Second)
-	disconnect, _ = nc.checkToDisconnect(next_tick, hostinfo)
-	assert.True(t, disconnect)
+	nextTick = now.Add(61 * time.Second)
+	destroyed = nc.handleInvalidCertificate(nextTick, vpnIP, hostinfo)
+	assert.True(t, destroyed)
 }

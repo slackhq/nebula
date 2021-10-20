@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/cert"
 )
 
 // TODO: incount and outcount are intended as a shortcut to locking the mutexes for every single packet
@@ -154,22 +153,6 @@ func (n *connectionManager) Run() {
 	}
 }
 
-// Check if peer's certificate is not expired or invalid.
-func (n *connectionManager) checkToDisconnect(now time.Time, hostinfo *HostInfo) (bool, *cert.NebulaCertificate) {
-	if !n.intf.disconnectInvalid {
-		return false, nil
-	}
-
-	if remoteCert := hostinfo.GetCert(); remoteCert != nil {
-		valid, _ := remoteCert.Verify(now, n.intf.caPool)
-		if !valid {
-			return true, remoteCert
-		}
-	}
-
-	return false, nil
-}
-
 func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) {
 	n.TrafficTimer.advance(now)
 	for {
@@ -194,14 +177,7 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 			}
 		}
 
-		// If we set `pki.disconnect_invalid` and peer's cert is invalid,
-		// expired, etc. - disconnect immediately.
-		disconnect, remoteCert := n.checkToDisconnect(now, hostinfo)
-		if disconnect {
-			n.l.WithField("vpnIp", IntIp(vpnIP)).
-				WithField("certName", remoteCert.Details.Name).
-				Info("Invalid certificate status")
-			n.intf.closeTunnel(hostinfo, false)
+		if n.handleInvalidCertificate(now, vpnIP, hostinfo) {
 			continue
 		}
 
@@ -255,13 +231,7 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 			}
 		}
 
-		// If we set `pki.disconnect_invalid` and peer's cert is invalid,
-		// expired, etc. - disconnect immediately.
-		disconnect, _ := n.checkToDisconnect(now, hostinfo)
-		if disconnect {
-			n.l.WithField("vpnIp", IntIp(vpnIP)).
-				Info("Invalid certificate status")
-			n.intf.closeTunnel(hostinfo, false)
+		if n.handleInvalidCertificate(now, vpnIP, hostinfo) {
 			continue
 		}
 
@@ -301,4 +271,35 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 			n.ClearPendingDeletion(vpnIP)
 		}
 	}
+}
+
+// handleInvalidCertificates will destroy a tunnel if pki.disconnect_invalid is true and the certificate is no longer valid
+func (n *connectionManager) handleInvalidCertificate(now time.Time, vpnIP uint32, hostinfo *HostInfo) bool {
+	if !n.intf.disconnectInvalid {
+		return false
+	}
+
+	remoteCert := hostinfo.GetCert()
+	if remoteCert == nil {
+		return false
+	}
+
+	valid, err := remoteCert.Verify(now, n.intf.caPool)
+	if valid {
+		return false
+	}
+
+	fingerprint, _ := remoteCert.Sha256Sum()
+	n.l.WithField("vpnIp", IntIp(vpnIP)).WithError(err).
+		WithField("certName", remoteCert.Details.Name).
+		WithField("fingerprint", fingerprint).
+		Info("Remote certificate is no longer valid, tearing down the tunnel")
+
+	// Inform the remote and close the tunnel locally
+	n.intf.sendCloseTunnel(hostinfo)
+	n.intf.closeTunnel(hostinfo, false)
+
+	n.ClearIP(vpnIP)
+	n.ClearPendingDeletion(vpnIP)
+	return true
 }
