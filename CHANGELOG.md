@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New config option `pki.disconnect_invalid` that will tear down tunnels when they become invalid (through expiry or
   removal of root trust). Default is `false`. Note, this will not currently recognize if a remote has changed
   certificates since the last handshake. (#370)
+  
+### Changed
+
+- Build against go 1.17. (#553)
 
 ### Deprecated
 
