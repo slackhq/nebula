@@ -1,5 +1,5 @@
-// +build !android
-// +build !e2e_testing
+//go:build !android && !e2e_testing
+// +build !android,!e2e_testing
 
 package nebula
 
