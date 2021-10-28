@@ -66,11 +66,14 @@ func (d *dnsRecords) Add(host, data string) {
 	d.Unlock()
 }
 
-func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
+func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter, c *config.C) {
 	for _, q := range m.Question {
+		a, _, _ := net.SplitHostPort(w.RemoteAddr().String())
+		b := net.ParseIP(a)
+
 		switch q.Qtype {
 		case dns.TypeA:
-			l.Debugf("Query for A %s", q.Name)
+			l.Debugf("Query from %s for A %s", b, q.Name)
 			ip := dnsR.Query(q.Name)
 			if ip != "" {
 				rr, err := dns.NewRR(fmt.Sprintf("%s A %s", q.Name, ip))
@@ -79,14 +82,20 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
 				}
 			}
 		case dns.TypeTXT:
-			a, _, _ := net.SplitHostPort(w.RemoteAddr().String())
-			b := net.ParseIP(a)
-			// We don't answer these queries from non nebula nodes or localhost
-			//l.Debugf("Does %s contain %s", b, dnsR.hostMap.vpnCIDR)
-			if !dnsR.hostMap.vpnCIDR.Contains(b) && a != "127.0.0.1" {
+			allowFrom, err := getDnsAllowList(c)
+			if err != nil {
+				l.Errorf("failed parsing lighthouse.dns.allow_from: %s\n ", err.Error())
 				return
 			}
-			l.Debugf("Query for TXT %s", q.Name)
+			allowFrom = append(allowFrom, net.IPNet{
+				IP:   net.ParseIP("127.0.0.1"),
+				Mask: net.IPv4Mask(255, 0, 0, 0),
+			})
+			allowFrom = append(allowFrom, *dnsR.hostMap.vpnCIDR)
+			if !allowListContains(allowFrom, b) {
+				return
+			}
+			l.Debugf("Query from %s for TXT %s", b, q.Name)
 			ip := dnsR.QueryCert(q.Name)
 			if ip != "" {
 				rr, err := dns.NewRR(fmt.Sprintf("%s TXT %s", q.Name, ip))
@@ -98,14 +107,14 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
 	}
 }
 
-func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
+func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg, c *config.C) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Compress = false
 
 	switch r.Opcode {
 	case dns.OpcodeQuery:
-		parseQuery(l, m, w)
+		parseQuery(l, m, w, c)
 	}
 
 	w.WriteMsg(m)
@@ -116,7 +125,7 @@ func dnsMain(l *logrus.Logger, hostMap *HostMap, c *config.C) func() {
 
 	// attach request handler func
 	dns.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
-		handleDnsRequest(l, w, r)
+		handleDnsRequest(l, w, r, c)
 	})
 
 	c.RegisterReloadCallback(func(c *config.C) {
@@ -130,6 +139,29 @@ func dnsMain(l *logrus.Logger, hostMap *HostMap, c *config.C) func() {
 
 func getDnsServerAddr(c *config.C) string {
 	return c.GetString("lighthouse.dns.host", "") + ":" + strconv.Itoa(c.GetInt("lighthouse.dns.port", 53))
+}
+
+func getDnsAllowList(c *config.C) ([]net.IPNet, error) {
+	var networks []net.IPNet
+
+	for _, network := range c.GetStringSlice("lighthouse.dns.allow_from", []string{}) {
+		_, net, err := net.ParseCIDR(network)
+		if err != nil {
+			return networks, err
+		}
+		networks = append(networks, *net)
+	}
+
+	return networks, nil
+}
+
+func allowListContains(networks []net.IPNet, ip net.IP) bool {
+	for _, net := range networks {
+		if net.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func startDns(l *logrus.Logger, c *config.C) {
