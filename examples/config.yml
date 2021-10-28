@@ -33,6 +33,9 @@ lighthouse:
     # The DNS host defines the IP to bind the dns listener to. This also allows binding to the nebula node IP.
     #host: 0.0.0.0
     #port: 53
+    # Allow answering DNS requests from the below allow list
+    #allow_from:
+    #  - 192.168.0.0/16
   # interval is the number of seconds between updates from this node to a lighthouse.
   # during updates, a node sends information about its current IP addresses to each node.
   interval: 60
