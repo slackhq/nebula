@@ -511,6 +511,42 @@ func (i *HostInfo) SetRemote(remote *udp.Addr) {
 	}
 }
 
+// SetRemoteIfPreferred returns true if the remote was changed. The lastRoam
+// time on the HostInfo will also be updated.
+func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udp.Addr) bool {
+	currentRemote := i.remote
+	if currentRemote == nil {
+		i.SetRemote(newRemote)
+		return true
+	}
+
+	// NOTE: We do this loop here instead of calling `isPreferred` in
+	// remote_list.go so that we only have to loop over preferredRanges once.
+	newIsPreferred := false
+	for _, l := range hm.preferredRanges {
+		// return early if we are already on a preferred remote
+		if l.Contains(currentRemote.IP) {
+			return false
+		}
+
+		if l.Contains(newRemote.IP) {
+			newIsPreferred = true
+		}
+	}
+
+	if newIsPreferred {
+		// Consider this a roaming event
+		i.lastRoam = time.Now()
+		i.lastRoamRemote = currentRemote.Copy()
+
+		i.SetRemote(newRemote)
+
+		return true
+	}
+
+	return false
+}
+
 func (i *HostInfo) ClearConnectionState() {
 	i.ConnectionState = nil
 }
@@ -557,7 +593,7 @@ func (i *HostInfo) logger(l *logrus.Logger) *logrus.Entry {
 
 // Utility functions
 
-func localIps(l *logrus.Logger, allowList *AllowList) *[]net.IP {
+func localIps(l *logrus.Logger, allowList *LocalAllowList) *[]net.IP {
 	//FIXME: This function is pretty garbage
 	var ips []net.IP
 	ifaces, _ := net.Interfaces()

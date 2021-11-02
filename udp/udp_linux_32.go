@@ -1,3 +1,4 @@
+//go:build linux && (386 || amd64p32 || arm || mips || mipsle) && !android && !e2e_testing
 // +build linux
 // +build 386 amd64p32 arm mips mipsle
 // +build !android

@@ -1,3 +1,4 @@
+//go:build e2e_testing
 // +build e2e_testing
 
 package e2e
@@ -187,12 +188,17 @@ func newTestCert(ca *cert.NebulaCertificate, key []byte, name string, before, af
 }
 
 func x25519Keypair() ([]byte, []byte) {
-	var pubkey, privkey [32]byte
-	if _, err := io.ReadFull(rand.Reader, privkey[:]); err != nil {
+	privkey := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, privkey); err != nil {
 		panic(err)
 	}
-	curve25519.ScalarBaseMult(&pubkey, &privkey)
-	return pubkey[:], privkey[:]
+
+	pubkey, err := curve25519.X25519(privkey, curve25519.Basepoint)
+	if err != nil {
+		panic(err)
+	}
+
+	return pubkey, privkey
 }
 
 type doneCb func()

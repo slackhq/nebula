@@ -11,11 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - SSH `print-cert` has a new `-raw` flag to get the PEM representation of a certificate. (#483)
 
+- New build architecture: Linux `riscv64`. (#542)
+
+- New experimental config option `remote_allow_ranges`. (#540)
+
+- New config option `pki.disconnect_invalid` that will tear down tunnels when they become invalid (through expiry or
+  removal of root trust). Default is `false`. Note, this will not currently recognize if a remote has changed
+  certificates since the last handshake. (#370)
+  
+### Changed
+
+- Build against go 1.17. (#553)
+
+### Deprecated
+
+- The `preferred_ranges` option has been supported as a replacement for
+  `local_range` since v1.0.0. It has now been documented and `local_range`
+  has been officially deprecated. (#541)
+
 ### Fixed
 
 - Valid recv_error packets were incorrectly marked as "spoofing" and ignored. (#482)
 
 - SSH server handles single `exec` requests correctly. (#483)
+
+- Signing a certificate with `nebula-cert sign` now verifies that the supplied
+  ca-key matches the ca-crt. (#503)
+
+- If `preferred_ranges` (or the deprecated `local_range`) is configured, we
+  will immediately switch to a preferred remote address after the reception of
+  a handshake packet (instead of waiting until 1,000 packets have been sent).
+  (#532)
 
 ## [1.4.0] - 2021-05-11
 
@@ -26,13 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Experimental: Nebula can now do work on more than 2 cpu cores in send and receive paths via
   the new `routines` config option. (#382, #391, #395)
-  
+
 - ICMP ping requests can be responded to when the `tun.disabled` is `true`.
   This is useful so that you can "ping" a lighthouse running in this mode. (#342)
 
 - Run smoke tests via `make smoke-docker`. (#287)
 
-- More reported stats, udp memory use on linux, build version (when using Prometheus), firewall, 
+- More reported stats, udp memory use on linux, build version (when using Prometheus), firewall,
   handshake, and cached packet stats. (#390, #405, #450, #453)
 
 - IPv6 support for the underlay network. (#369)
@@ -45,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Example systemd unit file now better arranged startup order when using `sshd`
   and other fixes. (#317, #412, #438)
-  
+
 - Reduced memory utilization/garbage collection. (#320, #323, #340)
 
 - Reduced CPU utilization. (#329)

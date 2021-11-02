@@ -80,11 +80,12 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	lh.addrMap[3] = NewRemoteList()
 	lh.addrMap[3].unlockedSetV4(
 		3,
+		3,
 		[]*Ip4AndPort{
 			NewIp4AndPort(hAddr.IP, uint32(hAddr.Port)),
 			NewIp4AndPort(hAddr2.IP, uint32(hAddr2.Port)),
 		},
-		func(*Ip4AndPort) bool { return true },
+		func(iputil.VpnIp, *Ip4AndPort) bool { return true },
 	)
 
 	rAddr := udp.NewAddrFromString("1.2.2.3:12345")
@@ -92,11 +93,12 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	lh.addrMap[2] = NewRemoteList()
 	lh.addrMap[2].unlockedSetV4(
 		3,
+		3,
 		[]*Ip4AndPort{
 			NewIp4AndPort(rAddr.IP, uint32(rAddr.Port)),
 			NewIp4AndPort(rAddr2.IP, uint32(rAddr2.Port)),
 		},
-		func(*Ip4AndPort) bool { return true },
+		func(iputil.VpnIp, *Ip4AndPort) bool { return true },
 	)
 
 	mw := &mockEncWriter{}

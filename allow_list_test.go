@@ -17,21 +17,21 @@ func TestNewAllowListFromConfig(t *testing.T) {
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"192.168.0.0": true,
 	}
-	r, err := NewAllowListFromConfig(c, "allowlist", false)
+	r, err := newAllowListFromConfig(c, "allowlist", nil)
 	assert.EqualError(t, err, "config `allowlist` has invalid CIDR: 192.168.0.0")
 	assert.Nil(t, r)
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"192.168.0.0/16": "abc",
 	}
-	r, err = NewAllowListFromConfig(c, "allowlist", false)
+	r, err = newAllowListFromConfig(c, "allowlist", nil)
 	assert.EqualError(t, err, "config `allowlist` has invalid value (type string): abc")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"192.168.0.0/16": true,
 		"10.0.0.0/8":     false,
 	}
-	r, err = NewAllowListFromConfig(c, "allowlist", false)
+	r, err = newAllowListFromConfig(c, "allowlist", nil)
 	assert.EqualError(t, err, "config `allowlist` contains both true and false rules, but no default set for 0.0.0.0/0")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
@@ -41,7 +41,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 		"fd00::/8":       true,
 		"fd00:fd00::/16": false,
 	}
-	r, err = NewAllowListFromConfig(c, "allowlist", false)
+	r, err = newAllowListFromConfig(c, "allowlist", nil)
 	assert.EqualError(t, err, "config `allowlist` contains both true and false rules, but no default set for ::/0")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
@@ -49,7 +49,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 		"10.0.0.0/8":    false,
 		"10.42.42.0/24": true,
 	}
-	r, err = NewAllowListFromConfig(c, "allowlist", false)
+	r, err = newAllowListFromConfig(c, "allowlist", nil)
 	if assert.NoError(t, err) {
 		assert.NotNil(t, r)
 	}
@@ -62,7 +62,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 		"fd00::/8":       true,
 		"fd00:fd00::/16": false,
 	}
-	r, err = NewAllowListFromConfig(c, "allowlist", false)
+	r, err = newAllowListFromConfig(c, "allowlist", nil)
 	if assert.NoError(t, err) {
 		assert.NotNil(t, r)
 	}
@@ -71,18 +71,10 @@ func TestNewAllowListFromConfig(t *testing.T) {
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"interfaces": map[interface{}]interface{}{
-			`docker.*`: false,
-		},
-	}
-	r, err = NewAllowListFromConfig(c, "allowlist", false)
-	assert.EqualError(t, err, "config `allowlist` does not support `interfaces`")
-
-	c.Settings["allowlist"] = map[interface{}]interface{}{
-		"interfaces": map[interface{}]interface{}{
 			`docker.*`: "foo",
 		},
 	}
-	r, err = NewAllowListFromConfig(c, "allowlist", true)
+	lr, err := NewLocalAllowListFromConfig(c, "allowlist")
 	assert.EqualError(t, err, "config `allowlist.interfaces` has invalid value (type string): foo")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
@@ -91,7 +83,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 			`eth.*`:    true,
 		},
 	}
-	r, err = NewAllowListFromConfig(c, "allowlist", true)
+	lr, err = NewLocalAllowListFromConfig(c, "allowlist")
 	assert.EqualError(t, err, "config `allowlist.interfaces` values must all be the same true/false value")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
@@ -99,9 +91,9 @@ func TestNewAllowListFromConfig(t *testing.T) {
 			`docker.*`: false,
 		},
 	}
-	r, err = NewAllowListFromConfig(c, "allowlist", true)
+	lr, err = NewLocalAllowListFromConfig(c, "allowlist")
 	if assert.NoError(t, err) {
-		assert.NotNil(t, r)
+		assert.NotNil(t, lr)
 	}
 }
 
@@ -128,14 +120,14 @@ func TestAllowList_Allow(t *testing.T) {
 	assert.Equal(t, false, al.Allow(net.ParseIP("::2")))
 }
 
-func TestAllowList_AllowName(t *testing.T) {
-	assert.Equal(t, true, ((*AllowList)(nil)).AllowName("docker0"))
+func TestLocalAllowList_AllowName(t *testing.T) {
+	assert.Equal(t, true, ((*LocalAllowList)(nil)).AllowName("docker0"))
 
 	rules := []AllowListNameRule{
 		{Name: regexp.MustCompile("^docker.*$"), Allow: false},
 		{Name: regexp.MustCompile("^tun.*$"), Allow: false},
 	}
-	al := &AllowList{nameRules: rules}
+	al := &LocalAllowList{nameRules: rules}
 
 	assert.Equal(t, false, al.AllowName("docker0"))
 	assert.Equal(t, false, al.AllowName("tun0"))
@@ -145,7 +137,7 @@ func TestAllowList_AllowName(t *testing.T) {
 		{Name: regexp.MustCompile("^eth.*$"), Allow: true},
 		{Name: regexp.MustCompile("^ens.*$"), Allow: true},
 	}
-	al = &AllowList{nameRules: rules}
+	al = &LocalAllowList{nameRules: rules}
 
 	assert.Equal(t, false, al.AllowName("docker0"))
 	assert.Equal(t, true, al.AllowName("eth0"))

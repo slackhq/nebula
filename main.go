@@ -281,13 +281,13 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		c.GetBool("stats.lighthouse_metrics", false),
 	)
 
-	remoteAllowList, err := NewAllowListFromConfig(c, "lighthouse.remote_allow_list", false)
+	remoteAllowList, err := NewRemoteAllowListFromConfig(c, "lighthouse.remote_allow_list", "lighthouse.remote_allow_ranges")
 	if err != nil {
 		return nil, NewContextualError("Invalid lighthouse.remote_allow_list", nil, err)
 	}
 	lightHouse.SetRemoteAllowList(remoteAllowList)
 
-	localAllowList, err := NewAllowListFromConfig(c, "lighthouse.local_allow_list", true)
+	localAllowList, err := NewLocalAllowListFromConfig(c, "lighthouse.local_allow_list")
 	if err != nil {
 		return nil, NewContextualError("Invalid lighthouse.local_allow_list", nil, err)
 	}
@@ -374,6 +374,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
 		caPool:                  caPool,
+		disconnectInvalid:       c.GetBool("pki.disconnect_invalid", false),
 
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,

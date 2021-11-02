@@ -1,4 +1,4 @@
-GOMINVERSION = 1.16
+GOMINVERSION = 1.17
 NEBULA_CMD_PATH = "./cmd/nebula"
 GO111MODULE = on
 export GO111MODULE
@@ -39,7 +39,8 @@ ALL_LINUX = linux-amd64 \
 	linux-mipsle \
 	linux-mips64 \
 	linux-mips64le \
-	linux-mips-softfloat
+	linux-mips-softfloat \
+	linux-riscv64
 
 ALL = $(ALL_LINUX) \
 	darwin-amd64 \

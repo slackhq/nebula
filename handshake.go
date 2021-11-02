@@ -6,7 +6,8 @@ import (
 )
 
 func HandleIncomingHandshake(f *Interface, addr *udp.Addr, packet []byte, h *header.H, hostinfo *HostInfo) {
-	if !f.lightHouse.remoteAllowList.Allow(addr.IP) {
+	// First remote allow list check before we know the vpnIp
+	if !f.lightHouse.remoteAllowList.AllowUnknownVpnIp(addr.IP) {
 		f.l.WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
 		return
 	}
