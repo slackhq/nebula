@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -328,14 +329,23 @@ func NewUDPAddrFromLH6(ipp *Ip6AndPort) *udpAddr {
 	return NewUDPAddr(lhIp6ToIp(ipp), uint16(ipp.Port))
 }
 
-func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
+func (lh *LightHouse) LhUpdateWorker(ctx context.Context, f EncWriter) {
 	if lh.amLighthouse || lh.interval == 0 {
 		return
 	}
 
+	clockSource := time.NewTicker(time.Second * time.Duration(lh.interval))
+	defer clockSource.Stop()
+
 	for {
 		lh.SendUpdate(f)
-		time.Sleep(time.Second * time.Duration(lh.interval))
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-clockSource.C:
+			continue
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -369,7 +370,7 @@ func (hm *HostMap) punchList(rl []*RemoteList) []*RemoteList {
 }
 
 // Punchy iterates through the result of punchList() to assemble all known addresses and sends a hole punch packet to them
-func (hm *HostMap) Punchy(conn *udpConn) {
+func (hm *HostMap) Punchy(ctx context.Context, conn *udpConn) {
 	var metricsTxPunchy metrics.Counter
 	if hm.metricsEnabled {
 		metricsTxPunchy = metrics.GetOrRegisterCounter("messages.tx.punchy", nil)
@@ -379,6 +380,10 @@ func (hm *HostMap) Punchy(conn *udpConn) {
 
 	var remotes []*RemoteList
 	b := []byte{1}
+
+	clockSource := time.NewTicker(time.Second * 10)
+	defer clockSource.Stop()
+
 	for {
 		remotes = hm.punchList(remotes[:0])
 		for _, rl := range remotes {
@@ -388,7 +393,13 @@ func (hm *HostMap) Punchy(conn *udpConn) {
 				conn.WriteTo(b, addr)
 			}
 		}
-		time.Sleep(time.Second * 10)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-clockSource.C:
+			continue
+		}
 	}
 }
 

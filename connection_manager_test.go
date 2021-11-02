@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"net"
@@ -45,7 +46,9 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	now := time.Now()
 
 	// Create manager
-	nc := newConnectionManager(l, ifce, 5, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	nc := newConnectionManager(ctx, l, ifce, 5, 10)
 	p := []byte("")
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)
@@ -112,7 +115,9 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	now := time.Now()
 
 	// Create manager
-	nc := newConnectionManager(l, ifce, 5, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	nc := newConnectionManager(ctx, l, ifce, 5, 10)
 	p := []byte("")
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)
@@ -220,7 +225,9 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	}
 
 	// Create manager
-	nc := newConnectionManager(l, ifce, 5, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	nc := newConnectionManager(ctx, l, ifce, 5, 10)
 	ifce.connectionManager = nc
 	hostinfo := nc.hostMap.AddVpnIP(vpnIP)
 	hostinfo.ConnectionState = &ConnectionState{

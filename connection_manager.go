@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -32,7 +33,7 @@ type connectionManager struct {
 	// I wanted to call one matLock
 }
 
-func newConnectionManager(l *logrus.Logger, intf *Interface, checkInterval, pendingDeletionInterval int) *connectionManager {
+func newConnectionManager(ctx context.Context, l *logrus.Logger, intf *Interface, checkInterval, pendingDeletionInterval int) *connectionManager {
 	nc := &connectionManager{
 		hostMap:                 intf.hostMap,
 		in:                      make(map[uint32]struct{}),
@@ -50,7 +51,7 @@ func newConnectionManager(l *logrus.Logger, intf *Interface, checkInterval, pend
 		pendingDeletionInterval: pendingDeletionInterval,
 		l:                       l,
 	}
-	nc.Start()
+	nc.Start(ctx)
 	return nc
 }
 
@@ -137,19 +138,26 @@ func (n *connectionManager) AddTrafficWatch(vpnIP uint32, seconds int) {
 	n.TrafficTimer.Add(vpnIP, time.Second*time.Duration(seconds))
 }
 
-func (n *connectionManager) Start() {
-	go n.Run()
+func (n *connectionManager) Start(ctx context.Context) {
+	go n.Run(ctx)
 }
 
-func (n *connectionManager) Run() {
-	clockSource := time.Tick(500 * time.Millisecond)
+func (n *connectionManager) Run(ctx context.Context) {
+	clockSource := time.NewTicker(500 * time.Millisecond)
+	defer clockSource.Stop()
+
 	p := []byte("")
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)
 
-	for now := range clockSource {
-		n.HandleMonitorTick(now, p, nb, out)
-		n.HandleDeletionTick(now)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-clockSource.C:
+			n.HandleMonitorTick(now, p, nb, out)
+			n.HandleDeletionTick(now)
+		}
 	}
 }
 

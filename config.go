@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -114,14 +115,21 @@ func (c *Config) HasChanged(k string) bool {
 
 // CatchHUP will listen for the HUP signal in a go routine and reload all configs found in the
 // original path provided to Load. The old settings are shallow copied for change detection after the reload.
-func (c *Config) CatchHUP() {
+func (c *Config) CatchHUP(ctx context.Context) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGHUP)
 
 	go func() {
-		for range ch {
-			c.l.Info("Caught HUP, reloading config")
-			c.ReloadConfig()
+		for {
+			select {
+			case <-ctx.Done():
+				signal.Stop(ch)
+				close(ch)
+				return
+			case <-ch:
+				c.l.Info("Caught HUP, reloading config")
+				c.ReloadConfig()
+			}
 		}
 	}()
 }
