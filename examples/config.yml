@@ -227,10 +227,10 @@ handshakes:
   # after receiving the response for lighthouse queries
   #trigger_buffer: 64
 
-  # pki can be used to mask the contents of handshakes and makes handshaking with unintended recipients more difficult
+  # psk can be used to mask the contents of handshakes and makes handshaking with unintended recipients more difficult
   # all settings respond to a reload
   psk:
-    # mode defines the how pre shared keys can be used in a handshake
+    # mode defines how the pre shared keys can be used in a handshake
     # `none` (the default) does not send or receive using a psk. Ideally `enforced` is used
     # `transitional-accepting` will send handshakes without using a psk and can receive handshakes using a psk we know about
     # `transitional-sending` will send handshakes using a psk but will still accept handshakes without them
