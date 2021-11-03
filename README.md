@@ -1,4 +1,4 @@
-## What is Nebula?
+## What is Nebula?
 Nebula is a scalable overlay networking tool with a focus on performance, simplicity and security.
 It lets you seamlessly connect computers anywhere in the world. Nebula is portable, and runs on Linux, OSX, Windows, iOS, and Android.
 It can be used to connect a small number of computers, but is also able to connect tens of thousands of computers.
@@ -7,6 +7,8 @@ Nebula incorporates a number of existing concepts like encryption, security grou
 and tunneling, and each of those individual pieces existed before Nebula in various forms.
 What makes Nebula different to existing offerings is that it brings all of these ideas together,
 resulting in a sum that is greater than its individual parts.
+
+Further documentation can be found [here](https://www.defined.net/nebula/introduction/).
 
 You can read more about Nebula [here](https://medium.com/p/884110a5579).
 

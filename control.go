@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"context"
 	"net"
 	"os"
 	"os/signal"
@@ -20,6 +21,7 @@ import (
 type Control struct {
 	f          *Interface
 	l          *logrus.Logger
+	cancel     context.CancelFunc
 	sshStart   func()
 	statsStart func()
 	dnsStart   func()
@@ -60,6 +62,7 @@ func (c *Control) Start() {
 func (c *Control) Stop() {
 	//TODO: stop tun and udp routines, the lock on hostMap effectively does that though
 	c.CloseAllTunnels(false)
+	c.cancel()
 	c.l.Info("Goodbye")
 }
 

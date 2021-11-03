@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -88,7 +89,7 @@ type Interface struct {
 	l *logrus.Logger
 }
 
-func NewInterface(c *InterfaceConfig) (*Interface, error) {
+func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	if c.Outside == nil {
 		return nil, errors.New("no outside connection")
 	}
@@ -137,7 +138,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		l: c.l,
 	}
 
-	ifce.connectionManager = newConnectionManager(c.l, ifce, c.checkInterval, c.pendingDeletionInterval)
+	ifce.connectionManager = newConnectionManager(ctx, c.l, ifce, c.checkInterval, c.pendingDeletionInterval)
 
 	return ifce, nil
 }
@@ -307,15 +308,20 @@ func (f *Interface) reloadFirewall(c *config.C) {
 		Info("New firewall has been installed")
 }
 
-func (f *Interface) emitStats(i time.Duration) {
+func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 	ticker := time.NewTicker(i)
+	defer ticker.Stop()
 
 	udpStats := udp.NewUDPStatsEmitter(f.writers)
 
-	for range ticker.C {
-		f.firewall.EmitStats()
-		f.handshakeManager.EmitStats()
-
-		udpStats()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			f.firewall.EmitStats()
+			f.handshakeManager.EmitStats()
+			udpStats()
+		}
 	}
 }

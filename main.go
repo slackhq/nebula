@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -16,7 +17,15 @@ import (
 
 type m map[string]interface{}
 
-func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, tunFd *int) (*Control, error) {
+func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, tunFd *int) (retcon *Control, reterr error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	// Automatically cancel the context if Main returns an error, to signal all created goroutines to quit.
+	defer func() {
+		if reterr != nil {
+			cancel()
+		}
+	}()
+
 	l := logger
 	l.Formatter = &logrus.TextFormatter{
 		FullTimestamp: true,
@@ -129,7 +138,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	var tun Inside
 	if !configTest {
-		c.CatchHUP()
+		c.CatchHUP(ctx)
 
 		switch {
 		case c.GetBool("tun.disabled", false):
@@ -161,6 +170,12 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			return nil, NewContextualError("Failed to get a tun/tap device", nil, err)
 		}
 	}
+
+	defer func() {
+		if reterr != nil {
+			tun.Close()
+		}
+	}()
 
 	// set up our UDP listener
 	udpConns := make([]*udp.Conn, routines)
@@ -239,7 +254,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	punchy := NewPunchyFromConfig(c)
 	if punchy.Punch && !configTest {
 		l.Info("UDP hole punching enabled")
-		go hostMap.Punchy(udpConns[0])
+		go hostMap.Punchy(ctx, udpConns[0])
 	}
 
 	amLighthouse := c.GetBool("lighthouse.am_lighthouse", false)
@@ -391,7 +406,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	var ifce *Interface
 	if !configTest {
-		ifce, err = NewInterface(ifConfig)
+		ifce, err = NewInterface(ctx, ifConfig)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize interface: %s", err)
 		}
@@ -402,11 +417,14 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 		ifce.RegisterConfigChangeCallbacks(c)
 
-		go handshakeManager.Run(ifce)
-		go lightHouse.LhUpdateWorker(ifce)
+		go handshakeManager.Run(ctx, ifce)
+		go lightHouse.LhUpdateWorker(ctx, ifce)
 	}
 
+	// TODO - stats third-party modules start uncancellable goroutines. Update those libs to accept
+	// a context so that they can exit when the context is Done.
 	statsStart, err := startStats(l, c, buildVersion, configTest)
+
 	if err != nil {
 		return nil, NewContextualError("Failed to start stats emitter", nil, err)
 	}
@@ -416,7 +434,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 
 	//TODO: check if we _should_ be emitting stats
-	go ifce.emitStats(c.GetDuration("stats.interval", time.Second*10))
+	go ifce.emitStats(ctx, c.GetDuration("stats.interval", time.Second*10))
 
 	attachCommands(l, ssh, hostMap, handshakeManager.pendingHostMap, lightHouse, ifce)
 
@@ -427,5 +445,5 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		dnsStart = dnsMain(l, hostMap, c)
 	}
 
-	return &Control{ifce, l, sshStart, statsStart, dnsStart}, nil
+	return &Control{ifce, l, cancel, sshStart, statsStart, dnsStart}, nil
 }

@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -69,14 +70,18 @@ func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges [
 	}
 }
 
-func (c *HandshakeManager) Run(f udp.EncWriter) {
-	clockSource := time.Tick(c.config.tryInterval)
+func (c *HandshakeManager) Run(ctx context.Context, f udp.EncWriter) {
+	clockSource := time.NewTicker(c.config.tryInterval)
+	defer clockSource.Stop()
+
 	for {
 		select {
-		case vpnIp := <-c.trigger:
-			c.l.WithField("vpnIp", vpnIp).Debug("HandshakeManager: triggered")
-			c.handleOutbound(vpnIp, f, true)
-		case now := <-clockSource:
+		case <-ctx.Done():
+			return
+		case vpnIP := <-c.trigger:
+			c.l.WithField("vpnIp", vpnIP).Debug("HandshakeManager: triggered")
+			c.handleOutbound(vpnIP, f, true)
+		case now := <-clockSource.C:
 			c.NextOutboundHandshakeTimerTick(now, f)
 		}
 	}
