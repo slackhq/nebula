@@ -11,7 +11,7 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.5.2
 	github.com/google/gopacket v1.1.19
-	github.com/imdario/mergo v0.3.12
+	github.com/imdario/mergo v0.3.8
 	github.com/kardianos/service v1.2.0
 	github.com/miekg/dns v1.1.43
 	github.com/nbrownus/go-metrics-prometheus v0.0.0-20210712211119-974a6260965f
