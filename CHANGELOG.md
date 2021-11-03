@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New config option `unsafe_routes.<route>.metric` will set a metric for a specific unsafe route. It's useful if you have
   more than one identical route and want to prefer one against the other.
 
+- New config option `lighthouse.dns.allow_from` to list the CIDRs to allow querying DNS server for TXT records.
+  By default, only 127.0.0.1 is allowed.
+
 ### Changed
 
 - Build against go 1.17. (#553)
@@ -45,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   will immediately switch to a preferred remote address after the reception of
   a handshake packet (instead of waiting until 1,000 packets have been sent).
   (#532)
-  
+
 - A race condition when `punchy.respond` is enabled and ensures the correct
   vpn ip is sent a punch back response in highly queried node. (#566)
 
