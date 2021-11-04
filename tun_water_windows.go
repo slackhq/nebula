@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os/exec"
 	"strconv"
@@ -91,4 +92,8 @@ func (c *WindowsWaterTun) DeviceName() string {
 func (c *WindowsWaterTun) WriteRaw(b []byte) error {
 	_, err := c.Write(b)
 	return err
+}
+
+func (t *WindowsWaterTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
 }

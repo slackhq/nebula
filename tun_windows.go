@@ -8,17 +8,12 @@ import (
 	"io"
 	"net"
 	"os"
+
+	"github.com/sirupsen/logrus"
 )
 
 type Tun struct {
 	Inside
-}
-
-func (c *Tun) Close() error {
-	if c.Interface != nil {
-		return c.Interface.Close()
-	}
-	return nil
 }
 
 func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {

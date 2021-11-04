@@ -3,6 +3,7 @@ package nebula
 import (
 	"crypto"
 	"fmt"
+	"io"
 	"net"
 	"unsafe"
 
@@ -93,6 +94,7 @@ func (c *WinTun) Activate() error {
 		routes = append(routes, &winipcfg.RouteData{
 			Destination: *r.route,
 			NextHop:     *r.via,
+			Metric:      uint32(r.metric),
 		})
 	}
 
@@ -139,17 +141,21 @@ func (c *WinTun) WriteRaw(b []byte) error {
 	return err
 }
 
+func (c *WinTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
+}
+
 func (c *WinTun) Close() error {
 	// It seems that the Windows networking stack doesn't like it when we destroy interfaces that have active routes,
 	// so to be certain, just remove everything before destroying.
 	luid := winipcfg.LUID(c.tun.LUID())
 	_ = luid.FlushRoutes(windows.AF_INET)
 	_ = luid.FlushIPAddresses(windows.AF_INET)
-	/* We doesn't support IPV6 yet
+	/* We don't support IPV6 yet
 	_ = luid.FlushRoutes(windows.AF_INET6)
 	_ = luid.FlushIPAddresses(windows.AF_INET6)
 	*/
-	_ = luid.FlushDNS()
+	_ = luid.FlushDNS(windows.AF_INET)
 
 	return c.tun.Close()
 }
