@@ -3,6 +3,8 @@ NEBULA_CMD_PATH = "./cmd/nebula"
 BUILD_NUMBER ?= dev+$(shell date -u '+%Y%m%d%H%M%S')
 GO111MODULE = on
 export GO111MODULE
+CGO_ENABLED = 0
+export CGO_ENABLED
 
 # Ensure the version of go we are using is at least what is defined in GOMINVERSION at the top of this file
 GOVERSION := $(shell go version | awk '{print substr($$3, 3)}')
@@ -42,7 +44,7 @@ release-linux: $(ALL_LINUX:%=build/nebula-%.tar.gz)
 
 release-freebsd: build/nebula-freebsd-amd64.tar.gz
 
-BUILD_ARGS = -trimpath -tags netgo
+BUILD_ARGS = -trimpath
 
 bin-windows: build/windows-amd64/nebula.exe build/windows-amd64/nebula-cert.exe
 	mv $? .
