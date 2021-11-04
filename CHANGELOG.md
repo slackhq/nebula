@@ -45,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   will immediately switch to a preferred remote address after the reception of
   a handshake packet (instead of waiting until 1,000 packets have been sent).
   (#532)
+  
+- A race condition when `punchy.respond` is enabled and ensures the correct
+  vpn ip is sent a punch back response in highly queried node. (#566)
 
 ## [1.4.0] - 2021-05-11
 
