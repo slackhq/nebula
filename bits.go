@@ -26,7 +26,7 @@ func NewBits(bits uint64) *Bits {
 	}
 }
 
-func (b *Bits) Check(i uint64) bool {
+func (b *Bits) Check(l logrus.FieldLogger, i uint64) bool {
 	// If i is the next number, return true.
 	if i > b.current || (i == 0 && b.firstSeen == false && b.current < b.length) {
 		return true
@@ -47,7 +47,7 @@ func (b *Bits) Check(i uint64) bool {
 	return false
 }
 
-func (b *Bits) Update(i uint64) bool {
+func (b *Bits) Update(l *logrus.Logger, i uint64) bool {
 	// If i is the next number, return true and update current.
 	if i == b.current+1 {
 		// Report missed packets, we can only understand what was missed after the first window has been gone through

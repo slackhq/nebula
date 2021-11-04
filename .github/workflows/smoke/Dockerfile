@@ -1,5 +1,7 @@
 FROM debian:buster
 
-ADD ./build /
+ADD ./build /nebula
 
-ENTRYPOINT ["/nebula"]
+WORKDIR /nebula
+
+ENTRYPOINT ["/nebula/nebula"]

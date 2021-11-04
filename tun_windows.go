@@ -1,7 +1,11 @@
+//go:build !e2e_testing
+// +build !e2e_testing
+
 package nebula
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 )
@@ -10,11 +14,18 @@ type Tun struct {
 	Inside
 }
 
-func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func (c *Tun) Close() error {
+	if c.Interface != nil {
+		return c.Interface.Close()
+	}
+	return nil
+}
+
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Windows")
 }
 
-func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("route MTU not supported in Windows")
 	}
@@ -46,4 +57,8 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 func checkWinTunExists() error {
 	_, err := os.Stat("wintun.dll")
 	return err
+}
+
+func (t *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
 }

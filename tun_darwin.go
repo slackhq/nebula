@@ -1,13 +1,16 @@
-// +build !ios
+//go:build !ios && !e2e_testing
+// +build !ios,!e2e_testing
 
 package nebula
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os/exec"
 	"strconv"
 
+	"github.com/sirupsen/logrus"
 	"github.com/songgao/water"
 )
 
@@ -16,11 +19,11 @@ type Tun struct {
 	Cidr         *net.IPNet
 	MTU          int
 	UnsafeRoutes []route
-
+	l            *logrus.Logger
 	*water.Interface
 }
 
-func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("route MTU not supported in Darwin")
 	}
@@ -30,11 +33,19 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 		Cidr:         cidr,
 		MTU:          defaultMTU,
 		UnsafeRoutes: unsafeRoutes,
+		l:            l,
 	}, nil
 }
 
-func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
+}
+
+func (c *Tun) Close() error {
+	if c.Interface != nil {
+		return c.Interface.Close()
+	}
+	return nil
 }
 
 func (c *Tun) Activate() error {
@@ -79,4 +90,8 @@ func (c *Tun) DeviceName() string {
 func (c *Tun) WriteRaw(b []byte) error {
 	_, err := c.Write(b)
 	return err
+}
+
+func (t *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
 }

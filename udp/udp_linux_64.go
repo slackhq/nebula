@@ -1,10 +1,14 @@
+//go:build linux && (amd64 || arm64 || ppc64 || ppc64le || mips64 || mips64le || s390x || riscv64) && !android && !e2e_testing
 // +build linux
-// +build amd64 arm64 ppc64 ppc64le mips64 mips64le s390x
+// +build amd64 arm64 ppc64 ppc64le mips64 mips64le s390x riscv64
 // +build !android
+// +build !e2e_testing
 
-package nebula
+package udp
 
-import "unsafe"
+import (
+	"golang.org/x/sys/unix"
+)
 
 type iovec struct {
 	Base *byte
@@ -29,24 +33,24 @@ type rawMessage struct {
 	Pad0 [4]byte
 }
 
-func (u *udpConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
+func (u *Conn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
 	msgs := make([]rawMessage, n)
 	buffers := make([][]byte, n)
 	names := make([][]byte, n)
 
 	for i := range msgs {
-		buffers[i] = make([]byte, mtu)
-		names[i] = make([]byte, 0x1c) //TODO = sizeofSockaddrInet6
+		buffers[i] = make([]byte, MTU)
+		names[i] = make([]byte, unix.SizeofSockaddrInet6)
 
 		//TODO: this is still silly, no need for an array
 		vs := []iovec{
-			{Base: (*byte)(unsafe.Pointer(&buffers[i][0])), Len: uint64(len(buffers[i]))},
+			{Base: &buffers[i][0], Len: uint64(len(buffers[i]))},
 		}
 
 		msgs[i].Hdr.Iov = &vs[0]
 		msgs[i].Hdr.Iovlen = uint64(len(vs))
 
-		msgs[i].Hdr.Name = (*byte)(unsafe.Pointer(&names[i][0]))
+		msgs[i].Hdr.Name = &names[i][0]
 		msgs[i].Hdr.Namelen = uint32(len(names[i]))
 	}
 

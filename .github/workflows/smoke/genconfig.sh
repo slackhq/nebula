@@ -33,9 +33,9 @@ lighthouse_hosts() {
 
 cat <<EOF
 pki:
-  ca: /ca.crt
-  cert: /${HOST}.crt
-  key: /${HOST}.key
+  ca: ca.crt
+  cert: ${HOST}.crt
+  key: ${HOST}.key
 
 lighthouse:
   am_lighthouse: ${AM_LIGHTHOUSE:-false}
