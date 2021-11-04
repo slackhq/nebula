@@ -6,7 +6,7 @@
 //NOTE: This file was forked from https://git.zx2c4.com/wireguard-go/tree/tun/tun_windows.go?id=851efb1bb65555e0f765a3361c8eb5ac47435b19
 // Mainly to shed functionality we won't be using and to fix names that display in the system
 
-package tun
+package wintun
 
 import (
 	"errors"
@@ -42,14 +42,12 @@ type NativeTun struct {
 	rate      rateJuggler
 	session   wintun.Session
 	readWait  windows.Handle
-	events    chan Event
 	running   sync.WaitGroup
 	closeOnce sync.Once
 	close     int32
-	forcedMTU int
 }
 
-var WintunTunnelType = "WireGuard"
+var WintunTunnelType = "Nebula"
 var WintunStaticRequestedGUID *windows.GUID
 
 //go:linkname procyield runtime.procyield
@@ -76,23 +74,15 @@ func CreateTUNWithRequestedGUID(ifname string, requestedGUID *windows.GUID, mtu 
 		return nil, fmt.Errorf("Error creating interface: %w", err)
 	}
 
-	forcedMTU := 1420
-	if mtu > 0 {
-		forcedMTU = mtu
-	}
-
 	tun := &NativeTun{
-		wt:        wt,
-		name:      ifname,
-		handle:    windows.InvalidHandle,
-		events:    make(chan Event, 10),
-		forcedMTU: forcedMTU,
+		wt:     wt,
+		name:   ifname,
+		handle: windows.InvalidHandle,
 	}
 
 	tun.session, err = wt.StartSession(0x800000) // Ring capacity, 8 MiB
 	if err != nil {
 		tun.wt.Close()
-		close(tun.events)
 		return nil, fmt.Errorf("Error starting session: %w", err)
 	}
 	tun.readWait = tun.session.ReadWaitEvent()
@@ -107,10 +97,6 @@ func (tun *NativeTun) File() *os.File {
 	return nil
 }
 
-func (tun *NativeTun) Events() chan Event {
-	return tun.events
-}
-
 func (tun *NativeTun) Close() error {
 	var err error
 	tun.closeOnce.Do(func() {
@@ -121,22 +107,8 @@ func (tun *NativeTun) Close() error {
 		if tun.wt != nil {
 			tun.wt.Close()
 		}
-		close(tun.events)
 	})
 	return err
-}
-
-func (tun *NativeTun) MTU() (int, error) {
-	return tun.forcedMTU, nil
-}
-
-// TODO: This is a temporary hack. We really need to be monitoring the interface in real time and adapting to MTU changes.
-func (tun *NativeTun) ForceMTU(mtu int) {
-	update := tun.forcedMTU != mtu
-	tun.forcedMTU = mtu
-	if update {
-		tun.events <- EventMTUUpdate
-	}
 }
 
 // Note: Read() and Write() assume the caller comes only from a single thread; there's no locking.

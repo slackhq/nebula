@@ -7,8 +7,8 @@ import (
 	"net"
 	"unsafe"
 
+	"github.com/slackhq/nebula/wintun"
 	"golang.org/x/sys/windows"
-	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
@@ -20,7 +20,7 @@ type WinTun struct {
 	MTU          int
 	UnsafeRoutes []route
 
-	tun *tun.NativeTun
+	tun *wintun.NativeTun
 }
 
 func generateGUIDByDeviceName(name string) (*windows.GUID, error) {
@@ -48,7 +48,7 @@ func newWinTun(deviceName string, cidr *net.IPNet, defaultMTU int, unsafeRoutes 
 		return nil, fmt.Errorf("Generate GUID failed: %w", err)
 	}
 
-	tunDevice, err := tun.CreateTUNWithRequestedGUID(deviceName, guid, defaultMTU)
+	tunDevice, err := wintun.CreateTUNWithRequestedGUID(deviceName, guid, defaultMTU)
 	if err != nil {
 		return nil, fmt.Errorf("Create TUN device failed: %w", err)
 	}
@@ -59,7 +59,7 @@ func newWinTun(deviceName string, cidr *net.IPNet, defaultMTU int, unsafeRoutes 
 		MTU:          defaultMTU,
 		UnsafeRoutes: unsafeRoutes,
 
-		tun: tunDevice.(*tun.NativeTun),
+		tun: tunDevice.(*wintun.NativeTun),
 	}
 
 	return ifce, nil
@@ -86,7 +86,7 @@ func (c *WinTun) Activate() error {
 	// Add cidr route to overwrite metric
 	routes = append(routes, &winipcfg.RouteData{
 		Destination: mainRoute,
-		NextHop: net.IPv4zero,
+		NextHop:     net.IPv4zero,
 	})
 
 	for _, r := range c.UnsafeRoutes {
