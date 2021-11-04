@@ -11,6 +11,9 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 )
 
 const (
@@ -39,7 +42,7 @@ type HandshakeManager struct {
 	pendingHostMap         *HostMap
 	mainHostMap            *HostMap
 	lightHouse             *LightHouse
-	outside                *udpConn
+	outside                *udp.Conn
 	config                 HandshakeConfig
 	OutboundHandshakeTimer *SystemTimerWheel
 	messageMetrics         *MessageMetrics
@@ -47,18 +50,18 @@ type HandshakeManager struct {
 	metricTimedOut         metrics.Counter
 	l                      *logrus.Logger
 
-	// can be used to trigger outbound handshake for the given vpnIP
-	trigger chan uint32
+	// can be used to trigger outbound handshake for the given vpnIp
+	trigger chan iputil.VpnIp
 }
 
-func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udpConn, config HandshakeConfig) *HandshakeManager {
+func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udp.Conn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
 		pendingHostMap:         NewHostMap(l, "pending", tunCidr, preferredRanges),
 		mainHostMap:            mainHostMap,
 		lightHouse:             lightHouse,
 		outside:                outside,
 		config:                 config,
-		trigger:                make(chan uint32, config.triggerBuffer),
+		trigger:                make(chan iputil.VpnIp, config.triggerBuffer),
 		OutboundHandshakeTimer: NewSystemTimerWheel(config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
 		messageMetrics:         config.messageMetrics,
 		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
@@ -67,7 +70,7 @@ func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges [
 	}
 }
 
-func (c *HandshakeManager) Run(ctx context.Context, f EncWriter) {
+func (c *HandshakeManager) Run(ctx context.Context, f udp.EncWriter) {
 	clockSource := time.NewTicker(c.config.tryInterval)
 	defer clockSource.Stop()
 
@@ -76,7 +79,7 @@ func (c *HandshakeManager) Run(ctx context.Context, f EncWriter) {
 		case <-ctx.Done():
 			return
 		case vpnIP := <-c.trigger:
-			c.l.WithField("vpnIp", IntIp(vpnIP)).Debug("HandshakeManager: triggered")
+			c.l.WithField("vpnIp", vpnIP).Debug("HandshakeManager: triggered")
 			c.handleOutbound(vpnIP, f, true)
 		case now := <-clockSource.C:
 			c.NextOutboundHandshakeTimerTick(now, f)
@@ -84,20 +87,20 @@ func (c *HandshakeManager) Run(ctx context.Context, f EncWriter) {
 	}
 }
 
-func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWriter) {
+func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f udp.EncWriter) {
 	c.OutboundHandshakeTimer.advance(now)
 	for {
 		ep := c.OutboundHandshakeTimer.Purge()
 		if ep == nil {
 			break
 		}
-		vpnIP := ep.(uint32)
-		c.handleOutbound(vpnIP, f, false)
+		vpnIp := ep.(iputil.VpnIp)
+		c.handleOutbound(vpnIp, f, false)
 	}
 }
 
-func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseTriggered bool) {
-	hostinfo, err := c.pendingHostMap.QueryVpnIP(vpnIP)
+func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, lighthouseTriggered bool) {
+	hostinfo, err := c.pendingHostMap.QueryVpnIp(vpnIp)
 	if err != nil {
 		return
 	}
@@ -115,7 +118,7 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 	if !hostinfo.HandshakeReady {
 		// There is currently a slight race in getOrHandshake due to ConnectionState not being part of the HostInfo directly
 		// Our hostinfo here was added to the pending map and the wheel may have ticked to us before we created ConnectionState
-		c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval*time.Duration(hostinfo.HandshakeCounter))
+		c.OutboundHandshakeTimer.Add(vpnIp, c.config.tryInterval*time.Duration(hostinfo.HandshakeCounter))
 		return
 	}
 
@@ -143,21 +146,21 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 	// Get a remotes object if we don't already have one.
 	// This is mainly to protect us as this should never be the case
 	if hostinfo.remotes == nil {
-		hostinfo.remotes = c.lightHouse.QueryCache(vpnIP)
+		hostinfo.remotes = c.lightHouse.QueryCache(vpnIp)
 	}
 
 	//TODO: this will generate a load of queries for hosts with only 1 ip (i'm not using a lighthouse, static mapped)
 	if hostinfo.remotes.Len(c.pendingHostMap.preferredRanges) <= 1 {
 		// If we only have 1 remote it is highly likely our query raced with the other host registered within the lighthouse
-		// Our vpnIP here has a tunnel with a lighthouse but has yet to send a host update packet there so we only know about
+		// Our vpnIp here has a tunnel with a lighthouse but has yet to send a host update packet there so we only know about
 		// the learned public ip for them. Query again to short circuit the promotion counter
-		c.lightHouse.QueryServer(vpnIP, f)
+		c.lightHouse.QueryServer(vpnIp, f)
 	}
 
 	// Send a the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
-	var sentTo []*udpAddr
-	hostinfo.remotes.ForEach(c.pendingHostMap.preferredRanges, func(addr *udpAddr, _ bool) {
-		c.messageMetrics.Tx(handshake, NebulaMessageSubType(hostinfo.HandshakePacket[0][1]), 1)
+	var sentTo []*udp.Addr
+	hostinfo.remotes.ForEach(c.pendingHostMap.preferredRanges, func(addr *udp.Addr, _ bool) {
+		c.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
 		err = c.outside.WriteTo(hostinfo.HandshakePacket[0], addr)
 		if err != nil {
 			hostinfo.logger(c.l).WithField("udpAddr", addr).
@@ -184,16 +187,16 @@ func (c *HandshakeManager) handleOutbound(vpnIP uint32, f EncWriter, lighthouseT
 	// If a lighthouse triggered this attempt then we are still in the timer wheel and do not need to re-add
 	if !lighthouseTriggered {
 		//TODO: feel like we dupe handshake real fast in a tight loop, why?
-		c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval*time.Duration(hostinfo.HandshakeCounter))
+		c.OutboundHandshakeTimer.Add(vpnIp, c.config.tryInterval*time.Duration(hostinfo.HandshakeCounter))
 	}
 }
 
-func (c *HandshakeManager) AddVpnIP(vpnIP uint32) *HostInfo {
-	hostinfo := c.pendingHostMap.AddVpnIP(vpnIP)
+func (c *HandshakeManager) AddVpnIp(vpnIp iputil.VpnIp) *HostInfo {
+	hostinfo := c.pendingHostMap.AddVpnIp(vpnIp)
 	// We lock here and use an array to insert items to prevent locking the
 	// main receive thread for very long by waiting to add items to the pending map
 	//TODO: what lock?
-	c.OutboundHandshakeTimer.Add(vpnIP, c.config.tryInterval)
+	c.OutboundHandshakeTimer.Add(vpnIp, c.config.tryInterval)
 	c.metricInitiated.Inc(1)
 
 	return hostinfo
@@ -208,12 +211,12 @@ var (
 
 // CheckAndComplete checks for any conflicts in the main and pending hostmap
 // before adding hostinfo to main. If err is nil, it was added. Otherwise err will be:
-
+//
 // ErrAlreadySeen if we already have an entry in the hostmap that has seen the
 // exact same handshake packet
 //
 // ErrExistingHostInfo if we already have an entry in the hostmap for this
-// VpnIP and the new handshake was older than the one we currently have
+// VpnIp and the new handshake was older than the one we currently have
 //
 // ErrLocalIndexCollision if we already have an entry in the main or pending
 // hostmap for the hostinfo.localIndexId.
@@ -224,7 +227,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 	defer c.mainHostMap.Unlock()
 
 	// Check if we already have a tunnel with this vpn ip
-	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.hostId]
+	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.vpnIp]
 	if found && existingHostInfo != nil {
 		// Is it just a delayed handshake packet?
 		if bytes.Equal(hostinfo.HandshakePacket[handshakePacket], existingHostInfo.HandshakePacket[handshakePacket]) {
@@ -252,16 +255,16 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 	}
 
 	existingRemoteIndex, found := c.mainHostMap.RemoteIndexes[hostinfo.remoteIndexId]
-	if found && existingRemoteIndex != nil && existingRemoteIndex.hostId != hostinfo.hostId {
+	if found && existingRemoteIndex != nil && existingRemoteIndex.vpnIp != hostinfo.vpnIp {
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
 		hostinfo.logger(c.l).
-			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", IntIp(existingRemoteIndex.hostId)).
+			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", existingRemoteIndex.vpnIp).
 			Info("New host shadows existing host remoteIndex")
 	}
 
 	// Check if we are also handshaking with this vpn ip
-	pendingHostInfo, found := c.pendingHostMap.Hosts[hostinfo.hostId]
+	pendingHostInfo, found := c.pendingHostMap.Hosts[hostinfo.vpnIp]
 	if found && pendingHostInfo != nil {
 		if !overwrite {
 			// We won, let our pending handshake win
@@ -278,7 +281,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 
 	if existingHostInfo != nil {
 		// We are going to overwrite this entry, so remove the old references
-		delete(c.mainHostMap.Hosts, existingHostInfo.hostId)
+		delete(c.mainHostMap.Hosts, existingHostInfo.vpnIp)
 		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
 		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
 	}
@@ -296,10 +299,10 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 	c.mainHostMap.Lock()
 	defer c.mainHostMap.Unlock()
 
-	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.hostId]
+	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.vpnIp]
 	if found && existingHostInfo != nil {
 		// We are going to overwrite this entry, so remove the old references
-		delete(c.mainHostMap.Hosts, existingHostInfo.hostId)
+		delete(c.mainHostMap.Hosts, existingHostInfo.vpnIp)
 		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
 		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
 	}
@@ -309,7 +312,7 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
 		hostinfo.logger(c.l).
-			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", IntIp(existingRemoteIndex.hostId)).
+			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", existingRemoteIndex.vpnIp).
 			Info("New host shadows existing host remoteIndex")
 	}
 

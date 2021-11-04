@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/iputil"
 )
 
 // TODO: incount and outcount are intended as a shortcut to locking the mutexes for every single packet
@@ -13,16 +15,16 @@ import (
 
 type connectionManager struct {
 	hostMap      *HostMap
-	in           map[uint32]struct{}
+	in           map[iputil.VpnIp]struct{}
 	inLock       *sync.RWMutex
 	inCount      int
-	out          map[uint32]struct{}
+	out          map[iputil.VpnIp]struct{}
 	outLock      *sync.RWMutex
 	outCount     int
 	TrafficTimer *SystemTimerWheel
 	intf         *Interface
 
-	pendingDeletion      map[uint32]int
+	pendingDeletion      map[iputil.VpnIp]int
 	pendingDeletionLock  *sync.RWMutex
 	pendingDeletionTimer *SystemTimerWheel
 
@@ -36,15 +38,15 @@ type connectionManager struct {
 func newConnectionManager(ctx context.Context, l *logrus.Logger, intf *Interface, checkInterval, pendingDeletionInterval int) *connectionManager {
 	nc := &connectionManager{
 		hostMap:                 intf.hostMap,
-		in:                      make(map[uint32]struct{}),
+		in:                      make(map[iputil.VpnIp]struct{}),
 		inLock:                  &sync.RWMutex{},
 		inCount:                 0,
-		out:                     make(map[uint32]struct{}),
+		out:                     make(map[iputil.VpnIp]struct{}),
 		outLock:                 &sync.RWMutex{},
 		outCount:                0,
 		TrafficTimer:            NewSystemTimerWheel(time.Millisecond*500, time.Second*60),
 		intf:                    intf,
-		pendingDeletion:         make(map[uint32]int),
+		pendingDeletion:         make(map[iputil.VpnIp]int),
 		pendingDeletionLock:     &sync.RWMutex{},
 		pendingDeletionTimer:    NewSystemTimerWheel(time.Millisecond*500, time.Second*60),
 		checkInterval:           checkInterval,
@@ -55,7 +57,7 @@ func newConnectionManager(ctx context.Context, l *logrus.Logger, intf *Interface
 	return nc
 }
 
-func (n *connectionManager) In(ip uint32) {
+func (n *connectionManager) In(ip iputil.VpnIp) {
 	n.inLock.RLock()
 	// If this already exists, return
 	if _, ok := n.in[ip]; ok {
@@ -68,7 +70,7 @@ func (n *connectionManager) In(ip uint32) {
 	n.inLock.Unlock()
 }
 
-func (n *connectionManager) Out(ip uint32) {
+func (n *connectionManager) Out(ip iputil.VpnIp) {
 	n.outLock.RLock()
 	// If this already exists, return
 	if _, ok := n.out[ip]; ok {
@@ -87,9 +89,9 @@ func (n *connectionManager) Out(ip uint32) {
 	n.outLock.Unlock()
 }
 
-func (n *connectionManager) CheckIn(vpnIP uint32) bool {
+func (n *connectionManager) CheckIn(vpnIp iputil.VpnIp) bool {
 	n.inLock.RLock()
-	if _, ok := n.in[vpnIP]; ok {
+	if _, ok := n.in[vpnIp]; ok {
 		n.inLock.RUnlock()
 		return true
 	}
@@ -97,7 +99,7 @@ func (n *connectionManager) CheckIn(vpnIP uint32) bool {
 	return false
 }
 
-func (n *connectionManager) ClearIP(ip uint32) {
+func (n *connectionManager) ClearIP(ip iputil.VpnIp) {
 	n.inLock.Lock()
 	n.outLock.Lock()
 	delete(n.in, ip)
@@ -106,13 +108,13 @@ func (n *connectionManager) ClearIP(ip uint32) {
 	n.outLock.Unlock()
 }
 
-func (n *connectionManager) ClearPendingDeletion(ip uint32) {
+func (n *connectionManager) ClearPendingDeletion(ip iputil.VpnIp) {
 	n.pendingDeletionLock.Lock()
 	delete(n.pendingDeletion, ip)
 	n.pendingDeletionLock.Unlock()
 }
 
-func (n *connectionManager) AddPendingDeletion(ip uint32) {
+func (n *connectionManager) AddPendingDeletion(ip iputil.VpnIp) {
 	n.pendingDeletionLock.Lock()
 	if _, ok := n.pendingDeletion[ip]; ok {
 		n.pendingDeletion[ip] += 1
@@ -123,7 +125,7 @@ func (n *connectionManager) AddPendingDeletion(ip uint32) {
 	n.pendingDeletionLock.Unlock()
 }
 
-func (n *connectionManager) checkPendingDeletion(ip uint32) bool {
+func (n *connectionManager) checkPendingDeletion(ip iputil.VpnIp) bool {
 	n.pendingDeletionLock.RLock()
 	if _, ok := n.pendingDeletion[ip]; ok {
 
@@ -134,8 +136,8 @@ func (n *connectionManager) checkPendingDeletion(ip uint32) bool {
 	return false
 }
 
-func (n *connectionManager) AddTrafficWatch(vpnIP uint32, seconds int) {
-	n.TrafficTimer.Add(vpnIP, time.Second*time.Duration(seconds))
+func (n *connectionManager) AddTrafficWatch(vpnIp iputil.VpnIp, seconds int) {
+	n.TrafficTimer.Add(vpnIp, time.Second*time.Duration(seconds))
 }
 
 func (n *connectionManager) Start(ctx context.Context) {
@@ -169,23 +171,23 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 			break
 		}
 
-		vpnIP := ep.(uint32)
+		vpnIp := ep.(iputil.VpnIp)
 
 		// Check for traffic coming back in from this host.
-		traf := n.CheckIn(vpnIP)
+		traf := n.CheckIn(vpnIp)
 
-		hostinfo, err := n.hostMap.QueryVpnIP(vpnIP)
+		hostinfo, err := n.hostMap.QueryVpnIp(vpnIp)
 		if err != nil {
-			n.l.Debugf("Not found in hostmap: %s", IntIp(vpnIP))
+			n.l.Debugf("Not found in hostmap: %s", vpnIp)
 
 			if !n.intf.disconnectInvalid {
-				n.ClearIP(vpnIP)
-				n.ClearPendingDeletion(vpnIP)
+				n.ClearIP(vpnIp)
+				n.ClearPendingDeletion(vpnIp)
 				continue
 			}
 		}
 
-		if n.handleInvalidCertificate(now, vpnIP, hostinfo) {
+		if n.handleInvalidCertificate(now, vpnIp, hostinfo) {
 			continue
 		}
 
@@ -193,12 +195,12 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 		// expired, just ignore.
 		if traf {
 			if n.l.Level >= logrus.DebugLevel {
-				n.l.WithField("vpnIp", IntIp(vpnIP)).
+				n.l.WithField("vpnIp", vpnIp).
 					WithField("tunnelCheck", m{"state": "alive", "method": "passive"}).
 					Debug("Tunnel status")
 			}
-			n.ClearIP(vpnIP)
-			n.ClearPendingDeletion(vpnIP)
+			n.ClearIP(vpnIp)
+			n.ClearPendingDeletion(vpnIp)
 			continue
 		}
 
@@ -208,12 +210,12 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 
 		if hostinfo != nil && hostinfo.ConnectionState != nil {
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
-			n.intf.SendMessageToVpnIp(test, testRequest, vpnIP, p, nb, out)
+			n.intf.SendMessageToVpnIp(header.Test, header.TestRequest, vpnIp, p, nb, out)
 
 		} else {
-			hostinfo.logger(n.l).Debugf("Hostinfo sadness: %s", IntIp(vpnIP))
+			hostinfo.logger(n.l).Debugf("Hostinfo sadness: %s", vpnIp)
 		}
-		n.AddPendingDeletion(vpnIP)
+		n.AddPendingDeletion(vpnIp)
 	}
 
 }
@@ -226,38 +228,38 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 			break
 		}
 
-		vpnIP := ep.(uint32)
+		vpnIp := ep.(iputil.VpnIp)
 
-		hostinfo, err := n.hostMap.QueryVpnIP(vpnIP)
+		hostinfo, err := n.hostMap.QueryVpnIp(vpnIp)
 		if err != nil {
-			n.l.Debugf("Not found in hostmap: %s", IntIp(vpnIP))
+			n.l.Debugf("Not found in hostmap: %s", vpnIp)
 
 			if !n.intf.disconnectInvalid {
-				n.ClearIP(vpnIP)
-				n.ClearPendingDeletion(vpnIP)
+				n.ClearIP(vpnIp)
+				n.ClearPendingDeletion(vpnIp)
 				continue
 			}
 		}
 
-		if n.handleInvalidCertificate(now, vpnIP, hostinfo) {
+		if n.handleInvalidCertificate(now, vpnIp, hostinfo) {
 			continue
 		}
 
 		// If we saw an incoming packets from this ip and peer's certificate is not
 		// expired, just ignore.
-		traf := n.CheckIn(vpnIP)
+		traf := n.CheckIn(vpnIp)
 		if traf {
-			n.l.WithField("vpnIp", IntIp(vpnIP)).
+			n.l.WithField("vpnIp", vpnIp).
 				WithField("tunnelCheck", m{"state": "alive", "method": "active"}).
 				Debug("Tunnel status")
 
-			n.ClearIP(vpnIP)
-			n.ClearPendingDeletion(vpnIP)
+			n.ClearIP(vpnIp)
+			n.ClearPendingDeletion(vpnIp)
 			continue
 		}
 
 		// If it comes around on deletion wheel and hasn't resolved itself, delete
-		if n.checkPendingDeletion(vpnIP) {
+		if n.checkPendingDeletion(vpnIp) {
 			cn := ""
 			if hostinfo.ConnectionState != nil && hostinfo.ConnectionState.peerCert != nil {
 				cn = hostinfo.ConnectionState.peerCert.Details.Name
@@ -267,22 +269,22 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 				WithField("certName", cn).
 				Info("Tunnel status")
 
-			n.ClearIP(vpnIP)
-			n.ClearPendingDeletion(vpnIP)
+			n.ClearIP(vpnIp)
+			n.ClearPendingDeletion(vpnIp)
 			// TODO: This is only here to let tests work. Should do proper mocking
 			if n.intf.lightHouse != nil {
-				n.intf.lightHouse.DeleteVpnIP(vpnIP)
+				n.intf.lightHouse.DeleteVpnIp(vpnIp)
 			}
 			n.hostMap.DeleteHostInfo(hostinfo)
 		} else {
-			n.ClearIP(vpnIP)
-			n.ClearPendingDeletion(vpnIP)
+			n.ClearIP(vpnIp)
+			n.ClearPendingDeletion(vpnIp)
 		}
 	}
 }
 
 // handleInvalidCertificates will destroy a tunnel if pki.disconnect_invalid is true and the certificate is no longer valid
-func (n *connectionManager) handleInvalidCertificate(now time.Time, vpnIP uint32, hostinfo *HostInfo) bool {
+func (n *connectionManager) handleInvalidCertificate(now time.Time, vpnIp iputil.VpnIp, hostinfo *HostInfo) bool {
 	if !n.intf.disconnectInvalid {
 		return false
 	}
@@ -298,7 +300,7 @@ func (n *connectionManager) handleInvalidCertificate(now time.Time, vpnIP uint32
 	}
 
 	fingerprint, _ := remoteCert.Sha256Sum()
-	n.l.WithField("vpnIp", IntIp(vpnIP)).WithError(err).
+	n.l.WithField("vpnIp", vpnIp).WithError(err).
 		WithField("certName", remoteCert.Details.Name).
 		WithField("fingerprint", fingerprint).
 		Info("Remote certificate is no longer valid, tearing down the tunnel")
@@ -307,7 +309,7 @@ func (n *connectionManager) handleInvalidCertificate(now time.Time, vpnIP uint32
 	n.intf.sendCloseTunnel(hostinfo)
 	n.intf.closeTunnel(hostinfo, false)
 
-	n.ClearIP(vpnIP)
-	n.ClearPendingDeletion(vpnIP)
+	n.ClearIP(vpnIp)
+	n.ClearPendingDeletion(vpnIp)
 	return true
 }

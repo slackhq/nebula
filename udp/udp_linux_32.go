@@ -4,7 +4,7 @@
 // +build !android
 // +build !e2e_testing
 
-package nebula
+package udp
 
 import (
 	"golang.org/x/sys/unix"
@@ -30,13 +30,13 @@ type rawMessage struct {
 	Len uint32
 }
 
-func (u *udpConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
+func (u *Conn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
 	msgs := make([]rawMessage, n)
 	buffers := make([][]byte, n)
 	names := make([][]byte, n)
 
 	for i := range msgs {
-		buffers[i] = make([]byte, mtu)
+		buffers[i] = make([]byte, MTU)
 		names[i] = make([]byte, unix.SizeofSockaddrInet6)
 
 		//TODO: this is still silly, no need for an array

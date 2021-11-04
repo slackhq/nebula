@@ -1,39 +1,39 @@
-package nebula
+package cidr
 
 import (
-	"encoding/binary"
-	"fmt"
 	"net"
+
+	"github.com/slackhq/nebula/iputil"
 )
 
-type CIDRNode struct {
-	left   *CIDRNode
-	right  *CIDRNode
-	parent *CIDRNode
+type Node struct {
+	left   *Node
+	right  *Node
+	parent *Node
 	value  interface{}
 }
 
-type CIDRTree struct {
-	root *CIDRNode
+type Tree4 struct {
+	root *Node
 }
 
 const (
-	startbit = uint32(0x80000000)
+	startbit = iputil.VpnIp(0x80000000)
 )
 
-func NewCIDRTree() *CIDRTree {
-	tree := new(CIDRTree)
-	tree.root = &CIDRNode{}
+func NewTree4() *Tree4 {
+	tree := new(Tree4)
+	tree.root = &Node{}
 	return tree
 }
 
-func (tree *CIDRTree) AddCIDR(cidr *net.IPNet, val interface{}) {
+func (tree *Tree4) AddCIDR(cidr *net.IPNet, val interface{}) {
 	bit := startbit
 	node := tree.root
 	next := tree.root
 
-	ip := ip2int(cidr.IP)
-	mask := ip2int(cidr.Mask)
+	ip := iputil.Ip2VpnIp(cidr.IP)
+	mask := iputil.Ip2VpnIp(cidr.Mask)
 
 	// Find our last ancestor in the tree
 	for bit&mask != 0 {
@@ -59,7 +59,7 @@ func (tree *CIDRTree) AddCIDR(cidr *net.IPNet, val interface{}) {
 
 	// Build up the rest of the tree we don't already have
 	for bit&mask != 0 {
-		next = &CIDRNode{}
+		next = &Node{}
 		next.parent = node
 
 		if ip&bit != 0 {
@@ -77,7 +77,7 @@ func (tree *CIDRTree) AddCIDR(cidr *net.IPNet, val interface{}) {
 }
 
 // Finds the first match, which may be the least specific
-func (tree *CIDRTree) Contains(ip uint32) (value interface{}) {
+func (tree *Tree4) Contains(ip iputil.VpnIp) (value interface{}) {
 	bit := startbit
 	node := tree.root
 
@@ -100,7 +100,7 @@ func (tree *CIDRTree) Contains(ip uint32) (value interface{}) {
 }
 
 // Finds the most specific match
-func (tree *CIDRTree) MostSpecificContains(ip uint32) (value interface{}) {
+func (tree *Tree4) MostSpecificContains(ip iputil.VpnIp) (value interface{}) {
 	bit := startbit
 	node := tree.root
 
@@ -122,7 +122,7 @@ func (tree *CIDRTree) MostSpecificContains(ip uint32) (value interface{}) {
 }
 
 // Finds the most specific match
-func (tree *CIDRTree) Match(ip uint32) (value interface{}) {
+func (tree *Tree4) Match(ip iputil.VpnIp) (value interface{}) {
 	bit := startbit
 	node := tree.root
 	lastNode := node
@@ -142,28 +142,4 @@ func (tree *CIDRTree) Match(ip uint32) (value interface{}) {
 		value = lastNode.value
 	}
 	return value
-}
-
-// A helper type to avoid converting to IP when logging
-type IntIp uint32
-
-func (ip IntIp) String() string {
-	return fmt.Sprintf("%v", int2ip(uint32(ip)))
-}
-
-func (ip IntIp) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf("\"%s\"", int2ip(uint32(ip)).String())), nil
-}
-
-func ip2int(ip []byte) uint32 {
-	if len(ip) == 16 {
-		return binary.BigEndian.Uint32(ip[12:16])
-	}
-	return binary.BigEndian.Uint32(ip)
-}
-
-func int2ip(nn uint32) net.IP {
-	ip := make(net.IP, 4)
-	binary.BigEndian.PutUint32(ip, nn)
-	return ip
 }

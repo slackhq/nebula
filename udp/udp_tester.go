@@ -1,16 +1,19 @@
 //go:build e2e_testing
 // +build e2e_testing
 
-package nebula
+package udp
 
 import (
 	"fmt"
 	"net"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/header"
 )
 
-type UdpPacket struct {
+type Packet struct {
 	ToIp     net.IP
 	ToPort   uint16
 	FromIp   net.IP
@@ -18,8 +21,8 @@ type UdpPacket struct {
 	Data     []byte
 }
 
-func (u *UdpPacket) Copy() *UdpPacket {
-	n := &UdpPacket{
+func (u *Packet) Copy() *Packet {
+	n := &Packet{
 		ToIp:     make(net.IP, len(u.ToIp)),
 		ToPort:   u.ToPort,
 		FromIp:   make(net.IP, len(u.FromIp)),
@@ -33,20 +36,20 @@ func (u *UdpPacket) Copy() *UdpPacket {
 	return n
 }
 
-type udpConn struct {
-	addr *udpAddr
+type Conn struct {
+	Addr *Addr
 
-	rxPackets chan *UdpPacket // Packets to receive into nebula
-	txPackets chan *UdpPacket // Packets transmitted outside by nebula
+	RxPackets chan *Packet // Packets to receive into nebula
+	TxPackets chan *Packet // Packets transmitted outside by nebula
 
 	l *logrus.Logger
 }
 
-func NewListener(l *logrus.Logger, ip string, port int, _ bool) (*udpConn, error) {
-	return &udpConn{
-		addr:      &udpAddr{net.ParseIP(ip), uint16(port)},
-		rxPackets: make(chan *UdpPacket, 1),
-		txPackets: make(chan *UdpPacket, 1),
+func NewListener(l *logrus.Logger, ip string, port int, _ bool, _ int) (*Conn, error) {
+	return &Conn{
+		Addr:      &Addr{net.ParseIP(ip), uint16(port)},
+		RxPackets: make(chan *Packet, 1),
+		TxPackets: make(chan *Packet, 1),
 		l:         l,
 	}, nil
 }
@@ -54,8 +57,8 @@ func NewListener(l *logrus.Logger, ip string, port int, _ bool) (*udpConn, error
 // Send will place a UdpPacket onto the receive queue for nebula to consume
 // this is an encrypted packet or a handshake message in most cases
 // packets were transmitted from another nebula node, you can send them with Tun.Send
-func (u *udpConn) Send(packet *UdpPacket) {
-	h := &Header{}
+func (u *Conn) Send(packet *Packet) {
+	h := &header.H{}
 	if err := h.Parse(packet.Data); err != nil {
 		panic(err)
 	}
@@ -63,19 +66,19 @@ func (u *udpConn) Send(packet *UdpPacket) {
 		WithField("udpAddr", fmt.Sprintf("%v:%v", packet.FromIp, packet.FromPort)).
 		WithField("dataLen", len(packet.Data)).
 		Info("UDP receiving injected packet")
-	u.rxPackets <- packet
+	u.RxPackets <- packet
 }
 
 // Get will pull a UdpPacket from the transmit queue
 // nebula meant to send this message on the network, it will be encrypted
 // packets were ingested from the tun side (in most cases), you can send them with Tun.Send
-func (u *udpConn) Get(block bool) *UdpPacket {
+func (u *Conn) Get(block bool) *Packet {
 	if block {
-		return <-u.txPackets
+		return <-u.TxPackets
 	}
 
 	select {
-	case p := <-u.txPackets:
+	case p := <-u.TxPackets:
 		return p
 	default:
 		return nil
@@ -86,56 +89,49 @@ func (u *udpConn) Get(block bool) *UdpPacket {
 // Below this is boilerplate implementation to make nebula actually work
 //********************************************************************************************************************//
 
-func (u *udpConn) WriteTo(b []byte, addr *udpAddr) error {
-	p := &UdpPacket{
+func (u *Conn) WriteTo(b []byte, addr *Addr) error {
+	p := &Packet{
 		Data:     make([]byte, len(b), len(b)),
 		FromIp:   make([]byte, 16),
-		FromPort: u.addr.Port,
+		FromPort: u.Addr.Port,
 		ToIp:     make([]byte, 16),
 		ToPort:   addr.Port,
 	}
 
 	copy(p.Data, b)
 	copy(p.ToIp, addr.IP.To16())
-	copy(p.FromIp, u.addr.IP.To16())
+	copy(p.FromIp, u.Addr.IP.To16())
 
-	u.txPackets <- p
+	u.TxPackets <- p
 	return nil
 }
 
-func (u *udpConn) ListenOut(f *Interface, q int) {
-	plaintext := make([]byte, mtu)
-	header := &Header{}
-	fwPacket := &FirewallPacket{}
-	ua := &udpAddr{IP: make([]byte, 16)}
+func (u *Conn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int) {
+	plaintext := make([]byte, MTU)
+	h := &header.H{}
+	fwPacket := &firewall.Packet{}
+	ua := &Addr{IP: make([]byte, 16)}
 	nb := make([]byte, 12, 12)
 
-	lhh := f.lightHouse.NewRequestHandler()
-	conntrackCache := NewConntrackCacheTicker(f.conntrackCacheTimeout)
-
 	for {
-		p := <-u.rxPackets
+		p := <-u.RxPackets
 		ua.Port = p.FromPort
 		copy(ua.IP, p.FromIp.To16())
-		f.readOutsidePackets(ua, plaintext[:0], p.Data, header, fwPacket, lhh, nb, q, conntrackCache.Get(u.l))
+		r(ua, plaintext[:0], p.Data, h, fwPacket, lhf, nb, q, cache.Get(u.l))
 	}
 }
 
-func (u *udpConn) reloadConfig(*Config) {}
+func (u *Conn) ReloadConfig(*config.C) {}
 
-func NewUDPStatsEmitter(_ []*udpConn) func() {
+func NewUDPStatsEmitter(_ []*Conn) func() {
 	// No UDP stats for non-linux
 	return func() {}
 }
 
-func (u *udpConn) LocalAddr() (*udpAddr, error) {
-	return u.addr, nil
+func (u *Conn) LocalAddr() (*Addr, error) {
+	return u.Addr, nil
 }
 
-func (u *udpConn) Rebind() error {
+func (u *Conn) Rebind() error {
 	return nil
-}
-
-func hostDidRoam(addr *udpAddr, newaddr *udpAddr) bool {
-	return !addr.Equals(newaddr)
 }
