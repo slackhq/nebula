@@ -632,15 +632,16 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp i
 	// of a double nat or other difficult scenario, this may help establish
 	// a tunnel.
 	if lhh.lh.punchBack {
+		queryVpnIp := iputil.VpnIp(n.Details.VpnIp)
 		go func() {
 			time.Sleep(time.Second * 5)
 			if lhh.l.Level >= logrus.DebugLevel {
-				lhh.l.Debugf("Sending a nebula test packet to vpn ip %s", iputil.VpnIp(n.Details.VpnIp))
+				lhh.l.Debugf("Sending a nebula test packet to vpn ip %s", queryVpnIp)
 			}
 			//NOTE: we have to allocate a new output buffer here since we are spawning a new goroutine
 			// for each punchBack packet. We should move this into a timerwheel or a single goroutine
 			// managed by a channel.
-			w.SendMessageToVpnIp(header.Test, header.TestRequest, iputil.VpnIp(n.Details.VpnIp), []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			w.SendMessageToVpnIp(header.Test, header.TestRequest, queryVpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 		}()
 	}
 }
