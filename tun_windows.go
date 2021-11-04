@@ -8,6 +8,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
+	"runtime"
+	"syscall"
 
 	"github.com/sirupsen/logrus"
 )
@@ -50,7 +53,19 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 }
 
 func checkWinTunExists() error {
-	_, err := os.Stat("wintun.dll")
+	myPath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+
+	arch := runtime.GOARCH
+	switch arch {
+	case "386":
+		//NOTE: wintun bundles 386 as x86
+		arch = "x86"
+	}
+
+	_, err = syscall.LoadDLL(filepath.Join(filepath.Dir(myPath), "dist", "windows", "wintun", "bin", arch, "wintun.dll"))
 	return err
 }
 

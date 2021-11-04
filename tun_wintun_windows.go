@@ -75,12 +75,17 @@ func (c *WinTun) Activate() error {
 	foundDefault4 := false
 	routes := make([]*winipcfg.RouteData, 0, len(c.UnsafeRoutes)+1)
 
+	mainRoute := net.IPNet{
+		IP:   c.Cidr.IP.Mask(c.Cidr.Mask),
+		Mask: c.Cidr.Mask,
+	}
+
+	// Try to clear our the current route if one exists
+	luid.DeleteRoute(mainRoute, net.IPv4zero)
+
 	// Add cidr route to overwrite metric
 	routes = append(routes, &winipcfg.RouteData{
-		Destination: net.IPNet{
-			IP:   c.Cidr.IP.Mask(c.Cidr.Mask),
-			Mask: c.Cidr.Mask,
-		},
+		Destination: mainRoute,
 		NextHop: net.IPv4zero,
 	})
 
@@ -91,6 +96,10 @@ func (c *WinTun) Activate() error {
 			}
 		}
 
+		// Try to clear out an existing route if one exists
+		luid.DeleteRoute(*r.route, *r.via)
+
+		// Add our unsafe route
 		routes = append(routes, &winipcfg.RouteData{
 			Destination: *r.route,
 			NextHop:     *r.via,
