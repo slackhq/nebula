@@ -175,6 +175,7 @@ func (f *Interface) activate() {
 	}
 
 	if err := f.inside.Activate(); err != nil {
+		f.inside.Close()
 		f.l.Fatal(err)
 	}
 }

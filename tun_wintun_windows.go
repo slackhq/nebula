@@ -80,9 +80,6 @@ func (c *WinTun) Activate() error {
 		Mask: c.Cidr.Mask,
 	}
 
-	// Try to clear our the current route if one exists
-	luid.DeleteRoute(mainRoute, net.IPv4zero)
-
 	// Add cidr route to overwrite metric
 	routes = append(routes, &winipcfg.RouteData{
 		Destination: mainRoute,
@@ -96,9 +93,6 @@ func (c *WinTun) Activate() error {
 			}
 		}
 
-		// Try to clear out an existing route if one exists
-		luid.DeleteRoute(*r.route, *r.via)
-
 		// Add our unsafe route
 		routes = append(routes, &winipcfg.RouteData{
 			Destination: *r.route,
@@ -107,6 +101,7 @@ func (c *WinTun) Activate() error {
 		})
 	}
 
+	luid.FlushRoutes(windows.AF_INET)
 	if err := luid.AddRoutes(routes); err != nil {
 		return fmt.Errorf("failed to add routes: %w", err)
 	}
