@@ -1,3 +1,6 @@
+//go:build !e2e_testing
+// +build !e2e_testing
+
 package nebula
 
 import (
@@ -6,6 +9,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 )
 
@@ -19,9 +23,10 @@ type Tun struct {
 	TXQueueLen   int
 	Routes       []route
 	UnsafeRoutes []route
+	l            *logrus.Logger
 }
 
-func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
 	ifce = &Tun{
@@ -33,11 +38,12 @@ func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route,
 		TXQueueLen:      txQueueLen,
 		Routes:          routes,
 		UnsafeRoutes:    unsafeRoutes,
+		l:               l,
 	}
 	return
 }
 
-func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	return nil, fmt.Errorf("newTun not supported in Android")
 }
 

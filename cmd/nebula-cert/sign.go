@@ -92,6 +92,10 @@ func signCert(args []string, out io.Writer, errOut io.Writer) error {
 		return fmt.Errorf("error while parsing ca-crt: %s", err)
 	}
 
+	if err := caCert.VerifyPrivateKey(caKey); err != nil {
+		return fmt.Errorf("refusing to sign, root certificate does not match private key")
+	}
+
 	issuer, err := caCert.Sha256Sum()
 	if err != nil {
 		return fmt.Errorf("error while getting -ca-crt fingerprint: %s", err)
@@ -222,12 +226,17 @@ func signCert(args []string, out io.Writer, errOut io.Writer) error {
 }
 
 func x25519Keypair() ([]byte, []byte) {
-	var pubkey, privkey [32]byte
-	if _, err := io.ReadFull(rand.Reader, privkey[:]); err != nil {
+	privkey := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, privkey); err != nil {
 		panic(err)
 	}
-	curve25519.ScalarBaseMult(&pubkey, &privkey)
-	return pubkey[:], privkey[:]
+
+	pubkey, err := curve25519.X25519(privkey, curve25519.Basepoint)
+	if err != nil {
+		panic(err)
+	}
+
+	return pubkey, privkey
 }
 
 func signSummary() string {

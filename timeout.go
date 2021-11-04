@@ -2,12 +2,14 @@ package nebula
 
 import (
 	"time"
+
+	"github.com/slackhq/nebula/firewall"
 )
 
 // How many timer objects should be cached
 const timerCacheMax = 50000
 
-var emptyFWPacket = FirewallPacket{}
+var emptyFWPacket = firewall.Packet{}
 
 type TimerWheel struct {
 	// Current tick
@@ -42,7 +44,7 @@ type TimeoutList struct {
 
 // Represents an item within a tick
 type TimeoutItem struct {
-	Packet FirewallPacket
+	Packet firewall.Packet
 	Next   *TimeoutItem
 }
 
@@ -73,8 +75,8 @@ func NewTimerWheel(min, max time.Duration) *TimerWheel {
 	return &tw
 }
 
-// Add will add a FirewallPacket to the wheel in it's proper timeout
-func (tw *TimerWheel) Add(v FirewallPacket, timeout time.Duration) *TimeoutItem {
+// Add will add a firewall.Packet to the wheel in it's proper timeout
+func (tw *TimerWheel) Add(v firewall.Packet, timeout time.Duration) *TimeoutItem {
 	// Check and see if we should progress the tick
 	tw.advance(time.Now())
 
@@ -103,7 +105,7 @@ func (tw *TimerWheel) Add(v FirewallPacket, timeout time.Duration) *TimeoutItem 
 	return ti
 }
 
-func (tw *TimerWheel) Purge() (FirewallPacket, bool) {
+func (tw *TimerWheel) Purge() (firewall.Packet, bool) {
 	if tw.expired.Head == nil {
 		return emptyFWPacket, false
 	}

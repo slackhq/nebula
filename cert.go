@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/config"
 )
-
-var trustedCAs *cert.NebulaCAPool
 
 type CertState struct {
 	certificate         *cert.NebulaCertificate
@@ -46,7 +46,7 @@ func NewCertState(certificate *cert.NebulaCertificate, privateKey []byte) (*Cert
 	return cs, nil
 }
 
-func NewCertStateFromConfig(c *Config) (*CertState, error) {
+func NewCertStateFromConfig(c *config.C) (*CertState, error) {
 	var pemPrivateKey []byte
 	var err error
 
@@ -119,7 +119,7 @@ func NewCertStateFromConfig(c *Config) (*CertState, error) {
 	return NewCertState(nebulaCert, rawKey)
 }
 
-func loadCAFromConfig(c *Config) (*cert.NebulaCAPool, error) {
+func loadCAFromConfig(l *logrus.Logger, c *config.C) (*cert.NebulaCAPool, error) {
 	var rawCA []byte
 	var err error
 

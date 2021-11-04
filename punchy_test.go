@@ -4,11 +4,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNewPunchyFromConfig(t *testing.T) {
-	c := NewConfig()
+	l := util.NewTestLogger()
+	c := config.NewC(l)
 
 	// Test defaults
 	p := NewPunchyFromConfig(c)

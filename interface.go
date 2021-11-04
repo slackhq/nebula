@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -9,6 +10,12 @@ import (
 	"time"
 
 	"github.com/rcrowley/go-metrics"
+	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 )
 
 const mtu = 9001
@@ -24,7 +31,7 @@ type Inside interface {
 
 type InterfaceConfig struct {
 	HostMap                 *HostMap
-	Outside                 *udpConn
+	Outside                 *udp.Conn
 	Inside                  Inside
 	certState               *CertState
 	Cipher                  string
@@ -36,17 +43,19 @@ type InterfaceConfig struct {
 	pendingDeletionInterval int
 	DropLocalBroadcast      bool
 	DropMulticast           bool
-	UDPBatchSize            int
 	routines                int
 	MessageMetrics          *MessageMetrics
 	version                 string
+	caPool                  *cert.NebulaCAPool
+	disconnectInvalid       bool
 
 	ConntrackCacheTimeout time.Duration
+	l                     *logrus.Logger
 }
 
 type Interface struct {
 	hostMap            *HostMap
-	outside            *udpConn
+	outside            *udp.Conn
 	inside             Inside
 	certState          *CertState
 	cipher             string
@@ -56,11 +65,13 @@ type Interface struct {
 	serveDns           bool
 	createTime         time.Time
 	lightHouse         *LightHouse
-	localBroadcast     uint32
+	localBroadcast     iputil.VpnIp
+	myVpnIp            iputil.VpnIp
 	dropLocalBroadcast bool
 	dropMulticast      bool
-	udpBatchSize       int
 	routines           int
+	caPool             *cert.NebulaCAPool
+	disconnectInvalid  bool
 
 	// rebindCount is used to decide if an active tunnel should trigger a punch notification through a lighthouse
 	rebindCount int8
@@ -68,14 +79,17 @@ type Interface struct {
 
 	conntrackCacheTimeout time.Duration
 
-	writers []*udpConn
+	writers []*udp.Conn
 	readers []io.ReadWriteCloser
 
-	metricHandshakes metrics.Histogram
-	messageMetrics   *MessageMetrics
+	metricHandshakes    metrics.Histogram
+	messageMetrics      *MessageMetrics
+	cachedPacketMetrics *cachedPacketMetrics
+
+	l *logrus.Logger
 }
 
-func NewInterface(c *InterfaceConfig) (*Interface, error) {
+func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	if c.Outside == nil {
 		return nil, errors.New("no outside connection")
 	}
@@ -89,6 +103,7 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		return nil, errors.New("no firewall rules")
 	}
 
+	myVpnIp := iputil.Ip2VpnIp(c.certState.certificate.Details.Ips[0].IP)
 	ifce := &Interface{
 		hostMap:            c.HostMap,
 		outside:            c.Outside,
@@ -100,35 +115,46 @@ func NewInterface(c *InterfaceConfig) (*Interface, error) {
 		handshakeManager:   c.HandshakeManager,
 		createTime:         time.Now(),
 		lightHouse:         c.lightHouse,
-		localBroadcast:     ip2int(c.certState.certificate.Details.Ips[0].IP) | ^ip2int(c.certState.certificate.Details.Ips[0].Mask),
+		localBroadcast:     myVpnIp | ^iputil.Ip2VpnIp(c.certState.certificate.Details.Ips[0].Mask),
 		dropLocalBroadcast: c.DropLocalBroadcast,
 		dropMulticast:      c.DropMulticast,
-		udpBatchSize:       c.UDPBatchSize,
 		routines:           c.routines,
 		version:            c.version,
-		writers:            make([]*udpConn, c.routines),
+		writers:            make([]*udp.Conn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
+		caPool:             c.caPool,
+		disconnectInvalid:  c.disconnectInvalid,
+		myVpnIp:            myVpnIp,
 
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
+		cachedPacketMetrics: &cachedPacketMetrics{
+			sent:    metrics.GetOrRegisterCounter("hostinfo.cached_packets.sent", nil),
+			dropped: metrics.GetOrRegisterCounter("hostinfo.cached_packets.dropped", nil),
+		},
+
+		l: c.l,
 	}
 
-	ifce.connectionManager = newConnectionManager(ifce, c.checkInterval, c.pendingDeletionInterval)
+	ifce.connectionManager = newConnectionManager(ctx, c.l, ifce, c.checkInterval, c.pendingDeletionInterval)
 
 	return ifce, nil
 }
 
-func (f *Interface) run() {
+// activate creates the interface on the host. After the interface is created, any
+// other services that want to bind listeners to its IP may do so successfully. However,
+// the interface isn't going to process anything until run() is called.
+func (f *Interface) activate() {
 	// actually turn on tun dev
 
 	addr, err := f.outside.LocalAddr()
 	if err != nil {
-		l.WithError(err).Error("Failed to get udp listen address")
+		f.l.WithError(err).Error("Failed to get udp listen address")
 	}
 
-	l.WithField("interface", f.inside.DeviceName()).WithField("network", f.inside.CidrNet().String()).
+	f.l.WithField("interface", f.inside.DeviceName()).WithField("network", f.inside.CidrNet().String()).
 		WithField("build", f.version).WithField("udpAddr", addr).
 		Info("Nebula interface is active")
 
@@ -140,16 +166,18 @@ func (f *Interface) run() {
 		if i > 0 {
 			reader, err = f.inside.NewMultiQueueReader()
 			if err != nil {
-				l.Fatal(err)
+				f.l.Fatal(err)
 			}
 		}
 		f.readers[i] = reader
 	}
 
 	if err := f.inside.Activate(); err != nil {
-		l.Fatal(err)
+		f.l.Fatal(err)
 	}
+}
 
+func (f *Interface) run() {
 	// Launch n queues to read packets from udp
 	for i := 0; i < f.routines; i++ {
 		go f.listenOut(i)
@@ -164,14 +192,17 @@ func (f *Interface) run() {
 func (f *Interface) listenOut(i int) {
 	runtime.LockOSThread()
 
-	var li *udpConn
+	var li *udp.Conn
 	// TODO clean this up with a coherent interface for each outside connection
 	if i > 0 {
 		li = f.writers[i]
 	} else {
 		li = f.outside
 	}
-	li.ListenOut(f, i)
+
+	lhh := f.lightHouse.NewRequestHandler()
+	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
+	li.ListenOut(f.readOutsidePackets, lhh.HandleRequest, conntrackCache, i)
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
@@ -179,50 +210,50 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
-	fwPacket := &FirewallPacket{}
+	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
-	conntrackCache := NewConntrackCacheTicker(f.conntrackCacheTimeout)
+	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
 	for {
 		n, err := reader.Read(packet)
 		if err != nil {
-			l.WithError(err).Error("Error while reading outbound packet")
+			f.l.WithError(err).Error("Error while reading outbound packet")
 			// This only seems to happen when something fatal happens to the fd, so exit.
 			os.Exit(2)
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get())
+		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
 	}
 }
 
-func (f *Interface) RegisterConfigChangeCallbacks(c *Config) {
+func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
 	c.RegisterReloadCallback(f.reloadCA)
 	c.RegisterReloadCallback(f.reloadCertKey)
 	c.RegisterReloadCallback(f.reloadFirewall)
 	for _, udpConn := range f.writers {
-		c.RegisterReloadCallback(udpConn.reloadConfig)
+		c.RegisterReloadCallback(udpConn.ReloadConfig)
 	}
 }
 
-func (f *Interface) reloadCA(c *Config) {
+func (f *Interface) reloadCA(c *config.C) {
 	// reload and check regardless
 	// todo: need mutex?
-	newCAs, err := loadCAFromConfig(c)
+	newCAs, err := loadCAFromConfig(f.l, c)
 	if err != nil {
-		l.WithError(err).Error("Could not refresh trusted CA certificates")
+		f.l.WithError(err).Error("Could not refresh trusted CA certificates")
 		return
 	}
 
-	trustedCAs = newCAs
-	l.WithField("fingerprints", trustedCAs.GetFingerprints()).Info("Trusted CA certificates refreshed")
+	f.caPool = newCAs
+	f.l.WithField("fingerprints", f.caPool.GetFingerprints()).Info("Trusted CA certificates refreshed")
 }
 
-func (f *Interface) reloadCertKey(c *Config) {
+func (f *Interface) reloadCertKey(c *config.C) {
 	// reload and check in all cases
 	cs, err := NewCertStateFromConfig(c)
 	if err != nil {
-		l.WithError(err).Error("Could not refresh client cert")
+		f.l.WithError(err).Error("Could not refresh client cert")
 		return
 	}
 
@@ -230,24 +261,24 @@ func (f *Interface) reloadCertKey(c *Config) {
 	oldIPs := f.certState.certificate.Details.Ips
 	newIPs := cs.certificate.Details.Ips
 	if len(oldIPs) > 0 && len(newIPs) > 0 && oldIPs[0].String() != newIPs[0].String() {
-		l.WithField("new_ip", newIPs[0]).WithField("old_ip", oldIPs[0]).Error("IP in new cert was different from old")
+		f.l.WithField("new_ip", newIPs[0]).WithField("old_ip", oldIPs[0]).Error("IP in new cert was different from old")
 		return
 	}
 
 	f.certState = cs
-	l.WithField("cert", cs.certificate).Info("Client cert refreshed from disk")
+	f.l.WithField("cert", cs.certificate).Info("Client cert refreshed from disk")
 }
 
-func (f *Interface) reloadFirewall(c *Config) {
+func (f *Interface) reloadFirewall(c *config.C) {
 	//TODO: need to trigger/detect if the certificate changed too
 	if c.HasChanged("firewall") == false {
-		l.Debug("No firewall config change detected")
+		f.l.Debug("No firewall config change detected")
 		return
 	}
 
-	fw, err := NewFirewallFromConfig(f.certState.certificate, c)
+	fw, err := NewFirewallFromConfig(f.l, f.certState.certificate, c)
 	if err != nil {
-		l.WithError(err).Error("Error while creating firewall during reload")
+		f.l.WithError(err).Error("Error while creating firewall during reload")
 		return
 	}
 
@@ -260,7 +291,7 @@ func (f *Interface) reloadFirewall(c *Config) {
 	// If rulesVersion is back to zero, we have wrapped all the way around. Be
 	// safe and just reset conntrack in this case.
 	if fw.rulesVersion == 0 {
-		l.WithField("firewallHash", fw.GetRuleHash()).
+		f.l.WithField("firewallHash", fw.GetRuleHash()).
 			WithField("oldFirewallHash", oldFw.GetRuleHash()).
 			WithField("rulesVersion", fw.rulesVersion).
 			Warn("firewall rulesVersion has overflowed, resetting conntrack")
@@ -271,21 +302,26 @@ func (f *Interface) reloadFirewall(c *Config) {
 	f.firewall = fw
 
 	oldFw.Destroy()
-	l.WithField("firewallHash", fw.GetRuleHash()).
+	f.l.WithField("firewallHash", fw.GetRuleHash()).
 		WithField("oldFirewallHash", oldFw.GetRuleHash()).
 		WithField("rulesVersion", fw.rulesVersion).
 		Info("New firewall has been installed")
 }
 
-func (f *Interface) emitStats(i time.Duration) {
+func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 	ticker := time.NewTicker(i)
+	defer ticker.Stop()
 
-	udpStats := NewUDPStatsEmitter(f.writers)
+	udpStats := udp.NewUDPStatsEmitter(f.writers)
 
-	for range ticker.C {
-		f.firewall.EmitStats()
-		f.handshakeManager.EmitStats()
-
-		udpStats()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			f.firewall.EmitStats()
+			f.handshakeManager.EmitStats()
+			udpStats()
+		}
 	}
 }

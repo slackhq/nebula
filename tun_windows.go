@@ -1,3 +1,6 @@
+//go:build !e2e_testing
+// +build !e2e_testing
+
 package nebula
 
 import (
@@ -7,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 
+	"github.com/sirupsen/logrus"
 	"github.com/songgao/water"
 )
 
@@ -15,15 +19,23 @@ type Tun struct {
 	Cidr         *net.IPNet
 	MTU          int
 	UnsafeRoutes []route
+	l            *logrus.Logger
 
 	*water.Interface
 }
 
-func newTunFromFd(deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func (c *Tun) Close() error {
+	if c.Interface != nil {
+		return c.Interface.Close()
+	}
+	return nil
+}
+
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Windows")
 }
 
-func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("route MTU not supported in Windows")
 	}
@@ -33,6 +45,7 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 		Cidr:         cidr,
 		MTU:          defaultMTU,
 		UnsafeRoutes: unsafeRoutes,
+		l:            l,
 	}, nil
 }
 
@@ -79,7 +92,7 @@ func (c *Tun) Activate() error {
 
 	for _, r := range c.UnsafeRoutes {
 		err = exec.Command(
-			"C:\\Windows\\System32\\route.exe", "add", r.route.String(), r.via.String(), "IF", strconv.Itoa(iface.Index),
+			"C:\\Windows\\System32\\route.exe", "add", r.route.String(), r.via.String(), "IF", strconv.Itoa(iface.Index), "METRIC", strconv.Itoa(r.metric),
 		).Run()
 		if err != nil {
 			return fmt.Errorf("failed to add the unsafe_route %s: %v", r.route.String(), err)

@@ -7,9 +7,11 @@ pki:
   ca: /etc/nebula/ca.crt
   cert: /etc/nebula/host.crt
   key: /etc/nebula/host.key
-  #blocklist is a list of certificate fingerprints that we will refuse to talk to
+  # blocklist is a list of certificate fingerprints that we will refuse to talk to
   #blocklist:
   #  - c99d4e650533b92061b09918e838a5a0a6aaee21eed1d12fd937682865936c72
+  # disconnect_invalid is a toggle to force a client to be disconnected if the certificate is expired or invalid.
+  #disconnect_invalid: false
 
 # The static host map defines a set of hosts with fixed IP addresses on the internet (or any network).
 # A host can have multiple fixed IP addresses defined here, and nebula will try each when establishing a tunnel.
@@ -55,6 +57,14 @@ lighthouse:
     #"0.0.0.0/0": true
     #"10.0.0.0/8": false
     #"10.42.42.0/24": true
+
+  # EXPERIMENTAL: This option my change or disappear in the future.
+  # Optionally allows the definition of remote_allow_list blocks
+  # specific to an inside VPN IP CIDR.
+  #remote_allow_ranges:
+    # This rule would only allow only private IPs for this VPN range
+    #"10.42.42.0/24":
+      #"192.168.0.0/16": true
 
   # local_allow_list allows you to filter which local IP addresses we advertise
   # to the lighthouses. This uses the same logic as `remote_allow_list`, but
@@ -112,9 +122,11 @@ punchy:
 # IMPORTANT: this value must be identical on ALL NODES/LIGHTHOUSES. We do not/will not support use of different ciphers simultaneously!
 #cipher: chachapoly
 
-# Local range is used to define a hint about the local network range, which speeds up discovering the fastest
+# Preferred ranges is used to define a hint about the local network ranges, which speeds up discovering the fastest
 # path to a network adjacent nebula node.
-#local_range: "172.16.0.0/24"
+# NOTE: the previous option "local_range" only allowed definition of a single range
+# and has been deprecated for "preferred_ranges"
+#preferred_ranges: ["172.16.0.0/24"]
 
 # sshd can expose informational and administrative functions via ssh this is a
 #sshd:
@@ -153,10 +165,13 @@ tun:
   # Unsafe routes allows you to route traffic over nebula to non-nebula nodes
   # Unsafe routes should be avoided unless you have hosts/services that cannot run nebula
   # NOTE: The nebula certificate of the "via" node *MUST* have the "route" defined as a subnet in its certificate
+  # `mtu` will default to tun mtu if this option is not specified
+  # `metric` will default to 0 if this option is not specified
   unsafe_routes:
     #- route: 172.16.1.0/24
     #  via: 192.168.100.99
-    #  mtu: 1300 #mtu will default to tun mtu if this option is not sepcified
+    #  mtu: 1300
+    #  metric: 100
 
 
 # TODO
@@ -200,17 +215,17 @@ logging:
   #   e.g.: `lighthouse.rx.HostQuery`
   #lighthouse_metrics: false
 
-# Handshake Manger Settings
+# Handshake Manager Settings
 #handshakes:
-  # Total time to try a handshake = sequence of `try_interval * retries`
-  # With 100ms interval and 20 retries it is 23.5 seconds
+  # Handshakes are sent to all known addresses at each interval with a linear backoff,
+  # Wait try_interval after the 1st attempt, 2 * try_interval after the 2nd, etc, until the handshake is older than timeout
+  # A 100ms interval with the default 10 retries will give a handshake 5.5 seconds to resolve before timing out
   #try_interval: 100ms
   #retries: 20
-  # wait_rotation is the number of handshake attempts to do before starting to try non-local IP addresses
-  #wait_rotation: 5
   # trigger_buffer is the size of the buffer channel for quickly sending handshakes
   # after receiving the response for lighthouse queries
   #trigger_buffer: 64
+
 
 # Nebula security group configuration
 firewall:
