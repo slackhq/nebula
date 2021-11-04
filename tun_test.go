@@ -5,12 +5,14 @@ import (
 	"net"
 	"testing"
 
+	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 )
 
 func Test_parseRoutes(t *testing.T) {
-	l := NewTestLogger()
-	c := NewConfig(l)
+	l := util.NewTestLogger()
+	c := config.NewC(l)
 	_, n, _ := net.ParseCIDR("10.0.0.0/24")
 
 	// test no routes config
@@ -105,8 +107,8 @@ func Test_parseRoutes(t *testing.T) {
 }
 
 func Test_parseUnsafeRoutes(t *testing.T) {
-	l := NewTestLogger()
-	c := NewConfig(l)
+	l := util.NewTestLogger()
+	c := config.NewC(l)
 	_, n, _ := net.ParseCIDR("10.0.0.0/24")
 
 	// test no routes config
@@ -206,24 +208,30 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{
 		map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "9000", "route": "1.0.0.0/29"},
 		map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "8000", "route": "1.0.0.1/32"},
+		map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "1500", "metric": 1234, "route": "1.0.0.2/32"},
 	}}
 	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, err)
-	assert.Len(t, routes, 2)
+	assert.Len(t, routes, 3)
 
 	tested := 0
 	for _, r := range routes {
 		if r.mtu == 8000 {
 			assert.Equal(t, "1.0.0.1/32", r.route.String())
 			tested++
-		} else {
+		} else if r.mtu == 9000 {
 			assert.Equal(t, 9000, r.mtu)
 			assert.Equal(t, "1.0.0.0/29", r.route.String())
+			tested++
+		} else {
+			assert.Equal(t, 1500, r.mtu)
+			assert.Equal(t, 1234, r.metric)
+			assert.Equal(t, "1.0.0.2/32", r.route.String())
 			tested++
 		}
 	}
 
-	if tested != 2 {
+	if tested != 3 {
 		t.Fatal("Did not see both unsafe_routes")
 	}
 }

@@ -5,14 +5,17 @@ import (
 	"net"
 	"sort"
 	"sync"
+
+	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 )
 
 // forEachFunc is used to benefit folks that want to do work inside the lock
-type forEachFunc func(addr *udpAddr, preferred bool)
+type forEachFunc func(addr *udp.Addr, preferred bool)
 
 // The checkFuncs here are to simplify bulk importing LH query response logic into a single function (reset slice and iterate)
-type checkFuncV4 func(to *Ip4AndPort) bool
-type checkFuncV6 func(to *Ip6AndPort) bool
+type checkFuncV4 func(vpnIp iputil.VpnIp, to *Ip4AndPort) bool
+type checkFuncV6 func(vpnIp iputil.VpnIp, to *Ip6AndPort) bool
 
 // CacheMap is a struct that better represents the lighthouse cache for humans
 // The string key is the owners vpnIp
@@ -21,8 +24,8 @@ type CacheMap map[string]*Cache
 // Cache is the other part of CacheMap to better represent the lighthouse cache for humans
 // We don't reason about ipv4 vs ipv6 here
 type Cache struct {
-	Learned  []*udpAddr `json:"learned,omitempty"`
-	Reported []*udpAddr `json:"reported,omitempty"`
+	Learned  []*udp.Addr `json:"learned,omitempty"`
+	Reported []*udp.Addr `json:"reported,omitempty"`
 }
 
 //TODO: Seems like we should plop static host entries in here too since the are protected by the lighthouse from deletion
@@ -53,16 +56,16 @@ type RemoteList struct {
 	sync.RWMutex
 
 	// A deduplicated set of addresses. Any accessor should lock beforehand.
-	addrs []*udpAddr
+	addrs []*udp.Addr
 
 	// These are maps to store v4 and v6 addresses per lighthouse
 	// Map key is the vpnIp of the person that told us about this the cached entries underneath.
 	// For learned addresses, this is the vpnIp that sent the packet
-	cache map[uint32]*cache
+	cache map[iputil.VpnIp]*cache
 
 	// This is a list of remotes that we have tried to handshake with and have returned from the wrong vpn ip.
 	// They should not be tried again during a handshake
-	badRemotes []*udpAddr
+	badRemotes []*udp.Addr
 
 	// A flag that the cache may have changed and addrs needs to be rebuilt
 	shouldRebuild bool
@@ -71,8 +74,8 @@ type RemoteList struct {
 // NewRemoteList creates a new empty RemoteList
 func NewRemoteList() *RemoteList {
 	return &RemoteList{
-		addrs: make([]*udpAddr, 0),
-		cache: make(map[uint32]*cache),
+		addrs: make([]*udp.Addr, 0),
+		cache: make(map[iputil.VpnIp]*cache),
 	}
 }
 
@@ -98,7 +101,7 @@ func (r *RemoteList) ForEach(preferredRanges []*net.IPNet, forEach forEachFunc) 
 
 // CopyAddrs locks and makes a deep copy of the deduplicated address list
 // The deduplication work may need to occur here, so you must pass preferredRanges
-func (r *RemoteList) CopyAddrs(preferredRanges []*net.IPNet) []*udpAddr {
+func (r *RemoteList) CopyAddrs(preferredRanges []*net.IPNet) []*udp.Addr {
 	if r == nil {
 		return nil
 	}
@@ -107,7 +110,7 @@ func (r *RemoteList) CopyAddrs(preferredRanges []*net.IPNet) []*udpAddr {
 
 	r.RLock()
 	defer r.RUnlock()
-	c := make([]*udpAddr, len(r.addrs))
+	c := make([]*udp.Addr, len(r.addrs))
 	for i, v := range r.addrs {
 		c[i] = v.Copy()
 	}
@@ -118,7 +121,7 @@ func (r *RemoteList) CopyAddrs(preferredRanges []*net.IPNet) []*udpAddr {
 // Currently this is only needed when HostInfo.SetRemote is called as that should cover both handshaking and roaming.
 // It will mark the deduplicated address list as dirty, so do not call it unless new information is available
 //TODO: this needs to support the allow list list
-func (r *RemoteList) LearnRemote(ownerVpnIp uint32, addr *udpAddr) {
+func (r *RemoteList) LearnRemote(ownerVpnIp iputil.VpnIp, addr *udp.Addr) {
 	r.Lock()
 	defer r.Unlock()
 	if v4 := addr.IP.To4(); v4 != nil {
@@ -139,8 +142,8 @@ func (r *RemoteList) CopyCache() *CacheMap {
 		c := cm[vpnIp]
 		if c == nil {
 			c = &Cache{
-				Learned:  make([]*udpAddr, 0),
-				Reported: make([]*udpAddr, 0),
+				Learned:  make([]*udp.Addr, 0),
+				Reported: make([]*udp.Addr, 0),
 			}
 			cm[vpnIp] = c
 		}
@@ -148,7 +151,7 @@ func (r *RemoteList) CopyCache() *CacheMap {
 	}
 
 	for owner, mc := range r.cache {
-		c := getOrMake(IntIp(owner).String())
+		c := getOrMake(owner.String())
 
 		if mc.v4 != nil {
 			if mc.v4.learned != nil {
@@ -175,7 +178,7 @@ func (r *RemoteList) CopyCache() *CacheMap {
 }
 
 // BlockRemote locks and records the address as bad, it will be excluded from the deduplicated address list
-func (r *RemoteList) BlockRemote(bad *udpAddr) {
+func (r *RemoteList) BlockRemote(bad *udp.Addr) {
 	r.Lock()
 	defer r.Unlock()
 
@@ -192,11 +195,11 @@ func (r *RemoteList) BlockRemote(bad *udpAddr) {
 }
 
 // CopyBlockedRemotes locks and makes a deep copy of the blocked remotes list
-func (r *RemoteList) CopyBlockedRemotes() []*udpAddr {
+func (r *RemoteList) CopyBlockedRemotes() []*udp.Addr {
 	r.RLock()
 	defer r.RUnlock()
 
-	c := make([]*udpAddr, len(r.badRemotes))
+	c := make([]*udp.Addr, len(r.badRemotes))
 	for i, v := range r.badRemotes {
 		c[i] = v.Copy()
 	}
@@ -228,7 +231,7 @@ func (r *RemoteList) Rebuild(preferredRanges []*net.IPNet) {
 }
 
 // unlockedIsBad assumes you have the write lock and checks if the remote matches any entry in the blocked address list
-func (r *RemoteList) unlockedIsBad(remote *udpAddr) bool {
+func (r *RemoteList) unlockedIsBad(remote *udp.Addr) bool {
 	for _, v := range r.badRemotes {
 		if v.Equals(remote) {
 			return true
@@ -239,14 +242,14 @@ func (r *RemoteList) unlockedIsBad(remote *udpAddr) bool {
 
 // unlockedSetLearnedV4 assumes you have the write lock and sets the current learned address for this owner and marks the
 // deduplicated address list as dirty
-func (r *RemoteList) unlockedSetLearnedV4(ownerVpnIp uint32, to *Ip4AndPort) {
+func (r *RemoteList) unlockedSetLearnedV4(ownerVpnIp iputil.VpnIp, to *Ip4AndPort) {
 	r.shouldRebuild = true
 	r.unlockedGetOrMakeV4(ownerVpnIp).learned = to
 }
 
 // unlockedSetV4 assumes you have the write lock and resets the reported list of ips for this owner to the list provided
 // and marks the deduplicated address list as dirty
-func (r *RemoteList) unlockedSetV4(ownerVpnIp uint32, to []*Ip4AndPort, check checkFuncV4) {
+func (r *RemoteList) unlockedSetV4(ownerVpnIp iputil.VpnIp, vpnIp iputil.VpnIp, to []*Ip4AndPort, check checkFuncV4) {
 	r.shouldRebuild = true
 	c := r.unlockedGetOrMakeV4(ownerVpnIp)
 
@@ -255,7 +258,7 @@ func (r *RemoteList) unlockedSetV4(ownerVpnIp uint32, to []*Ip4AndPort, check ch
 
 	// We can't take their array but we can take their pointers
 	for _, v := range to[:minInt(len(to), MaxRemotes)] {
-		if check(v) {
+		if check(vpnIp, v) {
 			c.reported = append(c.reported, v)
 		}
 	}
@@ -263,7 +266,7 @@ func (r *RemoteList) unlockedSetV4(ownerVpnIp uint32, to []*Ip4AndPort, check ch
 
 // unlockedPrependV4 assumes you have the write lock and prepends the address in the reported list for this owner
 // This is only useful for establishing static hosts
-func (r *RemoteList) unlockedPrependV4(ownerVpnIp uint32, to *Ip4AndPort) {
+func (r *RemoteList) unlockedPrependV4(ownerVpnIp iputil.VpnIp, to *Ip4AndPort) {
 	r.shouldRebuild = true
 	c := r.unlockedGetOrMakeV4(ownerVpnIp)
 
@@ -276,14 +279,14 @@ func (r *RemoteList) unlockedPrependV4(ownerVpnIp uint32, to *Ip4AndPort) {
 
 // unlockedSetLearnedV6 assumes you have the write lock and sets the current learned address for this owner and marks the
 // deduplicated address list as dirty
-func (r *RemoteList) unlockedSetLearnedV6(ownerVpnIp uint32, to *Ip6AndPort) {
+func (r *RemoteList) unlockedSetLearnedV6(ownerVpnIp iputil.VpnIp, to *Ip6AndPort) {
 	r.shouldRebuild = true
 	r.unlockedGetOrMakeV6(ownerVpnIp).learned = to
 }
 
 // unlockedSetV6 assumes you have the write lock and resets the reported list of ips for this owner to the list provided
 // and marks the deduplicated address list as dirty
-func (r *RemoteList) unlockedSetV6(ownerVpnIp uint32, to []*Ip6AndPort, check checkFuncV6) {
+func (r *RemoteList) unlockedSetV6(ownerVpnIp iputil.VpnIp, vpnIp iputil.VpnIp, to []*Ip6AndPort, check checkFuncV6) {
 	r.shouldRebuild = true
 	c := r.unlockedGetOrMakeV6(ownerVpnIp)
 
@@ -292,7 +295,7 @@ func (r *RemoteList) unlockedSetV6(ownerVpnIp uint32, to []*Ip6AndPort, check ch
 
 	// We can't take their array but we can take their pointers
 	for _, v := range to[:minInt(len(to), MaxRemotes)] {
-		if check(v) {
+		if check(vpnIp, v) {
 			c.reported = append(c.reported, v)
 		}
 	}
@@ -300,7 +303,7 @@ func (r *RemoteList) unlockedSetV6(ownerVpnIp uint32, to []*Ip6AndPort, check ch
 
 // unlockedPrependV6 assumes you have the write lock and prepends the address in the reported list for this owner
 // This is only useful for establishing static hosts
-func (r *RemoteList) unlockedPrependV6(ownerVpnIp uint32, to *Ip6AndPort) {
+func (r *RemoteList) unlockedPrependV6(ownerVpnIp iputil.VpnIp, to *Ip6AndPort) {
 	r.shouldRebuild = true
 	c := r.unlockedGetOrMakeV6(ownerVpnIp)
 
@@ -313,7 +316,7 @@ func (r *RemoteList) unlockedPrependV6(ownerVpnIp uint32, to *Ip6AndPort) {
 
 // unlockedGetOrMakeV4 assumes you have the write lock and builds the cache and owner entry. Only the v4 pointer is established.
 // The caller must dirty the learned address cache if required
-func (r *RemoteList) unlockedGetOrMakeV4(ownerVpnIp uint32) *cacheV4 {
+func (r *RemoteList) unlockedGetOrMakeV4(ownerVpnIp iputil.VpnIp) *cacheV4 {
 	am := r.cache[ownerVpnIp]
 	if am == nil {
 		am = &cache{}
@@ -328,7 +331,7 @@ func (r *RemoteList) unlockedGetOrMakeV4(ownerVpnIp uint32) *cacheV4 {
 
 // unlockedGetOrMakeV6 assumes you have the write lock and builds the cache and owner entry. Only the v6 pointer is established.
 // The caller must dirty the learned address cache if required
-func (r *RemoteList) unlockedGetOrMakeV6(ownerVpnIp uint32) *cacheV6 {
+func (r *RemoteList) unlockedGetOrMakeV6(ownerVpnIp iputil.VpnIp) *cacheV6 {
 	am := r.cache[ownerVpnIp]
 	if am == nil {
 		am = &cache{}

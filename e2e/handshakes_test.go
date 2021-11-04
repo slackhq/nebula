@@ -1,3 +1,4 @@
+//go:build e2e_testing
 // +build e2e_testing
 
 package e2e
@@ -9,6 +10,9 @@ import (
 
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/e2e/router"
+	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -36,7 +40,7 @@ func TestGoodHandshake(t *testing.T) {
 	t.Log("I consume a garbage packet with a proper nebula header for our tunnel")
 	// this should log a statement and get ignored, allowing the real handshake packet to complete the tunnel
 	badPacket := stage1Packet.Copy()
-	badPacket.Data = badPacket.Data[:len(badPacket.Data)-nebula.HeaderLen]
+	badPacket.Data = badPacket.Data[:len(badPacket.Data)-header.Len]
 	myControl.InjectUDPPacket(badPacket)
 
 	t.Log("Have me consume their real stage 1 packet. I have a tunnel now")
@@ -86,8 +90,8 @@ func TestWrongResponderHandshake(t *testing.T) {
 
 	t.Log("Start the handshake process, we will route until we see our cached packet get sent to them")
 	myControl.InjectTunUDPPacket(theirVpnIp, 80, 80, []byte("Hi from me"))
-	r.RouteForAllExitFunc(func(p *nebula.UdpPacket, c *nebula.Control) router.ExitType {
-		h := &nebula.Header{}
+	r.RouteForAllExitFunc(func(p *udp.Packet, c *nebula.Control) router.ExitType {
+		h := &header.H{}
 		err := h.Parse(p.Data)
 		if err != nil {
 			panic(err)
@@ -114,8 +118,8 @@ func TestWrongResponderHandshake(t *testing.T) {
 	r.FlushAll()
 
 	t.Log("Ensure ensure I don't have any hostinfo artifacts from evil")
-	assert.Nil(t, myControl.GetHostInfoByVpnIP(ip2int(evilVpnIp), true), "My pending hostmap should not contain evil")
-	assert.Nil(t, myControl.GetHostInfoByVpnIP(ip2int(evilVpnIp), false), "My main hostmap should not contain evil")
+	assert.Nil(t, myControl.GetHostInfoByVpnIp(iputil.Ip2VpnIp(evilVpnIp), true), "My pending hostmap should not contain evil")
+	assert.Nil(t, myControl.GetHostInfoByVpnIp(iputil.Ip2VpnIp(evilVpnIp), false), "My main hostmap should not contain evil")
 	//NOTE: if evil lost the handshake race it may still have a tunnel since me would reject the handshake since the tunnel is complete
 
 	//TODO: assert hostmaps for everyone

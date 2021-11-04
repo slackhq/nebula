@@ -375,9 +375,16 @@ func TestNebulaCertificate_Verify_Subnets(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestNebulaVerifyPrivateKey(t *testing.T) {
+func TestNebulaCertificate_VerifyPrivateKey(t *testing.T) {
 	ca, _, caKey, err := newTestCaCert(time.Time{}, time.Time{}, []*net.IPNet{}, []*net.IPNet{}, []string{})
 	assert.Nil(t, err)
+	err = ca.VerifyPrivateKey(caKey)
+	assert.Nil(t, err)
+
+	_, _, caKey2, err := newTestCaCert(time.Time{}, time.Time{}, []*net.IPNet{}, []*net.IPNet{}, []string{})
+	assert.Nil(t, err)
+	err = ca.VerifyPrivateKey(caKey2)
+	assert.NotNil(t, err)
 
 	c, _, priv, err := newTestCert(ca, caKey, time.Time{}, time.Time{}, []*net.IPNet{}, []*net.IPNet{}, []string{})
 	err = c.VerifyPrivateKey(priv)
@@ -853,10 +860,15 @@ func newTestCert(ca *NebulaCertificate, key []byte, before, after time.Time, ips
 }
 
 func x25519Keypair() ([]byte, []byte) {
-	var pubkey, privkey [32]byte
-	if _, err := io.ReadFull(rand.Reader, privkey[:]); err != nil {
+	privkey := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, privkey); err != nil {
 		panic(err)
 	}
-	curve25519.ScalarBaseMult(&pubkey, &privkey)
-	return pubkey[:], privkey[:]
+
+	pubkey, err := curve25519.X25519(privkey, curve25519.Basepoint)
+	if err != nil {
+		panic(err)
+	}
+
+	return pubkey, privkey
 }

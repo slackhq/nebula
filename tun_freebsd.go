@@ -1,3 +1,4 @@
+//go:build !e2e_testing
 // +build !e2e_testing
 
 package nebula
@@ -25,6 +26,13 @@ type Tun struct {
 	l            *logrus.Logger
 
 	io.ReadWriteCloser
+}
+
+func (c *Tun) Close() error {
+	if c.ReadWriteCloser != nil {
+		return c.ReadWriteCloser.Close()
+	}
+	return nil
 }
 
 func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {

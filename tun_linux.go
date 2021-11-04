@@ -1,5 +1,5 @@
-// +build !android
-// +build !e2e_testing
+//go:build !android && !e2e_testing
+// +build !android,!e2e_testing
 
 package nebula
 
@@ -300,6 +300,7 @@ func (c Tun) Activate() error {
 			LinkIndex: link.Attrs().Index,
 			Dst:       r.route,
 			MTU:       r.mtu,
+			Priority:  r.metric,
 			AdvMSS:    c.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
 		}

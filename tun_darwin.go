@@ -1,5 +1,5 @@
-// +build !ios
-// +build !e2e_testing
+//go:build !ios && !e2e_testing
+// +build !ios,!e2e_testing
 
 package nebula
 
@@ -39,6 +39,13 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 
 func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
+}
+
+func (c *Tun) Close() error {
+	if c.Interface != nil {
+		return c.Interface.Close()
+	}
+	return nil
 }
 
 func (c *Tun) Activate() error {

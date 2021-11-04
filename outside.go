@@ -10,6 +10,10 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/udp"
 	"golang.org/x/net/ipv4"
 )
 
@@ -17,8 +21,8 @@ const (
 	minFwPacketLen = 4
 )
 
-func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte, header *Header, fwPacket *FirewallPacket, lhh *LightHouseHandler, nb []byte, q int, localCache ConntrackCache) {
-	err := header.Parse(packet)
+func (f *Interface) readOutsidePackets(addr *udp.Addr, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf udp.LightHouseHandlerFunc, nb []byte, q int, localCache firewall.ConntrackCache) {
+	err := h.Parse(packet)
 	if err != nil {
 		// TODO: best if we return this and let caller log
 		// TODO: Might be better to send the literal []byte("holepunch") packet and ignore that?
@@ -32,30 +36,30 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 	//l.Error("in packet ", header, packet[HeaderLen:])
 
 	// verify if we've seen this index before, otherwise respond to the handshake initiation
-	hostinfo, err := f.hostMap.QueryIndex(header.RemoteIndex)
+	hostinfo, err := f.hostMap.QueryIndex(h.RemoteIndex)
 
 	var ci *ConnectionState
 	if err == nil {
 		ci = hostinfo.ConnectionState
 	}
 
-	switch header.Type {
-	case message:
-		if !f.handleEncrypted(ci, addr, header) {
+	switch h.Type {
+	case header.Message:
+		if !f.handleEncrypted(ci, addr, h) {
 			return
 		}
 
-		f.decryptToTun(hostinfo, header.MessageCounter, out, packet, fwPacket, nb, q, localCache)
+		f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache)
 
 		// Fallthrough to the bottom to record incoming traffic
 
-	case lightHouse:
-		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
-		if !f.handleEncrypted(ci, addr, header) {
+	case header.LightHouse:
+		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
+		if !f.handleEncrypted(ci, addr, h) {
 			return
 		}
 
-		d, err := f.decrypt(hostinfo, header.MessageCounter, out, packet, header, nb)
+		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).WithField("udpAddr", addr).
 				WithField("packet", packet).
@@ -66,17 +70,17 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 			return
 		}
 
-		lhh.HandleRequest(addr, hostinfo.hostId, d, f)
+		lhf(addr, hostinfo.vpnIp, d, f)
 
 		// Fallthrough to the bottom to record incoming traffic
 
-	case test:
-		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
-		if !f.handleEncrypted(ci, addr, header) {
+	case header.Test:
+		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
+		if !f.handleEncrypted(ci, addr, h) {
 			return
 		}
 
-		d, err := f.decrypt(hostinfo, header.MessageCounter, out, packet, header, nb)
+		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).WithField("udpAddr", addr).
 				WithField("packet", packet).
@@ -87,11 +91,11 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 			return
 		}
 
-		if header.Subtype == testRequest {
+		if h.Subtype == header.TestRequest {
 			// This testRequest might be from TryPromoteBest, so we should roam
 			// to the new IP address before responding
 			f.handleHostRoaming(hostinfo, addr)
-			f.send(test, testReply, ci, hostinfo, hostinfo.remote, d, nb, out)
+			f.send(header.Test, header.TestReply, ci, hostinfo, hostinfo.remote, d, nb, out)
 		}
 
 		// Fallthrough to the bottom to record incoming traffic
@@ -99,19 +103,19 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		// Non encrypted messages below here, they should not fall through to avoid tracking incoming traffic since they
 		// are unauthenticated
 
-	case handshake:
-		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
-		HandleIncomingHandshake(f, addr, packet, header, hostinfo)
+	case header.Handshake:
+		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
+		HandleIncomingHandshake(f, addr, packet, h, hostinfo)
 		return
 
-	case recvError:
-		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
-		f.handleRecvError(addr, header)
+	case header.RecvError:
+		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
+		f.handleRecvError(addr, h)
 		return
 
-	case closeTunnel:
-		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
-		if !f.handleEncrypted(ci, addr, header) {
+	case header.CloseTunnel:
+		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
+		if !f.handleEncrypted(ci, addr, h) {
 			return
 		}
 
@@ -122,22 +126,22 @@ func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte,
 		return
 
 	default:
-		f.messageMetrics.Rx(header.Type, header.Subtype, 1)
+		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
 		hostinfo.logger(f.l).Debugf("Unexpected packet received from %s", addr)
 		return
 	}
 
 	f.handleHostRoaming(hostinfo, addr)
 
-	f.connectionManager.In(hostinfo.hostId)
+	f.connectionManager.In(hostinfo.vpnIp)
 }
 
 // closeTunnel closes a tunnel locally, it does not send a closeTunnel packet to the remote
 func (f *Interface) closeTunnel(hostInfo *HostInfo, hasHostMapLock bool) {
 	//TODO: this would be better as a single function in ConnectionManager that handled locks appropriately
-	f.connectionManager.ClearIP(hostInfo.hostId)
-	f.connectionManager.ClearPendingDeletion(hostInfo.hostId)
-	f.lightHouse.DeleteVpnIP(hostInfo.hostId)
+	f.connectionManager.ClearIP(hostInfo.vpnIp)
+	f.connectionManager.ClearPendingDeletion(hostInfo.vpnIp)
+	f.lightHouse.DeleteVpnIp(hostInfo.vpnIp)
 
 	if hasHostMapLock {
 		f.hostMap.unlockedDeleteHostInfo(hostInfo)
@@ -148,12 +152,12 @@ func (f *Interface) closeTunnel(hostInfo *HostInfo, hasHostMapLock bool) {
 
 // sendCloseTunnel is a helper function to send a proper close tunnel packet to a remote
 func (f *Interface) sendCloseTunnel(h *HostInfo) {
-	f.send(closeTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+	f.send(header.CloseTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 }
 
-func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {
-	if hostDidRoam(hostinfo.remote, addr) {
-		if !f.lightHouse.remoteAllowList.Allow(addr.IP) {
+func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udp.Addr) {
+	if !hostinfo.remote.Equals(addr) {
+		if !f.lightHouse.remoteAllowList.Allow(hostinfo.vpnIp, addr.IP) {
 			hostinfo.logger(f.l).WithField("newAddr", addr).Debug("lighthouse.remote_allow_list denied roaming")
 			return
 		}
@@ -175,11 +179,11 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udpAddr) {
 
 }
 
-func (f *Interface) handleEncrypted(ci *ConnectionState, addr *udpAddr, header *Header) bool {
+func (f *Interface) handleEncrypted(ci *ConnectionState, addr *udp.Addr, h *header.H) bool {
 	// If connectionstate exists and the replay protector allows, process packet
 	// Else, send recv errors for 300 seconds after a restart to allow fast reconnection.
-	if ci == nil || !ci.window.Check(f.l, header.MessageCounter) {
-		f.sendRecvError(addr, header.RemoteIndex)
+	if ci == nil || !ci.window.Check(f.l, h.MessageCounter) {
+		f.sendRecvError(addr, h.RemoteIndex)
 		return false
 	}
 
@@ -187,7 +191,7 @@ func (f *Interface) handleEncrypted(ci *ConnectionState, addr *udpAddr, header *
 }
 
 // newPacket validates and parses the interesting bits for the firewall out of the ip and sub protocol headers
-func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
+func newPacket(data []byte, incoming bool, fp *firewall.Packet) error {
 	// Do we at least have an ipv4 header worth of data?
 	if len(data) < ipv4.HeaderLen {
 		return fmt.Errorf("packet is less than %v bytes", ipv4.HeaderLen)
@@ -215,7 +219,7 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 
 	// Accounting for a variable header length, do we have enough data for our src/dst tuples?
 	minLen := ihl
-	if !fp.Fragment && fp.Protocol != fwProtoICMP {
+	if !fp.Fragment && fp.Protocol != firewall.ProtoICMP {
 		minLen += minFwPacketLen
 	}
 	if len(data) < minLen {
@@ -224,9 +228,9 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 
 	// Firewall packets are locally oriented
 	if incoming {
-		fp.RemoteIP = binary.BigEndian.Uint32(data[12:16])
-		fp.LocalIP = binary.BigEndian.Uint32(data[16:20])
-		if fp.Fragment || fp.Protocol == fwProtoICMP {
+		fp.RemoteIP = iputil.Ip2VpnIp(data[12:16])
+		fp.LocalIP = iputil.Ip2VpnIp(data[16:20])
+		if fp.Fragment || fp.Protocol == firewall.ProtoICMP {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
 		} else {
@@ -234,9 +238,9 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4])
 		}
 	} else {
-		fp.LocalIP = binary.BigEndian.Uint32(data[12:16])
-		fp.RemoteIP = binary.BigEndian.Uint32(data[16:20])
-		if fp.Fragment || fp.Protocol == fwProtoICMP {
+		fp.LocalIP = iputil.Ip2VpnIp(data[12:16])
+		fp.RemoteIP = iputil.Ip2VpnIp(data[16:20])
+		if fp.Fragment || fp.Protocol == firewall.ProtoICMP {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
 		} else {
@@ -248,15 +252,15 @@ func newPacket(data []byte, incoming bool, fp *FirewallPacket) error {
 	return nil
 }
 
-func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []byte, header *Header, nb []byte) ([]byte, error) {
+func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []byte, h *header.H, nb []byte) ([]byte, error) {
 	var err error
-	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:HeaderLen], packet[HeaderLen:], mc, nb)
+	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], mc, nb)
 	if err != nil {
 		return nil, err
 	}
 
 	if !hostinfo.ConnectionState.window.Update(f.l, mc) {
-		hostinfo.logger(f.l).WithField("header", header).
+		hostinfo.logger(f.l).WithField("header", h).
 			Debugln("dropping out of window packet")
 		return nil, errors.New("out of window packet")
 	}
@@ -264,10 +268,10 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	return out, nil
 }
 
-func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *FirewallPacket, nb []byte, q int, localCache ConntrackCache) {
+func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) {
 	var err error
 
-	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:HeaderLen], packet[HeaderLen:], messageCounter, nb)
+	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], messageCounter, nb)
 	if err != nil {
 		hostinfo.logger(f.l).WithError(err).Error("Failed to decrypt packet")
 		//TODO: maybe after build 64 is out? 06/14/2018 - NB
@@ -298,18 +302,18 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return
 	}
 
-	f.connectionManager.In(hostinfo.hostId)
+	f.connectionManager.In(hostinfo.vpnIp)
 	_, err = f.readers[q].Write(out)
 	if err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")
 	}
 }
 
-func (f *Interface) sendRecvError(endpoint *udpAddr, index uint32) {
-	f.messageMetrics.Tx(recvError, 0, 1)
+func (f *Interface) sendRecvError(endpoint *udp.Addr, index uint32) {
+	f.messageMetrics.Tx(header.RecvError, 0, 1)
 
 	//TODO: this should be a signed message so we can trust that we should drop the index
-	b := HeaderEncode(make([]byte, HeaderLen), Version, uint8(recvError), 0, index, 0)
+	b := header.Encode(make([]byte, header.Len), header.Version, header.RecvError, 0, index, 0)
 	f.outside.WriteTo(b, endpoint)
 	if f.l.Level >= logrus.DebugLevel {
 		f.l.WithField("index", index).
@@ -318,7 +322,7 @@ func (f *Interface) sendRecvError(endpoint *udpAddr, index uint32) {
 	}
 }
 
-func (f *Interface) handleRecvError(addr *udpAddr, h *Header) {
+func (f *Interface) handleRecvError(addr *udp.Addr, h *header.H) {
 	if f.l.Level >= logrus.DebugLevel {
 		f.l.WithField("index", h.RemoteIndex).
 			WithField("udpAddr", addr).

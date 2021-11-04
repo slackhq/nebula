@@ -4,6 +4,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/slackhq/nebula/iputil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -11,22 +12,24 @@ func TestRemoteList_Rebuild(t *testing.T) {
 	rl := NewRemoteList()
 	rl.unlockedSetV4(
 		0,
+		0,
 		[]*Ip4AndPort{
-			{Ip: ip2int(net.ParseIP("70.199.182.92")), Port: 1475}, // this is duped
-			{Ip: ip2int(net.ParseIP("172.17.0.182")), Port: 10101},
-			{Ip: ip2int(net.ParseIP("172.17.1.1")), Port: 10101}, // this is duped
-			{Ip: ip2int(net.ParseIP("172.18.0.1")), Port: 10101}, // this is duped
-			{Ip: ip2int(net.ParseIP("172.18.0.1")), Port: 10101}, // this is a dupe
-			{Ip: ip2int(net.ParseIP("172.19.0.1")), Port: 10101},
-			{Ip: ip2int(net.ParseIP("172.31.0.1")), Port: 10101},
-			{Ip: ip2int(net.ParseIP("172.17.1.1")), Port: 10101},   // this is a dupe
-			{Ip: ip2int(net.ParseIP("70.199.182.92")), Port: 1476}, // almost dupe of 0 with a diff port
-			{Ip: ip2int(net.ParseIP("70.199.182.92")), Port: 1475}, // this is a dupe
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("70.199.182.92"))), Port: 1475}, // this is duped
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.17.0.182"))), Port: 10101},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.17.1.1"))), Port: 10101}, // this is duped
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.18.0.1"))), Port: 10101}, // this is duped
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.18.0.1"))), Port: 10101}, // this is a dupe
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.19.0.1"))), Port: 10101},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.31.0.1"))), Port: 10101},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.17.1.1"))), Port: 10101},   // this is a dupe
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("70.199.182.92"))), Port: 1476}, // almost dupe of 0 with a diff port
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("70.199.182.92"))), Port: 1475}, // this is a dupe
 		},
-		func(*Ip4AndPort) bool { return true },
+		func(iputil.VpnIp, *Ip4AndPort) bool { return true },
 	)
 
 	rl.unlockedSetV6(
+		1,
 		1,
 		[]*Ip6AndPort{
 			NewIp6AndPort(net.ParseIP("1::1"), 1), // this is duped
@@ -35,7 +38,7 @@ func TestRemoteList_Rebuild(t *testing.T) {
 			NewIp6AndPort(net.ParseIP("1::1"), 1), // this is a dupe
 			NewIp6AndPort(net.ParseIP("1::1"), 2), // this is a dupe
 		},
-		func(*Ip6AndPort) bool { return true },
+		func(iputil.VpnIp, *Ip6AndPort) bool { return true },
 	)
 
 	rl.Rebuild([]*net.IPNet{})
@@ -102,20 +105,22 @@ func BenchmarkFullRebuild(b *testing.B) {
 	rl := NewRemoteList()
 	rl.unlockedSetV4(
 		0,
+		0,
 		[]*Ip4AndPort{
-			{Ip: ip2int(net.ParseIP("70.199.182.92")), Port: 1475},
-			{Ip: ip2int(net.ParseIP("172.17.0.182")), Port: 10101},
-			{Ip: ip2int(net.ParseIP("172.17.1.1")), Port: 10101},
-			{Ip: ip2int(net.ParseIP("172.18.0.1")), Port: 10101},
-			{Ip: ip2int(net.ParseIP("172.19.0.1")), Port: 10101},
-			{Ip: ip2int(net.ParseIP("172.31.0.1")), Port: 10101},
-			{Ip: ip2int(net.ParseIP("172.17.1.1")), Port: 10101},   // this is a dupe
-			{Ip: ip2int(net.ParseIP("70.199.182.92")), Port: 1476}, // dupe of 0 with a diff port
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("70.199.182.92"))), Port: 1475},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.17.0.182"))), Port: 10101},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.17.1.1"))), Port: 10101},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.18.0.1"))), Port: 10101},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.19.0.1"))), Port: 10101},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.31.0.1"))), Port: 10101},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.17.1.1"))), Port: 10101},   // this is a dupe
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("70.199.182.92"))), Port: 1476}, // dupe of 0 with a diff port
 		},
-		func(*Ip4AndPort) bool { return true },
+		func(iputil.VpnIp, *Ip4AndPort) bool { return true },
 	)
 
 	rl.unlockedSetV6(
+		0,
 		0,
 		[]*Ip6AndPort{
 			NewIp6AndPort(net.ParseIP("1::1"), 1),
@@ -123,7 +128,7 @@ func BenchmarkFullRebuild(b *testing.B) {
 			NewIp6AndPort(net.ParseIP("1:100::1"), 1),
 			NewIp6AndPort(net.ParseIP("1::1"), 1), // this is a dupe
 		},
-		func(*Ip6AndPort) bool { return true },
+		func(iputil.VpnIp, *Ip6AndPort) bool { return true },
 	)
 
 	b.Run("no preferred", func(b *testing.B) {
@@ -165,20 +170,22 @@ func BenchmarkSortRebuild(b *testing.B) {
 	rl := NewRemoteList()
 	rl.unlockedSetV4(
 		0,
+		0,
 		[]*Ip4AndPort{
-			{Ip: ip2int(net.ParseIP("70.199.182.92")), Port: 1475},
-			{Ip: ip2int(net.ParseIP("172.17.0.182")), Port: 10101},
-			{Ip: ip2int(net.ParseIP("172.17.1.1")), Port: 10101},
-			{Ip: ip2int(net.ParseIP("172.18.0.1")), Port: 10101},
-			{Ip: ip2int(net.ParseIP("172.19.0.1")), Port: 10101},
-			{Ip: ip2int(net.ParseIP("172.31.0.1")), Port: 10101},
-			{Ip: ip2int(net.ParseIP("172.17.1.1")), Port: 10101},   // this is a dupe
-			{Ip: ip2int(net.ParseIP("70.199.182.92")), Port: 1476}, // dupe of 0 with a diff port
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("70.199.182.92"))), Port: 1475},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.17.0.182"))), Port: 10101},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.17.1.1"))), Port: 10101},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.18.0.1"))), Port: 10101},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.19.0.1"))), Port: 10101},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.31.0.1"))), Port: 10101},
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("172.17.1.1"))), Port: 10101},   // this is a dupe
+			{Ip: uint32(iputil.Ip2VpnIp(net.ParseIP("70.199.182.92"))), Port: 1476}, // dupe of 0 with a diff port
 		},
-		func(*Ip4AndPort) bool { return true },
+		func(iputil.VpnIp, *Ip4AndPort) bool { return true },
 	)
 
 	rl.unlockedSetV6(
+		0,
 		0,
 		[]*Ip6AndPort{
 			NewIp6AndPort(net.ParseIP("1::1"), 1),
@@ -186,7 +193,7 @@ func BenchmarkSortRebuild(b *testing.B) {
 			NewIp6AndPort(net.ParseIP("1:100::1"), 1),
 			NewIp6AndPort(net.ParseIP("1::1"), 1), // this is a dupe
 		},
-		func(*Ip6AndPort) bool { return true },
+		func(iputil.VpnIp, *Ip6AndPort) bool { return true },
 	)
 
 	b.Run("no preferred", func(b *testing.B) {

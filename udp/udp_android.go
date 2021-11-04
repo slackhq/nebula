@@ -1,6 +1,7 @@
+//go:build !e2e_testing
 // +build !e2e_testing
 
-package nebula
+package udp
 
 import (
 	"fmt"
@@ -33,6 +34,6 @@ func NewListenConfig(multi bool) net.ListenConfig {
 	}
 }
 
-func (u *udpConn) Rebind() error {
+func (u *Conn) Rebind() error {
 	return nil
 }
