@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Build against go 1.17. (#553)
 
+- Build with CGO_ENABLED=0 set, to create more portable binaries. This could
+  have an affect on DNS resolution if you rely on anything non-standard. (#421)
+
 ### Deprecated
 
 - The `preferred_ranges` option has been supported as a replacement for
