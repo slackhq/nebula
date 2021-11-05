@@ -75,17 +75,6 @@ func (c *WinTun) Activate() error {
 	foundDefault4 := false
 	routes := make([]*winipcfg.RouteData, 0, len(c.UnsafeRoutes)+1)
 
-	mainRoute := net.IPNet{
-		IP:   c.Cidr.IP.Mask(c.Cidr.Mask),
-		Mask: c.Cidr.Mask,
-	}
-
-	// Add cidr route to overwrite metric
-	routes = append(routes, &winipcfg.RouteData{
-		Destination: mainRoute,
-		NextHop:     net.IPv4zero,
-	})
-
 	for _, r := range c.UnsafeRoutes {
 		if !foundDefault4 {
 			if cidr, bits := r.route.Mask.Size(); cidr == 0 && bits != 0 {
@@ -101,7 +90,6 @@ func (c *WinTun) Activate() error {
 		})
 	}
 
-	luid.FlushRoutes(windows.AF_INET)
 	if err := luid.AddRoutes(routes); err != nil {
 		return fmt.Errorf("failed to add routes: %w", err)
 	}
