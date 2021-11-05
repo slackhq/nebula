@@ -27,7 +27,19 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	now := time.Now()
 	blah.NextOutboundHandshakeTimerTick(now, mw)
 
-	i := blah.AddVpnIp(ip, nil)
+	var initCalled bool
+	initFunc := func(*HostInfo) {
+		initCalled = true
+	}
+
+	i := blah.AddVpnIp(ip, initFunc)
+	assert.True(t, initCalled)
+
+	initCalled = false
+	i2 := blah.AddVpnIp(ip, initFunc)
+	assert.False(t, initCalled)
+	assert.Same(t, i, i2)
+
 	i.remotes = NewRemoteList()
 	i.HandshakeReady = true
 
