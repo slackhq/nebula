@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Build against go 1.17. (#553)
 
+- Windows now uses the [wintun](https://www.wintun.net/) driver which does not require installation. This driver
+  is a large improvement over the TAP driver that was used in previous versions. If you had a previous version
+  of `nebula` running, you will want to disable the tap driver in Control Panel, or uninstall the `tap0901` driver
+  before running this version. (#289)
+
 ### Deprecated
 
 - The `preferred_ranges` option has been supported as a replacement for
