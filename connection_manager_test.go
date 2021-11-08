@@ -57,7 +57,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	out := make([]byte, mtu)
 	nc.HandleMonitorTick(now, p, nb, out)
 	// Add an ip we have established a connection w/ to hostmap
-	hostinfo := nc.hostMap.AddVpnIp(vpnIp)
+	hostinfo, _ := nc.hostMap.AddVpnIp(vpnIp, nil)
 	hostinfo.ConnectionState = &ConnectionState{
 		certState: cs,
 		H:         &noise.HandshakeState{},
@@ -126,7 +126,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	out := make([]byte, mtu)
 	nc.HandleMonitorTick(now, p, nb, out)
 	// Add an ip we have established a connection w/ to hostmap
-	hostinfo := nc.hostMap.AddVpnIp(vpnIp)
+	hostinfo, _ := nc.hostMap.AddVpnIp(vpnIp, nil)
 	hostinfo.ConnectionState = &ConnectionState{
 		certState: cs,
 		H:         &noise.HandshakeState{},
@@ -232,7 +232,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	defer cancel()
 	nc := newConnectionManager(ctx, l, ifce, 5, 10)
 	ifce.connectionManager = nc
-	hostinfo := nc.hostMap.AddVpnIp(vpnIp)
+	hostinfo, _ := nc.hostMap.AddVpnIp(vpnIp, nil)
 	hostinfo.ConnectionState = &ConnectionState{
 		certState: cs,
 		peerCert:  &peerCert,
