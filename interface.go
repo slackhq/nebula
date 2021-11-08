@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -72,6 +73,7 @@ type Interface struct {
 	routines           int
 	caPool             *cert.NebulaCAPool
 	disconnectInvalid  bool
+	closed             int32
 
 	// rebindCount is used to decide if an active tunnel should trigger a punch notification through a lighthouse
 	rebindCount int8
@@ -173,6 +175,7 @@ func (f *Interface) activate() {
 	}
 
 	if err := f.inside.Activate(); err != nil {
+		f.inside.Close()
 		f.l.Fatal(err)
 	}
 }
@@ -218,6 +221,10 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	for {
 		n, err := reader.Read(packet)
 		if err != nil {
+			if errors.Is(err, os.ErrClosed) && atomic.LoadInt32(&f.closed) != 0 {
+				return
+			}
+
 			f.l.WithError(err).Error("Error while reading outbound packet")
 			// This only seems to happen when something fatal happens to the fd, so exit.
 			os.Exit(2)
@@ -324,4 +331,11 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 			udpStats()
 		}
 	}
+}
+
+func (f *Interface) Close() error {
+	atomic.StoreInt32(&f.closed, 1)
+
+	// Release the tun device
+	return f.inside.Close()
 }
