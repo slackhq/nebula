@@ -4,7 +4,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/flynn/noise"
 	"github.com/golang/protobuf/proto"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
@@ -71,27 +70,50 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 }
 
 func ixHandshakeStage1(f *Interface, addr *udp.Addr, packet []byte, h *header.H) {
-	ci := f.newConnectionState(f.l, false, noise.HandshakeIX, []byte{}, 0)
-	// Mark packet 1 as seen so it doesn't show up as missed
-	ci.window.Update(f.l, 1)
-
-	msg, _, _, err := ci.H.ReadMessage(nil, packet[header.Len:])
-	if err != nil {
-		f.l.WithError(err).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.ReadMessage")
-		return
-	}
+	var (
+		err error
+		ci  *ConnectionState
+		msg []byte
+	)
 
 	hs := &NebulaHandshake{}
-	err = proto.Unmarshal(msg, hs)
-	/*
-		l.Debugln("GOT INDEX: ", hs.Details.InitiatorIndex)
-	*/
-	if err != nil || hs.Details == nil {
-		f.l.WithError(err).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed unmarshal handshake message")
+
+	// Handle multiple possible psk options, ensure the protobuf comes out clean too
+	for _, p := range f.psk.Cache {
+		//TODO: benchmark generation time of makePsk
+		ci, err = f.newConnectionState(f.l, false, p)
+		if err != nil {
+			f.l.WithError(err).WithField("udpAddr", addr).Error("Failed to get a new connection state")
+			continue
+		}
+
+		msg, _, _, err = ci.H.ReadMessage(nil, packet[header.Len:])
+		if err != nil {
+			// Calls to ReadMessage with an incorrect psk should fail, try the next one if we have one
+			continue
+		}
+
+		// Sometimes ReadMessage returns fine with a nil psk even if the handshake is using a psk, ensure our protobuf
+		// comes out clean as well
+		err = proto.Unmarshal(msg, hs)
+		if err == nil {
+			// There was no error, we can continue with this handshake
+			break
+		}
+
+		// The unmarshal failed, try the next psk if we have one
+	}
+
+	// We finished with an error, log it and get out
+	if err != nil {
+		// We aren't logging the error here because we can't be sure of the failure when using psk
+		f.l.WithField("udpAddr", addr).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+			Error("Was unable to decrypt the handshake")
 		return
 	}
+
+	// Mark packet 1 as seen so it doesn't show up as missed
+	ci.window.Update(f.l, 1)
 
 	remoteCert, err := RecombineCertAndValidate(ci.H, hs.Details.Cert, f.caPool)
 	if err != nil {

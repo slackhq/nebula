@@ -215,17 +215,45 @@ logging:
   #   e.g.: `lighthouse.rx.HostQuery`
   #lighthouse_metrics: false
 
-# Handshake Manager Settings
-#handshakes:
+# Handshake Manger Settings
+handshakes:
   # Handshakes are sent to all known addresses at each interval with a linear backoff,
   # Wait try_interval after the 1st attempt, 2 * try_interval after the 2nd, etc, until the handshake is older than timeout
   # A 100ms interval with the default 10 retries will give a handshake 5.5 seconds to resolve before timing out
   #try_interval: 100ms
   #retries: 20
+
   # trigger_buffer is the size of the buffer channel for quickly sending handshakes
   # after receiving the response for lighthouse queries
   #trigger_buffer: 64
 
+  # psk can be used to mask the contents of handshakes and makes handshaking with unintended recipients more difficult
+  # all settings respond to a reload
+  psk:
+    # mode defines how the pre shared keys can be used in a handshake
+    # `none` (the default) does not send or receive using a psk. Ideally `enforced` is used
+    # `transitional-accepting` will send handshakes without using a psk and can receive handshakes using a psk we know about
+    # `transitional-sending` will send handshakes using a psk but will still accept handshakes without them
+    # `enforced` enforces the use of a psk for all tunnels. Any node not also using `enforced` or `transitional-sending` can not handshake with us
+    #
+    # When moving from `none` to `enforced` you will want to change every node in the mesh to `transitional-accepting` and reload
+    # then move every node to `transitional-sending` then reload, and finally `enforced` then reload. This allows you to
+    # avoid stopping the world to use psk. You must ensure at `transitional-accepting` that all nodes have the same psks.
+    #mode: none
+
+    # In `transitional-accepting`, `transitional-sending` and `enforced` modes, the keys provided here are sent through
+    # hkdf with the intended recipients ip used in the info section. This helps guard against handshaking with the wrong
+    # host if your static_host_map or lighthouse(s) has incorrect information.
+    #
+    # Setting keys if mode is `none` has no effect.
+    #
+    # Only the first key is used for outbound handshakes but all keys provided will be tried in the order specified, on
+    # incoming handshakes. This is to allow for psk rotation.
+    #keys:
+      # - shared secret string, this one is used in all outbound handshakes
+      # - this is a fallback key, received handshakes can use this
+      # - another fallback, received handshakes can use this one too
+      # - "\x68\x65\x6c\x6c\x6f\x20\x66\x72\x69\x65\x6e\x64\x73" # for raw bytes if you desire
 
 # Nebula security group configuration
 firewall:

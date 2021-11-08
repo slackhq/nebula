@@ -95,6 +95,11 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	}
 
+	psk, err := NewPskFromConfig(c, iputil.Ip2VpnIp(tunCidr.IP))
+	if err != nil {
+		return nil, NewContextualError("Failed to create psk", nil, err)
+	}
+
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// All non system modifying configuration consumption should live above this line
 	// tun config, listeners, anything modifying the computer should be below
@@ -356,10 +361,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	handshakeManager := NewHandshakeManager(l, tunCidr, preferredRanges, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
 
-	//TODO: These will be reused for psk
-	//handshakeMACKey := config.GetString("handshake_mac.key", "")
-	//handshakeAcceptedMACKeys := config.GetStringSlice("handshake_mac.accepted_keys", []string{})
-
 	serveDns := false
 	if c.GetBool("lighthouse.serve_dns", false) {
 		if c.GetBool("lighthouse.am_lighthouse", false) {
@@ -390,6 +391,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		version:                 buildVersion,
 		caPool:                  caPool,
 		disconnectInvalid:       c.GetBool("pki.disconnect_invalid", false),
+		psk:                     psk,
 
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,

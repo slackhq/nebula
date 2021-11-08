@@ -3,7 +3,6 @@ package nebula
 import (
 	"sync/atomic"
 
-	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
@@ -79,7 +78,6 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 	}
 	hostinfo, err := f.hostMap.PromoteBestQueryVpnIp(vpnIp, f)
 
-	//if err != nil || hostinfo.ConnectionState == nil {
 	if err != nil {
 		hostinfo, err = f.handshakeManager.pendingHostMap.QueryVpnIp(vpnIp)
 		if err != nil {
@@ -102,21 +100,27 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 		return hostinfo
 	}
 
+	// Create a connection state if we don't have one yet
 	if ci == nil {
-		// if we don't have a connection state, then send a handshake initiation
-		ci = f.newConnectionState(f.l, true, noise.HandshakeIX, []byte{}, 0)
-		// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
-		//ci = f.newConnectionState(true, noise.HandshakeXX, []byte{}, 0)
+		// Generate a PSK based on our config, this may be nil
+		p, err := f.psk.MakeFor(vpnIp)
+		if err != nil {
+			//TODO: This isn't fatal specifically but it's pretty bad
+			f.l.WithError(err).WithField("vpnIp", vpnIp).Error("Failed to get a PSK KDF")
+			return hostinfo
+		}
+
+		ci, err = f.newConnectionState(f.l, true, p)
+		if err != nil {
+			f.l.WithError(err).WithField("vpnIp", vpnIp).Error("Failed to get a connection state")
+			return hostinfo
+		}
 		hostinfo.ConnectionState = ci
-	} else if ci.eKey == nil {
-		// if we don't have any state at all, create it
 	}
 
 	// If we have already created the handshake packet, we don't want to call the function at all.
 	if !hostinfo.HandshakeReady {
 		ixHandshakeStage0(f, vpnIp, hostinfo)
-		// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
-		//xx_handshakeStage0(f, ip, hostinfo)
 
 		// If this is a static host, we don't need to wait for the HostQueryReply
 		// We can trigger the handshake right now

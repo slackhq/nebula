@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
@@ -49,6 +50,7 @@ type InterfaceConfig struct {
 	version                 string
 	caPool                  *cert.NebulaCAPool
 	disconnectInvalid       bool
+	psk                     *Psk
 
 	ConntrackCacheTimeout time.Duration
 	l                     *logrus.Logger
@@ -80,9 +82,9 @@ type Interface struct {
 	version     string
 
 	conntrackCacheTimeout time.Duration
-
-	writers []*udp.Conn
-	readers []io.ReadWriteCloser
+	psk                   *Psk
+	writers               []*udp.Conn
+	readers               []io.ReadWriteCloser
 
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
@@ -106,6 +108,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	}
 
 	myVpnIp := iputil.Ip2VpnIp(c.certState.certificate.Details.Ips[0].IP)
+
 	ifce := &Interface{
 		hostMap:            c.HostMap,
 		outside:            c.Outside,
@@ -126,6 +129,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		readers:            make([]io.ReadWriteCloser, c.routines),
 		caPool:             c.caPool,
 		disconnectInvalid:  c.disconnectInvalid,
+		psk:                c.psk,
 		myVpnIp:            myVpnIp,
 
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
@@ -241,6 +245,7 @@ func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
 	for _, udpConn := range f.writers {
 		c.RegisterReloadCallback(udpConn.ReloadConfig)
 	}
+	c.RegisterReloadCallback(f.reloadPSKs)
 }
 
 func (f *Interface) reloadCA(c *config.C) {
@@ -313,6 +318,19 @@ func (f *Interface) reloadFirewall(c *config.C) {
 		WithField("oldFirewallHash", oldFw.GetRuleHash()).
 		WithField("rulesVersion", fw.rulesVersion).
 		Info("New firewall has been installed")
+}
+
+func (f *Interface) reloadPSKs(c *config.C) {
+	psk, err := NewPskFromConfig(c, f.myVpnIp)
+	if err != nil {
+		f.l.WithError(err).Error("Error while reloading PSKs")
+		return
+	}
+
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&f.psk)), unsafe.Pointer(psk))
+
+	f.l.WithField("pskMode", psk.mode).WithField("keysLen", len(psk.Cache)).
+		Info("New psks are in use")
 }
 
 func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
