@@ -2,13 +2,14 @@ package sshd
 
 import (
 	"fmt"
+	"sort"
+	"strings"
+
 	"github.com/anmitsu/go-shlex"
 	"github.com/armon/go-radix"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/terminal"
-	"sort"
-	"strings"
 )
 
 type session struct {
@@ -80,11 +81,18 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 		case "exec":
 			var payload = struct{ Value string }{}
 			cErr := ssh.Unmarshal(req.Payload, &payload)
-			if cErr == nil {
-				s.dispatchCommand(payload.Value, &stringWriter{channel})
-			} else {
-				//TODO: log it
+			if cErr != nil {
+				req.Reply(false, nil)
+				return
 			}
+
+			req.Reply(true, nil)
+			s.dispatchCommand(payload.Value, &stringWriter{channel})
+
+			//TODO: Fix error handling and report the proper status back
+			status := struct{ Status uint32 }{uint32(0)}
+			//TODO: I think this is how we shut down a shell as well?
+			channel.SendRequest("exit-status", false, ssh.Marshal(status))
 			channel.Close()
 			return
 

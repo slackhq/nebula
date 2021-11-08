@@ -1,3 +1,6 @@
+//go:build !android && !e2e_testing
+// +build !android,!e2e_testing
+
 package nebula
 
 import (
@@ -8,6 +11,7 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
@@ -22,6 +26,7 @@ type Tun struct {
 	TXQueueLen   int
 	Routes       []route
 	UnsafeRoutes []route
+	l            *logrus.Logger
 }
 
 type ifReq struct {
@@ -53,8 +58,9 @@ func ipv4(addr string) (o [4]byte, err error) {
 */
 
 const (
-	cIFF_TUN   = 0x0001
-	cIFF_NO_PI = 0x1000
+	cIFF_TUN         = 0x0001
+	cIFF_NO_PI       = 0x1000
+	cIFF_MULTI_QUEUE = 0x0100
 )
 
 type ifreqAddr struct {
@@ -75,7 +81,25 @@ type ifreqQLEN struct {
 	pad   [8]byte
 }
 
-func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+
+	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
+
+	ifce = &Tun{
+		ReadWriteCloser: file,
+		fd:              int(file.Fd()),
+		Device:          "tun0",
+		Cidr:            cidr,
+		DefaultMTU:      defaultMTU,
+		TXQueueLen:      txQueueLen,
+		Routes:          routes,
+		UnsafeRoutes:    unsafeRoutes,
+		l:               l,
+	}
+	return
+}
+
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		return nil, err
@@ -83,9 +107,12 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 
 	var req ifReq
 	req.Flags = uint16(cIFF_TUN | cIFF_NO_PI)
+	if multiqueue {
+		req.Flags |= cIFF_MULTI_QUEUE
+	}
 	copy(req.Name[:], deviceName)
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
-		return
+		return nil, err
 	}
 	name := strings.Trim(string(req.Name[:]), "\x00")
 
@@ -108,8 +135,27 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 		TXQueueLen:      txQueueLen,
 		Routes:          routes,
 		UnsafeRoutes:    unsafeRoutes,
+		l:               l,
 	}
 	return
+}
+
+func (c *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var req ifReq
+	req.Flags = uint16(cIFF_TUN | cIFF_NO_PI | cIFF_MULTI_QUEUE)
+	copy(req.Name[:], c.Device)
+	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
+		return nil, err
+	}
+
+	file := os.NewFile(uintptr(fd), "/dev/net/tun")
+
+	return file, nil
 }
 
 func (c *Tun) WriteRaw(b []byte) error {
@@ -132,6 +178,10 @@ func (c *Tun) WriteRaw(b []byte) error {
 			return io.ErrUnexpectedEOF
 		}
 	}
+}
+
+func (c *Tun) Write(b []byte) (int, error) {
+	return len(b), c.WriteRaw(b)
 }
 
 func (c Tun) deviceBytes() (o [16]byte) {
@@ -188,14 +238,14 @@ func (c Tun) Activate() error {
 	ifm := ifreqMTU{Name: devName, MTU: int32(c.MaxMTU)}
 	if err = ioctl(fd, unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
 		// This is currently a non fatal condition because the route table must have the MTU set appropriately as well
-		l.WithError(err).Error("Failed to set tun mtu")
+		c.l.WithError(err).Error("Failed to set tun mtu")
 	}
 
 	// Set the transmit queue length
 	ifrq := ifreqQLEN{Name: devName, Value: int32(c.TXQueueLen)}
 	if err = ioctl(fd, unix.SIOCSIFTXQLEN, uintptr(unsafe.Pointer(&ifrq))); err != nil {
 		// If we can't set the queue length nebula will still work but it may lead to packet loss
-		l.WithError(err).Error("Failed to set tun tx queue length")
+		c.l.WithError(err).Error("Failed to set tun tx queue length")
 	}
 
 	// Bring up the interface
@@ -216,6 +266,7 @@ func (c Tun) Activate() error {
 		LinkIndex: link.Attrs().Index,
 		Dst:       dr,
 		MTU:       c.DefaultMTU,
+		AdvMSS:    c.advMSS(route{}),
 		Scope:     unix.RT_SCOPE_LINK,
 		Src:       c.Cidr.IP,
 		Protocol:  unix.RTPROT_KERNEL,
@@ -233,6 +284,7 @@ func (c Tun) Activate() error {
 			LinkIndex: link.Attrs().Index,
 			Dst:       r.route,
 			MTU:       r.mtu,
+			AdvMSS:    c.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
 		}
 
@@ -248,6 +300,8 @@ func (c Tun) Activate() error {
 			LinkIndex: link.Attrs().Index,
 			Dst:       r.route,
 			MTU:       r.mtu,
+			Priority:  r.metric,
+			AdvMSS:    c.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
 		}
 
@@ -264,4 +318,25 @@ func (c Tun) Activate() error {
 	}
 
 	return nil
+}
+
+func (c *Tun) CidrNet() *net.IPNet {
+	return c.Cidr
+}
+
+func (c *Tun) DeviceName() string {
+	return c.Device
+}
+
+func (c Tun) advMSS(r route) int {
+	mtu := r.mtu
+	if r.mtu == 0 {
+		mtu = c.DefaultMTU
+	}
+
+	// We only need to set advmss if the route MTU does not match the device MTU
+	if mtu != c.MaxMTU {
+		return mtu - 40
+	}
+	return 0
 }

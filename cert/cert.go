@@ -1,18 +1,18 @@
 package cert
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net"
 	"time"
 
-	"bytes"
-	"encoding/json"
 	"github.com/golang/protobuf/proto"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ed25519"
@@ -59,6 +59,10 @@ func UnmarshalNebulaCertificate(b []byte) (*NebulaCertificate, error) {
 	err := proto.Unmarshal(b, &rc)
 	if err != nil {
 		return nil, err
+	}
+
+	if rc.Details == nil {
+		return nil, fmt.Errorf("encoded Details was nil")
 	}
 
 	if len(rc.Details.Ips)%2 != 0 {
@@ -122,6 +126,9 @@ func UnmarshalNebulaCertificateFromPEM(b []byte) (*NebulaCertificate, []byte, er
 	p, r := pem.Decode(b)
 	if p == nil {
 		return nil, r, fmt.Errorf("input did not contain a valid PEM encoded block")
+	}
+	if p.Type != CertBanner {
+		return nil, r, fmt.Errorf("bytes did not contain a proper nebula certificate banner")
 	}
 	nc, err := UnmarshalNebulaCertificate(p.Bytes)
 	return nc, r, err
@@ -244,10 +251,10 @@ func (nc *NebulaCertificate) Expired(t time.Time) bool {
 	return nc.Details.NotBefore.After(t) || nc.Details.NotAfter.Before(t)
 }
 
-// Verify will ensure a certificate is good in all respects (expiry, group membership, signature, cert blacklist, etc)
+// Verify will ensure a certificate is good in all respects (expiry, group membership, signature, cert blocklist, etc)
 func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error) {
-	if ncp.IsBlacklisted(nc) {
-		return false, fmt.Errorf("certificate has been blacklisted")
+	if ncp.IsBlocklisted(nc) {
+		return false, fmt.Errorf("certificate has been blocked")
 	}
 
 	signer, err := ncp.GetCAForCert(nc)
@@ -318,12 +325,26 @@ func (nc *NebulaCertificate) CheckRootConstrains(signer *NebulaCertificate) erro
 
 // VerifyPrivateKey checks that the public key in the Nebula certificate and a supplied private key match
 func (nc *NebulaCertificate) VerifyPrivateKey(key []byte) error {
-	var dst, key32 [32]byte
-	copy(key32[:], key)
-	curve25519.ScalarBaseMult(&dst, &key32)
-	if !bytes.Equal(dst[:], nc.Details.PublicKey) {
+	if nc.Details.IsCA {
+		// the call to PublicKey below will panic slice bounds out of range otherwise
+		if len(key) != ed25519.PrivateKeySize {
+			return fmt.Errorf("key was not 64 bytes, is invalid ed25519 private key")
+		}
+
+		if !ed25519.PublicKey(nc.Details.PublicKey).Equal(ed25519.PrivateKey(key).Public()) {
+			return fmt.Errorf("public key in cert and private key supplied don't match")
+		}
+		return nil
+	}
+
+	pub, err := curve25519.X25519(key, curve25519.Basepoint)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(pub, nc.Details.PublicKey) {
 		return fmt.Errorf("public key in cert and private key supplied don't match")
 	}
+
 	return nil
 }
 
@@ -466,6 +487,63 @@ func (nc *NebulaCertificate) MarshalJSON() ([]byte, error) {
 		"signature":   fmt.Sprintf("%x", nc.Signature),
 	}
 	return json.Marshal(jc)
+}
+
+//func (nc *NebulaCertificate) Copy() *NebulaCertificate {
+//	r, err := nc.Marshal()
+//	if err != nil {
+//		//TODO
+//		return nil
+//	}
+//
+//	c, err := UnmarshalNebulaCertificate(r)
+//	return c
+//}
+
+func (nc *NebulaCertificate) Copy() *NebulaCertificate {
+	c := &NebulaCertificate{
+		Details: NebulaCertificateDetails{
+			Name:           nc.Details.Name,
+			Groups:         make([]string, len(nc.Details.Groups)),
+			Ips:            make([]*net.IPNet, len(nc.Details.Ips)),
+			Subnets:        make([]*net.IPNet, len(nc.Details.Subnets)),
+			NotBefore:      nc.Details.NotBefore,
+			NotAfter:       nc.Details.NotAfter,
+			PublicKey:      make([]byte, len(nc.Details.PublicKey)),
+			IsCA:           nc.Details.IsCA,
+			Issuer:         nc.Details.Issuer,
+			InvertedGroups: make(map[string]struct{}, len(nc.Details.InvertedGroups)),
+		},
+		Signature: make([]byte, len(nc.Signature)),
+	}
+
+	copy(c.Signature, nc.Signature)
+	copy(c.Details.Groups, nc.Details.Groups)
+	copy(c.Details.PublicKey, nc.Details.PublicKey)
+
+	for i, p := range nc.Details.Ips {
+		c.Details.Ips[i] = &net.IPNet{
+			IP:   make(net.IP, len(p.IP)),
+			Mask: make(net.IPMask, len(p.Mask)),
+		}
+		copy(c.Details.Ips[i].IP, p.IP)
+		copy(c.Details.Ips[i].Mask, p.Mask)
+	}
+
+	for i, p := range nc.Details.Subnets {
+		c.Details.Subnets[i] = &net.IPNet{
+			IP:   make(net.IP, len(p.IP)),
+			Mask: make(net.IPMask, len(p.Mask)),
+		}
+		copy(c.Details.Subnets[i].IP, p.IP)
+		copy(c.Details.Subnets[i].Mask, p.Mask)
+	}
+
+	for g := range nc.Details.InvertedGroups {
+		c.Details.InvertedGroups[g] = struct{}{}
+	}
+
+	return c
 }
 
 func netMatch(certIp *net.IPNet, rootIps []*net.IPNet) bool {

@@ -3,13 +3,14 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
-	"github.com/slackhq/nebula/cert"
-	"github.com/stretchr/testify/assert"
-	"golang.org/x/crypto/ed25519"
 	"io/ioutil"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/slackhq/nebula/cert"
+	"github.com/stretchr/testify/assert"
+	"golang.org/x/crypto/ed25519"
 )
 
 func Test_verifySummary(t *testing.T) {
@@ -71,7 +72,7 @@ func Test_verify(t *testing.T) {
 		Details: cert.NebulaCertificateDetails{
 			Name:      "test-ca",
 			NotBefore: time.Now().Add(time.Hour * -1),
-			NotAfter:  time.Now().Add(time.Hour),
+			NotAfter:  time.Now().Add(time.Hour * 2),
 			PublicKey: caPub,
 			IsCA:      true,
 		},

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ed25519"
@@ -172,13 +173,13 @@ func TestNebulaCertificate_Verify(t *testing.T) {
 
 	f, err := c.Sha256Sum()
 	assert.Nil(t, err)
-	caPool.BlacklistFingerprint(f)
+	caPool.BlocklistFingerprint(f)
 
 	v, err := c.Verify(time.Now(), caPool)
 	assert.False(t, v)
-	assert.EqualError(t, err, "certificate has been blacklisted")
+	assert.EqualError(t, err, "certificate has been blocked")
 
-	caPool.ResetCertBlacklist()
+	caPool.ResetCertBlocklist()
 	v, err = c.Verify(time.Now(), caPool)
 	assert.True(t, v)
 	assert.Nil(t, err)
@@ -374,9 +375,16 @@ func TestNebulaCertificate_Verify_Subnets(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestNebulaVerifyPrivateKey(t *testing.T) {
+func TestNebulaCertificate_VerifyPrivateKey(t *testing.T) {
 	ca, _, caKey, err := newTestCaCert(time.Time{}, time.Time{}, []*net.IPNet{}, []*net.IPNet{}, []string{})
 	assert.Nil(t, err)
+	err = ca.VerifyPrivateKey(caKey)
+	assert.Nil(t, err)
+
+	_, _, caKey2, err := newTestCaCert(time.Time{}, time.Time{}, []*net.IPNet{}, []*net.IPNet{}, []string{})
+	assert.Nil(t, err)
+	err = ca.VerifyPrivateKey(caKey2)
+	assert.NotNil(t, err)
 
 	c, _, priv, err := newTestCert(ca, caKey, time.Time{}, time.Time{}, []*net.IPNet{}, []*net.IPNet{}, []string{})
 	err = c.VerifyPrivateKey(priv)
@@ -446,6 +454,255 @@ BVG+oJpAoqokUBbI4U0N8CSfpUABEkB/Pm5A2xyH/nc8mg/wvGUWG3pZ7nHzaDMf
 	assert.Equal(t, pp.CAs[string("5c9c3f23e7ee7fe97637cbd3a0a5b854154d1d9aaaf7b566a51f4a88f76b64cd")].Details.Name, rootCA01.Details.Name)
 }
 
+func appendByteSlices(b ...[]byte) []byte {
+	retSlice := []byte{}
+	for _, v := range b {
+		retSlice = append(retSlice, v...)
+	}
+	return retSlice
+}
+
+func TestUnmrshalCertPEM(t *testing.T) {
+	goodCert := []byte(`
+# A good cert
+-----BEGIN NEBULA CERTIFICATE-----
+CkAKDm5lYnVsYSByb290IGNhKJfap9AFMJfg1+YGOiCUQGByMuNRhIlQBOyzXWbL
+vcKBwDhov900phEfJ5DN3kABEkDCq5R8qBiu8sl54yVfgRcQXEDt3cHr8UTSLszv
+bzBEr00kERQxxTzTsH8cpYEgRoipvmExvg8WP8NdAJEYJosB
+-----END NEBULA CERTIFICATE-----
+`)
+	badBanner := []byte(`# A bad banner
+-----BEGIN NOT A NEBULA CERTIFICATE-----
+CkAKDm5lYnVsYSByb290IGNhKJfap9AFMJfg1+YGOiCUQGByMuNRhIlQBOyzXWbL
+vcKBwDhov900phEfJ5DN3kABEkDCq5R8qBiu8sl54yVfgRcQXEDt3cHr8UTSLszv
+bzBEr00kERQxxTzTsH8cpYEgRoipvmExvg8WP8NdAJEYJosB
+-----END NOT A NEBULA CERTIFICATE-----
+`)
+	invalidPem := []byte(`# Not a valid PEM format
+-BEGIN NEBULA CERTIFICATE-----
+CkAKDm5lYnVsYSByb290IGNhKJfap9AFMJfg1+YGOiCUQGByMuNRhIlQBOyzXWbL
+vcKBwDhov900phEfJ5DN3kABEkDCq5R8qBiu8sl54yVfgRcQXEDt3cHr8UTSLszv
+bzBEr00kERQxxTzTsH8cpYEgRoipvmExvg8WP8NdAJEYJosB
+-END NEBULA CERTIFICATE----`)
+
+	certBundle := appendByteSlices(goodCert, badBanner, invalidPem)
+
+	// Success test case
+	cert, rest, err := UnmarshalNebulaCertificateFromPEM(certBundle)
+	assert.NotNil(t, cert)
+	assert.Equal(t, rest, append(badBanner, invalidPem...))
+	assert.Nil(t, err)
+
+	// Fail due to invalid banner.
+	cert, rest, err = UnmarshalNebulaCertificateFromPEM(rest)
+	assert.Nil(t, cert)
+	assert.Equal(t, rest, invalidPem)
+	assert.EqualError(t, err, "bytes did not contain a proper nebula certificate banner")
+
+	// Fail due to ivalid PEM format, because
+	// it's missing the requisite pre-encapsulation boundary.
+	cert, rest, err = UnmarshalNebulaCertificateFromPEM(rest)
+	assert.Nil(t, cert)
+	assert.Equal(t, rest, invalidPem)
+	assert.EqualError(t, err, "input did not contain a valid PEM encoded block")
+}
+
+func TestUnmarshalEd25519PrivateKey(t *testing.T) {
+	privKey := []byte(`# A good key
+-----BEGIN NEBULA ED25519 PRIVATE KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+-----END NEBULA ED25519 PRIVATE KEY-----
+`)
+	shortKey := []byte(`# A short key
+-----BEGIN NEBULA ED25519 PRIVATE KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+-----END NEBULA ED25519 PRIVATE KEY-----
+`)
+	invalidBanner := []byte(`# Invalid banner
+-----BEGIN NOT A NEBULA PRIVATE KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+-----END NOT A NEBULA PRIVATE KEY-----
+`)
+	invalidPem := []byte(`# Not a valid PEM format
+-BEGIN NEBULA ED25519 PRIVATE KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+-END NEBULA ED25519 PRIVATE KEY-----`)
+
+	keyBundle := appendByteSlices(privKey, shortKey, invalidBanner, invalidPem)
+
+	// Success test case
+	k, rest, err := UnmarshalEd25519PrivateKey(keyBundle)
+	assert.Len(t, k, 64)
+	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
+	assert.Nil(t, err)
+
+	// Fail due to short key
+	k, rest, err = UnmarshalEd25519PrivateKey(rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, appendByteSlices(invalidBanner, invalidPem))
+	assert.EqualError(t, err, "key was not 64 bytes, is invalid ed25519 private key")
+
+	// Fail due to invalid banner
+	k, rest, err = UnmarshalEd25519PrivateKey(rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, invalidPem)
+	assert.EqualError(t, err, "bytes did not contain a proper nebula Ed25519 private key banner")
+
+	// Fail due to ivalid PEM format, because
+	// it's missing the requisite pre-encapsulation boundary.
+	k, rest, err = UnmarshalEd25519PrivateKey(rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, invalidPem)
+	assert.EqualError(t, err, "input did not contain a valid PEM encoded block")
+}
+
+func TestUnmarshalX25519PrivateKey(t *testing.T) {
+	privKey := []byte(`# A good key
+-----BEGIN NEBULA X25519 PRIVATE KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+-----END NEBULA X25519 PRIVATE KEY-----
+`)
+	shortKey := []byte(`# A short key
+-----BEGIN NEBULA X25519 PRIVATE KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+-----END NEBULA X25519 PRIVATE KEY-----
+`)
+	invalidBanner := []byte(`# Invalid banner
+-----BEGIN NOT A NEBULA PRIVATE KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+-----END NOT A NEBULA PRIVATE KEY-----
+`)
+	invalidPem := []byte(`# Not a valid PEM format
+-BEGIN NEBULA X25519 PRIVATE KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+-END NEBULA X25519 PRIVATE KEY-----`)
+
+	keyBundle := appendByteSlices(privKey, shortKey, invalidBanner, invalidPem)
+
+	// Success test case
+	k, rest, err := UnmarshalX25519PrivateKey(keyBundle)
+	assert.Len(t, k, 32)
+	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
+	assert.Nil(t, err)
+
+	// Fail due to short key
+	k, rest, err = UnmarshalX25519PrivateKey(rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, appendByteSlices(invalidBanner, invalidPem))
+	assert.EqualError(t, err, "key was not 32 bytes, is invalid X25519 private key")
+
+	// Fail due to invalid banner
+	k, rest, err = UnmarshalX25519PrivateKey(rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, invalidPem)
+	assert.EqualError(t, err, "bytes did not contain a proper nebula X25519 private key banner")
+
+	// Fail due to ivalid PEM format, because
+	// it's missing the requisite pre-encapsulation boundary.
+	k, rest, err = UnmarshalX25519PrivateKey(rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, invalidPem)
+	assert.EqualError(t, err, "input did not contain a valid PEM encoded block")
+}
+
+func TestUnmarshalEd25519PublicKey(t *testing.T) {
+	pubKey := []byte(`# A good key
+-----BEGIN NEBULA ED25519 PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+-----END NEBULA ED25519 PUBLIC KEY-----
+`)
+	shortKey := []byte(`# A short key
+-----BEGIN NEBULA ED25519 PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+-----END NEBULA ED25519 PUBLIC KEY-----
+`)
+	invalidBanner := []byte(`# Invalid banner
+-----BEGIN NOT A NEBULA PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+-----END NOT A NEBULA PUBLIC KEY-----
+`)
+	invalidPem := []byte(`# Not a valid PEM format
+-BEGIN NEBULA ED25519 PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+-END NEBULA ED25519 PUBLIC KEY-----`)
+
+	keyBundle := appendByteSlices(pubKey, shortKey, invalidBanner, invalidPem)
+
+	// Success test case
+	k, rest, err := UnmarshalEd25519PublicKey(keyBundle)
+	assert.Equal(t, len(k), 32)
+	assert.Nil(t, err)
+	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
+
+	// Fail due to short key
+	k, rest, err = UnmarshalEd25519PublicKey(rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, appendByteSlices(invalidBanner, invalidPem))
+	assert.EqualError(t, err, "key was not 32 bytes, is invalid ed25519 public key")
+
+	// Fail due to invalid banner
+	k, rest, err = UnmarshalEd25519PublicKey(rest)
+	assert.Nil(t, k)
+	assert.EqualError(t, err, "bytes did not contain a proper nebula Ed25519 public key banner")
+	assert.Equal(t, rest, invalidPem)
+
+	// Fail due to ivalid PEM format, because
+	// it's missing the requisite pre-encapsulation boundary.
+	k, rest, err = UnmarshalEd25519PublicKey(rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, invalidPem)
+	assert.EqualError(t, err, "input did not contain a valid PEM encoded block")
+}
+
+func TestUnmarshalX25519PublicKey(t *testing.T) {
+	pubKey := []byte(`# A good key
+-----BEGIN NEBULA X25519 PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+-----END NEBULA X25519 PUBLIC KEY-----
+`)
+	shortKey := []byte(`# A short key
+-----BEGIN NEBULA X25519 PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+-----END NEBULA X25519 PUBLIC KEY-----
+`)
+	invalidBanner := []byte(`# Invalid banner
+-----BEGIN NOT A NEBULA PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+-----END NOT A NEBULA PUBLIC KEY-----
+`)
+	invalidPem := []byte(`# Not a valid PEM format
+-BEGIN NEBULA X25519 PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+-END NEBULA X25519 PUBLIC KEY-----`)
+
+	keyBundle := appendByteSlices(pubKey, shortKey, invalidBanner, invalidPem)
+
+	// Success test case
+	k, rest, err := UnmarshalX25519PublicKey(keyBundle)
+	assert.Equal(t, len(k), 32)
+	assert.Nil(t, err)
+	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
+
+	// Fail due to short key
+	k, rest, err = UnmarshalX25519PublicKey(rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, appendByteSlices(invalidBanner, invalidPem))
+	assert.EqualError(t, err, "key was not 32 bytes, is invalid X25519 public key")
+
+	// Fail due to invalid banner
+	k, rest, err = UnmarshalX25519PublicKey(rest)
+	assert.Nil(t, k)
+	assert.EqualError(t, err, "bytes did not contain a proper nebula X25519 public key banner")
+	assert.Equal(t, rest, invalidPem)
+
+	// Fail due to ivalid PEM format, because
+	// it's missing the requisite pre-encapsulation boundary.
+	k, rest, err = UnmarshalX25519PublicKey(rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, invalidPem)
+	assert.EqualError(t, err, "input did not contain a valid PEM encoded block")
+}
+
 // Ensure that upgrading the protobuf library does not change how certificates
 // are marshalled, since this would break signature verification
 func TestMarshalingNebulaCertificateConsistency(t *testing.T) {
@@ -487,6 +744,24 @@ func TestMarshalingNebulaCertificateConsistency(t *testing.T) {
 	assert.Equal(t, "0a0774657374696e67121b8182845080feffff0f828284508080fcff0f8382845080fe83f80f1a1b8182844880fe83f80f8282844880feffff0f838284488080fcff0f220b746573742d67726f757031220b746573742d67726f757032220b746573742d67726f75703328f0e0e7d70430a08681c4053a20313233343536373839306162636564666768696a3132333435363738393061624a081234567890abcedf", fmt.Sprintf("%x", b))
 }
 
+func TestNebulaCertificate_Copy(t *testing.T) {
+	ca, _, caKey, err := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
+	assert.Nil(t, err)
+
+	c, _, _, err := newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
+	assert.Nil(t, err)
+	cc := c.Copy()
+
+	util.AssertDeepCopyEqual(t, c, cc)
+}
+
+func TestUnmarshalNebulaCertificate(t *testing.T) {
+	// Test that we don't panic with an invalid certificate (#332)
+	data := []byte("\x98\x00\x00")
+	_, err := UnmarshalNebulaCertificate(data)
+	assert.EqualError(t, err, "encoded Details was nil")
+}
+
 func newTestCaCert(before, after time.Time, ips, subnets []*net.IPNet, groups []string) (*NebulaCertificate, []byte, []byte, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if before.IsZero() {
@@ -498,11 +773,12 @@ func newTestCaCert(before, after time.Time, ips, subnets []*net.IPNet, groups []
 
 	nc := &NebulaCertificate{
 		Details: NebulaCertificateDetails{
-			Name:      "test ca",
-			NotBefore: before,
-			NotAfter:  after,
-			PublicKey: pub,
-			IsCA:      true,
+			Name:           "test ca",
+			NotBefore:      time.Unix(before.Unix(), 0),
+			NotAfter:       time.Unix(after.Unix(), 0),
+			PublicKey:      pub,
+			IsCA:           true,
+			InvertedGroups: make(map[string]struct{}),
 		},
 	}
 
@@ -544,17 +820,17 @@ func newTestCert(ca *NebulaCertificate, key []byte, before, after time.Time, ips
 
 	if len(ips) == 0 {
 		ips = []*net.IPNet{
-			{IP: net.ParseIP("10.1.1.1"), Mask: net.IPMask(net.ParseIP("255.255.255.0"))},
-			{IP: net.ParseIP("10.1.1.2"), Mask: net.IPMask(net.ParseIP("255.255.0.0"))},
-			{IP: net.ParseIP("10.1.1.3"), Mask: net.IPMask(net.ParseIP("255.0.255.0"))},
+			{IP: net.ParseIP("10.1.1.1").To4(), Mask: net.IPMask(net.ParseIP("255.255.255.0").To4())},
+			{IP: net.ParseIP("10.1.1.2").To4(), Mask: net.IPMask(net.ParseIP("255.255.0.0").To4())},
+			{IP: net.ParseIP("10.1.1.3").To4(), Mask: net.IPMask(net.ParseIP("255.0.255.0").To4())},
 		}
 	}
 
 	if len(subnets) == 0 {
 		subnets = []*net.IPNet{
-			{IP: net.ParseIP("9.1.1.1"), Mask: net.IPMask(net.ParseIP("255.0.255.0"))},
-			{IP: net.ParseIP("9.1.1.2"), Mask: net.IPMask(net.ParseIP("255.255.255.0"))},
-			{IP: net.ParseIP("9.1.1.3"), Mask: net.IPMask(net.ParseIP("255.255.0.0"))},
+			{IP: net.ParseIP("9.1.1.1").To4(), Mask: net.IPMask(net.ParseIP("255.0.255.0").To4())},
+			{IP: net.ParseIP("9.1.1.2").To4(), Mask: net.IPMask(net.ParseIP("255.255.255.0").To4())},
+			{IP: net.ParseIP("9.1.1.3").To4(), Mask: net.IPMask(net.ParseIP("255.255.0.0").To4())},
 		}
 	}
 
@@ -562,15 +838,16 @@ func newTestCert(ca *NebulaCertificate, key []byte, before, after time.Time, ips
 
 	nc := &NebulaCertificate{
 		Details: NebulaCertificateDetails{
-			Name:      "testing",
-			Ips:       ips,
-			Subnets:   subnets,
-			Groups:    groups,
-			NotBefore: before,
-			NotAfter:  after,
-			PublicKey: pub,
-			IsCA:      false,
-			Issuer:    issuer,
+			Name:           "testing",
+			Ips:            ips,
+			Subnets:        subnets,
+			Groups:         groups,
+			NotBefore:      time.Unix(before.Unix(), 0),
+			NotAfter:       time.Unix(after.Unix(), 0),
+			PublicKey:      pub,
+			IsCA:           false,
+			Issuer:         issuer,
+			InvertedGroups: make(map[string]struct{}),
 		},
 	}
 
@@ -583,10 +860,15 @@ func newTestCert(ca *NebulaCertificate, key []byte, before, after time.Time, ips
 }
 
 func x25519Keypair() ([]byte, []byte) {
-	var pubkey, privkey [32]byte
-	if _, err := io.ReadFull(rand.Reader, privkey[:]); err != nil {
+	privkey := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, privkey); err != nil {
 		panic(err)
 	}
-	curve25519.ScalarBaseMult(&pubkey, &privkey)
-	return pubkey[:], privkey[:]
+
+	pubkey, err := curve25519.X25519(privkey, curve25519.Basepoint)
+	if err != nil {
+		panic(err)
+	}
+
+	return pubkey, privkey
 }

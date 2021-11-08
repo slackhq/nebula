@@ -1,3 +1,6 @@
+//go:build !ios && !e2e_testing
+// +build !ios,!e2e_testing
+
 package nebula
 
 import (
@@ -9,6 +12,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 )
 
@@ -19,6 +23,7 @@ type Tun struct {
 	DefaultMTU   int
 	TXQueueLen   int
 	UnsafeRoutes []route
+	l            *logrus.Logger
 }
 
 type sockaddrCtl struct {
@@ -72,9 +77,9 @@ type ifreqQLEN struct {
 	pad   [8]byte
 }
 
-func newTun(name string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (tun *Tun, err error) {
+func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	if len(routes) > 0 {
-		return nil, fmt.Errorf("Route MTU not supported in Darwin")
+		return nil, fmt.Errorf("route MTU not supported in Darwin")
 	}
 	ifIndex := -1
 	if name != "utun" {
@@ -127,13 +132,14 @@ func newTun(name string, cidr *net.IPNet, defaultMTU int, routes []route, unsafe
 
 	file := os.NewFile(uintptr(fd), "")
 
-	tun = &Tun{
+	tun := &Tun{
 		ReadWriteCloser: file,
 		Device:          name,
 		Cidr:            cidr,
 		DefaultMTU:      defaultMTU,
 		TXQueueLen:      txQueueLen,
 		UnsafeRoutes:    unsafeRoutes,
+		l:               l,
 	}
 
 	return tun, nil
@@ -144,6 +150,17 @@ func (t *Tun) deviceBytes() (o [16]byte) {
 		o[i] = byte(c)
 	}
 	return
+}
+
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
+}
+
+func (c *Tun) Close() error {
+	if c.ReadWriteCloser != nil {
+		return c.ReadWriteCloser.Close()
+	}
+	return nil
 }
 
 func (t *Tun) Activate() error {
@@ -159,6 +176,7 @@ func (t *Tun) Activate() error {
 		unix.SOCK_DGRAM,
 		unix.IPPROTO_IP,
 	)
+
 	if err != nil {
 		return err
 	}
@@ -211,7 +229,7 @@ func (t *Tun) Activate() error {
 		return fmt.Errorf("failed to bring the tun device up: %s", err)
 	}
 
-	if err = exec.Command("route", "-n", "add", "-net", t.Cidr.String(), "-interface", t.Device).Run(); err != nil {
+	if err = exec.Command("/sbin/route", "-n", "add", "-net", t.Cidr.String(), "-interface", t.Device).Run(); err != nil {
 		return fmt.Errorf("failed to run 'route add': %s", err)
 	}
 
@@ -223,7 +241,7 @@ func (t *Tun) Activate() error {
 
 	// Unsafe path routes
 	for _, r := range t.UnsafeRoutes {
-		if err = exec.Command("route", "-n", "add", "-net", r.route.String(), "-interface", t.Device).Run(); err != nil {
+		if err = exec.Command("/sbin/route", "-n", "add", "-net", r.route.String(), "-interface", t.Device).Run(); err != nil {
 			return fmt.Errorf("failed to run 'route add' for unsafe_route %s: %s", r.route.String(), err)
 		}
 	}
@@ -296,4 +314,16 @@ func (t *Tun) Write(from []byte) (int, error) {
 
 	n, err := t.ReadWriteCloser.Write(buf)
 	return n - 4, err
+}
+
+func (c *Tun) CidrNet() *net.IPNet {
+	return c.Cidr
+}
+
+func (c *Tun) DeviceName() string {
+	return c.Device
+}
+
+func (t *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
 }

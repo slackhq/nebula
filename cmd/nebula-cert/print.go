@@ -4,23 +4,27 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/slackhq/nebula/cert"
 	"io"
 	"io/ioutil"
 	"os"
 	"strings"
+
+	"github.com/skip2/go-qrcode"
+	"github.com/slackhq/nebula/cert"
 )
 
 type printFlags struct {
-	set  *flag.FlagSet
-	json *bool
-	path *string
+	set       *flag.FlagSet
+	json      *bool
+	outQRPath *string
+	path      *string
 }
 
 func newPrintFlags() *printFlags {
 	pf := printFlags{set: flag.NewFlagSet("print", flag.ContinueOnError)}
 	pf.set.Usage = func() {}
 	pf.json = pf.set.Bool("json", false, "Optional: outputs certificates in json format")
+	pf.outQRPath = pf.set.String("out-qr", "", "Optional: output a qr code image (png) of the certificate")
 	pf.path = pf.set.String("path", "", "Required: path to the certificate")
 
 	return &pf
@@ -43,6 +47,8 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 	}
 
 	var c *cert.NebulaCertificate
+	var qrBytes []byte
+	part := 0
 
 	for {
 		c, rawCert, err = cert.UnmarshalNebulaCertificateFromPEM(rawCert)
@@ -60,8 +66,30 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 			out.Write([]byte("\n"))
 		}
 
+		if *pf.outQRPath != "" {
+			b, err := c.MarshalToPEM()
+			if err != nil {
+				return fmt.Errorf("error while marshalling cert to PEM: %s", err)
+			}
+			qrBytes = append(qrBytes, b...)
+		}
+
 		if rawCert == nil || len(rawCert) == 0 || strings.TrimSpace(string(rawCert)) == "" {
 			break
+		}
+
+		part++
+	}
+
+	if *pf.outQRPath != "" {
+		b, err := qrcode.Encode(string(qrBytes), qrcode.Medium, -5)
+		if err != nil {
+			return fmt.Errorf("error while generating qr code: %s", err)
+		}
+
+		err = ioutil.WriteFile(*pf.outQRPath, b, 0600)
+		if err != nil {
+			return fmt.Errorf("error while writing out-qr: %s", err)
 		}
 	}
 

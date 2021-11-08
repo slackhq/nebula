@@ -1,9 +1,11 @@
 package nebula
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
 	"time"
+
+	"github.com/slackhq/nebula/firewall"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewTimerWheel(t *testing.T) {
@@ -49,7 +51,7 @@ func TestTimerWheel_findWheel(t *testing.T) {
 func TestTimerWheel_Add(t *testing.T) {
 	tw := NewTimerWheel(time.Second, time.Second*10)
 
-	fp1 := FirewallPacket{}
+	fp1 := firewall.Packet{}
 	tw.Add(fp1, time.Second*1)
 
 	// Make sure we set head and tail properly
@@ -60,7 +62,7 @@ func TestTimerWheel_Add(t *testing.T) {
 	assert.Nil(t, tw.wheel[2].Tail.Next)
 
 	// Make sure we only modify head
-	fp2 := FirewallPacket{}
+	fp2 := firewall.Packet{}
 	tw.Add(fp2, time.Second*1)
 	assert.Equal(t, fp2, tw.wheel[2].Head.Packet)
 	assert.Equal(t, fp1, tw.wheel[2].Head.Next.Packet)
@@ -83,7 +85,7 @@ func TestTimerWheel_Purge(t *testing.T) {
 	assert.NotNil(t, tw.lastTick)
 	assert.Equal(t, 0, tw.current)
 
-	fps := []FirewallPacket{
+	fps := []firewall.Packet{
 		{LocalIP: 1},
 		{LocalIP: 2},
 		{LocalIP: 3},

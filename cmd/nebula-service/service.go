@@ -1,44 +1,55 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 
 	"github.com/kardianos/service"
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
+	"github.com/slackhq/nebula/config"
 )
 
 var logger service.Logger
 
 type program struct {
-	exit       chan struct{}
 	configPath *string
 	configTest *bool
 	build      string
+	control    *nebula.Control
 }
 
 func (p *program) Start(s service.Service) error {
-	logger.Info("Nebula service starting.")
-	p.exit = make(chan struct{})
 	// Start should not block.
-	go p.run()
-	return nil
-}
+	logger.Info("Nebula service starting.")
 
-func (p *program) run() error {
-	nebula.Main(*p.configPath, *p.configTest, Build)
+	l := logrus.New()
+	HookLogger(l)
+
+	c := config.NewC(l)
+	err := c.Load(*p.configPath)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %s", err)
+	}
+
+	p.control, err = nebula.Main(c, *p.configTest, Build, l, nil)
+	if err != nil {
+		return err
+	}
+
+	p.control.Start()
 	return nil
 }
 
 func (p *program) Stop(s service.Service) error {
 	logger.Info("Nebula service stopping.")
-	close(p.exit)
+	p.control.Stop()
 	return nil
 }
 
 func doService(configPath *string, configTest *bool, build string, serviceFlag *string) {
-
 	if *configPath == "" {
 		ex, err := os.Executable()
 		if err != nil {
@@ -60,6 +71,10 @@ func doService(configPath *string, configTest *bool, build string, serviceFlag *
 		build:      build,
 	}
 
+	// Here are what the different loggers are doing:
+	// - `log` is the standard go log utility, meant to be used while the process is still attached to stdout/stderr
+	// - `logger` is the service log utility that may be attached to a special place depending on OS (Windows will have it attached to the event log)
+	// - above, in `Run` we create a `logrus.Logger` which is what nebula expects to use
 	s, err := service.New(prg, svcConfig)
 	if err != nil {
 		log.Fatal(err)
@@ -75,6 +90,7 @@ func doService(configPath *string, configTest *bool, build string, serviceFlag *
 		for {
 			err := <-errs
 			if err != nil {
+				// Route any errors from the system logger to stdout as a best effort to notice issues there
 				log.Print(err)
 			}
 		}
@@ -84,6 +100,7 @@ func doService(configPath *string, configTest *bool, build string, serviceFlag *
 	case "run":
 		err = s.Run()
 		if err != nil {
+			// Route any errors to the system logger
 			logger.Error(err)
 		}
 	default:

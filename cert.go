@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/config"
 )
-
-var trustedCAs *cert.NebulaCAPool
 
 type CertState struct {
 	certificate         *cert.NebulaCertificate
@@ -46,7 +46,7 @@ func NewCertState(certificate *cert.NebulaCertificate, privateKey []byte) (*Cert
 	return cs, nil
 }
 
-func NewCertStateFromConfig(c *Config) (*CertState, error) {
+func NewCertStateFromConfig(c *config.C) (*CertState, error) {
 	var pemPrivateKey []byte
 	var err error
 
@@ -119,7 +119,7 @@ func NewCertStateFromConfig(c *Config) (*CertState, error) {
 	return NewCertState(nebulaCert, rawKey)
 }
 
-func loadCAFromConfig(c *Config) (*cert.NebulaCAPool, error) {
+func loadCAFromConfig(l *logrus.Logger, c *config.C) (*cert.NebulaCAPool, error) {
 	var rawCA []byte
 	var err error
 
@@ -149,10 +149,16 @@ func loadCAFromConfig(c *Config) (*cert.NebulaCAPool, error) {
 		return nil, fmt.Errorf("error while adding CA certificate to CA trust store: %s", err)
 	}
 
-	// pki.blacklist entered the scene at about the same time we aliased x509 to pki, not supporting backwards compat
+	for _, fp := range c.GetStringSlice("pki.blocklist", []string{}) {
+		l.WithField("fingerprint", fp).Infof("Blocklisting cert")
+		CAs.BlocklistFingerprint(fp)
+	}
+
+	// Support deprecated config for at leaast one minor release to allow for migrations
 	for _, fp := range c.GetStringSlice("pki.blacklist", []string{}) {
-		l.WithField("fingerprint", fp).Infof("Blacklisting cert")
-		CAs.BlacklistFingerprint(fp)
+		l.WithField("fingerprint", fp).Infof("Blocklisting cert")
+		l.Warn("pki.blacklist is deprecated and will not be supported in a future release. Please migrate your config to use pki.blocklist")
+		CAs.BlocklistFingerprint(fp)
 	}
 
 	return CAs, nil

@@ -2,6 +2,7 @@
 
 set -e
 
+FIREWALL_ALL='[{"port": "any", "proto": "any", "host": "any"}]'
 
 if [ "$STATIC_HOSTS" ] || [ "$LIGHTHOUSES" ]
 then
@@ -32,9 +33,9 @@ lighthouse_hosts() {
 
 cat <<EOF
 pki:
-  ca: /ca.crt
-  cert: /${HOST}.crt
-  key: /${HOST}.key
+  ca: ca.crt
+  cert: ${HOST}.crt
+  key: ${HOST}.key
 
 lighthouse:
   am_lighthouse: ${AM_LIGHTHOUSE:-false}
@@ -48,13 +49,6 @@ tun:
   dev: ${TUN_DEV:-nebula1}
 
 firewall:
-  outbound:
-    - port: any
-      proto: any
-      host: any
-
-  inbound:
-    - port: any
-      proto: any
-      host: any
+  outbound: ${OUTBOUND:-$FIREWALL_ALL}
+  inbound: ${INBOUND:-$FIREWALL_ALL}
 EOF

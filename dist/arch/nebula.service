@@ -1,0 +1,13 @@
+[Unit]
+Description=nebula
+Wants=basic.target network-online.target
+After=basic.target network.target network-online.target
+
+[Service]
+SyslogIdentifier=nebula
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=/usr/bin/nebula -config /etc/nebula/config.yml
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

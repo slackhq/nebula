@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
+	"github.com/slackhq/nebula/config"
 )
 
 // A version string that can be set with
@@ -45,5 +47,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	nebula.Main(*configPath, *configTest, Build)
+	l := logrus.New()
+	l.Out = os.Stdout
+
+	c := config.NewC(l)
+	err := c.Load(*configPath)
+	if err != nil {
+		fmt.Printf("failed to load config: %s", err)
+		os.Exit(1)
+	}
+
+	ctrl, err := nebula.Main(c, *configTest, Build, l, nil)
+
+	switch v := err.(type) {
+	case nebula.ContextualError:
+		v.Log(l)
+		os.Exit(1)
+	case error:
+		l.WithError(err).Error("Failed to start")
+		os.Exit(1)
+	}
+
+	if !*configTest {
+		ctrl.Start()
+		ctrl.ShutdownBlock()
+	}
+
+	os.Exit(0)
 }

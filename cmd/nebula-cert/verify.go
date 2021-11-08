@@ -3,12 +3,13 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/slackhq/nebula/cert"
 	"io"
 	"io/ioutil"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/slackhq/nebula/cert"
 )
 
 type verifyFlags struct {
