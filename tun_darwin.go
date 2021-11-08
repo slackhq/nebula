@@ -81,13 +81,18 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("route MTU not supported in Darwin")
 	}
+
 	ifIndex := -1
-	if name != "utun" {
+	if name != "" && name != "utun" {
 		_, err := fmt.Sscanf(name, "utun%d", &ifIndex)
 		if err != nil || ifIndex < 0 {
-			return nil, fmt.Errorf("Interface name must be utun[0-9]* on Darwin")
+			// NOTE: we don't make this error so we don't break existing
+			// configs that set a name before it was used.
+			l.Warn("interface name must be utun[0-9]+ on Darwin, ignoring")
+			ifIndex = -1
 		}
 	}
+
 	fd, err := unix.Socket(_PF_SYSTEM, unix.SOCK_DGRAM, _SYSPROTO_CONTROL)
 	if err != nil {
 		return nil, fmt.Errorf("system socket: %v", err)
@@ -124,6 +129,20 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 	if errno != 0 {
 		return nil, fmt.Errorf("SYS_CONNECT: %v", errno)
 	}
+
+	var ifName struct {
+		name [16]byte
+	}
+	ifNameSize := uintptr(len(ifName.name))
+	_, _, errno = syscall.Syscall6(syscall.SYS_GETSOCKOPT, uintptr(fd),
+		2,
+		2,
+		uintptr(unsafe.Pointer(&ifName)),
+		uintptr(unsafe.Pointer(&ifNameSize)), 0)
+	if errno != 0 {
+		return nil, fmt.Errorf("SYS_GETSOCKOPT: %v", errno)
+	}
+	name = string(ifName.name[:ifNameSize-1])
 
 	err = syscall.SetNonblock(fd, true)
 	if err != nil {
