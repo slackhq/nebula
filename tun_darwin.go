@@ -118,12 +118,10 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 		scUnit:    uint32(ifIndex) + 1,
 	}
 
-	scPointer := unsafe.Pointer(&sc)
-
 	_, _, errno := unix.RawSyscall(
 		unix.SYS_CONNECT,
 		uintptr(fd),
-		uintptr(scPointer),
+		uintptr(unsafe.Pointer(&sc)),
 		uintptr(sockaddrCtlSize),
 	)
 	if errno != 0 {
@@ -135,8 +133,8 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 	}
 	ifNameSize := uintptr(len(ifName.name))
 	_, _, errno = syscall.Syscall6(syscall.SYS_GETSOCKOPT, uintptr(fd),
-		2,
-		2,
+		2, // SYSPROTO_CONTROL
+		2, // UTUN_OPT_IFNAME
 		uintptr(unsafe.Pointer(&ifName)),
 		uintptr(unsafe.Pointer(&ifNameSize)), 0)
 	if errno != 0 {
