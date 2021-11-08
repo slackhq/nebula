@@ -72,7 +72,7 @@ func Test_verify(t *testing.T) {
 		Details: cert.NebulaCertificateDetails{
 			Name:      "test-ca",
 			NotBefore: time.Now().Add(time.Hour * -1),
-			NotAfter:  time.Now().Add(time.Hour),
+			NotAfter:  time.Now().Add(time.Hour * 2),
 			PublicKey: caPub,
 			IsCA:      true,
 		},
