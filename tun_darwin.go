@@ -24,6 +24,9 @@ type Tun struct {
 	TXQueueLen   int
 	UnsafeRoutes []route
 	l            *logrus.Logger
+
+	// cache out buffer since we need to prepend 4 bytes for tun metadata
+	out []byte
 }
 
 type sockaddrCtl struct {
@@ -350,37 +353,6 @@ func addRoute(sock int, addr, mask *netroute.Inet4Addr, link *netroute.LinkAddr)
 	return nil
 }
 
-func (t *Tun) WriteRaw(b []byte) error {
-	var nn int
-
-	// add packet information header
-	var h [4]byte
-	h[0] = 0x00
-	h[1] = 0x00
-	h[2] = 0x00
-	h[3] = unix.AF_INET
-	b = append(h[:], b[:]...)
-
-	for {
-		max := len(b)
-		n, err := t.ReadWriteCloser.Write(b[nn:max])
-		if n > 0 {
-			nn += n
-		}
-		if nn == len(b) {
-			return err
-		}
-
-		if err != nil {
-			return err
-		}
-
-		if n == 0 {
-			return io.ErrUnexpectedEOF
-		}
-	}
-}
-
 var _ io.ReadWriteCloser = (*Tun)(nil)
 
 func (t *Tun) Read(to []byte) (int, error) {
@@ -393,13 +365,18 @@ func (t *Tun) Read(to []byte) (int, error) {
 	return n - 4, err
 }
 
+// Write is only valid for single threaded use
 func (t *Tun) Write(from []byte) (int, error) {
+	buf := t.out
+	if cap(buf) < len(from)+4 {
+		buf = make([]byte, len(from)+4)
+		t.out = buf
+	}
+	buf = buf[:len(from)+4]
 
 	if len(from) == 0 {
 		return 0, syscall.EIO
 	}
-
-	buf := make([]byte, len(from)+4)
 
 	// Determine the IP Family for the NULL L2 Header
 	ipVer := from[0] >> 4
@@ -415,6 +392,11 @@ func (t *Tun) Write(from []byte) (int, error) {
 
 	n, err := t.ReadWriteCloser.Write(buf)
 	return n - 4, err
+}
+
+func (t *Tun) WriteRaw(from []byte) error {
+	_, err := t.Write(from)
+	return err
 }
 
 func (c *Tun) CidrNet() *net.IPNet {
