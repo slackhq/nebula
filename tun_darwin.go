@@ -8,11 +8,11 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"syscall"
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
+	netroute "golang.org/x/net/route"
 	"golang.org/x/sys/unix"
 )
 
@@ -246,8 +246,33 @@ func (t *Tun) Activate() error {
 		return fmt.Errorf("failed to bring the tun device up: %s", err)
 	}
 
-	if err = exec.Command("/sbin/route", "-n", "add", "-net", t.Cidr.String(), "-interface", t.Device).Run(); err != nil {
-		return fmt.Errorf("failed to run 'route add': %s", err)
+	routeSock, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, unix.AF_UNSPEC)
+	if err != nil {
+		return fmt.Errorf("unable to create AF_ROUTE socket: %v", err)
+	}
+	defer func() {
+		unix.Shutdown(routeSock, unix.SHUT_RDWR)
+		err := unix.Close(routeSock)
+		if err != nil {
+			t.l.WithError(err).Error("failed to close AF_ROUTE socket")
+		}
+	}()
+
+	routeAddr := &netroute.Inet4Addr{}
+	maskAddr := &netroute.Inet4Addr{}
+	linkAddr, err := getLinkAddr(t.Device)
+	if err != nil {
+		return err
+	}
+	if linkAddr == nil {
+		return fmt.Errorf("unable to discover link_addr for tun interface")
+	}
+
+	copy(routeAddr.IP[:], addr[:])
+	copy(maskAddr.IP[:], mask[:])
+	err = addRoute(routeSock, routeAddr, maskAddr, linkAddr)
+	if err != nil {
+		return err
 	}
 
 	// Run the interface
@@ -258,9 +283,68 @@ func (t *Tun) Activate() error {
 
 	// Unsafe path routes
 	for _, r := range t.UnsafeRoutes {
-		if err = exec.Command("/sbin/route", "-n", "add", "-net", r.route.String(), "-interface", t.Device).Run(); err != nil {
-			return fmt.Errorf("failed to run 'route add' for unsafe_route %s: %s", r.route.String(), err)
+		copy(routeAddr.IP[:], r.route.IP.To4())
+		copy(maskAddr.IP[:], net.IP(r.route.Mask).To4())
+
+		err = addRoute(routeSock, routeAddr, maskAddr, linkAddr)
+		if err != nil {
+			return err
 		}
+
+		// TODO how to set metric
+	}
+
+	return nil
+}
+
+// Get the LinkAddr for the interface of the given name
+// TODO: Is there an easier way to fetch this when we create the interface?
+// Maybe SIOCGIFINDEX? but this doesn't appear to exist in the darwin headers.
+func getLinkAddr(name string) (*netroute.LinkAddr, error) {
+	rib, err := netroute.FetchRIB(unix.AF_UNSPEC, unix.NET_RT_IFLIST, 0)
+	if err != nil {
+		return nil, err
+	}
+	msgs, err := netroute.ParseRIB(unix.NET_RT_IFLIST, rib)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, m := range msgs {
+		switch m := m.(type) {
+		case *netroute.InterfaceMessage:
+			if m.Name == name {
+				sa, ok := m.Addrs[unix.RTAX_IFP].(*netroute.LinkAddr)
+				if ok {
+					return sa, nil
+				}
+			}
+		}
+	}
+
+	return nil, nil
+}
+
+func addRoute(sock int, addr, mask *netroute.Inet4Addr, link *netroute.LinkAddr) error {
+	r := netroute.RouteMessage{
+		Version: unix.RTM_VERSION,
+		Type:    unix.RTM_ADD,
+		Flags:   unix.RTF_UP,
+		Seq:     1,
+		Addrs: []netroute.Addr{
+			unix.RTAX_DST:     addr,
+			unix.RTAX_GATEWAY: link,
+			unix.RTAX_NETMASK: mask,
+		},
+	}
+
+	data, err := r.Marshal()
+	if err != nil {
+		return fmt.Errorf("failed to create route.RouteMessage: %v", err)
+	}
+	_, err = unix.Write(sock, data[:])
+	if err != nil {
+		return fmt.Errorf("failed to write route.RouteMessage to socket: %v", err)
 	}
 
 	return nil
