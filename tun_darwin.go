@@ -394,17 +394,17 @@ func (t *Tun) Write(from []byte) (int, error) {
 	return n - 4, err
 }
 
-func (t *Tun) WriteRaw(from []byte) error {
-	_, err := t.Write(from)
-	return err
-}
-
 func (c *Tun) CidrNet() *net.IPNet {
 	return c.Cidr
 }
 
 func (c *Tun) DeviceName() string {
 	return c.Device
+}
+
+func (c *Tun) WriteRaw(b []byte) error {
+	_, err := c.Write(b)
+	return err
 }
 
 func (t *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
