@@ -83,7 +83,7 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 	if err != nil {
 		hostinfo, err = f.handshakeManager.pendingHostMap.QueryVpnIp(vpnIp)
 		if err != nil {
-			hostinfo = f.handshakeManager.AddVpnIp(vpnIp)
+			hostinfo = f.handshakeManager.AddVpnIp(vpnIp, f.initHostInfo)
 		}
 	}
 	ci := hostinfo.ConnectionState
@@ -100,16 +100,6 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 	ci = hostinfo.ConnectionState
 	if ci != nil && ci.eKey != nil && ci.ready {
 		return hostinfo
-	}
-
-	if ci == nil {
-		// if we don't have a connection state, then send a handshake initiation
-		ci = f.newConnectionState(f.l, true, noise.HandshakeIX, []byte{}, 0)
-		// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
-		//ci = f.newConnectionState(true, noise.HandshakeXX, []byte{}, 0)
-		hostinfo.ConnectionState = ci
-	} else if ci.eKey == nil {
-		// if we don't have any state at all, create it
 	}
 
 	// If we have already created the handshake packet, we don't want to call the function at all.
@@ -129,6 +119,12 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 	}
 
 	return hostinfo
+}
+
+// initHostInfo is the init function to pass to (*HandshakeManager).AddVpnIP that
+// will create the initial Noise ConnectionState
+func (f *Interface) initHostInfo(hostinfo *HostInfo) {
+	hostinfo.ConnectionState = f.newConnectionState(f.l, true, noise.HandshakeIX, []byte{}, 0)
 }
 
 func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubType, hostInfo *HostInfo, p, nb, out []byte) {

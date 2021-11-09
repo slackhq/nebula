@@ -62,6 +62,9 @@ func (c *Control) Start() {
 func (c *Control) Stop() {
 	//TODO: stop tun and udp routines, the lock on hostMap effectively does that though
 	c.CloseAllTunnels(false)
+	if err := c.f.Close(); err != nil {
+		c.l.WithError(err).Error("Close interface failed")
+	}
 	c.cancel()
 	c.l.Info("Goodbye")
 }

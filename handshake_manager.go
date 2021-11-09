@@ -191,13 +191,13 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 	}
 }
 
-func (c *HandshakeManager) AddVpnIp(vpnIp iputil.VpnIp) *HostInfo {
-	hostinfo := c.pendingHostMap.AddVpnIp(vpnIp)
-	// We lock here and use an array to insert items to prevent locking the
-	// main receive thread for very long by waiting to add items to the pending map
-	//TODO: what lock?
-	c.OutboundHandshakeTimer.Add(vpnIp, c.config.tryInterval)
-	c.metricInitiated.Inc(1)
+func (c *HandshakeManager) AddVpnIp(vpnIp iputil.VpnIp, init func(*HostInfo)) *HostInfo {
+	hostinfo, created := c.pendingHostMap.AddVpnIp(vpnIp, init)
+
+	if created {
+		c.OutboundHandshakeTimer.Add(vpnIp, c.config.tryInterval)
+		c.metricInitiated.Inc(1)
+	}
 
 	return hostinfo
 }

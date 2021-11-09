@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Build with CGO_ENABLED=0 set, to create more portable binaries. This could
   have an affect on DNS resolution if you rely on anything non-standard. (#421)
 
+- Windows now uses the [wintun](https://www.wintun.net/) driver which does not require installation. This driver
+  is a large improvement over the TAP driver that was used in previous versions. If you had a previous version
+  of `nebula` running, you will want to disable the tap driver in Control Panel, or uninstall the `tap0901` driver
+  before running this version. (#289)
+
 ### Deprecated
 
 - The `preferred_ranges` option has been supported as a replacement for
@@ -48,9 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   will immediately switch to a preferred remote address after the reception of
   a handshake packet (instead of waiting until 1,000 packets have been sent).
   (#532)
-  
+
 - A race condition when `punchy.respond` is enabled and ensures the correct
   vpn ip is sent a punch back response in highly queried node. (#566)
+
+- Fix a rare crash during handshake due to a race condition. (#535)
 
 ## [1.4.0] - 2021-05-11
 
