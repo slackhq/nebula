@@ -148,7 +148,9 @@ punchy:
 tun:
   # When tun is disabled, a lighthouse can be started without a local tun interface (and therefore without root)
   disabled: false
-  # Name of the device
+  # Name of the device. If not set, a default will be chosen by the OS.
+  # For macOS: if set, must be in the form `utun[0-9]+`.
+  # For FreeBSD: Required to be set, must be in the form `tun[0-9]+`.
   dev: nebula1
   # Toggles forwarding of local broadcast packets, the address of which depends on the ip/mask encoded in pki.cert
   drop_local_broadcast: false

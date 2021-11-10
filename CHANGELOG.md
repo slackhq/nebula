@@ -33,9 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is a large improvement over the TAP driver that was used in previous versions. If you had a previous version
   of `nebula` running, you will want to disable the tap driver in Control Panel, or uninstall the `tap0901` driver
   before running this version. (#289)
-  
+
 - Darwin binaries are now universal (works on both amd64 and arm64), signed, and shipped in a notarized zip file.
   `nebula-darwin.zip` will be the only darwin release artifact. (#571)
+
+- Darwin uses syscalls and AF_ROUTE to configure the routing table, instead of
+  using `/sbin/route`. Setting `tun.dev` is now allowed on Darwin as well, it
+  must be in the format `utun[0-9]+` or it will be ignored. (#163)
 
 ### Deprecated
 
