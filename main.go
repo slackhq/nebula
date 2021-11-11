@@ -10,6 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/udp"
 	"gopkg.in/yaml.v2"
@@ -136,7 +137,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		l.WithField("duration", conntrackCacheTimeout).Info("Using routine-local conntrack cache")
 	}
 
-	var tun Inside
+	var tun overlay.Device
 	if !configTest {
 		c.CatchHUP(ctx)
 

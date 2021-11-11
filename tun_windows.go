@@ -13,10 +13,11 @@ import (
 	"syscall"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/overlay"
 )
 
 type Tun struct {
-	Inside
+	overlay.Device
 }
 
 func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
@@ -34,7 +35,7 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 		useWintun = false
 	}
 
-	var inside Inside
+	var inside overlay.Device
 	if useWintun {
 		inside, err = newWinTun(deviceName, cidr, defaultMTU, unsafeRoutes, txQueueLen)
 		if err != nil {
@@ -48,7 +49,7 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 	}
 
 	return &Tun{
-		Inside: inside,
+		Device: inside,
 	}, nil
 }
 
