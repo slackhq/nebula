@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2021-11-11
+
 ### Added
 
 - SSH `print-cert` has a new `-raw` flag to get the PEM representation of a certificate. (#483)
@@ -20,14 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   certificates since the last handshake. (#370)
 
 - New config option `unsafe_routes.<route>.metric` will set a metric for a specific unsafe route. It's useful if you have
-  more than one identical route and want to prefer one against the other.
+  more than one identical route and want to prefer one against the other. (#353)
 
 ### Changed
 
 - Build against go 1.17. (#553)
 
-- Build with CGO_ENABLED=0 set, to create more portable binaries. This could
-  have an affect on DNS resolution if you rely on anything non-standard. (#421)
+- Build with `CGO_ENABLED=0` set, to create more portable binaries. This could
+  have an effect on DNS resolution if you rely on anything non-standard. (#421)
 
 - Windows now uses the [wintun](https://www.wintun.net/) driver which does not require installation. This driver
   is a large improvement over the TAP driver that was used in previous versions. If you had a previous version
@@ -304,7 +306,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/slackhq/nebula/releases/tag/v1.5.0
 [1.4.0]: https://github.com/slackhq/nebula/releases/tag/v1.4.0
 [1.3.0]: https://github.com/slackhq/nebula/releases/tag/v1.3.0
 [1.2.0]: https://github.com/slackhq/nebula/releases/tag/v1.2.0
