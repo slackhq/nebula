@@ -1,4 +1,4 @@
-package nebula
+package overlay
 
 import (
 	"fmt"
@@ -14,12 +14,12 @@ type WindowsWaterTun struct {
 	Device       string
 	Cidr         *net.IPNet
 	MTU          int
-	UnsafeRoutes []route
+	UnsafeRoutes []Route
 
 	*water.Interface
 }
 
-func newWindowsWaterTun(deviceName string, cidr *net.IPNet, defaultMTU int, unsafeRoutes []route, txQueueLen int) (ifce *WindowsWaterTun, err error) {
+func newWindowsWaterTun(deviceName string, cidr *net.IPNet, defaultMTU int, unsafeRoutes []Route, txQueueLen int) (ifce *WindowsWaterTun, err error) {
 	// NOTE: You cannot set the deviceName under Windows, so you must check tun.Device after calling .Activate()
 	return &WindowsWaterTun{
 		Cidr:         cidr,
@@ -71,10 +71,10 @@ func (c *WindowsWaterTun) Activate() error {
 
 	for _, r := range c.UnsafeRoutes {
 		err = exec.Command(
-			"C:\\Windows\\System32\\route.exe", "add", r.route.String(), r.via.String(), "IF", strconv.Itoa(iface.Index), "METRIC", strconv.Itoa(r.metric),
+			"C:\\Windows\\System32\\route.exe", "add", r.Cidr.String(), r.Via.String(), "IF", strconv.Itoa(iface.Index), "METRIC", strconv.Itoa(r.Metric),
 		).Run()
 		if err != nil {
-			return fmt.Errorf("failed to add the unsafe_route %s: %v", r.route.String(), err)
+			return fmt.Errorf("failed to add the unsafe_route %s: %v", r.Cidr.String(), err)
 		}
 	}
 

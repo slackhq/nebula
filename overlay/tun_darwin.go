@@ -1,7 +1,7 @@
 //go:build !ios && !e2e_testing
 // +build !ios,!e2e_testing
 
-package nebula
+package overlay
 
 import (
 	"fmt"
@@ -22,7 +22,7 @@ type Tun struct {
 	Cidr         *net.IPNet
 	DefaultMTU   int
 	TXQueueLen   int
-	UnsafeRoutes []route
+	UnsafeRoutes []Route
 	l            *logrus.Logger
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
@@ -80,7 +80,7 @@ type ifreqQLEN struct {
 	pad   [8]byte
 }
 
-func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
+func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("route MTU not supported in Darwin")
 	}
@@ -172,7 +172,7 @@ func (t *Tun) deviceBytes() (o [16]byte) {
 	return
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int) (ifce *Tun, err error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
 }
 
@@ -286,8 +286,8 @@ func (t *Tun) Activate() error {
 
 	// Unsafe path routes
 	for _, r := range t.UnsafeRoutes {
-		copy(routeAddr.IP[:], r.route.IP.To4())
-		copy(maskAddr.IP[:], net.IP(r.route.Mask).To4())
+		copy(routeAddr.IP[:], r.Cidr.IP.To4())
+		copy(maskAddr.IP[:], net.IP(r.Cidr.Mask).To4())
 
 		err = addRoute(routeSock, routeAddr, maskAddr, linkAddr)
 		if err != nil {

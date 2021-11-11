@@ -1,4 +1,4 @@
-package nebula
+package overlay
 
 import (
 	"crypto"
@@ -18,7 +18,7 @@ type WinTun struct {
 	Device       string
 	Cidr         *net.IPNet
 	MTU          int
-	UnsafeRoutes []route
+	UnsafeRoutes []Route
 
 	tun *wintun.NativeTun
 }
@@ -42,7 +42,7 @@ func generateGUIDByDeviceName(name string) (*windows.GUID, error) {
 	return (*windows.GUID)(unsafe.Pointer(&sum[0])), nil
 }
 
-func newWinTun(deviceName string, cidr *net.IPNet, defaultMTU int, unsafeRoutes []route, txQueueLen int) (ifce *WinTun, err error) {
+func newWinTun(deviceName string, cidr *net.IPNet, defaultMTU int, unsafeRoutes []Route, txQueueLen int) (ifce *WinTun, err error) {
 	guid, err := generateGUIDByDeviceName(deviceName)
 	if err != nil {
 		return nil, fmt.Errorf("Generate GUID failed: %w", err)
@@ -77,16 +77,16 @@ func (c *WinTun) Activate() error {
 
 	for _, r := range c.UnsafeRoutes {
 		if !foundDefault4 {
-			if cidr, bits := r.route.Mask.Size(); cidr == 0 && bits != 0 {
+			if cidr, bits := r.Cidr.Mask.Size(); cidr == 0 && bits != 0 {
 				foundDefault4 = true
 			}
 		}
 
 		// Add our unsafe route
 		routes = append(routes, &winipcfg.RouteData{
-			Destination: *r.route,
-			NextHop:     *r.via,
-			Metric:      uint32(r.metric),
+			Destination: *r.Cidr,
+			NextHop:     *r.Via,
+			Metric:      uint32(r.Metric),
 		})
 	}
 
