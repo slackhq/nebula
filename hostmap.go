@@ -15,6 +15,7 @@ import (
 	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -408,10 +409,10 @@ func (hm *HostMap) Punchy(ctx context.Context, conn *udp.Conn) {
 	}
 }
 
-func (hm *HostMap) addUnsafeRoutes(routes *[]route) {
+func (hm *HostMap) addUnsafeRoutes(routes *[]overlay.Route) {
 	for _, r := range *routes {
-		hm.l.WithField("route", r.route).WithField("via", r.via).Warn("Adding UNSAFE Route")
-		hm.unsafeRoutes.AddCIDR(r.route, iputil.Ip2VpnIp(*r.via))
+		hm.l.WithField("cidr", r.Cidr).WithField("via", r.Via).Warn("Adding UNSAFE Route")
+		hm.unsafeRoutes.AddCIDR(r.Cidr, iputil.Ip2VpnIp(*r.Via))
 	}
 }
 

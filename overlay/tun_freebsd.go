@@ -1,7 +1,7 @@
 //go:build !e2e_testing
 // +build !e2e_testing
 
-package nebula
+package overlay
 
 import (
 	"fmt"
@@ -22,7 +22,7 @@ type Tun struct {
 	Device       string
 	Cidr         *net.IPNet
 	MTU          int
-	UnsafeRoutes []route
+	UnsafeRoutes []Route
 	l            *logrus.Logger
 
 	io.ReadWriteCloser
@@ -35,11 +35,11 @@ func (c *Tun) Close() error {
 	return nil
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int) (ifce *Tun, err error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in FreeBSD")
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("Route MTU not supported in FreeBSD")
 	}
@@ -80,9 +80,9 @@ func (c *Tun) Activate() error {
 	}
 	// Unsafe path routes
 	for _, r := range c.UnsafeRoutes {
-		c.l.Debug("command: route", "-n", "add", "-net", r.route.String(), "-interface", c.Device)
-		if err = exec.Command("/sbin/route", "-n", "add", "-net", r.route.String(), "-interface", c.Device).Run(); err != nil {
-			return fmt.Errorf("failed to run 'route add' for unsafe_route %s: %s", r.route.String(), err)
+		c.l.Debug("command: route", "-n", "add", "-net", r.Cidr.String(), "-interface", c.Device)
+		if err = exec.Command("/sbin/route", "-n", "add", "-net", r.Cidr.String(), "-interface", c.Device).Run(); err != nil {
+			return fmt.Errorf("failed to run 'route add' for unsafe_route %s: %s", r.Cidr.String(), err)
 		}
 	}
 

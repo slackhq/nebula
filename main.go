@@ -78,11 +78,11 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	// TODO: make sure mask is 4 bytes
 	tunCidr := cs.certificate.Details.Ips[0]
-	routes, err := parseRoutes(c, tunCidr)
+	routes, err := overlay.ParseRoutes(c, tunCidr)
 	if err != nil {
 		return nil, util.NewContextualError("Could not parse tun.routes", nil, err)
 	}
-	unsafeRoutes, err := parseUnsafeRoutes(c, tunCidr)
+	unsafeRoutes, err := overlay.ParseUnsafeRoutes(c, tunCidr)
 	if err != nil {
 		return nil, util.NewContextualError("Could not parse tun.unsafe_routes", nil, err)
 	}
@@ -142,32 +142,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	if !configTest {
 		c.CatchHUP(ctx)
 
-		switch {
-		case c.GetBool("tun.disabled", false):
-			tun = newDisabledTun(tunCidr, c.GetInt("tun.tx_queue", 500), c.GetBool("stats.message_metrics", false), l)
-		case tunFd != nil:
-			tun, err = newTunFromFd(
-				l,
-				*tunFd,
-				tunCidr,
-				c.GetInt("tun.mtu", DEFAULT_MTU),
-				routes,
-				unsafeRoutes,
-				c.GetInt("tun.tx_queue", 500),
-			)
-		default:
-			tun, err = newTun(
-				l,
-				c.GetString("tun.dev", ""),
-				tunCidr,
-				c.GetInt("tun.mtu", DEFAULT_MTU),
-				routes,
-				unsafeRoutes,
-				c.GetInt("tun.tx_queue", 500),
-				routines > 1,
-			)
-		}
-
+		tun, err = overlay.NewDeviceFromConfig(c, l, tunCidr, routes, unsafeRoutes, tunFd, routines)
 		if err != nil {
 			return nil, util.NewContextualError("Failed to get a tun/tap device", nil, err)
 		}

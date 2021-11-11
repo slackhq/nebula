@@ -1,4 +1,4 @@
-package nebula
+package overlay
 
 import (
 	"encoding/binary"
@@ -71,7 +71,8 @@ func (t *disabledTun) Read(b []byte) (int, error) {
 
 func (t *disabledTun) handleICMPEchoRequest(b []byte) bool {
 	// Return early if this is not a simple ICMP Echo Request
-	if !(len(b) >= 28 && len(b) <= mtu && b[0] == 0x45 && b[9] == 0x01 && b[20] == 0x08) {
+	//TODO: make constants out of these
+	if !(len(b) >= 28 && len(b) <= 9001 && b[0] == 0x45 && b[9] == 0x01 && b[20] == 0x08) {
 		return false
 	}
 
