@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net"
 	"os"
 	"runtime"
 	"sync/atomic"
@@ -16,24 +15,16 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/udp"
 )
 
 const mtu = 9001
 
-type Inside interface {
-	io.ReadWriteCloser
-	Activate() error
-	CidrNet() *net.IPNet
-	DeviceName() string
-	WriteRaw([]byte) error
-	NewMultiQueueReader() (io.ReadWriteCloser, error)
-}
-
 type InterfaceConfig struct {
 	HostMap                 *HostMap
 	Outside                 *udp.Conn
-	Inside                  Inside
+	Inside                  overlay.Device
 	certState               *CertState
 	Cipher                  string
 	Firewall                *Firewall
@@ -57,7 +48,7 @@ type InterfaceConfig struct {
 type Interface struct {
 	hostMap            *HostMap
 	outside            *udp.Conn
-	inside             Inside
+	inside             overlay.Device
 	certState          *CertState
 	cipher             string
 	firewall           *Firewall
