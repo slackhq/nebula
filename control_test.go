@@ -9,13 +9,13 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
-	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestControl_GetHostInfoByVpnIp(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	// Special care must be taken to re-use all objects provided to the hostmap and certificate in the expectedInfo object
 	// To properly ensure we are not exposing core memory to the caller
 	hm := NewHostMap(l, "test", &net.IPNet{}, make([]*net.IPNet, 0))
@@ -94,7 +94,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 
 	// Make sure we don't have any unexpected fields
 	assertFields(t, []string{"VpnIp", "LocalIndex", "RemoteIndex", "RemoteAddrs", "CachedPackets", "Cert", "MessageCounter", "CurrentRemote"}, thi)
-	util.AssertDeepCopyEqual(t, &expectedInfo, thi)
+	test.AssertDeepCopyEqual(t, &expectedInfo, thi)
 
 	// Make sure we don't panic if the host info doesn't have a cert yet
 	assert.NotPanics(t, func() {

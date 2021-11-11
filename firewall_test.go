@@ -14,12 +14,12 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/iputil"
-	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNewFirewall(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	c := &cert.NebulaCertificate{}
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 	conntrack := fw.Conntrack
@@ -58,7 +58,7 @@ func TestNewFirewall(t *testing.T) {
 }
 
 func TestFirewall_AddRule(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	ob := &bytes.Buffer{}
 	l.SetOutput(ob)
 
@@ -133,7 +133,7 @@ func TestFirewall_AddRule(t *testing.T) {
 }
 
 func TestFirewall_Drop(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	ob := &bytes.Buffer{}
 	l.SetOutput(ob)
 
@@ -308,7 +308,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 }
 
 func TestFirewall_Drop2(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	ob := &bytes.Buffer{}
 	l.SetOutput(ob)
 
@@ -367,7 +367,7 @@ func TestFirewall_Drop2(t *testing.T) {
 }
 
 func TestFirewall_Drop3(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	ob := &bytes.Buffer{}
 	l.SetOutput(ob)
 
@@ -453,7 +453,7 @@ func TestFirewall_Drop3(t *testing.T) {
 }
 
 func TestFirewall_DropConntrackReload(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	ob := &bytes.Buffer{}
 	l.SetOutput(ob)
 
@@ -635,7 +635,7 @@ func Test_parsePort(t *testing.T) {
 }
 
 func TestNewFirewallFromConfig(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	// Test a bad rule definition
 	c := &cert.NebulaCertificate{}
 	conf := config.NewC(l)
@@ -685,7 +685,7 @@ func TestNewFirewallFromConfig(t *testing.T) {
 }
 
 func TestAddFirewallRulesFromConfig(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	// Test adding tcp rule
 	conf := config.NewC(l)
 	mf := &mockFirewall{}
@@ -849,7 +849,7 @@ func TestTCPRTTTracking(t *testing.T) {
 }
 
 func TestFirewall_convertRule(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	ob := &bytes.Buffer{}
 	l.SetOutput(ob)
 

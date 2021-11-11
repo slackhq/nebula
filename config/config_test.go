@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestConfig_Load(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	dir, err := ioutil.TempDir("", "config-test")
 	// invalid yaml
 	c := NewC(l)
@@ -42,7 +42,7 @@ func TestConfig_Load(t *testing.T) {
 }
 
 func TestConfig_Get(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	// test simple type
 	c := NewC(l)
 	c.Settings["firewall"] = map[interface{}]interface{}{"outbound": "hi"}
@@ -58,14 +58,14 @@ func TestConfig_Get(t *testing.T) {
 }
 
 func TestConfig_GetStringSlice(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	c := NewC(l)
 	c.Settings["slice"] = []interface{}{"one", "two"}
 	assert.Equal(t, []string{"one", "two"}, c.GetStringSlice("slice", []string{}))
 }
 
 func TestConfig_GetBool(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	c := NewC(l)
 	c.Settings["bool"] = true
 	assert.Equal(t, true, c.GetBool("bool", false))
@@ -93,7 +93,7 @@ func TestConfig_GetBool(t *testing.T) {
 }
 
 func TestConfig_HasChanged(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	// No reload has occurred, return false
 	c := NewC(l)
 	c.Settings["test"] = "hi"
@@ -115,7 +115,7 @@ func TestConfig_HasChanged(t *testing.T) {
 }
 
 func TestConfig_ReloadConfig(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	done := make(chan bool, 1)
 	dir, err := ioutil.TempDir("", "config-test")
 	assert.Nil(t, err)

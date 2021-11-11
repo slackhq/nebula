@@ -8,6 +8,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/util"
 )
 
 // A version string that can be set with
@@ -60,7 +61,7 @@ func main() {
 	ctrl, err := nebula.Main(c, *configTest, Build, l, nil)
 
 	switch v := err.(type) {
-	case nebula.ContextualError:
+	case util.ContextualError:
 		v.Log(l)
 		os.Exit(1)
 	case error:

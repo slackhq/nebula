@@ -1,4 +1,4 @@
-package util
+package test
 
 import (
 	"io/ioutil"
@@ -7,7 +7,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func NewTestLogger() *logrus.Logger {
+func NewLogger() *logrus.Logger {
 	l := logrus.New()
 
 	v := os.Getenv("TEST_LOGS")
