@@ -65,7 +65,7 @@ func (c *Control) InjectLightHouseAddr(vpnIp net.IP, toAddr *net.UDPAddr) {
 
 // GetFromTun will pull a packet off the tun side of nebula
 func (c *Control) GetFromTun(block bool) []byte {
-	return c.f.inside.(*overlay.Tun).Get(block)
+	return c.f.inside.(*overlay.TestTun).Get(block)
 }
 
 // GetFromUDP will pull a udp packet off the udp side of nebula
@@ -78,7 +78,7 @@ func (c *Control) GetUDPTxChan() <-chan *udp.Packet {
 }
 
 func (c *Control) GetTunTxChan() <-chan []byte {
-	return c.f.inside.(*overlay.Tun).TxPackets
+	return c.f.inside.(*overlay.TestTun).TxPackets
 }
 
 // InjectUDPPacket will inject a packet into the udp side of nebula
@@ -115,7 +115,7 @@ func (c *Control) InjectTunUDPPacket(toIp net.IP, toPort uint16, fromPort uint16
 		panic(err)
 	}
 
-	c.f.inside.(*overlay.Tun).Send(buffer.Bytes())
+	c.f.inside.(*overlay.TestTun).Send(buffer.Bytes())
 }
 
 func (c *Control) GetUDPAddr() string {

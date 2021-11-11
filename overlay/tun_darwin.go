@@ -16,7 +16,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type Tun struct {
+type tun struct {
 	io.ReadWriteCloser
 	Device       string
 	Cidr         *net.IPNet
@@ -74,13 +74,7 @@ type ifreqMTU struct {
 	pad  [8]byte
 }
 
-type ifreqQLEN struct {
-	Name  [16]byte
-	Value int32
-	pad   [8]byte
-}
-
-func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
+func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int, _ bool) (*tun, error) {
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("route MTU not supported in Darwin")
 	}
@@ -106,7 +100,7 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 		ctlName [96]byte
 	}{}
 
-	copy(ctlInfo.ctlName[:], []byte(utunControlName))
+	copy(ctlInfo.ctlName[:], utunControlName)
 
 	err = ioctl(uintptr(fd), uintptr(_CTLIOCGINFO), uintptr(unsafe.Pointer(ctlInfo)))
 	if err != nil {
@@ -125,7 +119,7 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 		unix.SYS_CONNECT,
 		uintptr(fd),
 		uintptr(unsafe.Pointer(&sc)),
-		uintptr(sockaddrCtlSize),
+		sockaddrCtlSize,
 	)
 	if errno != 0 {
 		return nil, fmt.Errorf("SYS_CONNECT: %v", errno)
@@ -152,7 +146,7 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 
 	file := os.NewFile(uintptr(fd), "")
 
-	tun := &Tun{
+	tun := &tun{
 		ReadWriteCloser: file,
 		Device:          name,
 		Cidr:            cidr,
@@ -165,25 +159,25 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 	return tun, nil
 }
 
-func (t *Tun) deviceBytes() (o [16]byte) {
+func (t *tun) deviceBytes() (o [16]byte) {
 	for i, c := range t.Device {
 		o[i] = byte(c)
 	}
 	return
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int) (ifce *Tun, err error) {
+func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ []Route, _ int) (*tun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
 }
 
-func (c *Tun) Close() error {
-	if c.ReadWriteCloser != nil {
-		return c.ReadWriteCloser.Close()
+func (t *tun) Close() error {
+	if t.ReadWriteCloser != nil {
+		return t.ReadWriteCloser.Close()
 	}
 	return nil
 }
 
-func (t *Tun) Activate() error {
+func (t *tun) Activate() error {
 	devName := t.deviceBytes()
 
 	var addr, mask [4]byte
@@ -231,7 +225,7 @@ func (t *Tun) Activate() error {
 	// Set the MTU on the device
 	ifm := ifreqMTU{Name: devName, MTU: int32(t.DefaultMTU)}
 	if err = ioctl(fd, unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
-		return fmt.Errorf("Failed to set tun mtu: %v", err)
+		return fmt.Errorf("failed to set tun mtu: %v", err)
 	}
 
 	/*
@@ -353,9 +347,7 @@ func addRoute(sock int, addr, mask *netroute.Inet4Addr, link *netroute.LinkAddr)
 	return nil
 }
 
-var _ io.ReadWriteCloser = (*Tun)(nil)
-
-func (t *Tun) Read(to []byte) (int, error) {
+func (t *tun) Read(to []byte) (int, error) {
 
 	buf := make([]byte, len(to)+4)
 
@@ -366,7 +358,7 @@ func (t *Tun) Read(to []byte) (int, error) {
 }
 
 // Write is only valid for single threaded use
-func (t *Tun) Write(from []byte) (int, error) {
+func (t *tun) Write(from []byte) (int, error) {
 	buf := t.out
 	if cap(buf) < len(from)+4 {
 		buf = make([]byte, len(from)+4)
@@ -385,7 +377,7 @@ func (t *Tun) Write(from []byte) (int, error) {
 	} else if ipVer == 6 {
 		buf[3] = syscall.AF_INET6
 	} else {
-		return 0, fmt.Errorf("Unable to determine IP version from packet")
+		return 0, fmt.Errorf("unable to determine IP version from packet")
 	}
 
 	copy(buf[4:], from)
@@ -394,19 +386,19 @@ func (t *Tun) Write(from []byte) (int, error) {
 	return n - 4, err
 }
 
-func (c *Tun) CidrNet() *net.IPNet {
-	return c.Cidr
+func (t *tun) CidrNet() *net.IPNet {
+	return t.Cidr
 }
 
-func (c *Tun) DeviceName() string {
-	return c.Device
+func (t *tun) DeviceName() string {
+	return t.Device
 }
 
-func (c *Tun) WriteRaw(b []byte) error {
-	_, err := c.Write(b)
+func (t *tun) WriteRaw(b []byte) error {
+	_, err := t.Write(b)
 	return err
 }
 
-func (t *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
 }
