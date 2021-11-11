@@ -1,4 +1,4 @@
-## What is Nebula?
+## What is Nebula?
 Nebula is a scalable overlay networking tool with a focus on performance, simplicity and security.
 It lets you seamlessly connect computers anywhere in the world. Nebula is portable, and runs on Linux, OSX, Windows, iOS, and Android.
 It can be used to connect a small number of computers, but is also able to connect tens of thousands of computers.
@@ -7,6 +7,8 @@ Nebula incorporates a number of existing concepts like encryption, security grou
 and tunneling, and each of those individual pieces existed before Nebula in various forms.
 What makes Nebula different to existing offerings is that it brings all of these ideas together,
 resulting in a sum that is greater than its individual parts.
+
+Further documentation can be found [here](https://www.defined.net/nebula/introduction/).
 
 You can read more about Nebula [here](https://medium.com/p/884110a5579).
 
@@ -48,9 +50,9 @@ Nebula's user-defined groups allow for provider agnostic traffic filtering betwe
 Discovery nodes allow individual peers to find each other and optionally use UDP hole punching to establish connections from behind most firewalls or NATs.
 Users can move data between nodes in any number of cloud service providers, datacenters, and endpoints, without needing to maintain a particular addressing scheme.
 
-Nebula uses elliptic curve Diffie-Hellman key exchange, and AES-256-GCM in its default configuration.
+Nebula uses Elliptic-curve Diffie-Hellman (`ECDH`) key exchange and `AES-256-GCM` in its default configuration.
 
-Nebula was created to provide a mechanism for groups hosts to communicate securely, even across the internet, while enabling expressive firewall definitions similar in style to cloud security groups.
+Nebula was created to provide a mechanism for groups of hosts to communicate securely, even across the internet, while enabling expressive firewall definitions similar in style to cloud security groups.
 
 ## Getting started (quickly)
 

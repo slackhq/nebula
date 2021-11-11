@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"github.com/slackhq/nebula"
+	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/udp"
 )
 
 type R struct {
@@ -41,7 +43,7 @@ const (
 	RouteAndExit ExitType = 2
 )
 
-type ExitFunc func(packet *nebula.UdpPacket, receiver *nebula.Control) ExitType
+type ExitFunc func(packet *udp.Packet, receiver *nebula.Control) ExitType
 
 func NewR(controls ...*nebula.Control) *R {
 	r := &R{
@@ -79,7 +81,7 @@ func (r *R) AddRoute(ip net.IP, port uint16, c *nebula.Control) {
 // OnceFrom will route a single packet from sender then return
 // If the router doesn't have the nebula controller for that address, we panic
 func (r *R) OnceFrom(sender *nebula.Control) {
-	r.RouteExitFunc(sender, func(*nebula.UdpPacket, *nebula.Control) ExitType {
+	r.RouteExitFunc(sender, func(*udp.Packet, *nebula.Control) ExitType {
 		return RouteAndExit
 	})
 }
@@ -119,7 +121,7 @@ func (r *R) RouteUntilTxTun(sender *nebula.Control, receiver *nebula.Control) []
 //   - routeAndExit: this call will return immediately after routing the last packet from sender
 //   - keepRouting: the packet will be routed and whatDo will be called again on the next packet from sender
 func (r *R) RouteExitFunc(sender *nebula.Control, whatDo ExitFunc) {
-	h := &nebula.Header{}
+	h := &header.H{}
 	for {
 		p := sender.GetFromUDP(true)
 		r.Lock()
@@ -159,9 +161,9 @@ func (r *R) RouteExitFunc(sender *nebula.Control, whatDo ExitFunc) {
 
 // RouteUntilAfterMsgType will route for sender until a message type is seen and sent from sender
 // If the router doesn't have the nebula controller for that address, we panic
-func (r *R) RouteUntilAfterMsgType(sender *nebula.Control, msgType nebula.NebulaMessageType, subType nebula.NebulaMessageSubType) {
-	h := &nebula.Header{}
-	r.RouteExitFunc(sender, func(p *nebula.UdpPacket, r *nebula.Control) ExitType {
+func (r *R) RouteUntilAfterMsgType(sender *nebula.Control, msgType header.MessageType, subType header.MessageSubType) {
+	h := &header.H{}
+	r.RouteExitFunc(sender, func(p *udp.Packet, r *nebula.Control) ExitType {
 		if err := h.Parse(p.Data); err != nil {
 			panic(err)
 		}
@@ -181,7 +183,7 @@ func (r *R) RouteForUntilAfterToAddr(sender *nebula.Control, toAddr *net.UDPAddr
 		finish = RouteAndExit
 	}
 
-	r.RouteExitFunc(sender, func(p *nebula.UdpPacket, r *nebula.Control) ExitType {
+	r.RouteExitFunc(sender, func(p *udp.Packet, r *nebula.Control) ExitType {
 		if p.ToIp.Equal(toAddr.IP) && p.ToPort == uint16(toAddr.Port) {
 			return finish
 		}
@@ -215,7 +217,7 @@ func (r *R) RouteForAllExitFunc(whatDo ExitFunc) {
 		x, rx, _ := reflect.Select(sc)
 		r.Lock()
 
-		p := rx.Interface().(*nebula.UdpPacket)
+		p := rx.Interface().(*udp.Packet)
 
 		outAddr := cm[x].GetUDPAddr()
 		inAddr := net.JoinHostPort(p.ToIp.String(), fmt.Sprintf("%v", p.ToPort))
@@ -277,7 +279,7 @@ func (r *R) FlushAll() {
 		}
 		r.Lock()
 
-		p := rx.Interface().(*nebula.UdpPacket)
+		p := rx.Interface().(*udp.Packet)
 
 		outAddr := cm[x].GetUDPAddr()
 		inAddr := net.JoinHostPort(p.ToIp.String(), fmt.Sprintf("%v", p.ToPort))
@@ -292,7 +294,7 @@ func (r *R) FlushAll() {
 
 // getControl performs or seeds NAT translation and returns the control for toAddr, p from fields may change
 // This is an internal router function, the caller must hold the lock
-func (r *R) getControl(fromAddr, toAddr string, p *nebula.UdpPacket) *nebula.Control {
+func (r *R) getControl(fromAddr, toAddr string, p *udp.Packet) *nebula.Control {
 	if newAddr, ok := r.outNat[fromAddr+":"+toAddr]; ok {
 		p.FromIp = newAddr.IP
 		p.FromPort = uint16(newAddr.Port)

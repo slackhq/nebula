@@ -25,7 +25,7 @@ jobs:
           mv build/*.tar.gz release
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v2
         with:
           name: linux-latest
           path: release
@@ -47,16 +47,20 @@ jobs:
           echo $Env:GITHUB_REF.Substring(11)
           go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\nebula.exe ./cmd/nebula-service
           go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\nebula-cert.exe ./cmd/nebula-cert
+          mkdir build\dist\windows
+          mv dist\windows\wintun build\dist\windows\
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v2
         with:
           name: windows-latest
           path: build
 
   build-darwin:
-    name: Build Darwin amd64
-    runs-on: macOS-latest
+    name: Build Universal Darwin
+    env:
+      HAS_SIGNING_CREDS: ${{ secrets.AC_USERNAME != '' }}
+    runs-on: macos-11
     steps:
       - name: Set up Go 1.17
         uses: actions/setup-go@v2
@@ -66,43 +70,54 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
 
-      - name: Build
+      - name: Import certificates
+        if: env.HAS_SIGNING_CREDS == 'true'
+        uses: Apple-Actions/import-codesign-certs@v1
+        with:
+          p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
+
+      - name: Build, sign, and notarize
+        env:
+          AC_USERNAME: ${{ secrets.AC_USERNAME }}
+          AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
         run: |
-          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" service build/nebula-darwin-amd64.tar.gz
-          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" service build/nebula-darwin-arm64.tar.gz
+          rm -rf release
           mkdir release
-          mv build/*.tar.gz release
+          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" service build/darwin-amd64/nebula build/darwin-amd64/nebula-cert
+          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" service build/darwin-arm64/nebula build/darwin-arm64/nebula-cert
+          lipo -create -output ./release/nebula ./build/darwin-amd64/nebula ./build/darwin-arm64/nebula
+          lipo -create -output ./release/nebula-cert ./build/darwin-amd64/nebula-cert ./build/darwin-arm64/nebula-cert
+
+          if [ -n "$AC_USERNAME" ]; then
+            codesign -s "10BC1FDDEB6CE753550156C0669109FAC49E4D1E" -f -v --timestamp --options=runtime -i "net.defined.nebula" ./release/nebula
+            codesign -s "10BC1FDDEB6CE753550156C0669109FAC49E4D1E" -f -v --timestamp --options=runtime -i "net.defined.nebula-cert" ./release/nebula-cert
+          fi
+
+          zip -j release/nebula-darwin.zip release/nebula-cert release/nebula
+
+          if [ -n "$AC_USERNAME" ]; then
+            xcrun notarytool submit ./release/nebula-darwin.zip --team-id "576H3XS7FP" --apple-id "$AC_USERNAME" --password "$AC_PASSWORD" --wait
+          fi
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v2
         with:
           name: darwin-latest
-          path: release
+          path: ./release/*
 
   release:
     name: Create and Upload Release
     needs: [build-linux, build-darwin, build-windows]
     runs-on: ubuntu-latest
     steps:
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v1
-        with:
-          name: linux-latest
-
-      - name: Download Darwin artifacts
-        uses: actions/download-artifact@v1
-        with:
-          name: darwin-latest
-
-      - name: Download Windows artifacts
-        uses: actions/download-artifact@v1
-        with:
-          name: windows-latest
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
 
       - name: Zip Windows
         run: |
           cd windows-latest
-          zip nebula-windows-amd64.zip nebula.exe nebula-cert.exe
+          zip -r nebula-windows-amd64.zip nebula.exe nebula-cert.exe dist
 
       - name: Create sha256sum
         run: |
@@ -115,12 +130,17 @@ jobs:
                 sha256sum <nebula.exe | sed 's=-$=nebula-windows-amd64.zip/nebula.exe='
                 sha256sum <nebula-cert.exe | sed 's=-$=nebula-windows-amd64.zip/nebula-cert.exe='
                 sha256sum nebula-windows-amd64.zip
+              elif [ "$dir" = darwin-latest ]
+              then
+                sha256sum <nebula-darwin.zip | sed 's=-$=nebula-darwin.zip='
+                sha256sum <nebula | sed 's=-$=nebula-darwin.zip/nebula='
+                sha256sum <nebula-cert | sed 's=-$=nebula-darwin.zip/nebula-cert='
               else
-                  for v in *.tar.gz
-                  do
-                    sha256sum $v
-                    tar zxf $v --to-command='sh -c "sha256sum | sed s=-$='$v'/$TAR_FILENAME="'
-                  done
+                for v in *.tar.gz
+                do
+                  sha256sum $v
+                  tar zxf $v --to-command='sh -c "sha256sum | sed s=-$='$v'/$TAR_FILENAME="'
+                done
               fi
             )
           done | sort -k 2 >SHASUM256.txt
@@ -150,25 +170,15 @@ jobs:
           asset_name: SHASUM256.txt
           asset_content_type: text/plain
 
-      - name: Upload darwin-amd64
+      - name: Upload darwin zip
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./darwin-latest/nebula-darwin-amd64.tar.gz
-          asset_name: nebula-darwin-amd64.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload darwin-arm64
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./darwin-latest/nebula-darwin-arm64.tar.gz
-          asset_name: nebula-darwin-arm64.tar.gz
-          asset_content_type: application/gzip
+          asset_path: ./darwin-latest/nebula-darwin.zip
+          asset_name: nebula-darwin.zip
+          asset_content_type: application/zip
 
       - name: Upload windows-amd64
         uses: actions/upload-release-asset@v1.0.1

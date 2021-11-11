@@ -5,7 +5,6 @@ package e2e
 
 import (
 	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -19,7 +18,9 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/e2e/router"
+	"github.com/slackhq/nebula/iputil"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ed25519"
@@ -82,10 +83,10 @@ func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, u
 		panic(err)
 	}
 
-	config := nebula.NewConfig(l)
-	config.LoadString(string(cb))
+	c := config.NewC(l)
+	c.LoadString(string(cb))
 
-	control, err := nebula.Main(config, false, "e2e-test", l, nil)
+	control, err := nebula.Main(c, false, "e2e-test", l, nil)
 
 	if err != nil {
 		panic(err)
@@ -200,19 +201,6 @@ func x25519Keypair() ([]byte, []byte) {
 	return pubkey, privkey
 }
 
-func ip2int(ip []byte) uint32 {
-	if len(ip) == 16 {
-		return binary.BigEndian.Uint32(ip[12:16])
-	}
-	return binary.BigEndian.Uint32(ip)
-}
-
-func int2ip(nn uint32) net.IP {
-	ip := make(net.IP, 4)
-	binary.BigEndian.PutUint32(ip, nn)
-	return ip
-}
-
 type doneCb func()
 
 func deadline(t *testing.T, seconds time.Duration) doneCb {
@@ -245,15 +233,15 @@ func assertTunnel(t *testing.T, vpnIpA, vpnIpB net.IP, controlA, controlB *nebul
 
 func assertHostInfoPair(t *testing.T, addrA, addrB *net.UDPAddr, vpnIpA, vpnIpB net.IP, controlA, controlB *nebula.Control) {
 	// Get both host infos
-	hBinA := controlA.GetHostInfoByVpnIP(ip2int(vpnIpB), false)
-	assert.NotNil(t, hBinA, "Host B was not found by vpnIP in controlA")
+	hBinA := controlA.GetHostInfoByVpnIp(iputil.Ip2VpnIp(vpnIpB), false)
+	assert.NotNil(t, hBinA, "Host B was not found by vpnIp in controlA")
 
-	hAinB := controlB.GetHostInfoByVpnIP(ip2int(vpnIpA), false)
-	assert.NotNil(t, hAinB, "Host A was not found by vpnIP in controlB")
+	hAinB := controlB.GetHostInfoByVpnIp(iputil.Ip2VpnIp(vpnIpA), false)
+	assert.NotNil(t, hAinB, "Host A was not found by vpnIp in controlB")
 
 	// Check that both vpn and real addr are correct
-	assert.Equal(t, vpnIpB, hBinA.VpnIP, "Host B VpnIp is wrong in control A")
-	assert.Equal(t, vpnIpA, hAinB.VpnIP, "Host A VpnIp is wrong in control B")
+	assert.Equal(t, vpnIpB, hBinA.VpnIp, "Host B VpnIp is wrong in control A")
+	assert.Equal(t, vpnIpA, hAinB.VpnIp, "Host A VpnIp is wrong in control B")
 
 	assert.Equal(t, addrB.IP.To16(), hBinA.CurrentRemote.IP.To16(), "Host B remote ip is wrong in control A")
 	assert.Equal(t, addrA.IP.To16(), hAinB.CurrentRemote.IP.To16(), "Host A remote ip is wrong in control B")

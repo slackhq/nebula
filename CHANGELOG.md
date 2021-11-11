@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2021-11-11
+
 ### Added
 
 - SSH `print-cert` has a new `-raw` flag to get the PEM representation of a certificate. (#483)
@@ -18,10 +20,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New config option `pki.disconnect_invalid` that will tear down tunnels when they become invalid (through expiry or
   removal of root trust). Default is `false`. Note, this will not currently recognize if a remote has changed
   certificates since the last handshake. (#370)
-  
+
+- New config option `unsafe_routes.<route>.metric` will set a metric for a specific unsafe route. It's useful if you have
+  more than one identical route and want to prefer one against the other. (#353)
+
 ### Changed
 
 - Build against go 1.17. (#553)
+
+- Build with `CGO_ENABLED=0` set, to create more portable binaries. This could
+  have an effect on DNS resolution if you rely on anything non-standard. (#421)
+
+- Windows now uses the [wintun](https://www.wintun.net/) driver which does not require installation. This driver
+  is a large improvement over the TAP driver that was used in previous versions. If you had a previous version
+  of `nebula` running, you will want to disable the tap driver in Control Panel, or uninstall the `tap0901` driver
+  before running this version. (#289)
+
+- Darwin binaries are now universal (works on both amd64 and arm64), signed, and shipped in a notarized zip file.
+  `nebula-darwin.zip` will be the only darwin release artifact. (#571)
+
+- Darwin uses syscalls and AF_ROUTE to configure the routing table, instead of
+  using `/sbin/route`. Setting `tun.dev` is now allowed on Darwin as well, it
+  must be in the format `utun[0-9]+` or it will be ignored. (#163)
 
 ### Deprecated
 
@@ -42,6 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   will immediately switch to a preferred remote address after the reception of
   a handshake packet (instead of waiting until 1,000 packets have been sent).
   (#532)
+
+- A race condition when `punchy.respond` is enabled and ensures the correct
+  vpn ip is sent a punch back response in highly queried node. (#566)
+
+- Fix a rare crash during handshake due to a race condition. (#535)
 
 ## [1.4.0] - 2021-05-11
 
@@ -281,7 +306,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/slackhq/nebula/releases/tag/v1.5.0
 [1.4.0]: https://github.com/slackhq/nebula/releases/tag/v1.4.0
 [1.3.0]: https://github.com/slackhq/nebula/releases/tag/v1.3.0
 [1.2.0]: https://github.com/slackhq/nebula/releases/tag/v1.2.0

@@ -3,11 +3,12 @@ package nebula
 import (
 	"testing"
 
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestBits(t *testing.T) {
-	l := NewTestLogger()
+	l := test.NewLogger()
 	b := NewBits(10)
 
 	// make sure it is the right size
@@ -75,7 +76,7 @@ func TestBits(t *testing.T) {
 }
 
 func TestBitsDupeCounter(t *testing.T) {
-	l := NewTestLogger()
+	l := test.NewLogger()
 	b := NewBits(10)
 	b.lostCounter.Clear()
 	b.dupeCounter.Clear()
@@ -100,7 +101,7 @@ func TestBitsDupeCounter(t *testing.T) {
 }
 
 func TestBitsOutOfWindowCounter(t *testing.T) {
-	l := NewTestLogger()
+	l := test.NewLogger()
 	b := NewBits(10)
 	b.lostCounter.Clear()
 	b.dupeCounter.Clear()
@@ -130,7 +131,7 @@ func TestBitsOutOfWindowCounter(t *testing.T) {
 }
 
 func TestBitsLostCounter(t *testing.T) {
-	l := NewTestLogger()
+	l := test.NewLogger()
 	b := NewBits(10)
 	b.lostCounter.Clear()
 	b.dupeCounter.Clear()

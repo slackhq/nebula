@@ -15,12 +15,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/config"
 )
 
 // startStats initializes stats from config. On success, if any futher work
 // is needed to serve stats, it returns a func to handle that work. If no
 // work is needed, it'll return nil. On failure, it returns nil, error.
-func startStats(l *logrus.Logger, c *Config, buildVersion string, configTest bool) (func(), error) {
+func startStats(l *logrus.Logger, c *config.C, buildVersion string, configTest bool) (func(), error) {
 	mType := c.GetString("stats.type", "")
 	if mType == "" || mType == "none" {
 		return nil, nil
@@ -57,7 +58,7 @@ func startStats(l *logrus.Logger, c *Config, buildVersion string, configTest boo
 	return startFn, nil
 }
 
-func startGraphiteStats(l *logrus.Logger, i time.Duration, c *Config, configTest bool) error {
+func startGraphiteStats(l *logrus.Logger, i time.Duration, c *config.C, configTest bool) error {
 	proto := c.GetString("stats.protocol", "tcp")
 	host := c.GetString("stats.host", "")
 	if host == "" {
@@ -77,7 +78,7 @@ func startGraphiteStats(l *logrus.Logger, i time.Duration, c *Config, configTest
 	return nil
 }
 
-func startPrometheusStats(l *logrus.Logger, i time.Duration, c *Config, buildVersion string, configTest bool) (func(), error) {
+func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildVersion string, configTest bool) (func(), error) {
 	namespace := c.GetString("stats.namespace", "")
 	subsystem := c.GetString("stats.subsystem", "")
 
@@ -93,7 +94,9 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *Config, buildVer
 
 	pr := prometheus.NewRegistry()
 	pClient := mp.NewPrometheusProvider(metrics.DefaultRegistry, namespace, subsystem, pr, i)
-	go pClient.UpdatePrometheusMetrics()
+	if !configTest {
+		go pClient.UpdatePrometheusMetrics()
+	}
 
 	// Export our version information as labels on a static gauge
 	g := prometheus.NewGauge(prometheus.GaugeOpts{

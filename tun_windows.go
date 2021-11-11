@@ -7,21 +7,17 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os/exec"
-	"strconv"
+	"os"
+	"path/filepath"
+	"runtime"
+	"syscall"
 
 	"github.com/sirupsen/logrus"
-	"github.com/songgao/water"
+	"github.com/slackhq/nebula/overlay"
 )
 
 type Tun struct {
-	Device       string
-	Cidr         *net.IPNet
-	MTU          int
-	UnsafeRoutes []route
-	l            *logrus.Logger
-
-	*water.Interface
+	overlay.Device
 }
 
 func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
@@ -33,78 +29,44 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 		return nil, fmt.Errorf("route MTU not supported in Windows")
 	}
 
-	// NOTE: You cannot set the deviceName under Windows, so you must check tun.Device after calling .Activate()
-	return &Tun{
-		Cidr:         cidr,
-		MTU:          defaultMTU,
-		UnsafeRoutes: unsafeRoutes,
-		l:            l,
-	}, nil
-}
-
-func (c *Tun) Activate() error {
-	var err error
-	c.Interface, err = water.New(water.Config{
-		DeviceType: water.TUN,
-		PlatformSpecificParams: water.PlatformSpecificParams{
-			ComponentID: "tap0901",
-			Network:     c.Cidr.String(),
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("Activate failed: %v", err)
+	useWintun := true
+	if err = checkWinTunExists(); err != nil {
+		l.WithError(err).Warn("Check Wintun driver failed, fallback to wintap driver")
+		useWintun = false
 	}
 
-	c.Device = c.Interface.Name()
-
-	// TODO use syscalls instead of exec.Command
-	err = exec.Command(
-		`C:\Windows\System32\netsh.exe`, "interface", "ipv4", "set", "address",
-		fmt.Sprintf("name=%s", c.Device),
-		"source=static",
-		fmt.Sprintf("addr=%s", c.Cidr.IP),
-		fmt.Sprintf("mask=%s", net.IP(c.Cidr.Mask)),
-		"gateway=none",
-	).Run()
-	if err != nil {
-		return fmt.Errorf("failed to run 'netsh' to set address: %s", err)
-	}
-	err = exec.Command(
-		`C:\Windows\System32\netsh.exe`, "interface", "ipv4", "set", "interface",
-		c.Device,
-		fmt.Sprintf("mtu=%d", c.MTU),
-	).Run()
-	if err != nil {
-		return fmt.Errorf("failed to run 'netsh' to set MTU: %s", err)
-	}
-
-	iface, err := net.InterfaceByName(c.Device)
-	if err != nil {
-		return fmt.Errorf("failed to find interface named %s: %v", c.Device, err)
-	}
-
-	for _, r := range c.UnsafeRoutes {
-		err = exec.Command(
-			"C:\\Windows\\System32\\route.exe", "add", r.route.String(), r.via.String(), "IF", strconv.Itoa(iface.Index),
-		).Run()
+	var inside overlay.Device
+	if useWintun {
+		inside, err = newWinTun(deviceName, cidr, defaultMTU, unsafeRoutes, txQueueLen)
 		if err != nil {
-			return fmt.Errorf("failed to add the unsafe_route %s: %v", r.route.String(), err)
+			return nil, fmt.Errorf("Create Wintun interface failed, %w", err)
+		}
+	} else {
+		inside, err = newWindowsWaterTun(deviceName, cidr, defaultMTU, unsafeRoutes, txQueueLen)
+		if err != nil {
+			return nil, fmt.Errorf("Create wintap driver failed, %w", err)
 		}
 	}
 
-	return nil
+	return &Tun{
+		Device: inside,
+	}, nil
 }
 
-func (c *Tun) CidrNet() *net.IPNet {
-	return c.Cidr
-}
+func checkWinTunExists() error {
+	myPath, err := os.Executable()
+	if err != nil {
+		return err
+	}
 
-func (c *Tun) DeviceName() string {
-	return c.Device
-}
+	arch := runtime.GOARCH
+	switch arch {
+	case "386":
+		//NOTE: wintun bundles 386 as x86
+		arch = "x86"
+	}
 
-func (c *Tun) WriteRaw(b []byte) error {
-	_, err := c.Write(b)
+	_, err = syscall.LoadDLL(filepath.Join(filepath.Dir(myPath), "dist", "windows", "wintun", "bin", arch, "wintun.dll"))
 	return err
 }
 

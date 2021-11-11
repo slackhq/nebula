@@ -148,7 +148,9 @@ punchy:
 tun:
   # When tun is disabled, a lighthouse can be started without a local tun interface (and therefore without root)
   disabled: false
-  # Name of the device
+  # Name of the device. If not set, a default will be chosen by the OS.
+  # For macOS: if set, must be in the form `utun[0-9]+`.
+  # For FreeBSD: Required to be set, must be in the form `tun[0-9]+`.
   dev: nebula1
   # Toggles forwarding of local broadcast packets, the address of which depends on the ip/mask encoded in pki.cert
   drop_local_broadcast: false
@@ -165,10 +167,13 @@ tun:
   # Unsafe routes allows you to route traffic over nebula to non-nebula nodes
   # Unsafe routes should be avoided unless you have hosts/services that cannot run nebula
   # NOTE: The nebula certificate of the "via" node *MUST* have the "route" defined as a subnet in its certificate
+  # `mtu` will default to tun mtu if this option is not specified
+  # `metric` will default to 0 if this option is not specified
   unsafe_routes:
     #- route: 172.16.1.0/24
     #  via: 192.168.100.99
-    #  mtu: 1300 #mtu will default to tun mtu if this option is not sepcified
+    #  mtu: 1300
+    #  metric: 100
 
 
 # TODO
