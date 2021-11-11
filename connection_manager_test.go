@@ -11,15 +11,15 @@ import (
 	"github.com/flynn/noise"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
-	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 )
 
 var vpnIp iputil.VpnIp
 
 func Test_NewConnectionManagerTest(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	//_, tuncidr, _ := net.ParseCIDR("1.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
@@ -89,7 +89,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 }
 
 func Test_NewConnectionManagerTest2(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	//_, tuncidr, _ := net.ParseCIDR("1.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
@@ -164,7 +164,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 // Disconnect only if disconnectInvalid: true is set.
 func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	now := time.Now()
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	ipNet := net.IPNet{
 		IP:   net.IPv4(172, 1, 1, 2),
 		Mask: net.IPMask{255, 255, 255, 0},

@@ -1,4 +1,4 @@
-package nebula
+package util
 
 import (
 	"errors"
@@ -7,6 +7,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
+
+type m map[string]interface{}
 
 type TestLogWriter struct {
 	Logs []string

@@ -8,8 +8,8 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
-	"github.com/slackhq/nebula/util"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -46,7 +46,7 @@ func TestNewLhQuery(t *testing.T) {
 }
 
 func Test_lhStaticMapping(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	lh1 := "10.128.0.2"
 	lh1IP := net.ParseIP(lh1)
 
@@ -67,7 +67,7 @@ func Test_lhStaticMapping(t *testing.T) {
 }
 
 func BenchmarkLighthouseHandleRequest(b *testing.B) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	lh1 := "10.128.0.2"
 	lh1IP := net.ParseIP(lh1)
 
@@ -137,7 +137,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 }
 
 func TestLighthouse_Memory(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 
 	myUdpAddr0 := &udp.Addr{IP: net.ParseIP("10.0.0.2"), Port: 4242}
 	myUdpAddr1 := &udp.Addr{IP: net.ParseIP("192.168.0.2"), Port: 4242}
@@ -266,7 +266,7 @@ func newLHHostUpdate(fromAddr *udp.Addr, vpnIp iputil.VpnIp, addrs []*udp.Addr, 
 
 //TODO: this is a RemoteList test
 //func Test_lhRemoteAllowList(t *testing.T) {
-//	l := NewTestLogger()
+//	l := NewLogger()
 //	c := NewConfig(l)
 //	c.Settings["remoteallowlist"] = map[interface{}]interface{}{
 //		"10.20.0.0/12": false,

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ed25519"
@@ -752,7 +752,7 @@ func TestNebulaCertificate_Copy(t *testing.T) {
 	assert.Nil(t, err)
 	cc := c.Copy()
 
-	util.AssertDeepCopyEqual(t, c, cc)
+	test.AssertDeepCopyEqual(t, c, cc)
 }
 
 func TestUnmarshalNebulaCertificate(t *testing.T) {
