@@ -7,24 +7,33 @@ import (
 	"os/exec"
 	"strconv"
 
+	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/iputil"
 	"github.com/songgao/water"
 )
 
 type waterTun struct {
-	Device       string
-	Cidr         *net.IPNet
-	MTU          int
-	UnsafeRoutes []Route
+	Device   string
+	Cidr     *net.IPNet
+	MTU      int
+	Routes   []Route
+	cidrTree *cidr.Tree4
 
 	*water.Interface
 }
 
-func newWaterTun(cidr *net.IPNet, defaultMTU int, unsafeRoutes []Route) (*waterTun, error) {
+func newWaterTun(cidr *net.IPNet, defaultMTU int, routes []Route) (*waterTun, error) {
+	cidrTree, err := makeCidrTree(routes, false)
+	if err != nil {
+		return nil, err
+	}
+
 	// NOTE: You cannot set the deviceName under Windows, so you must check tun.Device after calling .Activate()
 	return &waterTun{
-		Cidr:         cidr,
-		MTU:          defaultMTU,
-		UnsafeRoutes: unsafeRoutes,
+		Cidr:     cidr,
+		MTU:      defaultMTU,
+		Routes:   routes,
+		cidrTree: cidrTree,
 	}, nil
 }
 
@@ -69,7 +78,12 @@ func (t *waterTun) Activate() error {
 		return fmt.Errorf("failed to find interface named %s: %v", t.Device, err)
 	}
 
-	for _, r := range t.UnsafeRoutes {
+	for _, r := range t.Routes {
+		if r.Via == nil {
+			// We don't allow route MTUs so only install routes with a via
+			continue
+		}
+
 		err = exec.Command(
 			"C:\\Windows\\System32\\route.exe", "add", r.Cidr.String(), r.Via.String(), "IF", strconv.Itoa(iface.Index), "METRIC", strconv.Itoa(r.Metric),
 		).Run()
@@ -79,6 +93,15 @@ func (t *waterTun) Activate() error {
 	}
 
 	return nil
+}
+
+func (t *waterTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+	r := t.cidrTree.MostSpecificContains(ip)
+	if r != nil {
+		return r.(iputil.VpnIp)
+	}
+
+	return 0
 }
 
 func (t *waterTun) CidrNet() *net.IPNet {

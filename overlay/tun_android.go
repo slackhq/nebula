@@ -8,42 +8,41 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/iputil"
 	"golang.org/x/sys/unix"
 )
 
 type tun struct {
 	io.ReadWriteCloser
-	fd           int
-	Device       string
-	Cidr         *net.IPNet
-	MaxMTU       int
-	DefaultMTU   int
-	TXQueueLen   int
-	Routes       []Route
-	UnsafeRoutes []Route
-	l            *logrus.Logger
+	fd   int
+	Cidr *net.IPNet
+	l    *logrus.Logger
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int) (*tun, error) {
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes []Route, _ int) (*tun, error) {
+	if len(routes) > 0 {
+		return nil, fmt.Errorf("routes are not supported in %s", runtime.GOOS)
+	}
+
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
 	return &tun{
 		ReadWriteCloser: file,
 		fd:              int(file.Fd()),
-		Device:          "android",
 		Cidr:            cidr,
-		DefaultMTU:      defaultMTU,
-		TXQueueLen:      txQueueLen,
-		Routes:          routes,
-		UnsafeRoutes:    unsafeRoutes,
 		l:               l,
 	}, nil
 }
 
-func newTun(_ *logrus.Logger, _ string, _ *net.IPNet, _ int, _ []Route, _ []Route, _ int, _ bool) (*tun, error) {
+func newTun(_ *logrus.Logger, _ string, _ *net.IPNet, _ int, _ []Route, _ int, _ bool) (*tun, error) {
 	return nil, fmt.Errorf("newTun not supported in Android")
+}
+
+func (t *tun) RouteFor(iputil.VpnIp) iputil.VpnIp {
+	return 0
 }
 
 func (t *tun) WriteRaw(b []byte) error {
@@ -77,7 +76,7 @@ func (t *tun) CidrNet() *net.IPNet {
 }
 
 func (t *tun) DeviceName() string {
-	return t.Device
+	return "android"
 }
 
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {

@@ -14,11 +14,11 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ []Route, _ int) (Device, error) {
+func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int) (Device, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Windows")
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, _ int, _ bool) (Device, error) {
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route, _ int, _ bool) (Device, error) {
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("route MTU not supported in Windows")
 	}
@@ -30,14 +30,14 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 	}
 
 	if useWintun {
-		device, err := newWinTun(deviceName, cidr, defaultMTU, unsafeRoutes)
+		device, err := newWinTun(deviceName, cidr, defaultMTU, routes)
 		if err != nil {
 			return nil, fmt.Errorf("create Wintun interface failed, %w", err)
 		}
 		return device, nil
 	}
 
-	device, err := newWaterTun(cidr, defaultMTU, unsafeRoutes)
+	device, err := newWaterTun(cidr, defaultMTU, routes)
 	if err != nil {
 		return nil, fmt.Errorf("create wintap driver failed, %w", err)
 	}

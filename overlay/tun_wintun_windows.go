@@ -7,6 +7,8 @@ import (
 	"net"
 	"unsafe"
 
+	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/wintun"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
@@ -15,10 +17,11 @@ import (
 const tunGUIDLabel = "Fixed Nebula Windows GUID v1"
 
 type winTun struct {
-	Device       string
-	Cidr         *net.IPNet
-	MTU          int
-	UnsafeRoutes []Route
+	Device   string
+	Cidr     *net.IPNet
+	MTU      int
+	Routes   []Route
+	cidrTree *cidr.Tree4
 
 	tun *wintun.NativeTun
 }
@@ -42,7 +45,7 @@ func generateGUIDByDeviceName(name string) (*windows.GUID, error) {
 	return (*windows.GUID)(unsafe.Pointer(&sum[0])), nil
 }
 
-func newWinTun(deviceName string, cidr *net.IPNet, defaultMTU int, unsafeRoutes []Route) (*winTun, error) {
+func newWinTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route) (*winTun, error) {
 	guid, err := generateGUIDByDeviceName(deviceName)
 	if err != nil {
 		return nil, fmt.Errorf("generate GUID failed: %w", err)
@@ -53,11 +56,17 @@ func newWinTun(deviceName string, cidr *net.IPNet, defaultMTU int, unsafeRoutes 
 		return nil, fmt.Errorf("create TUN device failed: %w", err)
 	}
 
+	cidrTree, err := makeCidrTree(routes, false)
+	if err != nil {
+		return nil, err
+	}
+
 	return &winTun{
-		Device:       deviceName,
-		Cidr:         cidr,
-		MTU:          defaultMTU,
-		UnsafeRoutes: unsafeRoutes,
+		Device:   deviceName,
+		Cidr:     cidr,
+		MTU:      defaultMTU,
+		Routes:   routes,
+		cidrTree: cidrTree,
 
 		tun: tunDevice.(*wintun.NativeTun),
 	}, nil
@@ -71,11 +80,16 @@ func (t *winTun) Activate() error {
 	}
 
 	foundDefault4 := false
-	routes := make([]*winipcfg.RouteData, 0, len(t.UnsafeRoutes)+1)
+	routes := make([]*winipcfg.RouteData, 0, len(t.Routes)+1)
 
-	for _, r := range t.UnsafeRoutes {
+	for _, r := range t.Routes {
+		if r.Via == nil {
+			// We don't allow route MTUs so only install routes with a via
+			continue
+		}
+
 		if !foundDefault4 {
-			if cidr, bits := r.Cidr.Mask.Size(); cidr == 0 && bits != 0 {
+			if ones, bits := r.Cidr.Mask.Size(); ones == 0 && bits != 0 {
 				foundDefault4 = true
 			}
 		}
@@ -108,6 +122,15 @@ func (t *winTun) Activate() error {
 	}
 
 	return nil
+}
+
+func (t *winTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+	r := t.cidrTree.MostSpecificContains(ip)
+	if r != nil {
+		return r.(iputil.VpnIp)
+	}
+
+	return 0
 }
 
 func (t *winTun) CidrNet() *net.IPNet {

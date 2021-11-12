@@ -15,7 +15,6 @@ import (
 	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
-	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -36,7 +35,6 @@ type HostMap struct {
 	Hosts           map[iputil.VpnIp]*HostInfo
 	preferredRanges []*net.IPNet
 	vpnCIDR         *net.IPNet
-	unsafeRoutes    *cidr.Tree4
 	metricsEnabled  bool
 	l               *logrus.Logger
 }
@@ -99,7 +97,6 @@ func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRang
 		Hosts:           h,
 		preferredRanges: preferredRanges,
 		vpnCIDR:         vpnCIDR,
-		unsafeRoutes:    cidr.NewTree4(),
 		l:               l,
 	}
 	return &m
@@ -333,15 +330,6 @@ func (hm *HostMap) queryVpnIp(vpnIp iputil.VpnIp, promoteIfce *Interface) (*Host
 	return nil, errors.New("unable to find host")
 }
 
-func (hm *HostMap) queryUnsafeRoute(ip iputil.VpnIp) iputil.VpnIp {
-	r := hm.unsafeRoutes.MostSpecificContains(ip)
-	if r != nil {
-		return r.(iputil.VpnIp)
-	} else {
-		return 0
-	}
-}
-
 // We already have the hm Lock when this is called, so make sure to not call
 // any other methods that might try to grab it again
 func (hm *HostMap) addHostInfo(hostinfo *HostInfo, f *Interface) {
@@ -406,13 +394,6 @@ func (hm *HostMap) Punchy(ctx context.Context, conn *udp.Conn) {
 		case <-clockSource.C:
 			continue
 		}
-	}
-}
-
-func (hm *HostMap) addUnsafeRoutes(routes *[]overlay.Route) {
-	for _, r := range *routes {
-		hm.l.WithField("cidr", r.Cidr).WithField("via", r.Via).Warn("Adding UNSAFE Route")
-		hm.unsafeRoutes.AddCIDR(r.Cidr, iputil.Ip2VpnIp(*r.Via))
 	}
 }
 
