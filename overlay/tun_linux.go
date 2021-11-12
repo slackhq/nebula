@@ -1,7 +1,7 @@
 //go:build !android && !e2e_testing
 // +build !android,!e2e_testing
 
-package nebula
+package overlay
 
 import (
 	"fmt"
@@ -24,8 +24,8 @@ type Tun struct {
 	MaxMTU       int
 	DefaultMTU   int
 	TXQueueLen   int
-	Routes       []route
-	UnsafeRoutes []route
+	Routes       []Route
+	UnsafeRoutes []Route
 	l            *logrus.Logger
 }
 
@@ -81,7 +81,7 @@ type ifreqQLEN struct {
 	pad   [8]byte
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int) (ifce *Tun, err error) {
 
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
@@ -99,7 +99,7 @@ func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU in
 	return
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		return nil, err
@@ -120,8 +120,8 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 
 	maxMTU := defaultMTU
 	for _, r := range routes {
-		if r.mtu > maxMTU {
-			maxMTU = r.mtu
+		if r.MTU > maxMTU {
+			maxMTU = r.MTU
 		}
 	}
 
@@ -266,7 +266,7 @@ func (c Tun) Activate() error {
 		LinkIndex: link.Attrs().Index,
 		Dst:       dr,
 		MTU:       c.DefaultMTU,
-		AdvMSS:    c.advMSS(route{}),
+		AdvMSS:    c.advMSS(Route{}),
 		Scope:     unix.RT_SCOPE_LINK,
 		Src:       c.Cidr.IP,
 		Protocol:  unix.RTPROT_KERNEL,
@@ -282,15 +282,15 @@ func (c Tun) Activate() error {
 	for _, r := range c.Routes {
 		nr := netlink.Route{
 			LinkIndex: link.Attrs().Index,
-			Dst:       r.route,
-			MTU:       r.mtu,
+			Dst:       r.Cidr,
+			MTU:       r.MTU,
 			AdvMSS:    c.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
 		}
 
 		err = netlink.RouteAdd(&nr)
 		if err != nil {
-			return fmt.Errorf("failed to set mtu %v on route %v; %v", r.mtu, r.route, err)
+			return fmt.Errorf("failed to set mtu %v on route %v; %v", r.MTU, r.Cidr, err)
 		}
 	}
 
@@ -298,16 +298,16 @@ func (c Tun) Activate() error {
 	for _, r := range c.UnsafeRoutes {
 		nr := netlink.Route{
 			LinkIndex: link.Attrs().Index,
-			Dst:       r.route,
-			MTU:       r.mtu,
-			Priority:  r.metric,
+			Dst:       r.Cidr,
+			MTU:       r.MTU,
+			Priority:  r.Metric,
 			AdvMSS:    c.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
 		}
 
 		err = netlink.RouteAdd(&nr)
 		if err != nil {
-			return fmt.Errorf("failed to set mtu %v on route %v; %v", r.mtu, r.route, err)
+			return fmt.Errorf("failed to set mtu %v on route %v; %v", r.MTU, r.Cidr, err)
 		}
 	}
 
@@ -328,9 +328,9 @@ func (c *Tun) DeviceName() string {
 	return c.Device
 }
 
-func (c Tun) advMSS(r route) int {
-	mtu := r.mtu
-	if r.mtu == 0 {
+func (c Tun) advMSS(r Route) int {
+	mtu := r.MTU
+	if r.MTU == 0 {
 		mtu = c.DefaultMTU
 	}
 

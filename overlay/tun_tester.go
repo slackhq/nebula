@@ -1,7 +1,7 @@
 //go:build e2e_testing
 // +build e2e_testing
 
-package nebula
+package overlay
 
 import (
 	"fmt"
@@ -15,14 +15,14 @@ type Tun struct {
 	Device       string
 	Cidr         *net.IPNet
 	MTU          int
-	UnsafeRoutes []route
+	UnsafeRoutes []Route
 	l            *logrus.Logger
 
 	rxPackets chan []byte // Packets to receive into nebula
-	txPackets chan []byte // Packets transmitted outside by nebula
+	TxPackets chan []byte // Packets transmitted outside by nebula
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, _ []route, unsafeRoutes []route, _ int, _ bool) (ifce *Tun, err error) {
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, _ []Route, unsafeRoutes []Route, _ int, _ bool) (ifce *Tun, err error) {
 	return &Tun{
 		Device:       deviceName,
 		Cidr:         cidr,
@@ -30,11 +30,11 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 		UnsafeRoutes: unsafeRoutes,
 		l:            l,
 		rxPackets:    make(chan []byte, 1),
-		txPackets:    make(chan []byte, 1),
+		TxPackets:    make(chan []byte, 1),
 	}, nil
 }
 
-func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []route, _ []route, _ int) (ifce *Tun, err error) {
+func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ []Route, _ int) (ifce *Tun, err error) {
 	return nil, fmt.Errorf("newTunFromFd not supported")
 }
 
@@ -51,11 +51,11 @@ func (c *Tun) Send(packet []byte) {
 // packets were ingested from the udp side, you can send them with udpConn.Send
 func (c *Tun) Get(block bool) []byte {
 	if block {
-		return <-c.txPackets
+		return <-c.TxPackets
 	}
 
 	select {
-	case p := <-c.txPackets:
+	case p := <-c.TxPackets:
 		return p
 	default:
 		return nil
@@ -90,7 +90,7 @@ func (c *Tun) Close() error {
 func (c *Tun) WriteRaw(b []byte) error {
 	packet := make([]byte, len(b), len(b))
 	copy(packet, b)
-	c.txPackets <- packet
+	c.TxPackets <- packet
 	return nil
 }
 

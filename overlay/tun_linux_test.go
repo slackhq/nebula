@@ -1,25 +1,25 @@
 //go:build !e2e_testing
 // +build !e2e_testing
 
-package nebula
+package overlay
 
 import "testing"
 
 var runAdvMSSTests = []struct {
 	name     string
 	tun      Tun
-	r        route
+	r        Route
 	expected int
 }{
 	// Standard case, default MTU is the device max MTU
-	{"default", Tun{DefaultMTU: 1440, MaxMTU: 1440}, route{}, 0},
-	{"default-min", Tun{DefaultMTU: 1440, MaxMTU: 1440}, route{mtu: 1440}, 0},
-	{"default-low", Tun{DefaultMTU: 1440, MaxMTU: 1440}, route{mtu: 1200}, 1160},
+	{"default", Tun{DefaultMTU: 1440, MaxMTU: 1440}, Route{}, 0},
+	{"default-min", Tun{DefaultMTU: 1440, MaxMTU: 1440}, Route{MTU: 1440}, 0},
+	{"default-low", Tun{DefaultMTU: 1440, MaxMTU: 1440}, Route{MTU: 1200}, 1160},
 
 	// Case where we have a route MTU set higher than the default
-	{"route", Tun{DefaultMTU: 1440, MaxMTU: 8941}, route{}, 1400},
-	{"route-min", Tun{DefaultMTU: 1440, MaxMTU: 8941}, route{mtu: 1440}, 1400},
-	{"route-high", Tun{DefaultMTU: 1440, MaxMTU: 8941}, route{mtu: 8941}, 0},
+	{"route", Tun{DefaultMTU: 1440, MaxMTU: 8941}, Route{}, 1400},
+	{"route-min", Tun{DefaultMTU: 1440, MaxMTU: 8941}, Route{MTU: 1440}, 1400},
+	{"route-high", Tun{DefaultMTU: 1440, MaxMTU: 8941}, Route{MTU: 8941}, 0},
 }
 
 func TestTunAdvMSS(t *testing.T) {

@@ -1,7 +1,7 @@
 //go:build !e2e_testing
 // +build !e2e_testing
 
-package nebula
+package overlay
 
 import (
 	"fmt"
@@ -13,18 +13,17 @@ import (
 	"syscall"
 
 	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/overlay"
 )
 
 type Tun struct {
-	overlay.Device
+	Device
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int) (ifce *Tun, err error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Windows")
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	if len(routes) > 0 {
 		return nil, fmt.Errorf("route MTU not supported in Windows")
 	}
@@ -35,7 +34,7 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 		useWintun = false
 	}
 
-	var inside overlay.Device
+	var inside Device
 	if useWintun {
 		inside, err = newWinTun(deviceName, cidr, defaultMTU, unsafeRoutes, txQueueLen)
 		if err != nil {

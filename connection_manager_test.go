@@ -11,6 +11,7 @@ import (
 	"github.com/flynn/noise"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
@@ -38,7 +39,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	lh := NewLightHouse(l, false, &net.IPNet{IP: net.IP{0, 0, 0, 0}, Mask: net.IPMask{0, 0, 0, 0}}, []iputil.VpnIp{}, 1000, 0, &udp.Conn{}, false, 1, false)
 	ifce := &Interface{
 		hostMap:          hostMap,
-		inside:           &Tun{},
+		inside:           &overlay.Tun{},
 		outside:          &udp.Conn{},
 		certState:        cs,
 		firewall:         &Firewall{},
@@ -107,7 +108,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	lh := NewLightHouse(l, false, &net.IPNet{IP: net.IP{0, 0, 0, 0}, Mask: net.IPMask{0, 0, 0, 0}}, []iputil.VpnIp{}, 1000, 0, &udp.Conn{}, false, 1, false)
 	ifce := &Interface{
 		hostMap:          hostMap,
-		inside:           &Tun{},
+		inside:           &overlay.Tun{},
 		outside:          &udp.Conn{},
 		certState:        cs,
 		firewall:         &Firewall{},
@@ -216,7 +217,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	lh := NewLightHouse(l, false, &net.IPNet{IP: net.IP{0, 0, 0, 0}, Mask: net.IPMask{0, 0, 0, 0}}, []iputil.VpnIp{}, 1000, 0, &udp.Conn{}, false, 1, false)
 	ifce := &Interface{
 		hostMap:           hostMap,
-		inside:            &Tun{},
+		inside:            &overlay.Tun{},
 		outside:           &udp.Conn{},
 		certState:         cs,
 		firewall:          &Firewall{},
