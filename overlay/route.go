@@ -16,7 +16,7 @@ type Route struct {
 	Via    *net.IP
 }
 
-func ParseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
+func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 	var err error
 
 	r := c.Get("tun.routes")
@@ -86,7 +86,7 @@ func ParseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 	return routes, nil
 }
 
-func ParseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
+func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 	var err error
 
 	r := c.Get("tun.unsafe_routes")

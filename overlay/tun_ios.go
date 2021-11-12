@@ -9,25 +9,26 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"sync"
 	"syscall"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/iputil"
 )
 
 type tun struct {
 	io.ReadWriteCloser
-	Device string
-	Cidr   *net.IPNet
+	Cidr *net.IPNet
 }
 
-func newTun(_ *logrus.Logger, _ string, _ *net.IPNet, _ int, _ []Route, _ []Route, _ int, _ bool) (*tun, error) {
+func newTun(_ *logrus.Logger, _ string, _ *net.IPNet, _ int, _ []Route, _ int, _ bool) (*tun, error) {
 	return nil, fmt.Errorf("newTun not supported in iOS")
 }
 
-func newTunFromFd(_ *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes []Route, _ []Route, _ int) (*tun, error) {
+func newTunFromFd(_ *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes []Route, _ int) (*tun, error) {
 	if len(routes) > 0 {
-		return nil, fmt.Errorf("route MTU not supported in Darwin")
+		return nil, fmt.Errorf("routes are not supported in %s", runtime.GOOS)
 	}
 
 	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
@@ -40,6 +41,10 @@ func newTunFromFd(_ *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes
 
 func (t *tun) Activate() error {
 	return nil
+}
+
+func (t *tun) RouteFor(iputil.VpnIp) iputil.VpnIp {
+	return 0
 }
 
 func (t *tun) WriteRaw(b []byte) error {
@@ -73,7 +78,6 @@ func (tr *tunReadCloser) Read(to []byte) (int, error) {
 }
 
 func (tr *tunReadCloser) Write(from []byte) (int, error) {
-
 	if len(from) == 0 {
 		return 0, syscall.EIO
 	}
@@ -111,7 +115,7 @@ func (t *tun) CidrNet() *net.IPNet {
 }
 
 func (t *tun) DeviceName() string {
-	return t.Device
+	return "iOS"
 }
 
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {

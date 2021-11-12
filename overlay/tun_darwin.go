@@ -12,18 +12,20 @@ import (
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/iputil"
 	netroute "golang.org/x/net/route"
 	"golang.org/x/sys/unix"
 )
 
 type tun struct {
 	io.ReadWriteCloser
-	Device       string
-	Cidr         *net.IPNet
-	DefaultMTU   int
-	TXQueueLen   int
-	UnsafeRoutes []Route
-	l            *logrus.Logger
+	Device     string
+	Cidr       *net.IPNet
+	DefaultMTU int
+	Routes     []Route
+	cidrTree   *cidr.Tree4
+	l          *logrus.Logger
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
 	out []byte
@@ -74,9 +76,10 @@ type ifreqMTU struct {
 	pad  [8]byte
 }
 
-func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int, _ bool) (*tun, error) {
-	if len(routes) > 0 {
-		return nil, fmt.Errorf("route MTU not supported in Darwin")
+func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []Route, _ int, _ bool) (*tun, error) {
+	cidrTree, err := makeCidrTree(routes, false)
+	if err != nil {
+		return nil, err
 	}
 
 	ifIndex := -1
@@ -151,8 +154,8 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 		Device:          name,
 		Cidr:            cidr,
 		DefaultMTU:      defaultMTU,
-		TXQueueLen:      txQueueLen,
-		UnsafeRoutes:    unsafeRoutes,
+		Routes:          routes,
+		cidrTree:        cidrTree,
 		l:               l,
 	}
 
@@ -166,7 +169,7 @@ func (t *tun) deviceBytes() (o [16]byte) {
 	return
 }
 
-func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ []Route, _ int) (*tun, error) {
+func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int) (*tun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
 }
 
@@ -279,7 +282,12 @@ func (t *tun) Activate() error {
 	}
 
 	// Unsafe path routes
-	for _, r := range t.UnsafeRoutes {
+	for _, r := range t.Routes {
+		if r.Via == nil {
+			// We don't allow route MTUs so only install routes with a via
+			continue
+		}
+
 		copy(routeAddr.IP[:], r.Cidr.IP.To4())
 		copy(maskAddr.IP[:], net.IP(r.Cidr.Mask).To4())
 
@@ -292,6 +300,15 @@ func (t *tun) Activate() error {
 	}
 
 	return nil
+}
+
+func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+	r := t.cidrTree.MostSpecificContains(ip)
+	if r != nil {
+		return r.(iputil.VpnIp)
+	}
+
+	return 0
 }
 
 // Get the LinkAddr for the interface of the given name

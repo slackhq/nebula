@@ -9,32 +9,39 @@ import (
 	"net"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/iputil"
 )
 
 type TestTun struct {
-	Device       string
-	Cidr         *net.IPNet
-	MTU          int
-	UnsafeRoutes []Route
-	l            *logrus.Logger
+	Device   string
+	Cidr     *net.IPNet
+	Routes   []Route
+	cidrTree *cidr.Tree4
+	l        *logrus.Logger
 
 	rxPackets chan []byte // Packets to receive into nebula
 	TxPackets chan []byte // Packets transmitted outside by nebula
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, _ []Route, unsafeRoutes []Route, _ int, _ bool) (*TestTun, error) {
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, _ int, routes []Route, _ int, _ bool) (*TestTun, error) {
+	cidrTree, err := makeCidrTree(routes, false)
+	if err != nil {
+		return nil, err
+	}
+
 	return &TestTun{
-		Device:       deviceName,
-		Cidr:         cidr,
-		MTU:          defaultMTU,
-		UnsafeRoutes: unsafeRoutes,
-		l:            l,
-		rxPackets:    make(chan []byte, 1),
-		TxPackets:    make(chan []byte, 1),
+		Device:    deviceName,
+		Cidr:      cidr,
+		Routes:    routes,
+		cidrTree:  cidrTree,
+		l:         l,
+		rxPackets: make(chan []byte, 1),
+		TxPackets: make(chan []byte, 1),
 	}, nil
 }
 
-func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ []Route, _ int) (*TestTun, error) {
+func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int) (*TestTun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported")
 }
 
@@ -65,6 +72,15 @@ func (t *TestTun) Get(block bool) []byte {
 //********************************************************************************************************************//
 // Below this is boilerplate implementation to make nebula actually work
 //********************************************************************************************************************//
+
+func (t *TestTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+	r := t.cidrTree.MostSpecificContains(ip)
+	if r != nil {
+		return r.(iputil.VpnIp)
+	}
+
+	return 0
+}
 
 func (t *TestTun) Activate() error {
 	return nil

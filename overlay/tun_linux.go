@@ -12,21 +12,23 @@ import (
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/iputil"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
 
 type tun struct {
 	io.ReadWriteCloser
-	fd           int
-	Device       string
-	Cidr         *net.IPNet
-	MaxMTU       int
-	DefaultMTU   int
-	TXQueueLen   int
-	Routes       []Route
-	UnsafeRoutes []Route
-	l            *logrus.Logger
+	fd         int
+	Device     string
+	Cidr       *net.IPNet
+	MaxMTU     int
+	DefaultMTU int
+	TXQueueLen int
+	Routes     []Route
+	cidrTree   *cidr.Tree4
+	l          *logrus.Logger
 }
 
 type ifReq struct {
@@ -61,7 +63,11 @@ type ifreqQLEN struct {
 	pad   [8]byte
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int) (*tun, error) {
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []Route, txQueueLen int) (*tun, error) {
+	cidrTree, err := makeCidrTree(routes, true)
+	if err != nil {
+		return nil, err
+	}
 
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
@@ -73,12 +79,12 @@ func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU in
 		DefaultMTU:      defaultMTU,
 		TXQueueLen:      txQueueLen,
 		Routes:          routes,
-		UnsafeRoutes:    unsafeRoutes,
+		cidrTree:        cidrTree,
 		l:               l,
 	}, nil
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int, multiqueue bool) (*tun, error) {
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route, txQueueLen int, multiqueue bool) (*tun, error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		return nil, err
@@ -104,6 +110,11 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 		}
 	}
 
+	cidrTree, err := makeCidrTree(routes, true)
+	if err != nil {
+		return nil, err
+	}
+
 	return &tun{
 		ReadWriteCloser: file,
 		fd:              int(file.Fd()),
@@ -113,7 +124,7 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 		DefaultMTU:      defaultMTU,
 		TXQueueLen:      txQueueLen,
 		Routes:          routes,
-		UnsafeRoutes:    unsafeRoutes,
+		cidrTree:        cidrTree,
 		l:               l,
 	}, nil
 }
@@ -134,6 +145,15 @@ func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	file := os.NewFile(uintptr(fd), "/dev/net/tun")
 
 	return file, nil
+}
+
+func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+	r := t.cidrTree.MostSpecificContains(ip)
+	if r != nil {
+		return r.(iputil.VpnIp)
+	}
+
+	return 0
 }
 
 func (t *tun) WriteRaw(b []byte) error {
@@ -266,21 +286,8 @@ func (t tun) Activate() error {
 			Scope:     unix.RT_SCOPE_LINK,
 		}
 
-		err = netlink.RouteAdd(&nr)
-		if err != nil {
-			return fmt.Errorf("failed to set mtu %v on route %v; %v", r.MTU, r.Cidr, err)
-		}
-	}
-
-	// Unsafe path routes
-	for _, r := range t.UnsafeRoutes {
-		nr := netlink.Route{
-			LinkIndex: link.Attrs().Index,
-			Dst:       r.Cidr,
-			MTU:       r.MTU,
-			Priority:  r.Metric,
-			AdvMSS:    t.advMSS(r),
-			Scope:     unix.RT_SCOPE_LINK,
+		if r.Metric > 0 {
+			nr.Priority = r.Metric
 		}
 
 		err = netlink.RouteAdd(&nr)

@@ -72,7 +72,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 	//TODO: we can find contains without converting back to bytes
 	if f.hostMap.vpnCIDR.Contains(vpnIp.ToIP()) == false {
-		vpnIp = f.hostMap.queryUnsafeRoute(vpnIp)
+		vpnIp = f.inside.RouteFor(vpnIp)
 		if vpnIp == 0 {
 			return nil
 		}
