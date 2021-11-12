@@ -18,11 +18,11 @@ func (NoopTun) Activate() error {
 	return nil
 }
 
-func (NoopTun) CidrNet() *net.IPNet {
+func (NoopTun) Cidr() *net.IPNet {
 	return nil
 }
 
-func (NoopTun) DeviceName() string {
+func (NoopTun) Name() string {
 	return "noop"
 }
 
@@ -32,10 +32,6 @@ func (NoopTun) Read([]byte) (int, error) {
 
 func (NoopTun) Write([]byte) (int, error) {
 	return 0, nil
-}
-
-func (NoopTun) WriteRaw([]byte) error {
-	return nil
 }
 
 func (NoopTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {

@@ -22,12 +22,12 @@ type tun struct {
 	io.ReadWriteCloser
 	fd         int
 	Device     string
-	Cidr       *net.IPNet
+	cidr       *net.IPNet
 	MaxMTU     int
 	DefaultMTU int
 	TXQueueLen int
 	Routes     []Route
-	cidrTree   *cidr.Tree4
+	routeTree  *cidr.Tree4
 	l          *logrus.Logger
 }
 
@@ -64,7 +64,7 @@ type ifreqQLEN struct {
 }
 
 func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []Route, txQueueLen int) (*tun, error) {
-	cidrTree, err := makeCidrTree(routes, true)
+	routeTree, err := makeRouteTree(routes, true)
 	if err != nil {
 		return nil, err
 	}
@@ -75,11 +75,11 @@ func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU in
 		ReadWriteCloser: file,
 		fd:              int(file.Fd()),
 		Device:          "tun0",
-		Cidr:            cidr,
+		cidr:            cidr,
 		DefaultMTU:      defaultMTU,
 		TXQueueLen:      txQueueLen,
 		Routes:          routes,
-		cidrTree:        cidrTree,
+		routeTree:       routeTree,
 		l:               l,
 	}, nil
 }
@@ -110,7 +110,7 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 		}
 	}
 
-	cidrTree, err := makeCidrTree(routes, true)
+	routeTree, err := makeRouteTree(routes, true)
 	if err != nil {
 		return nil, err
 	}
@@ -119,12 +119,12 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 		ReadWriteCloser: file,
 		fd:              int(file.Fd()),
 		Device:          name,
-		Cidr:            cidr,
+		cidr:            cidr,
 		MaxMTU:          maxMTU,
 		DefaultMTU:      defaultMTU,
 		TXQueueLen:      txQueueLen,
 		Routes:          routes,
-		cidrTree:        cidrTree,
+		routeTree:       routeTree,
 		l:               l,
 	}, nil
 }
@@ -148,7 +148,7 @@ func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 }
 
 func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	r := t.cidrTree.MostSpecificContains(ip)
+	r := t.routeTree.MostSpecificContains(ip)
 	if r != nil {
 		return r.(iputil.VpnIp)
 	}
@@ -156,30 +156,27 @@ func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
 	return 0
 }
 
-func (t *tun) WriteRaw(b []byte) error {
+func (t *tun) Write(b []byte) (int, error) {
 	var nn int
+	max := len(b)
+
 	for {
-		max := len(b)
 		n, err := unix.Write(t.fd, b[nn:max])
 		if n > 0 {
 			nn += n
 		}
 		if nn == len(b) {
-			return err
+			return nn, err
 		}
 
 		if err != nil {
-			return err
+			return nn, err
 		}
 
 		if n == 0 {
-			return io.ErrUnexpectedEOF
+			return nn, io.ErrUnexpectedEOF
 		}
 	}
-}
-
-func (t *tun) Write(b []byte) (int, error) {
-	return len(b), t.WriteRaw(b)
 }
 
 func (t tun) deviceBytes() (o [16]byte) {
@@ -194,8 +191,8 @@ func (t tun) Activate() error {
 
 	var addr, mask [4]byte
 
-	copy(addr[:], t.Cidr.IP.To4())
-	copy(mask[:], t.Cidr.Mask)
+	copy(addr[:], t.cidr.IP.To4())
+	copy(mask[:], t.cidr.Mask)
 
 	s, err := unix.Socket(
 		unix.AF_INET,
@@ -259,14 +256,14 @@ func (t tun) Activate() error {
 	}
 
 	// Default route
-	dr := &net.IPNet{IP: t.Cidr.IP.Mask(t.Cidr.Mask), Mask: t.Cidr.Mask}
+	dr := &net.IPNet{IP: t.cidr.IP.Mask(t.cidr.Mask), Mask: t.cidr.Mask}
 	nr := netlink.Route{
 		LinkIndex: link.Attrs().Index,
 		Dst:       dr,
 		MTU:       t.DefaultMTU,
 		AdvMSS:    t.advMSS(Route{}),
 		Scope:     unix.RT_SCOPE_LINK,
-		Src:       t.Cidr.IP,
+		Src:       t.cidr.IP,
 		Protocol:  unix.RTPROT_KERNEL,
 		Table:     unix.RT_TABLE_MAIN,
 		Type:      unix.RTN_UNICAST,
@@ -305,11 +302,11 @@ func (t tun) Activate() error {
 	return nil
 }
 
-func (t *tun) CidrNet() *net.IPNet {
-	return t.Cidr
+func (t *tun) Cidr() *net.IPNet {
+	return t.cidr
 }
 
-func (t *tun) DeviceName() string {
+func (t *tun) Name() string {
 	return t.Device
 }
 

@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"runtime"
 	"strconv"
 
+	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
 )
 
@@ -14,6 +16,20 @@ type Route struct {
 	Metric int
 	Cidr   *net.IPNet
 	Via    *net.IP
+}
+
+func makeRouteTree(routes []Route, allowMTU bool) (*cidr.Tree4, error) {
+	routeTree := cidr.NewTree4()
+	for _, r := range routes {
+		if !allowMTU && r.MTU > 0 {
+			return nil, fmt.Errorf("route MTU is not supported in %s", runtime.GOOS)
+		}
+
+		if r.Via != nil {
+			routeTree.AddCIDR(r.Cidr, r.Via)
+		}
+	}
+	return routeTree, nil
 }
 
 func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {

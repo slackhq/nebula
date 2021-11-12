@@ -17,11 +17,11 @@ import (
 const tunGUIDLabel = "Fixed Nebula Windows GUID v1"
 
 type winTun struct {
-	Device   string
-	Cidr     *net.IPNet
-	MTU      int
-	Routes   []Route
-	cidrTree *cidr.Tree4
+	Device    string
+	cidr      *net.IPNet
+	MTU       int
+	Routes    []Route
+	routeTree *cidr.Tree4
 
 	tun *wintun.NativeTun
 }
@@ -56,17 +56,17 @@ func newWinTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []Rout
 		return nil, fmt.Errorf("create TUN device failed: %w", err)
 	}
 
-	cidrTree, err := makeCidrTree(routes, false)
+	routeTree, err := makeRouteTree(routes, false)
 	if err != nil {
 		return nil, err
 	}
 
 	return &winTun{
-		Device:   deviceName,
-		Cidr:     cidr,
-		MTU:      defaultMTU,
-		Routes:   routes,
-		cidrTree: cidrTree,
+		Device:    deviceName,
+		cidr:      cidr,
+		MTU:       defaultMTU,
+		Routes:    routes,
+		routeTree: routeTree,
 
 		tun: tunDevice.(*wintun.NativeTun),
 	}, nil
@@ -75,7 +75,7 @@ func newWinTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []Rout
 func (t *winTun) Activate() error {
 	luid := winipcfg.LUID(t.tun.LUID())
 
-	if err := luid.SetIPAddresses([]net.IPNet{*t.Cidr}); err != nil {
+	if err := luid.SetIPAddresses([]net.IPNet{*t.cidr}); err != nil {
 		return fmt.Errorf("failed to set address: %w", err)
 	}
 
@@ -125,7 +125,7 @@ func (t *winTun) Activate() error {
 }
 
 func (t *winTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	r := t.cidrTree.MostSpecificContains(ip)
+	r := t.routeTree.MostSpecificContains(ip)
 	if r != nil {
 		return r.(iputil.VpnIp)
 	}
@@ -133,11 +133,11 @@ func (t *winTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
 	return 0
 }
 
-func (t *winTun) CidrNet() *net.IPNet {
-	return t.Cidr
+func (t *winTun) Cidr() *net.IPNet {
+	return t.cidr
 }
 
-func (t *winTun) DeviceName() string {
+func (t *winTun) Name() string {
 	return t.Device
 }
 
@@ -147,11 +147,6 @@ func (t *winTun) Read(b []byte) (int, error) {
 
 func (t *winTun) Write(b []byte) (int, error) {
 	return t.tun.Write(b, 0)
-}
-
-func (t *winTun) WriteRaw(b []byte) error {
-	_, err := t.Write(b)
-	return err
 }
 
 func (t *winTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {

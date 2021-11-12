@@ -21,12 +21,12 @@ import (
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
 
 type tun struct {
-	Device   string
-	Cidr     *net.IPNet
-	MTU      int
-	Routes   []Route
-	cidrTree *cidr.Tree4
-	l        *logrus.Logger
+	Device    string
+	cidr      *net.IPNet
+	MTU       int
+	Routes    []Route
+	routeTree *cidr.Tree4
+	l         *logrus.Logger
 
 	io.ReadWriteCloser
 }
@@ -43,7 +43,7 @@ func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int
 }
 
 func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route, _ int, _ bool) (*tun, error) {
-	cidrTree, err := makeCidrTree(routes, false)
+	routeTree, err := makeRouteTree(routes, false)
 	if err != nil {
 		return nil, err
 	}
@@ -55,12 +55,12 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 		return nil, fmt.Errorf("tun.dev must match `tun[0-9]+`")
 	}
 	return &tun{
-		Device:   deviceName,
-		Cidr:     cidr,
-		MTU:      defaultMTU,
-		Routes:   routes,
-		cidrTree: cidrTree,
-		l:        l,
+		Device:    deviceName,
+		cidr:      cidr,
+		MTU:       defaultMTU,
+		Routes:    routes,
+		routeTree: routeTree,
+		l:         l,
 	}, nil
 }
 
@@ -72,12 +72,12 @@ func (t *tun) Activate() error {
 	}
 
 	// TODO use syscalls instead of exec.Command
-	t.l.Debug("command: ifconfig", t.Device, t.Cidr.String(), t.Cidr.IP.String())
-	if err = exec.Command("/sbin/ifconfig", t.Device, t.Cidr.String(), t.Cidr.IP.String()).Run(); err != nil {
+	t.l.Debug("command: ifconfig", t.Device, t.cidr.String(), t.cidr.IP.String())
+	if err = exec.Command("/sbin/ifconfig", t.Device, t.cidr.String(), t.cidr.IP.String()).Run(); err != nil {
 		return fmt.Errorf("failed to run 'ifconfig': %s", err)
 	}
-	t.l.Debug("command: route", "-n", "add", "-net", t.Cidr.String(), "-interface", t.Device)
-	if err = exec.Command("/sbin/route", "-n", "add", "-net", t.Cidr.String(), "-interface", t.Device).Run(); err != nil {
+	t.l.Debug("command: route", "-n", "add", "-net", t.cidr.String(), "-interface", t.Device)
+	if err = exec.Command("/sbin/route", "-n", "add", "-net", t.cidr.String(), "-interface", t.Device).Run(); err != nil {
 		return fmt.Errorf("failed to run 'route add': %s", err)
 	}
 	t.l.Debug("command: ifconfig", t.Device, "mtu", strconv.Itoa(t.MTU))
@@ -101,7 +101,7 @@ func (t *tun) Activate() error {
 }
 
 func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	r := t.cidrTree.MostSpecificContains(ip)
+	r := t.routeTree.MostSpecificContains(ip)
 	if r != nil {
 		return r.(iputil.VpnIp)
 	}
@@ -109,17 +109,12 @@ func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
 	return 0
 }
 
-func (t *tun) CidrNet() *net.IPNet {
-	return t.Cidr
+func (t *tun) Cidr() *net.IPNet {
+	return t.cidr
 }
 
-func (t *tun) DeviceName() string {
+func (t *tun) Name() string {
 	return t.Device
-}
-
-func (t *tun) WriteRaw(b []byte) error {
-	_, err := t.Write(b)
-	return err
 }
 
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {

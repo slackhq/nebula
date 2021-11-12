@@ -13,27 +13,27 @@ import (
 )
 
 type waterTun struct {
-	Device   string
-	Cidr     *net.IPNet
-	MTU      int
-	Routes   []Route
-	cidrTree *cidr.Tree4
+	Device    string
+	cidr      *net.IPNet
+	MTU       int
+	Routes    []Route
+	routeTree *cidr.Tree4
 
 	*water.Interface
 }
 
 func newWaterTun(cidr *net.IPNet, defaultMTU int, routes []Route) (*waterTun, error) {
-	cidrTree, err := makeCidrTree(routes, false)
+	routeTree, err := makeRouteTree(routes, false)
 	if err != nil {
 		return nil, err
 	}
 
 	// NOTE: You cannot set the deviceName under Windows, so you must check tun.Device after calling .Activate()
 	return &waterTun{
-		Cidr:     cidr,
-		MTU:      defaultMTU,
-		Routes:   routes,
-		cidrTree: cidrTree,
+		cidr:      cidr,
+		MTU:       defaultMTU,
+		Routes:    routes,
+		routeTree: routeTree,
 	}, nil
 }
 
@@ -43,7 +43,7 @@ func (t *waterTun) Activate() error {
 		DeviceType: water.TUN,
 		PlatformSpecificParams: water.PlatformSpecificParams{
 			ComponentID: "tap0901",
-			Network:     t.Cidr.String(),
+			Network:     t.cidr.String(),
 		},
 	})
 	if err != nil {
@@ -57,8 +57,8 @@ func (t *waterTun) Activate() error {
 		`C:\Windows\System32\netsh.exe`, "interface", "ipv4", "set", "address",
 		fmt.Sprintf("name=%s", t.Device),
 		"source=static",
-		fmt.Sprintf("addr=%s", t.Cidr.IP),
-		fmt.Sprintf("mask=%s", net.IP(t.Cidr.Mask)),
+		fmt.Sprintf("addr=%s", t.cidr.IP),
+		fmt.Sprintf("mask=%s", net.IP(t.cidr.Mask)),
 		"gateway=none",
 	).Run()
 	if err != nil {
@@ -96,7 +96,7 @@ func (t *waterTun) Activate() error {
 }
 
 func (t *waterTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	r := t.cidrTree.MostSpecificContains(ip)
+	r := t.routeTree.MostSpecificContains(ip)
 	if r != nil {
 		return r.(iputil.VpnIp)
 	}
@@ -104,17 +104,12 @@ func (t *waterTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
 	return 0
 }
 
-func (t *waterTun) CidrNet() *net.IPNet {
-	return t.Cidr
+func (t *waterTun) Cidr() *net.IPNet {
+	return t.cidr
 }
 
-func (t *waterTun) DeviceName() string {
+func (t *waterTun) Name() string {
 	return t.Device
-}
-
-func (t *waterTun) WriteRaw(b []byte) error {
-	_, err := t.Write(b)
-	return err
 }
 
 func (t *waterTun) Close() error {

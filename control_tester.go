@@ -92,7 +92,7 @@ func (c *Control) InjectTunUDPPacket(toIp net.IP, toPort uint16, fromPort uint16
 		Version:  4,
 		TTL:      64,
 		Protocol: layers.IPProtocolUDP,
-		SrcIP:    c.f.inside.CidrNet().IP,
+		SrcIP:    c.f.inside.Cidr().IP,
 		DstIP:    toIp,
 	}
 

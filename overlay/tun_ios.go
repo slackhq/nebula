@@ -19,7 +19,7 @@ import (
 
 type tun struct {
 	io.ReadWriteCloser
-	Cidr *net.IPNet
+	cidr *net.IPNet
 }
 
 func newTun(_ *logrus.Logger, _ string, _ *net.IPNet, _ int, _ []Route, _ int, _ bool) (*tun, error) {
@@ -33,8 +33,7 @@ func newTunFromFd(_ *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes
 
 	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
 	return &tun{
-		Cidr:            cidr,
-		Device:          "iOS",
+		cidr:            cidr,
 		ReadWriteCloser: &tunReadCloser{f: file},
 	}, nil
 }
@@ -45,11 +44,6 @@ func (t *tun) Activate() error {
 
 func (t *tun) RouteFor(iputil.VpnIp) iputil.VpnIp {
 	return 0
-}
-
-func (t *tun) WriteRaw(b []byte) error {
-	_, err := t.Write(b)
-	return err
 }
 
 // The following is hoisted up from water, we do this so we can inject our own fd on iOS
@@ -110,11 +104,11 @@ func (tr *tunReadCloser) Close() error {
 	return tr.f.Close()
 }
 
-func (t *tun) CidrNet() *net.IPNet {
-	return t.Cidr
+func (t *tun) Cidr() *net.IPNet {
+	return t.cidr
 }
 
-func (t *tun) DeviceName() string {
+func (t *tun) Name() string {
 	return "iOS"
 }
 

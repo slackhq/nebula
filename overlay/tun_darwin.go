@@ -21,10 +21,10 @@ import (
 type tun struct {
 	io.ReadWriteCloser
 	Device     string
-	Cidr       *net.IPNet
+	cidr       *net.IPNet
 	DefaultMTU int
 	Routes     []Route
-	cidrTree   *cidr.Tree4
+	routeTree  *cidr.Tree4
 	l          *logrus.Logger
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
@@ -77,7 +77,7 @@ type ifreqMTU struct {
 }
 
 func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []Route, _ int, _ bool) (*tun, error) {
-	cidrTree, err := makeCidrTree(routes, false)
+	routeTree, err := makeRouteTree(routes, false)
 	if err != nil {
 		return nil, err
 	}
@@ -152,10 +152,10 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 	tun := &tun{
 		ReadWriteCloser: file,
 		Device:          name,
-		Cidr:            cidr,
+		cidr:            cidr,
 		DefaultMTU:      defaultMTU,
 		Routes:          routes,
-		cidrTree:        cidrTree,
+		routeTree:       routeTree,
 		l:               l,
 	}
 
@@ -185,8 +185,8 @@ func (t *tun) Activate() error {
 
 	var addr, mask [4]byte
 
-	copy(addr[:], t.Cidr.IP.To4())
-	copy(mask[:], t.Cidr.Mask)
+	copy(addr[:], t.cidr.IP.To4())
+	copy(mask[:], t.cidr.Mask)
 
 	s, err := unix.Socket(
 		unix.AF_INET,
@@ -303,7 +303,7 @@ func (t *tun) Activate() error {
 }
 
 func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	r := t.cidrTree.MostSpecificContains(ip)
+	r := t.routeTree.MostSpecificContains(ip)
 	if r != nil {
 		return r.(iputil.VpnIp)
 	}
@@ -403,17 +403,12 @@ func (t *tun) Write(from []byte) (int, error) {
 	return n - 4, err
 }
 
-func (t *tun) CidrNet() *net.IPNet {
-	return t.Cidr
+func (t *tun) Cidr() *net.IPNet {
+	return t.cidr
 }
 
-func (t *tun) DeviceName() string {
+func (t *tun) Name() string {
 	return t.Device
-}
-
-func (t *tun) WriteRaw(b []byte) error {
-	_, err := t.Write(b)
-	return err
 }
 
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
