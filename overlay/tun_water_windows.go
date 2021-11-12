@@ -10,7 +10,7 @@ import (
 	"github.com/songgao/water"
 )
 
-type WindowsWaterTun struct {
+type waterTun struct {
 	Device       string
 	Cidr         *net.IPNet
 	MTU          int
@@ -19,37 +19,37 @@ type WindowsWaterTun struct {
 	*water.Interface
 }
 
-func newWindowsWaterTun(deviceName string, cidr *net.IPNet, defaultMTU int, unsafeRoutes []Route, txQueueLen int) (ifce *WindowsWaterTun, err error) {
+func newWaterTun(cidr *net.IPNet, defaultMTU int, unsafeRoutes []Route) (*waterTun, error) {
 	// NOTE: You cannot set the deviceName under Windows, so you must check tun.Device after calling .Activate()
-	return &WindowsWaterTun{
+	return &waterTun{
 		Cidr:         cidr,
 		MTU:          defaultMTU,
 		UnsafeRoutes: unsafeRoutes,
 	}, nil
 }
 
-func (c *WindowsWaterTun) Activate() error {
+func (t *waterTun) Activate() error {
 	var err error
-	c.Interface, err = water.New(water.Config{
+	t.Interface, err = water.New(water.Config{
 		DeviceType: water.TUN,
 		PlatformSpecificParams: water.PlatformSpecificParams{
 			ComponentID: "tap0901",
-			Network:     c.Cidr.String(),
+			Network:     t.Cidr.String(),
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("Activate failed: %v", err)
+		return fmt.Errorf("activate failed: %v", err)
 	}
 
-	c.Device = c.Interface.Name()
+	t.Device = t.Interface.Name()
 
 	// TODO use syscalls instead of exec.Command
 	err = exec.Command(
 		`C:\Windows\System32\netsh.exe`, "interface", "ipv4", "set", "address",
-		fmt.Sprintf("name=%s", c.Device),
+		fmt.Sprintf("name=%s", t.Device),
 		"source=static",
-		fmt.Sprintf("addr=%s", c.Cidr.IP),
-		fmt.Sprintf("mask=%s", net.IP(c.Cidr.Mask)),
+		fmt.Sprintf("addr=%s", t.Cidr.IP),
+		fmt.Sprintf("mask=%s", net.IP(t.Cidr.Mask)),
 		"gateway=none",
 	).Run()
 	if err != nil {
@@ -57,19 +57,19 @@ func (c *WindowsWaterTun) Activate() error {
 	}
 	err = exec.Command(
 		`C:\Windows\System32\netsh.exe`, "interface", "ipv4", "set", "interface",
-		c.Device,
-		fmt.Sprintf("mtu=%d", c.MTU),
+		t.Device,
+		fmt.Sprintf("mtu=%d", t.MTU),
 	).Run()
 	if err != nil {
 		return fmt.Errorf("failed to run 'netsh' to set MTU: %s", err)
 	}
 
-	iface, err := net.InterfaceByName(c.Device)
+	iface, err := net.InterfaceByName(t.Device)
 	if err != nil {
-		return fmt.Errorf("failed to find interface named %s: %v", c.Device, err)
+		return fmt.Errorf("failed to find interface named %s: %v", t.Device, err)
 	}
 
-	for _, r := range c.UnsafeRoutes {
+	for _, r := range t.UnsafeRoutes {
 		err = exec.Command(
 			"C:\\Windows\\System32\\route.exe", "add", r.Cidr.String(), r.Via.String(), "IF", strconv.Itoa(iface.Index), "METRIC", strconv.Itoa(r.Metric),
 		).Run()
@@ -81,27 +81,27 @@ func (c *WindowsWaterTun) Activate() error {
 	return nil
 }
 
-func (c *WindowsWaterTun) CidrNet() *net.IPNet {
-	return c.Cidr
+func (t *waterTun) CidrNet() *net.IPNet {
+	return t.Cidr
 }
 
-func (c *WindowsWaterTun) DeviceName() string {
-	return c.Device
+func (t *waterTun) DeviceName() string {
+	return t.Device
 }
 
-func (c *WindowsWaterTun) WriteRaw(b []byte) error {
-	_, err := c.Write(b)
+func (t *waterTun) WriteRaw(b []byte) error {
+	_, err := t.Write(b)
 	return err
 }
 
-func (c *WindowsWaterTun) Close() error {
-	if c.Interface == nil {
+func (t *waterTun) Close() error {
+	if t.Interface == nil {
 		return nil
 	}
 
-	return c.Interface.Close()
+	return t.Interface.Close()
 }
 
-func (t *WindowsWaterTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *waterTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
 }

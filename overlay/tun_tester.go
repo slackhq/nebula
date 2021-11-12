@@ -11,7 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-type Tun struct {
+type TestTun struct {
 	Device       string
 	Cidr         *net.IPNet
 	MTU          int
@@ -22,8 +22,8 @@ type Tun struct {
 	TxPackets chan []byte // Packets transmitted outside by nebula
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, _ []Route, unsafeRoutes []Route, _ int, _ bool) (ifce *Tun, err error) {
-	return &Tun{
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, _ []Route, unsafeRoutes []Route, _ int, _ bool) (*TestTun, error) {
+	return &TestTun{
 		Device:       deviceName,
 		Cidr:         cidr,
 		MTU:          defaultMTU,
@@ -34,28 +34,28 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 	}, nil
 }
 
-func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ []Route, _ int) (ifce *Tun, err error) {
+func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ []Route, _ int) (*TestTun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported")
 }
 
 // Send will place a byte array onto the receive queue for nebula to consume
 // These are unencrypted ip layer frames destined for another nebula node.
 // packets should exit the udp side, capture them with udpConn.Get
-func (c *Tun) Send(packet []byte) {
-	c.l.WithField("dataLen", len(packet)).Info("Tun receiving injected packet")
-	c.rxPackets <- packet
+func (t *TestTun) Send(packet []byte) {
+	t.l.WithField("dataLen", len(packet)).Info("Tun receiving injected packet")
+	t.rxPackets <- packet
 }
 
 // Get will pull an unencrypted ip layer frame from the transmit queue
 // nebula meant to send this message to some application on the local system
 // packets were ingested from the udp side, you can send them with udpConn.Send
-func (c *Tun) Get(block bool) []byte {
+func (t *TestTun) Get(block bool) []byte {
 	if block {
-		return <-c.TxPackets
+		return <-t.TxPackets
 	}
 
 	select {
-	case p := <-c.TxPackets:
+	case p := <-t.TxPackets:
 		return p
 	default:
 		return nil
@@ -66,40 +66,40 @@ func (c *Tun) Get(block bool) []byte {
 // Below this is boilerplate implementation to make nebula actually work
 //********************************************************************************************************************//
 
-func (c *Tun) Activate() error {
+func (t *TestTun) Activate() error {
 	return nil
 }
 
-func (c *Tun) CidrNet() *net.IPNet {
-	return c.Cidr
+func (t *TestTun) CidrNet() *net.IPNet {
+	return t.Cidr
 }
 
-func (c *Tun) DeviceName() string {
-	return c.Device
+func (t *TestTun) DeviceName() string {
+	return t.Device
 }
 
-func (c *Tun) Write(b []byte) (n int, err error) {
-	return len(b), c.WriteRaw(b)
+func (t *TestTun) Write(b []byte) (n int, err error) {
+	return len(b), t.WriteRaw(b)
 }
 
-func (c *Tun) Close() error {
-	close(c.rxPackets)
+func (t *TestTun) Close() error {
+	close(t.rxPackets)
 	return nil
 }
 
-func (c *Tun) WriteRaw(b []byte) error {
+func (t *TestTun) WriteRaw(b []byte) error {
 	packet := make([]byte, len(b), len(b))
 	copy(packet, b)
-	c.TxPackets <- packet
+	t.TxPackets <- packet
 	return nil
 }
 
-func (c *Tun) Read(b []byte) (int, error) {
-	p := <-c.rxPackets
+func (t *TestTun) Read(b []byte) (int, error) {
+	p := <-t.rxPackets
 	copy(b, p)
 	return len(p), nil
 }
 
-func (c *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *TestTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented")
 }

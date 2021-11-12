@@ -14,7 +14,7 @@ import (
 
 const tunGUIDLabel = "Fixed Nebula Windows GUID v1"
 
-type WinTun struct {
+type winTun struct {
 	Device       string
 	Cidr         *net.IPNet
 	MTU          int
@@ -42,40 +42,38 @@ func generateGUIDByDeviceName(name string) (*windows.GUID, error) {
 	return (*windows.GUID)(unsafe.Pointer(&sum[0])), nil
 }
 
-func newWinTun(deviceName string, cidr *net.IPNet, defaultMTU int, unsafeRoutes []Route, txQueueLen int) (ifce *WinTun, err error) {
+func newWinTun(deviceName string, cidr *net.IPNet, defaultMTU int, unsafeRoutes []Route) (*winTun, error) {
 	guid, err := generateGUIDByDeviceName(deviceName)
 	if err != nil {
-		return nil, fmt.Errorf("Generate GUID failed: %w", err)
+		return nil, fmt.Errorf("generate GUID failed: %w", err)
 	}
 
 	tunDevice, err := wintun.CreateTUNWithRequestedGUID(deviceName, guid, defaultMTU)
 	if err != nil {
-		return nil, fmt.Errorf("Create TUN device failed: %w", err)
+		return nil, fmt.Errorf("create TUN device failed: %w", err)
 	}
 
-	ifce = &WinTun{
+	return &winTun{
 		Device:       deviceName,
 		Cidr:         cidr,
 		MTU:          defaultMTU,
 		UnsafeRoutes: unsafeRoutes,
 
 		tun: tunDevice.(*wintun.NativeTun),
-	}
-
-	return ifce, nil
+	}, nil
 }
 
-func (c *WinTun) Activate() error {
-	luid := winipcfg.LUID(c.tun.LUID())
+func (t *winTun) Activate() error {
+	luid := winipcfg.LUID(t.tun.LUID())
 
-	if err := luid.SetIPAddresses([]net.IPNet{*c.Cidr}); err != nil {
+	if err := luid.SetIPAddresses([]net.IPNet{*t.Cidr}); err != nil {
 		return fmt.Errorf("failed to set address: %w", err)
 	}
 
 	foundDefault4 := false
-	routes := make([]*winipcfg.RouteData, 0, len(c.UnsafeRoutes)+1)
+	routes := make([]*winipcfg.RouteData, 0, len(t.UnsafeRoutes)+1)
 
-	for _, r := range c.UnsafeRoutes {
+	for _, r := range t.UnsafeRoutes {
 		if !foundDefault4 {
 			if cidr, bits := r.Cidr.Mask.Size(); cidr == 0 && bits != 0 {
 				foundDefault4 = true
@@ -99,7 +97,7 @@ func (c *WinTun) Activate() error {
 		return fmt.Errorf("failed to get ip interface: %w", err)
 	}
 
-	ipif.NLMTU = uint32(c.MTU)
+	ipif.NLMTU = uint32(t.MTU)
 	if foundDefault4 {
 		ipif.UseAutomaticMetric = false
 		ipif.Metric = 0
@@ -112,35 +110,35 @@ func (c *WinTun) Activate() error {
 	return nil
 }
 
-func (c *WinTun) CidrNet() *net.IPNet {
-	return c.Cidr
+func (t *winTun) CidrNet() *net.IPNet {
+	return t.Cidr
 }
 
-func (c *WinTun) DeviceName() string {
-	return c.Device
+func (t *winTun) DeviceName() string {
+	return t.Device
 }
 
-func (c *WinTun) Read(b []byte) (int, error) {
-	return c.tun.Read(b, 0)
+func (t *winTun) Read(b []byte) (int, error) {
+	return t.tun.Read(b, 0)
 }
 
-func (c *WinTun) Write(b []byte) (int, error) {
-	return c.tun.Write(b, 0)
+func (t *winTun) Write(b []byte) (int, error) {
+	return t.tun.Write(b, 0)
 }
 
-func (c *WinTun) WriteRaw(b []byte) error {
-	_, err := c.Write(b)
+func (t *winTun) WriteRaw(b []byte) error {
+	_, err := t.Write(b)
 	return err
 }
 
-func (c *WinTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *winTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
 }
 
-func (c *WinTun) Close() error {
+func (t *winTun) Close() error {
 	// It seems that the Windows networking stack doesn't like it when we destroy interfaces that have active routes,
 	// so to be certain, just remove everything before destroying.
-	luid := winipcfg.LUID(c.tun.LUID())
+	luid := winipcfg.LUID(t.tun.LUID())
 	_ = luid.FlushRoutes(windows.AF_INET)
 	_ = luid.FlushIPAddresses(windows.AF_INET)
 	/* We don't support IPV6 yet
@@ -149,5 +147,5 @@ func (c *WinTun) Close() error {
 	*/
 	_ = luid.FlushDNS(windows.AF_INET)
 
-	return c.tun.Close()
+	return t.tun.Close()
 }
