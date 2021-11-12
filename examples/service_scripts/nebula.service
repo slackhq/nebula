@@ -5,6 +5,7 @@ After=basic.target network.target
 Before=sshd.service
 
 [Service]
+ExecStartPre=/bin/sleep 5
 SyslogIdentifier=nebula
 ExecReload=/bin/kill -HUP $MAINPID
 ExecStart=/usr/local/bin/nebula -config /etc/nebula/config.yml
