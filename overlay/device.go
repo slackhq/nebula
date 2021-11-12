@@ -10,9 +10,8 @@ import (
 type Device interface {
 	io.ReadWriteCloser
 	Activate() error
-	CidrNet() *net.IPNet
-	DeviceName() string
-	WriteRaw([]byte) error
+	Cidr() *net.IPNet
+	Name() string
 	RouteFor(iputil.VpnIp) iputil.VpnIp
 	NewMultiQueueReader() (io.ReadWriteCloser, error)
 }

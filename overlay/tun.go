@@ -1,12 +1,9 @@
 package overlay
 
 import (
-	"fmt"
 	"net"
-	"runtime"
 
 	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/util"
 )
@@ -51,18 +48,4 @@ func NewDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, fd *
 			routines > 1,
 		)
 	}
-}
-
-func makeCidrTree(routes []Route, allowMTU bool) (*cidr.Tree4, error) {
-	cidrTree := cidr.NewTree4()
-	for _, r := range routes {
-		if !allowMTU && r.MTU > 0 {
-			return nil, fmt.Errorf("route MTU is not supported in %s", runtime.GOOS)
-		}
-
-		if r.Via != nil {
-			cidrTree.AddCIDR(r.Cidr, r.Via)
-		}
-	}
-	return cidrTree, nil
 }

@@ -12,13 +12,12 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/iputil"
-	"golang.org/x/sys/unix"
 )
 
 type tun struct {
 	io.ReadWriteCloser
 	fd   int
-	Cidr *net.IPNet
+	cidr *net.IPNet
 	l    *logrus.Logger
 }
 
@@ -32,7 +31,7 @@ func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes
 	return &tun{
 		ReadWriteCloser: file,
 		fd:              int(file.Fd()),
-		Cidr:            cidr,
+		cidr:            cidr,
 		l:               l,
 	}, nil
 }
@@ -45,37 +44,15 @@ func (t *tun) RouteFor(iputil.VpnIp) iputil.VpnIp {
 	return 0
 }
 
-func (t *tun) WriteRaw(b []byte) error {
-	var nn int
-	for {
-		max := len(b)
-		n, err := unix.Write(t.fd, b[nn:max])
-		if n > 0 {
-			nn += n
-		}
-		if nn == len(b) {
-			return err
-		}
-
-		if err != nil {
-			return err
-		}
-
-		if n == 0 {
-			return io.ErrUnexpectedEOF
-		}
-	}
-}
-
 func (t tun) Activate() error {
 	return nil
 }
 
-func (t *tun) CidrNet() *net.IPNet {
-	return t.Cidr
+func (t *tun) Cidr() *net.IPNet {
+	return t.cidr
 }
 
-func (t *tun) DeviceName() string {
+func (t *tun) Name() string {
 	return "android"
 }
 

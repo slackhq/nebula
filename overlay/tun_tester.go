@@ -14,27 +14,27 @@ import (
 )
 
 type TestTun struct {
-	Device   string
-	Cidr     *net.IPNet
-	Routes   []Route
-	cidrTree *cidr.Tree4
-	l        *logrus.Logger
+	Device    string
+	cidr      *net.IPNet
+	Routes    []Route
+	routeTree *cidr.Tree4
+	l         *logrus.Logger
 
 	rxPackets chan []byte // Packets to receive into nebula
 	TxPackets chan []byte // Packets transmitted outside by nebula
 }
 
 func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, _ int, routes []Route, _ int, _ bool) (*TestTun, error) {
-	cidrTree, err := makeCidrTree(routes, false)
+	routeTree, err := makeRouteTree(routes, false)
 	if err != nil {
 		return nil, err
 	}
 
 	return &TestTun{
 		Device:    deviceName,
-		Cidr:      cidr,
+		cidr:      cidr,
 		Routes:    routes,
-		cidrTree:  cidrTree,
+		routeTree: routeTree,
 		l:         l,
 		rxPackets: make(chan []byte, 1),
 		TxPackets: make(chan []byte, 1),
@@ -74,7 +74,7 @@ func (t *TestTun) Get(block bool) []byte {
 //********************************************************************************************************************//
 
 func (t *TestTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	r := t.cidrTree.MostSpecificContains(ip)
+	r := t.routeTree.MostSpecificContains(ip)
 	if r != nil {
 		return r.(iputil.VpnIp)
 	}
@@ -86,27 +86,23 @@ func (t *TestTun) Activate() error {
 	return nil
 }
 
-func (t *TestTun) CidrNet() *net.IPNet {
-	return t.Cidr
+func (t *TestTun) Cidr() *net.IPNet {
+	return t.cidr
 }
 
-func (t *TestTun) DeviceName() string {
+func (t *TestTun) Name() string {
 	return t.Device
 }
 
 func (t *TestTun) Write(b []byte) (n int, err error) {
-	return len(b), t.WriteRaw(b)
+	packet := make([]byte, len(b), len(b))
+	copy(packet, b)
+	t.TxPackets <- packet
+	return len(b), nil
 }
 
 func (t *TestTun) Close() error {
 	close(t.rxPackets)
-	return nil
-}
-
-func (t *TestTun) WriteRaw(b []byte) error {
-	packet := make([]byte, len(b), len(b))
-	copy(packet, b)
-	t.TxPackets <- packet
 	return nil
 }
 

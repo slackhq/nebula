@@ -48,11 +48,11 @@ func (*disabledTun) RouteFor(iputil.VpnIp) iputil.VpnIp {
 	return 0
 }
 
-func (t *disabledTun) CidrNet() *net.IPNet {
+func (t *disabledTun) Cidr() *net.IPNet {
 	return t.cidr
 }
 
-func (*disabledTun) DeviceName() string {
+func (*disabledTun) Name() string {
 	return "disabled"
 }
 
@@ -126,11 +126,6 @@ func (t *disabledTun) Write(b []byte) (int, error) {
 		t.l.WithField("raw", prettyPacket(b)).Debugf("Disabled tun received unexpected payload")
 	}
 	return len(b), nil
-}
-
-func (t *disabledTun) WriteRaw(b []byte) error {
-	_, err := t.Write(b)
-	return err
 }
 
 func (t *disabledTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
