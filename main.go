@@ -402,6 +402,24 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	// a context so that they can exit when the context is Done.
 	statsStart, err := startStats(l, c, buildVersion, configTest)
 
+	var pcpStart, pcpStop func()
+	if c.GetBool("punchy.port_mappings.pcp.enabled", false) {
+		l.Printf("PCP port mapping enabled")
+
+		pcp, err := NewPCP(c, lightHouse, l)
+		if err != nil {
+			l.WithError(err).Error("PCP failed to init client")
+		} else {
+			pcpStart = func() {
+				err = pcp.Start()
+				if err != nil {
+					l.WithError(err).Error("failed to start pcp client")
+				}
+			}
+			pcpStop = pcp.Stop
+		}
+	}
+
 	if err != nil {
 		return nil, util.NewContextualError("Failed to start stats emitter", nil, err)
 	}
@@ -422,5 +440,5 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		dnsStart = dnsMain(l, hostMap, c)
 	}
 
-	return &Control{ifce, l, cancel, sshStart, statsStart, dnsStart}, nil
+	return &Control{ifce, l, cancel, sshStart, statsStart, dnsStart, pcpStart, pcpStop}, nil
 }

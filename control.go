@@ -25,6 +25,8 @@ type Control struct {
 	sshStart   func()
 	statsStart func()
 	dnsStart   func()
+	pcpStart   func()
+	pcpStop    func()
 }
 
 type ControlHostInfo struct {
@@ -53,6 +55,9 @@ func (c *Control) Start() {
 	if c.dnsStart != nil {
 		go c.dnsStart()
 	}
+	if c.pcpStart != nil {
+		go c.pcpStart()
+	}
 
 	// Start reading packets.
 	c.f.run()
@@ -66,6 +71,11 @@ func (c *Control) Stop() {
 		c.l.WithError(err).Error("Close interface failed")
 	}
 	c.cancel()
+
+	if c.pcpStop != nil {
+		c.pcpStop()
+	}
+
 	c.l.Info("Goodbye")
 }
 

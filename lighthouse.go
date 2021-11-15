@@ -44,6 +44,9 @@ type LightHouse struct {
 	// filters local addresses that we advertise to lighthouses
 	localAllowList *LocalAllowList
 
+	portMappingIP4 map[string]*Ip4AndPort
+	portMappingIP6 map[string]*Ip6AndPort
+
 	// used to trigger the HandshakeManager when we receive HostQueryReply
 	handshakeTrigger chan<- iputil.VpnIp
 
@@ -70,6 +73,8 @@ func NewLightHouse(l *logrus.Logger, amLighthouse bool, myVpnIpNet *net.IPNet, i
 		addrMap:      make(map[iputil.VpnIp]*RemoteList),
 		nebulaPort:   nebulaPort,
 		lighthouses:  make(map[iputil.VpnIp]struct{}),
+		portMappingIP4: make(map[string]*Ip4AndPort),
+		portMappingIP6: make(map[string]*Ip6AndPort),
 		staticList:   make(map[iputil.VpnIp]struct{}),
 		interval:     interval,
 		punchConn:    pc,
@@ -108,7 +113,7 @@ func (lh *LightHouse) SetLocalAllowList(allowList *LocalAllowList) {
 }
 
 func (lh *LightHouse) ValidateLHStaticEntries() error {
-	for lhIP, _ := range lh.lighthouses {
+	for lhIP := range lh.lighthouses {
 		if _, ok := lh.staticList[lhIP]; !ok {
 			return fmt.Errorf("Lighthouse %s does not have a static_host_map entry", lhIP)
 		}
@@ -240,6 +245,14 @@ func (lh *LightHouse) AddStaticRemote(vpnIp iputil.VpnIp, toAddr *udp.Addr) {
 	lh.staticList[vpnIp] = struct{}{}
 }
 
+func (lh *LightHouse) AddIP4PortMapping(name string, addr *Ip4AndPort) {
+	lh.portMappingIP4[name] = addr
+}
+
+func (lh *LightHouse) AddIP6PortMapping(name string, addr *Ip6AndPort) {
+	lh.portMappingIP6[name] = addr
+}
+
 // unlockedGetRemoteList assumes you have the lh lock
 func (lh *LightHouse) unlockedGetRemoteList(vpnIp iputil.VpnIp) *RemoteList {
 	am, ok := lh.addrMap[vpnIp]
@@ -364,6 +377,14 @@ func (lh *LightHouse) SendUpdate(f udp.EncWriter) {
 			v6 = append(v6, NewIp6AndPort(e, lh.nebulaPort))
 		}
 	}
+
+	for _, value := range lh.portMappingIP4 {
+		v4 = append(v4, value)
+	}
+	for _, value := range lh.portMappingIP6 {
+		v6 = append(v6, value)
+	}
+
 	m := &NebulaMeta{
 		Type: NebulaMeta_HostUpdateNotification,
 		Details: &NebulaMetaDetails{
