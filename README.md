@@ -107,18 +107,16 @@ For each host, copy the nebula binary to the host, along with `config.yaml` from
 Download go and clone this repo. Change to the nebula directory.
 
 To build nebula for all platforms:
-`make all`
+* `make all`
 
 To build nebula for a specific platform (ex, Windows):
-`make bin-windows`
+* `make bin-windows`
 
 To build nebula with a specific version (avoiding auto generation using `git branch --show-version`, if `git` is <2.25.x)
-
-`make all BUILD_NUMBER=1.42`
+* `make all BUILD_NUMBER=1.42`
 
 Note: `GOPATH` and `GOROOT` are not required; the following prefix can be used to resolve any conflicts:
-
-`GOROOT="" GOPATH="" make all`
+* `GOROOT="" GOPATH="" make all`
 
 See the [Makefile](Makefile) for more details on build targets
 
