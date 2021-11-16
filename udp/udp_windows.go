@@ -5,7 +5,6 @@ package udp
 
 import (
 	"errors"
-	"fmt"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
