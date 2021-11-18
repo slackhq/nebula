@@ -352,9 +352,7 @@ func (f *Interface) handleRecvError(addr *udp.Addr, h *header.H) {
 	// We delete this host from the main hostmap
 	f.hostMap.DeleteHostInfo(hostinfo)
 	// We also delete it from pending to allow for
-	// fast reconnect. We must null the connectionstate
-	// or a counter reuse may happen
-	hostinfo.ConnectionState = nil
+	// fast reconnect.
 	f.handshakeManager.DeleteHostInfo(hostinfo)
 }
 
