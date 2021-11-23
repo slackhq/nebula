@@ -19,13 +19,13 @@ import (
 )
 
 //const ProbeLen = 100
-const PromoteEvery = 1000
-const ReQueryEvery = 5000
-const MaxRemotes = 10
+var PromoteEvery uint32
+var ReQueryEvery uint32
+var MaxRemotes int
 
-// How long we should prevent roaming back to the previous IP.
+// RoamingSuppressSeconds How long we should prevent roaming back to the previous IP.
 // This helps prevent flapping due to packets already in flight
-const RoamingSuppressSeconds = 2
+var RoamingSuppressSeconds time.Duration
 
 type HostMap struct {
 	sync.RWMutex    //Because we concurrently read and write to our maps

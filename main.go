@@ -89,6 +89,13 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	}
 
+	// Set vars from hostmap.go
+	PromoteEvery = uint32(c.GetInt("dynamic_roaming.promote_every", 1000))
+	ReQueryEvery = uint32(c.GetInt("dynamic_roaming.requery_every", 5000))
+	// Must type cast instead of using c.GetDuration because the value is multiplied by time.Second everywhere else.
+	RoamingSuppressSeconds = time.Duration(c.GetInt("dynamic_roaming.roaming_suppress_seconds", 2))
+	MaxRemotes = c.GetInt("max_remote_peers", 10)
+	
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// All non system modifying configuration consumption should live above this line
 	// tun config, listeners, anything modifying the computer should be below

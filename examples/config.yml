@@ -128,6 +128,15 @@ punchy:
 # and has been deprecated for "preferred_ranges"
 #preferred_ranges: ["172.16.0.0/24"]
 
+dynamic_roaming:
+  #promote_every: 1000
+  #requery_every: 5000
+  # How long we should prevent roaminb back to the previous IP.
+  # This helps prevent flapping due to packets already in flight
+  #roaming_suppress_seconds: 2
+
+#max_remote_peers: 10
+
 # sshd can expose informational and administrative functions via ssh this is a
 #sshd:
   # Toggles the feature
