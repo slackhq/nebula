@@ -50,6 +50,10 @@ ALL = $(ALL_LINUX) \
 	freebsd-amd64 \
 	windows-amd64
 
+CONFIG_DIR = ~/.config/nebula/
+CONFIG_FILE_PATH = "$(CONFIG_DIR)config.yml"
+PKI_DIR = ~/.config/nebula/certificates/
+
 e2e:
 	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
 
@@ -91,6 +95,15 @@ bin:
 install:
 	go install $(BUILD_ARGS) -ldflags "$(LDFLAGS)" ${NEBULA_CMD_PATH}
 	go install $(BUILD_ARGS) -ldflags "$(LDFLAGS)" ./cmd/nebula-cert
+	mkdir -p "$(CONFIG_DIR)";\
+	mkdir -p "$(PKI_DIR)";\
+	cp --update --backup --verbose examples/config "$(CONFIG_FILE)"
+
+uninstall:
+	go clean -i -x
+	@echo ""
+	@echo "------------"
+	@echo "NOTICE: Leaving config and key directories!"
 
 build/linux-arm-%: GOENV += GOARM=$(word 3, $(subst -, ,$*))
 build/linux-mips-%: GOENV += GOMIPS=$(word 3, $(subst -, ,$*))
