@@ -1,9 +1,19 @@
+SHELL = /bin/bash
+
 GOMINVERSION = 1.17
-NEBULA_CMD_PATH = "./cmd/nebula"
 GO111MODULE = on
-export GO111MODULE
 CGO_ENABLED = 0
+export GO111MODULE
 export CGO_ENABLED
+
+NEBULA_CMD_PATH = "./cmd/nebula"
+NEBULA_CERT_CMD_PATH = "./cmd/nebula-cert"
+
+INSTALL_PROGRAM = install
+prefix = /usr/local
+sysconfigdir = "$(prefix)"/nebula
+binddir = "$(prefix)"/bin
+
 
 # Set up OS specific bits
 ifeq ($(OS),Windows_NT)
@@ -50,6 +60,7 @@ ALL = $(ALL_LINUX) \
 	freebsd-amd64 \
 	windows-amd64
 
+
 e2e:
 	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
 
@@ -85,12 +96,25 @@ bin-freebsd: build/freebsd-amd64/nebula build/freebsd-amd64/nebula-cert
 	mv $? .
 
 bin:
-	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula${NEBULA_CMD_SUFFIX} ${NEBULA_CMD_PATH}
-	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula-cert${NEBULA_CMD_SUFFIX} ./cmd/nebula-cert
+	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula${NEBULA_CMD_SUFFIX} "${NEBULA_CMD_PATH}"
+	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula-cert$(NEBULA_CMD_SUFFIX) "$(NEBULA_CERT_CMD_PATH)"
 
 install:
-	go install $(BUILD_ARGS) -ldflags "$(LDFLAGS)" ${NEBULA_CMD_PATH}
-	go install $(BUILD_ARGS) -ldflags "$(LDFLAGS)" ./cmd/nebula-cert
+	$(INSTALL_PROGRAM) nebula --target-directory "$(binddir)" -D;\
+	$(INSTALL_PROGRAM) nebula-cert --target-directory "$(binddir)" -D;\
+	$(INSTALL_PROGRAM) --backup --suffix=.backup --mode=0640 --target-directory "$(sysconfigdir)" -D examples/config.yml
+
+clean:
+	go clean -i -x
+	rm -rv build/
+
+uninstall:
+	rm -rv "$(binddir)"
+	@echo ""
+	@echo "------------"
+	@echo "NOTICE: Leaving config/certificate directory: $(sysconfigdir)"
+	@echo "------------"
+	@echo ""
 
 build/linux-arm-%: GOENV += GOARM=$(word 3, $(subst -, ,$*))
 build/linux-mips-%: GOENV += GOMIPS=$(word 3, $(subst -, ,$*))
