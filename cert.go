@@ -144,7 +144,12 @@ func loadCAFromConfig(l *logrus.Logger, c *config.C) (*cert.NebulaCAPool, error)
 		}
 	}
 
-	CAs, err := cert.NewCAPoolFromBytes(rawCA)
+	var ignore []error
+	if c.GetBool("pki.ignore_expired_ca", false) {
+		ignore = append(ignore, cert.ErrExpired)
+	}
+
+	CAs, err := cert.NewCAPoolFromBytes(rawCA, ignore...)
 	if err != nil {
 		return nil, fmt.Errorf("error while adding CA certificate to CA trust store: %s", err)
 	}

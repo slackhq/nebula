@@ -12,6 +12,9 @@ pki:
   #  - c99d4e650533b92061b09918e838a5a0a6aaee21eed1d12fd937682865936c72
   # disconnect_invalid is a toggle to force a client to be disconnected if the certificate is expired or invalid.
   #disconnect_invalid: false
+  # ignore_expired_ca is a toggle that will allow nebula to start when there are expired certificates in the ca file.
+  # Expired certs are not loaded, and so will not be trusted.
+  #ignore_expired_ca: false
 
 # The static host map defines a set of hosts with fixed IP addresses on the internet (or any network).
 # A host can have multiple fixed IP addresses defined here, and nebula will try each when establishing a tunnel.

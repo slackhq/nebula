@@ -1,6 +1,7 @@
 package cert
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -21,15 +22,29 @@ func NewCAPool() *NebulaCAPool {
 	return &ca
 }
 
-func NewCAPoolFromBytes(caPEMs []byte) (*NebulaCAPool, error) {
+// NewCAPoolFromBytes will create a new CA pool from the provided
+// input bytes, which must be a PEM-encoded set of nebula certificates.
+// Specific errors from the inner call to pool.AddCACertificate can be
+// ignored (tested with errors.Is), any certificates that generate an
+// ignored error will NOT be present in the returned pool.
+func NewCAPoolFromBytes(caPEMs []byte, ignore ...error) (*NebulaCAPool, error) {
 	pool := NewCAPool()
 	var err error
 	for {
 		caPEMs, err = pool.AddCACertificate(caPEMs)
 		if err != nil {
-			return nil, err
+			ignored := false
+			for _, e := range ignore {
+				if errors.Is(err, e) {
+					ignored = true
+					break
+				}
+			}
+			if !ignored {
+				return nil, err
+			}
 		}
-		if caPEMs == nil || len(caPEMs) == 0 || strings.TrimSpace(string(caPEMs)) == "" {
+		if len(caPEMs) == 0 || strings.TrimSpace(string(caPEMs)) == "" {
 			break
 		}
 	}
@@ -47,15 +62,15 @@ func (ncp *NebulaCAPool) AddCACertificate(pemBytes []byte) ([]byte, error) {
 	}
 
 	if !c.Details.IsCA {
-		return pemBytes, fmt.Errorf("provided certificate was not a CA; %s", c.Details.Name)
+		return pemBytes, fmt.Errorf("%s: %w", c.Details.Name, ErrNotCA)
 	}
 
 	if !c.CheckSignature(c.Details.PublicKey) {
-		return pemBytes, fmt.Errorf("provided certificate was not self signed; %s", c.Details.Name)
+		return pemBytes, fmt.Errorf("%s: %w", c.Details.Name, ErrNotSelfSigned)
 	}
 
 	if c.Expired(time.Now()) {
-		return pemBytes, fmt.Errorf("provided CA certificate is expired; %s", c.Details.Name)
+		return pemBytes, fmt.Errorf("%s: %w", c.Details.Name, ErrExpired)
 	}
 
 	sum, err := c.Sha256Sum()
