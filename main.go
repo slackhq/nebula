@@ -249,6 +249,10 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		lighthouseHosts[i] = iputil.Ip2VpnIp(ip)
 	}
 
+	if !amLighthouse && len(lighthouseHosts) == 0 {
+		l.Warn("No lighthouses.hosts configured, this host will only be able to initiate tunnels with static_host_map entries")
+	}
+
 	lightHouse := NewLightHouse(
 		l,
 		amLighthouse,
