@@ -24,29 +24,32 @@ func NewCAPool() *NebulaCAPool {
 
 // NewCAPoolFromBytes will create a new CA pool from the provided
 // input bytes, which must be a PEM-encoded set of nebula certificates.
-// Specific errors from the inner call to pool.AddCACertificate can be
-// ignored (tested with errors.Is), any certificates that generate an
-// ignored error will NOT be present in the returned pool.
-func NewCAPoolFromBytes(caPEMs []byte, ignore ...error) (*NebulaCAPool, error) {
+// If the pool contains any expired certificates, an ErrExpired will be
+// returned along with the pool. The caller must handle any such errors.
+func NewCAPoolFromBytes(caPEMs []byte) (*NebulaCAPool, error) {
 	pool := NewCAPool()
 	var err error
+	var expired []string
 	for {
 		caPEMs, err = pool.AddCACertificate(caPEMs)
+		if errors.Is(err, ErrExpired) {
+			expired = append(expired, err.Error())
+			err = nil
+		}
 		if err != nil {
-			ignored := false
-			for _, e := range ignore {
-				if errors.Is(err, e) {
-					ignored = true
-					break
-				}
-			}
-			if !ignored {
-				return nil, err
-			}
+			return nil, err
 		}
 		if len(caPEMs) == 0 || strings.TrimSpace(string(caPEMs)) == "" {
 			break
 		}
+	}
+
+	if len(pool.CAs)-len(expired) == 0 {
+		return nil, ErrEmptyCAPool
+	}
+
+	if len(expired) > 0 {
+		return pool, fmt.Errorf("%s: %w", strings.Join(expired, ","), ErrExpired)
 	}
 
 	return pool, nil
@@ -69,16 +72,16 @@ func (ncp *NebulaCAPool) AddCACertificate(pemBytes []byte) ([]byte, error) {
 		return pemBytes, fmt.Errorf("%s: %w", c.Details.Name, ErrNotSelfSigned)
 	}
 
-	if c.Expired(time.Now()) {
-		return pemBytes, fmt.Errorf("%s: %w", c.Details.Name, ErrExpired)
-	}
-
 	sum, err := c.Sha256Sum()
 	if err != nil {
 		return pemBytes, fmt.Errorf("could not calculate shasum for provided CA; error: %s; %s", err, c.Details.Name)
 	}
 
 	ncp.CAs[sum] = c
+	if c.Expired(time.Now()) {
+		return pemBytes, fmt.Errorf("%s: %w", c.Details.Name, ErrExpired)
+	}
+
 	return pemBytes, nil
 }
 
