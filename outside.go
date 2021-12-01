@@ -349,9 +349,8 @@ func (f *Interface) handleRecvError(addr *udp.Addr, h *header.H) {
 		return
 	}
 
-	// We delete this host from the main hostmap
-	f.hostMap.DeleteHostInfo(hostinfo)
-	// We also delete it from pending to allow for
+	f.closeTunnel(hostinfo, false)
+	// We also delete it from pending hostmap to allow for
 	// fast reconnect.
 	f.handshakeManager.DeleteHostInfo(hostinfo)
 }
