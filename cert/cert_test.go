@@ -469,7 +469,7 @@ WH1M9n4O7cFtGlM6sJJOS+rCVVEJ3ABS7+MPdQs=
 
 	// expired cert, with valid certs
 	pppp, err := NewCAPoolFromBytes(append([]byte(expired), noNewLines...))
-	assert.Equal(t, fmt.Errorf("expired: %s: %w", ErrExpired, ErrExpired), err)
+	assert.Equal(t, ErrExpired, err)
 	assert.Equal(t, pppp.CAs[string("c9bfaf7ce8e84b2eeda2e27b469f4b9617bde192efd214b68891ecda6ed49522")].Details.Name, rootCA.Details.Name)
 	assert.Equal(t, pppp.CAs[string("5c9c3f23e7ee7fe97637cbd3a0a5b854154d1d9aaaf7b566a51f4a88f76b64cd")].Details.Name, rootCA01.Details.Name)
 	assert.Equal(t, pppp.CAs[string("152070be6bb19bc9e3bde4c2f0e7d8f4ff5448b4c9856b8eccb314fade0229b0")].Details.Name, "expired")
