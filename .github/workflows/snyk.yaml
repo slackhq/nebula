@@ -1,19 +1,16 @@
-name: Snyk Github Actions
-
+name: Experiment
 on: 
   schedule:
-  - cron: '*/2 * * * *'
+  - cron: '*/5 * * * *'
 
 jobs:
-  security:
+  job1:
+    name: Debug
     runs-on: ubuntu-latest
+
     steps:
-      - name: Git checkout
-        uses: actions/checkout@v2
-        with: { ref: snyk-test }
-      - name: Run Snyk to check for vulnerabilities
-        uses: snyk/actions/golang@master
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          command: monitor
+    - name: Git checkout
+      uses: actions/checkout@v2
+      with: { ref: snyk-test }
+    - name: List files
+      run: ls
