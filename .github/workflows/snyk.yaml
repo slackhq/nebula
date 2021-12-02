@@ -1,7 +1,7 @@
 name: Experiment
 on: 
   schedule:
-  - cron: '*/5 * * * *'
+  - cron: '*/2 * * * *'
 
 jobs:
   job1:
