@@ -1,7 +1,7 @@
 name: Experiment
 on: 
   schedule:
-  - cron: '*/2 * * * *'
+  - cron: '*/1 * * * *'
 
 jobs:
   job1:
@@ -11,6 +11,5 @@ jobs:
     steps:
     - name: Git checkout
       uses: actions/checkout@v2
-      with: { ref: snyk-test }
     - name: List files
       run: ls
