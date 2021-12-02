@@ -1,9 +1,9 @@
-
-   
 name: Snyk Github Actions
+
 on:
   schedule:
     - cron:  '*/1 * * * *'
+
 jobs:
   security:
     runs-on: ubuntu-latest
