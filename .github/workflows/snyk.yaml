@@ -1,14 +1,16 @@
 name: Snyk Github Actions
 
-on:
+on: 
   schedule:
-    - cron:  '*/1 * * * *'
+  - cron: '*/2 * * * *'
 
 jobs:
   security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@master
+      - name: Git checkout
+        uses: actions/checkout@v2
+        with: { ref: snyk-test }
       - name: Run Snyk to check for vulnerabilities
         uses: snyk/actions/golang@master
         env:
