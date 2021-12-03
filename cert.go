@@ -148,7 +148,13 @@ func loadCAFromConfig(l *logrus.Logger, c *config.C) (*cert.NebulaCAPool, error)
 	if errors.Is(err, cert.ErrExpired) {
 		for _, cert := range CAs.CAs {
 			if cert.Expired(time.Now()) {
-				l.WithField("certificate", cert).Warn("expired certificate present in CA pool")
+				fingerprint, _ := cert.Sha256Sum()
+				l.WithField("name", cert.Details.Name).
+					WithField("not_before", cert.Details.NotBefore).
+					WithField("not_after", cert.Details.NotAfter).
+					WithField("fingerprint", fingerprint).
+					WithField("signature", fmt.Sprintf("%x", cert.Signature)).
+					Warn("expired certificate present in CA pool")
 			}
 		}
 		err = nil
