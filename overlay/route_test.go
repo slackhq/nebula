@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 )
@@ -234,4 +235,36 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	if tested != 3 {
 		t.Fatal("Did not see both unsafe_routes")
 	}
+}
+
+func Test_makeRouteTree(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	_, n, _ := net.ParseCIDR("10.0.0.0/24")
+
+	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{
+		map[interface{}]interface{}{"via": "192.168.0.1", "route": "1.0.0.0/28"},
+		map[interface{}]interface{}{"via": "192.168.0.2", "route": "1.0.0.1/32"},
+	}}
+	routes, err := parseUnsafeRoutes(c, n)
+	assert.NoError(t, err)
+	assert.Len(t, routes, 2)
+	routeTree, err := makeRouteTree(routes, true)
+	assert.NoError(t, err)
+
+	ip := iputil.Ip2VpnIp(net.ParseIP("1.0.0.2"))
+	r := routeTree.MostSpecificContains(ip)
+	assert.NotNil(t, r)
+	assert.IsType(t, iputil.VpnIp(0), r)
+	assert.EqualValues(t, iputil.Ip2VpnIp(net.ParseIP("192.168.0.1")), r)
+
+	ip = iputil.Ip2VpnIp(net.ParseIP("1.0.0.1"))
+	r = routeTree.MostSpecificContains(ip)
+	assert.NotNil(t, r)
+	assert.IsType(t, iputil.VpnIp(0), r)
+	assert.EqualValues(t, iputil.Ip2VpnIp(net.ParseIP("192.168.0.2")), r)
+
+	ip = iputil.Ip2VpnIp(net.ParseIP("1.1.0.1"))
+	r = routeTree.MostSpecificContains(ip)
+	assert.Nil(t, r)
 }

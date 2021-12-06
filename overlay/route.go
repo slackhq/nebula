@@ -9,13 +9,14 @@ import (
 
 	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/iputil"
 )
 
 type Route struct {
 	MTU    int
 	Metric int
 	Cidr   *net.IPNet
-	Via    *net.IP
+	Via    *iputil.VpnIp
 }
 
 func makeRouteTree(routes []Route, allowMTU bool) (*cidr.Tree4, error) {
@@ -26,7 +27,7 @@ func makeRouteTree(routes []Route, allowMTU bool) (*cidr.Tree4, error) {
 		}
 
 		if r.Via != nil {
-			routeTree.AddCIDR(r.Cidr, r.Via)
+			routeTree.AddCIDR(r.Cidr, *r.Via)
 		}
 	}
 	return routeTree, nil
@@ -180,8 +181,10 @@ func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 			return nil, fmt.Errorf("entry %v.route in tun.unsafe_routes is not present", i+1)
 		}
 
+		viaVpnIp := iputil.Ip2VpnIp(nVia)
+
 		r := Route{
-			Via:    &nVia,
+			Via:    &viaVpnIp,
 			MTU:    mtu,
 			Metric: metric,
 		}

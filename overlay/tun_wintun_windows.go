@@ -97,7 +97,7 @@ func (t *winTun) Activate() error {
 		// Add our unsafe route
 		routes = append(routes, &winipcfg.RouteData{
 			Destination: *r.Cidr,
-			NextHop:     *r.Via,
+			NextHop:     r.Via.ToIP(),
 			Metric:      uint32(r.Metric),
 		})
 	}
