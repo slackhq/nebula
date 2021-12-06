@@ -138,13 +138,13 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		if err != nil {
 			return nil, util.NewContextualError("Failed to get a tun/tap device", nil, err)
 		}
-	}
 
-	defer func() {
-		if reterr != nil {
-			tun.Close()
-		}
-	}()
+		defer func() {
+			if reterr != nil {
+				tun.Close()
+			}
+		}()
+	}
 
 	// set up our UDP listener
 	udpConns := make([]*udp.Conn, routines)
