@@ -464,8 +464,8 @@ WH1M9n4O7cFtGlM6sJJOS+rCVVEJ3ABS7+MPdQs=
 
 	// expired cert, no valid certs
 	ppp, err := NewCAPoolFromBytes([]byte(expired))
-	assert.Nil(t, ppp)
-	assert.Equal(t, ErrEmptyCAPool, err)
+	assert.Equal(t, ErrExpired, err)
+	assert.Equal(t, ppp.CAs[string("152070be6bb19bc9e3bde4c2f0e7d8f4ff5448b4c9856b8eccb314fade0229b0")].Details.Name, "expired")
 
 	// expired cert, with valid certs
 	pppp, err := NewCAPoolFromBytes(append([]byte(expired), noNewLines...))

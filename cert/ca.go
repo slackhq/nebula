@@ -29,11 +29,11 @@ func NewCAPool() *NebulaCAPool {
 func NewCAPoolFromBytes(caPEMs []byte) (*NebulaCAPool, error) {
 	pool := NewCAPool()
 	var err error
-	var expired int
+	var expired bool
 	for {
 		caPEMs, err = pool.AddCACertificate(caPEMs)
 		if errors.Is(err, ErrExpired) {
-			expired++
+			expired = true
 			err = nil
 		}
 		if err != nil {
@@ -44,11 +44,7 @@ func NewCAPoolFromBytes(caPEMs []byte) (*NebulaCAPool, error) {
 		}
 	}
 
-	if len(pool.CAs)-expired == 0 {
-		return nil, ErrEmptyCAPool
-	}
-
-	if expired > 0 {
+	if expired {
 		return pool, ErrExpired
 	}
 
