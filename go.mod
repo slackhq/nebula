@@ -25,8 +25,8 @@ require (
 	github.com/stretchr/testify v1.7.0
 	github.com/vishvananda/netlink v1.1.0
 	github.com/vishvananda/netns v0.0.0-20211101163701-50045581ed74 // indirect
-	golang.org/x/crypto v0.0.0-20210921155107-089bfa567519
-	golang.org/x/net v0.0.0-20211101193420-4a448f8816b3
+	golang.org/x/crypto v0.0.0-20211202192323-5770296d904e
+	golang.org/x/net v0.0.0-20211112202133-69e39bad7dc2
 	golang.org/x/sys v0.0.0-20211103235746-7861aae1554b
 	golang.zx2c4.com/wintun v0.0.0-20211104114900-415007cec224
 	golang.zx2c4.com/wireguard/windows v0.5.1
