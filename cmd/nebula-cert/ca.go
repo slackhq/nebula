@@ -37,8 +37,8 @@ func newCaFlags() *caFlags {
 	cf.outCertPath = cf.set.String("out-crt", "ca.crt", "Optional: path to write the certificate to")
 	cf.outQRPath = cf.set.String("out-qr", "", "Optional: output a qr code image (png) of the certificate")
 	cf.groups = cf.set.String("groups", "", "Optional: comma separated list of groups. This will limit which groups subordinate certs can use")
-	cf.ips = cf.set.String("ips", "", "Optional: comma separated list of ip and network in CIDR notation. This will limit which ip addresses and networks subordinate certs can use")
-	cf.subnets = cf.set.String("subnets", "", "Optional: comma separated list of ip and network in CIDR notation. This will limit which subnet addresses and networks subordinate certs can use")
+	cf.ips = cf.set.String("ips", "", "Optional: comma separated list of ipv4 address and network in CIDR notation. This will limit which ipv4 addresses and networks subordinate certs can use for ip addresses")
+	cf.subnets = cf.set.String("subnets", "", "Optional: comma separated list of ipv4 address and network in CIDR notation. This will limit which ipv4 addresses and networks subordinate certs can use in subnets")
 	return &cf
 }
 
@@ -82,6 +82,9 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 				if err != nil {
 					return newHelpErrorf("invalid ip definition: %s", err)
 				}
+				if ip.To4() == nil {
+					return newHelpErrorf("invalid ip definition: can only be ipv4, have %s", rs)
+				}
 
 				ipNet.IP = ip
 				ips = append(ips, ipNet)
@@ -97,6 +100,9 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 				_, s, err := net.ParseCIDR(rs)
 				if err != nil {
 					return newHelpErrorf("invalid subnet definition: %s", err)
+				}
+				if s.IP.To4() == nil {
+					return newHelpErrorf("invalid subnet definition: can only be ipv4, have %s", rs)
 				}
 				subnets = append(subnets, s)
 			}
