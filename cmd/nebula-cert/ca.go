@@ -82,7 +82,7 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 				if err != nil {
 					return newHelpErrorf("invalid ip definition: %s", err)
 				}
-				if a := ip.To4(); a == nil {
+				if ip.To4() == nil {
 					return newHelpErrorf("invalid ip definition: can only be ipv4, have %s", rs)
 				}
 
@@ -101,7 +101,7 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 				if err != nil {
 					return newHelpErrorf("invalid subnet definition: %s", err)
 				}
-				if a := s.IP.To4(); a == nil {
+				if s.IP.To4() == nil {
 					return newHelpErrorf("invalid subnet definition: can only be ipv4, have %s", rs)
 				}
 				subnets = append(subnets, s)
