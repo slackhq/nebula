@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Warn when a non lighthouse node does not have lighthouse hosts configured. (#587)
 
+### Changed
+
+- No longer fatals if expired CA certificates are present in `pki.ca`, as long as 1 valid CA is present. (#599)
+
+- `nebula-cert` will now enforce ipv4 addresses. (#604)
+
+### Fixed
+
+- Rare race condition when tearing down a tunnel due to `recv_error` and sending packets on another thread. (#590)
+
+- Bug in `routes` and `unsafe_routes` handling that was introduced in 1.5.0. (#595)
+
+- `-test` mode no longer results in a crash. (#602)
+
+### Removed
+
+- `x509.ca` config alias for `pki.ca`. (#604)
+
+### Security
+
+- Upgraded `golang.org/x/crypto` to address an issue which allowed unauthenticated clients to cause a panic in SSH
+  servers. (#603)
+
 ## [1.5.0] - 2021-11-11
 
 ### Added
