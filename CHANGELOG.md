@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2021-12-13
+
 ### Added
 
 - Warn when a non lighthouse node does not have lighthouse hosts configured. (#587)
@@ -333,7 +335,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/slackhq/nebula/releases/tag/v1.5.1
 [1.5.0]: https://github.com/slackhq/nebula/releases/tag/v1.5.0
 [1.4.0]: https://github.com/slackhq/nebula/releases/tag/v1.4.0
 [1.3.0]: https://github.com/slackhq/nebula/releases/tag/v1.3.0
