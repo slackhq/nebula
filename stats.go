@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -15,13 +16,15 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 )
 
 // startStats initializes stats from config. On success, if any futher work
 // is needed to serve stats, it returns a func to handle that work. If no
 // work is needed, it'll return nil. On failure, it returns nil, error.
-func startStats(l *logrus.Logger, c *config.C, buildVersion string, configTest bool) (func(), error) {
+func startStats(l *logrus.Logger, c *config.C, buildVersion string, clientCert *CertState, caCert *cert.NebulaCAPool, configTest bool) (func(), error) {
+
 	mType := c.GetString("stats.type", "")
 	if mType == "" || mType == "none" {
 		return nil, nil
@@ -41,7 +44,7 @@ func startStats(l *logrus.Logger, c *config.C, buildVersion string, configTest b
 		}
 	case "prometheus":
 		var err error
-		startFn, err = startPrometheusStats(l, interval, c, buildVersion, configTest)
+		startFn, err = startPrometheusStats(l, interval, c, buildVersion, clientCert, caCert, configTest)
 		if err != nil {
 			return nil, err
 		}
@@ -78,7 +81,7 @@ func startGraphiteStats(l *logrus.Logger, i time.Duration, c *config.C, configTe
 	return nil
 }
 
-func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildVersion string, configTest bool) (func(), error) {
+func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildVersion string, clientCert *CertState, caCert *cert.NebulaCAPool, configTest bool) (func(), error) {
 	namespace := c.GetString("stats.namespace", "")
 	subsystem := c.GetString("stats.subsystem", "")
 
@@ -125,21 +128,25 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildV
 
 	// TODO : flesh this out with real data
 	// Export our certificate information as labels on a static gauge
-	ca_info := prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "ca_cert_expiry",
-		Help:      "Returns CA cert time expiry in unixtime",
-		ConstLabels: prometheus.Labels{
-			// TODO : fill these in with actual data, not hardcoded fields
-			"name":       "ca-name-here",
-			"public_key": "1234567890abcdef1234567890abcdef1234567890abcdef",
-		},
-	})
-	pr.MustRegister(ca_info)
-	ca_info.Set(1234534)
+	for _, ca := range caCert.CAs {
 
-	// TODO : flesh this out with real data
+		ca_info := prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "ca_cert_expiry",
+			Help:      "Returns CA cert time expiry in unixtime",
+			ConstLabels: prometheus.Labels{
+				// TODO : fill these in with actual data, not hardcoded fields
+				"name":       ca.Details.Name,
+				"public_key": hex.EncodeToString(ca.Details.PublicKey),
+			},
+		})
+
+		pr.MustRegister(ca_info)
+		ca_info.Set(float64(ca.Details.NotAfter.Unix()))
+
+	}
+
 	// Export our certificate information as labels on a static gauge
 	cert_info := prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: namespace,
@@ -147,13 +154,12 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildV
 		Name:      "client_cert_expiry",
 		Help:      "Returns client cert time expiry in unixtime",
 		ConstLabels: prometheus.Labels{
-			// TODO : fill these in with actual data, not hardcoded fields
-			"name":       "host-name-here",
-			"public_key": "1234567890abcdef1234567890abcdef1234567890abcdef",
+			"name":       clientCert.certificate.Details.Name,
+			"public_key": hex.EncodeToString(clientCert.certificate.Details.PublicKey),
 		},
 	})
 	pr.MustRegister(cert_info)
-	cert_info.Set(987654321)
+	cert_info.Set(float64(clientCert.certificate.Details.NotAfter.Unix()))
 
 	var startFn func()
 	if !configTest {

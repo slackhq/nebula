@@ -394,7 +394,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	// TODO - stats third-party modules start uncancellable goroutines. Update those libs to accept
 	// a context so that they can exit when the context is Done.
-	statsStart, err := startStats(l, c, buildVersion, configTest)
+	statsStart, err := startStats(l, c, buildVersion, cs, caPool, configTest)
 
 	if err != nil {
 		return nil, util.NewContextualError("Failed to start stats emitter", nil, err)
