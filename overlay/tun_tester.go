@@ -25,7 +25,7 @@ type TestTun struct {
 }
 
 func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, _ int, routes []Route, _ int, _ bool) (*TestTun, error) {
-	routeTree, err := makeRouteTree(routes, false)
+	routeTree, err := makeRouteTree(l, routes, false)
 	if err != nil {
 		return nil, err
 	}

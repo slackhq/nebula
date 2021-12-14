@@ -77,7 +77,7 @@ type ifreqMTU struct {
 }
 
 func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []Route, _ int, _ bool) (*tun, error) {
-	routeTree, err := makeRouteTree(routes, false)
+	routeTree, err := makeRouteTree(l, routes, false)
 	if err != nil {
 		return nil, err
 	}

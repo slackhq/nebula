@@ -64,7 +64,7 @@ type ifreqQLEN struct {
 }
 
 func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []Route, txQueueLen int) (*tun, error) {
-	routeTree, err := makeRouteTree(routes, true)
+	routeTree, err := makeRouteTree(l, routes, true)
 	if err != nil {
 		return nil, err
 	}
@@ -105,12 +105,16 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 
 	maxMTU := defaultMTU
 	for _, r := range routes {
+		if r.MTU == 0 {
+			r.MTU = defaultMTU
+		}
+
 		if r.MTU > maxMTU {
 			maxMTU = r.MTU
 		}
 	}
 
-	routeTree, err := makeRouteTree(routes, true)
+	routeTree, err := makeRouteTree(l, routes, true)
 	if err != nil {
 		return nil, err
 	}
