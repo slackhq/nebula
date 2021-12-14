@@ -43,7 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 1.5.1 - 2021-12-13
 
-(This release was skipped due to discovering #610 and #611 after tagging.)
+(This release was skipped due to discovering #610 and #611 after the tag was
+created.)
 
 ## [1.5.0] - 2021-11-11
 
