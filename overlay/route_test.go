@@ -191,7 +191,7 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "route": "1.0.0.0/8"}}}
 	routes, err = parseUnsafeRoutes(c, n)
 	assert.Len(t, routes, 1)
-	assert.Equal(t, DefaultMTU, routes[0].MTU)
+	assert.Equal(t, 0, routes[0].MTU)
 
 	// bad mtu
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "nope"}}}
@@ -249,7 +249,7 @@ func Test_makeRouteTree(t *testing.T) {
 	routes, err := parseUnsafeRoutes(c, n)
 	assert.NoError(t, err)
 	assert.Len(t, routes, 2)
-	routeTree, err := makeRouteTree(routes, true)
+	routeTree, err := makeRouteTree(l, routes, true)
 	assert.NoError(t, err)
 
 	ip := iputil.Ip2VpnIp(net.ParseIP("1.0.0.2"))
