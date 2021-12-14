@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upgraded `golang.org/x/crypto` to address an issue which allowed unauthenticated clients to cause a panic in SSH
   servers. (#603)
 
-## [1.5.1] - 2021-12-13
+## 1.5.1 - 2021-12-13
 
 (This release was skipped due to discovering #610 and #611 after tagging.)
 
