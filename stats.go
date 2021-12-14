@@ -126,7 +126,6 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildV
 	pr.MustRegister(start_time)
 	start_time.Set(float64(time.Now().Unix()))
 
-	// TODO : flesh this out with real data
 	// Export our certificate information as labels on a static gauge
 	for _, ca := range caCert.CAs {
 
