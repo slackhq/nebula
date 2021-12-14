@@ -112,6 +112,49 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildV
 	pr.MustRegister(g)
 	g.Set(1)
 
+	// Export the start time of the current binary execution
+	start_time := prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace:   namespace,
+		Subsystem:   subsystem,
+		Name:        "start_time",
+		Help:        "Time the nebula client started, in unixtime",
+		ConstLabels: prometheus.Labels{},
+	})
+	pr.MustRegister(start_time)
+	start_time.Set(float64(time.Now().Unix()))
+
+	// TODO : flesh this out with real data
+	// Export our certificate information as labels on a static gauge
+	ca_info := prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "ca_cert_expiry",
+		Help:      "Returns CA cert time expiry in unixtime",
+		ConstLabels: prometheus.Labels{
+			// TODO : fill these in with actual data, not hardcoded fields
+			"name":       "ca-name-here",
+			"public_key": "1234567890abcdef1234567890abcdef1234567890abcdef",
+		},
+	})
+	pr.MustRegister(ca_info)
+	ca_info.Set(1234534)
+
+	// TODO : flesh this out with real data
+	// Export our certificate information as labels on a static gauge
+	cert_info := prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "client_cert_expiry",
+		Help:      "Returns client cert time expiry in unixtime",
+		ConstLabels: prometheus.Labels{
+			// TODO : fill these in with actual data, not hardcoded fields
+			"name":       "host-name-here",
+			"public_key": "1234567890abcdef1234567890abcdef1234567890abcdef",
+		},
+	})
+	pr.MustRegister(cert_info)
+	cert_info.Set(987654321)
+
 	var startFn func()
 	if !configTest {
 		startFn = func() {
