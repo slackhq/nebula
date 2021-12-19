@@ -25,7 +25,10 @@ func TestDnsWildcardLookup(t *testing.T) {
 	ds.Add("test.com.com", "1.2.3.4")
 	ds.dnsWildcardEnabled = true
 
-	result := ds.Query("foo.test.com.com")
+	result := ds.Query("test.com.com")
+	assert.Equal(t, "1.2.3.4", result)
+
+	result = ds.Query("foo.test.com.com")
 	assert.Equal(t, "1.2.3.4", result)
 }
 
@@ -48,7 +51,10 @@ func TestDnsWildcardLookupLimit(t *testing.T) {
 	ds.dnsWildcardEnabled = true
 	ds.dnsWildcardLimit = 1
 
-	result := ds.Query("foo.test.com.com")
+	result := ds.Query("test.com.com")
+	assert.Equal(t, "1.2.3.4", result)
+
+	result = ds.Query("foo.test.com.com")
 	assert.Equal(t, "1.2.3.4", result)
 
 	result = ds.Query("foo.bar.test.com.com")

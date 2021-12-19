@@ -38,22 +38,19 @@ func newDnsRecords(hostMap *HostMap) *dnsRecords {
 
 func (d *dnsRecords) Query(data string) string {
 	d.RLock()
-	if r, ok := d.dnsMap[data]; ok {
-		d.RUnlock()
-		return r
-	}
 
 	if d.dnsWildcardEnabled {
-		limitCounter := 0
-		parts := strings.Split(data, ".")
-		for len(parts) > 1 && limitCounter < d.dnsWildcardLimit {
-			host := strings.Join(parts[1:], ".")
-			if r, ok := d.dnsMap[host]; ok {
+		hostParts := strings.SplitN(data, ".", d.dnsWildcardLimit+1)
+		for i := range hostParts {
+			if r, ok := d.dnsMap[strings.Join(hostParts[i:], ".")]; ok {
+				d.RUnlock()
 				return r
 			}
-			parts = strings.Split(host, ".")
-
-			limitCounter++
+		}
+	} else {
+		if r, ok := d.dnsMap[data]; ok {
+			d.RUnlock()
+			return r
 		}
 	}
 
