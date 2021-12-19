@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/miekg/dns"
@@ -20,14 +21,18 @@ var dnsAddr string
 
 type dnsRecords struct {
 	sync.RWMutex
-	dnsMap  map[string]string
-	hostMap *HostMap
+	dnsMap             map[string]string
+	hostMap            *HostMap
+	dnsWildcardEnabled bool
+	dnsWildcardLimit   int
 }
 
 func newDnsRecords(hostMap *HostMap) *dnsRecords {
 	return &dnsRecords{
-		dnsMap:  make(map[string]string),
-		hostMap: hostMap,
+		dnsMap:             make(map[string]string),
+		hostMap:            hostMap,
+		dnsWildcardEnabled: false,
+		dnsWildcardLimit:   5,
 	}
 }
 
@@ -37,6 +42,21 @@ func (d *dnsRecords) Query(data string) string {
 		d.RUnlock()
 		return r
 	}
+
+	if d.dnsWildcardEnabled {
+		limitCounter := 0
+		parts := strings.Split(data, ".")
+		for len(parts) > 1 && limitCounter < d.dnsWildcardLimit {
+			host := strings.Join(parts[1:], ".")
+			if r, ok := d.dnsMap[host]; ok {
+				return r
+			}
+			parts = strings.Split(host, ".")
+
+			limitCounter++
+		}
+	}
+
 	d.RUnlock()
 	return ""
 }
@@ -113,6 +133,8 @@ func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
 
 func dnsMain(l *logrus.Logger, hostMap *HostMap, c *config.C) func() {
 	dnsR = newDnsRecords(hostMap)
+	dnsR.dnsWildcardEnabled = c.GetBool("dns.wildcard", false)
+	dnsR.dnsWildcardLimit = c.GetInt("dns.wildcard_limit", 5)
 
 	// attach request handler func
 	dns.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
