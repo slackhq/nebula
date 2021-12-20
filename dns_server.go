@@ -130,8 +130,8 @@ func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
 
 func dnsMain(l *logrus.Logger, hostMap *HostMap, c *config.C) func() {
 	dnsR = newDnsRecords(hostMap)
-	dnsR.dnsWildcardEnabled = c.GetBool("dns.wildcard", false)
-	dnsR.dnsWildcardLimit = c.GetInt("dns.wildcard_limit", 5)
+	dnsR.dnsWildcardEnabled = c.GetBool("lighthouse.dns.wildcard", false)
+	dnsR.dnsWildcardLimit = c.GetInt("lighthouse.dns.wildcard_limit", 5)
 
 	// attach request handler func
 	dns.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
