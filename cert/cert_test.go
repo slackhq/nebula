@@ -431,6 +431,15 @@ BVG+oJpAoqokUBbI4U0N8CSfpUABEkB/Pm5A2xyH/nc8mg/wvGUWG3pZ7nHzaDMf
 
 `
 
+	expired := `
+# expired certificate
+-----BEGIN NEBULA CERTIFICATE-----
+CjkKB2V4cGlyZWQouPmWjQYwufmWjQY6ILCRaoCkJlqHgv5jfDN4lzLHBvDzaQm4
+vZxfu144hmgjQAESQG4qlnZi8DncvD/LDZnLgJHOaX1DWCHHEh59epVsC+BNgTie
+WH1M9n4O7cFtGlM6sJJOS+rCVVEJ3ABS7+MPdQs=
+-----END NEBULA CERTIFICATE-----
+`
+
 	rootCA := NebulaCertificate{
 		Details: NebulaCertificateDetails{
 			Name: "nebula root ca",
@@ -452,6 +461,19 @@ BVG+oJpAoqokUBbI4U0N8CSfpUABEkB/Pm5A2xyH/nc8mg/wvGUWG3pZ7nHzaDMf
 	assert.Nil(t, err)
 	assert.Equal(t, pp.CAs[string("c9bfaf7ce8e84b2eeda2e27b469f4b9617bde192efd214b68891ecda6ed49522")].Details.Name, rootCA.Details.Name)
 	assert.Equal(t, pp.CAs[string("5c9c3f23e7ee7fe97637cbd3a0a5b854154d1d9aaaf7b566a51f4a88f76b64cd")].Details.Name, rootCA01.Details.Name)
+
+	// expired cert, no valid certs
+	ppp, err := NewCAPoolFromBytes([]byte(expired))
+	assert.Equal(t, ErrExpired, err)
+	assert.Equal(t, ppp.CAs[string("152070be6bb19bc9e3bde4c2f0e7d8f4ff5448b4c9856b8eccb314fade0229b0")].Details.Name, "expired")
+
+	// expired cert, with valid certs
+	pppp, err := NewCAPoolFromBytes(append([]byte(expired), noNewLines...))
+	assert.Equal(t, ErrExpired, err)
+	assert.Equal(t, pppp.CAs[string("c9bfaf7ce8e84b2eeda2e27b469f4b9617bde192efd214b68891ecda6ed49522")].Details.Name, rootCA.Details.Name)
+	assert.Equal(t, pppp.CAs[string("5c9c3f23e7ee7fe97637cbd3a0a5b854154d1d9aaaf7b566a51f4a88f76b64cd")].Details.Name, rootCA01.Details.Name)
+	assert.Equal(t, pppp.CAs[string("152070be6bb19bc9e3bde4c2f0e7d8f4ff5448b4c9856b8eccb314fade0229b0")].Details.Name, "expired")
+	assert.Equal(t, len(pppp.CAs), 3)
 }
 
 func appendByteSlices(b ...[]byte) []byte {

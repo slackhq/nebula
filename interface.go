@@ -147,7 +147,7 @@ func (f *Interface) activate() {
 		f.l.WithError(err).Error("Failed to get udp listen address")
 	}
 
-	f.l.WithField("interface", f.inside.DeviceName()).WithField("network", f.inside.CidrNet().String()).
+	f.l.WithField("interface", f.inside.Name()).WithField("network", f.inside.Cidr().String()).
 		WithField("build", f.version).WithField("udpAddr", addr).
 		Info("Nebula interface is active")
 

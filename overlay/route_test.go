@@ -6,77 +6,78 @@ import (
 	"testing"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 )
 
-func Test_ParseRoutes(t *testing.T) {
+func Test_parseRoutes(t *testing.T) {
 	l := test.NewLogger()
 	c := config.NewC(l)
 	_, n, _ := net.ParseCIDR("10.0.0.0/24")
 
 	// test no routes config
-	routes, err := ParseRoutes(c, n)
+	routes, err := parseRoutes(c, n)
 	assert.Nil(t, err)
 	assert.Len(t, routes, 0)
 
 	// not an array
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": "hi"}
-	routes, err = ParseRoutes(c, n)
+	routes, err = parseRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "tun.routes is not an array")
 
 	// no routes
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{}}
-	routes, err = ParseRoutes(c, n)
+	routes, err = parseRoutes(c, n)
 	assert.Nil(t, err)
 	assert.Len(t, routes, 0)
 
 	// weird route
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{"asdf"}}
-	routes, err = ParseRoutes(c, n)
+	routes, err = parseRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1 in tun.routes is invalid")
 
 	// no mtu
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{}}}
-	routes, err = ParseRoutes(c, n)
+	routes, err = parseRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.mtu in tun.routes is not present")
 
 	// bad mtu
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{"mtu": "nope"}}}
-	routes, err = ParseRoutes(c, n)
+	routes, err = parseRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.mtu in tun.routes is not an integer: strconv.Atoi: parsing \"nope\": invalid syntax")
 
 	// low mtu
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{"mtu": "499"}}}
-	routes, err = ParseRoutes(c, n)
+	routes, err = parseRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.mtu in tun.routes is below 500: 499")
 
 	// missing route
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{"mtu": "500"}}}
-	routes, err = ParseRoutes(c, n)
+	routes, err = parseRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.route in tun.routes is not present")
 
 	// unparsable route
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "route": "nope"}}}
-	routes, err = ParseRoutes(c, n)
+	routes, err = parseRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.route in tun.routes failed to parse: invalid CIDR address: nope")
 
 	// below network range
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "route": "1.0.0.0/8"}}}
-	routes, err = ParseRoutes(c, n)
+	routes, err = parseRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.route in tun.routes is not contained within the network attached to the certificate; route: 1.0.0.0/8, network: 10.0.0.0/24")
 
 	// above network range
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "route": "10.0.1.0/24"}}}
-	routes, err = ParseRoutes(c, n)
+	routes, err = parseRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.route in tun.routes is not contained within the network attached to the certificate; route: 10.0.1.0/24, network: 10.0.0.0/24")
 
@@ -85,7 +86,7 @@ func Test_ParseRoutes(t *testing.T) {
 		map[interface{}]interface{}{"mtu": "9000", "route": "10.0.0.0/29"},
 		map[interface{}]interface{}{"mtu": "8000", "route": "10.0.0.1/32"},
 	}}
-	routes, err = ParseRoutes(c, n)
+	routes, err = parseRoutes(c, n)
 	assert.Nil(t, err)
 	assert.Len(t, routes, 2)
 
@@ -106,37 +107,37 @@ func Test_ParseRoutes(t *testing.T) {
 	}
 }
 
-func Test_ParseUnsafeRoutes(t *testing.T) {
+func Test_parseUnsafeRoutes(t *testing.T) {
 	l := test.NewLogger()
 	c := config.NewC(l)
 	_, n, _ := net.ParseCIDR("10.0.0.0/24")
 
 	// test no routes config
-	routes, err := ParseUnsafeRoutes(c, n)
+	routes, err := parseUnsafeRoutes(c, n)
 	assert.Nil(t, err)
 	assert.Len(t, routes, 0)
 
 	// not an array
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": "hi"}
-	routes, err = ParseUnsafeRoutes(c, n)
+	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "tun.unsafe_routes is not an array")
 
 	// no routes
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{}}
-	routes, err = ParseUnsafeRoutes(c, n)
+	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, err)
 	assert.Len(t, routes, 0)
 
 	// weird route
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{"asdf"}}
-	routes, err = ParseUnsafeRoutes(c, n)
+	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1 in tun.unsafe_routes is invalid")
 
 	// no via
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{}}}
-	routes, err = ParseUnsafeRoutes(c, n)
+	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.via in tun.unsafe_routes is not present")
 
@@ -145,62 +146,62 @@ func Test_ParseUnsafeRoutes(t *testing.T) {
 		127, false, nil, 1.0, []string{"1", "2"},
 	} {
 		c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": invalidValue}}}
-		routes, err = ParseUnsafeRoutes(c, n)
+		routes, err = parseUnsafeRoutes(c, n)
 		assert.Nil(t, routes)
 		assert.EqualError(t, err, fmt.Sprintf("entry 1.via in tun.unsafe_routes is not a string: found %T", invalidValue))
 	}
 
 	// unparsable via
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "via": "nope"}}}
-	routes, err = ParseUnsafeRoutes(c, n)
+	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.via in tun.unsafe_routes failed to parse address: nope")
 
 	// missing route
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "500"}}}
-	routes, err = ParseUnsafeRoutes(c, n)
+	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.route in tun.unsafe_routes is not present")
 
 	// unparsable route
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "500", "route": "nope"}}}
-	routes, err = ParseUnsafeRoutes(c, n)
+	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.route in tun.unsafe_routes failed to parse: invalid CIDR address: nope")
 
 	// within network range
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "route": "10.0.0.0/24"}}}
-	routes, err = ParseUnsafeRoutes(c, n)
+	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.route in tun.unsafe_routes is contained within the network attached to the certificate; route: 10.0.0.0/24, network: 10.0.0.0/24")
 
 	// below network range
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "route": "1.0.0.0/8"}}}
-	routes, err = ParseUnsafeRoutes(c, n)
+	routes, err = parseUnsafeRoutes(c, n)
 	assert.Len(t, routes, 1)
 	assert.Nil(t, err)
 
 	// above network range
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "route": "10.0.1.0/24"}}}
-	routes, err = ParseUnsafeRoutes(c, n)
+	routes, err = parseUnsafeRoutes(c, n)
 	assert.Len(t, routes, 1)
 	assert.Nil(t, err)
 
 	// no mtu
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "route": "1.0.0.0/8"}}}
-	routes, err = ParseUnsafeRoutes(c, n)
+	routes, err = parseUnsafeRoutes(c, n)
 	assert.Len(t, routes, 1)
-	assert.Equal(t, DefaultMTU, routes[0].MTU)
+	assert.Equal(t, 0, routes[0].MTU)
 
 	// bad mtu
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "nope"}}}
-	routes, err = ParseUnsafeRoutes(c, n)
+	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.mtu in tun.unsafe_routes is not an integer: strconv.Atoi: parsing \"nope\": invalid syntax")
 
 	// low mtu
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "499"}}}
-	routes, err = ParseUnsafeRoutes(c, n)
+	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.mtu in tun.unsafe_routes is below 500: 499")
 
@@ -210,7 +211,7 @@ func Test_ParseUnsafeRoutes(t *testing.T) {
 		map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "8000", "route": "1.0.0.1/32"},
 		map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "1500", "metric": 1234, "route": "1.0.0.2/32"},
 	}}
-	routes, err = ParseUnsafeRoutes(c, n)
+	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, err)
 	assert.Len(t, routes, 3)
 
@@ -234,4 +235,36 @@ func Test_ParseUnsafeRoutes(t *testing.T) {
 	if tested != 3 {
 		t.Fatal("Did not see both unsafe_routes")
 	}
+}
+
+func Test_makeRouteTree(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	_, n, _ := net.ParseCIDR("10.0.0.0/24")
+
+	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{
+		map[interface{}]interface{}{"via": "192.168.0.1", "route": "1.0.0.0/28"},
+		map[interface{}]interface{}{"via": "192.168.0.2", "route": "1.0.0.1/32"},
+	}}
+	routes, err := parseUnsafeRoutes(c, n)
+	assert.NoError(t, err)
+	assert.Len(t, routes, 2)
+	routeTree, err := makeRouteTree(l, routes, true)
+	assert.NoError(t, err)
+
+	ip := iputil.Ip2VpnIp(net.ParseIP("1.0.0.2"))
+	r := routeTree.MostSpecificContains(ip)
+	assert.NotNil(t, r)
+	assert.IsType(t, iputil.VpnIp(0), r)
+	assert.EqualValues(t, iputil.Ip2VpnIp(net.ParseIP("192.168.0.1")), r)
+
+	ip = iputil.Ip2VpnIp(net.ParseIP("1.0.0.1"))
+	r = routeTree.MostSpecificContains(ip)
+	assert.NotNil(t, r)
+	assert.IsType(t, iputil.VpnIp(0), r)
+	assert.EqualValues(t, iputil.Ip2VpnIp(net.ParseIP("192.168.0.2")), r)
+
+	ip = iputil.Ip2VpnIp(net.ParseIP("1.1.0.1"))
+	r = routeTree.MostSpecificContains(ip)
+	assert.Nil(t, r)
 }

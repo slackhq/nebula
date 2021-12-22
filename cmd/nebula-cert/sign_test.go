@@ -39,7 +39,7 @@ func Test_signHelp(t *testing.T) {
 			"  -in-pub string\n"+
 			"    \tOptional (if out-key not set): path to read a previously generated public key\n"+
 			"  -ip string\n"+
-			"    \tRequired: ip and network in CIDR notation to assign the cert\n"+
+			"    \tRequired: ipv4 address and network in CIDR notation to assign the cert\n"+
 			"  -name string\n"+
 			"    \tRequired: name of the cert, usually a hostname\n"+
 			"  -out-crt string\n"+
@@ -49,7 +49,7 @@ func Test_signHelp(t *testing.T) {
 			"  -out-qr string\n"+
 			"    \tOptional: output a qr code image (png) of the certificate\n"+
 			"  -subnets string\n"+
-			"    \tOptional: comma separated list of subnet this cert can serve for\n",
+			"    \tOptional: comma separated list of ipv4 address and network in CIDR notation. Subnets this cert can serve for\n",
 		ob.String(),
 	)
 }
@@ -59,7 +59,6 @@ func Test_signCert(t *testing.T) {
 	eb := &bytes.Buffer{}
 
 	// required args
-
 	assertHelpError(t, signCert([]string{"-ca-crt", "./nope", "-ca-key", "./nope", "-ip", "1.1.1.1/24", "-out-key", "nope", "-out-crt", "nope"}, ob, eb), "-name is required")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
@@ -160,11 +159,25 @@ func Test_signCert(t *testing.T) {
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 
+	ob.Reset()
+	eb.Reset()
+	args = []string{"-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "100::100/100", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m"}
+	assertHelpError(t, signCert(args, ob, eb), "invalid ip definition: can only be ipv4, have 100::100/100")
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
+
 	// bad subnet cidr
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m", "-subnets", "a"}
 	assertHelpError(t, signCert(args, ob, eb), "invalid subnet definition: invalid CIDR address: a")
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
+
+	ob.Reset()
+	eb.Reset()
+	args = []string{"-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m", "-subnets", "100::100/100"}
+	assertHelpError(t, signCert(args, ob, eb), "invalid subnet definition: can only be ipv4, have 100::100/100")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 

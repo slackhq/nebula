@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2021-12-14
+
+### Added
+
+- Warn when a non lighthouse node does not have lighthouse hosts configured. (#587)
+
+### Changed
+
+- No longer fatals if expired CA certificates are present in `pki.ca`, as long as 1 valid CA is present. (#599)
+
+- `nebula-cert` will now enforce ipv4 addresses. (#604)
+
+- Warn on macOS if an unsafe route cannot be created due to a collision with an
+  existing route. (#610)
+
+- Warn if you set a route MTU on platforms where we don't support it. (#611)
+
+### Fixed
+
+- Rare race condition when tearing down a tunnel due to `recv_error` and sending packets on another thread. (#590)
+
+- Bug in `routes` and `unsafe_routes` handling that was introduced in 1.5.0. (#595)
+
+- `-test` mode no longer results in a crash. (#602)
+
+### Removed
+
+- `x509.ca` config alias for `pki.ca`. (#604)
+
+### Security
+
+- Upgraded `golang.org/x/crypto` to address an issue which allowed unauthenticated clients to cause a panic in SSH
+  servers. (#603)
+
+## 1.5.1 - 2021-12-13
+
+(This release was skipped due to discovering #610 and #611 after the tag was
+created.)
+
 ## [1.5.0] - 2021-11-11
 
 ### Added
@@ -306,7 +345,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/slackhq/nebula/releases/tag/v1.5.2
 [1.5.0]: https://github.com/slackhq/nebula/releases/tag/v1.5.0
 [1.4.0]: https://github.com/slackhq/nebula/releases/tag/v1.4.0
 [1.3.0]: https://github.com/slackhq/nebula/releases/tag/v1.3.0

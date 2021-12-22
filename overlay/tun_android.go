@@ -8,79 +8,54 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 
 	"github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
+	"github.com/slackhq/nebula/iputil"
 )
 
-type Tun struct {
+type tun struct {
 	io.ReadWriteCloser
-	fd           int
-	Device       string
-	Cidr         *net.IPNet
-	MaxMTU       int
-	DefaultMTU   int
-	TXQueueLen   int
-	Routes       []Route
-	UnsafeRoutes []Route
-	l            *logrus.Logger
+	fd   int
+	cidr *net.IPNet
+	l    *logrus.Logger
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int) (ifce *Tun, err error) {
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes []Route, _ int) (*tun, error) {
+	if len(routes) > 0 {
+		return nil, fmt.Errorf("routes are not supported in %s", runtime.GOOS)
+	}
+
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
-	ifce = &Tun{
+	return &tun{
 		ReadWriteCloser: file,
 		fd:              int(file.Fd()),
-		Device:          "android",
-		Cidr:            cidr,
-		DefaultMTU:      defaultMTU,
-		TXQueueLen:      txQueueLen,
-		Routes:          routes,
-		UnsafeRoutes:    unsafeRoutes,
+		cidr:            cidr,
 		l:               l,
-	}
-	return
+	}, nil
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
+func newTun(_ *logrus.Logger, _ string, _ *net.IPNet, _ int, _ []Route, _ int, _ bool) (*tun, error) {
 	return nil, fmt.Errorf("newTun not supported in Android")
 }
 
-func (c *Tun) WriteRaw(b []byte) error {
-	var nn int
-	for {
-		max := len(b)
-		n, err := unix.Write(c.fd, b[nn:max])
-		if n > 0 {
-			nn += n
-		}
-		if nn == len(b) {
-			return err
-		}
-
-		if err != nil {
-			return err
-		}
-
-		if n == 0 {
-			return io.ErrUnexpectedEOF
-		}
-	}
+func (t *tun) RouteFor(iputil.VpnIp) iputil.VpnIp {
+	return 0
 }
 
-func (c Tun) Activate() error {
+func (t tun) Activate() error {
 	return nil
 }
 
-func (c *Tun) CidrNet() *net.IPNet {
-	return c.Cidr
+func (t *tun) Cidr() *net.IPNet {
+	return t.cidr
 }
 
-func (c *Tun) DeviceName() string {
-	return c.Device
+func (t *tun) Name() string {
+	return "android"
 }
 
-func (t *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for android")
 }

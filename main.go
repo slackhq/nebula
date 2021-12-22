@@ -78,14 +78,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	// TODO: make sure mask is 4 bytes
 	tunCidr := cs.certificate.Details.Ips[0]
-	routes, err := overlay.ParseRoutes(c, tunCidr)
-	if err != nil {
-		return nil, util.NewContextualError("Could not parse tun.routes", nil, err)
-	}
-	unsafeRoutes, err := overlay.ParseUnsafeRoutes(c, tunCidr)
-	if err != nil {
-		return nil, util.NewContextualError("Could not parse tun.unsafe_routes", nil, err)
-	}
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
 	wireSSHReload(l, ssh, c)
@@ -142,17 +134,17 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	if !configTest {
 		c.CatchHUP(ctx)
 
-		tun, err = overlay.NewDeviceFromConfig(c, l, tunCidr, routes, unsafeRoutes, tunFd, routines)
+		tun, err = overlay.NewDeviceFromConfig(c, l, tunCidr, tunFd, routines)
 		if err != nil {
 			return nil, util.NewContextualError("Failed to get a tun/tap device", nil, err)
 		}
-	}
 
-	defer func() {
-		if reterr != nil {
-			tun.Close()
-		}
-	}()
+		defer func() {
+			if reterr != nil {
+				tun.Close()
+			}
+		}()
+	}
 
 	// set up our UDP listener
 	udpConns := make([]*udp.Conn, routines)
@@ -217,8 +209,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 
 	hostMap := NewHostMap(l, "main", tunCidr, preferredRanges)
-
-	hostMap.addUnsafeRoutes(&unsafeRoutes)
 	hostMap.metricsEnabled = c.GetBool("stats.message_metrics", false)
 
 	l.WithField("network", hostMap.vpnCIDR).WithField("preferredRanges", hostMap.preferredRanges).Info("Main HostMap created")
@@ -257,6 +247,10 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			return nil, util.NewContextualError("lighthouse host is not in our subnet, invalid", m{"vpnIp": ip, "network": tunCidr.String()}, nil)
 		}
 		lighthouseHosts[i] = iputil.Ip2VpnIp(ip)
+	}
+
+	if !amLighthouse && len(lighthouseHosts) == 0 {
+		l.Warn("No lighthouses.hosts configured, this host will only be able to initiate tunnels with static_host_map entries")
 	}
 
 	lightHouse := NewLightHouse(

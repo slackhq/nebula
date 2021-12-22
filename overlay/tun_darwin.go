@@ -4,6 +4,7 @@
 package overlay
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,18 +13,20 @@ import (
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/iputil"
 	netroute "golang.org/x/net/route"
 	"golang.org/x/sys/unix"
 )
 
-type Tun struct {
+type tun struct {
 	io.ReadWriteCloser
-	Device       string
-	Cidr         *net.IPNet
-	DefaultMTU   int
-	TXQueueLen   int
-	UnsafeRoutes []Route
-	l            *logrus.Logger
+	Device     string
+	cidr       *net.IPNet
+	DefaultMTU int
+	Routes     []Route
+	routeTree  *cidr.Tree4
+	l          *logrus.Logger
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
 	out []byte
@@ -74,15 +77,10 @@ type ifreqMTU struct {
 	pad  [8]byte
 }
 
-type ifreqQLEN struct {
-	Name  [16]byte
-	Value int32
-	pad   [8]byte
-}
-
-func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
-	if len(routes) > 0 {
-		return nil, fmt.Errorf("route MTU not supported in Darwin")
+func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []Route, _ int, _ bool) (*tun, error) {
+	routeTree, err := makeRouteTree(l, routes, false)
+	if err != nil {
+		return nil, err
 	}
 
 	ifIndex := -1
@@ -106,7 +104,7 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 		ctlName [96]byte
 	}{}
 
-	copy(ctlInfo.ctlName[:], []byte(utunControlName))
+	copy(ctlInfo.ctlName[:], utunControlName)
 
 	err = ioctl(uintptr(fd), uintptr(_CTLIOCGINFO), uintptr(unsafe.Pointer(ctlInfo)))
 	if err != nil {
@@ -125,7 +123,7 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 		unix.SYS_CONNECT,
 		uintptr(fd),
 		uintptr(unsafe.Pointer(&sc)),
-		uintptr(sockaddrCtlSize),
+		sockaddrCtlSize,
 	)
 	if errno != 0 {
 		return nil, fmt.Errorf("SYS_CONNECT: %v", errno)
@@ -152,44 +150,44 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 
 	file := os.NewFile(uintptr(fd), "")
 
-	tun := &Tun{
+	tun := &tun{
 		ReadWriteCloser: file,
 		Device:          name,
-		Cidr:            cidr,
+		cidr:            cidr,
 		DefaultMTU:      defaultMTU,
-		TXQueueLen:      txQueueLen,
-		UnsafeRoutes:    unsafeRoutes,
+		Routes:          routes,
+		routeTree:       routeTree,
 		l:               l,
 	}
 
 	return tun, nil
 }
 
-func (t *Tun) deviceBytes() (o [16]byte) {
+func (t *tun) deviceBytes() (o [16]byte) {
 	for i, c := range t.Device {
 		o[i] = byte(c)
 	}
 	return
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []Route, unsafeRoutes []Route, txQueueLen int) (ifce *Tun, err error) {
+func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int) (*tun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
 }
 
-func (c *Tun) Close() error {
-	if c.ReadWriteCloser != nil {
-		return c.ReadWriteCloser.Close()
+func (t *tun) Close() error {
+	if t.ReadWriteCloser != nil {
+		return t.ReadWriteCloser.Close()
 	}
 	return nil
 }
 
-func (t *Tun) Activate() error {
+func (t *tun) Activate() error {
 	devName := t.deviceBytes()
 
 	var addr, mask [4]byte
 
-	copy(addr[:], t.Cidr.IP.To4())
-	copy(mask[:], t.Cidr.Mask)
+	copy(addr[:], t.cidr.IP.To4())
+	copy(mask[:], t.cidr.Mask)
 
 	s, err := unix.Socket(
 		unix.AF_INET,
@@ -231,7 +229,7 @@ func (t *Tun) Activate() error {
 	// Set the MTU on the device
 	ifm := ifreqMTU{Name: devName, MTU: int32(t.DefaultMTU)}
 	if err = ioctl(fd, unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
-		return fmt.Errorf("Failed to set tun mtu: %v", err)
+		return fmt.Errorf("failed to set tun mtu: %v", err)
 	}
 
 	/*
@@ -275,6 +273,9 @@ func (t *Tun) Activate() error {
 	copy(maskAddr.IP[:], mask[:])
 	err = addRoute(routeSock, routeAddr, maskAddr, linkAddr)
 	if err != nil {
+		if errors.Is(err, unix.EEXIST) {
+			err = fmt.Errorf("unable to add tun route, identical route already exists: %s", t.cidr)
+		}
 		return err
 	}
 
@@ -285,19 +286,38 @@ func (t *Tun) Activate() error {
 	}
 
 	// Unsafe path routes
-	for _, r := range t.UnsafeRoutes {
+	for _, r := range t.Routes {
+		if r.Via == nil {
+			// We don't allow route MTUs so only install routes with a via
+			continue
+		}
+
 		copy(routeAddr.IP[:], r.Cidr.IP.To4())
 		copy(maskAddr.IP[:], net.IP(r.Cidr.Mask).To4())
 
 		err = addRoute(routeSock, routeAddr, maskAddr, linkAddr)
 		if err != nil {
-			return err
+			if errors.Is(err, unix.EEXIST) {
+				t.l.WithField("route", r.Cidr).
+					Warnf("unable to add unsafe_route, identical route already exists")
+			} else {
+				return err
+			}
 		}
 
 		// TODO how to set metric
 	}
 
 	return nil
+}
+
+func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+	r := t.routeTree.MostSpecificContains(ip)
+	if r != nil {
+		return r.(iputil.VpnIp)
+	}
+
+	return 0
 }
 
 // Get the LinkAddr for the interface of the given name
@@ -343,19 +363,17 @@ func addRoute(sock int, addr, mask *netroute.Inet4Addr, link *netroute.LinkAddr)
 
 	data, err := r.Marshal()
 	if err != nil {
-		return fmt.Errorf("failed to create route.RouteMessage: %v", err)
+		return fmt.Errorf("failed to create route.RouteMessage: %w", err)
 	}
 	_, err = unix.Write(sock, data[:])
 	if err != nil {
-		return fmt.Errorf("failed to write route.RouteMessage to socket: %v", err)
+		return fmt.Errorf("failed to write route.RouteMessage to socket: %w", err)
 	}
 
 	return nil
 }
 
-var _ io.ReadWriteCloser = (*Tun)(nil)
-
-func (t *Tun) Read(to []byte) (int, error) {
+func (t *tun) Read(to []byte) (int, error) {
 
 	buf := make([]byte, len(to)+4)
 
@@ -366,7 +384,7 @@ func (t *Tun) Read(to []byte) (int, error) {
 }
 
 // Write is only valid for single threaded use
-func (t *Tun) Write(from []byte) (int, error) {
+func (t *tun) Write(from []byte) (int, error) {
 	buf := t.out
 	if cap(buf) < len(from)+4 {
 		buf = make([]byte, len(from)+4)
@@ -385,7 +403,7 @@ func (t *Tun) Write(from []byte) (int, error) {
 	} else if ipVer == 6 {
 		buf[3] = syscall.AF_INET6
 	} else {
-		return 0, fmt.Errorf("Unable to determine IP version from packet")
+		return 0, fmt.Errorf("unable to determine IP version from packet")
 	}
 
 	copy(buf[4:], from)
@@ -394,19 +412,14 @@ func (t *Tun) Write(from []byte) (int, error) {
 	return n - 4, err
 }
 
-func (c *Tun) CidrNet() *net.IPNet {
-	return c.Cidr
+func (t *tun) Cidr() *net.IPNet {
+	return t.cidr
 }
 
-func (c *Tun) DeviceName() string {
-	return c.Device
+func (t *tun) Name() string {
+	return t.Device
 }
 
-func (c *Tun) WriteRaw(b []byte) error {
-	_, err := c.Write(b)
-	return err
-}
-
-func (t *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
 }
