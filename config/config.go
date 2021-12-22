@@ -4,11 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,11 +18,14 @@ import (
 
 type C struct {
 	path        string
-	files       []string
 	Settings    map[interface{}]interface{}
 	oldSettings map[interface{}]interface{}
 	callbacks   []func(*C)
 	l           *logrus.Logger
+
+	// SIGHUP reload function
+	// TODO: is this really necessary, I feel this is a hack
+	reloadOnSIGHUP func() error
 }
 
 func NewC(l *logrus.Logger) *C {
@@ -35,35 +35,22 @@ func NewC(l *logrus.Logger) *C {
 	}
 }
 
-// Load will find all yaml files within path and load them in lexical order
-func (c *C) Load(path string) error {
-	c.path = path
-	c.files = make([]string, 0)
-
-	err := c.resolve(path, true)
-	if err != nil {
-		return err
+// Load will find all yaml files provided as string slices,
+// and load them in the provided order.
+// The caller is responsible to provide at least one configuration
+// or it will error out.
+func (c *C) Load(config ...string) error {
+	if len(config) == 0 {
+		return errors.New("no configurations provided")
 	}
 
-	if len(c.files) == 0 {
-		return fmt.Errorf("no config files found at %s", path)
-	}
-
-	sort.Strings(c.files)
-
-	err = c.parse()
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return c.parse(config...)
 }
 
-func (c *C) LoadString(raw string) error {
-	if raw == "" {
-		return errors.New("Empty configuration")
-	}
-	return c.parseRaw([]byte(raw))
+// RegisterSIGHUPHandler registers a function that gets called when
+// SIGHUP gets intercepted.
+func (c *C) RegisterSIGHUPHandler(handler func() error) {
+	c.reloadOnSIGHUP = handler
 }
 
 // RegisterReloadCallback stores a function to be called when a config reload is triggered. The functions registered
@@ -125,28 +112,40 @@ func (c *C) CatchHUP(ctx context.Context) {
 				close(ch)
 				return
 			case <-ch:
-				c.l.Info("Caught HUP, reloading config")
-				c.ReloadConfig()
+				c.l.Info("Caught HUP")
+				if c.reloadOnSIGHUP != nil {
+					if err := c.reloadOnSIGHUP(); err != nil {
+						c.l.WithError(err).Error("Error in reloading configs")
+						continue
+					}
+					c.l.Info("succesfully executed SIGHUP handler")
+				}
 			}
 		}
 	}()
 }
 
-func (c *C) ReloadConfig() {
+// ReloadConfig tries to reload
+func (c *C) ReloadConfig(configs ...string) error {
+	if len(configs) == 0 {
+		return errors.New("no configurations provided")
+	}
+
 	c.oldSettings = make(map[interface{}]interface{})
 	for k, v := range c.Settings {
 		c.oldSettings[k] = v
 	}
 
-	err := c.Load(c.path)
-	if err != nil {
+	if err := c.Load(configs...); err != nil {
 		c.l.WithField("config_path", c.path).WithError(err).Error("Error occurred while reloading config")
-		return
+		return err
 	}
 
 	for _, v := range c.callbacks {
 		v(c)
 	}
+
+	return nil
 }
 
 // GetString will get the string for k or return the default d if not found or invalid
@@ -257,102 +256,26 @@ func (c *C) get(k string, v interface{}) interface{} {
 	return v
 }
 
-// direct signifies if this is the config path directly specified by the user,
-// versus a file/dir found by recursing into that path
-func (c *C) resolve(path string, direct bool) error {
-	i, err := os.Stat(path)
-	if err != nil {
-		return nil
-	}
-
-	if !i.IsDir() {
-		c.addFile(path, direct)
-		return nil
-	}
-
-	paths, err := readDirNames(path)
-	if err != nil {
-		return fmt.Errorf("problem while reading directory %s: %s", path, err)
-	}
-
-	for _, p := range paths {
-		err := c.resolve(filepath.Join(path, p), false)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (c *C) addFile(path string, direct bool) error {
-	ext := filepath.Ext(path)
-
-	if !direct && ext != ".yaml" && ext != ".yml" {
-		return nil
-	}
-
-	ap, err := filepath.Abs(path)
-	if err != nil {
-		return err
-	}
-
-	c.files = append(c.files, ap)
-	return nil
-}
-
-func (c *C) parseRaw(b []byte) error {
+// parse reads and merges all the config files provided
+func (c *C) parse(configs ...string) error {
 	var m map[interface{}]interface{}
 
-	err := yaml.Unmarshal(b, &m)
-	if err != nil {
-		return err
-	}
+	for _, config := range configs {
+		var newMap map[interface{}]interface{}
 
-	c.Settings = m
-	return nil
-}
-
-func (c *C) parse() error {
-	var m map[interface{}]interface{}
-
-	for _, path := range c.files {
-		b, err := ioutil.ReadFile(path)
-		if err != nil {
-			return err
-		}
-
-		var nm map[interface{}]interface{}
-		err = yaml.Unmarshal(b, &nm)
-		if err != nil {
+		if err := yaml.Unmarshal([]byte(config), &newMap); err != nil {
 			return err
 		}
 
 		// We need to use WithAppendSlice so that firewall rules in separate
 		// files are appended together
-		err = mergo.Merge(&nm, m, mergo.WithAppendSlice)
-		m = nm
-		if err != nil {
+		if err := mergo.Merge(&newMap, m, mergo.WithAppendSlice); err != nil {
 			return err
 		}
+
+		m = newMap
 	}
 
 	c.Settings = m
 	return nil
-}
-
-func readDirNames(path string) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-
-	paths, err := f.Readdirnames(-1)
-	f.Close()
-	if err != nil {
-		return nil, err
-	}
-
-	sort.Strings(paths)
-	return paths, nil
 }

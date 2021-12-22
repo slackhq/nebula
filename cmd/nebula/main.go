@@ -46,14 +46,31 @@ func main() {
 	l.Out = os.Stdout
 
 	c := config.NewC(l)
-	err := c.Load(*configPath)
+
+	// read files from config path and store read files in configFiles string slice
+	configFiles, err := config.ReadConfigFiles(*configPath)
 	if err != nil {
-		fmt.Printf("failed to load config: %s", err)
+		fmt.Printf("failed to read config(s): %s", err)
 		os.Exit(1)
 	}
 
-	ctrl, err := nebula.Main(c, *configTest, Build, l, nil)
+	if err := c.Load(configFiles...); err != nil {
+		fmt.Printf("failed to load config(s): %s", err)
+		os.Exit(1)
+	}
 
+	// register SIGHUP handler
+	c.RegisterSIGHUPHandler(func() error {
+		// re-read files from config path
+		configFiles, err := config.ReadConfigFiles(*configPath)
+		if err != nil {
+			return err
+		}
+
+		return c.ReloadConfig(configFiles...)
+	})
+
+	ctrl, err := nebula.Main(c, *configTest, Build, l, nil)
 	switch v := err.(type) {
 	case util.ContextualError:
 		v.Log(l)

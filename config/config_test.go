@@ -1,9 +1,6 @@
 package config
 
 import (
-	"io/ioutil"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,22 +10,15 @@ import (
 
 func TestConfig_Load(t *testing.T) {
 	l := test.NewLogger()
-	dir, err := ioutil.TempDir("", "config-test")
-	// invalid yaml
+
 	c := NewC(l)
-	ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte(" invalid yaml"), 0644)
-	assert.EqualError(t, c.Load(dir), "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[interface {}]interface {}")
+
+	// invalid yaml
+	assert.EqualError(t, c.Load(" invalid yaml"), "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[interface {}]interface {}")
 
 	// simple multi config merge
 	c = NewC(l)
-	os.RemoveAll(dir)
-	os.Mkdir(dir, 0755)
-
-	assert.Nil(t, err)
-
-	ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
-	ioutil.WriteFile(filepath.Join(dir, "02.yml"), []byte("outer:\n  inner: override\nnew: hi"), 0644)
-	assert.Nil(t, c.Load(dir))
+	assert.Nil(t, c.Load("outer:\n  inner: hi", "outer:\n  inner: override\nnew: hi"))
 	expected := map[interface{}]interface{}{
 		"outer": map[interface{}]interface{}{
 			"inner": "override",
@@ -117,24 +107,19 @@ func TestConfig_HasChanged(t *testing.T) {
 func TestConfig_ReloadConfig(t *testing.T) {
 	l := test.NewLogger()
 	done := make(chan bool, 1)
-	dir, err := ioutil.TempDir("", "config-test")
-	assert.Nil(t, err)
-	ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
 
 	c := NewC(l)
-	assert.Nil(t, c.Load(dir))
+	assert.Nil(t, c.Load("outer:\n  inner: hi"))
 
 	assert.False(t, c.HasChanged("outer.inner"))
 	assert.False(t, c.HasChanged("outer"))
 	assert.False(t, c.HasChanged(""))
 
-	ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: ho"), 0644)
-
 	c.RegisterReloadCallback(func(c *C) {
 		done <- true
 	})
 
-	c.ReloadConfig()
+	c.ReloadConfig("outer:\n  inner: ho")
 	assert.True(t, c.HasChanged("outer.inner"))
 	assert.True(t, c.HasChanged("outer"))
 	assert.True(t, c.HasChanged(""))

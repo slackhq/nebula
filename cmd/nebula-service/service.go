@@ -29,9 +29,17 @@ func (p *program) Start(s service.Service) error {
 	HookLogger(l)
 
 	c := config.NewC(l)
-	err := c.Load(*p.configPath)
+
+	// read files from config path and store read files in configFiles string slice
+	configFiles, err := config.ReadConfigFiles(*p.configPath)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %s", err)
+		fmt.Printf("failed to read config(s): %s", err)
+		os.Exit(1)
+	}
+
+	if err := c.Load(configFiles...); err != nil {
+		fmt.Printf("failed to load config(s): %s", err)
+		os.Exit(1)
 	}
 
 	p.control, err = nebula.Main(c, *p.configTest, Build, l, nil)
