@@ -52,9 +52,16 @@ func main() {
 	l.Out = os.Stdout
 
 	c := config.NewC(l)
-	err := c.Load(*configPath)
+
+	// read files from config path and store read files in configFiles string slice
+	configFiles, err := config.ReadConfigFiles(*configPath)
 	if err != nil {
-		fmt.Printf("failed to load config: %s", err)
+		fmt.Printf("failed to read config(s): %s", err)
+		os.Exit(1)
+	}
+
+	if err := c.Load(configFiles...); err != nil {
+		fmt.Printf("failed to load config(s): %s", err)
 		os.Exit(1)
 	}
 

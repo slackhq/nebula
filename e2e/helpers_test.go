@@ -84,7 +84,7 @@ func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, u
 	}
 
 	c := config.NewC(l)
-	c.LoadString(string(cb))
+	c.Load(string(cb))
 
 	control, err := nebula.Main(c, false, "e2e-test", l, nil)
 
