@@ -212,7 +212,8 @@ func (u *Conn) WriteTo(b []byte, addr *Addr) error {
 	if u.isV4 {
 		addrV4, isAddrV4 := isIPV4(addr.IP)
 		if !isAddrV4 {
-			return fmt.Errorf("listener is IPv4, but writing to IPv6 remote")
+			u.l.Warnf("socket is IPv4-only, not sending to IPv6 address: %s", addr.IP)
+			return nil
 		}
 		var rsa unix.RawSockaddrInet4
 		rsa.Family = unix.AF_INET
