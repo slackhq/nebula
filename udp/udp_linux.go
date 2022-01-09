@@ -12,6 +12,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
@@ -48,7 +49,7 @@ type _SK_MEMINFO [_SK_MEMINFO_VARS]uint32
 
 func NewListener(l *logrus.Logger, ip string, port int, multi bool, batch int) (*Conn, error) {
 	lip := net.ParseIP(ip)
-	lipV4, isV4 := isIPV4(lip)
+	lipV4, isV4 := cidr.IsIPV4(lip)
 
 	af := unix.AF_INET6
 	if isV4 {
@@ -210,7 +211,7 @@ func (u *Conn) WriteTo(b []byte, addr *Addr) error {
 	var rsaPtr unsafe.Pointer
 	var rsaSize int
 	if u.isV4 {
-		addrV4, isAddrV4 := isIPV4(addr.IP)
+		addrV4, isAddrV4 := cidr.IsIPV4(addr.IP)
 		if !isAddrV4 {
 			u.l.Warnf("socket is IPv4-only, not sending to IPv6 address: %s", addr.IP)
 			return nil

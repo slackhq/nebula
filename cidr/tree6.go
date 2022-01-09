@@ -23,7 +23,7 @@ func NewTree6() *Tree6 {
 func (tree *Tree6) AddCIDR(cidr *net.IPNet, val interface{}) {
 	var node, next *Node
 
-	cidrIP, ipv4 := isIPV4(cidr.IP)
+	cidrIP, ipv4 := IsIPV4(cidr.IP)
 	if ipv4 {
 		node = tree.root4
 		next = tree.root4
@@ -78,7 +78,7 @@ func (tree *Tree6) AddCIDR(cidr *net.IPNet, val interface{}) {
 func (tree *Tree6) MostSpecificContains(ip net.IP) (value interface{}) {
 	var node *Node
 
-	wholeIP, ipv4 := isIPV4(ip)
+	wholeIP, ipv4 := IsIPV4(ip)
 	if ipv4 {
 		node = tree.root4
 	} else {
@@ -163,7 +163,7 @@ func (tree *Tree6) MostSpecificContainsIpV6(hi, lo uint64) (value interface{}) {
 	return value
 }
 
-func isIPV4(ip net.IP) (net.IP, bool) {
+func IsIPV4(ip net.IP) (net.IP, bool) {
 	if len(ip) == net.IPv4len {
 		return ip, true
 	}
