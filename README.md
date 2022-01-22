@@ -84,7 +84,7 @@ This assumes you have four nodes, named lighthouse1, laptop, server1, host3. You
 ```
 
 #### 5. Configuration files for each host
-Download a copy of the nebula [example configuration](https://github.com/slackhq/nebula/blob/master/examples/config.yml).
+Download a copy of the nebula [example configuration](https://github.com/slackhq/nebula/blob/master/examples/config.yaml).
 
 * On the lighthouse node, you'll need to ensure `am_lighthouse: true` is set.
 
