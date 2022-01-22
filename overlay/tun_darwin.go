@@ -4,6 +4,7 @@
 package overlay
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -77,7 +78,7 @@ type ifreqMTU struct {
 }
 
 func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []Route, _ int, _ bool) (*tun, error) {
-	routeTree, err := makeRouteTree(routes, false)
+	routeTree, err := makeRouteTree(l, routes, false)
 	if err != nil {
 		return nil, err
 	}
@@ -272,6 +273,9 @@ func (t *tun) Activate() error {
 	copy(maskAddr.IP[:], mask[:])
 	err = addRoute(routeSock, routeAddr, maskAddr, linkAddr)
 	if err != nil {
+		if errors.Is(err, unix.EEXIST) {
+			err = fmt.Errorf("unable to add tun route, identical route already exists: %s", t.cidr)
+		}
 		return err
 	}
 
@@ -293,7 +297,12 @@ func (t *tun) Activate() error {
 
 		err = addRoute(routeSock, routeAddr, maskAddr, linkAddr)
 		if err != nil {
-			return err
+			if errors.Is(err, unix.EEXIST) {
+				t.l.WithField("route", r.Cidr).
+					Warnf("unable to add unsafe_route, identical route already exists")
+			} else {
+				return err
+			}
 		}
 
 		// TODO how to set metric
@@ -354,11 +363,11 @@ func addRoute(sock int, addr, mask *netroute.Inet4Addr, link *netroute.LinkAddr)
 
 	data, err := r.Marshal()
 	if err != nil {
-		return fmt.Errorf("failed to create route.RouteMessage: %v", err)
+		return fmt.Errorf("failed to create route.RouteMessage: %w", err)
 	}
 	_, err = unix.Write(sock, data[:])
 	if err != nil {
-		return fmt.Errorf("failed to write route.RouteMessage to socket: %v", err)
+		return fmt.Errorf("failed to write route.RouteMessage to socket: %w", err)
 	}
 
 	return nil

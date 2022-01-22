@@ -1,6 +1,7 @@
 package cert
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -21,17 +22,30 @@ func NewCAPool() *NebulaCAPool {
 	return &ca
 }
 
+// NewCAPoolFromBytes will create a new CA pool from the provided
+// input bytes, which must be a PEM-encoded set of nebula certificates.
+// If the pool contains any expired certificates, an ErrExpired will be
+// returned along with the pool. The caller must handle any such errors.
 func NewCAPoolFromBytes(caPEMs []byte) (*NebulaCAPool, error) {
 	pool := NewCAPool()
 	var err error
+	var expired bool
 	for {
 		caPEMs, err = pool.AddCACertificate(caPEMs)
+		if errors.Is(err, ErrExpired) {
+			expired = true
+			err = nil
+		}
 		if err != nil {
 			return nil, err
 		}
-		if caPEMs == nil || len(caPEMs) == 0 || strings.TrimSpace(string(caPEMs)) == "" {
+		if len(caPEMs) == 0 || strings.TrimSpace(string(caPEMs)) == "" {
 			break
 		}
+	}
+
+	if expired {
+		return pool, ErrExpired
 	}
 
 	return pool, nil
@@ -47,15 +61,11 @@ func (ncp *NebulaCAPool) AddCACertificate(pemBytes []byte) ([]byte, error) {
 	}
 
 	if !c.Details.IsCA {
-		return pemBytes, fmt.Errorf("provided certificate was not a CA; %s", c.Details.Name)
+		return pemBytes, fmt.Errorf("%s: %w", c.Details.Name, ErrNotCA)
 	}
 
 	if !c.CheckSignature(c.Details.PublicKey) {
-		return pemBytes, fmt.Errorf("provided certificate was not self signed; %s", c.Details.Name)
-	}
-
-	if c.Expired(time.Now()) {
-		return pemBytes, fmt.Errorf("provided CA certificate is expired; %s", c.Details.Name)
+		return pemBytes, fmt.Errorf("%s: %w", c.Details.Name, ErrNotSelfSigned)
 	}
 
 	sum, err := c.Sha256Sum()
@@ -64,6 +74,10 @@ func (ncp *NebulaCAPool) AddCACertificate(pemBytes []byte) ([]byte, error) {
 	}
 
 	ncp.CAs[sum] = c
+	if c.Expired(time.Now()) {
+		return pemBytes, fmt.Errorf("%s: %w", c.Details.Name, ErrExpired)
+	}
+
 	return pemBytes, nil
 }
 

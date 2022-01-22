@@ -397,10 +397,6 @@ func (hm *HostMap) Punchy(ctx context.Context, conn *udp.Conn) {
 	}
 }
 
-func (i *HostInfo) BindConnectionState(cs *ConnectionState) {
-	i.ConnectionState = cs
-}
-
 // TryPromoteBest handles re-querying lighthouses and probing for better paths
 // NOTE: It is an error to call this if you are a lighthouse since they should not roam clients!
 func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface) {
@@ -539,10 +535,6 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udp.Addr) bool {
 	}
 
 	return false
-}
-
-func (i *HostInfo) ClearConnectionState() {
-	i.ConnectionState = nil
 }
 
 func (i *HostInfo) RecvErrorExceeded() bool {

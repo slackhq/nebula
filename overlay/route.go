@@ -7,26 +7,28 @@ import (
 	"runtime"
 	"strconv"
 
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/iputil"
 )
 
 type Route struct {
 	MTU    int
 	Metric int
 	Cidr   *net.IPNet
-	Via    *net.IP
+	Via    *iputil.VpnIp
 }
 
-func makeRouteTree(routes []Route, allowMTU bool) (*cidr.Tree4, error) {
+func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*cidr.Tree4, error) {
 	routeTree := cidr.NewTree4()
 	for _, r := range routes {
 		if !allowMTU && r.MTU > 0 {
-			return nil, fmt.Errorf("route MTU is not supported in %s", runtime.GOOS)
+			l.WithField("route", r).Warnf("route MTU is not supported in %s", runtime.GOOS)
 		}
 
 		if r.Via != nil {
-			routeTree.AddCIDR(r.Cidr, r.Via)
+			routeTree.AddCIDR(r.Cidr, *r.Via)
 		}
 	}
 	return routeTree, nil
@@ -126,21 +128,19 @@ func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 			return nil, fmt.Errorf("entry %v in tun.unsafe_routes is invalid", i+1)
 		}
 
-		rMtu, ok := m["mtu"]
-		if !ok {
-			rMtu = c.GetInt("tun.mtu", DefaultMTU)
-		}
-
-		mtu, ok := rMtu.(int)
-		if !ok {
-			mtu, err = strconv.Atoi(rMtu.(string))
-			if err != nil {
-				return nil, fmt.Errorf("entry %v.mtu in tun.unsafe_routes is not an integer: %v", i+1, err)
+		var mtu int
+		if rMtu, ok := m["mtu"]; ok {
+			mtu, ok = rMtu.(int)
+			if !ok {
+				mtu, err = strconv.Atoi(rMtu.(string))
+				if err != nil {
+					return nil, fmt.Errorf("entry %v.mtu in tun.unsafe_routes is not an integer: %v", i+1, err)
+				}
 			}
-		}
 
-		if mtu < 500 {
-			return nil, fmt.Errorf("entry %v.mtu in tun.unsafe_routes is below 500: %v", i+1, mtu)
+			if mtu != 0 && mtu < 500 {
+				return nil, fmt.Errorf("entry %v.mtu in tun.unsafe_routes is below 500: %v", i+1, mtu)
+			}
 		}
 
 		rMetric, ok := m["metric"]
@@ -180,8 +180,10 @@ func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 			return nil, fmt.Errorf("entry %v.route in tun.unsafe_routes is not present", i+1)
 		}
 
+		viaVpnIp := iputil.Ip2VpnIp(nVia)
+
 		r := Route{
-			Via:    &nVia,
+			Via:    &viaVpnIp,
 			MTU:    mtu,
 			Metric: metric,
 		}

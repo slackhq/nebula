@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/songgao/water"
@@ -22,8 +23,8 @@ type waterTun struct {
 	*water.Interface
 }
 
-func newWaterTun(cidr *net.IPNet, defaultMTU int, routes []Route) (*waterTun, error) {
-	routeTree, err := makeRouteTree(routes, false)
+func newWaterTun(l *logrus.Logger, cidr *net.IPNet, defaultMTU int, routes []Route) (*waterTun, error) {
+	routeTree, err := makeRouteTree(l, routes, false)
 	if err != nil {
 		return nil, err
 	}

@@ -7,6 +7,7 @@ import (
 	"net"
 	"unsafe"
 
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/wintun"
@@ -45,7 +46,7 @@ func generateGUIDByDeviceName(name string) (*windows.GUID, error) {
 	return (*windows.GUID)(unsafe.Pointer(&sum[0])), nil
 }
 
-func newWinTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route) (*winTun, error) {
+func newWinTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route) (*winTun, error) {
 	guid, err := generateGUIDByDeviceName(deviceName)
 	if err != nil {
 		return nil, fmt.Errorf("generate GUID failed: %w", err)
@@ -56,7 +57,7 @@ func newWinTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []Rout
 		return nil, fmt.Errorf("create TUN device failed: %w", err)
 	}
 
-	routeTree, err := makeRouteTree(routes, false)
+	routeTree, err := makeRouteTree(l, routes, false)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +98,7 @@ func (t *winTun) Activate() error {
 		// Add our unsafe route
 		routes = append(routes, &winipcfg.RouteData{
 			Destination: *r.Cidr,
-			NextHop:     *r.Via,
+			NextHop:     r.Via.ToIP(),
 			Metric:      uint32(r.Metric),
 		})
 	}

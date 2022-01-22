@@ -30,14 +30,14 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 	}
 
 	if useWintun {
-		device, err := newWinTun(deviceName, cidr, defaultMTU, routes)
+		device, err := newWinTun(l, deviceName, cidr, defaultMTU, routes)
 		if err != nil {
 			return nil, fmt.Errorf("create Wintun interface failed, %w", err)
 		}
 		return device, nil
 	}
 
-	device, err := newWaterTun(cidr, defaultMTU, routes)
+	device, err := newWaterTun(l, cidr, defaultMTU, routes)
 	if err != nil {
 		return nil, fmt.Errorf("create wintap driver failed, %w", err)
 	}

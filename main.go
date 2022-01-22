@@ -138,13 +138,13 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		if err != nil {
 			return nil, util.NewContextualError("Failed to get a tun/tap device", nil, err)
 		}
-	}
 
-	defer func() {
-		if reterr != nil {
-			tun.Close()
-		}
-	}()
+		defer func() {
+			if reterr != nil {
+				tun.Close()
+			}
+		}()
+	}
 
 	// set up our UDP listener
 	udpConns := make([]*udp.Conn, routines)
@@ -247,6 +247,10 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			return nil, util.NewContextualError("lighthouse host is not in our subnet, invalid", m{"vpnIp": ip, "network": tunCidr.String()}, nil)
 		}
 		lighthouseHosts[i] = iputil.Ip2VpnIp(ip)
+	}
+
+	if !amLighthouse && len(lighthouseHosts) == 0 {
+		l.Warn("No lighthouses.hosts configured, this host will only be able to initiate tunnels with static_host_map entries")
 	}
 
 	lightHouse := NewLightHouse(
