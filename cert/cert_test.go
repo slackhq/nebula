@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ed25519"
@@ -375,9 +375,16 @@ func TestNebulaCertificate_Verify_Subnets(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestNebulaVerifyPrivateKey(t *testing.T) {
+func TestNebulaCertificate_VerifyPrivateKey(t *testing.T) {
 	ca, _, caKey, err := newTestCaCert(time.Time{}, time.Time{}, []*net.IPNet{}, []*net.IPNet{}, []string{})
 	assert.Nil(t, err)
+	err = ca.VerifyPrivateKey(caKey)
+	assert.Nil(t, err)
+
+	_, _, caKey2, err := newTestCaCert(time.Time{}, time.Time{}, []*net.IPNet{}, []*net.IPNet{}, []string{})
+	assert.Nil(t, err)
+	err = ca.VerifyPrivateKey(caKey2)
+	assert.NotNil(t, err)
 
 	c, _, priv, err := newTestCert(ca, caKey, time.Time{}, time.Time{}, []*net.IPNet{}, []*net.IPNet{}, []string{})
 	err = c.VerifyPrivateKey(priv)
@@ -424,6 +431,15 @@ BVG+oJpAoqokUBbI4U0N8CSfpUABEkB/Pm5A2xyH/nc8mg/wvGUWG3pZ7nHzaDMf
 
 `
 
+	expired := `
+# expired certificate
+-----BEGIN NEBULA CERTIFICATE-----
+CjkKB2V4cGlyZWQouPmWjQYwufmWjQY6ILCRaoCkJlqHgv5jfDN4lzLHBvDzaQm4
+vZxfu144hmgjQAESQG4qlnZi8DncvD/LDZnLgJHOaX1DWCHHEh59epVsC+BNgTie
+WH1M9n4O7cFtGlM6sJJOS+rCVVEJ3ABS7+MPdQs=
+-----END NEBULA CERTIFICATE-----
+`
+
 	rootCA := NebulaCertificate{
 		Details: NebulaCertificateDetails{
 			Name: "nebula root ca",
@@ -445,6 +461,19 @@ BVG+oJpAoqokUBbI4U0N8CSfpUABEkB/Pm5A2xyH/nc8mg/wvGUWG3pZ7nHzaDMf
 	assert.Nil(t, err)
 	assert.Equal(t, pp.CAs[string("c9bfaf7ce8e84b2eeda2e27b469f4b9617bde192efd214b68891ecda6ed49522")].Details.Name, rootCA.Details.Name)
 	assert.Equal(t, pp.CAs[string("5c9c3f23e7ee7fe97637cbd3a0a5b854154d1d9aaaf7b566a51f4a88f76b64cd")].Details.Name, rootCA01.Details.Name)
+
+	// expired cert, no valid certs
+	ppp, err := NewCAPoolFromBytes([]byte(expired))
+	assert.Equal(t, ErrExpired, err)
+	assert.Equal(t, ppp.CAs[string("152070be6bb19bc9e3bde4c2f0e7d8f4ff5448b4c9856b8eccb314fade0229b0")].Details.Name, "expired")
+
+	// expired cert, with valid certs
+	pppp, err := NewCAPoolFromBytes(append([]byte(expired), noNewLines...))
+	assert.Equal(t, ErrExpired, err)
+	assert.Equal(t, pppp.CAs[string("c9bfaf7ce8e84b2eeda2e27b469f4b9617bde192efd214b68891ecda6ed49522")].Details.Name, rootCA.Details.Name)
+	assert.Equal(t, pppp.CAs[string("5c9c3f23e7ee7fe97637cbd3a0a5b854154d1d9aaaf7b566a51f4a88f76b64cd")].Details.Name, rootCA01.Details.Name)
+	assert.Equal(t, pppp.CAs[string("152070be6bb19bc9e3bde4c2f0e7d8f4ff5448b4c9856b8eccb314fade0229b0")].Details.Name, "expired")
+	assert.Equal(t, len(pppp.CAs), 3)
 }
 
 func appendByteSlices(b ...[]byte) []byte {
@@ -745,7 +774,7 @@ func TestNebulaCertificate_Copy(t *testing.T) {
 	assert.Nil(t, err)
 	cc := c.Copy()
 
-	util.AssertDeepCopyEqual(t, c, cc)
+	test.AssertDeepCopyEqual(t, c, cc)
 }
 
 func TestUnmarshalNebulaCertificate(t *testing.T) {
@@ -853,10 +882,15 @@ func newTestCert(ca *NebulaCertificate, key []byte, before, after time.Time, ips
 }
 
 func x25519Keypair() ([]byte, []byte) {
-	var pubkey, privkey [32]byte
-	if _, err := io.ReadFull(rand.Reader, privkey[:]); err != nil {
+	privkey := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, privkey); err != nil {
 		panic(err)
 	}
-	curve25519.ScalarBaseMult(&pubkey, &privkey)
-	return pubkey[:], privkey[:]
+
+	pubkey, err := curve25519.X25519(privkey, curve25519.Basepoint)
+	if err != nil {
+		panic(err)
+	}
+
+	return pubkey, privkey
 }

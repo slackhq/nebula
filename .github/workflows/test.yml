@@ -18,21 +18,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
 
-    - name: Set up Go 1.16
-      uses: actions/setup-go@v1
+    - name: Set up Go 1.17
+      uses: actions/setup-go@v2
       with:
-        go-version: 1.16
+        go-version: 1.17
       id: go
 
     - name: Check out code into the Go module directory
-      uses: actions/checkout@v1
+      uses: actions/checkout@v2
 
-    - uses: actions/cache@v1
+    - uses: actions/cache@v2
       with:
         path: ~/go/pkg/mod
-        key: ${{ runner.os }}-go1.16-${{ hashFiles('**/go.sum') }}
+        key: ${{ runner.os }}-go1.17-${{ hashFiles('**/go.sum') }}
         restore-keys: |
-          ${{ runner.os }}-go1.16-
+          ${{ runner.os }}-go1.17-
 
     - name: Build
       run: make all
@@ -48,24 +48,24 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [windows-latest, macOS-latest]
+        os: [windows-latest, macos-11]
     steps:
 
-    - name: Set up Go 1.16
-      uses: actions/setup-go@v1
+    - name: Set up Go 1.17
+      uses: actions/setup-go@v2
       with:
-        go-version: 1.16
+        go-version: 1.17
       id: go
 
     - name: Check out code into the Go module directory
-      uses: actions/checkout@v1
+      uses: actions/checkout@v2
 
-    - uses: actions/cache@v1
+    - uses: actions/cache@v2
       with:
         path: ~/go/pkg/mod
-        key: ${{ runner.os }}-go1.16-${{ hashFiles('**/go.sum') }}
+        key: ${{ runner.os }}-go1.17-${{ hashFiles('**/go.sum') }}
         restore-keys: |
-          ${{ runner.os }}-go1.16-
+          ${{ runner.os }}-go1.17-
 
     - name: Build nebula
       run: go build ./cmd/nebula
