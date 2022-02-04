@@ -37,6 +37,11 @@ Check the [releases](https://github.com/slackhq/nebula/releases/latest) page for
     $ sudo dnf install nebula
     ```
 
+- [macOS Homebrew](https://github.com/Homebrew/homebrew-core/blob/HEAD/Formula/nebula.rb)
+    ```
+    $ brew install nebula
+    ```
+
 #### Mobile
 
 - [iOS](https://apps.apple.com/us/app/mobile-nebula/id1509587936?itsct=apps_box&amp;itscg=30200)
