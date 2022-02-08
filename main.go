@@ -275,6 +275,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		version:                 buildVersion,
 		caPool:                  caPool,
 		disconnectInvalid:       c.GetBool("pki.disconnect_invalid", false),
+		relayManager:            NewRelayManager(ctx, l, hostMap),
 
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,

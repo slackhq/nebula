@@ -27,10 +27,30 @@ const MaxRemotes = 10
 // This helps prevent flapping due to packets already in flight
 const RoamingSuppressSeconds = 2
 
+const (
+	Requested = iota
+	Established
+)
+
+const (
+	Unknowntype = iota
+	RelayType
+	TerminalType
+)
+
+type Relay struct {
+	Type        int
+	State       int
+	LocalIndex  uint32
+	RemoteIndex uint32
+	PeerIp      iputil.VpnIp
+}
+
 type HostMap struct {
 	sync.RWMutex    //Because we concurrently read and write to our maps
 	name            string
 	Indexes         map[uint32]*HostInfo
+	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a RelayHostID
 	RemoteIndexes   map[uint32]*HostInfo
 	Hosts           map[iputil.VpnIp]*HostInfo
 	preferredRanges []*net.IPNet
@@ -57,6 +77,9 @@ type HostInfo struct {
 	vpnIp             iputil.VpnIp
 	recvError         int
 	remoteCidr        *cidr.Tree4
+	relays            map[uint32]iputil.VpnIp // VpnIp's of Hosts to use as relays to access this peer
+	relayForByIp      map[iputil.VpnIp]*Relay // Set of VpnIp peers for which this peer is a relay
+	relayForByIdx     map[uint32]*Relay
 
 	// lastRebindCount is the other side of Interface.rebindCount, if these values don't match then we need to ask LH
 	// for a punch from the remote end of this tunnel. The goal being to prime their conntrack for our traffic just like
@@ -70,6 +93,11 @@ type HostInfo struct {
 
 	lastRoam       time.Time
 	lastRoamRemote *udp.Addr
+}
+
+type ViaSender struct {
+	relayHI   *HostInfo
+	remoteIdx uint32
 }
 
 type cachedPacket struct {
@@ -90,9 +118,11 @@ func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRang
 	h := map[iputil.VpnIp]*HostInfo{}
 	i := map[uint32]*HostInfo{}
 	r := map[uint32]*HostInfo{}
+	relays := map[uint32]*HostInfo{}
 	m := HostMap{
 		name:            name,
 		Indexes:         i,
+		Relays:          relays,
 		RemoteIndexes:   r,
 		Hosts:           h,
 		preferredRanges: preferredRanges,
@@ -140,6 +170,9 @@ func (hm *HostMap) AddVpnIp(vpnIp iputil.VpnIp, init func(hostinfo *HostInfo)) (
 			promoteCounter:  0,
 			vpnIp:           vpnIp,
 			HandshakePacket: make(map[uint8][]byte, 0),
+			relays:          map[uint32]iputil.VpnIp{},
+			relayForByIp:    map[iputil.VpnIp]*Relay{},
+			relayForByIdx:   map[uint32]*Relay{},
 		}
 		if init != nil {
 			init(h)
@@ -292,6 +325,17 @@ func (hm *HostMap) QueryIndex(index uint32) (*HostInfo, error) {
 		return nil, errors.New("unable to find index")
 	}
 }
+func (hm *HostMap) QueryRelayIndex(index uint32) (*HostInfo, error) {
+	//TODO: we probably just want ot return bool instead of error, or at least a static error
+	hm.RLock()
+	if h, ok := hm.Relays[index]; ok {
+		hm.RUnlock()
+		return h, nil
+	} else {
+		hm.RUnlock()
+		return nil, errors.New("unable to find index")
+	}
+}
 
 func (hm *HostMap) QueryReverseIndex(index uint32) (*HostInfo, error) {
 	hm.RLock()
@@ -397,6 +441,12 @@ func (hm *HostMap) Punchy(ctx context.Context, conn *udp.Conn) {
 	}
 }
 
+func (i *HostInfo) AddRelay(idx uint32, relayIp iputil.VpnIp) {
+	i.Lock()
+	i.relays[idx] = relayIp
+	i.Unlock()
+}
+
 // TryPromoteBest handles re-querying lighthouses and probing for better paths
 // NOTE: It is an error to call this if you are a lighthouse since they should not roam clients!
 func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface) {
@@ -421,7 +471,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 
 			// Try to send a test packet to that host, this should
 			// cause it to detect a roaming event and switch remotes
-			ifce.send(header.Test, header.TestRequest, i.ConnectionState, i, addr, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			ifce.sendTo(header.Test, header.TestRequest, i.ConnectionState, i, addr, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 		})
 	}
 
@@ -460,6 +510,7 @@ func (i *HostInfo) handshakeComplete(l *logrus.Logger, m *cachedPacketMetrics) {
 	//TODO: HandshakeComplete means send stored packets and ConnectionState.ready means we are ready to send
 	//TODO: if the transition from HandhsakeComplete to ConnectionState.ready happens all within this function they are identical
 
+	i.logger(l).Infof("BRAD: hostInfo %v handshake complete", i.vpnIp.String())
 	i.ConnectionState.queueLock.Lock()
 	i.HandshakeComplete = true
 	//TODO: this should be managed by the handshake state machine to set it based on how many handshake were seen.

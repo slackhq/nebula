@@ -26,6 +26,7 @@ type CacheMap map[string]*Cache
 type Cache struct {
 	Learned  []*udp.Addr `json:"learned,omitempty"`
 	Reported []*udp.Addr `json:"reported,omitempty"`
+	Relay    []*net.IP   `json:"relay"`
 }
 
 //TODO: Seems like we should plop static host entries in here too since the are protected by the lighthouse from deletion
@@ -33,8 +34,13 @@ type Cache struct {
 
 // cache is an internal struct that splits v4 and v6 addresses inside the cache map
 type cache struct {
-	v4 *cacheV4
-	v6 *cacheV6
+	v4    *cacheV4
+	v6    *cacheV6
+	relay *cacheRelay
+}
+
+type cacheRelay struct {
+	relay []uint32
 }
 
 // cacheV4 stores learned and reported ipv4 records under cache
@@ -57,6 +63,9 @@ type RemoteList struct {
 
 	// A deduplicated set of addresses. Any accessor should lock beforehand.
 	addrs []*udp.Addr
+
+	// A set of relay addresses. VpnIp addresses that advertise as relays for this remote.
+	relays []*iputil.VpnIp
 
 	// These are maps to store v4 and v6 addresses per lighthouse
 	// Map key is the vpnIp of the person that told us about this the cached entries underneath.
@@ -144,6 +153,7 @@ func (r *RemoteList) CopyCache() *CacheMap {
 			c = &Cache{
 				Learned:  make([]*udp.Addr, 0),
 				Reported: make([]*udp.Addr, 0),
+				Relay:    make([]*net.IP, 0),
 			}
 			cm[vpnIp] = c
 		}
@@ -170,6 +180,13 @@ func (r *RemoteList) CopyCache() *CacheMap {
 
 			for _, a := range mc.v6.reported {
 				c.Reported = append(c.Reported, NewUDPAddrFromLH6(a))
+			}
+		}
+
+		if mc.relay != nil {
+			for _, a := range mc.relay.relay {
+				nip := iputil.VpnIp(a).ToIP()
+				c.Relay = append(c.Relay, &nip)
 			}
 		}
 	}
@@ -264,6 +281,17 @@ func (r *RemoteList) unlockedSetV4(ownerVpnIp iputil.VpnIp, vpnIp iputil.VpnIp, 
 	}
 }
 
+func (r *RemoteList) unlockedSetRelay(ownerVpnIp iputil.VpnIp, vpnIp iputil.VpnIp, to []uint32) {
+	r.shouldRebuild = true
+	c := r.unlockedGetOrMakeRelay(ownerVpnIp)
+
+	// Reset the slice
+	c.relay = c.relay[:0]
+
+	// We can't take their array but we can take their pointers
+	c.relay = append(c.relay, to[:minInt(len(to), MaxRemotes)]...)
+}
+
 // unlockedPrependV4 assumes you have the write lock and prepends the address in the reported list for this owner
 // This is only useful for establishing static hosts
 func (r *RemoteList) unlockedPrependV4(ownerVpnIp iputil.VpnIp, to *Ip4AndPort) {
@@ -314,6 +342,19 @@ func (r *RemoteList) unlockedPrependV6(ownerVpnIp iputil.VpnIp, to *Ip6AndPort) 
 	}
 }
 
+func (r *RemoteList) unlockedGetOrMakeRelay(ownerVpnIp iputil.VpnIp) *cacheRelay {
+	am := r.cache[ownerVpnIp]
+	if am == nil {
+		am = &cache{}
+		r.cache[ownerVpnIp] = am
+	}
+	// Avoid occupying memory for relay if we never have any
+	if am.relay == nil {
+		am.relay = &cacheRelay{}
+	}
+	return am.relay
+}
+
 // unlockedGetOrMakeV4 assumes you have the write lock and builds the cache and owner entry. Only the v4 pointer is established.
 // The caller must dirty the learned address cache if required
 func (r *RemoteList) unlockedGetOrMakeV4(ownerVpnIp iputil.VpnIp) *cacheV4 {
@@ -348,6 +389,7 @@ func (r *RemoteList) unlockedGetOrMakeV6(ownerVpnIp iputil.VpnIp) *cacheV6 {
 // The result of this function can contain duplicates. unlockedSort handles cleaning it.
 func (r *RemoteList) unlockedCollect() {
 	addrs := r.addrs[:0]
+	relays := r.relays[:0]
 
 	for _, c := range r.cache {
 		if c.v4 != nil {
@@ -381,9 +423,18 @@ func (r *RemoteList) unlockedCollect() {
 				}
 			}
 		}
+
+		if c.relay != nil {
+			for _, v := range c.relay.relay {
+				ip := iputil.VpnIp(v)
+				relays = append(relays, &ip)
+			}
+		}
 	}
 
 	r.addrs = addrs
+	r.relays = relays
+
 }
 
 // unlockedSort assumes you have the write lock and performs the deduping and sorting of the address list

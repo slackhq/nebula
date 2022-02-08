@@ -59,6 +59,9 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		remoteIndexId: 200,
 		localIndexId:  201,
 		vpnIp:         iputil.Ip2VpnIp(ipNet.IP),
+		relays:        map[uint32]iputil.VpnIp{},
+		relayForByIp:  map[iputil.VpnIp]*Relay{},
+		relayForByIdx: map[uint32]*Relay{},
 	})
 
 	hm.Add(iputil.Ip2VpnIp(ipNet2.IP), &HostInfo{
@@ -70,6 +73,9 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		remoteIndexId: 200,
 		localIndexId:  201,
 		vpnIp:         iputil.Ip2VpnIp(ipNet2.IP),
+		relays:        map[uint32]iputil.VpnIp{},
+		relayForByIp:  map[iputil.VpnIp]*Relay{},
+		relayForByIdx: map[uint32]*Relay{},
 	})
 
 	c := Control{

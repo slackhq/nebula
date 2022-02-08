@@ -13,6 +13,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
@@ -70,6 +71,12 @@ type LightHouse struct {
 
 	atomicAdvertiseAddrs []netIpAndPort
 
+	// Look up a Relay VPN IP based on a target VPN IP
+	relays *cidr.Tree4
+
+	// CIDRs for which I am a relay
+	relayFor []net.IPNet
+
 	metrics           *MessageMetrics
 	metricHolepunchTx metrics.Counter
 	l                 *logrus.Logger
@@ -105,6 +112,7 @@ func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet *net.IPNet,
 		atomicStaticList:  make(map[iputil.VpnIp]struct{}),
 		punchConn:         pc,
 		punchy:            p,
+		relays:            cidr.NewTree4(),
 		l:                 l,
 	}
 
@@ -115,6 +123,17 @@ func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet *net.IPNet,
 		h.metricHolepunchTx = metrics.NilCounter{}
 	}
 
+	l.Info("BRAD: Look for relay config...")
+	for _, v := range c.GetStringSlice("relay", nil) {
+		l.WithField("CIDR", v).Info("BRAD: Read relay from config. Woot!")
+		_, net, err := net.ParseCIDR(v)
+		if err != nil {
+			l.WithError(err).Infof("BRAD: Relay CIDR failed to parse (%v)", v)
+			continue
+		}
+		l.Infof("BRAD: AddRelay(%v, %v)", net, iputil.Ip2VpnIp(myVpnNet.IP))
+		h.AddRelay(net, iputil.Ip2VpnIp(myVpnNet.IP))
+	}
 	err := h.reload(c, true)
 	if err != nil {
 		return nil, err
@@ -333,6 +352,7 @@ func (lh *LightHouse) loadStaticMap(c *config.C, tunCidr *net.IPNet, staticList 
 
 func (lh *LightHouse) Query(ip iputil.VpnIp, f udp.EncWriter) *RemoteList {
 	if !lh.IsLighthouseIP(ip) {
+		lh.l.Infof("BRAD: LightHouse Query(%v)", ip)
 		lh.QueryServer(ip, f)
 	}
 	lh.RLock()
@@ -427,7 +447,17 @@ func (lh *LightHouse) DeleteVpnIp(vpnIp iputil.VpnIp) {
 	lh.Unlock()
 }
 
-// addStaticRemote adds a static host entry for vpnIp as ourselves as the owner
+func (lh *LightHouse) AddRelay(vpnCidr *net.IPNet, vpnIp iputil.VpnIp) {
+	lh.Lock()
+	lh.l.Infof("BRAD: LightHouse.AddRelay(%v, %v", vpnCidr, vpnIp)
+	// Include in the lookup trie the target vpnIP, for responding to queries
+	lh.relays.AddCIDR(vpnCidr, vpnIp)
+	// Include the Relay info for my HostUpdate notifications to my lighthouse
+	lh.relayFor = append(lh.relayFor, *vpnCidr)
+	lh.Unlock()
+}
+
+// AddStaticRemote adds a static host entry for vpnIp as ourselves as the owner
 // We are the owner because we don't want a lighthouse server to advertise for static hosts it was configured with
 // And we don't want a lighthouse query reply to interfere with our learned cache if we are a client
 //NOTE: this function should not interact with any hot path objects, like lh.staticList, the caller should handle it
@@ -533,6 +563,20 @@ func NewIp6AndPort(ip net.IP, port uint32) *Ip6AndPort {
 	}
 }
 
+func NewIp4CIDR(cidr *net.IPNet) *Ip4CIDR {
+	mask, _ := cidr.Mask.Size()
+	ipp := Ip4CIDR{Mask: uint32(mask)}
+	ipp.Ip = uint32(iputil.Ip2VpnIp(cidr.IP))
+	return &ipp
+}
+
+func (c *Ip4CIDR) BuildIpNet() *net.IPNet {
+	return &net.IPNet{
+		IP:   iputil.VpnIp(c.Ip).ToIP(),
+		Mask: net.CIDRMask(int(c.Mask), 32),
+	}
+}
+
 func NewUDPAddrFromLH4(ipp *Ip4AndPort) *udp.Addr {
 	ip := ipp.Ip
 	return udp.NewAddr(
@@ -597,12 +641,18 @@ func (lh *LightHouse) SendUpdate(f udp.EncWriter) {
 		}
 	}
 
+	var relayCIDRs []*Ip4CIDR
+	for _, r := range lh.relayFor {
+		relayCIDRs = append(relayCIDRs, NewIp4CIDR(&r))
+	}
+
 	m := &NebulaMeta{
 		Type: NebulaMeta_HostUpdateNotification,
 		Details: &NebulaMetaDetails{
 			VpnIp:       uint32(lh.myVpnIp),
 			Ip4AndPorts: v4,
 			Ip6AndPorts: v6,
+			Ip4CIDR:     relayCIDRs,
 		},
 	}
 
@@ -664,6 +714,8 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	// Keep the array memory around
 	details.Ip4AndPorts = details.Ip4AndPorts[:0]
 	details.Ip6AndPorts = details.Ip6AndPorts[:0]
+	details.Ip4CIDR = details.Ip4CIDR[:0]
+	details.RelayVpnIp = details.RelayVpnIp[:0]
 	lhh.meta.Details = details
 
 	return lhh.meta
@@ -723,10 +775,19 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp,
 
 		lhh.coalesceAnswers(c, n)
 
+		// Look up Relays
+		lhh.l.Infof("BRAD: Look up IP '%v' in relays...", iputil.VpnIp(reqVpnIp).ToIP())
+		res := lhh.lh.relays.Contains(iputil.VpnIp(reqVpnIp))
+		lhh.l.Infof("BRAD: Look up IP '%v' in relays...got %v", iputil.VpnIp(reqVpnIp).ToIP(), res)
+		if res != nil {
+			n.Details.RelayVpnIp = append(n.Details.RelayVpnIp, uint32(res.(iputil.VpnIp)))
+		}
+		lhh.l.Infof("BRAD: MarshalTo %v", n)
 		return n.MarshalTo(lhh.pb)
 	})
 
 	if !found {
+		lhh.l.Infof("BRAD: handleHostQuery !found")
 		return
 	}
 
@@ -745,6 +806,13 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp,
 		n.Details.VpnIp = uint32(vpnIp)
 
 		lhh.coalesceAnswers(c, n)
+
+		// Look up Relays
+		res := lhh.lh.relays.Contains(iputil.VpnIp(reqVpnIp))
+		if res != nil {
+			n.Details.RelayVpnIp = append(n.Details.RelayVpnIp, uint32(res.(iputil.VpnIp)))
+		}
+		lhh.l.Infof("BRAD: 2 MarshalTo %v", n)
 
 		return n.MarshalTo(lhh.pb)
 	})
@@ -786,6 +854,7 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp iputil.V
 	if !lhh.lh.IsLighthouseIP(vpnIp) {
 		return
 	}
+	lhh.l.Infof("BRAD: HostQueryReply %v", n)
 
 	lhh.lh.Lock()
 	am := lhh.lh.unlockedGetRemoteList(iputil.VpnIp(n.Details.VpnIp))
@@ -795,6 +864,8 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp iputil.V
 	certVpnIp := iputil.VpnIp(n.Details.VpnIp)
 	am.unlockedSetV4(vpnIp, certVpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(vpnIp, certVpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
+	am.unlockedSetRelay(vpnIp, certVpnIp, n.Details.RelayVpnIp)
+	lhh.l.Infof("BRAD: handleHostQueryReply am=%v", len(am.relays))
 	am.Unlock()
 
 	// Non-blocking attempt to trigger, skip if it would block
@@ -822,12 +893,18 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 
 	lhh.lh.Lock()
 	am := lhh.lh.unlockedGetRemoteList(vpnIp)
+	for _, r := range n.Details.Ip4CIDR {
+		lhh.l.Infof("BRAD: AddCIDR VpnIP %v for CIDR %v", vpnIp, r.BuildIpNet())
+		lhh.lh.relays.AddCIDR(r.BuildIpNet(), vpnIp)
+	}
 	am.Lock()
 	lhh.lh.Unlock()
 
 	certVpnIp := iputil.VpnIp(n.Details.VpnIp)
 	am.unlockedSetV4(vpnIp, certVpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(vpnIp, certVpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
+	lhh.l.Infof("BRAD: HostUpdateNotification includes vpnIP %v relay for %v", certVpnIp, n.Details.RelayVpnIp)
+	am.unlockedSetRelay(vpnIp, certVpnIp, n.Details.RelayVpnIp)
 	am.Unlock()
 }
 

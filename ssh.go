@@ -519,7 +519,6 @@ func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 			0,
 			hostInfo.ConnectionState,
 			hostInfo,
-			hostInfo.remote,
 			[]byte{},
 			make([]byte, 12, 12),
 			make([]byte, mtu),

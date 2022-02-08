@@ -21,7 +21,7 @@ const (
 	minFwPacketLen = 4
 )
 
-func (f *Interface) readOutsidePackets(addr *udp.Addr, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf udp.LightHouseHandlerFunc, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf udp.LightHouseHandlerFunc, nb []byte, q int, localCache firewall.ConntrackCache) {
 	err := h.Parse(packet)
 	if err != nil {
 		// TODO: best if we return this and let caller log
@@ -32,25 +32,98 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, out []byte, packet []byte
 		}
 		return
 	}
+	f.l.Errorf("BRAD: len(packet)=%v h=%v addr=%v", len(packet), h, addr)
 
 	//l.Error("in packet ", header, packet[HeaderLen:])
 
+	var hostinfo *HostInfo
 	// verify if we've seen this index before, otherwise respond to the handshake initiation
-	hostinfo, err := f.hostMap.QueryIndex(h.RemoteIndex)
+	if h.Type == header.Message && h.Subtype == header.MessageRelay {
+		hostinfo, _ = f.hostMap.QueryRelayIndex(h.RemoteIndex)
+	} else {
+		hostinfo, _ = f.hostMap.QueryIndex(h.RemoteIndex)
+	}
 
 	var ci *ConnectionState
-	if err == nil {
+	if hostinfo != nil {
 		ci = hostinfo.ConnectionState
 	}
 
 	switch h.Type {
 	case header.Message:
+		// TODO handleEncrypted sends directly to addr on error. Handle this in the tunneling case.
 		if !f.handleEncrypted(ci, addr, h) {
 			return
 		}
 
-		f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache)
+		switch h.Subtype {
+		case header.MessageNone:
+			f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache)
+		case header.MessageRelay:
+			// The entire body is sent as AD, not encrypted.
+			// The packet is my parsed Nebula header, AEAD-protected payload, and a trailing 16-byte AEAD signature value.
+			signedPayload := packet[:len(packet)-16]
+			hostinfo.logger(f.l).WithError(err).Infof("BRAD: DecryptDanger See if I can read a tunneled message using HostInfo %v, len(packet)=%v, sans Signature len=%v...", hostinfo.vpnIp.String(), len(packet), len(packet)-16)
+			out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, signedPayload, packet[len(packet)-16:], h.MessageCounter, nb)
+			if err != nil {
+				hostinfo.logger(f.l).WithError(err).Info("BRAD: DecryptDanger FAIL")
+				return
+			}
+			// Successfully validated the thing. Get rid of the Relay header.
+			signedPayload = signedPayload[header.Len:]
+			hostinfo.logger(f.l).WithError(err).Infof("BRAD: DecryptDanger Worked! len(signedPayload)=%v...", len(signedPayload[header.Len:]))
+			// Pull the Roaming parts up here, and return.
+			f.handleHostRoaming(hostinfo, addr)
+			f.connectionManager.In(hostinfo.vpnIp)
 
+			relay, ok := hostinfo.relayForByIdx[h.RemoteIndex]
+			if !ok {
+				hostinfo.logger(f.l).Infof("BRAD: Failed to find a relay with index %v", h.RemoteIndex)
+				return
+			}
+			hostinfo.logger(f.l).Infof("BRAD: Got relay %v with index %v", *relay, h.RemoteIndex)
+
+			switch relay.Type {
+			case TerminalType:
+				// If I am the target of this relay, process the unwrapped packet
+				// From this recursive point, all these variables are 'burned'. We shouldn't rely on them again.
+				hostinfo.logger(f.l).Infof("BRAD: Relay for %v type is Terminal, process this packet", relay.PeerIp.String())
+				f.readOutsidePackets(nil, &ViaSender{relayHI: hostinfo, remoteIdx: relay.RemoteIndex}, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
+				return
+			case RelayType:
+				// Find the target HostInfo relay object
+				targetHI, err := f.hostMap.QueryVpnIp(relay.PeerIp)
+				if err != nil {
+					hostinfo.logger(f.l).WithError(err).Infof("BRAD: Failed to find target host info by ip %v", relay.PeerIp)
+					return
+				}
+				// find the target Relay info object
+				targetRelay, ok := targetHI.relayForByIp[hostinfo.vpnIp]
+				if !ok {
+					hostinfo.logger(f.l).Infof("BRAD: Faild to find relay for %v in hostinfo %v", relay.PeerIp.String(), hostinfo.vpnIp.String())
+					return
+				}
+
+				// If that relay is Established, forward the payload through it
+				if targetRelay.State == Established {
+					hostinfo.logger(f.l).Infof("BRAD: Relay state is ESTABLISHED")
+					switch targetRelay.Type {
+					case RelayType:
+						// Forward this packet through the relay tunnel
+						hostinfo.logger(f.l).Infof("BRAD: Relay type is RELAY, forward this packet along to %v (not done yet)", relay.PeerIp.String())
+						// Find the target HostInfo
+
+						hostinfo.logger(f.l).Infof("BRAD: Relay this packet through host %v", targetHI.vpnIp.String())
+						f.SendVia(targetHI, targetRelay.RemoteIndex, signedPayload, nb, out)
+					case TerminalType:
+						hostinfo.logger(f.l).Infof("BRAD: Relay Type is Terminal...What is going on?")
+					}
+				} else {
+					hostinfo.logger(f.l).Infof("BRAD: Relay State is NOT Established. What is going on?")
+					return
+				}
+			}
+		}
 		// Fallthrough to the bottom to record incoming traffic
 
 	case header.LightHouse:
@@ -95,7 +168,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, out []byte, packet []byte
 			// This testRequest might be from TryPromoteBest, so we should roam
 			// to the new IP address before responding
 			f.handleHostRoaming(hostinfo, addr)
-			f.send(header.Test, header.TestReply, ci, hostinfo, hostinfo.remote, d, nb, out)
+			f.send(header.Test, header.TestReply, ci, hostinfo, d, nb, out)
 		}
 
 		// Fallthrough to the bottom to record incoming traffic
@@ -105,7 +178,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, out []byte, packet []byte
 
 	case header.Handshake:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		HandleIncomingHandshake(f, addr, packet, h, hostinfo)
+		HandleIncomingHandshake(f, addr, via, packet, h, hostinfo)
 		return
 
 	case header.RecvError:
@@ -124,6 +197,32 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, out []byte, packet []byte
 
 		f.closeTunnel(hostinfo, false)
 		return
+
+	case header.Control:
+		if !f.handleEncrypted(ci, addr, h) {
+			hostinfo.logger(f.l).WithField("udpAddr", addr).
+				Info("BRAD: got a header.Control message that failed handleEncrypted()")
+			return
+		}
+
+		hostinfo.logger(f.l).WithField("udpAddr", addr).
+			Info("BRAD: got a header.Control message")
+
+		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
+		if err != nil {
+			hostinfo.logger(f.l).WithError(err).WithField("udpAddr", addr).
+				WithField("packet", packet).
+				Error("Failed to decrypt Control packet")
+			return
+		}
+		m := &NebulaControl{}
+		err = m.Unmarshal(d)
+		if err != nil {
+			hostinfo.logger(f.l).WithError(err).Info("BRAD: Faild to unmarshal the thing")
+		}
+
+		hostinfo.logger(f.l).Infof("BRAD: Control Message %v", m)
+		f.relayManager.HandleControlMsg(hostinfo, m, f)
 
 	default:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
@@ -152,7 +251,7 @@ func (f *Interface) closeTunnel(hostInfo *HostInfo, hasHostMapLock bool) {
 
 // sendCloseTunnel is a helper function to send a proper close tunnel packet to a remote
 func (f *Interface) sendCloseTunnel(h *HostInfo) {
-	f.send(header.CloseTunnel, 0, h.ConnectionState, h, h.remote, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+	f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 }
 
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udp.Addr) {
@@ -183,8 +282,14 @@ func (f *Interface) handleEncrypted(ci *ConnectionState, addr *udp.Addr, h *head
 	// If connectionstate exists and the replay protector allows, process packet
 	// Else, send recv errors for 300 seconds after a restart to allow fast reconnection.
 	if ci == nil || !ci.window.Check(f.l, h.MessageCounter) {
-		f.sendRecvError(addr, h.RemoteIndex)
-		return false
+		f.l.WithField("ci", ci).WithField("h", h.MessageCounter).Info("BRAD: handleEncrypted failed.")
+		if addr != nil {
+			f.sendRecvError(addr, h.RemoteIndex)
+			return false
+		} else {
+			f.l.Info("BRAD: handleEncrypted failed and addr is nil. Can't sendRecvError.")
+			return false
+		}
 	}
 
 	return true

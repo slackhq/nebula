@@ -372,6 +372,9 @@ type testEncWriter struct {
 	metaFilter *NebulaMeta_MessageType
 }
 
+func (tw *testEncWriter) SendVia(via interface{}, remoteIdx uint32, ad, nb, out []byte) {
+}
+
 func (tw *testEncWriter) SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, _, _ []byte) {
 	msg := &NebulaMeta{}
 	err := msg.Unmarshal(p)
