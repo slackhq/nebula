@@ -243,7 +243,7 @@ func TestLighthouse_reload(t *testing.T) {
 	assert.NoError(t, err)
 
 	c.Settings["static_host_map"] = map[interface{}]interface{}{"10.128.0.2": []interface{}{"1.1.1.1:4242"}}
-	lh.reload(c)
+	lh.reload(c, false)
 }
 
 func newLHHostRequest(fromAddr *udp.Addr, myVpnIp, queryVpnIp iputil.VpnIp, lhh *LightHouseHandler) testLhReply {
