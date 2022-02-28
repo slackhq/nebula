@@ -200,7 +200,7 @@ func (lh *LightHouse) parseLighthouses(c *config.C, tunCidr *net.IPNet, lhMap ma
 	}
 
 	if !lh.amLighthouse && len(lhMap) == 0 {
-		lh.l.Warn("No lighthouses.hosts configured, this host will only be able to initiate tunnels with static_host_map entries")
+		lh.l.Warn("No lighthouse.hosts configured, this host will only be able to initiate tunnels with static_host_map entries")
 	}
 
 	for lhIP, _ := range lhMap {
