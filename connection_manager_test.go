@@ -35,7 +35,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 		rawCertificateNoKey: []byte{},
 	}
 
-	lh := &LightHouse{l: l}
+	lh := &LightHouse{l: l, atomicStaticList: make(map[iputil.VpnIp]struct{}), atomicLighthouses: make(map[iputil.VpnIp]struct{})}
 	ifce := &Interface{
 		hostMap:          hostMap,
 		inside:           &test.NoopTun{},
@@ -104,7 +104,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 		rawCertificateNoKey: []byte{},
 	}
 
-	lh := &LightHouse{l: l}
+	lh := &LightHouse{l: l, atomicStaticList: make(map[iputil.VpnIp]struct{}), atomicLighthouses: make(map[iputil.VpnIp]struct{})}
 	ifce := &Interface{
 		hostMap:          hostMap,
 		inside:           &test.NoopTun{},
@@ -213,7 +213,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 		rawCertificateNoKey: []byte{},
 	}
 
-	lh := &LightHouse{l: l}
+	lh := &LightHouse{l: l, atomicStaticList: make(map[iputil.VpnIp]struct{}), atomicLighthouses: make(map[iputil.VpnIp]struct{})}
 	ifce := &Interface{
 		hostMap:           hostMap,
 		inside:            &test.NoopTun{},
