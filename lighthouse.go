@@ -26,6 +26,11 @@ import (
 
 var ErrHostNotKnown = errors.New("host not known")
 
+type netIpAndPort struct {
+	ip   net.IP
+	port uint16
+}
+
 type LightHouse struct {
 	//TODO: We need a timer wheel to kick out vpnIps that haven't reported in a long time
 	sync.RWMutex //Because we concurrently read and write to our maps
@@ -64,6 +69,8 @@ type LightHouse struct {
 	updateUdp       udp.EncWriter
 	nebulaPort      uint32 // 32 bits because protobuf does not have a uint16
 
+	atomicAdvertiseAddrs []netIpAndPort
+
 	metrics           *MessageMetrics
 	metricHolepunchTx metrics.Counter
 	l                 *logrus.Logger
@@ -71,7 +78,7 @@ type LightHouse struct {
 
 // NewLightHouseFromConfig will build a Lighthouse struct from the values provided in the config object
 // addrMap should be nil unless this is during a config reload
-func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet *net.IPNet, pc *udp.Conn, p *Punchy) (*LightHouse, error) {
+func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet *net.IPNet, pc *udp.Conn, p *Punchy, realPort int) (*LightHouse, error) {
 	amLighthouse := c.GetBool("lighthouse.am_lighthouse", false)
 	nebulaPort := uint32(c.GetInt("listen.port", 0))
 	if amLighthouse && nebulaPort == 0 {
@@ -94,7 +101,7 @@ func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet *net.IPNet,
 		myVpnZeros:        iputil.VpnIp(32 - ones),
 		myVpnNet:          myVpnNet,
 		addrMap:           make(map[iputil.VpnIp]*RemoteList),
-		nebulaPort:        nebulaPort,
+		nebulaPort:        uint32(realPort),
 		atomicLighthouses: make(map[iputil.VpnIp]struct{}),
 		atomicStaticList:  make(map[iputil.VpnIp]struct{}),
 		punchConn:         pc,
@@ -143,11 +150,45 @@ func (lh *LightHouse) GetLocalAllowList() *LocalAllowList {
 	return (*LocalAllowList)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicLocalAllowList))))
 }
 
+func (lh *LightHouse) GetAdvertiseAddrs() []netIpAndPort {
+	return *(*[]netIpAndPort)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicAdvertiseAddrs))))
+}
+
 func (lh *LightHouse) GetUpdateInterval() int64 {
 	return atomic.LoadInt64(&lh.atomicInterval)
 }
 
 func (lh *LightHouse) reload(c *config.C, initial bool) error {
+	if initial || c.HasChanged("lighthouse.advertise_addrs") {
+		rawAdvAddrs := c.GetStringSlice("lighthouse.advertise_addrs", []string{})
+		advAddrs := make([]netIpAndPort, 0)
+
+		for i, rawAddr := range rawAdvAddrs {
+			fIp, fPort, err := udp.ParseIPAndPort(rawAddr)
+			if err != nil {
+				return util.NewContextualError("Unable to parse lighthouse.advertise_addrs entry", m{"addr": rawAddr, "entry": i + 1}, err)
+			}
+
+			if fPort == 0 {
+				fPort = uint16(lh.nebulaPort)
+			}
+
+			if ip4 := fIp.To4(); ip4 != nil && lh.myVpnNet.Contains(fIp) {
+				lh.l.WithField("addr", rawAddr).WithField("entry", i+1).
+					Warn("Ignoring lighthouse.advertise_addrs report because it is within the nebula network range")
+				continue
+			}
+
+			advAddrs = append(advAddrs, netIpAndPort{ip: fIp, port: fPort})
+		}
+
+		atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicAdvertiseAddrs)), unsafe.Pointer(&advAddrs))
+
+		if !initial {
+			lh.l.Info("lighthouse.advertise_addrs has changed")
+		}
+	}
+
 	if initial || c.HasChanged("lighthouse.interval") {
 		atomic.StoreInt64(&lh.atomicInterval, int64(c.GetInt("lighthouse.interval", 10)))
 
@@ -535,6 +576,14 @@ func (lh *LightHouse) SendUpdate(f udp.EncWriter) {
 	var v4 []*Ip4AndPort
 	var v6 []*Ip6AndPort
 
+	for _, e := range lh.GetAdvertiseAddrs() {
+		if ip := e.ip.To4(); ip != nil {
+			v4 = append(v4, NewIp4AndPort(e.ip, uint32(e.port)))
+		} else {
+			v6 = append(v6, NewIp6AndPort(e.ip, uint32(e.port)))
+		}
+	}
+
 	lal := lh.GetLocalAllowList()
 	for _, e := range *localIps(lh.l, lal) {
 		if ip4 := e.To4(); ip4 != nil && ipMaskContains(lh.myVpnIp, lh.myVpnZeros, iputil.Ip2VpnIp(ip4)) {
@@ -548,6 +597,7 @@ func (lh *LightHouse) SendUpdate(f udp.EncWriter) {
 			v6 = append(v6, NewIp6AndPort(e, lh.nebulaPort))
 		}
 	}
+
 	m := &NebulaMeta{
 		Type: NebulaMeta_HostUpdateNotification,
 		Details: &NebulaMetaDetails{

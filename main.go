@@ -215,7 +215,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		go hostMap.Punchy(ctx, udpConns[0])
 	}
 
-	lightHouse, err := NewLightHouseFromConfig(l, c, tunCidr, udpConns[0], punchy)
+	lightHouse, err := NewLightHouseFromConfig(l, c, tunCidr, udpConns[0], punchy, port)
 	switch {
 	case errors.As(err, &util.ContextualError{}):
 		return nil, err
