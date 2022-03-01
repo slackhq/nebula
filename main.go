@@ -3,6 +3,7 @@ package nebula
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -224,13 +225,11 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 
 	lightHouse, err := NewLightHouseFromConfig(l, c, tunCidr, udpConns[0], punchy)
-	if err != nil {
-		switch err.(type) {
-		case util.ContextualError:
-			return nil, err
-		case error:
-			return nil, util.NewContextualError("Failed to initialize lighthouse handler", nil, err)
-		}
+	switch {
+	case errors.As(err, &util.ContextualError{}):
+		return nil, err
+	case err != nil:
+		return nil, util.NewContextualError("Failed to initialize lighthouse handler", nil, err)
 	}
 
 	var messageMetrics *MessageMetrics
