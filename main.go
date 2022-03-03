@@ -219,7 +219,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	*/
 
 	punchy := NewPunchyFromConfig(l, c)
-	if punchy.Punch && !configTest {
+	if punchy.GetPunch() && !configTest {
 		l.Info("UDP hole punching enabled")
 		go hostMap.Punchy(ctx, udpConns[0])
 	}

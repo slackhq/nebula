@@ -764,7 +764,7 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp i
 		}
 
 		go func() {
-			time.Sleep(lhh.lh.punchy.Delay)
+			time.Sleep(lhh.lh.punchy.GetDelay())
 			lhh.lh.metricHolepunchTx.Inc(1)
 			lhh.lh.punchConn.WriteTo(empty, vpnPeer)
 		}()
@@ -786,7 +786,7 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp i
 	// This sends a nebula test packet to the host trying to contact us. In the case
 	// of a double nat or other difficult scenario, this may help establish
 	// a tunnel.
-	if lhh.lh.punchy.Respond {
+	if lhh.lh.punchy.GetRespond() {
 		queryVpnIp := iputil.VpnIp(n.Details.VpnIp)
 		go func() {
 			time.Sleep(time.Second * 5)

@@ -149,6 +149,24 @@ func (c *C) ReloadConfig() {
 	}
 }
 
+func (c *C) ReloadConfigString(raw string) error {
+	c.oldSettings = make(map[interface{}]interface{})
+	for k, v := range c.Settings {
+		c.oldSettings[k] = v
+	}
+
+	err := c.LoadString(raw)
+	if err != nil {
+		return err
+	}
+
+	for _, v := range c.callbacks {
+		v(c)
+	}
+
+	return nil
+}
+
 // GetString will get the string for k or return the default d if not found or invalid
 func (c *C) GetString(k, d string) string {
 	r := c.Get(k)
