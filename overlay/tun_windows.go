@@ -19,10 +19,6 @@ func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int
 }
 
 func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route, _ int, _ bool) (Device, error) {
-	if len(routes) > 0 {
-		return nil, fmt.Errorf("route MTU not supported in Windows")
-	}
-
 	useWintun := true
 	if err := checkWinTunExists(); err != nil {
 		l.WithError(err).Warn("Check Wintun driver failed, fallback to wintap driver")
