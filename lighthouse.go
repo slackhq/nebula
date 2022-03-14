@@ -57,8 +57,12 @@ type LightHouse struct {
 	// since static should be rare
 	atomicStaticList  map[iputil.VpnIp]struct{}
 	atomicLighthouses map[iputil.VpnIp]struct{}
-	interval          int64
-	nebulaPort        uint32 // 32 bits because protobuf does not have a uint16
+
+	atomicInterval  int64
+	updateCancel    context.CancelFunc
+	updateParentCtx context.Context
+	updateUdp       udp.EncWriter
+	nebulaPort      uint32 // 32 bits because protobuf does not have a uint16
 
 	metrics           *MessageMetrics
 	metricHolepunchTx metrics.Counter
@@ -130,12 +134,21 @@ func (lh *LightHouse) GetLocalAllowList() *LocalAllowList {
 	return (*LocalAllowList)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicLocalAllowList))))
 }
 
+func (lh *LightHouse) GetUpdateInterval() int64 {
+	return atomic.LoadInt64(&lh.atomicInterval)
+}
+
 func (lh *LightHouse) reload(c *config.C, initial bool) error {
 	if initial || c.HasChanged("lighthouse.interval") {
-		atomic.StoreInt64(&lh.interval, int64(c.GetInt("lighthouse.interval", 10)))
+		atomic.StoreInt64(&lh.atomicInterval, int64(c.GetInt("lighthouse.interval", 10)))
+
 		if !initial {
-			//TODO: we should cancel the context and kick it back off again, that requires proxying the outer context though
-			lh.l.Infof("lighthouse.interval changed to %v", lh.interval)
+			lh.l.Infof("lighthouse.interval changed to %v", lh.atomicInterval)
+
+			if lh.updateCancel != nil {
+				lh.updateCancel()
+				lh.LhUpdateWorker(lh.updateParentCtx, lh.updateUdp)
+			}
 		}
 	}
 
@@ -482,18 +495,23 @@ func NewUDPAddrFromLH6(ipp *Ip6AndPort) *udp.Addr {
 }
 
 func (lh *LightHouse) LhUpdateWorker(ctx context.Context, f udp.EncWriter) {
-	if lh.amLighthouse || lh.interval == 0 {
+	interval := lh.GetUpdateInterval()
+	if lh.amLighthouse || interval == 0 {
 		return
 	}
 
-	clockSource := time.NewTicker(time.Second * time.Duration(lh.interval))
+	clockSource := time.NewTicker(time.Second * time.Duration(interval))
+	updateCtx, cancel := context.WithCancel(ctx)
+	lh.updateCancel = cancel
+	lh.updateParentCtx = ctx
+	lh.updateUdp = f
 	defer clockSource.Stop()
 
 	for {
 		lh.SendUpdate(f)
 
 		select {
-		case <-ctx.Done():
+		case <-updateCtx.Done():
 			return
 		case <-clockSource.C:
 			continue
