@@ -114,7 +114,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, packet []byte, h *header.H)
 		return
 	}
 
-	if !f.lightHouse.remoteAllowList.Allow(vpnIp, addr.IP) {
+	if !f.lightHouse.GetRemoteAllowList().Allow(vpnIp, addr.IP) {
 		f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
 		return
 	}
@@ -321,7 +321,7 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, hostinfo *HostInfo, packet 
 	hostinfo.Lock()
 	defer hostinfo.Unlock()
 
-	if !f.lightHouse.remoteAllowList.Allow(hostinfo.vpnIp, addr.IP) {
+	if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnIp, addr.IP) {
 		f.l.WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
 		return false
 	}

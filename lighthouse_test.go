@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/test"
@@ -47,33 +48,32 @@ func TestNewLhQuery(t *testing.T) {
 
 func Test_lhStaticMapping(t *testing.T) {
 	l := test.NewLogger()
+	_, myVpnNet, _ := net.ParseCIDR("10.128.0.1/16")
 	lh1 := "10.128.0.2"
-	lh1IP := net.ParseIP(lh1)
 
-	udpServer, _ := udp.NewListener(l, "0.0.0.0", 0, true, 2)
-
-	meh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{255, 255, 255, 255}}, []iputil.VpnIp{iputil.Ip2VpnIp(lh1IP)}, 10, 10003, udpServer, false, 1, false)
-	meh.AddStaticRemote(iputil.Ip2VpnIp(lh1IP), udp.NewAddr(lh1IP, uint16(4242)))
-	err := meh.ValidateLHStaticEntries()
+	c := config.NewC(l)
+	c.Settings["lighthouse"] = map[interface{}]interface{}{"hosts": []interface{}{lh1}}
+	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"1.1.1.1:4242"}}
+	_, err := NewLightHouseFromConfig(l, c, myVpnNet, nil, nil)
 	assert.Nil(t, err)
 
 	lh2 := "10.128.0.3"
-	lh2IP := net.ParseIP(lh2)
-
-	meh = NewLightHouse(l, true, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{255, 255, 255, 255}}, []iputil.VpnIp{iputil.Ip2VpnIp(lh1IP), iputil.Ip2VpnIp(lh2IP)}, 10, 10003, udpServer, false, 1, false)
-	meh.AddStaticRemote(iputil.Ip2VpnIp(lh1IP), udp.NewAddr(lh1IP, uint16(4242)))
-	err = meh.ValidateLHStaticEntries()
-	assert.EqualError(t, err, "Lighthouse 10.128.0.3 does not have a static_host_map entry")
+	c = config.NewC(l)
+	c.Settings["lighthouse"] = map[interface{}]interface{}{"hosts": []interface{}{lh1, lh2}}
+	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"100.1.1.1:4242"}}
+	_, err = NewLightHouseFromConfig(l, c, myVpnNet, nil, nil)
+	assert.EqualError(t, err, "lighthouse 10.128.0.3 does not have a static_host_map entry")
 }
 
 func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	l := test.NewLogger()
-	lh1 := "10.128.0.2"
-	lh1IP := net.ParseIP(lh1)
+	_, myVpnNet, _ := net.ParseCIDR("10.128.0.1/0")
 
-	udpServer, _ := udp.NewListener(l, "0.0.0.0", 0, true, 2)
-
-	lh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{0, 0, 0, 0}}, []iputil.VpnIp{iputil.Ip2VpnIp(lh1IP)}, 10, 10003, udpServer, false, 1, false)
+	c := config.NewC(l)
+	lh, err := NewLightHouseFromConfig(l, c, myVpnNet, nil, nil)
+	if !assert.NoError(b, err) {
+		b.Fatal()
+	}
 
 	hAddr := udp.NewAddrFromString("4.5.6.7:12345")
 	hAddr2 := udp.NewAddrFromString("4.5.6.7:12346")
@@ -160,8 +160,11 @@ func TestLighthouse_Memory(t *testing.T) {
 	theirUdpAddr4 := &udp.Addr{IP: net.ParseIP("24.15.0.3"), Port: 4242}
 	theirVpnIp := iputil.Ip2VpnIp(net.ParseIP("10.128.0.3"))
 
-	udpServer, _ := udp.NewListener(l, "0.0.0.0", 0, true, 2)
-	lh := NewLightHouse(l, true, &net.IPNet{IP: net.IP{10, 128, 0, 1}, Mask: net.IPMask{255, 255, 255, 0}}, []iputil.VpnIp{}, 10, 10003, udpServer, false, 1, false)
+	c := config.NewC(l)
+	c.Settings["lighthouse"] = map[interface{}]interface{}{"am_lighthouse": true}
+	c.Settings["listen"] = map[interface{}]interface{}{"port": 4242}
+	lh, err := NewLightHouseFromConfig(l, c, &net.IPNet{IP: net.IP{10, 128, 0, 1}, Mask: net.IPMask{255, 255, 255, 0}}, nil, nil)
+	assert.NoError(t, err)
 	lhh := lh.NewRequestHandler()
 
 	// Test that my first update responds with just that
@@ -179,9 +182,16 @@ func TestLighthouse_Memory(t *testing.T) {
 	r = newLHHostRequest(myUdpAddr0, myVpnIp, myVpnIp, lhh)
 	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, myUdpAddr1, myUdpAddr4)
 
-	// Update a different host
+	// Update a different host and ask about it
 	newLHHostUpdate(theirUdpAddr0, theirVpnIp, []*udp.Addr{theirUdpAddr1, theirUdpAddr2, theirUdpAddr3, theirUdpAddr4}, lhh)
+	r = newLHHostRequest(theirUdpAddr0, theirVpnIp, theirVpnIp, lhh)
+	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, theirUdpAddr1, theirUdpAddr2, theirUdpAddr3, theirUdpAddr4)
+
+	// Have both hosts ask about the other
 	r = newLHHostRequest(theirUdpAddr0, theirVpnIp, myVpnIp, lhh)
+	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, myUdpAddr1, myUdpAddr4)
+
+	r = newLHHostRequest(myUdpAddr0, myVpnIp, theirVpnIp, lhh)
 	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, theirUdpAddr1, theirUdpAddr2, theirUdpAddr3, theirUdpAddr4)
 
 	// Make sure we didn't get changed
@@ -224,6 +234,18 @@ func TestLighthouse_Memory(t *testing.T) {
 	assertIp4InArray(t, r.msg.Details.Ip4AndPorts, good)
 }
 
+func TestLighthouse_reload(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	c.Settings["lighthouse"] = map[interface{}]interface{}{"am_lighthouse": true}
+	c.Settings["listen"] = map[interface{}]interface{}{"port": 4242}
+	lh, err := NewLightHouseFromConfig(l, c, &net.IPNet{IP: net.IP{10, 128, 0, 1}, Mask: net.IPMask{255, 255, 255, 0}}, nil, nil)
+	assert.NoError(t, err)
+
+	c.Settings["static_host_map"] = map[interface{}]interface{}{"10.128.0.2": []interface{}{"1.1.1.1:4242"}}
+	lh.reload(c, false)
+}
+
 func newLHHostRequest(fromAddr *udp.Addr, myVpnIp, queryVpnIp iputil.VpnIp, lhh *LightHouseHandler) testLhReply {
 	req := &NebulaMeta{
 		Type: NebulaMeta_HostQuery,
@@ -237,7 +259,10 @@ func newLHHostRequest(fromAddr *udp.Addr, myVpnIp, queryVpnIp iputil.VpnIp, lhh 
 		panic(err)
 	}
 
-	w := &testEncWriter{}
+	filter := NebulaMeta_HostQueryReply
+	w := &testEncWriter{
+		metaFilter: &filter,
+	}
 	lhh.HandleRequest(fromAddr, myVpnIp, b, w)
 	return w.lastReply
 }
@@ -344,18 +369,22 @@ type testLhReply struct {
 }
 
 type testEncWriter struct {
-	lastReply testLhReply
+	lastReply  testLhReply
+	metaFilter *NebulaMeta_MessageType
 }
 
 func (tw *testEncWriter) SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, _, _ []byte) {
-	tw.lastReply = testLhReply{
-		nebType:    t,
-		nebSubType: st,
-		vpnIp:      vpnIp,
-		msg:        &NebulaMeta{},
+	msg := &NebulaMeta{}
+	err := proto.Unmarshal(p, msg)
+	if tw.metaFilter == nil || msg.Type == *tw.metaFilter {
+		tw.lastReply = testLhReply{
+			nebType:    t,
+			nebSubType: st,
+			vpnIp:      vpnIp,
+			msg:        msg,
+		}
 	}
 
-	err := proto.Unmarshal(p, tw.lastReply.msg)
 	if err != nil {
 		panic(err)
 	}
@@ -363,7 +392,10 @@ func (tw *testEncWriter) SendMessageToVpnIp(t header.MessageType, st header.Mess
 
 // assertIp4InArray asserts every address in want is at the same position in have and that the lengths match
 func assertIp4InArray(t *testing.T, have []*Ip4AndPort, want ...*udp.Addr) {
-	assert.Len(t, have, len(want))
+	if !assert.Len(t, have, len(want)) {
+		return
+	}
+
 	for k, w := range want {
 		if !(have[k].Ip == uint32(iputil.Ip2VpnIp(w.IP)) && have[k].Port == uint32(w.Port)) {
 			assert.Fail(t, fmt.Sprintf("Response did not contain: %v:%v at %v; %v", w.IP, w.Port, k, translateV4toUdpAddr(have)))
@@ -373,7 +405,10 @@ func assertIp4InArray(t *testing.T, have []*Ip4AndPort, want ...*udp.Addr) {
 
 // assertUdpAddrInArray asserts every address in want is at the same position in have and that the lengths match
 func assertUdpAddrInArray(t *testing.T, have []*udp.Addr, want ...*udp.Addr) {
-	assert.Len(t, have, len(want))
+	if !assert.Len(t, have, len(want)) {
+		return
+	}
+
 	for k, w := range want {
 		if !(have[k].IP.Equal(w.IP) && have[k].Port == w.Port) {
 			assert.Fail(t, fmt.Sprintf("Response did not contain: %v at %v; %v", w, k, have))

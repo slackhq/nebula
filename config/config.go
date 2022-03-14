@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -26,6 +27,7 @@ type C struct {
 	oldSettings map[interface{}]interface{}
 	callbacks   []func(*C)
 	l           *logrus.Logger
+	reloadLock  sync.Mutex
 }
 
 func NewC(l *logrus.Logger) *C {
@@ -133,6 +135,9 @@ func (c *C) CatchHUP(ctx context.Context) {
 }
 
 func (c *C) ReloadConfig() {
+	c.reloadLock.Lock()
+	defer c.reloadLock.Unlock()
+
 	c.oldSettings = make(map[interface{}]interface{})
 	for k, v := range c.Settings {
 		c.oldSettings[k] = v
@@ -147,6 +152,27 @@ func (c *C) ReloadConfig() {
 	for _, v := range c.callbacks {
 		v(c)
 	}
+}
+
+func (c *C) ReloadConfigString(raw string) error {
+	c.reloadLock.Lock()
+	defer c.reloadLock.Unlock()
+
+	c.oldSettings = make(map[interface{}]interface{})
+	for k, v := range c.Settings {
+		c.oldSettings[k] = v
+	}
+
+	err := c.LoadString(raw)
+	if err != nil {
+		return err
+	}
+
+	for _, v := range c.callbacks {
+		v(c)
+	}
+
+	return nil
 }
 
 // GetString will get the string for k or return the default d if not found or invalid

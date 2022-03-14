@@ -160,9 +160,10 @@ func (c *Control) CloseTunnel(vpnIp iputil.VpnIp, localOnly bool) bool {
 func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	//TODO: this is probably better as a function in ConnectionManager or HostMap directly
 	c.f.hostMap.Lock()
+	lighthouses := c.f.lightHouse.GetLighthouses()
 	for _, h := range c.f.hostMap.Hosts {
 		if excludeLighthouses {
-			if _, ok := c.f.lightHouse.lighthouses[h.vpnIp]; ok {
+			if _, ok := lighthouses[h.vpnIp]; ok {
 				continue
 			}
 		}

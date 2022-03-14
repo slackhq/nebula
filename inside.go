@@ -110,7 +110,7 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 
 		// If this is a static host, we don't need to wait for the HostQueryReply
 		// We can trigger the handshake right now
-		if _, ok := f.lightHouse.staticList[vpnIp]; ok {
+		if _, ok := f.lightHouse.GetStaticHostList()[vpnIp]; ok {
 			select {
 			case f.handshakeManager.trigger <- vpnIp:
 			default:
