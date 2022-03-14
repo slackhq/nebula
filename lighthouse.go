@@ -146,9 +146,11 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 			lh.l.Infof("lighthouse.interval changed to %v", lh.atomicInterval)
 
 			if lh.updateCancel != nil {
+				// May not always have a running routine
 				lh.updateCancel()
-				lh.LhUpdateWorker(lh.updateParentCtx, lh.updateUdp)
 			}
+
+			lh.LhUpdateWorker(lh.updateParentCtx, lh.updateUdp)
 		}
 	}
 
@@ -495,6 +497,9 @@ func NewUDPAddrFromLH6(ipp *Ip6AndPort) *udp.Addr {
 }
 
 func (lh *LightHouse) LhUpdateWorker(ctx context.Context, f udp.EncWriter) {
+	lh.updateParentCtx = ctx
+	lh.updateUdp = f
+
 	interval := lh.GetUpdateInterval()
 	if lh.amLighthouse || interval == 0 {
 		return
@@ -503,8 +508,6 @@ func (lh *LightHouse) LhUpdateWorker(ctx context.Context, f udp.EncWriter) {
 	clockSource := time.NewTicker(time.Second * time.Duration(interval))
 	updateCtx, cancel := context.WithCancel(ctx)
 	lh.updateCancel = cancel
-	lh.updateParentCtx = ctx
-	lh.updateUdp = f
 	defer clockSource.Stop()
 
 	for {
