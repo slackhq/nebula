@@ -78,7 +78,7 @@ type LightHouse struct {
 
 // NewLightHouseFromConfig will build a Lighthouse struct from the values provided in the config object
 // addrMap should be nil unless this is during a config reload
-func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet *net.IPNet, pc *udp.Conn, p *Punchy, realPort int) (*LightHouse, error) {
+func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet *net.IPNet, pc *udp.Conn, p *Punchy) (*LightHouse, error) {
 	amLighthouse := c.GetBool("lighthouse.am_lighthouse", false)
 	nebulaPort := uint32(c.GetInt("listen.port", 0))
 	if amLighthouse && nebulaPort == 0 {
@@ -101,7 +101,7 @@ func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet *net.IPNet,
 		myVpnZeros:        iputil.VpnIp(32 - ones),
 		myVpnNet:          myVpnNet,
 		addrMap:           make(map[iputil.VpnIp]*RemoteList),
-		nebulaPort:        uint32(realPort),
+		nebulaPort:        nebulaPort,
 		atomicLighthouses: make(map[iputil.VpnIp]struct{}),
 		atomicStaticList:  make(map[iputil.VpnIp]struct{}),
 		punchConn:         pc,

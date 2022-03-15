@@ -54,14 +54,14 @@ func Test_lhStaticMapping(t *testing.T) {
 	c := config.NewC(l)
 	c.Settings["lighthouse"] = map[interface{}]interface{}{"hosts": []interface{}{lh1}}
 	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"1.1.1.1:4242"}}
-	_, err := NewLightHouseFromConfig(l, c, myVpnNet, nil, nil, 1)
+	_, err := NewLightHouseFromConfig(l, c, myVpnNet, nil, nil)
 	assert.Nil(t, err)
 
 	lh2 := "10.128.0.3"
 	c = config.NewC(l)
 	c.Settings["lighthouse"] = map[interface{}]interface{}{"hosts": []interface{}{lh1, lh2}}
 	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"100.1.1.1:4242"}}
-	_, err = NewLightHouseFromConfig(l, c, myVpnNet, nil, nil, 1)
+	_, err = NewLightHouseFromConfig(l, c, myVpnNet, nil, nil)
 	assert.EqualError(t, err, "lighthouse 10.128.0.3 does not have a static_host_map entry")
 }
 
@@ -70,7 +70,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	_, myVpnNet, _ := net.ParseCIDR("10.128.0.1/0")
 
 	c := config.NewC(l)
-	lh, err := NewLightHouseFromConfig(l, c, myVpnNet, nil, nil, 1)
+	lh, err := NewLightHouseFromConfig(l, c, myVpnNet, nil, nil)
 	if !assert.NoError(b, err) {
 		b.Fatal()
 	}
@@ -163,7 +163,7 @@ func TestLighthouse_Memory(t *testing.T) {
 	c := config.NewC(l)
 	c.Settings["lighthouse"] = map[interface{}]interface{}{"am_lighthouse": true}
 	c.Settings["listen"] = map[interface{}]interface{}{"port": 4242}
-	lh, err := NewLightHouseFromConfig(l, c, &net.IPNet{IP: net.IP{10, 128, 0, 1}, Mask: net.IPMask{255, 255, 255, 0}}, nil, nil, 1)
+	lh, err := NewLightHouseFromConfig(l, c, &net.IPNet{IP: net.IP{10, 128, 0, 1}, Mask: net.IPMask{255, 255, 255, 0}}, nil, nil)
 	assert.NoError(t, err)
 	lhh := lh.NewRequestHandler()
 
@@ -239,7 +239,7 @@ func TestLighthouse_reload(t *testing.T) {
 	c := config.NewC(l)
 	c.Settings["lighthouse"] = map[interface{}]interface{}{"am_lighthouse": true}
 	c.Settings["listen"] = map[interface{}]interface{}{"port": 4242}
-	lh, err := NewLightHouseFromConfig(l, c, &net.IPNet{IP: net.IP{10, 128, 0, 1}, Mask: net.IPMask{255, 255, 255, 0}}, nil, nil, 1)
+	lh, err := NewLightHouseFromConfig(l, c, &net.IPNet{IP: net.IP{10, 128, 0, 1}, Mask: net.IPMask{255, 255, 255, 0}}, nil, nil)
 	assert.NoError(t, err)
 
 	c.Settings["static_host_map"] = map[interface{}]interface{}{"10.128.0.2": []interface{}{"1.1.1.1:4242"}}

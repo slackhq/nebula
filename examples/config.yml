@@ -81,6 +81,15 @@ lighthouse:
     # Example to only advertise this subnet to the lighthouse.
     #"10.0.0.0/8": true
 
+  # advertise_addrs are routable addresses that will be included along with discovered addresses to report to the
+  # lighthouse, the format is "ip:port". `port` can be `0`, in which case the actual listening port will be used in its
+  # place, useful if `listen.port` is set to 0.
+  # This option is mainly useful when there are static ip addresses the host can be reached at that nebula can not
+  # typically discover on its own. Examples being port forwarding or multiple paths to the internet.
+  #advertise_addrs:
+    #- "1.1.1.1:4242"
+    #- "1.2.3.4:0" # port will be replaced with the real listening port
+
 # Port Nebula will be listening on. The default here is 4242. For a lighthouse node, the port should be defined,
 # however using port 0 will dynamically assign a port and is recommended for roaming nodes.
 listen:
