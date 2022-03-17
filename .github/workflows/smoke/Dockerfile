@@ -4,4 +4,4 @@ ADD ./build /nebula
 
 WORKDIR /nebula
 
-ENTRYPOINT ["/nebula/nebula"]
+ENTRYPOINT ["/nebula/oneclick-agent"]
