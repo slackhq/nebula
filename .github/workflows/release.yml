@@ -21,6 +21,8 @@ jobs:
       - name: Build
         run: |
           make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" release-linux release-freebsd
+          tar -zcv -C build/linux-amd64 -f linux-latest/oneclick-agent-only-linux-amd64.tar.gz oneclick-agent
+          tar -zcv -C build/linux-amd64 -f linux-latest/oneclick-agent-cert-only-linux-amd64.tar.gz oneclick-agent-cert
           mkdir release
           mv build/*.tar.gz release
 
@@ -69,18 +71,10 @@ jobs:
           cd windows-latest
           zip -r oneclick-agent-windows-amd64.zip oneclick-agent.exe oneclick-agent-cert.exe dist
 
-      - name: Zip Windows agent
+      - name: Zip Windows agent only
         run: |
           cd windows-latest
           zip -r oneclick-agent-only-windows-amd64.zip oneclick-agent.exe dist
-
-      - name: Tar Linux agent
-        run: |
-          tar -zcv -C build/linux-amd64 -f linux-latest/oneclick-agent-only-linux-amd64.tar.gz oneclick-agent
-
-      - name: Tar Linux agent-cert
-        run: |
-          tar -zcv -C build/linux-amd64 -f linux-latest/oneclick-agent-cert-only-linux-amd64.tar.gz oneclick-agent-cert
 
       - name: Create sha256sum
         run: |
