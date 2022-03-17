@@ -56,59 +56,9 @@ jobs:
           name: windows-latest
           path: build
 
-  build-darwin:
-    name: Build Universal Darwin
-    env:
-      HAS_SIGNING_CREDS: ${{ secrets.AC_USERNAME != '' }}
-    runs-on: macos-11
-    steps:
-      - name: Set up Go 1.17
-        uses: actions/setup-go@v2
-        with:
-          go-version: 1.17
-
-      - name: Checkout code
-        uses: actions/checkout@v2
-
-      - name: Import certificates
-        if: env.HAS_SIGNING_CREDS == 'true'
-        uses: Apple-Actions/import-codesign-certs@v1
-        with:
-          p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
-          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
-
-      - name: Build, sign, and notarize
-        env:
-          AC_USERNAME: ${{ secrets.AC_USERNAME }}
-          AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
-        run: |
-          rm -rf release
-          mkdir release
-          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" service build/darwin-amd64/oneclick-agent build/darwin-amd64/oneclick-agent-cert
-          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" service build/darwin-arm64/oneclick-agent build/darwin-arm64/oneclick-agent-cert
-          lipo -create -output ./release/oneclick-agent ./build/darwin-amd64/oneclick-agent ./build/darwin-arm64/oneclick-agent
-          lipo -create -output ./release/oneclick-agent-cert ./build/darwin-amd64/oneclick-agent-cert ./build/darwin-arm64/oneclick-agent-cert
-
-          if [ -n "$AC_USERNAME" ]; then
-            codesign -s "10BC1FDDEB6CE753550156C0669109FAC49E4D1E" -f -v --timestamp --options=runtime -i "net.defined.oneclick-agent" ./release/oneclick-agent
-            codesign -s "10BC1FDDEB6CE753550156C0669109FAC49E4D1E" -f -v --timestamp --options=runtime -i "net.defined.oneclick-agent-cert" ./release/oneclick-agent-cert
-          fi
-
-          zip -j release/oneclick-agent-darwin.zip release/oneclick-agent-cert release/oneclick-agent
-
-          if [ -n "$AC_USERNAME" ]; then
-            xcrun notarytool submit ./release/oneclick-agent-darwin.zip --team-id "576H3XS7FP" --apple-id "$AC_USERNAME" --password "$AC_PASSWORD" --wait
-          fi
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v2
-        with:
-          name: darwin-latest
-          path: ./release/*
-
   release:
     name: Create and Upload Release
-    needs: [build-linux, build-darwin, build-windows]
+    needs: [build-linux, build-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
@@ -121,7 +71,7 @@ jobs:
 
       - name: Create sha256sum
         run: |
-          for dir in linux-latest darwin-latest windows-latest
+          for dir in linux-latest windows-latest
           do
             (
               cd $dir
@@ -130,11 +80,6 @@ jobs:
                 sha256sum <oneclick-agent.exe | sed 's=-$=oneclick-agent-windows-amd64.zip/oneclick-agent.exe='
                 sha256sum <oneclick-agent-cert.exe | sed 's=-$=oneclick-agent-windows-amd64.zip/oneclick-agent-cert.exe='
                 sha256sum oneclick-agent-windows-amd64.zip
-              elif [ "$dir" = darwin-latest ]
-              then
-                sha256sum <oneclick-agent-darwin.zip | sed 's=-$=oneclick-agent-darwin.zip='
-                sha256sum <oneclick-agent | sed 's=-$=oneclick-agent-darwin.zip/oneclick-agent='
-                sha256sum <oneclick-agent-cert | sed 's=-$=oneclick-agent-darwin.zip/oneclick-agent-cert='
               else
                 for v in *.tar.gz
                 do
@@ -169,16 +114,6 @@ jobs:
           asset_path: ./SHASUM256.txt
           asset_name: SHASUM256.txt
           asset_content_type: text/plain
-
-      - name: Upload darwin zip
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./darwin-latest/oneclick-agent-darwin.zip
-          asset_name: oneclick-agent-darwin.zip
-          asset_content_type: application/zip
 
       - name: Upload windows-amd64
         uses: actions/upload-release-asset@v1.0.1
