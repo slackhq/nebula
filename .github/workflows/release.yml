@@ -21,8 +21,8 @@ jobs:
       - name: Build
         run: |
           make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" release-linux release-freebsd
-          tar -zcv -C build/linux-amd64 -f linux-latest/oneclick-agent-only-linux-amd64.tar.gz oneclick-agent
-          tar -zcv -C build/linux-amd64 -f linux-latest/oneclick-agent-cert-only-linux-amd64.tar.gz oneclick-agent-cert
+          tar -zcv -C build/linux-amd64 -f build/oneclick-agent-only-linux-amd64.tar.gz oneclick-agent
+          tar -zcv -C build/linux-amd64 -f build/oneclick-agent-cert-only-linux-amd64.tar.gz oneclick-agent-cert
           mkdir release
           mv build/*.tar.gz release
 
