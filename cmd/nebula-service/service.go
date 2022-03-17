@@ -23,7 +23,7 @@ type program struct {
 
 func (p *program) Start(s service.Service) error {
 	// Start should not block.
-	logger.Info("Nebula service starting.")
+	logger.Info("Oneclick Agent service starting.")
 
 	l := logrus.New()
 	HookLogger(l)
@@ -44,7 +44,7 @@ func (p *program) Start(s service.Service) error {
 }
 
 func (p *program) Stop(s service.Service) error {
-	logger.Info("Nebula service stopping.")
+	logger.Info("Oneclick Agent service stopping.")
 	p.control.Stop()
 	return nil
 }
