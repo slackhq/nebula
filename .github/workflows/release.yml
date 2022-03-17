@@ -69,6 +69,19 @@ jobs:
           cd windows-latest
           zip -r oneclick-agent-windows-amd64.zip oneclick-agent.exe oneclick-agent-cert.exe dist
 
+      - name: Zip Windows agent
+        run: |
+          cd windows-latest
+          zip -r oneclick-agent-only-windows-amd64.zip oneclick-agent.exe dist
+
+      - name: Tar Linux agent
+        run: |
+          tar -zcv -C build/linux-amd64 -f linux-latest/oneclick-agent-only-linux-amd64.tar.gz oneclick-agent
+
+      - name: Tar Linux agent-cert
+        run: |
+          tar -zcv -C build/linux-amd64 -f linux-latest/oneclick-agent-cert-only-linux-amd64.tar.gz oneclick-agent-cert
+
       - name: Create sha256sum
         run: |
           for dir in linux-latest windows-latest
@@ -80,6 +93,7 @@ jobs:
                 sha256sum <oneclick-agent.exe | sed 's=-$=oneclick-agent-windows-amd64.zip/oneclick-agent.exe='
                 sha256sum <oneclick-agent-cert.exe | sed 's=-$=oneclick-agent-windows-amd64.zip/oneclick-agent-cert.exe='
                 sha256sum oneclick-agent-windows-amd64.zip
+                sha256sum oneclick-agent-only-windows-amd64.zip
               else
                 for v in *.tar.gz
                 do
@@ -123,6 +137,36 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./windows-latest/oneclick-agent-windows-amd64.zip
           asset_name: oneclick-agent-windows-amd64.zip
+          asset_content_type: application/zip
+
+      - name: Upload windows-amd64 agent only
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./windows-latest/oneclick-agent-only-windows-amd64.zip
+          asset_name: oneclick-agent-only-windows-amd64.zip
+          asset_content_type: application/zip
+
+      - name: Upload linux-amd64 agent only
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./linux-latest/oneclick-agent-only-linux-amd64.tar.gz
+          asset_name: oneclick-agent-only-linux-amd64.tar.gz
+          asset_content_type: application/zip
+
+      - name: Upload linux-amd64 agent-cert only
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./linux-latest/oneclick-agent-cert-only-linux-amd64.tar.gz
+          asset_name: oneclick-agent-cert-only-linux-amd64.tar.gz
           asset_content_type: application/zip
 
       - name: Upload linux-amd64
