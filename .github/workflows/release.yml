@@ -45,8 +45,8 @@ jobs:
       - name: Build
         run: |
           echo $Env:GITHUB_REF.Substring(11)
-          go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\nebula.exe ./cmd/nebula-service
-          go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\nebula-cert.exe ./cmd/nebula-cert
+          go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\oneclick-agent.exe ./cmd/nebula-service
+          go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\oneclick-agent-cert.exe ./cmd/nebula-cert
           mkdir build\dist\windows
           mv dist\windows\wintun build\dist\windows\
 
@@ -84,20 +84,20 @@ jobs:
         run: |
           rm -rf release
           mkdir release
-          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" service build/darwin-amd64/nebula build/darwin-amd64/nebula-cert
-          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" service build/darwin-arm64/nebula build/darwin-arm64/nebula-cert
-          lipo -create -output ./release/nebula ./build/darwin-amd64/nebula ./build/darwin-arm64/nebula
-          lipo -create -output ./release/nebula-cert ./build/darwin-amd64/nebula-cert ./build/darwin-arm64/nebula-cert
+          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" service build/darwin-amd64/oneclick-agent build/darwin-amd64/oneclick-agent-cert
+          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" service build/darwin-arm64/oneclick-agent build/darwin-arm64/oneclick-agent-cert
+          lipo -create -output ./release/oneclick-agent ./build/darwin-amd64/oneclick-agent ./build/darwin-arm64/oneclick-agent
+          lipo -create -output ./release/oneclick-agent-cert ./build/darwin-amd64/oneclick-agent-cert ./build/darwin-arm64/oneclick-agent-cert
 
           if [ -n "$AC_USERNAME" ]; then
-            codesign -s "10BC1FDDEB6CE753550156C0669109FAC49E4D1E" -f -v --timestamp --options=runtime -i "net.defined.nebula" ./release/nebula
-            codesign -s "10BC1FDDEB6CE753550156C0669109FAC49E4D1E" -f -v --timestamp --options=runtime -i "net.defined.nebula-cert" ./release/nebula-cert
+            codesign -s "10BC1FDDEB6CE753550156C0669109FAC49E4D1E" -f -v --timestamp --options=runtime -i "net.defined.oneclick-agent" ./release/oneclick-agent
+            codesign -s "10BC1FDDEB6CE753550156C0669109FAC49E4D1E" -f -v --timestamp --options=runtime -i "net.defined.oneclick-agent-cert" ./release/oneclick-agent-cert
           fi
 
-          zip -j release/nebula-darwin.zip release/nebula-cert release/nebula
+          zip -j release/oneclick-agent-darwin.zip release/oneclick-agent-cert release/oneclick-agent
 
           if [ -n "$AC_USERNAME" ]; then
-            xcrun notarytool submit ./release/nebula-darwin.zip --team-id "576H3XS7FP" --apple-id "$AC_USERNAME" --password "$AC_PASSWORD" --wait
+            xcrun notarytool submit ./release/oneclick-agent-darwin.zip --team-id "576H3XS7FP" --apple-id "$AC_USERNAME" --password "$AC_PASSWORD" --wait
           fi
 
       - name: Upload artifacts
@@ -117,7 +117,7 @@ jobs:
       - name: Zip Windows
         run: |
           cd windows-latest
-          zip -r nebula-windows-amd64.zip nebula.exe nebula-cert.exe dist
+          zip -r oneclick-agent-windows-amd64.zip oneclick-agent.exe oneclick-agent-cert.exe dist
 
       - name: Create sha256sum
         run: |
@@ -127,14 +127,14 @@ jobs:
               cd $dir
               if [ "$dir" = windows-latest ]
               then
-                sha256sum <nebula.exe | sed 's=-$=nebula-windows-amd64.zip/nebula.exe='
-                sha256sum <nebula-cert.exe | sed 's=-$=nebula-windows-amd64.zip/nebula-cert.exe='
-                sha256sum nebula-windows-amd64.zip
+                sha256sum <oneclick-agent.exe | sed 's=-$=oneclick-agent-windows-amd64.zip/oneclick-agent.exe='
+                sha256sum <oneclick-agent-cert.exe | sed 's=-$=oneclick-agent-windows-amd64.zip/oneclick-agent-cert.exe='
+                sha256sum oneclick-agent-windows-amd64.zip
               elif [ "$dir" = darwin-latest ]
               then
-                sha256sum <nebula-darwin.zip | sed 's=-$=nebula-darwin.zip='
-                sha256sum <nebula | sed 's=-$=nebula-darwin.zip/nebula='
-                sha256sum <nebula-cert | sed 's=-$=nebula-darwin.zip/nebula-cert='
+                sha256sum <oneclick-agent-darwin.zip | sed 's=-$=oneclick-agent-darwin.zip='
+                sha256sum <oneclick-agent | sed 's=-$=oneclick-agent-darwin.zip/oneclick-agent='
+                sha256sum <oneclick-agent-cert | sed 's=-$=oneclick-agent-darwin.zip/oneclick-agent-cert='
               else
                 for v in *.tar.gz
                 do
@@ -176,8 +176,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./darwin-latest/nebula-darwin.zip
-          asset_name: nebula-darwin.zip
+          asset_path: ./darwin-latest/oneclick-agent-darwin.zip
+          asset_name: oneclick-agent-darwin.zip
           asset_content_type: application/zip
 
       - name: Upload windows-amd64
@@ -186,8 +186,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./windows-latest/nebula-windows-amd64.zip
-          asset_name: nebula-windows-amd64.zip
+          asset_path: ./windows-latest/oneclick-agent-windows-amd64.zip
+          asset_name: oneclick-agent-windows-amd64.zip
           asset_content_type: application/zip
 
       - name: Upload linux-amd64
@@ -196,8 +196,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-amd64.tar.gz
-          asset_name: nebula-linux-amd64.tar.gz
+          asset_path: ./linux-latest/oneclick-agent-linux-amd64.tar.gz
+          asset_name: oneclick-agent-linux-amd64.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload linux-386
@@ -206,8 +206,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-386.tar.gz
-          asset_name: nebula-linux-386.tar.gz
+          asset_path: ./linux-latest/oneclick-agent-linux-386.tar.gz
+          asset_name: oneclick-agent-linux-386.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload linux-ppc64le
@@ -216,8 +216,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-ppc64le.tar.gz
-          asset_name: nebula-linux-ppc64le.tar.gz
+          asset_path: ./linux-latest/oneclick-agent-linux-ppc64le.tar.gz
+          asset_name: oneclick-agent-linux-ppc64le.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload linux-arm-5
@@ -226,8 +226,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-arm-5.tar.gz
-          asset_name: nebula-linux-arm-5.tar.gz
+          asset_path: ./linux-latest/oneclick-agent-linux-arm-5.tar.gz
+          asset_name: oneclick-agent-linux-arm-5.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload linux-arm-6
@@ -236,8 +236,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-arm-6.tar.gz
-          asset_name: nebula-linux-arm-6.tar.gz
+          asset_path: ./linux-latest/oneclick-agent-linux-arm-6.tar.gz
+          asset_name: oneclick-agent-linux-arm-6.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload linux-arm-7
@@ -246,8 +246,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-arm-7.tar.gz
-          asset_name: nebula-linux-arm-7.tar.gz
+          asset_path: ./linux-latest/oneclick-agent-linux-arm-7.tar.gz
+          asset_name: oneclick-agent-linux-arm-7.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload linux-arm64
@@ -256,8 +256,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-arm64.tar.gz
-          asset_name: nebula-linux-arm64.tar.gz
+          asset_path: ./linux-latest/oneclick-agent-linux-arm64.tar.gz
+          asset_name: oneclick-agent-linux-arm64.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload linux-mips
@@ -266,8 +266,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-mips.tar.gz
-          asset_name: nebula-linux-mips.tar.gz
+          asset_path: ./linux-latest/oneclick-agent-linux-mips.tar.gz
+          asset_name: oneclick-agent-linux-mips.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload linux-mipsle
@@ -276,8 +276,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-mipsle.tar.gz
-          asset_name: nebula-linux-mipsle.tar.gz
+          asset_path: ./linux-latest/oneclick-agent-linux-mipsle.tar.gz
+          asset_name: oneclick-agent-linux-mipsle.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload linux-mips64
@@ -286,8 +286,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-mips64.tar.gz
-          asset_name: nebula-linux-mips64.tar.gz
+          asset_path: ./linux-latest/oneclick-agent-linux-mips64.tar.gz
+          asset_name: oneclick-agent-linux-mips64.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload linux-mips64le
@@ -296,8 +296,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-mips64le.tar.gz
-          asset_name: nebula-linux-mips64le.tar.gz
+          asset_path: ./linux-latest/oneclick-agent-linux-mips64le.tar.gz
+          asset_name: oneclick-agent-linux-mips64le.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload linux-mips-softfloat
@@ -306,8 +306,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-mips-softfloat.tar.gz
-          asset_name: nebula-linux-mips-softfloat.tar.gz
+          asset_path: ./linux-latest/oneclick-agent-linux-mips-softfloat.tar.gz
+          asset_name: oneclick-agent-linux-mips-softfloat.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload linux-riscv64
@@ -316,8 +316,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-riscv64.tar.gz
-          asset_name: nebula-linux-riscv64.tar.gz
+          asset_path: ./linux-latest/oneclick-agent-linux-riscv64.tar.gz
+          asset_name: oneclick-agent-linux-riscv64.tar.gz
           asset_content_type: application/gzip
 
       - name: Upload freebsd-amd64
@@ -326,6 +326,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-freebsd-amd64.tar.gz
-          asset_name: nebula-freebsd-amd64.tar.gz
+          asset_path: ./linux-latest/oneclick-agent-freebsd-amd64.tar.gz
+          asset_name: oneclick-agent-freebsd-amd64.tar.gz
           asset_content_type: application/gzip
