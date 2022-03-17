@@ -65,28 +65,28 @@ e2evvv: e2ev
 e2evvvv: TEST_ENV += TEST_LOGS=3
 e2evvvv: e2ev
 
-all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
+all: $(ALL:%=build/%/oneclick-agent) $(ALL:%=build/%/oneclick-agent-cert)
 
-release: $(ALL:%=build/nebula-%.tar.gz)
+release: $(ALL:%=build/oneclick-agent-%.tar.gz)
 
-release-linux: $(ALL_LINUX:%=build/nebula-%.tar.gz)
+release-linux: $(ALL_LINUX:%=build/oneclick-agent-%.tar.gz)
 
-release-freebsd: build/nebula-freebsd-amd64.tar.gz
+release-freebsd: build/oneclick-agent-freebsd-amd64.tar.gz
 
 BUILD_ARGS = -trimpath
 
-bin-windows: build/windows-amd64/nebula.exe build/windows-amd64/nebula-cert.exe
+bin-windows: build/windows-amd64/oneclick-agent.exe build/windows-amd64/oneclick-agent-cert.exe
 	mv $? .
 
-bin-darwin: build/darwin-amd64/nebula build/darwin-amd64/nebula-cert
+bin-darwin: build/darwin-amd64/oneclick-agent build/darwin-amd64/oneclick-agent-cert
 	mv $? .
 
-bin-freebsd: build/freebsd-amd64/nebula build/freebsd-amd64/nebula-cert
+bin-freebsd: build/freebsd-amd64/oneclick-agent build/freebsd-amd64/oneclick-agent-cert
 	mv $? .
 
 bin:
-	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula${NEBULA_CMD_SUFFIX} ${NEBULA_CMD_PATH}
-	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula-cert${NEBULA_CMD_SUFFIX} ./cmd/nebula-cert
+	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./oneclick-agent${NEBULA_CMD_SUFFIX} ${NEBULA_CMD_PATH}
+	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./oneclick-agent-cert${NEBULA_CMD_SUFFIX} ./cmd/nebula-cert
 
 install:
 	go install $(BUILD_ARGS) -ldflags "$(LDFLAGS)" ${NEBULA_CMD_PATH}
@@ -98,27 +98,27 @@ build/linux-mips-%: GOENV += GOMIPS=$(word 3, $(subst -, ,$*))
 # Build an extra small binary for mips-softfloat
 build/linux-mips-softfloat/%: LDFLAGS += -s -w
 
-build/%/nebula: .FORCE
+build/%/oneclick-agent: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
 		GOARCH=$(word 2, $(subst -, ,$*)) $(GOENV) \
 		go build $(BUILD_ARGS) -o $@ -ldflags "$(LDFLAGS)" ${NEBULA_CMD_PATH}
 
-build/%/nebula-cert: .FORCE
+build/%/oneclick-agent-cert: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
 		GOARCH=$(word 2, $(subst -, ,$*)) $(GOENV) \
 		go build $(BUILD_ARGS) -o $@ -ldflags "$(LDFLAGS)" ./cmd/nebula-cert
 
-build/%/nebula.exe: build/%/nebula
+build/%/oneclick-agent.exe: build/%/oneclick-agent
 	mv $< $@
 
-build/%/nebula-cert.exe: build/%/nebula-cert
+build/%/oneclick-agent-cert.exe: build/%/oneclick-agent-cert
 	mv $< $@
 
-build/nebula-%.tar.gz: build/%/nebula build/%/nebula-cert
-	tar -zcv -C build/$* -f $@ nebula nebula-cert
+build/oneclick-agent-%.tar.gz: build/%/oneclick-agent build/%/oneclick-agent-cert
+	tar -zcv -C build/$* -f $@ oneclick-agent oneclick-agent-cert
 
-build/nebula-%.zip: build/%/nebula.exe build/%/nebula-cert.exe
-	cd build/$* && zip ../nebula-$*.zip nebula.exe nebula-cert.exe
+build/oneclick-agent-%.zip: build/%/oneclick-agent.exe build/%/oneclick-agent-cert.exe
+	cd build/$* && zip ../oneclick-agent-$*.zip oneclick-agent.exe oneclick-agent-cert.exe
 
 vet:
 	go vet -v ./...
@@ -158,7 +158,7 @@ ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) service ${.DEFAULT_GOAL} --no-print-directory
 endif
 
-bin-docker: bin build/linux-amd64/nebula build/linux-amd64/nebula-cert
+bin-docker: bin build/linux-amd64/oneclick-agent build/linux-amd64/oneclick-agent-cert
 
 smoke-docker: bin-docker
 	cd .github/workflows/smoke/ && ./build.sh

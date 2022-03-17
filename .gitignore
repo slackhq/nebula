@@ -4,6 +4,13 @@
 /nebula-arm6
 /nebula-darwin
 /nebula.exe
+/oneclick-agent
+/oneclick-agent-cert
+/oneclick-agent-cert.exe
+/oneclick-agent-arm
+/oneclick-agent-arm6
+/oneclick-agent-darwin
+/oneclick-agent.exe
 /cert/*.crt
 /cert/*.key
 /coverage.out

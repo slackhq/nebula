@@ -59,9 +59,9 @@ func doService(configPath *string, configTest *bool, build string, serviceFlag *
 	}
 
 	svcConfig := &service.Config{
-		Name:        "Nebula",
-		DisplayName: "Nebula Network Service",
-		Description: "Nebula network connectivity daemon for encrypted communications",
+		Name:        "Oneclick Agent",
+		DisplayName: "Oneclick Network Service",
+		Description: "Oneclick network connectivity daemon for encrypted communications",
 		Arguments:   []string{"-service", "run", "-config", *configPath},
 	}
 
