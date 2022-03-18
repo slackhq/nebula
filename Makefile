@@ -48,7 +48,8 @@ ALL = $(ALL_LINUX) \
 	darwin-amd64 \
 	darwin-arm64 \
 	freebsd-amd64 \
-	windows-amd64
+	windows-amd64 \
+	windows-arm64
 
 e2e:
 	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
@@ -76,6 +77,9 @@ release-freebsd: build/nebula-freebsd-amd64.tar.gz
 BUILD_ARGS = -trimpath
 
 bin-windows: build/windows-amd64/nebula.exe build/windows-amd64/nebula-cert.exe
+	mv $? .
+
+bin-windows-arm64: build/windows-arm64/nebula.exe build/windows-arm64/nebula-cert.exe
 	mv $? .
 
 bin-darwin: build/darwin-amd64/nebula build/darwin-amd64/nebula-cert
