@@ -51,7 +51,6 @@ ALL = $(ALL_LINUX) \
 	windows-amd64 \
 	windows-arm64
 
-
 e2e:
 	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
 
@@ -80,7 +79,7 @@ BUILD_ARGS = -trimpath
 bin-windows: build/windows-amd64/nebula.exe build/windows-amd64/nebula-cert.exe
 	mv $? .
 
-bin-winarm64: build/windows-arm64/nebula.exe build/windows-arm64/nebula-cert.exe
+bin-windows-arm64: build/windows-arm64/nebula.exe build/windows-arm64/nebula-cert.exe
 	mv $? .
 
 bin-darwin: build/darwin-amd64/nebula build/darwin-amd64/nebula-cert
