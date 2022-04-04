@@ -179,12 +179,9 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 		hostinfo, err := n.hostMap.QueryVpnIp(vpnIp)
 		if err != nil {
 			n.l.Debugf("Not found in hostmap: %s", vpnIp)
-
-			if !n.intf.disconnectInvalid {
-				n.ClearIP(vpnIp)
-				n.ClearPendingDeletion(vpnIp)
-				continue
-			}
+			n.ClearIP(vpnIp)
+			n.ClearPendingDeletion(vpnIp)
+			continue
 		}
 
 		if n.handleInvalidCertificate(now, vpnIp, hostinfo) {
