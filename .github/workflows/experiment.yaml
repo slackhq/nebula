@@ -1,0 +1,15 @@
+name: Experiment
+on: 
+  schedule:
+  - cron: '* 1 * * *'
+
+jobs:
+  job1:
+    name: Debug
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Git checkout
+      uses: actions/checkout@v2
+    - name: List files
+      run: ls
