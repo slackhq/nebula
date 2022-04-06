@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
@@ -20,6 +21,7 @@ const tunGUIDLabel = "Fixed Nebula Windows GUID v1"
 type winTun struct {
 	Device    string
 	cidr      *net.IPNet
+	prefix    netip.Prefix
 	MTU       int
 	Routes    []Route
 	routeTree *cidr.Tree4
@@ -62,9 +64,15 @@ func newWinTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU 
 		return nil, err
 	}
 
+	prefix, err := iputil.ToNetIpPrefix(*cidr)
+	if err != nil {
+		return nil, err
+	}
+
 	return &winTun{
 		Device:    deviceName,
 		cidr:      cidr,
+		prefix:    prefix,
 		MTU:       defaultMTU,
 		Routes:    routes,
 		routeTree: routeTree,
@@ -76,7 +84,7 @@ func newWinTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU 
 func (t *winTun) Activate() error {
 	luid := winipcfg.LUID(t.tun.LUID())
 
-	if err := luid.SetIPAddresses([]net.IPNet{*t.cidr}); err != nil {
+	if err := luid.SetIPAddresses([]netip.Prefix{t.prefix}); err != nil {
 		return fmt.Errorf("failed to set address: %w", err)
 	}
 
@@ -95,10 +103,15 @@ func (t *winTun) Activate() error {
 			}
 		}
 
+		prefix, err := iputil.ToNetIpPrefix(*r.Cidr)
+		if err != nil {
+			return err
+		}
+
 		// Add our unsafe route
 		routes = append(routes, &winipcfg.RouteData{
-			Destination: *r.Cidr,
-			NextHop:     r.Via.ToIP(),
+			Destination: prefix,
+			NextHop:     r.Via.ToNetIpAddr(),
 			Metric:      uint32(r.Metric),
 		})
 	}
