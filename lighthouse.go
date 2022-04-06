@@ -11,7 +11,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
@@ -356,7 +355,7 @@ func (lh *LightHouse) QueryServer(ip iputil.VpnIp, f udp.EncWriter) {
 	}
 
 	// Send a query to the lighthouses and hope for the best next time
-	query, err := proto.Marshal(NewLhQueryByInt(ip))
+	query, err := NewLhQueryByInt(ip).Marshal()
 	if err != nil {
 		lh.l.WithError(err).WithField("vpnIp", ip).Error("Failed to marshal lighthouse query payload")
 		return
@@ -612,7 +611,7 @@ func (lh *LightHouse) SendUpdate(f udp.EncWriter) {
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)
 
-	mm, err := proto.Marshal(m)
+	mm, err := m.Marshal()
 	if err != nil {
 		lh.l.WithError(err).Error("Error while marshaling for lighthouse update")
 		return

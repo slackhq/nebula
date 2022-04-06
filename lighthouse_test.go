@@ -5,7 +5,6 @@ import (
 	"net"
 	"testing"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
@@ -20,7 +19,7 @@ func TestOldIPv4Only(t *testing.T) {
 	// This test ensures our new ipv6 enabled LH protobuf IpAndPorts works with the old style to enable backwards compatibility
 	b := []byte{8, 129, 130, 132, 80, 16, 10}
 	var m Ip4AndPort
-	err := proto.Unmarshal(b, &m)
+	err := m.Unmarshal(b)
 	assert.NoError(t, err)
 	assert.Equal(t, "10.1.1.1", iputil.VpnIp(m.GetIp()).String())
 }
@@ -36,12 +35,12 @@ func TestNewLhQuery(t *testing.T) {
 	assert.IsType(t, &NebulaMeta{}, a)
 
 	// It should also Marshal fine
-	b, err := proto.Marshal(a)
+	b, err := a.Marshal()
 	assert.Nil(t, err)
 
 	// and then Unmarshal fine
 	n := &NebulaMeta{}
-	err = proto.Unmarshal(b, n)
+	err = n.Unmarshal(b)
 	assert.Nil(t, err)
 
 }
@@ -112,7 +111,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 				Ip4AndPorts: nil,
 			},
 		}
-		p, err := proto.Marshal(req)
+		p, err := req.Marshal()
 		assert.NoError(b, err)
 		for n := 0; n < b.N; n++ {
 			lhh.HandleRequest(rAddr, 2, p, mw)
@@ -127,7 +126,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 				Ip4AndPorts: nil,
 			},
 		}
-		p, err := proto.Marshal(req)
+		p, err := req.Marshal()
 		assert.NoError(b, err)
 
 		for n := 0; n < b.N; n++ {
@@ -375,7 +374,7 @@ type testEncWriter struct {
 
 func (tw *testEncWriter) SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, _, _ []byte) {
 	msg := &NebulaMeta{}
-	err := proto.Unmarshal(p, msg)
+	err := msg.Unmarshal(p)
 	if tw.metaFilter == nil || msg.Type == *tw.metaFilter {
 		tw.lastReply = testLhReply{
 			nebType:    t,

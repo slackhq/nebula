@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/flynn/noise"
-	"github.com/golang/protobuf/proto"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
@@ -43,7 +42,7 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 	hs := &NebulaHandshake{
 		Details: hsProto,
 	}
-	hsBytes, err = proto.Marshal(hs)
+	hsBytes, err = hs.Marshal()
 
 	if err != nil {
 		f.l.WithError(err).WithField("vpnIp", vpnIp).
@@ -83,7 +82,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, packet []byte, h *header.H)
 	}
 
 	hs := &NebulaHandshake{}
-	err = proto.Unmarshal(msg, hs)
+	err = hs.Unmarshal(msg)
 	/*
 		l.Debugln("GOT INDEX: ", hs.Details.InitiatorIndex)
 	*/
@@ -154,7 +153,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, packet []byte, h *header.H)
 	// Update the time in case their clock is way off from ours
 	hs.Details.Time = uint64(time.Now().UnixNano())
 
-	hsBytes, err := proto.Marshal(hs)
+	hsBytes, err := hs.Marshal()
 	if err != nil {
 		f.l.WithError(err).WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).
 			WithField("certName", certName).
@@ -364,7 +363,7 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, hostinfo *HostInfo, packet 
 	}
 
 	hs := &NebulaHandshake{}
-	err = proto.Unmarshal(msg, hs)
+	err = hs.Unmarshal(msg)
 	if err != nil || hs.Details == nil {
 		f.l.WithError(err).WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).Error("Failed unmarshal handshake message")
