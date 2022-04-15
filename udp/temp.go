@@ -10,7 +10,9 @@ type EncWriter interface {
 		remoteIdx uint32,
 		ad,
 		nb,
-		out []byte)
+		out []byte,
+		nocopy bool,
+	)
 	SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, nb, out []byte)
 }
 

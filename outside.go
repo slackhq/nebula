@@ -53,11 +53,13 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 	case header.Message:
 		// TODO handleEncrypted sends directly to addr on error. Handle this in the tunneling case.
 		if !f.handleEncrypted(ci, addr, h) {
+			f.l.Errorf("BRAD: handleEncrypted returned false, early return")
 			return
 		}
 
 		switch h.Subtype {
 		case header.MessageNone:
+			f.l.Errorf("BRAD: decryptToTun")
 			f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache)
 		case header.MessageRelay:
 			// The entire body is sent as AD, not encrypted.
@@ -71,7 +73,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			}
 			// Successfully validated the thing. Get rid of the Relay header.
 			signedPayload = signedPayload[header.Len:]
-			hostinfo.logger(f.l).WithError(err).Infof("BRAD: DecryptDanger Worked! len(signedPayload)=%v...", len(signedPayload[header.Len:]))
+			hostinfo.logger(f.l).WithError(err).Infof("BRAD: DecryptDanger Worked! len(signedPayload)=%v...", len(signedPayload))
 			// Pull the Roaming parts up here, and return.
 			f.handleHostRoaming(hostinfo, addr)
 			f.connectionManager.In(hostinfo.vpnIp)
@@ -114,7 +116,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 						// Find the target HostInfo
 
 						hostinfo.logger(f.l).Infof("BRAD: Relay this packet through host %v", targetHI.vpnIp.String())
-						f.SendVia(targetHI, targetRelay.RemoteIndex, signedPayload, nb, out)
+						f.SendVia(targetHI, targetRelay.RemoteIndex, signedPayload, nb, out, false)
 					case TerminalType:
 						hostinfo.logger(f.l).Infof("BRAD: Relay Type is Terminal...What is going on?")
 					}

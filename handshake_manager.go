@@ -194,7 +194,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 			switch existingRelay.State {
 			case Established:
 				hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Relay already established. SendVia() now.")
-				f.SendVia(relayHostInfo, existingRelay.RemoteIndex, hostinfo.HandshakePacket[0], make([]byte, 12), make([]byte, mtu))
+				f.SendVia(relayHostInfo, existingRelay.RemoteIndex, hostinfo.HandshakePacket[0], make([]byte, 12), make([]byte, mtu), false)
 			case Requested:
 				hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Re-send CreateRelay request")
 				// Re-send the CreateRelay request, in case the previous one was lost.

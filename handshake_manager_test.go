@@ -133,6 +133,6 @@ func (mw *mockEncWriter) SendMessageToVpnIp(t header.MessageType, st header.Mess
 	return
 }
 
-func (mw *mockEncWriter) SendVia(via interface{}, remoteIdx uint32, ad, nb, out []byte) {
+func (mw *mockEncWriter) SendVia(via interface{}, remoteIdx uint32, ad, nb, out []byte, nocopy bool) {
 	return
 }

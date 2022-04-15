@@ -210,6 +210,7 @@ func (f *Interface) SendVia(viaIfc interface{},
 	ad,
 	nb,
 	out []byte,
+	nocopy bool,
 ) {
 	via := viaIfc.(*HostInfo)
 	c := atomic.AddUint64(&via.ConnectionState.atomicMessageCounter, 1)
@@ -217,14 +218,22 @@ func (f *Interface) SendVia(viaIfc interface{},
 	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, remoteIdx, c)
 	f.connectionManager.Out(via.vpnIp)
 
+	via.logger(f.l).Infof("BRAD: SendVia Capacity of out %v to contain ad (%v) to len out (%v)", cap(out), len(ad), len(out))
 	// AEAD over both the header and payload for this message type.
-	h := header.H{}
-	errs := h.Parse(ad)
-	if errs != nil {
-		via.logger(f.l).WithError(errs).Infof("BRAD: Failed to parse header of relayed packet")
+	if len(out)+len(ad) > cap(out) {
+		via.logger(f.l).Infof("BRAD: Capacity of out %v not large enough to add ad (%v) to out (%v)", cap(out), len(ad), len(out))
+		return
 	}
-	via.logger(f.l).Infof("BRAD: SendVia has Relay header len %v, payload len %v with HostInfo %v header=%v", len(out), len(ad), via.vpnIp.String(), h)
-	out = append(out, ad...)
+
+	// The header bytes are written to the 'out' slice; Grow the slice to hold the header and associated data payload.
+	offset := len(out)
+	out = out[:offset+len(ad)]
+
+	// In one call path, the associated data _is_ already stored in out. In other call paths, the associated data must
+	// be copied into 'out'.
+	if !nocopy {
+		copy(out[offset:], ad)
+	}
 
 	var err error
 	via.logger(f.l).Infof("BRAD: EncryptDanger with HostInfo %v, len(out)=%v", via.vpnIp.String(), len(out))
@@ -245,8 +254,14 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		//TODO: log warning
 		return
 	}
+	useRelay := remote == nil && hostinfo.remote == nil
+	fullOut := out
 
-	var err error
+	if useRelay {
+		// Save a header's worth of data at the front of the 'out' buffer.
+		out = out[header.Len:]
+	}
+
 	//TODO: enable if we do more than 1 tun queue
 	//ci.writeLock.Lock()
 	c := atomic.AddUint64(&ci.atomicMessageCounter, 1)
@@ -267,6 +282,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		}
 	}
 
+	var err error
 	out, err = ci.eKey.EncryptDanger(out, out, p, c, nb)
 	//TODO: see above note on lock
 	//ci.writeLock.Unlock()
@@ -308,7 +324,8 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 				continue
 			}
 			hostinfo.logger(f.l).Infof("BRAD: sendNoMetrics Write with relay %v", relayHostInfo.vpnIp.String())
-			f.SendVia(relayHostInfo, relay.RemoteIndex, out, nb, make([]byte, mtu))
+			f.SendVia(relayHostInfo, relay.RemoteIndex, out, nb, fullOut[:header.Len+len(out)], true)
+			break
 		}
 	}
 	return
