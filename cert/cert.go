@@ -13,9 +13,9 @@ import (
 	"net"
 	"time"
 
-	"github.com/golang/protobuf/proto"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ed25519"
+	"google.golang.org/protobuf/proto"
 )
 
 const publicKeyLen = 32
