@@ -81,6 +81,19 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			relay, ok := hostinfo.relayForByIdx[h.RemoteIndex]
 			if !ok {
 				hostinfo.logger(f.l).Infof("BRAD: Failed to find a relay with index %v", h.RemoteIndex)
+				// Kindly notify the sender that there is no relay here
+				m := NebulaControl{
+					Type:                NebulaControl_RemoveRelayRequest,
+					ResponderRelayIndex: h.RemoteIndex,
+				}
+				msg, err := proto.Marshal(&m)
+				if err != nil {
+					hostinfo.logger(f.l).
+						WithError(err).
+						Error("BRAD: Failed to marshal Control message to remove relay")
+				} else {
+					f.SendMessageToVpnIp(header.Control, 0, hostinfo.vpnIp, msg, make([]byte, 12), make([]byte, mtu))
+				}
 				return
 			}
 			hostinfo.logger(f.l).Infof("BRAD: Got relay %v with index %v", *relay, h.RemoteIndex)

@@ -164,6 +164,7 @@ func Test_Case1_Stage1Race(t *testing.T) {
 	myControl.WaitForType(1, 0, theirControl)
 
 	t.Log("My cached packet should be received by them")
+	// This is where it blocks !! v
 	myCachedPacket := theirControl.GetFromTun(true)
 	assertUdpPacket(t, []byte("Hi from me"), myCachedPacket, myVpnIp, theirVpnIp, 80, 80)
 

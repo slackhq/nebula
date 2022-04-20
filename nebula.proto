@@ -74,6 +74,7 @@ message NebulaControl {
     None = 0;
     CreateRelayRequest = 1;
     CreateRelayResponse = 2;
+    RemoveRelayRequest = 3;
   }
   MessageType Type = 1;
 
