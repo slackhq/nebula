@@ -61,6 +61,6 @@ message NebulaHandshakeDetails {
   uint32 ResponderIndex = 3;
   uint64 Cookie = 4;
   uint64 Time = 5;
-  uint32 TargetIp = 6;
+  uint32 TargetIp = 8;
 }
 
