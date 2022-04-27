@@ -107,7 +107,10 @@ func (t *TestTun) Close() error {
 }
 
 func (t *TestTun) Read(b []byte) (int, error) {
-	p := <-t.rxPackets
+	p, ok := <-t.rxPackets
+	if !ok {
+		return 0, fmt.Errorf("t.rxPackets channel closed")
+	}
 	copy(b, p)
 	return len(p), nil
 }

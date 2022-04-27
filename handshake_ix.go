@@ -35,6 +35,7 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 		InitiatorIndex: hostinfo.localIndexId,
 		Time:           uint64(time.Now().UnixNano()),
 		Cert:           ci.certState.rawCertificateNoKey,
+		TargetIp:       uint32(vpnIp),
 	}
 
 	hsBytes := []byte{}
@@ -86,9 +87,17 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, packet []byte, h *header.H)
 	/*
 		l.Debugln("GOT INDEX: ", hs.Details.InitiatorIndex)
 	*/
+
 	if err != nil || hs.Details == nil {
 		f.l.WithError(err).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed unmarshal handshake message")
+		return
+	}
+
+	// TargetIp is optional; if it's non-zero, then ensure it matches my vpn IP address.
+	if hs.Details.TargetIp != 0 && iputil.VpnIp(hs.Details.TargetIp) != f.myVpnIp {
+		f.l.WithField("udpAddr", addr).WithField("targetVpnIp", addr).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Handshake target is not me")
 		return
 	}
 
