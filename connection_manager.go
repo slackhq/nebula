@@ -230,12 +230,9 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 		hostinfo, err := n.hostMap.QueryVpnIp(vpnIp)
 		if err != nil {
 			n.l.Debugf("Not found in hostmap: %s", vpnIp)
-
-			if !n.intf.disconnectInvalid {
-				n.ClearIP(vpnIp)
-				n.ClearPendingDeletion(vpnIp)
-				continue
-			}
+			n.ClearIP(vpnIp)
+			n.ClearPendingDeletion(vpnIp)
+			continue
 		}
 
 		if n.handleInvalidCertificate(now, vpnIp, hostinfo) {
@@ -283,10 +280,6 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 // handleInvalidCertificates will destroy a tunnel if pki.disconnect_invalid is true and the certificate is no longer valid
 func (n *connectionManager) handleInvalidCertificate(now time.Time, vpnIp iputil.VpnIp, hostinfo *HostInfo) bool {
 	if !n.intf.disconnectInvalid {
-		return false
-	}
-
-	if hostinfo == nil {
 		return false
 	}
 
