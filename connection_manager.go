@@ -286,6 +286,10 @@ func (n *connectionManager) handleInvalidCertificate(now time.Time, vpnIp iputil
 		return false
 	}
 
+	if hostinfo == nil {
+		return false
+	}
+
 	remoteCert := hostinfo.GetCert()
 	if remoteCert == nil {
 		return false
