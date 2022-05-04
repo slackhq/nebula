@@ -311,7 +311,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	} else {
 		// Try to send via a relay
 		hostinfo.logger(f.l).Infof("BRAD: sendNoMetrics Write search for relay for %v (len=%v)", hostinfo.vpnIp.String(), len(hostinfo.relays))
-		for _, relayIP := range hostinfo.relays {
+		for relayIP, _ := range hostinfo.relays {
 			relayHostInfo, err := f.hostMap.QueryVpnIp(relayIP)
 			if err != nil {
 				hostinfo.logger(f.l).WithError(err).Infof("BRAD: sendNoMetrics failed to find HostInfo for relayIP %v", relayIP)

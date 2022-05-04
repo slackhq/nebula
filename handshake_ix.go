@@ -137,7 +137,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 		vpnIp:             vpnIp,
 		HandshakePacket:   make(map[uint8][]byte, 0),
 		lastHandshakeTime: hs.Details.Time,
-		relays:            map[uint32]iputil.VpnIp{},
+		relays:            map[iputil.VpnIp]struct{}{},
 		relayForByIp:      map[iputil.VpnIp]*Relay{},
 		relayForByIdx:     map[uint32]*Relay{},
 	}
@@ -247,7 +247,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 					return
 				}
 				f.l.Infof("BRAD: ErrAlreadySeen ix_handshake_stage1 Send response via relay %v", via2.relayHI.vpnIp)
-				hostinfo.relays[via2.remoteIdx] = via2.relayHI.vpnIp
+				hostinfo.relays[via2.relayHI.vpnIp] = struct{}{}
 				f.SendVia(via2.relayHI, via2.remoteIdx, msg, make([]byte, 12), make([]byte, mtu), false)
 				return
 			}
@@ -330,7 +330,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 			return
 		}
 		f.l.Infof("BRAD: ix_handshake_stage1 Send response via relay %v", via2.relayHI.vpnIp)
-		hostinfo.relays[via2.remoteIdx] = via2.relayHI.vpnIp
+		hostinfo.relays[via2.relayHI.vpnIp] = struct{}{}
 		f.SendVia(via2.relayHI, via2.remoteIdx, msg, make([]byte, 12), make([]byte, mtu), false)
 	}
 
@@ -486,7 +486,7 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via interface{}, hostinfo *
 		hostinfo.SetRemote(addr)
 	} else {
 		via2 := via.(*ViaSender)
-		hostinfo.relays[via2.remoteIdx] = via2.relayHI.vpnIp
+		hostinfo.relays[via2.relayHI.vpnIp] = struct{}{}
 	}
 
 	// Build up the radix for the firewall if we have subnets in the cert

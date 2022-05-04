@@ -46,12 +46,18 @@ type Relay struct {
 	PeerIp      iputil.VpnIp
 }
 
+type RelayRemoteIdx struct {
+	idx uint32
+	ip  iputil.VpnIp
+}
+
 type HostMap struct {
 	sync.RWMutex    //Because we concurrently read and write to our maps
 	name            string
 	Indexes         map[uint32]*HostInfo
 	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a RelayHostID
 	RemoteIndexes   map[uint32]*HostInfo
+	RelayRemoteIdx  map[RelayRemoteIdx]*Relay
 	Hosts           map[iputil.VpnIp]*HostInfo
 	preferredRanges []*net.IPNet
 	vpnCIDR         *net.IPNet
@@ -77,8 +83,8 @@ type HostInfo struct {
 	vpnIp             iputil.VpnIp
 	recvError         int
 	remoteCidr        *cidr.Tree4
-	relays            map[uint32]iputil.VpnIp // VpnIp's of Hosts to use as relays to access this peer
-	relayForByIp      map[iputil.VpnIp]*Relay // Set of VpnIp peers for which this peer is a relay
+	relays            map[iputil.VpnIp]struct{} // VpnIp's of Hosts to use as relays to access this peer
+	relayForByIp      map[iputil.VpnIp]*Relay   // Set of VpnIp peers for which this peer is a relay
 	relayForByIdx     map[uint32]*Relay
 
 	// lastRebindCount is the other side of Interface.rebindCount, if these values don't match then we need to ask LH
@@ -118,12 +124,14 @@ func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRang
 	h := map[iputil.VpnIp]*HostInfo{}
 	i := map[uint32]*HostInfo{}
 	r := map[uint32]*HostInfo{}
+	rri := map[RelayRemoteIdx]*Relay{}
 	relays := map[uint32]*HostInfo{}
 	m := HostMap{
 		name:            name,
 		Indexes:         i,
 		Relays:          relays,
 		RemoteIndexes:   r,
+		RelayRemoteIdx:  rri,
 		Hosts:           h,
 		preferredRanges: preferredRanges,
 		vpnCIDR:         vpnCIDR,
@@ -170,7 +178,7 @@ func (hm *HostMap) AddVpnIp(vpnIp iputil.VpnIp, init func(hostinfo *HostInfo)) (
 			promoteCounter:  0,
 			vpnIp:           vpnIp,
 			HandshakePacket: make(map[uint8][]byte, 0),
-			relays:          map[uint32]iputil.VpnIp{},
+			relays:          map[iputil.VpnIp]struct{}{},
 			relayForByIp:    map[iputil.VpnIp]*Relay{},
 			relayForByIdx:   map[uint32]*Relay{},
 		}
@@ -443,7 +451,7 @@ func (hm *HostMap) Punchy(ctx context.Context, conn *udp.Conn) {
 
 func (i *HostInfo) AddRelay(idx uint32, relayIp iputil.VpnIp) {
 	i.Lock()
-	i.relays[idx] = relayIp
+	i.relays[relayIp] = struct{}{}
 	i.Unlock()
 }
 

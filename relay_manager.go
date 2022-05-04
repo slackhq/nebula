@@ -39,7 +39,7 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 		if !inRelays {
 			hm.Relays[index] = relayHostInfo
 			relayHostInfo.Lock()
-			relayHostInfo.relays[index] = vpnIp
+			relayHostInfo.relays[vpnIp] = struct{}{}
 			newRelay := Relay{
 				Type:       relayType,
 				State:      Requested,
@@ -68,19 +68,29 @@ func (rm *relayManager) SetRelay(l *logrus.Logger, relayHostInfo *HostInfo, m *N
 	l.Infof("BRAD: SetRelay on HostInfo %v, RelayFromIp=%v RelayToIp=%v InitiatorIdx=%v ResponderIdx=%v",
 		relayHostInfo.vpnIp.String(), iputil.VpnIp(m.RelayFromIp).String(), iputil.VpnIp(m.RelayToIp).String(),
 		m.InitiatorRelayIndex, m.ResponderRelayIndex)
-	relayHostInfo.Lock()
-	defer relayHostInfo.Unlock()
-	relay, ok := relayHostInfo.relayForByIdx[m.InitiatorRelayIndex]
-	if !ok {
-		l.Infof("BRAD: I, HostInfo %v,  don't have host %v in my relayFor map :/", relayHostInfo.vpnIp, iputil.VpnIp(m.RelayFromIp).String())
-		return &Relay{}, fmt.Errorf("wat")
+	var relay *Relay
+	err := func() error {
+		relayHostInfo.Lock()
+		defer relayHostInfo.Unlock()
+		var ok bool
+		relay, ok = relayHostInfo.relayForByIdx[m.InitiatorRelayIndex]
+		if !ok {
+			l.Infof("BRAD: I, HostInfo %v,  don't have host %v in my relayFor map :/", relayHostInfo.vpnIp, iputil.VpnIp(m.RelayFromIp).String())
+			return fmt.Errorf("wat")
+		}
+		relay.RemoteIndex = m.ResponderRelayIndex
+		l.Infof("BRAD: Set relay.State=ESTABLISHED for Relay %v Peer %v", relayHostInfo.vpnIp.String(), relay.PeerIp.String())
+		relay.State = Established
+		//relayHostInfo.relayForByIp[iputil.VpnIp(m.RelayFromIp)] = relay
+		//relayHostInfo.relayForByIdx[m.InitiatorRelayIndex] = relay
+		return nil
+	}()
+	if err != nil {
+		return relay, err
 	}
-	relay.RemoteIndex = m.ResponderRelayIndex
-	l.Infof("BRAD: Set relay.State=ESTABLISHED for Relay %v Peer %v", relayHostInfo.vpnIp.String(), relay.PeerIp.String())
-	relay.State = Established
-	//relayHostInfo.relayForByIp[iputil.VpnIp(m.RelayFromIp)] = relay
-	//relayHostInfo.relayForByIdx[m.InitiatorRelayIndex] = relay
-
+	rm.hostmap.Lock()
+	defer rm.hostmap.Unlock()
+	rm.hostmap.RelayRemoteIdx[RelayRemoteIdx{idx: m.ResponderRelayIndex, ip: relayHostInfo.vpnIp}] = relay
 	l.Info("BRAD: Relay state updated.")
 	return relay, nil
 }
@@ -92,6 +102,8 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, m *NebulaControl, f *Inter
 		rm.handleCreateRelayRequest(h, f, m)
 	case NebulaControl_CreateRelayResponse:
 		rm.handleCreateRelayResponse(h, f, m)
+	case NebulaControl_RemoveRelayRequest:
+		rm.handleRemoveRelayRequest(h, f, m)
 	}
 
 }
@@ -110,6 +122,7 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 		rm.l.Infof("BRAD: Terminal relay type, no need to look for another relay.")
 		return
 	}
+	// I'm the middle man. Let the initiator know that the I've established the relay they requested.
 	rm.l.Infof("BRAD: Look up relay PeerIP %v's HostInfo, peerHostInfo.", relay.PeerIp.String())
 	peerHostInfo, err := rm.hostmap.QueryVpnIp(relay.PeerIp)
 	if err != nil {
@@ -279,6 +292,36 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 	}
 	// Queue up a retry request
 	//rm.workManager.Add(func() { rm.handleCreateRelay(h, f, target) }, 500*time.Millisecond)
+}
+
+func (rm *relayManager) handleRemoveRelayRequest(h *HostInfo, f *Interface, m *NebulaControl) {
+	// Find the Relay object based on the remote index and host IP that sent the message
+	rm.hostmap.Lock()
+	relayRemote := RelayRemoteIdx{idx: m.ResponderRelayIndex, ip: h.vpnIp}
+	relay, ok := rm.hostmap.RelayRemoteIdx[relayRemote]
+	if !ok {
+		rm.hostmap.Unlock()
+		rm.l.WithField("vpnIp", h.vpnIp).WithField("remoteIdx", m.ResponderRelayIndex).Info("Received RemoveRelayRequest for unknown Relay tunnel")
+		return
+	}
+	// Clean up hostmap.RelayRemoteIdx
+	// Clean up HostInfo.relays
+	delete(rm.hostmap.RelayRemoteIdx, relayRemote)
+	rm.hostmap.Unlock()
+	h.Lock()
+	// Clean up HostInfo relay object's relayForByIp, relayForByIdx
+	delete(h.relayForByIp, relay.PeerIp)
+	delete(h.relayForByIdx, relay.LocalIndex)
+	h.Unlock()
+	// Finally clean up the HostInfo of the peer, to indicate that this relay HostInfo doesn't work anymore
+	peerHostInfo, err := rm.hostmap.QueryVpnIp(relay.PeerIp)
+	if err != nil {
+		rm.l.WithField("vpnIp", h.vpnIp).WithField("peerIp", relay.PeerIp).Info("BRAD: Failed to find peer's HostInfo")
+		return
+	}
+	peerHostInfo.Lock()
+	delete(peerHostInfo.relays, h.vpnIp)
+	peerHostInfo.Unlock()
 }
 
 /*
