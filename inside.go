@@ -218,7 +218,6 @@ func (f *Interface) SendVia(viaIfc interface{},
 	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, remoteIdx, c)
 	f.connectionManager.Out(via.vpnIp)
 
-	via.logger(f.l).Infof("BRAD: SendVia Capacity of out %v to contain ad (%v) to len out (%v)", cap(out), len(ad), len(out))
 	// AEAD over both the header and payload for this message type.
 	if len(out)+len(ad) > cap(out) {
 		via.logger(f.l).Infof("BRAD: Capacity of out %v not large enough to add ad (%v) to out (%v)", cap(out), len(ad), len(out))
@@ -236,13 +235,11 @@ func (f *Interface) SendVia(viaIfc interface{},
 	}
 
 	var err error
-	via.logger(f.l).Infof("BRAD: EncryptDanger with HostInfo %v, len(out)=%v", via.vpnIp.String(), len(out))
 	out, err = via.ConnectionState.eKey.EncryptDanger(out, out, nil, c, nb)
 	if err != nil {
 		via.logger(f.l).WithError(err).Info("BRAD: Failed to EncryptDanger in sendVia")
 		return
 	}
-	via.logger(f.l).WithError(err).Infof("BRAD: EncryptDanger worked, len(out)=%v", len(out))
 	err = f.writers[0].WriteTo(out, via.remote)
 	if err != nil {
 		via.logger(f.l).WithError(err).Info("BRAD: Failed to WriteTo in sendVia")
@@ -295,14 +292,12 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	}
 
 	if remote != nil {
-		hostinfo.logger(f.l).Infof("BRAD: sendNoMetrics Write with remote %v", remote.String())
 		err = f.writers[q].WriteTo(out, remote)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).
 				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
 		}
 	} else if hostinfo.remote != nil {
-		hostinfo.logger(f.l).Infof("BRAD: sendNoMetrics Write with hostinfo.remote %v", hostinfo.remote.String())
 		err = f.writers[q].WriteTo(out, hostinfo.remote)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).
@@ -310,20 +305,17 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		}
 	} else {
 		// Try to send via a relay
-		hostinfo.logger(f.l).Infof("BRAD: sendNoMetrics Write search for relay for %v (len=%v)", hostinfo.vpnIp.String(), len(hostinfo.relays))
 		for relayIP, _ := range hostinfo.relays {
 			relayHostInfo, err := f.hostMap.QueryVpnIp(relayIP)
 			if err != nil {
 				hostinfo.logger(f.l).WithError(err).Infof("BRAD: sendNoMetrics failed to find HostInfo for relayIP %v", relayIP)
 				continue
 			}
-			hostinfo.logger(f.l).WithError(err).Infof("BRAD: sendNoMetrics found relay %v for target %v", relayHostInfo.vpnIp.String(), relayIP)
 			relay, ok := relayHostInfo.relayForByIp[hostinfo.vpnIp]
 			if !ok {
 				hostinfo.logger(f.l).Infof("BRAD: sendNoMetrics relay %v does not have a relay object for target %v", relayHostInfo.vpnIp.String(), hostinfo.vpnIp.String())
 				continue
 			}
-			hostinfo.logger(f.l).Infof("BRAD: sendNoMetrics Write with relay %v", relayHostInfo.vpnIp.String())
 			f.SendVia(relayHostInfo, relay.RemoteIndex, out, nb, fullOut[:header.Len+len(out)], true)
 			break
 		}

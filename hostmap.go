@@ -46,18 +46,12 @@ type Relay struct {
 	PeerIp      iputil.VpnIp
 }
 
-type RelayRemoteIdx struct {
-	idx uint32
-	ip  iputil.VpnIp
-}
-
 type HostMap struct {
 	sync.RWMutex    //Because we concurrently read and write to our maps
 	name            string
 	Indexes         map[uint32]*HostInfo
 	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a RelayHostID
 	RemoteIndexes   map[uint32]*HostInfo
-	RelayRemoteIdx  map[RelayRemoteIdx]*Relay
 	Hosts           map[iputil.VpnIp]*HostInfo
 	preferredRanges []*net.IPNet
 	vpnCIDR         *net.IPNet
@@ -124,14 +118,12 @@ func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRang
 	h := map[iputil.VpnIp]*HostInfo{}
 	i := map[uint32]*HostInfo{}
 	r := map[uint32]*HostInfo{}
-	rri := map[RelayRemoteIdx]*Relay{}
 	relays := map[uint32]*HostInfo{}
 	m := HostMap{
 		name:            name,
 		Indexes:         i,
 		Relays:          relays,
 		RemoteIndexes:   r,
-		RelayRemoteIdx:  rri,
 		Hosts:           h,
 		preferredRanges: preferredRanges,
 		vpnCIDR:         vpnCIDR,
@@ -518,7 +510,6 @@ func (i *HostInfo) handshakeComplete(l *logrus.Logger, m *cachedPacketMetrics) {
 	//TODO: HandshakeComplete means send stored packets and ConnectionState.ready means we are ready to send
 	//TODO: if the transition from HandhsakeComplete to ConnectionState.ready happens all within this function they are identical
 
-	i.logger(l).Infof("BRAD: hostInfo %v handshake complete", i.vpnIp.String())
 	i.ConnectionState.queueLock.Lock()
 	i.HandshakeComplete = true
 	//TODO: this should be managed by the handshake state machine to set it based on how many handshake were seen.

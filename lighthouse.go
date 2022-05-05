@@ -123,7 +123,6 @@ func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet *net.IPNet,
 		h.metricHolepunchTx = metrics.NilCounter{}
 	}
 
-	l.Info("BRAD: Look for relay config...")
 	for _, v := range c.GetStringSlice("relay", nil) {
 		l.WithField("CIDR", v).Info("BRAD: Read relay from config. Woot!")
 		_, net, err := net.ParseCIDR(v)
@@ -352,7 +351,6 @@ func (lh *LightHouse) loadStaticMap(c *config.C, tunCidr *net.IPNet, staticList 
 
 func (lh *LightHouse) Query(ip iputil.VpnIp, f udp.EncWriter) *RemoteList {
 	if !lh.IsLighthouseIP(ip) {
-		lh.l.Infof("BRAD: LightHouse Query(%v)", ip)
 		lh.QueryServer(ip, f)
 	}
 	lh.RLock()
@@ -449,7 +447,6 @@ func (lh *LightHouse) DeleteVpnIp(vpnIp iputil.VpnIp) {
 
 func (lh *LightHouse) AddRelay(vpnCidr *net.IPNet, vpnIp iputil.VpnIp) {
 	lh.Lock()
-	lh.l.Infof("BRAD: LightHouse.AddRelay(%v, %v", vpnCidr, vpnIp)
 	// Include in the lookup trie the target vpnIP, for responding to queries
 	lh.relays.AddCIDR(vpnCidr, vpnIp)
 	// Include the Relay info for my HostUpdate notifications to my lighthouse
@@ -776,13 +773,10 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp,
 		lhh.coalesceAnswers(c, n)
 
 		// Look up Relays
-		lhh.l.Infof("BRAD: Look up IP '%v' in relays...", iputil.VpnIp(reqVpnIp).ToIP())
 		res := lhh.lh.relays.Contains(iputil.VpnIp(reqVpnIp))
-		lhh.l.Infof("BRAD: Look up IP '%v' in relays...got %v", iputil.VpnIp(reqVpnIp).ToIP(), res)
 		if res != nil {
 			n.Details.RelayVpnIp = append(n.Details.RelayVpnIp, uint32(res.(iputil.VpnIp)))
 		}
-		lhh.l.Infof("BRAD: MarshalTo %v", n)
 		return n.MarshalTo(lhh.pb)
 	})
 
@@ -854,7 +848,6 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp iputil.V
 	if !lhh.lh.IsLighthouseIP(vpnIp) {
 		return
 	}
-	lhh.l.Infof("BRAD: HostQueryReply %v", n)
 
 	lhh.lh.Lock()
 	am := lhh.lh.unlockedGetRemoteList(iputil.VpnIp(n.Details.VpnIp))
@@ -865,7 +858,6 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp iputil.V
 	am.unlockedSetV4(vpnIp, certVpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(vpnIp, certVpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
 	am.unlockedSetRelay(vpnIp, certVpnIp, n.Details.RelayVpnIp)
-	lhh.l.Infof("BRAD: handleHostQueryReply am=%v", len(am.relays))
 	am.Unlock()
 
 	// Non-blocking attempt to trigger, skip if it would block
@@ -903,7 +895,6 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 	certVpnIp := iputil.VpnIp(n.Details.VpnIp)
 	am.unlockedSetV4(vpnIp, certVpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(vpnIp, certVpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
-	lhh.l.Infof("BRAD: HostUpdateNotification includes vpnIP %v relay for %v", certVpnIp, n.Details.RelayVpnIp)
 	am.unlockedSetRelay(vpnIp, certVpnIp, n.Details.RelayVpnIp)
 	am.Unlock()
 }

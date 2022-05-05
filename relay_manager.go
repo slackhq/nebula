@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
@@ -12,21 +14,34 @@ import (
 )
 
 type relayManager struct {
-	l       *logrus.Logger
-	hostmap *HostMap
+	l           *logrus.Logger
+	hostmap     *HostMap
+	workManager *SystemTimerWheel
+
+	in       map[iputil.VpnIp]struct{}
+	inLock   *sync.RWMutex
+	inCount  int
+	out      map[iputil.VpnIp]struct{}
+	outLock  *sync.RWMutex
+	outCount int
 }
 
 func NewRelayManager(ctx context.Context, l *logrus.Logger, hostmap *HostMap) *relayManager {
-	l.Info("BRAD: NewRelayManager")
 	rm := &relayManager{
-		l:       l,
-		hostmap: hostmap,
+		l:           l,
+		hostmap:     hostmap,
+		workManager: NewSystemTimerWheel(time.Millisecond*500, time.Second*60),
+		in:          make(map[iputil.VpnIp]struct{}),
+		inLock:      &sync.RWMutex{},
+		inCount:     0,
+		out:         make(map[iputil.VpnIp]struct{}),
+		outLock:     &sync.RWMutex{},
+		outCount:    0,
 	}
 	return rm
 }
 
 func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iputil.VpnIp, remoteIdx *uint32, relayType int) (uint32, error) {
-	l.Infof("BRAD: AddRelay for HostInfo %v and peerIp %v!", relayHostInfo.vpnIp.String(), vpnIp)
 	hm.Lock()
 	defer hm.Unlock()
 	for i := 0; i < 32; i++ {
@@ -48,7 +63,6 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 			}
 
 			if remoteIdx != nil {
-				l.Infof("BRAD: Set the relay's RemoteIndex appropriately %v", *remoteIdx)
 				newRelay.RemoteIndex = *remoteIdx
 			}
 
@@ -56,7 +70,6 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 			relayHostInfo.relayForByIdx[index] = &newRelay
 
 			relayHostInfo.Unlock()
-			l.Infof("BRAD: Generated Relay Index %v", index)
 			return index, nil
 		}
 	}
@@ -90,8 +103,6 @@ func (rm *relayManager) SetRelay(l *logrus.Logger, relayHostInfo *HostInfo, m *N
 	}
 	rm.hostmap.Lock()
 	defer rm.hostmap.Unlock()
-	rm.hostmap.RelayRemoteIdx[RelayRemoteIdx{idx: m.ResponderRelayIndex, ip: relayHostInfo.vpnIp}] = relay
-	l.Info("BRAD: Relay state updated.")
 	return relay, nil
 }
 
@@ -119,11 +130,9 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 	}
 	// Do I need to complete the relays now?
 	if relay.Type == TerminalType {
-		rm.l.Infof("BRAD: Terminal relay type, no need to look for another relay.")
 		return
 	}
 	// I'm the middle man. Let the initiator know that the I've established the relay they requested.
-	rm.l.Infof("BRAD: Look up relay PeerIP %v's HostInfo, peerHostInfo.", relay.PeerIp.String())
 	peerHostInfo, err := rm.hostmap.QueryVpnIp(relay.PeerIp)
 	if err != nil {
 		rm.l.Infof("BRAD: I didn't find a HostInfo for peer IP %v", relay.PeerIp.String())
@@ -160,22 +169,15 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *NebulaControl) {
 	from := iputil.VpnIp(m.RelayFromIp)
 	target := iputil.VpnIp(m.RelayToIp)
-	f.l.Infof("BRAD: handleCreateRelay me=%v createRelay CB from %v for src %v to target %v", f.myVpnIp.String(), h.vpnIp.String(), from.String(), target.String())
 	// Is the target of the relay me?
 	if target == f.myVpnIp {
-		f.l.Info("BRAD: I am the target of this relay. Yay!")
 
 		h.RLock()
 		_, ok := h.relayForByIp[from]
 		h.RUnlock()
-		if ok {
-			rm.l.Infof("BRAD: I searched the relay HostInfo for IP %v, and got a hit.", from.String())
-		}
 		if !ok {
-			rm.l.Infof("BRAD: Create a new Relay state thing for HostInfo %v PeerIP=%v from=%v target=%v", h.vpnIp.String(), from.String(), from.String(), target.String())
 			idx, err := AddRelay(rm.l, h, f.hostMap, from, &m.InitiatorRelayIndex, TerminalType)
 			if err != nil {
-				rm.l.WithError(err).Warn("BRAD: Failed to generate an index for this relay. Oops.")
 				return
 			}
 			h.AddRelay(idx, from)
@@ -188,8 +190,6 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			// Do something, Something happened.
 		}
 
-		rm.l.Infof("BRAD: Generate a CreateRelayResponse for %v. ResponderIdx=%v InitIdx=%v, FromIP=%v, ToIp=%v",
-			h.vpnIp.String(), relay.LocalIndex, relay.RemoteIndex, h.vpnIp.String(), target.String())
 		resp := NebulaControl{
 			Type:                NebulaControl_CreateRelayResponse,
 			ResponderRelayIndex: relay.LocalIndex,
@@ -207,37 +207,30 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		return
 	} else {
 		// the target is not me. Create a relay to the target, from me.
-		f.l.Infof("BRAD: I am not the target of this relay. Attempt to create relay for target %v", target.String())
-		peer, err := f.hostMap.QueryVpnIp(target)
-		if err != nil {
-			rm.l.WithError(err).Error("BRAD: I do not have a tunnel to the peer :/")
+		peer := f.getOrHandshake(target)
+		if peer == nil {
 			return
 		}
 		sendCreateRequest := false
 		var index uint32
+		var err error
 		peer.RLock()
 		relay, ok := peer.relayForByIp[from]
 		peer.RUnlock()
 		if ok {
 			index = relay.LocalIndex
-			rm.l.Infof("BRAD: I searched the relay HostInfo for IP %v, and found existing state with index %v, state %v.", target.String(), index, relay.State)
 			if relay.State == Requested {
 				sendCreateRequest = true
 			}
 		} else {
-			rm.l.Infof("BRAD: I searched the relay HostInfo for IP %v, but didn't find anything.", target.String())
 			// Allocate an index in the hostMap for this relay peer
-			rm.l.Infof("BRAD: Create a new Relay state thing for HostInfo %v PeerIp=%v from=%v target=%v", peer.vpnIp.String(), from.String(), from.String(), target.String())
 			index, err = AddRelay(rm.l, peer, f.hostMap, from, nil, RelayType)
 			if err != nil {
-				rm.l.WithError(err).Error("BRAD: I was unable to create an index.")
 				return
 			}
-			rm.l.Infof("BRAD: Added new state to the Relay thing, with index %v", index)
 		}
 		if sendCreateRequest {
 			// Send a CreateRelayRequest to the peer.
-			rm.l.Infof("BRAD: Send CreateRelayRequest with initiator Index %v to %v", index, target.String())
 			req := NebulaControl{
 				Type:                NebulaControl_CreateRelayRequest,
 				InitiatorRelayIndex: index,
@@ -257,18 +250,14 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		relay, ok = h.relayForByIp[target]
 		h.RUnlock()
 		if !ok {
-			rm.l.Infof("BRAD: Create relay state on host info %v for peerIp %v", h.vpnIp.String(), target.String())
 			// Add the relay
 			_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, RelayType)
 			if err != nil {
-				rm.l.Infof("BRAD: Failed to AddRelay on RelayRequest: %v", err)
 				return
 			}
 		} else {
-			rm.l.Infof("BRAD: Already tracking Relay object on host info %v for target %v, state=%v", h.vpnIp, target, relay.State)
 			switch relay.State {
 			case Established:
-				rm.l.Info("BRAD: Send a RelayCreatedResponse.")
 				resp := NebulaControl{
 					Type:                NebulaControl_CreateRelayResponse,
 					ResponderRelayIndex: relay.LocalIndex,
@@ -294,20 +283,9 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 	//rm.workManager.Add(func() { rm.handleCreateRelay(h, f, target) }, 500*time.Millisecond)
 }
 
-func (rm *relayManager) handleRemoveRelayRequest(h *HostInfo, f *Interface, m *NebulaControl) {
-	// Find the Relay object based on the remote index and host IP that sent the message
-	rm.hostmap.Lock()
-	relayRemote := RelayRemoteIdx{idx: m.ResponderRelayIndex, ip: h.vpnIp}
-	relay, ok := rm.hostmap.RelayRemoteIdx[relayRemote]
-	if !ok {
-		rm.hostmap.Unlock()
-		rm.l.WithField("vpnIp", h.vpnIp).WithField("remoteIdx", m.ResponderRelayIndex).Info("Received RemoveRelayRequest for unknown Relay tunnel")
-		return
-	}
-	// Clean up hostmap.RelayRemoteIdx
+func (rm *relayManager) RemoveRelay(relay *Relay, h *HostInfo) {
+
 	// Clean up HostInfo.relays
-	delete(rm.hostmap.RelayRemoteIdx, relayRemote)
-	rm.hostmap.Unlock()
 	h.Lock()
 	// Clean up HostInfo relay object's relayForByIp, relayForByIdx
 	delete(h.relayForByIp, relay.PeerIp)
@@ -324,31 +302,11 @@ func (rm *relayManager) handleRemoveRelayRequest(h *HostInfo, f *Interface, m *N
 	peerHostInfo.Unlock()
 }
 
-/*
-func (rm *relayManager) AddRelayIndexHostInfo(h *HostInfo) error {
-	c.pendingHostMap.Lock()
-	defer c.pendingHostMap.Unlock()
-	c.mainHostMap.RLock()
-	defer c.mainHostMap.RUnlock()
-
-	for i := 0; i < 32; i++ {
-		index, err := generateIndex(rm.l)
-		if err != nil {
-			return err
-		}
-
-		_, inPending := c.pendingHostMap.Indexes[index]
-		_, inMain := c.mainHostMap.Indexes[index]
-
-		if !inMain && !inPending {
-			h.localIndexId = index
-			c.pendingHostMap.Indexes[index] = h
-			return nil
-		}
-	}
-
-	return errors.New("failed to generate unique localIndexId")
+func (rm *relayManager) handleRemoveRelayRequest(h *HostInfo, f *Interface, m *NebulaControl) {
+	// Find the Relay object based on the remote index and host IP that sent the message
+	//rm.RemoveRelay(relay, h)
 }
+
 func (rm *relayManager) Start(ctx context.Context) {
 	go rm.Run(ctx)
 }
@@ -377,5 +335,3 @@ func (rm *relayManager) HandleMonitorTick(now time.Time) {
 		ep.(func())()
 	}
 }
-
-*/

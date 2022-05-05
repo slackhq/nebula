@@ -176,17 +176,29 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 		}
 	})
 
+	// Don't be too noisy or confusing if we fail to send a handshake - if we don't get through we'll eventually log a timeout
+	if len(sentTo) > 0 {
+		hostinfo.logger(c.l).WithField("udpAddrs", sentTo).
+			WithField("initiatorIndex", hostinfo.localIndexId).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+			Info("Handshake message sent")
+	}
+
 	hostinfo.logger(c.l).Infof("Look for relays...%v", hostinfo.remotes.relays)
 	// Send a RelayRequest to all known Relay IP's
 	for _, relay := range hostinfo.remotes.relays {
-		hostinfo.logger(c.l).WithField("relayUDPAddr", relay).
-			//WithField("initiatorIndex", hostinfo.localIndexId).
-			WithField("its", "happening").
-			Info("Send CreateRelayRequest")
+		// Don't relay to myself, and don't relay through the host I'm trying to connect to
+		if *relay == vpnIp || *relay == c.lightHouse.myVpnIp {
+			continue
+		}
 		relayHostInfo, err := c.mainHostMap.QueryVpnIp(*relay)
 		if err != nil {
-			hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Failed to find relay in main hostmap")
-			// TODO: Create a tunnel to the relay, since it doesn't exist yet.
+			hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Failed to find relay in main hostmap. Send test message.")
+			// TODONE: Create a tunnel to the relay, since it doesn't exist yet.
+			// HACKERY EncWriter should expose getOrHandshake. The impl of SendMessageToVpnIp calls getOrHandshake, but will
+			// also queue up unecessary messages for the peer.
+			// Update EncWriter to expose GetOrHandshake, and use that directly here.
+			f.SendMessageToVpnIp(header.Test, header.TestRequest, *relay, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 			continue
 		}
 		// Check the relay to see if we already added a relay to it
@@ -238,14 +250,6 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 				f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
 			}
 		}
-	}
-
-	// Don't be too noisy or confusing if we fail to send a handshake - if we don't get through we'll eventually log a timeout
-	if len(sentTo) > 0 {
-		hostinfo.logger(c.l).WithField("udpAddrs", sentTo).
-			WithField("initiatorIndex", hostinfo.localIndexId).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Info("Handshake message sent")
 	}
 
 	// Increment the counter to increase our delay, linear backoff

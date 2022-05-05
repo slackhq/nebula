@@ -246,7 +246,6 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 					f.l.Error("BRAD: Both addr and via are nil. Can't send anything.")
 					return
 				}
-				f.l.Infof("BRAD: ErrAlreadySeen ix_handshake_stage1 Send response via relay %v", via2.relayHI.vpnIp)
 				hostinfo.relays[via2.relayHI.vpnIp] = struct{}{}
 				f.SendVia(via2.relayHI, via2.remoteIdx, msg, make([]byte, 12), make([]byte, mtu), false)
 				return
@@ -329,7 +328,6 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 			f.l.Error("BRAD: Both addr and via are nil. Can't send anything.")
 			return
 		}
-		f.l.Infof("BRAD: ix_handshake_stage1 Send response via relay %v", via2.relayHI.vpnIp)
 		hostinfo.relays[via2.relayHI.vpnIp] = struct{}{}
 		f.SendVia(via2.relayHI, via2.remoteIdx, msg, make([]byte, 12), make([]byte, mtu), false)
 	}

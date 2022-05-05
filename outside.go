@@ -32,7 +32,6 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 		}
 		return
 	}
-	f.l.Errorf("BRAD: len(packet)=%v h=%v addr=%v", len(packet), h, addr)
 
 	//l.Error("in packet ", header, packet[HeaderLen:])
 
@@ -59,21 +58,17 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 
 		switch h.Subtype {
 		case header.MessageNone:
-			f.l.Errorf("BRAD: decryptToTun")
 			f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache)
 		case header.MessageRelay:
 			// The entire body is sent as AD, not encrypted.
 			// The packet is my parsed Nebula header, AEAD-protected payload, and a trailing 16-byte AEAD signature value.
 			signedPayload := packet[:len(packet)-16]
-			hostinfo.logger(f.l).WithError(err).Infof("BRAD: DecryptDanger See if I can read a tunneled message using HostInfo %v, len(packet)=%v, sans Signature len=%v...", hostinfo.vpnIp.String(), len(packet), len(packet)-16)
 			out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, signedPayload, packet[len(packet)-16:], h.MessageCounter, nb)
 			if err != nil {
-				hostinfo.logger(f.l).WithError(err).Info("BRAD: DecryptDanger FAIL")
 				return
 			}
 			// Successfully validated the thing. Get rid of the Relay header.
 			signedPayload = signedPayload[header.Len:]
-			hostinfo.logger(f.l).WithError(err).Infof("BRAD: DecryptDanger Worked! len(signedPayload)=%v...", len(signedPayload))
 			// Pull the Roaming parts up here, and return.
 			f.handleHostRoaming(hostinfo, addr)
 			f.connectionManager.In(hostinfo.vpnIp)
@@ -96,13 +91,11 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				}
 				return
 			}
-			hostinfo.logger(f.l).Infof("BRAD: Got relay %v with index %v", *relay, h.RemoteIndex)
 
 			switch relay.Type {
 			case TerminalType:
 				// If I am the target of this relay, process the unwrapped packet
 				// From this recursive point, all these variables are 'burned'. We shouldn't rely on them again.
-				hostinfo.logger(f.l).Infof("BRAD: Relay for %v type is Terminal, process this packet", relay.PeerIp.String())
 				f.readOutsidePackets(nil, &ViaSender{relayHI: hostinfo, remoteIdx: relay.RemoteIndex}, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
 				return
 			case RelayType:
@@ -121,14 +114,10 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 
 				// If that relay is Established, forward the payload through it
 				if targetRelay.State == Established {
-					hostinfo.logger(f.l).Infof("BRAD: Relay state is ESTABLISHED")
 					switch targetRelay.Type {
 					case RelayType:
 						// Forward this packet through the relay tunnel
-						hostinfo.logger(f.l).Infof("BRAD: Relay type is RELAY, forward this packet along to %v (not done yet)", relay.PeerIp.String())
 						// Find the target HostInfo
-
-						hostinfo.logger(f.l).Infof("BRAD: Relay this packet through host %v", targetHI.vpnIp.String())
 						f.SendVia(targetHI, targetRelay.RemoteIndex, signedPayload, nb, out, false)
 					case TerminalType:
 						hostinfo.logger(f.l).Infof("BRAD: Relay Type is Terminal...What is going on?")
@@ -220,9 +209,6 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			return
 		}
 
-		hostinfo.logger(f.l).WithField("udpAddr", addr).
-			Info("BRAD: got a header.Control message")
-
 		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).WithField("udpAddr", addr).
@@ -234,9 +220,9 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 		err = m.Unmarshal(d)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).Info("BRAD: Faild to unmarshal the thing")
+			break
 		}
 
-		hostinfo.logger(f.l).Infof("BRAD: Control Message %v", m)
 		f.relayManager.HandleControlMsg(hostinfo, m, f)
 
 	default:
