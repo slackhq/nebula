@@ -247,7 +247,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 					return
 				}
 				hostinfo.relays[via2.relayHI.vpnIp] = struct{}{}
-				f.SendVia(via2.relayHI, via2.remoteIdx, msg, make([]byte, 12), make([]byte, mtu), false)
+				f.SendVia(via2.relayHI, via2.relay, msg, make([]byte, 12), make([]byte, mtu), false)
 				return
 			}
 		case ErrExistingHostInfo:
@@ -329,7 +329,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 			return
 		}
 		hostinfo.relays[via2.relayHI.vpnIp] = struct{}{}
-		f.SendVia(via2.relayHI, via2.remoteIdx, msg, make([]byte, 12), make([]byte, mtu), false)
+		f.SendVia(via2.relayHI, via2.relay, msg, make([]byte, 12), make([]byte, mtu), false)
 	}
 
 	hostinfo.handshakeComplete(f.l, f.cachedPacketMetrics)

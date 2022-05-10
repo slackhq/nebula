@@ -198,24 +198,22 @@ func (f *Interface) sendTo(t header.MessageType, st header.MessageSubType, ci *C
 // to the payload for the ultimate target host, making this a useful method for sending
 // handshake messages to peers through relay tunnels.
 // via is the HostInfo through which the message is relayed.
-// remoteIdx is the remote index to use in the Nebula Header, indicating which Relay tunnel
-// this message is using, and ultimately which destination host the Relay should forward
-// the message to.
 // ad is the plaintext data to authenticate, but not encrypt
 // nb is a buffer used to store the nonce value, re-used for performance reasons.
 // out is a buffer used to store the result of the Encrypt operation
 // q indicates which writer to use to send the packet.
 func (f *Interface) SendVia(viaIfc interface{},
-	remoteIdx uint32,
+	relayIfc interface{},
 	ad,
 	nb,
 	out []byte,
 	nocopy bool,
 ) {
 	via := viaIfc.(*HostInfo)
+	relay := relayIfc.(*Relay)
 	c := atomic.AddUint64(&via.ConnectionState.atomicMessageCounter, 1)
 
-	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, remoteIdx, c)
+	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, relay.RemoteIndex, c)
 	f.connectionManager.Out(via.vpnIp)
 
 	// AEAD over both the header and payload for this message type.
@@ -240,6 +238,7 @@ func (f *Interface) SendVia(viaIfc interface{},
 		via.logger(f.l).WithError(err).Info("BRAD: Failed to EncryptDanger in sendVia")
 		return
 	}
+	f.relayManager.Out(relay.LocalIndex)
 	err = f.writers[0].WriteTo(out, via.remote)
 	if err != nil {
 		via.logger(f.l).WithError(err).Info("BRAD: Failed to WriteTo in sendVia")
@@ -316,7 +315,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 				hostinfo.logger(f.l).Infof("BRAD: sendNoMetrics relay %v does not have a relay object for target %v", relayHostInfo.vpnIp.String(), hostinfo.vpnIp.String())
 				continue
 			}
-			f.SendVia(relayHostInfo, relay.RemoteIndex, out, nb, fullOut[:header.Len+len(out)], true)
+			f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true)
 			break
 		}
 	}

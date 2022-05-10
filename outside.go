@@ -76,6 +76,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			relay, ok := hostinfo.relayForByIdx[h.RemoteIndex]
 			if !ok {
 				hostinfo.logger(f.l).Infof("BRAD: Failed to find a relay with index %v", h.RemoteIndex)
+				f.hostMap.DeleteRelayIdx(h.RemoteIndex)
 				// Kindly notify the sender that there is no relay here
 				m := NebulaControl{
 					Type:                NebulaControl_RemoveRelayRequest,
@@ -87,6 +88,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 						WithError(err).
 						Error("BRAD: Failed to marshal Control message to remove relay")
 				} else {
+					f.relayManager.In(h.RemoteIndex)
 					f.SendMessageToVpnIp(header.Control, 0, hostinfo.vpnIp, msg, make([]byte, 12), make([]byte, mtu))
 				}
 				return
@@ -96,7 +98,8 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			case TerminalType:
 				// If I am the target of this relay, process the unwrapped packet
 				// From this recursive point, all these variables are 'burned'. We shouldn't rely on them again.
-				f.readOutsidePackets(nil, &ViaSender{relayHI: hostinfo, remoteIdx: relay.RemoteIndex}, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
+				f.relayManager.In(h.RemoteIndex)
+				f.readOutsidePackets(nil, &ViaSender{relayHI: hostinfo, remoteIdx: relay.RemoteIndex, relay: relay}, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
 				return
 			case RelayType:
 				// Find the target HostInfo relay object
@@ -118,7 +121,8 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 					case RelayType:
 						// Forward this packet through the relay tunnel
 						// Find the target HostInfo
-						f.SendVia(targetHI, targetRelay.RemoteIndex, signedPayload, nb, out, false)
+						f.relayManager.In(h.RemoteIndex)
+						f.SendVia(targetHI, targetRelay, signedPayload, nb, out, false)
 					case TerminalType:
 						hostinfo.logger(f.l).Infof("BRAD: Relay Type is Terminal...What is going on?")
 					}

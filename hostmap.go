@@ -98,6 +98,7 @@ type HostInfo struct {
 type ViaSender struct {
 	relayHI   *HostInfo
 	remoteIdx uint32
+	relay     *Relay
 }
 
 type cachedPacket struct {
@@ -281,6 +282,12 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 	hm.Lock()
 	defer hm.Unlock()
 	hm.unlockedDeleteHostInfo(hostinfo)
+}
+
+func (hm *HostMap) DeleteRelayIdx(localIdx uint32) {
+	hm.Lock()
+	defer hm.Unlock()
+	delete(hm.RemoteIndexes, localIdx)
 }
 
 func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {

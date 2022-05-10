@@ -7,7 +7,7 @@ import (
 
 type EncWriter interface {
 	SendVia(via interface{},
-		remoteIdx uint32,
+		relay interface{},
 		ad,
 		nb,
 		out []byte,

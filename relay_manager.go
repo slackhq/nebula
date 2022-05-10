@@ -14,31 +14,73 @@ import (
 )
 
 type relayManager struct {
-	l           *logrus.Logger
-	hostmap     *HostMap
-	workManager *SystemTimerWheel
+	l             *logrus.Logger
+	hostmap       *HostMap
+	relayWheeler  *GenericTimerWheel
+	checkInterval time.Duration
 
-	in       map[iputil.VpnIp]struct{}
-	inLock   *sync.RWMutex
-	inCount  int
-	out      map[iputil.VpnIp]struct{}
-	outLock  *sync.RWMutex
-	outCount int
+	in      map[uint32]struct{}
+	inLock  *sync.RWMutex
+	out     map[uint32]struct{}
+	outLock *sync.RWMutex
 }
 
 func NewRelayManager(ctx context.Context, l *logrus.Logger, hostmap *HostMap) *relayManager {
 	rm := &relayManager{
-		l:           l,
-		hostmap:     hostmap,
-		workManager: NewSystemTimerWheel(time.Millisecond*500, time.Second*60),
-		in:          make(map[iputil.VpnIp]struct{}),
-		inLock:      &sync.RWMutex{},
-		inCount:     0,
-		out:         make(map[iputil.VpnIp]struct{}),
-		outLock:     &sync.RWMutex{},
-		outCount:    0,
+		l:             l,
+		hostmap:       hostmap,
+		relayWheeler:  NewGenericTimerWheel(time.Millisecond*500, time.Second*60),
+		checkInterval: 5 * time.Second,
+		in:            make(map[uint32]struct{}),
+		inLock:        &sync.RWMutex{},
+		out:           make(map[uint32]struct{}),
+		outLock:       &sync.RWMutex{},
 	}
 	return rm
+}
+
+func (rm *relayManager) In(localIdx uint32) {
+	rm.inLock.RLock()
+	// If this already exists, return
+	if _, ok := rm.in[localIdx]; ok {
+		rm.inLock.RUnlock()
+		return
+	}
+	rm.inLock.RUnlock()
+	rm.inLock.Lock()
+	rm.in[localIdx] = struct{}{}
+	rm.inLock.Unlock()
+}
+
+// Out is used to indicate some outbound traffic to a relay, tracked by the relay's local index.
+// We better see some traffic _in_ over that same relay tunnel, or we're gunna shut it all down.
+func (rm *relayManager) Out(localIdx uint32) {
+	rm.outLock.RLock()
+	// If this already exists, return
+	if _, ok := rm.out[localIdx]; ok {
+		rm.outLock.RUnlock()
+		return
+	}
+	rm.outLock.RUnlock()
+	rm.outLock.Lock()
+	// double check since we dropped the lock temporarily
+	if _, ok := rm.out[localIdx]; ok {
+		rm.outLock.Unlock()
+		return
+	}
+	rm.out[localIdx] = struct{}{}
+	rm.outLock.Unlock()
+	rm.relayWheeler.Add(localIdx, rm.checkInterval)
+}
+
+func (rm *relayManager) CheckIn(localIdx uint32) bool {
+	rm.inLock.RLock()
+	if _, ok := rm.in[localIdx]; ok {
+		rm.inLock.RUnlock()
+		return true
+	}
+	rm.inLock.RUnlock()
+	return false
 }
 
 func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iputil.VpnIp, remoteIdx *uint32, relayType int) (uint32, error) {
@@ -78,9 +120,6 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 }
 
 func (rm *relayManager) SetRelay(l *logrus.Logger, relayHostInfo *HostInfo, m *NebulaControl) (*Relay, error) {
-	l.Infof("BRAD: SetRelay on HostInfo %v, RelayFromIp=%v RelayToIp=%v InitiatorIdx=%v ResponderIdx=%v",
-		relayHostInfo.vpnIp.String(), iputil.VpnIp(m.RelayFromIp).String(), iputil.VpnIp(m.RelayToIp).String(),
-		m.InitiatorRelayIndex, m.ResponderRelayIndex)
 	var relay *Relay
 	err := func() error {
 		relayHostInfo.Lock()
@@ -92,7 +131,6 @@ func (rm *relayManager) SetRelay(l *logrus.Logger, relayHostInfo *HostInfo, m *N
 			return fmt.Errorf("wat")
 		}
 		relay.RemoteIndex = m.ResponderRelayIndex
-		l.Infof("BRAD: Set relay.State=ESTABLISHED for Relay %v Peer %v", relayHostInfo.vpnIp.String(), relay.PeerIp.String())
 		relay.State = Established
 		//relayHostInfo.relayForByIp[iputil.VpnIp(m.RelayFromIp)] = relay
 		//relayHostInfo.relayForByIdx[m.InitiatorRelayIndex] = relay
@@ -120,9 +158,7 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, m *NebulaControl, f *Inter
 }
 
 func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *NebulaControl) {
-	from := iputil.VpnIp(m.RelayFromIp)
 	target := iputil.VpnIp(m.RelayToIp)
-	rm.l.Infof("BRAD: Got a CreateRelayResponse from %v for from %v to %v. Woot!", h.vpnIp.String(), from.String(), target.String())
 	relay, err := rm.SetRelay(rm.l, h, m)
 	if err != nil {
 		rm.l.Infof("BRAD: Failed to update relay for target %v: %v", target.String(), err)
@@ -145,10 +181,7 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 		rm.l.Infof("BRAD: peerRelay %v does not have Relay state for %v", peerHostInfo.vpnIp.String(), target.String())
 		return
 	}
-	rm.l.Infof("BRAD: Set the Relay state ESTABLISHED for the initial Relay requester %v!", peerRelay)
 	peerRelay.State = Established
-	rm.l.Infof("BRAD: send CreateRelayResponse initIdx=%v respIdx=%v relayFromIp=%v relayToIp=%v peerHostInfo=%v.",
-		peerRelay.RemoteIndex, peerRelay.LocalIndex, peerHostInfo.vpnIp.String(), target.String(), peerHostInfo.vpnIp.String())
 	resp := NebulaControl{
 		Type:                NebulaControl_CreateRelayResponse,
 		ResponderRelayIndex: peerRelay.LocalIndex,
@@ -161,7 +194,6 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 		rm.l.
 			WithError(err).Error("BRAD: relayManager Failed to send Control CreateRelayResponse message to create relay")
 	} else {
-		rm.l.Infof("BRAD: Send CreateRelayResponse to %v", peerHostInfo.vpnIp)
 		f.SendMessageToVpnIp(header.Control, 0, peerHostInfo.vpnIp, msg, make([]byte, 12), make([]byte, mtu))
 	}
 }
@@ -169,6 +201,7 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *NebulaControl) {
 	from := iputil.VpnIp(m.RelayFromIp)
 	target := iputil.VpnIp(m.RelayToIp)
+	rm.l.Info("BRAD: relayManager CreateRelayReqest from %v to %v", from, target)
 	// Is the target of the relay me?
 	if target == f.myVpnIp {
 
@@ -270,7 +303,6 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 					rm.l.
 						WithError(err).Error("BRAD: relayManager Failed to send Control CreateRelayResponse message to create relay")
 				} else {
-					rm.l.Infof("BRAD: Send CreateRelayResponse to %v", h.vpnIp)
 					f.SendMessageToVpnIp(header.Control, 0, h.vpnIp, msg, make([]byte, 12), make([]byte, mtu))
 				}
 
@@ -311,6 +343,10 @@ func (rm *relayManager) Start(ctx context.Context) {
 	go rm.Run(ctx)
 }
 
+func (rm *relayManager) AddTrafficWatch(localIdx uint32, seconds int) {
+	rm.relayWheeler.Add(localIdx, (time.Duration(seconds) * time.Second))
+}
+
 func (rm *relayManager) Run(ctx context.Context) {
 	clockSource := time.NewTicker(500 * time.Millisecond)
 	defer clockSource.Stop()
@@ -320,7 +356,7 @@ func (rm *relayManager) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-clockSource.C:
-			rm.workManager.advance(now)
+			rm.relayWheeler.advance(now)
 			rm.HandleMonitorTick(now)
 		}
 	}
@@ -328,10 +364,15 @@ func (rm *relayManager) Run(ctx context.Context) {
 
 func (rm *relayManager) HandleMonitorTick(now time.Time) {
 	for {
-		ep := rm.workManager.Purge()
+		ep := rm.relayWheeler.Purge()
 		if ep == nil {
 			break
 		}
-		ep.(func())()
+		traf := rm.CheckIn(ep.(uint32))
+		if traf {
+			rm.l.Infof("BRAD: I've received traffic from this relay. Do nothing. %v", ep.(uint32))
+		} else {
+			rm.l.Infof("BRAD: I've seen no traffic from this relay. PURGE LOCAL IDX %v", ep.(uint32))
+		}
 	}
 }
