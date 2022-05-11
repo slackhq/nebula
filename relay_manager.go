@@ -315,23 +315,8 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 	//rm.workManager.Add(func() { rm.handleCreateRelay(h, f, target) }, 500*time.Millisecond)
 }
 
-func (rm *relayManager) RemoveRelay(relay *Relay, h *HostInfo) {
-
-	// Clean up HostInfo.relays
-	h.Lock()
-	// Clean up HostInfo relay object's relayForByIp, relayForByIdx
-	delete(h.relayForByIp, relay.PeerIp)
-	delete(h.relayForByIdx, relay.LocalIndex)
-	h.Unlock()
-	// Finally clean up the HostInfo of the peer, to indicate that this relay HostInfo doesn't work anymore
-	peerHostInfo, err := rm.hostmap.QueryVpnIp(relay.PeerIp)
-	if err != nil {
-		rm.l.WithField("vpnIp", h.vpnIp).WithField("peerIp", relay.PeerIp).Info("BRAD: Failed to find peer's HostInfo")
-		return
-	}
-	peerHostInfo.Lock()
-	delete(peerHostInfo.relays, h.vpnIp)
-	peerHostInfo.Unlock()
+func (rm *relayManager) RemoveRelay(localIdx uint32) {
+	rm.hostmap.RemoveRelay(localIdx)
 }
 
 func (rm *relayManager) handleRemoveRelayRequest(h *HostInfo, f *Interface, m *NebulaControl) {
@@ -368,11 +353,13 @@ func (rm *relayManager) HandleMonitorTick(now time.Time) {
 		if ep == nil {
 			break
 		}
-		traf := rm.CheckIn(ep.(uint32))
+		localIdx := ep.(uint32)
+		traf := rm.CheckIn(localIdx)
 		if traf {
-			rm.l.Infof("BRAD: I've received traffic from this relay. Do nothing. %v", ep.(uint32))
+			rm.l.Infof("BRAD: I've received traffic from this relay. Do nothing. %v", localIdx)
 		} else {
-			rm.l.Infof("BRAD: I've seen no traffic from this relay. PURGE LOCAL IDX %v", ep.(uint32))
+			rm.l.Infof("BRAD: I've seen no traffic from this relay. PURGE LOCAL IDX %v", localIdx)
+			rm.hostmap.RemoveRelay(localIdx)
 		}
 	}
 }

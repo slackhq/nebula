@@ -146,6 +146,47 @@ func (hm *HostMap) EmitStats(name string) {
 	metrics.GetOrRegisterGauge("hostmap."+name+".remoteIndexes", nil).Update(int64(remoteIndexLen))
 }
 
+func (hm *HostMap) RemoveRelay(localIdx uint32) {
+	hm.Lock()
+	hm.l.Infof("BRAD: HostMap %v RemoveRelay", localIdx)
+	hiRelay, ok := hm.Relays[localIdx]
+	if !ok {
+		hm.l.Infof("BRAD: HostMap %v RemoveRelay Index not found", localIdx)
+		hm.Unlock()
+		return
+	}
+	hm.l.Infof("BRAD: HostMap %v RemoveRelay found relay %v, delete hm.Relays", localIdx, hiRelay.vpnIp)
+	delete(hm.Relays, localIdx)
+	hm.Unlock()
+	ip, ok := hiRelay.RemoveRelay(localIdx, hm.l)
+	if !ok {
+		return
+	}
+	hiPeer, err := hm.QueryVpnIp(ip)
+	if err != nil {
+		hm.l.Infof("BRAD: HostMap %v RemoveRelay peer not found", localIdx)
+		return
+	}
+	hm.l.Infof("BRAD: HostMap %v RemoveRelay also clean up HostInfo %v relays", localIdx, hiPeer.vpnIp)
+	hiPeer.Lock()
+	delete(hiPeer.relays, hiRelay.vpnIp)
+	hiPeer.Unlock()
+}
+
+func (hi *HostInfo) RemoveRelay(localIdx uint32, l *logrus.Logger) (iputil.VpnIp, bool) {
+	hi.Lock()
+	l.Infof("BRAD: HostInfo %v RemoveRelay", hi.vpnIp)
+	relay, ok := hi.relayForByIdx[localIdx]
+	if !ok {
+		hi.Unlock()
+		return iputil.VpnIp(0), false
+	}
+	delete(hi.relayForByIdx, localIdx)
+	delete(hi.relayForByIp, relay.PeerIp)
+	hi.Unlock()
+	return relay.PeerIp, true
+}
+
 func (hm *HostMap) GetIndexByVpnIp(vpnIp iputil.VpnIp) (uint32, error) {
 	hm.RLock()
 	if i, ok := hm.Hosts[vpnIp]; ok {
@@ -279,6 +320,19 @@ func (hm *HostMap) DeleteReverseIndex(index uint32) {
 }
 
 func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
+
+	// Tear down all the relays going through this host
+	localRelayIdxs := []uint32{}
+	hostinfo.Lock()
+	for localIdx := range hostinfo.relayForByIdx {
+		localRelayIdxs = append(localRelayIdxs, localIdx)
+	}
+	hostinfo.Unlock()
+	for _, localIdx := range localRelayIdxs {
+		hm.RemoveRelay(localIdx)
+	}
+
+	// Now delete the host itself
 	hm.Lock()
 	defer hm.Unlock()
 	hm.unlockedDeleteHostInfo(hostinfo)
