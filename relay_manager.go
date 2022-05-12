@@ -83,7 +83,7 @@ func (rm *relayManager) CheckIn(localIdx uint32) bool {
 	return false
 }
 
-func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iputil.VpnIp, remoteIdx *uint32, relayType int) (uint32, error) {
+func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iputil.VpnIp, remoteIdx *uint32, relayType int, state int) (uint32, error) {
 	hm.Lock()
 	defer hm.Unlock()
 	for i := 0; i < 32; i++ {
@@ -99,7 +99,7 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 			relayHostInfo.relays[vpnIp] = struct{}{}
 			newRelay := Relay{
 				Type:       relayType,
-				State:      Requested,
+				State:      state,
 				LocalIndex: index,
 				PeerIp:     vpnIp,
 			}
@@ -201,15 +201,23 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *NebulaControl) {
 	from := iputil.VpnIp(m.RelayFromIp)
 	target := iputil.VpnIp(m.RelayToIp)
-	rm.l.Info("BRAD: relayManager CreateRelayReqest from %v to %v", from, target)
+	rm.l.Infof("BRAD: relayManager CreateRelayReqest from %v to %v", from, target)
 	// Is the target of the relay me?
 	if target == f.myVpnIp {
 
 		h.RLock()
-		_, ok := h.relayForByIp[from]
+		existingRelay, ok := h.relayForByIp[from]
 		h.RUnlock()
-		if !ok {
-			idx, err := AddRelay(rm.l, h, f.hostMap, from, &m.InitiatorRelayIndex, TerminalType)
+		if ok {
+			// Clean up existing relay, if this is a new request.
+			if existingRelay.RemoteIndex != m.InitiatorRelayIndex {
+				// We got a brand new Relay request, because its index is different than what we saw before.
+				// Clean up the existing Relay state, and get ready to record new Relay state.
+				rm.l.Infof("BRAD: Found an existing, apparently stale Relay. Remove it.")
+				rm.hostmap.RemoveRelay(existingRelay.LocalIndex)
+			}
+		} else {
+			idx, err := AddRelay(rm.l, h, f.hostMap, from, &m.InitiatorRelayIndex, TerminalType, Requested)
 			if err != nil {
 				return
 			}
@@ -248,20 +256,23 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		var index uint32
 		var err error
 		peer.RLock()
-		relay, ok := peer.relayForByIp[from]
+		targetRelay, ok := peer.relayForByIp[from]
 		peer.RUnlock()
+		rm.l.Infof("BRAD: Search peer(%v) for relayForByIp(%v), got %v,%v", peer.vpnIp, from, targetRelay, ok)
 		if ok {
-			index = relay.LocalIndex
-			if relay.State == Requested {
+			index = targetRelay.LocalIndex
+			if targetRelay.State == Requested {
 				sendCreateRequest = true
 			}
 		} else {
 			// Allocate an index in the hostMap for this relay peer
-			index, err = AddRelay(rm.l, peer, f.hostMap, from, nil, RelayType)
+			index, err = AddRelay(rm.l, peer, f.hostMap, from, nil, RelayType, Requested)
 			if err != nil {
 				return
 			}
+			sendCreateRequest = true
 		}
+		rm.l.Infof("BRAD: sendCreateRequest=%v", sendCreateRequest)
 		if sendCreateRequest {
 			// Send a CreateRelayRequest to the peer.
 			req := NebulaControl{
@@ -280,15 +291,32 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		}
 		// Also track the half-created Relay state just received
 		h.RLock()
-		relay, ok = h.relayForByIp[target]
+		relay, ok := h.relayForByIp[target]
 		h.RUnlock()
+		rm.l.Infof("BRAD: Search h(%v) for relayForByIp(%v), got %v,%v", h.vpnIp, target, relay, ok)
 		if !ok {
 			// Add the relay
-			_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, RelayType)
+			state := Requested
+			if targetRelay != nil && targetRelay.State == Established {
+
+				state = Established
+			}
+			_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, RelayType, state)
 			if err != nil {
 				return
 			}
 		} else {
+			if relay.RemoteIndex != m.InitiatorRelayIndex {
+				// This is a stale Relay entry for the same tunnel targets.
+				// Clean up the existing stuff.
+				rm.l.Infof("BRAD: relay's RemoteIndex(%v) != m.InitiatorRelayIndex(%v) :/", relay.RemoteIndex, m.InitiatorRelayIndex)
+				rm.RemoveRelay(relay.LocalIndex)
+				// Add the new relay
+				_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, RelayType, Requested)
+				if err != nil {
+					return
+				}
+			}
 			switch relay.State {
 			case Established:
 				resp := NebulaControl{
@@ -336,15 +364,18 @@ func (rm *relayManager) Run(ctx context.Context) {
 	clockSource := time.NewTicker(500 * time.Millisecond)
 	defer clockSource.Stop()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case now := <-clockSource.C:
-			rm.relayWheeler.advance(now)
-			rm.HandleMonitorTick(now)
+	rm.l.Infof("BRAD: Don't actually run.")
+	/*
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-clockSource.C:
+				rm.relayWheeler.advance(now)
+				rm.HandleMonitorTick(now)
+			}
 		}
-	}
+	*/
 }
 
 func (rm *relayManager) HandleMonitorTick(now time.Time) {

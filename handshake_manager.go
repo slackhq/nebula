@@ -148,9 +148,9 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 	// This is mainly to protect us as this should never be the case
 	// NB ^ This comment doesn't jive. It's how the thing gets intiailized.
 	// It's the common path. Should it update every time, in case a future LH query/queries give us more info?
-	//if hostinfo.remotes == nil {
-	hostinfo.remotes = c.lightHouse.QueryCache(vpnIp)
-	//}
+	if hostinfo.remotes == nil {
+		hostinfo.remotes = c.lightHouse.QueryCache(vpnIp)
+	}
 
 	//TODO: this will generate a load of queries for hosts with only 1 ip (i'm not using a lighthouse, static mapped)
 	if hostinfo.remotes.Len(c.pendingHostMap.preferredRanges) <= 1 {
@@ -230,7 +230,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 			}
 		} else {
 			// No relays exist or requested yet.
-			idx, err := AddRelay(c.l, relayHostInfo, c.mainHostMap, vpnIp, nil, TerminalType)
+			idx, err := AddRelay(c.l, relayHostInfo, c.mainHostMap, vpnIp, nil, TerminalType, Requested)
 			if err != nil {
 				hostinfo.logger(c.l).WithField("relay", relay.String()).WithError(err).Info("Failed to add relay to hostmap")
 			}

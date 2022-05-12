@@ -321,9 +321,14 @@ func (hm *HostMap) DeleteReverseIndex(index uint32) {
 
 func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 
-	// Tear down all the relays going through this host
-	localRelayIdxs := []uint32{}
+	// Delete the host itself, ensuring it's not modified anymore
+	hm.Lock()
+	hm.unlockedDeleteHostInfo(hostinfo)
+	hm.Unlock()
+
+	// And tear down all the relays going through this host
 	hostinfo.Lock()
+	localRelayIdxs := make([]uint32, 0, len(hostinfo.relayForByIdx))
 	for localIdx := range hostinfo.relayForByIdx {
 		localRelayIdxs = append(localRelayIdxs, localIdx)
 	}
@@ -332,10 +337,6 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 		hm.RemoveRelay(localIdx)
 	}
 
-	// Now delete the host itself
-	hm.Lock()
-	defer hm.Unlock()
-	hm.unlockedDeleteHostInfo(hostinfo)
 }
 
 func (hm *HostMap) DeleteRelayIdx(localIdx uint32) {
