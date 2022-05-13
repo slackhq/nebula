@@ -124,13 +124,12 @@ func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet *net.IPNet,
 	}
 
 	for _, v := range c.GetStringSlice("relay", nil) {
-		l.WithField("CIDR", v).Info("BRAD: Read relay from config. Woot!")
+		l.WithField("CIDR", v).Info("Read relay from config")
 		_, net, err := net.ParseCIDR(v)
 		if err != nil {
-			l.WithError(err).Infof("BRAD: Relay CIDR failed to parse (%v)", v)
+			l.WithError(err).Errorf("Relay CIDR failed to parse (%v)", v)
 			continue
 		}
-		l.Infof("BRAD: AddRelay(%v, %v)", net, iputil.Ip2VpnIp(myVpnNet.IP))
 		h.AddRelay(net, iputil.Ip2VpnIp(myVpnNet.IP))
 	}
 	err := h.reload(c, true)
@@ -781,7 +780,6 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp,
 	})
 
 	if !found {
-		lhh.l.Infof("BRAD: handleHostQuery !found")
 		return
 	}
 
@@ -806,7 +804,6 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp,
 		if res != nil {
 			n.Details.RelayVpnIp = append(n.Details.RelayVpnIp, uint32(res.(iputil.VpnIp)))
 		}
-		lhh.l.Infof("BRAD: 2 MarshalTo %v", n)
 
 		return n.MarshalTo(lhh.pb)
 	})
@@ -886,7 +883,6 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 	lhh.lh.Lock()
 	am := lhh.lh.unlockedGetRemoteList(vpnIp)
 	for _, r := range n.Details.Ip4CIDR {
-		lhh.l.Infof("BRAD: AddCIDR VpnIP %v for CIDR %v", vpnIp, r.BuildIpNet())
 		lhh.lh.relays.AddCIDR(r.BuildIpNet(), vpnIp)
 	}
 	am.Lock()

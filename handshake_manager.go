@@ -80,7 +80,6 @@ func (c *HandshakeManager) Run(ctx context.Context, f udp.EncWriter) {
 		case <-ctx.Done():
 			return
 		case vpnIP := <-c.trigger:
-			c.l.WithField("vpnIp", vpnIP).Debug("HandshakeManager: triggered")
 			c.handleOutbound(vpnIP, f, true)
 		case now := <-clockSource.C:
 			c.NextOutboundHandshakeTimerTick(now, f)
@@ -220,12 +219,12 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 				if err != nil {
 					hostinfo.logger(c.l).
 						WithError(err).
-						Error("BRAD: Failed to marshal Control message to create relay")
+						Error("Failed to marshal Control message to create relay")
 				} else {
 					f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
 				}
 			default:
-				hostinfo.logger(c.l).Infof("BRAD: Found a Relay on hostinfo obj %v for vpnIp %v, but unexpected state %v",
+				hostinfo.logger(c.l).Error("Found a Relay on hostinfo object %v for vpnIp %v, but unexpected state %v",
 					relayHostInfo.vpnIp.String(), vpnIp.String(), existingRelay.State)
 			}
 		} else {
@@ -245,9 +244,8 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 			if err != nil {
 				hostinfo.logger(c.l).
 					WithError(err).
-					Error("BRAD: Failed to marshal Control message to create relay")
+					Error("Failed to marshal Control message to create relay")
 			} else {
-				hostinfo.logger(c.l).Infof("BRAD: CreateRelayRequest to %v", vpnIp.String())
 				f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
 			}
 		}

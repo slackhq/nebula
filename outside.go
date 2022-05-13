@@ -52,7 +52,6 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 	case header.Message:
 		// TODO handleEncrypted sends directly to addr on error. Handle this in the tunneling case.
 		if !f.handleEncrypted(ci, addr, h) {
-			f.l.Errorf("BRAD: handleEncrypted returned false, early return")
 			return
 		}
 
@@ -78,7 +77,9 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 
 			relay, ok := hostinfo.relayForByIdx[h.RemoteIndex]
 			if !ok {
-				hostinfo.logger(f.l).Infof("BRAD: Failed to find a relay with index %v", h.RemoteIndex)
+				// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
+				// its internal mapping. This shouldn't happen!
+				hostinfo.logger(f.l).Error("HostInfo obj %v is missing remote index %v", hostinfo.vpnIp, h.RemoteIndex)
 				f.hostMap.DeleteRelayIdx(h.RemoteIndex)
 				// Kindly notify the sender that there is no relay here
 				m := NebulaControl{
@@ -89,9 +90,8 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				if err != nil {
 					hostinfo.logger(f.l).
 						WithError(err).
-						Error("BRAD: Failed to marshal Control message to remove relay")
+						Error("Failed to marshal Control message to remove relay")
 				} else {
-					f.relayManager.In(h.RemoteIndex)
 					f.SendMessageToVpnIp(header.Control, 0, hostinfo.vpnIp, msg, make([]byte, 12), make([]byte, mtu))
 				}
 				return
@@ -101,20 +101,19 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			case TerminalType:
 				// If I am the target of this relay, process the unwrapped packet
 				// From this recursive point, all these variables are 'burned'. We shouldn't rely on them again.
-				f.relayManager.In(h.RemoteIndex)
 				f.readOutsidePackets(nil, &ViaSender{relayHI: hostinfo, remoteIdx: relay.RemoteIndex, relay: relay}, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
 				return
 			case RelayType:
 				// Find the target HostInfo relay object
 				targetHI, err := f.hostMap.QueryVpnIp(relay.PeerIp)
 				if err != nil {
-					hostinfo.logger(f.l).WithError(err).Infof("BRAD: Failed to find target host info by ip %v", relay.PeerIp)
+					hostinfo.logger(f.l).WithError(err).Infof("Failed to find target host info by ip %v", relay.PeerIp)
 					return
 				}
 				// find the target Relay info object
 				targetRelay, ok := targetHI.relayForByIp[hostinfo.vpnIp]
 				if !ok {
-					hostinfo.logger(f.l).Infof("BRAD: Faild to find relay for %v in hostinfo %v", relay.PeerIp.String(), hostinfo.vpnIp.String())
+					hostinfo.logger(f.l).Infof("Failed to find relay for %v in hostinfo %v", relay.PeerIp.String(), hostinfo.vpnIp.String())
 					return
 				}
 
@@ -124,13 +123,12 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 					case RelayType:
 						// Forward this packet through the relay tunnel
 						// Find the target HostInfo
-						f.relayManager.In(h.RemoteIndex)
 						f.SendVia(targetHI, targetRelay, signedPayload, nb, out, false)
 					case TerminalType:
-						hostinfo.logger(f.l).Infof("BRAD: Relay Type is Terminal...What is going on?")
+						hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 					}
 				} else {
-					hostinfo.logger(f.l).Infof("BRAD: Relay State is NOT Established. What is going on?")
+					hostinfo.logger(f.l).Infof("Unexpected relay state %v, should be Established (%v)", targetRelay.State, Established)
 					return
 				}
 			}
@@ -211,8 +209,6 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 
 	case header.Control:
 		if !f.handleEncrypted(ci, addr, h) {
-			hostinfo.logger(f.l).WithField("udpAddr", addr).
-				Info("BRAD: got a header.Control message that failed handleEncrypted()")
 			return
 		}
 
@@ -226,7 +222,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 		m := &NebulaControl{}
 		err = m.Unmarshal(d)
 		if err != nil {
-			hostinfo.logger(f.l).WithError(err).Info("BRAD: Faild to unmarshal the thing")
+			hostinfo.logger(f.l).WithError(err).Error("Failed to unmarshal control message")
 			break
 		}
 
@@ -290,7 +286,6 @@ func (f *Interface) handleEncrypted(ci *ConnectionState, addr *udp.Addr, h *head
 	// If connectionstate exists and the replay protector allows, process packet
 	// Else, send recv errors for 300 seconds after a restart to allow fast reconnection.
 	if ci == nil || !ci.window.Check(f.l, h.MessageCounter) {
-		f.l.WithField("ci", ci).WithField("h", h.MessageCounter).Info("BRAD: handleEncrypted failed.")
 		if addr != nil {
 			f.sendRecvError(addr, h.RemoteIndex)
 			return false

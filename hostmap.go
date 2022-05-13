@@ -147,15 +147,13 @@ func (hm *HostMap) EmitStats(name string) {
 }
 
 func (hm *HostMap) RemoveRelay(localIdx uint32) {
+	hm.l.Infof("BRAD: hm.RemoveRelay(%v)", localIdx)
 	hm.Lock()
-	hm.l.Infof("BRAD: HostMap %v RemoveRelay", localIdx)
 	hiRelay, ok := hm.Relays[localIdx]
 	if !ok {
-		hm.l.Infof("BRAD: HostMap %v RemoveRelay Index not found", localIdx)
 		hm.Unlock()
 		return
 	}
-	hm.l.Infof("BRAD: HostMap %v RemoveRelay found relay %v, delete hm.Relays", localIdx, hiRelay.vpnIp)
 	delete(hm.Relays, localIdx)
 	hm.Unlock()
 	ip, ok := hiRelay.RemoveRelay(localIdx, hm.l)
@@ -164,18 +162,22 @@ func (hm *HostMap) RemoveRelay(localIdx uint32) {
 	}
 	hiPeer, err := hm.QueryVpnIp(ip)
 	if err != nil {
-		hm.l.Infof("BRAD: HostMap %v RemoveRelay peer not found", localIdx)
 		return
 	}
-	hm.l.Infof("BRAD: HostMap %v RemoveRelay also clean up HostInfo %v relays", localIdx, hiPeer.vpnIp)
+	var otherPeerIdx uint32
 	hiPeer.Lock()
 	delete(hiPeer.relays, hiRelay.vpnIp)
+	relay, ok := hiPeer.relayForByIp[hiRelay.vpnIp]
+	if ok {
+		otherPeerIdx = relay.LocalIndex
+	}
 	hiPeer.Unlock()
+	// I am a relaying host. I need to remove the other relay, too.
+	hm.RemoveRelay(otherPeerIdx)
 }
 
 func (hi *HostInfo) RemoveRelay(localIdx uint32, l *logrus.Logger) (iputil.VpnIp, bool) {
 	hi.Lock()
-	l.Infof("BRAD: HostInfo %v RemoveRelay", hi.vpnIp)
 	relay, ok := hi.relayForByIdx[localIdx]
 	if !ok {
 		hi.Unlock()
@@ -322,21 +324,31 @@ func (hm *HostMap) DeleteReverseIndex(index uint32) {
 func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 
 	// Delete the host itself, ensuring it's not modified anymore
+	hm.l.Infof("BRAD: DeleteHostInfo %v", hostinfo.vpnIp)
 	hm.Lock()
 	hm.unlockedDeleteHostInfo(hostinfo)
 	hm.Unlock()
 
 	// And tear down all the relays going through this host
-	hostinfo.Lock()
-	localRelayIdxs := make([]uint32, 0, len(hostinfo.relayForByIdx))
 	for localIdx := range hostinfo.relayForByIdx {
-		localRelayIdxs = append(localRelayIdxs, localIdx)
-	}
-	hostinfo.Unlock()
-	for _, localIdx := range localRelayIdxs {
+		hm.l.Infof("BRAD: DeleteHostInfo %v RemoveRelay %v", hostinfo.vpnIp, localIdx)
 		hm.RemoveRelay(localIdx)
 	}
 
+	// And tear down the relays I was using to be reached
+	teardownRelayIdx := []uint32{}
+	for relayIp := range hostinfo.relays {
+		if relayHostInfo, err := hm.QueryVpnIp(relayIp); err != nil {
+			relayHostInfo.Lock()
+			if r, ok := relayHostInfo.relayForByIp[relayHostInfo.vpnIp]; ok {
+				teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
+			}
+			relayHostInfo.Unlock()
+		}
+	}
+	for _, localIdx := range teardownRelayIdx {
+		hm.RemoveRelay(localIdx)
+	}
 }
 
 func (hm *HostMap) DeleteRelayIdx(localIdx uint32) {

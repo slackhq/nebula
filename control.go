@@ -25,7 +25,6 @@ type Control struct {
 	sshStart   func()
 	statsStart func()
 	dnsStart   func()
-	relayStart func()
 }
 
 type ControlHostInfo struct {
@@ -53,9 +52,6 @@ func (c *Control) Start() {
 	}
 	if c.dnsStart != nil {
 		go c.dnsStart()
-	}
-	if c.relayStart != nil {
-		go c.relayStart()
 	}
 
 	// Start reading packets.

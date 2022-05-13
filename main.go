@@ -331,7 +331,5 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		dnsStart = dnsMain(l, hostMap, c)
 	}
 
-	relayStart := func() { ifConfig.relayManager.Start(ctx) }
-
-	return &Control{ifce, l, cancel, sshStart, statsStart, dnsStart, relayStart}, nil
+	return &Control{ifce, l, cancel, sshStart, statsStart, dnsStart}, nil
 }

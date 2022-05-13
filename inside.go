@@ -115,6 +115,7 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 		// If this is a static host, we don't need to wait for the HostQueryReply
 		// We can trigger the handshake right now
 		if _, ok := f.lightHouse.GetStaticHostList()[vpnIp]; ok {
+
 			select {
 			case f.handshakeManager.trigger <- vpnIp:
 			default:
@@ -218,7 +219,7 @@ func (f *Interface) SendVia(viaIfc interface{},
 
 	// AEAD over both the header and payload for this message type.
 	if len(out)+len(ad) > cap(out) {
-		via.logger(f.l).Infof("BRAD: Capacity of out %v not large enough to add ad (%v) to out (%v)", cap(out), len(ad), len(out))
+		via.logger(f.l).Errorf("SendVia failure: Capacity of out %v not large enough to add ad (%v) to length of out (%v)", cap(out), len(ad), len(out))
 		return
 	}
 
@@ -235,13 +236,12 @@ func (f *Interface) SendVia(viaIfc interface{},
 	var err error
 	out, err = via.ConnectionState.eKey.EncryptDanger(out, out, nil, c, nb)
 	if err != nil {
-		via.logger(f.l).WithError(err).Info("BRAD: Failed to EncryptDanger in sendVia")
+		via.logger(f.l).WithError(err).Info("Failed to EncryptDanger in sendVia")
 		return
 	}
-	f.relayManager.Out(relay.LocalIndex)
 	err = f.writers[0].WriteTo(out, via.remote)
 	if err != nil {
-		via.logger(f.l).WithError(err).Info("BRAD: Failed to WriteTo in sendVia")
+		via.logger(f.l).WithError(err).Info("Failed to WriteTo in sendVia")
 	}
 }
 
@@ -307,12 +307,12 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		for relayIP, _ := range hostinfo.relays {
 			relayHostInfo, err := f.hostMap.QueryVpnIp(relayIP)
 			if err != nil {
-				hostinfo.logger(f.l).WithError(err).Infof("BRAD: sendNoMetrics failed to find HostInfo for relayIP %v", relayIP)
+				hostinfo.logger(f.l).WithError(err).Infof("sendNoMetrics failed to find HostInfo for relayIP %v", relayIP)
 				continue
 			}
 			relay, ok := relayHostInfo.relayForByIp[hostinfo.vpnIp]
 			if !ok {
-				hostinfo.logger(f.l).Infof("BRAD: sendNoMetrics relay %v does not have a relay object for target %v", relayHostInfo.vpnIp.String(), hostinfo.vpnIp.String())
+				hostinfo.logger(f.l).Infof("sendNoMetrics relay %v does not have a relay object for target %v", relayHostInfo.vpnIp.String(), hostinfo.vpnIp.String())
 				continue
 			}
 			f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true)

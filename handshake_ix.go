@@ -243,7 +243,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 			} else {
 				via2 := via.(*ViaSender)
 				if via2 == nil {
-					f.l.Error("BRAD: Both addr and via are nil. Can't send anything.")
+					f.l.Error("Handshake send failed: both addr and via are nil.")
 					return
 				}
 				hostinfo.relays[via2.relayHI.vpnIp] = struct{}{}
@@ -325,7 +325,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 	} else {
 		via2 := via.(*ViaSender)
 		if via2 == nil {
-			f.l.Error("BRAD: Both addr and via are nil. Can't send anything.")
+			f.l.Error("Handshake send failed: both addr and via are nil.")
 			return
 		}
 		hostinfo.relays[via2.relayHI.vpnIp] = struct{}{}
