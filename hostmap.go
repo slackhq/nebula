@@ -322,25 +322,25 @@ func (hm *HostMap) DeleteReverseIndex(index uint32) {
 }
 
 func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
-
 	// Delete the host itself, ensuring it's not modified anymore
-	hm.l.Infof("BRAD: DeleteHostInfo %v", hostinfo.vpnIp)
 	hm.Lock()
 	hm.unlockedDeleteHostInfo(hostinfo)
 	hm.Unlock()
 
 	// And tear down all the relays going through this host
 	for localIdx := range hostinfo.relayForByIdx {
-		hm.l.Infof("BRAD: DeleteHostInfo %v RemoveRelay %v", hostinfo.vpnIp, localIdx)
 		hm.RemoveRelay(localIdx)
 	}
 
-	// And tear down the relays I was using to be reached
+	// And tear down the relays this deleted hostInfo was using to be reached
 	teardownRelayIdx := []uint32{}
 	for relayIp := range hostinfo.relays {
-		if relayHostInfo, err := hm.QueryVpnIp(relayIp); err != nil {
+		relayHostInfo, err := hm.QueryVpnIp(relayIp)
+		if err != nil {
+			hm.l.WithError(err).Info("Missing relay host %v in hostmap", relayIp)
+		} else {
 			relayHostInfo.Lock()
-			if r, ok := relayHostInfo.relayForByIp[relayHostInfo.vpnIp]; ok {
+			if r, ok := relayHostInfo.relayForByIp[hostinfo.vpnIp]; ok {
 				teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
 			}
 			relayHostInfo.Unlock()
