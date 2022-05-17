@@ -531,10 +531,12 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		defer i.RUnlock()
 
 		// return early if we are already on a preferred remote
-		rIP := i.remote.IP
-		for _, l := range preferredRanges {
-			if l.Contains(rIP) {
-				return
+		if i.remote != nil {
+			rIP := i.remote.IP
+			for _, l := range preferredRanges {
+				if l.Contains(rIP) {
+					return
+				}
 			}
 		}
 
