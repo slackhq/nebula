@@ -4,24 +4,53 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 )
 
 type relayManager struct {
-	l       *logrus.Logger
-	hostmap *HostMap
+	l             *logrus.Logger
+	hostmap       *HostMap
+	atomicAmRelay int32
 }
 
-func NewRelayManager(ctx context.Context, l *logrus.Logger, hostmap *HostMap) *relayManager {
+func NewRelayManager(ctx context.Context, l *logrus.Logger, hostmap *HostMap, c *config.C) *relayManager {
 	rm := &relayManager{
 		l:       l,
 		hostmap: hostmap,
 	}
+	c.RegisterReloadCallback(func(c *config.C) {
+		err := rm.reload(c, false)
+		l.WithError(err).Error("Failed to reload relay_manager")
+	})
 	return rm
+}
+
+func (rm *relayManager) reload(c *config.C, initial bool) error {
+	if c.HasChanged("relay.am_relay") {
+		rm.setAmRelay(c.GetBool("relay.am_relay", false))
+	}
+	return nil
+}
+
+func (rm *relayManager) GetAmRelay() bool {
+	return atomic.LoadInt32(&rm.atomicAmRelay) == 1
+}
+
+func (rm *relayManager) setAmRelay(v bool) {
+	var val int32
+	switch v {
+	case true:
+		val = 1
+	case false:
+		val = 0
+	}
+	atomic.StoreInt32(&rm.atomicAmRelay, val)
 }
 
 func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iputil.VpnIp, remoteIdx *uint32, relayType int, state int) (uint32, error) {
@@ -181,6 +210,10 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		}
 		return
 	} else {
+		if rm.GetAmRelay() == false {
+			rm.l.Infof("BRAD: handleCreateRelayRequest: from=%v target=%v I am not configured as a relay :/", from, target)
+			return
+		}
 		// the target is not me. Create a relay to the target, from me.
 		peer, err := rm.hostmap.QueryVpnIp(target)
 		if err != nil {
