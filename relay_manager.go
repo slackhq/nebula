@@ -24,6 +24,7 @@ func NewRelayManager(ctx context.Context, l *logrus.Logger, hostmap *HostMap, c 
 		l:       l,
 		hostmap: hostmap,
 	}
+	rm.reload(c, true)
 	c.RegisterReloadCallback(func(c *config.C) {
 		err := rm.reload(c, false)
 		l.WithError(err).Error("Failed to reload relay_manager")
@@ -32,7 +33,8 @@ func NewRelayManager(ctx context.Context, l *logrus.Logger, hostmap *HostMap, c 
 }
 
 func (rm *relayManager) reload(c *config.C, initial bool) error {
-	if c.HasChanged("relay.am_relay") {
+	rm.l.Infof("BRAD: relayManager.Reload()")
+	if initial || c.HasChanged("relay.am_relay") {
 		rm.setAmRelay(c.GetBool("relay.am_relay", false))
 	}
 	return nil
@@ -53,6 +55,8 @@ func (rm *relayManager) setAmRelay(v bool) {
 	atomic.StoreInt32(&rm.atomicAmRelay, val)
 }
 
+// AddRelay finds an available relay index on the hostmap, and associates the relay info with it.
+// relayHostInfo is the Nebula peer which can be used as a relay to access the target vpnIp.
 func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iputil.VpnIp, remoteIdx *uint32, relayType int, state int) (uint32, error) {
 	hm.Lock()
 	defer hm.Unlock()
@@ -66,7 +70,6 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 		if !inRelays {
 			hm.Relays[index] = relayHostInfo
 			relayHostInfo.Lock()
-			relayHostInfo.relays[vpnIp] = struct{}{}
 			newRelay := Relay{
 				Type:       relayType,
 				State:      state,
@@ -180,11 +183,10 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			}
 		}
 		if addRelay {
-			idx, err := AddRelay(rm.l, h, f.hostMap, from, &m.InitiatorRelayIndex, TerminalType, Requested)
+			_, err := AddRelay(rm.l, h, f.hostMap, from, &m.InitiatorRelayIndex, TerminalType, Requested)
 			if err != nil {
 				return
 			}
-			h.AddRelay(idx, from)
 		}
 
 		h.RLock()

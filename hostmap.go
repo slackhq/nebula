@@ -175,6 +175,26 @@ func (hm *HostMap) RemoveRelay(localIdx uint32) {
 	hm.RemoveRelay(otherPeerIdx)
 }
 
+func (hi *HostInfo) CopyRelayIps() []iputil.VpnIp {
+	currentRelays := []iputil.VpnIp{}
+	hi.Lock()
+	for relayIp := range hi.relays {
+		currentRelays = append(currentRelays, relayIp)
+	}
+	hi.Unlock()
+	return currentRelays
+}
+
+func (hi *HostInfo) CopyRelaysForIps() []iputil.VpnIp {
+	currentRelays := []iputil.VpnIp{}
+	hi.Lock()
+	for relayIp := range hi.relayForByIp {
+		currentRelays = append(currentRelays, relayIp)
+	}
+	hi.Unlock()
+	return currentRelays
+}
+
 func (hi *HostInfo) RemoveRelay(localIdx uint32, l *logrus.Logger) (iputil.VpnIp, bool) {
 	hi.Lock()
 	relay, ok := hi.relayForByIdx[localIdx]
