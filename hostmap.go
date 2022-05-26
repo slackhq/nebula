@@ -147,7 +147,6 @@ func (hm *HostMap) EmitStats(name string) {
 }
 
 func (hm *HostMap) RemoveRelay(localIdx uint32) {
-	hm.l.Infof("BRAD: hm.RemoveRelay(%v)", localIdx)
 	hm.Lock()
 	hiRelay, ok := hm.Relays[localIdx]
 	if !ok {

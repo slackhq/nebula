@@ -65,6 +65,7 @@ func (rm *relayManager) SetRelay(relayHostInfo *HostInfo, m *NebulaControl) (*Re
 	relay, ok := relayHostInfo.relayForByIdx[m.InitiatorRelayIndex]
 	if !ok {
 		relayHostInfo.Unlock()
+		rm.l.Infof("BRAD: relayManager SetRelay on %v with index %v relayForByIdx not found from %v to %v", relayHostInfo.vpnIp, m.InitiatorRelayIndex, m.RelayFromIp, m.RelayToIp)
 		return nil, fmt.Errorf("wat")
 	}
 	relay.RemoteIndex = m.ResponderRelayIndex
@@ -91,7 +92,7 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 	target := iputil.VpnIp(m.RelayToIp)
 	relay, err := rm.SetRelay(h, m)
 	if err != nil {
-		rm.l.WithError(err).Error("Failed to update relay for target %v: %v", target.String(), err)
+		rm.l.WithError(err).Errorf("Failed to update relay for target %v: %v", target.String(), err)
 		return
 	}
 	// Do I need to complete the relays now?
@@ -136,15 +137,20 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 
 		h.RLock()
 		existingRelay, ok := h.relayForByIp[from]
+		rm.l.Infof("BRAD: handleCreateRelayRequest: Look up relayForByIp[from=%v], existing=%v", from, existingRelay)
 		h.RUnlock()
+		addRelay := !ok
 		if ok {
 			// Clean up existing relay, if this is a new request.
 			if existingRelay.RemoteIndex != m.InitiatorRelayIndex {
 				// We got a brand new Relay request, because its index is different than what we saw before.
 				// Clean up the existing Relay state, and get ready to record new Relay state.
+				rm.l.Infof("BRAD: existing relay RemoteIndex != InitiatorRelayIndex, RemoveRelay")
 				rm.hostmap.RemoveRelay(existingRelay.LocalIndex)
+				addRelay = true
 			}
-		} else {
+		}
+		if addRelay {
 			idx, err := AddRelay(rm.l, h, f.hostMap, from, &m.InitiatorRelayIndex, TerminalType, Requested)
 			if err != nil {
 				return
@@ -176,13 +182,21 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		return
 	} else {
 		// the target is not me. Create a relay to the target, from me.
-		peer := f.getOrHandshake(target)
-		if peer == nil {
+		peer, err := rm.hostmap.QueryVpnIp(target)
+		if err != nil {
+			// Try to establish a connection to this host. If we get a future relay request,
+			// we'll be ready!
+			f.getOrHandshake(target)
+			rm.l.Infof("BRAD: No existing connection to target %v, call getOrHandshake to try to make one.", target)
+			return
+		}
+		if peer.remote == nil {
+			// Only create relays to peers for whom I have a direct connection
+			rm.l.Infof("BRAD: No direct connection to peer %v, don't create relay.", target)
 			return
 		}
 		sendCreateRequest := false
 		var index uint32
-		var err error
 		peer.RLock()
 		targetRelay, ok := peer.relayForByIp[from]
 		peer.RUnlock()

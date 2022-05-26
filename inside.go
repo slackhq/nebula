@@ -254,6 +254,11 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	fullOut := out
 
 	if useRelay {
+		if len(out) < header.Len {
+			// out always has a capacity of mtu, but not always a length greater than the header.Len.
+			// Grow it to make sure the next operation works.
+			out = out[:header.Len]
+		}
 		// Save a header's worth of data at the front of the 'out' buffer.
 		out = out[header.Len:]
 	}

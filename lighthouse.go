@@ -13,7 +13,6 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
@@ -71,11 +70,8 @@ type LightHouse struct {
 
 	atomicAdvertiseAddrs []netIpAndPort
 
-	// Look up a Relay VPN IP based on a target VPN IP
-	relays *cidr.Tree4
-
-	// CIDRs for which I am a relay
-	relayFor []net.IPNet
+	// IP's of relays that can be used by peers to access me
+	atomicRelaysForMe []iputil.VpnIp
 
 	metrics           *MessageMetrics
 	metricHolepunchTx metrics.Counter
@@ -112,7 +108,6 @@ func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet *net.IPNet,
 		atomicStaticList:  make(map[iputil.VpnIp]struct{}),
 		punchConn:         pc,
 		punchy:            p,
-		relays:            cidr.NewTree4(),
 		l:                 l,
 	}
 
@@ -123,15 +118,6 @@ func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet *net.IPNet,
 		h.metricHolepunchTx = metrics.NilCounter{}
 	}
 
-	for _, v := range c.GetStringSlice("relay", nil) {
-		l.WithField("CIDR", v).Info("Read relay from config")
-		_, net, err := net.ParseCIDR(v)
-		if err != nil {
-			l.WithError(err).Errorf("Relay CIDR failed to parse (%v)", v)
-			continue
-		}
-		h.AddRelay(net, iputil.Ip2VpnIp(myVpnNet.IP))
-	}
 	err := h.reload(c, true)
 	if err != nil {
 		return nil, err
@@ -168,6 +154,10 @@ func (lh *LightHouse) GetLocalAllowList() *LocalAllowList {
 
 func (lh *LightHouse) GetAdvertiseAddrs() []netIpAndPort {
 	return *(*[]netIpAndPort)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicAdvertiseAddrs))))
+}
+
+func (lh *LightHouse) GetRelaysForMe() []iputil.VpnIp {
+	return *(*[]iputil.VpnIp)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicRelaysForMe))))
 }
 
 func (lh *LightHouse) GetUpdateInterval() int64 {
@@ -274,6 +264,19 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 			//NOTE: we are not tearing down existing lighthouse connections because they might be used for non lighthouse traffic
 			lh.l.Info("lighthouse.hosts has changed")
 		}
+	}
+
+	if initial || c.HasChanged("relay.relays") {
+		relaysForMe := []iputil.VpnIp{}
+		for _, v := range c.GetStringSlice("relay.relays", nil) {
+			lh.l.WithField("Relay IP", v).Info("Read relay from config")
+
+			configRIP := net.ParseIP(v)
+			if configRIP != nil {
+				relaysForMe = append(relaysForMe, iputil.Ip2VpnIp(configRIP))
+			}
+		}
+		atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicRelaysForMe)), unsafe.Pointer(&relaysForMe))
 	}
 
 	return nil
@@ -441,15 +444,6 @@ func (lh *LightHouse) DeleteVpnIp(vpnIp iputil.VpnIp) {
 		lh.l.Debugf("deleting %s from lighthouse.", vpnIp)
 	}
 
-	lh.Unlock()
-}
-
-func (lh *LightHouse) AddRelay(vpnCidr *net.IPNet, vpnIp iputil.VpnIp) {
-	lh.Lock()
-	// Include in the lookup trie the target vpnIP, for responding to queries
-	lh.relays.AddCIDR(vpnCidr, vpnIp)
-	// Include the Relay info for my HostUpdate notifications to my lighthouse
-	lh.relayFor = append(lh.relayFor, *vpnCidr)
 	lh.Unlock()
 }
 
@@ -637,9 +631,9 @@ func (lh *LightHouse) SendUpdate(f udp.EncWriter) {
 		}
 	}
 
-	var relayCIDRs []*Ip4CIDR
-	for _, r := range lh.relayFor {
-		relayCIDRs = append(relayCIDRs, NewIp4CIDR(&r))
+	var relays []uint32
+	for _, r := range lh.GetRelaysForMe() {
+		relays = append(relays, (uint32)(r))
 	}
 
 	m := &NebulaMeta{
@@ -648,7 +642,7 @@ func (lh *LightHouse) SendUpdate(f udp.EncWriter) {
 			VpnIp:       uint32(lh.myVpnIp),
 			Ip4AndPorts: v4,
 			Ip6AndPorts: v6,
-			Ip4CIDR:     relayCIDRs,
+			RelayVpnIp:  relays,
 		},
 	}
 
@@ -771,11 +765,6 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp,
 
 		lhh.coalesceAnswers(c, n)
 
-		// Look up Relays
-		res := lhh.lh.relays.Contains(iputil.VpnIp(reqVpnIp))
-		if res != nil {
-			n.Details.RelayVpnIp = append(n.Details.RelayVpnIp, uint32(res.(iputil.VpnIp)))
-		}
 		return n.MarshalTo(lhh.pb)
 	})
 
@@ -798,12 +787,6 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp,
 		n.Details.VpnIp = uint32(vpnIp)
 
 		lhh.coalesceAnswers(c, n)
-
-		// Look up Relays
-		res := lhh.lh.relays.Contains(iputil.VpnIp(reqVpnIp))
-		if res != nil {
-			n.Details.RelayVpnIp = append(n.Details.RelayVpnIp, uint32(res.(iputil.VpnIp)))
-		}
 
 		return n.MarshalTo(lhh.pb)
 	})
@@ -838,6 +821,10 @@ func (lhh *LightHouseHandler) coalesceAnswers(c *cache, n *NebulaMeta) {
 		if c.v6.reported != nil && len(c.v6.reported) > 0 {
 			n.Details.Ip6AndPorts = append(n.Details.Ip6AndPorts, c.v6.reported...)
 		}
+	}
+
+	if c.relay != nil {
+		n.Details.RelayVpnIp = append(n.Details.RelayVpnIp, c.relay.relay...)
 	}
 }
 
@@ -882,9 +869,6 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 
 	lhh.lh.Lock()
 	am := lhh.lh.unlockedGetRemoteList(vpnIp)
-	for _, r := range n.Details.Ip4CIDR {
-		lhh.lh.relays.AddCIDR(r.BuildIpNet(), vpnIp)
-	}
 	am.Lock()
 	lhh.lh.Unlock()
 

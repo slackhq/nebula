@@ -290,7 +290,6 @@ func (f *Interface) handleEncrypted(ci *ConnectionState, addr *udp.Addr, h *head
 			f.sendRecvError(addr, h.RemoteIndex)
 			return false
 		} else {
-			f.l.Info("BRAD: handleEncrypted failed and addr is nil. Can't sendRecvError.")
 			return false
 		}
 	}
