@@ -46,7 +46,7 @@ lighthouse:
   hosts:
     - {{ hostvars[groups['lighthouse'][0]][vagrant_ifce]['ipv4']['address'] | to_nebula_ip }}
 {% endif %}
-  
+
 # Configure the private interface
 tun:
   dev: nebula1
@@ -65,7 +65,6 @@ firewall:
     tcp_timeout: 12m
     udp_timeout: 3m
     default_timeout: 10m
-    max_connections: 100,000
 
   inbound:
     - proto: icmp

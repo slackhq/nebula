@@ -244,7 +244,6 @@ firewall:
     tcp_timeout: 12m
     udp_timeout: 3m
     default_timeout: 10m
-    max_connections: 100000
 
   # The firewall is default deny. There is no way to write a deny rule.
   # Rules are comprised of a protocol, port, and one or more of host, group, or CIDR
