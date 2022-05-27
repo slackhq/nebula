@@ -191,8 +191,8 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 			continue
 		}
 		relayHostInfo, err := c.mainHostMap.QueryVpnIp(*relay)
-		if err != nil {
-			hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Failed to find relay in main hostmap. Send test message.")
+		if err != nil || relayHostInfo.GetRemote() == nil {
+			hostinfo.logger(c.l).WithError(err).WithField("relay", relay.String()).Info("Failed to find relay in main hostmap, or relay is not directly connected. Send test message.")
 			// TODONE: Create a tunnel to the relay, since it doesn't exist yet.
 			// HACKERY EncWriter should expose getOrHandshake. The impl of SendMessageToVpnIp calls getOrHandshake, but will
 			// also queue up unecessary messages for the peer.
@@ -229,24 +229,26 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 			}
 		} else {
 			// No relays exist or requested yet.
-			idx, err := AddRelay(c.l, relayHostInfo, c.mainHostMap, vpnIp, nil, TerminalType, Requested)
-			if err != nil {
-				hostinfo.logger(c.l).WithField("relay", relay.String()).WithError(err).Info("Failed to add relay to hostmap")
-			}
+			if relayHostInfo.GetRemote() != nil {
+				idx, err := AddRelay(c.l, relayHostInfo, c.mainHostMap, vpnIp, nil, TerminalType, Requested)
+				if err != nil {
+					hostinfo.logger(c.l).WithField("relay", relay.String()).WithError(err).Info("Failed to add relay to hostmap")
+				}
 
-			m := NebulaControl{
-				Type:                NebulaControl_CreateRelayRequest,
-				InitiatorRelayIndex: idx,
-				RelayFromIp:         uint32(c.lightHouse.myVpnIp),
-				RelayToIp:           uint32(vpnIp),
-			}
-			msg, err := proto.Marshal(&m)
-			if err != nil {
-				hostinfo.logger(c.l).
-					WithError(err).
-					Error("Failed to marshal Control message to create relay")
-			} else {
-				f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
+				m := NebulaControl{
+					Type:                NebulaControl_CreateRelayRequest,
+					InitiatorRelayIndex: idx,
+					RelayFromIp:         uint32(c.lightHouse.myVpnIp),
+					RelayToIp:           uint32(vpnIp),
+				}
+				msg, err := proto.Marshal(&m)
+				if err != nil {
+					hostinfo.logger(c.l).
+						WithError(err).
+						Error("Failed to marshal Control message to create relay")
+				} else {
+					f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
+				}
 			}
 		}
 	}

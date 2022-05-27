@@ -267,16 +267,23 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 	}
 
 	if initial || c.HasChanged("relay.relays") {
-		relaysForMe := []iputil.VpnIp{}
-		for _, v := range c.GetStringSlice("relay.relays", nil) {
-			lh.l.WithField("Relay IP", v).Info("Read relay from config")
+		if c.GetBool("relay.am_relay", false) {
+			// Relays aren't allowed to specify other relays
+			lh.l.Info("Ignore relays from config because am_relay is true")
+			relaysForMe := []iputil.VpnIp{}
+			atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicRelaysForMe)), unsafe.Pointer(&relaysForMe))
+		} else {
+			relaysForMe := []iputil.VpnIp{}
+			for _, v := range c.GetStringSlice("relay.relays", nil) {
+				lh.l.WithField("Relay IP", v).Info("Read relay from config")
 
-			configRIP := net.ParseIP(v)
-			if configRIP != nil {
-				relaysForMe = append(relaysForMe, iputil.Ip2VpnIp(configRIP))
+				configRIP := net.ParseIP(v)
+				if configRIP != nil {
+					relaysForMe = append(relaysForMe, iputil.Ip2VpnIp(configRIP))
+				}
 			}
+			atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicRelaysForMe)), unsafe.Pointer(&relaysForMe))
 		}
-		atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicRelaysForMe)), unsafe.Pointer(&relaysForMe))
 	}
 
 	return nil
