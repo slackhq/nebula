@@ -29,7 +29,7 @@ vagrant plugin install vagrant-hostmanager
 
 All hosts within the Vagrantfile are brought up with
 
-`vagrant up`
+`vagrant up` 
 
 Once the boxes are up, go into the `ansible/` directory and deploy the playbook by running
 
@@ -37,7 +37,7 @@ Once the boxes are up, go into the `ansible/` directory and deploy the playbook 
 
 ## Testing within the vagrant env
 
-Once the ansible run is done, hop onto a vagrant box
+Once the ansible run is done, hop onto a vagrant box 
 
 `vagrant ssh generic1.vagrant`
 
@@ -45,8 +45,8 @@ or specifically
 
 `ssh vagrant@<ip-address-in-vagrant-file` (password for the vagrant user on the boxes is `vagrant`)
 
-Some quick tests once the vagrant boxes are up are to ping from `generic1.vagrant` to `generic2.vagrant` using
-their respective nebula ip address.
+Some quick tests once the vagrant boxes are up are to ping from `generic1.vagrant` to `generic2.vagrant` using 
+their respective nebula ip address. 
 
 ```
 vagrant@generic1:~$ ping 10.168.91.220
@@ -61,7 +61,7 @@ You can further verify that the allowed nebula firewall rules work by ssh'ing fr
 
 See `/etc/nebula/config.yml` on a box for firewall rules.
 
-To see full handshakes and hostmaps, change the logging config of `/etc/nebula/config.yml` on the vagrant boxes from
+To see full handshakes and hostmaps, change the logging config of `/etc/nebula/config.yml` on the vagrant boxes from 
 info to debug.
 
 You can watch nebula logs by running
@@ -76,11 +76,11 @@ Refer to the nebula src code directory's README for further instructions on conf
 
 ### Is nebula up and running?
 
-Run and verify that
+Run and verify that 
 
 ```
 ifconfig
-```
+``` 
 
 shows you an interface with the name `nebula1` being up.
 
@@ -100,11 +100,11 @@ nebula1: flags=4305<UP,POINTOPOINT,RUNNING,NOARP,MULTICAST>  mtu 1300
 
 Are you able to ping other boxes on the private nebula network?
 
-The following are the private nebula ip addresses of the vagrant env
+The following are the private nebula ip addresses of the vagrant env 
 
 ```
 generic1.vagrant [nebula_ip] 10.168.91.210
-generic2.vagrant [nebula_ip] 10.168.91.220
+generic2.vagrant [nebula_ip] 10.168.91.220 
 lighthouse1.vagrant [nebula_ip] 10.168.91.230
 ```
 
@@ -113,7 +113,7 @@ Try pinging generic1.vagrant to and from any other box using its nebula ip above
 Double check the nebula firewall rules under /etc/nebula/config.yml to make sure that connectivity is allowed for your use-case if on a specific port.
 
 ```
-vagrant@lighthouse1:~$ grep -A21 firewall /etc/nebula/config.yml
+vagrant@lighthouse1:~$ grep -A21 firewall /etc/nebula/config.yml 
 firewall:
   conntrack:
     tcp_timeout: 12m

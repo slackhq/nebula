@@ -46,7 +46,7 @@ lighthouse:
   hosts:
     - {{ hostvars[groups['lighthouse'][0]][vagrant_ifce]['ipv4']['address'] | to_nebula_ip }}
 {% endif %}
-
+  
 # Configure the private interface
 tun:
   dev: nebula1
