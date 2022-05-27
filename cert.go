@@ -66,6 +66,11 @@ func NewCertStateFromConfig(c *config.C) (*CertState, error) {
 		}
 	}
 
+	rawKey, _, err := cert.UnmarshalX25519PrivateKey(pemPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("error while unmarshaling pki.key %s: %s", privPathOrPEM, err)
+	}
+
 	var rawCert []byte
 
 	pubPathOrPEM := c.GetString("pki.cert", "")
