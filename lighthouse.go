@@ -267,12 +267,15 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 	}
 
 	if initial || c.HasChanged("relay.relays") {
-		if c.GetBool("relay.am_relay", false) {
+		switch c.GetBool("relay.am_relay", false) {
+		case true:
 			// Relays aren't allowed to specify other relays
-			lh.l.Info("Ignore relays from config because am_relay is true")
+			if len(c.GetStringSlice("relay.relays", nil)) > 0 {
+				lh.l.Info("Ignoring relays from config because am_relay is true")
+			}
 			relaysForMe := []iputil.VpnIp{}
 			atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicRelaysForMe)), unsafe.Pointer(&relaysForMe))
-		} else {
+		case false:
 			relaysForMe := []iputil.VpnIp{}
 			for _, v := range c.GetStringSlice("relay.relays", nil) {
 				lh.l.WithField("Relay IP", v).Info("Read relay from config")
