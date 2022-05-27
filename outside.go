@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/flynn/noise"
+	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/firewall"
@@ -14,7 +15,6 @@ import (
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
 	"golang.org/x/net/ipv4"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -79,7 +79,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			if !ok {
 				// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
 				// its internal mapping. This shouldn't happen!
-				hostinfo.logger(f.l).Error("HostInfo obj %v is missing remote index %v", hostinfo.vpnIp, h.RemoteIndex)
+				hostinfo.logger(f.l).Errorf("HostInfo obj %v is missing remote index %v", hostinfo.vpnIp, h.RemoteIndex)
 				f.hostMap.DeleteRelayIdx(h.RemoteIndex)
 				// Kindly notify the sender that there is no relay here
 				m := NebulaControl{

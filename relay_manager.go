@@ -134,14 +134,14 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 	// I'm the middle man. Let the initiator know that the I've established the relay they requested.
 	peerHostInfo, err := rm.hostmap.QueryVpnIp(relay.PeerIp)
 	if err != nil {
-		rm.l.WithError(err).Error("Can't find a HostInfo for peer IP %v", relay.PeerIp.String())
+		rm.l.WithError(err).Errorf("Can't find a HostInfo for peer IP %v", relay.PeerIp.String())
 		return
 	}
 	peerHostInfo.RLock()
 	peerRelay, ok := peerHostInfo.relayForByIp[target]
 	peerHostInfo.RUnlock()
 	if !ok {
-		rm.l.Error("peerRelay %v does not have Relay state for %v", peerHostInfo.vpnIp.String(), target.String())
+		rm.l.Errorf("peerRelay %v does not have Relay state for %v", peerHostInfo.vpnIp.String(), target.String())
 		return
 	}
 	peerRelay.State = Established

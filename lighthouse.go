@@ -711,7 +711,6 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	// Keep the array memory around
 	details.Ip4AndPorts = details.Ip4AndPorts[:0]
 	details.Ip6AndPorts = details.Ip6AndPorts[:0]
-	details.Ip4CIDR = details.Ip4CIDR[:0]
 	details.RelayVpnIp = details.RelayVpnIp[:0]
 	lhh.meta.Details = details
 

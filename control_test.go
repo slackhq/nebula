@@ -59,7 +59,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		remoteIndexId: 200,
 		localIndexId:  201,
 		vpnIp:         iputil.Ip2VpnIp(ipNet.IP),
-		relays:        map[uint32]iputil.VpnIp{},
+		relays:        map[iputil.VpnIp]struct{}{},
 		relayForByIp:  map[iputil.VpnIp]*Relay{},
 		relayForByIdx: map[uint32]*Relay{},
 	})
@@ -73,7 +73,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		remoteIndexId: 200,
 		localIndexId:  201,
 		vpnIp:         iputil.Ip2VpnIp(ipNet2.IP),
-		relays:        map[uint32]iputil.VpnIp{},
+		relays:        map[iputil.VpnIp]struct{}{},
 		relayForByIp:  map[iputil.VpnIp]*Relay{},
 		relayForByIdx: map[uint32]*Relay{},
 	})
@@ -88,18 +88,20 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	thi := c.GetHostInfoByVpnIp(iputil.Ip2VpnIp(ipNet.IP), false)
 
 	expectedInfo := ControlHostInfo{
-		VpnIp:          net.IPv4(1, 2, 3, 4).To4(),
-		LocalIndex:     201,
-		RemoteIndex:    200,
-		RemoteAddrs:    []*udp.Addr{remote2, remote1},
-		CachedPackets:  0,
-		Cert:           crt.Copy(),
-		MessageCounter: 0,
-		CurrentRemote:  udp.NewAddr(net.ParseIP("0.0.0.100"), 4444),
+		VpnIp:                  net.IPv4(1, 2, 3, 4).To4(),
+		LocalIndex:             201,
+		RemoteIndex:            200,
+		RemoteAddrs:            []*udp.Addr{remote2, remote1},
+		CachedPackets:          0,
+		Cert:                   crt.Copy(),
+		MessageCounter:         0,
+		CurrentRemote:          udp.NewAddr(net.ParseIP("0.0.0.100"), 4444),
+		CurrentRelaysToMe:      []iputil.VpnIp{},
+		CurrentRelaysThroughMe: []iputil.VpnIp{},
 	}
 
 	// Make sure we don't have any unexpected fields
-	assertFields(t, []string{"VpnIp", "LocalIndex", "RemoteIndex", "RemoteAddrs", "CachedPackets", "Cert", "MessageCounter", "CurrentRemote"}, thi)
+	assertFields(t, []string{"VpnIp", "LocalIndex", "RemoteIndex", "RemoteAddrs", "CachedPackets", "Cert", "MessageCounter", "CurrentRemote", "CurrentRelaysToMe", "CurrentRelaysThroughMe"}, thi)
 	test.AssertDeepCopyEqual(t, &expectedInfo, thi)
 
 	// Make sure we don't panic if the host info doesn't have a cert yet

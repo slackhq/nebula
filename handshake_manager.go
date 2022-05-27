@@ -224,7 +224,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 					f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
 				}
 			default:
-				hostinfo.logger(c.l).Error("Found a Relay on hostinfo object %v for vpnIp %v, but unexpected state %v",
+				hostinfo.logger(c.l).Errorf("Found a Relay on hostinfo object %v for vpnIp %v, but unexpected state %v",
 					relayHostInfo.vpnIp.String(), vpnIp.String(), existingRelay.State)
 			}
 		} else {

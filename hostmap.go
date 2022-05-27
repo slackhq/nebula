@@ -356,7 +356,7 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 	for relayIp := range hostinfo.relays {
 		relayHostInfo, err := hm.QueryVpnIp(relayIp)
 		if err != nil {
-			hm.l.WithError(err).Info("Missing relay host %v in hostmap", relayIp)
+			hm.l.WithError(err).Infof("Missing relay host %v in hostmap", relayIp)
 		} else {
 			relayHostInfo.Lock()
 			if r, ok := relayHostInfo.relayForByIp[hostinfo.vpnIp]; ok {
