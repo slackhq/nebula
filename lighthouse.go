@@ -18,6 +18,7 @@ import (
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
+	"google.golang.org/protobuf/proto"
 )
 
 //TODO: if a lighthouse doesn't have an answer, clients AGGRESSIVELY REQUERY.. why? handshake manager and/or getOrHandshake?
@@ -355,7 +356,7 @@ func (lh *LightHouse) QueryServer(ip iputil.VpnIp, f udp.EncWriter) {
 	}
 
 	// Send a query to the lighthouses and hope for the best next time
-	query, err := NewLhQueryByInt(ip).Marshal()
+	query, err := proto.Marshal(NewLhQueryByInt(ip))
 	if err != nil {
 		lh.l.WithError(err).WithField("vpnIp", ip).Error("Failed to marshal lighthouse query payload")
 		return
@@ -611,7 +612,7 @@ func (lh *LightHouse) SendUpdate(f udp.EncWriter) {
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)
 
-	mm, err := m.Marshal()
+	mm, err := proto.Marshal(m)
 	if err != nil {
 		lh.l.WithError(err).Error("Error while marshaling for lighthouse update")
 		return
@@ -671,7 +672,7 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 
 func (lhh *LightHouseHandler) HandleRequest(rAddr *udp.Addr, vpnIp iputil.VpnIp, p []byte, w udp.EncWriter) {
 	n := lhh.resetMeta()
-	err := n.Unmarshal(p)
+	err := proto.Unmarshal(p, n)
 	if err != nil {
 		lhh.l.WithError(err).WithField("vpnIp", vpnIp).WithField("udpAddr", rAddr).
 			Error("Failed to unmarshal lighthouse packet")
@@ -723,7 +724,9 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp,
 
 		lhh.coalesceAnswers(c, n)
 
-		return n.MarshalTo(lhh.pb)
+		var err error
+		lhh.pb, err = proto.MarshalOptions{}.MarshalAppend(lhh.pb[:0], n)
+		return len(lhh.pb), err
 	})
 
 	if !found {
@@ -746,7 +749,9 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp,
 
 		lhh.coalesceAnswers(c, n)
 
-		return n.MarshalTo(lhh.pb)
+		var err error
+		lhh.pb, err = proto.MarshalOptions{}.MarshalAppend(lhh.pb[:0], n)
+		return len(lhh.pb), err
 	})
 
 	if !found {

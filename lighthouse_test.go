@@ -11,6 +11,7 @@ import (
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/proto"
 )
 
 //TODO: Add a test to ensure udpAddr is copied and not reused
@@ -19,7 +20,7 @@ func TestOldIPv4Only(t *testing.T) {
 	// This test ensures our new ipv6 enabled LH protobuf IpAndPorts works with the old style to enable backwards compatibility
 	b := []byte{8, 129, 130, 132, 80, 16, 10}
 	var m Ip4AndPort
-	err := m.Unmarshal(b)
+	err := proto.Unmarshal(b, &m)
 	assert.NoError(t, err)
 	assert.Equal(t, "10.1.1.1", iputil.VpnIp(m.GetIp()).String())
 }
@@ -35,12 +36,12 @@ func TestNewLhQuery(t *testing.T) {
 	assert.IsType(t, &NebulaMeta{}, a)
 
 	// It should also Marshal fine
-	b, err := a.Marshal()
+	b, err := proto.Marshal(a)
 	assert.Nil(t, err)
 
 	// and then Unmarshal fine
 	n := &NebulaMeta{}
-	err = n.Unmarshal(b)
+	err = proto.Unmarshal(b, n)
 	assert.Nil(t, err)
 
 }
@@ -111,7 +112,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 				Ip4AndPorts: nil,
 			},
 		}
-		p, err := req.Marshal()
+		p, err := proto.Marshal(req)
 		assert.NoError(b, err)
 		for n := 0; n < b.N; n++ {
 			lhh.HandleRequest(rAddr, 2, p, mw)
@@ -126,7 +127,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 				Ip4AndPorts: nil,
 			},
 		}
-		p, err := req.Marshal()
+		p, err := proto.Marshal(req)
 		assert.NoError(b, err)
 
 		for n := 0; n < b.N; n++ {
@@ -253,7 +254,7 @@ func newLHHostRequest(fromAddr *udp.Addr, myVpnIp, queryVpnIp iputil.VpnIp, lhh 
 		},
 	}
 
-	b, err := req.Marshal()
+	b, err := proto.Marshal(req)
 	if err != nil {
 		panic(err)
 	}
@@ -279,7 +280,7 @@ func newLHHostUpdate(fromAddr *udp.Addr, vpnIp iputil.VpnIp, addrs []*udp.Addr, 
 		req.Details.Ip4AndPorts[k] = &Ip4AndPort{Ip: uint32(iputil.Ip2VpnIp(v.IP)), Port: uint32(v.Port)}
 	}
 
-	b, err := req.Marshal()
+	b, err := proto.Marshal(req)
 	if err != nil {
 		panic(err)
 	}
@@ -374,7 +375,7 @@ type testEncWriter struct {
 
 func (tw *testEncWriter) SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, _, _ []byte) {
 	msg := &NebulaMeta{}
-	err := msg.Unmarshal(p)
+	err := proto.Unmarshal(p, msg)
 	if tw.metaFilter == nil || msg.Type == *tw.metaFilter {
 		tw.lastReply = testLhReply{
 			nebType:    t,
