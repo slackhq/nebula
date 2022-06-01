@@ -234,9 +234,11 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		tryInterval:   c.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
 		retries:       c.GetInt("handshakes.retries", DefaultHandshakeRetries),
 		triggerBuffer: c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
+		useRelays:     c.GetBool("relay.use_relays", DefaultUseRelays),
 
 		messageMetrics: messageMetrics,
 	}
+	l.Infof("BRAD: useRelays = %v", handshakeConfig.useRelays)
 
 	handshakeManager := NewHandshakeManager(l, tunCidr, preferredRanges, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger

@@ -64,7 +64,7 @@ type RemoteList struct {
 	// A deduplicated set of addresses. Any accessor should lock beforehand.
 	addrs []*udp.Addr
 
-	// A set of relay addresses. VpnIp addresses that advertise as relays for this remote.
+	// A set of relay addresses. VpnIp addresses that the remote identified as relays.
 	relays []*iputil.VpnIp
 
 	// These are maps to store v4 and v6 addresses per lighthouse
@@ -83,8 +83,9 @@ type RemoteList struct {
 // NewRemoteList creates a new empty RemoteList
 func NewRemoteList() *RemoteList {
 	return &RemoteList{
-		addrs: make([]*udp.Addr, 0),
-		cache: make(map[iputil.VpnIp]*cache),
+		addrs:  make([]*udp.Addr, 0),
+		relays: make([]*iputil.VpnIp, 0),
+		cache:  make(map[iputil.VpnIp]*cache),
 	}
 }
 

@@ -21,6 +21,7 @@ const (
 	DefaultHandshakeTryInterval   = time.Millisecond * 100
 	DefaultHandshakeRetries       = 10
 	DefaultHandshakeTriggerBuffer = 64
+	DefaultUseRelays              = true
 )
 
 var (
@@ -28,6 +29,7 @@ var (
 		tryInterval:   DefaultHandshakeTryInterval,
 		retries:       DefaultHandshakeRetries,
 		triggerBuffer: DefaultHandshakeTriggerBuffer,
+		useRelays:     DefaultUseRelays,
 	}
 )
 
@@ -35,6 +37,7 @@ type HandshakeConfig struct {
 	tryInterval   time.Duration
 	retries       int
 	triggerBuffer int
+	useRelays     bool
 
 	messageMetrics *MessageMetrics
 }
@@ -183,71 +186,72 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 			Info("Handshake message sent")
 	}
 
-	hostinfo.logger(c.l).Infof("Look for relays...%v", hostinfo.remotes.relays)
-	// Send a RelayRequest to all known Relay IP's
-	for _, relay := range hostinfo.remotes.relays {
-		// Don't relay to myself, and don't relay through the host I'm trying to connect to
-		if *relay == vpnIp || *relay == c.lightHouse.myVpnIp {
-			continue
-		}
-		relayHostInfo, err := c.mainHostMap.QueryVpnIp(*relay)
-		if err != nil || relayHostInfo.GetRemote() == nil {
-			hostinfo.logger(c.l).WithError(err).WithField("relay", relay.String()).Info("Failed to find relay in main hostmap, or relay is not directly connected. Send test message.")
-			// TODONE: Create a tunnel to the relay, since it doesn't exist yet.
-			// HACKERY EncWriter should expose getOrHandshake. The impl of SendMessageToVpnIp calls getOrHandshake, but will
-			// also queue up unecessary messages for the peer.
-			// Update EncWriter to expose GetOrHandshake, and use that directly here.
-			f.SendMessageToVpnIp(header.Test, header.TestRequest, *relay, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
-			continue
-		}
-		// Check the relay HostInfo to see if we already established a relay through it
-		if existingRelay, ok := relayHostInfo.relayForByIp[vpnIp]; ok {
-			switch existingRelay.State {
-			case Established:
-				hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Relay already established. SendVia(handshake0) now.")
-				f.SendVia(relayHostInfo, existingRelay, hostinfo.HandshakePacket[0], make([]byte, 12), make([]byte, mtu), false)
-			case Requested:
-				hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Re-send CreateRelay request")
-				// Re-send the CreateRelay request, in case the previous one was lost.
-				m := NebulaControl{
-					Type:                NebulaControl_CreateRelayRequest,
-					InitiatorRelayIndex: existingRelay.LocalIndex,
-					RelayFromIp:         uint32(c.lightHouse.myVpnIp),
-					RelayToIp:           uint32(vpnIp),
-				}
-				msg, err := proto.Marshal(&m)
-				if err != nil {
-					hostinfo.logger(c.l).
-						WithError(err).
-						Error("Failed to marshal Control message to create relay")
-				} else {
-					f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
-				}
-			default:
-				hostinfo.logger(c.l).Errorf("Found a Relay on hostinfo object %v for vpnIp %v, but unexpected state %v",
-					relayHostInfo.vpnIp.String(), vpnIp.String(), existingRelay.State)
+	if c.config.useRelays {
+		hostinfo.logger(c.l).Infof("Attempt to relay through hosts (%v)", hostinfo.remotes.relays)
+		// Send a RelayRequest to all known Relay IP's
+		for _, relay := range hostinfo.remotes.relays {
+			// Don't relay to myself, and don't relay through the host I'm trying to connect to
+			if *relay == vpnIp || *relay == c.lightHouse.myVpnIp {
+				continue
 			}
-		} else {
-			// No relays exist or requested yet.
-			if relayHostInfo.GetRemote() != nil {
-				idx, err := AddRelay(c.l, relayHostInfo, c.mainHostMap, vpnIp, nil, TerminalType, Requested)
-				if err != nil {
-					hostinfo.logger(c.l).WithField("relay", relay.String()).WithError(err).Info("Failed to add relay to hostmap")
+			relayHostInfo, err := c.mainHostMap.QueryVpnIp(*relay)
+			if err != nil || relayHostInfo.GetRemote() == nil {
+				hostinfo.logger(c.l).WithError(err).WithField("relay", relay.String()).Info("Failed to find relay in main hostmap, or relay is not directly connected. Send test message.")
+				// TODO EncWriter should expose getOrHandshake. The impl of SendMessageToVpnIp calls getOrHandshake, but will
+				// also queue up unecessary messages for the peer.
+				// Update EncWriter to expose GetOrHandshake, and use that directly here.
+				f.SendMessageToVpnIp(header.Test, header.TestRequest, *relay, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+				continue
+			}
+			// Check the relay HostInfo to see if we already established a relay through it
+			if existingRelay, ok := relayHostInfo.relayForByIp[vpnIp]; ok {
+				switch existingRelay.State {
+				case Established:
+					hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Relay already established. SendVia(handshake0) now.")
+					f.SendVia(relayHostInfo, existingRelay, hostinfo.HandshakePacket[0], make([]byte, 12), make([]byte, mtu), false)
+				case Requested:
+					hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Re-send CreateRelay request")
+					// Re-send the CreateRelay request, in case the previous one was lost.
+					m := NebulaControl{
+						Type:                NebulaControl_CreateRelayRequest,
+						InitiatorRelayIndex: existingRelay.LocalIndex,
+						RelayFromIp:         uint32(c.lightHouse.myVpnIp),
+						RelayToIp:           uint32(vpnIp),
+					}
+					msg, err := proto.Marshal(&m)
+					if err != nil {
+						hostinfo.logger(c.l).
+							WithError(err).
+							Error("Failed to marshal Control message to create relay")
+					} else {
+						f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
+					}
+				default:
+					hostinfo.logger(c.l).Errorf("Found a Relay on hostinfo object %v for vpnIp %v, but unexpected state %v",
+						relayHostInfo.vpnIp.String(), vpnIp.String(), existingRelay.State)
 				}
+			} else {
+				// No relays exist or requested yet.
+				if relayHostInfo.GetRemote() != nil {
+					idx, err := AddRelay(c.l, relayHostInfo, c.mainHostMap, vpnIp, nil, TerminalType, Requested)
+					if err != nil {
+						hostinfo.logger(c.l).WithField("relay", relay.String()).WithError(err).Info("Failed to add relay to hostmap")
+					}
 
-				m := NebulaControl{
-					Type:                NebulaControl_CreateRelayRequest,
-					InitiatorRelayIndex: idx,
-					RelayFromIp:         uint32(c.lightHouse.myVpnIp),
-					RelayToIp:           uint32(vpnIp),
-				}
-				msg, err := proto.Marshal(&m)
-				if err != nil {
-					hostinfo.logger(c.l).
-						WithError(err).
-						Error("Failed to marshal Control message to create relay")
-				} else {
-					f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
+					m := NebulaControl{
+						Type:                NebulaControl_CreateRelayRequest,
+						InitiatorRelayIndex: idx,
+						RelayFromIp:         uint32(c.lightHouse.myVpnIp),
+						RelayToIp:           uint32(vpnIp),
+					}
+					msg, err := proto.Marshal(&m)
+					if err != nil {
+						hostinfo.logger(c.l).
+							WithError(err).
+							Error("Failed to marshal Control message to create relay")
+					} else {
+						f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
+					}
 				}
 			}
 		}
