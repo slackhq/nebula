@@ -238,7 +238,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 		messageMetrics: messageMetrics,
 	}
-	l.Infof("BRAD: useRelays = %v", handshakeConfig.useRelays)
 
 	handshakeManager := NewHandshakeManager(l, tunCidr, preferredRanges, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
