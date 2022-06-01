@@ -23,12 +23,8 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		return
 	}
 
-	// Immediately forward packets from self to self
+	// Ignore packets from self to self
 	if fwPacket.RemoteIP == f.myVpnIp {
-		_, err := f.readers[q].Write(packet)
-		if err != nil {
-			f.l.WithError(err).Error("Failed to forward to tun")
-		}
 		return
 	}
 
