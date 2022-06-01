@@ -72,6 +72,10 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	}
 }
 
+func (f *Interface) Handshake(vpnIp iputil.VpnIp) {
+	f.getOrHandshake(vpnIp)
+}
+
 // getOrHandshake returns nil if the vpnIp is not routable
 func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 	//TODO: we can find contains without converting back to bytes

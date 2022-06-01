@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/flynn/noise"
-	oldproto "github.com/golang/protobuf/proto"
+	oldproto "github.com/gogo/protobuf/proto"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/firewall"

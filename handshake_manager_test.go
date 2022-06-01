@@ -136,3 +136,5 @@ func (mw *mockEncWriter) SendMessageToVpnIp(t header.MessageType, st header.Mess
 func (mw *mockEncWriter) SendVia(via interface{}, relay interface{}, ad, nb, out []byte, nocopy bool) {
 	return
 }
+
+func (mw *mockEncWriter) Handshake(vpnIP iputil.VpnIp) {}

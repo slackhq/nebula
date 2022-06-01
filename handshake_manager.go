@@ -196,18 +196,15 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 			}
 			relayHostInfo, err := c.mainHostMap.QueryVpnIp(*relay)
 			if err != nil || relayHostInfo.GetRemote() == nil {
-				hostinfo.logger(c.l).WithError(err).WithField("relay", relay.String()).Info("Failed to find relay in main hostmap, or relay is not directly connected. Send test message.")
-				// TODO EncWriter should expose getOrHandshake. The impl of SendMessageToVpnIp calls getOrHandshake, but will
-				// also queue up unecessary messages for the peer.
-				// Update EncWriter to expose GetOrHandshake, and use that directly here.
-				f.SendMessageToVpnIp(header.Test, header.TestRequest, *relay, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+				hostinfo.logger(c.l).WithError(err).WithField("relay", relay.String()).Info("Failed to find relay in main hostmap, or relay is not directly connected. Establish Nebula tunnel.")
+				f.Handshake(*relay)
 				continue
 			}
 			// Check the relay HostInfo to see if we already established a relay through it
 			if existingRelay, ok := relayHostInfo.relayForByIp[vpnIp]; ok {
 				switch existingRelay.State {
 				case Established:
-					hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Relay already established. SendVia(handshake0) now.")
+					hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Send handshake via relay")
 					f.SendVia(relayHostInfo, existingRelay, hostinfo.HandshakePacket[0], make([]byte, 12), make([]byte, mtu), false)
 				case Requested:
 					hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Re-send CreateRelay request")
