@@ -217,7 +217,8 @@ func (f *Interface) SendVia(viaIfc interface{},
 	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, relay.RemoteIndex, c)
 	f.connectionManager.Out(via.vpnIp)
 
-	// AEAD over both the header and payload for this message type.
+	// Authenticate the header and payload, but do not encrypt for this message type.
+	// The payload consists of the inner, unencrypted Nebula header, as well as the end-to-end encrypted payload.
 	if len(out)+len(ad) > cap(out) {
 		via.logger(f.l).Errorf("SendVia failure: Capacity of out %v not large enough to add ad (%v) to length of out (%v)", cap(out), len(ad), len(out))
 		return
@@ -309,7 +310,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		}
 	} else {
 		// Try to send via a relay
-		for relayIP, _ := range hostinfo.relays {
+		for relayIP := range hostinfo.relays {
 			relayHostInfo, err := f.hostMap.QueryVpnIp(relayIP)
 			if err != nil {
 				hostinfo.logger(f.l).WithError(err).Infof("sendNoMetrics failed to find HostInfo for relayIP %v", relayIP)

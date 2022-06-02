@@ -96,9 +96,9 @@ type HostInfo struct {
 }
 
 type ViaSender struct {
-	relayHI   *HostInfo
-	remoteIdx uint32
-	relay     *Relay
+	relayHI   *HostInfo // relayHI is the host info object of the relay
+	remoteIdx uint32    // remoteIdx is the index included in the header of the received packet
+	relay     *Relay    // relay contains the rest of the relay information, including the PeerIP of the host trying to communicate with us.
 }
 
 type cachedPacket struct {
