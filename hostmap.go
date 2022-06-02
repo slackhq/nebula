@@ -50,7 +50,7 @@ type HostMap struct {
 	sync.RWMutex    //Because we concurrently read and write to our maps
 	name            string
 	Indexes         map[uint32]*HostInfo
-	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a RelayHostID
+	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a Relay HostInfo object
 	RemoteIndexes   map[uint32]*HostInfo
 	Hosts           map[iputil.VpnIp]*HostInfo
 	preferredRanges []*net.IPNet
@@ -77,9 +77,9 @@ type HostInfo struct {
 	vpnIp             iputil.VpnIp
 	recvError         int
 	remoteCidr        *cidr.Tree4
-	relays            map[iputil.VpnIp]struct{} // VpnIp's of Hosts to use as relays to access this peer
-	relayForByIp      map[iputil.VpnIp]*Relay   // Set of VpnIp peers for which this peer is a relay
-	relayForByIdx     map[uint32]*Relay
+	relays            map[iputil.VpnIp]struct{} // Set of VpnIp's of Hosts to use as relays to access this peer
+	relayForByIp      map[iputil.VpnIp]*Relay   // Maps VpnIps of peers for which this HostInfo is a relay to some Relay info
+	relayForByIdx     map[uint32]*Relay         // Maps a local index to some Relay info
 
 	// lastRebindCount is the other side of Interface.rebindCount, if these values don't match then we need to ask LH
 	// for a punch from the remote end of this tunnel. The goal being to prime their conntrack for our traffic just like
