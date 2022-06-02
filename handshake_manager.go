@@ -201,7 +201,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 				continue
 			}
 			// Check the relay HostInfo to see if we already established a relay through it
-			if existingRelay, ok := relayHostInfo.relayForByIp[vpnIp]; ok {
+			if existingRelay, ok := relayHostInfo.QueryRelayForByIp(vpnIp); ok {
 				switch existingRelay.State {
 				case Established:
 					hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Send handshake via relay")
