@@ -137,9 +137,7 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 		rm.l.WithError(err).Errorf("Can't find a HostInfo for peer IP %v", relay.PeerIp.String())
 		return
 	}
-	peerHostInfo.RLock()
-	peerRelay, ok := peerHostInfo.relayForByIp[target]
-	peerHostInfo.RUnlock()
+	peerRelay, ok := peerHostInfo.QueryRelayForByIp(target)
 	if !ok {
 		rm.l.Errorf("peerRelay %v does not have Relay state for %v", peerHostInfo.vpnIp.String(), target.String())
 		return
@@ -166,10 +164,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 	target := iputil.VpnIp(m.RelayToIp)
 	// Is the target of the relay me?
 	if target == f.myVpnIp {
-
-		h.RLock()
-		existingRelay, ok := h.relayForByIp[from]
-		h.RUnlock()
+		existingRelay, ok := h.QueryRelayForByIp(from)
 		addRelay := !ok
 		if ok {
 			// Clean up existing relay, if this is a new request.
@@ -187,9 +182,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			}
 		}
 
-		h.RLock()
-		relay, ok := h.relayForByIp[from]
-		h.RUnlock()
+		relay, ok := h.QueryRelayForByIp(from)
 		if ok && m.InitiatorRelayIndex != relay.RemoteIndex {
 			// Do something, Something happened.
 		}
@@ -227,9 +220,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		}
 		sendCreateRequest := false
 		var index uint32
-		peer.RLock()
-		targetRelay, ok := peer.relayForByIp[from]
-		peer.RUnlock()
+		targetRelay, ok := peer.QueryRelayForByIp(from)
 		if ok {
 			index = targetRelay.LocalIndex
 			if targetRelay.State == Requested {
@@ -260,9 +251,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			}
 		}
 		// Also track the half-created Relay state just received
-		h.RLock()
-		relay, ok := h.relayForByIp[target]
-		h.RUnlock()
+		relay, ok := h.QueryRelayForByIp(target)
 		if !ok {
 			// Add the relay
 			state := Requested

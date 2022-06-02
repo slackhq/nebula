@@ -248,6 +248,9 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 				}
 				hostinfo.relays[via2.relayHI.vpnIp] = struct{}{}
 				f.SendVia(via2.relayHI, via2.relay, msg, make([]byte, 12), make([]byte, mtu), false)
+				f.l.WithField("vpnIp", existing.vpnIp).WithField("relay", via2.relayHI.vpnIp).
+					WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
+					Info("Handshake message sent")
 				return
 			}
 		case ErrExistingHostInfo:
@@ -330,6 +333,14 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 		}
 		hostinfo.relays[via2.relayHI.vpnIp] = struct{}{}
 		f.SendVia(via2.relayHI, via2.relay, msg, make([]byte, 12), make([]byte, mtu), false)
+		f.l.WithField("vpnIp", vpnIp).WithField("relay", via2.relayHI.vpnIp).
+			WithField("certName", certName).
+			WithField("fingerprint", fingerprint).
+			WithField("issuer", issuer).
+			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
+			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+			WithField("sentCachedPackets", len(hostinfo.packetStore)).
+			Info("Handshake message sent")
 	}
 
 	hostinfo.handshakeComplete(f.l, f.cachedPacketMetrics)

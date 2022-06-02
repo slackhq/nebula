@@ -563,20 +563,6 @@ func NewIp6AndPort(ip net.IP, port uint32) *Ip6AndPort {
 	}
 }
 
-func NewIp4CIDR(cidr *net.IPNet) *Ip4CIDR {
-	mask, _ := cidr.Mask.Size()
-	ipp := Ip4CIDR{Mask: uint32(mask)}
-	ipp.Ip = uint32(iputil.Ip2VpnIp(cidr.IP))
-	return &ipp
-}
-
-func (c *Ip4CIDR) BuildIpNet() *net.IPNet {
-	return &net.IPNet{
-		IP:   iputil.VpnIp(c.Ip).ToIP(),
-		Mask: net.CIDRMask(int(c.Mask), 32),
-	}
-}
-
 func NewUDPAddrFromLH4(ipp *Ip4AndPort) *udp.Addr {
 	ip := ipp.Ip
 	return udp.NewAddr(

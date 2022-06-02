@@ -61,7 +61,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache)
 		case header.MessageRelay:
 			// The entire body is sent as AD, not encrypted.
-			// The packet consists of a 16-byte parsed Nebula header, AEAD-protected payload, and a trailing 16-byte AEAD signature value.
+			// The packet consists of a 16-byte parsed Nebula header, Associated Data-protected payload, and a trailing 16-byte AEAD signature value.
 			// The packet is guaranteed to be at least 16 bytes at this point, b/c it got past the h.Parse() call above. If it's
 			// otherwise malformed (meaning, there is no trailing 16 byte AEAD value), then this will result in at worst a 0-length slice
 			// which will gracefully fail in the DecryptDanger call.
@@ -112,7 +112,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 					return
 				}
 				// find the target Relay info object
-				targetRelay, ok := targetHI.relayForByIp[hostinfo.vpnIp]
+				targetRelay, ok := targetHI.QueryRelayForByIp(hostinfo.vpnIp)
 				if !ok {
 					hostinfo.logger(f.l).Infof("Failed to find relay for %v in hostinfo %v", relay.PeerIp.String(), hostinfo.vpnIp.String())
 					return

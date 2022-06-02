@@ -208,6 +208,13 @@ func (hi *HostInfo) RemoveRelay(localIdx uint32, l *logrus.Logger) (iputil.VpnIp
 	return relay.PeerIp, true
 }
 
+func (hi *HostInfo) QueryRelayForByIp(vpnIp iputil.VpnIp) (*Relay, bool) {
+	hi.RLock()
+	defer hi.RUnlock()
+	r, ok := hi.relayForByIp[vpnIp]
+	return r, ok
+}
+
 func (hm *HostMap) GetIndexByVpnIp(vpnIp iputil.VpnIp) (uint32, error) {
 	hm.RLock()
 	if i, ok := hm.Hosts[vpnIp]; ok {
@@ -358,11 +365,9 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 		if err != nil {
 			hm.l.WithError(err).Infof("Missing relay host %v in hostmap", relayIp)
 		} else {
-			relayHostInfo.Lock()
-			if r, ok := relayHostInfo.relayForByIp[hostinfo.vpnIp]; ok {
+			if r, ok := relayHostInfo.QueryRelayForByIp(hostinfo.vpnIp); ok {
 				teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
 			}
-			relayHostInfo.Unlock()
 		}
 	}
 	for _, localIdx := range teardownRelayIdx {
