@@ -59,6 +59,95 @@ type HostMap struct {
 	l               *logrus.Logger
 }
 
+type RelayState struct {
+	sync.RWMutex
+
+	relays        map[iputil.VpnIp]struct{} // Set of VpnIp's of Hosts to use as relays to access this peer
+	relayForByIp  map[iputil.VpnIp]*Relay   // Maps VpnIps of peers for which this HostInfo is a relay to some Relay info
+	relayForByIdx map[uint32]*Relay         // Maps a local index to some Relay info
+}
+
+func (rs *RelayState) DeleteRelay(ip iputil.VpnIp) {
+	rs.Lock()
+	defer rs.Unlock()
+	delete(rs.relays, ip)
+}
+
+func (rs *RelayState) GetRelayForByIp(ip iputil.VpnIp) (*Relay, bool) {
+	rs.RLock()
+	defer rs.RUnlock()
+	r, ok := rs.relayForByIp[ip]
+	return r, ok
+}
+
+func (rs *RelayState) InsertRelayTo(ip iputil.VpnIp) {
+	rs.Lock()
+	defer rs.Unlock()
+	rs.relays[ip] = struct{}{}
+}
+
+func (rs *RelayState) CopyRelayIps() []iputil.VpnIp {
+	rs.RLock()
+	defer rs.RUnlock()
+	ret := make([]iputil.VpnIp, 0, len(rs.relays))
+	for ip := range rs.relays {
+		ret = append(ret, ip)
+	}
+	return ret
+}
+
+func (rs *RelayState) CopyRelaysForIps() []iputil.VpnIp {
+	rs.RLock()
+	defer rs.RUnlock()
+	currentRelays := make([]iputil.VpnIp, 0, len(rs.relayForByIp))
+	for relayIp := range rs.relayForByIp {
+		currentRelays = append(currentRelays, relayIp)
+	}
+	return currentRelays
+}
+
+func (rs *RelayState) CopyRelayForIdxs() []uint32 {
+	rs.RLock()
+	defer rs.RUnlock()
+	ret := make([]uint32, 0, len(rs.relayForByIdx))
+	for i := range rs.relayForByIdx {
+		ret = append(ret, i)
+	}
+	return ret
+}
+
+func (rs *RelayState) RemoveRelay(localIdx uint32) (iputil.VpnIp, bool) {
+	rs.Lock()
+	defer rs.Unlock()
+	relay, ok := rs.relayForByIdx[localIdx]
+	if !ok {
+		return iputil.VpnIp(0), false
+	}
+	delete(rs.relayForByIdx, localIdx)
+	delete(rs.relayForByIp, relay.PeerIp)
+	return relay.PeerIp, true
+}
+
+func (rs *RelayState) QueryRelayForByIp(vpnIp iputil.VpnIp) (*Relay, bool) {
+	rs.RLock()
+	defer rs.RUnlock()
+	r, ok := rs.relayForByIp[vpnIp]
+	return r, ok
+}
+
+func (rs *RelayState) QueryRelayForByIdx(idx uint32) (*Relay, bool) {
+	rs.RLock()
+	defer rs.RUnlock()
+	r, ok := rs.relayForByIdx[idx]
+	return r, ok
+}
+func (rs *RelayState) InsertRelay(ip iputil.VpnIp, idx uint32, r *Relay) {
+	rs.Lock()
+	defer rs.Unlock()
+	rs.relayForByIp[ip] = r
+	rs.relayForByIdx[idx] = r
+}
+
 type HostInfo struct {
 	sync.RWMutex
 
@@ -77,9 +166,7 @@ type HostInfo struct {
 	vpnIp             iputil.VpnIp
 	recvError         int
 	remoteCidr        *cidr.Tree4
-	relays            map[iputil.VpnIp]struct{} // Set of VpnIp's of Hosts to use as relays to access this peer
-	relayForByIp      map[iputil.VpnIp]*Relay   // Maps VpnIps of peers for which this HostInfo is a relay to some Relay info
-	relayForByIdx     map[uint32]*Relay         // Maps a local index to some Relay info
+	relayState        RelayState
 
 	// lastRebindCount is the other side of Interface.rebindCount, if these values don't match then we need to ask LH
 	// for a punch from the remote end of this tunnel. The goal being to prime their conntrack for our traffic just like
@@ -155,7 +242,7 @@ func (hm *HostMap) RemoveRelay(localIdx uint32) {
 	}
 	delete(hm.Relays, localIdx)
 	hm.Unlock()
-	ip, ok := hiRelay.RemoveRelay(localIdx, hm.l)
+	ip, ok := hiRelay.relayState.RemoveRelay(localIdx)
 	if !ok {
 		return
 	}
@@ -164,55 +251,13 @@ func (hm *HostMap) RemoveRelay(localIdx uint32) {
 		return
 	}
 	var otherPeerIdx uint32
-	hiPeer.Lock()
-	delete(hiPeer.relays, hiRelay.vpnIp)
-	relay, ok := hiPeer.relayForByIp[hiRelay.vpnIp]
+	hiPeer.relayState.DeleteRelay(hiRelay.vpnIp)
+	relay, ok := hiPeer.relayState.GetRelayForByIp(hiRelay.vpnIp)
 	if ok {
 		otherPeerIdx = relay.LocalIndex
 	}
-	hiPeer.Unlock()
 	// I am a relaying host. I need to remove the other relay, too.
 	hm.RemoveRelay(otherPeerIdx)
-}
-
-func (hi *HostInfo) CopyRelayIps() []iputil.VpnIp {
-	currentRelays := []iputil.VpnIp{}
-	hi.Lock()
-	for relayIp := range hi.relays {
-		currentRelays = append(currentRelays, relayIp)
-	}
-	hi.Unlock()
-	return currentRelays
-}
-
-func (hi *HostInfo) CopyRelaysForIps() []iputil.VpnIp {
-	currentRelays := []iputil.VpnIp{}
-	hi.Lock()
-	for relayIp := range hi.relayForByIp {
-		currentRelays = append(currentRelays, relayIp)
-	}
-	hi.Unlock()
-	return currentRelays
-}
-
-func (hi *HostInfo) RemoveRelay(localIdx uint32, l *logrus.Logger) (iputil.VpnIp, bool) {
-	hi.Lock()
-	relay, ok := hi.relayForByIdx[localIdx]
-	if !ok {
-		hi.Unlock()
-		return iputil.VpnIp(0), false
-	}
-	delete(hi.relayForByIdx, localIdx)
-	delete(hi.relayForByIp, relay.PeerIp)
-	hi.Unlock()
-	return relay.PeerIp, true
-}
-
-func (hi *HostInfo) QueryRelayForByIp(vpnIp iputil.VpnIp) (*Relay, bool) {
-	hi.RLock()
-	defer hi.RUnlock()
-	r, ok := hi.relayForByIp[vpnIp]
-	return r, ok
 }
 
 func (hm *HostMap) GetIndexByVpnIp(vpnIp iputil.VpnIp) (uint32, error) {
@@ -240,9 +285,11 @@ func (hm *HostMap) AddVpnIp(vpnIp iputil.VpnIp, init func(hostinfo *HostInfo)) (
 			promoteCounter:  0,
 			vpnIp:           vpnIp,
 			HandshakePacket: make(map[uint8][]byte, 0),
-			relays:          map[iputil.VpnIp]struct{}{},
-			relayForByIp:    map[iputil.VpnIp]*Relay{},
-			relayForByIdx:   map[uint32]*Relay{},
+			relayState: RelayState{
+				relays:        map[iputil.VpnIp]struct{}{},
+				relayForByIp:  map[iputil.VpnIp]*Relay{},
+				relayForByIdx: map[uint32]*Relay{},
+			},
 		}
 		if init != nil {
 			init(h)
@@ -354,18 +401,18 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 	hm.Unlock()
 
 	// And tear down all the relays going through this host
-	for localIdx := range hostinfo.relayForByIdx {
+	for _, localIdx := range hostinfo.relayState.CopyRelayForIdxs() {
 		hm.RemoveRelay(localIdx)
 	}
 
 	// And tear down the relays this deleted hostInfo was using to be reached
 	teardownRelayIdx := []uint32{}
-	for relayIp := range hostinfo.relays {
+	for _, relayIp := range hostinfo.relayState.CopyRelayIps() {
 		relayHostInfo, err := hm.QueryVpnIp(relayIp)
 		if err != nil {
 			hm.l.WithError(err).Infof("Missing relay host %v in hostmap", relayIp)
 		} else {
-			if r, ok := relayHostInfo.QueryRelayForByIp(hostinfo.vpnIp); ok {
+			if r, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp); ok {
 				teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
 			}
 		}
@@ -537,12 +584,6 @@ func (hm *HostMap) Punchy(ctx context.Context, conn *udp.Conn) {
 			continue
 		}
 	}
-}
-
-func (i *HostInfo) AddRelay(idx uint32, relayIp iputil.VpnIp) {
-	i.Lock()
-	i.relays[relayIp] = struct{}{}
-	i.Unlock()
 }
 
 // TryPromoteBest handles re-querying lighthouses and probing for better paths

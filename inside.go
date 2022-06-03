@@ -309,13 +309,13 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		}
 	} else {
 		// Try to send via a relay
-		for relayIP := range hostinfo.relays {
+		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
 			relayHostInfo, err := f.hostMap.QueryVpnIp(relayIP)
 			if err != nil {
 				hostinfo.logger(f.l).WithError(err).Infof("sendNoMetrics failed to find HostInfo for relayIP %v", relayIP)
 				continue
 			}
-			relay, ok := relayHostInfo.QueryRelayForByIp(hostinfo.vpnIp)
+			relay, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp)
 			if !ok {
 				hostinfo.logger(f.l).Infof("sendNoMetrics relay %v does not have a relay object for target %v", relayHostInfo.vpnIp.String(), hostinfo.vpnIp.String())
 				continue

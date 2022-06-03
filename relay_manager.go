@@ -68,7 +68,6 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 		_, inRelays := hm.Relays[index]
 		if !inRelays {
 			hm.Relays[index] = relayHostInfo
-			relayHostInfo.Lock()
 			newRelay := Relay{
 				Type:       relayType,
 				State:      state,
@@ -79,11 +78,8 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 			if remoteIdx != nil {
 				newRelay.RemoteIndex = *remoteIdx
 			}
+			relayHostInfo.relayState.InsertRelay(vpnIp, index, &newRelay)
 
-			relayHostInfo.relayForByIp[vpnIp] = &newRelay
-			relayHostInfo.relayForByIdx[index] = &newRelay
-
-			relayHostInfo.Unlock()
 			return index, nil
 		}
 	}
@@ -92,16 +88,14 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 }
 
 func (rm *relayManager) SetRelay(relayHostInfo *HostInfo, m *NebulaControl) (*Relay, error) {
-	relayHostInfo.Lock()
-	relay, ok := relayHostInfo.relayForByIdx[m.InitiatorRelayIndex]
+	relay, ok := relayHostInfo.relayState.QueryRelayForByIdx(m.InitiatorRelayIndex)
 	if !ok {
-		relayHostInfo.Unlock()
 		rm.l.Infof("BRAD: relayManager SetRelay on %v with index %v relayForByIdx not found from %v to %v", relayHostInfo.vpnIp, m.InitiatorRelayIndex, m.RelayFromIp, m.RelayToIp)
 		return nil, fmt.Errorf("wat")
 	}
+	// relay deserves some synchronization
 	relay.RemoteIndex = m.ResponderRelayIndex
 	relay.State = Established
-	relayHostInfo.Unlock()
 
 	return relay, nil
 }
@@ -137,7 +131,7 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 		rm.l.WithError(err).Errorf("Can't find a HostInfo for peer IP %v", relay.PeerIp.String())
 		return
 	}
-	peerRelay, ok := peerHostInfo.QueryRelayForByIp(target)
+	peerRelay, ok := peerHostInfo.relayState.QueryRelayForByIp(target)
 	if !ok {
 		rm.l.Errorf("peerRelay %v does not have Relay state for %v", peerHostInfo.vpnIp.String(), target.String())
 		return
@@ -164,7 +158,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 	target := iputil.VpnIp(m.RelayToIp)
 	// Is the target of the relay me?
 	if target == f.myVpnIp {
-		existingRelay, ok := h.QueryRelayForByIp(from)
+		existingRelay, ok := h.relayState.QueryRelayForByIp(from)
 		addRelay := !ok
 		if ok {
 			// Clean up existing relay, if this is a new request.
@@ -182,7 +176,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			}
 		}
 
-		relay, ok := h.QueryRelayForByIp(from)
+		relay, ok := h.relayState.QueryRelayForByIp(from)
 		if ok && m.InitiatorRelayIndex != relay.RemoteIndex {
 			// Do something, Something happened.
 		}
@@ -220,7 +214,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		}
 		sendCreateRequest := false
 		var index uint32
-		targetRelay, ok := peer.QueryRelayForByIp(from)
+		targetRelay, ok := peer.relayState.QueryRelayForByIp(from)
 		if ok {
 			index = targetRelay.LocalIndex
 			if targetRelay.State == Requested {
@@ -251,7 +245,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			}
 		}
 		// Also track the half-created Relay state just received
-		relay, ok := h.QueryRelayForByIp(target)
+		relay, ok := h.relayState.QueryRelayForByIp(target)
 		if !ok {
 			// Add the relay
 			state := Requested

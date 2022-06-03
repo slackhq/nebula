@@ -76,7 +76,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			f.handleHostRoaming(hostinfo, addr)
 			f.connectionManager.In(hostinfo.vpnIp)
 
-			relay, ok := hostinfo.relayForByIdx[h.RemoteIndex]
+			relay, ok := hostinfo.relayState.QueryRelayForByIdx(h.RemoteIndex)
 			if !ok {
 				// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
 				// its internal mapping. This shouldn't happen!
@@ -112,7 +112,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 					return
 				}
 				// find the target Relay info object
-				targetRelay, ok := targetHI.QueryRelayForByIp(hostinfo.vpnIp)
+				targetRelay, ok := targetHI.relayState.QueryRelayForByIp(hostinfo.vpnIp)
 				if !ok {
 					hostinfo.logger(f.l).Infof("Failed to find relay for %v in hostinfo %v", relay.PeerIp.String(), hostinfo.vpnIp.String())
 					return
