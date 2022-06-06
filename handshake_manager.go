@@ -9,7 +9,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/header"
@@ -215,7 +214,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 						RelayFromIp:         uint32(c.lightHouse.myVpnIp),
 						RelayToIp:           uint32(vpnIp),
 					}
-					msg, err := proto.Marshal(&m)
+					msg, err := m.Marshal()
 					if err != nil {
 						hostinfo.logger(c.l).
 							WithError(err).
@@ -241,7 +240,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 						RelayFromIp:         uint32(c.lightHouse.myVpnIp),
 						RelayToIp:           uint32(vpnIp),
 					}
-					msg, err := proto.Marshal(&m)
+					msg, err := m.Marshal()
 					if err != nil {
 						hostinfo.logger(c.l).
 							WithError(err).

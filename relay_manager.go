@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
@@ -144,7 +143,7 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 		RelayFromIp:         uint32(peerHostInfo.vpnIp),
 		RelayToIp:           uint32(target),
 	}
-	msg, err := proto.Marshal(&resp)
+	msg, err := resp.Marshal()
 	if err != nil {
 		rm.l.
 			WithError(err).Error("relayManager Failed to marhsal Control CreateRelayResponse message to create relay")
@@ -188,7 +187,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			RelayFromIp:         uint32(from),
 			RelayToIp:           uint32(target),
 		}
-		msg, err := proto.Marshal(&resp)
+		msg, err := resp.Marshal()
 		if err != nil {
 			rm.l.
 				WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
@@ -236,7 +235,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 				RelayFromIp:         uint32(h.vpnIp),
 				RelayToIp:           uint32(target),
 			}
-			msg, err := proto.Marshal(&req)
+			msg, err := req.Marshal()
 			if err != nil {
 				rm.l.
 					WithError(err).Error("relayManager Failed to marshal Control message to create relay")
@@ -277,7 +276,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 					RelayFromIp:         uint32(h.vpnIp),
 					RelayToIp:           uint32(target),
 				}
-				msg, err := proto.Marshal(&resp)
+				msg, err := resp.Marshal()
 				if err != nil {
 					rm.l.
 						WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")

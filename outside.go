@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/flynn/noise"
-	oldproto "github.com/gogo/protobuf/proto"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/firewall"
@@ -87,7 +86,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 					Type:                NebulaControl_RemoveRelayRequest,
 					ResponderRelayIndex: h.RemoteIndex,
 				}
-				msg, err := oldproto.Marshal(&m)
+				msg, err := m.Marshal()
 				if err != nil {
 					hostinfo.logger(f.l).
 						WithError(err).
