@@ -86,11 +86,12 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 	return 0, errors.New("failed to generate unique localIndexId")
 }
 
-func (rm *relayManager) SetRelay(relayHostInfo *HostInfo, m *NebulaControl) (*Relay, error) {
+// EstablishRelay updates a Requested Relay to become an Established Relay, which can pass traffic.
+func (rm *relayManager) EstablishRelay(relayHostInfo *HostInfo, m *NebulaControl) (*Relay, error) {
 	relay, ok := relayHostInfo.relayState.QueryRelayForByIdx(m.InitiatorRelayIndex)
 	if !ok {
-		rm.l.Infof("BRAD: relayManager SetRelay on %v with index %v relayForByIdx not found from %v to %v", relayHostInfo.vpnIp, m.InitiatorRelayIndex, m.RelayFromIp, m.RelayToIp)
-		return nil, fmt.Errorf("wat")
+		rm.l.Infof("relayManager EstablishRelay on %v with index %v relayForByIdx not found from %v to %v", relayHostInfo.vpnIp, m.InitiatorRelayIndex, m.RelayFromIp, m.RelayToIp)
+		return nil, fmt.Errorf("unknown relay")
 	}
 	// relay deserves some synchronization
 	relay.RemoteIndex = m.ResponderRelayIndex
@@ -106,8 +107,6 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, m *NebulaControl, f *Inter
 		rm.handleCreateRelayRequest(h, f, m)
 	case NebulaControl_CreateRelayResponse:
 		rm.handleCreateRelayResponse(h, f, m)
-	case NebulaControl_RemoveRelayRequest:
-		rm.handleRemoveRelayRequest(h, f, m)
 	}
 
 }
@@ -115,7 +114,7 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, m *NebulaControl, f *Inter
 func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *NebulaControl) {
 	target := iputil.VpnIp(m.RelayToIp)
 
-	relay, err := rm.SetRelay(h, m)
+	relay, err := rm.EstablishRelay(h, m)
 	if err != nil {
 		rm.l.WithError(err).Errorf("Failed to update relay for target %v: %v", target.String(), err)
 		return
@@ -293,9 +292,4 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 
 func (rm *relayManager) RemoveRelay(localIdx uint32) {
 	rm.hostmap.RemoveRelay(localIdx)
-}
-
-func (rm *relayManager) handleRemoveRelayRequest(h *HostInfo, f *Interface, m *NebulaControl) {
-	// Find the Relay object based on the remote index and host IP that sent the message
-	//rm.RemoveRelay(relay, h)
 }

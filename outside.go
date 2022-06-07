@@ -71,7 +71,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			}
 			// Successfully validated the thing. Get rid of the Relay header.
 			signedPayload = signedPayload[header.Len:]
-			// Pull the Roaming parts up here, and return.
+			// Pull the Roaming parts up here, and return in all call paths.
 			f.handleHostRoaming(hostinfo, addr)
 			f.connectionManager.In(hostinfo.vpnIp)
 
@@ -80,20 +80,10 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
 				// its internal mapping. This shouldn't happen!
 				hostinfo.logger(f.l).Errorf("HostInfo obj %v is missing remote index %v", hostinfo.vpnIp, h.RemoteIndex)
+				// Delete my local index from the hostmap
 				f.hostMap.DeleteRelayIdx(h.RemoteIndex)
-				// Kindly notify the sender that there is no relay here
-				m := NebulaControl{
-					Type:                NebulaControl_RemoveRelayRequest,
-					ResponderRelayIndex: h.RemoteIndex,
-				}
-				msg, err := m.Marshal()
-				if err != nil {
-					hostinfo.logger(f.l).
-						WithError(err).
-						Error("Failed to marshal Control message to remove relay")
-				} else {
-					f.SendMessageToVpnIp(header.Control, 0, hostinfo.vpnIp, msg, make([]byte, 12), make([]byte, mtu))
-				}
+				// When the peer doesn't recieve any return traffic, its connection_manager will eventually clean up
+				// the broken relay when it cleans up the associated HostInfo object.
 				return
 			}
 
@@ -124,6 +114,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 						// Forward this packet through the relay tunnel
 						// Find the target HostInfo
 						f.SendVia(targetHI, targetRelay, signedPayload, nb, out, false)
+						return
 					case TerminalType:
 						hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 					}
@@ -133,7 +124,6 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				}
 			}
 		}
-		// Fallthrough to the bottom to record incoming traffic
 
 	case header.LightHouse:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
