@@ -39,14 +39,15 @@ sudo docker exec lighthouse1 ping -c1 192.168.100.2
 sudo docker exec lighthouse1 ping -c1 192.168.100.3
 sudo docker exec lighthouse1 ping -c1 192.168.100.4
 
-# set +x
-# echo
-# echo " *** Testing ping from host2"
-# echo
-# set -x
-# sudo docker exec host2 ping -c1 192.168.100.1
-# # Should fail because not allowed by host3 inbound firewall
-# ! sudo docker exec host2 ping -c1 192.168.100.3 -w5 || exit 1
+set +x
+echo
+echo " *** Testing ping from host2"
+echo
+set -x
+sudo docker exec host2 ping -c1 192.168.100.1
+# Should fail because no relay configured in this direction
+! sudo docker exec host2 ping -c1 192.168.100.3 -w5 || exit 1
+! sudo docker exec host2 ping -c1 192.168.100.4 -w5 || exit 1
 
 set +x
 echo
@@ -66,17 +67,6 @@ sudo docker exec host4 ping -c1 192.168.100.1
 # Should fail because relays not allowed
 ! sudo docker exec host4 ping -c1 192.168.100.2 -w5 || exit 1
 sudo docker exec host4 ping -c1 192.168.100.3
-
-# set +x
-# echo
-# echo " *** Testing conntrack"
-# echo
-# set -x
-# # host2 can ping host3 now that host3 pinged it first
-# sudo docker exec host2 ping -c1 192.168.100.3
-# # host4 can ping host2 once conntrack established
-# sudo docker exec host2 ping -c1 192.168.100.4
-# sudo docker exec host4 ping -c1 192.168.100.2
 
 sudo docker exec host4 sh -c 'kill 1'
 sudo docker exec host3 sh -c 'kill 1'
