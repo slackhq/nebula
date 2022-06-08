@@ -373,12 +373,10 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via interface{}, hostinfo *
 			Info("Handshake is already complete")
 
 		// Update remote if preferred
-		if addr != nil {
-			if hostinfo.SetRemoteIfPreferred(f.hostMap, addr) {
-				// Send a test packet to ensure the other side has also switched to
-				// the preferred remote
-				f.SendMessageToVpnIp(header.Test, header.TestRequest, hostinfo.vpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
-			}
+		if hostinfo.SetRemoteIfPreferred(f.hostMap, addr) {
+			// Send a test packet to ensure the other side has also switched to
+			// the preferred remote
+			f.SendMessageToVpnIp(header.Test, header.TestRequest, hostinfo.vpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 		}
 
 		// We already have a complete tunnel, there is nothing that can be done by processing further stage 1 packets

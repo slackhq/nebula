@@ -695,6 +695,10 @@ func (i *HostInfo) SetRemote(remote *udp.Addr) {
 // SetRemoteIfPreferred returns true if the remote was changed. The lastRoam
 // time on the HostInfo will also be updated.
 func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udp.Addr) bool {
+	if newRemote == nil {
+		// relays have nil udp Addrs
+		return false
+	}
 	currentRemote := i.remote
 	if currentRemote == nil {
 		i.SetRemote(newRemote)
