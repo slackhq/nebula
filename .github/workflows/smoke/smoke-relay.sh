@@ -7,6 +7,10 @@ set -o pipefail
 mkdir -p logs
 
 cleanup() {
+    echo
+    echo " *** cleanup"
+    echo
+
     set +e
     if [ "$(jobs -r)" ]
     then
@@ -73,3 +77,9 @@ sudo docker exec host3 sh -c 'kill 1'
 sudo docker exec host2 sh -c 'kill 1'
 sudo docker exec lighthouse1 sh -c 'kill 1'
 sleep 1
+
+if [ "$(jobs -r)" ]
+then
+    echo "nebula still running after SIGTERM sent" >&2
+    exit 1
+fi
