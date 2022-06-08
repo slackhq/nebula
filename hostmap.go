@@ -34,7 +34,7 @@ const (
 
 const (
 	Unknowntype = iota
-	RelayType
+	ForwardingType
 	TerminalType
 )
 

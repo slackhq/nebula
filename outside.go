@@ -93,7 +93,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				// From this recursive point, all these variables are 'burned'. We shouldn't rely on them again.
 				f.readOutsidePackets(nil, &ViaSender{relayHI: hostinfo, remoteIdx: relay.RemoteIndex, relay: relay}, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
 				return
-			case RelayType:
+			case ForwardingType:
 				// Find the target HostInfo relay object
 				targetHI, err := f.hostMap.QueryVpnIp(relay.PeerIp)
 				if err != nil {
@@ -110,7 +110,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				// If that relay is Established, forward the payload through it
 				if targetRelay.State == Established {
 					switch targetRelay.Type {
-					case RelayType:
+					case ForwardingType:
 						// Forward this packet through the relay tunnel
 						// Find the target HostInfo
 						f.SendVia(targetHI, targetRelay, signedPayload, nb, out, false)

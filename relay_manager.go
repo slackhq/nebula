@@ -220,7 +220,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			}
 		} else {
 			// Allocate an index in the hostMap for this relay peer
-			index, err = AddRelay(rm.l, peer, f.hostMap, from, nil, RelayType, Requested)
+			index, err = AddRelay(rm.l, peer, f.hostMap, from, nil, ForwardingType, Requested)
 			if err != nil {
 				return
 			}
@@ -251,7 +251,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 
 				state = Established
 			}
-			_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, RelayType, state)
+			_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, ForwardingType, state)
 			if err != nil {
 				return
 			}
@@ -261,7 +261,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 				// Clean up the existing stuff.
 				rm.RemoveRelay(relay.LocalIndex)
 				// Add the new relay
-				_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, RelayType, Requested)
+				_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, ForwardingType, Requested)
 				if err != nil {
 					return
 				}
