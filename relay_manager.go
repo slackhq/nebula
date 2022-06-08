@@ -168,7 +168,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			}
 		}
 		if addRelay {
-			_, err := AddRelay(rm.l, h, f.hostMap, from, &m.InitiatorRelayIndex, TerminalType, Requested)
+			_, err := AddRelay(rm.l, h, f.hostMap, from, &m.InitiatorRelayIndex, TerminalType, Established)
 			if err != nil {
 				return
 			}
@@ -195,10 +195,10 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		}
 		return
 	} else {
+		// the target is not me. Create a relay to the target, from me.
 		if rm.GetAmRelay() == false {
 			return
 		}
-		// the target is not me. Create a relay to the target, from me.
 		peer, err := rm.hostmap.QueryVpnIp(target)
 		if err != nil {
 			// Try to establish a connection to this host. If we get a future relay request,
@@ -248,11 +248,12 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			// Add the relay
 			state := Requested
 			if targetRelay != nil && targetRelay.State == Established {
-
 				state = Established
 			}
 			_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, ForwardingType, state)
 			if err != nil {
+				rm.l.
+					WithError(err).Error("relayManager Failed to allocate a local index for relay")
 				return
 			}
 		} else {
@@ -265,6 +266,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 				if err != nil {
 					return
 				}
+				relay, _ = h.relayState.QueryRelayForByIp(target)
 			}
 			switch relay.State {
 			case Established:
