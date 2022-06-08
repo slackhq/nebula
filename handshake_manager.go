@@ -185,7 +185,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 			Info("Handshake message sent")
 	}
 
-	if c.config.useRelays {
+	if c.config.useRelays && len(hostinfo.remotes.relays) > 0 {
 		hostinfo.logger(c.l).Infof("Attempt to relay through hosts (%v)", hostinfo.remotes.relays)
 		// Send a RelayRequest to all known Relay IP's
 		for _, relay := range hostinfo.remotes.relays {
