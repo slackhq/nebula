@@ -535,7 +535,7 @@ func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		)
 	}
 
-	ifce.closeTunnel(hostInfo, false)
+	ifce.closeTunnel(hostInfo)
 	return w.WriteLine("Closed")
 }
 

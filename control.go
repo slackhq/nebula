@@ -62,12 +62,14 @@ func (c *Control) Start() {
 
 // Stop signals nebula to shutdown, returns after the shutdown is complete
 func (c *Control) Stop() {
-	//TODO: stop tun and udp routines, the lock on hostMap effectively does that though
+	// Stop the handshakeManager (and other serivces), to prevent new tunnels from
+	// being created while we're shutting them all down.
+	c.cancel()
+
 	c.CloseAllTunnels(false)
 	if err := c.f.Close(); err != nil {
 		c.l.WithError(err).Error("Close interface failed")
 	}
-	c.cancel()
 	c.l.Info("Goodbye")
 }
 
@@ -152,7 +154,7 @@ func (c *Control) CloseTunnel(vpnIp iputil.VpnIp, localOnly bool) bool {
 		)
 	}
 
-	c.f.closeTunnel(hostInfo, false)
+	c.f.closeTunnel(hostInfo)
 	return true
 }
 
@@ -160,25 +162,47 @@ func (c *Control) CloseTunnel(vpnIp iputil.VpnIp, localOnly bool) bool {
 // the int returned is a count of tunnels closed
 func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	//TODO: this is probably better as a function in ConnectionManager or HostMap directly
-	c.f.hostMap.Lock()
 	lighthouses := c.f.lightHouse.GetLighthouses()
-	for _, h := range c.f.hostMap.Hosts {
+
+	shutdown := func(h *HostInfo) {
 		if excludeLighthouses {
 			if _, ok := lighthouses[h.vpnIp]; ok {
-				continue
+				return
 			}
 		}
+		c.f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+		c.f.closeTunnel(h)
 
-		if h.ConnectionState.ready {
-			c.f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
-			c.f.closeTunnel(h, true)
+		c.l.WithField("vpnIp", h.vpnIp).WithField("udpAddr", h.remote).
+			Debug("Sending close tunnel message")
+		closed++
+	}
 
-			c.l.WithField("vpnIp", h.vpnIp).WithField("udpAddr", h.remote).
-				Debug("Sending close tunnel message")
-			closed++
+	// Learn which hosts are being used as relays, so we can shut them down last.
+	relayingHosts := map[iputil.VpnIp]*HostInfo{}
+	// Grab the hostMap lock to access the Relays map
+	c.f.hostMap.Lock()
+	for _, relayingHost := range c.f.hostMap.Relays {
+		relayingHosts[relayingHost.vpnIp] = relayingHost
+	}
+	c.f.hostMap.Unlock()
+
+	hostInfos := []*HostInfo{}
+	// Grab the hostMap lock to access the Hosts map
+	c.f.hostMap.Lock()
+	for _, relayHost := range c.f.hostMap.Hosts {
+		if _, ok := relayingHosts[relayHost.vpnIp]; !ok {
+			hostInfos = append(hostInfos, relayHost)
 		}
 	}
 	c.f.hostMap.Unlock()
+
+	for _, h := range hostInfos {
+		shutdown(h)
+	}
+	for _, h := range relayingHosts {
+		shutdown(h)
+	}
 	return
 }
 
