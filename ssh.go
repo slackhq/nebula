@@ -344,16 +344,6 @@ func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pen
 			return sshQueryLighthouse(ifce, fs, a, w)
 		},
 	})
-
-	ssh.RegisterCommand(&sshd.Command{
-		Name:             "die",
-		ShortDescription: "Immediately kill the Nebula process",
-		Help:             "This command is for brad's debugging",
-		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-			os.Exit(-1)
-			return nil
-		},
-	})
 }
 
 func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error {

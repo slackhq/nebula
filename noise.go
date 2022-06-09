@@ -66,3 +66,10 @@ func (s *NebulaCipherState) DecryptDanger(out, ad, ciphertext []byte, n uint64, 
 		return []byte{}, nil
 	}
 }
+
+func (s *NebulaCipherState) Overhead() int {
+	if s != nil {
+		return s.c.(cipher.AEAD).Overhead()
+	}
+	return 0
+}

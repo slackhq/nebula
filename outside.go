@@ -64,8 +64,9 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			// The packet is guaranteed to be at least 16 bytes at this point, b/c it got past the h.Parse() call above. If it's
 			// otherwise malformed (meaning, there is no trailing 16 byte AEAD value), then this will result in at worst a 0-length slice
 			// which will gracefully fail in the DecryptDanger call.
-			signedPayload := packet[:len(packet)-16]
-			out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, signedPayload, packet[len(packet)-16:], h.MessageCounter, nb)
+			signedPayload := packet[:len(packet)-hostinfo.ConnectionState.dKey.Overhead()]
+			signatureValue := packet[len(packet)-hostinfo.ConnectionState.dKey.Overhead():]
+			out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, signedPayload, signatureValue, h.MessageCounter, nb)
 			if err != nil {
 				return
 			}
@@ -79,7 +80,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			if !ok {
 				// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
 				// its internal mapping. This shouldn't happen!
-				hostinfo.logger(f.l).Errorf("HostInfo obj %v is missing remote index %v", hostinfo.vpnIp, h.RemoteIndex)
+				hostinfo.logger(f.l).WithField("hostinfo", hostinfo.vpnIp).WithField("remoteIndex", h.RemoteIndex).Errorf("HostInfo missing remote index")
 				// Delete my local index from the hostmap
 				f.hostMap.DeleteRelayIdx(h.RemoteIndex)
 				// When the peer doesn't recieve any return traffic, its connection_manager will eventually clean up
@@ -97,13 +98,13 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				// Find the target HostInfo relay object
 				targetHI, err := f.hostMap.QueryVpnIp(relay.PeerIp)
 				if err != nil {
-					hostinfo.logger(f.l).WithError(err).Infof("Failed to find target host info by ip %v", relay.PeerIp)
+					hostinfo.logger(f.l).WithField("peerIp", relay.PeerIp).WithError(err).Info("Failed to find target host info by ip")
 					return
 				}
 				// find the target Relay info object
 				targetRelay, ok := targetHI.relayState.QueryRelayForByIp(hostinfo.vpnIp)
 				if !ok {
-					hostinfo.logger(f.l).Infof("Failed to find relay for %v in hostinfo %v", relay.PeerIp.String(), hostinfo.vpnIp.String())
+					hostinfo.logger(f.l).WithField("peerIp", relay.PeerIp).Info("Failed to find relay in hostinfo")
 					return
 				}
 
@@ -119,7 +120,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 						hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 					}
 				} else {
-					hostinfo.logger(f.l).Infof("Unexpected relay state %v, should be Established (%v)", targetRelay.State, Established)
+					hostinfo.logger(f.l).WithField("targetRelayState", targetRelay.State).Info("Unexpected target relay state")
 					return
 				}
 			}

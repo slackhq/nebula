@@ -278,7 +278,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 		case false:
 			relaysForMe := []iputil.VpnIp{}
 			for _, v := range c.GetStringSlice("relay.relays", nil) {
-				lh.l.WithField("Relay IP", v).Info("Read relay from config")
+				lh.l.WithField("RelayIP", v).Info("Read relay from config")
 
 				configRIP := net.ParseIP(v)
 				if configRIP != nil {

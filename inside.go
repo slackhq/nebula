@@ -218,8 +218,13 @@ func (f *Interface) SendVia(viaIfc interface{},
 
 	// Authenticate the header and payload, but do not encrypt for this message type.
 	// The payload consists of the inner, unencrypted Nebula header, as well as the end-to-end encrypted payload.
-	if len(out)+len(ad) > cap(out) {
-		via.logger(f.l).Errorf("SendVia failure: Capacity of out %v not large enough to add ad (%v) to length of out (%v)", cap(out), len(ad), len(out))
+	if len(out)+len(ad)+via.ConnectionState.eKey.Overhead() > cap(out) {
+		via.logger(f.l).
+			WithField("outCap", cap(out)).
+			WithField("payloadLen", len(ad)).
+			WithField("headerLen", len(out)).
+			WithField("cipherOverhead", via.ConnectionState.eKey.Overhead()).
+			Error("SendVia out buffer not large enough for relay")
 		return
 	}
 
@@ -312,12 +317,15 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
 			relayHostInfo, err := f.hostMap.QueryVpnIp(relayIP)
 			if err != nil {
-				hostinfo.logger(f.l).WithError(err).Infof("sendNoMetrics failed to find HostInfo for relayIP %v", relayIP)
+				hostinfo.logger(f.l).WithField("relayIp", relayIP).WithError(err).Info("sendNoMetrics failed to find HostInfo")
 				continue
 			}
 			relay, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp)
 			if !ok {
-				hostinfo.logger(f.l).Infof("sendNoMetrics relay %v does not have a relay object for target %v", relayHostInfo.vpnIp.String(), hostinfo.vpnIp.String())
+				hostinfo.logger(f.l).
+					WithField("relayIp", relayHostInfo.vpnIp).
+					WithField("relayTarget", hostinfo.vpnIp).
+					Info("sendNoMetrics relay missing object for target")
 				continue
 			}
 			f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true)

@@ -157,14 +157,14 @@ func loadCAFromConfig(l *logrus.Logger, c *config.C) (*cert.NebulaCAPool, error)
 	}
 
 	for _, fp := range c.GetStringSlice("pki.blocklist", []string{}) {
-		l.WithField("fingerprint", fp).Infof("Blocklisting cert")
+		l.WithField("fingerprint", fp).Info("Blocklisting cert")
 		CAs.BlocklistFingerprint(fp)
 	}
 
 	// Support deprecated config for at least one minor release to allow for migrations
 	//TODO: remove in 2022 or later
 	for _, fp := range c.GetStringSlice("pki.blacklist", []string{}) {
-		l.WithField("fingerprint", fp).Infof("Blocklisting cert")
+		l.WithField("fingerprint", fp).Info("Blocklisting cert")
 		l.Warn("pki.blacklist is deprecated and will not be supported in a future release. Please migrate your config to use pki.blocklist")
 		CAs.BlocklistFingerprint(fp)
 	}

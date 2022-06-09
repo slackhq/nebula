@@ -410,7 +410,7 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 	for _, relayIp := range hostinfo.relayState.CopyRelayIps() {
 		relayHostInfo, err := hm.QueryVpnIp(relayIp)
 		if err != nil {
-			hm.l.WithError(err).Infof("Missing relay host %v in hostmap", relayIp)
+			hm.l.WithError(err).WithField("relay", relayIp).Info("Missing relay host in hostmap")
 		} else {
 			if r, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp); ok {
 				teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
@@ -460,7 +460,7 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 }
 
 func (hm *HostMap) QueryIndex(index uint32) (*HostInfo, error) {
-	//TODO: we probably just want ot return bool instead of error, or at least a static error
+	//TODO: we probably just want to return bool instead of error, or at least a static error
 	hm.RLock()
 	if h, ok := hm.Indexes[index]; ok {
 		hm.RUnlock()
@@ -471,7 +471,7 @@ func (hm *HostMap) QueryIndex(index uint32) (*HostInfo, error) {
 	}
 }
 func (hm *HostMap) QueryRelayIndex(index uint32) (*HostInfo, error) {
-	//TODO: we probably just want ot return bool instead of error, or at least a static error
+	//TODO: we probably just want to return bool instead of error, or at least a static error
 	hm.RLock()
 	if h, ok := hm.Relays[index]; ok {
 		hm.RUnlock()

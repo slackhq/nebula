@@ -186,7 +186,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 	}
 
 	if c.config.useRelays && len(hostinfo.remotes.relays) > 0 {
-		hostinfo.logger(c.l).Infof("Attempt to relay through hosts (%v)", hostinfo.remotes.relays)
+		hostinfo.logger(c.l).WithField("relayIps", hostinfo.remotes.relays).Info("Attempt to relay through hosts")
 		// Send a RelayRequest to all known Relay IP's
 		for _, relay := range hostinfo.remotes.relays {
 			// Don't relay to myself, and don't relay through the host I'm trying to connect to
@@ -195,7 +195,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 			}
 			relayHostInfo, err := c.mainHostMap.QueryVpnIp(*relay)
 			if err != nil || relayHostInfo.remote == nil {
-				hostinfo.logger(c.l).WithError(err).WithField("relay", relay.String()).Info("Failed to find relay in main hostmap, or relay is not directly connected. Establish Nebula tunnel.")
+				hostinfo.logger(c.l).WithError(err).WithField("relay", relay.String()).Info("Establish tunnel to relay target.")
 				f.Handshake(*relay)
 				continue
 			}
@@ -223,8 +223,11 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 						f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
 					}
 				default:
-					hostinfo.logger(c.l).Errorf("Found a Relay on hostinfo object %v for vpnIp %v, but unexpected state %v",
-						relayHostInfo.vpnIp.String(), vpnIp.String(), existingRelay.State)
+					hostinfo.logger(c.l).
+						WithField("vpnIp", vpnIp).
+						WithField("state", existingRelay.State).
+						WithField("relayVpnIp", relayHostInfo.vpnIp).
+						Errorf("Relay unexpected state")
 				}
 			} else {
 				// No relays exist or requested yet.

@@ -90,7 +90,10 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 func (rm *relayManager) EstablishRelay(relayHostInfo *HostInfo, m *NebulaControl) (*Relay, error) {
 	relay, ok := relayHostInfo.relayState.QueryRelayForByIdx(m.InitiatorRelayIndex)
 	if !ok {
-		rm.l.Infof("relayManager EstablishRelay on %v with index %v relayForByIdx not found from %v to %v", relayHostInfo.vpnIp, m.InitiatorRelayIndex, m.RelayFromIp, m.RelayToIp)
+		rm.l.WithFields(logrus.Fields{"relayHostInfo": relayHostInfo.vpnIp,
+			"initiatorRelayIndex": m.InitiatorRelayIndex,
+			"relayFrom":           m.RelayFromIp,
+			"relayTo":             m.RelayToIp}).Info("relayManager EstablishRelay relayForByIdx not found")
 		return nil, fmt.Errorf("unknown relay")
 	}
 	// relay deserves some synchronization
@@ -112,11 +115,18 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, m *NebulaControl, f *Inter
 }
 
 func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *NebulaControl) {
+	rm.l.WithFields(logrus.Fields{
+		"relayFrom":    iputil.VpnIp(m.RelayFromIp),
+		"relayTarget":  iputil.VpnIp(m.RelayToIp),
+		"initiatorIdx": m.InitiatorRelayIndex,
+		"responderIdx": m.ResponderRelayIndex,
+		"hostInfo":     h.vpnIp}).
+		Info("handleCreateRelayResponse")
 	target := iputil.VpnIp(m.RelayToIp)
 
 	relay, err := rm.EstablishRelay(h, m)
 	if err != nil {
-		rm.l.WithError(err).Errorf("Failed to update relay for target %v: %v", target.String(), err)
+		rm.l.WithError(err).WithField("target", target.String()).Error("Failed to update relay for target")
 		return
 	}
 	// Do I need to complete the relays now?
@@ -126,12 +136,12 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 	// I'm the middle man. Let the initiator know that the I've established the relay they requested.
 	peerHostInfo, err := rm.hostmap.QueryVpnIp(relay.PeerIp)
 	if err != nil {
-		rm.l.WithError(err).Errorf("Can't find a HostInfo for peer IP %v", relay.PeerIp.String())
+		rm.l.WithError(err).WithField("relayPeerIp", relay.PeerIp).Error("Can't find a HostInfo for peer IP")
 		return
 	}
 	peerRelay, ok := peerHostInfo.relayState.QueryRelayForByIp(target)
 	if !ok {
-		rm.l.Errorf("peerRelay %v does not have Relay state for %v", peerHostInfo.vpnIp.String(), target.String())
+		rm.l.WithField("peerIp", peerHostInfo.vpnIp).WithField("target", target.String()).Error("peerRelay does not have Relay state for target IP", peerHostInfo.vpnIp.String(), target.String())
 		return
 	}
 	peerRelay.State = Established
@@ -152,6 +162,12 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 }
 
 func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *NebulaControl) {
+	rm.l.WithFields(logrus.Fields{
+		"relayFrom":    iputil.VpnIp(m.RelayFromIp),
+		"relayTarget":  iputil.VpnIp(m.RelayToIp),
+		"initiatorIdx": m.InitiatorRelayIndex,
+		"hostInfo":     h.vpnIp}).
+		Info("handleCreateRelayRequest")
 	from := iputil.VpnIp(m.RelayFromIp)
 	target := iputil.VpnIp(m.RelayToIp)
 	// Is the target of the relay me?
