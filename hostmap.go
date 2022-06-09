@@ -593,11 +593,12 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 	if c%PromoteEvery == 0 {
 		// The lock here is currently protecting i.remote access
 		i.RLock()
-		defer i.RUnlock()
+		remote := i.remote
+		i.RUnlock()
 
 		// return early if we are already on a preferred remote
-		if i.remote != nil {
-			rIP := i.remote.IP
+		if remote != nil {
+			rIP := remote.IP
 			for _, l := range preferredRanges {
 				if l.Contains(rIP) {
 					return
@@ -606,7 +607,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		}
 
 		i.remotes.ForEach(preferredRanges, func(addr *udp.Addr, preferred bool) {
-			if addr == nil || !preferred {
+			if remote != nil && (addr == nil || !preferred) {
 				return
 			}
 
