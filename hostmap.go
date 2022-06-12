@@ -226,11 +226,13 @@ func (hm *HostMap) EmitStats(name string) {
 	hostLen := len(hm.Hosts)
 	indexLen := len(hm.Indexes)
 	remoteIndexLen := len(hm.RemoteIndexes)
+	relaysLen := len(hm.Relays)
 	hm.RUnlock()
 
 	metrics.GetOrRegisterGauge("hostmap."+name+".hosts", nil).Update(int64(hostLen))
 	metrics.GetOrRegisterGauge("hostmap."+name+".indexes", nil).Update(int64(indexLen))
 	metrics.GetOrRegisterGauge("hostmap."+name+".remoteIndexes", nil).Update(int64(remoteIndexLen))
+	metrics.GetOrRegisterGauge("hostmap."+name+".relayIndexes", nil).Update(int64(relaysLen))
 }
 
 func (hm *HostMap) RemoveRelay(localIdx uint32) {

@@ -383,6 +383,9 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 		delete(c.mainHostMap.Hosts, existingHostInfo.vpnIp)
 		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
 		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
+		for _, relayIdx := range existingHostInfo.relayState.CopyRelayForIdxs() {
+			delete(c.mainHostMap.Relays, relayIdx)
+		}
 	}
 
 	existingRemoteIndex, found := c.mainHostMap.RemoteIndexes[hostinfo.remoteIndexId]

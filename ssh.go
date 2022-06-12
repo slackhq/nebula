@@ -294,6 +294,28 @@ func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pen
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
+		Name:             "print-relays",
+		ShortDescription: "Prints json details about all relay info",
+		Flags: func() (*flag.FlagSet, interface{}) {
+			fl := flag.NewFlagSet("", flag.ContinueOnError)
+			s := sshPrintTunnelFlags{}
+			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json")
+			return fl, &s
+		},
+		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
+			return sshPrintRelays(ifce, fs, a, w)
+		},
+	})
+
+	ssh.RegisterCommand(&sshd.Command{
+		Name:             "die",
+		ShortDescription: "Brad's debugging tool",
+		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
+			os.Exit(-1)
+			return nil
+		},
+	})
+	ssh.RegisterCommand(&sshd.Command{
 		Name:             "change-remote",
 		ShortDescription: "Changes the remote address used in the tunnel for the provided vpn ip",
 		Flags: func() (*flag.FlagSet, interface{}) {
@@ -727,6 +749,68 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 	}
 
 	return w.WriteLine(cert.String())
+}
+
+func sshPrintRelays(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
+	relays := map[uint32]*HostInfo{}
+	ifce.hostMap.Lock()
+	for k, v := range ifce.hostMap.Relays {
+		relays[k] = v
+	}
+	ifce.hostMap.Unlock()
+
+	for k, v := range relays {
+		w.WriteLine(fmt.Sprintf("Index '%v' :  HostInfo %v", k, v.vpnIp))
+		relayHI, err := ifce.hostMap.QueryVpnIp(v.vpnIp)
+		if err != nil {
+			w.WriteLine(fmt.Sprintf("Failed to find relay host '%v'", v.vpnIp))
+			continue
+		}
+		for _, vpnIp := range relayHI.relayState.CopyRelayForIps() {
+			w.WriteLine(fmt.Sprintf("\trelay for IP '%v'", vpnIp))
+			r, ok := relayHI.relayState.GetRelayForByIp(vpnIp)
+			switch ok {
+			case true:
+				t := ""
+				s := ""
+				peerIp := ""
+				switch r.Type {
+				case ForwardingType:
+					t = "forwarding"
+				case TerminalType:
+					t = "terminal"
+				default:
+					t = "unkown"
+				}
+
+				switch r.State {
+				case Requested:
+					s = "requested"
+				case Established:
+					s = "established"
+				default:
+					s = "unknown"
+				}
+
+				peerIp = r.PeerIp.String()
+
+				w.WriteLine(fmt.Sprintf("\tRelay: type=%v, state=%v, ip=%v, local=%v, remote=%v", t, s, peerIp, r.LocalIndex, r.RemoteIndex))
+			case false:
+				w.WriteLine(fmt.Sprintf("\tFailed to find relay info :/"))
+			}
+			relayedHI, err := ifce.hostMap.QueryVpnIp(vpnIp)
+			switch err {
+			case nil:
+				w.WriteLine(fmt.Sprintf("\t\tHostInfo '%v' relays: %v", relayedHI.vpnIp, relayedHI.relayState.CopyRelayIps()))
+			default:
+				w.WriteLine(fmt.Sprintf("Failed to find relayed host in hostMap :/"))
+			}
+		}
+		for _, relayIdx := range relayHI.relayState.CopyRelayForIdxs() {
+			w.WriteLine(fmt.Sprintf("\trelay for index '%v'", relayIdx))
+		}
+	}
+	return nil
 }
 
 func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
