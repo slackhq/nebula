@@ -96,7 +96,7 @@ func (rs *RelayState) CopyRelayIps() []iputil.VpnIp {
 	return ret
 }
 
-func (rs *RelayState) CopyRelaysForIps() []iputil.VpnIp {
+func (rs *RelayState) CopyRelayForIps() []iputil.VpnIp {
 	rs.RLock()
 	defer rs.RUnlock()
 	currentRelays := make([]iputil.VpnIp, 0, len(rs.relayForByIp))

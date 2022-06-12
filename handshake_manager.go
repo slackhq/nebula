@@ -359,6 +359,9 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 		delete(c.mainHostMap.Hosts, existingHostInfo.vpnIp)
 		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
 		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
+		for _, relayIdx := range existingHostInfo.relayState.CopyRelayForIdxs() {
+			delete(c.mainHostMap.Relays, relayIdx)
+		}
 	}
 
 	c.mainHostMap.addHostInfo(hostinfo, f)

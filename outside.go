@@ -262,11 +262,7 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udp.Addr) {
 		hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
 			Info("Host roamed to new udp ip/port.")
 		hostinfo.lastRoam = time.Now()
-		remoteCopy := udp.Addr{}
-		if hostinfo.remote != nil {
-			remoteCopy = *hostinfo.remote
-		}
-		hostinfo.lastRoamRemote = &remoteCopy
+		hostinfo.lastRoamRemote = hostinfo.remote
 		hostinfo.SetRemote(addr)
 	}
 

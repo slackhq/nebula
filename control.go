@@ -215,7 +215,7 @@ func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 		RemoteAddrs:            h.remotes.CopyAddrs(preferredRanges),
 		CachedPackets:          len(h.packetStore),
 		CurrentRelaysToMe:      h.relayState.CopyRelayIps(),
-		CurrentRelaysThroughMe: h.relayState.CopyRelaysForIps(),
+		CurrentRelaysThroughMe: h.relayState.CopyRelayForIps(),
 	}
 
 	if h.ConnectionState != nil {

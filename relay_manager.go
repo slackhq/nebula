@@ -26,7 +26,9 @@ func NewRelayManager(ctx context.Context, l *logrus.Logger, hostmap *HostMap, c 
 	rm.reload(c, true)
 	c.RegisterReloadCallback(func(c *config.C) {
 		err := rm.reload(c, false)
-		l.WithError(err).Error("Failed to reload relay_manager")
+		if err != nil {
+			l.WithError(err).Error("Failed to reload relay_manager")
+		}
 	})
 	return rm
 }
