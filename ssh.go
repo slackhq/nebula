@@ -308,14 +308,6 @@ func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pen
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
-		Name:             "die",
-		ShortDescription: "Brad's debugging tool",
-		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-			os.Exit(-1)
-			return nil
-		},
-	})
-	ssh.RegisterCommand(&sshd.Command{
 		Name:             "change-remote",
 		ShortDescription: "Changes the remote address used in the tunnel for the provided vpn ip",
 		Flags: func() (*flag.FlagSet, interface{}) {
