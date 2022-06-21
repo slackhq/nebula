@@ -20,6 +20,7 @@ const (
 	DefaultHandshakeTryInterval   = time.Millisecond * 100
 	DefaultHandshakeRetries       = 10
 	DefaultHandshakeTriggerBuffer = 64
+	DefaultUseRelays              = true
 )
 
 var (
@@ -27,6 +28,7 @@ var (
 		tryInterval:   DefaultHandshakeTryInterval,
 		retries:       DefaultHandshakeRetries,
 		triggerBuffer: DefaultHandshakeTriggerBuffer,
+		useRelays:     DefaultUseRelays,
 	}
 )
 
@@ -34,6 +36,7 @@ type HandshakeConfig struct {
 	tryInterval   time.Duration
 	retries       int
 	triggerBuffer int
+	useRelays     bool
 
 	messageMetrics *MessageMetrics
 }
@@ -79,7 +82,6 @@ func (c *HandshakeManager) Run(ctx context.Context, f udp.EncWriter) {
 		case <-ctx.Done():
 			return
 		case vpnIP := <-c.trigger:
-			c.l.WithField("vpnIp", vpnIP).Debug("HandshakeManager: triggered")
 			c.handleOutbound(vpnIP, f, true)
 		case now := <-clockSource.C:
 			c.NextOutboundHandshakeTimerTick(now, f)
@@ -145,6 +147,8 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 
 	// Get a remotes object if we don't already have one.
 	// This is mainly to protect us as this should never be the case
+	// NB ^ This comment doesn't jive. It's how the thing gets intiailized.
+	// It's the common path. Should it update every time, in case a future LH query/queries give us more info?
 	if hostinfo.remotes == nil {
 		hostinfo.remotes = c.lightHouse.QueryCache(vpnIp)
 	}
@@ -179,6 +183,77 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 			WithField("initiatorIndex", hostinfo.localIndexId).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
 			Info("Handshake message sent")
+	}
+
+	if c.config.useRelays && len(hostinfo.remotes.relays) > 0 {
+		hostinfo.logger(c.l).WithField("relayIps", hostinfo.remotes.relays).Info("Attempt to relay through hosts")
+		// Send a RelayRequest to all known Relay IP's
+		for _, relay := range hostinfo.remotes.relays {
+			// Don't relay to myself, and don't relay through the host I'm trying to connect to
+			if *relay == vpnIp || *relay == c.lightHouse.myVpnIp {
+				continue
+			}
+			relayHostInfo, err := c.mainHostMap.QueryVpnIp(*relay)
+			if err != nil || relayHostInfo.remote == nil {
+				hostinfo.logger(c.l).WithError(err).WithField("relay", relay.String()).Info("Establish tunnel to relay target.")
+				f.Handshake(*relay)
+				continue
+			}
+			// Check the relay HostInfo to see if we already established a relay through it
+			if existingRelay, ok := relayHostInfo.relayState.QueryRelayForByIp(vpnIp); ok {
+				switch existingRelay.State {
+				case Established:
+					hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Send handshake via relay")
+					f.SendVia(relayHostInfo, existingRelay, hostinfo.HandshakePacket[0], make([]byte, 12), make([]byte, mtu), false)
+				case Requested:
+					hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Re-send CreateRelay request")
+					// Re-send the CreateRelay request, in case the previous one was lost.
+					m := NebulaControl{
+						Type:                NebulaControl_CreateRelayRequest,
+						InitiatorRelayIndex: existingRelay.LocalIndex,
+						RelayFromIp:         uint32(c.lightHouse.myVpnIp),
+						RelayToIp:           uint32(vpnIp),
+					}
+					msg, err := m.Marshal()
+					if err != nil {
+						hostinfo.logger(c.l).
+							WithError(err).
+							Error("Failed to marshal Control message to create relay")
+					} else {
+						f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
+					}
+				default:
+					hostinfo.logger(c.l).
+						WithField("vpnIp", vpnIp).
+						WithField("state", existingRelay.State).
+						WithField("relayVpnIp", relayHostInfo.vpnIp).
+						Errorf("Relay unexpected state")
+				}
+			} else {
+				// No relays exist or requested yet.
+				if relayHostInfo.remote != nil {
+					idx, err := AddRelay(c.l, relayHostInfo, c.mainHostMap, vpnIp, nil, TerminalType, Requested)
+					if err != nil {
+						hostinfo.logger(c.l).WithField("relay", relay.String()).WithError(err).Info("Failed to add relay to hostmap")
+					}
+
+					m := NebulaControl{
+						Type:                NebulaControl_CreateRelayRequest,
+						InitiatorRelayIndex: idx,
+						RelayFromIp:         uint32(c.lightHouse.myVpnIp),
+						RelayToIp:           uint32(vpnIp),
+					}
+					msg, err := m.Marshal()
+					if err != nil {
+						hostinfo.logger(c.l).
+							WithError(err).
+							Error("Failed to marshal Control message to create relay")
+					} else {
+						f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
+					}
+				}
+			}
+		}
 	}
 
 	// Increment the counter to increase our delay, linear backoff
@@ -284,6 +359,9 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 		delete(c.mainHostMap.Hosts, existingHostInfo.vpnIp)
 		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
 		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
+		for _, relayIdx := range existingHostInfo.relayState.CopyRelayForIdxs() {
+			delete(c.mainHostMap.Relays, relayIdx)
+		}
 	}
 
 	c.mainHostMap.addHostInfo(hostinfo, f)
@@ -305,6 +383,9 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 		delete(c.mainHostMap.Hosts, existingHostInfo.vpnIp)
 		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
 		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
+		for _, relayIdx := range existingHostInfo.relayState.CopyRelayForIdxs() {
+			delete(c.mainHostMap.Relays, relayIdx)
+		}
 	}
 
 	existingRemoteIndex, found := c.mainHostMap.RemoteIndexes[hostinfo.remoteIndexId]

@@ -70,6 +70,9 @@ type LightHouse struct {
 
 	atomicAdvertiseAddrs []netIpAndPort
 
+	// IP's of relays that can be used by peers to access me
+	atomicRelaysForMe []iputil.VpnIp
+
 	metrics           *MessageMetrics
 	metricHolepunchTx metrics.Counter
 	l                 *logrus.Logger
@@ -151,6 +154,10 @@ func (lh *LightHouse) GetLocalAllowList() *LocalAllowList {
 
 func (lh *LightHouse) GetAdvertiseAddrs() []netIpAndPort {
 	return *(*[]netIpAndPort)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicAdvertiseAddrs))))
+}
+
+func (lh *LightHouse) GetRelaysForMe() []iputil.VpnIp {
+	return *(*[]iputil.VpnIp)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicRelaysForMe))))
 }
 
 func (lh *LightHouse) GetUpdateInterval() int64 {
@@ -256,6 +263,29 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 		if !initial {
 			//NOTE: we are not tearing down existing lighthouse connections because they might be used for non lighthouse traffic
 			lh.l.Info("lighthouse.hosts has changed")
+		}
+	}
+
+	if initial || c.HasChanged("relay.relays") {
+		switch c.GetBool("relay.am_relay", false) {
+		case true:
+			// Relays aren't allowed to specify other relays
+			if len(c.GetStringSlice("relay.relays", nil)) > 0 {
+				lh.l.Info("Ignoring relays from config because am_relay is true")
+			}
+			relaysForMe := []iputil.VpnIp{}
+			atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicRelaysForMe)), unsafe.Pointer(&relaysForMe))
+		case false:
+			relaysForMe := []iputil.VpnIp{}
+			for _, v := range c.GetStringSlice("relay.relays", nil) {
+				lh.l.WithField("RelayIP", v).Info("Read relay from config")
+
+				configRIP := net.ParseIP(v)
+				if configRIP != nil {
+					relaysForMe = append(relaysForMe, iputil.Ip2VpnIp(configRIP))
+				}
+			}
+			atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicRelaysForMe)), unsafe.Pointer(&relaysForMe))
 		}
 	}
 
@@ -427,7 +457,7 @@ func (lh *LightHouse) DeleteVpnIp(vpnIp iputil.VpnIp) {
 	lh.Unlock()
 }
 
-// addStaticRemote adds a static host entry for vpnIp as ourselves as the owner
+// AddStaticRemote adds a static host entry for vpnIp as ourselves as the owner
 // We are the owner because we don't want a lighthouse server to advertise for static hosts it was configured with
 // And we don't want a lighthouse query reply to interfere with our learned cache if we are a client
 //NOTE: this function should not interact with any hot path objects, like lh.staticList, the caller should handle it
@@ -597,12 +627,18 @@ func (lh *LightHouse) SendUpdate(f udp.EncWriter) {
 		}
 	}
 
+	var relays []uint32
+	for _, r := range lh.GetRelaysForMe() {
+		relays = append(relays, (uint32)(r))
+	}
+
 	m := &NebulaMeta{
 		Type: NebulaMeta_HostUpdateNotification,
 		Details: &NebulaMetaDetails{
 			VpnIp:       uint32(lh.myVpnIp),
 			Ip4AndPorts: v4,
 			Ip6AndPorts: v6,
+			RelayVpnIp:  relays,
 		},
 	}
 
@@ -664,6 +700,7 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	// Keep the array memory around
 	details.Ip4AndPorts = details.Ip4AndPorts[:0]
 	details.Ip6AndPorts = details.Ip6AndPorts[:0]
+	details.RelayVpnIp = details.RelayVpnIp[:0]
 	lhh.meta.Details = details
 
 	return lhh.meta
@@ -780,6 +817,10 @@ func (lhh *LightHouseHandler) coalesceAnswers(c *cache, n *NebulaMeta) {
 			n.Details.Ip6AndPorts = append(n.Details.Ip6AndPorts, c.v6.reported...)
 		}
 	}
+
+	if c.relay != nil {
+		n.Details.RelayVpnIp = append(n.Details.RelayVpnIp, c.relay.relay...)
+	}
 }
 
 func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp iputil.VpnIp) {
@@ -795,6 +836,7 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp iputil.V
 	certVpnIp := iputil.VpnIp(n.Details.VpnIp)
 	am.unlockedSetV4(vpnIp, certVpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(vpnIp, certVpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
+	am.unlockedSetRelay(vpnIp, certVpnIp, n.Details.RelayVpnIp)
 	am.Unlock()
 
 	// Non-blocking attempt to trigger, skip if it would block
@@ -828,6 +870,7 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 	certVpnIp := iputil.VpnIp(n.Details.VpnIp)
 	am.unlockedSetV4(vpnIp, certVpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(vpnIp, certVpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
+	am.unlockedSetRelay(vpnIp, certVpnIp, n.Details.RelayVpnIp)
 	am.Unlock()
 }
 

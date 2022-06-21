@@ -301,7 +301,7 @@ func (n *connectionManager) handleInvalidCertificate(now time.Time, vpnIp iputil
 
 	// Inform the remote and close the tunnel locally
 	n.intf.sendCloseTunnel(hostinfo)
-	n.intf.closeTunnel(hostinfo, false)
+	n.intf.closeTunnel(hostinfo)
 
 	n.ClearIP(vpnIp)
 	n.ClearPendingDeletion(vpnIp)

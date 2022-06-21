@@ -40,6 +40,7 @@ pki:
 lighthouse:
   am_lighthouse: ${AM_LIGHTHOUSE:-false}
   hosts: $(lighthouse_hosts)
+  remote_allow_list: ${REMOTE_ALLOW_LIST}
 
 listen:
   host: 0.0.0.0
@@ -51,4 +52,6 @@ tun:
 firewall:
   outbound: ${OUTBOUND:-$FIREWALL_ALL}
   inbound: ${INBOUND:-$FIREWALL_ALL}
+
+$(test -t 0 || cat)
 EOF
