@@ -48,8 +48,8 @@ type Conn struct {
 func NewListener(l *logrus.Logger, ip string, port int, _ bool, _ int) (*Conn, error) {
 	return &Conn{
 		Addr:      &Addr{net.ParseIP(ip), uint16(port)},
-		RxPackets: make(chan *Packet, 1),
-		TxPackets: make(chan *Packet, 1),
+		RxPackets: make(chan *Packet, 10),
+		TxPackets: make(chan *Packet, 10),
 		l:         l,
 	}, nil
 }

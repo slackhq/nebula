@@ -158,18 +158,14 @@ func Test_Case1_Stage1Race(t *testing.T) {
 
 	r.Log("Now inject both stage 1 handshake packets")
 	r.InjectUDPPacket(theirControl, myControl, theirHsForMe)
-	//myControl.InjectUDPPacket(theirHsForMe)
-
 	r.InjectUDPPacket(myControl, theirControl, myHsForThem)
 	//TODO: they should win, grab their index for me and make sure I use it in the end.
 
 	r.Log("They should not have a stage 2 (won the race) but I should send one")
-	p := myControl.GetFromUDP(true)
-	r.InjectUDPPacket(myControl, theirControl, p)
+	r.InjectUDPPacket(myControl, theirControl, myControl.GetFromUDP(true))
 
 	r.Log("Route for me until I send a message packet to them")
-	r.RouteForAllUntilAfterMsgTypeTo(theirControl, 1, 0)
-	//myControl.WaitForType(1, 0, theirControl)
+	r.RouteForAllUntilAfterMsgTypeTo(theirControl, header.Message, header.MessageNone)
 
 	t.Log("My cached packet should be received by them")
 	myCachedPacket := theirControl.GetFromTun(true)
@@ -215,6 +211,7 @@ func TestRelays(t *testing.T) {
 
 	p := r.RouteForAllUntilTxTun(theirControl)
 	assertUdpPacket(t, []byte("Hi from me"), p, myVpnIp, theirVpnIp, 80, 80)
+	//TODO: assert we actually used the relay even though it should be impossible for a tunnel to have occurred without it
 }
 
 //TODO: add a test with many lies
