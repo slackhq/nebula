@@ -40,16 +40,22 @@ type R struct {
 	// A map of vpn ip to the nebula control it belongs to
 	vpnControls map[iputil.VpnIp]*nebula.Control
 
-	flow []*Packet
+	flow []flowEntry
 
 	// All interactions are locked to help serialize behavior
 	sync.Mutex
 
 	fn           string
 	cancelRender context.CancelFunc
+	t            *testing.T
 }
 
-type Packet struct {
+type flowEntry struct {
+	note   string
+	packet *packet
+}
+
+type packet struct {
 	from   *nebula.Control
 	to     *nebula.Control
 	packet *udp.Packet
@@ -86,6 +92,7 @@ func NewR(t *testing.T, controls ...*nebula.Control) *R {
 		inNat:        make(map[string]*nebula.Control),
 		outNat:       make(map[string]net.UDPAddr),
 		fn:           filepath.Join("mermaid", fmt.Sprintf("%s.md", t.Name())),
+		t:            t,
 		cancelRender: cancel,
 	}
 
@@ -148,27 +155,39 @@ func (r *R) renderFlow() {
 	}
 
 	var participants = map[string]struct{}{}
+	var participansVals []string
+
 	fmt.Fprintln(f, "```mermaid")
 	fmt.Fprintln(f, "sequenceDiagram")
 
 	// Assemble participants
-	for _, p := range r.flow {
-		addr := p.from.GetUDPAddr()
+	for _, e := range r.flow {
+		if e.packet == nil {
+			continue
+		}
+
+		addr := e.packet.from.GetUDPAddr()
 		if _, ok := participants[addr]; ok {
 			continue
 		}
 		participants[addr] = struct{}{}
+		sanAddr := strings.Replace(addr, ":", "#58;", 1)
+		participansVals = append(participansVals, sanAddr)
 		fmt.Fprintf(
 			f, "    participant %s as Nebula: %s<br/>UDP: %s\n",
-			strings.Replace(addr, ":", "#58;", 1),
-			p.from.GetVpnIp(),
-			strings.Replace(addr, ":", "#58;", 1),
+			sanAddr, e.packet.from.GetVpnIp(), sanAddr,
 		)
 	}
 
 	// Print packets
 	h := &header.H{}
-	for _, p := range r.flow {
+	for _, e := range r.flow {
+		if e.packet == nil {
+			fmt.Fprintf(f, "    note over %s: %s\n", strings.Join(participansVals, ", "), e.note)
+			continue
+		}
+
+		p := e.packet
 		if p.tun {
 			fmt.Fprintln(f, r.formatUdpPacket(p))
 
@@ -183,7 +202,7 @@ func (r *R) renderFlow() {
 			}
 
 			fmt.Fprintf(f,
-				"    %s%s%s: %s %s, counter: %v\n",
+				"    %s%s%s: %s(%s), counter: %v\n",
 				strings.Replace(p.from.GetUDPAddr(), ":", "#58;", 1),
 				line,
 				strings.Replace(p.to.GetUDPAddr(), ":", "#58;", 1),
@@ -202,16 +221,30 @@ func (r *R) InjectFlow(from, to *nebula.Control, p *udp.Packet) {
 	r.unlockedInjectFlow(from, to, p, false)
 }
 
+func (r *R) Log(arg ...any) {
+	r.Lock()
+	r.flow = append(r.flow, flowEntry{note: fmt.Sprint(arg...)})
+	r.t.Log(arg...)
+	r.Unlock()
+}
+
+func (r *R) Logf(format string, arg ...any) {
+	r.Lock()
+	r.flow = append(r.flow, flowEntry{note: fmt.Sprintf(format, arg...)})
+	r.t.Logf(format, arg...)
+	r.Unlock()
+}
+
 // unlockedInjectFlow is used by the router to record a packet has been transmitted, the packet is returned and
 // should be marked as received AFTER it has been placed on the receivers channel
-func (r *R) unlockedInjectFlow(from, to *nebula.Control, p *udp.Packet, tun bool) *Packet {
-	fp := &Packet{
+func (r *R) unlockedInjectFlow(from, to *nebula.Control, p *udp.Packet, tun bool) *packet {
+	fp := &packet{
 		from:   from,
 		to:     to,
 		packet: p.Copy(),
 		tun:    tun,
 	}
-	r.flow = append(r.flow, fp)
+	r.flow = append(r.flow, flowEntry{packet: fp})
 	return fp
 }
 
@@ -560,7 +593,7 @@ func (r *R) getControl(fromAddr, toAddr string, p *udp.Packet) *nebula.Control {
 	return r.controls[toAddr]
 }
 
-func (r *R) formatUdpPacket(p *Packet) string {
+func (r *R) formatUdpPacket(p *packet) string {
 	packet := gopacket.NewPacket(p.packet.Data, layers.LayerTypeIPv4, gopacket.Lazy)
 	v4 := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 	if v4 == nil {

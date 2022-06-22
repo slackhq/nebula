@@ -156,18 +156,18 @@ func Test_Case1_Stage1Race(t *testing.T) {
 	myHsForThem := myControl.GetFromUDP(true)
 	theirHsForMe := theirControl.GetFromUDP(true)
 
-	t.Log("Now inject both stage 1 handshake packets")
+	r.Log("Now inject both stage 1 handshake packets")
 	r.InjectUDPPacket(theirControl, myControl, theirHsForMe)
 	//myControl.InjectUDPPacket(theirHsForMe)
 
 	r.InjectUDPPacket(myControl, theirControl, myHsForThem)
 	//TODO: they should win, grab their index for me and make sure I use it in the end.
 
-	t.Log("They should not have a stage 2 (won the race) but I should send one")
+	r.Log("They should not have a stage 2 (won the race) but I should send one")
 	p := myControl.GetFromUDP(true)
 	r.InjectUDPPacket(myControl, theirControl, p)
 
-	t.Log("Route for me until I send a message packet to them")
+	r.Log("Route for me until I send a message packet to them")
 	r.RouteForAllUntilAfterMsgTypeTo(theirControl, 1, 0)
 	//myControl.WaitForType(1, 0, theirControl)
 
