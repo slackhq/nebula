@@ -24,6 +24,7 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	lh := &LightHouse{
 		atomicStaticList:  make(map[iputil.VpnIp]struct{}),
 		atomicLighthouses: make(map[iputil.VpnIp]struct{}),
+		addrMap:           make(map[iputil.VpnIp]*RemoteList),
 	}
 
 	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, lh, &udp.Conn{}, defaultHandshakeConfig)
@@ -131,3 +132,9 @@ type mockEncWriter struct {
 func (mw *mockEncWriter) SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, nb, out []byte) {
 	return
 }
+
+func (mw *mockEncWriter) SendVia(via interface{}, relay interface{}, ad, nb, out []byte, nocopy bool) {
+	return
+}
+
+func (mw *mockEncWriter) Handshake(vpnIP iputil.VpnIp) {}

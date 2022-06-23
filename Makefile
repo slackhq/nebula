@@ -168,6 +168,10 @@ smoke-docker: bin-docker
 	cd .github/workflows/smoke/ && ./build.sh
 	cd .github/workflows/smoke/ && ./smoke.sh
 
+smoke-relay-docker: bin-docker
+	cd .github/workflows/smoke/ && ./build-relay.sh
+	cd .github/workflows/smoke/ && ./smoke-relay.sh
+
 smoke-docker-race: BUILD_ARGS = -race
 smoke-docker-race: smoke-docker
 

@@ -51,11 +51,6 @@ func NewCertStateFromConfig(c *config.C) (*CertState, error) {
 	var err error
 
 	privPathOrPEM := c.GetString("pki.key", "")
-	if privPathOrPEM == "" {
-		// Support backwards compat with the old x509
-		//TODO: remove after this is rolled out everywhere - NB 2018/02/23
-		privPathOrPEM = c.GetString("x509.key", "")
-	}
 
 	if privPathOrPEM == "" {
 		return nil, errors.New("no pki.key path or PEM data provided")
@@ -79,11 +74,6 @@ func NewCertStateFromConfig(c *config.C) (*CertState, error) {
 	var rawCert []byte
 
 	pubPathOrPEM := c.GetString("pki.cert", "")
-	if pubPathOrPEM == "" {
-		// Support backwards compat with the old x509
-		//TODO: remove after this is rolled out everywhere - NB 2018/02/23
-		pubPathOrPEM = c.GetString("x509.cert", "")
-	}
 
 	if pubPathOrPEM == "" {
 		return nil, errors.New("no pki.cert path or PEM data provided")
@@ -157,14 +147,14 @@ func loadCAFromConfig(l *logrus.Logger, c *config.C) (*cert.NebulaCAPool, error)
 	}
 
 	for _, fp := range c.GetStringSlice("pki.blocklist", []string{}) {
-		l.WithField("fingerprint", fp).Infof("Blocklisting cert")
+		l.WithField("fingerprint", fp).Info("Blocklisting cert")
 		CAs.BlocklistFingerprint(fp)
 	}
 
 	// Support deprecated config for at least one minor release to allow for migrations
 	//TODO: remove in 2022 or later
 	for _, fp := range c.GetStringSlice("pki.blacklist", []string{}) {
-		l.WithField("fingerprint", fp).Infof("Blocklisting cert")
+		l.WithField("fingerprint", fp).Info("Blocklisting cert")
 		l.Warn("pki.blacklist is deprecated and will not be supported in a future release. Please migrate your config to use pki.blocklist")
 		CAs.BlocklistFingerprint(fp)
 	}

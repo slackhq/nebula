@@ -230,10 +230,13 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		messageMetrics = newMessageMetricsOnlyRecvError()
 	}
 
+	useRelays := c.GetBool("relay.use_relays", DefaultUseRelays) && !c.GetBool("relay.am_relay", false)
+
 	handshakeConfig := HandshakeConfig{
 		tryInterval:   c.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
 		retries:       c.GetInt("handshakes.retries", DefaultHandshakeRetries),
 		triggerBuffer: c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
+		useRelays:     useRelays,
 
 		messageMetrics: messageMetrics,
 	}
@@ -275,6 +278,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		version:                 buildVersion,
 		caPool:                  caPool,
 		disconnectInvalid:       c.GetBool("pki.disconnect_invalid", false),
+		relayManager:            NewRelayManager(ctx, l, hostMap, c),
 
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,

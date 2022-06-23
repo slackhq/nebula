@@ -7,6 +7,10 @@ set -o pipefail
 mkdir -p logs
 
 cleanup() {
+    echo
+    echo " *** cleanup"
+    echo
+
     set +e
     if [ "$(jobs -r)" ]
     then
@@ -21,13 +25,13 @@ sudo docker run --name host2 --rm nebula:smoke -config host2.yml -test
 sudo docker run --name host3 --rm nebula:smoke -config host3.yml -test
 sudo docker run --name host4 --rm nebula:smoke -config host4.yml -test
 
-sudo docker run --name lighthouse1 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm nebula:smoke -config lighthouse1.yml 2>&1 | tee logs/lighthouse1 &
+sudo docker run --name lighthouse1 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm nebula:smoke -config lighthouse1.yml 2>&1 | tee logs/lighthouse1 | sed -u 's/^/  [lighthouse1]  /' &
 sleep 1
-sudo docker run --name host2 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm nebula:smoke -config host2.yml 2>&1 | tee logs/host2 &
+sudo docker run --name host2 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm nebula:smoke -config host2.yml 2>&1 | tee logs/host2 | sed -u 's/^/  [host2]  /' &
 sleep 1
-sudo docker run --name host3 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm nebula:smoke -config host3.yml 2>&1 | tee logs/host3 &
+sudo docker run --name host3 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm nebula:smoke -config host3.yml 2>&1 | tee logs/host3 | sed -u 's/^/  [host3]  /' &
 sleep 1
-sudo docker run --name host4 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm nebula:smoke -config host4.yml 2>&1 | tee logs/host4 &
+sudo docker run --name host4 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm nebula:smoke -config host4.yml 2>&1 | tee logs/host4 | sed -u 's/^/  [host4]  /' &
 sleep 1
 
 set +x
@@ -81,3 +85,9 @@ sudo docker exec host3 sh -c 'kill 1'
 sudo docker exec host2 sh -c 'kill 1'
 sudo docker exec lighthouse1 sh -c 'kill 1'
 sleep 1
+
+if [ "$(jobs -r)" ]
+then
+    echo "nebula still running after SIGTERM sent" >&2
+    exit 1
+fi

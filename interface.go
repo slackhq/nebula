@@ -42,6 +42,7 @@ type InterfaceConfig struct {
 	version                 string
 	caPool                  *cert.NebulaCAPool
 	disconnectInvalid       bool
+	relayManager            *relayManager
 
 	ConntrackCacheTimeout time.Duration
 	l                     *logrus.Logger
@@ -67,6 +68,7 @@ type Interface struct {
 	caPool             *cert.NebulaCAPool
 	disconnectInvalid  bool
 	closed             int32
+	relayManager       *relayManager
 
 	sendRecvErrorConfig sendRecvErrorConfig
 
@@ -156,6 +158,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		caPool:             c.caPool,
 		disconnectInvalid:  c.disconnectInvalid,
 		myVpnIp:            myVpnIp,
+		relayManager:       c.relayManager,
 
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
 
