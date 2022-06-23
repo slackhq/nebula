@@ -6,6 +6,7 @@ import (
 
 	"github.com/slackhq/nebula/firewall"
 	"github.com/stretchr/testify/assert"
+	"github.com/thepudds/fzgen/fuzzer"
 )
 
 func TestNewTimerWheel(t *testing.T) {
@@ -24,6 +25,17 @@ func TestNewTimerWheel(t *testing.T) {
 
 	tw = NewTimerWheel(time.Second*120, time.Minute*10)
 	assert.Equal(t, 7, tw.wheelLen)
+}
+
+func Fuzz_TimerWheel_NewTimerWheel(f *testing.F) {
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var min time.Duration
+		var max time.Duration
+		fz := fuzzer.NewFuzzer(data)
+		fz.Fill(&min, &max)
+
+		NewTimerWheel(min, max)
+	})
 }
 
 func TestTimerWheel_findWheel(t *testing.T) {
@@ -94,6 +106,20 @@ func TestTimerWheel_Add(t *testing.T) {
 	}
 }
 
+func Fuzz_TimerWheel_Add(f *testing.F) {
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var min time.Duration
+		var max time.Duration
+		var v firewall.Packet
+		var timeout time.Duration
+		fz := fuzzer.NewFuzzer(data)
+		fz.Fill(&min, &max, &v, &timeout)
+
+		tw := NewTimerWheel(min, max)
+		tw.Add(v, timeout)
+	})
+}
+
 func TestTimerWheel_Purge(t *testing.T) {
 	// First advance should set the lastTick and do nothing else
 	tw := NewTimerWheel(time.Second, time.Second*10)
@@ -158,4 +184,16 @@ func TestTimerWheel_Purge(t *testing.T) {
 	ta = ta.Add(time.Second * 1)
 	tw.advance(ta)
 	assert.Equal(t, 0, tw.current)
+}
+
+func Fuzz_TimerWheel_Purge(f *testing.F) {
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var min time.Duration
+		var max time.Duration
+		fz := fuzzer.NewFuzzer(data)
+		fz.Fill(&min, &max)
+
+		tw := NewTimerWheel(min, max)
+		tw.Purge()
+	})
 }

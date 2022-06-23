@@ -19,6 +19,7 @@ require (
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/stretchr/testify v1.8.1
+	github.com/thepudds/fzgen v0.4.2
 	github.com/vishvananda/netlink v1.1.0
 	golang.org/x/crypto v0.3.0
 	golang.org/x/net v0.2.0
@@ -39,6 +40,7 @@ require (
 	github.com/prometheus/client_model v0.3.0 // indirect
 	github.com/prometheus/common v0.37.0 // indirect
 	github.com/prometheus/procfs v0.8.0 // indirect
+	github.com/sanity-io/litter v1.5.1 // indirect
 	github.com/vishvananda/netns v0.0.1 // indirect
 	golang.org/x/mod v0.7.0 // indirect
 	golang.org/x/term v0.2.0 // indirect
