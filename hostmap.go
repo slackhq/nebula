@@ -27,16 +27,125 @@ const MaxRemotes = 10
 // This helps prevent flapping due to packets already in flight
 const RoamingSuppressSeconds = 2
 
+const (
+	Requested = iota
+	Established
+)
+
+const (
+	Unknowntype = iota
+	ForwardingType
+	TerminalType
+)
+
+type Relay struct {
+	Type        int
+	State       int
+	LocalIndex  uint32
+	RemoteIndex uint32
+	PeerIp      iputil.VpnIp
+}
+
 type HostMap struct {
 	sync.RWMutex    //Because we concurrently read and write to our maps
 	name            string
 	Indexes         map[uint32]*HostInfo
+	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a Relay HostInfo object
 	RemoteIndexes   map[uint32]*HostInfo
 	Hosts           map[iputil.VpnIp]*HostInfo
 	preferredRanges []*net.IPNet
 	vpnCIDR         *net.IPNet
 	metricsEnabled  bool
 	l               *logrus.Logger
+}
+
+type RelayState struct {
+	sync.RWMutex
+
+	relays        map[iputil.VpnIp]struct{} // Set of VpnIp's of Hosts to use as relays to access this peer
+	relayForByIp  map[iputil.VpnIp]*Relay   // Maps VpnIps of peers for which this HostInfo is a relay to some Relay info
+	relayForByIdx map[uint32]*Relay         // Maps a local index to some Relay info
+}
+
+func (rs *RelayState) DeleteRelay(ip iputil.VpnIp) {
+	rs.Lock()
+	defer rs.Unlock()
+	delete(rs.relays, ip)
+}
+
+func (rs *RelayState) GetRelayForByIp(ip iputil.VpnIp) (*Relay, bool) {
+	rs.RLock()
+	defer rs.RUnlock()
+	r, ok := rs.relayForByIp[ip]
+	return r, ok
+}
+
+func (rs *RelayState) InsertRelayTo(ip iputil.VpnIp) {
+	rs.Lock()
+	defer rs.Unlock()
+	rs.relays[ip] = struct{}{}
+}
+
+func (rs *RelayState) CopyRelayIps() []iputil.VpnIp {
+	rs.RLock()
+	defer rs.RUnlock()
+	ret := make([]iputil.VpnIp, 0, len(rs.relays))
+	for ip := range rs.relays {
+		ret = append(ret, ip)
+	}
+	return ret
+}
+
+func (rs *RelayState) CopyRelayForIps() []iputil.VpnIp {
+	rs.RLock()
+	defer rs.RUnlock()
+	currentRelays := make([]iputil.VpnIp, 0, len(rs.relayForByIp))
+	for relayIp := range rs.relayForByIp {
+		currentRelays = append(currentRelays, relayIp)
+	}
+	return currentRelays
+}
+
+func (rs *RelayState) CopyRelayForIdxs() []uint32 {
+	rs.RLock()
+	defer rs.RUnlock()
+	ret := make([]uint32, 0, len(rs.relayForByIdx))
+	for i := range rs.relayForByIdx {
+		ret = append(ret, i)
+	}
+	return ret
+}
+
+func (rs *RelayState) RemoveRelay(localIdx uint32) (iputil.VpnIp, bool) {
+	rs.Lock()
+	defer rs.Unlock()
+	relay, ok := rs.relayForByIdx[localIdx]
+	if !ok {
+		return iputil.VpnIp(0), false
+	}
+	delete(rs.relayForByIdx, localIdx)
+	delete(rs.relayForByIp, relay.PeerIp)
+	return relay.PeerIp, true
+}
+
+func (rs *RelayState) QueryRelayForByIp(vpnIp iputil.VpnIp) (*Relay, bool) {
+	rs.RLock()
+	defer rs.RUnlock()
+	r, ok := rs.relayForByIp[vpnIp]
+	return r, ok
+}
+
+func (rs *RelayState) QueryRelayForByIdx(idx uint32) (*Relay, bool) {
+	rs.RLock()
+	defer rs.RUnlock()
+	r, ok := rs.relayForByIdx[idx]
+	return r, ok
+}
+func (rs *RelayState) InsertRelay(ip iputil.VpnIp, idx uint32, r *Relay) {
+	rs.Lock()
+	defer rs.Unlock()
+	rs.relayForByIp[ip] = r
+	rs.relayForByIdx[idx] = r
 }
 
 type HostInfo struct {
@@ -57,6 +166,7 @@ type HostInfo struct {
 	vpnIp             iputil.VpnIp
 	recvError         int
 	remoteCidr        *cidr.Tree4
+	relayState        RelayState
 
 	// lastRebindCount is the other side of Interface.rebindCount, if these values don't match then we need to ask LH
 	// for a punch from the remote end of this tunnel. The goal being to prime their conntrack for our traffic just like
@@ -70,6 +180,12 @@ type HostInfo struct {
 
 	lastRoam       time.Time
 	lastRoamRemote *udp.Addr
+}
+
+type ViaSender struct {
+	relayHI   *HostInfo // relayHI is the host info object of the relay
+	remoteIdx uint32    // remoteIdx is the index included in the header of the received packet
+	relay     *Relay    // relay contains the rest of the relay information, including the PeerIP of the host trying to communicate with us.
 }
 
 type cachedPacket struct {
@@ -90,9 +206,11 @@ func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRang
 	h := map[iputil.VpnIp]*HostInfo{}
 	i := map[uint32]*HostInfo{}
 	r := map[uint32]*HostInfo{}
+	relays := map[uint32]*HostInfo{}
 	m := HostMap{
 		name:            name,
 		Indexes:         i,
+		Relays:          relays,
 		RemoteIndexes:   r,
 		Hosts:           h,
 		preferredRanges: preferredRanges,
@@ -108,11 +226,40 @@ func (hm *HostMap) EmitStats(name string) {
 	hostLen := len(hm.Hosts)
 	indexLen := len(hm.Indexes)
 	remoteIndexLen := len(hm.RemoteIndexes)
+	relaysLen := len(hm.Relays)
 	hm.RUnlock()
 
 	metrics.GetOrRegisterGauge("hostmap."+name+".hosts", nil).Update(int64(hostLen))
 	metrics.GetOrRegisterGauge("hostmap."+name+".indexes", nil).Update(int64(indexLen))
 	metrics.GetOrRegisterGauge("hostmap."+name+".remoteIndexes", nil).Update(int64(remoteIndexLen))
+	metrics.GetOrRegisterGauge("hostmap."+name+".relayIndexes", nil).Update(int64(relaysLen))
+}
+
+func (hm *HostMap) RemoveRelay(localIdx uint32) {
+	hm.Lock()
+	hiRelay, ok := hm.Relays[localIdx]
+	if !ok {
+		hm.Unlock()
+		return
+	}
+	delete(hm.Relays, localIdx)
+	hm.Unlock()
+	ip, ok := hiRelay.relayState.RemoveRelay(localIdx)
+	if !ok {
+		return
+	}
+	hiPeer, err := hm.QueryVpnIp(ip)
+	if err != nil {
+		return
+	}
+	var otherPeerIdx uint32
+	hiPeer.relayState.DeleteRelay(hiRelay.vpnIp)
+	relay, ok := hiPeer.relayState.GetRelayForByIp(hiRelay.vpnIp)
+	if ok {
+		otherPeerIdx = relay.LocalIndex
+	}
+	// I am a relaying host. I need to remove the other relay, too.
+	hm.RemoveRelay(otherPeerIdx)
 }
 
 func (hm *HostMap) GetIndexByVpnIp(vpnIp iputil.VpnIp) (uint32, error) {
@@ -140,6 +287,11 @@ func (hm *HostMap) AddVpnIp(vpnIp iputil.VpnIp, init func(hostinfo *HostInfo)) (
 			promoteCounter:  0,
 			vpnIp:           vpnIp,
 			HandshakePacket: make(map[uint8][]byte, 0),
+			relayState: RelayState{
+				relays:        map[iputil.VpnIp]struct{}{},
+				relayForByIp:  map[iputil.VpnIp]*Relay{},
+				relayForByIdx: map[uint32]*Relay{},
+			},
 		}
 		if init != nil {
 			init(h)
@@ -245,9 +397,37 @@ func (hm *HostMap) DeleteReverseIndex(index uint32) {
 }
 
 func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
+	// Delete the host itself, ensuring it's not modified anymore
+	hm.Lock()
+	hm.unlockedDeleteHostInfo(hostinfo)
+	hm.Unlock()
+
+	// And tear down all the relays going through this host
+	for _, localIdx := range hostinfo.relayState.CopyRelayForIdxs() {
+		hm.RemoveRelay(localIdx)
+	}
+
+	// And tear down the relays this deleted hostInfo was using to be reached
+	teardownRelayIdx := []uint32{}
+	for _, relayIp := range hostinfo.relayState.CopyRelayIps() {
+		relayHostInfo, err := hm.QueryVpnIp(relayIp)
+		if err != nil {
+			hm.l.WithError(err).WithField("relay", relayIp).Info("Missing relay host in hostmap")
+		} else {
+			if r, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp); ok {
+				teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
+			}
+		}
+	}
+	for _, localIdx := range teardownRelayIdx {
+		hm.RemoveRelay(localIdx)
+	}
+}
+
+func (hm *HostMap) DeleteRelayIdx(localIdx uint32) {
 	hm.Lock()
 	defer hm.Unlock()
-	hm.unlockedDeleteHostInfo(hostinfo)
+	delete(hm.RemoteIndexes, localIdx)
 }
 
 func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
@@ -282,9 +462,20 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 }
 
 func (hm *HostMap) QueryIndex(index uint32) (*HostInfo, error) {
-	//TODO: we probably just want ot return bool instead of error, or at least a static error
+	//TODO: we probably just want to return bool instead of error, or at least a static error
 	hm.RLock()
 	if h, ok := hm.Indexes[index]; ok {
+		hm.RUnlock()
+		return h, nil
+	} else {
+		hm.RUnlock()
+		return nil, errors.New("unable to find index")
+	}
+}
+func (hm *HostMap) QueryRelayIndex(index uint32) (*HostInfo, error) {
+	//TODO: we probably just want to return bool instead of error, or at least a static error
+	hm.RLock()
+	if h, ok := hm.Relays[index]; ok {
 		hm.RUnlock()
 		return h, nil
 	} else {
@@ -404,24 +595,27 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 	if c%PromoteEvery == 0 {
 		// The lock here is currently protecting i.remote access
 		i.RLock()
-		defer i.RUnlock()
+		remote := i.remote
+		i.RUnlock()
 
 		// return early if we are already on a preferred remote
-		rIP := i.remote.IP
-		for _, l := range preferredRanges {
-			if l.Contains(rIP) {
-				return
+		if remote != nil {
+			rIP := remote.IP
+			for _, l := range preferredRanges {
+				if l.Contains(rIP) {
+					return
+				}
 			}
 		}
 
 		i.remotes.ForEach(preferredRanges, func(addr *udp.Addr, preferred bool) {
-			if addr == nil || !preferred {
+			if remote != nil && (addr == nil || !preferred) {
 				return
 			}
 
 			// Try to send a test packet to that host, this should
 			// cause it to detect a roaming event and switch remotes
-			ifce.send(header.Test, header.TestRequest, i.ConnectionState, i, addr, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			ifce.sendTo(header.Test, header.TestRequest, i.ConnectionState, i, addr, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 		})
 	}
 
@@ -504,6 +698,10 @@ func (i *HostInfo) SetRemote(remote *udp.Addr) {
 // SetRemoteIfPreferred returns true if the remote was changed. The lastRoam
 // time on the HostInfo will also be updated.
 func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udp.Addr) bool {
+	if newRemote == nil {
+		// relays have nil udp Addrs
+		return false
+	}
 	currentRemote := i.remote
 	if currentRemote == nil {
 		i.SetRemote(newRemote)

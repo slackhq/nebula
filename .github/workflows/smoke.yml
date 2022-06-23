@@ -45,4 +45,12 @@ jobs:
       working-directory: ./.github/workflows/smoke
       run: ./smoke.sh
 
+    - name: setup relay docker image
+      working-directory: ./.github/workflows/smoke
+      run: ./build-relay.sh
+
+    - name: run smoke relay
+      working-directory: ./.github/workflows/smoke
+      run: ./smoke-relay.sh
+
     timeout-minutes: 10

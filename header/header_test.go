@@ -93,6 +93,7 @@ func TestTypeMap(t *testing.T) {
 		Handshake: {
 			HandshakeIXPSK0: "ix_psk0",
 		},
+		Control: &subTypeNoneMap,
 	}, subTypeMap)
 }
 
