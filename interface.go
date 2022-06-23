@@ -352,6 +352,10 @@ func (f *Interface) reloadSendRecvError(c *config.C) {
 	stringValue := c.GetString("listen.send_recv_error", "")
 	if (c.InitialLoad() && stringValue != "") || c.HasChanged("listen.send_recv_error") {
 		switch stringValue {
+		case "always":
+			f.sendRecvErrorConfig = sendRecvErrorAlways
+		case "never":
+			f.sendRecvErrorConfig = sendRecvErrorNever
 		case "private":
 			f.sendRecvErrorConfig = sendRecvErrorPrivate
 		default:
