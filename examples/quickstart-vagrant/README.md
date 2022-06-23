@@ -119,7 +119,6 @@ firewall:
     tcp_timeout: 12m
     udp_timeout: 3m
     default_timeout: 10m
-    max_connections: 100,000
 
   inbound:
     - proto: icmp
