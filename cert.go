@@ -51,11 +51,6 @@ func NewCertStateFromConfig(c *config.C) (*CertState, error) {
 	var err error
 
 	privPathOrPEM := c.GetString("pki.key", "")
-	if privPathOrPEM == "" {
-		// Support backwards compat with the old x509
-		//TODO: remove after this is rolled out everywhere - NB 2018/02/23
-		privPathOrPEM = c.GetString("x509.key", "")
-	}
 
 	if privPathOrPEM == "" {
 		return nil, errors.New("no pki.key path or PEM data provided")
@@ -79,11 +74,6 @@ func NewCertStateFromConfig(c *config.C) (*CertState, error) {
 	var rawCert []byte
 
 	pubPathOrPEM := c.GetString("pki.cert", "")
-	if pubPathOrPEM == "" {
-		// Support backwards compat with the old x509
-		//TODO: remove after this is rolled out everywhere - NB 2018/02/23
-		pubPathOrPEM = c.GetString("x509.cert", "")
-	}
 
 	if pubPathOrPEM == "" {
 		return nil, errors.New("no pki.cert path or PEM data provided")
