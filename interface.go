@@ -349,8 +349,9 @@ func (f *Interface) reloadFirewall(c *config.C) {
 }
 
 func (f *Interface) reloadSendRecvError(c *config.C) {
-	stringValue := c.GetString("listen.send_recv_error", "")
-	if (c.InitialLoad() && stringValue != "") || c.HasChanged("listen.send_recv_error") {
+	if c.InitialLoad() || c.HasChanged("listen.send_recv_error") {
+		stringValue := c.GetString("listen.send_recv_error", "always")
+
 		switch stringValue {
 		case "always":
 			f.sendRecvErrorConfig = sendRecvErrorAlways
