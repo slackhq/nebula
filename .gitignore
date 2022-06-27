@@ -10,3 +10,4 @@
 /cpu.pprof
 /build
 /*.tar.gz
+/e2e/mermaid/

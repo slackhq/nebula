@@ -4,14 +4,23 @@
 package router
 
 import (
+	"context"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
+	"testing"
+	"time"
 
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -28,37 +37,92 @@ type R struct {
 	// map[from address + ":" + to address] => ip:port to rewrite in the udp packet to receiver
 	outNat map[string]net.UDPAddr
 
+	// A map of vpn ip to the nebula control it belongs to
+	vpnControls map[iputil.VpnIp]*nebula.Control
+
+	flow []flowEntry
+
 	// All interactions are locked to help serialize behavior
 	sync.Mutex
+
+	fn           string
+	cancelRender context.CancelFunc
+	t            *testing.T
+}
+
+type flowEntry struct {
+	note   string
+	packet *packet
+}
+
+type packet struct {
+	from   *nebula.Control
+	to     *nebula.Control
+	packet *udp.Packet
+	tun    bool // a packet pulled off a tun device
+	rx     bool // the packet was received by a udp device
 }
 
 type ExitType int
 
 const (
-	// Keeps routing, the function will get called again on the next packet
+	// KeepRouting the function will get called again on the next packet
 	KeepRouting ExitType = 0
-	// Does not route this packet and exits immediately
+	// ExitNow does not route this packet and exits immediately
 	ExitNow ExitType = 1
-	// Routes this packet and exits immediately afterwards
+	// RouteAndExit routes this packet and exits immediately afterwards
 	RouteAndExit ExitType = 2
 )
 
 type ExitFunc func(packet *udp.Packet, receiver *nebula.Control) ExitType
 
-func NewR(controls ...*nebula.Control) *R {
-	r := &R{
-		controls: make(map[string]*nebula.Control),
-		inNat:    make(map[string]*nebula.Control),
-		outNat:   make(map[string]net.UDPAddr),
+// NewR creates a new router to pass packets in a controlled fashion between the provided controllers.
+// The packet flow will be recorded in a file within the mermaid directory under the same name as the test.
+// Renders will occur automatically, roughly every 100ms, until a call to RenderFlow() is made
+func NewR(t *testing.T, controls ...*nebula.Control) *R {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	if err := os.MkdirAll("mermaid", 0755); err != nil {
+		panic(err)
 	}
+
+	r := &R{
+		controls:     make(map[string]*nebula.Control),
+		vpnControls:  make(map[iputil.VpnIp]*nebula.Control),
+		inNat:        make(map[string]*nebula.Control),
+		outNat:       make(map[string]net.UDPAddr),
+		fn:           filepath.Join("mermaid", fmt.Sprintf("%s.md", t.Name())),
+		t:            t,
+		cancelRender: cancel,
+	}
+
+	// Try to remove our render file
+	os.Remove(r.fn)
 
 	for _, c := range controls {
 		addr := c.GetUDPAddr()
 		if _, ok := r.controls[addr]; ok {
 			panic("Duplicate listen address: " + addr)
 		}
+
+		r.vpnControls[c.GetVpnIp()] = c
 		r.controls[addr] = c
 	}
+
+	// Spin the renderer in case we go nuts and the test never completes
+	go func() {
+		clockSource := time.NewTicker(time.Millisecond * 100)
+		defer clockSource.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-clockSource.C:
+				r.renderFlow()
+			}
+		}
+	}()
 
 	return r
 }
@@ -76,6 +140,112 @@ func (r *R) AddRoute(ip net.IP, port uint16, c *nebula.Control) {
 		panic("Duplicate listen address inNat: " + inAddr)
 	}
 	r.inNat[inAddr] = c
+}
+
+// RenderFlow renders the packet flow seen up until now and stops further automatic renders from happening.
+func (r *R) RenderFlow() {
+	r.cancelRender()
+	r.renderFlow()
+}
+
+func (r *R) renderFlow() {
+	f, err := os.OpenFile(r.fn, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0644)
+	if err != nil {
+		panic(err)
+	}
+
+	var participants = map[string]struct{}{}
+	var participansVals []string
+
+	fmt.Fprintln(f, "```mermaid")
+	fmt.Fprintln(f, "sequenceDiagram")
+
+	// Assemble participants
+	for _, e := range r.flow {
+		if e.packet == nil {
+			continue
+		}
+
+		addr := e.packet.from.GetUDPAddr()
+		if _, ok := participants[addr]; ok {
+			continue
+		}
+		participants[addr] = struct{}{}
+		sanAddr := strings.Replace(addr, ":", "#58;", 1)
+		participansVals = append(participansVals, sanAddr)
+		fmt.Fprintf(
+			f, "    participant %s as Nebula: %s<br/>UDP: %s\n",
+			sanAddr, e.packet.from.GetVpnIp(), sanAddr,
+		)
+	}
+
+	// Print packets
+	h := &header.H{}
+	for _, e := range r.flow {
+		if e.packet == nil {
+			fmt.Fprintf(f, "    note over %s: %s\n", strings.Join(participansVals, ", "), e.note)
+			continue
+		}
+
+		p := e.packet
+		if p.tun {
+			fmt.Fprintln(f, r.formatUdpPacket(p))
+
+		} else {
+			if err := h.Parse(p.packet.Data); err != nil {
+				panic(err)
+			}
+
+			line := "--x"
+			if p.rx {
+				line = "->>"
+			}
+
+			fmt.Fprintf(f,
+				"    %s%s%s: %s(%s), counter: %v\n",
+				strings.Replace(p.from.GetUDPAddr(), ":", "#58;", 1),
+				line,
+				strings.Replace(p.to.GetUDPAddr(), ":", "#58;", 1),
+				h.TypeName(), h.SubTypeName(), h.MessageCounter,
+			)
+		}
+	}
+	fmt.Fprintln(f, "```")
+}
+
+// InjectFlow can be used to record packet flow if the test is handling the routing on its own.
+// The packet is assumed to have been received
+func (r *R) InjectFlow(from, to *nebula.Control, p *udp.Packet) {
+	r.Lock()
+	defer r.Unlock()
+	r.unlockedInjectFlow(from, to, p, false)
+}
+
+func (r *R) Log(arg ...any) {
+	r.Lock()
+	r.flow = append(r.flow, flowEntry{note: fmt.Sprint(arg...)})
+	r.t.Log(arg...)
+	r.Unlock()
+}
+
+func (r *R) Logf(format string, arg ...any) {
+	r.Lock()
+	r.flow = append(r.flow, flowEntry{note: fmt.Sprintf(format, arg...)})
+	r.t.Logf(format, arg...)
+	r.Unlock()
+}
+
+// unlockedInjectFlow is used by the router to record a packet has been transmitted, the packet is returned and
+// should be marked as received AFTER it has been placed on the receivers channel
+func (r *R) unlockedInjectFlow(from, to *nebula.Control, p *udp.Packet, tun bool) *packet {
+	fp := &packet{
+		from:   from,
+		to:     to,
+		packet: p.Copy(),
+		tun:    tun,
+	}
+	r.flow = append(r.flow, flowEntry{packet: fp})
+	return fp
 }
 
 // OnceFrom will route a single packet from sender then return
@@ -96,6 +266,11 @@ func (r *R) RouteUntilTxTun(sender *nebula.Control, receiver *nebula.Control) []
 		select {
 		// Maybe we already have something on the tun for us
 		case b := <-tunTx:
+			r.Lock()
+			np := udp.Packet{Data: make([]byte, len(b))}
+			copy(np.Data, b)
+			r.unlockedInjectFlow(receiver, receiver, &np, true)
+			r.Unlock()
 			return b
 
 		// Nope, lets push the sender along
@@ -108,10 +283,70 @@ func (r *R) RouteUntilTxTun(sender *nebula.Control, receiver *nebula.Control) []
 				r.Unlock()
 				panic("No control for udp tx")
 			}
-
+			fp := r.unlockedInjectFlow(sender, c, p, false)
 			c.InjectUDPPacket(p)
+			fp.rx = true
 			r.Unlock()
 		}
+	}
+}
+
+// RouteForAllUntilTxTun will route for everyone and return when a packet is seen on receivers tun
+// If the router doesn't have the nebula controller for that address, we panic
+func (r *R) RouteForAllUntilTxTun(receiver *nebula.Control) []byte {
+	sc := make([]reflect.SelectCase, len(r.controls)+1)
+	cm := make([]*nebula.Control, len(r.controls)+1)
+
+	i := 0
+	sc[i] = reflect.SelectCase{
+		Dir:  reflect.SelectRecv,
+		Chan: reflect.ValueOf(receiver.GetTunTxChan()),
+		Send: reflect.Value{},
+	}
+	cm[i] = receiver
+
+	i++
+	for _, c := range r.controls {
+		sc[i] = reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(c.GetUDPTxChan()),
+			Send: reflect.Value{},
+		}
+
+		cm[i] = c
+		i++
+	}
+
+	for {
+		x, rx, _ := reflect.Select(sc)
+		r.Lock()
+
+		if x == 0 {
+			// we are the tun tx, we can exit
+			p := rx.Interface().([]byte)
+			np := udp.Packet{Data: make([]byte, len(p))}
+			copy(np.Data, p)
+
+			r.unlockedInjectFlow(cm[x], cm[x], &np, true)
+			r.Unlock()
+			return p
+
+		} else {
+			// we are a udp tx, route and continue
+			p := rx.Interface().(*udp.Packet)
+			outAddr := cm[x].GetUDPAddr()
+
+			inAddr := net.JoinHostPort(p.ToIp.String(), fmt.Sprintf("%v", p.ToPort))
+			c := r.getControl(outAddr, inAddr, p)
+			if c == nil {
+				r.Unlock()
+				panic("No control for udp tx")
+			}
+			fp := r.unlockedInjectFlow(cm[x], c, p, false)
+			c.InjectUDPPacket(p)
+			fp.rx = true
+		}
+		r.Unlock()
 	}
 }
 
@@ -144,12 +379,16 @@ func (r *R) RouteExitFunc(sender *nebula.Control, whatDo ExitFunc) {
 			return
 
 		case RouteAndExit:
+			fp := r.unlockedInjectFlow(sender, receiver, p, false)
 			receiver.InjectUDPPacket(p)
+			fp.rx = true
 			r.Unlock()
 			return
 
 		case KeepRouting:
+			fp := r.unlockedInjectFlow(sender, receiver, p, false)
 			receiver.InjectUDPPacket(p)
+			fp.rx = true
 
 		default:
 			panic(fmt.Sprintf("Unknown exitFunc return: %v", e))
@@ -173,6 +412,34 @@ func (r *R) RouteUntilAfterMsgType(sender *nebula.Control, msgType header.Messag
 
 		return KeepRouting
 	})
+}
+
+func (r *R) RouteForAllUntilAfterMsgTypeTo(receiver *nebula.Control, msgType header.MessageType, subType header.MessageSubType) {
+	h := &header.H{}
+	r.RouteForAllExitFunc(func(p *udp.Packet, r *nebula.Control) ExitType {
+		if r != receiver {
+			return KeepRouting
+		}
+
+		if err := h.Parse(p.Data); err != nil {
+			panic(err)
+		}
+
+		if h.Type == msgType && h.Subtype == subType {
+			return RouteAndExit
+		}
+
+		return KeepRouting
+	})
+}
+
+func (r *R) InjectUDPPacket(sender, receiver *nebula.Control, packet *udp.Packet) {
+	r.Lock()
+	defer r.Unlock()
+
+	fp := r.unlockedInjectFlow(sender, receiver, packet, false)
+	receiver.InjectUDPPacket(packet)
+	fp.rx = true
 }
 
 // RouteForUntilAfterToAddr will route for sender and return only after it sees and sends a packet destined for toAddr
@@ -234,12 +501,16 @@ func (r *R) RouteForAllExitFunc(whatDo ExitFunc) {
 			return
 
 		case RouteAndExit:
+			fp := r.unlockedInjectFlow(cm[x], receiver, p, false)
 			receiver.InjectUDPPacket(p)
+			fp.rx = true
 			r.Unlock()
 			return
 
 		case KeepRouting:
+			fp := r.unlockedInjectFlow(cm[x], receiver, p, false)
 			receiver.InjectUDPPacket(p)
+			fp.rx = true
 
 		default:
 			panic(fmt.Sprintf("Unknown exitFunc return: %v", e))
@@ -320,4 +591,32 @@ func (r *R) getControl(fromAddr, toAddr string, p *udp.Packet) *nebula.Control {
 	}
 
 	return r.controls[toAddr]
+}
+
+func (r *R) formatUdpPacket(p *packet) string {
+	packet := gopacket.NewPacket(p.packet.Data, layers.LayerTypeIPv4, gopacket.Lazy)
+	v4 := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+	if v4 == nil {
+		panic("not an ipv4 packet")
+	}
+
+	from := "unknown"
+	if c, ok := r.vpnControls[iputil.Ip2VpnIp(v4.SrcIP)]; ok {
+		from = c.GetUDPAddr()
+	}
+
+	udp := packet.Layer(layers.LayerTypeUDP).(*layers.UDP)
+	if udp == nil {
+		panic("not a udp packet")
+	}
+
+	data := packet.ApplicationLayer()
+	return fmt.Sprintf(
+		"    %s-->>%s: src port: %v<br/>dest port: %v<br/>data: \"%v\"\n",
+		strings.Replace(from, ":", "#58;", 1),
+		strings.Replace(p.to.GetUDPAddr(), ":", "#58;", 1),
+		udp.SrcPort,
+		udp.DstPort,
+		string(data.Payload()),
+	)
 }

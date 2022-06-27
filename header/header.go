@@ -46,6 +46,7 @@ var typeMap = map[MessageType]string{
 	LightHouse:  "lightHouse",
 	Test:        "test",
 	CloseTunnel: "closeTunnel",
+	Control:     "control",
 }
 
 const (
@@ -73,7 +74,10 @@ var subTypeTestMap = map[MessageSubType]string{
 var subTypeNoneMap = map[MessageSubType]string{0: "none"}
 
 var subTypeMap = map[MessageType]*map[MessageSubType]string{
-	Message:     &subTypeNoneMap,
+	Message: {
+		MessageNone:  "none",
+		MessageRelay: "relay",
+	},
 	RecvError:   &subTypeNoneMap,
 	LightHouse:  &subTypeNoneMap,
 	Test:        &subTypeTestMap,
