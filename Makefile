@@ -6,18 +6,22 @@ CGO_ENABLED = 0
 export CGO_ENABLED
 
 # Set up OS specific bits
-ifeq ($(OS),Windows_NT)
-	#TODO: we should be able to ditch awk as well
-	GOVERSION := $(shell go version | awk "{print substr($$3, 3)}")
-	GOISMIN := $(shell IF "$(GOVERSION)" GEQ "$(GOMINVERSION)" ECHO 1)
-	NEBULA_CMD_SUFFIX = .exe
-	NULL_FILE = nul
-else
-	GOVERSION := $(shell go version | awk '{print substr($$3, 3)}')
-	GOISMIN := $(shell expr "$(GOVERSION)" ">=" "$(GOMINVERSION)")
-	NEBULA_CMD_SUFFIX =
-	NULL_FILE = /dev/null
-endif
+#ifeq ($(OS),Windows_NT)
+#	#TODO: we should be able to ditch awk as well
+#	GOVERSION := $(shell go version | awk "{print substr($$3, 3)}")
+#	GOISMIN := $(shell IF "$(GOVERSION)" GEQ "$(GOMINVERSION)" ECHO 1)
+#	NEBULA_CMD_SUFFIX = .exe
+#	NULL_FILE = nul
+#else
+#	GOVERSION := $(shell go version | awk '{print substr($$3, 3)}')
+#	GOISMIN := $(shell expr "$(GOVERSION)" ">=" "$(GOMINVERSION)")
+#	NEBULA_CMD_SUFFIX =
+#	NULL_FILE = /dev/null
+#endif
+#
+#ifneq "$(GOISMIN)" "1"
+#$(error "go version $(GOVERSION) is not supported, upgrade to $(GOMINVERSION) or above")
+#endif
 
 # Only defined the build number if we haven't already
 ifndef BUILD_NUMBER
@@ -52,6 +56,7 @@ ALL = $(ALL_LINUX) \
 	windows-arm64
 
 e2e:
+	echo "$(SHELL)"
 	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
 
 e2ev: TEST_FLAGS = -v
