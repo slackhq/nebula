@@ -76,6 +76,11 @@ func (c *C) RegisterReloadCallback(f func(*C)) {
 	c.callbacks = append(c.callbacks, f)
 }
 
+// InitialLoad returns true if this is the first load of the config, and ReloadConfig has not been called yet.
+func (c *C) InitialLoad() bool {
+	return c.oldSettings == nil
+}
+
 // HasChanged checks if the underlying structure of the provided key has changed after a config reload. The value of
 // k in both the old and new settings will be serialized, the result of the string comparison is returned.
 // If k is an empty string the entire config is tested.

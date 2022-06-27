@@ -3,7 +3,9 @@ package nebula
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"runtime"
 	"sync/atomic"
@@ -68,6 +70,8 @@ type Interface struct {
 	closed             int32
 	relayManager       *relayManager
 
+	sendRecvErrorConfig sendRecvErrorConfig
+
 	// rebindCount is used to decide if an active tunnel should trigger a punch notification through a lighthouse
 	rebindCount int8
 	version     string
@@ -82,6 +86,40 @@ type Interface struct {
 	cachedPacketMetrics *cachedPacketMetrics
 
 	l *logrus.Logger
+}
+
+type sendRecvErrorConfig uint8
+
+const (
+	sendRecvErrorAlways sendRecvErrorConfig = iota
+	sendRecvErrorNever
+	sendRecvErrorPrivate
+)
+
+func (s sendRecvErrorConfig) ShouldSendRecvError(ip net.IP) bool {
+	switch s {
+	case sendRecvErrorPrivate:
+		return ip.IsPrivate()
+	case sendRecvErrorAlways:
+		return true
+	case sendRecvErrorNever:
+		return false
+	default:
+		panic(fmt.Errorf("invalid sendRecvErrorConfig value: %d", s))
+	}
+}
+
+func (s sendRecvErrorConfig) String() string {
+	switch s {
+	case sendRecvErrorAlways:
+		return "always"
+	case sendRecvErrorNever:
+		return "never"
+	case sendRecvErrorPrivate:
+		return "private"
+	default:
+		return fmt.Sprintf("invalid(%d)", s)
+	}
 }
 
 func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
@@ -232,6 +270,7 @@ func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
 	c.RegisterReloadCallback(f.reloadCA)
 	c.RegisterReloadCallback(f.reloadCertKey)
 	c.RegisterReloadCallback(f.reloadFirewall)
+	c.RegisterReloadCallback(f.reloadSendRecvError)
 	for _, udpConn := range f.writers {
 		c.RegisterReloadCallback(udpConn.ReloadConfig)
 	}
@@ -307,6 +346,30 @@ func (f *Interface) reloadFirewall(c *config.C) {
 		WithField("oldFirewallHash", oldFw.GetRuleHash()).
 		WithField("rulesVersion", fw.rulesVersion).
 		Info("New firewall has been installed")
+}
+
+func (f *Interface) reloadSendRecvError(c *config.C) {
+	if c.InitialLoad() || c.HasChanged("listen.send_recv_error") {
+		stringValue := c.GetString("listen.send_recv_error", "always")
+
+		switch stringValue {
+		case "always":
+			f.sendRecvErrorConfig = sendRecvErrorAlways
+		case "never":
+			f.sendRecvErrorConfig = sendRecvErrorNever
+		case "private":
+			f.sendRecvErrorConfig = sendRecvErrorPrivate
+		default:
+			if c.GetBool("listen.send_recv_error", true) {
+				f.sendRecvErrorConfig = sendRecvErrorAlways
+			} else {
+				f.sendRecvErrorConfig = sendRecvErrorNever
+			}
+		}
+
+		f.l.WithField("sendRecvError", f.sendRecvErrorConfig.String()).
+			Info("Loaded send_recv_error config")
+	}
 }
 
 func (f *Interface) emitStats(ctx context.Context, i time.Duration) {

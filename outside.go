@@ -273,7 +273,7 @@ func (f *Interface) handleEncrypted(ci *ConnectionState, addr *udp.Addr, h *head
 	// Else, send recv errors for 300 seconds after a restart to allow fast reconnection.
 	if ci == nil || !ci.window.Check(f.l, h.MessageCounter) {
 		if addr != nil {
-			f.sendRecvError(addr, h.RemoteIndex)
+			f.maybeSendRecvError(addr, h.RemoteIndex)
 			return false
 		} else {
 			return false
@@ -399,6 +399,12 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	_, err = f.readers[q].Write(out)
 	if err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")
+	}
+}
+
+func (f *Interface) maybeSendRecvError(endpoint *udp.Addr, index uint32) {
+	if f.sendRecvErrorConfig.ShouldSendRecvError(endpoint.IP) {
+		f.sendRecvError(endpoint, index)
 	}
 }
 

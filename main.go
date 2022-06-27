@@ -306,6 +306,8 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 		ifce.RegisterConfigChangeCallbacks(c)
 
+		ifce.reloadSendRecvError(c)
+
 		go handshakeManager.Run(ctx, ifce)
 		go lightHouse.LhUpdateWorker(ctx, ifce)
 	}
