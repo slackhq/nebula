@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - ???
+
+### Added
+
+- Experimental: nebula clients can be configured to act as relays for other nebula clients.
+  Primarily useful when stubborn NATs make a direct tunnel impossible. (#678)
+
+- Configuration option to report manually specified `ip:port`s to lighthouses. (#650)
+
+- Windows arm64 build. (#638)
+
+- `punchy` and most `lighthouse` config options now support hot reloading. (#649)
+
+### Changed
+
+- Build against go 1.18. (#656)
+
+- Dependencies updated. (#664)
+
+### Fixed
+
+- Packets destined for the same host that sent it will be returned on MacOS.
+  This matches the default behavior of other operating systems. (#501)
+ 
+- `unsafe_route` configuration will no longer crash on Windows. (#648)
+
+- A few panics that were introduced in 1.5.x. (#657, #658, #675)
+
+### Security
+
+- `listen.send_recv_error` can control the conditions in which to send `recv_error` messages. (#670)
+
+### Removed
+
+- `x509` config stanza support has been removed. (#685)
+
 ## [1.5.2] - 2021-12-14
 
 ### Added
@@ -345,7 +381,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.5.2...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/slackhq/nebula/releases/tag/v1.6.0
 [1.5.2]: https://github.com/slackhq/nebula/releases/tag/v1.5.2
 [1.5.0]: https://github.com/slackhq/nebula/releases/tag/v1.5.0
 [1.4.0]: https://github.com/slackhq/nebula/releases/tag/v1.4.0
