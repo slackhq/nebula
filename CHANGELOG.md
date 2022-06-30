@@ -32,14 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Packets destined for the same host that sent it will be returned on MacOS.
   This matches the default behavior of other operating systems. (#501)
- 
+
 - `unsafe_route` configuration will no longer crash on Windows. (#648)
 
 - A few panics that were introduced in 1.5.x. (#657, #658, #675)
 
 ### Security
 
-- `listen.send_recv_error` can control the conditions in which to send `recv_error` messages. (#670)
+- You can set `listen.send_recv_error` to control the conditions in which
+  `recv_error` messages are sent. Sending these messages can expose the fact
+  that Nebula is running on a host, but it speeds up re-handshaking. (#670)
 
 ### Removed
 
