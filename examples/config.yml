@@ -112,13 +112,11 @@ listen:
   # This setting is reloadable.
   #send_recv_error: always
 
-# EXPERIMENTAL: This option is currently only supported on linux and may
-# change in future minor releases.
-#
 # Routines is the number of thread pairs to run that consume from the tun and UDP queues.
 # Currently, this defaults to 1 which means we have 1 tun queue reader and 1
 # UDP queue reader. Setting this above one will set IFF_MULTI_QUEUE on the tun
 # device and SO_REUSEPORT on the UDP socket to allow multiple queues.
+# This option is only supported on Linux.
 #routines: 1
 
 punchy:
