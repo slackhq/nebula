@@ -24,7 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Build against go 1.18. (#656)
 
- - Promoted `routines` config from Experimental to Supported feature (#702)
+- Promoted `routines` config from experimental to supported feature. (#702)
+
 - Dependencies updated. (#664)
 
 ### Fixed
