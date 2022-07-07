@@ -17,3 +17,4 @@
 /cpu.pprof
 /build
 /*.tar.gz
+/.vscode
