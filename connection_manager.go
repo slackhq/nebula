@@ -179,12 +179,9 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 		hostinfo, err := n.hostMap.QueryVpnIp(vpnIp)
 		if err != nil {
 			n.l.Debugf("Not found in hostmap: %s", vpnIp)
-
-			if !n.intf.disconnectInvalid {
-				n.ClearIP(vpnIp)
-				n.ClearPendingDeletion(vpnIp)
-				continue
-			}
+			n.ClearIP(vpnIp)
+			n.ClearPendingDeletion(vpnIp)
+			continue
 		}
 
 		if n.handleInvalidCertificate(now, vpnIp, hostinfo) {
@@ -233,12 +230,9 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 		hostinfo, err := n.hostMap.QueryVpnIp(vpnIp)
 		if err != nil {
 			n.l.Debugf("Not found in hostmap: %s", vpnIp)
-
-			if !n.intf.disconnectInvalid {
-				n.ClearIP(vpnIp)
-				n.ClearPendingDeletion(vpnIp)
-				continue
-			}
+			n.ClearIP(vpnIp)
+			n.ClearPendingDeletion(vpnIp)
+			continue
 		}
 
 		if n.handleInvalidCertificate(now, vpnIp, hostinfo) {
@@ -307,7 +301,7 @@ func (n *connectionManager) handleInvalidCertificate(now time.Time, vpnIp iputil
 
 	// Inform the remote and close the tunnel locally
 	n.intf.sendCloseTunnel(hostinfo)
-	n.intf.closeTunnel(hostinfo, false)
+	n.intf.closeTunnel(hostinfo)
 
 	n.ClearIP(vpnIp)
 	n.ClearPendingDeletion(vpnIp)

@@ -10,10 +10,10 @@ jobs:
     name: Build Linux All
     runs-on: ubuntu-latest
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.18
         uses: actions/setup-go@v2
         with:
-          go-version: 1.17
+          go-version: 1.18
 
       - name: Checkout code
         uses: actions/checkout@v2
@@ -33,13 +33,13 @@ jobs:
           path: release
 
   build-windows:
-    name: Build Windows amd64
+    name: Build Windows
     runs-on: windows-latest
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.18
         uses: actions/setup-go@v2
         with:
-          go-version: 1.17
+          go-version: 1.18
 
       - name: Checkout code
         uses: actions/checkout@v2
@@ -47,8 +47,14 @@ jobs:
       - name: Build
         run: |
           echo $Env:GITHUB_REF.Substring(11)
-          go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\oneclick-agent.exe ./cmd/nebula-service
-          go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\oneclick-agent-cert.exe ./cmd/nebula-cert
+          mkdir build\windows-amd64
+          $Env:GOARCH = "amd64"
+          go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\windows-amd64\oneclick-agent.exe ./cmd/nebula-service
+          go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\windows-amd64\oneclick-agent-cert.exe ./cmd/nebula-cert
+          mkdir build\windows-arm64
+          $Env:GOARCH = "arm64"
+          go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\windows-arm64\oneclick-agent.exe ./cmd/nebula-service
+          go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\windows-arm64\oneclick-agent-cert.exe ./cmd/nebula-cert
           mkdir build\dist\windows
           mv dist\windows\wintun build\dist\windows\
 
@@ -69,7 +75,10 @@ jobs:
       - name: Zip Windows
         run: |
           cd windows-latest
+          cp windows-amd64/* .
           zip -r oneclick-agent-windows-amd64.zip oneclick-agent.exe oneclick-agent-cert.exe dist
+          cp windows-arm64/* .
+          zip -r oneclick-agent-windows-arm64.zip oneclick-agent.exe oneclick-agent-cert.exe dist
 
       - name: Zip Windows agent only
         run: |
@@ -84,10 +93,13 @@ jobs:
               cd $dir
               if [ "$dir" = windows-latest ]
               then
-                sha256sum <oneclick-agent.exe | sed 's=-$=oneclick-agent-windows-amd64.zip/oneclick-agent.exe='
-                sha256sum <oneclick-agent-cert.exe | sed 's=-$=oneclick-agent-windows-amd64.zip/oneclick-agent-cert.exe='
+                sha256sum <windows-amd64/oneclick-agent.exe | sed 's=-$=oneclick-agent-windows-amd64.zip/oneclick-agent.exe='
+                sha256sum <windows-amd64/oneclick-agent-cert.exe | sed 's=-$=oneclick-agent-windows-amd64.zip/oneclick-agent-cert.exe='
+                sha256sum <windows-arm64/oneclick-agent.exe | sed 's=-$=oneclick-agent-windows-arm64.zip/oneclick-agent.exe='
+                sha256sum <windows-arm64/oneclick-agent-cert.exe | sed 's=-$=oneclick-agent-windows-arm64.zip/oneclick-agent-cert.exe='
                 sha256sum oneclick-agent-windows-amd64.zip
                 sha256sum oneclick-agent-only-windows-amd64.zip
+                sha256sum oneclick-agent-windows-arm64.zip
               else
                 for v in *.tar.gz
                 do
@@ -161,6 +173,16 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./linux-latest/oneclick-agent-cert-only-linux-amd64.tar.gz
           asset_name: oneclick-agent-cert-only-linux-amd64.tar.gz
+          asset_content_type: application/zip
+
+      - name: Upload windows-arm64
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./windows-latest/oneclick-agent-windows-arm64.zip
+          asset_name: oneclick-agent-windows-arm64.zip
           asset_content_type: application/zip
 
       - name: Upload linux-amd64

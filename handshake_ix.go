@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/flynn/noise"
-	"github.com/golang/protobuf/proto"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
@@ -43,7 +42,7 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 	hs := &NebulaHandshake{
 		Details: hsProto,
 	}
-	hsBytes, err = proto.Marshal(hs)
+	hsBytes, err = hs.Marshal()
 
 	if err != nil {
 		f.l.WithError(err).WithField("vpnIp", vpnIp).
@@ -70,7 +69,7 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 	hostinfo.handshakeStart = time.Now()
 }
 
-func ixHandshakeStage1(f *Interface, addr *udp.Addr, packet []byte, h *header.H) {
+func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []byte, h *header.H) {
 	ci := f.newConnectionState(f.l, false, noise.HandshakeIX, []byte{}, 0)
 	// Mark packet 1 as seen so it doesn't show up as missed
 	ci.window.Update(f.l, 1)
@@ -83,7 +82,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, packet []byte, h *header.H)
 	}
 
 	hs := &NebulaHandshake{}
-	err = proto.Unmarshal(msg, hs)
+	err = hs.Unmarshal(msg)
 	/*
 		l.Debugln("GOT INDEX: ", hs.Details.InitiatorIndex)
 	*/
@@ -114,9 +113,11 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, packet []byte, h *header.H)
 		return
 	}
 
-	if !f.lightHouse.remoteAllowList.Allow(vpnIp, addr.IP) {
-		f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
-		return
+	if addr != nil {
+		if !f.lightHouse.GetRemoteAllowList().Allow(vpnIp, addr.IP) {
+			f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
+			return
+		}
 	}
 
 	myIndex, err := generateIndex(f.l)
@@ -136,6 +137,11 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, packet []byte, h *header.H)
 		vpnIp:             vpnIp,
 		HandshakePacket:   make(map[uint8][]byte, 0),
 		lastHandshakeTime: hs.Details.Time,
+		relayState: RelayState{
+			relays:        map[iputil.VpnIp]struct{}{},
+			relayForByIp:  map[iputil.VpnIp]*Relay{},
+			relayForByIdx: map[uint32]*Relay{},
+		},
 	}
 
 	hostinfo.Lock()
@@ -154,7 +160,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, packet []byte, h *header.H)
 	// Update the time in case their clock is way off from ours
 	hs.Details.Time = uint64(time.Now().UnixNano())
 
-	hsBytes, err := proto.Marshal(hs)
+	hsBytes, err := hs.Marshal()
 	if err != nil {
 		f.l.WithError(err).WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).
 			WithField("certName", certName).
@@ -224,17 +230,31 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, packet []byte, h *header.H)
 
 			msg = existing.HandshakePacket[2]
 			f.messageMetrics.Tx(header.Handshake, header.MessageSubType(msg[1]), 1)
-			err := f.outside.WriteTo(msg, addr)
-			if err != nil {
-				f.l.WithField("vpnIp", existing.vpnIp).WithField("udpAddr", addr).
-					WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-					WithError(err).Error("Failed to send handshake message")
+			if addr != nil {
+				err := f.outside.WriteTo(msg, addr)
+				if err != nil {
+					f.l.WithField("vpnIp", existing.vpnIp).WithField("udpAddr", addr).
+						WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
+						WithError(err).Error("Failed to send handshake message")
+				} else {
+					f.l.WithField("vpnIp", existing.vpnIp).WithField("udpAddr", addr).
+						WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
+						Info("Handshake message sent")
+				}
+				return
 			} else {
-				f.l.WithField("vpnIp", existing.vpnIp).WithField("udpAddr", addr).
+				via2 := via.(*ViaSender)
+				if via2 == nil {
+					f.l.Error("Handshake send failed: both addr and via are nil.")
+					return
+				}
+				hostinfo.relayState.InsertRelayTo(via2.relayHI.vpnIp)
+				f.SendVia(via2.relayHI, via2.relay, msg, make([]byte, 12), make([]byte, mtu), false)
+				f.l.WithField("vpnIp", existing.vpnIp).WithField("relay", via2.relayHI.vpnIp).
 					WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
 					Info("Handshake message sent")
+				return
 			}
-			return
 		case ErrExistingHostInfo:
 			// This means there was an existing tunnel and this handshake was older than the one we are currently based on
 			f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).
@@ -287,17 +307,35 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, packet []byte, h *header.H)
 
 	// Do the send
 	f.messageMetrics.Tx(header.Handshake, header.MessageSubType(msg[1]), 1)
-	err = f.outside.WriteTo(msg, addr)
-	if err != nil {
-		f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).
-			WithField("certName", certName).
-			WithField("fingerprint", fingerprint).
-			WithField("issuer", issuer).
-			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			WithError(err).Error("Failed to send handshake")
+	if addr != nil {
+		err = f.outside.WriteTo(msg, addr)
+		if err != nil {
+			f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).
+				WithField("certName", certName).
+				WithField("fingerprint", fingerprint).
+				WithField("issuer", issuer).
+				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
+				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+				WithError(err).Error("Failed to send handshake")
+		} else {
+			f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).
+				WithField("certName", certName).
+				WithField("fingerprint", fingerprint).
+				WithField("issuer", issuer).
+				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
+				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+				WithField("sentCachedPackets", len(hostinfo.packetStore)).
+				Info("Handshake message sent")
+		}
 	} else {
-		f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).
+		via2 := via.(*ViaSender)
+		if via2 == nil {
+			f.l.Error("Handshake send failed: both addr and via are nil.")
+			return
+		}
+		hostinfo.relayState.InsertRelayTo(via2.relayHI.vpnIp)
+		f.SendVia(via2.relayHI, via2.relay, msg, make([]byte, 12), make([]byte, mtu), false)
+		f.l.WithField("vpnIp", vpnIp).WithField("relay", via2.relayHI.vpnIp).
 			WithField("certName", certName).
 			WithField("fingerprint", fingerprint).
 			WithField("issuer", issuer).
@@ -312,7 +350,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, packet []byte, h *header.H)
 	return
 }
 
-func ixHandshakeStage2(f *Interface, addr *udp.Addr, hostinfo *HostInfo, packet []byte, h *header.H) bool {
+func ixHandshakeStage2(f *Interface, addr *udp.Addr, via interface{}, hostinfo *HostInfo, packet []byte, h *header.H) bool {
 	if hostinfo == nil {
 		// Nothing here to tear down, got a bogus stage 2 packet
 		return true
@@ -321,9 +359,11 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, hostinfo *HostInfo, packet 
 	hostinfo.Lock()
 	defer hostinfo.Unlock()
 
-	if !f.lightHouse.remoteAllowList.Allow(hostinfo.vpnIp, addr.IP) {
-		f.l.WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
-		return false
+	if addr != nil {
+		if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnIp, addr.IP) {
+			f.l.WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
+			return false
+		}
 	}
 
 	ci := hostinfo.ConnectionState
@@ -364,7 +404,7 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, hostinfo *HostInfo, packet 
 	}
 
 	hs := &NebulaHandshake{}
-	err = proto.Unmarshal(msg, hs)
+	err = hs.Unmarshal(msg)
 	if err != nil || hs.Details == nil {
 		f.l.WithError(err).WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).Error("Failed unmarshal handshake message")
@@ -451,7 +491,12 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, hostinfo *HostInfo, packet 
 	ci.eKey = NewNebulaCipherState(eKey)
 
 	// Make sure the current udpAddr being used is set for responding
-	hostinfo.SetRemote(addr)
+	if addr != nil {
+		hostinfo.SetRemote(addr)
+	} else {
+		via2 := via.(*ViaSender)
+		hostinfo.relayState.InsertRelayTo(via2.relayHI.vpnIp)
+	}
 
 	// Build up the radix for the firewall if we have subnets in the cert
 	hostinfo.CreateRemoteCIDR(remoteCert)

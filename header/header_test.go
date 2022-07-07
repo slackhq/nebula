@@ -82,10 +82,14 @@ func TestTypeMap(t *testing.T) {
 		LightHouse:  "lightHouse",
 		Test:        "test",
 		CloseTunnel: "closeTunnel",
+		Control:     "control",
 	}, typeMap)
 
 	assert.Equal(t, map[MessageType]*map[MessageSubType]string{
-		Message:     &subTypeNoneMap,
+		Message: {
+			MessageNone:  "none",
+			MessageRelay: "relay",
+		},
 		RecvError:   &subTypeNoneMap,
 		LightHouse:  &subTypeNoneMap,
 		Test:        &subTypeTestMap,
@@ -93,6 +97,7 @@ func TestTypeMap(t *testing.T) {
 		Handshake: {
 			HandshakeIXPSK0: "ix_psk0",
 		},
+		Control: &subTypeNoneMap,
 	}, subTypeMap)
 }
 

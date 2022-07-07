@@ -63,6 +63,24 @@ func (c *Control) InjectLightHouseAddr(vpnIp net.IP, toAddr *net.UDPAddr) {
 	}
 }
 
+// InjectRelays will push relayVpnIps into the local lighthouse cache for the vpnIp
+// This is necessary to inform an initiator of possible relays for communicating with a responder
+func (c *Control) InjectRelays(vpnIp net.IP, relayVpnIps []net.IP) {
+	c.f.lightHouse.Lock()
+	remoteList := c.f.lightHouse.unlockedGetRemoteList(iputil.Ip2VpnIp(vpnIp))
+	remoteList.Lock()
+	defer remoteList.Unlock()
+	c.f.lightHouse.Unlock()
+
+	iVpnIp := iputil.Ip2VpnIp(vpnIp)
+	uVpnIp := []uint32{}
+	for _, rVPnIp := range relayVpnIps {
+		uVpnIp = append(uVpnIp, uint32(iputil.Ip2VpnIp(rVPnIp)))
+	}
+
+	remoteList.unlockedSetRelay(iVpnIp, iVpnIp, uVpnIp)
+}
+
 // GetFromTun will pull a packet off the tun side of nebula
 func (c *Control) GetFromTun(block bool) []byte {
 	return c.f.inside.(*overlay.TestTun).Get(block)
@@ -116,6 +134,10 @@ func (c *Control) InjectTunUDPPacket(toIp net.IP, toPort uint16, fromPort uint16
 	}
 
 	c.f.inside.(*overlay.TestTun).Send(buffer.Bytes())
+}
+
+func (c *Control) GetVpnIp() iputil.VpnIp {
+	return c.f.myVpnIp
 }
 
 func (c *Control) GetUDPAddr() string {

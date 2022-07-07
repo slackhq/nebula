@@ -36,6 +36,7 @@ const (
 	LightHouse  MessageType = 3
 	Test        MessageType = 4
 	CloseTunnel MessageType = 5
+	Control     MessageType = 6
 )
 
 var typeMap = map[MessageType]string{
@@ -45,7 +46,13 @@ var typeMap = map[MessageType]string{
 	LightHouse:  "lightHouse",
 	Test:        "test",
 	CloseTunnel: "closeTunnel",
+	Control:     "control",
 }
+
+const (
+	MessageNone  MessageSubType = 0
+	MessageRelay MessageSubType = 1
+)
 
 const (
 	TestRequest MessageSubType = 0
@@ -67,7 +74,10 @@ var subTypeTestMap = map[MessageSubType]string{
 var subTypeNoneMap = map[MessageSubType]string{0: "none"}
 
 var subTypeMap = map[MessageType]*map[MessageSubType]string{
-	Message:     &subTypeNoneMap,
+	Message: {
+		MessageNone:  "none",
+		MessageRelay: "relay",
+	},
 	RecvError:   &subTypeNoneMap,
 	LightHouse:  &subTypeNoneMap,
 	Test:        &subTypeTestMap,
@@ -75,6 +85,7 @@ var subTypeMap = map[MessageType]*map[MessageSubType]string{
 	Handshake: {
 		HandshakeIXPSK0: "ix_psk0",
 	},
+	Control: &subTypeNoneMap,
 }
 
 type H struct {

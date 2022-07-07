@@ -23,8 +23,18 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		return
 	}
 
-	// Ignore packets from self to self
 	if fwPacket.RemoteIP == f.myVpnIp {
+		// Immediately forward packets from self to self.
+		// This should only happen on Darwin-based hosts, which routes packets from
+		// the Nebula IP to the Nebula IP through the Nebula TUN device.
+		if immediatelyForwardToSelf {
+			_, err := f.readers[q].Write(packet)
+			if err != nil {
+				f.l.WithError(err).Error("Failed to forward to tun")
+			}
+		}
+		// Otherwise, drop. On linux, we should never see these packets - Linux
+		// routes packets from the nebula IP to the nebula IP through the loopback device.
 		return
 	}
 
@@ -58,7 +68,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, f.caPool, localCache)
 	if dropReason == nil {
-		f.sendNoMetrics(header.Message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out, q)
+		f.sendNoMetrics(header.Message, 0, ci, hostinfo, nil, packet, nb, out, q)
 
 	} else if f.l.Level >= logrus.DebugLevel {
 		hostinfo.logger(f.l).
@@ -66,6 +76,10 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 			WithField("reason", dropReason).
 			Debugln("dropping outbound packet")
 	}
+}
+
+func (f *Interface) Handshake(vpnIp iputil.VpnIp) {
+	f.getOrHandshake(vpnIp)
 }
 
 // getOrHandshake returns nil if the vpnIp is not routable
@@ -110,7 +124,7 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 
 		// If this is a static host, we don't need to wait for the HostQueryReply
 		// We can trigger the handshake right now
-		if _, ok := f.lightHouse.staticList[vpnIp]; ok {
+		if _, ok := f.lightHouse.GetStaticHostList()[vpnIp]; ok {
 			select {
 			case f.handshakeManager.trigger <- vpnIp:
 			default:
@@ -146,7 +160,7 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 		return
 	}
 
-	f.sendNoMetrics(header.Message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out, 0)
+	f.sendNoMetrics(header.Message, st, hostInfo.ConnectionState, hostInfo, nil, p, nb, out, 0)
 }
 
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
@@ -177,12 +191,73 @@ func (f *Interface) SendMessageToVpnIp(t header.MessageType, st header.MessageSu
 }
 
 func (f *Interface) sendMessageToVpnIp(t header.MessageType, st header.MessageSubType, hostInfo *HostInfo, p, nb, out []byte) {
-	f.send(t, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out)
+	f.send(t, st, hostInfo.ConnectionState, hostInfo, p, nb, out)
 }
 
-func (f *Interface) send(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udp.Addr, p, nb, out []byte) {
+func (f *Interface) send(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, p, nb, out []byte) {
+	f.messageMetrics.Tx(t, st, 1)
+	f.sendNoMetrics(t, st, ci, hostinfo, nil, p, nb, out, 0)
+}
+
+func (f *Interface) sendTo(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udp.Addr, p, nb, out []byte) {
 	f.messageMetrics.Tx(t, st, 1)
 	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
+}
+
+// sendVia sends a payload through a Relay tunnel. No authentication or encryption is done
+// to the payload for the ultimate target host, making this a useful method for sending
+// handshake messages to peers through relay tunnels.
+// via is the HostInfo through which the message is relayed.
+// ad is the plaintext data to authenticate, but not encrypt
+// nb is a buffer used to store the nonce value, re-used for performance reasons.
+// out is a buffer used to store the result of the Encrypt operation
+// q indicates which writer to use to send the packet.
+func (f *Interface) SendVia(viaIfc interface{},
+	relayIfc interface{},
+	ad,
+	nb,
+	out []byte,
+	nocopy bool,
+) {
+	via := viaIfc.(*HostInfo)
+	relay := relayIfc.(*Relay)
+	c := atomic.AddUint64(&via.ConnectionState.atomicMessageCounter, 1)
+
+	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, relay.RemoteIndex, c)
+	f.connectionManager.Out(via.vpnIp)
+
+	// Authenticate the header and payload, but do not encrypt for this message type.
+	// The payload consists of the inner, unencrypted Nebula header, as well as the end-to-end encrypted payload.
+	if len(out)+len(ad)+via.ConnectionState.eKey.Overhead() > cap(out) {
+		via.logger(f.l).
+			WithField("outCap", cap(out)).
+			WithField("payloadLen", len(ad)).
+			WithField("headerLen", len(out)).
+			WithField("cipherOverhead", via.ConnectionState.eKey.Overhead()).
+			Error("SendVia out buffer not large enough for relay")
+		return
+	}
+
+	// The header bytes are written to the 'out' slice; Grow the slice to hold the header and associated data payload.
+	offset := len(out)
+	out = out[:offset+len(ad)]
+
+	// In one call path, the associated data _is_ already stored in out. In other call paths, the associated data must
+	// be copied into 'out'.
+	if !nocopy {
+		copy(out[offset:], ad)
+	}
+
+	var err error
+	out, err = via.ConnectionState.eKey.EncryptDanger(out, out, nil, c, nb)
+	if err != nil {
+		via.logger(f.l).WithError(err).Info("Failed to EncryptDanger in sendVia")
+		return
+	}
+	err = f.writers[0].WriteTo(out, via.remote)
+	if err != nil {
+		via.logger(f.l).WithError(err).Info("Failed to WriteTo in sendVia")
+	}
 }
 
 func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udp.Addr, p, nb, out []byte, q int) {
@@ -190,8 +265,19 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		//TODO: log warning
 		return
 	}
+	useRelay := remote == nil && hostinfo.remote == nil
+	fullOut := out
 
-	var err error
+	if useRelay {
+		if len(out) < header.Len {
+			// out always has a capacity of mtu, but not always a length greater than the header.Len.
+			// Grow it to make sure the next operation works.
+			out = out[:header.Len]
+		}
+		// Save a header's worth of data at the front of the 'out' buffer.
+		out = out[header.Len:]
+	}
+
 	//TODO: enable if we do more than 1 tun queue
 	//ci.writeLock.Lock()
 	c := atomic.AddUint64(&ci.atomicMessageCounter, 1)
@@ -212,6 +298,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		}
 	}
 
+	var err error
 	out, err = ci.eKey.EncryptDanger(out, out, p, c, nb)
 	//TODO: see above note on lock
 	//ci.writeLock.Unlock()
@@ -223,10 +310,37 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		return
 	}
 
-	err = f.writers[q].WriteTo(out, remote)
-	if err != nil {
-		hostinfo.logger(f.l).WithError(err).
-			WithField("udpAddr", remote).Error("Failed to write outgoing packet")
+	if remote != nil {
+		err = f.writers[q].WriteTo(out, remote)
+		if err != nil {
+			hostinfo.logger(f.l).WithError(err).
+				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
+		}
+	} else if hostinfo.remote != nil {
+		err = f.writers[q].WriteTo(out, hostinfo.remote)
+		if err != nil {
+			hostinfo.logger(f.l).WithError(err).
+				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
+		}
+	} else {
+		// Try to send via a relay
+		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
+			relayHostInfo, err := f.hostMap.QueryVpnIp(relayIP)
+			if err != nil {
+				hostinfo.logger(f.l).WithField("relayIp", relayIP).WithError(err).Info("sendNoMetrics failed to find HostInfo")
+				continue
+			}
+			relay, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp)
+			if !ok {
+				hostinfo.logger(f.l).
+					WithField("relayIp", relayHostInfo.vpnIp).
+					WithField("relayTarget", hostinfo.vpnIp).
+					Info("sendNoMetrics relay missing object for target")
+				continue
+			}
+			f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true)
+			break
+		}
 	}
 	return
 }

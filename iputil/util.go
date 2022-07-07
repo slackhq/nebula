@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"net/netip"
 )
 
 type VpnIp uint32
@@ -39,11 +40,37 @@ func (ip VpnIp) ToIP() net.IP {
 	return nip
 }
 
+func (ip VpnIp) ToNetIpAddr() netip.Addr {
+	var nip [4]byte
+	binary.BigEndian.PutUint32(nip[:], uint32(ip))
+	return netip.AddrFrom4(nip)
+}
+
 func Ip2VpnIp(ip []byte) VpnIp {
 	if len(ip) == 16 {
 		return VpnIp(binary.BigEndian.Uint32(ip[12:16]))
 	}
 	return VpnIp(binary.BigEndian.Uint32(ip))
+}
+
+func ToNetIpAddr(ip net.IP) (netip.Addr, error) {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return netip.Addr{}, fmt.Errorf("invalid net.IP: %v", ip)
+	}
+	return addr, nil
+}
+
+func ToNetIpPrefix(ipNet net.IPNet) (netip.Prefix, error) {
+	addr, err := ToNetIpAddr(ipNet.IP)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	ones, bits := ipNet.Mask.Size()
+	if ones == 0 && bits == 0 {
+		return netip.Prefix{}, fmt.Errorf("invalid net.IP: %v", ipNet)
+	}
+	return netip.PrefixFrom(addr, ones), nil
 }
 
 // ubtoa encodes the string form of the integer v to dst[start:] and

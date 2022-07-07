@@ -36,8 +36,8 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, _ int, routes 
 		Routes:    routes,
 		routeTree: routeTree,
 		l:         l,
-		rxPackets: make(chan []byte, 1),
-		TxPackets: make(chan []byte, 1),
+		rxPackets: make(chan []byte, 10),
+		TxPackets: make(chan []byte, 10),
 	}, nil
 }
 

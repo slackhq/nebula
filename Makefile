@@ -1,4 +1,4 @@
-GOMINVERSION = 1.17
+GOMINVERSION = 1.18
 NEBULA_CMD_PATH = "./cmd/nebula"
 GO111MODULE = on
 export GO111MODULE
@@ -48,7 +48,8 @@ ALL = $(ALL_LINUX) \
 	darwin-amd64 \
 	darwin-arm64 \
 	freebsd-amd64 \
-	windows-amd64
+	windows-amd64 \
+	windows-arm64
 
 e2e:
 	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
@@ -76,6 +77,9 @@ release-freebsd: build/oneclick-agent-freebsd-amd64.tar.gz
 BUILD_ARGS = -trimpath
 
 bin-windows: build/windows-amd64/oneclick-agent.exe build/windows-amd64/oneclick-agent-cert.exe
+	mv $? .
+
+bin-windows-arm64: build/windows-arm64/oneclick-agent.exe build/windows-arm64/oneclick-agent-cert.exe
 	mv $? .
 
 bin-darwin: build/darwin-amd64/oneclick-agent build/darwin-amd64/oneclick-agent-cert
@@ -163,6 +167,10 @@ bin-docker: bin build/linux-amd64/oneclick-agent build/linux-amd64/oneclick-agen
 smoke-docker: bin-docker
 	cd .github/workflows/smoke/ && ./build.sh
 	cd .github/workflows/smoke/ && ./smoke.sh
+
+smoke-relay-docker: bin-docker
+	cd .github/workflows/smoke/ && ./build-relay.sh
+	cd .github/workflows/smoke/ && ./smoke-relay.sh
 
 smoke-docker-race: BUILD_ARGS = -race
 smoke-docker-race: smoke-docker

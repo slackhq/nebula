@@ -294,6 +294,20 @@ func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pen
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
+		Name:             "print-relays",
+		ShortDescription: "Prints json details about all relay info",
+		Flags: func() (*flag.FlagSet, interface{}) {
+			fl := flag.NewFlagSet("", flag.ContinueOnError)
+			s := sshPrintTunnelFlags{}
+			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json")
+			return fl, &s
+		},
+		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
+			return sshPrintRelays(ifce, fs, a, w)
+		},
+	})
+
+	ssh.RegisterCommand(&sshd.Command{
 		Name:             "change-remote",
 		ShortDescription: "Changes the remote address used in the tunnel for the provided vpn ip",
 		Flags: func() (*flag.FlagSet, interface{}) {
@@ -519,14 +533,13 @@ func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 			0,
 			hostInfo.ConnectionState,
 			hostInfo,
-			hostInfo.remote,
 			[]byte{},
 			make([]byte, 12, 12),
 			make([]byte, mtu),
 		)
 	}
 
-	ifce.closeTunnel(hostInfo, false)
+	ifce.closeTunnel(hostInfo)
 	return w.WriteLine("Closed")
 }
 
@@ -728,6 +741,104 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 	}
 
 	return w.WriteLine(cert.String())
+}
+
+func sshPrintRelays(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
+	args, ok := fs.(*sshPrintTunnelFlags)
+	if !ok {
+		//TODO: error
+		w.WriteLine(fmt.Sprintf("sshPrintRelays failed to convert args type"))
+		return nil
+	}
+
+	relays := map[uint32]*HostInfo{}
+	ifce.hostMap.Lock()
+	for k, v := range ifce.hostMap.Relays {
+		relays[k] = v
+	}
+	ifce.hostMap.Unlock()
+
+	type RelayFor struct {
+		Error          error
+		Type           string
+		State          string
+		PeerIp         iputil.VpnIp
+		LocalIndex     uint32
+		RemoteIndex    uint32
+		RelayedThrough []iputil.VpnIp
+	}
+
+	type RelayOutput struct {
+		NebulaIp    iputil.VpnIp
+		RelayForIps []RelayFor
+	}
+
+	type CmdOutput struct {
+		Relays []*RelayOutput
+	}
+
+	co := CmdOutput{}
+
+	enc := json.NewEncoder(w.GetWriter())
+
+	if args.Pretty {
+		enc.SetIndent("", "    ")
+	}
+
+	for k, v := range relays {
+		ro := RelayOutput{NebulaIp: v.vpnIp}
+		co.Relays = append(co.Relays, &ro)
+		relayHI, err := ifce.hostMap.QueryVpnIp(v.vpnIp)
+		if err != nil {
+			ro.RelayForIps = append(ro.RelayForIps, RelayFor{Error: err})
+			continue
+		}
+		for _, vpnIp := range relayHI.relayState.CopyRelayForIps() {
+			rf := RelayFor{Error: nil}
+			r, ok := relayHI.relayState.GetRelayForByIp(vpnIp)
+			if ok {
+				t := ""
+				switch r.Type {
+				case ForwardingType:
+					t = "forwarding"
+				case TerminalType:
+					t = "terminal"
+				default:
+					t = "unkown"
+				}
+
+				s := ""
+				switch r.State {
+				case Requested:
+					s = "requested"
+				case Established:
+					s = "established"
+				default:
+					s = "unknown"
+				}
+
+				rf.LocalIndex = r.LocalIndex
+				rf.RemoteIndex = r.RemoteIndex
+				rf.PeerIp = r.PeerIp
+				rf.Type = t
+				rf.State = s
+				if rf.LocalIndex != k {
+					rf.Error = fmt.Errorf("hostmap LocalIndex '%v' does not match RelayState LocalIndex", k)
+				}
+			}
+			relayedHI, err := ifce.hostMap.QueryVpnIp(vpnIp)
+			if err == nil {
+				rf.RelayedThrough = append(rf.RelayedThrough, relayedHI.relayState.CopyRelayIps()...)
+			}
+
+			ro.RelayForIps = append(ro.RelayForIps, rf)
+		}
+	}
+	err := enc.Encode(co)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {

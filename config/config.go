@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -26,6 +27,7 @@ type C struct {
 	oldSettings map[interface{}]interface{}
 	callbacks   []func(*C)
 	l           *logrus.Logger
+	reloadLock  sync.Mutex
 }
 
 func NewC(l *logrus.Logger) *C {
@@ -72,6 +74,11 @@ func (c *C) LoadString(raw string) error {
 // These functions should return quickly or spawn their own go routine if they will take a while
 func (c *C) RegisterReloadCallback(f func(*C)) {
 	c.callbacks = append(c.callbacks, f)
+}
+
+// InitialLoad returns true if this is the first load of the config, and ReloadConfig has not been called yet.
+func (c *C) InitialLoad() bool {
+	return c.oldSettings == nil
 }
 
 // HasChanged checks if the underlying structure of the provided key has changed after a config reload. The value of
@@ -133,6 +140,9 @@ func (c *C) CatchHUP(ctx context.Context) {
 }
 
 func (c *C) ReloadConfig() {
+	c.reloadLock.Lock()
+	defer c.reloadLock.Unlock()
+
 	c.oldSettings = make(map[interface{}]interface{})
 	for k, v := range c.Settings {
 		c.oldSettings[k] = v
@@ -147,6 +157,27 @@ func (c *C) ReloadConfig() {
 	for _, v := range c.callbacks {
 		v(c)
 	}
+}
+
+func (c *C) ReloadConfigString(raw string) error {
+	c.reloadLock.Lock()
+	defer c.reloadLock.Unlock()
+
+	c.oldSettings = make(map[interface{}]interface{})
+	for k, v := range c.Settings {
+		c.oldSettings[k] = v
+	}
+
+	err := c.LoadString(raw)
+	if err != nil {
+		return err
+	}
+
+	for _, v := range c.callbacks {
+		v(c)
+	}
+
+	return nil
 }
 
 // GetString will get the string for k or return the default d if not found or invalid

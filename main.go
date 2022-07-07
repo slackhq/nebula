@@ -3,13 +3,13 @@ package nebula
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/udp"
@@ -158,15 +158,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			}
 			udpServer.ReloadConfig(c)
 			udpConns[i] = udpServer
-
-			// If port is dynamic, discover it
-			if port == 0 {
-				uPort, err := udpServer.LocalAddr()
-				if err != nil {
-					return nil, util.NewContextualError("Failed to get listening port", nil, err)
-				}
-				port = int(uPort.Port)
-			}
 		}
 	}
 
@@ -218,95 +209,18 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		go hostMap.Promoter(config.GetInt("promoter.interval"))
 	*/
 
-	punchy := NewPunchyFromConfig(c)
-	if punchy.Punch && !configTest {
+	punchy := NewPunchyFromConfig(l, c)
+	if punchy.GetPunch() && !configTest {
 		l.Info("UDP hole punching enabled")
 		go hostMap.Punchy(ctx, udpConns[0])
 	}
 
-	amLighthouse := c.GetBool("lighthouse.am_lighthouse", false)
-
-	// fatal if am_lighthouse is enabled but we are using an ephemeral port
-	if amLighthouse && (c.GetInt("listen.port", 0) == 0) {
-		return nil, util.NewContextualError("lighthouse.am_lighthouse enabled on node but no port number is set in config", nil, nil)
-	}
-
-	// warn if am_lighthouse is enabled but upstream lighthouses exists
-	rawLighthouseHosts := c.GetStringSlice("lighthouse.hosts", []string{})
-	if amLighthouse && len(rawLighthouseHosts) != 0 {
-		l.Warn("lighthouse.am_lighthouse enabled on node but upstream lighthouses exist in config")
-	}
-
-	lighthouseHosts := make([]iputil.VpnIp, len(rawLighthouseHosts))
-	for i, host := range rawLighthouseHosts {
-		ip := net.ParseIP(host)
-		if ip == nil {
-			return nil, util.NewContextualError("Unable to parse lighthouse host entry", m{"host": host, "entry": i + 1}, nil)
-		}
-		if !tunCidr.Contains(ip) {
-			return nil, util.NewContextualError("lighthouse host is not in our subnet, invalid", m{"vpnIp": ip, "network": tunCidr.String()}, nil)
-		}
-		lighthouseHosts[i] = iputil.Ip2VpnIp(ip)
-	}
-
-	if !amLighthouse && len(lighthouseHosts) == 0 {
-		l.Warn("No lighthouses.hosts configured, this host will only be able to initiate tunnels with static_host_map entries")
-	}
-
-	lightHouse := NewLightHouse(
-		l,
-		amLighthouse,
-		tunCidr,
-		lighthouseHosts,
-		//TODO: change to a duration
-		c.GetInt("lighthouse.interval", 10),
-		uint32(port),
-		udpConns[0],
-		punchy.Respond,
-		punchy.Delay,
-		c.GetBool("stats.lighthouse_metrics", false),
-	)
-
-	remoteAllowList, err := NewRemoteAllowListFromConfig(c, "lighthouse.remote_allow_list", "lighthouse.remote_allow_ranges")
-	if err != nil {
-		return nil, util.NewContextualError("Invalid lighthouse.remote_allow_list", nil, err)
-	}
-	lightHouse.SetRemoteAllowList(remoteAllowList)
-
-	localAllowList, err := NewLocalAllowListFromConfig(c, "lighthouse.local_allow_list")
-	if err != nil {
-		return nil, util.NewContextualError("Invalid lighthouse.local_allow_list", nil, err)
-	}
-	lightHouse.SetLocalAllowList(localAllowList)
-
-	//TODO: Move all of this inside functions in lighthouse.go
-	for k, v := range c.GetMap("static_host_map", map[interface{}]interface{}{}) {
-		ip := net.ParseIP(fmt.Sprintf("%v", k))
-		vpnIp := iputil.Ip2VpnIp(ip)
-		if !tunCidr.Contains(ip) {
-			return nil, util.NewContextualError("static_host_map key is not in our subnet, invalid", m{"vpnIp": vpnIp, "network": tunCidr.String()}, nil)
-		}
-		vals, ok := v.([]interface{})
-		if ok {
-			for _, v := range vals {
-				ip, port, err := udp.ParseIPAndPort(fmt.Sprintf("%v", v))
-				if err != nil {
-					return nil, util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
-				}
-				lightHouse.AddStaticRemote(vpnIp, udp.NewAddr(ip, port))
-			}
-		} else {
-			ip, port, err := udp.ParseIPAndPort(fmt.Sprintf("%v", v))
-			if err != nil {
-				return nil, util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp}, err)
-			}
-			lightHouse.AddStaticRemote(vpnIp, udp.NewAddr(ip, port))
-		}
-	}
-
-	err = lightHouse.ValidateLHStaticEntries()
-	if err != nil {
-		l.WithError(err).Error("Lighthouse unreachable")
+	lightHouse, err := NewLightHouseFromConfig(l, c, tunCidr, udpConns[0], punchy)
+	switch {
+	case errors.As(err, &util.ContextualError{}):
+		return nil, err
+	case err != nil:
+		return nil, util.NewContextualError("Failed to initialize lighthouse handler", nil, err)
 	}
 
 	var messageMetrics *MessageMetrics
@@ -316,10 +230,13 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		messageMetrics = newMessageMetricsOnlyRecvError()
 	}
 
+	useRelays := c.GetBool("relay.use_relays", DefaultUseRelays) && !c.GetBool("relay.am_relay", false)
+
 	handshakeConfig := HandshakeConfig{
 		tryInterval:   c.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
 		retries:       c.GetInt("handshakes.retries", DefaultHandshakeRetries),
 		triggerBuffer: c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
+		useRelays:     useRelays,
 
 		messageMetrics: messageMetrics,
 	}
@@ -361,6 +278,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		version:                 buildVersion,
 		caPool:                  caPool,
 		disconnectInvalid:       c.GetBool("pki.disconnect_invalid", false),
+		relayManager:            NewRelayManager(ctx, l, hostMap, c),
 
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,
@@ -388,6 +306,8 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 		ifce.RegisterConfigChangeCallbacks(c)
 
+		ifce.reloadSendRecvError(c)
+
 		go handshakeManager.Run(ctx, ifce)
 		go lightHouse.LhUpdateWorker(ctx, ifce)
 	}
@@ -411,7 +331,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	// Start DNS server last to allow using the nebula IP as lighthouse.dns.host
 	var dnsStart func()
-	if amLighthouse && serveDns {
+	if lightHouse.amLighthouse && serveDns {
 		l.Debugln("Starting dns server")
 		dnsStart = dnsMain(l, hostMap, c)
 	}

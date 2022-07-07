@@ -48,8 +48,8 @@ type Conn struct {
 func NewListener(l *logrus.Logger, ip string, port int, _ bool, _ int) (*Conn, error) {
 	return &Conn{
 		Addr:      &Addr{net.ParseIP(ip), uint16(port)},
-		RxPackets: make(chan *Packet, 1),
-		TxPackets: make(chan *Packet, 1),
+		RxPackets: make(chan *Packet, 10),
+		TxPackets: make(chan *Packet, 10),
 		l:         l,
 	}, nil
 }
@@ -117,7 +117,7 @@ func (u *Conn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall
 		p := <-u.RxPackets
 		ua.Port = p.FromPort
 		copy(ua.IP, p.FromIp.To16())
-		r(ua, plaintext[:0], p.Data, h, fwPacket, lhf, nb, q, cache.Get(u.l))
+		r(ua, nil, plaintext[:0], p.Data, h, fwPacket, lhf, nb, q, cache.Get(u.l))
 	}
 }
 

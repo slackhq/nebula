@@ -18,3 +18,4 @@
 /build
 /*.tar.gz
 /.vscode
+/e2e/mermaid/

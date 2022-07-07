@@ -3,7 +3,7 @@ package nebula
 /*
 
 import (
-	proto "github.com/golang/protobuf/proto"
+	proto "google.golang.org/protobuf/proto"
 )
 
 func HandleMetaProto(p []byte) {
