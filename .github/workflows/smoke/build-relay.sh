@@ -8,8 +8,8 @@ mkdir ./build
 (
     cd build
 
-    cp ../../../../build/linux-amd64/nebula .
-    cp ../../../../build/linux-amd64/nebula-cert .
+    cp ../../../../build/linux-amd64/oneclick-agent .
+    cp ../../../../build/linux-amd64/oneclick-agent-cert .
 
     HOST="lighthouse1" AM_LIGHTHOUSE=true ../genconfig.sh >lighthouse1.yml <<EOF
 relay:
@@ -34,11 +34,11 @@ relay:
   use_relays: false
 EOF
 
-    ../../../../nebula-cert ca -name "Smoke Test"
-    ../../../../nebula-cert sign -name "lighthouse1" -groups "lighthouse,lighthouse1" -ip "192.168.100.1/24"
-    ../../../../nebula-cert sign -name "host2" -groups "host,host2" -ip "192.168.100.2/24"
-    ../../../../nebula-cert sign -name "host3" -groups "host,host3" -ip "192.168.100.3/24"
-    ../../../../nebula-cert sign -name "host4" -groups "host,host4" -ip "192.168.100.4/24"
+    ../../../../oneclick-agent-cert ca -name "Smoke Test"
+    ../../../../oneclick-agent-cert sign -name "lighthouse1" -groups "lighthouse,lighthouse1" -ip "192.168.100.1/24"
+    ../../../../oneclick-agent-cert sign -name "host2" -groups "host,host2" -ip "192.168.100.2/24"
+    ../../../../oneclick-agent-cert sign -name "host3" -groups "host,host3" -ip "192.168.100.3/24"
+    ../../../../oneclick-agent-cert sign -name "host4" -groups "host,host4" -ip "192.168.100.4/24"
 )
 
 sudo docker build -t nebula:smoke-relay .
