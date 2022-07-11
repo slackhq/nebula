@@ -83,6 +83,7 @@ jobs:
       - name: Zip Windows agent only
         run: |
           cd windows-latest
+          cp windows-amd64/* .
           zip -r oneclick-agent-only-windows-amd64.zip oneclick-agent.exe dist
 
       - name: Create sha256sum
