@@ -138,7 +138,7 @@ func (c *Conn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall
 		p := (*[2]byte)(unsafe.Pointer(&udpAddr.Port))
 		p[0] = byte(rua.Port >> 8)
 		p[1] = byte(rua.Port)
-		r(udpAddr, plaintext[:0], buffer[:n], h, fwPacket, lhf, nb, q, cache.Get(c.l))
+		r(udpAddr, nil, plaintext[:0], buffer[:n], h, fwPacket, lhf, nb, q, cache.Get(c.l))
 	}
 }
 
