@@ -4,10 +4,12 @@
 /nebula-arm6
 /nebula-darwin
 /nebula.exe
-/cert/*.crt
-/cert/*.key
+/nebula-cert.exe
 /coverage.out
 /cpu.pprof
 /build
 /*.tar.gz
 /e2e/mermaid/
+**.crt
+**.key
+**.pem
