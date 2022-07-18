@@ -911,7 +911,7 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp i
 	if lhh.lh.punchy.GetRespond() {
 		queryVpnIp := iputil.VpnIp(n.Details.VpnIp)
 		go func() {
-			time.Sleep(time.Second * 5)
+			time.Sleep(lhh.lh.punchy.GetRespondDelay())
 			if lhh.l.Level >= logrus.DebugLevel {
 				lhh.l.Debugf("Sending a nebula test packet to vpn ip %s", queryVpnIp)
 			}

@@ -9,10 +9,11 @@ import (
 )
 
 type Punchy struct {
-	atomicPunch   int32
-	atomicRespond int32
-	atomicDelay   time.Duration
-	l             *logrus.Logger
+	atomicPunch        int32
+	atomicRespond      int32
+	atomicDelay        time.Duration
+	atomicRespondDelay time.Duration
+	l                  *logrus.Logger
 }
 
 func NewPunchyFromConfig(l *logrus.Logger, c *config.C) *Punchy {
@@ -74,6 +75,12 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 			p.l.Infof("punchy.delay changed to %s", p.GetDelay())
 		}
 	}
+	if initial || c.HasChanged("punchy.respond_delay") {
+		atomic.StoreInt64((*int64)(&p.atomicRespondDelay), (int64)(c.GetDuration("punchy.respond_delay", 5*time.Second)))
+		if !initial {
+			p.l.Infof("punchy.respond_delay changed to %s", p.GetRespondDelay())
+		}
+	}
 }
 
 func (p *Punchy) GetPunch() bool {
@@ -86,4 +93,8 @@ func (p *Punchy) GetRespond() bool {
 
 func (p *Punchy) GetDelay() time.Duration {
 	return (time.Duration)(atomic.LoadInt64((*int64)(&p.atomicDelay)))
+}
+
+func (p *Punchy) GetRespondDelay() time.Duration {
+	return (time.Duration)(atomic.LoadInt64((*int64)(&p.atomicRespondDelay)))
 }
