@@ -214,9 +214,9 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "reload",
 		ShortDescription: "Reloads configuration from disk, same as sending HUP to the process",
-		Callback:         func (fs interface{}, a []string, w sshd.StringWriter) error {
-                            return sshReload(c, w)
-                        },
+		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
+			return sshReload(c, w)
+		},
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
@@ -877,7 +877,7 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 }
 
 func sshReload(c *config.C, w sshd.StringWriter) error {
-    err := w.WriteLine("Config reloaded")
-    c.ReloadConfig()
+	err := w.WriteLine("Config reloaded")
+	c.ReloadConfig()
 	return err
 }
