@@ -877,7 +877,7 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 }
 
 func sshReload(c *config.C, w sshd.StringWriter) error {
-	err := w.WriteLine("Config reloaded")
+	err := w.WriteLine("Reloading config")
 	c.ReloadConfig()
 	return err
 }
