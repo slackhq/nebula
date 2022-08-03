@@ -18,6 +18,20 @@ import (
 
 var vpnIp iputil.VpnIp
 
+func newTestLighthouse() *LightHouse {
+	lh := &LightHouse{
+		l:       test.NewLogger(),
+		addrMap: map[iputil.VpnIp]*RemoteList{},
+	}
+	lighthouses := map[iputil.VpnIp]struct{}{}
+	staticList := map[iputil.VpnIp]struct{}{}
+
+	lh.lighthouses.Store(&lighthouses)
+	lh.staticList.Store(&staticList)
+
+	return lh
+}
+
 func Test_NewConnectionManagerTest(t *testing.T) {
 	l := test.NewLogger()
 	//_, tuncidr, _ := net.ParseCIDR("1.1.1.1/24")
@@ -35,7 +49,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 		rawCertificateNoKey: []byte{},
 	}
 
-	lh := &LightHouse{l: l, atomicStaticList: make(map[iputil.VpnIp]struct{}), atomicLighthouses: make(map[iputil.VpnIp]struct{})}
+	lh := newTestLighthouse()
 	ifce := &Interface{
 		hostMap:          hostMap,
 		inside:           &test.NoopTun{},
@@ -104,7 +118,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 		rawCertificateNoKey: []byte{},
 	}
 
-	lh := &LightHouse{l: l, atomicStaticList: make(map[iputil.VpnIp]struct{}), atomicLighthouses: make(map[iputil.VpnIp]struct{})}
+	lh := newTestLighthouse()
 	ifce := &Interface{
 		hostMap:          hostMap,
 		inside:           &test.NoopTun{},
@@ -213,7 +227,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 		rawCertificateNoKey: []byte{},
 	}
 
-	lh := &LightHouse{l: l, atomicStaticList: make(map[iputil.VpnIp]struct{}), atomicLighthouses: make(map[iputil.VpnIp]struct{})}
+	lh := newTestLighthouse()
 	ifce := &Interface{
 		hostMap:           hostMap,
 		inside:            &test.NoopTun{},
