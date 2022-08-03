@@ -461,7 +461,7 @@ func (lh *LightHouse) DeleteVpnIp(vpnIp iputil.VpnIp) {
 // AddStaticRemote adds a static host entry for vpnIp as ourselves as the owner
 // We are the owner because we don't want a lighthouse server to advertise for static hosts it was configured with
 // And we don't want a lighthouse query reply to interfere with our learned cache if we are a client
-//NOTE: this function should not interact with any hot path objects, like lh.staticList, the caller should handle it
+// NOTE: this function should not interact with any hot path objects, like lh.staticList, the caller should handle it
 func (lh *LightHouse) addStaticRemote(vpnIp iputil.VpnIp, toAddr *udp.Addr, staticList map[iputil.VpnIp]struct{}) {
 	lh.Lock()
 	am := lh.unlockedGetRemoteList(vpnIp)

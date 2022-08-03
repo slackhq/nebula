@@ -18,7 +18,7 @@ import (
 	"github.com/slackhq/nebula/udp"
 )
 
-//const ProbeLen = 100
+// const ProbeLen = 100
 const PromoteEvery = 1000
 const ReQueryEvery = 5000
 const MaxRemotes = 10
