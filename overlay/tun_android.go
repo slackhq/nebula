@@ -8,22 +8,24 @@ import (
 	"io"
 	"net"
 	"os"
-	"runtime"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/iputil"
 )
 
 type tun struct {
 	io.ReadWriteCloser
-	fd   int
-	cidr *net.IPNet
-	l    *logrus.Logger
+	fd        int
+	cidr      *net.IPNet
+	routeTree *cidr.Tree4
+	l         *logrus.Logger
 }
 
 func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes []Route, _ int) (*tun, error) {
-	if len(routes) > 0 {
-		return nil, fmt.Errorf("routes are not supported in %s", runtime.GOOS)
+	routeTree, err := makeRouteTree(l, routes, false)
+	if err != nil {
+		return nil, err
 	}
 
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
@@ -33,6 +35,7 @@ func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes
 		fd:              int(file.Fd()),
 		cidr:            cidr,
 		l:               l,
+		routeTree:       routeTree,
 	}, nil
 }
 
@@ -40,7 +43,12 @@ func newTun(_ *logrus.Logger, _ string, _ *net.IPNet, _ int, _ []Route, _ int, _
 	return nil, fmt.Errorf("newTun not supported in Android")
 }
 
-func (t *tun) RouteFor(iputil.VpnIp) iputil.VpnIp {
+func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+	r := t.routeTree.MostSpecificContains(ip)
+	if r != nil {
+		return r.(iputil.VpnIp)
+	}
+
 	return 0
 }
 
