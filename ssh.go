@@ -12,7 +12,6 @@ import (
 	"runtime/pprof"
 	"sort"
 	"strings"
-	"syscall"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
@@ -166,7 +165,7 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 	return runner, nil
 }
 
-func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pendingHostMap *HostMap, lightHouse *LightHouse, ifce *Interface) {
+func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap *HostMap, pendingHostMap *HostMap, lightHouse *LightHouse, ifce *Interface) {
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "list-hostmap",
 		ShortDescription: "List all known previously connected hosts",
@@ -215,7 +214,9 @@ func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pen
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "reload",
 		ShortDescription: "Reloads configuration from disk, same as sending HUP to the process",
-		Callback:         sshReload,
+		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
+			return sshReload(c, w)
+		},
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
@@ -875,16 +876,8 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 	return enc.Encode(copyHostInfo(hostInfo, ifce.hostMap.preferredRanges))
 }
 
-func sshReload(fs interface{}, a []string, w sshd.StringWriter) error {
-	p, err := os.FindProcess(os.Getpid())
-	if err != nil {
-		return w.WriteLine(err.Error())
-		//TODO
-	}
-	err = p.Signal(syscall.SIGHUP)
-	if err != nil {
-		return w.WriteLine(err.Error())
-		//TODO
-	}
-	return w.WriteLine("HUP sent")
+func sshReload(c *config.C, w sshd.StringWriter) error {
+	err := w.WriteLine("Reloading config")
+	c.ReloadConfig()
+	return err
 }
