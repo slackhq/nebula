@@ -93,7 +93,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				hostinfo.logger(f.l).WithField("hostinfo", hostinfo.vpnIp).WithField("remoteIndex", h.RemoteIndex).Errorf("HostInfo missing remote index")
 				// Delete my local index from the hostmap
 				f.hostMap.DeleteRelayIdx(h.RemoteIndex)
-				// When the peer doesn't recieve any return traffic, its connection_manager will eventually clean up
+				// When the peer doesn't receive any return traffic, its connection_manager will eventually clean up
 				// the broken relay when it cleans up the associated HostInfo object.
 				return
 			}

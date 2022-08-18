@@ -147,7 +147,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 
 	// Get a remotes object if we don't already have one.
 	// This is mainly to protect us as this should never be the case
-	// NB ^ This comment doesn't jive. It's how the thing gets intiailized.
+	// NB ^ This comment doesn't jive. It's how the thing gets initialized.
 	// It's the common path. Should it update every time, in case a future LH query/queries give us more info?
 	if hostinfo.remotes == nil {
 		hostinfo.remotes = c.lightHouse.QueryCache(vpnIp)
