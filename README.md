@@ -128,7 +128,7 @@ docker build -t nebula .
 
 To run nebula Docker image, ensure correct network permission is given and network is in **host** mode:
 ```
-docker run -dt -v=/path/to/config/on/host:/config --cap-add=NET_ADMIN --network=host --device=/dev/net/tun --restart=unless-stopped <image>
+docker run -dt --name=nebula -v=/path/to/config/on/host:/config --cap-add=NET_ADMIN --network=host --device=/dev/net/tun --restart=unless-stopped <image>
 ```
 Where **\<image\>** is either `nebula` if source built or image from provider like Dockerhub.
 
