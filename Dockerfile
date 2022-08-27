@@ -4,10 +4,11 @@ COPY . .
 RUN make bin-docker
 
 FROM golang as runtime
-WORKDIR /app
+WORKDIR /config
 EXPOSE 4242
 COPY --from=builder /src/build/linux-amd64/nebula /app/
 
 VOLUME ["/config"]
 
-ENTRYPOINT ["./nebula", "-config", "/config/config.yaml"]
+ENTRYPOINT ["/app/nebula"]
+CMD ["-config", "config.yaml"]
