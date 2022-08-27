@@ -130,7 +130,7 @@ To run nebula Docker image, ensure correct network permission is given and netwo
 ```
 docker run -dt -v=/path/to/config/on/host:/config --cap-add=NET_ADMIN --network=host --device=/dev/net/tun --restart=unless-stopped <image>
 ```
-Where **<image>** is either `nebula` if source built or image from provider like Dockerhub.
+Where **\<image\>** is either `nebula` if source built or image from provider like Dockerhub.
 
 ## Credits
 
