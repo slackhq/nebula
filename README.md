@@ -114,6 +114,24 @@ To build nebula for a specific platform (ex, Windows):
 
 See the [Makefile](Makefile) for more details on build targets
 
+## Docker
+### Building Nebula Docker image from source
+
+Ensure Docker is installed and clone this repo. Change to the nebula directory.
+
+To build nebula Docker image:
+```
+docker build -t nebula .
+```
+
+### Running
+
+To run nebula Docker image, ensure correct network permission is given and network is in **host** mode:
+```
+docker run -dt -v=/path/to/config/on/host:/config --cap-add=NET_ADMIN --network=host --device=/dev/net/tun --restart=unless-stopped <image>
+```
+Where **<image>** is either `nebula` if source built or image from provider like Dockerhub.
+
 ## Credits
 
 Nebula was created at Slack Technologies, Inc by Nate Brown and Ryan Huber, with contributions from Oliver Fross, Alan Lam, Wade Simmons, and Lining Wang.
