@@ -1,3 +1,4 @@
+//go:build !windows
 // +build !windows
 
 package main
@@ -30,15 +31,17 @@ func Test_caHelp(t *testing.T) {
 			"  -groups string\n"+
 			"    \tOptional: comma separated list of groups. This will limit which groups subordinate certs can use\n"+
 			"  -ips string\n"+
-			"    \tOptional: comma separated list of ip and network in CIDR notation. This will limit which ip addresses and networks subordinate certs can use\n"+
+			"    \tOptional: comma separated list of ipv4 address and network in CIDR notation. This will limit which ipv4 addresses and networks subordinate certs can use for ip addresses\n"+
 			"  -name string\n"+
 			"    \tRequired: name of the certificate authority\n"+
 			"  -out-crt string\n"+
 			"    \tOptional: path to write the certificate to (default \"ca.crt\")\n"+
 			"  -out-key string\n"+
 			"    \tOptional: path to write the private key to (default \"ca.key\")\n"+
+			"  -out-qr string\n"+
+			"    \tOptional: output a qr code image (png) of the certificate\n"+
 			"  -subnets string\n"+
-			"    \tOptional: comma separated list of ip and network in CIDR notation. This will limit which subnet addresses and networks subordinate certs can use\n",
+			"    \tOptional: comma separated list of ipv4 address and network in CIDR notation. This will limit which ipv4 addresses and networks subordinate certs can use in subnets\n",
 		ob.String(),
 	)
 }
@@ -49,6 +52,16 @@ func Test_ca(t *testing.T) {
 
 	// required args
 	assertHelpError(t, ca([]string{"-out-key", "nope", "-out-crt", "nope", "duration", "100m"}, ob, eb), "-name is required")
+	assert.Equal(t, "", ob.String())
+	assert.Equal(t, "", eb.String())
+
+	// ipv4 only ips
+	assertHelpError(t, ca([]string{"-name", "ipv6", "-ips", "100::100/100"}, ob, eb), "invalid ip definition: can only be ipv4, have 100::100/100")
+	assert.Equal(t, "", ob.String())
+	assert.Equal(t, "", eb.String())
+
+	// ipv4 only subnets
+	assertHelpError(t, ca([]string{"-name", "ipv6", "-subnets", "100::100/100"}, ob, eb), "invalid subnet definition: can only be ipv4, have 100::100/100")
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 

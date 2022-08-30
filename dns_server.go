@@ -7,6 +7,9 @@ import (
 	"sync"
 
 	"github.com/miekg/dns"
+	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/iputil"
 )
 
 // This whole thing should be rewritten to use context
@@ -43,8 +46,8 @@ func (d *dnsRecords) QueryCert(data string) string {
 	if ip == nil {
 		return ""
 	}
-	iip := ip2int(ip)
-	hostinfo, err := d.hostMap.QueryVpnIP(iip)
+	iip := iputil.Ip2VpnIp(ip)
+	hostinfo, err := d.hostMap.QueryVpnIp(iip)
 	if err != nil {
 		return ""
 	}
@@ -63,7 +66,7 @@ func (d *dnsRecords) Add(host, data string) {
 	d.Unlock()
 }
 
-func parseQuery(m *dns.Msg, w dns.ResponseWriter) {
+func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
 	for _, q := range m.Question {
 		switch q.Qtype {
 		case dns.TypeA:
@@ -95,37 +98,44 @@ func parseQuery(m *dns.Msg, w dns.ResponseWriter) {
 	}
 }
 
-func handleDnsRequest(w dns.ResponseWriter, r *dns.Msg) {
+func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Compress = false
 
 	switch r.Opcode {
 	case dns.OpcodeQuery:
-		parseQuery(m, w)
+		parseQuery(l, m, w)
 	}
 
 	w.WriteMsg(m)
 }
 
-func dnsMain(hostMap *HostMap, c *Config) {
+func dnsMain(l *logrus.Logger, hostMap *HostMap, c *config.C) func() {
 	dnsR = newDnsRecords(hostMap)
 
 	// attach request handler func
-	dns.HandleFunc(".", handleDnsRequest)
+	dns.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+		handleDnsRequest(l, w, r)
+	})
 
-	c.RegisterReloadCallback(reloadDns)
-	startDns(c)
+	c.RegisterReloadCallback(func(c *config.C) {
+		reloadDns(l, c)
+	})
+
+	return func() {
+		startDns(l, c)
+	}
 }
 
-func getDnsServerAddr(c *Config) string {
+func getDnsServerAddr(c *config.C) string {
 	return c.GetString("lighthouse.dns.host", "") + ":" + strconv.Itoa(c.GetInt("lighthouse.dns.port", 53))
 }
 
-func startDns(c *Config) {
+func startDns(l *logrus.Logger, c *config.C) {
 	dnsAddr = getDnsServerAddr(c)
 	dnsServer = &dns.Server{Addr: dnsAddr, Net: "udp"}
-	l.Debugf("Starting DNS responder at %s\n", dnsAddr)
+	l.WithField("dnsListener", dnsAddr).Info("Starting DNS responder")
 	err := dnsServer.ListenAndServe()
 	defer dnsServer.Shutdown()
 	if err != nil {
@@ -133,7 +143,7 @@ func startDns(c *Config) {
 	}
 }
 
-func reloadDns(c *Config) {
+func reloadDns(l *logrus.Logger, c *config.C) {
 	if dnsAddr == getDnsServerAddr(c) {
 		l.Debug("No DNS server config change detected")
 		return
@@ -141,5 +151,5 @@ func reloadDns(c *Config) {
 
 	l.Debug("Restarting DNS server")
 	dnsServer.Shutdown()
-	go startDns(c)
+	go startDns(l, c)
 }
