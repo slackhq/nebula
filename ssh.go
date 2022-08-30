@@ -701,8 +701,7 @@ func sshGetMutexProfile(fs interface{}, a []string, w sshd.StringWriter) error {
 		return w.WriteLine(fmt.Sprintf("Unable to write profile: %s", err))
 	}
 
-	err = w.WriteLine(fmt.Sprintf("Mutex profile created at %s", a))
-	return err
+	return w.WriteLine(fmt.Sprintf("Mutex profile created at %s", a))
 }
 
 func sshLogLevel(l *logrus.Logger, fs interface{}, a []string, w sshd.StringWriter) error {
