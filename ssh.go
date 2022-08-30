@@ -687,21 +687,18 @@ func sshGetMutexProfile(fs interface{}, a []string, w sshd.StringWriter) error {
 
 	file, err := os.Create(a[0])
 	if err != nil {
-		err = w.WriteLine(fmt.Sprintf("Unable to create profile file: %s", err))
-		return err
+		return w.WriteLine(fmt.Sprintf("Unable to create profile file: %s", err))
 	}
 	defer file.Close()
 
 	mutexProfile := pprof.Lookup("mutex")
 	if mutexProfile == nil {
-		err = w.WriteLine("Unable to get pprof.Lookup(\"mutex\")")
-		return err
+		return w.WriteLine("Unable to get pprof.Lookup(\"mutex\")")
 	}
 
 	err = mutexProfile.WriteTo(file, 0)
 	if err != nil {
-		err = w.WriteLine(fmt.Sprintf("Unable to write profile: %s", err))
-		return err
+		return w.WriteLine(fmt.Sprintf("Unable to write profile: %s", err))
 	}
 
 	err = w.WriteLine(fmt.Sprintf("Mutex profile created at %s", a))
