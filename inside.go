@@ -45,6 +45,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	hostinfo := f.getOrHandshake(fwPacket.RemoteIP)
 	if hostinfo == nil {
+		f.rejectInside(packet, out, q)
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("vpnIp", fwPacket.RemoteIP).
 				WithField("fwPacket", fwPacket).
@@ -70,12 +71,40 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	if dropReason == nil {
 		f.sendNoMetrics(header.Message, 0, ci, hostinfo, nil, packet, nb, out, q)
 
-	} else if f.l.Level >= logrus.DebugLevel {
-		hostinfo.logger(f.l).
-			WithField("fwPacket", fwPacket).
-			WithField("reason", dropReason).
-			Debugln("dropping outbound packet")
+	} else {
+		f.rejectInside(packet, out, q)
+		if f.l.Level >= logrus.DebugLevel {
+			hostinfo.logger(f.l).
+				WithField("fwPacket", fwPacket).
+				WithField("reason", dropReason).
+				Debugln("dropping outbound packet")
+		}
 	}
+}
+
+func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
+	if !f.firewall.InSendReject {
+		return
+	}
+
+	out = iputil.CreateRejectPacket(packet, out)
+	_, err := f.readers[q].Write(out)
+	if err != nil {
+		f.l.WithError(err).Error("Failed to write to tun")
+	}
+}
+
+func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *HostInfo, nb, out []byte, q int) {
+	if !f.firewall.OutSendReject {
+		return
+	}
+
+	// Use some out buffer space to build the packet before encryption
+	// Need 40 bytes for the reject packet (20 byte ipv4 header, 20 byte tcp rst packet)
+	// Leave 100 bytes for the encrypted packet (60 byte Nebula header, 40 byte reject packet)
+	out = out[:140]
+	outPacket := iputil.CreateRejectPacket(packet, out[100:])
+	f.sendNoMetrics(header.Message, 0, ci, hostinfo, nil, outPacket, nb, out, q)
 }
 
 func (f *Interface) Handshake(vpnIp iputil.VpnIp) {
