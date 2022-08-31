@@ -29,6 +29,7 @@ func BenchmarkHotPath(b *testing.B) {
 	theirControl.Start()
 
 	r := router.NewR(b, myControl, theirControl)
+	r.CancelFlowLogs()
 
 	for n := 0; n < b.N; n++ {
 		myControl.InjectTunUDPPacket(theirVpnIp, 80, 80, []byte("Hi from me"))

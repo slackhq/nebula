@@ -63,6 +63,12 @@ type packet struct {
 	rx     bool // the packet was received by a udp device
 }
 
+func (p *packet) WasReceived() {
+	if p != nil {
+		p.rx = true
+	}
+}
+
 type ExitType int
 
 const (
@@ -91,6 +97,7 @@ func NewR(t testing.TB, controls ...*nebula.Control) *R {
 		vpnControls:  make(map[iputil.VpnIp]*nebula.Control),
 		inNat:        make(map[string]*nebula.Control),
 		outNat:       make(map[string]net.UDPAddr),
+		flow:         []flowEntry{},
 		fn:           filepath.Join("mermaid", fmt.Sprintf("%s.md", t.Name())),
 		t:            t,
 		cancelRender: cancel,
@@ -148,14 +155,24 @@ func (r *R) RenderFlow() {
 	r.renderFlow()
 }
 
+// CancelFlowLogs stops flow logs from being tracked and destroys any logs already collected
+func (r *R) CancelFlowLogs() {
+	r.cancelRender()
+	r.flow = nil
+}
+
 func (r *R) renderFlow() {
+	if r.flow == nil {
+		return
+	}
+
 	f, err := os.OpenFile(r.fn, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0644)
 	if err != nil {
 		panic(err)
 	}
 
 	var participants = map[string]struct{}{}
-	var participansVals []string
+	var participantsVals []string
 
 	fmt.Fprintln(f, "```mermaid")
 	fmt.Fprintln(f, "sequenceDiagram")
@@ -172,7 +189,7 @@ func (r *R) renderFlow() {
 		}
 		participants[addr] = struct{}{}
 		sanAddr := strings.Replace(addr, ":", "#58;", 1)
-		participansVals = append(participansVals, sanAddr)
+		participantsVals = append(participantsVals, sanAddr)
 		fmt.Fprintf(
 			f, "    participant %s as Nebula: %s<br/>UDP: %s\n",
 			sanAddr, e.packet.from.GetVpnIp(), sanAddr,
@@ -183,7 +200,7 @@ func (r *R) renderFlow() {
 	h := &header.H{}
 	for _, e := range r.flow {
 		if e.packet == nil {
-			fmt.Fprintf(f, "    note over %s: %s\n", strings.Join(participansVals, ", "), e.note)
+			fmt.Fprintf(f, "    note over %s: %s\n", strings.Join(participantsVals, ", "), e.note)
 			continue
 		}
 
@@ -222,6 +239,10 @@ func (r *R) InjectFlow(from, to *nebula.Control, p *udp.Packet) {
 }
 
 func (r *R) Log(arg ...any) {
+	if r.flow == nil {
+		return
+	}
+
 	r.Lock()
 	r.flow = append(r.flow, flowEntry{note: fmt.Sprint(arg...)})
 	r.t.Log(arg...)
@@ -229,6 +250,10 @@ func (r *R) Log(arg ...any) {
 }
 
 func (r *R) Logf(format string, arg ...any) {
+	if r.flow == nil {
+		return
+	}
+
 	r.Lock()
 	r.flow = append(r.flow, flowEntry{note: fmt.Sprintf(format, arg...)})
 	r.t.Logf(format, arg...)
@@ -236,14 +261,20 @@ func (r *R) Logf(format string, arg ...any) {
 }
 
 // unlockedInjectFlow is used by the router to record a packet has been transmitted, the packet is returned and
-// should be marked as received AFTER it has been placed on the receivers channel
+// should be marked as received AFTER it has been placed on the receivers channel.
+// If flow logs have been disabled this function will return nil
 func (r *R) unlockedInjectFlow(from, to *nebula.Control, p *udp.Packet, tun bool) *packet {
+	if r.flow == nil {
+		return nil
+	}
+
 	fp := &packet{
 		from:   from,
 		to:     to,
 		packet: p.Copy(),
 		tun:    tun,
 	}
+
 	r.flow = append(r.flow, flowEntry{packet: fp})
 	return fp
 }
@@ -285,7 +316,7 @@ func (r *R) RouteUntilTxTun(sender *nebula.Control, receiver *nebula.Control) []
 			}
 			fp := r.unlockedInjectFlow(sender, c, p, false)
 			c.InjectUDPPacket(p)
-			fp.rx = true
+			fp.WasReceived()
 			r.Unlock()
 		}
 	}
@@ -344,7 +375,7 @@ func (r *R) RouteForAllUntilTxTun(receiver *nebula.Control) []byte {
 			}
 			fp := r.unlockedInjectFlow(cm[x], c, p, false)
 			c.InjectUDPPacket(p)
-			fp.rx = true
+			fp.WasReceived()
 		}
 		r.Unlock()
 	}
@@ -381,14 +412,14 @@ func (r *R) RouteExitFunc(sender *nebula.Control, whatDo ExitFunc) {
 		case RouteAndExit:
 			fp := r.unlockedInjectFlow(sender, receiver, p, false)
 			receiver.InjectUDPPacket(p)
-			fp.rx = true
+			fp.WasReceived()
 			r.Unlock()
 			return
 
 		case KeepRouting:
 			fp := r.unlockedInjectFlow(sender, receiver, p, false)
 			receiver.InjectUDPPacket(p)
-			fp.rx = true
+			fp.WasReceived()
 
 		default:
 			panic(fmt.Sprintf("Unknown exitFunc return: %v", e))
@@ -439,7 +470,7 @@ func (r *R) InjectUDPPacket(sender, receiver *nebula.Control, packet *udp.Packet
 
 	fp := r.unlockedInjectFlow(sender, receiver, packet, false)
 	receiver.InjectUDPPacket(packet)
-	fp.rx = true
+	fp.WasReceived()
 }
 
 // RouteForUntilAfterToAddr will route for sender and return only after it sees and sends a packet destined for toAddr
@@ -503,14 +534,14 @@ func (r *R) RouteForAllExitFunc(whatDo ExitFunc) {
 		case RouteAndExit:
 			fp := r.unlockedInjectFlow(cm[x], receiver, p, false)
 			receiver.InjectUDPPacket(p)
-			fp.rx = true
+			fp.WasReceived()
 			r.Unlock()
 			return
 
 		case KeepRouting:
 			fp := r.unlockedInjectFlow(cm[x], receiver, p, false)
 			receiver.InjectUDPPacket(p)
-			fp.rx = true
+			fp.WasReceived()
 
 		default:
 			panic(fmt.Sprintf("Unknown exitFunc return: %v", e))
