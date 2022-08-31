@@ -79,17 +79,17 @@ func ipv4CreateRejectTCPPacket(packet []byte, out []byte) []byte {
 	out = out[:(outLen)]
 
 	ipHdr := out[0:ipv4.HeaderLen]
-	ipHdr[0] = ipv4.Version<<4 | (ipv4.HeaderLen >> 2)               // version, ihl
-	ipHdr[1] = 0                                                     // DSCP, ECN
-	binary.BigEndian.PutUint16(ipHdr[2:], uint16(ipv4.HeaderLen+20)) // Total Length
-	ipHdr[4] = 0                                                     // id
-	ipHdr[5] = 0                                                     //  .
-	ipHdr[6] = 0                                                     // flags, fragment offset
-	ipHdr[7] = 0                                                     //  .
-	ipHdr[8] = 64                                                    // TTL
-	ipHdr[9] = 6                                                     // protocol (tcp)
-	ipHdr[10] = 0                                                    // checksum
-	ipHdr[11] = 0                                                    //  .
+	ipHdr[0] = ipv4.Version<<4 | (ipv4.HeaderLen >> 2)    // version, ihl
+	ipHdr[1] = 0                                          // DSCP, ECN
+	binary.BigEndian.PutUint16(ipHdr[2:], uint16(outLen)) // Total Length
+	ipHdr[4] = 0                                          // id
+	ipHdr[5] = 0                                          //  .
+	ipHdr[6] = 0                                          // flags, fragment offset
+	ipHdr[7] = 0                                          //  .
+	ipHdr[8] = 64                                         // TTL
+	ipHdr[9] = 6                                          // protocol (tcp)
+	ipHdr[10] = 0                                         // checksum
+	ipHdr[11] = 0                                         //  .
 
 	// Swap dest / src IPs
 	copy(ipHdr[12:16], packet[16:20])
@@ -122,14 +122,14 @@ func ipv4CreateRejectTCPPacket(packet []byte, out []byte) []byte {
 	copy(tcpOut[2:4], tcpIn[0:2])
 	binary.BigEndian.PutUint32(tcpOut[4:], seq)
 	binary.BigEndian.PutUint32(tcpOut[8:], ackSeq)
-	tcpOut[12] = 5 << 4   // data offset,  reserved,  NS
-	tcpOut[13] = outFlags // CWR, ECE, URG, ACK, PSH, RST, SYN, FIN
-	tcpOut[14] = 0        // window size
-	tcpOut[15] = 0        //  .
-	tcpOut[16] = 0        // checksum
-	tcpOut[17] = 0        //  .
-	tcpOut[18] = 0        // URG Pointer
-	tcpOut[19] = 0        //  .
+	tcpOut[12] = (tcpLen >> 2) << 4 // data offset,  reserved,  NS
+	tcpOut[13] = outFlags           // CWR, ECE, URG, ACK, PSH, RST, SYN, FIN
+	tcpOut[14] = 0                  // window size
+	tcpOut[15] = 0                  //  .
+	tcpOut[16] = 0                  // checksum
+	tcpOut[17] = 0                  //  .
+	tcpOut[18] = 0                  // URG Pointer
+	tcpOut[19] = 0                  //  .
 
 	// Calculate checksum
 	csum := ipv4PseudoheaderChecksum(ipHdr[12:16], ipHdr[16:20], 6, tcpLen)
@@ -172,7 +172,7 @@ func CreateICMPEchoResponse(packet, out []byte) []byte {
 	return out
 }
 
-// Checksum calculates the TCP/IP checksum defined in rfc1071. The passed-in
+// calculates the TCP/IP checksum defined in rfc1071. The passed-in
 // csum is any initial checksum data that's already been computed.
 //
 // based on:
