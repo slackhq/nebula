@@ -47,7 +47,7 @@ type R struct {
 
 	fn           string
 	cancelRender context.CancelFunc
-	t            *testing.T
+	t            testing.TB
 }
 
 type flowEntry struct {
@@ -79,7 +79,7 @@ type ExitFunc func(packet *udp.Packet, receiver *nebula.Control) ExitType
 // NewR creates a new router to pass packets in a controlled fashion between the provided controllers.
 // The packet flow will be recorded in a file within the mermaid directory under the same name as the test.
 // Renders will occur automatically, roughly every 100ms, until a call to RenderFlow() is made
-func NewR(t *testing.T, controls ...*nebula.Control) *R {
+func NewR(t testing.TB, controls ...*nebula.Control) *R {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	if err := os.MkdirAll("mermaid", 0755); err != nil {
