@@ -100,21 +100,36 @@ func ipv4CreateRejectTCPPacket(packet []byte, out []byte) []byte {
 
 	// TCP RST
 	tcpIn := packet[ihl:]
+	var ackSeq, seq uint32
+	outFlags := byte(0b00000100) // RST
+
+	// Set seq and ackSeq based on how iptables/netfilter does it in Linux:
+	// - https://github.com/torvalds/linux/blob/v5.19/net/ipv4/netfilter/nf_reject_ipv4.c#L193-L221
+	inAck := tcpIn[13]&0b00010000 != 0
+	if inAck {
+		seq = binary.BigEndian.Uint32(tcpIn[8:])
+	} else {
+		inSyn := uint32((tcpIn[13] & 0b00000010) >> 1)
+		inFin := uint32(tcpIn[13] & 0b00000001)
+		// seq from the packet + syn + fin + tcp segment length
+		ackSeq = binary.BigEndian.Uint32(tcpIn[4:]) + inSyn + inFin + uint32(len(tcpIn)) - uint32(tcpIn[12]>>4)<<2
+		outFlags |= 0b00010000 // ACK
+	}
+
 	tcpOut := out[ipv4.HeaderLen:]
-	seq := binary.BigEndian.Uint32(tcpIn[4:]) + 1
 	// Swap dest / src ports
 	copy(tcpOut[0:2], tcpIn[2:4])
 	copy(tcpOut[2:4], tcpIn[0:2])
 	binary.BigEndian.PutUint32(tcpOut[4:], seq)
-	binary.BigEndian.PutUint32(tcpOut[8:], seq)
-	tcpOut[12] = 5 << 4     // data offset,  reserved,  NS
-	tcpOut[13] = 0b00010100 // CWR, ECE, URG, **ACK**, PSH, **RST**, SYN, FIN
-	tcpOut[14] = 0          // window size
-	tcpOut[15] = 0          //  .
-	tcpOut[16] = 0          // checksum
-	tcpOut[17] = 0          //  .
-	tcpOut[18] = 0          // URG Pointer
-	tcpOut[19] = 0          //  .
+	binary.BigEndian.PutUint32(tcpOut[8:], ackSeq)
+	tcpOut[12] = 5 << 4   // data offset,  reserved,  NS
+	tcpOut[13] = outFlags // CWR, ECE, URG, ACK, PSH, RST, SYN, FIN
+	tcpOut[14] = 0        // window size
+	tcpOut[15] = 0        //  .
+	tcpOut[16] = 0        // checksum
+	tcpOut[17] = 0        //  .
+	tcpOut[18] = 0        // URG Pointer
+	tcpOut[19] = 0        //  .
 
 	// Calculate checksum
 	csum := ipv4PseudoheaderChecksum(ipHdr[12:16], ipHdr[16:20], 6, tcpLen)
