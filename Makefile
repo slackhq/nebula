@@ -66,6 +66,9 @@ e2evvv: e2ev
 e2evvvv: TEST_ENV += TEST_LOGS=3
 e2evvvv: e2ev
 
+e2e-bench: TEST_FLAGS = -bench=. -benchmem -run=^$
+e2e-bench: e2e
+
 all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
 
 release: $(ALL:%=build/nebula-%.tar.gz)

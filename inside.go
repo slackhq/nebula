@@ -14,7 +14,9 @@ import (
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
-		f.l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
+		if f.l.Level >= logrus.DebugLevel {
+			f.l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
+		}
 		return
 	}
 
