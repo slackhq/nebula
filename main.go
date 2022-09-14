@@ -210,9 +210,11 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	*/
 
 	punchy := NewPunchyFromConfig(l, c)
-	if punchy.GetPunch() && !configTest {
-		l.Info("UDP hole punching enabled")
-		go hostMap.Punchy(ctx, udpConns[0])
+	if !configTest {
+		if punchy.GetPunch() {
+			l.Info("UDP hole punching enabled")
+		}
+		go hostMap.Punchy(ctx, punchy, udpConns[0])
 	}
 
 	lightHouse, err := NewLightHouseFromConfig(l, c, tunCidr, udpConns[0], punchy)

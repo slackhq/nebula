@@ -9,14 +9,16 @@ import (
 )
 
 type Punchy struct {
-	punch   atomic.Bool
-	respond atomic.Bool
-	delay   atomic.Int64
-	l       *logrus.Logger
+	punch     atomic.Bool
+	respond   atomic.Bool
+	frequency atomic.Int64
+	delay     atomic.Int64
+	l         *logrus.Logger
+	reconfig  chan struct{}
 }
 
 func NewPunchyFromConfig(l *logrus.Logger, c *config.C) *Punchy {
-	p := &Punchy{l: l}
+	p := &Punchy{l: l, reconfig: make(chan struct{})}
 
 	p.reload(c, true)
 	c.RegisterReloadCallback(func(c *config.C) {
@@ -27,7 +29,11 @@ func NewPunchyFromConfig(l *logrus.Logger, c *config.C) *Punchy {
 }
 
 func (p *Punchy) reload(c *config.C, initial bool) {
-	if initial {
+	// Notify the HostMap Punchy goroutine if punch.punch or punch.frequency is changed.
+	// Other punchy values aren't consumed by the HostMap Punchy goroutine.
+	punchyUpdated := false
+	if initial || c.HasChanged("punchy.punch") {
+		punchyUpdated = true
 		var yes bool
 		if c.IsSet("punchy.punch") {
 			yes = c.GetBool("punchy.punch", false)
@@ -37,9 +43,12 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 		}
 
 		p.punch.Store(yes)
-	} else if c.HasChanged("punchy.punch") || c.HasChanged("punchy") {
-		//TODO: it should be relatively easy to support this, just need to be able to cancel the goroutine and boot it up from here
-		p.l.Warn("Changing punchy.punch with reload is not supported, ignoring.")
+		if yes {
+			p.l.Info("punchy enabled")
+		} else {
+			p.l.Info("punchy disabled")
+		}
+
 	}
 
 	if initial || c.HasChanged("punchy.respond") || c.HasChanged("punch_back") {
@@ -65,6 +74,21 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 			p.l.Infof("punchy.delay changed to %s", p.GetDelay())
 		}
 	}
+
+	if initial || c.HasChanged("punchy.frequency") {
+		punchyUpdated = true
+		p.frequency.Store((int64)(c.GetDuration("punchy.frequency", time.Second*10)))
+		if !initial {
+			p.l.WithField("frequency", p.GetFrequency()).Infof("punchy.frequency changed to %s", p.GetFrequency())
+		}
+	}
+
+	if punchyUpdated {
+		select {
+		case p.reconfig <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (p *Punchy) GetPunch() bool {
@@ -77,4 +101,8 @@ func (p *Punchy) GetRespond() bool {
 
 func (p *Punchy) GetDelay() time.Duration {
 	return (time.Duration)(p.delay.Load())
+}
+
+func (p *Punchy) GetFrequency() time.Duration {
+	return (time.Duration)(p.frequency.Load())
 }

@@ -539,22 +539,23 @@ func (hm *HostMap) addHostInfo(hostinfo *HostInfo, f *Interface) {
 	}
 }
 
-// punchList assembles a list of all non nil RemoteList pointer entries in this hostmap
+// punchList assembles a list of all non nil remote pointer entries in this hostmap
 // The caller can then do the its work outside of the read lock
-func (hm *HostMap) punchList(rl []*RemoteList) []*RemoteList {
+func (hm *HostMap) punchList(rl []*udp.Addr) []*udp.Addr {
 	hm.RLock()
 	defer hm.RUnlock()
 
 	for _, v := range hm.Hosts {
-		if v.remotes != nil {
-			rl = append(rl, v.remotes)
+		// TODO v.remote is data-racy. Need to synchronize access (atomic or lock)
+		if v.remote != nil {
+			rl = append(rl, v.remote)
 		}
 	}
 	return rl
 }
 
 // Punchy iterates through the result of punchList() to assemble all known addresses and sends a hole punch packet to them
-func (hm *HostMap) Punchy(ctx context.Context, conn *udp.Conn) {
+func (hm *HostMap) Punchy(ctx context.Context, punchy *Punchy, conn *udp.Conn) {
 	var metricsTxPunchy metrics.Counter
 	if hm.metricsEnabled {
 		metricsTxPunchy = metrics.GetOrRegisterCounter("messages.tx.punchy", nil)
@@ -562,27 +563,31 @@ func (hm *HostMap) Punchy(ctx context.Context, conn *udp.Conn) {
 		metricsTxPunchy = metrics.NilCounter{}
 	}
 
-	var remotes []*RemoteList
+	var addrs []*udp.Addr
 	b := []byte{1}
 
-	clockSource := time.NewTicker(time.Second * 10)
+	punchInterval := punchy.GetFrequency()
+	clockSource := time.NewTicker(punchInterval)
 	defer clockSource.Stop()
 
 	for {
-		remotes = hm.punchList(remotes[:0])
-		for _, rl := range remotes {
-			//TODO: CopyAddrs generates garbage but ForEach locks for the work here, figure out which way is better
-			for _, addr := range rl.CopyAddrs(hm.preferredRanges) {
-				metricsTxPunchy.Inc(1)
-				conn.WriteTo(b, addr)
-			}
-		}
-
 		select {
 		case <-ctx.Done():
 			return
 		case <-clockSource.C:
-			continue
+			if punchy.GetPunch() {
+				addrs = hm.punchList(addrs[:0])
+				for _, a := range addrs {
+					metricsTxPunchy.Inc(1)
+					conn.WriteTo(b, a)
+				}
+			}
+		case <-punchy.reconfig:
+			frequency := punchy.GetFrequency()
+			if frequency != punchInterval {
+				punchInterval = frequency
+				clockSource.Reset(frequency)
+			}
 		}
 	}
 }

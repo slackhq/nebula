@@ -123,6 +123,9 @@ punchy:
   # Continues to punch inbound/outbound at a regular interval to avoid expiration of firewall nat mappings
   punch: true
 
+  # frequency controls the regular interval of NAT punches. Defaults to 10 seconds.
+  #frequency: 10s
+
   # respond means that a node you are trying to reach will connect back out to you if your hole punching fails
   # this is extremely useful if one node is behind a difficult nat, such as a symmetric NAT
   # Default is false
