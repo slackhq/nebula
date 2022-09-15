@@ -17,7 +17,7 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 	// This queries the lighthouse if we don't know a remote for the host
 	// We do it here to provoke the lighthouse to preempt our timer wheel and trigger the stage 1 packet to send
 	// more quickly, effect is a quicker handshake.
-	if hostinfo.remote == nil {
+	if hostinfo.remote.Load() == nil {
 		f.lightHouse.QueryServer(vpnIp, f)
 	}
 

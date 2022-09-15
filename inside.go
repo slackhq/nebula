@@ -253,7 +253,7 @@ func (f *Interface) SendVia(viaIfc interface{},
 		via.logger(f.l).WithError(err).Info("Failed to EncryptDanger in sendVia")
 		return
 	}
-	err = f.writers[0].WriteTo(out, via.remote)
+	err = f.writers[0].WriteTo(out, via.remote.Load())
 	if err != nil {
 		via.logger(f.l).WithError(err).Info("Failed to WriteTo in sendVia")
 	}
@@ -264,7 +264,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		//TODO: log warning
 		return
 	}
-	useRelay := remote == nil && hostinfo.remote == nil
+	useRelay := remote == nil && hostinfo.remote.Load() == nil
 	fullOut := out
 
 	if useRelay {
@@ -315,11 +315,11 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 			hostinfo.logger(f.l).WithError(err).
 				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
 		}
-	} else if hostinfo.remote != nil {
-		err = f.writers[q].WriteTo(out, hostinfo.remote)
+	} else if hiRemote := hostinfo.remote.Load(); hiRemote != nil {
+		err = f.writers[q].WriteTo(out, hiRemote)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).
-				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
+				WithField("udpAddr", hiRemote).Error("Failed to write outgoing packet")
 		}
 	} else {
 		// Try to send via a relay

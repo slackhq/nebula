@@ -172,7 +172,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 		c.f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 		c.f.closeTunnel(h)
 
-		c.l.WithField("vpnIp", h.vpnIp).WithField("udpAddr", h.remote).
+		c.l.WithField("vpnIp", h.vpnIp).WithField("udpAddr", h.remote.Load()).
 			Debug("Sending close tunnel message")
 		closed++
 	}
@@ -225,8 +225,9 @@ func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 		chi.Cert = c.Copy()
 	}
 
-	if h.remote != nil {
-		chi.CurrentRemote = h.remote.Copy()
+	r := h.remote.Load()
+	if r != nil {
+		chi.CurrentRemote = r.Copy()
 	}
 
 	return chi

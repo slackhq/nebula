@@ -194,7 +194,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 				continue
 			}
 			relayHostInfo, err := c.mainHostMap.QueryVpnIp(*relay)
-			if err != nil || relayHostInfo.remote == nil {
+			if err != nil || relayHostInfo.remote.Load() == nil {
 				hostinfo.logger(c.l).WithError(err).WithField("relay", relay.String()).Info("Establish tunnel to relay target.")
 				f.Handshake(*relay)
 				continue
@@ -231,7 +231,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 				}
 			} else {
 				// No relays exist or requested yet.
-				if relayHostInfo.remote != nil {
+				if relayHostInfo.remote.Load() != nil {
 					idx, err := AddRelay(c.l, relayHostInfo, c.mainHostMap, vpnIp, nil, TerminalType, Requested)
 					if err != nil {
 						hostinfo.logger(c.l).WithField("relay", relay.String()).WithError(err).Info("Failed to add relay to hostmap")

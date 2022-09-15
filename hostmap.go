@@ -151,7 +151,7 @@ func (rs *RelayState) InsertRelay(ip iputil.VpnIp, idx uint32, r *Relay) {
 type HostInfo struct {
 	sync.RWMutex
 
-	remote            *udp.Addr
+	remote            atomic.Pointer[udp.Addr]
 	remotes           *RemoteList
 	promoteCounter    atomic.Uint32
 	ConnectionState   *ConnectionState
@@ -592,10 +592,7 @@ func (hm *HostMap) Punchy(ctx context.Context, conn *udp.Conn) {
 func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface) {
 	c := i.promoteCounter.Add(1)
 	if c%PromoteEvery == 0 {
-		// The lock here is currently protecting i.remote access
-		i.RLock()
-		remote := i.remote
-		i.RUnlock()
+		remote := i.remote.Load()
 
 		// return early if we are already on a preferred remote
 		if remote != nil {
@@ -688,8 +685,8 @@ func (i *HostInfo) GetCert() *cert.NebulaCertificate {
 
 func (i *HostInfo) SetRemote(remote *udp.Addr) {
 	// We copy here because we likely got this remote from a source that reuses the object
-	if !i.remote.Equals(remote) {
-		i.remote = remote.Copy()
+	if !i.remote.Load().Equals(remote) {
+		i.remote.Store(remote.Copy())
 		i.remotes.LearnRemote(i.vpnIp, remote.Copy())
 	}
 }
@@ -701,7 +698,7 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udp.Addr) bool {
 		// relays have nil udp Addrs
 		return false
 	}
-	currentRemote := i.remote
+	currentRemote := i.remote.Load()
 	if currentRemote == nil {
 		i.SetRemote(newRemote)
 		return true
