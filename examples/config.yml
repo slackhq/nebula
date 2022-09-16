@@ -121,6 +121,7 @@ listen:
 
 punchy:
   # Continues to punch inbound/outbound at a regular interval to avoid expiration of firewall nat mappings
+  # Default is false
   punch: true
 
   # respond means that a node you are trying to reach will connect back out to you if your hole punching fails
