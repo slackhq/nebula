@@ -203,10 +203,10 @@ punchy:
   #delay: 1s
 
 
-# Cipher allows you to choose between the available ciphers for your network.
-# Options are chachapoly or aes
+# Choose between chachapoly or aes as the network cipher.
+# Default is aes
 # IMPORTANT: this value must be identical on ALL NODES/LIGHTHOUSES.
-# We do not/will not support use of different ciphers simultaneously!
+# Use of different ciphers in the same network is not supported!
 #cipher: chachapoly
 
 
