@@ -163,10 +163,17 @@ listen:
   # Default is 4242
   port: 4242
 
-  # Sets the max number of packets to pull from the kernel for each syscall
-  # (on systems that support recvmmsg).
-  # Default is 64 (reload not supported)
+  # Sets the max number of packets to pull from the kernel for each syscall.
+  # This only works on systems that support recvmmsg. On systems that don't
+  # support recvmmsg, make sure you set this to 1, otherwise the node won't be
+  # able to join the network.
+  # Systems that don't support recvmmsg include:
+  # - Older Linux kernels (< 2.6.34)
+  # - Older FreeBSD kernels (< 11.0)
+  # Reload is not supported for this option.
+  # Default is 64
   #batch: 64
+
   # Configure socket buffers for the udp side (outside), leave unset to use the
   # system defaults. Values will be doubled by the kernel.
   # Default is net.core.rmem_default and net.core.wmem_default
