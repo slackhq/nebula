@@ -54,11 +54,13 @@ static_host_map:
 
 
 lighthouse:
+  # The following is an example configuration for a lighthouse node:
+
   # Enable lighthouse functionality for this node.
   # Default is false
-  am_lighthouse: false
+  #am_lighthouse: true
 
-  # Start a simple DNS server.
+  # Start a simple DNS server. Only valid on lighthouse nodes.
   # Default is false
   #serve_dns: false
   #dns:
@@ -67,11 +69,12 @@ lighthouse:
     #host: 0.0.0.0
     #port: 53
 
-  # The number of seconds between updates from this node to a lighthouse.
-  # During updates, a node sends information about its current IP addresses
-  # to each lighthouse.
-  # Default is 10 seconds
-  interval: 60
+
+  # The following is an example configuration for a non-lighthouse node:
+
+  # Enable lighthouse functionality for this node.
+  # Default is false
+  am_lighthouse: false
 
   # List of lighthouse hosts this node should report to and query from.
   # IMPORTANT: THIS SHOULD BE EMPTY ON LIGHTHOUSE NODES
@@ -79,6 +82,13 @@ lighthouse:
   hosts:
     - "192.168.100.1"
     - "192.168.100.5"
+
+  # The number of seconds between updates from this node to a lighthouse.
+  # During updates, a node sends information about its current state and
+  # configuration to each listed lighthouse. Only valid on non-lighthouse nodes.
+  # Default is 10
+  interval: 60
+
 
   # List of allowed routable IP ranges for remote nodes. This list is checked
   # during handshake. If not specified, all IP ranges are allowed.
@@ -97,7 +107,7 @@ lighthouse:
     #"10.0.0.0/8": false
     #"10.42.42.0/24": true
 
-  # EXPERIMENTAL: This option my change or disappear in the future.
+  # EXPERIMENTAL: This option may change or disappear in the future.
   # Define the equivalent of remote_allow_list blocks, but for each specific
   # Nebula VPN IP range. Each VPN IP range can have its own list of allowable
   # routable IP ranges.
