@@ -210,11 +210,11 @@ punchy:
 #cipher: chachapoly
 
 
-# Preferred ranges is used to hint about the local network ranges, which
-# speeds up discovering the fastest path to a network adjacent nebula node.
-# NOTE: the previous option "local_range" only allowed definition of a single
-# range and has been deprecated for "preferred_ranges"
-#preferred_ranges: ["172.16.0.0/24"]
+# Advertise the locally-accessible network ranges, in order to speed up
+# discovery of the fastest path to a network-adjacent Nebula node.
+# NOTE: This replaces the older "local_range" option, which only allowed
+#       the user to define a single range.
+#preferred_ranges: ["172.16.0.0/24", "192.168.0.0/16"]
 
 
 # sshd can expose informational and administrative functions via ssh
