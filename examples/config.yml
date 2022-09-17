@@ -359,15 +359,21 @@ logging:
 
 # Handshake Manager Settings
 #handshakes:
-  # Handshakes are sent to all known addresses at each interval with a linear
-  # backoff: Wait try_interval after the 1st attempt, 2 * try_interval after
-  # the 2nd, etc, until the handshake is older than timeout.
-  # A 100ms interval with the default 10 retries will give a handshake 5.5
-  # seconds to resolve before timing out.
+  # Handshakes are sent to all known addresses at each try_interval, each with a
+  # linear backoff strategy:
+  #     Wait try_interval after the 1st attempt,
+  #     Wait 2 * try_interval after the 2nd attempt,
+  #     ...
+  #     and so on until the number of retries is reached.
+
+  # Default try_interval is 100ms
+  # Default retries is 10
+  # A 100ms interval with 10 retries will time out in 5.5 seconds.
   #try_interval: 100ms
-  #retries: 20
-  # trigger_buffer is the size of the buffer channel for quickly sending
-  # handshakes after receiving the response for lighthouse queries
+  #retries: 10
+
+  # The size of the buffer channel for quickly sending handshakes after
+  # receiving the response for lighthouse queries.
   #trigger_buffer: 64
 
 
