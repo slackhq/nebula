@@ -217,22 +217,25 @@ punchy:
 #preferred_ranges: ["172.16.0.0/24", "192.168.0.0/16"]
 
 
-# sshd can expose informational and administrative functions via ssh
 #sshd:
-  # Toggles the feature
+  # Start a simple SSH server for informational and administrative functions.
+  # Default is false
   #enabled: true
-  # Host and port to listen on, port 22 is not allowed for your safety
+
+  # Host and port to listen on. Port 22 is forbidden for security reasons.
   #listen: 127.0.0.1:2222
-  # A file containing the ssh host private key to use
+
+  # Path to the file containing the ssh server's private host key
   # A decent way to generate one:
   # ssh-keygen -t ed25519 -f ssh_host_ed25519_key -N "" < /dev/null
-  #host_key: ./ssh_host_ed25519_key
-  # A file containing a list of authorized public keys
+  #host_key: /etc/nebula/ssh_host_ed25519_key
+
+  # A list of authorized public keys that are allowed to connect
   #authorized_users:
     #- user: steeeeve
-      # keys can be an array of strings or single string
+      # keys can be a list of strings or single string
       #keys:
-        #- "ssh public key string"
+        #- "AAAAC3NzaC1lZDI1NTE5AAAAIEJ66Z7vPg8RaHddmEFj+KMMYM4miWNm0wosY4qbFY92"
 
 
 # EXPERIMENTAL: relay support for networks that can't establish direct
