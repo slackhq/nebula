@@ -241,18 +241,19 @@ punchy:
 # EXPERIMENTAL: relay support for networks that can't establish direct
 # connections.
 relay:
-  # Relays are a list of Nebula IP's that peers can use to relay packets to me.
-  # IPs in this list must have am_relay set to true in their configs, otherwise
-  # they will reject relay requests.
+  # List of Nebula IP addresses that network peers can use to relay packets to
+  # this node. Nodes listed here must be configured with "am_relay = true",
+  # otherwise they will reject relay requests.
   #relays:
     #- 192.168.100.1
-    #- <other Nebula VPN IPs of hosts used as relays to access me>
-  # Set am_relay to true to permit other hosts to list my IP in their relays
-  # config.
+    #- 192.168.100.2
+
+  # Allow other hosts to use this node as a relay.
   # Default is false
   am_relay: false
-  # Set use_relays to false to prevent this instance from attempting to
-  # establish connections through relays.
+
+  # Use relays to establish connections to other nodes if a direct connection
+  # is not possible.
   # Default is true
   use_relays: true
 
