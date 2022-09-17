@@ -380,11 +380,12 @@ logging:
 # Nebula security group configuration
 firewall:
   conntrack:
+    # The values shown here are the defaults:
     tcp_timeout: 12m
     udp_timeout: 3m
     default_timeout: 10m
 
-  # The firewall is default deny. There is no way to write a deny rule.
+  # The firewall defaults to deny all. There is no way to write a deny rule.
   # Rules are comprised of a protocol, port, and one or more of host, group,
   # or CIDR.
   # Logical evaluation is roughly:
@@ -393,30 +394,30 @@ firewall:
   #         or `fragment` to match second and further fragments of fragmented
   #         packets (since there is no port available).
   #   code: same as port but makes more sense when talking about ICMP
-  #         TODO: this is not currently implemented in a way that works, use `any`
+  #         TODO: the current implementation doesn't really work, just use `any`
   #   proto: `any`, `tcp`, `udp`, or `icmp`
-  #   host: `any` or a literal hostname, ie `test-host`
-  #   group: `any` or a literal group name, ie `default-group`
+  #   host: `any` or a literal hostname, i.e. `test-host`
+  #   group: `any` or a literal group name, i.e. `default-group`
   #   groups: Same as group but accepts a list of values. Multiple values are
-  #           AND'd together and a certificate would have to contain all groups
-  #           to pass
+  #           AND'd together, thus a certificate has to contain all specified
+  #           groups in order to match this rule.
   #   cidr: a CIDR, `0.0.0.0/0` is any.
   #   ca_name: An issuing CA name
   #   ca_sha: An issuing CA shasum
 
   outbound:
-    # Allow all outbound traffic from this node
+    # Example: allow all outbound traffic from this node
     - port: any
       proto: any
       host: any
 
   inbound:
-    # Allow icmp between any nebula hosts
+    # Example: allow icmp between any nebula hosts
     - port: any
       proto: icmp
       host: any
 
-    # Allow tcp/443 from any host with BOTH laptop and home group
+    # Example: allow tcp/443 from any host with BOTH laptop and home group
     - port: 443
       proto: tcp
       groups:
