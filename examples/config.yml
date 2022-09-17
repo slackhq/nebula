@@ -54,52 +54,62 @@ static_host_map:
 
 
 lighthouse:
-  # am_lighthouse is used to enable lighthouse functionality for a node.
-  # This should ONLY be true on lighthouse nodes.
+  # Enable lighthouse functionality for this node.
+  # Default is false
   am_lighthouse: false
-  # serve_dns optionally starts a dns listener that responds to various queries
-  # and can even be delegated to for resolution
+
+  # Start a simple DNS server.
+  # Default is false
   #serve_dns: false
   #dns:
-    # The DNS host defines the IP to bind the dns listener to. This also allows
-    # binding to the nebula node IP.
+    # Host and port that the DNS server listens at.
+    # This can be a routable IP or a Nebula node IP.
     #host: 0.0.0.0
     #port: 53
-  # interval is the number of seconds between updates from this node to a
-  # lighthouse. during updates, a node sends information about its current IP
-  # addresses to each node.
+
+  # The number of seconds between updates from this node to a lighthouse.
+  # During updates, a node sends information about its current IP addresses
+  # to each lighthouse.
   # Default is 10 seconds
   interval: 60
-  # hosts is a list of lighthouse hosts this node should report to and query from
+
+  # List of lighthouse hosts this node should report to and query from.
   # IMPORTANT: THIS SHOULD BE EMPTY ON LIGHTHOUSE NODES
   # IMPORTANT2: THIS SHOULD BE LIGHTHOUSES' NEBULA IPs, NOT THEIR ROUTABLE IPs
   hosts:
     - "192.168.100.1"
+    - "192.168.100.5"
 
-  # remote_allow_list allows you to control ip ranges that this node will
-  # consider when handshaking to another node. By default, any remote IPs are
-  # allowed. You can provide CIDRs here with `true` to allow and `false` to
-  # deny. The most specific CIDR rule applies to each remote. If all rules are
-  # "allow", the default will be "deny", and vice-versa. If both "allow" and
-  # "deny" rules are present, then you MUST set a rule for "0.0.0.0/0" as the
-  # default.
+  # List of allowed routable IP ranges for remote nodes. This list is checked
+  # during handshake. If not specified, all IP ranges are allowed.
+  # You can provide CIDRs here with `true` to allow and `false` to deny.
+  # The most specific CIDR rule applies to each remote.
+  # If all rules are "allow", the default will be "deny", and vice-versa.
+  # If both "allow" and "deny" rules are present, then you MUST set a rule
+  # for "0.0.0.0/0" as the default.
   #remote_allow_list:
-    # Example to block IPs from this subnet from being used for remote IPs.
+    # Example: block IPs in this subnet from connecting to this node.
     #"172.16.0.0/12": false
 
-    # A more complicated example, allow public IPs but only private IPs from
-    # a specific subnet
+    # A more complicated example: allow public IPs, but allow only private IPs
+    # from a specific subnet (10.42.42.0/24).
     #"0.0.0.0/0": true
     #"10.0.0.0/8": false
     #"10.42.42.0/24": true
 
   # EXPERIMENTAL: This option my change or disappear in the future.
-  # Optionally allows the definition of remote_allow_list blocks
-  # specific to an inside VPN IP CIDR.
+  # Define the equivalent of remote_allow_list blocks, but for each specific
+  # Nebula VPN IP range. Each VPN IP range can have its own list of allowable
+  # routable IP ranges.
   #remote_allow_ranges:
-    # This rule would only allow only private IPs for this VPN range
+    # Example: for Nebula VPN IP addresses in 10.42.42.0/24, allow nodes to have
+    # routable IP addresses in the 192.168.0.0/16 range.
     #"10.42.42.0/24":
       #"192.168.0.0/16": true
+    # Example: for Nebula IP addresses within 10.42.41.0/24, allow nodes to join
+    # from the 123.45.0.0/16 range.
+    #"10.42.41.0/24":
+      #"123.45.0.0/16": true
 
   # local_allow_list allows you to filter which local IP addresses we advertise
   # to the lighthouses. This uses the same logic as `remote_allow_list`, but
