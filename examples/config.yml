@@ -17,20 +17,23 @@
 # without affecting existing tunnels.
 # To reload, send a HUP to the nebula process.
 
-# PKI defines the location of credentials for this node. Each of these can also
-# be inlined by using the yaml ": |" syntax.
+# PKI defines the location of credentials for this node.
+# Each of these can also be inlined by using the yaml ": |" syntax.
 pki:
-  # The CAs that are accepted by this node. Must contain one or more
-  # certificates created by 'nebula-cert ca'
+  # Path to a file containing one or more CA certificates that will be accepted
+  # by this node. The certificates must all be created by 'nebula-cert ca'.
   ca: /etc/nebula/ca.crt
+  # cert: path to this node's certificate file
+  # key: path to this node's private key file
   cert: /etc/nebula/host.crt
   key: /etc/nebula/host.key
-  # blocklist is a list of certificate fingerprints that we will refuse to
-  # talk to
+
+  # List of certificate fingerprints that we will refuse to talk to
   #blocklist:
   #  - c99d4e650533b92061b09918e838a5a0a6aaee21eed1d12fd937682865936c72
-  # disconnect_invalid is a toggle to force a client to be disconnected if the
-  # certificate is expired or invalid.
+
+  # Force disconnect a client if their certificate is expired or invalid.
+  # Default is false
   #disconnect_invalid: false
 
 
