@@ -138,34 +138,44 @@ lighthouse:
     #- "1.2.3.4:0" # port will be replaced with the real listening port
 
 
-# Port Nebula will be listening on. The default here is 4242.
-# For a lighthouse node, the port should be defined (not 0). If port is set 0,
-# a port will be dynamically assigned. This is recommended for roaming nodes.
+# Configure the listening address for the nebula daemon.
 listen:
-  # To listen on both any ipv4 and ipv6 use "[::]"
+  # Specify the IP addresses that nebula will listen on.
+  # The default is 0.0.0.0 (all IPv4 addresses on this host)
+  # To listen on all IPv4 and IPv6 addresses, use "[::]"
   host: 0.0.0.0
+  # Specify the port that nebula will listen on.
+  # For a lighthouse node, the port should not be set to 0, otherwise the port
+  # will be randomized, thus other nodes won't be able to connect to it.
+  # For any other node, you can specify a port here, or you can set it to 0,
+  # such that a port will be dynamically assigned (this is recommended for
+  # roaming nodes).
+  # Default is 4242
   port: 4242
+
   # Sets the max number of packets to pull from the kernel for each syscall
-  # (on systems that support recvmmsg)
-  # Default is 64, and does not support reload
+  # (on systems that support recvmmsg).
+  # Default is 64 (reload not supported)
   #batch: 64
   # Configure socket buffers for the udp side (outside), leave unset to use the
   # system defaults. Values will be doubled by the kernel.
   # Default is net.core.rmem_default and net.core.wmem_default
   # (/proc/sys/net/core/rmem_default and /proc/sys/net/core/rmem_default)
-  # Maximum is limited by available memory, SO_RCVBUFFORCE and SO_SNDBUFFORCE
-  # are used to avoid having to raise the system wide max, net.core.rmem_max
-  # and net.core.wmem_max
+  # Maximum is limited by available memory. SO_RCVBUFFORCE and SO_SNDBUFFORCE
+  # are used to avoid having to raise the system wide max (net.core.rmem_max
+  # and net.core.wmem_max)
   #read_buffer: 10485760
   #write_buffer: 10485760
-  # By default, Nebula replies to packets it has no tunnel for with a
-  # "recv_error" packet. This packet helps speed up reconnection in the case
-  # that Nebula on either side did not shut down cleanly. This response can be
-  # abused as a way to discover if Nebula is running on a host though.
-  # This option lets you configure if you want to send "recv_error" packets
-  # always, never, or only to private network remotes.
-  # Valid values: always, never, private
-  # This setting is reloadable.
+
+  # Controls whether nebula should reply to packets it has no tunnel for, with
+  # a "recv_error" packet. This helps speed up reconnection in case the nebula
+  # daemon on either side of the tunnel did not shut down cleanly.
+  # However, this can also be abused to discover if nebula is running on a host.
+  # Valid values are:
+  # always: always send "recv_error" packets
+  # never: never send "recv_error" packets
+  # private: only send "recv_error" packets to nodes with private routable IPs
+  # Default is always (reload is supported)
   #send_recv_error: always
 
 
