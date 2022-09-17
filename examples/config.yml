@@ -259,38 +259,48 @@ relay:
 
 
 # Configure the private interface.
-# Note: the node's IP address is baked into the nebula certificate.
 tun:
-  # When tun is disabled, a lighthouse can be started without a local tun
-  # interface (and therefore without root).
+  # Disable the tun interface if you want this node to only serve as a
+  # lighthouse. This is useful in cases where you don't want to run the nebula
+  # daemon as root, or where root access is not available.
+  # Default is false
   disabled: false
+
   # Name of the device. If not set, a default will be chosen by the OS.
   # For macOS: if set, must be in the form `utun[0-9]+`.
-  # For FreeBSD: Required to be set, must be in the form `tun[0-9]+`.
+  # For FreeBSD: must be set, and must be in the form `tun[0-9]+`.
   dev: nebula1
-  # Toggles forwarding of local broadcast packets, the address of which
-  # depends on the ip/mask encoded in pki.cert
+
+  # Disable forwarding local broadcast packets. The broadcast address is
+  # determined by the node's Nebula IP encoded in its host certificate.
+  # Default is false
   drop_local_broadcast: false
-  # Toggles forwarding of multicast packets
+
+  # Disable forwarding of multicast packets.
+  # Default is false
   drop_multicast: false
-  # Sets the transmit queue length, if you notice lots of transmit drops on
-  # the tun it may help to raise this number.
+
+  # Transmit queue length. Try increasing this number if you notice lots of
+  # transmit drops on the tun interface.
   # Default is 500
   tx_queue: 500
+
   # Default MTU for every packet.
-  # Default is 1300, a safe setting for internet based traffic
+  # Default is 1300 (this is a safe value for internet-based traffic)
   mtu: 1300
-  # Route based MTU overrides, if you have known vpn ip paths that can support
-  # larger MTUs you can increase/decrease them here.
+
+  # Route-based MTU overrides. If some Nebula nodes are reachable via a network
+  # path that supports larger MTUs, you can specify them here.
   routes:
     #- mtu: 8800
     #  route: 10.0.0.0/16
-  # Unsafe routes allows you to route traffic over nebula to non-nebula nodes.
+
+  # Allow traffic between Nebula nodes to be routed through non-Nebula nodes.
   # Avoid unsafe routes unless you have hosts/services that cannot run nebula.
   # NOTE: The nebula certificate of the "via" node *MUST* have the "route"
   # defined as a subnet in its certificate.
-  # `mtu` will default to tun interface's mtu if this option is not specified.
-  # `metric` will default to 0 if this option is not specified.
+  # Default for mtu is the tun interface's mtu
+  # Default for metric is 0
   unsafe_routes:
     #- route: 172.16.1.0/24
     #  via: 192.168.100.99
