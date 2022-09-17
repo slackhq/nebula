@@ -1,11 +1,21 @@
-# This is the nebula example configuration file.
+# This is the sample configuration file for Nebula.
+# You must edit at least the static_host_map, lighthouse, and firewall sections.
 
-# You must edit, at a minimum, the static_host_map, lighthouse, and firewall
-# sections.
+# Basic terminology:
+# Node: a host that participates in the Nebula network. This can be a server,
+#       virtual machine, laptop, mobile phone, or any other capable host.
+# Routable IP: a node's "normal" or "native" IP address. This is typically a
+#              static public IP address for a server. For a laptop or mobile
+#              device, this is typically a dynamic IP address assigned by DHCP.
+#              If the node is behind a NAT, this is the external IP address of
+#              the NAT gateway.
+# Nebula IP: a node's "VPN" IP address. This is the IP address that nodes use to
+#            communicate within the Nebula network. This address is baked
+#            directly into the node's certificate file.
 
 # Some options in this file, including the pki section, can be reloaded
-# without affecting existing tunnels. To reload, send a HUP to the nebula
-# process.
+# without affecting existing tunnels.
+# To reload, send a HUP to the nebula process.
 
 # PKI defines the location of credentials for this node. Each of these can also
 # be inlined by using the yaml ": |" syntax.
