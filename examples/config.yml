@@ -37,16 +37,20 @@ pki:
   #disconnect_invalid: false
 
 
-# The static host map defines a set of hosts with fixed IP addresses on the
-# internet (or any network).
-# A host can have multiple fixed IP addresses defined here, and nebula will try
-# each one when establishing a tunnel.
+# The static host map defines a set of known hosts with static IP addresses.
+# Each entry maps a node's Nebula IP address to its routable IP addresses.
+# If a node has multiple routable IP addresses, nebula will try each one when
+# establishing a tunnel.
 # The syntax is:
 #   "{nebula ip}": ["{routable ip/dns name}:{routable port}"]
-# For example, if your lighthouse has the nebula IP of 192.168.100.1 and has
-# the routable ip address of 100.64.22.11 and runs on port 4242:
 static_host_map:
+  # Example: lighthouse with Nebula IP of 192.168.100.1 and routable IP address
+  #          of 100.64.22.11, with nebula listening on port 4242
   "192.168.100.1": ["100.64.22.11:4242"]
+  # Example: map a nebula node to a domain name
+  #"192.168.100.2": ["nebula.example.com:4242"]
+  # Example: a host with multiple IP addresses
+  #"192.168.100.3": ["107.63.148.70:4242", "136.144.110.48:4242"]
 
 
 lighthouse:
