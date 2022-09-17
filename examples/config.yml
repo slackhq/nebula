@@ -251,13 +251,6 @@ punchy:
 # EXPERIMENTAL: relay support for networks that can't establish direct
 # connections.
 relay:
-  # List of Nebula IP addresses that network peers can use to relay packets to
-  # this node. Nodes listed here must be configured with "am_relay = true",
-  # otherwise they will reject relay requests.
-  #relays:
-    #- 192.168.100.1
-    #- 192.168.100.2
-
   # Allow other hosts to use this node as a relay.
   # Default is false
   am_relay: false
@@ -266,6 +259,13 @@ relay:
   # is not possible.
   # Default is true
   use_relays: true
+
+  # List of Nebula IP addresses that network peers can use to relay packets to
+  # this node. Nodes listed here must be configured with "am_relay = true",
+  # otherwise they will reject relay requests.
+  #relays:
+    #- 192.168.100.1
+    #- 192.168.100.2
 
 
 # Configure the private interface.
