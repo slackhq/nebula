@@ -188,18 +188,17 @@ listen:
 
 
 punchy:
-  # Continues to punch inbound/outbound at a regular interval to avoid
-  # expiration of firewall nat mappings
+  # Send UDP packets at a regular interval to maintain the NAT hole punch and
+  # prevent it from timing out.
   # Default is false
   punch: true
 
-  # If respond is true, a node you are trying to reach will connect back out to
-  # you if your hole punching fails. This is extremely useful if one node is
-  # behind a difficult NAT, such as a symmetric NAT.
+  # Respond to test packets used for hole punching. This is useful in cases
+  # where one node is behind a symmetric NAT or double NAT.
   # Default is false
   #respond: true
 
-  # delays a punch response for misbehaving NATs, only valid if respond is true
+  # Delays a punch response, only valid if respond (see above) is true.
   # Default is 1s
   #delay: 1s
 
