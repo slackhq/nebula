@@ -18,7 +18,7 @@
 # To reload, send a HUP to the nebula process.
 
 # PKI defines the location of credentials for this node.
-# Each of these can also be inlined by using the yaml ": |" syntax.
+# Each of these can also be inlined using the yaml ": |" syntax.
 pki:
   # Path to a file containing one or more CA certificates that will be accepted
   # by this node. The certificates must all be created by 'nebula-cert ca'.
