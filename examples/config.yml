@@ -278,8 +278,8 @@ relay:
 # Configure the private interface.
 tun:
   # Disable the tun interface if you want this node to only serve as a
-  # lighthouse. This is useful in cases where you don't want to run the nebula
-  # daemon as root, or where root access is not available.
+  # lighthouse, and not join the network. This is useful in cases where you
+  # don't want or can't run the nebula daemon as root.
   # Default is false
   disabled: false
 
