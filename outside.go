@@ -34,6 +34,16 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 	}
 
 	//l.Error("in packet ", header, packet[HeaderLen:])
+	if addr != nil {
+		if ip4 := addr.IP.To4(); ip4 != nil {
+			if ipMaskContains(f.lightHouse.myVpnIp, f.lightHouse.myVpnZeros, iputil.VpnIp(binary.BigEndian.Uint32(ip4))) {
+				if f.l.Level >= logrus.DebugLevel {
+					f.l.WithField("udpAddr", addr).Debug("Refusing to process double encrypted packet")
+				}
+				return
+			}
+		}
+	}
 
 	var hostinfo *HostInfo
 	// verify if we've seen this index before, otherwise respond to the handshake initiation

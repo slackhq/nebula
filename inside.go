@@ -86,8 +86,7 @@ func (f *Interface) Handshake(vpnIp iputil.VpnIp) {
 
 // getOrHandshake returns nil if the vpnIp is not routable
 func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
-	//TODO: we can find contains without converting back to bytes
-	if f.hostMap.vpnCIDR.Contains(vpnIp.ToIP()) == false {
+	if !ipMaskContains(f.lightHouse.myVpnIp, f.lightHouse.myVpnZeros, vpnIp) {
 		vpnIp = f.inside.RouteFor(vpnIp)
 		if vpnIp == 0 {
 			return nil
