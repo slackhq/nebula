@@ -54,6 +54,10 @@
   register: addconf
   notify: restart nebula
 
+- name: nebula systemd (template)
+  copy: src=systemd.nebula@.service dest="/etc/systemd/system/nebula@.service" mode=0644 owner=root group=root
+  register: addconf
+
 - name: maybe reload systemd
   shell: systemctl daemon-reload
   when: addconf.changed
