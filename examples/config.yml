@@ -256,16 +256,25 @@ punchy:
 
 
 # EXPERIMENTAL: relay support for networks that can't establish direct
-# connections.
-relay:
+# connections. Multi-hop relays are not supported. A relay node cannot relay
+# its own packets through other relay nodes.
+#relay:
+  # The following is an example configuration for a relay node:
+
   # Allow other hosts to use this node as a relay.
   # Default is false
-  am_relay: false
+  #am_relay: true
+
+  # The following is an example configuration for a non-relay node:
+
+  # Allow other hosts to use this node as a relay.
+  # Default is false
+  #am_relay: false
 
   # Use relays to establish connections to other nodes if a direct connection
   # is not possible.
   # Default is true
-  use_relays: true
+  #use_relays: true
 
   # List of Nebula IP addresses that network peers can use to relay packets to
   # this node. Nodes listed here must be configured with "am_relay = true",
