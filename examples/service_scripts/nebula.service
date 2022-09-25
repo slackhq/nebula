@@ -5,8 +5,9 @@ After=basic.target network.target
 Before=sshd.service
 
 [Service]
+WorkingDirectory=/etc/nebula
 ExecReload=/bin/kill -HUP $MAINPID
-ExecStart=/usr/local/bin/nebula -config /etc/nebula/config.yml
+ExecStart=/usr/local/bin/nebula -config config.yml
 Restart=always
 
 [Install]
