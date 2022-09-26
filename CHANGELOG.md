@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   confusion on hosts that have unsafe routes configured. (#741)
 
 - The ssh `reload` command did not work on Windows, since it relied on sending
-  a SIGHUP signal internal. This has been fixed. (#725)
+  a SIGHUP signal internally. This has been fixed. (#725)
 
 - A regression in v1.5.2 that broke unsafe routes on Mobile clients has been
   fixed. (#729)
