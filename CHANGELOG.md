@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2022-09-26
+
+### Fixed
+
+- Refuse to process underlay packets received from overlay IPs. This prevents
+  confusion on hosts that have unsafe routes configured. (#741)
+
+- The ssh `reload` command did not work on Windows, since it relied on sending
+  a SIGHUP signal internal. This has been fixed. (#725)
+
+- A regression in v1.5.2 that broke unsafe routes on Mobile clients has been
+  fixed. (#729)
+
 ## [1.6.0] - 2022-06-30
 
 ### Added
@@ -385,7 +398,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/slackhq/nebula/releases/tag/v1.6.1
 [1.6.0]: https://github.com/slackhq/nebula/releases/tag/v1.6.0
 [1.5.2]: https://github.com/slackhq/nebula/releases/tag/v1.5.2
 [1.5.0]: https://github.com/slackhq/nebula/releases/tag/v1.5.0
