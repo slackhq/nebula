@@ -55,7 +55,7 @@ func doService(configPath *string, configTest *bool, build string, serviceFlag *
 		if err != nil {
 			panic(err)
 		}
-		*configPath = filepath.Dir(ex) + "/config.yaml"
+		*configPath = filepath.Dir(ex) + "/config.yml"
 	}
 
 	svcConfig := &service.Config{
