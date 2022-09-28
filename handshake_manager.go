@@ -137,14 +137,6 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 		return
 	}
 
-	// We only care about a lighthouse trigger before the first handshake transmit attempt. This is a very specific
-	// optimization for a fast lighthouse reply
-	//TODO: it would feel better to do this once, anytime, as our delay increases over time
-	if lighthouseTriggered && hostinfo.HandshakeCounter > 0 {
-		// If we didn't return here a lighthouse could cause us to aggressively send handshakes
-		return
-	}
-
 	// Get a remotes object if we don't already have one.
 	// This is mainly to protect us as this should never be the case
 	// NB ^ This comment doesn't jive. It's how the thing gets intiailized.
@@ -153,8 +145,20 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 		hostinfo.remotes = c.lightHouse.QueryCache(vpnIp)
 	}
 
+	remoteCount := hostinfo.remotes.Len(c.pendingHostMap.preferredRanges)
+
+	// We only care about a lighthouse trigger before the first handshake transmit attempt, or if we have new remotes
+	// to send to. This is a very specific optimization for a fast lighthouse reply.
+	// TODO: it would feel better to do this once, anytime, as our delay increases over time
+	if lighthouseTriggered && hostinfo.HandshakeCounter > 0 && remoteCount <= hostinfo.HandshakeLastRemotes {
+		// If we didn't return here a lighthouse could cause us to aggressively send handshakes
+		return
+	}
+
+	hostinfo.HandshakeLastRemotes = remoteCount
+
 	//TODO: this will generate a load of queries for hosts with only 1 ip (i'm not using a lighthouse, static mapped)
-	if hostinfo.remotes.Len(c.pendingHostMap.preferredRanges) <= 1 {
+	if !lighthouseTriggered && remoteCount <= 1 {
 		// If we only have 1 remote it is highly likely our query raced with the other host registered within the lighthouse
 		// Our vpnIp here has a tunnel with a lighthouse but has yet to send a host update packet there so we only know about
 		// the learned public ip for them. Query again to short circuit the promotion counter

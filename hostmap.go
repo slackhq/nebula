@@ -151,22 +151,23 @@ func (rs *RelayState) InsertRelay(ip iputil.VpnIp, idx uint32, r *Relay) {
 type HostInfo struct {
 	sync.RWMutex
 
-	remote            *udp.Addr
-	remotes           *RemoteList
-	promoteCounter    uint32
-	ConnectionState   *ConnectionState
-	handshakeStart    time.Time        //todo: this an entry in the handshake manager
-	HandshakeReady    bool             //todo: being in the manager means you are ready
-	HandshakeCounter  int              //todo: another handshake manager entry
-	HandshakeComplete bool             //todo: this should go away in favor of ConnectionState.ready
-	HandshakePacket   map[uint8][]byte //todo: this is other handshake manager entry
-	packetStore       []*cachedPacket  //todo: this is other handshake manager entry
-	remoteIndexId     uint32
-	localIndexId      uint32
-	vpnIp             iputil.VpnIp
-	recvError         int
-	remoteCidr        *cidr.Tree4
-	relayState        RelayState
+	remote               *udp.Addr
+	remotes              *RemoteList
+	promoteCounter       uint32
+	ConnectionState      *ConnectionState
+	handshakeStart       time.Time        //todo: this an entry in the handshake manager
+	HandshakeReady       bool             //todo: being in the manager means you are ready
+	HandshakeCounter     int              //todo: another handshake manager entry
+	HandshakeLastRemotes int              //todo: another handshake manager entry, how many remotes we sent to last attempt
+	HandshakeComplete    bool             //todo: this should go away in favor of ConnectionState.ready
+	HandshakePacket      map[uint8][]byte //todo: this is other handshake manager entry
+	packetStore          []*cachedPacket  //todo: this is other handshake manager entry
+	remoteIndexId        uint32
+	localIndexId         uint32
+	vpnIp                iputil.VpnIp
+	recvError            int
+	remoteCidr           *cidr.Tree4
+	relayState           RelayState
 
 	// lastRebindCount is the other side of Interface.rebindCount, if these values don't match then we need to ask LH
 	// for a punch from the remote end of this tunnel. The goal being to prime their conntrack for our traffic just like
