@@ -108,6 +108,8 @@ func Test_NewHandshakeManagerTrigger(t *testing.T) {
 
 	uaddr := udp.NewAddrFromString("10.1.1.1:4242")
 	hi.remotes.unlockedPrependV4(ip, NewIp4AndPort(uaddr.IP, uint32(uaddr.Port)))
+	// TODO figure out what is going on in this test
+	hi.HandshakeLastRemotes = 1
 
 	// We now have remotes but only the first trigger should have pushed things forward
 	blah.handleOutbound(ip, mw, true)
