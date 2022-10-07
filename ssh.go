@@ -264,13 +264,13 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 		},
 	})
 
-    ssh.RegisterCommand(&sshd.Command{
-        Name:             "device-info",
-        ShortDescription: "Prints information about the network device.",
-        Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-            return sshDeviceInfo(ifce, fs, a, w)
-        },
-    })
+	ssh.RegisterCommand(&sshd.Command{
+		Name:             "device-info",
+		ShortDescription: "Prints information about the network device.",
+		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
+			return sshDeviceInfo(ifce, fs, a, w)
+		},
+	})
 
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "print-cert",
@@ -885,7 +885,7 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 }
 
 func sshDeviceInfo(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
-    return w.WriteLine(fmt.Sprintf("name=%v cidr=%v", ifce.inside.Name(), ifce.inside.Cidr().String()))
+	return w.WriteLine(fmt.Sprintf("name=%v cidr=%v", ifce.inside.Name(), ifce.inside.Cidr().String()))
 }
 
 func sshReload(c *config.C, w sshd.StringWriter) error {
