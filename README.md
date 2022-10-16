@@ -76,7 +76,7 @@ Nebula lighthouses allow nodes to find each other, anywhere in the world. A ligh
 
 
 ##### Optional - Storing your certificate authority key as a GPG encrypted file
-A simple way to keep your CA key safe and encrypted at rest is to store it as a GPG encrypted file and pipe the decrypted contents to `nebula-cert` at runtime via standard input. This avoids keeping your certificate authority private key from being stored in a readable plaintext format when not in use.
+A simple way to keep your CA key safe and encrypted at rest is to store it as a GPG encrypted file and pipe the decrypted contents to `nebula-cert` at runtime via standard input. This keeps your certificate authority private key from being stored in a readable cleartext format when not in use.
 
 Creating a new GPG key is outside the scope of this quickstart guide, but a good introductory guide to GPG can be found [here](https://help.ubuntu.com/community/GnuPrivacyGuardHowto). Assuming you have a GPG key set up already, you can encrypt your `ca.key` file to create an encrypted version `ca.key.asc`:
 ```
