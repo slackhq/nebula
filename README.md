@@ -74,6 +74,21 @@ Nebula lighthouses allow nodes to find each other, anywhere in the world. A ligh
   ```
   This will create files named `ca.key` and `ca.cert` in the current directory. The `ca.key` file is the most sensitive file you'll create, because it is the key used to sign the certificates for individual nebula nodes/hosts. Please store this file somewhere safe, preferably with strong encryption.
 
+
+##### Optional - Storing your certificate authority key as a GPG encrypted file
+A simple way to keep your CA key safe and encrypted at rest is to store it as a GPG encrypted file and pipe the decrypted contents to `nebula-cert` at runtime via standard input. This avoids keeping your certificate authority private key from being stored in a readable plaintext format when not in use.
+
+Creating a new GPG key is outside the scope of this quickstart guide, but a good introductory guide to GPG can be found [here](https://help.ubuntu.com/community/GnuPrivacyGuardHowto). Assuming you have a GPG key set up already, you can encrypt your `ca.key` file to create an encrypted version `ca.key.asc`:
+```
+gpg --encrypt --armor -r yourgpgkey@example.com ca.key
+```
+
+You can then delete your plaintext `ca.key` and perform any signing operations directly from your encrypted `ca.key.asc` using the following command:
+```
+gpg -d ca.key.asc | nebula-cert sign -ca-key /dev/stdin [the rest of your signing command]
+```
+
+
 #### 4. Nebula host keys and certificates generated from that certificate authority
 This assumes you have four nodes, named lighthouse1, laptop, server1, host3. You can name the nodes any way you'd like, including FQDN. You'll also need to choose IP addresses and the associated subnet. In this example, we are creating a nebula network that will use 192.168.100.x/24 as its network range. This example also demonstrates nebula groups, which can later be used to define traffic rules in a nebula network.
 ```
