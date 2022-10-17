@@ -53,6 +53,9 @@ type HandshakeManager struct {
 	metricTimedOut         metrics.Counter
 	l                      *logrus.Logger
 
+	multiPort MultiPortConfig
+	udpRaw    *udp.RawConn
+
 	// can be used to trigger outbound handshake for the given vpnIp
 	trigger chan iputil.VpnIp
 }
@@ -163,6 +166,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 
 	// Send a the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
 	var sentTo []*udp.Addr
+	var sentMultiport bool
 	hostinfo.remotes.ForEach(c.pendingHostMap.preferredRanges, func(addr *udp.Addr, _ bool) {
 		c.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
 		err = c.outside.WriteTo(hostinfo.HandshakePacket[0], addr)
@@ -175,6 +179,27 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 		} else {
 			sentTo = append(sentTo, addr)
 		}
+
+		// Attempt a multiport handshake if we are past the TxHandshakeDelay attempts
+		if c.multiPort.TxHandshake && c.udpRaw != nil && hostinfo.HandshakeCounter >= c.multiPort.TxHandshakeDelay {
+			sentMultiport = true
+			// We need to re-allocate with 8 bytes at the start of SOCK_RAW
+			raw := hostinfo.HandshakePacket[0x80]
+			if raw == nil {
+				raw = make([]byte, len(hostinfo.HandshakePacket[0])+udp.RawOverhead)
+				copy(raw[udp.RawOverhead:], hostinfo.HandshakePacket[0])
+				hostinfo.HandshakePacket[0x80] = raw
+			}
+
+			c.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
+			err = c.udpRaw.WriteTo(raw, udp.RandomSendPort.UDPSendPort(c.multiPort.TxPorts), addr)
+			if err != nil {
+				hostinfo.logger(c.l).WithField("udpAddr", addr).
+					WithField("initiatorIndex", hostinfo.localIndexId).
+					WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+					WithError(err).Error("Failed to send handshake message")
+			}
+		}
 	})
 
 	// Don't be too noisy or confusing if we fail to send a handshake - if we don't get through we'll eventually log a timeout
@@ -182,6 +207,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 		hostinfo.logger(c.l).WithField("udpAddrs", sentTo).
 			WithField("initiatorIndex", hostinfo.localIndexId).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+			WithField("multiportHandshake", sentMultiport).
 			Info("Handshake message sent")
 	}
 

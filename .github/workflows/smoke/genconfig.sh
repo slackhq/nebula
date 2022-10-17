@@ -48,6 +48,10 @@ listen:
 
 tun:
   dev: ${TUN_DEV:-nebula1}
+  multiport:
+    tx_enabled: ${MULTIPORT_TX:-false}
+    rx_enabled: ${MULTIPORT_RX:-false}
+    tx_handshake: ${MULTIPORT_HANDSHAKE:-false}
 
 firewall:
   outbound: ${OUTBOUND:-$FIREWALL_ALL}

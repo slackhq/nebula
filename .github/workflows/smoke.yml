@@ -53,4 +53,12 @@ jobs:
       working-directory: ./.github/workflows/smoke
       run: ./smoke-relay.sh
 
+    - name: setup docker image for multiport
+      working-directory: ./.github/workflows/smoke
+      run: NAME="smoke-multiport" MULTIPORT_TX=true MULTIPORT_RX=true MULTIPORT_HANDSHAKE=true ./build.sh
+
+    - name: run smoke
+      working-directory: ./.github/workflows/smoke
+      run: ./smoke.sh
+
     timeout-minutes: 10

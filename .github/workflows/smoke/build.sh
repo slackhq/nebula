@@ -36,4 +36,4 @@ mkdir ./build
     ../../../../nebula-cert sign -name "host4" -groups "host,host4" -ip "192.168.100.4/24"
 )
 
-sudo docker build -t nebula:smoke .
+sudo docker build -t "nebula:${NAME:-smoke}" .

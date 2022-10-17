@@ -80,12 +80,24 @@ type Interface struct {
 
 	writers []*udp.Conn
 	readers []io.ReadWriteCloser
+	udpRaw  *udp.RawConn
+
+	multiPort MultiPortConfig
 
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
 	cachedPacketMetrics *cachedPacketMetrics
 
 	l *logrus.Logger
+}
+
+type MultiPortConfig struct {
+	Tx               bool
+	Rx               bool
+	TxBasePort       uint16
+	TxPorts          int
+	TxHandshake      bool
+	TxHandshakeDelay int
 }
 
 type sendRecvErrorConfig uint8
@@ -193,6 +205,8 @@ func (f *Interface) activate() {
 		Info("Nebula interface is active")
 
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
+
+	metrics.GetOrRegisterGauge("multiport.tx_ports", nil).Update(int64(f.multiPort.TxPorts))
 
 	// Prepare n tun queues
 	var reader io.ReadWriteCloser = f.inside
@@ -378,6 +392,8 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 
 	udpStats := udp.NewUDPStatsEmitter(f.writers)
 
+	var rawStats func()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -386,6 +402,12 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 			f.firewall.EmitStats()
 			f.handshakeManager.EmitStats()
 			udpStats()
+			if f.udpRaw != nil {
+				if rawStats == nil {
+					rawStats = udp.NewRawStatsEmitter(f.udpRaw)
+				}
+				rawStats()
+			}
 		}
 	}
 }

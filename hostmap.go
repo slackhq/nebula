@@ -154,6 +154,8 @@ type HostInfo struct {
 	remote            *udp.Addr
 	remotes           *RemoteList
 	promoteCounter    uint32
+	multiportTx       bool
+	multiportRx       bool
 	ConnectionState   *ConnectionState
 	handshakeStart    time.Time        //todo: this an entry in the handshake manager
 	HandshakeReady    bool             //todo: being in the manager means you are ready

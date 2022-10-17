@@ -175,6 +175,10 @@ smoke-relay-docker: bin-docker
 	cd .github/workflows/smoke/ && ./build-relay.sh
 	cd .github/workflows/smoke/ && ./smoke-relay.sh
 
+smoke-multiport-docker: bin-docker
+	cd .github/workflows/smoke/ && NAME="smoke-multiport" MULTIPORT_TX=true MULTIPORT_RX=true MULTIPORT_HANDSHAKE=true ./build.sh
+	cd .github/workflows/smoke/ && NAME="smoke-multiport" ./smoke.sh
+
 smoke-docker-race: BUILD_ARGS = -race
 smoke-docker-race: smoke-docker
 
