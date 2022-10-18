@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"flag"
 	"fmt"
@@ -26,6 +28,8 @@ type caFlags struct {
 	groups      *string
 	ips         *string
 	subnets     *string
+
+	curve *string
 }
 
 func newCaFlags() *caFlags {
@@ -39,6 +43,7 @@ func newCaFlags() *caFlags {
 	cf.groups = cf.set.String("groups", "", "Optional: comma separated list of groups. This will limit which groups subordinate certs can use")
 	cf.ips = cf.set.String("ips", "", "Optional: comma separated list of ipv4 address and network in CIDR notation. This will limit which ipv4 addresses and networks subordinate certs can use for ip addresses")
 	cf.subnets = cf.set.String("subnets", "", "Optional: comma separated list of ipv4 address and network in CIDR notation. This will limit which ipv4 addresses and networks subordinate certs can use in subnets")
+	cf.curve = cf.set.String("curve", "25519", "EdDSA/ECDSA Curve (25519, P256)")
 	return &cf
 }
 
@@ -109,9 +114,25 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 		}
 	}
 
-	pub, rawPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return fmt.Errorf("error while generating ed25519 keys: %s", err)
+	var curve cert.Curve
+	var pub, rawPriv []byte
+	switch *cf.curve {
+	case "25519", "X25519", "Curve25519", "CURVE25519":
+		curve = cert.Curve_CURVE25519
+		pub, rawPriv, err = ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return fmt.Errorf("error while generating ed25519 keys: %s", err)
+		}
+	case "P256":
+		var key *ecdsa.PrivateKey
+		curve = cert.Curve_P256
+		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return fmt.Errorf("error while generating ecdsa keys: %s", err)
+		}
+		// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L60
+		rawPriv = key.D.FillBytes(make([]byte, 32))
+		pub = elliptic.Marshal(elliptic.P256(), key.X, key.Y)
 	}
 
 	nc := cert.NebulaCertificate{
@@ -124,6 +145,7 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 			NotAfter:  time.Now().Add(*cf.duration),
 			PublicKey: pub,
 			IsCA:      true,
+			Curve:     curve,
 		},
 	}
 
@@ -140,7 +162,7 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 		return fmt.Errorf("error while signing: %s", err)
 	}
 
-	err = ioutil.WriteFile(*cf.outKeyPath, cert.MarshalEd25519PrivateKey(rawPriv), 0600)
+	err = ioutil.WriteFile(*cf.outKeyPath, cert.MarshalSigningPrivateKey(curve, rawPriv), 0600)
 	if err != nil {
 		return fmt.Errorf("error while writing out-key: %s", err)
 	}

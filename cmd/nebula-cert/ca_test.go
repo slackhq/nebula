@@ -26,6 +26,8 @@ func Test_caHelp(t *testing.T) {
 	assert.Equal(
 		t,
 		"Usage of "+os.Args[0]+" ca <flags>: create a self signed certificate authority\n"+
+			"  -curve string\n"+
+			"    \tEdDSA/ECDSA Curve (25519, P256) (default \"25519\")\n"+
 			"  -duration duration\n"+
 			"    \tOptional: amount of time the certificate should be valid for. Valid time units are seconds: \"s\", minutes: \"m\", hours: \"h\" (default 8760h0m0s)\n"+
 			"  -groups string\n"+

@@ -2,7 +2,9 @@ package cert
 
 import (
 	"bytes"
-	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -10,11 +12,11 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net"
 	"time"
 
 	"golang.org/x/crypto/curve25519"
-	"golang.org/x/crypto/ed25519"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -26,6 +28,10 @@ const (
 	X25519PublicKeyBanner   = "NEBULA X25519 PUBLIC KEY"
 	Ed25519PrivateKeyBanner = "NEBULA ED25519 PRIVATE KEY"
 	Ed25519PublicKeyBanner  = "NEBULA ED25519 PUBLIC KEY"
+
+	P256PrivateKeyBanner      = "NEBULA P256 PRIVATE KEY"
+	P256PublicKeyBanner       = "NEBULA P256 PUBLIC KEY"
+	ECDSAP256PrivateKeyBanner = "NEBULA ECDSA P256 PRIVATE KEY"
 )
 
 type NebulaCertificate struct {
@@ -46,6 +52,8 @@ type NebulaCertificateDetails struct {
 
 	// Map of groups for faster lookup
 	InvertedGroups map[string]struct{}
+
+	Curve Curve
 }
 
 type m map[string]interface{}
@@ -84,6 +92,7 @@ func UnmarshalNebulaCertificate(b []byte) (*NebulaCertificate, error) {
 			PublicKey:      make([]byte, len(rc.Details.PublicKey)),
 			IsCA:           rc.Details.IsCA,
 			InvertedGroups: make(map[string]struct{}),
+			Curve:          rc.Details.Curve,
 		},
 		Signature: make([]byte, len(rc.Signature)),
 	}
@@ -134,6 +143,28 @@ func UnmarshalNebulaCertificateFromPEM(b []byte) (*NebulaCertificate, []byte, er
 	return nc, r, err
 }
 
+func MarshalPrivateKey(curve Curve, b []byte) []byte {
+	switch curve {
+	case Curve_CURVE25519:
+		return pem.EncodeToMemory(&pem.Block{Type: X25519PrivateKeyBanner, Bytes: b})
+	case Curve_P256:
+		return pem.EncodeToMemory(&pem.Block{Type: P256PrivateKeyBanner, Bytes: b})
+	default:
+		return nil
+	}
+}
+
+func MarshalSigningPrivateKey(curve Curve, b []byte) []byte {
+	switch curve {
+	case Curve_CURVE25519:
+		return pem.EncodeToMemory(&pem.Block{Type: Ed25519PrivateKeyBanner, Bytes: b})
+	case Curve_P256:
+		return pem.EncodeToMemory(&pem.Block{Type: ECDSAP256PrivateKeyBanner, Bytes: b})
+	default:
+		return nil
+	}
+}
+
 // MarshalX25519PrivateKey is a simple helper to PEM encode an X25519 private key
 func MarshalX25519PrivateKey(b []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: X25519PrivateKeyBanner, Bytes: b})
@@ -142,6 +173,52 @@ func MarshalX25519PrivateKey(b []byte) []byte {
 // MarshalEd25519PrivateKey is a simple helper to PEM encode an Ed25519 private key
 func MarshalEd25519PrivateKey(key ed25519.PrivateKey) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: Ed25519PrivateKeyBanner, Bytes: key})
+}
+
+func UnmarshalPrivateKey(b []byte) ([]byte, []byte, Curve, error) {
+	k, r := pem.Decode(b)
+	if k == nil {
+		return nil, r, 0, fmt.Errorf("input did not contain a valid PEM encoded block")
+	}
+	var expectedLen int
+	var curve Curve
+	switch k.Type {
+	case X25519PrivateKeyBanner:
+		expectedLen = 32
+		curve = Curve_CURVE25519
+	case P256PrivateKeyBanner:
+		expectedLen = 32
+		curve = Curve_P256
+	default:
+		return nil, r, 0, fmt.Errorf("bytes did not contain a proper nebula private key banner")
+	}
+	if len(k.Bytes) != expectedLen {
+		return nil, r, 0, fmt.Errorf("key was not %d bytes, is invalid %s private key", expectedLen, curve)
+	}
+	return k.Bytes, r, curve, nil
+}
+
+func UnmarshalSigningPrivateKey(b []byte) ([]byte, []byte, Curve, error) {
+	k, r := pem.Decode(b)
+	if k == nil {
+		return nil, r, 0, fmt.Errorf("input did not contain a valid PEM encoded block")
+	}
+	var curve Curve
+	switch k.Type {
+	case Ed25519PrivateKeyBanner:
+		curve = Curve_CURVE25519
+		if len(k.Bytes) != ed25519.PrivateKeySize {
+			return nil, r, 0, fmt.Errorf("key was not %d bytes, is invalid Ed25519 private key", ed25519.PrivateKeySize)
+		}
+	case ECDSAP256PrivateKeyBanner:
+		curve = Curve_P256
+		if len(k.Bytes) != 32 {
+			return nil, r, 0, fmt.Errorf("key was not 32 bytes, is invalid ECDSA P256 private key")
+		}
+	default:
+		return nil, r, 0, fmt.Errorf("bytes did not contain a proper nebula Ed25519/ECDSA private key banner")
+	}
+	return k.Bytes, r, curve, nil
 }
 
 // UnmarshalX25519PrivateKey will try to pem decode an X25519 private key, returning any other bytes b
@@ -178,6 +255,17 @@ func UnmarshalEd25519PrivateKey(b []byte) (ed25519.PrivateKey, []byte, error) {
 	return k.Bytes, r, nil
 }
 
+func MarshalPublicKey(curve Curve, b []byte) []byte {
+	switch curve {
+	case Curve_CURVE25519:
+		return pem.EncodeToMemory(&pem.Block{Type: X25519PublicKeyBanner, Bytes: b})
+	case Curve_P256:
+		return pem.EncodeToMemory(&pem.Block{Type: P256PublicKeyBanner, Bytes: b})
+	default:
+		return nil
+	}
+}
+
 // MarshalX25519PublicKey is a simple helper to PEM encode an X25519 public key
 func MarshalX25519PublicKey(b []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: X25519PublicKeyBanner, Bytes: b})
@@ -186,6 +274,30 @@ func MarshalX25519PublicKey(b []byte) []byte {
 // MarshalEd25519PublicKey is a simple helper to PEM encode an Ed25519 public key
 func MarshalEd25519PublicKey(key ed25519.PublicKey) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: Ed25519PublicKeyBanner, Bytes: key})
+}
+
+func UnmarshalPublicKey(b []byte) ([]byte, []byte, Curve, error) {
+	k, r := pem.Decode(b)
+	if k == nil {
+		return nil, r, 0, fmt.Errorf("input did not contain a valid PEM encoded block")
+	}
+	var expectedLen int
+	var curve Curve
+	switch k.Type {
+	case X25519PublicKeyBanner:
+		expectedLen = 32
+		curve = Curve_CURVE25519
+	case P256PublicKeyBanner:
+		// Uncompressed
+		expectedLen = 65
+		curve = Curve_P256
+	default:
+		return nil, r, 0, fmt.Errorf("bytes did not contain a proper nebula public key banner")
+	}
+	if len(k.Bytes) != expectedLen {
+		return nil, r, 0, fmt.Errorf("key was not %d bytes, is invalid %s public key", expectedLen, curve)
+	}
+	return k.Bytes, r, curve, nil
 }
 
 // UnmarshalX25519PublicKey will try to pem decode an X25519 public key, returning any other bytes b
@@ -223,27 +335,61 @@ func UnmarshalEd25519PublicKey(b []byte) (ed25519.PublicKey, []byte, error) {
 }
 
 // Sign signs a nebula cert with the provided private key
-func (nc *NebulaCertificate) Sign(key ed25519.PrivateKey) error {
+func (nc *NebulaCertificate) Sign(key []byte) error {
 	b, err := proto.Marshal(nc.getRawDetails())
 	if err != nil {
 		return err
 	}
 
-	sig, err := key.Sign(rand.Reader, b, crypto.Hash(0))
-	if err != nil {
-		return err
+	var sig []byte
+
+	switch nc.Details.Curve {
+	case Curve_CURVE25519:
+		signer := ed25519.PrivateKey(key)
+		sig = ed25519.Sign(signer, b)
+	case Curve_P256:
+		x, y := elliptic.Unmarshal(elliptic.P256(), nc.Details.PublicKey)
+		signer := &ecdsa.PrivateKey{
+			PublicKey: ecdsa.PublicKey{
+				Curve: elliptic.P256(),
+				X:     x, Y: y,
+			},
+			// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L95
+			D: new(big.Int).SetBytes(key),
+		}
+
+		// We need to hash first for ECDSA
+		// - https://pkg.go.dev/crypto/ecdsa#SignASN1
+		hashed := sha256.Sum256(b)
+		sig, err = ecdsa.SignASN1(rand.Reader, signer, hashed[:])
+		if err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("invalid curve: %s", nc.Details.Curve)
 	}
+
 	nc.Signature = sig
 	return nil
 }
 
 // CheckSignature verifies the signature against the provided public key
-func (nc *NebulaCertificate) CheckSignature(key ed25519.PublicKey) bool {
+func (nc *NebulaCertificate) CheckSignature(key []byte) bool {
 	b, err := proto.Marshal(nc.getRawDetails())
 	if err != nil {
 		return false
 	}
-	return ed25519.Verify(key, b, nc.Signature)
+	switch nc.Details.Curve {
+	case Curve_CURVE25519:
+		return ed25519.Verify(ed25519.PublicKey(key), b, nc.Signature)
+	case Curve_P256:
+		x, y := elliptic.Unmarshal(elliptic.P256(), key)
+		pubKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+		hashed := sha256.Sum256(b)
+		return ecdsa.VerifyASN1(pubKey, hashed[:], nc.Signature)
+	default:
+		return false
+	}
 }
 
 // Expired will return true if the nebula cert is too young or too old compared to the provided time, otherwise false
@@ -324,22 +470,43 @@ func (nc *NebulaCertificate) CheckRootConstrains(signer *NebulaCertificate) erro
 }
 
 // VerifyPrivateKey checks that the public key in the Nebula certificate and a supplied private key match
-func (nc *NebulaCertificate) VerifyPrivateKey(key []byte) error {
+func (nc *NebulaCertificate) VerifyPrivateKey(curve Curve, key []byte) error {
 	if nc.Details.IsCA {
-		// the call to PublicKey below will panic slice bounds out of range otherwise
-		if len(key) != ed25519.PrivateKeySize {
-			return fmt.Errorf("key was not 64 bytes, is invalid ed25519 private key")
-		}
+		switch curve {
+		case Curve_CURVE25519:
+			// the call to PublicKey below will panic slice bounds out of range otherwise
+			if len(key) != ed25519.PrivateKeySize {
+				return fmt.Errorf("key was not 64 bytes, is invalid ed25519 private key")
+			}
 
-		if !ed25519.PublicKey(nc.Details.PublicKey).Equal(ed25519.PrivateKey(key).Public()) {
-			return fmt.Errorf("public key in cert and private key supplied don't match")
+			if !ed25519.PublicKey(nc.Details.PublicKey).Equal(ed25519.PrivateKey(key).Public()) {
+				return fmt.Errorf("public key in cert and private key supplied don't match")
+			}
+		case Curve_P256:
+			x, y := elliptic.P256().ScalarBaseMult(key)
+			pub := elliptic.Marshal(elliptic.P256(), x, y)
+			if !bytes.Equal(pub, nc.Details.PublicKey) {
+				return fmt.Errorf("public key in cert and private key supplied don't match")
+			}
+		default:
+			return fmt.Errorf("invalid curve: %s", curve)
 		}
 		return nil
 	}
 
-	pub, err := curve25519.X25519(key, curve25519.Basepoint)
-	if err != nil {
-		return err
+	var pub []byte
+	switch curve {
+	case Curve_CURVE25519:
+		var err error
+		pub, err = curve25519.X25519(key, curve25519.Basepoint)
+		if err != nil {
+			return err
+		}
+	case Curve_P256:
+		x, y := elliptic.P256().ScalarBaseMult(key)
+		pub = elliptic.Marshal(elliptic.P256(), x, y)
+	default:
+		return fmt.Errorf("invalid curve: %s", curve)
 	}
 	if !bytes.Equal(pub, nc.Details.PublicKey) {
 		return fmt.Errorf("public key in cert and private key supplied don't match")
@@ -393,6 +560,7 @@ func (nc *NebulaCertificate) String() string {
 	s += fmt.Sprintf("\t\tIs CA: %v\n", nc.Details.IsCA)
 	s += fmt.Sprintf("\t\tIssuer: %s\n", nc.Details.Issuer)
 	s += fmt.Sprintf("\t\tPublic key: %x\n", nc.Details.PublicKey)
+	s += fmt.Sprintf("\t\tCurve: %s\n", nc.Details.Curve)
 	s += "\t}\n"
 	fp, err := nc.Sha256Sum()
 	if err == nil {
@@ -413,6 +581,7 @@ func (nc *NebulaCertificate) getRawDetails() *RawNebulaCertificateDetails {
 		NotAfter:  nc.Details.NotAfter.Unix(),
 		PublicKey: make([]byte, len(nc.Details.PublicKey)),
 		IsCA:      nc.Details.IsCA,
+		Curve:     nc.Details.Curve,
 	}
 
 	for _, ipNet := range nc.Details.Ips {
@@ -482,6 +651,7 @@ func (nc *NebulaCertificate) MarshalJSON() ([]byte, error) {
 			"publicKey": fmt.Sprintf("%x", nc.Details.PublicKey),
 			"isCa":      nc.Details.IsCA,
 			"issuer":    nc.Details.Issuer,
+			"curve":     nc.Details.Curve.String(),
 		},
 		"fingerprint": fp,
 		"signature":   fmt.Sprintf("%x", nc.Signature),

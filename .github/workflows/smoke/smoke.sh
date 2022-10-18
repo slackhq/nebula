@@ -20,18 +20,20 @@ cleanup() {
 
 trap cleanup EXIT
 
-sudo docker run --name lighthouse1 --rm nebula:smoke -config lighthouse1.yml -test
-sudo docker run --name host2 --rm nebula:smoke -config host2.yml -test
-sudo docker run --name host3 --rm nebula:smoke -config host3.yml -test
-sudo docker run --name host4 --rm nebula:smoke -config host4.yml -test
+CONTAINER="nebula:${NAME:-smoke}"
 
-sudo docker run --name lighthouse1 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm nebula:smoke -config lighthouse1.yml 2>&1 | tee logs/lighthouse1 | sed -u 's/^/  [lighthouse1]  /' &
+sudo docker run --name lighthouse1 --rm "$CONTAINER" -config lighthouse1.yml -test
+sudo docker run --name host2 --rm "$CONTAINER" -config host2.yml -test
+sudo docker run --name host3 --rm "$CONTAINER" -config host3.yml -test
+sudo docker run --name host4 --rm "$CONTAINER" -config host4.yml -test
+
+sudo docker run --name lighthouse1 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm "$CONTAINER" -config lighthouse1.yml 2>&1 | tee logs/lighthouse1 | sed -u 's/^/  [lighthouse1]  /' &
 sleep 1
-sudo docker run --name host2 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm nebula:smoke -config host2.yml 2>&1 | tee logs/host2 | sed -u 's/^/  [host2]  /' &
+sudo docker run --name host2 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm "$CONTAINER" -config host2.yml 2>&1 | tee logs/host2 | sed -u 's/^/  [host2]  /' &
 sleep 1
-sudo docker run --name host3 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm nebula:smoke -config host3.yml 2>&1 | tee logs/host3 | sed -u 's/^/  [host3]  /' &
+sudo docker run --name host3 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm "$CONTAINER" -config host3.yml 2>&1 | tee logs/host3 | sed -u 's/^/  [host3]  /' &
 sleep 1
-sudo docker run --name host4 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm nebula:smoke -config host4.yml 2>&1 | tee logs/host4 | sed -u 's/^/  [host4]  /' &
+sudo docker run --name host4 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm "$CONTAINER" -config host4.yml 2>&1 | tee logs/host4 | sed -u 's/^/  [host4]  /' &
 sleep 1
 
 set +x

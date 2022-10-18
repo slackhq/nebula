@@ -9,6 +9,7 @@ import (
 	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/noiseutil"
 )
 
 const ReplayWindow = 1024
@@ -28,12 +29,23 @@ type ConnectionState struct {
 }
 
 func (f *Interface) newConnectionState(l *logrus.Logger, initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {
-	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashSHA256)
+	var dhFunc noise.DHFunc
+	curCertState := f.certState
+
+	switch curCertState.certificate.Details.Curve {
+	case cert.Curve_CURVE25519:
+		dhFunc = noise.DH25519
+	case cert.Curve_P256:
+		dhFunc = noiseutil.DHP256
+	default:
+		l.Errorf("invalid curve: %s", curCertState.certificate.Details.Curve)
+		return nil
+	}
+	cs := noise.NewCipherSuite(dhFunc, noise.CipherAESGCM, noise.HashSHA256)
 	if f.cipher == "chachapoly" {
-		cs = noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
+		cs = noise.NewCipherSuite(dhFunc, noise.CipherChaChaPoly, noise.HashSHA256)
 	}
 
-	curCertState := f.certState
 	static := noise.DHKey{Private: curCertState.privateKey, Public: curCertState.publicKey}
 
 	b := NewBits(ReplayWindow)
