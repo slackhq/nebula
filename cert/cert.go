@@ -471,6 +471,9 @@ func (nc *NebulaCertificate) CheckRootConstrains(signer *NebulaCertificate) erro
 
 // VerifyPrivateKey checks that the public key in the Nebula certificate and a supplied private key match
 func (nc *NebulaCertificate) VerifyPrivateKey(curve Curve, key []byte) error {
+	if curve != nc.Details.Curve {
+		return fmt.Errorf("curve in cert and private key supplied don't match")
+	}
 	if nc.Details.IsCA {
 		switch curve {
 		case Curve_CURVE25519:
