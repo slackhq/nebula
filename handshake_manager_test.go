@@ -21,11 +21,7 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	preferredRanges := []*net.IPNet{localrange}
 	mw := &mockEncWriter{}
 	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
-	lh := &LightHouse{
-		atomicStaticList:  make(map[iputil.VpnIp]struct{}),
-		atomicLighthouses: make(map[iputil.VpnIp]struct{}),
-		addrMap:           make(map[iputil.VpnIp]*RemoteList),
-	}
+	lh := newTestLighthouse()
 
 	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, lh, &udp.Conn{}, defaultHandshakeConfig)
 
@@ -79,12 +75,7 @@ func Test_NewHandshakeManagerTrigger(t *testing.T) {
 	preferredRanges := []*net.IPNet{localrange}
 	mw := &mockEncWriter{}
 	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
-	lh := &LightHouse{
-		addrMap:           make(map[iputil.VpnIp]*RemoteList),
-		l:                 l,
-		atomicStaticList:  make(map[iputil.VpnIp]struct{}),
-		atomicLighthouses: make(map[iputil.VpnIp]struct{}),
-	}
+	lh := newTestLighthouse()
 
 	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, lh, &udp.Conn{}, defaultHandshakeConfig)
 

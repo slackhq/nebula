@@ -18,10 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
 
-    - name: Set up Go 1.18
+    - name: Set up Go 1.19
       uses: actions/setup-go@v2
       with:
-        go-version: 1.18
+        go-version: 1.19
       id: go
 
     - name: Check out code into the Go module directory
@@ -30,9 +30,9 @@ jobs:
     - uses: actions/cache@v2
       with:
         path: ~/go/pkg/mod
-        key: ${{ runner.os }}-go1.18-${{ hashFiles('**/go.sum') }}
+        key: ${{ runner.os }}-go1.19-${{ hashFiles('**/go.sum') }}
         restore-keys: |
-          ${{ runner.os }}-go1.18-
+          ${{ runner.os }}-go1.19-
 
     - name: build
       run: make bin-docker

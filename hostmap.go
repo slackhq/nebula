@@ -18,7 +18,7 @@ import (
 	"github.com/slackhq/nebula/udp"
 )
 
-//const ProbeLen = 100
+// const ProbeLen = 100
 const PromoteEvery = 1000
 const ReQueryEvery = 5000
 const MaxRemotes = 10
@@ -153,7 +153,7 @@ type HostInfo struct {
 
 	remote            *udp.Addr
 	remotes           *RemoteList
-	promoteCounter    uint32
+	promoteCounter    atomic.Uint32
 	ConnectionState   *ConnectionState
 	handshakeStart    time.Time        //todo: this an entry in the handshake manager
 	HandshakeReady    bool             //todo: being in the manager means you are ready
@@ -284,7 +284,6 @@ func (hm *HostMap) AddVpnIp(vpnIp iputil.VpnIp, init func(hostinfo *HostInfo)) (
 	if h, ok := hm.Hosts[vpnIp]; !ok {
 		hm.RUnlock()
 		h = &HostInfo{
-			promoteCounter:  0,
 			vpnIp:           vpnIp,
 			HandshakePacket: make(map[uint8][]byte, 0),
 			relayState: RelayState{
@@ -591,7 +590,7 @@ func (hm *HostMap) Punchy(ctx context.Context, conn *udp.Conn) {
 // TryPromoteBest handles re-querying lighthouses and probing for better paths
 // NOTE: It is an error to call this if you are a lighthouse since they should not roam clients!
 func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface) {
-	c := atomic.AddUint32(&i.promoteCounter, 1)
+	c := i.promoteCounter.Add(1)
 	if c%PromoteEvery == 0 {
 		// The lock here is currently protecting i.remote access
 		i.RLock()
@@ -658,7 +657,7 @@ func (i *HostInfo) handshakeComplete(l *logrus.Logger, m *cachedPacketMetrics) {
 	i.HandshakeComplete = true
 	//TODO: this should be managed by the handshake state machine to set it based on how many handshake were seen.
 	// Clamping it to 2 gets us out of the woods for now
-	atomic.StoreUint64(&i.ConnectionState.atomicMessageCounter, 2)
+	i.ConnectionState.messageCounter.Store(2)
 
 	if l.Level >= logrus.DebugLevel {
 		i.logger(l).Debugf("Sending %d stored packets", len(i.packetStore))
