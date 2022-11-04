@@ -12,6 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/iputil"
+	"golang.org/x/sys/unix"
 )
 
 type tun struct {
@@ -24,6 +25,11 @@ type tun struct {
 
 func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes []Route, _ int) (*tun, error) {
 	routeTree, err := makeRouteTree(l, routes, false)
+	if err != nil {
+		return nil, err
+	}
+
+	err = unix.SetNonblock(deviceFd, true)
 	if err != nil {
 		return nil, err
 	}
