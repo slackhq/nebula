@@ -17,10 +17,8 @@ type connectionManager struct {
 	hostMap      *HostMap
 	in           map[iputil.VpnIp]struct{}
 	inLock       *sync.RWMutex
-	inCount      int
 	out          map[iputil.VpnIp]struct{}
 	outLock      *sync.RWMutex
-	outCount     int
 	TrafficTimer *SystemTimerWheel
 	intf         *Interface
 
@@ -40,10 +38,8 @@ func newConnectionManager(ctx context.Context, l *logrus.Logger, intf *Interface
 		hostMap:                 intf.hostMap,
 		in:                      make(map[iputil.VpnIp]struct{}),
 		inLock:                  &sync.RWMutex{},
-		inCount:                 0,
 		out:                     make(map[iputil.VpnIp]struct{}),
 		outLock:                 &sync.RWMutex{},
-		outCount:                0,
 		TrafficTimer:            NewSystemTimerWheel(time.Millisecond*500, time.Second*60),
 		intf:                    intf,
 		pendingDeletion:         make(map[iputil.VpnIp]int),
