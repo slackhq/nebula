@@ -879,7 +879,7 @@ func parsePort(s string) (startPort, endPort int32, err error) {
 	return
 }
 
-//TODO: write tests for these
+// TODO: write tests for these
 func setTCPRTTTracking(c *conn, p []byte) {
 	if c.Seq != 0 {
 		return

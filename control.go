@@ -5,7 +5,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"sync/atomic"
 	"syscall"
 
 	"github.com/sirupsen/logrus"
@@ -219,7 +218,7 @@ func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 	}
 
 	if h.ConnectionState != nil {
-		chi.MessageCounter = atomic.LoadUint64(&h.ConnectionState.atomicMessageCounter)
+		chi.MessageCounter = h.ConnectionState.messageCounter.Load()
 	}
 
 	if c := h.GetCert(); c != nil {

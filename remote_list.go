@@ -130,7 +130,7 @@ func (r *RemoteList) CopyAddrs(preferredRanges []*net.IPNet) []*udp.Addr {
 // LearnRemote locks and sets the learned slot for the owner vpn ip to the provided addr
 // Currently this is only needed when HostInfo.SetRemote is called as that should cover both handshaking and roaming.
 // It will mark the deduplicated address list as dirty, so do not call it unless new information is available
-//TODO: this needs to support the allow list list
+// TODO: this needs to support the allow list list
 func (r *RemoteList) LearnRemote(ownerVpnIp iputil.VpnIp, addr *udp.Addr) {
 	r.Lock()
 	defer r.Unlock()

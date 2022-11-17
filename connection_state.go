@@ -14,17 +14,17 @@ import (
 const ReplayWindow = 1024
 
 type ConnectionState struct {
-	eKey                 *NebulaCipherState
-	dKey                 *NebulaCipherState
-	H                    *noise.HandshakeState
-	certState            *CertState
-	peerCert             *cert.NebulaCertificate
-	initiator            bool
-	atomicMessageCounter uint64
-	window               *Bits
-	queueLock            sync.Mutex
-	writeLock            sync.Mutex
-	ready                bool
+	eKey           *NebulaCipherState
+	dKey           *NebulaCipherState
+	H              *noise.HandshakeState
+	certState      *CertState
+	peerCert       *cert.NebulaCertificate
+	initiator      bool
+	messageCounter atomic.Uint64
+	window         *Bits
+	queueLock      sync.Mutex
+	writeLock      sync.Mutex
+	ready          bool
 }
 
 func (f *Interface) newConnectionState(l *logrus.Logger, initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {
@@ -70,7 +70,7 @@ func (cs *ConnectionState) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m{
 		"certificate":     cs.peerCert,
 		"initiator":       cs.initiator,
-		"message_counter": atomic.LoadUint64(&cs.atomicMessageCounter),
+		"message_counter": cs.messageCounter.Load(),
 		"ready":           cs.ready,
 	})
 }

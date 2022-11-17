@@ -62,10 +62,12 @@ func (u *Conn) Send(packet *Packet) {
 	if err := h.Parse(packet.Data); err != nil {
 		panic(err)
 	}
-	u.l.WithField("header", h).
-		WithField("udpAddr", fmt.Sprintf("%v:%v", packet.FromIp, packet.FromPort)).
-		WithField("dataLen", len(packet.Data)).
-		Info("UDP receiving injected packet")
+	if u.l.Level >= logrus.InfoLevel {
+		u.l.WithField("header", h).
+			WithField("udpAddr", fmt.Sprintf("%v:%v", packet.FromIp, packet.FromPort)).
+			WithField("dataLen", len(packet.Data)).
+			Info("UDP receiving injected packet")
+	}
 	u.RxPackets <- packet
 }
 
@@ -114,7 +116,10 @@ func (u *Conn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall
 	nb := make([]byte, 12, 12)
 
 	for {
-		p := <-u.RxPackets
+		p, ok := <-u.RxPackets
+		if !ok {
+			return
+		}
 		ua.Port = p.FromPort
 		copy(ua.IP, p.FromIp.To16())
 		r(ua, nil, plaintext[:0], p.Data, h, fwPacket, lhf, nb, q, cache.Get(u.l))

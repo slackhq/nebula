@@ -1,8 +1,6 @@
 package nebula
 
 import (
-	"sync/atomic"
-
 	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
@@ -14,7 +12,9 @@ import (
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
-		f.l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
+		if f.l.Level >= logrus.DebugLevel {
+			f.l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
+		}
 		return
 	}
 
@@ -84,8 +84,7 @@ func (f *Interface) Handshake(vpnIp iputil.VpnIp) {
 
 // getOrHandshake returns nil if the vpnIp is not routable
 func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
-	//TODO: we can find contains without converting back to bytes
-	if f.hostMap.vpnCIDR.Contains(vpnIp.ToIP()) == false {
+	if !ipMaskContains(f.lightHouse.myVpnIp, f.lightHouse.myVpnZeros, vpnIp) {
 		vpnIp = f.inside.RouteFor(vpnIp)
 		if vpnIp == 0 {
 			return nil
@@ -221,7 +220,7 @@ func (f *Interface) SendVia(viaIfc interface{},
 ) {
 	via := viaIfc.(*HostInfo)
 	relay := relayIfc.(*Relay)
-	c := atomic.AddUint64(&via.ConnectionState.atomicMessageCounter, 1)
+	c := via.ConnectionState.messageCounter.Add(1)
 
 	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, relay.RemoteIndex, c)
 	f.connectionManager.Out(via.vpnIp)
@@ -280,7 +279,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 
 	//TODO: enable if we do more than 1 tun queue
 	//ci.writeLock.Lock()
-	c := atomic.AddUint64(&ci.atomicMessageCounter, 1)
+	c := ci.messageCounter.Add(1)
 
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
 	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)

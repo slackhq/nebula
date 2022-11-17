@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"testing"
@@ -304,7 +303,8 @@ func NewTestLogger() *logrus.Logger {
 
 	v := os.Getenv("TEST_LOGS")
 	if v == "" {
-		l.SetOutput(ioutil.Discard)
+		l.SetOutput(io.Discard)
+		l.SetLevel(logrus.PanicLevel)
 		return l
 	}
 
