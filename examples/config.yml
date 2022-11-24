@@ -1,70 +1,125 @@
-# This is the nebula example configuration file. You must edit, at a minimum, the static_host_map, lighthouse, and firewall sections
-# Some options in this file are HUPable, including the pki section. (A HUP will reload credentials from disk without affecting existing tunnels)
+# This is the sample configuration file for Nebula.
+# You must edit at least the static_host_map, lighthouse, and firewall sections.
 
-# PKI defines the location of credentials for this node. Each of these can also be inlined by using the yaml ": |" syntax.
+# Basic terminology:
+# Node: a host that participates in the Nebula network. This can be a server,
+#       virtual machine, laptop, mobile phone, or any other capable host.
+# Routable IP: a node's "normal" or "native" IP address. This is typically a
+#              static public IP address for a server. For a laptop or mobile
+#              device, this is typically a dynamic IP address assigned by DHCP.
+#              If the node is behind a NAT, this is the external IP address of
+#              the NAT gateway.
+# Nebula IP: a node's "VPN" IP address. This is the IP address that nodes use to
+#            communicate within the Nebula network. This address is baked
+#            directly into the node's certificate file.
+
+# Some options in this file, including the pki section, can be reloaded
+# without affecting existing tunnels.
+# To reload, send a HUP to the nebula process.
+
+# PKI defines the location of credentials for this node.
+# Each of these can also be inlined using the yaml ": |" syntax.
 pki:
-  # The CAs that are accepted by this node. Must contain one or more certificates created by 'nebula-cert ca'
+  # Path to a file containing one or more CA certificates that will be accepted
+  # by this node. The certificates must all be created by 'nebula-cert ca'.
   ca: /etc/nebula/ca.crt
+  # cert: path to this node's certificate file
+  # key: path to this node's private key file
   cert: /etc/nebula/host.crt
   key: /etc/nebula/host.key
-  # blocklist is a list of certificate fingerprints that we will refuse to talk to
+
+  # List of certificate fingerprints that we will refuse to talk to
   #blocklist:
   #  - c99d4e650533b92061b09918e838a5a0a6aaee21eed1d12fd937682865936c72
-  # disconnect_invalid is a toggle to force a client to be disconnected if the certificate is expired or invalid.
+
+  # Force disconnect a client if their certificate is expired or invalid.
+  # Default is false
   #disconnect_invalid: false
 
-# The static host map defines a set of hosts with fixed IP addresses on the internet (or any network).
-# A host can have multiple fixed IP addresses defined here, and nebula will try each when establishing a tunnel.
+
+# The static host map defines a set of known hosts with static IP addresses.
+# Each entry maps a node's Nebula IP address to its routable IP addresses.
+# If a node has multiple routable IP addresses, nebula will try each one when
+# establishing a tunnel.
 # The syntax is:
 #   "{nebula ip}": ["{routable ip/dns name}:{routable port}"]
-# Example, if your lighthouse has the nebula IP of 192.168.100.1 and has the real ip address of 100.64.22.11 and runs on port 4242:
 static_host_map:
+  # Example: lighthouse with Nebula IP of 192.168.100.1 and routable IP address
+  #          of 100.64.22.11, with nebula listening on port 4242
   "192.168.100.1": ["100.64.22.11:4242"]
+  # Example: map a nebula node to a domain name
+  #"192.168.100.2": ["nebula.example.com:4242"]
+  # Example: a host with multiple IP addresses
+  #"192.168.100.3": ["107.63.148.70:4242", "136.144.110.48:4242"]
 
 
 lighthouse:
-  # am_lighthouse is used to enable lighthouse functionality for a node. This should ONLY be true on nodes
-  # you have configured to be lighthouses in your network
-  am_lighthouse: false
-  # serve_dns optionally starts a dns listener that responds to various queries and can even be
-  # delegated to for resolution
+  # The following is an example configuration for a lighthouse node:
+
+  # Enable lighthouse functionality for this node.
+  # Default is false
+  #am_lighthouse: true
+
+  # Start a simple DNS server. Only valid on lighthouse nodes.
+  # Default is false
   #serve_dns: false
   #dns:
-    # The DNS host defines the IP to bind the dns listener to. This also allows binding to the nebula node IP.
+    # Host and port that the DNS server listens at.
+    # This can be a routable IP or a Nebula node IP.
     #host: 0.0.0.0
     #port: 53
-  # interval is the number of seconds between updates from this node to a lighthouse.
-  # during updates, a node sends information about its current IP addresses to each node.
-  interval: 60
-  # hosts is a list of lighthouse hosts this node should report to and query from
+
+
+  # The following is an example configuration for a non-lighthouse node:
+
+  # Enable lighthouse functionality for this node.
+  # Default is false
+  am_lighthouse: false
+
+  # List of lighthouse hosts this node should report to and query from.
   # IMPORTANT: THIS SHOULD BE EMPTY ON LIGHTHOUSE NODES
-  # IMPORTANT2: THIS SHOULD BE LIGHTHOUSES' NEBULA IPs, NOT LIGHTHOUSES' REAL ROUTABLE IPs
+  # IMPORTANT2: THIS SHOULD BE LIGHTHOUSES' NEBULA IPs, NOT THEIR ROUTABLE IPs
   hosts:
     - "192.168.100.1"
+    - "192.168.100.5"
 
-  # remote_allow_list allows you to control ip ranges that this node will
-  # consider when handshaking to another node. By default, any remote IPs are
-  # allowed. You can provide CIDRs here with `true` to allow and `false` to
-  # deny. The most specific CIDR rule applies to each remote. If all rules are
-  # "allow", the default will be "deny", and vice-versa. If both "allow" and
-  # "deny" rules are present, then you MUST set a rule for "0.0.0.0/0" as the
-  # default.
+  # The number of seconds between updates from this node to a lighthouse.
+  # During updates, a node sends information about its current state and
+  # configuration to each listed lighthouse. Only valid on non-lighthouse nodes.
+  # Default is 10
+  interval: 60
+
+
+  # List of allowed routable IP ranges for remote nodes. This list is checked
+  # during handshake. If not specified, all IP ranges are allowed.
+  # You can provide CIDRs here with `true` to allow and `false` to deny.
+  # The most specific CIDR rule applies to each remote.
+  # If all rules are "allow", the default will be "deny", and vice-versa.
+  # If both "allow" and "deny" rules are present, then you MUST set a rule
+  # for "0.0.0.0/0" as the default.
   #remote_allow_list:
-    # Example to block IPs from this subnet from being used for remote IPs.
+    # Example: block IPs in this subnet from connecting to this node.
     #"172.16.0.0/12": false
 
-    # A more complicated example, allow public IPs but only private IPs from a specific subnet
+    # A more complicated example: allow public IPs, but allow only private IPs
+    # from a specific subnet (10.42.42.0/24).
     #"0.0.0.0/0": true
     #"10.0.0.0/8": false
     #"10.42.42.0/24": true
 
-  # EXPERIMENTAL: This option my change or disappear in the future.
-  # Optionally allows the definition of remote_allow_list blocks
-  # specific to an inside VPN IP CIDR.
+  # EXPERIMENTAL: This option may change or disappear in the future.
+  # Define the equivalent of remote_allow_list blocks, but for each specific
+  # Nebula VPN IP range. Each VPN IP range can have its own list of allowable
+  # routable IP ranges.
   #remote_allow_ranges:
-    # This rule would only allow only private IPs for this VPN range
+    # Example: for Nebula VPN IP addresses in 10.42.42.0/24, allow nodes to have
+    # routable IP addresses in the 192.168.0.0/16 range.
     #"10.42.42.0/24":
       #"192.168.0.0/16": true
+    # Example: for Nebula IP addresses within 10.42.41.0/24, allow nodes to join
+    # from the 123.45.0.0/16 range.
+    #"10.42.41.0/24":
+      #"123.45.0.0/16": true
 
   # local_allow_list allows you to filter which local IP addresses we advertise
   # to the lighthouses. This uses the same logic as `remote_allow_list`, but
@@ -72,7 +127,7 @@ lighthouse:
   # to match against interface names. The regexp must match the entire name.
   # All interface rules must be either true or false (and the default will be
   # the inverse). CIDR rules are matched after interface name rules.
-  # Default is all local IP addresses.
+  # Default is all local IP addresses
   #local_allow_list:
     # Example to block tun0 and all docker interfaces.
     #interfaces:
@@ -81,121 +136,197 @@ lighthouse:
     # Example to only advertise this subnet to the lighthouse.
     #"10.0.0.0/8": true
 
-  # advertise_addrs are routable addresses that will be included along with discovered addresses to report to the
-  # lighthouse, the format is "ip:port". `port` can be `0`, in which case the actual listening port will be used in its
-  # place, useful if `listen.port` is set to 0.
-  # This option is mainly useful when there are static ip addresses the host can be reached at that nebula can not
-  # typically discover on its own. Examples being port forwarding or multiple paths to the internet.
+  # advertise_addrs are routable addresses that will be included along with
+  # discovered addresses to report to the lighthouse, the format is "ip:port".
+  # `port` can be `0`, in which case the actual listening port will be used in
+  # its place, useful if `listen.port` is set to 0.
+  # This option is mainly useful when there are static ip addresses the host
+  # can be reached at that nebula can not typically discover on its own.
+  # Examples being port forwarding or multiple paths to the internet.
   #advertise_addrs:
     #- "1.1.1.1:4242"
     #- "1.2.3.4:0" # port will be replaced with the real listening port
 
-# Port Nebula will be listening on. The default here is 4242. For a lighthouse node, the port should be defined,
-# however using port 0 will dynamically assign a port and is recommended for roaming nodes.
+
+# Configure the listening address for the nebula daemon.
 listen:
-  # To listen on both any ipv4 and ipv6 use "[::]"
+  # Specify the IP addresses that nebula will listen on.
+  # The default is 0.0.0.0 (all IPv4 addresses on this host)
+  # To listen on all IPv4 and IPv6 addresses, use "[::]"
   host: 0.0.0.0
+  # Specify the port that nebula will listen on.
+  # For a lighthouse node, the port should not be set to 0, otherwise the port
+  # will be randomized, thus other nodes won't be able to connect to it.
+  # For any other node, you can specify a port here, or you can set it to 0,
+  # such that a port will be dynamically assigned (this is recommended for
+  # roaming nodes).
+  # Default is 4242
   port: 4242
-  # Sets the max number of packets to pull from the kernel for each syscall (under systems that support recvmmsg)
-  # default is 64, does not support reload
+
+  # Sets the max number of packets to pull from the kernel for each syscall.
+  # This only works on systems that support recvmmsg. On systems that don't
+  # support recvmmsg, make sure you set this to 1, otherwise the node won't be
+  # able to join the network.
+  # Systems that don't support recvmmsg include:
+  # - Older Linux kernels (< 2.6.34)
+  # - Older FreeBSD kernels (< 11.0)
+  # Reload is not supported for this option.
+  # Default is 64
   #batch: 64
-  # Configure socket buffers for the udp side (outside), leave unset to use the system defaults. Values will be doubled by the kernel
-  # Default is net.core.rmem_default and net.core.wmem_default (/proc/sys/net/core/rmem_default and /proc/sys/net/core/rmem_default)
-  # Maximum is limited by memory in the system, SO_RCVBUFFORCE and SO_SNDBUFFORCE is used to avoid having to raise the system wide
-  # max, net.core.rmem_max and net.core.wmem_max
+
+  # Configure socket buffers for the udp side (outside), leave unset to use the
+  # system defaults. Values will be doubled by the kernel.
+  # Default is net.core.rmem_default and net.core.wmem_default
+  # (/proc/sys/net/core/rmem_default and /proc/sys/net/core/rmem_default).
+  # Maximum is limited by available memory. SO_RCVBUFFORCE and SO_SNDBUFFORCE
+  # are used so as to avoid having to raise the system-wide limit
+  # (net.core.rmem_max and net.core.wmem_max).
   #read_buffer: 10485760
   #write_buffer: 10485760
-  # By default, Nebula replies to packets it has no tunnel for with a "recv_error" packet. This packet helps speed up reconnection
-  # in the case that Nebula on either side did not shut down cleanly. This response can be abused as a way to discover if Nebula is running
-  # on a host though. This option lets you configure if you want to send "recv_error" packets always, never, or only to private network remotes.
-  # valid values: always, never, private
-  # This setting is reloadable.
+
+  # Controls whether nebula should reply to packets it has no tunnel for, with
+  # a "recv_error" packet. This helps speed up reconnection in case the nebula
+  # daemon on either side of the tunnel did not shut down cleanly.
+  # However, this can also be abused to discover if nebula is running on a host.
+  # Valid values are:
+  # always: always send "recv_error" packets
+  # never: never send "recv_error" packets
+  # private: only send "recv_error" packets to nodes with private routable IPs
+  # Default is always (reload is supported)
   #send_recv_error: always
 
-# Routines is the number of thread pairs to run that consume from the tun and UDP queues.
-# Currently, this defaults to 1 which means we have 1 tun queue reader and 1
-# UDP queue reader. Setting this above one will set IFF_MULTI_QUEUE on the tun
-# device and SO_REUSEPORT on the UDP socket to allow multiple queues.
+
+# The number of thread pairs to run on the tun device and UDP queues. If this
+# is greater than 1, then IFF_MULTI_QUEUE will be set on the tun device and
+# SO_REUSEPORT will be set on the UDP socket, in order to allow multiple queues.
 # This option is only supported on Linux.
+# Default is 1
 #routines: 1
 
+
 punchy:
-  # Continues to punch inbound/outbound at a regular interval to avoid expiration of firewall nat mappings
+  # Send UDP packets at a regular interval to maintain the NAT hole punch and
+  # prevent it from timing out.
+  # Default is false
   punch: true
 
-  # respond means that a node you are trying to reach will connect back out to you if your hole punching fails
-  # this is extremely useful if one node is behind a difficult nat, such as a symmetric NAT
+  # Respond to test packets used for hole punching. This is useful in cases
+  # where one node is behind a symmetric NAT or double NAT.
   # Default is false
   #respond: true
 
-  # delays a punch response for misbehaving NATs, default is 1 second, respond must be true to take effect
+  # Delays a punch response, only valid if respond (see above) is true.
+  # Default is 1s
   #delay: 1s
 
-# Cipher allows you to choose between the available ciphers for your network. Options are chachapoly or aes
-# IMPORTANT: this value must be identical on ALL NODES/LIGHTHOUSES. We do not/will not support use of different ciphers simultaneously!
+
+# Choose between chachapoly or aes as the network cipher.
+# Default is aes
+# IMPORTANT: this value must be identical on ALL NODES/LIGHTHOUSES.
+# Use of different ciphers in the same network is not supported!
 #cipher: chachapoly
 
-# Preferred ranges is used to define a hint about the local network ranges, which speeds up discovering the fastest
-# path to a network adjacent nebula node.
-# NOTE: the previous option "local_range" only allowed definition of a single range
-# and has been deprecated for "preferred_ranges"
-#preferred_ranges: ["172.16.0.0/24"]
 
-# sshd can expose informational and administrative functions via ssh this is a
+# Advertise the locally-accessible network ranges, in order to speed up
+# discovery of the fastest path to a network-adjacent Nebula node.
+# NOTE: This replaces the older "local_range" option, which only allowed
+#       the user to define a single range.
+#preferred_ranges: ["172.16.0.0/24", "192.168.0.0/16"]
+
+
 #sshd:
-  # Toggles the feature
+  # Start a simple SSH server for informational and administrative functions.
+  # Default is false
   #enabled: true
-  # Host and port to listen on, port 22 is not allowed for your safety
+
+  # Host and port to listen on. Port 22 is forbidden for security reasons.
   #listen: 127.0.0.1:2222
-  # A file containing the ssh host private key to use
-  # A decent way to generate one: ssh-keygen -t ed25519 -f ssh_host_ed25519_key -N "" < /dev/null
-  #host_key: ./ssh_host_ed25519_key
-  # A file containing a list of authorized public keys
+
+  # Path to the file containing the ssh server's private host key
+  # A decent way to generate one:
+  # ssh-keygen -t ed25519 -f ssh_host_ed25519_key -N "" < /dev/null
+  #host_key: /etc/nebula/ssh_host_ed25519_key
+
+  # A list of authorized public keys that are allowed to connect
   #authorized_users:
     #- user: steeeeve
-      # keys can be an array of strings or single string
+      # keys can be a list of strings or single string
       #keys:
-        #- "ssh public key string"
+        #- "AAAAC3NzaC1lZDI1NTE5AAAAIEJ66Z7vPg8RaHddmEFj+KMMYM4miWNm0wosY4qbFY92"
 
-# EXPERIMENTAL: relay support for networks that can't establish direct connections.
-relay:
-  # Relays are a list of Nebula IP's that peers can use to relay packets to me.
-  # IPs in this list must have am_relay set to true in their configs, otherwise
-  # they will reject relay requests.
+
+# EXPERIMENTAL: relay support for networks that can't establish direct
+# connections. Multi-hop relays are not supported. A relay node cannot relay
+# its own packets through other relay nodes.
+#relay:
+  # The following is an example configuration for a relay node:
+
+  # Allow other hosts to use this node as a relay.
+  # Default is false
+  #am_relay: true
+
+  # The following is an example configuration for a non-relay node:
+
+  # Allow other hosts to use this node as a relay.
+  # Default is false
+  #am_relay: false
+
+  # Use relays to establish connections to other nodes if a direct connection
+  # is not possible.
+  # Default is true
+  #use_relays: true
+
+  # List of Nebula IP addresses that network peers can use to relay packets to
+  # this node. Nodes listed here must be configured with "am_relay = true",
+  # otherwise they will reject relay requests.
   #relays:
     #- 192.168.100.1
-    #- <other Nebula VPN IPs of hosts used as relays to access me>
-  # Set am_relay to true to permit other hosts to list my IP in their relays config. Default false.
-  am_relay: false
-  # Set use_relays to false to prevent this instance from attempting to establish connections through relays.
-  # default true
-  use_relays: true
+    #- 192.168.100.2
 
-# Configure the private interface. Note: addr is baked into the nebula certificate
+
+# Configure the private interface.
 tun:
-  # When tun is disabled, a lighthouse can be started without a local tun interface (and therefore without root)
+  # Disable the tun interface if you want this node to only serve as a
+  # lighthouse, and not join the network. This is useful in cases where you
+  # don't want or can't run the nebula daemon as root.
+  # Default is false
   disabled: false
+
   # Name of the device. If not set, a default will be chosen by the OS.
   # For macOS: if set, must be in the form `utun[0-9]+`.
-  # For FreeBSD: Required to be set, must be in the form `tun[0-9]+`.
+  # For FreeBSD: must be set, and must be in the form `tun[0-9]+`.
   dev: nebula1
-  # Toggles forwarding of local broadcast packets, the address of which depends on the ip/mask encoded in pki.cert
+
+  # Disable forwarding local broadcast packets. The broadcast address is
+  # determined by the node's Nebula IP encoded in its host certificate.
+  # Default is false
   drop_local_broadcast: false
-  # Toggles forwarding of multicast packets
+
+  # Disable forwarding of multicast packets.
+  # Default is false
   drop_multicast: false
-  # Sets the transmit queue length, if you notice lots of transmit drops on the tun it may help to raise this number. Default is 500
+
+  # Transmit queue length. Try increasing this number if you notice lots of
+  # transmit drops on the tun interface.
+  # Default is 500
   tx_queue: 500
-  # Default MTU for every packet, safe setting is (and the default) 1300 for internet based traffic
+
+  # Default MTU for every packet.
+  # Default is 1300 (this is a safe value for internet-based traffic)
   mtu: 1300
-  # Route based MTU overrides, you have known vpn ip paths that can support larger MTUs you can increase/decrease them here
+
+  # Route-based MTU overrides. If some Nebula nodes are reachable via a network
+  # path that supports larger MTUs, you can specify them here.
   routes:
     #- mtu: 8800
     #  route: 10.0.0.0/16
-  # Unsafe routes allows you to route traffic over nebula to non-nebula nodes
-  # Unsafe routes should be avoided unless you have hosts/services that cannot run nebula
-  # NOTE: The nebula certificate of the "via" node *MUST* have the "route" defined as a subnet in its certificate
-  # `mtu` will default to tun mtu if this option is not specified
-  # `metric` will default to 0 if this option is not specified
+
+  # Allow traffic between Nebula nodes to be routed through non-Nebula nodes.
+  # Avoid unsafe routes unless you have hosts/services that cannot run nebula.
+  # NOTE: The nebula certificate of the "via" node *MUST* have the "route"
+  # defined as a subnet in its certificate.
+  # Default for mtu is the tun interface's mtu
+  # Default for metric is 0
   unsafe_routes:
     #- route: 172.16.1.0/24
     #  via: 192.168.100.99
@@ -204,22 +335,29 @@ tun:
 
 
 # TODO
-# Configure logging level
 logging:
-  # panic, fatal, error, warning, info, or debug. Default is info
+  # Available log levels are panic, fatal, error, warning, info, and debug.
+  # Default is info
   level: info
-  # json or text formats currently available. Default is text
+
+  # Choose log format between text and json.
+  # Default is text
   format: text
-  # Disable timestamp logging. useful when output is redirected to logging system that already adds timestamps. Default is false
+
+  # Disable timestamps in log messages. Useful when log output is redirected to
+  # another logging system that adds its own timestamps.
+  # Default is false
   #disable_timestamp: true
-  # timestamp format is specified in Go time format, see:
+
+  # Timestamp format is specified in Go time format, see:
   #     https://golang.org/pkg/time/#pkg-constants
   # default when `format: json`: "2006-01-02T15:04:05Z07:00" (RFC3339)
   # default when `format: text`:
   #     when TTY attached: seconds since beginning of execution
   #     otherwise: "2006-01-02T15:04:05Z07:00" (RFC3339)
-  # As an example, to log as RFC3339 with millisecond precision, set to:
+  # For example, to log as RFC3339 with millisecond precision:
   #timestamp_format: "2006-01-02T15:04:05.000Z07:00"
+
 
 #stats:
   #type: graphite
@@ -244,51 +382,68 @@ logging:
   #   e.g.: `lighthouse.rx.HostQuery`
   #lighthouse_metrics: false
 
+
 # Handshake Manager Settings
 #handshakes:
-  # Handshakes are sent to all known addresses at each interval with a linear backoff,
-  # Wait try_interval after the 1st attempt, 2 * try_interval after the 2nd, etc, until the handshake is older than timeout
-  # A 100ms interval with the default 10 retries will give a handshake 5.5 seconds to resolve before timing out
+  # Handshakes are sent to all known addresses at each try_interval, each with a
+  # linear backoff strategy:
+  #     Wait try_interval after the 1st attempt,
+  #     Wait 2 * try_interval after the 2nd attempt,
+  #     ...
+  #     and so on until the number of retries is reached.
+
+  # Default try_interval is 100ms
+  # Default retries is 10
+  # A 100ms interval with 10 retries will time out in 5.5 seconds.
   #try_interval: 100ms
-  #retries: 20
-  # trigger_buffer is the size of the buffer channel for quickly sending handshakes
-  # after receiving the response for lighthouse queries
+  #retries: 10
+
+  # The size of the buffer channel for quickly sending handshakes after
+  # receiving the response for lighthouse queries.
   #trigger_buffer: 64
 
 
 # Nebula security group configuration
 firewall:
   conntrack:
+    # The values shown here are the defaults:
     tcp_timeout: 12m
     udp_timeout: 3m
     default_timeout: 10m
 
-  # The firewall is default deny. There is no way to write a deny rule.
-  # Rules are comprised of a protocol, port, and one or more of host, group, or CIDR
-  # Logical evaluation is roughly: port AND proto AND (ca_sha OR ca_name) AND (host OR group OR groups OR cidr)
-  # - port: Takes `0` or `any` as any, a single number `80`, a range `200-901`, or `fragment` to match second and further fragments of fragmented packets (since there is no port available).
-  #   code: same as port but makes more sense when talking about ICMP, TODO: this is not currently implemented in a way that works, use `any`
+  # The firewall defaults to deny all. There is no way to write a deny rule.
+  # Rules are comprised of a protocol, port, and one or more of host, group,
+  # or CIDR.
+  # Logical evaluation is roughly:
+  # port AND proto AND (ca_sha OR ca_name) AND (host OR group OR groups OR cidr)
+  # - port: Takes `0` or `any` as any, a single number `80`, a range `200-901`,
+  #         or `fragment` to match second and further fragments of fragmented
+  #         packets (since there is no port available).
+  #   code: same as port but makes more sense when talking about ICMP
+  #         TODO: the current implementation doesn't really work, just use `any`
   #   proto: `any`, `tcp`, `udp`, or `icmp`
-  #   host: `any` or a literal hostname, ie `test-host`
-  #   group: `any` or a literal group name, ie `default-group`
-  #   groups: Same as group but accepts a list of values. Multiple values are AND'd together and a certificate would have to contain all groups to pass
+  #   host: `any` or a literal hostname, i.e. `test-host`
+  #   group: `any` or a literal group name, i.e. `default-group`
+  #   groups: Same as group but accepts a list of values. Multiple values are
+  #           AND'd together, thus a certificate has to contain all specified
+  #           groups in order to match this rule.
   #   cidr: a CIDR, `0.0.0.0/0` is any.
   #   ca_name: An issuing CA name
   #   ca_sha: An issuing CA shasum
 
   outbound:
-    # Allow all outbound traffic from this node
+    # Example: allow all outbound traffic from this node
     - port: any
       proto: any
       host: any
 
   inbound:
-    # Allow icmp between any nebula hosts
+    # Example: allow icmp between any nebula hosts
     - port: any
       proto: icmp
       host: any
 
-    # Allow tcp/443 from any host with BOTH laptop and home group
+    # Example: allow tcp/443 from any host with BOTH laptop and home group
     - port: 443
       proto: tcp
       groups:
