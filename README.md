@@ -8,7 +8,7 @@ and tunneling, and each of those individual pieces existed before Nebula in vari
 What makes Nebula different to existing offerings is that it brings all of these ideas together,
 resulting in a sum that is greater than its individual parts.
 
-Further documentation can be found [here](https://www.defined.net/nebula/).
+Further documentation can be found [here](https://nebula.defined.net/docs/).
 
 You can read more about Nebula [here](https://medium.com/p/884110a5579).
 

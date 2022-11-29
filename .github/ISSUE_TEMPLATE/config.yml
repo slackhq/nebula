@@ -1,7 +1,7 @@
 blank_issues_enabled: true
 contact_links:
   - name: 📘 Documentation
-    url: https://www.defined.net/nebula/
+    url: https://nebula.defined.net/docs/
     about: Review documentation.
 
   - name: 💁 Support/Chat
