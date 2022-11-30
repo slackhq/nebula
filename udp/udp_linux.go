@@ -22,7 +22,7 @@ import (
 
 type Conn struct {
 	sysFd int
-	isV4 bool
+	isV4  bool
 	l     *logrus.Logger
 	batch int
 }
@@ -67,7 +67,6 @@ func isZeros(p net.IP) bool {
 	return true
 }
 
-
 func NewListener(l *logrus.Logger, ip string, port int, multi bool, batch int) (*Conn, error) {
 	lip := net.ParseIP(ip)
 	lipV4, isV4 := isIPV4(lip)
@@ -86,7 +85,6 @@ func NewListener(l *logrus.Logger, ip string, port int, multi bool, batch int) (
 		unix.Close(fd)
 		return nil, fmt.Errorf("unable to open socket: %s", err)
 	}
-
 
 	copy(lip[:], net.ParseIP(ip))
 
@@ -186,7 +184,6 @@ func (u *Conn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall
 			} else {
 				udpAddr.IP = names[i][8:24]
 			}
-			udpAddr.IP = names[i][8:24]
 			udpAddr.Port = binary.BigEndian.Uint16(names[i][2:4])
 			r(udpAddr, nil, plaintext[:0], buffers[i][:msgs[i].Len], h, fwPacket, lhf, nb, q, cache.Get(u.l))
 		}
