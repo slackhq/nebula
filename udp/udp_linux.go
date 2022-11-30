@@ -22,6 +22,7 @@ import (
 
 type Conn struct {
 	sysFd int
+	isV4 bool
 	l     *logrus.Logger
 	batch int
 }
@@ -45,9 +46,37 @@ const (
 
 type _SK_MEMINFO [_SK_MEMINFO_VARS]uint32
 
+func isIPV4(ip net.IP) (net.IP, bool) {
+	if len(ip) == net.IPv4len {
+		return ip, true
+	}
+
+	if len(ip) == net.IPv6len && isZeros(ip[0:10]) && ip[10] == 0xff && ip[11] == 0xff {
+		return ip[12:16], true
+	}
+
+	return ip, false
+}
+
+func isZeros(p net.IP) bool {
+	for i := 0; i < len(p); i++ {
+		if p[i] != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+
 func NewListener(l *logrus.Logger, ip string, port int, multi bool, batch int) (*Conn, error) {
+	lip := net.ParseIP(ip)
+	lipV4, isV4 := isIPV4(lip)
+	af := unix.AF_INET6
+	if isV4 {
+		af = unix.AF_INET
+	}
 	syscall.ForkLock.RLock()
-	fd, err := unix.Socket(unix.AF_INET6, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
+	fd, err := unix.Socket(af, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
 	if err == nil {
 		unix.CloseOnExec(fd)
 	}
@@ -58,7 +87,7 @@ func NewListener(l *logrus.Logger, ip string, port int, multi bool, batch int) (
 		return nil, fmt.Errorf("unable to open socket: %s", err)
 	}
 
-	var lip [16]byte
+
 	copy(lip[:], net.ParseIP(ip))
 
 	if multi {
@@ -68,7 +97,16 @@ func NewListener(l *logrus.Logger, ip string, port int, multi bool, batch int) (
 	}
 
 	//TODO: support multiple listening IPs (for limiting ipv6)
-	if err = unix.Bind(fd, &unix.SockaddrInet6{Addr: lip, Port: port}); err != nil {
+	var sa unix.Sockaddr
+	if isV4 {
+		sa4 := &unix.SockaddrInet4{Port: port}
+		copy(sa4.Addr[:], lipV4)
+		sa = sa4
+	} else {
+		sa6 := &unix.SockaddrInet6{Port: port}
+		sa = sa6
+	}
+	if err = unix.Bind(fd, sa); err != nil {
 		return nil, fmt.Errorf("unable to bind to socket: %s", err)
 	}
 
@@ -77,7 +115,7 @@ func NewListener(l *logrus.Logger, ip string, port int, multi bool, batch int) (
 	//v, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU)
 	//l.Println(v, err)
 
-	return &Conn{sysFd: fd, l: l, batch: batch}, err
+	return &Conn{sysFd: fd, isV4: isV4, l: l, batch: batch}, err
 }
 
 func (u *Conn) Rebind() error {
@@ -143,6 +181,11 @@ func (u *Conn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall
 
 		//metric.Update(int64(n))
 		for i := 0; i < n; i++ {
+			if u.isV4 {
+				udpAddr.IP = names[i][4:8]
+			} else {
+				udpAddr.IP = names[i][8:24]
+			}
 			udpAddr.IP = names[i][8:24]
 			udpAddr.Port = binary.BigEndian.Uint16(names[i][2:4])
 			r(udpAddr, nil, plaintext[:0], buffers[i][:msgs[i].Len], h, fwPacket, lhf, nb, q, cache.Get(u.l))
@@ -192,13 +235,27 @@ func (u *Conn) ReadMulti(msgs []rawMessage) (int, error) {
 }
 
 func (u *Conn) WriteTo(b []byte, addr *Addr) error {
-
-	var rsa unix.RawSockaddrInet6
-	rsa.Family = unix.AF_INET6
-	p := (*[2]byte)(unsafe.Pointer(&rsa.Port))
-	p[0] = byte(addr.Port >> 8)
-	p[1] = byte(addr.Port)
-	copy(rsa.Addr[:], addr.IP)
+	var rsaPtr unsafe.Pointer
+	var rsaSize int
+	if u.isV4 {
+		addrV4, isAddrV4 := isIPV4(addr.IP)
+		if !isAddrV4 {
+			return fmt.Errorf("Listener is IPv4, but writing to IPv6 remote")
+		}
+		var rsa unix.RawSockaddrInet4
+		rsa.Family = unix.AF_INET
+		rsa.Port = (addr.Port >> 8) | ((addr.Port & 0xff) << 8)
+		copy(rsa.Addr[:], addrV4)
+		rsaPtr = unsafe.Pointer(&rsa)
+		rsaSize = unix.SizeofSockaddrInet4
+	} else {
+		var rsa unix.RawSockaddrInet6
+		rsa.Family = unix.AF_INET6
+		rsa.Port = (addr.Port >> 8) | ((addr.Port & 0xff) << 8)
+		copy(rsa.Addr[:], addr.IP)
+		rsaPtr = unsafe.Pointer(&rsa)
+		rsaSize = unix.SizeofSockaddrInet6
+	}
 
 	for {
 		_, _, err := unix.Syscall6(
@@ -207,8 +264,8 @@ func (u *Conn) WriteTo(b []byte, addr *Addr) error {
 			uintptr(unsafe.Pointer(&b[0])),
 			uintptr(len(b)),
 			uintptr(0),
-			uintptr(unsafe.Pointer(&rsa)),
-			uintptr(unix.SizeofSockaddrInet6),
+			uintptr(rsaPtr),
+			uintptr(rsaSize),
 		)
 
 		if err != 0 {
