@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/miekg/dns"
@@ -20,23 +21,39 @@ var dnsAddr string
 
 type dnsRecords struct {
 	sync.RWMutex
-	dnsMap  map[string]string
-	hostMap *HostMap
+	dnsMap             map[string]string
+	hostMap            *HostMap
+	dnsWildcardEnabled bool
+	dnsWildcardLimit   int
 }
 
 func newDnsRecords(hostMap *HostMap) *dnsRecords {
 	return &dnsRecords{
-		dnsMap:  make(map[string]string),
-		hostMap: hostMap,
+		dnsMap:             make(map[string]string),
+		hostMap:            hostMap,
+		dnsWildcardEnabled: false,
+		dnsWildcardLimit:   5,
 	}
 }
 
 func (d *dnsRecords) Query(data string) string {
 	d.RLock()
-	if r, ok := d.dnsMap[data]; ok {
-		d.RUnlock()
-		return r
+
+	if d.dnsWildcardEnabled {
+		hostParts := strings.SplitN(data, ".", d.dnsWildcardLimit+1)
+		for i := range hostParts {
+			if r, ok := d.dnsMap[strings.Join(hostParts[i:], ".")]; ok {
+				d.RUnlock()
+				return r
+			}
+		}
+	} else {
+		if r, ok := d.dnsMap[data]; ok {
+			d.RUnlock()
+			return r
+		}
 	}
+
 	d.RUnlock()
 	return ""
 }
@@ -113,6 +130,8 @@ func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
 
 func dnsMain(l *logrus.Logger, hostMap *HostMap, c *config.C) func() {
 	dnsR = newDnsRecords(hostMap)
+	dnsR.dnsWildcardEnabled = c.GetBool("lighthouse.dns.wildcard", false)
+	dnsR.dnsWildcardLimit = c.GetInt("lighthouse.dns.wildcard_limit", 5)
 
 	// attach request handler func
 	dns.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
