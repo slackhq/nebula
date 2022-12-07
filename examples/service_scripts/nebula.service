@@ -1,8 +1,10 @@
 [Unit]
 Description=nebula
-Wants=basic.target
-After=basic.target network.target
+Wants=network-online.target
+After=nss-lookup.target
 Before=sshd.service
+StartLimitIntervalSec=30
+StartLimitBurst=5
 
 [Service]
 SyslogIdentifier=nebula
