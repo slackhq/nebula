@@ -158,7 +158,7 @@ type HostInfo struct {
 	handshakeStart       time.Time        //todo: this an entry in the handshake manager
 	HandshakeReady       bool             //todo: being in the manager means you are ready
 	HandshakeCounter     int              //todo: another handshake manager entry
-	HandshakeLastRemotes int              //todo: another handshake manager entry, how many remotes we sent to last attempt
+	HandshakeLastRemotes []*udp.Addr      //todo: another handshake manager entry, which remotes we sent to last time
 	HandshakeComplete    bool             //todo: this should go away in favor of ConnectionState.ready
 	HandshakePacket      map[uint8][]byte //todo: this is other handshake manager entry
 	packetStore          []*cachedPacket  //todo: this is other handshake manager entry
