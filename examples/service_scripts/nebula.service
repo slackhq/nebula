@@ -1,6 +1,6 @@
 [Unit]
 Description=nebula
-Wants=basic.target
+Wants=basic.target nss-lookup.target
 After=basic.target network.target
 Before=sshd.service
 
