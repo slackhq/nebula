@@ -489,7 +489,13 @@ func (lh *LightHouse) addStaticRemotes(i int, vpnIp iputil.VpnIp, toAddrs []stri
 	ctx := lh.ctx
 	lh.Unlock()
 
-	hr, err := NewHostnameResults(ctx, lh.l, toAddrs)
+	hr, err := NewHostnameResults(ctx, lh.l, toAddrs, func() {
+		// This callback runs whenever the DNS hostname resolver finds a different set of IP's
+		// in its resolution for hostnames.
+		am.Lock()
+		defer am.Unlock()
+		am.shouldRebuild = true
+	})
 	if err != nil {
 		return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
 	}
@@ -497,13 +503,14 @@ func (lh *LightHouse) addStaticRemotes(i int, vpnIp iputil.VpnIp, toAddrs []stri
 
 	for _, addrPort := range hr.GetIPs() {
 
-		if addrPort.Addr().Is4() {
+		switch {
+		case addrPort.Addr().Is4():
 			to := NewIp4AndPortFromNetIP(addrPort.Addr(), addrPort.Port())
 			if !lh.unlockedShouldAddV4(vpnIp, to) {
 				continue
 			}
 			am.unlockedPrependV4(lh.myVpnIp, to)
-		} else {
+		case addrPort.Addr().Is6():
 			to := NewIp6AndPortFromNetIP(addrPort.Addr(), addrPort.Port())
 			if !lh.unlockedShouldAddV6(vpnIp, to) {
 				continue

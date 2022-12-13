@@ -74,7 +74,7 @@ type hostnamesResults struct {
 	ips          atomic.Pointer[map[netip.AddrPort]struct{}]
 }
 
-func NewHostnameResults(ctx context.Context, l *logrus.Logger, hostPorts []string) (*hostnamesResults, error) {
+func NewHostnameResults(ctx context.Context, l *logrus.Logger, hostPorts []string, onUpdate func()) (*hostnamesResults, error) {
 	r := &hostnamesResults{
 		hostnames: make([]hostnamePort, len(hostPorts)),
 		l:         l,
@@ -145,6 +145,7 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, hostPorts []strin
 			if different {
 				fmt.Printf("DNS results are different. Storing new IP's. (%s)->(%s)\n", *origSet, netipAddrs)
 				r.ips.Store(&netipAddrs)
+				onUpdate()
 			}
 			select {
 			case <-ctx.Done():
@@ -166,10 +167,12 @@ func (hr *hostnamesResults) Cancel() {
 
 func (hr *hostnamesResults) GetIPs() []netip.AddrPort {
 	var retSlice []netip.AddrPort
-	p := hr.ips.Load()
-	if p != nil {
-		for k := range *p {
-			retSlice = append(retSlice, k)
+	if hr != nil {
+		p := hr.ips.Load()
+		if p != nil {
+			for k := range *p {
+				retSlice = append(retSlice, k)
+			}
 		}
 	}
 	return retSlice
@@ -562,6 +565,24 @@ func (r *RemoteList) unlockedCollect() {
 				ip := iputil.VpnIp(v)
 				relays = append(relays, &ip)
 			}
+		}
+	}
+
+	dnsAddrs := r.hr.GetIPs()
+	for _, addr := range dnsAddrs {
+		switch {
+		case addr.Addr().Is4():
+			v4 := addr.Addr().As4()
+			addrs = append(addrs, &udp.Addr{
+				IP:   v4[:],
+				Port: addr.Port(),
+			})
+		case addr.Addr().Is6():
+			v6 := addr.Addr().As16()
+			addrs = append(addrs, &udp.Addr{
+				IP:   v6[:],
+				Port: addr.Port(),
+			})
 		}
 	}
 
