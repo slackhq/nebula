@@ -3,8 +3,11 @@ package nebula
 import (
 	"bytes"
 	"net"
+	"net/netip"
 	"sort"
+	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
@@ -55,6 +58,54 @@ type cacheV6 struct {
 	reported []*Ip6AndPort
 }
 
+type hostnamesResults struct {
+	hostnames []string
+	ips       atomic.Pointer[map[netip.AddrPort]struct{}]
+}
+
+func NewHostnameResults(hostPorts []string) (*hostnamesResults, error) {
+	r := &hostnamesResults{
+		hostnames: append([]string{}, hostPorts...),
+	}
+
+	// Fastrack IP addresses to ensure they're immediately available for use.
+	// DNS lookups for hostnames that aren't hardcoded IP's will happen in a background goroutine.
+	ips := map[netip.AddrPort]struct{}{}
+	for _, hostPort := range hostPorts {
+
+		rIp, sPort, err := net.SplitHostPort(hostPort)
+		if err != nil {
+			return nil, err
+		}
+
+		iPort, err := strconv.Atoi(sPort)
+		if err != nil {
+			return nil, err
+		}
+
+		addr, err := netip.ParseAddr(rIp)
+		if err != nil {
+			// This address is a hostname, not an IP address
+			continue
+		}
+		ips[netip.AddrPortFrom(addr, uint16(iPort))] = struct{}{}
+	}
+	r.ips.Store(&ips)
+
+	return r, nil
+}
+
+func (hr *hostnamesResults) GetIPs() []netip.AddrPort {
+	var retSlice []netip.AddrPort
+	p := hr.ips.Load()
+	if p != nil {
+		for k := range *p {
+			retSlice = append(retSlice, k)
+		}
+	}
+	return retSlice
+}
+
 // RemoteList is a unifying concept for lighthouse servers and clients as well as hostinfos.
 // It serves as a local cache of query replies, host update notifications, and locally learned addresses
 type RemoteList struct {
@@ -72,6 +123,8 @@ type RemoteList struct {
 	// For learned addresses, this is the vpnIp that sent the packet
 	cache map[iputil.VpnIp]*cache
 
+	hr *hostnamesResults
+
 	// This is a list of remotes that we have tried to handshake with and have returned from the wrong vpn ip.
 	// They should not be tried again during a handshake
 	badRemotes []*udp.Addr
@@ -87,6 +140,10 @@ func NewRemoteList() *RemoteList {
 		relays: make([]*iputil.VpnIp, 0),
 		cache:  make(map[iputil.VpnIp]*cache),
 	}
+}
+
+func (r *RemoteList) unlockedSetHostnamesResults(hr *hostnamesResults) {
+	r.hr = hr
 }
 
 // Len locks and reports the size of the deduplicated address list

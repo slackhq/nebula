@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -368,16 +367,9 @@ func (lh *LightHouse) loadStaticMap(c *config.C, tunCidr *net.IPNet, staticList 
 		remoteAddrs := []string{}
 		for _, v := range vals {
 			remoteAddrs = append(remoteAddrs, fmt.Sprintf("%v", v))
-			/*
-				ip, port, err := udp.ParseIPAndPort(fmt.Sprintf("%v", v))
-				if err != nil {
-					return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
-				}
-				remoteAddrs = append(remoteAddrs, udp.NewAddr(ip, port))
-			*/
 		}
 
-		err := lh.addStaticRemote(i, vpnIp, remoteAddrs, staticList)
+		err := lh.addStaticRemotes(i, vpnIp, remoteAddrs, staticList)
 		if err != nil {
 			return err
 		}
@@ -487,54 +479,38 @@ func (lh *LightHouse) DeleteVpnIp(vpnIp iputil.VpnIp) {
 // We are the owner because we don't want a lighthouse server to advertise for static hosts it was configured with
 // And we don't want a lighthouse query reply to interfere with our learned cache if we are a client
 // NOTE: this function should not interact with any hot path objects, like lh.staticList, the caller should handle it
-func (lh *LightHouse) addStaticRemote(i int, vpnIp iputil.VpnIp, toAddrs []string, staticList map[iputil.VpnIp]struct{}) error {
+func (lh *LightHouse) addStaticRemotes(i int, vpnIp iputil.VpnIp, toAddrs []string, staticList map[iputil.VpnIp]struct{}) error {
 	lh.Lock()
 	am := lh.unlockedGetRemoteList(vpnIp)
 	am.Lock()
 	defer am.Unlock()
 	lh.Unlock()
 
-	addrSet := false
-	for _, toAddr := range toAddrs {
+	hr, err := NewHostnameResults(toAddrs)
+	if err != nil {
+		return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
+	}
+	am.unlockedSetHostnamesResults(hr)
 
-		rIp, sPort, err := net.SplitHostPort(toAddr)
-		if err != nil {
-			return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
-		}
+	for _, addrPort := range hr.GetIPs() {
 
-		iPort, err := strconv.Atoi(sPort)
-		if err != nil {
-			return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
-		}
-
-		addr, err := netip.ParseAddr(rIp)
-		if err != nil {
-			// This address is a hostname, not an IP address
-			continue
-		}
-
-		if addr.Is4() {
-			to := NewIp4AndPortFromNetIP(addr, uint32(iPort))
+		if addrPort.Addr().Is4() {
+			to := NewIp4AndPortFromNetIP(addrPort.Addr(), addrPort.Port())
 			if !lh.unlockedShouldAddV4(vpnIp, to) {
 				continue
 			}
 			am.unlockedPrependV4(lh.myVpnIp, to)
-			addrSet = true
-
 		} else {
-			to := NewIp6AndPortFromNetIP(addr, uint32(iPort))
+			to := NewIp6AndPortFromNetIP(addrPort.Addr(), addrPort.Port())
 			if !lh.unlockedShouldAddV6(vpnIp, to) {
 				continue
 			}
 			am.unlockedPrependV6(lh.myVpnIp, to)
-			addrSet = true
 		}
 	}
 
 	// Mark it as static in the caller provided map
-	if addrSet {
-		staticList[vpnIp] = struct{}{}
-	}
+	staticList[vpnIp] = struct{}{}
 	return nil
 }
 
@@ -639,11 +615,11 @@ func NewIp4AndPort(ip net.IP, port uint32) *Ip4AndPort {
 	return &ipp
 }
 
-func NewIp4AndPortFromNetIP(ip netip.Addr, port uint32) *Ip4AndPort {
+func NewIp4AndPortFromNetIP(ip netip.Addr, port uint16) *Ip4AndPort {
 	v4Addr := ip.As4()
 	return &Ip4AndPort{
 		Ip:   binary.BigEndian.Uint32(v4Addr[:]),
-		Port: port,
+		Port: uint32(port),
 	}
 }
 
@@ -655,12 +631,12 @@ func NewIp6AndPort(ip net.IP, port uint32) *Ip6AndPort {
 	}
 }
 
-func NewIp6AndPortFromNetIP(ip netip.Addr, port uint32) *Ip6AndPort {
+func NewIp6AndPortFromNetIP(ip netip.Addr, port uint16) *Ip6AndPort {
 	ip6Addr := ip.As16()
 	return &Ip6AndPort{
 		Hi:   binary.BigEndian.Uint64(ip6Addr[:8]),
 		Lo:   binary.BigEndian.Uint64(ip6Addr[8:]),
-		Port: port,
+		Port: uint32(port),
 	}
 }
 func NewUDPAddrFromLH4(ipp *Ip4AndPort) *udp.Addr {
