@@ -486,9 +486,10 @@ func (lh *LightHouse) addStaticRemotes(i int, vpnIp iputil.VpnIp, toAddrs []stri
 	am := lh.unlockedGetRemoteList(vpnIp)
 	am.Lock()
 	defer am.Unlock()
+	ctx := lh.ctx
 	lh.Unlock()
 
-	hr, err := NewHostnameResults(toAddrs)
+	hr, err := NewHostnameResults(ctx, lh.l, toAddrs)
 	if err != nil {
 		return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
 	}

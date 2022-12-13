@@ -2,13 +2,17 @@ package nebula
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
 )
@@ -58,20 +62,28 @@ type cacheV6 struct {
 	reported []*Ip6AndPort
 }
 
-type hostnamesResults struct {
-	hostnames []string
-	ips       atomic.Pointer[map[netip.AddrPort]struct{}]
+type hostnamePort struct {
+	name string
+	port uint16
 }
 
-func NewHostnameResults(hostPorts []string) (*hostnamesResults, error) {
+type hostnamesResults struct {
+	hostnames    []hostnamePort
+	lookupTicker *time.Ticker
+	l            *logrus.Logger
+	ips          atomic.Pointer[map[netip.AddrPort]struct{}]
+}
+
+func NewHostnameResults(ctx context.Context, l *logrus.Logger, hostPorts []string) (*hostnamesResults, error) {
 	r := &hostnamesResults{
-		hostnames: append([]string{}, hostPorts...),
+		hostnames: make([]hostnamePort, len(hostPorts)),
+		l:         l,
 	}
 
 	// Fastrack IP addresses to ensure they're immediately available for use.
 	// DNS lookups for hostnames that aren't hardcoded IP's will happen in a background goroutine.
 	ips := map[netip.AddrPort]struct{}{}
-	for _, hostPort := range hostPorts {
+	for idx, hostPort := range hostPorts {
 
 		rIp, sPort, err := net.SplitHostPort(hostPort)
 		if err != nil {
@@ -83,16 +95,73 @@ func NewHostnameResults(hostPorts []string) (*hostnamesResults, error) {
 			return nil, err
 		}
 
+		r.hostnames[idx] = hostnamePort{name: rIp, port: uint16(iPort)}
 		addr, err := netip.ParseAddr(rIp)
 		if err != nil {
 			// This address is a hostname, not an IP address
 			continue
 		}
+
+		// Save the IP address immediately
 		ips[netip.AddrPortFrom(addr, uint16(iPort))] = struct{}{}
 	}
 	r.ips.Store(&ips)
 
+	// Time for the DNS lookup goroutine
+	ticker := time.NewTicker(1 * time.Second)
+	r.lookupTicker = ticker
+	go func() {
+		defer ticker.Stop()
+		for {
+
+			netipAddrs := map[netip.AddrPort]struct{}{}
+			for _, hostPort := range r.hostnames {
+				addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", hostPort.name)
+				if err != nil {
+					fmt.Printf("LookupHost(%s) returned error %s\n", hostPort.name, err)
+					continue
+				}
+				fmt.Printf("LookupHost(%s) returned addrs %s\n", hostPort.name, addrs)
+				for _, a := range addrs {
+					netipAddrs[netip.AddrPortFrom(a, hostPort.port)] = struct{}{}
+				}
+			}
+			origSet := r.ips.Load()
+			different := false
+			for a := range *origSet {
+				if _, ok := netipAddrs[a]; !ok {
+					different = true
+					break
+				}
+			}
+			if !different {
+				for a := range netipAddrs {
+					if _, ok := (*origSet)[a]; !ok {
+						different = true
+						break
+					}
+				}
+			}
+			if different {
+				fmt.Printf("DNS results are different. Storing new IP's. (%s)->(%s)\n", *origSet, netipAddrs)
+				r.ips.Store(&netipAddrs)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				continue
+			}
+		}
+	}()
+
 	return r, nil
+}
+
+func (hr *hostnamesResults) Cancel() {
+	if hr != nil {
+		hr.lookupTicker.Stop()
+	}
 }
 
 func (hr *hostnamesResults) GetIPs() []netip.AddrPort {
@@ -143,6 +212,8 @@ func NewRemoteList() *RemoteList {
 }
 
 func (r *RemoteList) unlockedSetHostnamesResults(hr *hostnamesResults) {
+	// Cancel any existing hostnamesResults DNS goroutine to release resources
+	r.hr.Cancel()
 	r.hr = hr
 }
 
