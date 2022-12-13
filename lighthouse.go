@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -363,16 +365,22 @@ func (lh *LightHouse) loadStaticMap(c *config.C, tunCidr *net.IPNet, staticList 
 		if !ok {
 			vals = []interface{}{v}
 		}
-		remoteAddrs := []*udp.Addr{}
+		remoteAddrs := []string{}
 		for _, v := range vals {
-			ip, port, err := udp.ParseIPAndPort(fmt.Sprintf("%v", v))
-			if err != nil {
-				return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
-			}
-			remoteAddrs = append(remoteAddrs, udp.NewAddr(ip, port))
+			remoteAddrs = append(remoteAddrs, fmt.Sprintf("%v", v))
+			/*
+				ip, port, err := udp.ParseIPAndPort(fmt.Sprintf("%v", v))
+				if err != nil {
+					return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
+				}
+				remoteAddrs = append(remoteAddrs, udp.NewAddr(ip, port))
+			*/
 		}
 
-		lh.addStaticRemote(vpnIp, remoteAddrs, staticList)
+		err := lh.addStaticRemote(i, vpnIp, remoteAddrs, staticList)
+		if err != nil {
+			return err
+		}
 		i++
 	}
 
@@ -479,7 +487,7 @@ func (lh *LightHouse) DeleteVpnIp(vpnIp iputil.VpnIp) {
 // We are the owner because we don't want a lighthouse server to advertise for static hosts it was configured with
 // And we don't want a lighthouse query reply to interfere with our learned cache if we are a client
 // NOTE: this function should not interact with any hot path objects, like lh.staticList, the caller should handle it
-func (lh *LightHouse) addStaticRemote(vpnIp iputil.VpnIp, toAddrs []*udp.Addr, staticList map[iputil.VpnIp]struct{}) {
+func (lh *LightHouse) addStaticRemote(i int, vpnIp iputil.VpnIp, toAddrs []string, staticList map[iputil.VpnIp]struct{}) error {
 	lh.Lock()
 	am := lh.unlockedGetRemoteList(vpnIp)
 	am.Lock()
@@ -488,8 +496,25 @@ func (lh *LightHouse) addStaticRemote(vpnIp iputil.VpnIp, toAddrs []*udp.Addr, s
 
 	addrSet := false
 	for _, toAddr := range toAddrs {
-		if ipv4 := toAddr.IP.To4(); ipv4 != nil {
-			to := NewIp4AndPort(ipv4, uint32(toAddr.Port))
+
+		rIp, sPort, err := net.SplitHostPort(toAddr)
+		if err != nil {
+			return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
+		}
+
+		iPort, err := strconv.Atoi(sPort)
+		if err != nil {
+			return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
+		}
+
+		addr, err := netip.ParseAddr(rIp)
+		if err != nil {
+			// This address is a hostname, not an IP address
+			continue
+		}
+
+		if addr.Is4() {
+			to := NewIp4AndPortFromNetIP(addr, uint32(iPort))
 			if !lh.unlockedShouldAddV4(vpnIp, to) {
 				continue
 			}
@@ -497,7 +522,7 @@ func (lh *LightHouse) addStaticRemote(vpnIp iputil.VpnIp, toAddrs []*udp.Addr, s
 			addrSet = true
 
 		} else {
-			to := NewIp6AndPort(toAddr.IP, uint32(toAddr.Port))
+			to := NewIp6AndPortFromNetIP(addr, uint32(iPort))
 			if !lh.unlockedShouldAddV6(vpnIp, to) {
 				continue
 			}
@@ -510,6 +535,7 @@ func (lh *LightHouse) addStaticRemote(vpnIp iputil.VpnIp, toAddrs []*udp.Addr, s
 	if addrSet {
 		staticList[vpnIp] = struct{}{}
 	}
+	return nil
 }
 
 // addCalculatedRemotes adds any calculated remotes based on the
@@ -613,6 +639,14 @@ func NewIp4AndPort(ip net.IP, port uint32) *Ip4AndPort {
 	return &ipp
 }
 
+func NewIp4AndPortFromNetIP(ip netip.Addr, port uint32) *Ip4AndPort {
+	v4Addr := ip.As4()
+	return &Ip4AndPort{
+		Ip:   binary.BigEndian.Uint32(v4Addr[:]),
+		Port: port,
+	}
+}
+
 func NewIp6AndPort(ip net.IP, port uint32) *Ip6AndPort {
 	return &Ip6AndPort{
 		Hi:   binary.BigEndian.Uint64(ip[:8]),
@@ -621,6 +655,14 @@ func NewIp6AndPort(ip net.IP, port uint32) *Ip6AndPort {
 	}
 }
 
+func NewIp6AndPortFromNetIP(ip netip.Addr, port uint32) *Ip6AndPort {
+	ip6Addr := ip.As16()
+	return &Ip6AndPort{
+		Hi:   binary.BigEndian.Uint64(ip6Addr[:8]),
+		Lo:   binary.BigEndian.Uint64(ip6Addr[8:]),
+		Port: port,
+	}
+}
 func NewUDPAddrFromLH4(ipp *Ip4AndPort) *udp.Addr {
 	ip := ipp.Ip
 	return udp.NewAddr(
