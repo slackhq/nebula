@@ -67,15 +67,16 @@ type hostnamePort struct {
 }
 
 type hostnamesResults struct {
-	hostnames    []hostnamePort
-	lookupTicker *time.Ticker
-	l            *logrus.Logger
-	ips          atomic.Pointer[map[netip.AddrPort]struct{}]
+	hostnames []hostnamePort
+	stop      chan struct{}
+	l         *logrus.Logger
+	ips       atomic.Pointer[map[netip.AddrPort]struct{}]
 }
 
 func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, hostPorts []string, onUpdate func()) (*hostnamesResults, error) {
 	r := &hostnamesResults{
 		hostnames: make([]hostnamePort, len(hostPorts)),
+		stop:      make(chan (struct{})),
 		l:         l,
 	}
 
@@ -110,9 +111,9 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 
 	// Time for the DNS lookup goroutine
 	if performBackgroundLookup {
-		r.lookupTicker = time.NewTicker(d)
+		ticker := time.NewTicker(d)
 		go func() {
-			defer r.lookupTicker.Stop()
+			defer ticker.Stop()
 			for {
 				netipAddrs := map[netip.AddrPort]struct{}{}
 				for _, hostPort := range r.hostnames {
@@ -149,7 +150,9 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 				select {
 				case <-ctx.Done():
 					return
-				case <-r.lookupTicker.C:
+				case <-r.stop:
+					return
+				case <-ticker.C:
 					continue
 				}
 			}
@@ -161,7 +164,7 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 
 func (hr *hostnamesResults) Cancel() {
 	if hr != nil {
-		hr.lookupTicker.Stop()
+		hr.stop <- struct{}{}
 	}
 }
 
