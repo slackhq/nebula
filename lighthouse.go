@@ -360,22 +360,19 @@ func (lh *LightHouse) loadStaticMap(c *config.C, tunCidr *net.IPNet, staticList 
 
 		vpnIp := iputil.Ip2VpnIp(rip)
 		vals, ok := v.([]interface{})
-		if ok {
-			for _, v := range vals {
-				ip, port, err := udp.ParseIPAndPort(fmt.Sprintf("%v", v))
-				if err != nil {
-					return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
-				}
-				lh.addStaticRemote(vpnIp, udp.NewAddr(ip, port), staticList)
-			}
-
-		} else {
+		if !ok {
+			vals = []interface{}{v}
+		}
+		remoteAddrs := []*udp.Addr{}
+		for _, v := range vals {
 			ip, port, err := udp.ParseIPAndPort(fmt.Sprintf("%v", v))
 			if err != nil {
 				return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
 			}
-			lh.addStaticRemote(vpnIp, udp.NewAddr(ip, port), staticList)
+			remoteAddrs = append(remoteAddrs, udp.NewAddr(ip, port))
 		}
+
+		lh.addStaticRemote(vpnIp, remoteAddrs, staticList)
 		i++
 	}
 
@@ -482,30 +479,37 @@ func (lh *LightHouse) DeleteVpnIp(vpnIp iputil.VpnIp) {
 // We are the owner because we don't want a lighthouse server to advertise for static hosts it was configured with
 // And we don't want a lighthouse query reply to interfere with our learned cache if we are a client
 // NOTE: this function should not interact with any hot path objects, like lh.staticList, the caller should handle it
-func (lh *LightHouse) addStaticRemote(vpnIp iputil.VpnIp, toAddr *udp.Addr, staticList map[iputil.VpnIp]struct{}) {
+func (lh *LightHouse) addStaticRemote(vpnIp iputil.VpnIp, toAddrs []*udp.Addr, staticList map[iputil.VpnIp]struct{}) {
 	lh.Lock()
 	am := lh.unlockedGetRemoteList(vpnIp)
 	am.Lock()
 	defer am.Unlock()
 	lh.Unlock()
 
-	if ipv4 := toAddr.IP.To4(); ipv4 != nil {
-		to := NewIp4AndPort(ipv4, uint32(toAddr.Port))
-		if !lh.unlockedShouldAddV4(vpnIp, to) {
-			return
-		}
-		am.unlockedPrependV4(lh.myVpnIp, to)
+	addrSet := false
+	for _, toAddr := range toAddrs {
+		if ipv4 := toAddr.IP.To4(); ipv4 != nil {
+			to := NewIp4AndPort(ipv4, uint32(toAddr.Port))
+			if !lh.unlockedShouldAddV4(vpnIp, to) {
+				continue
+			}
+			am.unlockedPrependV4(lh.myVpnIp, to)
+			addrSet = true
 
-	} else {
-		to := NewIp6AndPort(toAddr.IP, uint32(toAddr.Port))
-		if !lh.unlockedShouldAddV6(vpnIp, to) {
-			return
+		} else {
+			to := NewIp6AndPort(toAddr.IP, uint32(toAddr.Port))
+			if !lh.unlockedShouldAddV6(vpnIp, to) {
+				continue
+			}
+			am.unlockedPrependV6(lh.myVpnIp, to)
+			addrSet = true
 		}
-		am.unlockedPrependV6(lh.myVpnIp, to)
 	}
 
 	// Mark it as static in the caller provided map
-	staticList[vpnIp] = struct{}{}
+	if addrSet {
+		staticList[vpnIp] = struct{}{}
+	}
 }
 
 // addCalculatedRemotes adds any calculated remotes based on the
