@@ -261,7 +261,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 	}
 
 	//NOTE: many things will get much simpler when we combine static_host_map and lighthouse.hosts in config
-	if initial || c.HasChanged("static_host_map") {
+	if initial || c.HasChanged("static_host_map") || c.HasChanged("static_host_map_cadence") {
 		staticList := make(map[iputil.VpnIp]struct{})
 		err := lh.loadStaticMap(c, lh.myVpnNet, staticList)
 		if err != nil {
@@ -347,7 +347,21 @@ func (lh *LightHouse) parseLighthouses(c *config.C, tunCidr *net.IPNet, lhMap ma
 	return nil
 }
 
+func getStaticMapCadence(c *config.C) (time.Duration, error) {
+	cadence := c.GetString("static_host_map_cadence", "5m")
+	d, err := time.ParseDuration(cadence)
+	if err != nil {
+		return 0, err
+	}
+	return d, nil
+}
+
 func (lh *LightHouse) loadStaticMap(c *config.C, tunCidr *net.IPNet, staticList map[iputil.VpnIp]struct{}) error {
+	d, err := getStaticMapCadence(c)
+	if err != nil {
+		return err
+	}
+
 	shm := c.GetMap("static_host_map", map[interface{}]interface{}{})
 	i := 0
 
@@ -371,7 +385,7 @@ func (lh *LightHouse) loadStaticMap(c *config.C, tunCidr *net.IPNet, staticList 
 			remoteAddrs = append(remoteAddrs, fmt.Sprintf("%v", v))
 		}
 
-		err := lh.addStaticRemotes(i, vpnIp, remoteAddrs, staticList)
+		err := lh.addStaticRemotes(i, d, vpnIp, remoteAddrs, staticList)
 		if err != nil {
 			return err
 		}
@@ -481,7 +495,7 @@ func (lh *LightHouse) DeleteVpnIp(vpnIp iputil.VpnIp) {
 // We are the owner because we don't want a lighthouse server to advertise for static hosts it was configured with
 // And we don't want a lighthouse query reply to interfere with our learned cache if we are a client
 // NOTE: this function should not interact with any hot path objects, like lh.staticList, the caller should handle it
-func (lh *LightHouse) addStaticRemotes(i int, vpnIp iputil.VpnIp, toAddrs []string, staticList map[iputil.VpnIp]struct{}) error {
+func (lh *LightHouse) addStaticRemotes(i int, d time.Duration, vpnIp iputil.VpnIp, toAddrs []string, staticList map[iputil.VpnIp]struct{}) error {
 	lh.Lock()
 	am := lh.unlockedGetRemoteList(vpnIp)
 	am.Lock()
@@ -489,7 +503,7 @@ func (lh *LightHouse) addStaticRemotes(i int, vpnIp iputil.VpnIp, toAddrs []stri
 	ctx := lh.ctx
 	lh.Unlock()
 
-	hr, err := NewHostnameResults(ctx, lh.l, toAddrs, func() {
+	hr, err := NewHostnameResults(ctx, lh.l, d, toAddrs, func() {
 		// This callback runs whenever the DNS hostname resolver finds a different set of IP's
 		// in its resolution for hostnames.
 		am.Lock()

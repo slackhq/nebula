@@ -3,7 +3,6 @@ package nebula
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"net"
 	"net/netip"
 	"sort"
@@ -74,7 +73,7 @@ type hostnamesResults struct {
 	ips          atomic.Pointer[map[netip.AddrPort]struct{}]
 }
 
-func NewHostnameResults(ctx context.Context, l *logrus.Logger, hostPorts []string, onUpdate func()) (*hostnamesResults, error) {
+func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, hostPorts []string, onUpdate func()) (*hostnamesResults, error) {
 	r := &hostnamesResults{
 		hostnames: make([]hostnamePort, len(hostPorts)),
 		l:         l,
@@ -82,6 +81,7 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, hostPorts []strin
 
 	// Fastrack IP addresses to ensure they're immediately available for use.
 	// DNS lookups for hostnames that aren't hardcoded IP's will happen in a background goroutine.
+	performBackgroundLookup := false
 	ips := map[netip.AddrPort]struct{}{}
 	for idx, hostPort := range hostPorts {
 
@@ -99,6 +99,7 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, hostPorts []strin
 		addr, err := netip.ParseAddr(rIp)
 		if err != nil {
 			// This address is a hostname, not an IP address
+			performBackgroundLookup = true
 			continue
 		}
 
@@ -108,53 +109,52 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, hostPorts []strin
 	r.ips.Store(&ips)
 
 	// Time for the DNS lookup goroutine
-	ticker := time.NewTicker(1 * time.Second)
-	r.lookupTicker = ticker
-	go func() {
-		defer ticker.Stop()
-		for {
-
-			netipAddrs := map[netip.AddrPort]struct{}{}
-			for _, hostPort := range r.hostnames {
-				addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", hostPort.name)
-				if err != nil {
-					fmt.Printf("LookupHost(%s) returned error %s\n", hostPort.name, err)
-					continue
+	if performBackgroundLookup {
+		r.lookupTicker = time.NewTicker(d)
+		go func() {
+			defer r.lookupTicker.Stop()
+			for {
+				netipAddrs := map[netip.AddrPort]struct{}{}
+				for _, hostPort := range r.hostnames {
+					addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", hostPort.name)
+					if err != nil {
+						l.WithFields(logrus.Fields{"hostname": hostPort}).WithError(err).Info("DNS Resolver failed to look up host")
+						continue
+					}
+					for _, a := range addrs {
+						netipAddrs[netip.AddrPortFrom(a, hostPort.port)] = struct{}{}
+					}
 				}
-				fmt.Printf("LookupHost(%s) returned addrs %s\n", hostPort.name, addrs)
-				for _, a := range addrs {
-					netipAddrs[netip.AddrPortFrom(a, hostPort.port)] = struct{}{}
-				}
-			}
-			origSet := r.ips.Load()
-			different := false
-			for a := range *origSet {
-				if _, ok := netipAddrs[a]; !ok {
-					different = true
-					break
-				}
-			}
-			if !different {
-				for a := range netipAddrs {
-					if _, ok := (*origSet)[a]; !ok {
+				origSet := r.ips.Load()
+				different := false
+				for a := range *origSet {
+					if _, ok := netipAddrs[a]; !ok {
 						different = true
 						break
 					}
 				}
+				if !different {
+					for a := range netipAddrs {
+						if _, ok := (*origSet)[a]; !ok {
+							different = true
+							break
+						}
+					}
+				}
+				if different {
+					l.WithFields(logrus.Fields{"origSet": origSet, "newSet": netipAddrs}).Info("DNS Results changed for host list")
+					r.ips.Store(&netipAddrs)
+					onUpdate()
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-r.lookupTicker.C:
+					continue
+				}
 			}
-			if different {
-				fmt.Printf("DNS results are different. Storing new IP's. (%s)->(%s)\n", *origSet, netipAddrs)
-				r.ips.Store(&netipAddrs)
-				onUpdate()
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				continue
-			}
-		}
-	}()
+		}()
+	}
 
 	return r, nil
 }
