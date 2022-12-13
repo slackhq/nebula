@@ -127,6 +127,8 @@ func help(err string, out io.Writer) {
 	fmt.Fprintln(out, "    "+signSummary())
 	fmt.Fprintln(out, "    "+printSummary())
 	fmt.Fprintln(out, "    "+verifySummary())
+	fmt.Fprintln(out, "")
+	fmt.Fprintf(out, "  To see usage for a given mode, use %s <mode> -h\n", os.Args[0])
 }
 
 func mustFlagString(name string, val *string) error {
