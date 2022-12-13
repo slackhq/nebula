@@ -195,7 +195,8 @@ type RemoteList struct {
 	// For learned addresses, this is the vpnIp that sent the packet
 	cache map[iputil.VpnIp]*cache
 
-	hr *hostnamesResults
+	hr        *hostnamesResults
+	shouldAdd func(netip.Addr) bool
 
 	// This is a list of remotes that we have tried to handshake with and have returned from the wrong vpn ip.
 	// They should not be tried again during a handshake
@@ -206,11 +207,12 @@ type RemoteList struct {
 }
 
 // NewRemoteList creates a new empty RemoteList
-func NewRemoteList() *RemoteList {
+func NewRemoteList(shouldAdd func(netip.Addr) bool) *RemoteList {
 	return &RemoteList{
-		addrs:  make([]*udp.Addr, 0),
-		relays: make([]*iputil.VpnIp, 0),
-		cache:  make(map[iputil.VpnIp]*cache),
+		addrs:     make([]*udp.Addr, 0),
+		relays:    make([]*iputil.VpnIp, 0),
+		cache:     make(map[iputil.VpnIp]*cache),
+		shouldAdd: shouldAdd,
 	}
 }
 
@@ -570,19 +572,21 @@ func (r *RemoteList) unlockedCollect() {
 
 	dnsAddrs := r.hr.GetIPs()
 	for _, addr := range dnsAddrs {
-		switch {
-		case addr.Addr().Is4():
-			v4 := addr.Addr().As4()
-			addrs = append(addrs, &udp.Addr{
-				IP:   v4[:],
-				Port: addr.Port(),
-			})
-		case addr.Addr().Is6():
-			v6 := addr.Addr().As16()
-			addrs = append(addrs, &udp.Addr{
-				IP:   v6[:],
-				Port: addr.Port(),
-			})
+		if r.shouldAdd == nil || r.shouldAdd(addr.Addr()) {
+			switch {
+			case addr.Addr().Is4():
+				v4 := addr.Addr().As4()
+				addrs = append(addrs, &udp.Addr{
+					IP:   v4[:],
+					Port: addr.Port(),
+				})
+			case addr.Addr().Is6():
+				v6 := addr.Addr().As16()
+				addrs = append(addrs, &udp.Addr{
+					IP:   v6[:],
+					Port: addr.Port(),
+				})
+			}
 		}
 	}
 

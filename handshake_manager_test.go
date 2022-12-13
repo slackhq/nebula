@@ -41,7 +41,7 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	assert.False(t, initCalled)
 	assert.Same(t, i, i2)
 
-	i.remotes = NewRemoteList()
+	i.remotes = NewRemoteList(nil)
 	i.HandshakeReady = true
 
 	// Adding something to pending should not affect the main hostmap

@@ -77,7 +77,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 
 	hAddr := udp.NewAddrFromString("4.5.6.7:12345")
 	hAddr2 := udp.NewAddrFromString("4.5.6.7:12346")
-	lh.addrMap[3] = NewRemoteList()
+	lh.addrMap[3] = NewRemoteList(nil)
 	lh.addrMap[3].unlockedSetV4(
 		3,
 		3,
@@ -90,7 +90,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 
 	rAddr := udp.NewAddrFromString("1.2.2.3:12345")
 	rAddr2 := udp.NewAddrFromString("1.2.2.3:12346")
-	lh.addrMap[2] = NewRemoteList()
+	lh.addrMap[2] = NewRemoteList(nil)
 	lh.addrMap[2].unlockedSetV4(
 		3,
 		3,

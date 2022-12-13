@@ -561,10 +561,40 @@ func (lh *LightHouse) addCalculatedRemotes(vpnIp iputil.VpnIp) bool {
 func (lh *LightHouse) unlockedGetRemoteList(vpnIp iputil.VpnIp) *RemoteList {
 	am, ok := lh.addrMap[vpnIp]
 	if !ok {
-		am = NewRemoteList()
+		am = NewRemoteList(func(a netip.Addr) bool { return lh.shouldAdd(vpnIp, a) })
 		lh.addrMap[vpnIp] = am
 	}
 	return am
+}
+
+func (lh *LightHouse) shouldAdd(vpnIp iputil.VpnIp, to netip.Addr) bool {
+	switch {
+	case to.Is4():
+		ipBytes := to.As4()
+		ip := iputil.Ip2VpnIp(ipBytes[:])
+		allow := lh.GetRemoteAllowList().AllowIpV4(vpnIp, ip)
+		if lh.l.Level >= logrus.TraceLevel {
+			lh.l.WithField("remoteIp", vpnIp).WithField("allow", allow).Trace("remoteAllowList.Allow")
+		}
+		if !allow || ipMaskContains(lh.myVpnIp, lh.myVpnZeros, ip) {
+			return false
+		}
+	case to.Is6():
+		ipBytes := to.As16()
+
+		hi := binary.BigEndian.Uint64(ipBytes[:8])
+		lo := binary.BigEndian.Uint64(ipBytes[8:])
+		allow := lh.GetRemoteAllowList().AllowIpV6(vpnIp, hi, lo)
+		if lh.l.Level >= logrus.TraceLevel {
+			lh.l.WithField("remoteIp", to).WithField("allow", allow).Trace("remoteAllowList.Allow")
+		}
+
+		// We don't check our vpn network here because nebula does not support ipv6 on the inside
+		if !allow {
+			return false
+		}
+	}
+	return true
 }
 
 // unlockedShouldAddV4 checks if to is allowed by our allow list
