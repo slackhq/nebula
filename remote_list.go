@@ -67,17 +67,21 @@ type hostnamePort struct {
 }
 
 type hostnamesResults struct {
-	hostnames []hostnamePort
-	stop      chan struct{}
-	l         *logrus.Logger
-	ips       atomic.Pointer[map[netip.AddrPort]struct{}]
+	hostnames     []hostnamePort
+	network       string
+	lookupTimeout time.Duration
+	stop          chan struct{}
+	l             *logrus.Logger
+	ips           atomic.Pointer[map[netip.AddrPort]struct{}]
 }
 
-func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, hostPorts []string, onUpdate func()) (*hostnamesResults, error) {
+func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, network string, timeout time.Duration, hostPorts []string, onUpdate func()) (*hostnamesResults, error) {
 	r := &hostnamesResults{
-		hostnames: make([]hostnamePort, len(hostPorts)),
-		stop:      make(chan (struct{})),
-		l:         l,
+		hostnames:     make([]hostnamePort, len(hostPorts)),
+		network:       network,
+		lookupTimeout: timeout,
+		stop:          make(chan (struct{})),
+		l:             l,
 	}
 
 	// Fastrack IP addresses to ensure they're immediately available for use.
@@ -117,9 +121,11 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 			for {
 				netipAddrs := map[netip.AddrPort]struct{}{}
 				for _, hostPort := range r.hostnames {
-					addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", hostPort.name)
+					timeoutCtx, timeoutCancel := context.WithTimeout(ctx, r.lookupTimeout)
+					addrs, err := net.DefaultResolver.LookupNetIP(timeoutCtx, r.network, hostPort.name)
+					timeoutCancel()
 					if err != nil {
-						l.WithFields(logrus.Fields{"hostname": hostPort}).WithError(err).Info("DNS Resolver failed to look up host")
+						l.WithFields(logrus.Fields{"hostname": hostPort.name, "network": r.network}).WithError(err).Error("DNS resolution failed for static_map host")
 						continue
 					}
 					for _, a := range addrs {
@@ -143,7 +149,7 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 					}
 				}
 				if different {
-					l.WithFields(logrus.Fields{"origSet": origSet, "newSet": netipAddrs}).Info("DNS Results changed for host list")
+					l.WithFields(logrus.Fields{"origSet": origSet, "newSet": netipAddrs}).Info("DNS results changed for host list")
 					r.ips.Store(&netipAddrs)
 					onUpdate()
 				}
