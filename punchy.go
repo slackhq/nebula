@@ -9,12 +9,13 @@ import (
 )
 
 type Punchy struct {
-	punch     atomic.Bool
-	respond   atomic.Bool
-	frequency atomic.Int64
-	delay     atomic.Int64
-	l         *logrus.Logger
-	reconfig  chan struct{}
+	punch           atomic.Bool
+	respond         atomic.Bool
+	frequency       atomic.Int64
+	delay           atomic.Int64
+	l               *logrus.Logger
+	reconfig        chan struct{}
+	punchEverything atomic.Bool
 }
 
 func NewPunchyFromConfig(l *logrus.Logger, c *config.C) *Punchy {
@@ -83,6 +84,14 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 		}
 	}
 
+	if initial || c.HasChanged("punchy.target_all_remotes") {
+		punchyUpdated = true
+		p.punchEverything.Store(c.GetBool("punchy.target_all_remotes", true))
+		if !initial {
+			p.l.WithField("target_all_remotes", p.GetTargetEverything()).Info("punchy.target_all_remotes changed")
+		}
+	}
+
 	if punchyUpdated {
 		select {
 		case p.reconfig <- struct{}{}:
@@ -93,6 +102,10 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 
 func (p *Punchy) GetPunch() bool {
 	return p.punch.Load()
+}
+
+func (p *Punchy) GetTargetEverything() bool {
+	return p.punchEverything.Load()
 }
 
 func (p *Punchy) GetRespond() bool {

@@ -539,19 +539,35 @@ func (hm *HostMap) addHostInfo(hostinfo *HostInfo, f *Interface) {
 	}
 }
 
-// punchList assembles a list of all non nil remote pointer entries in this hostmap
-// The caller can then do the its work outside of the read lock
-func (hm *HostMap) punchList(rl []*udp.Addr) []*udp.Addr {
-	hm.RLock()
-	defer hm.RUnlock()
+// punchList assembles a list of target IPs and ports to punch.
+// It can target every known RemoteAddr (that is, all potential real IP's known for every host),
+// or return only the list of currently established real IP's connected.
+// The caller can then do the its work outside of the read lock.
+// We avoid some memory allocation by re-using the same allRemoteLists and targetAddrs slices in every call.
+func (hm *HostMap) punchList(targetEverything bool, allRemoteLists []*RemoteList, targetAddrs []*udp.Addr) []*udp.Addr {
+	allRemoteLists = allRemoteLists[:0]
+	targetAddrs = targetAddrs[:0]
+	if targetEverything {
+		hm.RLock()
+		for _, v := range hm.Hosts {
+			allRemoteLists = append(allRemoteLists, v.remotes)
+		}
+		hm.RUnlock()
+		for _, curRemoteList := range allRemoteLists {
+			targetAddrs = append(targetAddrs, curRemoteList.CopyAddrs(hm.preferredRanges)...)
+		}
+	} else {
+		hm.RLock()
+		defer hm.RUnlock()
 
-	for _, v := range hm.Hosts {
-		// TODO v.remote is data-racy. Need to synchronize access (atomic or lock)
-		if v.remote != nil {
-			rl = append(rl, v.remote)
+		for _, v := range hm.Hosts {
+			// TODO v.remote is data-racy. Need to synchronize access (atomic or lock)
+			if v.remote != nil {
+				targetAddrs = append(targetAddrs, v.remote)
+			}
 		}
 	}
-	return rl
+	return targetAddrs
 }
 
 // Punchy iterates through the result of punchList() to assemble all known addresses and sends a hole punch packet to them
@@ -564,6 +580,7 @@ func (hm *HostMap) Punchy(ctx context.Context, punchy *Punchy, conn *udp.Conn) {
 	}
 
 	var addrs []*udp.Addr
+	var rl []*RemoteList
 	b := []byte{1}
 
 	punchInterval := punchy.GetFrequency()
@@ -571,17 +588,18 @@ func (hm *HostMap) Punchy(ctx context.Context, punchy *Punchy, conn *udp.Conn) {
 	defer clockSource.Stop()
 
 	for {
+		if punchy.GetPunch() {
+			addrs = hm.punchList(punchy.GetTargetEverything(), rl, addrs[:0])
+			for _, a := range addrs {
+				metricsTxPunchy.Inc(1)
+				conn.WriteTo(b, a)
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-clockSource.C:
-			if punchy.GetPunch() {
-				addrs = hm.punchList(addrs[:0])
-				for _, a := range addrs {
-					metricsTxPunchy.Inc(1)
-					conn.WriteTo(b, a)
-				}
-			}
+			continue
 		case <-punchy.reconfig:
 			frequency := punchy.GetFrequency()
 			if frequency != punchInterval {
