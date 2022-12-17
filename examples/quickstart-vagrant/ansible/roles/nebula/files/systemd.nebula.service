@@ -1,7 +1,8 @@
 [Unit]
-Description=nebula
-Wants=basic.target nss-lookup.target
-After=basic.target network.target
+Description=Nebula overlay networking tool
+Wants=basic.target network-online.target nss-lookup.target time-sync.target
+After=basic.target network.target network-online.target
+Before=sshd.service
 
 [Service]
 SyslogIdentifier=nebula
