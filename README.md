@@ -31,9 +31,8 @@ Check the [releases](https://github.com/slackhq/nebula/releases/latest) page for
     ```
     $ sudo pacman -S nebula
     ```
-- [Fedora Linux](https://copr.fedorainfracloud.org/coprs/jdoss/nebula/)
+- [Fedora Linux](https://src.fedoraproject.org/rpms/nebula)
     ```
-    $ sudo dnf copr enable jdoss/nebula
     $ sudo dnf install nebula
     ```
 
