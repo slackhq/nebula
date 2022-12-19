@@ -358,7 +358,7 @@ func (lh *LightHouse) parseLighthouses(c *config.C, tunCidr *net.IPNet, lhMap ma
 }
 
 func getStaticMapCadence(c *config.C) (time.Duration, error) {
-	cadence := c.GetString("static_map.cadence", "5m")
+	cadence := c.GetString("static_map.cadence", "30s")
 	d, err := time.ParseDuration(cadence)
 	if err != nil {
 		return 0, err
