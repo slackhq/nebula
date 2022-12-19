@@ -93,13 +93,13 @@ Download a copy of the nebula [example configuration](https://github.com/slackhq
 
 #### 6. Copy nebula credentials, configuration, and binaries to each host
 
-For each host, copy the nebula binary to the host, along with `config.yaml` from step 5, and the files `ca.crt`, `{host}.crt`, and `{host}.key` from step 4.
+For each host, copy the nebula binary to the host, along with `config.yml` from step 5, and the files `ca.crt`, `{host}.crt`, and `{host}.key` from step 4.
 
 **DO NOT COPY `ca.key` TO INDIVIDUAL NODES.**
 
 #### 7. Run nebula on each host
 ```
-./nebula -config /path/to/config.yaml
+./nebula -config /path/to/config.yml
 ```
 
 ## Building Nebula from source
