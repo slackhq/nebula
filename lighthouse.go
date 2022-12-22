@@ -73,7 +73,7 @@ type LightHouse struct {
 	// IP's of relays that can be used by peers to access me
 	relaysForMe atomic.Pointer[[]iputil.VpnIp]
 
-	atomicCalculatedRemotes *cidr.Tree4 // Maps VpnIp to []*calculatedRemote
+	calculatedRemotes atomic.Pointer[cidr.Tree4] // Maps VpnIp to []*calculatedRemote
 
 	metrics           *MessageMetrics
 	metricHolepunchTx metrics.Counter
@@ -165,7 +165,7 @@ func (lh *LightHouse) GetRelaysForMe() []iputil.VpnIp {
 }
 
 func (lh *LightHouse) getCalculatedRemotes() *cidr.Tree4 {
-	return (*cidr.Tree4)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicCalculatedRemotes))))
+	return lh.calculatedRemotes.Load()
 }
 
 func (lh *LightHouse) GetUpdateInterval() int64 {
@@ -250,7 +250,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 			return util.NewContextualError("Invalid lighthouse.calculated_remotes", nil, err)
 		}
 
-		atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicCalculatedRemotes)), unsafe.Pointer(cr))
+		lh.calculatedRemotes.Store(cr)
 		if !initial {
 			//TODO: a diff will be annoyingly difficult
 			lh.l.Info("lighthouse.calculated_remotes has changed")
