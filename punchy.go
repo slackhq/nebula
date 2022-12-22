@@ -9,10 +9,10 @@ import (
 )
 
 type Punchy struct {
-	atomicPunch   int32
-	atomicRespond int32
-	atomicDelay   time.Duration
-	l             *logrus.Logger
+	punch   atomic.Bool
+	respond atomic.Bool
+	delay   atomic.Int64
+	l       *logrus.Logger
 }
 
 func NewPunchyFromConfig(l *logrus.Logger, c *config.C) *Punchy {
@@ -36,12 +36,7 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 			yes = c.GetBool("punchy", false)
 		}
 
-		if yes {
-			atomic.StoreInt32(&p.atomicPunch, 1)
-		} else {
-			atomic.StoreInt32(&p.atomicPunch, 0)
-		}
-
+		p.punch.Store(yes)
 	} else if c.HasChanged("punchy.punch") || c.HasChanged("punchy") {
 		//TODO: it should be relatively easy to support this, just need to be able to cancel the goroutine and boot it up from here
 		p.l.Warn("Changing punchy.punch with reload is not supported, ignoring.")
@@ -56,11 +51,7 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 			yes = c.GetBool("punch_back", false)
 		}
 
-		if yes {
-			atomic.StoreInt32(&p.atomicRespond, 1)
-		} else {
-			atomic.StoreInt32(&p.atomicRespond, 0)
-		}
+		p.respond.Store(yes)
 
 		if !initial {
 			p.l.Infof("punchy.respond changed to %v", p.GetRespond())
@@ -69,7 +60,7 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 
 	//NOTE: this will not apply to any in progress operations, only the next one
 	if initial || c.HasChanged("punchy.delay") {
-		atomic.StoreInt64((*int64)(&p.atomicDelay), (int64)(c.GetDuration("punchy.delay", time.Second)))
+		p.delay.Store((int64)(c.GetDuration("punchy.delay", time.Second)))
 		if !initial {
 			p.l.Infof("punchy.delay changed to %s", p.GetDelay())
 		}
@@ -77,13 +68,13 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 }
 
 func (p *Punchy) GetPunch() bool {
-	return atomic.LoadInt32(&p.atomicPunch) == 1
+	return p.punch.Load()
 }
 
 func (p *Punchy) GetRespond() bool {
-	return atomic.LoadInt32(&p.atomicRespond) == 1
+	return p.respond.Load()
 }
 
 func (p *Punchy) GetDelay() time.Duration {
-	return (time.Duration)(atomic.LoadInt64((*int64)(&p.atomicDelay)))
+	return (time.Duration)(p.delay.Load())
 }

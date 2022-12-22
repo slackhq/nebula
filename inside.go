@@ -1,8 +1,6 @@
 package nebula
 
 import (
-	"sync/atomic"
-
 	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
@@ -228,7 +226,7 @@ func (f *Interface) SendVia(viaIfc interface{},
 ) {
 	via := viaIfc.(*HostInfo)
 	relay := relayIfc.(*Relay)
-	c := atomic.AddUint64(&via.ConnectionState.atomicMessageCounter, 1)
+	c := via.ConnectionState.messageCounter.Add(1)
 
 	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, relay.RemoteIndex, c)
 	f.connectionManager.Out(via.vpnIp)
@@ -287,7 +285,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 
 	//TODO: enable if we do more than 1 tun queue
 	//ci.writeLock.Lock()
-	c := atomic.AddUint64(&ci.atomicMessageCounter, 1)
+	c := ci.messageCounter.Add(1)
 
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
 	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)

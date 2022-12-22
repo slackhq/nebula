@@ -47,8 +47,9 @@ lighthouse:
   # allowed. You can provide CIDRs here with `true` to allow and `false` to
   # deny. The most specific CIDR rule applies to each remote. If all rules are
   # "allow", the default will be "deny", and vice-versa. If both "allow" and
-  # "deny" rules are present, then you MUST set a rule for "0.0.0.0/0" as the
-  # default.
+  # "deny" IPv4 rules are present, then you MUST set a rule for "0.0.0.0/0" as
+  # the default. Similarly if both "allow" and "deny" IPv6 rules are present,
+  # then you MUST set a rule for "::/0" as the default.
   #remote_allow_list:
     # Example to block IPs from this subnet from being used for remote IPs.
     #"172.16.0.0/12": false
@@ -58,7 +59,7 @@ lighthouse:
     #"10.0.0.0/8": false
     #"10.42.42.0/24": true
 
-  # EXPERIMENTAL: This option my change or disappear in the future.
+  # EXPERIMENTAL: This option may change or disappear in the future.
   # Optionally allows the definition of remote_allow_list blocks
   # specific to an inside VPN IP CIDR.
   #remote_allow_ranges:
@@ -146,7 +147,7 @@ punchy:
 
 # Cipher allows you to choose between the available ciphers for your network. Options are chachapoly or aes
 # IMPORTANT: this value must be identical on ALL NODES/LIGHTHOUSES. We do not/will not support use of different ciphers simultaneously!
-#cipher: chachapoly
+#cipher: aes
 
 # Preferred ranges is used to define a hint about the local network ranges, which speeds up discovering the fastest
 # path to a network adjacent nebula node.
