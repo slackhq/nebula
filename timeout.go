@@ -36,19 +36,19 @@ type TimerWheel struct {
 	itemsCached int
 }
 
-// Represents a tick in the wheel
+// TimeoutList Represents a tick in the wheel
 type TimeoutList struct {
 	Head *TimeoutItem
 	Tail *TimeoutItem
 }
 
-// Represents an item within a tick
+// TimeoutItem Represents an item within a tick
 type TimeoutItem struct {
 	Packet firewall.Packet
 	Next   *TimeoutItem
 }
 
-// Builds a timer wheel and identifies the tick duration and wheel duration from the provided values
+// NewTimerWheel Builds a timer wheel and identifies the tick duration and wheel duration from the provided values
 // Purge must be called once per entry to actually remove anything
 func NewTimerWheel(min, max time.Duration) *TimerWheel {
 	//TODO provide an error
@@ -56,9 +56,10 @@ func NewTimerWheel(min, max time.Duration) *TimerWheel {
 	//	return nil
 	//}
 
-	// Round down and add 1 so we can have the smallest # of ticks in the wheel and still account for a full
-	// max duration
-	wLen := int((max / min) + 1)
+	// Round down and add 2 so we can have the smallest # of ticks in the wheel and still account for a full
+	// max duration, even if our current tick is at the maximum position and the next item to be added is at maximum
+	// timeout
+	wLen := int((max / min) + 2)
 
 	tw := TimerWheel{
 		wheelLen:      wLen,
