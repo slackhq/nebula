@@ -6,6 +6,7 @@ import (
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -277,8 +278,10 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		out = out[header.Len:]
 	}
 
-	//TODO: enable if we do more than 1 tun queue
-	//ci.writeLock.Lock()
+	if noiseutil.EncryptLockNeeded {
+		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
+		ci.writeLock.Lock()
+	}
 	c := ci.messageCounter.Add(1)
 
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
@@ -299,8 +302,9 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 
 	var err error
 	out, err = ci.eKey.EncryptDanger(out, out, p, c, nb)
-	//TODO: see above note on lock
-	//ci.writeLock.Unlock()
+	if noiseutil.EncryptLockNeeded {
+		ci.writeLock.Unlock()
+	}
 	if err != nil {
 		hostinfo.logger(f.l).WithError(err).
 			WithField("udpAddr", remote).WithField("counter", c).
