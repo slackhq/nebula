@@ -37,19 +37,19 @@ type SystemTimerWheel struct {
 	lock sync.Mutex
 }
 
-// Represents a tick in the wheel
+// SystemTimeoutList Represents a tick in the wheel
 type SystemTimeoutList struct {
 	Head *SystemTimeoutItem
 	Tail *SystemTimeoutItem
 }
 
-// Represents an item within a tick
+// SystemTimeoutItem Represents an item within a tick
 type SystemTimeoutItem struct {
 	Item iputil.VpnIp
 	Next *SystemTimeoutItem
 }
 
-// Builds a timer wheel and identifies the tick duration and wheel duration from the provided values
+// NewSystemTimerWheel Builds a timer wheel and identifies the tick duration and wheel duration from the provided values
 // Purge must be called once per entry to actually remove anything
 func NewSystemTimerWheel(min, max time.Duration) *SystemTimerWheel {
 	//TODO provide an error
@@ -57,9 +57,10 @@ func NewSystemTimerWheel(min, max time.Duration) *SystemTimerWheel {
 	//	return nil
 	//}
 
-	// Round down and add 1 so we can have the smallest # of ticks in the wheel and still account for a full
-	// max duration
-	wLen := int((max / min) + 1)
+	// Round down and add 2 so we can have the smallest # of ticks in the wheel and still account for a full
+	// max duration, even if our current tick is at the maximum position and the next item to be added is at maximum
+	// timeout
+	wLen := int((max / min) + 2)
 
 	tw := SystemTimerWheel{
 		wheelLen:      wLen,

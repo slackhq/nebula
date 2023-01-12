@@ -11,24 +11,24 @@ import (
 func TestNewTimerWheel(t *testing.T) {
 	// Make sure we get an object we expect
 	tw := NewTimerWheel(time.Second, time.Second*10)
-	assert.Equal(t, 11, tw.wheelLen)
+	assert.Equal(t, 12, tw.wheelLen)
 	assert.Equal(t, 0, tw.current)
 	assert.Nil(t, tw.lastTick)
 	assert.Equal(t, time.Second*1, tw.tickDuration)
 	assert.Equal(t, time.Second*10, tw.wheelDuration)
-	assert.Len(t, tw.wheel, 11)
+	assert.Len(t, tw.wheel, 12)
 
 	// Assert the math is correct
 	tw = NewTimerWheel(time.Second*3, time.Second*10)
-	assert.Equal(t, 4, tw.wheelLen)
+	assert.Equal(t, 5, tw.wheelLen)
 
 	tw = NewTimerWheel(time.Second*120, time.Minute*10)
-	assert.Equal(t, 6, tw.wheelLen)
+	assert.Equal(t, 7, tw.wheelLen)
 }
 
 func TestTimerWheel_findWheel(t *testing.T) {
 	tw := NewTimerWheel(time.Second, time.Second*10)
-	assert.Len(t, tw.wheel, 11)
+	assert.Len(t, tw.wheel, 12)
 
 	// Current + tick + 1 since we don't know how far into current we are
 	assert.Equal(t, 2, tw.findWheel(time.Second*1))
@@ -37,15 +37,15 @@ func TestTimerWheel_findWheel(t *testing.T) {
 	assert.Equal(t, 2, tw.findWheel(time.Millisecond*1))
 
 	// Make sure we hit that last index
-	assert.Equal(t, 0, tw.findWheel(time.Second*10))
+	assert.Equal(t, 11, tw.findWheel(time.Second*10))
 
 	// Scale down to max duration
-	assert.Equal(t, 0, tw.findWheel(time.Second*11))
+	assert.Equal(t, 11, tw.findWheel(time.Second*11))
 
 	tw.current = 1
 	// Make sure we account for the current position properly
 	assert.Equal(t, 3, tw.findWheel(time.Second*1))
-	assert.Equal(t, 1, tw.findWheel(time.Second*10))
+	assert.Equal(t, 0, tw.findWheel(time.Second*10))
 }
 
 func TestTimerWheel_Add(t *testing.T) {
@@ -75,6 +75,23 @@ func TestTimerWheel_Add(t *testing.T) {
 	tw.Add(fp2, time.Second*1)
 	assert.Nil(t, tw.itemCache)
 	assert.Equal(t, 0, tw.itemsCached)
+
+	// Ensure that all configurations of a wheel does not result in calculating an overflow of the wheel
+	for min := time.Duration(1); min < 100; min++ {
+		for max := min; max < 100; max++ {
+			tw = NewTimerWheel(min, max)
+
+			for current := 0; current < tw.wheelLen; current++ {
+				tw.current = current
+				for timeout := time.Duration(0); timeout <= tw.wheelDuration; timeout++ {
+					tick := tw.findWheel(timeout)
+					if tick >= tw.wheelLen {
+						t.Errorf("Min: %v; Max: %v; Wheel len: %v; Current Tick: %v; Insert timeout: %v; Calc tick: %v", min, max, tw.wheelLen, current, timeout, tick)
+					}
+				}
+			}
+		}
+	}
 }
 
 func TestTimerWheel_Purge(t *testing.T) {
@@ -133,6 +150,10 @@ func TestTimerWheel_Purge(t *testing.T) {
 	ta = ta.Add(time.Second * 2)
 	tw.advance(ta)
 	assert.Equal(t, 10, tw.current)
+
+	ta = ta.Add(time.Second * 1)
+	tw.advance(ta)
+	assert.Equal(t, 11, tw.current)
 
 	ta = ta.Add(time.Second * 1)
 	tw.advance(ta)
