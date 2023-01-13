@@ -236,3 +236,45 @@ func Fuzz_TimerWheel_Purge(f *testing.F) {
 		tw.Purge()
 	})
 }
+
+func Fuzz_TimerWheel_Chain(f *testing.F) {
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var min time.Duration
+		var max time.Duration
+		fz := fuzzer.NewFuzzer(data)
+		fz.Fill(&min, &max)
+
+		if min == 0 || max == 0 {
+			t.Skip("We don't expect to handle a divide by zero")
+		}
+
+		if min < 0 || max < 0 {
+			t.Skip("We expect min and max to be positive durations")
+		}
+
+		wLen := int((max / min) + 2)
+		if max > time.Second*5 || wLen > 50_000_000 {
+			t.Skip("Long time durations are not amenable to fuzzing")
+		}
+
+		target := NewTimerWheel(min, max)
+
+		steps := []fuzzer.Step{
+			{
+				Name: "Fuzz_TimerWheel_Add",
+				Func: func(v firewall.Packet, timeout time.Duration) *TimeoutItem {
+					return target.Add(v, timeout)
+				},
+			},
+			{
+				Name: "Fuzz_TimerWheel_Purge",
+				Func: func() (firewall.Packet, bool) {
+					return target.Purge()
+				},
+			},
+		}
+
+		// Execute a specific chain of steps, with the count, sequence and arguments controlled by fz.Chain
+		fz.Chain(steps, fuzzer.ChainParallel)
+	})
+}
