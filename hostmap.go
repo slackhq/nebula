@@ -764,7 +764,10 @@ func (i *HostInfo) logger(l *logrus.Logger) *logrus.Entry {
 		return logrus.NewEntry(l)
 	}
 
-	li := l.WithField("vpnIp", i.vpnIp)
+	li := l.WithField("vpnIp", i.vpnIp).
+		WithField("localIndex", i.localIndexId).
+		WithField("remoteIndex", i.remoteIndexId)
+
 	if connState := i.ConnectionState; connState != nil {
 		if peerCert := connState.peerCert; peerCert != nil {
 			li = li.WithField("certName", peerCert.Details.Name)
