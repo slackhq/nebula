@@ -47,8 +47,6 @@ func Fuzz_TimerWheel_NewTimerWheel(f *testing.F) {
 			t.Skip("Long time durations are not amenable to fuzzing")
 		}
 
-		t.Logf("min: %v\nmax: %v", min, max)
-
 		NewTimerWheel(min, max)
 	})
 }
@@ -129,6 +127,19 @@ func Fuzz_TimerWheel_Add(f *testing.F) {
 		var timeout time.Duration
 		fz := fuzzer.NewFuzzer(data)
 		fz.Fill(&min, &max, &v, &timeout)
+
+		if min == 0 || max == 0 {
+			t.Skip("We don't expect to handle a divide by zero")
+		}
+
+		if min < 0 || max < 0 {
+			t.Skip("We expect min and max to be positive durations")
+		}
+
+		wLen := int((max / min) + 2)
+		if max > time.Second*5 || wLen > 50_000_000 {
+			t.Skip("Long time durations are not amenable to fuzzing")
+		}
 
 		tw := NewTimerWheel(min, max)
 		tw.Add(v, timeout)
