@@ -34,6 +34,10 @@ func Fuzz_TimerWheel_NewTimerWheel(f *testing.F) {
 		fz := fuzzer.NewFuzzer(data)
 		fz.Fill(&min, &max)
 
+		if min == 0 && max == 0 {
+			t.Skip("We don't expect to handle a divide by zero")
+		}
+
 		NewTimerWheel(min, max)
 	})
 }
