@@ -223,7 +223,7 @@ func (f *Interface) SendVia(viaIfc interface{},
 	c := via.ConnectionState.messageCounter.Add(1)
 
 	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, relay.RemoteIndex, c)
-	f.connectionManager.Out(via.localIndexId)
+	f.connectionManager.Out(via.vpnIp)
 
 	// Authenticate the header and payload, but do not encrypt for this message type.
 	// The payload consists of the inner, unencrypted Nebula header, as well as the end-to-end encrypted payload.
@@ -283,7 +283,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
 	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)
-	f.connectionManager.Out(hostinfo.localIndexId)
+	f.connectionManager.Out(hostinfo.vpnIp)
 
 	// Query our LH if we haven't since the last time we've been rebound, this will cause the remote to punch against
 	// all our IPs and enable a faster roaming.

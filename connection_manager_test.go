@@ -71,22 +71,16 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	out := make([]byte, mtu)
 	nc.HandleMonitorTick(now, p, nb, out)
 	// Add an ip we have established a connection w/ to hostmap
-	hostinfo := &HostInfo{
-		vpnIp:         vpnIp,
-		localIndexId:  1099,
-		remoteIndexId: 9901,
-	}
+	hostinfo, _ := nc.hostMap.AddVpnIp(vpnIp, nil)
 	hostinfo.ConnectionState = &ConnectionState{
 		certState: cs,
 		H:         &noise.HandshakeState{},
 	}
-	nc.hostMap.addHostInfo(hostinfo, ifce)
 
 	// We saw traffic out to vpnIp
-	nc.Out(hostinfo.localIndexId)
-	assert.NotContains(t, nc.pendingDeletion, hostinfo.localIndexId)
-	assert.Contains(t, nc.hostMap.Hosts, hostinfo.vpnIp)
-	assert.Contains(t, nc.hostMap.Indexes, hostinfo.localIndexId)
+	nc.Out(vpnIp)
+	assert.NotContains(t, nc.pendingDeletion, vpnIp)
+	assert.Contains(t, nc.hostMap.Hosts, vpnIp)
 	// Move ahead 5s. Nothing should happen
 	next_tick := now.Add(5 * time.Second)
 	nc.HandleMonitorTick(next_tick, p, nb, out)
@@ -96,17 +90,16 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	nc.HandleMonitorTick(next_tick, p, nb, out)
 	nc.HandleDeletionTick(next_tick)
 	// This host should now be up for deletion
-	assert.Contains(t, nc.pendingDeletion, hostinfo.localIndexId)
-	assert.Contains(t, nc.hostMap.Hosts, hostinfo.vpnIp)
-	assert.Contains(t, nc.hostMap.Indexes, hostinfo.localIndexId)
+	assert.Contains(t, nc.pendingDeletion, vpnIp)
+	assert.Contains(t, nc.hostMap.Hosts, vpnIp)
 	// Move ahead some more
 	next_tick = now.Add(45 * time.Second)
 	nc.HandleMonitorTick(next_tick, p, nb, out)
 	nc.HandleDeletionTick(next_tick)
 	// The host should be evicted
-	assert.NotContains(t, nc.pendingDeletion, hostinfo.localIndexId)
-	assert.NotContains(t, nc.hostMap.Hosts, hostinfo.vpnIp)
-	assert.NotContains(t, nc.hostMap.Indexes, hostinfo.localIndexId)
+	assert.NotContains(t, nc.pendingDeletion, vpnIp)
+	assert.NotContains(t, nc.hostMap.Hosts, vpnIp)
+
 }
 
 func Test_NewConnectionManagerTest2(t *testing.T) {
@@ -147,19 +140,14 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	out := make([]byte, mtu)
 	nc.HandleMonitorTick(now, p, nb, out)
 	// Add an ip we have established a connection w/ to hostmap
-	hostinfo := &HostInfo{
-		vpnIp:         vpnIp,
-		localIndexId:  1099,
-		remoteIndexId: 9901,
-	}
+	hostinfo, _ := nc.hostMap.AddVpnIp(vpnIp, nil)
 	hostinfo.ConnectionState = &ConnectionState{
 		certState: cs,
 		H:         &noise.HandshakeState{},
 	}
-	nc.hostMap.addHostInfo(hostinfo, ifce)
 
 	// We saw traffic out to vpnIp
-	nc.Out(hostinfo.localIndexId)
+	nc.Out(vpnIp)
 	assert.NotContains(t, nc.pendingDeletion, vpnIp)
 	assert.Contains(t, nc.hostMap.Hosts, vpnIp)
 	// Move ahead 5s. Nothing should happen
@@ -171,19 +159,18 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	nc.HandleMonitorTick(next_tick, p, nb, out)
 	nc.HandleDeletionTick(next_tick)
 	// This host should now be up for deletion
-	assert.Contains(t, nc.pendingDeletion, hostinfo.localIndexId)
+	assert.Contains(t, nc.pendingDeletion, vpnIp)
 	assert.Contains(t, nc.hostMap.Hosts, vpnIp)
-	assert.Contains(t, nc.hostMap.Indexes, hostinfo.localIndexId)
 	// We heard back this time
-	nc.In(hostinfo.localIndexId)
+	nc.In(vpnIp)
 	// Move ahead some more
 	next_tick = now.Add(45 * time.Second)
 	nc.HandleMonitorTick(next_tick, p, nb, out)
 	nc.HandleDeletionTick(next_tick)
-	// The host should not be evicted
-	assert.NotContains(t, nc.pendingDeletion, hostinfo.localIndexId)
-	assert.Contains(t, nc.hostMap.Hosts, hostinfo.vpnIp)
-	assert.Contains(t, nc.hostMap.Indexes, hostinfo.localIndexId)
+	// The host should be evicted
+	assert.NotContains(t, nc.pendingDeletion, vpnIp)
+	assert.Contains(t, nc.hostMap.Hosts, vpnIp)
+
 }
 
 // Check if we can disconnect the peer.
@@ -270,13 +257,13 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	// Check if to disconnect with invalid certificate.
 	// Should be alive.
 	nextTick := now.Add(45 * time.Second)
-	destroyed := nc.handleInvalidCertificate(nextTick, hostinfo)
+	destroyed := nc.handleInvalidCertificate(nextTick, vpnIp, hostinfo)
 	assert.False(t, destroyed)
 
 	// Move ahead 61s.
 	// Check if to disconnect with invalid certificate.
 	// Should be disconnected.
 	nextTick = now.Add(61 * time.Second)
-	destroyed = nc.handleInvalidCertificate(nextTick, hostinfo)
+	destroyed = nc.handleInvalidCertificate(nextTick, vpnIp, hostinfo)
 	assert.True(t, destroyed)
 }
