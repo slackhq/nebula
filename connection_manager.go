@@ -19,12 +19,12 @@ type connectionManager struct {
 	inLock       *sync.RWMutex
 	out          map[iputil.VpnIp]struct{}
 	outLock      *sync.RWMutex
-	TrafficTimer *SystemTimerWheel
+	TrafficTimer *TimerWheel[iputil.VpnIp]
 	intf         *Interface
 
 	pendingDeletion      map[iputil.VpnIp]int
 	pendingDeletionLock  *sync.RWMutex
-	pendingDeletionTimer *SystemTimerWheel
+	pendingDeletionTimer *TimerWheel[iputil.VpnIp]
 
 	checkInterval           int
 	pendingDeletionInterval int
@@ -40,11 +40,11 @@ func newConnectionManager(ctx context.Context, l *logrus.Logger, intf *Interface
 		inLock:                  &sync.RWMutex{},
 		out:                     make(map[iputil.VpnIp]struct{}),
 		outLock:                 &sync.RWMutex{},
-		TrafficTimer:            NewSystemTimerWheel(time.Millisecond*500, time.Second*60),
+		TrafficTimer:            NewTimerWheel[iputil.VpnIp](time.Millisecond*500, time.Second*60),
 		intf:                    intf,
 		pendingDeletion:         make(map[iputil.VpnIp]int),
 		pendingDeletionLock:     &sync.RWMutex{},
-		pendingDeletionTimer:    NewSystemTimerWheel(time.Millisecond*500, time.Second*60),
+		pendingDeletionTimer:    NewTimerWheel[iputil.VpnIp](time.Millisecond*500, time.Second*60),
 		checkInterval:           checkInterval,
 		pendingDeletionInterval: pendingDeletionInterval,
 		l:                       l,
@@ -160,14 +160,12 @@ func (n *connectionManager) Run(ctx context.Context) {
 }
 
 func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) {
-	n.TrafficTimer.advance(now)
+	n.TrafficTimer.Advance(now)
 	for {
-		ep := n.TrafficTimer.Purge()
-		if ep == nil {
+		vpnIp, has := n.TrafficTimer.Purge()
+		if !has {
 			break
 		}
-
-		vpnIp := ep.(iputil.VpnIp)
 
 		// Check for traffic coming back in from this host.
 		traf := n.CheckIn(vpnIp)
@@ -214,14 +212,12 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 }
 
 func (n *connectionManager) HandleDeletionTick(now time.Time) {
-	n.pendingDeletionTimer.advance(now)
+	n.pendingDeletionTimer.Advance(now)
 	for {
-		ep := n.pendingDeletionTimer.Purge()
-		if ep == nil {
+		vpnIp, has := n.pendingDeletionTimer.Purge()
+		if !has {
 			break
 		}
-
-		vpnIp := ep.(iputil.VpnIp)
 
 		hostinfo, err := n.hostMap.QueryVpnIp(vpnIp)
 		if err != nil {

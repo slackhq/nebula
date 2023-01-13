@@ -2,16 +2,12 @@ package nebula
 
 import (
 	"time"
-
-	"github.com/slackhq/nebula/firewall"
 )
 
 // How many timer objects should be cached
 const timerCacheMax = 50000
 
-var emptyFWPacket = firewall.Packet{}
-
-type TimerWheel struct {
+type TimerWheel[T any] struct {
 	// Current tick
 	current int
 
@@ -26,31 +22,33 @@ type TimerWheel struct {
 	wheelDuration time.Duration
 
 	// The actual wheel which is just a set of singly linked lists, head/tail pointers
-	wheel []*TimeoutList
+	wheel []*TimeoutList[T]
 
 	// Singly linked list of items that have timed out of the wheel
-	expired *TimeoutList
+	expired *TimeoutList[T]
 
 	// Item cache to avoid garbage collect
-	itemCache   *TimeoutItem
+	itemCache   *TimeoutItem[T]
 	itemsCached int
 }
 
 // TimeoutList Represents a tick in the wheel
-type TimeoutList struct {
-	Head *TimeoutItem
-	Tail *TimeoutItem
+type TimeoutList[T any] struct {
+	Head *TimeoutItem[T]
+	Tail *TimeoutItem[T]
 }
 
 // TimeoutItem Represents an item within a tick
-type TimeoutItem struct {
-	Packet firewall.Packet
-	Next   *TimeoutItem
+type TimeoutItem[T any] struct {
+	Item T
+	Next *TimeoutItem[T]
 }
 
 // NewTimerWheel Builds a timer wheel and identifies the tick duration and wheel duration from the provided values
 // Purge must be called once per entry to actually remove anything
-func NewTimerWheel(min, max time.Duration) *TimerWheel {
+// The TimerWheel does not handle concurrency on its own.
+// Locks around access to it must be used if multiple routines are manipulating it.
+func NewTimerWheel[T any](min, max time.Duration) *TimerWheel[T] {
 	//TODO provide an error
 	//if min >= max {
 	//	return nil
@@ -61,25 +59,25 @@ func NewTimerWheel(min, max time.Duration) *TimerWheel {
 	// timeout
 	wLen := int((max / min) + 2)
 
-	tw := TimerWheel{
+	tw := TimerWheel[T]{
 		wheelLen:      wLen,
-		wheel:         make([]*TimeoutList, wLen),
+		wheel:         make([]*TimeoutList[T], wLen),
 		tickDuration:  min,
 		wheelDuration: max,
-		expired:       &TimeoutList{},
+		expired:       &TimeoutList[T]{},
 	}
 
 	for i := range tw.wheel {
-		tw.wheel[i] = &TimeoutList{}
+		tw.wheel[i] = &TimeoutList[T]{}
 	}
 
 	return &tw
 }
 
-// Add will add a firewall.Packet to the wheel in it's proper timeout
-func (tw *TimerWheel) Add(v firewall.Packet, timeout time.Duration) *TimeoutItem {
+// Add will add an item to the wheel in its proper timeout
+func (tw *TimerWheel[T]) Add(v T, timeout time.Duration) *TimeoutItem[T] {
 	// Check and see if we should progress the tick
-	tw.advance(time.Now())
+	tw.Advance(time.Now())
 
 	i := tw.findWheel(timeout)
 
@@ -90,11 +88,11 @@ func (tw *TimerWheel) Add(v firewall.Packet, timeout time.Duration) *TimeoutItem
 		tw.itemsCached--
 		ti.Next = nil
 	} else {
-		ti = &TimeoutItem{}
+		ti = &TimeoutItem[T]{}
 	}
 
 	// Relink and return
-	ti.Packet = v
+	ti.Item = v
 	if tw.wheel[i].Tail == nil {
 		tw.wheel[i].Head = ti
 		tw.wheel[i].Tail = ti
@@ -106,9 +104,12 @@ func (tw *TimerWheel) Add(v firewall.Packet, timeout time.Duration) *TimeoutItem
 	return ti
 }
 
-func (tw *TimerWheel) Purge() (firewall.Packet, bool) {
+// Purge removes and returns the first available expired item from the wheel and the 2nd argument is true.
+// If no item is available then an empty T is returned and the 2nd argument is false.
+func (tw *TimerWheel[T]) Purge() (T, bool) {
 	if tw.expired.Head == nil {
-		return emptyFWPacket, false
+		var na T
+		return na, false
 	}
 
 	ti := tw.expired.Head
@@ -128,11 +129,11 @@ func (tw *TimerWheel) Purge() (firewall.Packet, bool) {
 		tw.itemsCached++
 	}
 
-	return ti.Packet, true
+	return ti.Item, true
 }
 
-// advance will move the wheel forward by proper number of ticks. The caller _should_ lock the wheel before calling this
-func (tw *TimerWheel) findWheel(timeout time.Duration) (i int) {
+// findWheel find the next position in the wheel for the provided timeout given the current tick
+func (tw *TimerWheel[T]) findWheel(timeout time.Duration) (i int) {
 	if timeout < tw.tickDuration {
 		// Can't track anything below the set resolution
 		timeout = tw.tickDuration
@@ -154,8 +155,9 @@ func (tw *TimerWheel) findWheel(timeout time.Duration) (i int) {
 	return tick
 }
 
-// advance will lock and move the wheel forward by proper number of ticks.
-func (tw *TimerWheel) advance(now time.Time) {
+// Advance will move the wheel forward by the appropriate number of ticks for the provided time and all items
+// passed over will be moved to the expired list. Calling Purge is necessary to remove them entirely.
+func (tw *TimerWheel[T]) Advance(now time.Time) {
 	if tw.lastTick == nil {
 		tw.lastTick = &now
 	}

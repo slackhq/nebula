@@ -77,7 +77,7 @@ type FirewallConntrack struct {
 	sync.Mutex
 
 	Conns      map[firewall.Packet]*conn
-	TimerWheel *TimerWheel
+	TimerWheel *TimerWheel[firewall.Packet]
 }
 
 type FirewallTable struct {
@@ -145,7 +145,7 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 	return &Firewall{
 		Conntrack: &FirewallConntrack{
 			Conns:      make(map[firewall.Packet]*conn),
-			TimerWheel: NewTimerWheel(min, max),
+			TimerWheel: NewTimerWheel[firewall.Packet](min, max),
 		},
 		InRules:        newFirewallTable(),
 		OutRules:       newFirewallTable(),
