@@ -219,6 +219,19 @@ func Fuzz_TimerWheel_Purge(f *testing.F) {
 		fz := fuzzer.NewFuzzer(data)
 		fz.Fill(&min, &max)
 
+		if min == 0 || max == 0 {
+			t.Skip("We don't expect to handle a divide by zero")
+		}
+
+		if min < 0 || max < 0 {
+			t.Skip("We expect min and max to be positive durations")
+		}
+
+		wLen := int((max / min) + 2)
+		if max > time.Second*5 || wLen > 50_000_000 {
+			t.Skip("Long time durations are not amenable to fuzzing")
+		}
+
 		tw := NewTimerWheel(min, max)
 		tw.Purge()
 	})
