@@ -74,11 +74,9 @@ func NewTimerWheel[T any](min, max time.Duration) *TimerWheel[T] {
 	return &tw
 }
 
-// Add will add an item to the wheel in its proper timeout
+// Add will add an item to the wheel in its proper timeout.
+// Caller should Advance the wheel prior to ensure the proper slot is used.
 func (tw *TimerWheel[T]) Add(v T, timeout time.Duration) *TimeoutItem[T] {
-	// Check and see if we should progress the tick
-	tw.Advance(time.Now())
-
 	i := tw.findWheel(timeout)
 
 	// Try to fetch off the cache

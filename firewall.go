@@ -510,6 +510,7 @@ func (f *Firewall) addConn(packet []byte, fp firewall.Packet, incoming bool) {
 	conntrack := f.Conntrack
 	conntrack.Lock()
 	if _, ok := conntrack.Conns[fp]; !ok {
+		conntrack.TimerWheel.Advance(time.Now())
 		conntrack.TimerWheel.Add(fp, timeout)
 	}
 
@@ -537,6 +538,7 @@ func (f *Firewall) evict(p firewall.Packet) {
 
 	// Timeout is in the future, re-add the timer
 	if newT > 0 {
+		conntrack.TimerWheel.Advance(time.Now())
 		conntrack.TimerWheel.Add(p, newT)
 		return
 	}
