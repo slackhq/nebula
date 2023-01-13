@@ -18,12 +18,12 @@ type connectionManager struct {
 	inLock       *sync.RWMutex
 	out          map[uint32]struct{}
 	outLock      *sync.RWMutex
-	TrafficTimer *TimerWheel[uint32]
+	TrafficTimer *LockingTimerWheel[uint32]
 	intf         *Interface
 
 	pendingDeletion      map[uint32]int
 	pendingDeletionLock  *sync.RWMutex
-	pendingDeletionTimer *TimerWheel[uint32]
+	pendingDeletionTimer *LockingTimerWheel[uint32]
 
 	checkInterval           int
 	pendingDeletionInterval int
@@ -39,11 +39,11 @@ func newConnectionManager(ctx context.Context, l *logrus.Logger, intf *Interface
 		inLock:                  &sync.RWMutex{},
 		out:                     make(map[uint32]struct{}),
 		outLock:                 &sync.RWMutex{},
-		TrafficTimer:            NewTimerWheel[uint32](time.Millisecond*500, time.Second*60),
+		TrafficTimer:            NewLockingTimerWheel[uint32](time.Millisecond*500, time.Second*60),
 		intf:                    intf,
 		pendingDeletion:         make(map[uint32]int),
 		pendingDeletionLock:     &sync.RWMutex{},
-		pendingDeletionTimer:    NewTimerWheel[uint32](time.Millisecond*500, time.Second*60),
+		pendingDeletionTimer:    NewLockingTimerWheel[uint32](time.Millisecond*500, time.Second*60),
 		checkInterval:           checkInterval,
 		pendingDeletionInterval: pendingDeletionInterval,
 		l:                       l,

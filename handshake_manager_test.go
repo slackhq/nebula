@@ -106,8 +106,8 @@ func Test_NewHandshakeManagerTrigger(t *testing.T) {
 	assert.Equal(t, 1, testCountTimerWheelEntries(blah.OutboundHandshakeTimer))
 }
 
-func testCountTimerWheelEntries(tw *TimerWheel[iputil.VpnIp]) (c int) {
-	for _, i := range tw.wheel {
+func testCountTimerWheelEntries(tw *LockingTimerWheel[iputil.VpnIp]) (c int) {
+	for _, i := range tw.t.wheel {
 		n := i.Head
 		for n != nil {
 			c++

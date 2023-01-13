@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"sync"
 	"time"
 )
 
@@ -30,6 +31,11 @@ type TimerWheel[T any] struct {
 	// Item cache to avoid garbage collect
 	itemCache   *TimeoutItem[T]
 	itemsCached int
+}
+
+type LockingTimerWheel[T any] struct {
+	m sync.Mutex
+	t *TimerWheel[T]
 }
 
 // TimeoutList Represents a tick in the wheel
@@ -72,6 +78,13 @@ func NewTimerWheel[T any](min, max time.Duration) *TimerWheel[T] {
 	}
 
 	return &tw
+}
+
+// NewLockingTimerWheel is version of TimerWheel that is safe for concurrent use with a small performance penalty
+func NewLockingTimerWheel[T any](min, max time.Duration) *LockingTimerWheel[T] {
+	return &LockingTimerWheel[T]{
+		t: NewTimerWheel[T](min, max),
+	}
 }
 
 // Add will add an item to the wheel in its proper timeout.
@@ -191,4 +204,22 @@ func (tw *TimerWheel[T]) Advance(now time.Time) {
 	// Advance the tick based on duration to avoid losing some accuracy
 	newTick := tw.lastTick.Add(tw.tickDuration * time.Duration(adv))
 	tw.lastTick = &newTick
+}
+
+func (lw *LockingTimerWheel[T]) Add(v T, timeout time.Duration) *TimeoutItem[T] {
+	lw.m.Lock()
+	defer lw.m.Unlock()
+	return lw.t.Add(v, timeout)
+}
+
+func (lw *LockingTimerWheel[T]) Purge() (T, bool) {
+	lw.m.Lock()
+	defer lw.m.Unlock()
+	return lw.t.Purge()
+}
+
+func (lw *LockingTimerWheel[T]) Advance(now time.Time) {
+	lw.m.Lock()
+	defer lw.m.Unlock()
+	lw.t.Advance(now)
 }
