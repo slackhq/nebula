@@ -42,10 +42,8 @@ func Fuzz_TimerWheel_NewTimerWheel(f *testing.F) {
 			t.Skip("We expect min and max to be positive durations")
 		}
 
-		fuzzingMax := time.Second * 5
 		wLen := int((max / min) + 2)
-		t.Log(wLen)
-		if max > fuzzingMax || wLen > int(fuzzingMax) {
+		if max > time.Second*5 || wLen > 50_000_000 {
 			t.Skip("Long time durations are not amenable to fuzzing")
 		}
 
