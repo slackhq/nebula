@@ -47,7 +47,7 @@ type HandshakeManager struct {
 	lightHouse             *LightHouse
 	outside                *udp.Conn
 	config                 HandshakeConfig
-	OutboundHandshakeTimer *SystemTimerWheel
+	OutboundHandshakeTimer *LockingTimerWheel[iputil.VpnIp]
 	messageMetrics         *MessageMetrics
 	metricInitiated        metrics.Counter
 	metricTimedOut         metrics.Counter
@@ -65,7 +65,7 @@ func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges [
 		outside:                outside,
 		config:                 config,
 		trigger:                make(chan iputil.VpnIp, config.triggerBuffer),
-		OutboundHandshakeTimer: NewSystemTimerWheel(config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
+		OutboundHandshakeTimer: NewLockingTimerWheel[iputil.VpnIp](config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
 		messageMetrics:         config.messageMetrics,
 		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
 		metricTimedOut:         metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),
@@ -90,13 +90,12 @@ func (c *HandshakeManager) Run(ctx context.Context, f udp.EncWriter) {
 }
 
 func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f udp.EncWriter) {
-	c.OutboundHandshakeTimer.advance(now)
+	c.OutboundHandshakeTimer.Advance(now)
 	for {
-		ep := c.OutboundHandshakeTimer.Purge()
-		if ep == nil {
+		vpnIp, has := c.OutboundHandshakeTimer.Purge()
+		if !has {
 			break
 		}
-		vpnIp := ep.(iputil.VpnIp)
 		c.handleOutbound(vpnIp, f, false)
 	}
 }
