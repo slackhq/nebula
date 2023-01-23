@@ -42,7 +42,8 @@ echo " *** Testing ping from host2"
 echo
 set -x
 sudo docker exec host2 ping -c1 192.168.100.1
-sudo docker exec host2 ping -c1 192.168.100.3
+# Should fail because not allowed by host3 inbound firewall
+! sudo docker exec host2 ping -c1 192.168.100.3 -w5 || exit 1
 
 set +x
 echo
