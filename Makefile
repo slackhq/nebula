@@ -49,8 +49,12 @@ ALL_LINUX = linux-amd64 \
 ALL_FREEBSD = freebsd-amd64 \
 	freebsd-arm64
 
+ALL_OPENBSD = openbsd-amd64 \
+	openbsd-arm64
+
 ALL = $(ALL_LINUX) \
 	$(ALL_FREEBSD) \
+	$(ALL_OPENBSD) \
 	darwin-amd64 \
 	darwin-arm64 \
 	windows-amd64 \
