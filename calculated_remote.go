@@ -59,7 +59,7 @@ func NewCalculatedRemotesFromConfig(c *config.C, k string) (*cidr.Tree4, error) 
 
 	calculatedRemotes := cidr.NewTree4()
 
-	rawMap, ok := value.(map[interface{}]interface{})
+	rawMap, ok := value.(map[any]any)
 	if !ok {
 		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, value)
 	}
@@ -74,7 +74,7 @@ func NewCalculatedRemotesFromConfig(c *config.C, k string) (*cidr.Tree4, error) 
 			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s", k, rawCIDR)
 		}
 
-		entry, err := newCalculatedRemotesList(rawValue)
+		entry, err := newCalculatedRemotesListFromConfig(rawValue)
 		if err != nil {
 			return nil, fmt.Errorf("config '%s.%s': %w", k, rawCIDR, err)
 		}
@@ -85,15 +85,15 @@ func NewCalculatedRemotesFromConfig(c *config.C, k string) (*cidr.Tree4, error) 
 	return calculatedRemotes, nil
 }
 
-func newCalculatedRemotesList(raw interface{}) ([]*calculatedRemote, error) {
-	rawList, ok := raw.([]interface{})
+func newCalculatedRemotesListFromConfig(raw any) ([]*calculatedRemote, error) {
+	rawList, ok := raw.([]any)
 	if !ok {
 		return nil, fmt.Errorf("calculated_remotes entry has invalid type: %T", raw)
 	}
 
 	var l []*calculatedRemote
 	for _, e := range rawList {
-		c, err := newCalculatedRemotesEntry(e)
+		c, err := newCalculatedRemotesEntryFromConfig(e)
 		if err != nil {
 			return nil, fmt.Errorf("calculated_remotes entry: %w", err)
 		}
@@ -103,8 +103,8 @@ func newCalculatedRemotesList(raw interface{}) ([]*calculatedRemote, error) {
 	return l, nil
 }
 
-func newCalculatedRemotesEntry(raw interface{}) (*calculatedRemote, error) {
-	rawMap, ok := raw.(map[interface{}]interface{})
+func newCalculatedRemotesEntryFromConfig(raw any) (*calculatedRemote, error) {
+	rawMap, ok := raw.(map[any]any)
 	if !ok {
 		return nil, fmt.Errorf("invalid type: %T", raw)
 	}

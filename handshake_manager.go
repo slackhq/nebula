@@ -157,8 +157,9 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 
 	hostinfo.HandshakeLastRemotes = remotes
 
-	//TODO: this will generate a load of queries for hosts with only 1 ip (i'm not using a lighthouse, static mapped)
-	// So we only do it after attempting 5 handshakes already
+	// TODO: this will generate a load of queries for hosts with only 1 ip
+	// (such as ones registered to the lighthouse with only a private IP)
+	// So we only do it one time after attempting 5 handshakes already.
 	if len(remotes) <= 1 && hostinfo.HandshakeCounter == 5 {
 		// If we only have 1 remote it is highly likely our query raced with the other host registered within the lighthouse
 		// Our vpnIp here has a tunnel with a lighthouse but has yet to send a host update packet there so we only know about
