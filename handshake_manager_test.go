@@ -66,8 +66,8 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	assert.NotContains(t, blah.pendingHostMap.Hosts, ip)
 }
 
-func testCountTimerWheelEntries(tw *SystemTimerWheel) (c int) {
-	for _, i := range tw.wheel {
+func testCountTimerWheelEntries(tw *LockingTimerWheel[iputil.VpnIp]) (c int) {
+	for _, i := range tw.t.wheel {
 		n := i.Head
 		for n != nil {
 			c++

@@ -25,8 +25,9 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	if fwPacket.RemoteIP == f.myVpnIp {
 		// Immediately forward packets from self to self.
-		// This should only happen on Darwin-based hosts, which routes packets from
-		// the Nebula IP to the Nebula IP through the Nebula TUN device.
+		// This should only happen on Darwin-based and FreeBSD hosts, which
+		// routes packets from the Nebula IP to the Nebula IP through the Nebula
+		// TUN device.
 		if immediatelyForwardToSelf {
 			_, err := f.readers[q].Write(packet)
 			if err != nil {
