@@ -2,8 +2,9 @@ package router
 
 import (
 	"fmt"
-	"github.com/slackhq/nebula"
 	"strings"
+
+	"github.com/slackhq/nebula"
 )
 
 type edge struct {

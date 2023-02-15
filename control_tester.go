@@ -4,8 +4,9 @@
 package nebula
 
 import (
-	"github.com/slackhq/nebula/cert"
 	"net"
+
+	"github.com/slackhq/nebula/cert"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
