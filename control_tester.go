@@ -4,6 +4,7 @@
 package nebula
 
 import (
+	"github.com/slackhq/nebula/cert"
 	"net"
 
 	"github.com/google/gopacket"
@@ -14,7 +15,7 @@ import (
 	"github.com/slackhq/nebula/udp"
 )
 
-// WaitForTypeByIndex will pipe all messages from this control device into the pipeTo control device
+// WaitForType will pipe all messages from this control device into the pipeTo control device
 // returning after a message matching the criteria has been piped
 func (c *Control) WaitForType(msgType header.MessageType, subType header.MessageSubType, pipeTo *Control) {
 	h := &header.H{}
@@ -152,4 +153,12 @@ func (c *Control) KillPendingTunnel(vpnIp net.IP) bool {
 
 	c.f.handshakeManager.pendingHostMap.DeleteHostInfo(hostinfo)
 	return true
+}
+
+func (c *Control) GetHostmap() *HostMap {
+	return c.f.hostMap
+}
+
+func (c *Control) GetCert() *cert.NebulaCertificate {
+	return c.f.certState.certificate
 }
