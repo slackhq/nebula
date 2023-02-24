@@ -217,7 +217,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			f.getOrHandshake(target)
 			return
 		}
-		if peer.remote == nil {
+		if peer.remote.Load() == nil {
 			// Only create relays to peers for whom I have a direct connection
 			return
 		}

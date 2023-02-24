@@ -50,8 +50,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	remotes := NewRemoteList()
 	remotes.unlockedPrependV4(0, NewIp4AndPort(remote1.IP, uint32(remote1.Port)))
 	remotes.unlockedPrependV6(0, NewIp6AndPort(remote2.IP, uint32(remote2.Port)))
-	hm.Add(iputil.Ip2VpnIp(ipNet.IP), &HostInfo{
-		remote:  remote1,
+	hi := &HostInfo{
 		remotes: remotes,
 		ConnectionState: &ConnectionState{
 			peerCert: crt,
@@ -64,10 +63,11 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 			relayForByIp:  map[iputil.VpnIp]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
 		},
-	})
+	}
+	hi.remote.Store(remote1)
+	hm.Add(iputil.Ip2VpnIp(ipNet.IP), hi)
 
-	hm.Add(iputil.Ip2VpnIp(ipNet2.IP), &HostInfo{
-		remote:  remote1,
+	hi = &HostInfo{
 		remotes: remotes,
 		ConnectionState: &ConnectionState{
 			peerCert: nil,
@@ -80,7 +80,9 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 			relayForByIp:  map[iputil.VpnIp]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
 		},
-	})
+	}
+	hi.remote.Store(remote1)
+	hm.Add(iputil.Ip2VpnIp(ipNet2.IP), hi)
 
 	c := Control{
 		f: &Interface{
