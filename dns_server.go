@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"fmt"
+	"math/bits"
 	"net"
 	"strconv"
 	"strings"
@@ -60,6 +61,23 @@ func (d *dnsRecords) QueryCert(data string) string {
 	return c
 }
 
+func (d *dnsRecords) QueryPTR(data string) string {
+	ip := net.ParseIP(strings.TrimSuffix(data, ".in-addr.arpa.")).To4()
+	if ip == nil {
+		return ""
+	}
+	iip := bits.ReverseBytes32(ip2int(ip))
+	hostinfo, err := d.hostMap.QueryVpnIP(iip)
+	if err != nil {
+		return ""
+	}
+	q := hostinfo.GetCert()
+	if q == nil {
+		return ""
+	}
+	return q.Details.Name + "."
+}
+
 func (d *dnsRecords) Add(host, data string) {
 	d.Lock()
 	defer d.Unlock()
@@ -90,6 +108,22 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
 			ip := dnsR.QueryCert(q.Name)
 			if ip != "" {
 				rr, err := dns.NewRR(fmt.Sprintf("%s TXT %s", q.Name, ip))
+				if err == nil {
+					m.Answer = append(m.Answer, rr)
+				}
+			}
+		case dns.TypePTR:
+			a, _, _ := net.SplitHostPort(w.RemoteAddr().String())
+			b := net.ParseIP(a)
+			// We don't answer these queries from non nebula nodes or localhost
+			//l.Debugf("Does %s contain %s", b, dnsR.hostMap.vpnCIDR)
+			if !dnsR.hostMap.vpnCIDR.Contains(b) && a != "127.0.0.1" {
+				return
+			}
+			l.Debugf("Query for PTR %s", q.Name)
+			name := dnsR.QueryPTR(q.Name)
+			if name != "" {
+				rr, err := dns.NewRR(fmt.Sprintf("%s PTR %s", q.Name, name))
 				if err == nil {
 					m.Answer = append(m.Answer, rr)
 				}
