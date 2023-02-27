@@ -5,7 +5,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"sync/atomic"
 	"syscall"
 
 	"github.com/sirupsen/logrus"
@@ -62,7 +61,7 @@ func (c *Control) Start() {
 
 // Stop signals nebula to shutdown, returns after the shutdown is complete
 func (c *Control) Stop() {
-	// Stop the handshakeManager (and other serivces), to prevent new tunnels from
+	// Stop the handshakeManager (and other services), to prevent new tunnels from
 	// being created while we're shutting them all down.
 	c.cancel()
 
@@ -219,7 +218,7 @@ func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 	}
 
 	if h.ConnectionState != nil {
-		chi.MessageCounter = atomic.LoadUint64(&h.ConnectionState.atomicMessageCounter)
+		chi.MessageCounter = h.ConnectionState.messageCounter.Load()
 	}
 
 	if c := h.GetCert(); c != nil {

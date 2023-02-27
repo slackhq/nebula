@@ -22,7 +22,9 @@ func Test_help(t *testing.T) {
 		"    " + keygenSummary() + "\n" +
 		"    " + signSummary() + "\n" +
 		"    " + printSummary() + "\n" +
-		"    " + verifySummary() + "\n"
+		"    " + verifySummary() + "\n" +
+		"\n" +
+		"  To see usage for a given mode, use " + os.Args[0] + " <mode> -h\n"
 
 	ob := &bytes.Buffer{}
 

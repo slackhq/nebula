@@ -85,6 +85,7 @@ func TestGoodHandshake(t *testing.T) {
 	defer r.RenderFlow()
 	assertTunnel(t, myVpnIp, theirVpnIp, myControl, theirControl, r)
 
+	r.RenderHostmaps("Final hostmaps", myControl, theirControl)
 	myControl.Stop()
 	theirControl.Stop()
 	//TODO: assert hostmaps
@@ -150,6 +151,7 @@ func TestWrongResponderHandshake(t *testing.T) {
 	//NOTE: if evil lost the handshake race it may still have a tunnel since me would reject the handshake since the tunnel is complete
 
 	//TODO: assert hostmaps for everyone
+	r.RenderHostmaps("Final hostmaps", myControl, theirControl, evilControl)
 	t.Log("Success!")
 	myControl.Stop()
 	theirControl.Stop()
@@ -205,6 +207,7 @@ func Test_Case1_Stage1Race(t *testing.T) {
 	t.Log("Do a bidirectional tunnel test")
 	assertTunnel(t, myVpnIp, theirVpnIp, myControl, theirControl, r)
 
+	r.RenderHostmaps("Final hostmaps", myControl, theirControl)
 	myControl.Stop()
 	theirControl.Stop()
 	//TODO: assert hostmaps
@@ -235,6 +238,7 @@ func TestRelays(t *testing.T) {
 
 	p := r.RouteForAllUntilTxTun(theirControl)
 	assertUdpPacket(t, []byte("Hi from me"), p, myVpnIp, theirVpnIp, 80, 80)
+	r.RenderHostmaps("Final hostmaps", myControl, relayControl, theirControl)
 	//TODO: assert we actually used the relay even though it should be impossible for a tunnel to have occurred without it
 }
 

@@ -813,7 +813,7 @@ func sshPrintRelays(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 				case TerminalType:
 					t = "terminal"
 				default:
-					t = "unkown"
+					t = "unknown"
 				}
 
 				s := ""

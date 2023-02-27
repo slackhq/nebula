@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"sync/atomic"
 	"time"
 
 	"github.com/flynn/noise"
@@ -51,7 +50,7 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 	}
 
 	h := header.Encode(make([]byte, header.Len), header.Version, header.Handshake, header.HandshakeIXPSK0, 0, 1)
-	atomic.AddUint64(&ci.atomicMessageCounter, 1)
+	ci.messageCounter.Add(1)
 
 	msg, _, _, err := ci.H.WriteMessage(h, hsBytes)
 	if err != nil {
