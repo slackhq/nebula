@@ -49,7 +49,7 @@ type sshCreateTunnelFlags struct {
 }
 
 type sshDeviceInfoFlags struct {
-	Json bool
+	Json   bool
 	Pretty bool
 }
 
@@ -898,7 +898,7 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 
 func sshDeviceInfo(ifce *Interface, fs interface{}, w sshd.StringWriter) error {
 
-	data := struct{
+	data := struct {
 		Name string `json:"name"`
 		Cidr string `json:"cidr"`
 	}{
