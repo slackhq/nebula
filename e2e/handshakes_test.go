@@ -242,4 +242,51 @@ func TestRelays(t *testing.T) {
 	//TODO: assert we actually used the relay even though it should be impossible for a tunnel to have occurred without it
 }
 
+func TestStage1RaceRelays(t *testing.T) {
+	//NOTE: this is a race between me and relay resulting in a full tunnel from me to them via relay
+	ca, _, caKey, _ := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
+	myControl, myVpnIpNet, myUdpAddr := newSimpleServer(ca, caKey, "me     ", net.IP{10, 0, 0, 1}, m{"relay": m{"use_relays": true}})
+	relayControl, relayVpnIpNet, relayUdpAddr := newSimpleServer(ca, caKey, "relay  ", net.IP{10, 0, 0, 128}, m{"relay": m{"am_relay": true}})
+	theirControl, theirVpnIpNet, theirUdpAddr := newSimpleServer(ca, caKey, "them   ", net.IP{10, 0, 0, 2}, m{"relay": m{"use_relays": true}})
+
+	// Teach my how to get to the relay and that their can be reached via the relay
+	myControl.InjectLightHouseAddr(relayVpnIpNet, relayUdpAddr)
+	theirControl.InjectLightHouseAddr(relayVpnIpNet, relayUdpAddr)
+
+	myControl.InjectRelays(theirVpnIpNet, []net.IP{relayVpnIpNet})
+	theirControl.InjectRelays(myVpnIpNet, []net.IP{relayVpnIpNet})
+
+	relayControl.InjectLightHouseAddr(theirVpnIpNet, theirUdpAddr)
+	relayControl.InjectLightHouseAddr(myVpnIpNet, myUdpAddr)
+
+	// Build a router so we don't have to reason who gets which packet
+	r := router.NewR(t, myControl, relayControl, theirControl)
+	defer r.RenderFlow()
+
+	// Start the servers
+	myControl.Start()
+	relayControl.Start()
+	theirControl.Start()
+
+	r.Log("Get a tunnel between me and relay")
+	assertTunnel(t, myVpnIpNet, relayVpnIpNet, myControl, relayControl, r)
+
+	r.Log("Get a tunnel between them and relay")
+	assertTunnel(t, theirVpnIpNet, relayVpnIpNet, theirControl, relayControl, r)
+
+	r.Log("Trigger a handshake from both them and me via relay to them and me")
+	myControl.InjectTunUDPPacket(theirVpnIpNet, 80, 80, []byte("Hi from me"))
+	theirControl.InjectTunUDPPacket(myVpnIpNet, 80, 80, []byte("Hi from them"))
+
+	r.Log("Wait for a packet from them to me")
+	p := r.RouteForAllUntilTxTun(myControl)
+	_ = p
+
+	myControl.Stop()
+	theirControl.Stop()
+	relayControl.Stop()
+	//
+	////TODO: assert hostmaps
+}
+
 //TODO: add a test with many lies
