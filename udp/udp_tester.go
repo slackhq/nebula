@@ -66,7 +66,7 @@ func (u *Conn) Send(packet *Packet) {
 		u.l.WithField("header", h).
 			WithField("udpAddr", fmt.Sprintf("%v:%v", packet.FromIp, packet.FromPort)).
 			WithField("dataLen", len(packet.Data)).
-			Info("UDP receiving injected packet")
+			Debug("UDP receiving injected packet")
 	}
 	u.RxPackets <- packet
 }

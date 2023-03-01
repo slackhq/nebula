@@ -22,8 +22,9 @@ import (
 )
 
 type sshListHostMapFlags struct {
-	Json   bool
-	Pretty bool
+	Json    bool
+	Pretty  bool
+	ByIndex bool
 }
 
 type sshPrintCertFlags struct {
@@ -174,6 +175,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 			s := sshListHostMapFlags{}
 			fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
+			fl.BoolVar(&s.ByIndex, "by-index", false, "gets all hosts in the hostmap from the index table")
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
@@ -189,6 +191,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 			s := sshListHostMapFlags{}
 			fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
+			fl.BoolVar(&s.ByIndex, "by-index", false, "gets all hosts in the hostmap from the index table")
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
@@ -368,7 +371,13 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 		return nil
 	}
 
-	hm := listHostMap(hostMap)
+	var hm []ControlHostInfo
+	if fs.ByIndex {
+		hm = listHostMapIndexes(hostMap)
+	} else {
+		hm = listHostMapHosts(hostMap)
+	}
+
 	sort.Slice(hm, func(i, j int) bool {
 		return bytes.Compare(hm[i].VpnIp, hm[j].VpnIp) < 0
 	})

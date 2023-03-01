@@ -181,6 +181,14 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 			continue
 		}
 
+		// Does the vpnIp point to this hostinfo or is it ancillary? If we have ancillary hostinfos then we need to
+		// decide if this should be the main hostinfo if we are seeing traffic on it
+		primary, _ := n.hostMap.QueryVpnIp(hostinfo.vpnIp)
+		mainHostInfo := true
+		if primary != nil && primary != hostinfo {
+			mainHostInfo = false
+		}
+
 		// If we saw an incoming packets from this ip and peer's certificate is not
 		// expired, just ignore.
 		if traf {
@@ -191,6 +199,20 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 			}
 			n.ClearLocalIndex(localIndex)
 			n.ClearPendingDeletion(localIndex)
+
+			if !mainHostInfo {
+				if hostinfo.vpnIp > n.intf.myVpnIp {
+					// We are receiving traffic on the non primary hostinfo and we really just want 1 tunnel. Make
+					// This the primary and prime the old primary hostinfo for testing
+					n.hostMap.MakePrimary(hostinfo)
+					n.Out(primary.localIndexId)
+				} else {
+					// This hostinfo is still being used despite not being the primary hostinfo for this vpn ip
+					// Keep tracking so that we can tear it down when it goes away
+					n.Out(hostinfo.localIndexId)
+				}
+			}
+
 			continue
 		}
 
@@ -198,7 +220,7 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 			WithField("tunnelCheck", m{"state": "testing", "method": "active"}).
 			Debug("Tunnel status")
 
-		if hostinfo != nil && hostinfo.ConnectionState != nil {
+		if hostinfo != nil && hostinfo.ConnectionState != nil && mainHostInfo {
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
 			n.intf.sendMessageToVpnIp(header.Test, header.TestRequest, hostinfo, p, nb, out)
 
