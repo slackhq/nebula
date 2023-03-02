@@ -5,11 +5,11 @@ package router
 
 import (
 	"fmt"
-	"github.com/slackhq/nebula/iputil"
 	"sort"
 	"strings"
 
 	"github.com/slackhq/nebula"
+	"github.com/slackhq/nebula/iputil"
 )
 
 type edge struct {

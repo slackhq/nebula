@@ -6,7 +6,6 @@ package router
 import (
 	"context"
 	"fmt"
-	"golang.org/x/exp/maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -24,6 +23,7 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
+	"golang.org/x/exp/maps"
 )
 
 type R struct {

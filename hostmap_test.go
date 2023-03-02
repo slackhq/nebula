@@ -1,10 +1,11 @@
 package nebula
 
 import (
-	"github.com/slackhq/nebula/test"
-	"github.com/stretchr/testify/assert"
 	"net"
 	"testing"
+
+	"github.com/slackhq/nebula/test"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestHostMap_MakePrimary(t *testing.T) {
