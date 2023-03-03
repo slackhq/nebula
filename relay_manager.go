@@ -268,7 +268,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 				return
 			}
 		} else {
-			if relay.RemoteIndex != m.InitiatorRelayIndex {
+			if relay.State == Established && relay.RemoteIndex != m.InitiatorRelayIndex {
 				// This is a stale Relay entry for the same tunnel targets.
 				// Clean up the existing stuff.
 				rm.RemoveRelay(relay.LocalIndex)
