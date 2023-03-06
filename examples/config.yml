@@ -91,7 +91,7 @@ lighthouse:
     #- "1.1.1.1:4242"
     #- "1.2.3.4:0" # port will be replaced with the real listening port
 
-  # EXPERIMENTAL: This option my change or disappear in the future.
+  # EXPERIMENTAL: This option may change or disappear in the future.
   # This setting allows us to "guess" what the remote might be for a host
   # while we wait for the lighthouse response.
   #calculated_remotes:
