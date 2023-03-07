@@ -181,7 +181,8 @@ type HostInfo struct {
 	lastRoam       time.Time
 	lastRoamRemote *udp.Addr
 
-	// Used to track other hostinfos for this vpn ip since only 1 can be primary (used for xmit)
+	// Used to track other hostinfos for this vpn ip since only 1 can be primary
+	// Synchronised via hostmap lock and not the hostinfo lock.
 	next, prev *HostInfo
 }
 
@@ -439,8 +440,6 @@ func (hm *HostMap) MakePrimary(hostinfo *HostInfo) {
 }
 
 func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) {
-	//TODO: should we try and coalesce the relay state from oldHostinfo here?
-	//	I think we can hit this if we had a full relay tunnel, then re-handshook with the relay, then tried to use the relay through the tunnel. Need to test that
 	oldHostinfo := hm.Hosts[hostinfo.vpnIp]
 	if oldHostinfo == hostinfo {
 		return
