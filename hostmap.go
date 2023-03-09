@@ -23,6 +23,10 @@ const PromoteEvery = 1000
 const ReQueryEvery = 5000
 const MaxRemotes = 10
 
+// MaxHostInfosPerVpnIp is the max number of hostinfos we will track for a given vpn ip
+// 5 allows for an initial handshake and each host pair re-handshaking twice
+const MaxHostInfosPerVpnIp = 5
+
 // How long we should prevent roaming back to the previous IP.
 // This helps prevent flapping due to packets already in flight
 const RoamingSuppressSeconds = 2
@@ -399,9 +403,15 @@ func (hm *HostMap) DeleteReverseIndex(index uint32) {
 	}
 }
 
-func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
+// DeleteHostInfo will fully unlink the hostinfo and return true if it was the final hostinfo for this vpn ip
+func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) bool {
 	// Delete the host itself, ensuring it's not modified anymore
 	hm.Lock()
+	final := true
+	if hostinfo.next != nil || hostinfo.prev != nil {
+		// If we have a previous or next hostinfo then we are not the last one for this vpn ip
+		final = false
+	}
 	hm.unlockedDeleteHostInfo(hostinfo)
 	hm.Unlock()
 
@@ -425,6 +435,8 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 	for _, localIdx := range teardownRelayIdx {
 		hm.RemoveRelay(localIdx)
 	}
+
+	return final
 }
 
 func (hm *HostMap) DeleteRelayIdx(localIdx uint32) {
@@ -577,7 +589,7 @@ func (hm *HostMap) queryVpnIp(vpnIp iputil.VpnIp, promoteIfce *Interface) (*Host
 }
 
 // unlockedAddHostInfo assumes you have a write-lock and will add a hostinfo object to the hostmap Indexes and RemoteIndexes maps.
-// If an entry exists for the Hosts table (vpnIp -> hostinfo) then overwriteVpnIp must be true to change the pointer.
+// If an entry exists for the Hosts table (vpnIp -> hostinfo) then the provided hostinfo will be made primary
 func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	if f.serveDns {
 		remoteCert := hostinfo.ConnectionState.peerCert
@@ -599,6 +611,16 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 		hm.l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": hostinfo.vpnIp, "mapTotalSize": len(hm.Hosts),
 			"hostinfo": m{"existing": true, "localIndexId": hostinfo.localIndexId, "hostId": hostinfo.vpnIp}}).
 			Debug("Hostmap vpnIp added")
+	}
+
+	i := 1
+	check := hostinfo
+	for check != nil {
+		if i > MaxHostInfosPerVpnIp {
+			hm.unlockedDeleteHostInfo(check)
+		}
+		check = check.next
+		i++
 	}
 }
 

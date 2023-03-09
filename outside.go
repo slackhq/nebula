@@ -245,9 +245,11 @@ func (f *Interface) closeTunnel(hostInfo *HostInfo) {
 	//TODO: this would be better as a single function in ConnectionManager that handled locks appropriately
 	f.connectionManager.ClearLocalIndex(hostInfo.localIndexId)
 	f.connectionManager.ClearPendingDeletion(hostInfo.localIndexId)
-	f.lightHouse.DeleteVpnIp(hostInfo.vpnIp)
-
-	f.hostMap.DeleteHostInfo(hostInfo)
+	final := f.hostMap.DeleteHostInfo(hostInfo)
+	if final {
+		// We no longer have any tunnels with this vpn ip, clear learned lighthouse state to lower memory usage
+		f.lightHouse.DeleteVpnIp(hostInfo.vpnIp)
+	}
 }
 
 // sendCloseTunnel is a helper function to send a proper close tunnel packet to a remote
