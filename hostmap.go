@@ -407,7 +407,7 @@ func (hm *HostMap) DeleteReverseIndex(index uint32) {
 func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) bool {
 	// Delete the host itself, ensuring it's not modified anymore
 	hm.Lock()
-        // If we have a previous or next hostinfo then we are not the last one for this vpn ip
+	// If we have a previous or next hostinfo then we are not the last one for this vpn ip
 	final := (hostinfo.next == nil && hostinfo.prev == nil)
 	hm.unlockedDeleteHostInfo(hostinfo)
 	hm.Unlock()
