@@ -74,7 +74,7 @@ func (c *Control) Stop() {
 
 // ShutdownBlock will listen for and block on term and interrupt signals, calling Control.Stop() once signalled
 func (c *Control) ShutdownBlock() {
-	sigChan := make(chan os.Signal)
+	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM)
 	signal.Notify(sigChan, syscall.SIGINT)
 
