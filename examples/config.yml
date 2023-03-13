@@ -259,6 +259,15 @@ logging:
 
 # Nebula security group configuration
 firewall:
+  # Action to take when a packet is not allowed by the firewall rules.
+  # Can be one of:
+  #   `drop` (default): silently drop the packet.
+  #   `reject`: send a reject reply.
+  #     - For TCP, this will be a RST "Connection Reset" packet.
+  #     - For other protocols, this will be an ICMP port unreachable packet.
+  outbound_action: drop
+  inbound_action: drop
+
   conntrack:
     tcp_timeout: 12m
     udp_timeout: 3m
