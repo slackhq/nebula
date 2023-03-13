@@ -23,6 +23,10 @@ const PromoteEvery = 1000
 const ReQueryEvery = 5000
 const MaxRemotes = 10
 
+// MaxHostInfosPerVpnIp is the max number of hostinfos we will track for a given vpn ip
+// 5 allows for an initial handshake and each host pair re-handshaking twice
+const MaxHostInfosPerVpnIp = 5
+
 // How long we should prevent roaming back to the previous IP.
 // This helps prevent flapping due to packets already in flight
 const RoamingSuppressSeconds = 2
@@ -180,6 +184,10 @@ type HostInfo struct {
 
 	lastRoam       time.Time
 	lastRoamRemote *udp.Addr
+
+	// Used to track other hostinfos for this vpn ip since only 1 can be primary
+	// Synchronised via hostmap lock and not the hostinfo lock.
+	next, prev *HostInfo
 }
 
 type ViaSender struct {
@@ -395,9 +403,12 @@ func (hm *HostMap) DeleteReverseIndex(index uint32) {
 	}
 }
 
-func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
+// DeleteHostInfo will fully unlink the hostinfo and return true if it was the final hostinfo for this vpn ip
+func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) bool {
 	// Delete the host itself, ensuring it's not modified anymore
 	hm.Lock()
+	// If we have a previous or next hostinfo then we are not the last one for this vpn ip
+	final := (hostinfo.next == nil && hostinfo.prev == nil)
 	hm.unlockedDeleteHostInfo(hostinfo)
 	hm.Unlock()
 
@@ -421,6 +432,8 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 	for _, localIdx := range teardownRelayIdx {
 		hm.RemoveRelay(localIdx)
 	}
+
+	return final
 }
 
 func (hm *HostMap) DeleteRelayIdx(localIdx uint32) {
@@ -429,28 +442,80 @@ func (hm *HostMap) DeleteRelayIdx(localIdx uint32) {
 	delete(hm.RemoteIndexes, localIdx)
 }
 
-func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
-	// Check if this same hostId is in the hostmap with a different instance.
-	// This could happen if we have an entry in the pending hostmap with different
-	// index values than the one in the main hostmap.
-	hostinfo2, ok := hm.Hosts[hostinfo.vpnIp]
-	if ok && hostinfo2 != hostinfo {
-		delete(hm.Hosts, hostinfo2.vpnIp)
-		delete(hm.Indexes, hostinfo2.localIndexId)
-		delete(hm.RemoteIndexes, hostinfo2.remoteIndexId)
+func (hm *HostMap) MakePrimary(hostinfo *HostInfo) {
+	hm.Lock()
+	defer hm.Unlock()
+	hm.unlockedMakePrimary(hostinfo)
+}
+
+func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) {
+	oldHostinfo := hm.Hosts[hostinfo.vpnIp]
+	if oldHostinfo == hostinfo {
+		return
 	}
 
-	delete(hm.Hosts, hostinfo.vpnIp)
-	if len(hm.Hosts) == 0 {
-		hm.Hosts = map[iputil.VpnIp]*HostInfo{}
+	if hostinfo.prev != nil {
+		hostinfo.prev.next = hostinfo.next
 	}
+
+	if hostinfo.next != nil {
+		hostinfo.next.prev = hostinfo.prev
+	}
+
+	hm.Hosts[hostinfo.vpnIp] = hostinfo
+
+	if oldHostinfo == nil {
+		return
+	}
+
+	hostinfo.next = oldHostinfo
+	oldHostinfo.prev = hostinfo
+	hostinfo.prev = nil
+}
+
+func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
+	primary, ok := hm.Hosts[hostinfo.vpnIp]
+	if ok && primary == hostinfo {
+		// The vpnIp pointer points to the same hostinfo as the local index id, we can remove it
+		delete(hm.Hosts, hostinfo.vpnIp)
+		if len(hm.Hosts) == 0 {
+			hm.Hosts = map[iputil.VpnIp]*HostInfo{}
+		}
+
+		if hostinfo.next != nil {
+			// We had more than 1 hostinfo at this vpnip, promote the next in the list to primary
+			hm.Hosts[hostinfo.vpnIp] = hostinfo.next
+			// It is primary, there is no previous hostinfo now
+			hostinfo.next.prev = nil
+		}
+
+	} else {
+		// Relink if we were in the middle of multiple hostinfos for this vpn ip
+		if hostinfo.prev != nil {
+			hostinfo.prev.next = hostinfo.next
+		}
+
+		if hostinfo.next != nil {
+			hostinfo.next.prev = hostinfo.prev
+		}
+	}
+
+	hostinfo.next = nil
+	hostinfo.prev = nil
+
+	// The remote index uses index ids outside our control so lets make sure we are only removing
+	// the remote index pointer here if it points to the hostinfo we are deleting
+	hostinfo2, ok := hm.RemoteIndexes[hostinfo.remoteIndexId]
+	if ok && hostinfo2 == hostinfo {
+		delete(hm.RemoteIndexes, hostinfo.remoteIndexId)
+		if len(hm.RemoteIndexes) == 0 {
+			hm.RemoteIndexes = map[uint32]*HostInfo{}
+		}
+	}
+
 	delete(hm.Indexes, hostinfo.localIndexId)
 	if len(hm.Indexes) == 0 {
 		hm.Indexes = map[uint32]*HostInfo{}
-	}
-	delete(hm.RemoteIndexes, hostinfo.remoteIndexId)
-	if len(hm.RemoteIndexes) == 0 {
-		hm.RemoteIndexes = map[uint32]*HostInfo{}
 	}
 
 	if hm.l.Level >= logrus.DebugLevel {
@@ -520,15 +585,22 @@ func (hm *HostMap) queryVpnIp(vpnIp iputil.VpnIp, promoteIfce *Interface) (*Host
 	return nil, errors.New("unable to find host")
 }
 
-// We already have the hm Lock when this is called, so make sure to not call
-// any other methods that might try to grab it again
-func (hm *HostMap) addHostInfo(hostinfo *HostInfo, f *Interface) {
+// unlockedAddHostInfo assumes you have a write-lock and will add a hostinfo object to the hostmap Indexes and RemoteIndexes maps.
+// If an entry exists for the Hosts table (vpnIp -> hostinfo) then the provided hostinfo will be made primary
+func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	if f.serveDns {
 		remoteCert := hostinfo.ConnectionState.peerCert
 		dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ips[0].IP.String())
 	}
 
+	existing := hm.Hosts[hostinfo.vpnIp]
 	hm.Hosts[hostinfo.vpnIp] = hostinfo
+
+	if existing != nil {
+		hostinfo.next = existing
+		existing.prev = hostinfo
+	}
+
 	hm.Indexes[hostinfo.localIndexId] = hostinfo
 	hm.RemoteIndexes[hostinfo.remoteIndexId] = hostinfo
 
@@ -536,6 +608,16 @@ func (hm *HostMap) addHostInfo(hostinfo *HostInfo, f *Interface) {
 		hm.l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": hostinfo.vpnIp, "mapTotalSize": len(hm.Hosts),
 			"hostinfo": m{"existing": true, "localIndexId": hostinfo.localIndexId, "hostId": hostinfo.vpnIp}}).
 			Debug("Hostmap vpnIp added")
+	}
+
+	i := 1
+	check := hostinfo
+	for check != nil {
+		if i > MaxHostInfosPerVpnIp {
+			hm.unlockedDeleteHostInfo(check)
+		}
+		check = check.next
+		i++
 	}
 }
 

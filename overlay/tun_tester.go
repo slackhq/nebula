@@ -51,7 +51,7 @@ func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int
 // packets should exit the udp side, capture them with udpConn.Get
 func (t *TestTun) Send(packet []byte) {
 	if t.l.Level >= logrus.InfoLevel {
-		t.l.WithField("dataLen", len(packet)).Info("Tun receiving injected packet")
+		t.l.WithField("dataLen", len(packet)).Debug("Tun receiving injected packet")
 	}
 	t.rxPackets <- packet
 }

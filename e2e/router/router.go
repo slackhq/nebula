@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
+	"golang.org/x/exp/maps"
 )
 
 type R struct {
@@ -150,6 +152,7 @@ func NewR(t testing.TB, controls ...*nebula.Control) *R {
 			case <-ctx.Done():
 				return
 			case <-clockSource.C:
+				r.renderHostmaps("clock tick")
 				r.renderFlow()
 			}
 		}
@@ -220,11 +223,16 @@ func (r *R) renderFlow() {
 		)
 	}
 
+	if len(participantsVals) > 2 {
+		// Get the first and last participantVals for notes
+		participantsVals = []string{participantsVals[0], participantsVals[len(participantsVals)-1]}
+	}
+
 	// Print packets
 	h := &header.H{}
 	for _, e := range r.flow {
 		if e.packet == nil {
-			fmt.Fprintf(f, "    note over %s: %s\n", strings.Join(participantsVals, ", "), e.note)
+			//fmt.Fprintf(f, "    note over %s: %s\n", strings.Join(participantsVals, ", "), e.note)
 			continue
 		}
 
@@ -294,6 +302,28 @@ func (r *R) RenderHostmaps(title string, controls ...*nebula.Control) {
 	})
 }
 
+func (r *R) renderHostmaps(title string) {
+	c := maps.Values(r.controls)
+	sort.SliceStable(c, func(i, j int) bool {
+		return c[i].GetVpnIp() > c[j].GetVpnIp()
+	})
+
+	s := renderHostmaps(c...)
+	if len(r.additionalGraphs) > 0 {
+		lastGraph := r.additionalGraphs[len(r.additionalGraphs)-1]
+		if lastGraph.content == s {
+			// Ignore this rendering if it matches the last rendering added
+			// This is useful if you want to track rendering changes
+			return
+		}
+	}
+
+	r.additionalGraphs = append(r.additionalGraphs, mermaidGraph{
+		title:   title,
+		content: s,
+	})
+}
+
 // InjectFlow can be used to record packet flow if the test is handling the routing on its own.
 // The packet is assumed to have been received
 func (r *R) InjectFlow(from, to *nebula.Control, p *udp.Packet) {
@@ -331,6 +361,8 @@ func (r *R) unlockedInjectFlow(from, to *nebula.Control, p *udp.Packet, tun bool
 	if r.flow == nil {
 		return nil
 	}
+
+	r.renderHostmaps(fmt.Sprintf("Packet %v", len(r.flow)))
 
 	if len(r.ignoreFlows) > 0 {
 		var h header.H
