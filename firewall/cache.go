@@ -13,7 +13,7 @@ type ConntrackCache map[Packet]struct{}
 
 type ConntrackCacheTicker struct {
 	cacheV    uint64
-	cacheTick uint64
+	cacheTick atomic.Uint64
 
 	cache ConntrackCache
 }
@@ -35,7 +35,7 @@ func NewConntrackCacheTicker(d time.Duration) *ConntrackCacheTicker {
 func (c *ConntrackCacheTicker) tick(d time.Duration) {
 	for {
 		time.Sleep(d)
-		atomic.AddUint64(&c.cacheTick, 1)
+		c.cacheTick.Add(1)
 	}
 }
 
@@ -45,7 +45,7 @@ func (c *ConntrackCacheTicker) Get(l *logrus.Logger) ConntrackCache {
 	if c == nil {
 		return nil
 	}
-	if tick := atomic.LoadUint64(&c.cacheTick); tick != c.cacheV {
+	if tick := c.cacheTick.Load(); tick != c.cacheV {
 		c.cacheV = tick
 		if ll := len(c.cache); ll > 0 {
 			if l.Level == logrus.DebugLevel {

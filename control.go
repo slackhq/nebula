@@ -5,7 +5,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"sync/atomic"
 	"syscall"
 
 	"github.com/sirupsen/logrus"
@@ -62,7 +61,7 @@ func (c *Control) Start() {
 
 // Stop signals nebula to shutdown, returns after the shutdown is complete
 func (c *Control) Stop() {
-	// Stop the handshakeManager (and other serivces), to prevent new tunnels from
+	// Stop the handshakeManager (and other services), to prevent new tunnels from
 	// being created while we're shutting them all down.
 	c.cancel()
 
@@ -96,12 +95,21 @@ func (c *Control) RebindUDPServer() {
 	c.f.rebindCount++
 }
 
-// ListHostmap returns details about the actual or pending (handshaking) hostmap
-func (c *Control) ListHostmap(pendingMap bool) []ControlHostInfo {
+// ListHostmapHosts returns details about the actual or pending (handshaking) hostmap by vpn ip
+func (c *Control) ListHostmapHosts(pendingMap bool) []ControlHostInfo {
 	if pendingMap {
-		return listHostMap(c.f.handshakeManager.pendingHostMap)
+		return listHostMapHosts(c.f.handshakeManager.pendingHostMap)
 	} else {
-		return listHostMap(c.f.hostMap)
+		return listHostMapHosts(c.f.hostMap)
+	}
+}
+
+// ListHostmapIndexes returns details about the actual or pending (handshaking) hostmap by local index id
+func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
+	if pendingMap {
+		return listHostMapIndexes(c.f.handshakeManager.pendingHostMap)
+	} else {
+		return listHostMapIndexes(c.f.hostMap)
 	}
 }
 
@@ -219,7 +227,7 @@ func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 	}
 
 	if h.ConnectionState != nil {
-		chi.MessageCounter = atomic.LoadUint64(&h.ConnectionState.atomicMessageCounter)
+		chi.MessageCounter = h.ConnectionState.messageCounter.Load()
 	}
 
 	if c := h.GetCert(); c != nil {
@@ -233,11 +241,24 @@ func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 	return chi
 }
 
-func listHostMap(hm *HostMap) []ControlHostInfo {
+func listHostMapHosts(hm *HostMap) []ControlHostInfo {
 	hm.RLock()
 	hosts := make([]ControlHostInfo, len(hm.Hosts))
 	i := 0
 	for _, v := range hm.Hosts {
+		hosts[i] = copyHostInfo(v, hm.preferredRanges)
+		i++
+	}
+	hm.RUnlock()
+
+	return hosts
+}
+
+func listHostMapIndexes(hm *HostMap) []ControlHostInfo {
+	hm.RLock()
+	hosts := make([]ControlHostInfo, len(hm.Indexes))
+	i := 0
+	for _, v := range hm.Indexes {
 		hosts[i] = copyHostInfo(v, hm.preferredRanges)
 		i++
 	}

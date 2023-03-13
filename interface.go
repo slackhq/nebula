@@ -67,7 +67,7 @@ type Interface struct {
 	routines           int
 	caPool             *cert.NebulaCAPool
 	disconnectInvalid  bool
-	closed             int32
+	closed             atomic.Bool
 	relayManager       *relayManager
 
 	sendRecvErrorConfig sendRecvErrorConfig
@@ -267,7 +267,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	for {
 		n, err := reader.Read(packet)
 		if err != nil {
-			if errors.Is(err, os.ErrClosed) && atomic.LoadInt32(&f.closed) != 0 {
+			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
 				return
 			}
 
@@ -413,7 +413,7 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 }
 
 func (f *Interface) Close() error {
-	atomic.StoreInt32(&f.closed, 1)
+	f.closed.Store(true)
 
 	// Release the tun device
 	return f.inside.Close()

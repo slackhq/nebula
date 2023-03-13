@@ -1,8 +1,6 @@
 package nebula
 
 import (
-	"sync/atomic"
-
 	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
@@ -27,8 +25,9 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	if fwPacket.RemoteIP == f.myVpnIp {
 		// Immediately forward packets from self to self.
-		// This should only happen on Darwin-based hosts, which routes packets from
-		// the Nebula IP to the Nebula IP through the Nebula TUN device.
+		// This should only happen on Darwin-based and FreeBSD hosts, which
+		// routes packets from the Nebula IP to the Nebula IP through the Nebula
+		// TUN device.
 		if immediatelyForwardToSelf {
 			_, err := f.readers[q].Write(packet)
 			if err != nil {
@@ -222,10 +221,10 @@ func (f *Interface) SendVia(viaIfc interface{},
 ) {
 	via := viaIfc.(*HostInfo)
 	relay := relayIfc.(*Relay)
-	c := atomic.AddUint64(&via.ConnectionState.atomicMessageCounter, 1)
+	c := via.ConnectionState.messageCounter.Add(1)
 
 	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, relay.RemoteIndex, c)
-	f.connectionManager.Out(via.vpnIp)
+	f.connectionManager.Out(via.localIndexId)
 
 	// Authenticate the header and payload, but do not encrypt for this message type.
 	// The payload consists of the inner, unencrypted Nebula header, as well as the end-to-end encrypted payload.
@@ -298,11 +297,11 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 
 	//TODO: enable if we do more than 1 tun queue
 	//ci.writeLock.Lock()
-	c := atomic.AddUint64(&ci.atomicMessageCounter, 1)
+	c := ci.messageCounter.Add(1)
 
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
 	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)
-	f.connectionManager.Out(hostinfo.vpnIp)
+	f.connectionManager.Out(hostinfo.localIndexId)
 
 	// Query our LH if we haven't since the last time we've been rebound, this will cause the remote to punch against
 	// all our IPs and enable a faster roaming.

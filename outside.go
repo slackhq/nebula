@@ -84,7 +84,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			signedPayload = signedPayload[header.Len:]
 			// Pull the Roaming parts up here, and return in all call paths.
 			f.handleHostRoaming(hostinfo, addr)
-			f.connectionManager.In(hostinfo.vpnIp)
+			f.connectionManager.In(hostinfo.localIndexId)
 
 			relay, ok := hostinfo.relayState.QueryRelayForByIdx(h.RemoteIndex)
 			if !ok {
@@ -93,7 +93,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				hostinfo.logger(f.l).WithField("hostinfo", hostinfo.vpnIp).WithField("remoteIndex", h.RemoteIndex).Errorf("HostInfo missing remote index")
 				// Delete my local index from the hostmap
 				f.hostMap.DeleteRelayIdx(h.RemoteIndex)
-				// When the peer doesn't recieve any return traffic, its connection_manager will eventually clean up
+				// When the peer doesn't receive any return traffic, its connection_manager will eventually clean up
 				// the broken relay when it cleans up the associated HostInfo object.
 				return
 			}
@@ -237,17 +237,19 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 
 	f.handleHostRoaming(hostinfo, addr)
 
-	f.connectionManager.In(hostinfo.vpnIp)
+	f.connectionManager.In(hostinfo.localIndexId)
 }
 
 // closeTunnel closes a tunnel locally, it does not send a closeTunnel packet to the remote
 func (f *Interface) closeTunnel(hostInfo *HostInfo) {
 	//TODO: this would be better as a single function in ConnectionManager that handled locks appropriately
-	f.connectionManager.ClearIP(hostInfo.vpnIp)
-	f.connectionManager.ClearPendingDeletion(hostInfo.vpnIp)
-	f.lightHouse.DeleteVpnIp(hostInfo.vpnIp)
-
-	f.hostMap.DeleteHostInfo(hostInfo)
+	f.connectionManager.ClearLocalIndex(hostInfo.localIndexId)
+	f.connectionManager.ClearPendingDeletion(hostInfo.localIndexId)
+	final := f.hostMap.DeleteHostInfo(hostInfo)
+	if final {
+		// We no longer have any tunnels with this vpn ip, clear learned lighthouse state to lower memory usage
+		f.lightHouse.DeleteVpnIp(hostInfo.vpnIp)
+	}
 }
 
 // sendCloseTunnel is a helper function to send a proper close tunnel packet to a remote
@@ -418,7 +420,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return
 	}
 
-	f.connectionManager.In(hostinfo.vpnIp)
+	f.connectionManager.In(hostinfo.localIndexId)
 	_, err = f.readers[q].Write(out)
 	if err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")

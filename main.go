@@ -202,7 +202,10 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	hostMap := NewHostMap(l, "main", tunCidr, preferredRanges)
 	hostMap.metricsEnabled = c.GetBool("stats.message_metrics", false)
 
-	l.WithField("network", hostMap.vpnCIDR).WithField("preferredRanges", hostMap.preferredRanges).Info("Main HostMap created")
+	l.
+		WithField("network", hostMap.vpnCIDR.String()).
+		WithField("preferredRanges", hostMap.preferredRanges).
+		Info("Main HostMap created")
 
 	/*
 		config.SetDefault("promoter.interval", 10)
