@@ -61,6 +61,11 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 
 		_, inRelays := hm.Relays[index]
 		if !inRelays {
+			// Avoid standing up a relay that can't be used since only the primary hostinfo
+			// will be pointed to by the relay logic
+			//TODO: if there was an existing primary and it had relay state, should we merge?
+			hm.unlockedMakePrimary(relayHostInfo)
+
 			hm.Relays[index] = relayHostInfo
 			newRelay := Relay{
 				Type:       relayType,

@@ -1,7 +1,6 @@
 package overlay
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -75,38 +74,15 @@ func (t *disabledTun) Read(b []byte) (int, error) {
 }
 
 func (t *disabledTun) handleICMPEchoRequest(b []byte) bool {
-	// Return early if this is not a simple ICMP Echo Request
-	//TODO: make constants out of these
-	if !(len(b) >= 28 && len(b) <= 9001 && b[0] == 0x45 && b[9] == 0x01 && b[20] == 0x08) {
+	out := make([]byte, len(b))
+	out = iputil.CreateICMPEchoResponse(b, out)
+	if out == nil {
 		return false
 	}
-
-	// We don't support fragmented packets
-	if b[7] != 0 || (b[6]&0x2F != 0) {
-		return false
-	}
-
-	buf := make([]byte, len(b))
-	copy(buf, b)
-
-	// Swap dest / src IPs and recalculate checksum
-	ipv4 := buf[0:20]
-	copy(ipv4[12:16], b[16:20])
-	copy(ipv4[16:20], b[12:16])
-	ipv4[10] = 0
-	ipv4[11] = 0
-	binary.BigEndian.PutUint16(ipv4[10:], ipChecksum(ipv4))
-
-	// Change type to ICMP Echo Reply and recalculate checksum
-	icmp := buf[20:]
-	icmp[0] = 0
-	icmp[2] = 0
-	icmp[3] = 0
-	binary.BigEndian.PutUint16(icmp[2:], ipChecksum(icmp))
 
 	// attempt to write it, but don't block
 	select {
-	case t.read <- buf:
+	case t.read <- out:
 	default:
 		t.l.Debugf("tun_disabled: dropped ICMP Echo Reply response")
 	}
@@ -153,23 +129,4 @@ func (p prettyPacket) String() string {
 	}
 
 	return s.String()
-}
-
-func ipChecksum(b []byte) uint16 {
-	var c uint32
-	sz := len(b) - 1
-
-	for i := 0; i < sz; i += 2 {
-		c += uint32(b[i]) << 8
-		c += uint32(b[i+1])
-	}
-	if sz%2 == 0 {
-		c += uint32(b[sz]) << 8
-	}
-
-	for (c >> 16) > 0 {
-		c = (c & 0xffff) + (c >> 16)
-	}
-
-	return ^uint16(c)
 }

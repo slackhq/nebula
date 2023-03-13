@@ -80,7 +80,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 		certState: cs,
 		H:         &noise.HandshakeState{},
 	}
-	nc.hostMap.addHostInfo(hostinfo, ifce)
+	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
 
 	// We saw traffic out to vpnIp
 	nc.Out(hostinfo.localIndexId)
@@ -156,7 +156,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 		certState: cs,
 		H:         &noise.HandshakeState{},
 	}
-	nc.hostMap.addHostInfo(hostinfo, ifce)
+	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
 
 	// We saw traffic out to vpnIp
 	nc.Out(hostinfo.localIndexId)

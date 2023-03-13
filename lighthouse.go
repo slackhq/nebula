@@ -12,6 +12,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
@@ -71,6 +72,8 @@ type LightHouse struct {
 
 	// IP's of relays that can be used by peers to access me
 	relaysForMe atomic.Pointer[[]iputil.VpnIp]
+
+	calculatedRemotes atomic.Pointer[cidr.Tree4] // Maps VpnIp to []*calculatedRemote
 
 	metrics           *MessageMetrics
 	metricHolepunchTx metrics.Counter
@@ -161,6 +164,10 @@ func (lh *LightHouse) GetRelaysForMe() []iputil.VpnIp {
 	return *lh.relaysForMe.Load()
 }
 
+func (lh *LightHouse) getCalculatedRemotes() *cidr.Tree4 {
+	return lh.calculatedRemotes.Load()
+}
+
 func (lh *LightHouse) GetUpdateInterval() int64 {
 	return lh.interval.Load()
 }
@@ -234,6 +241,19 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 		if !initial {
 			//TODO: a diff will be annoyingly difficult
 			lh.l.Info("lighthouse.local_allow_list has changed")
+		}
+	}
+
+	if initial || c.HasChanged("lighthouse.calculated_remotes") {
+		cr, err := NewCalculatedRemotesFromConfig(c, "lighthouse.calculated_remotes")
+		if err != nil {
+			return util.NewContextualError("Invalid lighthouse.calculated_remotes", nil, err)
+		}
+
+		lh.calculatedRemotes.Store(cr)
+		if !initial {
+			//TODO: a diff will be annoyingly difficult
+			lh.l.Info("lighthouse.calculated_remotes has changed")
 		}
 	}
 
@@ -486,6 +506,39 @@ func (lh *LightHouse) addStaticRemote(vpnIp iputil.VpnIp, toAddr *udp.Addr, stat
 
 	// Mark it as static in the caller provided map
 	staticList[vpnIp] = struct{}{}
+}
+
+// addCalculatedRemotes adds any calculated remotes based on the
+// lighthouse.calculated_remotes configuration. It returns true if any
+// calculated remotes were added
+func (lh *LightHouse) addCalculatedRemotes(vpnIp iputil.VpnIp) bool {
+	tree := lh.getCalculatedRemotes()
+	if tree == nil {
+		return false
+	}
+	value := tree.MostSpecificContains(vpnIp)
+	if value == nil {
+		return false
+	}
+	calculatedRemotes := value.([]*calculatedRemote)
+
+	var calculated []*Ip4AndPort
+	for _, cr := range calculatedRemotes {
+		c := cr.Apply(vpnIp)
+		if c != nil {
+			calculated = append(calculated, c)
+		}
+	}
+
+	lh.Lock()
+	am := lh.unlockedGetRemoteList(vpnIp)
+	am.Lock()
+	defer am.Unlock()
+	lh.Unlock()
+
+	am.unlockedSetV4(lh.myVpnIp, vpnIp, calculated, lh.unlockedShouldAddV4)
+
+	return len(calculated) > 0
 }
 
 // unlockedGetRemoteList assumes you have the lh lock
