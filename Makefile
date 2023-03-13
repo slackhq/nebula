@@ -1,4 +1,4 @@
-GOMINVERSION = 1.18
+GOMINVERSION = 1.19
 NEBULA_CMD_PATH = "./cmd/nebula"
 GO111MODULE = on
 export GO111MODULE
@@ -65,6 +65,9 @@ e2evvv: e2ev
 
 e2evvvv: TEST_ENV += TEST_LOGS=3
 e2evvvv: e2ev
+
+e2e-bench: TEST_FLAGS = -bench=. -benchmem -run=^$
+e2e-bench: e2e
 
 all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
 

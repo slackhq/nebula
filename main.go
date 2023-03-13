@@ -202,7 +202,10 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	hostMap := NewHostMap(l, "main", tunCidr, preferredRanges)
 	hostMap.metricsEnabled = c.GetBool("stats.message_metrics", false)
 
-	l.WithField("network", hostMap.vpnCIDR).WithField("preferredRanges", hostMap.preferredRanges).Info("Main HostMap created")
+	l.
+		WithField("network", hostMap.vpnCIDR.String()).
+		WithField("preferredRanges", hostMap.preferredRanges).
+		Info("Main HostMap created")
 
 	/*
 		config.SetDefault("promoter.interval", 10)
@@ -327,7 +330,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	//TODO: check if we _should_ be emitting stats
 	go ifce.emitStats(ctx, c.GetDuration("stats.interval", time.Second*10))
 
-	attachCommands(l, ssh, hostMap, handshakeManager.pendingHostMap, lightHouse, ifce)
+	attachCommands(l, c, ssh, hostMap, handshakeManager.pendingHostMap, lightHouse, ifce)
 
 	// Start DNS server last to allow using the nebula IP as lighthouse.dns.host
 	var dnsStart func()

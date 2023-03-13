@@ -12,7 +12,6 @@ import (
 	"runtime/pprof"
 	"sort"
 	"strings"
-	"syscall"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
@@ -23,8 +22,9 @@ import (
 )
 
 type sshListHostMapFlags struct {
-	Json   bool
-	Pretty bool
+	Json    bool
+	Pretty  bool
+	ByIndex bool
 }
 
 type sshPrintCertFlags struct {
@@ -166,7 +166,7 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 	return runner, nil
 }
 
-func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pendingHostMap *HostMap, lightHouse *LightHouse, ifce *Interface) {
+func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap *HostMap, pendingHostMap *HostMap, lightHouse *LightHouse, ifce *Interface) {
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "list-hostmap",
 		ShortDescription: "List all known previously connected hosts",
@@ -175,6 +175,7 @@ func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pen
 			s := sshListHostMapFlags{}
 			fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
+			fl.BoolVar(&s.ByIndex, "by-index", false, "gets all hosts in the hostmap from the index table")
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
@@ -190,6 +191,7 @@ func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pen
 			s := sshListHostMapFlags{}
 			fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
 			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
+			fl.BoolVar(&s.ByIndex, "by-index", false, "gets all hosts in the hostmap from the index table")
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
@@ -215,7 +217,9 @@ func attachCommands(l *logrus.Logger, ssh *sshd.SSHServer, hostMap *HostMap, pen
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "reload",
 		ShortDescription: "Reloads configuration from disk, same as sending HUP to the process",
-		Callback:         sshReload,
+		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
+			return sshReload(c, w)
+		},
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
@@ -367,7 +371,13 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 		return nil
 	}
 
-	hm := listHostMap(hostMap)
+	var hm []ControlHostInfo
+	if fs.ByIndex {
+		hm = listHostMapIndexes(hostMap)
+	} else {
+		hm = listHostMapHosts(hostMap)
+	}
+
 	sort.Slice(hm, func(i, j int) bool {
 		return bytes.Compare(hm[i].VpnIp, hm[j].VpnIp) < 0
 	})
@@ -804,7 +814,7 @@ func sshPrintRelays(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 				case TerminalType:
 					t = "terminal"
 				default:
-					t = "unkown"
+					t = "unknown"
 				}
 
 				s := ""
@@ -875,16 +885,8 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 	return enc.Encode(copyHostInfo(hostInfo, ifce.hostMap.preferredRanges))
 }
 
-func sshReload(fs interface{}, a []string, w sshd.StringWriter) error {
-	p, err := os.FindProcess(os.Getpid())
-	if err != nil {
-		return w.WriteLine(err.Error())
-		//TODO
-	}
-	err = p.Signal(syscall.SIGHUP)
-	if err != nil {
-		return w.WriteLine(err.Error())
-		//TODO
-	}
-	return w.WriteLine("HUP sent")
+func sshReload(c *config.C, w sshd.StringWriter) error {
+	err := w.WriteLine("Reloading config")
+	c.ReloadConfig()
+	return err
 }

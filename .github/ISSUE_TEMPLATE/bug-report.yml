@@ -1,0 +1,57 @@
+name: "\U0001F41B Bug Report"
+description: Report an issue or possible bug
+title: "\U0001F41B BUG:"
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Thank you for taking the time to file a bug report!
+        
+        Please fill out this form as completely as possible.
+
+  - type: input
+    id: version
+    attributes:
+      label: What version of `nebula` are you using?
+      placeholder: 0.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: What operating system are you using?
+      description: iOS and Android specific issues belong in the [mobile_nebula](https://github.com/DefinedNet/mobile_nebula) repo.
+      placeholder: Linux, Mac, Windows
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs from affected hosts
+      description: |
+        Provide logs from all affected hosts during the time of the issue.
+        Improve formatting by using <code>```</code> at the beginning and end of each log block.
+    validations:
+      required: false
+
+  - type: textarea
+    id: configs
+    attributes:
+      label: Config files from affected hosts
+      description: |
+        Provide config files for all affected hosts.
+        Improve formatting by using <code>```</code> at the beginning and end of each config file.
+    validations:
+      required: false

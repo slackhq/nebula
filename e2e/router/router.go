@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
+	"golang.org/x/exp/maps"
 )
 
 type R struct {
@@ -40,14 +42,37 @@ type R struct {
 	// A map of vpn ip to the nebula control it belongs to
 	vpnControls map[iputil.VpnIp]*nebula.Control
 
-	flow []flowEntry
+	ignoreFlows []ignoreFlow
+	flow        []flowEntry
+
+	// A set of additional mermaid graphs to draw in the flow log markdown file
+	// Currently consisting only of hostmap renders
+	additionalGraphs []mermaidGraph
 
 	// All interactions are locked to help serialize behavior
 	sync.Mutex
 
 	fn           string
 	cancelRender context.CancelFunc
-	t            *testing.T
+	t            testing.TB
+}
+
+type ignoreFlow struct {
+	tun         NullBool
+	messageType header.MessageType
+	subType     header.MessageSubType
+	//from
+	//to
+}
+
+type mermaidGraph struct {
+	title   string
+	content string
+}
+
+type NullBool struct {
+	HasValue bool
+	IsTrue   bool
 }
 
 type flowEntry struct {
@@ -61,6 +86,12 @@ type packet struct {
 	packet *udp.Packet
 	tun    bool // a packet pulled off a tun device
 	rx     bool // the packet was received by a udp device
+}
+
+func (p *packet) WasReceived() {
+	if p != nil {
+		p.rx = true
+	}
 }
 
 type ExitType int
@@ -79,7 +110,7 @@ type ExitFunc func(packet *udp.Packet, receiver *nebula.Control) ExitType
 // NewR creates a new router to pass packets in a controlled fashion between the provided controllers.
 // The packet flow will be recorded in a file within the mermaid directory under the same name as the test.
 // Renders will occur automatically, roughly every 100ms, until a call to RenderFlow() is made
-func NewR(t *testing.T, controls ...*nebula.Control) *R {
+func NewR(t testing.TB, controls ...*nebula.Control) *R {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	if err := os.MkdirAll("mermaid", 0755); err != nil {
@@ -91,6 +122,8 @@ func NewR(t *testing.T, controls ...*nebula.Control) *R {
 		vpnControls:  make(map[iputil.VpnIp]*nebula.Control),
 		inNat:        make(map[string]*nebula.Control),
 		outNat:       make(map[string]net.UDPAddr),
+		flow:         []flowEntry{},
+		ignoreFlows:  []ignoreFlow{},
 		fn:           filepath.Join("mermaid", fmt.Sprintf("%s.md", t.Name())),
 		t:            t,
 		cancelRender: cancel,
@@ -119,6 +152,7 @@ func NewR(t *testing.T, controls ...*nebula.Control) *R {
 			case <-ctx.Done():
 				return
 			case <-clockSource.C:
+				r.renderHostmaps("clock tick")
 				r.renderFlow()
 			}
 		}
@@ -148,14 +182,24 @@ func (r *R) RenderFlow() {
 	r.renderFlow()
 }
 
+// CancelFlowLogs stops flow logs from being tracked and destroys any logs already collected
+func (r *R) CancelFlowLogs() {
+	r.cancelRender()
+	r.flow = nil
+}
+
 func (r *R) renderFlow() {
+	if r.flow == nil {
+		return
+	}
+
 	f, err := os.OpenFile(r.fn, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0644)
 	if err != nil {
 		panic(err)
 	}
 
 	var participants = map[string]struct{}{}
-	var participansVals []string
+	var participantsVals []string
 
 	fmt.Fprintln(f, "```mermaid")
 	fmt.Fprintln(f, "sequenceDiagram")
@@ -172,18 +216,23 @@ func (r *R) renderFlow() {
 		}
 		participants[addr] = struct{}{}
 		sanAddr := strings.Replace(addr, ":", "#58;", 1)
-		participansVals = append(participansVals, sanAddr)
+		participantsVals = append(participantsVals, sanAddr)
 		fmt.Fprintf(
 			f, "    participant %s as Nebula: %s<br/>UDP: %s\n",
 			sanAddr, e.packet.from.GetVpnIp(), sanAddr,
 		)
 	}
 
+	if len(participantsVals) > 2 {
+		// Get the first and last participantVals for notes
+		participantsVals = []string{participantsVals[0], participantsVals[len(participantsVals)-1]}
+	}
+
 	// Print packets
 	h := &header.H{}
 	for _, e := range r.flow {
 		if e.packet == nil {
-			fmt.Fprintf(f, "    note over %s: %s\n", strings.Join(participansVals, ", "), e.note)
+			//fmt.Fprintf(f, "    note over %s: %s\n", strings.Join(participantsVals, ", "), e.note)
 			continue
 		}
 
@@ -202,15 +251,77 @@ func (r *R) renderFlow() {
 			}
 
 			fmt.Fprintf(f,
-				"    %s%s%s: %s(%s), counter: %v\n",
+				"    %s%s%s: %s(%s), index %v, counter: %v\n",
 				strings.Replace(p.from.GetUDPAddr(), ":", "#58;", 1),
 				line,
 				strings.Replace(p.to.GetUDPAddr(), ":", "#58;", 1),
-				h.TypeName(), h.SubTypeName(), h.MessageCounter,
+				h.TypeName(), h.SubTypeName(), h.RemoteIndex, h.MessageCounter,
 			)
 		}
 	}
 	fmt.Fprintln(f, "```")
+
+	for _, g := range r.additionalGraphs {
+		fmt.Fprintf(f, "## %s\n", g.title)
+		fmt.Fprintln(f, "```mermaid")
+		fmt.Fprintln(f, g.content)
+		fmt.Fprintln(f, "```")
+	}
+}
+
+// IgnoreFlow tells the router to stop recording future flows that matches the provided criteria.
+// messageType and subType will target nebula underlay packets while tun will target nebula overlay packets
+// NOTE: This is a very broad system, if you set tun to true then no more tun traffic will be rendered
+func (r *R) IgnoreFlow(messageType header.MessageType, subType header.MessageSubType, tun NullBool) {
+	r.Lock()
+	defer r.Unlock()
+	r.ignoreFlows = append(r.ignoreFlows, ignoreFlow{
+		tun,
+		messageType,
+		subType,
+	})
+}
+
+func (r *R) RenderHostmaps(title string, controls ...*nebula.Control) {
+	r.Lock()
+	defer r.Unlock()
+
+	s := renderHostmaps(controls...)
+	if len(r.additionalGraphs) > 0 {
+		lastGraph := r.additionalGraphs[len(r.additionalGraphs)-1]
+		if lastGraph.content == s && lastGraph.title == title {
+			// Ignore this rendering if it matches the last rendering added
+			// This is useful if you want to track rendering changes
+			return
+		}
+	}
+
+	r.additionalGraphs = append(r.additionalGraphs, mermaidGraph{
+		title:   title,
+		content: s,
+	})
+}
+
+func (r *R) renderHostmaps(title string) {
+	c := maps.Values(r.controls)
+	sort.SliceStable(c, func(i, j int) bool {
+		return c[i].GetVpnIp() > c[j].GetVpnIp()
+	})
+
+	s := renderHostmaps(c...)
+	if len(r.additionalGraphs) > 0 {
+		lastGraph := r.additionalGraphs[len(r.additionalGraphs)-1]
+		if lastGraph.content == s {
+			// Ignore this rendering if it matches the last rendering added
+			// This is useful if you want to track rendering changes
+			return
+		}
+	}
+
+	r.additionalGraphs = append(r.additionalGraphs, mermaidGraph{
+		title:   title,
+		content: s,
+	})
 }
 
 // InjectFlow can be used to record packet flow if the test is handling the routing on its own.
@@ -222,6 +333,10 @@ func (r *R) InjectFlow(from, to *nebula.Control, p *udp.Packet) {
 }
 
 func (r *R) Log(arg ...any) {
+	if r.flow == nil {
+		return
+	}
+
 	r.Lock()
 	r.flow = append(r.flow, flowEntry{note: fmt.Sprint(arg...)})
 	r.t.Log(arg...)
@@ -229,6 +344,10 @@ func (r *R) Log(arg ...any) {
 }
 
 func (r *R) Logf(format string, arg ...any) {
+	if r.flow == nil {
+		return
+	}
+
 	r.Lock()
 	r.flow = append(r.flow, flowEntry{note: fmt.Sprintf(format, arg...)})
 	r.t.Logf(format, arg...)
@@ -236,14 +355,40 @@ func (r *R) Logf(format string, arg ...any) {
 }
 
 // unlockedInjectFlow is used by the router to record a packet has been transmitted, the packet is returned and
-// should be marked as received AFTER it has been placed on the receivers channel
+// should be marked as received AFTER it has been placed on the receivers channel.
+// If flow logs have been disabled this function will return nil
 func (r *R) unlockedInjectFlow(from, to *nebula.Control, p *udp.Packet, tun bool) *packet {
+	if r.flow == nil {
+		return nil
+	}
+
+	r.renderHostmaps(fmt.Sprintf("Packet %v", len(r.flow)))
+
+	if len(r.ignoreFlows) > 0 {
+		var h header.H
+		err := h.Parse(p.Data)
+		if err != nil {
+			panic(err)
+		}
+
+		for _, i := range r.ignoreFlows {
+			if !tun {
+				if i.messageType == h.Type && i.subType == h.Subtype {
+					return nil
+				}
+			} else if i.tun.HasValue && i.tun.IsTrue {
+				return nil
+			}
+		}
+	}
+
 	fp := &packet{
 		from:   from,
 		to:     to,
 		packet: p.Copy(),
 		tun:    tun,
 	}
+
 	r.flow = append(r.flow, flowEntry{packet: fp})
 	return fp
 }
@@ -285,7 +430,7 @@ func (r *R) RouteUntilTxTun(sender *nebula.Control, receiver *nebula.Control) []
 			}
 			fp := r.unlockedInjectFlow(sender, c, p, false)
 			c.InjectUDPPacket(p)
-			fp.rx = true
+			fp.WasReceived()
 			r.Unlock()
 		}
 	}
@@ -344,7 +489,7 @@ func (r *R) RouteForAllUntilTxTun(receiver *nebula.Control) []byte {
 			}
 			fp := r.unlockedInjectFlow(cm[x], c, p, false)
 			c.InjectUDPPacket(p)
-			fp.rx = true
+			fp.WasReceived()
 		}
 		r.Unlock()
 	}
@@ -381,14 +526,14 @@ func (r *R) RouteExitFunc(sender *nebula.Control, whatDo ExitFunc) {
 		case RouteAndExit:
 			fp := r.unlockedInjectFlow(sender, receiver, p, false)
 			receiver.InjectUDPPacket(p)
-			fp.rx = true
+			fp.WasReceived()
 			r.Unlock()
 			return
 
 		case KeepRouting:
 			fp := r.unlockedInjectFlow(sender, receiver, p, false)
 			receiver.InjectUDPPacket(p)
-			fp.rx = true
+			fp.WasReceived()
 
 		default:
 			panic(fmt.Sprintf("Unknown exitFunc return: %v", e))
@@ -439,7 +584,7 @@ func (r *R) InjectUDPPacket(sender, receiver *nebula.Control, packet *udp.Packet
 
 	fp := r.unlockedInjectFlow(sender, receiver, packet, false)
 	receiver.InjectUDPPacket(packet)
-	fp.rx = true
+	fp.WasReceived()
 }
 
 // RouteForUntilAfterToAddr will route for sender and return only after it sees and sends a packet destined for toAddr
@@ -503,14 +648,14 @@ func (r *R) RouteForAllExitFunc(whatDo ExitFunc) {
 		case RouteAndExit:
 			fp := r.unlockedInjectFlow(cm[x], receiver, p, false)
 			receiver.InjectUDPPacket(p)
-			fp.rx = true
+			fp.WasReceived()
 			r.Unlock()
 			return
 
 		case KeepRouting:
 			fp := r.unlockedInjectFlow(cm[x], receiver, p, false)
 			receiver.InjectUDPPacket(p)
-			fp.rx = true
+			fp.WasReceived()
 
 		default:
 			panic(fmt.Sprintf("Unknown exitFunc return: %v", e))

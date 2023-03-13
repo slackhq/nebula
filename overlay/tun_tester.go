@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cidr"
@@ -49,7 +50,9 @@ func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int
 // These are unencrypted ip layer frames destined for another nebula node.
 // packets should exit the udp side, capture them with udpConn.Get
 func (t *TestTun) Send(packet []byte) {
-	t.l.WithField("dataLen", len(packet)).Info("Tun receiving injected packet")
+	if t.l.Level >= logrus.InfoLevel {
+		t.l.WithField("dataLen", len(packet)).Debug("Tun receiving injected packet")
+	}
 	t.rxPackets <- packet
 }
 
@@ -107,7 +110,10 @@ func (t *TestTun) Close() error {
 }
 
 func (t *TestTun) Read(b []byte) (int, error) {
-	p := <-t.rxPackets
+	p, ok := <-t.rxPackets
+	if !ok {
+		return 0, os.ErrClosed
+	}
 	copy(b, p)
 	return len(p), nil
 }

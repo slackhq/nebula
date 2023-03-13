@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"sync/atomic"
 	"time"
 
 	"github.com/flynn/noise"
@@ -51,7 +50,7 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 	}
 
 	h := header.Encode(make([]byte, header.Len), header.Version, header.Handshake, header.HandshakeIXPSK0, 0, 1)
-	atomic.AddUint64(&ci.atomicMessageCounter, 1)
+	ci.messageCounter.Add(1)
 
 	msg, _, _, err := ci.H.WriteMessage(h, hsBytes)
 	if err != nil {
@@ -208,9 +207,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 	hostinfo.SetRemote(addr)
 	hostinfo.CreateRemoteCIDR(remoteCert)
 
-	// Only overwrite existing record if we should win the handshake race
-	overwrite := vpnIp > f.myVpnIp
-	existing, err := f.handshakeManager.CheckAndComplete(hostinfo, 0, overwrite, f)
+	existing, err := f.handshakeManager.CheckAndComplete(hostinfo, 0, f)
 	if err != nil {
 		switch err {
 		case ErrAlreadySeen:
@@ -281,16 +278,6 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 				WithField("localIndex", hostinfo.localIndexId).WithField("collision", existing.vpnIp).
 				Error("Failed to add HostInfo due to localIndex collision")
 			return
-		case ErrExistingHandshake:
-			// We have a race where both parties think they are an initiator and this tunnel lost, let the other one finish
-			f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).
-				WithField("certName", certName).
-				WithField("fingerprint", fingerprint).
-				WithField("issuer", issuer).
-				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-				Error("Prevented a pending handshake race")
-			return
 		default:
 			// Shouldn't happen, but just in case someone adds a new error type to CheckAndComplete
 			// And we forget to update it here
@@ -345,6 +332,12 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 			Info("Handshake message sent")
 	}
 
+	if existing != nil {
+		// Make sure we are tracking the old primary if there was one, it needs to go away eventually
+		f.connectionManager.Out(existing.localIndexId)
+	}
+
+	f.connectionManager.Out(hostinfo.localIndexId)
 	hostinfo.handshakeComplete(f.l, f.cachedPacketMetrics)
 
 	return
@@ -502,8 +495,12 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via interface{}, hostinfo *
 	hostinfo.CreateRemoteCIDR(remoteCert)
 
 	// Complete our handshake and update metrics, this will replace any existing tunnels for this vpnIp
-	//TODO: Complete here does not do a race avoidance, it will just take the new tunnel. Is this ok?
-	f.handshakeManager.Complete(hostinfo, f)
+	existing := f.handshakeManager.Complete(hostinfo, f)
+	if existing != nil {
+		// Make sure we are tracking the old primary if there was one, it needs to go away eventually
+		f.connectionManager.Out(existing.localIndexId)
+	}
+
 	hostinfo.handshakeComplete(f.l, f.cachedPacketMetrics)
 	f.metricHandshakes.Update(duration)
 

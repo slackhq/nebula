@@ -13,9 +13,9 @@ import (
 )
 
 type relayManager struct {
-	l             *logrus.Logger
-	hostmap       *HostMap
-	atomicAmRelay int32
+	l       *logrus.Logger
+	hostmap *HostMap
+	amRelay atomic.Bool
 }
 
 func NewRelayManager(ctx context.Context, l *logrus.Logger, hostmap *HostMap, c *config.C) *relayManager {
@@ -41,18 +41,11 @@ func (rm *relayManager) reload(c *config.C, initial bool) error {
 }
 
 func (rm *relayManager) GetAmRelay() bool {
-	return atomic.LoadInt32(&rm.atomicAmRelay) == 1
+	return rm.amRelay.Load()
 }
 
 func (rm *relayManager) setAmRelay(v bool) {
-	var val int32
-	switch v {
-	case true:
-		val = 1
-	case false:
-		val = 0
-	}
-	atomic.StoreInt32(&rm.atomicAmRelay, val)
+	rm.amRelay.Store(v)
 }
 
 // AddRelay finds an available relay index on the hostmap, and associates the relay info with it.
@@ -68,6 +61,11 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 
 		_, inRelays := hm.Relays[index]
 		if !inRelays {
+			// Avoid standing up a relay that can't be used since only the primary hostinfo
+			// will be pointed to by the relay logic
+			//TODO: if there was an existing primary and it had relay state, should we merge?
+			hm.unlockedMakePrimary(relayHostInfo)
+
 			hm.Relays[index] = relayHostInfo
 			newRelay := Relay{
 				Type:       relayType,

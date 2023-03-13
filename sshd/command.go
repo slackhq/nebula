@@ -40,8 +40,13 @@ func execCommand(c *Command, args []string, w StringWriter) error {
 	if c.Flags != nil {
 		fl, fs = c.Flags()
 		if fl != nil {
-			//TODO: handle the error
-			fl.Parse(args)
+			// SetOutput() here in case fl.Parse dumps usage.
+			fl.SetOutput(w.GetWriter())
+			err := fl.Parse(args)
+			if err != nil {
+				// fl.Parse has dumped error information to the user via the w writer.
+				return err
+			}
 			args = fl.Args()
 		}
 	}

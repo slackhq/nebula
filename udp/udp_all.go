@@ -64,6 +64,22 @@ func (ua *Addr) Copy() *Addr {
 	return &nu
 }
 
+type AddrSlice []*Addr
+
+func (a AddrSlice) Equal(b AddrSlice) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for i := range a {
+		if !a[i].Equals(b[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
 func ParseIPAndPort(s string) (net.IP, uint16, error) {
 	rIp, sPort, err := net.SplitHostPort(s)
 	if err != nil {

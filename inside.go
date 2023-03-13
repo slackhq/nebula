@@ -1,8 +1,6 @@
 package nebula
 
 import (
-	"sync/atomic"
-
 	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
@@ -14,7 +12,9 @@ import (
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
-		f.l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
+		if f.l.Level >= logrus.DebugLevel {
+			f.l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
+		}
 		return
 	}
 
@@ -25,8 +25,9 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	if fwPacket.RemoteIP == f.myVpnIp {
 		// Immediately forward packets from self to self.
-		// This should only happen on Darwin-based hosts, which routes packets from
-		// the Nebula IP to the Nebula IP through the Nebula TUN device.
+		// This should only happen on Darwin-based and FreeBSD hosts, which
+		// routes packets from the Nebula IP to the Nebula IP through the Nebula
+		// TUN device.
 		if immediatelyForwardToSelf {
 			_, err := f.readers[q].Write(packet)
 			if err != nil {
@@ -45,6 +46,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	hostinfo := f.getOrHandshake(fwPacket.RemoteIP)
 	if hostinfo == nil {
+		f.rejectInside(packet, out, q)
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("vpnIp", fwPacket.RemoteIP).
 				WithField("fwPacket", fwPacket).
@@ -70,12 +72,40 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	if dropReason == nil {
 		f.sendNoMetrics(header.Message, 0, ci, hostinfo, nil, packet, nb, out, q)
 
-	} else if f.l.Level >= logrus.DebugLevel {
-		hostinfo.logger(f.l).
-			WithField("fwPacket", fwPacket).
-			WithField("reason", dropReason).
-			Debugln("dropping outbound packet")
+	} else {
+		f.rejectInside(packet, out, q)
+		if f.l.Level >= logrus.DebugLevel {
+			hostinfo.logger(f.l).
+				WithField("fwPacket", fwPacket).
+				WithField("reason", dropReason).
+				Debugln("dropping outbound packet")
+		}
 	}
+}
+
+func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
+	if !f.firewall.InSendReject {
+		return
+	}
+
+	out = iputil.CreateRejectPacket(packet, out)
+	_, err := f.readers[q].Write(out)
+	if err != nil {
+		f.l.WithError(err).Error("Failed to write to tun")
+	}
+}
+
+func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *HostInfo, nb, out []byte, q int) {
+	if !f.firewall.OutSendReject {
+		return
+	}
+
+	// Use some out buffer space to build the packet before encryption
+	// Need 40 bytes for the reject packet (20 byte ipv4 header, 20 byte tcp rst packet)
+	// Leave 100 bytes for the encrypted packet (60 byte Nebula header, 40 byte reject packet)
+	out = out[:140]
+	outPacket := iputil.CreateRejectPacket(packet, out[100:])
+	f.sendNoMetrics(header.Message, 0, ci, hostinfo, nil, outPacket, nb, out, q)
 }
 
 func (f *Interface) Handshake(vpnIp iputil.VpnIp) {
@@ -84,8 +114,7 @@ func (f *Interface) Handshake(vpnIp iputil.VpnIp) {
 
 // getOrHandshake returns nil if the vpnIp is not routable
 func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
-	//TODO: we can find contains without converting back to bytes
-	if f.hostMap.vpnCIDR.Contains(vpnIp.ToIP()) == false {
+	if !ipMaskContains(f.lightHouse.myVpnIp, f.lightHouse.myVpnZeros, vpnIp) {
 		vpnIp = f.inside.RouteFor(vpnIp)
 		if vpnIp == 0 {
 			return nil
@@ -124,7 +153,13 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 
 		// If this is a static host, we don't need to wait for the HostQueryReply
 		// We can trigger the handshake right now
-		if _, ok := f.lightHouse.GetStaticHostList()[vpnIp]; ok {
+		_, doTrigger := f.lightHouse.GetStaticHostList()[vpnIp]
+		if !doTrigger {
+			// Add any calculated remotes, and trigger early handshake if one found
+			doTrigger = f.lightHouse.addCalculatedRemotes(vpnIp)
+		}
+
+		if doTrigger {
 			select {
 			case f.handshakeManager.trigger <- vpnIp:
 			default:
@@ -221,10 +256,10 @@ func (f *Interface) SendVia(viaIfc interface{},
 ) {
 	via := viaIfc.(*HostInfo)
 	relay := relayIfc.(*Relay)
-	c := atomic.AddUint64(&via.ConnectionState.atomicMessageCounter, 1)
+	c := via.ConnectionState.messageCounter.Add(1)
 
 	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, relay.RemoteIndex, c)
-	f.connectionManager.Out(via.vpnIp)
+	f.connectionManager.Out(via.localIndexId)
 
 	// Authenticate the header and payload, but do not encrypt for this message type.
 	// The payload consists of the inner, unencrypted Nebula header, as well as the end-to-end encrypted payload.
@@ -280,11 +315,11 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 
 	//TODO: enable if we do more than 1 tun queue
 	//ci.writeLock.Lock()
-	c := atomic.AddUint64(&ci.atomicMessageCounter, 1)
+	c := ci.messageCounter.Add(1)
 
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
 	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)
-	f.connectionManager.Out(hostinfo.vpnIp)
+	f.connectionManager.Out(hostinfo.localIndexId)
 
 	// Query our LH if we haven't since the last time we've been rebound, this will cause the remote to punch against
 	// all our IPs and enable a faster roaming.

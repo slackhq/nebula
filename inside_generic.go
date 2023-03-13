@@ -1,5 +1,5 @@
-//go:build !darwin
-// +build !darwin
+//go:build !darwin && !dragonfly && !freebsd && !netbsd && !openbsd
+// +build !darwin,!dragonfly,!freebsd,!netbsd,!openbsd
 
 package nebula
 
