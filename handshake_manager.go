@@ -142,14 +142,6 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 		return
 	}
 
-	// We only care about a lighthouse trigger before the first handshake transmit attempt. This is a very specific
-	// optimization for a fast lighthouse reply
-	//TODO: it would feel better to do this once, anytime, as our delay increases over time
-	if lighthouseTriggered && hostinfo.HandshakeCounter > 0 {
-		// If we didn't return here a lighthouse could cause us to aggressively send handshakes
-		return
-	}
-
 	// Get a remotes object if we don't already have one.
 	// This is mainly to protect us as this should never be the case
 	// NB ^ This comment doesn't jive. It's how the thing gets initialized.
@@ -158,8 +150,22 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 		hostinfo.remotes = c.lightHouse.QueryCache(vpnIp)
 	}
 
-	//TODO: this will generate a load of queries for hosts with only 1 ip (i'm not using a lighthouse, static mapped)
-	if hostinfo.remotes.Len(c.pendingHostMap.preferredRanges) <= 1 {
+	remotes := hostinfo.remotes.CopyAddrs(c.pendingHostMap.preferredRanges)
+	remotesHaveChanged := !udp.AddrSlice(remotes).Equal(hostinfo.HandshakeLastRemotes)
+
+	// We only care about a lighthouse trigger if we have new remotes to send to.
+	// This is a very specific optimization for a fast lighthouse reply.
+	if lighthouseTriggered && !remotesHaveChanged {
+		// If we didn't return here a lighthouse could cause us to aggressively send handshakes
+		return
+	}
+
+	hostinfo.HandshakeLastRemotes = remotes
+
+	// TODO: this will generate a load of queries for hosts with only 1 ip
+	// (such as ones registered to the lighthouse with only a private IP)
+	// So we only do it one time after attempting 5 handshakes already.
+	if len(remotes) <= 1 && hostinfo.HandshakeCounter == 5 {
 		// If we only have 1 remote it is highly likely our query raced with the other host registered within the lighthouse
 		// Our vpnIp here has a tunnel with a lighthouse but has yet to send a host update packet there so we only know about
 		// the learned public ip for them. Query again to short circuit the promotion counter
@@ -182,12 +188,18 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 		}
 	})
 
-	// Don't be too noisy or confusing if we fail to send a handshake - if we don't get through we'll eventually log a timeout
-	if len(sentTo) > 0 {
+	// Don't be too noisy or confusing if we fail to send a handshake - if we don't get through we'll eventually log a timeout,
+	// so only log when the list of remotes has changed
+	if remotesHaveChanged {
 		hostinfo.logger(c.l).WithField("udpAddrs", sentTo).
 			WithField("initiatorIndex", hostinfo.localIndexId).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
 			Info("Handshake message sent")
+	} else if c.l.IsLevelEnabled(logrus.DebugLevel) {
+		hostinfo.logger(c.l).WithField("udpAddrs", sentTo).
+			WithField("initiatorIndex", hostinfo.localIndexId).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+			Debug("Handshake message sent")
 	}
 
 	if c.config.useRelays && len(hostinfo.remotes.relays) > 0 {
