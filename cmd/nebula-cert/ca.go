@@ -141,7 +141,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	var passphrase []byte
 	if *cf.encryption {
 		for i := 0; i < 5; i++ {
-			out.Write([]byte("Enter a passphrase: "))
+			out.Write([]byte("Enter passphrase: "))
 			passphrase, err = pr.ReadPassword()
 
 			if err == ErrNoTerminal {

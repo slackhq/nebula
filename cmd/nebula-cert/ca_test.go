@@ -77,7 +77,7 @@ func Test_ca(t *testing.T) {
 		err:      nil,
 	}
 
-	pwPromptOb := "Enter a passphrase: "
+	pwPromptOb := "Enter passphrase: "
 
 	// required args
 	assertHelpError(t, ca(
