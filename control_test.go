@@ -61,8 +61,8 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		vpnIp:         iputil.Ip2VpnIp(ipNet.IP),
 		relayState: RelayState{
 			relays:        map[iputil.VpnIp]struct{}{},
-			relayForByIp:  map[iputil.VpnIp]*Relay{},
-			relayForByIdx: map[uint32]*Relay{},
+			relayForByIp:  map[iputil.VpnIp]*RelayWrapper{},
+			relayForByIdx: map[uint32]*RelayWrapper{},
 		},
 	})
 
@@ -77,8 +77,8 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		vpnIp:         iputil.Ip2VpnIp(ipNet2.IP),
 		relayState: RelayState{
 			relays:        map[iputil.VpnIp]struct{}{},
-			relayForByIp:  map[iputil.VpnIp]*Relay{},
-			relayForByIdx: map[uint32]*Relay{},
+			relayForByIp:  map[iputil.VpnIp]*RelayWrapper{},
+			relayForByIdx: map[uint32]*RelayWrapper{},
 		},
 	})
 

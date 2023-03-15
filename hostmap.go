@@ -50,6 +50,13 @@ type Relay struct {
 	PeerIp      iputil.VpnIp
 }
 
+// For synchronization, treat the Relay struct as immutable. To edit the Relay
+// struct, make a copy of an existing value, edit the fileds in the copy, and
+// then store a pointer to the copy in RelayWrapper.
+type RelayWrapper struct {
+	Relay atomic.Pointer[Relay]
+}
+
 type HostMap struct {
 	sync.RWMutex    //Because we concurrently read and write to our maps
 	name            string
@@ -66,9 +73,9 @@ type HostMap struct {
 type RelayState struct {
 	sync.RWMutex
 
-	relays        map[iputil.VpnIp]struct{} // Set of VpnIp's of Hosts to use as relays to access this peer
-	relayForByIp  map[iputil.VpnIp]*Relay   // Maps VpnIps of peers for which this HostInfo is a relay to some Relay info
-	relayForByIdx map[uint32]*Relay         // Maps a local index to some Relay info
+	relays        map[iputil.VpnIp]struct{}      // Set of VpnIp's of Hosts to use as relays to access this peer
+	relayForByIp  map[iputil.VpnIp]*RelayWrapper // Maps VpnIps of peers for which this HostInfo is a relay to some Relay info
+	relayForByIdx map[uint32]*RelayWrapper       // Maps a local index to some Relay info
 }
 
 func (rs *RelayState) DeleteRelay(ip iputil.VpnIp) {
@@ -81,7 +88,7 @@ func (rs *RelayState) GetRelayForByIp(ip iputil.VpnIp) (*Relay, bool) {
 	rs.RLock()
 	defer rs.RUnlock()
 	r, ok := rs.relayForByIp[ip]
-	return r, ok
+	return r.Relay.Load(), ok
 }
 
 func (rs *RelayState) InsertRelayTo(ip iputil.VpnIp) {
@@ -127,29 +134,68 @@ func (rs *RelayState) RemoveRelay(localIdx uint32) (iputil.VpnIp, bool) {
 	if !ok {
 		return iputil.VpnIp(0), false
 	}
+	r := relay.Relay.Load()
 	delete(rs.relayForByIdx, localIdx)
-	delete(rs.relayForByIp, relay.PeerIp)
-	return relay.PeerIp, true
+	delete(rs.relayForByIp, r.PeerIp)
+	return r.PeerIp, true
+}
+
+func (rs *RelayState) CompleteRelayByIP(vpnIp iputil.VpnIp, remoteIdx uint32) bool {
+	rs.Lock()
+	defer rs.Unlock()
+	r, ok := rs.relayForByIp[vpnIp]
+	if !ok {
+		return false
+	}
+	newRelay := *r.Relay.Load()
+	newRelay.State = Established
+	newRelay.RemoteIndex = remoteIdx
+	r.Relay.Store(&newRelay)
+	return true
+}
+
+func (rs *RelayState) CompleteRelayByIdx(localIdx uint32, remoteIdx uint32) (*Relay, bool) {
+	rs.Lock()
+	defer rs.Unlock()
+	r, ok := rs.relayForByIdx[localIdx]
+	if !ok {
+		return nil, false
+	}
+	newRelay := *r.Relay.Load()
+	newRelay.State = Established
+	newRelay.RemoteIndex = remoteIdx
+	r.Relay.Store(&newRelay)
+	return &newRelay, true
 }
 
 func (rs *RelayState) QueryRelayForByIp(vpnIp iputil.VpnIp) (*Relay, bool) {
 	rs.RLock()
 	defer rs.RUnlock()
 	r, ok := rs.relayForByIp[vpnIp]
-	return r, ok
+	var ret *Relay
+	if ok {
+		ret = r.Relay.Load()
+	}
+	return ret, ok
 }
 
 func (rs *RelayState) QueryRelayForByIdx(idx uint32) (*Relay, bool) {
 	rs.RLock()
 	defer rs.RUnlock()
 	r, ok := rs.relayForByIdx[idx]
-	return r, ok
+	var ret *Relay
+	if ok {
+		ret = r.Relay.Load()
+	}
+	return ret, ok
 }
 func (rs *RelayState) InsertRelay(ip iputil.VpnIp, idx uint32, r *Relay) {
 	rs.Lock()
 	defer rs.Unlock()
-	rs.relayForByIp[ip] = r
-	rs.relayForByIdx[idx] = r
+	rw := &RelayWrapper{}
+	rw.Relay.Store(r)
+	rs.relayForByIp[ip] = rw
+	rs.relayForByIdx[idx] = rw
 }
 
 type HostInfo struct {
@@ -297,8 +343,8 @@ func (hm *HostMap) AddVpnIp(vpnIp iputil.VpnIp, init func(hostinfo *HostInfo)) (
 			HandshakePacket: make(map[uint8][]byte, 0),
 			relayState: RelayState{
 				relays:        map[iputil.VpnIp]struct{}{},
-				relayForByIp:  map[iputil.VpnIp]*Relay{},
-				relayForByIdx: map[uint32]*Relay{},
+				relayForByIp:  map[iputil.VpnIp]*RelayWrapper{},
+				relayForByIdx: map[uint32]*RelayWrapper{},
 			},
 		}
 		if init != nil {
