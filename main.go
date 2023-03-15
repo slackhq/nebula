@@ -151,8 +151,21 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	port := c.GetInt("listen.port", 0)
 
 	if !configTest {
+		rawListenHost := c.GetString("listen.host", "0.0.0.0")
+		var listenHost *net.IPAddr
+		if rawListenHost == "[::]" {
+			// Old guidance was to provide the literal `[::]` in `listen.host` but that won't resolve.
+			listenHost = &net.IPAddr{IP: net.IPv6zero}
+
+		} else {
+			listenHost, err = net.ResolveIPAddr("ip", rawListenHost)
+			if err != nil {
+				return nil, util.NewContextualError("Failed to resolve listen.host", nil, err)
+			}
+		}
+
 		for i := 0; i < routines; i++ {
-			udpServer, err := udp.NewListener(l, c.GetString("listen.host", "0.0.0.0"), port, routines > 1, c.GetInt("listen.batch", 64))
+			udpServer, err := udp.NewListener(l, listenHost.IP, port, routines > 1, c.GetInt("listen.batch", 64))
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
