@@ -88,7 +88,11 @@ func (rs *RelayState) GetRelayForByIp(ip iputil.VpnIp) (*Relay, bool) {
 	rs.RLock()
 	defer rs.RUnlock()
 	r, ok := rs.relayForByIp[ip]
-	return r.Relay.Load(), ok
+	var res *Relay
+	if ok {
+		res = r.Relay.Load()
+	}
+	return res, ok
 }
 
 func (rs *RelayState) InsertRelayTo(ip iputil.VpnIp) {
