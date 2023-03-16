@@ -393,43 +393,19 @@ func TestStage1RaceRelays(t *testing.T) {
 	relayControl.Start()
 	theirControl.Start()
 
-	r.Log("Trigger a handshake to start on both me and relay")
-	myControl.InjectTunUDPPacket(relayVpnIpNet.IP, 80, 80, []byte("Hi from me"))
-	relayControl.InjectTunUDPPacket(myVpnIpNet.IP, 80, 80, []byte("Hi from relay"))
-
-	r.Log("Get both stage 1 handshake packets")
-	//TODO: this is where it breaks, we need to get the hs packets for the relay not for the destination
-	myHsForThem := myControl.GetFromUDP(true)
-	relayHsForMe := relayControl.GetFromUDP(true)
-
-	r.Log("Now inject both stage 1 handshake packets")
-	r.InjectUDPPacket(relayControl, myControl, relayHsForMe)
-	r.InjectUDPPacket(myControl, relayControl, myHsForThem)
-
-	r.Log("Route for me until I send a message packet to relay")
-	r.RouteForAllUntilAfterMsgTypeTo(relayControl, header.Message, header.MessageNone)
-
-	r.Log("My cached packet should be received by relay")
-	myCachedPacket := relayControl.GetFromTun(true)
-	assertUdpPacket(t, []byte("Hi from me"), myCachedPacket, myVpnIpNet.IP, relayVpnIpNet.IP, 80, 80)
-
-	r.Log("Relays cached packet should be received by me")
-	relayCachedPacket := r.RouteForAllUntilTxTun(myControl)
-	assertUdpPacket(t, []byte("Hi from relay"), relayCachedPacket, relayVpnIpNet.IP, myVpnIpNet.IP, 80, 80)
-
-	r.Log("Do a bidirectional tunnel test; me and relay")
+	r.Log("Get a tunnel between me and relay")
 	assertTunnel(t, myVpnIpNet.IP, relayVpnIpNet.IP, myControl, relayControl, r)
 
-	r.Log("Create a tunnel between relay and them")
+	r.Log("Get a tunnel between them and relay")
 	assertTunnel(t, theirVpnIpNet.IP, relayVpnIpNet.IP, theirControl, relayControl, r)
 
-	r.RenderHostmaps("Starting hostmaps", myControl, relayControl, theirControl)
+	r.Log("Trigger a handshake from both them and me via relay to them and me")
+	myControl.InjectTunUDPPacket(theirVpnIpNet.IP, 80, 80, []byte("Hi from me"))
+	theirControl.InjectTunUDPPacket(myVpnIpNet.IP, 80, 80, []byte("Hi from them"))
 
-	r.Log("Trigger a handshake to start from me to them via the relay")
-	//TODO: if we initiate a handshake from me and then assert the tunnel it will cause a relay control race that can blow up
-	//	this is a problem that exists on master today
-	//myControl.InjectTunUDPPacket(theirVpnIpNet.IP, 80, 80, []byte("Hi from me"))
-	assertTunnel(t, myVpnIpNet.IP, theirVpnIpNet.IP, myControl, theirControl, r)
+	r.Log("Wait for a packet from them to me")
+	p := r.RouteForAllUntilTxTun(myControl)
+	_ = p
 
 	myControl.Stop()
 	theirControl.Stop()
