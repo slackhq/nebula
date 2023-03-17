@@ -384,8 +384,9 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) *HostInfo 
 	}
 
 	existingHostInfo := c.mainHostMap.Hosts[hostinfo.vpnIp]
-	c.mainHostMap.unlockedAddHostInfo(hostinfo, f)
+	// We need to remove from the pending hostmap first to avoid undoing work when after to the main hostmap.
 	c.pendingHostMap.unlockedDeleteHostInfo(hostinfo)
+	c.mainHostMap.unlockedAddHostInfo(hostinfo, f)
 	return existingHostInfo
 }
 
