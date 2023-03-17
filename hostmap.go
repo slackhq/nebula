@@ -314,20 +314,6 @@ func (hm *HostMap) AddVpnIp(vpnIp iputil.VpnIp, init func(hostinfo *HostInfo)) (
 	}
 }
 
-func (hm *HostMap) DeleteVpnIp(vpnIp iputil.VpnIp) {
-	hm.Lock()
-	delete(hm.Hosts, vpnIp)
-	if len(hm.Hosts) == 0 {
-		hm.Hosts = map[iputil.VpnIp]*HostInfo{}
-	}
-	hm.Unlock()
-
-	if hm.l.Level >= logrus.DebugLevel {
-		hm.l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": vpnIp, "mapTotalSize": len(hm.Hosts)}).
-			Debug("Hostmap vpnIp deleted")
-	}
-}
-
 // Only used by pendingHostMap when the remote index is not initially known
 func (hm *HostMap) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
 	hm.Lock()
@@ -342,45 +328,8 @@ func (hm *HostMap) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
 	}
 }
 
-func (hm *HostMap) AddVpnIpHostInfo(vpnIp iputil.VpnIp, h *HostInfo) {
-	hm.Lock()
-	h.vpnIp = vpnIp
-	hm.Hosts[vpnIp] = h
-	hm.Indexes[h.localIndexId] = h
-	hm.RemoteIndexes[h.remoteIndexId] = h
-	hm.Unlock()
-
-	if hm.l.Level > logrus.DebugLevel {
-		hm.l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": vpnIp, "mapTotalSize": len(hm.Hosts),
-			"hostinfo": m{"existing": true, "localIndexId": h.localIndexId, "vpnIp": h.vpnIp}}).
-			Debug("Hostmap vpnIp added")
-	}
-}
-
-// This is only called in pendingHostmap, to cleanup an inbound handshake
-func (hm *HostMap) DeleteIndex(index uint32) {
-	hm.Lock()
-	hostinfo, ok := hm.Indexes[index]
-	if ok {
-		delete(hm.Indexes, index)
-		delete(hm.RemoteIndexes, hostinfo.remoteIndexId)
-
-		// Check if we have an entry under hostId that matches the same hostinfo
-		// instance. Clean it up as well if we do.
-		hostinfo2, ok := hm.Hosts[hostinfo.vpnIp]
-		if ok && hostinfo2 == hostinfo {
-			delete(hm.Hosts, hostinfo.vpnIp)
-		}
-	}
-	hm.Unlock()
-
-	if hm.l.Level >= logrus.DebugLevel {
-		hm.l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes)}).
-			Debug("Hostmap index deleted")
-	}
-}
-
-// This is used to cleanup on recv_error
+// DeleteReverseIndex is used to clean up on recv_error
+// This function should only ever be called on the pending hostmap
 func (hm *HostMap) DeleteReverseIndex(index uint32) {
 	hm.Lock()
 	hostinfo, ok := hm.RemoteIndexes[index]
