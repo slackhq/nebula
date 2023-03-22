@@ -95,11 +95,13 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 	// Draw the local index to relay or remote index nodes
 	r += fmt.Sprintf("\t\tsubgraph indexes.%s[\"Indexes (index to hostinfo)\"]\n", clusterName)
 	for _, idx := range sortedIndexes(hm.Indexes) {
-		hi := hm.Indexes[idx]
-		r += fmt.Sprintf("\t\t\t%v.%v[\"%v (%v)\"]\n", clusterName, idx, idx, hi.GetVpnIp())
-		remoteClusterName := strings.Trim(hi.GetCert().Details.Name, " ")
-		globalLines = append(globalLines, &edge{from: fmt.Sprintf("%v.%v", clusterName, idx), to: fmt.Sprintf("%v.%v", remoteClusterName, hi.GetRemoteIndex())})
-		_ = hi
+		hi, ok := hm.Indexes[idx]
+		if ok {
+			r += fmt.Sprintf("\t\t\t%v.%v[\"%v (%v)\"]\n", clusterName, idx, idx, hi.GetVpnIp())
+			remoteClusterName := strings.Trim(hi.GetCert().Details.Name, " ")
+			globalLines = append(globalLines, &edge{from: fmt.Sprintf("%v.%v", clusterName, idx), to: fmt.Sprintf("%v.%v", remoteClusterName, hi.GetRemoteIndex())})
+			_ = hi
+		}
 	}
 	r += "\t\tend\n"
 

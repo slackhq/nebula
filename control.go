@@ -198,7 +198,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	hostInfos := []*HostInfo{}
 	// Grab the hostMap lock to access the Hosts map
 	c.f.hostMap.Lock()
-	for _, relayHost := range c.f.hostMap.Hosts {
+	for _, relayHost := range c.f.hostMap.Indexes {
 		if _, ok := relayingHosts[relayHost.vpnIp]; !ok {
 			hostInfos = append(hostInfos, relayHost)
 		}

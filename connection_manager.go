@@ -240,7 +240,7 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 			break
 		}
 
-		hostinfo, err := n.hostMap.QueryIndex(localIndex)
+		hostinfo, mainHostInfo, err := n.hostMap.QueryIndexIsPrimary(localIndex)
 		if err != nil {
 			n.l.WithField("localIndex", localIndex).Debugf("Not found in hostmap")
 			n.ClearLocalIndex(localIndex)
@@ -262,6 +262,12 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 
 			n.ClearLocalIndex(localIndex)
 			n.ClearPendingDeletion(localIndex)
+
+			if !mainHostInfo {
+				// This hostinfo is still being used despite not being the primary hostinfo for this vpn ip
+				// Keep tracking so that we can tear it down when it goes away
+				n.Out(localIndex)
+			}
 			continue
 		}
 

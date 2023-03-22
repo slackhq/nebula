@@ -412,25 +412,27 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) bool {
 	hm.unlockedDeleteHostInfo(hostinfo)
 	hm.Unlock()
 
-	// And tear down all the relays going through this host
+	// And tear down all the relays going through this host, if final
 	for _, localIdx := range hostinfo.relayState.CopyRelayForIdxs() {
 		hm.RemoveRelay(localIdx)
 	}
 
-	// And tear down the relays this deleted hostInfo was using to be reached
-	teardownRelayIdx := []uint32{}
-	for _, relayIp := range hostinfo.relayState.CopyRelayIps() {
-		relayHostInfo, err := hm.QueryVpnIp(relayIp)
-		if err != nil {
-			hm.l.WithError(err).WithField("relay", relayIp).Info("Missing relay host in hostmap")
-		} else {
-			if r, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp); ok {
-				teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
+	if final {
+		// And tear down the relays this deleted hostInfo was using to be reached
+		teardownRelayIdx := []uint32{}
+		for _, relayIp := range hostinfo.relayState.CopyRelayIps() {
+			relayHostInfo, err := hm.QueryVpnIp(relayIp)
+			if err != nil {
+				hm.l.WithError(err).WithField("relay", relayIp).Info("Missing relay host in hostmap")
+			} else {
+				if r, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp); ok {
+					teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
+				}
 			}
 		}
-	}
-	for _, localIdx := range teardownRelayIdx {
-		hm.RemoveRelay(localIdx)
+		for _, localIdx := range teardownRelayIdx {
+			hm.RemoveRelay(localIdx)
+		}
 	}
 
 	return final
@@ -534,6 +536,20 @@ func (hm *HostMap) QueryIndex(index uint32) (*HostInfo, error) {
 	} else {
 		hm.RUnlock()
 		return nil, errors.New("unable to find index")
+	}
+}
+
+// Retrieves a HostInfo by Index. Returns whether the HostInfo is primary at time of query.
+// This helper exists so that the hostinfo.prev pointer can be read while the hostmap lock is held.
+func (hm *HostMap) QueryIndexIsPrimary(index uint32) (*HostInfo, bool, error) {
+	//TODO: we probably just want to return bool instead of error, or at least a static error
+	hm.RLock()
+	if h, ok := hm.Indexes[index]; ok {
+		hm.RUnlock()
+		return h, h.prev == nil, nil
+	} else {
+		hm.RUnlock()
+		return nil, false, errors.New("unable to find index")
 	}
 }
 func (hm *HostMap) QueryRelayIndex(index uint32) (*HostInfo, error) {

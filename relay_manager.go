@@ -152,7 +152,7 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 	msg, err := resp.Marshal()
 	if err != nil {
 		rm.l.
-			WithError(err).Error("relayManager Failed to marhsal Control CreateRelayResponse message to create relay")
+			WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
 	} else {
 		f.SendMessageToVpnIp(header.Control, 0, peerHostInfo.vpnIp, msg, make([]byte, 12), make([]byte, mtu))
 		rm.l.WithFields(logrus.Fields{
