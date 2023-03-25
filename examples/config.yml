@@ -106,6 +106,8 @@ lighthouse:
 
 # Port Nebula will be listening on. The default here is 4242. For a lighthouse node, the port should be defined,
 # however using port 0 will dynamically assign a port and is recommended for roaming nodes.
+# If you run several nodes on the same local network behind a NAT router, e.g., residential DSL or mobile broadband,
+# you must set different ports for each node or use port 0 for dynamic assignment.
 listen:
   # To listen on both any ipv4 and ipv6 use "[::]"
   host: 0.0.0.0
