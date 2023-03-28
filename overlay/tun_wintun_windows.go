@@ -92,7 +92,7 @@ func (t *winTun) Activate() error {
 	routes := make([]*winipcfg.RouteData, 0, len(t.Routes)+1)
 
 	for _, r := range t.Routes {
-		if r.Via == nil {
+		if r.Via == nil || !r.Install {
 			// We don't allow route MTUs so only install routes with a via
 			continue
 		}
