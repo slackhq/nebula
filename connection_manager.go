@@ -216,6 +216,13 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 			continue
 		}
 
+		if n.intf.lightHouse.IsLighthouseIP(hostinfo.vpnIp) {
+			// Don't probe lighthouses since recv_error should naturally catch this.
+			n.ClearLocalIndex(localIndex)
+			n.ClearPendingDeletion(localIndex)
+			continue
+		}
+
 		hostinfo.logger(n.l).
 			WithField("tunnelCheck", m{"state": "testing", "method": "active"}).
 			Debug("Tunnel status")
