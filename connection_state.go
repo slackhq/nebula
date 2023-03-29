@@ -33,7 +33,7 @@ func (f *Interface) newConnectionState(l *logrus.Logger, initiator bool, pattern
 		cs = noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
 	}
 
-	curCertState := f.certState
+	curCertState := f.certState.Load()
 	static := noise.DHKey{Private: curCertState.privateKey, Public: curCertState.publicKey}
 
 	b := NewBits(ReplayWindow)

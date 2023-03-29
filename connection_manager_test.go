@@ -54,12 +54,12 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 		hostMap:          hostMap,
 		inside:           &test.NoopTun{},
 		outside:          &udp.Conn{},
-		certState:        cs,
 		firewall:         &Firewall{},
 		lightHouse:       lh,
 		handshakeManager: NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.Conn{}, defaultHandshakeConfig),
 		l:                l,
 	}
+	ifce.certState.Store(cs)
 	now := time.Now()
 
 	// Create manager
@@ -130,12 +130,12 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 		hostMap:          hostMap,
 		inside:           &test.NoopTun{},
 		outside:          &udp.Conn{},
-		certState:        cs,
 		firewall:         &Firewall{},
 		lightHouse:       lh,
 		handshakeManager: NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.Conn{}, defaultHandshakeConfig),
 		l:                l,
 	}
+	ifce.certState.Store(cs)
 	now := time.Now()
 
 	// Create manager
@@ -245,7 +245,6 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 		hostMap:           hostMap,
 		inside:            &test.NoopTun{},
 		outside:           &udp.Conn{},
-		certState:         cs,
 		firewall:          &Firewall{},
 		lightHouse:        lh,
 		handshakeManager:  NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.Conn{}, defaultHandshakeConfig),
@@ -253,6 +252,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 		disconnectInvalid: true,
 		caPool:            ncp,
 	}
+	ifce.certState.Store(cs)
 
 	// Create manager
 	ctx, cancel := context.WithCancel(context.Background())
