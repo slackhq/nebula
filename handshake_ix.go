@@ -138,8 +138,8 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 		lastHandshakeTime: hs.Details.Time,
 		relayState: RelayState{
 			relays:        map[iputil.VpnIp]struct{}{},
-			relayForByIp:  map[iputil.VpnIp]*RelayWrapper{},
-			relayForByIdx: map[uint32]*RelayWrapper{},
+			relayForByIp:  map[iputil.VpnIp]*Relay{},
+			relayForByIdx: map[uint32]*Relay{},
 		},
 	}
 
