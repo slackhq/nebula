@@ -104,13 +104,13 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				// Find the target HostInfo relay object
 				targetHI, err := f.hostMap.QueryVpnIp(relay.PeerIp)
 				if err != nil {
-					hostinfo.logger(f.l).WithField("peerIp", relay.PeerIp).WithError(err).Info("Failed to find target host info by ip")
+					hostinfo.logger(f.l).WithField("relayTo", relay.PeerIp).WithError(err).Info("Failed to find target host info by ip")
 					return
 				}
 				// find the target Relay info object
 				targetRelay, ok := targetHI.relayState.QueryRelayForByIp(hostinfo.vpnIp)
 				if !ok {
-					hostinfo.logger(f.l).WithFields(logrus.Fields{"peerIp": relay.PeerIp, "vpnIp": hostinfo.vpnIp}).Info("Failed to find relay in hostinfo")
+					hostinfo.logger(f.l).WithFields(logrus.Fields{"relayTo": relay.PeerIp, "relayFrom": hostinfo.vpnIp}).Info("Failed to find relay in hostinfo")
 					return
 				}
 
@@ -126,7 +126,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 						hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 					}
 				} else {
-					hostinfo.logger(f.l).WithFields(logrus.Fields{"peerIp": relay.PeerIp, "vpnIp": hostinfo.vpnIp, "targetRelayState": targetRelay.State}).Info("Unexpected target relay state")
+					hostinfo.logger(f.l).WithFields(logrus.Fields{"relayTo": relay.PeerIp, "relayFrom": hostinfo.vpnIp, "targetRelayState": targetRelay.State}).Info("Unexpected target relay state")
 					return
 				}
 			}
