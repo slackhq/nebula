@@ -68,7 +68,6 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 	r += fmt.Sprintf("\t\tsubgraph %s.hosts[\"Hosts (vpn ip to index)\"]\n", clusterName)
 	hm.RLock()
 	hosts := sortedHosts(hm.Hosts)
-	hm.RUnlock()
 	for _, vpnIp := range hosts {
 		hi := hm.Hosts[vpnIp]
 		r += fmt.Sprintf("\t\t\t%v.%v[\"%v\"]\n", clusterName, vpnIp, vpnIp)
@@ -83,6 +82,7 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 			lines = append(lines, fmt.Sprintf("%v.%v --> %v.%v", clusterName, vpnIp, clusterName, relayIp))
 		}
 	}
+	hm.RUnlock()
 	r += "\t\tend\n"
 
 	// Draw the relay hostinfos
@@ -99,7 +99,6 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 	r += fmt.Sprintf("\t\tsubgraph indexes.%s[\"Indexes (index to hostinfo)\"]\n", clusterName)
 	hm.RLock()
 	indexes := sortedIndexes(hm.Indexes)
-	hm.RUnlock()
 	for _, idx := range indexes {
 		hi, ok := hm.Indexes[idx]
 		if ok {
@@ -109,6 +108,7 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 			_ = hi
 		}
 	}
+	hm.RUnlock()
 	r += "\t\tend\n"
 
 	// Add the edges inside this host
