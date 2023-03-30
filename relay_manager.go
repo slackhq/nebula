@@ -90,7 +90,7 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 func (rm *relayManager) EstablishRelay(relayHostInfo *HostInfo, m *NebulaControl) (*Relay, error) {
 	relay, ok := relayHostInfo.relayState.CompleteRelayByIdx(m.InitiatorRelayIndex, m.ResponderRelayIndex)
 	if !ok {
-		rm.l.WithFields(logrus.Fields{"relayHostInfo": relayHostInfo.vpnIp,
+		rm.l.WithFields(logrus.Fields{"relay": relayHostInfo.vpnIp,
 			"initiatorRelayIndex": m.InitiatorRelayIndex,
 			"relayFrom":           m.RelayFromIp,
 			"relayTo":             m.RelayToIp}).Info("relayManager failed to update relay")
@@ -113,17 +113,17 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, m *NebulaControl, f *Inter
 
 func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *NebulaControl) {
 	rm.l.WithFields(logrus.Fields{
-		"relayFrom":    iputil.VpnIp(m.RelayFromIp),
-		"relayTarget":  iputil.VpnIp(m.RelayToIp),
-		"initiatorIdx": m.InitiatorRelayIndex,
-		"responderIdx": m.ResponderRelayIndex,
-		"vpnIp":        h.vpnIp}).
+		"relayFrom":           iputil.VpnIp(m.RelayFromIp),
+		"relayTo":             iputil.VpnIp(m.RelayToIp),
+		"initiatorRelayIndex": m.InitiatorRelayIndex,
+		"responderRelayIndex": m.ResponderRelayIndex,
+		"vpnIp":               h.vpnIp}).
 		Info("handleCreateRelayResponse")
 	target := iputil.VpnIp(m.RelayToIp)
 
 	relay, err := rm.EstablishRelay(h, m)
 	if err != nil {
-		rm.l.WithError(err).WithField("target", target.String()).Error("Failed to update relay for target")
+		rm.l.WithError(err).Error("Failed to update relay for relayTo")
 		return
 	}
 	// Do I need to complete the relays now?
@@ -133,12 +133,12 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 	// I'm the middle man. Let the initiator know that the I've established the relay they requested.
 	peerHostInfo, err := rm.hostmap.QueryVpnIp(relay.PeerIp)
 	if err != nil {
-		rm.l.WithError(err).WithField("relayPeerIp", relay.PeerIp).Error("Can't find a HostInfo for peer IP")
+		rm.l.WithError(err).WithField("relayTo", relay.PeerIp).Error("Can't find a HostInfo for peer")
 		return
 	}
 	peerRelay, ok := peerHostInfo.relayState.QueryRelayForByIp(target)
 	if !ok {
-		rm.l.WithField("peerIp", peerHostInfo.vpnIp).WithField("target", target.String()).Error("peerRelay does not have Relay state for target IP", peerHostInfo.vpnIp.String(), target.String())
+		rm.l.WithField("relayTo", peerHostInfo.vpnIp).Error("peerRelay does not have Relay state for relayTo")
 		return
 	}
 	peerRelay.State = Established
@@ -156,11 +156,11 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 	} else {
 		f.SendMessageToVpnIp(header.Control, 0, peerHostInfo.vpnIp, msg, make([]byte, 12), make([]byte, mtu))
 		rm.l.WithFields(logrus.Fields{
-			"relayFrom":    iputil.VpnIp(resp.RelayFromIp),
-			"relayTarget":  iputil.VpnIp(resp.RelayToIp),
-			"initiatorIdx": resp.InitiatorRelayIndex,
-			"responderIdx": resp.ResponderRelayIndex,
-			"vpnIp":        peerHostInfo.vpnIp}).
+			"relayFrom":           iputil.VpnIp(resp.RelayFromIp),
+			"relayTo":             iputil.VpnIp(resp.RelayToIp),
+			"initiatorRelayIndex": resp.InitiatorRelayIndex,
+			"responderRelayIndex": resp.ResponderRelayIndex,
+			"vpnIp":               peerHostInfo.vpnIp}).
 			Info("send CreateRelayResponse")
 	}
 }
@@ -171,10 +171,10 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 	target := iputil.VpnIp(m.RelayToIp)
 
 	logMsg := rm.l.WithFields(logrus.Fields{
-		"relayFrom":    from,
-		"relayTarget":  target,
-		"initiatorIdx": m.InitiatorRelayIndex,
-		"vpnIp":        h.vpnIp})
+		"relayFrom":           from,
+		"relayTo":             target,
+		"initiatorRelayIndex": m.InitiatorRelayIndex,
+		"vpnIp":               h.vpnIp})
 
 	logMsg.Info("handleCreateRelayRequest")
 	// Is the target of the relay me?
@@ -193,7 +193,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 					// We got a brand new Relay request, because its index is different than what we saw before.
 					// This should never happen. The peer should never change an index, once created.
 					logMsg.WithFields(logrus.Fields{
-						"existingRemoteIdx": existingRelay.RemoteIndex}).Error("Existing relay mismatch with CreateRelayRequest")
+						"existingRemoteIndex": existingRelay.RemoteIndex}).Error("Existing relay mismatch with CreateRelayRequest")
 					return
 				}
 			}
@@ -225,11 +225,11 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		} else {
 			f.SendMessageToVpnIp(header.Control, 0, h.vpnIp, msg, make([]byte, 12), make([]byte, mtu))
 			rm.l.WithFields(logrus.Fields{
-				"relayFrom":    iputil.VpnIp(resp.RelayFromIp),
-				"relayTarget":  iputil.VpnIp(resp.RelayToIp),
-				"initiatorIdx": resp.InitiatorRelayIndex,
-				"responderIdx": resp.ResponderRelayIndex,
-				"vpnIp":        h.vpnIp}).
+				"relayFrom":           iputil.VpnIp(resp.RelayFromIp),
+				"relayTo":             iputil.VpnIp(resp.RelayToIp),
+				"initiatorRelayIndex": resp.InitiatorRelayIndex,
+				"responderRelayIndex": resp.ResponderRelayIndex,
+				"vpnIp":               h.vpnIp}).
 				Info("send CreateRelayResponse")
 		}
 		return
@@ -280,11 +280,11 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			} else {
 				f.SendMessageToVpnIp(header.Control, 0, target, msg, make([]byte, 12), make([]byte, mtu))
 				rm.l.WithFields(logrus.Fields{
-					"relayFrom":    iputil.VpnIp(req.RelayFromIp),
-					"relayTarget":  iputil.VpnIp(req.RelayToIp),
-					"initiatorIdx": req.InitiatorRelayIndex,
-					"responderIdx": req.ResponderRelayIndex,
-					"vpnIp":        target}).
+					"relayFrom":           iputil.VpnIp(req.RelayFromIp),
+					"relayTo":             iputil.VpnIp(req.RelayToIp),
+					"initiatorRelayIndex": req.InitiatorRelayIndex,
+					"responderRelayIndex": req.ResponderRelayIndex,
+					"vpnIp":               target}).
 					Info("send CreateRelayRequest")
 			}
 		}
@@ -309,7 +309,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 					// We got a brand new Relay request, because its index is different than what we saw before.
 					// This should never happen. The peer should never change an index, once created.
 					logMsg.WithFields(logrus.Fields{
-						"existingRemoteIdx": relay.RemoteIndex}).Error("Existing relay mismatch with CreateRelayRequest")
+						"existingRemoteIndex": relay.RemoteIndex}).Error("Existing relay mismatch with CreateRelayRequest")
 					return
 				}
 				resp := NebulaControl{
@@ -326,11 +326,11 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 				} else {
 					f.SendMessageToVpnIp(header.Control, 0, h.vpnIp, msg, make([]byte, 12), make([]byte, mtu))
 					rm.l.WithFields(logrus.Fields{
-						"relayFrom":    iputil.VpnIp(resp.RelayFromIp),
-						"relayTarget":  iputil.VpnIp(resp.RelayToIp),
-						"initiatorIdx": resp.InitiatorRelayIndex,
-						"responderIdx": resp.ResponderRelayIndex,
-						"vpnIp":        h.vpnIp}).
+						"relayFrom":           iputil.VpnIp(resp.RelayFromIp),
+						"relayTo":             iputil.VpnIp(resp.RelayToIp),
+						"initiatorRelayIndex": resp.InitiatorRelayIndex,
+						"responderRelayIndex": resp.ResponderRelayIndex,
+						"vpnIp":               h.vpnIp}).
 						Info("send CreateRelayResponse")
 				}
 

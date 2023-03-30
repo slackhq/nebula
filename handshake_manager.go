@@ -203,7 +203,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 	}
 
 	if c.config.useRelays && len(hostinfo.remotes.relays) > 0 {
-		hostinfo.logger(c.l).WithField("relayIps", hostinfo.remotes.relays).Info("Attempt to relay through hosts")
+		hostinfo.logger(c.l).WithField("relays", hostinfo.remotes.relays).Info("Attempt to relay through hosts")
 		// Send a RelayRequest to all known Relay IP's
 		for _, relay := range hostinfo.remotes.relays {
 			// Don't relay to myself, and don't relay through the host I'm trying to connect to
@@ -212,7 +212,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 			}
 			relayHostInfo, err := c.mainHostMap.QueryVpnIp(*relay)
 			if err != nil || relayHostInfo.remote == nil {
-				hostinfo.logger(c.l).WithError(err).WithField("relay", relay.String()).Info("Establish tunnel to relay target.")
+				hostinfo.logger(c.l).WithError(err).WithField("relay", relay.String()).Info("Establish tunnel to relay target")
 				f.Handshake(*relay)
 				continue
 			}
@@ -239,17 +239,17 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 					} else {
 						f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
 						c.l.WithFields(logrus.Fields{
-							"relayFrom":    iputil.VpnIp(c.lightHouse.myVpnIp),
-							"relayTarget":  iputil.VpnIp(vpnIp),
-							"initiatorIdx": existingRelay.LocalIndex,
-							"vpnIp":        *relay}).
+							"relayFrom":           c.lightHouse.myVpnIp,
+							"relayTo":             vpnIp,
+							"initiatorRelayIndex": existingRelay.LocalIndex,
+							"relay":               *relay}).
 							Info("send CreateRelayRequest")
 					}
 				default:
 					hostinfo.logger(c.l).
 						WithField("vpnIp", vpnIp).
 						WithField("state", existingRelay.State).
-						WithField("relayVpnIp", relayHostInfo.vpnIp).
+						WithField("relay", relayHostInfo.vpnIp).
 						Errorf("Relay unexpected state")
 				}
 			} else {
@@ -274,10 +274,10 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 					} else {
 						f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
 						c.l.WithFields(logrus.Fields{
-							"relayFrom":    iputil.VpnIp(c.lightHouse.myVpnIp),
-							"relayTarget":  iputil.VpnIp(vpnIp),
-							"initiatorIdx": idx,
-							"vpnIp":        *relay}).
+							"relayFrom":           c.lightHouse.myVpnIp,
+							"relayTo":             vpnIp,
+							"initiatorRelayIndex": idx,
+							"relay":               *relay}).
 							Info("send CreateRelayRequest")
 					}
 				}
