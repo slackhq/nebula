@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -54,7 +53,7 @@ func newConnectionManager(ctx context.Context, l *logrus.Logger, intf *Interface
 		metricsTxPunchy:         metrics.GetOrRegisterCounter("messages.tx.punchy", nil),
 		l:                       l,
 	}
-	fmt.Println(nc.trafficTimer.t.tickDuration)
+
 	nc.Start(ctx)
 	return nc
 }
@@ -252,7 +251,7 @@ func (n *connectionManager) handleInvalidCertificate(now time.Time, hostinfo *Ho
 }
 
 func (n *connectionManager) sendPunch(hostinfo *HostInfo) {
-	if hostinfo.remote == nil {
+	if hostinfo.remote == nil || !n.punchy.GetPunch() {
 		// Don't punch to relayed hosts
 		return
 	}
