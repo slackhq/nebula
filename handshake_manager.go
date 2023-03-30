@@ -238,6 +238,12 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 							Error("Failed to marshal Control message to create relay")
 					} else {
 						f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
+						c.l.WithFields(logrus.Fields{
+							"relayFrom":    iputil.VpnIp(c.lightHouse.myVpnIp),
+							"relayTarget":  iputil.VpnIp(vpnIp),
+							"initiatorIdx": existingRelay.LocalIndex,
+							"vpnIp":        *relay}).
+							Info("send CreateRelayRequest")
 					}
 				default:
 					hostinfo.logger(c.l).
@@ -267,6 +273,12 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 							Error("Failed to marshal Control message to create relay")
 					} else {
 						f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
+						c.l.WithFields(logrus.Fields{
+							"relayFrom":    iputil.VpnIp(c.lightHouse.myVpnIp),
+							"relayTarget":  iputil.VpnIp(vpnIp),
+							"initiatorIdx": idx,
+							"vpnIp":        *relay}).
+							Info("send CreateRelayRequest")
 					}
 				}
 			}
@@ -333,7 +345,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 		}
 
 		// Is this a newer handshake?
-		if existingHostInfo.lastHandshakeTime >= hostinfo.lastHandshakeTime {
+		if existingHostInfo.lastHandshakeTime >= hostinfo.lastHandshakeTime && !existingHostInfo.ConnectionState.initiator {
 			return existingHostInfo, ErrExistingHostInfo
 		}
 

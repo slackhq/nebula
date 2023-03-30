@@ -50,7 +50,7 @@ func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int
 // These are unencrypted ip layer frames destined for another nebula node.
 // packets should exit the udp side, capture them with udpConn.Get
 func (t *TestTun) Send(packet []byte) {
-	if t.l.Level >= logrus.InfoLevel {
+	if t.l.Level >= logrus.DebugLevel {
 		t.l.WithField("dataLen", len(packet)).Debug("Tun receiving injected packet")
 	}
 	t.rxPackets <- packet

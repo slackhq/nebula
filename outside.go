@@ -89,12 +89,8 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			relay, ok := hostinfo.relayState.QueryRelayForByIdx(h.RemoteIndex)
 			if !ok {
 				// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
-				// its internal mapping. This shouldn't happen!
-				hostinfo.logger(f.l).WithField("hostinfo", hostinfo.vpnIp).WithField("remoteIndex", h.RemoteIndex).Errorf("HostInfo missing remote index")
-				// Delete my local index from the hostmap
-				f.hostMap.DeleteRelayIdx(h.RemoteIndex)
-				// When the peer doesn't receive any return traffic, its connection_manager will eventually clean up
-				// the broken relay when it cleans up the associated HostInfo object.
+				// its internal mapping. This should never happen.
+				hostinfo.logger(f.l).WithFields(logrus.Fields{"vpnIp": hostinfo.vpnIp, "remoteIndex": h.RemoteIndex}).Error("HostInfo missing remote relay index")
 				return
 			}
 
@@ -114,7 +110,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				// find the target Relay info object
 				targetRelay, ok := targetHI.relayState.QueryRelayForByIp(hostinfo.vpnIp)
 				if !ok {
-					hostinfo.logger(f.l).WithField("peerIp", relay.PeerIp).Info("Failed to find relay in hostinfo")
+					hostinfo.logger(f.l).WithFields(logrus.Fields{"peerIp": relay.PeerIp, "vpnIp": hostinfo.vpnIp}).Info("Failed to find relay in hostinfo")
 					return
 				}
 
@@ -130,7 +126,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 						hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 					}
 				} else {
-					hostinfo.logger(f.l).WithField("targetRelayState", targetRelay.State).Info("Unexpected target relay state")
+					hostinfo.logger(f.l).WithFields(logrus.Fields{"peerIp": relay.PeerIp, "vpnIp": hostinfo.vpnIp, "targetRelayState": targetRelay.State}).Info("Unexpected target relay state")
 					return
 				}
 			}
