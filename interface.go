@@ -33,8 +33,8 @@ type InterfaceConfig struct {
 	ServeDns                bool
 	HandshakeManager        *HandshakeManager
 	lightHouse              *LightHouse
-	checkInterval           int
-	pendingDeletionInterval int
+	checkInterval           time.Duration
+	pendingDeletionInterval time.Duration
 	DropLocalBroadcast      bool
 	DropMulticast           bool
 	routines                int
@@ -43,6 +43,7 @@ type InterfaceConfig struct {
 	caPool                  *cert.NebulaCAPool
 	disconnectInvalid       bool
 	relayManager            *relayManager
+	punchy                  *Punchy
 
 	ConntrackCacheTimeout time.Duration
 	l                     *logrus.Logger
@@ -172,7 +173,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	}
 
 	ifce.certState.Store(c.certState)
-	ifce.connectionManager = newConnectionManager(ctx, c.l, ifce, c.checkInterval, c.pendingDeletionInterval)
+	ifce.connectionManager = newConnectionManager(ctx, c.l, ifce, c.checkInterval, c.pendingDeletionInterval, c.punchy)
 
 	return ifce, nil
 }

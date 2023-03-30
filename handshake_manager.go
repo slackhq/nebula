@@ -380,7 +380,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 // Complete is a simpler version of CheckAndComplete when we already know we
 // won't have a localIndexId collision because we already have an entry in the
 // pendingHostMap. An existing hostinfo is returned if there was one.
-func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) *HostInfo {
+func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 	c.pendingHostMap.Lock()
 	defer c.pendingHostMap.Unlock()
 	c.mainHostMap.Lock()
@@ -395,11 +395,9 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) *HostInfo 
 			Info("New host shadows existing host remoteIndex")
 	}
 
-	existingHostInfo := c.mainHostMap.Hosts[hostinfo.vpnIp]
 	// We need to remove from the pending hostmap first to avoid undoing work when after to the main hostmap.
 	c.pendingHostMap.unlockedDeleteHostInfo(hostinfo)
 	c.mainHostMap.unlockedAddHostInfo(hostinfo, f)
-	return existingHostInfo
 }
 
 // AddIndexHostInfo generates a unique localIndexId for this HostInfo
