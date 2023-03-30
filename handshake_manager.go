@@ -242,7 +242,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 							"relayFrom":    iputil.VpnIp(c.lightHouse.myVpnIp),
 							"relayTarget":  iputil.VpnIp(vpnIp),
 							"initiatorIdx": existingRelay.LocalIndex,
-							"hostInfo":     *relay}).
+							"vpnIp":        *relay}).
 							Info("send CreateRelayRequest")
 					}
 				default:
@@ -277,7 +277,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 							"relayFrom":    iputil.VpnIp(c.lightHouse.myVpnIp),
 							"relayTarget":  iputil.VpnIp(vpnIp),
 							"initiatorIdx": idx,
-							"hostInfo":     *relay}).
+							"vpnIp":        *relay}).
 							Info("send CreateRelayRequest")
 					}
 				}

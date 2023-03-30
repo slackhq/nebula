@@ -117,7 +117,7 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 		"relayTarget":  iputil.VpnIp(m.RelayToIp),
 		"initiatorIdx": m.InitiatorRelayIndex,
 		"responderIdx": m.ResponderRelayIndex,
-		"hostInfo":     h.vpnIp}).
+		"vpnIp":        h.vpnIp}).
 		Info("handleCreateRelayResponse")
 	target := iputil.VpnIp(m.RelayToIp)
 
@@ -160,7 +160,7 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 			"relayTarget":  iputil.VpnIp(resp.RelayToIp),
 			"initiatorIdx": resp.InitiatorRelayIndex,
 			"responderIdx": resp.ResponderRelayIndex,
-			"hostInfo":     peerHostInfo.vpnIp}).
+			"vpnIp":        peerHostInfo.vpnIp}).
 			Info("send CreateRelayResponse")
 	}
 }
@@ -174,7 +174,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		"relayFrom":    from,
 		"relayTarget":  target,
 		"initiatorIdx": m.InitiatorRelayIndex,
-		"hostInfo":     h.vpnIp})
+		"vpnIp":        h.vpnIp})
 
 	logMsg.Info("handleCreateRelayRequest")
 	// Is the target of the relay me?
@@ -229,7 +229,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 				"relayTarget":  iputil.VpnIp(resp.RelayToIp),
 				"initiatorIdx": resp.InitiatorRelayIndex,
 				"responderIdx": resp.ResponderRelayIndex,
-				"hostInfo":     h.vpnIp}).
+				"vpnIp":        h.vpnIp}).
 				Info("send CreateRelayResponse")
 		}
 		return
@@ -284,7 +284,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 					"relayTarget":  iputil.VpnIp(req.RelayToIp),
 					"initiatorIdx": req.InitiatorRelayIndex,
 					"responderIdx": req.ResponderRelayIndex,
-					"hostInfo":     target}).
+					"vpnIp":        target}).
 					Info("send CreateRelayRequest")
 			}
 		}
@@ -330,7 +330,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 						"relayTarget":  iputil.VpnIp(resp.RelayToIp),
 						"initiatorIdx": resp.InitiatorRelayIndex,
 						"responderIdx": resp.ResponderRelayIndex,
-						"hostInfo":     h.vpnIp}).
+						"vpnIp":        h.vpnIp}).
 						Info("send CreateRelayResponse")
 				}
 
