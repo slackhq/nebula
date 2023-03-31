@@ -562,6 +562,24 @@ func (hm *HostMap) QueryVpnIp(vpnIp iputil.VpnIp) (*HostInfo, error) {
 	return hm.queryVpnIp(vpnIp, nil)
 }
 
+func (hm *HostMap) QueryVpnIpRelayFor(targetIp, relayHostIp iputil.VpnIp) (*HostInfo, *Relay, error) {
+	hm.RLock()
+	defer hm.RUnlock()
+
+	h, ok := hm.Hosts[relayHostIp]
+	if !ok {
+		return nil, nil, errors.New("unable to find host")
+	}
+	for h != nil {
+		r, ok := h.relayState.QueryRelayForByIp(targetIp)
+		if ok {
+			return h, r, nil
+		}
+		h = h.next
+	}
+	return nil, nil, errors.New("unable to find host with relay")
+}
+
 // PromoteBestQueryVpnIp will attempt to lazily switch to the best remote every
 // `PromoteEvery` calls to this function for a given host.
 func (hm *HostMap) PromoteBestQueryVpnIp(vpnIp iputil.VpnIp, ifce *Interface) (*HostInfo, error) {
