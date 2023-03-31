@@ -238,9 +238,6 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 
 // closeTunnel closes a tunnel locally, it does not send a closeTunnel packet to the remote
 func (f *Interface) closeTunnel(hostInfo *HostInfo) {
-	//TODO: this would be better as a single function in ConnectionManager that handled locks appropriately
-	f.connectionManager.ClearLocalIndex(hostInfo.localIndexId)
-	f.connectionManager.ClearPendingDeletion(hostInfo.localIndexId)
 	final := f.hostMap.DeleteHostInfo(hostInfo)
 	if final {
 		// We no longer have any tunnels with this vpn ip, clear learned lighthouse state to lower memory usage

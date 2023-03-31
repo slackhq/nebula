@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -618,54 +617,6 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 		}
 		check = check.next
 		i++
-	}
-}
-
-// punchList assembles a list of all non nil RemoteList pointer entries in this hostmap
-// The caller can then do the its work outside of the read lock
-func (hm *HostMap) punchList(rl []*RemoteList) []*RemoteList {
-	hm.RLock()
-	defer hm.RUnlock()
-
-	for _, v := range hm.Hosts {
-		if v.remotes != nil {
-			rl = append(rl, v.remotes)
-		}
-	}
-	return rl
-}
-
-// Punchy iterates through the result of punchList() to assemble all known addresses and sends a hole punch packet to them
-func (hm *HostMap) Punchy(ctx context.Context, conn *udp.Conn) {
-	var metricsTxPunchy metrics.Counter
-	if hm.metricsEnabled {
-		metricsTxPunchy = metrics.GetOrRegisterCounter("messages.tx.punchy", nil)
-	} else {
-		metricsTxPunchy = metrics.NilCounter{}
-	}
-
-	var remotes []*RemoteList
-	b := []byte{1}
-
-	clockSource := time.NewTicker(time.Second * 10)
-	defer clockSource.Stop()
-
-	for {
-		remotes = hm.punchList(remotes[:0])
-		for _, rl := range remotes {
-			//TODO: CopyAddrs generates garbage but ForEach locks for the work here, figure out which way is better
-			for _, addr := range rl.CopyAddrs(hm.preferredRanges) {
-				metricsTxPunchy.Inc(1)
-				conn.WriteTo(b, addr)
-			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-clockSource.C:
-			continue
-		}
 	}
 }
 
