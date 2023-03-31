@@ -709,7 +709,6 @@ func (i *HostInfo) handshakeComplete(l *logrus.Logger, m *cachedPacketMetrics) {
 	i.packetStore = make([]*cachedPacket, 0)
 	i.ConnectionState.ready = true
 	i.ConnectionState.queueLock.Unlock()
-	i.ConnectionState.certState = nil
 }
 
 func (i *HostInfo) GetCert() *cert.NebulaCertificate {

@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"time"
@@ -136,8 +137,13 @@ func (n *connectionManager) Run(ctx context.Context) {
 }
 
 func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte, now time.Time) {
-	hostinfo, err := n.hostMap.QueryIndex(localIndex)
-	if err != nil {
+	var unlockOnce sync.Once
+	n.hostMap.RLock()
+	//TODO: we can release the read lock sooner but would need to reorganize the code a bit to make it less difficult to understand
+	defer unlockOnce.Do(n.hostMap.RUnlock)
+
+	hostinfo := n.hostMap.Indexes[localIndex]
+	if hostinfo == nil {
 		n.l.WithField("localIndex", localIndex).Debugf("Not found in hostmap")
 		delete(n.pendingDeletion, localIndex)
 		return
@@ -147,7 +153,7 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 		return
 	}
 
-	primary, _ := n.hostMap.QueryVpnIp(hostinfo.vpnIp)
+	primary := n.hostMap.Hosts[hostinfo.vpnIp]
 	mainHostInfo := true
 	if primary != nil && primary != hostinfo {
 		mainHostInfo = false
@@ -165,12 +171,10 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 		}
 		delete(n.pendingDeletion, hostinfo.localIndexId)
 
-		if !mainHostInfo {
-			if hostinfo.vpnIp > n.intf.myVpnIp {
-				// We are receiving traffic on the non primary hostinfo and we really just want 1 tunnel. Make
-				// This the primary and prime the old primary hostinfo for testing
-				n.hostMap.MakePrimary(hostinfo)
-			}
+		if mainHostInfo {
+			n.handleRehandshake(hostinfo)
+		} else {
+			n.handleMakePrimary(hostinfo, primary)
 		}
 
 		n.trafficTimer.Add(hostinfo.localIndexId, n.checkInterval)
@@ -189,6 +193,7 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 			WithField("tunnelCheck", m{"state": "dead", "method": "active"}).
 			Info("Tunnel status")
 
+		unlockOnce.Do(n.hostMap.RUnlock)
 		n.hostMap.DeleteHostInfo(hostinfo)
 		delete(n.pendingDeletion, hostinfo.localIndexId)
 		return
@@ -230,6 +235,34 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 
 	n.pendingDeletion[hostinfo.localIndexId] = struct{}{}
 	n.trafficTimer.Add(hostinfo.localIndexId, n.pendingDeletionInterval)
+}
+
+func (n *connectionManager) handleMakePrimary(current, primary *HostInfo) {
+	// The primary tunnel is the most recent handshake to complete locally and should work entirely fine.
+	// If we are here then we have multiple tunnels for a host pair and neither side believes the same tunnel is primary.
+	// Let's sort this out.
+
+	if current.vpnIp < n.intf.myVpnIp {
+		// Only one side should flip primary because if both flip then we may never resolve to a single tunnel.
+		// vpn ip is static across all tunnels for this host pair so lets use that to determine who is flipping.
+		// The remotes vpn ip is lower than mine. I will not flip.
+		return
+	}
+
+	certState := n.intf.certState.Load()
+	if !bytes.Equal(current.ConnectionState.certState.certificate.Signature, certState.certificate.Signature) {
+		// The current hostinfo is not using the latest local cert, no point in trying to promote it
+		return
+	}
+
+	n.hostMap.RUnlock()
+	n.hostMap.Lock()
+	// Make sure the primary is still the same after the write lock. This avoids a race with a rehandshake.
+	if n.hostMap.Hosts[current.vpnIp] == primary {
+		n.hostMap.unlockedMakePrimary(current)
+	}
+	n.hostMap.Unlock()
+	n.hostMap.RLock()
 }
 
 // handleInvalidCertificates will destroy a tunnel if pki.disconnect_invalid is true and the certificate is no longer valid
@@ -275,5 +308,31 @@ func (n *connectionManager) sendPunch(hostinfo *HostInfo) {
 	} else if hostinfo.remote != nil {
 		n.metricsTxPunchy.Inc(1)
 		n.intf.outside.WriteTo([]byte{1}, hostinfo.remote)
+	}
+}
+
+func (n *connectionManager) handleRehandshake(hostinfo *HostInfo) {
+	certState := n.intf.certState.Load()
+	if bytes.Equal(hostinfo.ConnectionState.certState.certificate.Signature, certState.certificate.Signature) {
+		return
+	}
+
+	n.l.WithField("vpnIp", hostinfo.vpnIp).
+		WithField("reason", "local certificate is not current").
+		Info("Re-handshaking with remote")
+
+	//TODO: this is copied from getOrHandshake to keep the extra checks out of the hot path, figure it out
+	newHostinfo := n.intf.handshakeManager.AddVpnIp(hostinfo.vpnIp, n.intf.initHostInfo)
+	if !newHostinfo.HandshakeReady {
+		ixHandshakeStage0(n.intf, newHostinfo.vpnIp, newHostinfo)
+	}
+
+	//If this is a static host, we don't need to wait for the HostQueryReply
+	//We can trigger the handshake right now
+	if _, ok := n.intf.lightHouse.GetStaticHostList()[hostinfo.vpnIp]; ok {
+		select {
+		case n.intf.handshakeManager.trigger <- hostinfo.vpnIp:
+		default:
+		}
 	}
 }
