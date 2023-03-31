@@ -251,8 +251,8 @@ func (n *connectionManager) handleInvalidCertificate(now time.Time, hostinfo *Ho
 }
 
 func (n *connectionManager) sendPunch(hostinfo *HostInfo) {
-	if hostinfo.remote == nil || !n.punchy.GetPunch() {
-		// Don't punch to relayed hosts
+	if !n.punchy.GetPunch() {
+		// Punching is disabled
 		return
 	}
 
@@ -262,7 +262,7 @@ func (n *connectionManager) sendPunch(hostinfo *HostInfo) {
 			n.intf.outside.WriteTo([]byte{1}, addr)
 		})
 
-	} else {
+	} else if hostinfo.remote != nil {
 		n.metricsTxPunchy.Inc(1)
 		n.intf.outside.WriteTo([]byte{1}, hostinfo.remote)
 	}
