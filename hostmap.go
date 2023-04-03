@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -63,6 +62,9 @@ type HostMap struct {
 	l               *logrus.Logger
 }
 
+// For synchronization, treat the pointed-to Relay struct as immutable. To edit the Relay
+// struct, make a copy of an existing value, edit the fileds in the copy, and
+// then store a pointer to the new copy in both realyForBy* maps.
 type RelayState struct {
 	sync.RWMutex
 
@@ -123,13 +125,43 @@ func (rs *RelayState) CopyRelayForIdxs() []uint32 {
 func (rs *RelayState) RemoveRelay(localIdx uint32) (iputil.VpnIp, bool) {
 	rs.Lock()
 	defer rs.Unlock()
-	relay, ok := rs.relayForByIdx[localIdx]
+	r, ok := rs.relayForByIdx[localIdx]
 	if !ok {
 		return iputil.VpnIp(0), false
 	}
 	delete(rs.relayForByIdx, localIdx)
-	delete(rs.relayForByIp, relay.PeerIp)
-	return relay.PeerIp, true
+	delete(rs.relayForByIp, r.PeerIp)
+	return r.PeerIp, true
+}
+
+func (rs *RelayState) CompleteRelayByIP(vpnIp iputil.VpnIp, remoteIdx uint32) bool {
+	rs.Lock()
+	defer rs.Unlock()
+	r, ok := rs.relayForByIp[vpnIp]
+	if !ok {
+		return false
+	}
+	newRelay := *r
+	newRelay.State = Established
+	newRelay.RemoteIndex = remoteIdx
+	rs.relayForByIdx[r.LocalIndex] = &newRelay
+	rs.relayForByIp[r.PeerIp] = &newRelay
+	return true
+}
+
+func (rs *RelayState) CompleteRelayByIdx(localIdx uint32, remoteIdx uint32) (*Relay, bool) {
+	rs.Lock()
+	defer rs.Unlock()
+	r, ok := rs.relayForByIdx[localIdx]
+	if !ok {
+		return nil, false
+	}
+	newRelay := *r
+	newRelay.State = Established
+	newRelay.RemoteIndex = remoteIdx
+	rs.relayForByIdx[r.LocalIndex] = &newRelay
+	rs.relayForByIp[r.PeerIp] = &newRelay
+	return &newRelay, true
 }
 
 func (rs *RelayState) QueryRelayForByIp(vpnIp iputil.VpnIp) (*Relay, bool) {
@@ -145,6 +177,7 @@ func (rs *RelayState) QueryRelayForByIdx(idx uint32) (*Relay, bool) {
 	r, ok := rs.relayForByIdx[idx]
 	return r, ok
 }
+
 func (rs *RelayState) InsertRelay(ip iputil.VpnIp, idx uint32, r *Relay) {
 	rs.Lock()
 	defer rs.Unlock()
@@ -155,24 +188,25 @@ func (rs *RelayState) InsertRelay(ip iputil.VpnIp, idx uint32, r *Relay) {
 type HostInfo struct {
 	sync.RWMutex
 
-	remote            *udp.Addr
-	remotes           *RemoteList
-	promoteCounter    atomic.Uint32
-	multiportTx       bool
-	multiportRx       bool
-	ConnectionState   *ConnectionState
-	handshakeStart    time.Time        //todo: this an entry in the handshake manager
-	HandshakeReady    bool             //todo: being in the manager means you are ready
-	HandshakeCounter  int              //todo: another handshake manager entry
-	HandshakeComplete bool             //todo: this should go away in favor of ConnectionState.ready
-	HandshakePacket   map[uint8][]byte //todo: this is other handshake manager entry
-	packetStore       []*cachedPacket  //todo: this is other handshake manager entry
-	remoteIndexId     uint32
-	localIndexId      uint32
-	vpnIp             iputil.VpnIp
-	recvError         int
-	remoteCidr        *cidr.Tree4
-	relayState        RelayState
+	remote               *udp.Addr
+	remotes              *RemoteList
+	promoteCounter       atomic.Uint32
+	multiportTx          bool
+	multiportRx          bool
+	ConnectionState      *ConnectionState
+	handshakeStart       time.Time        //todo: this an entry in the handshake manager
+	HandshakeReady       bool             //todo: being in the manager means you are ready
+	HandshakeCounter     int              //todo: another handshake manager entry
+	HandshakeLastRemotes []*udp.Addr      //todo: another handshake manager entry, which remotes we sent to last time
+	HandshakeComplete    bool             //todo: this should go away in favor of ConnectionState.ready
+	HandshakePacket      map[uint8][]byte //todo: this is other handshake manager entry
+	packetStore          []*cachedPacket  //todo: this is other handshake manager entry
+	remoteIndexId        uint32
+	localIndexId         uint32
+	vpnIp                iputil.VpnIp
+	recvError            int
+	remoteCidr           *cidr.Tree4
+	relayState           RelayState
 
 	// lastRebindCount is the other side of Interface.rebindCount, if these values don't match then we need to ask LH
 	// for a punch from the remote end of this tunnel. The goal being to prime their conntrack for our traffic just like
@@ -315,20 +349,6 @@ func (hm *HostMap) AddVpnIp(vpnIp iputil.VpnIp, init func(hostinfo *HostInfo)) (
 	}
 }
 
-func (hm *HostMap) DeleteVpnIp(vpnIp iputil.VpnIp) {
-	hm.Lock()
-	delete(hm.Hosts, vpnIp)
-	if len(hm.Hosts) == 0 {
-		hm.Hosts = map[iputil.VpnIp]*HostInfo{}
-	}
-	hm.Unlock()
-
-	if hm.l.Level >= logrus.DebugLevel {
-		hm.l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": vpnIp, "mapTotalSize": len(hm.Hosts)}).
-			Debug("Hostmap vpnIp deleted")
-	}
-}
-
 // Only used by pendingHostMap when the remote index is not initially known
 func (hm *HostMap) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
 	hm.Lock()
@@ -343,45 +363,8 @@ func (hm *HostMap) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
 	}
 }
 
-func (hm *HostMap) AddVpnIpHostInfo(vpnIp iputil.VpnIp, h *HostInfo) {
-	hm.Lock()
-	h.vpnIp = vpnIp
-	hm.Hosts[vpnIp] = h
-	hm.Indexes[h.localIndexId] = h
-	hm.RemoteIndexes[h.remoteIndexId] = h
-	hm.Unlock()
-
-	if hm.l.Level > logrus.DebugLevel {
-		hm.l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": vpnIp, "mapTotalSize": len(hm.Hosts),
-			"hostinfo": m{"existing": true, "localIndexId": h.localIndexId, "vpnIp": h.vpnIp}}).
-			Debug("Hostmap vpnIp added")
-	}
-}
-
-// This is only called in pendingHostmap, to cleanup an inbound handshake
-func (hm *HostMap) DeleteIndex(index uint32) {
-	hm.Lock()
-	hostinfo, ok := hm.Indexes[index]
-	if ok {
-		delete(hm.Indexes, index)
-		delete(hm.RemoteIndexes, hostinfo.remoteIndexId)
-
-		// Check if we have an entry under hostId that matches the same hostinfo
-		// instance. Clean it up as well if we do.
-		hostinfo2, ok := hm.Hosts[hostinfo.vpnIp]
-		if ok && hostinfo2 == hostinfo {
-			delete(hm.Hosts, hostinfo.vpnIp)
-		}
-	}
-	hm.Unlock()
-
-	if hm.l.Level >= logrus.DebugLevel {
-		hm.l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes)}).
-			Debug("Hostmap index deleted")
-	}
-}
-
-// This is used to cleanup on recv_error
+// DeleteReverseIndex is used to clean up on recv_error
+// This function should only ever be called on the pending hostmap
 func (hm *HostMap) DeleteReverseIndex(index uint32) {
 	hm.Lock()
 	hostinfo, ok := hm.RemoteIndexes[index]
@@ -414,25 +397,27 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) bool {
 	hm.unlockedDeleteHostInfo(hostinfo)
 	hm.Unlock()
 
-	// And tear down all the relays going through this host
+	// And tear down all the relays going through this host, if final
 	for _, localIdx := range hostinfo.relayState.CopyRelayForIdxs() {
 		hm.RemoveRelay(localIdx)
 	}
 
-	// And tear down the relays this deleted hostInfo was using to be reached
-	teardownRelayIdx := []uint32{}
-	for _, relayIp := range hostinfo.relayState.CopyRelayIps() {
-		relayHostInfo, err := hm.QueryVpnIp(relayIp)
-		if err != nil {
-			hm.l.WithError(err).WithField("relay", relayIp).Info("Missing relay host in hostmap")
-		} else {
-			if r, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp); ok {
-				teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
+	if final {
+		// And tear down the relays this deleted hostInfo was using to be reached
+		teardownRelayIdx := []uint32{}
+		for _, relayIp := range hostinfo.relayState.CopyRelayIps() {
+			relayHostInfo, err := hm.QueryVpnIp(relayIp)
+			if err != nil {
+				hm.l.WithError(err).WithField("relay", relayIp).Info("Missing relay host in hostmap")
+			} else {
+				if r, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp); ok {
+					teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
+				}
 			}
 		}
-	}
-	for _, localIdx := range teardownRelayIdx {
-		hm.RemoveRelay(localIdx)
+		for _, localIdx := range teardownRelayIdx {
+			hm.RemoveRelay(localIdx)
+		}
 	}
 
 	return final
@@ -538,6 +523,20 @@ func (hm *HostMap) QueryIndex(index uint32) (*HostInfo, error) {
 		return nil, errors.New("unable to find index")
 	}
 }
+
+// Retrieves a HostInfo by Index. Returns whether the HostInfo is primary at time of query.
+// This helper exists so that the hostinfo.prev pointer can be read while the hostmap lock is held.
+func (hm *HostMap) QueryIndexIsPrimary(index uint32) (*HostInfo, bool, error) {
+	//TODO: we probably just want to return bool instead of error, or at least a static error
+	hm.RLock()
+	if h, ok := hm.Indexes[index]; ok {
+		hm.RUnlock()
+		return h, h.prev == nil, nil
+	} else {
+		hm.RUnlock()
+		return nil, false, errors.New("unable to find index")
+	}
+}
 func (hm *HostMap) QueryRelayIndex(index uint32) (*HostInfo, error) {
 	//TODO: we probably just want to return bool instead of error, or at least a static error
 	hm.RLock()
@@ -620,54 +619,6 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 		}
 		check = check.next
 		i++
-	}
-}
-
-// punchList assembles a list of all non nil RemoteList pointer entries in this hostmap
-// The caller can then do the its work outside of the read lock
-func (hm *HostMap) punchList(rl []*RemoteList) []*RemoteList {
-	hm.RLock()
-	defer hm.RUnlock()
-
-	for _, v := range hm.Hosts {
-		if v.remotes != nil {
-			rl = append(rl, v.remotes)
-		}
-	}
-	return rl
-}
-
-// Punchy iterates through the result of punchList() to assemble all known addresses and sends a hole punch packet to them
-func (hm *HostMap) Punchy(ctx context.Context, conn *udp.Conn) {
-	var metricsTxPunchy metrics.Counter
-	if hm.metricsEnabled {
-		metricsTxPunchy = metrics.GetOrRegisterCounter("messages.tx.punchy", nil)
-	} else {
-		metricsTxPunchy = metrics.NilCounter{}
-	}
-
-	var remotes []*RemoteList
-	b := []byte{1}
-
-	clockSource := time.NewTicker(time.Second * 10)
-	defer clockSource.Stop()
-
-	for {
-		remotes = hm.punchList(remotes[:0])
-		for _, rl := range remotes {
-			//TODO: CopyAddrs generates garbage but ForEach locks for the work here, figure out which way is better
-			for _, addr := range rl.CopyAddrs(hm.preferredRanges) {
-				metricsTxPunchy.Inc(1)
-				conn.WriteTo(b, addr)
-			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-clockSource.C:
-			continue
-		}
 	}
 }
 

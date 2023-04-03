@@ -47,6 +47,9 @@ type Firewall struct {
 	InRules  *FirewallTable
 	OutRules *FirewallTable
 
+	InSendReject  bool
+	OutSendReject bool
+
 	//TODO: we should have many more options for TCP, an option for ICMP, and mimic the kernel a bit better
 	// https://www.kernel.org/doc/Documentation/networking/nf_conntrack-sysctl.txt
 	TCPTimeout     time.Duration //linux: 5 days max
@@ -178,6 +181,28 @@ func NewFirewallFromConfig(l *logrus.Logger, nc *cert.NebulaCertificate, c *conf
 		nc,
 		//TODO: max_connections
 	)
+
+	inboundAction := c.GetString("firewall.inbound_action", "drop")
+	switch inboundAction {
+	case "reject":
+		fw.InSendReject = true
+	case "drop":
+		fw.InSendReject = false
+	default:
+		l.WithField("action", inboundAction).Warn("invalid firewall.inbound_action, defaulting to `drop`")
+		fw.InSendReject = false
+	}
+
+	outboundAction := c.GetString("firewall.outbound_action", "drop")
+	switch outboundAction {
+	case "reject":
+		fw.OutSendReject = true
+	case "drop":
+		fw.OutSendReject = false
+	default:
+		l.WithField("action", inboundAction).Warn("invalid firewall.outbound_action, defaulting to `drop`")
+		fw.OutSendReject = false
+	}
 
 	err := AddFirewallRulesFromConfig(l, false, c, fw)
 	if err != nil {

@@ -161,5 +161,5 @@ func (c *Control) GetHostmap() *HostMap {
 }
 
 func (c *Control) GetCert() *cert.NebulaCertificate {
-	return c.f.certState.certificate
+	return c.f.certState.Load().certificate
 }

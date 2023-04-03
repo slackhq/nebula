@@ -9,8 +9,10 @@ import (
 	"net"
 	"os"
 	"reflect"
+	"runtime"
 	"runtime/pprof"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/sirupsen/logrus"
@@ -241,6 +243,18 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 		Name:             "save-heap-profile",
 		ShortDescription: "Saves a heap profile to the provided path",
 		Callback:         sshGetHeapProfile,
+	})
+
+	ssh.RegisterCommand(&sshd.Command{
+		Name:             "mutex-profile-fraction",
+		ShortDescription: "Gets or sets runtime.SetMutexProfileFraction",
+		Callback:         sshMutexProfileFraction,
+	})
+
+	ssh.RegisterCommand(&sshd.Command{
+		Name:             "save-mutex-profile",
+		ShortDescription: "Saves a mutex profile to the provided path",
+		Callback:         sshGetMutexProfile,
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
@@ -661,6 +675,45 @@ func sshGetHeapProfile(fs interface{}, a []string, w sshd.StringWriter) error {
 	return err
 }
 
+func sshMutexProfileFraction(fs interface{}, a []string, w sshd.StringWriter) error {
+	if len(a) == 0 {
+		rate := runtime.SetMutexProfileFraction(-1)
+		return w.WriteLine(fmt.Sprintf("Current value: %d", rate))
+	}
+
+	newRate, err := strconv.Atoi(a[0])
+	if err != nil {
+		return w.WriteLine(fmt.Sprintf("Invalid argument: %s", a[0]))
+	}
+
+	oldRate := runtime.SetMutexProfileFraction(newRate)
+	return w.WriteLine(fmt.Sprintf("New value: %d. Old value: %d", newRate, oldRate))
+}
+
+func sshGetMutexProfile(fs interface{}, a []string, w sshd.StringWriter) error {
+	if len(a) == 0 {
+		return w.WriteLine("No path to write profile provided")
+	}
+
+	file, err := os.Create(a[0])
+	if err != nil {
+		return w.WriteLine(fmt.Sprintf("Unable to create profile file: %s", err))
+	}
+	defer file.Close()
+
+	mutexProfile := pprof.Lookup("mutex")
+	if mutexProfile == nil {
+		return w.WriteLine("Unable to get pprof.Lookup(\"mutex\")")
+	}
+
+	err = mutexProfile.WriteTo(file, 0)
+	if err != nil {
+		return w.WriteLine(fmt.Sprintf("Unable to write profile: %s", err))
+	}
+
+	return w.WriteLine(fmt.Sprintf("Mutex profile created at %s", a))
+}
+
 func sshLogLevel(l *logrus.Logger, fs interface{}, a []string, w sshd.StringWriter) error {
 	if len(a) == 0 {
 		return w.WriteLine(fmt.Sprintf("Log level is: %s", l.Level))
@@ -700,7 +753,7 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 		return nil
 	}
 
-	cert := ifce.certState.certificate
+	cert := ifce.certState.Load().certificate
 	if len(a) > 0 {
 		parsedIp := net.ParseIP(a[0])
 		if parsedIp == nil {

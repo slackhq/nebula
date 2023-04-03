@@ -77,6 +77,10 @@ func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, u
 			"timestamp_format": fmt.Sprintf("%v 15:04:05.000000", name),
 			"level":            l.Level.String(),
 		},
+		"timers": m{
+			"pending_deletion_interval": 4,
+			"connection_alive_interval": 4,
+		},
 	}
 
 	if overrides != nil {

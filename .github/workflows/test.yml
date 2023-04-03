@@ -37,6 +37,9 @@ jobs:
     - name: Build
       run: make all
 
+    - name: Vet
+      run: make vet
+
     - name: Test
       run: make test
 
@@ -79,8 +82,11 @@ jobs:
     - name: Build nebula-cert
       run: go build ./cmd/nebula-cert
 
+    - name: Vet
+      run: make vet
+
     - name: Test
-      run: go test -v ./...
+      run: make test
 
     - name: End 2 end
       run: make e2evv

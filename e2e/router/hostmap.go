@@ -63,10 +63,13 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 	r := fmt.Sprintf("\tsubgraph %s[\"%s (%s)\"]\n", clusterName, clusterName, clusterVpnIp)
 
 	hm := c.GetHostmap()
+	hm.RLock()
+	defer hm.RUnlock()
 
 	// Draw the vpn to index nodes
 	r += fmt.Sprintf("\t\tsubgraph %s.hosts[\"Hosts (vpn ip to index)\"]\n", clusterName)
-	for _, vpnIp := range sortedHosts(hm.Hosts) {
+	hosts := sortedHosts(hm.Hosts)
+	for _, vpnIp := range hosts {
 		hi := hm.Hosts[vpnIp]
 		r += fmt.Sprintf("\t\t\t%v.%v[\"%v\"]\n", clusterName, vpnIp, vpnIp)
 		lines = append(lines, fmt.Sprintf("%v.%v --> %v.%v", clusterName, vpnIp, clusterName, hi.GetLocalIndex()))
@@ -94,12 +97,15 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 
 	// Draw the local index to relay or remote index nodes
 	r += fmt.Sprintf("\t\tsubgraph indexes.%s[\"Indexes (index to hostinfo)\"]\n", clusterName)
-	for _, idx := range sortedIndexes(hm.Indexes) {
-		hi := hm.Indexes[idx]
-		r += fmt.Sprintf("\t\t\t%v.%v[\"%v (%v)\"]\n", clusterName, idx, idx, hi.GetVpnIp())
-		remoteClusterName := strings.Trim(hi.GetCert().Details.Name, " ")
-		globalLines = append(globalLines, &edge{from: fmt.Sprintf("%v.%v", clusterName, idx), to: fmt.Sprintf("%v.%v", remoteClusterName, hi.GetRemoteIndex())})
-		_ = hi
+	indexes := sortedIndexes(hm.Indexes)
+	for _, idx := range indexes {
+		hi, ok := hm.Indexes[idx]
+		if ok {
+			r += fmt.Sprintf("\t\t\t%v.%v[\"%v (%v)\"]\n", clusterName, idx, idx, hi.GetVpnIp())
+			remoteClusterName := strings.Trim(hi.GetCert().Details.Name, " ")
+			globalLines = append(globalLines, &edge{from: fmt.Sprintf("%v.%v", clusterName, idx), to: fmt.Sprintf("%v.%v", remoteClusterName, hi.GetRemoteIndex())})
+			_ = hi
+		}
 	}
 	r += "\t\tend\n"
 

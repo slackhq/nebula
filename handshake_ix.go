@@ -381,12 +381,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 			Info("Handshake message sent")
 	}
 
-	if existing != nil {
-		// Make sure we are tracking the old primary if there was one, it needs to go away eventually
-		f.connectionManager.Out(existing.localIndexId)
-	}
-
-	f.connectionManager.Out(hostinfo.localIndexId)
+	f.connectionManager.AddTrafficWatch(hostinfo.localIndexId)
 	hostinfo.handshakeComplete(f.l, f.cachedPacketMetrics)
 
 	return
@@ -564,12 +559,8 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via interface{}, hostinfo *
 	hostinfo.CreateRemoteCIDR(remoteCert)
 
 	// Complete our handshake and update metrics, this will replace any existing tunnels for this vpnIp
-	existing := f.handshakeManager.Complete(hostinfo, f)
-	if existing != nil {
-		// Make sure we are tracking the old primary if there was one, it needs to go away eventually
-		f.connectionManager.Out(existing.localIndexId)
-	}
-
+	f.handshakeManager.Complete(hostinfo, f)
+	f.connectionManager.AddTrafficWatch(hostinfo.localIndexId)
 	hostinfo.handshakeComplete(f.l, f.cachedPacketMetrics)
 	f.metricHandshakes.Update(duration)
 

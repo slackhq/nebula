@@ -9,10 +9,12 @@ import (
 )
 
 type Punchy struct {
-	punch   atomic.Bool
-	respond atomic.Bool
-	delay   atomic.Int64
-	l       *logrus.Logger
+	punch           atomic.Bool
+	respond         atomic.Bool
+	delay           atomic.Int64
+	respondDelay    atomic.Int64
+	punchEverything atomic.Bool
+	l               *logrus.Logger
 }
 
 func NewPunchyFromConfig(l *logrus.Logger, c *config.C) *Punchy {
@@ -37,6 +39,12 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 		}
 
 		p.punch.Store(yes)
+		if yes {
+			p.l.Info("punchy enabled")
+		} else {
+			p.l.Info("punchy disabled")
+		}
+
 	} else if c.HasChanged("punchy.punch") || c.HasChanged("punchy") {
 		//TODO: it should be relatively easy to support this, just need to be able to cancel the goroutine and boot it up from here
 		p.l.Warn("Changing punchy.punch with reload is not supported, ignoring.")
@@ -65,6 +73,20 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 			p.l.Infof("punchy.delay changed to %s", p.GetDelay())
 		}
 	}
+
+	if initial || c.HasChanged("punchy.target_all_remotes") {
+		p.punchEverything.Store(c.GetBool("punchy.target_all_remotes", true))
+		if !initial {
+			p.l.WithField("target_all_remotes", p.GetTargetEverything()).Info("punchy.target_all_remotes changed")
+		}
+	}
+
+	if initial || c.HasChanged("punchy.respond_delay") {
+		p.respondDelay.Store((int64)(c.GetDuration("punchy.respond_delay", 5*time.Second)))
+		if !initial {
+			p.l.Infof("punchy.respond_delay changed to %s", p.GetRespondDelay())
+		}
+	}
 }
 
 func (p *Punchy) GetPunch() bool {
@@ -77,4 +99,12 @@ func (p *Punchy) GetRespond() bool {
 
 func (p *Punchy) GetDelay() time.Duration {
 	return (time.Duration)(p.delay.Load())
+}
+
+func (p *Punchy) GetRespondDelay() time.Duration {
+	return (time.Duration)(p.respondDelay.Load())
+}
+
+func (p *Punchy) GetTargetEverything() bool {
+	return p.punchEverything.Load()
 }

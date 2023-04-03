@@ -54,6 +54,8 @@ tun:
     tx_handshake: ${MULTIPORT_HANDSHAKE:-false}
 
 firewall:
+  inbound_action: reject
+  outbound_action: reject
   outbound: ${OUTBOUND:-$FIREWALL_ALL}
   inbound: ${INBOUND:-$FIREWALL_ALL}
 

@@ -91,6 +91,19 @@ lighthouse:
     #- "1.1.1.1:4242"
     #- "1.2.3.4:0" # port will be replaced with the real listening port
 
+  # EXPERIMENTAL: This option may change or disappear in the future.
+  # This setting allows us to "guess" what the remote might be for a host
+  # while we wait for the lighthouse response.
+  #calculated_remotes:
+    # For any Nebula IPs in 10.0.10.0/24, this will apply the mask and add
+    # the calculated IP as an initial remote (while we wait for the response
+    # from the lighthouse). Both CIDRs must have the same mask size.
+    # For example, Nebula IP 10.0.10.123 will have a calculated remote of
+    # 192.168.1.123
+    #10.0.10.0/24:
+      #- mask: 192.168.1.0/24
+      #  port: 4242
+
 # Port Nebula will be listening on. The default here is 4242. For a lighthouse node, the port should be defined,
 # however using port 0 will dynamically assign a port and is recommended for roaming nodes.
 listen:
@@ -129,8 +142,11 @@ punchy:
   # Default is false
   #respond: true
 
-  # delays a punch response for misbehaving NATs, default is 1 second, respond must be true to take effect
+  # delays a punch response for misbehaving NATs, default is 1 second.
   #delay: 1s
+
+  # set the delay before attempting punchy.respond. Default is 5 seconds. respond must be true to take effect.
+  #respond_delay: 5s
 
 # Cipher allows you to choose between the available ciphers for your network. Options are chachapoly or aes
 # IMPORTANT: this value must be identical on ALL NODES/LIGHTHOUSES. We do not/will not support use of different ciphers simultaneously!
@@ -299,6 +315,15 @@ logging:
 
 # Nebula security group configuration
 firewall:
+  # Action to take when a packet is not allowed by the firewall rules.
+  # Can be one of:
+  #   `drop` (default): silently drop the packet.
+  #   `reject`: send a reject reply.
+  #     - For TCP, this will be a RST "Connection Reset" packet.
+  #     - For other protocols, this will be an ICMP port unreachable packet.
+  outbound_action: drop
+  inbound_action: drop
+
   conntrack:
     tcp_timeout: 12m
     udp_timeout: 3m

@@ -74,7 +74,7 @@ func (c *Control) Stop() {
 
 // ShutdownBlock will listen for and block on term and interrupt signals, calling Control.Stop() once signalled
 func (c *Control) ShutdownBlock() {
-	sigChan := make(chan os.Signal)
+	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM)
 	signal.Notify(sigChan, syscall.SIGINT)
 
@@ -198,7 +198,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	hostInfos := []*HostInfo{}
 	// Grab the hostMap lock to access the Hosts map
 	c.f.hostMap.Lock()
-	for _, relayHost := range c.f.hostMap.Hosts {
+	for _, relayHost := range c.f.hostMap.Indexes {
 		if _, ok := relayingHosts[relayHost.vpnIp]; !ok {
 			hostInfos = append(hostInfos, relayHost)
 		}

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/e2e/router"
 	"github.com/slackhq/nebula/header"
@@ -393,47 +394,112 @@ func TestStage1RaceRelays(t *testing.T) {
 	relayControl.Start()
 	theirControl.Start()
 
-	r.Log("Trigger a handshake to start on both me and relay")
-	myControl.InjectTunUDPPacket(relayVpnIpNet.IP, 80, 80, []byte("Hi from me"))
-	relayControl.InjectTunUDPPacket(myVpnIpNet.IP, 80, 80, []byte("Hi from relay"))
-
-	r.Log("Get both stage 1 handshake packets")
-	//TODO: this is where it breaks, we need to get the hs packets for the relay not for the destination
-	myHsForThem := myControl.GetFromUDP(true)
-	relayHsForMe := relayControl.GetFromUDP(true)
-
-	r.Log("Now inject both stage 1 handshake packets")
-	r.InjectUDPPacket(relayControl, myControl, relayHsForMe)
-	r.InjectUDPPacket(myControl, relayControl, myHsForThem)
-
-	r.Log("Route for me until I send a message packet to relay")
-	r.RouteForAllUntilAfterMsgTypeTo(relayControl, header.Message, header.MessageNone)
-
-	r.Log("My cached packet should be received by relay")
-	myCachedPacket := relayControl.GetFromTun(true)
-	assertUdpPacket(t, []byte("Hi from me"), myCachedPacket, myVpnIpNet.IP, relayVpnIpNet.IP, 80, 80)
-
-	r.Log("Relays cached packet should be received by me")
-	relayCachedPacket := r.RouteForAllUntilTxTun(myControl)
-	assertUdpPacket(t, []byte("Hi from relay"), relayCachedPacket, relayVpnIpNet.IP, myVpnIpNet.IP, 80, 80)
-
-	r.Log("Do a bidirectional tunnel test; me and relay")
+	r.Log("Get a tunnel between me and relay")
 	assertTunnel(t, myVpnIpNet.IP, relayVpnIpNet.IP, myControl, relayControl, r)
 
-	r.Log("Create a tunnel between relay and them")
+	r.Log("Get a tunnel between them and relay")
 	assertTunnel(t, theirVpnIpNet.IP, relayVpnIpNet.IP, theirControl, relayControl, r)
 
-	r.RenderHostmaps("Starting hostmaps", myControl, relayControl, theirControl)
+	r.Log("Trigger a handshake from both them and me via relay to them and me")
+	myControl.InjectTunUDPPacket(theirVpnIpNet.IP, 80, 80, []byte("Hi from me"))
+	theirControl.InjectTunUDPPacket(myVpnIpNet.IP, 80, 80, []byte("Hi from them"))
 
-	r.Log("Trigger a handshake to start from me to them via the relay")
-	//TODO: if we initiate a handshake from me and then assert the tunnel it will cause a relay control race that can blow up
-	//	this is a problem that exists on master today
-	//myControl.InjectTunUDPPacket(theirVpnIpNet.IP, 80, 80, []byte("Hi from me"))
-	assertTunnel(t, myVpnIpNet.IP, theirVpnIpNet.IP, myControl, theirControl, r)
+	r.Log("Wait for a packet from them to me")
+	p := r.RouteForAllUntilTxTun(myControl)
+	_ = p
 
 	myControl.Stop()
 	theirControl.Stop()
 	relayControl.Stop()
+	//
+	////TODO: assert hostmaps
+}
+
+func TestStage1RaceRelays2(t *testing.T) {
+	//NOTE: this is a race between me and relay resulting in a full tunnel from me to them via relay
+	ca, _, caKey, _ := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
+	myControl, myVpnIpNet, myUdpAddr := newSimpleServer(ca, caKey, "me     ", net.IP{10, 0, 0, 1}, m{"relay": m{"use_relays": true}})
+	relayControl, relayVpnIpNet, relayUdpAddr := newSimpleServer(ca, caKey, "relay  ", net.IP{10, 0, 0, 128}, m{"relay": m{"am_relay": true}})
+	theirControl, theirVpnIpNet, theirUdpAddr := newSimpleServer(ca, caKey, "them   ", net.IP{10, 0, 0, 2}, m{"relay": m{"use_relays": true}})
+	l := NewTestLogger()
+
+	// Teach my how to get to the relay and that their can be reached via the relay
+	myControl.InjectLightHouseAddr(relayVpnIpNet.IP, relayUdpAddr)
+	theirControl.InjectLightHouseAddr(relayVpnIpNet.IP, relayUdpAddr)
+
+	myControl.InjectRelays(theirVpnIpNet.IP, []net.IP{relayVpnIpNet.IP})
+	theirControl.InjectRelays(myVpnIpNet.IP, []net.IP{relayVpnIpNet.IP})
+
+	relayControl.InjectLightHouseAddr(theirVpnIpNet.IP, theirUdpAddr)
+	relayControl.InjectLightHouseAddr(myVpnIpNet.IP, myUdpAddr)
+
+	// Build a router so we don't have to reason who gets which packet
+	r := router.NewR(t, myControl, relayControl, theirControl)
+	defer r.RenderFlow()
+
+	// Start the servers
+	myControl.Start()
+	relayControl.Start()
+	theirControl.Start()
+
+	r.Log("Get a tunnel between me and relay")
+	l.Info("Get a tunnel between me and relay")
+	assertTunnel(t, myVpnIpNet.IP, relayVpnIpNet.IP, myControl, relayControl, r)
+
+	r.Log("Get a tunnel between them and relay")
+	l.Info("Get a tunnel between them and relay")
+	assertTunnel(t, theirVpnIpNet.IP, relayVpnIpNet.IP, theirControl, relayControl, r)
+
+	r.Log("Trigger a handshake from both them and me via relay to them and me")
+	l.Info("Trigger a handshake from both them and me via relay to them and me")
+	myControl.InjectTunUDPPacket(theirVpnIpNet.IP, 80, 80, []byte("Hi from me"))
+	theirControl.InjectTunUDPPacket(myVpnIpNet.IP, 80, 80, []byte("Hi from them"))
+
+	//r.RouteUntilAfterMsgType(myControl, header.Control, header.MessageNone)
+	//r.RouteUntilAfterMsgType(theirControl, header.Control, header.MessageNone)
+
+	r.Log("Wait for a packet from them to me")
+	l.Info("Wait for a packet from them to me; myControl")
+	r.RouteForAllUntilTxTun(myControl)
+	l.Info("Wait for a packet from them to me; theirControl")
+	r.RouteForAllUntilTxTun(theirControl)
+
+	r.Log("Assert the tunnel works")
+	l.Info("Assert the tunnel works")
+	assertTunnel(t, theirVpnIpNet.IP, myVpnIpNet.IP, theirControl, myControl, r)
+
+	t.Log("Wait until we remove extra tunnels")
+	l.Info("Wait until we remove extra tunnels")
+	l.WithFields(
+		logrus.Fields{
+			"myControl":    len(myControl.GetHostmap().Indexes),
+			"theirControl": len(theirControl.GetHostmap().Indexes),
+			"relayControl": len(relayControl.GetHostmap().Indexes),
+		}).Info("Waiting for hostinfos to be removed...")
+	hostInfos := len(myControl.GetHostmap().Indexes) + len(theirControl.GetHostmap().Indexes) + len(relayControl.GetHostmap().Indexes)
+	retries := 60
+	for hostInfos > 6 && retries > 0 {
+		hostInfos = len(myControl.GetHostmap().Indexes) + len(theirControl.GetHostmap().Indexes) + len(relayControl.GetHostmap().Indexes)
+		l.WithFields(
+			logrus.Fields{
+				"myControl":    len(myControl.GetHostmap().Indexes),
+				"theirControl": len(theirControl.GetHostmap().Indexes),
+				"relayControl": len(relayControl.GetHostmap().Indexes),
+			}).Info("Waiting for hostinfos to be removed...")
+		assertTunnel(t, myVpnIpNet.IP, theirVpnIpNet.IP, myControl, theirControl, r)
+		t.Log("Connection manager hasn't ticked yet")
+		time.Sleep(time.Second)
+		retries--
+	}
+
+	r.Log("Assert the tunnel works")
+	l.Info("Assert the tunnel works")
+	assertTunnel(t, theirVpnIpNet.IP, myVpnIpNet.IP, theirControl, myControl, r)
+
+	myControl.Stop()
+	theirControl.Stop()
+	relayControl.Stop()
+
 	//
 	////TODO: assert hostmaps
 }
