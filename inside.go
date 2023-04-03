@@ -221,6 +221,11 @@ func (f *Interface) SendVia(viaIfc interface{},
 ) {
 	via := viaIfc.(*HostInfo)
 	relay := relayIfc.(*Relay)
+
+	if noiseutil.EncryptLockNeeded {
+		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
+		via.ConnectionState.writeLock.Lock()
+	}
 	c := via.ConnectionState.messageCounter.Add(1)
 
 	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, relay.RemoteIndex, c)
@@ -229,6 +234,9 @@ func (f *Interface) SendVia(viaIfc interface{},
 	// Authenticate the header and payload, but do not encrypt for this message type.
 	// The payload consists of the inner, unencrypted Nebula header, as well as the end-to-end encrypted payload.
 	if len(out)+len(ad)+via.ConnectionState.eKey.Overhead() > cap(out) {
+		if noiseutil.EncryptLockNeeded {
+			via.ConnectionState.writeLock.Unlock()
+		}
 		via.logger(f.l).
 			WithField("outCap", cap(out)).
 			WithField("payloadLen", len(ad)).
@@ -250,6 +258,9 @@ func (f *Interface) SendVia(viaIfc interface{},
 
 	var err error
 	out, err = via.ConnectionState.eKey.EncryptDanger(out, out, nil, c, nb)
+	if noiseutil.EncryptLockNeeded {
+		via.ConnectionState.writeLock.Unlock()
+	}
 	if err != nil {
 		via.logger(f.l).WithError(err).Info("Failed to EncryptDanger in sendVia")
 		return
