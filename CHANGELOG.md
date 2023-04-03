@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `nebula-cert ca` now supports encrypting the CA's private key with a
+  passphrase. Pass `-encrypt` in order to be prompted for a passphrase.
+  Encryption is performed using AES-256-GCM and Argon2id for KDF. KDF
+  parameters default to RFC recommendations, but can be overridden via CLI
+  flags `-argon-memory`, `-argon-parallelism`, and `-argon-iterations`.
+
 ## [1.6.1] - 2022-09-26
 
 ### Fixed
