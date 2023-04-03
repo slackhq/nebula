@@ -34,27 +34,27 @@ func TestNewFirewall(t *testing.T) {
 
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
-	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
+	assert.Equal(t, 3602, conntrack.TimerWheel.wheelLen)
 
 	fw = NewFirewall(l, time.Second, time.Hour, time.Minute, c)
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
-	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
+	assert.Equal(t, 3602, conntrack.TimerWheel.wheelLen)
 
 	fw = NewFirewall(l, time.Hour, time.Second, time.Minute, c)
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
-	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
+	assert.Equal(t, 3602, conntrack.TimerWheel.wheelLen)
 
 	fw = NewFirewall(l, time.Hour, time.Minute, time.Second, c)
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
-	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
+	assert.Equal(t, 3602, conntrack.TimerWheel.wheelLen)
 
 	fw = NewFirewall(l, time.Minute, time.Hour, time.Second, c)
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
-	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
+	assert.Equal(t, 3602, conntrack.TimerWheel.wheelLen)
 
 	fw = NewFirewall(l, time.Minute, time.Second, time.Hour, c)
 	assert.Equal(t, time.Hour, conntrack.TimerWheel.wheelDuration)
-	assert.Equal(t, 3601, conntrack.TimerWheel.wheelLen)
+	assert.Equal(t, 3602, conntrack.TimerWheel.wheelLen)
 }
 
 func TestFirewall_AddRule(t *testing.T) {
@@ -138,12 +138,12 @@ func TestFirewall_Drop(t *testing.T) {
 	l.SetOutput(ob)
 
 	p := firewall.Packet{
-		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
-		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
-		10,
-		90,
-		firewall.ProtoUDP,
-		false,
+		LocalIP:    iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
+		RemoteIP:   iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
+		LocalPort:  10,
+		RemotePort: 90,
+		Protocol:   firewall.ProtoUDP,
+		Fragment:   false,
 	}
 
 	ipNet := net.IPNet{
@@ -313,12 +313,12 @@ func TestFirewall_Drop2(t *testing.T) {
 	l.SetOutput(ob)
 
 	p := firewall.Packet{
-		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
-		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
-		10,
-		90,
-		firewall.ProtoUDP,
-		false,
+		LocalIP:    iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
+		RemoteIP:   iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
+		LocalPort:  10,
+		RemotePort: 90,
+		Protocol:   firewall.ProtoUDP,
+		Fragment:   false,
 	}
 
 	ipNet := net.IPNet{
@@ -372,12 +372,12 @@ func TestFirewall_Drop3(t *testing.T) {
 	l.SetOutput(ob)
 
 	p := firewall.Packet{
-		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
-		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
-		1,
-		1,
-		firewall.ProtoUDP,
-		false,
+		LocalIP:    iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
+		RemoteIP:   iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
+		LocalPort:  1,
+		RemotePort: 1,
+		Protocol:   firewall.ProtoUDP,
+		Fragment:   false,
 	}
 
 	ipNet := net.IPNet{
@@ -458,12 +458,12 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 	l.SetOutput(ob)
 
 	p := firewall.Packet{
-		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
-		iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
-		10,
-		90,
-		firewall.ProtoUDP,
-		false,
+		LocalIP:    iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
+		RemoteIP:   iputil.Ip2VpnIp(net.IPv4(1, 2, 3, 4)),
+		LocalPort:  10,
+		RemotePort: 90,
+		Protocol:   firewall.ProtoUDP,
+		Fragment:   false,
 	}
 
 	ipNet := net.IPNet{

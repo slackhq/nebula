@@ -62,11 +62,11 @@ func (u *Conn) Send(packet *Packet) {
 	if err := h.Parse(packet.Data); err != nil {
 		panic(err)
 	}
-	if u.l.Level >= logrus.InfoLevel {
+	if u.l.Level >= logrus.DebugLevel {
 		u.l.WithField("header", h).
 			WithField("udpAddr", fmt.Sprintf("%v:%v", packet.FromIp, packet.FromPort)).
 			WithField("dataLen", len(packet.Data)).
-			Info("UDP receiving injected packet")
+			Debug("UDP receiving injected packet")
 	}
 	u.RxPackets <- packet
 }

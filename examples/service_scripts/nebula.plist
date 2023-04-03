@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+    <dict>
+        <key>KeepAlive</key>
+        <true/>
+        <key>Label</key>
+        <string>net.defined.nebula</string>
+        <key>WorkingDirectory</key>
+        <string>/Users/{username}/.local/bin/nebula</string>
+        <key>LimitLoadToSessionType</key>
+        <array>
+            <string>Aqua</string>
+            <string>Background</string>
+            <string>LoginWindow</string>
+            <string>StandardIO</string>
+            <string>System</string>
+        </array>
+        <key>ProgramArguments</key>
+        <array>
+            <string>./nebula</string>
+            <string>-config</string>
+            <string>./config.yml</string>
+        </array>
+        <key>RunAtLoad</key>
+        <true/>
+        <key>StandardErrorPath</key>
+        <string>./nebula.log</string>
+        <key>StandardOutPath</key>
+        <string>./nebula.log</string>
+        <key>UserName</key>
+        <string>root</string>
+    </dict>
+</plist>

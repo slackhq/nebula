@@ -1,9 +1,13 @@
 blank_issues_enabled: true
 contact_links:
   - name: 📘 Documentation
-    url: https://www.defined.net/nebula/
+    url: https://nebula.defined.net/docs/
     about: Review documentation.
 
   - name: 💁 Support/Chat
     url: https://join.slack.com/t/nebulaoss/shared_invite/enQtOTA5MDI4NDg3MTg4LTkwY2EwNTI4NzQyMzc0M2ZlODBjNWI3NTY1MzhiOThiMmZlZjVkMTI0NGY4YTMyNjUwMWEyNzNkZTJmYzQxOGU
     about: 'This issue tracker is not for support questions. Join us on Slack for assistance!'
+
+  - name: 📱 Mobile Nebula
+    url: https://github.com/definednet/mobile_nebula
+    about: 'This issue tracker is not for mobile support. Try the Mobile Nebula repo instead!'

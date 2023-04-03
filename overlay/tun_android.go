@@ -28,11 +28,13 @@ func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes
 		return nil, err
 	}
 
+	// XXX Android returns an fd in non-blocking mode which is necessary for shutdown to work properly.
+	// Be sure not to call file.Fd() as it will set the fd to blocking mode.
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
 	return &tun{
 		ReadWriteCloser: file,
-		fd:              int(file.Fd()),
+		fd:              deviceFd,
 		cidr:            cidr,
 		l:               l,
 		routeTree:       routeTree,

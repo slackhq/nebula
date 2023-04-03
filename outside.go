@@ -84,17 +84,13 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			signedPayload = signedPayload[header.Len:]
 			// Pull the Roaming parts up here, and return in all call paths.
 			f.handleHostRoaming(hostinfo, addr)
-			f.connectionManager.In(hostinfo.vpnIp)
+			f.connectionManager.In(hostinfo.localIndexId)
 
 			relay, ok := hostinfo.relayState.QueryRelayForByIdx(h.RemoteIndex)
 			if !ok {
 				// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
-				// its internal mapping. This shouldn't happen!
-				hostinfo.logger(f.l).WithField("hostinfo", hostinfo.vpnIp).WithField("remoteIndex", h.RemoteIndex).Errorf("HostInfo missing remote index")
-				// Delete my local index from the hostmap
-				f.hostMap.DeleteRelayIdx(h.RemoteIndex)
-				// When the peer doesn't recieve any return traffic, its connection_manager will eventually clean up
-				// the broken relay when it cleans up the associated HostInfo object.
+				// its internal mapping. This should never happen.
+				hostinfo.logger(f.l).WithFields(logrus.Fields{"vpnIp": hostinfo.vpnIp, "remoteIndex": h.RemoteIndex}).Error("HostInfo missing remote relay index")
 				return
 			}
 
@@ -108,13 +104,13 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				// Find the target HostInfo relay object
 				targetHI, err := f.hostMap.QueryVpnIp(relay.PeerIp)
 				if err != nil {
-					hostinfo.logger(f.l).WithField("peerIp", relay.PeerIp).WithError(err).Info("Failed to find target host info by ip")
+					hostinfo.logger(f.l).WithField("relayTo", relay.PeerIp).WithError(err).Info("Failed to find target host info by ip")
 					return
 				}
 				// find the target Relay info object
 				targetRelay, ok := targetHI.relayState.QueryRelayForByIp(hostinfo.vpnIp)
 				if !ok {
-					hostinfo.logger(f.l).WithField("peerIp", relay.PeerIp).Info("Failed to find relay in hostinfo")
+					hostinfo.logger(f.l).WithFields(logrus.Fields{"relayTo": relay.PeerIp, "relayFrom": hostinfo.vpnIp}).Info("Failed to find relay in hostinfo")
 					return
 				}
 
@@ -130,7 +126,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 						hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 					}
 				} else {
-					hostinfo.logger(f.l).WithField("targetRelayState", targetRelay.State).Info("Unexpected target relay state")
+					hostinfo.logger(f.l).WithFields(logrus.Fields{"relayTo": relay.PeerIp, "relayFrom": hostinfo.vpnIp, "targetRelayState": targetRelay.State}).Info("Unexpected target relay state")
 					return
 				}
 			}
@@ -237,17 +233,16 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 
 	f.handleHostRoaming(hostinfo, addr)
 
-	f.connectionManager.In(hostinfo.vpnIp)
+	f.connectionManager.In(hostinfo.localIndexId)
 }
 
 // closeTunnel closes a tunnel locally, it does not send a closeTunnel packet to the remote
 func (f *Interface) closeTunnel(hostInfo *HostInfo) {
-	//TODO: this would be better as a single function in ConnectionManager that handled locks appropriately
-	f.connectionManager.ClearIP(hostInfo.vpnIp)
-	f.connectionManager.ClearPendingDeletion(hostInfo.vpnIp)
-	f.lightHouse.DeleteVpnIp(hostInfo.vpnIp)
-
-	f.hostMap.DeleteHostInfo(hostInfo)
+	final := f.hostMap.DeleteHostInfo(hostInfo)
+	if final {
+		// We no longer have any tunnels with this vpn ip, clear learned lighthouse state to lower memory usage
+		f.lightHouse.DeleteVpnIp(hostInfo.vpnIp)
+	}
 }
 
 // sendCloseTunnel is a helper function to send a proper close tunnel packet to a remote
@@ -397,6 +392,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 
 	dropReason := f.firewall.Drop(out, *fwPacket, true, hostinfo, f.caPool, localCache)
 	if dropReason != nil {
+		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, out, q)
 		if f.l.Level >= logrus.DebugLevel {
 			hostinfo.logger(f.l).WithField("fwPacket", fwPacket).
 				WithField("reason", dropReason).
@@ -405,7 +401,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return
 	}
 
-	f.connectionManager.In(hostinfo.vpnIp)
+	f.connectionManager.In(hostinfo.localIndexId)
 	_, err = f.readers[q].Write(out)
 	if err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")

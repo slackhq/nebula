@@ -18,7 +18,7 @@ import (
 	"github.com/slackhq/nebula/config"
 )
 
-// startStats initializes stats from config. On success, if any futher work
+// startStats initializes stats from config. On success, if any further work
 // is needed to serve stats, it returns a func to handle that work. If no
 // work is needed, it'll return nil. On failure, it returns nil, error.
 func startStats(l *logrus.Logger, c *config.C, buildVersion string, configTest bool) (func(), error) {

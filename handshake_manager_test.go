@@ -21,11 +21,7 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	preferredRanges := []*net.IPNet{localrange}
 	mw := &mockEncWriter{}
 	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
-	lh := &LightHouse{
-		atomicStaticList:  make(map[iputil.VpnIp]struct{}),
-		atomicLighthouses: make(map[iputil.VpnIp]struct{}),
-		addrMap:           make(map[iputil.VpnIp]*RemoteList),
-	}
+	lh := newTestLighthouse()
 
 	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, lh, &udp.Conn{}, defaultHandshakeConfig)
 
@@ -70,53 +66,8 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	assert.NotContains(t, blah.pendingHostMap.Hosts, ip)
 }
 
-func Test_NewHandshakeManagerTrigger(t *testing.T) {
-	l := test.NewLogger()
-	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
-	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
-	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
-	ip := iputil.Ip2VpnIp(net.ParseIP("172.1.1.2"))
-	preferredRanges := []*net.IPNet{localrange}
-	mw := &mockEncWriter{}
-	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
-	lh := &LightHouse{
-		addrMap:           make(map[iputil.VpnIp]*RemoteList),
-		l:                 l,
-		atomicStaticList:  make(map[iputil.VpnIp]struct{}),
-		atomicLighthouses: make(map[iputil.VpnIp]struct{}),
-	}
-
-	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, lh, &udp.Conn{}, defaultHandshakeConfig)
-
-	now := time.Now()
-	blah.NextOutboundHandshakeTimerTick(now, mw)
-
-	assert.Equal(t, 0, testCountTimerWheelEntries(blah.OutboundHandshakeTimer))
-
-	hi := blah.AddVpnIp(ip, nil)
-	hi.HandshakeReady = true
-	assert.Equal(t, 1, testCountTimerWheelEntries(blah.OutboundHandshakeTimer))
-	assert.Equal(t, 0, hi.HandshakeCounter, "Should not have attempted a handshake yet")
-
-	// Trigger the same method the channel will but, this should set our remotes pointer
-	blah.handleOutbound(ip, mw, true)
-	assert.Equal(t, 1, hi.HandshakeCounter, "Trigger should have done a handshake attempt")
-	assert.NotNil(t, hi.remotes, "Manager should have set my remotes pointer")
-
-	// Make sure the trigger doesn't double schedule the timer entry
-	assert.Equal(t, 1, testCountTimerWheelEntries(blah.OutboundHandshakeTimer))
-
-	uaddr := udp.NewAddrFromString("10.1.1.1:4242")
-	hi.remotes.unlockedPrependV4(ip, NewIp4AndPort(uaddr.IP, uint32(uaddr.Port)))
-
-	// We now have remotes but only the first trigger should have pushed things forward
-	blah.handleOutbound(ip, mw, true)
-	assert.Equal(t, 1, hi.HandshakeCounter, "Trigger should have not done a handshake attempt")
-	assert.Equal(t, 1, testCountTimerWheelEntries(blah.OutboundHandshakeTimer))
-}
-
-func testCountTimerWheelEntries(tw *SystemTimerWheel) (c int) {
-	for _, i := range tw.wheel {
+func testCountTimerWheelEntries(tw *LockingTimerWheel[iputil.VpnIp]) (c int) {
+	for _, i := range tw.t.wheel {
 		n := i.Head
 		for n != nil {
 			c++

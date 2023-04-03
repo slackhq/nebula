@@ -202,7 +202,10 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	hostMap := NewHostMap(l, "main", tunCidr, preferredRanges)
 	hostMap.metricsEnabled = c.GetBool("stats.message_metrics", false)
 
-	l.WithField("network", hostMap.vpnCIDR).WithField("preferredRanges", hostMap.preferredRanges).Info("Main HostMap created")
+	l.
+		WithField("network", hostMap.vpnCIDR.String()).
+		WithField("preferredRanges", hostMap.preferredRanges).
+		Info("Main HostMap created")
 
 	/*
 		config.SetDefault("promoter.interval", 10)
@@ -210,11 +213,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	*/
 
 	punchy := NewPunchyFromConfig(l, c)
-	if punchy.GetPunch() && !configTest {
-		l.Info("UDP hole punching enabled")
-		go hostMap.Punchy(ctx, udpConns[0])
-	}
-
 	lightHouse, err := NewLightHouseFromConfig(l, c, tunCidr, udpConns[0], punchy)
 	switch {
 	case errors.As(err, &util.ContextualError{}):
@@ -269,8 +267,8 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		ServeDns:                serveDns,
 		HandshakeManager:        handshakeManager,
 		lightHouse:              lightHouse,
-		checkInterval:           checkInterval,
-		pendingDeletionInterval: pendingDeletionInterval,
+		checkInterval:           time.Second * time.Duration(checkInterval),
+		pendingDeletionInterval: time.Second * time.Duration(pendingDeletionInterval),
 		DropLocalBroadcast:      c.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:           c.GetBool("tun.drop_multicast", false),
 		routines:                routines,
@@ -279,6 +277,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		caPool:                  caPool,
 		disconnectInvalid:       c.GetBool("pki.disconnect_invalid", false),
 		relayManager:            NewRelayManager(ctx, l, hostMap, c),
+		punchy:                  punchy,
 
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,

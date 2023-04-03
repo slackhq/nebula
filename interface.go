@@ -33,8 +33,8 @@ type InterfaceConfig struct {
 	ServeDns                bool
 	HandshakeManager        *HandshakeManager
 	lightHouse              *LightHouse
-	checkInterval           int
-	pendingDeletionInterval int
+	checkInterval           time.Duration
+	pendingDeletionInterval time.Duration
 	DropLocalBroadcast      bool
 	DropMulticast           bool
 	routines                int
@@ -43,6 +43,7 @@ type InterfaceConfig struct {
 	caPool                  *cert.NebulaCAPool
 	disconnectInvalid       bool
 	relayManager            *relayManager
+	punchy                  *Punchy
 
 	ConntrackCacheTimeout time.Duration
 	l                     *logrus.Logger
@@ -52,7 +53,7 @@ type Interface struct {
 	hostMap            *HostMap
 	outside            *udp.Conn
 	inside             overlay.Device
-	certState          *CertState
+	certState          atomic.Pointer[CertState]
 	cipher             string
 	firewall           *Firewall
 	connectionManager  *connectionManager
@@ -67,7 +68,7 @@ type Interface struct {
 	routines           int
 	caPool             *cert.NebulaCAPool
 	disconnectInvalid  bool
-	closed             int32
+	closed             atomic.Bool
 	relayManager       *relayManager
 
 	sendRecvErrorConfig sendRecvErrorConfig
@@ -141,7 +142,6 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		hostMap:            c.HostMap,
 		outside:            c.Outside,
 		inside:             c.Inside,
-		certState:          c.certState,
 		cipher:             c.Cipher,
 		firewall:           c.Firewall,
 		serveDns:           c.ServeDns,
@@ -172,7 +172,8 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		l: c.l,
 	}
 
-	ifce.connectionManager = newConnectionManager(ctx, c.l, ifce, c.checkInterval, c.pendingDeletionInterval)
+	ifce.certState.Store(c.certState)
+	ifce.connectionManager = newConnectionManager(ctx, c.l, ifce, c.checkInterval, c.pendingDeletionInterval, c.punchy)
 
 	return ifce, nil
 }
@@ -253,7 +254,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	for {
 		n, err := reader.Read(packet)
 		if err != nil {
-			if errors.Is(err, os.ErrClosed) && atomic.LoadInt32(&f.closed) != 0 {
+			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
 				return
 			}
 
@@ -298,14 +299,15 @@ func (f *Interface) reloadCertKey(c *config.C) {
 	}
 
 	// did IP in cert change? if so, don't set
-	oldIPs := f.certState.certificate.Details.Ips
+	currentCert := f.certState.Load().certificate
+	oldIPs := currentCert.Details.Ips
 	newIPs := cs.certificate.Details.Ips
 	if len(oldIPs) > 0 && len(newIPs) > 0 && oldIPs[0].String() != newIPs[0].String() {
 		f.l.WithField("new_ip", newIPs[0]).WithField("old_ip", oldIPs[0]).Error("IP in new cert was different from old")
 		return
 	}
 
-	f.certState = cs
+	f.certState.Store(cs)
 	f.l.WithField("cert", cs.certificate).Info("Client cert refreshed from disk")
 }
 
@@ -316,7 +318,7 @@ func (f *Interface) reloadFirewall(c *config.C) {
 		return
 	}
 
-	fw, err := NewFirewallFromConfig(f.l, f.certState.certificate, c)
+	fw, err := NewFirewallFromConfig(f.l, f.certState.Load().certificate, c)
 	if err != nil {
 		f.l.WithError(err).Error("Error while creating firewall during reload")
 		return
@@ -391,7 +393,7 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 }
 
 func (f *Interface) Close() error {
-	atomic.StoreInt32(&f.closed, 1)
+	f.closed.Store(true)
 
 	// Release the tun device
 	return f.inside.Close()

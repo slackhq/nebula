@@ -47,6 +47,9 @@ type Firewall struct {
 	InRules  *FirewallTable
 	OutRules *FirewallTable
 
+	InSendReject  bool
+	OutSendReject bool
+
 	//TODO: we should have many more options for TCP, an option for ICMP, and mimic the kernel a bit better
 	// https://www.kernel.org/doc/Documentation/networking/nf_conntrack-sysctl.txt
 	TCPTimeout     time.Duration //linux: 5 days max
@@ -77,7 +80,7 @@ type FirewallConntrack struct {
 	sync.Mutex
 
 	Conns      map[firewall.Packet]*conn
-	TimerWheel *TimerWheel
+	TimerWheel *TimerWheel[firewall.Packet]
 }
 
 type FirewallTable struct {
@@ -145,7 +148,7 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 	return &Firewall{
 		Conntrack: &FirewallConntrack{
 			Conns:      make(map[firewall.Packet]*conn),
-			TimerWheel: NewTimerWheel(min, max),
+			TimerWheel: NewTimerWheel[firewall.Packet](min, max),
 		},
 		InRules:        newFirewallTable(),
 		OutRules:       newFirewallTable(),
@@ -178,6 +181,28 @@ func NewFirewallFromConfig(l *logrus.Logger, nc *cert.NebulaCertificate, c *conf
 		nc,
 		//TODO: max_connections
 	)
+
+	inboundAction := c.GetString("firewall.inbound_action", "drop")
+	switch inboundAction {
+	case "reject":
+		fw.InSendReject = true
+	case "drop":
+		fw.InSendReject = false
+	default:
+		l.WithField("action", inboundAction).Warn("invalid firewall.inbound_action, defaulting to `drop`")
+		fw.InSendReject = false
+	}
+
+	outboundAction := c.GetString("firewall.outbound_action", "drop")
+	switch outboundAction {
+	case "reject":
+		fw.OutSendReject = true
+	case "drop":
+		fw.OutSendReject = false
+	default:
+		l.WithField("action", inboundAction).Warn("invalid firewall.outbound_action, defaulting to `drop`")
+		fw.OutSendReject = false
+	}
 
 	err := AddFirewallRulesFromConfig(l, false, c, fw)
 	if err != nil {
@@ -510,6 +535,7 @@ func (f *Firewall) addConn(packet []byte, fp firewall.Packet, incoming bool) {
 	conntrack := f.Conntrack
 	conntrack.Lock()
 	if _, ok := conntrack.Conns[fp]; !ok {
+		conntrack.TimerWheel.Advance(time.Now())
 		conntrack.TimerWheel.Add(fp, timeout)
 	}
 
@@ -537,6 +563,7 @@ func (f *Firewall) evict(p firewall.Packet) {
 
 	// Timeout is in the future, re-add the timer
 	if newT > 0 {
+		conntrack.TimerWheel.Advance(time.Now())
 		conntrack.TimerWheel.Add(p, newT)
 		return
 	}
@@ -879,7 +906,7 @@ func parsePort(s string) (startPort, endPort int32, err error) {
 	return
 }
 
-//TODO: write tests for these
+// TODO: write tests for these
 func setTCPRTTTracking(c *conn, p []byte) {
 	if c.Seq != 0 {
 		return
