@@ -103,7 +103,7 @@ func TestNebulaCertificate_Sign(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	assert.Nil(t, err)
 	assert.False(t, nc.CheckSignature(pub))
-	assert.Nil(t, nc.Sign(priv))
+	assert.Nil(t, nc.Sign(Curve_CURVE25519, priv))
 	assert.True(t, nc.CheckSignature(pub))
 
 	_, err = nc.Marshal()
@@ -145,7 +145,7 @@ func TestNebulaCertificate_SignP256(t *testing.T) {
 
 	assert.Nil(t, err)
 	assert.False(t, nc.CheckSignature(pub))
-	assert.Nil(t, nc.Sign(rawPriv))
+	assert.Nil(t, nc.Sign(Curve_P256, rawPriv))
 	assert.True(t, nc.CheckSignature(pub))
 
 	_, err = nc.Marshal()
@@ -1000,7 +1000,7 @@ func newTestCaCert(before, after time.Time, ips, subnets []*net.IPNet, groups []
 		nc.Details.Groups = groups
 	}
 
-	err = nc.Sign(priv)
+	err = nc.Sign(Curve_CURVE25519, priv)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1043,7 +1043,7 @@ func newTestCaCertP256(before, after time.Time, ips, subnets []*net.IPNet, group
 		nc.Details.Groups = groups
 	}
 
-	err = nc.Sign(rawPriv)
+	err = nc.Sign(Curve_P256, rawPriv)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1110,7 +1110,7 @@ func newTestCert(ca *NebulaCertificate, key []byte, before, after time.Time, ips
 		},
 	}
 
-	err = nc.Sign(key)
+	err = nc.Sign(ca.Details.Curve, key)
 	if err != nil {
 		return nil, nil, nil, err
 	}

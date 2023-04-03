@@ -157,7 +157,7 @@ func ca(args []string, out io.Writer, errOut io.Writer) error {
 		return fmt.Errorf("refusing to overwrite existing CA cert: %s", *cf.outCertPath)
 	}
 
-	err = nc.Sign(rawPriv)
+	err = nc.Sign(curve, rawPriv)
 	if err != nil {
 		return fmt.Errorf("error while signing: %s", err)
 	}

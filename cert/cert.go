@@ -335,7 +335,11 @@ func UnmarshalEd25519PublicKey(b []byte) (ed25519.PublicKey, []byte, error) {
 }
 
 // Sign signs a nebula cert with the provided private key
-func (nc *NebulaCertificate) Sign(key []byte) error {
+func (nc *NebulaCertificate) Sign(curve Curve, key []byte) error {
+	if curve != nc.Details.Curve {
+		return fmt.Errorf("curve in cert and private key supplied don't match")
+	}
+
 	b, err := proto.Marshal(nc.getRawDetails())
 	if err != nil {
 		return err
@@ -343,7 +347,7 @@ func (nc *NebulaCertificate) Sign(key []byte) error {
 
 	var sig []byte
 
-	switch nc.Details.Curve {
+	switch curve {
 	case Curve_CURVE25519:
 		signer := ed25519.PrivateKey(key)
 		sig = ed25519.Sign(signer, b)
