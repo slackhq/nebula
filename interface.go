@@ -380,7 +380,7 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 
 	udpStats := udp.NewUDPStatsEmitter(f.writers)
 
-	certExpirationGauge := metrics.GetOrRegisterGauge("certificate.expiration_ttl_seconds", nil)
+	certExpirationGauge := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil)
 
 	for {
 		select {
@@ -390,7 +390,7 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 			f.firewall.EmitStats()
 			f.handshakeManager.EmitStats()
 			udpStats()
-			certExpirationGauge.Update(int64(f.certState.certificate.Details.NotAfter.Sub(time.Now()) / time.Second))
+			certExpirationGauge.Update(int64(f.certState.Load().certificate.Details.NotAfter.Sub(time.Now()) / time.Second))
 		}
 	}
 }
