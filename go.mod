@@ -24,6 +24,7 @@ require (
 	golang.org/x/exp v0.0.0-20230310171629-522b1b587ee0
 	golang.org/x/net v0.8.0
 	golang.org/x/sys v0.6.0
+	golang.org/x/term v0.6.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
 	google.golang.org/protobuf v1.29.0
@@ -42,7 +43,6 @@ require (
 	github.com/prometheus/procfs v0.9.0 // indirect
 	github.com/vishvananda/netns v0.0.4 // indirect
 	golang.org/x/mod v0.9.0 // indirect
-	golang.org/x/term v0.6.0 // indirect
 	golang.org/x/tools v0.7.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

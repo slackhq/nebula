@@ -11,7 +11,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"net"
 	"time"
@@ -23,15 +25,17 @@ import (
 const publicKeyLen = 32
 
 const (
-	CertBanner              = "NEBULA CERTIFICATE"
-	X25519PrivateKeyBanner  = "NEBULA X25519 PRIVATE KEY"
-	X25519PublicKeyBanner   = "NEBULA X25519 PUBLIC KEY"
-	Ed25519PrivateKeyBanner = "NEBULA ED25519 PRIVATE KEY"
-	Ed25519PublicKeyBanner  = "NEBULA ED25519 PUBLIC KEY"
+	CertBanner                       = "NEBULA CERTIFICATE"
+	X25519PrivateKeyBanner           = "NEBULA X25519 PRIVATE KEY"
+	X25519PublicKeyBanner            = "NEBULA X25519 PUBLIC KEY"
+	EncryptedEd25519PrivateKeyBanner = "NEBULA ED25519 ENCRYPTED PRIVATE KEY"
+	Ed25519PrivateKeyBanner          = "NEBULA ED25519 PRIVATE KEY"
+	Ed25519PublicKeyBanner           = "NEBULA ED25519 PUBLIC KEY"
 
-	P256PrivateKeyBanner      = "NEBULA P256 PRIVATE KEY"
-	P256PublicKeyBanner       = "NEBULA P256 PUBLIC KEY"
-	ECDSAP256PrivateKeyBanner = "NEBULA ECDSA P256 PRIVATE KEY"
+	P256PrivateKeyBanner               = "NEBULA P256 PRIVATE KEY"
+	P256PublicKeyBanner                = "NEBULA P256 PUBLIC KEY"
+	EncryptedECDSAP256PrivateKeyBanner = "NEBULA ECDSA P256 ENCRYPTED PRIVATE KEY"
+	ECDSAP256PrivateKeyBanner          = "NEBULA ECDSA P256 PRIVATE KEY"
 )
 
 type NebulaCertificate struct {
@@ -56,7 +60,20 @@ type NebulaCertificateDetails struct {
 	Curve Curve
 }
 
+type NebulaEncryptedData struct {
+	EncryptionMetadata NebulaEncryptionMetadata
+	Ciphertext         []byte
+}
+
+type NebulaEncryptionMetadata struct {
+	EncryptionAlgorithm string
+	Argon2Parameters    Argon2Parameters
+}
+
 type m map[string]interface{}
+
+// Returned if we try to unmarshal an encrypted private key without a passphrase
+var ErrPrivateKeyEncrypted = errors.New("private key must be decrypted")
 
 // UnmarshalNebulaCertificate will unmarshal a protobuf byte representation of a nebula cert
 func UnmarshalNebulaCertificate(b []byte) (*NebulaCertificate, error) {
@@ -205,6 +222,10 @@ func UnmarshalSigningPrivateKey(b []byte) ([]byte, []byte, Curve, error) {
 	}
 	var curve Curve
 	switch k.Type {
+	case EncryptedEd25519PrivateKeyBanner:
+		return nil, nil, Curve_CURVE25519, ErrPrivateKeyEncrypted
+	case EncryptedECDSAP256PrivateKeyBanner:
+		return nil, nil, Curve_P256, ErrPrivateKeyEncrypted
 	case Ed25519PrivateKeyBanner:
 		curve = Curve_CURVE25519
 		if len(k.Bytes) != ed25519.PrivateKeySize {
@@ -219,6 +240,38 @@ func UnmarshalSigningPrivateKey(b []byte) ([]byte, []byte, Curve, error) {
 		return nil, r, 0, fmt.Errorf("bytes did not contain a proper nebula Ed25519/ECDSA private key banner")
 	}
 	return k.Bytes, r, curve, nil
+}
+
+// EncryptAndMarshalSigningPrivateKey is a simple helper to encrypt and PEM encode a private key
+func EncryptAndMarshalSigningPrivateKey(curve Curve, b []byte, passphrase []byte, kdfParams *Argon2Parameters) ([]byte, error) {
+	ciphertext, err := aes256Encrypt(passphrase, kdfParams, b)
+	if err != nil {
+		return nil, err
+	}
+
+	b, err = proto.Marshal(&RawNebulaEncryptedData{
+		EncryptionMetadata: &RawNebulaEncryptionMetadata{
+			EncryptionAlgorithm: "AES-256-GCM",
+			Argon2Parameters: &RawNebulaArgon2Parameters{
+				Version:     kdfParams.version,
+				Memory:      kdfParams.Memory,
+				Parallelism: uint32(kdfParams.Parallelism),
+				Iterations:  kdfParams.Iterations,
+				Salt:        kdfParams.salt,
+			},
+		},
+		Ciphertext: ciphertext,
+	})
+
+	return pem.EncodeToMemory(&pem.Block{Type: EncryptedEd25519PrivateKeyBanner, Bytes: b}), nil
+	switch curve {
+	case Curve_CURVE25519:
+		return pem.EncodeToMemory(&pem.Block{Type: EncryptedEd25519PrivateKeyBanner, Bytes: b}), nil
+	case Curve_P256:
+		return pem.EncodeToMemory(&pem.Block{Type: EncryptedECDSAP256PrivateKeyBanner, Bytes: b}), nil
+	default:
+		return nil, fmt.Errorf("invalid curve: %v", curve)
+	}
 }
 
 // UnmarshalX25519PrivateKey will try to pem decode an X25519 private key, returning any other bytes b
@@ -245,14 +298,131 @@ func UnmarshalEd25519PrivateKey(b []byte) (ed25519.PrivateKey, []byte, error) {
 	if k == nil {
 		return nil, r, fmt.Errorf("input did not contain a valid PEM encoded block")
 	}
-	if k.Type != Ed25519PrivateKeyBanner {
+
+	if k.Type == EncryptedEd25519PrivateKeyBanner {
+		return nil, r, ErrPrivateKeyEncrypted
+	} else if k.Type != Ed25519PrivateKeyBanner {
 		return nil, r, fmt.Errorf("bytes did not contain a proper nebula Ed25519 private key banner")
 	}
+
 	if len(k.Bytes) != ed25519.PrivateKeySize {
 		return nil, r, fmt.Errorf("key was not 64 bytes, is invalid ed25519 private key")
 	}
 
 	return k.Bytes, r, nil
+}
+
+// UnmarshalNebulaCertificate will unmarshal a protobuf byte representation of a nebula cert into its
+// protobuf-generated struct.
+func UnmarshalNebulaEncryptedData(b []byte) (*NebulaEncryptedData, error) {
+	if len(b) == 0 {
+		return nil, fmt.Errorf("nil byte array")
+	}
+	var rned RawNebulaEncryptedData
+	err := proto.Unmarshal(b, &rned)
+	if err != nil {
+		return nil, err
+	}
+
+	if rned.EncryptionMetadata == nil {
+		return nil, fmt.Errorf("encoded EncryptionMetadata was nil")
+	}
+
+	if rned.EncryptionMetadata.Argon2Parameters == nil {
+		return nil, fmt.Errorf("encoded Argon2Parameters was nil")
+	}
+
+	params, err := unmarshalArgon2Parameters(rned.EncryptionMetadata.Argon2Parameters)
+	if err != nil {
+		return nil, err
+	}
+
+	ned := NebulaEncryptedData{
+		EncryptionMetadata: NebulaEncryptionMetadata{
+			EncryptionAlgorithm: rned.EncryptionMetadata.EncryptionAlgorithm,
+			Argon2Parameters:    *params,
+		},
+		Ciphertext: rned.Ciphertext,
+	}
+
+	return &ned, nil
+}
+
+func unmarshalArgon2Parameters(params *RawNebulaArgon2Parameters) (*Argon2Parameters, error) {
+	if params.Version < math.MinInt32 || params.Version > math.MaxInt32 {
+		return nil, fmt.Errorf("Argon2Parameters Version must be at least %d and no more than %d", math.MinInt32, math.MaxInt32)
+	}
+	if params.Memory <= 0 || params.Memory > math.MaxUint32 {
+		return nil, fmt.Errorf("Argon2Parameters Memory must be be greater than 0 and no more than %d KiB", uint32(math.MaxUint32))
+	}
+	if params.Parallelism <= 0 || params.Parallelism > math.MaxUint8 {
+		return nil, fmt.Errorf("Argon2Parameters Parallelism must be be greater than 0 and no more than %d", math.MaxUint8)
+	}
+	if params.Iterations <= 0 || params.Iterations > math.MaxUint32 {
+		return nil, fmt.Errorf("-argon-iterations must be be greater than 0 and no more than %d", uint32(math.MaxUint32))
+	}
+
+	return &Argon2Parameters{
+		version:     rune(params.Version),
+		Memory:      uint32(params.Memory),
+		Parallelism: uint8(params.Parallelism),
+		Iterations:  uint32(params.Iterations),
+		salt:        params.Salt,
+	}, nil
+
+}
+
+// DecryptAndUnmarshalSigningPrivateKey will try to pem decode and decrypt an Ed25519/ECDSA private key with
+// the given passphrase, returning any other bytes b or an error on failure
+func DecryptAndUnmarshalSigningPrivateKey(passphrase, b []byte) (Curve, []byte, []byte, error) {
+	var curve Curve
+
+	k, r := pem.Decode(b)
+	if k == nil {
+		return curve, nil, r, fmt.Errorf("input did not contain a valid PEM encoded block")
+	}
+
+	switch k.Type {
+	case EncryptedEd25519PrivateKeyBanner:
+		curve = Curve_CURVE25519
+	case EncryptedECDSAP256PrivateKeyBanner:
+		curve = Curve_P256
+	default:
+		return curve, nil, r, fmt.Errorf("bytes did not contain a proper nebula encrypted Ed25519/ECDSA private key banner")
+	}
+
+	ned, err := UnmarshalNebulaEncryptedData(k.Bytes)
+	if err != nil {
+		return curve, nil, r, err
+	}
+
+	var bytes []byte
+	switch ned.EncryptionMetadata.EncryptionAlgorithm {
+	case "AES-256-GCM":
+		bytes, err = aes256Decrypt(passphrase, &ned.EncryptionMetadata.Argon2Parameters, ned.Ciphertext)
+		if err != nil {
+			return curve, nil, r, err
+		}
+	default:
+		return curve, nil, r, fmt.Errorf("unsupported encryption algorithm: %s", ned.EncryptionMetadata.EncryptionAlgorithm)
+	}
+
+	if len(bytes) != ed25519.PrivateKeySize {
+		return curve, nil, r, fmt.Errorf("key was not 64 bytes, is invalid ed25519 private key")
+	}
+
+	switch curve {
+	case Curve_CURVE25519:
+		if len(bytes) != ed25519.PrivateKeySize {
+			return curve, nil, r, fmt.Errorf("key was not %d bytes, is invalid Ed25519 private key", ed25519.PrivateKeySize)
+		}
+	case Curve_P256:
+		if len(bytes) != 32 {
+			return curve, nil, r, fmt.Errorf("key was not 32 bytes, is invalid ECDSA P256 private key")
+		}
+	}
+
+	return curve, bytes, r, nil
 }
 
 func MarshalPublicKey(curve Curve, b []byte) []byte {
