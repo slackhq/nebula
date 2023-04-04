@@ -79,6 +79,16 @@ func (rs *RelayState) DeleteRelay(ip iputil.VpnIp) {
 	delete(rs.relays, ip)
 }
 
+func (rs *RelayState) CopyAllRelayFor() []*Relay {
+	rs.RLock()
+	defer rs.RUnlock()
+	ret := make([]*Relay, 0, len(rs.relayForByIdx))
+	for _, r := range rs.relayForByIdx {
+		ret = append(ret, r)
+	}
+	return ret
+}
+
 func (rs *RelayState) GetRelayForByIp(ip iputil.VpnIp) (*Relay, bool) {
 	rs.RLock()
 	defer rs.RUnlock()
@@ -572,7 +582,7 @@ func (hm *HostMap) QueryVpnIpRelayFor(targetIp, relayHostIp iputil.VpnIp) (*Host
 	}
 	for h != nil {
 		r, ok := h.relayState.QueryRelayForByIp(targetIp)
-		if ok {
+		if ok && r.State == Established {
 			return h, r, nil
 		}
 		h = h.next

@@ -78,8 +78,8 @@ func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, u
 			"level":            l.Level.String(),
 		},
 		"timers": m{
-			"pending_deletion_interval": 4,
-			"connection_alive_interval": 4,
+			"pending_deletion_interval": 2,
+			"connection_alive_interval": 2,
 		},
 	}
 

@@ -154,7 +154,7 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 		rm.l.
 			WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
 	} else {
-		f.SendMessageToVpnIp(header.Control, 0, peerHostInfo.vpnIp, msg, make([]byte, 12), make([]byte, mtu))
+		f.sendMessageToVpnIp(header.Control, 0, peerHostInfo, msg, make([]byte, 12), make([]byte, mtu))
 		rm.l.WithFields(logrus.Fields{
 			"relayFrom":           iputil.VpnIp(resp.RelayFromIp),
 			"relayTo":             iputil.VpnIp(resp.RelayToIp),
@@ -223,7 +223,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			logMsg.
 				WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
 		} else {
-			f.SendMessageToVpnIp(header.Control, 0, h.vpnIp, msg, make([]byte, 12), make([]byte, mtu))
+			f.sendMessageToVpnIp(header.Control, 0, h, msg, make([]byte, 12), make([]byte, mtu))
 			rm.l.WithFields(logrus.Fields{
 				"relayFrom":           iputil.VpnIp(resp.RelayFromIp),
 				"relayTo":             iputil.VpnIp(resp.RelayToIp),
@@ -278,7 +278,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 				logMsg.
 					WithError(err).Error("relayManager Failed to marshal Control message to create relay")
 			} else {
-				f.SendMessageToVpnIp(header.Control, 0, target, msg, make([]byte, 12), make([]byte, mtu))
+				f.sendMessageToVpnIp(header.Control, 0, peer, msg, make([]byte, 12), make([]byte, mtu))
 				rm.l.WithFields(logrus.Fields{
 					"relayFrom":           iputil.VpnIp(req.RelayFromIp),
 					"relayTo":             iputil.VpnIp(req.RelayToIp),
@@ -324,7 +324,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 					rm.l.
 						WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
 				} else {
-					f.SendMessageToVpnIp(header.Control, 0, h.vpnIp, msg, make([]byte, 12), make([]byte, mtu))
+					f.sendMessageToVpnIp(header.Control, 0, h, msg, make([]byte, 12), make([]byte, mtu))
 					rm.l.WithFields(logrus.Fields{
 						"relayFrom":           iputil.VpnIp(resp.RelayFromIp),
 						"relayTo":             iputil.VpnIp(resp.RelayToIp),
