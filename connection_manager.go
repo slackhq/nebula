@@ -12,6 +12,15 @@ import (
 	"github.com/slackhq/nebula/udp"
 )
 
+type trafficDecision int
+
+const (
+	doNothing    trafficDecision = 0
+	deleteTunnel trafficDecision = 1 // delete the hostinfo on our side, do not notify the remote
+	closeTunnel  trafficDecision = 2 // delete the hostinfo and notify the remote
+	swapPrimary  trafficDecision = 3
+)
+
 type connectionManager struct {
 	in     map[uint32]struct{}
 	inLock *sync.RWMutex
@@ -137,20 +146,35 @@ func (n *connectionManager) Run(ctx context.Context) {
 }
 
 func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte, now time.Time) {
-	var unlockOnce sync.Once
+	decision, hostinfo, primary := n.makeTrafficDecision(localIndex, p, nb, out, now)
+
+	switch decision {
+	case deleteTunnel:
+		n.hostMap.DeleteHostInfo(hostinfo)
+
+	case closeTunnel:
+		n.intf.sendCloseTunnel(hostinfo)
+		n.intf.closeTunnel(hostinfo)
+
+	case swapPrimary:
+		n.trySwapPrimary(hostinfo, primary)
+	}
+}
+
+func (n *connectionManager) makeTrafficDecision(localIndex uint32, p, nb, out []byte, now time.Time) (trafficDecision, *HostInfo, *HostInfo) {
 	n.hostMap.RLock()
-	//TODO: we can release the read lock sooner but would need to reorganize the code a bit to make it less difficult to understand
-	defer unlockOnce.Do(n.hostMap.RUnlock)
+	defer n.hostMap.RUnlock()
 
 	hostinfo := n.hostMap.Indexes[localIndex]
 	if hostinfo == nil {
 		n.l.WithField("localIndex", localIndex).Debugf("Not found in hostmap")
 		delete(n.pendingDeletion, localIndex)
-		return
+		return doNothing, nil, nil
 	}
 
-	if n.handleInvalidCertificate(now, hostinfo) {
-		return
+	if n.isInvalidCertificate(now, hostinfo) {
+		delete(n.pendingDeletion, hostinfo.localIndexId)
+		return closeTunnel, hostinfo, nil
 	}
 
 	primary := n.hostMap.Hosts[hostinfo.vpnIp]
@@ -164,6 +188,7 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 
 	// A hostinfo is determined alive if there is incoming traffic
 	if inTraffic {
+		decision := doNothing
 		if n.l.Level >= logrus.DebugLevel {
 			hostinfo.logger(n.l).
 				WithField("tunnelCheck", m{"state": "alive", "method": "passive"}).
@@ -172,9 +197,9 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 		delete(n.pendingDeletion, hostinfo.localIndexId)
 
 		if mainHostInfo {
-			n.handleRehandshake(hostinfo)
+			n.tryRehandshake(hostinfo)
 		} else {
-			n.handleMakePrimary(hostinfo, primary)
+			decision = swapPrimary
 		}
 
 		n.trafficTimer.Add(hostinfo.localIndexId, n.checkInterval)
@@ -184,7 +209,7 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 			n.sendPunch(hostinfo)
 		}
 
-		return
+		return decision, hostinfo, primary
 	}
 
 	if _, ok := n.pendingDeletion[hostinfo.localIndexId]; ok {
@@ -193,10 +218,8 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 			WithField("tunnelCheck", m{"state": "dead", "method": "active"}).
 			Info("Tunnel status")
 
-		unlockOnce.Do(n.hostMap.RUnlock)
-		n.hostMap.DeleteHostInfo(hostinfo)
 		delete(n.pendingDeletion, hostinfo.localIndexId)
-		return
+		return deleteTunnel, hostinfo, nil
 	}
 
 	hostinfo.logger(n.l).
@@ -209,7 +232,7 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 			// Just maintain NAT state if configured to do so.
 			n.sendPunch(hostinfo)
 			n.trafficTimer.Add(hostinfo.localIndexId, n.checkInterval)
-			return
+			return doNothing, nil, nil
 
 		}
 
@@ -223,7 +246,7 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 		if n.intf.lightHouse.IsLighthouseIP(hostinfo.vpnIp) {
 			// We are sending traffic to the lighthouse, let recv_error sort out any issues instead of testing the tunnel
 			n.trafficTimer.Add(hostinfo.localIndexId, n.checkInterval)
-			return
+			return doNothing, nil, nil
 		}
 
 		// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
@@ -235,9 +258,10 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 
 	n.pendingDeletion[hostinfo.localIndexId] = struct{}{}
 	n.trafficTimer.Add(hostinfo.localIndexId, n.pendingDeletionInterval)
+	return doNothing, nil, nil
 }
 
-func (n *connectionManager) handleMakePrimary(current, primary *HostInfo) {
+func (n *connectionManager) trySwapPrimary(current, primary *HostInfo) {
 	// The primary tunnel is the most recent handshake to complete locally and should work entirely fine.
 	// If we are here then we have multiple tunnels for a host pair and neither side believes the same tunnel is primary.
 	// Let's sort this out.
@@ -255,18 +279,17 @@ func (n *connectionManager) handleMakePrimary(current, primary *HostInfo) {
 		return
 	}
 
-	n.hostMap.RUnlock()
 	n.hostMap.Lock()
 	// Make sure the primary is still the same after the write lock. This avoids a race with a rehandshake.
 	if n.hostMap.Hosts[current.vpnIp] == primary {
 		n.hostMap.unlockedMakePrimary(current)
 	}
 	n.hostMap.Unlock()
-	n.hostMap.RLock()
 }
 
-// handleInvalidCertificates will destroy a tunnel if pki.disconnect_invalid is true and the certificate is no longer valid
-func (n *connectionManager) handleInvalidCertificate(now time.Time, hostinfo *HostInfo) bool {
+// isInvalidCertificate will check if we should destroy a tunnel if pki.disconnect_invalid is true and
+// the certificate is no longer valid
+func (n *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostInfo) bool {
 	if !n.intf.disconnectInvalid {
 		return false
 	}
@@ -286,10 +309,6 @@ func (n *connectionManager) handleInvalidCertificate(now time.Time, hostinfo *Ho
 		WithField("fingerprint", fingerprint).
 		Info("Remote certificate is no longer valid, tearing down the tunnel")
 
-	// Inform the remote and close the tunnel locally
-	n.intf.sendCloseTunnel(hostinfo)
-	n.intf.closeTunnel(hostinfo)
-	delete(n.pendingDeletion, hostinfo.localIndexId)
 	return true
 }
 
@@ -311,7 +330,7 @@ func (n *connectionManager) sendPunch(hostinfo *HostInfo) {
 	}
 }
 
-func (n *connectionManager) handleRehandshake(hostinfo *HostInfo) {
+func (n *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 	certState := n.intf.certState.Load()
 	if bytes.Equal(hostinfo.ConnectionState.certState.certificate.Signature, certState.certificate.Signature) {
 		return
