@@ -147,12 +147,12 @@ func (c *Control) GetUDPAddr() string {
 }
 
 func (c *Control) KillPendingTunnel(vpnIp net.IP) bool {
-	hostinfo, ok := c.f.handshakeManager.pendingHostMap.Hosts[iputil.Ip2VpnIp(vpnIp)]
-	if !ok {
+	hostinfo := c.f.handshakeManager.QueryVpnIp(iputil.Ip2VpnIp(vpnIp))
+	if hostinfo == nil {
 		return false
 	}
 
-	c.f.handshakeManager.pendingHostMap.DeleteHostInfo(hostinfo)
+	c.f.handshakeManager.DeleteHostInfo(hostinfo)
 	return true
 }
 

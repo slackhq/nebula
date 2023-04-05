@@ -47,8 +47,8 @@ func (d *dnsRecords) QueryCert(data string) string {
 		return ""
 	}
 	iip := iputil.Ip2VpnIp(ip)
-	hostinfo, err := d.hostMap.QueryVpnIp(iip)
-	if err != nil {
+	hostinfo := d.hostMap.QueryVpnIp(iip)
+	if hostinfo == nil {
 		return ""
 	}
 	q := hostinfo.GetCert()
