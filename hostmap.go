@@ -32,6 +32,7 @@ const RoamingSuppressSeconds = 2
 
 const (
 	Requested = iota
+	PeerRequested
 	Established
 )
 

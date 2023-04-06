@@ -183,20 +183,22 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 	case migrateRelays:
 		n.migrateRelayUsed(hostinfo, primary)
 	}
+
+	n.resetRelayTrafficCheck(hostinfo)
 }
 
-func (n *connectionManager) deleteRelayUsed(hostinfo *HostInfo) {
-	n.relayUsedLock.Lock()
-	defer n.relayUsedLock.Unlock()
-	// No need to migrate any relays, delete usage info now.
-	for _, idx := range hostinfo.relayState.CopyRelayForIdxs() {
-		delete(n.relayUsed, idx)
+func (n *connectionManager) resetRelayTrafficCheck(hostinfo *HostInfo) {
+	if hostinfo != nil {
+		n.relayUsedLock.Lock()
+		defer n.relayUsedLock.Unlock()
+		// No need to migrate any relays, delete usage info now.
+		for _, idx := range hostinfo.relayState.CopyRelayForIdxs() {
+			delete(n.relayUsed, idx)
+		}
 	}
 }
 
 func (n *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo) {
-	defer n.deleteRelayUsed(oldhostinfo)
-
 	relayFor := oldhostinfo.relayState.CopyAllRelayFor()
 
 	for _, r := range relayFor {
@@ -309,13 +311,9 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, p, nb, out []
 
 		if mainHostInfo {
 			n.tryRehandshake(hostinfo)
-			// No need to migrate any relays, delete usage info now.
-			n.deleteRelayUsed(hostinfo)
 		} else {
 			if n.shouldSwapPrimary(hostinfo, primary) {
 				decision = swapPrimary
-				// No need to migrate any relays, delete usage info now.
-				n.deleteRelayUsed(hostinfo)
 			} else {
 				// migrate the relays to the primary, if in use.
 				decision = migrateRelays

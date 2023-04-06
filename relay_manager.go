@@ -141,27 +141,29 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 		rm.l.WithField("relayTo", peerHostInfo.vpnIp).Error("peerRelay does not have Relay state for relayTo")
 		return
 	}
-	peerRelay.State = Established
-	resp := NebulaControl{
-		Type:                NebulaControl_CreateRelayResponse,
-		ResponderRelayIndex: peerRelay.LocalIndex,
-		InitiatorRelayIndex: peerRelay.RemoteIndex,
-		RelayFromIp:         uint32(peerHostInfo.vpnIp),
-		RelayToIp:           uint32(target),
-	}
-	msg, err := resp.Marshal()
-	if err != nil {
-		rm.l.
-			WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
-	} else {
-		f.SendMessageToHostInfo(header.Control, 0, peerHostInfo, msg, make([]byte, 12), make([]byte, mtu))
-		rm.l.WithFields(logrus.Fields{
-			"relayFrom":           iputil.VpnIp(resp.RelayFromIp),
-			"relayTo":             iputil.VpnIp(resp.RelayToIp),
-			"initiatorRelayIndex": resp.InitiatorRelayIndex,
-			"responderRelayIndex": resp.ResponderRelayIndex,
-			"vpnIp":               peerHostInfo.vpnIp}).
-			Info("send CreateRelayResponse")
+	if peerRelay.State == PeerRequested {
+		peerRelay.State = Established
+		resp := NebulaControl{
+			Type:                NebulaControl_CreateRelayResponse,
+			ResponderRelayIndex: peerRelay.LocalIndex,
+			InitiatorRelayIndex: peerRelay.RemoteIndex,
+			RelayFromIp:         uint32(peerHostInfo.vpnIp),
+			RelayToIp:           uint32(target),
+		}
+		msg, err := resp.Marshal()
+		if err != nil {
+			rm.l.
+				WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
+		} else {
+			f.SendMessageToHostInfo(header.Control, 0, peerHostInfo, msg, make([]byte, 12), make([]byte, mtu))
+			rm.l.WithFields(logrus.Fields{
+				"relayFrom":           iputil.VpnIp(resp.RelayFromIp),
+				"relayTo":             iputil.VpnIp(resp.RelayToIp),
+				"initiatorRelayIndex": resp.InitiatorRelayIndex,
+				"responderRelayIndex": resp.ResponderRelayIndex,
+				"vpnIp":               peerHostInfo.vpnIp}).
+				Info("send CreateRelayResponse")
+		}
 	}
 }
 
@@ -292,7 +294,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		relay, ok := h.relayState.QueryRelayForByIp(target)
 		if !ok {
 			// Add the relay
-			state := Requested
+			state := PeerRequested
 			if targetRelay != nil && targetRelay.State == Established {
 				state = Established
 			}
