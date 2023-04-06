@@ -88,4 +88,8 @@ func (mw *mockEncWriter) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte
 	return
 }
 
+func (mw *mockEncWriter) SendMessageToHostInfo(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte) {
+	return
+}
+
 func (mw *mockEncWriter) Handshake(vpnIP iputil.VpnIp) {}

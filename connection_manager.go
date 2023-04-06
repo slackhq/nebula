@@ -260,7 +260,7 @@ func (n *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo)
 		if err != nil {
 			n.l.WithError(err).Error("failed to marshal Control message to migrate relay")
 		} else {
-			n.intf.sendMessageToVpnIp(header.Control, 0, newhostinfo, msg, make([]byte, 12), make([]byte, mtu))
+			n.intf.SendMessageToHostInfo(header.Control, 0, newhostinfo, msg, make([]byte, 12), make([]byte, mtu))
 			n.l.WithFields(logrus.Fields{
 				"relayFrom":           iputil.VpnIp(req.RelayFromIp),
 				"relayTo":             iputil.VpnIp(req.RelayToIp),
@@ -370,7 +370,7 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, p, nb, out []
 		}
 
 		// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
-		n.intf.sendMessageToVpnIp(header.Test, header.TestRequest, hostinfo, p, nb, out)
+		n.intf.SendMessageToHostInfo(header.Test, header.TestRequest, hostinfo, p, nb, out)
 
 	} else {
 		hostinfo.logger(n.l).Debugf("Hostinfo sadness")

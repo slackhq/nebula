@@ -289,29 +289,13 @@ func (hm *HostMap) EmitStats(name string) {
 
 func (hm *HostMap) RemoveRelay(localIdx uint32) {
 	hm.Lock()
-	hiRelay, ok := hm.Relays[localIdx]
+	_, ok := hm.Relays[localIdx]
 	if !ok {
 		hm.Unlock()
 		return
 	}
 	delete(hm.Relays, localIdx)
 	hm.Unlock()
-	ip, ok := hiRelay.relayState.RemoveRelay(localIdx)
-	if !ok {
-		return
-	}
-	hiPeer, err := hm.QueryVpnIp(ip)
-	if err != nil {
-		return
-	}
-	var otherPeerIdx uint32
-	hiPeer.relayState.DeleteRelay(hiRelay.vpnIp)
-	relay, ok := hiPeer.relayState.GetRelayForByIp(hiRelay.vpnIp)
-	if ok {
-		otherPeerIdx = relay.LocalIndex
-	}
-	// I am a relaying host. I need to remove the other relay, too.
-	hm.RemoveRelay(otherPeerIdx)
 }
 
 func (hm *HostMap) GetIndexByVpnIp(vpnIp iputil.VpnIp) (uint32, error) {
@@ -405,29 +389,6 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) bool {
 	hm.unlockedDeleteHostInfo(hostinfo)
 	hm.Unlock()
 
-	// And tear down all the relays going through this host, if final
-	for _, localIdx := range hostinfo.relayState.CopyRelayForIdxs() {
-		hm.RemoveRelay(localIdx)
-	}
-
-	if final {
-		// And tear down the relays this deleted hostInfo was using to be reached
-		teardownRelayIdx := []uint32{}
-		for _, relayIp := range hostinfo.relayState.CopyRelayIps() {
-			relayHostInfo, err := hm.QueryVpnIp(relayIp)
-			if err != nil {
-				hm.l.WithError(err).WithField("relay", relayIp).Info("Missing relay host in hostmap")
-			} else {
-				if r, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp); ok {
-					teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
-				}
-			}
-		}
-		for _, localIdx := range teardownRelayIdx {
-			hm.RemoveRelay(localIdx)
-		}
-	}
-
 	return final
 }
 
@@ -517,6 +478,10 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 		hm.l.WithField("hostMap", m{"mapName": hm.name, "mapTotalSize": len(hm.Hosts),
 			"vpnIp": hostinfo.vpnIp, "indexNumber": hostinfo.localIndexId, "remoteIndexNumber": hostinfo.remoteIndexId}).
 			Debug("Hostmap hostInfo deleted")
+	}
+
+	for _, localRelayIdx := range hostinfo.relayState.CopyRelayForIdxs() {
+		delete(hm.Relays, localRelayIdx)
 	}
 }
 
