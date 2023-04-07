@@ -760,6 +760,12 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	return lhh.meta
 }
 
+func lhHandleRequest(lhh *LightHouseHandler, f *Interface) udp.LightHouseHandlerFunc {
+	return func(rAddr *udp.Addr, vpnIp iputil.VpnIp, p []byte) {
+		lhh.HandleRequest(rAddr, vpnIp, p, f)
+	}
+}
+
 func (lhh *LightHouseHandler) HandleRequest(rAddr *udp.Addr, vpnIp iputil.VpnIp, p []byte, w udp.EncWriter) {
 	n := lhh.resetMeta()
 	err := n.Unmarshal(p)

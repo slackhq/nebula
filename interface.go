@@ -238,7 +238,7 @@ func (f *Interface) listenOut(i int) {
 
 	lhh := f.lightHouse.NewRequestHandler()
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
-	li.ListenOut(f.readOutsidePackets, lhh.HandleRequest, conntrackCache, i)
+	li.ListenOut(f.readOutsidePackets, lhHandleRequest(lhh, f), conntrackCache, i)
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
