@@ -248,16 +248,13 @@ func (f *Interface) sendTo(t header.MessageType, st header.MessageSubType, ci *C
 // nb is a buffer used to store the nonce value, re-used for performance reasons.
 // out is a buffer used to store the result of the Encrypt operation
 // q indicates which writer to use to send the packet.
-func (f *Interface) SendVia(viaIfc interface{},
-	relayIfc interface{},
+func (f *Interface) SendVia(via *HostInfo,
+	relay *Relay,
 	ad,
 	nb,
 	out []byte,
 	nocopy bool,
 ) {
-	via := viaIfc.(*HostInfo)
-	relay := relayIfc.(*Relay)
-
 	if noiseutil.EncryptLockNeeded {
 		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
 		via.ConnectionState.writeLock.Lock()

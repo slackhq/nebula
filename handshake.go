@@ -5,7 +5,7 @@ import (
 	"github.com/slackhq/nebula/udp"
 )
 
-func HandleIncomingHandshake(f *Interface, addr *udp.Addr, via interface{}, packet []byte, h *header.H, hostinfo *HostInfo) {
+func HandleIncomingHandshake(f *Interface, addr *udp.Addr, via *ViaSender, packet []byte, h *header.H, hostinfo *HostInfo) {
 	// First remote allow list check before we know the vpnIp
 	if addr != nil {
 		if !f.lightHouse.GetRemoteAllowList().AllowUnknownVpnIp(addr.IP) {

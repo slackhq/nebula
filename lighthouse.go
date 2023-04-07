@@ -65,7 +65,7 @@ type LightHouse struct {
 	interval        atomic.Int64
 	updateCancel    context.CancelFunc
 	updateParentCtx context.Context
-	updateUdp       udp.EncWriter
+	updateUdp       EncWriter
 	nebulaPort      uint32 // 32 bits because protobuf does not have a uint16
 
 	advertiseAddrs atomic.Pointer[[]netIpAndPort]
@@ -382,7 +382,7 @@ func (lh *LightHouse) loadStaticMap(c *config.C, tunCidr *net.IPNet, staticList 
 	return nil
 }
 
-func (lh *LightHouse) Query(ip iputil.VpnIp, f udp.EncWriter) *RemoteList {
+func (lh *LightHouse) Query(ip iputil.VpnIp, f EncWriter) *RemoteList {
 	if !lh.IsLighthouseIP(ip) {
 		lh.QueryServer(ip, f)
 	}
@@ -396,7 +396,7 @@ func (lh *LightHouse) Query(ip iputil.VpnIp, f udp.EncWriter) *RemoteList {
 }
 
 // This is asynchronous so no reply should be expected
-func (lh *LightHouse) QueryServer(ip iputil.VpnIp, f udp.EncWriter) {
+func (lh *LightHouse) QueryServer(ip iputil.VpnIp, f EncWriter) {
 	if lh.amLighthouse {
 		return
 	}
@@ -629,7 +629,7 @@ func NewUDPAddrFromLH6(ipp *Ip6AndPort) *udp.Addr {
 	return udp.NewAddr(lhIp6ToIp(ipp), uint16(ipp.Port))
 }
 
-func (lh *LightHouse) LhUpdateWorker(ctx context.Context, f udp.EncWriter) {
+func (lh *LightHouse) LhUpdateWorker(ctx context.Context, f EncWriter) {
 	lh.updateParentCtx = ctx
 	lh.updateUdp = f
 
@@ -655,7 +655,7 @@ func (lh *LightHouse) LhUpdateWorker(ctx context.Context, f udp.EncWriter) {
 	}
 }
 
-func (lh *LightHouse) SendUpdate(f udp.EncWriter) {
+func (lh *LightHouse) SendUpdate(f EncWriter) {
 	var v4 []*Ip4AndPort
 	var v6 []*Ip6AndPort
 
@@ -760,7 +760,13 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	return lhh.meta
 }
 
-func (lhh *LightHouseHandler) HandleRequest(rAddr *udp.Addr, vpnIp iputil.VpnIp, p []byte, w udp.EncWriter) {
+func lhHandleRequest(lhh *LightHouseHandler, f *Interface) udp.LightHouseHandlerFunc {
+	return func(rAddr *udp.Addr, vpnIp iputil.VpnIp, p []byte) {
+		lhh.HandleRequest(rAddr, vpnIp, p, f)
+	}
+}
+
+func (lhh *LightHouseHandler) HandleRequest(rAddr *udp.Addr, vpnIp iputil.VpnIp, p []byte, w EncWriter) {
 	n := lhh.resetMeta()
 	err := n.Unmarshal(p)
 	if err != nil {
@@ -795,7 +801,7 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udp.Addr, vpnIp iputil.VpnIp,
 	}
 }
 
-func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp, addr *udp.Addr, w udp.EncWriter) {
+func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp, addr *udp.Addr, w EncWriter) {
 	// Exit if we don't answer queries
 	if !lhh.lh.amLighthouse {
 		if lhh.l.Level >= logrus.DebugLevel {
@@ -928,7 +934,7 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 	am.Unlock()
 }
 
-func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp iputil.VpnIp, w udp.EncWriter) {
+func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp iputil.VpnIp, w EncWriter) {
 	if !lhh.lh.IsLighthouseIP(vpnIp) {
 		return
 	}
