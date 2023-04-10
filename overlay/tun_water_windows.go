@@ -80,7 +80,7 @@ func (t *waterTun) Activate() error {
 	}
 
 	for _, r := range t.Routes {
-		if r.Via == nil {
+		if r.Via == nil || !r.Install {
 			// We don't allow route MTUs so only install routes with a via
 			continue
 		}

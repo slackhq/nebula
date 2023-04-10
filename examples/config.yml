@@ -204,21 +204,24 @@ tun:
   tx_queue: 500
   # Default MTU for every packet, safe setting is (and the default) 1300 for internet based traffic
   mtu: 1300
+
   # Route based MTU overrides, you have known vpn ip paths that can support larger MTUs you can increase/decrease them here
   routes:
     #- mtu: 8800
     #  route: 10.0.0.0/16
+
   # Unsafe routes allows you to route traffic over nebula to non-nebula nodes
   # Unsafe routes should be avoided unless you have hosts/services that cannot run nebula
   # NOTE: The nebula certificate of the "via" node *MUST* have the "route" defined as a subnet in its certificate
-  # `mtu` will default to tun mtu if this option is not specified
-  # `metric` will default to 0 if this option is not specified
+  # `mtu`: will default to tun mtu if this option is not specified
+  # `metric`: will default to 0 if this option is not specified
+  # `install`: will default to true, controls whether this route is installed in the systems routing table.
   unsafe_routes:
     #- route: 172.16.1.0/24
     #  via: 192.168.100.99
     #  mtu: 1300
     #  metric: 100
-
+    #  install: true
 
 # TODO
 # Configure logging level

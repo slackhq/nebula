@@ -92,6 +92,8 @@ func Test_parseRoutes(t *testing.T) {
 
 	tested := 0
 	for _, r := range routes {
+		assert.True(t, r.Install)
+
 		if r.MTU == 8000 {
 			assert.Equal(t, "10.0.0.1/32", r.Cidr.String())
 			tested++
@@ -205,35 +207,45 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.mtu in tun.unsafe_routes is below 500: 499")
 
+	// bad install
+	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "9000", "route": "1.0.0.0/29", "install": "nope"}}}
+	routes, err = parseUnsafeRoutes(c, n)
+	assert.Nil(t, routes)
+	assert.EqualError(t, err, "entry 1.install in tun.unsafe_routes is not a boolean: strconv.ParseBool: parsing \"nope\": invalid syntax")
+
 	// happy case
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{
-		map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "9000", "route": "1.0.0.0/29"},
-		map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "8000", "route": "1.0.0.1/32"},
+		map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "9000", "route": "1.0.0.0/29", "install": "t"},
+		map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "8000", "route": "1.0.0.1/32", "install": 0},
+		map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "1500", "metric": 1234, "route": "1.0.0.2/32", "install": 1},
 		map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "1500", "metric": 1234, "route": "1.0.0.2/32"},
 	}}
 	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, err)
-	assert.Len(t, routes, 3)
+	assert.Len(t, routes, 4)
 
 	tested := 0
 	for _, r := range routes {
 		if r.MTU == 8000 {
 			assert.Equal(t, "1.0.0.1/32", r.Cidr.String())
+			assert.False(t, r.Install)
 			tested++
 		} else if r.MTU == 9000 {
 			assert.Equal(t, 9000, r.MTU)
 			assert.Equal(t, "1.0.0.0/29", r.Cidr.String())
+			assert.True(t, r.Install)
 			tested++
 		} else {
 			assert.Equal(t, 1500, r.MTU)
 			assert.Equal(t, 1234, r.Metric)
 			assert.Equal(t, "1.0.0.2/32", r.Cidr.String())
+			assert.True(t, r.Install)
 			tested++
 		}
 	}
 
-	if tested != 3 {
-		t.Fatal("Did not see both unsafe_routes")
+	if tested != 4 {
+		t.Fatal("Did not see all unsafe_routes")
 	}
 }
 
