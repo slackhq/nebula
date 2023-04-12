@@ -8,6 +8,20 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestCIDRTree_List(t *testing.T) {
+	tree := NewTree4()
+	tree.AddCIDR(Parse("1.0.0.0/16"), "1")
+	tree.AddCIDR(Parse("1.0.0.0/8"), "2")
+	tree.AddCIDR(Parse("1.0.0.0/16"), "3")
+	tree.AddCIDR(Parse("1.0.0.0/16"), "4")
+	list := tree.List()
+	assert.Len(t, list, 2)
+	assert.Equal(t, "1.0.0.0/8", list[0].CIDR.String())
+	assert.Equal(t, "2", *list[0].Value)
+	assert.Equal(t, "1.0.0.0/16", list[1].CIDR.String())
+	assert.Equal(t, "4", *list[1].Value)
+}
+
 func TestCIDRTree_Contains(t *testing.T) {
 	tree := NewTree4()
 	tree.AddCIDR(Parse("1.0.0.0/8"), "1")

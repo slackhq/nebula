@@ -60,6 +60,15 @@ func (tree *Tree4) AddCIDR(cidr *net.IPNet, val interface{}) {
 
 	// We already have this range so update the value
 	if next != nil {
+		addCIDR := cidr.String()
+		for i, v := range tree.list {
+			if addCIDR == v.CIDR.String() {
+				tree.list = append(tree.list[:i], tree.list[i+1:]...)
+				break
+			}
+		}
+
+		tree.list = append(tree.list, entry{CIDR: cidr, Value: &val})
 		node.value = val
 		return
 	}
