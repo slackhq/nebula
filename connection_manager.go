@@ -340,10 +340,6 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, p, nb, out []
 		return deleteTunnel, hostinfo, nil
 	}
 
-	hostinfo.logger(n.l).
-		WithField("tunnelCheck", m{"state": "testing", "method": "active"}).
-		Debug("Tunnel status")
-
 	if hostinfo != nil && hostinfo.ConnectionState != nil && mainHostInfo {
 		if !outTraffic {
 			// If we aren't sending or receiving traffic then its an unused tunnel and we don't to test the tunnel.
@@ -366,6 +362,10 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, p, nb, out []
 			n.trafficTimer.Add(hostinfo.localIndexId, n.checkInterval)
 			return doNothing, nil, nil
 		}
+
+		hostinfo.logger(n.l).
+			WithField("tunnelCheck", m{"state": "testing", "method": "active"}).
+			Debug("Tunnel status")
 
 		// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
 		n.intf.SendMessageToHostInfo(header.Test, header.TestRequest, hostinfo, p, nb, out)
