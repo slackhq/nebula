@@ -329,8 +329,8 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 		testHostInfo := existingHostInfo
 		for testHostInfo != nil {
 			// Is it just a delayed handshake packet?
-			if bytes.Equal(hostinfo.HandshakePacket[handshakePacket], existingHostInfo.HandshakePacket[handshakePacket]) {
-				return existingHostInfo, ErrAlreadySeen
+			if bytes.Equal(hostinfo.HandshakePacket[handshakePacket], testHostInfo.HandshakePacket[handshakePacket]) {
+				return testHostInfo, ErrAlreadySeen
 			}
 
 			testHostInfo = testHostInfo.next

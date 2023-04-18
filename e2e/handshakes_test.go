@@ -802,6 +802,67 @@ func TestRehandshakingLoser(t *testing.T) {
 	theirControl.Stop()
 }
 
+func TestRaceRegression(t *testing.T) {
+	// This test forces stage 1, stage 2, stage 1 to be received by me from them
+	// We had a bug where we were not finding the duplicate handshake and responding to the final stage 1 which
+	// caused a cross-linked hostinfo
+	ca, _, caKey, _ := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
+	myControl, myVpnIpNet, myUdpAddr, _ := newSimpleServer(ca, caKey, "me", net.IP{10, 0, 0, 1}, nil)
+	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServer(ca, caKey, "them", net.IP{10, 0, 0, 2}, nil)
+
+	// Put their info in our lighthouse
+	myControl.InjectLightHouseAddr(theirVpnIpNet.IP, theirUdpAddr)
+	theirControl.InjectLightHouseAddr(myVpnIpNet.IP, myUdpAddr)
+
+	// Start the servers
+	myControl.Start()
+	theirControl.Start()
+
+	//them rx stage:1 initiatorIndex=642843150 responderIndex=0
+	//me rx   stage:1 initiatorIndex=120607833 responderIndex=0
+	//them rx stage:1 initiatorIndex=642843150 responderIndex=0
+	//me rx   stage:2 initiatorIndex=642843150 responderIndex=3701775874
+	//me rx   stage:1 initiatorIndex=120607833 responderIndex=0
+	//them rx stage:2 initiatorIndex=120607833 responderIndex=4209862089
+
+	t.Log("Start both handshakes")
+	myControl.InjectTunUDPPacket(theirVpnIpNet.IP, 80, 80, []byte("Hi from me"))
+	theirControl.InjectTunUDPPacket(myVpnIpNet.IP, 80, 80, []byte("Hi from them"))
+
+	t.Log("Get both stage 1")
+	myStage1ForThem := myControl.GetFromUDP(true)
+	theirStage1ForMe := theirControl.GetFromUDP(true)
+
+	t.Log("Inject them in a special way")
+	theirControl.InjectUDPPacket(myStage1ForThem)
+	myControl.InjectUDPPacket(theirStage1ForMe)
+	theirControl.InjectUDPPacket(myStage1ForThem)
+
+	//TODO: ensure stage 2
+	t.Log("Get both stage 2")
+	myStage2ForThem := myControl.GetFromUDP(true)
+	theirStage2ForMe := theirControl.GetFromUDP(true)
+
+	t.Log("Inject them in a special way again")
+	myControl.InjectUDPPacket(theirStage2ForMe)
+	myControl.InjectUDPPacket(theirStage1ForMe)
+	theirControl.InjectUDPPacket(myStage2ForThem)
+
+	r := router.NewR(t, myControl, theirControl)
+	defer r.RenderFlow()
+
+	t.Log("Flush the packets")
+	r.RouteForAllUntilTxTun(myControl)
+	r.RouteForAllUntilTxTun(theirControl)
+	r.RenderHostmaps("Starting hostmaps", myControl, theirControl)
+
+	t.Log("Make sure the tunnel still works")
+	assertTunnel(t, myVpnIpNet.IP, theirVpnIpNet.IP, myControl, theirControl, r)
+
+	myControl.Stop()
+	theirControl.Stop()
+}
+
 //TODO: test
 // Race winner renews and handshakes
 // Race loser renews and handshakes
