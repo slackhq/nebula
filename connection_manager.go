@@ -130,8 +130,15 @@ func (n *connectionManager) getAndResetTrafficCheck(localIndex uint32) (bool, bo
 }
 
 func (n *connectionManager) AddTrafficWatch(localIndex uint32) {
-	n.Out(localIndex)
+	// Use a write lock directly because it should be incredibly rare that we are ever already tracking this index
+	n.outLock.Lock()
+	if _, ok := n.out[localIndex]; ok {
+		n.inLock.Unlock()
+		return
+	}
+	n.out[localIndex] = struct{}{}
 	n.trafficTimer.Add(localIndex, n.checkInterval)
+	n.outLock.Unlock()
 }
 
 func (n *connectionManager) Start(ctx context.Context) {
@@ -363,15 +370,19 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, p, nb, out []
 			return doNothing, nil, nil
 		}
 
-		hostinfo.logger(n.l).
-			WithField("tunnelCheck", m{"state": "testing", "method": "active"}).
-			Debug("Tunnel status")
+		if n.l.Level >= logrus.DebugLevel {
+			hostinfo.logger(n.l).
+				WithField("tunnelCheck", m{"state": "testing", "method": "active"}).
+				Debug("Tunnel status")
+		}
 
 		// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
 		n.intf.SendMessageToHostInfo(header.Test, header.TestRequest, hostinfo, p, nb, out)
 
 	} else {
-		hostinfo.logger(n.l).Debugf("Hostinfo sadness")
+		if n.l.Level >= logrus.DebugLevel {
+			hostinfo.logger(n.l).Debugf("Hostinfo sadness")
+		}
 	}
 
 	n.pendingDeletion[hostinfo.localIndexId] = struct{}{}
