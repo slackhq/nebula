@@ -42,6 +42,13 @@ lighthouse:
   hosts:
     - "192.168.100.1"
 
+  # Toggle sending test packets to lighthouse hosts to assert the tunnels are still viable.
+  # Disabling sending test packets to lighthouses can reduce bookkeeping traffic
+  # and load on lighthouses with many tunnels.
+  # Setting to false may lead to connectivity issues if a lighthouse host is behind a NAT or firewall that
+  # tracks outbound packets from the lighthouse to the clients.
+  #send_test_packets: true
+
   # remote_allow_list allows you to control ip ranges that this node will
   # consider when handshaking to another node. By default, any remote IPs are
   # allowed. You can provide CIDRs here with `true` to allow and `false` to

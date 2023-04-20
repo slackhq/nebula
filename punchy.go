@@ -14,6 +14,7 @@ type Punchy struct {
 	delay           atomic.Int64
 	respondDelay    atomic.Int64
 	punchEverything atomic.Bool
+	testLighthouses atomic.Bool
 	l               *logrus.Logger
 }
 
@@ -87,6 +88,13 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 			p.l.Infof("punchy.respond_delay changed to %s", p.GetRespondDelay())
 		}
 	}
+
+	if initial || c.HasChanged("lighthouse.send_test_packets") {
+		p.testLighthouses.Store(c.GetBool("lighthouse.send_test_packets", true))
+		if !initial {
+			p.l.Infof("lighthouse.send_test_packets changed to %v", p.GetTestLighthouses())
+		}
+	}
 }
 
 func (p *Punchy) GetPunch() bool {
@@ -107,4 +115,8 @@ func (p *Punchy) GetRespondDelay() time.Duration {
 
 func (p *Punchy) GetTargetEverything() bool {
 	return p.punchEverything.Load()
+}
+
+func (p *Punchy) GetTestLighthouses() bool {
+	return p.testLighthouses.Load()
 }
