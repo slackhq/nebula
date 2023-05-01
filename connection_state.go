@@ -41,7 +41,7 @@ func (f *Interface) newConnectionState(l *logrus.Logger, initiator bool, pattern
 		l.Errorf("invalid curve: %s", curCertState.certificate.Details.Curve)
 		return nil
 	}
-	cs := noise.NewCipherSuite(dhFunc, noise.CipherAESGCM, noise.HashSHA256)
+	cs := noise.NewCipherSuite(dhFunc, noiseutil.CipherAESGCM, noise.HashSHA256)
 	if f.cipher == "chachapoly" {
 		cs = noise.NewCipherSuite(dhFunc, noise.CipherChaChaPoly, noise.HashSHA256)
 	}

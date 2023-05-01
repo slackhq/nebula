@@ -98,6 +98,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	assert.NotContains(t, nc.in, hostinfo.localIndexId)
 
 	// Do another traffic check tick, this host should be pending deletion now
+	nc.Out(hostinfo.localIndexId)
 	nc.doTrafficCheck(hostinfo.localIndexId, p, nb, out, time.Now())
 	assert.Contains(t, nc.pendingDeletion, hostinfo.localIndexId)
 	assert.NotContains(t, nc.out, hostinfo.localIndexId)
@@ -175,6 +176,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	assert.NotContains(t, nc.in, hostinfo.localIndexId)
 
 	// Do another traffic check tick, this host should be pending deletion now
+	nc.Out(hostinfo.localIndexId)
 	nc.doTrafficCheck(hostinfo.localIndexId, p, nb, out, time.Now())
 	assert.Contains(t, nc.pendingDeletion, hostinfo.localIndexId)
 	assert.NotContains(t, nc.out, hostinfo.localIndexId)

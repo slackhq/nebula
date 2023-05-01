@@ -183,12 +183,6 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 		return
 	}
 
-	if n.intf.lightHouse.IsLighthouseIP(hostinfo.vpnIp) {
-		// We are sending traffic to the lighthouse, let recv_error sort out any issues instead of testing the tunnel
-		n.trafficTimer.Add(hostinfo.localIndexId, n.checkInterval)
-		return
-	}
-
 	if _, ok := n.pendingDeletion[hostinfo.localIndexId]; ok {
 		// We have already sent a test packet and nothing was returned, this hostinfo is dead
 		hostinfo.logger(n.l).
@@ -205,10 +199,26 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 		Debug("Tunnel status")
 
 	if hostinfo != nil && hostinfo.ConnectionState != nil && mainHostInfo {
-		if n.punchy.GetTargetEverything() {
-			// Maybe the remote is sending us packets but our NAT is blocking it and since we are configured to punch to all
-			// known remotes, go ahead and do that AND send a test packet
+		if !outTraffic {
+			// If we aren't sending or receiving traffic then its an unused tunnel and we don't to test the tunnel.
+			// Just maintain NAT state if configured to do so.
 			n.sendPunch(hostinfo)
+			n.trafficTimer.Add(hostinfo.localIndexId, n.checkInterval)
+			return
+
+		}
+
+		if n.punchy.GetTargetEverything() {
+			// This is similar to the old punchy behavior with a slight optimization.
+			// We aren't receiving traffic but we are sending it, punch on all known
+			// ips in case we need to re-prime NAT state
+			n.sendPunch(hostinfo)
+		}
+
+		if n.intf.lightHouse.IsLighthouseIP(hostinfo.vpnIp) {
+			// We are sending traffic to the lighthouse, let recv_error sort out any issues instead of testing the tunnel
+			n.trafficTimer.Add(hostinfo.localIndexId, n.checkInterval)
+			return
 		}
 
 		// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
