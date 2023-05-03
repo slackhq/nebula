@@ -372,7 +372,7 @@ type testEncWriter struct {
 	metaFilter *NebulaMeta_MessageType
 }
 
-func (tw *testEncWriter) SendVia(via interface{}, relay interface{}, ad, nb, out []byte, nocopy bool) {
+func (tw *testEncWriter) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, nocopy bool) {
 }
 func (tw *testEncWriter) Handshake(vpnIp iputil.VpnIp) {
 }

@@ -21,7 +21,23 @@ const (
 	minFwPacketLen = 4
 )
 
-func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf udp.LightHouseHandlerFunc, nb []byte, q int, localCache firewall.ConntrackCache) {
+func readOutsidePackets(f *Interface) udp.EncReader {
+	return func(
+		addr *udp.Addr,
+		out []byte,
+		packet []byte,
+		header *header.H,
+		fwPacket *firewall.Packet,
+		lhh udp.LightHouseHandlerFunc,
+		nb []byte,
+		q int,
+		localCache firewall.ConntrackCache,
+	) {
+		f.readOutsidePackets(addr, nil, out, packet, header, fwPacket, lhh, nb, q, localCache)
+	}
+}
+
+func (f *Interface) readOutsidePackets(addr *udp.Addr, via *ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf udp.LightHouseHandlerFunc, nb []byte, q int, localCache firewall.ConntrackCache) {
 	err := h.Parse(packet)
 	if err != nil {
 		// TODO: best if we return this and let caller log
@@ -149,7 +165,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			return
 		}
 
-		lhf(addr, hostinfo.vpnIp, d, f)
+		lhf(addr, hostinfo.vpnIp, d)
 
 		// Fallthrough to the bottom to record incoming traffic
 

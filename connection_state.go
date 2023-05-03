@@ -9,6 +9,7 @@ import (
 	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/noiseutil"
 )
 
 const ReplayWindow = 1024
@@ -28,7 +29,7 @@ type ConnectionState struct {
 }
 
 func (f *Interface) newConnectionState(l *logrus.Logger, initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {
-	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashSHA256)
+	cs := noise.NewCipherSuite(noise.DH25519, noiseutil.CipherAESGCM, noise.HashSHA256)
 	if f.cipher == "chachapoly" {
 		cs = noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
 	}

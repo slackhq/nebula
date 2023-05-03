@@ -56,10 +56,6 @@ type HandshakeManager struct {
 	multiPort MultiPortConfig
 	udpRaw    *udp.RawConn
 
-	// vpnIps is another map similar to the pending hostmap but tracks entries in the wheel instead
-	// this is to avoid situations where the same vpn ip enters the wheel and causes rapid fire handshaking
-	vpnIps map[iputil.VpnIp]struct{}
-
 	// can be used to trigger outbound handshake for the given vpnIp
 	trigger chan iputil.VpnIp
 }
@@ -73,7 +69,6 @@ func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges [
 		config:                 config,
 		trigger:                make(chan iputil.VpnIp, config.triggerBuffer),
 		OutboundHandshakeTimer: NewLockingTimerWheel[iputil.VpnIp](config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
-		vpnIps:                 map[iputil.VpnIp]struct{}{},
 		messageMetrics:         config.messageMetrics,
 		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
 		metricTimedOut:         metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),
@@ -81,7 +76,7 @@ func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges [
 	}
 }
 
-func (c *HandshakeManager) Run(ctx context.Context, f udp.EncWriter) {
+func (c *HandshakeManager) Run(ctx context.Context, f EncWriter) {
 	clockSource := time.NewTicker(c.config.tryInterval)
 	defer clockSource.Stop()
 
@@ -97,7 +92,7 @@ func (c *HandshakeManager) Run(ctx context.Context, f udp.EncWriter) {
 	}
 }
 
-func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f udp.EncWriter) {
+func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWriter) {
 	c.OutboundHandshakeTimer.Advance(now)
 	for {
 		vpnIp, has := c.OutboundHandshakeTimer.Purge()
@@ -108,10 +103,9 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f udp.E
 	}
 }
 
-func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, lighthouseTriggered bool) {
+func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f EncWriter, lighthouseTriggered bool) {
 	hostinfo, err := c.pendingHostMap.QueryVpnIp(vpnIp)
 	if err != nil {
-		delete(c.vpnIps, vpnIp)
 		return
 	}
 	hostinfo.Lock()
@@ -324,10 +318,7 @@ func (c *HandshakeManager) AddVpnIp(vpnIp iputil.VpnIp, init func(*HostInfo)) *H
 	hostinfo, created := c.pendingHostMap.AddVpnIp(vpnIp, init)
 
 	if created {
-		if _, ok := c.vpnIps[vpnIp]; !ok {
-			c.OutboundHandshakeTimer.Add(vpnIp, c.config.tryInterval)
-		}
-		c.vpnIps[vpnIp] = struct{}{}
+		c.OutboundHandshakeTimer.Add(vpnIp, c.config.tryInterval)
 		c.metricInitiated.Inc(1)
 	}
 

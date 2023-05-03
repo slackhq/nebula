@@ -16,6 +16,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/udp"
@@ -99,6 +100,18 @@ type MultiPortConfig struct {
 	TxPorts          int
 	TxHandshake      bool
 	TxHandshakeDelay int
+}
+
+type EncWriter interface {
+	SendVia(via *HostInfo,
+		relay *Relay,
+		ad,
+		nb,
+		out []byte,
+		nocopy bool,
+	)
+	SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, nb, out []byte)
+	Handshake(vpnIp iputil.VpnIp)
 }
 
 type sendRecvErrorConfig uint8
@@ -252,7 +265,7 @@ func (f *Interface) listenOut(i int) {
 
 	lhh := f.lightHouse.NewRequestHandler()
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
-	li.ListenOut(f.readOutsidePackets, lhh.HandleRequest, conntrackCache, i)
+	li.ListenOut(readOutsidePackets(f), lhHandleRequest(lhh, f), conntrackCache, i)
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
@@ -396,6 +409,8 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 
 	var rawStats func()
 
+	certExpirationGauge := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -410,6 +425,7 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 				}
 				rawStats()
 			}
+			certExpirationGauge.Update(int64(f.certState.Load().certificate.Details.NotAfter.Sub(time.Now()) / time.Second))
 		}
 	}
 }

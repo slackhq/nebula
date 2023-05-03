@@ -279,6 +279,10 @@ func (t tun) Activate() error {
 
 	// Path routes
 	for _, r := range t.Routes {
+		if !r.Install {
+			continue
+		}
+
 		nr := netlink.Route{
 			LinkIndex: link.Attrs().Index,
 			Dst:       r.Cidr,
