@@ -77,6 +77,8 @@ release-linux: $(ALL_LINUX:%=build/nebula-%.tar.gz)
 
 release-freebsd: build/nebula-freebsd-amd64.tar.gz
 
+release-boringcrypto: build/nebula-linux-$(shell go env GOARCH)-boringcrypto.tar.gz
+
 BUILD_ARGS = -trimpath
 
 bin-windows: build/windows-amd64/nebula.exe build/windows-amd64/nebula-cert.exe
@@ -89,6 +91,9 @@ bin-darwin: build/darwin-amd64/nebula build/darwin-amd64/nebula-cert
 	mv $? .
 
 bin-freebsd: build/freebsd-amd64/nebula build/freebsd-amd64/nebula-cert
+	mv $? .
+
+bin-boringcrypto: build/linux-$(shell go env GOARCH)-boringcrypto/nebula build/linux-$(shell go env GOARCH)-boringcrypto/nebula-cert
 	mv $? .
 
 bin:
@@ -104,6 +109,10 @@ build/linux-mips-%: GOENV += GOMIPS=$(word 3, $(subst -, ,$*))
 
 # Build an extra small binary for mips-softfloat
 build/linux-mips-softfloat/%: LDFLAGS += -s -w
+
+# boringcrypto
+build/linux-amd64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
+build/linux-arm64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
 
 build/%/nebula: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \

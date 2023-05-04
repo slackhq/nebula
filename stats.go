@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"strconv"
 	"time"
 
 	graphite "github.com/cyberdelia/go-metrics-graphite"
@@ -105,8 +106,9 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildV
 		Name:      "info",
 		Help:      "Version information for the Nebula binary",
 		ConstLabels: prometheus.Labels{
-			"version":   buildVersion,
-			"goversion": runtime.Version(),
+			"version":      buildVersion,
+			"goversion":    runtime.Version(),
+			"boringcrypto": strconv.FormatBool(boringEnabled()),
 		},
 	})
 	pr.MustRegister(g)

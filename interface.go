@@ -204,6 +204,7 @@ func (f *Interface) activate() {
 
 	f.l.WithField("interface", f.inside.Name()).WithField("network", f.inside.Cidr().String()).
 		WithField("build", f.version).WithField("udpAddr", addr).
+		WithField("boringcrypto", boringEnabled()).
 		Info("Nebula interface is active")
 
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
