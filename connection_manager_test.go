@@ -279,13 +279,13 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	// Check if to disconnect with invalid certificate.
 	// Should be alive.
 	nextTick := now.Add(45 * time.Second)
-	destroyed := nc.handleInvalidCertificate(nextTick, hostinfo)
-	assert.False(t, destroyed)
+	invalid := nc.isInvalidCertificate(nextTick, hostinfo)
+	assert.False(t, invalid)
 
 	// Move ahead 61s.
 	// Check if to disconnect with invalid certificate.
 	// Should be disconnected.
 	nextTick = now.Add(61 * time.Second)
-	destroyed = nc.handleInvalidCertificate(nextTick, hostinfo)
-	assert.True(t, destroyed)
+	invalid = nc.isInvalidCertificate(nextTick, hostinfo)
+	assert.True(t, invalid)
 }

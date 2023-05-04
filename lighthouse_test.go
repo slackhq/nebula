@@ -377,6 +377,23 @@ func (tw *testEncWriter) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte
 func (tw *testEncWriter) Handshake(vpnIp iputil.VpnIp) {
 }
 
+func (tw *testEncWriter) SendMessageToHostInfo(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, _, _ []byte) {
+	msg := &NebulaMeta{}
+	err := msg.Unmarshal(p)
+	if tw.metaFilter == nil || msg.Type == *tw.metaFilter {
+		tw.lastReply = testLhReply{
+			nebType:    t,
+			nebSubType: st,
+			vpnIp:      hostinfo.vpnIp,
+			msg:        msg,
+		}
+	}
+
+	if err != nil {
+		panic(err)
+	}
+}
+
 func (tw *testEncWriter) SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, _, _ []byte) {
 	msg := &NebulaMeta{}
 	err := msg.Unmarshal(p)

@@ -231,7 +231,8 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f EncWriter, light
 							WithError(err).
 							Error("Failed to marshal Control message to create relay")
 					} else {
-						f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
+						// This must send over the hostinfo, not over hm.Hosts[ip]
+						f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, make([]byte, 12), make([]byte, mtu))
 						c.l.WithFields(logrus.Fields{
 							"relayFrom":           c.lightHouse.myVpnIp,
 							"relayTo":             vpnIp,
@@ -266,7 +267,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f EncWriter, light
 							WithError(err).
 							Error("Failed to marshal Control message to create relay")
 					} else {
-						f.SendMessageToVpnIp(header.Control, 0, *relay, msg, make([]byte, 12), make([]byte, mtu))
+						f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, make([]byte, 12), make([]byte, mtu))
 						c.l.WithFields(logrus.Fields{
 							"relayFrom":           c.lightHouse.myVpnIp,
 							"relayTo":             vpnIp,
@@ -328,8 +329,8 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 		testHostInfo := existingHostInfo
 		for testHostInfo != nil {
 			// Is it just a delayed handshake packet?
-			if bytes.Equal(hostinfo.HandshakePacket[handshakePacket], existingHostInfo.HandshakePacket[handshakePacket]) {
-				return existingHostInfo, ErrAlreadySeen
+			if bytes.Equal(hostinfo.HandshakePacket[handshakePacket], testHostInfo.HandshakePacket[handshakePacket]) {
+				return testHostInfo, ErrAlreadySeen
 			}
 
 			testHostInfo = testHostInfo.next

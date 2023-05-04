@@ -215,7 +215,7 @@ func (r *R) renderFlow() {
 			continue
 		}
 		participants[addr] = struct{}{}
-		sanAddr := strings.Replace(addr, ":", "#58;", 1)
+		sanAddr := strings.Replace(addr, ":", "-", 1)
 		participantsVals = append(participantsVals, sanAddr)
 		fmt.Fprintf(
 			f, "    participant %s as Nebula: %s<br/>UDP: %s\n",
@@ -252,9 +252,9 @@ func (r *R) renderFlow() {
 
 			fmt.Fprintf(f,
 				"    %s%s%s: %s(%s), index %v, counter: %v\n",
-				strings.Replace(p.from.GetUDPAddr(), ":", "#58;", 1),
+				strings.Replace(p.from.GetUDPAddr(), ":", "-", 1),
 				line,
-				strings.Replace(p.to.GetUDPAddr(), ":", "#58;", 1),
+				strings.Replace(p.to.GetUDPAddr(), ":", "-", 1),
 				h.TypeName(), h.SubTypeName(), h.RemoteIndex, h.MessageCounter,
 			)
 		}
@@ -758,8 +758,8 @@ func (r *R) formatUdpPacket(p *packet) string {
 	data := packet.ApplicationLayer()
 	return fmt.Sprintf(
 		"    %s-->>%s: src port: %v<br/>dest port: %v<br/>data: \"%v\"\n",
-		strings.Replace(from, ":", "#58;", 1),
-		strings.Replace(p.to.GetUDPAddr(), ":", "#58;", 1),
+		strings.Replace(from, ":", "-", 1),
+		strings.Replace(p.to.GetUDPAddr(), ":", "-", 1),
 		udp.SrcPort,
 		udp.DstPort,
 		string(data.Payload()),

@@ -75,7 +75,7 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 	}
 
 	if initial || c.HasChanged("punchy.target_all_remotes") {
-		p.punchEverything.Store(c.GetBool("punchy.target_all_remotes", true))
+		p.punchEverything.Store(c.GetBool("punchy.target_all_remotes", false))
 		if !initial {
 			p.l.WithField("target_all_remotes", p.GetTargetEverything()).Info("punchy.target_all_remotes changed")
 		}
