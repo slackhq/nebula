@@ -178,7 +178,10 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 
 	switch decision {
 	case deleteTunnel:
-		n.hostMap.DeleteHostInfo(hostinfo)
+		if n.hostMap.DeleteHostInfo(hostinfo) {
+			// Only clearing the lighthouse cache if this is the last hostinfo for this vpn ip in the hostmap
+			n.intf.lightHouse.DeleteVpnIp(hostinfo.vpnIp)
+		}
 
 	case closeTunnel:
 		n.intf.sendCloseTunnel(hostinfo)
@@ -391,7 +394,6 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, p, nb, out []
 }
 
 func (n *connectionManager) shouldSwapPrimary(current, primary *HostInfo) bool {
-
 	// The primary tunnel is the most recent handshake to complete locally and should work entirely fine.
 	// If we are here then we have multiple tunnels for a host pair and neither side believes the same tunnel is primary.
 	// Let's sort this out.
