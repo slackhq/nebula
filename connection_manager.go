@@ -8,6 +8,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
@@ -419,12 +420,9 @@ func (n *connectionManager) swapPrimary(current, primary *HostInfo) {
 }
 
 // isInvalidCertificate will check if we should destroy a tunnel if pki.disconnect_invalid is true and
-// the certificate is no longer valid
+// the certificate is no longer valid. Block listed certificates will skip the pki.disconnect_invalid
+// check and return true.
 func (n *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostInfo) bool {
-	if !n.intf.disconnectInvalid {
-		return false
-	}
-
 	remoteCert := hostinfo.GetCert()
 	if remoteCert == nil {
 		return false
@@ -432,6 +430,11 @@ func (n *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostIn
 
 	valid, err := remoteCert.Verify(now, n.intf.caPool)
 	if valid {
+		return false
+	}
+
+	if !n.intf.disconnectInvalid && err != cert.ErrBlockListed {
+		// Block listed certificates should always be disconnected
 		return false
 	}
 

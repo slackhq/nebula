@@ -393,7 +393,7 @@ func (nc *NebulaCertificate) Expired(t time.Time) bool {
 // Verify will ensure a certificate is good in all respects (expiry, group membership, signature, cert blocklist, etc)
 func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error) {
 	if ncp.IsBlocklisted(nc) {
-		return false, fmt.Errorf("certificate has been blocked")
+		return false, ErrBlockListed
 	}
 
 	signer, err := ncp.GetCAForCert(nc)
@@ -402,15 +402,15 @@ func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error
 	}
 
 	if signer.Expired(t) {
-		return false, fmt.Errorf("root certificate is expired")
+		return false, ErrRootExpired
 	}
 
 	if nc.Expired(t) {
-		return false, fmt.Errorf("certificate is expired")
+		return false, ErrExpired
 	}
 
 	if !nc.CheckSignature(signer.Details.PublicKey) {
-		return false, fmt.Errorf("certificate signature did not match")
+		return false, ErrSignatureMismatch
 	}
 
 	if err := nc.CheckRootConstrains(signer); err != nil {
