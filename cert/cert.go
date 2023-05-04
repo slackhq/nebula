@@ -2,6 +2,7 @@ package cert
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -659,8 +660,11 @@ func (nc *NebulaCertificate) VerifyPrivateKey(curve Curve, key []byte) error {
 				return fmt.Errorf("public key in cert and private key supplied don't match")
 			}
 		case Curve_P256:
-			x, y := elliptic.P256().ScalarBaseMult(key)
-			pub := elliptic.Marshal(elliptic.P256(), x, y)
+			privkey, err := ecdh.P256().NewPrivateKey(key)
+			if err != nil {
+				return fmt.Errorf("cannot parse private key as P256")
+			}
+			pub := privkey.PublicKey().Bytes()
 			if !bytes.Equal(pub, nc.Details.PublicKey) {
 				return fmt.Errorf("public key in cert and private key supplied don't match")
 			}
@@ -679,8 +683,11 @@ func (nc *NebulaCertificate) VerifyPrivateKey(curve Curve, key []byte) error {
 			return err
 		}
 	case Curve_P256:
-		x, y := elliptic.P256().ScalarBaseMult(key)
-		pub = elliptic.Marshal(elliptic.P256(), x, y)
+		privkey, err := ecdh.P256().NewPrivateKey(key)
+		if err != nil {
+			return err
+		}
+		pub = privkey.PublicKey().Bytes()
 	default:
 		return fmt.Errorf("invalid curve: %s", curve)
 	}

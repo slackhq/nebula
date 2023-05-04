@@ -1,6 +1,7 @@
 package cert
 
 import (
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -1220,10 +1221,10 @@ func x25519Keypair() ([]byte, []byte) {
 }
 
 func p256Keypair() ([]byte, []byte) {
-	privkey, x, y, err := elliptic.GenerateKey(elliptic.P256(), rand.Reader)
+	privkey, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
 		panic(err)
 	}
-	pubkey := elliptic.Marshal(elliptic.P256(), x, y)
-	return pubkey, privkey
+	pubkey := privkey.PublicKey()
+	return pubkey.Bytes(), privkey.Bytes()
 }
