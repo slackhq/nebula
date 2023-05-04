@@ -253,18 +253,18 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 
 	lh := newTestLighthouse()
 	ifce := &Interface{
-		hostMap:           hostMap,
-		inside:            &test.NoopTun{},
-		outside:           &udp.NoopConn{},
-		firewall:          &Firewall{},
-		lightHouse:        lh,
-		handshakeManager:  NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
-		l:                 l,
-		disconnectInvalid: true,
-		pki:               &PKI{},
+		hostMap:          hostMap,
+		inside:           &test.NoopTun{},
+		outside:          &udp.NoopConn{},
+		firewall:         &Firewall{},
+		lightHouse:       lh,
+		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
+		l:                l,
+		pki:              &PKI{},
 	}
 	ifce.pki.cs.Store(cs)
 	ifce.pki.caPool.Store(ncp)
+	ifce.disconnectInvalid.Store(true)
 
 	// Create manager
 	ctx, cancel := context.WithCancel(context.Background())

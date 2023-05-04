@@ -273,7 +273,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		routines:                routines,
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
-		disconnectInvalid:       c.GetBool("pki.disconnect_invalid", false),
 		relayManager:            NewRelayManager(ctx, l, hostMap, c),
 		punchy:                  punchy,
 
@@ -303,6 +302,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		lightHouse.ifce = ifce
 
 		ifce.RegisterConfigChangeCallbacks(c)
+		ifce.reloadDisconnectInvalid(c)
 		ifce.reloadSendRecvError(c)
 
 		handshakeManager.f = ifce
