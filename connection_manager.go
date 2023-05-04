@@ -133,7 +133,7 @@ func (n *connectionManager) AddTrafficWatch(localIndex uint32) {
 	// Use a write lock directly because it should be incredibly rare that we are ever already tracking this index
 	n.outLock.Lock()
 	if _, ok := n.out[localIndex]; ok {
-		n.inLock.Unlock()
+		n.outLock.Unlock()
 		return
 	}
 	n.out[localIndex] = struct{}{}
