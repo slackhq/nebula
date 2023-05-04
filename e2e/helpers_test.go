@@ -141,7 +141,7 @@ func newTestCaCert(before, after time.Time, ips, subnets []*net.IPNet, groups []
 		nc.Details.Groups = groups
 	}
 
-	err = nc.Sign(priv)
+	err = nc.Sign(cert.Curve_CURVE25519, priv)
 	if err != nil {
 		panic(err)
 	}
@@ -187,7 +187,7 @@ func newTestCert(ca *cert.NebulaCertificate, key []byte, name string, before, af
 		},
 	}
 
-	err = nc.Sign(key)
+	err = nc.Sign(ca.Details.Curve, key)
 	if err != nil {
 		panic(err)
 	}

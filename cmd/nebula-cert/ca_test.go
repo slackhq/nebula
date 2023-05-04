@@ -35,6 +35,8 @@ func Test_caHelp(t *testing.T) {
 			"    \tOptional: Argon2 memory parameter (in KiB) used for encrypted private key passphrase (default 2097152)\n"+
 			"  -argon-parallelism uint\n"+
 			"    \tOptional: Argon2 parallelism parameter used for encrypted private key passphrase (default 4)\n"+
+			"  -curve string\n"+
+			"    \tEdDSA/ECDSA Curve (25519, P256) (default \"25519\")\n"+
 			"  -duration duration\n"+
 			"    \tOptional: amount of time the certificate should be valid for. Valid time units are seconds: \"s\", minutes: \"m\", hours: \"h\" (default 8760h0m0s)\n"+
 			"  -encrypt\n"+
@@ -174,7 +176,9 @@ func Test_ca(t *testing.T) {
 	assert.Equal(t, uint32(1), ned.EncryptionMetadata.Argon2Parameters.Iterations)
 
 	// verify the key is valid and decrypt-able
-	lKey, b, err = cert.DecryptAndUnmarshalEd25519PrivateKey(passphrase, rb)
+	var curve cert.Curve
+	curve, lKey, b, err = cert.DecryptAndUnmarshalSigningPrivateKey(passphrase, rb)
+	assert.Equal(t, cert.Curve_CURVE25519, curve)
 	assert.Nil(t, err)
 	assert.Len(t, b, 0)
 	assert.Len(t, lKey, 64)

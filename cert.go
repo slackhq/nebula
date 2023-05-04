@@ -66,7 +66,7 @@ func NewCertStateFromConfig(c *config.C) (*CertState, error) {
 		}
 	}
 
-	rawKey, _, err := cert.UnmarshalX25519PrivateKey(pemPrivateKey)
+	rawKey, _, curve, err := cert.UnmarshalPrivateKey(pemPrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("error while unmarshaling pki.key %s: %s", privPathOrPEM, err)
 	}
@@ -102,7 +102,7 @@ func NewCertStateFromConfig(c *config.C) (*CertState, error) {
 		return nil, fmt.Errorf("no IPs encoded in certificate")
 	}
 
-	if err = nebulaCert.VerifyPrivateKey(rawKey); err != nil {
+	if err = nebulaCert.VerifyPrivateKey(curve, rawKey); err != nil {
 		return nil, fmt.Errorf("private key is not a pair with public key in nebula cert")
 	}
 

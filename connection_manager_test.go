@@ -220,7 +220,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 			PublicKey: pubCA,
 		},
 	}
-	caCert.Sign(privCA)
+	caCert.Sign(cert.Curve_CURVE25519, privCA)
 	ncp := &cert.NebulaCAPool{
 		CAs: cert.NewCAPool().CAs,
 	}
@@ -239,7 +239,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 			Issuer:    "ca",
 		},
 	}
-	peerCert.Sign(privCA)
+	peerCert.Sign(cert.Curve_CURVE25519, privCA)
 
 	cs := &CertState{
 		rawCertificate:      []byte{},

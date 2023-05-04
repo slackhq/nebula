@@ -53,4 +53,12 @@ jobs:
       working-directory: ./.github/workflows/smoke
       run: ./smoke-relay.sh
 
+    - name: setup docker image for P256
+      working-directory: ./.github/workflows/smoke
+      run: NAME="smoke-p256" CURVE=P256 ./build.sh
+
+    - name: run smoke-p256
+      working-directory: ./.github/workflows/smoke
+      run: NAME="smoke-p256" ./smoke.sh
+
     timeout-minutes: 10
