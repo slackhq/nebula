@@ -32,13 +32,12 @@ jobs:
 
     - name: Install goimports
       run: |
-        go get golang.org/x/tools/cmd/goimports
-        go build golang.org/x/tools/cmd/goimports
+        go install golang.org/x/tools/cmd/goimports@latest
 
     - name: gofmt
       run: |
-        if [ "$(find . -iname '*.go' | grep -v '\.pb\.go$' | xargs ./goimports -l)" ]
+        if [ "$(find . -iname '*.go' | grep -v '\.pb\.go$' | xargs goimports -l)" ]
         then
-          find . -iname '*.go' | grep -v '\.pb\.go$' | xargs ./goimports -d
+          find . -iname '*.go' | grep -v '\.pb\.go$' | xargs goimports -d
           exit 1
         fi
