@@ -281,7 +281,7 @@ func TestNebulaCertificate_VerifyP256(t *testing.T) {
 
 	v, err := c.Verify(time.Now(), caPool)
 	assert.False(t, v)
-	assert.EqualError(t, err, "certificate has been blocked")
+	assert.EqualError(t, err, "certificate is in the block list")
 
 	caPool.ResetCertBlocklist()
 	v, err = c.Verify(time.Now(), caPool)
