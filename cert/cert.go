@@ -522,15 +522,15 @@ func (nc *NebulaCertificate) Sign(curve Curve, key []byte) error {
 		signer := ed25519.PrivateKey(key)
 		sig = ed25519.Sign(signer, b)
 	case Curve_P256:
-		x, y := elliptic.Unmarshal(elliptic.P256(), nc.Details.PublicKey)
 		signer := &ecdsa.PrivateKey{
 			PublicKey: ecdsa.PublicKey{
 				Curve: elliptic.P256(),
-				X:     x, Y: y,
 			},
 			// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L95
 			D: new(big.Int).SetBytes(key),
 		}
+		// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L119
+		signer.X, signer.Y = signer.Curve.ScalarBaseMult(key)
 
 		// We need to hash first for ECDSA
 		// - https://pkg.go.dev/crypto/ecdsa#SignASN1
