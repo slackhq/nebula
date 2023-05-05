@@ -793,11 +793,14 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udp.Addr, vpnIp iputil.VpnIp,
 		lhh.handleHostQueryReply(n, vpnIp)
 
 	case NebulaMeta_HostUpdateNotification:
-		lhh.handleHostUpdateNotification(n, vpnIp)
+		lhh.handleHostUpdateNotification(n, vpnIp, w)
 
 	case NebulaMeta_HostMovedNotification:
 	case NebulaMeta_HostPunchNotification:
 		lhh.handleHostPunchNotification(n, vpnIp, w)
+
+	case NebulaMeta_HostUpdateNotificationAck:
+		// noop
 	}
 }
 
@@ -906,7 +909,7 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp iputil.V
 	}
 }
 
-func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp iputil.VpnIp) {
+func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp iputil.VpnIp, w EncWriter) {
 	if !lhh.lh.amLighthouse {
 		if lhh.l.Level >= logrus.DebugLevel {
 			lhh.l.Debugln("I am not a lighthouse, do not take host updates: ", vpnIp)
@@ -932,6 +935,19 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 	am.unlockedSetV6(vpnIp, certVpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
 	am.unlockedSetRelay(vpnIp, certVpnIp, n.Details.RelayVpnIp)
 	am.Unlock()
+
+	n = lhh.resetMeta()
+	n.Type = NebulaMeta_HostUpdateNotificationAck
+	n.Details.VpnIp = uint32(vpnIp)
+	ln, err := n.MarshalTo(lhh.pb)
+
+	if err != nil {
+		lhh.l.WithError(err).WithField("vpnIp", vpnIp).Error("Failed to marshal lighthouse host update ack")
+		return
+	}
+
+	lhh.lh.metricTx(NebulaMeta_HostUpdateNotificationAck, 1)
+	w.SendMessageToVpnIp(header.LightHouse, 0, vpnIp, lhh.pb[:ln], lhh.nb, lhh.out[:0])
 }
 
 func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp iputil.VpnIp, w EncWriter) {
