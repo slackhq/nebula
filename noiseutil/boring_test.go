@@ -11,6 +11,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestEncryptLockNeeded(t *testing.T) {
+	assert.True(t, EncryptLockNeeded)
+}
+
 // Ensure NewGCMTLS validates the nonce is non-repeating
 func TestNewGCMTLS(t *testing.T) {
 	assert.True(t, boring.Enabled())
