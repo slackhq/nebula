@@ -368,12 +368,6 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, p, nb, out []
 			n.sendPunch(hostinfo)
 		}
 
-		if n.intf.lightHouse.IsLighthouseIP(hostinfo.vpnIp) {
-			// We are sending traffic to the lighthouse, let recv_error sort out any issues instead of testing the tunnel
-			n.trafficTimer.Add(hostinfo.localIndexId, n.checkInterval)
-			return doNothing, nil, nil
-		}
-
 		if n.l.Level >= logrus.DebugLevel {
 			hostinfo.logger(n.l).
 				WithField("tunnelCheck", m{"state": "testing", "method": "active"}).
