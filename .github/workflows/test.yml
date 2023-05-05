@@ -52,6 +52,36 @@ jobs:
         path: e2e/mermaid/
         if-no-files-found: warn
 
+  test-linux-boringcrypto:
+    name: Build and test on linux with boringcrypto
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Set up Go 1.20
+      uses: actions/setup-go@v2
+      with:
+        go-version: "1.20"
+      id: go
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v2
+
+    - uses: actions/cache@v2
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go1.20-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go1.20-
+
+    - name: Build
+      run: make bin-boringcrypto
+
+    - name: Test
+      run: make test-boringcrypto
+
+    - name: End 2 end
+      run: make e2evv GOEXPERIMENT=boringcrypto CGO_ENABLED=1
+
   test:
     name: Build and test on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
