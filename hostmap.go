@@ -51,7 +51,7 @@ type Relay struct {
 }
 
 type HostMap struct {
-	sync.RWMutex    //Because we concurrently read and write to our maps
+	syncRWMutex     //Because we concurrently read and write to our maps
 	name            string
 	Indexes         map[uint32]*HostInfo
 	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a Relay HostInfo object
@@ -197,7 +197,7 @@ func (rs *RelayState) InsertRelay(ip iputil.VpnIp, idx uint32, r *Relay) {
 }
 
 type HostInfo struct {
-	sync.RWMutex
+	syncRWMutex
 
 	remote               *udp.Addr
 	remotes              *RemoteList
@@ -261,6 +261,7 @@ func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRang
 	r := map[uint32]*HostInfo{}
 	relays := map[uint32]*HostInfo{}
 	m := HostMap{
+		syncRWMutex:     newSyncRWMutex("hostmap", name),
 		name:            name,
 		Indexes:         i,
 		Relays:          relays,
@@ -321,6 +322,7 @@ func (hm *HostMap) AddVpnIp(vpnIp iputil.VpnIp, init func(hostinfo *HostInfo)) (
 	if h, ok := hm.Hosts[vpnIp]; !ok {
 		hm.RUnlock()
 		h = &HostInfo{
+			syncRWMutex:     newSyncRWMutex("hostinfo"),
 			vpnIp:           vpnIp,
 			HandshakePacket: make(map[uint8][]byte, 0),
 			relayState: RelayState{

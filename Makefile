@@ -54,6 +54,9 @@ ALL = $(ALL_LINUX) \
 e2e:
 	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
 
+e2e-mutex-debug:
+	$(TEST_ENV) go test -tags=mutex_debug,e2e_testing -count=1 $(TEST_FLAGS) ./e2e
+
 e2ev: TEST_FLAGS = -v
 e2ev: e2e
 
