@@ -17,11 +17,12 @@ import (
 type trafficDecision int
 
 const (
-	doNothing     trafficDecision = 0
-	deleteTunnel  trafficDecision = 1 // delete the hostinfo on our side, do not notify the remote
-	closeTunnel   trafficDecision = 2 // delete the hostinfo and notify the remote
-	swapPrimary   trafficDecision = 3
-	migrateRelays trafficDecision = 4
+	doNothing      trafficDecision = 0
+	deleteTunnel   trafficDecision = 1 // delete the hostinfo on our side, do not notify the remote
+	closeTunnel    trafficDecision = 2 // delete the hostinfo and notify the remote
+	swapPrimary    trafficDecision = 3
+	migrateRelays  trafficDecision = 4
+	tryRehandshake trafficDecision = 5
 )
 
 type connectionManager struct {
@@ -193,6 +194,9 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 
 	case migrateRelays:
 		n.migrateRelayUsed(hostinfo, primary)
+
+	case tryRehandshake:
+		n.tryRehandshake(hostinfo)
 	}
 
 	n.resetRelayTrafficCheck(hostinfo)
@@ -321,7 +325,8 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, p, nb, out []
 		delete(n.pendingDeletion, hostinfo.localIndexId)
 
 		if mainHostInfo {
-			n.tryRehandshake(hostinfo)
+			decision = tryRehandshake
+
 		} else {
 			if n.shouldSwapPrimary(hostinfo, primary) {
 				decision = swapPrimary
