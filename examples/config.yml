@@ -305,7 +305,8 @@ firewall:
   #   host: `any` or a literal hostname, ie `test-host`
   #   group: `any` or a literal group name, ie `default-group`
   #   groups: Same as group but accepts a list of values. Multiple values are AND'd together and a certificate would have to contain all groups to pass
-  #   cidr: a CIDR, `0.0.0.0/0` is any.
+  #   cidr: a remote CIDR, `0.0.0.0/0` is any.
+  #   local_cidr: a local CIDR, `0.0.0.0/0` is any. This could be used to filter destinations when using unsafe_routes.
   #   ca_name: An issuing CA name
   #   ca_sha: An issuing CA shasum
 
