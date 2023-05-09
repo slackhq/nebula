@@ -261,7 +261,7 @@ func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRang
 	r := map[uint32]*HostInfo{}
 	relays := map[uint32]*HostInfo{}
 	m := HostMap{
-		syncRWMutex:     newSyncRWMutex("hostmap", name),
+		syncRWMutex:     newSyncRWMutex(mutexKey{Type: "hostmap", SubType: name}),
 		name:            name,
 		Indexes:         i,
 		Relays:          relays,
@@ -322,7 +322,7 @@ func (hm *HostMap) AddVpnIp(vpnIp iputil.VpnIp, init func(hostinfo *HostInfo)) (
 	if h, ok := hm.Hosts[vpnIp]; !ok {
 		hm.RUnlock()
 		h = &HostInfo{
-			syncRWMutex:     newSyncRWMutex("hostinfo"),
+			syncRWMutex:     newSyncRWMutex(mutexKey{Type: "hostinfo", ID: uint32(vpnIp)}),
 			vpnIp:           vpnIp,
 			HandshakePacket: make(map[uint8][]byte, 0),
 			relayState: RelayState{

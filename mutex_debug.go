@@ -4,63 +4,75 @@
 package nebula
 
 import (
-	"strings"
+	"fmt"
 	"sync"
 
 	"github.com/timandy/routine"
 )
 
-var threadLocal routine.ThreadLocal = routine.NewThreadLocalWithInitial(func() any { return map[string]bool{} })
+var threadLocal routine.ThreadLocal = routine.NewThreadLocalWithInitial(func() any { return map[mutexKey]bool{} })
+
+type mutexKey struct {
+	Type    string
+	SubType string
+	ID      uint32
+}
 
 type syncRWMutex struct {
 	sync.RWMutex
-	mutexType string
+	mutexKey
 }
 
-func newSyncRWMutex(t ...string) syncRWMutex {
+func newSyncRWMutex(key mutexKey) syncRWMutex {
 	return syncRWMutex{
-		mutexType: strings.Join(t, "-"),
+		mutexKey: key,
 	}
 }
 
-func checkMutex(state map[string]bool, add string) {
-	if add == "hostinfo" {
-		if state["hostmap-main"] {
-			panic("grabbing hostinfo lock and already have hostmap-main")
+func checkMutex(state map[mutexKey]bool, add mutexKey) {
+	switch add.Type {
+	case "hostinfo":
+		// Check for any other hostinfo keys:
+		for k, v := range state {
+			if k.Type == "hostinfo" && v {
+				panic(fmt.Errorf("grabbing hostinfo lock and already have a hostinfo lock: state=%v add=%v", state, add))
+			}
 		}
-		if state["hostmap-pending"] {
-			panic("grabbing hostinfo lock and already have hostmap-pending")
+		if state[mutexKey{Type: "hostmap", SubType: "main"}] {
+			panic(fmt.Errorf("grabbing hostinfo lock and already have hostmap-main: state=%v add=%v", state, add))
 		}
-	}
-	if add == "hostmap-pending" {
-		if state["hostmap-main"] {
-			panic("grabbing hostmap-pending lock and already have hostmap-main")
+		if state[mutexKey{Type: "hostmap", SubType: "pending"}] {
+			panic(fmt.Errorf("grabbing hostinfo lock and already have hostmap-pending: state=%v add=%v", state, add))
+		}
+	case "hostmap-pending":
+		if state[mutexKey{Type: "hostmap", SubType: "main"}] {
+			panic(fmt.Errorf("grabbing hostmap-pending lock and already have hostmap-main: state=%v add=%v", state, add))
 		}
 	}
 }
 
 func (s *syncRWMutex) Lock() {
-	m := threadLocal.Get().(map[string]bool)
-	checkMutex(m, s.mutexType)
-	m[s.mutexType] = true
+	m := threadLocal.Get().(map[mutexKey]bool)
+	checkMutex(m, s.mutexKey)
+	m[s.mutexKey] = true
 	s.RWMutex.Lock()
 }
 
 func (s *syncRWMutex) Unlock() {
-	m := threadLocal.Get().(map[string]bool)
-	m[s.mutexType] = false
+	m := threadLocal.Get().(map[mutexKey]bool)
+	m[s.mutexKey] = false
 	s.RWMutex.Unlock()
 }
 
 func (s *syncRWMutex) RLock() {
-	m := threadLocal.Get().(map[string]bool)
-	checkMutex(m, s.mutexType)
-	m[s.mutexType] = true
+	m := threadLocal.Get().(map[mutexKey]bool)
+	checkMutex(m, s.mutexKey)
+	m[s.mutexKey] = true
 	s.RWMutex.RLock()
 }
 
 func (s *syncRWMutex) RUnlock() {
-	m := threadLocal.Get().(map[string]bool)
-	m[s.mutexType] = false
+	m := threadLocal.Get().(map[mutexKey]bool)
+	m[s.mutexKey] = false
 	s.RWMutex.RUnlock()
 }

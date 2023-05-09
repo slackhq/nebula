@@ -9,6 +9,12 @@ import (
 
 type syncRWMutex = sync.RWMutex
 
-func newSyncRWMutex(t ...string) syncRWMutex {
+func newSyncRWMutex(mutexKey) syncRWMutex {
 	return sync.RWMutex{}
+}
+
+type mutexKey struct {
+	Type    string
+	SubType string
+	ID      uint32
 }
