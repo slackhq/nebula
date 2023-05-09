@@ -60,7 +60,7 @@ func (s *syncRWMutex) Lock() {
 
 func (s *syncRWMutex) Unlock() {
 	m := threadLocal.Get().(map[mutexKey]bool)
-	m[s.mutexKey] = false
+	delete(m, s.mutexKey)
 	s.RWMutex.Unlock()
 }
 
@@ -73,6 +73,6 @@ func (s *syncRWMutex) RLock() {
 
 func (s *syncRWMutex) RUnlock() {
 	m := threadLocal.Get().(map[mutexKey]bool)
-	m[s.mutexKey] = false
+	delete(m, s.mutexKey)
 	s.RWMutex.RUnlock()
 }
