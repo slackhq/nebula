@@ -11,7 +11,3 @@ contact_links:
   - name: 📱 Mobile Nebula
     url: https://github.com/definednet/mobile_nebula
     about: 'This issue tracker is not for mobile support. Try the Mobile Nebula repo instead!'
-
-  - name: 🔒 Report Security Vulnerability
-    url: https://github.com/slackhq/nebula/blob/master/SECURITY.md
-    about: 'Please view SECURITY.md to learn how to report security vulnerabilities.'
