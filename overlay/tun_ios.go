@@ -23,11 +23,11 @@ type tun struct {
 	routeTree *cidr.Tree4
 }
 
-func newTun(_ *logrus.Logger, _ string, _ *net.IPNet, _ int, _ []Route, _ int, _ bool) (*tun, error) {
+func newTun(_ *logrus.Logger, _ string, _ *net.IPNet, _ int, _ []Route, _ int, _ bool, _ bool) (*tun, error) {
 	return nil, fmt.Errorf("newTun not supported in iOS")
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes []Route, _ int) (*tun, error) {
+func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes []Route, _ int, _ bool) (*tun, error) {
 	routeTree, err := makeRouteTree(l, routes, false)
 	if err != nil {
 		return nil, err

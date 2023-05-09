@@ -35,6 +35,7 @@ func NewDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, fd *
 			c.GetInt("tun.mtu", DefaultMTU),
 			routes,
 			c.GetInt("tun.tx_queue", 500),
+			c.GetBool("tun.use_system_route_table", false),
 		)
 
 	default:
@@ -46,6 +47,7 @@ func NewDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, fd *
 			routes,
 			c.GetInt("tun.tx_queue", 500),
 			routines > 1,
+			c.GetBool("tun.use_system_route_table", false),
 		)
 	}
 }
