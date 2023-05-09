@@ -1,7 +1,7 @@
-Security
-========
+Security Policy
+===============
 
-Reporting Security Issues
+Reporting a Vulnerability
 -------------------------
 
 If you believe you have found a security vulnerability with Nebula, please let
