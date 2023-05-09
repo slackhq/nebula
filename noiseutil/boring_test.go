@@ -4,14 +4,21 @@
 package noiseutil
 
 import (
+	"crypto/boring"
 	"encoding/hex"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
+func TestEncryptLockNeeded(t *testing.T) {
+	assert.True(t, EncryptLockNeeded)
+}
+
 // Ensure NewGCMTLS validates the nonce is non-repeating
 func TestNewGCMTLS(t *testing.T) {
+	assert.True(t, boring.Enabled())
+
 	// Test Case 16 from GCM Spec:
 	//  - (now dead link): http://csrc.nist.gov/groups/ST/toolkit/BCM/documents/proposedmodes/gcm/gcm-spec.pdf
 	//  - as listed in boringssl tests: https://github.com/google/boringssl/blob/fips-20220613/crypto/cipher_extra/test/cipher_tests.txt#L412-L418

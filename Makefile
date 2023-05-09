@@ -145,6 +145,9 @@ vet:
 test:
 	go test -v ./...
 
+test-boringcrypto:
+	GOEXPERIMENT=boringcrypto CGO_ENABLED=1 go test -v ./...
+
 test-cov-html:
 	go test -coverprofile=coverage.out
 	go tool cover -html=coverage.out
