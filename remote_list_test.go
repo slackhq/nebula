@@ -9,7 +9,7 @@ import (
 )
 
 func TestRemoteList_Rebuild(t *testing.T) {
-	rl := NewRemoteList()
+	rl := NewRemoteList(nil)
 	rl.unlockedSetV4(
 		0,
 		0,
@@ -102,7 +102,7 @@ func TestRemoteList_Rebuild(t *testing.T) {
 }
 
 func BenchmarkFullRebuild(b *testing.B) {
-	rl := NewRemoteList()
+	rl := NewRemoteList(nil)
 	rl.unlockedSetV4(
 		0,
 		0,
@@ -167,7 +167,7 @@ func BenchmarkFullRebuild(b *testing.B) {
 }
 
 func BenchmarkSortRebuild(b *testing.B) {
-	rl := NewRemoteList()
+	rl := NewRemoteList(nil)
 	rl.unlockedSetV4(
 		0,
 		0,
