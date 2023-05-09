@@ -41,7 +41,7 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	assert.False(t, initCalled)
 	assert.Same(t, i, i2)
 
-	i.remotes = NewRemoteList()
+	i.remotes = NewRemoteList(nil)
 	i.HandshakeReady = true
 
 	// Adding something to pending should not affect the main hostmap
@@ -85,6 +85,10 @@ func (mw *mockEncWriter) SendMessageToVpnIp(t header.MessageType, st header.Mess
 }
 
 func (mw *mockEncWriter) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, nocopy bool) {
+	return
+}
+
+func (mw *mockEncWriter) SendMessageToHostInfo(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte) {
 	return
 }
 

@@ -77,7 +77,7 @@ func Test_verify(t *testing.T) {
 			IsCA:      true,
 		},
 	}
-	ca.Sign(caPriv)
+	ca.Sign(cert.Curve_CURVE25519, caPriv)
 	b, _ := ca.MarshalToPEM()
 	caFile.Truncate(0)
 	caFile.Seek(0, 0)
@@ -117,7 +117,7 @@ func Test_verify(t *testing.T) {
 		},
 	}
 
-	crt.Sign(badPriv)
+	crt.Sign(cert.Curve_CURVE25519, badPriv)
 	b, _ = crt.MarshalToPEM()
 	certFile.Truncate(0)
 	certFile.Seek(0, 0)
@@ -129,7 +129,7 @@ func Test_verify(t *testing.T) {
 	assert.EqualError(t, err, "certificate signature did not match")
 
 	// verified cert at path
-	crt.Sign(caPriv)
+	crt.Sign(cert.Curve_CURVE25519, caPriv)
 	b, _ = crt.MarshalToPEM()
 	certFile.Truncate(0)
 	certFile.Seek(0, 0)

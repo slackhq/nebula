@@ -47,7 +47,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		Signature: []byte{1, 2, 1, 2, 1, 3},
 	}
 
-	remotes := NewRemoteList()
+	remotes := NewRemoteList(nil)
 	remotes.unlockedPrependV4(0, NewIp4AndPort(remote1.IP, uint32(remote1.Port)))
 	remotes.unlockedPrependV6(0, NewIp6AndPort(remote2.IP, uint32(remote2.Port)))
 	hm.Add(iputil.Ip2VpnIp(ipNet.IP), &HostInfo{

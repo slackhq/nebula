@@ -32,6 +32,7 @@ const RoamingSuppressSeconds = 2
 
 const (
 	Requested = iota
+	PeerRequested
 	Established
 )
 
@@ -77,6 +78,16 @@ func (rs *RelayState) DeleteRelay(ip iputil.VpnIp) {
 	rs.Lock()
 	defer rs.Unlock()
 	delete(rs.relays, ip)
+}
+
+func (rs *RelayState) CopyAllRelayFor() []*Relay {
+	rs.RLock()
+	defer rs.RUnlock()
+	ret := make([]*Relay, 0, len(rs.relayForByIdx))
+	for _, r := range rs.relayForByIdx {
+		ret = append(ret, r)
+	}
+	return ret
 }
 
 func (rs *RelayState) GetRelayForByIp(ip iputil.VpnIp) (*Relay, bool) {
@@ -281,29 +292,13 @@ func (hm *HostMap) EmitStats(name string) {
 
 func (hm *HostMap) RemoveRelay(localIdx uint32) {
 	hm.Lock()
-	hiRelay, ok := hm.Relays[localIdx]
+	_, ok := hm.Relays[localIdx]
 	if !ok {
 		hm.Unlock()
 		return
 	}
 	delete(hm.Relays, localIdx)
 	hm.Unlock()
-	ip, ok := hiRelay.relayState.RemoveRelay(localIdx)
-	if !ok {
-		return
-	}
-	hiPeer, err := hm.QueryVpnIp(ip)
-	if err != nil {
-		return
-	}
-	var otherPeerIdx uint32
-	hiPeer.relayState.DeleteRelay(hiRelay.vpnIp)
-	relay, ok := hiPeer.relayState.GetRelayForByIp(hiRelay.vpnIp)
-	if ok {
-		otherPeerIdx = relay.LocalIndex
-	}
-	// I am a relaying host. I need to remove the other relay, too.
-	hm.RemoveRelay(otherPeerIdx)
 }
 
 func (hm *HostMap) GetIndexByVpnIp(vpnIp iputil.VpnIp) (uint32, error) {
@@ -397,29 +392,6 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) bool {
 	hm.unlockedDeleteHostInfo(hostinfo)
 	hm.Unlock()
 
-	// And tear down all the relays going through this host, if final
-	for _, localIdx := range hostinfo.relayState.CopyRelayForIdxs() {
-		hm.RemoveRelay(localIdx)
-	}
-
-	if final {
-		// And tear down the relays this deleted hostInfo was using to be reached
-		teardownRelayIdx := []uint32{}
-		for _, relayIp := range hostinfo.relayState.CopyRelayIps() {
-			relayHostInfo, err := hm.QueryVpnIp(relayIp)
-			if err != nil {
-				hm.l.WithError(err).WithField("relay", relayIp).Info("Missing relay host in hostmap")
-			} else {
-				if r, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp); ok {
-					teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
-				}
-			}
-		}
-		for _, localIdx := range teardownRelayIdx {
-			hm.RemoveRelay(localIdx)
-		}
-	}
-
 	return final
 }
 
@@ -510,6 +482,10 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 			"vpnIp": hostinfo.vpnIp, "indexNumber": hostinfo.localIndexId, "remoteIndexNumber": hostinfo.remoteIndexId}).
 			Debug("Hostmap hostInfo deleted")
 	}
+
+	for _, localRelayIdx := range hostinfo.relayState.CopyRelayForIdxs() {
+		delete(hm.Relays, localRelayIdx)
+	}
 }
 
 func (hm *HostMap) QueryIndex(index uint32) (*HostInfo, error) {
@@ -562,6 +538,24 @@ func (hm *HostMap) QueryReverseIndex(index uint32) (*HostInfo, error) {
 
 func (hm *HostMap) QueryVpnIp(vpnIp iputil.VpnIp) (*HostInfo, error) {
 	return hm.queryVpnIp(vpnIp, nil)
+}
+
+func (hm *HostMap) QueryVpnIpRelayFor(targetIp, relayHostIp iputil.VpnIp) (*HostInfo, *Relay, error) {
+	hm.RLock()
+	defer hm.RUnlock()
+
+	h, ok := hm.Hosts[relayHostIp]
+	if !ok {
+		return nil, nil, errors.New("unable to find host")
+	}
+	for h != nil {
+		r, ok := h.relayState.QueryRelayForByIp(targetIp)
+		if ok && r.State == Established {
+			return h, r, nil
+		}
+		h = h.next
+	}
+	return nil, nil, errors.New("unable to find host with relay")
 }
 
 // PromoteBestQueryVpnIp will attempt to lazily switch to the best remote every
@@ -711,7 +705,6 @@ func (i *HostInfo) handshakeComplete(l *logrus.Logger, m *cachedPacketMetrics) {
 	i.packetStore = make([]*cachedPacket, 0)
 	i.ConnectionState.ready = true
 	i.ConnectionState.queueLock.Unlock()
-	i.ConnectionState.certState = nil
 }
 
 func (i *HostInfo) GetCert() *cert.NebulaCertificate {

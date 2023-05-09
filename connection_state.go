@@ -29,12 +29,23 @@ type ConnectionState struct {
 }
 
 func (f *Interface) newConnectionState(l *logrus.Logger, initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {
-	cs := noise.NewCipherSuite(noise.DH25519, noiseutil.CipherAESGCM, noise.HashSHA256)
+	var dhFunc noise.DHFunc
+	curCertState := f.certState.Load()
+
+	switch curCertState.certificate.Details.Curve {
+	case cert.Curve_CURVE25519:
+		dhFunc = noise.DH25519
+	case cert.Curve_P256:
+		dhFunc = noiseutil.DHP256
+	default:
+		l.Errorf("invalid curve: %s", curCertState.certificate.Details.Curve)
+		return nil
+	}
+	cs := noise.NewCipherSuite(dhFunc, noiseutil.CipherAESGCM, noise.HashSHA256)
 	if f.cipher == "chachapoly" {
-		cs = noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
+		cs = noise.NewCipherSuite(dhFunc, noise.CipherChaChaPoly, noise.HashSHA256)
 	}
 
-	curCertState := f.certState.Load()
 	static := noise.DHKey{Private: curCertState.privateKey, Public: curCertState.publicKey}
 
 	b := NewBits(ReplayWindow)

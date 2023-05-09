@@ -1,7 +1,7 @@
 package main
 
 import (
-	"crypto/ed25519"
+	"crypto/ecdh"
 	"crypto/rand"
 	"flag"
 	"fmt"
@@ -78,10 +78,11 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return fmt.Errorf("error while reading ca-key: %s", err)
 	}
 
-	var caKey ed25519.PrivateKey
+	var curve cert.Curve
+	var caKey []byte
 
 	// naively attempt to decode the private key as though it is not encrypted
-	caKey, _, err = cert.UnmarshalEd25519PrivateKey(rawCAKey)
+	caKey, _, curve, err = cert.UnmarshalSigningPrivateKey(rawCAKey)
 	if err == cert.ErrPrivateKeyEncrypted {
 		// ask for a passphrase until we get one
 		var passphrase []byte
@@ -103,7 +104,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			return fmt.Errorf("cannot open encrypted ca-key without passphrase")
 		}
 
-		caKey, _, err = cert.DecryptAndUnmarshalEd25519PrivateKey(passphrase, rawCAKey)
+		curve, caKey, _, err = cert.DecryptAndUnmarshalSigningPrivateKey(passphrase, rawCAKey)
 		if err != nil {
 			return fmt.Errorf("error while parsing encrypted ca-key: %s", err)
 		}
@@ -121,7 +122,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return fmt.Errorf("error while parsing ca-crt: %s", err)
 	}
 
-	if err := caCert.VerifyPrivateKey(caKey); err != nil {
+	if err := caCert.VerifyPrivateKey(curve, caKey); err != nil {
 		return fmt.Errorf("refusing to sign, root certificate does not match private key")
 	}
 
@@ -181,12 +182,16 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		if err != nil {
 			return fmt.Errorf("error while reading in-pub: %s", err)
 		}
-		pub, _, err = cert.UnmarshalX25519PublicKey(rawPub)
+		var pubCurve cert.Curve
+		pub, _, pubCurve, err = cert.UnmarshalPublicKey(rawPub)
 		if err != nil {
 			return fmt.Errorf("error while parsing in-pub: %s", err)
 		}
+		if pubCurve != curve {
+			return fmt.Errorf("curve of in-pub does not match ca")
+		}
 	} else {
-		pub, rawPriv = x25519Keypair()
+		pub, rawPriv = newKeypair(curve)
 	}
 
 	nc := cert.NebulaCertificate{
@@ -200,6 +205,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			PublicKey: pub,
 			IsCA:      false,
 			Issuer:    issuer,
+			Curve:     curve,
 		},
 	}
 
@@ -219,7 +225,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return fmt.Errorf("refusing to overwrite existing cert: %s", *sf.outCertPath)
 	}
 
-	err = nc.Sign(caKey)
+	err = nc.Sign(curve, caKey)
 	if err != nil {
 		return fmt.Errorf("error while signing: %s", err)
 	}
@@ -229,7 +235,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			return fmt.Errorf("refusing to overwrite existing key: %s", *sf.outKeyPath)
 		}
 
-		err = ioutil.WriteFile(*sf.outKeyPath, cert.MarshalX25519PrivateKey(rawPriv), 0600)
+		err = ioutil.WriteFile(*sf.outKeyPath, cert.MarshalPrivateKey(curve, rawPriv), 0600)
 		if err != nil {
 			return fmt.Errorf("error while writing out-key: %s", err)
 		}
@@ -260,6 +266,17 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	return nil
 }
 
+func newKeypair(curve cert.Curve) ([]byte, []byte) {
+	switch curve {
+	case cert.Curve_CURVE25519:
+		return x25519Keypair()
+	case cert.Curve_P256:
+		return p256Keypair()
+	default:
+		return nil, nil
+	}
+}
+
 func x25519Keypair() ([]byte, []byte) {
 	privkey := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, privkey); err != nil {
@@ -272,6 +289,15 @@ func x25519Keypair() ([]byte, []byte) {
 	}
 
 	return pubkey, privkey
+}
+
+func p256Keypair() ([]byte, []byte) {
+	privkey, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	pubkey := privkey.PublicKey()
+	return pubkey.Bytes(), privkey.Bytes()
 }
 
 func signSummary() string {

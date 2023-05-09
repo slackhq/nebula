@@ -111,6 +111,7 @@ type EncWriter interface {
 		nocopy bool,
 	)
 	SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, nb, out []byte)
+	SendMessageToHostInfo(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte)
 	Handshake(vpnIp iputil.VpnIp)
 }
 
@@ -216,6 +217,7 @@ func (f *Interface) activate() {
 
 	f.l.WithField("interface", f.inside.Name()).WithField("network", f.inside.Cidr().String()).
 		WithField("build", f.version).WithField("udpAddr", addr).
+		WithField("boringcrypto", boringEnabled()).
 		Info("Nebula interface is active")
 
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))

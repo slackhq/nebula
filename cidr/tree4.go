@@ -13,8 +13,14 @@ type Node struct {
 	value  interface{}
 }
 
+type entry struct {
+	CIDR  *net.IPNet
+	Value *interface{}
+}
+
 type Tree4 struct {
 	root *Node
+	list []entry
 }
 
 const (
@@ -24,6 +30,7 @@ const (
 func NewTree4() *Tree4 {
 	tree := new(Tree4)
 	tree.root = &Node{}
+	tree.list = []entry{}
 	return tree
 }
 
@@ -53,6 +60,15 @@ func (tree *Tree4) AddCIDR(cidr *net.IPNet, val interface{}) {
 
 	// We already have this range so update the value
 	if next != nil {
+		addCIDR := cidr.String()
+		for i, v := range tree.list {
+			if addCIDR == v.CIDR.String() {
+				tree.list = append(tree.list[:i], tree.list[i+1:]...)
+				break
+			}
+		}
+
+		tree.list = append(tree.list, entry{CIDR: cidr, Value: &val})
 		node.value = val
 		return
 	}
@@ -74,9 +90,10 @@ func (tree *Tree4) AddCIDR(cidr *net.IPNet, val interface{}) {
 
 	// Final node marks our cidr, set the value
 	node.value = val
+	tree.list = append(tree.list, entry{CIDR: cidr, Value: &val})
 }
 
-// Finds the first match, which may be the least specific
+// Contains finds the first match, which may be the least specific
 func (tree *Tree4) Contains(ip iputil.VpnIp) (value interface{}) {
 	bit := startbit
 	node := tree.root
@@ -99,7 +116,7 @@ func (tree *Tree4) Contains(ip iputil.VpnIp) (value interface{}) {
 	return value
 }
 
-// Finds the most specific match
+// MostSpecificContains finds the most specific match
 func (tree *Tree4) MostSpecificContains(ip iputil.VpnIp) (value interface{}) {
 	bit := startbit
 	node := tree.root
@@ -121,7 +138,7 @@ func (tree *Tree4) MostSpecificContains(ip iputil.VpnIp) (value interface{}) {
 	return value
 }
 
-// Finds the most specific match
+// Match finds the most specific match
 func (tree *Tree4) Match(ip iputil.VpnIp) (value interface{}) {
 	bit := startbit
 	node := tree.root
@@ -142,4 +159,9 @@ func (tree *Tree4) Match(ip iputil.VpnIp) (value interface{}) {
 		value = lastNode.value
 	}
 	return value
+}
+
+// List will return all CIDRs and their current values. Do not modify the contents!
+func (tree *Tree4) List() []entry {
+	return tree.list
 }

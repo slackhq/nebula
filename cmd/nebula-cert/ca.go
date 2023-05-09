@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"flag"
 	"fmt"
@@ -31,6 +33,8 @@ type caFlags struct {
 	argonIterations  *uint
 	argonParallelism *uint
 	encryption       *bool
+
+	curve *string
 }
 
 func newCaFlags() *caFlags {
@@ -48,6 +52,7 @@ func newCaFlags() *caFlags {
 	cf.argonParallelism = cf.set.Uint("argon-parallelism", 4, "Optional: Argon2 parallelism parameter used for encrypted private key passphrase")
 	cf.argonIterations = cf.set.Uint("argon-iterations", 1, "Optional: Argon2 iterations parameter used for encrypted private key passphrase")
 	cf.encryption = cf.set.Bool("encrypt", false, "Optional: prompt for passphrase and write out-key in an encrypted format")
+	cf.curve = cf.set.String("curve", "25519", "EdDSA/ECDSA Curve (25519, P256)")
 	return &cf
 }
 
@@ -160,9 +165,25 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		}
 	}
 
-	pub, rawPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return fmt.Errorf("error while generating ed25519 keys: %s", err)
+	var curve cert.Curve
+	var pub, rawPriv []byte
+	switch *cf.curve {
+	case "25519", "X25519", "Curve25519", "CURVE25519":
+		curve = cert.Curve_CURVE25519
+		pub, rawPriv, err = ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return fmt.Errorf("error while generating ed25519 keys: %s", err)
+		}
+	case "P256":
+		var key *ecdsa.PrivateKey
+		curve = cert.Curve_P256
+		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return fmt.Errorf("error while generating ecdsa keys: %s", err)
+		}
+		// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L60
+		rawPriv = key.D.FillBytes(make([]byte, 32))
+		pub = elliptic.Marshal(elliptic.P256(), key.X, key.Y)
 	}
 
 	nc := cert.NebulaCertificate{
@@ -175,6 +196,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 			NotAfter:  time.Now().Add(*cf.duration),
 			PublicKey: pub,
 			IsCA:      true,
+			Curve:     curve,
 		},
 	}
 
@@ -186,20 +208,20 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		return fmt.Errorf("refusing to overwrite existing CA cert: %s", *cf.outCertPath)
 	}
 
-	err = nc.Sign(rawPriv)
+	err = nc.Sign(curve, rawPriv)
 	if err != nil {
 		return fmt.Errorf("error while signing: %s", err)
 	}
 
 	if *cf.encryption {
-		b, err := cert.EncryptAndMarshalEd25519PrivateKey(rawPriv, passphrase, kdfParams)
+		b, err := cert.EncryptAndMarshalSigningPrivateKey(curve, rawPriv, passphrase, kdfParams)
 		if err != nil {
 			return fmt.Errorf("error while encrypting out-key: %s", err)
 		}
 
 		err = ioutil.WriteFile(*cf.outKeyPath, b, 0600)
 	} else {
-		err = ioutil.WriteFile(*cf.outKeyPath, cert.MarshalEd25519PrivateKey(rawPriv), 0600)
+		err = ioutil.WriteFile(*cf.outKeyPath, cert.MarshalSigningPrivateKey(curve, rawPriv), 0600)
 	}
 
 	if err != nil {

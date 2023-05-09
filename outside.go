@@ -83,7 +83,9 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via *ViaSender, out []byt
 
 		switch h.Subtype {
 		case header.MessageNone:
-			f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache)
+			if !f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache) {
+				return
+			}
 		case header.MessageRelay:
 			// The entire body is sent as AD, not encrypted.
 			// The packet consists of a 16-byte parsed Nebula header, Associated Data-protected payload, and a trailing 16-byte AEAD signature value.
@@ -100,7 +102,9 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via *ViaSender, out []byt
 			signedPayload = signedPayload[header.Len:]
 			// Pull the Roaming parts up here, and return in all call paths.
 			f.handleHostRoaming(hostinfo, addr)
+			// Track usage of both the HostInfo and the Relay for the received & authenticated packet
 			f.connectionManager.In(hostinfo.localIndexId)
+			f.connectionManager.RelayUsed(h.RemoteIndex)
 
 			relay, ok := hostinfo.relayState.QueryRelayForByIdx(h.RemoteIndex)
 			if !ok {
@@ -118,15 +122,9 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via *ViaSender, out []byt
 				return
 			case ForwardingType:
 				// Find the target HostInfo relay object
-				targetHI, err := f.hostMap.QueryVpnIp(relay.PeerIp)
+				targetHI, targetRelay, err := f.hostMap.QueryVpnIpRelayFor(hostinfo.vpnIp, relay.PeerIp)
 				if err != nil {
 					hostinfo.logger(f.l).WithField("relayTo", relay.PeerIp).WithError(err).Info("Failed to find target host info by ip")
-					return
-				}
-				// find the target Relay info object
-				targetRelay, ok := targetHI.relayState.QueryRelayForByIp(hostinfo.vpnIp)
-				if !ok {
-					hostinfo.logger(f.l).WithFields(logrus.Fields{"relayTo": relay.PeerIp, "relayFrom": hostinfo.vpnIp}).Info("Failed to find relay in hostinfo")
 					return
 				}
 
@@ -395,7 +393,7 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	return out, nil
 }
 
-func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) bool {
 	var err error
 
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], messageCounter, nb)
@@ -403,20 +401,20 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		hostinfo.logger(f.l).WithError(err).Error("Failed to decrypt packet")
 		//TODO: maybe after build 64 is out? 06/14/2018 - NB
 		//f.sendRecvError(hostinfo.remote, header.RemoteIndex)
-		return
+		return false
 	}
 
 	err = newPacket(out, true, fwPacket)
 	if err != nil {
 		hostinfo.logger(f.l).WithError(err).WithField("packet", out).
 			Warnf("Error while validating inbound packet")
-		return
+		return false
 	}
 
 	if !hostinfo.ConnectionState.window.Update(f.l, messageCounter) {
 		hostinfo.logger(f.l).WithField("fwPacket", fwPacket).
 			Debugln("dropping out of window packet")
-		return
+		return false
 	}
 
 	dropReason := f.firewall.Drop(out, *fwPacket, true, hostinfo, f.caPool, localCache)
@@ -427,7 +425,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 				WithField("reason", dropReason).
 				Debugln("dropping inbound packet")
 		}
-		return
+		return false
 	}
 
 	f.connectionManager.In(hostinfo.localIndexId)
@@ -435,6 +433,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	if err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")
 	}
+	return true
 }
 
 func (f *Interface) maybeSendRecvError(endpoint *udp.Addr, index uint32) {

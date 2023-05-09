@@ -1,4 +1,4 @@
-GOMINVERSION = 1.19
+GOMINVERSION = 1.20
 NEBULA_CMD_PATH = "./cmd/nebula"
 GO111MODULE = on
 export GO111MODULE
@@ -77,6 +77,8 @@ release-linux: $(ALL_LINUX:%=build/nebula-%.tar.gz)
 
 release-freebsd: build/nebula-freebsd-amd64.tar.gz
 
+release-boringcrypto: build/nebula-linux-$(shell go env GOARCH)-boringcrypto.tar.gz
+
 BUILD_ARGS = -trimpath
 
 bin-windows: build/windows-amd64/nebula.exe build/windows-amd64/nebula-cert.exe
@@ -89,6 +91,9 @@ bin-darwin: build/darwin-amd64/nebula build/darwin-amd64/nebula-cert
 	mv $? .
 
 bin-freebsd: build/freebsd-amd64/nebula build/freebsd-amd64/nebula-cert
+	mv $? .
+
+bin-boringcrypto: build/linux-$(shell go env GOARCH)-boringcrypto/nebula build/linux-$(shell go env GOARCH)-boringcrypto/nebula-cert
 	mv $? .
 
 bin:
@@ -104,6 +109,10 @@ build/linux-mips-%: GOENV += GOMIPS=$(word 3, $(subst -, ,$*))
 
 # Build an extra small binary for mips-softfloat
 build/linux-mips-softfloat/%: LDFLAGS += -s -w
+
+# boringcrypto
+build/linux-amd64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
+build/linux-arm64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
 
 build/%/nebula: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
@@ -132,6 +141,9 @@ vet:
 
 test:
 	go test -v ./...
+
+test-boringcrypto:
+	GOEXPERIMENT=boringcrypto CGO_ENABLED=1 go test -v ./...
 
 test-cov-html:
 	go test -coverprofile=coverage.out
@@ -170,6 +182,8 @@ bin-docker: bin build/linux-amd64/nebula build/linux-amd64/nebula-cert
 smoke-docker: bin-docker
 	cd .github/workflows/smoke/ && ./build.sh
 	cd .github/workflows/smoke/ && ./smoke.sh
+	cd .github/workflows/smoke/ && NAME="smoke-p256" CURVE="P256" ./build.sh
+	cd .github/workflows/smoke/ && NAME="smoke-p256" ./smoke.sh
 
 smoke-relay-docker: bin-docker
 	cd .github/workflows/smoke/ && ./build-relay.sh
