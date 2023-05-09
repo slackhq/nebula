@@ -407,14 +407,10 @@ func DecryptAndUnmarshalSigningPrivateKey(passphrase, b []byte) (Curve, []byte, 
 		return curve, nil, r, fmt.Errorf("unsupported encryption algorithm: %s", ned.EncryptionMetadata.EncryptionAlgorithm)
 	}
 
-	if len(bytes) != ed25519.PrivateKeySize {
-		return curve, nil, r, fmt.Errorf("key was not 64 bytes, is invalid ed25519 private key")
-	}
-
 	switch curve {
 	case Curve_CURVE25519:
 		if len(bytes) != ed25519.PrivateKeySize {
-			return curve, nil, r, fmt.Errorf("key was not %d bytes, is invalid Ed25519 private key", ed25519.PrivateKeySize)
+			return curve, nil, r, fmt.Errorf("key was not %d bytes, is invalid ed25519 private key", ed25519.PrivateKeySize)
 		}
 	case Curve_P256:
 		if len(bytes) != 32 {
