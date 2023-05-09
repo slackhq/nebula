@@ -44,7 +44,7 @@ jobs:
       run: make test
 
     - name: End 2 end
-      run: make e2evv
+      run: make e2e-mutex-debug TEST_LOGS=1 TEST_FLAGS=-v
 
     - uses: actions/upload-artifact@v3
       with:
