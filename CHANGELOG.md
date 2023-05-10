@@ -17,21 +17,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameters default to RFC recommendations, but can be overridden via CLI
   flags `-argon-memory`, `-argon-parallelism`, and `-argon-iterations`. (#386)
 
-0707cae document P256 and BoringCrypto (#865)
-31ed926 add test for GOEXPERIMENT=boringcrypto (#861)
-e0185c4 Support NIST curve P256 (#769)
-0b67b19 add boringcrypto Makefile targets (#856)
-e055382 Use NewGCMTLS (when using experiment boringcrypto) (#803)
+- Support for curve P256 and BoringCrypto has been added. See README section
+  "Curve P256 and BoringCrypto" for more details. (#865, #861, #769, #856, #803)
 
-1701087 Add destination CIDR checking (#507)
-397fe5f Add ability to skip installing unsafe routes on the os routing table (#831)
-a9cb2e0 Add ability to respect the system route table for unsafe route on linux (#839)
-6685856 emit certificate.expiration_ttl_seconds metric (#782)
-3e5c7e6 add punchy.respond_delay config option (#721)
-8a82e0f ssh: add save-mutex-profile (#737)
-e1af37e add calculated_remotes (#759)
-6e0ae4f firewall: add option to send REJECT replies (#738)
-f0ac61c Add `nebula.plist` based on the homebrew nebula LaunchDaemon plist (#762)
+- New firewall rule `local_cidr`. This could be used to filter destinations
+  when using `unsafe_routes`. (#507)
+
+- Add `unsafe_route` option `install`. This controls whether the route is
+  installed in the systems routing table. (#831)
+
+- Add `tun.use_system_route_table` option. Set to true to manage unsafe routes
+  directly on the system route table with gateway routes instead of in Nebula
+  configuration files. (#839)
+
+- The metric `certificate.ttl_seconds` is now exposed via stats. (#782)
+
+- Add `punchy.respond_delay` option. This allows you to change the delay
+  before attempting punchy.respond. Default is 5 seconds. (#721)
+
+- Added ssh commands to allow the capture of a mutex profile. (#737)
+
+- You can now set `lighthouse.calculated_remotes` to make it possible to do
+  handshakes without a lighthouse in certain configurations. (#759)
+
+- The firewall can be configured to send REJECT replies instead of the default
+  DROP behavior. (#738)
+
+- For macOS, an example launchd configuration file is now provided. (#762)
 
 ### Changed
 
