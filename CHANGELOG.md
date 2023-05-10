@@ -7,12 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2023-05-10
+
 ### Added
+
 - `nebula-cert ca` now supports encrypting the CA's private key with a
   passphrase. Pass `-encrypt` in order to be prompted for a passphrase.
   Encryption is performed using AES-256-GCM and Argon2id for KDF. KDF
   parameters default to RFC recommendations, but can be overridden via CLI
-  flags `-argon-memory`, `-argon-parallelism`, and `-argon-iterations`.
+  flags `-argon-memory`, `-argon-parallelism`, and `-argon-iterations`. (#386)
+
+0707cae document P256 and BoringCrypto (#865)
+31ed926 add test for GOEXPERIMENT=boringcrypto (#861)
+e0185c4 Support NIST curve P256 (#769)
+0b67b19 add boringcrypto Makefile targets (#856)
+e055382 Use NewGCMTLS (when using experiment boringcrypto) (#803)
+
+1701087 Add destination CIDR checking (#507)
+397fe5f Add ability to skip installing unsafe routes on the os routing table (#831)
+a9cb2e0 Add ability to respect the system route table for unsafe route on linux (#839)
+6685856 emit certificate.expiration_ttl_seconds metric (#782)
+3e5c7e6 add punchy.respond_delay config option (#721)
+8a82e0f ssh: add save-mutex-profile (#737)
+e1af37e add calculated_remotes (#759)
+6e0ae4f firewall: add option to send REJECT replies (#738)
+f0ac61c Add `nebula.plist` based on the homebrew nebula LaunchDaemon plist (#762)
+
+### Changed
+
+bd9cc01 Dns static lookerupper (#796)
+48eb638 Have lighthouses ack updates to reduce test packet traffic (#851)
+  e28336c probes to the lh are not generally useful as recv_error should catch (#408)
+3cb4e0e Allow listen.host to contain names (#825)
+
+03e4a7f Rehandshaking (#838)
+  5fe8f45 Clear lighthouse cache for a vpn ip on a dead connection when its the final hostinfo (#857)
+  d3fe3ef Fix handshake retry regression (#842)
+  fd99ce9 Use fewer test packets (#840)
+  ee8e134 Use connection manager to drive NAT maintenance (#835)
+  f0ef805 Remove dead code and re-order transit from pending to main hostmap on stage 2 (#828)
+  92cc32f Remove handshake race avoidance (#820)
+  a06977b Track connections by local index id instead of vpn ip (#807)
+
+
+### Fixed
+
+702e1c5 Always disconnect block listed hosts (#858)
+a0d3b93 update dependencies: 2023-05 (#855)
+61b784d Update dependencies 2023-03 (#824)
+d4f9500 Update dependencies (2022-11) (#780)
+58ec1f7 build with go1.20 (#854)
+2801fb2 Fix relay (#827)
+5bd8712 Immediately forward packets from self to self on FreeBSD (#808)
+1a6c657 Normalize logs (#837)
+  0fc4d81 log network as String to match the other log event in interface.go that emits network (#811)
+c177126 Fix possible panic in the timerwheels (#802)
+c44da3a Make DNS queries case insensitive (#793)
+3ae242f Add nss-lookup to the systemd wants (#791)
+9a8892c Fix 756 SSH command line parsing error to write to user instead of stderr (#757)
+85f5849 Fix a hang when shutting down Android (#772)
 
 ## [1.6.1] - 2022-09-26
 
@@ -405,7 +458,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/slackhq/nebula/releases/tag/v1.7.0
 [1.6.1]: https://github.com/slackhq/nebula/releases/tag/v1.6.1
 [1.6.0]: https://github.com/slackhq/nebula/releases/tag/v1.6.0
 [1.5.2]: https://github.com/slackhq/nebula/releases/tag/v1.5.2
