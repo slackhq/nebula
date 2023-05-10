@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `punchy.respond_delay` option. This allows you to change the delay
   before attempting punchy.respond. Default is 5 seconds. (#721)
 
-- Added ssh commands to allow the capture of a mutex profile. (#737)
+- Added SSH commands to allow the capture of a mutex profile. (#737)
 
 - You can now set `lighthouse.calculated_remotes` to make it possible to do
   handshakes without a lighthouse in certain configurations. (#759)
@@ -62,20 +62,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-702e1c5 Always disconnect block listed hosts (#858)
-a0d3b93 update dependencies: 2023-05 (#855)
-61b784d Update dependencies 2023-03 (#824)
-d4f9500 Update dependencies (2022-11) (#780)
-58ec1f7 build with go1.20 (#854)
-2801fb2 Fix relay (#827)
-5bd8712 Immediately forward packets from self to self on FreeBSD (#808)
-1a6c657 Normalize logs (#837)
-  0fc4d81 log network as String to match the other log event in interface.go that emits network (#811)
-c177126 Fix possible panic in the timerwheels (#802)
-c44da3a Make DNS queries case insensitive (#793)
-3ae242f Add nss-lookup to the systemd wants (#791)
-9a8892c Fix 756 SSH command line parsing error to write to user instead of stderr (#757)
-85f5849 Fix a hang when shutting down Android (#772)
+- Always disconnect blocklisted hosts, even if `pki.disconnect_invalid` is
+  not set. (#858)
+
+- Dependencies updated and go1.20 required. (#780, #824, #855, #854)
+
+- Fix possible race condition with relays. (#827)
+
+- FreeBSD: Fix connection to the localhost's own Nebula IP. (#808)
+
+- Normalize and document some common log field values. (#837, #811)
+
+- Fix crash if you set unlucky values for the firewall timeout configuration
+  options. (#802)
+
+- Make DNS queries case insensitive. (#793)
+
+- Update example systemd configurations to want `nss-lookup`. (#791)
+
+- Errors with SSH commands now go to the SSH tunnel instead of stderr. (#757)
+
+- Fix a hang when shutting down Android. (#772)
 
 ## [1.6.1] - 2022-09-26
 
