@@ -47,20 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-bd9cc01 Dns static lookerupper (#796)
-48eb638 Have lighthouses ack updates to reduce test packet traffic (#851)
-  e28336c probes to the lh are not generally useful as recv_error should catch (#408)
-3cb4e0e Allow listen.host to contain names (#825)
+- Lighthouses and other `static_host_map` entries that use DNS names will now
+  be automatically refreshed to detect when the IP address changes. (#796)
 
-03e4a7f Rehandshaking (#838)
-  5fe8f45 Clear lighthouse cache for a vpn ip on a dead connection when its the final hostinfo (#857)
-  d3fe3ef Fix handshake retry regression (#842)
-  fd99ce9 Use fewer test packets (#840)
-  ee8e134 Use connection manager to drive NAT maintenance (#835)
-  f0ef805 Remove dead code and re-order transit from pending to main hostmap on stage 2 (#828)
-  92cc32f Remove handshake race avoidance (#820)
-  a06977b Track connections by local index id instead of vpn ip (#807)
+- Lighthouses send ACK replies back to clients so that they do not fall into
+  connection testing as often by clients. (#851, #408)
 
+- Allow the `listen.host` option to contain a hostname. (#825)
+
+- When Nebula switches to a new certificate (such as via SIGHUP), we now
+  rehandshake with all existing tunnels. This allows firewall groups to be
+  updated and `pki.disconnect_invalid` to know about the new certificate
+  expiration time. (#838, #857, #842, #840, #835, #828, #820, #807)
 
 ### Fixed
 
