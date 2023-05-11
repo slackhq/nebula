@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add `tun.use_system_route_table` option. Set to true to manage unsafe routes
   directly on the system route table with gateway routes instead of in Nebula
-  configuration files. (#839)
+  configuration files. This is only supported on Linux. (#839)
 
 - The metric `certificate.ttl_seconds` is now exposed via stats. (#782)
 
