@@ -17,6 +17,7 @@ import (
 	"math"
 	"math/big"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/curve25519"
@@ -43,8 +44,8 @@ type NebulaCertificate struct {
 	Details   NebulaCertificateDetails
 	Signature []byte
 
-	sha256sum         string
-	signatureVerified bool
+	sha256sum         atomic.Pointer[string]
+	signatureVerified atomic.Bool
 }
 
 type NebulaCertificateDetails struct {
@@ -548,26 +549,27 @@ func (nc *NebulaCertificate) Sign(curve Curve, key []byte) error {
 
 // CheckSignature verifies the signature against the provided public key
 func (nc *NebulaCertificate) CheckSignature(key []byte) bool {
-	if nc.signatureVerified {
+	if nc.signatureVerified.Load() {
 		return true
 	}
 	b, err := proto.Marshal(nc.getRawDetails())
 	if err != nil {
 		return false
 	}
+
+	var verified bool
 	switch nc.Details.Curve {
 	case Curve_CURVE25519:
-		nc.signatureVerified = ed25519.Verify(ed25519.PublicKey(key), b, nc.Signature)
+		verified = ed25519.Verify(ed25519.PublicKey(key), b, nc.Signature)
 	case Curve_P256:
 		x, y := elliptic.Unmarshal(elliptic.P256(), key)
 		pubKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
 		hashed := sha256.Sum256(b)
-		nc.signatureVerified = ecdsa.VerifyASN1(pubKey, hashed[:], nc.Signature)
-	default:
-		nc.signatureVerified = false
+		verified = ecdsa.VerifyASN1(pubKey, hashed[:], nc.Signature)
 	}
 
-	return nc.signatureVerified
+	nc.signatureVerified.Store(verified)
+	return verified
 }
 
 // Expired will return true if the nebula cert is too young or too old compared to the provided time, otherwise false
@@ -808,8 +810,8 @@ func (nc *NebulaCertificate) MarshalToPEM() ([]byte, error) {
 
 // Sha256Sum calculates a sha-256 sum of the marshaled certificate
 func (nc *NebulaCertificate) Sha256Sum() (string, error) {
-	if nc.sha256sum != "" {
-		return nc.sha256sum, nil
+	if s := nc.sha256sum.Load(); s != nil {
+		return *s, nil
 	}
 	b, err := nc.Marshal()
 	if err != nil {
@@ -817,8 +819,9 @@ func (nc *NebulaCertificate) Sha256Sum() (string, error) {
 	}
 
 	sum := sha256.Sum256(b)
-	nc.sha256sum = hex.EncodeToString(sum[:])
-	return nc.sha256sum, nil
+	s := hex.EncodeToString(sum[:])
+	nc.sha256sum.Store(&s)
+	return s, nil
 }
 
 func (nc *NebulaCertificate) MarshalJSON() ([]byte, error) {
