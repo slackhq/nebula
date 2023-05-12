@@ -42,6 +42,9 @@ const (
 type NebulaCertificate struct {
 	Details   NebulaCertificateDetails
 	Signature []byte
+
+	sha256sum         string
+	signatureVerified bool
 }
 
 type NebulaCertificateDetails struct {
@@ -545,21 +548,26 @@ func (nc *NebulaCertificate) Sign(curve Curve, key []byte) error {
 
 // CheckSignature verifies the signature against the provided public key
 func (nc *NebulaCertificate) CheckSignature(key []byte) bool {
+	if nc.signatureVerified {
+		return true
+	}
 	b, err := proto.Marshal(nc.getRawDetails())
 	if err != nil {
 		return false
 	}
 	switch nc.Details.Curve {
 	case Curve_CURVE25519:
-		return ed25519.Verify(ed25519.PublicKey(key), b, nc.Signature)
+		nc.signatureVerified = ed25519.Verify(ed25519.PublicKey(key), b, nc.Signature)
 	case Curve_P256:
 		x, y := elliptic.Unmarshal(elliptic.P256(), key)
 		pubKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
 		hashed := sha256.Sum256(b)
-		return ecdsa.VerifyASN1(pubKey, hashed[:], nc.Signature)
+		nc.signatureVerified = ecdsa.VerifyASN1(pubKey, hashed[:], nc.Signature)
 	default:
-		return false
+		nc.signatureVerified = false
 	}
+
+	return nc.signatureVerified
 }
 
 // Expired will return true if the nebula cert is too young or too old compared to the provided time, otherwise false
@@ -800,13 +808,17 @@ func (nc *NebulaCertificate) MarshalToPEM() ([]byte, error) {
 
 // Sha256Sum calculates a sha-256 sum of the marshaled certificate
 func (nc *NebulaCertificate) Sha256Sum() (string, error) {
+	if nc.sha256sum != "" {
+		return nc.sha256sum, nil
+	}
 	b, err := nc.Marshal()
 	if err != nil {
 		return "", err
 	}
 
 	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:]), nil
+	nc.sha256sum = hex.EncodeToString(sum[:])
+	return nc.sha256sum, nil
 }
 
 func (nc *NebulaCertificate) MarshalJSON() ([]byte, error) {
