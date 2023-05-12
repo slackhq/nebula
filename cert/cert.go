@@ -44,8 +44,11 @@ type NebulaCertificate struct {
 	Details   NebulaCertificateDetails
 	Signature []byte
 
-	sha256sum         atomic.Pointer[string]
-	signatureVerified atomic.Bool
+	// the cached hex string of the calculated sha256sum
+	sha256sum atomic.Pointer[string]
+
+	// the cached public key bytes if they were verified as the signer
+	signatureVerified atomic.Pointer[[]byte]
 }
 
 type NebulaCertificateDetails struct {
@@ -549,8 +552,8 @@ func (nc *NebulaCertificate) Sign(curve Curve, key []byte) error {
 
 // CheckSignature verifies the signature against the provided public key
 func (nc *NebulaCertificate) CheckSignature(key []byte) bool {
-	if nc.signatureVerified.Load() {
-		return true
+	if v := nc.signatureVerified.Load(); v != nil {
+		return bytes.Equal(*v, key)
 	}
 	b, err := proto.Marshal(nc.getRawDetails())
 	if err != nil {
@@ -568,7 +571,11 @@ func (nc *NebulaCertificate) CheckSignature(key []byte) bool {
 		verified = ecdsa.VerifyASN1(pubKey, hashed[:], nc.Signature)
 	}
 
-	nc.signatureVerified.Store(verified)
+	if verified {
+		keyCopy := make([]byte, len(key))
+		copy(keyCopy, key)
+		nc.signatureVerified.Store(&keyCopy)
+	}
 	return verified
 }
 
