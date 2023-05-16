@@ -45,9 +45,11 @@ type NebulaCertificate struct {
 	Signature []byte
 
 	// the cached hex string of the calculated sha256sum
+	// for VerifyWithCache
 	sha256sum atomic.Pointer[string]
 
 	// the cached public key bytes if they were verified as the signer
+	// for VerifyWithCache
 	signatureVerified atomic.Pointer[[]byte]
 }
 
@@ -552,30 +554,42 @@ func (nc *NebulaCertificate) Sign(curve Curve, key []byte) error {
 
 // CheckSignature verifies the signature against the provided public key
 func (nc *NebulaCertificate) CheckSignature(key []byte) bool {
-	if v := nc.signatureVerified.Load(); v != nil {
-		return bytes.Equal(*v, key)
-	}
 	b, err := proto.Marshal(nc.getRawDetails())
 	if err != nil {
 		return false
 	}
 
-	var verified bool
 	switch nc.Details.Curve {
 	case Curve_CURVE25519:
-		verified = ed25519.Verify(ed25519.PublicKey(key), b, nc.Signature)
+		return ed25519.Verify(ed25519.PublicKey(key), b, nc.Signature)
 	case Curve_P256:
 		x, y := elliptic.Unmarshal(elliptic.P256(), key)
 		pubKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
 		hashed := sha256.Sum256(b)
-		verified = ecdsa.VerifyASN1(pubKey, hashed[:], nc.Signature)
+		return ecdsa.VerifyASN1(pubKey, hashed[:], nc.Signature)
+	default:
+		return false
+	}
+}
+
+// NOTE: This uses an internal cache that will not be invalidated automatically
+// if you manually change any fields in the NebulaCertificate.
+func (nc *NebulaCertificate) checkSignatureWithCache(key []byte, useCache bool) bool {
+	if !useCache {
+		return nc.CheckSignature(key)
 	}
 
+	if v := nc.signatureVerified.Load(); v != nil {
+		return bytes.Equal(*v, key)
+	}
+
+	verified := nc.CheckSignature(key)
 	if verified {
 		keyCopy := make([]byte, len(key))
 		copy(keyCopy, key)
 		nc.signatureVerified.Store(&keyCopy)
 	}
+
 	return verified
 }
 
@@ -586,7 +600,26 @@ func (nc *NebulaCertificate) Expired(t time.Time) bool {
 
 // Verify will ensure a certificate is good in all respects (expiry, group membership, signature, cert blocklist, etc)
 func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error) {
-	if ncp.IsBlocklisted(nc) {
+	return nc.verify(t, ncp, false)
+}
+
+// VerifyWithCache will ensure a certificate is good in all respects (expiry, group membership, signature, cert blocklist, etc)
+//
+// NOTE: This uses an internal cache that will not be invalidated automatically
+// if you manually change any fields in the NebulaCertificate.
+func (nc *NebulaCertificate) VerifyWithCache(t time.Time, ncp *NebulaCAPool) (bool, error) {
+	return nc.verify(t, ncp, true)
+}
+
+// ResetCache resets the cache used by VerifyWithCache.
+func (nc *NebulaCertificate) ResetCache() {
+	nc.sha256sum.Store(nil)
+	nc.signatureVerified.Store(nil)
+}
+
+// Verify will ensure a certificate is good in all respects (expiry, group membership, signature, cert blocklist, etc)
+func (nc *NebulaCertificate) verify(t time.Time, ncp *NebulaCAPool, useCache bool) (bool, error) {
+	if ncp.isBlocklistedWithCache(nc, useCache) {
 		return false, ErrBlockListed
 	}
 
@@ -603,7 +636,7 @@ func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error
 		return false, ErrExpired
 	}
 
-	if !nc.CheckSignature(signer.Details.PublicKey) {
+	if !nc.checkSignatureWithCache(signer.Details.PublicKey, useCache) {
 		return false, ErrSignatureMismatch
 	}
 
@@ -817,16 +850,30 @@ func (nc *NebulaCertificate) MarshalToPEM() ([]byte, error) {
 
 // Sha256Sum calculates a sha-256 sum of the marshaled certificate
 func (nc *NebulaCertificate) Sha256Sum() (string, error) {
-	if s := nc.sha256sum.Load(); s != nil {
-		return *s, nil
-	}
 	b, err := nc.Marshal()
 	if err != nil {
 		return "", err
 	}
 
 	sum := sha256.Sum256(b)
-	s := hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// NOTE: This uses an internal cache that will not be invalidated automatically
+// if you manually change any fields in the NebulaCertificate.
+func (nc *NebulaCertificate) sha256SumWithCache(useCache bool) (string, error) {
+	if !useCache {
+		return nc.Sha256Sum()
+	}
+
+	if s := nc.sha256sum.Load(); s != nil {
+		return *s, nil
+	}
+	s, err := nc.Sha256Sum()
+	if err != nil {
+		return s, err
+	}
+
 	nc.sha256sum.Store(&s)
 	return s, nil
 }

@@ -93,7 +93,12 @@ func (ncp *NebulaCAPool) ResetCertBlocklist() {
 
 // IsBlocklisted returns true if the fingerprint fails to generate or has been explicitly blocklisted
 func (ncp *NebulaCAPool) IsBlocklisted(c *NebulaCertificate) bool {
-	h, err := c.Sha256Sum()
+	return ncp.isBlocklistedWithCache(c, false)
+}
+
+// IsBlocklisted returns true if the fingerprint fails to generate or has been explicitly blocklisted
+func (ncp *NebulaCAPool) isBlocklistedWithCache(c *NebulaCertificate, useCache bool) bool {
+	h, err := c.sha256SumWithCache(useCache)
 	if err != nil {
 		return true
 	}
