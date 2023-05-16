@@ -558,7 +558,6 @@ func (nc *NebulaCertificate) CheckSignature(key []byte) bool {
 	if err != nil {
 		return false
 	}
-
 	switch nc.Details.Curve {
 	case Curve_CURVE25519:
 		return ed25519.Verify(ed25519.PublicKey(key), b, nc.Signature)
