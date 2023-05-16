@@ -550,11 +550,18 @@ func (nc *NebulaCertificate) Sign(curve Curve, key []byte) error {
 	return nil
 }
 
-// CheckSignature verifies the signature against the provided public key
-func (nc *NebulaCertificate) CheckSignature(key []byte) bool {
+// CheckSignatureCached verifies the signature against the provided public key,
+// but reuses previous checks from a cache. Only use the Cached version when
+// you're certain that the contents of the NebulaCertificate are unchanged.
+func (nc *NebulaCertificate) CheckSignatureCached(key []byte) bool {
 	if v := nc.signatureVerified.Load(); v != nil {
 		return bytes.Equal(*v, key)
 	}
+	return nc.CheckSignature(key)
+}
+
+// CheckSignature verifies the signature against the provided public key
+func (nc *NebulaCertificate) CheckSignature(key []byte) bool {
 	b, err := proto.Marshal(nc.getRawDetails())
 	if err != nil {
 		return false
@@ -586,8 +593,27 @@ func (nc *NebulaCertificate) Expired(t time.Time) bool {
 
 // Verify will ensure a certificate is good in all respects (expiry, group membership, signature, cert blocklist, etc)
 func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error) {
-	if ncp.IsBlocklisted(nc) {
-		return false, ErrBlockListed
+	return nc.verify(t, ncp, false)
+}
+
+// Verify will ensure a certificate is good in all respects (expiry, group membership, signature, cert blocklist, etc)
+// The implementation caches some expensive cert validation results, and is only save to use on unchanging certificates.
+func (nc *NebulaCertificate) VerifyCached(t time.Time, ncp *NebulaCAPool) (bool, error) {
+	return nc.verify(t, ncp, true)
+}
+
+// Verify will ensure a certificate is good in all respects (expiry, group membership, signature, cert blocklist, etc)
+// useCache will re-use cached results in order to avoid some unnecessary memory allocation, but may only be used on
+// unchanging NebulaCertificates.
+func (nc *NebulaCertificate) verify(t time.Time, ncp *NebulaCAPool, useCache bool) (bool, error) {
+	if useCache {
+		if ncp.IsBlocklistedCached(nc) {
+			return false, ErrBlockListed
+		}
+	} else {
+		if ncp.IsBlocklisted(nc) {
+			return false, ErrBlockListed
+		}
 	}
 
 	signer, err := ncp.GetCAForCert(nc)
@@ -817,9 +843,6 @@ func (nc *NebulaCertificate) MarshalToPEM() ([]byte, error) {
 
 // Sha256Sum calculates a sha-256 sum of the marshaled certificate
 func (nc *NebulaCertificate) Sha256Sum() (string, error) {
-	if s := nc.sha256sum.Load(); s != nil {
-		return *s, nil
-	}
 	b, err := nc.Marshal()
 	if err != nil {
 		return "", err
@@ -829,6 +852,14 @@ func (nc *NebulaCertificate) Sha256Sum() (string, error) {
 	s := hex.EncodeToString(sum[:])
 	nc.sha256sum.Store(&s)
 	return s, nil
+}
+
+// Sha256SumCached calculates a sha-256 sum of the cached marshaled certificate
+func (nc *NebulaCertificate) Sha256SumCached() (string, error) {
+	if s := nc.sha256sum.Load(); s != nil {
+		return *s, nil
+	}
+	return nc.Sha256Sum()
 }
 
 func (nc *NebulaCertificate) MarshalJSON() ([]byte, error) {

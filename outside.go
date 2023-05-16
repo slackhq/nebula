@@ -526,7 +526,7 @@ func RecombineCertAndValidate(h *noise.HandshakeState, rawCertBytes []byte, caPo
 	}
 
 	c, _ := cert.UnmarshalNebulaCertificate(recombined)
-	isValid, err := c.Verify(time.Now(), caPool)
+	isValid, err := c.VerifyCached(time.Now(), caPool)
 	if err != nil {
 		return c, fmt.Errorf("certificate validation failed: %s", err)
 	} else if !isValid {

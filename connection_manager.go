@@ -427,7 +427,7 @@ func (n *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostIn
 		return false
 	}
 
-	valid, err := remoteCert.Verify(now, n.intf.caPool)
+	valid, err := remoteCert.VerifyCached(now, n.intf.caPool)
 	if valid {
 		return false
 	}
@@ -437,7 +437,7 @@ func (n *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostIn
 		return false
 	}
 
-	fingerprint, _ := remoteCert.Sha256Sum()
+	fingerprint, _ := remoteCert.Sha256SumCached()
 	hostinfo.logger(n.l).WithError(err).
 		WithField("fingerprint", fingerprint).
 		Info("Remote certificate is no longer valid, tearing down the tunnel")
