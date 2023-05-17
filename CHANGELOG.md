@@ -7,12 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2023-05-17
+
 ### Added
+
 - `nebula-cert ca` now supports encrypting the CA's private key with a
   passphrase. Pass `-encrypt` in order to be prompted for a passphrase.
   Encryption is performed using AES-256-GCM and Argon2id for KDF. KDF
   parameters default to RFC recommendations, but can be overridden via CLI
-  flags `-argon-memory`, `-argon-parallelism`, and `-argon-iterations`.
+  flags `-argon-memory`, `-argon-parallelism`, and `-argon-iterations`. (#386)
+
+- Support for curve P256 and BoringCrypto has been added. See README section
+  "Curve P256 and BoringCrypto" for more details. (#865, #861, #769, #856, #803)
+
+- New firewall rule `local_cidr`. This could be used to filter destinations
+  when using `unsafe_routes`. (#507)
+
+- Add `unsafe_route` option `install`. This controls whether the route is
+  installed in the systems routing table. (#831)
+
+- Add `tun.use_system_route_table` option. Set to true to manage unsafe routes
+  directly on the system route table with gateway routes instead of in Nebula
+  configuration files. This is only supported on Linux. (#839)
+
+- The metric `certificate.ttl_seconds` is now exposed via stats. (#782)
+
+- Add `punchy.respond_delay` option. This allows you to change the delay
+  before attempting punchy.respond. Default is 5 seconds. (#721)
+
+- Added SSH commands to allow the capture of a mutex profile. (#737)
+
+- You can now set `lighthouse.calculated_remotes` to make it possible to do
+  handshakes without a lighthouse in certain configurations. (#759)
+
+- The firewall can be configured to send REJECT replies instead of the default
+  DROP behavior. (#738)
+
+- For macOS, an example launchd configuration file is now provided. (#762)
+
+### Changed
+
+- Lighthouses and other `static_host_map` entries that use DNS names will now
+  be automatically refreshed to detect when the IP address changes. (#796)
+
+- Lighthouses send ACK replies back to clients so that they do not fall into
+  connection testing as often by clients. (#851, #408)
+
+- Allow the `listen.host` option to contain a hostname. (#825)
+
+- When Nebula switches to a new certificate (such as via SIGHUP), we now
+  rehandshake with all existing tunnels. This allows firewall groups to be
+  updated and `pki.disconnect_invalid` to know about the new certificate
+  expiration time. (#838, #857, #842, #840, #835, #828, #820, #807)
+
+### Fixed
+
+- Always disconnect blocklisted hosts, even if `pki.disconnect_invalid` is
+  not set. (#858)
+
+- Dependencies updated and go1.20 required. (#780, #824, #855, #854)
+
+- Fix possible race condition with relays. (#827)
+
+- FreeBSD: Fix connection to the localhost's own Nebula IP. (#808)
+
+- Normalize and document some common log field values. (#837, #811)
+
+- Fix crash if you set unlucky values for the firewall timeout configuration
+  options. (#802)
+
+- Make DNS queries case insensitive. (#793)
+
+- Update example systemd configurations to want `nss-lookup`. (#791)
+
+- Errors with SSH commands now go to the SSH tunnel instead of stderr. (#757)
+
+- Fix a hang when shutting down Android. (#772)
 
 ## [1.6.1] - 2022-09-26
 
@@ -405,7 +475,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/slackhq/nebula/releases/tag/v1.7.0
 [1.6.1]: https://github.com/slackhq/nebula/releases/tag/v1.6.1
 [1.6.0]: https://github.com/slackhq/nebula/releases/tag/v1.6.0
 [1.5.2]: https://github.com/slackhq/nebula/releases/tag/v1.5.2
