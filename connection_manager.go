@@ -427,7 +427,7 @@ func (n *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostIn
 		return false
 	}
 
-	valid, err := remoteCert.Verify(now, n.intf.caPool)
+	valid, err := remoteCert.VerifyWithCache(now, n.intf.caPool)
 	if valid {
 		return false
 	}
