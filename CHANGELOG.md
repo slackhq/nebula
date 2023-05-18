@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2023-05-18
+
+### Fixed
+
+- Fix IPv4 addresses returned by `static_host_map` DNS lookup queries being
+  treated as IPv6 addresses. (#877)
+
 ## [1.7.0] - 2023-05-17
 
 ### Added
