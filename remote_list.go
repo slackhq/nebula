@@ -586,7 +586,7 @@ func (r *RemoteList) unlockedCollect() {
 			case addr.Addr().Is4():
 				v4 := addr.Addr().As4()
 				addrs = append(addrs, &udp.Addr{
-					IP:   v4[:],
+					IP:   net.IPv4(v4[0], v4[1], v4[2], v4[3]),
 					Port: addr.Port(),
 				})
 			case addr.Addr().Is6():
