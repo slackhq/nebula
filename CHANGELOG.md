@@ -482,7 +482,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.7.1...HEAD
+[1.7.1]: https://github.com/slackhq/nebula/releases/tag/v1.7.1
 [1.7.0]: https://github.com/slackhq/nebula/releases/tag/v1.7.0
 [1.6.1]: https://github.com/slackhq/nebula/releases/tag/v1.6.1
 [1.6.0]: https://github.com/slackhq/nebula/releases/tag/v1.6.0
