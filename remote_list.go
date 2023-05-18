@@ -582,20 +582,11 @@ func (r *RemoteList) unlockedCollect() {
 	dnsAddrs := r.hr.GetIPs()
 	for _, addr := range dnsAddrs {
 		if r.shouldAdd == nil || r.shouldAdd(addr.Addr()) {
-			switch {
-			case addr.Addr().Is4():
-				v4 := addr.Addr().As4()
-				addrs = append(addrs, &udp.Addr{
-					IP:   v4[:],
-					Port: addr.Port(),
-				})
-			case addr.Addr().Is6():
-				v6 := addr.Addr().As16()
-				addrs = append(addrs, &udp.Addr{
-					IP:   v6[:],
-					Port: addr.Port(),
-				})
-			}
+			v6 := addr.Addr().As16()
+			addrs = append(addrs, &udp.Addr{
+				IP:   v6[:],
+				Port: addr.Port(),
+			})
 		}
 	}
 
