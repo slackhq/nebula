@@ -78,10 +78,13 @@ func NewListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (
 	}
 
 	fd, err := windows.WSASocket(
-		windows.AF_INET,
+		windows.AF_INET6,
 		windows.SOCK_DGRAM,
 		windows.IPPROTO_UDP,
 		nil, 0, windows.WSA_FLAG_OVERLAPPED)
+
+	// make the socket a dual-stack IP socket to serve ipv4 and ipv6
+	windows.SetsockoptInt(fd, windows.IPPROTO_IPV6, windows.IPV6_V6ONLY, 0)
 
 	if err != nil {
 		windows.Close(fd)
@@ -89,15 +92,15 @@ func NewListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (
 		return nil, fmt.Errorf("unable to open socket: %s", err)
 	}
 
-	var lip [4]byte
-	copy(lip[:], ip.To4())
+	var lip [16]byte
+	copy(lip[:], ip[:])
 
 	if multi {
 		return nil, fmt.Errorf("unable to set SO_REUSEPORT on windows", err)
 	}
 
 	//TODO: support multiple listening IPs (for limiting ipv6)
-	if err := windows.Bind(fd, &windows.SockaddrInet4{Addr: lip, Port: port}); err != nil {
+	if err := windows.Bind(fd, &windows.SockaddrInet6{Addr: lip, Port: port}); err != nil {
 		return nil, fmt.Errorf("unable to bind to socket: %s", err)
 	}
 
@@ -227,13 +230,6 @@ func RawsockAddrToIPAndPort(rsa *windows.RawSockaddrAny) (net.IP, uint16, error)
 
 	switch rsa.Addr.Family {
 	case syscall.AF_INET:
-		var port uint16
-		pp := (*syscall.RawSockaddrInet4)(unsafe.Pointer(rsa))
-		ip := net.IP(pp.Addr[:])
-		p := (*[2]byte)(unsafe.Pointer(&port))
-		p[0] = byte(pp.Port >> 8)
-		p[1] = byte(pp.Port)
-		return ip, port, nil
 	case syscall.AF_INET6:
 		var port uint16
 		pp := (*syscall.RawSockaddrInet6)(unsafe.Pointer(rsa))
@@ -253,35 +249,18 @@ func AddrToRawSockaddrAny(addr *Addr) (*windows.RawSockaddrAny, int32, error) {
 		return nil, 0, syscall.EINVAL
 	}
 
-	ip4 := addr.IP.To4()
-	if ip4 != nil {
-		if addr.Port < 0 || addr.Port > 0xFFFF {
-			return nil, 0, syscall.EINVAL
-		}
-
-		var rsa windows.RawSockaddrInet4
-		rsa.Family = windows.AF_INET
-		p := (*[2]byte)(unsafe.Pointer(&rsa.Port))
-		p[0] = byte(addr.Port >> 8)
-		p[1] = byte(addr.Port)
-		copy(rsa.Addr[:], ip4)
-
-		return (*windows.RawSockaddrAny)(unsafe.Pointer(&rsa)), int32(unsafe.Sizeof(rsa)), nil
-
-	} else {
-		if addr.Port < 0 || addr.Port > 0xFFFF {
-			return nil, 0, syscall.EINVAL
-		}
-
-		var rsa windows.RawSockaddrInet6
-		rsa.Family = windows.AF_INET6
-		p := (*[2]byte)(unsafe.Pointer(&rsa.Port))
-		p[0] = byte(addr.Port >> 8)
-		p[1] = byte(addr.Port)
-		copy(rsa.Addr[:], addr.IP)
-
-		return (*windows.RawSockaddrAny)(unsafe.Pointer(&rsa)), int32(unsafe.Sizeof(rsa)), nil
+	if addr.Port < 0 || addr.Port > 0xFFFF {
+		return nil, 0, syscall.EINVAL
 	}
+
+	var rsa windows.RawSockaddrInet6
+	rsa.Family = windows.AF_INET6
+	p := (*[2]byte)(unsafe.Pointer(&rsa.Port))
+	p[0] = byte(addr.Port >> 8)
+	p[1] = byte(addr.Port)
+	copy(rsa.Addr[:], addr.IP)
+
+	return (*windows.RawSockaddrAny)(unsafe.Pointer(&rsa)), int32(unsafe.Sizeof(rsa)), nil
 }
 
 func (u *Conn) ReadSingle(msgs []rawMessage) (int, error) {
@@ -296,16 +275,6 @@ func (u *Conn) ReadSingle(msgs []rawMessage) (int, error) {
 
 		switch sa := sa.(type) {
 		case *windows.SockaddrInet4:
-			name := windows.RawSockaddrInet4{Family: windows.AF_INET}
-
-			copy(name.Addr[:], sa.Addr[:])
-			name.Port = uint16(sa.Port)
-
-			p := (*[2]byte)(unsafe.Pointer(&name.Port))
-			p[0] = byte(sa.Port >> 8)
-			p[1] = byte(sa.Port)
-
-			*msgs[0].Hdr.Name = *(*windows.RawSockaddrAny)(unsafe.Pointer(&name))
 		case *windows.SockaddrInet6:
 			name := windows.RawSockaddrInet6{Family: windows.AF_INET6}
 
