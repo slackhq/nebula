@@ -80,7 +80,6 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 		hostnames:     make([]hostnamePort, len(hostPorts)),
 		network:       network,
 		lookupTimeout: timeout,
-		stop:          make(chan (struct{})),
 		l:             l,
 	}
 
@@ -115,6 +114,7 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 
 	// Time for the DNS lookup goroutine
 	if performBackgroundLookup {
+		r.stop = make(chan (struct{}), 1)
 		ticker := time.NewTicker(d)
 		go func() {
 			defer ticker.Stop()
@@ -169,7 +169,7 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 }
 
 func (hr *hostnamesResults) Cancel() {
-	if hr != nil {
+	if hr != nil && hr.stop != nil {
 		hr.stop <- struct{}{}
 	}
 }
