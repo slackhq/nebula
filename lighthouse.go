@@ -265,14 +265,13 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 		// Clean up. Entries still in the static_host_map will be re-built.
 		// Entries no longer present must have their (possible) background DNS goroutines stopped.
 		if existingStaticList := lh.staticList.Load(); existingStaticList != nil {
-			lh.Lock()
+			lh.RLock()
 			for staticVpnIp := range *existingStaticList {
-				am := lh.unlockedGetRemoteList(staticVpnIp)
-				if am != nil {
+				if am, ok := lh.addrMap[staticVpnIp]; ok && am != nil {
 					am.hr.Cancel()
 				}
 			}
-			lh.Unlock()
+			lh.RUnlock()
 		}
 		// Build a new list based on current config.
 		staticList := make(map[iputil.VpnIp]struct{})
