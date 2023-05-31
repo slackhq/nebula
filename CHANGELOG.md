@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] - 2023-05-31
+
+### Fixed
+
+- Fix a freeze during config reload if the `static_host_map` config was changed. (#886)
+
 ## [1.7.1] - 2023-05-18
 
 ### Fixed
@@ -482,7 +488,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.7.1...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.7.2...HEAD
+[1.7.2]: https://github.com/slackhq/nebula/releases/tag/v1.7.2
 [1.7.1]: https://github.com/slackhq/nebula/releases/tag/v1.7.1
 [1.7.0]: https://github.com/slackhq/nebula/releases/tag/v1.7.0
 [1.6.1]: https://github.com/slackhq/nebula/releases/tag/v1.6.1
