@@ -36,7 +36,7 @@ func (u *Packet) Copy() *Packet {
 	return n
 }
 
-type Conn struct {
+type TesterConn struct {
 	Addr *Addr
 
 	RxPackets chan *Packet // Packets to receive into nebula
@@ -45,8 +45,8 @@ type Conn struct {
 	l *logrus.Logger
 }
 
-func NewListener(l *logrus.Logger, ip net.IP, port int, _ bool, _ int) (*Conn, error) {
-	return &Conn{
+func NewListener(l *logrus.Logger, ip net.IP, port int, _ bool, _ int) (Conn, error) {
+	return &TesterConn{
 		Addr:      &Addr{ip, uint16(port)},
 		RxPackets: make(chan *Packet, 10),
 		TxPackets: make(chan *Packet, 10),
@@ -57,7 +57,7 @@ func NewListener(l *logrus.Logger, ip net.IP, port int, _ bool, _ int) (*Conn, e
 // Send will place a UdpPacket onto the receive queue for nebula to consume
 // this is an encrypted packet or a handshake message in most cases
 // packets were transmitted from another nebula node, you can send them with Tun.Send
-func (u *Conn) Send(packet *Packet) {
+func (u *TesterConn) Send(packet *Packet) {
 	h := &header.H{}
 	if err := h.Parse(packet.Data); err != nil {
 		panic(err)
@@ -74,7 +74,7 @@ func (u *Conn) Send(packet *Packet) {
 // Get will pull a UdpPacket from the transmit queue
 // nebula meant to send this message on the network, it will be encrypted
 // packets were ingested from the tun side (in most cases), you can send them with Tun.Send
-func (u *Conn) Get(block bool) *Packet {
+func (u *TesterConn) Get(block bool) *Packet {
 	if block {
 		return <-u.TxPackets
 	}
@@ -91,7 +91,7 @@ func (u *Conn) Get(block bool) *Packet {
 // Below this is boilerplate implementation to make nebula actually work
 //********************************************************************************************************************//
 
-func (u *Conn) WriteTo(b []byte, addr *Addr) error {
+func (u *TesterConn) WriteTo(b []byte, addr *Addr) error {
 	p := &Packet{
 		Data:     make([]byte, len(b), len(b)),
 		FromIp:   make([]byte, 16),
@@ -108,7 +108,7 @@ func (u *Conn) WriteTo(b []byte, addr *Addr) error {
 	return nil
 }
 
-func (u *Conn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int) {
+func (u *TesterConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int) {
 	plaintext := make([]byte, MTU)
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
@@ -126,17 +126,17 @@ func (u *Conn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall
 	}
 }
 
-func (u *Conn) ReloadConfig(*config.C) {}
+func (u *TesterConn) ReloadConfig(*config.C) {}
 
-func NewUDPStatsEmitter(_ []*Conn) func() {
+func NewUDPStatsEmitter(_ []Conn) func() {
 	// No UDP stats for non-linux
 	return func() {}
 }
 
-func (u *Conn) LocalAddr() (*Addr, error) {
+func (u *TesterConn) LocalAddr() (*Addr, error) {
 	return u.Addr, nil
 }
 
-func (u *Conn) Rebind() error {
+func (u *TesterConn) Rebind() error {
 	return nil
 }

@@ -37,7 +37,7 @@ func NewListenConfig(multi bool) net.ListenConfig {
 	}
 }
 
-func (u *Conn) Rebind() error {
+func (u *GenericConn) Rebind() error {
 	file, err := u.File()
 	if err != nil {
 		return err

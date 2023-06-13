@@ -45,7 +45,7 @@ type HandshakeManager struct {
 	pendingHostMap         *HostMap
 	mainHostMap            *HostMap
 	lightHouse             *LightHouse
-	outside                *udp.Conn
+	outside                udp.Conn
 	config                 HandshakeConfig
 	OutboundHandshakeTimer *LockingTimerWheel[iputil.VpnIp]
 	messageMetrics         *MessageMetrics
@@ -57,7 +57,7 @@ type HandshakeManager struct {
 	trigger chan iputil.VpnIp
 }
 
-func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udp.Conn, config HandshakeConfig) *HandshakeManager {
+func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
 		pendingHostMap:         NewHostMap(l, "pending", tunCidr, preferredRanges),
 		mainHostMap:            mainHostMap,
