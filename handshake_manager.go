@@ -7,8 +7,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"sync"
 	"time"
 
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/header"
@@ -21,6 +23,10 @@ const (
 	DefaultHandshakeRetries       = 10
 	DefaultHandshakeTriggerBuffer = 64
 	DefaultUseRelays              = true
+
+	DefaultHandshakeChurnLimiting    = false
+	DefaultHandshakeChurnNumFailures = 3
+	DefaultHandshakeChurnPeriod      = time.Second * 300
 )
 
 var (
@@ -33,10 +39,13 @@ var (
 )
 
 type HandshakeConfig struct {
-	tryInterval   time.Duration
-	retries       int
-	triggerBuffer int
-	useRelays     bool
+	tryInterval      time.Duration
+	retries          int
+	triggerBuffer    int
+	useRelays        bool
+	churnLimiting    bool
+	churnNumFailures int
+	churnPeriod      time.Duration
 
 	messageMetrics *MessageMetrics
 }
@@ -52,12 +61,73 @@ type HandshakeManager struct {
 	metricInitiated        metrics.Counter
 	metricTimedOut         metrics.Counter
 	l                      *logrus.Logger
+	ChurnLimiter           *ChurnLimiter
 
 	// can be used to trigger outbound handshake for the given vpnIp
 	trigger chan iputil.VpnIp
 }
 
+type Limiter struct {
+	mu            sync.Mutex
+	lastResetTime time.Time
+	attempts      int
+}
+type ChurnLimiter struct {
+	limiterMap  *lru.Cache[string, *Limiter]
+	numFailures int
+	period      time.Duration
+	enabled     bool
+}
+
+func (m *ChurnLimiter) Attempt(vpnIp iputil.VpnIp) bool {
+	if !m.enabled {
+		return true
+	}
+
+	current, ok := m.limiterMap.Get(vpnIp.String())
+	if !ok {
+		current = &Limiter{
+			lastResetTime: time.Now(),
+			attempts:      0,
+		}
+	}
+
+	allow := true
+	current.mu.Lock()
+	defer current.mu.Unlock()
+	if time.Since(current.lastResetTime) < m.period {
+		current.attempts += 1
+		if current.attempts > m.numFailures {
+			allow = false
+		}
+	} else {
+		current.lastResetTime = time.Now()
+		current.attempts = 1
+	}
+
+	m.limiterMap.Add(vpnIp.String(), current)
+	return allow
+}
+
 func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
+	var churnLimiter *ChurnLimiter
+	if config.useRelays && config.churnLimiting {
+		limiterMap, err := lru.New[string, *Limiter](1000)
+		if err != nil {
+			l.WithError(err).Fatal("Failed to create LRU")
+		}
+		churnLimiter = &ChurnLimiter{
+			limiterMap:  limiterMap,
+			numFailures: config.churnNumFailures,
+			period:      config.churnPeriod,
+			enabled:     true,
+		}
+	} else {
+		churnLimiter = &ChurnLimiter{
+			enabled: false,
+		}
+	}
+
 	return &HandshakeManager{
 		pendingHostMap:         NewHostMap(l, "pending", tunCidr, preferredRanges),
 		mainHostMap:            mainHostMap,
@@ -66,6 +136,7 @@ func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges [
 		config:                 config,
 		trigger:                make(chan iputil.VpnIp, config.triggerBuffer),
 		OutboundHandshakeTimer: NewLockingTimerWheel[iputil.VpnIp](config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
+		ChurnLimiter:           churnLimiter,
 		messageMetrics:         config.messageMetrics,
 		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
 		metricTimedOut:         metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),
