@@ -4,21 +4,42 @@
 package overlay
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
-	"regexp"
 	"strconv"
-	"strings"
+	"syscall"
+	"unsafe"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/iputil"
 )
 
-var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
+const (
+	FIODGNAME = 0x80106678
+)
+
+type fiodgnameArg struct {
+	length int32
+	pad    [4]byte
+	buf    unsafe.Pointer
+}
+
+type ifreqRename struct {
+	Name [16]byte
+	Data uintptr
+}
+
+type ifreqDestroy struct {
+	Name [16]byte
+	pad  [16]byte
+}
 
 type tun struct {
 	Device    string
@@ -33,8 +54,25 @@ type tun struct {
 
 func (t *tun) Close() error {
 	if t.ReadWriteCloser != nil {
-		return t.ReadWriteCloser.Close()
+		if err := t.ReadWriteCloser.Close(); err != nil {
+			return err
+		}
+
+		s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_IP)
+		if err != nil {
+			return err
+		}
+		defer syscall.Close(s)
+
+		ifreq := ifreqDestroy{Name: t.deviceBytes()}
+
+		// Destroy the interface
+		fmt.Println("Destroying interface...")
+		err = ioctl(uintptr(s), syscall.SIOCIFDESTROY, uintptr(unsafe.Pointer(&ifreq)))
+		fmt.Println("destroyed!")
+		return err
 	}
+
 	return nil
 }
 
@@ -43,34 +81,82 @@ func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int
 }
 
 func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route, _ int, _ bool, _ bool) (*tun, error) {
+	// Try to open existing tun device
+	var file *os.File
+	var err error
+	if deviceName != "" {
+		file, err = os.OpenFile("/dev/"+deviceName, os.O_RDWR, 0)
+	}
+	if errors.Is(err, fs.ErrNotExist) || deviceName == "" {
+		// If the device doesn't already exist, request a new one and rename it
+		file, err = os.OpenFile("/dev/tun", os.O_RDWR, 0)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	fileFd := file.Fd()
+	err = syscall.SetNonblock(int(fileFd), true)
+	if err != nil {
+		return nil, fmt.Errorf("SetNonblock: %v", err)
+	}
+
+	var name [16]byte
+	arg := fiodgnameArg{length: 16, buf: unsafe.Pointer(&name)}
+	if err := ioctl(fileFd, FIODGNAME, uintptr(unsafe.Pointer(&arg))); err != nil {
+		return nil, err
+	}
+
+	ifName := string(bytes.TrimRight(name[:], "\x00"))
+	if deviceName == "" {
+		deviceName = ifName
+	}
+
+	if ifName != deviceName {
+		s, err := syscall.Socket(
+			syscall.AF_INET,
+			syscall.SOCK_DGRAM,
+			syscall.IPPROTO_IP,
+		)
+		if err != nil {
+			return nil, err
+		}
+		defer syscall.Close(s)
+
+		fd := uintptr(s)
+
+		var fromName [16]byte
+		var toName [16]byte
+		copy(fromName[:], ifName)
+		copy(toName[:], deviceName)
+
+		ifrr := ifreqRename{
+			Name: fromName,
+			Data: uintptr(unsafe.Pointer(&toName)),
+		}
+
+		// Set the device name
+		ioctl(fd, syscall.SIOCSIFNAME, uintptr(unsafe.Pointer(&ifrr)))
+	}
+
 	routeTree, err := makeRouteTree(l, routes, false)
 	if err != nil {
 		return nil, err
 	}
 
-	if strings.HasPrefix(deviceName, "/dev/") {
-		deviceName = strings.TrimPrefix(deviceName, "/dev/")
-	}
-	if !deviceNameRE.MatchString(deviceName) {
-		return nil, fmt.Errorf("tun.dev must match `tun[0-9]+`")
-	}
 	return &tun{
-		Device:    deviceName,
-		cidr:      cidr,
-		MTU:       defaultMTU,
-		Routes:    routes,
-		routeTree: routeTree,
-		l:         l,
+		ReadWriteCloser: file,
+		Device:          deviceName,
+		cidr:            cidr,
+		MTU:             defaultMTU,
+		Routes:          routes,
+		routeTree:       routeTree,
+		l:               l,
 	}, nil
 }
 
 func (t *tun) Activate() error {
 	var err error
-	t.ReadWriteCloser, err = os.OpenFile("/dev/"+t.Device, os.O_RDWR, 0)
-	if err != nil {
-		return fmt.Errorf("activate failed: %v", err)
-	}
-
 	// TODO use syscalls instead of exec.Command
 	t.l.Debug("command: ifconfig", t.Device, t.cidr.String(), t.cidr.IP.String())
 	if err = exec.Command("/sbin/ifconfig", t.Device, t.cidr.String(), t.cidr.IP.String()).Run(); err != nil {
@@ -119,4 +205,11 @@ func (t *tun) Name() string {
 
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for freebsd")
+}
+
+func (t *tun) deviceBytes() (o [16]byte) {
+	for i, c := range t.Device {
+		o[i] = byte(c)
+	}
+	return
 }

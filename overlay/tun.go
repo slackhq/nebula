@@ -6,6 +6,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/util"
+	"golang.org/x/sys/unix"
 )
 
 const DefaultMTU = 1300
@@ -50,4 +51,12 @@ func NewDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, fd *
 			c.GetBool("tun.use_system_route_table", false),
 		)
 	}
+}
+
+func ioctl(a1, a2, a3 uintptr) error {
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, a1, a2, a3)
+	if errno != 0 {
+		return errno
+	}
+	return nil
 }

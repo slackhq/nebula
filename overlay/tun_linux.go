@@ -43,14 +43,6 @@ type ifReq struct {
 	pad   [8]byte
 }
 
-func ioctl(a1, a2, a3 uintptr) error {
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, a1, a2, a3)
-	if errno != 0 {
-		return errno
-	}
-	return nil
-}
-
 type ifreqAddr struct {
 	Name [16]byte
 	Addr unix.RawSockaddrInet4
