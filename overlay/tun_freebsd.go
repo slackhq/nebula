@@ -67,9 +67,7 @@ func (t *tun) Close() error {
 		ifreq := ifreqDestroy{Name: t.deviceBytes()}
 
 		// Destroy the interface
-		fmt.Println("Destroying interface...")
 		err = ioctl(uintptr(s), syscall.SIOCIFDESTROY, uintptr(unsafe.Pointer(&ifreq)))
-		fmt.Println("destroyed!")
 		return err
 	}
 
@@ -95,15 +93,18 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 		return nil, err
 	}
 
-	fileFd := file.Fd()
-	err = syscall.SetNonblock(int(fileFd), true)
+	rawConn, err := file.SyscallConn()
 	if err != nil {
-		return nil, fmt.Errorf("SetNonblock: %v", err)
+		return nil, fmt.Errorf("SyscallConn: %v", err)
 	}
 
 	var name [16]byte
-	arg := fiodgnameArg{length: 16, buf: unsafe.Pointer(&name)}
-	if err := ioctl(fileFd, FIODGNAME, uintptr(unsafe.Pointer(&arg))); err != nil {
+	var ctrlErr error
+	rawConn.Control(func(fd uintptr) {
+		arg := fiodgnameArg{length: 16, buf: unsafe.Pointer(&name)}
+		ctrlErr = ioctl(fd, FIODGNAME, uintptr(unsafe.Pointer(&arg)))
+	})
+	if ctrlErr != nil {
 		return nil, err
 	}
 
