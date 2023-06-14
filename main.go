@@ -147,7 +147,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 
 	// set up our UDP listener
-	udpConns := make([]*udp.Conn, routines)
+	udpConns := make([]udp.Conn, routines)
 	port := c.GetInt("listen.port", 0)
 
 	if !configTest {

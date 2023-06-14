@@ -39,7 +39,7 @@ type LightHouse struct {
 	myVpnIp      iputil.VpnIp
 	myVpnZeros   iputil.VpnIp
 	myVpnNet     *net.IPNet
-	punchConn    *udp.Conn
+	punchConn    udp.Conn
 	punchy       *Punchy
 
 	// Local cache of answers from light houses
@@ -84,7 +84,7 @@ type LightHouse struct {
 
 // NewLightHouseFromConfig will build a Lighthouse struct from the values provided in the config object
 // addrMap should be nil unless this is during a config reload
-func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C, myVpnNet *net.IPNet, pc *udp.Conn, p *Punchy) (*LightHouse, error) {
+func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C, myVpnNet *net.IPNet, pc udp.Conn, p *Punchy) (*LightHouse, error) {
 	amLighthouse := c.GetBool("lighthouse.am_lighthouse", false)
 	nebulaPort := uint32(c.GetInt("listen.port", 0))
 	if amLighthouse && nebulaPort == 0 {

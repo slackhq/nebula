@@ -54,10 +54,10 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	ifce := &Interface{
 		hostMap:          hostMap,
 		inside:           &test.NoopTun{},
-		outside:          &udp.Conn{},
+		outside:          &udp.NoopConn{},
 		firewall:         &Firewall{},
 		lightHouse:       lh,
-		handshakeManager: NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.Conn{}, defaultHandshakeConfig),
+		handshakeManager: NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
 		l:                l,
 	}
 	ifce.certState.Store(cs)
@@ -133,10 +133,10 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	ifce := &Interface{
 		hostMap:          hostMap,
 		inside:           &test.NoopTun{},
-		outside:          &udp.Conn{},
+		outside:          &udp.NoopConn{},
 		firewall:         &Firewall{},
 		lightHouse:       lh,
-		handshakeManager: NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.Conn{}, defaultHandshakeConfig),
+		handshakeManager: NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
 		l:                l,
 	}
 	ifce.certState.Store(cs)
@@ -252,10 +252,10 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	ifce := &Interface{
 		hostMap:           hostMap,
 		inside:            &test.NoopTun{},
-		outside:           &udp.Conn{},
+		outside:           &udp.NoopConn{},
 		firewall:          &Firewall{},
 		lightHouse:        lh,
-		handshakeManager:  NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.Conn{}, defaultHandshakeConfig),
+		handshakeManager:  NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
 		l:                 l,
 		disconnectInvalid: true,
 		caPool:            ncp,

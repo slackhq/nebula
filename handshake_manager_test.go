@@ -23,7 +23,7 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
 	lh := newTestLighthouse()
 
-	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, lh, &udp.Conn{}, defaultHandshakeConfig)
+	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, lh, &udp.NoopConn{}, defaultHandshakeConfig)
 
 	now := time.Now()
 	blah.NextOutboundHandshakeTimerTick(now, mw)
