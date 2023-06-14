@@ -22,6 +22,8 @@ import (
 )
 
 const (
+	// FIODGNAME is defined in sys/sys/filio.h on FreeBSD
+	// For 32-bit systems, use FIODGNAME_32 (not defined in this file: 0x80086678)
 	FIODGNAME = 0x80106678
 )
 
@@ -101,6 +103,7 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 	var name [16]byte
 	var ctrlErr error
 	rawConn.Control(func(fd uintptr) {
+		// Read the name of the interface
 		arg := fiodgnameArg{length: 16, buf: unsafe.Pointer(&name)}
 		ctrlErr = ioctl(fd, FIODGNAME, uintptr(unsafe.Pointer(&arg)))
 	})
@@ -113,6 +116,7 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 		deviceName = ifName
 	}
 
+	// If the name doesn't match the desired interface name, rename it now
 	if ifName != deviceName {
 		s, err := syscall.Socket(
 			syscall.AF_INET,
