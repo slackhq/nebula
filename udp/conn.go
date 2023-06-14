@@ -26,6 +26,7 @@ type Conn interface {
 	ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int)
 	WriteTo(b []byte, addr *Addr) error
 	ReloadConfig(c *config.C)
+	Close() error
 }
 
 type NoopConn struct{}
@@ -44,4 +45,7 @@ func (NoopConn) WriteTo(_ []byte, _ *Addr) error {
 }
 func (NoopConn) ReloadConfig(_ *config.C) {
 	return
+}
+func (NoopConn) Close() error {
+	return nil
 }

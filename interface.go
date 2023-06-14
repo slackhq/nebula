@@ -413,6 +413,13 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 func (f *Interface) Close() error {
 	f.closed.Store(true)
 
+	for _, u := range f.writers {
+		err := u.Close()
+		if err != nil {
+			f.l.WithError(err).Error("Error while closing udp socket")
+		}
+	}
+
 	// Release the tun device
 	return f.inside.Close()
 }

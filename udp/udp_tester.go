@@ -140,3 +140,9 @@ func (u *TesterConn) LocalAddr() (*Addr, error) {
 func (u *TesterConn) Rebind() error {
 	return nil
 }
+
+func (u *TesterConn) Close() error {
+	close(u.RxPackets)
+	close(u.TxPackets)
+	return nil
+}
