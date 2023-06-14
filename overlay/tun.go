@@ -2,7 +2,6 @@ package overlay
 
 import (
 	"net"
-	"syscall"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
@@ -51,12 +50,4 @@ func NewDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, fd *
 			c.GetBool("tun.use_system_route_table", false),
 		)
 	}
-}
-
-func ioctl(a1, a2, a3 uintptr) error {
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, a1, a2, a3)
-	if errno != 0 {
-		return errno
-	}
-	return nil
 }
