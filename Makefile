@@ -12,6 +12,8 @@ ifeq ($(OS),Windows_NT)
 	GOISMIN := $(shell IF "$(GOVERSION)" GEQ "$(GOMINVERSION)" ECHO 1)
 	NEBULA_CMD_SUFFIX = .exe
 	NULL_FILE = nul
+	# RIO on windows does pointer stuff that makes go vet angry
+	VET_FLAGS = -unsafeptr=false
 else
 	GOVERSION := $(shell go version | awk '{print substr($$3, 3)}')
 	GOISMIN := $(shell expr "$(GOVERSION)" ">=" "$(GOMINVERSION)")
@@ -137,7 +139,7 @@ build/nebula-%.zip: build/%/nebula.exe build/%/nebula-cert.exe
 	cd build/$* && zip ../nebula-$*.zip nebula.exe nebula-cert.exe
 
 vet:
-	go vet -v ./...
+	go vet $(VET_FLAGS) -v ./...
 
 test:
 	go test -v ./...
