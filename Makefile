@@ -44,10 +44,13 @@ ALL_LINUX = linux-amd64 \
 	linux-mips-softfloat \
 	linux-riscv64
 
+ALL_FREEBSD = freebsd-amd64 \
+	freebsd-arm64
+
 ALL = $(ALL_LINUX) \
+	$(ALL_FREEBSD) \
 	darwin-amd64 \
 	darwin-arm64 \
-	freebsd-amd64 \
 	windows-amd64 \
 	windows-arm64
 
@@ -75,7 +78,7 @@ release: $(ALL:%=build/nebula-%.tar.gz)
 
 release-linux: $(ALL_LINUX:%=build/nebula-%.tar.gz)
 
-release-freebsd: build/nebula-freebsd-amd64.tar.gz
+release-freebsd: $(ALL_FREEBSD:%=build/nebula-%.tar.gz)
 
 release-boringcrypto: build/nebula-linux-$(shell go env GOARCH)-boringcrypto.tar.gz
 
@@ -91,6 +94,9 @@ bin-darwin: build/darwin-amd64/nebula build/darwin-amd64/nebula-cert
 	mv $? .
 
 bin-freebsd: build/freebsd-amd64/nebula build/freebsd-amd64/nebula-cert
+	mv $? .
+
+bin-freebsd-arm64: build/freebsd-arm64/nebula build/freebsd-arm64/nebula-cert
 	mv $? .
 
 bin-boringcrypto: build/linux-$(shell go env GOARCH)-boringcrypto/nebula build/linux-$(shell go env GOARCH)-boringcrypto/nebula-cert
