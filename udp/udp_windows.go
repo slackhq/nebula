@@ -42,8 +42,11 @@ type rawMessage struct {
 var (
 	modws2_32 = windows.NewLazySystemDLL("ws2_32.dll")
 
-	procWSACreateEvent  = modws2_32.NewProc("WSACreateEvent")
-	procWSAGetLastError = modws2_32.NewProc("WSAGetLastError")
+	procWSACreateEvent           = modws2_32.NewProc("WSACreateEvent")
+	procWSACloseEvent            = modws2_32.NewProc("WSACloseEvent")
+	procWSAGetLastError          = modws2_32.NewProc("WSAGetLastError")
+	procWSAWaitForMultipleEvents = modws2_32.NewProc("WSAWaitForMultipleEvents")
+	procWSAResetEvent            = modws2_32.NewProc("WSAResetEvent")
 )
 
 func WSACreateEvent() (windows.Handle, error) {
@@ -55,9 +58,62 @@ func WSACreateEvent() (windows.Handle, error) {
 	}
 }
 
+func WSACloseEvent(hevent windows.Handle) (bool, error) {
+	r1, _, errNum := syscall.Syscall(procWSACloseEvent.Addr(), uintptr(hevent), 0, 0, 0)
+	if r1 == 0 {
+		return false, errNum
+	} else {
+		return true, nil
+	}
+}
+
 func WSAGetLastError() error {
 	r1, _, _ := syscall.Syscall(procWSAGetLastError.Addr(), 0, 0, 0, 0)
 	return syscall.Errno(r1)
+}
+
+func WSAWaitForMultipleEvents(cEvents uint32, events *windows.Handle, waitAll bool, timeout uint32, alertable bool) (result int32, err error) {
+	var waitAllInt uint32 = 0
+	var alertableInt uint32 = 0
+
+	if waitAll {
+		waitAllInt = 1
+	}
+
+	if alertable {
+		alertableInt = 1
+	}
+
+	r1, _, errNum := syscall.Syscall6(
+		procWSAWaitForMultipleEvents.Addr(),
+		5,
+		uintptr(cEvents),
+		uintptr(unsafe.Pointer(events)),
+		uintptr(waitAllInt),
+		uintptr(timeout),
+		uintptr(alertableInt),
+		0)
+
+	result = int32(r1)
+
+	if result == -1 {
+		if errNum != 0 {
+			err = errNum
+		} else {
+			err = syscall.EINVAL
+		}
+	}
+
+	return
+}
+
+func WSAResetEvent(hevent windows.Handle) error {
+	r1, _, errNum := syscall.Syscall(procWSAResetEvent.Addr(), uintptr(hevent), 0, 0, 0)
+	if r1 == 0 {
+		return errNum
+	} else {
+		return nil
+	}
 }
 
 func MAKEWORD(low, high uint8) uint32 {
@@ -70,7 +126,10 @@ func NewListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (
 
 	l.Debug("Library [ws2_32.dll] loaded at ", modws2_32.Handle())
 	l.Debug("Symbol [WSACreateEvent] loaded at ", procWSACreateEvent.Addr())
+	l.Debug("Symbol [WSACloseEvent] loaded at ", procWSAResetEvent.Addr())
 	l.Debug("Symbol [WSAGetLastError] loaded at ", procWSAGetLastError.Addr())
+	l.Debug("Symbol [WSAWaitForMultipleEvents] loaded at ", procWSAWaitForMultipleEvents.Addr())
+	l.Debug("Symbol [WSAResetEvent] loaded at ", procWSAResetEvent.Addr())
 
 	if err := windows.WSAStartup(MAKEWORD(2, 2), &wsaData); err != nil {
 		windows.WSACleanup()
@@ -158,7 +217,7 @@ func (u *Conn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, []windows.RawS
 	flags := make([]uint32, n)
 	overlap := make([]windows.Overlapped, n)
 
-	// annoyingly and inconsistently, WaitForMultipleObjects needs an array of handles instead of a pointer to the first item
+	// the array must be available to provide to WSAWaitForMultipleEvents
 	u.hevents = make([]windows.Handle, n)
 
 	for i := range msgs {
@@ -173,7 +232,7 @@ func (u *Conn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, []windows.RawS
 			u.l.WithError(err).Error("WSACreateEvent failed")
 		}
 		u.hevents[i] = hevent
-		overlap[i].HEvent = hevent
+		overlap[i].HEvent = u.hevents[i]
 
 		msgs[i].Len = &len[i]
 		msgs[i].Hdr = msghdr{
@@ -203,23 +262,22 @@ func (u *Conn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall
 	}
 
 	for {
-		n, err := read(msgs)
+		index, err := read(msgs)
+
 		if err != nil {
 			u.l.WithError(err).Error("Failed to read packets")
 			continue
 		}
 
-		for i := 0; i < n; i++ {
-			ip, port, err := RawsockAddrToIPAndPort(&names[i])
-			if err != nil {
-				u.l.WithError(err).Error("Failed to read packets")
-			}
-
-			udpAddr.IP = ip
-			udpAddr.Port = port
-
-			r(udpAddr, plaintext[:0], buffers[i][:*msgs[i].Len], h, fwPacket, lhf, nb, q, cache.Get(u.l))
+		ip, port, err := RawsockAddrToIPAndPort(&names[index])
+		if err != nil {
+			u.l.WithError(err).Error("Failed to read packets")
 		}
+
+		udpAddr.IP = ip
+		udpAddr.Port = port
+
+		r(udpAddr, plaintext[:0], buffers[index][:*msgs[index].Len], h, fwPacket, lhf, nb, q, cache.Get(u.l))
 	}
 }
 
@@ -289,61 +347,46 @@ func (u *Conn) ReadSingle(msgs []rawMessage) (int, error) {
 			*msgs[0].Hdr.Name = *(*windows.RawSockaddrAny)(unsafe.Pointer(&name))
 		}
 
-		return 1, nil
+		// unlike the linux implementation, we need the buffer index.
+		// for a single read this is always 0.
+		return 0, nil
 	}
 }
 
 func (u *Conn) ReadMulti(msgs []rawMessage) (int, error) {
-	for {
-		err := windows.WSARecvFrom(
-			u.sysFd,
-			msgs[0].Hdr.WSABuf,
-			uint32(len(msgs)),
-			msgs[0].Len,
-			msgs[0].Hdr.Flags,
-			msgs[0].Hdr.Name,
-			msgs[0].Hdr.Namelen,
-			msgs[0].Hdr.Overlap,
-			nil)
+	flags := uint32(0)
+	err := windows.WSARecvFrom(
+		u.sysFd,
+		msgs[0].Hdr.WSABuf,
+		uint32(len(msgs)),
+		msgs[0].Len,
+		msgs[0].Hdr.Flags,
+		msgs[0].Hdr.Name,
+		msgs[0].Hdr.Namelen,
+		msgs[0].Hdr.Overlap,
+		nil)
 
-		n := 0
-		if err != nil {
-			if err != windows.ERROR_IO_PENDING {
-				return 0, &net.OpError{Op: "WSARecvFrom", Err: err}
-			} else {
-				rc, err := windows.WaitForMultipleObjects(
-					u.hevents,
-					false,
-					windows.INFINITE)
-
-				if rc == windows.WAIT_FAILED {
-					return 0, &net.OpError{Op: "WaitForMultipleObjects", Err: err}
-				}
-
-				for i := 0; i < len(msgs); i++ {
-					err := windows.GetOverlappedResult(msgs[i].Hdr.Overlap.HEvent, msgs[i].Hdr.Overlap, msgs[i].Len, false)
-					if err != nil {
-						return 0, &net.OpError{Op: "GetOverlappedResult", Err: err}
-					} else if *msgs[i].Len == 0 {
-						break
-					}
-
-					n++
-				}
-			}
-		} else {
-			for i := 0; i < len(msgs); i++ {
-				if *msgs[i].Len > 0 {
-					n++
-				}
-			}
-		}
-
-		return int(n), nil
+	if err != nil && err != windows.ERROR_IO_PENDING {
+		return -1, &net.OpError{Op: "WSARecvFrom", Err: err}
 	}
+
+	index, waitErr := WSAWaitForMultipleEvents(uint32(len(msgs)), &u.hevents[0], false, windows.INFINITE, false)
+
+	if waitErr != nil {
+		return -1, &net.OpError{Op: "WSAWaitForMultipleEvents", Err: waitErr}
+	}
+
+	WSAResetEvent(msgs[index].Hdr.Overlap.HEvent)
+
+	if err == windows.ERROR_IO_PENDING {
+		err = windows.WSAGetOverlappedResult(u.sysFd, msgs[index].Hdr.Overlap, msgs[index].Len, false, &flags)
+	}
+
+	return int(index), err
 }
 
 func (u *Conn) WriteTo(b []byte, addr *Addr) error {
+	flags := uint32(0)
 	name, namelen, _ := AddrToRawSockaddrAny(addr)
 	var wsaBuf = &windows.WSABuf{Buf: &b[0], Len: uint32(len(b))}
 	var hevent, _ = WSACreateEvent()
@@ -352,17 +395,31 @@ func (u *Conn) WriteTo(b []byte, addr *Addr) error {
 
 	for {
 		err := windows.WSASendTo(u.sysFd, wsaBuf, 1, &bytesSent, 0, name, namelen, overlapped, nil)
+
+		if err != nil {
+			WSACloseEvent(hevent)
+			return &net.OpError{Op: "WSASendTo", Err: err}
+		}
+
+		_, waitErr := WSAWaitForMultipleEvents(1, &hevent, false, windows.INFINITE, false)
+
+		if waitErr != nil {
+			WSACloseEvent(hevent)
+			return &net.OpError{Op: "WSAWaitForMultipleEvents", Err: waitErr}
+		}
+
 		if err == windows.ERROR_IO_PENDING {
-			windows.WaitForSingleObject(hevent, 5000)
-			windows.GetOverlappedResult(hevent, overlapped, &bytesSent, false)
-			windows.CloseHandle(hevent)
-		} else if err != nil {
-			windows.CloseHandle(hevent)
-			return &net.OpError{Op: "WSASendMsg", Err: err}
+			err = windows.WSAGetOverlappedResult(u.sysFd, overlapped, &bytesSent, true, &flags)
+
+			if err != nil {
+				WSACloseEvent(hevent)
+				return &net.OpError{Op: "WSAGetOverlappedResult", Err: err}
+			}
 		}
 
 		//TODO: handle incomplete writes
 
+		WSACloseEvent(hevent)
 		return nil
 	}
 }
