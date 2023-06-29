@@ -43,7 +43,6 @@ var (
 	modws2_32 = windows.NewLazySystemDLL("ws2_32.dll")
 
 	procWSACreateEvent           = modws2_32.NewProc("WSACreateEvent")
-	procWSACloseEvent            = modws2_32.NewProc("WSACloseEvent")
 	procWSAGetLastError          = modws2_32.NewProc("WSAGetLastError")
 	procWSAWaitForMultipleEvents = modws2_32.NewProc("WSAWaitForMultipleEvents")
 	procWSAResetEvent            = modws2_32.NewProc("WSAResetEvent")
@@ -55,15 +54,6 @@ func WSACreateEvent() (windows.Handle, error) {
 		return 0, errNum
 	} else {
 		return windows.Handle(handlePtr), nil
-	}
-}
-
-func WSACloseEvent(hevent windows.Handle) (bool, error) {
-	r1, _, errNum := syscall.Syscall(procWSACloseEvent.Addr(), uintptr(hevent), 0, 0, 0)
-	if r1 == 0 {
-		return false, errNum
-	} else {
-		return true, nil
 	}
 }
 
@@ -126,7 +116,6 @@ func NewListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (
 
 	l.Debug("Library [ws2_32.dll] loaded at ", modws2_32.Handle())
 	l.Debug("Symbol [WSACreateEvent] loaded at ", procWSACreateEvent.Addr())
-	l.Debug("Symbol [WSACloseEvent] loaded at ", procWSAResetEvent.Addr())
 	l.Debug("Symbol [WSAGetLastError] loaded at ", procWSAGetLastError.Addr())
 	l.Debug("Symbol [WSAWaitForMultipleEvents] loaded at ", procWSAWaitForMultipleEvents.Addr())
 	l.Debug("Symbol [WSAResetEvent] loaded at ", procWSAResetEvent.Addr())
@@ -302,25 +291,6 @@ func RawsockAddrToIPAndPort(rsa *windows.RawSockaddrAny) (net.IP, uint16, error)
 	return nil, 0, syscall.EAFNOSUPPORT
 }
 
-func AddrToRawSockaddrAny(addr *Addr) (*windows.RawSockaddrAny, int32, error) {
-	if addr == nil {
-		return nil, 0, syscall.EINVAL
-	}
-
-	if addr.Port < 0 || addr.Port > 0xFFFF {
-		return nil, 0, syscall.EINVAL
-	}
-
-	var rsa windows.RawSockaddrInet6
-	rsa.Family = windows.AF_INET6
-	p := (*[2]byte)(unsafe.Pointer(&rsa.Port))
-	p[0] = byte(addr.Port >> 8)
-	p[1] = byte(addr.Port)
-	copy(rsa.Addr[:], addr.IP)
-
-	return (*windows.RawSockaddrAny)(unsafe.Pointer(&rsa)), int32(unsafe.Sizeof(rsa)), nil
-}
-
 func (u *Conn) ReadSingle(msgs []rawMessage) (int, error) {
 	for {
 		len, sa, err := windows.Recvfrom(u.sysFd, msgs[0].Hdr.Buf, 0)
@@ -386,40 +356,20 @@ func (u *Conn) ReadMulti(msgs []rawMessage) (int, error) {
 }
 
 func (u *Conn) WriteTo(b []byte, addr *Addr) error {
-	flags := uint32(0)
-	name, namelen, _ := AddrToRawSockaddrAny(addr)
-	var wsaBuf = &windows.WSABuf{Buf: &b[0], Len: uint32(len(b))}
-	var hevent, _ = WSACreateEvent()
-	var overlapped = &windows.Overlapped{HEvent: hevent}
-	var bytesSent uint32
+	var buf [16]byte
+	copy(buf[:], addr.IP.To16())
+	sa := &windows.SockaddrInet6{Addr: buf, Port: int(addr.Port)}
+	flags := 0
 
 	for {
-		err := windows.WSASendTo(u.sysFd, wsaBuf, 1, &bytesSent, 0, name, namelen, overlapped, nil)
+		err := windows.Sendto(u.sysFd, b, flags, sa)
 
 		if err != nil {
-			WSACloseEvent(hevent)
-			return &net.OpError{Op: "WSASendTo", Err: err}
-		}
-
-		_, waitErr := WSAWaitForMultipleEvents(1, &hevent, false, windows.INFINITE, false)
-
-		if waitErr != nil {
-			WSACloseEvent(hevent)
-			return &net.OpError{Op: "WSAWaitForMultipleEvents", Err: waitErr}
-		}
-
-		if err == windows.ERROR_IO_PENDING {
-			err = windows.WSAGetOverlappedResult(u.sysFd, overlapped, &bytesSent, true, &flags)
-
-			if err != nil {
-				WSACloseEvent(hevent)
-				return &net.OpError{Op: "WSAGetOverlappedResult", Err: err}
-			}
+			return &net.OpError{Op: "Sendto", Err: err}
 		}
 
 		//TODO: handle incomplete writes
 
-		WSACloseEvent(hevent)
 		return nil
 	}
 }
