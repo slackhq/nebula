@@ -54,6 +54,16 @@ jobs:
           mkdir build\dist\windows
           mv dist\windows\wintun build\dist\windows\
 
+      - name: UPX
+        run: |
+          curl -L -o upx.zip https://github.com/upx/upx/releases/download/v4.0.2/upx-4.0.2-win64.zip
+          echo "325c58ea2ed375afbd4eeac0b26f15f98db0d75dea701205ca10d8bf4d2fdc24  upx.zip" | sha256sum -c
+          unzip upx.zip
+          upx-4.0.2-win64\upx.exe build\windows-amd64\nebula.exe
+          upx-4.0.2-win64\upx.exe build\windows-amd64\nebula-cert.exe
+          upx-4.0.2-win64\upx.exe build\windows-arm64\nebula.exe
+          upx-4.0.2-win64\upx.exe build\windows-arm64\nebula-cert.exe
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
