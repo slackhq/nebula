@@ -60,7 +60,9 @@ jobs:
           curl -L -o upx.zip https://github.com/upx/upx/releases/download/v4.0.2/upx-4.0.2-win64.zip
           echo "325c58ea2ed375afbd4eeac0b26f15f98db0d75dea701205ca10d8bf4d2fdc24  upx.zip" | sha256sum -c
           unzip upx.zip
-          upx-4.0.2-win64/upx.exe build/windows-amd64/nebula{,-cert}.exe
+          mkdir build/windows-amd64-upx
+          upx-4.0.2-win64/upx.exe -o build/windows-amd64-upx/nebula.exe build/windows-amd64/nebula.exe
+          upx-4.0.2-win64/upx.exe -o build/windows-amd64-upx/nebula-cert.exe build/windows-amd64/nebula-cert.exe
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
@@ -134,6 +136,8 @@ jobs:
           cd artifacts/windows-latest
           cp windows-amd64/* .
           zip -r nebula-windows-amd64.zip nebula.exe nebula-cert.exe dist
+          cp windows-amd64-upx/* .
+          zip -r nebula-windows-amd64-upx.zip nebula.exe nebula-cert.exe dist
           cp windows-arm64/* .
           zip -r nebula-windows-arm64.zip nebula.exe nebula-cert.exe dist
 
@@ -148,9 +152,12 @@ jobs:
               then
                 sha256sum <windows-amd64/nebula.exe | sed 's=-$=nebula-windows-amd64.zip/nebula.exe='
                 sha256sum <windows-amd64/nebula-cert.exe | sed 's=-$=nebula-windows-amd64.zip/nebula-cert.exe='
+                sha256sum <windows-amd64-upx/nebula.exe | sed 's=-$=nebula-windows-amd64-upx.zip/nebula.exe='
+                sha256sum <windows-amd64-upx/nebula-cert.exe | sed 's=-$=nebula-windows-amd64-upx.zip/nebula-cert.exe='
                 sha256sum <windows-arm64/nebula.exe | sed 's=-$=nebula-windows-arm64.zip/nebula.exe='
                 sha256sum <windows-arm64/nebula-cert.exe | sed 's=-$=nebula-windows-arm64.zip/nebula-cert.exe='
                 sha256sum nebula-windows-amd64.zip
+                sha256sum nebula-windows-amd64-upx.zip
                 sha256sum nebula-windows-arm64.zip
               elif [ "$dir" = darwin-latest ]
               then
