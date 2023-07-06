@@ -244,6 +244,9 @@ logging:
   # As an example, to log as RFC3339 with millisecond precision, set to:
   #timestamp_format: "2006-01-02T15:04:05.000Z07:00"
 
+#http:
+  #listen: 127.0.0.1:8080
+
 #stats:
   #type: graphite
   #prefix: nebula
@@ -252,7 +255,6 @@ logging:
   #interval: 10s
 
   #type: prometheus
-  #listen: 127.0.0.1:8080
   #path: /metrics
   #namespace: prometheusns
   #subsystem: nebula

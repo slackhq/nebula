@@ -3,7 +3,6 @@ package nebula
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"runtime"
@@ -19,10 +18,12 @@ import (
 	"github.com/slackhq/nebula/config"
 )
 
+type statsHandlerFunc func(listen, path string) http.Handler
+
 // startStats initializes stats from config. On success, if any further work
-// is needed to serve stats, it returns a func to handle that work. If no
+// is needed to serve stats, it returns an http.Handler for that work. If no
 // work is needed, it'll return nil. On failure, it returns nil, error.
-func startStats(l *logrus.Logger, c *config.C, buildVersion string, configTest bool) (func(), error) {
+func startStats(l *logrus.Logger, c *config.C, listen, buildVersion string, configTest bool) (f statsHandlerFunc, err error) {
 	mType := c.GetString("stats.type", "")
 	if mType == "" || mType == "none" {
 		return nil, nil
@@ -33,7 +34,6 @@ func startStats(l *logrus.Logger, c *config.C, buildVersion string, configTest b
 		return nil, fmt.Errorf("stats.interval was an invalid duration: %s", c.GetString("stats.interval", ""))
 	}
 
-	var startFn func()
 	switch mType {
 	case "graphite":
 		err := startGraphiteStats(l, interval, c, configTest)
@@ -41,8 +41,7 @@ func startStats(l *logrus.Logger, c *config.C, buildVersion string, configTest b
 			return nil, err
 		}
 	case "prometheus":
-		var err error
-		startFn, err = startPrometheusStats(l, interval, c, buildVersion, configTest)
+		f, err = startPrometheusStats(l, interval, c, listen, buildVersion, configTest)
 		if err != nil {
 			return nil, err
 		}
@@ -56,7 +55,7 @@ func startStats(l *logrus.Logger, c *config.C, buildVersion string, configTest b
 	go metrics.CaptureDebugGCStats(metrics.DefaultRegistry, interval)
 	go metrics.CaptureRuntimeMemStats(metrics.DefaultRegistry, interval)
 
-	return startFn, nil
+	return f, nil
 }
 
 func startGraphiteStats(l *logrus.Logger, i time.Duration, c *config.C, configTest bool) error {
@@ -79,13 +78,12 @@ func startGraphiteStats(l *logrus.Logger, i time.Duration, c *config.C, configTe
 	return nil
 }
 
-func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildVersion string, configTest bool) (func(), error) {
+func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, listen, buildVersion string, configTest bool) (statsHandlerFunc, error) {
 	namespace := c.GetString("stats.namespace", "")
 	subsystem := c.GetString("stats.subsystem", "")
 
-	listen := c.GetString("stats.listen", "")
 	if listen == "" {
-		return nil, fmt.Errorf("stats.listen should not be empty")
+		return nil, fmt.Errorf("http.listen or stats.listen must be defined to use promtheus stats")
 	}
 
 	path := c.GetString("stats.path", "")
@@ -114,14 +112,13 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildV
 	pr.MustRegister(g)
 	g.Set(1)
 
-	var startFn func()
+	var f statsHandlerFunc
 	if !configTest {
-		startFn = func() {
+		f = func(listen, path string) http.Handler {
 			l.Infof("Prometheus stats listening on %s at %s", listen, path)
-			http.Handle(path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: l}))
-			log.Fatal(http.ListenAndServe(listen, nil))
+			return promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: l})
 		}
 	}
 
-	return startFn, nil
+	return f, nil
 }

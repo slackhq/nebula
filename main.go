@@ -324,12 +324,23 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		go lightHouse.LhUpdateWorker(ctx, ifce)
 	}
 
+	httpListen := c.GetString("http.listen", "")
+	if httpListen == "" {
+		if httpListen = c.GetString("stats.listen", ""); httpListen != "" {
+			l.Warn("http.listen is undef, falling back to stats.listen. stats.listen will be deprecated in a future release.")
+		}
+	}
+
 	// TODO - stats third-party modules start uncancellable goroutines. Update those libs to accept
 	// a context so that they can exit when the context is Done.
-	statsStart, err := startStats(l, c, buildVersion, configTest)
-
+	statsHTTPHandler, err := startStats(l, c, httpListen, buildVersion, configTest)
 	if err != nil {
 		return nil, util.NewContextualError("Failed to start stats emitter", nil, err)
+	}
+
+	httpStart, err := startHttp(l, c, statsHTTPHandler, httpListen)
+	if err != nil {
+		return nil, util.NewContextualError("Failed to start http server", nil, err)
 	}
 
 	if configTest {
@@ -348,5 +359,5 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		dnsStart = dnsMain(l, hostMap, c)
 	}
 
-	return &Control{ifce, l, cancel, sshStart, statsStart, dnsStart}, nil
+	return &Control{ifce, l, cancel, sshStart, httpStart, dnsStart}, nil
 }
