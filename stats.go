@@ -86,11 +86,6 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, listen
 		return nil, fmt.Errorf("http.listen or stats.listen must be defined to use promtheus stats")
 	}
 
-	path := c.GetString("stats.path", "")
-	if path == "" {
-		return nil, fmt.Errorf("stats.path should not be empty")
-	}
-
 	pr := prometheus.NewRegistry()
 	pClient := mp.NewPrometheusProvider(metrics.DefaultRegistry, namespace, subsystem, pr, i)
 	if !configTest {
