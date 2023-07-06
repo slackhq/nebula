@@ -83,7 +83,7 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, listen
 	subsystem := c.GetString("stats.subsystem", "")
 
 	if listen == "" {
-		return nil, fmt.Errorf("http.listen or stats.listen must be defined to use promtheus stats")
+		return nil, fmt.Errorf("http.listen or stats.listen must be defined to use Prometheus stats")
 	}
 
 	pr := prometheus.NewRegistry()
