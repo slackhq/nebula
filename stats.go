@@ -21,7 +21,7 @@ import (
 type statsHandlerFunc func(listen, path string) http.Handler
 
 // startStats initializes stats from config. On success, if any further work
-// is needed to serve stats, it returns an statsHandlerFunc for that work. If
+// is needed to serve stats, it returns a statsHandlerFunc for that work. If
 // no work is needed, it'll return nil. On failure, it returns nil, error.
 func startStats(l *logrus.Logger, c *config.C, listen, buildVersion string, configTest bool) (f statsHandlerFunc, err error) {
 	mType := c.GetString("stats.type", "")

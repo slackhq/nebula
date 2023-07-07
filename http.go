@@ -9,7 +9,7 @@ import (
 	"github.com/slackhq/nebula/config"
 )
 
-// startHttp returns a function to start an http server with pprof support and optionally, a provided stats
+// startHttp returns a function to start an http server with pprof support and optionally a provided stats
 // http handler.
 func startHttp(l *logrus.Logger, c *config.C, listen string, statsHandler statsHandlerFunc) (func(), error) {
 	if listen == "" {
