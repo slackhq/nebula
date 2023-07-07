@@ -107,13 +107,13 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, listen
 	pr.MustRegister(g)
 	g.Set(1)
 
-	var f statsHandlerFunc
+	var startHandler statsHandlerFunc
 	if !configTest {
-		f = func(listen, path string) http.Handler {
+		startHandler = func(listen, path string) http.Handler {
 			l.Infof("Prometheus stats listening on %s at %s", listen, path)
 			return promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: l})
 		}
 	}
 
-	return f, nil
+	return startHandler, nil
 }

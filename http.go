@@ -9,7 +9,9 @@ import (
 	"github.com/slackhq/nebula/config"
 )
 
-func startHttp(l *logrus.Logger, c *config.C, statsHandler statsHandlerFunc, listen string) (f func(), err error) {
+// startHttp returns a function to start an http server with pprof support and optionally, a provided stats
+// http handler.
+func startHttp(l *logrus.Logger, c *config.C, listen string, statsHandler statsHandlerFunc) (func(), error) {
 	if listen == "" {
 		return nil, nil
 	}
@@ -22,13 +24,11 @@ func startHttp(l *logrus.Logger, c *config.C, statsHandler statsHandlerFunc, lis
 		}
 	}
 
-	f = func() {
+	return func() {
 		l.Infof("Go pprof handler listening on %s at /debug/pprof", listen)
 		if statsHandler != nil {
 			http.Handle(statsPath, statsHandler(listen, statsPath))
 		}
 		l.Fatal(http.ListenAndServe(listen, nil))
-	}
-
-	return f, err
+	}, nil
 }

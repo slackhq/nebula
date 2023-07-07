@@ -338,7 +338,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		return nil, util.NewContextualError("Failed to start stats emitter", nil, err)
 	}
 
-	httpStart, err := startHttp(l, c, statsHTTPHandler, httpListen)
+	httpStart, err := startHttp(l, c, httpListen, statsHTTPHandler)
 	if err != nil {
 		return nil, util.NewContextualError("Failed to start http server", nil, err)
 	}
