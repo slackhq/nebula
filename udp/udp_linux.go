@@ -137,8 +137,8 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 	for {
 		n, err := read(msgs)
 		if err != nil {
-			u.l.WithError(err).Error("Failed to read packets")
-			continue
+			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
+			return
 		}
 
 		//metric.Update(int64(n))
@@ -260,6 +260,11 @@ func (u *StdConn) getMemInfo(meminfo *_SK_MEMINFO) error {
 		return err
 	}
 	return nil
+}
+
+func (u *StdConn) Close() error {
+	//TODO: this will not interrupt the read loop
+	return syscall.Close(u.sysFd)
 }
 
 func NewUDPStatsEmitter(udpConns []Conn) func() {
