@@ -68,7 +68,7 @@ type HandshakeManager struct {
 }
 
 type Limiter struct {
-	mu            sync.Mutex
+	mu            sync.RWMutex
 	lastResetTime time.Time
 	attempts      int
 }
@@ -77,6 +77,27 @@ type ChurnLimiter struct {
 	numFailures int
 	period      time.Duration
 	enabled     bool
+}
+
+func (m *ChurnLimiter) Check(vpnIp iputil.VpnIp) bool {
+	if !m.enabled {
+		return false
+	}
+
+	current, ok := m.limiterMap.Get(vpnIp.String())
+	if !ok {
+		return false
+	}
+
+	current.mu.RLock()
+	defer current.mu.RUnlock()
+	if time.Since(current.lastResetTime) < m.period {
+		if current.attempts > m.numFailures {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (m *ChurnLimiter) Attempt(vpnIp iputil.VpnIp) bool {
