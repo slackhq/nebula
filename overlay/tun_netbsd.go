@@ -17,6 +17,11 @@ import (
 	"syscall"
 )
 
+type ifreqDestroy struct {
+	Name	[16]byte
+	pad		[16]byte
+}
+
 type tun struct {
 	Device    string
 	cidr      *net.IPNet
@@ -38,7 +43,11 @@ func (t *tun) Close() error {
 		if err != nil {
 			return err
 		}
-		err = syscall.Close(s)
+		defer syscall.Close(s)
+
+		ifreq := ifreqDestroy{Name: t.deviceBytes()}
+
+		err = ioctl(uintptr(s), syscall.SIOCIFDESTROY, uintptr(unsafe.Pointer(&ifreq)))
 
 		return err
 	}
@@ -86,6 +95,20 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 
 func (t *tun) Activate() error {
 	var err error
+
+	s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_IP)
+	if err != nil {
+		return err
+	}
+
+	iosetmode := syscall.IFF_POINTOPOINT | syscall.IFF_MULTICAST
+	
+	err := ioctl(uintptr(s), syscall.TUNSIFMODE, uintptr(unsafe.Pointer(&iosetmode)))
+
+	if err != nil {
+		return err
+	}
+
 	// TODO use syscalls instead of exec.Command
 	t.l.Debug("command: ifconfig", t.Device, t.cidr.String(), t.cidr.IP.String())
 	if err = exec.Command("/sbin/ifconfig", t.Device, t.cidr.String(), t.cidr.IP.String()).Run(); err != nil {
