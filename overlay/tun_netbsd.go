@@ -101,19 +101,6 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 func (t *tun) Activate() error {
 	var err error
 
-	s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_IP)
-	if err != nil {
-		return err
-	}
-
-	iosetmode := syscall.IFF_POINTOPOINT | syscall.IFF_MULTICAST
-	
-	err = ioctl(uintptr(s), TUNSIFMODE, uintptr(unsafe.Pointer(&iosetmode)))
-
-	if err != nil {
-		return err
-	}
-
 	// TODO use syscalls instead of exec.Command
 	t.l.Debug("command: ifconfig", t.Device, t.cidr.String(), t.cidr.IP.String())
 	if err = exec.Command("/sbin/ifconfig", t.Device, t.cidr.String(), t.cidr.IP.String()).Run(); err != nil {
