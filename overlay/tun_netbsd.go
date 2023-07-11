@@ -14,7 +14,12 @@ import (
 	"os/exec"
 	"regexp"
 	"strconv"
+	"unsafe"
 	"syscall"
+)
+
+const (
+	TUNSIFMODE = 0x80047458
 )
 
 type ifreqDestroy struct {
@@ -103,7 +108,7 @@ func (t *tun) Activate() error {
 
 	iosetmode := syscall.IFF_POINTOPOINT | syscall.IFF_MULTICAST
 	
-	err := ioctl(uintptr(s), syscall.TUNSIFMODE, uintptr(unsafe.Pointer(&iosetmode)))
+	err = ioctl(uintptr(s), TUNSIFMODE, uintptr(unsafe.Pointer(&iosetmode)))
 
 	if err != nil {
 		return err
