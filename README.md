@@ -108,7 +108,7 @@ For each host, copy the nebula binary to the host, along with `config.yml` from 
 
 ## Building Nebula from source
 
-Download go and clone this repo. Change to the nebula directory.
+Make sure you have [go](https://go.dev/doc/install) installed and clone this repo. Change to the nebula directory.
 
 To build nebula for all platforms:
 `make all`
