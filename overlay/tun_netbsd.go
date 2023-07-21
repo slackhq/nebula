@@ -5,26 +5,23 @@ package overlay
 
 import (
 	"fmt"
-	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/cidr"
-	"github.com/slackhq/nebula/iputil"
 	"io"
 	"net"
 	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
-	"unsafe"
 	"syscall"
-)
+	"unsafe"
 
-const (
-	TUNSIFMODE = 0x80047458
+	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/iputil"
 )
 
 type ifreqDestroy struct {
-	Name	[16]byte
-	pad		[16]byte
+	Name [16]byte
+	pad  [16]byte
 }
 
 type tun struct {
