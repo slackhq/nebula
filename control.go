@@ -17,6 +17,15 @@ import (
 // Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
 // core. This means copying IP objects, slices, de-referencing pointers and taking the actual value, etc
 
+type controlEach func(h *HostInfo)
+
+type controlHostLister interface {
+	QueryVpnIp(vpnIp iputil.VpnIp) *HostInfo
+	ForEachIndex(each controlEach)
+	ForEachVpnIp(each controlEach)
+	GetPreferredRanges() []*net.IPNet
+}
+
 type Control struct {
 	f          *Interface
 	l          *logrus.Logger
@@ -98,7 +107,7 @@ func (c *Control) RebindUDPServer() {
 // ListHostmapHosts returns details about the actual or pending (handshaking) hostmap by vpn ip
 func (c *Control) ListHostmapHosts(pendingMap bool) []ControlHostInfo {
 	if pendingMap {
-		return listHostMapHosts(c.f.handshakeManager.pendingHostMap)
+		return listHostMapHosts(c.f.handshakeManager)
 	} else {
 		return listHostMapHosts(c.f.hostMap)
 	}
@@ -107,7 +116,7 @@ func (c *Control) ListHostmapHosts(pendingMap bool) []ControlHostInfo {
 // ListHostmapIndexes returns details about the actual or pending (handshaking) hostmap by local index id
 func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 	if pendingMap {
-		return listHostMapIndexes(c.f.handshakeManager.pendingHostMap)
+		return listHostMapIndexes(c.f.handshakeManager)
 	} else {
 		return listHostMapIndexes(c.f.hostMap)
 	}
@@ -115,15 +124,15 @@ func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 
 // GetHostInfoByVpnIp returns a single tunnels hostInfo, or nil if not found
 func (c *Control) GetHostInfoByVpnIp(vpnIp iputil.VpnIp, pending bool) *ControlHostInfo {
-	var hm *HostMap
+	var hl controlHostLister
 	if pending {
-		hm = c.f.handshakeManager.pendingHostMap
+		hl = c.f.handshakeManager
 	} else {
-		hm = c.f.hostMap
+		hl = c.f.hostMap
 	}
 
-	h, err := hm.QueryVpnIp(vpnIp)
-	if err != nil {
+	h := hl.QueryVpnIp(vpnIp)
+	if h == nil {
 		return nil
 	}
 
@@ -133,8 +142,8 @@ func (c *Control) GetHostInfoByVpnIp(vpnIp iputil.VpnIp, pending bool) *ControlH
 
 // SetRemoteForTunnel forces a tunnel to use a specific remote
 func (c *Control) SetRemoteForTunnel(vpnIp iputil.VpnIp, addr udp.Addr) *ControlHostInfo {
-	hostInfo, err := c.f.hostMap.QueryVpnIp(vpnIp)
-	if err != nil {
+	hostInfo := c.f.hostMap.QueryVpnIp(vpnIp)
+	if hostInfo == nil {
 		return nil
 	}
 
@@ -145,8 +154,8 @@ func (c *Control) SetRemoteForTunnel(vpnIp iputil.VpnIp, addr udp.Addr) *Control
 
 // CloseTunnel closes a fully established tunnel. If localOnly is false it will notify the remote end as well.
 func (c *Control) CloseTunnel(vpnIp iputil.VpnIp, localOnly bool) bool {
-	hostInfo, err := c.f.hostMap.QueryVpnIp(vpnIp)
-	if err != nil {
+	hostInfo := c.f.hostMap.QueryVpnIp(vpnIp)
+	if hostInfo == nil {
 		return false
 	}
 
@@ -241,28 +250,20 @@ func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 	return chi
 }
 
-func listHostMapHosts(hm *HostMap) []ControlHostInfo {
-	hm.RLock()
-	hosts := make([]ControlHostInfo, len(hm.Hosts))
-	i := 0
-	for _, v := range hm.Hosts {
-		hosts[i] = copyHostInfo(v, hm.preferredRanges)
-		i++
-	}
-	hm.RUnlock()
-
+func listHostMapHosts(hl controlHostLister) []ControlHostInfo {
+	hosts := make([]ControlHostInfo, 0)
+	pr := hl.GetPreferredRanges()
+	hl.ForEachVpnIp(func(hostinfo *HostInfo) {
+		hosts = append(hosts, copyHostInfo(hostinfo, pr))
+	})
 	return hosts
 }
 
-func listHostMapIndexes(hm *HostMap) []ControlHostInfo {
-	hm.RLock()
-	hosts := make([]ControlHostInfo, len(hm.Indexes))
-	i := 0
-	for _, v := range hm.Indexes {
-		hosts[i] = copyHostInfo(v, hm.preferredRanges)
-		i++
-	}
-	hm.RUnlock()
-
+func listHostMapIndexes(hl controlHostLister) []ControlHostInfo {
+	hosts := make([]ControlHostInfo, 0)
+	pr := hl.GetPreferredRanges()
+	hl.ForEachIndex(func(hostinfo *HostInfo) {
+		hosts = append(hosts, copyHostInfo(hostinfo, pr))
+	})
 	return hosts
 }

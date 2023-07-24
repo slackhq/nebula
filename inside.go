@@ -121,14 +121,10 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 			return nil
 		}
 	}
-	hostinfo, err := f.hostMap.PromoteBestQueryVpnIp(vpnIp, f)
 
-	//if err != nil || hostinfo.ConnectionState == nil {
-	if err != nil {
-		hostinfo, err = f.handshakeManager.pendingHostMap.QueryVpnIp(vpnIp)
-		if err != nil {
-			hostinfo = f.handshakeManager.AddVpnIp(vpnIp, f.initHostInfo)
-		}
+	hostinfo := f.hostMap.PromoteBestQueryVpnIp(vpnIp, f)
+	if hostinfo == nil {
+		hostinfo = f.handshakeManager.AddVpnIp(vpnIp, f.initHostInfo)
 	}
 	ci := hostinfo.ConnectionState
 
@@ -137,6 +133,7 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 	}
 
 	// Handshake is not ready, we need to grab the lock now before we start the handshake process
+	//TODO: move this to handshake manager
 	hostinfo.Lock()
 	defer hostinfo.Unlock()
 

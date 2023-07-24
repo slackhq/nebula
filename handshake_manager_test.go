@@ -20,7 +20,7 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	ip := iputil.Ip2VpnIp(net.ParseIP("172.1.1.2"))
 	preferredRanges := []*net.IPNet{localrange}
 	mw := &mockEncWriter{}
-	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
+	mainHM := NewHostMap(l, vpncidr, preferredRanges)
 	lh := newTestLighthouse()
 
 	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, lh, &udp.NoopConn{}, defaultHandshakeConfig)
@@ -48,7 +48,7 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	assert.Len(t, mainHM.Hosts, 0)
 
 	// Confirm they are in the pending index list
-	assert.Contains(t, blah.pendingHostMap.Hosts, ip)
+	assert.Contains(t, blah.vpnIps, ip)
 
 	// Jump ahead `HandshakeRetries` ticks, offset by one to get the sleep logic right
 	for i := 1; i <= DefaultHandshakeRetries+1; i++ {
@@ -57,13 +57,13 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	}
 
 	// Confirm they are still in the pending index list
-	assert.Contains(t, blah.pendingHostMap.Hosts, ip)
+	assert.Contains(t, blah.vpnIps, ip)
 
 	// Tick 1 more time, a minute will certainly flush it out
 	blah.NextOutboundHandshakeTimerTick(now.Add(time.Minute), mw)
 
 	// Confirm they have been removed
-	assert.NotContains(t, blah.pendingHostMap.Hosts, ip)
+	assert.NotContains(t, blah.vpnIps, ip)
 }
 
 func testCountTimerWheelEntries(tw *LockingTimerWheel[iputil.VpnIp]) (c int) {

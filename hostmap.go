@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -52,7 +51,6 @@ type Relay struct {
 
 type HostMap struct {
 	sync.RWMutex    //Because we concurrently read and write to our maps
-	name            string
 	Indexes         map[uint32]*HostInfo
 	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a Relay HostInfo object
 	RemoteIndexes   map[uint32]*HostInfo
@@ -203,13 +201,13 @@ type HostInfo struct {
 	remotes              *RemoteList
 	promoteCounter       atomic.Uint32
 	ConnectionState      *ConnectionState
-	handshakeStart       time.Time        //todo: this an entry in the handshake manager
-	HandshakeReady       bool             //todo: being in the manager means you are ready
-	HandshakeCounter     int              //todo: another handshake manager entry
-	HandshakeLastRemotes []*udp.Addr      //todo: another handshake manager entry, which remotes we sent to last time
-	HandshakeComplete    bool             //todo: this should go away in favor of ConnectionState.ready
-	HandshakePacket      map[uint8][]byte //todo: this is other handshake manager entry
-	packetStore          []*cachedPacket  //todo: this is other handshake manager entry
+	handshakeStart       time.Time   //todo: this an entry in the handshake manager
+	HandshakeReady       bool        //todo: being in the manager means you are ready
+	HandshakeCounter     int         //todo: another handshake manager entry
+	HandshakeLastRemotes []*udp.Addr //todo: another handshake manager entry, which remotes we sent to last time
+	HandshakeComplete    bool        //todo: this should go away in favor of ConnectionState.ready
+	HandshakePacket      map[uint8][]byte
+	packetStore          []*cachedPacket //todo: this is other handshake manager entry
 	remoteIndexId        uint32
 	localIndexId         uint32
 	vpnIp                iputil.VpnIp
@@ -255,13 +253,12 @@ type cachedPacketMetrics struct {
 	dropped metrics.Counter
 }
 
-func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRanges []*net.IPNet) *HostMap {
+func NewHostMap(l *logrus.Logger, vpnCIDR *net.IPNet, preferredRanges []*net.IPNet) *HostMap {
 	h := map[iputil.VpnIp]*HostInfo{}
 	i := map[uint32]*HostInfo{}
 	r := map[uint32]*HostInfo{}
 	relays := map[uint32]*HostInfo{}
 	m := HostMap{
-		name:            name,
 		Indexes:         i,
 		Relays:          relays,
 		RemoteIndexes:   r,
@@ -273,8 +270,8 @@ func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRang
 	return &m
 }
 
-// UpdateStats takes a name and reports host and index counts to the stats collection system
-func (hm *HostMap) EmitStats(name string) {
+// EmitStats reports host, index, and relay counts to the stats collection system
+func (hm *HostMap) EmitStats() {
 	hm.RLock()
 	hostLen := len(hm.Hosts)
 	indexLen := len(hm.Indexes)
@@ -282,10 +279,10 @@ func (hm *HostMap) EmitStats(name string) {
 	relaysLen := len(hm.Relays)
 	hm.RUnlock()
 
-	metrics.GetOrRegisterGauge("hostmap."+name+".hosts", nil).Update(int64(hostLen))
-	metrics.GetOrRegisterGauge("hostmap."+name+".indexes", nil).Update(int64(indexLen))
-	metrics.GetOrRegisterGauge("hostmap."+name+".remoteIndexes", nil).Update(int64(remoteIndexLen))
-	metrics.GetOrRegisterGauge("hostmap."+name+".relayIndexes", nil).Update(int64(relaysLen))
+	metrics.GetOrRegisterGauge("hostmap.main.hosts", nil).Update(int64(hostLen))
+	metrics.GetOrRegisterGauge("hostmap.main.indexes", nil).Update(int64(indexLen))
+	metrics.GetOrRegisterGauge("hostmap.main.remoteIndexes", nil).Update(int64(remoteIndexLen))
+	metrics.GetOrRegisterGauge("hostmap.main.relayIndexes", nil).Update(int64(relaysLen))
 }
 
 func (hm *HostMap) RemoveRelay(localIdx uint32) {
@@ -299,88 +296,6 @@ func (hm *HostMap) RemoveRelay(localIdx uint32) {
 	hm.Unlock()
 }
 
-func (hm *HostMap) GetIndexByVpnIp(vpnIp iputil.VpnIp) (uint32, error) {
-	hm.RLock()
-	if i, ok := hm.Hosts[vpnIp]; ok {
-		index := i.localIndexId
-		hm.RUnlock()
-		return index, nil
-	}
-	hm.RUnlock()
-	return 0, errors.New("vpn IP not found")
-}
-
-func (hm *HostMap) Add(ip iputil.VpnIp, hostinfo *HostInfo) {
-	hm.Lock()
-	hm.Hosts[ip] = hostinfo
-	hm.Unlock()
-}
-
-func (hm *HostMap) AddVpnIp(vpnIp iputil.VpnIp, init func(hostinfo *HostInfo)) (hostinfo *HostInfo, created bool) {
-	hm.RLock()
-	if h, ok := hm.Hosts[vpnIp]; !ok {
-		hm.RUnlock()
-		h = &HostInfo{
-			vpnIp:           vpnIp,
-			HandshakePacket: make(map[uint8][]byte, 0),
-			relayState: RelayState{
-				relays:        map[iputil.VpnIp]struct{}{},
-				relayForByIp:  map[iputil.VpnIp]*Relay{},
-				relayForByIdx: map[uint32]*Relay{},
-			},
-		}
-		if init != nil {
-			init(h)
-		}
-		hm.Lock()
-		hm.Hosts[vpnIp] = h
-		hm.Unlock()
-		return h, true
-	} else {
-		hm.RUnlock()
-		return h, false
-	}
-}
-
-// Only used by pendingHostMap when the remote index is not initially known
-func (hm *HostMap) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
-	hm.Lock()
-	h.remoteIndexId = index
-	hm.RemoteIndexes[index] = h
-	hm.Unlock()
-
-	if hm.l.Level > logrus.DebugLevel {
-		hm.l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes),
-			"hostinfo": m{"existing": true, "localIndexId": h.localIndexId, "hostId": h.vpnIp}}).
-			Debug("Hostmap remoteIndex added")
-	}
-}
-
-// DeleteReverseIndex is used to clean up on recv_error
-// This function should only ever be called on the pending hostmap
-func (hm *HostMap) DeleteReverseIndex(index uint32) {
-	hm.Lock()
-	hostinfo, ok := hm.RemoteIndexes[index]
-	if ok {
-		delete(hm.Indexes, hostinfo.localIndexId)
-		delete(hm.RemoteIndexes, index)
-
-		// Check if we have an entry under hostId that matches the same hostinfo
-		// instance. Clean it up as well if we do (they might not match in pendingHostmap)
-		var hostinfo2 *HostInfo
-		hostinfo2, ok = hm.Hosts[hostinfo.vpnIp]
-		if ok && hostinfo2 == hostinfo {
-			delete(hm.Hosts, hostinfo.vpnIp)
-		}
-	}
-	hm.Unlock()
-
-	if hm.l.Level >= logrus.DebugLevel {
-		hm.l.WithField("hostMap", m{"mapName": hm.name, "indexNumber": index, "mapTotalSize": len(hm.Indexes)}).
-			Debug("Hostmap remote index deleted")
-	}
-}
-
 // DeleteHostInfo will fully unlink the hostinfo and return true if it was the final hostinfo for this vpn ip
 func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) bool {
 	// Delete the host itself, ensuring it's not modified anymore
@@ -391,12 +306,6 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) bool {
 	hm.Unlock()
 
 	return final
-}
-
-func (hm *HostMap) DeleteRelayIdx(localIdx uint32) {
-	hm.Lock()
-	defer hm.Unlock()
-	delete(hm.RemoteIndexes, localIdx)
 }
 
 func (hm *HostMap) MakePrimary(hostinfo *HostInfo) {
@@ -476,7 +385,7 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 	}
 
 	if hm.l.Level >= logrus.DebugLevel {
-		hm.l.WithField("hostMap", m{"mapName": hm.name, "mapTotalSize": len(hm.Hosts),
+		hm.l.WithField("hostMap", m{"mapTotalSize": len(hm.Hosts),
 			"vpnIp": hostinfo.vpnIp, "indexNumber": hostinfo.localIndexId, "remoteIndexNumber": hostinfo.remoteIndexId}).
 			Debug("Hostmap hostInfo deleted")
 	}
@@ -486,55 +395,41 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 	}
 }
 
-func (hm *HostMap) QueryIndex(index uint32) (*HostInfo, error) {
-	//TODO: we probably just want to return bool instead of error, or at least a static error
+func (hm *HostMap) QueryIndex(index uint32) *HostInfo {
 	hm.RLock()
 	if h, ok := hm.Indexes[index]; ok {
 		hm.RUnlock()
-		return h, nil
+		return h
 	} else {
 		hm.RUnlock()
-		return nil, errors.New("unable to find index")
+		return nil
 	}
 }
 
-// Retrieves a HostInfo by Index. Returns whether the HostInfo is primary at time of query.
-// This helper exists so that the hostinfo.prev pointer can be read while the hostmap lock is held.
-func (hm *HostMap) QueryIndexIsPrimary(index uint32) (*HostInfo, bool, error) {
-	//TODO: we probably just want to return bool instead of error, or at least a static error
-	hm.RLock()
-	if h, ok := hm.Indexes[index]; ok {
-		hm.RUnlock()
-		return h, h.prev == nil, nil
-	} else {
-		hm.RUnlock()
-		return nil, false, errors.New("unable to find index")
-	}
-}
-func (hm *HostMap) QueryRelayIndex(index uint32) (*HostInfo, error) {
+func (hm *HostMap) QueryRelayIndex(index uint32) *HostInfo {
 	//TODO: we probably just want to return bool instead of error, or at least a static error
 	hm.RLock()
 	if h, ok := hm.Relays[index]; ok {
 		hm.RUnlock()
-		return h, nil
+		return h
 	} else {
 		hm.RUnlock()
-		return nil, errors.New("unable to find index")
+		return nil
 	}
 }
 
-func (hm *HostMap) QueryReverseIndex(index uint32) (*HostInfo, error) {
+func (hm *HostMap) QueryReverseIndex(index uint32) *HostInfo {
 	hm.RLock()
 	if h, ok := hm.RemoteIndexes[index]; ok {
 		hm.RUnlock()
-		return h, nil
+		return h
 	} else {
 		hm.RUnlock()
-		return nil, fmt.Errorf("unable to find reverse index or connectionstate nil in %s hostmap", hm.name)
+		return nil
 	}
 }
 
-func (hm *HostMap) QueryVpnIp(vpnIp iputil.VpnIp) (*HostInfo, error) {
+func (hm *HostMap) QueryVpnIp(vpnIp iputil.VpnIp) *HostInfo {
 	return hm.queryVpnIp(vpnIp, nil)
 }
 
@@ -558,11 +453,11 @@ func (hm *HostMap) QueryVpnIpRelayFor(targetIp, relayHostIp iputil.VpnIp) (*Host
 
 // PromoteBestQueryVpnIp will attempt to lazily switch to the best remote every
 // `PromoteEvery` calls to this function for a given host.
-func (hm *HostMap) PromoteBestQueryVpnIp(vpnIp iputil.VpnIp, ifce *Interface) (*HostInfo, error) {
+func (hm *HostMap) PromoteBestQueryVpnIp(vpnIp iputil.VpnIp, ifce *Interface) *HostInfo {
 	return hm.queryVpnIp(vpnIp, ifce)
 }
 
-func (hm *HostMap) queryVpnIp(vpnIp iputil.VpnIp, promoteIfce *Interface) (*HostInfo, error) {
+func (hm *HostMap) queryVpnIp(vpnIp iputil.VpnIp, promoteIfce *Interface) *HostInfo {
 	hm.RLock()
 	if h, ok := hm.Hosts[vpnIp]; ok {
 		hm.RUnlock()
@@ -570,12 +465,12 @@ func (hm *HostMap) queryVpnIp(vpnIp iputil.VpnIp, promoteIfce *Interface) (*Host
 		if promoteIfce != nil && !promoteIfce.lightHouse.amLighthouse {
 			h.TryPromoteBest(hm.preferredRanges, promoteIfce)
 		}
-		return h, nil
+		return h
 
 	}
 
 	hm.RUnlock()
-	return nil, errors.New("unable to find host")
+	return nil
 }
 
 // unlockedAddHostInfo assumes you have a write-lock and will add a hostinfo object to the hostmap Indexes and RemoteIndexes maps.
@@ -598,7 +493,7 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	hm.RemoteIndexes[hostinfo.remoteIndexId] = hostinfo
 
 	if hm.l.Level >= logrus.DebugLevel {
-		hm.l.WithField("hostMap", m{"mapName": hm.name, "vpnIp": hostinfo.vpnIp, "mapTotalSize": len(hm.Hosts),
+		hm.l.WithField("hostMap", m{"vpnIp": hostinfo.vpnIp, "mapTotalSize": len(hm.Hosts),
 			"hostinfo": m{"existing": true, "localIndexId": hostinfo.localIndexId, "hostId": hostinfo.vpnIp}}).
 			Debug("Hostmap vpnIp added")
 	}
@@ -611,6 +506,28 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 		}
 		check = check.next
 		i++
+	}
+}
+
+func (hm *HostMap) GetPreferredRanges() []*net.IPNet {
+	return hm.preferredRanges
+}
+
+func (hm *HostMap) ForEachVpnIp(f controlEach) {
+	hm.RLock()
+	defer hm.RUnlock()
+
+	for _, v := range hm.Hosts {
+		f(v)
+	}
+}
+
+func (hm *HostMap) ForEachIndex(f controlEach) {
+	hm.RLock()
+	defer hm.RUnlock()
+
+	for _, v := range hm.Indexes {
+		f(v)
 	}
 }
 

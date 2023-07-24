@@ -212,7 +212,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	}
 
-	hostMap := NewHostMap(l, "main", tunCidr, preferredRanges)
+	hostMap := NewHostMap(l, tunCidr, preferredRanges)
 	hostMap.metricsEnabled = c.GetBool("stats.message_metrics", false)
 
 	l.
@@ -339,7 +339,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	//TODO: check if we _should_ be emitting stats
 	go ifce.emitStats(ctx, c.GetDuration("stats.interval", time.Second*10))
 
-	attachCommands(l, c, ssh, hostMap, handshakeManager.pendingHostMap, lightHouse, ifce)
+	attachCommands(l, c, ssh, ifce)
 
 	// Start DNS server last to allow using the nebula IP as lighthouse.dns.host
 	var dnsStart func()
