@@ -22,19 +22,19 @@ func notifyReady(l *logrus.Logger) {
 
 	conn, err := net.DialTimeout("unixgram", sockName, time.Second)
 	if err != nil {
-		l.WithError(err).Debugln("failed to connect to systemd notification socket")
+		l.WithError(err).Error("failed to connect to systemd notification socket")
 		return
 	}
 	defer conn.Close()
 
 	err = conn.SetWriteDeadline(time.Now().Add(time.Second))
 	if err != nil {
-		l.WithError(err).Debugln("failed to set the write deadline for the systemd notification socket")
+		l.WithError(err).Error("failed to set the write deadline for the systemd notification socket")
 		return
 	}
 
 	if _, err = conn.Write([]byte(SdNotifyReady)); err != nil {
-		l.WithError(err).Debugln("failed to signal the systemd notification socket")
+		l.WithError(err).Error("failed to signal the systemd notification socket")
 		return
 	}
 
