@@ -5,7 +5,9 @@ package udp
 
 import (
 	"fmt"
+	"io"
 	"net"
+	"sync/atomic"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
@@ -42,7 +44,8 @@ type TesterConn struct {
 	RxPackets chan *Packet // Packets to receive into nebula
 	TxPackets chan *Packet // Packets transmitted outside by nebula
 
-	l *logrus.Logger
+	closed atomic.Bool
+	l      *logrus.Logger
 }
 
 func NewListener(l *logrus.Logger, ip net.IP, port int, _ bool, _ int) (Conn, error) {
@@ -58,6 +61,10 @@ func NewListener(l *logrus.Logger, ip net.IP, port int, _ bool, _ int) (Conn, er
 // this is an encrypted packet or a handshake message in most cases
 // packets were transmitted from another nebula node, you can send them with Tun.Send
 func (u *TesterConn) Send(packet *Packet) {
+	if u.closed.Load() {
+		return
+	}
+
 	h := &header.H{}
 	if err := h.Parse(packet.Data); err != nil {
 		panic(err)
@@ -92,6 +99,10 @@ func (u *TesterConn) Get(block bool) *Packet {
 //********************************************************************************************************************//
 
 func (u *TesterConn) WriteTo(b []byte, addr *Addr) error {
+	if u.closed.Load() {
+		return io.ErrClosedPipe
+	}
+
 	p := &Packet{
 		Data:     make([]byte, len(b), len(b)),
 		FromIp:   make([]byte, 16),
@@ -142,7 +153,9 @@ func (u *TesterConn) Rebind() error {
 }
 
 func (u *TesterConn) Close() error {
-	close(u.RxPackets)
-	close(u.TxPackets)
+	if u.closed.CompareAndSwap(false, true) {
+		close(u.RxPackets)
+		close(u.TxPackets)
+	}
 	return nil
 }
