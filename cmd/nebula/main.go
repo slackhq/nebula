@@ -65,6 +65,7 @@ func main() {
 
 	if !*configTest {
 		ctrl.Start()
+		notifyReady(l)
 		ctrl.ShutdownBlock()
 	}
 
