@@ -66,6 +66,35 @@ func Test_lhStaticMapping(t *testing.T) {
 	assert.EqualError(t, err, "lighthouse 10.128.0.3 does not have a static_host_map entry")
 }
 
+func TestReloadLighthouseInterval(t *testing.T) {
+	l := test.NewLogger()
+	_, myVpnNet, _ := net.ParseCIDR("10.128.0.1/16")
+	lh1 := "10.128.0.2"
+
+	c := config.NewC(l)
+	c.Settings["lighthouse"] = map[interface{}]interface{}{
+		"hosts":    []interface{}{lh1},
+		"interval": "1s",
+	}
+
+	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"1.1.1.1:4242"}}
+	lh, err := NewLightHouseFromConfig(context.Background(), l, c, myVpnNet, nil, nil)
+	assert.NoError(t, err)
+	lh.ifce = &mockEncWriter{}
+
+	// The first one routine is kicked off by main.go currently, lets make sure that one dies
+	c.ReloadConfigString("lighthouse:\n  interval: 5")
+	assert.Equal(t, int64(5), lh.interval.Load())
+
+	// Subsequent calls are killed off by the LightHouse.Reload function
+	c.ReloadConfigString("lighthouse:\n  interval: 10")
+	assert.Equal(t, int64(10), lh.interval.Load())
+
+	// If this completes then nothing is stealing our reload routine
+	c.ReloadConfigString("lighthouse:\n  interval: 11")
+	assert.Equal(t, int64(11), lh.interval.Load())
+}
+
 func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	l := test.NewLogger()
 	_, myVpnNet, _ := net.ParseCIDR("10.128.0.1/0")

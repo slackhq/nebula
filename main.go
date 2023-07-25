@@ -315,13 +315,12 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		// TODO: Better way to attach these, probably want a new interface in InterfaceConfig
 		// I don't want to make this initial commit too far-reaching though
 		ifce.writers = udpConns
+		lightHouse.ifce = ifce
 
 		ifce.RegisterConfigChangeCallbacks(c)
-
 		ifce.reloadSendRecvError(c)
 
 		go handshakeManager.Run(ctx, ifce)
-		go lightHouse.LhUpdateWorker(ctx, ifce)
 	}
 
 	// TODO - stats third-party modules start uncancellable goroutines. Update those libs to accept
@@ -348,5 +347,13 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		dnsStart = dnsMain(l, hostMap, c)
 	}
 
-	return &Control{ifce, l, cancel, sshStart, statsStart, dnsStart}, nil
+	return &Control{
+		ifce,
+		l,
+		cancel,
+		sshStart,
+		statsStart,
+		dnsStart,
+		lightHouse.StartUpdateWorker,
+	}, nil
 }
