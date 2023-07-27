@@ -20,9 +20,9 @@ require (
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/stretchr/testify v1.8.4
 	github.com/vishvananda/netlink v1.1.0
-	golang.org/x/crypto v0.8.0
+	golang.org/x/crypto v0.11.0
 	golang.org/x/exp v0.0.0-20230425010034-47ecfdc1ba53
-	golang.org/x/net v0.9.0
+	golang.org/x/net v0.12.0
 	golang.org/x/sys v0.10.0
 	golang.org/x/term v0.10.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
