@@ -64,11 +64,10 @@ type LightHouse struct {
 	staticList  atomic.Pointer[map[iputil.VpnIp]struct{}]
 	lighthouses atomic.Pointer[map[iputil.VpnIp]struct{}]
 
-	interval        atomic.Int64
-	updateCancel    context.CancelFunc
-	updateParentCtx context.Context
-	updateUdp       EncWriter
-	nebulaPort      uint32 // 32 bits because protobuf does not have a uint16
+	interval     atomic.Int64
+	updateCancel context.CancelFunc
+	ifce         EncWriter
+	nebulaPort   uint32 // 32 bits because protobuf does not have a uint16
 
 	advertiseAddrs atomic.Pointer[[]netIpAndPort]
 
@@ -217,7 +216,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 				lh.updateCancel()
 			}
 
-			lh.LhUpdateWorker(lh.updateParentCtx, lh.updateUdp)
+			lh.StartUpdateWorker()
 		}
 	}
 
@@ -754,33 +753,33 @@ func NewUDPAddrFromLH6(ipp *Ip6AndPort) *udp.Addr {
 	return udp.NewAddr(lhIp6ToIp(ipp), uint16(ipp.Port))
 }
 
-func (lh *LightHouse) LhUpdateWorker(ctx context.Context, f EncWriter) {
-	lh.updateParentCtx = ctx
-	lh.updateUdp = f
-
+func (lh *LightHouse) StartUpdateWorker() {
 	interval := lh.GetUpdateInterval()
 	if lh.amLighthouse || interval == 0 {
 		return
 	}
 
 	clockSource := time.NewTicker(time.Second * time.Duration(interval))
-	updateCtx, cancel := context.WithCancel(ctx)
+	updateCtx, cancel := context.WithCancel(lh.ctx)
 	lh.updateCancel = cancel
-	defer clockSource.Stop()
 
-	for {
-		lh.SendUpdate(f)
+	go func() {
+		defer clockSource.Stop()
 
-		select {
-		case <-updateCtx.Done():
-			return
-		case <-clockSource.C:
-			continue
+		for {
+			lh.SendUpdate()
+
+			select {
+			case <-updateCtx.Done():
+				return
+			case <-clockSource.C:
+				continue
+			}
 		}
-	}
+	}()
 }
 
-func (lh *LightHouse) SendUpdate(f EncWriter) {
+func (lh *LightHouse) SendUpdate() {
 	var v4 []*Ip4AndPort
 	var v6 []*Ip6AndPort
 
@@ -833,7 +832,7 @@ func (lh *LightHouse) SendUpdate(f EncWriter) {
 	}
 
 	for vpnIp := range lighthouses {
-		f.SendMessageToVpnIp(header.LightHouse, 0, vpnIp, mm, nb, out)
+		lh.ifce.SendMessageToVpnIp(header.LightHouse, 0, vpnIp, mm, nb, out)
 	}
 }
 

@@ -27,12 +27,13 @@ type controlHostLister interface {
 }
 
 type Control struct {
-	f          *Interface
-	l          *logrus.Logger
-	cancel     context.CancelFunc
-	sshStart   func()
-	statsStart func()
-	dnsStart   func()
+	f               *Interface
+	l               *logrus.Logger
+	cancel          context.CancelFunc
+	sshStart        func()
+	statsStart      func()
+	dnsStart        func()
+	lighthouseStart func()
 }
 
 type ControlHostInfo struct {
@@ -63,12 +64,15 @@ func (c *Control) Start() {
 	if c.dnsStart != nil {
 		go c.dnsStart()
 	}
+	if c.lighthouseStart != nil {
+		c.lighthouseStart()
+	}
 
 	// Start reading packets.
 	c.f.run()
 }
 
-// Stop signals nebula to shutdown, returns after the shutdown is complete
+// Stop signals nebula to shutdown and close all tunnels, returns after the shutdown is complete
 func (c *Control) Stop() {
 	// Stop the handshakeManager (and other services), to prevent new tunnels from
 	// being created while we're shutting them all down.
@@ -98,7 +102,7 @@ func (c *Control) RebindUDPServer() {
 	_ = c.f.outside.Rebind()
 
 	// Trigger a lighthouse update, useful for mobile clients that should have an update interval of 0
-	c.f.lightHouse.SendUpdate(c.f)
+	c.f.lightHouse.SendUpdate()
 
 	// Let the main interface know that we rebound so that underlying tunnels know to trigger punches from their remotes
 	c.f.rebindCount++
