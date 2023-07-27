@@ -54,7 +54,8 @@ ALL = $(ALL_LINUX) \
 	darwin-amd64 \
 	darwin-arm64 \
 	windows-amd64 \
-	windows-arm64
+	windows-arm64 \
+	netbsd-amd64
 
 e2e:
 	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
