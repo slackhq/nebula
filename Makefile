@@ -87,6 +87,8 @@ release-linux: $(ALL_LINUX:%=build/nebula-%.tar.gz)
 
 release-freebsd: $(ALL_FREEBSD:%=build/nebula-%.tar.gz)
 
+release-openbsd: $(ALL_OPENBSD:%=build/nebula-%.tar.gz)
+
 release-boringcrypto: build/nebula-linux-$(shell go env GOARCH)-boringcrypto.tar.gz
 
 BUILD_ARGS = -trimpath
