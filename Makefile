@@ -52,14 +52,17 @@ ALL_FREEBSD = freebsd-amd64 \
 ALL_OPENBSD = openbsd-amd64 \
 	openbsd-arm64
 
+ALL_NETBSD = netbsd-amd64 \
+ 	netbsd-arm64
+
 ALL = $(ALL_LINUX) \
 	$(ALL_FREEBSD) \
 	$(ALL_OPENBSD) \
+	$(ALL_NETBSD) \
 	darwin-amd64 \
 	darwin-arm64 \
 	windows-amd64 \
-	windows-arm64 \
-	netbsd-amd64
+	windows-arm64
 
 e2e:
 	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
@@ -88,6 +91,8 @@ release-linux: $(ALL_LINUX:%=build/nebula-%.tar.gz)
 release-freebsd: $(ALL_FREEBSD:%=build/nebula-%.tar.gz)
 
 release-openbsd: $(ALL_OPENBSD:%=build/nebula-%.tar.gz)
+
+release-netbsd: $(ALL_NETBSD:%=build/nebula-%.tar.gz)
 
 release-boringcrypto: build/nebula-linux-$(shell go env GOARCH)-boringcrypto.tar.gz
 
