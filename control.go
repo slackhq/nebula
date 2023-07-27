@@ -27,12 +27,12 @@ type controlHostLister interface {
 }
 
 type Control struct {
-	f          *Interface
-	l          *logrus.Logger
-	cancel     context.CancelFunc
-	sshStart   func()
-	statsStart func()
-	dnsStart   func()
+	f         *Interface
+	l         *logrus.Logger
+	cancel    context.CancelFunc
+	sshStart  func()
+	httpStart func()
+	dnsStart  func()
 }
 
 type ControlHostInfo struct {
@@ -57,8 +57,8 @@ func (c *Control) Start() {
 	if c.sshStart != nil {
 		go c.sshStart()
 	}
-	if c.statsStart != nil {
-		go c.statsStart()
+	if c.httpStart != nil {
+		go c.httpStart()
 	}
 	if c.dnsStart != nil {
 		go c.dnsStart()
