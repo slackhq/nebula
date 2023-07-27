@@ -761,7 +761,6 @@ func (lh *LightHouse) StartUpdateWorker() {
 
 	clockSource := time.NewTicker(time.Second * time.Duration(interval))
 	updateCtx, cancel := context.WithCancel(lh.ctx)
-	// We seem to have a race right here, the first caller never gets canceled because the updateCancel is set by the 2nd?
 	lh.updateCancel = cancel
 
 	go func() {
