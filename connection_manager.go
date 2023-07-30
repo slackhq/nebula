@@ -352,6 +352,11 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, p, nb, out []
 			WithField("tunnelCheck", m{"state": "dead", "method": "active"}).
 			Info("Tunnel status")
 
+		if n.intf.handshakeManager.ChurnLimiter.Check(hostinfo.vpnIp) {
+			n.l.WithField("vpnIp", hostinfo.vpnIp).Info("Tunnel status; relaying with churn limiter")
+			return doNothing, nil, nil
+		}
+
 		delete(n.pendingDeletion, hostinfo.localIndexId)
 		return deleteTunnel, hostinfo, nil
 	}

@@ -278,6 +278,13 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udp.Addr) {
 			return
 		}
 
+		if f.handshakeManager.ChurnLimiter.Check(hostinfo.vpnIp) {
+			hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
+				Debug("Host roamed to new udp ip/port, but churn limiter denied roam")
+
+			return
+		}
+
 		hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
 			Info("Host roamed to new udp ip/port.")
 		hostinfo.lastRoam = time.Now()
