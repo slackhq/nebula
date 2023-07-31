@@ -255,10 +255,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	handshakeManager := NewHandshakeManager(l, tunCidr, preferredRanges, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
 
-	//TODO: These will be reused for psk
-	//handshakeMACKey := config.GetString("handshake_mac.key", "")
-	//handshakeAcceptedMACKeys := config.GetStringSlice("handshake_mac.accepted_keys", []string{})
-
 	serveDns := false
 	if c.GetBool("lighthouse.serve_dns", false) {
 		if c.GetBool("lighthouse.am_lighthouse", false) {
