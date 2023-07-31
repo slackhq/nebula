@@ -220,11 +220,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		WithField("preferredRanges", hostMap.preferredRanges).
 		Info("Main HostMap created")
 
-	/*
-		config.SetDefault("promoter.interval", 10)
-		go hostMap.Promoter(config.GetInt("promoter.interval"))
-	*/
-
 	punchy := NewPunchyFromConfig(l, c)
 	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, tunCidr, udpConns[0], punchy)
 	switch {
