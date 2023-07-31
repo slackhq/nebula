@@ -270,6 +270,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	checkInterval := c.GetInt("timers.connection_alive_interval", 5)
 	pendingDeletionInterval := c.GetInt("timers.pending_deletion_interval", 10)
+
 	ifConfig := &InterfaceConfig{
 		HostMap:                 hostMap,
 		Inside:                  tun,
@@ -282,6 +283,9 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		lightHouse:              lightHouse,
 		checkInterval:           time.Second * time.Duration(checkInterval),
 		pendingDeletionInterval: time.Second * time.Duration(pendingDeletionInterval),
+		tryPromoteEvery:         c.GetUint32("counters.try_promote", defaultPromoteEvery),
+		reQueryEvery:            c.GetUint32("counters.requery_every_packets", defaultReQueryEvery),
+		reQueryWait:             int64(c.GetInt("timers.requery_wait_seconds", defaultReQueryWait)),
 		DropLocalBroadcast:      c.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:           c.GetBool("tun.drop_multicast", false),
 		routines:                routines,

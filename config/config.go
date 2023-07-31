@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -234,6 +235,15 @@ func (c *C) GetInt(k string, d int) int {
 	}
 
 	return v
+}
+
+// GetUint32 will get the uint32 for k or return the default d if not found or invalid
+func (c *C) GetUint32(k string, d uint32) uint32 {
+	r := c.GetInt(k, int(d))
+	if uint64(r) > uint64(math.MaxUint32) {
+		return d
+	}
+	return uint32(r)
 }
 
 // GetBool will get the bool for k or return the default d if not found or invalid
