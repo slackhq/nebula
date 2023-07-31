@@ -220,11 +220,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		WithField("preferredRanges", hostMap.preferredRanges).
 		Info("Main HostMap created")
 
-	/*
-		config.SetDefault("promoter.interval", 10)
-		go hostMap.Promoter(config.GetInt("promoter.interval"))
-	*/
-
 	punchy := NewPunchyFromConfig(l, c)
 	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, tunCidr, udpConns[0], punchy)
 	switch {
@@ -254,10 +249,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	handshakeManager := NewHandshakeManager(l, tunCidr, preferredRanges, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
-
-	//TODO: These will be reused for psk
-	//handshakeMACKey := config.GetString("handshake_mac.key", "")
-	//handshakeAcceptedMACKeys := config.GetStringSlice("handshake_mac.accepted_keys", []string{})
 
 	serveDns := false
 	if c.GetBool("lighthouse.serve_dns", false) {
