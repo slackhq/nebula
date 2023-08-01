@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/imdario/mergo"
+	"dario.cat/mergo"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 )
