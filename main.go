@@ -285,7 +285,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		pendingDeletionInterval: time.Second * time.Duration(pendingDeletionInterval),
 		tryPromoteEvery:         c.GetUint32("counters.try_promote", defaultPromoteEvery),
 		reQueryEvery:            c.GetUint32("counters.requery_every_packets", defaultReQueryEvery),
-		reQueryWait:             int64(c.GetInt("timers.requery_wait_seconds", defaultReQueryWait)),
+		reQueryWait:             c.GetDuration("timers.requery_wait_duration", defaultReQueryWait),
 		DropLocalBroadcast:      c.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:           c.GetBool("tun.drop_multicast", false),
 		routines:                routines,

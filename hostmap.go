@@ -17,9 +17,9 @@ import (
 )
 
 // const ProbeLen = 100
-const defaultPromoteEvery = 1000  // Count of packets sent before we try moving a tunnel to a preferred underlay ip address
-const defaultReQueryEvery = 5000  // Count of packets sent before re-querying a hostinfo to the lighthouse
-const defaultReQueryWait = 1 * 60 // Minimum amount of seconds to wait before re-querying a hostinfo the lighthouse. Evaluated every ReQueryEvery
+const defaultPromoteEvery = 1000       // Count of packets sent before we try moving a tunnel to a preferred underlay ip address
+const defaultReQueryEvery = 5000       // Count of packets sent before re-querying a hostinfo to the lighthouse
+const defaultReQueryWait = time.Minute // Minimum amount of seconds to wait before re-querying a hostinfo the lighthouse. Evaluated every ReQueryEvery
 const MaxRemotes = 10
 
 // MaxHostInfosPerVpnIp is the max number of hostinfos we will track for a given vpn ip
@@ -569,7 +569,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 
 	// Re query our lighthouses for new remotes occasionally
 	if c%ifce.reQueryEvery.Load() == 0 && ifce.lightHouse != nil {
-		now := time.Now().Unix()
+		now := time.Now().UnixNano()
 		if now < i.nextLHQuery.Load() {
 			return
 		}

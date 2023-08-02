@@ -48,7 +48,7 @@ type InterfaceConfig struct {
 
 	tryPromoteEvery uint32
 	reQueryEvery    uint32
-	reQueryWait     int64
+	reQueryWait     time.Duration
 
 	ConntrackCacheTimeout time.Duration
 	l                     *logrus.Logger
@@ -196,7 +196,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 
 	ifce.tryPromoteEvery.Store(c.tryPromoteEvery)
 	ifce.reQueryEvery.Store(c.reQueryEvery)
-	ifce.reQueryWait.Store(c.reQueryWait)
+	ifce.reQueryWait.Store(int64(c.reQueryWait))
 
 	ifce.certState.Store(c.certState)
 	ifce.connectionManager = newConnectionManager(ctx, c.l, ifce, c.checkInterval, c.pendingDeletionInterval, c.punchy)
@@ -415,10 +415,10 @@ func (f *Interface) reloadMisc(c *config.C) {
 		f.l.Info("counters.requery_every_packets")
 	}
 
-	if c.HasChanged("timers.requery_wait_seconds") {
-		n := c.GetInt("timers.requery_wait_seconds", defaultReQueryWait)
+	if c.HasChanged("timers.requery_wait_duration") {
+		n := c.GetDuration("timers.requery_wait_duration", defaultReQueryWait)
 		f.reQueryWait.Store(int64(n))
-		f.l.Info("timers.requery_wait_seconds")
+		f.l.Info("timers.requery_wait_duration")
 	}
 }
 
