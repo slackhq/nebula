@@ -23,7 +23,6 @@ type ConnectionState struct {
 	initiator      bool
 	messageCounter atomic.Uint64
 	window         *Bits
-	queueLock      sync.Mutex
 	writeLock      sync.Mutex
 	ready          bool
 }

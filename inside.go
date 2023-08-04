@@ -44,7 +44,10 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		return
 	}
 
-	hostinfo := f.getOrHandshake(fwPacket.RemoteIP)
+	hostinfo, ready := f.getOrHandshake(fwPacket.RemoteIP, func(h *HostInfo) {
+		h.unlockedCachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
+	})
+
 	if hostinfo == nil {
 		f.rejectInside(packet, out, q)
 		if f.l.Level >= logrus.DebugLevel {
@@ -54,23 +57,14 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		}
 		return
 	}
-	ci := hostinfo.ConnectionState
 
-	if !ci.ready {
-		// Because we might be sending stored packets, lock here to stop new things going to
-		// the packet queue.
-		ci.queueLock.Lock()
-		if !ci.ready {
-			hostinfo.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
-			ci.queueLock.Unlock()
-			return
-		}
-		ci.queueLock.Unlock()
+	if !ready {
+		return
 	}
 
 	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
-		f.sendNoMetrics(header.Message, 0, ci, hostinfo, nil, packet, nb, out, q)
+		f.sendNoMetrics(header.Message, 0, hostinfo.ConnectionState, hostinfo, nil, packet, nb, out, q)
 
 	} else {
 		f.rejectInside(packet, out, q)
@@ -109,62 +103,20 @@ func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *
 }
 
 func (f *Interface) Handshake(vpnIp iputil.VpnIp) {
-	f.getOrHandshake(vpnIp)
+	f.getOrHandshake(vpnIp, nil)
 }
 
-// getOrHandshake returns nil if the vpnIp is not routable
-func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
+// getOrHandshake returns nil if the vpnIp is not routable.
+// If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
+func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp, cacheCallback func(info *HostInfo)) (*HostInfo, bool) {
 	if !ipMaskContains(f.lightHouse.myVpnIp, f.lightHouse.myVpnZeros, vpnIp) {
 		vpnIp = f.inside.RouteFor(vpnIp)
 		if vpnIp == 0 {
-			return nil
+			return nil, false
 		}
 	}
 
-	hostinfo := f.hostMap.PromoteBestQueryVpnIp(vpnIp, f)
-	if hostinfo == nil {
-		hostinfo = f.handshakeManager.AddVpnIp(vpnIp)
-	}
-	ci := hostinfo.ConnectionState
-
-	if ci != nil && ci.eKey != nil && ci.ready {
-		return hostinfo
-	}
-
-	// Handshake is not ready, we need to grab the lock now before we start the handshake process
-	//TODO: move this to handshake manager
-	hostinfo.Lock()
-	defer hostinfo.Unlock()
-
-	// Double check, now that we have the lock
-	ci = hostinfo.ConnectionState
-	if ci != nil && ci.eKey != nil && ci.ready {
-		return hostinfo
-	}
-
-	// If we have already created the handshake packet, we don't want to call the function at all.
-	if !hostinfo.HandshakeReady {
-		ixHandshakeStage0(f, vpnIp, hostinfo)
-		// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
-		//xx_handshakeStage0(f, ip, hostinfo)
-
-		// If this is a static host, we don't need to wait for the HostQueryReply
-		// We can trigger the handshake right now
-		_, doTrigger := f.lightHouse.GetStaticHostList()[vpnIp]
-		if !doTrigger {
-			// Add any calculated remotes, and trigger early handshake if one found
-			doTrigger = f.lightHouse.addCalculatedRemotes(vpnIp)
-		}
-
-		if doTrigger {
-			select {
-			case f.handshakeManager.trigger <- vpnIp:
-			default:
-			}
-		}
-	}
-
-	return hostinfo
+	return f.handshakeManager.GetOrHandshake(vpnIp, cacheCallback)
 }
 
 func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte) {
@@ -191,7 +143,10 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
 func (f *Interface) SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, nb, out []byte) {
-	hostInfo := f.getOrHandshake(vpnIp)
+	hostInfo, ready := f.getOrHandshake(vpnIp, func(h *HostInfo) {
+		h.unlockedCachePacket(f.l, t, st, p, f.SendMessageToHostInfo, f.cachedPacketMetrics)
+	})
+
 	if hostInfo == nil {
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("vpnIp", vpnIp).
@@ -200,16 +155,8 @@ func (f *Interface) SendMessageToVpnIp(t header.MessageType, st header.MessageSu
 		return
 	}
 
-	if !hostInfo.ConnectionState.ready {
-		// Because we might be sending stored packets, lock here to stop new things going to
-		// the packet queue.
-		hostInfo.ConnectionState.queueLock.Lock()
-		if !hostInfo.ConnectionState.ready {
-			hostInfo.cachePacket(f.l, t, st, p, f.SendMessageToHostInfo, f.cachedPacketMetrics)
-			hostInfo.ConnectionState.queueLock.Unlock()
-			return
-		}
-		hostInfo.ConnectionState.queueLock.Unlock()
+	if !ready {
+		return
 	}
 
 	f.SendMessageToHostInfo(t, st, hostInfo, p, nb, out)
@@ -229,7 +176,7 @@ func (f *Interface) sendTo(t header.MessageType, st header.MessageSubType, ci *C
 	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
 }
 
-// sendVia sends a payload through a Relay tunnel. No authentication or encryption is done
+// SendVia sends a payload through a Relay tunnel. No authentication or encryption is done
 // to the payload for the ultimate target host, making this a useful method for sending
 // handshake messages to peers through relay tunnels.
 // via is the HostInfo through which the message is relayed.
