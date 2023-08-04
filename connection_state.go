@@ -30,15 +30,15 @@ type ConnectionState struct {
 
 func (f *Interface) newConnectionState(l *logrus.Logger, initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {
 	var dhFunc noise.DHFunc
-	curCertState := f.certState.Load()
+	curCertState := f.pki.GetCertState()
 
-	switch curCertState.certificate.Details.Curve {
+	switch curCertState.Certificate.Details.Curve {
 	case cert.Curve_CURVE25519:
 		dhFunc = noise.DH25519
 	case cert.Curve_P256:
 		dhFunc = noiseutil.DHP256
 	default:
-		l.Errorf("invalid curve: %s", curCertState.certificate.Details.Curve)
+		l.Errorf("invalid curve: %s", curCertState.Certificate.Details.Curve)
 		return nil
 	}
 	cs := noise.NewCipherSuite(dhFunc, noiseutil.CipherAESGCM, noise.HashSHA256)
@@ -46,7 +46,7 @@ func (f *Interface) newConnectionState(l *logrus.Logger, initiator bool, pattern
 		cs = noise.NewCipherSuite(dhFunc, noise.CipherChaChaPoly, noise.HashSHA256)
 	}
 
-	static := noise.DHKey{Private: curCertState.privateKey, Public: curCertState.publicKey}
+	static := noise.DHKey{Private: curCertState.PrivateKey, Public: curCertState.PublicKey}
 
 	b := NewBits(ReplayWindow)
 	// Clear out bit 0, we never transmit it and we don't want it showing as packet loss

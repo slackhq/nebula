@@ -161,7 +161,7 @@ func (c *Control) GetHostmap() *HostMap {
 }
 
 func (c *Control) GetCert() *cert.NebulaCertificate {
-	return c.f.certState.Load().certificate
+	return c.f.pki.GetCertState().Certificate
 }
 
 func (c *Control) ReHandshake(vpnIp iputil.VpnIp) {

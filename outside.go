@@ -404,7 +404,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return false
 	}
 
-	dropReason := f.firewall.Drop(out, *fwPacket, true, hostinfo, f.caPool, localCache)
+	dropReason := f.firewall.Drop(out, *fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason != nil {
 		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, out, q)
 		if f.l.Level >= logrus.DebugLevel {

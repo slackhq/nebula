@@ -405,8 +405,8 @@ func (n *connectionManager) shouldSwapPrimary(current, primary *HostInfo) bool {
 		return false
 	}
 
-	certState := n.intf.certState.Load()
-	return bytes.Equal(current.ConnectionState.certState.certificate.Signature, certState.certificate.Signature)
+	certState := n.intf.pki.GetCertState()
+	return bytes.Equal(current.ConnectionState.certState.Certificate.Signature, certState.Certificate.Signature)
 }
 
 func (n *connectionManager) swapPrimary(current, primary *HostInfo) {
@@ -427,7 +427,7 @@ func (n *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostIn
 		return false
 	}
 
-	valid, err := remoteCert.VerifyWithCache(now, n.intf.caPool)
+	valid, err := remoteCert.VerifyWithCache(now, n.intf.pki.GetCAPool())
 	if valid {
 		return false
 	}
@@ -464,8 +464,8 @@ func (n *connectionManager) sendPunch(hostinfo *HostInfo) {
 }
 
 func (n *connectionManager) tryRehandshake(hostinfo *HostInfo) {
-	certState := n.intf.certState.Load()
-	if bytes.Equal(hostinfo.ConnectionState.certState.certificate.Signature, certState.certificate.Signature) {
+	certState := n.intf.pki.GetCertState()
+	if bytes.Equal(hostinfo.ConnectionState.certState.Certificate.Signature, certState.Certificate.Signature) {
 		return
 	}
 

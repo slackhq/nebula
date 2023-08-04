@@ -12,18 +12,18 @@ type ContextualError struct {
 	Context   string
 }
 
-func NewContextualError(msg string, fields map[string]interface{}, realError error) ContextualError {
-	return ContextualError{Context: msg, Fields: fields, RealError: realError}
+func NewContextualError(msg string, fields map[string]interface{}, realError error) *ContextualError {
+	return &ContextualError{Context: msg, Fields: fields, RealError: realError}
 }
 
-func (ce ContextualError) Error() string {
+func (ce *ContextualError) Error() string {
 	if ce.RealError == nil {
 		return ce.Context
 	}
 	return ce.RealError.Error()
 }
 
-func (ce ContextualError) Unwrap() error {
+func (ce *ContextualError) Unwrap() error {
 	if ce.RealError == nil {
 		return errors.New(ce.Context)
 	}
