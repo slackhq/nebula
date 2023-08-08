@@ -46,6 +46,10 @@ type InterfaceConfig struct {
 	relayManager            *relayManager
 	punchy                  *Punchy
 
+	tryPromoteEvery uint32
+	reQueryEvery    uint32
+	reQueryWait     time.Duration
+
 	ConntrackCacheTimeout time.Duration
 	l                     *logrus.Logger
 }
@@ -71,6 +75,10 @@ type Interface struct {
 	disconnectInvalid  bool
 	closed             atomic.Bool
 	relayManager       *relayManager
+
+	tryPromoteEvery atomic.Uint32
+	reQueryEvery    atomic.Uint32
+	reQueryWait     atomic.Int64
 
 	sendRecvErrorConfig sendRecvErrorConfig
 
@@ -186,6 +194,10 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		l: c.l,
 	}
 
+	ifce.tryPromoteEvery.Store(c.tryPromoteEvery)
+	ifce.reQueryEvery.Store(c.reQueryEvery)
+	ifce.reQueryWait.Store(int64(c.reQueryWait))
+
 	ifce.certState.Store(c.certState)
 	ifce.connectionManager = newConnectionManager(ctx, c.l, ifce, c.checkInterval, c.pendingDeletionInterval, c.punchy)
 
@@ -287,6 +299,7 @@ func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
 	c.RegisterReloadCallback(f.reloadCertKey)
 	c.RegisterReloadCallback(f.reloadFirewall)
 	c.RegisterReloadCallback(f.reloadSendRecvError)
+	c.RegisterReloadCallback(f.reloadMisc)
 	for _, udpConn := range f.writers {
 		c.RegisterReloadCallback(udpConn.ReloadConfig)
 	}
@@ -386,6 +399,26 @@ func (f *Interface) reloadSendRecvError(c *config.C) {
 
 		f.l.WithField("sendRecvError", f.sendRecvErrorConfig.String()).
 			Info("Loaded send_recv_error config")
+	}
+}
+
+func (f *Interface) reloadMisc(c *config.C) {
+	if c.HasChanged("counters.try_promote") {
+		n := c.GetUint32("counters.try_promote", defaultPromoteEvery)
+		f.tryPromoteEvery.Store(n)
+		f.l.Info("counters.try_promote has changed")
+	}
+
+	if c.HasChanged("counters.requery_every_packets") {
+		n := c.GetUint32("counters.requery_every_packets", defaultReQueryEvery)
+		f.reQueryEvery.Store(n)
+		f.l.Info("counters.requery_every_packets has changed")
+	}
+
+	if c.HasChanged("timers.requery_wait_duration") {
+		n := c.GetDuration("timers.requery_wait_duration", defaultReQueryWait)
+		f.reQueryWait.Store(int64(n))
+		f.l.Info("timers.requery_wait_duration has changed")
 	}
 }
 
