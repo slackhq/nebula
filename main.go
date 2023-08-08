@@ -45,7 +45,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	err := configLogger(l, c)
 	if err != nil {
-		return nil, util.NewContextualError("Failed to configure the logger", nil, err)
+		return nil, util.ContextualizeIfNeeded("Failed to configure the logger", err)
 	}
 
 	c.RegisterReloadCallback(func(c *config.C) {
@@ -57,14 +57,13 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	pki, err := NewPKIFromConfig(l, c)
 	if err != nil {
-		//The errors coming out of NewPKIFromConfig are already nicely formatted
-		return nil, err
+		return nil, util.ContextualizeIfNeeded("Failed to load PKI from config", err)
 	}
 
 	certificate := pki.GetCertState().Certificate
 	fw, err := NewFirewallFromConfig(l, certificate, c)
 	if err != nil {
-		return nil, util.NewContextualError("Error while loading firewall rules", nil, err)
+		return nil, util.ContextualizeIfNeeded("Error while loading firewall rules", err)
 	}
 	l.WithField("firewallHash", fw.GetRuleHash()).Info("Firewall started")
 
@@ -77,7 +76,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	if c.GetBool("sshd.enabled", false) {
 		sshStart, err = configSSH(l, ssh, c)
 		if err != nil {
-			return nil, util.NewContextualError("Error while configuring the sshd", nil, err)
+			return nil, util.ContextualizeIfNeeded("Error while configuring the sshd", err)
 		}
 	}
 
@@ -128,7 +127,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 		tun, err = overlay.NewDeviceFromConfig(c, l, tunCidr, tunFd, routines)
 		if err != nil {
-			return nil, util.NewContextualError("Failed to get a tun/tap device", nil, err)
+			return nil, util.ContextualizeIfNeeded("Failed to get a tun/tap device", err)
 		}
 
 		defer func() {
@@ -152,7 +151,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		} else {
 			listenHost, err = net.ResolveIPAddr("ip", rawListenHost)
 			if err != nil {
-				return nil, util.NewContextualError("Failed to resolve listen.host", nil, err)
+				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
 			}
 		}
 
@@ -174,7 +173,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		for _, rawPreferredRange := range rawPreferredRanges {
 			_, preferredRange, err := net.ParseCIDR(rawPreferredRange)
 			if err != nil {
-				return nil, util.NewContextualError("Failed to parse preferred ranges", nil, err)
+				return nil, util.ContextualizeIfNeeded("Failed to parse preferred ranges", err)
 			}
 			preferredRanges = append(preferredRanges, preferredRange)
 		}
@@ -187,7 +186,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	if rawLocalRange != "" {
 		_, localRange, err := net.ParseCIDR(rawLocalRange)
 		if err != nil {
-			return nil, util.NewContextualError("Failed to parse local_range", nil, err)
+			return nil, util.ContextualizeIfNeeded("Failed to parse local_range", err)
 		}
 
 		// Check if the entry for local_range was already specified in
@@ -215,12 +214,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	punchy := NewPunchyFromConfig(l, c)
 	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, tunCidr, udpConns[0], punchy)
 	if err != nil {
-		switch v := err.(type) {
-		case *util.ContextualError:
-			return nil, err
-		case error:
-			return nil, util.NewContextualError("Failed to initialize lighthouse handler", nil, v)
-		}
+		return nil, util.ContextualizeIfNeeded("Failed to initialize lighthouse handler", err)
 	}
 
 	var messageMetrics *MessageMetrics
@@ -314,9 +308,8 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	// TODO - stats third-party modules start uncancellable goroutines. Update those libs to accept
 	// a context so that they can exit when the context is Done.
 	statsStart, err := startStats(l, c, buildVersion, configTest)
-
 	if err != nil {
-		return nil, util.NewContextualError("Failed to start stats emitter", nil, err)
+		return nil, util.ContextualizeIfNeeded("Failed to start stats emitter", err)
 	}
 
 	if configTest {

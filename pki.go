@@ -36,9 +36,9 @@ func NewPKIFromConfig(l *logrus.Logger, c *config.C) (*PKI, error) {
 	}
 
 	c.RegisterReloadCallback(func(c *config.C) {
-		cErr := pki.reload(c, false)
-		if cErr != nil {
-			cErr.Log(l)
+		rErr := pki.reload(c, false)
+		if rErr != nil {
+			util.LogWithContextIfNeeded("Failed to reload PKI from config", rErr, l)
 		}
 	})
 
@@ -53,7 +53,7 @@ func (p *PKI) GetCAPool() *cert.NebulaCAPool {
 	return p.caPool.Load()
 }
 
-func (p *PKI) reload(c *config.C, initial bool) *util.ContextualError {
+func (p *PKI) reload(c *config.C, initial bool) error {
 	err := p.reloadCert(c, initial)
 	if err != nil {
 		if initial {
