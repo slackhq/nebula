@@ -412,7 +412,7 @@ func (f *Interface) reloadMisc(c *config.C) {
 	if c.HasChanged("counters.requery_every_packets") {
 		n := c.GetUint32("counters.requery_every_packets", defaultReQueryEvery)
 		f.reQueryEvery.Store(n)
-		f.l.Info("counters.requery_every_packets")
+		f.l.Info("counters.requery_every_packets has changed")
 	}
 
 	if c.HasChanged("timers.requery_wait_duration") {
