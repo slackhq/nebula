@@ -418,7 +418,7 @@ func (f *Interface) reloadMisc(c *config.C) {
 	if c.HasChanged("timers.requery_wait_duration") {
 		n := c.GetDuration("timers.requery_wait_duration", defaultReQueryWait)
 		f.reQueryWait.Store(int64(n))
-		f.l.Info("timers.requery_wait_duration")
+		f.l.Info("timers.requery_wait_duration has changed")
 	}
 }
 
