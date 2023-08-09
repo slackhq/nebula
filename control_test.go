@@ -96,7 +96,6 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		LocalIndex:             201,
 		RemoteIndex:            200,
 		RemoteAddrs:            []*udp.Addr{remote2, remote1},
-		CachedPackets:          0,
 		Cert:                   crt.Copy(),
 		MessageCounter:         0,
 		CurrentRemote:          udp.NewAddr(net.ParseIP("0.0.0.100"), 4444),
@@ -105,7 +104,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	}
 
 	// Make sure we don't have any unexpected fields
-	assertFields(t, []string{"VpnIp", "LocalIndex", "RemoteIndex", "RemoteAddrs", "CachedPackets", "Cert", "MessageCounter", "CurrentRemote", "CurrentRelaysToMe", "CurrentRelaysThroughMe"}, thi)
+	assertFields(t, []string{"VpnIp", "LocalIndex", "RemoteIndex", "RemoteAddrs", "Cert", "MessageCounter", "CurrentRemote", "CurrentRelaysToMe", "CurrentRelaysThroughMe"}, thi)
 	test.AssertDeepCopyEqual(t, &expectedInfo, thi)
 
 	// Make sure we don't panic if the host info doesn't have a cert yet

@@ -198,7 +198,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via *ViaSender, out []byt
 
 	case header.Handshake:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		HandleIncomingHandshake(f, addr, via, packet, h, hostinfo)
+		f.handshakeManager.HandleIncoming(addr, via, packet, h)
 		return
 
 	case header.RecvError:
@@ -454,9 +454,6 @@ func (f *Interface) handleRecvError(addr *udp.Addr, h *header.H) {
 		f.l.WithField("remoteIndex", h.RemoteIndex).Debugln("Did not find remote index in main hostmap")
 		return
 	}
-
-	hostinfo.Lock()
-	defer hostinfo.Unlock()
 
 	if !hostinfo.RecvErrorExceeded() {
 		return
