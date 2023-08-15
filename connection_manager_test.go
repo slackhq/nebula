@@ -44,10 +44,10 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	// Very incomplete mock objects
 	hostMap := NewHostMap(l, vpncidr, preferredRanges)
 	cs := &CertState{
-		rawCertificate:      []byte{},
-		privateKey:          []byte{},
-		certificate:         &cert.NebulaCertificate{},
-		rawCertificateNoKey: []byte{},
+		RawCertificate:      []byte{},
+		PrivateKey:          []byte{},
+		Certificate:         &cert.NebulaCertificate{},
+		RawCertificateNoKey: []byte{},
 	}
 
 	lh := newTestLighthouse()
@@ -57,10 +57,11 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 		outside:          &udp.NoopConn{},
 		firewall:         &Firewall{},
 		lightHouse:       lh,
+		pki:              &PKI{},
 		handshakeManager: NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
 		l:                l,
 	}
-	ifce.certState.Store(cs)
+	ifce.pki.cs.Store(cs)
 
 	// Create manager
 	ctx, cancel := context.WithCancel(context.Background())
@@ -123,10 +124,10 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	// Very incomplete mock objects
 	hostMap := NewHostMap(l, vpncidr, preferredRanges)
 	cs := &CertState{
-		rawCertificate:      []byte{},
-		privateKey:          []byte{},
-		certificate:         &cert.NebulaCertificate{},
-		rawCertificateNoKey: []byte{},
+		RawCertificate:      []byte{},
+		PrivateKey:          []byte{},
+		Certificate:         &cert.NebulaCertificate{},
+		RawCertificateNoKey: []byte{},
 	}
 
 	lh := newTestLighthouse()
@@ -136,10 +137,11 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 		outside:          &udp.NoopConn{},
 		firewall:         &Firewall{},
 		lightHouse:       lh,
+		pki:              &PKI{},
 		handshakeManager: NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
 		l:                l,
 	}
-	ifce.certState.Store(cs)
+	ifce.pki.cs.Store(cs)
 
 	// Create manager
 	ctx, cancel := context.WithCancel(context.Background())
@@ -242,10 +244,10 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	peerCert.Sign(cert.Curve_CURVE25519, privCA)
 
 	cs := &CertState{
-		rawCertificate:      []byte{},
-		privateKey:          []byte{},
-		certificate:         &cert.NebulaCertificate{},
-		rawCertificateNoKey: []byte{},
+		RawCertificate:      []byte{},
+		PrivateKey:          []byte{},
+		Certificate:         &cert.NebulaCertificate{},
+		RawCertificateNoKey: []byte{},
 	}
 
 	lh := newTestLighthouse()
@@ -258,9 +260,10 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 		handshakeManager:  NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
 		l:                 l,
 		disconnectInvalid: true,
-		caPool:            ncp,
+		pki:               &PKI{},
 	}
-	ifce.certState.Store(cs)
+	ifce.pki.cs.Store(cs)
+	ifce.pki.caPool.Store(ncp)
 
 	// Create manager
 	ctx, cancel := context.WithCancel(context.Background())
