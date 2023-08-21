@@ -244,7 +244,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		if peer == nil {
 			// Try to establish a connection to this host. If we get a future relay request,
 			// we'll be ready!
-			f.getOrHandshake(target)
+			f.Handshake(target)
 			return
 		}
 		if peer.remote == nil {

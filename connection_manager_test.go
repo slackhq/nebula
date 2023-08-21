@@ -58,7 +58,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 		firewall:         &Firewall{},
 		lightHouse:       lh,
 		pki:              &PKI{},
-		handshakeManager: NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
+		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
 		l:                l,
 	}
 	ifce.pki.cs.Store(cs)
@@ -138,7 +138,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 		firewall:         &Firewall{},
 		lightHouse:       lh,
 		pki:              &PKI{},
-		handshakeManager: NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
+		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
 		l:                l,
 	}
 	ifce.pki.cs.Store(cs)
@@ -258,7 +258,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 		outside:           &udp.NoopConn{},
 		firewall:          &Firewall{},
 		lightHouse:        lh,
-		handshakeManager:  NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
+		handshakeManager:  NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
 		l:                 l,
 		disconnectInvalid: true,
 		pki:               &PKI{},

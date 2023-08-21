@@ -165,15 +165,5 @@ func (c *Control) GetCert() *cert.NebulaCertificate {
 }
 
 func (c *Control) ReHandshake(vpnIp iputil.VpnIp) {
-	hostinfo := c.f.handshakeManager.AddVpnIp(vpnIp)
-	ixHandshakeStage0(c.f, vpnIp, hostinfo)
-
-	// If this is a static host, we don't need to wait for the HostQueryReply
-	// We can trigger the handshake right now
-	if _, ok := c.f.lightHouse.GetStaticHostList()[hostinfo.vpnIp]; ok {
-		select {
-		case c.f.handshakeManager.trigger <- hostinfo.vpnIp:
-		default:
-		}
-	}
+	c.f.handshakeManager.StartHandshake(vpnIp, nil)
 }

@@ -235,7 +235,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		messageMetrics: messageMetrics,
 	}
 
-	handshakeManager := NewHandshakeManager(l, tunCidr, preferredRanges, hostMap, lightHouse, udpConns[0], handshakeConfig)
+	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
 
 	serveDns := false
@@ -302,7 +302,8 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		ifce.RegisterConfigChangeCallbacks(c)
 		ifce.reloadSendRecvError(c)
 
-		go handshakeManager.Run(ctx, ifce)
+		handshakeManager.f = ifce
+		go handshakeManager.Run(ctx)
 	}
 
 	// TODO - stats third-party modules start uncancellable goroutines. Update those libs to accept

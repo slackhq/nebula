@@ -23,14 +23,12 @@ type ConnectionState struct {
 	initiator      bool
 	messageCounter atomic.Uint64
 	window         *Bits
-	queueLock      sync.Mutex
 	writeLock      sync.Mutex
 	ready          bool
 }
 
 func NewConnectionState(l *logrus.Logger, cipher string, certState *CertState, initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {
 	var dhFunc noise.DHFunc
-
 	switch certState.Certificate.Details.Curve {
 	case cert.Curve_CURVE25519:
 		dhFunc = noise.DH25519

@@ -473,18 +473,5 @@ func (n *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 		WithField("reason", "local certificate is not current").
 		Info("Re-handshaking with remote")
 
-	//TODO: this is copied from getOrHandshake to keep the extra checks out of the hot path, figure it out
-	newHostinfo := n.intf.handshakeManager.AddVpnIp(hostinfo.vpnIp)
-	if !newHostinfo.HandshakeReady {
-		ixHandshakeStage0(n.intf, newHostinfo.vpnIp, newHostinfo)
-	}
-
-	//If this is a static host, we don't need to wait for the HostQueryReply
-	//We can trigger the handshake right now
-	if _, ok := n.intf.lightHouse.GetStaticHostList()[hostinfo.vpnIp]; ok {
-		select {
-		case n.intf.handshakeManager.trigger <- hostinfo.vpnIp:
-		default:
-		}
-	}
+	n.intf.handshakeManager.StartHandshake(hostinfo.vpnIp, nil)
 }
