@@ -21,7 +21,7 @@ import (
 func (c *Control) WaitForType(msgType header.MessageType, subType header.MessageSubType, pipeTo *Control) {
 	h := &header.H{}
 	for {
-		p := c.f.outside.Get(true)
+		p := c.f.outside.(*udp.TesterConn).Get(true)
 		if err := h.Parse(p.Data); err != nil {
 			panic(err)
 		}
@@ -37,7 +37,7 @@ func (c *Control) WaitForType(msgType header.MessageType, subType header.Message
 func (c *Control) WaitForTypeByIndex(toIndex uint32, msgType header.MessageType, subType header.MessageSubType, pipeTo *Control) {
 	h := &header.H{}
 	for {
-		p := c.f.outside.Get(true)
+		p := c.f.outside.(*udp.TesterConn).Get(true)
 		if err := h.Parse(p.Data); err != nil {
 			panic(err)
 		}
@@ -90,11 +90,11 @@ func (c *Control) GetFromTun(block bool) []byte {
 
 // GetFromUDP will pull a udp packet off the udp side of nebula
 func (c *Control) GetFromUDP(block bool) *udp.Packet {
-	return c.f.outside.Get(block)
+	return c.f.outside.(*udp.TesterConn).Get(block)
 }
 
 func (c *Control) GetUDPTxChan() <-chan *udp.Packet {
-	return c.f.outside.TxPackets
+	return c.f.outside.(*udp.TesterConn).TxPackets
 }
 
 func (c *Control) GetTunTxChan() <-chan []byte {
@@ -103,7 +103,7 @@ func (c *Control) GetTunTxChan() <-chan []byte {
 
 // InjectUDPPacket will inject a packet into the udp side of nebula
 func (c *Control) InjectUDPPacket(p *udp.Packet) {
-	c.f.outside.Send(p)
+	c.f.outside.(*udp.TesterConn).Send(p)
 }
 
 // InjectTunUDPPacket puts a udp packet on the tun interface. Using UDP here because it's a simpler protocol
@@ -143,16 +143,16 @@ func (c *Control) GetVpnIp() iputil.VpnIp {
 }
 
 func (c *Control) GetUDPAddr() string {
-	return c.f.outside.Addr.String()
+	return c.f.outside.(*udp.TesterConn).Addr.String()
 }
 
 func (c *Control) KillPendingTunnel(vpnIp net.IP) bool {
-	hostinfo, ok := c.f.handshakeManager.pendingHostMap.Hosts[iputil.Ip2VpnIp(vpnIp)]
-	if !ok {
+	hostinfo := c.f.handshakeManager.QueryVpnIp(iputil.Ip2VpnIp(vpnIp))
+	if hostinfo == nil {
 		return false
 	}
 
-	c.f.handshakeManager.pendingHostMap.DeleteHostInfo(hostinfo)
+	c.f.handshakeManager.DeleteHostInfo(hostinfo)
 	return true
 }
 
@@ -161,7 +161,7 @@ func (c *Control) GetHostmap() *HostMap {
 }
 
 func (c *Control) GetCert() *cert.NebulaCertificate {
-	return c.f.certState.Load().certificate
+	return c.f.pki.GetCertState().Certificate
 }
 
 func (c *Control) ReHandshake(vpnIp iputil.VpnIp) {

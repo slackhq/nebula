@@ -18,7 +18,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	l := test.NewLogger()
 	// Special care must be taken to re-use all objects provided to the hostmap and certificate in the expectedInfo object
 	// To properly ensure we are not exposing core memory to the caller
-	hm := NewHostMap(l, "test", &net.IPNet{}, make([]*net.IPNet, 0))
+	hm := NewHostMap(l, &net.IPNet{}, make([]*net.IPNet, 0))
 	remote1 := udp.NewAddr(net.ParseIP("0.0.0.100"), 4444)
 	remote2 := udp.NewAddr(net.ParseIP("1:2:3:4:5:6:7:8"), 4444)
 	ipNet := net.IPNet{
@@ -50,7 +50,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	remotes := NewRemoteList(nil)
 	remotes.unlockedPrependV4(0, NewIp4AndPort(remote1.IP, uint32(remote1.Port)))
 	remotes.unlockedPrependV6(0, NewIp6AndPort(remote2.IP, uint32(remote2.Port)))
-	hm.Add(iputil.Ip2VpnIp(ipNet.IP), &HostInfo{
+	hm.unlockedAddHostInfo(&HostInfo{
 		remote:  remote1,
 		remotes: remotes,
 		ConnectionState: &ConnectionState{
@@ -64,9 +64,9 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 			relayForByIp:  map[iputil.VpnIp]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
 		},
-	})
+	}, &Interface{})
 
-	hm.Add(iputil.Ip2VpnIp(ipNet2.IP), &HostInfo{
+	hm.unlockedAddHostInfo(&HostInfo{
 		remote:  remote1,
 		remotes: remotes,
 		ConnectionState: &ConnectionState{
@@ -80,7 +80,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 			relayForByIp:  map[iputil.VpnIp]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
 		},
-	})
+	}, &Interface{})
 
 	c := Control{
 		f: &Interface{

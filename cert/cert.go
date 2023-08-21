@@ -17,6 +17,7 @@ import (
 	"math"
 	"math/big"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/curve25519"
@@ -42,6 +43,14 @@ const (
 type NebulaCertificate struct {
 	Details   NebulaCertificateDetails
 	Signature []byte
+
+	// the cached hex string of the calculated sha256sum
+	// for VerifyWithCache
+	sha256sum atomic.Pointer[string]
+
+	// the cached public key bytes if they were verified as the signer
+	// for VerifyWithCache
+	signatureVerified atomic.Pointer[[]byte]
 }
 
 type NebulaCertificateDetails struct {
@@ -407,14 +416,10 @@ func DecryptAndUnmarshalSigningPrivateKey(passphrase, b []byte) (Curve, []byte, 
 		return curve, nil, r, fmt.Errorf("unsupported encryption algorithm: %s", ned.EncryptionMetadata.EncryptionAlgorithm)
 	}
 
-	if len(bytes) != ed25519.PrivateKeySize {
-		return curve, nil, r, fmt.Errorf("key was not 64 bytes, is invalid ed25519 private key")
-	}
-
 	switch curve {
 	case Curve_CURVE25519:
 		if len(bytes) != ed25519.PrivateKeySize {
-			return curve, nil, r, fmt.Errorf("key was not %d bytes, is invalid Ed25519 private key", ed25519.PrivateKeySize)
+			return curve, nil, r, fmt.Errorf("key was not %d bytes, is invalid ed25519 private key", ed25519.PrivateKeySize)
 		}
 	case Curve_P256:
 		if len(bytes) != 32 {
@@ -566,6 +571,27 @@ func (nc *NebulaCertificate) CheckSignature(key []byte) bool {
 	}
 }
 
+// NOTE: This uses an internal cache that will not be invalidated automatically
+// if you manually change any fields in the NebulaCertificate.
+func (nc *NebulaCertificate) checkSignatureWithCache(key []byte, useCache bool) bool {
+	if !useCache {
+		return nc.CheckSignature(key)
+	}
+
+	if v := nc.signatureVerified.Load(); v != nil {
+		return bytes.Equal(*v, key)
+	}
+
+	verified := nc.CheckSignature(key)
+	if verified {
+		keyCopy := make([]byte, len(key))
+		copy(keyCopy, key)
+		nc.signatureVerified.Store(&keyCopy)
+	}
+
+	return verified
+}
+
 // Expired will return true if the nebula cert is too young or too old compared to the provided time, otherwise false
 func (nc *NebulaCertificate) Expired(t time.Time) bool {
 	return nc.Details.NotBefore.After(t) || nc.Details.NotAfter.Before(t)
@@ -573,7 +599,26 @@ func (nc *NebulaCertificate) Expired(t time.Time) bool {
 
 // Verify will ensure a certificate is good in all respects (expiry, group membership, signature, cert blocklist, etc)
 func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error) {
-	if ncp.IsBlocklisted(nc) {
+	return nc.verify(t, ncp, false)
+}
+
+// VerifyWithCache will ensure a certificate is good in all respects (expiry, group membership, signature, cert blocklist, etc)
+//
+// NOTE: This uses an internal cache that will not be invalidated automatically
+// if you manually change any fields in the NebulaCertificate.
+func (nc *NebulaCertificate) VerifyWithCache(t time.Time, ncp *NebulaCAPool) (bool, error) {
+	return nc.verify(t, ncp, true)
+}
+
+// ResetCache resets the cache used by VerifyWithCache.
+func (nc *NebulaCertificate) ResetCache() {
+	nc.sha256sum.Store(nil)
+	nc.signatureVerified.Store(nil)
+}
+
+// Verify will ensure a certificate is good in all respects (expiry, group membership, signature, cert blocklist, etc)
+func (nc *NebulaCertificate) verify(t time.Time, ncp *NebulaCAPool, useCache bool) (bool, error) {
+	if ncp.isBlocklistedWithCache(nc, useCache) {
 		return false, ErrBlockListed
 	}
 
@@ -590,7 +635,7 @@ func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error
 		return false, ErrExpired
 	}
 
-	if !nc.CheckSignature(signer.Details.PublicKey) {
+	if !nc.checkSignatureWithCache(signer.Details.PublicKey, useCache) {
 		return false, ErrSignatureMismatch
 	}
 
@@ -811,6 +856,25 @@ func (nc *NebulaCertificate) Sha256Sum() (string, error) {
 
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// NOTE: This uses an internal cache that will not be invalidated automatically
+// if you manually change any fields in the NebulaCertificate.
+func (nc *NebulaCertificate) sha256SumWithCache(useCache bool) (string, error) {
+	if !useCache {
+		return nc.Sha256Sum()
+	}
+
+	if s := nc.sha256sum.Load(); s != nil {
+		return *s, nil
+	}
+	s, err := nc.Sha256Sum()
+	if err != nil {
+		return s, err
+	}
+
+	nc.sha256sum.Store(&s)
+	return s, nil
 }
 
 func (nc *NebulaCertificate) MarshalJSON() ([]byte, error) {

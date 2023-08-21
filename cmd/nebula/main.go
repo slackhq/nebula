@@ -53,18 +53,14 @@ func main() {
 	}
 
 	ctrl, err := nebula.Main(c, *configTest, Build, l, nil)
-
-	switch v := err.(type) {
-	case util.ContextualError:
-		v.Log(l)
-		os.Exit(1)
-	case error:
-		l.WithError(err).Error("Failed to start")
+	if err != nil {
+		util.LogWithContextIfNeeded("Failed to start", err, l)
 		os.Exit(1)
 	}
 
 	if !*configTest {
 		ctrl.Start()
+		notifyReady(l)
 		ctrl.ShutdownBlock()
 	}
 

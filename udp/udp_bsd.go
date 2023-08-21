@@ -1,7 +1,10 @@
-//go:build !e2e_testing
+//go:build (openbsd || freebsd) && !e2e_testing
+// +build openbsd freebsd
 // +build !e2e_testing
 
 package udp
+
+// FreeBSD support is primarily implemented in udp_generic, besides NewListenConfig
 
 import (
 	"fmt"

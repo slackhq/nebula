@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -42,10 +43,15 @@ type HandshakeConfig struct {
 }
 
 type HandshakeManager struct {
-	pendingHostMap         *HostMap
+	// Mutex for interacting with the vpnIps and indexes maps
+	sync.RWMutex
+
+	vpnIps  map[iputil.VpnIp]*HostInfo
+	indexes map[uint32]*HostInfo
+
 	mainHostMap            *HostMap
 	lightHouse             *LightHouse
-	outside                *udp.Conn
+	outside                udp.Conn
 	config                 HandshakeConfig
 	OutboundHandshakeTimer *LockingTimerWheel[iputil.VpnIp]
 	messageMetrics         *MessageMetrics
@@ -57,9 +63,10 @@ type HandshakeManager struct {
 	trigger chan iputil.VpnIp
 }
 
-func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udp.Conn, config HandshakeConfig) *HandshakeManager {
+func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
-		pendingHostMap:         NewHostMap(l, "pending", tunCidr, preferredRanges),
+		vpnIps:                 map[iputil.VpnIp]*HostInfo{},
+		indexes:                map[uint32]*HostInfo{},
 		mainHostMap:            mainHostMap,
 		lightHouse:             lightHouse,
 		outside:                outside,
@@ -101,8 +108,8 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time, f EncWr
 }
 
 func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f EncWriter, lighthouseTriggered bool) {
-	hostinfo, err := c.pendingHostMap.QueryVpnIp(vpnIp)
-	if err != nil {
+	hostinfo := c.QueryVpnIp(vpnIp)
+	if hostinfo == nil {
 		return
 	}
 	hostinfo.Lock()
@@ -111,7 +118,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f EncWriter, light
 	// We may have raced to completion but now that we have a lock we should ensure we have not yet completed.
 	if hostinfo.HandshakeComplete {
 		// Ensure we don't exist in the pending hostmap anymore since we have completed
-		c.pendingHostMap.DeleteHostInfo(hostinfo)
+		c.DeleteHostInfo(hostinfo)
 		return
 	}
 
@@ -125,14 +132,14 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f EncWriter, light
 
 	// If we are out of time, clean up
 	if hostinfo.HandshakeCounter >= c.config.retries {
-		hostinfo.logger(c.l).WithField("udpAddrs", hostinfo.remotes.CopyAddrs(c.pendingHostMap.preferredRanges)).
+		hostinfo.logger(c.l).WithField("udpAddrs", hostinfo.remotes.CopyAddrs(c.mainHostMap.preferredRanges)).
 			WithField("initiatorIndex", hostinfo.localIndexId).
 			WithField("remoteIndex", hostinfo.remoteIndexId).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
 			WithField("durationNs", time.Since(hostinfo.handshakeStart).Nanoseconds()).
 			Info("Handshake timed out")
 		c.metricTimedOut.Inc(1)
-		c.pendingHostMap.DeleteHostInfo(hostinfo)
+		c.DeleteHostInfo(hostinfo)
 		return
 	}
 
@@ -144,7 +151,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f EncWriter, light
 		hostinfo.remotes = c.lightHouse.QueryCache(vpnIp)
 	}
 
-	remotes := hostinfo.remotes.CopyAddrs(c.pendingHostMap.preferredRanges)
+	remotes := hostinfo.remotes.CopyAddrs(c.mainHostMap.preferredRanges)
 	remotesHaveChanged := !udp.AddrSlice(remotes).Equal(hostinfo.HandshakeLastRemotes)
 
 	// We only care about a lighthouse trigger if we have new remotes to send to.
@@ -168,9 +175,9 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f EncWriter, light
 
 	// Send the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
 	var sentTo []*udp.Addr
-	hostinfo.remotes.ForEach(c.pendingHostMap.preferredRanges, func(addr *udp.Addr, _ bool) {
+	hostinfo.remotes.ForEach(c.mainHostMap.preferredRanges, func(addr *udp.Addr, _ bool) {
 		c.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
-		err = c.outside.WriteTo(hostinfo.HandshakePacket[0], addr)
+		err := c.outside.WriteTo(hostinfo.HandshakePacket[0], addr)
 		if err != nil {
 			hostinfo.logger(c.l).WithField("udpAddr", addr).
 				WithField("initiatorIndex", hostinfo.localIndexId).
@@ -204,9 +211,9 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f EncWriter, light
 			if *relay == vpnIp || *relay == c.lightHouse.myVpnIp {
 				continue
 			}
-			relayHostInfo, err := c.mainHostMap.QueryVpnIp(*relay)
-			if err != nil || relayHostInfo.remote == nil {
-				hostinfo.logger(c.l).WithError(err).WithField("relay", relay.String()).Info("Establish tunnel to relay target")
+			relayHostInfo := c.mainHostMap.QueryVpnIp(*relay)
+			if relayHostInfo == nil || relayHostInfo.remote == nil {
+				hostinfo.logger(c.l).WithField("relay", relay.String()).Info("Establish tunnel to relay target")
 				f.Handshake(*relay)
 				continue
 			}
@@ -289,13 +296,34 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f EncWriter, light
 	}
 }
 
+// AddVpnIp will try to handshake with the provided vpn ip and return the hostinfo for it.
 func (c *HandshakeManager) AddVpnIp(vpnIp iputil.VpnIp, init func(*HostInfo)) *HostInfo {
-	hostinfo, created := c.pendingHostMap.AddVpnIp(vpnIp, init)
+	// A write lock is used to avoid having to recheck the map and trading a read lock for a write lock
+	c.Lock()
+	defer c.Unlock()
 
-	if created {
-		c.OutboundHandshakeTimer.Add(vpnIp, c.config.tryInterval)
-		c.metricInitiated.Inc(1)
+	if hostinfo, ok := c.vpnIps[vpnIp]; ok {
+		// We are already tracking this vpn ip
+		return hostinfo
 	}
+
+	hostinfo := &HostInfo{
+		vpnIp:           vpnIp,
+		HandshakePacket: make(map[uint8][]byte, 0),
+		relayState: RelayState{
+			relays:        map[iputil.VpnIp]struct{}{},
+			relayForByIp:  map[iputil.VpnIp]*Relay{},
+			relayForByIdx: map[uint32]*Relay{},
+		},
+	}
+
+	if init != nil {
+		init(hostinfo)
+	}
+
+	c.vpnIps[vpnIp] = hostinfo
+	c.metricInitiated.Inc(1)
+	c.OutboundHandshakeTimer.Add(vpnIp, c.config.tryInterval)
 
 	return hostinfo
 }
@@ -318,8 +346,8 @@ var (
 // ErrLocalIndexCollision if we already have an entry in the main or pending
 // hostmap for the hostinfo.localIndexId.
 func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket uint8, f *Interface) (*HostInfo, error) {
-	c.pendingHostMap.Lock()
-	defer c.pendingHostMap.Unlock()
+	c.Lock()
+	defer c.Unlock()
 	c.mainHostMap.Lock()
 	defer c.mainHostMap.Unlock()
 
@@ -350,7 +378,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 		return existingIndex, ErrLocalIndexCollision
 	}
 
-	existingIndex, found = c.pendingHostMap.Indexes[hostinfo.localIndexId]
+	existingIndex, found = c.indexes[hostinfo.localIndexId]
 	if found && existingIndex != hostinfo {
 		// We have a collision, but for a different hostinfo
 		return existingIndex, ErrLocalIndexCollision
@@ -373,8 +401,8 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 // won't have a localIndexId collision because we already have an entry in the
 // pendingHostMap. An existing hostinfo is returned if there was one.
 func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
-	c.pendingHostMap.Lock()
-	defer c.pendingHostMap.Unlock()
+	c.Lock()
+	defer c.Unlock()
 	c.mainHostMap.Lock()
 	defer c.mainHostMap.Unlock()
 
@@ -388,7 +416,7 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 	}
 
 	// We need to remove from the pending hostmap first to avoid undoing work when after to the main hostmap.
-	c.pendingHostMap.unlockedDeleteHostInfo(hostinfo)
+	c.unlockedDeleteHostInfo(hostinfo)
 	c.mainHostMap.unlockedAddHostInfo(hostinfo, f)
 }
 
@@ -396,8 +424,8 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 // and adds it to the pendingHostMap. Will error if we are unable to generate
 // a unique localIndexId
 func (c *HandshakeManager) AddIndexHostInfo(h *HostInfo) error {
-	c.pendingHostMap.Lock()
-	defer c.pendingHostMap.Unlock()
+	c.Lock()
+	defer c.Unlock()
 	c.mainHostMap.RLock()
 	defer c.mainHostMap.RUnlock()
 
@@ -407,12 +435,12 @@ func (c *HandshakeManager) AddIndexHostInfo(h *HostInfo) error {
 			return err
 		}
 
-		_, inPending := c.pendingHostMap.Indexes[index]
+		_, inPending := c.indexes[index]
 		_, inMain := c.mainHostMap.Indexes[index]
 
 		if !inMain && !inPending {
 			h.localIndexId = index
-			c.pendingHostMap.Indexes[index] = h
+			c.indexes[index] = h
 			return nil
 		}
 	}
@@ -420,22 +448,73 @@ func (c *HandshakeManager) AddIndexHostInfo(h *HostInfo) error {
 	return errors.New("failed to generate unique localIndexId")
 }
 
-func (c *HandshakeManager) addRemoteIndexHostInfo(index uint32, h *HostInfo) {
-	c.pendingHostMap.addRemoteIndexHostInfo(index, h)
-}
-
 func (c *HandshakeManager) DeleteHostInfo(hostinfo *HostInfo) {
-	//l.Debugln("Deleting pending hostinfo :", hostinfo)
-	c.pendingHostMap.DeleteHostInfo(hostinfo)
+	c.Lock()
+	defer c.Unlock()
+	c.unlockedDeleteHostInfo(hostinfo)
 }
 
-func (c *HandshakeManager) QueryIndex(index uint32) (*HostInfo, error) {
-	return c.pendingHostMap.QueryIndex(index)
+func (c *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
+	delete(c.vpnIps, hostinfo.vpnIp)
+	if len(c.vpnIps) == 0 {
+		c.vpnIps = map[iputil.VpnIp]*HostInfo{}
+	}
+
+	delete(c.indexes, hostinfo.localIndexId)
+	if len(c.vpnIps) == 0 {
+		c.indexes = map[uint32]*HostInfo{}
+	}
+
+	if c.l.Level >= logrus.DebugLevel {
+		c.l.WithField("hostMap", m{"mapTotalSize": len(c.vpnIps),
+			"vpnIp": hostinfo.vpnIp, "indexNumber": hostinfo.localIndexId, "remoteIndexNumber": hostinfo.remoteIndexId}).
+			Debug("Pending hostmap hostInfo deleted")
+	}
+}
+
+func (c *HandshakeManager) QueryVpnIp(vpnIp iputil.VpnIp) *HostInfo {
+	c.RLock()
+	defer c.RUnlock()
+	return c.vpnIps[vpnIp]
+}
+
+func (c *HandshakeManager) QueryIndex(index uint32) *HostInfo {
+	c.RLock()
+	defer c.RUnlock()
+	return c.indexes[index]
+}
+
+func (c *HandshakeManager) GetPreferredRanges() []*net.IPNet {
+	return c.mainHostMap.preferredRanges
+}
+
+func (c *HandshakeManager) ForEachVpnIp(f controlEach) {
+	c.RLock()
+	defer c.RUnlock()
+
+	for _, v := range c.vpnIps {
+		f(v)
+	}
+}
+
+func (c *HandshakeManager) ForEachIndex(f controlEach) {
+	c.RLock()
+	defer c.RUnlock()
+
+	for _, v := range c.indexes {
+		f(v)
+	}
 }
 
 func (c *HandshakeManager) EmitStats() {
-	c.pendingHostMap.EmitStats("pending")
-	c.mainHostMap.EmitStats("main")
+	c.RLock()
+	hostLen := len(c.vpnIps)
+	indexLen := len(c.indexes)
+	c.RUnlock()
+
+	metrics.GetOrRegisterGauge("hostmap.pending.hosts", nil).Update(int64(hostLen))
+	metrics.GetOrRegisterGauge("hostmap.pending.indexes", nil).Update(int64(indexLen))
+	c.mainHostMap.EmitStats()
 }
 
 // Utility functions below

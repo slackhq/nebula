@@ -410,6 +410,8 @@ func TestStage1RaceRelays(t *testing.T) {
 	p := r.RouteForAllUntilTxTun(myControl)
 	_ = p
 
+	r.FlushAll()
+
 	myControl.Stop()
 	theirControl.Stop()
 	relayControl.Stop()

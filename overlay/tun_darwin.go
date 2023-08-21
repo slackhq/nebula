@@ -47,14 +47,6 @@ type ifReq struct {
 	pad   [8]byte
 }
 
-func ioctl(a1, a2, a3 uintptr) error {
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, a1, a2, a3)
-	if errno != 0 {
-		return errno
-	}
-	return nil
-}
-
 var sockaddrCtlSize uintptr = 32
 
 const (
@@ -194,10 +186,10 @@ func (t *tun) Activate() error {
 		unix.SOCK_DGRAM,
 		unix.IPPROTO_IP,
 	)
-
 	if err != nil {
 		return err
 	}
+	defer unix.Close(s)
 
 	fd := uintptr(s)
 

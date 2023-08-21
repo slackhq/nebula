@@ -64,9 +64,9 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via *ViaSender, out []byt
 	var hostinfo *HostInfo
 	// verify if we've seen this index before, otherwise respond to the handshake initiation
 	if h.Type == header.Message && h.Subtype == header.MessageRelay {
-		hostinfo, _ = f.hostMap.QueryRelayIndex(h.RemoteIndex)
+		hostinfo = f.hostMap.QueryRelayIndex(h.RemoteIndex)
 	} else {
-		hostinfo, _ = f.hostMap.QueryIndex(h.RemoteIndex)
+		hostinfo = f.hostMap.QueryIndex(h.RemoteIndex)
 	}
 
 	var ci *ConnectionState
@@ -404,7 +404,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return false
 	}
 
-	dropReason := f.firewall.Drop(out, *fwPacket, true, hostinfo, f.caPool, localCache)
+	dropReason := f.firewall.Drop(out, *fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason != nil {
 		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, out, q)
 		if f.l.Level >= logrus.DebugLevel {
@@ -449,12 +449,9 @@ func (f *Interface) handleRecvError(addr *udp.Addr, h *header.H) {
 			Debug("Recv error received")
 	}
 
-	// First, clean up in the pending hostmap
-	f.handshakeManager.pendingHostMap.DeleteReverseIndex(h.RemoteIndex)
-
-	hostinfo, err := f.hostMap.QueryReverseIndex(h.RemoteIndex)
-	if err != nil {
-		f.l.Debugln(err, ": ", h.RemoteIndex)
+	hostinfo := f.hostMap.QueryReverseIndex(h.RemoteIndex)
+	if hostinfo == nil {
+		f.l.WithField("remoteIndex", h.RemoteIndex).Debugln("Did not find remote index in main hostmap")
 		return
 	}
 
@@ -464,14 +461,14 @@ func (f *Interface) handleRecvError(addr *udp.Addr, h *header.H) {
 	if !hostinfo.RecvErrorExceeded() {
 		return
 	}
+
 	if hostinfo.remote != nil && !hostinfo.remote.Equals(addr) {
 		f.l.Infoln("Someone spoofing recv_errors? ", addr, hostinfo.remote)
 		return
 	}
 
 	f.closeTunnel(hostinfo)
-	// We also delete it from pending hostmap to allow for
-	// fast reconnect.
+	// We also delete it from pending hostmap to allow for fast reconnect.
 	f.handshakeManager.DeleteHostInfo(hostinfo)
 }
 

@@ -21,6 +21,19 @@ pki:
 static_host_map:
   "192.168.100.1": ["100.64.22.11:4242"]
 
+# The static_map config stanza can be used to configure how the static_host_map behaves.
+#static_map:
+  # cadence determines how frequently DNS is re-queried for updated IP addresses when a static_host_map entry contains
+  # a DNS name.
+  #cadence: 30s
+
+  # network determines the type of IP addresses to ask the DNS server for. The default is "ip4" because nodes typically
+  # do not know their public IPv4 address. Connecting to the Lighthouse via IPv4 allows the Lighthouse to detect the
+  # public address. Other valid options are "ip6" and "ip" (returns both.)
+  #network: ip4
+
+  # lookup_timeout is the DNS query timeout.
+  #lookup_timeout: 250ms
 
 lighthouse:
   # am_lighthouse is used to enable lighthouse functionality for a node. This should ONLY be true on nodes
@@ -194,7 +207,7 @@ tun:
   disabled: false
   # Name of the device. If not set, a default will be chosen by the OS.
   # For macOS: if set, must be in the form `utun[0-9]+`.
-  # For FreeBSD: Required to be set, must be in the form `tun[0-9]+`.
+  # For NetBSD: Required to be set, must be in the form `tun[0-9]+`
   dev: nebula1
   # Toggles forwarding of local broadcast packets, the address of which depends on the ip/mask encoded in pki.cert
   drop_local_broadcast: false

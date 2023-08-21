@@ -3,6 +3,7 @@ package nebula
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -168,7 +169,7 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 	return runner, nil
 }
 
-func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap *HostMap, pendingHostMap *HostMap, lightHouse *LightHouse, ifce *Interface) {
+func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Interface) {
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "list-hostmap",
 		ShortDescription: "List all known previously connected hosts",
@@ -181,7 +182,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-			return sshListHostMap(hostMap, fs, w)
+			return sshListHostMap(f.hostMap, fs, w)
 		},
 	})
 
@@ -197,7 +198,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-			return sshListHostMap(pendingHostMap, fs, w)
+			return sshListHostMap(f.handshakeManager, fs, w)
 		},
 	})
 
@@ -212,7 +213,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-			return sshListLighthouseMap(lightHouse, fs, w)
+			return sshListLighthouseMap(f.lightHouse, fs, w)
 		},
 	})
 
@@ -277,7 +278,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 		Name:             "version",
 		ShortDescription: "Prints the currently running version of nebula",
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-			return sshVersion(ifce, fs, a, w)
+			return sshVersion(f, fs, a, w)
 		},
 	})
 
@@ -293,7 +294,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-			return sshPrintCert(ifce, fs, a, w)
+			return sshPrintCert(f, fs, a, w)
 		},
 	})
 
@@ -307,7 +308,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-			return sshPrintTunnel(ifce, fs, a, w)
+			return sshPrintTunnel(f, fs, a, w)
 		},
 	})
 
@@ -321,7 +322,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-			return sshPrintRelays(ifce, fs, a, w)
+			return sshPrintRelays(f, fs, a, w)
 		},
 	})
 
@@ -335,7 +336,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-			return sshChangeRemote(ifce, fs, a, w)
+			return sshChangeRemote(f, fs, a, w)
 		},
 	})
 
@@ -349,7 +350,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-			return sshCloseTunnel(ifce, fs, a, w)
+			return sshCloseTunnel(f, fs, a, w)
 		},
 	})
 
@@ -364,7 +365,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-			return sshCreateTunnel(ifce, fs, a, w)
+			return sshCreateTunnel(f, fs, a, w)
 		},
 	})
 
@@ -373,12 +374,12 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, hostMap 
 		ShortDescription: "Query the lighthouses for the provided vpn ip",
 		Help:             "This command is asynchronous. Only currently known udp ips will be printed.",
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-			return sshQueryLighthouse(ifce, fs, a, w)
+			return sshQueryLighthouse(f, fs, a, w)
 		},
 	})
 }
 
-func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error {
+func sshListHostMap(hl controlHostLister, a interface{}, w sshd.StringWriter) error {
 	fs, ok := a.(*sshListHostMapFlags)
 	if !ok {
 		//TODO: error
@@ -387,9 +388,9 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 
 	var hm []ControlHostInfo
 	if fs.ByIndex {
-		hm = listHostMapIndexes(hostMap)
+		hm = listHostMapIndexes(hl)
 	} else {
-		hm = listHostMapHosts(hostMap)
+		hm = listHostMapHosts(hl)
 	}
 
 	sort.Slice(hm, func(i, j int) bool {
@@ -546,8 +547,8 @@ func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	hostInfo, err := ifce.hostMap.QueryVpnIp(vpnIp)
-	if err != nil {
+	hostInfo := ifce.hostMap.QueryVpnIp(vpnIp)
+	if hostInfo == nil {
 		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn ip: %v", a[0]))
 	}
 
@@ -588,12 +589,12 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	hostInfo, _ := ifce.hostMap.QueryVpnIp(vpnIp)
+	hostInfo := ifce.hostMap.QueryVpnIp(vpnIp)
 	if hostInfo != nil {
 		return w.WriteLine(fmt.Sprintf("Tunnel already exists"))
 	}
 
-	hostInfo, _ = ifce.handshakeManager.pendingHostMap.QueryVpnIp(vpnIp)
+	hostInfo = ifce.handshakeManager.QueryVpnIp(vpnIp)
 	if hostInfo != nil {
 		return w.WriteLine(fmt.Sprintf("Tunnel already handshaking"))
 	}
@@ -645,8 +646,8 @@ func sshChangeRemote(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	hostInfo, err := ifce.hostMap.QueryVpnIp(vpnIp)
-	if err != nil {
+	hostInfo := ifce.hostMap.QueryVpnIp(vpnIp)
+	if hostInfo == nil {
 		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn ip: %v", a[0]))
 	}
 
@@ -753,7 +754,7 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 		return nil
 	}
 
-	cert := ifce.certState.Load().certificate
+	cert := ifce.pki.GetCertState().Certificate
 	if len(a) > 0 {
 		parsedIp := net.ParseIP(a[0])
 		if parsedIp == nil {
@@ -765,8 +766,8 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 			return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 		}
 
-		hostInfo, err := ifce.hostMap.QueryVpnIp(vpnIp)
-		if err != nil {
+		hostInfo := ifce.hostMap.QueryVpnIp(vpnIp)
+		if hostInfo == nil {
 			return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn ip: %v", a[0]))
 		}
 
@@ -851,9 +852,9 @@ func sshPrintRelays(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 	for k, v := range relays {
 		ro := RelayOutput{NebulaIp: v.vpnIp}
 		co.Relays = append(co.Relays, &ro)
-		relayHI, err := ifce.hostMap.QueryVpnIp(v.vpnIp)
-		if err != nil {
-			ro.RelayForIps = append(ro.RelayForIps, RelayFor{Error: err})
+		relayHI := ifce.hostMap.QueryVpnIp(v.vpnIp)
+		if relayHI == nil {
+			ro.RelayForIps = append(ro.RelayForIps, RelayFor{Error: errors.New("could not find hostinfo")})
 			continue
 		}
 		for _, vpnIp := range relayHI.relayState.CopyRelayForIps() {
@@ -889,8 +890,8 @@ func sshPrintRelays(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 					rf.Error = fmt.Errorf("hostmap LocalIndex '%v' does not match RelayState LocalIndex", k)
 				}
 			}
-			relayedHI, err := ifce.hostMap.QueryVpnIp(vpnIp)
-			if err == nil {
+			relayedHI := ifce.hostMap.QueryVpnIp(vpnIp)
+			if relayedHI != nil {
 				rf.RelayedThrough = append(rf.RelayedThrough, relayedHI.relayState.CopyRelayIps()...)
 			}
 
@@ -925,8 +926,8 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	hostInfo, err := ifce.hostMap.QueryVpnIp(vpnIp)
-	if err != nil {
+	hostInfo := ifce.hostMap.QueryVpnIp(vpnIp)
+	if hostInfo == nil {
 		return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn ip: %v", a[0]))
 	}
 

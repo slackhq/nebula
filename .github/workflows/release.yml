@@ -7,25 +7,24 @@ name: Create release and upload binaries
 
 jobs:
   build-linux:
-    name: Build Linux All
+    name: Build Linux/BSD All
     runs-on: ubuntu-latest
     steps:
-      - name: Set up Go 1.20
-        uses: actions/setup-go@v2
-        with:
-          go-version: "1.20"
+      - uses: actions/checkout@v3
 
-      - name: Checkout code
-        uses: actions/checkout@v2
+      - uses: actions/setup-go@v4
+        with:
+          go-version-file: 'go.mod'
+          check-latest: true
 
       - name: Build
         run: |
-          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" release-linux release-freebsd
+          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" release-linux release-freebsd release-openbsd release-netbsd
           mkdir release
           mv build/*.tar.gz release
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: linux-latest
           path: release
@@ -34,13 +33,12 @@ jobs:
     name: Build Windows
     runs-on: windows-latest
     steps:
-      - name: Set up Go 1.20
-        uses: actions/setup-go@v2
-        with:
-          go-version: "1.20"
+      - uses: actions/checkout@v3
 
-      - name: Checkout code
-        uses: actions/checkout@v2
+      - uses: actions/setup-go@v4
+        with:
+          go-version-file: 'go.mod'
+          check-latest: true
 
       - name: Build
         run: |
@@ -57,7 +55,7 @@ jobs:
           mv dist\windows\wintun build\dist\windows\
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: windows-latest
           path: build
@@ -68,17 +66,16 @@ jobs:
       HAS_SIGNING_CREDS: ${{ secrets.AC_USERNAME != '' }}
     runs-on: macos-11
     steps:
-      - name: Set up Go 1.20
-        uses: actions/setup-go@v2
-        with:
-          go-version: "1.20"
+      - uses: actions/checkout@v3
 
-      - name: Checkout code
-        uses: actions/checkout@v2
+      - uses: actions/setup-go@v4
+        with:
+          go-version-file: 'go.mod'
+          check-latest: true
 
       - name: Import certificates
         if: env.HAS_SIGNING_CREDS == 'true'
-        uses: Apple-Actions/import-codesign-certs@v1
+        uses: Apple-Actions/import-codesign-certs@v2
         with:
           p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
           p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
@@ -107,7 +104,7 @@ jobs:
           fi
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: darwin-latest
           path: ./release/*
@@ -117,12 +114,16 @@ jobs:
     needs: [build-linux, build-darwin, build-windows]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v3
+
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
 
       - name: Zip Windows
         run: |
-          cd windows-latest
+          cd artifacts/windows-latest
           cp windows-amd64/* .
           zip -r nebula-windows-amd64.zip nebula.exe nebula-cert.exe dist
           cp windows-arm64/* .
@@ -130,6 +131,7 @@ jobs:
 
       - name: Create sha256sum
         run: |
+          cd artifacts
           for dir in linux-latest darwin-latest windows-latest
           do
             (
@@ -159,195 +161,12 @@ jobs:
 
       - name: Create Release
         id: create_release
-        uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
-
-      ##
-      ## Upload assets (I wish we could just upload the whole folder at once...
-      ##
-
-      - name: Upload SHASUM256.txt
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./SHASUM256.txt
-          asset_name: SHASUM256.txt
-          asset_content_type: text/plain
-
-      - name: Upload darwin zip
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./darwin-latest/nebula-darwin.zip
-          asset_name: nebula-darwin.zip
-          asset_content_type: application/zip
-
-      - name: Upload windows-amd64
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./windows-latest/nebula-windows-amd64.zip
-          asset_name: nebula-windows-amd64.zip
-          asset_content_type: application/zip
-
-      - name: Upload windows-arm64
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./windows-latest/nebula-windows-arm64.zip
-          asset_name: nebula-windows-arm64.zip
-          asset_content_type: application/zip
-
-      - name: Upload linux-amd64
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-amd64.tar.gz
-          asset_name: nebula-linux-amd64.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload linux-386
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-386.tar.gz
-          asset_name: nebula-linux-386.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload linux-ppc64le
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-ppc64le.tar.gz
-          asset_name: nebula-linux-ppc64le.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload linux-arm-5
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-arm-5.tar.gz
-          asset_name: nebula-linux-arm-5.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload linux-arm-6
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-arm-6.tar.gz
-          asset_name: nebula-linux-arm-6.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload linux-arm-7
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-arm-7.tar.gz
-          asset_name: nebula-linux-arm-7.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload linux-arm64
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-arm64.tar.gz
-          asset_name: nebula-linux-arm64.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload linux-mips
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-mips.tar.gz
-          asset_name: nebula-linux-mips.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload linux-mipsle
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-mipsle.tar.gz
-          asset_name: nebula-linux-mipsle.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload linux-mips64
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-mips64.tar.gz
-          asset_name: nebula-linux-mips64.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload linux-mips64le
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-mips64le.tar.gz
-          asset_name: nebula-linux-mips64le.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload linux-mips-softfloat
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-mips-softfloat.tar.gz
-          asset_name: nebula-linux-mips-softfloat.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload linux-riscv64
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-linux-riscv64.tar.gz
-          asset_name: nebula-linux-riscv64.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload freebsd-amd64
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./linux-latest/nebula-freebsd-amd64.tar.gz
-          asset_name: nebula-freebsd-amd64.tar.gz
-          asset_content_type: application/gzip
+        run: |
+          cd artifacts
+          gh release create \
+            --verify-tag \
+            --title "Release ${{ github.ref_name }}" \
+            "${{ github.ref_name }}" \
+            SHASUM256.txt *-latest/*.zip *-latest/*.tar.gz
