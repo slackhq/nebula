@@ -406,7 +406,7 @@ func (n *connectionManager) shouldSwapPrimary(current, primary *HostInfo) bool {
 	}
 
 	certState := n.intf.pki.GetCertState()
-	return bytes.Equal(current.ConnectionState.certState.Certificate.Signature, certState.Certificate.Signature)
+	return bytes.Equal(current.ConnectionState.myCert.Signature, certState.Certificate.Signature)
 }
 
 func (n *connectionManager) swapPrimary(current, primary *HostInfo) {
@@ -465,7 +465,7 @@ func (n *connectionManager) sendPunch(hostinfo *HostInfo) {
 
 func (n *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 	certState := n.intf.pki.GetCertState()
-	if bytes.Equal(hostinfo.ConnectionState.certState.Certificate.Signature, certState.Certificate.Signature) {
+	if bytes.Equal(hostinfo.ConnectionState.myCert.Signature, certState.Certificate.Signature) {
 		return
 	}
 
@@ -474,7 +474,7 @@ func (n *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 		Info("Re-handshaking with remote")
 
 	//TODO: this is copied from getOrHandshake to keep the extra checks out of the hot path, figure it out
-	newHostinfo := n.intf.handshakeManager.AddVpnIp(hostinfo.vpnIp, n.intf.initHostInfo)
+	newHostinfo := n.intf.handshakeManager.AddVpnIp(hostinfo.vpnIp)
 	if !newHostinfo.HandshakeReady {
 		ixHandshakeStage0(n.intf, newHostinfo.vpnIp, newHostinfo)
 	}

@@ -28,12 +28,14 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 		return
 	}
 
-	ci := hostinfo.ConnectionState
+	certState := f.pki.GetCertState()
+	ci := NewConnectionState(f.l, f.cipher, certState, true, noise.HandshakeIX, []byte{}, 0)
+	hostinfo.ConnectionState = ci
 
 	hsProto := &NebulaHandshakeDetails{
 		InitiatorIndex: hostinfo.localIndexId,
 		Time:           uint64(time.Now().UnixNano()),
-		Cert:           ci.certState.RawCertificateNoKey,
+		Cert:           certState.RawCertificateNoKey,
 	}
 
 	hsBytes := []byte{}
@@ -69,7 +71,8 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 }
 
 func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []byte, h *header.H) {
-	ci := f.newConnectionState(f.l, false, noise.HandshakeIX, []byte{}, 0)
+	certState := f.pki.GetCertState()
+	ci := NewConnectionState(f.l, f.cipher, certState, false, noise.HandshakeIX, []byte{}, 0)
 	// Mark packet 1 as seen so it doesn't show up as missed
 	ci.window.Update(f.l, 1)
 
@@ -155,7 +158,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 		Info("Handshake message received")
 
 	hs.Details.ResponderIndex = myIndex
-	hs.Details.Cert = ci.certState.RawCertificateNoKey
+	hs.Details.Cert = certState.RawCertificateNoKey
 	// Update the time in case their clock is way off from ours
 	hs.Details.Time = uint64(time.Now().UnixNano())
 

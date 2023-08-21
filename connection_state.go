@@ -18,7 +18,7 @@ type ConnectionState struct {
 	eKey           *NebulaCipherState
 	dKey           *NebulaCipherState
 	H              *noise.HandshakeState
-	certState      *CertState
+	myCert         *cert.NebulaCertificate
 	peerCert       *cert.NebulaCertificate
 	initiator      bool
 	messageCounter atomic.Uint64
@@ -28,25 +28,27 @@ type ConnectionState struct {
 	ready          bool
 }
 
-func (f *Interface) newConnectionState(l *logrus.Logger, initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {
+func NewConnectionState(l *logrus.Logger, cipher string, certState *CertState, initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {
 	var dhFunc noise.DHFunc
-	curCertState := f.pki.GetCertState()
 
-	switch curCertState.Certificate.Details.Curve {
+	switch certState.Certificate.Details.Curve {
 	case cert.Curve_CURVE25519:
 		dhFunc = noise.DH25519
 	case cert.Curve_P256:
 		dhFunc = noiseutil.DHP256
 	default:
-		l.Errorf("invalid curve: %s", curCertState.Certificate.Details.Curve)
+		l.Errorf("invalid curve: %s", certState.Certificate.Details.Curve)
 		return nil
 	}
-	cs := noise.NewCipherSuite(dhFunc, noiseutil.CipherAESGCM, noise.HashSHA256)
-	if f.cipher == "chachapoly" {
+
+	var cs noise.CipherSuite
+	if cipher == "chachapoly" {
 		cs = noise.NewCipherSuite(dhFunc, noise.CipherChaChaPoly, noise.HashSHA256)
+	} else {
+		cs = noise.NewCipherSuite(dhFunc, noiseutil.CipherAESGCM, noise.HashSHA256)
 	}
 
-	static := noise.DHKey{Private: curCertState.PrivateKey, Public: curCertState.PublicKey}
+	static := noise.DHKey{Private: certState.PrivateKey, Public: certState.PublicKey}
 
 	b := NewBits(ReplayWindow)
 	// Clear out bit 0, we never transmit it and we don't want it showing as packet loss
@@ -72,7 +74,7 @@ func (f *Interface) newConnectionState(l *logrus.Logger, initiator bool, pattern
 		initiator: initiator,
 		window:    b,
 		ready:     false,
-		certState: curCertState,
+		myCert:    certState.Certificate,
 	}
 
 	return ci

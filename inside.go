@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
@@ -124,7 +123,7 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 
 	hostinfo := f.hostMap.PromoteBestQueryVpnIp(vpnIp, f)
 	if hostinfo == nil {
-		hostinfo = f.handshakeManager.AddVpnIp(vpnIp, f.initHostInfo)
+		hostinfo = f.handshakeManager.AddVpnIp(vpnIp)
 	}
 	ci := hostinfo.ConnectionState
 
@@ -166,12 +165,6 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
 	}
 
 	return hostinfo
-}
-
-// initHostInfo is the init function to pass to (*HandshakeManager).AddVpnIP that
-// will create the initial Noise ConnectionState
-func (f *Interface) initHostInfo(hostinfo *HostInfo) {
-	hostinfo.ConnectionState = f.newConnectionState(f.l, true, noise.HandshakeIX, []byte{}, 0)
 }
 
 func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte) {

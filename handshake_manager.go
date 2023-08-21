@@ -297,7 +297,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f EncWriter, light
 }
 
 // AddVpnIp will try to handshake with the provided vpn ip and return the hostinfo for it.
-func (c *HandshakeManager) AddVpnIp(vpnIp iputil.VpnIp, init func(*HostInfo)) *HostInfo {
+func (c *HandshakeManager) AddVpnIp(vpnIp iputil.VpnIp) *HostInfo {
 	// A write lock is used to avoid having to recheck the map and trading a read lock for a write lock
 	c.Lock()
 	defer c.Unlock()
@@ -315,10 +315,6 @@ func (c *HandshakeManager) AddVpnIp(vpnIp iputil.VpnIp, init func(*HostInfo)) *H
 			relayForByIp:  map[iputil.VpnIp]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
 		},
-	}
-
-	if init != nil {
-		init(hostinfo)
 	}
 
 	c.vpnIps[vpnIp] = hostinfo
