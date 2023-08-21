@@ -102,7 +102,8 @@ func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *
 	}
 
 	// Use some out buffer space to build the packet before encryption
-	const maxOutLen = iputil.MaxRejectPacketSize + header.NebulaOverhead
+	const aeadOverhead = 16
+	const maxOutLen = iputil.MaxRejectPacketSize + header.Len + aeadOverhead
 	outPacket := iputil.CreateRejectPacket(packet, out[maxOutLen:maxOutLen+iputil.MaxRejectPacketSize])
 	out = out[:maxOutLen]
 
