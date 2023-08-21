@@ -24,6 +24,19 @@ type m map[string]interface{}
 const (
 	Version uint8 = 1
 	Len           = 16
+
+	// The total Nebula packet overhead is 60 bytes:
+	//   - HeaderLen bytes for the Nebula header.
+	//   - 16 bytes for the encryption cipher's AEAD 128-bit tag.
+	//     NOTE: both AESGCM and ChaChaPoly have a 16 byte tag, but if we add other
+	//     ciphers in the future we could calculate this based on the cipher,
+	//     returned by (cipher.AEAD).Overhead().
+	//   - 20 bytes for our IPv4 header.
+	//     (max is 60 bytes, but we don't use IPv4 options)
+	//     TODO: Could routers along the path inject a larger IPv4 header? If so,
+	//     we may need to increase this.
+	//   - 8 bytes for our UDP header.
+	NebulaOverhead = Len + 16 + 20 + 8
 )
 
 type MessageType uint8
