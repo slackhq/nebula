@@ -130,6 +130,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 	}
 
 	hostinfo := &HostInfo{
+		syncRWMutex:       newSyncRWMutex(mutexKey{Type: mutexKeyTypeHostInfo, ID: uint32(vpnIp)}),
 		ConnectionState:   ci,
 		localIndexId:      myIndex,
 		remoteIndexId:     hs.Details.InitiatorIndex,

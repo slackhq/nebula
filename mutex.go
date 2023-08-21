@@ -9,12 +9,19 @@ import (
 
 type syncRWMutex = sync.RWMutex
 
+type mutexKeyType string
+
+const (
+	mutexKeyTypeHostMap          mutexKeyType = "hostmap"
+	mutexKeyTypeHostInfo                      = "hostinfo"
+	mutexKeyTypeHandshakeManager              = "handshake-manager"
+)
+
 func newSyncRWMutex(mutexKey) syncRWMutex {
 	return sync.RWMutex{}
 }
 
 type mutexKey struct {
-	Type    string
-	SubType string
-	ID      uint32
+	Type mutexKeyType
+	ID   uint32
 }

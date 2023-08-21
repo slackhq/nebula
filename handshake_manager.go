@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -44,7 +43,7 @@ type HandshakeConfig struct {
 
 type HandshakeManager struct {
 	// Mutex for interacting with the vpnIps and indexes maps
-	sync.RWMutex
+	syncRWMutex
 
 	vpnIps  map[iputil.VpnIp]*HostInfo
 	indexes map[uint32]*HostInfo
@@ -65,6 +64,7 @@ type HandshakeManager struct {
 
 func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
+		syncRWMutex:            newSyncRWMutex(mutexKey{Type: mutexKeyTypeHandshakeManager}),
 		vpnIps:                 map[iputil.VpnIp]*HostInfo{},
 		indexes:                map[uint32]*HostInfo{},
 		mainHostMap:            mainHostMap,
@@ -308,6 +308,7 @@ func (c *HandshakeManager) AddVpnIp(vpnIp iputil.VpnIp, init func(*HostInfo)) *H
 	}
 
 	hostinfo := &HostInfo{
+		syncRWMutex:     newSyncRWMutex(mutexKey{Type: mutexKeyTypeHostInfo, ID: uint32(vpnIp)}),
 		vpnIp:           vpnIp,
 		HandshakePacket: make(map[uint8][]byte, 0),
 		relayState: RelayState{

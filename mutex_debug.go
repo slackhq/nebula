@@ -13,10 +13,17 @@ import (
 
 var threadLocal routine.ThreadLocal = routine.NewThreadLocalWithInitial(func() any { return map[mutexKey]mutexValue{} })
 
+type mutexKeyType string
+
+const (
+	mutexKeyTypeHostMap          mutexKeyType = "hostmap"
+	mutexKeyTypeHostInfo                      = "hostinfo"
+	mutexKeyTypeHandshakeManager              = "handshake-manager"
+)
+
 type mutexKey struct {
-	Type    string
-	SubType string
-	ID      uint32
+	Type mutexKeyType
+	ID   uint32
 }
 
 type mutexValue struct {
@@ -37,22 +44,22 @@ func newSyncRWMutex(key mutexKey) syncRWMutex {
 
 func checkMutex(state map[mutexKey]mutexValue, add mutexKey) {
 	switch add.Type {
-	case "hostinfo":
+	case mutexKeyTypeHostInfo:
 		// Check for any other hostinfo keys:
 		for k := range state {
-			if k.Type == "hostinfo" {
+			if k.Type == mutexKeyTypeHostInfo {
 				panic(fmt.Errorf("grabbing hostinfo lock and already have a hostinfo lock: state=%v add=%v", state, add))
 			}
 		}
-		if _, ok := state[mutexKey{Type: "hostmap", SubType: "main"}]; ok {
-			panic(fmt.Errorf("grabbing hostinfo lock and already have hostmap-main: state=%v add=%v", state, add))
+		if _, ok := state[mutexKey{Type: mutexKeyTypeHostMap}]; ok {
+			panic(fmt.Errorf("grabbing hostinfo lock and already have hostmap: state=%v add=%v", state, add))
 		}
-		if _, ok := state[mutexKey{Type: "hostmap", SubType: "pending"}]; ok {
-			panic(fmt.Errorf("grabbing hostinfo lock and already have hostmap-pending: state=%v add=%v", state, add))
+		if _, ok := state[mutexKey{Type: mutexKeyTypeHandshakeManager}]; ok {
+			panic(fmt.Errorf("grabbing hostinfo lock and already have handshake-manager: state=%v add=%v", state, add))
 		}
-	case "hostmap-pending":
-		if _, ok := state[mutexKey{Type: "hostmap", SubType: "main"}]; ok {
-			panic(fmt.Errorf("grabbing hostmap-pending lock and already have hostmap-main: state=%v add=%v", state, add))
+	case mutexKeyTypeHandshakeManager:
+		if _, ok := state[mutexKey{Type: mutexKeyTypeHostMap}]; ok {
+			panic(fmt.Errorf("grabbing handshake-manager lock and already have hostmap: state=%v add=%v", state, add))
 		}
 	}
 }

@@ -19,6 +19,7 @@ require (
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/stretchr/testify v1.8.4
+	github.com/timandy/routine v1.1.1
 	github.com/vishvananda/netlink v1.1.0
 	golang.org/x/crypto v0.12.0
 	golang.org/x/exp v0.0.0-20230425010034-47ecfdc1ba53
@@ -43,7 +44,6 @@ require (
 	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.10.1 // indirect
 	github.com/rogpeppe/go-internal v1.10.0 // indirect
-	github.com/timandy/routine v1.1.1 // indirect
 	github.com/vishvananda/netns v0.0.4 // indirect
 	golang.org/x/mod v0.10.0 // indirect
 	golang.org/x/tools v0.8.0 // indirect

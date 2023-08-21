@@ -264,7 +264,7 @@ func NewHostMap(l *logrus.Logger, vpnCIDR *net.IPNet, preferredRanges []*net.IPN
 	r := map[uint32]*HostInfo{}
 	relays := map[uint32]*HostInfo{}
 	m := HostMap{
-		syncRWMutex:     newSyncRWMutex(mutexKey{Type: "hostmap"}),
+		syncRWMutex:     newSyncRWMutex(mutexKey{Type: mutexKeyTypeHostMap}),
 		Indexes:         i,
 		Relays:          relays,
 		RemoteIndexes:   r,
