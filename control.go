@@ -11,6 +11,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -29,6 +30,7 @@ type controlHostLister interface {
 type Control struct {
 	f               *Interface
 	l               *logrus.Logger
+	ctx             context.Context
 	cancel          context.CancelFunc
 	sshStart        func()
 	statsStart      func()
@@ -70,6 +72,10 @@ func (c *Control) Start() {
 
 	// Start reading packets.
 	c.f.run()
+}
+
+func (c *Control) Context() context.Context {
+	return c.ctx
 }
 
 // Stop signals nebula to shutdown and close all tunnels, returns after the shutdown is complete
@@ -225,6 +231,10 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 		shutdown(h)
 	}
 	return
+}
+
+func (c *Control) Device() overlay.Device {
+	return c.f.inside
 }
 
 func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
