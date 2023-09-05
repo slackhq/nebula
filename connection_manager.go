@@ -231,7 +231,7 @@ func (n *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo)
 			index = existing.LocalIndex
 			switch r.Type {
 			case TerminalType:
-				relayFrom = newhostinfo.vpnIp
+				relayFrom = n.intf.myVpnIp
 				relayTo = existing.PeerIp
 			case ForwardingType:
 				relayFrom = existing.PeerIp
@@ -256,7 +256,7 @@ func (n *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo)
 			}
 			switch r.Type {
 			case TerminalType:
-				relayFrom = newhostinfo.vpnIp
+				relayFrom = n.intf.myVpnIp
 				relayTo = r.PeerIp
 			case ForwardingType:
 				relayFrom = r.PeerIp
