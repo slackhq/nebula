@@ -54,9 +54,16 @@ func newWinTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU 
 		return nil, fmt.Errorf("generate GUID failed: %w", err)
 	}
 
-	tunDevice, err := wintun.CreateTUNWithRequestedGUID(deviceName, guid, defaultMTU)
+	var tunDevice wintun.Device
+	tunDevice, err = wintun.CreateTUNWithRequestedGUID(deviceName, guid, defaultMTU)
 	if err != nil {
-		return nil, fmt.Errorf("create TUN device failed: %w", err)
+		// Windows 10 has an issue with unclean shutdowns not fully cleaning up the wintun device.
+		// Trying a second time resolves the issue.
+		l.WithError(err).Debug("Failed to create wintun device, retrying")
+		tunDevice, err = wintun.CreateTUNWithRequestedGUID(deviceName, guid, defaultMTU)
+		if err != nil {
+			return nil, fmt.Errorf("create TUN device failed: %w", err)
+		}
 	}
 
 	routeTree, err := makeRouteTree(l, routes, false)
