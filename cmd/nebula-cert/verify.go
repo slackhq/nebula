@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"strings"
 	"time"
@@ -40,7 +39,7 @@ func verify(args []string, out io.Writer, errOut io.Writer) error {
 		return err
 	}
 
-	rawCACert, err := ioutil.ReadFile(*vf.caPath)
+	rawCACert, err := os.ReadFile(*vf.caPath)
 	if err != nil {
 		return fmt.Errorf("error while reading ca: %s", err)
 	}
@@ -57,7 +56,7 @@ func verify(args []string, out io.Writer, errOut io.Writer) error {
 		}
 	}
 
-	rawCert, err := ioutil.ReadFile(*vf.certPath)
+	rawCert, err := os.ReadFile(*vf.certPath)
 	if err != nil {
 		return fmt.Errorf("unable to read crt; %s", err)
 	}
