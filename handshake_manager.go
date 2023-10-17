@@ -89,12 +89,15 @@ func (hh *HandshakeHostInfo) cachePacket(l *logrus.Logger, t header.MessageType,
 				Debugf("Packet store")
 		}
 
-	} else if l.Level >= logrus.DebugLevel {
+	} else {
 		m.dropped.Inc(1)
-		hh.hostinfo.logger(l).
-			WithField("length", len(hh.packetStore)).
-			WithField("stored", false).
-			Debugf("Packet store")
+
+		if l.Level >= logrus.DebugLevel {
+			hh.hostinfo.logger(l).
+				WithField("length", len(hh.packetStore)).
+				WithField("stored", false).
+				Debugf("Packet store")
+		}
 	}
 }
 
