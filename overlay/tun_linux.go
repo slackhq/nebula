@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"unsafe"
@@ -59,6 +60,26 @@ type ifreqQLEN struct {
 	Name  [16]byte
 	Value int32
 	pad   [8]byte
+}
+
+type multiPathRoute struct {
+	routes []weightedRoute
+}
+
+func (m multiPathRoute) via() string {
+	if len(m.routes) == 1 {
+		return fmt.Sprint(m.routes[1].gw)
+	}
+	parts := make([]string, len(m.routes))
+	for i, r := range m.routes {
+		parts[i] = fmt.Sprintf("%s(%d)", r.gw, r.weight)
+	}
+	return strings.Join(parts, "|")
+}
+
+type weightedRoute struct {
+	gw     iputil.VpnIp
+	weight int
 }
 
 func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []Route, txQueueLen int, useSystemRoutes bool) (*tun, error) {
@@ -155,11 +176,17 @@ func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 
 func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
 	r := t.routeTree.Load().MostSpecificContains(ip)
-	if r != nil {
-		return r.(iputil.VpnIp)
+	switch v := r.(type) {
+	case iputil.VpnIp:
+		return v
+	case multiPathRoute:
+		// TODO:
+		//	- randomize equal weights (already sorted by highest weight)
+		//	- return first route with active tunnel
+		return 0
+	default:
+		return 0
 	}
-
-	return 0
 }
 
 func (t *tun) Write(b []byte) (int, error) {
@@ -362,15 +389,30 @@ func (t *tun) watchRoutes() {
 }
 
 func (t *tun) updateRoutes(r netlink.RouteUpdate) {
-	if r.Gw == nil {
-		// Not a gateway route, ignore
-		t.l.WithField("route", r).Debug("Ignoring route update, not a gateway route")
-		return
+	var routes []weightedRoute
+	if len(r.Gw) > 0 {
+		routes = append(routes, weightedRoute{gw: iputil.Ip2VpnIp(r.Gw)})
+	}
+	for _, p := range r.MultiPath {
+		if len(p.Gw) > 0 {
+			routes = append(routes, weightedRoute{gw: iputil.Ip2VpnIp(p.Gw), weight: p.Hops + 1})
+		}
 	}
 
-	if !t.cidr.Contains(r.Gw) {
-		// Gateway isn't in our overlay network, ignore
-		t.l.WithField("route", r).Debug("Ignoring route update, not in our network")
+	mpr := multiPathRoute{
+		routes: make([]weightedRoute, 0, len(routes)),
+	}
+	for _, route := range routes {
+		if !t.cidr.Contains(route.gw.ToIP()) {
+			// Gateway isn't in our overlay network, ignore
+			t.l.WithField("gw", route.gw).Debug("Ignoring route gateway, not in our network")
+			continue
+		}
+		mpr.routes = append(mpr.routes, route)
+	}
+
+	if len(mpr.routes) == 0 {
+		t.l.WithField("route", r).Debug("Ignoring route update, no remaining gateways")
 		return
 	}
 
@@ -380,23 +422,46 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 		return
 	}
 
+	sort.Slice(mpr.routes, func(i, j int) bool {
+		if mpr.routes[i].weight == mpr.routes[j].weight {
+			return mpr.routes[i].gw < mpr.routes[j].gw
+		}
+		// By weight DESC
+		return mpr.routes[i].weight > mpr.routes[j].weight
+	})
+
 	newTree := cidr.NewTree4()
 	if r.Type == unix.RTM_NEWROUTE {
 		for _, oldR := range t.routeTree.Load().List() {
 			newTree.AddCIDR(oldR.CIDR, oldR.Value)
 		}
 
-		t.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Adding route")
-		newTree.AddCIDR(r.Dst, iputil.Ip2VpnIp(r.Gw))
-
+		t.l.WithField("destination", r.Dst).WithField("via", mpr.via()).Info("Adding route")
+		if len(mpr.routes) == 1 {
+			newTree.AddCIDR(r.Dst, mpr.routes[0].gw)
+		} else {
+			newTree.AddCIDR(r.Dst, mpr)
+		}
 	} else {
-		gw := iputil.Ip2VpnIp(r.Gw)
 		for _, oldR := range t.routeTree.Load().List() {
-			if bytes.Equal(oldR.CIDR.IP, r.Dst.IP) && bytes.Equal(oldR.CIDR.Mask, r.Dst.Mask) && *oldR.Value != nil && (*oldR.Value).(iputil.VpnIp) == gw {
-				// This is the record to delete
-				t.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Removing route")
-				continue
+			found := false
+			if bytes.Equal(oldR.CIDR.IP, r.Dst.IP) && bytes.Equal(oldR.CIDR.Mask, r.Dst.Mask) {
+				switch v := (*oldR.Value).(type) {
+				case iputil.VpnIp:
+					if v == iputil.Ip2VpnIp(r.Gw) {
+						found = true
+					}
+				case multiPathRoute:
+					if v.via() == mpr.via() {
+						found = true
+					}
+				}
 			}
+			if found (
+				// This is the record to delete
+				t.l.WithField("destination", r.Dst).WithField("via", mpr.via()).Info("Removing route")
+				continue
+			)
 
 			newTree.AddCIDR(oldR.CIDR, oldR.Value)
 		}
