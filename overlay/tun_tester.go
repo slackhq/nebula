@@ -82,13 +82,13 @@ func (t *TestTun) Get(block bool) []byte {
 // Below this is boilerplate implementation to make nebula actually work
 //********************************************************************************************************************//
 
-func (t *TestTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+func (t *TestTun) RoutesFor(ip iputil.VpnIp) []iputil.VpnIp {
 	r := t.routeTree.MostSpecificContains(ip)
 	if r != nil {
-		return r.(iputil.VpnIp)
+		return []iputil.VpnIp{r.(iputil.VpnIp)}
 	}
 
-	return 0
+	return nil
 }
 
 func (t *TestTun) Activate() error {

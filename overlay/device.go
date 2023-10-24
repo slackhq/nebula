@@ -12,6 +12,6 @@ type Device interface {
 	Activate() error
 	Cidr() *net.IPNet
 	Name() string
-	RouteFor(iputil.VpnIp) iputil.VpnIp
+	RoutesFor(iputil.VpnIp) []iputil.VpnIp
 	NewMultiQueueReader() (io.ReadWriteCloser, error)
 }

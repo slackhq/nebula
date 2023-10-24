@@ -96,13 +96,13 @@ func (t *waterTun) Activate() error {
 	return nil
 }
 
-func (t *waterTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+func (t *waterTun) RoutesFor(ip iputil.VpnIp) []iputil.VpnIp {
 	r := t.routeTree.MostSpecificContains(ip)
 	if r != nil {
-		return r.(iputil.VpnIp)
+		return []iputil.VpnIp{r.(iputil.VpnIp)}
 	}
 
-	return 0
+	return nil
 }
 
 func (t *waterTun) Cidr() *net.IPNet {

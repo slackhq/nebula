@@ -110,9 +110,18 @@ func (f *Interface) Handshake(vpnIp iputil.VpnIp) {
 // If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
 func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp, cacheCallback func(info *HostInfo)) (*HostInfo, bool) {
 	if !ipMaskContains(f.lightHouse.myVpnIp, f.lightHouse.myVpnZeros, vpnIp) {
-		vpnIp = f.inside.RouteFor(vpnIp)
-		if vpnIp == 0 {
+		routes := f.inside.RoutesFor(vpnIp)
+		if len(routes) == 0 {
 			return nil, false
+		}
+		// default to the prioritized gateway
+		vpnIp = routes[0]
+		// but prefer the highest prioriity gateway with an active tunnel
+		for _, candidate := range routes {
+			if _, ok := f.handshakeManager.GetOrHandshake(candidate, nil); ok {
+				vpnIp = candidate
+				break
+			}
 		}
 	}
 

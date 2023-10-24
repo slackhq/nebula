@@ -114,13 +114,13 @@ func (t *tun) Activate() error {
 	return nil
 }
 
-func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+func (t *tun) RoutesFor(ip iputil.VpnIp) []iputil.VpnIp {
 	r := t.routeTree.MostSpecificContains(ip)
 	if r != nil {
-		return r.(iputil.VpnIp)
+		return []iputil.VpnIp{r.(iputil.VpnIp)}
 	}
 
-	return 0
+	return nil
 }
 
 func (t *tun) Cidr() *net.IPNet {

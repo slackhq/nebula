@@ -5,8 +5,10 @@ package overlay
 
 import (
 	"bytes"
+	"crypto/rand"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"os"
 	"sort"
@@ -174,18 +176,34 @@ func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return file, nil
 }
 
-func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+func (t *tun) RoutesFor(ip iputil.VpnIp) []iputil.VpnIp {
 	r := t.routeTree.Load().MostSpecificContains(ip)
 	switch v := r.(type) {
 	case iputil.VpnIp:
-		return v
+		return []iputil.VpnIp{v}
 	case multiPathRoute:
-		// TODO:
-		//	- randomize equal weights (already sorted by highest weight)
-		//	- return first route with active tunnel
-		return 0
+		routes := make([]weightedRoute, len(v.routes))
+		vpnIps := make([]iputil.VpnIp, 0, len(routes))
+		copy(routes, v.routes)
+		sort.Slice(routes, func(i, j int) bool {
+			// Randomize equal weight routes
+			if routes[i].weight == routes[j].weight {
+				rn, err := rand.Int(rand.Reader, big.NewInt(2))
+				if err != nil {
+					return false
+				}
+				return rn.Int64() == 0
+			}
+			// Highest weight preferred
+			return routes[i].weight > routes[j].weight
+		})
+
+		for _, r := range routes {
+			vpnIps = append(vpnIps, r.gw)
+		}
+		return vpnIps
 	default:
-		return 0
+		return nil
 	}
 }
 
@@ -457,11 +475,11 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 					}
 				}
 			}
-			if found (
+			if found {
 				// This is the record to delete
 				t.l.WithField("destination", r.Dst).WithField("via", mpr.via()).Info("Removing route")
 				continue
-			)
+			}
 
 			newTree.AddCIDR(oldR.CIDR, oldR.Value)
 		}

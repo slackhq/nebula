@@ -45,13 +45,13 @@ func newTun(_ *logrus.Logger, _ string, _ *net.IPNet, _ int, _ []Route, _ int, _
 	return nil, fmt.Errorf("newTun not supported in Android")
 }
 
-func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+func (t *tun) RoutesFor(ip iputil.VpnIp) []iputil.VpnIp {
 	r := t.routeTree.MostSpecificContains(ip)
 	if r != nil {
-		return r.(iputil.VpnIp)
+		return []iputil.VpnIp{r.(iputil.VpnIp)}
 	}
 
-	return 0
+	return nil
 }
 
 func (t tun) Activate() error {

@@ -43,8 +43,8 @@ func (*disabledTun) Activate() error {
 	return nil
 }
 
-func (*disabledTun) RouteFor(iputil.VpnIp) iputil.VpnIp {
-	return 0
+func (*disabledTun) RoutesFor(ip iputil.VpnIp) []iputil.VpnIp {
+	return nil
 }
 
 func (t *disabledTun) Cidr() *net.IPNet {

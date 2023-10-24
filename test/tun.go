@@ -10,8 +10,8 @@ import (
 
 type NoopTun struct{}
 
-func (NoopTun) RouteFor(iputil.VpnIp) iputil.VpnIp {
-	return 0
+func (NoopTun) RoutesFor(iputil.VpnIp) []iputil.VpnIp {
+	return nil
 }
 
 func (NoopTun) Activate() error {
