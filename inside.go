@@ -110,6 +110,7 @@ func (f *Interface) Handshake(vpnIp iputil.VpnIp) {
 // If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
 func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp, cacheCallback func(info *HostInfo)) (*HostInfo, bool) {
 	if !ipMaskContains(f.lightHouse.myVpnIp, f.lightHouse.myVpnZeros, vpnIp) {
+		original := vpnIp
 		routes := f.inside.RoutesFor(vpnIp)
 		if len(routes) == 0 {
 			return nil, false
@@ -120,6 +121,11 @@ func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp, cacheCallback func(info *
 		for _, candidate := range routes {
 			if _, ok := f.handshakeManager.GetOrHandshake(candidate, nil); ok {
 				vpnIp = candidate
+				if f.l.Level >= logrus.DebugLevel && len(routes) > 1 {
+					f.l.WithField("vpnIp", original).
+						WithField("gateway", vpnIp).
+						Debugln("routing via active tunnel")
+				}
 				break
 			}
 		}
