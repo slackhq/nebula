@@ -70,7 +70,7 @@ type multiPathRoute struct {
 
 func (m multiPathRoute) via() string {
 	if len(m.routes) == 1 {
-		return fmt.Sprint(m.routes[1].gw)
+		return fmt.Sprint(m.routes[0].gw)
 	}
 	parts := make([]string, len(m.routes))
 	for i, r := range m.routes {
