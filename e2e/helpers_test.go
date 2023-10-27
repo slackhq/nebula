@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"dario.cat/mergo"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
-	"github.com/imdario/mergo"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"

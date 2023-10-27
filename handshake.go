@@ -20,7 +20,7 @@ func HandleIncomingHandshake(f *Interface, addr *udp.Addr, via *ViaSender, packe
 		case 1:
 			ixHandshakeStage1(f, addr, via, packet, h)
 		case 2:
-			newHostinfo, _ := f.handshakeManager.QueryIndex(h.RemoteIndex)
+			newHostinfo := f.handshakeManager.QueryIndex(h.RemoteIndex)
 			tearDown := ixHandshakeStage2(f, addr, via, newHostinfo, packet, h)
 			if tearDown && newHostinfo != nil {
 				f.handshakeManager.DeleteHostInfo(newHostinfo)

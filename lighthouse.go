@@ -39,7 +39,7 @@ type LightHouse struct {
 	myVpnIp      iputil.VpnIp
 	myVpnZeros   iputil.VpnIp
 	myVpnNet     *net.IPNet
-	punchConn    *udp.Conn
+	punchConn    udp.Conn
 	punchy       *Punchy
 
 	// Local cache of answers from light houses
@@ -64,11 +64,10 @@ type LightHouse struct {
 	staticList  atomic.Pointer[map[iputil.VpnIp]struct{}]
 	lighthouses atomic.Pointer[map[iputil.VpnIp]struct{}]
 
-	interval        atomic.Int64
-	updateCancel    context.CancelFunc
-	updateParentCtx context.Context
-	updateUdp       EncWriter
-	nebulaPort      uint32 // 32 bits because protobuf does not have a uint16
+	interval     atomic.Int64
+	updateCancel context.CancelFunc
+	ifce         EncWriter
+	nebulaPort   uint32 // 32 bits because protobuf does not have a uint16
 
 	advertiseAddrs atomic.Pointer[[]netIpAndPort]
 
@@ -84,7 +83,7 @@ type LightHouse struct {
 
 // NewLightHouseFromConfig will build a Lighthouse struct from the values provided in the config object
 // addrMap should be nil unless this is during a config reload
-func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C, myVpnNet *net.IPNet, pc *udp.Conn, p *Punchy) (*LightHouse, error) {
+func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C, myVpnNet *net.IPNet, pc udp.Conn, p *Punchy) (*LightHouse, error) {
 	amLighthouse := c.GetBool("lighthouse.am_lighthouse", false)
 	nebulaPort := uint32(c.GetInt("listen.port", 0))
 	if amLighthouse && nebulaPort == 0 {
@@ -133,7 +132,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 	c.RegisterReloadCallback(func(c *config.C) {
 		err := h.reload(c, false)
 		switch v := err.(type) {
-		case util.ContextualError:
+		case *util.ContextualError:
 			v.Log(l)
 		case error:
 			l.WithError(err).Error("failed to reload lighthouse")
@@ -217,7 +216,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 				lh.updateCancel()
 			}
 
-			lh.LhUpdateWorker(lh.updateParentCtx, lh.updateUdp)
+			lh.StartUpdateWorker()
 		}
 	}
 
@@ -262,6 +261,18 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 
 	//NOTE: many things will get much simpler when we combine static_host_map and lighthouse.hosts in config
 	if initial || c.HasChanged("static_host_map") || c.HasChanged("static_map.cadence") || c.HasChanged("static_map.network") || c.HasChanged("static_map.lookup_timeout") {
+		// Clean up. Entries still in the static_host_map will be re-built.
+		// Entries no longer present must have their (possible) background DNS goroutines stopped.
+		if existingStaticList := lh.staticList.Load(); existingStaticList != nil {
+			lh.RLock()
+			for staticVpnIp := range *existingStaticList {
+				if am, ok := lh.addrMap[staticVpnIp]; ok && am != nil {
+					am.hr.Cancel()
+				}
+			}
+			lh.RUnlock()
+		}
+		// Build a new list based on current config.
 		staticList := make(map[iputil.VpnIp]struct{})
 		err := lh.loadStaticMap(c, lh.myVpnNet, staticList)
 		if err != nil {
@@ -742,33 +753,33 @@ func NewUDPAddrFromLH6(ipp *Ip6AndPort) *udp.Addr {
 	return udp.NewAddr(lhIp6ToIp(ipp), uint16(ipp.Port))
 }
 
-func (lh *LightHouse) LhUpdateWorker(ctx context.Context, f EncWriter) {
-	lh.updateParentCtx = ctx
-	lh.updateUdp = f
-
+func (lh *LightHouse) StartUpdateWorker() {
 	interval := lh.GetUpdateInterval()
 	if lh.amLighthouse || interval == 0 {
 		return
 	}
 
 	clockSource := time.NewTicker(time.Second * time.Duration(interval))
-	updateCtx, cancel := context.WithCancel(ctx)
+	updateCtx, cancel := context.WithCancel(lh.ctx)
 	lh.updateCancel = cancel
-	defer clockSource.Stop()
 
-	for {
-		lh.SendUpdate(f)
+	go func() {
+		defer clockSource.Stop()
 
-		select {
-		case <-updateCtx.Done():
-			return
-		case <-clockSource.C:
-			continue
+		for {
+			lh.SendUpdate()
+
+			select {
+			case <-updateCtx.Done():
+				return
+			case <-clockSource.C:
+				continue
+			}
 		}
-	}
+	}()
 }
 
-func (lh *LightHouse) SendUpdate(f EncWriter) {
+func (lh *LightHouse) SendUpdate() {
 	var v4 []*Ip4AndPort
 	var v6 []*Ip6AndPort
 
@@ -821,7 +832,7 @@ func (lh *LightHouse) SendUpdate(f EncWriter) {
 	}
 
 	for vpnIp := range lighthouses {
-		f.SendMessageToVpnIp(header.LightHouse, 0, vpnIp, mm, nb, out)
+		lh.ifce.SendMessageToVpnIp(header.LightHouse, 0, vpnIp, mm, nb, out)
 	}
 }
 

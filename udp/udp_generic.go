@@ -18,30 +18,32 @@ import (
 	"github.com/slackhq/nebula/header"
 )
 
-type Conn struct {
+type GenericConn struct {
 	*net.UDPConn
 	l *logrus.Logger
 }
 
-func NewListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (*Conn, error) {
+var _ Conn = &GenericConn{}
+
+func NewGenericListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (Conn, error) {
 	lc := NewListenConfig(multi)
 	pc, err := lc.ListenPacket(context.TODO(), "udp", net.JoinHostPort(ip.String(), fmt.Sprintf("%v", port)))
 	if err != nil {
 		return nil, err
 	}
 	if uc, ok := pc.(*net.UDPConn); ok {
-		return &Conn{UDPConn: uc, l: l}, nil
+		return &GenericConn{UDPConn: uc, l: l}, nil
 	}
 	return nil, fmt.Errorf("Unexpected PacketConn: %T %#v", pc, pc)
 }
 
-func (uc *Conn) WriteTo(b []byte, addr *Addr) error {
-	_, err := uc.UDPConn.WriteToUDP(b, &net.UDPAddr{IP: addr.IP, Port: int(addr.Port)})
+func (u *GenericConn) WriteTo(b []byte, addr *Addr) error {
+	_, err := u.UDPConn.WriteToUDP(b, &net.UDPAddr{IP: addr.IP, Port: int(addr.Port)})
 	return err
 }
 
-func (uc *Conn) LocalAddr() (*Addr, error) {
-	a := uc.UDPConn.LocalAddr()
+func (u *GenericConn) LocalAddr() (*Addr, error) {
+	a := u.UDPConn.LocalAddr()
 
 	switch v := a.(type) {
 	case *net.UDPAddr:
@@ -55,11 +57,11 @@ func (uc *Conn) LocalAddr() (*Addr, error) {
 	}
 }
 
-func (u *Conn) ReloadConfig(c *config.C) {
+func (u *GenericConn) ReloadConfig(c *config.C) {
 	// TODO
 }
 
-func NewUDPStatsEmitter(udpConns []*Conn) func() {
+func NewUDPStatsEmitter(udpConns []Conn) func() {
 	// No UDP stats for non-linux
 	return func() {}
 }
@@ -68,7 +70,7 @@ type rawMessage struct {
 	Len uint32
 }
 
-func (u *Conn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int) {
+func (u *GenericConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int) {
 	plaintext := make([]byte, MTU)
 	buffer := make([]byte, MTU)
 	h := &header.H{}
@@ -80,8 +82,8 @@ func (u *Conn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall
 		// Just read one packet at a time
 		n, rua, err := u.ReadFromUDP(buffer)
 		if err != nil {
-			u.l.WithError(err).Error("Failed to read packets")
-			continue
+			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
+			return
 		}
 
 		udpAddr.IP = rua.IP

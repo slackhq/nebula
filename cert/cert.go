@@ -272,6 +272,9 @@ func EncryptAndMarshalSigningPrivateKey(curve Curve, b []byte, passphrase []byte
 		},
 		Ciphertext: ciphertext,
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	switch curve {
 	case Curve_CURVE25519:

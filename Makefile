@@ -12,6 +12,8 @@ ifeq ($(OS),Windows_NT)
 	GOISMIN := $(shell IF "$(GOVERSION)" GEQ "$(GOMINVERSION)" ECHO 1)
 	NEBULA_CMD_SUFFIX = .exe
 	NULL_FILE = nul
+	# RIO on windows does pointer stuff that makes go vet angry
+	VET_FLAGS = -unsafeptr=false
 else
 	GOVERSION := $(shell go version | awk '{print substr($$3, 3)}')
 	GOISMIN := $(shell expr "$(GOVERSION)" ">=" "$(GOMINVERSION)")
@@ -44,10 +46,21 @@ ALL_LINUX = linux-amd64 \
 	linux-mips-softfloat \
 	linux-riscv64
 
+ALL_FREEBSD = freebsd-amd64 \
+	freebsd-arm64
+
+ALL_OPENBSD = openbsd-amd64 \
+	openbsd-arm64
+
+ALL_NETBSD = netbsd-amd64 \
+ 	netbsd-arm64
+
 ALL = $(ALL_LINUX) \
+	$(ALL_FREEBSD) \
+	$(ALL_OPENBSD) \
+	$(ALL_NETBSD) \
 	darwin-amd64 \
 	darwin-arm64 \
-	freebsd-amd64 \
 	windows-amd64 \
 	windows-arm64
 
@@ -75,7 +88,11 @@ release: $(ALL:%=build/nebula-%.tar.gz)
 
 release-linux: $(ALL_LINUX:%=build/nebula-%.tar.gz)
 
-release-freebsd: build/nebula-freebsd-amd64.tar.gz
+release-freebsd: $(ALL_FREEBSD:%=build/nebula-%.tar.gz)
+
+release-openbsd: $(ALL_OPENBSD:%=build/nebula-%.tar.gz)
+
+release-netbsd: $(ALL_NETBSD:%=build/nebula-%.tar.gz)
 
 release-boringcrypto: build/nebula-linux-$(shell go env GOARCH)-boringcrypto.tar.gz
 
@@ -91,6 +108,9 @@ bin-darwin: build/darwin-amd64/nebula build/darwin-amd64/nebula-cert
 	mv $? .
 
 bin-freebsd: build/freebsd-amd64/nebula build/freebsd-amd64/nebula-cert
+	mv $? .
+
+bin-freebsd-arm64: build/freebsd-arm64/nebula build/freebsd-arm64/nebula-cert
 	mv $? .
 
 bin-boringcrypto: build/linux-$(shell go env GOARCH)-boringcrypto/nebula build/linux-$(shell go env GOARCH)-boringcrypto/nebula-cert
@@ -137,7 +157,7 @@ build/nebula-%.zip: build/%/nebula.exe build/%/nebula-cert.exe
 	cd build/$* && zip ../nebula-$*.zip nebula.exe nebula-cert.exe
 
 vet:
-	go vet -v ./...
+	go vet $(VET_FLAGS) -v ./...
 
 test:
 	go test -v ./...
