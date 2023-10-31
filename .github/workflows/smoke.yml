@@ -26,7 +26,7 @@ jobs:
         check-latest: true
 
     - name: build
-      run: make bin-docker
+      run: make bin-docker CGO_ENABLED=1 BUILD_ARGS=-race
 
     - name: setup docker image
       working-directory: ./.github/workflows/smoke
