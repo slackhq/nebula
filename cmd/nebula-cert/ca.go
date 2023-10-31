@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"net"
 	"os"
@@ -219,9 +218,9 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 			return fmt.Errorf("error while encrypting out-key: %s", err)
 		}
 
-		err = ioutil.WriteFile(*cf.outKeyPath, b, 0600)
+		err = os.WriteFile(*cf.outKeyPath, b, 0600)
 	} else {
-		err = ioutil.WriteFile(*cf.outKeyPath, cert.MarshalSigningPrivateKey(curve, rawPriv), 0600)
+		err = os.WriteFile(*cf.outKeyPath, cert.MarshalSigningPrivateKey(curve, rawPriv), 0600)
 	}
 
 	if err != nil {
@@ -233,7 +232,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		return fmt.Errorf("error while marshalling certificate: %s", err)
 	}
 
-	err = ioutil.WriteFile(*cf.outCertPath, b, 0600)
+	err = os.WriteFile(*cf.outCertPath, b, 0600)
 	if err != nil {
 		return fmt.Errorf("error while writing out-crt: %s", err)
 	}
@@ -244,7 +243,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 			return fmt.Errorf("error while generating qr code: %s", err)
 		}
 
-		err = ioutil.WriteFile(*cf.outQRPath, b, 0600)
+		err = os.WriteFile(*cf.outQRPath, b, 0600)
 		if err != nil {
 			return fmt.Errorf("error while writing out-qr: %s", err)
 		}

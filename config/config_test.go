@@ -1,7 +1,6 @@
 package config
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,10 +15,10 @@ import (
 
 func TestConfig_Load(t *testing.T) {
 	l := test.NewLogger()
-	dir, err := ioutil.TempDir("", "config-test")
+	dir, err := os.MkdirTemp("", "config-test")
 	// invalid yaml
 	c := NewC(l)
-	ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte(" invalid yaml"), 0644)
+	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte(" invalid yaml"), 0644)
 	assert.EqualError(t, c.Load(dir), "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[interface {}]interface {}")
 
 	// simple multi config merge
@@ -29,8 +28,8 @@ func TestConfig_Load(t *testing.T) {
 
 	assert.Nil(t, err)
 
-	ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
-	ioutil.WriteFile(filepath.Join(dir, "02.yml"), []byte("outer:\n  inner: override\nnew: hi"), 0644)
+	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
+	os.WriteFile(filepath.Join(dir, "02.yml"), []byte("outer:\n  inner: override\nnew: hi"), 0644)
 	assert.Nil(t, c.Load(dir))
 	expected := map[interface{}]interface{}{
 		"outer": map[interface{}]interface{}{
@@ -120,9 +119,9 @@ func TestConfig_HasChanged(t *testing.T) {
 func TestConfig_ReloadConfig(t *testing.T) {
 	l := test.NewLogger()
 	done := make(chan bool, 1)
-	dir, err := ioutil.TempDir("", "config-test")
+	dir, err := os.MkdirTemp("", "config-test")
 	assert.Nil(t, err)
-	ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
+	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
 
 	c := NewC(l)
 	assert.Nil(t, c.Load(dir))
@@ -131,7 +130,7 @@ func TestConfig_ReloadConfig(t *testing.T) {
 	assert.False(t, c.HasChanged("outer"))
 	assert.False(t, c.HasChanged(""))
 
-	ioutil.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: ho"), 0644)
+	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: ho"), 0644)
 
 	c.RegisterReloadCallback(func(c *C) {
 		done <- true

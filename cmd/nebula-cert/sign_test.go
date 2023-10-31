@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"crypto/rand"
 	"errors"
-	"io/ioutil"
 	"os"
 	"testing"
 	"time"
@@ -104,7 +103,7 @@ func Test_signCert(t *testing.T) {
 	// failed to unmarshal key
 	ob.Reset()
 	eb.Reset()
-	caKeyF, err := ioutil.TempFile("", "sign-cert.key")
+	caKeyF, err := os.CreateTemp("", "sign-cert.key")
 	assert.Nil(t, err)
 	defer os.Remove(caKeyF.Name())
 
@@ -128,7 +127,7 @@ func Test_signCert(t *testing.T) {
 	// failed to unmarshal cert
 	ob.Reset()
 	eb.Reset()
-	caCrtF, err := ioutil.TempFile("", "sign-cert.crt")
+	caCrtF, err := os.CreateTemp("", "sign-cert.crt")
 	assert.Nil(t, err)
 	defer os.Remove(caCrtF.Name())
 
@@ -159,7 +158,7 @@ func Test_signCert(t *testing.T) {
 	// failed to unmarshal pub
 	ob.Reset()
 	eb.Reset()
-	inPubF, err := ioutil.TempFile("", "in.pub")
+	inPubF, err := os.CreateTemp("", "in.pub")
 	assert.Nil(t, err)
 	defer os.Remove(inPubF.Name())
 
@@ -206,7 +205,7 @@ func Test_signCert(t *testing.T) {
 
 	// mismatched ca key
 	_, caPriv2, _ := ed25519.GenerateKey(rand.Reader)
-	caKeyF2, err := ioutil.TempFile("", "sign-cert-2.key")
+	caKeyF2, err := os.CreateTemp("", "sign-cert-2.key")
 	assert.Nil(t, err)
 	defer os.Remove(caKeyF2.Name())
 	caKeyF2.Write(cert.MarshalEd25519PrivateKey(caPriv2))
@@ -227,7 +226,7 @@ func Test_signCert(t *testing.T) {
 	assert.Empty(t, eb.String())
 
 	// create temp key file
-	keyF, err := ioutil.TempFile("", "test.key")
+	keyF, err := os.CreateTemp("", "test.key")
 	assert.Nil(t, err)
 	os.Remove(keyF.Name())
 
@@ -241,7 +240,7 @@ func Test_signCert(t *testing.T) {
 	os.Remove(keyF.Name())
 
 	// create temp cert file
-	crtF, err := ioutil.TempFile("", "test.crt")
+	crtF, err := os.CreateTemp("", "test.crt")
 	assert.Nil(t, err)
 	os.Remove(crtF.Name())
 
@@ -254,13 +253,13 @@ func Test_signCert(t *testing.T) {
 	assert.Empty(t, eb.String())
 
 	// read cert and key files
-	rb, _ := ioutil.ReadFile(keyF.Name())
+	rb, _ := os.ReadFile(keyF.Name())
 	lKey, b, err := cert.UnmarshalX25519PrivateKey(rb)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
 	assert.Len(t, lKey, 32)
 
-	rb, _ = ioutil.ReadFile(crtF.Name())
+	rb, _ = os.ReadFile(crtF.Name())
 	lCrt, b, err := cert.UnmarshalNebulaCertificateFromPEM(rb)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
@@ -296,7 +295,7 @@ func Test_signCert(t *testing.T) {
 	assert.Empty(t, eb.String())
 
 	// read cert file and check pub key matches in-pub
-	rb, _ = ioutil.ReadFile(crtF.Name())
+	rb, _ = os.ReadFile(crtF.Name())
 	lCrt, b, err = cert.UnmarshalNebulaCertificateFromPEM(rb)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
@@ -348,11 +347,11 @@ func Test_signCert(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 
-	caKeyF, err = ioutil.TempFile("", "sign-cert.key")
+	caKeyF, err = os.CreateTemp("", "sign-cert.key")
 	assert.Nil(t, err)
 	defer os.Remove(caKeyF.Name())
 
-	caCrtF, err = ioutil.TempFile("", "sign-cert.crt")
+	caCrtF, err = os.CreateTemp("", "sign-cert.crt")
 	assert.Nil(t, err)
 	defer os.Remove(caCrtF.Name())
 

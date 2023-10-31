@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
-	"io/ioutil"
 	"os"
 	"testing"
 	"time"
@@ -56,7 +55,7 @@ func Test_verify(t *testing.T) {
 	// invalid ca at path
 	ob.Reset()
 	eb.Reset()
-	caFile, err := ioutil.TempFile("", "verify-ca")
+	caFile, err := os.CreateTemp("", "verify-ca")
 	assert.Nil(t, err)
 	defer os.Remove(caFile.Name())
 
@@ -92,7 +91,7 @@ func Test_verify(t *testing.T) {
 	// invalid crt at path
 	ob.Reset()
 	eb.Reset()
-	certFile, err := ioutil.TempFile("", "verify-cert")
+	certFile, err := os.CreateTemp("", "verify-cert")
 	assert.Nil(t, err)
 	defer os.Remove(certFile.Name())
 

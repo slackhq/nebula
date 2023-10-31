@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"encoding/pem"
 	"errors"
-	"io/ioutil"
 	"os"
 	"strings"
 	"testing"
@@ -107,7 +106,7 @@ func Test_ca(t *testing.T) {
 	assert.Equal(t, "", eb.String())
 
 	// create temp key file
-	keyF, err := ioutil.TempFile("", "test.key")
+	keyF, err := os.CreateTemp("", "test.key")
 	assert.Nil(t, err)
 	os.Remove(keyF.Name())
 
@@ -120,7 +119,7 @@ func Test_ca(t *testing.T) {
 	assert.Equal(t, "", eb.String())
 
 	// create temp cert file
-	crtF, err := ioutil.TempFile("", "test.crt")
+	crtF, err := os.CreateTemp("", "test.crt")
 	assert.Nil(t, err)
 	os.Remove(crtF.Name())
 	os.Remove(keyF.Name())
@@ -134,13 +133,13 @@ func Test_ca(t *testing.T) {
 	assert.Equal(t, "", eb.String())
 
 	// read cert and key files
-	rb, _ := ioutil.ReadFile(keyF.Name())
+	rb, _ := os.ReadFile(keyF.Name())
 	lKey, b, err := cert.UnmarshalEd25519PrivateKey(rb)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
 	assert.Len(t, lKey, 64)
 
-	rb, _ = ioutil.ReadFile(crtF.Name())
+	rb, _ = os.ReadFile(crtF.Name())
 	lCrt, b, err := cert.UnmarshalNebulaCertificateFromPEM(rb)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
@@ -166,7 +165,7 @@ func Test_ca(t *testing.T) {
 	assert.Equal(t, "", eb.String())
 
 	// read encrypted key file and verify default params
-	rb, _ = ioutil.ReadFile(keyF.Name())
+	rb, _ = os.ReadFile(keyF.Name())
 	k, _ := pem.Decode(rb)
 	ned, err := cert.UnmarshalNebulaEncryptedData(k.Bytes)
 	assert.Nil(t, err)
