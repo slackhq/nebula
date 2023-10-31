@@ -1,6 +1,7 @@
 package cert
 
 import (
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -9,8 +10,6 @@ import (
 	"net"
 	"testing"
 	"time"
-
-	"crypto/ecdh"
 
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
