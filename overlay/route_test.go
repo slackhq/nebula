@@ -265,18 +265,16 @@ func Test_makeRouteTree(t *testing.T) {
 	assert.NoError(t, err)
 
 	ip := iputil.Ip2VpnIp(net.ParseIP("1.0.0.2"))
-	r := routeTree.MostSpecificContains(ip)
-	assert.NotNil(t, r)
-	assert.IsType(t, iputil.VpnIp(0), r)
-	assert.EqualValues(t, iputil.Ip2VpnIp(net.ParseIP("192.168.0.1")), r)
+	ok, r := routeTree.MostSpecificContains(ip)
+	assert.True(t, ok)
+	assert.Equal(t, iputil.Ip2VpnIp(net.ParseIP("192.168.0.1")), r)
 
 	ip = iputil.Ip2VpnIp(net.ParseIP("1.0.0.1"))
-	r = routeTree.MostSpecificContains(ip)
-	assert.NotNil(t, r)
-	assert.IsType(t, iputil.VpnIp(0), r)
-	assert.EqualValues(t, iputil.Ip2VpnIp(net.ParseIP("192.168.0.2")), r)
+	ok, r = routeTree.MostSpecificContains(ip)
+	assert.True(t, ok)
+	assert.Equal(t, iputil.Ip2VpnIp(net.ParseIP("192.168.0.2")), r)
 
 	ip = iputil.Ip2VpnIp(net.ParseIP("1.1.0.1"))
-	r = routeTree.MostSpecificContains(ip)
-	assert.Nil(t, r)
+	ok, r = routeTree.MostSpecificContains(ip)
+	assert.False(t, ok)
 }

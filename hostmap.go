@@ -205,7 +205,7 @@ type HostInfo struct {
 	localIndexId    uint32
 	vpnIp           iputil.VpnIp
 	recvError       atomic.Uint32
-	remoteCidr      *cidr.Tree4
+	remoteCidr      *cidr.Tree4[struct{}]
 	relayState      RelayState
 
 	// HandshakePacket records the packets used to create this hostinfo
@@ -633,7 +633,7 @@ func (i *HostInfo) CreateRemoteCIDR(c *cert.NebulaCertificate) {
 		return
 	}
 
-	remoteCidr := cidr.NewTree4()
+	remoteCidr := cidr.NewTree4[struct{}]()
 	for _, ip := range c.Details.Ips {
 		remoteCidr.AddCIDR(&net.IPNet{IP: ip.IP, Mask: net.IPMask{255, 255, 255, 255}}, struct{}{})
 	}

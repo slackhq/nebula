@@ -24,7 +24,7 @@ type winTun struct {
 	prefix    netip.Prefix
 	MTU       int
 	Routes    []Route
-	routeTree *cidr.Tree4
+	routeTree *cidr.Tree4[iputil.VpnIp]
 
 	tun *wintun.NativeTun
 }
@@ -146,12 +146,8 @@ func (t *winTun) Activate() error {
 }
 
 func (t *winTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	r := t.routeTree.MostSpecificContains(ip)
-	if r != nil {
-		return r.(iputil.VpnIp)
-	}
-
-	return 0
+	_, r := t.routeTree.MostSpecificContains(ip)
+	return r
 }
 
 func (t *winTun) Cidr() *net.IPNet {
