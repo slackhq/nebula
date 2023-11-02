@@ -74,7 +74,7 @@ type LightHouse struct {
 	// IP's of relays that can be used by peers to access me
 	relaysForMe atomic.Pointer[[]iputil.VpnIp]
 
-	calculatedRemotes atomic.Pointer[cidr.Tree4] // Maps VpnIp to []*calculatedRemote
+	calculatedRemotes atomic.Pointer[cidr.Tree4[[]*calculatedRemote]] // Maps VpnIp to []*calculatedRemote
 
 	metrics           *MessageMetrics
 	metricHolepunchTx metrics.Counter
@@ -166,7 +166,7 @@ func (lh *LightHouse) GetRelaysForMe() []iputil.VpnIp {
 	return *lh.relaysForMe.Load()
 }
 
-func (lh *LightHouse) getCalculatedRemotes() *cidr.Tree4 {
+func (lh *LightHouse) getCalculatedRemotes() *cidr.Tree4[[]*calculatedRemote] {
 	return lh.calculatedRemotes.Load()
 }
 
@@ -594,11 +594,10 @@ func (lh *LightHouse) addCalculatedRemotes(vpnIp iputil.VpnIp) bool {
 	if tree == nil {
 		return false
 	}
-	value := tree.MostSpecificContains(vpnIp)
-	if value == nil {
+	ok, calculatedRemotes := tree.MostSpecificContains(vpnIp)
+	if !ok {
 		return false
 	}
-	calculatedRemotes := value.([]*calculatedRemote)
 
 	var calculated []*Ip4AndPort
 	for _, cr := range calculatedRemotes {
