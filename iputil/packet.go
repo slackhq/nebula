@@ -30,10 +30,6 @@ func CreateRejectPacket(packet []byte, out []byte) []byte {
 func ipv4CreateRejectICMPPacket(packet []byte, out []byte) []byte {
 	ihl := int(packet[0]&0x0f) << 2
 
-	if ihl > 60 {
-		// invalid
-		return nil
-	}
 	if len(packet) < ihl {
 		// We need at least this many bytes for this to be a valid packet
 		return nil
@@ -46,8 +42,11 @@ func ipv4CreateRejectICMPPacket(packet []byte, out []byte) []byte {
 	}
 
 	outLen := ipv4.HeaderLen + 8 + packetLen
+	if outLen > cap(out) {
+		return nil
+	}
 
-	out = out[:(outLen)]
+	out = out[:outLen]
 
 	ipHdr := out[0:ipv4.HeaderLen]
 	ipHdr[0] = ipv4.Version<<4 | (ipv4.HeaderLen >> 2)    // version, ihl
@@ -96,16 +95,15 @@ func ipv4CreateRejectTCPPacket(packet []byte, out []byte) []byte {
 	ihl := int(packet[0]&0x0f) << 2
 	outLen := ipv4.HeaderLen + tcpLen
 
-	if ihl > 60 {
-		// invalid
-		return nil
-	}
 	if len(packet) < ihl+tcpLen {
 		// We need at least this many bytes for this to be a valid packet
 		return nil
 	}
+	if outLen > cap(out) {
+		return nil
+	}
 
-	out = out[:(outLen)]
+	out = out[:outLen]
 
 	ipHdr := out[0:ipv4.HeaderLen]
 	ipHdr[0] = ipv4.Version<<4 | (ipv4.HeaderLen >> 2)    // version, ihl

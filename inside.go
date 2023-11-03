@@ -90,6 +90,10 @@ func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
 	}
 
 	out = iputil.CreateRejectPacket(packet, out)
+	if len(out) == 0 {
+		return
+	}
+
 	_, err := f.readers[q].Write(out)
 	if err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")
@@ -101,27 +105,22 @@ func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *
 		return
 	}
 
-	// Use some out buffer space to build the packet before encryption
-	const aeadOverhead = 16
-	const maxOutLen = iputil.MaxRejectPacketSize + header.Len + aeadOverhead
-	outPacket := iputil.CreateRejectPacket(packet, out[maxOutLen:maxOutLen+iputil.MaxRejectPacketSize])
-	out = out[:maxOutLen]
-
-	if len(outPacket) == 0 {
+	out = iputil.CreateRejectPacket(packet, out)
+	if len(out) == 0 {
 		return
 	}
 
-	if len(outPacket) > iputil.MaxRejectPacketSize {
-		if f.l.GetLevel() >= logrus.DebugLevel {
+	if len(out) > iputil.MaxRejectPacketSize {
+		if f.l.GetLevel() >= logrus.InfoLevel {
 			f.l.
 				WithField("packet", packet).
-				WithField("outPacket", outPacket).
-				Debug("rejectOutside: packet too big, not sending")
+				WithField("outPacket", out).
+				Info("rejectOutside: packet too big, not sending")
 		}
 		return
 	}
 
-	f.sendNoMetrics(header.Message, 0, ci, hostinfo, nil, outPacket, nb, out, q)
+	f.sendNoMetrics(header.Message, 0, ci, hostinfo, nil, out, nb, packet, q)
 }
 
 func (f *Interface) Handshake(vpnIp iputil.VpnIp) {
