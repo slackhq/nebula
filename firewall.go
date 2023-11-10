@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"net"
 	"reflect"
 	"strconv"
@@ -278,6 +279,13 @@ func (f *Firewall) GetRuleHash() string {
 	return hex.EncodeToString(sum[:])
 }
 
+// GetRuleHashFNV returns a float64 FNV-1 hash representation the rules, suitable for use as a Prometheus value
+func (f *Firewall) GetRuleHashFNV() float64 {
+	h := fnv.New32a()
+	h.Write([]byte(f.rules))
+	return float64(h.Sum32())
+}
+
 func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw FirewallInterface) error {
 	var table string
 	if inbound {
@@ -449,6 +457,7 @@ func (f *Firewall) EmitStats() {
 	conntrack.Unlock()
 	metrics.GetOrRegisterGauge("firewall.conntrack.count", nil).Update(int64(conntrackCount))
 	metrics.GetOrRegisterGauge("firewall.rules.version", nil).Update(int64(f.rulesVersion))
+	metrics.GetOrRegisterGauge("firewall.rules.hash", nil).Update(int64(f.GetRuleHashFNV()))
 }
 
 func (f *Firewall) inConns(packet []byte, fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool, localCache firewall.ConntrackCache) bool {
