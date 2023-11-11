@@ -1,5 +1,4 @@
-//go:build !windows && (!linux || android) && !e2e_testing
-// +build !windows
+//go:build (!linux || android) && !e2e_testing
 // +build !linux android
 // +build !e2e_testing
 
