@@ -30,7 +30,7 @@ type tun struct {
 	TXQueueLen int
 
 	Routes          []Route
-	routeTree       atomic.Pointer[cidr.Tree4]
+	routeTree       atomic.Pointer[cidr.Tree4[iputil.VpnIp]]
 	routeChan       chan struct{}
 	useSystemRoutes bool
 
@@ -41,14 +41,6 @@ type ifReq struct {
 	Name  [16]byte
 	Flags uint16
 	pad   [8]byte
-}
-
-func ioctl(a1, a2, a3 uintptr) error {
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, a1, a2, a3)
-	if errno != 0 {
-		return errno
-	}
-	return nil
 }
 
 type ifreqAddr struct {
@@ -162,12 +154,8 @@ func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 }
 
 func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	r := t.routeTree.Load().MostSpecificContains(ip)
-	if r != nil {
-		return r.(iputil.VpnIp)
-	}
-
-	return 0
+	_, r := t.routeTree.Load().MostSpecificContains(ip)
+	return r
 }
 
 func (t *tun) Write(b []byte) (int, error) {
@@ -388,7 +376,7 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 		return
 	}
 
-	newTree := cidr.NewTree4()
+	newTree := cidr.NewTree4[iputil.VpnIp]()
 	if r.Type == unix.RTM_NEWROUTE {
 		for _, oldR := range t.routeTree.Load().List() {
 			newTree.AddCIDR(oldR.CIDR, oldR.Value)
@@ -400,7 +388,7 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 	} else {
 		gw := iputil.Ip2VpnIp(r.Gw)
 		for _, oldR := range t.routeTree.Load().List() {
-			if bytes.Equal(oldR.CIDR.IP, r.Dst.IP) && bytes.Equal(oldR.CIDR.Mask, r.Dst.Mask) && *oldR.Value != nil && (*oldR.Value).(iputil.VpnIp) == gw {
+			if bytes.Equal(oldR.CIDR.IP, r.Dst.IP) && bytes.Equal(oldR.CIDR.Mask, r.Dst.Mask) && oldR.Value == gw {
 				// This is the record to delete
 				t.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Removing route")
 				continue

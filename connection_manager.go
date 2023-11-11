@@ -231,7 +231,7 @@ func (n *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo)
 			index = existing.LocalIndex
 			switch r.Type {
 			case TerminalType:
-				relayFrom = newhostinfo.vpnIp
+				relayFrom = n.intf.myVpnIp
 				relayTo = existing.PeerIp
 			case ForwardingType:
 				relayFrom = existing.PeerIp
@@ -256,7 +256,7 @@ func (n *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo)
 			}
 			switch r.Type {
 			case TerminalType:
-				relayFrom = newhostinfo.vpnIp
+				relayFrom = n.intf.myVpnIp
 				relayTo = r.PeerIp
 			case ForwardingType:
 				relayFrom = r.PeerIp
@@ -405,8 +405,8 @@ func (n *connectionManager) shouldSwapPrimary(current, primary *HostInfo) bool {
 		return false
 	}
 
-	certState := n.intf.certState.Load()
-	return bytes.Equal(current.ConnectionState.certState.certificate.Signature, certState.certificate.Signature)
+	certState := n.intf.pki.GetCertState()
+	return bytes.Equal(current.ConnectionState.myCert.Signature, certState.Certificate.Signature)
 }
 
 func (n *connectionManager) swapPrimary(current, primary *HostInfo) {
@@ -427,7 +427,7 @@ func (n *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostIn
 		return false
 	}
 
-	valid, err := remoteCert.VerifyWithCache(now, n.intf.caPool)
+	valid, err := remoteCert.VerifyWithCache(now, n.intf.pki.GetCAPool())
 	if valid {
 		return false
 	}
@@ -464,8 +464,8 @@ func (n *connectionManager) sendPunch(hostinfo *HostInfo) {
 }
 
 func (n *connectionManager) tryRehandshake(hostinfo *HostInfo) {
-	certState := n.intf.certState.Load()
-	if bytes.Equal(hostinfo.ConnectionState.certState.certificate.Signature, certState.certificate.Signature) {
+	certState := n.intf.pki.GetCertState()
+	if bytes.Equal(hostinfo.ConnectionState.myCert.Signature, certState.Certificate.Signature) {
 		return
 	}
 
@@ -473,18 +473,5 @@ func (n *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 		WithField("reason", "local certificate is not current").
 		Info("Re-handshaking with remote")
 
-	//TODO: this is copied from getOrHandshake to keep the extra checks out of the hot path, figure it out
-	newHostinfo := n.intf.handshakeManager.AddVpnIp(hostinfo.vpnIp, n.intf.initHostInfo)
-	if !newHostinfo.HandshakeReady {
-		ixHandshakeStage0(n.intf, newHostinfo.vpnIp, newHostinfo)
-	}
-
-	//If this is a static host, we don't need to wait for the HostQueryReply
-	//We can trigger the handshake right now
-	if _, ok := n.intf.lightHouse.GetStaticHostList()[hostinfo.vpnIp]; ok {
-		select {
-		case n.intf.handshakeManager.trigger <- hostinfo.vpnIp:
-		default:
-		}
-	}
+	n.intf.handshakeManager.StartHandshake(hostinfo.vpnIp, nil)
 }

@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"strings"
 
@@ -41,7 +40,7 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 		return err
 	}
 
-	rawCert, err := ioutil.ReadFile(*pf.path)
+	rawCert, err := os.ReadFile(*pf.path)
 	if err != nil {
 		return fmt.Errorf("unable to read cert; %s", err)
 	}
@@ -87,7 +86,7 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 			return fmt.Errorf("error while generating qr code: %s", err)
 		}
 
-		err = ioutil.WriteFile(*pf.outQRPath, b, 0600)
+		err = os.WriteFile(*pf.outQRPath, b, 0600)
 		if err != nil {
 			return fmt.Errorf("error while writing out-qr: %s", err)
 		}

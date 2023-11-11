@@ -11,7 +11,7 @@ import (
 func TestHostMap_MakePrimary(t *testing.T) {
 	l := test.NewLogger()
 	hm := NewHostMap(
-		l, "test",
+		l,
 		&net.IPNet{
 			IP:   net.IP{10, 0, 0, 1},
 			Mask: net.IPMask{255, 255, 255, 0},
@@ -32,7 +32,7 @@ func TestHostMap_MakePrimary(t *testing.T) {
 	hm.unlockedAddHostInfo(h1, f)
 
 	// Make sure we go h1 -> h2 -> h3 -> h4
-	prim, _ := hm.QueryVpnIp(1)
+	prim := hm.QueryVpnIp(1)
 	assert.Equal(t, h1.localIndexId, prim.localIndexId)
 	assert.Equal(t, h2.localIndexId, prim.next.localIndexId)
 	assert.Nil(t, prim.prev)
@@ -47,7 +47,7 @@ func TestHostMap_MakePrimary(t *testing.T) {
 	hm.MakePrimary(h3)
 
 	// Make sure we go h3 -> h1 -> h2 -> h4
-	prim, _ = hm.QueryVpnIp(1)
+	prim = hm.QueryVpnIp(1)
 	assert.Equal(t, h3.localIndexId, prim.localIndexId)
 	assert.Equal(t, h1.localIndexId, prim.next.localIndexId)
 	assert.Nil(t, prim.prev)
@@ -62,7 +62,7 @@ func TestHostMap_MakePrimary(t *testing.T) {
 	hm.MakePrimary(h4)
 
 	// Make sure we go h4 -> h3 -> h1 -> h2
-	prim, _ = hm.QueryVpnIp(1)
+	prim = hm.QueryVpnIp(1)
 	assert.Equal(t, h4.localIndexId, prim.localIndexId)
 	assert.Equal(t, h3.localIndexId, prim.next.localIndexId)
 	assert.Nil(t, prim.prev)
@@ -77,7 +77,7 @@ func TestHostMap_MakePrimary(t *testing.T) {
 	hm.MakePrimary(h4)
 
 	// Make sure we go h4 -> h3 -> h1 -> h2
-	prim, _ = hm.QueryVpnIp(1)
+	prim = hm.QueryVpnIp(1)
 	assert.Equal(t, h4.localIndexId, prim.localIndexId)
 	assert.Equal(t, h3.localIndexId, prim.next.localIndexId)
 	assert.Nil(t, prim.prev)
@@ -92,7 +92,7 @@ func TestHostMap_MakePrimary(t *testing.T) {
 func TestHostMap_DeleteHostInfo(t *testing.T) {
 	l := test.NewLogger()
 	hm := NewHostMap(
-		l, "test",
+		l,
 		&net.IPNet{
 			IP:   net.IP{10, 0, 0, 1},
 			Mask: net.IPMask{255, 255, 255, 0},
@@ -119,11 +119,11 @@ func TestHostMap_DeleteHostInfo(t *testing.T) {
 	// h6 should be deleted
 	assert.Nil(t, h6.next)
 	assert.Nil(t, h6.prev)
-	_, err := hm.QueryIndex(h6.localIndexId)
-	assert.Error(t, err)
+	h := hm.QueryIndex(h6.localIndexId)
+	assert.Nil(t, h)
 
 	// Make sure we go h1 -> h2 -> h3 -> h4 -> h5
-	prim, _ := hm.QueryVpnIp(1)
+	prim := hm.QueryVpnIp(1)
 	assert.Equal(t, h1.localIndexId, prim.localIndexId)
 	assert.Equal(t, h2.localIndexId, prim.next.localIndexId)
 	assert.Nil(t, prim.prev)
@@ -142,7 +142,7 @@ func TestHostMap_DeleteHostInfo(t *testing.T) {
 	assert.Nil(t, h1.next)
 
 	// Make sure we go h2 -> h3 -> h4 -> h5
-	prim, _ = hm.QueryVpnIp(1)
+	prim = hm.QueryVpnIp(1)
 	assert.Equal(t, h2.localIndexId, prim.localIndexId)
 	assert.Equal(t, h3.localIndexId, prim.next.localIndexId)
 	assert.Nil(t, prim.prev)
@@ -160,7 +160,7 @@ func TestHostMap_DeleteHostInfo(t *testing.T) {
 	assert.Nil(t, h3.next)
 
 	// Make sure we go h2 -> h4 -> h5
-	prim, _ = hm.QueryVpnIp(1)
+	prim = hm.QueryVpnIp(1)
 	assert.Equal(t, h2.localIndexId, prim.localIndexId)
 	assert.Equal(t, h4.localIndexId, prim.next.localIndexId)
 	assert.Nil(t, prim.prev)
@@ -176,7 +176,7 @@ func TestHostMap_DeleteHostInfo(t *testing.T) {
 	assert.Nil(t, h5.next)
 
 	// Make sure we go h2 -> h4
-	prim, _ = hm.QueryVpnIp(1)
+	prim = hm.QueryVpnIp(1)
 	assert.Equal(t, h2.localIndexId, prim.localIndexId)
 	assert.Equal(t, h4.localIndexId, prim.next.localIndexId)
 	assert.Nil(t, prim.prev)
@@ -190,7 +190,7 @@ func TestHostMap_DeleteHostInfo(t *testing.T) {
 	assert.Nil(t, h2.next)
 
 	// Make sure we only have h4
-	prim, _ = hm.QueryVpnIp(1)
+	prim = hm.QueryVpnIp(1)
 	assert.Equal(t, h4.localIndexId, prim.localIndexId)
 	assert.Nil(t, prim.prev)
 	assert.Nil(t, prim.next)
@@ -202,6 +202,6 @@ func TestHostMap_DeleteHostInfo(t *testing.T) {
 	assert.Nil(t, h4.next)
 
 	// Make sure we have nil
-	prim, _ = hm.QueryVpnIp(1)
+	prim = hm.QueryVpnIp(1)
 	assert.Nil(t, prim)
 }

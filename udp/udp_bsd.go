@@ -1,9 +1,10 @@
-//go:build !e2e_testing
+//go:build (openbsd || freebsd) && !e2e_testing
+// +build openbsd freebsd
 // +build !e2e_testing
 
 package udp
 
-// Darwin support is primarily implemented in udp_generic, besides NewListenConfig
+// FreeBSD support is primarily implemented in udp_generic, besides NewListenConfig
 
 import (
 	"fmt"
@@ -36,22 +37,11 @@ func NewListenConfig(multi bool) net.ListenConfig {
 					return controlErr
 				}
 			}
-
 			return nil
 		},
 	}
 }
 
 func (u *GenericConn) Rebind() error {
-	rc, err := u.UDPConn.SyscallConn()
-	if err != nil {
-		return err
-	}
-
-	return rc.Control(func(fd uintptr) {
-		err := syscall.SetsockoptInt(int(fd), unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, 0)
-		if err != nil {
-			u.l.WithError(err).Error("Failed to rebind udp socket")
-		}
-	})
+	return nil
 }

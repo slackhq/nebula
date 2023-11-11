@@ -131,9 +131,9 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 		return
 	}
 	// I'm the middle man. Let the initiator know that the I've established the relay they requested.
-	peerHostInfo, err := rm.hostmap.QueryVpnIp(relay.PeerIp)
-	if err != nil {
-		rm.l.WithError(err).WithField("relayTo", relay.PeerIp).Error("Can't find a HostInfo for peer")
+	peerHostInfo := rm.hostmap.QueryVpnIp(relay.PeerIp)
+	if peerHostInfo == nil {
+		rm.l.WithField("relayTo", relay.PeerIp).Error("Can't find a HostInfo for peer")
 		return
 	}
 	peerRelay, ok := peerHostInfo.relayState.QueryRelayForByIp(target)
@@ -179,6 +179,12 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		"vpnIp":               h.vpnIp})
 
 	logMsg.Info("handleCreateRelayRequest")
+	// Is the source of the relay me? This should never happen, but did happen due to
+	// an issue migrating relays over to newly re-handshaked host info objects.
+	if from == f.myVpnIp {
+		logMsg.WithField("myIP", f.myVpnIp).Error("Discarding relay request from myself")
+		return
+	}
 	// Is the target of the relay me?
 	if target == f.myVpnIp {
 		existingRelay, ok := h.relayState.QueryRelayForByIp(from)
@@ -240,11 +246,11 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		if !rm.GetAmRelay() {
 			return
 		}
-		peer, err := rm.hostmap.QueryVpnIp(target)
-		if err != nil {
+		peer := rm.hostmap.QueryVpnIp(target)
+		if peer == nil {
 			// Try to establish a connection to this host. If we get a future relay request,
 			// we'll be ready!
-			f.getOrHandshake(target)
+			f.Handshake(target)
 			return
 		}
 		if peer.remote == nil {
@@ -253,6 +259,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		}
 		sendCreateRequest := false
 		var index uint32
+		var err error
 		targetRelay, ok := peer.relayState.QueryRelayForByIp(from)
 		if ok {
 			index = targetRelay.LocalIndex

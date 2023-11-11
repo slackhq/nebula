@@ -25,7 +25,7 @@ type tun struct {
 	cidr       *net.IPNet
 	DefaultMTU int
 	Routes     []Route
-	routeTree  *cidr.Tree4
+	routeTree  *cidr.Tree4[iputil.VpnIp]
 	l          *logrus.Logger
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
@@ -45,14 +45,6 @@ type ifReq struct {
 	Name  [16]byte
 	Flags uint16
 	pad   [8]byte
-}
-
-func ioctl(a1, a2, a3 uintptr) error {
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, a1, a2, a3)
-	if errno != 0 {
-		return errno
-	}
-	return nil
 }
 
 var sockaddrCtlSize uintptr = 32
@@ -194,10 +186,10 @@ func (t *tun) Activate() error {
 		unix.SOCK_DGRAM,
 		unix.IPPROTO_IP,
 	)
-
 	if err != nil {
 		return err
 	}
+	defer unix.Close(s)
 
 	fd := uintptr(s)
 
@@ -312,9 +304,9 @@ func (t *tun) Activate() error {
 }
 
 func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	r := t.routeTree.MostSpecificContains(ip)
-	if r != nil {
-		return r.(iputil.VpnIp)
+	ok, r := t.routeTree.MostSpecificContains(ip)
+	if ok {
+		return r
 	}
 
 	return 0

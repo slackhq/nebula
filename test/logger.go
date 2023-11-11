@@ -1,7 +1,7 @@
 package test
 
 import (
-	"io/ioutil"
+	"io"
 	"os"
 
 	"github.com/sirupsen/logrus"
@@ -12,7 +12,7 @@ func NewLogger() *logrus.Logger {
 
 	v := os.Getenv("TEST_LOGS")
 	if v == "" {
-		l.SetOutput(ioutil.Discard)
+		l.SetOutput(io.Discard)
 		return l
 	}
 

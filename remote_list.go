@@ -70,7 +70,7 @@ type hostnamesResults struct {
 	hostnames     []hostnamePort
 	network       string
 	lookupTimeout time.Duration
-	stop          chan struct{}
+	cancelFn      func()
 	l             *logrus.Logger
 	ips           atomic.Pointer[map[netip.AddrPort]struct{}]
 }
@@ -80,7 +80,6 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 		hostnames:     make([]hostnamePort, len(hostPorts)),
 		network:       network,
 		lookupTimeout: timeout,
-		stop:          make(chan (struct{})),
 		l:             l,
 	}
 
@@ -115,6 +114,8 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 
 	// Time for the DNS lookup goroutine
 	if performBackgroundLookup {
+		newCtx, cancel := context.WithCancel(ctx)
+		r.cancelFn = cancel
 		ticker := time.NewTicker(d)
 		go func() {
 			defer ticker.Stop()
@@ -154,9 +155,7 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 					onUpdate()
 				}
 				select {
-				case <-ctx.Done():
-					return
-				case <-r.stop:
+				case <-newCtx.Done():
 					return
 				case <-ticker.C:
 					continue
@@ -169,8 +168,8 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 }
 
 func (hr *hostnamesResults) Cancel() {
-	if hr != nil {
-		hr.stop <- struct{}{}
+	if hr != nil && hr.cancelFn != nil {
+		hr.cancelFn()
 	}
 }
 
