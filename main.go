@@ -71,6 +71,9 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	tunCidr := certificate.Details.Ips[0]
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
+	if err != nil {
+		return nil, util.ContextualizeIfNeeded("Error while creating SSH server", err)
+	}
 	wireSSHReload(l, ssh, c)
 	var sshStart func()
 	if c.GetBool("sshd.enabled", false) {

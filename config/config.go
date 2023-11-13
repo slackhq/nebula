@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"math"
 	"os"
 	"os/signal"
@@ -358,7 +357,7 @@ func (c *C) parse() error {
 	var m map[interface{}]interface{}
 
 	for _, path := range c.files {
-		b, err := ioutil.ReadFile(path)
+		b, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}

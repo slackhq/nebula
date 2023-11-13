@@ -210,6 +210,7 @@ smoke-relay-docker: bin-docker
 	cd .github/workflows/smoke/ && ./smoke-relay.sh
 
 smoke-docker-race: BUILD_ARGS = -race
+smoke-docker-race: CGO_ENABLED = 1
 smoke-docker-race: smoke-docker
 
 .FORCE:

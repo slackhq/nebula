@@ -21,8 +21,8 @@ type Route struct {
 	Install bool
 }
 
-func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*cidr.Tree4, error) {
-	routeTree := cidr.NewTree4()
+func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*cidr.Tree4[iputil.VpnIp], error) {
+	routeTree := cidr.NewTree4[iputil.VpnIp]()
 	for _, r := range routes {
 		if !allowMTU && r.MTU > 0 {
 			l.WithField("route", r).Warnf("route MTU is not supported in %s", runtime.GOOS)

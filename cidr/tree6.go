@@ -8,20 +8,20 @@ import (
 
 const startbit6 = uint64(1 << 63)
 
-type Tree6 struct {
-	root4 *Node
-	root6 *Node
+type Tree6[T any] struct {
+	root4 *Node[T]
+	root6 *Node[T]
 }
 
-func NewTree6() *Tree6 {
-	tree := new(Tree6)
-	tree.root4 = &Node{}
-	tree.root6 = &Node{}
+func NewTree6[T any]() *Tree6[T] {
+	tree := new(Tree6[T])
+	tree.root4 = &Node[T]{}
+	tree.root6 = &Node[T]{}
 	return tree
 }
 
-func (tree *Tree6) AddCIDR(cidr *net.IPNet, val interface{}) {
-	var node, next *Node
+func (tree *Tree6[T]) AddCIDR(cidr *net.IPNet, val T) {
+	var node, next *Node[T]
 
 	cidrIP, ipv4 := isIPV4(cidr.IP)
 	if ipv4 {
@@ -56,7 +56,7 @@ func (tree *Tree6) AddCIDR(cidr *net.IPNet, val interface{}) {
 
 		// Build up the rest of the tree we don't already have
 		for bit&mask != 0 {
-			next = &Node{}
+			next = &Node[T]{}
 			next.parent = node
 
 			if ip&bit != 0 {
@@ -72,11 +72,12 @@ func (tree *Tree6) AddCIDR(cidr *net.IPNet, val interface{}) {
 
 	// Final node marks our cidr, set the value
 	node.value = val
+	node.hasValue = true
 }
 
 // Finds the most specific match
-func (tree *Tree6) MostSpecificContains(ip net.IP) (value interface{}) {
-	var node *Node
+func (tree *Tree6[T]) MostSpecificContains(ip net.IP) (ok bool, value T) {
+	var node *Node[T]
 
 	wholeIP, ipv4 := isIPV4(ip)
 	if ipv4 {
@@ -90,8 +91,9 @@ func (tree *Tree6) MostSpecificContains(ip net.IP) (value interface{}) {
 		bit := startbit
 
 		for node != nil {
-			if node.value != nil {
+			if node.hasValue {
 				value = node.value
+				ok = true
 			}
 
 			if bit == 0 {
@@ -108,16 +110,17 @@ func (tree *Tree6) MostSpecificContains(ip net.IP) (value interface{}) {
 		}
 	}
 
-	return value
+	return ok, value
 }
 
-func (tree *Tree6) MostSpecificContainsIpV4(ip iputil.VpnIp) (value interface{}) {
+func (tree *Tree6[T]) MostSpecificContainsIpV4(ip iputil.VpnIp) (ok bool, value T) {
 	bit := startbit
 	node := tree.root4
 
 	for node != nil {
-		if node.value != nil {
+		if node.hasValue {
 			value = node.value
+			ok = true
 		}
 
 		if ip&bit != 0 {
@@ -129,10 +132,10 @@ func (tree *Tree6) MostSpecificContainsIpV4(ip iputil.VpnIp) (value interface{})
 		bit >>= 1
 	}
 
-	return value
+	return ok, value
 }
 
-func (tree *Tree6) MostSpecificContainsIpV6(hi, lo uint64) (value interface{}) {
+func (tree *Tree6[T]) MostSpecificContainsIpV6(hi, lo uint64) (ok bool, value T) {
 	ip := hi
 	node := tree.root6
 
@@ -140,8 +143,9 @@ func (tree *Tree6) MostSpecificContainsIpV6(hi, lo uint64) (value interface{}) {
 		bit := startbit6
 
 		for node != nil {
-			if node.value != nil {
+			if node.hasValue {
 				value = node.value
+				ok = true
 			}
 
 			if bit == 0 {
@@ -160,7 +164,7 @@ func (tree *Tree6) MostSpecificContainsIpV6(hi, lo uint64) (value interface{}) {
 		ip = lo
 	}
 
-	return value
+	return ok, value
 }
 
 func isIPV4(ip net.IP) (net.IP, bool) {
