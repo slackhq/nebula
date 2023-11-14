@@ -83,6 +83,10 @@ func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
 	}
 
 	out = iputil.CreateRejectPacket(packet, out)
+	if len(out) == 0 {
+		return
+	}
+
 	_, err := f.readers[q].Write(out)
 	if err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")
@@ -94,12 +98,22 @@ func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *
 		return
 	}
 
-	// Use some out buffer space to build the packet before encryption
-	// Need 40 bytes for the reject packet (20 byte ipv4 header, 20 byte tcp rst packet)
-	// Leave 100 bytes for the encrypted packet (60 byte Nebula header, 40 byte reject packet)
-	out = out[:140]
-	outPacket := iputil.CreateRejectPacket(packet, out[100:])
-	f.sendNoMetrics(header.Message, 0, ci, hostinfo, nil, outPacket, nb, out, q)
+	out = iputil.CreateRejectPacket(packet, out)
+	if len(out) == 0 {
+		return
+	}
+
+	if len(out) > iputil.MaxRejectPacketSize {
+		if f.l.GetLevel() >= logrus.InfoLevel {
+			f.l.
+				WithField("packet", packet).
+				WithField("outPacket", out).
+				Info("rejectOutside: packet too big, not sending")
+		}
+		return
+	}
+
+	f.sendNoMetrics(header.Message, 0, ci, hostinfo, nil, out, nb, packet, q)
 }
 
 func (f *Interface) Handshake(vpnIp iputil.VpnIp) {
