@@ -279,16 +279,16 @@ func (f *Firewall) GetRuleHash() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// GetRuleHashFNV returns a int64 FNV-1 hash representation the rules, for use as a metric value
-func (f *Firewall) GetRuleHashFNV() int64 {
-	h := fnv.New64a()
+// GetRuleHashFNV returns a uint32 FNV-1 hash representation the rules, for use as a metric value
+func (f *Firewall) GetRuleHashFNV() uint32 {
+	h := fnv.New32a()
 	h.Write([]byte(f.rules))
-	return int64(h.Sum64())
+	return h.Sum32()
 }
 
 // GetRuleHashes returns both the sha256 and FNV-1 hashes, suitable for logging
 func (f *Firewall) GetRuleHashes() string {
-	return "SHA:" + f.GetRuleHash() + ",FNV:" + strconv.FormatInt(f.GetRuleHashFNV(), 10)
+	return "SHA:" + f.GetRuleHash() + ",FNV:" + strconv.FormatUint(uint64(f.GetRuleHashFNV()), 10)
 }
 
 func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw FirewallInterface) error {
