@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   option `timers.requery_wait_duration` defaults to `60s`. (#940)
 
 - The internal structures for hostmaps were refactored to reduce memory usage
-  the potential for subtle bugs. (#843, #938, #953, #954, #955)
+  and the potential for subtle bugs. (#843, #938, #953, #954, #955)
 
 - Various other refactors and fixes. (#935, #952, #972, #961, #996, #1002,
   #987, #1004)
