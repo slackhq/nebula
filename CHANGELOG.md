@@ -41,9 +41,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The internal structures for hostmaps were refactored to reduce memory usage
   and the potential for subtle bugs. (#843, #938, #953, #954, #955)
 
-- Various other refactors and fixes. (#935, #952, #972, #961, #996, #1002,
-  #987, #1004)
-
 - Lots of dependency updates.
 
 ### Fixed
@@ -53,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix issues with firewall reject packets that could cause panics. (#957)
 
 - Fix relay migration. (#964)
+
+- Various other refactors and fixes. (#935, #952, #972, #961, #996, #1002,
+  #987, #1004)
 
 ## [1.7.2] - 2023-06-01
 
