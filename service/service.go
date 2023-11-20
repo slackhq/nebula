@@ -108,7 +108,11 @@ func New(config *config.C) (*Service, error) {
 
 	reader, writer := device.Pipe()
 
-	context.AfterFunc(ctx, func() { reader.Close(); writer.Close() })
+	go func() {
+		<-ctx.Done()
+		reader.Close()
+		writer.Close()
+	}()
 
 	// create Goroutines to forward packets between Nebula and Gvisor
 	eg.Go(func() error {
