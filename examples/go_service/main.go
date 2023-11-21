@@ -70,7 +70,8 @@ pki:
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			return err
+			log.Printf("accept error: %s", err)
+			break
 		}
 		defer conn.Close()
 
@@ -86,7 +87,8 @@ pki:
 		}
 
 		if err := scanner.Err(); err != nil {
-			return err
+			log.Printf("scanner error: %s", err)
+			break
 		}
 	}
 
