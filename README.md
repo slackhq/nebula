@@ -27,7 +27,7 @@ Check the [releases](https://github.com/slackhq/nebula/releases/latest) page for
 
 #### Distribution Packages
 
-- [Arch Linux](https://archlinux.org/packages/community/x86_64/nebula/)
+- [Arch Linux](https://archlinux.org/packages/extra/x86_64/nebula/)
     ```
     $ sudo pacman -S nebula
     ```
