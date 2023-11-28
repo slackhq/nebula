@@ -332,8 +332,8 @@ func (f *Interface) reloadFirewall(c *config.C) {
 	// If rulesVersion is back to zero, we have wrapped all the way around. Be
 	// safe and just reset conntrack in this case.
 	if fw.rulesVersion == 0 {
-		f.l.WithField("firewallHash", fw.GetRuleHash()).
-			WithField("oldFirewallHash", oldFw.GetRuleHash()).
+		f.l.WithField("firewallHashes", fw.GetRuleHashes()).
+			WithField("oldFirewallHashes", oldFw.GetRuleHashes()).
 			WithField("rulesVersion", fw.rulesVersion).
 			Warn("firewall rulesVersion has overflowed, resetting conntrack")
 	} else {
@@ -343,8 +343,8 @@ func (f *Interface) reloadFirewall(c *config.C) {
 	f.firewall = fw
 
 	oldFw.Destroy()
-	f.l.WithField("firewallHash", fw.GetRuleHash()).
-		WithField("oldFirewallHash", oldFw.GetRuleHash()).
+	f.l.WithField("firewallHashes", fw.GetRuleHashes()).
+		WithField("oldFirewallHashes", oldFw.GetRuleHashes()).
 		WithField("rulesVersion", fw.rulesVersion).
 		Info("New firewall has been installed")
 }

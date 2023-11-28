@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"net"
 	"reflect"
 	"strconv"
@@ -278,6 +279,18 @@ func (f *Firewall) GetRuleHash() string {
 	return hex.EncodeToString(sum[:])
 }
 
+// GetRuleHashFNV returns a uint32 FNV-1 hash representation the rules, for use as a metric value
+func (f *Firewall) GetRuleHashFNV() uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(f.rules))
+	return h.Sum32()
+}
+
+// GetRuleHashes returns both the sha256 and FNV-1 hashes, suitable for logging
+func (f *Firewall) GetRuleHashes() string {
+	return "SHA:" + f.GetRuleHash() + ",FNV:" + strconv.FormatUint(uint64(f.GetRuleHashFNV()), 10)
+}
+
 func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw FirewallInterface) error {
 	var table string
 	if inbound {
@@ -449,6 +462,7 @@ func (f *Firewall) EmitStats() {
 	conntrack.Unlock()
 	metrics.GetOrRegisterGauge("firewall.conntrack.count", nil).Update(int64(conntrackCount))
 	metrics.GetOrRegisterGauge("firewall.rules.version", nil).Update(int64(f.rulesVersion))
+	metrics.GetOrRegisterGauge("firewall.rules.hash", nil).Update(int64(f.GetRuleHashFNV()))
 }
 
 func (f *Firewall) inConns(packet []byte, fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool, localCache firewall.ConntrackCache) bool {
