@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.8.0] - 2023-11
+## [1.8.0] - 2023-12-06
 
 ### Deprecated
 
@@ -52,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix relay migration. (#964)
 
 - Various other refactors and fixes. (#935, #952, #972, #961, #996, #1002,
-  #987, #1004)
+  #987, #1004, #1030, #1032, ...)
 
 ## [1.7.2] - 2023-06-01
 
