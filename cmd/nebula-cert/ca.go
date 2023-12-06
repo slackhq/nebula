@@ -212,22 +212,22 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		return fmt.Errorf("error while signing: %s", err)
 	}
 
+	var b []byte
 	if *cf.encryption {
-		b, err := cert.EncryptAndMarshalSigningPrivateKey(curve, rawPriv, passphrase, kdfParams)
+		b, err = cert.EncryptAndMarshalSigningPrivateKey(curve, rawPriv, passphrase, kdfParams)
 		if err != nil {
 			return fmt.Errorf("error while encrypting out-key: %s", err)
 		}
-
-		err = os.WriteFile(*cf.outKeyPath, b, 0600)
 	} else {
-		err = os.WriteFile(*cf.outKeyPath, cert.MarshalSigningPrivateKey(curve, rawPriv), 0600)
+		b = cert.MarshalSigningPrivateKey(curve, rawPriv)
 	}
 
+	err = os.WriteFile(*cf.outKeyPath, b, 0600)
 	if err != nil {
 		return fmt.Errorf("error while writing out-key: %s", err)
 	}
 
-	b, err := nc.MarshalToPEM()
+	b, err = nc.MarshalToPEM()
 	if err != nil {
 		return fmt.Errorf("error while marshalling certificate: %s", err)
 	}
