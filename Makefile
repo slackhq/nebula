@@ -169,6 +169,12 @@ test-cov-html:
 	go test -coverprofile=coverage.out
 	go tool cover -html=coverage.out
 
+build-test-mobile:
+	GOARCH=amd64 GOOS=ios go build $(shell go list ./... | grep -v '/cmd/\|/examples/')
+	GOARCH=arm64 GOOS=ios go build $(shell go list ./... | grep -v '/cmd/\|/examples/')
+	GOARCH=amd64 GOOS=android go build $(shell go list ./... | grep -v '/cmd/\|/examples/')
+	GOARCH=arm64 GOOS=android go build $(shell go list ./... | grep -v '/cmd/\|/examples/')
+
 bench:
 	go test -bench=.
 
@@ -214,5 +220,5 @@ smoke-docker-race: CGO_ENABLED = 1
 smoke-docker-race: smoke-docker
 
 .FORCE:
-.PHONY: e2e e2ev e2evv e2evvv e2evvvv test test-cov-html bench bench-cpu bench-cpu-long bin proto release service smoke-docker smoke-docker-race
+.PHONY: e2e e2ev e2evv e2evvv e2evvvv test test-cov-html bench bench-cpu bench-cpu-long bin proto release service build-test-mobile smoke-docker smoke-docker-race
 .DEFAULT_GOAL := bin

@@ -37,6 +37,9 @@ jobs:
     - name: End 2 end
       run: make e2evv
 
+    - name: Build test mobile
+      run: make build-test-mobile
+
     - uses: actions/upload-artifact@v3
       with:
         name: e2e packet flow
