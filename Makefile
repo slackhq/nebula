@@ -162,8 +162,7 @@ build/nebula-%.zip: build/%/nebula.exe build/%/nebula-cert.exe
 	cd build/$* && zip ../nebula-$*.zip nebula.exe nebula-cert.exe
 
 docker/%: build/%/nebula build/%/nebula-cert
-	cp -r build release
-	docker buildx build . $(DOCKER_BUILD_ARGS) -f docker/Dockerfile --platform "$(subst -,/,$*)" --tag "nebula:latest" --tag "nebula:$(BUILD_NUMBER)"
+	docker buildx build . $(DOCKER_BUILD_ARGS) -f docker/Dockerfile --platform "$(subst -,/,$*)" --build-arg SOURCEDIR="build/$*" --tag "nebula:latest" --tag "nebula:$(BUILD_NUMBER)"
 
 vet:
 	go vet $(VET_FLAGS) -v ./...
