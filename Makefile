@@ -55,6 +55,9 @@ ALL_OPENBSD = openbsd-amd64 \
 ALL_NETBSD = netbsd-amd64 \
  	netbsd-arm64
 
+ALL_DOCKER = linux-amd64 \
+	linux-arm64
+
 ALL = $(ALL_LINUX) \
 	$(ALL_FREEBSD) \
 	$(ALL_OPENBSD) \
@@ -83,6 +86,8 @@ e2e-bench: TEST_FLAGS = -bench=. -benchmem -run=^$
 e2e-bench: e2e
 
 all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
+
+all-docker: $(ALL_DOCKER:%=docker/%)
 
 release: $(ALL:%=build/nebula-%.tar.gz)
 
@@ -155,6 +160,10 @@ build/nebula-%.tar.gz: build/%/nebula build/%/nebula-cert
 
 build/nebula-%.zip: build/%/nebula.exe build/%/nebula-cert.exe
 	cd build/$* && zip ../nebula-$*.zip nebula.exe nebula-cert.exe
+
+docker/%: build/%/dnclient
+	cp -r build release
+	docker buildx build . -f docker/Dockerfile --platform "$(subst -,/,$*)" --tag "nebula:latest" --tag "nebula:$(BUILD_NUMBER)"
 
 vet:
 	go vet $(VET_FLAGS) -v ./...
