@@ -161,9 +161,9 @@ build/nebula-%.tar.gz: build/%/nebula build/%/nebula-cert
 build/nebula-%.zip: build/%/nebula.exe build/%/nebula-cert.exe
 	cd build/$* && zip ../nebula-$*.zip nebula.exe nebula-cert.exe
 
-docker/%: build/%/dnclient
+docker/%: build/%/nebula build/%/nebula-cert
 	cp -r build release
-	docker buildx build . -f docker/Dockerfile --platform "$(subst -,/,$*)" --tag "nebula:latest" --tag "nebula:$(BUILD_NUMBER)"
+	docker buildx build . $(DOCKER_BUILD_ARGS) -f docker/Dockerfile --platform "$(subst -,/,$*)" --tag "nebula:latest" --tag "nebula:$(BUILD_NUMBER)"
 
 vet:
 	go vet $(VET_FLAGS) -v ./...

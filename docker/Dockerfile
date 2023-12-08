@@ -4,7 +4,10 @@ ARG TARGETPLATFORM
 RUN echo "Building image for $TARGETPLATFORM"
 
 COPY release/$TARGETPLATFORM/nebula /usr/local/bin/nebula
-RUN chmod +x /usr/local/bin/nebula
+COPY release/$TARGETPLATFORM/nebula-cert /usr/local/bin/nebula-cert
+
+RUN chmod +x /usr/local/bin/nebula && \
+    chmod +x /usr/local/bin/nebula-cert
 
 COPY docker/main.sh /main.sh
 RUN chmod +x /main.sh
