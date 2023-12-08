@@ -15,7 +15,7 @@ docker run \
     --cap-add NET_ADMIN \
     --volume ./config:/config \
     --rm \
-    NebulaOSS/nebula
+    nebulaoss/nebula
 ```
 
 A few notes:
