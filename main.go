@@ -173,52 +173,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	}
 
-	// Set up my internal host map
-	var preferredRanges []*net.IPNet
-	rawPreferredRanges := c.GetStringSlice("preferred_ranges", []string{})
-	// First, check if 'preferred_ranges' is set and fallback to 'local_range'
-	if len(rawPreferredRanges) > 0 {
-		for _, rawPreferredRange := range rawPreferredRanges {
-			_, preferredRange, err := net.ParseCIDR(rawPreferredRange)
-			if err != nil {
-				return nil, util.ContextualizeIfNeeded("Failed to parse preferred ranges", err)
-			}
-			preferredRanges = append(preferredRanges, preferredRange)
-		}
-	}
-
-	// local_range was superseded by preferred_ranges. If it is still present,
-	// merge the local_range setting into preferred_ranges. We will probably
-	// deprecate local_range and remove in the future.
-	rawLocalRange := c.GetString("local_range", "")
-	if rawLocalRange != "" {
-		_, localRange, err := net.ParseCIDR(rawLocalRange)
-		if err != nil {
-			return nil, util.ContextualizeIfNeeded("Failed to parse local_range", err)
-		}
-
-		// Check if the entry for local_range was already specified in
-		// preferred_ranges. Don't put it into the slice twice if so.
-		var found bool
-		for _, r := range preferredRanges {
-			if r.String() == localRange.String() {
-				found = true
-				break
-			}
-		}
-		if !found {
-			preferredRanges = append(preferredRanges, localRange)
-		}
-	}
-
-	hostMap := NewHostMap(l, tunCidr, preferredRanges)
-	hostMap.metricsEnabled = c.GetBool("stats.message_metrics", false)
-
-	l.
-		WithField("network", hostMap.vpnCIDR.String()).
-		WithField("preferredRanges", hostMap.preferredRanges).
-		Info("Main HostMap created")
-
+	hostMap := NewHostMapFromConfig(l, tunCidr, c)
 	punchy := NewPunchyFromConfig(l, c)
 	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, tunCidr, udpConns[0], punchy)
 	if err != nil {
