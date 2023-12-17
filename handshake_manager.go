@@ -367,7 +367,7 @@ func (hm *HandshakeManager) GetOrHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 		return h, true
 	}
 
-	defer hm.mainHostMap.RUnlock()
+	hm.mainHostMap.RUnlock()
 	return hm.StartHandshake(vpnIp, cacheCb), false
 }
 
