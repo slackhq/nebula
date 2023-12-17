@@ -25,7 +25,7 @@ type tun struct {
 	cidr       *net.IPNet
 	DefaultMTU int
 	Routes     []Route
-	routeTree  *cidr.Tree4
+	routeTree  *cidr.Tree4[iputil.VpnIp]
 	l          *logrus.Logger
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
@@ -304,9 +304,9 @@ func (t *tun) Activate() error {
 }
 
 func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	r := t.routeTree.MostSpecificContains(ip)
-	if r != nil {
-		return r.(iputil.VpnIp)
+	ok, r := t.routeTree.MostSpecificContains(ip)
+	if ok {
+		return r
 	}
 
 	return 0

@@ -77,6 +77,9 @@ func aes256Decrypt(passphrase []byte, kdfParams *Argon2Parameters, data []byte) 
 	}
 
 	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
 
 	nonce, ciphertext, err := splitNonceCiphertext(data, gcm.NonceSize())
 	if err != nil {

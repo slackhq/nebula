@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/test"
@@ -14,35 +15,32 @@ import (
 
 func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	l := test.NewLogger()
-	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
 	ip := iputil.Ip2VpnIp(net.ParseIP("172.1.1.2"))
 	preferredRanges := []*net.IPNet{localrange}
-	mw := &mockEncWriter{}
 	mainHM := NewHostMap(l, vpncidr, preferredRanges)
 	lh := newTestLighthouse()
 
-	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, lh, &udp.NoopConn{}, defaultHandshakeConfig)
-
-	now := time.Now()
-	blah.NextOutboundHandshakeTimerTick(now, mw)
-
-	var initCalled bool
-	initFunc := func(*HostInfo) {
-		initCalled = true
+	cs := &CertState{
+		RawCertificate:      []byte{},
+		PrivateKey:          []byte{},
+		Certificate:         &cert.NebulaCertificate{},
+		RawCertificateNoKey: []byte{},
 	}
 
-	i := blah.AddVpnIp(ip, initFunc)
-	assert.True(t, initCalled)
+	blah := NewHandshakeManager(l, mainHM, lh, &udp.NoopConn{}, defaultHandshakeConfig)
+	blah.f = &Interface{handshakeManager: blah, pki: &PKI{}, l: l}
+	blah.f.pki.cs.Store(cs)
 
-	initCalled = false
-	i2 := blah.AddVpnIp(ip, initFunc)
-	assert.False(t, initCalled)
+	now := time.Now()
+	blah.NextOutboundHandshakeTimerTick(now)
+
+	i := blah.StartHandshake(ip, nil)
+	i2 := blah.StartHandshake(ip, nil)
 	assert.Same(t, i, i2)
 
 	i.remotes = NewRemoteList(nil)
-	i.HandshakeReady = true
 
 	// Adding something to pending should not affect the main hostmap
 	assert.Len(t, mainHM.Hosts, 0)
@@ -53,14 +51,14 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	// Jump ahead `HandshakeRetries` ticks, offset by one to get the sleep logic right
 	for i := 1; i <= DefaultHandshakeRetries+1; i++ {
 		now = now.Add(time.Duration(i) * DefaultHandshakeTryInterval)
-		blah.NextOutboundHandshakeTimerTick(now, mw)
+		blah.NextOutboundHandshakeTimerTick(now)
 	}
 
 	// Confirm they are still in the pending index list
 	assert.Contains(t, blah.vpnIps, ip)
 
 	// Tick 1 more time, a minute will certainly flush it out
-	blah.NextOutboundHandshakeTimerTick(now.Add(time.Minute), mw)
+	blah.NextOutboundHandshakeTimerTick(now.Add(time.Minute))
 
 	// Confirm they have been removed
 	assert.NotContains(t, blah.vpnIps, ip)

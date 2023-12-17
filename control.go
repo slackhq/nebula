@@ -11,6 +11,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -29,6 +30,7 @@ type controlHostLister interface {
 type Control struct {
 	f               *Interface
 	l               *logrus.Logger
+	ctx             context.Context
 	cancel          context.CancelFunc
 	sshStart        func()
 	statsStart      func()
@@ -41,7 +43,6 @@ type ControlHostInfo struct {
 	LocalIndex             uint32                  `json:"localIndex"`
 	RemoteIndex            uint32                  `json:"remoteIndex"`
 	RemoteAddrs            []*udp.Addr             `json:"remoteAddrs"`
-	CachedPackets          int                     `json:"cachedPackets"`
 	Cert                   *cert.NebulaCertificate `json:"cert"`
 	MessageCounter         uint64                  `json:"messageCounter"`
 	CurrentRemote          *udp.Addr               `json:"currentRemote"`
@@ -70,6 +71,10 @@ func (c *Control) Start() {
 
 	// Start reading packets.
 	c.f.run()
+}
+
+func (c *Control) Context() context.Context {
+	return c.ctx
 }
 
 // Stop signals nebula to shutdown and close all tunnels, returns after the shutdown is complete
@@ -227,6 +232,10 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	return
 }
 
+func (c *Control) Device() overlay.Device {
+	return c.f.inside
+}
+
 func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 
 	chi := ControlHostInfo{
@@ -234,7 +243,6 @@ func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 		LocalIndex:             h.localIndexId,
 		RemoteIndex:            h.remoteIndexId,
 		RemoteAddrs:            h.remotes.CopyAddrs(preferredRanges),
-		CachedPackets:          len(h.packetStore),
 		CurrentRelaysToMe:      h.relayState.CopyRelayIps(),
 		CurrentRelaysThroughMe: h.relayState.CopyRelayForIps(),
 	}

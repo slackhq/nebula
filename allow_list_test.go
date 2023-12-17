@@ -100,7 +100,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 func TestAllowList_Allow(t *testing.T) {
 	assert.Equal(t, true, ((*AllowList)(nil)).Allow(net.ParseIP("1.1.1.1")))
 
-	tree := cidr.NewTree6()
+	tree := cidr.NewTree6[bool]()
 	tree.AddCIDR(cidr.Parse("0.0.0.0/0"), true)
 	tree.AddCIDR(cidr.Parse("10.0.0.0/8"), false)
 	tree.AddCIDR(cidr.Parse("10.42.42.42/32"), true)

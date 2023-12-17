@@ -58,7 +58,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 		firewall:         &Firewall{},
 		lightHouse:       lh,
 		pki:              &PKI{},
-		handshakeManager: NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
+		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
 		l:                l,
 	}
 	ifce.pki.cs.Store(cs)
@@ -79,8 +79,8 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 		remoteIndexId: 9901,
 	}
 	hostinfo.ConnectionState = &ConnectionState{
-		certState: cs,
-		H:         &noise.HandshakeState{},
+		myCert: &cert.NebulaCertificate{},
+		H:      &noise.HandshakeState{},
 	}
 	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
 
@@ -138,7 +138,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 		firewall:         &Firewall{},
 		lightHouse:       lh,
 		pki:              &PKI{},
-		handshakeManager: NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
+		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
 		l:                l,
 	}
 	ifce.pki.cs.Store(cs)
@@ -159,8 +159,8 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 		remoteIndexId: 9901,
 	}
 	hostinfo.ConnectionState = &ConnectionState{
-		certState: cs,
-		H:         &noise.HandshakeState{},
+		myCert: &cert.NebulaCertificate{},
+		H:      &noise.HandshakeState{},
 	}
 	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
 
@@ -222,7 +222,8 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 			PublicKey: pubCA,
 		},
 	}
-	caCert.Sign(cert.Curve_CURVE25519, privCA)
+
+	assert.NoError(t, caCert.Sign(cert.Curve_CURVE25519, privCA))
 	ncp := &cert.NebulaCAPool{
 		CAs: cert.NewCAPool().CAs,
 	}
@@ -241,7 +242,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 			Issuer:    "ca",
 		},
 	}
-	peerCert.Sign(cert.Curve_CURVE25519, privCA)
+	assert.NoError(t, peerCert.Sign(cert.Curve_CURVE25519, privCA))
 
 	cs := &CertState{
 		RawCertificate:      []byte{},
@@ -252,18 +253,18 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 
 	lh := newTestLighthouse()
 	ifce := &Interface{
-		hostMap:           hostMap,
-		inside:            &test.NoopTun{},
-		outside:           &udp.NoopConn{},
-		firewall:          &Firewall{},
-		lightHouse:        lh,
-		handshakeManager:  NewHandshakeManager(l, vpncidr, preferredRanges, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
-		l:                 l,
-		disconnectInvalid: true,
-		pki:               &PKI{},
+		hostMap:          hostMap,
+		inside:           &test.NoopTun{},
+		outside:          &udp.NoopConn{},
+		firewall:         &Firewall{},
+		lightHouse:       lh,
+		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
+		l:                l,
+		pki:              &PKI{},
 	}
 	ifce.pki.cs.Store(cs)
 	ifce.pki.caPool.Store(ncp)
+	ifce.disconnectInvalid.Store(true)
 
 	// Create manager
 	ctx, cancel := context.WithCancel(context.Background())
@@ -275,9 +276,9 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	hostinfo := &HostInfo{
 		vpnIp: vpnIp,
 		ConnectionState: &ConnectionState{
-			certState: cs,
-			peerCert:  &peerCert,
-			H:         &noise.HandshakeState{},
+			myCert:   &cert.NebulaCertificate{},
+			peerCert: &peerCert,
+			H:        &noise.HandshakeState{},
 		},
 	}
 	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)

@@ -5,7 +5,9 @@ package nebula
 
 import (
 	"fmt"
+	"log"
 	"runtime"
+	"runtime/debug"
 	"sync"
 
 	"github.com/timandy/routine"
@@ -42,24 +44,38 @@ func newSyncRWMutex(key mutexKey) syncRWMutex {
 	}
 }
 
+func alertMutex(err error) {
+	log.Print(err, string(debug.Stack()))
+}
+
 func checkMutex(state map[mutexKey]mutexValue, add mutexKey) {
+	for k := range state {
+		if add == k {
+			alertMutex(fmt.Errorf("re-entrant lock: state=%v add=%v", state, add))
+		}
+	}
+
 	switch add.Type {
 	case mutexKeyTypeHostInfo:
 		// Check for any other hostinfo keys:
 		for k := range state {
 			if k.Type == mutexKeyTypeHostInfo {
-				panic(fmt.Errorf("grabbing hostinfo lock and already have a hostinfo lock: state=%v add=%v", state, add))
+				alertMutex(fmt.Errorf("grabbing hostinfo lock and already have a hostinfo lock: state=%v add=%v", state, add))
 			}
 		}
 		if _, ok := state[mutexKey{Type: mutexKeyTypeHostMap}]; ok {
-			panic(fmt.Errorf("grabbing hostinfo lock and already have hostmap: state=%v add=%v", state, add))
+			alertMutex(fmt.Errorf("grabbing hostinfo lock and already have hostmap: state=%v add=%v", state, add))
 		}
 		if _, ok := state[mutexKey{Type: mutexKeyTypeHandshakeManager}]; ok {
-			panic(fmt.Errorf("grabbing hostinfo lock and already have handshake-manager: state=%v add=%v", state, add))
+			alertMutex(fmt.Errorf("grabbing hostinfo lock and already have handshake-manager: state=%v add=%v", state, add))
 		}
-	case mutexKeyTypeHandshakeManager:
-		if _, ok := state[mutexKey{Type: mutexKeyTypeHostMap}]; ok {
-			panic(fmt.Errorf("grabbing handshake-manager lock and already have hostmap: state=%v add=%v", state, add))
+		// case mutexKeyTypeHandshakeManager:
+		// 	if _, ok := state[mutexKey{Type: mutexKeyTypeHostMap}]; ok {
+		// 		alertMutex(fmt.Errorf("grabbing handshake-manager lock and already have hostmap: state=%v add=%v", state, add))
+		// 	}
+	case mutexKeyTypeHostMap:
+		if _, ok := state[mutexKey{Type: mutexKeyTypeHandshakeManager}]; ok {
+			alertMutex(fmt.Errorf("grabbing hostmap lock and already have handshake-manager: state=%v add=%v", state, add))
 		}
 	}
 }

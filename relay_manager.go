@@ -179,6 +179,12 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		"vpnIp":               h.vpnIp})
 
 	logMsg.Info("handleCreateRelayRequest")
+	// Is the source of the relay me? This should never happen, but did happen due to
+	// an issue migrating relays over to newly re-handshaked host info objects.
+	if from == f.myVpnIp {
+		logMsg.WithField("myIP", f.myVpnIp).Error("Discarding relay request from myself")
+		return
+	}
 	// Is the target of the relay me?
 	if target == f.myVpnIp {
 		existingRelay, ok := h.relayState.QueryRelayForByIp(from)
@@ -244,7 +250,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		if peer == nil {
 			// Try to establish a connection to this host. If we get a future relay request,
 			// we'll be ready!
-			f.getOrHandshake(target)
+			f.Handshake(target)
 			return
 		}
 		if peer.remote == nil {

@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"strings"
@@ -73,7 +72,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return newHelpErrorf("cannot set both -in-pub and -out-key")
 	}
 
-	rawCAKey, err := ioutil.ReadFile(*sf.caKeyPath)
+	rawCAKey, err := os.ReadFile(*sf.caKeyPath)
 	if err != nil {
 		return fmt.Errorf("error while reading ca-key: %s", err)
 	}
@@ -112,7 +111,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return fmt.Errorf("error while parsing ca-key: %s", err)
 	}
 
-	rawCACert, err := ioutil.ReadFile(*sf.caCertPath)
+	rawCACert, err := os.ReadFile(*sf.caCertPath)
 	if err != nil {
 		return fmt.Errorf("error while reading ca-crt: %s", err)
 	}
@@ -178,7 +177,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 
 	var pub, rawPriv []byte
 	if *sf.inPubPath != "" {
-		rawPub, err := ioutil.ReadFile(*sf.inPubPath)
+		rawPub, err := os.ReadFile(*sf.inPubPath)
 		if err != nil {
 			return fmt.Errorf("error while reading in-pub: %s", err)
 		}
@@ -235,7 +234,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			return fmt.Errorf("refusing to overwrite existing key: %s", *sf.outKeyPath)
 		}
 
-		err = ioutil.WriteFile(*sf.outKeyPath, cert.MarshalPrivateKey(curve, rawPriv), 0600)
+		err = os.WriteFile(*sf.outKeyPath, cert.MarshalPrivateKey(curve, rawPriv), 0600)
 		if err != nil {
 			return fmt.Errorf("error while writing out-key: %s", err)
 		}
@@ -246,7 +245,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return fmt.Errorf("error while marshalling certificate: %s", err)
 	}
 
-	err = ioutil.WriteFile(*sf.outCertPath, b, 0600)
+	err = os.WriteFile(*sf.outCertPath, b, 0600)
 	if err != nil {
 		return fmt.Errorf("error while writing out-crt: %s", err)
 	}
@@ -257,7 +256,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			return fmt.Errorf("error while generating qr code: %s", err)
 		}
 
-		err = ioutil.WriteFile(*sf.outQRPath, b, 0600)
+		err = os.WriteFile(*sf.outQRPath, b, 0600)
 		if err != nil {
 			return fmt.Errorf("error while writing out-qr: %s", err)
 		}

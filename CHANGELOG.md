@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2023-12-06
+
+### Deprecated
+
+- The next minor release of Nebula, 1.9.0, will require at least Windows 10 or
+  Windows Server 2016. This is because support for earlier versions was removed
+  in Go 1.21. See https://go.dev/doc/go1.21#windows
+
+### Added
+
+- Linux: Notify systemd of service readiness. This should resolve timing issues
+  with services that depend on Nebula being active. For an example of how to
+  enable this, see: `examples/service_scripts/nebula.service`. (#929)
+
+- Windows: Use Registered IO (RIO) when possible. Testing on a Windows 11
+  machine shows ~50x improvement in throughput. (#905)
+
+- NetBSD, OpenBSD: Added rudimentary support. (#916, #812)
+
+- FreeBSD: Add support for naming tun devices. (#903)
+
+### Changed
+
+- `pki.disconnect_invalid` will now default to true. This means that once a
+  certificate expires, the tunnel will be disconnected. If you use SIGHUP to
+  reload certificates without restarting Nebula, you should ensure all of your
+  clients are on 1.7.0 or newer before you enable this feature. (#859)
+
+- Limit how often a busy tunnel can requery the lighthouse. The new config
+  option `timers.requery_wait_duration` defaults to `60s`. (#940)
+
+- The internal structures for hostmaps were refactored to reduce memory usage
+  and the potential for subtle bugs. (#843, #938, #953, #954, #955)
+
+- Lots of dependency updates.
+
+### Fixed
+
+- Windows: Retry wintun device creation if it fails the first time. (#985)
+
+- Fix issues with firewall reject packets that could cause panics. (#957)
+
+- Fix relay migration during re-handshakes. (#964)
+
+- Various other refactors and fixes. (#935, #952, #972, #961, #996, #1002,
+  #987, #1004, #1030, #1032, ...)
+
 ## [1.7.2] - 2023-06-01
 
 ### Fixed
@@ -488,7 +535,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.7.2...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/slackhq/nebula/releases/tag/v1.8.0
 [1.7.2]: https://github.com/slackhq/nebula/releases/tag/v1.7.2
 [1.7.1]: https://github.com/slackhq/nebula/releases/tag/v1.7.1
 [1.7.0]: https://github.com/slackhq/nebula/releases/tag/v1.7.0

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"io/ioutil"
 	"os"
 	"testing"
 	"time"
@@ -54,7 +53,7 @@ func Test_printCert(t *testing.T) {
 	// invalid cert at path
 	ob.Reset()
 	eb.Reset()
-	tf, err := ioutil.TempFile("", "print-cert")
+	tf, err := os.CreateTemp("", "print-cert")
 	assert.Nil(t, err)
 	defer os.Remove(tf.Name())
 

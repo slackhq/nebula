@@ -43,10 +43,15 @@ func NewListenConfig(multi bool) net.ListenConfig {
 }
 
 func (u *GenericConn) Rebind() error {
-	file, err := u.File()
+	rc, err := u.UDPConn.SyscallConn()
 	if err != nil {
 		return err
 	}
 
-	return syscall.SetsockoptInt(int(file.Fd()), unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, 0)
+	return rc.Control(func(fd uintptr) {
+		err := syscall.SetsockoptInt(int(fd), unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, 0)
+		if err != nil {
+			u.l.WithError(err).Error("Failed to rebind udp socket")
+		}
+	})
 }
