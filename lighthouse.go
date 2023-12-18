@@ -466,14 +466,7 @@ func (lh *LightHouse) QueryServer(ip iputil.VpnIp) {
 	if lh.amLighthouse {
 		return
 	}
-	select {
-	case lh.queryChan <- ip:
-		return
-	default:
-		if lh.l.Level >= logrus.DebugLevel {
-			lh.l.WithField("vpnIp", ip).Debug("Lighthouse query buffer was full, dropping request")
-		}
-	}
+	lh.queryChan <- ip
 }
 
 func (lh *LightHouse) QueryCache(ip iputil.VpnIp) *RemoteList {
