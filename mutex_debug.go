@@ -5,9 +5,7 @@ package nebula
 
 import (
 	"fmt"
-	"log"
 	"runtime"
-	"runtime/debug"
 	"sync"
 
 	"github.com/timandy/routine"
@@ -22,6 +20,13 @@ const (
 	mutexKeyTypeHostInfo                      = "hostinfo"
 	mutexKeyTypeHandshakeManager              = "handshake-manager"
 )
+
+// For each Key in this map, the Value is a list of lock types you can already have
+// when you want to grab that Key. This ensures that locks are always fetched
+// in the same order, to prevent deadlocks.
+var allowedConcurrentLocks = map[mutexKeyType][]mutexKeyType{
+	mutexKeyTypeHandshakeManager: {mutexKeyTypeHostMap},
+}
 
 type mutexKey struct {
 	Type mutexKeyType
@@ -45,37 +50,30 @@ func newSyncRWMutex(key mutexKey) syncRWMutex {
 }
 
 func alertMutex(err error) {
-	log.Print(err, string(debug.Stack()))
+	panic(err)
+	// NOTE: you could switch to this log Line and remove the panic if you want
+	// to log all failures instead of panicking on the first one
+	//log.Print(err, string(debug.Stack()))
 }
 
 func checkMutex(state map[mutexKey]mutexValue, add mutexKey) {
-	for k := range state {
-		if add == k {
-			alertMutex(fmt.Errorf("re-entrant lock: state=%v add=%v", state, add))
-		}
-	}
+	allowedConcurrent := allowedConcurrentLocks[add.Type]
 
-	switch add.Type {
-	case mutexKeyTypeHostInfo:
-		// Check for any other hostinfo keys:
-		for k := range state {
-			if k.Type == mutexKeyTypeHostInfo {
-				alertMutex(fmt.Errorf("grabbing hostinfo lock and already have a hostinfo lock: state=%v add=%v", state, add))
+	for k, v := range state {
+		if add == k {
+			alertMutex(fmt.Errorf("re-entrant lock: %s. previous allocation: %s", add, v))
+		}
+
+		// TODO use slices.Contains, but requires go1.21
+		var found bool
+		for _, a := range allowedConcurrent {
+			if a == k.Type {
+				found = true
+				break
 			}
 		}
-		if _, ok := state[mutexKey{Type: mutexKeyTypeHostMap}]; ok {
-			alertMutex(fmt.Errorf("grabbing hostinfo lock and already have hostmap: state=%v add=%v", state, add))
-		}
-		if _, ok := state[mutexKey{Type: mutexKeyTypeHandshakeManager}]; ok {
-			alertMutex(fmt.Errorf("grabbing hostinfo lock and already have handshake-manager: state=%v add=%v", state, add))
-		}
-		// case mutexKeyTypeHandshakeManager:
-		// 	if _, ok := state[mutexKey{Type: mutexKeyTypeHostMap}]; ok {
-		// 		alertMutex(fmt.Errorf("grabbing handshake-manager lock and already have hostmap: state=%v add=%v", state, add))
-		// 	}
-	case mutexKeyTypeHostMap:
-		if _, ok := state[mutexKey{Type: mutexKeyTypeHandshakeManager}]; ok {
-			alertMutex(fmt.Errorf("grabbing hostmap lock and already have handshake-manager: state=%v add=%v", state, add))
+		if !found {
+			alertMutex(fmt.Errorf("grabbing %s lock and already have these locks: %s", add.Type, state))
 		}
 	}
 }
@@ -108,4 +106,16 @@ func (s *syncRWMutex) RUnlock() {
 	m := threadLocal.Get().(map[mutexKey]mutexValue)
 	delete(m, s.mutexKey)
 	s.RWMutex.RUnlock()
+}
+
+func (m mutexKey) String() string {
+	if m.ID == 0 {
+		return fmt.Sprintf("%s", m.Type)
+	} else {
+		return fmt.Sprintf("%s(%d)", m.Type, m.ID)
+	}
+}
+
+func (m mutexValue) String() string {
+	return fmt.Sprintf("%s:%d", m.file, m.line)
 }
