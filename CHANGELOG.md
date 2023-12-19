@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix a deadlock introduced in v1.8.0 that could occur during handshakes.  (#1044)
+- Fix a deadlock introduced in v1.8.0 that could occur during handshakes. (#1044)
 
 - Fix mobile builds. (#1035)
 
