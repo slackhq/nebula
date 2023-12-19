@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/heimdalr/dag"
+	"github.com/clarkmcc/go-dag"
 	"github.com/timandy/routine"
 )
 
@@ -41,37 +41,38 @@ func (m mutexValue) String() string {
 
 var threadLocal routine.ThreadLocal = routine.NewThreadLocalWithInitial(func() any { return map[mutexKey]mutexValue{} })
 
-var allowedDAG *dag.DAG
+var allowedDAG dag.AcyclicGraph
 
 // We build a directed acyclic graph to assert that the locks can only be
 // acquired in a determined order, If there are cycles in the DAG, then we
 // know that the locking order is not guaranteed.
 func init() {
-	allowedDAG = dag.NewDAG()
 	for k, v := range allowedConcurrentLocks {
-		_ = allowedDAG.AddVertexByID(k, k)
+		allowedDAG.Add(k)
 		for _, t := range v {
-			_ = allowedDAG.AddVertexByID(t, t)
+			allowedDAG.Add(t)
 		}
 	}
 	for k, v := range allowedConcurrentLocks {
 		for _, t := range v {
-			if err := allowedDAG.AddEdge(t, k); err != nil {
-				panic(fmt.Errorf("Failed to assembled DAG for allowedConcurrentLocks: %w", err))
-			}
+			allowedDAG.Connect(dag.BasicEdge(k, t))
 		}
+	}
+
+	if cycles := allowedDAG.Cycles(); len(cycles) > 0 {
+		panic(fmt.Errorf("Cycles found in allowedConcurrentLocks: %v", cycles))
 	}
 
 	// Rebuild allowedConcurrentLocks as a flattened list of all possibilities
 	for k := range allowedConcurrentLocks {
-		anc, err := allowedDAG.GetAncestors(k)
+		ancestors, err := allowedDAG.Ancestors(k)
 		if err != nil {
 			panic(err)
 		}
 
 		var allowed []mutexKey
-		for t := range anc {
-			allowed = append(allowed, mutexKey(t))
+		for t := range ancestors {
+			allowed = append(allowed, t.(mutexKey))
 		}
 		allowedConcurrentLocks[k] = allowed
 	}
@@ -107,6 +108,10 @@ func alertMutex(err error) {
 }
 
 func checkMutex(state map[mutexKey]mutexValue, add mutexKey) {
+	if add == "" {
+		alertMutex(fmt.Errorf("mutex not initialized with mutexKey"))
+	}
+
 	allowedConcurrent := allowedConcurrentLocks[add]
 
 	for k, v := range state {
