@@ -3,7 +3,6 @@ package nebula
 import (
 	"errors"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -67,7 +66,7 @@ type HostMap struct {
 // struct, make a copy of an existing value, edit the fileds in the copy, and
 // then store a pointer to the new copy in both realyForBy* maps.
 type RelayState struct {
-	sync.RWMutex
+	syncRWMutex
 
 	relays        map[iputil.VpnIp]struct{} // Set of VpnIp's of Hosts to use as relays to access this peer
 	relayForByIp  map[iputil.VpnIp]*Relay   // Maps VpnIps of peers for which this HostInfo is a relay to some Relay info

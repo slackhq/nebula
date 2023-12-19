@@ -8,8 +8,10 @@ const (
 	mutexKeyTypeHostMap mutexKeyType = "hostmap"
 
 	mutexKeyTypeLightHouse           = "lighthouse"
+	mutexKeyTypeRemoteList           = "remote-list"
 	mutexKeyTypeFirewallConntrack    = "firewall-conntrack"
 	mutexKeyTypeHostInfo             = "hostinfo"
+	mutexKeyTypeRelayState           = "relay-state"
 	mutexKeyTypeHandshakeHostInfo    = "handshake-hostinfo"
 	mutexKeyTypeHandshakeManager     = "handshake-manager"
 	mutexKeyTypeConnectionStateWrite = "connection-state-write-lock"
@@ -30,10 +32,13 @@ var allowedConcurrentLocks = map[mutexKeyType][]mutexKeyType{
 	mutexKeyTypeConnectionStateWrite: {mutexKeyTypeHostMap},
 
 	mutexKeyTypeLightHouse: {mutexKeyTypeHandshakeManager},
+	mutexKeyTypeRemoteList: {mutexKeyTypeLightHouse},
 
 	mutexKeyTypeConnectionManagerIn:        {mutexKeyTypeHostMap},
 	mutexKeyTypeConnectionManagerOut:       {mutexKeyTypeConnectionStateWrite, mutexKeyTypeConnectionManagerIn},
 	mutexKeyTypeConnectionManagerRelayUsed: {mutexKeyTypeHandshakeHostInfo},
+
+	mutexKeyTypeRelayState: {mutexKeyTypeHostMap, mutexKeyTypeConnectionManagerRelayUsed},
 }
 
 type mutexKey struct {
