@@ -562,7 +562,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		}
 
 		i.nextLHQuery.Store(now + ifce.reQueryWait.Load())
-		ifce.lightHouse.QueryServer(i.vpnIp, ifce)
+		ifce.lightHouse.QueryServer(i.vpnIp)
 	}
 }
 

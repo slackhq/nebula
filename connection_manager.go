@@ -22,6 +22,7 @@ const (
 	swapPrimary    trafficDecision = 3
 	migrateRelays  trafficDecision = 4
 	tryRehandshake trafficDecision = 5
+	sendTestPacket trafficDecision = 6
 )
 
 type connectionManager struct {
@@ -175,7 +176,7 @@ func (n *connectionManager) Run(ctx context.Context) {
 }
 
 func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte, now time.Time) {
-	decision, hostinfo, primary := n.makeTrafficDecision(localIndex, p, nb, out, now)
+	decision, hostinfo, primary := n.makeTrafficDecision(localIndex, now)
 
 	switch decision {
 	case deleteTunnel:
@@ -196,6 +197,9 @@ func (n *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte,
 
 	case tryRehandshake:
 		n.tryRehandshake(hostinfo)
+
+	case sendTestPacket:
+		n.intf.SendMessageToHostInfo(header.Test, header.TestRequest, hostinfo, p, nb, out)
 	}
 
 	n.resetRelayTrafficCheck(hostinfo)
@@ -288,7 +292,7 @@ func (n *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo)
 	}
 }
 
-func (n *connectionManager) makeTrafficDecision(localIndex uint32, p, nb, out []byte, now time.Time) (trafficDecision, *HostInfo, *HostInfo) {
+func (n *connectionManager) makeTrafficDecision(localIndex uint32, now time.Time) (trafficDecision, *HostInfo, *HostInfo) {
 	n.hostMap.RLock()
 	defer n.hostMap.RUnlock()
 
@@ -355,6 +359,7 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, p, nb, out []
 		return deleteTunnel, hostinfo, nil
 	}
 
+	decision := doNothing
 	if hostinfo != nil && hostinfo.ConnectionState != nil && mainHostInfo {
 		if !outTraffic {
 			// If we aren't sending or receiving traffic then its an unused tunnel and we don't to test the tunnel.
@@ -379,7 +384,7 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, p, nb, out []
 		}
 
 		// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
-		n.intf.SendMessageToHostInfo(header.Test, header.TestRequest, hostinfo, p, nb, out)
+		decision = sendTestPacket
 
 	} else {
 		if n.l.Level >= logrus.DebugLevel {
@@ -389,7 +394,7 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, p, nb, out []
 
 	n.pendingDeletion[hostinfo.localIndexId] = struct{}{}
 	n.trafficTimer.Add(hostinfo.localIndexId, n.pendingDeletionInterval)
-	return doNothing, nil, nil
+	return decision, hostinfo, nil
 }
 
 func (n *connectionManager) shouldSwapPrimary(current, primary *HostInfo) bool {

@@ -21,8 +21,9 @@ var vpnIp iputil.VpnIp
 
 func newTestLighthouse() *LightHouse {
 	lh := &LightHouse{
-		l:       test.NewLogger(),
-		addrMap: map[iputil.VpnIp]*RemoteList{},
+		l:         test.NewLogger(),
+		addrMap:   map[iputil.VpnIp]*RemoteList{},
+		queryChan: make(chan iputil.VpnIp, 10),
 	}
 	lighthouses := map[iputil.VpnIp]struct{}{}
 	staticList := map[iputil.VpnIp]struct{}{}
