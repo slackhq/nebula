@@ -289,6 +289,10 @@ logging:
   # A 100ms interval with the default 10 retries will give a handshake 5.5 seconds to resolve before timing out
   #try_interval: 100ms
   #retries: 20
+
+  # query_buffer is the size of the buffer channel for querying lighthouses
+  #query_buffer: 64
+
   # trigger_buffer is the size of the buffer channel for quickly sending handshakes
   # after receiving the response for lighthouse queries
   #trigger_buffer: 64
