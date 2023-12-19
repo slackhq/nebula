@@ -463,9 +463,11 @@ func (lh *LightHouse) Query(ip iputil.VpnIp) *RemoteList {
 
 // QueryServer is asynchronous so no reply should be expected
 func (lh *LightHouse) QueryServer(ip iputil.VpnIp) {
-	if lh.amLighthouse {
+	// Don't put lighthouse ips in the query channel because we can't query lighthouses about lighthouses
+	if lh.amLighthouse || lh.IsLighthouseIP(ip) {
 		return
 	}
+
 	lh.queryChan <- ip
 }
 
