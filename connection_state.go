@@ -3,7 +3,6 @@ package nebula
 import (
 	"crypto/rand"
 	"encoding/json"
-	"sync"
 	"sync/atomic"
 
 	"github.com/flynn/noise"
@@ -23,7 +22,7 @@ type ConnectionState struct {
 	initiator      bool
 	messageCounter atomic.Uint64
 	window         *Bits
-	writeLock      sync.Mutex
+	writeLock      syncMutex
 }
 
 func NewConnectionState(l *logrus.Logger, cipher string, certState *CertState, initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {
@@ -71,6 +70,7 @@ func NewConnectionState(l *logrus.Logger, cipher string, certState *CertState, i
 		initiator: initiator,
 		window:    b,
 		myCert:    certState.Certificate,
+		writeLock: newSyncMutex(mutexKey{Type: mutexKeyTypeConnectionStateWrite}),
 	}
 
 	return ci

@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -65,7 +64,7 @@ type HandshakeManager struct {
 }
 
 type HandshakeHostInfo struct {
-	sync.Mutex
+	syncMutex
 
 	startTime   time.Time       // Time that we first started trying with this handshake
 	ready       bool            // Is the handshake ready
@@ -397,6 +396,7 @@ func (hm *HandshakeManager) StartHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 	}
 
 	hh := &HandshakeHostInfo{
+		syncMutex: newSyncMutex(mutexKey{Type: mutexKeyTypeHandshakeHostInfo, ID: uint32(vpnIp)}),
 		hostinfo:  hostinfo,
 		startTime: time.Now(),
 	}

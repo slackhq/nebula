@@ -8,34 +8,42 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/heimdalr/dag"
 	"github.com/timandy/routine"
 )
 
 var threadLocal routine.ThreadLocal = routine.NewThreadLocalWithInitial(func() any { return map[mutexKey]mutexValue{} })
 
-type mutexKeyType string
+var allowedDAG *dag.DAG
 
-const (
-	mutexKeyTypeHostMap          mutexKeyType = "hostmap"
-	mutexKeyTypeHostInfo                      = "hostinfo"
-	mutexKeyTypeHandshakeManager              = "handshake-manager"
-)
+func init() {
+	allowedDAG = dag.NewDAG()
+	for k, v := range allowedConcurrentLocks {
+		allowedDAG.AddVertexByID(string(k), k)
+		for _, t := range v {
+			if _, err := allowedDAG.GetVertex(string(t)); err != nil {
+				allowedDAG.AddVertexByID(string(t), t)
+			}
+		}
+	}
+	for k, v := range allowedConcurrentLocks {
+		for _, t := range v {
+			allowedDAG.AddEdge(string(t), string(k))
+		}
+	}
 
-// For each Key in this map, the Value is a list of lock types you can already have
-// when you want to grab that Key. This ensures that locks are always fetched
-// in the same order, to prevent deadlocks.
-var allowedConcurrentLocks = map[mutexKeyType][]mutexKeyType{
-	mutexKeyTypeHandshakeManager: {mutexKeyTypeHostMap},
-}
+	for k := range allowedConcurrentLocks {
+		anc, err := allowedDAG.GetAncestors(string(k))
+		if err != nil {
+			panic(err)
+		}
 
-type mutexKey struct {
-	Type mutexKeyType
-	ID   uint32
-}
-
-type mutexValue struct {
-	file string
-	line int
+		var allowed []mutexKeyType
+		for t := range anc {
+			allowed = append(allowed, mutexKeyType(t))
+		}
+		allowedConcurrentLocks[k] = allowed
+	}
 }
 
 type syncRWMutex struct {
@@ -43,8 +51,19 @@ type syncRWMutex struct {
 	mutexKey
 }
 
+type syncMutex struct {
+	sync.Mutex
+	mutexKey
+}
+
 func newSyncRWMutex(key mutexKey) syncRWMutex {
 	return syncRWMutex{
+		mutexKey: key,
+	}
+}
+
+func newSyncMutex(key mutexKey) syncMutex {
+	return syncMutex{
 		mutexKey: key,
 	}
 }
@@ -108,14 +127,17 @@ func (s *syncRWMutex) RUnlock() {
 	s.RWMutex.RUnlock()
 }
 
-func (m mutexKey) String() string {
-	if m.ID == 0 {
-		return fmt.Sprintf("%s", m.Type)
-	} else {
-		return fmt.Sprintf("%s(%d)", m.Type, m.ID)
-	}
+func (s *syncMutex) Lock() {
+	m := threadLocal.Get().(map[mutexKey]mutexValue)
+	checkMutex(m, s.mutexKey)
+	v := mutexValue{}
+	_, v.file, v.line, _ = runtime.Caller(1)
+	m[s.mutexKey] = v
+	s.Mutex.Lock()
 }
 
-func (m mutexValue) String() string {
-	return fmt.Sprintf("%s:%d", m.file, m.line)
+func (s *syncMutex) Unlock() {
+	m := threadLocal.Get().(map[mutexKey]mutexValue)
+	delete(m, s.mutexKey)
+	s.Mutex.Unlock()
 }
