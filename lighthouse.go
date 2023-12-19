@@ -100,7 +100,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 
 	ones, _ := myVpnNet.Mask.Size()
 	h := LightHouse{
-		syncRWMutex:  newSyncRWMutex(mutexKey{Type: mutexKeyTypeLightHouse}),
+		syncRWMutex:  newSyncRWMutex("lighthouse"),
 		ctx:          ctx,
 		amLighthouse: amLighthouse,
 		myVpnIp:      iputil.Ip2VpnIp(myVpnNet.IP),

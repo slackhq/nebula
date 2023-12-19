@@ -216,7 +216,7 @@ type RemoteList struct {
 // NewRemoteList creates a new empty RemoteList
 func NewRemoteList(shouldAdd func(netip.Addr) bool) *RemoteList {
 	return &RemoteList{
-		syncRWMutex: newSyncRWMutex(mutexKey{Type: mutexKeyTypeRemoteList}),
+		syncRWMutex: newSyncRWMutex("remote-list"),
 		addrs:       make([]*udp.Addr, 0),
 		relays:      make([]*iputil.VpnIp, 0),
 		cache:       make(map[iputil.VpnIp]*cache),

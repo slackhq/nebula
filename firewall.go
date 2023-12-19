@@ -148,7 +148,7 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 
 	return &Firewall{
 		Conntrack: &FirewallConntrack{
-			syncMutex:  newSyncMutex(mutexKey{Type: mutexKeyTypeFirewallConntrack}),
+			syncMutex:  newSyncMutex("firewall-conntrack"),
 			Conns:      make(map[firewall.Packet]*conn),
 			TimerWheel: NewTimerWheel[firewall.Packet](min, max),
 		},

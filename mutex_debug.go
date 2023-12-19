@@ -12,35 +12,66 @@ import (
 	"github.com/timandy/routine"
 )
 
+type mutexKey = string
+
+// For each Key in this map, the Value is a list of lock types you can already have
+// when you want to grab that Key. This ensures that locks are always fetched
+// in the same order, to prevent deadlocks.
+var allowedConcurrentLocks = map[mutexKey][]mutexKey{
+	"connection-manager-in":         {"hostmap"},
+	"connection-manager-out":        {"connection-state-write", "connection-manager-in"},
+	"connection-manager-relay-used": {"handshake-hostinfo"},
+	"connection-state-write":        {"hostmap"},
+	"firewall-conntrack":            {"handshake-hostinfo"},
+	"handshake-manager":             {"hostmap"},
+	"hostmap":                       {"handshake-hostinfo"},
+	"lighthouse":                    {"handshake-manager"},
+	"relay-state":                   {"hostmap", "connection-manager-relay-used"},
+	"remote-list":                   {"lighthouse"},
+}
+
+type mutexValue struct {
+	file string
+	line int
+}
+
+func (m mutexValue) String() string {
+	return fmt.Sprintf("%s:%d", m.file, m.line)
+}
+
 var threadLocal routine.ThreadLocal = routine.NewThreadLocalWithInitial(func() any { return map[mutexKey]mutexValue{} })
 
 var allowedDAG *dag.DAG
 
+// We build a directed acyclic graph to assert that the locks can only be
+// acquired in a determined order, If there are cycles in the DAG, then we
+// know that the locking order is not guaranteed.
 func init() {
 	allowedDAG = dag.NewDAG()
 	for k, v := range allowedConcurrentLocks {
-		allowedDAG.AddVertexByID(string(k), k)
+		_ = allowedDAG.AddVertexByID(k, k)
 		for _, t := range v {
-			if _, err := allowedDAG.GetVertex(string(t)); err != nil {
-				allowedDAG.AddVertexByID(string(t), t)
-			}
+			_ = allowedDAG.AddVertexByID(t, t)
 		}
 	}
 	for k, v := range allowedConcurrentLocks {
 		for _, t := range v {
-			allowedDAG.AddEdge(string(t), string(k))
+			if err := allowedDAG.AddEdge(t, k); err != nil {
+				panic(fmt.Errorf("Failed to assembled DAG for allowedConcurrentLocks: %w", err))
+			}
 		}
 	}
 
+	// Rebuild allowedConcurrentLocks as a flattened list of all possibilities
 	for k := range allowedConcurrentLocks {
-		anc, err := allowedDAG.GetAncestors(string(k))
+		anc, err := allowedDAG.GetAncestors(k)
 		if err != nil {
 			panic(err)
 		}
 
-		var allowed []mutexKeyType
+		var allowed []mutexKey
 		for t := range anc {
-			allowed = append(allowed, mutexKeyType(t))
+			allowed = append(allowed, mutexKey(t))
 		}
 		allowedConcurrentLocks[k] = allowed
 	}
@@ -76,7 +107,7 @@ func alertMutex(err error) {
 }
 
 func checkMutex(state map[mutexKey]mutexValue, add mutexKey) {
-	allowedConcurrent := allowedConcurrentLocks[add.Type]
+	allowedConcurrent := allowedConcurrentLocks[add]
 
 	for k, v := range state {
 		if add == k {
@@ -86,13 +117,13 @@ func checkMutex(state map[mutexKey]mutexValue, add mutexKey) {
 		// TODO use slices.Contains, but requires go1.21
 		var found bool
 		for _, a := range allowedConcurrent {
-			if a == k.Type {
+			if a == k {
 				found = true
 				break
 			}
 		}
 		if !found {
-			alertMutex(fmt.Errorf("grabbing %s lock and already have these locks: %s", add.Type, state))
+			alertMutex(fmt.Errorf("grabbing %s lock and already have these locks: %s", add, state))
 		}
 	}
 }

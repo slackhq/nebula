@@ -70,7 +70,7 @@ func NewConnectionState(l *logrus.Logger, cipher string, certState *CertState, i
 		initiator: initiator,
 		window:    b,
 		myCert:    certState.Certificate,
-		writeLock: newSyncMutex(mutexKey{Type: mutexKeyTypeConnectionStateWrite}),
+		writeLock: newSyncMutex("connection-state-write"),
 	}
 
 	return ci

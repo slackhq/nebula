@@ -102,7 +102,7 @@ func (hh *HandshakeHostInfo) cachePacket(l *logrus.Logger, t header.MessageType,
 
 func NewHandshakeManager(l *logrus.Logger, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
-		syncRWMutex:            newSyncRWMutex(mutexKey{Type: mutexKeyTypeHandshakeManager}),
+		syncRWMutex:            newSyncRWMutex("handshake-manager"),
 		vpnIps:                 map[iputil.VpnIp]*HandshakeHostInfo{},
 		indexes:                map[uint32]*HandshakeHostInfo{},
 		mainHostMap:            mainHostMap,
@@ -385,11 +385,11 @@ func (hm *HandshakeManager) StartHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 	}
 
 	hostinfo := &HostInfo{
-		syncRWMutex:     newSyncRWMutex(mutexKey{Type: mutexKeyTypeHostInfo, ID: uint32(vpnIp)}),
+		syncRWMutex:     newSyncRWMutex("hostinfo"),
 		vpnIp:           vpnIp,
 		HandshakePacket: make(map[uint8][]byte, 0),
 		relayState: RelayState{
-			syncRWMutex:   newSyncRWMutex(mutexKey{Type: mutexKeyTypeRelayState, ID: uint32(vpnIp)}),
+			syncRWMutex:   newSyncRWMutex("relay-state"),
 			relays:        map[iputil.VpnIp]struct{}{},
 			relayForByIp:  map[iputil.VpnIp]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
@@ -397,7 +397,7 @@ func (hm *HandshakeManager) StartHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 	}
 
 	hh := &HandshakeHostInfo{
-		syncMutex: newSyncMutex(mutexKey{Type: mutexKeyTypeHandshakeHostInfo, ID: uint32(vpnIp)}),
+		syncMutex: newSyncMutex("handshake-hostinfo"),
 		hostinfo:  hostinfo,
 		startTime: time.Now(),
 	}

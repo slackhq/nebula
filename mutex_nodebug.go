@@ -7,6 +7,7 @@ import (
 	"sync"
 )
 
+type mutexKey = string
 type syncRWMutex = sync.RWMutex
 type syncMutex = sync.Mutex
 
