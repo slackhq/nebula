@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.1] - 2023-12-19
+
+### Security
+
+- Update `golang.org/x/crypto`, which includes a fix for CVE-2023-48795. (#1048)
+
+### Fixed
+
+- Fix a deadlock introduced in v1.8.0 that could occur during handshakes.  (#1044)
+
+- Fix mobile builds. (#1035)
+
 ## [1.8.0] - 2023-12-06
 
 ### Deprecated
@@ -535,7 +547,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/slackhq/nebula/releases/tag/v1.8.1
 [1.8.0]: https://github.com/slackhq/nebula/releases/tag/v1.8.0
 [1.7.2]: https://github.com/slackhq/nebula/releases/tag/v1.7.2
 [1.7.1]: https://github.com/slackhq/nebula/releases/tag/v1.7.1
