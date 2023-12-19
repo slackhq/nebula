@@ -7,8 +7,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
-	"time"
 	"sync"
+	"time"
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
