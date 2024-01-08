@@ -170,6 +170,16 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			}
 			udpServer.ReloadConfig(c)
 			udpConns[i] = udpServer
+
+			// If port is dynamic, discover it before the next pass through the for loop
+			// This way all routines will use the same port correctly
+			if port == 0 {
+				uPort, err := udpServer.LocalAddr()
+				if err != nil {
+					return nil, util.NewContextualError("Failed to get listening port", nil, err)
+				}
+				port = int(uPort.Port)
+			}
 		}
 	}
 
