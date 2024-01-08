@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.2] - 2024-01-08
+
+### Fixed
+
+- Fix multiple routines when listen.port is zero. This was a regression
+  introduced in v1.6.0. (#1057)
+
+### Changed
+
+- Small dependency update for Noise. (#1038)
+
 ## [1.8.1] - 2023-12-19
 
 ### Security
@@ -547,7 +558,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.8.2...HEAD
+[1.8.2]: https://github.com/slackhq/nebula/releases/tag/v1.8.2
 [1.8.1]: https://github.com/slackhq/nebula/releases/tag/v1.8.1
 [1.8.0]: https://github.com/slackhq/nebula/releases/tag/v1.8.0
 [1.7.2]: https://github.com/slackhq/nebula/releases/tag/v1.7.2
