@@ -18,7 +18,7 @@ type waterTun struct {
 	cidr      *net.IPNet
 	MTU       int
 	Routes    []Route
-	routeTree *cidr.Tree4
+	routeTree *cidr.Tree4[iputil.VpnIp]
 
 	*water.Interface
 }
@@ -80,7 +80,7 @@ func (t *waterTun) Activate() error {
 	}
 
 	for _, r := range t.Routes {
-		if r.Via == nil {
+		if r.Via == nil || !r.Install {
 			// We don't allow route MTUs so only install routes with a via
 			continue
 		}
@@ -97,12 +97,8 @@ func (t *waterTun) Activate() error {
 }
 
 func (t *waterTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	r := t.routeTree.MostSpecificContains(ip)
-	if r != nil {
-		return r.(iputil.VpnIp)
-	}
-
-	return 0
+	_, r := t.routeTree.MostSpecificContains(ip)
+	return r
 }
 
 func (t *waterTun) Cidr() *net.IPNet {

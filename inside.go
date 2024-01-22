@@ -1,11 +1,11 @@
 package nebula
 
 import (
-	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -25,8 +25,9 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	if fwPacket.RemoteIP == f.myVpnIp {
 		// Immediately forward packets from self to self.
-		// This should only happen on Darwin-based hosts, which routes packets from
-		// the Nebula IP to the Nebula IP through the Nebula TUN device.
+		// This should only happen on Darwin-based and FreeBSD hosts, which
+		// routes packets from the Nebula IP to the Nebula IP through the Nebula
+		// TUN device.
 		if immediatelyForwardToSelf {
 			_, err := f.readers[q].Write(packet)
 			if err != nil {
@@ -43,8 +44,12 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		return
 	}
 
-	hostinfo := f.getOrHandshake(fwPacket.RemoteIP)
+	hostinfo, ready := f.getOrHandshake(fwPacket.RemoteIP, func(hh *HandshakeHostInfo) {
+		hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
+	})
+
 	if hostinfo == nil {
+		f.rejectInside(packet, out, q)
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("vpnIp", fwPacket.RemoteIP).
 				WithField("fwPacket", fwPacket).
@@ -52,95 +57,83 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		}
 		return
 	}
-	ci := hostinfo.ConnectionState
 
-	if ci.ready == false {
-		// Because we might be sending stored packets, lock here to stop new things going to
-		// the packet queue.
-		ci.queueLock.Lock()
-		if !ci.ready {
-			hostinfo.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
-			ci.queueLock.Unlock()
-			return
-		}
-		ci.queueLock.Unlock()
+	if !ready {
+		return
 	}
 
-	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, f.caPool, localCache)
+	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
-		f.sendNoMetrics(header.Message, 0, ci, hostinfo, nil, packet, nb, out, q)
+		f.sendNoMetrics(header.Message, 0, hostinfo.ConnectionState, hostinfo, nil, packet, nb, out, q)
 
-	} else if f.l.Level >= logrus.DebugLevel {
-		hostinfo.logger(f.l).
-			WithField("fwPacket", fwPacket).
-			WithField("reason", dropReason).
-			Debugln("dropping outbound packet")
+	} else {
+		f.rejectInside(packet, out, q)
+		if f.l.Level >= logrus.DebugLevel {
+			hostinfo.logger(f.l).
+				WithField("fwPacket", fwPacket).
+				WithField("reason", dropReason).
+				Debugln("dropping outbound packet")
+		}
 	}
+}
+
+func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
+	if !f.firewall.InSendReject {
+		return
+	}
+
+	out = iputil.CreateRejectPacket(packet, out)
+	if len(out) == 0 {
+		return
+	}
+
+	_, err := f.readers[q].Write(out)
+	if err != nil {
+		f.l.WithError(err).Error("Failed to write to tun")
+	}
+}
+
+func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *HostInfo, nb, out []byte, q int) {
+	if !f.firewall.OutSendReject {
+		return
+	}
+
+	out = iputil.CreateRejectPacket(packet, out)
+	if len(out) == 0 {
+		return
+	}
+
+	if len(out) > iputil.MaxRejectPacketSize {
+		if f.l.GetLevel() >= logrus.InfoLevel {
+			f.l.
+				WithField("packet", packet).
+				WithField("outPacket", out).
+				Info("rejectOutside: packet too big, not sending")
+		}
+		return
+	}
+
+	f.sendNoMetrics(header.Message, 0, ci, hostinfo, nil, out, nb, packet, q)
 }
 
 func (f *Interface) Handshake(vpnIp iputil.VpnIp) {
-	f.getOrHandshake(vpnIp)
+	f.getOrHandshake(vpnIp, nil)
 }
 
-// getOrHandshake returns nil if the vpnIp is not routable
-func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
+// getOrHandshake returns nil if the vpnIp is not routable.
+// If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
+func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
 	if !ipMaskContains(f.lightHouse.myVpnIp, f.lightHouse.myVpnZeros, vpnIp) {
 		vpnIp = f.inside.RouteFor(vpnIp)
 		if vpnIp == 0 {
-			return nil
-		}
-	}
-	hostinfo, err := f.hostMap.PromoteBestQueryVpnIp(vpnIp, f)
-
-	//if err != nil || hostinfo.ConnectionState == nil {
-	if err != nil {
-		hostinfo, err = f.handshakeManager.pendingHostMap.QueryVpnIp(vpnIp)
-		if err != nil {
-			hostinfo = f.handshakeManager.AddVpnIp(vpnIp, f.initHostInfo)
-		}
-	}
-	ci := hostinfo.ConnectionState
-
-	if ci != nil && ci.eKey != nil && ci.ready {
-		return hostinfo
-	}
-
-	// Handshake is not ready, we need to grab the lock now before we start the handshake process
-	hostinfo.Lock()
-	defer hostinfo.Unlock()
-
-	// Double check, now that we have the lock
-	ci = hostinfo.ConnectionState
-	if ci != nil && ci.eKey != nil && ci.ready {
-		return hostinfo
-	}
-
-	// If we have already created the handshake packet, we don't want to call the function at all.
-	if !hostinfo.HandshakeReady {
-		ixHandshakeStage0(f, vpnIp, hostinfo)
-		// FIXME: Maybe make XX selectable, but probably not since psk makes it nearly pointless for us.
-		//xx_handshakeStage0(f, ip, hostinfo)
-
-		// If this is a static host, we don't need to wait for the HostQueryReply
-		// We can trigger the handshake right now
-		if _, ok := f.lightHouse.GetStaticHostList()[vpnIp]; ok {
-			select {
-			case f.handshakeManager.trigger <- vpnIp:
-			default:
-			}
+			return nil, false
 		}
 	}
 
-	return hostinfo
+	return f.handshakeManager.GetOrHandshake(vpnIp, cacheCallback)
 }
 
-// initHostInfo is the init function to pass to (*HandshakeManager).AddVpnIP that
-// will create the initial Noise ConnectionState
-func (f *Interface) initHostInfo(hostinfo *HostInfo) {
-	hostinfo.ConnectionState = f.newConnectionState(f.l, true, noise.HandshakeIX, []byte{}, 0)
-}
-
-func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubType, hostInfo *HostInfo, p, nb, out []byte) {
+func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte) {
 	fp := &firewall.Packet{}
 	err := newPacket(p, false, fp)
 	if err != nil {
@@ -149,7 +142,7 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 	}
 
 	// check if packet is in outbound fw rules
-	dropReason := f.firewall.Drop(p, *fp, false, hostInfo, f.caPool, nil)
+	dropReason := f.firewall.Drop(p, *fp, false, hostinfo, f.pki.GetCAPool(), nil)
 	if dropReason != nil {
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("fwPacket", fp).
@@ -159,12 +152,15 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 		return
 	}
 
-	f.sendNoMetrics(header.Message, st, hostInfo.ConnectionState, hostInfo, nil, p, nb, out, 0)
+	f.sendNoMetrics(header.Message, st, hostinfo.ConnectionState, hostinfo, nil, p, nb, out, 0)
 }
 
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
 func (f *Interface) SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, nb, out []byte) {
-	hostInfo := f.getOrHandshake(vpnIp)
+	hostInfo, ready := f.getOrHandshake(vpnIp, func(hh *HandshakeHostInfo) {
+		hh.cachePacket(f.l, t, st, p, f.SendMessageToHostInfo, f.cachedPacketMetrics)
+	})
+
 	if hostInfo == nil {
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("vpnIp", vpnIp).
@@ -173,24 +169,15 @@ func (f *Interface) SendMessageToVpnIp(t header.MessageType, st header.MessageSu
 		return
 	}
 
-	if !hostInfo.ConnectionState.ready {
-		// Because we might be sending stored packets, lock here to stop new things going to
-		// the packet queue.
-		hostInfo.ConnectionState.queueLock.Lock()
-		if !hostInfo.ConnectionState.ready {
-			hostInfo.cachePacket(f.l, t, st, p, f.sendMessageToVpnIp, f.cachedPacketMetrics)
-			hostInfo.ConnectionState.queueLock.Unlock()
-			return
-		}
-		hostInfo.ConnectionState.queueLock.Unlock()
+	if !ready {
+		return
 	}
 
-	f.sendMessageToVpnIp(t, st, hostInfo, p, nb, out)
-	return
+	f.SendMessageToHostInfo(t, st, hostInfo, p, nb, out)
 }
 
-func (f *Interface) sendMessageToVpnIp(t header.MessageType, st header.MessageSubType, hostInfo *HostInfo, p, nb, out []byte) {
-	f.send(t, st, hostInfo.ConnectionState, hostInfo, p, nb, out)
+func (f *Interface) SendMessageToHostInfo(t header.MessageType, st header.MessageSubType, hi *HostInfo, p, nb, out []byte) {
+	f.send(t, st, hi.ConnectionState, hi, p, nb, out)
 }
 
 func (f *Interface) send(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, p, nb, out []byte) {
@@ -203,7 +190,7 @@ func (f *Interface) sendTo(t header.MessageType, st header.MessageSubType, ci *C
 	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
 }
 
-// sendVia sends a payload through a Relay tunnel. No authentication or encryption is done
+// SendVia sends a payload through a Relay tunnel. No authentication or encryption is done
 // to the payload for the ultimate target host, making this a useful method for sending
 // handshake messages to peers through relay tunnels.
 // via is the HostInfo through which the message is relayed.
@@ -211,23 +198,28 @@ func (f *Interface) sendTo(t header.MessageType, st header.MessageSubType, ci *C
 // nb is a buffer used to store the nonce value, re-used for performance reasons.
 // out is a buffer used to store the result of the Encrypt operation
 // q indicates which writer to use to send the packet.
-func (f *Interface) SendVia(viaIfc interface{},
-	relayIfc interface{},
+func (f *Interface) SendVia(via *HostInfo,
+	relay *Relay,
 	ad,
 	nb,
 	out []byte,
 	nocopy bool,
 ) {
-	via := viaIfc.(*HostInfo)
-	relay := relayIfc.(*Relay)
+	if noiseutil.EncryptLockNeeded {
+		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
+		via.ConnectionState.writeLock.Lock()
+	}
 	c := via.ConnectionState.messageCounter.Add(1)
 
 	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, relay.RemoteIndex, c)
-	f.connectionManager.Out(via.vpnIp)
+	f.connectionManager.Out(via.localIndexId)
 
 	// Authenticate the header and payload, but do not encrypt for this message type.
 	// The payload consists of the inner, unencrypted Nebula header, as well as the end-to-end encrypted payload.
 	if len(out)+len(ad)+via.ConnectionState.eKey.Overhead() > cap(out) {
+		if noiseutil.EncryptLockNeeded {
+			via.ConnectionState.writeLock.Unlock()
+		}
 		via.logger(f.l).
 			WithField("outCap", cap(out)).
 			WithField("payloadLen", len(ad)).
@@ -249,6 +241,9 @@ func (f *Interface) SendVia(viaIfc interface{},
 
 	var err error
 	out, err = via.ConnectionState.eKey.EncryptDanger(out, out, nil, c, nb)
+	if noiseutil.EncryptLockNeeded {
+		via.ConnectionState.writeLock.Unlock()
+	}
 	if err != nil {
 		via.logger(f.l).WithError(err).Info("Failed to EncryptDanger in sendVia")
 		return
@@ -257,6 +252,7 @@ func (f *Interface) SendVia(viaIfc interface{},
 	if err != nil {
 		via.logger(f.l).WithError(err).Info("Failed to WriteTo in sendVia")
 	}
+	f.connectionManager.RelayUsed(relay.LocalIndex)
 }
 
 func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udp.Addr, p, nb, out []byte, q int) {
@@ -277,20 +273,22 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		out = out[header.Len:]
 	}
 
-	//TODO: enable if we do more than 1 tun queue
-	//ci.writeLock.Lock()
+	if noiseutil.EncryptLockNeeded {
+		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
+		ci.writeLock.Lock()
+	}
 	c := ci.messageCounter.Add(1)
 
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
 	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)
-	f.connectionManager.Out(hostinfo.vpnIp)
+	f.connectionManager.Out(hostinfo.localIndexId)
 
 	// Query our LH if we haven't since the last time we've been rebound, this will cause the remote to punch against
 	// all our IPs and enable a faster roaming.
 	if t != header.CloseTunnel && hostinfo.lastRebindCount != f.rebindCount {
 		//NOTE: there is an update hole if a tunnel isn't used and exactly 256 rebinds occur before the tunnel is
 		// finally used again. This tunnel would eventually be torn down and recreated if this action didn't help.
-		f.lightHouse.QueryServer(hostinfo.vpnIp, f)
+		f.lightHouse.QueryServer(hostinfo.vpnIp)
 		hostinfo.lastRebindCount = f.rebindCount
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("vpnIp", hostinfo.vpnIp).Debug("Lighthouse update triggered for punch due to rebind counter")
@@ -299,8 +297,9 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 
 	var err error
 	out, err = ci.eKey.EncryptDanger(out, out, p, c, nb)
-	//TODO: see above note on lock
-	//ci.writeLock.Unlock()
+	if noiseutil.EncryptLockNeeded {
+		ci.writeLock.Unlock()
+	}
 	if err != nil {
 		hostinfo.logger(f.l).WithError(err).
 			WithField("udpAddr", remote).WithField("counter", c).
@@ -324,31 +323,19 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	} else {
 		// Try to send via a relay
 		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
-			relayHostInfo, err := f.hostMap.QueryVpnIp(relayIP)
+			relayHostInfo, relay, err := f.hostMap.QueryVpnIpRelayFor(hostinfo.vpnIp, relayIP)
 			if err != nil {
-				hostinfo.logger(f.l).WithField("relayIp", relayIP).WithError(err).Info("sendNoMetrics failed to find HostInfo")
-				continue
-			}
-			relay, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp)
-			if !ok {
-				hostinfo.logger(f.l).
-					WithField("relayIp", relayHostInfo.vpnIp).
-					WithField("relayTarget", hostinfo.vpnIp).
-					Info("sendNoMetrics relay missing object for target")
+				hostinfo.relayState.DeleteRelay(relayIP)
+				hostinfo.logger(f.l).WithField("relay", relayIP).WithError(err).Info("sendNoMetrics failed to find HostInfo")
 				continue
 			}
 			f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true)
 			break
 		}
 	}
-	return
 }
 
 func isMulticast(ip iputil.VpnIp) bool {
 	// Class D multicast
-	if (((ip >> 24) & 0xff) & 0xf0) == 0xe0 {
-		return true
-	}
-
-	return false
+	return (((ip >> 24) & 0xff) & 0xf0) == 0xe0
 }

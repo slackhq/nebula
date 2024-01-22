@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync/atomic"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cidr"
@@ -18,14 +19,15 @@ type TestTun struct {
 	Device    string
 	cidr      *net.IPNet
 	Routes    []Route
-	routeTree *cidr.Tree4
+	routeTree *cidr.Tree4[iputil.VpnIp]
 	l         *logrus.Logger
 
+	closed    atomic.Bool
 	rxPackets chan []byte // Packets to receive into nebula
 	TxPackets chan []byte // Packets transmitted outside by nebula
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, _ int, routes []Route, _ int, _ bool) (*TestTun, error) {
+func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, _ int, routes []Route, _ int, _ bool, _ bool) (*TestTun, error) {
 	routeTree, err := makeRouteTree(l, routes, false)
 	if err != nil {
 		return nil, err
@@ -42,7 +44,7 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, _ int, routes 
 	}, nil
 }
 
-func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int) (*TestTun, error) {
+func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int, _ bool) (*TestTun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported")
 }
 
@@ -50,8 +52,12 @@ func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int
 // These are unencrypted ip layer frames destined for another nebula node.
 // packets should exit the udp side, capture them with udpConn.Get
 func (t *TestTun) Send(packet []byte) {
-	if t.l.Level >= logrus.InfoLevel {
-		t.l.WithField("dataLen", len(packet)).Info("Tun receiving injected packet")
+	if t.closed.Load() {
+		return
+	}
+
+	if t.l.Level >= logrus.DebugLevel {
+		t.l.WithField("dataLen", len(packet)).Debug("Tun receiving injected packet")
 	}
 	t.rxPackets <- packet
 }
@@ -77,12 +83,8 @@ func (t *TestTun) Get(block bool) []byte {
 //********************************************************************************************************************//
 
 func (t *TestTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	r := t.routeTree.MostSpecificContains(ip)
-	if r != nil {
-		return r.(iputil.VpnIp)
-	}
-
-	return 0
+	_, r := t.routeTree.MostSpecificContains(ip)
+	return r
 }
 
 func (t *TestTun) Activate() error {
@@ -98,6 +100,10 @@ func (t *TestTun) Name() string {
 }
 
 func (t *TestTun) Write(b []byte) (n int, err error) {
+	if t.closed.Load() {
+		return 0, io.ErrClosedPipe
+	}
+
 	packet := make([]byte, len(b), len(b))
 	copy(packet, b)
 	t.TxPackets <- packet
@@ -105,7 +111,10 @@ func (t *TestTun) Write(b []byte) (n int, err error) {
 }
 
 func (t *TestTun) Close() error {
-	close(t.rxPackets)
+	if t.closed.CompareAndSwap(false, true) {
+		close(t.rxPackets)
+		close(t.TxPackets)
+	}
 	return nil
 }
 

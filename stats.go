@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"strconv"
 	"time"
 
 	graphite "github.com/cyberdelia/go-metrics-graphite"
@@ -18,7 +19,7 @@ import (
 	"github.com/slackhq/nebula/config"
 )
 
-// startStats initializes stats from config. On success, if any futher work
+// startStats initializes stats from config. On success, if any further work
 // is needed to serve stats, it returns a func to handle that work. If no
 // work is needed, it'll return nil. On failure, it returns nil, error.
 func startStats(l *logrus.Logger, c *config.C, buildVersion string, configTest bool) (func(), error) {
@@ -105,8 +106,9 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildV
 		Name:      "info",
 		Help:      "Version information for the Nebula binary",
 		ConstLabels: prometheus.Labels{
-			"version":   buildVersion,
-			"goversion": runtime.Version(),
+			"version":      buildVersion,
+			"goversion":    runtime.Version(),
+			"boringcrypto": strconv.FormatBool(boringEnabled()),
 		},
 	})
 	pr.MustRegister(g)

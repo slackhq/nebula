@@ -14,14 +14,15 @@ import (
 )
 
 type Route struct {
-	MTU    int
-	Metric int
-	Cidr   *net.IPNet
-	Via    *iputil.VpnIp
+	MTU     int
+	Metric  int
+	Cidr    *net.IPNet
+	Via     *iputil.VpnIp
+	Install bool
 }
 
-func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*cidr.Tree4, error) {
-	routeTree := cidr.NewTree4()
+func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*cidr.Tree4[iputil.VpnIp], error) {
+	routeTree := cidr.NewTree4[iputil.VpnIp]()
 	for _, r := range routes {
 		if !allowMTU && r.MTU > 0 {
 			l.WithField("route", r).Warnf("route MTU is not supported in %s", runtime.GOOS)
@@ -81,7 +82,8 @@ func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 		}
 
 		r := Route{
-			MTU: mtu,
+			Install: true,
+			MTU:     mtu,
 		}
 
 		_, r.Cidr, err = net.ParseCIDR(fmt.Sprintf("%v", rRoute))
@@ -182,10 +184,20 @@ func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 
 		viaVpnIp := iputil.Ip2VpnIp(nVia)
 
+		install := true
+		rInstall, ok := m["install"]
+		if ok {
+			install, err = strconv.ParseBool(fmt.Sprintf("%v", rInstall))
+			if err != nil {
+				return nil, fmt.Errorf("entry %v.install in tun.unsafe_routes is not a boolean: %v", i+1, err)
+			}
+		}
+
 		r := Route{
-			Via:    &viaVpnIp,
-			MTU:    mtu,
-			Metric: metric,
+			Via:     &viaVpnIp,
+			MTU:     mtu,
+			Metric:  metric,
+			Install: install,
 		}
 
 		_, r.Cidr, err = net.ParseCIDR(fmt.Sprintf("%v", rRoute))

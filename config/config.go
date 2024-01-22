@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/imdario/mergo"
+	"dario.cat/mergo"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 )
@@ -121,6 +121,10 @@ func (c *C) HasChanged(k string) bool {
 // CatchHUP will listen for the HUP signal in a go routine and reload all configs found in the
 // original path provided to Load. The old settings are shallow copied for change detection after the reload.
 func (c *C) CatchHUP(ctx context.Context) {
+	if c.path == "" {
+		return
+	}
+
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGHUP)
 
@@ -236,6 +240,15 @@ func (c *C) GetInt(k string, d int) int {
 	return v
 }
 
+// GetUint32 will get the uint32 for k or return the default d if not found or invalid
+func (c *C) GetUint32(k string, d uint32) uint32 {
+	r := c.GetInt(k, int(d))
+	if uint64(r) > uint64(math.MaxUint32) {
+		return d
+	}
+	return uint32(r)
+}
+
 // GetBool will get the bool for k or return the default d if not found or invalid
 func (c *C) GetBool(k string, d bool) bool {
 	r := strings.ToLower(c.GetString(k, fmt.Sprintf("%v", d)))
@@ -348,7 +361,7 @@ func (c *C) parse() error {
 	var m map[interface{}]interface{}
 
 	for _, path := range c.files {
-		b, err := ioutil.ReadFile(path)
+		b, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}

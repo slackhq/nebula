@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/miekg/dns"
@@ -33,11 +34,10 @@ func newDnsRecords(hostMap *HostMap) *dnsRecords {
 
 func (d *dnsRecords) Query(data string) string {
 	d.RLock()
-	if r, ok := d.dnsMap[data]; ok {
-		d.RUnlock()
+	defer d.RUnlock()
+	if r, ok := d.dnsMap[strings.ToLower(data)]; ok {
 		return r
 	}
-	d.RUnlock()
 	return ""
 }
 
@@ -47,8 +47,8 @@ func (d *dnsRecords) QueryCert(data string) string {
 		return ""
 	}
 	iip := iputil.Ip2VpnIp(ip)
-	hostinfo, err := d.hostMap.QueryVpnIp(iip)
-	if err != nil {
+	hostinfo := d.hostMap.QueryVpnIp(iip)
+	if hostinfo == nil {
 		return ""
 	}
 	q := hostinfo.GetCert()
@@ -62,8 +62,8 @@ func (d *dnsRecords) QueryCert(data string) string {
 
 func (d *dnsRecords) Add(host, data string) {
 	d.Lock()
-	d.dnsMap[host] = data
-	d.Unlock()
+	defer d.Unlock()
+	d.dnsMap[strings.ToLower(host)] = data
 }
 
 func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {

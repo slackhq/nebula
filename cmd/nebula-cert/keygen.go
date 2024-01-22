@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 
 	"github.com/slackhq/nebula/cert"
@@ -14,6 +13,8 @@ type keygenFlags struct {
 	set        *flag.FlagSet
 	outKeyPath *string
 	outPubPath *string
+
+	curve *string
 }
 
 func newKeygenFlags() *keygenFlags {
@@ -21,6 +22,7 @@ func newKeygenFlags() *keygenFlags {
 	cf.set.Usage = func() {}
 	cf.outPubPath = cf.set.String("out-pub", "", "Required: path to write the public key to")
 	cf.outKeyPath = cf.set.String("out-key", "", "Required: path to write the private key to")
+	cf.curve = cf.set.String("curve", "25519", "ECDH Curve (25519, P256)")
 	return &cf
 }
 
@@ -38,14 +40,25 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 		return err
 	}
 
-	pub, rawPriv := x25519Keypair()
+	var pub, rawPriv []byte
+	var curve cert.Curve
+	switch *cf.curve {
+	case "25519", "X25519", "Curve25519", "CURVE25519":
+		pub, rawPriv = x25519Keypair()
+		curve = cert.Curve_CURVE25519
+	case "P256":
+		pub, rawPriv = p256Keypair()
+		curve = cert.Curve_P256
+	default:
+		return fmt.Errorf("invalid curve: %s", *cf.curve)
+	}
 
-	err = ioutil.WriteFile(*cf.outKeyPath, cert.MarshalX25519PrivateKey(rawPriv), 0600)
+	err = os.WriteFile(*cf.outKeyPath, cert.MarshalPrivateKey(curve, rawPriv), 0600)
 	if err != nil {
 		return fmt.Errorf("error while writing out-key: %s", err)
 	}
 
-	err = ioutil.WriteFile(*cf.outPubPath, cert.MarshalX25519PublicKey(pub), 0600)
+	err = os.WriteFile(*cf.outPubPath, cert.MarshalPublicKey(curve, pub), 0600)
 	if err != nil {
 		return fmt.Errorf("error while writing out-pub: %s", err)
 	}

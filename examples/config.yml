@@ -11,7 +11,7 @@ pki:
   #blocklist:
   #  - c99d4e650533b92061b09918e838a5a0a6aaee21eed1d12fd937682865936c72
   # disconnect_invalid is a toggle to force a client to be disconnected if the certificate is expired or invalid.
-  #disconnect_invalid: false
+  #disconnect_invalid: true
 
 # The static host map defines a set of hosts with fixed IP addresses on the internet (or any network).
 # A host can have multiple fixed IP addresses defined here, and nebula will try each when establishing a tunnel.
@@ -21,6 +21,19 @@ pki:
 static_host_map:
   "192.168.100.1": ["100.64.22.11:4242"]
 
+# The static_map config stanza can be used to configure how the static_host_map behaves.
+#static_map:
+  # cadence determines how frequently DNS is re-queried for updated IP addresses when a static_host_map entry contains
+  # a DNS name.
+  #cadence: 30s
+
+  # network determines the type of IP addresses to ask the DNS server for. The default is "ip4" because nodes typically
+  # do not know their public IPv4 address. Connecting to the Lighthouse via IPv4 allows the Lighthouse to detect the
+  # public address. Other valid options are "ip6" and "ip" (returns both.)
+  #network: ip4
+
+  # lookup_timeout is the DNS query timeout.
+  #lookup_timeout: 250ms
 
 lighthouse:
   # am_lighthouse is used to enable lighthouse functionality for a node. This should ONLY be true on nodes
@@ -47,8 +60,9 @@ lighthouse:
   # allowed. You can provide CIDRs here with `true` to allow and `false` to
   # deny. The most specific CIDR rule applies to each remote. If all rules are
   # "allow", the default will be "deny", and vice-versa. If both "allow" and
-  # "deny" rules are present, then you MUST set a rule for "0.0.0.0/0" as the
-  # default.
+  # "deny" IPv4 rules are present, then you MUST set a rule for "0.0.0.0/0" as
+  # the default. Similarly if both "allow" and "deny" IPv6 rules are present,
+  # then you MUST set a rule for "::/0" as the default.
   #remote_allow_list:
     # Example to block IPs from this subnet from being used for remote IPs.
     #"172.16.0.0/12": false
@@ -90,10 +104,23 @@ lighthouse:
     #- "1.1.1.1:4242"
     #- "1.2.3.4:0" # port will be replaced with the real listening port
 
+  # EXPERIMENTAL: This option may change or disappear in the future.
+  # This setting allows us to "guess" what the remote might be for a host
+  # while we wait for the lighthouse response.
+  #calculated_remotes:
+    # For any Nebula IPs in 10.0.10.0/24, this will apply the mask and add
+    # the calculated IP as an initial remote (while we wait for the response
+    # from the lighthouse). Both CIDRs must have the same mask size.
+    # For example, Nebula IP 10.0.10.123 will have a calculated remote of
+    # 192.168.1.123
+    #10.0.10.0/24:
+      #- mask: 192.168.1.0/24
+      #  port: 4242
+
 # Port Nebula will be listening on. The default here is 4242. For a lighthouse node, the port should be defined,
 # however using port 0 will dynamically assign a port and is recommended for roaming nodes.
 listen:
-  # To listen on both any ipv4 and ipv6 use "[::]"
+  # To listen on both any ipv4 and ipv6 use "::"
   host: 0.0.0.0
   port: 4242
   # Sets the max number of packets to pull from the kernel for each syscall (under systems that support recvmmsg)
@@ -128,12 +155,15 @@ punchy:
   # Default is false
   #respond: true
 
-  # delays a punch response for misbehaving NATs, default is 1 second, respond must be true to take effect
+  # delays a punch response for misbehaving NATs, default is 1 second.
   #delay: 1s
+
+  # set the delay before attempting punchy.respond. Default is 5 seconds. respond must be true to take effect.
+  #respond_delay: 5s
 
 # Cipher allows you to choose between the available ciphers for your network. Options are chachapoly or aes
 # IMPORTANT: this value must be identical on ALL NODES/LIGHTHOUSES. We do not/will not support use of different ciphers simultaneously!
-#cipher: chachapoly
+#cipher: aes
 
 # Preferred ranges is used to define a hint about the local network ranges, which speeds up discovering the fastest
 # path to a network adjacent nebula node.
@@ -141,7 +171,8 @@ punchy:
 # and has been deprecated for "preferred_ranges"
 #preferred_ranges: ["172.16.0.0/24"]
 
-# sshd can expose informational and administrative functions via ssh this is a
+# sshd can expose informational and administrative functions via ssh. This can expose informational and administrative
+# functions, and allows manual tweaking of various network settings when debugging or testing.
 #sshd:
   # Toggles the feature
   #enabled: true
@@ -177,7 +208,7 @@ tun:
   disabled: false
   # Name of the device. If not set, a default will be chosen by the OS.
   # For macOS: if set, must be in the form `utun[0-9]+`.
-  # For FreeBSD: Required to be set, must be in the form `tun[0-9]+`.
+  # For NetBSD: Required to be set, must be in the form `tun[0-9]+`
   dev: nebula1
   # Toggles forwarding of local broadcast packets, the address of which depends on the ip/mask encoded in pki.cert
   drop_local_broadcast: false
@@ -187,21 +218,28 @@ tun:
   tx_queue: 500
   # Default MTU for every packet, safe setting is (and the default) 1300 for internet based traffic
   mtu: 1300
+
   # Route based MTU overrides, you have known vpn ip paths that can support larger MTUs you can increase/decrease them here
   routes:
     #- mtu: 8800
     #  route: 10.0.0.0/16
+
   # Unsafe routes allows you to route traffic over nebula to non-nebula nodes
   # Unsafe routes should be avoided unless you have hosts/services that cannot run nebula
   # NOTE: The nebula certificate of the "via" node *MUST* have the "route" defined as a subnet in its certificate
-  # `mtu` will default to tun mtu if this option is not specified
-  # `metric` will default to 0 if this option is not specified
+  # `mtu`: will default to tun mtu if this option is not specified
+  # `metric`: will default to 0 if this option is not specified
+  # `install`: will default to true, controls whether this route is installed in the systems routing table.
   unsafe_routes:
     #- route: 172.16.1.0/24
     #  via: 192.168.100.99
     #  mtu: 1300
     #  metric: 100
+    #  install: true
 
+  # On linux only, set to true to manage unsafe routes directly on the system route table with gateway routes instead of
+  # in nebula configuration files. Default false, not reloadable.
+  #use_system_route_table: false
 
 # TODO
 # Configure logging level
@@ -251,6 +289,10 @@ logging:
   # A 100ms interval with the default 10 retries will give a handshake 5.5 seconds to resolve before timing out
   #try_interval: 100ms
   #retries: 20
+
+  # query_buffer is the size of the buffer channel for querying lighthouses
+  #query_buffer: 64
+
   # trigger_buffer is the size of the buffer channel for quickly sending handshakes
   # after receiving the response for lighthouse queries
   #trigger_buffer: 64
@@ -258,6 +300,15 @@ logging:
 
 # Nebula security group configuration
 firewall:
+  # Action to take when a packet is not allowed by the firewall rules.
+  # Can be one of:
+  #   `drop` (default): silently drop the packet.
+  #   `reject`: send a reject reply.
+  #     - For TCP, this will be a RST "Connection Reset" packet.
+  #     - For other protocols, this will be an ICMP port unreachable packet.
+  outbound_action: drop
+  inbound_action: drop
+
   conntrack:
     tcp_timeout: 12m
     udp_timeout: 3m
@@ -272,7 +323,8 @@ firewall:
   #   host: `any` or a literal hostname, ie `test-host`
   #   group: `any` or a literal group name, ie `default-group`
   #   groups: Same as group but accepts a list of values. Multiple values are AND'd together and a certificate would have to contain all groups to pass
-  #   cidr: a CIDR, `0.0.0.0/0` is any.
+  #   cidr: a remote CIDR, `0.0.0.0/0` is any.
+  #   local_cidr: a local CIDR, `0.0.0.0/0` is any. This could be used to filter destinations when using unsafe_routes.
   #   ca_name: An issuing CA name
   #   ca_sha: An issuing CA shasum
 

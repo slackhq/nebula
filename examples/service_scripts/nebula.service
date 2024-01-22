@@ -1,10 +1,12 @@
 [Unit]
-Description=nebula
-Wants=basic.target
-After=basic.target network.target
+Description=Nebula overlay networking tool
+Wants=basic.target network-online.target nss-lookup.target time-sync.target
+After=basic.target network.target network-online.target
 Before=sshd.service
 
 [Service]
+Type=notify
+NotifyAccess=main
 SyslogIdentifier=nebula
 ExecReload=/bin/kill -HUP $MAINPID
 ExecStart=/usr/local/bin/nebula -config /etc/nebula/config.yml

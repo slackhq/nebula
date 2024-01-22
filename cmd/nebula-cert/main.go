@@ -62,11 +62,11 @@ func main() {
 
 	switch args[0] {
 	case "ca":
-		err = ca(args[1:], os.Stdout, os.Stderr)
+		err = ca(args[1:], os.Stdout, os.Stderr, StdinPasswordReader{})
 	case "keygen":
 		err = keygen(args[1:], os.Stdout, os.Stderr)
 	case "sign":
-		err = signCert(args[1:], os.Stdout, os.Stderr)
+		err = signCert(args[1:], os.Stdout, os.Stderr, StdinPasswordReader{})
 	case "print":
 		err = printCert(args[1:], os.Stdout, os.Stderr)
 	case "verify":
@@ -127,6 +127,8 @@ func help(err string, out io.Writer) {
 	fmt.Fprintln(out, "    "+signSummary())
 	fmt.Fprintln(out, "    "+printSummary())
 	fmt.Fprintln(out, "    "+verifySummary())
+	fmt.Fprintln(out, "")
+	fmt.Fprintf(out, "  To see usage for a given mode, use %s <mode> -h\n", os.Args[0])
 }
 
 func mustFlagString(name string, val *string) error {
