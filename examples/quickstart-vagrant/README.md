@@ -1,10 +1,24 @@
 # Quickstart Guide
 
-This guide is intended to bring up a vagrant environment with 1 lighthouse and 2 generic hosts running nebula.
+This guide is intended to bring up a vagrant environment with 1 lighthouse and
+2 generic hosts running Nebula.
+
+## Check and install Go on host
+
+Before you start, check what version of Go you have installed:
+
+```
+go version
+```
+
+Compare with a minimum version that is listed in the [Makefile](https://github.com/slackhq/nebula/blob/master/Makefile#L1)
+(Example for master branch).
+
+If necessary, install or update your Go version.
 
 ## Creating the virtualenv for ansible
 
-Within the `quickstart/` directory, do the following
+Within the `quickstart-vagrant/` directory, do the following:
 
 ```
 # make a virtual environment
@@ -19,25 +33,26 @@ pip install -r requirements.yml
 
 ## Bringing up the vagrant environment
 
-A plugin that is used for the Vagrant environment is `vagrant-hostmanager`
+Plugins that are used for the Vagrant environment is `vagrant-hostmanager` and
+`vagrant-cachier`.
 
-To install, run
+Vagrant will install them automatically if it is necessary.
 
-```
-vagrant plugin install vagrant-hostmanager
-```
 
-All hosts within the Vagrantfile are brought up with
+All hosts within the Vagrantfile are brought up with:
 
-`vagrant up` 
+`vagrant up`
 
-Once the boxes are up, go into the `ansible/` directory and deploy the playbook by running
+During the execution of the `vagrant up`, the Nebula will be installed using
+the Ansible.
 
-`ansible-playbook playbook.yml -i inventory -u vagrant`
+Installation of the Nebula can always be repeated using the command:
+
+`vagrant provision`
 
 ## Testing within the vagrant env
 
-Once the ansible run is done, hop onto a vagrant box 
+Once the `vagrant up` is done, hop onto a vagrant box:
 
 `vagrant ssh generic1.vagrant`
 
@@ -45,8 +60,8 @@ or specifically
 
 `ssh vagrant@<ip-address-in-vagrant-file` (password for the vagrant user on the boxes is `vagrant`)
 
-Some quick tests once the vagrant boxes are up are to ping from `generic1.vagrant` to `generic2.vagrant` using 
-their respective nebula ip address. 
+Some quick tests once the vagrant boxes are up are to ping from `generic1.vagrant` to
+`generic2.vagrant` using their respective Nebula ip address.
 
 ```
 vagrant@generic1:~$ ping 10.168.91.220
@@ -55,32 +70,34 @@ PING 10.168.91.220 (10.168.91.220) 56(84) bytes of data.
 64 bytes from 10.168.91.220: icmp_seq=2 ttl=64 time=0.704 ms
 ```
 
-You can further verify that the allowed nebula firewall rules work by ssh'ing from 1 generic box to the other.
+You can further verify that the allowed Nebula firewall rules work by ssh'ing
+from 1 generic box to the other.
 
 `ssh vagrant@<nebula-ip-address>`  (password for the vagrant user on the boxes is `vagrant`)
 
 See `/etc/nebula/config.yml` on a box for firewall rules.
 
-To see full handshakes and hostmaps, change the logging config of `/etc/nebula/config.yml` on the vagrant boxes from 
-info to debug.
+To see full handshakes and hostmaps, change the logging config of `/etc/nebula/config.yml`
+on the vagrant boxes from info to debug.
 
-You can watch nebula logs by running
+You can watch Nebula logs by running:
 
 ```
 sudo journalctl -fu nebula
 ```
 
-Refer to the nebula src code directory's README for further instructions on configuring nebula.
+Refer to the Nebula src code directory's README for further instructions on
+configuring Nebula.
 
 ## Troubleshooting
 
-### Is nebula up and running?
+### Is Nebula up and running?
 
-Run and verify that 
+Run and verify that:
 
 ```
 ifconfig
-``` 
+```
 
 shows you an interface with the name `nebula1` being up.
 
@@ -98,22 +115,23 @@ nebula1: flags=4305<UP,POINTOPOINT,RUNNING,NOARP,MULTICAST>  mtu 1300
 
 ### Connectivity
 
-Are you able to ping other boxes on the private nebula network?
+Are you able to ping other boxes on the private Nebula network?
 
-The following are the private nebula ip addresses of the vagrant env 
+The following are the private Nebula ip addresses of the vagrant env:
 
 ```
 generic1.vagrant [nebula_ip] 10.168.91.210
-generic2.vagrant [nebula_ip] 10.168.91.220 
+generic2.vagrant [nebula_ip] 10.168.91.220
 lighthouse1.vagrant [nebula_ip] 10.168.91.230
 ```
 
-Try pinging generic1.vagrant to and from any other box using its nebula ip above.
+Try pinging generic1.vagrant to and from any other box using its Nebula ip above.
 
-Double check the nebula firewall rules under /etc/nebula/config.yml to make sure that connectivity is allowed for your use-case if on a specific port.
+Double check the Nebula firewall rules under /etc/nebula/config.yml to make sure
+that connectivity is allowed for your use-case if on a specific port.
 
 ```
-vagrant@lighthouse1:~$ grep -A21 firewall /etc/nebula/config.yml 
+vagrant@lighthouse1:~$ grep -A21 firewall /etc/nebula/config.yml
 firewall:
   conntrack:
     tcp_timeout: 12m

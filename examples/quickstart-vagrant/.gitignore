@@ -1,0 +1,7 @@
+# Ignore the dir Vagrant created
+.vagrant/
+
+# Ignore the virtualenv for ansible
+venv/
+
+__pycache__

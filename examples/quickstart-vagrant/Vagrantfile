@@ -1,9 +1,9 @@
 Vagrant.require_version ">= 2.2.6"
 
 nodes = [
-  { :hostname => 'generic1.vagrant', :ip => '172.11.91.210', :box => 'bento/ubuntu-18.04', :ram => '512', :cpus => 1},
-  { :hostname => 'generic2.vagrant', :ip => '172.11.91.220', :box => 'bento/ubuntu-18.04', :ram => '512', :cpus => 1},
-  { :hostname => 'lighthouse1.vagrant', :ip => '172.11.91.230', :box => 'bento/ubuntu-18.04', :ram => '512', :cpus => 1},
+  { :hostname => 'generic1.vagrant',    :ip => '172.11.91.210', :box => 'ubuntu/focal64', :ram => '512', :cpus => 1},
+  { :hostname => 'generic2.vagrant',    :ip => '172.11.91.220', :box => 'ubuntu/focal64', :ram => '512', :cpus => 1},
+  { :hostname => 'lighthouse1.vagrant', :ip => '172.11.91.230', :box => 'ubuntu/focal64', :ram => '512', :cpus => 1},
 ]
 
 Vagrant.configure("2") do |config|
@@ -13,7 +13,11 @@ Vagrant.configure("2") do |config|
   if Vagrant.has_plugin?('vagrant-cachier')
     config.cache.enable :apt
   else
-    printf("** Install vagrant-cachier plugin to speedup deploy: `vagrant plugin install vagrant-cachier`.**\n")
+    puts "vagrant-cachier plugin not installed!"
+    puts "Try to install the vagrant-cachier plugin..."
+    system('vagrant plugin install vagrant-cachier')
+    puts "Please run the requested command again."
+    abort
   end
 
   if Vagrant.has_plugin?('vagrant-hostmanager')
@@ -21,17 +25,54 @@ Vagrant.configure("2") do |config|
     config.hostmanager.manage_host = true
     config.hostmanager.include_offline = true
   else
-    config.vagrant.plugins = "vagrant-hostmanager"
+    puts "vagrant-hostmanager plugin not installed!"
+    puts "Try to install the vagrant-hostmanager plugin..."
+    system('vagrant plugin install vagrant-hostmanager')
+    puts "Please run the requested command again."
+    abort
   end
 
- nodes.each do |node|
+  nodes.each do |node|
     config.vm.define node[:hostname] do |node_config|
       node_config.vm.box = node[:box]
       node_config.vm.hostname = node[:hostname]
       node_config.vm.network :private_network, ip: node[:ip]
+      node_config.vm.provision "shell", inline: <<-SHELL
+      set -o xtrace
+      set -o pipefail
+      set -o errexit
+      export DEBIAN_FRONTEND=noninteractive
+      export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+      apt-get update
+      apt-get install -y net-tools iperf3
+      SHELL
+      if node[:hostname] == 'lighthouse1.vagrant'
+        node_config.vm.provision "ansible" do |ansible|
+          ansible.limit = "all,localhost"
+          ansible.playbook = "ansible/playbook.yml"
+          ansible.inventory_path = "ansible/inventory"
+          ansible.config_file = "ansible/ansible.cfg"
+          #ansible.verbose  = "-vvv"
+        end
+      end
       node_config.vm.provider :virtualbox do |vb|
+        vb.name = node[:hostname]
+        vb.gui = false
         vb.memory = node[:ram]
         vb.cpus = node[:cpus]
+        vb.default_nic_type = "virtio"
+        vb.customize ['modifyvm', :id, '--graphicscontroller', 'vmsvga']
+        vb.customize ['modifyvm', :id, '--vram', '32']
+        vb.customize ['modifyvm', :id, '--audio', 'none']
+        vb.customize ['modifyvm', :id, '--uart1', 'off']
+        vb.customize ['modifyvm', :id, '--uart2', 'off']
+        vb.customize ['modifyvm', :id, '--uart3', 'off']
+        vb.customize ['modifyvm', :id, '--uart4', 'off']
+        vb.customize ['modifyvm', :id, '--boot1', 'disk']
+        vb.customize ['modifyvm', :id, '--boot2', 'none']
+        vb.customize ['modifyvm', :id, '--boot3', 'none']
+        vb.customize ['modifyvm', :id, '--boot4', 'none']
+        vb.customize ['storagectl', :id, '--name', 'SCSI', '--hostiocache', 'on']
         vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
         vb.customize ['guestproperty', 'set', :id, '/VirtualBox/GuestAdd/VBoxService/--timesync-set-threshold', 10000]
       end
