@@ -6,8 +6,19 @@ import (
 	"golang.org/x/net/ipv4"
 )
 
+const (
+	// Need 96 bytes for the largest reject packet:
+	// - 20 byte ipv4 header
+	// - 8 byte icmpv4 header
+	// - 68 byte body (60 byte max orig ipv4 header + 8 byte orig icmpv4 header)
+	MaxRejectPacketSize = ipv4.HeaderLen + 8 + 60 + 8
+)
+
 func CreateRejectPacket(packet []byte, out []byte) []byte {
-	// TODO ipv4 only, need to fix when inside supports ipv6
+	if len(packet) < ipv4.HeaderLen || int(packet[0]>>4) != ipv4.Version {
+		return nil
+	}
+
 	switch packet[9] {
 	case 6: // tcp
 		return ipv4CreateRejectTCPPacket(packet, out)
@@ -19,20 +30,28 @@ func CreateRejectPacket(packet []byte, out []byte) []byte {
 func ipv4CreateRejectICMPPacket(packet []byte, out []byte) []byte {
 	ihl := int(packet[0]&0x0f) << 2
 
-	// ICMP reply includes header and first 8 bytes of the packet
+	if len(packet) < ihl {
+		// We need at least this many bytes for this to be a valid packet
+		return nil
+	}
+
+	// ICMP reply includes original header and first 8 bytes of the packet
 	packetLen := len(packet)
 	if packetLen > ihl+8 {
 		packetLen = ihl + 8
 	}
 
 	outLen := ipv4.HeaderLen + 8 + packetLen
+	if outLen > cap(out) {
+		return nil
+	}
 
-	out = out[:(outLen)]
+	out = out[:outLen]
 
 	ipHdr := out[0:ipv4.HeaderLen]
-	ipHdr[0] = ipv4.Version<<4 | (ipv4.HeaderLen >> 2)                        // version, ihl
-	ipHdr[1] = 0                                                              // DSCP, ECN
-	binary.BigEndian.PutUint16(ipHdr[2:], uint16(ipv4.HeaderLen+8+packetLen)) // Total Length
+	ipHdr[0] = ipv4.Version<<4 | (ipv4.HeaderLen >> 2)    // version, ihl
+	ipHdr[1] = 0                                          // DSCP, ECN
+	binary.BigEndian.PutUint16(ipHdr[2:], uint16(outLen)) // Total Length
 
 	ipHdr[4] = 0  // id
 	ipHdr[5] = 0  //  .
@@ -76,7 +95,15 @@ func ipv4CreateRejectTCPPacket(packet []byte, out []byte) []byte {
 	ihl := int(packet[0]&0x0f) << 2
 	outLen := ipv4.HeaderLen + tcpLen
 
-	out = out[:(outLen)]
+	if len(packet) < ihl+tcpLen {
+		// We need at least this many bytes for this to be a valid packet
+		return nil
+	}
+	if outLen > cap(out) {
+		return nil
+	}
+
+	out = out[:outLen]
 
 	ipHdr := out[0:ipv4.HeaderLen]
 	ipHdr[0] = ipv4.Version<<4 | (ipv4.HeaderLen >> 2)    // version, ihl

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"reflect"
@@ -96,7 +95,7 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 		return nil, fmt.Errorf("sshd.host_key must be provided")
 	}
 
-	hostKeyBytes, err := ioutil.ReadFile(hostKeyFile)
+	hostKeyBytes, err := os.ReadFile(hostKeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("error while loading sshd.host_key file: %s", err)
 	}
@@ -519,7 +518,7 @@ func sshQueryLighthouse(ifce *Interface, fs interface{}, a []string, w sshd.Stri
 	}
 
 	var cm *CacheMap
-	rl := ifce.lightHouse.Query(vpnIp, ifce)
+	rl := ifce.lightHouse.Query(vpnIp)
 	if rl != nil {
 		cm = rl.CopyCache()
 	}

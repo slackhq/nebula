@@ -21,6 +21,7 @@ const defaultPromoteEvery = 1000       // Count of packets sent before we try mo
 const defaultReQueryEvery = 5000       // Count of packets sent before re-querying a hostinfo to the lighthouse
 const defaultReQueryWait = time.Minute // Minimum amount of seconds to wait before re-querying a hostinfo the lighthouse. Evaluated every ReQueryEvery
 const MaxRemotes = 10
+const maxRecvError = 4
 
 // MaxHostInfosPerVpnIp is the max number of hostinfos we will track for a given vpn ip
 // 5 allows for an initial handshake and each host pair re-handshaking twice
@@ -196,27 +197,26 @@ func (rs *RelayState) InsertRelay(ip iputil.VpnIp, idx uint32, r *Relay) {
 }
 
 type HostInfo struct {
-	sync.RWMutex
+	remote          *udp.Addr
+	remotes         *RemoteList
+	promoteCounter  atomic.Uint32
+	ConnectionState *ConnectionState
+	remoteIndexId   uint32
+	localIndexId    uint32
+	vpnIp           iputil.VpnIp
+	recvError       atomic.Uint32
+	remoteCidr      *cidr.Tree4[struct{}]
+	relayState      RelayState
 
-	remote               *udp.Addr
-	remotes              *RemoteList
-	promoteCounter       atomic.Uint32
-	multiportTx          bool
-	multiportRx          bool
-	ConnectionState      *ConnectionState
-	handshakeStart       time.Time   //todo: this an entry in the handshake manager
-	HandshakeReady       bool        //todo: being in the manager means you are ready
-	HandshakeCounter     int         //todo: another handshake manager entry
-	HandshakeLastRemotes []*udp.Addr //todo: another handshake manager entry, which remotes we sent to last time
-	HandshakeComplete    bool        //todo: this should go away in favor of ConnectionState.ready
-	HandshakePacket      map[uint8][]byte
-	packetStore          []*cachedPacket //todo: this is other handshake manager entry
-	remoteIndexId        uint32
-	localIndexId         uint32
-	vpnIp                iputil.VpnIp
-	recvError            int
-	remoteCidr           *cidr.Tree4
-	relayState           RelayState
+	// If true, we should send to this remote using multiport
+	multiportTx bool
+
+	// If true, we will receive from this remote using multiport
+	multiportRx bool
+
+	// HandshakePacket records the packets used to create this hostinfo
+	// We need these to avoid replayed handshake packets creating new hostinfos which causes churn
+	HandshakePacket map[uint8][]byte
 
 	// nextLHQuery is the earliest we can ask the lighthouse for new information.
 	// This is used to limit lighthouse re-queries in chatty clients
@@ -414,7 +414,6 @@ func (hm *HostMap) QueryIndex(index uint32) *HostInfo {
 }
 
 func (hm *HostMap) QueryRelayIndex(index uint32) *HostInfo {
-	//TODO: we probably just want to return bool instead of error, or at least a static error
 	hm.RLock()
 	if h, ok := hm.Relays[index]; ok {
 		hm.RUnlock()
@@ -537,10 +536,7 @@ func (hm *HostMap) ForEachIndex(f controlEach) {
 func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface) {
 	c := i.promoteCounter.Add(1)
 	if c%ifce.tryPromoteEvery.Load() == 0 {
-		// The lock here is currently protecting i.remote access
-		i.RLock()
 		remote := i.remote
-		i.RUnlock()
 
 		// return early if we are already on a preferred remote
 		if remote != nil {
@@ -571,60 +567,8 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		}
 
 		i.nextLHQuery.Store(now + ifce.reQueryWait.Load())
-		ifce.lightHouse.QueryServer(i.vpnIp, ifce)
+		ifce.lightHouse.QueryServer(i.vpnIp)
 	}
-}
-
-func (i *HostInfo) unlockedCachePacket(l *logrus.Logger, t header.MessageType, st header.MessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
-	//TODO: return the error so we can log with more context
-	if len(i.packetStore) < 100 {
-		tempPacket := make([]byte, len(packet))
-		copy(tempPacket, packet)
-		//l.WithField("trace", string(debug.Stack())).Error("Caching packet", tempPacket)
-		i.packetStore = append(i.packetStore, &cachedPacket{t, st, f, tempPacket})
-		if l.Level >= logrus.DebugLevel {
-			i.logger(l).
-				WithField("length", len(i.packetStore)).
-				WithField("stored", true).
-				Debugf("Packet store")
-		}
-
-	} else if l.Level >= logrus.DebugLevel {
-		m.dropped.Inc(1)
-		i.logger(l).
-			WithField("length", len(i.packetStore)).
-			WithField("stored", false).
-			Debugf("Packet store")
-	}
-}
-
-// handshakeComplete will set the connection as ready to communicate, as well as flush any stored packets
-func (i *HostInfo) handshakeComplete(l *logrus.Logger, m *cachedPacketMetrics) {
-	//TODO: I'm not certain the distinction between handshake complete and ConnectionState being ready matters because:
-	//TODO: HandshakeComplete means send stored packets and ConnectionState.ready means we are ready to send
-	//TODO: if the transition from HandhsakeComplete to ConnectionState.ready happens all within this function they are identical
-
-	i.HandshakeComplete = true
-	//TODO: this should be managed by the handshake state machine to set it based on how many handshake were seen.
-	// Clamping it to 2 gets us out of the woods for now
-	i.ConnectionState.messageCounter.Store(2)
-
-	if l.Level >= logrus.DebugLevel {
-		i.logger(l).Debugf("Sending %d stored packets", len(i.packetStore))
-	}
-
-	if len(i.packetStore) > 0 {
-		nb := make([]byte, 12, 12)
-		out := make([]byte, mtu)
-		for _, cp := range i.packetStore {
-			cp.callback(cp.messageType, cp.messageSubType, i, cp.packet, nb, out)
-		}
-		m.sent.Inc(int64(len(i.packetStore)))
-	}
-
-	i.remotes.ResetBlockedRemotes()
-	i.packetStore = make([]*cachedPacket, 0)
-	i.ConnectionState.ready = true
 }
 
 func (i *HostInfo) GetCert() *cert.NebulaCertificate {
@@ -683,9 +627,8 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udp.Addr) bool {
 }
 
 func (i *HostInfo) RecvErrorExceeded() bool {
-	if i.recvError < 3 {
-		i.recvError += 1
-		return false
+	if i.recvError.Add(1) >= maxRecvError {
+		return true
 	}
 	return true
 }
@@ -696,7 +639,7 @@ func (i *HostInfo) CreateRemoteCIDR(c *cert.NebulaCertificate) {
 		return
 	}
 
-	remoteCidr := cidr.NewTree4()
+	remoteCidr := cidr.NewTree4[struct{}]()
 	for _, ip := range c.Details.Ips {
 		remoteCidr.AddCIDR(&net.IPNet{IP: ip.IP, Mask: net.IPMask{255, 255, 255, 255}}, struct{}{})
 	}

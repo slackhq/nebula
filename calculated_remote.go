@@ -51,13 +51,13 @@ func (c *calculatedRemote) Apply(ip iputil.VpnIp) *Ip4AndPort {
 	return &Ip4AndPort{Ip: uint32(masked), Port: c.port}
 }
 
-func NewCalculatedRemotesFromConfig(c *config.C, k string) (*cidr.Tree4, error) {
+func NewCalculatedRemotesFromConfig(c *config.C, k string) (*cidr.Tree4[[]*calculatedRemote], error) {
 	value := c.Get(k)
 	if value == nil {
 		return nil, nil
 	}
 
-	calculatedRemotes := cidr.NewTree4()
+	calculatedRemotes := cidr.NewTree4[[]*calculatedRemote]()
 
 	rawMap, ok := value.(map[any]any)
 	if !ok {

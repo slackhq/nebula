@@ -18,7 +18,7 @@ import (
 
 type m map[string]interface{}
 
-func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, tunFd *int) (retcon *Control, reterr error) {
+func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Automatically cancel the context if Main returns an error, to signal all created goroutines to quit.
 	defer func() {
@@ -65,12 +65,15 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while loading firewall rules", err)
 	}
-	l.WithField("firewallHash", fw.GetRuleHash()).Info("Firewall started")
+	l.WithField("firewallHashes", fw.GetRuleHashes()).Info("Firewall started")
 
 	// TODO: make sure mask is 4 bytes
 	tunCidr := certificate.Details.Ips[0]
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
+	if err != nil {
+		return nil, util.ContextualizeIfNeeded("Error while creating SSH server", err)
+	}
 	wireSSHReload(l, ssh, c)
 	var sshStart func()
 	if c.GetBool("sshd.enabled", false) {
@@ -125,7 +128,11 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	if !configTest {
 		c.CatchHUP(ctx)
 
-		tun, err = overlay.NewDeviceFromConfig(c, l, tunCidr, tunFd, routines)
+		if deviceFactory == nil {
+			deviceFactory = overlay.NewDeviceFromConfig
+		}
+
+		tun, err = deviceFactory(c, l, tunCidr, routines)
 		if err != nil {
 			return nil, util.ContextualizeIfNeeded("Failed to get a tun/tap device", err)
 		}
@@ -156,12 +163,23 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 
 		for i := 0; i < routines; i++ {
+			l.Infof("listening %q %d", listenHost.IP, port)
 			udpServer, err := udp.NewListener(l, listenHost.IP, port, routines > 1, c.GetInt("listen.batch", 64))
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
 			udpServer.ReloadConfig(c)
 			udpConns[i] = udpServer
+
+			// If port is dynamic, discover it before the next pass through the for loop
+			// This way all routines will use the same port correctly
+			if port == 0 {
+				uPort, err := udpServer.LocalAddr()
+				if err != nil {
+					return nil, util.NewContextualError("Failed to get listening port", nil, err)
+				}
+				port = int(uPort.Port)
+			}
 		}
 	}
 
@@ -270,7 +288,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		routines:                routines,
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
-		disconnectInvalid:       c.GetBool("pki.disconnect_invalid", false),
 		relayManager:            NewRelayManager(ctx, l, hostMap, c),
 		punchy:                  punchy,
 
@@ -333,6 +350,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		c.RegisterReloadCallback(loadMultiPortConfig)
 
 		ifce.RegisterConfigChangeCallbacks(c)
+		ifce.reloadDisconnectInvalid(c)
 		ifce.reloadSendRecvError(c)
 
 		handshakeManager.f = ifce
@@ -365,6 +383,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	return &Control{
 		ifce,
 		l,
+		ctx,
 		cancel,
 		sshStart,
 		statsStart,

@@ -18,7 +18,7 @@ type tun struct {
 	io.ReadWriteCloser
 	fd        int
 	cidr      *net.IPNet
-	routeTree *cidr.Tree4
+	routeTree *cidr.Tree4[iputil.VpnIp]
 	l         *logrus.Logger
 }
 
@@ -46,12 +46,8 @@ func newTun(_ *logrus.Logger, _ string, _ *net.IPNet, _ int, _ []Route, _ int, _
 }
 
 func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	r := t.routeTree.MostSpecificContains(ip)
-	if r != nil {
-		return r.(iputil.VpnIp)
-	}
-
-	return 0
+	_, r := t.routeTree.MostSpecificContains(ip)
+	return r
 }
 
 func (t tun) Activate() error {

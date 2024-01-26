@@ -40,7 +40,6 @@ type InterfaceConfig struct {
 	routines                int
 	MessageMetrics          *MessageMetrics
 	version                 string
-	disconnectInvalid       bool
 	relayManager            *relayManager
 	punchy                  *Punchy
 
@@ -69,7 +68,7 @@ type Interface struct {
 	dropLocalBroadcast bool
 	dropMulticast      bool
 	routines           int
-	disconnectInvalid  bool
+	disconnectInvalid  atomic.Bool
 	closed             atomic.Bool
 	relayManager       *relayManager
 
@@ -188,7 +187,6 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		version:            c.version,
 		writers:            make([]udp.Conn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
-		disconnectInvalid:  c.disconnectInvalid,
 		myVpnIp:            myVpnIp,
 		relayManager:       c.relayManager,
 
@@ -308,9 +306,21 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
 	c.RegisterReloadCallback(f.reloadFirewall)
 	c.RegisterReloadCallback(f.reloadSendRecvError)
+	c.RegisterReloadCallback(f.reloadDisconnectInvalid)
 	c.RegisterReloadCallback(f.reloadMisc)
+
 	for _, udpConn := range f.writers {
 		c.RegisterReloadCallback(udpConn.ReloadConfig)
+	}
+}
+
+func (f *Interface) reloadDisconnectInvalid(c *config.C) {
+	initial := c.InitialLoad()
+	if initial || c.HasChanged("pki.disconnect_invalid") {
+		f.disconnectInvalid.Store(c.GetBool("pki.disconnect_invalid", true))
+		if !initial {
+			f.l.Infof("pki.disconnect_invalid changed to %v", f.disconnectInvalid.Load())
+		}
 	}
 }
 
@@ -336,8 +346,8 @@ func (f *Interface) reloadFirewall(c *config.C) {
 	// If rulesVersion is back to zero, we have wrapped all the way around. Be
 	// safe and just reset conntrack in this case.
 	if fw.rulesVersion == 0 {
-		f.l.WithField("firewallHash", fw.GetRuleHash()).
-			WithField("oldFirewallHash", oldFw.GetRuleHash()).
+		f.l.WithField("firewallHashes", fw.GetRuleHashes()).
+			WithField("oldFirewallHashes", oldFw.GetRuleHashes()).
 			WithField("rulesVersion", fw.rulesVersion).
 			Warn("firewall rulesVersion has overflowed, resetting conntrack")
 	} else {
@@ -347,8 +357,8 @@ func (f *Interface) reloadFirewall(c *config.C) {
 	f.firewall = fw
 
 	oldFw.Destroy()
-	f.l.WithField("firewallHash", fw.GetRuleHash()).
-		WithField("oldFirewallHash", oldFw.GetRuleHash()).
+	f.l.WithField("firewallHashes", fw.GetRuleHashes()).
+		WithField("oldFirewallHashes", oldFw.GetRuleHashes()).
 		WithField("rulesVersion", fw.rulesVersion).
 		Info("New firewall has been installed")
 }
