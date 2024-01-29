@@ -144,7 +144,7 @@ func (tree *Tree4[T]) MostSpecificContains(ip iputil.VpnIp) (ok bool, value T) {
 
 type eachFunc[T any] func(T) bool
 
-// EachContains will call a function, passing the value, for each entry until the function returns false or the search is complete
+// EachContains will call a function, passing the value, for each entry until the function returns true or the search is complete
 // The final return value will be true if the provided function returned true
 func (tree *Tree4[T]) EachContains(ip iputil.VpnIp, each eachFunc[T]) bool {
 	bit := startbit
