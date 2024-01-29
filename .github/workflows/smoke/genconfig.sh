@@ -50,6 +50,8 @@ tun:
   dev: ${TUN_DEV:-tun0}
 
 firewall:
+  inbound_action: reject
+  outbound_action: reject
   outbound: ${OUTBOUND:-$FIREWALL_ALL}
   inbound: ${INBOUND:-$FIREWALL_ALL}
 

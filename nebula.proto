@@ -15,6 +15,7 @@ message NebulaMeta {
     HostWhoamiReply = 7;
     PathCheck = 8;
     PathCheckReply = 9;
+    HostUpdateNotificationAck = 10;
   }
 
   MessageType Type = 1;

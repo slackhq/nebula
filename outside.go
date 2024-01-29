@@ -21,7 +21,23 @@ const (
 	minFwPacketLen = 4
 )
 
-func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf udp.LightHouseHandlerFunc, nb []byte, q int, localCache firewall.ConntrackCache) {
+func readOutsidePackets(f *Interface) udp.EncReader {
+	return func(
+		addr *udp.Addr,
+		out []byte,
+		packet []byte,
+		header *header.H,
+		fwPacket *firewall.Packet,
+		lhh udp.LightHouseHandlerFunc,
+		nb []byte,
+		q int,
+		localCache firewall.ConntrackCache,
+	) {
+		f.readOutsidePackets(addr, nil, out, packet, header, fwPacket, lhh, nb, q, localCache)
+	}
+}
+
+func (f *Interface) readOutsidePackets(addr *udp.Addr, via *ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf udp.LightHouseHandlerFunc, nb []byte, q int, localCache firewall.ConntrackCache) {
 	err := h.Parse(packet)
 	if err != nil {
 		// TODO: best if we return this and let caller log
@@ -48,9 +64,9 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 	var hostinfo *HostInfo
 	// verify if we've seen this index before, otherwise respond to the handshake initiation
 	if h.Type == header.Message && h.Subtype == header.MessageRelay {
-		hostinfo, _ = f.hostMap.QueryRelayIndex(h.RemoteIndex)
+		hostinfo = f.hostMap.QueryRelayIndex(h.RemoteIndex)
 	} else {
-		hostinfo, _ = f.hostMap.QueryIndex(h.RemoteIndex)
+		hostinfo = f.hostMap.QueryIndex(h.RemoteIndex)
 	}
 
 	var ci *ConnectionState
@@ -67,7 +83,9 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 
 		switch h.Subtype {
 		case header.MessageNone:
-			f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache)
+			if !f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache) {
+				return
+			}
 		case header.MessageRelay:
 			// The entire body is sent as AD, not encrypted.
 			// The packet consists of a 16-byte parsed Nebula header, Associated Data-protected payload, and a trailing 16-byte AEAD signature value.
@@ -84,17 +102,15 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			signedPayload = signedPayload[header.Len:]
 			// Pull the Roaming parts up here, and return in all call paths.
 			f.handleHostRoaming(hostinfo, addr)
-			f.connectionManager.In(hostinfo.vpnIp)
+			// Track usage of both the HostInfo and the Relay for the received & authenticated packet
+			f.connectionManager.In(hostinfo.localIndexId)
+			f.connectionManager.RelayUsed(h.RemoteIndex)
 
 			relay, ok := hostinfo.relayState.QueryRelayForByIdx(h.RemoteIndex)
 			if !ok {
 				// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
-				// its internal mapping. This shouldn't happen!
-				hostinfo.logger(f.l).WithField("hostinfo", hostinfo.vpnIp).WithField("remoteIndex", h.RemoteIndex).Errorf("HostInfo missing remote index")
-				// Delete my local index from the hostmap
-				f.hostMap.DeleteRelayIdx(h.RemoteIndex)
-				// When the peer doesn't receive any return traffic, its connection_manager will eventually clean up
-				// the broken relay when it cleans up the associated HostInfo object.
+				// its internal mapping. This should never happen.
+				hostinfo.logger(f.l).WithFields(logrus.Fields{"vpnIp": hostinfo.vpnIp, "remoteIndex": h.RemoteIndex}).Error("HostInfo missing remote relay index")
 				return
 			}
 
@@ -106,15 +122,9 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				return
 			case ForwardingType:
 				// Find the target HostInfo relay object
-				targetHI, err := f.hostMap.QueryVpnIp(relay.PeerIp)
+				targetHI, targetRelay, err := f.hostMap.QueryVpnIpRelayFor(hostinfo.vpnIp, relay.PeerIp)
 				if err != nil {
-					hostinfo.logger(f.l).WithField("peerIp", relay.PeerIp).WithError(err).Info("Failed to find target host info by ip")
-					return
-				}
-				// find the target Relay info object
-				targetRelay, ok := targetHI.relayState.QueryRelayForByIp(hostinfo.vpnIp)
-				if !ok {
-					hostinfo.logger(f.l).WithField("peerIp", relay.PeerIp).Info("Failed to find relay in hostinfo")
+					hostinfo.logger(f.l).WithField("relayTo", relay.PeerIp).WithError(err).Info("Failed to find target host info by ip")
 					return
 				}
 
@@ -130,7 +140,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 						hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 					}
 				} else {
-					hostinfo.logger(f.l).WithField("targetRelayState", targetRelay.State).Info("Unexpected target relay state")
+					hostinfo.logger(f.l).WithFields(logrus.Fields{"relayTo": relay.PeerIp, "relayFrom": hostinfo.vpnIp, "targetRelayState": targetRelay.State}).Info("Unexpected target relay state")
 					return
 				}
 			}
@@ -153,7 +163,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			return
 		}
 
-		lhf(addr, hostinfo.vpnIp, d, f)
+		lhf(addr, hostinfo.vpnIp, d)
 
 		// Fallthrough to the bottom to record incoming traffic
 
@@ -188,7 +198,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 
 	case header.Handshake:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		HandleIncomingHandshake(f, addr, via, packet, h, hostinfo)
+		f.handshakeManager.HandleIncoming(addr, via, packet, h)
 		return
 
 	case header.RecvError:
@@ -237,17 +247,16 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 
 	f.handleHostRoaming(hostinfo, addr)
 
-	f.connectionManager.In(hostinfo.vpnIp)
+	f.connectionManager.In(hostinfo.localIndexId)
 }
 
 // closeTunnel closes a tunnel locally, it does not send a closeTunnel packet to the remote
 func (f *Interface) closeTunnel(hostInfo *HostInfo) {
-	//TODO: this would be better as a single function in ConnectionManager that handled locks appropriately
-	f.connectionManager.ClearIP(hostInfo.vpnIp)
-	f.connectionManager.ClearPendingDeletion(hostInfo.vpnIp)
-	f.lightHouse.DeleteVpnIp(hostInfo.vpnIp)
-
-	f.hostMap.DeleteHostInfo(hostInfo)
+	final := f.hostMap.DeleteHostInfo(hostInfo)
+	if final {
+		// We no longer have any tunnels with this vpn ip, clear learned lighthouse state to lower memory usage
+		f.lightHouse.DeleteVpnIp(hostInfo.vpnIp)
+	}
 }
 
 // sendCloseTunnel is a helper function to send a proper close tunnel packet to a remote
@@ -371,7 +380,7 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	return out, nil
 }
 
-func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) bool {
 	var err error
 
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], messageCounter, nb)
@@ -379,37 +388,41 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		hostinfo.logger(f.l).WithError(err).Error("Failed to decrypt packet")
 		//TODO: maybe after build 64 is out? 06/14/2018 - NB
 		//f.sendRecvError(hostinfo.remote, header.RemoteIndex)
-		return
+		return false
 	}
 
 	err = newPacket(out, true, fwPacket)
 	if err != nil {
 		hostinfo.logger(f.l).WithError(err).WithField("packet", out).
 			Warnf("Error while validating inbound packet")
-		return
+		return false
 	}
 
 	if !hostinfo.ConnectionState.window.Update(f.l, messageCounter) {
 		hostinfo.logger(f.l).WithField("fwPacket", fwPacket).
 			Debugln("dropping out of window packet")
-		return
+		return false
 	}
 
-	dropReason := f.firewall.Drop(out, *fwPacket, true, hostinfo, f.caPool, localCache)
+	dropReason := f.firewall.Drop(out, *fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason != nil {
+		// NOTE: We give `packet` as the `out` here since we already decrypted from it and we don't need it anymore
+		// This gives us a buffer to build the reject packet in
+		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, packet, q)
 		if f.l.Level >= logrus.DebugLevel {
 			hostinfo.logger(f.l).WithField("fwPacket", fwPacket).
 				WithField("reason", dropReason).
 				Debugln("dropping inbound packet")
 		}
-		return
+		return false
 	}
 
-	f.connectionManager.In(hostinfo.vpnIp)
+	f.connectionManager.In(hostinfo.localIndexId)
 	_, err = f.readers[q].Write(out)
 	if err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")
 	}
+	return true
 }
 
 func (f *Interface) maybeSendRecvError(endpoint *udp.Addr, index uint32) {
@@ -438,29 +451,23 @@ func (f *Interface) handleRecvError(addr *udp.Addr, h *header.H) {
 			Debug("Recv error received")
 	}
 
-	// First, clean up in the pending hostmap
-	f.handshakeManager.pendingHostMap.DeleteReverseIndex(h.RemoteIndex)
-
-	hostinfo, err := f.hostMap.QueryReverseIndex(h.RemoteIndex)
-	if err != nil {
-		f.l.Debugln(err, ": ", h.RemoteIndex)
+	hostinfo := f.hostMap.QueryReverseIndex(h.RemoteIndex)
+	if hostinfo == nil {
+		f.l.WithField("remoteIndex", h.RemoteIndex).Debugln("Did not find remote index in main hostmap")
 		return
 	}
-
-	hostinfo.Lock()
-	defer hostinfo.Unlock()
 
 	if !hostinfo.RecvErrorExceeded() {
 		return
 	}
+
 	if hostinfo.remote != nil && !hostinfo.remote.Equals(addr) {
 		f.l.Infoln("Someone spoofing recv_errors? ", addr, hostinfo.remote)
 		return
 	}
 
 	f.closeTunnel(hostinfo)
-	// We also delete it from pending hostmap to allow for
-	// fast reconnect.
+	// We also delete it from pending hostmap to allow for fast reconnect.
 	f.handshakeManager.DeleteHostInfo(hostinfo)
 }
 

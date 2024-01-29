@@ -41,4 +41,4 @@ EOF
     ../../../../nebula-cert sign -name "host4" -groups "host,host4" -ip "192.168.100.4/24"
 )
 
-sudo docker build -t nebula:smoke-relay .
+docker build -t nebula:smoke-relay .

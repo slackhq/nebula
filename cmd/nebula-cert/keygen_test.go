@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"io/ioutil"
 	"os"
 	"testing"
 
@@ -22,6 +21,8 @@ func Test_keygenHelp(t *testing.T) {
 	assert.Equal(
 		t,
 		"Usage of "+os.Args[0]+" keygen <flags>: create a public/private key pair. the public key can be passed to `nebula-cert sign`\n"+
+			"  -curve string\n"+
+			"    \tECDH Curve (25519, P256) (default \"25519\")\n"+
 			"  -out-key string\n"+
 			"    \tRequired: path to write the private key to\n"+
 			"  -out-pub string\n"+
@@ -52,7 +53,7 @@ func Test_keygen(t *testing.T) {
 	assert.Equal(t, "", eb.String())
 
 	// create temp key file
-	keyF, err := ioutil.TempFile("", "test.key")
+	keyF, err := os.CreateTemp("", "test.key")
 	assert.Nil(t, err)
 	defer os.Remove(keyF.Name())
 
@@ -65,7 +66,7 @@ func Test_keygen(t *testing.T) {
 	assert.Equal(t, "", eb.String())
 
 	// create temp pub file
-	pubF, err := ioutil.TempFile("", "test.pub")
+	pubF, err := os.CreateTemp("", "test.pub")
 	assert.Nil(t, err)
 	defer os.Remove(pubF.Name())
 
@@ -78,13 +79,13 @@ func Test_keygen(t *testing.T) {
 	assert.Equal(t, "", eb.String())
 
 	// read cert and key files
-	rb, _ := ioutil.ReadFile(keyF.Name())
+	rb, _ := os.ReadFile(keyF.Name())
 	lKey, b, err := cert.UnmarshalX25519PrivateKey(rb)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
 	assert.Len(t, lKey, 32)
 
-	rb, _ = ioutil.ReadFile(pubF.Name())
+	rb, _ = os.ReadFile(pubF.Name())
 	lPub, b, err := cert.UnmarshalX25519PublicKey(rb)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
