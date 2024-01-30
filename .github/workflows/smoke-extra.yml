@@ -31,26 +31,10 @@ jobs:
     - name: install vagrant
       run: sudo apt-get update && sudo apt-get install -y vagrant virtualbox
 
-    - name: build
-      run: make bin-docker CGO_ENABLED=1 BUILD_ARGS=-race
+    - name: freebsd
+      run: make smoke-vagrant/freebsd-amd64
 
-    - name: build
-      run: make build/freebsd-amd64/nebula CGO_ENABLED=1 BUILD_ARGS=-race
-
-    - name: setup docker image
-      working-directory: ./.github/workflows/smoke
-      run: ./build.sh freebsd-amd64
-
-    - name: run smoke
-      working-directory: ./.github/workflows/smoke
-      run: ./smoke-vagrant.sh freebsd-amd64
-
-    # - name: setup docker image
-    #   working-directory: ./.github/workflows/smoke
-    #   run: ./build.sh linux-amd64-ipv6disable
-
-    # - name: run smoke
-    #   working-directory: ./.github/workflows/smoke
-    #   run: ./smoke-vagrant.sh linux-amd64-ipv6disable
+    # - name: ipv6disable
+    #   run: make smoke-vagrant/linux-amd64-ipv6disable
 
     timeout-minutes: 30
