@@ -26,11 +26,11 @@ jobs:
         go-version-file: 'go.mod'
         check-latest: true
 
+    - name: install vagrant
+      run: sudo apt-get update && sudo apt-get install -y vagrant virtualbox
+
     - name: build
       run: make bin-docker CGO_ENABLED=1 BUILD_ARGS=-race
-
-    - name: install vagrant
-      run: sudo apt-get install -y vagrant virtualbox
 
     - name: setup docker image
       working-directory: ./.github/workflows/smoke
