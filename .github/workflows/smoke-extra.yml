@@ -36,6 +36,9 @@ jobs:
     - name: openbsd-amd64
       run: make smoke-vagrant/openbsd-amd64
 
+    - name: netbsd-amd64
+      run: make smoke-vagrant/netbsd-amd64
+
     - name: linux-386
       run: make smoke-vagrant/linux-386
 
