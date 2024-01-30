@@ -1,11 +1,7 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
 Vagrant.configure("2") do |config|
-  config.vm.box = "bento/freebsd-12.1"
+  config.vm.box = "generic/freebsd14"
 
   config.vm.synced_folder "../build", "/nebula"
-
-  config.vm.provision "shell", inline: <<-EOD
-    sudo kldload if_tap
-  EOD
 end
