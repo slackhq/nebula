@@ -30,7 +30,7 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y vagrant virtualbox
 
     - name: build
-      run: make bin-docker CGO_ENABLED=1 BUILD_ARGS=-race
+      run: make bin-docker build/linux-amd64-ipv6disable/nebula CGO_ENABLED=1 BUILD_ARGS=-race
 
     - name: setup docker image
       working-directory: ./.github/workflows/smoke
