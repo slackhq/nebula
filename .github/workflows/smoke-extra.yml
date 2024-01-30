@@ -31,10 +31,13 @@ jobs:
     - name: install vagrant
       run: sudo apt-get update && sudo apt-get install -y vagrant virtualbox
 
-    - name: freebsd
+    - name: freebsd-amd64
       run: make smoke-vagrant/freebsd-amd64
 
-    # - name: ipv6disable
-    #   run: make smoke-vagrant/linux-amd64-ipv6disable
+    - name: linux-386
+      run: make smoke-vagrant/linux-386
+
+    - name: linux-amd64-ipv6disable
+      run: make smoke-vagrant/linux-amd64-ipv6disable
 
     timeout-minutes: 30
