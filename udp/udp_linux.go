@@ -55,7 +55,7 @@ func maybeIPV4(ip net.IP) (net.IP, bool) {
 }
 
 func NewListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (Conn, error) {
-	lipV4, isV4 := maybeIPV4(ip)
+	ipV4, isV4 := maybeIPV4(ip)
 	af := unix.AF_INET6
 	if isV4 {
 		af = unix.AF_INET
@@ -72,9 +72,6 @@ func NewListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (
 		return nil, fmt.Errorf("unable to open socket: %s", err)
 	}
 
-	var lip [16]byte
-	copy(lip[:], ip.To16())
-
 	if multi {
 		if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
 			return nil, fmt.Errorf("unable to set SO_REUSEPORT: %s", err)
@@ -85,10 +82,11 @@ func NewListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (
 	var sa unix.Sockaddr
 	if isV4 {
 		sa4 := &unix.SockaddrInet4{Port: port}
-		copy(sa4.Addr[:], lipV4)
+		copy(sa4.Addr[:], ipV4)
 		sa = sa4
 	} else {
 		sa6 := &unix.SockaddrInet6{Port: port}
+		copy(sa6.Addr[:], ip.To16())
 		sa = sa6
 	}
 	if err = unix.Bind(fd, sa); err != nil {
