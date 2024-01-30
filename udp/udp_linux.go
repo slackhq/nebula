@@ -219,27 +219,18 @@ func (u *StdConn) ReadMulti(msgs []rawMessage) (int, error) {
 }
 
 func (u *StdConn) WriteTo(b []byte, addr *Addr) error {
-	var rsaPtr unsafe.Pointer
-	var rsaSize int
 	if u.isV4 {
-		addrV4, isAddrV4 := maybeIPV4(addr.IP)
-		if !isAddrV4 {
-			return fmt.Errorf("Listener is IPv4, but writing to IPv6 remote")
-		}
-		var rsa unix.RawSockaddrInet4
-		rsa.Family = unix.AF_INET
-		rsa.Port = (addr.Port >> 8) | ((addr.Port & 0xff) << 8)
-		copy(rsa.Addr[:], addrV4)
-		rsaPtr = unsafe.Pointer(&rsa)
-		rsaSize = unix.SizeofSockaddrInet4
-	} else {
-		var rsa unix.RawSockaddrInet6
-		rsa.Family = unix.AF_INET6
-		rsa.Port = (addr.Port >> 8) | ((addr.Port & 0xff) << 8)
-		copy(rsa.Addr[:], addr.IP)
-		rsaPtr = unsafe.Pointer(&rsa)
-		rsaSize = unix.SizeofSockaddrInet6
+		return u.writeTo4(b, addr)
 	}
+	return u.writeTo6(b, addr)
+}
+
+func (u *StdConn) writeTo6(b []byte, addr *Addr) error {
+	var rsa unix.RawSockaddrInet6
+	rsa.Family = unix.AF_INET6
+	// Little Endian -> Network Endian
+	rsa.Port = (addr.Port >> 8) | ((addr.Port & 0xff) << 8)
+	copy(rsa.Addr[:], addr.IP.To16())
 
 	for {
 		_, _, err := unix.Syscall6(
@@ -248,8 +239,41 @@ func (u *StdConn) WriteTo(b []byte, addr *Addr) error {
 			uintptr(unsafe.Pointer(&b[0])),
 			uintptr(len(b)),
 			uintptr(0),
-			uintptr(rsaPtr),
-			uintptr(rsaSize),
+			uintptr(unsafe.Pointer(&rsa)),
+			uintptr(unix.SizeofSockaddrInet6),
+		)
+
+		if err != 0 {
+			return &net.OpError{Op: "sendto", Err: err}
+		}
+
+		//TODO: handle incomplete writes
+
+		return nil
+	}
+}
+
+func (u *StdConn) writeTo4(b []byte, addr *Addr) error {
+	addrV4, isAddrV4 := maybeIPV4(addr.IP)
+	if !isAddrV4 {
+		return fmt.Errorf("Listener is IPv4, but writing to IPv6 remote")
+	}
+
+	var rsa unix.RawSockaddrInet4
+	rsa.Family = unix.AF_INET
+	// Little Endian -> Network Endian
+	rsa.Port = (addr.Port >> 8) | ((addr.Port & 0xff) << 8)
+	copy(rsa.Addr[:], addrV4)
+
+	for {
+		_, _, err := unix.Syscall6(
+			unix.SYS_SENDTO,
+			uintptr(u.sysFd),
+			uintptr(unsafe.Pointer(&b[0])),
+			uintptr(len(b)),
+			uintptr(0),
+			uintptr(unsafe.Pointer(&rsa)),
+			uintptr(unix.SizeofSockaddrInet4),
 		)
 
 		if err != 0 {
