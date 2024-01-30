@@ -6,11 +6,11 @@ Vagrant.configure("2") do |config|
   config.vm.synced_folder "../build", "/nebula"
 
   config.vm.provision :shell do |shell|
-    shell.privileged = true
     shell.inline = <<-EOF
-        sudo sed -i 's/GRUB_CMDLINE_LINUX=""/GRUB_CMDLINE_LINUX="ipv6.disable=1"/' /etc/default/grub
-        sudo update-grub
+      sed -i 's/GRUB_CMDLINE_LINUX=""/GRUB_CMDLINE_LINUX="ipv6.disable=1"/' /etc/default/grub
+      update-grub
     EOF
+    shell.privileged = true
     shell.reboot = true
   end
 end
