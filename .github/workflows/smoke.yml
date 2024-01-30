@@ -30,7 +30,7 @@ jobs:
       run: make bin-docker CGO_ENABLED=1 BUILD_ARGS=-race
 
     - name: install vagrant
-      run: sudo apt-get install -y vagrant virtualbox-7.0
+      run: sudo apt-get install -y vagrant virtualbox
 
     - name: setup docker image
       working-directory: ./.github/workflows/smoke
