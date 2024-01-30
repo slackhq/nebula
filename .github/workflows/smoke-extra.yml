@@ -1,0 +1,56 @@
+name: smoke-extra
+on:
+  push:
+    branches:
+      - master
+      - test-smoke-vagrant
+  pull_request:
+    types: [opened, synchronize, labeled, reopened]
+    paths:
+      - '.github/workflows/smoke**'
+      - '**Makefile'
+      - '**.go'
+      - '**.proto'
+      - 'go.mod'
+      - 'go.sum'
+jobs:
+
+  smoke-extra:
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'smoke-test-extra')
+    name: Run extra smoke tests
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+        check-latest: true
+
+    - name: install vagrant
+      run: sudo apt-get update && sudo apt-get install -y vagrant virtualbox
+
+    - name: build
+      run: make bin-docker CGO_ENABLED=1 BUILD_ARGS=-race
+
+    - name: build
+      run: make build/freebsd-amd64/nebula CGO_ENABLED=1 BUILD_ARGS=-race
+
+    - name: setup docker image
+      working-directory: ./.github/workflows/smoke
+      run: ./build.sh freebsd-amd64
+
+    - name: run smoke
+      working-directory: ./.github/workflows/smoke
+      run: ./smoke-vagrant.sh freebsd-amd64
+
+    # - name: setup docker image
+    #   working-directory: ./.github/workflows/smoke
+    #   run: ./build.sh linux-amd64-ipv6disable
+
+    # - name: run smoke
+    #   working-directory: ./.github/workflows/smoke
+    #   run: ./smoke-vagrant.sh linux-amd64-ipv6disable
+
+    timeout-minutes: 30
