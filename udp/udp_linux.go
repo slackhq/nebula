@@ -46,29 +46,16 @@ const (
 
 type _SK_MEMINFO [_SK_MEMINFO_VARS]uint32
 
-func isIPV4(ip net.IP) (net.IP, bool) {
-	if len(ip) == net.IPv4len {
-		return ip, true
+func maybeIPV4(ip net.IP) (net.IP, bool) {
+	ip4 := ip.To4()
+	if ip4 != nil {
+		return ip4, true
 	}
-
-	if len(ip) == net.IPv6len && isZeros(ip[0:10]) && ip[10] == 0xff && ip[11] == 0xff {
-		return ip[12:16], true
-	}
-
 	return ip, false
 }
 
-func isZeros(p net.IP) bool {
-	for i := 0; i < len(p); i++ {
-		if p[i] != 0 {
-			return false
-		}
-	}
-	return true
-}
-
 func NewListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (Conn, error) {
-	lipV4, isV4 := isIPV4(ip)
+	lipV4, isV4 := maybeIPV4(ip)
 	af := unix.AF_INET6
 	if isV4 {
 		af = unix.AF_INET
@@ -235,7 +222,7 @@ func (u *StdConn) WriteTo(b []byte, addr *Addr) error {
 	var rsaPtr unsafe.Pointer
 	var rsaSize int
 	if u.isV4 {
-		addrV4, isAddrV4 := isIPV4(addr.IP)
+		addrV4, isAddrV4 := maybeIPV4(addr.IP)
 		if !isAddrV4 {
 			return fmt.Errorf("Listener is IPv4, but writing to IPv6 remote")
 		}
