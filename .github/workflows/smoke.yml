@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - master
+      - test-smoke-vagrant
   pull_request:
     paths:
       - '.github/workflows/smoke**'
@@ -27,6 +28,17 @@ jobs:
 
     - name: build
       run: make bin-docker CGO_ENABLED=1 BUILD_ARGS=-race
+
+    - name: install vagrant
+      run: sudo apt-get install -y vagrant virtualbox-7.0
+
+    - name: setup docker image
+      working-directory: ./.github/workflows/smoke
+      run: ./build.sh linux-amd64-ipv6disable
+
+    - name: run smoke
+      working-directory: ./.github/workflows/smoke
+      run: ./smoke-vagrant.sh linux-amd64-ipv6disable
 
     - name: setup docker image
       working-directory: ./.github/workflows/smoke
