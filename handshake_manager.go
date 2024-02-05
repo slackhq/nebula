@@ -110,7 +110,7 @@ func NewHandshakeManager(l *logrus.Logger, mainHostMap *HostMap, lightHouse *Lig
 		outside:                outside,
 		config:                 config,
 		trigger:                make(chan iputil.VpnIp, config.triggerBuffer),
-		OutboundHandshakeTimer: NewLockingTimerWheel[iputil.VpnIp](config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
+		OutboundHandshakeTimer: NewLockingTimerWheel[iputil.VpnIp]("handshake-manager-timer", config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
 		messageMetrics:         config.messageMetrics,
 		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
 		metricTimedOut:         metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),

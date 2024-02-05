@@ -5,7 +5,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
@@ -20,15 +19,16 @@ var dnsServer *dns.Server
 var dnsAddr string
 
 type dnsRecords struct {
-	sync.RWMutex
+	syncRWMutex
 	dnsMap  map[string]string
 	hostMap *HostMap
 }
 
 func newDnsRecords(hostMap *HostMap) *dnsRecords {
 	return &dnsRecords{
-		dnsMap:  make(map[string]string),
-		hostMap: hostMap,
+		syncRWMutex: newSyncRWMutex("dns-records"),
+		dnsMap:      make(map[string]string),
+		hostMap:     hostMap,
 	}
 }
 
