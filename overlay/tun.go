@@ -5,65 +5,46 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/util"
 )
 
 const DefaultMTU = 1300
 
+// TODO: We may be able to remove routines
 type DeviceFactory func(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, routines int) (Device, error)
 
 func NewDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, routines int) (Device, error) {
-	routes, err := parseRoutes(c, tunCidr)
-	if err != nil {
-		return nil, util.NewContextualError("Could not parse tun.routes", nil, err)
-	}
-
-	unsafeRoutes, err := parseUnsafeRoutes(c, tunCidr)
-	if err != nil {
-		return nil, util.NewContextualError("Could not parse tun.unsafe_routes", nil, err)
-	}
-	routes = append(routes, unsafeRoutes...)
-
 	switch {
 	case c.GetBool("tun.disabled", false):
 		tun := newDisabledTun(tunCidr, c.GetInt("tun.tx_queue", 500), c.GetBool("stats.message_metrics", false), l)
 		return tun, nil
 
 	default:
-		return newTun(
-			l,
-			c.GetString("tun.dev", ""),
-			tunCidr,
-			c.GetInt("tun.mtu", DefaultMTU),
-			routes,
-			c.GetInt("tun.tx_queue", 500),
-			routines > 1,
-			c.GetBool("tun.use_system_route_table", false),
-		)
+		return newTun(c, l, tunCidr, routines > 1)
 	}
 }
 
 func NewFdDeviceFromConfig(fd *int) DeviceFactory {
 	return func(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, routines int) (Device, error) {
-		routes, err := parseRoutes(c, tunCidr)
-		if err != nil {
-			return nil, util.NewContextualError("Could not parse tun.routes", nil, err)
-		}
-
-		unsafeRoutes, err := parseUnsafeRoutes(c, tunCidr)
-		if err != nil {
-			return nil, util.NewContextualError("Could not parse tun.unsafe_routes", nil, err)
-		}
-		routes = append(routes, unsafeRoutes...)
-		return newTunFromFd(
-			l,
-			*fd,
-			tunCidr,
-			c.GetInt("tun.mtu", DefaultMTU),
-			routes,
-			c.GetInt("tun.tx_queue", 500),
-			c.GetBool("tun.use_system_route_table", false),
-		)
-
+		return newTunFromFd(c, l, *fd, tunCidr)
 	}
+}
+
+func findRemovedRoutes(newRoutes, oldRoutes []Route) []Route {
+	var removed []Route
+	has := func(entry Route) bool {
+		for _, check := range newRoutes {
+			if check.Equal(entry) {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, oldEntry := range oldRoutes {
+		if !has(oldEntry) {
+			removed = append(removed, oldEntry)
+		}
+	}
+
+	return removed
 }

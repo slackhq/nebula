@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"net"
@@ -19,6 +20,22 @@ type Route struct {
 	Cidr    *net.IPNet
 	Via     *iputil.VpnIp
 	Install bool
+}
+
+func (r Route) Equal(t Route) bool {
+	if !r.Cidr.IP.Equal(t.Cidr.IP) {
+		return false
+	}
+	if !bytes.Equal(r.Cidr.Mask, t.Cidr.Mask) {
+		return false
+	}
+	if r.Metric != t.Metric {
+		return false
+	}
+	if r.MTU != t.MTU {
+		return false
+	}
+	return true
 }
 
 func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*cidr.Tree4[iputil.VpnIp], error) {
