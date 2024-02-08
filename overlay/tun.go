@@ -5,6 +5,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/util"
 )
 
 const DefaultMTU = 1300
@@ -27,6 +28,25 @@ func NewFdDeviceFromConfig(fd *int) DeviceFactory {
 	return func(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, routines int) (Device, error) {
 		return newTunFromFd(c, l, *fd, tunCidr)
 	}
+}
+
+func getAllRoutesFromConfig(c *config.C, cidr *net.IPNet) (bool, []Route, error) {
+	if !c.HasChanged("tun.routes") && !c.HasChanged("tun.unsafe_routes") {
+		return false, nil, nil
+	}
+
+	routes, err := parseRoutes(c, cidr)
+	if err != nil {
+		return true, nil, util.NewContextualError("Could not parse tun.routes", nil, err)
+	}
+
+	unsafeRoutes, err := parseUnsafeRoutes(c, cidr)
+	if err != nil {
+		return true, nil, util.NewContextualError("Could not parse tun.unsafe_routes", nil, err)
+	}
+
+	routes = append(routes, unsafeRoutes...)
+	return true, routes, nil
 }
 
 func findRemovedRoutes(newRoutes, oldRoutes []Route) []Route {

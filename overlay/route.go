@@ -38,6 +38,14 @@ func (r Route) Equal(t Route) bool {
 	return true
 }
 
+func (r Route) String() string {
+	s := r.Cidr.String()
+	if r.Metric != 0 {
+		s += fmt.Sprintf(" metric: %v", r.Metric)
+	}
+	return s
+}
+
 func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*cidr.Tree4[iputil.VpnIp], error) {
 	routeTree := cidr.NewTree4[iputil.VpnIp]()
 	for _, r := range routes {

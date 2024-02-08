@@ -122,7 +122,6 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, cidr *net.IPNet
 	}
 
 	c.RegisterReloadCallback(func(c *config.C) {
-		//TODO: do we want to log the addition/removal of routes on reload?
 		err := t.reload(c, false)
 		if err != nil {
 			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
@@ -133,17 +132,15 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, cidr *net.IPNet
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
-	routes, err := parseRoutes(c, t.cidr)
+	routes, err := getAllRoutesFromConfig(c, t.cidr)
 	if err != nil {
-		return util.NewContextualError("Could not parse tun.routes", nil, err)
+		return err
 	}
 
-	unsafeRoutes, err := parseUnsafeRoutes(c, t.cidr)
-	if err != nil {
-		return util.NewContextualError("Could not parse tun.unsafe_routes", nil, err)
+	if !initial && !change {
+		return nil
 	}
 
-	routes = append(routes, unsafeRoutes...)
 	routeTree, err := makeRouteTree(t.l, routes, true)
 	if err != nil {
 		return err
@@ -369,6 +366,8 @@ func (t *tun) addRoutes(logErrors bool) error {
 			} else {
 				return retErr
 			}
+		} else {
+			t.l.WithField("route", r).Info("Added route")
 		}
 	}
 
@@ -396,6 +395,8 @@ func (t *tun) removeRoutes(routes []Route) {
 		err := netlink.RouteDel(&nr)
 		if err != nil {
 			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
+		} else {
+			t.l.WithField("route", r).Info("Removed route")
 		}
 	}
 }
