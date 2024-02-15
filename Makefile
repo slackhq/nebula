@@ -34,7 +34,7 @@ ifndef DOCKER_IMAGE_REPO
 	DOCKER_IMAGE_REPO = nebula
 endif
 ifndef DOCKER_IMAGE_TAG
-	DOCKER_IMAGE_TAG = lates
+	DOCKER_IMAGE_TAG = latest
 endif
 
 LDFLAGS = -X main.Build=$(BUILD_NUMBER)
