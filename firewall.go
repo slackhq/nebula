@@ -65,10 +65,11 @@ type Firewall struct {
 	rules        string
 	rulesVersion uint16
 
-	trackTCPRTT     bool
-	metricTCPRTT    metrics.Histogram
-	incomingMetrics firewallMetrics
-	outgoingMetrics firewallMetrics
+	defaultLocalCIDRAny bool
+	trackTCPRTT         bool
+	metricTCPRTT        metrics.Histogram
+	incomingMetrics     firewallMetrics
+	outgoingMetrics     firewallMetrics
 
 	l *logrus.Logger
 }
@@ -205,6 +206,9 @@ func NewFirewallFromConfig(l *logrus.Logger, nc *cert.NebulaCertificate, c *conf
 		nc,
 		//TODO: max_connections
 	)
+
+	//TODO: Flip to false after v1.9 release
+	fw.defaultLocalCIDRAny = c.GetBool("firewall.default_local_cidr_any", true)
 
 	inboundAction := c.GetString("firewall.inbound_action", "drop")
 	switch inboundAction {
@@ -873,10 +877,11 @@ func (fr *FirewallRule) match(p firewall.Packet, c *cert.NebulaCertificate) bool
 
 func (flc *firewallLocalCIDR) addRule(f *Firewall, localIp *net.IPNet) error {
 	if localIp == nil || (localIp != nil && localIp.Contains(net.IPv4(0, 0, 0, 0))) {
-		if !f.hasSubnets {
+		if !f.hasSubnets || f.defaultLocalCIDRAny {
 			flc.Any = true
 			return nil
 		}
+
 		localIp = f.assignedCIDR
 	}
 
