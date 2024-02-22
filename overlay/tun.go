@@ -30,8 +30,8 @@ func NewFdDeviceFromConfig(fd *int) DeviceFactory {
 	}
 }
 
-func getAllRoutesFromConfig(c *config.C, cidr *net.IPNet) (bool, []Route, error) {
-	if !c.HasChanged("tun.routes") && !c.HasChanged("tun.unsafe_routes") {
+func getAllRoutesFromConfig(c *config.C, cidr *net.IPNet, initial bool) (bool, []Route, error) {
+	if !initial && !c.HasChanged("tun.routes") && !c.HasChanged("tun.unsafe_routes") {
 		return false, nil, nil
 	}
 

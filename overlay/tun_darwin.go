@@ -293,7 +293,7 @@ func (t *tun) Activate() error {
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
-	change, routes, err := getAllRoutesFromConfig(c, t.cidr)
+	change, routes, err := getAllRoutesFromConfig(c, t.cidr, initial)
 	if err != nil {
 		return err
 	}

@@ -132,7 +132,7 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, cidr *net.IPNet
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
-	routes, err := getAllRoutesFromConfig(c, t.cidr)
+	change, routes, err := getAllRoutesFromConfig(c, t.cidr, initial)
 	if err != nil {
 		return err
 	}
