@@ -11,7 +11,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -81,7 +80,7 @@ type firewallMetrics struct {
 }
 
 type FirewallConntrack struct {
-	sync.Mutex
+	syncMutex
 
 	Conns      map[firewall.Packet]*conn
 	TimerWheel *TimerWheel[firewall.Packet]
@@ -170,6 +169,7 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 
 	return &Firewall{
 		Conntrack: &FirewallConntrack{
+			syncMutex:  newSyncMutex("firewall-conntrack"),
 			Conns:      make(map[firewall.Packet]*conn),
 			TimerWheel: NewTimerWheel[firewall.Packet](min, max),
 		},
