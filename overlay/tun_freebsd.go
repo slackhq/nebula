@@ -174,16 +174,21 @@ func newTun(c *config.C, l *logrus.Logger, cidr *net.IPNet, _ bool) (*tun, error
 func (t *tun) Activate() error {
 	var err error
 	// TODO use syscalls instead of exec.Command
-	t.l.Debug("command: ifconfig", t.Device, t.cidr.String(), t.cidr.IP.String())
-	if err = exec.Command("/sbin/ifconfig", t.Device, t.cidr.String(), t.cidr.IP.String()).Run(); err != nil {
+	cmd := exec.Command("/sbin/ifconfig", t.Device, t.cidr.String(), t.cidr.IP.String())
+	t.l.Debug("command: ", cmd.String())
+	if err = cmd.Run(); err != nil {
 		return fmt.Errorf("failed to run 'ifconfig': %s", err)
 	}
-	t.l.Debug("command: route", "-n", "add", "-net", t.cidr.String(), "-interface", t.Device)
-	if err = exec.Command("/sbin/route", "-n", "add", "-net", t.cidr.String(), "-interface", t.Device).Run(); err != nil {
+
+	cmd = exec.Command("/sbin/route", "-n", "add", "-net", t.cidr.String(), "-interface", t.Device)
+	t.l.Debug("command: ", cmd.String())
+	if err = cmd.Run(); err != nil {
 		return fmt.Errorf("failed to run 'route add': %s", err)
 	}
-	t.l.Debug("command: ifconfig", t.Device, "mtu", strconv.Itoa(t.MTU))
-	if err = exec.Command("/sbin/ifconfig", t.Device, "mtu", strconv.Itoa(t.MTU)).Run(); err != nil {
+
+	cmd = exec.Command("/sbin/ifconfig", t.Device, "mtu", strconv.Itoa(t.MTU))
+	t.l.Debug("command: ", cmd.String())
+	if err = cmd.Run(); err != nil {
 		return fmt.Errorf("failed to run 'ifconfig': %s", err)
 	}
 
