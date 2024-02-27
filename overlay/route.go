@@ -22,6 +22,8 @@ type Route struct {
 	Install bool
 }
 
+// Equal determines if a route that could be installed in the system route table is equal to another
+// Via is ignored since that is only consumed within nebula itself
 func (r Route) Equal(t Route) bool {
 	if !r.Cidr.IP.Equal(t.Cidr.IP) {
 		return false
@@ -33,6 +35,9 @@ func (r Route) Equal(t Route) bool {
 		return false
 	}
 	if r.MTU != t.MTU {
+		return false
+	}
+	if r.Install != t.Install {
 		return false
 	}
 	return true

@@ -49,6 +49,8 @@ func getAllRoutesFromConfig(c *config.C, cidr *net.IPNet, initial bool) (bool, [
 	return true, routes, nil
 }
 
+// findRemovedRoutes will return all routes that are not present in the newRoutes list and would affect the system route table.
+// Via is not used to evaluate since it does not affect the system route table.
 func findRemovedRoutes(newRoutes, oldRoutes []Route) []Route {
 	var removed []Route
 	has := func(entry Route) bool {
