@@ -1,0 +1,35 @@
+#!/sbin/openrc-run
+#
+# nebula service for open-rc systems
+
+extra_commands="checkconfig"
+
+: ${NEBULA_CONFDIR:=${RC_PREFIX%/}/etc/nebula}
+: ${NEBULA_CONFIG:=${NEBULA_CONFDIR}/config.yml}
+: ${NEBULA_BINARY:=${NEBULA_BINARY}${RC_PREFIX%/}/usr/local/sbin/nebula}
+
+command="${NEBULA_BINARY}"
+command_args="${NEBULA_OPTS} -config ${NEBULA_CONFIG}"
+
+supervisor="supervise-daemon"
+
+description="A scalable overlay networking tool with a focus on performance, simplicity and security"
+
+required_dirs="${NEBULA_CONFDIR}"
+required_files="${NEBULA_CONFIG}"
+
+checkconfig() {
+        "${command}" -test ${command_args} || return 1
+}
+
+start_pre() {
+        if [ "${RC_CMD}" != "restart" ] ; then
+                checkconfig || return $?
+        fi
+}
+
+stop_pre() {
+        if [ "${RC_CMD}" = "restart" ] ; then
+                checkconfig || return $?
+        fi
+}
