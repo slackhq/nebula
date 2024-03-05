@@ -3,6 +3,7 @@ package nebula
 import (
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -472,7 +473,9 @@ func (hm *HostMap) queryVpnIp(vpnIp iputil.VpnIp, promoteIfce *Interface) *HostI
 func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	if f.serveDns {
 		remoteCert := hostinfo.ConnectionState.peerCert
-		dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ips[0].IP.String())
+		for _, hostname := range strings.Split(remoteCert.Details.Name, " ") {
+			dnsR.Add(hostname+".", remoteCert.Details.Ips[0].IP.String())
+		}
 	}
 
 	existing := hm.Hosts[hostinfo.vpnIp]
