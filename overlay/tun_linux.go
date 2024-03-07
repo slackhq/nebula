@@ -31,6 +31,7 @@ type tun struct {
 	DefaultMTU  int
 	TXQueueLen  int
 	deviceIndex int
+	ioctlFd     uintptr
 
 	Routes          atomic.Pointer[[]Route]
 	routeTree       atomic.Pointer[cidr.Tree4[iputil.VpnIp]]
@@ -110,7 +111,6 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, cidr *net.IPNet
 		ReadWriteCloser: file,
 		fd:              int(file.Fd()),
 		cidr:            cidr,
-		DefaultMTU:      c.GetInt("tun.mtu", DefaultMTU),
 		TXQueueLen:      c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes: c.GetBool("tun.use_system_route_table", false),
 		l:               l,
@@ -132,12 +132,12 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, cidr *net.IPNet
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
-	change, routes, err := getAllRoutesFromConfig(c, t.cidr, initial)
+	routeChange, routes, err := getAllRoutesFromConfig(c, t.cidr, initial)
 	if err != nil {
 		return err
 	}
 
-	if !initial && !change {
+	if !initial && !routeChange && !c.HasChanged("tun.mtu") {
 		return nil
 	}
 
@@ -146,24 +146,42 @@ func (t *tun) reload(c *config.C, initial bool) error {
 		return err
 	}
 
+	oldDefaultMTU := t.DefaultMTU
+	oldMaxMTU := t.MaxMTU
+	newDefaultMTU := c.GetInt("tun.mtu", DefaultMTU)
+	newMaxMTU := newDefaultMTU
 	for i, r := range routes {
 		if r.MTU == 0 {
-			//TODO: This was horribly broken before, I have doubts anyone is using it
-			routes[i].MTU = t.DefaultMTU
+			routes[i].MTU = newDefaultMTU
 		}
 
 		if r.MTU > t.MaxMTU {
-			//TODO: This needs to be atomic but it is not used so maybe its fine?
-			//TODO: this is also not handled since it would adjust the main route and device mtu
-			t.MaxMTU = r.MTU
+			newMaxMTU = r.MTU
 		}
 	}
+
+	t.MaxMTU = newMaxMTU
+	t.DefaultMTU = newDefaultMTU
 
 	// Teach nebula how to handle the routes before establishing them in the system table
 	oldRoutes := t.Routes.Swap(&routes)
 	t.routeTree.Store(routeTree)
 
 	if !initial {
+		if oldMaxMTU != newMaxMTU {
+			t.setMTU()
+			t.l.Infof("Set max MTU to %v was %v", t.MaxMTU, oldMaxMTU)
+		}
+
+		if oldDefaultMTU != newDefaultMTU {
+			err := t.setDefaultRoute()
+			if err != nil {
+				t.l.Warn(err)
+			} else {
+				t.l.Infof("Set default MTU to %v was %v", t.DefaultMTU, oldDefaultMTU)
+			}
+		}
+
 		// Remove first, if the system removes a wanted route hopefully it will be re-added next
 		t.removeRoutes(findRemovedRoutes(routes, *oldRoutes))
 
@@ -251,7 +269,7 @@ func (t *tun) Activate() error {
 	if err != nil {
 		return err
 	}
-	fd := uintptr(s)
+	t.ioctlFd = uintptr(s)
 
 	ifra := ifreqAddr{
 		Name: devName,
@@ -262,50 +280,72 @@ func (t *tun) Activate() error {
 	}
 
 	// Set the device ip address
-	if err = ioctl(fd, unix.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra))); err != nil {
+	if err = ioctl(t.ioctlFd, unix.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra))); err != nil {
 		return fmt.Errorf("failed to set tun address: %s", err)
 	}
 
 	// Set the device network
 	ifra.Addr.Addr = mask
-	if err = ioctl(fd, unix.SIOCSIFNETMASK, uintptr(unsafe.Pointer(&ifra))); err != nil {
+	if err = ioctl(t.ioctlFd, unix.SIOCSIFNETMASK, uintptr(unsafe.Pointer(&ifra))); err != nil {
 		return fmt.Errorf("failed to set tun netmask: %s", err)
 	}
 
 	// Set the device name
 	ifrf := ifReq{Name: devName}
-	if err = ioctl(fd, unix.SIOCGIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
+	if err = ioctl(t.ioctlFd, unix.SIOCGIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
 		return fmt.Errorf("failed to set tun device name: %s", err)
 	}
 
-	// Set the MTU on the device
-	ifm := ifreqMTU{Name: devName, MTU: int32(t.MaxMTU)}
-	if err = ioctl(fd, unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
-		// This is currently a non fatal condition because the route table must have the MTU set appropriately as well
-		t.l.WithError(err).Error("Failed to set tun mtu")
-	}
+	// Setup our default MTU
+	t.setMTU()
 
 	// Set the transmit queue length
 	ifrq := ifreqQLEN{Name: devName, Value: int32(t.TXQueueLen)}
-	if err = ioctl(fd, unix.SIOCSIFTXQLEN, uintptr(unsafe.Pointer(&ifrq))); err != nil {
+	if err = ioctl(t.ioctlFd, unix.SIOCSIFTXQLEN, uintptr(unsafe.Pointer(&ifrq))); err != nil {
 		// If we can't set the queue length nebula will still work but it may lead to packet loss
 		t.l.WithError(err).Error("Failed to set tun tx queue length")
 	}
 
 	// Bring up the interface
 	ifrf.Flags = ifrf.Flags | unix.IFF_UP
-	if err = ioctl(fd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
+	if err = ioctl(t.ioctlFd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
 		return fmt.Errorf("failed to bring the tun device up: %s", err)
 	}
 
-	// Set the routes
 	link, err := netlink.LinkByName(t.Device)
 	if err != nil {
 		return fmt.Errorf("failed to get tun device link: %s", err)
 	}
-
 	t.deviceIndex = link.Attrs().Index
 
+	if err = t.setDefaultRoute(); err != nil {
+		return err
+	}
+
+	// Set the routes
+	if err = t.addRoutes(false); err != nil {
+		return err
+	}
+
+	// Run the interface
+	ifrf.Flags = ifrf.Flags | unix.IFF_UP | unix.IFF_RUNNING
+	if err = ioctl(t.ioctlFd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
+		return fmt.Errorf("failed to run tun device: %s", err)
+	}
+
+	return nil
+}
+
+func (t *tun) setMTU() {
+	// Set the MTU on the device
+	ifm := ifreqMTU{Name: t.deviceBytes(), MTU: int32(t.MaxMTU)}
+	if err := ioctl(t.ioctlFd, unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
+		// This is currently a non fatal condition because the route table must have the MTU set appropriately as well
+		t.l.WithError(err).Error("Failed to set tun mtu")
+	}
+}
+
+func (t *tun) setDefaultRoute() error {
 	// Default route
 	dr := &net.IPNet{IP: t.cidr.IP.Mask(t.cidr.Mask), Mask: t.cidr.Mask}
 	nr := netlink.Route{
@@ -319,20 +359,9 @@ func (t *tun) Activate() error {
 		Table:     unix.RT_TABLE_MAIN,
 		Type:      unix.RTN_UNICAST,
 	}
-	err = netlink.RouteReplace(&nr)
+	err := netlink.RouteReplace(&nr)
 	if err != nil {
 		return fmt.Errorf("failed to set mtu %v on the default route %v; %v", t.DefaultMTU, dr, err)
-	}
-
-	err = t.addRoutes(false)
-	if err != nil {
-		return err
-	}
-
-	// Run the interface
-	ifrf.Flags = ifrf.Flags | unix.IFF_UP | unix.IFF_RUNNING
-	if err = ioctl(fd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
-		return fmt.Errorf("failed to run tun device: %s", err)
 	}
 
 	return nil
@@ -497,6 +526,10 @@ func (t *tun) Close() error {
 
 	if t.ReadWriteCloser != nil {
 		t.ReadWriteCloser.Close()
+	}
+
+	if t.ioctlFd > 0 {
+		os.NewFile(t.ioctlFd, "ioctlFd").Close()
 	}
 
 	return nil
