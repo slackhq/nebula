@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"dario.cat/mergo"
+	"github.com/siriusa51/goresult"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 )
@@ -23,8 +24,8 @@ import (
 type C struct {
 	path        string
 	files       []string
-	Settings    map[interface{}]interface{}
-	oldSettings map[interface{}]interface{}
+	Settings    map[any]any
+	oldSettings map[any]any
 	callbacks   []func(*C)
 	l           *logrus.Logger
 	reloadLock  sync.Mutex
@@ -32,7 +33,7 @@ type C struct {
 
 func NewC(l *logrus.Logger) *C {
 	return &C{
-		Settings: make(map[interface{}]interface{}),
+		Settings: make(map[any]any),
 		l:        l,
 	}
 }
@@ -63,7 +64,7 @@ func (c *C) Load(path string) error {
 
 func (c *C) LoadString(raw string) error {
 	if raw == "" {
-		return errors.New("Empty configuration")
+		return errors.New("empty configuration")
 	}
 	return c.parseRaw([]byte(raw))
 }
@@ -92,8 +93,8 @@ func (c *C) HasChanged(k string) bool {
 	}
 
 	var (
-		nv interface{}
-		ov interface{}
+		nv any
+		ov any
 	)
 
 	if k == "" {
@@ -147,7 +148,7 @@ func (c *C) ReloadConfig() {
 	c.reloadLock.Lock()
 	defer c.reloadLock.Unlock()
 
-	c.oldSettings = make(map[interface{}]interface{})
+	c.oldSettings = make(map[any]any)
 	for k, v := range c.Settings {
 		c.oldSettings[k] = v
 	}
@@ -167,7 +168,7 @@ func (c *C) ReloadConfigString(raw string) error {
 	c.reloadLock.Lock()
 	defer c.reloadLock.Unlock()
 
-	c.oldSettings = make(map[interface{}]interface{})
+	c.oldSettings = make(map[any]any)
 	for k, v := range c.Settings {
 		c.oldSettings[k] = v
 	}
@@ -184,26 +185,26 @@ func (c *C) ReloadConfigString(raw string) error {
 	return nil
 }
 
-// GetString will get the string for k or return the default d if not found or invalid
-func (c *C) GetString(k, d string) string {
+// GetString will get the string for k or return an error
+func (c *C) GetString(k string) goresult.Result[string] {
 	r := c.Get(k)
-	if r == nil {
-		return d
+	if r.IsError() {
+		return goresult.Error[string](r.Error())
 	}
 
-	return fmt.Sprintf("%v", r)
+	return goresult.Ok(fmt.Sprintf("%v", r))
 }
 
-// GetStringSlice will get the slice of strings for k or return the default d if not found or invalid
-func (c *C) GetStringSlice(k string, d []string) []string {
+// GetStringSlice will get the slice of strings for k or return an error
+func (c *C) GetStringSlice(k string) goresult.Result[[]string] {
 	r := c.Get(k)
-	if r == nil {
-		return d
+	if r.IsError() {
+		return goresult.Error[[]string](r.Error())
 	}
 
-	rv, ok := r.([]interface{})
+	rv, ok := r.Unwrap().([]any)
 	if !ok {
-		return d
+		return goresult.Error[[]string](errors.New("failed to parse"))
 	}
 
 	v := make([]string, len(rv))
@@ -211,94 +212,107 @@ func (c *C) GetStringSlice(k string, d []string) []string {
 		v[i] = fmt.Sprintf("%v", rv[i])
 	}
 
-	return v
+	return goresult.Ok(v)
 }
 
-// GetMap will get the map for k or return the default d if not found or invalid
-func (c *C) GetMap(k string, d map[interface{}]interface{}) map[interface{}]interface{} {
+// GetMap will get the map for k or return an error
+func (c *C) GetMap(k string) goresult.Result[map[any]any] {
 	r := c.Get(k)
-	if r == nil {
-		return d
+	if r.IsError() {
+		return goresult.Error[map[any]any](r.Error())
 	}
 
-	v, ok := r.(map[interface{}]interface{})
+	v, ok := r.Unwrap().(map[any]any)
 	if !ok {
-		return d
+		return goresult.Error[map[any]any](errors.New("failed to parse"))
 	}
 
-	return v
+	return goresult.Ok(v)
 }
 
-// GetInt will get the int for k or return the default d if not found or invalid
-func (c *C) GetInt(k string, d int) int {
-	r := c.GetString(k, strconv.Itoa(d))
-	v, err := strconv.Atoi(r)
+// GetInt will get the int for k or return an error
+func (c *C) GetInt(k string) goresult.Result[int] {
+	r := c.GetString(k)
+	if r.IsError() {
+		return goresult.Error[int](r.Error())
+	}
+	v, err := strconv.Atoi(r.Unwrap())
 	if err != nil {
-		return d
+		return goresult.Error[int](err)
 	}
 
-	return v
+	return goresult.Ok(v)
 }
 
-// GetUint32 will get the uint32 for k or return the default d if not found or invalid
-func (c *C) GetUint32(k string, d uint32) uint32 {
-	r := c.GetInt(k, int(d))
-	if uint64(r) > uint64(math.MaxUint32) {
-		return d
+// GetUint32 will get the uint32 for k or return an error
+func (c *C) GetUint32(k string) goresult.Result[uint32] {
+	r := c.GetInt(k)
+	if r.IsError() {
+		return goresult.Error[uint32](r.Error())
 	}
-	return uint32(r)
+	if uint64(r.Unwrap()) > uint64(math.MaxUint32) {
+		return goresult.Error[uint32](errors.New("Number is too large"))
+	}
+	return goresult.Ok(uint32(r.Unwrap()))
 }
 
-// GetBool will get the bool for k or return the default d if not found or invalid
-func (c *C) GetBool(k string, d bool) bool {
-	r := strings.ToLower(c.GetString(k, fmt.Sprintf("%v", d)))
-	v, err := strconv.ParseBool(r)
+// GetBool will get the bool for k or an error
+func (c *C) GetBool(k string) goresult.Result[bool] {
+	r := c.GetString(k)
+	if r.IsError() {
+		return goresult.Error[bool](r.Error())
+	}
+	v, err := strconv.ParseBool(strings.ToLower(r.Unwrap()))
 	if err != nil {
-		switch r {
+		switch r.Unwrap() {
 		case "y", "yes":
-			return true
+			return goresult.Ok(true)
 		case "n", "no":
-			return false
+			return goresult.Ok(false)
 		}
-		return d
+		return goresult.Error[bool](errors.New("failed to parse"))
 	}
 
-	return v
+	return goresult.Ok(v)
 }
 
-// GetDuration will get the duration for k or return the default d if not found or invalid
-func (c *C) GetDuration(k string, d time.Duration) time.Duration {
-	r := c.GetString(k, "")
-	v, err := time.ParseDuration(r)
+// GetDuration will get the duration for k or return an error
+func (c *C) GetDuration(k string) goresult.Result[time.Duration] {
+	r := c.GetString(k)
+	if r.IsError() {
+		return goresult.Error[time.Duration](r.Error())
+	}
+	v, err := time.ParseDuration(r.Unwrap())
 	if err != nil {
-		return d
+		return goresult.Error[time.Duration](err)
 	}
-	return v
+	return goresult.Ok(v)
 }
 
-func (c *C) Get(k string) interface{} {
+func (c *C) Get(k string) goresult.Result[any] {
 	return c.get(k, c.Settings)
 }
 
 func (c *C) IsSet(k string) bool {
-	return c.get(k, c.Settings) != nil
+	v := c.get(k, c.Settings)
+	return v.IsOk() && v.Unwrap() != nil
 }
 
-func (c *C) get(k string, v interface{}) interface{} {
+func (c *C) get(k string, v any) goresult.Result[any] {
 	parts := strings.Split(k, ".")
 	for _, p := range parts {
-		m, ok := v.(map[interface{}]interface{})
+		m, ok := v.(map[any]any)
 		if !ok {
-			return nil
+			return goresult.Error[any](errors.New("failed to parse"))
 		}
 
 		v, ok = m[p]
 		if !ok {
-			return nil
+			return goresult.Error[any](errors.New("failed to parse"))
 		}
 	}
 
-	return v
+	return goresult.Ok(v)
 }
 
 // direct signifies if this is the config path directly specified by the user,
@@ -346,7 +360,7 @@ func (c *C) addFile(path string, direct bool) error {
 }
 
 func (c *C) parseRaw(b []byte) error {
-	var m map[interface{}]interface{}
+	var m map[any]any
 
 	err := yaml.Unmarshal(b, &m)
 	if err != nil {
@@ -358,7 +372,7 @@ func (c *C) parseRaw(b []byte) error {
 }
 
 func (c *C) parse() error {
-	var m map[interface{}]interface{}
+	var m map[any]any
 
 	for _, path := range c.files {
 		b, err := os.ReadFile(path)
@@ -366,7 +380,7 @@ func (c *C) parse() error {
 			return err
 		}
 
-		var nm map[interface{}]interface{}
+		var nm map[any]any
 		err = yaml.Unmarshal(b, &nm)
 		if err != nil {
 			return err
