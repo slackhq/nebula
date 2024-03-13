@@ -39,11 +39,14 @@ func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 	var err error
 
 	r := c.Get("tun.routes")
-	if r == nil {
+	if r.IsError() {
+		return nil, r.Error()
+	}
+	if r.Unwrap() == nil {
 		return []Route{}, nil
 	}
 
-	rawRoutes, ok := r.([]interface{})
+	rawRoutes, ok := r.Unwrap().([]interface{})
 	if !ok {
 		return nil, fmt.Errorf("tun.routes is not an array")
 	}
@@ -110,11 +113,14 @@ func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 	var err error
 
 	r := c.Get("tun.unsafe_routes")
-	if r == nil {
+	if r.IsError() {
+		return nil, r.Error()
+	}
+	if r.Unwrap() == nil {
 		return []Route{}, nil
 	}
 
-	rawRoutes, ok := r.([]interface{})
+	rawRoutes, ok := r.Unwrap().([]interface{})
 	if !ok {
 		return nil, fmt.Errorf("tun.unsafe_routes is not an array")
 	}

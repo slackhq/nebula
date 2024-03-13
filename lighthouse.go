@@ -86,8 +86,8 @@ type LightHouse struct {
 // NewLightHouseFromConfig will build a Lighthouse struct from the values provided in the config object
 // addrMap should be nil unless this is during a config reload
 func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C, myVpnNet *net.IPNet, pc udp.Conn, p *Punchy) (*LightHouse, error) {
-	amLighthouse := c.GetBool("lighthouse.am_lighthouse", false)
-	nebulaPort := uint32(c.GetInt("listen.port", 0))
+	amLighthouse := c.GetBool("lighthouse.am_lighthouse").UnwrapOr(false)
+	nebulaPort := uint32(c.GetInt("listen.port").UnwrapOr(0))
 	if amLighthouse && nebulaPort == 0 {
 		return nil, util.NewContextualError("lighthouse.am_lighthouse enabled on node but no port number is set in config", nil, nil)
 	}
@@ -112,7 +112,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 		nebulaPort:   nebulaPort,
 		punchConn:    pc,
 		punchy:       p,
-		queryChan:    make(chan iputil.VpnIp, c.GetUint32("handshakes.query_buffer", 64)),
+		queryChan:    make(chan iputil.VpnIp, c.GetUint32("handshakes.query_buffer").UnwrapOr(64)),
 		l:            l,
 	}
 	lighthouses := make(map[iputil.VpnIp]struct{})
@@ -120,7 +120,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 	staticList := make(map[iputil.VpnIp]struct{})
 	h.staticList.Store(&staticList)
 
-	if c.GetBool("stats.lighthouse_metrics", false) {
+	if c.GetBool("stats.lighthouse_metrics").UnwrapOr(false) {
 		h.metrics = newLighthouseMetrics()
 		h.metricHolepunchTx = metrics.GetOrRegisterCounter("messages.tx.holepunch", nil)
 	} else {
@@ -181,7 +181,7 @@ func (lh *LightHouse) GetUpdateInterval() int64 {
 
 func (lh *LightHouse) reload(c *config.C, initial bool) error {
 	if initial || c.HasChanged("lighthouse.advertise_addrs") {
-		rawAdvAddrs := c.GetStringSlice("lighthouse.advertise_addrs", []string{})
+		rawAdvAddrs := c.GetStringSlice("lighthouse.advertise_addrs").UnwrapOrDefault()
 		advAddrs := make([]netIpAndPort, 0)
 
 		for i, rawAddr := range rawAdvAddrs {
@@ -211,7 +211,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 	}
 
 	if initial || c.HasChanged("lighthouse.interval") {
-		lh.interval.Store(int64(c.GetInt("lighthouse.interval", 10)))
+		lh.interval.Store(int64(c.GetInt("lighthouse.interval").UnwrapOr(10)))
 
 		if !initial {
 			lh.l.Infof("lighthouse.interval changed to %v", lh.interval.Load())
@@ -317,17 +317,17 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 	}
 
 	if initial || c.HasChanged("relay.relays") {
-		switch c.GetBool("relay.am_relay", false) {
+		switch c.GetBool("relay.am_relay").UnwrapOr(false) {
 		case true:
 			// Relays aren't allowed to specify other relays
-			if len(c.GetStringSlice("relay.relays", nil)) > 0 {
+			if len(c.GetStringSlice("relay.relays").UnwrapOr(nil)) > 0 {
 				lh.l.Info("Ignoring relays from config because am_relay is true")
 			}
 			relaysForMe := []iputil.VpnIp{}
 			lh.relaysForMe.Store(&relaysForMe)
 		case false:
 			relaysForMe := []iputil.VpnIp{}
-			for _, v := range c.GetStringSlice("relay.relays", nil) {
+			for _, v := range c.GetStringSlice("relay.relays").UnwrapOrDefault() {
 				lh.l.WithField("relay", v).Info("Read relay from config")
 
 				configRIP := net.ParseIP(v)
@@ -343,7 +343,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 }
 
 func (lh *LightHouse) parseLighthouses(c *config.C, tunCidr *net.IPNet, lhMap map[iputil.VpnIp]struct{}) error {
-	lhs := c.GetStringSlice("lighthouse.hosts", []string{})
+	lhs := c.GetStringSlice("lighthouse.hosts").UnwrapOr([]string{})
 	if lh.amLighthouse && len(lhs) != 0 {
 		lh.l.Warn("lighthouse.am_lighthouse enabled on node but upstream lighthouses exist in config")
 	}
@@ -374,7 +374,7 @@ func (lh *LightHouse) parseLighthouses(c *config.C, tunCidr *net.IPNet, lhMap ma
 }
 
 func getStaticMapCadence(c *config.C) (time.Duration, error) {
-	cadence := c.GetString("static_map.cadence", "30s")
+	cadence := c.GetString("static_map.cadence").UnwrapOr("30s")
 	d, err := time.ParseDuration(cadence)
 	if err != nil {
 		return 0, err
@@ -383,7 +383,7 @@ func getStaticMapCadence(c *config.C) (time.Duration, error) {
 }
 
 func getStaticMapLookupTimeout(c *config.C) (time.Duration, error) {
-	lookupTimeout := c.GetString("static_map.lookup_timeout", "250ms")
+	lookupTimeout := c.GetString("static_map.lookup_timeout").UnwrapOr("250ms")
 	d, err := time.ParseDuration(lookupTimeout)
 	if err != nil {
 		return 0, err
@@ -392,7 +392,7 @@ func getStaticMapLookupTimeout(c *config.C) (time.Duration, error) {
 }
 
 func getStaticMapNetwork(c *config.C) (string, error) {
-	network := c.GetString("static_map.network", "ip4")
+	network := c.GetString("static_map.network").UnwrapOr("ip4")
 	if network != "ip" && network != "ip4" && network != "ip6" {
 		return "", fmt.Errorf("static_map.network must be one of ip, ip4, or ip6")
 	}
@@ -415,7 +415,7 @@ func (lh *LightHouse) loadStaticMap(c *config.C, tunCidr *net.IPNet, staticList 
 		return err
 	}
 
-	shm := c.GetMap("static_host_map", map[interface{}]interface{}{})
+	shm := c.GetMap("static_host_map").UnwrapOr(map[any]any{})
 	i := 0
 
 	for k, v := range shm {

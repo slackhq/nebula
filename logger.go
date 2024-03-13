@@ -11,20 +11,20 @@ import (
 
 func configLogger(l *logrus.Logger, c *config.C) error {
 	// set up our logging level
-	logLevel, err := logrus.ParseLevel(strings.ToLower(c.GetString("logging.level", "info")))
+	logLevel, err := logrus.ParseLevel(strings.ToLower(c.GetString("logging.level").UnwrapOr("info")))
 	if err != nil {
 		return fmt.Errorf("%s; possible levels: %s", err, logrus.AllLevels)
 	}
 	l.SetLevel(logLevel)
 
-	disableTimestamp := c.GetBool("logging.disable_timestamp", false)
-	timestampFormat := c.GetString("logging.timestamp_format", "")
+	disableTimestamp := c.GetBool("logging.disable_timestamp").UnwrapOr(false)
+	timestampFormat := c.GetString("logging.timestamp_format").UnwrapOrDefault()
 	fullTimestamp := (timestampFormat != "")
 	if timestampFormat == "" {
 		timestampFormat = time.RFC3339
 	}
 
-	logFormat := strings.ToLower(c.GetString("logging.format", "text"))
+	logFormat := strings.ToLower(c.GetString("logging.format").UnwrapOr("text"))
 	switch logFormat {
 	case "text":
 		l.Formatter = &logrus.TextFormatter{

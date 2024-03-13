@@ -220,13 +220,16 @@ func getAllowListInterfaces(k string, v interface{}) ([]AllowListNameRule, error
 
 func getRemoteAllowRanges(c *config.C, k string) (*cidr.Tree6[*AllowList], error) {
 	value := c.Get(k)
-	if value == nil {
+	if value.IsError() {
+		return nil, value.Error()
+	}
+	if value.Unwrap() == nil {
 		return nil, nil
 	}
 
 	remoteAllowRanges := cidr.NewTree6[*AllowList]()
 
-	rawMap, ok := value.(map[interface{}]interface{})
+	rawMap, ok := value.Unwrap().(map[interface{}]interface{})
 	if !ok {
 		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, value)
 	}

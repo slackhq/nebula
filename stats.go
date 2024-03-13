@@ -23,14 +23,14 @@ import (
 // is needed to serve stats, it returns a func to handle that work. If no
 // work is needed, it'll return nil. On failure, it returns nil, error.
 func startStats(l *logrus.Logger, c *config.C, buildVersion string, configTest bool) (func(), error) {
-	mType := c.GetString("stats.type", "")
+	mType := c.GetString("stats.type").UnwrapOrDefault()
 	if mType == "" || mType == "none" {
 		return nil, nil
 	}
 
-	interval := c.GetDuration("stats.interval", 0)
+	interval := c.GetDuration("stats.interval").UnwrapOr(0)
 	if interval == 0 {
-		return nil, fmt.Errorf("stats.interval was an invalid duration: %s", c.GetString("stats.interval", ""))
+		return nil, fmt.Errorf("stats.interval was an invalid duration: %s", c.GetString("stats.interval").UnwrapOrDefault())
 	}
 
 	var startFn func()
@@ -60,13 +60,13 @@ func startStats(l *logrus.Logger, c *config.C, buildVersion string, configTest b
 }
 
 func startGraphiteStats(l *logrus.Logger, i time.Duration, c *config.C, configTest bool) error {
-	proto := c.GetString("stats.protocol", "tcp")
-	host := c.GetString("stats.host", "")
+	proto := c.GetString("stats.protocol").UnwrapOr("tcp")
+	host := c.GetString("stats.host").UnwrapOrDefault()
 	if host == "" {
 		return errors.New("stats.host can not be empty")
 	}
 
-	prefix := c.GetString("stats.prefix", "nebula")
+	prefix := c.GetString("stats.prefix").UnwrapOr("nebula")
 	addr, err := net.ResolveTCPAddr(proto, host)
 	if err != nil {
 		return fmt.Errorf("error while setting up graphite sink: %s", err)
@@ -80,15 +80,15 @@ func startGraphiteStats(l *logrus.Logger, i time.Duration, c *config.C, configTe
 }
 
 func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildVersion string, configTest bool) (func(), error) {
-	namespace := c.GetString("stats.namespace", "")
-	subsystem := c.GetString("stats.subsystem", "")
+	namespace := c.GetString("stats.namespace").UnwrapOrDefault()
+	subsystem := c.GetString("stats.subsystem").UnwrapOrDefault()
 
-	listen := c.GetString("stats.listen", "")
+	listen := c.GetString("stats.listen").UnwrapOrDefault()
 	if listen == "" {
 		return nil, fmt.Errorf("stats.listen should not be empty")
 	}
 
-	path := c.GetString("stats.path", "")
+	path := c.GetString("stats.path").UnwrapOrDefault()
 	if path == "" {
 		return nil, fmt.Errorf("stats.path should not be empty")
 	}

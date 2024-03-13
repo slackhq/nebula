@@ -53,7 +53,7 @@ type sshCreateTunnelFlags struct {
 
 func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) {
 	c.RegisterReloadCallback(func(c *config.C) {
-		if c.GetBool("sshd.enabled", false) {
+		if c.GetBool("sshd.enabled").UnwrapOr(false) {
 			sshRun, err := configSSH(l, ssh, c)
 			if err != nil {
 				l.WithError(err).Error("Failed to reconfigure the sshd")
@@ -76,7 +76,7 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 	//TODO conntrack list
 	//TODO print firewall rules or hash?
 
-	listen := c.GetString("sshd.listen", "")
+	listen := c.GetString("sshd.listen").UnwrapOrDefault()
 	if listen == "" {
 		return nil, fmt.Errorf("sshd.listen must be provided")
 	}
@@ -90,7 +90,7 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 	}
 
 	//TODO: no good way to reload this right now
-	hostKeyPathOrKey := c.GetString("sshd.host_key", "")
+	hostKeyPathOrKey := c.GetString("sshd.host_key").UnwrapOrDefault()
 	if hostKeyPathOrKey == "" {
 		return nil, fmt.Errorf("sshd.host_key must be provided")
 	}
@@ -111,7 +111,10 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 	}
 
 	rawKeys := c.Get("sshd.authorized_users")
-	keys, ok := rawKeys.([]interface{})
+	if rawKeys.IsError() {
+		return nil, fmt.Errorf("error while loading sshd.authorized_users: %s", rawKeys.Error())
+	}
+	keys, ok := rawKeys.Unwrap().([]interface{})
 	if ok {
 		for _, rk := range keys {
 			kDef, ok := rk.(map[interface{}]interface{})
@@ -159,7 +162,7 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 	}
 
 	var runner func()
-	if c.GetBool("sshd.enabled", false) {
+	if c.GetBool("sshd.enabled").UnwrapOr(false) {
 		ssh.Stop()
 		runner = func() {
 			if err := ssh.Run(listen); err != nil {
