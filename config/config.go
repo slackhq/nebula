@@ -304,12 +304,12 @@ func (c *C) get(k string, v any) goresult.Result[any] {
 	for _, p := range parts {
 		m, ok := v.(map[any]any)
 		if !ok {
-			return goresult.Error[any](errors.New("failed to parse"))
+			return goresult.Error[any](errors.New("failed to parse config"))
 		}
 
 		v, ok = m[p]
 		if !ok {
-			return goresult.Error[any](errors.New("failed to parse"))
+			return goresult.Error[any](fmt.Errorf("did not find key \"%s\" in config", k))
 		}
 	}
 

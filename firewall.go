@@ -325,15 +325,13 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 		table = "firewall.outbound"
 	}
 
-	r := c.Get(table)
-	if r.IsError() {
-		return r.Error()
-	}
-	if r.Unwrap() == nil {
+	r := c.Get(table).UnwrapOrDefault()
+
+	if r == nil {
 		return nil
 	}
 
-	rs, ok := r.Unwrap().([]interface{})
+	rs, ok := r.([]interface{})
 	if !ok {
 		return fmt.Errorf("%s failed to parse, should be an array of rules", table)
 	}
