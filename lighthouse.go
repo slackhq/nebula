@@ -181,7 +181,7 @@ func (lh *LightHouse) GetUpdateInterval() int64 {
 
 func (lh *LightHouse) reload(c *config.C, initial bool) error {
 	if initial || c.HasChanged("lighthouse.advertise_addrs") {
-		rawAdvAddrs := c.GetStringSlice("lighthouse.advertise_addrs").UnwrapOrDefault()
+		rawAdvAddrs := c.GetStringSlice("lighthouse.advertise_addrs").UnwrapOr([]string{})
 		advAddrs := make([]netIpAndPort, 0)
 
 		for i, rawAddr := range rawAdvAddrs {

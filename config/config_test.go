@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -48,50 +49,50 @@ func TestConfig_Get(t *testing.T) {
 	// test simple type
 	c := NewC(l)
 	c.Settings["firewall"] = map[interface{}]interface{}{"outbound": "hi"}
-	assert.Equal(t, "hi", c.Get("firewall.outbound"))
+	assert.Equal(t, "hi", c.Get("firewall.outbound").Unwrap())
 
 	// test complex type
 	inner := []map[interface{}]interface{}{{"port": "1", "code": "2"}}
 	c.Settings["firewall"] = map[interface{}]interface{}{"outbound": inner}
-	assert.EqualValues(t, inner, c.Get("firewall.outbound"))
+	assert.EqualValues(t, inner, c.Get("firewall.outbound").Unwrap())
 
 	// test missing
-	assert.Nil(t, c.Get("firewall.nope"))
+	assert.Equal(t, errors.New("failed to parse"), c.Get("firewall.nope").Error())
 }
 
 func TestConfig_GetStringSlice(t *testing.T) {
 	l := test.NewLogger()
 	c := NewC(l)
 	c.Settings["slice"] = []interface{}{"one", "two"}
-	assert.Equal(t, []string{"one", "two"}, c.GetStringSlice("slice", []string{}))
+	assert.Equal(t, []string{"one", "two"}, c.GetStringSlice("slice").UnwrapOr([]string{}))
 }
 
 func TestConfig_GetBool(t *testing.T) {
 	l := test.NewLogger()
 	c := NewC(l)
 	c.Settings["bool"] = true
-	assert.Equal(t, true, c.GetBool("bool", false))
+	assert.Equal(t, true, c.GetBool("bool").Unwrap())
 
 	c.Settings["bool"] = "true"
-	assert.Equal(t, true, c.GetBool("bool", false))
+	assert.Equal(t, true, c.GetBool("bool").Unwrap())
 
 	c.Settings["bool"] = false
-	assert.Equal(t, false, c.GetBool("bool", true))
+	assert.Equal(t, false, c.GetBool("bool").Unwrap())
 
 	c.Settings["bool"] = "false"
-	assert.Equal(t, false, c.GetBool("bool", true))
+	assert.Equal(t, false, c.GetBool("bool").Unwrap())
 
 	c.Settings["bool"] = "Y"
-	assert.Equal(t, true, c.GetBool("bool", false))
+	assert.Equal(t, true, c.GetBool("bool").Unwrap())
 
 	c.Settings["bool"] = "yEs"
-	assert.Equal(t, true, c.GetBool("bool", false))
+	assert.Equal(t, true, c.GetBool("bool").Unwrap())
 
 	c.Settings["bool"] = "N"
-	assert.Equal(t, false, c.GetBool("bool", true))
+	assert.Equal(t, false, c.GetBool("bool").Unwrap())
 
 	c.Settings["bool"] = "nO"
-	assert.Equal(t, false, c.GetBool("bool", true))
+	assert.Equal(t, false, c.GetBool("bool").Unwrap())
 }
 
 func TestConfig_HasChanged(t *testing.T) {

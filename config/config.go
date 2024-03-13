@@ -102,8 +102,8 @@ func (c *C) HasChanged(k string) bool {
 		ov = c.oldSettings
 		k = "all settings"
 	} else {
-		nv = c.get(k, c.Settings)
-		ov = c.get(k, c.oldSettings)
+		nv = c.get(k, c.Settings).Unwrap()
+		ov = c.get(k, c.oldSettings).Unwrap()
 	}
 
 	newVals, err := yaml.Marshal(nv)
@@ -192,7 +192,7 @@ func (c *C) GetString(k string) goresult.Result[string] {
 		return goresult.Error[string](r.Error())
 	}
 
-	return goresult.Ok(fmt.Sprintf("%v", r))
+	return goresult.Ok(fmt.Sprintf("%v", r.Unwrap()))
 }
 
 // GetStringSlice will get the slice of strings for k or return an error
@@ -262,15 +262,16 @@ func (c *C) GetBool(k string) goresult.Result[bool] {
 	if r.IsError() {
 		return goresult.Error[bool](r.Error())
 	}
-	v, err := strconv.ParseBool(strings.ToLower(r.Unwrap()))
+	x := strings.ToLower(r.Unwrap())
+	v, err := strconv.ParseBool(x)
 	if err != nil {
-		switch r.Unwrap() {
+		switch x {
 		case "y", "yes":
 			return goresult.Ok(true)
 		case "n", "no":
 			return goresult.Ok(false)
 		}
-		return goresult.Error[bool](errors.New("failed to parse"))
+		return goresult.Error[bool](err)
 	}
 
 	return goresult.Ok(v)
