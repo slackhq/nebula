@@ -52,17 +52,15 @@ func (c *calculatedRemote) Apply(ip iputil.VpnIp) *Ip4AndPort {
 }
 
 func NewCalculatedRemotesFromConfig(c *config.C, k string) (*cidr.Tree4[[]*calculatedRemote], error) {
-	value := c.Get(k)
-	if value.IsError() {
-		return nil, value.Error()
-	}
-	if value.Unwrap() == nil {
+	value := c.Get(k).UnwrapOrDefault()
+
+	if value == nil {
 		return nil, nil
 	}
 
 	calculatedRemotes := cidr.NewTree4[[]*calculatedRemote]()
 
-	rawMap, ok := value.Unwrap().(map[any]any)
+	rawMap, ok := value.(map[any]any)
 	if !ok {
 		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, value)
 	}

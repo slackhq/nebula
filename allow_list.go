@@ -72,15 +72,13 @@ func NewRemoteAllowListFromConfig(c *config.C, k, rangesKey string) (*RemoteAllo
 // If the handleKey func returns true, the rest of the parsing is skipped
 // for this key. This allows parsing of special values like `interfaces`.
 func newAllowListFromConfig(c *config.C, k string, handleKey func(key string, value interface{}) (bool, error)) (*AllowList, error) {
-	r := c.Get(k)
-	if r.IsError() {
-		return nil, r.Error()
-	}
-	if r.Unwrap() == nil {
+	r := c.Get(k).UnwrapOrDefault()
+
+	if r == nil {
 		return nil, nil
 	}
 
-	return newAllowList(k, r.Unwrap(), handleKey)
+	return newAllowList(k, r, handleKey)
 }
 
 // If the handleKey func returns true, the rest of the parsing is skipped
@@ -222,17 +220,15 @@ func getAllowListInterfaces(k string, v interface{}) ([]AllowListNameRule, error
 }
 
 func getRemoteAllowRanges(c *config.C, k string) (*cidr.Tree6[*AllowList], error) {
-	value := c.Get(k)
-	if value.IsError() {
-		return nil, value.Error()
-	}
-	if value.Unwrap() == nil {
+	value := c.Get(k).UnwrapOrDefault()
+
+	if value == nil {
 		return nil, nil
 	}
 
 	remoteAllowRanges := cidr.NewTree6[*AllowList]()
 
-	rawMap, ok := value.Unwrap().(map[interface{}]interface{})
+	rawMap, ok := value.(map[interface{}]interface{})
 	if !ok {
 		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, value)
 	}

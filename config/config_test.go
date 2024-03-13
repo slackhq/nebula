@@ -57,7 +57,7 @@ func TestConfig_Get(t *testing.T) {
 	assert.EqualValues(t, inner, c.Get("firewall.outbound").Unwrap())
 
 	// test missing
-	assert.Equal(t, errors.New("failed to parse"), c.Get("firewall.nope").Error())
+	assert.Equal(t, errors.New("did not find key \"firewall.nope\" in config"), c.Get("firewall.nope").Error())
 }
 
 func TestConfig_GetStringSlice(t *testing.T) {

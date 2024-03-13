@@ -102,8 +102,8 @@ func (c *C) HasChanged(k string) bool {
 		ov = c.oldSettings
 		k = "all settings"
 	} else {
-		nv = c.get(k, c.Settings).Unwrap()
-		ov = c.get(k, c.oldSettings).Unwrap()
+		nv = c.get(k, c.Settings).UnwrapOrDefault()
+		ov = c.get(k, c.oldSettings).UnwrapOrDefault()
 	}
 
 	newVals, err := yaml.Marshal(nv)
