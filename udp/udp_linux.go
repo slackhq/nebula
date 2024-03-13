@@ -285,7 +285,7 @@ func (u *StdConn) writeTo4(b []byte, addr *Addr) error {
 }
 
 func (u *StdConn) ReloadConfig(c *config.C) {
-	b := c.GetInt("listen.read_buffer", 0)
+	b := c.GetInt("listen.read_buffer").UnwrapOr(0)
 	if b > 0 {
 		err := u.SetRecvBuffer(b)
 		if err == nil {
@@ -300,7 +300,7 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 		}
 	}
 
-	b = c.GetInt("listen.write_buffer", 0)
+	b = c.GetInt("listen.write_buffer").UnwrapOr(0)
 	if b > 0 {
 		err := u.SetSendBuffer(b)
 		if err == nil {
