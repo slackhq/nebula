@@ -54,11 +54,11 @@ pki:
   cert: /home/rice/Developer/nebula-config/app.crt
   key: /home/rice/Developer/nebula-config/app.key
 `
-	var config config.C
-	if err := config.LoadString(configStr); err != nil {
+	var cfg config.C
+	if err := cfg.LoadString(configStr); err != nil {
 		return err
 	}
-	service, err := service.New(&config)
+	service, err := service.New(&cfg)
 	if err != nil {
 		return err
 	}
