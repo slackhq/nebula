@@ -17,7 +17,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay"
 	"golang.org/x/sync/errgroup"
-	"gvisor.dev/gvisor/pkg/bufferv2"
+	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -124,7 +124,7 @@ func New(config *config.C) (*Service, error) {
 				return err
 			}
 			packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
-				Payload: bufferv2.MakeWithData(bytes.Clone(buf[:n])),
+				Payload: buffer.MakeWithData(bytes.Clone(buf[:n])),
 			})
 			linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
 
