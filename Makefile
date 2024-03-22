@@ -44,7 +44,8 @@ ALL_LINUX = linux-amd64 \
 	linux-mips64 \
 	linux-mips64le \
 	linux-mips-softfloat \
-	linux-riscv64
+	linux-riscv64 \
+        linux-loong64
 
 ALL_FREEBSD = freebsd-amd64 \
 	freebsd-arm64
