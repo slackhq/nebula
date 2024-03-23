@@ -30,6 +30,13 @@ ifndef BUILD_NUMBER
 	endif
 endif
 
+ifndef DOCKER_IMAGE_REPO
+	DOCKER_IMAGE_REPO = nebula
+endif
+ifndef DOCKER_IMAGE_TAG
+	DOCKER_IMAGE_TAG = latest
+endif
+
 LDFLAGS = -X main.Build=$(BUILD_NUMBER)
 
 ALL_LINUX = linux-amd64 \
@@ -54,6 +61,9 @@ ALL_OPENBSD = openbsd-amd64 \
 
 ALL_NETBSD = netbsd-amd64 \
  	netbsd-arm64
+
+ALL_DOCKER = linux-amd64 \
+	linux-arm64
 
 ALL = $(ALL_LINUX) \
 	$(ALL_FREEBSD) \
@@ -83,6 +93,8 @@ e2e-bench: TEST_FLAGS = -bench=. -benchmem -run=^$
 e2e-bench: e2e
 
 all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
+
+all-docker: $(ALL_DOCKER:%=docker/%)
 
 release: $(ALL:%=build/nebula-%.tar.gz)
 
@@ -155,6 +167,9 @@ build/nebula-%.tar.gz: build/%/nebula build/%/nebula-cert
 
 build/nebula-%.zip: build/%/nebula.exe build/%/nebula-cert.exe
 	cd build/$* && zip ../nebula-$*.zip nebula.exe nebula-cert.exe
+
+docker/%: build/%/nebula build/%/nebula-cert
+	docker buildx build . $(DOCKER_BUILD_ARGS) -f docker/Dockerfile --platform "$(subst -,/,$*)" --build-arg SOURCEDIR="build/$*" --tag "${DOCKER_IMAGE_REPO}:${DOCKER_IMAGE_TAG}" --tag "${DOCKER_IMAGE_REPO}:$(BUILD_NUMBER)"
 
 vet:
 	go vet $(VET_FLAGS) -v ./...
