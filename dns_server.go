@@ -129,7 +129,7 @@ func dnsMain(l *logrus.Logger, hostMap *HostMap, c *config.C) func() {
 }
 
 func getDnsServerAddr(c *config.C) string {
-	return c.GetString("lighthouse.dns.host", "") + ":" + strconv.Itoa(c.GetInt("lighthouse.dns.port", 53))
+	return c.GetString("lighthouse.dns.host").UnwrapOrDefault() + ":" + strconv.Itoa(c.GetInt("lighthouse.dns.port").UnwrapOr(53))
 }
 
 func startDns(l *logrus.Logger, c *config.C) {

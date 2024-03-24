@@ -303,7 +303,7 @@ func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
 func (f *Interface) reloadDisconnectInvalid(c *config.C) {
 	initial := c.InitialLoad()
 	if initial || c.HasChanged("pki.disconnect_invalid") {
-		f.disconnectInvalid.Store(c.GetBool("pki.disconnect_invalid", true))
+		f.disconnectInvalid.Store(c.GetBool("pki.disconnect_invalid").UnwrapOr(true))
 		if !initial {
 			f.l.Infof("pki.disconnect_invalid changed to %v", f.disconnectInvalid.Load())
 		}
@@ -351,7 +351,7 @@ func (f *Interface) reloadFirewall(c *config.C) {
 
 func (f *Interface) reloadSendRecvError(c *config.C) {
 	if c.InitialLoad() || c.HasChanged("listen.send_recv_error") {
-		stringValue := c.GetString("listen.send_recv_error", "always")
+		stringValue := c.GetString("listen.send_recv_error").UnwrapOr("always")
 
 		switch stringValue {
 		case "always":
@@ -361,7 +361,7 @@ func (f *Interface) reloadSendRecvError(c *config.C) {
 		case "private":
 			f.sendRecvErrorConfig = sendRecvErrorPrivate
 		default:
-			if c.GetBool("listen.send_recv_error", true) {
+			if c.GetBool("listen.send_recv_error").UnwrapOr(true) {
 				f.sendRecvErrorConfig = sendRecvErrorAlways
 			} else {
 				f.sendRecvErrorConfig = sendRecvErrorNever
@@ -375,19 +375,19 @@ func (f *Interface) reloadSendRecvError(c *config.C) {
 
 func (f *Interface) reloadMisc(c *config.C) {
 	if c.HasChanged("counters.try_promote") {
-		n := c.GetUint32("counters.try_promote", defaultPromoteEvery)
+		n := c.GetUint32("counters.try_promote").UnwrapOr(defaultPromoteEvery)
 		f.tryPromoteEvery.Store(n)
 		f.l.Info("counters.try_promote has changed")
 	}
 
 	if c.HasChanged("counters.requery_every_packets") {
-		n := c.GetUint32("counters.requery_every_packets", defaultReQueryEvery)
+		n := c.GetUint32("counters.requery_every_packets").UnwrapOr(defaultReQueryEvery)
 		f.reQueryEvery.Store(n)
 		f.l.Info("counters.requery_every_packets has changed")
 	}
 
 	if c.HasChanged("timers.requery_wait_duration") {
-		n := c.GetDuration("timers.requery_wait_duration", defaultReQueryWait)
+		n := c.GetDuration("timers.requery_wait_duration").UnwrapOr(defaultReQueryWait)
 		f.reQueryWait.Store(int64(n))
 		f.l.Info("timers.requery_wait_duration has changed")
 	}

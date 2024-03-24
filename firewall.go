@@ -200,17 +200,17 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 func NewFirewallFromConfig(l *logrus.Logger, nc *cert.NebulaCertificate, c *config.C) (*Firewall, error) {
 	fw := NewFirewall(
 		l,
-		c.GetDuration("firewall.conntrack.tcp_timeout", time.Minute*12),
-		c.GetDuration("firewall.conntrack.udp_timeout", time.Minute*3),
-		c.GetDuration("firewall.conntrack.default_timeout", time.Minute*10),
+		c.GetDuration("firewall.conntrack.tcp_timeout").UnwrapOr(time.Minute*12),
+		c.GetDuration("firewall.conntrack.udp_timeout").UnwrapOr(time.Minute*3),
+		c.GetDuration("firewall.conntrack.default_timeout").UnwrapOr(time.Minute*10),
 		nc,
 		//TODO: max_connections
 	)
 
 	//TODO: Flip to false after v1.9 release
-	fw.defaultLocalCIDRAny = c.GetBool("firewall.default_local_cidr_any", true)
+	fw.defaultLocalCIDRAny = c.GetBool("firewall.default_local_cidr_any").UnwrapOr(true)
 
-	inboundAction := c.GetString("firewall.inbound_action", "drop")
+	inboundAction := c.GetString("firewall.inbound_action").UnwrapOr("drop")
 	switch inboundAction {
 	case "reject":
 		fw.InSendReject = true
@@ -221,7 +221,7 @@ func NewFirewallFromConfig(l *logrus.Logger, nc *cert.NebulaCertificate, c *conf
 		fw.InSendReject = false
 	}
 
-	outboundAction := c.GetString("firewall.outbound_action", "drop")
+	outboundAction := c.GetString("firewall.outbound_action").UnwrapOr("drop")
 	switch outboundAction {
 	case "reject":
 		fw.OutSendReject = true
@@ -325,7 +325,8 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 		table = "firewall.outbound"
 	}
 
-	r := c.Get(table)
+	r := c.Get(table).UnwrapOrDefault()
+
 	if r == nil {
 		return nil
 	}

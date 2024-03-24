@@ -76,7 +76,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 	wireSSHReload(l, ssh, c)
 	var sshStart func()
-	if c.GetBool("sshd.enabled", false) {
+	if c.GetBool("sshd.enabled").UnwrapOr(false) {
 		sshStart, err = configSSH(l, ssh, c)
 		if err != nil {
 			return nil, util.ContextualizeIfNeeded("Error while configuring the sshd", err)
@@ -91,7 +91,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	var routines int
 
 	// If `routines` is set, use that and ignore the specific values
-	if routines = c.GetInt("routines", 0); routines != 0 {
+	if routines = c.GetInt("routines").UnwrapOr(0); routines != 0 {
 		if routines < 1 {
 			routines = 1
 		}
@@ -100,8 +100,8 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	} else {
 		// deprecated and undocumented
-		tunQueues := c.GetInt("tun.routines", 1)
-		udpQueues := c.GetInt("listen.routines", 1)
+		tunQueues := c.GetInt("tun.routines").UnwrapOr(1)
+		udpQueues := c.GetInt("listen.routines").UnwrapOr(1)
 		if tunQueues > udpQueues {
 			routines = tunQueues
 		} else {
@@ -115,7 +115,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	// EXPERIMENTAL
 	// Intentionally not documented yet while we do more testing and determine
 	// a good default value.
-	conntrackCacheTimeout := c.GetDuration("firewall.conntrack.routine_cache_timeout", 0)
+	conntrackCacheTimeout := c.GetDuration("firewall.conntrack.routine_cache_timeout").UnwrapOr(0)
 	if routines > 1 && !c.IsSet("firewall.conntrack.routine_cache_timeout") {
 		// Use a different default if we are running with multiple routines
 		conntrackCacheTimeout = 1 * time.Second
@@ -146,10 +146,10 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	// set up our UDP listener
 	udpConns := make([]udp.Conn, routines)
-	port := c.GetInt("listen.port", 0)
+	port := c.GetInt("listen.port").UnwrapOr(0)
 
 	if !configTest {
-		rawListenHost := c.GetString("listen.host", "0.0.0.0")
+		rawListenHost := c.GetString("listen.host").UnwrapOr("0.0.0.0")
 		var listenHost *net.IPAddr
 		if rawListenHost == "[::]" {
 			// Old guidance was to provide the literal `[::]` in `listen.host` but that won't resolve.
@@ -164,7 +164,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 		for i := 0; i < routines; i++ {
 			l.Infof("listening %q %d", listenHost.IP, port)
-			udpServer, err := udp.NewListener(l, listenHost.IP, port, routines > 1, c.GetInt("listen.batch", 64))
+			udpServer, err := udp.NewListener(l, listenHost.IP, port, routines > 1, c.GetInt("listen.batch").UnwrapOr(64))
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
@@ -185,7 +185,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	// Set up my internal host map
 	var preferredRanges []*net.IPNet
-	rawPreferredRanges := c.GetStringSlice("preferred_ranges", []string{})
+	rawPreferredRanges := c.GetStringSlice("preferred_ranges").UnwrapOr([]string{})
 	// First, check if 'preferred_ranges' is set and fallback to 'local_range'
 	if len(rawPreferredRanges) > 0 {
 		for _, rawPreferredRange := range rawPreferredRanges {
@@ -200,7 +200,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	// local_range was superseded by preferred_ranges. If it is still present,
 	// merge the local_range setting into preferred_ranges. We will probably
 	// deprecate local_range and remove in the future.
-	rawLocalRange := c.GetString("local_range", "")
+	rawLocalRange := c.GetString("local_range").UnwrapOrDefault()
 	if rawLocalRange != "" {
 		_, localRange, err := net.ParseCIDR(rawLocalRange)
 		if err != nil {
@@ -222,7 +222,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 
 	hostMap := NewHostMap(l, tunCidr, preferredRanges)
-	hostMap.metricsEnabled = c.GetBool("stats.message_metrics", false)
+	hostMap.metricsEnabled = c.GetBool("stats.message_metrics").UnwrapOr(false)
 
 	l.
 		WithField("network", hostMap.vpnCIDR.String()).
@@ -236,18 +236,18 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 
 	var messageMetrics *MessageMetrics
-	if c.GetBool("stats.message_metrics", false) {
+	if c.GetBool("stats.message_metrics").UnwrapOr(false) {
 		messageMetrics = newMessageMetrics()
 	} else {
 		messageMetrics = newMessageMetricsOnlyRecvError()
 	}
 
-	useRelays := c.GetBool("relay.use_relays", DefaultUseRelays) && !c.GetBool("relay.am_relay", false)
+	useRelays := c.GetBool("relay.use_relays").UnwrapOr(DefaultUseRelays) && !c.GetBool("relay.am_relay").UnwrapOr(false)
 
 	handshakeConfig := HandshakeConfig{
-		tryInterval:   c.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
-		retries:       c.GetInt("handshakes.retries", DefaultHandshakeRetries),
-		triggerBuffer: c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
+		tryInterval:   c.GetDuration("handshakes.try_interval").UnwrapOr(DefaultHandshakeTryInterval),
+		retries:       c.GetInt("handshakes.retries").UnwrapOr(DefaultHandshakeRetries),
+		triggerBuffer: c.GetInt("handshakes.trigger_buffer").UnwrapOr(DefaultHandshakeTriggerBuffer),
 		useRelays:     useRelays,
 
 		messageMetrics: messageMetrics,
@@ -257,34 +257,34 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	lightHouse.handshakeTrigger = handshakeManager.trigger
 
 	serveDns := false
-	if c.GetBool("lighthouse.serve_dns", false) {
-		if c.GetBool("lighthouse.am_lighthouse", false) {
+	if c.GetBool("lighthouse.serve_dns").UnwrapOr(false) {
+		if c.GetBool("lighthouse.am_lighthouse").UnwrapOr(false) {
 			serveDns = true
 		} else {
 			l.Warn("DNS server refusing to run because this host is not a lighthouse.")
 		}
 	}
 
-	checkInterval := c.GetInt("timers.connection_alive_interval", 5)
-	pendingDeletionInterval := c.GetInt("timers.pending_deletion_interval", 10)
+	checkInterval := c.GetInt("timers.connection_alive_interval").UnwrapOr(5)
+	pendingDeletionInterval := c.GetInt("timers.pending_deletion_interval").UnwrapOr(10)
 
 	ifConfig := &InterfaceConfig{
 		HostMap:                 hostMap,
 		Inside:                  tun,
 		Outside:                 udpConns[0],
 		pki:                     pki,
-		Cipher:                  c.GetString("cipher", "aes"),
+		Cipher:                  c.GetString("cipher").UnwrapOr("aes"),
 		Firewall:                fw,
 		ServeDns:                serveDns,
 		HandshakeManager:        handshakeManager,
 		lightHouse:              lightHouse,
 		checkInterval:           time.Second * time.Duration(checkInterval),
 		pendingDeletionInterval: time.Second * time.Duration(pendingDeletionInterval),
-		tryPromoteEvery:         c.GetUint32("counters.try_promote", defaultPromoteEvery),
-		reQueryEvery:            c.GetUint32("counters.requery_every_packets", defaultReQueryEvery),
-		reQueryWait:             c.GetDuration("timers.requery_wait_duration", defaultReQueryWait),
-		DropLocalBroadcast:      c.GetBool("tun.drop_local_broadcast", false),
-		DropMulticast:           c.GetBool("tun.drop_multicast", false),
+		tryPromoteEvery:         c.GetUint32("counters.try_promote").UnwrapOr(defaultPromoteEvery),
+		reQueryEvery:            c.GetUint32("counters.requery_every_packets").UnwrapOr(defaultReQueryEvery),
+		reQueryWait:             c.GetDuration("timers.requery_wait_duration").UnwrapOr(defaultReQueryWait),
+		DropLocalBroadcast:      c.GetBool("tun.drop_local_broadcast").UnwrapOr(false),
+		DropMulticast:           c.GetBool("tun.drop_multicast").UnwrapOr(false),
 		routines:                routines,
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
@@ -336,7 +336,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 
 	//TODO: check if we _should_ be emitting stats
-	go ifce.emitStats(ctx, c.GetDuration("stats.interval", time.Second*10))
+	go ifce.emitStats(ctx, c.GetDuration("stats.interval").UnwrapOr(time.Second*10))
 
 	attachCommands(l, c, ssh, ifce)
 

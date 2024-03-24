@@ -35,7 +35,7 @@ func NewRelayManager(ctx context.Context, l *logrus.Logger, hostmap *HostMap, c 
 
 func (rm *relayManager) reload(c *config.C, initial bool) error {
 	if initial || c.HasChanged("relay.am_relay") {
-		rm.setAmRelay(c.GetBool("relay.am_relay", false))
+		rm.setAmRelay(c.GetBool("relay.am_relay").UnwrapOr(false))
 	}
 	return nil
 }

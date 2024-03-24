@@ -32,10 +32,10 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 	if initial {
 		var yes bool
 		if c.IsSet("punchy.punch") {
-			yes = c.GetBool("punchy.punch", false)
+			yes = c.GetBool("punchy.punch").UnwrapOr(false)
 		} else {
 			// Deprecated fallback
-			yes = c.GetBool("punchy", false)
+			yes = c.GetBool("punchy").UnwrapOr(false)
 		}
 
 		p.punch.Store(yes)
@@ -53,10 +53,10 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 	if initial || c.HasChanged("punchy.respond") || c.HasChanged("punch_back") {
 		var yes bool
 		if c.IsSet("punchy.respond") {
-			yes = c.GetBool("punchy.respond", false)
+			yes = c.GetBool("punchy.respond").UnwrapOr(false)
 		} else {
 			// Deprecated fallback
-			yes = c.GetBool("punch_back", false)
+			yes = c.GetBool("punch_back").UnwrapOr(false)
 		}
 
 		p.respond.Store(yes)
@@ -68,21 +68,21 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 
 	//NOTE: this will not apply to any in progress operations, only the next one
 	if initial || c.HasChanged("punchy.delay") {
-		p.delay.Store((int64)(c.GetDuration("punchy.delay", time.Second)))
+		p.delay.Store((int64)(c.GetDuration("punchy.delay").UnwrapOr(time.Second)))
 		if !initial {
 			p.l.Infof("punchy.delay changed to %s", p.GetDelay())
 		}
 	}
 
 	if initial || c.HasChanged("punchy.target_all_remotes") {
-		p.punchEverything.Store(c.GetBool("punchy.target_all_remotes", false))
+		p.punchEverything.Store(c.GetBool("punchy.target_all_remotes").UnwrapOr(false))
 		if !initial {
 			p.l.WithField("target_all_remotes", p.GetTargetEverything()).Info("punchy.target_all_remotes changed")
 		}
 	}
 
 	if initial || c.HasChanged("punchy.respond_delay") {
-		p.respondDelay.Store((int64)(c.GetDuration("punchy.respond_delay", 5*time.Second)))
+		p.respondDelay.Store((int64)(c.GetDuration("punchy.respond_delay").UnwrapOr(5 * time.Second)))
 		if !initial {
 			p.l.Infof("punchy.respond_delay changed to %s", p.GetRespondDelay())
 		}

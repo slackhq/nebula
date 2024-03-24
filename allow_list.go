@@ -72,7 +72,8 @@ func NewRemoteAllowListFromConfig(c *config.C, k, rangesKey string) (*RemoteAllo
 // If the handleKey func returns true, the rest of the parsing is skipped
 // for this key. This allows parsing of special values like `interfaces`.
 func newAllowListFromConfig(c *config.C, k string, handleKey func(key string, value interface{}) (bool, error)) (*AllowList, error) {
-	r := c.Get(k)
+	r := c.Get(k).UnwrapOrDefault()
+
 	if r == nil {
 		return nil, nil
 	}
@@ -219,7 +220,8 @@ func getAllowListInterfaces(k string, v interface{}) ([]AllowListNameRule, error
 }
 
 func getRemoteAllowRanges(c *config.C, k string) (*cidr.Tree6[*AllowList], error) {
-	value := c.Get(k)
+	value := c.Get(k).UnwrapOrDefault()
+
 	if value == nil {
 		return nil, nil
 	}

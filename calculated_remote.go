@@ -52,7 +52,8 @@ func (c *calculatedRemote) Apply(ip iputil.VpnIp) *Ip4AndPort {
 }
 
 func NewCalculatedRemotesFromConfig(c *config.C, k string) (*cidr.Tree4[[]*calculatedRemote], error) {
-	value := c.Get(k)
+	value := c.Get(k).UnwrapOrDefault()
+
 	if value == nil {
 		return nil, nil
 	}

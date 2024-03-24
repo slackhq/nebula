@@ -143,7 +143,7 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 	var pemPrivateKey []byte
 	var err error
 
-	privPathOrPEM := c.GetString("pki.key", "")
+	privPathOrPEM := c.GetString("pki.key").UnwrapOrDefault()
 	if privPathOrPEM == "" {
 		return nil, errors.New("no pki.key path or PEM data provided")
 	}
@@ -166,7 +166,7 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 
 	var rawCert []byte
 
-	pubPathOrPEM := c.GetString("pki.cert", "")
+	pubPathOrPEM := c.GetString("pki.cert").UnwrapOrDefault()
 	if pubPathOrPEM == "" {
 		return nil, errors.New("no pki.cert path or PEM data provided")
 	}
@@ -206,7 +206,7 @@ func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.NebulaCAPool, er
 	var rawCA []byte
 	var err error
 
-	caPathOrPEM := c.GetString("pki.ca", "")
+	caPathOrPEM := c.GetString("pki.ca").UnwrapOrDefault()
 	if caPathOrPEM == "" {
 		return nil, errors.New("no pki.ca path or PEM data provided")
 	}
@@ -239,7 +239,7 @@ func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.NebulaCAPool, er
 		return nil, fmt.Errorf("error while adding CA certificate to CA trust store: %s", err)
 	}
 
-	for _, fp := range c.GetStringSlice("pki.blocklist", []string{}) {
+	for _, fp := range c.GetStringSlice("pki.blocklist").UnwrapOrDefault() {
 		l.WithField("fingerprint", fp).Info("Blocklisting cert")
 		caPool.BlocklistFingerprint(fp)
 	}

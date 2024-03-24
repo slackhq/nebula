@@ -25,20 +25,20 @@ func NewDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, rout
 	routes = append(routes, unsafeRoutes...)
 
 	switch {
-	case c.GetBool("tun.disabled", false):
-		tun := newDisabledTun(tunCidr, c.GetInt("tun.tx_queue", 500), c.GetBool("stats.message_metrics", false), l)
+	case c.GetBool("tun.disabled").UnwrapOr(false):
+		tun := newDisabledTun(tunCidr, c.GetInt("tun.tx_queue").UnwrapOr(500), c.GetBool("stats.message_metrics").UnwrapOr(false), l)
 		return tun, nil
 
 	default:
 		return newTun(
 			l,
-			c.GetString("tun.dev", ""),
+			c.GetString("tun.dev").UnwrapOrDefault(),
 			tunCidr,
-			c.GetInt("tun.mtu", DefaultMTU),
+			c.GetInt("tun.mtu").UnwrapOr(DefaultMTU),
 			routes,
-			c.GetInt("tun.tx_queue", 500),
+			c.GetInt("tun.tx_queue").UnwrapOr(500),
 			routines > 1,
-			c.GetBool("tun.use_system_route_table", false),
+			c.GetBool("tun.use_system_route_table").UnwrapOr(false),
 		)
 	}
 }
@@ -59,10 +59,10 @@ func NewFdDeviceFromConfig(fd *int) DeviceFactory {
 			l,
 			*fd,
 			tunCidr,
-			c.GetInt("tun.mtu", DefaultMTU),
+			c.GetInt("tun.mtu").UnwrapOr(DefaultMTU),
 			routes,
-			c.GetInt("tun.tx_queue", 500),
-			c.GetBool("tun.use_system_route_table", false),
+			c.GetInt("tun.tx_queue").UnwrapOr(500),
+			c.GetBool("tun.use_system_route_table").UnwrapOr(false),
 		)
 
 	}

@@ -38,7 +38,7 @@ func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*cidr.Tree4
 func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 	var err error
 
-	r := c.Get("tun.routes")
+	r := c.Get("tun.routes").UnwrapOrDefault()
 	if r == nil {
 		return []Route{}, nil
 	}
@@ -109,7 +109,7 @@ func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 	var err error
 
-	r := c.Get("tun.unsafe_routes")
+	r := c.Get("tun.unsafe_routes").UnwrapOrDefault()
 	if r == nil {
 		return []Route{}, nil
 	}
