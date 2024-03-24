@@ -383,7 +383,7 @@ func getStaticMapCadence(c *config.C) (time.Duration, error) {
 }
 
 func getStaticMapLookupTimeout(c *config.C) (time.Duration, error) {
-	lookupTimeout := c.GetString("static_map.lookup_timeout", "250ms")
+	lookupTimeout := c.GetString("static_map.lookup_timeout", "5s")
 	d, err := time.ParseDuration(lookupTimeout)
 	if err != nil {
 		return 0, err

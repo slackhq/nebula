@@ -33,7 +33,7 @@ static_host_map:
   #network: ip4
 
   # lookup_timeout is the DNS query timeout.
-  #lookup_timeout: 250ms
+  #lookup_timeout: 5s
 
 lighthouse:
   # am_lighthouse is used to enable lighthouse functionality for a node. This should ONLY be true on nodes
