@@ -939,7 +939,7 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		enc.SetIndent("", "    ")
 	}
 
-	return enc.Encode(copyHostInfo(hostInfo, ifce.hostMap.preferredRanges))
+	return enc.Encode(copyHostInfo(hostInfo, ifce.hostMap.GetPreferredRanges()))
 }
 
 func sshReload(c *config.C, w sshd.StringWriter) error {

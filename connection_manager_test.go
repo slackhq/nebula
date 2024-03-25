@@ -43,7 +43,9 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	preferredRanges := []*net.IPNet{localrange}
 
 	// Very incomplete mock objects
-	hostMap := NewHostMap(l, vpncidr, preferredRanges)
+	hostMap := newHostMap(l, vpncidr)
+	hostMap.preferredRanges.Store(&preferredRanges)
+
 	cs := &CertState{
 		RawCertificate:      []byte{},
 		PrivateKey:          []byte{},
@@ -123,7 +125,9 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	preferredRanges := []*net.IPNet{localrange}
 
 	// Very incomplete mock objects
-	hostMap := NewHostMap(l, vpncidr, preferredRanges)
+	hostMap := newHostMap(l, vpncidr)
+	hostMap.preferredRanges.Store(&preferredRanges)
+
 	cs := &CertState{
 		RawCertificate:      []byte{},
 		PrivateKey:          []byte{},
@@ -210,7 +214,8 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
 	preferredRanges := []*net.IPNet{localrange}
-	hostMap := NewHostMap(l, vpncidr, preferredRanges)
+	hostMap := newHostMap(l, vpncidr)
+	hostMap.preferredRanges.Store(&preferredRanges)
 
 	// Generate keys for CA and peer's cert.
 	pubCA, privCA, _ := ed25519.GenerateKey(rand.Reader)
