@@ -96,6 +96,10 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
 			}
 		}
 	}
+
+	if len(m.Answer) == 0 {
+		m.Rcode = dns.RcodeNameError
+	}
 }
 
 func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
