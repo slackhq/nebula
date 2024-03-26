@@ -19,7 +19,16 @@ func NewListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (
 		return nil, fmt.Errorf("multiple udp listeners not supported on windows")
 	}
 
-	rc, err := NewRIOListener(l, ip, port)
+	var rc Conn
+	var err error
+
+	rc, err = NewRIOListener(l, ip, port)
+	if err == nil {
+		return rc, nil
+	}
+
+	l.WithError(err).Error("Falling back to WSA")
+	rc, err = NewWsaListener(l, ip, port, multi, batch)
 	if err == nil {
 		return rc, nil
 	}
