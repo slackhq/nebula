@@ -40,7 +40,7 @@ jobs:
     - name: Build test mobile
       run: make build-test-mobile
 
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
         name: e2e packet flow
         path: e2e/mermaid/
@@ -97,7 +97,7 @@ jobs:
     - name: End 2 end
       run: make e2evv
 
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
         name: e2e packet flow
         path: e2e/mermaid/
