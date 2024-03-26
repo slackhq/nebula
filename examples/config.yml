@@ -181,12 +181,15 @@ punchy:
   # A file containing the ssh host private key to use
   # A decent way to generate one: ssh-keygen -t ed25519 -f ssh_host_ed25519_key -N "" < /dev/null
   #host_key: ./ssh_host_ed25519_key
-  # A file containing a list of authorized public keys
+  # Authorized users and their public keys
   #authorized_users:
     #- user: steeeeve
       # keys can be an array of strings or single string
       #keys:
         #- "ssh public key string"
+  # Trusted SSH CA public keys. These are the public keys of the CAs that are allowed to sign SSH keys for access.
+  #trusted_cas:
+    #- "ssh public key string"
 
 # EXPERIMENTAL: relay support for networks that can't establish direct connections.
 relay:
