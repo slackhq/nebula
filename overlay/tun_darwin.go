@@ -9,12 +9,15 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/util"
 	netroute "golang.org/x/net/route"
 	"golang.org/x/sys/unix"
 )
@@ -24,8 +27,9 @@ type tun struct {
 	Device     string
 	cidr       *net.IPNet
 	DefaultMTU int
-	Routes     []Route
-	routeTree  *cidr.Tree4[iputil.VpnIp]
+	Routes     atomic.Pointer[[]Route]
+	routeTree  atomic.Pointer[cidr.Tree4[iputil.VpnIp]]
+	linkAddr   *netroute.LinkAddr
 	l          *logrus.Logger
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
@@ -69,12 +73,8 @@ type ifreqMTU struct {
 	pad  [8]byte
 }
 
-func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []Route, _ int, _ bool, _ bool) (*tun, error) {
-	routeTree, err := makeRouteTree(l, routes, false)
-	if err != nil {
-		return nil, err
-	}
-
+func newTun(c *config.C, l *logrus.Logger, cidr *net.IPNet, _ bool) (*tun, error) {
+	name := c.GetString("tun.dev", "")
 	ifIndex := -1
 	if name != "" && name != "utun" {
 		_, err := fmt.Sscanf(name, "utun%d", &ifIndex)
@@ -142,17 +142,27 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 
 	file := os.NewFile(uintptr(fd), "")
 
-	tun := &tun{
+	t := &tun{
 		ReadWriteCloser: file,
 		Device:          name,
 		cidr:            cidr,
-		DefaultMTU:      defaultMTU,
-		Routes:          routes,
-		routeTree:       routeTree,
+		DefaultMTU:      c.GetInt("tun.mtu", DefaultMTU),
 		l:               l,
 	}
 
-	return tun, nil
+	err = t.reload(c, true)
+	if err != nil {
+		return nil, err
+	}
+
+	c.RegisterReloadCallback(func(c *config.C) {
+		err := t.reload(c, false)
+		if err != nil {
+			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+		}
+	})
+
+	return t, nil
 }
 
 func (t *tun) deviceBytes() (o [16]byte) {
@@ -162,7 +172,7 @@ func (t *tun) deviceBytes() (o [16]byte) {
 	return
 }
 
-func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int, _ bool) (*tun, error) {
+func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ *net.IPNet) (*tun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
 }
 
@@ -260,6 +270,7 @@ func (t *tun) Activate() error {
 	if linkAddr == nil {
 		return fmt.Errorf("unable to discover link_addr for tun interface")
 	}
+	t.linkAddr = linkAddr
 
 	copy(routeAddr.IP[:], addr[:])
 	copy(maskAddr.IP[:], mask[:])
@@ -278,33 +289,48 @@ func (t *tun) Activate() error {
 	}
 
 	// Unsafe path routes
-	for _, r := range t.Routes {
-		if r.Via == nil || !r.Install {
-			// We don't allow route MTUs so only install routes with a via
-			continue
-		}
+	return t.addRoutes(false)
+}
 
-		copy(routeAddr.IP[:], r.Cidr.IP.To4())
-		copy(maskAddr.IP[:], net.IP(r.Cidr.Mask).To4())
+func (t *tun) reload(c *config.C, initial bool) error {
+	change, routes, err := getAllRoutesFromConfig(c, t.cidr, initial)
+	if err != nil {
+		return err
+	}
 
-		err = addRoute(routeSock, routeAddr, maskAddr, linkAddr)
+	if !initial && !change {
+		return nil
+	}
+
+	routeTree, err := makeRouteTree(t.l, routes, false)
+	if err != nil {
+		return err
+	}
+
+	// Teach nebula how to handle the routes before establishing them in the system table
+	oldRoutes := t.Routes.Swap(&routes)
+	t.routeTree.Store(routeTree)
+
+	if !initial {
+		// Remove first, if the system removes a wanted route hopefully it will be re-added next
+		err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes))
 		if err != nil {
-			if errors.Is(err, unix.EEXIST) {
-				t.l.WithField("route", r.Cidr).
-					Warnf("unable to add unsafe_route, identical route already exists")
-			} else {
-				return err
-			}
+			util.LogWithContextIfNeeded("Failed to remove routes", err, t.l)
 		}
 
-		// TODO how to set metric
+		// Ensure any routes we actually want are installed
+		err = t.addRoutes(true)
+		if err != nil {
+			// Catch any stray logs
+			util.LogWithContextIfNeeded("Failed to add routes", err, t.l)
+		}
 	}
 
 	return nil
 }
 
 func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	ok, r := t.routeTree.MostSpecificContains(ip)
+	ok, r := t.routeTree.Load().MostSpecificContains(ip)
 	if ok {
 		return r
 	}
@@ -340,11 +366,117 @@ func getLinkAddr(name string) (*netroute.LinkAddr, error) {
 	return nil, nil
 }
 
+func (t *tun) addRoutes(logErrors bool) error {
+	routeSock, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, unix.AF_UNSPEC)
+	if err != nil {
+		return fmt.Errorf("unable to create AF_ROUTE socket: %v", err)
+	}
+
+	defer func() {
+		unix.Shutdown(routeSock, unix.SHUT_RDWR)
+		err := unix.Close(routeSock)
+		if err != nil {
+			t.l.WithError(err).Error("failed to close AF_ROUTE socket")
+		}
+	}()
+
+	routeAddr := &netroute.Inet4Addr{}
+	maskAddr := &netroute.Inet4Addr{}
+	routes := *t.Routes.Load()
+	for _, r := range routes {
+		if r.Via == nil || !r.Install {
+			// We don't allow route MTUs so only install routes with a via
+			continue
+		}
+
+		copy(routeAddr.IP[:], r.Cidr.IP.To4())
+		copy(maskAddr.IP[:], net.IP(r.Cidr.Mask).To4())
+
+		err := addRoute(routeSock, routeAddr, maskAddr, t.linkAddr)
+		if err != nil {
+			if errors.Is(err, unix.EEXIST) {
+				t.l.WithField("route", r.Cidr).
+					Warnf("unable to add unsafe_route, identical route already exists")
+			} else {
+				retErr := util.NewContextualError("Failed to add route", map[string]interface{}{"route": r}, err)
+				if logErrors {
+					retErr.Log(t.l)
+				} else {
+					return retErr
+				}
+			}
+		} else {
+			t.l.WithField("route", r).Info("Added route")
+		}
+	}
+
+	return nil
+}
+
+func (t *tun) removeRoutes(routes []Route) error {
+	routeSock, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, unix.AF_UNSPEC)
+	if err != nil {
+		return fmt.Errorf("unable to create AF_ROUTE socket: %v", err)
+	}
+
+	defer func() {
+		unix.Shutdown(routeSock, unix.SHUT_RDWR)
+		err := unix.Close(routeSock)
+		if err != nil {
+			t.l.WithError(err).Error("failed to close AF_ROUTE socket")
+		}
+	}()
+
+	routeAddr := &netroute.Inet4Addr{}
+	maskAddr := &netroute.Inet4Addr{}
+
+	for _, r := range routes {
+		if !r.Install {
+			continue
+		}
+
+		copy(routeAddr.IP[:], r.Cidr.IP.To4())
+		copy(maskAddr.IP[:], net.IP(r.Cidr.Mask).To4())
+
+		err := delRoute(routeSock, routeAddr, maskAddr, t.linkAddr)
+		if err != nil {
+			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
+		} else {
+			t.l.WithField("route", r).Info("Removed route")
+		}
+	}
+	return nil
+}
+
 func addRoute(sock int, addr, mask *netroute.Inet4Addr, link *netroute.LinkAddr) error {
 	r := netroute.RouteMessage{
 		Version: unix.RTM_VERSION,
 		Type:    unix.RTM_ADD,
 		Flags:   unix.RTF_UP,
+		Seq:     1,
+		Addrs: []netroute.Addr{
+			unix.RTAX_DST:     addr,
+			unix.RTAX_GATEWAY: link,
+			unix.RTAX_NETMASK: mask,
+		},
+	}
+
+	data, err := r.Marshal()
+	if err != nil {
+		return fmt.Errorf("failed to create route.RouteMessage: %w", err)
+	}
+	_, err = unix.Write(sock, data[:])
+	if err != nil {
+		return fmt.Errorf("failed to write route.RouteMessage to socket: %w", err)
+	}
+
+	return nil
+}
+
+func delRoute(sock int, addr, mask *netroute.Inet4Addr, link *netroute.LinkAddr) error {
+	r := netroute.RouteMessage{
+		Version: unix.RTM_VERSION,
+		Type:    unix.RTM_DELETE,
 		Seq:     1,
 		Addrs: []netroute.Addr{
 			unix.RTAX_DST:     addr,

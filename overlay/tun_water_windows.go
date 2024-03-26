@@ -6,10 +6,13 @@ import (
 	"net"
 	"os/exec"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/util"
 	"github.com/songgao/water"
 )
 
@@ -17,25 +20,34 @@ type waterTun struct {
 	Device    string
 	cidr      *net.IPNet
 	MTU       int
-	Routes    []Route
-	routeTree *cidr.Tree4[iputil.VpnIp]
-
+	Routes    atomic.Pointer[[]Route]
+	routeTree atomic.Pointer[cidr.Tree4[iputil.VpnIp]]
+	l         *logrus.Logger
+	f         *net.Interface
 	*water.Interface
 }
 
-func newWaterTun(l *logrus.Logger, cidr *net.IPNet, defaultMTU int, routes []Route) (*waterTun, error) {
-	routeTree, err := makeRouteTree(l, routes, false)
+func newWaterTun(c *config.C, l *logrus.Logger, cidr *net.IPNet, _ bool) (*waterTun, error) {
+	// NOTE: You cannot set the deviceName under Windows, so you must check tun.Device after calling .Activate()
+	t := &waterTun{
+		cidr: cidr,
+		MTU:  c.GetInt("tun.mtu", DefaultMTU),
+		l:    l,
+	}
+
+	err := t.reload(c, true)
 	if err != nil {
 		return nil, err
 	}
 
-	// NOTE: You cannot set the deviceName under Windows, so you must check tun.Device after calling .Activate()
-	return &waterTun{
-		cidr:      cidr,
-		MTU:       defaultMTU,
-		Routes:    routes,
-		routeTree: routeTree,
-	}, nil
+	c.RegisterReloadCallback(func(c *config.C) {
+		err := t.reload(c, false)
+		if err != nil {
+			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+		}
+	})
+
+	return t, nil
 }
 
 func (t *waterTun) Activate() error {
@@ -74,30 +86,104 @@ func (t *waterTun) Activate() error {
 		return fmt.Errorf("failed to run 'netsh' to set MTU: %s", err)
 	}
 
-	iface, err := net.InterfaceByName(t.Device)
+	t.f, err = net.InterfaceByName(t.Device)
 	if err != nil {
 		return fmt.Errorf("failed to find interface named %s: %v", t.Device, err)
 	}
 
-	for _, r := range t.Routes {
-		if r.Via == nil || !r.Install {
-			// We don't allow route MTUs so only install routes with a via
-			continue
-		}
+	err = t.addRoutes(false)
+	if err != nil {
+		return err
+	}
 
-		err = exec.Command(
-			"C:\\Windows\\System32\\route.exe", "add", r.Cidr.String(), r.Via.String(), "IF", strconv.Itoa(iface.Index), "METRIC", strconv.Itoa(r.Metric),
-		).Run()
+	return nil
+}
+
+func (t *waterTun) reload(c *config.C, initial bool) error {
+	change, routes, err := getAllRoutesFromConfig(c, t.cidr, initial)
+	if err != nil {
+		return err
+	}
+
+	if !initial && !change {
+		return nil
+	}
+
+	routeTree, err := makeRouteTree(t.l, routes, false)
+	if err != nil {
+		return err
+	}
+
+	// Teach nebula how to handle the routes before establishing them in the system table
+	oldRoutes := t.Routes.Swap(&routes)
+	t.routeTree.Store(routeTree)
+
+	if !initial {
+		// Remove first, if the system removes a wanted route hopefully it will be re-added next
+		t.removeRoutes(findRemovedRoutes(routes, *oldRoutes))
+
+		// Ensure any routes we actually want are installed
+		err = t.addRoutes(true)
 		if err != nil {
-			return fmt.Errorf("failed to add the unsafe_route %s: %v", r.Cidr.String(), err)
+			// Catch any stray logs
+			util.LogWithContextIfNeeded("Failed to set routes", err, t.l)
+		} else {
+			for _, r := range findRemovedRoutes(routes, *oldRoutes) {
+				t.l.WithField("route", r).Info("Removed route")
+			}
 		}
 	}
 
 	return nil
 }
 
+func (t *waterTun) addRoutes(logErrors bool) error {
+	// Path routes
+	routes := *t.Routes.Load()
+	for _, r := range routes {
+		if r.Via == nil || !r.Install {
+			// We don't allow route MTUs so only install routes with a via
+			continue
+		}
+
+		err := exec.Command(
+			"C:\\Windows\\System32\\route.exe", "add", r.Cidr.String(), r.Via.String(), "IF", strconv.Itoa(t.f.Index), "METRIC", strconv.Itoa(r.Metric),
+		).Run()
+
+		if err != nil {
+			retErr := util.NewContextualError("Failed to add route", map[string]interface{}{"route": r}, err)
+			if logErrors {
+				retErr.Log(t.l)
+			} else {
+				return retErr
+			}
+		} else {
+			t.l.WithField("route", r).Info("Added route")
+		}
+	}
+
+	return nil
+}
+
+func (t *waterTun) removeRoutes(routes []Route) {
+	for _, r := range routes {
+		if !r.Install {
+			continue
+		}
+
+		err := exec.Command(
+			"C:\\Windows\\System32\\route.exe", "delete", r.Cidr.String(), r.Via.String(), "IF", strconv.Itoa(t.f.Index), "METRIC", strconv.Itoa(r.Metric),
+		).Run()
+		if err != nil {
+			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
+		} else {
+			t.l.WithField("route", r).Info("Removed route")
+		}
+	}
+}
+
 func (t *waterTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	_, r := t.routeTree.MostSpecificContains(ip)
+	_, r := t.routeTree.Load().MostSpecificContains(ip)
 	return r
 }
 

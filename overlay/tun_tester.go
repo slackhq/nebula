@@ -12,6 +12,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/iputil"
 )
 
@@ -27,14 +28,18 @@ type TestTun struct {
 	TxPackets chan []byte // Packets transmitted outside by nebula
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, _ int, routes []Route, _ int, _ bool, _ bool) (*TestTun, error) {
+func newTun(c *config.C, l *logrus.Logger, cidr *net.IPNet, _ bool) (*TestTun, error) {
+	_, routes, err := getAllRoutesFromConfig(c, cidr, true)
+	if err != nil {
+		return nil, err
+	}
 	routeTree, err := makeRouteTree(l, routes, false)
 	if err != nil {
 		return nil, err
 	}
 
 	return &TestTun{
-		Device:    deviceName,
+		Device:    c.GetString("tun.dev", ""),
 		cidr:      cidr,
 		Routes:    routes,
 		routeTree: routeTree,
@@ -44,7 +49,7 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, _ int, routes 
 	}, nil
 }
 
-func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int, _ bool) (*TestTun, error) {
+func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ *net.IPNet) (*TestTun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported")
 }
 
