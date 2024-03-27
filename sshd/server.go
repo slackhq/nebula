@@ -49,7 +49,6 @@ func NewSSHServer(l *logrus.Entry) (*SSHServer, error) {
 				if bytes.Equal(ca.Marshal(), auth.Marshal()) {
 					return true
 				}
-				fmt.Println("didn't pass ca check")
 			}
 
 			return false
@@ -234,27 +233,4 @@ func (s *SSHServer) closeSessions() {
 		c.Close()
 	}
 	s.connsLock.Unlock()
-}
-
-func (s *SSHServer) matchPubKey(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
-	pk := string(pubKey.Marshal())
-	fp := ssh.FingerprintSHA256(pubKey)
-
-	tk, ok := s.trustedKeys[c.User()]
-	if !ok {
-		return nil, fmt.Errorf("unknown user %s", c.User())
-	}
-
-	_, ok = tk[pk]
-	if !ok {
-		return nil, fmt.Errorf("unknown public key for %s (%s)", c.User(), fp)
-	}
-
-	return &ssh.Permissions{
-		// Record the public key used for authentication.
-		Extensions: map[string]string{
-			"fp":   fp,
-			"user": c.User(),
-		},
-	}, nil
 }
