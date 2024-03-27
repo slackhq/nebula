@@ -272,6 +272,10 @@ logging:
   #namespace: prometheusns
   #subsystem: nebula
   #interval: 10s
+  # You can optionally set static labels to include with all metrics
+  #labels:
+  #  myStaticLabel1: value1
+  #  myStaticLabel2: value2
 
   # enables counter metrics for meta packets
   #   e.g.: `messages.tx.handshake`

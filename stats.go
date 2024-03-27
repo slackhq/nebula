@@ -93,8 +93,19 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildV
 		return nil, fmt.Errorf("stats.path should not be empty")
 	}
 
-	pr := prometheus.NewRegistry()
-	pClient := mp.NewPrometheusProvider(metrics.DefaultRegistry, namespace, subsystem, pr, i)
+	pry := prometheus.NewRegistry()
+	var prr prometheus.Registerer = pry
+
+	labelsRaw := c.GetMap("stats.labels", nil)
+	if labelsRaw != nil {
+		labels := prometheus.Labels{}
+		for k, v := range labelsRaw {
+			labels[fmt.Sprintf("%v", k)] = fmt.Sprintf("%v", v)
+		}
+		prr = prometheus.WrapRegistererWith(labels, prr)
+	}
+
+	pClient := mp.NewPrometheusProvider(metrics.DefaultRegistry, namespace, subsystem, prr, i)
 	if !configTest {
 		go pClient.UpdatePrometheusMetrics()
 	}
@@ -111,14 +122,14 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildV
 			"boringcrypto": strconv.FormatBool(boringEnabled()),
 		},
 	})
-	pr.MustRegister(g)
+	prr.MustRegister(g)
 	g.Set(1)
 
 	var startFn func()
 	if !configTest {
 		startFn = func() {
 			l.Infof("Prometheus stats listening on %s at %s", listen, path)
-			http.Handle(path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: l}))
+			http.Handle(path, promhttp.HandlerFor(pry, promhttp.HandlerOpts{ErrorLog: l}))
 			log.Fatal(http.ListenAndServe(listen, nil))
 		}
 	}
