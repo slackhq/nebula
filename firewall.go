@@ -876,13 +876,15 @@ func (fr *FirewallRule) match(p firewall.Packet, c *cert.NebulaCertificate) bool
 }
 
 func (flc *firewallLocalCIDR) addRule(f *Firewall, localIp *net.IPNet) error {
-	if localIp == nil || (localIp != nil && localIp.Contains(net.IPv4(0, 0, 0, 0))) {
+	if localIp == nil {
 		if !f.hasSubnets || f.defaultLocalCIDRAny {
 			flc.Any = true
 			return nil
 		}
 
 		localIp = f.assignedCIDR
+	} else if localIp.Contains(net.IPv4(0, 0, 0, 0)) {
+		flc.Any = true
 	}
 
 	flc.LocalCIDR.AddCIDR(localIp, struct{}{})
