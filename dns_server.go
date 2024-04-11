@@ -129,7 +129,12 @@ func dnsMain(l *logrus.Logger, hostMap *HostMap, c *config.C) func() {
 }
 
 func getDnsServerAddr(c *config.C) string {
-	return c.GetString("lighthouse.dns.host", "") + ":" + strconv.Itoa(c.GetInt("lighthouse.dns.port", 53))
+	dnsHost := strings.TrimSpace(c.GetString("lighthouse.dns.host", ""))
+	// Old guidance was to provide the literal `[::]` in `lighthouse.dns.host` but that won't resolve.
+	if dnsHost == "[::]" {
+		dnsHost = "::"
+	}
+	return net.JoinHostPort(dnsHost, strconv.Itoa(c.GetInt("lighthouse.dns.port", 53)))
 }
 
 func startDns(l *logrus.Logger, c *config.C) {
