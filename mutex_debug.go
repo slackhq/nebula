@@ -135,6 +135,19 @@ func checkMutex(state map[mutexKey]mutexValue, add mutexKey) {
 	}
 }
 
+func chanDebugRecv(key mutexKey) {
+	m := threadLocal.Get().(map[mutexKey]mutexValue)
+	checkMutex(m, key)
+	v := mutexValue{}
+	_, v.file, v.line, _ = runtime.Caller(1)
+	m[key] = v
+}
+
+func chanDebugSend(key mutexKey) {
+	m := threadLocal.Get().(map[mutexKey]mutexValue)
+	checkMutex(m, key)
+}
+
 func (s *syncRWMutex) Lock() {
 	m := threadLocal.Get().(map[mutexKey]mutexValue)
 	checkMutex(m, s.mutexKey)

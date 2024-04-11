@@ -468,6 +468,7 @@ func (lh *LightHouse) QueryServer(ip iputil.VpnIp) {
 		return
 	}
 
+	chanDebugSend("lighthouse-query-chan")
 	lh.queryChan <- ip
 }
 
@@ -749,6 +750,8 @@ func (lh *LightHouse) startQueryWorker() {
 	go func() {
 		nb := make([]byte, 12, 12)
 		out := make([]byte, mtu)
+
+		chanDebugRecv("lighthouse-query-chan")
 
 		for {
 			select {

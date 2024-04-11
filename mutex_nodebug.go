@@ -18,3 +18,6 @@ func newSyncRWMutex(mutexKey) syncRWMutex {
 func newSyncMutex(mutexKey) syncMutex {
 	return sync.Mutex{}
 }
+
+func chanDebugRecv(key mutexKey) {}
+func chanDebugSend(key mutexKey) {}
