@@ -324,7 +324,7 @@ func UnmarshalEd25519PrivateKey(b []byte) (ed25519.PrivateKey, []byte, error) {
 	return k.Bytes, r, nil
 }
 
-// UnmarshalNebulaCertificate will unmarshal a protobuf byte representation of a nebula cert into its
+// UnmarshalNebulaEncryptedData will unmarshal a protobuf byte representation of a nebula cert into its
 // protobuf-generated struct.
 func UnmarshalNebulaEncryptedData(b []byte) (*NebulaEncryptedData, error) {
 	if len(b) == 0 {
