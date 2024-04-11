@@ -57,15 +57,18 @@ type Firewall struct {
 	DefaultTimeout time.Duration //linux: 600s
 
 	// Used to ensure we don't emit local packets for ips we don't own
-	localIps *cidr.Tree4[struct{}]
+	localIps     *cidr.Tree4[struct{}]
+	assignedCIDR *net.IPNet
+	hasSubnets   bool
 
 	rules        string
 	rulesVersion uint16
 
-	trackTCPRTT     bool
-	metricTCPRTT    metrics.Histogram
-	incomingMetrics firewallMetrics
-	outgoingMetrics firewallMetrics
+	defaultLocalCIDRAny bool
+	trackTCPRTT         bool
+	metricTCPRTT        metrics.Histogram
+	incomingMetrics     firewallMetrics
+	outgoingMetrics     firewallMetrics
 
 	l *logrus.Logger
 }
@@ -83,6 +86,8 @@ type FirewallConntrack struct {
 	TimerWheel *TimerWheel[firewall.Packet]
 }
 
+// FirewallTable is the entry point for a rule, the evaluation order is:
+// Proto AND port AND (CA SHA or CA name) AND local CIDR AND (group OR groups OR name OR remote CIDR)
 type FirewallTable struct {
 	TCP      firewallPort
 	UDP      firewallPort
@@ -106,17 +111,26 @@ type FirewallCA struct {
 }
 
 type FirewallRule struct {
-	// Any makes Hosts, Groups, CIDR and LocalCIDR irrelevant
-	Any       bool
-	Hosts     map[string]struct{}
-	Groups    [][]string
-	CIDR      *cidr.Tree4[struct{}]
-	LocalCIDR *cidr.Tree4[struct{}]
+	// Any makes Hosts, Groups, and CIDR irrelevant
+	Any    *firewallLocalCIDR
+	Hosts  map[string]*firewallLocalCIDR
+	Groups []*firewallGroups
+	CIDR   *cidr.Tree4[*firewallLocalCIDR]
+}
+
+type firewallGroups struct {
+	Groups    []string
+	LocalCIDR *firewallLocalCIDR
 }
 
 // Even though ports are uint16, int32 maps are faster for lookup
 // Plus we can use `-1` for fragment rules
 type firewallPort map[int32]*FirewallCA
+
+type firewallLocalCIDR struct {
+	Any       bool
+	LocalCIDR *cidr.Tree4[struct{}]
+}
 
 // NewFirewall creates a new Firewall object. A TimerWheel is created for you from the provided timeouts.
 func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Duration, c *cert.NebulaCertificate) *Firewall {
@@ -138,8 +152,15 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 	}
 
 	localIps := cidr.NewTree4[struct{}]()
+	var assignedCIDR *net.IPNet
 	for _, ip := range c.Details.Ips {
-		localIps.AddCIDR(&net.IPNet{IP: ip.IP, Mask: net.IPMask{255, 255, 255, 255}}, struct{}{})
+		ipNet := &net.IPNet{IP: ip.IP, Mask: net.IPMask{255, 255, 255, 255}}
+		localIps.AddCIDR(ipNet, struct{}{})
+
+		if assignedCIDR == nil {
+			// Only grabbing the first one in the cert since any more than that currently has undefined behavior
+			assignedCIDR = ipNet
+		}
 	}
 
 	for _, n := range c.Details.Subnets {
@@ -158,6 +179,8 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		UDPTimeout:     UDPTimeout,
 		DefaultTimeout: defaultTimeout,
 		localIps:       localIps,
+		assignedCIDR:   assignedCIDR,
+		hasSubnets:     len(c.Details.Subnets) > 0,
 		l:              l,
 
 		metricTCPRTT: metrics.GetOrRegisterHistogram("network.tcp.rtt", nil, metrics.NewExpDecaySample(1028, 0.015)),
@@ -183,6 +206,9 @@ func NewFirewallFromConfig(l *logrus.Logger, nc *cert.NebulaCertificate, c *conf
 		nc,
 		//TODO: max_connections
 	)
+
+	//TODO: Flip to false after v1.9 release
+	fw.defaultLocalCIDRAny = c.GetBool("firewall.default_local_cidr_any", true)
 
 	inboundAction := c.GetString("firewall.inbound_action", "drop")
 	switch inboundAction {
@@ -270,7 +296,7 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 		return fmt.Errorf("unknown protocol %v", proto)
 	}
 
-	return fp.addRule(startPort, endPort, groups, host, ip, localIp, caName, caSha)
+	return fp.addRule(f, startPort, endPort, groups, host, ip, localIp, caName, caSha)
 }
 
 // GetRuleHash returns a hash representation of all inbound and outbound rules
@@ -624,7 +650,7 @@ func (ft *FirewallTable) match(p firewall.Packet, incoming bool, c *cert.NebulaC
 	return false
 }
 
-func (fp firewallPort) addRule(startPort int32, endPort int32, groups []string, host string, ip *net.IPNet, localIp *net.IPNet, caName string, caSha string) error {
+func (fp firewallPort) addRule(f *Firewall, startPort int32, endPort int32, groups []string, host string, ip *net.IPNet, localIp *net.IPNet, caName string, caSha string) error {
 	if startPort > endPort {
 		return fmt.Errorf("start port was lower than end port")
 	}
@@ -637,7 +663,7 @@ func (fp firewallPort) addRule(startPort int32, endPort int32, groups []string, 
 			}
 		}
 
-		if err := fp[i].addRule(groups, host, ip, localIp, caName, caSha); err != nil {
+		if err := fp[i].addRule(f, groups, host, ip, localIp, caName, caSha); err != nil {
 			return err
 		}
 	}
@@ -668,13 +694,12 @@ func (fp firewallPort) match(p firewall.Packet, incoming bool, c *cert.NebulaCer
 	return fp[firewall.PortAny].match(p, c, caPool)
 }
 
-func (fc *FirewallCA) addRule(groups []string, host string, ip, localIp *net.IPNet, caName, caSha string) error {
+func (fc *FirewallCA) addRule(f *Firewall, groups []string, host string, ip, localIp *net.IPNet, caName, caSha string) error {
 	fr := func() *FirewallRule {
 		return &FirewallRule{
-			Hosts:     make(map[string]struct{}),
-			Groups:    make([][]string, 0),
-			CIDR:      cidr.NewTree4[struct{}](),
-			LocalCIDR: cidr.NewTree4[struct{}](),
+			Hosts:  make(map[string]*firewallLocalCIDR),
+			Groups: make([]*firewallGroups, 0),
+			CIDR:   cidr.NewTree4[*firewallLocalCIDR](),
 		}
 	}
 
@@ -683,14 +708,14 @@ func (fc *FirewallCA) addRule(groups []string, host string, ip, localIp *net.IPN
 			fc.Any = fr()
 		}
 
-		return fc.Any.addRule(groups, host, ip, localIp)
+		return fc.Any.addRule(f, groups, host, ip, localIp)
 	}
 
 	if caSha != "" {
 		if _, ok := fc.CAShas[caSha]; !ok {
 			fc.CAShas[caSha] = fr()
 		}
-		err := fc.CAShas[caSha].addRule(groups, host, ip, localIp)
+		err := fc.CAShas[caSha].addRule(f, groups, host, ip, localIp)
 		if err != nil {
 			return err
 		}
@@ -700,7 +725,7 @@ func (fc *FirewallCA) addRule(groups []string, host string, ip, localIp *net.IPN
 		if _, ok := fc.CANames[caName]; !ok {
 			fc.CANames[caName] = fr()
 		}
-		err := fc.CANames[caName].addRule(groups, host, ip, localIp)
+		err := fc.CANames[caName].addRule(f, groups, host, ip, localIp)
 		if err != nil {
 			return err
 		}
@@ -732,41 +757,63 @@ func (fc *FirewallCA) match(p firewall.Packet, c *cert.NebulaCertificate, caPool
 	return fc.CANames[s.Details.Name].match(p, c)
 }
 
-func (fr *FirewallRule) addRule(groups []string, host string, ip *net.IPNet, localIp *net.IPNet) error {
-	if fr.Any {
-		return nil
+func (fr *FirewallRule) addRule(f *Firewall, groups []string, host string, ip *net.IPNet, localCIDR *net.IPNet) error {
+	flc := func() *firewallLocalCIDR {
+		return &firewallLocalCIDR{
+			LocalCIDR: cidr.NewTree4[struct{}](),
+		}
 	}
 
-	if fr.isAny(groups, host, ip, localIp) {
-		fr.Any = true
-		// If it's any we need to wipe out any pre-existing rules to save on memory
-		fr.Groups = make([][]string, 0)
-		fr.Hosts = make(map[string]struct{})
-		fr.CIDR = cidr.NewTree4[struct{}]()
-		fr.LocalCIDR = cidr.NewTree4[struct{}]()
-	} else {
-		if len(groups) > 0 {
-			fr.Groups = append(fr.Groups, groups)
+	if fr.isAny(groups, host, ip) {
+		if fr.Any == nil {
+			fr.Any = flc()
 		}
 
-		if host != "" {
-			fr.Hosts[host] = struct{}{}
+		return fr.Any.addRule(f, localCIDR)
+	}
+
+	if len(groups) > 0 {
+		nlc := flc()
+		err := nlc.addRule(f, localCIDR)
+		if err != nil {
+			return err
 		}
 
-		if ip != nil {
-			fr.CIDR.AddCIDR(ip, struct{}{})
-		}
+		fr.Groups = append(fr.Groups, &firewallGroups{
+			Groups:    groups,
+			LocalCIDR: nlc,
+		})
+	}
 
-		if localIp != nil {
-			fr.LocalCIDR.AddCIDR(localIp, struct{}{})
+	if host != "" {
+		nlc := fr.Hosts[host]
+		if nlc == nil {
+			nlc = flc()
 		}
+		err := nlc.addRule(f, localCIDR)
+		if err != nil {
+			return err
+		}
+		fr.Hosts[host] = nlc
+	}
+
+	if ip != nil {
+		_, nlc := fr.CIDR.GetCIDR(ip)
+		if nlc == nil {
+			nlc = flc()
+		}
+		err := nlc.addRule(f, localCIDR)
+		if err != nil {
+			return err
+		}
+		fr.CIDR.AddCIDR(ip, nlc)
 	}
 
 	return nil
 }
 
-func (fr *FirewallRule) isAny(groups []string, host string, ip, localIp *net.IPNet) bool {
-	if len(groups) == 0 && host == "" && ip == nil && localIp == nil {
+func (fr *FirewallRule) isAny(groups []string, host string, ip *net.IPNet) bool {
+	if len(groups) == 0 && host == "" && ip == nil {
 		return true
 	}
 
@@ -784,10 +831,6 @@ func (fr *FirewallRule) isAny(groups []string, host string, ip, localIp *net.IPN
 		return true
 	}
 
-	if localIp != nil && localIp.Contains(net.IPv4(0, 0, 0, 0)) {
-		return true
-	}
-
 	return false
 }
 
@@ -797,7 +840,7 @@ func (fr *FirewallRule) match(p firewall.Packet, c *cert.NebulaCertificate) bool
 	}
 
 	// Shortcut path for if groups, hosts, or cidr contained an `any`
-	if fr.Any {
+	if fr.Any.match(p, c) {
 		return true
 	}
 
@@ -805,7 +848,7 @@ func (fr *FirewallRule) match(p firewall.Packet, c *cert.NebulaCertificate) bool
 	for _, sg := range fr.Groups {
 		found := false
 
-		for _, g := range sg {
+		for _, g := range sg.Groups {
 			if _, ok := c.Details.InvertedGroups[g]; !ok {
 				found = false
 				break
@@ -814,33 +857,51 @@ func (fr *FirewallRule) match(p firewall.Packet, c *cert.NebulaCertificate) bool
 			found = true
 		}
 
-		if found {
+		if found && sg.LocalCIDR.match(p, c) {
 			return true
 		}
 	}
 
 	if fr.Hosts != nil {
-		if _, ok := fr.Hosts[c.Details.Name]; ok {
-			return true
+		if flc, ok := fr.Hosts[c.Details.Name]; ok {
+			if flc.match(p, c) {
+				return true
+			}
 		}
 	}
 
-	if fr.CIDR != nil {
-		ok, _ := fr.CIDR.Contains(p.RemoteIP)
-		if ok {
-			return true
+	return fr.CIDR.EachContains(p.RemoteIP, func(flc *firewallLocalCIDR) bool {
+		return flc.match(p, c)
+	})
+}
+
+func (flc *firewallLocalCIDR) addRule(f *Firewall, localIp *net.IPNet) error {
+	if localIp == nil {
+		if !f.hasSubnets || f.defaultLocalCIDRAny {
+			flc.Any = true
+			return nil
 		}
+
+		localIp = f.assignedCIDR
+	} else if localIp.Contains(net.IPv4(0, 0, 0, 0)) {
+		flc.Any = true
 	}
 
-	if fr.LocalCIDR != nil {
-		ok, _ := fr.LocalCIDR.Contains(p.LocalIP)
-		if ok {
-			return true
-		}
+	flc.LocalCIDR.AddCIDR(localIp, struct{}{})
+	return nil
+}
+
+func (flc *firewallLocalCIDR) match(p firewall.Packet, c *cert.NebulaCertificate) bool {
+	if flc == nil {
+		return false
 	}
 
-	// No host, group, or cidr matched, bye bye
-	return false
+	if flc.Any {
+		return true
+	}
+
+	ok, _ := flc.LocalCIDR.Contains(p.LocalIP)
+	return ok
 }
 
 type rule struct {

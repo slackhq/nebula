@@ -8,13 +8,13 @@ body:
     attributes:
       value: |
         ### Thank you for taking the time to file a bug report!
-        
+
         Please fill out this form as completely as possible.
 
   - type: input
     id: version
     attributes:
-      label: What version of `nebula` are you using?
+      label: What version of `nebula` are you using? (`nebula -version`)
       placeholder: 0.0.0
     validations:
       required: true
@@ -41,10 +41,17 @@ body:
     attributes:
       label: Logs from affected hosts
       description: |
-        Provide logs from all affected hosts during the time of the issue.
+        Please provide logs from ALL affected hosts during the time of the issue. If you do not provide logs we will be unable to assist you!
+
+        [Learn how to find Nebula logs here.](https://nebula.defined.net/docs/guides/viewing-nebula-logs/)
+
         Improve formatting by using <code>```</code> at the beginning and end of each log block.
+      value: |
+        ```
+
+        ```
     validations:
-      required: false
+      required: true
 
   - type: textarea
     id: configs
@@ -52,6 +59,11 @@ body:
       label: Config files from affected hosts
       description: |
         Provide config files for all affected hosts.
+
         Improve formatting by using <code>```</code> at the beginning and end of each config file.
+      value: |
+        ```
+
+        ```
     validations:
-      required: false
+      required: true

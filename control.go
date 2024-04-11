@@ -145,7 +145,7 @@ func (c *Control) GetHostInfoByVpnIp(vpnIp iputil.VpnIp, pending bool) *ControlH
 		return nil
 	}
 
-	ch := copyHostInfo(h, c.f.hostMap.preferredRanges)
+	ch := copyHostInfo(h, c.f.hostMap.GetPreferredRanges())
 	return &ch
 }
 
@@ -157,7 +157,7 @@ func (c *Control) SetRemoteForTunnel(vpnIp iputil.VpnIp, addr udp.Addr) *Control
 	}
 
 	hostInfo.SetRemote(addr.Copy())
-	ch := copyHostInfo(hostInfo, c.f.hostMap.preferredRanges)
+	ch := copyHostInfo(hostInfo, c.f.hostMap.GetPreferredRanges())
 	return &ch
 }
 
