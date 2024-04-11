@@ -376,11 +376,11 @@ func (hm *HandshakeManager) StartHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 	hm.Lock()
 
 	if hh, ok := hm.vpnIps[vpnIp]; ok {
-		hm.Unlock()
 		// We are already trying to handshake with this vpn ip
 		if cacheCb != nil {
 			cacheCb(hh)
 		}
+		hm.Unlock()
 		return hh.hostinfo
 	}
 
@@ -422,9 +422,7 @@ func (hm *HandshakeManager) StartHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 	}
 
 	hm.Unlock()
-	if !hm.lightHouse.IsLighthouseIP(vpnIp) {
-		hm.lightHouse.QueryServer(vpnIp)
-	}
+	hm.lightHouse.QueryServer(vpnIp)
 	return hostinfo
 }
 
