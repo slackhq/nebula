@@ -81,7 +81,7 @@ func New(config *config.C) (*Service, error) {
 	if tcpipProblem := s.ipstack.CreateNIC(nicID, linkEP); tcpipProblem != nil {
 		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
 	}
-	ipv4Subnet, _ := tcpip.NewSubnet(tcpip.Address(strings.Repeat("\x00", 4)), tcpip.AddressMask(strings.Repeat("\x00", 4)))
+	ipv4Subnet, _ := tcpip.NewSubnet(tcpip.AddrFrom4([4]byte{0x00, 0x00, 0x00, 0x00}), tcpip.MaskFrom(strings.Repeat("\x00", 4)))
 	s.ipstack.SetRouteTable([]tcpip.Route{
 		{
 			Destination: ipv4Subnet,
@@ -91,7 +91,7 @@ func New(config *config.C) (*Service, error) {
 
 	ipNet := device.Cidr()
 	pa := tcpip.ProtocolAddress{
-		AddressWithPrefix: tcpip.Address(ipNet.IP).WithPrefix(),
+		AddressWithPrefix: tcpip.AddrFromSlice(ipNet.IP).WithPrefix(),
 		Protocol:          ipv4.ProtocolNumber,
 	}
 	if err := s.ipstack.AddProtocolAddress(nicID, pa, stack.AddressProperties{
@@ -136,7 +136,7 @@ func New(config *config.C) (*Service, error) {
 	eg.Go(func() error {
 		for {
 			packet := linkEP.ReadContext(ctx)
-			if packet.IsNil() {
+			if packet == nil {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
@@ -166,7 +166,7 @@ func (s *Service) DialContext(ctx context.Context, network, address string) (net
 
 	fullAddr := tcpip.FullAddress{
 		NIC:  nicID,
-		Addr: tcpip.Address(addr.IP),
+		Addr: tcpip.AddrFromSlice(addr.IP),
 		Port: uint16(addr.Port),
 	}
 
