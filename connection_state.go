@@ -24,7 +24,6 @@ type ConnectionState struct {
 	messageCounter atomic.Uint64
 	window         *Bits
 	writeLock      sync.Mutex
-	ready          bool
 }
 
 func NewConnectionState(l *logrus.Logger, cipher string, certState *CertState, initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {
@@ -71,7 +70,6 @@ func NewConnectionState(l *logrus.Logger, cipher string, certState *CertState, i
 		H:         hs,
 		initiator: initiator,
 		window:    b,
-		ready:     false,
 		myCert:    certState.Certificate,
 	}
 
@@ -83,6 +81,5 @@ func (cs *ConnectionState) MarshalJSON() ([]byte, error) {
 		"certificate":     cs.peerCert,
 		"initiator":       cs.initiator,
 		"message_counter": cs.messageCounter.Load(),
-		"ready":           cs.ready,
 	})
 }

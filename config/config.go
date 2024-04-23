@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"math"
 	"os"
 	"os/signal"
@@ -122,6 +121,10 @@ func (c *C) HasChanged(k string) bool {
 // CatchHUP will listen for the HUP signal in a go routine and reload all configs found in the
 // original path provided to Load. The old settings are shallow copied for change detection after the reload.
 func (c *C) CatchHUP(ctx context.Context) {
+	if c.path == "" {
+		return
+	}
+
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGHUP)
 
@@ -358,7 +361,7 @@ func (c *C) parse() error {
 	var m map[interface{}]interface{}
 
 	for _, path := range c.files {
-		b, err := ioutil.ReadFile(path)
+		b, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}

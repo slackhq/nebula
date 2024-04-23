@@ -6,35 +6,36 @@ import (
 	"github.com/slackhq/nebula/iputil"
 )
 
-type Node struct {
-	left   *Node
-	right  *Node
-	parent *Node
-	value  interface{}
+type Node[T any] struct {
+	left     *Node[T]
+	right    *Node[T]
+	parent   *Node[T]
+	hasValue bool
+	value    T
 }
 
-type entry struct {
+type entry[T any] struct {
 	CIDR  *net.IPNet
-	Value *interface{}
+	Value T
 }
 
-type Tree4 struct {
-	root *Node
-	list []entry
+type Tree4[T any] struct {
+	root *Node[T]
+	list []entry[T]
 }
 
 const (
 	startbit = iputil.VpnIp(0x80000000)
 )
 
-func NewTree4() *Tree4 {
-	tree := new(Tree4)
-	tree.root = &Node{}
-	tree.list = []entry{}
+func NewTree4[T any]() *Tree4[T] {
+	tree := new(Tree4[T])
+	tree.root = &Node[T]{}
+	tree.list = []entry[T]{}
 	return tree
 }
 
-func (tree *Tree4) AddCIDR(cidr *net.IPNet, val interface{}) {
+func (tree *Tree4[T]) AddCIDR(cidr *net.IPNet, val T) {
 	bit := startbit
 	node := tree.root
 	next := tree.root
@@ -68,14 +69,15 @@ func (tree *Tree4) AddCIDR(cidr *net.IPNet, val interface{}) {
 			}
 		}
 
-		tree.list = append(tree.list, entry{CIDR: cidr, Value: &val})
+		tree.list = append(tree.list, entry[T]{CIDR: cidr, Value: val})
 		node.value = val
+		node.hasValue = true
 		return
 	}
 
 	// Build up the rest of the tree we don't already have
 	for bit&mask != 0 {
-		next = &Node{}
+		next = &Node[T]{}
 		next.parent = node
 
 		if ip&bit != 0 {
@@ -90,17 +92,18 @@ func (tree *Tree4) AddCIDR(cidr *net.IPNet, val interface{}) {
 
 	// Final node marks our cidr, set the value
 	node.value = val
-	tree.list = append(tree.list, entry{CIDR: cidr, Value: &val})
+	node.hasValue = true
+	tree.list = append(tree.list, entry[T]{CIDR: cidr, Value: val})
 }
 
 // Contains finds the first match, which may be the least specific
-func (tree *Tree4) Contains(ip iputil.VpnIp) (value interface{}) {
+func (tree *Tree4[T]) Contains(ip iputil.VpnIp) (ok bool, value T) {
 	bit := startbit
 	node := tree.root
 
 	for node != nil {
-		if node.value != nil {
-			return node.value
+		if node.hasValue {
+			return true, node.value
 		}
 
 		if ip&bit != 0 {
@@ -113,17 +116,18 @@ func (tree *Tree4) Contains(ip iputil.VpnIp) (value interface{}) {
 
 	}
 
-	return value
+	return false, value
 }
 
 // MostSpecificContains finds the most specific match
-func (tree *Tree4) MostSpecificContains(ip iputil.VpnIp) (value interface{}) {
+func (tree *Tree4[T]) MostSpecificContains(ip iputil.VpnIp) (ok bool, value T) {
 	bit := startbit
 	node := tree.root
 
 	for node != nil {
-		if node.value != nil {
+		if node.hasValue {
 			value = node.value
+			ok = true
 		}
 
 		if ip&bit != 0 {
@@ -135,17 +139,25 @@ func (tree *Tree4) MostSpecificContains(ip iputil.VpnIp) (value interface{}) {
 		bit >>= 1
 	}
 
-	return value
+	return ok, value
 }
 
-// Match finds the most specific match
-func (tree *Tree4) Match(ip iputil.VpnIp) (value interface{}) {
+type eachFunc[T any] func(T) bool
+
+// EachContains will call a function, passing the value, for each entry until the function returns true or the search is complete
+// The final return value will be true if the provided function returned true
+func (tree *Tree4[T]) EachContains(ip iputil.VpnIp, each eachFunc[T]) bool {
 	bit := startbit
 	node := tree.root
-	lastNode := node
 
 	for node != nil {
-		lastNode = node
+		if node.hasValue {
+			// If the each func returns true then we can exit the loop
+			if each(node.value) {
+				return true
+			}
+		}
+
 		if ip&bit != 0 {
 			node = node.right
 		} else {
@@ -155,13 +167,37 @@ func (tree *Tree4) Match(ip iputil.VpnIp) (value interface{}) {
 		bit >>= 1
 	}
 
-	if bit == 0 && lastNode != nil {
-		value = lastNode.value
+	return false
+}
+
+// GetCIDR returns the entry added by the most recent matching AddCIDR call
+func (tree *Tree4[T]) GetCIDR(cidr *net.IPNet) (ok bool, value T) {
+	bit := startbit
+	node := tree.root
+
+	ip := iputil.Ip2VpnIp(cidr.IP)
+	mask := iputil.Ip2VpnIp(cidr.Mask)
+
+	// Find our last ancestor in the tree
+	for node != nil && bit&mask != 0 {
+		if ip&bit != 0 {
+			node = node.right
+		} else {
+			node = node.left
+		}
+
+		bit = bit >> 1
 	}
-	return value
+
+	if bit&mask == 0 && node != nil {
+		value = node.value
+		ok = node.hasValue
+	}
+
+	return ok, value
 }
 
 // List will return all CIDRs and their current values. Do not modify the contents!
-func (tree *Tree4) List() []entry {
+func (tree *Tree4[T]) List() []entry[T] {
 	return tree.list
 }

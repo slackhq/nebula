@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/test"
@@ -18,10 +19,21 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
 	ip := iputil.Ip2VpnIp(net.ParseIP("172.1.1.2"))
 	preferredRanges := []*net.IPNet{localrange}
-	mainHM := NewHostMap(l, vpncidr, preferredRanges)
+	mainHM := newHostMap(l, vpncidr)
+	mainHM.preferredRanges.Store(&preferredRanges)
+
 	lh := newTestLighthouse()
 
+	cs := &CertState{
+		RawCertificate:      []byte{},
+		PrivateKey:          []byte{},
+		Certificate:         &cert.NebulaCertificate{},
+		RawCertificateNoKey: []byte{},
+	}
+
 	blah := NewHandshakeManager(l, mainHM, lh, &udp.NoopConn{}, defaultHandshakeConfig)
+	blah.f = &Interface{handshakeManager: blah, pki: &PKI{}, l: l}
+	blah.f.pki.cs.Store(cs)
 
 	now := time.Now()
 	blah.NextOutboundHandshakeTimerTick(now)
@@ -31,7 +43,6 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	assert.Same(t, i, i2)
 
 	i.remotes = NewRemoteList(nil)
-	i.HandshakeReady = true
 
 	// Adding something to pending should not affect the main hostmap
 	assert.Len(t, mainHM.Hosts, 0)

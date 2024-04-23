@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/flynn/noise"
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
@@ -13,20 +14,20 @@ import (
 
 // This function constructs a handshake packet, but does not actually send it
 // Sending is done by the handshake manager
-func ixHandshakeStage0(f *Interface, hostinfo *HostInfo) bool {
-	err := f.handshakeManager.allocateIndex(hostinfo)
+func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
+	err := f.handshakeManager.allocateIndex(hh)
 	if err != nil {
-		f.l.WithError(err).WithField("vpnIp", hostinfo.vpnIp).
+		f.l.WithError(err).WithField("vpnIp", hh.hostinfo.vpnIp).
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to generate index")
 		return false
 	}
 
 	certState := f.pki.GetCertState()
 	ci := NewConnectionState(f.l, f.cipher, certState, true, noise.HandshakeIX, []byte{}, 0)
-	hostinfo.ConnectionState = ci
+	hh.hostinfo.ConnectionState = ci
 
 	hsProto := &NebulaHandshakeDetails{
-		InitiatorIndex: hostinfo.localIndexId,
+		InitiatorIndex: hh.hostinfo.localIndexId,
 		Time:           uint64(time.Now().UnixNano()),
 		Cert:           certState.RawCertificateNoKey,
 	}
@@ -39,7 +40,7 @@ func ixHandshakeStage0(f *Interface, hostinfo *HostInfo) bool {
 	hsBytes, err = hs.Marshal()
 
 	if err != nil {
-		f.l.WithError(err).WithField("vpnIp", hostinfo.vpnIp).
+		f.l.WithError(err).WithField("vpnIp", hh.hostinfo.vpnIp).
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to marshal handshake message")
 		return false
 	}
@@ -49,7 +50,7 @@ func ixHandshakeStage0(f *Interface, hostinfo *HostInfo) bool {
 
 	msg, _, _, err := ci.H.WriteMessage(h, hsBytes)
 	if err != nil {
-		f.l.WithError(err).WithField("vpnIp", hostinfo.vpnIp).
+		f.l.WithError(err).WithField("vpnIp", hh.hostinfo.vpnIp).
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to call noise.WriteMessage")
 		return false
 	}
@@ -58,9 +59,8 @@ func ixHandshakeStage0(f *Interface, hostinfo *HostInfo) bool {
 	// handshake packet 1 from the responder
 	ci.window.Update(f.l, 1)
 
-	hostinfo.HandshakePacket[0] = msg
-	hostinfo.HandshakeReady = true
-	hostinfo.handshakeStart = time.Now()
+	hh.hostinfo.HandshakePacket[0] = msg
+	hh.ready = true
 	return true
 }
 
@@ -140,9 +140,6 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 		},
 	}
 
-	hostinfo.Lock()
-	defer hostinfo.Unlock()
-
 	f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).
 		WithField("certName", certName).
 		WithField("fingerprint", fingerprint).
@@ -208,19 +205,12 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 	if err != nil {
 		switch err {
 		case ErrAlreadySeen:
-			// Update remote if preferred (Note we have to switch to locking
-			// the existing hostinfo, and then switch back so the defer Unlock
-			// higher in this function still works)
-			hostinfo.Unlock()
-			existing.Lock()
 			// Update remote if preferred
 			if existing.SetRemoteIfPreferred(f.hostMap, addr) {
 				// Send a test packet to ensure the other side has also switched to
 				// the preferred remote
 				f.SendMessageToVpnIp(header.Test, header.TestRequest, vpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 			}
-			existing.Unlock()
-			hostinfo.Lock()
 
 			msg = existing.HandshakePacket[2]
 			f.messageMetrics.Tx(header.Handshake, header.MessageSubType(msg[1]), 1)
@@ -307,7 +297,6 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 				WithField("issuer", issuer).
 				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-				WithField("sentCachedPackets", len(hostinfo.packetStore)).
 				Info("Handshake message sent")
 		}
 	} else {
@@ -323,25 +312,26 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 			WithField("issuer", issuer).
 			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			WithField("sentCachedPackets", len(hostinfo.packetStore)).
 			Info("Handshake message sent")
 	}
 
 	f.connectionManager.AddTrafficWatch(hostinfo.localIndexId)
-	hostinfo.handshakeComplete(f.l, f.cachedPacketMetrics)
+	hostinfo.ConnectionState.messageCounter.Store(2)
+	hostinfo.remotes.ResetBlockedRemotes()
 
 	return
 }
 
-func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hostinfo *HostInfo, packet []byte, h *header.H) bool {
-	if hostinfo == nil {
+func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hh *HandshakeHostInfo, packet []byte, h *header.H) bool {
+	if hh == nil {
 		// Nothing here to tear down, got a bogus stage 2 packet
 		return true
 	}
 
-	hostinfo.Lock()
-	defer hostinfo.Unlock()
+	hh.Lock()
+	defer hh.Unlock()
 
+	hostinfo := hh.hostinfo
 	if addr != nil {
 		if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnIp, addr.IP) {
 			f.l.WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
@@ -350,22 +340,6 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hostinfo *H
 	}
 
 	ci := hostinfo.ConnectionState
-	if ci.ready {
-		f.l.WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("header", h).
-			Info("Handshake is already complete")
-
-		// Update remote if preferred
-		if hostinfo.SetRemoteIfPreferred(f.hostMap, addr) {
-			// Send a test packet to ensure the other side has also switched to
-			// the preferred remote
-			f.SendMessageToVpnIp(header.Test, header.TestRequest, hostinfo.vpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
-		}
-
-		// We already have a complete tunnel, there is nothing that can be done by processing further stage 1 packets
-		return false
-	}
-
 	msg, eKey, dKey, err := ci.H.ReadMessage(nil, packet[header.Len:])
 	if err != nil {
 		f.l.WithError(err).WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).
@@ -422,22 +396,22 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hostinfo *H
 		f.handshakeManager.DeleteHostInfo(hostinfo)
 
 		// Create a new hostinfo/handshake for the intended vpn ip
-		f.handshakeManager.StartHandshake(hostinfo.vpnIp, func(newHostInfo *HostInfo) {
+		f.handshakeManager.StartHandshake(hostinfo.vpnIp, func(newHH *HandshakeHostInfo) {
 			//TODO: this doesnt know if its being added or is being used for caching a packet
 			// Block the current used address
-			newHostInfo.remotes = hostinfo.remotes
-			newHostInfo.remotes.BlockRemote(addr)
+			newHH.hostinfo.remotes = hostinfo.remotes
+			newHH.hostinfo.remotes.BlockRemote(addr)
 
 			// Get the correct remote list for the host we did handshake with
 			hostinfo.remotes = f.lightHouse.QueryCache(vpnIp)
 
-			f.l.WithField("blockedUdpAddrs", newHostInfo.remotes.CopyBlockedRemotes()).WithField("vpnIp", vpnIp).
-				WithField("remotes", newHostInfo.remotes.CopyAddrs(f.hostMap.preferredRanges)).
+			f.l.WithField("blockedUdpAddrs", newHH.hostinfo.remotes.CopyBlockedRemotes()).WithField("vpnIp", vpnIp).
+				WithField("remotes", newHH.hostinfo.remotes.CopyAddrs(f.hostMap.GetPreferredRanges())).
 				Info("Blocked addresses for handshakes")
 
 			// Swap the packet store to benefit the original intended recipient
-			newHostInfo.packetStore = hostinfo.packetStore
-			hostinfo.packetStore = []*cachedPacket{}
+			newHH.packetStore = hh.packetStore
+			hh.packetStore = []*cachedPacket{}
 
 			// Finally, put the correct vpn ip in the host info, tell them to close the tunnel, and return true to tear down
 			hostinfo.vpnIp = vpnIp
@@ -450,7 +424,7 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hostinfo *H
 	// Mark packet 2 as seen so it doesn't show up as missed
 	ci.window.Update(f.l, 2)
 
-	duration := time.Since(hostinfo.handshakeStart).Nanoseconds()
+	duration := time.Since(hh.startTime).Nanoseconds()
 	f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).
 		WithField("certName", certName).
 		WithField("fingerprint", fingerprint).
@@ -458,7 +432,7 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hostinfo *H
 		WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 		WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 		WithField("durationNs", duration).
-		WithField("sentCachedPackets", len(hostinfo.packetStore)).
+		WithField("sentCachedPackets", len(hh.packetStore)).
 		Info("Handshake message received")
 
 	hostinfo.remoteIndexId = hs.Details.ResponderIndex
@@ -482,7 +456,23 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hostinfo *H
 	// Complete our handshake and update metrics, this will replace any existing tunnels for this vpnIp
 	f.handshakeManager.Complete(hostinfo, f)
 	f.connectionManager.AddTrafficWatch(hostinfo.localIndexId)
-	hostinfo.handshakeComplete(f.l, f.cachedPacketMetrics)
+
+	hostinfo.ConnectionState.messageCounter.Store(2)
+
+	if f.l.Level >= logrus.DebugLevel {
+		hostinfo.logger(f.l).Debugf("Sending %d stored packets", len(hh.packetStore))
+	}
+
+	if len(hh.packetStore) > 0 {
+		nb := make([]byte, 12, 12)
+		out := make([]byte, mtu)
+		for _, cp := range hh.packetStore {
+			cp.callback(cp.messageType, cp.messageSubType, hostinfo, cp.packet, nb, out)
+		}
+		f.cachedPacketMetrics.sent.Inc(int64(len(hh.packetStore)))
+	}
+
+	hostinfo.remotes.ResetBlockedRemotes()
 	f.metricHandshakes.Update(duration)
 
 	return false

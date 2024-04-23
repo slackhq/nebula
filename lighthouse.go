@@ -74,7 +74,9 @@ type LightHouse struct {
 	// IP's of relays that can be used by peers to access me
 	relaysForMe atomic.Pointer[[]iputil.VpnIp]
 
-	calculatedRemotes atomic.Pointer[cidr.Tree4] // Maps VpnIp to []*calculatedRemote
+	queryChan chan iputil.VpnIp
+
+	calculatedRemotes atomic.Pointer[cidr.Tree4[[]*calculatedRemote]] // Maps VpnIp to []*calculatedRemote
 
 	metrics           *MessageMetrics
 	metricHolepunchTx metrics.Counter
@@ -110,6 +112,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 		nebulaPort:   nebulaPort,
 		punchConn:    pc,
 		punchy:       p,
+		queryChan:    make(chan iputil.VpnIp, c.GetUint32("handshakes.query_buffer", 64)),
 		l:            l,
 	}
 	lighthouses := make(map[iputil.VpnIp]struct{})
@@ -139,6 +142,8 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 		}
 	})
 
+	h.startQueryWorker()
+
 	return &h, nil
 }
 
@@ -166,7 +171,7 @@ func (lh *LightHouse) GetRelaysForMe() []iputil.VpnIp {
 	return *lh.relaysForMe.Load()
 }
 
-func (lh *LightHouse) getCalculatedRemotes() *cidr.Tree4 {
+func (lh *LightHouse) getCalculatedRemotes() *cidr.Tree4[[]*calculatedRemote] {
 	return lh.calculatedRemotes.Load()
 }
 
@@ -443,9 +448,9 @@ func (lh *LightHouse) loadStaticMap(c *config.C, tunCidr *net.IPNet, staticList 
 	return nil
 }
 
-func (lh *LightHouse) Query(ip iputil.VpnIp, f EncWriter) *RemoteList {
+func (lh *LightHouse) Query(ip iputil.VpnIp) *RemoteList {
 	if !lh.IsLighthouseIP(ip) {
-		lh.QueryServer(ip, f)
+		lh.QueryServer(ip)
 	}
 	lh.RLock()
 	if v, ok := lh.addrMap[ip]; ok {
@@ -456,30 +461,14 @@ func (lh *LightHouse) Query(ip iputil.VpnIp, f EncWriter) *RemoteList {
 	return nil
 }
 
-// This is asynchronous so no reply should be expected
-func (lh *LightHouse) QueryServer(ip iputil.VpnIp, f EncWriter) {
-	if lh.amLighthouse {
+// QueryServer is asynchronous so no reply should be expected
+func (lh *LightHouse) QueryServer(ip iputil.VpnIp) {
+	// Don't put lighthouse ips in the query channel because we can't query lighthouses about lighthouses
+	if lh.amLighthouse || lh.IsLighthouseIP(ip) {
 		return
 	}
 
-	if lh.IsLighthouseIP(ip) {
-		return
-	}
-
-	// Send a query to the lighthouses and hope for the best next time
-	query, err := NewLhQueryByInt(ip).Marshal()
-	if err != nil {
-		lh.l.WithError(err).WithField("vpnIp", ip).Error("Failed to marshal lighthouse query payload")
-		return
-	}
-
-	lighthouses := lh.GetLighthouses()
-	lh.metricTx(NebulaMeta_HostQuery, int64(len(lighthouses)))
-	nb := make([]byte, 12, 12)
-	out := make([]byte, mtu)
-	for n := range lighthouses {
-		f.SendMessageToVpnIp(header.LightHouse, 0, n, query, nb, out)
-	}
+	lh.queryChan <- ip
 }
 
 func (lh *LightHouse) QueryCache(ip iputil.VpnIp) *RemoteList {
@@ -594,11 +583,10 @@ func (lh *LightHouse) addCalculatedRemotes(vpnIp iputil.VpnIp) bool {
 	if tree == nil {
 		return false
 	}
-	value := tree.MostSpecificContains(vpnIp)
-	if value == nil {
+	ok, calculatedRemotes := tree.MostSpecificContains(vpnIp)
+	if !ok {
 		return false
 	}
-	calculatedRemotes := value.([]*calculatedRemote)
 
 	var calculated []*Ip4AndPort
 	for _, cr := range calculatedRemotes {
@@ -751,6 +739,46 @@ func NewUDPAddrFromLH4(ipp *Ip4AndPort) *udp.Addr {
 
 func NewUDPAddrFromLH6(ipp *Ip6AndPort) *udp.Addr {
 	return udp.NewAddr(lhIp6ToIp(ipp), uint16(ipp.Port))
+}
+
+func (lh *LightHouse) startQueryWorker() {
+	if lh.amLighthouse {
+		return
+	}
+
+	go func() {
+		nb := make([]byte, 12, 12)
+		out := make([]byte, mtu)
+
+		for {
+			select {
+			case <-lh.ctx.Done():
+				return
+			case ip := <-lh.queryChan:
+				lh.innerQueryServer(ip, nb, out)
+			}
+		}
+	}()
+}
+
+func (lh *LightHouse) innerQueryServer(ip iputil.VpnIp, nb, out []byte) {
+	if lh.IsLighthouseIP(ip) {
+		return
+	}
+
+	// Send a query to the lighthouses and hope for the best next time
+	query, err := NewLhQueryByInt(ip).Marshal()
+	if err != nil {
+		lh.l.WithError(err).WithField("vpnIp", ip).Error("Failed to marshal lighthouse query payload")
+		return
+	}
+
+	lighthouses := lh.GetLighthouses()
+	lh.metricTx(NebulaMeta_HostQuery, int64(len(lighthouses)))
+
+	for n := range lighthouses {
+		lh.ifce.SendMessageToVpnIp(header.LightHouse, 0, n, query, nb, out)
+	}
 }
 
 func (lh *LightHouse) StartUpdateWorker() {

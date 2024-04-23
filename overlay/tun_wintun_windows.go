@@ -6,11 +6,14 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/util"
 	"github.com/slackhq/nebula/wintun"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
@@ -23,8 +26,9 @@ type winTun struct {
 	cidr      *net.IPNet
 	prefix    netip.Prefix
 	MTU       int
-	Routes    []Route
-	routeTree *cidr.Tree4
+	Routes    atomic.Pointer[[]Route]
+	routeTree atomic.Pointer[cidr.Tree4[iputil.VpnIp]]
+	l         *logrus.Logger
 
 	tun *wintun.NativeTun
 }
@@ -48,20 +52,11 @@ func generateGUIDByDeviceName(name string) (*windows.GUID, error) {
 	return (*windows.GUID)(unsafe.Pointer(&sum[0])), nil
 }
 
-func newWinTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route) (*winTun, error) {
+func newWinTun(c *config.C, l *logrus.Logger, cidr *net.IPNet, _ bool) (*winTun, error) {
+	deviceName := c.GetString("tun.dev", "")
 	guid, err := generateGUIDByDeviceName(deviceName)
 	if err != nil {
 		return nil, fmt.Errorf("generate GUID failed: %w", err)
-	}
-
-	tunDevice, err := wintun.CreateTUNWithRequestedGUID(deviceName, guid, defaultMTU)
-	if err != nil {
-		return nil, fmt.Errorf("create TUN device failed: %w", err)
-	}
-
-	routeTree, err := makeRouteTree(l, routes, false)
-	if err != nil {
-		return nil, err
 	}
 
 	prefix, err := iputil.ToNetIpPrefix(*cidr)
@@ -69,32 +64,129 @@ func newWinTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU 
 		return nil, err
 	}
 
-	return &winTun{
-		Device:    deviceName,
-		cidr:      cidr,
-		prefix:    prefix,
-		MTU:       defaultMTU,
-		Routes:    routes,
-		routeTree: routeTree,
+	t := &winTun{
+		Device: deviceName,
+		cidr:   cidr,
+		prefix: prefix,
+		MTU:    c.GetInt("tun.mtu", DefaultMTU),
+		l:      l,
+	}
 
-		tun: tunDevice.(*wintun.NativeTun),
-	}, nil
+	err = t.reload(c, true)
+	if err != nil {
+		return nil, err
+	}
+
+	var tunDevice wintun.Device
+	tunDevice, err = wintun.CreateTUNWithRequestedGUID(deviceName, guid, t.MTU)
+	if err != nil {
+		// Windows 10 has an issue with unclean shutdowns not fully cleaning up the wintun device.
+		// Trying a second time resolves the issue.
+		l.WithError(err).Debug("Failed to create wintun device, retrying")
+		tunDevice, err = wintun.CreateTUNWithRequestedGUID(deviceName, guid, t.MTU)
+		if err != nil {
+			return nil, fmt.Errorf("create TUN device failed: %w", err)
+		}
+	}
+	t.tun = tunDevice.(*wintun.NativeTun)
+
+	c.RegisterReloadCallback(func(c *config.C) {
+		err := t.reload(c, false)
+		if err != nil {
+			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+		}
+	})
+
+	return t, nil
+}
+
+func (t *winTun) reload(c *config.C, initial bool) error {
+	change, routes, err := getAllRoutesFromConfig(c, t.cidr, initial)
+	if err != nil {
+		return err
+	}
+
+	if !initial && !change {
+		return nil
+	}
+
+	routeTree, err := makeRouteTree(t.l, routes, false)
+	if err != nil {
+		return err
+	}
+
+	// Teach nebula how to handle the routes before establishing them in the system table
+	oldRoutes := t.Routes.Swap(&routes)
+	t.routeTree.Store(routeTree)
+
+	if !initial {
+		// Remove first, if the system removes a wanted route hopefully it will be re-added next
+		err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes))
+		if err != nil {
+			util.LogWithContextIfNeeded("Failed to remove routes", err, t.l)
+		}
+
+		// Ensure any routes we actually want are installed
+		err = t.addRoutes(true)
+		if err != nil {
+			// Catch any stray logs
+			util.LogWithContextIfNeeded("Failed to add routes", err, t.l)
+		}
+	}
+
+	return nil
 }
 
 func (t *winTun) Activate() error {
 	luid := winipcfg.LUID(t.tun.LUID())
 
-	if err := luid.SetIPAddresses([]netip.Prefix{t.prefix}); err != nil {
+	err := luid.SetIPAddresses([]netip.Prefix{t.prefix})
+	if err != nil {
 		return fmt.Errorf("failed to set address: %w", err)
 	}
 
-	foundDefault4 := false
-	routes := make([]*winipcfg.RouteData, 0, len(t.Routes)+1)
+	err = t.addRoutes(false)
+	if err != nil {
+		return err
+	}
 
-	for _, r := range t.Routes {
+	return nil
+}
+
+func (t *winTun) addRoutes(logErrors bool) error {
+	luid := winipcfg.LUID(t.tun.LUID())
+	routes := *t.Routes.Load()
+	foundDefault4 := false
+
+	for _, r := range routes {
 		if r.Via == nil || !r.Install {
 			// We don't allow route MTUs so only install routes with a via
 			continue
+		}
+
+		prefix, err := iputil.ToNetIpPrefix(*r.Cidr)
+		if err != nil {
+			retErr := util.NewContextualError("Failed to parse cidr to netip prefix, ignoring route", map[string]interface{}{"route": r}, err)
+			if logErrors {
+				retErr.Log(t.l)
+				continue
+			} else {
+				return retErr
+			}
+		}
+
+		// Add our unsafe route
+		err = luid.AddRoute(prefix, r.Via.ToNetIpAddr(), uint32(r.Metric))
+		if err != nil {
+			retErr := util.NewContextualError("Failed to add route", map[string]interface{}{"route": r}, err)
+			if logErrors {
+				retErr.Log(t.l)
+				continue
+			} else {
+				return retErr
+			}
+		} else {
+			t.l.WithField("route", r).Info("Added route")
 		}
 
 		if !foundDefault4 {
@@ -102,22 +194,6 @@ func (t *winTun) Activate() error {
 				foundDefault4 = true
 			}
 		}
-
-		prefix, err := iputil.ToNetIpPrefix(*r.Cidr)
-		if err != nil {
-			return err
-		}
-
-		// Add our unsafe route
-		routes = append(routes, &winipcfg.RouteData{
-			Destination: prefix,
-			NextHop:     r.Via.ToNetIpAddr(),
-			Metric:      uint32(r.Metric),
-		})
-	}
-
-	if err := luid.AddRoutes(routes); err != nil {
-		return fmt.Errorf("failed to add routes: %w", err)
 	}
 
 	ipif, err := luid.IPInterface(windows.AF_INET)
@@ -134,17 +210,36 @@ func (t *winTun) Activate() error {
 	if err := ipif.Set(); err != nil {
 		return fmt.Errorf("failed to set ip interface: %w", err)
 	}
+	return nil
+}
 
+func (t *winTun) removeRoutes(routes []Route) error {
+	luid := winipcfg.LUID(t.tun.LUID())
+
+	for _, r := range routes {
+		if !r.Install {
+			continue
+		}
+
+		prefix, err := iputil.ToNetIpPrefix(*r.Cidr)
+		if err != nil {
+			t.l.WithError(err).WithField("route", r).Info("Failed to convert cidr to netip prefix")
+			continue
+		}
+
+		err = luid.DeleteRoute(prefix, r.Via.ToNetIpAddr())
+		if err != nil {
+			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
+		} else {
+			t.l.WithField("route", r).Info("Removed route")
+		}
+	}
 	return nil
 }
 
 func (t *winTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	r := t.routeTree.MostSpecificContains(ip)
-	if r != nil {
-		return r.(iputil.VpnIp)
-	}
-
-	return 0
+	_, r := t.routeTree.Load().MostSpecificContains(ip)
+	return r
 }
 
 func (t *winTun) Cidr() *net.IPNet {

@@ -18,7 +18,7 @@ import (
 
 type m map[string]interface{}
 
-func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, tunFd *int) (retcon *Control, reterr error) {
+func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Automatically cancel the context if Main returns an error, to signal all created goroutines to quit.
 	defer func() {
@@ -65,12 +65,15 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while loading firewall rules", err)
 	}
-	l.WithField("firewallHash", fw.GetRuleHash()).Info("Firewall started")
+	l.WithField("firewallHashes", fw.GetRuleHashes()).Info("Firewall started")
 
 	// TODO: make sure mask is 4 bytes
 	tunCidr := certificate.Details.Ips[0]
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
+	if err != nil {
+		return nil, util.ContextualizeIfNeeded("Error while creating SSH server", err)
+	}
 	wireSSHReload(l, ssh, c)
 	var sshStart func()
 	if c.GetBool("sshd.enabled", false) {
@@ -125,7 +128,11 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	if !configTest {
 		c.CatchHUP(ctx)
 
-		tun, err = overlay.NewDeviceFromConfig(c, l, tunCidr, tunFd, routines)
+		if deviceFactory == nil {
+			deviceFactory = overlay.NewDeviceFromConfig
+		}
+
+		tun, err = deviceFactory(c, l, tunCidr, routines)
 		if err != nil {
 			return nil, util.ContextualizeIfNeeded("Failed to get a tun/tap device", err)
 		}
@@ -156,61 +163,27 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 
 		for i := 0; i < routines; i++ {
+			l.Infof("listening %q %d", listenHost.IP, port)
 			udpServer, err := udp.NewListener(l, listenHost.IP, port, routines > 1, c.GetInt("listen.batch", 64))
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
 			udpServer.ReloadConfig(c)
 			udpConns[i] = udpServer
-		}
-	}
 
-	// Set up my internal host map
-	var preferredRanges []*net.IPNet
-	rawPreferredRanges := c.GetStringSlice("preferred_ranges", []string{})
-	// First, check if 'preferred_ranges' is set and fallback to 'local_range'
-	if len(rawPreferredRanges) > 0 {
-		for _, rawPreferredRange := range rawPreferredRanges {
-			_, preferredRange, err := net.ParseCIDR(rawPreferredRange)
-			if err != nil {
-				return nil, util.ContextualizeIfNeeded("Failed to parse preferred ranges", err)
-			}
-			preferredRanges = append(preferredRanges, preferredRange)
-		}
-	}
-
-	// local_range was superseded by preferred_ranges. If it is still present,
-	// merge the local_range setting into preferred_ranges. We will probably
-	// deprecate local_range and remove in the future.
-	rawLocalRange := c.GetString("local_range", "")
-	if rawLocalRange != "" {
-		_, localRange, err := net.ParseCIDR(rawLocalRange)
-		if err != nil {
-			return nil, util.ContextualizeIfNeeded("Failed to parse local_range", err)
-		}
-
-		// Check if the entry for local_range was already specified in
-		// preferred_ranges. Don't put it into the slice twice if so.
-		var found bool
-		for _, r := range preferredRanges {
-			if r.String() == localRange.String() {
-				found = true
-				break
+			// If port is dynamic, discover it before the next pass through the for loop
+			// This way all routines will use the same port correctly
+			if port == 0 {
+				uPort, err := udpServer.LocalAddr()
+				if err != nil {
+					return nil, util.NewContextualError("Failed to get listening port", nil, err)
+				}
+				port = int(uPort.Port)
 			}
 		}
-		if !found {
-			preferredRanges = append(preferredRanges, localRange)
-		}
 	}
 
-	hostMap := NewHostMap(l, tunCidr, preferredRanges)
-	hostMap.metricsEnabled = c.GetBool("stats.message_metrics", false)
-
-	l.
-		WithField("network", hostMap.vpnCIDR.String()).
-		WithField("preferredRanges", hostMap.preferredRanges).
-		Info("Main HostMap created")
-
+	hostMap := NewHostMapFromConfig(l, tunCidr, c)
 	punchy := NewPunchyFromConfig(l, c)
 	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, tunCidr, udpConns[0], punchy)
 	if err != nil {
@@ -270,7 +243,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		routines:                routines,
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
-		disconnectInvalid:       c.GetBool("pki.disconnect_invalid", false),
 		relayManager:            NewRelayManager(ctx, l, hostMap, c),
 		punchy:                  punchy,
 
@@ -300,6 +272,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		lightHouse.ifce = ifce
 
 		ifce.RegisterConfigChangeCallbacks(c)
+		ifce.reloadDisconnectInvalid(c)
 		ifce.reloadSendRecvError(c)
 
 		handshakeManager.f = ifce
@@ -332,6 +305,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	return &Control{
 		ifce,
 		l,
+		ctx,
 		cancel,
 		sshStart,
 		statsStart,

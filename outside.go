@@ -198,7 +198,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via *ViaSender, out []byt
 
 	case header.Handshake:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		HandleIncomingHandshake(f, addr, via, packet, h, hostinfo)
+		f.handshakeManager.HandleIncoming(addr, via, packet, h)
 		return
 
 	case header.RecvError:
@@ -404,9 +404,11 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return false
 	}
 
-	dropReason := f.firewall.Drop(out, *fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(*fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason != nil {
-		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, out, q)
+		// NOTE: We give `packet` as the `out` here since we already decrypted from it and we don't need it anymore
+		// This gives us a buffer to build the reject packet in
+		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, packet, q)
 		if f.l.Level >= logrus.DebugLevel {
 			hostinfo.logger(f.l).WithField("fwPacket", fwPacket).
 				WithField("reason", dropReason).
@@ -454,9 +456,6 @@ func (f *Interface) handleRecvError(addr *udp.Addr, h *header.H) {
 		f.l.WithField("remoteIndex", h.RemoteIndex).Debugln("Did not find remote index in main hostmap")
 		return
 	}
-
-	hostinfo.Lock()
-	defer hostinfo.Unlock()
 
 	if !hostinfo.RecvErrorExceeded() {
 		return

@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 
 	"github.com/slackhq/nebula/cert"
@@ -54,12 +53,12 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 		return fmt.Errorf("invalid curve: %s", *cf.curve)
 	}
 
-	err = ioutil.WriteFile(*cf.outKeyPath, cert.MarshalPrivateKey(curve, rawPriv), 0600)
+	err = os.WriteFile(*cf.outKeyPath, cert.MarshalPrivateKey(curve, rawPriv), 0600)
 	if err != nil {
 		return fmt.Errorf("error while writing out-key: %s", err)
 	}
 
-	err = ioutil.WriteFile(*cf.outPubPath, cert.MarshalPublicKey(curve, pub), 0600)
+	err = os.WriteFile(*cf.outPubPath, cert.MarshalPublicKey(curve, pub), 0600)
 	if err != nil {
 		return fmt.Errorf("error while writing out-pub: %s", err)
 	}
