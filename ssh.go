@@ -302,7 +302,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Inter
 			return fl, &s
 		},
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
-			return sshDeviceInfo(ifce, fs, w)
+			return sshDeviceInfo(f, fs, w)
 		},
 	})
 
