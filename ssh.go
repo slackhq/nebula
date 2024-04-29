@@ -231,7 +231,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Inter
 
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "start-cpu-profile",
-		ShortDescription: "Starts a cpu profile and write output to the provided file",
+		ShortDescription: "Starts a cpu profile and write output to the provided file, ex: `cpu-profile.pb.gz`",
 		Callback:         sshStartCpuProfile,
 	})
 
@@ -246,7 +246,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Inter
 
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "save-heap-profile",
-		ShortDescription: "Saves a heap profile to the provided path",
+		ShortDescription: "Saves a heap profile to the provided path, ex: `heap-profile.pb.gz`",
 		Callback:         sshGetHeapProfile,
 	})
 
@@ -258,7 +258,7 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Inter
 
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "save-mutex-profile",
-		ShortDescription: "Saves a mutex profile to the provided path",
+		ShortDescription: "Saves a mutex profile to the provided path, ex: `mutex-profile.pb.gz`",
 		Callback:         sshGetMutexProfile,
 	})
 
