@@ -3,7 +3,6 @@ package nebula
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -19,7 +18,7 @@ import (
 
 type m map[string]interface{}
 
-func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, tunFd *int) (retcon *Control, reterr error) {
+func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Automatically cancel the context if Main returns an error, to signal all created goroutines to quit.
 	defer func() {
@@ -46,7 +45,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	err := configLogger(l, c)
 	if err != nil {
-		return nil, util.NewContextualError("Failed to configure the logger", nil, err)
+		return nil, util.ContextualizeIfNeeded("Failed to configure the logger", err)
 	}
 
 	c.RegisterReloadCallback(func(c *config.C) {
@@ -56,36 +55,31 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	})
 
-	caPool, err := loadCAFromConfig(l, c)
+	pki, err := NewPKIFromConfig(l, c)
 	if err != nil {
-		//The errors coming out of loadCA are already nicely formatted
-		return nil, util.NewContextualError("Failed to load ca from config", nil, err)
+		return nil, util.ContextualizeIfNeeded("Failed to load PKI from config", err)
 	}
-	l.WithField("fingerprints", caPool.GetFingerprints()).Debug("Trusted CA fingerprints")
 
-	cs, err := NewCertStateFromConfig(c)
+	certificate := pki.GetCertState().Certificate
+	fw, err := NewFirewallFromConfig(l, certificate, c)
 	if err != nil {
-		//The errors coming out of NewCertStateFromConfig are already nicely formatted
-		return nil, util.NewContextualError("Failed to load certificate from config", nil, err)
+		return nil, util.ContextualizeIfNeeded("Error while loading firewall rules", err)
 	}
-	l.WithField("cert", cs.certificate).Debug("Client nebula certificate")
-
-	fw, err := NewFirewallFromConfig(l, cs.certificate, c)
-	if err != nil {
-		return nil, util.NewContextualError("Error while loading firewall rules", nil, err)
-	}
-	l.WithField("firewallHash", fw.GetRuleHash()).Info("Firewall started")
+	l.WithField("firewallHashes", fw.GetRuleHashes()).Info("Firewall started")
 
 	// TODO: make sure mask is 4 bytes
-	tunCidr := cs.certificate.Details.Ips[0]
+	tunCidr := certificate.Details.Ips[0]
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
+	if err != nil {
+		return nil, util.ContextualizeIfNeeded("Error while creating SSH server", err)
+	}
 	wireSSHReload(l, ssh, c)
 	var sshStart func()
 	if c.GetBool("sshd.enabled", false) {
 		sshStart, err = configSSH(l, ssh, c)
 		if err != nil {
-			return nil, util.NewContextualError("Error while configuring the sshd", nil, err)
+			return nil, util.ContextualizeIfNeeded("Error while configuring the sshd", err)
 		}
 	}
 
@@ -134,9 +128,13 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	if !configTest {
 		c.CatchHUP(ctx)
 
-		tun, err = overlay.NewDeviceFromConfig(c, l, tunCidr, tunFd, routines)
+		if deviceFactory == nil {
+			deviceFactory = overlay.NewDeviceFromConfig
+		}
+
+		tun, err = deviceFactory(c, l, tunCidr, routines)
 		if err != nil {
-			return nil, util.NewContextualError("Failed to get a tun/tap device", nil, err)
+			return nil, util.ContextualizeIfNeeded("Failed to get a tun/tap device", err)
 		}
 
 		defer func() {
@@ -147,83 +145,49 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 
 	// set up our UDP listener
-	udpConns := make([]*udp.Conn, routines)
+	udpConns := make([]udp.Conn, routines)
 	port := c.GetInt("listen.port", 0)
 
 	if !configTest {
+		rawListenHost := c.GetString("listen.host", "0.0.0.0")
+		var listenHost *net.IPAddr
+		if rawListenHost == "[::]" {
+			// Old guidance was to provide the literal `[::]` in `listen.host` but that won't resolve.
+			listenHost = &net.IPAddr{IP: net.IPv6zero}
+
+		} else {
+			listenHost, err = net.ResolveIPAddr("ip", rawListenHost)
+			if err != nil {
+				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
+			}
+		}
+
 		for i := 0; i < routines; i++ {
-			udpServer, err := udp.NewListener(l, c.GetString("listen.host", "0.0.0.0"), port, routines > 1, c.GetInt("listen.batch", 64))
+			l.Infof("listening %q %d", listenHost.IP, port)
+			udpServer, err := udp.NewListener(l, listenHost.IP, port, routines > 1, c.GetInt("listen.batch", 64))
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
 			udpServer.ReloadConfig(c)
 			udpConns[i] = udpServer
-		}
-	}
 
-	// Set up my internal host map
-	var preferredRanges []*net.IPNet
-	rawPreferredRanges := c.GetStringSlice("preferred_ranges", []string{})
-	// First, check if 'preferred_ranges' is set and fallback to 'local_range'
-	if len(rawPreferredRanges) > 0 {
-		for _, rawPreferredRange := range rawPreferredRanges {
-			_, preferredRange, err := net.ParseCIDR(rawPreferredRange)
-			if err != nil {
-				return nil, util.NewContextualError("Failed to parse preferred ranges", nil, err)
-			}
-			preferredRanges = append(preferredRanges, preferredRange)
-		}
-	}
-
-	// local_range was superseded by preferred_ranges. If it is still present,
-	// merge the local_range setting into preferred_ranges. We will probably
-	// deprecate local_range and remove in the future.
-	rawLocalRange := c.GetString("local_range", "")
-	if rawLocalRange != "" {
-		_, localRange, err := net.ParseCIDR(rawLocalRange)
-		if err != nil {
-			return nil, util.NewContextualError("Failed to parse local_range", nil, err)
-		}
-
-		// Check if the entry for local_range was already specified in
-		// preferred_ranges. Don't put it into the slice twice if so.
-		var found bool
-		for _, r := range preferredRanges {
-			if r.String() == localRange.String() {
-				found = true
-				break
+			// If port is dynamic, discover it before the next pass through the for loop
+			// This way all routines will use the same port correctly
+			if port == 0 {
+				uPort, err := udpServer.LocalAddr()
+				if err != nil {
+					return nil, util.NewContextualError("Failed to get listening port", nil, err)
+				}
+				port = int(uPort.Port)
 			}
 		}
-		if !found {
-			preferredRanges = append(preferredRanges, localRange)
-		}
 	}
 
-	hostMap := NewHostMap(l, "main", tunCidr, preferredRanges)
-	hostMap.metricsEnabled = c.GetBool("stats.message_metrics", false)
-
-	l.
-		WithField("network", hostMap.vpnCIDR.String()).
-		WithField("preferredRanges", hostMap.preferredRanges).
-		Info("Main HostMap created")
-
-	/*
-		config.SetDefault("promoter.interval", 10)
-		go hostMap.Promoter(config.GetInt("promoter.interval"))
-	*/
-
+	hostMap := NewHostMapFromConfig(l, tunCidr, c)
 	punchy := NewPunchyFromConfig(l, c)
-	if punchy.GetPunch() && !configTest {
-		l.Info("UDP hole punching enabled")
-		go hostMap.Punchy(ctx, udpConns[0])
-	}
-
-	lightHouse, err := NewLightHouseFromConfig(l, c, tunCidr, udpConns[0], punchy)
-	switch {
-	case errors.As(err, &util.ContextualError{}):
-		return nil, err
-	case err != nil:
-		return nil, util.NewContextualError("Failed to initialize lighthouse handler", nil, err)
+	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, tunCidr, udpConns[0], punchy)
+	if err != nil {
+		return nil, util.ContextualizeIfNeeded("Failed to initialize lighthouse handler", err)
 	}
 
 	var messageMetrics *MessageMetrics
@@ -244,12 +208,8 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		messageMetrics: messageMetrics,
 	}
 
-	handshakeManager := NewHandshakeManager(l, tunCidr, preferredRanges, hostMap, lightHouse, udpConns[0], handshakeConfig)
+	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
-
-	//TODO: These will be reused for psk
-	//handshakeMACKey := config.GetString("handshake_mac.key", "")
-	//handshakeAcceptedMACKeys := config.GetStringSlice("handshake_mac.accepted_keys", []string{})
 
 	serveDns := false
 	if c.GetBool("lighthouse.serve_dns", false) {
@@ -262,26 +222,29 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	checkInterval := c.GetInt("timers.connection_alive_interval", 5)
 	pendingDeletionInterval := c.GetInt("timers.pending_deletion_interval", 10)
+
 	ifConfig := &InterfaceConfig{
 		HostMap:                 hostMap,
 		Inside:                  tun,
 		Outside:                 udpConns[0],
-		certState:               cs,
+		pki:                     pki,
 		Cipher:                  c.GetString("cipher", "aes"),
 		Firewall:                fw,
 		ServeDns:                serveDns,
 		HandshakeManager:        handshakeManager,
 		lightHouse:              lightHouse,
-		checkInterval:           checkInterval,
-		pendingDeletionInterval: pendingDeletionInterval,
+		checkInterval:           time.Second * time.Duration(checkInterval),
+		pendingDeletionInterval: time.Second * time.Duration(pendingDeletionInterval),
+		tryPromoteEvery:         c.GetUint32("counters.try_promote", defaultPromoteEvery),
+		reQueryEvery:            c.GetUint32("counters.requery_every_packets", defaultReQueryEvery),
+		reQueryWait:             c.GetDuration("timers.requery_wait_duration", defaultReQueryWait),
 		DropLocalBroadcast:      c.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:           c.GetBool("tun.drop_multicast", false),
 		routines:                routines,
 		MessageMetrics:          messageMetrics,
 		version:                 buildVersion,
-		caPool:                  caPool,
-		disconnectInvalid:       c.GetBool("pki.disconnect_invalid", false),
 		relayManager:            NewRelayManager(ctx, l, hostMap, c),
+		punchy:                  punchy,
 
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,
@@ -306,21 +269,21 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		// TODO: Better way to attach these, probably want a new interface in InterfaceConfig
 		// I don't want to make this initial commit too far-reaching though
 		ifce.writers = udpConns
+		lightHouse.ifce = ifce
 
 		ifce.RegisterConfigChangeCallbacks(c)
-
+		ifce.reloadDisconnectInvalid(c)
 		ifce.reloadSendRecvError(c)
 
-		go handshakeManager.Run(ctx, ifce)
-		go lightHouse.LhUpdateWorker(ctx, ifce)
+		handshakeManager.f = ifce
+		go handshakeManager.Run(ctx)
 	}
 
 	// TODO - stats third-party modules start uncancellable goroutines. Update those libs to accept
 	// a context so that they can exit when the context is Done.
 	statsStart, err := startStats(l, c, buildVersion, configTest)
-
 	if err != nil {
-		return nil, util.NewContextualError("Failed to start stats emitter", nil, err)
+		return nil, util.ContextualizeIfNeeded("Failed to start stats emitter", err)
 	}
 
 	if configTest {
@@ -330,7 +293,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	//TODO: check if we _should_ be emitting stats
 	go ifce.emitStats(ctx, c.GetDuration("stats.interval", time.Second*10))
 
-	attachCommands(l, c, ssh, hostMap, handshakeManager.pendingHostMap, lightHouse, ifce)
+	attachCommands(l, c, ssh, ifce)
 
 	// Start DNS server last to allow using the nebula IP as lighthouse.dns.host
 	var dnsStart func()
@@ -339,5 +302,14 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		dnsStart = dnsMain(l, hostMap, c)
 	}
 
-	return &Control{ifce, l, cancel, sshStart, statsStart, dnsStart}, nil
+	return &Control{
+		ifce,
+		l,
+		ctx,
+		cancel,
+		sshStart,
+		statsStart,
+		dnsStart,
+		lightHouse.StartUpdateWorker,
+	}, nil
 }

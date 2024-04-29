@@ -2,10 +2,16 @@ package nebula
 
 import (
 	"bytes"
+	"context"
 	"net"
+	"net/netip"
 	"sort"
+	"strconv"
 	"sync"
+	"sync/atomic"
+	"time"
 
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
 )
@@ -55,6 +61,131 @@ type cacheV6 struct {
 	reported []*Ip6AndPort
 }
 
+type hostnamePort struct {
+	name string
+	port uint16
+}
+
+type hostnamesResults struct {
+	hostnames     []hostnamePort
+	network       string
+	lookupTimeout time.Duration
+	cancelFn      func()
+	l             *logrus.Logger
+	ips           atomic.Pointer[map[netip.AddrPort]struct{}]
+}
+
+func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, network string, timeout time.Duration, hostPorts []string, onUpdate func()) (*hostnamesResults, error) {
+	r := &hostnamesResults{
+		hostnames:     make([]hostnamePort, len(hostPorts)),
+		network:       network,
+		lookupTimeout: timeout,
+		l:             l,
+	}
+
+	// Fastrack IP addresses to ensure they're immediately available for use.
+	// DNS lookups for hostnames that aren't hardcoded IP's will happen in a background goroutine.
+	performBackgroundLookup := false
+	ips := map[netip.AddrPort]struct{}{}
+	for idx, hostPort := range hostPorts {
+
+		rIp, sPort, err := net.SplitHostPort(hostPort)
+		if err != nil {
+			return nil, err
+		}
+
+		iPort, err := strconv.Atoi(sPort)
+		if err != nil {
+			return nil, err
+		}
+
+		r.hostnames[idx] = hostnamePort{name: rIp, port: uint16(iPort)}
+		addr, err := netip.ParseAddr(rIp)
+		if err != nil {
+			// This address is a hostname, not an IP address
+			performBackgroundLookup = true
+			continue
+		}
+
+		// Save the IP address immediately
+		ips[netip.AddrPortFrom(addr, uint16(iPort))] = struct{}{}
+	}
+	r.ips.Store(&ips)
+
+	// Time for the DNS lookup goroutine
+	if performBackgroundLookup {
+		newCtx, cancel := context.WithCancel(ctx)
+		r.cancelFn = cancel
+		ticker := time.NewTicker(d)
+		go func() {
+			defer ticker.Stop()
+			for {
+				netipAddrs := map[netip.AddrPort]struct{}{}
+				for _, hostPort := range r.hostnames {
+					timeoutCtx, timeoutCancel := context.WithTimeout(ctx, r.lookupTimeout)
+					addrs, err := net.DefaultResolver.LookupNetIP(timeoutCtx, r.network, hostPort.name)
+					timeoutCancel()
+					if err != nil {
+						l.WithFields(logrus.Fields{"hostname": hostPort.name, "network": r.network}).WithError(err).Error("DNS resolution failed for static_map host")
+						continue
+					}
+					for _, a := range addrs {
+						netipAddrs[netip.AddrPortFrom(a, hostPort.port)] = struct{}{}
+					}
+				}
+				origSet := r.ips.Load()
+				different := false
+				for a := range *origSet {
+					if _, ok := netipAddrs[a]; !ok {
+						different = true
+						break
+					}
+				}
+				if !different {
+					for a := range netipAddrs {
+						if _, ok := (*origSet)[a]; !ok {
+							different = true
+							break
+						}
+					}
+				}
+				if different {
+					l.WithFields(logrus.Fields{"origSet": origSet, "newSet": netipAddrs}).Info("DNS results changed for host list")
+					r.ips.Store(&netipAddrs)
+					onUpdate()
+				}
+				select {
+				case <-newCtx.Done():
+					return
+				case <-ticker.C:
+					continue
+				}
+			}
+		}()
+	}
+
+	return r, nil
+}
+
+func (hr *hostnamesResults) Cancel() {
+	if hr != nil && hr.cancelFn != nil {
+		hr.cancelFn()
+	}
+}
+
+func (hr *hostnamesResults) GetIPs() []netip.AddrPort {
+	var retSlice []netip.AddrPort
+	if hr != nil {
+		p := hr.ips.Load()
+		if p != nil {
+			for k := range *p {
+				retSlice = append(retSlice, k)
+			}
+		}
+	}
+	return retSlice
+}
+
 // RemoteList is a unifying concept for lighthouse servers and clients as well as hostinfos.
 // It serves as a local cache of query replies, host update notifications, and locally learned addresses
 type RemoteList struct {
@@ -72,6 +203,9 @@ type RemoteList struct {
 	// For learned addresses, this is the vpnIp that sent the packet
 	cache map[iputil.VpnIp]*cache
 
+	hr        *hostnamesResults
+	shouldAdd func(netip.Addr) bool
+
 	// This is a list of remotes that we have tried to handshake with and have returned from the wrong vpn ip.
 	// They should not be tried again during a handshake
 	badRemotes []*udp.Addr
@@ -81,12 +215,19 @@ type RemoteList struct {
 }
 
 // NewRemoteList creates a new empty RemoteList
-func NewRemoteList() *RemoteList {
+func NewRemoteList(shouldAdd func(netip.Addr) bool) *RemoteList {
 	return &RemoteList{
-		addrs:  make([]*udp.Addr, 0),
-		relays: make([]*iputil.VpnIp, 0),
-		cache:  make(map[iputil.VpnIp]*cache),
+		addrs:     make([]*udp.Addr, 0),
+		relays:    make([]*iputil.VpnIp, 0),
+		cache:     make(map[iputil.VpnIp]*cache),
+		shouldAdd: shouldAdd,
 	}
+}
+
+func (r *RemoteList) unlockedSetHostnamesResults(hr *hostnamesResults) {
+	// Cancel any existing hostnamesResults DNS goroutine to release resources
+	r.hr.Cancel()
+	r.hr = hr
 }
 
 // Len locks and reports the size of the deduplicated address list
@@ -434,6 +575,17 @@ func (r *RemoteList) unlockedCollect() {
 				ip := iputil.VpnIp(v)
 				relays = append(relays, &ip)
 			}
+		}
+	}
+
+	dnsAddrs := r.hr.GetIPs()
+	for _, addr := range dnsAddrs {
+		if r.shouldAdd == nil || r.shouldAdd(addr.Addr()) {
+			v6 := addr.Addr().As16()
+			addrs = append(addrs, &udp.Addr{
+				IP:   v6[:],
+				Port: addr.Port(),
+			})
 		}
 	}
 

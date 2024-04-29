@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/test"
@@ -14,96 +15,55 @@ import (
 
 func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	l := test.NewLogger()
-	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
 	ip := iputil.Ip2VpnIp(net.ParseIP("172.1.1.2"))
 	preferredRanges := []*net.IPNet{localrange}
-	mw := &mockEncWriter{}
-	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
+	mainHM := newHostMap(l, vpncidr)
+	mainHM.preferredRanges.Store(&preferredRanges)
+
 	lh := newTestLighthouse()
 
-	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, lh, &udp.Conn{}, defaultHandshakeConfig)
-
-	now := time.Now()
-	blah.NextOutboundHandshakeTimerTick(now, mw)
-
-	var initCalled bool
-	initFunc := func(*HostInfo) {
-		initCalled = true
+	cs := &CertState{
+		RawCertificate:      []byte{},
+		PrivateKey:          []byte{},
+		Certificate:         &cert.NebulaCertificate{},
+		RawCertificateNoKey: []byte{},
 	}
 
-	i := blah.AddVpnIp(ip, initFunc)
-	assert.True(t, initCalled)
+	blah := NewHandshakeManager(l, mainHM, lh, &udp.NoopConn{}, defaultHandshakeConfig)
+	blah.f = &Interface{handshakeManager: blah, pki: &PKI{}, l: l}
+	blah.f.pki.cs.Store(cs)
 
-	initCalled = false
-	i2 := blah.AddVpnIp(ip, initFunc)
-	assert.False(t, initCalled)
+	now := time.Now()
+	blah.NextOutboundHandshakeTimerTick(now)
+
+	i := blah.StartHandshake(ip, nil)
+	i2 := blah.StartHandshake(ip, nil)
 	assert.Same(t, i, i2)
 
-	i.remotes = NewRemoteList()
-	i.HandshakeReady = true
+	i.remotes = NewRemoteList(nil)
 
 	// Adding something to pending should not affect the main hostmap
 	assert.Len(t, mainHM.Hosts, 0)
 
 	// Confirm they are in the pending index list
-	assert.Contains(t, blah.pendingHostMap.Hosts, ip)
+	assert.Contains(t, blah.vpnIps, ip)
 
 	// Jump ahead `HandshakeRetries` ticks, offset by one to get the sleep logic right
 	for i := 1; i <= DefaultHandshakeRetries+1; i++ {
 		now = now.Add(time.Duration(i) * DefaultHandshakeTryInterval)
-		blah.NextOutboundHandshakeTimerTick(now, mw)
+		blah.NextOutboundHandshakeTimerTick(now)
 	}
 
 	// Confirm they are still in the pending index list
-	assert.Contains(t, blah.pendingHostMap.Hosts, ip)
+	assert.Contains(t, blah.vpnIps, ip)
 
 	// Tick 1 more time, a minute will certainly flush it out
-	blah.NextOutboundHandshakeTimerTick(now.Add(time.Minute), mw)
+	blah.NextOutboundHandshakeTimerTick(now.Add(time.Minute))
 
 	// Confirm they have been removed
-	assert.NotContains(t, blah.pendingHostMap.Hosts, ip)
-}
-
-func Test_NewHandshakeManagerTrigger(t *testing.T) {
-	l := test.NewLogger()
-	_, tuncidr, _ := net.ParseCIDR("172.1.1.1/24")
-	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
-	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
-	ip := iputil.Ip2VpnIp(net.ParseIP("172.1.1.2"))
-	preferredRanges := []*net.IPNet{localrange}
-	mw := &mockEncWriter{}
-	mainHM := NewHostMap(l, "test", vpncidr, preferredRanges)
-	lh := newTestLighthouse()
-
-	blah := NewHandshakeManager(l, tuncidr, preferredRanges, mainHM, lh, &udp.Conn{}, defaultHandshakeConfig)
-
-	now := time.Now()
-	blah.NextOutboundHandshakeTimerTick(now, mw)
-
-	assert.Equal(t, 0, testCountTimerWheelEntries(blah.OutboundHandshakeTimer))
-
-	hi := blah.AddVpnIp(ip, nil)
-	hi.HandshakeReady = true
-	assert.Equal(t, 1, testCountTimerWheelEntries(blah.OutboundHandshakeTimer))
-	assert.Equal(t, 0, hi.HandshakeCounter, "Should not have attempted a handshake yet")
-
-	// Trigger the same method the channel will but, this should set our remotes pointer
-	blah.handleOutbound(ip, mw, true)
-	assert.Equal(t, 1, hi.HandshakeCounter, "Trigger should have done a handshake attempt")
-	assert.NotNil(t, hi.remotes, "Manager should have set my remotes pointer")
-
-	// Make sure the trigger doesn't double schedule the timer entry
-	assert.Equal(t, 1, testCountTimerWheelEntries(blah.OutboundHandshakeTimer))
-
-	uaddr := udp.NewAddrFromString("10.1.1.1:4242")
-	hi.remotes.unlockedPrependV4(ip, NewIp4AndPort(uaddr.IP, uint32(uaddr.Port)))
-
-	// We now have remotes but only the first trigger should have pushed things forward
-	blah.handleOutbound(ip, mw, true)
-	assert.Equal(t, 1, hi.HandshakeCounter, "Trigger should have not done a handshake attempt")
-	assert.Equal(t, 1, testCountTimerWheelEntries(blah.OutboundHandshakeTimer))
+	assert.NotContains(t, blah.vpnIps, ip)
 }
 
 func testCountTimerWheelEntries(tw *LockingTimerWheel[iputil.VpnIp]) (c int) {
@@ -124,7 +84,11 @@ func (mw *mockEncWriter) SendMessageToVpnIp(t header.MessageType, st header.Mess
 	return
 }
 
-func (mw *mockEncWriter) SendVia(via interface{}, relay interface{}, ad, nb, out []byte, nocopy bool) {
+func (mw *mockEncWriter) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, nocopy bool) {
+	return
+}
+
+func (mw *mockEncWriter) SendMessageToHostInfo(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte) {
 	return
 }
 

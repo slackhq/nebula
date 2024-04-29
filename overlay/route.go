@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"net"
@@ -14,14 +15,44 @@ import (
 )
 
 type Route struct {
-	MTU    int
-	Metric int
-	Cidr   *net.IPNet
-	Via    *iputil.VpnIp
+	MTU     int
+	Metric  int
+	Cidr    *net.IPNet
+	Via     *iputil.VpnIp
+	Install bool
 }
 
-func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*cidr.Tree4, error) {
-	routeTree := cidr.NewTree4()
+// Equal determines if a route that could be installed in the system route table is equal to another
+// Via is ignored since that is only consumed within nebula itself
+func (r Route) Equal(t Route) bool {
+	if !r.Cidr.IP.Equal(t.Cidr.IP) {
+		return false
+	}
+	if !bytes.Equal(r.Cidr.Mask, t.Cidr.Mask) {
+		return false
+	}
+	if r.Metric != t.Metric {
+		return false
+	}
+	if r.MTU != t.MTU {
+		return false
+	}
+	if r.Install != t.Install {
+		return false
+	}
+	return true
+}
+
+func (r Route) String() string {
+	s := r.Cidr.String()
+	if r.Metric != 0 {
+		s += fmt.Sprintf(" metric: %v", r.Metric)
+	}
+	return s
+}
+
+func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*cidr.Tree4[iputil.VpnIp], error) {
+	routeTree := cidr.NewTree4[iputil.VpnIp]()
 	for _, r := range routes {
 		if !allowMTU && r.MTU > 0 {
 			l.WithField("route", r).Warnf("route MTU is not supported in %s", runtime.GOOS)
@@ -81,7 +112,8 @@ func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 		}
 
 		r := Route{
-			MTU: mtu,
+			Install: true,
+			MTU:     mtu,
 		}
 
 		_, r.Cidr, err = net.ParseCIDR(fmt.Sprintf("%v", rRoute))
@@ -182,10 +214,20 @@ func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 
 		viaVpnIp := iputil.Ip2VpnIp(nVia)
 
+		install := true
+		rInstall, ok := m["install"]
+		if ok {
+			install, err = strconv.ParseBool(fmt.Sprintf("%v", rInstall))
+			if err != nil {
+				return nil, fmt.Errorf("entry %v.install in tun.unsafe_routes is not a boolean: %v", i+1, err)
+			}
+		}
+
 		r := Route{
-			Via:    &viaVpnIp,
-			MTU:    mtu,
-			Metric: metric,
+			Via:     &viaVpnIp,
+			MTU:     mtu,
+			Metric:  metric,
+			Install: install,
 		}
 
 		_, r.Cidr, err = net.ParseCIDR(fmt.Sprintf("%v", rRoute))

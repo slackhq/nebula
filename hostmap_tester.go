@@ -19,6 +19,6 @@ func (i *HostInfo) GetRemoteIndex() uint32 {
 	return i.remoteIndexId
 }
 
-func (i *HostInfo) GetRelayState() RelayState {
-	return i.relayState
+func (i *HostInfo) GetRelayState() *RelayState {
+	return &i.relayState
 }

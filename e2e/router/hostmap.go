@@ -5,9 +5,11 @@ package router
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/slackhq/nebula"
+	"github.com/slackhq/nebula/iputil"
 )
 
 type edge struct {
@@ -61,10 +63,14 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 	r := fmt.Sprintf("\tsubgraph %s[\"%s (%s)\"]\n", clusterName, clusterName, clusterVpnIp)
 
 	hm := c.GetHostmap()
+	hm.RLock()
+	defer hm.RUnlock()
 
 	// Draw the vpn to index nodes
 	r += fmt.Sprintf("\t\tsubgraph %s.hosts[\"Hosts (vpn ip to index)\"]\n", clusterName)
-	for vpnIp, hi := range hm.Hosts {
+	hosts := sortedHosts(hm.Hosts)
+	for _, vpnIp := range hosts {
+		hi := hm.Hosts[vpnIp]
 		r += fmt.Sprintf("\t\t\t%v.%v[\"%v\"]\n", clusterName, vpnIp, vpnIp)
 		lines = append(lines, fmt.Sprintf("%v.%v --> %v.%v", clusterName, vpnIp, clusterName, hi.GetLocalIndex()))
 
@@ -91,11 +97,15 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 
 	// Draw the local index to relay or remote index nodes
 	r += fmt.Sprintf("\t\tsubgraph indexes.%s[\"Indexes (index to hostinfo)\"]\n", clusterName)
-	for idx, hi := range hm.Indexes {
-		r += fmt.Sprintf("\t\t\t%v.%v[\"%v (%v)\"]\n", clusterName, idx, idx, hi.GetVpnIp())
-		remoteClusterName := strings.Trim(hi.GetCert().Details.Name, " ")
-		globalLines = append(globalLines, &edge{from: fmt.Sprintf("%v.%v", clusterName, idx), to: fmt.Sprintf("%v.%v", remoteClusterName, hi.GetRemoteIndex())})
-		_ = hi
+	indexes := sortedIndexes(hm.Indexes)
+	for _, idx := range indexes {
+		hi, ok := hm.Indexes[idx]
+		if ok {
+			r += fmt.Sprintf("\t\t\t%v.%v[\"%v (%v)\"]\n", clusterName, idx, idx, hi.GetVpnIp())
+			remoteClusterName := strings.Trim(hi.GetCert().Details.Name, " ")
+			globalLines = append(globalLines, &edge{from: fmt.Sprintf("%v.%v", clusterName, idx), to: fmt.Sprintf("%v.%v", remoteClusterName, hi.GetRemoteIndex())})
+			_ = hi
+		}
 	}
 	r += "\t\tend\n"
 
@@ -106,4 +116,30 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 
 	r += "\tend\n"
 	return r, globalLines
+}
+
+func sortedHosts(hosts map[iputil.VpnIp]*nebula.HostInfo) []iputil.VpnIp {
+	keys := make([]iputil.VpnIp, 0, len(hosts))
+	for key := range hosts {
+		keys = append(keys, key)
+	}
+
+	sort.SliceStable(keys, func(i, j int) bool {
+		return keys[i] > keys[j]
+	})
+
+	return keys
+}
+
+func sortedIndexes(indexes map[uint32]*nebula.HostInfo) []uint32 {
+	keys := make([]uint32, 0, len(indexes))
+	for key := range indexes {
+		keys = append(keys, key)
+	}
+
+	sort.SliceStable(keys, func(i, j int) bool {
+		return keys[i] > keys[j]
+	})
+
+	return keys
 }

@@ -5,6 +5,11 @@ option go_package = "github.com/slackhq/nebula/cert";
 
 //import "google/protobuf/timestamp.proto";
 
+enum Curve {
+  CURVE25519 = 0;
+  P256 = 1;
+}
+
 message RawNebulaCertificate {
     RawNebulaCertificateDetails Details = 1;
     bytes Signature = 2;
@@ -26,4 +31,24 @@ message RawNebulaCertificateDetails {
 
     // sha-256 of the issuer certificate, if this field is blank the cert is self-signed
     bytes Issuer = 9;
+
+    Curve curve = 100;
+}
+
+message RawNebulaEncryptedData {
+	RawNebulaEncryptionMetadata EncryptionMetadata = 1;
+	bytes Ciphertext = 2;
+}
+
+message RawNebulaEncryptionMetadata {
+	string EncryptionAlgorithm = 1;
+	RawNebulaArgon2Parameters Argon2Parameters = 2;
+}
+
+message RawNebulaArgon2Parameters {
+	int32 version = 1; // rune in Go
+	uint32 memory = 2;
+	uint32 parallelism = 4; // uint8 in Go
+	uint32 iterations = 3;
+	bytes salt = 5;
 }

@@ -13,9 +13,9 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/udp"
@@ -25,24 +25,27 @@ const mtu = 9001
 
 type InterfaceConfig struct {
 	HostMap                 *HostMap
-	Outside                 *udp.Conn
+	Outside                 udp.Conn
 	Inside                  overlay.Device
-	certState               *CertState
+	pki                     *PKI
 	Cipher                  string
 	Firewall                *Firewall
 	ServeDns                bool
 	HandshakeManager        *HandshakeManager
 	lightHouse              *LightHouse
-	checkInterval           int
-	pendingDeletionInterval int
+	checkInterval           time.Duration
+	pendingDeletionInterval time.Duration
 	DropLocalBroadcast      bool
 	DropMulticast           bool
 	routines                int
 	MessageMetrics          *MessageMetrics
 	version                 string
-	caPool                  *cert.NebulaCAPool
-	disconnectInvalid       bool
 	relayManager            *relayManager
+	punchy                  *Punchy
+
+	tryPromoteEvery uint32
+	reQueryEvery    uint32
+	reQueryWait     time.Duration
 
 	ConntrackCacheTimeout time.Duration
 	l                     *logrus.Logger
@@ -50,9 +53,9 @@ type InterfaceConfig struct {
 
 type Interface struct {
 	hostMap            *HostMap
-	outside            *udp.Conn
+	outside            udp.Conn
 	inside             overlay.Device
-	certState          *CertState
+	pki                *PKI
 	cipher             string
 	firewall           *Firewall
 	connectionManager  *connectionManager
@@ -65,10 +68,13 @@ type Interface struct {
 	dropLocalBroadcast bool
 	dropMulticast      bool
 	routines           int
-	caPool             *cert.NebulaCAPool
-	disconnectInvalid  bool
+	disconnectInvalid  atomic.Bool
 	closed             atomic.Bool
 	relayManager       *relayManager
+
+	tryPromoteEvery atomic.Uint32
+	reQueryEvery    atomic.Uint32
+	reQueryWait     atomic.Int64
 
 	sendRecvErrorConfig sendRecvErrorConfig
 
@@ -78,7 +84,7 @@ type Interface struct {
 
 	conntrackCacheTimeout time.Duration
 
-	writers []*udp.Conn
+	writers []udp.Conn
 	readers []io.ReadWriteCloser
 
 	metricHandshakes    metrics.Histogram
@@ -86,6 +92,19 @@ type Interface struct {
 	cachedPacketMetrics *cachedPacketMetrics
 
 	l *logrus.Logger
+}
+
+type EncWriter interface {
+	SendVia(via *HostInfo,
+		relay *Relay,
+		ad,
+		nb,
+		out []byte,
+		nocopy bool,
+	)
+	SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, nb, out []byte)
+	SendMessageToHostInfo(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte)
+	Handshake(vpnIp iputil.VpnIp)
 }
 
 type sendRecvErrorConfig uint8
@@ -129,34 +148,33 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	if c.Inside == nil {
 		return nil, errors.New("no inside interface (tun)")
 	}
-	if c.certState == nil {
+	if c.pki == nil {
 		return nil, errors.New("no certificate state")
 	}
 	if c.Firewall == nil {
 		return nil, errors.New("no firewall rules")
 	}
 
-	myVpnIp := iputil.Ip2VpnIp(c.certState.certificate.Details.Ips[0].IP)
+	certificate := c.pki.GetCertState().Certificate
+	myVpnIp := iputil.Ip2VpnIp(certificate.Details.Ips[0].IP)
 	ifce := &Interface{
+		pki:                c.pki,
 		hostMap:            c.HostMap,
 		outside:            c.Outside,
 		inside:             c.Inside,
-		certState:          c.certState,
 		cipher:             c.Cipher,
 		firewall:           c.Firewall,
 		serveDns:           c.ServeDns,
 		handshakeManager:   c.HandshakeManager,
 		createTime:         time.Now(),
 		lightHouse:         c.lightHouse,
-		localBroadcast:     myVpnIp | ^iputil.Ip2VpnIp(c.certState.certificate.Details.Ips[0].Mask),
+		localBroadcast:     myVpnIp | ^iputil.Ip2VpnIp(certificate.Details.Ips[0].Mask),
 		dropLocalBroadcast: c.DropLocalBroadcast,
 		dropMulticast:      c.DropMulticast,
 		routines:           c.routines,
 		version:            c.version,
-		writers:            make([]*udp.Conn, c.routines),
+		writers:            make([]udp.Conn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
-		caPool:             c.caPool,
-		disconnectInvalid:  c.disconnectInvalid,
 		myVpnIp:            myVpnIp,
 		relayManager:       c.relayManager,
 
@@ -172,7 +190,11 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		l: c.l,
 	}
 
-	ifce.connectionManager = newConnectionManager(ctx, c.l, ifce, c.checkInterval, c.pendingDeletionInterval)
+	ifce.tryPromoteEvery.Store(c.tryPromoteEvery)
+	ifce.reQueryEvery.Store(c.reQueryEvery)
+	ifce.reQueryWait.Store(int64(c.reQueryWait))
+
+	ifce.connectionManager = newConnectionManager(ctx, c.l, ifce, c.checkInterval, c.pendingDeletionInterval, c.punchy)
 
 	return ifce, nil
 }
@@ -190,6 +212,7 @@ func (f *Interface) activate() {
 
 	f.l.WithField("interface", f.inside.Name()).WithField("network", f.inside.Cidr().String()).
 		WithField("build", f.version).WithField("udpAddr", addr).
+		WithField("boringcrypto", boringEnabled()).
 		Info("Nebula interface is active")
 
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
@@ -227,7 +250,7 @@ func (f *Interface) run() {
 func (f *Interface) listenOut(i int) {
 	runtime.LockOSThread()
 
-	var li *udp.Conn
+	var li udp.Conn
 	// TODO clean this up with a coherent interface for each outside connection
 	if i > 0 {
 		li = f.writers[i]
@@ -237,7 +260,7 @@ func (f *Interface) listenOut(i int) {
 
 	lhh := f.lightHouse.NewRequestHandler()
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
-	li.ListenOut(f.readOutsidePackets, lhh.HandleRequest, conntrackCache, i)
+	li.ListenOut(readOutsidePackets(f), lhHandleRequest(lhh, f), conntrackCache, i)
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
@@ -267,46 +290,24 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 }
 
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
-	c.RegisterReloadCallback(f.reloadCA)
-	c.RegisterReloadCallback(f.reloadCertKey)
 	c.RegisterReloadCallback(f.reloadFirewall)
 	c.RegisterReloadCallback(f.reloadSendRecvError)
+	c.RegisterReloadCallback(f.reloadDisconnectInvalid)
+	c.RegisterReloadCallback(f.reloadMisc)
+
 	for _, udpConn := range f.writers {
 		c.RegisterReloadCallback(udpConn.ReloadConfig)
 	}
 }
 
-func (f *Interface) reloadCA(c *config.C) {
-	// reload and check regardless
-	// todo: need mutex?
-	newCAs, err := loadCAFromConfig(f.l, c)
-	if err != nil {
-		f.l.WithError(err).Error("Could not refresh trusted CA certificates")
-		return
+func (f *Interface) reloadDisconnectInvalid(c *config.C) {
+	initial := c.InitialLoad()
+	if initial || c.HasChanged("pki.disconnect_invalid") {
+		f.disconnectInvalid.Store(c.GetBool("pki.disconnect_invalid", true))
+		if !initial {
+			f.l.Infof("pki.disconnect_invalid changed to %v", f.disconnectInvalid.Load())
+		}
 	}
-
-	f.caPool = newCAs
-	f.l.WithField("fingerprints", f.caPool.GetFingerprints()).Info("Trusted CA certificates refreshed")
-}
-
-func (f *Interface) reloadCertKey(c *config.C) {
-	// reload and check in all cases
-	cs, err := NewCertStateFromConfig(c)
-	if err != nil {
-		f.l.WithError(err).Error("Could not refresh client cert")
-		return
-	}
-
-	// did IP in cert change? if so, don't set
-	oldIPs := f.certState.certificate.Details.Ips
-	newIPs := cs.certificate.Details.Ips
-	if len(oldIPs) > 0 && len(newIPs) > 0 && oldIPs[0].String() != newIPs[0].String() {
-		f.l.WithField("new_ip", newIPs[0]).WithField("old_ip", oldIPs[0]).Error("IP in new cert was different from old")
-		return
-	}
-
-	f.certState = cs
-	f.l.WithField("cert", cs.certificate).Info("Client cert refreshed from disk")
 }
 
 func (f *Interface) reloadFirewall(c *config.C) {
@@ -316,7 +317,7 @@ func (f *Interface) reloadFirewall(c *config.C) {
 		return
 	}
 
-	fw, err := NewFirewallFromConfig(f.l, f.certState.certificate, c)
+	fw, err := NewFirewallFromConfig(f.l, f.pki.GetCertState().Certificate, c)
 	if err != nil {
 		f.l.WithError(err).Error("Error while creating firewall during reload")
 		return
@@ -331,8 +332,8 @@ func (f *Interface) reloadFirewall(c *config.C) {
 	// If rulesVersion is back to zero, we have wrapped all the way around. Be
 	// safe and just reset conntrack in this case.
 	if fw.rulesVersion == 0 {
-		f.l.WithField("firewallHash", fw.GetRuleHash()).
-			WithField("oldFirewallHash", oldFw.GetRuleHash()).
+		f.l.WithField("firewallHashes", fw.GetRuleHashes()).
+			WithField("oldFirewallHashes", oldFw.GetRuleHashes()).
 			WithField("rulesVersion", fw.rulesVersion).
 			Warn("firewall rulesVersion has overflowed, resetting conntrack")
 	} else {
@@ -342,8 +343,8 @@ func (f *Interface) reloadFirewall(c *config.C) {
 	f.firewall = fw
 
 	oldFw.Destroy()
-	f.l.WithField("firewallHash", fw.GetRuleHash()).
-		WithField("oldFirewallHash", oldFw.GetRuleHash()).
+	f.l.WithField("firewallHashes", fw.GetRuleHashes()).
+		WithField("oldFirewallHashes", oldFw.GetRuleHashes()).
 		WithField("rulesVersion", fw.rulesVersion).
 		Info("New firewall has been installed")
 }
@@ -372,11 +373,33 @@ func (f *Interface) reloadSendRecvError(c *config.C) {
 	}
 }
 
+func (f *Interface) reloadMisc(c *config.C) {
+	if c.HasChanged("counters.try_promote") {
+		n := c.GetUint32("counters.try_promote", defaultPromoteEvery)
+		f.tryPromoteEvery.Store(n)
+		f.l.Info("counters.try_promote has changed")
+	}
+
+	if c.HasChanged("counters.requery_every_packets") {
+		n := c.GetUint32("counters.requery_every_packets", defaultReQueryEvery)
+		f.reQueryEvery.Store(n)
+		f.l.Info("counters.requery_every_packets has changed")
+	}
+
+	if c.HasChanged("timers.requery_wait_duration") {
+		n := c.GetDuration("timers.requery_wait_duration", defaultReQueryWait)
+		f.reQueryWait.Store(int64(n))
+		f.l.Info("timers.requery_wait_duration has changed")
+	}
+}
+
 func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 	ticker := time.NewTicker(i)
 	defer ticker.Stop()
 
 	udpStats := udp.NewUDPStatsEmitter(f.writers)
+
+	certExpirationGauge := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil)
 
 	for {
 		select {
@@ -386,12 +409,20 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 			f.firewall.EmitStats()
 			f.handshakeManager.EmitStats()
 			udpStats()
+			certExpirationGauge.Update(int64(f.pki.GetCertState().Certificate.Details.NotAfter.Sub(time.Now()) / time.Second))
 		}
 	}
 }
 
 func (f *Interface) Close() error {
 	f.closed.Store(true)
+
+	for _, u := range f.writers {
+		err := u.Close()
+		if err != nil {
+			f.l.WithError(err).Error("Error while closing udp socket")
+		}
+	}
 
 	// Release the tun device
 	return f.inside.Close()
