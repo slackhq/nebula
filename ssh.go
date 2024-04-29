@@ -51,6 +51,11 @@ type sshCreateTunnelFlags struct {
 	Address string
 }
 
+type sshDeviceInfoFlags struct {
+	Json   bool
+	Pretty bool
+}
+
 func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) {
 	c.RegisterReloadCallback(func(c *config.C) {
 		if c.GetBool("sshd.enabled", false) {
@@ -283,6 +288,21 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Inter
 		ShortDescription: "Prints the currently running version of nebula",
 		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
 			return sshVersion(f, fs, a, w)
+		},
+	})
+
+	ssh.RegisterCommand(&sshd.Command{
+		Name:             "device-info",
+		ShortDescription: "Prints information about the network device.",
+		Flags: func() (*flag.FlagSet, interface{}) {
+			fl := flag.NewFlagSet("", flag.ContinueOnError)
+			s := sshDeviceInfoFlags{}
+			fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
+			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
+			return fl, &s
+		},
+		Callback: func(fs interface{}, a []string, w sshd.StringWriter) error {
+			return sshDeviceInfo(f, fs, w)
 		},
 	})
 
@@ -940,6 +960,33 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 	}
 
 	return enc.Encode(copyHostInfo(hostInfo, ifce.hostMap.GetPreferredRanges()))
+}
+
+func sshDeviceInfo(ifce *Interface, fs interface{}, w sshd.StringWriter) error {
+
+	data := struct {
+		Name string `json:"name"`
+		Cidr string `json:"cidr"`
+	}{
+		Name: ifce.inside.Name(),
+		Cidr: ifce.inside.Cidr().String(),
+	}
+
+	flags, ok := fs.(*sshDeviceInfoFlags)
+	if !ok {
+		return fmt.Errorf("internal error: expected flags to be sshDeviceInfoFlags but was %+v", fs)
+	}
+
+	if flags.Json || flags.Pretty {
+		js := json.NewEncoder(w.GetWriter())
+		if flags.Pretty {
+			js.SetIndent("", "    ")
+		}
+
+		return js.Encode(data)
+	} else {
+		return w.WriteLine(fmt.Sprintf("name=%v cidr=%v", data.Name, data.Cidr))
+	}
 }
 
 func sshReload(c *config.C, w sshd.StringWriter) error {
