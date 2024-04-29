@@ -244,7 +244,10 @@ tun:
 # TODO
 # Configure logging level
 logging:
-  # panic, fatal, error, warning, info, or debug. Default is info
+  # panic, fatal, error, warning, info, or debug. Default is info and is reloadable.
+  #NOTE: Debug mode can log remotely controlled/untrusted data which can quickly fill a disk in some
+  # scenarios. Debug logging is also CPU intensive and will decrease performance overall.
+  # Only enable debug logging while actively investigating an issue.
   level: info
   # json or text formats currently available. Default is text
   format: text
