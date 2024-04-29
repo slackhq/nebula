@@ -90,9 +90,14 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 
 	remoteCert, err := RecombineCertAndValidate(ci.H, hs.Details.Cert, f.pki.GetCAPool())
 	if err != nil {
-		f.l.WithError(err).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Info("Invalid certificate from host")
+		e := f.l.WithError(err).WithField("udpAddr", addr).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"})
+
+		if f.l.Level > logrus.DebugLevel {
+			e = e.WithField("cert", remoteCert)
+		}
+
+		e.Info("Invalid certificate from host")
 		return
 	}
 	vpnIp := iputil.Ip2VpnIp(remoteCert.Details.Ips[0].IP)
@@ -372,9 +377,14 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hh *Handsha
 
 	remoteCert, err := RecombineCertAndValidate(ci.H, hs.Details.Cert, f.pki.GetCAPool())
 	if err != nil {
-		f.l.WithError(err).WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			Error("Invalid certificate from host")
+		e := f.l.WithError(err).WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).
+			WithField("handshake", m{"stage": 2, "style": "ix_psk0"})
+
+		if f.l.Level > logrus.DebugLevel {
+			e = e.WithField("cert", remoteCert)
+		}
+
+		e.Error("Invalid certificate from host")
 
 		// The handshake state machine is complete, if things break now there is no chance to recover. Tear down and start again
 		return true
