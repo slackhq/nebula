@@ -156,6 +156,11 @@ build/%/nebula-cert: .FORCE
 		GOARCH=$(word 2, $(subst -, ,$*)) $(GOENV) \
 		go build $(BUILD_ARGS) -o $@ -ldflags "$(LDFLAGS)" ./cmd/nebula-cert
 
+build/%/nebula-docker: .FORCE
+	GOOS=$(firstword $(subst -, , $*)) \
+		GOARCH=$(word 2, $(subst -, ,$*)) $(GOENV) \
+		go build $(BUILD_ARGS) -o $@ -ldflags "$(LDFLAGS)" ./cmd/nebula-docker
+
 build/%/nebula.exe: build/%/nebula
 	mv $< $@
 
@@ -168,8 +173,8 @@ build/nebula-%.tar.gz: build/%/nebula build/%/nebula-cert
 build/nebula-%.zip: build/%/nebula.exe build/%/nebula-cert.exe
 	cd build/$* && zip ../nebula-$*.zip nebula.exe nebula-cert.exe
 
-docker/%: build/%/nebula build/%/nebula-cert
-	docker buildx build . $(DOCKER_BUILD_ARGS) -f docker/Dockerfile --platform "$(subst -,/,$*)" --build-arg SOURCEDIR="build/$*" --tag "${DOCKER_IMAGE_REPO}:${DOCKER_IMAGE_TAG}" --tag "${DOCKER_IMAGE_REPO}:$(BUILD_NUMBER)"
+docker/%: build/%/nebula-docker build/%/nebula-cert .FORCE
+	docker build . $(DOCKER_BUILD_ARGS) -f docker/Dockerfile --platform "$(subst -,/,$*)" --build-arg SOURCEDIR="build/$*" --tag "${DOCKER_IMAGE_REPO}:${DOCKER_IMAGE_TAG}" --tag "${DOCKER_IMAGE_REPO}:$(BUILD_NUMBER)"
 
 vet:
 	go vet $(VET_FLAGS) -v ./...
