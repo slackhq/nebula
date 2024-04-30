@@ -3,5 +3,5 @@
 Vagrant.configure("2") do |config|
   config.vm.box = "generic/freebsd14"
 
-  config.vm.synced_folder "../build", "/nebula"
+  config.vm.synced_folder "../build", "/nebula", type: "rsync"
 end
