@@ -3,7 +3,7 @@ FROM gcr.io/distroless/static:latest
 ARG TARGETPLATFORM
 ARG SOURCEDIR
 
-COPY $SOURCEDIR/nebula-docker /nebula
+COPY $SOURCEDIR/nebula /nebula
 COPY $SOURCEDIR/nebula-cert /nebula-cert
 
 VOLUME ["/config"]

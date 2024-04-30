@@ -87,7 +87,27 @@ func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU in
 func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []Route, txQueueLen int, multiqueue bool, useSystemRoutes bool) (*tun, error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
-		return nil, err
+		// If /dev/net/tun doesn't exist, try to create it (would happen in docker)
+		if os.IsNotExist(err) {
+			err = os.MkdirAll("/dev/net", 0755)
+			if err != nil {
+				return nil, fmt.Errorf("/dev/net/tun doesn't exist, failed to mkdir -p /dev/net: %w", err)
+			}
+			s, err := os.Stat("/dev/net/tun")
+			if err != nil || s.Mode().Type() != os.ModeCharDevice {
+				err = unix.Mknod("/dev/net/tun", unix.S_IFCHR|0600, int(unix.Mkdev(10, 200)))
+				if err != nil {
+					return nil, fmt.Errorf("failed to create /dev/net/tun: %w", err)
+				}
+			}
+
+			fd, err = unix.Open("/dev/net/tun", os.O_RDWR, 0)
+			if err != nil {
+				return nil, fmt.Errorf("created /dev/net/tun, but still failed: %w", err)
+			}
+		} else {
+			return nil, err
+		}
 	}
 
 	var req ifReq
