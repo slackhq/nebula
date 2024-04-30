@@ -129,7 +129,7 @@ docker exec host4 sh -c 'kill 1'
 docker exec host3 sh -c 'kill 1'
 docker exec host2 sh -c 'kill 1'
 docker exec lighthouse1 sh -c 'kill 1'
-sleep 1
+sleep 5
 
 if [ "$(jobs -r)" ]
 then

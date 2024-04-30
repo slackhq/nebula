@@ -10,43 +10,78 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/util"
 )
 
 type tun struct {
 	io.ReadWriteCloser
 	cidr      *net.IPNet
-	routeTree *cidr.Tree4[iputil.VpnIp]
+	Routes    atomic.Pointer[[]Route]
+	routeTree atomic.Pointer[cidr.Tree4[iputil.VpnIp]]
+	l         *logrus.Logger
 }
 
-func newTun(_ *logrus.Logger, _ string, _ *net.IPNet, _ int, _ []Route, _ int, _ bool, _ bool) (*tun, error) {
+func newTun(_ *config.C, _ *logrus.Logger, _ *net.IPNet, _ bool) (*tun, error) {
 	return nil, fmt.Errorf("newTun not supported in iOS")
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, _ int, routes []Route, _ int, _ bool) (*tun, error) {
-	routeTree, err := makeRouteTree(l, routes, false)
+func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, cidr *net.IPNet) (*tun, error) {
+	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
+	t := &tun{
+		cidr:            cidr,
+		ReadWriteCloser: &tunReadCloser{f: file},
+		l:               l,
+	}
+
+	err := t.reload(c, true)
 	if err != nil {
 		return nil, err
 	}
 
-	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
-	return &tun{
-		cidr:            cidr,
-		ReadWriteCloser: &tunReadCloser{f: file},
-		routeTree:       routeTree,
-	}, nil
+	c.RegisterReloadCallback(func(c *config.C) {
+		err := t.reload(c, false)
+		if err != nil {
+			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+		}
+	})
+
+	return t, nil
 }
 
 func (t *tun) Activate() error {
 	return nil
 }
 
+func (t *tun) reload(c *config.C, initial bool) error {
+	change, routes, err := getAllRoutesFromConfig(c, t.cidr, initial)
+	if err != nil {
+		return err
+	}
+
+	if !initial && !change {
+		return nil
+	}
+
+	routeTree, err := makeRouteTree(t.l, routes, false)
+	if err != nil {
+		return err
+	}
+
+	// Teach nebula how to handle the routes
+	t.Routes.Store(&routes)
+	t.routeTree.Store(routeTree)
+	return nil
+}
+
 func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	_, r := t.routeTree.MostSpecificContains(ip)
+	_, r := t.routeTree.Load().MostSpecificContains(ip)
 	return r
 }
 

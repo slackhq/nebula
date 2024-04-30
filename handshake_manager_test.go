@@ -19,7 +19,9 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
 	ip := iputil.Ip2VpnIp(net.ParseIP("172.1.1.2"))
 	preferredRanges := []*net.IPNet{localrange}
-	mainHM := NewHostMap(l, vpncidr, preferredRanges)
+	mainHM := newHostMap(l, vpncidr)
+	mainHM.preferredRanges.Store(&preferredRanges)
+
 	lh := newTestLighthouse()
 
 	cs := &CertState{
