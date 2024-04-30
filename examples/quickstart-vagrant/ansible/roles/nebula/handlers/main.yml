@@ -1,5 +1,0 @@
----
-# handlers file for nebula
-
-- name: restart nebula
-  service: name=nebula state=restarted
