@@ -115,6 +115,19 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 		return nil, fmt.Errorf("error while adding sshd.host_key: %s", err)
 	}
 
+	// Clear existing trusted CAs and authorized keys
+	ssh.ClearTrustedCAs()
+	ssh.ClearAuthorizedKeys()
+
+	rawCAs := c.GetStringSlice("sshd.trusted_cas", []string{})
+	for _, caAuthorizedKey := range rawCAs {
+		err := ssh.AddTrustedCA(caAuthorizedKey)
+		if err != nil {
+			l.WithError(err).WithField("sshCA", caAuthorizedKey).Warn("SSH CA had an error, ignoring")
+			continue
+		}
+	}
+
 	rawKeys := c.Get("sshd.authorized_users")
 	keys, ok := rawKeys.([]interface{})
 	if ok {
