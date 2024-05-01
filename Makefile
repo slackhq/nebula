@@ -160,7 +160,7 @@ build/nebula-%.tar.gz: build/%/nebula build/%/nebula-cert
 build/nebula-%.zip: build/%/nebula.exe build/%/nebula-cert.exe
 	cd build/$* && zip ../nebula-$*.zip nebula.exe nebula-cert.exe
 
-docker/%: build/%/nebula build/%/nebula-cert .FORCE
+docker/%: build/%/nebula build/%/nebula-cert
 	docker build . $(DOCKER_BUILD_ARGS) -f docker/Dockerfile --platform "$(subst -,/,$*)" --tag "${DOCKER_IMAGE_REPO}:${DOCKER_IMAGE_TAG}" --tag "${DOCKER_IMAGE_REPO}:$(BUILD_NUMBER)"
 
 vet:
