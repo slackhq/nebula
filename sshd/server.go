@@ -1,6 +1,7 @@
 package sshd
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net"
@@ -15,8 +16,11 @@ type SSHServer struct {
 	config *ssh.ServerConfig
 	l      *logrus.Entry
 
+	certChecker *ssh.CertChecker
+
 	// Map of user -> authorized keys
 	trustedKeys map[string]map[string]bool
+	trustedCAs  []ssh.PublicKey
 
 	// List of available commands
 	helpCommand *Command
@@ -31,6 +35,7 @@ type SSHServer struct {
 
 // NewSSHServer creates a new ssh server rigged with default commands and prepares to listen
 func NewSSHServer(l *logrus.Entry) (*SSHServer, error) {
+
 	s := &SSHServer{
 		trustedKeys: make(map[string]map[string]bool),
 		l:           l,
@@ -38,8 +43,43 @@ func NewSSHServer(l *logrus.Entry) (*SSHServer, error) {
 		conns:       make(map[int]*session),
 	}
 
+	cc := ssh.CertChecker{
+		IsUserAuthority: func(auth ssh.PublicKey) bool {
+			for _, ca := range s.trustedCAs {
+				if bytes.Equal(ca.Marshal(), auth.Marshal()) {
+					return true
+				}
+			}
+
+			return false
+		},
+		UserKeyFallback: func(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
+			pk := string(pubKey.Marshal())
+			fp := ssh.FingerprintSHA256(pubKey)
+
+			tk, ok := s.trustedKeys[c.User()]
+			if !ok {
+				return nil, fmt.Errorf("unknown user %s", c.User())
+			}
+
+			_, ok = tk[pk]
+			if !ok {
+				return nil, fmt.Errorf("unknown public key for %s (%s)", c.User(), fp)
+			}
+
+			return &ssh.Permissions{
+				// Record the public key used for authentication.
+				Extensions: map[string]string{
+					"fp":   fp,
+					"user": c.User(),
+				},
+			}, nil
+
+		},
+	}
+
 	s.config = &ssh.ServerConfig{
-		PublicKeyCallback: s.matchPubKey,
+		PublicKeyCallback: cc.Authenticate,
 		//TODO: AuthLogCallback: s.authAttempt,
 		//TODO: version string
 		ServerVersion: fmt.Sprintf("SSH-2.0-Nebula???"),
@@ -66,8 +106,24 @@ func (s *SSHServer) SetHostKey(hostPrivateKey []byte) error {
 	return nil
 }
 
+func (s *SSHServer) ClearTrustedCAs() {
+	s.trustedCAs = []ssh.PublicKey{}
+}
+
 func (s *SSHServer) ClearAuthorizedKeys() {
 	s.trustedKeys = make(map[string]map[string]bool)
+}
+
+// AddTrustedCA adds a trusted CA for user certificates
+func (s *SSHServer) AddTrustedCA(pubKey string) error {
+	pk, _, _, _, err := ssh.ParseAuthorizedKey([]byte(pubKey))
+	if err != nil {
+		return err
+	}
+
+	s.trustedCAs = append(s.trustedCAs, pk)
+	s.l.WithField("sshKey", pubKey).Info("Trusted CA key")
+	return nil
 }
 
 // AddAuthorizedKey adds an ssh public key for a user
@@ -177,27 +233,4 @@ func (s *SSHServer) closeSessions() {
 		c.Close()
 	}
 	s.connsLock.Unlock()
-}
-
-func (s *SSHServer) matchPubKey(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
-	pk := string(pubKey.Marshal())
-	fp := ssh.FingerprintSHA256(pubKey)
-
-	tk, ok := s.trustedKeys[c.User()]
-	if !ok {
-		return nil, fmt.Errorf("unknown user %s", c.User())
-	}
-
-	_, ok = tk[pk]
-	if !ok {
-		return nil, fmt.Errorf("unknown public key for %s (%s)", c.User(), fp)
-	}
-
-	return &ssh.Permissions{
-		// Record the public key used for authentication.
-		Extensions: map[string]string{
-			"fp":   fp,
-			"user": c.User(),
-		},
-	}, nil
 }

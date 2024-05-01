@@ -2,6 +2,7 @@ package util
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/sirupsen/logrus"
 )
@@ -40,7 +41,7 @@ func (ce *ContextualError) Error() string {
 	if ce.RealError == nil {
 		return ce.Context
 	}
-	return ce.RealError.Error()
+	return fmt.Errorf("%s (%v): %w", ce.Context, ce.Fields, ce.RealError).Error()
 }
 
 func (ce *ContextualError) Unwrap() error {

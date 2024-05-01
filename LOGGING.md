@@ -33,6 +33,5 @@ l.WithError(err).
     WithField("vpnIp", IntIp(hostinfo.hostId)).
     WithField("udpAddr", addr).
     WithField("handshake", m{"stage": 1, "style": "ix"}).
-    WithField("cert", remoteCert).
     Info("Invalid certificate from host")
 ```

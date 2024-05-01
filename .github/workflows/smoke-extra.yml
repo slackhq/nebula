@@ -1,0 +1,48 @@
+name: smoke-extra
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    types: [opened, synchronize, labeled, reopened]
+    paths:
+      - '.github/workflows/smoke**'
+      - '**Makefile'
+      - '**.go'
+      - '**.proto'
+      - 'go.mod'
+      - 'go.sum'
+jobs:
+
+  smoke-extra:
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'smoke-test-extra')
+    name: Run extra smoke tests
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+        check-latest: true
+
+    - name: install vagrant
+      run: sudo apt-get update && sudo apt-get install -y vagrant virtualbox
+
+    - name: freebsd-amd64
+      run: make smoke-vagrant/freebsd-amd64
+
+    - name: openbsd-amd64
+      run: make smoke-vagrant/openbsd-amd64
+
+    - name: netbsd-amd64
+      run: make smoke-vagrant/netbsd-amd64
+
+    - name: linux-386
+      run: make smoke-vagrant/linux-386
+
+    - name: linux-amd64-ipv6disable
+      run: make smoke-vagrant/linux-amd64-ipv6disable
+
+    timeout-minutes: 30

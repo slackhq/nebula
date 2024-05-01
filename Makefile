@@ -1,22 +1,14 @@
-GOMINVERSION = 1.20
 NEBULA_CMD_PATH = "./cmd/nebula"
-GO111MODULE = on
-export GO111MODULE
 CGO_ENABLED = 0
 export CGO_ENABLED
 
 # Set up OS specific bits
 ifeq ($(OS),Windows_NT)
-	#TODO: we should be able to ditch awk as well
-	GOVERSION := $(shell go version | awk "{print substr($$3, 3)}")
-	GOISMIN := $(shell IF "$(GOVERSION)" GEQ "$(GOMINVERSION)" ECHO 1)
 	NEBULA_CMD_SUFFIX = .exe
 	NULL_FILE = nul
 	# RIO on windows does pointer stuff that makes go vet angry
 	VET_FLAGS = -unsafeptr=false
 else
-	GOVERSION := $(shell go version | awk '{print substr($$3, 3)}')
-	GOISMIN := $(shell expr "$(GOVERSION)" ">=" "$(GOMINVERSION)")
 	NEBULA_CMD_SUFFIX =
 	NULL_FILE = /dev/null
 endif
@@ -51,7 +43,8 @@ ALL_LINUX = linux-amd64 \
 	linux-mips64 \
 	linux-mips64le \
 	linux-mips-softfloat \
-	linux-riscv64
+	linux-riscv64 \
+        linux-loong64
 
 ALL_FREEBSD = freebsd-amd64 \
 	freebsd-arm64
@@ -88,6 +81,8 @@ e2evvvv: e2ev
 
 e2e-bench: TEST_FLAGS = -bench=. -benchmem -run=^$
 e2e-bench: e2e
+
+DOCKER_BIN = build/linux-amd64/nebula build/linux-amd64/nebula-cert
 
 all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
 
@@ -181,6 +176,12 @@ test-cov-html:
 	go test -coverprofile=coverage.out
 	go tool cover -html=coverage.out
 
+build-test-mobile:
+	GOARCH=amd64 GOOS=ios go build $(shell go list ./... | grep -v '/cmd/\|/examples/')
+	GOARCH=arm64 GOOS=ios go build $(shell go list ./... | grep -v '/cmd/\|/examples/')
+	GOARCH=amd64 GOOS=android go build $(shell go list ./... | grep -v '/cmd/\|/examples/')
+	GOARCH=arm64 GOOS=android go build $(shell go list ./... | grep -v '/cmd/\|/examples/')
+
 bench:
 	go test -bench=.
 
@@ -225,6 +226,10 @@ smoke-docker-race: BUILD_ARGS = -race
 smoke-docker-race: CGO_ENABLED = 1
 smoke-docker-race: smoke-docker
 
+smoke-vagrant/%: bin-docker build/%/nebula
+	cd .github/workflows/smoke/ && ./build.sh $*
+	cd .github/workflows/smoke/ && ./smoke-vagrant.sh $*
+
 .FORCE:
-.PHONY: e2e e2ev e2evv e2evvv e2evvvv test test-cov-html bench bench-cpu bench-cpu-long bin proto release service smoke-docker smoke-docker-race
+.PHONY: bench bench-cpu bench-cpu-long bin build-test-mobile e2e e2ev e2evv e2evvv e2evvvv proto release service smoke-docker smoke-docker-race test test-cov-html smoke-vagrant/%
 .DEFAULT_GOAL := bin
