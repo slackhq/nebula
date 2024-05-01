@@ -1,10 +1,7 @@
 FROM gcr.io/distroless/static:latest
 
-ARG TARGETPLATFORM
-ARG SOURCEDIR
-
-COPY $SOURCEDIR/nebula /nebula
-COPY $SOURCEDIR/nebula-cert /nebula-cert
+COPY build/$TARGETOS-$TARGETARCH/nebula /nebula
+COPY build/$TARGETOS-$TARGETARCH/nebula-cert /nebula-cert
 
 VOLUME ["/config"]
 
