@@ -127,7 +127,7 @@ jobs:
       # Be sure to checkout the code before downloading artifacts, or they will
       # be overwritten
       - name: Checkout code
-      - uses: actions/checkout@v4
+        uses: actions/checkout@v4
 
       - name: Download artifacts
         uses: actions/download-artifact@v3
