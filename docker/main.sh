@@ -8,4 +8,4 @@ if [ ! -c /dev/net/tun ]; then
     chmod 600 /dev/net/tun
 fi
 
-nebula "$@"
+exec nebula "$@"
