@@ -19,8 +19,7 @@ jobs:
 
       - name: Build
         run: |
-          #make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" release-linux release-freebsd release-openbsd release-netbsd
-          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" build/nebula-linux-amd64.tar.gz build/nebula-linux-arm64.tar.gz
+          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" release-linux release-freebsd release-openbsd release-netbsd
           mkdir release
           mv build/*.tar.gz release
 
@@ -31,7 +30,6 @@ jobs:
           path: release
 
   build-windows:
-    if: false
     name: Build Windows
     runs-on: windows-latest
     steps:
@@ -63,7 +61,6 @@ jobs:
           path: build
 
   build-darwin:
-    if: false
     name: Build Universal Darwin
     env:
       HAS_SIGNING_CREDS: ${{ secrets.AC_USERNAME != '' }}
@@ -116,8 +113,7 @@ jobs:
     name: Create and Upload Docker Images
     # Technically we only need build-linux to succeed, but if any platforms fail we'll
     # want to investigate and restart the build
-    #needs: [build-linux, build-darwin, build-windows]
-    needs: [build-linux]
+    needs: [build-linux, build-darwin, build-windows]
     runs-on: ubuntu-latest
     env:
       HAS_DOCKER_CREDS: ${{ vars.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
@@ -160,7 +156,6 @@ jobs:
           docker buildx build . --push -f docker/Dockerfile --platform linux/amd64,linux/arm64 --tag "${DOCKER_IMAGE_REPO}:${DOCKER_IMAGE_TAG}" --tag "${DOCKER_IMAGE_REPO}:${GITHUB_REF#refs/tags/v}"
 
   release:
-    if: false
     name: Create and Upload Release
     needs: [build-linux, build-darwin, build-windows]
     runs-on: ubuntu-latest
