@@ -22,13 +22,8 @@ ifndef BUILD_NUMBER
 	endif
 endif
 
-ifndef DOCKER_IMAGE_REPO
-	DOCKER_IMAGE_REPO = nebulaoss/nebula
-endif
-ifndef DOCKER_IMAGE_TAG
-	DOCKER_IMAGE_TAG = latest
-endif
-
+DOCKER_IMAGE_REPO ?= nebulaoss/nebula
+DOCKER_IMAGE_TAG ?= latest
 LDFLAGS = -X main.Build=$(BUILD_NUMBER)
 
 ALL_LINUX = linux-amd64 \
