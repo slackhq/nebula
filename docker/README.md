@@ -2,7 +2,7 @@
 
 ## Building
 
-From the root of the repository, run `make all-docker`.
+From the root of the repository, run `make docker`.
 
 ## Running
 

@@ -31,7 +31,7 @@ ifndef BUILD_NUMBER
 endif
 
 ifndef DOCKER_IMAGE_REPO
-	DOCKER_IMAGE_REPO = nebula
+	DOCKER_IMAGE_REPO = nebulaoss/nebula
 endif
 ifndef DOCKER_IMAGE_TAG
 	DOCKER_IMAGE_TAG = latest
@@ -62,9 +62,6 @@ ALL_OPENBSD = openbsd-amd64 \
 ALL_NETBSD = netbsd-amd64 \
  	netbsd-arm64
 
-ALL_DOCKER = linux-amd64 \
-	linux-arm64
-
 ALL = $(ALL_LINUX) \
 	$(ALL_FREEBSD) \
 	$(ALL_OPENBSD) \
@@ -94,7 +91,7 @@ e2e-bench: e2e
 
 all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
 
-all-docker: $(ALL_DOCKER:%=docker/%)
+docker: docker/linux-$(shell go env GOARCH)
 
 release: $(ALL:%=build/nebula-%.tar.gz)
 
