@@ -24,6 +24,7 @@ endif
 
 DOCKER_IMAGE_REPO ?= nebulaoss/nebula
 DOCKER_IMAGE_TAG ?= latest
+
 LDFLAGS = -X main.Build=$(BUILD_NUMBER)
 
 ALL_LINUX = linux-amd64 \
