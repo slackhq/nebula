@@ -40,10 +40,10 @@ jobs:
     - name: Build test mobile
       run: make build-test-mobile
 
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
-        name: e2e packet flow
-        path: e2e/mermaid/
+        name: e2e packet flow linux-latest
+        path: e2e/mermaid/linux-latest
         if-no-files-found: warn
 
   test-linux-boringcrypto:
@@ -97,8 +97,8 @@ jobs:
     - name: End 2 end
       run: make e2evv
 
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
-        name: e2e packet flow
-        path: e2e/mermaid/
+        name: e2e packet flow ${{ matrix.os }}
+        path: e2e/mermaid/${{ matrix.os }}
         if-no-files-found: warn
