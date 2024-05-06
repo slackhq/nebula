@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2024-05-07
+
+### Added
+
+- Nebula now has an official Docker image `nebulaoss/nebula` that is
+  distroless and contains just the `nebula` and `nebula-cert` binaries. You
+  can find it here: https://hub.docker.com/r/nebulaoss/nebula (#1037)
+
+### Changed
+
+- We are now building with go1.22, which means that for Windows you need at
+  least Windows 10 or Windows Server 2016. This is because support for earlier
+  versions was removed in Go 1.21. See https://go.dev/doc/go1.21#windows (#981)
+
+### Fixed
+
 ## [1.8.2] - 2024-01-08
 
 ### Fixed
@@ -558,7 +574,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.8.2...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/slackhq/nebula/releases/tag/v1.9.0
 [1.8.2]: https://github.com/slackhq/nebula/releases/tag/v1.8.2
 [1.8.1]: https://github.com/slackhq/nebula/releases/tag/v1.8.1
 [1.8.0]: https://github.com/slackhq/nebula/releases/tag/v1.8.0
