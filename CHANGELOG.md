@@ -12,11 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Deprecated
 
 - This release adds a new setting `default_local_cidr_any` that defaults to
-  true to match previous behavior, but will default to false in a future
-  release. When set to false, `local_cidr` is matched correctly for firewall
-  rules on hosts acting as unsafe routers, and should be set for any firewall
-  rules you want to allow unsafe route hosts to access. See the issue and
-  example config for more details. (#1071, #1099)
+  true to match previous behavior, but will default to false in the next
+  release (1.10). When set to false, `local_cidr` is matched correctly for
+  firewall rules on hosts acting as unsafe routers, and should be set for any
+  firewall rules you want to allow unsafe route hosts to access. See the issue
+  and example config for more details. (#1071, #1099)
 
 ### Added
 
