@@ -9,19 +9,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.9.0] - 2024-05-07
 
+### Deprecated
+
+- This release adds a new setting `default_local_cidr_any` that defaults to
+  true to match previous behavior, but will default to false in a future
+  release. When set to false, `local_cidr` is matched correctly for firewall
+  rules on hosts acting as unsafe routers, and should be set for any firewall
+  rules you want to allow unsafe route hosts to access. See the issue and
+  example config for more details. (#1071, #1099)
+
 ### Added
 
 - Nebula now has an official Docker image `nebulaoss/nebula` that is
   distroless and contains just the `nebula` and `nebula-cert` binaries. You
   can find it here: https://hub.docker.com/r/nebulaoss/nebula (#1037)
 
+- Experimental binaries for `loong64` are now provided. (#1003)
+
+- Added example service script for OpenRC. (#711)
+
+- The SSH daemon now supports inlined host keys. (#1054)
+
+- The SSH daemon now supports certificates with `sshd.trusted_cas`. (#1098)
+
 ### Changed
+
+- Config setting `tun.unsafe_routes` is now reloadable. (#1083)
+
+- Allow `::` in `lighthouse.dns.host`. (#1115)
+
+- Small documentation and internal improvements. (#1065, #1067, #1069, #1108,
+  #1109, #1111, #1135)
+
+- Various dependency updates. (#1139, #1138, #1134, #1133, #1126, #1123, #1110,
+  #1094, #1092, #1087, #1086, #1085, #1072, #1063, #1059, #1055, #1053, #1047,
+  #1046, #1034, #1022)
+
+### Removed
+
+- Support for the deprecated `local_range` option has been removed. Please
+  change to `preferred_ranges` (which is also now reloadable). (#1043)
 
 - We are now building with go1.22, which means that for Windows you need at
   least Windows 10 or Windows Server 2016. This is because support for earlier
   versions was removed in Go 1.21. See https://go.dev/doc/go1.21#windows (#981)
 
+- Removed vagrant example, as it was unmaintained. (#1129)
+
+- Removed Fedora and Arch nebula.service files, as they are maintained in the
+  upstream repos. (#1128, #1132)
+
+- Remove the TCP round trip tracking metrics, as they never had correct data
+  and were an experiment to begin with. (#1114)
+
 ### Fixed
+
+- Fixed a potential deadlock introduced in 1.8.1. (#1112)
+
+- Fixed support for Linux when IPv6 has been disabled at the OS level. (#787)
+
+- DNS will return NXDOMAIN now when there are no results. (#845)
+
+- Capitalization of `NotAfter` fixed in DNS TXT response. (#1127)
+
+- Don't log invalid certificates. It is untrusted data and can cause a large
+  volume of logs. (#1116)
 
 ## [1.8.2] - 2024-01-08
 

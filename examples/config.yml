@@ -167,8 +167,7 @@ punchy:
 
 # Preferred ranges is used to define a hint about the local network ranges, which speeds up discovering the fastest
 # path to a network adjacent nebula node.
-# NOTE: the previous option "local_range" only allowed definition of a single range
-# and has been deprecated for "preferred_ranges"
+# This setting is reloadable.
 #preferred_ranges: ["172.16.0.0/24"]
 
 # sshd can expose informational and administrative functions via ssh. This can expose informational and administrative
@@ -233,6 +232,7 @@ tun:
   # `mtu`: will default to tun mtu if this option is not specified
   # `metric`: will default to 0 if this option is not specified
   # `install`: will default to true, controls whether this route is installed in the systems routing table.
+  # This setting is reloadable.
   unsafe_routes:
     #- route: 172.16.1.0/24
     #  via: 192.168.100.99
