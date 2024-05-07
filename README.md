@@ -54,7 +54,7 @@ Check the [releases](https://github.com/slackhq/nebula/releases/latest) page for
 
 - [Docker](https://hub.docker.com/r/nebulaoss/nebula)
     ```
-    $ docker run nebulaoss/nebula
+    $ docker pull nebulaoss/nebula
     ```
 
 #### Mobile
