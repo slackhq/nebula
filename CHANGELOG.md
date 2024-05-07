@@ -36,8 +36,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Config setting `tun.unsafe_routes` is now reloadable. (#1083)
 
-- Allow `::` in `lighthouse.dns.host`. (#1115)
-
 - Small documentation and internal improvements. (#1065, #1067, #1069, #1108,
   #1109, #1111, #1135)
 
@@ -69,6 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed support for Linux when IPv6 has been disabled at the OS level. (#787)
 
 - DNS will return NXDOMAIN now when there are no results. (#845)
+
+- Allow `::` in `lighthouse.dns.host`. (#1115)
 
 - Capitalization of `NotAfter` fixed in DNS TXT response. (#1127)
 
