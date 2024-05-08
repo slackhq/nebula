@@ -142,15 +142,22 @@ func (tree *Tree4[T]) MostSpecificContains(ip iputil.VpnIp) (ok bool, value T) {
 	return ok, value
 }
 
-// Match finds the most specific match
-// TODO this is exact match
-func (tree *Tree4[T]) Match(ip iputil.VpnIp) (ok bool, value T) {
+type eachFunc[T any] func(T) bool
+
+// EachContains will call a function, passing the value, for each entry until the function returns true or the search is complete
+// The final return value will be true if the provided function returned true
+func (tree *Tree4[T]) EachContains(ip iputil.VpnIp, each eachFunc[T]) bool {
 	bit := startbit
 	node := tree.root
-	lastNode := node
 
 	for node != nil {
-		lastNode = node
+		if node.hasValue {
+			// If the each func returns true then we can exit the loop
+			if each(node.value) {
+				return true
+			}
+		}
+
 		if ip&bit != 0 {
 			node = node.right
 		} else {
@@ -160,10 +167,33 @@ func (tree *Tree4[T]) Match(ip iputil.VpnIp) (ok bool, value T) {
 		bit >>= 1
 	}
 
-	if bit == 0 && lastNode != nil {
-		value = lastNode.value
-		ok = true
+	return false
+}
+
+// GetCIDR returns the entry added by the most recent matching AddCIDR call
+func (tree *Tree4[T]) GetCIDR(cidr *net.IPNet) (ok bool, value T) {
+	bit := startbit
+	node := tree.root
+
+	ip := iputil.Ip2VpnIp(cidr.IP)
+	mask := iputil.Ip2VpnIp(cidr.Mask)
+
+	// Find our last ancestor in the tree
+	for node != nil && bit&mask != 0 {
+		if ip&bit != 0 {
+			node = node.right
+		} else {
+			node = node.left
+		}
+
+		bit = bit >> 1
 	}
+
+	if bit&mask == 0 && node != nil {
+		value = node.value
+		ok = node.hasValue
+	}
+
 	return ok, value
 }
 

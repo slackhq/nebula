@@ -4,19 +4,19 @@ import (
 	"net"
 	"testing"
 
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestHostMap_MakePrimary(t *testing.T) {
 	l := test.NewLogger()
-	hm := NewHostMap(
+	hm := newHostMap(
 		l,
 		&net.IPNet{
 			IP:   net.IP{10, 0, 0, 1},
 			Mask: net.IPMask{255, 255, 255, 0},
 		},
-		[]*net.IPNet{},
 	)
 
 	f := &Interface{}
@@ -91,13 +91,12 @@ func TestHostMap_MakePrimary(t *testing.T) {
 
 func TestHostMap_DeleteHostInfo(t *testing.T) {
 	l := test.NewLogger()
-	hm := NewHostMap(
+	hm := newHostMap(
 		l,
 		&net.IPNet{
 			IP:   net.IP{10, 0, 0, 1},
 			Mask: net.IPMask{255, 255, 255, 0},
 		},
-		[]*net.IPNet{},
 	)
 
 	f := &Interface{}
@@ -204,4 +203,34 @@ func TestHostMap_DeleteHostInfo(t *testing.T) {
 	// Make sure we have nil
 	prim = hm.QueryVpnIp(1)
 	assert.Nil(t, prim)
+}
+
+func TestHostMap_reload(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+
+	hm := NewHostMapFromConfig(
+		l,
+		&net.IPNet{
+			IP:   net.IP{10, 0, 0, 1},
+			Mask: net.IPMask{255, 255, 255, 0},
+		},
+		c,
+	)
+
+	toS := func(ipn []*net.IPNet) []string {
+		var s []string
+		for _, n := range ipn {
+			s = append(s, n.String())
+		}
+		return s
+	}
+
+	assert.Empty(t, hm.GetPreferredRanges())
+
+	c.ReloadConfigString("preferred_ranges: [1.1.1.0/24, 10.1.1.0/24]")
+	assert.EqualValues(t, []string{"1.1.1.0/24", "10.1.1.0/24"}, toS(hm.GetPreferredRanges()))
+
+	c.ReloadConfigString("preferred_ranges: [1.1.1.1/32]")
+	assert.EqualValues(t, []string{"1.1.1.1/32"}, toS(hm.GetPreferredRanges()))
 }

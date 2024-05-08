@@ -47,7 +47,7 @@ listen:
   port: ${LISTEN_PORT:-4242}
 
 tun:
-  dev: ${TUN_DEV:-nebula1}
+  dev: ${TUN_DEV:-tun0}
   multiport:
     tx_enabled: ${MULTIPORT_TX:-false}
     rx_enabled: ${MULTIPORT_RX:-false}

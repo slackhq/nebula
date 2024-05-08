@@ -11,6 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
@@ -57,9 +58,8 @@ type HostMap struct {
 	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a Relay HostInfo object
 	RemoteIndexes   map[uint32]*HostInfo
 	Hosts           map[iputil.VpnIp]*HostInfo
-	preferredRanges []*net.IPNet
+	preferredRanges atomic.Pointer[[]*net.IPNet]
 	vpnCIDR         *net.IPNet
-	metricsEnabled  bool
 	l               *logrus.Logger
 }
 
@@ -260,21 +260,53 @@ type cachedPacketMetrics struct {
 	dropped metrics.Counter
 }
 
-func NewHostMap(l *logrus.Logger, vpnCIDR *net.IPNet, preferredRanges []*net.IPNet) *HostMap {
-	h := map[iputil.VpnIp]*HostInfo{}
-	i := map[uint32]*HostInfo{}
-	r := map[uint32]*HostInfo{}
-	relays := map[uint32]*HostInfo{}
-	m := HostMap{
-		Indexes:         i,
-		Relays:          relays,
-		RemoteIndexes:   r,
-		Hosts:           h,
-		preferredRanges: preferredRanges,
-		vpnCIDR:         vpnCIDR,
-		l:               l,
+func NewHostMapFromConfig(l *logrus.Logger, vpnCIDR *net.IPNet, c *config.C) *HostMap {
+	hm := newHostMap(l, vpnCIDR)
+
+	hm.reload(c, true)
+	c.RegisterReloadCallback(func(c *config.C) {
+		hm.reload(c, false)
+	})
+
+	l.WithField("network", hm.vpnCIDR.String()).
+		WithField("preferredRanges", hm.GetPreferredRanges()).
+		Info("Main HostMap created")
+
+	return hm
+}
+
+func newHostMap(l *logrus.Logger, vpnCIDR *net.IPNet) *HostMap {
+	return &HostMap{
+		Indexes:       map[uint32]*HostInfo{},
+		Relays:        map[uint32]*HostInfo{},
+		RemoteIndexes: map[uint32]*HostInfo{},
+		Hosts:         map[iputil.VpnIp]*HostInfo{},
+		vpnCIDR:       vpnCIDR,
+		l:             l,
 	}
-	return &m
+}
+
+func (hm *HostMap) reload(c *config.C, initial bool) {
+	if initial || c.HasChanged("preferred_ranges") {
+		var preferredRanges []*net.IPNet
+		rawPreferredRanges := c.GetStringSlice("preferred_ranges", []string{})
+
+		for _, rawPreferredRange := range rawPreferredRanges {
+			_, preferredRange, err := net.ParseCIDR(rawPreferredRange)
+
+			if err != nil {
+				hm.l.WithError(err).WithField("range", rawPreferredRanges).Warn("Failed to parse preferred ranges, ignoring")
+				continue
+			}
+
+			preferredRanges = append(preferredRanges, preferredRange)
+		}
+
+		oldRanges := hm.preferredRanges.Swap(&preferredRanges)
+		if !initial {
+			hm.l.WithField("oldPreferredRanges", *oldRanges).WithField("newPreferredRanges", preferredRanges).Info("preferred_ranges changed")
+		}
+	}
 }
 
 // EmitStats reports host, index, and relay counts to the stats collection system
@@ -463,7 +495,7 @@ func (hm *HostMap) queryVpnIp(vpnIp iputil.VpnIp, promoteIfce *Interface) *HostI
 		hm.RUnlock()
 		// Do not attempt promotion if you are a lighthouse
 		if promoteIfce != nil && !promoteIfce.lightHouse.amLighthouse {
-			h.TryPromoteBest(hm.preferredRanges, promoteIfce)
+			h.TryPromoteBest(hm.GetPreferredRanges(), promoteIfce)
 		}
 		return h
 
@@ -510,7 +542,8 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 }
 
 func (hm *HostMap) GetPreferredRanges() []*net.IPNet {
-	return hm.preferredRanges
+	//NOTE: if preferredRanges is ever not stored before a load this will fail to dereference a nil pointer
+	return *hm.preferredRanges.Load()
 }
 
 func (hm *HostMap) ForEachVpnIp(f controlEach) {
@@ -602,7 +635,7 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udp.Addr) bool {
 	// NOTE: We do this loop here instead of calling `isPreferred` in
 	// remote_list.go so that we only have to loop over preferredRanges once.
 	newIsPreferred := false
-	for _, l := range hm.preferredRanges {
+	for _, l := range hm.GetPreferredRanges() {
 		// return early if we are already on a preferred remote
 		if l.Contains(currentRemote.IP) {
 			return false

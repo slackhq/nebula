@@ -180,9 +180,15 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		if err != nil {
 			return fmt.Errorf("error while generating ecdsa keys: %s", err)
 		}
-		// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L60
-		rawPriv = key.D.FillBytes(make([]byte, 32))
-		pub = elliptic.Marshal(elliptic.P256(), key.X, key.Y)
+
+		// ecdh.PrivateKey lets us get at the encoded bytes, even though
+		// we aren't using ECDH here.
+		eKey, err := key.ECDH()
+		if err != nil {
+			return fmt.Errorf("error while converting ecdsa key: %s", err)
+		}
+		rawPriv = eKey.Bytes()
+		pub = eKey.PublicKey().Bytes()
 	}
 
 	nc := cert.NebulaCertificate{

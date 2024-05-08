@@ -184,7 +184,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, lighthouseTrigger
 	hostinfo := hh.hostinfo
 	// If we are out of time, clean up
 	if hh.counter >= hm.config.retries {
-		hh.hostinfo.logger(hm.l).WithField("udpAddrs", hh.hostinfo.remotes.CopyAddrs(hm.mainHostMap.preferredRanges)).
+		hh.hostinfo.logger(hm.l).WithField("udpAddrs", hh.hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges())).
 			WithField("initiatorIndex", hh.hostinfo.localIndexId).
 			WithField("remoteIndex", hh.hostinfo.remoteIndexId).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
@@ -214,7 +214,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, lighthouseTrigger
 		hostinfo.remotes = hm.lightHouse.QueryCache(vpnIp)
 	}
 
-	remotes := hostinfo.remotes.CopyAddrs(hm.mainHostMap.preferredRanges)
+	remotes := hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges())
 	remotesHaveChanged := !udp.AddrSlice(remotes).Equal(hh.lastRemotes)
 
 	// We only care about a lighthouse trigger if we have new remotes to send to.
@@ -239,7 +239,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, lighthouseTrigger
 	// Send the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
 	var sentTo []*udp.Addr
 	var sentMultiport bool
-	hostinfo.remotes.ForEach(hm.mainHostMap.preferredRanges, func(addr *udp.Addr, _ bool) {
+	hostinfo.remotes.ForEach(hm.mainHostMap.GetPreferredRanges(), func(addr *udp.Addr, _ bool) {
 		hm.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
 		err := hm.outside.WriteTo(hostinfo.HandshakePacket[0], addr)
 		if err != nil {
@@ -388,7 +388,7 @@ func (hm *HandshakeManager) GetOrHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 		hm.mainHostMap.RUnlock()
 		// Do not attempt promotion if you are a lighthouse
 		if !hm.lightHouse.amLighthouse {
-			h.TryPromoteBest(hm.mainHostMap.preferredRanges, hm.f)
+			h.TryPromoteBest(hm.mainHostMap.GetPreferredRanges(), hm.f)
 		}
 		return h, true
 	}
@@ -400,13 +400,13 @@ func (hm *HandshakeManager) GetOrHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 // StartHandshake will ensure a handshake is currently being attempted for the provided vpn ip
 func (hm *HandshakeManager) StartHandshake(vpnIp iputil.VpnIp, cacheCb func(*HandshakeHostInfo)) *HostInfo {
 	hm.Lock()
-	defer hm.Unlock()
 
 	if hh, ok := hm.vpnIps[vpnIp]; ok {
 		// We are already trying to handshake with this vpn ip
 		if cacheCb != nil {
 			cacheCb(hh)
 		}
+		hm.Unlock()
 		return hh.hostinfo
 	}
 
@@ -447,6 +447,7 @@ func (hm *HandshakeManager) StartHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 		}
 	}
 
+	hm.Unlock()
 	hm.lightHouse.QueryServer(vpnIp)
 	return hostinfo
 }
@@ -625,7 +626,7 @@ func (hm *HandshakeManager) queryIndex(index uint32) *HandshakeHostInfo {
 }
 
 func (c *HandshakeManager) GetPreferredRanges() []*net.IPNet {
-	return c.mainHostMap.preferredRanges
+	return c.mainHostMap.GetPreferredRanges()
 }
 
 func (c *HandshakeManager) ForEachVpnIp(f controlEach) {
