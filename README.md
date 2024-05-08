@@ -52,6 +52,11 @@ Check the [releases](https://github.com/slackhq/nebula/releases/latest) page for
     $ brew install nebula
     ```
 
+- [Docker](https://hub.docker.com/r/nebulaoss/nebula)
+    ```
+    $ docker pull nebulaoss/nebula
+    ```
+
 #### Mobile
 
 - [iOS](https://apps.apple.com/us/app/mobile-nebula/id1509587936?itsct=apps_box&amp;itscg=30200)
