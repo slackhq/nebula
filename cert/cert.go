@@ -80,7 +80,7 @@ type NebulaEncryptionMetadata struct {
 	Argon2Parameters    Argon2Parameters
 }
 
-type m map[string]interface{}
+type m map[string]any
 
 // Returned if we try to unmarshal an encrypted private key without a passphrase
 var ErrPrivateKeyEncrypted = errors.New("private key must be decrypted")

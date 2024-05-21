@@ -14,27 +14,27 @@ import (
 func TestNewAllowListFromConfig(t *testing.T) {
 	l := test.NewLogger()
 	c := config.NewC(l)
-	c.Settings["allowlist"] = map[interface{}]interface{}{
+	c.Settings["allowlist"] = map[string]any{
 		"192.168.0.0": true,
 	}
 	r, err := newAllowListFromConfig(c, "allowlist", nil)
 	assert.EqualError(t, err, "config `allowlist` has invalid CIDR: 192.168.0.0")
 	assert.Nil(t, r)
 
-	c.Settings["allowlist"] = map[interface{}]interface{}{
+	c.Settings["allowlist"] = map[string]any{
 		"192.168.0.0/16": "abc",
 	}
 	r, err = newAllowListFromConfig(c, "allowlist", nil)
 	assert.EqualError(t, err, "config `allowlist` has invalid value (type string): abc")
 
-	c.Settings["allowlist"] = map[interface{}]interface{}{
+	c.Settings["allowlist"] = map[string]any{
 		"192.168.0.0/16": true,
 		"10.0.0.0/8":     false,
 	}
 	r, err = newAllowListFromConfig(c, "allowlist", nil)
 	assert.EqualError(t, err, "config `allowlist` contains both true and false rules, but no default set for 0.0.0.0/0")
 
-	c.Settings["allowlist"] = map[interface{}]interface{}{
+	c.Settings["allowlist"] = map[string]any{
 		"0.0.0.0/0":      true,
 		"10.0.0.0/8":     false,
 		"10.42.42.0/24":  true,
@@ -44,7 +44,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 	r, err = newAllowListFromConfig(c, "allowlist", nil)
 	assert.EqualError(t, err, "config `allowlist` contains both true and false rules, but no default set for ::/0")
 
-	c.Settings["allowlist"] = map[interface{}]interface{}{
+	c.Settings["allowlist"] = map[string]any{
 		"0.0.0.0/0":     true,
 		"10.0.0.0/8":    false,
 		"10.42.42.0/24": true,
@@ -54,7 +54,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 		assert.NotNil(t, r)
 	}
 
-	c.Settings["allowlist"] = map[interface{}]interface{}{
+	c.Settings["allowlist"] = map[string]any{
 		"0.0.0.0/0":      true,
 		"10.0.0.0/8":     false,
 		"10.42.42.0/24":  true,
@@ -69,16 +69,16 @@ func TestNewAllowListFromConfig(t *testing.T) {
 
 	// Test interface names
 
-	c.Settings["allowlist"] = map[interface{}]interface{}{
-		"interfaces": map[interface{}]interface{}{
+	c.Settings["allowlist"] = map[string]any{
+		"interfaces": map[string]any{
 			`docker.*`: "foo",
 		},
 	}
 	lr, err := NewLocalAllowListFromConfig(c, "allowlist")
 	assert.EqualError(t, err, "config `allowlist.interfaces` has invalid value (type string): foo")
 
-	c.Settings["allowlist"] = map[interface{}]interface{}{
-		"interfaces": map[interface{}]interface{}{
+	c.Settings["allowlist"] = map[string]any{
+		"interfaces": map[string]any{
 			`docker.*`: false,
 			`eth.*`:    true,
 		},
@@ -86,8 +86,8 @@ func TestNewAllowListFromConfig(t *testing.T) {
 	lr, err = NewLocalAllowListFromConfig(c, "allowlist")
 	assert.EqualError(t, err, "config `allowlist.interfaces` values must all be the same true/false value")
 
-	c.Settings["allowlist"] = map[interface{}]interface{}{
-		"interfaces": map[interface{}]interface{}{
+	c.Settings["allowlist"] = map[string]any{
+		"interfaces": map[string]any{
 			`docker.*`: false,
 		},
 	}

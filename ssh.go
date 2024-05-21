@@ -129,10 +129,10 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 	}
 
 	rawKeys := c.Get("sshd.authorized_users")
-	keys, ok := rawKeys.([]interface{})
+	keys, ok := rawKeys.([]any)
 	if ok {
 		for _, rk := range keys {
-			kDef, ok := rk.(map[interface{}]interface{})
+			kDef, ok := rk.(map[string]any)
 			if !ok {
 				l.WithField("sshKeyConfig", rk).Warn("Authorized user had an error, ignoring")
 				continue
@@ -153,7 +153,7 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 					continue
 				}
 
-			case []interface{}:
+			case []any:
 				for _, subK := range v {
 					sk, ok := subK.(string)
 					if !ok {
