@@ -112,7 +112,7 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 			}
 		}
 
-		value, ok := rawValue.(bool)
+		value, ok := config.AsBool(rawValue)
 		if !ok {
 			return nil, fmt.Errorf("config `%s` has invalid value (type %T): %v", k, rawValue, rawValue)
 		}
@@ -181,7 +181,7 @@ func getAllowListInterfaces(k string, v interface{}) ([]AllowListNameRule, error
 	firstEntry := true
 	var allValues bool
 	for name, rawAllow := range rawRules {
-		allow, ok := rawAllow.(bool)
+		allow, ok := config.AsBool(rawAllow)
 		if !ok {
 			return nil, fmt.Errorf("config `%s.interfaces` has invalid value (type %T): %v", k, rawAllow, rawAllow)
 		}
