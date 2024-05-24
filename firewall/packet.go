@@ -7,7 +7,7 @@ import (
 	"github.com/slackhq/nebula/iputil"
 )
 
-type m map[string]interface{}
+type m = map[string]any
 
 const (
 	ProtoAny  = 0 // When we want to handle HOPOPT (0) we can change this, if ever
