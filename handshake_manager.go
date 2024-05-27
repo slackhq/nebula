@@ -186,7 +186,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, lighthouseTrigger
 			WithField("remoteIndex", hh.hostinfo.remoteIndexId).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
 			WithField("durationNs", time.Since(hh.startTime).Nanoseconds()).
-			Info("Handshake timed out")
+			Error("Handshake timed out")
 		hm.metricTimedOut.Inc(1)
 		hm.DeleteHostInfo(hostinfo)
 		return
