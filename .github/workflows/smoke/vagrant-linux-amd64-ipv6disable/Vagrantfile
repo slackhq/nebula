@@ -1,0 +1,16 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+Vagrant.configure("2") do |config|
+  config.vm.box = "ubuntu/jammy64"
+
+  config.vm.synced_folder "../build", "/nebula"
+
+  config.vm.provision :shell do |shell|
+    shell.inline = <<-EOF
+      sed -i 's/GRUB_CMDLINE_LINUX=""/GRUB_CMDLINE_LINUX="ipv6.disable=1"/' /etc/default/grub
+      update-grub
+    EOF
+    shell.privileged = true
+    shell.reboot = true
+  end
+end

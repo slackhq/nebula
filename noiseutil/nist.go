@@ -48,7 +48,7 @@ func (c nistCurve) DH(privkey, pubkey []byte) ([]byte, error) {
 	}
 	ecdhPrivKey, err := c.curve.NewPrivateKey(privkey)
 	if err != nil {
-		return nil, fmt.Errorf("unable to unmarshal pubkey: %w", err)
+		return nil, fmt.Errorf("unable to unmarshal private key: %w", err)
 	}
 
 	return ecdhPrivKey.ECDH(ecdhPubKey)

@@ -11,6 +11,11 @@ mkdir ./build
     cp ../../../../build/linux-amd64/nebula .
     cp ../../../../build/linux-amd64/nebula-cert .
 
+    if [ "$1" ]
+    then
+        cp "../../../../build/$1/nebula" "$1-nebula"
+    fi
+
     HOST="lighthouse1" \
         AM_LIGHTHOUSE=true \
         ../genconfig.sh >lighthouse1.yml
