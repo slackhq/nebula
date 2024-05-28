@@ -26,10 +26,11 @@ var allowedConcurrentLocks = map[mutexKey][]mutexKey{
 	"firewall-conntrack":            {"handshake-hostinfo"},
 	"handshake-manager":             {"hostmap"},
 	"handshake-manager-timer":       {"handshake-manager"},
-	"hostmap":                       {"handshake-hostinfo"},
+	"hostmap":                       {"handshake-hostinfo", "lighthouse-query-chan"},
 	"lighthouse":                    {"handshake-manager"},
 	"relay-state":                   {"hostmap", "connection-manager-relay-used"},
 	"remote-list":                   {"lighthouse"},
+	"lighthouse-query-chan":         {"handshake-hostinfo"},
 }
 
 type mutexValue struct {
