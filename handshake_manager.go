@@ -356,10 +356,11 @@ func (hm *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, lighthouseTrigger
 // GetOrHandshake will try to find a hostinfo with a fully formed tunnel or start a new handshake if one is not present
 // The 2nd argument will be true if the hostinfo is ready to transmit traffic
 func (hm *HandshakeManager) GetOrHandshake(vpnIp iputil.VpnIp, cacheCb func(*HandshakeHostInfo)) (*HostInfo, bool) {
-	// Check the main hostmap and maintain a read lock if our host is not there
 	hm.mainHostMap.RLock()
-	if h, ok := hm.mainHostMap.Hosts[vpnIp]; ok {
-		hm.mainHostMap.RUnlock()
+	h, ok := hm.mainHostMap.Hosts[vpnIp]
+	hm.mainHostMap.RUnlock()
+
+	if ok {
 		// Do not attempt promotion if you are a lighthouse
 		if !hm.lightHouse.amLighthouse {
 			h.TryPromoteBest(hm.mainHostMap.GetPreferredRanges(), hm.f)
@@ -367,7 +368,6 @@ func (hm *HandshakeManager) GetOrHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 		return h, true
 	}
 
-	defer hm.mainHostMap.RUnlock()
 	return hm.StartHandshake(vpnIp, cacheCb), false
 }
 
