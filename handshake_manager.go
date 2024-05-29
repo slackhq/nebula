@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -15,6 +14,7 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
+	"github.com/wadey/synctrace"
 )
 
 const (
@@ -44,7 +44,7 @@ type HandshakeConfig struct {
 
 type HandshakeManager struct {
 	// Mutex for interacting with the vpnIps and indexes maps
-	sync.RWMutex
+	synctrace.RWMutex
 
 	vpnIps  map[iputil.VpnIp]*HandshakeHostInfo
 	indexes map[uint32]*HandshakeHostInfo
@@ -65,7 +65,7 @@ type HandshakeManager struct {
 }
 
 type HandshakeHostInfo struct {
-	sync.Mutex
+	synctrace.Mutex
 
 	startTime   time.Time       // Time that we first started trying with this handshake
 	ready       bool            // Is the handshake ready
@@ -103,6 +103,7 @@ func (hh *HandshakeHostInfo) cachePacket(l *logrus.Logger, t header.MessageType,
 
 func NewHandshakeManager(l *logrus.Logger, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
+		RWMutex:                synctrace.NewRWMutex("handshake-manager"),
 		vpnIps:                 map[iputil.VpnIp]*HandshakeHostInfo{},
 		indexes:                map[uint32]*HandshakeHostInfo{},
 		mainHostMap:            mainHostMap,
@@ -388,6 +389,7 @@ func (hm *HandshakeManager) StartHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 		vpnIp:           vpnIp,
 		HandshakePacket: make(map[uint8][]byte, 0),
 		relayState: RelayState{
+			RWMutex:       synctrace.NewRWMutex("relay-state"),
 			relays:        map[iputil.VpnIp]struct{}{},
 			relayForByIp:  map[iputil.VpnIp]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
@@ -395,6 +397,7 @@ func (hm *HandshakeManager) StartHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 	}
 
 	hh := &HandshakeHostInfo{
+		Mutex:     synctrace.NewMutex("handshake-hostinfo"),
 		hostinfo:  hostinfo,
 		startTime: time.Now(),
 	}

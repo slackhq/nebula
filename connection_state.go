@@ -3,13 +3,13 @@ package nebula
 import (
 	"crypto/rand"
 	"encoding/json"
-	"sync"
 	"sync/atomic"
 
 	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/noiseutil"
+	"github.com/wadey/synctrace"
 )
 
 const ReplayWindow = 1024
@@ -23,7 +23,7 @@ type ConnectionState struct {
 	initiator      bool
 	messageCounter atomic.Uint64
 	window         *Bits
-	writeLock      sync.Mutex
+	writeLock      synctrace.Mutex
 }
 
 func NewConnectionState(l *logrus.Logger, cipher string, certState *CertState, initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {
@@ -71,6 +71,7 @@ func NewConnectionState(l *logrus.Logger, cipher string, certState *CertState, i
 		initiator: initiator,
 		window:    b,
 		myCert:    certState.Certificate,
+		writeLock: synctrace.NewMutex("connection-state"),
 	}
 
 	return ci

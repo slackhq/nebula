@@ -3,7 +3,6 @@ package nebula
 import (
 	"errors"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
+	"github.com/wadey/synctrace"
 )
 
 // const ProbeLen = 100
@@ -53,21 +53,21 @@ type Relay struct {
 }
 
 type HostMap struct {
-	sync.RWMutex    //Because we concurrently read and write to our maps
-	Indexes         map[uint32]*HostInfo
-	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a Relay HostInfo object
-	RemoteIndexes   map[uint32]*HostInfo
-	Hosts           map[iputil.VpnIp]*HostInfo
-	preferredRanges atomic.Pointer[[]*net.IPNet]
-	vpnCIDR         *net.IPNet
-	l               *logrus.Logger
+	synctrace.RWMutex //Because we concurrently read and write to our maps
+	Indexes           map[uint32]*HostInfo
+	Relays            map[uint32]*HostInfo // Maps a Relay IDX to a Relay HostInfo object
+	RemoteIndexes     map[uint32]*HostInfo
+	Hosts             map[iputil.VpnIp]*HostInfo
+	preferredRanges   atomic.Pointer[[]*net.IPNet]
+	vpnCIDR           *net.IPNet
+	l                 *logrus.Logger
 }
 
 // For synchronization, treat the pointed-to Relay struct as immutable. To edit the Relay
 // struct, make a copy of an existing value, edit the fileds in the copy, and
 // then store a pointer to the new copy in both realyForBy* maps.
 type RelayState struct {
-	sync.RWMutex
+	synctrace.RWMutex
 
 	relays        map[iputil.VpnIp]struct{} // Set of VpnIp's of Hosts to use as relays to access this peer
 	relayForByIp  map[iputil.VpnIp]*Relay   // Maps VpnIps of peers for which this HostInfo is a relay to some Relay info
@@ -271,6 +271,7 @@ func NewHostMapFromConfig(l *logrus.Logger, vpnCIDR *net.IPNet, c *config.C) *Ho
 
 func newHostMap(l *logrus.Logger, vpnCIDR *net.IPNet) *HostMap {
 	return &HostMap{
+		RWMutex:       synctrace.NewRWMutex("hostmap"),
 		Indexes:       map[uint32]*HostInfo{},
 		Relays:        map[uint32]*HostInfo{},
 		RemoteIndexes: map[uint32]*HostInfo{},

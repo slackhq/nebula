@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,6 +18,7 @@ import (
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
+	"github.com/wadey/synctrace"
 )
 
 //TODO: if a lighthouse doesn't have an answer, clients AGGRESSIVELY REQUERY.. why? handshake manager and/or getOrHandshake?
@@ -33,14 +33,14 @@ type netIpAndPort struct {
 
 type LightHouse struct {
 	//TODO: We need a timer wheel to kick out vpnIps that haven't reported in a long time
-	sync.RWMutex //Because we concurrently read and write to our maps
-	ctx          context.Context
-	amLighthouse bool
-	myVpnIp      iputil.VpnIp
-	myVpnZeros   iputil.VpnIp
-	myVpnNet     *net.IPNet
-	punchConn    udp.Conn
-	punchy       *Punchy
+	synctrace.RWMutex //Because we concurrently read and write to our maps
+	ctx               context.Context
+	amLighthouse      bool
+	myVpnIp           iputil.VpnIp
+	myVpnZeros        iputil.VpnIp
+	myVpnNet          *net.IPNet
+	punchConn         udp.Conn
+	punchy            *Punchy
 
 	// Local cache of answers from light houses
 	// map of vpn Ip to answers
@@ -103,6 +103,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 
 	ones, _ := myVpnNet.Mask.Size()
 	h := LightHouse{
+		RWMutex:      synctrace.NewRWMutex("lighthouse"),
 		ctx:          ctx,
 		amLighthouse: amLighthouse,
 		myVpnIp:      iputil.Ip2VpnIp(myVpnNet.IP),
@@ -468,6 +469,7 @@ func (lh *LightHouse) QueryServer(ip iputil.VpnIp) {
 		return
 	}
 
+	synctrace.ChanDebugSend("lighthouse-querychan")
 	lh.queryChan <- ip
 }
 
@@ -750,9 +752,11 @@ func (lh *LightHouse) startQueryWorker() {
 		nb := make([]byte, 12, 12)
 		out := make([]byte, mtu)
 
+		synctrace.ChanDebugRecvLock("lighthouse-querychan")
 		for {
 			select {
 			case <-lh.ctx.Done():
+				synctrace.ChanDebugRecvUnlock("lighthouse-querychan")
 				return
 			case ip := <-lh.queryChan:
 				lh.innerQueryServer(ip, nb, out)

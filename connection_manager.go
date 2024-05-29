@@ -3,7 +3,6 @@ package nebula
 import (
 	"bytes"
 	"context"
-	"sync"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -12,6 +11,7 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
+	"github.com/wadey/synctrace"
 )
 
 type trafficDecision int
@@ -28,14 +28,14 @@ const (
 
 type connectionManager struct {
 	in     map[uint32]struct{}
-	inLock *sync.RWMutex
+	inLock synctrace.RWMutex
 
 	out     map[uint32]struct{}
-	outLock *sync.RWMutex
+	outLock synctrace.RWMutex
 
 	// relayUsed holds which relay localIndexs are in use
 	relayUsed     map[uint32]struct{}
-	relayUsedLock *sync.RWMutex
+	relayUsedLock synctrace.RWMutex
 
 	hostMap                 *HostMap
 	trafficTimer            *LockingTimerWheel[uint32]
@@ -60,11 +60,11 @@ func newConnectionManager(ctx context.Context, l *logrus.Logger, intf *Interface
 	nc := &connectionManager{
 		hostMap:                 intf.hostMap,
 		in:                      make(map[uint32]struct{}),
-		inLock:                  &sync.RWMutex{},
+		inLock:                  synctrace.NewRWMutex("connection-manager-in"),
 		out:                     make(map[uint32]struct{}),
-		outLock:                 &sync.RWMutex{},
+		outLock:                 synctrace.NewRWMutex("connection-manager-out"),
 		relayUsed:               make(map[uint32]struct{}),
-		relayUsedLock:           &sync.RWMutex{},
+		relayUsedLock:           synctrace.NewRWMutex("connection-manager-relay-used"),
 		trafficTimer:            NewLockingTimerWheel[uint32](time.Millisecond*500, max),
 		intf:                    intf,
 		pendingDeletion:         make(map[uint32]struct{}),
