@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 
+	"github.com/slackhq/nebula/pkclient"
+
 	"github.com/slackhq/nebula/cert"
 )
 
@@ -13,8 +15,8 @@ type keygenFlags struct {
 	set        *flag.FlagSet
 	outKeyPath *string
 	outPubPath *string
-
-	curve *string
+	curve      *string
+	p11url     *string
 }
 
 func newKeygenFlags() *keygenFlags {
@@ -23,6 +25,7 @@ func newKeygenFlags() *keygenFlags {
 	cf.outPubPath = cf.set.String("out-pub", "", "Required: path to write the public key to")
 	cf.outKeyPath = cf.set.String("out-key", "", "Required: path to write the private key to")
 	cf.curve = cf.set.String("curve", "25519", "ECDH Curve (25519, P256)")
+	cf.p11url = cf.set.String("pkcs11", "", "Optional PKCS11 URL to an existing private key to obtain a nebula public key from")
 	return &cf
 }
 
@@ -33,10 +36,7 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 		return err
 	}
 
-	if err := mustFlagString("out-key", cf.outKeyPath); err != nil {
-		return err
-	}
-	if err := mustFlagString("out-pub", cf.outPubPath); err != nil {
+	if err = mustFlagString("out-pub", cf.outPubPath); err != nil {
 		return err
 	}
 
@@ -53,11 +53,27 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 		return fmt.Errorf("invalid curve: %s", *cf.curve)
 	}
 
-	err = os.WriteFile(*cf.outKeyPath, cert.MarshalPrivateKey(curve, rawPriv), 0600)
-	if err != nil {
-		return fmt.Errorf("error while writing out-key: %s", err)
+	if len(*cf.p11url) == 0 {
+		if err = mustFlagString("out-key", cf.outKeyPath); err != nil {
+			return err
+		}
+		err = os.WriteFile(*cf.outKeyPath, cert.MarshalPrivateKey(curve, rawPriv), 0600)
+		if err != nil {
+			return fmt.Errorf("error while writing out-key: %s", err)
+		}
+	} else {
+		client, err := pkclient.FromUrl(*cf.p11url)
+		if err != nil {
+			return fmt.Errorf("error while creating PKCS11 client: %w", err)
+		}
+		defer func(client *pkclient.PKClient) {
+			_ = client.Close()
+		}(client)
+		pub, err = client.GetPubKey()
+		if err != nil {
+			return fmt.Errorf("error while getting public key: %w", err)
+		}
 	}
-
 	err = os.WriteFile(*cf.outPubPath, cert.MarshalPublicKey(curve, pub), 0600)
 	if err != nil {
 		return fmt.Errorf("error while writing out-pub: %s", err)
@@ -72,7 +88,7 @@ func keygenSummary() string {
 
 func keygenHelp(out io.Writer) {
 	cf := newKeygenFlags()
-	out.Write([]byte("Usage of " + os.Args[0] + " " + keygenSummary() + "\n"))
+	_, _ = out.Write([]byte("Usage of " + os.Args[0] + " " + keygenSummary() + "\n"))
 	cf.set.SetOutput(out)
 	cf.set.PrintDefaults()
 }

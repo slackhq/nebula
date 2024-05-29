@@ -41,8 +41,9 @@ const (
 )
 
 type NebulaCertificate struct {
-	Details   NebulaCertificateDetails
-	Signature []byte
+	Details      NebulaCertificateDetails
+	Pkcs11Backed bool
+	Signature    []byte
 
 	// the cached hex string of the calculated sha256sum
 	// for VerifyWithCache
@@ -693,6 +694,9 @@ func (nc *NebulaCertificate) CheckRootConstrains(signer *NebulaCertificate) erro
 
 // VerifyPrivateKey checks that the public key in the Nebula certificate and a supplied private key match
 func (nc *NebulaCertificate) VerifyPrivateKey(curve Curve, key []byte) error {
+	if nc.Pkcs11Backed {
+		return nil //todo!
+	}
 	if curve != nc.Details.Curve {
 		return fmt.Errorf("curve in cert and private key supplied don't match")
 	}
