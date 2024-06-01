@@ -40,7 +40,9 @@ ALL_LINUX = linux-amd64 \
 	linux-mips64le \
 	linux-mips-softfloat \
 	linux-riscv64 \
-        linux-loong64
+	linux-loong64 \
+	linux-amd64-pkcs11 \
+	linux-arm64-pkcs11
 
 ALL_FREEBSD = freebsd-amd64 \
 	freebsd-arm64
@@ -116,6 +118,9 @@ bin-freebsd-arm64: build/freebsd-arm64/nebula build/freebsd-arm64/nebula-cert
 bin-boringcrypto: build/linux-$(shell go env GOARCH)-boringcrypto/nebula build/linux-$(shell go env GOARCH)-boringcrypto/nebula-cert
 	mv $? .
 
+bin-pkcs11: build/linux-$(shell go env GOARCH)-pkcs11/nebula build/linux-$(shell go env GOARCH)-pkcs11/nebula-cert
+	mv $? .
+
 bin:
 	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula${NEBULA_CMD_SUFFIX} ${NEBULA_CMD_PATH}
 	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula-cert${NEBULA_CMD_SUFFIX} ./cmd/nebula-cert
@@ -133,6 +138,13 @@ build/linux-mips-softfloat/%: LDFLAGS += -s -w
 # boringcrypto
 build/linux-amd64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
 build/linux-arm64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
+
+# pkcs11
+build/linux-amd64-pkcs11/%: BUILD_ARGS += -tags pkcs11
+build/linux-amd64-pkcs11/%: CGO_ENABLED=1
+build/linux-arm64-pkcs11/%: BUILD_ARGS += -tags pkcs11
+build/linux-arm64-pkcs11/%: CGO_ENABLED=1
+build/linux-arm64-pkcs11/%: GOENV += CC=aarch64-linux-gnu-gcc
 
 build/%/nebula: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
