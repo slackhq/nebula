@@ -25,7 +25,7 @@ func newKeygenFlags() *keygenFlags {
 	cf.outPubPath = cf.set.String("out-pub", "", "Required: path to write the public key to")
 	cf.outKeyPath = cf.set.String("out-key", "", "Required: path to write the private key to")
 	cf.curve = cf.set.String("curve", "25519", "ECDH Curve (25519, P256)")
-	cf.p11url = cf.set.String("pkcs11", "", "Optional PKCS11 URL to an existing private key to obtain a nebula public key from")
+	keygenP11flag(&cf)
 	return &cf
 }
 
