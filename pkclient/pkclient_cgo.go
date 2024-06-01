@@ -5,9 +5,10 @@ package pkclient
 import (
 	"errors"
 	"fmt"
+	"log"
+
 	"github.com/miekg/pkcs11"
 	"github.com/miekg/pkcs11/p11"
-	"log"
 )
 
 type PKClient struct {
