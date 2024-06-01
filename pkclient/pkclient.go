@@ -5,11 +5,12 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log"
+	"strconv"
+
 	"github.com/miekg/pkcs11"
 	"github.com/miekg/pkcs11/p11"
 	"github.com/stefanberger/go-pkcs11uri"
-	"log"
-	"strconv"
 )
 
 const NoiseKeySize = 32

@@ -3,9 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/slackhq/nebula/pkclient"
 	"io"
 	"os"
+
+	"github.com/slackhq/nebula/pkclient"
 
 	"github.com/slackhq/nebula/cert"
 )

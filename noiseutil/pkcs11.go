@@ -3,8 +3,9 @@ package noiseutil
 import (
 	"crypto/ecdh"
 	"fmt"
-	"github.com/slackhq/nebula/pkclient"
 	"strings"
+
+	"github.com/slackhq/nebula/pkclient"
 
 	"github.com/flynn/noise"
 )
