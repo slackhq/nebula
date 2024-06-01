@@ -3,5 +3,6 @@
 package main
 
 func keygenP11flag(cf *keygenFlags) {
-	// do nothing
+	var e = ""
+	cf.p11url = &e
 }
