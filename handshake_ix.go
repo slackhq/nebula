@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/flynn/noise"
@@ -321,7 +322,11 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 	}
 
 	f.connectionManager.AddTrafficWatch(hostinfo.localIndexId)
-	hostinfo.ConnectionState.messageCounter.Store(2)
+	prev := hostinfo.ConnectionState.messageCounter.Swap(2)
+	if prev > 2 {
+		panic(fmt.Errorf("invalid state: messageCounter > 2 before handshake complete: %v", prev))
+	}
+
 	hostinfo.remotes.ResetBlockedRemotes()
 
 	return
@@ -463,11 +468,14 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hh *Handsha
 	// Build up the radix for the firewall if we have subnets in the cert
 	hostinfo.CreateRemoteCIDR(remoteCert)
 
+	prev := hostinfo.ConnectionState.messageCounter.Swap(2)
+	if prev > 2 {
+		panic(fmt.Errorf("invalid state: messageCounter > 2 before handshake complete: %v", prev))
+	}
+
 	// Complete our handshake and update metrics, this will replace any existing tunnels for this vpnIp
 	f.handshakeManager.Complete(hostinfo, f)
 	f.connectionManager.AddTrafficWatch(hostinfo.localIndexId)
-
-	hostinfo.ConnectionState.messageCounter.Store(2)
 
 	if f.l.Level >= logrus.DebugLevel {
 		hostinfo.logger(f.l).Debugf("Sending %d stored packets", len(hh.packetStore))
