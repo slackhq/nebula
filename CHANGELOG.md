@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.3] - 2024-06-06
+
+### Fixed
+
+- Initialize messageCounter to 2 instead of verifying later. (#1156)
+
 ## [1.9.2] - 2024-06-03
 
 ### Fixed
@@ -638,7 +644,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.9.2...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.9.3...HEAD
+[1.9.3]: https://github.com/slackhq/nebula/releases/tag/v1.9.3
 [1.9.2]: https://github.com/slackhq/nebula/releases/tag/v1.9.2
 [1.9.1]: https://github.com/slackhq/nebula/releases/tag/v1.9.1
 [1.9.0]: https://github.com/slackhq/nebula/releases/tag/v1.9.0
