@@ -27,25 +27,6 @@ type StdConn struct {
 	batch int
 }
 
-var x int
-
-// From linux/sock_diag.h
-const (
-	_SK_MEMINFO_RMEM_ALLOC = iota
-	_SK_MEMINFO_RCVBUF
-	_SK_MEMINFO_WMEM_ALLOC
-	_SK_MEMINFO_SNDBUF
-	_SK_MEMINFO_FWD_ALLOC
-	_SK_MEMINFO_WMEM_QUEUED
-	_SK_MEMINFO_OPTMEM
-	_SK_MEMINFO_BACKLOG
-	_SK_MEMINFO_DROPS
-
-	_SK_MEMINFO_VARS
-)
-
-type _SK_MEMINFO [_SK_MEMINFO_VARS]uint32
-
 func maybeIPV4(ip net.IP) (net.IP, bool) {
 	ip4 := ip.To4()
 	if ip4 != nil {
@@ -316,8 +297,8 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 	}
 }
 
-func (u *StdConn) getMemInfo(meminfo *_SK_MEMINFO) error {
-	var vallen uint32 = 4 * _SK_MEMINFO_VARS
+func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
+	var vallen uint32 = 4 * unix.SK_MEMINFO_VARS
 	_, _, err := unix.Syscall6(unix.SYS_GETSOCKOPT, uintptr(u.sysFd), uintptr(unix.SOL_SOCKET), uintptr(unix.SO_MEMINFO), uintptr(unsafe.Pointer(meminfo)), uintptr(unsafe.Pointer(&vallen)), 0)
 	if err != 0 {
 		return err
@@ -332,12 +313,12 @@ func (u *StdConn) Close() error {
 
 func NewUDPStatsEmitter(udpConns []Conn) func() {
 	// Check if our kernel supports SO_MEMINFO before registering the gauges
-	var udpGauges [][_SK_MEMINFO_VARS]metrics.Gauge
-	var meminfo _SK_MEMINFO
+	var udpGauges [][unix.SK_MEMINFO_VARS]metrics.Gauge
+	var meminfo [unix.SK_MEMINFO_VARS]uint32
 	if err := udpConns[0].(*StdConn).getMemInfo(&meminfo); err == nil {
-		udpGauges = make([][_SK_MEMINFO_VARS]metrics.Gauge, len(udpConns))
+		udpGauges = make([][unix.SK_MEMINFO_VARS]metrics.Gauge, len(udpConns))
 		for i := range udpConns {
-			udpGauges[i] = [_SK_MEMINFO_VARS]metrics.Gauge{
+			udpGauges[i] = [unix.SK_MEMINFO_VARS]metrics.Gauge{
 				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.rmem_alloc", i), nil),
 				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.rcvbuf", i), nil),
 				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.wmem_alloc", i), nil),
@@ -354,7 +335,7 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 	return func() {
 		for i, gauges := range udpGauges {
 			if err := udpConns[i].(*StdConn).getMemInfo(&meminfo); err == nil {
-				for j := 0; j < _SK_MEMINFO_VARS; j++ {
+				for j := 0; j < unix.SK_MEMINFO_VARS; j++ {
 					gauges[j].Update(int64(meminfo[j]))
 				}
 			}
