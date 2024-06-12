@@ -3,7 +3,6 @@ package nebula
 import (
 	"errors"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -53,7 +52,7 @@ type Relay struct {
 }
 
 type HostMap struct {
-	sync.RWMutex    //Because we concurrently read and write to our maps
+	syncRWMutex     //Because we concurrently read and write to our maps
 	Indexes         map[uint32]*HostInfo
 	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a Relay HostInfo object
 	RemoteIndexes   map[uint32]*HostInfo
@@ -67,7 +66,7 @@ type HostMap struct {
 // struct, make a copy of an existing value, edit the fileds in the copy, and
 // then store a pointer to the new copy in both realyForBy* maps.
 type RelayState struct {
-	sync.RWMutex
+	syncRWMutex
 
 	relays        map[iputil.VpnIp]struct{} // Set of VpnIp's of Hosts to use as relays to access this peer
 	relayForByIp  map[iputil.VpnIp]*Relay   // Maps VpnIps of peers for which this HostInfo is a relay to some Relay info
@@ -197,6 +196,7 @@ func (rs *RelayState) InsertRelay(ip iputil.VpnIp, idx uint32, r *Relay) {
 }
 
 type HostInfo struct {
+	syncRWMutex
 	remote          *udp.Addr
 	remotes         *RemoteList
 	promoteCounter  atomic.Uint32
@@ -271,6 +271,7 @@ func NewHostMapFromConfig(l *logrus.Logger, vpnCIDR *net.IPNet, c *config.C) *Ho
 
 func newHostMap(l *logrus.Logger, vpnCIDR *net.IPNet) *HostMap {
 	return &HostMap{
+		syncRWMutex:   newSyncRWMutex("hostmap"),
 		Indexes:       map[uint32]*HostInfo{},
 		Relays:        map[uint32]*HostInfo{},
 		RemoteIndexes: map[uint32]*HostInfo{},

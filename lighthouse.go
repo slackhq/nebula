@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,7 +32,7 @@ type netIpAndPort struct {
 
 type LightHouse struct {
 	//TODO: We need a timer wheel to kick out vpnIps that haven't reported in a long time
-	sync.RWMutex //Because we concurrently read and write to our maps
+	syncRWMutex  //Because we concurrently read and write to our maps
 	ctx          context.Context
 	amLighthouse bool
 	myVpnIp      iputil.VpnIp
@@ -103,6 +102,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 
 	ones, _ := myVpnNet.Mask.Size()
 	h := LightHouse{
+		syncRWMutex:  newSyncRWMutex("lighthouse"),
 		ctx:          ctx,
 		amLighthouse: amLighthouse,
 		myVpnIp:      iputil.Ip2VpnIp(myVpnNet.IP),
@@ -468,6 +468,7 @@ func (lh *LightHouse) QueryServer(ip iputil.VpnIp) {
 		return
 	}
 
+	chanDebugSend("lighthouse-query-chan")
 	lh.queryChan <- ip
 }
 
@@ -749,6 +750,8 @@ func (lh *LightHouse) startQueryWorker() {
 	go func() {
 		nb := make([]byte, 12, 12)
 		out := make([]byte, mtu)
+
+		chanDebugRecv("lighthouse-query-chan")
 
 		for {
 			select {

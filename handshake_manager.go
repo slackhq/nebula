@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -44,7 +43,7 @@ type HandshakeConfig struct {
 
 type HandshakeManager struct {
 	// Mutex for interacting with the vpnIps and indexes maps
-	sync.RWMutex
+	syncRWMutex
 
 	vpnIps  map[iputil.VpnIp]*HandshakeHostInfo
 	indexes map[uint32]*HandshakeHostInfo
@@ -65,7 +64,7 @@ type HandshakeManager struct {
 }
 
 type HandshakeHostInfo struct {
-	sync.Mutex
+	syncMutex
 
 	startTime   time.Time       // Time that we first started trying with this handshake
 	ready       bool            // Is the handshake ready
@@ -103,6 +102,7 @@ func (hh *HandshakeHostInfo) cachePacket(l *logrus.Logger, t header.MessageType,
 
 func NewHandshakeManager(l *logrus.Logger, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
+		syncRWMutex:            newSyncRWMutex("handshake-manager"),
 		vpnIps:                 map[iputil.VpnIp]*HandshakeHostInfo{},
 		indexes:                map[uint32]*HandshakeHostInfo{},
 		mainHostMap:            mainHostMap,
@@ -110,7 +110,7 @@ func NewHandshakeManager(l *logrus.Logger, mainHostMap *HostMap, lightHouse *Lig
 		outside:                outside,
 		config:                 config,
 		trigger:                make(chan iputil.VpnIp, config.triggerBuffer),
-		OutboundHandshakeTimer: NewLockingTimerWheel[iputil.VpnIp](config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
+		OutboundHandshakeTimer: NewLockingTimerWheel[iputil.VpnIp]("handshake-manager-timer", config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
 		messageMetrics:         config.messageMetrics,
 		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
 		metricTimedOut:         metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),
@@ -385,9 +385,11 @@ func (hm *HandshakeManager) StartHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 	}
 
 	hostinfo := &HostInfo{
+		syncRWMutex:     newSyncRWMutex("hostinfo"),
 		vpnIp:           vpnIp,
 		HandshakePacket: make(map[uint8][]byte, 0),
 		relayState: RelayState{
+			syncRWMutex:   newSyncRWMutex("relay-state"),
 			relays:        map[iputil.VpnIp]struct{}{},
 			relayForByIp:  map[iputil.VpnIp]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
@@ -395,6 +397,7 @@ func (hm *HandshakeManager) StartHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 	}
 
 	hh := &HandshakeHostInfo{
+		syncMutex: newSyncMutex("handshake-hostinfo"),
 		hostinfo:  hostinfo,
 		startTime: time.Now(),
 	}

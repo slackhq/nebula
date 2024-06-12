@@ -8,6 +8,7 @@ require (
 	dario.cat/mergo v1.0.0
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
 	github.com/armon/go-radix v1.0.0
+	github.com/clarkmcc/go-dag v0.0.0-20220908000337-9c3ba5b365fc
 	github.com/cyberdelia/go-metrics-graphite v0.0.0-20161219230853-39f87cc3b432
 	github.com/flynn/noise v1.1.0
 	github.com/gogo/protobuf v1.3.2
@@ -21,6 +22,7 @@ require (
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/stretchr/testify v1.9.0
+	github.com/timandy/routine v1.1.1
 	github.com/vishvananda/netlink v1.2.1-beta.2
 	golang.org/x/crypto v0.24.0
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090
