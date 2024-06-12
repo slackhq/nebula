@@ -415,7 +415,7 @@ func (lh *LightHouse) loadStaticMap(c *config.C, tunCidr *net.IPNet, staticList 
 		return err
 	}
 
-	shm := c.GetMap("static_host_map", map[interface{}]interface{}{})
+	shm := c.GetMap("static_host_map", map[string]any{})
 	i := 0
 
 	for k, v := range shm {
@@ -429,9 +429,9 @@ func (lh *LightHouse) loadStaticMap(c *config.C, tunCidr *net.IPNet, staticList 
 		}
 
 		vpnIp := iputil.Ip2VpnIp(rip)
-		vals, ok := v.([]interface{})
+		vals, ok := v.([]any)
 		if !ok {
-			vals = []interface{}{v}
+			vals = []any{v}
 		}
 		remoteAddrs := []string{}
 		for _, v := range vals {

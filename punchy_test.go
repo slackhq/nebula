@@ -26,7 +26,7 @@ func TestNewPunchyFromConfig(t *testing.T) {
 	assert.Equal(t, true, p.GetPunch())
 
 	// punchy.punch
-	c.Settings["punchy"] = map[interface{}]interface{}{"punch": true}
+	c.Settings["punchy"] = map[string]any{"punch": true}
 	p = NewPunchyFromConfig(l, c)
 	assert.Equal(t, true, p.GetPunch())
 
@@ -36,18 +36,18 @@ func TestNewPunchyFromConfig(t *testing.T) {
 	assert.Equal(t, true, p.GetRespond())
 
 	// punchy.respond
-	c.Settings["punchy"] = map[interface{}]interface{}{"respond": true}
+	c.Settings["punchy"] = map[string]any{"respond": true}
 	c.Settings["punch_back"] = false
 	p = NewPunchyFromConfig(l, c)
 	assert.Equal(t, true, p.GetRespond())
 
 	// punchy.delay
-	c.Settings["punchy"] = map[interface{}]interface{}{"delay": "1m"}
+	c.Settings["punchy"] = map[string]any{"delay": "1m"}
 	p = NewPunchyFromConfig(l, c)
 	assert.Equal(t, time.Minute, p.GetDelay())
 
 	// punchy.respond_delay
-	c.Settings["punchy"] = map[interface{}]interface{}{"respond_delay": "1m"}
+	c.Settings["punchy"] = map[string]any{"respond_delay": "1m"}
 	p = NewPunchyFromConfig(l, c)
 	assert.Equal(t, time.Minute, p.GetRespondDelay())
 }

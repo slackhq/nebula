@@ -12,7 +12,7 @@ import (
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 //TODO: Add a test to ensure udpAddr is copied and not reused
@@ -53,15 +53,15 @@ func Test_lhStaticMapping(t *testing.T) {
 	lh1 := "10.128.0.2"
 
 	c := config.NewC(l)
-	c.Settings["lighthouse"] = map[interface{}]interface{}{"hosts": []interface{}{lh1}}
-	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"1.1.1.1:4242"}}
+	c.Settings["lighthouse"] = map[string]any{"hosts": []any{lh1}}
+	c.Settings["static_host_map"] = map[string]any{lh1: []any{"1.1.1.1:4242"}}
 	_, err := NewLightHouseFromConfig(context.Background(), l, c, myVpnNet, nil, nil)
 	assert.Nil(t, err)
 
 	lh2 := "10.128.0.3"
 	c = config.NewC(l)
-	c.Settings["lighthouse"] = map[interface{}]interface{}{"hosts": []interface{}{lh1, lh2}}
-	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"100.1.1.1:4242"}}
+	c.Settings["lighthouse"] = map[string]any{"hosts": []any{lh1, lh2}}
+	c.Settings["static_host_map"] = map[string]any{lh1: []any{"100.1.1.1:4242"}}
 	_, err = NewLightHouseFromConfig(context.Background(), l, c, myVpnNet, nil, nil)
 	assert.EqualError(t, err, "lighthouse 10.128.0.3 does not have a static_host_map entry")
 }
@@ -72,12 +72,12 @@ func TestReloadLighthouseInterval(t *testing.T) {
 	lh1 := "10.128.0.2"
 
 	c := config.NewC(l)
-	c.Settings["lighthouse"] = map[interface{}]interface{}{
-		"hosts":    []interface{}{lh1},
+	c.Settings["lighthouse"] = map[string]any{
+		"hosts":    []any{lh1},
 		"interval": "1s",
 	}
 
-	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"1.1.1.1:4242"}}
+	c.Settings["static_host_map"] = map[string]any{lh1: []any{"1.1.1.1:4242"}}
 	lh, err := NewLightHouseFromConfig(context.Background(), l, c, myVpnNet, nil, nil)
 	assert.NoError(t, err)
 	lh.ifce = &mockEncWriter{}
@@ -191,8 +191,8 @@ func TestLighthouse_Memory(t *testing.T) {
 	theirVpnIp := iputil.Ip2VpnIp(net.ParseIP("10.128.0.3"))
 
 	c := config.NewC(l)
-	c.Settings["lighthouse"] = map[interface{}]interface{}{"am_lighthouse": true}
-	c.Settings["listen"] = map[interface{}]interface{}{"port": 4242}
+	c.Settings["lighthouse"] = map[string]any{"am_lighthouse": true}
+	c.Settings["listen"] = map[string]any{"port": 4242}
 	lh, err := NewLightHouseFromConfig(context.Background(), l, c, &net.IPNet{IP: net.IP{10, 128, 0, 1}, Mask: net.IPMask{255, 255, 255, 0}}, nil, nil)
 	assert.NoError(t, err)
 	lhh := lh.NewRequestHandler()
@@ -267,14 +267,14 @@ func TestLighthouse_Memory(t *testing.T) {
 func TestLighthouse_reload(t *testing.T) {
 	l := test.NewLogger()
 	c := config.NewC(l)
-	c.Settings["lighthouse"] = map[interface{}]interface{}{"am_lighthouse": true}
-	c.Settings["listen"] = map[interface{}]interface{}{"port": 4242}
+	c.Settings["lighthouse"] = map[string]any{"am_lighthouse": true}
+	c.Settings["listen"] = map[string]any{"port": 4242}
 	lh, err := NewLightHouseFromConfig(context.Background(), l, c, &net.IPNet{IP: net.IP{10, 128, 0, 1}, Mask: net.IPMask{255, 255, 255, 0}}, nil, nil)
 	assert.NoError(t, err)
 
-	nc := map[interface{}]interface{}{
-		"static_host_map": map[interface{}]interface{}{
-			"10.128.0.2": []interface{}{"1.1.1.1:4242"},
+	nc := map[string]any{
+		"static_host_map": map[string]any{
+			"10.128.0.2": []any{"1.1.1.1:4242"},
 		},
 	}
 	rc, err := yaml.Marshal(nc)
@@ -332,7 +332,7 @@ func newLHHostUpdate(fromAddr *udp.Addr, vpnIp iputil.VpnIp, addrs []*udp.Addr, 
 //func Test_lhRemoteAllowList(t *testing.T) {
 //	l := NewLogger()
 //	c := NewConfig(l)
-//	c.Settings["remoteallowlist"] = map[interface{}]interface{}{
+//	c.Settings["remoteallowlist"] = map[string]any{
 //		"10.20.0.0/12": false,
 //	}
 //	allowList, err := c.GetAllowList("remoteallowlist", false)

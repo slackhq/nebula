@@ -7,7 +7,7 @@ import (
 	"strconv"
 )
 
-type m map[string]interface{}
+type m = map[string]any
 
 type Addr struct {
 	IP   net.IP

@@ -73,7 +73,7 @@ func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 		return []Route{}, nil
 	}
 
-	rawRoutes, ok := r.([]interface{})
+	rawRoutes, ok := r.([]any)
 	if !ok {
 		return nil, fmt.Errorf("tun.routes is not an array")
 	}
@@ -84,7 +84,7 @@ func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 
 	routes := make([]Route, len(rawRoutes))
 	for i, r := range rawRoutes {
-		m, ok := r.(map[interface{}]interface{})
+		m, ok := r.(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("entry %v in tun.routes is invalid", i+1)
 		}
@@ -144,7 +144,7 @@ func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 		return []Route{}, nil
 	}
 
-	rawRoutes, ok := r.([]interface{})
+	rawRoutes, ok := r.([]any)
 	if !ok {
 		return nil, fmt.Errorf("tun.unsafe_routes is not an array")
 	}
@@ -155,7 +155,7 @@ func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 
 	routes := make([]Route, len(rawRoutes))
 	for i, r := range rawRoutes {
-		m, ok := r.(map[interface{}]interface{})
+		m, ok := r.(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("entry %v in tun.unsafe_routes is invalid", i+1)
 		}
