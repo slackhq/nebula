@@ -1151,7 +1151,7 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp i
 	}
 }
 
-// ipMaskContains checks if testIp is contained by ip after applying a cidr
+// ipMaskContains checks if testIp is contained by ip after applying a cidr.
 // zeros is 32 - bits from net.IPMask.Size()
 func ipMaskContains(ip iputil.VpnIp, zeros iputil.VpnIp, testIp iputil.VpnIp) bool {
 	return (testIp^ip)>>zeros == 0
