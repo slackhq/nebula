@@ -96,7 +96,7 @@ func (hh *HandshakeHostInfo) cachePacket(l *logrus.Logger, t header.MessageType,
 			hh.hostinfo.logger(l).
 				WithField("length", len(hh.packetStore)).
 				WithField("stored", false).
-				Debugf("Packet store")
+				Debugf("Packet drop")
 		}
 	}
 }
