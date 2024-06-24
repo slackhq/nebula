@@ -28,11 +28,11 @@ func NewNebulaCipherState(s *noise.CipherState) *NebulaCipherState {
 // EncryptDanger encrypts and authenticates a given payload.
 //
 // out is a destination slice to hold the output of the EncryptDanger operation.
-// - ad is additional data, which will be authenticated and appended to out, but not encrypted.
-// - plaintext is encrypted, authenticated and appended to out.
-// - n is a nonce value which must never be re-used with this key.
-// - nb is a buffer used for temporary storage in the implementation of this call, which should
-// be re-used by callers to minimize garbage collection.
+//   - ad is additional data, which will be authenticated and appended to out, but not encrypted.
+//   - plaintext is encrypted, authenticated and appended to out.
+//   - n is a nonce value which must never be re-used with this key.
+//   - nb is a buffer used for temporary storage in the implementation of this call, which should
+//     be re-used by callers to minimize garbage collection.
 func (s *NebulaCipherState) EncryptDanger(out, ad, plaintext []byte, n uint64, nb []byte) ([]byte, error) {
 	if s != nil {
 		// TODO: Is this okay now that we have made messageCounter atomic?
