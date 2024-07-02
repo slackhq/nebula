@@ -64,7 +64,7 @@ jobs:
     name: Build Universal Darwin
     env:
       HAS_SIGNING_CREDS: ${{ secrets.AC_USERNAME != '' }}
-    runs-on: macos-11
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
