@@ -50,6 +50,14 @@ func FromUrl(pkurl string) (*PKClient, error) {
 	return New(module, uint(slotid), pin, id, label)
 }
 
+func ecKeyToArray(key *ecdsa.PublicKey) []byte {
+	x := make([]byte, 32)
+	y := make([]byte, 32)
+	key.X.FillBytes(x)
+	key.Y.FillBytes(y)
+	return append([]byte{0x04}, append(x, y...)...)
+}
+
 func formatPubkeyFromPublicKeyInfoAttr(d []byte) ([]byte, error) {
 	e, err := x509.ParsePKIXPublicKey(d)
 	if err != nil {
@@ -57,7 +65,7 @@ func formatPubkeyFromPublicKeyInfoAttr(d []byte) ([]byte, error) {
 	}
 	switch t := e.(type) {
 	case *ecdsa.PublicKey:
-		return append([]byte{0x04}, append(t.X.Bytes(), t.Y.Bytes()...)...), nil
+		return ecKeyToArray(e.(*ecdsa.PublicKey)), nil
 	default:
 		return nil, fmt.Errorf("unknown public key type: %T", t)
 	}
