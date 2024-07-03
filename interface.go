@@ -86,12 +86,24 @@ type Interface struct {
 
 	writers []udp.Conn
 	readers []io.ReadWriteCloser
+	udpRaw  *udp.RawConn
+
+	multiPort MultiPortConfig
 
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
 	cachedPacketMetrics *cachedPacketMetrics
 
 	l *logrus.Logger
+}
+
+type MultiPortConfig struct {
+	Tx               bool
+	Rx               bool
+	TxBasePort       uint16
+	TxPorts          int
+	TxHandshake      bool
+	TxHandshakeDelay int
 }
 
 type EncWriter interface {
@@ -216,6 +228,8 @@ func (f *Interface) activate() {
 		Info("Nebula interface is active")
 
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
+
+	metrics.GetOrRegisterGauge("multiport.tx_ports", nil).Update(int64(f.multiPort.TxPorts))
 
 	// Prepare n tun queues
 	var reader io.ReadWriteCloser = f.inside
@@ -399,6 +413,8 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 
 	udpStats := udp.NewUDPStatsEmitter(f.writers)
 
+	var rawStats func()
+
 	certExpirationGauge := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil)
 
 	for {
@@ -409,6 +425,12 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 			f.firewall.EmitStats()
 			f.handshakeManager.EmitStats()
 			udpStats()
+			if f.udpRaw != nil {
+				if rawStats == nil {
+					rawStats = udp.NewRawStatsEmitter(f.udpRaw)
+				}
+				rawStats()
+			}
 			certExpirationGauge.Update(int64(f.pki.GetCertState().Certificate.Details.NotAfter.Sub(time.Now()) / time.Second))
 		}
 	}
