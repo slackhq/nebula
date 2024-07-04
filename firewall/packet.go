@@ -3,8 +3,7 @@ package firewall
 import (
 	"encoding/json"
 	"fmt"
-
-	"github.com/slackhq/nebula/iputil"
+	"net/netip"
 )
 
 type m map[string]interface{}
@@ -20,8 +19,8 @@ const (
 )
 
 type Packet struct {
-	LocalIP    iputil.VpnIp
-	RemoteIP   iputil.VpnIp
+	LocalIP    netip.Addr
+	RemoteIP   netip.Addr
 	LocalPort  uint16
 	RemotePort uint16
 	Protocol   uint8

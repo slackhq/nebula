@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"io"
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/slackhq/nebula/cert"
@@ -12,7 +13,7 @@ import (
 )
 
 // NewTestCaCert will generate a CA cert
-func NewTestCaCert(before, after time.Time, ips, subnets []*net.IPNet, groups []string) (*cert.NebulaCertificate, []byte, []byte, []byte) {
+func NewTestCaCert(before, after time.Time, ips, subnets []netip.Prefix, groups []string) (*cert.NebulaCertificate, []byte, []byte, []byte) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if before.IsZero() {
 		before = time.Now().Add(time.Second * -60).Round(time.Second)
@@ -33,11 +34,11 @@ func NewTestCaCert(before, after time.Time, ips, subnets []*net.IPNet, groups []
 	}
 
 	if len(ips) > 0 {
-		nc.Details.Ips = ips
+		//TODO nc.Details.Ips = ips
 	}
 
 	if len(subnets) > 0 {
-		nc.Details.Subnets = subnets
+		//TODO nc.Details.Subnets = subnets
 	}
 
 	if len(groups) > 0 {
@@ -59,7 +60,7 @@ func NewTestCaCert(before, after time.Time, ips, subnets []*net.IPNet, groups []
 
 // NewTestCert will generate a signed certificate with the provided details.
 // Expiry times are defaulted if you do not pass them in
-func NewTestCert(ca *cert.NebulaCertificate, key []byte, name string, before, after time.Time, ip *net.IPNet, subnets []*net.IPNet, groups []string) (*cert.NebulaCertificate, []byte, []byte, []byte) {
+func NewTestCert(ca *cert.NebulaCertificate, key []byte, name string, before, after time.Time, ip netip.Prefix, subnets []netip.Prefix, groups []string) (*cert.NebulaCertificate, []byte, []byte, []byte) {
 	issuer, err := ca.Sha256Sum()
 	if err != nil {
 		panic(err)
@@ -74,12 +75,12 @@ func NewTestCert(ca *cert.NebulaCertificate, key []byte, name string, before, af
 	}
 
 	pub, rawPriv := x25519Keypair()
-
+	ipb := ip.Addr().AsSlice()
 	nc := &cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
-			Name:           name,
-			Ips:            []*net.IPNet{ip},
-			Subnets:        subnets,
+			Name: name,
+			Ips:  []*net.IPNet{{IP: ipb[:], Mask: net.CIDRMask(ip.Bits(), ip.Addr().BitLen())}},
+			//Subnets:        subnets,
 			Groups:         groups,
 			NotBefore:      time.Unix(before.Unix(), 0),
 			NotAfter:       time.Unix(after.Unix(), 0),
@@ -115,4 +116,8 @@ func x25519Keypair() ([]byte, []byte) {
 	}
 
 	return pubkey, privkey
+}
+
+func addrToOldNetIp(addr netip.Addr) *net.IP {
+	return &net.IP{}
 }

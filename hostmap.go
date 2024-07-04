@@ -3,18 +3,17 @@ package nebula
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
-	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/iputil"
-	"github.com/slackhq/nebula/udp"
 )
 
 // const ProbeLen = 100
@@ -49,7 +48,7 @@ type Relay struct {
 	State       int
 	LocalIndex  uint32
 	RemoteIndex uint32
-	PeerIp      iputil.VpnIp
+	PeerIp      netip.Addr
 }
 
 type HostMap struct {
@@ -57,9 +56,9 @@ type HostMap struct {
 	Indexes         map[uint32]*HostInfo
 	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a Relay HostInfo object
 	RemoteIndexes   map[uint32]*HostInfo
-	Hosts           map[iputil.VpnIp]*HostInfo
-	preferredRanges atomic.Pointer[[]*net.IPNet]
-	vpnCIDR         *net.IPNet
+	Hosts           map[netip.Addr]*HostInfo
+	preferredRanges atomic.Pointer[[]netip.Prefix]
+	vpnCIDR         netip.Prefix
 	l               *logrus.Logger
 }
 
@@ -69,12 +68,12 @@ type HostMap struct {
 type RelayState struct {
 	sync.RWMutex
 
-	relays        map[iputil.VpnIp]struct{} // Set of VpnIp's of Hosts to use as relays to access this peer
-	relayForByIp  map[iputil.VpnIp]*Relay   // Maps VpnIps of peers for which this HostInfo is a relay to some Relay info
-	relayForByIdx map[uint32]*Relay         // Maps a local index to some Relay info
+	relays        map[netip.Addr]struct{} // Set of VpnIp's of Hosts to use as relays to access this peer
+	relayForByIp  map[netip.Addr]*Relay   // Maps VpnIps of peers for which this HostInfo is a relay to some Relay info
+	relayForByIdx map[uint32]*Relay       // Maps a local index to some Relay info
 }
 
-func (rs *RelayState) DeleteRelay(ip iputil.VpnIp) {
+func (rs *RelayState) DeleteRelay(ip netip.Addr) {
 	rs.Lock()
 	defer rs.Unlock()
 	delete(rs.relays, ip)
@@ -90,33 +89,33 @@ func (rs *RelayState) CopyAllRelayFor() []*Relay {
 	return ret
 }
 
-func (rs *RelayState) GetRelayForByIp(ip iputil.VpnIp) (*Relay, bool) {
+func (rs *RelayState) GetRelayForByIp(ip netip.Addr) (*Relay, bool) {
 	rs.RLock()
 	defer rs.RUnlock()
 	r, ok := rs.relayForByIp[ip]
 	return r, ok
 }
 
-func (rs *RelayState) InsertRelayTo(ip iputil.VpnIp) {
+func (rs *RelayState) InsertRelayTo(ip netip.Addr) {
 	rs.Lock()
 	defer rs.Unlock()
 	rs.relays[ip] = struct{}{}
 }
 
-func (rs *RelayState) CopyRelayIps() []iputil.VpnIp {
+func (rs *RelayState) CopyRelayIps() []netip.Addr {
 	rs.RLock()
 	defer rs.RUnlock()
-	ret := make([]iputil.VpnIp, 0, len(rs.relays))
+	ret := make([]netip.Addr, 0, len(rs.relays))
 	for ip := range rs.relays {
 		ret = append(ret, ip)
 	}
 	return ret
 }
 
-func (rs *RelayState) CopyRelayForIps() []iputil.VpnIp {
+func (rs *RelayState) CopyRelayForIps() []netip.Addr {
 	rs.RLock()
 	defer rs.RUnlock()
-	currentRelays := make([]iputil.VpnIp, 0, len(rs.relayForByIp))
+	currentRelays := make([]netip.Addr, 0, len(rs.relayForByIp))
 	for relayIp := range rs.relayForByIp {
 		currentRelays = append(currentRelays, relayIp)
 	}
@@ -133,19 +132,19 @@ func (rs *RelayState) CopyRelayForIdxs() []uint32 {
 	return ret
 }
 
-func (rs *RelayState) RemoveRelay(localIdx uint32) (iputil.VpnIp, bool) {
+func (rs *RelayState) RemoveRelay(localIdx uint32) (netip.Addr, bool) {
 	rs.Lock()
 	defer rs.Unlock()
 	r, ok := rs.relayForByIdx[localIdx]
 	if !ok {
-		return iputil.VpnIp(0), false
+		return netip.Addr{}, false
 	}
 	delete(rs.relayForByIdx, localIdx)
 	delete(rs.relayForByIp, r.PeerIp)
 	return r.PeerIp, true
 }
 
-func (rs *RelayState) CompleteRelayByIP(vpnIp iputil.VpnIp, remoteIdx uint32) bool {
+func (rs *RelayState) CompleteRelayByIP(vpnIp netip.Addr, remoteIdx uint32) bool {
 	rs.Lock()
 	defer rs.Unlock()
 	r, ok := rs.relayForByIp[vpnIp]
@@ -175,7 +174,7 @@ func (rs *RelayState) CompleteRelayByIdx(localIdx uint32, remoteIdx uint32) (*Re
 	return &newRelay, true
 }
 
-func (rs *RelayState) QueryRelayForByIp(vpnIp iputil.VpnIp) (*Relay, bool) {
+func (rs *RelayState) QueryRelayForByIp(vpnIp netip.Addr) (*Relay, bool) {
 	rs.RLock()
 	defer rs.RUnlock()
 	r, ok := rs.relayForByIp[vpnIp]
@@ -189,7 +188,7 @@ func (rs *RelayState) QueryRelayForByIdx(idx uint32) (*Relay, bool) {
 	return r, ok
 }
 
-func (rs *RelayState) InsertRelay(ip iputil.VpnIp, idx uint32, r *Relay) {
+func (rs *RelayState) InsertRelay(ip netip.Addr, idx uint32, r *Relay) {
 	rs.Lock()
 	defer rs.Unlock()
 	rs.relayForByIp[ip] = r
@@ -197,15 +196,15 @@ func (rs *RelayState) InsertRelay(ip iputil.VpnIp, idx uint32, r *Relay) {
 }
 
 type HostInfo struct {
-	remote          *udp.Addr
+	remote          netip.AddrPort
 	remotes         *RemoteList
 	promoteCounter  atomic.Uint32
 	ConnectionState *ConnectionState
 	remoteIndexId   uint32
 	localIndexId    uint32
-	vpnIp           iputil.VpnIp
+	vpnIp           netip.Addr
 	recvError       atomic.Uint32
-	remoteCidr      *cidr.Tree4[struct{}]
+	remoteCidr      *bart.Table[struct{}]
 	relayState      RelayState
 
 	// HandshakePacket records the packets used to create this hostinfo
@@ -227,7 +226,7 @@ type HostInfo struct {
 	lastHandshakeTime uint64
 
 	lastRoam       time.Time
-	lastRoamRemote *udp.Addr
+	lastRoamRemote netip.AddrPort
 
 	// Used to track other hostinfos for this vpn ip since only 1 can be primary
 	// Synchronised via hostmap lock and not the hostinfo lock.
@@ -254,7 +253,7 @@ type cachedPacketMetrics struct {
 	dropped metrics.Counter
 }
 
-func NewHostMapFromConfig(l *logrus.Logger, vpnCIDR *net.IPNet, c *config.C) *HostMap {
+func NewHostMapFromConfig(l *logrus.Logger, vpnCIDR netip.Prefix, c *config.C) *HostMap {
 	hm := newHostMap(l, vpnCIDR)
 
 	hm.reload(c, true)
@@ -269,12 +268,12 @@ func NewHostMapFromConfig(l *logrus.Logger, vpnCIDR *net.IPNet, c *config.C) *Ho
 	return hm
 }
 
-func newHostMap(l *logrus.Logger, vpnCIDR *net.IPNet) *HostMap {
+func newHostMap(l *logrus.Logger, vpnCIDR netip.Prefix) *HostMap {
 	return &HostMap{
 		Indexes:       map[uint32]*HostInfo{},
 		Relays:        map[uint32]*HostInfo{},
 		RemoteIndexes: map[uint32]*HostInfo{},
-		Hosts:         map[iputil.VpnIp]*HostInfo{},
+		Hosts:         map[netip.Addr]*HostInfo{},
 		vpnCIDR:       vpnCIDR,
 		l:             l,
 	}
@@ -282,11 +281,11 @@ func newHostMap(l *logrus.Logger, vpnCIDR *net.IPNet) *HostMap {
 
 func (hm *HostMap) reload(c *config.C, initial bool) {
 	if initial || c.HasChanged("preferred_ranges") {
-		var preferredRanges []*net.IPNet
+		var preferredRanges []netip.Prefix
 		rawPreferredRanges := c.GetStringSlice("preferred_ranges", []string{})
 
 		for _, rawPreferredRange := range rawPreferredRanges {
-			_, preferredRange, err := net.ParseCIDR(rawPreferredRange)
+			preferredRange, err := netip.ParsePrefix(rawPreferredRange)
 
 			if err != nil {
 				hm.l.WithError(err).WithField("range", rawPreferredRanges).Warn("Failed to parse preferred ranges, ignoring")
@@ -378,7 +377,7 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 		// The vpnIp pointer points to the same hostinfo as the local index id, we can remove it
 		delete(hm.Hosts, hostinfo.vpnIp)
 		if len(hm.Hosts) == 0 {
-			hm.Hosts = map[iputil.VpnIp]*HostInfo{}
+			hm.Hosts = map[netip.Addr]*HostInfo{}
 		}
 
 		if hostinfo.next != nil {
@@ -461,11 +460,11 @@ func (hm *HostMap) QueryReverseIndex(index uint32) *HostInfo {
 	}
 }
 
-func (hm *HostMap) QueryVpnIp(vpnIp iputil.VpnIp) *HostInfo {
+func (hm *HostMap) QueryVpnIp(vpnIp netip.Addr) *HostInfo {
 	return hm.queryVpnIp(vpnIp, nil)
 }
 
-func (hm *HostMap) QueryVpnIpRelayFor(targetIp, relayHostIp iputil.VpnIp) (*HostInfo, *Relay, error) {
+func (hm *HostMap) QueryVpnIpRelayFor(targetIp, relayHostIp netip.Addr) (*HostInfo, *Relay, error) {
 	hm.RLock()
 	defer hm.RUnlock()
 
@@ -483,7 +482,7 @@ func (hm *HostMap) QueryVpnIpRelayFor(targetIp, relayHostIp iputil.VpnIp) (*Host
 	return nil, nil, errors.New("unable to find host with relay")
 }
 
-func (hm *HostMap) queryVpnIp(vpnIp iputil.VpnIp, promoteIfce *Interface) *HostInfo {
+func (hm *HostMap) queryVpnIp(vpnIp netip.Addr, promoteIfce *Interface) *HostInfo {
 	hm.RLock()
 	if h, ok := hm.Hosts[vpnIp]; ok {
 		hm.RUnlock()
@@ -535,7 +534,7 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	}
 }
 
-func (hm *HostMap) GetPreferredRanges() []*net.IPNet {
+func (hm *HostMap) GetPreferredRanges() []netip.Prefix {
 	//NOTE: if preferredRanges is ever not stored before a load this will fail to dereference a nil pointer
 	return *hm.preferredRanges.Load()
 }
@@ -560,14 +559,14 @@ func (hm *HostMap) ForEachIndex(f controlEach) {
 
 // TryPromoteBest handles re-querying lighthouses and probing for better paths
 // NOTE: It is an error to call this if you are a lighthouse since they should not roam clients!
-func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface) {
+func (i *HostInfo) TryPromoteBest(preferredRanges []netip.Prefix, ifce *Interface) {
 	c := i.promoteCounter.Add(1)
 	if c%ifce.tryPromoteEvery.Load() == 0 {
 		remote := i.remote
 
 		// return early if we are already on a preferred remote
-		if remote != nil {
-			rIP := remote.IP
+		if remote.IsValid() {
+			rIP := remote.Addr()
 			for _, l := range preferredRanges {
 				if l.Contains(rIP) {
 					return
@@ -575,8 +574,8 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 			}
 		}
 
-		i.remotes.ForEach(preferredRanges, func(addr *udp.Addr, preferred bool) {
-			if remote != nil && (addr == nil || !preferred) {
+		i.remotes.ForEach(preferredRanges, func(addr netip.AddrPort, preferred bool) {
+			if remote.IsValid() && (!addr.IsValid() || !preferred) {
 				return
 			}
 
@@ -605,23 +604,23 @@ func (i *HostInfo) GetCert() *cert.NebulaCertificate {
 	return nil
 }
 
-func (i *HostInfo) SetRemote(remote *udp.Addr) {
+func (i *HostInfo) SetRemote(remote netip.AddrPort) {
 	// We copy here because we likely got this remote from a source that reuses the object
-	if !i.remote.Equals(remote) {
-		i.remote = remote.Copy()
-		i.remotes.LearnRemote(i.vpnIp, remote.Copy())
+	if i.remote != remote {
+		i.remote = remote
+		i.remotes.LearnRemote(i.vpnIp, remote)
 	}
 }
 
 // SetRemoteIfPreferred returns true if the remote was changed. The lastRoam
 // time on the HostInfo will also be updated.
-func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udp.Addr) bool {
-	if newRemote == nil {
+func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote netip.AddrPort) bool {
+	if !newRemote.IsValid() {
 		// relays have nil udp Addrs
 		return false
 	}
 	currentRemote := i.remote
-	if currentRemote == nil {
+	if !currentRemote.IsValid() {
 		i.SetRemote(newRemote)
 		return true
 	}
@@ -631,11 +630,11 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udp.Addr) bool {
 	newIsPreferred := false
 	for _, l := range hm.GetPreferredRanges() {
 		// return early if we are already on a preferred remote
-		if l.Contains(currentRemote.IP) {
+		if l.Contains(currentRemote.Addr()) {
 			return false
 		}
 
-		if l.Contains(newRemote.IP) {
+		if l.Contains(newRemote.Addr()) {
 			newIsPreferred = true
 		}
 	}
@@ -643,7 +642,7 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udp.Addr) bool {
 	if newIsPreferred {
 		// Consider this a roaming event
 		i.lastRoam = time.Now()
-		i.lastRoamRemote = currentRemote.Copy()
+		i.lastRoamRemote = currentRemote
 
 		i.SetRemote(newRemote)
 
@@ -666,13 +665,17 @@ func (i *HostInfo) CreateRemoteCIDR(c *cert.NebulaCertificate) {
 		return
 	}
 
-	remoteCidr := cidr.NewTree4[struct{}]()
+	remoteCidr := new(bart.Table[struct{}])
 	for _, ip := range c.Details.Ips {
-		remoteCidr.AddCIDR(&net.IPNet{IP: ip.IP, Mask: net.IPMask{255, 255, 255, 255}}, struct{}{})
+		nip, _ := netip.AddrFromSlice(ip.IP)
+		bits, _ := ip.Mask.Size()
+		remoteCidr.Insert(netip.PrefixFrom(nip, bits), struct{}{})
 	}
 
 	for _, n := range c.Details.Subnets {
-		remoteCidr.AddCIDR(n, struct{}{})
+		nip, _ := netip.AddrFromSlice(n.IP)
+		bits, _ := n.Mask.Size()
+		remoteCidr.Insert(netip.PrefixFrom(nip, bits), struct{}{})
 	}
 	i.remoteCidr = remoteCidr
 }
@@ -697,9 +700,9 @@ func (i *HostInfo) logger(l *logrus.Logger) *logrus.Entry {
 
 // Utility functions
 
-func localIps(l *logrus.Logger, allowList *LocalAllowList) *[]net.IP {
+func localIps(l *logrus.Logger, allowList *LocalAllowList) []netip.Addr {
 	//FIXME: This function is pretty garbage
-	var ips []net.IP
+	var ips []netip.Addr
 	ifaces, _ := net.Interfaces()
 	for _, i := range ifaces {
 		allow := allowList.AllowName(i.Name)
@@ -724,7 +727,8 @@ func localIps(l *logrus.Logger, allowList *LocalAllowList) *[]net.IP {
 			//TODO: Filtering out link local for now, this is probably the most correct thing
 			//TODO: Would be nice to filter out SLAAC MAC based ips as well
 			if ip.IsLoopback() == false && !ip.IsLinkLocalUnicast() {
-				allow := allowList.Allow(ip)
+				nip, _ := netip.AddrFromSlice(ip)
+				allow := allowList.Allow(nip)
 				if l.Level >= logrus.TraceLevel {
 					l.WithField("localIp", ip).WithField("allow", allow).Trace("localAllowList.Allow")
 				}
@@ -732,9 +736,9 @@ func localIps(l *logrus.Logger, allowList *LocalAllowList) *[]net.IP {
 					continue
 				}
 
-				ips = append(ips, ip)
+				ips = append(ips, nip)
 			}
 		}
 	}
-	return &ips
+	return ips
 }

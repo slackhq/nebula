@@ -2,7 +2,7 @@ package nebula
 
 import (
 	"context"
-	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,9 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/overlay"
-	"github.com/slackhq/nebula/udp"
 )
 
 // Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
@@ -21,10 +19,10 @@ import (
 type controlEach func(h *HostInfo)
 
 type controlHostLister interface {
-	QueryVpnIp(vpnIp iputil.VpnIp) *HostInfo
+	QueryVpnIp(vpnIp netip.Addr) *HostInfo
 	ForEachIndex(each controlEach)
 	ForEachVpnIp(each controlEach)
-	GetPreferredRanges() []*net.IPNet
+	GetPreferredRanges() []netip.Prefix
 }
 
 type Control struct {
@@ -39,15 +37,15 @@ type Control struct {
 }
 
 type ControlHostInfo struct {
-	VpnIp                  net.IP                  `json:"vpnIp"`
+	VpnIp                  netip.Addr              `json:"vpnIp"`
 	LocalIndex             uint32                  `json:"localIndex"`
 	RemoteIndex            uint32                  `json:"remoteIndex"`
-	RemoteAddrs            []*udp.Addr             `json:"remoteAddrs"`
+	RemoteAddrs            []netip.AddrPort        `json:"remoteAddrs"`
 	Cert                   *cert.NebulaCertificate `json:"cert"`
 	MessageCounter         uint64                  `json:"messageCounter"`
-	CurrentRemote          *udp.Addr               `json:"currentRemote"`
-	CurrentRelaysToMe      []iputil.VpnIp          `json:"currentRelaysToMe"`
-	CurrentRelaysThroughMe []iputil.VpnIp          `json:"currentRelaysThroughMe"`
+	CurrentRemote          netip.AddrPort          `json:"currentRemote"`
+	CurrentRelaysToMe      []netip.Addr            `json:"currentRelaysToMe"`
+	CurrentRelaysThroughMe []netip.Addr            `json:"currentRelaysThroughMe"`
 }
 
 // Start actually runs nebula, this is a nonblocking call. To block use Control.ShutdownBlock()
@@ -132,7 +130,7 @@ func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 }
 
 // GetHostInfoByVpnIp returns a single tunnels hostInfo, or nil if not found
-func (c *Control) GetHostInfoByVpnIp(vpnIp iputil.VpnIp, pending bool) *ControlHostInfo {
+func (c *Control) GetHostInfoByVpnIp(vpnIp netip.Addr, pending bool) *ControlHostInfo {
 	var hl controlHostLister
 	if pending {
 		hl = c.f.handshakeManager
@@ -150,19 +148,19 @@ func (c *Control) GetHostInfoByVpnIp(vpnIp iputil.VpnIp, pending bool) *ControlH
 }
 
 // SetRemoteForTunnel forces a tunnel to use a specific remote
-func (c *Control) SetRemoteForTunnel(vpnIp iputil.VpnIp, addr udp.Addr) *ControlHostInfo {
+func (c *Control) SetRemoteForTunnel(vpnIp netip.Addr, addr netip.AddrPort) *ControlHostInfo {
 	hostInfo := c.f.hostMap.QueryVpnIp(vpnIp)
 	if hostInfo == nil {
 		return nil
 	}
 
-	hostInfo.SetRemote(addr.Copy())
+	hostInfo.SetRemote(addr)
 	ch := copyHostInfo(hostInfo, c.f.hostMap.GetPreferredRanges())
 	return &ch
 }
 
 // CloseTunnel closes a fully established tunnel. If localOnly is false it will notify the remote end as well.
-func (c *Control) CloseTunnel(vpnIp iputil.VpnIp, localOnly bool) bool {
+func (c *Control) CloseTunnel(vpnIp netip.Addr, localOnly bool) bool {
 	hostInfo := c.f.hostMap.QueryVpnIp(vpnIp)
 	if hostInfo == nil {
 		return false
@@ -205,7 +203,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	}
 
 	// Learn which hosts are being used as relays, so we can shut them down last.
-	relayingHosts := map[iputil.VpnIp]*HostInfo{}
+	relayingHosts := map[netip.Addr]*HostInfo{}
 	// Grab the hostMap lock to access the Relays map
 	c.f.hostMap.Lock()
 	for _, relayingHost := range c.f.hostMap.Relays {
@@ -236,15 +234,16 @@ func (c *Control) Device() overlay.Device {
 	return c.f.inside
 }
 
-func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
+func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {
 
 	chi := ControlHostInfo{
-		VpnIp:                  h.vpnIp.ToIP(),
+		VpnIp:                  h.vpnIp,
 		LocalIndex:             h.localIndexId,
 		RemoteIndex:            h.remoteIndexId,
 		RemoteAddrs:            h.remotes.CopyAddrs(preferredRanges),
 		CurrentRelaysToMe:      h.relayState.CopyRelayIps(),
 		CurrentRelaysThroughMe: h.relayState.CopyRelayForIps(),
+		CurrentRemote:          h.remote,
 	}
 
 	if h.ConnectionState != nil {
@@ -253,10 +252,6 @@ func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 
 	if c := h.GetCert(); c != nil {
 		chi.Cert = c.Copy()
-	}
-
-	if h.remote != nil {
-		chi.CurrentRemote = h.remote.Copy()
 	}
 
 	return chi

@@ -8,15 +8,15 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
 
+	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/util"
 	netroute "golang.org/x/net/route"
 	"golang.org/x/sys/unix"
@@ -25,10 +25,10 @@ import (
 type tun struct {
 	io.ReadWriteCloser
 	Device     string
-	cidr       *net.IPNet
+	cidr       netip.Prefix
 	DefaultMTU int
 	Routes     atomic.Pointer[[]Route]
-	routeTree  atomic.Pointer[cidr.Tree4[iputil.VpnIp]]
+	routeTree  atomic.Pointer[bart.Table[netip.Addr]]
 	linkAddr   *netroute.LinkAddr
 	l          *logrus.Logger
 
@@ -73,7 +73,7 @@ type ifreqMTU struct {
 	pad  [8]byte
 }
 
-func newTun(c *config.C, l *logrus.Logger, cidr *net.IPNet, _ bool) (*tun, error) {
+func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, _ bool) (*tun, error) {
 	name := c.GetString("tun.dev", "")
 	ifIndex := -1
 	if name != "" && name != "utun" {
@@ -172,7 +172,7 @@ func (t *tun) deviceBytes() (o [16]byte) {
 	return
 }
 
-func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ *net.IPNet) (*tun, error) {
+func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ netip.Prefix) (*tun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
 }
 
@@ -188,8 +188,13 @@ func (t *tun) Activate() error {
 
 	var addr, mask [4]byte
 
-	copy(addr[:], t.cidr.IP.To4())
-	copy(mask[:], t.cidr.Mask)
+	if !t.cidr.Addr().Is4() {
+		//TODO:
+		panic("need ipv6")
+	}
+
+	addr = t.cidr.Addr().As4()
+	copy(mask[:], prefixToMask(t.cidr))
 
 	s, err := unix.Socket(
 		unix.AF_INET,
@@ -329,13 +334,12 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	return nil
 }
 
-func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	ok, r := t.routeTree.Load().MostSpecificContains(ip)
+func (t *tun) RouteFor(ip netip.Addr) netip.Addr {
+	r, ok := t.routeTree.Load().Lookup(ip)
 	if ok {
 		return r
 	}
-
-	return 0
+	return netip.Addr{}
 }
 
 // Get the LinkAddr for the interface of the given name
@@ -384,13 +388,19 @@ func (t *tun) addRoutes(logErrors bool) error {
 	maskAddr := &netroute.Inet4Addr{}
 	routes := *t.Routes.Load()
 	for _, r := range routes {
-		if r.Via == nil || !r.Install {
+		if !r.Via.IsValid() || !r.Install {
 			// We don't allow route MTUs so only install routes with a via
 			continue
 		}
 
-		copy(routeAddr.IP[:], r.Cidr.IP.To4())
-		copy(maskAddr.IP[:], net.IP(r.Cidr.Mask).To4())
+		if r.Cidr.Addr().Is6() {
+			//TODO: implement ipv6
+			panic("Cant handle ipv6 routes yet")
+		}
+
+		routeAddr.IP = r.Cidr.Addr().As4()
+		//TODO: we could avoid the copy
+		copy(maskAddr.IP[:], prefixToMask(r.Cidr))
 
 		err := addRoute(routeSock, routeAddr, maskAddr, t.linkAddr)
 		if err != nil {
@@ -435,8 +445,14 @@ func (t *tun) removeRoutes(routes []Route) error {
 			continue
 		}
 
-		copy(routeAddr.IP[:], r.Cidr.IP.To4())
-		copy(maskAddr.IP[:], net.IP(r.Cidr.Mask).To4())
+		if r.Cidr.Addr().Is6() {
+			//TODO: implement ipv6
+			panic("Cant handle ipv6 routes yet")
+		}
+
+		routeAddr.IP = r.Cidr.Addr().As4()
+		//TODO: we could avoid the copy
+		copy(maskAddr.IP[:], prefixToMask(r.Cidr))
 
 		err := delRoute(routeSock, routeAddr, maskAddr, t.linkAddr)
 		if err != nil {
@@ -536,7 +552,7 @@ func (t *tun) Write(from []byte) (int, error) {
 	return n - 4, err
 }
 
-func (t *tun) Cidr() *net.IPNet {
+func (t *tun) Cidr() netip.Prefix {
 	return t.cidr
 }
 
@@ -546,4 +562,12 @@ func (t *tun) Name() string {
 
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
+}
+
+func prefixToMask(prefix netip.Prefix) []byte {
+	pLen := 128
+	if prefix.Addr().Is4() {
+		pLen = 32
+	}
+	return net.CIDRMask(prefix.Bits(), pLen)
 }

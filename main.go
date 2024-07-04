@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -67,8 +68,13 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 	l.WithField("firewallHashes", fw.GetRuleHashes()).Info("Firewall started")
 
-	// TODO: make sure mask is 4 bytes
-	tunCidr := certificate.Details.Ips[0]
+	ones, _ := certificate.Details.Ips[0].Mask.Size()
+	addr, ok := netip.AddrFromSlice(certificate.Details.Ips[0].IP)
+	if !ok {
+		//TODO: IPV6-WORK
+		// should never happen but if it did we should log it
+	}
+	tunCidr := netip.PrefixFrom(addr, ones)
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
 	if err != nil {
@@ -149,22 +155,31 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	port := c.GetInt("listen.port", 0)
 
 	if !configTest {
+		//TODO: IPV6-WORK clean this mess up and check the [::] conversion works as expected
 		rawListenHost := c.GetString("listen.host", "0.0.0.0")
-		var listenHost *net.IPAddr
+		var listenHost netip.Addr
 		if rawListenHost == "[::]" {
 			// Old guidance was to provide the literal `[::]` in `listen.host` but that won't resolve.
-			listenHost = &net.IPAddr{IP: net.IPv6zero}
+			listenHost, _ = netip.ParseAddr("::")
 
 		} else {
-			listenHost, err = net.ResolveIPAddr("ip", rawListenHost)
+			//TODO: IPV6-WORK we can do a better resolving and avoid the slice conversion
+			ips, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", rawListenHost)
 			if err != nil {
 				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
 			}
+			if len(ips) == 0 {
+				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
+			}
+			//TODO: IPV6-WORK it is critical to unmap in some cases or else we get netips for v4 addresses that are not equal (v4in6 vs v4)
+			// We likely need to attempt unmapping in every entry point (tun/udp, maybe even lighthouse)
+			// Definitely in the remote list dns looker upper
+			listenHost = ips[0].Unmap()
 		}
 
 		for i := 0; i < routines; i++ {
-			l.Infof("listening %q %d", listenHost.IP, port)
-			udpServer, err := udp.NewListener(l, listenHost.IP, port, routines > 1, c.GetInt("listen.batch", 64))
+			l.Infof("listening on %v", netip.AddrPortFrom(listenHost, uint16(port)))
+			udpServer, err := udp.NewListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
@@ -178,7 +193,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 				if err != nil {
 					return nil, util.NewContextualError("Failed to get listening port", nil, err)
 				}
-				port = int(uPort.Port)
+				port = int(uPort.Port())
 			}
 		}
 	}

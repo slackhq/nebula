@@ -1,11 +1,11 @@
 package nebula
 
 import (
-	"net"
+	"net/netip"
 	"regexp"
 	"testing"
 
-	"github.com/slackhq/nebula/cidr"
+	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
@@ -98,26 +98,26 @@ func TestNewAllowListFromConfig(t *testing.T) {
 }
 
 func TestAllowList_Allow(t *testing.T) {
-	assert.Equal(t, true, ((*AllowList)(nil)).Allow(net.ParseIP("1.1.1.1")))
+	assert.Equal(t, true, ((*AllowList)(nil)).Allow(string2nip("1.1.1.1")))
 
-	tree := cidr.NewTree6[bool]()
-	tree.AddCIDR(cidr.Parse("0.0.0.0/0"), true)
-	tree.AddCIDR(cidr.Parse("10.0.0.0/8"), false)
-	tree.AddCIDR(cidr.Parse("10.42.42.42/32"), true)
-	tree.AddCIDR(cidr.Parse("10.42.0.0/16"), true)
-	tree.AddCIDR(cidr.Parse("10.42.42.0/24"), true)
-	tree.AddCIDR(cidr.Parse("10.42.42.0/24"), false)
-	tree.AddCIDR(cidr.Parse("::1/128"), true)
-	tree.AddCIDR(cidr.Parse("::2/128"), false)
+	tree := new(bart.Table[bool])
+	tree.Insert(string2prefix("0.0.0.0/0"), true)
+	tree.Insert(string2prefix("10.0.0.0/8"), false)
+	tree.Insert(string2prefix("10.42.42.42/32"), true)
+	tree.Insert(string2prefix("10.42.0.0/16"), true)
+	tree.Insert(string2prefix("10.42.42.0/24"), true)
+	tree.Insert(string2prefix("10.42.42.0/24"), false)
+	tree.Insert(string2prefix("::1/128"), true)
+	tree.Insert(string2prefix("::2/128"), false)
 	al := &AllowList{cidrTree: tree}
 
-	assert.Equal(t, true, al.Allow(net.ParseIP("1.1.1.1")))
-	assert.Equal(t, false, al.Allow(net.ParseIP("10.0.0.4")))
-	assert.Equal(t, true, al.Allow(net.ParseIP("10.42.42.42")))
-	assert.Equal(t, false, al.Allow(net.ParseIP("10.42.42.41")))
-	assert.Equal(t, true, al.Allow(net.ParseIP("10.42.0.1")))
-	assert.Equal(t, true, al.Allow(net.ParseIP("::1")))
-	assert.Equal(t, false, al.Allow(net.ParseIP("::2")))
+	assert.Equal(t, true, al.Allow(string2nip("1.1.1.1")))
+	assert.Equal(t, false, al.Allow(string2nip("10.0.0.4")))
+	assert.Equal(t, true, al.Allow(string2nip("10.42.42.42")))
+	assert.Equal(t, false, al.Allow(string2nip("10.42.42.41")))
+	assert.Equal(t, true, al.Allow(string2nip("10.42.0.1")))
+	assert.Equal(t, true, al.Allow(string2nip("::1")))
+	assert.Equal(t, false, al.Allow(string2nip("::2")))
 }
 
 func TestLocalAllowList_AllowName(t *testing.T) {
@@ -142,4 +142,20 @@ func TestLocalAllowList_AllowName(t *testing.T) {
 	assert.Equal(t, false, al.AllowName("docker0"))
 	assert.Equal(t, true, al.AllowName("eth0"))
 	assert.Equal(t, true, al.AllowName("ens5"))
+}
+
+func string2nip(s string) netip.Addr {
+	ip, err := netip.ParseAddr(s)
+	if err != nil {
+		panic("string2nip: netip.ParseAddr failed? " + err.Error())
+	}
+	return ip
+}
+
+func string2prefix(s string) netip.Prefix {
+	ip, err := netip.ParsePrefix(s)
+	if err != nil {
+		panic("string2prefix: netip.ParsePrefix failed? " + err.Error())
+	}
+	return ip
 }
