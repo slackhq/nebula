@@ -3,9 +3,11 @@
 package pkclient
 
 import (
+	"encoding/asn1"
 	"errors"
 	"fmt"
 	"log"
+	"math/big"
 
 	"github.com/miekg/pkcs11"
 	"github.com/miekg/pkcs11/p11"
@@ -18,6 +20,10 @@ type PKClient struct {
 	label      []byte
 	privKeyObj p11.Object
 	pubKeyObj  p11.Object
+}
+
+type ecdsaSignature struct {
+	R, S *big.Int
 }
 
 // New tries to open a session with the HSM, select the slot and login to it
@@ -137,6 +143,26 @@ func (c *PKClient) listDeriveKeys(id []byte, label []byte, private bool) {
 		a, err := obj.Attribute(pkcs11.CKA_DERIVE)
 		log.Printf("DERIVE: %s %v, %v", l, a, err)
 	}
+}
+
+// Signs some data. Returns the ASN.1 encoded signature.
+func (c *PKClient) SignASN1(data []byte) ([]byte, error) {
+	mech := pkcs11.NewMechanism(pkcs11.CKM_ECDSA_SHA256, nil)
+	sk := p11.PrivateKey(c.privKeyObj)
+	rawSig, err := sk.Sign(*mech, data)
+	if err != nil {
+		return nil, err
+	}
+
+	// PKCS #11 Mechanisms v2.30:
+	// "The signature octets correspond to the concatenation of the ECDSA values r and s,
+	// both represented as an octet string of equal length of at most nLen with the most
+	// significant byte first. If r and s have different octet length, the shorter of both
+	// must be padded with leading zero octets such that both have the same octet length.
+	// Loosely spoken, the first half of the signature is r and the second half is s."
+	r := new(big.Int).SetBytes(rawSig[:len(rawSig)/2])
+	s := new(big.Int).SetBytes(rawSig[len(rawSig)/2:])
+	return asn1.Marshal(ecdsaSignature{r, s})
 }
 
 // DeriveNoise derives a shared secret using the input public key against the private key that was found during setup.

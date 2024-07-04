@@ -25,7 +25,7 @@ func newKeygenFlags() *keygenFlags {
 	cf.outPubPath = cf.set.String("out-pub", "", "Required: path to write the public key to")
 	cf.outKeyPath = cf.set.String("out-key", "", "Required: path to write the private key to")
 	cf.curve = cf.set.String("curve", "25519", "ECDH Curve (25519, P256)")
-	keygenP11flag(&cf)
+	cf.p11url = p11Flag(cf.set)
 	return &cf
 }
 
@@ -36,42 +36,55 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 		return err
 	}
 
+	isP11 := len(*cf.p11url) > 0
+
+	if !isP11 {
+		if err = mustFlagString("out-key", cf.outKeyPath); err != nil {
+			return err
+		}
+	}
 	if err = mustFlagString("out-pub", cf.outPubPath); err != nil {
 		return err
 	}
 
 	var pub, rawPriv []byte
 	var curve cert.Curve
-	switch *cf.curve {
-	case "25519", "X25519", "Curve25519", "CURVE25519":
-		pub, rawPriv = x25519Keypair()
-		curve = cert.Curve_CURVE25519
-	case "P256":
-		pub, rawPriv = p256Keypair()
-		curve = cert.Curve_P256
-	default:
-		return fmt.Errorf("invalid curve: %s", *cf.curve)
-	}
-
-	if len(*cf.p11url) == 0 {
-		if err = mustFlagString("out-key", cf.outKeyPath); err != nil {
-			return err
-		}
-		err = os.WriteFile(*cf.outKeyPath, cert.MarshalPrivateKey(curve, rawPriv), 0600)
-		if err != nil {
-			return fmt.Errorf("error while writing out-key: %s", err)
+	if isP11 {
+		switch *cf.curve {
+		case "P256":
+			curve = cert.Curve_P256
+		default:
+			return fmt.Errorf("invalid curve for PKCS#11: %s", *cf.curve)
 		}
 	} else {
-		client, err := pkclient.FromUrl(*cf.p11url)
+		switch *cf.curve {
+		case "25519", "X25519", "Curve25519", "CURVE25519":
+			pub, rawPriv = x25519Keypair()
+			curve = cert.Curve_CURVE25519
+		case "P256":
+			pub, rawPriv = p256Keypair()
+			curve = cert.Curve_P256
+		default:
+			return fmt.Errorf("invalid curve: %s", *cf.curve)
+		}
+	}
+
+	if isP11 {
+		p11Client, err := pkclient.FromUrl(*cf.p11url)
 		if err != nil {
-			return fmt.Errorf("error while creating PKCS11 client: %w", err)
+			return fmt.Errorf("error while creating PKCS#11 client: %w", err)
 		}
 		defer func(client *pkclient.PKClient) {
 			_ = client.Close()
-		}(client)
-		pub, err = client.GetPubKey()
+		}(p11Client)
+		pub, err = p11Client.GetPubKey()
 		if err != nil {
 			return fmt.Errorf("error while getting public key: %w", err)
+		}
+	} else {
+		err = os.WriteFile(*cf.outKeyPath, cert.MarshalPrivateKey(curve, rawPriv), 0600)
+		if err != nil {
+			return fmt.Errorf("error while writing out-key: %s", err)
 		}
 	}
 	err = os.WriteFile(*cf.outPubPath, cert.MarshalPublicKey(curve, pub), 0600)

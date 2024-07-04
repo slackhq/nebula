@@ -17,6 +17,10 @@ func (c *PKClient) Close() error {
 	return nil
 }
 
+func (c *PKClient) SignASN1(data []byte) ([]byte, error) {
+	return nil, notImplemented
+}
+
 func (c *PKClient) DeriveNoise(_ []byte) ([]byte, error) {
 	return nil, notImplemented
 }

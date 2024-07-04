@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/slackhq/nebula/pkclient"
 	"golang.org/x/crypto/curve25519"
 	"google.golang.org/protobuf/proto"
 )
@@ -550,6 +551,34 @@ func (nc *NebulaCertificate) Sign(curve Curve, key []byte) error {
 		}
 	default:
 		return fmt.Errorf("invalid curve: %s", nc.Details.Curve)
+	}
+
+	nc.Signature = sig
+	return nil
+}
+
+// SignPkcs11 signs a nebula cert with the provided private key
+func (nc *NebulaCertificate) SignPkcs11(curve Curve, client *pkclient.PKClient) error {
+	if !nc.Pkcs11Backed {
+		return fmt.Errorf("certificate is not PKCS#11 backed")
+	}
+
+	if curve != nc.Details.Curve {
+		return fmt.Errorf("curve in cert and private key supplied don't match")
+	}
+
+	if curve != Curve_P256 {
+		return fmt.Errorf("only P256 is supported by PKCS#11")
+	}
+
+	b, err := proto.Marshal(nc.getRawDetails())
+	if err != nil {
+		return err
+	}
+
+	sig, err := client.SignASN1(b)
+	if err != nil {
+		return err
 	}
 
 	nc.Signature = sig

@@ -48,6 +48,8 @@ func Test_signHelp(t *testing.T) {
 			"    \tOptional (if in-pub not set): path to write the private key to\n"+
 			"  -out-qr string\n"+
 			"    \tOptional: output a qr code image (png) of the certificate\n"+
+			optionalPkcs11String("  -pkcs11 string\n"+
+			"    \tOptional: PKCS#11 URI to an existing private key\n")+
 			"  -subnets string\n"+
 			"    \tOptional: comma separated list of ipv4 address and network in CIDR notation. Subnets this cert can serve for\n",
 		ob.String(),

@@ -26,7 +26,9 @@ func Test_keygenHelp(t *testing.T) {
 			"  -out-key string\n"+
 			"    \tRequired: path to write the private key to\n"+
 			"  -out-pub string\n"+
-			"    \tRequired: path to write the public key to\n",
+			"    \tRequired: path to write the public key to\n"+
+			optionalPkcs11String("  -pkcs11 string\n"+
+			"    \tOptional: PKCS#11 URI to an existing private key\n"),
 		ob.String(),
 	)
 }
