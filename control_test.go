@@ -20,16 +20,16 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	hm := newHostMap(l, netip.Prefix{})
 	hm.preferredRanges.Store(&[]netip.Prefix{})
 
-	udp1, err := netip.ParseAddr("0.0.0.100")
-	assert.NoError(t, err)
-	remote1 := netip.AddrPortFrom(udp1, 4444)
-
-	udp2, err := netip.ParseAddr("1:2:3:4:5:6:7:8")
-	assert.NoError(t, err)
-	remote2 := netip.AddrPortFrom(udp2, 4444)
+	remote1 := netip.MustParseAddrPort("0.0.0.100:4444")
+	remote2 := netip.MustParseAddrPort("[1:2:3:4:5:6:7:8]:4444")
 
 	ipNet := net.IPNet{
-		IP:   net.IPv4(1, 2, 3, 4),
+		IP:   remote1.Addr().AsSlice(),
+		Mask: net.IPMask{255, 255, 255, 0},
+	}
+
+	ipNet2 := net.IPNet{
+		IP:   remote2.Addr().AsSlice(),
 		Mask: net.IPMask{255, 255, 255, 0},
 	}
 
@@ -50,8 +50,8 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	}
 
 	remotes := NewRemoteList(nil)
-	remotes.unlockedPrependV4(netip.Addr{}, NewIp4AndPortFromNetIP(remote1.Addr(), remote1.Port()))
-	remotes.unlockedPrependV6(netip.Addr{}, NewIp6AndPortFromNetIP(remote2.Addr(), remote2.Port()))
+	remotes.unlockedPrependV4(netip.IPv4Unspecified(), NewIp4AndPortFromNetIP(remote1.Addr(), remote1.Port()))
+	remotes.unlockedPrependV6(netip.IPv4Unspecified(), NewIp6AndPortFromNetIP(remote2.Addr(), remote2.Port()))
 
 	vpnIp, ok := netip.AddrFromSlice(ipNet.IP)
 	assert.True(t, ok)
@@ -72,7 +72,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		},
 	}, &Interface{})
 
-	vpnIp2, ok := netip.AddrFromSlice(ipNet.IP)
+	vpnIp2, ok := netip.AddrFromSlice(ipNet2.IP)
 	assert.True(t, ok)
 
 	hm.unlockedAddHostInfo(&HostInfo{
@@ -114,7 +114,9 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 
 	// Make sure we don't have any unexpected fields
 	assertFields(t, []string{"VpnIp", "LocalIndex", "RemoteIndex", "RemoteAddrs", "Cert", "MessageCounter", "CurrentRemote", "CurrentRelaysToMe", "CurrentRelaysThroughMe"}, thi)
-	test.AssertDeepCopyEqual(t, &expectedInfo, thi)
+	assert.EqualValues(t, &expectedInfo, thi)
+	//TODO: netip.Addr reuses global memory for zone identifiers which breaks our "no reused memory check" here
+	//test.AssertDeepCopyEqual(t, &expectedInfo, thi)
 
 	// Make sure we don't panic if the host info doesn't have a cert yet
 	assert.NotPanics(t, func() {
