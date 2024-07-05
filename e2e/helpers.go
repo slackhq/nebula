@@ -34,11 +34,17 @@ func NewTestCaCert(before, after time.Time, ips, subnets []netip.Prefix, groups 
 	}
 
 	if len(ips) > 0 {
-		//TODO nc.Details.Ips = ips
+		nc.Details.Ips = make([]*net.IPNet, len(ips))
+		for i, ip := range ips {
+			nc.Details.Ips[i] = &net.IPNet{IP: ip.Addr().AsSlice(), Mask: net.CIDRMask(ip.Bits(), ip.Addr().BitLen())}
+		}
 	}
 
 	if len(subnets) > 0 {
-		//TODO nc.Details.Subnets = subnets
+		nc.Details.Subnets = make([]*net.IPNet, len(subnets))
+		for i, ip := range subnets {
+			nc.Details.Ips[i] = &net.IPNet{IP: ip.Addr().AsSlice(), Mask: net.CIDRMask(ip.Bits(), ip.Addr().BitLen())}
+		}
 	}
 
 	if len(groups) > 0 {
@@ -116,8 +122,4 @@ func x25519Keypair() ([]byte, []byte) {
 	}
 
 	return pubkey, privkey
-}
-
-func addrToOldNetIp(addr netip.Addr) *net.IP {
-	return &net.IP{}
 }

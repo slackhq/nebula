@@ -30,7 +30,6 @@ func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, s
 	l := NewTestLogger()
 
 	vpnIpNet, err := netip.ParsePrefix(sVpnIpNet)
-	vpnIpNet.Addr().Unmap()
 	if err != nil {
 		panic(err)
 	}

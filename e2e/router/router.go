@@ -623,11 +623,6 @@ func (r *R) RouteForAllExitFunc(whatDo ExitFunc) {
 		p := rx.Interface().(*udp.Packet)
 		receiver := r.getControl(cm[x].GetUDPAddr(), p.To, p)
 		if receiver == nil {
-			//TODO: you can remove this loop after you solve the problem
-			for k, c := range r.controls {
-				_ = c
-				fmt.Println(k)
-			}
 			r.Unlock()
 			panic("Can't RouteForAllExitFunc for host: " + p.To.String())
 		}
