@@ -407,7 +407,6 @@ func (n *connectionManager) shouldSwapPrimary(current, primary *HostInfo) bool {
 	// If we are here then we have multiple tunnels for a host pair and neither side believes the same tunnel is primary.
 	// Let's sort this out.
 
-	//TODO: ensure this is still current is < than my vpn ip
 	if current.vpnIp.Compare(n.intf.myVpnNet.Addr()) < 0 {
 		// Only one side should flip primary because if both flip then we may never resolve to a single tunnel.
 		// vpn ip is static across all tunnels for this host pair so lets use that to determine who is flipping.
