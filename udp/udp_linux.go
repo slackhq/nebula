@@ -153,7 +153,7 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 				//TODO: IPV6-WORK what is not ok?
 			}
 			r(
-				netip.AddrPortFrom(ip, binary.BigEndian.Uint16(names[i][2:4])),
+				netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])),
 				plaintext[:0],
 				buffers[i][:msgs[i].Len],
 				h,

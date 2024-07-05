@@ -84,6 +84,16 @@ func (u *GenericConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *f
 			return
 		}
 
-		r(rua, plaintext[:0], buffer[:n], h, fwPacket, lhf, nb, q, cache.Get(u.l))
+		r(
+			netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()),
+			plaintext[:0],
+			buffer[:n],
+			h,
+			fwPacket,
+			lhf,
+			nb,
+			q,
+			cache.Get(u.l),
+		)
 	}
 }
