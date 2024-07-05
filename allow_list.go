@@ -122,10 +122,11 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 		}
 
 		ipNet, err := netip.ParsePrefix(rawCIDR)
-		//TODO: better include the error
 		if err != nil {
-			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s", k, rawCIDR)
+			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s. %w", k, rawCIDR, err)
 		}
+
+		ipNet = netip.PrefixFrom(ipNet.Addr().Unmap(), ipNet.Bits())
 
 		// TODO: should we error on duplicate CIDRs in the config?
 		tree.Insert(ipNet, value)
@@ -133,7 +134,7 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 		maskBits := ipNet.Bits()
 
 		var rules *allowListRules
-		if ipNet.Masked().Addr().Is4() {
+		if ipNet.Addr().Is4() {
 			rules = &rules4
 		} else {
 			rules = &rules6
@@ -156,8 +157,7 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 
 	if !rules4.defaultSet {
 		if rules4.allValuesMatch {
-			//TODO ensure this is a 0/0
-			tree.Insert(netip.Prefix{}, !rules4.allValues)
+			tree.Insert(netip.PrefixFrom(netip.IPv4Unspecified(), 0), !rules4.allValues)
 		} else {
 			return nil, fmt.Errorf("config `%s` contains both true and false rules, but no default set for 0.0.0.0/0", k)
 		}
@@ -165,8 +165,7 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 
 	if !rules6.defaultSet {
 		if rules6.allValuesMatch {
-			//TODO: ensure this is a ::/0
-			tree.Insert(netip.Prefix{}, !rules6.allValues)
+			tree.Insert(netip.PrefixFrom(netip.IPv6Unspecified(), 0), !rules6.allValues)
 		} else {
 			return nil, fmt.Errorf("config `%s` contains both true and false rules, but no default set for ::/0", k)
 		}
@@ -242,12 +241,11 @@ func getRemoteAllowRanges(c *config.C, k string) (*bart.Table[*AllowList], error
 		}
 
 		ipNet, err := netip.ParsePrefix(rawCIDR)
-		//TODO: better to include err
 		if err != nil {
-			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s", k, rawCIDR)
+			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s. %w", k, rawCIDR, err)
 		}
 
-		remoteAllowRanges.Insert(ipNet, allowList)
+		remoteAllowRanges.Insert(netip.PrefixFrom(ipNet.Addr().Unmap(), ipNet.Bits()), allowList)
 	}
 
 	return remoteAllowRanges, nil

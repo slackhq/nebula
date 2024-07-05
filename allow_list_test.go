@@ -18,7 +18,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 		"192.168.0.0": true,
 	}
 	r, err := newAllowListFromConfig(c, "allowlist", nil)
-	assert.EqualError(t, err, "config `allowlist` has invalid CIDR: 192.168.0.0")
+	assert.EqualError(t, err, "config `allowlist` has invalid CIDR: 192.168.0.0. netip.ParsePrefix(\"192.168.0.0\"): no '/'")
 	assert.Nil(t, r)
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
