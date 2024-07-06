@@ -14,14 +14,9 @@ import (
 
 func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	l := test.NewLogger()
-	vpncidr, err := netip.ParsePrefix("172.1.1.1/24")
-	assert.NoError(t, err)
-
-	localrange, err := netip.ParsePrefix("10.1.1.1/24")
-	assert.NoError(t, err)
-
-	ip, err := netip.ParseAddr("172.1.1.2")
-	assert.NoError(t, err)
+	vpncidr := netip.MustParsePrefix("172.1.1.1/24")
+	localrange := netip.MustParsePrefix("10.1.1.1/24")
+	ip := netip.MustParseAddr("172.1.1.2")
 
 	preferredRanges := []netip.Prefix{localrange}
 	mainHM := newHostMap(l, vpncidr)
