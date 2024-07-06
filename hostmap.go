@@ -667,13 +667,17 @@ func (i *HostInfo) CreateRemoteCIDR(c *cert.NebulaCertificate) {
 
 	remoteCidr := new(bart.Table[struct{}])
 	for _, ip := range c.Details.Ips {
+		//TODO: IPV6-WORK what to do when ip is invalid?
 		nip, _ := netip.AddrFromSlice(ip.IP)
+		nip = nip.Unmap()
 		bits, _ := ip.Mask.Size()
 		remoteCidr.Insert(netip.PrefixFrom(nip, bits), struct{}{})
 	}
 
 	for _, n := range c.Details.Subnets {
+		//TODO: IPV6-WORK what to do when ip is invalid?
 		nip, _ := netip.AddrFromSlice(n.IP)
+		nip = nip.Unmap()
 		bits, _ := n.Mask.Size()
 		remoteCidr.Insert(netip.PrefixFrom(nip, bits), struct{}{})
 	}
@@ -724,13 +728,21 @@ func localIps(l *logrus.Logger, allowList *LocalAllowList) []netip.Addr {
 				ip = v.IP
 			}
 
+			nip, ok := netip.AddrFromSlice(ip)
+			if !ok {
+				if l.Level >= logrus.DebugLevel {
+					l.WithField("localIp", ip).Debug("ip was invalid for netip")
+				}
+				continue
+			}
+			nip = nip.Unmap()
+
 			//TODO: Filtering out link local for now, this is probably the most correct thing
 			//TODO: Would be nice to filter out SLAAC MAC based ips as well
-			if ip.IsLoopback() == false && !ip.IsLinkLocalUnicast() {
-				nip, _ := netip.AddrFromSlice(ip)
+			if nip.IsLoopback() == false && nip.IsLinkLocalUnicast() == false {
 				allow := allowList.Allow(nip)
 				if l.Level >= logrus.TraceLevel {
-					l.WithField("localIp", ip).WithField("allow", allow).Trace("localAllowList.Allow")
+					l.WithField("localIp", nip).WithField("allow", allow).Trace("localAllowList.Allow")
 				}
 				if !allow {
 					continue
