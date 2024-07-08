@@ -81,7 +81,7 @@ func (p *PKI) reloadCert(c *config.C, initial bool) *util.ContextualError {
 
 	if !initial {
 		//TODO: include check for mask equality as well
-		
+
 		// did IP in cert change? if so, don't set
 		currentCert := p.cs.Load().Certificate
 		oldIPs := currentCert.Details.Ips

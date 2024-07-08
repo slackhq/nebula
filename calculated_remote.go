@@ -63,8 +63,7 @@ func (c *calculatedRemote) apply4(ip netip.Addr) *Ip4AndPort {
 
 func (c *calculatedRemote) apply6(ip netip.Addr) *Ip4AndPort {
 	//TODO: IPV6-WORK
-	panic("AAHHHHHH")
-	return &Ip4AndPort{}
+	panic("Can not calculate ipv6 remote addresses")
 }
 
 func NewCalculatedRemotesFromConfig(c *config.C, k string) (*bart.Table[[]*calculatedRemote], error) {
