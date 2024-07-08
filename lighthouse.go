@@ -198,7 +198,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 			}
 
 			//TODO: we could technically insert all returned ips instead of just the first one if a dns lookup was used
-			ip := ips[0]
+			ip := ips[0].Unmap()
 			if lh.myVpnNet.Contains(ip) {
 				lh.l.WithField("addr", rawAddr).WithField("entry", i+1).
 					Warn("Ignoring lighthouse.advertise_addrs report because it is within the nebula network range")

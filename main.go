@@ -155,15 +155,13 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	port := c.GetInt("listen.port", 0)
 
 	if !configTest {
-		//TODO: IPV6-WORK clean this mess up and check the [::] conversion works as expected
 		rawListenHost := c.GetString("listen.host", "0.0.0.0")
 		var listenHost netip.Addr
 		if rawListenHost == "[::]" {
 			// Old guidance was to provide the literal `[::]` in `listen.host` but that won't resolve.
-			listenHost, _ = netip.ParseAddr("::")
+			listenHost = netip.IPv6Unspecified()
 
 		} else {
-			//TODO: IPV6-WORK we can do a better resolving and avoid the slice conversion
 			ips, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", rawListenHost)
 			if err != nil {
 				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
@@ -171,9 +169,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			if len(ips) == 0 {
 				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
 			}
-			//TODO: IPV6-WORK it is critical to unmap in some cases or else we get netips for v4 addresses that are not equal (v4in6 vs v4)
-			// We likely need to attempt unmapping in every entry point (tun/udp, maybe even lighthouse)
-			// Definitely in the remote list dns looker upper
 			listenHost = ips[0].Unmap()
 		}
 
