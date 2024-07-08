@@ -6,7 +6,6 @@ package overlay
 import (
 	"fmt"
 	"io"
-	"net"
 	"net/netip"
 	"os"
 	"sync/atomic"
@@ -53,7 +52,7 @@ func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, cidr netip.Prefix
 	return t, nil
 }
 
-func newTun(_ *config.C, _ *logrus.Logger, _ *net.IPNet, _ bool) (*tun, error) {
+func newTun(_ *config.C, _ *logrus.Logger, _ netip.Prefix, _ bool) (*tun, error) {
 	return nil, fmt.Errorf("newTun not supported in Android")
 }
 

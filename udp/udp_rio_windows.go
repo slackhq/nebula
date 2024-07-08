@@ -134,7 +134,7 @@ func (u *RIOConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 		}
 
 		r(
-			netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), rua.Port),
+			netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)),
 			plaintext[:0],
 			buffer[:n],
 			h,
@@ -279,7 +279,8 @@ func (u *RIOConn) WriteTo(buf []byte, ip netip.AddrPort) error {
 	packet := u.tx.Push()
 	packet.addr.Family = windows.AF_INET6
 	packet.addr.Addr = ip.Addr().As16()
-	packet.addr.Port = ip.Port()
+	port := ip.Port()
+	packet.addr.Port = (port >> 8) | ((port & 0xff) << 8)
 	copy(packet.data[:], buf)
 
 	dataBuffer := &winrio.Buffer{

@@ -218,9 +218,9 @@ func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
 func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
 	var rsa unix.RawSockaddrInet6
 	rsa.Family = unix.AF_INET6
-	// Little Endian -> Network Endian
 	rsa.Addr = ip.Addr().As16()
 	port := ip.Port()
+	// Little Endian -> Network Endian
 	rsa.Port = (port >> 8) | ((port & 0xff) << 8)
 
 	for {
