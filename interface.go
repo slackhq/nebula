@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -62,6 +63,7 @@ type Interface struct {
 	serveDns           bool
 	createTime         time.Time
 	lightHouse         *LightHouse
+	myBroadcastAddr    netip.Addr
 	myVpnNet           netip.Prefix
 	dropLocalBroadcast bool
 	dropMulticast      bool
@@ -116,7 +118,6 @@ const (
 func (s sendRecvErrorConfig) ShouldSendRecvError(ip netip.AddrPort) bool {
 	switch s {
 	case sendRecvErrorPrivate:
-		//TODO: IPV6-WORK, double check
 		return ip.Addr().IsPrivate()
 	case sendRecvErrorAlways:
 		return true
@@ -155,9 +156,27 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	}
 
 	certificate := c.pki.GetCertState().Certificate
-	//TODO: shouldn't error but we could check
-	myVpnIp, _ := netip.AddrFromSlice(certificate.Details.Ips[0].IP)
+
+	myVpnAddr, ok := netip.AddrFromSlice(certificate.Details.Ips[0].IP)
+	if !ok {
+		return nil, fmt.Errorf("invalid ip address in certificate: %s", certificate.Details.Ips[0].IP)
+	}
+
+	myVpnMask, ok := netip.AddrFromSlice(certificate.Details.Ips[0].Mask)
+	if !ok {
+		return nil, fmt.Errorf("invalid ip mask in certificate: %s", certificate.Details.Ips[0].Mask)
+	}
+
+	myVpnAddr = myVpnAddr.Unmap()
+	myVpnMask = myVpnMask.Unmap()
+
+	if myVpnAddr.BitLen() != myVpnMask.BitLen() {
+		return nil, fmt.Errorf("ip address and mask are different lengths in certificate")
+	}
+
 	ones, _ := certificate.Details.Ips[0].Mask.Size()
+	myVpnNet := netip.PrefixFrom(myVpnAddr, ones)
+
 	ifce := &Interface{
 		pki:                c.pki,
 		hostMap:            c.HostMap,
@@ -175,7 +194,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		version:            c.version,
 		writers:            make([]udp.Conn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
-		myVpnNet:           netip.PrefixFrom(myVpnIp, ones),
+		myVpnNet:           myVpnNet,
 		relayManager:       c.relayManager,
 
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
@@ -188,6 +207,12 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		},
 
 		l: c.l,
+	}
+
+	if myVpnAddr.Is4() {
+		addr := myVpnNet.Masked().Addr().As4()
+		binary.BigEndian.PutUint32(addr[:], binary.BigEndian.Uint32(addr[:])|^binary.BigEndian.Uint32(certificate.Details.Ips[0].Mask))
+		ifce.myBroadcastAddr = netip.AddrFrom4(addr)
 	}
 
 	ifce.tryPromoteEvery.Store(c.tryPromoteEvery)

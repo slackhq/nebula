@@ -20,10 +20,9 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	}
 
 	// Ignore local broadcast packets
-	//TODO: IPV6-WORK
-	//if f.dropLocalBroadcast && fwPacket.RemoteIP == f.localBroadcast {
-	//	return
-	//}
+	if f.dropLocalBroadcast && fwPacket.RemoteIP == f.myBroadcastAddr {
+		return
+	}
 
 	if fwPacket.RemoteIP == f.myVpnNet.Addr() {
 		// Immediately forward packets from self to self.
@@ -42,11 +41,9 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	}
 
 	// Ignore multicast packets
-	//TODO: IPV6-WORK
-	//fwPacket.RemoteIP.IsMulticast()
-	//if f.dropMulticast && isMulticast(fwPacket.RemoteIP) {
-	//	return
-	//}
+	if f.dropMulticast && fwPacket.RemoteIP.IsMulticast() {
+		return
+	}
 
 	hostinfo, ready := f.getOrHandshake(fwPacket.RemoteIP, func(hh *HandshakeHostInfo) {
 		hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
