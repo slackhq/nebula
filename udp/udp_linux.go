@@ -125,6 +125,7 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 	plaintext := make([]byte, MTU)
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
+	var ip netip.Addr
 	nb := make([]byte, 12, 12)
 
 	//TODO: should we track this?
@@ -144,7 +145,6 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 
 		//metric.Update(int64(n))
 		for i := 0; i < n; i++ {
-			var ip netip.Addr
 			if u.isV4 {
 				ip, _ = netip.AddrFromSlice(names[i][4:8])
 				//TODO: IPV6-WORK what is not ok?
