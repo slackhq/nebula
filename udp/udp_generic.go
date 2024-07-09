@@ -48,7 +48,10 @@ func (u *GenericConn) LocalAddr() (netip.AddrPort, error) {
 
 	switch v := a.(type) {
 	case *net.UDPAddr:
-		addr, _ := netip.AddrFromSlice(v.IP)
+		addr, ok := netip.AddrFromSlice(v.IP)
+		if !ok {
+			return netip.AddrPort{}, fmt.Errorf("LocalAddr returned invalid IP address: %s", v.IP)
+		}
 		return netip.AddrPortFrom(addr, uint16(v.Port)), nil
 
 	default:
