@@ -71,8 +71,12 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	ones, _ := certificate.Details.Ips[0].Mask.Size()
 	addr, ok := netip.AddrFromSlice(certificate.Details.Ips[0].IP)
 	if !ok {
-		//TODO: IPV6-WORK
-		// should never happen but if it did we should log it
+		err = util.NewContextualError(
+			"Invalid ip address in certificate",
+			m{"vpnIp": certificate.Details.Ips[0].IP},
+			nil,
+		)
+		return nil, err
 	}
 	tunCidr := netip.PrefixFrom(addr, ones)
 

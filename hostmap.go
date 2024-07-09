@@ -132,18 +132,6 @@ func (rs *RelayState) CopyRelayForIdxs() []uint32 {
 	return ret
 }
 
-func (rs *RelayState) RemoveRelay(localIdx uint32) (netip.Addr, bool) {
-	rs.Lock()
-	defer rs.Unlock()
-	r, ok := rs.relayForByIdx[localIdx]
-	if !ok {
-		return netip.Addr{}, false
-	}
-	delete(rs.relayForByIdx, localIdx)
-	delete(rs.relayForByIp, r.PeerIp)
-	return r.PeerIp, true
-}
-
 func (rs *RelayState) CompleteRelayByIP(vpnIp netip.Addr, remoteIdx uint32) bool {
 	rs.Lock()
 	defer rs.Unlock()

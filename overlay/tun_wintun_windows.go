@@ -156,7 +156,7 @@ func (t *winTun) addRoutes(logErrors bool) error {
 		}
 
 		// Add our unsafe route
-		err := luid.AddRoute(t.cidr, r.Via, uint32(r.Metric))
+		err := luid.AddRoute(r.Cidr, r.Via, uint32(r.Metric))
 		if err != nil {
 			retErr := util.NewContextualError("Failed to add route", map[string]interface{}{"route": r}, err)
 			if logErrors {
@@ -170,8 +170,7 @@ func (t *winTun) addRoutes(logErrors bool) error {
 		}
 
 		if !foundDefault4 {
-			//TODO: IPV6-WORK verify this is correct
-			if r.Cidr.Bits() == 0 {
+			if r.Cidr.Bits() == 0 && r.Cidr.Addr().BitLen() == 32 {
 				foundDefault4 = true
 			}
 		}

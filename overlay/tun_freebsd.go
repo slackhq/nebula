@@ -83,8 +83,6 @@ func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ netip.Prefix) (*tun, e
 }
 
 func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, _ bool) (*tun, error) {
-	//TODO: IPV6-WORK might need to unmap cidr here
-
 	// Try to open existing tun device
 	var file *os.File
 	var err error

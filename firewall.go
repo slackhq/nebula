@@ -863,13 +863,8 @@ func (fr *FirewallRule) match(p firewall.Packet, c *cert.NebulaCertificate) bool
 	}
 
 	matched := false
-	//TODO: bart does not support this, we can do it for every prefix though :(
-	// https://github.com/gaissmai/bart/issues/61
-	//fr.CIDR.EachContains(p.RemoteIP, func(_ netip.Prefix, flc *firewallLocalCIDR) bool {
-	//	matched = flc.match(p, c)
-	//	return !matched
-	//})
-	fr.CIDR.All(func(prefix netip.Prefix, val *firewallLocalCIDR) bool {
+	prefix := netip.PrefixFrom(p.RemoteIP, p.RemoteIP.BitLen())
+	fr.CIDR.EachLookupPrefix(prefix, func(prefix netip.Prefix, val *firewallLocalCIDR) bool {
 		if prefix.Contains(p.RemoteIP) && val.match(p, c) {
 			matched = true
 			return false

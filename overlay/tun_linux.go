@@ -516,9 +516,14 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 	}
 
 	//TODO: IPV6-WORK what if not ok?
-	gwAddr, _ := netip.AddrFromSlice(r.Gw)
+	gwAddr, ok := netip.AddrFromSlice(r.Gw)
+	if !ok {
+		t.l.WithField("route", r).Debug("Ignoring route update, invalid gateway address")
+		return
+	}
+
 	gwAddr = gwAddr.Unmap()
-	if !t.cidr.Contains(gwAddr.Unmap()) {
+	if !t.cidr.Contains(gwAddr) {
 		// Gateway isn't in our overlay network, ignore
 		t.l.WithField("route", r).Debug("Ignoring route update, not in our network")
 		return
@@ -530,19 +535,22 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 		return
 	}
 
-	newTree := t.routeTree.Load().Clone()
-	//TODO: IPV6-WORK might need to unmap here
-	//TODO: IPV6-WORK what if not ok
-	dstAddr, _ := netip.AddrFromSlice(r.Dst.IP)
+	dstAddr, ok := netip.AddrFromSlice(r.Dst.IP)
+	if !ok {
+		t.l.WithField("route", r).Debug("Ignoring route update, invalid destination address")
+		return
+	}
+
 	ones, _ := r.Dst.Mask.Size()
 	dst := netip.PrefixFrom(dstAddr, ones)
+
+	newTree := t.routeTree.Load().Clone()
 
 	if r.Type == unix.RTM_NEWROUTE {
 		t.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Adding route")
 		newTree.Insert(dst, gwAddr)
 
 	} else {
-		//TODO: IPV6-WORK verify this works, we could also get and check the gw is the same
 		newTree.Delete(dst)
 		t.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Removing route")
 	}

@@ -189,7 +189,7 @@ func (t *tun) Activate() error {
 	var addr, mask [4]byte
 
 	if !t.cidr.Addr().Is4() {
-		//TODO:
+		//TODO: IPV6-WORK
 		panic("need ipv6")
 	}
 
@@ -393,7 +393,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 			continue
 		}
 
-		if r.Cidr.Addr().Is6() {
+		if !r.Cidr.Addr().Is4() {
 			//TODO: implement ipv6
 			panic("Cant handle ipv6 routes yet")
 		}
@@ -451,7 +451,6 @@ func (t *tun) removeRoutes(routes []Route) error {
 		}
 
 		routeAddr.IP = r.Cidr.Addr().As4()
-		//TODO: we could avoid the copy
 		copy(maskAddr.IP[:], prefixToMask(r.Cidr))
 
 		err := delRoute(routeSock, routeAddr, maskAddr, t.linkAddr)

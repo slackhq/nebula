@@ -24,7 +24,7 @@ type Route struct {
 // Equal determines if a route that could be installed in the system route table is equal to another
 // Via is ignored since that is only consumed within nebula itself
 func (r Route) Equal(t Route) bool {
-	if r.Cidr == t.Cidr {
+	if r.Cidr != t.Cidr {
 		return false
 	}
 	if r.Metric != t.Metric {
@@ -117,8 +117,7 @@ func parseRoutes(c *config.C, network netip.Prefix) ([]Route, error) {
 			return nil, fmt.Errorf("entry %v.route in tun.routes failed to parse: %v", i+1, err)
 		}
 
-		//TODO: IPV6-WORK, this is a little different than before, make sure its still cool
-		if !network.Contains(r.Cidr.Addr()) {
+		if !network.Contains(r.Cidr.Addr()) || r.Cidr.Bits() < network.Bits() {
 			return nil, fmt.Errorf(
 				"entry %v.route in tun.routes is not contained within the network attached to the certificate; route: %v, network: %v",
 				i+1,
@@ -201,7 +200,6 @@ func parseUnsafeRoutes(c *config.C, network netip.Prefix) ([]Route, error) {
 
 		viaVpnIp, err := netip.ParseAddr(via)
 		if err != nil {
-			//TODO: could include the error
 			return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes failed to parse address: %v", i+1, err)
 		}
 

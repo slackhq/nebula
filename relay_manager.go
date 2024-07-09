@@ -374,7 +374,3 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		}
 	}
 }
-
-func (rm *relayManager) RemoveRelay(localIdx uint32) {
-	rm.hostmap.RemoveRelay(localIdx)
-}

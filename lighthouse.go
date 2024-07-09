@@ -951,7 +951,6 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp netip.Addr, a
 	reqVpnIp := n.Details.VpnIp
 
 	//TODO: IPV6-WORK
-	//TODO: this all looks suspect to me, triple check it
 	b := [4]byte{}
 	binary.BigEndian.PutUint32(b[:], n.Details.VpnIp)
 	queryVpnIp := netip.AddrFrom4(b)
@@ -984,7 +983,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp netip.Addr, a
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostPunchNotification
 		//TODO: IPV6-WORK
-		b := vpnIp.As4()
+		b = vpnIp.As4()
 		n.Details.VpnIp = binary.BigEndian.Uint32(b[:])
 		lhh.coalesceAnswers(c, n)
 
@@ -1003,7 +1002,6 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp netip.Addr, a
 	lhh.lh.metricTx(NebulaMeta_HostPunchNotification, 1)
 
 	//TODO: IPV6-WORK
-	b = [4]byte{}
 	binary.BigEndian.PutUint32(b[:], reqVpnIp)
 	sendTo := netip.AddrFrom4(b)
 	w.SendMessageToVpnIp(header.LightHouse, 0, sendTo, lhh.pb[:ln], lhh.nb, lhh.out[:0])
@@ -1049,13 +1047,12 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp netip.Ad
 	//TODO: IPV6-WORK
 	b := [4]byte{}
 	binary.BigEndian.PutUint32(b[:], n.Details.VpnIp)
-	am := lhh.lh.unlockedGetRemoteList(netip.AddrFrom4(b))
+	certVpnIp := netip.AddrFrom4(b)
+	am := lhh.lh.unlockedGetRemoteList(certVpnIp)
 	am.Lock()
 	lhh.lh.Unlock()
 
 	//TODO: IPV6-WORK
-	binary.BigEndian.PutUint32(b[:], n.Details.VpnIp)
-	certVpnIp := netip.AddrFrom4(b)
 	am.unlockedSetV4(vpnIp, certVpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(vpnIp, certVpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
 

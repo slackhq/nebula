@@ -130,6 +130,7 @@ func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 }
 
 // GetHostInfoByVpnIp returns a single tunnels hostInfo, or nil if not found
+// Caller should take care to Unmap() any 4in6 addresses prior to calling.
 func (c *Control) GetHostInfoByVpnIp(vpnIp netip.Addr, pending bool) *ControlHostInfo {
 	var hl controlHostLister
 	if pending {
@@ -148,6 +149,7 @@ func (c *Control) GetHostInfoByVpnIp(vpnIp netip.Addr, pending bool) *ControlHos
 }
 
 // SetRemoteForTunnel forces a tunnel to use a specific remote
+// Caller should take care to Unmap() any 4in6 addresses prior to calling.
 func (c *Control) SetRemoteForTunnel(vpnIp netip.Addr, addr netip.AddrPort) *ControlHostInfo {
 	hostInfo := c.f.hostMap.QueryVpnIp(vpnIp)
 	if hostInfo == nil {
@@ -160,6 +162,7 @@ func (c *Control) SetRemoteForTunnel(vpnIp netip.Addr, addr netip.AddrPort) *Con
 }
 
 // CloseTunnel closes a fully established tunnel. If localOnly is false it will notify the remote end as well.
+// Caller should take care to Unmap() any 4in6 addresses prior to calling.
 func (c *Control) CloseTunnel(vpnIp netip.Addr, localOnly bool) bool {
 	hostInfo := c.f.hostMap.QueryVpnIp(vpnIp)
 	if hostInfo == nil {
