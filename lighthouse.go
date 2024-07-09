@@ -743,6 +743,11 @@ func (lh *LightHouse) innerQueryServer(ip netip.Addr, nb, out []byte) {
 		return
 	}
 
+	if ip.Is6() {
+		//TODO: remove this
+		return
+	}
+
 	// Send a query to the lighthouses and hope for the best next time
 	query, err := NewLhQueryByInt(ip).Marshal()
 	if err != nil {
@@ -817,6 +822,10 @@ func (lh *LightHouse) SendUpdate() {
 		relays = append(relays, binary.BigEndian.Uint32(b[:]))
 	}
 
+	if lh.myVpnNet.Addr().Is6() {
+		//TODO
+		return
+	}
 	//TODO: IPV6-WORK both relays and vpnip need ipv6 support
 	b := lh.myVpnNet.Addr().As4()
 

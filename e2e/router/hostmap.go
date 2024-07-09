@@ -59,7 +59,7 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 	var globalLines []*edge
 
 	clusterName := strings.Trim(c.GetCert().Details.Name, " ")
-	clusterVpnIp := c.GetCert().Details.Ips[0].IP
+	clusterVpnIp := c.GetCert().Details.Ip.Addr()
 	r := fmt.Sprintf("\tsubgraph %s[\"%s (%s)\"]\n", clusterName, clusterName, clusterVpnIp)
 
 	hm := c.GetHostmap()

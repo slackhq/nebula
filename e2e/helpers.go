@@ -3,7 +3,6 @@ package e2e
 import (
 	"crypto/rand"
 	"io"
-	"net"
 	"net/netip"
 	"time"
 
@@ -13,7 +12,7 @@ import (
 )
 
 // NewTestCaCert will generate a CA cert
-func NewTestCaCert(before, after time.Time, ips, subnets []netip.Prefix, groups []string) (*cert.NebulaCertificate, []byte, []byte, []byte) {
+func NewTestCaCert(before, after time.Time, ip netip.Prefix, subnets []netip.Prefix, groups []string) (*cert.NebulaCertificate, []byte, []byte, []byte) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if before.IsZero() {
 		before = time.Now().Add(time.Second * -60).Round(time.Second)
@@ -25,6 +24,7 @@ func NewTestCaCert(before, after time.Time, ips, subnets []netip.Prefix, groups 
 	nc := &cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
 			Name:           "test ca",
+			Ip:             ip,
 			NotBefore:      time.Unix(before.Unix(), 0),
 			NotAfter:       time.Unix(after.Unix(), 0),
 			PublicKey:      pub,
@@ -33,17 +33,10 @@ func NewTestCaCert(before, after time.Time, ips, subnets []netip.Prefix, groups 
 		},
 	}
 
-	if len(ips) > 0 {
-		nc.Details.Ips = make([]*net.IPNet, len(ips))
-		for i, ip := range ips {
-			nc.Details.Ips[i] = &net.IPNet{IP: ip.Addr().AsSlice(), Mask: net.CIDRMask(ip.Bits(), ip.Addr().BitLen())}
-		}
-	}
-
 	if len(subnets) > 0 {
-		nc.Details.Subnets = make([]*net.IPNet, len(subnets))
+		nc.Details.Subnets = make([]netip.Prefix, len(subnets))
 		for i, ip := range subnets {
-			nc.Details.Ips[i] = &net.IPNet{IP: ip.Addr().AsSlice(), Mask: net.CIDRMask(ip.Bits(), ip.Addr().BitLen())}
+			nc.Details.Subnets[i] = ip
 		}
 	}
 
@@ -81,11 +74,10 @@ func NewTestCert(ca *cert.NebulaCertificate, key []byte, name string, before, af
 	}
 
 	pub, rawPriv := x25519Keypair()
-	ipb := ip.Addr().AsSlice()
 	nc := &cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
 			Name: name,
-			Ips:  []*net.IPNet{{IP: ipb[:], Mask: net.CIDRMask(ip.Bits(), ip.Addr().BitLen())}},
+			Ip:   ip,
 			//Subnets:        subnets,
 			Groups:         groups,
 			NotBefore:      time.Unix(before.Unix(), 0),

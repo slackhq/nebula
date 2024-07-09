@@ -99,20 +99,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		return
 	}
 
-	vpnIp, ok := netip.AddrFromSlice(remoteCert.Details.Ips[0].IP)
-	if !ok {
-		e := f.l.WithError(err).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"})
-
-		if f.l.Level > logrus.DebugLevel {
-			e = e.WithField("cert", remoteCert)
-		}
-
-		e.Info("Invalid vpn ip from host")
-		return
-	}
-
-	vpnIp = vpnIp.Unmap()
+	vpnIp := remoteCert.Details.Ip.Addr()
 	certName := remoteCert.Details.Name
 	fingerprint, _ := remoteCert.Sha256Sum()
 	issuer := remoteCert.Details.Issuer
@@ -402,20 +389,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		return true
 	}
 
-	vpnIp, ok := netip.AddrFromSlice(remoteCert.Details.Ips[0].IP)
-	if !ok {
-		e := f.l.WithError(err).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"})
-
-		if f.l.Level > logrus.DebugLevel {
-			e = e.WithField("cert", remoteCert)
-		}
-
-		e.Info("Invalid vpn ip from host")
-		return true
-	}
-
-	vpnIp = vpnIp.Unmap()
+	vpnIp := remoteCert.Details.Ip.Addr()
 	certName := remoteCert.Details.Name
 	fingerprint, _ := remoteCert.Sha256Sum()
 	issuer := remoteCert.Details.Issuer

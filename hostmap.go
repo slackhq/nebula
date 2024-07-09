@@ -491,7 +491,7 @@ func (hm *HostMap) queryVpnIp(vpnIp netip.Addr, promoteIfce *Interface) *HostInf
 func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	if f.serveDns {
 		remoteCert := hostinfo.ConnectionState.peerCert
-		dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ips[0].IP.String())
+		dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ip.String())
 	}
 
 	existing := hm.Hosts[hostinfo.vpnIp]
@@ -648,26 +648,16 @@ func (i *HostInfo) RecvErrorExceeded() bool {
 }
 
 func (i *HostInfo) CreateRemoteCIDR(c *cert.NebulaCertificate) {
-	if len(c.Details.Ips) == 1 && len(c.Details.Subnets) == 0 {
+	if len(c.Details.Subnets) == 0 {
 		// Simple case, no CIDRTree needed
 		return
 	}
 
 	remoteCidr := new(bart.Table[struct{}])
-	for _, ip := range c.Details.Ips {
-		//TODO: IPV6-WORK what to do when ip is invalid?
-		nip, _ := netip.AddrFromSlice(ip.IP)
-		nip = nip.Unmap()
-		bits, _ := ip.Mask.Size()
-		remoteCidr.Insert(netip.PrefixFrom(nip, bits), struct{}{})
-	}
+	remoteCidr.Insert(c.Details.Ip, struct{}{})
 
 	for _, n := range c.Details.Subnets {
-		//TODO: IPV6-WORK what to do when ip is invalid?
-		nip, _ := netip.AddrFromSlice(n.IP)
-		nip = nip.Unmap()
-		bits, _ := n.Mask.Size()
-		remoteCidr.Insert(netip.PrefixFrom(nip, bits), struct{}{})
+		remoteCidr.Insert(n, struct{}{})
 	}
 	i.remoteCidr = remoteCidr
 }

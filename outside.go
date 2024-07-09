@@ -8,12 +8,14 @@ import (
 	"time"
 
 	"github.com/flynn/noise"
+	"github.com/google/gopacket/layers"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -303,14 +305,91 @@ func (f *Interface) handleEncrypted(ci *ConnectionState, addr netip.AddrPort, h 
 
 // newPacket validates and parses the interesting bits for the firewall out of the ip and sub protocol headers
 func newPacket(data []byte, incoming bool, fp *firewall.Packet) error {
-	// Do we at least have an ipv4 header worth of data?
-	if len(data) < ipv4.HeaderLen {
-		return fmt.Errorf("packet is less than %v bytes", ipv4.HeaderLen)
+	if len(data) < 1 {
+		return errors.New("packet too short")
 	}
 
-	// Is it an ipv4 packet?
-	if int((data[0]>>4)&0x0f) != 4 {
-		return fmt.Errorf("packet is not ipv4, type: %v", int((data[0]>>4)&0x0f))
+	version := int((data[0] >> 4) & 0x0f)
+	switch version {
+	case ipv4.Version:
+		return parseV4(data, incoming, fp)
+	case ipv6.Version:
+		return parseV6(data, incoming, fp)
+	}
+	return fmt.Errorf("packet is an unknown ip version: %v", version)
+}
+
+func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
+	dataLen := len(data)
+	if dataLen < ipv6.HeaderLen {
+		return fmt.Errorf("ipv6 packet is less than %v bytes", ipv4.HeaderLen)
+	}
+
+	if incoming {
+		fp.RemoteIP, _ = netip.AddrFromSlice(data[8:24])
+		fp.LocalIP, _ = netip.AddrFromSlice(data[24:40])
+	} else {
+		fp.LocalIP, _ = netip.AddrFromSlice(data[8:24])
+		fp.RemoteIP, _ = netip.AddrFromSlice(data[24:40])
+	}
+
+	//TODO: whats a reasonable number of extension headers to attempt to parse?
+	//https://www.ietf.org/archive/id/draft-ietf-6man-eh-limits-00.html
+	proto := layers.IPProtocol(data[6])
+	offset := 40
+	for i := 0; i < 24; i++ {
+		switch proto {
+		case layers.IPProtocolICMPv6:
+			//TODO: we need a new protocol in config language "icmpv6"
+			fp.Protocol = uint8(proto)
+			fp.RemotePort = 0
+			fp.LocalPort = 0
+			fp.Fragment = false
+			return nil
+
+		case layers.IPProtocolTCP:
+			if dataLen < offset+4 {
+				return fmt.Errorf("ipv6 packet was too small")
+			}
+			fp.Protocol = uint8(proto)
+			fp.RemotePort = binary.BigEndian.Uint16(data[offset : offset+2])
+			fp.LocalPort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+			fp.Fragment = false
+			return nil
+
+		case layers.IPProtocolUDP:
+			if dataLen < offset+4 {
+				return fmt.Errorf("ipv6 packet was too small")
+			}
+			fp.Protocol = uint8(proto)
+			fp.RemotePort = binary.BigEndian.Uint16(data[offset : offset+2])
+			fp.LocalPort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+			fp.Fragment = false
+			return nil
+
+		case layers.IPProtocolIPv6Fragment:
+			//TODO: can we determine the protocol?
+			fp.RemotePort = 0
+			fp.LocalPort = 0
+			fp.Fragment = true
+			return nil
+
+		default:
+			if dataLen < offset+1 {
+				break
+			}
+			offset += int(data[offset+1]) + 1
+			proto = layers.IPProtocol(data[offset])
+		}
+	}
+
+	return fmt.Errorf("could not find payload in ipv6 packet")
+}
+
+func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
+	// Do we at least have an ipv4 header worth of data?
+	if len(data) < ipv4.HeaderLen {
+		return fmt.Errorf("ipv4 packet is less than %v bytes", ipv4.HeaderLen)
 	}
 
 	// Adjust our start position based on the advertised ip header length
@@ -318,7 +397,7 @@ func newPacket(data []byte, incoming bool, fp *firewall.Packet) error {
 
 	// Well formed ip header length?
 	if ihl < ipv4.HeaderLen {
-		return fmt.Errorf("packet had an invalid header length: %v", ihl)
+		return fmt.Errorf("ipv4 packet had an invalid header length: %v", ihl)
 	}
 
 	// Check if this is the second or further fragment of a fragmented packet.
@@ -334,7 +413,7 @@ func newPacket(data []byte, incoming bool, fp *firewall.Packet) error {
 		minLen += minFwPacketLen
 	}
 	if len(data) < minLen {
-		return fmt.Errorf("packet is less than %v bytes, ip header len: %v", minLen, ihl)
+		return fmt.Errorf("ipv4 packet is less than %v bytes, ip header len: %v", minLen, ihl)
 	}
 
 	// Firewall packets are locally oriented

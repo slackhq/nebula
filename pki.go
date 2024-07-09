@@ -80,16 +80,12 @@ func (p *PKI) reloadCert(c *config.C, initial bool) *util.ContextualError {
 	}
 
 	if !initial {
-		//TODO: include check for mask equality as well
-
 		// did IP in cert change? if so, don't set
 		currentCert := p.cs.Load().Certificate
-		oldIPs := currentCert.Details.Ips
-		newIPs := cs.Certificate.Details.Ips
-		if len(oldIPs) > 0 && len(newIPs) > 0 && oldIPs[0].String() != newIPs[0].String() {
+		if currentCert.Details.Ip != cs.Certificate.Details.Ip {
 			return util.NewContextualError(
 				"IP in new cert was different from old",
-				m{"new_ip": newIPs[0], "old_ip": oldIPs[0]},
+				m{"new_ip": currentCert.Details.Ip, "old_ip": cs.Certificate.Details.Ip},
 				nil,
 			)
 		}
@@ -193,7 +189,7 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 		return nil, fmt.Errorf("nebula certificate for this host is expired")
 	}
 
-	if len(nebulaCert.Details.Ips) == 0 {
+	if !nebulaCert.Details.Ip.IsValid() {
 		return nil, fmt.Errorf("no IPs encoded in certificate")
 	}
 

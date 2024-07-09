@@ -17,6 +17,7 @@ import (
 	"math"
 	"math/big"
 	"net"
+	"net/netip"
 	"sync/atomic"
 	"time"
 
@@ -55,8 +56,8 @@ type NebulaCertificate struct {
 
 type NebulaCertificateDetails struct {
 	Name      string
-	Ips       []*net.IPNet
-	Subnets   []*net.IPNet
+	Ip        netip.Prefix
+	Subnets   []netip.Prefix
 	Groups    []string
 	NotBefore time.Time
 	NotAfter  time.Time
@@ -100,10 +101,6 @@ func UnmarshalNebulaCertificate(b []byte) (*NebulaCertificate, error) {
 		return nil, fmt.Errorf("encoded Details was nil")
 	}
 
-	if len(rc.Details.Ips)%2 != 0 {
-		return nil, fmt.Errorf("encoded IPs should be in pairs, an odd number was found")
-	}
-
 	if len(rc.Details.Subnets)%2 != 0 {
 		return nil, fmt.Errorf("encoded Subnets should be in pairs, an odd number was found")
 	}
@@ -112,8 +109,7 @@ func UnmarshalNebulaCertificate(b []byte) (*NebulaCertificate, error) {
 		Details: NebulaCertificateDetails{
 			Name:           rc.Details.Name,
 			Groups:         make([]string, len(rc.Details.Groups)),
-			Ips:            make([]*net.IPNet, len(rc.Details.Ips)/2),
-			Subnets:        make([]*net.IPNet, len(rc.Details.Subnets)/2),
+			Subnets:        make([]netip.Prefix, len(rc.Details.Subnets)),
 			NotBefore:      time.Unix(rc.Details.NotBefore, 0),
 			NotAfter:       time.Unix(rc.Details.NotAfter, 0),
 			PublicKey:      make([]byte, len(rc.Details.PublicKey)),
@@ -133,20 +129,17 @@ func UnmarshalNebulaCertificate(b []byte) (*NebulaCertificate, error) {
 	}
 	copy(nc.Details.PublicKey, rc.Details.PublicKey)
 
-	for i, rawIp := range rc.Details.Ips {
-		if i%2 == 0 {
-			nc.Details.Ips[i/2] = &net.IPNet{IP: int2ip(rawIp)}
-		} else {
-			nc.Details.Ips[i/2].Mask = net.IPMask(int2ip(rawIp))
-		}
+	nb := [16]byte{}
+	if rc.Details.Ip != nil {
+		binary.BigEndian.PutUint64(nb[:8], rc.Details.Ip.Hi)
+		binary.BigEndian.PutUint64(nb[8:], rc.Details.Ip.Lo)
+		nc.Details.Ip = netip.PrefixFrom(netip.AddrFrom16(nb).Unmap(), int(rc.Details.Ip.Bits))
 	}
 
-	for i, rawIp := range rc.Details.Subnets {
-		if i%2 == 0 {
-			nc.Details.Subnets[i/2] = &net.IPNet{IP: int2ip(rawIp)}
-		} else {
-			nc.Details.Subnets[i/2].Mask = net.IPMask(int2ip(rawIp))
-		}
+	for i, subnet := range rc.Details.Subnets {
+		binary.BigEndian.PutUint64(nb[:8], subnet.Hi)
+		binary.BigEndian.PutUint64(nb[8:], subnet.Lo)
+		nc.Details.Subnets[i] = netip.PrefixFrom(netip.AddrFrom16(nb).Unmap(), int(subnet.Bits))
 	}
 
 	for _, g := range rc.Details.Groups {
@@ -671,21 +664,15 @@ func (nc *NebulaCertificate) CheckRootConstrains(signer *NebulaCertificate) erro
 	}
 
 	// If the signer has a limited set of ip ranges to issue from make sure the cert only contains a subset
-	if len(signer.Details.Ips) > 0 {
-		for _, ip := range nc.Details.Ips {
-			if !netMatch(ip, signer.Details.Ips) {
-				return fmt.Errorf("certificate contained an ip assignment outside the limitations of the signing ca: %s", ip.String())
-			}
+	if signer.Details.Ip.IsValid() {
+		if !signer.Details.Ip.Contains(nc.Details.Ip.Addr()) || signer.Details.Ip.Bits() >= nc.Details.Ip.Bits() {
+			return fmt.Errorf("certificate contained an ip assignment outside the limitations of the signing ca: %s", nc.Details.Ip)
 		}
 	}
 
 	// If the signer has a limited set of subnet ranges to issue from make sure the cert only contains a subset
 	if len(signer.Details.Subnets) > 0 {
-		for _, subnet := range nc.Details.Subnets {
-			if !netMatch(subnet, signer.Details.Subnets) {
-				return fmt.Errorf("certificate contained a subnet assignment outside the limitations of the signing ca: %s", subnet)
-			}
-		}
+		//TODO:
 	}
 
 	return nil
@@ -756,14 +743,10 @@ func (nc *NebulaCertificate) String() string {
 	s += "\tDetails {\n"
 	s += fmt.Sprintf("\t\tName: %v\n", nc.Details.Name)
 
-	if len(nc.Details.Ips) > 0 {
-		s += "\t\tIps: [\n"
-		for _, ip := range nc.Details.Ips {
-			s += fmt.Sprintf("\t\t\t%v\n", ip.String())
-		}
-		s += "\t\t]\n"
+	if nc.Details.Ip.IsValid() {
+		s += fmt.Sprintf("\t\tIp: %v\n", nc.Details.Ip)
 	} else {
-		s += "\t\tIps: []\n"
+		s += "\t\tIp: <not set>\n"
 	}
 
 	if len(nc.Details.Subnets) > 0 {
@@ -815,12 +798,21 @@ func (nc *NebulaCertificate) getRawDetails() *RawNebulaCertificateDetails {
 		Curve:     nc.Details.Curve,
 	}
 
-	for _, ipNet := range nc.Details.Ips {
-		rd.Ips = append(rd.Ips, ip2int(ipNet.IP), ip2int(ipNet.Mask))
+	if nc.Details.Ip.IsValid() {
+		b := nc.Details.Ip.Addr().As16()
+		rd.Ip = &RawNetwork{}
+		rd.Ip.Hi = binary.BigEndian.Uint64(b[:8])
+		rd.Ip.Lo = binary.BigEndian.Uint64(b[8:])
+		rd.Ip.Bits = uint32(nc.Details.Ip.Bits())
 	}
 
 	for _, ipNet := range nc.Details.Subnets {
-		rd.Subnets = append(rd.Subnets, ip2int(ipNet.IP), ip2int(ipNet.Mask))
+		b := ipNet.Addr().As16()
+		ip := &RawNetwork{}
+		ip.Hi = binary.BigEndian.Uint64(b[:8])
+		ip.Lo = binary.BigEndian.Uint64(b[8:])
+		ip.Bits = uint32(nc.Details.Ip.Bits())
+		rd.Subnets = append(rd.Subnets, ip)
 	}
 
 	copy(rd.PublicKey, nc.Details.PublicKey[:])
@@ -881,7 +873,7 @@ func (nc *NebulaCertificate) sha256SumWithCache(useCache bool) (string, error) {
 }
 
 func (nc *NebulaCertificate) MarshalJSON() ([]byte, error) {
-	toString := func(ips []*net.IPNet) []string {
+	toString := func(ips []netip.Prefix) []string {
 		s := []string{}
 		for _, ip := range ips {
 			s = append(s, ip.String())
@@ -893,7 +885,7 @@ func (nc *NebulaCertificate) MarshalJSON() ([]byte, error) {
 	jc := m{
 		"details": m{
 			"name":      nc.Details.Name,
-			"ips":       toString(nc.Details.Ips),
+			"ip":        nc.Details.Ip,
 			"subnets":   toString(nc.Details.Subnets),
 			"groups":    nc.Details.Groups,
 			"notBefore": nc.Details.NotBefore,
@@ -925,8 +917,7 @@ func (nc *NebulaCertificate) Copy() *NebulaCertificate {
 		Details: NebulaCertificateDetails{
 			Name:           nc.Details.Name,
 			Groups:         make([]string, len(nc.Details.Groups)),
-			Ips:            make([]*net.IPNet, len(nc.Details.Ips)),
-			Subnets:        make([]*net.IPNet, len(nc.Details.Subnets)),
+			Subnets:        make([]netip.Prefix, len(nc.Details.Subnets)),
 			NotBefore:      nc.Details.NotBefore,
 			NotAfter:       nc.Details.NotAfter,
 			PublicKey:      make([]byte, len(nc.Details.PublicKey)),
@@ -937,26 +928,13 @@ func (nc *NebulaCertificate) Copy() *NebulaCertificate {
 		Signature: make([]byte, len(nc.Signature)),
 	}
 
+	c.Details.Ip = nc.Details.Ip
 	copy(c.Signature, nc.Signature)
 	copy(c.Details.Groups, nc.Details.Groups)
 	copy(c.Details.PublicKey, nc.Details.PublicKey)
 
-	for i, p := range nc.Details.Ips {
-		c.Details.Ips[i] = &net.IPNet{
-			IP:   make(net.IP, len(p.IP)),
-			Mask: make(net.IPMask, len(p.Mask)),
-		}
-		copy(c.Details.Ips[i].IP, p.IP)
-		copy(c.Details.Ips[i].Mask, p.Mask)
-	}
-
 	for i, p := range nc.Details.Subnets {
-		c.Details.Subnets[i] = &net.IPNet{
-			IP:   make(net.IP, len(p.IP)),
-			Mask: make(net.IPMask, len(p.Mask)),
-		}
-		copy(c.Details.Subnets[i].IP, p.IP)
-		copy(c.Details.Subnets[i].Mask, p.Mask)
+		c.Details.Subnets[i] = p
 	}
 
 	for g := range nc.Details.InvertedGroups {
