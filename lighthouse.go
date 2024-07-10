@@ -737,11 +737,6 @@ func (lh *LightHouse) innerQueryServer(ip netip.Addr, nb, out []byte) {
 		return
 	}
 
-	if ip.Is6() {
-		//TODO: remove this
-		return
-	}
-
 	// Send a query to the lighthouses and hope for the best next time
 	query, err := NewLhQueryByInt(ip).Marshal()
 	if err != nil {

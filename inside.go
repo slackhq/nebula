@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"encoding/hex"
 	"net/netip"
 
 	"github.com/sirupsen/logrus"
@@ -12,7 +11,7 @@ import (
 )
 
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
-	f.l.Error("outbound ", hex.EncodeToString(packet))
+	//f.l.Error("outbound ", hex.EncodeToString(packet))
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
 		if f.l.Level >= logrus.DebugLevel {

@@ -18,10 +18,34 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-func BenchmarkHotPath(b *testing.B) {
+func BenchmarkHotPathV4(b *testing.B) {
 	ca, _, caKey, _ := NewTestCaCert(time.Now(), time.Now().Add(10*time.Minute), netip.Prefix{}, nil, []string{})
 	myControl, _, _, _ := newSimpleServer(ca, caKey, "me", "10.128.0.1/24", nil)
 	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServer(ca, caKey, "them", "10.128.0.2/24", nil)
+
+	// Put their info in our lighthouse
+	myControl.InjectLightHouseAddr(theirVpnIpNet.Addr(), theirUdpAddr)
+
+	// Start the servers
+	myControl.Start()
+	theirControl.Start()
+
+	r := router.NewR(b, myControl, theirControl)
+	r.CancelFlowLogs()
+
+	for n := 0; n < b.N; n++ {
+		myControl.InjectTunUDPPacket(theirVpnIpNet.Addr(), 80, 80, []byte("Hi from me"))
+		_ = r.RouteForAllUntilTxTun(theirControl)
+	}
+
+	myControl.Stop()
+	theirControl.Stop()
+}
+
+func BenchmarkHotPathV6(b *testing.B) {
+	ca, _, caKey, _ := NewTestCaCert(time.Now(), time.Now().Add(10*time.Minute), netip.Prefix{}, nil, []string{})
+	myControl, _, _, _ := newSimpleServer(ca, caKey, "me", "ff00::1/64", nil)
+	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServer(ca, caKey, "them", "ff00::2/64", nil)
 
 	// Put their info in our lighthouse
 	myControl.InjectLightHouseAddr(theirVpnIpNet.Addr(), theirUdpAddr)

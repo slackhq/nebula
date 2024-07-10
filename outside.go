@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -344,7 +343,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 		}
 
 		proto := layers.IPProtocol(data[protoAt])
-		fmt.Println(proto, protoAt)
+		//fmt.Println(proto, protoAt)
 		switch proto {
 		case layers.IPProtocolICMPv6:
 			//TODO: we need a new protocol in config language "icmpv6"
@@ -483,7 +482,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return false
 	}
 
-	f.l.Error("inbound ", hex.EncodeToString(out))
+	//f.l.Error("inbound ", hex.EncodeToString(out))
 	err = newPacket(out, true, fwPacket)
 	if err != nil {
 		hostinfo.logger(f.l).WithError(err).WithField("packet", out).
