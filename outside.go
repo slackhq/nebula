@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -335,9 +336,15 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 
 	//TODO: whats a reasonable number of extension headers to attempt to parse?
 	//https://www.ietf.org/archive/id/draft-ietf-6man-eh-limits-00.html
-	proto := layers.IPProtocol(data[6])
+	protoAt := 6
 	offset := 40
 	for i := 0; i < 24; i++ {
+		if dataLen < offset {
+			break
+		}
+
+		proto := layers.IPProtocol(data[protoAt])
+		fmt.Println(proto, protoAt)
 		switch proto {
 		case layers.IPProtocolICMPv6:
 			//TODO: we need a new protocol in config language "icmpv6"
@@ -378,8 +385,15 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 			if dataLen < offset+1 {
 				break
 			}
-			offset += int(data[offset+1]) + 1
-			proto = layers.IPProtocol(data[offset])
+
+			next := int(data[offset+1]) * 8
+			if next == 0 {
+				// each extension is at least 8 bytes
+				next = 8
+			}
+
+			protoAt = offset
+			offset = offset + next
 		}
 	}
 
@@ -418,7 +432,6 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 
 	// Firewall packets are locally oriented
 	if incoming {
-		//TODO: IPV6-WORK
 		fp.RemoteIP, _ = netip.AddrFromSlice(data[12:16])
 		fp.LocalIP, _ = netip.AddrFromSlice(data[16:20])
 		if fp.Fragment || fp.Protocol == firewall.ProtoICMP {
@@ -429,7 +442,6 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4])
 		}
 	} else {
-		//TODO: IPV6-WORK
 		fp.LocalIP, _ = netip.AddrFromSlice(data[12:16])
 		fp.RemoteIP, _ = netip.AddrFromSlice(data[16:20])
 		if fp.Fragment || fp.Protocol == firewall.ProtoICMP {
@@ -471,6 +483,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return false
 	}
 
+	f.l.Error("inbound ", hex.EncodeToString(out))
 	err = newPacket(out, true, fwPacket)
 	if err != nil {
 		hostinfo.logger(f.l).WithError(err).WithField("packet", out).
