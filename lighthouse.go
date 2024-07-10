@@ -673,16 +673,10 @@ func (lh *LightHouse) IsLighthouseIP(vpnIp netip.Addr) bool {
 }
 
 func NewLhQueryByInt(vpnIp netip.Addr) *NebulaMeta {
-	if vpnIp.Is6() {
-		//TODO: need to support ipv6
-		panic("ipv6 is not yet supported")
-	}
-
-	b := vpnIp.As4()
 	return &NebulaMeta{
 		Type: NebulaMeta_HostQuery,
 		Details: &NebulaMetaDetails{
-			VpnIp: binary.BigEndian.Uint32(b[:]),
+			VpnIp: netAddrToProtoIp(vpnIp),
 		},
 	}
 }
@@ -815,24 +809,15 @@ func (lh *LightHouse) SendUpdate() {
 		}
 	}
 
-	var relays []uint32
+	var relays []*Ip
 	for _, r := range lh.GetRelaysForMe() {
-		//TODO: IPV6-WORK both relays and vpnip need ipv6 support
-		b := r.As4()
-		relays = append(relays, binary.BigEndian.Uint32(b[:]))
+		relays = append(relays, netAddrToProtoIp(r))
 	}
-
-	if lh.myVpnNet.Addr().Is6() {
-		//TODO
-		return
-	}
-	//TODO: IPV6-WORK both relays and vpnip need ipv6 support
-	b := lh.myVpnNet.Addr().As4()
 
 	m := &NebulaMeta{
 		Type: NebulaMeta_HostUpdateNotification,
 		Details: &NebulaMetaDetails{
-			VpnIp:       binary.BigEndian.Uint32(b[:]),
+			VpnIp:       netAddrToProtoIp(lh.myVpnNet.Addr()),
 			Ip4AndPorts: v4,
 			Ip6AndPorts: v6,
 			RelayVpnIp:  relays,
@@ -958,11 +943,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp netip.Addr, a
 
 	//TODO: we can DRY this further
 	reqVpnIp := n.Details.VpnIp
-
-	//TODO: IPV6-WORK
-	b := [4]byte{}
-	binary.BigEndian.PutUint32(b[:], n.Details.VpnIp)
-	queryVpnIp := netip.AddrFrom4(b)
+	queryVpnIp := protoIpToNetAddr(n.Details.VpnIp)
 
 	//TODO: Maybe instead of marshalling into n we marshal into a new `r` to not nuke our current request data
 	found, ln, err := lhh.lh.queryAndPrepMessage(queryVpnIp, func(c *cache) (int, error) {
@@ -991,9 +972,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp netip.Addr, a
 	found, ln, err = lhh.lh.queryAndPrepMessage(vpnIp, func(c *cache) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostPunchNotification
-		//TODO: IPV6-WORK
-		b = vpnIp.As4()
-		n.Details.VpnIp = binary.BigEndian.Uint32(b[:])
+		n.Details.VpnIp = netAddrToProtoIp(vpnIp)
 		lhh.coalesceAnswers(c, n)
 
 		return n.MarshalTo(lhh.pb)
@@ -1010,9 +989,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp netip.Addr, a
 
 	lhh.lh.metricTx(NebulaMeta_HostPunchNotification, 1)
 
-	//TODO: IPV6-WORK
-	binary.BigEndian.PutUint32(b[:], reqVpnIp)
-	sendTo := netip.AddrFrom4(b)
+	sendTo := protoIpToNetAddr(reqVpnIp)
 	w.SendMessageToVpnIp(header.LightHouse, 0, sendTo, lhh.pb[:ln], lhh.nb, lhh.out[:0])
 }
 
@@ -1036,12 +1013,9 @@ func (lhh *LightHouseHandler) coalesceAnswers(c *cache, n *NebulaMeta) {
 	}
 
 	if c.relay != nil {
-		//TODO: IPV6-WORK
-		relays := make([]uint32, len(c.relay.relay))
-		b := [4]byte{}
+		relays := make([]*Ip, len(c.relay.relay))
 		for i, _ := range relays {
-			b = c.relay.relay[i].As4()
-			relays[i] = binary.BigEndian.Uint32(b[:])
+			relays[i] = netAddrToProtoIp(c.relay.relay[i])
 		}
 		n.Details.RelayVpnIp = append(n.Details.RelayVpnIp, relays...)
 	}
@@ -1053,23 +1027,17 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp netip.Ad
 	}
 
 	lhh.lh.Lock()
-	//TODO: IPV6-WORK
-	b := [4]byte{}
-	binary.BigEndian.PutUint32(b[:], n.Details.VpnIp)
-	certVpnIp := netip.AddrFrom4(b)
+	certVpnIp := protoIpToNetAddr(n.Details.VpnIp)
 	am := lhh.lh.unlockedGetRemoteList(certVpnIp)
 	am.Lock()
 	lhh.lh.Unlock()
 
-	//TODO: IPV6-WORK
 	am.unlockedSetV4(vpnIp, certVpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(vpnIp, certVpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
 
-	//TODO: IPV6-WORK
 	relays := make([]netip.Addr, len(n.Details.RelayVpnIp))
 	for i, _ := range n.Details.RelayVpnIp {
-		binary.BigEndian.PutUint32(b[:], n.Details.RelayVpnIp[i])
-		relays[i] = netip.AddrFrom4(b)
+		relays[i] = protoIpToNetAddr(n.Details.RelayVpnIp[i])
 	}
 	am.unlockedSetRelay(vpnIp, certVpnIp, relays)
 	am.Unlock()
@@ -1090,10 +1058,7 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 	}
 
 	//Simple check that the host sent this not someone else
-	//TODO: IPV6-WORK
-	b := [4]byte{}
-	binary.BigEndian.PutUint32(b[:], n.Details.VpnIp)
-	detailsVpnIp := netip.AddrFrom4(b)
+	detailsVpnIp := protoIpToNetAddr(n.Details.VpnIp)
 	if detailsVpnIp != vpnIp {
 		if lhh.l.Level >= logrus.DebugLevel {
 			lhh.l.WithField("vpnIp", vpnIp).WithField("answer", detailsVpnIp).Debugln("Host sent invalid update")
@@ -1109,11 +1074,9 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 	am.unlockedSetV4(vpnIp, detailsVpnIp, n.Details.Ip4AndPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(vpnIp, detailsVpnIp, n.Details.Ip6AndPorts, lhh.lh.unlockedShouldAddV6)
 
-	//TODO: IPV6-WORK
 	relays := make([]netip.Addr, len(n.Details.RelayVpnIp))
 	for i, _ := range n.Details.RelayVpnIp {
-		binary.BigEndian.PutUint32(b[:], n.Details.RelayVpnIp[i])
-		relays[i] = netip.AddrFrom4(b)
+		relays[i] = protoIpToNetAddr(n.Details.RelayVpnIp[i])
 	}
 	am.unlockedSetRelay(vpnIp, detailsVpnIp, relays)
 	am.Unlock()
@@ -1121,11 +1084,8 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 	n = lhh.resetMeta()
 	n.Type = NebulaMeta_HostUpdateNotificationAck
 
-	//TODO: IPV6-WORK
-	vpnIpB := vpnIp.As4()
-	n.Details.VpnIp = binary.BigEndian.Uint32(vpnIpB[:])
+	n.Details.VpnIp = netAddrToProtoIp(vpnIp)
 	ln, err := n.MarshalTo(lhh.pb)
-
 	if err != nil {
 		lhh.l.WithError(err).WithField("vpnIp", vpnIp).Error("Failed to marshal lighthouse host update ack")
 		return
@@ -1154,10 +1114,7 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp n
 
 		if lhh.l.Level >= logrus.DebugLevel {
 			//TODO: lacking the ip we are actually punching on, old: l.Debugf("Punching %s on %d for %s", IntIp(a.Ip), a.Port, IntIp(n.Details.VpnIp))
-			//TODO: IPV6-WORK, make this debug line not suck
-			b := [4]byte{}
-			binary.BigEndian.PutUint32(b[:], n.Details.VpnIp)
-			lhh.l.Debugf("Punching on %d for %v", vpnPeer.Port(), netip.AddrFrom4(b))
+			lhh.l.Debugf("Punching on %d for %v", vpnPeer.Port(), protoIpToNetAddr(n.Details.VpnIp))
 		}
 	}
 
@@ -1173,10 +1130,7 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp n
 	// of a double nat or other difficult scenario, this may help establish
 	// a tunnel.
 	if lhh.lh.punchy.GetRespond() {
-		//TODO: IPV6-WORK
-		b := [4]byte{}
-		binary.BigEndian.PutUint32(b[:], n.Details.VpnIp)
-		queryVpnIp := netip.AddrFrom4(b)
+		queryVpnIp := protoIpToNetAddr(n.Details.VpnIp)
 		go func() {
 			time.Sleep(lhh.lh.punchy.GetRespondDelay())
 			if lhh.l.Level >= logrus.DebugLevel {

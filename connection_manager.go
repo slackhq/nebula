@@ -3,7 +3,6 @@ package nebula
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"net/netip"
 	"sync"
 	"time"
@@ -270,16 +269,12 @@ func (n *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo)
 			}
 		}
 
-		//TODO: IPV6-WORK
-		relayFromB := relayFrom.As4()
-		relayToB := relayTo.As4()
-
 		// Send a CreateRelayRequest to the peer.
 		req := NebulaControl{
 			Type:                NebulaControl_CreateRelayRequest,
 			InitiatorRelayIndex: index,
-			RelayFromIp:         binary.BigEndian.Uint32(relayFromB[:]),
-			RelayToIp:           binary.BigEndian.Uint32(relayToB[:]),
+			RelayFromIp:         netAddrToProtoIp(relayFrom),
+			RelayToIp:           netAddrToProtoIp(relayTo),
 		}
 		msg, err := req.Marshal()
 		if err != nil {
