@@ -6,7 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -139,14 +139,10 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		*sf.duration = time.Until(caCert.Details.NotAfter) - time.Second*1
 	}
 
-	ip, ipNet, err := net.ParseCIDR(*sf.ip)
+	ipNet, err := netip.ParsePrefix(*sf.ip)
 	if err != nil {
 		return newHelpErrorf("invalid ip definition: %s", err)
 	}
-	if ip.To4() == nil {
-		return newHelpErrorf("invalid ip definition: can only be ipv4, have %s", *sf.ip)
-	}
-	ipNet.IP = ip
 
 	groups := []string{}
 	if *sf.groups != "" {
@@ -158,17 +154,14 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 	}
 
-	subnets := []*net.IPNet{}
+	var subnets []netip.Prefix
 	if *sf.subnets != "" {
 		for _, rs := range strings.Split(*sf.subnets, ",") {
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
-				_, s, err := net.ParseCIDR(rs)
+				s, err := netip.ParsePrefix(rs)
 				if err != nil {
 					return newHelpErrorf("invalid subnet definition: %s", err)
-				}
-				if s.IP.To4() == nil {
-					return newHelpErrorf("invalid subnet definition: can only be ipv4, have %s", rs)
 				}
 				subnets = append(subnets, s)
 			}
@@ -196,7 +189,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	nc := cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
 			Name:      *sf.name,
-			Ips:       []*net.IPNet{ipNet},
+			Ip:        ipNet,
 			Groups:    groups,
 			Subnets:   subnets,
 			NotBefore: time.Now(),
