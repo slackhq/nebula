@@ -66,7 +66,6 @@ func New(hsmPath string, slotId uint, pin string, id string, label string) (*PKC
 			// ignore "already logged in"
 			if !errors.Is(err, pkcs11.Error(256)) {
 				_ = client.session.Close()
-				client.module.Destroy()
 				return nil, fmt.Errorf("unable to login. error: %w", err)
 			}
 		}
@@ -84,14 +83,14 @@ func New(hsmPath string, slotId uint, pin string, id string, label string) (*PKC
 
 // Close cleans up properly and logs out
 func (c *PKClient) Close() error {
-	if err := c.session.Logout(); err != nil {
-		return err
+	var err error = nil
+	if c.session != nil {
+		_ = c.session.Logout() //if logout fails, we still want to close
+		err = c.session.Close()
 	}
 
-	_ = c.session.Close()
 	c.module.Destroy()
-
-	return nil
+	return err
 }
 
 // Try to find a suitable key on the hsm for key derivation
@@ -145,7 +144,7 @@ func (c *PKClient) listDeriveKeys(id []byte, label []byte, private bool) {
 	}
 }
 
-// Signs some data. Returns the ASN.1 encoded signature.
+// SignASN1 signs some data. Returns the ASN.1 encoded signature.
 func (c *PKClient) SignASN1(data []byte) ([]byte, error) {
 	mech := pkcs11.NewMechanism(pkcs11.CKM_ECDSA_SHA256, nil)
 	sk := p11.PrivateKey(c.privKeyObj)
