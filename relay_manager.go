@@ -120,12 +120,8 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 		"responderRelayIndex": m.ResponderRelayIndex,
 		"vpnIp":               h.vpnIp}).
 		Info("handleCreateRelayResponse")
-	target := m.RelayToIp
-	//TODO: IPV6-WORK
-	b := [4]byte{}
-	binary.BigEndian.PutUint32(b[:], m.RelayToIp)
-	targetAddr := netip.AddrFrom4(b)
 
+	targetAddr := protoIpToNetAddr(m.RelayToIp)
 	relay, err := rm.EstablishRelay(h, m)
 	if err != nil {
 		rm.l.WithError(err).Error("Failed to update relay for relayTo")
@@ -147,15 +143,13 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 		return
 	}
 	if peerRelay.State == PeerRequested {
-		//TODO: IPV6-WORK
-		b = peerHostInfo.vpnIp.As4()
 		peerRelay.State = Established
 		resp := NebulaControl{
 			Type:                NebulaControl_CreateRelayResponse,
 			ResponderRelayIndex: peerRelay.LocalIndex,
 			InitiatorRelayIndex: peerRelay.RemoteIndex,
-			RelayFromIp:         binary.BigEndian.Uint32(b[:]),
-			RelayToIp:           uint32(target),
+			RelayFromIp:         netAddrToProtoIp(peerHostInfo.vpnIp),
+			RelayToIp:           netAddrToProtoIp(targetAddr),
 		}
 		msg, err := resp.Marshal()
 		if err != nil {
@@ -175,13 +169,8 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 }
 
 func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *NebulaControl) {
-	//TODO: IPV6-WORK
-	b := [4]byte{}
-	binary.BigEndian.PutUint32(b[:], m.RelayFromIp)
-	from := netip.AddrFrom4(b)
-
-	binary.BigEndian.PutUint32(b[:], m.RelayToIp)
-	target := netip.AddrFrom4(b)
+	from := protoIpToNetAddr(m.RelayFromIp)
+	target := protoIpToNetAddr(m.RelayToIp)
 
 	logMsg := rm.l.WithFields(logrus.Fields{
 		"relayFrom":           from,
@@ -230,16 +219,12 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			return
 		}
 
-		//TODO: IPV6-WORK
-		fromB := from.As4()
-		targetB := target.As4()
-
 		resp := NebulaControl{
 			Type:                NebulaControl_CreateRelayResponse,
 			ResponderRelayIndex: relay.LocalIndex,
 			InitiatorRelayIndex: relay.RemoteIndex,
-			RelayFromIp:         binary.BigEndian.Uint32(fromB[:]),
-			RelayToIp:           binary.BigEndian.Uint32(targetB[:]),
+			RelayFromIp:         netAddrToProtoIp(from),
+			RelayToIp:           netAddrToProtoIp(target),
 		}
 		msg, err := resp.Marshal()
 		if err != nil {
@@ -291,16 +276,12 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			sendCreateRequest = true
 		}
 		if sendCreateRequest {
-			//TODO: IPV6-WORK
-			fromB := h.vpnIp.As4()
-			targetB := target.As4()
-
 			// Send a CreateRelayRequest to the peer.
 			req := NebulaControl{
 				Type:                NebulaControl_CreateRelayRequest,
 				InitiatorRelayIndex: index,
-				RelayFromIp:         binary.BigEndian.Uint32(fromB[:]),
-				RelayToIp:           binary.BigEndian.Uint32(targetB[:]),
+				RelayFromIp:         netAddrToProtoIp(h.vpnIp),
+				RelayToIp:           netAddrToProtoIp(target),
 			}
 			msg, err := req.Marshal()
 			if err != nil {
@@ -342,15 +323,13 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 						"existingRemoteIndex": relay.RemoteIndex}).Error("Existing relay mismatch with CreateRelayRequest")
 					return
 				}
-				//TODO: IPV6-WORK
-				fromB := h.vpnIp.As4()
-				targetB := target.As4()
+
 				resp := NebulaControl{
 					Type:                NebulaControl_CreateRelayResponse,
 					ResponderRelayIndex: relay.LocalIndex,
 					InitiatorRelayIndex: relay.RemoteIndex,
-					RelayFromIp:         binary.BigEndian.Uint32(fromB[:]),
-					RelayToIp:           binary.BigEndian.Uint32(targetB[:]),
+					RelayFromIp:         netAddrToProtoIp(h.vpnIp),
+					RelayToIp:           netAddrToProtoIp(target),
 				}
 				msg, err := resp.Marshal()
 				if err != nil {
@@ -372,5 +351,20 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 				// Keep waiting for the other relay to complete
 			}
 		}
+	}
+}
+
+func protoIpToNetAddr(ip *Ip) netip.Addr {
+	b := [16]byte{}
+	binary.BigEndian.PutUint64(b[:8], ip.Hi)
+	binary.BigEndian.PutUint64(b[8:], ip.Lo)
+	return netip.AddrFrom16(b).Unmap()
+}
+
+func netAddrToProtoIp(addr netip.Addr) *Ip {
+	b := addr.As16()
+	return &Ip{
+		Hi: binary.BigEndian.Uint64(b[:8]),
+		Lo: binary.BigEndian.Uint64(b[8:]),
 	}
 }

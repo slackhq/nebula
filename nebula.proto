@@ -23,11 +23,16 @@ message NebulaMeta {
 }
 
 message NebulaMetaDetails {
-  uint32 VpnIp = 1;
+  Ip VpnIp = 1;
   repeated Ip4AndPort Ip4AndPorts = 2;
   repeated Ip6AndPort Ip6AndPorts = 4;
-  repeated uint32 RelayVpnIp = 5;
+  repeated Ip RelayVpnIp = 5;
   uint32 counter = 3;
+}
+
+message Ip {
+  uint64 Hi = 1;
+  uint64 Lo = 2;
 }
 
 message Ip4AndPort {
@@ -76,6 +81,6 @@ message NebulaControl {
 
   uint32 InitiatorRelayIndex = 2;
   uint32 ResponderRelayIndex = 3;
-  uint32 RelayToIp = 4;
-  uint32 RelayFromIp = 5;
+  Ip RelayToIp = 4;
+  Ip RelayFromIp = 5;
 }

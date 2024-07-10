@@ -58,6 +58,7 @@ const (
 	_AF_SYS_CONTROL   = 2              //#define AF_SYS_CONTROL 2 /* corresponding sub address type */
 	_PF_SYSTEM        = unix.AF_SYSTEM //#define PF_SYSTEM AF_SYSTEM
 	_CTLIOCGINFO      = 3227799043     //#define CTLIOCGINFO     _IOWR('N', 3, struct ctl_info)
+	_SIOCAIFADDR_IN6  = 2155899162
 	utunControlName   = "com.apple.net.utun_control"
 )
 
@@ -71,6 +72,22 @@ type ifreqMTU struct {
 	Name [16]byte
 	MTU  int32
 	pad  [8]byte
+}
+
+type addrLifetime struct {
+	Expire    float64
+	Preferred float64
+	Vltime    uint32
+	Pltime    uint32
+}
+
+type ifreqAlias struct {
+	Name       [16]byte
+	Addr       unix.RawSockaddrInet6
+	DstAddr    unix.RawSockaddrInet6
+	PrefixMask unix.RawSockaddrInet6
+	Flags      uint32
+	Lifetime   addrLifetime
 }
 
 func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, _ bool) (*tun, error) {
@@ -186,18 +203,8 @@ func (t *tun) Close() error {
 func (t *tun) Activate() error {
 	devName := t.deviceBytes()
 
-	var addr, mask [4]byte
-
-	if !t.cidr.Addr().Is4() {
-		//TODO: IPV6-WORK
-		panic("need ipv6")
-	}
-
-	addr = t.cidr.Addr().As4()
-	copy(mask[:], prefixToMask(t.cidr))
-
 	s, err := unix.Socket(
-		unix.AF_INET,
+		unix.AF_INET6,
 		unix.SOCK_DGRAM,
 		unix.IPPROTO_IP,
 	)
@@ -208,23 +215,16 @@ func (t *tun) Activate() error {
 
 	fd := uintptr(s)
 
-	ifra := ifreqAddr{
-		Name: devName,
-		Addr: unix.RawSockaddrInet4{
-			Family: unix.AF_INET,
-			Addr:   addr,
-		},
-	}
-
-	// Set the device ip address
-	if err = ioctl(fd, unix.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra))); err != nil {
-		return fmt.Errorf("failed to set tun address: %s", err)
-	}
-
-	// Set the device network
-	ifra.Addr.Addr = mask
-	if err = ioctl(fd, unix.SIOCSIFNETMASK, uintptr(unsafe.Pointer(&ifra))); err != nil {
-		return fmt.Errorf("failed to set tun netmask: %s", err)
+	if t.cidr.Addr().Is4() {
+		err = t.activate4(fd)
+		if err != nil {
+			return err
+		}
+	} else {
+		err = t.activate6(fd)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Set the device name
@@ -266,8 +266,6 @@ func (t *tun) Activate() error {
 		}
 	}()
 
-	routeAddr := &netroute.Inet4Addr{}
-	maskAddr := &netroute.Inet4Addr{}
 	linkAddr, err := getLinkAddr(t.Device)
 	if err != nil {
 		return err
@@ -277,14 +275,15 @@ func (t *tun) Activate() error {
 	}
 	t.linkAddr = linkAddr
 
-	copy(routeAddr.IP[:], addr[:])
-	copy(maskAddr.IP[:], mask[:])
-	err = addRoute(routeSock, routeAddr, maskAddr, linkAddr)
-	if err != nil {
-		if errors.Is(err, unix.EEXIST) {
-			err = fmt.Errorf("unable to add tun route, identical route already exists: %s", t.cidr)
+	if t.cidr.Addr().Is4() {
+		// macos appears to establish the default route for us when its ipv6
+		err = addRoute(routeSock, t.cidr, linkAddr)
+		if err != nil {
+			if errors.Is(err, unix.EEXIST) {
+				err = fmt.Errorf("unable to add tun route, identical route already exists: %s", t.cidr)
+			}
+			return err
 		}
-		return err
 	}
 
 	// Run the interface
@@ -295,6 +294,57 @@ func (t *tun) Activate() error {
 
 	// Unsafe path routes
 	return t.addRoutes(false)
+}
+
+func (t *tun) activate4(fd uintptr) error {
+	var addr, mask [4]byte
+	addr = t.cidr.Addr().As4()
+	copy(mask[:], prefixToMask(t.cidr))
+
+	ifra := ifreqAddr{
+		Name: t.deviceBytes(),
+		Addr: unix.RawSockaddrInet4{
+			Family: unix.AF_INET,
+			Addr:   addr,
+		},
+	}
+
+	// Set the device ip address
+	if err := ioctl(fd, unix.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra))); err != nil {
+		return fmt.Errorf("failed to set tun address: %s", err)
+	}
+
+	// Set the device network
+	ifra.Addr.Addr = mask
+	if err := ioctl(fd, unix.SIOCSIFNETMASK, uintptr(unsafe.Pointer(&ifra))); err != nil {
+		return fmt.Errorf("failed to set tun netmask: %s", err)
+	}
+
+	return nil
+}
+
+func (t *tun) activate6(fd uintptr) error {
+	var ifr ifreqAlias
+	ifr.Name = t.deviceBytes()
+
+	// Set the netmask
+	ifr.PrefixMask.Len = uint8(unsafe.Sizeof(ifr.PrefixMask))
+	copy(ifr.PrefixMask.Addr[:], prefixToMask(t.cidr))
+
+	// Set the address
+	ifr.Addr.Len = uint8(unsafe.Sizeof(ifr.Addr))
+	ifr.Addr.Family = unix.AF_INET6
+	ifr.Addr.Addr = t.cidr.Addr().As16()
+
+	// This address does not expire
+	ifr.Lifetime.Vltime = 0xffffffff
+	ifr.Lifetime.Pltime = 0xffffffff
+
+	if err := ioctl(fd, _SIOCAIFADDR_IN6, uintptr(unsafe.Pointer(&ifr))); err != nil {
+		return fmt.Errorf("failed to set tun address: %s", err)
+	}
+
+	return nil
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
@@ -402,22 +452,22 @@ func (t *tun) addRoutes(logErrors bool) error {
 		//TODO: we could avoid the copy
 		copy(maskAddr.IP[:], prefixToMask(r.Cidr))
 
-		err := addRoute(routeSock, routeAddr, maskAddr, t.linkAddr)
-		if err != nil {
-			if errors.Is(err, unix.EEXIST) {
-				t.l.WithField("route", r.Cidr).
-					Warnf("unable to add unsafe_route, identical route already exists")
-			} else {
-				retErr := util.NewContextualError("Failed to add route", map[string]interface{}{"route": r}, err)
-				if logErrors {
-					retErr.Log(t.l)
-				} else {
-					return retErr
-				}
-			}
-		} else {
-			t.l.WithField("route", r).Info("Added route")
-		}
+		//err := addRoute(routeSock, routeAddr, maskAddr, t.linkAddr)
+		//if err != nil {
+		//	if errors.Is(err, unix.EEXIST) {
+		//		t.l.WithField("route", r.Cidr).
+		//			Warnf("unable to add unsafe_route, identical route already exists")
+		//	} else {
+		//		retErr := util.NewContextualError("Failed to add route", map[string]interface{}{"route": r}, err)
+		//		if logErrors {
+		//			retErr.Log(t.l)
+		//		} else {
+		//			return retErr
+		//		}
+		//	}
+		//} else {
+		//	t.l.WithField("route", r).Info("Added route")
+		//}
 	}
 
 	return nil
@@ -463,16 +513,33 @@ func (t *tun) removeRoutes(routes []Route) error {
 	return nil
 }
 
-func addRoute(sock int, addr, mask *netroute.Inet4Addr, link *netroute.LinkAddr) error {
+func addRoute(sock int, prefix netip.Prefix, link *netroute.LinkAddr) error {
+	var routeAddr netroute.Addr
+	var routeMask netroute.Addr
+
+	if prefix.Addr().Is4() {
+		routeAddr = &netroute.Inet4Addr{IP: prefix.Addr().As4()}
+		mask := netroute.Inet4Addr{}
+		copy(mask.IP[:], prefixToMask(prefix))
+		routeMask = &mask
+
+	} else {
+		routeAddr = &netroute.Inet6Addr{IP: prefix.Addr().As16()}
+		mask := netroute.Inet6Addr{}
+		copy(mask.IP[:], prefixToMask(prefix))
+		routeMask = &mask
+
+	}
+
 	r := netroute.RouteMessage{
 		Version: unix.RTM_VERSION,
 		Type:    unix.RTM_ADD,
 		Flags:   unix.RTF_UP,
 		Seq:     1,
 		Addrs: []netroute.Addr{
-			unix.RTAX_DST:     addr,
+			unix.RTAX_DST:     routeAddr,
 			unix.RTAX_GATEWAY: link,
-			unix.RTAX_NETMASK: mask,
+			unix.RTAX_NETMASK: routeMask,
 		},
 	}
 

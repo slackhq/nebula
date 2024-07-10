@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -106,36 +106,23 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		}
 	}
 
-	var ips []*net.IPNet
+	var ips netip.Prefix
 	if *cf.ips != "" {
-		for _, rs := range strings.Split(*cf.ips, ",") {
-			rs := strings.Trim(rs, " ")
-			if rs != "" {
-				ip, ipNet, err := net.ParseCIDR(rs)
-				if err != nil {
-					return newHelpErrorf("invalid ip definition: %s", err)
-				}
-				if ip.To4() == nil {
-					return newHelpErrorf("invalid ip definition: can only be ipv4, have %s", rs)
-				}
-
-				ipNet.IP = ip
-				ips = append(ips, ipNet)
-			}
+		rs := strings.Trim(*cf.ips, " ")
+		ips, err = netip.ParsePrefix(rs)
+		if err != nil {
+			return newHelpErrorf("invalid ip definition: %s", err)
 		}
 	}
 
-	var subnets []*net.IPNet
+	var subnets []netip.Prefix
 	if *cf.subnets != "" {
 		for _, rs := range strings.Split(*cf.subnets, ",") {
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
-				_, s, err := net.ParseCIDR(rs)
+				s, err := netip.ParsePrefix(rs)
 				if err != nil {
 					return newHelpErrorf("invalid subnet definition: %s", err)
-				}
-				if s.IP.To4() == nil {
-					return newHelpErrorf("invalid subnet definition: can only be ipv4, have %s", rs)
 				}
 				subnets = append(subnets, s)
 			}
@@ -195,7 +182,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		Details: cert.NebulaCertificateDetails{
 			Name:      *cf.name,
 			Groups:    groups,
-			Ips:       ips,
+			Ip:        ips,
 			Subnets:   subnets,
 			NotBefore: time.Now(),
 			NotAfter:  time.Now().Add(*cf.duration),

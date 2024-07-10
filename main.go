@@ -68,18 +68,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 	l.WithField("firewallHashes", fw.GetRuleHashes()).Info("Firewall started")
 
-	ones, _ := certificate.Details.Ips[0].Mask.Size()
-	addr, ok := netip.AddrFromSlice(certificate.Details.Ips[0].IP)
-	if !ok {
-		err = util.NewContextualError(
-			"Invalid ip address in certificate",
-			m{"vpnIp": certificate.Details.Ips[0].IP},
-			nil,
-		)
-		return nil, err
-	}
-	tunCidr := netip.PrefixFrom(addr, ones)
-
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while creating SSH server", err)
@@ -142,7 +130,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			deviceFactory = overlay.NewDeviceFromConfig
 		}
 
-		tun, err = deviceFactory(c, l, tunCidr, routines)
+		tun, err = deviceFactory(c, l, certificate.Details.Ip, routines)
 		if err != nil {
 			return nil, util.ContextualizeIfNeeded("Failed to get a tun/tap device", err)
 		}
@@ -197,9 +185,9 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	}
 
-	hostMap := NewHostMapFromConfig(l, tunCidr, c)
+	hostMap := NewHostMapFromConfig(l, certificate.Details.Ip, c)
 	punchy := NewPunchyFromConfig(l, c)
-	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, tunCidr, udpConns[0], punchy)
+	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, certificate.Details.Ip, udpConns[0], punchy)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to initialize lighthouse handler", err)
 	}

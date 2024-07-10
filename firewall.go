@@ -145,27 +145,10 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 	}
 
 	localIps := new(bart.Table[struct{}])
-	var assignedCIDR netip.Prefix
-	var assignedSet bool
-	for _, ip := range c.Details.Ips {
-		//TODO: IPV6-WORK the unmap is a bit unfortunate
-		nip, _ := netip.AddrFromSlice(ip.IP)
-		nip = nip.Unmap()
-		nprefix := netip.PrefixFrom(nip, nip.BitLen())
-		localIps.Insert(nprefix, struct{}{})
-
-		if !assignedSet {
-			// Only grabbing the first one in the cert since any more than that currently has undefined behavior
-			assignedCIDR = nprefix
-			assignedSet = true
-		}
-	}
+	localIps.Insert(c.Details.Ip, struct{}{})
 
 	for _, n := range c.Details.Subnets {
-		nip, _ := netip.AddrFromSlice(n.IP)
-		ones, _ := n.Mask.Size()
-		nip = nip.Unmap()
-		localIps.Insert(netip.PrefixFrom(nip, ones), struct{}{})
+		localIps.Insert(n, struct{}{})
 	}
 
 	return &Firewall{
@@ -179,7 +162,7 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		UDPTimeout:     UDPTimeout,
 		DefaultTimeout: defaultTimeout,
 		localIps:       localIps,
-		assignedCIDR:   assignedCIDR,
+		assignedCIDR:   c.Details.Ip,
 		hasSubnets:     len(c.Details.Subnets) > 0,
 		l:              l,
 

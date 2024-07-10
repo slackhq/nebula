@@ -19,8 +19,8 @@ message RawNebulaCertificateDetails {
     string Name = 1;
 
     // Ips and Subnets are in big endian 32 bit pairs, 1st the ip, 2nd the mask
-    repeated uint32 Ips = 2;
-    repeated uint32 Subnets = 3;
+    RawNetwork Ip = 2;
+    repeated RawNetwork Subnets = 3;
 
     repeated string Groups = 4;
     int64 NotBefore = 5;
@@ -33,6 +33,12 @@ message RawNebulaCertificateDetails {
     bytes Issuer = 9;
 
     Curve curve = 100;
+}
+
+message RawNetwork {
+  uint64 Hi = 1;
+  uint64 Lo = 2;
+  uint32 bits = 3;
 }
 
 message RawNebulaEncryptedData {
