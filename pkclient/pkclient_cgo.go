@@ -204,7 +204,7 @@ func (c *PKClient) GetPubKey() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if d != nil {
+	if d != nil && len(d) > 0 {
 		return formatPubkeyFromPublicKeyInfoAttr(d)
 	}
 	c.pubKeyObj, err = c.findDeriveKey(c.id, c.label, false)
@@ -215,8 +215,8 @@ func (c *PKClient) GetPubKey() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pkcs11 module gave us a nil CKA_PUBLIC_KEY_INFO, and reading CKA_EC_POINT also failed: %w", err)
 	}
-	if d == nil {
-		return nil, fmt.Errorf("pkcs11 module gave us a nil CKA_EC_POINT")
+	if d == nil || len(d) < 1 {
+		return nil, fmt.Errorf("pkcs11 module gave us a nil or empty CKA_EC_POINT")
 	}
 	switch len(d) {
 	case 65: //length of 0x04 + len(X) + len(Y)
