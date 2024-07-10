@@ -72,6 +72,8 @@ func NewConnectionState(l *logrus.Logger, cipher string, certState *CertState, i
 		window:    b,
 		myCert:    certState.Certificate,
 	}
+	// always start the counter from 2, as packet 1 and packet 2 are handshake packets.
+	ci.messageCounter.Add(2)
 
 	return ci
 }

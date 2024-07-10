@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.3] - 2024-06-06
+
+### Fixed
+
+- Initialize messageCounter to 2 instead of verifying later. (#1156)
+
+## [1.9.2] - 2024-06-03
+
+### Fixed
+
+- Ensure messageCounter is set before handshake is complete. (#1154)
+
+## [1.9.1] - 2024-05-29
+
+### Fixed
+
+- Fixed a potential deadlock in GetOrHandshake. (#1151)
+
 ## [1.9.0] - 2024-05-07
 
 ### Deprecated
@@ -626,7 +644,10 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.9.3...HEAD
+[1.9.3]: https://github.com/slackhq/nebula/releases/tag/v1.9.3
+[1.9.2]: https://github.com/slackhq/nebula/releases/tag/v1.9.2
+[1.9.1]: https://github.com/slackhq/nebula/releases/tag/v1.9.1
 [1.9.0]: https://github.com/slackhq/nebula/releases/tag/v1.9.0
 [1.8.2]: https://github.com/slackhq/nebula/releases/tag/v1.8.2
 [1.8.1]: https://github.com/slackhq/nebula/releases/tag/v1.8.1

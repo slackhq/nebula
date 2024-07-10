@@ -55,7 +55,6 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 	}
 
 	h := header.Encode(make([]byte, header.Len), header.Version, header.Handshake, header.HandshakeIXPSK0, 0, 1)
-	ci.messageCounter.Add(1)
 
 	msg, _, _, err := ci.H.WriteMessage(h, hsBytes)
 	if err != nil {
@@ -374,7 +373,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 	}
 
 	f.connectionManager.AddTrafficWatch(hostinfo.localIndexId)
-	hostinfo.ConnectionState.messageCounter.Store(2)
+
 	hostinfo.remotes.ResetBlockedRemotes()
 
 	return
@@ -534,8 +533,6 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hh *Handsha
 	// Complete our handshake and update metrics, this will replace any existing tunnels for this vpnIp
 	f.handshakeManager.Complete(hostinfo, f)
 	f.connectionManager.AddTrafficWatch(hostinfo.localIndexId)
-
-	hostinfo.ConnectionState.messageCounter.Store(2)
 
 	if f.l.Level >= logrus.DebugLevel {
 		hostinfo.logger(f.l).Debugf("Sending %d stored packets", len(hh.packetStore))
