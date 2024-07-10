@@ -46,11 +46,23 @@ type ifReq struct {
 	pad   [8]byte
 }
 
-type ifreqAddr struct {
-	Name [16]byte
-	Addr unix.RawSockaddrInet4
-	pad  [8]byte
+type ifReqIdx struct {
+	Name    [16]byte
+	IfIndex uint32
+	pad     [6]byte
 }
+
+type in6IfReq struct {
+	Addr      [16]byte
+	PrefixLen uint32
+	IfIndex   uint32
+}
+
+//type ifreqAddr struct {
+//	Name [16]byte
+//	Addr unix.RawSockaddrInet4
+//	pad  [8]byte
+//}
 
 type ifreqMTU struct {
 	Name [16]byte
@@ -272,15 +284,14 @@ func (t *tun) Activate() error {
 		t.watchRoutes()
 	}
 
-	var addr, mask [4]byte
+	var mask [4]byte
 
 	//TODO: IPV6-WORK
-	addr = t.cidr.Addr().As4()
 	tmask := net.CIDRMask(t.cidr.Bits(), 32)
 	copy(mask[:], tmask)
 
 	s, err := unix.Socket(
-		unix.AF_INET,
+		unix.AF_INET6,
 		unix.SOCK_DGRAM,
 		unix.IPPROTO_IP,
 	)
@@ -289,29 +300,26 @@ func (t *tun) Activate() error {
 	}
 	t.ioctlFd = uintptr(s)
 
-	ifra := ifreqAddr{
-		Name: devName,
-		Addr: unix.RawSockaddrInet4{
-			Family: unix.AF_INET,
-			Addr:   addr,
-		},
-	}
-
-	// Set the device ip address
-	if err = ioctl(t.ioctlFd, unix.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra))); err != nil {
-		return fmt.Errorf("failed to set tun address: %s", err)
-	}
-
-	// Set the device network
-	ifra.Addr.Addr = mask
-	if err = ioctl(t.ioctlFd, unix.SIOCSIFNETMASK, uintptr(unsafe.Pointer(&ifra))); err != nil {
-		return fmt.Errorf("failed to set tun netmask: %s", err)
-	}
-
 	// Set the device name
 	ifrf := ifReq{Name: devName}
 	if err = ioctl(t.ioctlFd, unix.SIOCGIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
 		return fmt.Errorf("failed to set tun device name: %s", err)
+	}
+
+	idxReq := ifReqIdx{Name: devName}
+	if err = ioctl(t.ioctlFd, unix.SIOCGIFINDEX, uintptr(unsafe.Pointer(&idxReq))); err != nil {
+		return fmt.Errorf("get tun index: %s", err)
+	}
+
+	ifra6 := in6IfReq{
+		Addr:      t.cidr.Addr().As16(),
+		PrefixLen: uint32(t.cidr.Bits()),
+		IfIndex:   idxReq.IfIndex,
+	}
+
+	// Set the device ip address
+	if err = ioctl(t.ioctlFd, unix.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra6))); err != nil {
+		return fmt.Errorf("failed to set tun address: %s", err)
 	}
 
 	// Setup our default MTU
