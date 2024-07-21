@@ -1,0 +1,27 @@
+pki:
+  ca: ca.crt
+  cert: b.crt
+  key: b.key
+
+static_host_map:
+  "192.168.100.1": ["127.0.0.1:10001"]
+
+listen:
+  host: 127.0.0.1
+  port: 10002
+
+forwarding:
+  outbound:
+    - listen: "127.0.0.1:15002"
+      dial: "192.168.100.1:5201"
+      proto: tcp
+
+tun:
+  disabled: true
+  mtu: 1300
+
+firewall:
+  outbound:
+    - port: 5201
+      proto: tcp
+      host: any
