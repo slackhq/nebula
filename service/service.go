@@ -122,8 +122,9 @@ func New(config *config.C, logger *logrus.Logger) (*Service, error) {
 			if err != nil {
 				return err
 			}
+			view := buffer.NewViewWithData(buf[:n])
 			packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
-				Payload: buffer.MakeWithData(bytes.Clone(buf[:n])),
+				Payload: buffer.MakeWithView(view),
 			})
 			linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
 
