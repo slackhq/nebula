@@ -26,6 +26,11 @@ const (
 	sendTestPacket trafficDecision = 6
 )
 
+// The data written into this variable is never used.
+// Its there to avoid a fresh dynamic memory allocation of 1 byte
+// for each time its used.
+var BYTE_SLICE_ONE []byte = []byte{1}
+
 type connectionManager struct {
 	in     map[uint32]struct{}
 	inLock *sync.RWMutex
@@ -463,12 +468,12 @@ func (n *connectionManager) sendPunch(hostinfo *HostInfo) {
 	if n.punchy.GetTargetEverything() {
 		hostinfo.remotes.ForEach(n.hostMap.GetPreferredRanges(), func(addr netip.AddrPort, preferred bool) {
 			n.metricsTxPunchy.Inc(1)
-			n.intf.outside.WriteTo([]byte{1}, addr)
+			n.intf.outside.WriteTo(BYTE_SLICE_ONE, addr)
 		})
 
 	} else if hostinfo.remote.IsValid() {
 		n.metricsTxPunchy.Inc(1)
-		n.intf.outside.WriteTo([]byte{1}, hostinfo.remote)
+		n.intf.outside.WriteTo(BYTE_SLICE_ONE, hostinfo.remote)
 	}
 }
 
