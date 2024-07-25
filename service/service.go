@@ -105,24 +105,17 @@ func New(config *config.C, logger *logrus.Logger) (*Service, error) {
 	tcpFwd := tcp.NewForwarder(s.ipstack, tcpReceiveBufferSize, maxInFlightConnectionAttempts, s.tcpHandler)
 	s.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 
-	reader, writer := device.Pipe()
+	nebula_tun_reader, nebula_tun_writer := device.Pipe()
 
 	go func() {
 		<-ctx.Done()
-		reader.Close()
-		writer.Close()
+		close(nebula_tun_writer)
 	}()
 
 	// create Goroutines to forward packets between Nebula and Gvisor
 	eg.Go(func() error {
-		buf := make([]byte, header.IPv4MaximumHeaderSize+header.IPv4MaximumPayloadSize)
 		for {
-			// this will read exactly one packet
-			n, err := reader.Read(buf)
-			if err != nil {
-				return err
-			}
-			view := buffer.NewViewWithData(buf[:n])
+			view := <-nebula_tun_reader
 			packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 				Payload: buffer.MakeWithView(view),
 			})
@@ -142,11 +135,7 @@ func New(config *config.C, logger *logrus.Logger) (*Service, error) {
 				}
 				continue
 			}
-			bufView := packet.ToView()
-			if _, err := bufView.WriteTo(writer); err != nil {
-				return err
-			}
-			bufView.Release()
+			nebula_tun_writer <- packet.ToView()
 		}
 	})
 
