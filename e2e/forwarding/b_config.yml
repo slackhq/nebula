@@ -10,14 +10,15 @@ listen:
   host: 127.0.0.1
   port: 10002
 
-forwarding:
+port_forwarding:
   outbound:
-    - listen: "127.0.0.1:15002"
-      dial: "192.168.100.1:5201"
-      proto: tcp
+    - local_address: "127.0.0.1:15002"
+      remote_address: "192.168.100.1:5201"
+      protocols: [tcp]
 
 tun:
-  disabled: true
+  disabled: false
+  user: true
   mtu: 1300
 
 firewall:
