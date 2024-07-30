@@ -206,6 +206,10 @@ relay:
 
 # Configure the private interface. Note: addr is baked into the nebula certificate
 tun:
+  # When tun is set to "user" then a userspace tun is used instead of an official kernel supported one.
+  # This way nebula can be used without root privileges and offers port forwarding from and into
+  # the nebula network. "tun.disabled" needs to be false for this use-case.
+  user: false
   # When tun is disabled, a lighthouse can be started without a local tun interface (and therefore without root)
   disabled: false
   # Name of the device. If not set, a default will be chosen by the OS.
@@ -368,3 +372,22 @@ firewall:
       proto: tcp
       group: remote_client
       local_cidr: 192.168.100.1/24
+
+# by using port port forwarding (port tunnels) its possible to establish connections
+# from/into the nebula-network without using a tun/tap device and thus without requiring root access
+# on the host. port forwarding is only supported when setting "tun.user" is set to true and thus
+# a user-tun instead of a real one is used.
+# IMPORTANT: For incoming tunnels, don't forget to also open the firewall for the relevant ports.
+port_forwarding:
+  outbound:
+  # format of local and remote address: <host/ip>:<port>
+  #- local_address: 127.0.0.1:3399
+  #  remote_address: 192.168.100.92:4499
+     # format of protocols lists (yml-list): [tcp], [udp], [tcp, udp]
+  #  protocols: [tcp, udp]
+  inbound:
+  # format of forward_address: <host/ip>:<port>
+  #- port: 5599
+  #  forward_address: 127.0.0.1:5599
+     # format of protocols lists (yml-list): [tcp], [udp], [tcp, udp]
+  #  protocols: [tcp, udp]
