@@ -45,8 +45,7 @@ type Service struct {
 	}
 }
 
-func New(config *config.C) (*Service, error) {
-	logger := logrus.New()
+func New(config *config.C, logger *logrus.Logger) (*Service, error) {
 	logger.Out = os.Stdout
 
 	control, err := nebula.Main(config, false, "custom-app", logger, overlay.NewUserDeviceFromConfig)

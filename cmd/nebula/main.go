@@ -68,7 +68,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		service, err := service.New(c)
+		service, err := service.New(c, l)
 		if err != nil {
 			util.LogWithContextIfNeeded("Failed to start", err, l)
 			os.Exit(1)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"dario.cat/mergo"
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/e2e"
@@ -71,7 +72,8 @@ func newSimpleService(caCrt *cert.NebulaCertificate, caKey []byte, name string, 
 		panic(err)
 	}
 
-	s, err := New(&c)
+	l := logrus.New()
+	s, err := New(&c, l)
 	if err != nil {
 		panic(err)
 	}
