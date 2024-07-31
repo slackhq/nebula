@@ -2,18 +2,17 @@ package overlay
 
 import (
 	"io"
-	"net"
+	"net/netip"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/iputil"
 )
 
-func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, routines int) (Device, error) {
+func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr netip.Prefix, routines int) (Device, error) {
 	return NewUserDevice(tunCidr)
 }
 
-func NewUserDevice(tunCidr *net.IPNet) (Device, error) {
+func NewUserDevice(tunCidr netip.Prefix) (Device, error) {
 	// these pipes guarantee each write/read will match 1:1
 	or, ow := io.Pipe()
 	ir, iw := io.Pipe()
@@ -27,7 +26,7 @@ func NewUserDevice(tunCidr *net.IPNet) (Device, error) {
 }
 
 type UserDevice struct {
-	tunCidr *net.IPNet
+	tunCidr netip.Prefix
 
 	outboundReader *io.PipeReader
 	outboundWriter *io.PipeWriter
@@ -39,9 +38,9 @@ type UserDevice struct {
 func (d *UserDevice) Activate() error {
 	return nil
 }
-func (d *UserDevice) Cidr() *net.IPNet                      { return d.tunCidr }
-func (d *UserDevice) Name() string                          { return "faketun0" }
-func (d *UserDevice) RouteFor(ip iputil.VpnIp) iputil.VpnIp { return ip }
+func (d *UserDevice) Cidr() netip.Prefix                { return d.tunCidr }
+func (d *UserDevice) Name() string                      { return "faketun0" }
+func (d *UserDevice) RouteFor(ip netip.Addr) netip.Addr { return ip }
 func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return d, nil
 }

@@ -2,16 +2,14 @@ package overlay
 
 import (
 	"io"
-	"net"
-
-	"github.com/slackhq/nebula/iputil"
+	"net/netip"
 )
 
 type Device interface {
 	io.ReadWriteCloser
 	Activate() error
-	Cidr() *net.IPNet
+	Cidr() netip.Prefix
 	Name() string
-	RouteFor(iputil.VpnIp) iputil.VpnIp
+	RouteFor(netip.Addr) netip.Addr
 	NewMultiQueueReader() (io.ReadWriteCloser, error)
 }

@@ -4,19 +4,18 @@
 package overlay
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/util"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -26,7 +25,7 @@ type tun struct {
 	io.ReadWriteCloser
 	fd          int
 	Device      string
-	cidr        *net.IPNet
+	cidr        netip.Prefix
 	MaxMTU      int
 	DefaultMTU  int
 	TXQueueLen  int
@@ -34,7 +33,7 @@ type tun struct {
 	ioctlFd     uintptr
 
 	Routes          atomic.Pointer[[]Route]
-	routeTree       atomic.Pointer[cidr.Tree4[iputil.VpnIp]]
+	routeTree       atomic.Pointer[bart.Table[netip.Addr]]
 	routeChan       chan struct{}
 	useSystemRoutes bool
 
@@ -65,7 +64,7 @@ type ifreqQLEN struct {
 	pad   [8]byte
 }
 
-func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, cidr *net.IPNet) (*tun, error) {
+func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, cidr netip.Prefix) (*tun, error) {
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
 	t, err := newTunGeneric(c, l, file, cidr)
@@ -78,7 +77,7 @@ func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, cidr *net.IPNet) 
 	return t, nil
 }
 
-func newTun(c *config.C, l *logrus.Logger, cidr *net.IPNet, multiqueue bool) (*tun, error) {
+func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, multiqueue bool) (*tun, error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		// If /dev/net/tun doesn't exist, try to create it (will happen in docker)
@@ -123,7 +122,7 @@ func newTun(c *config.C, l *logrus.Logger, cidr *net.IPNet, multiqueue bool) (*t
 	return t, nil
 }
 
-func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, cidr *net.IPNet) (*tun, error) {
+func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, cidr netip.Prefix) (*tun, error) {
 	t := &tun{
 		ReadWriteCloser: file,
 		fd:              int(file.Fd()),
@@ -231,8 +230,8 @@ func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return file, nil
 }
 
-func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	_, r := t.routeTree.Load().MostSpecificContains(ip)
+func (t *tun) RouteFor(ip netip.Addr) netip.Addr {
+	r, _ := t.routeTree.Load().Lookup(ip)
 	return r
 }
 
@@ -275,8 +274,10 @@ func (t *tun) Activate() error {
 
 	var addr, mask [4]byte
 
-	copy(addr[:], t.cidr.IP.To4())
-	copy(mask[:], t.cidr.Mask)
+	//TODO: IPV6-WORK
+	addr = t.cidr.Addr().As4()
+	tmask := net.CIDRMask(t.cidr.Bits(), 32)
+	copy(mask[:], tmask)
 
 	s, err := unix.Socket(
 		unix.AF_INET,
@@ -364,14 +365,19 @@ func (t *tun) setMTU() {
 
 func (t *tun) setDefaultRoute() error {
 	// Default route
-	dr := &net.IPNet{IP: t.cidr.IP.Mask(t.cidr.Mask), Mask: t.cidr.Mask}
+
+	dr := &net.IPNet{
+		IP:   t.cidr.Masked().Addr().AsSlice(),
+		Mask: net.CIDRMask(t.cidr.Bits(), t.cidr.Addr().BitLen()),
+	}
+
 	nr := netlink.Route{
 		LinkIndex: t.deviceIndex,
 		Dst:       dr,
 		MTU:       t.DefaultMTU,
 		AdvMSS:    t.advMSS(Route{}),
 		Scope:     unix.RT_SCOPE_LINK,
-		Src:       t.cidr.IP,
+		Src:       net.IP(t.cidr.Addr().AsSlice()),
 		Protocol:  unix.RTPROT_KERNEL,
 		Table:     unix.RT_TABLE_MAIN,
 		Type:      unix.RTN_UNICAST,
@@ -392,9 +398,14 @@ func (t *tun) addRoutes(logErrors bool) error {
 			continue
 		}
 
+		dr := &net.IPNet{
+			IP:   r.Cidr.Masked().Addr().AsSlice(),
+			Mask: net.CIDRMask(r.Cidr.Bits(), r.Cidr.Addr().BitLen()),
+		}
+
 		nr := netlink.Route{
 			LinkIndex: t.deviceIndex,
-			Dst:       r.Cidr,
+			Dst:       dr,
 			MTU:       r.MTU,
 			AdvMSS:    t.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
@@ -426,9 +437,14 @@ func (t *tun) removeRoutes(routes []Route) {
 			continue
 		}
 
+		dr := &net.IPNet{
+			IP:   r.Cidr.Masked().Addr().AsSlice(),
+			Mask: net.CIDRMask(r.Cidr.Bits(), r.Cidr.Addr().BitLen()),
+		}
+
 		nr := netlink.Route{
 			LinkIndex: t.deviceIndex,
-			Dst:       r.Cidr,
+			Dst:       dr,
 			MTU:       r.MTU,
 			AdvMSS:    t.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
@@ -447,7 +463,7 @@ func (t *tun) removeRoutes(routes []Route) {
 	}
 }
 
-func (t *tun) Cidr() *net.IPNet {
+func (t *tun) Cidr() netip.Prefix {
 	return t.cidr
 }
 
@@ -499,7 +515,15 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 		return
 	}
 
-	if !t.cidr.Contains(r.Gw) {
+	//TODO: IPV6-WORK what if not ok?
+	gwAddr, ok := netip.AddrFromSlice(r.Gw)
+	if !ok {
+		t.l.WithField("route", r).Debug("Ignoring route update, invalid gateway address")
+		return
+	}
+
+	gwAddr = gwAddr.Unmap()
+	if !t.cidr.Contains(gwAddr) {
 		// Gateway isn't in our overlay network, ignore
 		t.l.WithField("route", r).Debug("Ignoring route update, not in our network")
 		return
@@ -511,28 +535,25 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 		return
 	}
 
-	newTree := cidr.NewTree4[iputil.VpnIp]()
-	if r.Type == unix.RTM_NEWROUTE {
-		for _, oldR := range t.routeTree.Load().List() {
-			newTree.AddCIDR(oldR.CIDR, oldR.Value)
-		}
-
-		t.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Adding route")
-		newTree.AddCIDR(r.Dst, iputil.Ip2VpnIp(r.Gw))
-
-	} else {
-		gw := iputil.Ip2VpnIp(r.Gw)
-		for _, oldR := range t.routeTree.Load().List() {
-			if bytes.Equal(oldR.CIDR.IP, r.Dst.IP) && bytes.Equal(oldR.CIDR.Mask, r.Dst.Mask) && oldR.Value == gw {
-				// This is the record to delete
-				t.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Removing route")
-				continue
-			}
-
-			newTree.AddCIDR(oldR.CIDR, oldR.Value)
-		}
+	dstAddr, ok := netip.AddrFromSlice(r.Dst.IP)
+	if !ok {
+		t.l.WithField("route", r).Debug("Ignoring route update, invalid destination address")
+		return
 	}
 
+	ones, _ := r.Dst.Mask.Size()
+	dst := netip.PrefixFrom(dstAddr, ones)
+
+	newTree := t.routeTree.Load().Clone()
+
+	if r.Type == unix.RTM_NEWROUTE {
+		t.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Adding route")
+		newTree.Insert(dst, gwAddr)
+
+	} else {
+		newTree.Delete(dst)
+		t.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Removing route")
+	}
 	t.routeTree.Store(newTree)
 }
 
