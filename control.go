@@ -129,8 +129,7 @@ func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 	}
 }
 
-// GetCertByVpnIp returns a single tunnels hostInfo, or nil if not found
-// Caller should take care to Unmap() any 4in6 addresses prior to calling.
+// GetCertByVpnIp returns the authenticated certificate of the given vpn IP, or nil if not found
 func (c *Control) GetCertByVpnIp(vpnIp netip.Addr) *cert.NebulaCertificate {
 	if c.f.myVpnNet.Addr() == vpnIp {
 		return c.f.pki.GetCertState().Certificate
