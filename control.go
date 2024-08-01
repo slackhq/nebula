@@ -129,6 +129,42 @@ func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 	}
 }
 
+// GetCertByVpnIp returns the authenticated certificate of the given vpn IP, or nil if not found
+func (c *Control) GetCertByVpnIp(vpnIp netip.Addr) *cert.NebulaCertificate {
+	if c.f.myVpnNet.Addr() == vpnIp {
+		return c.f.pki.GetCertState().Certificate
+	}
+	hi := c.f.hostMap.QueryVpnIp(vpnIp)
+	if hi == nil {
+		return nil
+	}
+	return hi.GetCert()
+}
+
+// CreateTunnel creates a new tunnel to the given vpn ip.
+func (c *Control) CreateTunnel(vpnIp netip.Addr) {
+	c.f.handshakeManager.StartHandshake(vpnIp, nil)
+}
+
+// PrintTunnel creates a new tunnel to the given vpn ip.
+func (c *Control) PrintTunnel(vpnIp netip.Addr) *ControlHostInfo {
+	hi := c.f.hostMap.QueryVpnIp(vpnIp)
+	if hi == nil {
+		return nil
+	}
+	chi := copyHostInfo(hi, c.f.hostMap.GetPreferredRanges())
+	return &chi
+}
+
+// QueryLighthouse queries the lighthouse.
+func (c *Control) QueryLighthouse(vpnIp netip.Addr) *CacheMap {
+	hi := c.f.lightHouse.Query(vpnIp)
+	if hi == nil {
+		return nil
+	}
+	return hi.CopyCache()
+}
+
 // GetHostInfoByVpnIp returns a single tunnels hostInfo, or nil if not found
 // Caller should take care to Unmap() any 4in6 addresses prior to calling.
 func (c *Control) GetHostInfoByVpnIp(vpnIp netip.Addr, pending bool) *ControlHostInfo {
