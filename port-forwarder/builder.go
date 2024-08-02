@@ -104,26 +104,26 @@ func ParseConfig(
 	return nil
 }
 
-func ConstructFromConfig(
+func ConstructFromInitialFwdList(
 	tunService *service.Service,
 	l *logrus.Logger,
-	c *config.C,
+	fwd_list *PortForwardingList,
 ) (*PortForwardingService, error) {
 
 	pfService := &PortForwardingService{
 		l:                     l,
 		tunService:            tunService,
-		configPortForwardings: make(map[string]ForwardConfig),
+		configPortForwardings: fwd_list.configPortForwardings,
 		portForwardings:       make(map[string]io.Closer),
 	}
 
-	ParseConfig(l, c, pfService)
-
-	c.RegisterReloadCallback(func(c *config.C) {
-		pfService.ReloadConfigAndApplyChanges(c)
-	})
-
 	return pfService, nil
+}
+
+func NewPortForwardingList() PortForwardingList {
+	return PortForwardingList{
+		configPortForwardings: map[string]ForwardConfig{},
+	}
 }
 
 type PortForwardingList struct {
@@ -134,15 +134,17 @@ func (pfl PortForwardingList) AddConfig(cfg ForwardConfig) {
 	pfl.configPortForwardings[cfg.ConfigDescriptor()] = cfg
 }
 
+func (pfl PortForwardingList) IsEmpty() bool {
+	return len(pfl.configPortForwardings) == 0
+}
+
 func (s *PortForwardingService) ReloadConfigAndApplyChanges(
 	c *config.C,
 ) error {
 
 	s.l.Infof("reloading port forwarding configuration...")
 
-	pflNew := PortForwardingList{
-		configPortForwardings: map[string]ForwardConfig{},
-	}
+	pflNew := NewPortForwardingList()
 
 	err := ParseConfig(s.l, c, pflNew)
 	if err != nil {

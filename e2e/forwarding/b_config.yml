@@ -20,8 +20,7 @@ port_forwarding:
       protocols: [tcp, udp]
 
 tun:
-  disabled: false
-  user: true
+  disabled: true
   mtu: 1300
 
 firewall:

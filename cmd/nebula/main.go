@@ -59,27 +59,32 @@ func main() {
 		os.Exit(1)
 	}
 
-	userspace_tun := c.GetBool("tun.user", false)
-	if userspace_tun {
-		l.Infof("Configuring userspace-tun instead of kernel tun")
-		if *configTest {
-			util.LogWithContextIfNeeded("Failed to start",
-				errors.New("config test currently not supported for user-tun"), l)
-			os.Exit(1)
-		}
+	fwd_list := port_forwarder.NewPortForwardingList()
+	disabled_tun := c.GetBool("tun.disabled", false)
+	if disabled_tun {
+		port_forwarder.ParseConfig(l, c, fwd_list)
+	}
+
+	if !*configTest && disabled_tun && !fwd_list.IsEmpty() {
+		l.Infof("Configuring user-tun instead of disabled-tun as port forwarding is configured")
 
 		service, err := service.New(c, l)
 		if err != nil {
-			util.LogWithContextIfNeeded("Failed to start", err, l)
+			util.LogWithContextIfNeeded("Failed to create service", err, l)
 			os.Exit(1)
 		}
 
 		// initialize port forwarding:
-		pf_service, err := port_forwarder.ConstructFromConfig(service, l, c)
+		pf_service, err := port_forwarder.ConstructFromInitialFwdList(service, l, &fwd_list)
 		if err != nil {
 			util.LogWithContextIfNeeded("Failed to start", err, l)
 			os.Exit(1)
 		}
+
+		c.RegisterReloadCallback(func(c *config.C) {
+			pf_service.ReloadConfigAndApplyChanges(c)
+		})
+
 		pf_service.Activate()
 
 		// wait for termination request
@@ -102,7 +107,7 @@ func main() {
 
 	} else {
 
-		l.Infof("Configuring for kernel tun")
+		l.Info("Configuring for disabled or kernel tun. no port forwarding provided")
 		ctrl, err := nebula.Main(c, *configTest, Build, l, nil)
 		if err != nil {
 			util.LogWithContextIfNeeded("Failed to start", err, l)
