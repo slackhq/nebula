@@ -81,7 +81,8 @@ func ParseConfig(
 
 			protocols, ok := node_map["protocols"]
 			if !ok {
-				return fmt.Errorf("child yml node of \"port_forwarding.%s\" needs to have a child \"protocols\"", direction)
+				l.Infof("child yml node of \"port_forwarding.%s\" should have a child \"protocols\"", direction)
+				continue
 			}
 
 			protocols_list, ok := protocols.(ymlListNode)

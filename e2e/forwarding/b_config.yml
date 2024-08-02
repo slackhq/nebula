@@ -14,6 +14,7 @@ listen:
   port: 10002
 
 port_forwarding:
+  enable_without_rules: true
   outbound:
     - listen_address: "127.0.0.1:15002"
       dial_address: "192.168.100.1:5201"

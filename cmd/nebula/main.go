@@ -61,11 +61,12 @@ func main() {
 
 	fwd_list := port_forwarder.NewPortForwardingList()
 	disabled_tun := c.GetBool("tun.disabled", false)
+	activate_service_anyway := c.GetBool("port_forwarding.enable_without_rules", false)
 	if disabled_tun {
 		port_forwarder.ParseConfig(l, c, fwd_list)
 	}
 
-	if !*configTest && disabled_tun && !fwd_list.IsEmpty() {
+	if !*configTest && disabled_tun && (activate_service_anyway || !fwd_list.IsEmpty()) {
 		l.Infof("Configuring user-tun instead of disabled-tun as port forwarding is configured")
 
 		service, err := service.New(c, l)

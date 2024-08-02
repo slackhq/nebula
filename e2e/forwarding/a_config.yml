@@ -14,6 +14,7 @@ listen:
   port: 10001
 
 port_forwarding:
+  enable_without_rules: true
   inbound:
     - listen_port: 5201
       dial_address: "127.0.0.1:15001"

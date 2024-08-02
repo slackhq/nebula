@@ -379,6 +379,10 @@ firewall:
 # In this case, if a user-tun instead of a real one is instantiated to allow the port forwarding.
 # IMPORTANT: For incoming tunnels, don't forget to also open the firewall for the relevant ports.
 port_forwarding:
+  # Forces activation of the user tun, even when there is no rule specified.
+  # This can be useful, when rules are planned to be added later by reload.
+  # Reload config can't consider a change on tun-type.
+  enable_without_rules: false
   outbound:
   # format of listen- and dial-address: <host/ip>:<port>
   #- listen_address: 127.0.0.1:3399

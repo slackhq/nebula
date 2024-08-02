@@ -46,6 +46,30 @@ port_forwarding:
 	assert.True(t, fwd_list.IsEmpty())
 }
 
+func TestConfigWithNoProtocols2(t *testing.T) {
+	l := logrus.New()
+	c := config.NewC(l)
+	err := c.LoadString(`
+port_forwarding:
+  outbound:
+  - listen_address: 127.0.0.1:3399
+    dial_address: 192.168.100.92:4499
+    # protocols: [tcp, udp]
+  inbound:
+  - listen_port: 5599
+    dial_address: 127.0.0.1:5599
+    # protocols: [tc, udp]
+`)
+	assert.Nil(t, err)
+
+	fwd_list := NewPortForwardingList()
+	err = ParseConfig(l, c, fwd_list)
+	assert.Nil(t, err)
+
+	assert.Len(t, fwd_list.configPortForwardings, 0)
+	assert.True(t, fwd_list.IsEmpty())
+}
+
 func TestConfigWithTcpIn(t *testing.T) {
 	l := logrus.New()
 	c := config.NewC(l)
