@@ -17,7 +17,7 @@ port_forwarding:
   inbound:
     - port: 5201
       forward_address: "127.0.0.1:15001"
-      protocols: [tcp]
+      protocols: [tcp, udp]
 
 tun:
   disabled: false
@@ -25,7 +25,11 @@ tun:
   mtu: 1300
 
 firewall:
+  outbound:
+    - port: any
+      proto: udp
+      host: any
   inbound:
     - port: 5201
-      proto: tcp
+      proto: any
       host: any

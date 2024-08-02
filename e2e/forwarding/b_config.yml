@@ -17,7 +17,7 @@ port_forwarding:
   outbound:
     - local_address: "127.0.0.1:15002"
       remote_address: "192.168.100.1:5201"
-      protocols: [tcp]
+      protocols: [tcp, udp]
 
 tun:
   disabled: false
@@ -26,6 +26,9 @@ tun:
 
 firewall:
   outbound:
+    - port: any
+      proto: udp
+      host: any
     - port: 5201
-      proto: tcp
+      proto: any
       host: any
