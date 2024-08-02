@@ -107,23 +107,17 @@ func New(config *config.C, logger *logrus.Logger) (*Service, error) {
 
 	nebula_tun_reader, nebula_tun_writer := device.Pipe()
 
-	go func() {
-		<-ctx.Done()
-		close(nebula_tun_writer)
-	}()
-
 	// create Goroutines to forward packets between Nebula and Gvisor
 	eg.Go(func() error {
 		for {
-			view := <-nebula_tun_reader
+			view, ok := <-nebula_tun_reader
+			if !ok {
+				return nil
+			}
 			packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 				Payload: buffer.MakeWithView(view),
 			})
 			linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
-
-			if err := ctx.Err(); err != nil {
-				return err
-			}
 		}
 	})
 	eg.Go(func() error {
