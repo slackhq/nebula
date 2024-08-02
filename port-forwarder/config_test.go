@@ -46,7 +46,7 @@ port_forwarding:
 	assert.True(t, fwd_list.IsEmpty())
 }
 
-func TestConfigWithNoProtocols2(t *testing.T) {
+func TestConfigWithNoProtocols_commentedProtos(t *testing.T) {
 	l := logrus.New()
 	c := config.NewC(l)
 	err := c.LoadString(`
@@ -59,6 +59,22 @@ port_forwarding:
   - listen_port: 5599
     dial_address: 127.0.0.1:5599
     # protocols: [tc, udp]
+`)
+	assert.Nil(t, err)
+
+	fwd_list := NewPortForwardingList()
+	err = ParseConfig(l, c, fwd_list)
+	assert.Nil(t, err)
+
+	assert.Len(t, fwd_list.configPortForwardings, 0)
+	assert.True(t, fwd_list.IsEmpty())
+}
+
+func TestConfigWithNoProtocols_missing_in_out(t *testing.T) {
+	l := logrus.New()
+	c := config.NewC(l)
+	err := c.LoadString(`
+port_forwarding:
 `)
 	assert.Nil(t, err)
 
