@@ -143,7 +143,7 @@ func New(config *config.C, logger *logrus.Logger) (*Service, error) {
 }
 
 // DialContext dials the provided address. Currently only TCP is supported.
-func (s *Service) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (s *Service) DialContext(ctx context.Context, network, address string) (*gonet.TCPConn, error) {
 	if network != "tcp" && network != "tcp4" {
 		return nil, errors.New("only tcp is supported")
 	}

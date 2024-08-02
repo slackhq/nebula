@@ -88,14 +88,14 @@ func (pt *PortForwardingOutgoingTcp) acceptOnLocalListenPort() error {
 }
 
 func (pt *PortForwardingOutgoingTcp) handleClientConnection(localConnection *net.TCPConn) {
-	err := pt.handleClientConnection_intern(localConnection)
+	err := pt.handleClientConnectionWithErrorReturn(localConnection)
 	if err != nil {
 		pt.l.Debugf("Closed TCP client connection %s. Err: %v",
 			localConnection.LocalAddr().String(), err)
 	}
 }
 
-func (pt *PortForwardingOutgoingTcp) handleClientConnection_intern(localConnection net.Conn) error {
+func (pt *PortForwardingOutgoingTcp) handleClientConnectionWithErrorReturn(localConnection net.Conn) error {
 
 	remoteConnection, err := pt.tunService.DialContext(context.Background(), "tcp", pt.cfg.remoteConnect)
 	if err != nil {
@@ -115,33 +115,48 @@ func handleTcpClientConnection_generic(l *logrus.Logger, connA, connB net.Conn) 
 		defer from.Close()
 		defer to.Close()
 		defer cancel()
-		// give communication in opposite direction time to finish as well
-		defer time.Sleep(time.Millisecond * 300)
+		// defer calls are executed in inverse order.
+		// this delays the deferred from/to.Close to give communication
+		// in opposite direction time to finish as well.
+		defer time.Sleep(time.Millisecond * 100)
 
 		// no write/read timeout
 		to.SetDeadline(time.Time{})
 		from.SetDeadline(time.Time{})
 		buf := make([]byte, 1*(1<<20))
-		for {
-			select {
-			case <-dataTransferCtx.Done():
-				return nil
-			default:
-			}
-
-			rn, r_err := from.Read(buf)
-			l.Tracef("%s read(%d), err: %v", name, rn, r_err)
-			for i := 0; i < rn; {
-				wn, w_err := to.Write(buf[i:rn])
-				if w_err != nil {
-					l.Debugf("%s writing(%d) to to-connection failed: %v", name, rn, w_err)
-					return w_err
+		if false {
+			// this variant seems to be slightly slower on the local speed-test. 1.60GiB/s vs. 1.70GiB/s
+			n, err := io.CopyBuffer(to, from, buf)
+			l.WithError(err).
+				WithField("payloadSize", n).
+				WithField("from", from.RemoteAddr()).
+				WithField("to", to.RemoteAddr()).
+				WithField("localFrom", from.LocalAddr()).
+				WithField("localTo", to.LocalAddr()).
+				Debug("stopped data forwarding")
+			return err
+		} else {
+			for {
+				select {
+				case <-dataTransferCtx.Done():
+					return nil
+				default:
 				}
-				i += wn
-			}
-			if r_err != nil {
-				l.Debugf("%s reading(%d) from from-connection failed: %v", name, rn, r_err)
-				return r_err
+
+				rn, r_err := from.Read(buf)
+				l.Tracef("%s read(%d), err: %v", name, rn, r_err)
+				for i := 0; i < rn; {
+					wn, w_err := to.Write(buf[i:rn])
+					if w_err != nil {
+						l.Debugf("%s writing(%d) to to-connection failed: %v", name, rn, w_err)
+						return w_err
+					}
+					i += wn
+				}
+				if r_err != nil {
+					l.Debugf("%s reading(%d) from from-connection failed: %v", name, rn, r_err)
+					return r_err
+				}
 			}
 		}
 	}
@@ -207,14 +222,14 @@ func (pt *PortForwardingIncomingTcp) acceptOnOutsideListenPort() error {
 }
 
 func (pt *PortForwardingIncomingTcp) handleClientConnection(localConnection net.Conn) {
-	err := pt.handleClientConnection_intern(localConnection)
+	err := pt.handleClientConnectionWithErrorReturn(localConnection)
 	if err != nil {
 		pt.l.Debugf("Closed TCP client connection %s. Err: %v",
 			localConnection.LocalAddr().String(), err)
 	}
 }
 
-func (pt *PortForwardingIncomingTcp) handleClientConnection_intern(outsideConnection net.Conn) error {
+func (pt *PortForwardingIncomingTcp) handleClientConnectionWithErrorReturn(outsideConnection net.Conn) error {
 
 	fwdAddr, err := net.ResolveTCPAddr("tcp", pt.cfg.forwardLocalAddress)
 	if err != nil {
