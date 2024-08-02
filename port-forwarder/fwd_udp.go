@@ -122,10 +122,6 @@ func (cfg ForwardConfigOutgoingUdp) SetupPortForwarding(
 	if err != nil {
 		return nil, err
 	}
-	remoteUdpAddr, err := net.ResolveUDPAddr("udp", cfg.remoteConnect)
-	if err != nil {
-		return nil, err
-	}
 
 	localListenConnection, err := net.ListenUDP("udp", localUdpListenAddr)
 	if err != nil {
@@ -133,7 +129,7 @@ func (cfg ForwardConfigOutgoingUdp) SetupPortForwarding(
 	}
 
 	l.Infof("UDP port forwarding to '%v': listening on local UDP addr: '%v'",
-		remoteUdpAddr, localUdpListenAddr)
+		cfg.remoteConnect, localUdpListenAddr)
 
 	portForwarding := &PortForwardingOutgoingUdp{
 		l:                     l,
@@ -180,7 +176,8 @@ func (pt *PortForwardingOutgoingUdp) listenLocalPort() error {
 		if !ok {
 			newRemoteConn, err := pt.tunService.DialUDP(pt.cfg.remoteConnect)
 			if err != nil {
-				return err
+				pt.l.WithFields(loggingFields).WithError(err).Error("dialing dial address failed")
+				continue
 			}
 			remoteConnection = &TimedConnection[*gonet.UDPConn]{
 				connection:      newRemoteConn,
@@ -222,6 +219,7 @@ type PortForwardingIncomingUdp struct {
 	tunService              *service.Service
 	cfg                     ForwardConfigIncomingUdp
 	outsideListenConnection *gonet.UDPConn
+	logPrefix               logrus.Fields
 }
 
 func (fwd PortForwardingIncomingUdp) Close() error {
@@ -247,9 +245,20 @@ func (cfg ForwardConfigIncomingUdp) SetupPortForwarding(
 		tunService:              tunService,
 		cfg:                     cfg,
 		outsideListenConnection: conn,
+		logPrefix: logrus.Fields{
+			"a":          "UDP fwd in",
+			"listenPort": cfg.port,
+			"dial":       cfg.forwardLocalAddress,
+		},
 	}
 
-	go forwarding.listenLocalOutsidePort()
+	go func() {
+		err := forwarding.listenLocalOutsidePort()
+		if err != nil {
+			forwarding.l.WithFields(forwarding.logPrefix).WithError(err).
+				Error("listening stopped with error")
+		}
+	}()
 
 	return forwarding, nil
 }
@@ -259,39 +268,35 @@ func (pt *PortForwardingIncomingUdp) listenLocalOutsidePort() error {
 	insidePortReaders := make(map[string]bool)
 	remoteConnections := make(map[string]*TimedConnection[*net.UDPConn])
 	closedConnections := make(chan string)
-	fwdAddr, err := net.ResolveUDPAddr("udp", pt.cfg.forwardLocalAddress)
-	if err != nil {
-		return err
-	}
 
-	loggingFields := logrus.Fields{
-		"a":      "UDP fwd in",
-		"listen": pt.outsideListenConnection.LocalAddr(),
-		"dial":   pt.cfg.forwardLocalAddress,
-	}
-
-	pt.l.WithFields(loggingFields).Debug("start listening")
+	pt.l.WithFields(pt.logPrefix).Debug("start listening")
 	var buf [512 * 1024]byte
 	for {
 		handleClosedConnections(pt.l, &closedConnections, &insidePortReaders, &remoteConnections)
 
-		pt.l.WithFields(loggingFields).Tracef("wait for data ...")
+		pt.l.WithFields(pt.logPrefix).Tracef("wait for data ...")
 		n, outsideSourceAddr, err := pt.outsideListenConnection.ReadFrom(buf[0:])
 		if err != nil {
-			fmt.Println(err)
+			pt.l.WithFields(pt.logPrefix).WithError(err).Error("read from listen port failed")
 			return err
 		}
 
-		pt.l.WithFields(loggingFields).
+		pt.l.WithFields(pt.logPrefix).
 			WithField("source", outsideSourceAddr).
 			WithField("payloadSize", n).
 			Trace("received")
 
 		remoteConnection, ok := remoteConnections[outsideSourceAddr.String()]
 		if !ok {
+			fwdAddr, err := net.ResolveUDPAddr("udp", pt.cfg.forwardLocalAddress)
+			if err != nil {
+				pt.l.WithFields(pt.logPrefix).Error("resolve of dial address failed")
+				continue
+			}
 			newRemoteConn, err := net.DialUDP("udp", nil, fwdAddr)
 			if err != nil {
-				return err
+				pt.l.WithFields(pt.logPrefix).Error("dial to dial address failed")
+				continue
 			}
 			remoteConnection = &TimedConnection[*net.UDPConn]{
 				connection:      newRemoteConn,
@@ -303,7 +308,7 @@ func (pt *PortForwardingIncomingUdp) listenLocalOutsidePort() error {
 		remoteConnection.connection.Write(buf[:n])
 		remoteConnection.timeout_counter.Reset()
 
-		pt.l.WithFields(loggingFields).
+		pt.l.WithFields(pt.logPrefix).
 			WithField("source", outsideSourceAddr).
 			WithField("dialSource", remoteConnection.connection.LocalAddr()).
 			WithField("payloadSize", n).
@@ -315,7 +320,7 @@ func (pt *PortForwardingIncomingUdp) listenLocalOutsidePort() error {
 				"source":     outsideSourceAddr,
 				"dialSource": remoteConnection.connection.LocalAddr(),
 			}
-			for k, v := range loggingFields {
+			for k, v := range pt.logPrefix {
 				loggingFieldsRsp[k] = v
 			}
 			insidePortReaders[outsideSourceAddr.String()] = true

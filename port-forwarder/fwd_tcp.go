@@ -48,17 +48,13 @@ func (cf ForwardConfigOutgoingTcp) SetupPortForwarding(
 	if err != nil {
 		return nil, err
 	}
-	remoteTcpAddr, err := net.ResolveTCPAddr("tcp", cf.remoteConnect)
-	if err != nil {
-		return nil, err
-	}
 	localListenPort, err := net.ListenTCP("tcp", localTcpListenAddr)
 	if err != nil {
 		return nil, err
 	}
 
 	l.Infof("TCP port forwarding to '%v': listening on local TCP addr: '%v'",
-		remoteTcpAddr, localTcpListenAddr)
+		cf.remoteConnect, localTcpListenAddr)
 
 	portForwarding := &PortForwardingOutgoingTcp{
 		l:                     l,
