@@ -79,15 +79,13 @@ func (pt *PortForwardingOutgoingTcp) acceptOnLocalListenPort() error {
 
 		pt.l.Debugf("accept TCP connect from local TCP port: %v", connection.RemoteAddr())
 
-		go pt.handleClientConnection(connection)
-	}
-}
-
-func (pt *PortForwardingOutgoingTcp) handleClientConnection(localConnection *net.TCPConn) {
-	err := pt.handleClientConnectionWithErrorReturn(localConnection)
-	if err != nil {
-		pt.l.Debugf("Closed TCP client connection %s. Err: %v",
-			localConnection.LocalAddr().String(), err)
+		go func() {
+			err := pt.handleClientConnectionWithErrorReturn(connection)
+			if err != nil {
+				pt.l.Debugf("Closed TCP client connection %s. Err: %v",
+					connection.LocalAddr().String(), err)
+			}
+		}()
 	}
 }
 
@@ -205,15 +203,13 @@ func (pt *PortForwardingIncomingTcp) acceptOnOutsideListenPort() error {
 
 		pt.l.Debugf("accept TCP connect from outside TCP port: %v", connection.RemoteAddr())
 
-		go pt.handleClientConnection(connection)
-	}
-}
-
-func (pt *PortForwardingIncomingTcp) handleClientConnection(localConnection net.Conn) {
-	err := pt.handleClientConnectionWithErrorReturn(localConnection)
-	if err != nil {
-		pt.l.Debugf("Closed TCP client connection %s. Err: %v",
-			localConnection.LocalAddr().String(), err)
+		go func() {
+			err := pt.handleClientConnectionWithErrorReturn(connection)
+			if err != nil {
+				pt.l.Debugf("Closed TCP client connection %s. Err: %v",
+					connection.LocalAddr().String(), err)
+			}
+		}()
 	}
 }
 
