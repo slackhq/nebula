@@ -106,15 +106,12 @@ func (pt *PortForwardingOutgoingTcp) handleClientConnectionWithErrorReturn(local
 
 func handleTcpClientConnection_generic(l *logrus.Logger, connA, connB net.Conn) error {
 
-	dataTransferCtx, cancel := context.WithCancel(context.Background())
-
 	dataTransferHandler := func(from, to net.Conn) error {
 
 		name := fmt.Sprintf("%s -> %s", from.LocalAddr().String(), to.LocalAddr().String())
 
 		defer from.Close()
 		defer to.Close()
-		defer cancel()
 		// defer calls are executed in inverse order.
 		// this delays the deferred from/to.Close to give communication
 		// in opposite direction time to finish as well.
@@ -123,7 +120,8 @@ func handleTcpClientConnection_generic(l *logrus.Logger, connA, connB net.Conn) 
 		// no write/read timeout
 		to.SetDeadline(time.Time{})
 		from.SetDeadline(time.Time{})
-		buf := make([]byte, 1*(1<<20))
+		megabyte := (1 << 20)
+		buf := make([]byte, 1*megabyte)
 		if false {
 			// this variant seems to be slightly slower on the local speed-test. 1.60GiB/s vs. 1.70GiB/s
 			n, err := io.CopyBuffer(to, from, buf)
@@ -137,12 +135,6 @@ func handleTcpClientConnection_generic(l *logrus.Logger, connA, connB net.Conn) 
 			return err
 		} else {
 			for {
-				select {
-				case <-dataTransferCtx.Done():
-					return nil
-				default:
-				}
-
 				rn, r_err := from.Read(buf)
 				l.Tracef("%s read(%d), err: %v", name, rn, r_err)
 				for i := 0; i < rn; {
