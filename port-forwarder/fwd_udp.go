@@ -36,7 +36,6 @@ type udpConnInterface interface {
 	WriteTo(b []byte, addr net.Addr) (int, error)
 	Write(b []byte) (int, error)
 	ReadFrom(b []byte) (int, net.Addr, error)
-	LocalAddr() net.Addr
 }
 
 func handleUdpDestinationPortResponseReading[destConn net.Conn, srcConn udpConnInterface](
@@ -103,18 +102,22 @@ cleanup:
 	}
 }
 
-type PortForwardingOutgoingUdp struct {
+type PortForwardingCommonUdp struct {
 	l          *logrus.Logger
 	tunService *service.Service
-	cfg        ForwardConfigOutgoingUdp
 	// net.Conn is thread-safe according to: https://pkg.go.dev/net#Conn
 	// no need for localListenConnection to protect by mutex
-	localListenConnection *net.UDPConn
+	localListenConnection io.Closer
 }
 
-func (fwd PortForwardingOutgoingUdp) Close() error {
+func (fwd PortForwardingCommonUdp) Close() error {
 	fwd.localListenConnection.Close()
 	return nil
+}
+
+type PortForwardingOutgoingUdp struct {
+	PortForwardingCommonUdp
+	cfg ForwardConfigOutgoingUdp
 }
 
 func (cfg ForwardConfigOutgoingUdp) SetupPortForwarding(
@@ -135,10 +138,12 @@ func (cfg ForwardConfigOutgoingUdp) SetupPortForwarding(
 		cfg.remoteConnect, localUdpListenAddr)
 
 	portForwarding := &PortForwardingOutgoingUdp{
-		l:                     l,
-		tunService:            tunService,
-		cfg:                   cfg,
-		localListenConnection: localListenConnection,
+		PortForwardingCommonUdp: PortForwardingCommonUdp{
+			l:                     l,
+			tunService:            tunService,
+			localListenConnection: localListenConnection,
+		},
+		cfg: cfg,
 	}
 
 	logPrefix := logrus.Fields{
@@ -240,16 +245,8 @@ func listenLocalPort_generic[destConn net.Conn](
 }
 
 type PortForwardingIncomingUdp struct {
-	l                       *logrus.Logger
-	tunService              *service.Service
-	cfg                     ForwardConfigIncomingUdp
-	outsideListenConnection *gonet.UDPConn
-	logPrefix               logrus.Fields
-}
-
-func (fwd PortForwardingIncomingUdp) Close() error {
-	fwd.outsideListenConnection.Close()
-	return nil
+	PortForwardingCommonUdp
+	cfg ForwardConfigIncomingUdp
 }
 
 func (cfg ForwardConfigIncomingUdp) SetupPortForwarding(
@@ -272,18 +269,19 @@ func (cfg ForwardConfigIncomingUdp) SetupPortForwarding(
 	}
 
 	forwarding := &PortForwardingIncomingUdp{
-		l:                       l,
-		tunService:              tunService,
-		cfg:                     cfg,
-		outsideListenConnection: conn,
-		logPrefix:               logPrefix,
+		PortForwardingCommonUdp: PortForwardingCommonUdp{
+			l:                     l,
+			tunService:            tunService,
+			localListenConnection: conn,
+		},
+		cfg: cfg,
 	}
 
 	go func() {
 		err := listenLocalPort_generic(
 			l,
-			forwarding.logPrefix,
-			forwarding.outsideListenConnection,
+			logPrefix,
+			conn,
 			func(address string) (*net.UDPConn, error) {
 				fwdAddr, err := net.ResolveUDPAddr("udp", cfg.forwardLocalAddress)
 				if err != nil {
@@ -295,7 +293,7 @@ func (cfg ForwardConfigIncomingUdp) SetupPortForwarding(
 			cfg.forwardLocalAddress,
 		)
 		if err != nil {
-			forwarding.l.WithFields(forwarding.logPrefix).WithError(err).
+			l.WithFields(logPrefix).WithError(err).
 				Error("listening stopped with error")
 		}
 	}()
