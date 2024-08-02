@@ -6,6 +6,9 @@ pki:
 static_host_map:
   "192.168.100.2": ["127.0.0.1:10002"]
 
+logging:
+  level: info
+
 listen:
   host: 127.0.0.1
   port: 10001
