@@ -15,8 +15,8 @@ listen:
 
 port_forwarding:
   outbound:
-    - local_address: "127.0.0.1:15002"
-      remote_address: "192.168.100.1:5201"
+    - listen_address: "127.0.0.1:15002"
+      dial_address: "192.168.100.1:5201"
       protocols: [tcp, udp]
 
 tun:

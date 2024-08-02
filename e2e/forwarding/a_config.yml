@@ -15,8 +15,8 @@ listen:
 
 port_forwarding:
   inbound:
-    - port: 5201
-      forward_address: "127.0.0.1:15001"
+    - listen_port: 5201
+      dial_address: "127.0.0.1:15001"
       protocols: [tcp, udp]
 
 tun:

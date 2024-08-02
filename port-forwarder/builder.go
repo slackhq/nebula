@@ -180,8 +180,8 @@ func (builder *builderData) convertToForwardConfigOutgoing(
 	isTcp bool,
 ) error {
 	fwd_port := ForwardConfigOutgoing{
-		localListen:   ymlMapGetStringEntry("local_address", m),
-		remoteConnect: ymlMapGetStringEntry("remote_address", m),
+		localListen:   ymlMapGetStringEntry("listen_address", m),
+		remoteConnect: ymlMapGetStringEntry("dial_address", m),
 	}
 
 	var cfg ForwardConfig
@@ -202,14 +202,14 @@ func (builder *builderData) convertToForwardConfigIncoming(
 	isTcp bool,
 ) error {
 
-	v, err := strconv.ParseUint(ymlMapGetStringEntry("port", m), 10, 32)
+	v, err := strconv.ParseUint(ymlMapGetStringEntry("listen_port", m), 10, 32)
 	if err != nil {
 		return err
 	}
 
 	fwd_port := ForwardConfigIncoming{
 		port:                uint32(v),
-		forwardLocalAddress: ymlMapGetStringEntry("forward_address", m),
+		forwardLocalAddress: ymlMapGetStringEntry("dial_address", m),
 	}
 
 	var cfg ForwardConfig

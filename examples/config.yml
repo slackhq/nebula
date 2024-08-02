@@ -376,18 +376,18 @@ firewall:
 # By using port port forwarding (port tunnels) its possible to establish connections
 # from/into the nebula-network without using a tun/tap device and thus without requiring root access
 # on the host. Port forwarding is only supported when setting "tun.disabled" is set to true.
-# In this case, if a user-tun instead of a real one is instanciated to allow the port forwarding.
+# In this case, if a user-tun instead of a real one is instantiated to allow the port forwarding.
 # IMPORTANT: For incoming tunnels, don't forget to also open the firewall for the relevant ports.
 port_forwarding:
   outbound:
-  # format of local and remote address: <host/ip>:<port>
-  #- local_address: 127.0.0.1:3399
-  #  remote_address: 192.168.100.92:4499
+  # format of listen- and dial-address: <host/ip>:<port>
+  #- listen_address: 127.0.0.1:3399
+  #  dial_address: 192.168.100.92:4499
      # format of protocols lists (yml-list): [tcp], [udp], [tcp, udp]
   #  protocols: [tcp, udp]
   inbound:
-  # format of forward_address: <host/ip>:<port>
-  #- port: 5599
-  #  forward_address: 127.0.0.1:5599
+  # format of dial_address: <host/ip>:<port>
+  #- listen_port: 5599
+  #  dial_address: 127.0.0.1:5599
      # format of protocols lists (yml-list): [tcp], [udp], [tcp, udp]
   #  protocols: [tcp, udp]
