@@ -28,16 +28,21 @@ func (cfg ForwardConfigIncomingTcp) ConfigDescriptor() string {
 	return fmt.Sprintf("inbound.tcp.%d.%s", cfg.port, cfg.forwardLocalAddress)
 }
 
-type PortForwardingOutgoingTcp struct {
+type PortForwardingCommonTcp struct {
+	ctx                   context.Context
 	l                     *logrus.Logger
 	tunService            *service.Service
-	cfg                   ForwardConfigOutgoingTcp
-	localListenConnection *net.TCPListener
+	localListenConnection net.Listener
 }
 
-func (fwd PortForwardingOutgoingTcp) Close() error {
+func (fwd PortForwardingCommonTcp) Close() error {
 	fwd.localListenConnection.Close()
 	return nil
+}
+
+type PortForwardingOutgoingTcp struct {
+	PortForwardingCommonTcp
+	cfg ForwardConfigOutgoingTcp
 }
 
 func (cf ForwardConfigOutgoingTcp) SetupPortForwarding(
@@ -56,22 +61,32 @@ func (cf ForwardConfigOutgoingTcp) SetupPortForwarding(
 	l.Infof("TCP port forwarding to '%v': listening on local TCP addr: '%v'",
 		cf.remoteConnect, localTcpListenAddr)
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	portForwarding := &PortForwardingOutgoingTcp{
-		l:                     l,
-		tunService:            tunService,
-		cfg:                   cf,
-		localListenConnection: localListenPort,
+		PortForwardingCommonTcp: PortForwardingCommonTcp{
+			ctx:                   ctx,
+			l:                     l,
+			tunService:            tunService,
+			localListenConnection: localListenPort,
+		},
+		cfg: cf,
 	}
 
-	go portForwarding.acceptOnLocalListenPort()
+	go func() {
+		defer cancel()
+		portForwarding.acceptOnLocalListenPort_generic(portForwarding.handleClientConnectionWithErrorReturn)
+	}()
 
 	return portForwarding, nil
 }
 
-func (pt *PortForwardingOutgoingTcp) acceptOnLocalListenPort() error {
+func (pt *PortForwardingCommonTcp) acceptOnLocalListenPort_generic(
+	handleClientConnectionWithErrorReturn func(localConnection net.Conn) error,
+) error {
 	for {
 		pt.l.Debug("listening on local TCP port ...")
-		connection, err := pt.localListenConnection.AcceptTCP()
+		connection, err := pt.localListenConnection.Accept()
 		if err != nil {
 			fmt.Println(err)
 			return err
@@ -80,9 +95,14 @@ func (pt *PortForwardingOutgoingTcp) acceptOnLocalListenPort() error {
 		pt.l.Debugf("accept TCP connect from local TCP port: %v", connection.RemoteAddr())
 
 		go func() {
-			err := pt.handleClientConnectionWithErrorReturn(connection)
+			defer connection.Close()
+			<-pt.ctx.Done()
+		}()
+
+		go func() {
+			err := handleClientConnectionWithErrorReturn(connection)
 			if err != nil {
-				pt.l.Debugf("Closed TCP client connection %s. Err: %v",
+				pt.l.Debugf("Closed TCP client connection %s. Err: %+v",
 					connection.LocalAddr().String(), err)
 			}
 		}()
@@ -95,10 +115,10 @@ func (pt *PortForwardingOutgoingTcp) handleClientConnectionWithErrorReturn(local
 	if err != nil {
 		return err
 	}
-	return handleTcpClientConnection_generic(pt.l, localConnection, remoteConnection)
+	return handleTcpClientConnectionPair_generic(pt.l, localConnection, remoteConnection)
 }
 
-func handleTcpClientConnection_generic(l *logrus.Logger, connA, connB net.Conn) error {
+func handleTcpClientConnectionPair_generic(l *logrus.Logger, connA, connB net.Conn) error {
 
 	dataTransferHandler := func(from, to net.Conn) error {
 
@@ -106,10 +126,6 @@ func handleTcpClientConnection_generic(l *logrus.Logger, connA, connB net.Conn) 
 
 		defer from.Close()
 		defer to.Close()
-		// defer calls are executed in inverse order.
-		// this delays the deferred from/to.Close to give communication
-		// in opposite direction time to finish as well.
-		defer time.Sleep(time.Millisecond * 100)
 
 		// no write/read timeout
 		to.SetDeadline(time.Time{})
@@ -156,15 +172,8 @@ func handleTcpClientConnection_generic(l *logrus.Logger, connA, connB net.Conn) 
 }
 
 type PortForwardingIncomingTcp struct {
-	l                       *logrus.Logger
-	tunService              *service.Service
-	cfg                     ForwardConfigIncomingTcp
-	outsideListenConnection net.Listener
-}
-
-func (fwd PortForwardingIncomingTcp) Close() error {
-	fwd.outsideListenConnection.Close()
-	return nil
+	PortForwardingCommonTcp
+	cfg ForwardConfigIncomingTcp
 }
 
 func (cf ForwardConfigIncomingTcp) SetupPortForwarding(
@@ -172,7 +181,7 @@ func (cf ForwardConfigIncomingTcp) SetupPortForwarding(
 	l *logrus.Logger,
 ) (io.Closer, error) {
 
-	listener, err := tunService.Listen("tcp", fmt.Sprintf(":%d", cf.port))
+	localListenPort, err := tunService.Listen("tcp", fmt.Sprintf(":%d", cf.port))
 	if err != nil {
 		return nil, err
 	}
@@ -180,37 +189,24 @@ func (cf ForwardConfigIncomingTcp) SetupPortForwarding(
 	l.Infof("TCP port forwarding to '%v': listening on local, outside TCP addr: ':%d'",
 		cf.forwardLocalAddress, cf.port)
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	portForwarding := &PortForwardingIncomingTcp{
-		l:                       l,
-		tunService:              tunService,
-		cfg:                     cf,
-		outsideListenConnection: listener,
+		PortForwardingCommonTcp: PortForwardingCommonTcp{
+			ctx:                   ctx,
+			l:                     l,
+			tunService:            tunService,
+			localListenConnection: localListenPort,
+		},
+		cfg: cf,
 	}
 
-	go portForwarding.acceptOnOutsideListenPort()
+	go func() {
+		defer cancel()
+		portForwarding.acceptOnLocalListenPort_generic(portForwarding.handleClientConnectionWithErrorReturn)
+	}()
 
 	return portForwarding, nil
-}
-
-func (pt *PortForwardingIncomingTcp) acceptOnOutsideListenPort() error {
-	for {
-		pt.l.Debug("listening on outside TCP port ...")
-		connection, err := pt.outsideListenConnection.Accept()
-		if err != nil {
-			fmt.Println(err)
-			return err
-		}
-
-		pt.l.Debugf("accept TCP connect from outside TCP port: %v", connection.RemoteAddr())
-
-		go func() {
-			err := pt.handleClientConnectionWithErrorReturn(connection)
-			if err != nil {
-				pt.l.Debugf("Closed TCP client connection %s. Err: %v",
-					connection.LocalAddr().String(), err)
-			}
-		}()
-	}
 }
 
 func (pt *PortForwardingIncomingTcp) handleClientConnectionWithErrorReturn(outsideConnection net.Conn) error {
@@ -225,5 +221,5 @@ func (pt *PortForwardingIncomingTcp) handleClientConnectionWithErrorReturn(outsi
 		return err
 	}
 
-	return handleTcpClientConnection_generic(pt.l, outsideConnection, localConnection)
+	return handleTcpClientConnectionPair_generic(pt.l, outsideConnection, localConnection)
 }
