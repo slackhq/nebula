@@ -13,7 +13,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/config"
-	port_forwarder "github.com/slackhq/nebula/port-forwarder"
+	"github.com/slackhq/nebula/port_forwarder"
 	"github.com/slackhq/nebula/service"
 	"github.com/slackhq/nebula/util"
 )
