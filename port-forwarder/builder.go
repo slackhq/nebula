@@ -152,6 +152,13 @@ func (s *PortForwardingService) ReloadConfigAndApplyChanges(
 		return err
 	}
 
+	return s.ApplyChangesByNewFwdList(&pflNew)
+}
+
+func (s *PortForwardingService) ApplyChangesByNewFwdList(
+	pflNew *PortForwardingList,
+) error {
+
 	to_be_closed := []string{}
 	for old := range s.configPortForwardings {
 		_, corresponding_new_exists := pflNew.configPortForwardings[old]

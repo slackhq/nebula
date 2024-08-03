@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func createPortForwarderFromConfigString(l *logrus.Logger, srv *service.Service, configStr string) (*PortForwardingService, error) {
+func loadPortFwdConfigFromString(l *logrus.Logger, configStr string) (*PortForwardingList, error) {
 	c := config.NewC(l)
 	err := c.LoadString(configStr)
 	if err != nil {
@@ -23,7 +23,17 @@ func createPortForwarderFromConfigString(l *logrus.Logger, srv *service.Service,
 		return nil, err
 	}
 
-	pf, err := ConstructFromInitialFwdList(srv, l, &fwd_list)
+	return &fwd_list, nil
+}
+
+func createPortForwarderFromConfigString(l *logrus.Logger, srv *service.Service, configStr string) (*PortForwardingService, error) {
+
+	fwd_list, err := loadPortFwdConfigFromString(l, configStr)
+	if err != nil {
+		return nil, err
+	}
+
+	pf, err := ConstructFromInitialFwdList(srv, l, fwd_list)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +74,7 @@ func doTestUdpCommunication(
 
 func TestUdpInOut2Clients(t *testing.T) {
 	l := logrus.New()
-	server, client := service.CreateTwoConnectedServices()
+	server, client := service.CreateTwoConnectedServices(4244)
 	defer client.Close()
 	defer server.Close()
 

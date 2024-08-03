@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"net/netip"
 	"time"
 
@@ -75,7 +76,7 @@ func newSimpleService(caCrt *cert.NebulaCertificate, caKey []byte, name string, 
 	return s
 }
 
-func CreateTwoConnectedServices() (*Service, *Service) {
+func CreateTwoConnectedServices(port int) (*Service, *Service) {
 	ca, _, caKey, _ := e2e.NewTestCaCert(time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
 	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
 		"static_host_map": m{},
@@ -84,12 +85,12 @@ func CreateTwoConnectedServices() (*Service, *Service) {
 		},
 		"listen": m{
 			"host": "0.0.0.0",
-			"port": 4243,
+			"port": port,
 		},
 	})
 	b := newSimpleService(ca, caKey, "b", netip.MustParseAddr("10.0.0.2"), m{
 		"static_host_map": m{
-			"10.0.0.1": []string{"localhost:4243"},
+			"10.0.0.1": []string{fmt.Sprintf("localhost:%d", port)},
 		},
 		"lighthouse": m{
 			"hosts":    []string{"10.0.0.1"},
