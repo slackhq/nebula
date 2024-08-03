@@ -238,3 +238,38 @@ port_forwarding:
 	assert.NotNil(t, fwd_list.configPortForwardings["inbound.udp.5580.127.0.0.1:5599"].(ForwardConfigIncomingUdp))
 	assert.NotNil(t, fwd_list.configPortForwardings["inbound.udp.5570.127.0.0.1:5555"].(ForwardConfigIncomingUdp))
 }
+
+func TestConfigWithOverlappingRulesNoDuplicatesInResult(t *testing.T) {
+	l := logrus.New()
+	c := config.NewC(l)
+	err := c.LoadString(`
+port_forwarding:
+  outbound:
+  - listen_address: 127.0.0.1:3399
+    dial_address: 192.168.100.92:4499
+    protocols: [udp, tcp, udp]
+  - listen_address: 127.0.0.1:3399
+    dial_address: 192.168.100.92:4499
+    protocols: [tcp]
+  inbound:
+  - listen_port: 5580
+    dial_address: 127.0.0.1:5599
+    protocols: [tcp, udp]
+  - listen_port: 5580
+    dial_address: 127.0.0.1:5599
+    protocols: [udp, udp]
+`)
+	assert.Nil(t, err)
+
+	fwd_list := NewPortForwardingList()
+	err = ParseConfig(l, c, fwd_list)
+	assert.Nil(t, err)
+
+	assert.Len(t, fwd_list.configPortForwardings, 4)
+	assert.False(t, fwd_list.IsEmpty())
+
+	assert.NotNil(t, fwd_list.configPortForwardings["outbound.udp.127.0.0.1:3399.192.168.100.92:4499"].(ForwardConfigOutgoingUdp))
+	assert.NotNil(t, fwd_list.configPortForwardings["outbound.tcp.127.0.0.1:3399.192.168.100.92:4499"].(ForwardConfigOutgoingTcp))
+	assert.NotNil(t, fwd_list.configPortForwardings["inbound.tcp.5580.127.0.0.1:5599"].(ForwardConfigIncomingTcp))
+	assert.NotNil(t, fwd_list.configPortForwardings["inbound.udp.5580.127.0.0.1:5599"].(ForwardConfigIncomingUdp))
+}
