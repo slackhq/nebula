@@ -3,17 +3,43 @@ package overlay
 import (
 	"io"
 	"net/netip"
+	"sync/atomic"
 
+	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"gvisor.dev/gvisor/pkg/buffer"
 )
 
 func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr netip.Prefix, routines int) (Device, error) {
-	return NewUserDevice(tunCidr)
+	d, err := NewUserDevice(tunCidr)
+	if err != nil {
+		return nil, err
+	}
+
+	_, routes, err := getAllRoutesFromConfig(c, tunCidr, true)
+	if err != nil {
+		return nil, err
+	}
+
+	routeTree, err := makeRouteTree(l, routes, true)
+	if err != nil {
+		return nil, err
+	}
+
+	newDefaultMTU := c.GetInt("tun.mtu", DefaultMTU)
+	for i, r := range routes {
+		if r.MTU == 0 {
+			routes[i].MTU = newDefaultMTU
+		}
+	}
+
+	d.routeTree.Store(routeTree)
+
+	return d, nil
 }
 
-func NewUserDevice(tunCidr netip.Prefix) (Device, error) {
+func NewUserDevice(tunCidr netip.Prefix) (*UserDevice, error) {
 	// these pipes guarantee each write/read will match 1:1
 	return &UserDevice{
 		tunCidr:         tunCidr,
@@ -27,6 +53,8 @@ type UserDevice struct {
 
 	outboundChannel chan *buffer.View
 	inboundChannel  chan *buffer.View
+
+	routeTree atomic.Pointer[bart.Table[netip.Addr]]
 }
 
 func (d *UserDevice) Activate() error {
@@ -34,7 +62,15 @@ func (d *UserDevice) Activate() error {
 }
 func (d *UserDevice) Cidr() netip.Prefix                { return d.tunCidr }
 func (d *UserDevice) Name() string                      { return "faketun0" }
-func (d *UserDevice) RouteFor(ip netip.Addr) netip.Addr { return ip }
+func (d *UserDevice) RouteFor(ip netip.Addr) netip.Addr {
+	ptr := d.routeTree.Load()
+	if ptr != nil {
+		r, _ := d.routeTree.Load().Lookup(ip)
+		return r
+	} else {
+		return ip
+	}
+}
 func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return d, nil
 }
