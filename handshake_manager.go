@@ -488,7 +488,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 	existingPendingIndex, found := c.indexes[hostinfo.localIndexId]
 	if found && existingPendingIndex.hostinfo != hostinfo {
 		// We have a collision, but for a different hostinfo
-		return existingIndex, ErrLocalIndexCollision
+		return existingPendingIndex.hostinfo, ErrLocalIndexCollision
 	}
 
 	existingRemoteIndex, found := c.mainHostMap.RemoteIndexes[hostinfo.remoteIndexId]
