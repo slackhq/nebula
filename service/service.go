@@ -45,8 +45,7 @@ type Service struct {
 	}
 }
 
-func New(config *config.C) (*Service, error) {
-	logger := logrus.New()
+func New(config *config.C, logger *logrus.Logger) (*Service, error) {
 	logger.Out = os.Stdout
 
 	control, err := nebula.Main(config, false, "custom-app", logger, overlay.NewUserDeviceFromConfig)
@@ -106,31 +105,19 @@ func New(config *config.C) (*Service, error) {
 	tcpFwd := tcp.NewForwarder(s.ipstack, tcpReceiveBufferSize, maxInFlightConnectionAttempts, s.tcpHandler)
 	s.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 
-	reader, writer := device.Pipe()
-
-	go func() {
-		<-ctx.Done()
-		reader.Close()
-		writer.Close()
-	}()
+	nebula_tun_reader, nebula_tun_writer := device.Pipe()
 
 	// create Goroutines to forward packets between Nebula and Gvisor
 	eg.Go(func() error {
-		buf := make([]byte, header.IPv4MaximumHeaderSize+header.IPv4MaximumPayloadSize)
 		for {
-			// this will read exactly one packet
-			n, err := reader.Read(buf)
-			if err != nil {
-				return err
+			view, ok := <-nebula_tun_reader
+			if !ok {
+				return nil
 			}
 			packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
-				Payload: buffer.MakeWithData(bytes.Clone(buf[:n])),
+				Payload: buffer.MakeWithView(view),
 			})
 			linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
-
-			if err := ctx.Err(); err != nil {
-				return err
-			}
 		}
 	})
 	eg.Go(func() error {
@@ -142,11 +129,7 @@ func New(config *config.C) (*Service, error) {
 				}
 				continue
 			}
-			bufView := packet.ToView()
-			if _, err := bufView.WriteTo(writer); err != nil {
-				return err
-			}
-			bufView.Release()
+			nebula_tun_writer <- packet.ToView()
 		}
 	})
 
@@ -154,7 +137,7 @@ func New(config *config.C) (*Service, error) {
 }
 
 // DialContext dials the provided address. Currently only TCP is supported.
-func (s *Service) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (s *Service) DialContext(ctx context.Context, network, address string) (*gonet.TCPConn, error) {
 	if network != "tcp" && network != "tcp4" {
 		return nil, errors.New("only tcp is supported")
 	}
@@ -171,6 +154,21 @@ func (s *Service) DialContext(ctx context.Context, network, address string) (net
 	}
 
 	return gonet.DialContextTCP(ctx, s.ipstack, fullAddr, ipv4.ProtocolNumber)
+}
+
+func (s *Service) DialUDP(address string) (*gonet.UDPConn, error) {
+	addr, err := net.ResolveUDPAddr("udp", address)
+	if err != nil {
+		return nil, err
+	}
+
+	fullAddr := tcpip.FullAddress{
+		NIC:  nicID,
+		Addr: tcpip.AddrFromSlice(addr.IP),
+		Port: uint16(addr.Port),
+	}
+
+	return gonet.DialUDP(s.ipstack, nil, &fullAddr, ipv4.ProtocolNumber)
 }
 
 // Listen listens on the provided address. Currently only TCP with wildcard
@@ -210,6 +208,19 @@ func (s *Service) Listen(network, address string) (net.Listener, error) {
 	s.mu.listeners[port] = l
 
 	return l, nil
+}
+
+func (s *Service) ListenUDP(address string) (*gonet.UDPConn, error) {
+	addr, err := net.ResolveUDPAddr("udp", address)
+	if err != nil {
+		return nil, err
+	}
+	return gonet.DialUDP(s.ipstack, &tcpip.FullAddress{
+		NIC:      nicID,
+		Addr:     tcpip.AddrFromSlice(addr.IP),
+		Port:     uint16(addr.Port),
+		LinkAddr: "",
+	}, nil, ipv4.ProtocolNumber)
 }
 
 func (s *Service) Wait() error {
