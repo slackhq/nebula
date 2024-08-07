@@ -1152,12 +1152,18 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp n
 		}
 	}
 
+	remoteVpnIp := iputil.VpnIp(n.Details.VpnIp)
+	remoteAllowList := lhh.lh.GetRemoteAllowList()
 	for _, a := range n.Details.Ip4AndPorts {
-		punch(AddrPortFromIp4AndPort(a))
+		if remoteAllowList.AllowIpV4(remoteVpnIp, iputil.VpnIp(a.Ip)) {
+			punch(AddrPortFromIp4AndPort(a))
+		}
 	}
 
 	for _, a := range n.Details.Ip6AndPorts {
-		punch(AddrPortFromIp6AndPort(a))
+		if remoteAllowList.AllowIpV6(remoteVpnIp, a.Hi, a.Lo) {
+			punch(AddrPortFromIp6AndPort(a))
+		}
 	}
 
 	// This sends a nebula test packet to the host trying to contact us. In the case
