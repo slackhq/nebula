@@ -2,15 +2,14 @@ package nebula
 
 import (
 	"net"
+	"net/netip"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
-	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/test"
-	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -18,18 +17,19 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	l := test.NewLogger()
 	// Special care must be taken to re-use all objects provided to the hostmap and certificate in the expectedInfo object
 	// To properly ensure we are not exposing core memory to the caller
-	hm := newHostMap(l, &net.IPNet{})
-	hm.preferredRanges.Store(&[]*net.IPNet{})
+	hm := newHostMap(l, netip.Prefix{})
+	hm.preferredRanges.Store(&[]netip.Prefix{})
 
-	remote1 := udp.NewAddr(net.ParseIP("0.0.0.100"), 4444)
-	remote2 := udp.NewAddr(net.ParseIP("1:2:3:4:5:6:7:8"), 4444)
+	remote1 := netip.MustParseAddrPort("0.0.0.100:4444")
+	remote2 := netip.MustParseAddrPort("[1:2:3:4:5:6:7:8]:4444")
+
 	ipNet := net.IPNet{
-		IP:   net.IPv4(1, 2, 3, 4),
+		IP:   remote1.Addr().AsSlice(),
 		Mask: net.IPMask{255, 255, 255, 0},
 	}
 
 	ipNet2 := net.IPNet{
-		IP:   net.ParseIP("1:2:3:4:5:6:7:8"),
+		IP:   remote2.Addr().AsSlice(),
 		Mask: net.IPMask{255, 255, 255, 0},
 	}
 
@@ -50,8 +50,12 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	}
 
 	remotes := NewRemoteList(nil)
-	remotes.unlockedPrependV4(0, NewIp4AndPort(remote1.IP, uint32(remote1.Port)))
-	remotes.unlockedPrependV6(0, NewIp6AndPort(remote2.IP, uint32(remote2.Port)))
+	remotes.unlockedPrependV4(netip.IPv4Unspecified(), NewIp4AndPortFromNetIP(remote1.Addr(), remote1.Port()))
+	remotes.unlockedPrependV6(netip.IPv4Unspecified(), NewIp6AndPortFromNetIP(remote2.Addr(), remote2.Port()))
+
+	vpnIp, ok := netip.AddrFromSlice(ipNet.IP)
+	assert.True(t, ok)
+
 	hm.unlockedAddHostInfo(&HostInfo{
 		remote:  remote1,
 		remotes: remotes,
@@ -60,13 +64,16 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		},
 		remoteIndexId: 200,
 		localIndexId:  201,
-		vpnIp:         iputil.Ip2VpnIp(ipNet.IP),
+		vpnIp:         vpnIp,
 		relayState: RelayState{
-			relays:        map[iputil.VpnIp]struct{}{},
-			relayForByIp:  map[iputil.VpnIp]*Relay{},
+			relays:        map[netip.Addr]struct{}{},
+			relayForByIp:  map[netip.Addr]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
 		},
 	}, &Interface{})
+
+	vpnIp2, ok := netip.AddrFromSlice(ipNet2.IP)
+	assert.True(t, ok)
 
 	hm.unlockedAddHostInfo(&HostInfo{
 		remote:  remote1,
@@ -76,10 +83,10 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		},
 		remoteIndexId: 200,
 		localIndexId:  201,
-		vpnIp:         iputil.Ip2VpnIp(ipNet2.IP),
+		vpnIp:         vpnIp2,
 		relayState: RelayState{
-			relays:        map[iputil.VpnIp]struct{}{},
-			relayForByIp:  map[iputil.VpnIp]*Relay{},
+			relays:        map[netip.Addr]struct{}{},
+			relayForByIp:  map[netip.Addr]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
 		},
 	}, &Interface{})
@@ -91,27 +98,29 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		l: logrus.New(),
 	}
 
-	thi := c.GetHostInfoByVpnIp(iputil.Ip2VpnIp(ipNet.IP), false)
+	thi := c.GetHostInfoByVpnIp(vpnIp, false)
 
 	expectedInfo := ControlHostInfo{
-		VpnIp:                  net.IPv4(1, 2, 3, 4).To4(),
+		VpnIp:                  vpnIp,
 		LocalIndex:             201,
 		RemoteIndex:            200,
-		RemoteAddrs:            []*udp.Addr{remote2, remote1},
+		RemoteAddrs:            []netip.AddrPort{remote2, remote1},
 		Cert:                   crt.Copy(),
 		MessageCounter:         0,
-		CurrentRemote:          udp.NewAddr(net.ParseIP("0.0.0.100"), 4444),
-		CurrentRelaysToMe:      []iputil.VpnIp{},
-		CurrentRelaysThroughMe: []iputil.VpnIp{},
+		CurrentRemote:          remote1,
+		CurrentRelaysToMe:      []netip.Addr{},
+		CurrentRelaysThroughMe: []netip.Addr{},
 	}
 
 	// Make sure we don't have any unexpected fields
 	assertFields(t, []string{"VpnIp", "LocalIndex", "RemoteIndex", "RemoteAddrs", "Cert", "MessageCounter", "CurrentRemote", "CurrentRelaysToMe", "CurrentRelaysThroughMe"}, thi)
-	test.AssertDeepCopyEqual(t, &expectedInfo, thi)
+	assert.EqualValues(t, &expectedInfo, thi)
+	//TODO: netip.Addr reuses global memory for zone identifiers which breaks our "no reused memory check" here
+	//test.AssertDeepCopyEqual(t, &expectedInfo, thi)
 
 	// Make sure we don't panic if the host info doesn't have a cert yet
 	assert.NotPanics(t, func() {
-		thi = c.GetHostInfoByVpnIp(iputil.Ip2VpnIp(ipNet2.IP), false)
+		thi = c.GetHostInfoByVpnIp(vpnIp2, false)
 	})
 }
 

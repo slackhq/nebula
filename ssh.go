@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"reflect"
 	"runtime"
@@ -18,9 +19,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/sshd"
-	"github.com/slackhq/nebula/udp"
 )
 
 type sshListHostMapFlags struct {
@@ -431,7 +430,7 @@ func sshListHostMap(hl controlHostLister, a interface{}, w sshd.StringWriter) er
 	}
 
 	sort.Slice(hm, func(i, j int) bool {
-		return bytes.Compare(hm[i].VpnIp, hm[j].VpnIp) < 0
+		return hm[i].VpnIp.Compare(hm[j].VpnIp) < 0
 	})
 
 	if fs.Json || fs.Pretty {
@@ -545,13 +544,12 @@ func sshQueryLighthouse(ifce *Interface, fs interface{}, a []string, w sshd.Stri
 		return w.WriteLine("No vpn ip was provided")
 	}
 
-	parsedIp := net.ParseIP(a[0])
-	if parsedIp == nil {
+	vpnIp, err := netip.ParseAddr(a[0])
+	if err != nil {
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	vpnIp := iputil.Ip2VpnIp(parsedIp)
-	if vpnIp == 0 {
+	if !vpnIp.IsValid() {
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
@@ -574,13 +572,12 @@ func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		return w.WriteLine("No vpn ip was provided")
 	}
 
-	parsedIp := net.ParseIP(a[0])
-	if parsedIp == nil {
+	vpnIp, err := netip.ParseAddr(a[0])
+	if err != nil {
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	vpnIp := iputil.Ip2VpnIp(parsedIp)
-	if vpnIp == 0 {
+	if !vpnIp.IsValid() {
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
@@ -616,13 +613,12 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		return w.WriteLine("No vpn ip was provided")
 	}
 
-	parsedIp := net.ParseIP(a[0])
-	if parsedIp == nil {
+	vpnIp, err := netip.ParseAddr(a[0])
+	if err != nil {
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	vpnIp := iputil.Ip2VpnIp(parsedIp)
-	if vpnIp == 0 {
+	if !vpnIp.IsValid() {
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
@@ -636,16 +632,16 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		return w.WriteLine(fmt.Sprintf("Tunnel already handshaking"))
 	}
 
-	var addr *udp.Addr
+	var addr netip.AddrPort
 	if flags.Address != "" {
-		addr = udp.NewAddrFromString(flags.Address)
-		if addr == nil {
+		addr, err = netip.ParseAddrPort(flags.Address)
+		if err != nil {
 			return w.WriteLine("Address could not be parsed")
 		}
 	}
 
 	hostInfo = ifce.handshakeManager.StartHandshake(vpnIp, nil)
-	if addr != nil {
+	if addr.IsValid() {
 		hostInfo.SetRemote(addr)
 	}
 
@@ -667,18 +663,17 @@ func sshChangeRemote(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		return w.WriteLine("No address was provided")
 	}
 
-	addr := udp.NewAddrFromString(flags.Address)
-	if addr == nil {
+	addr, err := netip.ParseAddrPort(flags.Address)
+	if err != nil {
 		return w.WriteLine("Address could not be parsed")
 	}
 
-	parsedIp := net.ParseIP(a[0])
-	if parsedIp == nil {
+	vpnIp, err := netip.ParseAddr(a[0])
+	if err != nil {
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	vpnIp := iputil.Ip2VpnIp(parsedIp)
-	if vpnIp == 0 {
+	if !vpnIp.IsValid() {
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
@@ -792,13 +787,12 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 
 	cert := ifce.pki.GetCertState().Certificate
 	if len(a) > 0 {
-		parsedIp := net.ParseIP(a[0])
-		if parsedIp == nil {
+		vpnIp, err := netip.ParseAddr(a[0])
+		if err != nil {
 			return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 		}
 
-		vpnIp := iputil.Ip2VpnIp(parsedIp)
-		if vpnIp == 0 {
+		if !vpnIp.IsValid() {
 			return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 		}
 
@@ -862,14 +856,14 @@ func sshPrintRelays(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		Error          error
 		Type           string
 		State          string
-		PeerIp         iputil.VpnIp
+		PeerIp         netip.Addr
 		LocalIndex     uint32
 		RemoteIndex    uint32
-		RelayedThrough []iputil.VpnIp
+		RelayedThrough []netip.Addr
 	}
 
 	type RelayOutput struct {
-		NebulaIp    iputil.VpnIp
+		NebulaIp    netip.Addr
 		RelayForIps []RelayFor
 	}
 
@@ -952,13 +946,12 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		return w.WriteLine("No vpn ip was provided")
 	}
 
-	parsedIp := net.ParseIP(a[0])
-	if parsedIp == nil {
+	vpnIp, err := netip.ParseAddr(a[0])
+	if err != nil {
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 
-	vpnIp := iputil.Ip2VpnIp(parsedIp)
-	if vpnIp == 0 {
+	if !vpnIp.IsValid() {
 		return w.WriteLine(fmt.Sprintf("The provided vpn ip could not be parsed: %s", a[0]))
 	}
 

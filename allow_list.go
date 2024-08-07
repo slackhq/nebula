@@ -2,17 +2,16 @@ package nebula
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"regexp"
 
-	"github.com/slackhq/nebula/cidr"
+	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/iputil"
 )
 
 type AllowList struct {
 	// The values of this cidrTree are `bool`, signifying allow/deny
-	cidrTree *cidr.Tree6[bool]
+	cidrTree *bart.Table[bool]
 }
 
 type RemoteAllowList struct {
@@ -20,7 +19,7 @@ type RemoteAllowList struct {
 
 	// Inside Range Specific, keys of this tree are inside CIDRs and values
 	// are *AllowList
-	insideAllowLists *cidr.Tree6[*AllowList]
+	insideAllowLists *bart.Table[*AllowList]
 }
 
 type LocalAllowList struct {
@@ -88,7 +87,7 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, raw)
 	}
 
-	tree := cidr.NewTree6[bool]()
+	tree := new(bart.Table[bool])
 
 	// Keep track of the rules we have added for both ipv4 and ipv6
 	type allowListRules struct {
@@ -122,18 +121,20 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 			return nil, fmt.Errorf("config `%s` has invalid value (type %T): %v", k, rawValue, rawValue)
 		}
 
-		_, ipNet, err := net.ParseCIDR(rawCIDR)
+		ipNet, err := netip.ParsePrefix(rawCIDR)
 		if err != nil {
-			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s", k, rawCIDR)
+			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s. %w", k, rawCIDR, err)
 		}
 
-		// TODO: should we error on duplicate CIDRs in the config?
-		tree.AddCIDR(ipNet, value)
+		ipNet = netip.PrefixFrom(ipNet.Addr().Unmap(), ipNet.Bits())
 
-		maskBits, maskSize := ipNet.Mask.Size()
+		// TODO: should we error on duplicate CIDRs in the config?
+		tree.Insert(ipNet, value)
+
+		maskBits := ipNet.Bits()
 
 		var rules *allowListRules
-		if maskSize == 32 {
+		if ipNet.Addr().Is4() {
 			rules = &rules4
 		} else {
 			rules = &rules6
@@ -156,8 +157,7 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 
 	if !rules4.defaultSet {
 		if rules4.allValuesMatch {
-			_, zeroCIDR, _ := net.ParseCIDR("0.0.0.0/0")
-			tree.AddCIDR(zeroCIDR, !rules4.allValues)
+			tree.Insert(netip.PrefixFrom(netip.IPv4Unspecified(), 0), !rules4.allValues)
 		} else {
 			return nil, fmt.Errorf("config `%s` contains both true and false rules, but no default set for 0.0.0.0/0", k)
 		}
@@ -165,8 +165,7 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 
 	if !rules6.defaultSet {
 		if rules6.allValuesMatch {
-			_, zeroCIDR, _ := net.ParseCIDR("::/0")
-			tree.AddCIDR(zeroCIDR, !rules6.allValues)
+			tree.Insert(netip.PrefixFrom(netip.IPv6Unspecified(), 0), !rules6.allValues)
 		} else {
 			return nil, fmt.Errorf("config `%s` contains both true and false rules, but no default set for ::/0", k)
 		}
@@ -218,13 +217,13 @@ func getAllowListInterfaces(k string, v interface{}) ([]AllowListNameRule, error
 	return nameRules, nil
 }
 
-func getRemoteAllowRanges(c *config.C, k string) (*cidr.Tree6[*AllowList], error) {
+func getRemoteAllowRanges(c *config.C, k string) (*bart.Table[*AllowList], error) {
 	value := c.Get(k)
 	if value == nil {
 		return nil, nil
 	}
 
-	remoteAllowRanges := cidr.NewTree6[*AllowList]()
+	remoteAllowRanges := new(bart.Table[*AllowList])
 
 	rawMap, ok := value.(map[interface{}]interface{})
 	if !ok {
@@ -241,45 +240,27 @@ func getRemoteAllowRanges(c *config.C, k string) (*cidr.Tree6[*AllowList], error
 			return nil, err
 		}
 
-		_, ipNet, err := net.ParseCIDR(rawCIDR)
+		ipNet, err := netip.ParsePrefix(rawCIDR)
 		if err != nil {
-			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s", k, rawCIDR)
+			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s. %w", k, rawCIDR, err)
 		}
 
-		remoteAllowRanges.AddCIDR(ipNet, allowList)
+		remoteAllowRanges.Insert(netip.PrefixFrom(ipNet.Addr().Unmap(), ipNet.Bits()), allowList)
 	}
 
 	return remoteAllowRanges, nil
 }
 
-func (al *AllowList) Allow(ip net.IP) bool {
+func (al *AllowList) Allow(ip netip.Addr) bool {
 	if al == nil {
 		return true
 	}
 
-	_, result := al.cidrTree.MostSpecificContains(ip)
+	result, _ := al.cidrTree.Lookup(ip)
 	return result
 }
 
-func (al *AllowList) AllowIpV4(ip iputil.VpnIp) bool {
-	if al == nil {
-		return true
-	}
-
-	_, result := al.cidrTree.MostSpecificContainsIpV4(ip)
-	return result
-}
-
-func (al *AllowList) AllowIpV6(hi, lo uint64) bool {
-	if al == nil {
-		return true
-	}
-
-	_, result := al.cidrTree.MostSpecificContainsIpV6(hi, lo)
-	return result
-}
-
-func (al *LocalAllowList) Allow(ip net.IP) bool {
+func (al *LocalAllowList) Allow(ip netip.Addr) bool {
 	if al == nil {
 		return true
 	}
@@ -301,43 +282,23 @@ func (al *LocalAllowList) AllowName(name string) bool {
 	return !al.nameRules[0].Allow
 }
 
-func (al *RemoteAllowList) AllowUnknownVpnIp(ip net.IP) bool {
+func (al *RemoteAllowList) AllowUnknownVpnIp(ip netip.Addr) bool {
 	if al == nil {
 		return true
 	}
 	return al.AllowList.Allow(ip)
 }
 
-func (al *RemoteAllowList) Allow(vpnIp iputil.VpnIp, ip net.IP) bool {
+func (al *RemoteAllowList) Allow(vpnIp netip.Addr, ip netip.Addr) bool {
 	if !al.getInsideAllowList(vpnIp).Allow(ip) {
 		return false
 	}
 	return al.AllowList.Allow(ip)
 }
 
-func (al *RemoteAllowList) AllowIpV4(vpnIp iputil.VpnIp, ip iputil.VpnIp) bool {
-	if al == nil {
-		return true
-	}
-	if !al.getInsideAllowList(vpnIp).AllowIpV4(ip) {
-		return false
-	}
-	return al.AllowList.AllowIpV4(ip)
-}
-
-func (al *RemoteAllowList) AllowIpV6(vpnIp iputil.VpnIp, hi, lo uint64) bool {
-	if al == nil {
-		return true
-	}
-	if !al.getInsideAllowList(vpnIp).AllowIpV6(hi, lo) {
-		return false
-	}
-	return al.AllowList.AllowIpV6(hi, lo)
-}
-
-func (al *RemoteAllowList) getInsideAllowList(vpnIp iputil.VpnIp) *AllowList {
+func (al *RemoteAllowList) getInsideAllowList(vpnIp netip.Addr) *AllowList {
 	if al.insideAllowLists != nil {
-		ok, inside := al.insideAllowLists.MostSpecificContainsIpV4(vpnIp)
+		inside, ok := al.insideAllowLists.Lookup(vpnIp)
 		if ok {
 			return inside
 		}

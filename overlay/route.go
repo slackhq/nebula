@@ -1,34 +1,30 @@
 package overlay
 
 import (
-	"bytes"
 	"fmt"
 	"math"
 	"net"
+	"net/netip"
 	"runtime"
 	"strconv"
 
+	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/iputil"
 )
 
 type Route struct {
 	MTU     int
 	Metric  int
-	Cidr    *net.IPNet
-	Via     *iputil.VpnIp
+	Cidr    netip.Prefix
+	Via     netip.Addr
 	Install bool
 }
 
 // Equal determines if a route that could be installed in the system route table is equal to another
 // Via is ignored since that is only consumed within nebula itself
 func (r Route) Equal(t Route) bool {
-	if !r.Cidr.IP.Equal(t.Cidr.IP) {
-		return false
-	}
-	if !bytes.Equal(r.Cidr.Mask, t.Cidr.Mask) {
+	if r.Cidr != t.Cidr {
 		return false
 	}
 	if r.Metric != t.Metric {
@@ -51,21 +47,21 @@ func (r Route) String() string {
 	return s
 }
 
-func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*cidr.Tree4[iputil.VpnIp], error) {
-	routeTree := cidr.NewTree4[iputil.VpnIp]()
+func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*bart.Table[netip.Addr], error) {
+	routeTree := new(bart.Table[netip.Addr])
 	for _, r := range routes {
 		if !allowMTU && r.MTU > 0 {
 			l.WithField("route", r).Warnf("route MTU is not supported in %s", runtime.GOOS)
 		}
 
-		if r.Via != nil {
-			routeTree.AddCIDR(r.Cidr, *r.Via)
+		if r.Via.IsValid() {
+			routeTree.Insert(r.Cidr, r.Via)
 		}
 	}
 	return routeTree, nil
 }
 
-func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
+func parseRoutes(c *config.C, network netip.Prefix) ([]Route, error) {
 	var err error
 
 	r := c.Get("tun.routes")
@@ -116,12 +112,12 @@ func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 			MTU:     mtu,
 		}
 
-		_, r.Cidr, err = net.ParseCIDR(fmt.Sprintf("%v", rRoute))
+		r.Cidr, err = netip.ParsePrefix(fmt.Sprintf("%v", rRoute))
 		if err != nil {
 			return nil, fmt.Errorf("entry %v.route in tun.routes failed to parse: %v", i+1, err)
 		}
 
-		if !ipWithin(network, r.Cidr) {
+		if !network.Contains(r.Cidr.Addr()) || r.Cidr.Bits() < network.Bits() {
 			return nil, fmt.Errorf(
 				"entry %v.route in tun.routes is not contained within the network attached to the certificate; route: %v, network: %v",
 				i+1,
@@ -136,7 +132,7 @@ func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 	return routes, nil
 }
 
-func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
+func parseUnsafeRoutes(c *config.C, network netip.Prefix) ([]Route, error) {
 	var err error
 
 	r := c.Get("tun.unsafe_routes")
@@ -202,17 +198,15 @@ func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 			return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes is not a string: found %T", i+1, rVia)
 		}
 
-		nVia := net.ParseIP(via)
-		if nVia == nil {
-			return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes failed to parse address: %v", i+1, via)
+		viaVpnIp, err := netip.ParseAddr(via)
+		if err != nil {
+			return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes failed to parse address: %v", i+1, err)
 		}
 
 		rRoute, ok := m["route"]
 		if !ok {
 			return nil, fmt.Errorf("entry %v.route in tun.unsafe_routes is not present", i+1)
 		}
-
-		viaVpnIp := iputil.Ip2VpnIp(nVia)
 
 		install := true
 		rInstall, ok := m["install"]
@@ -224,18 +218,18 @@ func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 		}
 
 		r := Route{
-			Via:     &viaVpnIp,
+			Via:     viaVpnIp,
 			MTU:     mtu,
 			Metric:  metric,
 			Install: install,
 		}
 
-		_, r.Cidr, err = net.ParseCIDR(fmt.Sprintf("%v", rRoute))
+		r.Cidr, err = netip.ParsePrefix(fmt.Sprintf("%v", rRoute))
 		if err != nil {
 			return nil, fmt.Errorf("entry %v.route in tun.unsafe_routes failed to parse: %v", i+1, err)
 		}
 
-		if ipWithin(network, r.Cidr) {
+		if network.Contains(r.Cidr.Addr()) {
 			return nil, fmt.Errorf(
 				"entry %v.route in tun.unsafe_routes is contained within the network attached to the certificate; route: %v, network: %v",
 				i+1,

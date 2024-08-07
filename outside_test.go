@@ -2,10 +2,10 @@ package nebula
 
 import (
 	"net"
+	"net/netip"
 	"testing"
 
 	"github.com/slackhq/nebula/firewall"
-	"github.com/slackhq/nebula/iputil"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/net/ipv4"
 )
@@ -55,8 +55,8 @@ func Test_newPacket(t *testing.T) {
 
 	assert.Nil(t, err)
 	assert.Equal(t, p.Protocol, uint8(firewall.ProtoTCP))
-	assert.Equal(t, p.LocalIP, iputil.Ip2VpnIp(net.IPv4(10, 0, 0, 2)))
-	assert.Equal(t, p.RemoteIP, iputil.Ip2VpnIp(net.IPv4(10, 0, 0, 1)))
+	assert.Equal(t, p.LocalIP, netip.MustParseAddr("10.0.0.2"))
+	assert.Equal(t, p.RemoteIP, netip.MustParseAddr("10.0.0.1"))
 	assert.Equal(t, p.RemotePort, uint16(3))
 	assert.Equal(t, p.LocalPort, uint16(4))
 
@@ -76,8 +76,8 @@ func Test_newPacket(t *testing.T) {
 
 	assert.Nil(t, err)
 	assert.Equal(t, p.Protocol, uint8(2))
-	assert.Equal(t, p.LocalIP, iputil.Ip2VpnIp(net.IPv4(10, 0, 0, 1)))
-	assert.Equal(t, p.RemoteIP, iputil.Ip2VpnIp(net.IPv4(10, 0, 0, 2)))
+	assert.Equal(t, p.LocalIP, netip.MustParseAddr("10.0.0.1"))
+	assert.Equal(t, p.RemoteIP, netip.MustParseAddr("10.0.0.2"))
 	assert.Equal(t, p.RemotePort, uint16(6))
 	assert.Equal(t, p.LocalPort, uint16(5))
 }

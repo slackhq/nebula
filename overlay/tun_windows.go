@@ -5,7 +5,7 @@ package overlay
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,11 +15,11 @@ import (
 	"github.com/slackhq/nebula/config"
 )
 
-func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ *net.IPNet) (Device, error) {
+func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ netip.Prefix) (Device, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Windows")
 }
 
-func newTun(c *config.C, l *logrus.Logger, cidr *net.IPNet, multiqueue bool) (Device, error) {
+func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, multiqueue bool) (Device, error) {
 	useWintun := true
 	if err := checkWinTunExists(); err != nil {
 		l.WithError(err).Warn("Check Wintun driver failed, fallback to wintap driver")

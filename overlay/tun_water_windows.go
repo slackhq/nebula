@@ -4,30 +4,30 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os/exec"
 	"strconv"
 	"sync/atomic"
 
+	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/util"
 	"github.com/songgao/water"
 )
 
 type waterTun struct {
 	Device    string
-	cidr      *net.IPNet
+	cidr      netip.Prefix
 	MTU       int
 	Routes    atomic.Pointer[[]Route]
-	routeTree atomic.Pointer[cidr.Tree4[iputil.VpnIp]]
+	routeTree atomic.Pointer[bart.Table[netip.Addr]]
 	l         *logrus.Logger
 	f         *net.Interface
 	*water.Interface
 }
 
-func newWaterTun(c *config.C, l *logrus.Logger, cidr *net.IPNet, _ bool) (*waterTun, error) {
+func newWaterTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, _ bool) (*waterTun, error) {
 	// NOTE: You cannot set the deviceName under Windows, so you must check tun.Device after calling .Activate()
 	t := &waterTun{
 		cidr: cidr,
@@ -70,8 +70,8 @@ func (t *waterTun) Activate() error {
 		`C:\Windows\System32\netsh.exe`, "interface", "ipv4", "set", "address",
 		fmt.Sprintf("name=%s", t.Device),
 		"source=static",
-		fmt.Sprintf("addr=%s", t.cidr.IP),
-		fmt.Sprintf("mask=%s", net.IP(t.cidr.Mask)),
+		fmt.Sprintf("addr=%s", t.cidr.Addr()),
+		fmt.Sprintf("mask=%s", net.CIDRMask(t.cidr.Bits(), t.cidr.Addr().BitLen())),
 		"gateway=none",
 	).Run()
 	if err != nil {
@@ -141,7 +141,7 @@ func (t *waterTun) addRoutes(logErrors bool) error {
 	// Path routes
 	routes := *t.Routes.Load()
 	for _, r := range routes {
-		if r.Via == nil || !r.Install {
+		if !r.Via.IsValid() || !r.Install {
 			// We don't allow route MTUs so only install routes with a via
 			continue
 		}
@@ -182,12 +182,12 @@ func (t *waterTun) removeRoutes(routes []Route) {
 	}
 }
 
-func (t *waterTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	_, r := t.routeTree.Load().MostSpecificContains(ip)
+func (t *waterTun) RouteFor(ip netip.Addr) netip.Addr {
+	r, _ := t.routeTree.Load().Lookup(ip)
 	return r
 }
 
-func (t *waterTun) Cidr() *net.IPNet {
+func (t *waterTun) Cidr() netip.Prefix {
 	return t.cidr
 }
 

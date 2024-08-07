@@ -6,21 +6,20 @@ package overlay
 import (
 	"fmt"
 	"io"
-	"net"
+	"net/netip"
 	"os"
 	"sync/atomic"
 
+	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/iputil"
 )
 
 type TestTun struct {
 	Device    string
-	cidr      *net.IPNet
+	cidr      netip.Prefix
 	Routes    []Route
-	routeTree *cidr.Tree4[iputil.VpnIp]
+	routeTree *bart.Table[netip.Addr]
 	l         *logrus.Logger
 
 	closed    atomic.Bool
@@ -28,7 +27,7 @@ type TestTun struct {
 	TxPackets chan []byte // Packets transmitted outside by nebula
 }
 
-func newTun(c *config.C, l *logrus.Logger, cidr *net.IPNet, _ bool) (*TestTun, error) {
+func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, _ bool) (*TestTun, error) {
 	_, routes, err := getAllRoutesFromConfig(c, cidr, true)
 	if err != nil {
 		return nil, err
@@ -49,7 +48,7 @@ func newTun(c *config.C, l *logrus.Logger, cidr *net.IPNet, _ bool) (*TestTun, e
 	}, nil
 }
 
-func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ *net.IPNet) (*TestTun, error) {
+func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ netip.Prefix) (*TestTun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported")
 }
 
@@ -87,8 +86,8 @@ func (t *TestTun) Get(block bool) []byte {
 // Below this is boilerplate implementation to make nebula actually work
 //********************************************************************************************************************//
 
-func (t *TestTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
-	_, r := t.routeTree.MostSpecificContains(ip)
+func (t *TestTun) RouteFor(ip netip.Addr) netip.Addr {
+	r, _ := t.routeTree.Lookup(ip)
 	return r
 }
 
@@ -96,7 +95,7 @@ func (t *TestTun) Activate() error {
 	return nil
 }
 
-func (t *TestTun) Cidr() *net.IPNet {
+func (t *TestTun) Cidr() netip.Prefix {
 	return t.cidr
 }
 
