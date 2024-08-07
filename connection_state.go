@@ -32,7 +32,11 @@ func NewConnectionState(l *logrus.Logger, cipher string, certState *CertState, i
 	case cert.Curve_CURVE25519:
 		dhFunc = noise.DH25519
 	case cert.Curve_P256:
-		dhFunc = noiseutil.DHP256
+		if certState.Certificate.Pkcs11Backed {
+			dhFunc = noiseutil.DHP256PKCS11
+		} else {
+			dhFunc = noiseutil.DHP256
+		}
 	default:
 		l.Errorf("invalid curve: %s", certState.Certificate.Details.Curve)
 		return nil

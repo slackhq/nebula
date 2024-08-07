@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+
 	"flag"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/skip2/go-qrcode"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/pkclient"
 	"golang.org/x/crypto/ed25519"
 )
 
@@ -33,7 +35,8 @@ type caFlags struct {
 	argonParallelism *uint
 	encryption       *bool
 
-	curve *string
+	curve  *string
+	p11url *string
 }
 
 func newCaFlags() *caFlags {
@@ -52,6 +55,7 @@ func newCaFlags() *caFlags {
 	cf.argonIterations = cf.set.Uint("argon-iterations", 1, "Optional: Argon2 iterations parameter used for encrypted private key passphrase")
 	cf.encryption = cf.set.Bool("encrypt", false, "Optional: prompt for passphrase and write out-key in an encrypted format")
 	cf.curve = cf.set.String("curve", "25519", "EdDSA/ECDSA Curve (25519, P256)")
+	cf.p11url = p11Flag(cf.set)
 	return &cf
 }
 
@@ -76,17 +80,21 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		return err
 	}
 
+	isP11 := len(*cf.p11url) > 0
+
 	if err := mustFlagString("name", cf.name); err != nil {
 		return err
 	}
-	if err := mustFlagString("out-key", cf.outKeyPath); err != nil {
-		return err
+	if !isP11 {
+		if err = mustFlagString("out-key", cf.outKeyPath); err != nil {
+			return err
+		}
 	}
 	if err := mustFlagString("out-crt", cf.outCertPath); err != nil {
 		return err
 	}
 	var kdfParams *cert.Argon2Parameters
-	if *cf.encryption {
+	if !isP11 && *cf.encryption {
 		if kdfParams, err = parseArgonParameters(*cf.argonMemory, *cf.argonParallelism, *cf.argonIterations); err != nil {
 			return err
 		}
@@ -143,7 +151,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	}
 
 	var passphrase []byte
-	if *cf.encryption {
+	if !isP11 && *cf.encryption {
 		for i := 0; i < 5; i++ {
 			out.Write([]byte("Enter passphrase: "))
 			passphrase, err = pr.ReadPassword()
@@ -166,29 +174,54 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 
 	var curve cert.Curve
 	var pub, rawPriv []byte
-	switch *cf.curve {
-	case "25519", "X25519", "Curve25519", "CURVE25519":
-		curve = cert.Curve_CURVE25519
-		pub, rawPriv, err = ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			return fmt.Errorf("error while generating ed25519 keys: %s", err)
-		}
-	case "P256":
-		var key *ecdsa.PrivateKey
-		curve = cert.Curve_P256
-		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			return fmt.Errorf("error while generating ecdsa keys: %s", err)
+	var p11Client *pkclient.PKClient
+
+	if isP11 {
+		switch *cf.curve {
+		case "P256":
+			curve = cert.Curve_P256
+		default:
+			return fmt.Errorf("invalid curve for PKCS#11: %s", *cf.curve)
 		}
 
-		// ecdh.PrivateKey lets us get at the encoded bytes, even though
-		// we aren't using ECDH here.
-		eKey, err := key.ECDH()
+		p11Client, err = pkclient.FromUrl(*cf.p11url)
 		if err != nil {
-			return fmt.Errorf("error while converting ecdsa key: %s", err)
+			return fmt.Errorf("error while creating PKCS#11 client: %w", err)
 		}
-		rawPriv = eKey.Bytes()
-		pub = eKey.PublicKey().Bytes()
+		defer func(client *pkclient.PKClient) {
+			_ = client.Close()
+		}(p11Client)
+		pub, err = p11Client.GetPubKey()
+		if err != nil {
+			return fmt.Errorf("error while getting public key with PKCS#11: %w", err)
+		}
+	} else {
+		switch *cf.curve {
+		case "25519", "X25519", "Curve25519", "CURVE25519":
+			curve = cert.Curve_CURVE25519
+			pub, rawPriv, err = ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				return fmt.Errorf("error while generating ed25519 keys: %s", err)
+			}
+		case "P256":
+			var key *ecdsa.PrivateKey
+			curve = cert.Curve_P256
+			key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				return fmt.Errorf("error while generating ecdsa keys: %s", err)
+			}
+
+			// ecdh.PrivateKey lets us get at the encoded bytes, even though
+			// we aren't using ECDH here.
+			eKey, err := key.ECDH()
+			if err != nil {
+				return fmt.Errorf("error while converting ecdsa key: %s", err)
+			}
+			rawPriv = eKey.Bytes()
+			pub = eKey.PublicKey().Bytes()
+		default:
+			return fmt.Errorf("invalid curve: %s", *cf.curve)
+		}
 	}
 
 	nc := cert.NebulaCertificate{
@@ -203,34 +236,48 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 			IsCA:      true,
 			Curve:     curve,
 		},
+		Pkcs11Backed: isP11,
 	}
 
-	if _, err := os.Stat(*cf.outKeyPath); err == nil {
-		return fmt.Errorf("refusing to overwrite existing CA key: %s", *cf.outKeyPath)
+	if !isP11 {
+		if _, err := os.Stat(*cf.outKeyPath); err == nil {
+			return fmt.Errorf("refusing to overwrite existing CA key: %s", *cf.outKeyPath)
+		}
 	}
 
 	if _, err := os.Stat(*cf.outCertPath); err == nil {
 		return fmt.Errorf("refusing to overwrite existing CA cert: %s", *cf.outCertPath)
 	}
 
-	err = nc.Sign(curve, rawPriv)
-	if err != nil {
-		return fmt.Errorf("error while signing: %s", err)
-	}
-
 	var b []byte
-	if *cf.encryption {
-		b, err = cert.EncryptAndMarshalSigningPrivateKey(curve, rawPriv, passphrase, kdfParams)
+
+	if isP11 {
+		err = nc.SignPkcs11(curve, p11Client)
 		if err != nil {
-			return fmt.Errorf("error while encrypting out-key: %s", err)
+			return fmt.Errorf("error while signing with PKCS#11: %w", err)
 		}
 	} else {
-		b = cert.MarshalSigningPrivateKey(curve, rawPriv)
-	}
+		err = nc.Sign(curve, rawPriv)
+		if err != nil {
+			return fmt.Errorf("error while signing: %s", err)
+		}
 
-	err = os.WriteFile(*cf.outKeyPath, b, 0600)
-	if err != nil {
-		return fmt.Errorf("error while writing out-key: %s", err)
+		if *cf.encryption {
+			b, err = cert.EncryptAndMarshalSigningPrivateKey(curve, rawPriv, passphrase, kdfParams)
+			if err != nil {
+				return fmt.Errorf("error while encrypting out-key: %s", err)
+			}
+		} else {
+			b = cert.MarshalSigningPrivateKey(curve, rawPriv)
+		}
+
+		err = os.WriteFile(*cf.outKeyPath, b, 0600)
+		if err != nil {
+			return fmt.Errorf("error while writing out-key: %s", err)
+		}
+		if _, err := os.Stat(*cf.outCertPath); err == nil {
+			return fmt.Errorf("refusing to overwrite existing CA cert: %s", *cf.outCertPath)
+		}
 	}
 
 	b, err = nc.MarshalToPEM()

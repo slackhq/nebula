@@ -13,6 +13,7 @@ import (
 
 	"github.com/skip2/go-qrcode"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/pkclient"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -29,6 +30,7 @@ type signFlags struct {
 	outQRPath   *string
 	groups      *string
 	subnets     *string
+	p11url      *string
 }
 
 func newSignFlags() *signFlags {
@@ -45,8 +47,8 @@ func newSignFlags() *signFlags {
 	sf.outQRPath = sf.set.String("out-qr", "", "Optional: output a qr code image (png) of the certificate")
 	sf.groups = sf.set.String("groups", "", "Optional: comma separated list of groups")
 	sf.subnets = sf.set.String("subnets", "", "Optional: comma separated list of ipv4 address and network in CIDR notation. Subnets this cert can serve for")
+	sf.p11url = p11Flag(sf.set)
 	return &sf
-
 }
 
 func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error {
@@ -56,8 +58,12 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return err
 	}
 
-	if err := mustFlagString("ca-key", sf.caKeyPath); err != nil {
-		return err
+	isP11 := len(*sf.p11url) > 0
+
+	if !isP11 {
+		if err := mustFlagString("ca-key", sf.caKeyPath); err != nil {
+			return err
+		}
 	}
 	if err := mustFlagString("ca-crt", sf.caCertPath); err != nil {
 		return err
@@ -68,47 +74,49 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	if err := mustFlagString("ip", sf.ip); err != nil {
 		return err
 	}
-	if *sf.inPubPath != "" && *sf.outKeyPath != "" {
+	if !isP11 && *sf.inPubPath != "" && *sf.outKeyPath != "" {
 		return newHelpErrorf("cannot set both -in-pub and -out-key")
-	}
-
-	rawCAKey, err := os.ReadFile(*sf.caKeyPath)
-	if err != nil {
-		return fmt.Errorf("error while reading ca-key: %s", err)
 	}
 
 	var curve cert.Curve
 	var caKey []byte
-
-	// naively attempt to decode the private key as though it is not encrypted
-	caKey, _, curve, err = cert.UnmarshalSigningPrivateKey(rawCAKey)
-	if err == cert.ErrPrivateKeyEncrypted {
-		// ask for a passphrase until we get one
-		var passphrase []byte
-		for i := 0; i < 5; i++ {
-			out.Write([]byte("Enter passphrase: "))
-			passphrase, err = pr.ReadPassword()
-
-			if err == ErrNoTerminal {
-				return fmt.Errorf("ca-key is encrypted and must be decrypted interactively")
-			} else if err != nil {
-				return fmt.Errorf("error reading password: %s", err)
-			}
-
-			if len(passphrase) > 0 {
-				break
-			}
-		}
-		if len(passphrase) == 0 {
-			return fmt.Errorf("cannot open encrypted ca-key without passphrase")
-		}
-
-		curve, caKey, _, err = cert.DecryptAndUnmarshalSigningPrivateKey(passphrase, rawCAKey)
+	if !isP11 {
+		var rawCAKey []byte
+		rawCAKey, err := os.ReadFile(*sf.caKeyPath)
 		if err != nil {
-			return fmt.Errorf("error while parsing encrypted ca-key: %s", err)
+			return fmt.Errorf("error while reading ca-key: %s", err)
 		}
-	} else if err != nil {
-		return fmt.Errorf("error while parsing ca-key: %s", err)
+
+		// naively attempt to decode the private key as though it is not encrypted
+		caKey, _, curve, err = cert.UnmarshalSigningPrivateKey(rawCAKey)
+		if err == cert.ErrPrivateKeyEncrypted {
+			// ask for a passphrase until we get one
+			var passphrase []byte
+			for i := 0; i < 5; i++ {
+				out.Write([]byte("Enter passphrase: "))
+				passphrase, err = pr.ReadPassword()
+
+				if err == ErrNoTerminal {
+					return fmt.Errorf("ca-key is encrypted and must be decrypted interactively")
+				} else if err != nil {
+					return fmt.Errorf("error reading password: %s", err)
+				}
+
+				if len(passphrase) > 0 {
+					break
+				}
+			}
+			if len(passphrase) == 0 {
+				return fmt.Errorf("cannot open encrypted ca-key without passphrase")
+			}
+
+			curve, caKey, _, err = cert.DecryptAndUnmarshalSigningPrivateKey(passphrase, rawCAKey)
+			if err != nil {
+				return fmt.Errorf("error while parsing encrypted ca-key: %s", err)
+			}
+		} else if err != nil {
+			return fmt.Errorf("error while parsing ca-key: %s", err)
+		}
 	}
 
 	rawCACert, err := os.ReadFile(*sf.caCertPath)
@@ -121,8 +129,10 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return fmt.Errorf("error while parsing ca-crt: %s", err)
 	}
 
-	if err := caCert.VerifyPrivateKey(curve, caKey); err != nil {
-		return fmt.Errorf("refusing to sign, root certificate does not match private key")
+	if !isP11 {
+		if err := caCert.VerifyPrivateKey(curve, caKey); err != nil {
+			return fmt.Errorf("refusing to sign, root certificate does not match private key")
+		}
 	}
 
 	issuer, err := caCert.Sha256Sum()
@@ -176,18 +186,36 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	}
 
 	var pub, rawPriv []byte
+	var p11Client *pkclient.PKClient
+
+	if isP11 {
+		curve = cert.Curve_P256
+		p11Client, err = pkclient.FromUrl(*sf.p11url)
+		if err != nil {
+			return fmt.Errorf("error while creating PKCS#11 client: %w", err)
+		}
+		defer func(client *pkclient.PKClient) {
+			_ = client.Close()
+		}(p11Client)
+	}
+
 	if *sf.inPubPath != "" {
+		var pubCurve cert.Curve
 		rawPub, err := os.ReadFile(*sf.inPubPath)
 		if err != nil {
 			return fmt.Errorf("error while reading in-pub: %s", err)
 		}
-		var pubCurve cert.Curve
 		pub, _, pubCurve, err = cert.UnmarshalPublicKey(rawPub)
 		if err != nil {
 			return fmt.Errorf("error while parsing in-pub: %s", err)
 		}
 		if pubCurve != curve {
 			return fmt.Errorf("curve of in-pub does not match ca")
+		}
+	} else if isP11 {
+		pub, err = p11Client.GetPubKey()
+		if err != nil {
+			return fmt.Errorf("error while getting public key with PKCS#11: %w", err)
 		}
 	} else {
 		pub, rawPriv = newKeypair(curve)
@@ -206,6 +234,19 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			Issuer:    issuer,
 			Curve:     curve,
 		},
+		Pkcs11Backed: isP11,
+	}
+
+	if p11Client == nil {
+		err = nc.Sign(curve, caKey)
+		if err != nil {
+			return fmt.Errorf("error while signing: %w", err)
+		}
+	} else {
+		err = nc.SignPkcs11(curve, p11Client)
+		if err != nil {
+			return fmt.Errorf("error while signing with PKCS#11: %w", err)
+		}
 	}
 
 	if err := nc.CheckRootConstrains(caCert); err != nil {
@@ -224,12 +265,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return fmt.Errorf("refusing to overwrite existing cert: %s", *sf.outCertPath)
 	}
 
-	err = nc.Sign(curve, caKey)
-	if err != nil {
-		return fmt.Errorf("error while signing: %s", err)
-	}
-
-	if *sf.inPubPath == "" {
+	if !isP11 && *sf.inPubPath == "" {
 		if _, err := os.Stat(*sf.outKeyPath); err == nil {
 			return fmt.Errorf("refusing to overwrite existing key: %s", *sf.outKeyPath)
 		}
