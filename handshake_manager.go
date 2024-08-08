@@ -35,7 +35,7 @@ var (
 
 type HandshakeConfig struct {
 	tryInterval   time.Duration
-	retries       int
+	retries       int64
 	triggerBuffer int
 	useRelays     bool
 
@@ -69,7 +69,7 @@ type HandshakeHostInfo struct {
 
 	startTime   time.Time        // Time that we first started trying with this handshake
 	ready       bool             // Is the handshake ready
-	counter     int              // How many attempts have we made so far
+	counter     int64            // How many attempts have we made so far
 	lastRemotes []netip.AddrPort // Remotes that we sent to during the previous attempt
 	packetStore []*cachedPacket  // A set of packets to be transmitted once the handshake completes
 
@@ -665,6 +665,6 @@ func generateIndex(l *logrus.Logger) (uint32, error) {
 	return index, nil
 }
 
-func hsTimeout(tries int, interval time.Duration) time.Duration {
-	return time.Duration(tries / 2 * ((2 * int(interval)) + (tries-1)*int(interval)))
+func hsTimeout(tries int64, interval time.Duration) time.Duration {
+	return time.Duration(tries / 2 * ((2 * int64(interval)) + (tries-1)*int64(interval)))
 }

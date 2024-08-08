@@ -215,7 +215,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	handshakeConfig := HandshakeConfig{
 		tryInterval:   c.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
-		retries:       c.GetInt("handshakes.retries", DefaultHandshakeRetries),
+		retries:       int64(c.GetInt("handshakes.retries", DefaultHandshakeRetries)),
 		triggerBuffer: c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
 		useRelays:     useRelays,
 
