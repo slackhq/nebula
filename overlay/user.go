@@ -54,7 +54,6 @@ type UserDevice struct {
 	outboundChannel chan *buffer.View
 	inboundChannel  chan *buffer.View
 
-
 	routeTree atomic.Pointer[bart.Table[netip.Addr]]
 }
 

@@ -206,7 +206,11 @@ relay:
 
 # Configure the private interface. Note: addr is baked into the nebula certificate
 tun:
-  # When tun is disabled, a lighthouse can be started without a local tun interface (and therefore without root)
+  # When tun is disabled, a feature limited Nebula can be started without root privileges.
+  # In this limited mode, Nebula can
+  # - run a lighthouse node
+  # - offer access from and to the nebula network via port forwarding
+  # - respond to ping requests
   disabled: false
   # Name of the device. If not set, a default will be chosen by the OS.
   # For macOS: if set, must be in the form `utun[0-9]+`.
@@ -368,3 +372,26 @@ firewall:
       proto: tcp
       group: remote_client
       local_cidr: 192.168.100.1/24
+
+# By using port port forwarding (port tunnels) its possible to establish connections
+# from/into the nebula-network without using a tun/tap device and thus without requiring root access
+# on the host. Port forwarding is only supported when setting "tun.disabled" is set to true.
+# In this case, if a user-tun instead of a real one is instantiated to allow the port forwarding.
+# IMPORTANT: For incoming tunnels, don't forget to also open the firewall for the relevant ports.
+port_forwarding:
+  # Forces activation of the user tun, even when there is no rule specified.
+  # This can be useful, when rules are planned to be added later by reload.
+  # Reload config can't consider a change on tun-type.
+  enable_without_rules: false
+  outbound:
+  # format of listen- and dial-address: <host/ip>:<port>
+  #- listen_address: 127.0.0.1:3399
+  #  dial_address: 192.168.100.92:4499
+     # format of protocols lists (yml-list): [tcp], [udp], [tcp, udp]
+  #  protocols: [tcp, udp]
+  inbound:
+  # format of dial_address: <host/ip>:<port>
+  #- listen_port: 5599
+  #  dial_address: 127.0.0.1:5599
+     # format of protocols lists (yml-list): [tcp], [udp], [tcp, udp]
+  #  protocols: [tcp, udp]

@@ -301,7 +301,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	for {
 		n, err := reader.Read(packet)
 		if err != nil {
-			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
+			if (errors.Is(err, os.ErrClosed) && f.closed.Load()) || errors.Is(err, io.EOF) {
 				return
 			}
 
