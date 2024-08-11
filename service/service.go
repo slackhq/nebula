@@ -106,31 +106,19 @@ func New(config *config.C) (*Service, error) {
 	tcpFwd := tcp.NewForwarder(s.ipstack, tcpReceiveBufferSize, maxInFlightConnectionAttempts, s.tcpHandler)
 	s.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 
-	reader, writer := device.Pipe()
-
-	go func() {
-		<-ctx.Done()
-		reader.Close()
-		writer.Close()
-	}()
+	nebula_tun_reader, nebula_tun_writer := device.Pipe()
 
 	// create Goroutines to forward packets between Nebula and Gvisor
 	eg.Go(func() error {
-		buf := make([]byte, header.IPv4MaximumHeaderSize+header.IPv4MaximumPayloadSize)
 		for {
-			// this will read exactly one packet
-			n, err := reader.Read(buf)
-			if err != nil {
-				return err
+			view, ok := <-nebula_tun_reader
+			if !ok {
+				return nil
 			}
 			packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
-				Payload: buffer.MakeWithData(bytes.Clone(buf[:n])),
+				Payload: buffer.MakeWithView(view),
 			})
 			linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
-
-			if err := ctx.Err(); err != nil {
-				return err
-			}
 		}
 	})
 	eg.Go(func() error {
@@ -142,11 +130,7 @@ func New(config *config.C) (*Service, error) {
 				}
 				continue
 			}
-			bufView := packet.ToView()
-			if _, err := bufView.WriteTo(writer); err != nil {
-				return err
-			}
-			bufView.Release()
+			nebula_tun_writer <- packet.ToView()
 		}
 	})
 
