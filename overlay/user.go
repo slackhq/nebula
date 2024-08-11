@@ -60,8 +60,8 @@ type UserDevice struct {
 func (d *UserDevice) Activate() error {
 	return nil
 }
-func (d *UserDevice) Cidr() netip.Prefix                { return d.tunCidr }
-func (d *UserDevice) Name() string                      { return "faketun0" }
+func (d *UserDevice) Cidr() netip.Prefix { return d.tunCidr }
+func (d *UserDevice) Name() string       { return "faketun0" }
 func (d *UserDevice) RouteFor(ip netip.Addr) netip.Addr {
 	ptr := d.routeTree.Load()
 	if ptr != nil {
