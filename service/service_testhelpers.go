@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"math/rand"
 	"net/netip"
 	"time"
 
@@ -77,6 +78,7 @@ func newSimpleService(caCrt *cert.NebulaCertificate, caKey []byte, name string, 
 }
 
 func CreateTwoConnectedServices(port int) (*Service, *Service) {
+	port += 100 * (rand.Int() % 10)
 	ca, _, caKey, _ := e2e.NewTestCaCert(
 		time.Now().Add(-5*time.Minute), // ensure that there is no issue due to rounding
 		time.Now().Add(30*time.Minute), // ensure that the certificate is valid for at least the time ot the test execution
