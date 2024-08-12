@@ -218,9 +218,7 @@ func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
 	var rsa unix.RawSockaddrInet6
 	rsa.Family = unix.AF_INET6
 	rsa.Addr = ip.Addr().As16()
-	port := ip.Port()
-	// Little Endian -> Network Endian
-	rsa.Port = (port >> 8) | ((port & 0xff) << 8)
+	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ip.Port())
 
 	for {
 		_, _, err := unix.Syscall6(
@@ -251,9 +249,7 @@ func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
 	var rsa unix.RawSockaddrInet4
 	rsa.Family = unix.AF_INET
 	rsa.Addr = ip.Addr().As4()
-	port := ip.Port()
-	// Little Endian -> Network Endian
-	rsa.Port = (port >> 8) | ((port & 0xff) << 8)
+	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ip.Port())
 
 	for {
 		_, _, err := unix.Syscall6(
