@@ -77,7 +77,10 @@ func newSimpleService(caCrt *cert.NebulaCertificate, caKey []byte, name string, 
 }
 
 func CreateTwoConnectedServices(port int) (*Service, *Service) {
-	ca, _, caKey, _ := e2e.NewTestCaCert(time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	ca, _, caKey, _ := e2e.NewTestCaCert(
+		time.Now().Add(-5*time.Minute), // ensure that there is no issue due to rounding
+		time.Now().Add(30*time.Minute), // ensure that the certificate is valid for at least the time ot the test execution
+		nil, nil, []string{})
 	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
 		"static_host_map": m{},
 		"lighthouse": m{
