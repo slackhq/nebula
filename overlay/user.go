@@ -110,6 +110,6 @@ func (d *UserDevice) ReadFrom(r io.Reader) (n int64, err error) {
 
 func (d *UserDevice) Close() error {
 	close(d.inboundChannel)
-	close(d.outboundChannel)
+	// close(d.outboundChannel) outbound channel needs to be closed from writer side
 	return nil
 }

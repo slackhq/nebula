@@ -121,6 +121,7 @@ func New(config *config.C, logger *logrus.Logger) (*Service, error) {
 		}
 	})
 	eg.Go(func() error {
+		defer close(nebula_tun_writer)
 		for {
 			packet := linkEP.ReadContext(ctx)
 			if packet == nil {
