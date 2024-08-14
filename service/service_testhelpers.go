@@ -18,7 +18,7 @@ type m map[string]interface{}
 
 func newSimpleService(caCrt *cert.NebulaCertificate, caKey []byte, name string, udpIp netip.Addr, overrides m) *Service {
 	_, _, myPrivKey, myPEM := e2e.NewTestCert(caCrt, caKey, "a",
-		time.Now().Add(-5*time.Minute),
+		time.Now().Add(-3*time.Minute),
 		time.Now().Add(30*time.Minute),
 		netip.PrefixFrom(udpIp, 24), nil, []string{})
 	caB, err := caCrt.MarshalToPEM()
@@ -83,8 +83,8 @@ func newSimpleService(caCrt *cert.NebulaCertificate, caKey []byte, name string, 
 func CreateTwoConnectedServices(port int) (*Service, *Service) {
 	port += 100 * (rand.Int() % 10)
 	ca, _, caKey, _ := e2e.NewTestCaCert(
-		time.Now().Add(-5*time.Minute), // ensure that there is no issue due to rounding
-		time.Now().Add(30*time.Minute), // ensure that the certificate is valid for at least the time ot the test execution
+		time.Now().Add(-9*time.Minute), // ensure that there is no issue due to rounding
+		time.Now().Add(40*time.Minute), // ensure that the certificate is valid for at least the time ot the test execution
 		nil, nil, []string{})
 	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
 		"static_host_map": m{},
