@@ -17,7 +17,7 @@ import (
 type m map[string]interface{}
 
 func newSimpleService(caCrt *cert.NebulaCertificate, caKey []byte, name string, udpIp netip.Addr, overrides m) *Service {
-	_, _, myPrivKey, myPEM := e2e.NewTestCert(caCrt, caKey, "a",
+	_, _, myPrivKey, myPEM := e2e.NewTestCert(caCrt, caKey, name,
 		time.Now().Add(-3*time.Minute),
 		time.Now().Add(30*time.Minute),
 		netip.PrefixFrom(udpIp, 24), nil, []string{})
