@@ -86,7 +86,7 @@ func CreateTwoConnectedServices(port int) (*Service, *Service) {
 		time.Now().Add(-9*time.Minute), // ensure that there is no issue due to rounding
 		time.Now().Add(40*time.Minute), // ensure that the certificate is valid for at least the time ot the test execution
 		nil, nil, []string{})
-	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
+	a := newSimpleService(ca, caKey, fmt.Sprintf("a_port_%d", port), netip.MustParseAddr("10.0.0.1"), m{
 		"static_host_map": m{},
 		"lighthouse": m{
 			"am_lighthouse": true,
@@ -96,7 +96,7 @@ func CreateTwoConnectedServices(port int) (*Service, *Service) {
 			"port": port,
 		},
 	})
-	b := newSimpleService(ca, caKey, "b", netip.MustParseAddr("10.0.0.2"), m{
+	b := newSimpleService(ca, caKey, fmt.Sprintf("b_port_%d", port), netip.MustParseAddr("10.0.0.2"), m{
 		"static_host_map": m{
 			"10.0.0.1": []string{fmt.Sprintf("localhost:%d", port)},
 		},
