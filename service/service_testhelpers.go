@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/netip"
+	"testing"
 	"time"
 
 	"dario.cat/mergo"
@@ -80,13 +81,13 @@ func newSimpleService(caCrt *cert.NebulaCertificate, caKey []byte, name string, 
 	return s
 }
 
-func CreateTwoConnectedServices(port int) (*Service, *Service) {
+func CreateTwoConnectedServices(t *testing.T, port int) (*Service, *Service) {
 	port += 100 * (rand.Int() % 10)
 	ca, _, caKey, _ := e2e.NewTestCaCert(
 		time.Now().Add(-9*time.Minute), // ensure that there is no issue due to rounding
 		time.Now().Add(40*time.Minute), // ensure that the certificate is valid for at least the time ot the test execution
 		nil, nil, []string{})
-	a := newSimpleService(ca, caKey, fmt.Sprintf("a_port_%d", port), netip.MustParseAddr("10.0.0.1"), m{
+	a := newSimpleService(ca, caKey, fmt.Sprintf("a_port_%d_test_name_%s", port, t.Name()), netip.MustParseAddr("10.0.0.1"), m{
 		"static_host_map": m{},
 		"lighthouse": m{
 			"am_lighthouse": true,
@@ -96,7 +97,7 @@ func CreateTwoConnectedServices(port int) (*Service, *Service) {
 			"port": port,
 		},
 	})
-	b := newSimpleService(ca, caKey, fmt.Sprintf("b_port_%d", port), netip.MustParseAddr("10.0.0.2"), m{
+	b := newSimpleService(ca, caKey, fmt.Sprintf("b_port_%d_test_name_%s", port, t.Name()), netip.MustParseAddr("10.0.0.2"), m{
 		"static_host_map": m{
 			"10.0.0.1": []string{fmt.Sprintf("localhost:%d", port)},
 		},

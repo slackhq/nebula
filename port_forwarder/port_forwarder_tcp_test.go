@@ -48,7 +48,7 @@ func doTestTcpCommunicationFail(
 
 func TestTcpInOut2Clients(t *testing.T) {
 	l := logrus.New()
-	server, client := service.CreateTwoConnectedServices(4247)
+	server, client := service.CreateTwoConnectedServices(t, 4247)
 	defer client.Close()
 	defer server.Close()
 
@@ -109,7 +109,7 @@ port_forwarding:
 
 func TestTcpInOut1ClientConfigReload(t *testing.T) {
 	l := logrus.New()
-	server, client := service.CreateTwoConnectedServices(4246)
+	server, client := service.CreateTwoConnectedServices(t, 4246)
 	defer client.Close()
 	defer server.Close()
 
@@ -199,7 +199,7 @@ port_forwarding:
 
 func TestTcpInOut1ClientConfigReload_inverseCloseOrder(t *testing.T) {
 	l := logrus.New()
-	server, client := service.CreateTwoConnectedServices(4245)
+	server, client := service.CreateTwoConnectedServices(t, 4245)
 	defer client.Close()
 	defer server.Close()
 

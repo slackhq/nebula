@@ -74,7 +74,7 @@ func doTestUdpCommunication(
 
 func TestUdpInOut2Clients(t *testing.T) {
 	l := logrus.New()
-	server, client := service.CreateTwoConnectedServices(4244)
+	server, client := service.CreateTwoConnectedServices(t, 4244)
 	defer client.Close()
 	defer server.Close()
 
