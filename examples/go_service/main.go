@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
@@ -60,6 +61,7 @@ pki:
 		return err
 	}
 	l := logrus.New()
+	l.Out = os.Stdout
 	service, err := service.New(&config, l)
 	if err != nil {
 		return err

@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"io"
 	"math/rand"
 	"net/netip"
 	"testing"
@@ -16,6 +17,16 @@ import (
 )
 
 type m map[string]interface{}
+
+type LogOutputWithPrefix struct {
+	prefix string
+	out    io.Writer
+}
+
+func (o LogOutputWithPrefix) Write(p []byte) (n int, err error) {
+	fmt.Fprintf(o.out, "[%s] ", o.prefix)
+	return o.out.Write(p)
+}
 
 func newSimpleService(caCrt *cert.NebulaCertificate, caKey []byte, name string, udpIp netip.Addr, overrides m) *Service {
 	_, _, myPrivKey, myPEM := e2e.NewTestCert(caCrt, caKey, name,
@@ -74,6 +85,12 @@ func newSimpleService(caCrt *cert.NebulaCertificate, caKey []byte, name string, 
 	}
 
 	l := logrus.New()
+	prefixWriter := LogOutputWithPrefix{
+		prefix: name,
+		out:    l.Out,
+	}
+	l.SetOutput(prefixWriter)
+
 	s, err := New(&c, l)
 	if err != nil {
 		panic(err)

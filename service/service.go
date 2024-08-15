@@ -8,7 +8,6 @@ import (
 	"log"
 	"math"
 	"net"
-	"os"
 	"strings"
 	"sync"
 
@@ -46,8 +45,6 @@ type Service struct {
 }
 
 func New(config *config.C, logger *logrus.Logger) (*Service, error) {
-	logger.Out = os.Stdout
-
 	control, err := nebula.Main(config, false, "custom-app", logger, overlay.NewUserDeviceFromConfig)
 	if err != nil {
 		return nil, err
