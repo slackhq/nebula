@@ -73,12 +73,11 @@ func doTestUdpCommunication(
 }
 
 func TestUdpInOut2Clients(t *testing.T) {
-	l := logrus.New()
-	server, client := service.CreateTwoConnectedServices(t, 4244)
-	defer client.Close()
-	defer server.Close()
+	server, sl, client, cl := service.CreateTwoConnectedServices(t, 4244)
+	defer assert.NoError(t, client.CloseAndWait())
+	defer assert.NoError(t, server.CloseAndWait())
 
-	server_pf, err := createPortForwarderFromConfigString(l, server, `
+	server_pf, err := createPortForwarderFromConfigString(sl, server, `
 port_forwarding:
   inbound:
   - listen_port: 4499
@@ -89,7 +88,7 @@ port_forwarding:
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
-	client_pf, err := createPortForwarderFromConfigString(l, client, `
+	client_pf, err := createPortForwarderFromConfigString(cl, client, `
 port_forwarding:
   outbound:
   - listen_address: 127.0.0.1:3399

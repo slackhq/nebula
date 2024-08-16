@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net"
+	"os"
 	"strings"
 	"sync"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay"
+	"github.com/slackhq/nebula/util"
 	"golang.org/x/sync/errgroup"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -33,6 +36,7 @@ import (
 const nicID = 1
 
 type Service struct {
+	l       *logrus.Logger
 	eg      *errgroup.Group
 	control *nebula.Control
 	ipstack *stack.Stack
@@ -54,6 +58,7 @@ func New(config *config.C, logger *logrus.Logger) (*Service, error) {
 	ctx := control.Context()
 	eg, ctx := errgroup.WithContext(ctx)
 	s := Service{
+		l:       logger,
 		eg:      eg,
 		control: control,
 	}
@@ -227,6 +232,23 @@ func (s *Service) Wait() error {
 
 func (s *Service) Close() error {
 	s.control.Stop()
+	return nil
+}
+
+func (s *Service) CloseAndWait() error {
+	s.Close()
+	if err := s.Wait(); err != nil {
+		if errors.Is(err, os.ErrClosed) ||
+			errors.Is(err, io.EOF) ||
+			errors.Is(err, context.Canceled) {
+			s.l.Debugf("Stop of nebula service returned: %v", err)
+			return nil
+		} else {
+			util.LogWithContextIfNeeded("Unclean stop", err, s.l)
+			return err
+		}
+	}
+
 	return nil
 }
 

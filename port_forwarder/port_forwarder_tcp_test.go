@@ -4,7 +4,6 @@ import (
 	"net"
 	"testing"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/service"
 	"github.com/stretchr/testify/assert"
 )
@@ -47,12 +46,11 @@ func doTestTcpCommunicationFail(
 }
 
 func TestTcpInOut2Clients(t *testing.T) {
-	l := logrus.New()
-	server, client := service.CreateTwoConnectedServices(t, 4247)
-	defer client.Close()
-	defer server.Close()
+	server, sl, client, cl := service.CreateTwoConnectedServices(t, 4247)
+	defer assert.NoError(t, client.CloseAndWait())
+	defer assert.NoError(t, server.CloseAndWait())
 
-	server_pf, err := createPortForwarderFromConfigString(l, server, `
+	server_pf, err := createPortForwarderFromConfigString(sl, server, `
 port_forwarding:
   inbound:
   - listen_port: 4495
@@ -63,7 +61,7 @@ port_forwarding:
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
-	client_pf, err := createPortForwarderFromConfigString(l, client, `
+	client_pf, err := createPortForwarderFromConfigString(cl, client, `
 port_forwarding:
   outbound:
   - listen_address: 127.0.0.1:3395
@@ -108,12 +106,11 @@ port_forwarding:
 }
 
 func TestTcpInOut1ClientConfigReload(t *testing.T) {
-	l := logrus.New()
-	server, client := service.CreateTwoConnectedServices(t, 4246)
-	defer client.Close()
-	defer server.Close()
+	server, sl, client, cl := service.CreateTwoConnectedServices(t, 4246)
+	defer assert.NoError(t, client.CloseAndWait())
+	defer assert.NoError(t, server.CloseAndWait())
 
-	server_pf, err := createPortForwarderFromConfigString(l, server, `
+	server_pf, err := createPortForwarderFromConfigString(sl, server, `
 port_forwarding:
   inbound:
   - listen_port: 4497
@@ -124,7 +121,7 @@ port_forwarding:
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
-	client_pf, err := createPortForwarderFromConfigString(l, client, `
+	client_pf, err := createPortForwarderFromConfigString(cl, client, `
 port_forwarding:
   outbound:
   - listen_address: 127.0.0.1:3397
@@ -158,7 +155,7 @@ port_forwarding:
 	doTestTcpCommunication(t, "Hello from client one side AGAIN!",
 		client1_conn, client1_server_side_conn)
 
-	new_server_fwd_list, err := loadPortFwdConfigFromString(l, `
+	new_server_fwd_list, err := loadPortFwdConfigFromString(sl, `
 port_forwarding:
   inbound:
   - listen_port: 4496
@@ -169,7 +166,7 @@ port_forwarding:
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
-	new_client_fwd_list, err := loadPortFwdConfigFromString(l, `
+	new_client_fwd_list, err := loadPortFwdConfigFromString(cl, `
 port_forwarding:
   outbound:
   - listen_address: 127.0.0.1:3396
@@ -198,12 +195,11 @@ port_forwarding:
 }
 
 func TestTcpInOut1ClientConfigReload_inverseCloseOrder(t *testing.T) {
-	l := logrus.New()
-	server, client := service.CreateTwoConnectedServices(t, 4245)
-	defer client.Close()
-	defer server.Close()
+	server, sl, client, cl := service.CreateTwoConnectedServices(t, 4245)
+	defer assert.NoError(t, client.CloseAndWait())
+	defer assert.NoError(t, server.CloseAndWait())
 
-	server_pf, err := createPortForwarderFromConfigString(l, server, `
+	server_pf, err := createPortForwarderFromConfigString(sl, server, `
 port_forwarding:
   inbound:
   - listen_port: 4499
@@ -214,7 +210,7 @@ port_forwarding:
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
-	client_pf, err := createPortForwarderFromConfigString(l, client, `
+	client_pf, err := createPortForwarderFromConfigString(cl, client, `
 port_forwarding:
   outbound:
   - listen_address: 127.0.0.1:3399
@@ -248,7 +244,7 @@ port_forwarding:
 	doTestTcpCommunication(t, "Hello from client one side AGAIN!",
 		client1_conn, client1_server_side_conn)
 
-	new_server_fwd_list, err := loadPortFwdConfigFromString(l, `
+	new_server_fwd_list, err := loadPortFwdConfigFromString(sl, `
 port_forwarding:
   inbound:
   - listen_port: 4498
@@ -259,7 +255,7 @@ port_forwarding:
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
-	new_client_fwd_list, err := loadPortFwdConfigFromString(l, `
+	new_client_fwd_list, err := loadPortFwdConfigFromString(cl, `
 port_forwarding:
   outbound:
   - listen_address: 127.0.0.1:3398

@@ -10,7 +10,7 @@ import (
 )
 
 func TestService(t *testing.T) {
-	a, b := CreateTwoConnectedServices(t, 4243)
+	a, _, b, _ := CreateTwoConnectedServices(t, 4243)
 
 	ln, err := a.Listen("tcp", ":1234")
 	if err != nil {

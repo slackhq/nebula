@@ -1,11 +1,8 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -95,16 +92,7 @@ func main() {
 		<-signalChannel
 
 		// shutdown:
-		service.Close()
-		if err := service.Wait(); err != nil {
-			if errors.Is(err, os.ErrClosed) ||
-				errors.Is(err, io.EOF) ||
-				errors.Is(err, context.Canceled) {
-				l.Debugf("Stop of user-tun service returned: %v", err)
-			} else {
-				util.LogWithContextIfNeeded("Unclean stop", err, l)
-			}
-		}
+		service.CloseAndWait()
 
 	} else {
 
