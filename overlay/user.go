@@ -109,7 +109,8 @@ func (d *UserDevice) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (d *UserDevice) Close() error {
-	close(d.inboundChannel)
-	// close(d.outboundChannel) outbound channel needs to be closed from writer side
+	// There is nothing to be done for the UserDevice.
+	// It doesn't start any goroutines on its own.
+	// It doesn't manage any resources that needs closing.
 	return nil
 }
