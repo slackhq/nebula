@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -30,6 +31,7 @@ func (cfg ForwardConfigIncomingTcp) ConfigDescriptor() string {
 
 type PortForwardingCommonTcp struct {
 	ctx                   context.Context
+	wg                    *sync.WaitGroup
 	l                     *logrus.Logger
 	tunService            *service.Service
 	localListenConnection net.Listener
@@ -37,6 +39,7 @@ type PortForwardingCommonTcp struct {
 
 func (fwd PortForwardingCommonTcp) Close() error {
 	fwd.localListenConnection.Close()
+	fwd.wg.Wait()
 	return nil
 }
 
@@ -62,10 +65,12 @@ func (cf ForwardConfigOutgoingTcp) SetupPortForwarding(
 		cf.remoteConnect, localTcpListenAddr)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	wg := &sync.WaitGroup{}
 
 	portForwarding := &PortForwardingOutgoingTcp{
 		PortForwardingCommonTcp: PortForwardingCommonTcp{
 			ctx:                   ctx,
+			wg:                    wg,
 			l:                     l,
 			tunService:            tunService,
 			localListenConnection: localListenPort,
@@ -73,7 +78,9 @@ func (cf ForwardConfigOutgoingTcp) SetupPortForwarding(
 		cfg: cf,
 	}
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		defer cancel()
 		portForwarding.acceptOnLocalListenPort_generic(portForwarding.handleClientConnectionWithErrorReturn)
 	}()
@@ -94,12 +101,16 @@ func (pt *PortForwardingCommonTcp) acceptOnLocalListenPort_generic(
 
 		pt.l.Debugf("accept TCP connect from local TCP port: %v", connection.RemoteAddr())
 
+		pt.wg.Add(1)
 		go func() {
+			defer pt.wg.Done()
 			defer connection.Close()
 			<-pt.ctx.Done()
 		}()
 
+		pt.wg.Add(1)
 		go func() {
+			defer pt.wg.Done()
 			err := handleClientConnectionWithErrorReturn(connection)
 			if err != nil {
 				pt.l.Debugf("Closed TCP client connection %s. Err: %+v",
@@ -190,10 +201,12 @@ func (cf ForwardConfigIncomingTcp) SetupPortForwarding(
 		cf.forwardLocalAddress, cf.port)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	wg := &sync.WaitGroup{}
 
 	portForwarding := &PortForwardingIncomingTcp{
 		PortForwardingCommonTcp: PortForwardingCommonTcp{
 			ctx:                   ctx,
+			wg:                    wg,
 			l:                     l,
 			tunService:            tunService,
 			localListenConnection: localListenPort,
@@ -201,7 +214,9 @@ func (cf ForwardConfigIncomingTcp) SetupPortForwarding(
 		cfg: cf,
 	}
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		defer cancel()
 		portForwarding.acceptOnLocalListenPort_generic(portForwarding.handleClientConnectionWithErrorReturn)
 	}()

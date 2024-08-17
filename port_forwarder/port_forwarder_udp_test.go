@@ -26,7 +26,7 @@ func loadPortFwdConfigFromString(l *logrus.Logger, configStr string) (*PortForwa
 	return &fwd_list, nil
 }
 
-func createPortForwarderFromConfigString(l *logrus.Logger, srv *service.Service, configStr string) (*PortForwardingService, error) {
+func createPortForwarderFromConfigString(t *testing.T, l *logrus.Logger, srv *service.Service, configStr string) (*PortForwardingService, error) {
 
 	fwd_list, err := loadPortFwdConfigFromString(l, configStr)
 	if err != nil {
@@ -42,6 +42,10 @@ func createPortForwarderFromConfigString(l *logrus.Logger, srv *service.Service,
 	if err != nil {
 		return nil, err
 	}
+
+	t.Cleanup(func() {
+		pf.CloseAll()
+	})
 
 	return pf, nil
 }
@@ -74,10 +78,8 @@ func doTestUdpCommunication(
 
 func TestUdpInOut2Clients(t *testing.T) {
 	server, sl, client, cl := service.CreateTwoConnectedServices(t, 4244)
-	defer assert.NoError(t, client.CloseAndWait())
-	defer assert.NoError(t, server.CloseAndWait())
 
-	server_pf, err := createPortForwarderFromConfigString(sl, server, `
+	server_pf, err := createPortForwarderFromConfigString(t, sl, server, `
 port_forwarding:
   inbound:
   - listen_port: 4499
@@ -88,7 +90,7 @@ port_forwarding:
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
-	client_pf, err := createPortForwarderFromConfigString(cl, client, `
+	client_pf, err := createPortForwarderFromConfigString(t, cl, client, `
 port_forwarding:
   outbound:
   - listen_address: 127.0.0.1:3399

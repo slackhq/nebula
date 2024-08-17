@@ -52,3 +52,14 @@ func (t *PortForwardingService) CloseSelective(descriptors []string) error {
 
 	return nil
 }
+
+func (t *PortForwardingService) CloseAll() error {
+
+	for descriptor, pf := range t.portForwardings {
+		t.l.Infof("closing port forwarding: %s", descriptor)
+		pf.Close()
+		delete(t.portForwardings, descriptor)
+	}
+
+	return nil
+}

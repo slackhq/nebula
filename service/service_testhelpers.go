@@ -13,6 +13,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/e2e"
+	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v2"
 )
 
@@ -114,6 +115,9 @@ func CreateTwoConnectedServices(t *testing.T, port int) (*Service, *logrus.Logge
 			"port": port,
 		},
 	})
+	t.Cleanup(func() {
+		assert.NoError(t, a.CloseAndWait())
+	})
 	b, bl := newSimpleService(ca, caKey, fmt.Sprintf("b_port_%d_test_name_%s", port, t.Name()), netip.MustParseAddr("10.0.0.2"), m{
 		"static_host_map": m{
 			"10.0.0.1": []string{fmt.Sprintf("localhost:%d", port)},
@@ -122,6 +126,9 @@ func CreateTwoConnectedServices(t *testing.T, port int) (*Service, *logrus.Logge
 			"hosts":    []string{"10.0.0.1"},
 			"interval": 1,
 		},
+	})
+	t.Cleanup(func() {
+		assert.NoError(t, b.CloseAndWait())
 	})
 	return a, al, b, bl
 }

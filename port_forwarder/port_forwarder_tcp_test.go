@@ -3,6 +3,7 @@ package port_forwarder
 import (
 	"net"
 	"testing"
+	"time"
 
 	"github.com/slackhq/nebula/service"
 	"github.com/stretchr/testify/assert"
@@ -45,12 +46,23 @@ func doTestTcpCommunicationFail(
 	assert.NotNil(t, err)
 }
 
+func tcpListenerNAccept(t *testing.T, listener *net.TCPListener, n int) <-chan net.Conn {
+	c := make(chan net.Conn, 1)
+	go func() {
+		defer close(c)
+		for range n {
+			conn, err := listener.Accept()
+			assert.Nil(t, err)
+			c <- conn
+		}
+	}()
+	return c
+}
+
 func TestTcpInOut2Clients(t *testing.T) {
 	server, sl, client, cl := service.CreateTwoConnectedServices(t, 4247)
-	defer assert.NoError(t, client.CloseAndWait())
-	defer assert.NoError(t, server.CloseAndWait())
 
-	server_pf, err := createPortForwarderFromConfigString(sl, server, `
+	server_pf, err := createPortForwarderFromConfigString(t, sl, server, `
 port_forwarding:
   inbound:
   - listen_port: 4495
@@ -61,7 +73,7 @@ port_forwarding:
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
-	client_pf, err := createPortForwarderFromConfigString(cl, client, `
+	client_pf, err := createPortForwarderFromConfigString(t, cl, client, `
 port_forwarding:
   outbound:
   - listen_address: 127.0.0.1:3395
@@ -79,13 +91,15 @@ port_forwarding:
 
 	server_listen_conn, err := net.ListenTCP("tcp", server_conn_addr)
 	assert.Nil(t, err)
+	server_listen_conn_accepts := tcpListenerNAccept(t, server_listen_conn, 2)
+
 	client1_conn, err := net.DialTCP("tcp", nil, client_conn_addr)
 	assert.Nil(t, err)
-	client1_server_side_conn, err := server_listen_conn.Accept()
-	assert.Nil(t, err)
+	client1_server_side_conn := <-server_listen_conn_accepts
+
 	client2_conn, err := net.DialTCP("tcp", nil, client_conn_addr)
 	assert.Nil(t, err)
-	client2_server_side_conn, err := server_listen_conn.Accept()
+	client2_server_side_conn := <-server_listen_conn_accepts
 	assert.Nil(t, err)
 
 	doTestTcpCommunication(t, "Hello from client 1 side!",
@@ -107,10 +121,8 @@ port_forwarding:
 
 func TestTcpInOut1ClientConfigReload(t *testing.T) {
 	server, sl, client, cl := service.CreateTwoConnectedServices(t, 4246)
-	defer assert.NoError(t, client.CloseAndWait())
-	defer assert.NoError(t, server.CloseAndWait())
 
-	server_pf, err := createPortForwarderFromConfigString(sl, server, `
+	server_pf, err := createPortForwarderFromConfigString(t, sl, server, `
 port_forwarding:
   inbound:
   - listen_port: 4497
@@ -121,7 +133,9 @@ port_forwarding:
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
-	client_pf, err := createPortForwarderFromConfigString(cl, client, `
+	time.Sleep(100 * time.Millisecond)
+
+	client_pf, err := createPortForwarderFromConfigString(t, cl, client, `
 port_forwarding:
   outbound:
   - listen_address: 127.0.0.1:3397
@@ -132,6 +146,8 @@ port_forwarding:
 
 	assert.Len(t, client_pf.portForwardings, 1)
 
+	time.Sleep(100 * time.Millisecond)
+
 	client_conn_addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:3397")
 	assert.Nil(t, err)
 	server_conn_addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:5597")
@@ -139,10 +155,15 @@ port_forwarding:
 
 	server_listen_conn, err := net.ListenTCP("tcp", server_conn_addr)
 	assert.Nil(t, err)
+
+	server_listen_conn_accepts := tcpListenerNAccept(t, server_listen_conn, 1)
+
+	time.Sleep(100 * time.Millisecond)
+
 	client1_conn, err := net.DialTCP("tcp", nil, client_conn_addr)
 	assert.Nil(t, err)
-	client1_server_side_conn, err := server_listen_conn.Accept()
-	assert.Nil(t, err)
+
+	client1_server_side_conn := <-server_listen_conn_accepts
 
 	doTestTcpCommunication(t, "Hello from client 1 side!",
 		client1_conn, client1_server_side_conn)
@@ -196,10 +217,8 @@ port_forwarding:
 
 func TestTcpInOut1ClientConfigReload_inverseCloseOrder(t *testing.T) {
 	server, sl, client, cl := service.CreateTwoConnectedServices(t, 4245)
-	defer assert.NoError(t, client.CloseAndWait())
-	defer assert.NoError(t, server.CloseAndWait())
 
-	server_pf, err := createPortForwarderFromConfigString(sl, server, `
+	server_pf, err := createPortForwarderFromConfigString(t, sl, server, `
 port_forwarding:
   inbound:
   - listen_port: 4499
@@ -210,7 +229,7 @@ port_forwarding:
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
-	client_pf, err := createPortForwarderFromConfigString(cl, client, `
+	client_pf, err := createPortForwarderFromConfigString(t, cl, client, `
 port_forwarding:
   outbound:
   - listen_address: 127.0.0.1:3399
@@ -228,10 +247,12 @@ port_forwarding:
 
 	server_listen_conn, err := net.ListenTCP("tcp", server_conn_addr)
 	assert.Nil(t, err)
+	server_listen_conn_accepts := tcpListenerNAccept(t, server_listen_conn, 1)
+
 	client1_conn, err := net.DialTCP("tcp", nil, client_conn_addr)
 	assert.Nil(t, err)
-	client1_server_side_conn, err := server_listen_conn.Accept()
-	assert.Nil(t, err)
+
+	client1_server_side_conn := <-server_listen_conn_accepts
 
 	doTestTcpCommunication(t, "Hello from client 1 side!",
 		client1_conn, client1_server_side_conn)

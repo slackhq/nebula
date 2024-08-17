@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -33,17 +34,29 @@ func (cfg ForwardConfigIncomingUdp) ConfigDescriptor() string {
 var UDP_CONNECTION_TIMEOUT_SECONDS uint32 = 300
 
 type udpConnInterface interface {
+	io.Closer
 	WriteTo(b []byte, addr net.Addr) (int, error)
 	Write(b []byte) (int, error)
 	ReadFrom(b []byte) (int, net.Addr, error)
+	LocalAddr() net.Addr
 }
 
-func handleUdpDestinationPortResponseReading[destConn net.Conn, srcConn udpConnInterface](
+func resetTimer(t *time.Timer, d time.Duration) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
+}
+
+func handleUdpDestinationPortResponseReading[destConn udpConnInterface, srcConn udpConnInterface](
 	l *logrus.Logger,
 	loggingFields logrus.Fields,
 	closedConnections *chan string,
 	sourceAddr net.Addr,
-	destConnection *TimedConnection[destConn],
+	destConnection destConn,
 	localListenConnection srcConn,
 ) error {
 	// net.Conn is thread-safe according to: https://pkg.go.dev/net#Conn
@@ -52,57 +65,41 @@ func handleUdpDestinationPortResponseReading[destConn net.Conn, srcConn udpConnI
 	defer func() { (*closedConnections) <- sourceAddr.String() }()
 
 	l.WithFields(loggingFields).Debug("begin reading responses ...")
-	buf := make([]byte, 2*(1<<16))
-	for {
-		destConnection.connection.SetDeadline(time.Now().Add(time.Second * 10))
-		l.WithFields(loggingFields).Trace("response read ...")
-		n, err := destConnection.connection.Read(buf)
-		if n == 0 {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				l.WithFields(loggingFields).Debug("response read - timeout tick")
-				if destConnection.timeout_counter.Increment(10) {
-					l.WithFields(loggingFields).Debug("response read - closed due to timeout")
-					return nil
-				}
-				continue
-			} else {
-				l.WithFields(loggingFields).WithError(err).Debugf("response read - close due to error")
-				return err
-			}
-		}
+	wg := &sync.WaitGroup{}
+	defer wg.Wait()
 
-		destConnection.timeout_counter.Reset()
-		l.WithFields(loggingFields).
-			WithField("payloadSize", n).
-			Debug("response forward")
-		n, err = localListenConnection.WriteTo(buf[:n], sourceAddr)
-		if n == 0 && (err != nil) {
-			l.WithFields(loggingFields).WithError(err).Debugf("response forward - write error")
-			return err
-		}
-	}
-}
+	timeout := time.Second * time.Duration(UDP_CONNECTION_TIMEOUT_SECONDS)
+	timer := time.NewTimer(timeout)
 
-func handleClosedConnections[C any](
-	l *logrus.Logger,
-	closedConnections *chan string,
-	portReaders *map[string]bool,
-	remoteConnections *map[string]*TimedConnection[C],
-) {
-cleanup:
+	rr := newUdpPortReader(wg, l, loggingFields, destConnection)
+	defer close(rr.receivedDataDone)
 	for {
 		select {
-		case closedOne := <-(*closedConnections):
-			l.Debugf("closing connection to %s", closedOne)
-			delete(*remoteConnections, closedOne)
-			delete(*portReaders, closedOne)
-		default:
-			break cleanup
+		case <-timer.C:
+			destConnection.Close()
+			l.WithFields(loggingFields).Debug("response read - closed due to timeout")
+			return nil
+		case data, ok := <-rr.receivedData:
+			if !ok {
+				return nil
+			}
+			resetTimer(timer, timeout)
+
+			l.WithFields(loggingFields).
+				WithField("payloadSize", data.n).
+				Debug("response forward")
+			n, err := localListenConnection.WriteTo(rr.buf[:data.n], sourceAddr)
+			rr.receivedDataDone <- 1
+			if (n == 0) && (err != nil) {
+				l.WithFields(loggingFields).WithError(err).Debugf("response forward - write error")
+				return err
+			}
 		}
 	}
 }
 
 type PortForwardingCommonUdp struct {
+	wg         *sync.WaitGroup
 	l          *logrus.Logger
 	tunService *service.Service
 	// net.Conn is thread-safe according to: https://pkg.go.dev/net#Conn
@@ -112,6 +109,7 @@ type PortForwardingCommonUdp struct {
 
 func (fwd PortForwardingCommonUdp) Close() error {
 	fwd.localListenConnection.Close()
+	fwd.wg.Wait()
 	return nil
 }
 
@@ -137,8 +135,11 @@ func (cfg ForwardConfigOutgoingUdp) SetupPortForwarding(
 	l.Infof("UDP port forwarding to '%v': listening on local UDP addr: '%v'",
 		cfg.remoteConnect, localUdpListenAddr)
 
+	wg := &sync.WaitGroup{}
+
 	portForwarding := &PortForwardingOutgoingUdp{
 		PortForwardingCommonUdp: PortForwardingCommonUdp{
+			wg:                    wg,
 			l:                     l,
 			tunService:            tunService,
 			localListenConnection: localListenConnection,
@@ -152,8 +153,11 @@ func (cfg ForwardConfigOutgoingUdp) SetupPortForwarding(
 		"dial":   cfg.remoteConnect,
 	}
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		err := listenLocalPort_generic(
+			wg,
 			l,
 			logPrefix,
 			localListenConnection,
@@ -171,7 +175,67 @@ func (cfg ForwardConfigOutgoingUdp) SetupPortForwarding(
 	return portForwarding, nil
 }
 
-func listenLocalPort_generic[destConn net.Conn](
+type readData struct {
+	n    int
+	addr net.Addr
+}
+
+type readerRoutine struct {
+	buf              []byte
+	receivedData     chan readData
+	receivedDataDone chan int
+}
+
+func newUdpPortReader(
+	wg *sync.WaitGroup,
+	l *logrus.Logger,
+	loggingFields logrus.Fields,
+	conn udpConnInterface,
+) *readerRoutine {
+	r := &readerRoutine{
+		buf:              make([]byte, 512*1024),
+		receivedData:     make(chan readData),
+		receivedDataDone: make(chan int, 1),
+	}
+	r.receivedDataDone <- 1
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer close(r.receivedData)
+		l.WithFields(loggingFields).
+			WithField("addr", conn.LocalAddr()).
+			Debug("start listening")
+		for {
+			_, ok := <-r.receivedDataDone
+			if !ok {
+				return
+			}
+			l.WithFields(loggingFields).
+				WithField("addr", conn.LocalAddr()).
+				Trace("reading data ...")
+			n, addr, err := conn.ReadFrom(r.buf[0:])
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					return
+				}
+				l.WithFields(loggingFields).
+					WithField("addr", conn.LocalAddr()).
+					WithError(err).Error("listen for data failed. stop.")
+				return
+			}
+			r.receivedData <- readData{
+				n:    n,
+				addr: addr,
+			}
+		}
+	}()
+
+	return r
+}
+
+func listenLocalPort_generic[destConn udpConnInterface](
+	wg *sync.WaitGroup,
 	l *logrus.Logger,
 	loggingFields logrus.Fields,
 	localListenConnection udpConnInterface,
@@ -179,67 +243,71 @@ func listenLocalPort_generic[destConn net.Conn](
 	remoteConnect string,
 ) error {
 	dialConnResponseReaders := make(map[string]bool)
-	dialConnections := make(map[string]*TimedConnection[destConn])
-	closedConnections := make(chan string)
+	dialConnections := make(map[string]destConn)
+	closedConnections := make(chan string, 5)
+	mr := newUdpPortReader(wg, l, loggingFields, localListenConnection)
+	defer close(mr.receivedDataDone)
 
-	l.WithFields(loggingFields).Debug("start listening ...")
-	var buf [512 * 1024]byte
+	defer func() {
+		// close and wait for remaining connections
+		for _, connection := range dialConnections {
+			connection.Close()
+		}
+		for range dialConnResponseReaders {
+			<-closedConnections
+		}
+	}()
+
 	for {
-		handleClosedConnections(l, &closedConnections, &dialConnResponseReaders, &dialConnections)
-
-		l.WithFields(loggingFields).Trace("reading data ...")
-		n, localSourceAddr, err := localListenConnection.ReadFrom(buf[0:])
-		if err != nil {
-			if errors.Is(err, io.EOF) {
+		select {
+		case closedOne := <-closedConnections:
+			l.Debugf("closing connection to %s", closedOne)
+			delete(dialConnections, closedOne)
+			delete(dialConnResponseReaders, closedOne)
+		case data, ok := <-mr.receivedData:
+			if !ok {
 				return nil
 			}
-			l.WithFields(loggingFields).Error("listen for data failed. stop.")
-			return err
-		}
-
-		l.WithFields(loggingFields).
-			WithField("source", localSourceAddr).
-			WithField("payloadSize", n).
-			Trace("read data")
-
-		dialConnection, ok := dialConnections[localSourceAddr.String()]
-		if !ok {
-			newDialConn, err := dial(remoteConnect)
-			if err != nil {
-				l.WithFields(loggingFields).WithError(err).Error("dialing dial address failed")
-				continue
+			l.WithFields(loggingFields).
+				WithField("source", data.addr).
+				WithField("payloadSize", data.n).
+				Trace("read data")
+			dialConnection, ok := dialConnections[data.addr.String()]
+			if !ok {
+				newConnection, err := dial(remoteConnect)
+				if err != nil {
+					l.WithFields(loggingFields).WithError(err).Error("dialing dial address failed")
+					continue
+				}
+				dialConnections[data.addr.String()] = newConnection
+				dialConnection = newConnection
 			}
-			dialConnection = &TimedConnection[destConn]{
-				connection:      newDialConn,
-				timeout_counter: NewTimeoutCounter(UDP_CONNECTION_TIMEOUT_SECONDS),
-			}
-			dialConnections[localSourceAddr.String()] = dialConnection
-		}
 
-		l.WithFields(loggingFields).
-			WithField("source", localSourceAddr).
-			WithField("dialSource", dialConnection.connection.LocalAddr()).
-			WithField("payloadSize", n).
-			Debug("forward")
+			l.WithFields(loggingFields).
+				WithField("source", data.addr).
+				WithField("dialSource", dialConnection.LocalAddr()).
+				WithField("payloadSize", data.n).
+				Debug("forward")
 
-		dialConnection.timeout_counter.Reset()
-		dialConnection.connection.Write(buf[:n])
+			dialConnection.Write(mr.buf[:data.n])
+			mr.receivedDataDone <- 1
 
-		_, ok = dialConnResponseReaders[localSourceAddr.String()]
-		if !ok {
-			loggingFieldsRsp := logrus.Fields{
-				"source":     localSourceAddr,
-				"dialSource": dialConnection.connection.LocalAddr(),
+			_, ok = dialConnResponseReaders[data.addr.String()]
+			if !ok {
+				loggingFieldsRsp := logrus.Fields{
+					"source":     data.addr,
+					"dialSource": dialConnection.LocalAddr(),
+				}
+				for k, v := range loggingFields {
+					loggingFieldsRsp[k] = v
+				}
+				dialConnResponseReaders[data.addr.String()] = true
+				go func() error {
+					return handleUdpDestinationPortResponseReading(
+						l, loggingFieldsRsp, &closedConnections, data.addr,
+						dialConnection, localListenConnection)
+				}()
 			}
-			for k, v := range loggingFields {
-				loggingFieldsRsp[k] = v
-			}
-			dialConnResponseReaders[localSourceAddr.String()] = true
-			go func() error {
-				return handleUdpDestinationPortResponseReading(
-					l, loggingFieldsRsp, &closedConnections, localSourceAddr,
-					dialConnection, localListenConnection)
-			}()
 		}
 	}
 }
@@ -268,8 +336,11 @@ func (cfg ForwardConfigIncomingUdp) SetupPortForwarding(
 		"dial":       cfg.forwardLocalAddress,
 	}
 
+	wg := &sync.WaitGroup{}
+
 	forwarding := &PortForwardingIncomingUdp{
 		PortForwardingCommonUdp: PortForwardingCommonUdp{
+			wg:                    wg,
 			l:                     l,
 			tunService:            tunService,
 			localListenConnection: conn,
@@ -277,8 +348,11 @@ func (cfg ForwardConfigIncomingUdp) SetupPortForwarding(
 		cfg: cfg,
 	}
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		err := listenLocalPort_generic(
+			wg,
 			l,
 			logPrefix,
 			conn,

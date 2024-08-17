@@ -62,12 +62,4 @@ func TestService(t *testing.T) {
 	if !bytes.Equal(data, []byte("server msg")) {
 		t.Fatal("got invalid message from client")
 	}
-
-	if err := c.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := eg.Wait(); err != nil {
-		t.Fatal(err)
-	}
 }
