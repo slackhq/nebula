@@ -55,8 +55,8 @@ func doTestUdpCommunication(
 	msg string,
 	senderConn *net.UDPConn,
 	toAddr net.Addr,
-	receiverConn *net.UDPConn,
-) (senderAddr net.Addr) {
+	receiverConn <-chan Pair[[]byte, net.Addr],
+) net.Addr {
 	data_sent := []byte(msg)
 	var n int
 	var err error
@@ -68,12 +68,33 @@ func doTestUdpCommunication(
 	assert.Nil(t, err)
 	assert.Equal(t, n, len(data_sent))
 
-	buf := make([]byte, 100)
-	n, senderAddr, err = receiverConn.ReadFrom(buf)
+	pair := <-receiverConn
 	assert.Nil(t, err)
-	assert.Equal(t, n, len(data_sent))
-	assert.Equal(t, data_sent, buf[:n])
-	return
+	assert.Equal(t, data_sent, pair.a)
+	return pair.b
+}
+
+type Pair[A any, B any] struct {
+	a A
+	b B
+}
+
+func readUdpConnectionToChannel(conn *net.UDPConn) <-chan Pair[[]byte, net.Addr] {
+	rcv_chan := make(chan Pair[[]byte, net.Addr])
+
+	go func() {
+		defer close(rcv_chan)
+		for {
+			buf := make([]byte, 100)
+			n, addr, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			rcv_chan <- Pair[[]byte, net.Addr]{buf[0:n], addr}
+		}
+	}()
+
+	return rcv_chan
 }
 
 func TestUdpInOut2Clients(t *testing.T) {
@@ -108,26 +129,34 @@ port_forwarding:
 
 	server_listen_conn, err := net.ListenUDP("udp", server_conn_addr)
 	assert.Nil(t, err)
+	defer server_listen_conn.Close()
+	server_listen_rcv_chan := readUdpConnectionToChannel(server_listen_conn)
+
 	client1_conn, err := net.DialUDP("udp", nil, client_conn_addr)
 	assert.Nil(t, err)
+	defer client1_conn.Close()
+	client1_rcv_chan := readUdpConnectionToChannel(client1_conn)
+
 	client2_conn, err := net.DialUDP("udp", nil, client_conn_addr)
 	assert.Nil(t, err)
+	defer client2_conn.Close()
+	client2_rcv_chan := readUdpConnectionToChannel(client2_conn)
 
 	client1_addr := doTestUdpCommunication(t, "Hello from client 1 side!",
-		client1_conn, nil, server_listen_conn)
+		client1_conn, nil, server_listen_rcv_chan)
 	assert.NotNil(t, client1_addr)
 	client2_addr := doTestUdpCommunication(t, "Hello from client two side!",
-		client2_conn, nil, server_listen_conn)
+		client2_conn, nil, server_listen_rcv_chan)
 	assert.NotNil(t, client2_addr)
 
 	doTestUdpCommunication(t, "Hello from server first side!",
-		server_listen_conn, client1_addr, client1_conn)
+		server_listen_conn, client1_addr, client1_rcv_chan)
 	doTestUdpCommunication(t, "Hello from server second side!",
-		server_listen_conn, client2_addr, client2_conn)
+		server_listen_conn, client2_addr, client2_rcv_chan)
 	doTestUdpCommunication(t, "Hello from server third side!",
-		server_listen_conn, client1_addr, client1_conn)
+		server_listen_conn, client1_addr, client1_rcv_chan)
 
 	doTestUdpCommunication(t, "Hello from client two side AGAIN!",
-		client2_conn, nil, server_listen_conn)
+		client2_conn, nil, server_listen_rcv_chan)
 
 }

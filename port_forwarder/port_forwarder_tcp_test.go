@@ -1,6 +1,7 @@
 package port_forwarder
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -9,19 +10,53 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func startReadToChannel(receiverConn net.Conn) <-chan []byte {
+	rcv_chan := make(chan []byte, 10)
+	r := make(chan bool, 1)
+	go func() {
+		defer close(rcv_chan)
+		r <- true
+		for {
+			buf := make([]byte, 100)
+			n, err := receiverConn.Read(buf)
+			if err != nil {
+				break
+			}
+			rcv_chan <- buf[0:n]
+		}
+	}()
+	<-r
+	time.Sleep(50 * time.Millisecond)
+	return rcv_chan
+}
+
 func doTestTcpCommunication(
 	t *testing.T,
 	msg string,
 	senderConn net.Conn,
-	receiverConn net.Conn,
+	receiverConn <-chan []byte,
 ) {
+	var n int = 0
+	var err error = nil
 	data_sent := []byte(msg)
-	n, err := senderConn.Write(data_sent)
-	assert.Nil(t, err)
-	assert.Equal(t, n, len(data_sent))
+	var buf []byte = nil
+	for {
+		fmt.Println("sending ...")
+		t.Log("sending ...")
+		n, err = senderConn.Write(data_sent)
+		assert.Nil(t, err)
+		assert.Equal(t, n, len(data_sent))
 
-	buf := make([]byte, 100)
-	n, err = receiverConn.Read(buf)
+		fmt.Println("receiving ...")
+		t.Log("receiving ...")
+		var ok bool = false
+		buf, ok = <-receiverConn
+		if ok {
+			break
+		}
+	}
+	fmt.Println("DONE")
+	t.Log("DONE")
 	assert.Nil(t, err)
 	assert.Equal(t, n, len(data_sent))
 	assert.Equal(t, data_sent, buf[:n])
@@ -48,14 +83,20 @@ func doTestTcpCommunicationFail(
 
 func tcpListenerNAccept(t *testing.T, listener *net.TCPListener, n int) <-chan net.Conn {
 	c := make(chan net.Conn, 1)
+	r := make(chan bool, 1)
 	go func() {
 		defer close(c)
+		r <- true
 		for range n {
 			conn, err := listener.Accept()
 			assert.Nil(t, err)
 			c <- conn
 		}
 	}()
+
+	<-r
+	time.Sleep(50 * time.Millisecond)
+
 	return c
 }
 
@@ -95,27 +136,30 @@ port_forwarding:
 
 	client1_conn, err := net.DialTCP("tcp", nil, client_conn_addr)
 	assert.Nil(t, err)
+	client1_rcv_chan := startReadToChannel(client1_conn)
 	client1_server_side_conn := <-server_listen_conn_accepts
+	client1_server_side_rcv_chan := startReadToChannel(client1_server_side_conn)
 
 	client2_conn, err := net.DialTCP("tcp", nil, client_conn_addr)
 	assert.Nil(t, err)
+	client2_rcv_chan := startReadToChannel(client2_conn)
 	client2_server_side_conn := <-server_listen_conn_accepts
-	assert.Nil(t, err)
+	client2_server_side_rcv_chan := startReadToChannel(client2_server_side_conn)
 
 	doTestTcpCommunication(t, "Hello from client 1 side!",
-		client1_conn, client1_server_side_conn)
+		client1_conn, client1_server_side_rcv_chan)
 	doTestTcpCommunication(t, "Hello from client two side!",
-		client2_conn, client2_server_side_conn)
+		client2_conn, client2_server_side_rcv_chan)
 
 	doTestTcpCommunication(t, "Hello from server first side!",
-		client1_server_side_conn, client1_conn)
+		client1_server_side_conn, client1_rcv_chan)
 	doTestTcpCommunication(t, "Hello from server second side!",
-		client2_server_side_conn, client2_conn)
+		client2_server_side_conn, client2_rcv_chan)
 	doTestTcpCommunication(t, "Hello from server third side!",
-		client1_server_side_conn, client1_conn)
+		client1_server_side_conn, client1_rcv_chan)
 
 	doTestTcpCommunication(t, "Hello from client two side AGAIN!",
-		client2_conn, client2_server_side_conn)
+		client2_conn, client2_server_side_rcv_chan)
 
 }
 
@@ -155,6 +199,7 @@ port_forwarding:
 
 	server_listen_conn, err := net.ListenTCP("tcp", server_conn_addr)
 	assert.Nil(t, err)
+	defer server_listen_conn.Close()
 
 	server_listen_conn_accepts := tcpListenerNAccept(t, server_listen_conn, 1)
 
@@ -162,19 +207,23 @@ port_forwarding:
 
 	client1_conn, err := net.DialTCP("tcp", nil, client_conn_addr)
 	assert.Nil(t, err)
+	defer client1_conn.Close()
+	client1_rcv_chan := startReadToChannel(client1_conn)
 
 	client1_server_side_conn := <-server_listen_conn_accepts
+	defer client1_server_side_conn.Close()
+	client1_server_side_rcv_chan := startReadToChannel(client1_server_side_conn)
 
 	doTestTcpCommunication(t, "Hello from client 1 side!",
-		client1_conn, client1_server_side_conn)
+		client1_conn, client1_server_side_rcv_chan)
 
 	doTestTcpCommunication(t, "Hello from server first side!",
-		client1_server_side_conn, client1_conn)
+		client1_server_side_conn, client1_rcv_chan)
 	doTestTcpCommunication(t, "Hello from server third side!",
-		client1_server_side_conn, client1_conn)
+		client1_server_side_conn, client1_rcv_chan)
 
 	doTestTcpCommunication(t, "Hello from client one side AGAIN!",
-		client1_conn, client1_server_side_conn)
+		client1_conn, client1_server_side_rcv_chan)
 
 	new_server_fwd_list, err := loadPortFwdConfigFromString(sl, `
 port_forwarding:
@@ -247,23 +296,28 @@ port_forwarding:
 
 	server_listen_conn, err := net.ListenTCP("tcp", server_conn_addr)
 	assert.Nil(t, err)
+	defer server_listen_conn.Close()
 	server_listen_conn_accepts := tcpListenerNAccept(t, server_listen_conn, 1)
 
 	client1_conn, err := net.DialTCP("tcp", nil, client_conn_addr)
 	assert.Nil(t, err)
+	defer client1_conn.Close()
+	client1_rcv_chan := startReadToChannel(client1_conn)
 
 	client1_server_side_conn := <-server_listen_conn_accepts
+	defer client1_server_side_conn.Close()
+	client1_server_side_rcv_chan := startReadToChannel(client1_server_side_conn)
 
 	doTestTcpCommunication(t, "Hello from client 1 side!",
-		client1_conn, client1_server_side_conn)
+		client1_conn, client1_server_side_rcv_chan)
 
 	doTestTcpCommunication(t, "Hello from server first side!",
-		client1_server_side_conn, client1_conn)
+		client1_server_side_conn, client1_rcv_chan)
 	doTestTcpCommunication(t, "Hello from server third side!",
-		client1_server_side_conn, client1_conn)
+		client1_server_side_conn, client1_rcv_chan)
 
 	doTestTcpCommunication(t, "Hello from client one side AGAIN!",
-		client1_conn, client1_server_side_conn)
+		client1_conn, client1_server_side_rcv_chan)
 
 	new_server_fwd_list, err := loadPortFwdConfigFromString(sl, `
 port_forwarding:
