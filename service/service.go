@@ -9,6 +9,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -144,24 +145,48 @@ func New(config *config.C, logger *logrus.Logger) (*Service, error) {
 	return &s, nil
 }
 
-// DialContext dials the provided address. Currently only TCP is supported.
-func (s *Service) DialContext(ctx context.Context, network, address string) (*gonet.TCPConn, error) {
-	if network != "tcp" && network != "tcp4" {
-		return nil, errors.New("only tcp is supported")
+func getProtocolNumber(addr netip.Addr) tcpip.NetworkProtocolNumber {
+	if addr.Is6() {
+		return ipv6.ProtocolNumber
 	}
+	return ipv4.ProtocolNumber
+}
 
-	addr, err := net.ResolveTCPAddr(network, address)
-	if err != nil {
-		return nil, err
+// DialContext dials the provided address.
+func (s *Service) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	switch network {
+	case "udp", "udp4", "udp6":
+		addr, err := net.ResolveUDPAddr(network, address)
+		if err != nil {
+			return nil, err
+		}
+		fullAddr := tcpip.FullAddress{
+			NIC:  nicID,
+			Addr: tcpip.AddrFromSlice(addr.IP),
+			Port: uint16(addr.Port),
+		}
+		num := getProtocolNumber(addr.AddrPort().Addr())
+		return gonet.DialUDP(s.ipstack, nil, &fullAddr, num)
+	case "tcp", "tcp4", "tcp6":
+		addr, err := net.ResolveTCPAddr(network, address)
+		if err != nil {
+			return nil, err
+		}
+		fullAddr := tcpip.FullAddress{
+			NIC:  nicID,
+			Addr: tcpip.AddrFromSlice(addr.IP),
+			Port: uint16(addr.Port),
+		}
+		num := getProtocolNumber(addr.AddrPort().Addr())
+		return gonet.DialContextTCP(ctx, s.ipstack, fullAddr, num)
+	default:
+		return nil, fmt.Errorf("unknown network type: %s", network)
 	}
+}
 
-	fullAddr := tcpip.FullAddress{
-		NIC:  nicID,
-		Addr: tcpip.AddrFromSlice(addr.IP),
-		Port: uint16(addr.Port),
-	}
-
-	return gonet.DialContextTCP(ctx, s.ipstack, fullAddr, ipv4.ProtocolNumber)
+// Dial dials the provided address
+func (s *Service) Dial(network, address string) (net.Conn, error) {
+	return s.DialContext(context.Background(), network, address)
 }
 
 func (s *Service) DialUDP(address string) (*gonet.UDPConn, error) {

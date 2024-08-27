@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"net"
 	"os"
 
 	"github.com/sirupsen/logrus"
@@ -56,18 +57,18 @@ pki:
   cert: /home/rice/Developer/nebula-config/app.crt
   key: /home/rice/Developer/nebula-config/app.key
 `
-	var config config.C
-	if err := config.LoadString(configStr); err != nil {
+	var cfg config.C
+	if err := cfg.LoadString(configStr); err != nil {
 		return err
 	}
 	l := logrus.New()
 	l.Out = os.Stdout
-	service, err := service.New(&config, l)
+	svc, err := service.New(&cfg, l)
 	if err != nil {
 		return err
 	}
 
-	ln, err := service.Listen("tcp", ":1234")
+	ln, err := svc.Listen("tcp", ":1234")
 	if err != nil {
 		return err
 	}
@@ -77,16 +78,24 @@ pki:
 			log.Printf("accept error: %s", err)
 			break
 		}
-		defer conn.Close()
+		defer func(conn net.Conn) {
+			_ = conn.Close()
+		}(conn)
 
 		log.Printf("got connection")
 
-		conn.Write([]byte("hello world\n"))
+		_, err = conn.Write([]byte("hello world\n"))
+		if err != nil {
+			log.Printf("write error: %s", err)
+		}
 
 		scanner := bufio.NewScanner(conn)
 		for scanner.Scan() {
 			message := scanner.Text()
-			fmt.Fprintf(conn, "echo: %q\n", message)
+			_, err = fmt.Fprintf(conn, "echo: %q\n", message)
+			if err != nil {
+				log.Printf("write error: %s", err)
+			}
 			log.Printf("got message %q", message)
 		}
 
@@ -96,8 +105,8 @@ pki:
 		}
 	}
 
-	service.Close()
-	if err := service.Wait(); err != nil {
+	_ = svc.Close()
+	if err := svc.Wait(); err != nil {
 		return err
 	}
 	return nil
