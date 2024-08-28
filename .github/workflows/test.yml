@@ -67,6 +67,24 @@ jobs:
     - name: End 2 end
       run: make e2evv GOEXPERIMENT=boringcrypto CGO_ENABLED=1
 
+  test-linux-pkcs11:
+    name: Build and test on linux with pkcs11
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+        check-latest: true
+
+    - name: Build
+      run: make bin-pkcs11
+
+    - name: Test
+      run: make test-pkcs11
+
   test:
     name: Build and test on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
