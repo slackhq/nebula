@@ -7,26 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.9.4] - 2024-09-03
+## [1.9.4] - 2024-09-04
 
 ### Added
 
-- #1181: Support UDP dialling with gvisor
-
-### Fixed
-
-- #1194: udp: fix endianness for port
-- #1191: fix rare panic when local index collision happens
-- #1185: Fix integer wraparound in the calculation of handshake timeouts on 32-bit targets
+- Support UDP dialing with gVisor. (#1181)
 
 ### Changed
 
-- #1188: Make some Nebula state programmatically available via control object
-- #1171: github actions: use macos-latest
-- #1164: Add puncuation to doc comment
-- #1162: cleanup SK_MEMINFO vars
-- #1173: Switch most everything to netip in prep for ipv6 in the overlay
+- Make some Nebula state programmatically available via control object. (#1188)
+- Switch internal representation of IPs to netip, to prepare for IPv6 support
+  in the overlay. (#1173)
+- Minor build and cleanup changes. (#1171, #1164, #1162)
 - Various dependency updates. (#1195, #1190, #1174, #1168, #1167, #1161, #1147, #1146)
+
+### Fixed
+
+- Fix a bug on big endian hosts, like mips. (#1194)
+- Fix a rare panic if a local index collision happens. (#1191)
+- Fix integer wraparound in the calculation of handshake timeouts on 32-bit targets. (#1185)
 
 ## [1.9.3] - 2024-06-06
 
