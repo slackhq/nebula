@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - #1164: Add puncuation to doc comment
 - #1162: cleanup SK_MEMINFO vars
 - #1173: Switch most everything to netip in prep for ipv6 in the overlay
-- Various dependency updates. (#1190, #1174, #1168, #1167, #1161, #1147, #1146)
+- Various dependency updates. (#1195, #1190, #1174, #1168, #1167, #1161, #1147, #1146)
 
 ## [1.9.3] - 2024-06-06
 
