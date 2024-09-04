@@ -916,7 +916,7 @@ type rule struct {
 	CASha     string
 }
 
-func convertRule(l *logrus.Logger, p interface{}, table string, i int) (rule, error) {
+func convertRule(l *logrus.Logger, p any, table string, i int) (rule, error) {
 	r := rule{}
 
 	m, ok := p.(map[string]any)
