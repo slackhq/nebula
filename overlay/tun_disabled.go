@@ -3,7 +3,7 @@ package overlay
 import (
 	"fmt"
 	"io"
-	"net"
+	"net/netip"
 	"strings"
 
 	"github.com/rcrowley/go-metrics"
@@ -13,7 +13,7 @@ import (
 
 type disabledTun struct {
 	read chan []byte
-	cidr *net.IPNet
+	cidr netip.Prefix
 
 	// Track these metrics since we don't have the tun device to do it for us
 	tx metrics.Counter
@@ -21,7 +21,7 @@ type disabledTun struct {
 	l  *logrus.Logger
 }
 
-func newDisabledTun(cidr *net.IPNet, queueLen int, metricsEnabled bool, l *logrus.Logger) *disabledTun {
+func newDisabledTun(cidr netip.Prefix, queueLen int, metricsEnabled bool, l *logrus.Logger) *disabledTun {
 	tun := &disabledTun{
 		cidr: cidr,
 		read: make(chan []byte, queueLen),
@@ -43,11 +43,11 @@ func (*disabledTun) Activate() error {
 	return nil
 }
 
-func (*disabledTun) RouteFor(iputil.VpnIp) iputil.VpnIp {
-	return 0
+func (*disabledTun) RouteFor(addr netip.Addr) netip.Addr {
+	return netip.Addr{}
 }
 
-func (t *disabledTun) Cidr() *net.IPNet {
+func (t *disabledTun) Cidr() netip.Prefix {
 	return t.cidr
 }
 

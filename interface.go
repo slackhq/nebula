@@ -2,10 +2,11 @@ package nebula
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
-	"net"
+	"net/netip"
 	"os"
 	"runtime"
 	"sync/atomic"
@@ -16,7 +17,6 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/udp"
 )
@@ -63,8 +63,8 @@ type Interface struct {
 	serveDns           bool
 	createTime         time.Time
 	lightHouse         *LightHouse
-	localBroadcast     iputil.VpnIp
-	myVpnIp            iputil.VpnIp
+	myBroadcastAddr    netip.Addr
+	myVpnNet           netip.Prefix
 	dropLocalBroadcast bool
 	dropMulticast      bool
 	routines           int
@@ -102,9 +102,9 @@ type EncWriter interface {
 		out []byte,
 		nocopy bool,
 	)
-	SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp iputil.VpnIp, p, nb, out []byte)
+	SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp netip.Addr, p, nb, out []byte)
 	SendMessageToHostInfo(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte)
-	Handshake(vpnIp iputil.VpnIp)
+	Handshake(vpnIp netip.Addr)
 }
 
 type sendRecvErrorConfig uint8
@@ -115,10 +115,10 @@ const (
 	sendRecvErrorPrivate
 )
 
-func (s sendRecvErrorConfig) ShouldSendRecvError(ip net.IP) bool {
+func (s sendRecvErrorConfig) ShouldSendRecvError(ip netip.AddrPort) bool {
 	switch s {
 	case sendRecvErrorPrivate:
-		return ip.IsPrivate()
+		return ip.Addr().IsPrivate()
 	case sendRecvErrorAlways:
 		return true
 	case sendRecvErrorNever:
@@ -156,7 +156,27 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	}
 
 	certificate := c.pki.GetCertState().Certificate
-	myVpnIp := iputil.Ip2VpnIp(certificate.Details.Ips[0].IP)
+
+	myVpnAddr, ok := netip.AddrFromSlice(certificate.Details.Ips[0].IP)
+	if !ok {
+		return nil, fmt.Errorf("invalid ip address in certificate: %s", certificate.Details.Ips[0].IP)
+	}
+
+	myVpnMask, ok := netip.AddrFromSlice(certificate.Details.Ips[0].Mask)
+	if !ok {
+		return nil, fmt.Errorf("invalid ip mask in certificate: %s", certificate.Details.Ips[0].Mask)
+	}
+
+	myVpnAddr = myVpnAddr.Unmap()
+	myVpnMask = myVpnMask.Unmap()
+
+	if myVpnAddr.BitLen() != myVpnMask.BitLen() {
+		return nil, fmt.Errorf("ip address and mask are different lengths in certificate")
+	}
+
+	ones, _ := certificate.Details.Ips[0].Mask.Size()
+	myVpnNet := netip.PrefixFrom(myVpnAddr, ones)
+
 	ifce := &Interface{
 		pki:                c.pki,
 		hostMap:            c.HostMap,
@@ -168,14 +188,13 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		handshakeManager:   c.HandshakeManager,
 		createTime:         time.Now(),
 		lightHouse:         c.lightHouse,
-		localBroadcast:     myVpnIp | ^iputil.Ip2VpnIp(certificate.Details.Ips[0].Mask),
 		dropLocalBroadcast: c.DropLocalBroadcast,
 		dropMulticast:      c.DropMulticast,
 		routines:           c.routines,
 		version:            c.version,
 		writers:            make([]udp.Conn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
-		myVpnIp:            myVpnIp,
+		myVpnNet:           myVpnNet,
 		relayManager:       c.relayManager,
 
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
@@ -188,6 +207,12 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		},
 
 		l: c.l,
+	}
+
+	if myVpnAddr.Is4() {
+		addr := myVpnNet.Masked().Addr().As4()
+		binary.BigEndian.PutUint32(addr[:], binary.BigEndian.Uint32(addr[:])|^binary.BigEndian.Uint32(certificate.Details.Ips[0].Mask))
+		ifce.myBroadcastAddr = netip.AddrFrom4(addr)
 	}
 
 	ifce.tryPromoteEvery.Store(c.tryPromoteEvery)

@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"net/netip"
 	"testing"
 	"time"
 
@@ -115,10 +116,10 @@ func TestTimerWheel_Purge(t *testing.T) {
 	assert.Equal(t, 0, tw.current)
 
 	fps := []firewall.Packet{
-		{LocalIP: 1},
-		{LocalIP: 2},
-		{LocalIP: 3},
-		{LocalIP: 4},
+		{LocalIP: netip.MustParseAddr("0.0.0.1")},
+		{LocalIP: netip.MustParseAddr("0.0.0.2")},
+		{LocalIP: netip.MustParseAddr("0.0.0.3")},
+		{LocalIP: netip.MustParseAddr("0.0.0.4")},
 	}
 
 	tw.Add(fps[0], time.Second*1)

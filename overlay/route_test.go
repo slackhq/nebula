@@ -2,11 +2,10 @@ package overlay
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"testing"
 
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 )
@@ -14,7 +13,8 @@ import (
 func Test_parseRoutes(t *testing.T) {
 	l := test.NewLogger()
 	c := config.NewC(l)
-	_, n, _ := net.ParseCIDR("10.0.0.0/24")
+	n, err := netip.ParsePrefix("10.0.0.0/24")
+	assert.NoError(t, err)
 
 	// test no routes config
 	routes, err := parseRoutes(c, n)
@@ -67,7 +67,7 @@ func Test_parseRoutes(t *testing.T) {
 	c.Settings["tun"] = map[string]any{"routes": []any{map[string]any{"mtu": "500", "route": "nope"}}}
 	routes, err = parseRoutes(c, n)
 	assert.Nil(t, routes)
-	assert.EqualError(t, err, "entry 1.route in tun.routes failed to parse: invalid CIDR address: nope")
+	assert.EqualError(t, err, "entry 1.route in tun.routes failed to parse: netip.ParsePrefix(\"nope\"): no '/'")
 
 	// below network range
 	c.Settings["tun"] = map[string]any{"routes": []any{map[string]any{"mtu": "500", "route": "1.0.0.0/8"}}}
@@ -112,7 +112,8 @@ func Test_parseRoutes(t *testing.T) {
 func Test_parseUnsafeRoutes(t *testing.T) {
 	l := test.NewLogger()
 	c := config.NewC(l)
-	_, n, _ := net.ParseCIDR("10.0.0.0/24")
+	n, err := netip.ParsePrefix("10.0.0.0/24")
+	assert.NoError(t, err)
 
 	// test no routes config
 	routes, err := parseUnsafeRoutes(c, n)
@@ -157,7 +158,7 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"mtu": "500", "via": "nope"}}}
 	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, routes)
-	assert.EqualError(t, err, "entry 1.via in tun.unsafe_routes failed to parse address: nope")
+	assert.EqualError(t, err, "entry 1.via in tun.unsafe_routes failed to parse address: ParseAddr(\"nope\"): unable to parse IP")
 
 	// missing route
 	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "mtu": "500"}}}
@@ -169,7 +170,7 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "mtu": "500", "route": "nope"}}}
 	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, routes)
-	assert.EqualError(t, err, "entry 1.route in tun.unsafe_routes failed to parse: invalid CIDR address: nope")
+	assert.EqualError(t, err, "entry 1.route in tun.unsafe_routes failed to parse: netip.ParsePrefix(\"nope\"): no '/'")
 
 	// within network range
 	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "route": "10.0.0.0/24"}}}
@@ -252,7 +253,8 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 func Test_makeRouteTree(t *testing.T) {
 	l := test.NewLogger()
 	c := config.NewC(l)
-	_, n, _ := net.ParseCIDR("10.0.0.0/24")
+	n, err := netip.ParsePrefix("10.0.0.0/24")
+	assert.NoError(t, err)
 
 	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{
 		map[string]any{"via": "192.168.0.1", "route": "1.0.0.0/28"},
@@ -264,17 +266,26 @@ func Test_makeRouteTree(t *testing.T) {
 	routeTree, err := makeRouteTree(l, routes, true)
 	assert.NoError(t, err)
 
-	ip := iputil.Ip2VpnIp(net.ParseIP("1.0.0.2"))
-	ok, r := routeTree.MostSpecificContains(ip)
+	ip, err := netip.ParseAddr("1.0.0.2")
+	assert.NoError(t, err)
+	r, ok := routeTree.Lookup(ip)
 	assert.True(t, ok)
-	assert.Equal(t, iputil.Ip2VpnIp(net.ParseIP("192.168.0.1")), r)
 
-	ip = iputil.Ip2VpnIp(net.ParseIP("1.0.0.1"))
-	ok, r = routeTree.MostSpecificContains(ip)
+	nip, err := netip.ParseAddr("192.168.0.1")
+	assert.NoError(t, err)
+	assert.Equal(t, nip, r)
+
+	ip, err = netip.ParseAddr("1.0.0.1")
+	assert.NoError(t, err)
+	r, ok = routeTree.Lookup(ip)
 	assert.True(t, ok)
-	assert.Equal(t, iputil.Ip2VpnIp(net.ParseIP("192.168.0.2")), r)
 
-	ip = iputil.Ip2VpnIp(net.ParseIP("1.1.0.1"))
-	ok, r = routeTree.MostSpecificContains(ip)
+	nip, err = netip.ParseAddr("192.168.0.2")
+	assert.NoError(t, err)
+	assert.Equal(t, nip, r)
+
+	ip, err = netip.ParseAddr("1.1.0.1")
+	assert.NoError(t, err)
+	r, ok = routeTree.Lookup(ip)
 	assert.False(t, ok)
 }

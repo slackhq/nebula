@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"net/netip"
 	"syscall"
 	"unsafe"
 
@@ -27,25 +28,6 @@ type StdConn struct {
 	batch int
 }
 
-var x int
-
-// From linux/sock_diag.h
-const (
-	_SK_MEMINFO_RMEM_ALLOC = iota
-	_SK_MEMINFO_RCVBUF
-	_SK_MEMINFO_WMEM_ALLOC
-	_SK_MEMINFO_SNDBUF
-	_SK_MEMINFO_FWD_ALLOC
-	_SK_MEMINFO_WMEM_QUEUED
-	_SK_MEMINFO_OPTMEM
-	_SK_MEMINFO_BACKLOG
-	_SK_MEMINFO_DROPS
-
-	_SK_MEMINFO_VARS
-)
-
-type _SK_MEMINFO [_SK_MEMINFO_VARS]uint32
-
 func maybeIPV4(ip net.IP) (net.IP, bool) {
 	ip4 := ip.To4()
 	if ip4 != nil {
@@ -54,10 +36,9 @@ func maybeIPV4(ip net.IP) (net.IP, bool) {
 	return ip, false
 }
 
-func NewListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (Conn, error) {
-	ipV4, isV4 := maybeIPV4(ip)
+func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
 	af := unix.AF_INET6
-	if isV4 {
+	if ip.Is4() {
 		af = unix.AF_INET
 	}
 	syscall.ForkLock.RLock()
@@ -80,13 +61,13 @@ func NewListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (
 
 	//TODO: support multiple listening IPs (for limiting ipv6)
 	var sa unix.Sockaddr
-	if isV4 {
+	if ip.Is4() {
 		sa4 := &unix.SockaddrInet4{Port: port}
-		copy(sa4.Addr[:], ipV4)
+		sa4.Addr = ip.As4()
 		sa = sa4
 	} else {
 		sa6 := &unix.SockaddrInet6{Port: port}
-		copy(sa6.Addr[:], ip.To16())
+		sa6.Addr = ip.As16()
 		sa = sa6
 	}
 	if err = unix.Bind(fd, sa); err != nil {
@@ -98,7 +79,7 @@ func NewListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (
 	//v, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU)
 	//l.Println(v, err)
 
-	return &StdConn{sysFd: fd, isV4: isV4, l: l, batch: batch}, err
+	return &StdConn{sysFd: fd, isV4: ip.Is4(), l: l, batch: batch}, err
 }
 
 func (u *StdConn) Rebind() error {
@@ -121,30 +102,29 @@ func (u *StdConn) GetSendBuffer() (int, error) {
 	return unix.GetsockoptInt(int(u.sysFd), unix.SOL_SOCKET, unix.SO_SNDBUF)
 }
 
-func (u *StdConn) LocalAddr() (*Addr, error) {
+func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	sa, err := unix.Getsockname(u.sysFd)
 	if err != nil {
-		return nil, err
+		return netip.AddrPort{}, err
 	}
 
-	addr := &Addr{}
 	switch sa := sa.(type) {
 	case *unix.SockaddrInet4:
-		addr.IP = net.IP{sa.Addr[0], sa.Addr[1], sa.Addr[2], sa.Addr[3]}.To16()
-		addr.Port = uint16(sa.Port)
-	case *unix.SockaddrInet6:
-		addr.IP = sa.Addr[0:]
-		addr.Port = uint16(sa.Port)
-	}
+		return netip.AddrPortFrom(netip.AddrFrom4(sa.Addr), uint16(sa.Port)), nil
 
-	return addr, nil
+	case *unix.SockaddrInet6:
+		return netip.AddrPortFrom(netip.AddrFrom16(sa.Addr), uint16(sa.Port)), nil
+
+	default:
+		return netip.AddrPort{}, fmt.Errorf("unsupported sock type: %T", sa)
+	}
 }
 
 func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int) {
 	plaintext := make([]byte, MTU)
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
-	udpAddr := &Addr{}
+	var ip netip.Addr
 	nb := make([]byte, 12, 12)
 
 	//TODO: should we track this?
@@ -165,12 +145,23 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 		//metric.Update(int64(n))
 		for i := 0; i < n; i++ {
 			if u.isV4 {
-				udpAddr.IP = names[i][4:8]
+				ip, _ = netip.AddrFromSlice(names[i][4:8])
+				//TODO: IPV6-WORK what is not ok?
 			} else {
-				udpAddr.IP = names[i][8:24]
+				ip, _ = netip.AddrFromSlice(names[i][8:24])
+				//TODO: IPV6-WORK what is not ok?
 			}
-			udpAddr.Port = binary.BigEndian.Uint16(names[i][2:4])
-			r(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], h, fwPacket, lhf, nb, q, cache.Get(u.l))
+			r(
+				netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])),
+				plaintext[:0],
+				buffers[i][:msgs[i].Len],
+				h,
+				fwPacket,
+				lhf,
+				nb,
+				q,
+				cache.Get(u.l),
+			)
 		}
 	}
 }
@@ -216,19 +207,18 @@ func (u *StdConn) ReadMulti(msgs []rawMessage) (int, error) {
 	}
 }
 
-func (u *StdConn) WriteTo(b []byte, addr *Addr) error {
+func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
 	if u.isV4 {
-		return u.writeTo4(b, addr)
+		return u.writeTo4(b, ip)
 	}
-	return u.writeTo6(b, addr)
+	return u.writeTo6(b, ip)
 }
 
-func (u *StdConn) writeTo6(b []byte, addr *Addr) error {
+func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
 	var rsa unix.RawSockaddrInet6
 	rsa.Family = unix.AF_INET6
-	// Little Endian -> Network Endian
-	rsa.Port = (addr.Port >> 8) | ((addr.Port & 0xff) << 8)
-	copy(rsa.Addr[:], addr.IP.To16())
+	rsa.Addr = ip.Addr().As16()
+	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ip.Port())
 
 	for {
 		_, _, err := unix.Syscall6(
@@ -251,17 +241,15 @@ func (u *StdConn) writeTo6(b []byte, addr *Addr) error {
 	}
 }
 
-func (u *StdConn) writeTo4(b []byte, addr *Addr) error {
-	addrV4, isAddrV4 := maybeIPV4(addr.IP)
-	if !isAddrV4 {
+func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
+	if !ip.Addr().Is4() {
 		return fmt.Errorf("Listener is IPv4, but writing to IPv6 remote")
 	}
 
 	var rsa unix.RawSockaddrInet4
 	rsa.Family = unix.AF_INET
-	// Little Endian -> Network Endian
-	rsa.Port = (addr.Port >> 8) | ((addr.Port & 0xff) << 8)
-	copy(rsa.Addr[:], addrV4)
+	rsa.Addr = ip.Addr().As4()
+	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ip.Port())
 
 	for {
 		_, _, err := unix.Syscall6(
@@ -316,8 +304,8 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 	}
 }
 
-func (u *StdConn) getMemInfo(meminfo *_SK_MEMINFO) error {
-	var vallen uint32 = 4 * _SK_MEMINFO_VARS
+func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
+	var vallen uint32 = 4 * unix.SK_MEMINFO_VARS
 	_, _, err := unix.Syscall6(unix.SYS_GETSOCKOPT, uintptr(u.sysFd), uintptr(unix.SOL_SOCKET), uintptr(unix.SO_MEMINFO), uintptr(unsafe.Pointer(meminfo)), uintptr(unsafe.Pointer(&vallen)), 0)
 	if err != 0 {
 		return err
@@ -332,12 +320,12 @@ func (u *StdConn) Close() error {
 
 func NewUDPStatsEmitter(udpConns []Conn) func() {
 	// Check if our kernel supports SO_MEMINFO before registering the gauges
-	var udpGauges [][_SK_MEMINFO_VARS]metrics.Gauge
-	var meminfo _SK_MEMINFO
+	var udpGauges [][unix.SK_MEMINFO_VARS]metrics.Gauge
+	var meminfo [unix.SK_MEMINFO_VARS]uint32
 	if err := udpConns[0].(*StdConn).getMemInfo(&meminfo); err == nil {
-		udpGauges = make([][_SK_MEMINFO_VARS]metrics.Gauge, len(udpConns))
+		udpGauges = make([][unix.SK_MEMINFO_VARS]metrics.Gauge, len(udpConns))
 		for i := range udpConns {
-			udpGauges[i] = [_SK_MEMINFO_VARS]metrics.Gauge{
+			udpGauges[i] = [unix.SK_MEMINFO_VARS]metrics.Gauge{
 				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.rmem_alloc", i), nil),
 				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.rcvbuf", i), nil),
 				metrics.GetOrRegisterGauge(fmt.Sprintf("udp.%d.wmem_alloc", i), nil),
@@ -354,7 +342,7 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 	return func() {
 		for i, gauges := range udpGauges {
 			if err := udpConns[i].(*StdConn).getMemInfo(&meminfo); err == nil {
-				for j := 0; j < _SK_MEMINFO_VARS; j++ {
+				for j := 0; j < unix.SK_MEMINFO_VARS; j++ {
 					gauges[j].Update(int64(meminfo[j]))
 				}
 			}
