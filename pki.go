@@ -16,7 +16,7 @@ import (
 
 type PKI struct {
 	cs     atomic.Pointer[CertState]
-	caPool atomic.Pointer[cert.NebulaCAPool]
+	caPool atomic.Pointer[cert.CAPool]
 	l      *logrus.Logger
 }
 
@@ -49,7 +49,7 @@ func (p *PKI) GetCertState() *CertState {
 	return p.cs.Load()
 }
 
-func (p *PKI) GetCAPool() *cert.NebulaCAPool {
+func (p *PKI) GetCAPool() *cert.CAPool {
 	return p.caPool.Load()
 }
 
@@ -218,7 +218,7 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 	return newCertState(nebulaCert, rawKey)
 }
 
-func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.NebulaCAPool, error) {
+func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.CAPool, error) {
 	var rawCA []byte
 	var err error
 
@@ -237,7 +237,7 @@ func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.NebulaCAPool, er
 		}
 	}
 
-	caPool, err := cert.NewCAPoolFromBytes(rawCA)
+	caPool, err := cert.NewCAPoolFromPEM(rawCA)
 	if errors.Is(err, cert.ErrExpired) {
 		var expired int
 		for _, crt := range caPool.CAs {

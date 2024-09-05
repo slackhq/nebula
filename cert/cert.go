@@ -631,7 +631,7 @@ func (nc *NebulaCertificate) Expired(t time.Time) bool {
 }
 
 // Verify will ensure a certificate is good in all respects (expiry, group membership, signature, cert blocklist, etc)
-func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error) {
+func (nc *NebulaCertificate) Verify(t time.Time, ncp *CAPool) (bool, error) {
 	return nc.verify(t, ncp, false)
 }
 
@@ -639,7 +639,7 @@ func (nc *NebulaCertificate) Verify(t time.Time, ncp *NebulaCAPool) (bool, error
 //
 // NOTE: This uses an internal cache that will not be invalidated automatically
 // if you manually change any fields in the NebulaCertificate.
-func (nc *NebulaCertificate) VerifyWithCache(t time.Time, ncp *NebulaCAPool) (bool, error) {
+func (nc *NebulaCertificate) VerifyWithCache(t time.Time, ncp *CAPool) (bool, error) {
 	return nc.verify(t, ncp, true)
 }
 
@@ -650,7 +650,7 @@ func (nc *NebulaCertificate) ResetCache() {
 }
 
 // Verify will ensure a certificate is good in all respects (expiry, group membership, signature, cert blocklist, etc)
-func (nc *NebulaCertificate) verify(t time.Time, ncp *NebulaCAPool, useCache bool) (bool, error) {
+func (nc *NebulaCertificate) verify(t time.Time, ncp *CAPool, useCache bool) (bool, error) {
 	if ncp.isBlocklistedWithCache(nc, useCache) {
 		return false, ErrBlockListed
 	}

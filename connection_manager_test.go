@@ -230,7 +230,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	}
 
 	assert.NoError(t, caCert.Sign(cert.Curve_CURVE25519, privCA))
-	ncp := &cert.NebulaCAPool{
+	ncp := &cert.CAPool{
 		CAs: cert.NewCAPool().CAs,
 	}
 	ncp.CAs["ca"] = &caCert

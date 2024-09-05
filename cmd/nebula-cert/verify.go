@@ -46,7 +46,7 @@ func verify(args []string, out io.Writer, errOut io.Writer) error {
 
 	caPool := cert.NewCAPool()
 	for {
-		rawCACert, err = caPool.AddCACertificate(rawCACert)
+		rawCACert, err = caPool.AddCAFromPEM(rawCACert)
 		if err != nil {
 			return fmt.Errorf("error while adding ca cert to pool: %s", err)
 		}

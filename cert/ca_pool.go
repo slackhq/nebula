@@ -7,14 +7,14 @@ import (
 	"time"
 )
 
-type NebulaCAPool struct {
+type CAPool struct {
 	CAs           map[string]*NebulaCertificate
 	certBlocklist map[string]struct{}
 }
 
 // NewCAPool creates a CAPool
-func NewCAPool() *NebulaCAPool {
-	ca := NebulaCAPool{
+func NewCAPool() *CAPool {
+	ca := CAPool{
 		CAs:           make(map[string]*NebulaCertificate),
 		certBlocklist: make(map[string]struct{}),
 	}
@@ -22,16 +22,16 @@ func NewCAPool() *NebulaCAPool {
 	return &ca
 }
 
-// NewCAPoolFromBytes will create a new CA pool from the provided
+// NewCAPoolFromPEM will create a new CA pool from the provided
 // input bytes, which must be a PEM-encoded set of nebula certificates.
 // If the pool contains any expired certificates, an ErrExpired will be
 // returned along with the pool. The caller must handle any such errors.
-func NewCAPoolFromBytes(caPEMs []byte) (*NebulaCAPool, error) {
+func NewCAPoolFromPEM(caPEMs []byte) (*CAPool, error) {
 	pool := NewCAPool()
 	var err error
 	var expired bool
 	for {
-		caPEMs, err = pool.AddCACertificate(caPEMs)
+		caPEMs, err = pool.AddCAFromPEM(caPEMs)
 		if errors.Is(err, ErrExpired) {
 			expired = true
 			err = nil
@@ -51,10 +51,10 @@ func NewCAPoolFromBytes(caPEMs []byte) (*NebulaCAPool, error) {
 	return pool, nil
 }
 
-// AddCACertificate verifies a Nebula CA certificate and adds it to the pool
+// AddCAFromPEM verifies a Nebula CA certificate and adds it to the pool
 // Only the first pem encoded object will be consumed, any remaining bytes are returned.
 // Parsed certificates will be verified and must be a CA
-func (ncp *NebulaCAPool) AddCACertificate(pemBytes []byte) ([]byte, error) {
+func (ncp *CAPool) AddCAFromPEM(pemBytes []byte) ([]byte, error) {
 	c, pemBytes, err := UnmarshalNebulaCertificateFromPEM(pemBytes)
 	if err != nil {
 		return pemBytes, err
@@ -82,23 +82,23 @@ func (ncp *NebulaCAPool) AddCACertificate(pemBytes []byte) ([]byte, error) {
 }
 
 // BlocklistFingerprint adds a cert fingerprint to the blocklist
-func (ncp *NebulaCAPool) BlocklistFingerprint(f string) {
+func (ncp *CAPool) BlocklistFingerprint(f string) {
 	ncp.certBlocklist[f] = struct{}{}
 }
 
 // ResetCertBlocklist removes all previously blocklisted cert fingerprints
-func (ncp *NebulaCAPool) ResetCertBlocklist() {
+func (ncp *CAPool) ResetCertBlocklist() {
 	ncp.certBlocklist = make(map[string]struct{})
 }
 
 // NOTE: This uses an internal cache for Sha256Sum() that will not be invalidated
 // automatically if you manually change any fields in the NebulaCertificate.
-func (ncp *NebulaCAPool) IsBlocklisted(c *NebulaCertificate) bool {
+func (ncp *CAPool) IsBlocklisted(c *NebulaCertificate) bool {
 	return ncp.isBlocklistedWithCache(c, false)
 }
 
 // IsBlocklisted returns true if the fingerprint fails to generate or has been explicitly blocklisted
-func (ncp *NebulaCAPool) isBlocklistedWithCache(c *NebulaCertificate, useCache bool) bool {
+func (ncp *CAPool) isBlocklistedWithCache(c *NebulaCertificate, useCache bool) bool {
 	h, err := c.sha256SumWithCache(useCache)
 	if err != nil {
 		return true
@@ -113,7 +113,7 @@ func (ncp *NebulaCAPool) isBlocklistedWithCache(c *NebulaCertificate, useCache b
 
 // GetCAForCert attempts to return the signing certificate for the provided certificate.
 // No signature validation is performed
-func (ncp *NebulaCAPool) GetCAForCert(c *NebulaCertificate) (*NebulaCertificate, error) {
+func (ncp *CAPool) GetCAForCert(c *NebulaCertificate) (*NebulaCertificate, error) {
 	if c.Details.Issuer == "" {
 		return nil, fmt.Errorf("no issuer in certificate")
 	}
@@ -127,7 +127,7 @@ func (ncp *NebulaCAPool) GetCAForCert(c *NebulaCertificate) (*NebulaCertificate,
 }
 
 // GetFingerprints returns an array of trusted CA fingerprints
-func (ncp *NebulaCAPool) GetFingerprints() []string {
+func (ncp *CAPool) GetFingerprints() []string {
 	fp := make([]string, len(ncp.CAs))
 
 	i := 0
