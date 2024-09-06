@@ -56,16 +56,6 @@ type NebulaCertificateDetails struct {
 	Curve Curve
 }
 
-type NebulaEncryptedData struct {
-	EncryptionMetadata NebulaEncryptionMetadata
-	Ciphertext         []byte
-}
-
-type NebulaEncryptionMetadata struct {
-	EncryptionAlgorithm string
-	Argon2Parameters    Argon2Parameters
-}
-
 type m map[string]interface{}
 
 // UnmarshalNebulaCertificate will unmarshal a protobuf byte representation of a nebula cert

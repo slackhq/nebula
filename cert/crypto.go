@@ -14,6 +14,16 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type NebulaEncryptedData struct {
+	EncryptionMetadata NebulaEncryptionMetadata
+	Ciphertext         []byte
+}
+
+type NebulaEncryptionMetadata struct {
+	EncryptionAlgorithm string
+	Argon2Parameters    Argon2Parameters
+}
+
 // Argon2Parameters KDF factors
 type Argon2Parameters struct {
 	version     rune
