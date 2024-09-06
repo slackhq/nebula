@@ -541,7 +541,7 @@ func TestRehandshakingRelays(t *testing.T) {
 	r.Log("Renew relay certificate and spin until me and them sees it")
 	_, _, myNextPrivKey, myNextPEM := NewTestCert(ca, caKey, "relay", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{relayVpnIpNet}, nil, []string{"new group"})
 
-	caB, err := ca.MarshalToPEM()
+	caB, err := ca.MarshalPEM()
 	if err != nil {
 		panic(err)
 	}
@@ -645,7 +645,7 @@ func TestRehandshakingRelaysPrimary(t *testing.T) {
 	r.Log("Renew relay certificate and spin until me and them sees it")
 	_, _, myNextPrivKey, myNextPEM := NewTestCert(ca, caKey, "relay", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{relayVpnIpNet}, nil, []string{"new group"})
 
-	caB, err := ca.MarshalToPEM()
+	caB, err := ca.MarshalPEM()
 	if err != nil {
 		panic(err)
 	}
@@ -740,7 +740,7 @@ func TestRehandshaking(t *testing.T) {
 	r.Log("Renew my certificate and spin until their sees it")
 	_, _, myNextPrivKey, myNextPEM := NewTestCert(ca, caKey, "me", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{myVpnIpNet}, nil, []string{"new group"})
 
-	caB, err := ca.MarshalToPEM()
+	caB, err := ca.MarshalPEM()
 	if err != nil {
 		panic(err)
 	}
@@ -841,7 +841,7 @@ func TestRehandshakingLoser(t *testing.T) {
 	r.Log("Renew their certificate and spin until mine sees it")
 	_, _, theirNextPrivKey, theirNextPEM := NewTestCert(ca, caKey, "them", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{theirVpnIpNet}, nil, []string{"their new group"})
 
-	caB, err := ca.MarshalToPEM()
+	caB, err := ca.MarshalPEM()
 	if err != nil {
 		panic(err)
 	}

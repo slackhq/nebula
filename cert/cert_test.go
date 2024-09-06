@@ -212,7 +212,7 @@ func TestNebulaCertificate_Verify(t *testing.T) {
 	caPool := NewCAPool()
 	assert.NoError(t, caPool.AddCA(ca))
 
-	f, err := c.Sha256Sum()
+	f, err := c.Fingerprint()
 	assert.Nil(t, err)
 	caPool.BlocklistFingerprint(f)
 
@@ -235,7 +235,7 @@ func TestNebulaCertificate_Verify(t *testing.T) {
 	ca, _, caKey, err = newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{"test1", "test2"})
 	assert.Nil(t, err)
 
-	caPem, err := ca.MarshalToPEM()
+	caPem, err := ca.MarshalPEM()
 	assert.Nil(t, err)
 
 	caPool = NewCAPool()
@@ -264,7 +264,7 @@ func TestNebulaCertificate_VerifyP256(t *testing.T) {
 	caPool := NewCAPool()
 	assert.NoError(t, caPool.AddCA(ca))
 
-	f, err := c.Sha256Sum()
+	f, err := c.Fingerprint()
 	assert.Nil(t, err)
 	caPool.BlocklistFingerprint(f)
 
@@ -287,7 +287,7 @@ func TestNebulaCertificate_VerifyP256(t *testing.T) {
 	ca, _, caKey, err = newTestCaCertP256(time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{"test1", "test2"})
 	assert.Nil(t, err)
 
-	caPem, err := ca.MarshalToPEM()
+	caPem, err := ca.MarshalPEM()
 	assert.Nil(t, err)
 
 	caPool = NewCAPool()
@@ -312,7 +312,7 @@ func TestNebulaCertificate_Verify_IPs(t *testing.T) {
 	ca, _, caKey, err := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []netip.Prefix{caIp1, caIp2}, nil, []string{"test"})
 	assert.Nil(t, err)
 
-	caPem, err := ca.MarshalToPEM()
+	caPem, err := ca.MarshalPEM()
 	assert.Nil(t, err)
 
 	caPool := NewCAPool()
@@ -385,7 +385,7 @@ func TestNebulaCertificate_Verify_Subnets(t *testing.T) {
 	ca, _, caKey, err := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), nil, []netip.Prefix{caIp1, caIp2}, []string{"test"})
 	assert.Nil(t, err)
 
-	caPem, err := ca.MarshalToPEM()
+	caPem, err := ca.MarshalPEM()
 	assert.Nil(t, err)
 
 	caPool := NewCAPool()
@@ -643,7 +643,7 @@ func newTestCaCertP256(before, after time.Time, ips, subnets []netip.Prefix, gro
 }
 
 func newTestCert(ca *certificateV1, key []byte, before, after time.Time, ips, subnets []netip.Prefix, groups []string) (*certificateV1, []byte, []byte, error) {
-	issuer, err := ca.Sha256Sum()
+	issuer, err := ca.Fingerprint()
 	if err != nil {
 		return nil, nil, nil, err
 	}

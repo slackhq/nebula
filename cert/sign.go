@@ -8,6 +8,8 @@ import (
 	"github.com/slackhq/nebula/pkclient"
 )
 
+// TBSCertificate represents a certificate intended to be signed.
+// It is invalid to use this structure as a Certificate.
 type TBSCertificate struct {
 	Version        Version
 	Name           string
@@ -22,7 +24,9 @@ type TBSCertificate struct {
 	issuer         string
 }
 
-// TODO:
+// Sign will create a sealed certificate using details provided by the TBSCertificate as long as those
+// details do not violate constraints of the signing certificate.
+// If the TBSCertificate is a CA then signer must be nil.
 func (t *TBSCertificate) Sign(signer Certificate, curve Curve, key []byte) (Certificate, error) {
 	return t.sign(signer, curve, key, nil)
 }
@@ -40,12 +44,17 @@ func (t *TBSCertificate) sign(signer Certificate, curve Curve, key []byte, clien
 		return nil, fmt.Errorf("curve in cert and private key supplied don't match")
 	}
 
-	//TODO: signer should assert its constraints on the TBSCertificate, once you do nebula-cert sign needs to not double do it
 	if signer != nil {
 		if t.IsCA {
 			return nil, fmt.Errorf("can not sign a CA certificate with another")
 		}
-		issuer, err := signer.Sha256Sum()
+
+		err := checkCAConstraints(signer, t.NotAfter, t.NotBefore, t.Groups, t.Networks, t.UnsafeNetworks)
+		if err != nil {
+			return nil, err
+		}
+
+		issuer, err := signer.Fingerprint()
 		if err != nil {
 			return nil, fmt.Errorf("error computing issuer: %v", err)
 		}

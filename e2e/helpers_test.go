@@ -46,7 +46,7 @@ func newSimpleServer(caCrt cert.Certificate, caKey []byte, name string, sVpnIpNe
 	}
 	_, _, myPrivKey, myPEM := NewTestCert(caCrt, caKey, name, time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{vpnIpNet}, nil, []string{})
 
-	caB, err := caCrt.MarshalToPEM()
+	caB, err := caCrt.MarshalPEM()
 	if err != nil {
 		panic(err)
 	}

@@ -825,7 +825,7 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 	}
 
 	if args.Raw {
-		b, err := cert.MarshalToPEM()
+		b, err := cert.MarshalPEM()
 		if err != nil {
 			//TODO: handle it
 			return nil

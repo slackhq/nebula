@@ -38,7 +38,7 @@ func NewTestCaCert(before, after time.Time, networks, unsafeNetworks []netip.Pre
 		panic(err)
 	}
 
-	pem, err := c.MarshalToPEM()
+	pem, err := c.MarshalPEM()
 	if err != nil {
 		panic(err)
 	}
@@ -75,7 +75,7 @@ func NewTestCert(ca cert.Certificate, key []byte, name string, before, after tim
 		panic(err)
 	}
 
-	pem, err := c.MarshalToPEM()
+	pem, err := c.MarshalPEM()
 	if err != nil {
 		panic(err)
 	}

@@ -13,7 +13,9 @@ const (
 )
 
 type Certificate interface {
-	//TODO: describe this
+	// Version defines the underlying certificate structure and wire protocol version
+	// Version1 certificates are ipv4 only and uses protobuf serialization
+	// Version2 certificates are ipv4 or ipv6 and uses asn.1 serialization
 	Version() Version
 
 	// Name is the human-readable name that identifies this certificate.
@@ -65,20 +67,14 @@ type Certificate interface {
 	// computed signature. A true result means this certificate has not been tampered with.
 	CheckSignature(signingPublicKey []byte) bool
 
-	// Sha256Sum returns the hex encoded sha256 sum of the certificate.
+	// Fingerprint returns the hex encoded sha256 sum of the certificate.
 	// This acts as a unique fingerprint and can be used to blocklist certificates.
-	Sha256Sum() (string, error)
+	Fingerprint() (string, error)
 
 	// Expired tests if the certificate is valid for the provided time.
 	Expired(t time.Time) bool
 
-	// CheckRootConstraints tests if the certificate meets all constraints in the
-	// signing certificate, returning the first violated constraint or nil if the
-	// certificate conforms to all constraints.
-	//TODO: feels better to have this on the CAPool I think
-	CheckRootConstraints(signer Certificate) error
-
-	//TODO
+	// VerifyPrivateKey returns an error if the private key is not a pair with the certificates public key.
 	VerifyPrivateKey(curve Curve, privateKey []byte) error
 
 	// Marshal will return the byte representation of this certificate
@@ -88,10 +84,9 @@ type Certificate interface {
 	// MarshalForHandshakes prepares the bytes needed to use directly in a handshake
 	MarshalForHandshakes() ([]byte, error)
 
-	// MarshalToPEM will return a PEM encoded representation of this certificate
+	// MarshalPEM will return a PEM encoded representation of this certificate
 	// This is primarily the format stored on disk
-	//TODO: MarshalPEM?
-	MarshalToPEM() ([]byte, error)
+	MarshalPEM() ([]byte, error)
 
 	// MarshalJSON will return the json representation of this certificate
 	MarshalJSON() ([]byte, error)
@@ -99,7 +94,7 @@ type Certificate interface {
 	// String will return a human-readable representation of this certificate
 	String() string
 
-	//TODO
+	// Copy creates a copy of the certificate
 	Copy() Certificate
 }
 
@@ -112,7 +107,7 @@ type CachedCertificate struct {
 	signerShaSum   string
 }
 
-// TODO:
+// UnmarshalCertificate will attempt to unmarshal a wire protocol level certificate.
 func UnmarshalCertificate(b []byte) (Certificate, error) {
 	c, err := unmarshalCertificateV1(b, true)
 	if err != nil {
@@ -121,7 +116,9 @@ func UnmarshalCertificate(b []byte) (Certificate, error) {
 	return c, nil
 }
 
-// TODO:
+// UnmarshalCertificateFromHandshake will attempt to unmarshal a certificate received in a handshake.
+// Handshakes save space by placing the peers public key in a different part of the packet, we have to
+// reassemble the actual certificate structure with that in mind.
 func UnmarshalCertificateFromHandshake(b []byte, publicKey []byte) (Certificate, error) {
 	c, err := unmarshalCertificateV1(b, false)
 	if err != nil {

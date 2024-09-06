@@ -273,7 +273,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 	}
 
-	b, err := c.MarshalToPEM()
+	b, err := c.MarshalPEM()
 	if err != nil {
 		return fmt.Errorf("error while marshalling certificate: %s", err)
 	}

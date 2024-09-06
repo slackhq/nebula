@@ -66,7 +66,7 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 		}
 
 		if *pf.outQRPath != "" {
-			b, err := c.MarshalToPEM()
+			b, err := c.MarshalPEM()
 			if err != nil {
 				return fmt.Errorf("error while marshalling cert to PEM: %s", err)
 			}

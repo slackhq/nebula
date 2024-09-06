@@ -388,11 +388,11 @@ func (d *dummyCert) Marshal() ([]byte, error) {
 	return nil, nil
 }
 
-func (d *dummyCert) MarshalToPEM() ([]byte, error) {
+func (d *dummyCert) MarshalPEM() ([]byte, error) {
 	return nil, nil
 }
 
-func (d *dummyCert) Sha256Sum() (string, error) {
+func (d *dummyCert) Fingerprint() (string, error) {
 	return "", nil
 }
 
