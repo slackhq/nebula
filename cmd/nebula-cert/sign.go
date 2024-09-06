@@ -80,15 +80,17 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 
 	var curve cert.Curve
 	var caKey []byte
+
 	if !isP11 {
 		var rawCAKey []byte
 		rawCAKey, err := os.ReadFile(*sf.caKeyPath)
+
 		if err != nil {
 			return fmt.Errorf("error while reading ca-key: %s", err)
 		}
 
 		// naively attempt to decode the private key as though it is not encrypted
-		caKey, _, curve, err = cert.UnmarshalSigningPrivateKey(rawCAKey)
+		caKey, _, curve, err = cert.UnmarshalSigningPrivateKeyFromPEM(rawCAKey)
 		if err == cert.ErrPrivateKeyEncrypted {
 			// ask for a passphrase until we get one
 			var passphrase []byte
@@ -124,7 +126,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return fmt.Errorf("error while reading ca-crt: %s", err)
 	}
 
-	caCert, _, err := cert.UnmarshalNebulaCertificateFromPEM(rawCACert)
+	caCert, _, err := cert.UnmarshalCertificateFromPEM(rawCACert)
 	if err != nil {
 		return fmt.Errorf("error while parsing ca-crt: %s", err)
 	}
@@ -205,7 +207,8 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		if err != nil {
 			return fmt.Errorf("error while reading in-pub: %s", err)
 		}
-		pub, _, pubCurve, err = cert.UnmarshalPublicKey(rawPub)
+
+		pub, _, pubCurve, err = cert.UnmarshalPublicKeyFromPEM(rawPub)
 		if err != nil {
 			return fmt.Errorf("error while parsing in-pub: %s", err)
 		}
@@ -270,7 +273,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			return fmt.Errorf("refusing to overwrite existing key: %s", *sf.outKeyPath)
 		}
 
-		err = os.WriteFile(*sf.outKeyPath, cert.MarshalPrivateKey(curve, rawPriv), 0600)
+		err = os.WriteFile(*sf.outKeyPath, cert.MarshalPrivateKeyToPEM(curve, rawPriv), 0600)
 		if err != nil {
 			return fmt.Errorf("error while writing out-key: %s", err)
 		}

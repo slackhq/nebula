@@ -109,7 +109,7 @@ func Test_ca(t *testing.T) {
 	// create temp key file
 	keyF, err := os.CreateTemp("", "test.key")
 	assert.Nil(t, err)
-	os.Remove(keyF.Name())
+	assert.Nil(t, os.Remove(keyF.Name()))
 
 	// failed cert write
 	ob.Reset()
@@ -122,8 +122,8 @@ func Test_ca(t *testing.T) {
 	// create temp cert file
 	crtF, err := os.CreateTemp("", "test.crt")
 	assert.Nil(t, err)
-	os.Remove(crtF.Name())
-	os.Remove(keyF.Name())
+	assert.Nil(t, os.Remove(crtF.Name()))
+	assert.Nil(t, os.Remove(keyF.Name()))
 
 	// test proper cert with removed empty groups and subnets
 	ob.Reset()
@@ -135,13 +135,14 @@ func Test_ca(t *testing.T) {
 
 	// read cert and key files
 	rb, _ := os.ReadFile(keyF.Name())
-	lKey, b, err := cert.UnmarshalEd25519PrivateKey(rb)
+	lKey, b, c, err := cert.UnmarshalSigningPrivateKeyFromPEM(rb)
+	assert.Equal(t, cert.Curve_CURVE25519, c)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
 	assert.Len(t, lKey, 64)
 
 	rb, _ = os.ReadFile(crtF.Name())
-	lCrt, b, err := cert.UnmarshalNebulaCertificateFromPEM(rb)
+	lCrt, b, err := cert.UnmarshalCertificateFromPEM(rb)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
 

@@ -107,7 +107,7 @@ func NewTestCert(ca *cert.NebulaCertificate, key []byte, name string, before, af
 		panic(err)
 	}
 
-	return nc, pub, cert.MarshalX25519PrivateKey(rawPriv), pem
+	return nc, pub, cert.MarshalPrivateKeyToPEM(cert.Curve_CURVE25519, rawPriv), pem
 }
 
 func x25519Keypair() ([]byte, []byte) {

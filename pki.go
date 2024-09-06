@@ -146,7 +146,7 @@ func loadPrivateKey(privPathOrPEM string) (rawKey []byte, curve cert.Curve, isPk
 	if strings.Contains(privPathOrPEM, "-----BEGIN") {
 		pemPrivateKey = []byte(privPathOrPEM)
 		privPathOrPEM = "<inline>"
-		rawKey, _, curve, err = cert.UnmarshalPrivateKey(pemPrivateKey)
+		rawKey, _, curve, err = cert.UnmarshalPrivateKeyFromPEM(pemPrivateKey)
 		if err != nil {
 			return nil, curve, false, fmt.Errorf("error while unmarshaling pki.key %s: %s", privPathOrPEM, err)
 		}
@@ -158,7 +158,7 @@ func loadPrivateKey(privPathOrPEM string) (rawKey []byte, curve cert.Curve, isPk
 		if err != nil {
 			return nil, curve, false, fmt.Errorf("unable to read pki.key file %s: %s", privPathOrPEM, err)
 		}
-		rawKey, _, curve, err = cert.UnmarshalPrivateKey(pemPrivateKey)
+		rawKey, _, curve, err = cert.UnmarshalPrivateKeyFromPEM(pemPrivateKey)
 		if err != nil {
 			return nil, curve, false, fmt.Errorf("error while unmarshaling pki.key %s: %s", privPathOrPEM, err)
 		}
@@ -198,7 +198,7 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 		}
 	}
 
-	nebulaCert, _, err := cert.UnmarshalNebulaCertificateFromPEM(rawCert)
+	nebulaCert, _, err := cert.UnmarshalCertificateFromPEM(rawCert)
 	if err != nil {
 		return nil, fmt.Errorf("error while unmarshaling pki.cert %s: %s", pubPathOrPEM, err)
 	}

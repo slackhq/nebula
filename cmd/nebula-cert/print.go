@@ -50,7 +50,7 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 	part := 0
 
 	for {
-		c, rawCert, err = cert.UnmarshalNebulaCertificateFromPEM(rawCert)
+		c, rawCert, err = cert.UnmarshalCertificateFromPEM(rawCert)
 		if err != nil {
 			return fmt.Errorf("error while unmarshaling cert: %s", err)
 		}

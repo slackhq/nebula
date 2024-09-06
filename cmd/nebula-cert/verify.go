@@ -61,7 +61,7 @@ func verify(args []string, out io.Writer, errOut io.Writer) error {
 		return fmt.Errorf("unable to read crt; %s", err)
 	}
 
-	c, _, err := cert.UnmarshalNebulaCertificateFromPEM(rawCert)
+	c, _, err := cert.UnmarshalCertificateFromPEM(rawCert)
 	if err != nil {
 		return fmt.Errorf("error while parsing crt: %s", err)
 	}

@@ -117,7 +117,7 @@ func Test_signCert(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	caPub, caPriv, _ := ed25519.GenerateKey(rand.Reader)
-	caKeyF.Write(cert.MarshalEd25519PrivateKey(caPriv))
+	caKeyF.Write(cert.MarshalSigningPrivateKeyToPEM(cert.Curve_CURVE25519, caPriv))
 
 	// failed to read cert
 	args = []string{"-ca-crt", "./nope", "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m"}
@@ -172,7 +172,7 @@ func Test_signCert(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	inPub, _ := x25519Keypair()
-	inPubF.Write(cert.MarshalX25519PublicKey(inPub))
+	inPubF.Write(cert.MarshalPublicKeyToPEM(cert.Curve_CURVE25519, inPub))
 
 	// bad ip cidr
 	ob.Reset()
@@ -209,7 +209,7 @@ func Test_signCert(t *testing.T) {
 	caKeyF2, err := os.CreateTemp("", "sign-cert-2.key")
 	assert.Nil(t, err)
 	defer os.Remove(caKeyF2.Name())
-	caKeyF2.Write(cert.MarshalEd25519PrivateKey(caPriv2))
+	caKeyF2.Write(cert.MarshalSigningPrivateKeyToPEM(cert.Curve_CURVE25519, caPriv2))
 
 	ob.Reset()
 	eb.Reset()
@@ -255,13 +255,14 @@ func Test_signCert(t *testing.T) {
 
 	// read cert and key files
 	rb, _ := os.ReadFile(keyF.Name())
-	lKey, b, err := cert.UnmarshalX25519PrivateKey(rb)
+	lKey, b, curve, err := cert.UnmarshalPrivateKeyFromPEM(rb)
+	assert.Equal(t, cert.Curve_CURVE25519, curve)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
 	assert.Len(t, lKey, 32)
 
 	rb, _ = os.ReadFile(crtF.Name())
-	lCrt, b, err := cert.UnmarshalNebulaCertificateFromPEM(rb)
+	lCrt, b, err := cert.UnmarshalCertificateFromPEM(rb)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
 
@@ -297,7 +298,7 @@ func Test_signCert(t *testing.T) {
 
 	// read cert file and check pub key matches in-pub
 	rb, _ = os.ReadFile(crtF.Name())
-	lCrt, b, err = cert.UnmarshalNebulaCertificateFromPEM(rb)
+	lCrt, b, err = cert.UnmarshalCertificateFromPEM(rb)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
 	assert.Equal(t, lCrt.Details.PublicKey, inPub)

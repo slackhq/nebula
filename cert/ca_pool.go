@@ -55,7 +55,7 @@ func NewCAPoolFromPEM(caPEMs []byte) (*CAPool, error) {
 // Only the first pem encoded object will be consumed, any remaining bytes are returned.
 // Parsed certificates will be verified and must be a CA
 func (ncp *CAPool) AddCAFromPEM(pemBytes []byte) ([]byte, error) {
-	c, pemBytes, err := UnmarshalNebulaCertificateFromPEM(pemBytes)
+	c, pemBytes, err := UnmarshalCertificateFromPEM(pemBytes)
 	if err != nil {
 		return pemBytes, err
 	}
