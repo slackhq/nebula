@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -157,26 +156,6 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 
 	certificate := c.pki.GetCertState().Certificate
 
-	myVpnAddr, ok := netip.AddrFromSlice(certificate.Details.Ips[0].IP)
-	if !ok {
-		return nil, fmt.Errorf("invalid ip address in certificate: %s", certificate.Details.Ips[0].IP)
-	}
-
-	myVpnMask, ok := netip.AddrFromSlice(certificate.Details.Ips[0].Mask)
-	if !ok {
-		return nil, fmt.Errorf("invalid ip mask in certificate: %s", certificate.Details.Ips[0].Mask)
-	}
-
-	myVpnAddr = myVpnAddr.Unmap()
-	myVpnMask = myVpnMask.Unmap()
-
-	if myVpnAddr.BitLen() != myVpnMask.BitLen() {
-		return nil, fmt.Errorf("ip address and mask are different lengths in certificate")
-	}
-
-	ones, _ := certificate.Details.Ips[0].Mask.Size()
-	myVpnNet := netip.PrefixFrom(myVpnAddr, ones)
-
 	ifce := &Interface{
 		pki:                c.pki,
 		hostMap:            c.HostMap,
@@ -194,7 +173,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		version:            c.version,
 		writers:            make([]udp.Conn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
-		myVpnNet:           myVpnNet,
+		myVpnNet:           certificate.Networks()[0],
 		relayManager:       c.relayManager,
 
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
@@ -209,10 +188,11 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		l: c.l,
 	}
 
-	if myVpnAddr.Is4() {
-		addr := myVpnNet.Masked().Addr().As4()
-		binary.BigEndian.PutUint32(addr[:], binary.BigEndian.Uint32(addr[:])|^binary.BigEndian.Uint32(certificate.Details.Ips[0].Mask))
-		ifce.myBroadcastAddr = netip.AddrFrom4(addr)
+	if ifce.myVpnNet.Addr().Is4() {
+		//TODO:
+		//addr := myVpnNet.Masked().Addr().As4()
+		//binary.BigEndian.PutUint32(addr[:], binary.BigEndian.Uint32(addr[:])|^binary.BigEndian.Uint32(certificate.Details.Ips[0].Mask))
+		//ifce.myBroadcastAddr = netip.AddrFrom4(addr)
 	}
 
 	ifce.tryPromoteEvery.Store(c.tryPromoteEvery)
@@ -434,7 +414,7 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 			f.firewall.EmitStats()
 			f.handshakeManager.EmitStats()
 			udpStats()
-			certExpirationGauge.Update(int64(f.pki.GetCertState().Certificate.Details.NotAfter.Sub(time.Now()) / time.Second))
+			certExpirationGauge.Update(int64(f.pki.GetCertState().Certificate.NotAfter().Sub(time.Now()) / time.Second))
 		}
 	}
 }

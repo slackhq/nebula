@@ -801,7 +801,7 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 			return w.WriteLine(fmt.Sprintf("Could not find tunnel for vpn ip: %v", a[0]))
 		}
 
-		cert = hostInfo.GetCert()
+		cert = hostInfo.GetCert().Certificate
 	}
 
 	if args.Json || args.Pretty {

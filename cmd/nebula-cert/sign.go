@@ -6,7 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -137,30 +137,24 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 	}
 
-	issuer, err := caCert.Sha256Sum()
-	if err != nil {
-		return fmt.Errorf("error while getting -ca-crt fingerprint: %s", err)
-	}
-
 	if caCert.Expired(time.Now()) {
 		return fmt.Errorf("ca certificate is expired")
 	}
 
 	// if no duration is given, expire one second before the root expires
 	if *sf.duration <= 0 {
-		*sf.duration = time.Until(caCert.Details.NotAfter) - time.Second*1
+		*sf.duration = time.Until(caCert.NotAfter()) - time.Second*1
 	}
 
-	ip, ipNet, err := net.ParseCIDR(*sf.ip)
+	network, err := netip.ParsePrefix(*sf.ip)
 	if err != nil {
 		return newHelpErrorf("invalid ip definition: %s", err)
 	}
-	if ip.To4() == nil {
+	if !network.Addr().Is4() {
 		return newHelpErrorf("invalid ip definition: can only be ipv4, have %s", *sf.ip)
 	}
-	ipNet.IP = ip
 
-	groups := []string{}
+	var groups []string
 	if *sf.groups != "" {
 		for _, rg := range strings.Split(*sf.groups, ",") {
 			g := strings.TrimSpace(rg)
@@ -170,16 +164,16 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 	}
 
-	subnets := []*net.IPNet{}
+	var subnets []netip.Prefix
 	if *sf.subnets != "" {
 		for _, rs := range strings.Split(*sf.subnets, ",") {
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
-				_, s, err := net.ParseCIDR(rs)
+				s, err := netip.ParsePrefix(rs)
 				if err != nil {
 					return newHelpErrorf("invalid subnet definition: %s", err)
 				}
-				if s.IP.To4() == nil {
+				if !s.Addr().Is4() {
 					return newHelpErrorf("invalid subnet definition: can only be ipv4, have %s", rs)
 				}
 				subnets = append(subnets, s)
@@ -224,37 +218,37 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		pub, rawPriv = newKeypair(curve)
 	}
 
-	nc := cert.NebulaCertificate{
-		Details: cert.NebulaCertificateDetails{
-			Name:      *sf.name,
-			Ips:       []*net.IPNet{ipNet},
-			Groups:    groups,
-			Subnets:   subnets,
-			NotBefore: time.Now(),
-			NotAfter:  time.Now().Add(*sf.duration),
-			PublicKey: pub,
-			IsCA:      false,
-			Issuer:    issuer,
-			Curve:     curve,
-		},
-		Pkcs11Backed: isP11,
+	t := &cert.TBSCertificate{
+		Version:        cert.Version1,
+		Name:           *sf.name,
+		Networks:       []netip.Prefix{network},
+		Groups:         groups,
+		UnsafeNetworks: subnets,
+		NotBefore:      time.Now(),
+		NotAfter:       time.Now().Add(*sf.duration),
+		PublicKey:      pub,
+		IsCA:           false,
+		Curve:          curve,
 	}
 
+	var c cert.Certificate
+
 	if p11Client == nil {
-		err = nc.Sign(curve, caKey)
+		c, err = t.Sign(caCert, curve, caKey)
 		if err != nil {
 			return fmt.Errorf("error while signing: %w", err)
 		}
 	} else {
-		err = nc.SignPkcs11(curve, p11Client)
+		c, err = t.SignPkcs11(caCert, curve, p11Client)
 		if err != nil {
 			return fmt.Errorf("error while signing with PKCS#11: %w", err)
 		}
 	}
 
-	if err := nc.CheckRootConstrains(caCert); err != nil {
-		return fmt.Errorf("refusing to sign, root certificate constraints violated: %s", err)
-	}
+	//TODO:
+	//if err := nc.CheckRootConstrains(caCert); err != nil {
+	//	return fmt.Errorf("refusing to sign, root certificate constraints violated: %s", err)
+	//}
 
 	if *sf.outKeyPath == "" {
 		*sf.outKeyPath = *sf.name + ".key"
@@ -279,7 +273,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 	}
 
-	b, err := nc.MarshalToPEM()
+	b, err := c.MarshalToPEM()
 	if err != nil {
 		return fmt.Errorf("error while marshalling certificate: %s", err)
 	}

@@ -45,7 +45,7 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 		return fmt.Errorf("unable to read cert; %s", err)
 	}
 
-	var c *cert.NebulaCertificate
+	var c cert.Certificate
 	var qrBytes []byte
 	part := 0
 

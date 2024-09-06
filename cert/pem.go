@@ -9,6 +9,7 @@ import (
 
 const (
 	CertificateBanner                = "NEBULA CERTIFICATE"
+	CertificateV2Banner              = "NEBULA CERTIFICATE V2"
 	X25519PrivateKeyBanner           = "NEBULA X25519 PRIVATE KEY"
 	X25519PublicKeyBanner            = "NEBULA X25519 PUBLIC KEY"
 	EncryptedEd25519PrivateKeyBanner = "NEBULA ED25519 ENCRYPTED PRIVATE KEY"
@@ -23,16 +24,25 @@ const (
 
 // UnmarshalCertificateFromPEM will try to unmarshal the first pem block in a byte array, returning any non consumed
 // data or an error on failure
-func UnmarshalCertificateFromPEM(b []byte) (*NebulaCertificate, []byte, error) {
+func UnmarshalCertificateFromPEM(b []byte) (Certificate, []byte, error) {
 	p, r := pem.Decode(b)
 	if p == nil {
 		return nil, r, ErrInvalidPEMBlock
 	}
-	if p.Type != CertificateBanner {
+
+	switch p.Type {
+	case CertificateBanner:
+		c, err := unmarshalCertificateV1(p.Bytes, true)
+		if err != nil {
+			return nil, nil, err
+		}
+		return c, r, nil
+	case CertificateV2Banner:
+		//TODO
+		panic("TODO")
+	default:
 		return nil, r, ErrInvalidPEMCertificateBanner
 	}
-	nc, err := UnmarshalNebulaCertificate(p.Bytes)
-	return nc, r, err
 }
 
 func MarshalPublicKeyToPEM(curve Curve, b []byte) []byte {

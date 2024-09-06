@@ -21,11 +21,12 @@ type PKI struct {
 }
 
 type CertState struct {
-	Certificate         *cert.NebulaCertificate
+	Certificate         cert.Certificate
 	RawCertificate      []byte
 	RawCertificateNoKey []byte
 	PublicKey           []byte
 	PrivateKey          []byte
+	pkcs11Backed        bool
 }
 
 func NewPKIFromConfig(l *logrus.Logger, c *config.C) (*PKI, error) {
@@ -84,8 +85,8 @@ func (p *PKI) reloadCert(c *config.C, initial bool) *util.ContextualError {
 
 		// did IP in cert change? if so, don't set
 		currentCert := p.cs.Load().Certificate
-		oldIPs := currentCert.Details.Ips
-		newIPs := cs.Certificate.Details.Ips
+		oldIPs := currentCert.Networks()
+		newIPs := cs.Certificate.Networks()
 		if len(oldIPs) > 0 && len(newIPs) > 0 && oldIPs[0].String() != newIPs[0].String() {
 			return util.NewContextualError(
 				"IP in new cert was different from old",
@@ -115,29 +116,28 @@ func (p *PKI) reloadCAPool(c *config.C) *util.ContextualError {
 	return nil
 }
 
-func newCertState(certificate *cert.NebulaCertificate, privateKey []byte) (*CertState, error) {
+func newCertState(certificate cert.Certificate, pkcs11backed bool, privateKey []byte) (*CertState, error) {
 	// Marshal the certificate to ensure it is valid
 	rawCertificate, err := certificate.Marshal()
 	if err != nil {
 		return nil, fmt.Errorf("invalid nebula certificate on interface: %s", err)
 	}
 
-	publicKey := certificate.Details.PublicKey
+	publicKey := certificate.PublicKey()
 	cs := &CertState{
 		RawCertificate: rawCertificate,
 		Certificate:    certificate,
 		PrivateKey:     privateKey,
 		PublicKey:      publicKey,
+		pkcs11Backed:   pkcs11backed,
 	}
 
-	cs.Certificate.Details.PublicKey = nil
-	rawCertNoKey, err := cs.Certificate.Marshal()
+	rawCertNoKey, err := cs.Certificate.MarshalForHandshakes()
 	if err != nil {
 		return nil, fmt.Errorf("error marshalling certificate no key: %s", err)
 	}
 	cs.RawCertificateNoKey = rawCertNoKey
-	// put public key back
-	cs.Certificate.Details.PublicKey = cs.PublicKey
+
 	return cs, nil
 }
 
@@ -202,12 +202,12 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error while unmarshaling pki.cert %s: %s", pubPathOrPEM, err)
 	}
-	nebulaCert.Pkcs11Backed = isPkcs11
+
 	if nebulaCert.Expired(time.Now()) {
 		return nil, fmt.Errorf("nebula certificate for this host is expired")
 	}
 
-	if len(nebulaCert.Details.Ips) == 0 {
+	if len(nebulaCert.Networks()) == 0 {
 		return nil, fmt.Errorf("no IPs encoded in certificate")
 	}
 
@@ -215,7 +215,7 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 		return nil, fmt.Errorf("private key is not a pair with public key in nebula cert")
 	}
 
-	return newCertState(nebulaCert, rawKey)
+	return newCertState(nebulaCert, isPkcs11, rawKey)
 }
 
 func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.CAPool, error) {
@@ -241,7 +241,7 @@ func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.CAPool, error) {
 	if errors.Is(err, cert.ErrExpired) {
 		var expired int
 		for _, crt := range caPool.CAs {
-			if crt.Expired(time.Now()) {
+			if crt.Certificate.Expired(time.Now()) {
 				expired++
 				l.WithField("cert", crt).Warn("expired certificate present in CA pool")
 			}

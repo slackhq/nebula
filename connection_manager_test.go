@@ -47,7 +47,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	cs := &CertState{
 		RawCertificate:      []byte{},
 		PrivateKey:          []byte{},
-		Certificate:         &cert.NebulaCertificate{},
+		Certificate:         &dummyCert{},
 		RawCertificateNoKey: []byte{},
 	}
 
@@ -80,7 +80,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 		remoteIndexId: 9901,
 	}
 	hostinfo.ConnectionState = &ConnectionState{
-		myCert: &cert.NebulaCertificate{},
+		myCert: &dummyCert{},
 		H:      &noise.HandshakeState{},
 	}
 	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
@@ -130,7 +130,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	cs := &CertState{
 		RawCertificate:      []byte{},
 		PrivateKey:          []byte{},
-		Certificate:         &cert.NebulaCertificate{},
+		Certificate:         &dummyCert{},
 		RawCertificateNoKey: []byte{},
 	}
 
@@ -163,7 +163,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 		remoteIndexId: 9901,
 	}
 	hostinfo.ConnectionState = &ConnectionState{
-		myCert: &cert.NebulaCertificate{},
+		myCert: &dummyCert{},
 		H:      &noise.HandshakeState{},
 	}
 	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
@@ -253,7 +253,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	cs := &CertState{
 		RawCertificate:      []byte{},
 		PrivateKey:          []byte{},
-		Certificate:         &cert.NebulaCertificate{},
+		Certificate:         &dummyCert{},
 		RawCertificateNoKey: []byte{},
 	}
 
@@ -282,7 +282,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	hostinfo := &HostInfo{
 		vpnIp: vpnIp,
 		ConnectionState: &ConnectionState{
-			myCert:   &cert.NebulaCertificate{},
+			myCert:   &dummyCert{},
 			peerCert: &peerCert,
 			H:        &noise.HandshakeState{},
 		},
@@ -302,4 +302,104 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	nextTick = now.Add(61 * time.Second)
 	invalid = nc.isInvalidCertificate(nextTick, hostinfo)
 	assert.True(t, invalid)
+}
+
+type dummyCert struct {
+	isCa bool
+}
+
+func (d *dummyCert) Version() cert.Version {
+	return cert.Version1
+}
+
+func (d *dummyCert) Curve() cert.Curve {
+	return cert.Curve_CURVE25519
+}
+
+func (d *dummyCert) Groups() []string {
+	return nil
+}
+
+func (d *dummyCert) IsCA() bool {
+	return d.isCa
+}
+
+func (d *dummyCert) Issuer() string {
+	return ""
+}
+
+func (d *dummyCert) Name() string {
+	return ""
+}
+
+func (d *dummyCert) Networks() []netip.Prefix {
+	return nil
+}
+
+func (d *dummyCert) NotAfter() time.Time {
+	return time.Now().Add(time.Hour * -1)
+}
+
+func (d *dummyCert) NotBefore() time.Time {
+	return time.Now().Add(time.Hour)
+}
+
+func (d *dummyCert) PublicKey() []byte {
+	return nil
+}
+
+func (d *dummyCert) Signature() []byte {
+	return nil
+}
+
+func (d *dummyCert) UnsafeNetworks() []netip.Prefix {
+	return nil
+}
+
+func (d *dummyCert) MarshalForHandshakes() ([]byte, error) {
+	return nil, nil
+}
+
+func (d *dummyCert) Sign(curve cert.Curve, key []byte) error {
+	return nil
+}
+
+func (d *dummyCert) CheckSignature(key []byte) bool {
+	return true
+}
+
+func (d *dummyCert) Expired(t time.Time) bool {
+	return false
+}
+
+func (d *dummyCert) CheckRootConstraints(signer cert.Certificate) error {
+	return nil
+}
+
+func (d *dummyCert) VerifyPrivateKey(curve cert.Curve, key []byte) error {
+	return nil
+}
+
+func (d *dummyCert) String() string {
+	return ""
+}
+
+func (d *dummyCert) Marshal() ([]byte, error) {
+	return nil, nil
+}
+
+func (d *dummyCert) MarshalToPEM() ([]byte, error) {
+	return nil, nil
+}
+
+func (d *dummyCert) Sha256Sum() (string, error) {
+	return "", nil
+}
+
+func (d *dummyCert) MarshalJSON() ([]byte, error) {
+	return nil, nil
+}
+
+func (d *dummyCert) Copy() cert.Certificate {
+	return d
 }

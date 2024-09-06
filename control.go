@@ -37,15 +37,15 @@ type Control struct {
 }
 
 type ControlHostInfo struct {
-	VpnIp                  netip.Addr              `json:"vpnIp"`
-	LocalIndex             uint32                  `json:"localIndex"`
-	RemoteIndex            uint32                  `json:"remoteIndex"`
-	RemoteAddrs            []netip.AddrPort        `json:"remoteAddrs"`
-	Cert                   *cert.NebulaCertificate `json:"cert"`
-	MessageCounter         uint64                  `json:"messageCounter"`
-	CurrentRemote          netip.AddrPort          `json:"currentRemote"`
-	CurrentRelaysToMe      []netip.Addr            `json:"currentRelaysToMe"`
-	CurrentRelaysThroughMe []netip.Addr            `json:"currentRelaysThroughMe"`
+	VpnIp                  netip.Addr       `json:"vpnIp"`
+	LocalIndex             uint32           `json:"localIndex"`
+	RemoteIndex            uint32           `json:"remoteIndex"`
+	RemoteAddrs            []netip.AddrPort `json:"remoteAddrs"`
+	Cert                   cert.Certificate `json:"cert"`
+	MessageCounter         uint64           `json:"messageCounter"`
+	CurrentRemote          netip.AddrPort   `json:"currentRemote"`
+	CurrentRelaysToMe      []netip.Addr     `json:"currentRelaysToMe"`
+	CurrentRelaysThroughMe []netip.Addr     `json:"currentRelaysThroughMe"`
 }
 
 // Start actually runs nebula, this is a nonblocking call. To block use Control.ShutdownBlock()
@@ -130,7 +130,8 @@ func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 }
 
 // GetCertByVpnIp returns the authenticated certificate of the given vpn IP, or nil if not found
-func (c *Control) GetCertByVpnIp(vpnIp netip.Addr) *cert.NebulaCertificate {
+// TODO: this should copy!
+func (c *Control) GetCertByVpnIp(vpnIp netip.Addr) cert.Certificate {
 	if c.f.myVpnNet.Addr() == vpnIp {
 		return c.f.pki.GetCertState().Certificate
 	}
@@ -138,7 +139,7 @@ func (c *Control) GetCertByVpnIp(vpnIp netip.Addr) *cert.NebulaCertificate {
 	if hi == nil {
 		return nil
 	}
-	return hi.GetCert()
+	return hi.GetCert().Certificate
 }
 
 // CreateTunnel creates a new tunnel to the given vpn ip.
@@ -290,7 +291,7 @@ func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {
 	}
 
 	if c := h.GetCert(); c != nil {
-		chi.Cert = c.Copy()
+		chi.Cert = c.Certificate.Copy()
 	}
 
 	return chi

@@ -66,8 +66,8 @@ func verify(args []string, out io.Writer, errOut io.Writer) error {
 		return fmt.Errorf("error while parsing crt: %s", err)
 	}
 
-	good, err := c.Verify(time.Now(), caPool)
-	if !good {
+	_, err = caPool.VerifyCertificate(time.Now(), c)
+	if err != nil {
 		return err
 	}
 

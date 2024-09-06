@@ -14,7 +14,6 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
 	"golang.org/x/net/ipv4"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -494,7 +493,7 @@ func (f *Interface) sendMeta(ci *ConnectionState, endpoint *net.UDPAddr, meta *N
 }
 */
 
-func RecombineCertAndValidate(h *noise.HandshakeState, rawCertBytes []byte, caPool *cert.CAPool) (*cert.NebulaCertificate, error) {
+func RecombineCertAndValidate(h *noise.HandshakeState, rawCertBytes []byte, caPool *cert.CAPool) (*cert.CachedCertificate, error) {
 	pk := h.PeerStatic()
 
 	if pk == nil {
@@ -505,31 +504,15 @@ func RecombineCertAndValidate(h *noise.HandshakeState, rawCertBytes []byte, caPo
 		return nil, errors.New("provided payload was empty")
 	}
 
-	r := &cert.RawNebulaCertificate{}
-	err := proto.Unmarshal(rawCertBytes, r)
+	c, err := cert.UnmarshalCertificateFromHandshake(rawCertBytes, pk)
 	if err != nil {
-		return nil, fmt.Errorf("error unmarshaling cert: %s", err)
+		return nil, fmt.Errorf("error unmarshaling cert: %w", err)
 	}
 
-	// If the Details are nil, just exit to avoid crashing
-	if r.Details == nil {
-		return nil, fmt.Errorf("certificate did not contain any details")
-	}
-
-	r.Details.PublicKey = pk
-	recombined, err := proto.Marshal(r)
+	cc, err := caPool.VerifyCertificate(time.Now(), c)
 	if err != nil {
-		return nil, fmt.Errorf("error while recombining certificate: %s", err)
+		return nil, fmt.Errorf("certificate validation failed: %w", err)
 	}
 
-	c, _ := cert.UnmarshalNebulaCertificate(recombined)
-	isValid, err := c.Verify(time.Now(), caPool)
-	if err != nil {
-		return c, fmt.Errorf("certificate validation failed: %s", err)
-	} else if !isValid {
-		// This case should never happen but here's to defensive programming!
-		return c, errors.New("certificate validation failed but did not return an error")
-	}
-
-	return c, nil
+	return cc, nil
 }

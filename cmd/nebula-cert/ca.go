@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -113,38 +113,36 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		}
 	}
 
-	var ips []*net.IPNet
+	var ips []netip.Prefix
 	if *cf.ips != "" {
 		for _, rs := range strings.Split(*cf.ips, ",") {
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
-				ip, ipNet, err := net.ParseCIDR(rs)
+				n, err := netip.ParsePrefix(rs)
 				if err != nil {
 					return newHelpErrorf("invalid ip definition: %s", err)
 				}
-				if ip.To4() == nil {
+				if !n.Addr().Is4() {
 					return newHelpErrorf("invalid ip definition: can only be ipv4, have %s", rs)
 				}
-
-				ipNet.IP = ip
-				ips = append(ips, ipNet)
+				ips = append(ips, n)
 			}
 		}
 	}
 
-	var subnets []*net.IPNet
+	var subnets []netip.Prefix
 	if *cf.subnets != "" {
 		for _, rs := range strings.Split(*cf.subnets, ",") {
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
-				_, s, err := net.ParseCIDR(rs)
+				n, err := netip.ParsePrefix(rs)
 				if err != nil {
 					return newHelpErrorf("invalid subnet definition: %s", err)
 				}
-				if s.IP.To4() == nil {
+				if !n.Addr().Is4() {
 					return newHelpErrorf("invalid subnet definition: can only be ipv4, have %s", rs)
 				}
-				subnets = append(subnets, s)
+				subnets = append(subnets, n)
 			}
 		}
 	}
@@ -223,19 +221,17 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		}
 	}
 
-	nc := cert.NebulaCertificate{
-		Details: cert.NebulaCertificateDetails{
-			Name:      *cf.name,
-			Groups:    groups,
-			Ips:       ips,
-			Subnets:   subnets,
-			NotBefore: time.Now(),
-			NotAfter:  time.Now().Add(*cf.duration),
-			PublicKey: pub,
-			IsCA:      true,
-			Curve:     curve,
-		},
-		Pkcs11Backed: isP11,
+	t := &cert.TBSCertificate{
+		Version:        cert.Version1,
+		Name:           *cf.name,
+		Groups:         groups,
+		Networks:       ips,
+		UnsafeNetworks: subnets,
+		NotBefore:      time.Now(),
+		NotAfter:       time.Now().Add(*cf.duration),
+		PublicKey:      pub,
+		IsCA:           true,
+		Curve:          curve,
 	}
 
 	if !isP11 {
@@ -248,15 +244,16 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		return fmt.Errorf("refusing to overwrite existing CA cert: %s", *cf.outCertPath)
 	}
 
+	var c cert.Certificate
 	var b []byte
 
 	if isP11 {
-		err = nc.SignPkcs11(curve, p11Client)
+		c, err = t.SignPkcs11(nil, curve, p11Client)
 		if err != nil {
 			return fmt.Errorf("error while signing with PKCS#11: %w", err)
 		}
 	} else {
-		err = nc.Sign(curve, rawPriv)
+		c, err = t.Sign(nil, curve, rawPriv)
 		if err != nil {
 			return fmt.Errorf("error while signing: %s", err)
 		}
@@ -279,7 +276,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		return fmt.Errorf("refusing to overwrite existing CA cert: %s", *cf.outCertPath)
 	}
 
-	b, err = nc.MarshalToPEM()
+	b, err = c.MarshalToPEM()
 	if err != nil {
 		return fmt.Errorf("error while marshalling certificate: %s", err)
 	}
