@@ -148,7 +148,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 
 	network, err := netip.ParsePrefix(*sf.ip)
 	if err != nil {
-		return newHelpErrorf("invalid ip definition: %s", err)
+		return newHelpErrorf("invalid ip definition: %s", *sf.ip)
 	}
 	if !network.Addr().Is4() {
 		return newHelpErrorf("invalid ip definition: can only be ipv4, have %s", *sf.ip)
@@ -171,7 +171,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			if rs != "" {
 				s, err := netip.ParsePrefix(rs)
 				if err != nil {
-					return newHelpErrorf("invalid subnet definition: %s", err)
+					return newHelpErrorf("invalid subnet definition: %s", rs)
 				}
 				if !s.Addr().Is4() {
 					return newHelpErrorf("invalid subnet definition: can only be ipv4, have %s", rs)
@@ -231,6 +231,18 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		Curve:          curve,
 	}
 
+	if *sf.outKeyPath == "" {
+		*sf.outKeyPath = *sf.name + ".key"
+	}
+
+	if *sf.outCertPath == "" {
+		*sf.outCertPath = *sf.name + ".crt"
+	}
+
+	if _, err := os.Stat(*sf.outCertPath); err == nil {
+		return fmt.Errorf("refusing to overwrite existing cert: %s", *sf.outCertPath)
+	}
+
 	var c cert.Certificate
 
 	if p11Client == nil {
@@ -243,23 +255,6 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		if err != nil {
 			return fmt.Errorf("error while signing with PKCS#11: %w", err)
 		}
-	}
-
-	//TODO:
-	//if err := nc.CheckRootConstrains(caCert); err != nil {
-	//	return fmt.Errorf("refusing to sign, root certificate constraints violated: %s", err)
-	//}
-
-	if *sf.outKeyPath == "" {
-		*sf.outKeyPath = *sf.name + ".key"
-	}
-
-	if *sf.outCertPath == "" {
-		*sf.outCertPath = *sf.name + ".crt"
-	}
-
-	if _, err := os.Stat(*sf.outCertPath); err == nil {
-		return fmt.Errorf("refusing to overwrite existing cert: %s", *sf.outCertPath)
 	}
 
 	if !isP11 && *sf.inPubPath == "" {

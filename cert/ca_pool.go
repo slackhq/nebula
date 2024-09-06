@@ -128,6 +128,9 @@ func (ncp *CAPool) IsBlocklisted(fingerprint string) bool {
 // If the certificate is valid then the returned CachedCertificate can be used in subsequent verification attempts
 // to increase performance.
 func (ncp *CAPool) VerifyCertificate(now time.Time, c Certificate) (*CachedCertificate, error) {
+	if c == nil {
+		return nil, fmt.Errorf("no certificate")
+	}
 	sha, err := c.Fingerprint()
 	if err != nil {
 		return nil, fmt.Errorf("could not calculate shasum to verify: %w", err)
@@ -230,18 +233,18 @@ func (ncp *CAPool) GetFingerprints() []string {
 
 // CheckCAConstraints returns an error if the sub certificate violates constraints present in the signer certificate.
 func CheckCAConstraints(signer Certificate, sub Certificate) error {
-	return checkCAConstraints(signer, sub.NotAfter(), sub.NotBefore(), sub.Groups(), sub.Networks(), sub.UnsafeNetworks())
+	return checkCAConstraints(signer, sub.NotBefore(), sub.NotAfter(), sub.Groups(), sub.Networks(), sub.UnsafeNetworks())
 }
 
 // checkCAConstraints is a very generic function allowing both Certificates and TBSCertificates to be tested.
 func checkCAConstraints(signer Certificate, notBefore, notAfter time.Time, groups []string, networks, unsafeNetworks []netip.Prefix) error {
 	// Make sure this cert wasn't valid before the root
-	if signer.NotAfter().Before(notAfter) {
+	if notAfter.After(signer.NotAfter()) {
 		return fmt.Errorf("certificate expires after signing certificate")
 	}
 
 	// Make sure this cert isn't valid after the root
-	if signer.NotBefore().After(notBefore) {
+	if notBefore.Before(signer.NotBefore()) {
 		return fmt.Errorf("certificate is valid before the signing certificate")
 	}
 

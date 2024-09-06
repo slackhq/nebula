@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"net"
 	"net/netip"
 	"testing"
 	"time"
@@ -206,10 +205,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	now := time.Now()
 	l := test.NewLogger()
-	ipNet := net.IPNet{
-		IP:   net.IPv4(172, 1, 1, 2),
-		Mask: net.IPMask{255, 255, 255, 0},
-	}
+
 	vpncidr := netip.MustParsePrefix("172.1.1.1/24")
 	localrange := netip.MustParsePrefix("10.1.1.1/24")
 	vpnIp := netip.MustParseAddr("172.1.1.2")
@@ -219,36 +215,33 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 
 	// Generate keys for CA and peer's cert.
 	pubCA, privCA, _ := ed25519.GenerateKey(rand.Reader)
-	caCert := cert.NebulaCertificate{
-		Details: cert.NebulaCertificateDetails{
-			Name:      "ca",
-			NotBefore: now,
-			NotAfter:  now.Add(1 * time.Hour),
-			IsCA:      true,
-			PublicKey: pubCA,
-		},
+	tbs := &cert.TBSCertificate{
+		Version:   1,
+		Name:      "ca",
+		IsCA:      true,
+		NotBefore: now,
+		NotAfter:  now.Add(1 * time.Hour),
+		PublicKey: pubCA,
 	}
 
-	assert.NoError(t, caCert.Sign(cert.Curve_CURVE25519, privCA))
-	ncp := &cert.CAPool{
-		CAs: cert.NewCAPool().CAs,
-	}
-	ncp.CAs["ca"] = &caCert
+	caCert, err := tbs.Sign(nil, cert.Curve_CURVE25519, privCA)
+	assert.NoError(t, err)
+	ncp := cert.NewCAPool()
+	assert.NoError(t, ncp.AddCA(caCert))
 
 	pubCrt, _, _ := ed25519.GenerateKey(rand.Reader)
-	peerCert := cert.NebulaCertificate{
-		Details: cert.NebulaCertificateDetails{
-			Name:      "host",
-			Ips:       []*net.IPNet{&ipNet},
-			Subnets:   []*net.IPNet{},
-			NotBefore: now,
-			NotAfter:  now.Add(60 * time.Second),
-			PublicKey: pubCrt,
-			IsCA:      false,
-			Issuer:    "ca",
-		},
+	tbs = &cert.TBSCertificate{
+		Version:   1,
+		Name:      "host",
+		Networks:  []netip.Prefix{vpncidr},
+		NotBefore: now,
+		NotAfter:  now.Add(60 * time.Second),
+		PublicKey: pubCrt,
 	}
-	assert.NoError(t, peerCert.Sign(cert.Curve_CURVE25519, privCA))
+	peerCert, err := tbs.Sign(caCert, cert.Curve_CURVE25519, privCA)
+	assert.NoError(t, err)
+
+	cachedPeerCert, err := ncp.VerifyCertificate(now.Add(time.Second), peerCert)
 
 	cs := &CertState{
 		RawCertificate:      []byte{},
@@ -283,7 +276,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 		vpnIp: vpnIp,
 		ConnectionState: &ConnectionState{
 			myCert:   &dummyCert{},
-			peerCert: &peerCert,
+			peerCert: cachedPeerCert,
 			H:        &noise.HandshakeState{},
 		},
 	}
@@ -305,19 +298,30 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 }
 
 type dummyCert struct {
-	isCa bool
+	version        cert.Version
+	curve          cert.Curve
+	groups         []string
+	isCa           bool
+	issuer         string
+	name           string
+	networks       []netip.Prefix
+	notAfter       time.Time
+	notBefore      time.Time
+	publicKey      []byte
+	signature      []byte
+	unsafeNetworks []netip.Prefix
 }
 
 func (d *dummyCert) Version() cert.Version {
-	return cert.Version1
+	return d.version
 }
 
 func (d *dummyCert) Curve() cert.Curve {
-	return cert.Curve_CURVE25519
+	return d.curve
 }
 
 func (d *dummyCert) Groups() []string {
-	return nil
+	return d.groups
 }
 
 func (d *dummyCert) IsCA() bool {
@@ -325,35 +329,35 @@ func (d *dummyCert) IsCA() bool {
 }
 
 func (d *dummyCert) Issuer() string {
-	return ""
+	return d.issuer
 }
 
 func (d *dummyCert) Name() string {
-	return ""
+	return d.name
 }
 
 func (d *dummyCert) Networks() []netip.Prefix {
-	return nil
+	return d.networks
 }
 
 func (d *dummyCert) NotAfter() time.Time {
-	return time.Now().Add(time.Hour * -1)
+	return d.notAfter
 }
 
 func (d *dummyCert) NotBefore() time.Time {
-	return time.Now().Add(time.Hour)
+	return d.notBefore
 }
 
 func (d *dummyCert) PublicKey() []byte {
-	return nil
+	return d.publicKey
 }
 
 func (d *dummyCert) Signature() []byte {
-	return nil
+	return d.signature
 }
 
 func (d *dummyCert) UnsafeNetworks() []netip.Prefix {
-	return nil
+	return d.unsafeNetworks
 }
 
 func (d *dummyCert) MarshalForHandshakes() ([]byte, error) {

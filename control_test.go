@@ -5,7 +5,6 @@ import (
 	"net/netip"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
@@ -33,22 +32,6 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		Mask: net.IPMask{255, 255, 255, 0},
 	}
 
-	crt := &cert.NebulaCertificate{
-		Details: cert.NebulaCertificateDetails{
-			Name:           "test",
-			Ips:            []*net.IPNet{&ipNet},
-			Subnets:        []*net.IPNet{},
-			Groups:         []string{"default-group"},
-			NotBefore:      time.Unix(1, 0),
-			NotAfter:       time.Unix(2, 0),
-			PublicKey:      []byte{5, 6, 7, 8},
-			IsCA:           false,
-			Issuer:         "the-issuer",
-			InvertedGroups: map[string]struct{}{"default-group": {}},
-		},
-		Signature: []byte{1, 2, 1, 2, 1, 3},
-	}
-
 	remotes := NewRemoteList(nil)
 	remotes.unlockedPrependV4(netip.IPv4Unspecified(), NewIp4AndPortFromNetIP(remote1.Addr(), remote1.Port()))
 	remotes.unlockedPrependV6(netip.IPv4Unspecified(), NewIp6AndPortFromNetIP(remote2.Addr(), remote2.Port()))
@@ -56,11 +39,14 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	vpnIp, ok := netip.AddrFromSlice(ipNet.IP)
 	assert.True(t, ok)
 
+	crt := &dummyCert{
+		//TODO: we need to populate this with fields if we ever enable the memory sharing test again
+	}
 	hm.unlockedAddHostInfo(&HostInfo{
 		remote:  remote1,
 		remotes: remotes,
 		ConnectionState: &ConnectionState{
-			peerCert: crt,
+			peerCert: &cert.CachedCertificate{Certificate: crt},
 		},
 		remoteIndexId: 200,
 		localIndexId:  201,

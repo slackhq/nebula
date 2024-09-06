@@ -138,16 +138,8 @@ func Test_signCert(t *testing.T) {
 	assert.Empty(t, eb.String())
 
 	// write a proper ca cert for later
-	ca := cert.NebulaCertificate{
-		Details: cert.NebulaCertificateDetails{
-			Name:      "ca",
-			NotBefore: time.Now(),
-			NotAfter:  time.Now().Add(time.Minute * 200),
-			PublicKey: caPub,
-			IsCA:      true,
-		},
-	}
-	b, _ := ca.MarshalToPEM()
+	ca, _ := NewTestCaCert("ca", caPub, caPriv, time.Now(), time.Now().Add(time.Minute*200), nil, nil, nil)
+	b, _ := ca.MarshalPEM()
 	caCrtF.Write(b)
 
 	// failed to read pub
@@ -178,7 +170,7 @@ func Test_signCert(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "a1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m"}
-	assertHelpError(t, signCert(args, ob, eb, nopw), "invalid ip definition: invalid CIDR address: a1.1.1.1/24")
+	assertHelpError(t, signCert(args, ob, eb, nopw), "invalid ip definition: a1.1.1.1/24")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 
@@ -193,7 +185,7 @@ func Test_signCert(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m", "-subnets", "a"}
-	assertHelpError(t, signCert(args, ob, eb, nopw), "invalid subnet definition: invalid CIDR address: a")
+	assertHelpError(t, signCert(args, ob, eb, nopw), "invalid subnet definition: a")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 
@@ -266,23 +258,23 @@ func Test_signCert(t *testing.T) {
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
 
-	assert.Equal(t, "test", lCrt.Details.Name)
-	assert.Equal(t, "1.1.1.1/24", lCrt.Details.Ips[0].String())
-	assert.Len(t, lCrt.Details.Ips, 1)
-	assert.False(t, lCrt.Details.IsCA)
-	assert.Equal(t, []string{"1", "2", "3", "4", "5"}, lCrt.Details.Groups)
-	assert.Len(t, lCrt.Details.Subnets, 3)
-	assert.Len(t, lCrt.Details.PublicKey, 32)
-	assert.Equal(t, time.Duration(time.Minute*100), lCrt.Details.NotAfter.Sub(lCrt.Details.NotBefore))
+	assert.Equal(t, "test", lCrt.Name())
+	assert.Equal(t, "1.1.1.1/24", lCrt.Networks()[0].String())
+	assert.Len(t, lCrt.Networks(), 1)
+	assert.False(t, lCrt.IsCA())
+	assert.Equal(t, []string{"1", "2", "3", "4", "5"}, lCrt.Groups())
+	assert.Len(t, lCrt.UnsafeNetworks(), 3)
+	assert.Len(t, lCrt.PublicKey(), 32)
+	assert.Equal(t, time.Duration(time.Minute*100), lCrt.NotAfter().Sub(lCrt.NotBefore()))
 
 	sns := []string{}
-	for _, sn := range lCrt.Details.Subnets {
+	for _, sn := range lCrt.UnsafeNetworks() {
 		sns = append(sns, sn.String())
 	}
 	assert.Equal(t, []string{"10.1.1.1/32", "10.2.2.2/32", "10.5.5.5/32"}, sns)
 
-	issuer, _ := ca.Sha256Sum()
-	assert.Equal(t, issuer, lCrt.Details.Issuer)
+	issuer, _ := ca.Fingerprint()
+	assert.Equal(t, issuer, lCrt.Issuer())
 
 	assert.True(t, lCrt.CheckSignature(caPub))
 
@@ -301,13 +293,15 @@ func Test_signCert(t *testing.T) {
 	lCrt, b, err = cert.UnmarshalCertificateFromPEM(rb)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
-	assert.Equal(t, lCrt.Details.PublicKey, inPub)
+	assert.Equal(t, lCrt.PublicKey(), inPub)
 
 	// test refuse to sign cert with duration beyond root
 	ob.Reset()
 	eb.Reset()
+	os.Remove(keyF.Name())
+	os.Remove(crtF.Name())
 	args = []string{"-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", crtF.Name(), "-out-key", keyF.Name(), "-duration", "1000m", "-subnets", "10.1.1.1/32, ,   10.2.2.2/32   ,   ,  ,, 10.5.5.5/32", "-groups", "1,,   2    ,        ,,,3,4,5"}
-	assert.EqualError(t, signCert(args, ob, eb, nopw), "refusing to sign, root certificate constraints violated: certificate expires after signing certificate")
+	assert.EqualError(t, signCert(args, ob, eb, nopw), "error while signing: certificate expires after signing certificate")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 
@@ -363,16 +357,8 @@ func Test_signCert(t *testing.T) {
 	b, _ = cert.EncryptAndMarshalSigningPrivateKey(cert.Curve_CURVE25519, caPriv, passphrase, kdfParams)
 	caKeyF.Write(b)
 
-	ca = cert.NebulaCertificate{
-		Details: cert.NebulaCertificateDetails{
-			Name:      "ca",
-			NotBefore: time.Now(),
-			NotAfter:  time.Now().Add(time.Minute * 200),
-			PublicKey: caPub,
-			IsCA:      true,
-		},
-	}
-	b, _ = ca.MarshalToPEM()
+	ca, _ = NewTestCaCert("ca", caPub, caPriv, time.Now(), time.Now().Add(time.Minute*200), nil, nil, nil)
+	b, _ = ca.MarshalPEM()
 	caCrtF.Write(b)
 
 	// test with the proper password

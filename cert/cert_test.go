@@ -67,89 +67,89 @@ func TestMarshalingNebulaCertificate(t *testing.T) {
 	assert.Equal(t, nc.details.Groups, nc2.Groups())
 }
 
-func TestNebulaCertificate_Sign(t *testing.T) {
-	before := time.Now().Add(time.Second * -60).Round(time.Second)
-	after := time.Now().Add(time.Second * 60).Round(time.Second)
-	pubKey := []byte("1234567890abcedfghij1234567890ab")
+//func TestNebulaCertificate_Sign(t *testing.T) {
+//	before := time.Now().Add(time.Second * -60).Round(time.Second)
+//	after := time.Now().Add(time.Second * 60).Round(time.Second)
+//	pubKey := []byte("1234567890abcedfghij1234567890ab")
+//
+//	nc := certificateV1{
+//		details: detailsV1{
+//			Name: "testing",
+//			Ips: []netip.Prefix{
+//				mustParsePrefixUnmapped("10.1.1.1/24"),
+//				mustParsePrefixUnmapped("10.1.1.2/16"),
+//				//TODO: netip cant do it
+//				//{IP: net.ParseIP("10.1.1.3"), Mask: net.IPMask(net.ParseIP("255.0.255.0"))},
+//			},
+//			Subnets: []netip.Prefix{
+//				//TODO: netip cant do it
+//				//{IP: net.ParseIP("9.1.1.1"), Mask: net.IPMask(net.ParseIP("255.0.255.0"))},
+//				mustParsePrefixUnmapped("9.1.1.2/24"),
+//				mustParsePrefixUnmapped("9.1.1.3/24"),
+//			},
+//			Groups:    []string{"test-group1", "test-group2", "test-group3"},
+//			NotBefore: before,
+//			NotAfter:  after,
+//			PublicKey: pubKey,
+//			IsCA:      false,
+//			Issuer:    "1234567890abcedfghij1234567890ab",
+//		},
+//	}
+//
+//	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+//	assert.Nil(t, err)
+//	assert.False(t, nc.CheckSignature(pub))
+//	assert.Nil(t, nc.Sign(Curve_CURVE25519, priv))
+//	assert.True(t, nc.CheckSignature(pub))
+//
+//	_, err = nc.Marshal()
+//	assert.Nil(t, err)
+//	//t.Log("Cert size:", len(b))
+//}
 
-	nc := certificateV1{
-		details: detailsV1{
-			Name: "testing",
-			Ips: []netip.Prefix{
-				mustParsePrefixUnmapped("10.1.1.1/24"),
-				mustParsePrefixUnmapped("10.1.1.2/16"),
-				//TODO: netip cant do it
-				//{IP: net.ParseIP("10.1.1.3"), Mask: net.IPMask(net.ParseIP("255.0.255.0"))},
-			},
-			Subnets: []netip.Prefix{
-				//TODO: netip cant do it
-				//{IP: net.ParseIP("9.1.1.1"), Mask: net.IPMask(net.ParseIP("255.0.255.0"))},
-				mustParsePrefixUnmapped("9.1.1.2/24"),
-				mustParsePrefixUnmapped("9.1.1.3/24"),
-			},
-			Groups:    []string{"test-group1", "test-group2", "test-group3"},
-			NotBefore: before,
-			NotAfter:  after,
-			PublicKey: pubKey,
-			IsCA:      false,
-			Issuer:    "1234567890abcedfghij1234567890ab",
-		},
-	}
-
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	assert.Nil(t, err)
-	assert.False(t, nc.CheckSignature(pub))
-	assert.Nil(t, nc.Sign(Curve_CURVE25519, priv))
-	assert.True(t, nc.CheckSignature(pub))
-
-	_, err = nc.Marshal()
-	assert.Nil(t, err)
-	//t.Log("Cert size:", len(b))
-}
-
-func TestNebulaCertificate_SignP256(t *testing.T) {
-	before := time.Now().Add(time.Second * -60).Round(time.Second)
-	after := time.Now().Add(time.Second * 60).Round(time.Second)
-	pubKey := []byte("01234567890abcedfghij1234567890ab1234567890abcedfghij1234567890ab")
-
-	nc := certificateV1{
-		details: detailsV1{
-			Name: "testing",
-			Ips: []netip.Prefix{
-				mustParsePrefixUnmapped("10.1.1.1/24"),
-				mustParsePrefixUnmapped("10.1.1.2/16"),
-				//TODO: netip no can do
-				//{IP: net.ParseIP("10.1.1.3"), Mask: net.IPMask(net.ParseIP("255.0.255.0"))},
-			},
-			Subnets: []netip.Prefix{
-				//TODO: netip bad
-				//{IP: net.ParseIP("9.1.1.1"), Mask: net.IPMask(net.ParseIP("255.0.255.0"))},
-				mustParsePrefixUnmapped("9.1.1.2/24"),
-				mustParsePrefixUnmapped("9.1.1.3/16"),
-			},
-			Groups:    []string{"test-group1", "test-group2", "test-group3"},
-			NotBefore: before,
-			NotAfter:  after,
-			PublicKey: pubKey,
-			IsCA:      false,
-			Curve:     Curve_P256,
-			Issuer:    "1234567890abcedfghij1234567890ab",
-		},
-	}
-
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	pub := elliptic.Marshal(elliptic.P256(), priv.PublicKey.X, priv.PublicKey.Y)
-	rawPriv := priv.D.FillBytes(make([]byte, 32))
-
-	assert.Nil(t, err)
-	assert.False(t, nc.CheckSignature(pub))
-	assert.Nil(t, nc.Sign(Curve_P256, rawPriv))
-	assert.True(t, nc.CheckSignature(pub))
-
-	_, err = nc.Marshal()
-	assert.Nil(t, err)
-	//t.Log("Cert size:", len(b))
-}
+//func TestNebulaCertificate_SignP256(t *testing.T) {
+//	before := time.Now().Add(time.Second * -60).Round(time.Second)
+//	after := time.Now().Add(time.Second * 60).Round(time.Second)
+//	pubKey := []byte("01234567890abcedfghij1234567890ab1234567890abcedfghij1234567890ab")
+//
+//	nc := certificateV1{
+//		details: detailsV1{
+//			Name: "testing",
+//			Ips: []netip.Prefix{
+//				mustParsePrefixUnmapped("10.1.1.1/24"),
+//				mustParsePrefixUnmapped("10.1.1.2/16"),
+//				//TODO: netip no can do
+//				//{IP: net.ParseIP("10.1.1.3"), Mask: net.IPMask(net.ParseIP("255.0.255.0"))},
+//			},
+//			Subnets: []netip.Prefix{
+//				//TODO: netip bad
+//				//{IP: net.ParseIP("9.1.1.1"), Mask: net.IPMask(net.ParseIP("255.0.255.0"))},
+//				mustParsePrefixUnmapped("9.1.1.2/24"),
+//				mustParsePrefixUnmapped("9.1.1.3/16"),
+//			},
+//			Groups:    []string{"test-group1", "test-group2", "test-group3"},
+//			NotBefore: before,
+//			NotAfter:  after,
+//			PublicKey: pubKey,
+//			IsCA:      false,
+//			Curve:     Curve_P256,
+//			Issuer:    "1234567890abcedfghij1234567890ab",
+//		},
+//	}
+//
+//	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+//	pub := elliptic.Marshal(elliptic.P256(), priv.PublicKey.X, priv.PublicKey.Y)
+//	rawPriv := priv.D.FillBytes(make([]byte, 32))
+//
+//	assert.Nil(t, err)
+//	assert.False(t, nc.CheckSignature(pub))
+//	assert.Nil(t, nc.Sign(Curve_P256, rawPriv))
+//	assert.True(t, nc.CheckSignature(pub))
+//
+//	_, err = nc.Marshal()
+//	assert.Nil(t, err)
+//	//t.Log("Cert size:", len(b))
+//}
 
 func TestNebulaCertificate_Expired(t *testing.T) {
 	nc := certificateV1{
@@ -227,9 +227,7 @@ func TestNebulaCertificate_Verify(t *testing.T) {
 	assert.EqualError(t, err, "root certificate is expired")
 
 	c, _, _, err = newTestCert(ca, caKey, time.Time{}, time.Time{}, nil, nil, nil)
-	assert.Nil(t, err)
-	_, err = caPool.VerifyCertificate(time.Now().Add(time.Minute*6), c)
-	assert.EqualError(t, err, "certificate is expired")
+	assert.EqualError(t, err, "certificate is valid before the signing certificate")
 
 	// Test group assertion
 	ca, _, caKey, err = newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{"test1", "test2"})
@@ -244,8 +242,6 @@ func TestNebulaCertificate_Verify(t *testing.T) {
 	assert.Empty(t, b)
 
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), nil, nil, []string{"test1", "bad"})
-	assert.Nil(t, err)
-	_, err = caPool.VerifyCertificate(time.Now(), c)
 	assert.EqualError(t, err, "certificate contained a group not present on the signing ca: bad")
 
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), nil, nil, []string{"test1"})
@@ -279,9 +275,7 @@ func TestNebulaCertificate_VerifyP256(t *testing.T) {
 	assert.EqualError(t, err, "root certificate is expired")
 
 	c, _, _, err = newTestCert(ca, caKey, time.Time{}, time.Time{}, nil, nil, nil)
-	assert.Nil(t, err)
-	_, err = caPool.VerifyCertificate(time.Now().Add(time.Minute*6), c)
-	assert.EqualError(t, err, "certificate is expired")
+	assert.EqualError(t, err, "certificate is valid before the signing certificate")
 
 	// Test group assertion
 	ca, _, caKey, err = newTestCaCertP256(time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{"test1", "test2"})
@@ -296,8 +290,6 @@ func TestNebulaCertificate_VerifyP256(t *testing.T) {
 	assert.Empty(t, b)
 
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), nil, nil, []string{"test1", "bad"})
-	assert.Nil(t, err)
-	_, err = caPool.VerifyCertificate(time.Now(), c)
 	assert.EqualError(t, err, "certificate contained a group not present on the signing ca: bad")
 
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), nil, nil, []string{"test1"})
@@ -324,32 +316,24 @@ func TestNebulaCertificate_Verify_IPs(t *testing.T) {
 	cIp1 := mustParsePrefixUnmapped("10.1.0.0/24")
 	cIp2 := mustParsePrefixUnmapped("192.168.0.1/16")
 	c, _, _, err := newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{cIp1, cIp2}, nil, []string{"test"})
-	assert.Nil(t, err)
-	_, err = caPool.VerifyCertificate(time.Now(), c)
 	assert.EqualError(t, err, "certificate contained an ip assignment outside the limitations of the signing ca: 10.1.0.0/24")
 
 	// ip is outside the network reversed order of above
 	cIp1 = mustParsePrefixUnmapped("192.168.0.1/24")
 	cIp2 = mustParsePrefixUnmapped("10.1.0.0/24")
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{cIp1, cIp2}, nil, []string{"test"})
-	assert.Nil(t, err)
-	_, err = caPool.VerifyCertificate(time.Now(), c)
 	assert.EqualError(t, err, "certificate contained an ip assignment outside the limitations of the signing ca: 10.1.0.0/24")
 
 	// ip is within the network but mask is outside
 	cIp1 = mustParsePrefixUnmapped("10.0.1.0/15")
 	cIp2 = mustParsePrefixUnmapped("192.168.0.1/24")
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{cIp1, cIp2}, nil, []string{"test"})
-	assert.Nil(t, err)
-	_, err = caPool.VerifyCertificate(time.Now(), c)
 	assert.EqualError(t, err, "certificate contained an ip assignment outside the limitations of the signing ca: 10.0.1.0/15")
 
 	// ip is within the network but mask is outside reversed order of above
 	cIp1 = mustParsePrefixUnmapped("192.168.0.1/24")
 	cIp2 = mustParsePrefixUnmapped("10.0.1.0/15")
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{cIp1, cIp2}, nil, []string{"test"})
-	assert.Nil(t, err)
-	_, err = caPool.VerifyCertificate(time.Now(), c)
 	assert.EqualError(t, err, "certificate contained an ip assignment outside the limitations of the signing ca: 10.0.1.0/15")
 
 	// ip and mask are within the network
@@ -397,32 +381,24 @@ func TestNebulaCertificate_Verify_Subnets(t *testing.T) {
 	cIp1 := mustParsePrefixUnmapped("10.1.0.0/24")
 	cIp2 := mustParsePrefixUnmapped("192.168.0.1/16")
 	c, _, _, err := newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), nil, []netip.Prefix{cIp1, cIp2}, []string{"test"})
-	assert.Nil(t, err)
-	_, err = caPool.VerifyCertificate(time.Now(), c)
 	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.1.0.0/24")
 
 	// ip is outside the network reversed order of above
 	cIp1 = mustParsePrefixUnmapped("192.168.0.1/24")
 	cIp2 = mustParsePrefixUnmapped("10.1.0.0/24")
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), nil, []netip.Prefix{cIp1, cIp2}, []string{"test"})
-	assert.Nil(t, err)
-	_, err = caPool.VerifyCertificate(time.Now(), c)
 	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.1.0.0/24")
 
 	// ip is within the network but mask is outside
 	cIp1 = mustParsePrefixUnmapped("10.0.1.0/15")
 	cIp2 = mustParsePrefixUnmapped("192.168.0.1/24")
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), nil, []netip.Prefix{cIp1, cIp2}, []string{"test"})
-	assert.Nil(t, err)
-	_, err = caPool.VerifyCertificate(time.Now(), c)
 	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.0.1.0/15")
 
 	// ip is within the network but mask is outside reversed order of above
 	cIp1 = mustParsePrefixUnmapped("192.168.0.1/24")
 	cIp2 = mustParsePrefixUnmapped("10.0.1.0/15")
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), nil, []netip.Prefix{cIp1, cIp2}, []string{"test"})
-	assert.Nil(t, err)
-	_, err = caPool.VerifyCertificate(time.Now(), c)
 	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.0.1.0/15")
 
 	// ip and mask are within the network
@@ -562,7 +538,7 @@ func TestUnmarshalNebulaCertificate(t *testing.T) {
 	assert.EqualError(t, err, "encoded Details was nil")
 }
 
-func newTestCaCert(before, after time.Time, ips, subnets []netip.Prefix, groups []string) (*certificateV1, []byte, []byte, error) {
+func newTestCaCert(before, after time.Time, ips, subnets []netip.Prefix, groups []string) (Certificate, []byte, []byte, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if before.IsZero() {
 		before = time.Now().Add(time.Second * -60).Round(time.Second)
@@ -571,36 +547,35 @@ func newTestCaCert(before, after time.Time, ips, subnets []netip.Prefix, groups 
 		after = time.Now().Add(time.Second * 60).Round(time.Second)
 	}
 
-	nc := &certificateV1{
-		details: detailsV1{
-			Name:      "test ca",
-			NotBefore: time.Unix(before.Unix(), 0),
-			NotAfter:  time.Unix(after.Unix(), 0),
-			PublicKey: pub,
-			IsCA:      true,
-		},
+	tbs := &TBSCertificate{
+		Version:   Version1,
+		Name:      "test ca",
+		IsCA:      true,
+		NotBefore: time.Unix(before.Unix(), 0),
+		NotAfter:  time.Unix(after.Unix(), 0),
+		PublicKey: pub,
 	}
 
 	if len(ips) > 0 {
-		nc.details.Ips = ips
+		tbs.Networks = ips
 	}
 
 	if len(subnets) > 0 {
-		nc.details.Subnets = subnets
+		tbs.UnsafeNetworks = subnets
 	}
 
 	if len(groups) > 0 {
-		nc.details.Groups = groups
+		tbs.Groups = groups
 	}
 
-	err = nc.Sign(Curve_CURVE25519, priv)
+	nc, err := tbs.Sign(nil, Curve_CURVE25519, priv)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	return nc, pub, priv, nil
 }
 
-func newTestCaCertP256(before, after time.Time, ips, subnets []netip.Prefix, groups []string) (*certificateV1, []byte, []byte, error) {
+func newTestCaCertP256(before, after time.Time, ips, subnets []netip.Prefix, groups []string) (Certificate, []byte, []byte, error) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	pub := elliptic.Marshal(elliptic.P256(), priv.PublicKey.X, priv.PublicKey.Y)
 	rawPriv := priv.D.FillBytes(make([]byte, 32))
@@ -612,42 +587,36 @@ func newTestCaCertP256(before, after time.Time, ips, subnets []netip.Prefix, gro
 		after = time.Now().Add(time.Second * 60).Round(time.Second)
 	}
 
-	nc := &certificateV1{
-		details: detailsV1{
-			Name:      "test ca",
-			NotBefore: time.Unix(before.Unix(), 0),
-			NotAfter:  time.Unix(after.Unix(), 0),
-			PublicKey: pub,
-			IsCA:      true,
-			Curve:     Curve_P256,
-		},
+	tbs := &TBSCertificate{
+		Version:   Version1,
+		Name:      "test ca",
+		IsCA:      true,
+		NotBefore: time.Unix(before.Unix(), 0),
+		NotAfter:  time.Unix(after.Unix(), 0),
+		PublicKey: pub,
+		Curve:     Curve_P256,
 	}
 
 	if len(ips) > 0 {
-		nc.details.Ips = ips
+		tbs.Networks = ips
 	}
 
 	if len(subnets) > 0 {
-		nc.details.Subnets = subnets
+		tbs.UnsafeNetworks = subnets
 	}
 
 	if len(groups) > 0 {
-		nc.details.Groups = groups
+		tbs.Groups = groups
 	}
 
-	err = nc.Sign(Curve_P256, rawPriv)
+	nc, err := tbs.Sign(nil, Curve_P256, rawPriv)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	return nc, pub, rawPriv, nil
 }
 
-func newTestCert(ca *certificateV1, key []byte, before, after time.Time, ips, subnets []netip.Prefix, groups []string) (*certificateV1, []byte, []byte, error) {
-	issuer, err := ca.Fingerprint()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
+func newTestCert(ca Certificate, key []byte, before, after time.Time, ips, subnets []netip.Prefix, groups []string) (Certificate, []byte, []byte, error) {
 	if before.IsZero() {
 		before = time.Now().Add(time.Second * -60).Round(time.Second)
 	}
@@ -679,31 +648,29 @@ func newTestCert(ca *certificateV1, key []byte, before, after time.Time, ips, su
 
 	var pub, rawPriv []byte
 
-	switch ca.details.Curve {
+	switch ca.Curve() {
 	case Curve_CURVE25519:
 		pub, rawPriv = x25519Keypair()
 	case Curve_P256:
 		pub, rawPriv = p256Keypair()
 	default:
-		return nil, nil, nil, fmt.Errorf("unknown curve: %v", ca.details.Curve)
+		return nil, nil, nil, fmt.Errorf("unknown curve: %v", ca.Curve())
 	}
 
-	nc := &certificateV1{
-		details: detailsV1{
-			Name:      "testing",
-			Ips:       ips,
-			Subnets:   subnets,
-			Groups:    groups,
-			NotBefore: time.Unix(before.Unix(), 0),
-			NotAfter:  time.Unix(after.Unix(), 0),
-			PublicKey: pub,
-			IsCA:      false,
-			Curve:     ca.details.Curve,
-			Issuer:    issuer,
-		},
+	tbs := &TBSCertificate{
+		Version:        Version1,
+		Name:           "testing",
+		Networks:       ips,
+		UnsafeNetworks: subnets,
+		Groups:         groups,
+		IsCA:           false,
+		NotBefore:      time.Unix(before.Unix(), 0),
+		NotAfter:       time.Unix(after.Unix(), 0),
+		PublicKey:      pub,
+		Curve:          ca.Curve(),
 	}
 
-	err = nc.Sign(ca.details.Curve, key)
+	nc, err := tbs.Sign(ca, ca.Curve(), key)
 	if err != nil {
 		return nil, nil, nil, err
 	}

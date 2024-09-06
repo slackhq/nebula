@@ -44,12 +44,14 @@ func (t *TBSCertificate) sign(signer Certificate, curve Curve, key []byte, clien
 		return nil, fmt.Errorf("curve in cert and private key supplied don't match")
 	}
 
+	//TODO: make sure we have all minimum properties to sign, like a public key
+
 	if signer != nil {
 		if t.IsCA {
 			return nil, fmt.Errorf("can not sign a CA certificate with another")
 		}
 
-		err := checkCAConstraints(signer, t.NotAfter, t.NotBefore, t.Groups, t.Networks, t.UnsafeNetworks)
+		err := checkCAConstraints(signer, t.NotBefore, t.NotAfter, t.Groups, t.Networks, t.UnsafeNetworks)
 		if err != nil {
 			return nil, err
 		}
