@@ -211,7 +211,9 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 
 	b.Run("fail on proto", func(b *testing.B) {
 		// This benchmark is showing us the cost of failing to match the protocol
-		c := &cert.CachedCertificate{}
+		c := &cert.CachedCertificate{
+			Certificate: &dummyCert{},
+		}
 		for n := 0; n < b.N; n++ {
 			assert.False(b, ft.match(firewall.Packet{Protocol: firewall.ProtoUDP}, true, c, cp))
 		}
@@ -219,14 +221,18 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 
 	b.Run("pass proto, fail on port", func(b *testing.B) {
 		// This benchmark is showing us the cost of matching a specific protocol but failing to match the port
-		c := &cert.CachedCertificate{}
+		c := &cert.CachedCertificate{
+			Certificate: &dummyCert{},
+		}
 		for n := 0; n < b.N; n++ {
 			assert.False(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 1}, true, c, cp))
 		}
 	})
 
 	b.Run("pass proto, port, fail on local CIDR", func(b *testing.B) {
-		c := &cert.CachedCertificate{}
+		c := &cert.CachedCertificate{
+			Certificate: &dummyCert{},
+		}
 		ip := netip.MustParsePrefix("9.254.254.254/32")
 		for n := 0; n < b.N; n++ {
 			assert.False(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 100, LocalIP: ip.Addr()}, true, c, cp))
@@ -234,127 +240,66 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 	})
 
 	b.Run("pass proto, port, any local CIDR, fail all group, name, and cidr", func(b *testing.B) {
-		//TODO:
-		//_, ip, _ := net.ParseCIDR("9.254.254.254/32")
-		//c := &cert.NebulaCertificate{
-		//	Details: cert.NebulaCertificateDetails{
-		//		InvertedGroups: map[string]struct{}{"nope": {}},
-		//		Name:           "nope",
-		//		Ips:            []*net.IPNet{ip},
-		//	},
-		//}
-		//for n := 0; n < b.N; n++ {
-		//	assert.False(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 10}, true, c, cp))
-		//}
+		c := &cert.CachedCertificate{
+			Certificate: &dummyCert{
+				name:     "nope",
+				networks: []netip.Prefix{netip.MustParsePrefix("9.254.254.245/32")},
+			},
+			InvertedGroups: map[string]struct{}{"nope": {}},
+		}
+		for n := 0; n < b.N; n++ {
+			assert.False(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 10}, true, c, cp))
+		}
 	})
 
 	b.Run("pass proto, port, specific local CIDR, fail all group, name, and cidr", func(b *testing.B) {
-		//TODO:
-		//_, ip, _ := net.ParseCIDR("9.254.254.254/32")
-		//c := &cert.NebulaCertificate{
-		//	Details: cert.NebulaCertificateDetails{
-		//		InvertedGroups: map[string]struct{}{"nope": {}},
-		//		Name:           "nope",
-		//		Ips:            []*net.IPNet{ip},
-		//	},
-		//}
-		//for n := 0; n < b.N; n++ {
-		//	assert.False(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 100, LocalIP: pfix.Addr()}, true, c, cp))
-		//}
+		c := &cert.CachedCertificate{
+			Certificate: &dummyCert{
+				name:     "nope",
+				networks: []netip.Prefix{netip.MustParsePrefix("9.254.254.245/32")},
+			},
+			InvertedGroups: map[string]struct{}{"nope": {}},
+		}
+		for n := 0; n < b.N; n++ {
+			assert.False(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 100, LocalIP: pfix.Addr()}, true, c, cp))
+		}
 	})
 
 	b.Run("pass on group on any local cidr", func(b *testing.B) {
-		//TODO:
-		//c := &cert.NebulaCertificate{
-		//	Details: cert.NebulaCertificateDetails{
-		//		InvertedGroups: map[string]struct{}{"good-group": {}},
-		//		Name:           "nope",
-		//	},
-		//}
-		//for n := 0; n < b.N; n++ {
-		//	assert.True(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 10}, true, c, cp))
-		//}
+		c := &cert.CachedCertificate{
+			Certificate: &dummyCert{
+				name: "nope",
+			},
+			InvertedGroups: map[string]struct{}{"good-group": {}},
+		}
+		for n := 0; n < b.N; n++ {
+			assert.True(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 10}, true, c, cp))
+		}
 	})
 
 	b.Run("pass on group on specific local cidr", func(b *testing.B) {
-		//TODO:
-		//c := &cert.NebulaCertificate{
-		//	Details: cert.NebulaCertificateDetails{
-		//		InvertedGroups: map[string]struct{}{"good-group": {}},
-		//		Name:           "nope",
-		//	},
-		//}
-		//for n := 0; n < b.N; n++ {
-		//	assert.True(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 100, LocalIP: pfix.Addr()}, true, c, cp))
-		//}
+		c := &cert.CachedCertificate{
+			Certificate: &dummyCert{
+				name: "nope",
+			},
+			InvertedGroups: map[string]struct{}{"good-group": {}},
+		}
+		for n := 0; n < b.N; n++ {
+			assert.True(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 100, LocalIP: pfix.Addr()}, true, c, cp))
+		}
 	})
 
 	b.Run("pass on name", func(b *testing.B) {
-		//TODO:
-		//c := &cert.NebulaCertificate{
-		//	Details: cert.NebulaCertificateDetails{
-		//		InvertedGroups: map[string]struct{}{"nope": {}},
-		//		Name:           "good-host",
-		//	},
-		//}
-		//for n := 0; n < b.N; n++ {
-		//	ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 10}, true, c, cp)
-		//}
+		c := &cert.CachedCertificate{
+			Certificate: &dummyCert{
+				name: "good-host",
+			},
+			InvertedGroups: map[string]struct{}{"nope": {}},
+		}
+		for n := 0; n < b.N; n++ {
+			ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 10}, true, c, cp)
+		}
 	})
-	//
-	//b.Run("pass on ip", func(b *testing.B) {
-	//	ip := iputil.Ip2VpnIp(net.IPv4(172, 1, 1, 1))
-	//	c := &cert.NebulaCertificate{
-	//		Details: cert.NebulaCertificateDetails{
-	//			InvertedGroups: map[string]struct{}{"nope": {}},
-	//			Name:           "good-host",
-	//		},
-	//	}
-	//	for n := 0; n < b.N; n++ {
-	//		ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 10, RemoteIP: ip}, true, c, cp)
-	//	}
-	//})
-	//
-	//b.Run("pass on local ip", func(b *testing.B) {
-	//	ip := iputil.Ip2VpnIp(net.IPv4(172, 1, 1, 1))
-	//	c := &cert.NebulaCertificate{
-	//		Details: cert.NebulaCertificateDetails{
-	//			InvertedGroups: map[string]struct{}{"nope": {}},
-	//			Name:           "good-host",
-	//		},
-	//	}
-	//	for n := 0; n < b.N; n++ {
-	//		ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 10, LocalIP: ip}, true, c, cp)
-	//	}
-	//})
-	//
-	//_ = ft.TCP.addRule(0, 0, []string{"good-group"}, "good-host", n, n, "", "")
-	//
-	//b.Run("pass on ip with any port", func(b *testing.B) {
-	//	ip := iputil.Ip2VpnIp(net.IPv4(172, 1, 1, 1))
-	//	c := &cert.NebulaCertificate{
-	//		Details: cert.NebulaCertificateDetails{
-	//			InvertedGroups: map[string]struct{}{"nope": {}},
-	//			Name:           "good-host",
-	//		},
-	//	}
-	//	for n := 0; n < b.N; n++ {
-	//		ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 100, RemoteIP: ip}, true, c, cp)
-	//	}
-	//})
-	//
-	//b.Run("pass on local ip with any port", func(b *testing.B) {
-	//	ip := iputil.Ip2VpnIp(net.IPv4(172, 1, 1, 1))
-	//	c := &cert.NebulaCertificate{
-	//		Details: cert.NebulaCertificateDetails{
-	//			InvertedGroups: map[string]struct{}{"nope": {}},
-	//			Name:           "good-host",
-	//		},
-	//	}
-	//	for n := 0; n < b.N; n++ {
-	//		ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 100, LocalIP: ip}, true, c, cp)
-	//	}
-	//})
 }
 
 func TestFirewall_Drop2(t *testing.T) {

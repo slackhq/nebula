@@ -13,6 +13,9 @@ import (
 )
 
 func TestControl_GetHostInfoByVpnIp(t *testing.T) {
+	//TODO: with multiple certificate versions we have a problem with this test
+	// Some certs versions have different characteristics and each version implements their own Copy() func
+	// which means this is not a good place to test for exposing memory
 	l := test.NewLogger()
 	// Special care must be taken to re-use all objects provided to the hostmap and certificate in the expectedInfo object
 	// To properly ensure we are not exposing core memory to the caller
@@ -39,9 +42,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	vpnIp, ok := netip.AddrFromSlice(ipNet.IP)
 	assert.True(t, ok)
 
-	crt := &dummyCert{
-		//TODO: we need to populate this with fields if we ever enable the memory sharing test again
-	}
+	crt := &dummyCert{}
 	hm.unlockedAddHostInfo(&HostInfo{
 		remote:  remote1,
 		remotes: remotes,
@@ -101,8 +102,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	// Make sure we don't have any unexpected fields
 	assertFields(t, []string{"VpnIp", "LocalIndex", "RemoteIndex", "RemoteAddrs", "Cert", "MessageCounter", "CurrentRemote", "CurrentRelaysToMe", "CurrentRelaysThroughMe"}, thi)
 	assert.EqualValues(t, &expectedInfo, thi)
-	//TODO: netip.Addr reuses global memory for zone identifiers which breaks our "no reused memory check" here
-	//test.AssertDeepCopyEqual(t, &expectedInfo, thi)
+	test.AssertDeepCopyEqual(t, &expectedInfo, thi)
 
 	// Make sure we don't panic if the host info doesn't have a cert yet
 	assert.NotPanics(t, func() {

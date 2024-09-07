@@ -6,6 +6,7 @@ package e2e
 import (
 	"fmt"
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -15,7 +16,6 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
-	"golang.org/x/exp/slices"
 	"gopkg.in/yaml.v2"
 )
 
