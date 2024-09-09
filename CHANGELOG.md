@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.4] - 2024-09-09
+
+### Added
+
+- Support UDP dialing with gVisor. (#1181)
+
+### Changed
+
+- Make some Nebula state programmatically available via control object. (#1188)
+- Switch internal representation of IPs to netip, to prepare for IPv6 support
+  in the overlay. (#1173)
+- Minor build and cleanup changes. (#1171, #1164, #1162)
+- Various dependency updates. (#1195, #1190, #1174, #1168, #1167, #1161, #1147, #1146)
+
+### Fixed
+
+- Fix a bug on big endian hosts, like mips. (#1194)
+- Fix a rare panic if a local index collision happens. (#1191)
+- Fix integer wraparound in the calculation of handshake timeouts on 32-bit targets. (#1185)
+
 ## [1.9.3] - 2024-06-06
 
 ### Fixed
@@ -644,7 +664,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.9.3...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.9.4...HEAD
+[1.9.4]: https://github.com/slackhq/nebula/releases/tag/v1.9.4
 [1.9.3]: https://github.com/slackhq/nebula/releases/tag/v1.9.3
 [1.9.2]: https://github.com/slackhq/nebula/releases/tag/v1.9.2
 [1.9.1]: https://github.com/slackhq/nebula/releases/tag/v1.9.1
