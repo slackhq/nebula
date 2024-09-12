@@ -89,8 +89,8 @@ func (p *PKI) reloadCert(c *config.C, initial bool) *util.ContextualError {
 		newIPs := cs.Certificate.Networks()
 		if len(oldIPs) > 0 && len(newIPs) > 0 && oldIPs[0].String() != newIPs[0].String() {
 			return util.NewContextualError(
-				"IP in new cert was different from old",
-				m{"new_ip": newIPs[0], "old_ip": oldIPs[0]},
+				"Networks in new cert was different from old",
+				m{"new_network": newIPs[0], "old_network": oldIPs[0]},
 				nil,
 			)
 		}
@@ -208,7 +208,7 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 	}
 
 	if len(nebulaCert.Networks()) == 0 {
-		return nil, fmt.Errorf("no IPs encoded in certificate")
+		return nil, fmt.Errorf("no networks encoded in certificate")
 	}
 
 	if err = nebulaCert.VerifyPrivateKey(curve, rawKey); err != nil {
