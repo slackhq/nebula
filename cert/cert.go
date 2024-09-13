@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/slackhq/nebula/pkclient"
 	"golang.org/x/crypto/curve25519"
 	"google.golang.org/protobuf/proto"
 )
@@ -41,8 +42,9 @@ const (
 )
 
 type NebulaCertificate struct {
-	Details   NebulaCertificateDetails
-	Signature []byte
+	Details      NebulaCertificateDetails
+	Pkcs11Backed bool
+	Signature    []byte
 
 	// the cached hex string of the calculated sha256sum
 	// for VerifyWithCache
@@ -555,6 +557,34 @@ func (nc *NebulaCertificate) Sign(curve Curve, key []byte) error {
 	return nil
 }
 
+// SignPkcs11 signs a nebula cert with the provided private key
+func (nc *NebulaCertificate) SignPkcs11(curve Curve, client *pkclient.PKClient) error {
+	if !nc.Pkcs11Backed {
+		return fmt.Errorf("certificate is not PKCS#11 backed")
+	}
+
+	if curve != nc.Details.Curve {
+		return fmt.Errorf("curve in cert and private key supplied don't match")
+	}
+
+	if curve != Curve_P256 {
+		return fmt.Errorf("only P256 is supported by PKCS#11")
+	}
+
+	b, err := proto.Marshal(nc.getRawDetails())
+	if err != nil {
+		return err
+	}
+
+	sig, err := client.SignASN1(b)
+	if err != nil {
+		return err
+	}
+
+	nc.Signature = sig
+	return nil
+}
+
 // CheckSignature verifies the signature against the provided public key
 func (nc *NebulaCertificate) CheckSignature(key []byte) bool {
 	b, err := proto.Marshal(nc.getRawDetails())
@@ -693,6 +723,9 @@ func (nc *NebulaCertificate) CheckRootConstrains(signer *NebulaCertificate) erro
 
 // VerifyPrivateKey checks that the public key in the Nebula certificate and a supplied private key match
 func (nc *NebulaCertificate) VerifyPrivateKey(curve Curve, key []byte) error {
+	if nc.Pkcs11Backed {
+		return nil //todo!
+	}
 	if curve != nc.Details.Curve {
 		return fmt.Errorf("curve in cert and private key supplied don't match")
 	}
