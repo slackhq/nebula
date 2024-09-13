@@ -47,7 +47,7 @@ func TestMarshalingNebulaCertificate(t *testing.T) {
 	assert.Nil(t, err)
 	//t.Log("Cert size:", len(b))
 
-	nc2, err := unmarshalCertificateV1(b, true)
+	nc2, err := unmarshalCertificateV1(b, nil)
 	assert.Nil(t, err)
 
 	assert.Equal(t, nc.signature, nc2.Signature())
@@ -526,7 +526,7 @@ func TestNebulaCertificate_Copy(t *testing.T) {
 func TestUnmarshalNebulaCertificate(t *testing.T) {
 	// Test that we don't panic with an invalid certificate (#332)
 	data := []byte("\x98\x00\x00")
-	_, err := unmarshalCertificateV1(data, true)
+	_, err := unmarshalCertificateV1(data, nil)
 	assert.EqualError(t, err, "encoded Details was nil")
 }
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 )
 
@@ -29,6 +30,7 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 		InitiatorIndex: hh.hostinfo.localIndexId,
 		Time:           uint64(time.Now().UnixNano()),
 		Cert:           certState.RawCertificateNoKey,
+		CertVersion:    uint32(certState.Certificate.Version()),
 	}
 
 	hsBytes := []byte{}
@@ -86,7 +88,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		return
 	}
 
-	remoteCert, err := RecombineCertAndValidate(ci.H, hs.Details.Cert, f.pki.GetCAPool())
+	remoteCert, err := cert.RecombineAndValidate(cert.Version(hs.Details.CertVersion), hs.Details.Cert, ci.H.PeerStatic(), f.pki.GetCAPool())
 	if err != nil {
 		e := f.l.WithError(err).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"})
@@ -166,6 +168,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 
 	hs.Details.ResponderIndex = myIndex
 	hs.Details.Cert = certState.RawCertificateNoKey
+	hs.Details.CertVersion = uint32(certState.Certificate.Version())
 	// Update the time in case their clock is way off from ours
 	hs.Details.Time = uint64(time.Now().UnixNano())
 
@@ -386,7 +389,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		return true
 	}
 
-	remoteCert, err := RecombineCertAndValidate(ci.H, hs.Details.Cert, f.pki.GetCAPool())
+	remoteCert, err := cert.RecombineAndValidate(cert.Version(hs.Details.CertVersion), hs.Details.Cert, ci.H.PeerStatic(), f.pki.GetCAPool())
 	if err != nil {
 		e := f.l.WithError(err).WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"})

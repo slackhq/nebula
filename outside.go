@@ -7,9 +7,7 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
@@ -492,27 +490,3 @@ func (f *Interface) sendMeta(ci *ConnectionState, endpoint *net.UDPAddr, meta *N
 	f.outside.WriteTo(msg, endpoint)
 }
 */
-
-func RecombineCertAndValidate(h *noise.HandshakeState, rawCertBytes []byte, caPool *cert.CAPool) (*cert.CachedCertificate, error) {
-	pk := h.PeerStatic()
-
-	if pk == nil {
-		return nil, errors.New("no peer static key was present")
-	}
-
-	if rawCertBytes == nil {
-		return nil, errors.New("provided payload was empty")
-	}
-
-	c, err := cert.UnmarshalCertificateFromHandshake(rawCertBytes, pk)
-	if err != nil {
-		return nil, fmt.Errorf("error unmarshaling cert: %w", err)
-	}
-
-	cc, err := caPool.VerifyCertificate(time.Now(), c)
-	if err != nil {
-		return nil, fmt.Errorf("certificate validation failed: %w", err)
-	}
-
-	return cc, nil
-}
