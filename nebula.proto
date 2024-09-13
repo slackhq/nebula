@@ -62,6 +62,7 @@ message NebulaHandshakeDetails {
   uint32 ResponderIndex = 3;
   uint64 Cookie = 4;
   uint64 Time = 5;
+  uint32 CertVersion = 8;
   // reserved for WIP multiport
   reserved 6, 7;
 }

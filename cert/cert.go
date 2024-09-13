@@ -1,15 +1,17 @@
 package cert
 
 import (
+	"fmt"
 	"net/netip"
 	"time"
 )
 
-type Version int
+type Version uint32
 
 const (
-	Version1 Version = 1
-	Version2 Version = 2
+	VersionPre1 Version = 0
+	Version1    Version = 1
+	Version2    Version = 2
 )
 
 type Certificate interface {
@@ -109,21 +111,62 @@ type CachedCertificate struct {
 
 // UnmarshalCertificate will attempt to unmarshal a wire protocol level certificate.
 func UnmarshalCertificate(b []byte) (Certificate, error) {
-	c, err := unmarshalCertificateV1(b, true)
+	//TODO: you left off here, no one uses this function but it might be beneficial to export _something_ that someone can use, maybe the Versioned unmarshallsers?
+	var c Certificate
+	c, err := unmarshalCertificateV2(b, nil)
+	if err == nil {
+		return c, nil
+	}
+
+	c, err = unmarshalCertificateV1(b, nil)
+	if err == nil {
+		return c, nil
+	}
+
+	return nil, fmt.Errorf("could not unmarshal certificate")
+}
+
+// UnmarshalCertificateFromHandshake will attempt to unmarshal a certificate received in a handshake.
+// Handshakes save space by placing the peers public key in a different part of the packet, we have to
+// reassemble the actual certificate structure with that in mind.
+func UnmarshalCertificateFromHandshake(v Version, b []byte, publicKey []byte) (Certificate, error) {
+	var c Certificate
+	var err error
+
+	switch v {
+	case VersionPre1, Version1:
+		c, err = unmarshalCertificateV1(b, publicKey)
+	case Version2:
+		c, err = unmarshalCertificateV2(b, publicKey)
+	default:
+		//TODO: make a static var
+		return nil, fmt.Errorf("unknown certificate version %d", v)
+	}
+
 	if err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
-// UnmarshalCertificateFromHandshake will attempt to unmarshal a certificate received in a handshake.
-// Handshakes save space by placing the peers public key in a different part of the packet, we have to
-// reassemble the actual certificate structure with that in mind.
-func UnmarshalCertificateFromHandshake(b []byte, publicKey []byte) (Certificate, error) {
-	c, err := unmarshalCertificateV1(b, false)
-	if err != nil {
-		return nil, err
+func RecombineAndValidate(v Version, rawCertBytes, publicKey []byte, caPool *CAPool) (*CachedCertificate, error) {
+	if publicKey == nil {
+		return nil, ErrNoPeerStaticKey
 	}
-	c.details.PublicKey = publicKey
-	return c, nil
+
+	if rawCertBytes == nil {
+		return nil, ErrNoPayload
+	}
+
+	c, err := UnmarshalCertificateFromHandshake(v, rawCertBytes, publicKey)
+	if err != nil {
+		return nil, fmt.Errorf("error unmarshaling cert: %w", err)
+	}
+
+	cc, err := caPool.VerifyCertificate(time.Now(), c)
+	if err != nil {
+		return nil, fmt.Errorf("certificate validation failed: %w", err)
+	}
+
+	return cc, nil
 }
