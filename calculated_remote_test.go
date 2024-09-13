@@ -1,27 +1,25 @@
 package nebula
 
 import (
-	"net"
+	"net/netip"
 	"testing"
 
-	"github.com/slackhq/nebula/iputil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCalculatedRemoteApply(t *testing.T) {
-	_, ipNet, err := net.ParseCIDR("192.168.1.0/24")
+	ipNet, err := netip.ParsePrefix("192.168.1.0/24")
 	require.NoError(t, err)
 
 	c, err := newCalculatedRemote(ipNet, 4242)
 	require.NoError(t, err)
 
-	input := iputil.Ip2VpnIp([]byte{10, 0, 10, 182})
+	input, err := netip.ParseAddr("10.0.10.182")
+	assert.NoError(t, err)
 
-	expected := &Ip4AndPort{
-		Ip:   uint32(iputil.Ip2VpnIp([]byte{192, 168, 1, 182})),
-		Port: 4242,
-	}
+	expected, err := netip.ParseAddr("192.168.1.182")
+	assert.NoError(t, err)
 
-	assert.Equal(t, expected, c.Apply(input))
+	assert.Equal(t, NewIp4AndPortFromNetIP(expected, 4242), c.Apply(input))
 }

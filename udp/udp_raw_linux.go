@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"net/netip"
 	"syscall"
 	"unsafe"
 
@@ -74,10 +75,10 @@ func NewRawConn(l *logrus.Logger, ip string, port int, basePort uint16) (*RawCon
 
 // WriteTo must be called with raw leaving the first `udp.RawOverhead` bytes empty,
 // for the IP/UDP headers.
-func (u *RawConn) WriteTo(raw []byte, fromPort uint16, addr *Addr) error {
+func (u *RawConn) WriteTo(raw []byte, fromPort uint16, ip netip.AddrPort) error {
 	var rsa unix.RawSockaddrInet4
 	rsa.Family = unix.AF_INET
-	copy(rsa.Addr[:], addr.IP.To4())
+	rsa.Addr = ip.Addr().As4()
 
 	totalLen := len(raw)
 	udpLen := totalLen - ipv4.HeaderLen
@@ -97,7 +98,7 @@ func (u *RawConn) WriteTo(raw []byte, fromPort uint16, addr *Addr) error {
 	// UDP header
 	fromPort = u.basePort + fromPort
 	binary.BigEndian.PutUint16(raw[20:22], uint16(fromPort))  // src port
-	binary.BigEndian.PutUint16(raw[22:24], uint16(addr.Port)) // dst port
+	binary.BigEndian.PutUint16(raw[22:24], uint16(ip.Port())) // dst port
 	binary.BigEndian.PutUint16(raw[24:26], uint16(udpLen))    // UDP length
 	binary.BigEndian.PutUint16(raw[26:28], 0)                 // checksum (optional)
 
@@ -150,8 +151,8 @@ func (u *RawConn) GetSendBuffer() (int, error) {
 	return unix.GetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_SNDBUF)
 }
 
-func (u *RawConn) getMemInfo(meminfo *_SK_MEMINFO) error {
-	var vallen uint32 = 4 * _SK_MEMINFO_VARS
+func (u *RawConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
+	var vallen uint32 = 4 * unix.SK_MEMINFO_VARS
 	_, _, err := unix.Syscall6(unix.SYS_GETSOCKOPT, uintptr(u.sysFd), uintptr(unix.SOL_SOCKET), uintptr(unix.SO_MEMINFO), uintptr(unsafe.Pointer(meminfo)), uintptr(unsafe.Pointer(&vallen)), 0)
 	if err != 0 {
 		return err
@@ -161,10 +162,10 @@ func (u *RawConn) getMemInfo(meminfo *_SK_MEMINFO) error {
 
 func NewRawStatsEmitter(rawConn *RawConn) func() {
 	// Check if our kernel supports SO_MEMINFO before registering the gauges
-	var gauges [_SK_MEMINFO_VARS]metrics.Gauge
-	var meminfo _SK_MEMINFO
+	var gauges [unix.SK_MEMINFO_VARS]metrics.Gauge
+	var meminfo [unix.SK_MEMINFO_VARS]uint32
 	if err := rawConn.getMemInfo(&meminfo); err == nil {
-		gauges = [_SK_MEMINFO_VARS]metrics.Gauge{
+		gauges = [unix.SK_MEMINFO_VARS]metrics.Gauge{
 			metrics.GetOrRegisterGauge("raw.rmem_alloc", nil),
 			metrics.GetOrRegisterGauge("raw.rcvbuf", nil),
 			metrics.GetOrRegisterGauge("raw.wmem_alloc", nil),
@@ -182,7 +183,7 @@ func NewRawStatsEmitter(rawConn *RawConn) func() {
 
 	return func() {
 		if err := rawConn.getMemInfo(&meminfo); err == nil {
-			for j := 0; j < _SK_MEMINFO_VARS; j++ {
+			for j := 0; j < unix.SK_MEMINFO_VARS; j++ {
 				gauges[j].Update(int64(meminfo[j]))
 			}
 		}

@@ -5,6 +5,7 @@ package udp
 
 import (
 	"fmt"
+	"net/netip"
 	"runtime"
 
 	"github.com/sirupsen/logrus"
@@ -19,7 +20,7 @@ func NewRawConn(l *logrus.Logger, ip string, port int, basePort uint16) (*RawCon
 	return nil, fmt.Errorf("multiport tx is not supported on %s", runtime.GOOS)
 }
 
-func (u *RawConn) WriteTo(raw []byte, fromPort uint16, addr *Addr) error {
+func (u *RawConn) WriteTo(raw []byte, fromPort uint16, addr netip.AddrPort) error {
 	return fmt.Errorf("multiport tx is not supported on %s", runtime.GOOS)
 }
 

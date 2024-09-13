@@ -1,12 +1,12 @@
 package nebula
 
 import (
+	"net/netip"
 	"time"
 
 	"github.com/flynn/noise"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -72,7 +72,7 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 	return true
 }
 
-func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []byte, h *header.H) {
+func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet []byte, h *header.H) {
 	certState := f.pki.GetCertState()
 	ci := NewConnectionState(f.l, f.cipher, certState, false, noise.HandshakeIX, []byte{}, 0)
 	// Mark packet 1 as seen so it doesn't show up as missed
@@ -108,12 +108,26 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 		e.Info("Invalid certificate from host")
 		return
 	}
-	vpnIp := iputil.Ip2VpnIp(remoteCert.Details.Ips[0].IP)
+
+	vpnIp, ok := netip.AddrFromSlice(remoteCert.Details.Ips[0].IP)
+	if !ok {
+		e := f.l.WithError(err).WithField("udpAddr", addr).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"})
+
+		if f.l.Level > logrus.DebugLevel {
+			e = e.WithField("cert", remoteCert)
+		}
+
+		e.Info("Invalid vpn ip from host")
+		return
+	}
+
+	vpnIp = vpnIp.Unmap()
 	certName := remoteCert.Details.Name
 	fingerprint, _ := remoteCert.Sha256Sum()
 	issuer := remoteCert.Details.Issuer
 
-	if vpnIp == f.myVpnIp {
+	if vpnIp == f.myVpnNet.Addr() {
 		f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).
 			WithField("certName", certName).
 			WithField("fingerprint", fingerprint).
@@ -122,8 +136,8 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 		return
 	}
 
-	if addr != nil {
-		if !f.lightHouse.GetRemoteAllowList().Allow(vpnIp, addr.IP) {
+	if addr.IsValid() {
+		if !f.lightHouse.GetRemoteAllowList().Allow(vpnIp, addr.Addr()) {
 			f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
 			return
 		}
@@ -153,13 +167,10 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 			TotalPorts:  uint32(f.multiPort.TxPorts),
 		}
 	}
-	if hs.Details.InitiatorMultiPort != nil && hs.Details.InitiatorMultiPort.BasePort != uint32(addr.Port) {
+	if hs.Details.InitiatorMultiPort != nil && hs.Details.InitiatorMultiPort.BasePort != uint32(addr.Port()) {
 		// The other side sent us a handshake from a different port, make sure
 		// we send responses back to the BasePort
-		addr = &udp.Addr{
-			IP:   addr.IP,
-			Port: uint16(hs.Details.InitiatorMultiPort.BasePort),
-		}
+		addr = netip.AddrPortFrom(addr.Addr(), uint16(hs.Details.InitiatorMultiPort.BasePort))
 	}
 
 	hostinfo := &HostInfo{
@@ -172,8 +183,8 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 		multiportTx:       multiportTx,
 		multiportRx:       multiportRx,
 		relayState: RelayState{
-			relays:        map[iputil.VpnIp]struct{}{},
-			relayForByIp:  map[iputil.VpnIp]*Relay{},
+			relays:        map[netip.Addr]struct{}{},
+			relayForByIp:  map[netip.Addr]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
 		},
 	}
@@ -246,7 +257,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 		case ErrAlreadySeen:
 			if hostinfo.multiportRx {
 				// The other host is sending to us with multiport, so only grab the IP
-				addr.Port = hostinfo.remote.Port
+				addr = netip.AddrPortFrom(addr.Addr(), hostinfo.remote.Port())
 			}
 			// Update remote if preferred
 			if existing.SetRemoteIfPreferred(f.hostMap, addr) {
@@ -257,7 +268,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 
 			msg = existing.HandshakePacket[2]
 			f.messageMetrics.Tx(header.Handshake, header.MessageSubType(msg[1]), 1)
-			if addr != nil {
+			if addr.IsValid() {
 				if multiportTx {
 					// TODO remove alloc here
 					raw := make([]byte, len(msg)+udp.RawOverhead)
@@ -330,7 +341,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 
 	// Do the send
 	f.messageMetrics.Tx(header.Handshake, header.MessageSubType(msg[1]), 1)
-	if addr != nil {
+	if addr.IsValid() {
 		if multiportTx {
 			// TODO remove alloc here
 			raw := make([]byte, len(msg)+udp.RawOverhead)
@@ -379,7 +390,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via *ViaSender, packet []by
 	return
 }
 
-func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hh *HandshakeHostInfo, packet []byte, h *header.H) bool {
+func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *HandshakeHostInfo, packet []byte, h *header.H) bool {
 	if hh == nil {
 		// Nothing here to tear down, got a bogus stage 2 packet
 		return true
@@ -389,8 +400,8 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hh *Handsha
 	defer hh.Unlock()
 
 	hostinfo := hh.hostinfo
-	if addr != nil {
-		if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnIp, addr.IP) {
+	if addr.IsValid() {
+		if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnIp, addr.Addr()) {
 			f.l.WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
 			return false
 		}
@@ -432,13 +443,13 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hh *Handsha
 		hostinfo.multiportRx = hs.Details.ResponderMultiPort.TxSupported && f.multiPort.Rx
 	}
 
-	if hs.Details.ResponderMultiPort != nil && hs.Details.ResponderMultiPort.BasePort != uint32(addr.Port) {
+	if hs.Details.ResponderMultiPort != nil && hs.Details.ResponderMultiPort.BasePort != uint32(addr.Port()) {
 		// The other side sent us a handshake from a different port, make sure
 		// we send responses back to the BasePort
-		addr = &udp.Addr{
-			IP:   addr.IP,
-			Port: uint16(hs.Details.ResponderMultiPort.BasePort),
-		}
+		addr = netip.AddrPortFrom(
+			addr.Addr(),
+			uint16(hs.Details.ResponderMultiPort.BasePort),
+		)
 	}
 
 	remoteCert, err := RecombineCertAndValidate(ci.H, hs.Details.Cert, f.pki.GetCAPool())
@@ -456,7 +467,20 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hh *Handsha
 		return true
 	}
 
-	vpnIp := iputil.Ip2VpnIp(remoteCert.Details.Ips[0].IP)
+	vpnIp, ok := netip.AddrFromSlice(remoteCert.Details.Ips[0].IP)
+	if !ok {
+		e := f.l.WithError(err).WithField("udpAddr", addr).
+			WithField("handshake", m{"stage": 2, "style": "ix_psk0"})
+
+		if f.l.Level > logrus.DebugLevel {
+			e = e.WithField("cert", remoteCert)
+		}
+
+		e.Info("Invalid vpn ip from host")
+		return true
+	}
+
+	vpnIp = vpnIp.Unmap()
 	certName := remoteCert.Details.Name
 	fingerprint, _ := remoteCert.Sha256Sum()
 	issuer := remoteCert.Details.Issuer
@@ -521,7 +545,7 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via *ViaSender, hh *Handsha
 	ci.eKey = NewNebulaCipherState(eKey)
 
 	// Make sure the current udpAddr being used is set for responding
-	if addr != nil {
+	if addr.IsValid() {
 		hostinfo.SetRemote(addr)
 	} else {
 		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnIp)

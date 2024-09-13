@@ -5,28 +5,26 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/flynn/noise"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 )
 
-var vpnIp iputil.VpnIp
-
 func newTestLighthouse() *LightHouse {
 	lh := &LightHouse{
 		l:         test.NewLogger(),
-		addrMap:   map[iputil.VpnIp]*RemoteList{},
-		queryChan: make(chan iputil.VpnIp, 10),
+		addrMap:   map[netip.Addr]*RemoteList{},
+		queryChan: make(chan netip.Addr, 10),
 	}
-	lighthouses := map[iputil.VpnIp]struct{}{}
-	staticList := map[iputil.VpnIp]struct{}{}
+	lighthouses := map[netip.Addr]struct{}{}
+	staticList := map[netip.Addr]struct{}{}
 
 	lh.lighthouses.Store(&lighthouses)
 	lh.staticList.Store(&staticList)
@@ -37,10 +35,10 @@ func newTestLighthouse() *LightHouse {
 func Test_NewConnectionManagerTest(t *testing.T) {
 	l := test.NewLogger()
 	//_, tuncidr, _ := net.ParseCIDR("1.1.1.1/24")
-	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
-	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
-	vpnIp = iputil.Ip2VpnIp(net.ParseIP("172.1.1.2"))
-	preferredRanges := []*net.IPNet{localrange}
+	vpncidr := netip.MustParsePrefix("172.1.1.1/24")
+	localrange := netip.MustParsePrefix("10.1.1.1/24")
+	vpnIp := netip.MustParseAddr("172.1.1.2")
+	preferredRanges := []netip.Prefix{localrange}
 
 	// Very incomplete mock objects
 	hostMap := newHostMap(l, vpncidr)
@@ -120,9 +118,10 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 func Test_NewConnectionManagerTest2(t *testing.T) {
 	l := test.NewLogger()
 	//_, tuncidr, _ := net.ParseCIDR("1.1.1.1/24")
-	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
-	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
-	preferredRanges := []*net.IPNet{localrange}
+	vpncidr := netip.MustParsePrefix("172.1.1.1/24")
+	localrange := netip.MustParsePrefix("10.1.1.1/24")
+	vpnIp := netip.MustParseAddr("172.1.1.2")
+	preferredRanges := []netip.Prefix{localrange}
 
 	// Very incomplete mock objects
 	hostMap := newHostMap(l, vpncidr)
@@ -211,9 +210,10 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 		IP:   net.IPv4(172, 1, 1, 2),
 		Mask: net.IPMask{255, 255, 255, 0},
 	}
-	_, vpncidr, _ := net.ParseCIDR("172.1.1.1/24")
-	_, localrange, _ := net.ParseCIDR("10.1.1.1/24")
-	preferredRanges := []*net.IPNet{localrange}
+	vpncidr := netip.MustParsePrefix("172.1.1.1/24")
+	localrange := netip.MustParsePrefix("10.1.1.1/24")
+	vpnIp := netip.MustParseAddr("172.1.1.2")
+	preferredRanges := []netip.Prefix{localrange}
 	hostMap := newHostMap(l, vpncidr)
 	hostMap.preferredRanges.Store(&preferredRanges)
 

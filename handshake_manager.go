@@ -6,15 +6,15 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"net"
+	"net/netip"
 	"sync"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/udp"
+	"golang.org/x/exp/slices"
 )
 
 const (
@@ -35,7 +35,7 @@ var (
 
 type HandshakeConfig struct {
 	tryInterval   time.Duration
-	retries       int
+	retries       int64
 	triggerBuffer int
 	useRelays     bool
 
@@ -46,14 +46,14 @@ type HandshakeManager struct {
 	// Mutex for interacting with the vpnIps and indexes maps
 	sync.RWMutex
 
-	vpnIps  map[iputil.VpnIp]*HandshakeHostInfo
+	vpnIps  map[netip.Addr]*HandshakeHostInfo
 	indexes map[uint32]*HandshakeHostInfo
 
 	mainHostMap            *HostMap
 	lightHouse             *LightHouse
 	outside                udp.Conn
 	config                 HandshakeConfig
-	OutboundHandshakeTimer *LockingTimerWheel[iputil.VpnIp]
+	OutboundHandshakeTimer *LockingTimerWheel[netip.Addr]
 	messageMetrics         *MessageMetrics
 	metricInitiated        metrics.Counter
 	metricTimedOut         metrics.Counter
@@ -64,17 +64,17 @@ type HandshakeManager struct {
 	udpRaw    *udp.RawConn
 
 	// can be used to trigger outbound handshake for the given vpnIp
-	trigger chan iputil.VpnIp
+	trigger chan netip.Addr
 }
 
 type HandshakeHostInfo struct {
 	sync.Mutex
 
-	startTime   time.Time       // Time that we first started trying with this handshake
-	ready       bool            // Is the handshake ready
-	counter     int             // How many attempts have we made so far
-	lastRemotes []*udp.Addr     // Remotes that we sent to during the previous attempt
-	packetStore []*cachedPacket // A set of packets to be transmitted once the handshake completes
+	startTime   time.Time        // Time that we first started trying with this handshake
+	ready       bool             // Is the handshake ready
+	counter     int64            // How many attempts have we made so far
+	lastRemotes []netip.AddrPort // Remotes that we sent to during the previous attempt
+	packetStore []*cachedPacket  // A set of packets to be transmitted once the handshake completes
 
 	hostinfo *HostInfo
 }
@@ -106,14 +106,14 @@ func (hh *HandshakeHostInfo) cachePacket(l *logrus.Logger, t header.MessageType,
 
 func NewHandshakeManager(l *logrus.Logger, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
-		vpnIps:                 map[iputil.VpnIp]*HandshakeHostInfo{},
+		vpnIps:                 map[netip.Addr]*HandshakeHostInfo{},
 		indexes:                map[uint32]*HandshakeHostInfo{},
 		mainHostMap:            mainHostMap,
 		lightHouse:             lightHouse,
 		outside:                outside,
 		config:                 config,
-		trigger:                make(chan iputil.VpnIp, config.triggerBuffer),
-		OutboundHandshakeTimer: NewLockingTimerWheel[iputil.VpnIp](config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
+		trigger:                make(chan netip.Addr, config.triggerBuffer),
+		OutboundHandshakeTimer: NewLockingTimerWheel[netip.Addr](config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
 		messageMetrics:         config.messageMetrics,
 		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
 		metricTimedOut:         metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),
@@ -137,10 +137,10 @@ func (c *HandshakeManager) Run(ctx context.Context) {
 	}
 }
 
-func (hm *HandshakeManager) HandleIncoming(addr *udp.Addr, via *ViaSender, packet []byte, h *header.H) {
+func (hm *HandshakeManager) HandleIncoming(addr netip.AddrPort, via *ViaSender, packet []byte, h *header.H) {
 	// First remote allow list check before we know the vpnIp
-	if addr != nil {
-		if !hm.lightHouse.GetRemoteAllowList().AllowUnknownVpnIp(addr.IP) {
+	if addr.IsValid() {
+		if !hm.lightHouse.GetRemoteAllowList().AllowUnknownVpnIp(addr.Addr()) {
 			hm.l.WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
 			return
 		}
@@ -173,7 +173,7 @@ func (c *HandshakeManager) NextOutboundHandshakeTimerTick(now time.Time) {
 	}
 }
 
-func (hm *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, lighthouseTriggered bool) {
+func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered bool) {
 	hh := hm.queryVpnIp(vpnIp)
 	if hh == nil {
 		return
@@ -215,7 +215,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, lighthouseTrigger
 	}
 
 	remotes := hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges())
-	remotesHaveChanged := !udp.AddrSlice(remotes).Equal(hh.lastRemotes)
+	remotesHaveChanged := !slices.Equal(remotes, hh.lastRemotes)
 
 	// We only care about a lighthouse trigger if we have new remotes to send to.
 	// This is a very specific optimization for a fast lighthouse reply.
@@ -237,9 +237,9 @@ func (hm *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, lighthouseTrigger
 	}
 
 	// Send the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
-	var sentTo []*udp.Addr
+	var sentTo []netip.AddrPort
 	var sentMultiport bool
-	hostinfo.remotes.ForEach(hm.mainHostMap.GetPreferredRanges(), func(addr *udp.Addr, _ bool) {
+	hostinfo.remotes.ForEach(hm.mainHostMap.GetPreferredRanges(), func(addr netip.AddrPort, _ bool) {
 		hm.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
 		err := hm.outside.WriteTo(hostinfo.HandshakePacket[0], addr)
 		if err != nil {
@@ -294,13 +294,13 @@ func (hm *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, lighthouseTrigger
 		// Send a RelayRequest to all known Relay IP's
 		for _, relay := range hostinfo.remotes.relays {
 			// Don't relay to myself, and don't relay through the host I'm trying to connect to
-			if *relay == vpnIp || *relay == hm.lightHouse.myVpnIp {
+			if relay == vpnIp || relay == hm.lightHouse.myVpnNet.Addr() {
 				continue
 			}
-			relayHostInfo := hm.mainHostMap.QueryVpnIp(*relay)
-			if relayHostInfo == nil || relayHostInfo.remote == nil {
+			relayHostInfo := hm.mainHostMap.QueryVpnIp(relay)
+			if relayHostInfo == nil || !relayHostInfo.remote.IsValid() {
 				hostinfo.logger(hm.l).WithField("relay", relay.String()).Info("Establish tunnel to relay target")
-				hm.f.Handshake(*relay)
+				hm.f.Handshake(relay)
 				continue
 			}
 			// Check the relay HostInfo to see if we already established a relay through it
@@ -311,12 +311,17 @@ func (hm *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, lighthouseTrigger
 					hm.f.SendVia(relayHostInfo, existingRelay, hostinfo.HandshakePacket[0], make([]byte, 12), make([]byte, mtu), false)
 				case Requested:
 					hostinfo.logger(hm.l).WithField("relay", relay.String()).Info("Re-send CreateRelay request")
+
+					//TODO: IPV6-WORK
+					myVpnIpB := hm.f.myVpnNet.Addr().As4()
+					theirVpnIpB := vpnIp.As4()
+
 					// Re-send the CreateRelay request, in case the previous one was lost.
 					m := NebulaControl{
 						Type:                NebulaControl_CreateRelayRequest,
 						InitiatorRelayIndex: existingRelay.LocalIndex,
-						RelayFromIp:         uint32(hm.lightHouse.myVpnIp),
-						RelayToIp:           uint32(vpnIp),
+						RelayFromIp:         binary.BigEndian.Uint32(myVpnIpB[:]),
+						RelayToIp:           binary.BigEndian.Uint32(theirVpnIpB[:]),
 					}
 					msg, err := m.Marshal()
 					if err != nil {
@@ -327,10 +332,10 @@ func (hm *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, lighthouseTrigger
 						// This must send over the hostinfo, not over hm.Hosts[ip]
 						hm.f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, make([]byte, 12), make([]byte, mtu))
 						hm.l.WithFields(logrus.Fields{
-							"relayFrom":           hm.lightHouse.myVpnIp,
+							"relayFrom":           hm.f.myVpnNet.Addr(),
 							"relayTo":             vpnIp,
 							"initiatorRelayIndex": existingRelay.LocalIndex,
-							"relay":               *relay}).
+							"relay":               relay}).
 							Info("send CreateRelayRequest")
 					}
 				default:
@@ -342,17 +347,21 @@ func (hm *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, lighthouseTrigger
 				}
 			} else {
 				// No relays exist or requested yet.
-				if relayHostInfo.remote != nil {
+				if relayHostInfo.remote.IsValid() {
 					idx, err := AddRelay(hm.l, relayHostInfo, hm.mainHostMap, vpnIp, nil, TerminalType, Requested)
 					if err != nil {
 						hostinfo.logger(hm.l).WithField("relay", relay.String()).WithError(err).Info("Failed to add relay to hostmap")
 					}
 
+					//TODO: IPV6-WORK
+					myVpnIpB := hm.f.myVpnNet.Addr().As4()
+					theirVpnIpB := vpnIp.As4()
+
 					m := NebulaControl{
 						Type:                NebulaControl_CreateRelayRequest,
 						InitiatorRelayIndex: idx,
-						RelayFromIp:         uint32(hm.lightHouse.myVpnIp),
-						RelayToIp:           uint32(vpnIp),
+						RelayFromIp:         binary.BigEndian.Uint32(myVpnIpB[:]),
+						RelayToIp:           binary.BigEndian.Uint32(theirVpnIpB[:]),
 					}
 					msg, err := m.Marshal()
 					if err != nil {
@@ -362,10 +371,10 @@ func (hm *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, lighthouseTrigger
 					} else {
 						hm.f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, make([]byte, 12), make([]byte, mtu))
 						hm.l.WithFields(logrus.Fields{
-							"relayFrom":           hm.lightHouse.myVpnIp,
+							"relayFrom":           hm.f.myVpnNet.Addr(),
 							"relayTo":             vpnIp,
 							"initiatorRelayIndex": idx,
-							"relay":               *relay}).
+							"relay":               relay}).
 							Info("send CreateRelayRequest")
 					}
 				}
@@ -381,7 +390,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, lighthouseTrigger
 
 // GetOrHandshake will try to find a hostinfo with a fully formed tunnel or start a new handshake if one is not present
 // The 2nd argument will be true if the hostinfo is ready to transmit traffic
-func (hm *HandshakeManager) GetOrHandshake(vpnIp iputil.VpnIp, cacheCb func(*HandshakeHostInfo)) (*HostInfo, bool) {
+func (hm *HandshakeManager) GetOrHandshake(vpnIp netip.Addr, cacheCb func(*HandshakeHostInfo)) (*HostInfo, bool) {
 	hm.mainHostMap.RLock()
 	h, ok := hm.mainHostMap.Hosts[vpnIp]
 	hm.mainHostMap.RUnlock()
@@ -398,7 +407,7 @@ func (hm *HandshakeManager) GetOrHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 }
 
 // StartHandshake will ensure a handshake is currently being attempted for the provided vpn ip
-func (hm *HandshakeManager) StartHandshake(vpnIp iputil.VpnIp, cacheCb func(*HandshakeHostInfo)) *HostInfo {
+func (hm *HandshakeManager) StartHandshake(vpnIp netip.Addr, cacheCb func(*HandshakeHostInfo)) *HostInfo {
 	hm.Lock()
 
 	if hh, ok := hm.vpnIps[vpnIp]; ok {
@@ -414,8 +423,8 @@ func (hm *HandshakeManager) StartHandshake(vpnIp iputil.VpnIp, cacheCb func(*Han
 		vpnIp:           vpnIp,
 		HandshakePacket: make(map[uint8][]byte, 0),
 		relayState: RelayState{
-			relays:        map[iputil.VpnIp]struct{}{},
-			relayForByIp:  map[iputil.VpnIp]*Relay{},
+			relays:        map[netip.Addr]struct{}{},
+			relayForByIp:  map[netip.Addr]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
 		},
 	}
@@ -505,7 +514,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 	existingPendingIndex, found := c.indexes[hostinfo.localIndexId]
 	if found && existingPendingIndex.hostinfo != hostinfo {
 		// We have a collision, but for a different hostinfo
-		return existingIndex, ErrLocalIndexCollision
+		return existingPendingIndex.hostinfo, ErrLocalIndexCollision
 	}
 
 	existingRemoteIndex, found := c.mainHostMap.RemoteIndexes[hostinfo.remoteIndexId]
@@ -581,7 +590,7 @@ func (c *HandshakeManager) DeleteHostInfo(hostinfo *HostInfo) {
 func (c *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 	delete(c.vpnIps, hostinfo.vpnIp)
 	if len(c.vpnIps) == 0 {
-		c.vpnIps = map[iputil.VpnIp]*HandshakeHostInfo{}
+		c.vpnIps = map[netip.Addr]*HandshakeHostInfo{}
 	}
 
 	delete(c.indexes, hostinfo.localIndexId)
@@ -596,7 +605,7 @@ func (c *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 	}
 }
 
-func (hm *HandshakeManager) QueryVpnIp(vpnIp iputil.VpnIp) *HostInfo {
+func (hm *HandshakeManager) QueryVpnIp(vpnIp netip.Addr) *HostInfo {
 	hh := hm.queryVpnIp(vpnIp)
 	if hh != nil {
 		return hh.hostinfo
@@ -605,7 +614,7 @@ func (hm *HandshakeManager) QueryVpnIp(vpnIp iputil.VpnIp) *HostInfo {
 
 }
 
-func (hm *HandshakeManager) queryVpnIp(vpnIp iputil.VpnIp) *HandshakeHostInfo {
+func (hm *HandshakeManager) queryVpnIp(vpnIp netip.Addr) *HandshakeHostInfo {
 	hm.RLock()
 	defer hm.RUnlock()
 	return hm.vpnIps[vpnIp]
@@ -625,7 +634,7 @@ func (hm *HandshakeManager) queryIndex(index uint32) *HandshakeHostInfo {
 	return hm.indexes[index]
 }
 
-func (c *HandshakeManager) GetPreferredRanges() []*net.IPNet {
+func (c *HandshakeManager) GetPreferredRanges() []netip.Prefix {
 	return c.mainHostMap.GetPreferredRanges()
 }
 
@@ -682,6 +691,6 @@ func generateIndex(l *logrus.Logger) (uint32, error) {
 	return index, nil
 }
 
-func hsTimeout(tries int, interval time.Duration) time.Duration {
-	return time.Duration(tries / 2 * ((2 * int(interval)) + (tries-1)*int(interval)))
+func hsTimeout(tries int64, interval time.Duration) time.Duration {
+	return time.Duration(tries / 2 * ((2 * int64(interval)) + (tries-1)*int64(interval)))
 }

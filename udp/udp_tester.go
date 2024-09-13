@@ -4,9 +4,8 @@
 package udp
 
 import (
-	"fmt"
 	"io"
-	"net"
+	"net/netip"
 	"sync/atomic"
 
 	"github.com/sirupsen/logrus"
@@ -16,30 +15,24 @@ import (
 )
 
 type Packet struct {
-	ToIp     net.IP
-	ToPort   uint16
-	FromIp   net.IP
-	FromPort uint16
-	Data     []byte
+	To   netip.AddrPort
+	From netip.AddrPort
+	Data []byte
 }
 
 func (u *Packet) Copy() *Packet {
 	n := &Packet{
-		ToIp:     make(net.IP, len(u.ToIp)),
-		ToPort:   u.ToPort,
-		FromIp:   make(net.IP, len(u.FromIp)),
-		FromPort: u.FromPort,
-		Data:     make([]byte, len(u.Data)),
+		To:   u.To,
+		From: u.From,
+		Data: make([]byte, len(u.Data)),
 	}
 
-	copy(n.ToIp, u.ToIp)
-	copy(n.FromIp, u.FromIp)
 	copy(n.Data, u.Data)
 	return n
 }
 
 type TesterConn struct {
-	Addr *Addr
+	Addr netip.AddrPort
 
 	RxPackets chan *Packet // Packets to receive into nebula
 	TxPackets chan *Packet // Packets transmitted outside by nebula
@@ -48,9 +41,9 @@ type TesterConn struct {
 	l      *logrus.Logger
 }
 
-func NewListener(l *logrus.Logger, ip net.IP, port int, _ bool, _ int) (Conn, error) {
+func NewListener(l *logrus.Logger, ip netip.Addr, port int, _ bool, _ int) (Conn, error) {
 	return &TesterConn{
-		Addr:      &Addr{ip, uint16(port)},
+		Addr:      netip.AddrPortFrom(ip, uint16(port)),
 		RxPackets: make(chan *Packet, 10),
 		TxPackets: make(chan *Packet, 10),
 		l:         l,
@@ -71,7 +64,7 @@ func (u *TesterConn) Send(packet *Packet) {
 	}
 	if u.l.Level >= logrus.DebugLevel {
 		u.l.WithField("header", h).
-			WithField("udpAddr", fmt.Sprintf("%v:%v", packet.FromIp, packet.FromPort)).
+			WithField("udpAddr", packet.From).
 			WithField("dataLen", len(packet.Data)).
 			Debug("UDP receiving injected packet")
 	}
@@ -98,23 +91,18 @@ func (u *TesterConn) Get(block bool) *Packet {
 // Below this is boilerplate implementation to make nebula actually work
 //********************************************************************************************************************//
 
-func (u *TesterConn) WriteTo(b []byte, addr *Addr) error {
+func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	if u.closed.Load() {
 		return io.ErrClosedPipe
 	}
 
 	p := &Packet{
-		Data:     make([]byte, len(b), len(b)),
-		FromIp:   make([]byte, 16),
-		FromPort: u.Addr.Port,
-		ToIp:     make([]byte, 16),
-		ToPort:   addr.Port,
+		Data: make([]byte, len(b), len(b)),
+		From: u.Addr,
+		To:   addr,
 	}
 
 	copy(p.Data, b)
-	copy(p.ToIp, addr.IP.To16())
-	copy(p.FromIp, u.Addr.IP.To16())
-
 	u.TxPackets <- p
 	return nil
 }
@@ -123,7 +111,6 @@ func (u *TesterConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *fi
 	plaintext := make([]byte, MTU)
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
-	ua := &Addr{IP: make([]byte, 16)}
 	nb := make([]byte, 12, 12)
 
 	for {
@@ -131,9 +118,7 @@ func (u *TesterConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *fi
 		if !ok {
 			return
 		}
-		ua.Port = p.FromPort
-		copy(ua.IP, p.FromIp.To16())
-		r(ua, plaintext[:0], p.Data, h, fwPacket, lhf, nb, q, cache.Get(u.l))
+		r(p.From, plaintext[:0], p.Data, h, fwPacket, lhf, nb, q, cache.Get(u.l))
 	}
 }
 
@@ -144,7 +129,7 @@ func NewUDPStatsEmitter(_ []Conn) func() {
 	return func() {}
 }
 
-func (u *TesterConn) LocalAddr() (*Addr, error) {
+func (u *TesterConn) LocalAddr() (netip.AddrPort, error) {
 	return u.Addr, nil
 }
 

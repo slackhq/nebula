@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -67,8 +68,17 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 	l.WithField("firewallHashes", fw.GetRuleHashes()).Info("Firewall started")
 
-	// TODO: make sure mask is 4 bytes
-	tunCidr := certificate.Details.Ips[0]
+	ones, _ := certificate.Details.Ips[0].Mask.Size()
+	addr, ok := netip.AddrFromSlice(certificate.Details.Ips[0].IP)
+	if !ok {
+		err = util.NewContextualError(
+			"Invalid ip address in certificate",
+			m{"vpnIp": certificate.Details.Ips[0].IP},
+			nil,
+		)
+		return nil, err
+	}
+	tunCidr := netip.PrefixFrom(addr, ones)
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
 	if err != nil {
@@ -150,21 +160,25 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	if !configTest {
 		rawListenHost := c.GetString("listen.host", "0.0.0.0")
-		var listenHost *net.IPAddr
+		var listenHost netip.Addr
 		if rawListenHost == "[::]" {
 			// Old guidance was to provide the literal `[::]` in `listen.host` but that won't resolve.
-			listenHost = &net.IPAddr{IP: net.IPv6zero}
+			listenHost = netip.IPv6Unspecified()
 
 		} else {
-			listenHost, err = net.ResolveIPAddr("ip", rawListenHost)
+			ips, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", rawListenHost)
 			if err != nil {
 				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
 			}
+			if len(ips) == 0 {
+				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
+			}
+			listenHost = ips[0].Unmap()
 		}
 
 		for i := 0; i < routines; i++ {
-			l.Infof("listening %q %d", listenHost.IP, port)
-			udpServer, err := udp.NewListener(l, listenHost.IP, port, routines > 1, c.GetInt("listen.batch", 64))
+			l.Infof("listening on %v", netip.AddrPortFrom(listenHost, uint16(port)))
+			udpServer, err := udp.NewListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
@@ -178,7 +192,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 				if err != nil {
 					return nil, util.NewContextualError("Failed to get listening port", nil, err)
 				}
-				port = int(uPort.Port)
+				port = int(uPort.Port())
 			}
 		}
 	}
@@ -201,7 +215,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	handshakeConfig := HandshakeConfig{
 		tryInterval:   c.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
-		retries:       c.GetInt("handshakes.retries", DefaultHandshakeRetries),
+		retries:       int64(c.GetInt("handshakes.retries", DefaultHandshakeRetries)),
 		triggerBuffer: c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
 		useRelays:     useRelays,
 
@@ -289,7 +303,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 				ifce.multiPort.TxBasePort = uint16(port)
 				ifce.multiPort.TxPorts = c.GetInt("tun.multiport.tx_ports", 100)
 				ifce.multiPort.TxHandshake = c.GetBool("tun.multiport.tx_handshake", false)
-				ifce.multiPort.TxHandshakeDelay = c.GetInt("tun.multiport.tx_handshake_delay", 2)
+				ifce.multiPort.TxHandshakeDelay = int64(c.GetInt("tun.multiport.tx_handshake_delay", 2))
 				ifce.udpRaw.ReloadConfig(c)
 			}
 			ifce.multiPort.Tx = tx
