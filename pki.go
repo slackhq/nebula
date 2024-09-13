@@ -211,8 +211,12 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 		return nil, fmt.Errorf("no networks encoded in certificate")
 	}
 
-	if err = nebulaCert.VerifyPrivateKey(curve, rawKey); err != nil {
-		return nil, fmt.Errorf("private key is not a pair with public key in nebula cert")
+	if isPkcs11 {
+		//TODO: We do not currently have a method to verify a public private key pair when the private key is in an hsm
+	} else {
+		if err = nebulaCert.VerifyPrivateKey(curve, rawKey); err != nil {
+			return nil, fmt.Errorf("private key is not a pair with public key in nebula cert")
+		}
 	}
 
 	return newCertState(nebulaCert, isPkcs11, rawKey)
