@@ -665,6 +665,13 @@ func lhIp6ToIp(v *Ip6AndPort) net.IP {
 	return ip
 }
 
+func lhIp6ToAddr(v *Ip6AndPort) netip.Addr {
+	var ip [16]byte
+	binary.BigEndian.PutUint64(ip[:8], v.Hi)
+	binary.BigEndian.PutUint64(ip[8:], v.Lo)
+	return netip.AddrFrom16(ip)
+}
+
 func (lh *LightHouse) IsLighthouseIP(vpnIp netip.Addr) bool {
 	if _, ok := lh.GetLighthouses()[vpnIp]; ok {
 		return true
@@ -1152,16 +1159,21 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp n
 		}
 	}
 
-	remoteVpnIp := iputil.VpnIp(n.Details.VpnIp)
+	//TODO: IPV6-WORK
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], n.Details.VpnIp)
+	remoteVpnIp := netip.AddrFrom4(b)
+
 	remoteAllowList := lhh.lh.GetRemoteAllowList()
 	for _, a := range n.Details.Ip4AndPorts {
-		if remoteAllowList.AllowIpV4(remoteVpnIp, iputil.VpnIp(a.Ip)) {
+		binary.BigEndian.PutUint32(b[:], a.Ip)
+		if remoteAllowList.Allow(remoteVpnIp, netip.AddrFrom4(b)) {
 			punch(AddrPortFromIp4AndPort(a))
 		}
 	}
 
 	for _, a := range n.Details.Ip6AndPorts {
-		if remoteAllowList.AllowIpV6(remoteVpnIp, a.Hi, a.Lo) {
+		if remoteAllowList.Allow(remoteVpnIp, lhIp6ToAddr(a)) {
 			punch(AddrPortFromIp6AndPort(a))
 		}
 	}
@@ -1170,19 +1182,15 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp n
 	// of a double nat or other difficult scenario, this may help establish
 	// a tunnel.
 	if lhh.lh.punchy.GetRespond() {
-		//TODO: IPV6-WORK
-		b := [4]byte{}
-		binary.BigEndian.PutUint32(b[:], n.Details.VpnIp)
-		queryVpnIp := netip.AddrFrom4(b)
 		go func() {
 			time.Sleep(lhh.lh.punchy.GetRespondDelay())
 			if lhh.l.Level >= logrus.DebugLevel {
-				lhh.l.Debugf("Sending a nebula test packet to vpn ip %s", queryVpnIp)
+				lhh.l.Debugf("Sending a nebula test packet to vpn ip %s", remoteVpnIp)
 			}
 			//NOTE: we have to allocate a new output buffer here since we are spawning a new goroutine
 			// for each punchBack packet. We should move this into a timerwheel or a single goroutine
 			// managed by a channel.
-			w.SendMessageToVpnIp(header.Test, header.TestRequest, queryVpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			w.SendMessageToVpnIp(header.Test, header.TestRequest, remoteVpnIp, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 		}()
 	}
 }
