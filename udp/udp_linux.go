@@ -22,10 +22,11 @@ import (
 //TODO: make it support reload as best you can!
 
 type StdConn struct {
-	sysFd int
-	isV4  bool
-	l     *logrus.Logger
-	batch int
+	sysFd  int
+	closed bool
+	isV4   bool
+	l      *logrus.Logger
+	batch  int
 }
 
 func maybeIPV4(ip net.IP) (net.IP, bool) {
@@ -139,6 +140,11 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 		n, err := read(msgs)
 		if err != nil {
 			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
+			return
+		}
+
+		if u.closed {
+			u.l.Debug("flag for closing connection is set, exiting read loop")
 			return
 		}
 
@@ -315,6 +321,10 @@ func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
 
 func (u *StdConn) Close() error {
 	//TODO: this will not interrupt the read loop
+	if u.closed {
+		return nil
+	}
+	u.closed = true
 	return syscall.Close(u.sysFd)
 }
 
