@@ -8,6 +8,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/service"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func loadPortFwdConfigFromString(l *logrus.Logger, configStr string) (*PortForwardingList, error) {
@@ -65,11 +66,11 @@ func doTestUdpCommunication(
 	} else {
 		n, err = senderConn.Write(data_sent)
 	}
-	assert.Nil(t, err)
+	require.Nil(t, err)
 	assert.Equal(t, n, len(data_sent))
 
 	pair := <-receiverConn
-	assert.Nil(t, err)
+	require.Nil(t, err)
 	assert.Equal(t, data_sent, pair.a)
 	return pair.b
 }
@@ -107,7 +108,7 @@ port_forwarding:
     dial_address: 127.0.0.1:5599
     protocols: [udp]
 `)
-	assert.Nil(t, err)
+	require.Nil(t, err)
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
@@ -118,27 +119,27 @@ port_forwarding:
     dial_address: 10.0.0.1:4499
     protocols: [udp]
 `)
-	assert.Nil(t, err)
+	require.Nil(t, err)
 
 	assert.Len(t, client_pf.portForwardings, 1)
 
 	client_conn_addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:3399")
-	assert.Nil(t, err)
+	require.Nil(t, err)
 	server_conn_addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:5599")
-	assert.Nil(t, err)
+	require.Nil(t, err)
 
 	server_listen_conn, err := net.ListenUDP("udp", server_conn_addr)
-	assert.Nil(t, err)
+	require.Nil(t, err)
 	defer server_listen_conn.Close()
 	server_listen_rcv_chan := readUdpConnectionToChannel(server_listen_conn)
 
 	client1_conn, err := net.DialUDP("udp", nil, client_conn_addr)
-	assert.Nil(t, err)
+	require.Nil(t, err)
 	defer client1_conn.Close()
 	client1_rcv_chan := readUdpConnectionToChannel(client1_conn)
 
 	client2_conn, err := net.DialUDP("udp", nil, client_conn_addr)
-	assert.Nil(t, err)
+	require.Nil(t, err)
 	defer client2_conn.Close()
 	client2_rcv_chan := readUdpConnectionToChannel(client2_conn)
 
