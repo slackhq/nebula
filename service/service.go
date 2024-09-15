@@ -257,7 +257,11 @@ func (s *Service) ListenUDP(address string) (*gonet.UDPConn, error) {
 }
 
 func (s *Service) Wait() error {
-	return s.eg.Wait()
+	err := s.eg.Wait()
+
+	s.ipstack.Destroy()
+
+	return err
 }
 
 func (s *Service) Close() error {
