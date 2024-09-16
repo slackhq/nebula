@@ -97,7 +97,10 @@ func ParseConfig(
 					return fmt.Errorf("child yml node of \"port_forwarding.%s.%d.protocols\" doesn't support: %s", direction, fwd_idx, proto_str)
 				}
 
-				factoryFn(node_map)
+				err := factoryFn(node_map)
+				if err != nil {
+					return fmt.Errorf("child yml node of \"port_forwarding.%s.%d.protocols\" with proto %s - failed to instantiate forwarder: %v", direction, fwd_idx, proto_str, err)
+				}
 			}
 		}
 	}
