@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
@@ -178,10 +179,11 @@ func (u *RIOConn) receive(buf []byte) (int, windows.RawSockaddrInet6, error) {
 retry:
 	count = 0
 	for tries := 0; count == 0 && tries < receiveSpins; tries++ {
+		if !u.isOpen.Load() { // might have changed since first check before the mutex lock
+			return 0, windows.RawSockaddrInet6{}, net.ErrClosed
+		}
+
 		if tries > 0 {
-			if !u.isOpen.Load() {
-				return 0, windows.RawSockaddrInet6{}, net.ErrClosed
-			}
 			procyield(1)
 		}
 
@@ -246,6 +248,10 @@ func (u *RIOConn) WriteTo(buf []byte, ip netip.AddrPort) error {
 
 	u.tx.mu.Lock()
 	defer u.tx.mu.Unlock()
+
+	if !u.isOpen.Load() { // might have changed since first check before the mutex lock
+		return net.ErrClosed
+	}
 
 	count := winrio.DequeueCompletion(u.tx.cq, u.results[:])
 	if count == 0 && u.tx.isFull {
@@ -322,6 +328,14 @@ func (u *RIOConn) Close() error {
 
 	windows.PostQueuedCompletionStatus(u.rx.iocp, 0, 0, nil)
 	windows.PostQueuedCompletionStatus(u.tx.iocp, 0, 0, nil)
+
+	u.rx.mu.Lock()                   // for waiting till active reader is done
+	time.Sleep(time.Millisecond * 0) // avoid warning about empty critical section
+	u.rx.mu.Unlock()
+
+	u.tx.mu.Lock()                   // for waiting till active writer is done
+	time.Sleep(time.Millisecond * 0) // avoid warning about empty critical section
+	u.tx.mu.Unlock()
 
 	u.rx.CloseAndZero()
 	u.tx.CloseAndZero()
