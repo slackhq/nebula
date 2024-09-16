@@ -34,6 +34,7 @@ func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr netip.Prefix
 		}
 	}
 
+	// this is needed to enable the "unsafe_routes" feature in combination with port forwarding.
 	d.routeTree.Store(routeTree)
 
 	return d, nil
