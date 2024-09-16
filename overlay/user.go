@@ -52,6 +52,7 @@ func NewUserDevice(tunCidr netip.Prefix) (*UserDevice, error) {
 type UserDevice struct {
 	tunCidr netip.Prefix
 
+	// using channel of *buffer.View significantly improves performance
 	outboundChannel chan *buffer.View
 	inboundChannel  chan *buffer.View
 
