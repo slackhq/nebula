@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
@@ -23,7 +24,7 @@ import (
 
 type StdConn struct {
 	sysFd  int
-	closed bool
+	closed atomic.Bool
 	isV4   bool
 	l      *logrus.Logger
 	batch  int
