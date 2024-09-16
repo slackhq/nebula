@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"testing"
-	"time"
 
 	"github.com/slackhq/nebula/service"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +26,6 @@ func startReadToChannel(receiverConn net.Conn) <-chan []byte {
 		}
 	}()
 	<-r
-	time.Sleep(50 * time.Millisecond)
 	return rcv_chan
 }
 
@@ -96,7 +94,6 @@ func tcpListenerNAccept(t *testing.T, listener *net.TCPListener, n int) <-chan n
 	}()
 
 	<-r
-	time.Sleep(50 * time.Millisecond)
 
 	return c
 }
@@ -183,8 +180,6 @@ port_forwarding:
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
-	time.Sleep(100 * time.Millisecond)
-
 	client_pf, err := createPortForwarderFromConfigString(t, cl, client, `
 port_forwarding:
   outbound:
@@ -196,8 +191,6 @@ port_forwarding:
 
 	assert.Len(t, client_pf.portForwardings, 1)
 
-	time.Sleep(100 * time.Millisecond)
-
 	client_conn_addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:3397")
 	require.Nil(t, err)
 	server_conn_addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:5597")
@@ -208,8 +201,6 @@ port_forwarding:
 	defer server_listen_conn.Close()
 
 	server_listen_conn_accepts := tcpListenerNAccept(t, server_listen_conn, 1)
-
-	time.Sleep(100 * time.Millisecond)
 
 	client1_conn, err := net.DialTCP("tcp", nil, client_conn_addr)
 	require.Nil(t, err)
