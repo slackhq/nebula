@@ -18,36 +18,46 @@ import (
 )
 
 type signFlags struct {
-	set         *flag.FlagSet
-	caKeyPath   *string
-	caCertPath  *string
-	name        *string
-	ip          *string
-	duration    *time.Duration
-	inPubPath   *string
-	outKeyPath  *string
-	outCertPath *string
-	outQRPath   *string
-	groups      *string
-	subnets     *string
-	p11url      *string
+	set            *flag.FlagSet
+	version        *uint
+	caKeyPath      *string
+	caCertPath     *string
+	name           *string
+	networks       *string
+	unsafeNetworks *string
+	duration       *time.Duration
+	inPubPath      *string
+	outKeyPath     *string
+	outCertPath    *string
+	outQRPath      *string
+	groups         *string
+
+	p11url *string
+
+	// Deprecated options
+	ip      *string
+	subnets *string
 }
 
 func newSignFlags() *signFlags {
 	sf := signFlags{set: flag.NewFlagSet("sign", flag.ContinueOnError)}
 	sf.set.Usage = func() {}
+	sf.version = sf.set.Uint("version", uint(cert.Version2), "Optional: version of the certificate format to use")
 	sf.caKeyPath = sf.set.String("ca-key", "ca.key", "Optional: path to the signing CA key")
 	sf.caCertPath = sf.set.String("ca-crt", "ca.crt", "Optional: path to the signing CA cert")
 	sf.name = sf.set.String("name", "", "Required: name of the cert, usually a hostname")
-	sf.ip = sf.set.String("ip", "", "Required: ipv4 address and network in CIDR notation to assign the cert")
+	sf.networks = sf.set.String("networks", "", "Required: comma separated list of ip address and network in CIDR notation to assign to this cert")
+	sf.unsafeNetworks = sf.set.String("unsafe-networks", "", "Optional: comma separated list of ip address and network in CIDR notation. Unsafe networks this cert can route for")
 	sf.duration = sf.set.Duration("duration", 0, "Optional: how long the cert should be valid for. The default is 1 second before the signing cert expires. Valid time units are seconds: \"s\", minutes: \"m\", hours: \"h\"")
 	sf.inPubPath = sf.set.String("in-pub", "", "Optional (if out-key not set): path to read a previously generated public key")
 	sf.outKeyPath = sf.set.String("out-key", "", "Optional (if in-pub not set): path to write the private key to")
 	sf.outCertPath = sf.set.String("out-crt", "", "Optional: path to write the certificate to")
 	sf.outQRPath = sf.set.String("out-qr", "", "Optional: output a qr code image (png) of the certificate")
 	sf.groups = sf.set.String("groups", "", "Optional: comma separated list of groups")
-	sf.subnets = sf.set.String("subnets", "", "Optional: comma separated list of ipv4 address and network in CIDR notation. Subnets this cert can serve for")
 	sf.p11url = p11Flag(sf.set)
+
+	sf.ip = sf.set.String("ip", "", "Deprecated, see -networks")
+	sf.subnets = sf.set.String("subnets", "", "Deprecated, see -unsafe-networks")
 	return &sf
 }
 
@@ -76,6 +86,11 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	}
 	if !isP11 && *sf.inPubPath != "" && *sf.outKeyPath != "" {
 		return newHelpErrorf("cannot set both -in-pub and -out-key")
+	}
+
+	version := cert.Version(*sf.version)
+	if version != cert.Version1 && version != cert.Version2 {
+		return newHelpErrorf("-version must be either %v or %v", cert.Version1, cert.Version2)
 	}
 
 	var curve cert.Curve
@@ -146,12 +161,30 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		*sf.duration = time.Until(caCert.NotAfter()) - time.Second*1
 	}
 
-	network, err := netip.ParsePrefix(*sf.ip)
-	if err != nil {
-		return newHelpErrorf("invalid ip definition: %s", *sf.ip)
+	var networks []netip.Prefix
+	if *sf.networks == "" && *sf.ip != "" {
+		// Pull up deprecated -ip flag if needed
+		*sf.networks = *sf.ip
 	}
-	if !network.Addr().Is4() {
-		return newHelpErrorf("invalid ip definition: can only be ipv4, have %s", *sf.ip)
+
+	if *sf.networks != "" {
+		for _, rs := range strings.Split(*sf.networks, ",") {
+			rs := strings.Trim(rs, " ")
+			if rs != "" {
+				n, err := netip.ParsePrefix(rs)
+				if err != nil {
+					return newHelpErrorf("invalid -networks definition: %s", rs)
+				}
+				if version == cert.Version1 && !n.Addr().Is4() {
+					return newHelpErrorf("invalid -networks definition: v1 certificates can only be ipv4, have %s", rs)
+				}
+				networks = append(networks, n)
+			}
+		}
+	}
+
+	if len(networks) > 1 && version == cert.Version1 {
+		return newHelpErrorf("invalid -networks definition: v1 certificates can only have a single ipv4 address")
 	}
 
 	var groups []string
@@ -164,19 +197,24 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 	}
 
-	var subnets []netip.Prefix
-	if *sf.subnets != "" {
-		for _, rs := range strings.Split(*sf.subnets, ",") {
+	var unsafeNetworks []netip.Prefix
+	if *sf.unsafeNetworks == "" && *sf.subnets != "" {
+		// Pull up deprecated -subnets flag if needed
+		*sf.unsafeNetworks = *sf.subnets
+	}
+
+	if *sf.unsafeNetworks != "" {
+		for _, rs := range strings.Split(*sf.unsafeNetworks, ",") {
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
-				s, err := netip.ParsePrefix(rs)
+				n, err := netip.ParsePrefix(rs)
 				if err != nil {
-					return newHelpErrorf("invalid subnet definition: %s", rs)
+					return newHelpErrorf("invalid -unsafe-networks definition: %s", rs)
 				}
-				if !s.Addr().Is4() {
-					return newHelpErrorf("invalid subnet definition: can only be ipv4, have %s", rs)
+				if version == cert.Version1 && !n.Addr().Is4() {
+					return newHelpErrorf("invalid -unsafe-networks definition: can only be ipv4, have %s", rs)
 				}
-				subnets = append(subnets, s)
+				unsafeNetworks = append(unsafeNetworks, n)
 			}
 		}
 	}
@@ -219,11 +257,11 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	}
 
 	t := &cert.TBSCertificate{
-		Version:        cert.Version1,
+		Version:        version,
 		Name:           *sf.name,
-		Networks:       []netip.Prefix{network},
+		Networks:       networks,
 		Groups:         groups,
-		UnsafeNetworks: subnets,
+		UnsafeNetworks: unsafeNetworks,
 		NotBefore:      time.Now(),
 		NotAfter:       time.Now().Add(*sf.duration),
 		PublicKey:      pub,
