@@ -281,6 +281,7 @@ func (c *certificateV2) marshalJSON() m {
 			"isCa":           c.details.isCA,
 			"issuer":         c.details.issuer,
 		},
+		"version":     Version2,
 		"publicKey":   fmt.Sprintf("%x", c.publicKey),
 		"curve":       c.curve.String(),
 		"fingerprint": fp,
