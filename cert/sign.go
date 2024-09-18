@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/slackhq/nebula/pkclient"
@@ -62,6 +63,7 @@ func (t *TBSCertificate) sign(signer Certificate, curve Curve, key []byte, clien
 	}
 
 	//TODO: make sure we have all minimum properties to sign, like a public key
+	//TODO: we need to verify networks and unsafe networks (no duplicates, max of 1 of each version for v2 certs
 
 	if signer != nil {
 		if t.IsCA {
@@ -83,6 +85,9 @@ func (t *TBSCertificate) sign(signer Certificate, curve Curve, key []byte, clien
 			return nil, fmt.Errorf("self signed certificates must have IsCA set to true")
 		}
 	}
+
+	slices.SortFunc(t.Networks, comparePrefix)
+	slices.SortFunc(t.UnsafeNetworks, comparePrefix)
 
 	var c beingSignedCertificate
 	switch t.Version {
@@ -151,4 +156,12 @@ func (t *TBSCertificate) sign(signer Certificate, curve Curve, key []byte, clien
 	}
 
 	return sc, nil
+}
+
+func comparePrefix(a, b netip.Prefix) int {
+	addr := a.Addr().Compare(b.Addr())
+	if addr == 0 {
+		return a.Bits() - b.Bits()
+	}
+	return addr
 }

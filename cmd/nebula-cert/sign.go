@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ecdh"
 	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -42,7 +43,7 @@ type signFlags struct {
 func newSignFlags() *signFlags {
 	sf := signFlags{set: flag.NewFlagSet("sign", flag.ContinueOnError)}
 	sf.set.Usage = func() {}
-	sf.version = sf.set.Uint("version", uint(cert.Version2), "Optional: version of the certificate format to use")
+	sf.version = sf.set.Uint("version", 0, "Optional: version of the certificate format to use, the default is to create both v1 and v2 certificates.")
 	sf.caKeyPath = sf.set.String("ca-key", "ca.key", "Optional: path to the signing CA key")
 	sf.caCertPath = sf.set.String("ca-crt", "ca.crt", "Optional: path to the signing CA cert")
 	sf.name = sf.set.String("name", "", "Required: name of the cert, usually a hostname")
@@ -81,15 +82,12 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	if err := mustFlagString("name", sf.name); err != nil {
 		return err
 	}
-	if err := mustFlagString("ip", sf.ip); err != nil {
-		return err
-	}
 	if !isP11 && *sf.inPubPath != "" && *sf.outKeyPath != "" {
 		return newHelpErrorf("cannot set both -in-pub and -out-key")
 	}
 
 	version := cert.Version(*sf.version)
-	if version != cert.Version1 && version != cert.Version2 {
+	if version != 0 && version != cert.Version1 && version != cert.Version2 {
 		return newHelpErrorf("-version must be either %v or %v", cert.Version1, cert.Version2)
 	}
 
@@ -106,14 +104,14 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 
 		// naively attempt to decode the private key as though it is not encrypted
 		caKey, _, curve, err = cert.UnmarshalSigningPrivateKeyFromPEM(rawCAKey)
-		if err == cert.ErrPrivateKeyEncrypted {
+		if errors.Is(err, cert.ErrPrivateKeyEncrypted) {
 			// ask for a passphrase until we get one
 			var passphrase []byte
 			for i := 0; i < 5; i++ {
 				out.Write([]byte("Enter passphrase: "))
 				passphrase, err = pr.ReadPassword()
 
-				if err == ErrNoTerminal {
+				if errors.Is(err, ErrNoTerminal) {
 					return fmt.Errorf("ca-key is encrypted and must be decrypted interactively")
 				} else if err != nil {
 					return fmt.Errorf("error reading password: %s", err)
@@ -161,7 +159,8 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		*sf.duration = time.Until(caCert.NotAfter()) - time.Second*1
 	}
 
-	var networks []netip.Prefix
+	var v4Networks []netip.Prefix
+	var v6Networks []netip.Prefix
 	if *sf.networks == "" && *sf.ip != "" {
 		// Pull up deprecated -ip flag if needed
 		*sf.networks = *sf.ip
@@ -169,22 +168,47 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 
 	if *sf.networks != "" {
 		for _, rs := range strings.Split(*sf.networks, ",") {
+			//TODO: error on duplicates? Mainly only addr matters, having two of the same addr in the same or different prefix space is strange
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
 				n, err := netip.ParsePrefix(rs)
 				if err != nil {
 					return newHelpErrorf("invalid -networks definition: %s", rs)
 				}
-				if version == cert.Version1 && !n.Addr().Is4() {
-					return newHelpErrorf("invalid -networks definition: v1 certificates can only be ipv4, have %s", rs)
+
+				if n.Addr().Is4() {
+					v4Networks = append(v4Networks, n)
+				} else {
+					v6Networks = append(v6Networks, n)
 				}
-				networks = append(networks, n)
 			}
 		}
 	}
 
-	if len(networks) > 1 && version == cert.Version1 {
-		return newHelpErrorf("invalid -networks definition: v1 certificates can only have a single ipv4 address")
+	var v4UnsafeNetworks []netip.Prefix
+	var v6UnsafeNetworks []netip.Prefix
+	if *sf.unsafeNetworks == "" && *sf.subnets != "" {
+		// Pull up deprecated -subnets flag if needed
+		*sf.unsafeNetworks = *sf.subnets
+	}
+
+	if *sf.unsafeNetworks != "" {
+		//TODO: error on duplicates?
+		for _, rs := range strings.Split(*sf.unsafeNetworks, ",") {
+			rs := strings.Trim(rs, " ")
+			if rs != "" {
+				n, err := netip.ParsePrefix(rs)
+				if err != nil {
+					return newHelpErrorf("invalid -unsafe-networks definition: %s", rs)
+				}
+
+				if n.Addr().Is4() {
+					v4UnsafeNetworks = append(v4UnsafeNetworks, n)
+				} else {
+					v6UnsafeNetworks = append(v6UnsafeNetworks, n)
+				}
+			}
+		}
 	}
 
 	var groups []string
@@ -193,28 +217,6 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			g := strings.TrimSpace(rg)
 			if g != "" {
 				groups = append(groups, g)
-			}
-		}
-	}
-
-	var unsafeNetworks []netip.Prefix
-	if *sf.unsafeNetworks == "" && *sf.subnets != "" {
-		// Pull up deprecated -subnets flag if needed
-		*sf.unsafeNetworks = *sf.subnets
-	}
-
-	if *sf.unsafeNetworks != "" {
-		for _, rs := range strings.Split(*sf.unsafeNetworks, ",") {
-			rs := strings.Trim(rs, " ")
-			if rs != "" {
-				n, err := netip.ParsePrefix(rs)
-				if err != nil {
-					return newHelpErrorf("invalid -unsafe-networks definition: %s", rs)
-				}
-				if version == cert.Version1 && !n.Addr().Is4() {
-					return newHelpErrorf("invalid -unsafe-networks definition: can only be ipv4, have %s", rs)
-				}
-				unsafeNetworks = append(unsafeNetworks, n)
 			}
 		}
 	}
@@ -256,19 +258,6 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		pub, rawPriv = newKeypair(curve)
 	}
 
-	t := &cert.TBSCertificate{
-		Version:        version,
-		Name:           *sf.name,
-		Networks:       networks,
-		Groups:         groups,
-		UnsafeNetworks: unsafeNetworks,
-		NotBefore:      time.Now(),
-		NotAfter:       time.Now().Add(*sf.duration),
-		PublicKey:      pub,
-		IsCA:           false,
-		Curve:          curve,
-	}
-
 	if *sf.outKeyPath == "" {
 		*sf.outKeyPath = *sf.name + ".key"
 	}
@@ -281,18 +270,85 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return fmt.Errorf("refusing to overwrite existing cert: %s", *sf.outCertPath)
 	}
 
-	var c cert.Certificate
+	var crts []cert.Certificate
 
-	if p11Client == nil {
-		c, err = t.Sign(caCert, curve, caKey)
-		if err != nil {
-			return fmt.Errorf("error while signing: %w", err)
+	notBefore := time.Now()
+	notAfter := notBefore.Add(*sf.duration)
+
+	if version == 0 || version == cert.Version1 {
+		// Make sure we at least have an ip
+		if len(v4Networks) != 1 {
+			return newHelpErrorf("invalid -networks definition: v1 certificates can only have a single ipv4 address")
 		}
-	} else {
-		c, err = t.SignPkcs11(caCert, curve, p11Client)
-		if err != nil {
-			return fmt.Errorf("error while signing with PKCS#11: %w", err)
+
+		if version == cert.Version1 {
+			// If we are asked to mint a v1 certificate only then we cant just ignore any v6 addresses
+			if len(v6Networks) > 0 {
+				return newHelpErrorf("invalid -networks definition: v1 certificates can only be ipv4")
+			}
+
+			if len(v6UnsafeNetworks) > 0 {
+				return newHelpErrorf("invalid -unsafe-networks definition: v1 certificates can only be ipv4")
+			}
 		}
+
+		t := &cert.TBSCertificate{
+			Version:        cert.Version1,
+			Name:           *sf.name,
+			Networks:       []netip.Prefix{v4Networks[0]},
+			Groups:         groups,
+			UnsafeNetworks: v4UnsafeNetworks,
+			NotBefore:      notBefore,
+			NotAfter:       notAfter,
+			PublicKey:      pub,
+			IsCA:           false,
+			Curve:          curve,
+		}
+
+		var nc cert.Certificate
+		if p11Client == nil {
+			nc, err = t.Sign(caCert, curve, caKey)
+			if err != nil {
+				return fmt.Errorf("error while signing: %w", err)
+			}
+		} else {
+			nc, err = t.SignPkcs11(caCert, curve, p11Client)
+			if err != nil {
+				return fmt.Errorf("error while signing with PKCS#11: %w", err)
+			}
+		}
+
+		crts = append(crts, nc)
+	}
+
+	if version == 0 || version == cert.Version2 {
+		t := &cert.TBSCertificate{
+			Version:        cert.Version2,
+			Name:           *sf.name,
+			Networks:       append(v4Networks, v6Networks...),
+			Groups:         groups,
+			UnsafeNetworks: append(v4UnsafeNetworks, v6UnsafeNetworks...),
+			NotBefore:      notBefore,
+			NotAfter:       notAfter,
+			PublicKey:      pub,
+			IsCA:           false,
+			Curve:          curve,
+		}
+
+		var nc cert.Certificate
+		if p11Client == nil {
+			nc, err = t.Sign(caCert, curve, caKey)
+			if err != nil {
+				return fmt.Errorf("error while signing: %w", err)
+			}
+		} else {
+			nc, err = t.SignPkcs11(caCert, curve, p11Client)
+			if err != nil {
+				return fmt.Errorf("error while signing with PKCS#11: %w", err)
+			}
+		}
+
+		crts = append(crts, nc)
 	}
 
 	if !isP11 && *sf.inPubPath == "" {
@@ -306,9 +362,13 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 	}
 
-	b, err := c.MarshalPEM()
-	if err != nil {
-		return fmt.Errorf("error while marshalling certificate: %s", err)
+	var b []byte
+	for _, c := range crts {
+		sb, err := c.MarshalPEM()
+		if err != nil {
+			return fmt.Errorf("error while marshalling certificate: %s", err)
+		}
+		b = append(b, sb...)
 	}
 
 	err = os.WriteFile(*sf.outCertPath, b, 0600)

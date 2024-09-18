@@ -28,17 +28,17 @@ type certificateV1 struct {
 }
 
 type detailsV1 struct {
-	Name      string
-	Ips       []netip.Prefix
-	Subnets   []netip.Prefix
-	Groups    []string
-	NotBefore time.Time
-	NotAfter  time.Time
-	PublicKey []byte
-	IsCA      bool
-	Issuer    string
+	name           string
+	networks       []netip.Prefix
+	unsafeNetworks []netip.Prefix
+	groups         []string
+	notBefore      time.Time
+	notAfter       time.Time
+	publicKey      []byte
+	isCA           bool
+	issuer         string
 
-	Curve Curve
+	curve Curve
 }
 
 type m map[string]interface{}
@@ -48,39 +48,39 @@ func (c *certificateV1) Version() Version {
 }
 
 func (c *certificateV1) Curve() Curve {
-	return c.details.Curve
+	return c.details.curve
 }
 
 func (c *certificateV1) Groups() []string {
-	return c.details.Groups
+	return c.details.groups
 }
 
 func (c *certificateV1) IsCA() bool {
-	return c.details.IsCA
+	return c.details.isCA
 }
 
 func (c *certificateV1) Issuer() string {
-	return c.details.Issuer
+	return c.details.issuer
 }
 
 func (c *certificateV1) Name() string {
-	return c.details.Name
+	return c.details.name
 }
 
 func (c *certificateV1) Networks() []netip.Prefix {
-	return c.details.Ips
+	return c.details.networks
 }
 
 func (c *certificateV1) NotAfter() time.Time {
-	return c.details.NotAfter
+	return c.details.notAfter
 }
 
 func (c *certificateV1) NotBefore() time.Time {
-	return c.details.NotBefore
+	return c.details.notBefore
 }
 
 func (c *certificateV1) PublicKey() []byte {
-	return c.details.PublicKey
+	return c.details.publicKey
 }
 
 func (c *certificateV1) Signature() []byte {
@@ -88,7 +88,7 @@ func (c *certificateV1) Signature() []byte {
 }
 
 func (c *certificateV1) UnsafeNetworks() []netip.Prefix {
-	return c.details.Subnets
+	return c.details.unsafeNetworks
 }
 
 func (c *certificateV1) Fingerprint() (string, error) {
@@ -106,7 +106,7 @@ func (c *certificateV1) CheckSignature(key []byte) bool {
 	if err != nil {
 		return false
 	}
-	switch c.details.Curve {
+	switch c.details.curve {
 	case Curve_CURVE25519:
 		return ed25519.Verify(key, b, c.signature)
 	case Curve_P256:
@@ -120,14 +120,14 @@ func (c *certificateV1) CheckSignature(key []byte) bool {
 }
 
 func (c *certificateV1) Expired(t time.Time) bool {
-	return c.details.NotBefore.After(t) || c.details.NotAfter.Before(t)
+	return c.details.notBefore.After(t) || c.details.notAfter.Before(t)
 }
 
 func (c *certificateV1) VerifyPrivateKey(curve Curve, key []byte) error {
-	if curve != c.details.Curve {
+	if curve != c.details.curve {
 		return fmt.Errorf("curve in cert and private key supplied don't match")
 	}
-	if c.details.IsCA {
+	if c.details.isCA {
 		switch curve {
 		case Curve_CURVE25519:
 			// the call to PublicKey below will panic slice bounds out of range otherwise
@@ -135,7 +135,7 @@ func (c *certificateV1) VerifyPrivateKey(curve Curve, key []byte) error {
 				return fmt.Errorf("key was not 64 bytes, is invalid ed25519 private key")
 			}
 
-			if !ed25519.PublicKey(c.details.PublicKey).Equal(ed25519.PrivateKey(key).Public()) {
+			if !ed25519.PublicKey(c.details.publicKey).Equal(ed25519.PrivateKey(key).Public()) {
 				return fmt.Errorf("public key in cert and private key supplied don't match")
 			}
 		case Curve_P256:
@@ -144,7 +144,7 @@ func (c *certificateV1) VerifyPrivateKey(curve Curve, key []byte) error {
 				return fmt.Errorf("cannot parse private key as P256: %w", err)
 			}
 			pub := privkey.PublicKey().Bytes()
-			if !bytes.Equal(pub, c.details.PublicKey) {
+			if !bytes.Equal(pub, c.details.publicKey) {
 				return fmt.Errorf("public key in cert and private key supplied don't match")
 			}
 		default:
@@ -170,7 +170,7 @@ func (c *certificateV1) VerifyPrivateKey(curve Curve, key []byte) error {
 	default:
 		return fmt.Errorf("invalid curve: %s", curve)
 	}
-	if !bytes.Equal(pub, c.details.PublicKey) {
+	if !bytes.Equal(pub, c.details.publicKey) {
 		return fmt.Errorf("public key in cert and private key supplied don't match")
 	}
 
@@ -180,97 +180,49 @@ func (c *certificateV1) VerifyPrivateKey(curve Curve, key []byte) error {
 // getRawDetails marshals the raw details into protobuf ready struct
 func (c *certificateV1) getRawDetails() *RawNebulaCertificateDetails {
 	rd := &RawNebulaCertificateDetails{
-		Name:      c.details.Name,
-		Groups:    c.details.Groups,
-		NotBefore: c.details.NotBefore.Unix(),
-		NotAfter:  c.details.NotAfter.Unix(),
-		PublicKey: make([]byte, len(c.details.PublicKey)),
-		IsCA:      c.details.IsCA,
-		Curve:     c.details.Curve,
+		Name:      c.details.name,
+		Groups:    c.details.groups,
+		NotBefore: c.details.notBefore.Unix(),
+		NotAfter:  c.details.notAfter.Unix(),
+		PublicKey: make([]byte, len(c.details.publicKey)),
+		IsCA:      c.details.isCA,
+		Curve:     c.details.curve,
 	}
 
-	for _, ipNet := range c.details.Ips {
+	for _, ipNet := range c.details.networks {
 		mask := net.CIDRMask(ipNet.Bits(), ipNet.Addr().BitLen())
 		rd.Ips = append(rd.Ips, addr2int(ipNet.Addr()), ip2int(mask))
 	}
 
-	for _, ipNet := range c.details.Subnets {
+	for _, ipNet := range c.details.unsafeNetworks {
 		mask := net.CIDRMask(ipNet.Bits(), ipNet.Addr().BitLen())
 		rd.Subnets = append(rd.Subnets, addr2int(ipNet.Addr()), ip2int(mask))
 	}
 
-	copy(rd.PublicKey, c.details.PublicKey[:])
+	copy(rd.PublicKey, c.details.publicKey[:])
 
 	// I know, this is terrible
-	rd.Issuer, _ = hex.DecodeString(c.details.Issuer)
+	rd.Issuer, _ = hex.DecodeString(c.details.issuer)
 
 	return rd
 }
 
 func (c *certificateV1) String() string {
-	if c == nil {
-		return "Certificate {}\n"
+	b, err := json.MarshalIndent(c.marshalJSON(), "", "\t")
+	if err != nil {
+		return "<error marshalling certificate>"
 	}
-
-	s := "NebulaCertificate {\n"
-	s += "\tDetails {\n"
-	s += fmt.Sprintf("\t\tName: %v\n", c.details.Name)
-
-	if len(c.details.Ips) > 0 {
-		s += "\t\tIps: [\n"
-		for _, ip := range c.details.Ips {
-			s += fmt.Sprintf("\t\t\t%v\n", ip.String())
-		}
-		s += "\t\t]\n"
-	} else {
-		s += "\t\tIps: []\n"
-	}
-
-	if len(c.details.Subnets) > 0 {
-		s += "\t\tSubnets: [\n"
-		for _, ip := range c.details.Subnets {
-			s += fmt.Sprintf("\t\t\t%v\n", ip.String())
-		}
-		s += "\t\t]\n"
-	} else {
-		s += "\t\tSubnets: []\n"
-	}
-
-	if len(c.details.Groups) > 0 {
-		s += "\t\tGroups: [\n"
-		for _, g := range c.details.Groups {
-			s += fmt.Sprintf("\t\t\t\"%v\"\n", g)
-		}
-		s += "\t\t]\n"
-	} else {
-		s += "\t\tGroups: []\n"
-	}
-
-	s += fmt.Sprintf("\t\tNot before: %v\n", c.details.NotBefore)
-	s += fmt.Sprintf("\t\tNot After: %v\n", c.details.NotAfter)
-	s += fmt.Sprintf("\t\tIs CA: %v\n", c.details.IsCA)
-	s += fmt.Sprintf("\t\tIssuer: %s\n", c.details.Issuer)
-	s += fmt.Sprintf("\t\tPublic key: %x\n", c.details.PublicKey)
-	s += fmt.Sprintf("\t\tCurve: %s\n", c.details.Curve)
-	s += "\t}\n"
-	fp, err := c.Fingerprint()
-	if err == nil {
-		s += fmt.Sprintf("\tFingerprint: %s\n", fp)
-	}
-	s += fmt.Sprintf("\tSignature: %x\n", c.Signature())
-	s += "}"
-
-	return s
+	return string(b)
 }
 
 func (c *certificateV1) MarshalForHandshakes() ([]byte, error) {
-	pubKey := c.details.PublicKey
-	c.details.PublicKey = nil
+	pubKey := c.details.publicKey
+	c.details.publicKey = nil
 	rawCertNoKey, err := c.Marshal()
 	if err != nil {
 		return nil, err
 	}
-	c.details.PublicKey = pubKey
+	c.details.publicKey = pubKey
 	return rawCertNoKey, nil
 }
 
@@ -292,64 +244,68 @@ func (c *certificateV1) MarshalPEM() ([]byte, error) {
 }
 
 func (c *certificateV1) MarshalJSON() ([]byte, error) {
+	return json.Marshal(c.marshalJSON())
+}
+
+func (c *certificateV1) marshalJSON() m {
 	fp, _ := c.Fingerprint()
-	jc := m{
+	return m{
+		"version": Version1,
 		"details": m{
-			"name":      c.details.Name,
-			"ips":       c.details.Ips,
-			"subnets":   c.details.Subnets,
-			"groups":    c.details.Groups,
-			"notBefore": c.details.NotBefore,
-			"notAfter":  c.details.NotAfter,
-			"publicKey": fmt.Sprintf("%x", c.details.PublicKey),
-			"isCa":      c.details.IsCA,
-			"issuer":    c.details.Issuer,
-			"curve":     c.details.Curve.String(),
+			"name":           c.details.name,
+			"networks":       c.details.networks,
+			"unsafeNetworks": c.details.unsafeNetworks,
+			"groups":         c.details.groups,
+			"notBefore":      c.details.notBefore,
+			"notAfter":       c.details.notAfter,
+			"publicKey":      fmt.Sprintf("%x", c.details.publicKey),
+			"isCa":           c.details.isCA,
+			"issuer":         c.details.issuer,
+			"curve":          c.details.curve.String(),
 		},
 		"fingerprint": fp,
 		"signature":   fmt.Sprintf("%x", c.Signature()),
 	}
-	return json.Marshal(jc)
 }
 
 func (c *certificateV1) Copy() Certificate {
 	nc := &certificateV1{
 		details: detailsV1{
-			Name:      c.details.Name,
-			Groups:    make([]string, len(c.details.Groups)),
-			Ips:       make([]netip.Prefix, len(c.details.Ips)),
-			Subnets:   make([]netip.Prefix, len(c.details.Subnets)),
-			NotBefore: c.details.NotBefore,
-			NotAfter:  c.details.NotAfter,
-			PublicKey: make([]byte, len(c.details.PublicKey)),
-			IsCA:      c.details.IsCA,
-			Issuer:    c.details.Issuer,
-			Curve:     c.details.Curve,
+			name:           c.details.name,
+			groups:         make([]string, len(c.details.groups)),
+			networks:       make([]netip.Prefix, len(c.details.networks)),
+			unsafeNetworks: make([]netip.Prefix, len(c.details.unsafeNetworks)),
+			notBefore:      c.details.notBefore,
+			notAfter:       c.details.notAfter,
+			publicKey:      make([]byte, len(c.details.publicKey)),
+			isCA:           c.details.isCA,
+			issuer:         c.details.issuer,
+			curve:          c.details.curve,
 		},
 		signature: make([]byte, len(c.signature)),
 	}
 
 	copy(nc.signature, c.signature)
-	copy(nc.details.Groups, c.details.Groups)
-	copy(nc.details.PublicKey, c.details.PublicKey)
-	copy(nc.details.Ips, c.details.Ips)
-	copy(nc.details.Subnets, c.details.Subnets)
+	copy(nc.details.groups, c.details.groups)
+	copy(nc.details.publicKey, c.details.publicKey)
+	copy(nc.details.networks, c.details.networks)
+	copy(nc.details.unsafeNetworks, c.details.unsafeNetworks)
 
 	return nc
 }
 
 func (c *certificateV1) fromTBSCertificate(t *TBSCertificate) error {
 	c.details = detailsV1{
-		Name:      t.Name,
-		Ips:       t.Networks,
-		Subnets:   t.UnsafeNetworks,
-		Groups:    t.Groups,
-		NotBefore: t.NotBefore,
-		NotAfter:  t.NotAfter,
-		PublicKey: t.PublicKey,
-		IsCA:      t.IsCA,
-		Curve:     t.Curve,
-		Issuer:    t.issuer,
+		name:           t.Name,
+		networks:       t.Networks,
+		unsafeNetworks: t.UnsafeNetworks,
+		groups:         t.Groups,
+		notBefore:      t.NotBefore,
+		notAfter:       t.NotAfter,
+		publicKey:      t.PublicKey,
+		isCA:           t.IsCA,
+		curve:          t.Curve,
+		issuer:         t.issuer,
 	}
 
 	return nil
@@ -394,28 +350,28 @@ func unmarshalCertificateV1(b []byte, publicKey []byte) (*certificateV1, error) 
 
 	nc := certificateV1{
 		details: detailsV1{
-			Name:      rc.Details.Name,
-			Groups:    make([]string, len(rc.Details.Groups)),
-			Ips:       make([]netip.Prefix, len(rc.Details.Ips)/2),
-			Subnets:   make([]netip.Prefix, len(rc.Details.Subnets)/2),
-			NotBefore: time.Unix(rc.Details.NotBefore, 0),
-			NotAfter:  time.Unix(rc.Details.NotAfter, 0),
-			PublicKey: make([]byte, len(rc.Details.PublicKey)),
-			IsCA:      rc.Details.IsCA,
-			Curve:     rc.Details.Curve,
+			name:           rc.Details.Name,
+			groups:         make([]string, len(rc.Details.Groups)),
+			networks:       make([]netip.Prefix, len(rc.Details.Ips)/2),
+			unsafeNetworks: make([]netip.Prefix, len(rc.Details.Subnets)/2),
+			notBefore:      time.Unix(rc.Details.NotBefore, 0),
+			notAfter:       time.Unix(rc.Details.NotAfter, 0),
+			publicKey:      make([]byte, len(rc.Details.PublicKey)),
+			isCA:           rc.Details.IsCA,
+			curve:          rc.Details.Curve,
 		},
 		signature: make([]byte, len(rc.Signature)),
 	}
 
 	copy(nc.signature, rc.Signature)
-	copy(nc.details.Groups, rc.Details.Groups)
-	nc.details.Issuer = hex.EncodeToString(rc.Details.Issuer)
+	copy(nc.details.groups, rc.Details.Groups)
+	nc.details.issuer = hex.EncodeToString(rc.Details.Issuer)
 
 	if len(publicKey) > 0 {
-		nc.details.PublicKey = publicKey
+		nc.details.publicKey = publicKey
 	}
 
-	copy(nc.details.PublicKey, rc.Details.PublicKey)
+	copy(nc.details.publicKey, rc.Details.PublicKey)
 
 	var ip netip.Addr
 	for i, rawIp := range rc.Details.Ips {
@@ -423,7 +379,7 @@ func unmarshalCertificateV1(b []byte, publicKey []byte) (*certificateV1, error) 
 			ip = int2addr(rawIp)
 		} else {
 			ones, _ := net.IPMask(int2ip(rawIp)).Size()
-			nc.details.Ips[i/2] = netip.PrefixFrom(ip, ones)
+			nc.details.networks[i/2] = netip.PrefixFrom(ip, ones)
 		}
 	}
 
@@ -432,7 +388,7 @@ func unmarshalCertificateV1(b []byte, publicKey []byte) (*certificateV1, error) 
 			ip = int2addr(rawIp)
 		} else {
 			ones, _ := net.IPMask(int2ip(rawIp)).Size()
-			nc.details.Subnets[i/2] = netip.PrefixFrom(ip, ones)
+			nc.details.unsafeNetworks[i/2] = netip.PrefixFrom(ip, ones)
 		}
 	}
 
