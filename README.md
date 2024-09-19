@@ -62,6 +62,10 @@ Check the [releases](https://github.com/slackhq/nebula/releases/latest) page for
 - [iOS](https://apps.apple.com/us/app/mobile-nebula/id1509587936?itsct=apps_box&amp;itscg=30200)
 - [Android](https://play.google.com/store/apps/details?id=net.defined.mobile_nebula&pcampaignid=pcampaignidMKT-Other-global-all-co-prtnr-py-PartBadge-Mar2515-1)
 
+#### Self-Host
+
+- [Elestio](https://elest.io/open-source/nebula)
+
 ## Technical Overview
 
 Nebula is a mutually authenticated peer-to-peer software defined network based on the [Noise Protocol Framework](https://noiseprotocol.org/).
