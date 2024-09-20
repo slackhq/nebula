@@ -231,16 +231,7 @@ func (c *certificateV2) MarshalForHandshakes() ([]byte, error) {
 		//TODO: panic on nil rawDetails
 		b.AddBytes(c.rawDetails)
 
-		// Skipping public key since those come across in a different part of the handshake
-
-		//todo is curve skippable? I don't think so?
-
-		// Add the curve only if its not the default value
-		if c.curve != Curve_CURVE25519 {
-			b.AddASN1(TagCertCurve, func(b *cryptobyte.Builder) {
-				b.AddBytes([]byte{byte(c.curve)})
-			})
-		}
+		// Skipping the curve and  since those come across in a different part of the handshake
 
 		// Add the signature
 		b.AddASN1(TagCertSignature, func(b *cryptobyte.Builder) {
@@ -464,7 +455,7 @@ func (d *detailsV2) Marshal() ([]byte, error) {
 	return b.Bytes()
 }
 
-func unmarshalCertificateV2(b []byte, publicKey []byte) (*certificateV2, error) {
+func unmarshalCertificateV2(b []byte, publicKey []byte, curve Curve) (*certificateV2, error) {
 	l := len(b)
 	if l == 0 || l > MaxCertificateSize {
 		return nil, ErrBadFormat
@@ -482,11 +473,12 @@ func unmarshalCertificateV2(b []byte, publicKey []byte) (*certificateV2, error) 
 		return nil, ErrBadFormat
 	}
 
+	//Maybe grab the curve
 	var rawCurve byte
-	if !readOptionalASN1Byte(&input, &rawCurve, TagCertCurve, byte(Curve_CURVE25519)) {
+	if !readOptionalASN1Byte(&input, &rawCurve, TagCertCurve, byte(curve)) {
 		return nil, ErrBadFormat
 	}
-	curve := Curve(rawCurve)
+	curve = Curve(rawCurve)
 
 	// Maybe grab the public key
 	var rawPublicKey cryptobyte.String
