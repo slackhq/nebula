@@ -237,10 +237,10 @@ func (t *tun) RouteFor(ip netip.Addr) netip.Addr {
 
 func (t *tun) Write(b []byte) (int, error) {
 	var nn int
-	max := len(b)
+	maximum := len(b)
 
 	for {
-		n, err := unix.Write(t.fd, b[nn:max])
+		n, err := unix.Write(t.fd, b[nn:maximum])
 		if n > 0 {
 			nn += n
 		}
@@ -278,23 +278,20 @@ func hasNetlinkAddr(al []*netlink.Addr, x netlink.Addr) bool {
 func (t *tun) addIPs(link netlink.Link) error {
 	newAddrs := make([]*netlink.Addr, len(t.vpnNetworks))
 	for i := range t.vpnNetworks {
-		//todo I wish I didn't need to stringify and re-parse
-		nlAddr, err := netlink.ParseAddr(t.vpnNetworks[i].String())
-		if err != nil {
-			return err
+		newAddrs[i] = &netlink.Addr{
+			IPNet: &net.IPNet{
+				IP:   t.vpnNetworks[i].Addr().AsSlice(),
+				Mask: net.CIDRMask(t.vpnNetworks[i].Bits(), t.vpnNetworks[i].Addr().BitLen()),
+			},
+			Label: t.vpnNetworks[i].Addr().Zone(),
 		}
-		newAddrs[i] = nlAddr
 	}
 
 	//add all new addresses
 	for i := range newAddrs {
 		//todo do we want to stack errors and try as many ops as possible?
-		//todo AddrReplace should still add new IPs I think
+		//AddrReplace still adds new IPs, but if their properties change it will change them as well
 		if err := netlink.AddrReplace(link, newAddrs[i]); err != nil {
-			return err
-		}
-		//newAddrs is the same order as vpnNetworks so this is fine
-		if err := t.setDefaultRoute(t.vpnNetworks[i]); err != nil {
 			return err
 		}
 	}
@@ -360,19 +357,14 @@ func (t *tun) Activate() error {
 		t.l.WithError(err).Error("Failed to set tun tx queue length")
 	}
 
-	// Bring up the interface
-	ifrf.Flags = ifrf.Flags | unix.IFF_UP
-	if err = ioctl(t.ioctlFd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
-		return fmt.Errorf("failed to bring the tun device up: %s", err)
-	}
-
 	if err = t.addIPs(link); err != nil {
 		return err
 	}
 
-	// Set the routes
-	if err = t.addRoutes(false); err != nil {
-		return err
+	// Bring up the interface
+	ifrf.Flags = ifrf.Flags | unix.IFF_UP
+	if err = ioctl(t.ioctlFd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
+		return fmt.Errorf("failed to bring the tun device up: %s", err)
 	}
 
 	// Run the interface
@@ -380,6 +372,19 @@ func (t *tun) Activate() error {
 	if err = ioctl(t.ioctlFd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
 		return fmt.Errorf("failed to run tun device: %s", err)
 	}
+
+	//set route MTU
+	for i := range t.vpnNetworks {
+		if err = t.setDefaultRoute(t.vpnNetworks[i]); err != nil {
+			return fmt.Errorf("failed to set default route MTU: %w", err)
+		}
+	}
+
+	// Set the routes
+	if err = t.addRoutes(false); err != nil {
+		return err
+	}
+
 	//todo do we want to keep the link-local address?
 
 	return nil
