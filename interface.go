@@ -2,19 +2,19 @@ package nebula
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/netip"
 	"os"
 	"runtime"
 	"sync/atomic"
 	"time"
 
+	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
@@ -29,7 +29,6 @@ type InterfaceConfig struct {
 	Outside                 udp.Conn
 	Inside                  overlay.Device
 	pki                     *PKI
-	Cipher                  string
 	Firewall                *Firewall
 	ServeDns                bool
 	HandshakeManager        *HandshakeManager
@@ -57,15 +56,16 @@ type Interface struct {
 	outside            udp.Conn
 	inside             overlay.Device
 	pki                *PKI
-	cipher             string
 	firewall           *Firewall
 	connectionManager  *connectionManager
 	handshakeManager   *HandshakeManager
 	serveDns           bool
 	createTime         time.Time
 	lightHouse         *LightHouse
-	myBroadcastAddr    netip.Addr
-	myVpnNet           netip.Prefix
+	myBroadcastAddr    *bart.Table[struct{}]
+	myVpnAddrs         []netip.Addr          // A list of addresses assigned to us via our certificate
+	myVpnAddrsTable    *bart.Table[struct{}] // A table of addresses assigned to us via our certificate
+	myVpnNetworks      *bart.Table[struct{}] // A table of networks assigned to us via our certificate
 	dropLocalBroadcast bool
 	dropMulticast      bool
 	routines           int
@@ -106,6 +106,7 @@ type EncWriter interface {
 	SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp netip.Addr, p, nb, out []byte)
 	SendMessageToHostInfo(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte)
 	Handshake(vpnIp netip.Addr)
+	GetHostInfo(vpnIp netip.Addr) *HostInfo
 }
 
 type sendRecvErrorConfig uint8
@@ -156,14 +157,11 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		return nil, errors.New("no firewall rules")
 	}
 
-	certificate := c.pki.GetCertState().Certificate
-
 	ifce := &Interface{
 		pki:                c.pki,
 		hostMap:            c.HostMap,
 		outside:            c.Outside,
 		inside:             c.Inside,
-		cipher:             c.Cipher,
 		firewall:           c.Firewall,
 		serveDns:           c.ServeDns,
 		handshakeManager:   c.HandshakeManager,
@@ -175,7 +173,8 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		version:            c.version,
 		writers:            make([]udp.Conn, c.routines),
 		readers:            make([]io.ReadWriteCloser, c.routines),
-		myVpnNet:           certificate.Networks()[0],
+		myVpnNetworks:      new(bart.Table[struct{}]),
+		myVpnAddrsTable:    new(bart.Table[struct{}]),
 		relayManager:       c.relayManager,
 
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
@@ -190,12 +189,25 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		l: c.l,
 	}
 
-	if ifce.myVpnNet.Addr().Is4() {
-		maskedAddr := certificate.Networks()[0].Masked()
-		addr := maskedAddr.Addr().As4()
-		mask := net.CIDRMask(maskedAddr.Bits(), maskedAddr.Addr().BitLen())
-		binary.BigEndian.PutUint32(addr[:], binary.BigEndian.Uint32(addr[:])|^binary.BigEndian.Uint32(mask))
-		ifce.myBroadcastAddr = netip.AddrFrom4(addr)
+	var crt cert.Certificate
+	cs := c.pki.getCertState()
+	crt = cs.getCertificate(cert.Version2)
+	if crt == nil {
+		// v2 certificates are a superset, only look at v1 if its all we have
+		crt = cs.getCertificate(cert.Version1)
+	}
+
+	for _, network := range crt.Networks() {
+		ifce.myVpnNetworks.Insert(network, struct{}{})
+		ifce.myVpnAddrsTable.Insert(netip.PrefixFrom(network.Addr(), network.Addr().BitLen()), struct{}{})
+		ifce.myVpnAddrs = append(ifce.myVpnAddrs, network.Addr())
+
+		if network.Addr().Is4() {
+			//TODO: finish calculating the broadcast ips
+			//addr := network.Masked().Addr().As4()
+			//binary.BigEndian.PutUint32(addr[:], binary.BigEndian.Uint32(addr[:])|^binary.BigEndian.Uint32(certificate.Details.Ips[0].Mask))
+			//ifce.myBroadcastAddr = netip.AddrFrom4(addr)
+		}
 	}
 
 	ifce.tryPromoteEvery.Store(c.tryPromoteEvery)
@@ -325,7 +337,7 @@ func (f *Interface) reloadFirewall(c *config.C) {
 		return
 	}
 
-	fw, err := NewFirewallFromConfig(f.l, f.pki.GetCertState().Certificate, c)
+	fw, err := NewFirewallFromConfig(f.l, f.pki.getDefaultCertificate(), c)
 	if err != nil {
 		f.l.WithError(err).Error("Error while creating firewall during reload")
 		return
@@ -417,9 +429,14 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 			f.firewall.EmitStats()
 			f.handshakeManager.EmitStats()
 			udpStats()
-			certExpirationGauge.Update(int64(f.pki.GetCertState().Certificate.NotAfter().Sub(time.Now()) / time.Second))
+			certExpirationGauge.Update(int64(f.pki.getDefaultCertificate().NotAfter().Sub(time.Now()) / time.Second))
+			//TODO: we should also report the default certificate version
 		}
 	}
+}
+
+func (f *Interface) GetHostInfo(vpnIp netip.Addr) *HostInfo {
+	return f.hostMap.QueryVpnAddr(vpnIp)
 }
 
 func (f *Interface) Close() error {

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"time"
 
 	"golang.org/x/crypto/curve25519"
@@ -391,6 +392,9 @@ func unmarshalCertificateV1(b []byte, publicKey []byte) (*certificateV1, error) 
 			nc.details.unsafeNetworks[i/2] = netip.PrefixFrom(ip, ones)
 		}
 	}
+
+	slices.SortFunc(nc.details.networks, comparePrefix)
+	slices.SortFunc(nc.details.unsafeNetworks, comparePrefix)
 
 	return &nc, nil
 }

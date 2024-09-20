@@ -21,5 +21,5 @@ func TestCalculatedRemoteApply(t *testing.T) {
 	expected, err := netip.ParseAddr("192.168.1.182")
 	assert.NoError(t, err)
 
-	assert.Equal(t, NewIp4AndPortFromNetIP(expected, 4242), c.Apply(input))
+	assert.Equal(t, netAddrToProtoV4AddrPort(expected, 4242), c.Apply(input))
 }

@@ -86,6 +86,17 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return newHelpErrorf("cannot set both -in-pub and -out-key")
 	}
 
+	var v4Networks []netip.Prefix
+	var v6Networks []netip.Prefix
+	if *sf.networks == "" && *sf.ip != "" {
+		// Pull up deprecated -ip flag if needed
+		*sf.networks = *sf.ip
+	}
+
+	if len(*sf.networks) == 0 {
+		return newHelpErrorf("-networks is required")
+	}
+
 	version := cert.Version(*sf.version)
 	if version != 0 && version != cert.Version1 && version != cert.Version2 {
 		return newHelpErrorf("-version must be either %v or %v", cert.Version1, cert.Version2)
@@ -157,13 +168,6 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	// if no duration is given, expire one second before the root expires
 	if *sf.duration <= 0 {
 		*sf.duration = time.Until(caCert.NotAfter()) - time.Second*1
-	}
-
-	var v4Networks []netip.Prefix
-	var v6Networks []netip.Prefix
-	if *sf.networks == "" && *sf.ip != "" {
-		// Pull up deprecated -ip flag if needed
-		*sf.networks = *sf.ip
 	}
 
 	if *sf.networks != "" {

@@ -21,7 +21,7 @@ Details ::= SEQUENCE {
     name Name,
 
     -- At least 1 ipv4 or ipv6 address must be present if isCA is false
-    networks SEQUENCE OF Network,
+    networks SEQUENCE OF Network OPTIONAL,
     unsafeNetworks SEQUENCE OF Network OPTIONAL,
     groups SEQUENCE OF Name OPTIONAL,
     isCA BOOLEAN DEFAULT false,
@@ -30,7 +30,7 @@ Details ::= SEQUENCE {
     notBefore Time,
     notAfter Time,
 
-    issuer OCTET STRING,
+    issuer OCTET STRING OPTIONAL,
     ...
     -- New fields can be added below here
 }
