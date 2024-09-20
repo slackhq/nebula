@@ -20,11 +20,16 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	}
 
 	// Ignore local broadcast packets
-	if f.dropLocalBroadcast && fwPacket.RemoteIP == f.myBroadcastAddr {
-		return
+	if f.dropLocalBroadcast {
+		_, found := f.myBroadcastAddr.Lookup(fwPacket.RemoteIP)
+		if found {
+			return
+		}
 	}
 
-	if fwPacket.RemoteIP == f.myVpnNet.Addr() {
+	//TODO: seems like a huge bummer
+	_, found := f.myVpnAddrsTable.Lookup(fwPacket.RemoteIP)
+	if found {
 		// Immediately forward packets from self to self.
 		// This should only happen on Darwin-based and FreeBSD hosts, which
 		// routes packets from the Nebula IP to the Nebula IP through the Nebula
@@ -124,7 +129,8 @@ func (f *Interface) Handshake(vpnIp netip.Addr) {
 // getOrHandshake returns nil if the vpnIp is not routable.
 // If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
 func (f *Interface) getOrHandshake(vpnIp netip.Addr, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
-	if !f.myVpnNet.Contains(vpnIp) {
+	_, found := f.myVpnNetworks.Lookup(vpnIp)
+	if !found {
 		vpnIp = f.inside.RouteFor(vpnIp)
 		if !vpnIp.IsValid() {
 			return nil, false
@@ -289,10 +295,10 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	if t != header.CloseTunnel && hostinfo.lastRebindCount != f.rebindCount {
 		//NOTE: there is an update hole if a tunnel isn't used and exactly 256 rebinds occur before the tunnel is
 		// finally used again. This tunnel would eventually be torn down and recreated if this action didn't help.
-		f.lightHouse.QueryServer(hostinfo.vpnIp)
+		f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
 		hostinfo.lastRebindCount = f.rebindCount
 		if f.l.Level >= logrus.DebugLevel {
-			f.l.WithField("vpnIp", hostinfo.vpnIp).Debug("Lighthouse update triggered for punch due to rebind counter")
+			f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).Debug("Lighthouse update triggered for punch due to rebind counter")
 		}
 	}
 
@@ -324,7 +330,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	} else {
 		// Try to send via a relay
 		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
-			relayHostInfo, relay, err := f.hostMap.QueryVpnIpRelayFor(hostinfo.vpnIp, relayIP)
+			relayHostInfo, relay, err := f.hostMap.QueryVpnAddrRelayFor(hostinfo.vpnAddrs[0], relayIP)
 			if err != nil {
 				hostinfo.relayState.DeleteRelay(relayIP)
 				hostinfo.logger(f.l).WithField("relay", relayIP).WithError(err).Info("sendNoMetrics failed to find HostInfo")

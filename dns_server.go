@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gaissmai/bart"
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
@@ -21,14 +22,16 @@ var dnsAddr string
 
 type dnsRecords struct {
 	sync.RWMutex
-	dnsMap  map[string]string
-	hostMap *HostMap
+	dnsMap          map[string]string
+	hostMap         *HostMap
+	myVpnAddrsTable *bart.Table[struct{}]
 }
 
-func newDnsRecords(hostMap *HostMap) *dnsRecords {
+func newDnsRecords(cs *CertState, hostMap *HostMap) *dnsRecords {
 	return &dnsRecords{
-		dnsMap:  make(map[string]string),
-		hostMap: hostMap,
+		dnsMap:          make(map[string]string),
+		hostMap:         hostMap,
+		myVpnAddrsTable: cs.myVpnAddrsTable,
 	}
 }
 
@@ -47,7 +50,7 @@ func (d *dnsRecords) QueryCert(data string) string {
 		return ""
 	}
 
-	hostinfo := d.hostMap.QueryVpnIp(ip)
+	hostinfo := d.hostMap.QueryVpnAddr(ip)
 	if hostinfo == nil {
 		return ""
 	}
@@ -91,7 +94,8 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
 
 			// We don't answer these queries from non nebula nodes or localhost
 			//l.Debugf("Does %s contain %s", b, dnsR.hostMap.vpnCIDR)
-			if !dnsR.hostMap.vpnCIDR.Contains(b) && a != "127.0.0.1" {
+			_, found := dnsR.myVpnAddrsTable.Lookup(b)
+			if !found && a != "127.0.0.1" {
 				return
 			}
 			l.Debugf("Query for TXT %s", q.Name)
@@ -123,8 +127,8 @@ func handleDnsRequest(l *logrus.Logger, w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func dnsMain(l *logrus.Logger, hostMap *HostMap, c *config.C) func() {
-	dnsR = newDnsRecords(hostMap)
+func dnsMain(l *logrus.Logger, cs *CertState, hostMap *HostMap, c *config.C) func() {
+	dnsR = newDnsRecords(cs, hostMap)
 
 	// attach request handler func
 	dns.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {

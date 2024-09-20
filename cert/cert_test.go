@@ -24,21 +24,21 @@ func TestMarshalingNebulaCertificate(t *testing.T) {
 
 	nc := certificateV1{
 		details: detailsV1{
-			Name: "testing",
-			Ips: []netip.Prefix{
+			name: "testing",
+			networks: []netip.Prefix{
 				mustParsePrefixUnmapped("10.1.1.1/24"),
 				mustParsePrefixUnmapped("10.1.1.2/16"),
 			},
-			Subnets: []netip.Prefix{
+			unsafeNetworks: []netip.Prefix{
 				mustParsePrefixUnmapped("9.1.1.2/24"),
 				mustParsePrefixUnmapped("9.1.1.3/16"),
 			},
-			Groups:    []string{"test-group1", "test-group2", "test-group3"},
-			NotBefore: before,
-			NotAfter:  after,
-			PublicKey: pubKey,
-			IsCA:      false,
-			Issuer:    "1234567890abcedfghij1234567890ab",
+			groups:    []string{"test-group1", "test-group2", "test-group3"},
+			notBefore: before,
+			notAfter:  after,
+			publicKey: pubKey,
+			isCA:      false,
+			issuer:    "1234567890abcedfghij1234567890ab",
 		},
 		signature: []byte("1234567890abcedfghij1234567890ab"),
 	}
@@ -51,16 +51,16 @@ func TestMarshalingNebulaCertificate(t *testing.T) {
 	assert.Nil(t, err)
 
 	assert.Equal(t, nc.signature, nc2.Signature())
-	assert.Equal(t, nc.details.Name, nc2.Name())
-	assert.Equal(t, nc.details.NotBefore, nc2.NotBefore())
-	assert.Equal(t, nc.details.NotAfter, nc2.NotAfter())
-	assert.Equal(t, nc.details.PublicKey, nc2.PublicKey())
-	assert.Equal(t, nc.details.IsCA, nc2.IsCA())
+	assert.Equal(t, nc.details.name, nc2.Name())
+	assert.Equal(t, nc.details.notBefore, nc2.NotBefore())
+	assert.Equal(t, nc.details.notAfter, nc2.NotAfter())
+	assert.Equal(t, nc.details.publicKey, nc2.PublicKey())
+	assert.Equal(t, nc.details.isCA, nc2.IsCA())
 
-	assert.Equal(t, nc.details.Ips, nc2.Networks())
-	assert.Equal(t, nc.details.Subnets, nc2.UnsafeNetworks())
+	assert.Equal(t, nc.details.networks, nc2.Networks())
+	assert.Equal(t, nc.details.unsafeNetworks, nc2.UnsafeNetworks())
 
-	assert.Equal(t, nc.details.Groups, nc2.Groups())
+	assert.Equal(t, nc.details.groups, nc2.Groups())
 }
 
 //func TestNebulaCertificate_Sign(t *testing.T) {
@@ -150,8 +150,8 @@ func TestMarshalingNebulaCertificate(t *testing.T) {
 func TestNebulaCertificate_Expired(t *testing.T) {
 	nc := certificateV1{
 		details: detailsV1{
-			NotBefore: time.Now().Add(time.Second * -60).Round(time.Second),
-			NotAfter:  time.Now().Add(time.Second * 60).Round(time.Second),
+			notBefore: time.Now().Add(time.Second * -60).Round(time.Second),
+			notAfter:  time.Now().Add(time.Second * 60).Round(time.Second),
 		},
 	}
 
@@ -166,21 +166,21 @@ func TestNebulaCertificate_MarshalJSON(t *testing.T) {
 
 	nc := certificateV1{
 		details: detailsV1{
-			Name: "testing",
-			Ips: []netip.Prefix{
+			name: "testing",
+			networks: []netip.Prefix{
 				mustParsePrefixUnmapped("10.1.1.1/24"),
 				mustParsePrefixUnmapped("10.1.1.2/16"),
 			},
-			Subnets: []netip.Prefix{
+			unsafeNetworks: []netip.Prefix{
 				mustParsePrefixUnmapped("9.1.1.2/24"),
 				mustParsePrefixUnmapped("9.1.1.3/16"),
 			},
-			Groups:    []string{"test-group1", "test-group2", "test-group3"},
-			NotBefore: time.Date(1, 0, 0, 1, 0, 0, 0, time.UTC),
-			NotAfter:  time.Date(1, 0, 0, 2, 0, 0, 0, time.UTC),
-			PublicKey: pubKey,
-			IsCA:      false,
-			Issuer:    "1234567890abcedfghij1234567890ab",
+			groups:    []string{"test-group1", "test-group2", "test-group3"},
+			notBefore: time.Date(1, 0, 0, 1, 0, 0, 0, time.UTC),
+			notAfter:  time.Date(1, 0, 0, 2, 0, 0, 0, time.UTC),
+			publicKey: pubKey,
+			isCA:      false,
+			issuer:    "1234567890abcedfghij1234567890ab",
 		},
 		signature: []byte("1234567890abcedfghij1234567890ab"),
 	}
@@ -189,7 +189,7 @@ func TestNebulaCertificate_MarshalJSON(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(
 		t,
-		"{\"details\":{\"curve\":\"CURVE25519\",\"groups\":[\"test-group1\",\"test-group2\",\"test-group3\"],\"ips\":[\"10.1.1.1/24\",\"10.1.1.2/16\"],\"isCa\":false,\"issuer\":\"1234567890abcedfghij1234567890ab\",\"name\":\"testing\",\"notAfter\":\"0000-11-30T02:00:00Z\",\"notBefore\":\"0000-11-30T01:00:00Z\",\"publicKey\":\"313233343536373839306162636564666768696a313233343536373839306162\",\"subnets\":[\"9.1.1.2/24\",\"9.1.1.3/16\"]},\"fingerprint\":\"3944c53d4267a229295b56cb2d27d459164c010ac97d655063ba421e0670f4ba\",\"signature\":\"313233343536373839306162636564666768696a313233343536373839306162\"}",
+		"{\"details\":{\"curve\":\"CURVE25519\",\"groups\":[\"test-group1\",\"test-group2\",\"test-group3\"],\"isCa\":false,\"issuer\":\"1234567890abcedfghij1234567890ab\",\"name\":\"testing\",\"networks\":[\"10.1.1.1/24\",\"10.1.1.2/16\"],\"notAfter\":\"0000-11-30T02:00:00Z\",\"notBefore\":\"0000-11-30T01:00:00Z\",\"publicKey\":\"313233343536373839306162636564666768696a313233343536373839306162\",\"unsafeNetworks\":[\"9.1.1.2/24\",\"9.1.1.3/16\"]},\"fingerprint\":\"3944c53d4267a229295b56cb2d27d459164c010ac97d655063ba421e0670f4ba\",\"signature\":\"313233343536373839306162636564666768696a313233343536373839306162\",\"version\":1}",
 		string(b),
 	)
 }

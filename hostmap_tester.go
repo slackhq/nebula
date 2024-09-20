@@ -9,8 +9,8 @@ import (
 	"net/netip"
 )
 
-func (i *HostInfo) GetVpnIp() netip.Addr {
-	return i.vpnIp
+func (i *HostInfo) GetVpnAddrs() []netip.Addr {
+	return i.vpnAddrs
 }
 
 func (i *HostInfo) GetLocalIndex() uint32 {
