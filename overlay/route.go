@@ -61,7 +61,7 @@ func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*bart.Table
 	return routeTree, nil
 }
 
-func parseRoutes(c *config.C, network netip.Prefix) ([]Route, error) {
+func parseRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 	var err error
 
 	r := c.Get("tun.routes")
@@ -117,13 +117,15 @@ func parseRoutes(c *config.C, network netip.Prefix) ([]Route, error) {
 			return nil, fmt.Errorf("entry %v.route in tun.routes failed to parse: %v", i+1, err)
 		}
 
-		if !network.Contains(r.Cidr.Addr()) || r.Cidr.Bits() < network.Bits() {
-			return nil, fmt.Errorf(
-				"entry %v.route in tun.routes is not contained within the network attached to the certificate; route: %v, network: %v",
-				i+1,
-				r.Cidr.String(),
-				network.String(),
-			)
+		for _, network := range networks {
+			if !network.Contains(r.Cidr.Addr()) || r.Cidr.Bits() < network.Bits() {
+				return nil, fmt.Errorf(
+					"entry %v.route in tun.routes is not contained within the configured vpn networks; route: %v, network: %v",
+					i+1,
+					r.Cidr.String(),
+					network.String(),
+				)
+			}
 		}
 
 		routes[i] = r
@@ -132,7 +134,7 @@ func parseRoutes(c *config.C, network netip.Prefix) ([]Route, error) {
 	return routes, nil
 }
 
-func parseUnsafeRoutes(c *config.C, network netip.Prefix) ([]Route, error) {
+func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 	var err error
 
 	r := c.Get("tun.unsafe_routes")
@@ -229,13 +231,15 @@ func parseUnsafeRoutes(c *config.C, network netip.Prefix) ([]Route, error) {
 			return nil, fmt.Errorf("entry %v.route in tun.unsafe_routes failed to parse: %v", i+1, err)
 		}
 
-		if network.Contains(r.Cidr.Addr()) {
-			return nil, fmt.Errorf(
-				"entry %v.route in tun.unsafe_routes is contained within the network attached to the certificate; route: %v, network: %v",
-				i+1,
-				r.Cidr.String(),
-				network.String(),
-			)
+		for _, network := range networks {
+			if network.Contains(r.Cidr.Addr()) {
+				return nil, fmt.Errorf(
+					"entry %v.route in tun.unsafe_routes is contained within the configured vpn networks; route: %v, network: %v",
+					i+1,
+					r.Cidr.String(),
+					network.String(),
+				)
+			}
 		}
 
 		routes[i] = r
