@@ -49,7 +49,8 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 
 	//l.Error("in packet ", header, packet[HeaderLen:])
 	if ip.IsValid() {
-		if f.myVpnNet.Contains(ip.Addr()) {
+		_, found := f.myVpnNetworks.Lookup(ip.Addr())
+		if found {
 			if f.l.Level >= logrus.DebugLevel {
 				f.l.WithField("udpAddr", ip).Debug("Refusing to process double encrypted packet")
 			}
@@ -106,7 +107,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			if !ok {
 				// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
 				// its internal mapping. This should never happen.
-				hostinfo.logger(f.l).WithFields(logrus.Fields{"vpnIp": hostinfo.vpnIp, "remoteIndex": h.RemoteIndex}).Error("HostInfo missing remote relay index")
+				hostinfo.logger(f.l).WithFields(logrus.Fields{"vpnAddrs": hostinfo.vpnAddrs, "remoteIndex": h.RemoteIndex}).Error("HostInfo missing remote relay index")
 				return
 			}
 
@@ -118,9 +119,9 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 				return
 			case ForwardingType:
 				// Find the target HostInfo relay object
-				targetHI, targetRelay, err := f.hostMap.QueryVpnIpRelayFor(hostinfo.vpnIp, relay.PeerIp)
+				targetHI, targetRelay, err := f.hostMap.QueryVpnAddrRelayFor(hostinfo.vpnAddrs[0], relay.PeerAddr)
 				if err != nil {
-					hostinfo.logger(f.l).WithField("relayTo", relay.PeerIp).WithError(err).Info("Failed to find target host info by ip")
+					hostinfo.logger(f.l).WithField("relayTo", relay.PeerAddr).WithError(err).Info("Failed to find target host info by ip")
 					return
 				}
 
@@ -136,7 +137,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 						hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 					}
 				} else {
-					hostinfo.logger(f.l).WithFields(logrus.Fields{"relayTo": relay.PeerIp, "relayFrom": hostinfo.vpnIp, "targetRelayState": targetRelay.State}).Info("Unexpected target relay state")
+					hostinfo.logger(f.l).WithFields(logrus.Fields{"relayTo": relay.PeerAddr, "relayFrom": hostinfo.vpnAddrs[0], "targetRelayState": targetRelay.State}).Info("Unexpected target relay state")
 					return
 				}
 			}
@@ -159,7 +160,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			return
 		}
 
-		lhf(ip, hostinfo.vpnIp, d)
+		lhf(ip, hostinfo.vpnAddrs, d)
 
 		// Fallthrough to the bottom to record incoming traffic
 
@@ -226,14 +227,8 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 				Error("Failed to decrypt Control packet")
 			return
 		}
-		m := &NebulaControl{}
-		err = m.Unmarshal(d)
-		if err != nil {
-			hostinfo.logger(f.l).WithError(err).Error("Failed to unmarshal control message")
-			break
-		}
 
-		f.relayManager.HandleControlMsg(hostinfo, m, f)
+		f.relayManager.HandleControlMsg(hostinfo, d, f)
 
 	default:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
@@ -251,7 +246,8 @@ func (f *Interface) closeTunnel(hostInfo *HostInfo) {
 	final := f.hostMap.DeleteHostInfo(hostInfo)
 	if final {
 		// We no longer have any tunnels with this vpn ip, clear learned lighthouse state to lower memory usage
-		f.lightHouse.DeleteVpnIp(hostInfo.vpnIp)
+		//TODO: we should delete all related vpnaddrs too
+		f.lightHouse.DeleteVpnAddr(hostInfo.vpnAddrs[0])
 	}
 }
 
@@ -262,7 +258,8 @@ func (f *Interface) sendCloseTunnel(h *HostInfo) {
 
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, ip netip.AddrPort) {
 	if ip.IsValid() && hostinfo.remote != ip {
-		if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnIp, ip.Addr()) {
+		//TODO: this is weird now that we can have multiple vpn addrs
+		if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnAddrs[0], ip.Addr()) {
 			hostinfo.logger(f.l).WithField("newAddr", ip).Debug("lighthouse.remote_allow_list denied roaming")
 			return
 		}

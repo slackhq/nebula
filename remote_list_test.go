@@ -13,7 +13,7 @@ func TestRemoteList_Rebuild(t *testing.T) {
 	rl.unlockedSetV4(
 		netip.MustParseAddr("0.0.0.0"),
 		netip.MustParseAddr("0.0.0.0"),
-		[]*Ip4AndPort{
+		[]*V4AddrPort{
 			newIp4AndPortFromString("70.199.182.92:1475"), // this is duped
 			newIp4AndPortFromString("172.17.0.182:10101"),
 			newIp4AndPortFromString("172.17.1.1:10101"), // this is duped
@@ -25,20 +25,20 @@ func TestRemoteList_Rebuild(t *testing.T) {
 			newIp4AndPortFromString("70.199.182.92:1476"), // almost dupe of 0 with a diff port
 			newIp4AndPortFromString("70.199.182.92:1475"), // this is a dupe
 		},
-		func(netip.Addr, *Ip4AndPort) bool { return true },
+		func(netip.Addr, *V4AddrPort) bool { return true },
 	)
 
 	rl.unlockedSetV6(
 		netip.MustParseAddr("0.0.0.1"),
 		netip.MustParseAddr("0.0.0.1"),
-		[]*Ip6AndPort{
+		[]*V6AddrPort{
 			newIp6AndPortFromString("[1::1]:1"), // this is duped
 			newIp6AndPortFromString("[1::1]:2"), // almost dupe of 0 with a diff port, also gets duped
 			newIp6AndPortFromString("[1:100::1]:1"),
 			newIp6AndPortFromString("[1::1]:1"), // this is a dupe
 			newIp6AndPortFromString("[1::1]:2"), // this is a dupe
 		},
-		func(netip.Addr, *Ip6AndPort) bool { return true },
+		func(netip.Addr, *V6AddrPort) bool { return true },
 	)
 
 	rl.Rebuild([]netip.Prefix{})
@@ -102,7 +102,7 @@ func BenchmarkFullRebuild(b *testing.B) {
 	rl.unlockedSetV4(
 		netip.MustParseAddr("0.0.0.0"),
 		netip.MustParseAddr("0.0.0.0"),
-		[]*Ip4AndPort{
+		[]*V4AddrPort{
 			newIp4AndPortFromString("70.199.182.92:1475"),
 			newIp4AndPortFromString("172.17.0.182:10101"),
 			newIp4AndPortFromString("172.17.1.1:10101"),
@@ -112,19 +112,19 @@ func BenchmarkFullRebuild(b *testing.B) {
 			newIp4AndPortFromString("172.17.1.1:10101"),   // this is a dupe
 			newIp4AndPortFromString("70.199.182.92:1476"), // dupe of 0 with a diff port
 		},
-		func(netip.Addr, *Ip4AndPort) bool { return true },
+		func(netip.Addr, *V4AddrPort) bool { return true },
 	)
 
 	rl.unlockedSetV6(
 		netip.MustParseAddr("0.0.0.0"),
 		netip.MustParseAddr("0.0.0.0"),
-		[]*Ip6AndPort{
+		[]*V6AddrPort{
 			newIp6AndPortFromString("[1::1]:1"),
 			newIp6AndPortFromString("[1::1]:2"), // dupe of 0 with a diff port
 			newIp6AndPortFromString("[1:100::1]:1"),
 			newIp6AndPortFromString("[1::1]:1"), // this is a dupe
 		},
-		func(netip.Addr, *Ip6AndPort) bool { return true },
+		func(netip.Addr, *V6AddrPort) bool { return true },
 	)
 
 	b.Run("no preferred", func(b *testing.B) {
@@ -164,7 +164,7 @@ func BenchmarkSortRebuild(b *testing.B) {
 	rl.unlockedSetV4(
 		netip.MustParseAddr("0.0.0.0"),
 		netip.MustParseAddr("0.0.0.0"),
-		[]*Ip4AndPort{
+		[]*V4AddrPort{
 			newIp4AndPortFromString("70.199.182.92:1475"),
 			newIp4AndPortFromString("172.17.0.182:10101"),
 			newIp4AndPortFromString("172.17.1.1:10101"),
@@ -174,19 +174,19 @@ func BenchmarkSortRebuild(b *testing.B) {
 			newIp4AndPortFromString("172.17.1.1:10101"),   // this is a dupe
 			newIp4AndPortFromString("70.199.182.92:1476"), // dupe of 0 with a diff port
 		},
-		func(netip.Addr, *Ip4AndPort) bool { return true },
+		func(netip.Addr, *V4AddrPort) bool { return true },
 	)
 
 	rl.unlockedSetV6(
 		netip.MustParseAddr("0.0.0.0"),
 		netip.MustParseAddr("0.0.0.0"),
-		[]*Ip6AndPort{
+		[]*V6AddrPort{
 			newIp6AndPortFromString("[1::1]:1"),
 			newIp6AndPortFromString("[1::1]:2"), // dupe of 0 with a diff port
 			newIp6AndPortFromString("[1:100::1]:1"),
 			newIp6AndPortFromString("[1::1]:1"), // this is a dupe
 		},
-		func(netip.Addr, *Ip6AndPort) bool { return true },
+		func(netip.Addr, *V6AddrPort) bool { return true },
 	)
 
 	b.Run("no preferred", func(b *testing.B) {
@@ -224,19 +224,19 @@ func BenchmarkSortRebuild(b *testing.B) {
 	})
 }
 
-func newIp4AndPortFromString(s string) *Ip4AndPort {
+func newIp4AndPortFromString(s string) *V4AddrPort {
 	a := netip.MustParseAddrPort(s)
 	v4Addr := a.Addr().As4()
-	return &Ip4AndPort{
-		Ip:   binary.BigEndian.Uint32(v4Addr[:]),
+	return &V4AddrPort{
+		Addr: binary.BigEndian.Uint32(v4Addr[:]),
 		Port: uint32(a.Port()),
 	}
 }
 
-func newIp6AndPortFromString(s string) *Ip6AndPort {
+func newIp6AndPortFromString(s string) *V6AddrPort {
 	a := netip.MustParseAddrPort(s)
 	v6Addr := a.Addr().As16()
-	return &Ip6AndPort{
+	return &V6AddrPort{
 		Hi:   binary.BigEndian.Uint64(v6Addr[:8]),
 		Lo:   binary.BigEndian.Uint64(v6Addr[8:]),
 		Port: uint32(a.Port()),

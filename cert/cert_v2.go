@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/netip"
+	"slices"
 	"time"
 
 	"golang.org/x/crypto/cryptobyte"
@@ -30,14 +31,14 @@ const (
 	TagCertPublicKey = 2 | classContextSpecific
 	TagCertSignature = 3 | classContextSpecific
 
-	TagDetailsName      = 0 | classContextSpecific
-	TagDetailsIps       = 1 | classConstructed | classContextSpecific
-	TagDetailsSubnets   = 2 | classConstructed | classContextSpecific
-	TagDetailsGroups    = 3 | classConstructed | classContextSpecific
-	TagDetailsIsCA      = 4 | classContextSpecific
-	TagDetailsNotBefore = 5 | classContextSpecific
-	TagDetailsNotAfter  = 6 | classContextSpecific
-	TagDetailsIssuer    = 7 | classContextSpecific
+	TagDetailsName           = 0 | classContextSpecific
+	TagDetailsNetworks       = 1 | classConstructed | classContextSpecific
+	TagDetailsUnsafeNetworks = 2 | classConstructed | classContextSpecific
+	TagDetailsGroups         = 3 | classConstructed | classContextSpecific
+	TagDetailsIsCA           = 4 | classContextSpecific
+	TagDetailsNotBefore      = 5 | classContextSpecific
+	TagDetailsNotAfter       = 6 | classContextSpecific
+	TagDetailsIssuer         = 7 | classContextSpecific
 )
 
 const (
@@ -47,9 +48,9 @@ const (
 	// MaxNameLength is limited to a maximum realistic DNS domain name to help facilitate DNS systems
 	MaxNameLength = 253
 
-	// MaxSubnetLength is the maximum length a subnet value can be.
+	// MaxNetworkLength is the maximum length a network value can be.
 	// 16 bytes for an ipv6 address + 1 byte for the prefix length
-	MaxSubnetLength = 17
+	MaxNetworkLength = 17
 )
 
 type certificateV2 struct {
@@ -370,14 +371,14 @@ func (d *detailsV2) Marshal() ([]byte, error) {
 			b.AddBytes([]byte(d.name))
 		})
 
-		// Add the ips if any exist
+		// Add the networks if any exist
 		if len(d.networks) > 0 {
-			b.AddASN1(TagDetailsIps, func(b *cryptobyte.Builder) {
-				for _, subnet := range d.networks {
-					sb, innerErr := subnet.MarshalBinary()
+			b.AddASN1(TagDetailsNetworks, func(b *cryptobyte.Builder) {
+				for _, n := range d.networks {
+					sb, innerErr := n.MarshalBinary()
 					if innerErr != nil {
 						// MarshalBinary never returns an error
-						err = fmt.Errorf("unable to marshal ip: %w", innerErr)
+						err = fmt.Errorf("unable to marshal network: %w", innerErr)
 						return
 					}
 					b.AddASN1OctetString(sb)
@@ -385,14 +386,14 @@ func (d *detailsV2) Marshal() ([]byte, error) {
 			})
 		}
 
-		// Add the subnets if any exist
+		// Add the unsafe networks if any exist
 		if len(d.unsafeNetworks) > 0 {
-			b.AddASN1(TagDetailsSubnets, func(b *cryptobyte.Builder) {
-				for _, subnet := range d.unsafeNetworks {
-					sb, innerErr := subnet.MarshalBinary()
+			b.AddASN1(TagDetailsUnsafeNetworks, func(b *cryptobyte.Builder) {
+				for _, n := range d.unsafeNetworks {
+					sb, innerErr := n.MarshalBinary()
 					if innerErr != nil {
 						// MarshalBinary never returns an error
-						err = fmt.Errorf("unable to marshal subnet: %w", innerErr)
+						err = fmt.Errorf("unable to marshal unsafe network: %w", innerErr)
 						return
 					}
 					b.AddASN1OctetString(sb)
@@ -511,47 +512,47 @@ func unmarshalDetails(b cryptobyte.String) (detailsV2, error) {
 		return detailsV2{}, ErrBadFormat
 	}
 
-	// Read the ip addresses
+	// Read the network addresses
 	var subString cryptobyte.String
 	var found bool
 
-	if !b.ReadOptionalASN1(&subString, &found, TagDetailsIps) {
+	if !b.ReadOptionalASN1(&subString, &found, TagDetailsNetworks) {
 		return detailsV2{}, ErrBadFormat
 	}
 
-	var ips []netip.Prefix
+	var networks []netip.Prefix
 	var val cryptobyte.String
 	if found {
 		for !subString.Empty() {
-			if !subString.ReadASN1(&val, asn1.OCTET_STRING) || val.Empty() || len(val) > MaxSubnetLength {
+			if !subString.ReadASN1(&val, asn1.OCTET_STRING) || val.Empty() || len(val) > MaxNetworkLength {
 				return detailsV2{}, ErrBadFormat
 			}
 
-			var ip netip.Prefix
-			if err := ip.UnmarshalBinary(val); err != nil {
+			var n netip.Prefix
+			if err := n.UnmarshalBinary(val); err != nil {
 				return detailsV2{}, ErrBadFormat
 			}
-			ips = append(ips, ip)
+			networks = append(networks, n)
 		}
 	}
 
-	// Read out any subnets
-	if !b.ReadOptionalASN1(&subString, &found, TagDetailsSubnets) {
+	// Read out any unsafe networks
+	if !b.ReadOptionalASN1(&subString, &found, TagDetailsUnsafeNetworks) {
 		return detailsV2{}, ErrBadFormat
 	}
 
-	var subnets []netip.Prefix
+	var unsafeNetworks []netip.Prefix
 	if found {
 		for !subString.Empty() {
-			if !subString.ReadASN1(&val, asn1.OCTET_STRING) || val.Empty() || len(val) > MaxSubnetLength {
+			if !subString.ReadASN1(&val, asn1.OCTET_STRING) || val.Empty() || len(val) > MaxNetworkLength {
 				return detailsV2{}, ErrBadFormat
 			}
 
-			var subnet netip.Prefix
-			if err := subnet.UnmarshalBinary(val); err != nil {
+			var n netip.Prefix
+			if err := n.UnmarshalBinary(val); err != nil {
 				return detailsV2{}, ErrBadFormat
 			}
-			subnets = append(subnets, subnet)
+			unsafeNetworks = append(unsafeNetworks, n)
 		}
 	}
 
@@ -593,10 +594,13 @@ func unmarshalDetails(b cryptobyte.String) (detailsV2, error) {
 		return detailsV2{}, ErrBadFormat
 	}
 
+	slices.SortFunc(networks, comparePrefix)
+	slices.SortFunc(unsafeNetworks, comparePrefix)
+
 	return detailsV2{
 		name:           string(name),
-		networks:       ips,
-		unsafeNetworks: subnets,
+		networks:       networks,
+		unsafeNetworks: unsafeNetworks,
 		groups:         groups,
 		isCA:           isCa,
 		notBefore:      time.Unix(notBefore, 0),

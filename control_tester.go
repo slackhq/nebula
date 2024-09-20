@@ -6,8 +6,6 @@ package nebula
 import (
 	"net/netip"
 
-	"github.com/slackhq/nebula/cert"
-
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/slackhq/nebula/header"
@@ -57,9 +55,9 @@ func (c *Control) InjectLightHouseAddr(vpnIp netip.Addr, toAddr netip.AddrPort) 
 	c.f.lightHouse.Unlock()
 
 	if toAddr.Addr().Is4() {
-		remoteList.unlockedPrependV4(vpnIp, NewIp4AndPortFromNetIP(toAddr.Addr(), toAddr.Port()))
+		remoteList.unlockedPrependV4(vpnIp, netAddrToProtoV4AddrPort(toAddr.Addr(), toAddr.Port()))
 	} else {
-		remoteList.unlockedPrependV6(vpnIp, NewIp6AndPortFromNetIP(toAddr.Addr(), toAddr.Port()))
+		remoteList.unlockedPrependV6(vpnIp, netAddrToProtoV6AddrPort(toAddr.Addr(), toAddr.Port()))
 	}
 }
 
@@ -131,8 +129,8 @@ func (c *Control) InjectTunUDPPacket(toIp netip.Addr, toPort uint16, fromPort ui
 	c.f.inside.(*overlay.TestTun).Send(buffer.Bytes())
 }
 
-func (c *Control) GetVpnIp() netip.Addr {
-	return c.f.myVpnNet.Addr()
+func (c *Control) GetVpnAddrs() []netip.Addr {
+	return c.f.myVpnAddrs
 }
 
 func (c *Control) GetUDPAddr() netip.AddrPort {
@@ -140,7 +138,7 @@ func (c *Control) GetUDPAddr() netip.AddrPort {
 }
 
 func (c *Control) KillPendingTunnel(vpnIp netip.Addr) bool {
-	hostinfo := c.f.handshakeManager.QueryVpnIp(vpnIp)
+	hostinfo := c.f.handshakeManager.QueryVpnAddr(vpnIp)
 	if hostinfo == nil {
 		return false
 	}
@@ -153,8 +151,8 @@ func (c *Control) GetHostmap() *HostMap {
 	return c.f.hostMap
 }
 
-func (c *Control) GetCert() cert.Certificate {
-	return c.f.pki.GetCertState().Certificate
+func (c *Control) GetCertState() *CertState {
+	return c.f.pki.getCertState()
 }
 
 func (c *Control) ReHandshake(vpnIp netip.Addr) {

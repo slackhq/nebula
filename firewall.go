@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -433,7 +434,8 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 		}
 	} else {
 		// Simple case: Certificate has one IP and no subnets
-		if fp.RemoteIP != h.vpnIp {
+		//TODO: we can make this more performant
+		if !slices.Contains(h.vpnAddrs, fp.RemoteIP) {
 			f.metrics(incoming).droppedRemoteIP.Inc(1)
 			return ErrInvalidRemoteIP
 		}
