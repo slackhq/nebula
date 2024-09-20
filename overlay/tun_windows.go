@@ -19,7 +19,7 @@ func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ netip.Prefix) (Device,
 	return nil, fmt.Errorf("newTunFromFd not supported in Windows")
 }
 
-func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, multiqueue bool) (Device, error) {
+func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueue bool) (Device, error) {
 	useWintun := true
 	if err := checkWinTunExists(); err != nil {
 		l.WithError(err).Warn("Check Wintun driver failed, fallback to wintap driver")
@@ -27,14 +27,14 @@ func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, multiqueue bool) (
 	}
 
 	if useWintun {
-		device, err := newWinTun(c, l, cidr, multiqueue)
+		device, err := newWinTun(c, l, vpnNetworks, multiqueue)
 		if err != nil {
 			return nil, fmt.Errorf("create Wintun interface failed, %w", err)
 		}
 		return device, nil
 	}
 
-	device, err := newWaterTun(c, l, cidr, multiqueue)
+	device, err := newWaterTun(c, l, vpnNetworks, multiqueue)
 	if err != nil {
 		return nil, fmt.Errorf("create wintap driver failed, %w", err)
 	}
