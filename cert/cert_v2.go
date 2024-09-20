@@ -223,7 +223,23 @@ func (c *certificateV2) String() string {
 }
 
 func (c *certificateV2) MarshalForHandshakes() ([]byte, error) {
-	panic("TODO")
+	var b cryptobyte.Builder
+	// Outermost certificate
+	b.AddASN1(asn1.SEQUENCE, func(b *cryptobyte.Builder) {
+
+		// Add the cert details which is already marshalled
+		//TODO: panic on nil rawDetails
+		b.AddBytes(c.rawDetails)
+
+		// Skipping the curve and public key since those come across in a different part of the handshake
+
+		// Add the signature
+		b.AddASN1(TagCertSignature, func(b *cryptobyte.Builder) {
+			b.AddBytes(c.signature)
+		})
+	})
+
+	return b.Bytes()
 }
 
 func (c *certificateV2) Marshal() ([]byte, error) {
