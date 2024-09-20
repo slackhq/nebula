@@ -31,6 +31,7 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 			InitiatorIndex: hh.hostinfo.localIndexId,
 			Time:           uint64(time.Now().UnixNano()),
 			Cert:           cs.getDefaultHandshakeBytes(),
+			CertVersion:    uint32(cs.defaultVersion),
 		},
 	}
 
