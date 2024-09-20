@@ -21,7 +21,7 @@ import (
 
 func BenchmarkHotPath(b *testing.B) {
 	ca, _, caKey, _ := NewTestCaCert(time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
-	myControl, _, _, _ := newSimpleServer(ca, caKey, "me", "10.128.0.1/24", nil)
+	myControl, myVpnIpNet, _, _ := newSimpleServer(ca, caKey, "me", "10.128.0.1/24", nil)
 	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServer(ca, caKey, "them", "10.128.0.2/24", nil)
 
 	// Put their info in our lighthouse
@@ -35,7 +35,7 @@ func BenchmarkHotPath(b *testing.B) {
 	r.CancelFlowLogs()
 
 	for n := 0; n < b.N; n++ {
-		myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, 80, []byte("Hi from me"))
+		myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
 		_ = r.RouteForAllUntilTxTun(theirControl)
 	}
 
@@ -56,7 +56,7 @@ func TestGoodHandshake(t *testing.T) {
 	theirControl.Start()
 
 	t.Log("Send a udp packet through to begin standing up the tunnel, this should come out the other side")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, 80, []byte("Hi from me"))
+	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
 
 	t.Log("Have them consume my stage 0 packet. They have a tunnel now")
 	theirControl.InjectUDPPacket(myControl.GetFromUDP(true))
@@ -120,7 +120,7 @@ func TestWrongResponderHandshake(t *testing.T) {
 	evilControl.Start()
 
 	t.Log("Start the handshake process, we will route until we see our cached packet get sent to them")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, 80, []byte("Hi from me"))
+	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
 	r.RouteForAllExitFunc(func(p *udp.Packet, c *nebula.Control) router.ExitType {
 		h := &header.H{}
 		err := h.Parse(p.Data)
@@ -181,8 +181,8 @@ func TestStage1Race(t *testing.T) {
 	theirControl.Start()
 
 	t.Log("Trigger a handshake to start on both me and them")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, 80, []byte("Hi from me"))
-	theirControl.InjectTunUDPPacket(myVpnIpNet[0].Addr(), 80, 80, []byte("Hi from them"))
+	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
+	theirControl.InjectTunUDPPacket(myVpnIpNet[0].Addr(), 80, theirVpnIpNet[0].Addr(), 80, []byte("Hi from them"))
 
 	t.Log("Get both stage 1 handshake packets")
 	myHsForThem := myControl.GetFromUDP(true)
@@ -258,7 +258,7 @@ func TestUncleanShutdownRaceLoser(t *testing.T) {
 	theirControl.Start()
 
 	r.Log("Trigger a handshake from me to them")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, 80, []byte("Hi from me"))
+	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
 
 	p := r.RouteForAllUntilTxTun(theirControl)
 	assertUdpPacket(t, []byte("Hi from me"), p, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), 80, 80)
@@ -269,7 +269,7 @@ func TestUncleanShutdownRaceLoser(t *testing.T) {
 	myHostmap.Indexes = map[uint32]*nebula.HostInfo{}
 	myHostmap.RemoteIndexes = map[uint32]*nebula.HostInfo{}
 
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, 80, []byte("Hi from me again"))
+	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me again"))
 	p = r.RouteForAllUntilTxTun(theirControl)
 	assertUdpPacket(t, []byte("Hi from me again"), p, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), 80, 80)
 
@@ -307,7 +307,7 @@ func TestUncleanShutdownRaceWinner(t *testing.T) {
 	theirControl.Start()
 
 	r.Log("Trigger a handshake from me to them")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, 80, []byte("Hi from me"))
+	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
 
 	p := r.RouteForAllUntilTxTun(theirControl)
 	assertUdpPacket(t, []byte("Hi from me"), p, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), 80, 80)
@@ -319,7 +319,7 @@ func TestUncleanShutdownRaceWinner(t *testing.T) {
 	theirHostmap.Indexes = map[uint32]*nebula.HostInfo{}
 	theirHostmap.RemoteIndexes = map[uint32]*nebula.HostInfo{}
 
-	theirControl.InjectTunUDPPacket(myVpnIpNet[0].Addr(), 80, 80, []byte("Hi from them again"))
+	theirControl.InjectTunUDPPacket(myVpnIpNet[0].Addr(), 80, theirVpnIpNet[0].Addr(), 80, []byte("Hi from them again"))
 	p = r.RouteForAllUntilTxTun(myControl)
 	assertUdpPacket(t, []byte("Hi from them again"), p, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), 80, 80)
 	r.RenderHostmaps("Derp hostmaps", myControl, theirControl)
@@ -361,7 +361,7 @@ func TestRelays(t *testing.T) {
 	theirControl.Start()
 
 	t.Log("Trigger a handshake from me to them via the relay")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, 80, []byte("Hi from me"))
+	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
 
 	p := r.RouteForAllUntilTxTun(theirControl)
 	r.Log("Assert the tunnel works")
@@ -403,8 +403,8 @@ func TestStage1RaceRelays(t *testing.T) {
 	assertTunnel(t, theirVpnIpNet[0].Addr(), relayVpnIpNet[0].Addr(), theirControl, relayControl, r)
 
 	r.Log("Trigger a handshake from both them and me via relay to them and me")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, 80, []byte("Hi from me"))
-	theirControl.InjectTunUDPPacket(myVpnIpNet[0].Addr(), 80, 80, []byte("Hi from them"))
+	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
+	theirControl.InjectTunUDPPacket(myVpnIpNet[0].Addr(), 80, theirVpnIpNet[0].Addr(), 80, []byte("Hi from them"))
 
 	r.Log("Wait for a packet from them to me")
 	p := r.RouteForAllUntilTxTun(myControl)
@@ -456,8 +456,8 @@ func TestStage1RaceRelays2(t *testing.T) {
 
 	r.Log("Trigger a handshake from both them and me via relay to them and me")
 	l.Info("Trigger a handshake from both them and me via relay to them and me")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, 80, []byte("Hi from me"))
-	theirControl.InjectTunUDPPacket(myVpnIpNet[0].Addr(), 80, 80, []byte("Hi from them"))
+	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
+	theirControl.InjectTunUDPPacket(myVpnIpNet[0].Addr(), 80, theirVpnIpNet[0].Addr(), 80, []byte("Hi from them"))
 
 	//r.RouteUntilAfterMsgType(myControl, header.Control, header.MessageNone)
 	//r.RouteUntilAfterMsgType(theirControl, header.Control, header.MessageNone)
@@ -529,7 +529,7 @@ func TestRehandshakingRelays(t *testing.T) {
 	theirControl.Start()
 
 	t.Log("Trigger a handshake from me to them via the relay")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, 80, []byte("Hi from me"))
+	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
 
 	p := r.RouteForAllUntilTxTun(theirControl)
 	r.Log("Assert the tunnel works")
@@ -633,7 +633,7 @@ func TestRehandshakingRelaysPrimary(t *testing.T) {
 	theirControl.Start()
 
 	t.Log("Trigger a handshake from me to them via the relay")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, 80, []byte("Hi from me"))
+	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
 
 	p := r.RouteForAllUntilTxTun(theirControl)
 	r.Log("Assert the tunnel works")
@@ -933,8 +933,8 @@ func TestRaceRegression(t *testing.T) {
 	//them rx stage:2 initiatorIndex=120607833 responderIndex=4209862089
 
 	t.Log("Start both handshakes")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, 80, []byte("Hi from me"))
-	theirControl.InjectTunUDPPacket(myVpnIpNet[0].Addr(), 80, 80, []byte("Hi from them"))
+	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
+	theirControl.InjectTunUDPPacket(myVpnIpNet[0].Addr(), 80, theirVpnIpNet[0].Addr(), 80, []byte("Hi from them"))
 
 	t.Log("Get both stage 1")
 	myStage1ForThem := myControl.GetFromUDP(true)
