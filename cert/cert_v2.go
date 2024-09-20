@@ -231,7 +231,7 @@ func (c *certificateV2) MarshalForHandshakes() ([]byte, error) {
 		//TODO: panic on nil rawDetails
 		b.AddBytes(c.rawDetails)
 
-		// Skipping the curve and  since those come across in a different part of the handshake
+		// Skipping the curve and public key since those come across in a different part of the handshake
 
 		// Add the signature
 		b.AddASN1(TagCertSignature, func(b *cryptobyte.Builder) {
