@@ -323,17 +323,11 @@ func (c *certificateV2) Copy() Certificate {
 		signature: make([]byte, len(c.signature)),
 	}
 
-	copy(c.signature, c.signature)
-	copy(c.details.groups, c.details.groups)
-	copy(c.publicKey, c.publicKey)
-
-	for i, p := range c.details.networks {
-		c.details.networks[i] = p
-	}
-
-	for i, p := range c.details.unsafeNetworks {
-		c.details.unsafeNetworks[i] = p
-	}
+	copy(nc.signature, c.signature)
+	copy(nc.details.groups, c.details.groups)
+	copy(nc.publicKey, c.publicKey)
+	copy(nc.details.networks, c.details.networks)
+	copy(nc.details.unsafeNetworks, c.details.unsafeNetworks)
 
 	return nc
 }
