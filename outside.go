@@ -4,10 +4,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/google/gopacket/layers"
-	"golang.org/x/net/ipv6"
 	"net/netip"
 	"time"
+
+	"github.com/google/gopacket/layers"
+	"golang.org/x/net/ipv6"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
