@@ -325,7 +325,7 @@ func (t *tun) Activate() error {
 	}
 
 	s, err := unix.Socket(
-		unix.AF_INET, //todo do we ever need INET6 here?
+		unix.AF_INET, //because everything we use t.ioctlFd for is address family independent, this is fine
 		unix.SOCK_DGRAM,
 		unix.IPPROTO_IP,
 	)
