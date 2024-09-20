@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"slices"
@@ -37,10 +38,11 @@ type CertState struct {
 	pkcs11Backed   bool
 	cipher         string
 
-	myVpnNetworks      []netip.Prefix
-	myVpnNetworksTable *bart.Table[struct{}]
-	myVpnAddrs         []netip.Addr
-	myVpnAddrsTable    *bart.Table[struct{}]
+	myVpnNetworks            []netip.Prefix
+	myVpnNetworksTable       *bart.Table[struct{}]
+	myVpnAddrs               []netip.Addr
+	myVpnAddrsTable          *bart.Table[struct{}]
+	myVpnBroadcastAddrsTable *bart.Table[struct{}]
 }
 
 func NewPKIFromConfig(l *logrus.Logger, c *config.C) (*PKI, error) {
@@ -294,7 +296,7 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 	}
 
 	var crt, v1, v2 cert.Certificate
-	for len(rawCert) != 0 {
+	for {
 		// Load the certificate
 		crt, rawCert, err = loadCertificate(rawCert)
 		if err != nil {
@@ -316,6 +318,10 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 		default:
 			return nil, fmt.Errorf("unknown certificate version %v", crt.Version())
 		}
+
+		if len(rawCert) == 0 || strings.TrimSpace(string(rawCert)) == "" {
+			break
+		}
 	}
 
 	rawDefaultVersion := c.GetUint32("pki.default_version", 1)
@@ -334,10 +340,11 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 
 func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, privateKeyCurve cert.Curve, privateKey []byte) (*CertState, error) {
 	cs := CertState{
-		privateKey:         privateKey,
-		pkcs11Backed:       pkcs11backed,
-		myVpnNetworksTable: new(bart.Table[struct{}]),
-		myVpnAddrsTable:    new(bart.Table[struct{}]),
+		privateKey:               privateKey,
+		pkcs11Backed:             pkcs11backed,
+		myVpnNetworksTable:       new(bart.Table[struct{}]),
+		myVpnAddrsTable:          new(bart.Table[struct{}]),
+		myVpnBroadcastAddrsTable: new(bart.Table[struct{}]),
 	}
 
 	if v1 != nil && v2 != nil {
@@ -409,10 +416,10 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 		cs.myVpnAddrsTable.Insert(netip.PrefixFrom(network.Addr(), network.Addr().BitLen()), struct{}{})
 
 		if network.Addr().Is4() {
-			//TODO: finish calculating the broadcast ips
-			//addr := network.Masked().Addr().As4()
-			//binary.BigEndian.PutUint32(addr[:], binary.BigEndian.Uint32(addr[:])|^binary.BigEndian.Uint32(certificate.Details.Ips[0].Mask))
-			//ifce.myBroadcastAddr = netip.AddrFrom4(addr)
+			addr := network.Masked().Addr().As4()
+			mask := net.CIDRMask(network.Bits(), network.Addr().BitLen())
+			binary.BigEndian.PutUint32(addr[:], binary.BigEndian.Uint32(addr[:])|^binary.BigEndian.Uint32(mask))
+			cs.myVpnBroadcastAddrsTable.Insert(netip.PrefixFrom(netip.AddrFrom4(addr), network.Addr().BitLen()), struct{}{})
 		}
 	}
 

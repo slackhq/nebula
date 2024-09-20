@@ -21,7 +21,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	// Ignore local broadcast packets
 	if f.dropLocalBroadcast {
-		_, found := f.myBroadcastAddr.Lookup(fwPacket.RemoteIP)
+		_, found := f.myBroadcastAddrsTable.Lookup(fwPacket.RemoteIP)
 		if found {
 			return
 		}
@@ -129,7 +129,7 @@ func (f *Interface) Handshake(vpnIp netip.Addr) {
 // getOrHandshake returns nil if the vpnIp is not routable.
 // If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
 func (f *Interface) getOrHandshake(vpnIp netip.Addr, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
-	_, found := f.myVpnNetworks.Lookup(vpnIp)
+	_, found := f.myVpnNetworksTable.Lookup(vpnIp)
 	if !found {
 		vpnIp = f.inside.RouteFor(vpnIp)
 		if !vpnIp.IsValid() {
