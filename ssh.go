@@ -971,12 +971,14 @@ func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 func sshDeviceInfo(ifce *Interface, fs interface{}, w sshd.StringWriter) error {
 
 	data := struct {
-		Name string `json:"name"`
-		Cidr string `json:"cidr"`
+		Name string         `json:"name"`
+		Cidr []netip.Prefix `json:"cidr"`
 	}{
 		Name: ifce.inside.Name(),
-		Cidr: ifce.inside.Cidr().String(),
+		Cidr: make([]netip.Prefix, len(ifce.inside.Networks())),
 	}
+
+	copy(data.Cidr, ifce.inside.Networks())
 
 	flags, ok := fs.(*sshDeviceInfoFlags)
 	if !ok {
