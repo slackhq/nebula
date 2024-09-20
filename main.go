@@ -129,8 +129,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			deviceFactory = overlay.NewDeviceFromConfig
 		}
 
-		//TODO: device needs all networks not just the first one
-		tun, err = deviceFactory(c, l, pki.getCertState().myVpnNetworks[0], routines)
+		tun, err = deviceFactory(c, l, pki.getCertState().myVpnNetworks, routines)
 		if err != nil {
 			return nil, util.ContextualizeIfNeeded("Failed to get a tun/tap device", err)
 		}
