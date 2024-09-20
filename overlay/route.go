@@ -117,15 +117,21 @@ func parseRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 			return nil, fmt.Errorf("entry %v.route in tun.routes failed to parse: %v", i+1, err)
 		}
 
+		found := false
 		for _, network := range networks {
-			if !network.Contains(r.Cidr.Addr()) || r.Cidr.Bits() < network.Bits() {
-				return nil, fmt.Errorf(
-					"entry %v.route in tun.routes is not contained within the configured vpn networks; route: %v, network: %v",
-					i+1,
-					r.Cidr.String(),
-					network.String(),
-				)
+			if network.Contains(r.Cidr.Addr()) && r.Cidr.Bits() >= network.Bits() {
+				found = true
+				break
 			}
+		}
+
+		if !found {
+			return nil, fmt.Errorf(
+				"entry %v.route in tun.routes is not contained within the configured vpn networks; route: %v, networks: %v",
+				i+1,
+				r.Cidr.String(),
+				networks,
+			)
 		}
 
 		routes[i] = r
