@@ -13,7 +13,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/udp"
 	"golang.org/x/net/ipv4"
 )
 
@@ -21,24 +20,7 @@ const (
 	minFwPacketLen = 4
 )
 
-// TODO: IPV6-WORK this can likely be removed now
-func readOutsidePackets(f *Interface) udp.EncReader {
-	return func(
-		addr netip.AddrPort,
-		out []byte,
-		packet []byte,
-		header *header.H,
-		fwPacket *firewall.Packet,
-		lhh udp.LightHouseHandlerFunc,
-		nb []byte,
-		q int,
-		localCache firewall.ConntrackCache,
-	) {
-		f.readOutsidePackets(addr, nil, out, packet, header, fwPacket, lhh, nb, q, localCache)
-	}
-}
-
-func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf udp.LightHouseHandlerFunc, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
 	err := h.Parse(packet)
 	if err != nil {
 		// TODO: best if we return this and let caller log
@@ -163,7 +145,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			return
 		}
 
-		lhf(ip, hostinfo.vpnAddrs, d)
+		lhf.HandleRequest(ip, hostinfo, d, f)
 
 		// Fallthrough to the bottom to record incoming traffic
 
