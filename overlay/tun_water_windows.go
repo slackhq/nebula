@@ -17,22 +17,22 @@ import (
 )
 
 type waterTun struct {
-	Device    string
-	cidr      netip.Prefix
-	MTU       int
-	Routes    atomic.Pointer[[]Route]
-	routeTree atomic.Pointer[bart.Table[netip.Addr]]
-	l         *logrus.Logger
-	f         *net.Interface
+	Device      string
+	vpnNetworks []netip.Prefix
+	MTU         int
+	Routes      atomic.Pointer[[]Route]
+	routeTree   atomic.Pointer[bart.Table[netip.Addr]]
+	l           *logrus.Logger
+	f           *net.Interface
 	*water.Interface
 }
 
-func newWaterTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, _ bool) (*waterTun, error) {
+func newWaterTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*waterTun, error) {
 	// NOTE: You cannot set the deviceName under Windows, so you must check tun.Device after calling .Activate()
 	t := &waterTun{
-		cidr: cidr,
-		MTU:  c.GetInt("tun.mtu", DefaultMTU),
-		l:    l,
+		vpnNetworks: vpnNetworks,
+		MTU:         c.GetInt("tun.mtu", DefaultMTU),
+		l:           l,
 	}
 
 	err := t.reload(c, true)
@@ -52,11 +52,13 @@ func newWaterTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, _ bool) (*wat
 
 func (t *waterTun) Activate() error {
 	var err error
+	//TODO multi-ip support
+	cidr := t.vpnNetworks[0]
 	t.Interface, err = water.New(water.Config{
 		DeviceType: water.TUN,
 		PlatformSpecificParams: water.PlatformSpecificParams{
 			ComponentID: "tap0901",
-			Network:     t.cidr.String(),
+			Network:     cidr.String(),
 		},
 	})
 	if err != nil {
@@ -70,8 +72,8 @@ func (t *waterTun) Activate() error {
 		`C:\Windows\System32\netsh.exe`, "interface", "ipv4", "set", "address",
 		fmt.Sprintf("name=%s", t.Device),
 		"source=static",
-		fmt.Sprintf("addr=%s", t.cidr.Addr()),
-		fmt.Sprintf("mask=%s", net.CIDRMask(t.cidr.Bits(), t.cidr.Addr().BitLen())),
+		fmt.Sprintf("addr=%s", cidr.Addr()),
+		fmt.Sprintf("mask=%s", net.CIDRMask(cidr.Bits(), cidr.Addr().BitLen())),
 		"gateway=none",
 	).Run()
 	if err != nil {
@@ -100,7 +102,7 @@ func (t *waterTun) Activate() error {
 }
 
 func (t *waterTun) reload(c *config.C, initial bool) error {
-	change, routes, err := getAllRoutesFromConfig(c, t.cidr, initial)
+	change, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
 	}
@@ -187,8 +189,8 @@ func (t *waterTun) RouteFor(ip netip.Addr) netip.Addr {
 	return r
 }
 
-func (t *waterTun) Cidr() netip.Prefix {
-	return t.cidr
+func (t *waterTun) Networks() []netip.Prefix {
+	return t.vpnNetworks
 }
 
 func (t *waterTun) Name() string {

@@ -113,7 +113,7 @@ type CachedCertificate struct {
 func UnmarshalCertificate(b []byte) (Certificate, error) {
 	//TODO: you left off here, no one uses this function but it might be beneficial to export _something_ that someone can use, maybe the Versioned unmarshallsers?
 	var c Certificate
-	c, err := unmarshalCertificateV2(b, nil)
+	c, err := unmarshalCertificateV2(b, nil, Curve_CURVE25519)
 	if err == nil {
 		return c, nil
 	}
@@ -129,7 +129,7 @@ func UnmarshalCertificate(b []byte) (Certificate, error) {
 // UnmarshalCertificateFromHandshake will attempt to unmarshal a certificate received in a handshake.
 // Handshakes save space by placing the peers public key in a different part of the packet, we have to
 // reassemble the actual certificate structure with that in mind.
-func UnmarshalCertificateFromHandshake(v Version, b []byte, publicKey []byte) (Certificate, error) {
+func UnmarshalCertificateFromHandshake(v Version, b []byte, publicKey []byte, curve Curve) (Certificate, error) {
 	var c Certificate
 	var err error
 
@@ -137,7 +137,7 @@ func UnmarshalCertificateFromHandshake(v Version, b []byte, publicKey []byte) (C
 	case VersionPre1, Version1:
 		c, err = unmarshalCertificateV1(b, publicKey)
 	case Version2:
-		c, err = unmarshalCertificateV2(b, publicKey)
+		c, err = unmarshalCertificateV2(b, publicKey, curve)
 	default:
 		//TODO: make a static var
 		return nil, fmt.Errorf("unknown certificate version %d", v)
@@ -146,10 +146,15 @@ func UnmarshalCertificateFromHandshake(v Version, b []byte, publicKey []byte) (C
 	if err != nil {
 		return nil, err
 	}
+
+	if c.Curve() != curve {
+		return nil, fmt.Errorf("certificate curve %s does not match expected %s", c.Curve().String(), curve.String())
+	}
+
 	return c, nil
 }
 
-func RecombineAndValidate(v Version, rawCertBytes, publicKey []byte, caPool *CAPool) (*CachedCertificate, error) {
+func RecombineAndValidate(v Version, rawCertBytes, publicKey []byte, curve Curve, caPool *CAPool) (*CachedCertificate, error) {
 	if publicKey == nil {
 		return nil, ErrNoPeerStaticKey
 	}
@@ -158,7 +163,7 @@ func RecombineAndValidate(v Version, rawCertBytes, publicKey []byte, caPool *CAP
 		return nil, ErrNoPayload
 	}
 
-	c, err := UnmarshalCertificateFromHandshake(v, rawCertBytes, publicKey)
+	c, err := UnmarshalCertificateFromHandshake(v, rawCertBytes, publicKey, curve)
 	if err != nil {
 		return nil, fmt.Errorf("error unmarshaling cert: %w", err)
 	}

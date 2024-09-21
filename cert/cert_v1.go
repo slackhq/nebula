@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"slices"
 	"time"
 
 	"golang.org/x/crypto/curve25519"
@@ -393,8 +392,7 @@ func unmarshalCertificateV1(b []byte, publicKey []byte) (*certificateV1, error) 
 		}
 	}
 
-	slices.SortFunc(nc.details.networks, comparePrefix)
-	slices.SortFunc(nc.details.unsafeNetworks, comparePrefix)
+	//do not sort the subnets field for V1 certs
 
 	return &nc, nil
 }
