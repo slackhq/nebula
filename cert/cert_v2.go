@@ -455,7 +455,7 @@ func (d *detailsV2) Marshal() ([]byte, error) {
 	return b.Bytes()
 }
 
-func unmarshalCertificateV2(b []byte, publicKey []byte) (*certificateV2, error) {
+func unmarshalCertificateV2(b []byte, publicKey []byte, curve Curve) (*certificateV2, error) {
 	l := len(b)
 	if l == 0 || l > MaxCertificateSize {
 		return nil, ErrBadFormat
@@ -473,11 +473,12 @@ func unmarshalCertificateV2(b []byte, publicKey []byte) (*certificateV2, error) 
 		return nil, ErrBadFormat
 	}
 
+	//Maybe grab the curve
 	var rawCurve byte
-	if !readOptionalASN1Byte(&input, &rawCurve, TagCertCurve, byte(Curve_CURVE25519)) {
+	if !readOptionalASN1Byte(&input, &rawCurve, TagCertCurve, byte(curve)) {
 		return nil, ErrBadFormat
 	}
-	curve := Curve(rawCurve)
+	curve = Curve(rawCurve)
 
 	// Maybe grab the public key
 	var rawPublicKey cryptobyte.String

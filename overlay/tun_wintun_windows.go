@@ -20,12 +20,12 @@ import (
 const tunGUIDLabel = "Fixed Nebula Windows GUID v1"
 
 type winTun struct {
-	Device    string
-	cidr      netip.Prefix
-	MTU       int
-	Routes    atomic.Pointer[[]Route]
-	routeTree atomic.Pointer[bart.Table[netip.Addr]]
-	l         *logrus.Logger
+	Device      string
+	vpnNetworks []netip.Prefix
+	MTU         int
+	Routes      atomic.Pointer[[]Route]
+	routeTree   atomic.Pointer[bart.Table[netip.Addr]]
+	l           *logrus.Logger
 
 	tun *wintun.NativeTun
 }
@@ -49,7 +49,7 @@ func generateGUIDByDeviceName(name string) (*windows.GUID, error) {
 	return (*windows.GUID)(unsafe.Pointer(&sum[0])), nil
 }
 
-func newWinTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, _ bool) (*winTun, error) {
+func newWinTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*winTun, error) {
 	deviceName := c.GetString("tun.dev", "")
 	guid, err := generateGUIDByDeviceName(deviceName)
 	if err != nil {
@@ -57,10 +57,10 @@ func newWinTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, _ bool) (*winTu
 	}
 
 	t := &winTun{
-		Device: deviceName,
-		cidr:   cidr,
-		MTU:    c.GetInt("tun.mtu", DefaultMTU),
-		l:      l,
+		Device:      deviceName,
+		vpnNetworks: vpnNetworks,
+		MTU:         c.GetInt("tun.mtu", DefaultMTU),
+		l:           l,
 	}
 
 	err = t.reload(c, true)
@@ -92,7 +92,7 @@ func newWinTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, _ bool) (*winTu
 }
 
 func (t *winTun) reload(c *config.C, initial bool) error {
-	change, routes, err := getAllRoutesFromConfig(c, t.cidr, initial)
+	change, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func (t *winTun) reload(c *config.C, initial bool) error {
 func (t *winTun) Activate() error {
 	luid := winipcfg.LUID(t.tun.LUID())
 
-	err := luid.SetIPAddresses([]netip.Prefix{t.cidr})
+	err := luid.SetIPAddresses(t.vpnNetworks)
 	if err != nil {
 		return fmt.Errorf("failed to set address: %w", err)
 	}
@@ -216,8 +216,8 @@ func (t *winTun) RouteFor(ip netip.Addr) netip.Addr {
 	return r
 }
 
-func (t *winTun) Cidr() netip.Prefix {
-	return t.cidr
+func (t *winTun) Networks() []netip.Prefix {
+	return t.vpnNetworks
 }
 
 func (t *winTun) Name() string {
