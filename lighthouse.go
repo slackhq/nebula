@@ -915,24 +915,18 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	return lhh.meta
 }
 
-func lhHandleRequest(lhh *LightHouseHandler, f *Interface) udp.LightHouseHandlerFunc {
-	return func(rAddr netip.AddrPort, vpnAddrs []netip.Addr, p []byte) {
-		lhh.HandleRequest(rAddr, vpnAddrs, p, f)
-	}
-}
-
-func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, vpnAddrs []netip.Addr, p []byte, w EncWriter) {
+func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, reqHostinfo *HostInfo, p []byte, w EncWriter) {
 	n := lhh.resetMeta()
 	err := n.Unmarshal(p)
 	if err != nil {
-		lhh.l.WithError(err).WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", rAddr).
+		lhh.l.WithError(err).WithField("vpnAddrs", reqHostinfo.vpnAddrs).WithField("udpAddr", rAddr).
 			Error("Failed to unmarshal lighthouse packet")
 		//TODO: send recv_error?
 		return
 	}
 
 	if n.Details == nil {
-		lhh.l.WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", rAddr).
+		lhh.l.WithField("vpnAddrs", reqHostinfo.vpnAddrs).WithField("udpAddr", rAddr).
 			Error("Invalid lighthouse update")
 		//TODO: send recv_error?
 		return
@@ -942,24 +936,24 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, vpnAddrs []net
 
 	switch n.Type {
 	case NebulaMeta_HostQuery:
-		lhh.handleHostQuery(n, vpnAddrs, rAddr, w)
+		lhh.handleHostQuery(n, reqHostinfo, rAddr, w)
 
 	case NebulaMeta_HostQueryReply:
-		lhh.handleHostQueryReply(n, vpnAddrs)
+		lhh.handleHostQueryReply(n, reqHostinfo)
 
 	case NebulaMeta_HostUpdateNotification:
-		lhh.handleHostUpdateNotification(n, vpnAddrs, w)
+		lhh.handleHostUpdateNotification(n, reqHostinfo, w)
 
 	case NebulaMeta_HostMovedNotification:
 	case NebulaMeta_HostPunchNotification:
-		lhh.handleHostPunchNotification(n, vpnAddrs, w)
+		lhh.handleHostPunchNotification(n, reqHostinfo, w)
 
 	case NebulaMeta_HostUpdateNotificationAck:
 		// noop
 	}
 }
 
-func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnAddrs []netip.Addr, addr netip.AddrPort, w EncWriter) {
+func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, reqHostinfo *HostInfo, addr netip.AddrPort, w EncWriter) {
 	// Exit if we don't answer queries
 	if !lhh.lh.amLighthouse {
 		if lhh.l.Level >= logrus.DebugLevel {
@@ -1007,15 +1001,15 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnAddrs []netip.Ad
 	}
 
 	if err != nil {
-		lhh.l.WithError(err).WithField("vpnAddrs", vpnAddrs).Error("Failed to marshal lighthouse host query reply")
+		lhh.l.WithError(err).WithField("vpnAddrs", reqHostinfo.vpnAddrs).Error("Failed to marshal lighthouse host query reply")
 		return
 	}
 
 	lhh.lh.metricTx(NebulaMeta_HostQueryReply, 1)
-	w.SendMessageToVpnIp(header.LightHouse, 0, vpnAddrs[0], lhh.pb[:ln], lhh.nb, lhh.out[:0])
+	w.SendMessageToVpnIp(header.LightHouse, 0, reqHostinfo.vpnAddrs[0], lhh.pb[:ln], lhh.nb, lhh.out[:0])
 
 	// This signals the other side to punch some zero byte udp packets
-	found, ln, err = lhh.lh.queryAndPrepMessage(vpnAddrs[0], func(c *cache) (int, error) {
+	found, ln, err = lhh.lh.queryAndPrepMessage(reqHostinfo.vpnAddrs[0], func(c *cache) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostPunchNotification
 		//TODO: unsure which version to use. If we had access to the hostmap we could see if there is already a tunnel
@@ -1027,15 +1021,15 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnAddrs []netip.Ad
 		}
 
 		if useVersion == cert.Version1 {
-			if !vpnAddrs[0].Is4() {
+			if !reqHostinfo.vpnAddrs[0].Is4() {
 				return 0, fmt.Errorf("invalid vpn ip for v1 handleHostQuery")
 			}
-			b := vpnAddrs[0].As4()
+			b := reqHostinfo.vpnAddrs[0].As4()
 			n.Details.OldVpnAddr = binary.BigEndian.Uint32(b[:])
 			lhh.coalesceAnswers(useVersion, c, n)
 
 		} else if useVersion == cert.Version2 {
-			n.Details.VpnAddr = netAddrToProtoAddr(vpnAddrs[0])
+			n.Details.VpnAddr = netAddrToProtoAddr(reqHostinfo.vpnAddrs[0])
 			lhh.coalesceAnswers(useVersion, c, n)
 
 		} else {
@@ -1050,7 +1044,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnAddrs []netip.Ad
 	}
 
 	if err != nil {
-		lhh.l.WithError(err).WithField("vpnAddrs", vpnAddrs).Error("Failed to marshal lighthouse host was queried for")
+		lhh.l.WithError(err).WithField("vpnAddrs", reqHostinfo.vpnAddrs).Error("Failed to marshal lighthouse host was queried for")
 		return
 	}
 
@@ -1100,9 +1094,9 @@ func (lhh *LightHouseHandler) coalesceAnswers(v cert.Version, c *cache, n *Nebul
 	}
 }
 
-func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnAddrs []netip.Addr) {
+func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, reqHostinfo *HostInfo) {
 	//TODO: this is kind of dumb
-	if !lhh.lh.IsLighthouseIP(vpnAddrs[0]) {
+	if !lhh.lh.IsLighthouseIP(reqHostinfo.vpnAddrs[0]) {
 		return
 	}
 
@@ -1121,8 +1115,8 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnAddrs []net
 	am.Lock()
 	lhh.lh.Unlock()
 
-	am.unlockedSetV4(vpnAddrs[0], certVpnIp, n.Details.V4AddrPorts, lhh.lh.unlockedShouldAddV4)
-	am.unlockedSetV6(vpnAddrs[0], certVpnIp, n.Details.V6AddrPorts, lhh.lh.unlockedShouldAddV6)
+	am.unlockedSetV4(reqHostinfo.vpnAddrs[0], certVpnIp, n.Details.V4AddrPorts, lhh.lh.unlockedShouldAddV4)
+	am.unlockedSetV6(reqHostinfo.vpnAddrs[0], certVpnIp, n.Details.V6AddrPorts, lhh.lh.unlockedShouldAddV6)
 
 	var relays []netip.Addr
 	if len(n.Details.OldRelayVpnAddrs) > 0 {
@@ -1139,7 +1133,7 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnAddrs []net
 		}
 	}
 
-	am.unlockedSetRelay(vpnAddrs[0], certVpnIp, relays)
+	am.unlockedSetRelay(reqHostinfo.vpnAddrs[0], certVpnIp, relays)
 	am.Unlock()
 
 	// Non-blocking attempt to trigger, skip if it would block
@@ -1149,10 +1143,10 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnAddrs []net
 	}
 }
 
-func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnAddrs []netip.Addr, w EncWriter) {
+func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, reqHostinfo *HostInfo, w EncWriter) {
 	if !lhh.lh.amLighthouse {
 		if lhh.l.Level >= logrus.DebugLevel {
-			lhh.l.Debugln("I am not a lighthouse, do not take host updates: ", vpnAddrs)
+			lhh.l.Debugln("I am not a lighthouse, do not take host updates: ", reqHostinfo.vpnAddrs)
 		}
 		return
 	}
@@ -1173,20 +1167,20 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnAdd
 	//todo hosts with only v2 certs cannot provide their ipv6 addr when contacting the lighthouse via v4?
 	//todo why do we care about the vpnip in the packet? We know where it came from, right?
 
-	if detailsVpnIp != vpnAddrs[0] {
+	if detailsVpnIp != reqHostinfo.vpnAddrs[0] {
 		if lhh.l.Level >= logrus.DebugLevel {
-			lhh.l.WithField("vpnAddrs", vpnAddrs).WithField("answer", detailsVpnIp).Debugln("Host sent invalid update")
+			lhh.l.WithField("vpnAddrs", reqHostinfo.vpnAddrs).WithField("answer", detailsVpnIp).Debugln("Host sent invalid update")
 		}
 		return
 	}
 
 	lhh.lh.Lock()
-	am := lhh.lh.unlockedGetRemoteList(vpnAddrs[0])
+	am := lhh.lh.unlockedGetRemoteList(reqHostinfo.vpnAddrs[0])
 	am.Lock()
 	lhh.lh.Unlock()
 
-	am.unlockedSetV4(vpnAddrs[0], detailsVpnIp, n.Details.V4AddrPorts, lhh.lh.unlockedShouldAddV4)
-	am.unlockedSetV6(vpnAddrs[0], detailsVpnIp, n.Details.V6AddrPorts, lhh.lh.unlockedShouldAddV6)
+	am.unlockedSetV4(reqHostinfo.vpnAddrs[0], detailsVpnIp, n.Details.V4AddrPorts, lhh.lh.unlockedShouldAddV4)
+	am.unlockedSetV6(reqHostinfo.vpnAddrs[0], detailsVpnIp, n.Details.V6AddrPorts, lhh.lh.unlockedShouldAddV6)
 
 	var relays []netip.Addr
 	if len(n.Details.OldRelayVpnAddrs) > 0 {
@@ -1203,22 +1197,22 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnAdd
 		}
 	}
 
-	am.unlockedSetRelay(vpnAddrs[0], detailsVpnIp, relays)
+	am.unlockedSetRelay(reqHostinfo.vpnAddrs[0], detailsVpnIp, relays)
 	am.Unlock()
 
 	n = lhh.resetMeta()
 	n.Type = NebulaMeta_HostUpdateNotificationAck
 
 	if useVersion == cert.Version1 {
-		if !vpnAddrs[0].Is4() {
-			lhh.l.WithField("vpnAddrs", vpnAddrs).Error("Can not send HostUpdateNotificationAck for a ipv6 vpn ip in a v1 message")
+		if !reqHostinfo.vpnAddrs[0].Is4() {
+			lhh.l.WithField("vpnAddrs", reqHostinfo.vpnAddrs).Error("Can not send HostUpdateNotificationAck for a ipv6 vpn ip in a v1 message")
 			return
 		}
-		vpnIpB := vpnAddrs[0].As4()
+		vpnIpB := reqHostinfo.vpnAddrs[0].As4()
 		n.Details.OldVpnAddr = binary.BigEndian.Uint32(vpnIpB[:])
 
 	} else if useVersion == cert.Version2 {
-		n.Details.VpnAddr = netAddrToProtoAddr(vpnAddrs[0])
+		n.Details.VpnAddr = netAddrToProtoAddr(reqHostinfo.vpnAddrs[0])
 
 	} else {
 		panic("unsupported version")
@@ -1226,17 +1220,17 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnAdd
 
 	ln, err := n.MarshalTo(lhh.pb)
 	if err != nil {
-		lhh.l.WithError(err).WithField("vpnAddrs", vpnAddrs).Error("Failed to marshal lighthouse host update ack")
+		lhh.l.WithError(err).WithField("vpnAddrs", reqHostinfo.vpnAddrs).Error("Failed to marshal lighthouse host update ack")
 		return
 	}
 
 	lhh.lh.metricTx(NebulaMeta_HostUpdateNotificationAck, 1)
-	w.SendMessageToVpnIp(header.LightHouse, 0, vpnAddrs[0], lhh.pb[:ln], lhh.nb, lhh.out[:0])
+	w.SendMessageToVpnIp(header.LightHouse, 0, reqHostinfo.vpnAddrs[0], lhh.pb[:ln], lhh.nb, lhh.out[:0])
 }
 
-func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnAddrs []netip.Addr, w EncWriter) {
+func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, reqHostinfo *HostInfo, w EncWriter) {
 	//TODO: this is kinda stupid
-	if !lhh.lh.IsLighthouseIP(vpnAddrs[0]) {
+	if !lhh.lh.IsLighthouseIP(reqHostinfo.vpnAddrs[0]) {
 		return
 	}
 
