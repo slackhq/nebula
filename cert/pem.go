@@ -37,7 +37,7 @@ func UnmarshalCertificateFromPEM(b []byte) (Certificate, []byte, error) {
 	case CertificateBanner:
 		c, err = unmarshalCertificateV1(p.Bytes, nil)
 	case CertificateV2Banner:
-		c, err = unmarshalCertificateV2(p.Bytes, nil)
+		c, err = unmarshalCertificateV2(p.Bytes, nil, Curve_CURVE25519)
 	default:
 		return nil, r, ErrInvalidPEMCertificateBanner
 	}

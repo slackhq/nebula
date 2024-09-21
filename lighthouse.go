@@ -1170,6 +1170,9 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnAdd
 		useVersion = 2
 	}
 
+	//todo hosts with only v2 certs cannot provide their ipv6 addr when contacting the lighthouse via v4?
+	//todo why do we care about the vpnip in the packet? We know where it came from, right?
+
 	if detailsVpnIp != vpnAddrs[0] {
 		if lhh.l.Level >= logrus.DebugLevel {
 			lhh.l.WithField("vpnAddrs", vpnAddrs).WithField("answer", detailsVpnIp).Debugln("Host sent invalid update")

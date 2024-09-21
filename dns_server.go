@@ -85,6 +85,15 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
 					m.Answer = append(m.Answer, rr)
 				}
 			}
+		case dns.TypeAAAA:
+			l.Debugf("Query for AAAA %s", q.Name)
+			ip := dnsR.Query(q.Name)
+			if ip != "" {
+				rr, err := dns.NewRR(fmt.Sprintf("%s AAAA %s", q.Name, ip))
+				if err == nil {
+					m.Answer = append(m.Answer, rr)
+				}
+			}
 		case dns.TypeTXT:
 			a, _, _ := net.SplitHostPort(w.RemoteAddr().String())
 			b, err := netip.ParseAddr(a)
