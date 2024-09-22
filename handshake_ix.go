@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/flynn/noise"
@@ -230,7 +231,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 	ci.dKey = NewNebulaCipherState(dKey)
 	ci.eKey = NewNebulaCipherState(eKey)
 
-	hostinfo.remotes = f.lightHouse.QueryCache(vpnAddrs[0])
+	hostinfo.remotes = f.lightHouse.QueryCache(vpnAddrs)
 	hostinfo.SetRemote(addr)
 	hostinfo.CreateRemoteCIDR(remoteCert.Certificate)
 
@@ -436,9 +437,13 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 	fingerprint := remoteCert.ShaSum
 	issuer := remoteCert.Certificate.Issuer()
 
+	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
+	for i, n := range vpnNetworks {
+		vpnAddrs[i] = n.Addr()
+	}
+
 	// Ensure the right host responded
-	//TODO: this is a horribly broken test
-	if vpnNetworks[0].Addr() != hostinfo.vpnAddrs[0] {
+	if !slices.Contains(vpnAddrs, hostinfo.vpnAddrs[0]) {
 		f.l.WithField("intendedVpnAddrs", hostinfo.vpnAddrs).WithField("haveVpnNetworks", vpnNetworks).
 			WithField("udpAddr", addr).WithField("certName", certName).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
@@ -455,7 +460,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 			newHH.hostinfo.remotes.BlockRemote(addr)
 
 			// Get the correct remote list for the host we did handshake with
-			hostinfo.remotes = f.lightHouse.QueryCache(vpnNetworks[0].Addr())
+			hostinfo.remotes = f.lightHouse.QueryCache(vpnAddrs)
 
 			f.l.WithField("blockedUdpAddrs", newHH.hostinfo.remotes.CopyBlockedRemotes()).WithField("vpnNetworks", vpnNetworks).
 				WithField("remotes", newHH.hostinfo.remotes.CopyAddrs(f.hostMap.GetPreferredRanges())).
@@ -466,10 +471,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 			hh.packetStore = []*cachedPacket{}
 
 			// Finally, put the correct vpn addrs in the host info, tell them to close the tunnel, and return true to tear down
-			hostinfo.vpnAddrs = nil
-			for _, n := range vpnNetworks {
-				hostinfo.vpnAddrs = append(hostinfo.vpnAddrs, n.Addr())
-			}
+			hostinfo.vpnAddrs = vpnAddrs
 			f.sendCloseTunnel(hostinfo)
 		})
 
@@ -492,6 +494,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 
 	hostinfo.remoteIndexId = hs.Details.ResponderIndex
 	hostinfo.lastHandshakeTime = hs.Details.Time
+	hostinfo.vpnAddrs = vpnAddrs
 
 	// Store their cert and our symmetric keys
 	ci.peerCert = remoteCert

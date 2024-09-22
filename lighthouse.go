@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -472,12 +473,12 @@ func (lh *LightHouse) loadStaticMap(c *config.C, staticList map[netip.Addr]struc
 	return nil
 }
 
-func (lh *LightHouse) Query(ip netip.Addr) *RemoteList {
-	if !lh.IsLighthouseIP(ip) {
-		lh.QueryServer(ip)
+func (lh *LightHouse) Query(vpnAddr netip.Addr) *RemoteList {
+	if !lh.IsLighthouseIP(vpnAddr) {
+		lh.QueryServer(vpnAddr)
 	}
 	lh.RLock()
-	if v, ok := lh.addrMap[ip]; ok {
+	if v, ok := lh.addrMap[vpnAddr]; ok {
 		lh.RUnlock()
 		return v
 	}
@@ -486,18 +487,18 @@ func (lh *LightHouse) Query(ip netip.Addr) *RemoteList {
 }
 
 // QueryServer is asynchronous so no reply should be expected
-func (lh *LightHouse) QueryServer(ip netip.Addr) {
+func (lh *LightHouse) QueryServer(vpnAddr netip.Addr) {
 	// Don't put lighthouse ips in the query channel because we can't query lighthouses about lighthouses
-	if lh.amLighthouse || lh.IsLighthouseIP(ip) {
+	if lh.amLighthouse || lh.IsLighthouseIP(vpnAddr) {
 		return
 	}
 
-	lh.queryChan <- ip
+	lh.queryChan <- vpnAddr
 }
 
-func (lh *LightHouse) QueryCache(ip netip.Addr) *RemoteList {
+func (lh *LightHouse) QueryCache(vpnAddrs []netip.Addr) *RemoteList {
 	lh.RLock()
-	if v, ok := lh.addrMap[ip]; ok {
+	if v, ok := lh.addrMap[vpnAddrs[0]]; ok {
 		lh.RUnlock()
 		return v
 	}
@@ -506,16 +507,16 @@ func (lh *LightHouse) QueryCache(ip netip.Addr) *RemoteList {
 	lh.Lock()
 	defer lh.Unlock()
 	// Add an entry if we don't already have one
-	return lh.unlockedGetRemoteList(ip)
+	return lh.unlockedGetRemoteList(vpnAddrs)
 }
 
 // queryAndPrepMessage is a lock helper on RemoteList, assisting the caller to build a lighthouse message containing
 // details from the remote list. It looks for a hit in the addrMap and a hit in the RemoteList under the owner vpnIp
 // If one is found then f() is called with proper locking, f() must return result of n.MarshalTo()
-func (lh *LightHouse) queryAndPrepMessage(vpnIp netip.Addr, f func(*cache) (int, error)) (bool, int, error) {
+func (lh *LightHouse) queryAndPrepMessage(vpnAddr netip.Addr, f func(*cache) (int, error)) (bool, int, error) {
 	lh.RLock()
 	// Do we have an entry in the main cache?
-	if v, ok := lh.addrMap[vpnIp]; ok {
+	if v, ok := lh.addrMap[vpnAddr]; ok {
 		// Swap lh lock for remote list lock
 		v.RLock()
 		defer v.RUnlock()
@@ -523,7 +524,7 @@ func (lh *LightHouse) queryAndPrepMessage(vpnIp netip.Addr, f func(*cache) (int,
 		lh.RUnlock()
 
 		// vpnIp should also be the owner here since we are a lighthouse.
-		c := v.cache[vpnIp]
+		c := v.cache[vpnAddr]
 		// Make sure we have
 		if c != nil {
 			n, err := f(c)
@@ -535,20 +536,25 @@ func (lh *LightHouse) queryAndPrepMessage(vpnIp netip.Addr, f func(*cache) (int,
 	return false, 0, nil
 }
 
-func (lh *LightHouse) DeleteVpnAddr(vpnIp netip.Addr) {
+func (lh *LightHouse) DeleteVpnAddrs(allVpnAddrs []netip.Addr) {
 	// First we check the static mapping
 	// and do nothing if it is there
-	if _, ok := lh.GetStaticHostList()[vpnIp]; ok {
+	if _, ok := lh.GetStaticHostList()[allVpnAddrs[0]]; ok {
 		return
 	}
 	lh.Lock()
-	//l.Debugln(lh.addrMap)
-	delete(lh.addrMap, vpnIp)
-
-	if lh.l.Level >= logrus.DebugLevel {
-		lh.l.Debugf("deleting %s from lighthouse.", vpnIp)
+	rm, ok := lh.addrMap[allVpnAddrs[0]]
+	if ok {
+		for _, addr := range allVpnAddrs {
+			srm := lh.addrMap[addr]
+			if srm == rm {
+				delete(lh.addrMap, addr)
+				if lh.l.Level >= logrus.DebugLevel {
+					lh.l.Debugf("deleting %s from lighthouse.", addr)
+				}
+			}
+		}
 	}
-
 	lh.Unlock()
 }
 
@@ -556,9 +562,9 @@ func (lh *LightHouse) DeleteVpnAddr(vpnIp netip.Addr) {
 // We are the owner because we don't want a lighthouse server to advertise for static hosts it was configured with
 // And we don't want a lighthouse query reply to interfere with our learned cache if we are a client
 // NOTE: this function should not interact with any hot path objects, like lh.staticList, the caller should handle it
-func (lh *LightHouse) addStaticRemotes(i int, d time.Duration, network string, timeout time.Duration, vpnIp netip.Addr, toAddrs []string, staticList map[netip.Addr]struct{}) error {
+func (lh *LightHouse) addStaticRemotes(i int, d time.Duration, network string, timeout time.Duration, vpnAddr netip.Addr, toAddrs []string, staticList map[netip.Addr]struct{}) error {
 	lh.Lock()
-	am := lh.unlockedGetRemoteList(vpnIp)
+	am := lh.unlockedGetRemoteList([]netip.Addr{vpnAddr})
 	am.Lock()
 	defer am.Unlock()
 	ctx := lh.ctx
@@ -572,12 +578,12 @@ func (lh *LightHouse) addStaticRemotes(i int, d time.Duration, network string, t
 		am.shouldRebuild = true
 	})
 	if err != nil {
-		return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
+		return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnAddr, "entry": i + 1}, err)
 	}
 	am.unlockedSetHostnamesResults(hr)
 
 	for _, addrPort := range hr.GetIPs() {
-		if !lh.shouldAdd(vpnIp, addrPort.Addr()) {
+		if !lh.shouldAdd(vpnAddr, addrPort.Addr()) {
 			continue
 		}
 		switch {
@@ -589,49 +595,52 @@ func (lh *LightHouse) addStaticRemotes(i int, d time.Duration, network string, t
 	}
 
 	// Mark it as static in the caller provided map
-	staticList[vpnIp] = struct{}{}
+	staticList[vpnAddr] = struct{}{}
 	return nil
 }
 
 // addCalculatedRemotes adds any calculated remotes based on the
 // lighthouse.calculated_remotes configuration. It returns true if any
 // calculated remotes were added
-func (lh *LightHouse) addCalculatedRemotes(vpnIp netip.Addr) bool {
+func (lh *LightHouse) addCalculatedRemotes(vpnAddr netip.Addr) bool {
 	//TODO: this needs to support v6 addresses too
 	tree := lh.getCalculatedRemotes()
 	if tree == nil {
 		return false
 	}
-	calculatedRemotes, ok := tree.Lookup(vpnIp)
+	calculatedRemotes, ok := tree.Lookup(vpnAddr)
 	if !ok {
 		return false
 	}
 
 	var calculated []*V4AddrPort
 	for _, cr := range calculatedRemotes {
-		c := cr.Apply(vpnIp)
+		c := cr.Apply(vpnAddr)
 		if c != nil {
 			calculated = append(calculated, c)
 		}
 	}
 
 	lh.Lock()
-	am := lh.unlockedGetRemoteList(vpnIp)
+	am := lh.unlockedGetRemoteList([]netip.Addr{vpnAddr})
 	am.Lock()
 	defer am.Unlock()
 	lh.Unlock()
 
-	am.unlockedSetV4(lh.myVpnNetworks[0].Addr(), vpnIp, calculated, lh.unlockedShouldAddV4)
+	am.unlockedSetV4(lh.myVpnNetworks[0].Addr(), vpnAddr, calculated, lh.unlockedShouldAddV4)
 
 	return len(calculated) > 0
 }
 
-// unlockedGetRemoteList assumes you have the lh lock
-func (lh *LightHouse) unlockedGetRemoteList(vpnIp netip.Addr) *RemoteList {
-	am, ok := lh.addrMap[vpnIp]
+// unlockedGetRemoteList
+// assumes you have the lh lock
+func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
+	am, ok := lh.addrMap[allAddrs[0]]
 	if !ok {
-		am = NewRemoteList(func(a netip.Addr) bool { return lh.shouldAdd(vpnIp, a) })
-		lh.addrMap[vpnIp] = am
+		am = NewRemoteList(func(a netip.Addr) bool { return lh.shouldAdd(allAddrs[0], a) })
+		for _, addr := range allAddrs {
+			lh.addrMap[addr] = am
+		}
 	}
 	return am
 }
@@ -693,9 +702,21 @@ func (lh *LightHouse) unlockedShouldAddV6(vpnIp netip.Addr, to *V6AddrPort) bool
 	return true
 }
 
-func (lh *LightHouse) IsLighthouseIP(vpnIp netip.Addr) bool {
-	if _, ok := lh.GetLighthouses()[vpnIp]; ok {
+func (lh *LightHouse) IsLighthouseIP(vpnAddr netip.Addr) bool {
+	if _, ok := lh.GetLighthouses()[vpnAddr]; ok {
 		return true
+	}
+	return false
+}
+
+// TODO: IsLighthouseIP should be sufficient, we just need to update the vpnAddrs for lighthouses after a handshake
+// so that we know all the lighthouse vpnAddrs, not just the ones we were configured to talk to initially
+func (lh *LightHouse) IsAnyLighthouseIP(vpnAddr []netip.Addr) bool {
+	l := lh.GetLighthouses()
+	for _, a := range vpnAddr {
+		if _, ok := l[a]; ok {
+			return true
+		}
 	}
 	return false
 }
@@ -915,20 +936,18 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	return lhh.meta
 }
 
-func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, reqHostinfo *HostInfo, p []byte, w EncWriter) {
+func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, fromVpnAddrs []netip.Addr, p []byte, w EncWriter) {
 	n := lhh.resetMeta()
 	err := n.Unmarshal(p)
 	if err != nil {
-		lhh.l.WithError(err).WithField("vpnAddrs", reqHostinfo.vpnAddrs).WithField("udpAddr", rAddr).
+		lhh.l.WithError(err).WithField("vpnAddrs", fromVpnAddrs).WithField("udpAddr", rAddr).
 			Error("Failed to unmarshal lighthouse packet")
-		//TODO: send recv_error?
 		return
 	}
 
 	if n.Details == nil {
-		lhh.l.WithField("vpnAddrs", reqHostinfo.vpnAddrs).WithField("udpAddr", rAddr).
+		lhh.l.WithField("vpnAddrs", fromVpnAddrs).WithField("udpAddr", rAddr).
 			Error("Invalid lighthouse update")
-		//TODO: send recv_error?
 		return
 	}
 
@@ -936,24 +955,24 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, reqHostinfo *H
 
 	switch n.Type {
 	case NebulaMeta_HostQuery:
-		lhh.handleHostQuery(n, reqHostinfo, rAddr, w)
+		lhh.handleHostQuery(n, fromVpnAddrs, rAddr, w)
 
 	case NebulaMeta_HostQueryReply:
-		lhh.handleHostQueryReply(n, reqHostinfo)
+		lhh.handleHostQueryReply(n, fromVpnAddrs)
 
 	case NebulaMeta_HostUpdateNotification:
-		lhh.handleHostUpdateNotification(n, reqHostinfo, w)
+		lhh.handleHostUpdateNotification(n, fromVpnAddrs, w)
 
 	case NebulaMeta_HostMovedNotification:
 	case NebulaMeta_HostPunchNotification:
-		lhh.handleHostPunchNotification(n, reqHostinfo, w)
+		lhh.handleHostPunchNotification(n, fromVpnAddrs, w)
 
 	case NebulaMeta_HostUpdateNotificationAck:
 		// noop
 	}
 }
 
-func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, reqHostinfo *HostInfo, addr netip.AddrPort, w EncWriter) {
+func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []netip.Addr, addr netip.AddrPort, w EncWriter) {
 	// Exit if we don't answer queries
 	if !lhh.lh.amLighthouse {
 		if lhh.l.Level >= logrus.DebugLevel {
@@ -1001,15 +1020,15 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, reqHostinfo *HostIn
 	}
 
 	if err != nil {
-		lhh.l.WithError(err).WithField("vpnAddrs", reqHostinfo.vpnAddrs).Error("Failed to marshal lighthouse host query reply")
+		lhh.l.WithError(err).WithField("vpnAddrs", fromVpnAddrs).Error("Failed to marshal lighthouse host query reply")
 		return
 	}
 
 	lhh.lh.metricTx(NebulaMeta_HostQueryReply, 1)
-	w.SendMessageToVpnIp(header.LightHouse, 0, reqHostinfo.vpnAddrs[0], lhh.pb[:ln], lhh.nb, lhh.out[:0])
+	w.SendMessageToVpnIp(header.LightHouse, 0, fromVpnAddrs[0], lhh.pb[:ln], lhh.nb, lhh.out[:0])
 
 	// This signals the other side to punch some zero byte udp packets
-	found, ln, err = lhh.lh.queryAndPrepMessage(reqHostinfo.vpnAddrs[0], func(c *cache) (int, error) {
+	found, ln, err = lhh.lh.queryAndPrepMessage(fromVpnAddrs[0], func(c *cache) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostPunchNotification
 		//TODO: unsure which version to use. If we had access to the hostmap we could see if there is already a tunnel
@@ -1021,15 +1040,15 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, reqHostinfo *HostIn
 		}
 
 		if useVersion == cert.Version1 {
-			if !reqHostinfo.vpnAddrs[0].Is4() {
+			if !fromVpnAddrs[0].Is4() {
 				return 0, fmt.Errorf("invalid vpn ip for v1 handleHostQuery")
 			}
-			b := reqHostinfo.vpnAddrs[0].As4()
+			b := fromVpnAddrs[0].As4()
 			n.Details.OldVpnAddr = binary.BigEndian.Uint32(b[:])
 			lhh.coalesceAnswers(useVersion, c, n)
 
 		} else if useVersion == cert.Version2 {
-			n.Details.VpnAddr = netAddrToProtoAddr(reqHostinfo.vpnAddrs[0])
+			n.Details.VpnAddr = netAddrToProtoAddr(fromVpnAddrs[0])
 			lhh.coalesceAnswers(useVersion, c, n)
 
 		} else {
@@ -1044,7 +1063,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, reqHostinfo *HostIn
 	}
 
 	if err != nil {
-		lhh.l.WithError(err).WithField("vpnAddrs", reqHostinfo.vpnAddrs).Error("Failed to marshal lighthouse host was queried for")
+		lhh.l.WithError(err).WithField("vpnAddrs", fromVpnAddrs).Error("Failed to marshal lighthouse host was queried for")
 		return
 	}
 
@@ -1094,9 +1113,8 @@ func (lhh *LightHouseHandler) coalesceAnswers(v cert.Version, c *cache, n *Nebul
 	}
 }
 
-func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, reqHostinfo *HostInfo) {
-	//TODO: this is kind of dumb
-	if !lhh.lh.IsLighthouseIP(reqHostinfo.vpnAddrs[0]) {
+func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, fromVpnAddrs []netip.Addr) {
+	if !lhh.lh.IsAnyLighthouseIP(fromVpnAddrs) {
 		return
 	}
 
@@ -1111,12 +1129,12 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, reqHostinfo *H
 		certVpnIp = protoAddrToNetAddr(n.Details.VpnAddr)
 	}
 
-	am := lhh.lh.unlockedGetRemoteList(certVpnIp)
+	am := lhh.lh.unlockedGetRemoteList([]netip.Addr{certVpnIp})
 	am.Lock()
 	lhh.lh.Unlock()
 
-	am.unlockedSetV4(reqHostinfo.vpnAddrs[0], certVpnIp, n.Details.V4AddrPorts, lhh.lh.unlockedShouldAddV4)
-	am.unlockedSetV6(reqHostinfo.vpnAddrs[0], certVpnIp, n.Details.V6AddrPorts, lhh.lh.unlockedShouldAddV6)
+	am.unlockedSetV4(fromVpnAddrs[0], certVpnIp, n.Details.V4AddrPorts, lhh.lh.unlockedShouldAddV4)
+	am.unlockedSetV6(fromVpnAddrs[0], certVpnIp, n.Details.V6AddrPorts, lhh.lh.unlockedShouldAddV6)
 
 	var relays []netip.Addr
 	if len(n.Details.OldRelayVpnAddrs) > 0 {
@@ -1133,7 +1151,7 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, reqHostinfo *H
 		}
 	}
 
-	am.unlockedSetRelay(reqHostinfo.vpnAddrs[0], certVpnIp, relays)
+	am.unlockedSetRelay(fromVpnAddrs[0], certVpnIp, relays)
 	am.Unlock()
 
 	// Non-blocking attempt to trigger, skip if it would block
@@ -1143,10 +1161,10 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, reqHostinfo *H
 	}
 }
 
-func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, reqHostinfo *HostInfo, w EncWriter) {
+func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVpnAddrs []netip.Addr, w EncWriter) {
 	if !lhh.lh.amLighthouse {
 		if lhh.l.Level >= logrus.DebugLevel {
-			lhh.l.Debugln("I am not a lighthouse, do not take host updates: ", reqHostinfo.vpnAddrs)
+			lhh.l.Debugln("I am not a lighthouse, do not take host updates: ", fromVpnAddrs)
 		}
 		return
 	}
@@ -1167,20 +1185,20 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, reqHos
 	//todo hosts with only v2 certs cannot provide their ipv6 addr when contacting the lighthouse via v4?
 	//todo why do we care about the vpnip in the packet? We know where it came from, right?
 
-	if detailsVpnIp != reqHostinfo.vpnAddrs[0] {
+	if !slices.Contains(fromVpnAddrs, detailsVpnIp) {
 		if lhh.l.Level >= logrus.DebugLevel {
-			lhh.l.WithField("vpnAddrs", reqHostinfo.vpnAddrs).WithField("answer", detailsVpnIp).Debugln("Host sent invalid update")
+			lhh.l.WithField("vpnAddrs", fromVpnAddrs).WithField("answer", detailsVpnIp).Debugln("Host sent invalid update")
 		}
 		return
 	}
 
 	lhh.lh.Lock()
-	am := lhh.lh.unlockedGetRemoteList(reqHostinfo.vpnAddrs[0])
+	am := lhh.lh.unlockedGetRemoteList(fromVpnAddrs)
 	am.Lock()
 	lhh.lh.Unlock()
 
-	am.unlockedSetV4(reqHostinfo.vpnAddrs[0], detailsVpnIp, n.Details.V4AddrPorts, lhh.lh.unlockedShouldAddV4)
-	am.unlockedSetV6(reqHostinfo.vpnAddrs[0], detailsVpnIp, n.Details.V6AddrPorts, lhh.lh.unlockedShouldAddV6)
+	am.unlockedSetV4(fromVpnAddrs[0], detailsVpnIp, n.Details.V4AddrPorts, lhh.lh.unlockedShouldAddV4)
+	am.unlockedSetV6(fromVpnAddrs[0], detailsVpnIp, n.Details.V6AddrPorts, lhh.lh.unlockedShouldAddV6)
 
 	var relays []netip.Addr
 	if len(n.Details.OldRelayVpnAddrs) > 0 {
@@ -1197,22 +1215,22 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, reqHos
 		}
 	}
 
-	am.unlockedSetRelay(reqHostinfo.vpnAddrs[0], detailsVpnIp, relays)
+	am.unlockedSetRelay(fromVpnAddrs[0], detailsVpnIp, relays)
 	am.Unlock()
 
 	n = lhh.resetMeta()
 	n.Type = NebulaMeta_HostUpdateNotificationAck
 
 	if useVersion == cert.Version1 {
-		if !reqHostinfo.vpnAddrs[0].Is4() {
-			lhh.l.WithField("vpnAddrs", reqHostinfo.vpnAddrs).Error("Can not send HostUpdateNotificationAck for a ipv6 vpn ip in a v1 message")
+		if !fromVpnAddrs[0].Is4() {
+			lhh.l.WithField("vpnAddrs", fromVpnAddrs).Error("Can not send HostUpdateNotificationAck for a ipv6 vpn ip in a v1 message")
 			return
 		}
-		vpnIpB := reqHostinfo.vpnAddrs[0].As4()
+		vpnIpB := fromVpnAddrs[0].As4()
 		n.Details.OldVpnAddr = binary.BigEndian.Uint32(vpnIpB[:])
 
 	} else if useVersion == cert.Version2 {
-		n.Details.VpnAddr = netAddrToProtoAddr(reqHostinfo.vpnAddrs[0])
+		n.Details.VpnAddr = netAddrToProtoAddr(fromVpnAddrs[0])
 
 	} else {
 		panic("unsupported version")
@@ -1220,17 +1238,17 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, reqHos
 
 	ln, err := n.MarshalTo(lhh.pb)
 	if err != nil {
-		lhh.l.WithError(err).WithField("vpnAddrs", reqHostinfo.vpnAddrs).Error("Failed to marshal lighthouse host update ack")
+		lhh.l.WithError(err).WithField("vpnAddrs", fromVpnAddrs).Error("Failed to marshal lighthouse host update ack")
 		return
 	}
 
 	lhh.lh.metricTx(NebulaMeta_HostUpdateNotificationAck, 1)
-	w.SendMessageToVpnIp(header.LightHouse, 0, reqHostinfo.vpnAddrs[0], lhh.pb[:ln], lhh.nb, lhh.out[:0])
+	w.SendMessageToVpnIp(header.LightHouse, 0, fromVpnAddrs[0], lhh.pb[:ln], lhh.nb, lhh.out[:0])
 }
 
-func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, reqHostinfo *HostInfo, w EncWriter) {
+func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpnAddrs []netip.Addr, w EncWriter) {
 	//TODO: this is kinda stupid
-	if !lhh.lh.IsLighthouseIP(reqHostinfo.vpnAddrs[0]) {
+	if !lhh.lh.IsAnyLighthouseIP(fromVpnAddrs) {
 		return
 	}
 
