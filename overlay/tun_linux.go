@@ -367,17 +367,19 @@ func (t *tun) Activate() error {
 		return fmt.Errorf("failed to bring the tun device up: %s", err)
 	}
 
+	//set route MTU
+	for i := range t.vpnNetworks {
+		if err = t.setDefaultRoute(t.vpnNetworks[i]); err != nil {
+			//todo why does this only work sometimes?
+			//avoid crashing for now
+			t.l.WithError(err).Error("failed to set default route MTU")
+		}
+	}
+
 	// Run the interface
 	ifrf.Flags = ifrf.Flags | unix.IFF_UP | unix.IFF_RUNNING
 	if err = ioctl(t.ioctlFd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
 		return fmt.Errorf("failed to run tun device: %s", err)
-	}
-
-	//set route MTU
-	for i := range t.vpnNetworks {
-		if err = t.setDefaultRoute(t.vpnNetworks[i]); err != nil {
-			return fmt.Errorf("failed to set default route MTU: %w", err)
-		}
 	}
 
 	// Set the routes
@@ -401,7 +403,6 @@ func (t *tun) setMTU() {
 
 func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 	// Default route
-
 	dr := &net.IPNet{
 		IP:   cidr.Masked().Addr().AsSlice(),
 		Mask: net.CIDRMask(cidr.Bits(), cidr.Addr().BitLen()),
