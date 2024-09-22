@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -1165,31 +1164,15 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 			lhh.l.Debugln("I am not a lighthouse, do not take host updates: ", fromVpnAddrs)
 		}
 		return
+	} else if lhh.l.Level >= logrus.DebugLevel {
+		lhh.l.WithField("vpnAddrs", fromVpnAddrs).WithField("details", n.Details.String()).Debugln("got HostUpdateNotification")
 	}
 
-	//Simple check that the host sent this not someone else
-	var detailsVpnIp netip.Addr
 	var useVersion cert.Version
-	if n.Details.OldVpnAddr != 0 {
-		b := [4]byte{}
-		binary.BigEndian.PutUint32(b[:], n.Details.OldVpnAddr)
-		detailsVpnIp = netip.AddrFrom4(b)
+	if n.Details.OldVpnAddr != 0 { //todo this is a bit of a hack
 		useVersion = 1
-	} else if n.Details.VpnAddr != nil {
-		detailsVpnIp = protoAddrToNetAddr(n.Details.VpnAddr)
-		useVersion = 2
-	}
-
-	//todo hosts with only v2 certs cannot provide their ipv6 addr when contacting the lighthouse via v4?
-	//todo why do we care about the vpnip in the packet? We know where it came from, right?
-
-	if !slices.Contains(fromVpnAddrs, detailsVpnIp) {
-		if lhh.l.Level >= logrus.DebugLevel {
-			lhh.l.WithField("vpnAddrs", fromVpnAddrs).WithField("detailsVpnIp", detailsVpnIp).Debugln("Host sent invalid update")
-		}
-		return
 	} else {
-		lhh.l.WithField("vpnAddrs", fromVpnAddrs).WithField("detailsVpnIp", detailsVpnIp).Debugln("got HostUpdateNotification")
+		useVersion = 2
 	}
 
 	lhh.lh.Lock()
@@ -1197,8 +1180,12 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 	am.Lock()
 	lhh.lh.Unlock()
 
-	am.unlockedSetV4(fromVpnAddrs[0], detailsVpnIp, n.Details.V4AddrPorts, lhh.lh.unlockedShouldAddV4)
-	am.unlockedSetV6(fromVpnAddrs[0], detailsVpnIp, n.Details.V6AddrPorts, lhh.lh.unlockedShouldAddV6)
+	//todo why do we care about the vpnip in the packet? We know where it came from, right?
+	//todo if the zeroth IP changes things will get weird
+	for i := range fromVpnAddrs {
+		am.unlockedSetV4(fromVpnAddrs[0], fromVpnAddrs[i], n.Details.V4AddrPorts, lhh.lh.unlockedShouldAddV4)
+		am.unlockedSetV6(fromVpnAddrs[0], fromVpnAddrs[i], n.Details.V6AddrPorts, lhh.lh.unlockedShouldAddV6)
+	}
 
 	var relays []netip.Addr
 	if len(n.Details.OldRelayVpnAddrs) > 0 {
@@ -1215,7 +1202,8 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 		}
 	}
 
-	am.unlockedSetRelay(fromVpnAddrs[0], detailsVpnIp, relays)
+	//todo does this need to be per-vpnip?
+	am.unlockedSetRelay(fromVpnAddrs[0], fromVpnAddrs[0], relays)
 	am.Unlock()
 
 	//begin sending update notif ack
@@ -1230,11 +1218,8 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 		vpnIpB := fromVpnAddrs[0].As4()
 		n.Details.OldVpnAddr = binary.BigEndian.Uint32(vpnIpB[:])
 
-	} else if useVersion == cert.Version2 {
-		n.Details.VpnAddr = netAddrToProtoAddr(fromVpnAddrs[0])
-
 	} else {
-		panic("unsupported version")
+		n.Details.VpnAddr = netAddrToProtoAddr(fromVpnAddrs[0])
 	}
 
 	ln, err := n.MarshalTo(lhh.pb)
@@ -1244,6 +1229,7 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 	}
 
 	lhh.lh.metricTx(NebulaMeta_HostUpdateNotificationAck, 1)
+	//all vpnaddrs transit the same tunnel, so we only need to send one
 	w.SendMessageToVpnIp(header.LightHouse, 0, fromVpnAddrs[0], lhh.pb[:ln], lhh.nb, lhh.out[:0])
 }
 

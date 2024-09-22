@@ -321,6 +321,7 @@ func (hm *HostMap) MakePrimary(hostinfo *HostInfo) {
 }
 
 func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) {
+	//don't need to iterate here -- all vpnaddr entries should be the same
 	oldHostinfo := hm.Hosts[hostinfo.vpnAddrs[0]]
 	if oldHostinfo == hostinfo {
 		return
@@ -334,7 +335,10 @@ func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) {
 		hostinfo.next.prev = hostinfo.prev
 	}
 
-	hm.Hosts[hostinfo.vpnAddrs[0]] = hostinfo
+	//do need to iterate here, since we're setting the pointer value
+	for i := range hostinfo.vpnAddrs {
+		hm.Hosts[hostinfo.vpnAddrs[i]] = hostinfo
+	}
 
 	if oldHostinfo == nil {
 		return
@@ -346,6 +350,7 @@ func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) {
 }
 
 func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo, dontRecurse bool) {
+	//don't need to iterate here -- all vpnaddr entries should be the same
 	primary, ok := hm.Hosts[hostinfo.vpnAddrs[0]]
 	if ok && primary == hostinfo {
 		// The vpnIp pointer points to the same hostinfo as the local index id, we can remove it
@@ -595,7 +600,10 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []netip.Prefix, ifce *Interfac
 		}
 
 		i.nextLHQuery.Store(now + ifce.reQueryWait.Load())
-		ifce.lightHouse.QueryServer(i.vpnAddrs[0])
+		//TODO do we need to query all entries? Hosts can gain and lose addresses
+		for j := range i.vpnAddrs {
+			ifce.lightHouse.QueryServer(i.vpnAddrs[j])
+		}
 	}
 }
 
