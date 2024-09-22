@@ -59,7 +59,7 @@ func NewTestCert(ca cert.Certificate, key []byte, name string, before, after tim
 
 	pub, rawPriv := x25519Keypair()
 	nc := &cert.TBSCertificate{
-		Version:        cert.Version1,
+		Version:        cert.Version2, //TODO: you changed this to discover standard e2e tests that would fail and you found some. DO NOT COMMIT THIS CHANGE
 		Name:           name,
 		Networks:       networks,
 		UnsafeNetworks: unsafeNetworks,
