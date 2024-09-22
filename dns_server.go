@@ -67,6 +67,7 @@ func (d *dnsRecords) QueryCert(data string) string {
 	return string(b)
 }
 
+// todo this needs multi-ip love
 func (d *dnsRecords) Add(host, data string) {
 	d.Lock()
 	defer d.Unlock()

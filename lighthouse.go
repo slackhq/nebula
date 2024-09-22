@@ -856,7 +856,7 @@ func (lh *LightHouse) SendUpdate() {
 			relays = append(relays, binary.BigEndian.Uint32(b[:]))
 		}
 
-		//TODO: need an ipv4 vpn addr to use
+		//TODO: need an ipv4 vpn addr to use -- ideally the one in our v1 cert
 		msg.Details.OldRelayVpnAddrs = relays
 
 	} else if v == 2 {
@@ -864,9 +864,7 @@ func (lh *LightHouse) SendUpdate() {
 		for _, r := range lh.GetRelaysForMe() {
 			relays = append(relays, netAddrToProtoAddr(r))
 		}
-
-		//TODO: need a vpn addr to use
-
+		//in v2, we don't use vpnaddrs in the host update -- we let the lighthouse use our cert.
 	} else {
 		panic("protocol version not supported")
 	}
@@ -1187,9 +1185,11 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 
 	if !slices.Contains(fromVpnAddrs, detailsVpnIp) {
 		if lhh.l.Level >= logrus.DebugLevel {
-			lhh.l.WithField("vpnAddrs", fromVpnAddrs).WithField("answer", detailsVpnIp).Debugln("Host sent invalid update")
+			lhh.l.WithField("vpnAddrs", fromVpnAddrs).WithField("detailsVpnIp", detailsVpnIp).Debugln("Host sent invalid update")
 		}
 		return
+	} else {
+		lhh.l.WithField("vpnAddrs", fromVpnAddrs).WithField("detailsVpnIp", detailsVpnIp).Debugln("got HostUpdateNotification")
 	}
 
 	lhh.lh.Lock()
@@ -1218,6 +1218,7 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 	am.unlockedSetRelay(fromVpnAddrs[0], detailsVpnIp, relays)
 	am.Unlock()
 
+	//begin sending update notif ack
 	n = lhh.resetMeta()
 	n.Type = NebulaMeta_HostUpdateNotificationAck
 

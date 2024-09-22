@@ -349,14 +349,19 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo, dontRecurse bool) 
 	primary, ok := hm.Hosts[hostinfo.vpnAddrs[0]]
 	if ok && primary == hostinfo {
 		// The vpnIp pointer points to the same hostinfo as the local index id, we can remove it
-		delete(hm.Hosts, hostinfo.vpnAddrs[0])
+		for i := range hostinfo.vpnAddrs {
+			delete(hm.Hosts, hostinfo.vpnAddrs[i])
+		}
 		if len(hm.Hosts) == 0 {
 			hm.Hosts = map[netip.Addr]*HostInfo{}
 		}
 
 		if hostinfo.next != nil {
 			// We had more than 1 hostinfo at this vpnip, promote the next in the list to primary
-			hm.Hosts[hostinfo.vpnAddrs[0]] = hostinfo.next
+			for i := range hostinfo.vpnAddrs {
+				hm.Hosts[hostinfo.vpnAddrs[i]] = hostinfo.next
+			}
+
 			// It is primary, there is no previous hostinfo now
 			hostinfo.next.prev = nil
 		}
@@ -487,17 +492,28 @@ func (hm *HostMap) queryVpnAddr(vpnIp netip.Addr, promoteIfce *Interface) *HostI
 // unlockedAddHostInfo assumes you have a write-lock and will add a hostinfo object to the hostmap Indexes and RemoteIndexes maps.
 // If an entry exists for the Hosts table (vpnIp -> hostinfo) then the provided hostinfo will be made primary
 func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
+	//todo this must be bad right?
+
 	if f.serveDns {
 		remoteCert := hostinfo.ConnectionState.peerCert
+		//todo multi-IP!
 		dnsR.Add(remoteCert.Certificate.Name()+".", remoteCert.Certificate.Networks()[0].Addr().String())
 	}
 
-	existing := hm.Hosts[hostinfo.vpnAddrs[0]]
-	hm.Hosts[hostinfo.vpnAddrs[0]] = hostinfo
+	//pull an existing record if we have one for any vpnip
+	var existing *HostInfo
+	for i := range hostinfo.vpnAddrs {
+		if hm.Hosts[hostinfo.vpnAddrs[i]] != nil {
+			existing = hm.Hosts[hostinfo.vpnAddrs[i]]
 
-	if existing != nil {
-		hostinfo.next = existing
-		existing.prev = hostinfo
+			hostinfo.next = existing
+			existing.prev = hostinfo
+			break
+		}
+	}
+	//set all the vpnips to use the new hostinfo
+	for i := range hostinfo.vpnAddrs {
+		hm.Hosts[hostinfo.vpnAddrs[i]] = hostinfo
 	}
 
 	hm.Indexes[hostinfo.localIndexId] = hostinfo
