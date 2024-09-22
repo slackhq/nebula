@@ -308,7 +308,7 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) bool {
 	hm.Lock()
 	// If we have a previous or next hostinfo then we are not the last one for this vpn ip
 	final := (hostinfo.next == nil && hostinfo.prev == nil)
-	hm.unlockedDeleteHostInfo(hostinfo)
+	hm.unlockedDeleteHostInfo(hostinfo, false)
 	hm.Unlock()
 
 	return final
@@ -345,7 +345,7 @@ func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) {
 	hostinfo.prev = nil
 }
 
-func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
+func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo, dontRecurse bool) {
 	primary, ok := hm.Hosts[hostinfo.vpnAddrs[0]]
 	if ok && primary == hostinfo {
 		// The vpnIp pointer points to the same hostinfo as the local index id, we can remove it
@@ -398,6 +398,18 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 
 	for _, localRelayIdx := range hostinfo.relayState.CopyRelayForIdxs() {
 		delete(hm.Relays, localRelayIdx)
+	}
+
+	if !dontRecurse {
+		for _, addr := range hostinfo.vpnAddrs {
+			h := hm.Hosts[addr]
+			for h != nil {
+				if h == hostinfo {
+					hm.unlockedDeleteHostInfo(h, true)
+				}
+				h = h.next
+			}
+		}
 	}
 }
 
@@ -501,7 +513,7 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	check := hostinfo
 	for check != nil {
 		if i > MaxHostInfosPerVpnIp {
-			hm.unlockedDeleteHostInfo(check)
+			hm.unlockedDeleteHostInfo(check, false)
 		}
 		check = check.next
 		i++
