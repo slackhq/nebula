@@ -145,7 +145,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			return
 		}
 
-		lhf.HandleRequest(ip, hostinfo, d, f)
+		lhf.HandleRequest(ip, hostinfo.vpnAddrs, d, f)
 
 		// Fallthrough to the bottom to record incoming traffic
 
@@ -230,9 +230,8 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 func (f *Interface) closeTunnel(hostInfo *HostInfo) {
 	final := f.hostMap.DeleteHostInfo(hostInfo)
 	if final {
-		// We no longer have any tunnels with this vpn ip, clear learned lighthouse state to lower memory usage
-		//TODO: we should delete all related vpnaddrs too
-		f.lightHouse.DeleteVpnAddr(hostInfo.vpnAddrs[0])
+		// We no longer have any tunnels with this vpn addr, clear learned lighthouse state to lower memory usage
+		f.lightHouse.DeleteVpnAddrs(hostInfo.vpnAddrs)
 	}
 }
 
@@ -241,26 +240,26 @@ func (f *Interface) sendCloseTunnel(h *HostInfo) {
 	f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 }
 
-func (f *Interface) handleHostRoaming(hostinfo *HostInfo, ip netip.AddrPort) {
-	if ip.IsValid() && hostinfo.remote != ip {
+func (f *Interface) handleHostRoaming(hostinfo *HostInfo, vpnAddr netip.AddrPort) {
+	if vpnAddr.IsValid() && hostinfo.remote != vpnAddr {
 		//TODO: this is weird now that we can have multiple vpn addrs
-		if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnAddrs[0], ip.Addr()) {
-			hostinfo.logger(f.l).WithField("newAddr", ip).Debug("lighthouse.remote_allow_list denied roaming")
+		if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnAddrs[0], vpnAddr.Addr()) {
+			hostinfo.logger(f.l).WithField("newAddr", vpnAddr).Debug("lighthouse.remote_allow_list denied roaming")
 			return
 		}
-		if !hostinfo.lastRoam.IsZero() && ip == hostinfo.lastRoamRemote && time.Since(hostinfo.lastRoam) < RoamingSuppressSeconds*time.Second {
+		if !hostinfo.lastRoam.IsZero() && vpnAddr == hostinfo.lastRoamRemote && time.Since(hostinfo.lastRoam) < RoamingSuppressSeconds*time.Second {
 			if f.l.Level >= logrus.DebugLevel {
-				hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", ip).
+				hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", vpnAddr).
 					Debugf("Suppressing roam back to previous remote for %d seconds", RoamingSuppressSeconds)
 			}
 			return
 		}
 
-		hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", ip).
+		hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", vpnAddr).
 			Info("Host roamed to new udp ip/port.")
 		hostinfo.lastRoam = time.Now()
 		hostinfo.lastRoamRemote = hostinfo.remote
-		hostinfo.SetRemote(ip)
+		hostinfo.SetRemote(vpnAddr)
 	}
 
 }
