@@ -607,14 +607,16 @@ func (hm *HandshakeManager) DeleteHostInfo(hostinfo *HostInfo) {
 }
 
 func (hm *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
-	//TODO: need to iterate hostinfo.vpnAddrs
-	delete(hm.vpnIps, hostinfo.vpnAddrs[0])
+	for _, addr := range hostinfo.vpnAddrs {
+		delete(hm.vpnIps, addr)
+	}
+
 	if len(hm.vpnIps) == 0 {
 		hm.vpnIps = map[netip.Addr]*HandshakeHostInfo{}
 	}
 
 	delete(hm.indexes, hostinfo.localIndexId)
-	if len(hm.vpnIps) == 0 {
+	if len(hm.indexes) == 0 {
 		hm.indexes = map[uint32]*HandshakeHostInfo{}
 	}
 

@@ -9,7 +9,7 @@ import (
 )
 
 func TestRemoteList_Rebuild(t *testing.T) {
-	rl := NewRemoteList(nil)
+	rl := NewRemoteList([]netip.Addr{netip.MustParseAddr("0.0.0.0")}, nil)
 	rl.unlockedSetV4(
 		netip.MustParseAddr("0.0.0.0"),
 		netip.MustParseAddr("0.0.0.0"),
@@ -98,7 +98,7 @@ func TestRemoteList_Rebuild(t *testing.T) {
 }
 
 func BenchmarkFullRebuild(b *testing.B) {
-	rl := NewRemoteList(nil)
+	rl := NewRemoteList([]netip.Addr{netip.MustParseAddr("0.0.0.0")}, nil)
 	rl.unlockedSetV4(
 		netip.MustParseAddr("0.0.0.0"),
 		netip.MustParseAddr("0.0.0.0"),
@@ -160,7 +160,7 @@ func BenchmarkFullRebuild(b *testing.B) {
 }
 
 func BenchmarkSortRebuild(b *testing.B) {
-	rl := NewRemoteList(nil)
+	rl := NewRemoteList([]netip.Addr{netip.MustParseAddr("0.0.0.0")}, nil)
 	rl.unlockedSetV4(
 		netip.MustParseAddr("0.0.0.0"),
 		netip.MustParseAddr("0.0.0.0"),

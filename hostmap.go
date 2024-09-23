@@ -308,7 +308,7 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) bool {
 	hm.Lock()
 	// If we have a previous or next hostinfo then we are not the last one for this vpn ip
 	final := (hostinfo.next == nil && hostinfo.prev == nil)
-	hm.unlockedDeleteHostInfo(hostinfo, false)
+	hm.unlockedDeleteHostInfo(hostinfo)
 	hm.Unlock()
 
 	return final
@@ -321,6 +321,8 @@ func (hm *HostMap) MakePrimary(hostinfo *HostInfo) {
 }
 
 func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) {
+	//TODO: we may need to promote follow on hostinfos from these vpnAddrs as well since their oldHostinfo might not be the same as this one
+	// this really looks like an ideal spot for memory leaks
 	oldHostinfo := hm.Hosts[hostinfo.vpnAddrs[0]]
 	if oldHostinfo == hostinfo {
 		return
@@ -345,7 +347,19 @@ func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) {
 	hostinfo.prev = nil
 }
 
-func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo, dontRecurse bool) {
+func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
+	for _, addr := range hostinfo.vpnAddrs {
+		h := hm.Hosts[addr]
+		for h != nil {
+			if h == hostinfo {
+				hm.unlockedInnerDeleteHostInfo(h)
+			}
+			h = h.next
+		}
+	}
+}
+
+func (hm *HostMap) unlockedInnerDeleteHostInfo(hostinfo *HostInfo) {
 	primary, ok := hm.Hosts[hostinfo.vpnAddrs[0]]
 	if ok && primary == hostinfo {
 		// The vpnIp pointer points to the same hostinfo as the local index id, we can remove it
@@ -398,18 +412,6 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo, dontRecurse bool) 
 
 	for _, localRelayIdx := range hostinfo.relayState.CopyRelayForIdxs() {
 		delete(hm.Relays, localRelayIdx)
-	}
-
-	if !dontRecurse {
-		for _, addr := range hostinfo.vpnAddrs {
-			h := hm.Hosts[addr]
-			for h != nil {
-				if h == hostinfo {
-					hm.unlockedDeleteHostInfo(h, true)
-				}
-				h = h.next
-			}
-		}
 	}
 }
 
@@ -487,17 +489,8 @@ func (hm *HostMap) queryVpnAddr(vpnIp netip.Addr, promoteIfce *Interface) *HostI
 // unlockedAddHostInfo assumes you have a write-lock and will add a hostinfo object to the hostmap Indexes and RemoteIndexes maps.
 // If an entry exists for the Hosts table (vpnIp -> hostinfo) then the provided hostinfo will be made primary
 func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
-	if f.serveDns {
-		remoteCert := hostinfo.ConnectionState.peerCert
-		dnsR.Add(remoteCert.Certificate.Name()+".", remoteCert.Certificate.Networks()[0].Addr().String())
-	}
-
-	existing := hm.Hosts[hostinfo.vpnAddrs[0]]
-	hm.Hosts[hostinfo.vpnAddrs[0]] = hostinfo
-
-	if existing != nil {
-		hostinfo.next = existing
-		existing.prev = hostinfo
+	for _, addr := range hostinfo.vpnAddrs {
+		hm.unlockedInnerAddHostInfo(addr, hostinfo, f)
 	}
 
 	hm.Indexes[hostinfo.localIndexId] = hostinfo
@@ -508,12 +501,27 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 			"hostinfo": m{"existing": true, "localIndexId": hostinfo.localIndexId, "vpnAddrs": hostinfo.vpnAddrs}}).
 			Debug("Hostmap vpnIp added")
 	}
+}
+
+func (hm *HostMap) unlockedInnerAddHostInfo(vpnAddr netip.Addr, hostinfo *HostInfo, f *Interface) {
+	if f.serveDns {
+		remoteCert := hostinfo.ConnectionState.peerCert
+		dnsR.Add(remoteCert.Certificate.Name()+".", vpnAddr.String())
+	}
+
+	existing := hm.Hosts[vpnAddr]
+	hm.Hosts[vpnAddr] = hostinfo
+
+	if existing != nil && existing != hostinfo {
+		hostinfo.next = existing
+		existing.prev = hostinfo
+	}
 
 	i := 1
 	check := hostinfo
 	for check != nil {
 		if i > MaxHostInfosPerVpnIp {
-			hm.unlockedDeleteHostInfo(check, false)
+			hm.unlockedDeleteHostInfo(check)
 		}
 		check = check.next
 		i++

@@ -189,6 +189,9 @@ type RemoteList struct {
 	// Every interaction with internals requires a lock!
 	sync.RWMutex
 
+	// The full list of vpn addresses assigned to this host
+	vpnAddrs []netip.Addr
+
 	// A deduplicated set of addresses. Any accessor should lock beforehand.
 	addrs []netip.AddrPort
 
@@ -212,13 +215,16 @@ type RemoteList struct {
 }
 
 // NewRemoteList creates a new empty RemoteList
-func NewRemoteList(shouldAdd func(netip.Addr) bool) *RemoteList {
-	return &RemoteList{
+func NewRemoteList(vpnAddrs []netip.Addr, shouldAdd func(netip.Addr) bool) *RemoteList {
+	r := &RemoteList{
+		vpnAddrs:  make([]netip.Addr, len(vpnAddrs)),
 		addrs:     make([]netip.AddrPort, 0),
 		relays:    make([]netip.Addr, 0),
 		cache:     make(map[netip.Addr]*cache),
 		shouldAdd: shouldAdd,
 	}
+	copy(r.vpnAddrs, vpnAddrs)
+	return r
 }
 
 func (r *RemoteList) unlockedSetHostnamesResults(hr *hostnamesResults) {
