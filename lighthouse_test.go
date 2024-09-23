@@ -108,7 +108,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	hAddr2 := netip.MustParseAddrPort("4.5.6.7:12346")
 
 	vpnIp3 := netip.MustParseAddr("0.0.0.3")
-	lh.addrMap[vpnIp3] = NewRemoteList(nil)
+	lh.addrMap[vpnIp3] = NewRemoteList([]netip.Addr{vpnIp3}, nil)
 	lh.addrMap[vpnIp3].unlockedSetV4(
 		vpnIp3,
 		vpnIp3,
@@ -122,7 +122,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	rAddr := netip.MustParseAddrPort("1.2.2.3:12345")
 	rAddr2 := netip.MustParseAddrPort("1.2.2.3:12346")
 	vpnIp2 := netip.MustParseAddr("0.0.0.3")
-	lh.addrMap[vpnIp2] = NewRemoteList(nil)
+	lh.addrMap[vpnIp2] = NewRemoteList([]netip.Addr{vpnIp2}, nil)
 	lh.addrMap[vpnIp2].unlockedSetV4(
 		vpnIp3,
 		vpnIp3,
