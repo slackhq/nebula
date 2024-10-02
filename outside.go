@@ -268,7 +268,7 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, ip netip.AddrPort) {
 		if hostinfo.multiportRx {
 			// If the remote is sending with multiport, we aren't roaming unless
 			// the IP has changed
-			if hostinfo.remote.Compare(ip) == 0 {
+			if hostinfo.remote.Addr().Compare(ip.Addr()) == 0 {
 				return
 			}
 			// Keep the port from the original hostinfo, because the remote is transmitting from multiport ports
