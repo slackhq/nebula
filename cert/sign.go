@@ -42,22 +42,58 @@ type beingSignedCertificate interface {
 	setSignature([]byte) error
 }
 
+type SignerLambda func(certBytes []byte) ([]byte, error)
+
 // Sign will create a sealed certificate using details provided by the TBSCertificate as long as those
 // details do not violate constraints of the signing certificate.
 // If the TBSCertificate is a CA then signer must be nil.
-func (t *TBSCertificate) Sign(signer Certificate, curve Curve, key []byte) (Certificate, error) {
-	return t.sign(signer, curve, key, nil)
+func (t *TBSCertificate) Sign(signWith Certificate, curve Curve, key []byte) (Certificate, error) {
+	switch t.Curve {
+	case Curve_CURVE25519:
+		signer := ed25519.PrivateKey(key)
+		sp := func(certBytes []byte) ([]byte, error) {
+			sig := ed25519.Sign(signer, certBytes)
+			return sig, nil
+		}
+		return t.SignWith(signWith, curve, sp)
+	case Curve_P256:
+		signer := &ecdsa.PrivateKey{
+			PublicKey: ecdsa.PublicKey{
+				Curve: elliptic.P256(),
+			},
+			// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L95
+			D: new(big.Int).SetBytes(key),
+		}
+		// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L119
+		signer.X, signer.Y = signer.Curve.ScalarBaseMult(key)
+		sp := func(certBytes []byte) ([]byte, error) {
+			// We need to hash first for ECDSA
+			// - https://pkg.go.dev/crypto/ecdsa#SignASN1
+			hashed := sha256.Sum256(certBytes)
+			return ecdsa.SignASN1(rand.Reader, signer, hashed[:])
+		}
+		return t.SignWith(signWith, curve, sp)
+	default:
+		return nil, fmt.Errorf("invalid curve: %s", t.Curve)
+	}
 }
 
 func (t *TBSCertificate) SignPkcs11(signer Certificate, curve Curve, client *pkclient.PKClient) (Certificate, error) {
-	if curve != Curve_P256 {
-		return nil, fmt.Errorf("only P256 is supported by PKCS#11")
+	if client == nil {
+		return nil, fmt.Errorf("pkclient must be non-nil")
 	}
-
-	return t.sign(signer, curve, nil, client)
+	switch t.Curve {
+	case Curve_CURVE25519:
+		return nil, fmt.Errorf("only P256 is supported by PKCS#11")
+	case Curve_P256:
+		//todo: verify that pkcs11 hashes for you
+		return t.SignWith(signer, curve, client.SignASN1)
+	default:
+		return nil, fmt.Errorf("invalid curve: %s", t.Curve)
+	}
 }
 
-func (t *TBSCertificate) sign(signer Certificate, curve Curve, key []byte, client *pkclient.PKClient) (Certificate, error) {
+func (t *TBSCertificate) SignWith(signer Certificate, curve Curve, sp SignerLambda) (Certificate, error) {
 	if curve != t.Curve {
 		return nil, fmt.Errorf("curve in cert and private key supplied don't match")
 	}
@@ -112,34 +148,7 @@ func (t *TBSCertificate) sign(signer Certificate, curve Curve, key []byte, clien
 		return nil, err
 	}
 
-	var sig []byte
-	switch t.Curve {
-	case Curve_CURVE25519:
-		signer := ed25519.PrivateKey(key)
-		sig = ed25519.Sign(signer, certBytes)
-	case Curve_P256:
-		if client != nil {
-			sig, err = client.SignASN1(certBytes)
-		} else {
-			signer := &ecdsa.PrivateKey{
-				PublicKey: ecdsa.PublicKey{
-					Curve: elliptic.P256(),
-				},
-				// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L95
-				D: new(big.Int).SetBytes(key),
-			}
-			// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L119
-			signer.X, signer.Y = signer.Curve.ScalarBaseMult(key)
-
-			// We need to hash first for ECDSA
-			// - https://pkg.go.dev/crypto/ecdsa#SignASN1
-			hashed := sha256.Sum256(certBytes)
-			sig, err = ecdsa.SignASN1(rand.Reader, signer, hashed[:])
-		}
-	default:
-		return nil, fmt.Errorf("invalid curve: %s", t.Curve)
-	}
-
+	sig, err := sp(certBytes)
 	if err != nil {
 		return nil, err
 	}
