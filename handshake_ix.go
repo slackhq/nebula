@@ -113,7 +113,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 
 	vpnIp := remoteCert.Certificate.Networks()[0].Addr().Unmap()
 	certName := remoteCert.Certificate.Name()
-	fingerprint := remoteCert.ShaSum
+	fingerprint := remoteCert.Fingerprint
 	issuer := remoteCert.Certificate.Issuer()
 
 	if vpnIp == f.myVpnNet.Addr() {
@@ -415,7 +415,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 
 	vpnIp := remoteCert.Certificate.Networks()[0].Addr().Unmap()
 	certName := remoteCert.Certificate.Name()
-	fingerprint := remoteCert.ShaSum
+	fingerprint := remoteCert.Fingerprint
 	issuer := remoteCert.Certificate.Issuer()
 
 	// Ensure the right host responded

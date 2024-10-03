@@ -82,12 +82,12 @@ func (ncp *CAPool) AddCA(c Certificate) error {
 
 	sum, err := c.Fingerprint()
 	if err != nil {
-		return fmt.Errorf("could not calculate shasum for provided CA; error: %s; %s", err, c.Name())
+		return fmt.Errorf("could not calculate fingerprint for provided CA; error: %w; %s", err, c.Name())
 	}
 
 	cc := &CachedCertificate{
 		Certificate:    c,
-		ShaSum:         sum,
+		Fingerprint:    sum,
 		InvertedGroups: make(map[string]struct{}),
 	}
 
@@ -131,21 +131,21 @@ func (ncp *CAPool) VerifyCertificate(now time.Time, c Certificate) (*CachedCerti
 	if c == nil {
 		return nil, fmt.Errorf("no certificate")
 	}
-	sha, err := c.Fingerprint()
+	fp, err := c.Fingerprint()
 	if err != nil {
-		return nil, fmt.Errorf("could not calculate shasum to verify: %w", err)
+		return nil, fmt.Errorf("could not calculate fingerprint to verify: %w", err)
 	}
 
-	signer, err := ncp.verify(c, now, sha, "")
+	signer, err := ncp.verify(c, now, fp, "")
 	if err != nil {
 		return nil, err
 	}
 
 	cc := CachedCertificate{
-		Certificate:    c,
-		InvertedGroups: make(map[string]struct{}),
-		ShaSum:         sha,
-		signerShaSum:   signer.ShaSum,
+		Certificate:       c,
+		InvertedGroups:    make(map[string]struct{}),
+		Fingerprint:       fp,
+		signerFingerprint: signer.Fingerprint,
 	}
 
 	for _, g := range c.Groups() {
@@ -158,12 +158,12 @@ func (ncp *CAPool) VerifyCertificate(now time.Time, c Certificate) (*CachedCerti
 // VerifyCachedCertificate is the same as VerifyCertificate other than it operates on a pre-verified structure and
 // is a cheaper operation to perform as a result.
 func (ncp *CAPool) VerifyCachedCertificate(now time.Time, c *CachedCertificate) error {
-	_, err := ncp.verify(c.Certificate, now, c.ShaSum, c.signerShaSum)
+	_, err := ncp.verify(c.Certificate, now, c.Fingerprint, c.signerFingerprint)
 	return err
 }
 
-func (ncp *CAPool) verify(c Certificate, now time.Time, certSha string, signerSha string) (*CachedCertificate, error) {
-	if ncp.IsBlocklisted(certSha) {
+func (ncp *CAPool) verify(c Certificate, now time.Time, certFp string, signerFp string) (*CachedCertificate, error) {
+	if ncp.IsBlocklisted(certFp) {
 		return nil, ErrBlockListed
 	}
 
@@ -185,9 +185,9 @@ func (ncp *CAPool) verify(c Certificate, now time.Time, certSha string, signerSh
 	//TODO: this is slightly different than v1.9.3 and earlier where we were matching the public key
 	// The reason to switch is that the public key can be reused and the constraints in the ca can change
 	// but there may be history here, double check
-	if len(signerSha) > 0 {
-		if signerSha != signer.ShaSum {
-			return nil, ErrSignatureMismatch
+	if len(signerFp) > 0 {
+		if signerFp != signer.Fingerprint {
+			return nil, ErrFingerprintMismatch
 		}
 		return signer, nil
 	}
@@ -206,11 +206,12 @@ func (ncp *CAPool) verify(c Certificate, now time.Time, certSha string, signerSh
 // GetCAForCert attempts to return the signing certificate for the provided certificate.
 // No signature validation is performed
 func (ncp *CAPool) GetCAForCert(c Certificate) (*CachedCertificate, error) {
-	if c.Issuer() == "" {
+	issuer := c.Issuer()
+	if issuer == "" {
 		return nil, fmt.Errorf("no issuer in certificate")
 	}
 
-	signer, ok := ncp.CAs[c.Issuer()]
+	signer, ok := ncp.CAs[issuer]
 	if ok {
 		return signer, nil
 	}
@@ -253,7 +254,6 @@ func checkCAConstraints(signer Certificate, notBefore, notAfter time.Time, group
 	if len(signerGroups) > 0 {
 		for _, g := range groups {
 			if !slices.Contains(signerGroups, g) {
-				//TODO: since we no longer pre-compute the inverted groups then this is kind of slow
 				return fmt.Errorf("certificate contained a group not present on the signing ca: %s", g)
 			}
 		}
@@ -262,17 +262,17 @@ func checkCAConstraints(signer Certificate, notBefore, notAfter time.Time, group
 	// If the signer has a limited set of ip ranges to issue from make sure the cert only contains a subset
 	signingNetworks := signer.Networks()
 	if len(signingNetworks) > 0 {
-		for _, subNetwork := range networks {
+		for _, certNetwork := range networks {
 			found := false
 			for _, signingNetwork := range signingNetworks {
-				if signingNetwork.Contains(subNetwork.Addr()) && signingNetwork.Bits() <= subNetwork.Bits() {
+				if signingNetwork.Contains(certNetwork.Addr()) && signingNetwork.Bits() <= certNetwork.Bits() {
 					found = true
 					break
 				}
 			}
 
 			if !found {
-				return fmt.Errorf("certificate contained an ip assignment outside the limitations of the signing ca: %s", subNetwork.String())
+				return fmt.Errorf("certificate contained an network assignment outside the limitations of the signing ca: %s", certNetwork.String())
 			}
 		}
 	}
@@ -280,17 +280,17 @@ func checkCAConstraints(signer Certificate, notBefore, notAfter time.Time, group
 	// If the signer has a limited set of subnet ranges to issue from make sure the cert only contains a subset
 	signingUnsafeNetworks := signer.UnsafeNetworks()
 	if len(signingUnsafeNetworks) > 0 {
-		for _, subUnsafeNetwork := range unsafeNetworks {
+		for _, certUnsafeNetwork := range unsafeNetworks {
 			found := false
 			for _, caNetwork := range signingUnsafeNetworks {
-				if caNetwork.Contains(subUnsafeNetwork.Addr()) && caNetwork.Bits() <= subUnsafeNetwork.Bits() {
+				if caNetwork.Contains(certUnsafeNetwork.Addr()) && caNetwork.Bits() <= certUnsafeNetwork.Bits() {
 					found = true
 					break
 				}
 			}
 
 			if !found {
-				return fmt.Errorf("certificate contained a subnet assignment outside the limitations of the signing ca: %s", subUnsafeNetwork.String())
+				return fmt.Errorf("certificate contained an unsafe network assignment outside the limitations of the signing ca: %s", certUnsafeNetwork.String())
 			}
 		}
 	}

@@ -11,6 +11,7 @@ var (
 	ErrNotCA                   = errors.New("certificate is not a CA")
 	ErrNotSelfSigned           = errors.New("certificate is not self-signed")
 	ErrBlockListed             = errors.New("certificate is in the block list")
+	ErrFingerprintMismatch     = errors.New("certificate fingerprint did not match")
 	ErrSignatureMismatch       = errors.New("certificate signature did not match")
 	ErrInvalidPublicKeyLength  = errors.New("invalid public key length")
 	ErrInvalidPrivateKeyLength = errors.New("invalid private key length")

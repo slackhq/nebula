@@ -448,7 +448,7 @@ func (n *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostIn
 	}
 
 	hostinfo.logger(n.l).WithError(err).
-		WithField("fingerprint", remoteCert.ShaSum).
+		WithField("fingerprint", remoteCert.Fingerprint).
 		Info("Remote certificate is no longer valid, tearing down the tunnel")
 
 	return true

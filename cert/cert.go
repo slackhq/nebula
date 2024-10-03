@@ -101,10 +101,10 @@ type Certificate interface {
 // CachedCertificate represents a verified certificate with some cached fields to improve
 // performance.
 type CachedCertificate struct {
-	Certificate    Certificate
-	InvertedGroups map[string]struct{}
-	ShaSum         string
-	signerShaSum   string
+	Certificate       Certificate
+	InvertedGroups    map[string]struct{}
+	Fingerprint       string
+	signerFingerprint string
 }
 
 // UnmarshalCertificate will attempt to unmarshal a wire protocol level certificate.
