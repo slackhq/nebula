@@ -272,7 +272,7 @@ func checkCAConstraints(signer Certificate, notBefore, notAfter time.Time, group
 			}
 
 			if !found {
-				return fmt.Errorf("certificate contained an network assignment outside the limitations of the signing ca: %s", certNetwork.String())
+				return fmt.Errorf("certificate contained a network assignment outside the limitations of the signing ca: %s", certNetwork.String())
 			}
 		}
 	}

@@ -316,25 +316,25 @@ func TestNebulaCertificate_Verify_IPs(t *testing.T) {
 	cIp1 := mustParsePrefixUnmapped("10.1.0.0/24")
 	cIp2 := mustParsePrefixUnmapped("192.168.0.1/16")
 	c, _, _, err := newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{cIp1, cIp2}, nil, []string{"test"})
-	assert.EqualError(t, err, "certificate contained an ip assignment outside the limitations of the signing ca: 10.1.0.0/24")
+	assert.EqualError(t, err, "certificate contained a network assignment outside the limitations of the signing ca: 10.1.0.0/24")
 
 	// ip is outside the network reversed order of above
 	cIp1 = mustParsePrefixUnmapped("192.168.0.1/24")
 	cIp2 = mustParsePrefixUnmapped("10.1.0.0/24")
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{cIp1, cIp2}, nil, []string{"test"})
-	assert.EqualError(t, err, "certificate contained an ip assignment outside the limitations of the signing ca: 10.1.0.0/24")
+	assert.EqualError(t, err, "certificate contained a network assignment outside the limitations of the signing ca: 10.1.0.0/24")
 
 	// ip is within the network but mask is outside
 	cIp1 = mustParsePrefixUnmapped("10.0.1.0/15")
 	cIp2 = mustParsePrefixUnmapped("192.168.0.1/24")
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{cIp1, cIp2}, nil, []string{"test"})
-	assert.EqualError(t, err, "certificate contained an ip assignment outside the limitations of the signing ca: 10.0.1.0/15")
+	assert.EqualError(t, err, "certificate contained a network assignment outside the limitations of the signing ca: 10.0.1.0/15")
 
 	// ip is within the network but mask is outside reversed order of above
 	cIp1 = mustParsePrefixUnmapped("192.168.0.1/24")
 	cIp2 = mustParsePrefixUnmapped("10.0.1.0/15")
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{cIp1, cIp2}, nil, []string{"test"})
-	assert.EqualError(t, err, "certificate contained an ip assignment outside the limitations of the signing ca: 10.0.1.0/15")
+	assert.EqualError(t, err, "certificate contained a network assignment outside the limitations of the signing ca: 10.0.1.0/15")
 
 	// ip and mask are within the network
 	cIp1 = mustParsePrefixUnmapped("10.0.1.0/16")
@@ -381,25 +381,25 @@ func TestNebulaCertificate_Verify_Subnets(t *testing.T) {
 	cIp1 := mustParsePrefixUnmapped("10.1.0.0/24")
 	cIp2 := mustParsePrefixUnmapped("192.168.0.1/16")
 	c, _, _, err := newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), nil, []netip.Prefix{cIp1, cIp2}, []string{"test"})
-	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.1.0.0/24")
+	assert.EqualError(t, err, "certificate contained an unsafe network assignment outside the limitations of the signing ca: 10.1.0.0/24")
 
 	// ip is outside the network reversed order of above
 	cIp1 = mustParsePrefixUnmapped("192.168.0.1/24")
 	cIp2 = mustParsePrefixUnmapped("10.1.0.0/24")
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), nil, []netip.Prefix{cIp1, cIp2}, []string{"test"})
-	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.1.0.0/24")
+	assert.EqualError(t, err, "certificate contained an unsafe network assignment outside the limitations of the signing ca: 10.1.0.0/24")
 
 	// ip is within the network but mask is outside
 	cIp1 = mustParsePrefixUnmapped("10.0.1.0/15")
 	cIp2 = mustParsePrefixUnmapped("192.168.0.1/24")
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), nil, []netip.Prefix{cIp1, cIp2}, []string{"test"})
-	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.0.1.0/15")
+	assert.EqualError(t, err, "certificate contained an unsafe network assignment outside the limitations of the signing ca: 10.0.1.0/15")
 
 	// ip is within the network but mask is outside reversed order of above
 	cIp1 = mustParsePrefixUnmapped("192.168.0.1/24")
 	cIp2 = mustParsePrefixUnmapped("10.0.1.0/15")
 	c, _, _, err = newTestCert(ca, caKey, time.Now(), time.Now().Add(5*time.Minute), nil, []netip.Prefix{cIp1, cIp2}, []string{"test"})
-	assert.EqualError(t, err, "certificate contained a subnet assignment outside the limitations of the signing ca: 10.0.1.0/15")
+	assert.EqualError(t, err, "certificate contained an unsafe network assignment outside the limitations of the signing ca: 10.0.1.0/15")
 
 	// ip and mask are within the network
 	cIp1 = mustParsePrefixUnmapped("10.0.1.0/16")
