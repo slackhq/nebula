@@ -96,3 +96,7 @@ func (mw *mockEncWriter) Handshake(vpnIP netip.Addr) {}
 func (mw *mockEncWriter) GetHostInfo(vpnIp netip.Addr) *HostInfo {
 	return nil
 }
+
+func (mw *mockEncWriter) GetCertState() *CertState {
+	return &CertState{defaultVersion: cert.Version2}
+}

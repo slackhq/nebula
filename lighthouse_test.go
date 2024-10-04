@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gaissmai/bart"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/test"
@@ -427,8 +428,9 @@ type testLhReply struct {
 }
 
 type testEncWriter struct {
-	lastReply  testLhReply
-	metaFilter *NebulaMeta_MessageType
+	lastReply       testLhReply
+	metaFilter      *NebulaMeta_MessageType
+	protocolVersion cert.Version
 }
 
 func (tw *testEncWriter) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, nocopy bool) {
@@ -472,6 +474,10 @@ func (tw *testEncWriter) SendMessageToVpnIp(t header.MessageType, st header.Mess
 
 func (tw *testEncWriter) GetHostInfo(vpnIp netip.Addr) *HostInfo {
 	return nil
+}
+
+func (tw *testEncWriter) GetCertState() *CertState {
+	return &CertState{defaultVersion: tw.protocolVersion}
 }
 
 // assertIp4InArray asserts every address in want is at the same position in have and that the lengths match

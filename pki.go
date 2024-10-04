@@ -324,10 +324,24 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 		}
 	}
 
-	rawDefaultVersion := c.GetUint32("pki.default_version", 1)
+	if v1 == nil && v2 == nil {
+		return nil, errors.New("no certificates found in pki.cert")
+	}
+
+	useDefaultVersion := uint32(1)
+	if v1 == nil {
+		// The only condition that requires v2 as the default is if only a v2 certificate is present
+		// We do this to avoid having to configure it specifically in the config file
+		useDefaultVersion = 2
+	}
+
+	rawDefaultVersion := c.GetUint32("pki.default_version", useDefaultVersion)
 	var defaultVersion cert.Version
 	switch rawDefaultVersion {
 	case 1:
+		if v1 == nil {
+			return nil, fmt.Errorf("can not use pki.default_version 1 without a v1 certificate in pki.cert")
+		}
 		defaultVersion = cert.Version1
 	case 2:
 		defaultVersion = cert.Version2

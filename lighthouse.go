@@ -61,11 +61,10 @@ type LightHouse struct {
 	staticList  atomic.Pointer[map[netip.Addr]struct{}]
 	lighthouses atomic.Pointer[map[netip.Addr]struct{}]
 
-	interval        atomic.Int64
-	updateCancel    context.CancelFunc
-	ifce            EncWriter
-	nebulaPort      uint32        // 32 bits because protobuf does not have a uint16
-	protocolVersion atomic.Uint32 // The default protocol version to use if we can't determine which to use from the tunnel
+	interval     atomic.Int64
+	updateCancel context.CancelFunc
+	ifce         EncWriter
+	nebulaPort   uint32 // 32 bits because protobuf does not have a uint16
 
 	advertiseAddrs atomic.Pointer[[]netip.AddrPort]
 
@@ -350,16 +349,6 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 			}
 			lh.relaysForMe.Store(&relaysForMe)
 		}
-	}
-
-	v := c.GetUint32("pki.default_version", 1)
-	switch v {
-	case 1:
-		lh.protocolVersion.Store(1)
-	case 2:
-		lh.protocolVersion.Store(2)
-	default:
-		return fmt.Errorf("invalid version for lighthouse: %v", v)
 	}
 
 	return nil
@@ -750,15 +739,12 @@ func (lh *LightHouse) innerQueryServer(addr netip.Addr, nb, out []byte) {
 	}
 
 	// Send a query to the lighthouses and hope for the best next time
-	//TODO: this is not sufficient since the version depends on the certs loaded into memory as well
-	v := lh.protocolVersion.Load()
+	v := lh.ifce.GetCertState().defaultVersion
 	msg := &NebulaMeta{
 		Type:    NebulaMeta_HostQuery,
 		Details: &NebulaMetaDetails{},
 	}
 
-	//TODO: remove this
-	v = 2
 	if v == 1 {
 		if !addr.Is4() {
 			lh.l.WithField("vpnAddr", addr).Error("Can't query lighthouse for v6 address using a v1 protocol")
@@ -843,7 +829,7 @@ func (lh *LightHouse) SendUpdate() {
 		}
 	}
 
-	v := lh.protocolVersion.Load()
+	v := lh.ifce.GetCertState().defaultVersion
 	msg := &NebulaMeta{
 		Type: NebulaMeta_HostUpdateNotification,
 		Details: &NebulaMetaDetails{
@@ -852,8 +838,6 @@ func (lh *LightHouse) SendUpdate() {
 		},
 	}
 
-	//TODO: remove this
-	v = 2
 	if v == 1 {
 		var relays []uint32
 		for _, r := range lh.GetRelaysForMe() {
@@ -1042,11 +1026,10 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 	found, ln, err = lhh.lh.queryAndPrepMessage(fromVpnAddrs[0], func(c *cache) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostPunchNotification
-		//TODO: unsure which version to use. If we had access to the hostmap we could see if there is already a tunnel
-		// and use that version then fallback to our default configuration
 		targetHI := lhh.lh.ifce.GetHostInfo(queryVpnIp)
-		useVersion = cert.Version(lhh.lh.protocolVersion.Load())
-		if targetHI != nil {
+		if targetHI == nil {
+			useVersion = lhh.lh.ifce.GetCertState().defaultVersion
+		} else {
 			useVersion = targetHI.GetCert().Certificate.Version()
 		}
 

@@ -107,6 +107,7 @@ type EncWriter interface {
 	SendMessageToHostInfo(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte)
 	Handshake(vpnIp netip.Addr)
 	GetHostInfo(vpnIp netip.Addr) *HostInfo
+	GetCertState() *CertState
 }
 
 type sendRecvErrorConfig uint8
@@ -426,6 +427,10 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 
 func (f *Interface) GetHostInfo(vpnIp netip.Addr) *HostInfo {
 	return f.hostMap.QueryVpnAddr(vpnIp)
+}
+
+func (f *Interface) GetCertState() *CertState {
+	return f.pki.getCertState()
 }
 
 func (f *Interface) Close() error {
