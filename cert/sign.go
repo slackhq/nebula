@@ -11,8 +11,6 @@ import (
 	"net/netip"
 	"slices"
 	"time"
-
-	"github.com/slackhq/nebula/pkclient"
 )
 
 // TBSCertificate represents a certificate intended to be signed.
@@ -71,21 +69,6 @@ func (t *TBSCertificate) Sign(signer Certificate, curve Curve, key []byte) (Cert
 			return ecdsa.SignASN1(rand.Reader, pk, hashed[:])
 		}
 		return t.SignWith(signer, curve, sp)
-	default:
-		return nil, fmt.Errorf("invalid curve: %s", t.Curve)
-	}
-}
-
-func (t *TBSCertificate) SignPkcs11(signer Certificate, curve Curve, client *pkclient.PKClient) (Certificate, error) {
-	if client == nil {
-		return nil, fmt.Errorf("pkclient must be non-nil")
-	}
-	switch t.Curve {
-	case Curve_CURVE25519:
-		return nil, fmt.Errorf("only P256 is supported by PKCS#11")
-	case Curve_P256:
-		//todo: verify that pkcs11 hashes for you
-		return t.SignWith(signer, curve, client.SignASN1)
 	default:
 		return nil, fmt.Errorf("invalid curve: %s", t.Curve)
 	}

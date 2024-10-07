@@ -272,7 +272,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	var b []byte
 
 	if isP11 {
-		c, err = t.SignPkcs11(nil, curve, p11Client)
+		c, err = t.SignWith(nil, curve, p11Client.SignASN1)
 		if err != nil {
 			return fmt.Errorf("error while signing with PKCS#11: %w", err)
 		}
