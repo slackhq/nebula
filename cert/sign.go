@@ -44,20 +44,18 @@ type beingSignedCertificate interface {
 
 type SignerLambda func(certBytes []byte) ([]byte, error)
 
-// Sign will create a sealed certificate using details provided by the TBSCertificate as long as those
-// details do not violate constraints of the signing certificate.
-// If the TBSCertificate is a CA then signer must be nil.
-func (t *TBSCertificate) Sign(signWith Certificate, curve Curve, key []byte) (Certificate, error) {
+// Sign calls SignWith with an appropriate function to sign with the value of key.
+func (t *TBSCertificate) Sign(signer Certificate, curve Curve, key []byte) (Certificate, error) {
 	switch t.Curve {
 	case Curve_CURVE25519:
-		signer := ed25519.PrivateKey(key)
+		pk := ed25519.PrivateKey(key)
 		sp := func(certBytes []byte) ([]byte, error) {
-			sig := ed25519.Sign(signer, certBytes)
+			sig := ed25519.Sign(pk, certBytes)
 			return sig, nil
 		}
-		return t.SignWith(signWith, curve, sp)
+		return t.SignWith(signer, curve, sp)
 	case Curve_P256:
-		signer := &ecdsa.PrivateKey{
+		pk := &ecdsa.PrivateKey{
 			PublicKey: ecdsa.PublicKey{
 				Curve: elliptic.P256(),
 			},
@@ -65,14 +63,14 @@ func (t *TBSCertificate) Sign(signWith Certificate, curve Curve, key []byte) (Ce
 			D: new(big.Int).SetBytes(key),
 		}
 		// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L119
-		signer.X, signer.Y = signer.Curve.ScalarBaseMult(key)
+		pk.X, pk.Y = pk.Curve.ScalarBaseMult(key)
 		sp := func(certBytes []byte) ([]byte, error) {
 			// We need to hash first for ECDSA
 			// - https://pkg.go.dev/crypto/ecdsa#SignASN1
 			hashed := sha256.Sum256(certBytes)
-			return ecdsa.SignASN1(rand.Reader, signer, hashed[:])
+			return ecdsa.SignASN1(rand.Reader, pk, hashed[:])
 		}
-		return t.SignWith(signWith, curve, sp)
+		return t.SignWith(signer, curve, sp)
 	default:
 		return nil, fmt.Errorf("invalid curve: %s", t.Curve)
 	}
@@ -93,6 +91,10 @@ func (t *TBSCertificate) SignPkcs11(signer Certificate, curve Curve, client *pkc
 	}
 }
 
+// SignWith will create a sealed certificate using details provided by the TBSCertificate as long as those
+// details do not violate constraints of the signing certificate.
+// If the TBSCertificate is a CA then signer must be nil.
+// sp is used to calculate the signature
 func (t *TBSCertificate) SignWith(signer Certificate, curve Curve, sp SignerLambda) (Certificate, error) {
 	if curve != t.Curve {
 		return nil, fmt.Errorf("curve in cert and private key supplied don't match")
