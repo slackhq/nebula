@@ -2,9 +2,11 @@ package nebula
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"runtime"
@@ -189,10 +191,11 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	}
 
 	if ifce.myVpnNet.Addr().Is4() {
-		//TODO:
-		//addr := myVpnNet.Masked().Addr().As4()
-		//binary.BigEndian.PutUint32(addr[:], binary.BigEndian.Uint32(addr[:])|^binary.BigEndian.Uint32(certificate.Details.Ips[0].Mask))
-		//ifce.myBroadcastAddr = netip.AddrFrom4(addr)
+		maskedAddr := certificate.Networks()[0].Masked()
+		addr := maskedAddr.Addr().As4()
+		mask := net.CIDRMask(maskedAddr.Bits(), maskedAddr.Addr().BitLen())
+		binary.BigEndian.PutUint32(addr[:], binary.BigEndian.Uint32(addr[:])|^binary.BigEndian.Uint32(mask))
+		ifce.myBroadcastAddr = netip.AddrFrom4(addr)
 	}
 
 	ifce.tryPromoteEvery.Store(c.tryPromoteEvery)
