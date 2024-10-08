@@ -28,12 +28,8 @@ func TestMarshalingNebulaCertificate(t *testing.T) {
 			Ips: []netip.Prefix{
 				mustParsePrefixUnmapped("10.1.1.1/24"),
 				mustParsePrefixUnmapped("10.1.1.2/16"),
-				//TODO: netip cant represent this netmask
-				//{IP: net.ParseIP("10.1.1.3"), Mask: net.IPMask(net.ParseIP("255.0.255.0"))},
 			},
 			Subnets: []netip.Prefix{
-				//TODO: netip cant represent this netmask
-				//{IP: net.ParseIP("9.1.1.1"), Mask: net.IPMask(net.ParseIP("255.0.255.0"))},
 				mustParsePrefixUnmapped("9.1.1.2/24"),
 				mustParsePrefixUnmapped("9.1.1.3/16"),
 			},
@@ -174,12 +170,8 @@ func TestNebulaCertificate_MarshalJSON(t *testing.T) {
 			Ips: []netip.Prefix{
 				mustParsePrefixUnmapped("10.1.1.1/24"),
 				mustParsePrefixUnmapped("10.1.1.2/16"),
-				//TODO: netip bad
-				//{IP: net.ParseIP("10.1.1.3"), Mask: net.IPMask(net.ParseIP("255.0.255.0"))},
 			},
 			Subnets: []netip.Prefix{
-				//TODO: netip bad
-				//{IP: net.ParseIP("9.1.1.1"), Mask: net.IPMask(net.ParseIP("255.0.255.0"))},
 				mustParsePrefixUnmapped("9.1.1.2/24"),
 				mustParsePrefixUnmapped("9.1.1.3/16"),
 			},
@@ -632,15 +624,11 @@ func newTestCert(ca Certificate, key []byte, before, after time.Time, ips, subne
 		ips = []netip.Prefix{
 			mustParsePrefixUnmapped("10.1.1.1/24"),
 			mustParsePrefixUnmapped("10.1.1.2/16"),
-			//TODO: netip bad
-			//{IP: net.ParseIP("10.1.1.3").To4(), Mask: net.IPMask(net.ParseIP("255.0.255.0").To4())},
 		}
 	}
 
 	if len(subnets) == 0 {
 		subnets = []netip.Prefix{
-			//TODO: netip bad
-			//{IP: net.ParseIP("9.1.1.1").To4(), Mask: net.IPMask(net.ParseIP("255.0.255.0").To4())},
 			mustParsePrefixUnmapped("9.1.1.2/24"),
 			mustParsePrefixUnmapped("9.1.1.3/16"),
 		}

@@ -130,16 +130,15 @@ func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 }
 
 // GetCertByVpnIp returns the authenticated certificate of the given vpn IP, or nil if not found
-// TODO: this should copy!
 func (c *Control) GetCertByVpnIp(vpnIp netip.Addr) cert.Certificate {
 	if c.f.myVpnNet.Addr() == vpnIp {
-		return c.f.pki.GetCertState().Certificate
+		return c.f.pki.GetCertState().Certificate.Copy()
 	}
 	hi := c.f.hostMap.QueryVpnIp(vpnIp)
 	if hi == nil {
 		return nil
 	}
-	return hi.GetCert().Certificate
+	return hi.GetCert().Certificate.Copy()
 }
 
 // CreateTunnel creates a new tunnel to the given vpn ip.

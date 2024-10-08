@@ -51,7 +51,7 @@ type Certificate interface {
 
 	// Issuer is the fingerprint of the CA that signed this certificate.
 	// If IsCA is true then this will be empty.
-	Issuer() string //TODO: string or bytes?
+	Issuer() string
 
 	// PublicKey is the raw bytes to be used in asymmetric cryptographic operations.
 	PublicKey() []byte
@@ -61,7 +61,7 @@ type Certificate interface {
 
 	// Signature is the cryptographic seal for all the details of this certificate.
 	// CheckSignature can be used to verify that the details of this certificate are valid.
-	Signature() []byte //TODO: string or bytes?
+	Signature() []byte
 
 	// CheckSignature will check that the certificate Signature() matches the
 	// computed signature. A true result means this certificate has not been tampered with.
