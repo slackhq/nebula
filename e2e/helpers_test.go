@@ -26,7 +26,7 @@ import (
 type m map[string]interface{}
 
 // newSimpleServer creates a nebula instance with many assumptions
-func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, sVpnIpNet string, overrides m) (*nebula.Control, netip.Prefix, netip.AddrPort, *config.C) {
+func newSimpleServer(caCrt cert.Certificate, caKey []byte, name string, sVpnIpNet string, overrides m) (*nebula.Control, netip.Prefix, netip.AddrPort, *config.C) {
 	l := NewTestLogger()
 
 	vpnIpNet, err := netip.ParsePrefix(sVpnIpNet)
@@ -44,9 +44,9 @@ func newSimpleServer(caCrt *cert.NebulaCertificate, caKey []byte, name string, s
 		budpIp[13] -= 128
 		udpAddr = netip.AddrPortFrom(netip.AddrFrom16(budpIp), 4242)
 	}
-	_, _, myPrivKey, myPEM := NewTestCert(caCrt, caKey, name, time.Now(), time.Now().Add(5*time.Minute), vpnIpNet, nil, []string{})
+	_, _, myPrivKey, myPEM := NewTestCert(caCrt, caKey, name, time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{vpnIpNet}, nil, []string{})
 
-	caB, err := caCrt.MarshalToPEM()
+	caB, err := caCrt.MarshalPEM()
 	if err != nil {
 		panic(err)
 	}

@@ -6,6 +6,7 @@ package e2e
 import (
 	"fmt"
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -538,9 +539,9 @@ func TestRehandshakingRelays(t *testing.T) {
 	// When I update the certificate for the relay, both me and them will have 2 host infos for the relay,
 	// and the main host infos will not have any relay state to handle the me<->relay<->them tunnel.
 	r.Log("Renew relay certificate and spin until me and them sees it")
-	_, _, myNextPrivKey, myNextPEM := NewTestCert(ca, caKey, "relay", time.Now(), time.Now().Add(5*time.Minute), relayVpnIpNet, nil, []string{"new group"})
+	_, _, myNextPrivKey, myNextPEM := NewTestCert(ca, caKey, "relay", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{relayVpnIpNet}, nil, []string{"new group"})
 
-	caB, err := ca.MarshalToPEM()
+	caB, err := ca.MarshalPEM()
 	if err != nil {
 		panic(err)
 	}
@@ -558,7 +559,7 @@ func TestRehandshakingRelays(t *testing.T) {
 		r.Log("Assert the tunnel works between myVpnIpNet and relayVpnIpNet")
 		assertTunnel(t, myVpnIpNet.Addr(), relayVpnIpNet.Addr(), myControl, relayControl, r)
 		c := myControl.GetHostInfoByVpnIp(relayVpnIpNet.Addr(), false)
-		if len(c.Cert.Details.Groups) != 0 {
+		if len(c.Cert.Groups()) != 0 {
 			// We have a new certificate now
 			r.Log("Certificate between my and relay is updated!")
 			break
@@ -571,7 +572,7 @@ func TestRehandshakingRelays(t *testing.T) {
 		r.Log("Assert the tunnel works between theirVpnIpNet and relayVpnIpNet")
 		assertTunnel(t, theirVpnIpNet.Addr(), relayVpnIpNet.Addr(), theirControl, relayControl, r)
 		c := theirControl.GetHostInfoByVpnIp(relayVpnIpNet.Addr(), false)
-		if len(c.Cert.Details.Groups) != 0 {
+		if len(c.Cert.Groups()) != 0 {
 			// We have a new certificate now
 			r.Log("Certificate between their and relay is updated!")
 			break
@@ -642,9 +643,9 @@ func TestRehandshakingRelaysPrimary(t *testing.T) {
 	// When I update the certificate for the relay, both me and them will have 2 host infos for the relay,
 	// and the main host infos will not have any relay state to handle the me<->relay<->them tunnel.
 	r.Log("Renew relay certificate and spin until me and them sees it")
-	_, _, myNextPrivKey, myNextPEM := NewTestCert(ca, caKey, "relay", time.Now(), time.Now().Add(5*time.Minute), relayVpnIpNet, nil, []string{"new group"})
+	_, _, myNextPrivKey, myNextPEM := NewTestCert(ca, caKey, "relay", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{relayVpnIpNet}, nil, []string{"new group"})
 
-	caB, err := ca.MarshalToPEM()
+	caB, err := ca.MarshalPEM()
 	if err != nil {
 		panic(err)
 	}
@@ -662,7 +663,7 @@ func TestRehandshakingRelaysPrimary(t *testing.T) {
 		r.Log("Assert the tunnel works between myVpnIpNet and relayVpnIpNet")
 		assertTunnel(t, myVpnIpNet.Addr(), relayVpnIpNet.Addr(), myControl, relayControl, r)
 		c := myControl.GetHostInfoByVpnIp(relayVpnIpNet.Addr(), false)
-		if len(c.Cert.Details.Groups) != 0 {
+		if len(c.Cert.Groups()) != 0 {
 			// We have a new certificate now
 			r.Log("Certificate between my and relay is updated!")
 			break
@@ -675,7 +676,7 @@ func TestRehandshakingRelaysPrimary(t *testing.T) {
 		r.Log("Assert the tunnel works between theirVpnIpNet and relayVpnIpNet")
 		assertTunnel(t, theirVpnIpNet.Addr(), relayVpnIpNet.Addr(), theirControl, relayControl, r)
 		c := theirControl.GetHostInfoByVpnIp(relayVpnIpNet.Addr(), false)
-		if len(c.Cert.Details.Groups) != 0 {
+		if len(c.Cert.Groups()) != 0 {
 			// We have a new certificate now
 			r.Log("Certificate between their and relay is updated!")
 			break
@@ -737,9 +738,9 @@ func TestRehandshaking(t *testing.T) {
 	r.RenderHostmaps("Starting hostmaps", myControl, theirControl)
 
 	r.Log("Renew my certificate and spin until their sees it")
-	_, _, myNextPrivKey, myNextPEM := NewTestCert(ca, caKey, "me", time.Now(), time.Now().Add(5*time.Minute), myVpnIpNet, nil, []string{"new group"})
+	_, _, myNextPrivKey, myNextPEM := NewTestCert(ca, caKey, "me", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{myVpnIpNet}, nil, []string{"new group"})
 
-	caB, err := ca.MarshalToPEM()
+	caB, err := ca.MarshalPEM()
 	if err != nil {
 		panic(err)
 	}
@@ -756,7 +757,7 @@ func TestRehandshaking(t *testing.T) {
 	for {
 		assertTunnel(t, myVpnIpNet.Addr(), theirVpnIpNet.Addr(), myControl, theirControl, r)
 		c := theirControl.GetHostInfoByVpnIp(myVpnIpNet.Addr(), false)
-		if len(c.Cert.Details.Groups) != 0 {
+		if len(c.Cert.Groups()) != 0 {
 			// We have a new certificate now
 			break
 		}
@@ -764,6 +765,7 @@ func TestRehandshaking(t *testing.T) {
 		time.Sleep(time.Second)
 	}
 
+	r.Log("Got the new cert")
 	// Flip their firewall to only allowing the new group to catch the tunnels reverting incorrectly
 	rc, err = yaml.Marshal(theirConfig.Settings)
 	assert.NoError(t, err)
@@ -794,7 +796,7 @@ func TestRehandshaking(t *testing.T) {
 
 	// Make sure the correct tunnel won
 	c := theirControl.GetHostInfoByVpnIp(myVpnIpNet.Addr(), false)
-	assert.Contains(t, c.Cert.Details.Groups, "new group")
+	assert.Contains(t, c.Cert.Groups(), "new group")
 
 	// We should only have a single tunnel now on both sides
 	assert.Len(t, myFinalHostmapHosts, 1)
@@ -837,9 +839,9 @@ func TestRehandshakingLoser(t *testing.T) {
 	r.RenderHostmaps("Starting hostmaps", myControl, theirControl)
 
 	r.Log("Renew their certificate and spin until mine sees it")
-	_, _, theirNextPrivKey, theirNextPEM := NewTestCert(ca, caKey, "them", time.Now(), time.Now().Add(5*time.Minute), theirVpnIpNet, nil, []string{"their new group"})
+	_, _, theirNextPrivKey, theirNextPEM := NewTestCert(ca, caKey, "them", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{theirVpnIpNet}, nil, []string{"their new group"})
 
-	caB, err := ca.MarshalToPEM()
+	caB, err := ca.MarshalPEM()
 	if err != nil {
 		panic(err)
 	}
@@ -857,8 +859,7 @@ func TestRehandshakingLoser(t *testing.T) {
 		assertTunnel(t, myVpnIpNet.Addr(), theirVpnIpNet.Addr(), myControl, theirControl, r)
 		theirCertInMe := myControl.GetHostInfoByVpnIp(theirVpnIpNet.Addr(), false)
 
-		_, theirNewGroup := theirCertInMe.Cert.Details.InvertedGroups["their new group"]
-		if theirNewGroup {
+		if slices.Contains(theirCertInMe.Cert.Groups(), "their new group") {
 			break
 		}
 
@@ -895,7 +896,7 @@ func TestRehandshakingLoser(t *testing.T) {
 
 	// Make sure the correct tunnel won
 	theirCertInMe := myControl.GetHostInfoByVpnIp(theirVpnIpNet.Addr(), false)
-	assert.Contains(t, theirCertInMe.Cert.Details.Groups, "their new group")
+	assert.Contains(t, theirCertInMe.Cert.Groups(), "their new group")
 
 	// We should only have a single tunnel now on both sides
 	assert.Len(t, myFinalHostmapHosts, 1)

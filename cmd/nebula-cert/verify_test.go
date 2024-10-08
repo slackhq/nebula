@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/slackhq/nebula/cert"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/ed25519"
 )
@@ -67,17 +66,8 @@ func Test_verify(t *testing.T) {
 
 	// make a ca for later
 	caPub, caPriv, _ := ed25519.GenerateKey(rand.Reader)
-	ca := cert.NebulaCertificate{
-		Details: cert.NebulaCertificateDetails{
-			Name:      "test-ca",
-			NotBefore: time.Now().Add(time.Hour * -1),
-			NotAfter:  time.Now().Add(time.Hour * 2),
-			PublicKey: caPub,
-			IsCA:      true,
-		},
-	}
-	ca.Sign(cert.Curve_CURVE25519, caPriv)
-	b, _ := ca.MarshalToPEM()
+	ca, _ := NewTestCaCert("test-ca", caPub, caPriv, time.Now().Add(time.Hour*-1), time.Now().Add(time.Hour*2), nil, nil, nil)
+	b, _ := ca.MarshalPEM()
 	caFile.Truncate(0)
 	caFile.Seek(0, 0)
 	caFile.Write(b)
@@ -102,22 +92,13 @@ func Test_verify(t *testing.T) {
 	assert.EqualError(t, err, "error while parsing crt: input did not contain a valid PEM encoded block")
 
 	// unverifiable cert at path
-	_, badPriv, _ := ed25519.GenerateKey(rand.Reader)
-	certPub, _ := x25519Keypair()
-	signer, _ := ca.Sha256Sum()
-	crt := cert.NebulaCertificate{
-		Details: cert.NebulaCertificateDetails{
-			Name:      "test-cert",
-			NotBefore: time.Now().Add(time.Hour * -1),
-			NotAfter:  time.Now().Add(time.Hour),
-			PublicKey: certPub,
-			IsCA:      false,
-			Issuer:    signer,
-		},
+	crt, _ := NewTestCert(ca, caPriv, "test-cert", time.Now().Add(time.Hour*-1), time.Now().Add(time.Hour), nil, nil, nil)
+	// Slightly evil hack to modify the certificate after it was sealed to generate an invalid signature
+	pub := crt.PublicKey()
+	for i, _ := range pub {
+		pub[i] = 0
 	}
-
-	crt.Sign(cert.Curve_CURVE25519, badPriv)
-	b, _ = crt.MarshalToPEM()
+	b, _ = crt.MarshalPEM()
 	certFile.Truncate(0)
 	certFile.Seek(0, 0)
 	certFile.Write(b)
@@ -128,8 +109,8 @@ func Test_verify(t *testing.T) {
 	assert.EqualError(t, err, "certificate signature did not match")
 
 	// verified cert at path
-	crt.Sign(cert.Curve_CURVE25519, caPriv)
-	b, _ = crt.MarshalToPEM()
+	crt, _ = NewTestCert(ca, caPriv, "test-cert", time.Now().Add(time.Hour*-1), time.Now().Add(time.Hour), nil, nil, nil)
+	b, _ = crt.MarshalPEM()
 	certFile.Truncate(0)
 	certFile.Seek(0, 0)
 	certFile.Write(b)

@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
@@ -27,7 +26,7 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	cs := &CertState{
 		RawCertificate:      []byte{},
 		PrivateKey:          []byte{},
-		Certificate:         &cert.NebulaCertificate{},
+		Certificate:         &dummyCert{},
 		RawCertificateNoKey: []byte{},
 	}
 

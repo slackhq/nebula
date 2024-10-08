@@ -2,6 +2,7 @@ package test
 
 import (
 	"fmt"
+	"net/netip"
 	"reflect"
 	"testing"
 	"time"
@@ -24,6 +25,11 @@ func AssertDeepCopyEqual(t *testing.T, a interface{}, b interface{}) {
 }
 
 func traverseDeepCopy(t *testing.T, v1 reflect.Value, v2 reflect.Value, name string) bool {
+	if v1.Type() == v2.Type() && v1.Type() == reflect.TypeOf(netip.Addr{}) {
+		// Ignore netip.Addr types since they reuse an interned global value
+		return false
+	}
+
 	switch v1.Kind() {
 	case reflect.Array:
 		for i := 0; i < v1.Len(); i++ {
