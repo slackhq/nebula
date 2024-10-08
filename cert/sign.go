@@ -42,7 +42,9 @@ type beingSignedCertificate interface {
 
 type SignerLambda func(certBytes []byte) ([]byte, error)
 
-// Sign calls SignWith with an appropriate function to sign with the value of key.
+// Sign will create a sealed certificate using details provided by the TBSCertificate as long as those
+// details do not violate constraints of the signing certificate.
+// If the TBSCertificate is a CA then signer must be nil.
 func (t *TBSCertificate) Sign(signer Certificate, curve Curve, key []byte) (Certificate, error) {
 	switch t.Curve {
 	case Curve_CURVE25519:
@@ -74,10 +76,8 @@ func (t *TBSCertificate) Sign(signer Certificate, curve Curve, key []byte) (Cert
 	}
 }
 
-// SignWith will create a sealed certificate using details provided by the TBSCertificate as long as those
-// details do not violate constraints of the signing certificate.
-// If the TBSCertificate is a CA then signer must be nil.
-// sp is used to calculate the signature
+// SignWith does the same thing as sign, but uses the function in `sp` to calculate the signature.
+// You should only use SignWith if you do not have direct access to your private key.
 func (t *TBSCertificate) SignWith(signer Certificate, curve Curve, sp SignerLambda) (Certificate, error) {
 	if curve != t.Curve {
 		return nil, fmt.Errorf("curve in cert and private key supplied don't match")
