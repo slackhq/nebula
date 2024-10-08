@@ -144,7 +144,7 @@ func (nc *certificateV1) VerifyPrivateKey(curve Curve, key []byte) error {
 		case Curve_P256:
 			privkey, err := ecdh.P256().NewPrivateKey(key)
 			if err != nil {
-				return fmt.Errorf("cannot parse private key as P256")
+				return fmt.Errorf("cannot parse private key as P256: %w", err)
 			}
 			pub := privkey.PublicKey().Bytes()
 			if !bytes.Equal(pub, nc.details.PublicKey) {

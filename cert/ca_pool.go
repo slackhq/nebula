@@ -182,9 +182,6 @@ func (ncp *CAPool) verify(c Certificate, now time.Time, certFp string, signerFp 
 
 	// If we are checking a cached certificate then we can bail early here
 	// Either the root is no longer trusted or everything is fine
-	//TODO: this is slightly different than v1.9.3 and earlier where we were matching the public key
-	// The reason to switch is that the public key can be reused and the constraints in the ca can change
-	// but there may be history here, double check
 	if len(signerFp) > 0 {
 		if signerFp != signer.Fingerprint {
 			return nil, ErrFingerprintMismatch
