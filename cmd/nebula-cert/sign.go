@@ -316,7 +316,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 				return fmt.Errorf("error while signing: %w", err)
 			}
 		} else {
-			nc, err = t.SignPkcs11(caCert, curve, p11Client)
+			nc, err = t.SignWith(caCert, curve, p11Client.SignASN1)
 			if err != nil {
 				return fmt.Errorf("error while signing with PKCS#11: %w", err)
 			}
@@ -346,7 +346,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 				return fmt.Errorf("error while signing: %w", err)
 			}
 		} else {
-			nc, err = t.SignPkcs11(caCert, curve, p11Client)
+			nc, err = t.SignWith(caCert, curve, p11Client.SignASN1)
 			if err != nil {
 				return fmt.Errorf("error while signing with PKCS#11: %w", err)
 			}
