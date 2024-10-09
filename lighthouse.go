@@ -858,7 +858,7 @@ func (lh *LightHouse) SendUpdate() {
 		for _, r := range lh.GetRelaysForMe() {
 			relays = append(relays, netAddrToProtoAddr(r))
 		}
-
+		msg.Details.RelayVpnAddrs = relays
 		// time="lh   15:57:55.871069" level=debug msg="Host sent invalid update" answer="ff::ffff:a80:3" vpnAddrs="[10.128.0.3 ff::3]" what???
 		msg.Details.VpnAddr = netAddrToProtoAddr(lh.myVpnNetworks[0].Addr())
 
