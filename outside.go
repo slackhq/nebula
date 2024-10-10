@@ -334,8 +334,13 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 				return fmt.Errorf("ipv6 packet was too small")
 			}
 			fp.Protocol = uint8(proto)
-			fp.RemotePort = binary.BigEndian.Uint16(data[offset : offset+2])
-			fp.LocalPort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+			if incoming {
+				fp.RemotePort = binary.BigEndian.Uint16(data[offset : offset+2])
+				fp.LocalPort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+			} else {
+				fp.LocalPort = binary.BigEndian.Uint16(data[offset : offset+2])
+				fp.RemotePort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+			}
 			fp.Fragment = false
 			return nil
 
@@ -344,8 +349,13 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 				return fmt.Errorf("ipv6 packet was too small")
 			}
 			fp.Protocol = uint8(proto)
-			fp.RemotePort = binary.BigEndian.Uint16(data[offset : offset+2])
-			fp.LocalPort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+			if incoming {
+				fp.RemotePort = binary.BigEndian.Uint16(data[offset : offset+2])
+				fp.LocalPort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+			} else {
+				fp.LocalPort = binary.BigEndian.Uint16(data[offset : offset+2])
+				fp.RemotePort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+			}
 			fp.Fragment = false
 			return nil
 
