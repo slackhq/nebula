@@ -284,7 +284,7 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 		fp = ft.TCP
 	case firewall.ProtoUDP:
 		fp = ft.UDP
-	case firewall.ProtoICMP:
+	case firewall.ProtoICMP, firewall.ProtoICMPv6:
 		fp = ft.ICMP
 	case firewall.ProtoAny:
 		fp = ft.AnyProto
@@ -631,7 +631,7 @@ func (ft *FirewallTable) match(p firewall.Packet, incoming bool, c *cert.CachedC
 		if ft.UDP.match(p, incoming, c, caPool) {
 			return true
 		}
-	case firewall.ProtoICMP:
+	case firewall.ProtoICMP, firewall.ProtoICMPv6:
 		if ft.ICMP.match(p, incoming, c, caPool) {
 			return true
 		}
