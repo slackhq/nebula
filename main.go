@@ -3,10 +3,11 @@ package nebula
 import (
 	"context"
 	"fmt"
-	"github.com/slackhq/nebula/cert"
 	"net"
 	"net/netip"
 	"time"
+
+	"github.com/slackhq/nebula/cert"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
