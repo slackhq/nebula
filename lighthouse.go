@@ -739,23 +739,24 @@ func (lh *LightHouse) innerQueryServer(addr netip.Addr, nb, out []byte) {
 	}
 
 	// Send a query to the lighthouses and hope for the best next time
-	v := lh.ifce.GetCertState().defaultVersion
+	cs := lh.ifce.GetCertState()
+	v := cs.defaultVersion
 	msg := &NebulaMeta{
 		Type:    NebulaMeta_HostQuery,
 		Details: &NebulaMetaDetails{},
 	}
+	isV6Query := addr.Is6() && cs.v2Cert != nil
 
-	if v == 1 {
+	//always use v2 style for ipv6 queries
+	if v == 2 || isV6Query {
+		msg.Details.VpnAddr = netAddrToProtoAddr(addr)
+	} else if v == 1 {
 		if !addr.Is4() {
 			lh.l.WithField("vpnAddr", addr).Error("Can't query lighthouse for v6 address using a v1 protocol")
 			return
 		}
 		b := addr.As4()
 		msg.Details.OldVpnAddr = binary.BigEndian.Uint32(b[:])
-
-	} else if v == 2 {
-		msg.Details.VpnAddr = netAddrToProtoAddr(addr)
-
 	} else {
 		panic("unsupported version")
 	}

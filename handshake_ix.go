@@ -23,22 +23,33 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 		return false
 	}
 
+	//if we're connecting to a v6 address, always use v2 certs
 	cs := f.pki.getCertState()
-	ci := NewConnectionState(f.l, cs, true, noise.HandshakeIX)
+	v := cs.defaultVersion
+	if cs.v2Cert != nil {
+		for _, a := range hh.hostinfo.vpnAddrs {
+			if a.Is6() {
+				v = cert.Version2
+				break
+			}
+		}
+	}
+
+	ci := NewConnectionState(f.l, cs, v, true, noise.HandshakeIX)
 	hh.hostinfo.ConnectionState = ci
 
 	hs := &NebulaHandshake{
 		Details: &NebulaHandshakeDetails{
 			InitiatorIndex: hh.hostinfo.localIndexId,
 			Time:           uint64(time.Now().UnixNano()),
-			Cert:           cs.getDefaultHandshakeBytes(),
-			CertVersion:    uint32(cs.defaultVersion),
+			Cert:           cs.getHandshakeBytes(v),
+			CertVersion:    uint32(v),
 		},
 	}
 
 	hsBytes, err := hs.Marshal()
 	if err != nil {
-		f.l.WithError(err).WithField("vpnAddrs", hh.hostinfo.vpnAddrs).
+		f.l.WithError(err).WithField("vpnAddrs", hh.hostinfo.vpnAddrs).WithField("version", v).
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to marshal handshake message")
 		return false
 	}
@@ -63,7 +74,7 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 
 func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet []byte, h *header.H) {
 	cs := f.pki.getCertState()
-	ci := NewConnectionState(f.l, cs, false, noise.HandshakeIX)
+	ci := NewConnectionState(f.l, cs, cs.defaultVersion, false, noise.HandshakeIX)
 	// Mark packet 1 as seen so it doesn't show up as missed
 	ci.window.Update(f.l, 1)
 
