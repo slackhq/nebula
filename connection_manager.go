@@ -415,7 +415,7 @@ func (n *connectionManager) shouldSwapPrimary(current, primary *HostInfo) bool {
 	}
 
 	certState := n.intf.pki.GetCertState()
-	return bytes.Equal(current.ConnectionState.myCert.Signature, certState.Certificate.Signature)
+	return bytes.Equal(current.ConnectionState.myCert.Signature(), certState.Certificate.Signature())
 }
 
 func (n *connectionManager) swapPrimary(current, primary *HostInfo) {
@@ -436,8 +436,9 @@ func (n *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostIn
 		return false
 	}
 
-	valid, err := remoteCert.VerifyWithCache(now, n.intf.pki.GetCAPool())
-	if valid {
+	caPool := n.intf.pki.GetCAPool()
+	err := caPool.VerifyCachedCertificate(now, remoteCert)
+	if err == nil {
 		return false
 	}
 
@@ -446,9 +447,8 @@ func (n *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostIn
 		return false
 	}
 
-	fingerprint, _ := remoteCert.Sha256Sum()
 	hostinfo.logger(n.l).WithError(err).
-		WithField("fingerprint", fingerprint).
+		WithField("fingerprint", remoteCert.Fingerprint).
 		Info("Remote certificate is no longer valid, tearing down the tunnel")
 
 	return true
@@ -474,7 +474,7 @@ func (n *connectionManager) sendPunch(hostinfo *HostInfo) {
 
 func (n *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 	certState := n.intf.pki.GetCertState()
-	if bytes.Equal(hostinfo.ConnectionState.myCert.Signature, certState.Certificate.Signature) {
+	if bytes.Equal(hostinfo.ConnectionState.myCert.Signature(), certState.Certificate.Signature()) {
 		return
 	}
 

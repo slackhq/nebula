@@ -99,8 +99,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		return
 	}
 
-	vpnIp, ok := netip.AddrFromSlice(remoteCert.Details.Ips[0].IP)
-	if !ok {
+	if len(remoteCert.Certificate.Networks()) == 0 {
 		e := f.l.WithError(err).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"})
 
@@ -112,10 +111,10 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		return
 	}
 
-	vpnIp = vpnIp.Unmap()
-	certName := remoteCert.Details.Name
-	fingerprint, _ := remoteCert.Sha256Sum()
-	issuer := remoteCert.Details.Issuer
+	vpnIp := remoteCert.Certificate.Networks()[0].Addr().Unmap()
+	certName := remoteCert.Certificate.Name()
+	fingerprint := remoteCert.Fingerprint
+	issuer := remoteCert.Certificate.Issuer()
 
 	if vpnIp == f.myVpnNet.Addr() {
 		f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).
@@ -216,7 +215,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 
 	hostinfo.remotes = f.lightHouse.QueryCache(vpnIp)
 	hostinfo.SetRemote(addr)
-	hostinfo.CreateRemoteCIDR(remoteCert)
+	hostinfo.CreateRemoteCIDR(remoteCert.Certificate)
 
 	existing, err := f.handshakeManager.CheckAndComplete(hostinfo, 0, f)
 	if err != nil {
@@ -402,8 +401,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		return true
 	}
 
-	vpnIp, ok := netip.AddrFromSlice(remoteCert.Details.Ips[0].IP)
-	if !ok {
+	if len(remoteCert.Certificate.Networks()) == 0 {
 		e := f.l.WithError(err).WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"})
 
@@ -415,10 +413,10 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		return true
 	}
 
-	vpnIp = vpnIp.Unmap()
-	certName := remoteCert.Details.Name
-	fingerprint, _ := remoteCert.Sha256Sum()
-	issuer := remoteCert.Details.Issuer
+	vpnIp := remoteCert.Certificate.Networks()[0].Addr().Unmap()
+	certName := remoteCert.Certificate.Name()
+	fingerprint := remoteCert.Fingerprint
+	issuer := remoteCert.Certificate.Issuer()
 
 	// Ensure the right host responded
 	if vpnIp != hostinfo.vpnIp {
@@ -486,7 +484,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 	}
 
 	// Build up the radix for the firewall if we have subnets in the cert
-	hostinfo.CreateRemoteCIDR(remoteCert)
+	hostinfo.CreateRemoteCIDR(remoteCert.Certificate)
 
 	// Complete our handshake and update metrics, this will replace any existing tunnels for this vpnIp
 	f.handshakeManager.Complete(hostinfo, f)

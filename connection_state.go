@@ -18,8 +18,8 @@ type ConnectionState struct {
 	eKey           *NebulaCipherState
 	dKey           *NebulaCipherState
 	H              *noise.HandshakeState
-	myCert         *cert.NebulaCertificate
-	peerCert       *cert.NebulaCertificate
+	myCert         cert.Certificate
+	peerCert       *cert.CachedCertificate
 	initiator      bool
 	messageCounter atomic.Uint64
 	window         *Bits
@@ -28,17 +28,17 @@ type ConnectionState struct {
 
 func NewConnectionState(l *logrus.Logger, cipher string, certState *CertState, initiator bool, pattern noise.HandshakePattern, psk []byte, pskStage int) *ConnectionState {
 	var dhFunc noise.DHFunc
-	switch certState.Certificate.Details.Curve {
+	switch certState.Certificate.Curve() {
 	case cert.Curve_CURVE25519:
 		dhFunc = noise.DH25519
 	case cert.Curve_P256:
-		if certState.Certificate.Pkcs11Backed {
+		if certState.pkcs11Backed {
 			dhFunc = noiseutil.DHP256PKCS11
 		} else {
 			dhFunc = noiseutil.DHP256
 		}
 	default:
-		l.Errorf("invalid curve: %s", certState.Certificate.Details.Curve)
+		l.Errorf("invalid curve: %s", certState.Certificate.Curve())
 		return nil
 	}
 

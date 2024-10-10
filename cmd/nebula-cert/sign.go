@@ -6,7 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -80,15 +80,17 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 
 	var curve cert.Curve
 	var caKey []byte
+
 	if !isP11 {
 		var rawCAKey []byte
 		rawCAKey, err := os.ReadFile(*sf.caKeyPath)
+
 		if err != nil {
 			return fmt.Errorf("error while reading ca-key: %s", err)
 		}
 
 		// naively attempt to decode the private key as though it is not encrypted
-		caKey, _, curve, err = cert.UnmarshalSigningPrivateKey(rawCAKey)
+		caKey, _, curve, err = cert.UnmarshalSigningPrivateKeyFromPEM(rawCAKey)
 		if err == cert.ErrPrivateKeyEncrypted {
 			// ask for a passphrase until we get one
 			var passphrase []byte
@@ -124,7 +126,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return fmt.Errorf("error while reading ca-crt: %s", err)
 	}
 
-	caCert, _, err := cert.UnmarshalNebulaCertificateFromPEM(rawCACert)
+	caCert, _, err := cert.UnmarshalCertificateFromPEM(rawCACert)
 	if err != nil {
 		return fmt.Errorf("error while parsing ca-crt: %s", err)
 	}
@@ -135,30 +137,24 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 	}
 
-	issuer, err := caCert.Sha256Sum()
-	if err != nil {
-		return fmt.Errorf("error while getting -ca-crt fingerprint: %s", err)
-	}
-
 	if caCert.Expired(time.Now()) {
 		return fmt.Errorf("ca certificate is expired")
 	}
 
 	// if no duration is given, expire one second before the root expires
 	if *sf.duration <= 0 {
-		*sf.duration = time.Until(caCert.Details.NotAfter) - time.Second*1
+		*sf.duration = time.Until(caCert.NotAfter()) - time.Second*1
 	}
 
-	ip, ipNet, err := net.ParseCIDR(*sf.ip)
+	network, err := netip.ParsePrefix(*sf.ip)
 	if err != nil {
-		return newHelpErrorf("invalid ip definition: %s", err)
+		return newHelpErrorf("invalid ip definition: %s", *sf.ip)
 	}
-	if ip.To4() == nil {
+	if !network.Addr().Is4() {
 		return newHelpErrorf("invalid ip definition: can only be ipv4, have %s", *sf.ip)
 	}
-	ipNet.IP = ip
 
-	groups := []string{}
+	var groups []string
 	if *sf.groups != "" {
 		for _, rg := range strings.Split(*sf.groups, ",") {
 			g := strings.TrimSpace(rg)
@@ -168,16 +164,16 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 	}
 
-	subnets := []*net.IPNet{}
+	var subnets []netip.Prefix
 	if *sf.subnets != "" {
 		for _, rs := range strings.Split(*sf.subnets, ",") {
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
-				_, s, err := net.ParseCIDR(rs)
+				s, err := netip.ParsePrefix(rs)
 				if err != nil {
-					return newHelpErrorf("invalid subnet definition: %s", err)
+					return newHelpErrorf("invalid subnet definition: %s", rs)
 				}
-				if s.IP.To4() == nil {
+				if !s.Addr().Is4() {
 					return newHelpErrorf("invalid subnet definition: can only be ipv4, have %s", rs)
 				}
 				subnets = append(subnets, s)
@@ -205,7 +201,8 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		if err != nil {
 			return fmt.Errorf("error while reading in-pub: %s", err)
 		}
-		pub, _, pubCurve, err = cert.UnmarshalPublicKey(rawPub)
+
+		pub, _, pubCurve, err = cert.UnmarshalPublicKeyFromPEM(rawPub)
 		if err != nil {
 			return fmt.Errorf("error while parsing in-pub: %s", err)
 		}
@@ -221,36 +218,17 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		pub, rawPriv = newKeypair(curve)
 	}
 
-	nc := cert.NebulaCertificate{
-		Details: cert.NebulaCertificateDetails{
-			Name:      *sf.name,
-			Ips:       []*net.IPNet{ipNet},
-			Groups:    groups,
-			Subnets:   subnets,
-			NotBefore: time.Now(),
-			NotAfter:  time.Now().Add(*sf.duration),
-			PublicKey: pub,
-			IsCA:      false,
-			Issuer:    issuer,
-			Curve:     curve,
-		},
-		Pkcs11Backed: isP11,
-	}
-
-	if p11Client == nil {
-		err = nc.Sign(curve, caKey)
-		if err != nil {
-			return fmt.Errorf("error while signing: %w", err)
-		}
-	} else {
-		err = nc.SignPkcs11(curve, p11Client)
-		if err != nil {
-			return fmt.Errorf("error while signing with PKCS#11: %w", err)
-		}
-	}
-
-	if err := nc.CheckRootConstrains(caCert); err != nil {
-		return fmt.Errorf("refusing to sign, root certificate constraints violated: %s", err)
+	t := &cert.TBSCertificate{
+		Version:        cert.Version1,
+		Name:           *sf.name,
+		Networks:       []netip.Prefix{network},
+		Groups:         groups,
+		UnsafeNetworks: subnets,
+		NotBefore:      time.Now(),
+		NotAfter:       time.Now().Add(*sf.duration),
+		PublicKey:      pub,
+		IsCA:           false,
+		Curve:          curve,
 	}
 
 	if *sf.outKeyPath == "" {
@@ -265,18 +243,32 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return fmt.Errorf("refusing to overwrite existing cert: %s", *sf.outCertPath)
 	}
 
+	var c cert.Certificate
+
+	if p11Client == nil {
+		c, err = t.Sign(caCert, curve, caKey)
+		if err != nil {
+			return fmt.Errorf("error while signing: %w", err)
+		}
+	} else {
+		c, err = t.SignPkcs11(caCert, curve, p11Client)
+		if err != nil {
+			return fmt.Errorf("error while signing with PKCS#11: %w", err)
+		}
+	}
+
 	if !isP11 && *sf.inPubPath == "" {
 		if _, err := os.Stat(*sf.outKeyPath); err == nil {
 			return fmt.Errorf("refusing to overwrite existing key: %s", *sf.outKeyPath)
 		}
 
-		err = os.WriteFile(*sf.outKeyPath, cert.MarshalPrivateKey(curve, rawPriv), 0600)
+		err = os.WriteFile(*sf.outKeyPath, cert.MarshalPrivateKeyToPEM(curve, rawPriv), 0600)
 		if err != nil {
 			return fmt.Errorf("error while writing out-key: %s", err)
 		}
 	}
 
-	b, err := nc.MarshalToPEM()
+	b, err := c.MarshalPEM()
 	if err != nil {
 		return fmt.Errorf("error while marshalling certificate: %s", err)
 	}
