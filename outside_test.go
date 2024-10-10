@@ -1,11 +1,12 @@
 package nebula
 
 import (
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 	"net"
 	"net/netip"
 	"testing"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 
 	"github.com/slackhq/nebula/firewall"
 	"github.com/stretchr/testify/assert"
