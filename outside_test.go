@@ -1,6 +1,8 @@
 package nebula
 
 import (
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 	"net"
 	"net/netip"
 	"testing"
@@ -86,4 +88,56 @@ func Test_newPacket(t *testing.T) {
 	assert.Equal(t, p.RemoteIP, netip.MustParseAddr("10.0.0.2"))
 	assert.Equal(t, p.RemotePort, uint16(6))
 	assert.Equal(t, p.LocalPort, uint16(5))
+}
+
+func Test_newPacket_v6(t *testing.T) {
+	p := &firewall.Packet{}
+
+	ip := layers.IPv6{
+		Version:    6,
+		NextHeader: firewall.ProtoUDP,
+		HopLimit:   128,
+		SrcIP:      net.IPv6linklocalallrouters,
+		DstIP:      net.IPv6linklocalallnodes,
+	}
+
+	udp := layers.UDP{
+		SrcPort: layers.UDPPort(36123),
+		DstPort: layers.UDPPort(22),
+	}
+	err := udp.SetNetworkLayerForChecksum(&ip)
+	if err != nil {
+		panic(err)
+	}
+
+	buffer := gopacket.NewSerializeBuffer()
+	opt := gopacket.SerializeOptions{
+		ComputeChecksums: true,
+		FixLengths:       true,
+	}
+	err = gopacket.SerializeLayers(buffer, opt, &ip, &udp, gopacket.Payload([]byte{0xde, 0xad, 0xbe, 0xef}))
+	if err != nil {
+		panic(err)
+	}
+	b := buffer.Bytes()
+
+	//test incoming
+	err = newPacket(b, true, p)
+
+	assert.Nil(t, err)
+	assert.Equal(t, p.Protocol, uint8(firewall.ProtoUDP))
+	assert.Equal(t, p.RemoteIP, netip.MustParseAddr("ff02::2"))
+	assert.Equal(t, p.LocalIP, netip.MustParseAddr("ff02::1"))
+	assert.Equal(t, p.RemotePort, uint16(36123))
+	assert.Equal(t, p.LocalPort, uint16(22))
+
+	//test outgoing
+	err = newPacket(b, false, p)
+
+	assert.Nil(t, err)
+	assert.Equal(t, p.Protocol, uint8(firewall.ProtoUDP))
+	assert.Equal(t, p.LocalIP, netip.MustParseAddr("ff02::2"))
+	assert.Equal(t, p.RemoteIP, netip.MustParseAddr("ff02::1"))
+	assert.Equal(t, p.LocalPort, uint16(36123))
+	assert.Equal(t, p.RemotePort, uint16(22))
 }

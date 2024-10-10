@@ -335,11 +335,11 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 			}
 			fp.Protocol = uint8(proto)
 			if incoming {
-				fp.RemotePort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
-				fp.LocalPort = binary.BigEndian.Uint16(data[offset : offset+2])
-			} else {
 				fp.RemotePort = binary.BigEndian.Uint16(data[offset : offset+2])
 				fp.LocalPort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+			} else {
+				fp.LocalPort = binary.BigEndian.Uint16(data[offset : offset+2])
+				fp.RemotePort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
 			}
 			fp.Fragment = false
 			return nil
@@ -350,11 +350,11 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 			}
 			fp.Protocol = uint8(proto)
 			if incoming {
-				fp.RemotePort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
-				fp.LocalPort = binary.BigEndian.Uint16(data[offset : offset+2])
-			} else {
 				fp.RemotePort = binary.BigEndian.Uint16(data[offset : offset+2])
 				fp.LocalPort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+			} else {
+				fp.LocalPort = binary.BigEndian.Uint16(data[offset : offset+2])
+				fp.RemotePort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
 			}
 			fp.Fragment = false
 			return nil
