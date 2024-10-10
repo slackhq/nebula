@@ -26,8 +26,9 @@ type ConnectionState struct {
 	writeLock      sync.Mutex
 }
 
-func NewConnectionState(l *logrus.Logger, cs *CertState, initiator bool, pattern noise.HandshakePattern) *ConnectionState {
-	crt := cs.GetDefaultCertificate()
+func NewConnectionState(l *logrus.Logger, cs *CertState, version cert.Version, initiator bool, pattern noise.HandshakePattern) *ConnectionState {
+	//todo I don't like passing version as an arg here but it's the sanest way to force v2 at stage0 but only sometimes
+	crt := cs.getCertificate(version)
 	var dhFunc noise.DHFunc
 	switch crt.Curve() {
 	case cert.Curve_CURVE25519:

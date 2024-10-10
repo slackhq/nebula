@@ -3,6 +3,7 @@ package nebula
 import (
 	"context"
 	"fmt"
+	"github.com/slackhq/nebula/cert"
 	"net"
 	"net/netip"
 	"time"
@@ -61,6 +62,10 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 
 	certificate := pki.getDefaultCertificate()
+	v2Cert := pki.getCertificate(cert.Version2)
+	if v2Cert != nil {
+		certificate = v2Cert
+	}
 	fw, err := NewFirewallFromConfig(l, certificate, c)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while loading firewall rules", err)
