@@ -11,7 +11,7 @@ import (
 func TestParsequery(t *testing.T) {
 	//TODO: This test is basically pointless
 	hostMap := &HostMap{}
-	ds := newDnsRecords(hostMap)
+	ds := newDnsRecords(&CertState{}, hostMap)
 	ds.Add("test.com.com", "1.2.3.4")
 
 	m := new(dns.Msg)

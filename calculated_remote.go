@@ -38,7 +38,7 @@ func (c *calculatedRemote) String() string {
 	return fmt.Sprintf("CalculatedRemote(mask=%v port=%d)", c.ipNet, c.port)
 }
 
-func (c *calculatedRemote) Apply(ip netip.Addr) *Ip4AndPort {
+func (c *calculatedRemote) Apply(ip netip.Addr) *V4AddrPort {
 	// Combine the masked bytes of the "mask" IP with the unmasked bytes
 	// of the overlay IP
 	if c.ipNet.Addr().Is4() {
@@ -47,7 +47,7 @@ func (c *calculatedRemote) Apply(ip netip.Addr) *Ip4AndPort {
 	return c.apply6(ip)
 }
 
-func (c *calculatedRemote) apply4(ip netip.Addr) *Ip4AndPort {
+func (c *calculatedRemote) apply4(ip netip.Addr) *V4AddrPort {
 	//TODO: IPV6-WORK this can be less crappy
 	maskb := net.CIDRMask(c.mask.Bits(), c.mask.Addr().BitLen())
 	mask := binary.BigEndian.Uint32(maskb[:])
@@ -58,10 +58,10 @@ func (c *calculatedRemote) apply4(ip netip.Addr) *Ip4AndPort {
 	b = ip.As4()
 	intIp := binary.BigEndian.Uint32(b[:])
 
-	return &Ip4AndPort{(maskIp & mask) | (intIp & ^mask), c.port}
+	return &V4AddrPort{(maskIp & mask) | (intIp & ^mask), c.port}
 }
 
-func (c *calculatedRemote) apply6(ip netip.Addr) *Ip4AndPort {
+func (c *calculatedRemote) apply6(ip netip.Addr) *V4AddrPort {
 	//TODO: IPV6-WORK
 	panic("Can not calculate ipv6 remote addresses")
 }

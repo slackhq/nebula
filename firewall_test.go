@@ -149,7 +149,7 @@ func TestFirewall_Drop(t *testing.T) {
 				InvertedGroups: map[string]struct{}{"default-group": {}},
 			},
 		},
-		vpnIp: netip.MustParseAddr("1.2.3.4"),
+		vpnAddrs: []netip.Addr{netip.MustParseAddr("1.2.3.4")},
 	}
 	h.CreateRemoteCIDR(&c)
 
@@ -329,7 +329,7 @@ func TestFirewall_Drop2(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c,
 		},
-		vpnIp: network.Addr(),
+		vpnAddrs: []netip.Addr{network.Addr()},
 	}
 	h.CreateRemoteCIDR(c.Certificate)
 
@@ -391,7 +391,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c1,
 		},
-		vpnIp: network.Addr(),
+		vpnAddrs: []netip.Addr{network.Addr()},
 	}
 	h1.CreateRemoteCIDR(c1.Certificate)
 
@@ -406,7 +406,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c2,
 		},
-		vpnIp: network.Addr(),
+		vpnAddrs: []netip.Addr{network.Addr()},
 	}
 	h2.CreateRemoteCIDR(c2.Certificate)
 
@@ -421,7 +421,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c3,
 		},
-		vpnIp: network.Addr(),
+		vpnAddrs: []netip.Addr{network.Addr()},
 	}
 	h3.CreateRemoteCIDR(c3.Certificate)
 
@@ -468,7 +468,7 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c,
 		},
-		vpnIp: network.Addr(),
+		vpnAddrs: []netip.Addr{network.Addr()},
 	}
 	h.CreateRemoteCIDR(c.Certificate)
 
