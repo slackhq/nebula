@@ -134,6 +134,7 @@ func (c *Control) GetCertByVpnIp(vpnIp netip.Addr) cert.Certificate {
 	_, found := c.f.myVpnAddrsTable.Lookup(vpnIp)
 	if found {
 		//TODO: we might have 2 certs....
+		//TODO: this should return our latest version cert
 		return c.f.pki.getDefaultCertificate().Copy()
 	}
 	hi := c.f.hostMap.QueryVpnAddr(vpnIp)

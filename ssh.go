@@ -785,6 +785,7 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 		return nil
 	}
 
+	//TODO: This should return both certs
 	cert := ifce.pki.getDefaultCertificate()
 	if len(a) > 0 {
 		vpnIp, err := netip.ParseAddr(a[0])

@@ -3,6 +3,7 @@ package nebula
 import (
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -26,8 +27,7 @@ type ConnectionState struct {
 	writeLock      sync.Mutex
 }
 
-func NewConnectionState(l *logrus.Logger, cs *CertState, initiator bool, pattern noise.HandshakePattern) *ConnectionState {
-	crt := cs.GetDefaultCertificate()
+func NewConnectionState(l *logrus.Logger, cs *CertState, crt cert.Certificate, initiator bool, pattern noise.HandshakePattern) (*ConnectionState, error) {
 	var dhFunc noise.DHFunc
 	switch crt.Curve() {
 	case cert.Curve_CURVE25519:
@@ -39,8 +39,7 @@ func NewConnectionState(l *logrus.Logger, cs *CertState, initiator bool, pattern
 			dhFunc = noiseutil.DHP256
 		}
 	default:
-		l.Errorf("invalid curve: %s", crt.Curve())
-		return nil
+		return nil, fmt.Errorf("invalid curve: %s", crt.Curve())
 	}
 
 	var ncs noise.CipherSuite
@@ -53,7 +52,7 @@ func NewConnectionState(l *logrus.Logger, cs *CertState, initiator bool, pattern
 	static := noise.DHKey{Private: cs.privateKey, Public: crt.PublicKey()}
 
 	b := NewBits(ReplayWindow)
-	// Clear out bit 0, we never transmit it and we don't want it showing as packet loss
+	// Clear out bit 0, we never transmit it, and we don't want it showing as packet loss
 	b.Update(l, 0)
 
 	hs, err := noise.NewHandshakeState(noise.Config{
@@ -67,7 +66,7 @@ func NewConnectionState(l *logrus.Logger, cs *CertState, initiator bool, pattern
 		PresharedKeyPlacement: 0,
 	})
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("NewConnectionState: %s", err)
 	}
 
 	// The queue and ready params prevent a counter race that would happen when
@@ -81,7 +80,7 @@ func NewConnectionState(l *logrus.Logger, cs *CertState, initiator bool, pattern
 	// always start the counter from 2, as packet 1 and packet 2 are handshake packets.
 	ci.messageCounter.Add(2)
 
-	return ci
+	return ci, nil
 }
 
 func (cs *ConnectionState) MarshalJSON() ([]byte, error) {

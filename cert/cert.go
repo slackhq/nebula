@@ -109,6 +109,10 @@ type CachedCertificate struct {
 	signerFingerprint string
 }
 
+func (cc *CachedCertificate) String() string {
+	return cc.Certificate.String()
+}
+
 // UnmarshalCertificate will attempt to unmarshal a wire protocol level certificate.
 func UnmarshalCertificate(b []byte) (Certificate, error) {
 	//TODO: you left off here, no one uses this function but it might be beneficial to export _something_ that someone can use, maybe the Versioned unmarshallsers?

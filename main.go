@@ -7,6 +7,8 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/slackhq/nebula/cert"
+
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay"
@@ -60,7 +62,15 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		return nil, util.ContextualizeIfNeeded("Failed to load PKI from config", err)
 	}
 
-	certificate := pki.getDefaultCertificate()
+	cs := pki.getCertState()
+	certificate := cs.getCertificate(cert.Version2)
+	if certificate == nil {
+		certificate = cs.getCertificate(cert.Version1)
+	}
+
+	if certificate == nil {
+		panic("No certificates available to configure the firewall")
+	}
 	fw, err := NewFirewallFromConfig(l, certificate, c)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while loading firewall rules", err)

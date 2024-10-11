@@ -70,10 +70,12 @@ func (p *PKI) getCertState() *CertState {
 	return p.cs.Load()
 }
 
+// TODO: We should remove this
 func (p *PKI) getDefaultCertificate() cert.Certificate {
 	return p.cs.Load().GetDefaultCertificate()
 }
 
+// TODO: We should remove this
 func (p *PKI) getCertificate(v cert.Version) cert.Certificate {
 	return p.cs.Load().getCertificate(v)
 }
@@ -209,10 +211,6 @@ func (cs *CertState) GetDefaultCertificate() cert.Certificate {
 	return c
 }
 
-func (cs *CertState) getDefaultHandshakeBytes() []byte {
-	return cs.getHandshakeBytes(cs.defaultVersion)
-}
-
 func (cs *CertState) getCertificate(v cert.Version) cert.Certificate {
 	switch v {
 	case cert.Version1:
@@ -224,15 +222,17 @@ func (cs *CertState) getCertificate(v cert.Version) cert.Certificate {
 	return nil
 }
 
+// getHandshakeBytes returns the cached bytes to be used in a handshake message for the requested version.
+// Callers must check if the return []byte is nil.
 func (cs *CertState) getHandshakeBytes(v cert.Version) []byte {
 	switch v {
 	case cert.Version1:
 		return cs.v1HandshakeBytes
 	case cert.Version2:
 		return cs.v2HandshakeBytes
+	default:
+		return nil
 	}
-
-	panic("No handshake bytes found")
 }
 
 func (cs *CertState) String() string {
@@ -369,6 +369,8 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 		if v1.Curve() != v2.Curve() {
 			return nil, util.NewContextualError("v1 and v2 curve are not the same, ignoring", nil, nil)
 		}
+
+		//TODO: make sure v2 has v1s address
 
 		cs.defaultVersion = dv
 	}
