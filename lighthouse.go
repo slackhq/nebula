@@ -860,24 +860,16 @@ func (lh *LightHouse) SendUpdate() {
 		}
 	}
 
-	msg := &NebulaMeta{
-		Type: NebulaMeta_HostUpdateNotification,
-		Details: &NebulaMetaDetails{
-			V4AddrPorts: v4,
-			V6AddrPorts: v6,
-		},
-	}
-
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)
 
 	var v1Update, v2Update []byte
 	var err error
-	var v cert.Version
 	updated := 0
 	lighthouses := lh.GetLighthouses()
 
 	for lhVpnAddr := range lighthouses {
+		var v cert.Version
 		hi := lh.ifce.GetHostInfo(lhVpnAddr)
 		if hi != nil {
 			v = hi.ConnectionState.myCert.Version()
@@ -894,11 +886,17 @@ func (lh *LightHouse) SendUpdate() {
 					b := r.As4()
 					relays = append(relays, binary.BigEndian.Uint32(b[:]))
 				}
-
-				msg.Details.OldRelayVpnAddrs = relays
 				//TODO: assert ipv4
 				b := lh.myVpnNetworks[0].Addr().As4()
-				msg.Details.OldVpnAddr = binary.BigEndian.Uint32(b[:])
+				msg := NebulaMeta{
+					Type: NebulaMeta_HostUpdateNotification,
+					Details: &NebulaMetaDetails{
+						V4AddrPorts:      v4,
+						V6AddrPorts:      v6,
+						OldRelayVpnAddrs: relays,
+						OldVpnAddr:       binary.BigEndian.Uint32(b[:]),
+					},
+				}
 
 				v1Update, err = msg.Marshal()
 				if err != nil {
@@ -917,8 +915,16 @@ func (lh *LightHouse) SendUpdate() {
 				for _, r := range lh.GetRelaysForMe() {
 					relays = append(relays, netAddrToProtoAddr(r))
 				}
-				msg.Details.RelayVpnAddrs = relays
-				msg.Details.VpnAddr = netAddrToProtoAddr(lh.myVpnNetworks[0].Addr())
+
+				msg := NebulaMeta{
+					Type: NebulaMeta_HostUpdateNotification,
+					Details: &NebulaMetaDetails{
+						V4AddrPorts:   v4,
+						V6AddrPorts:   v6,
+						RelayVpnAddrs: relays,
+						VpnAddr:       netAddrToProtoAddr(lh.myVpnNetworks[0].Addr()),
+					},
+				}
 
 				v2Update, err = msg.Marshal()
 				if err != nil {
