@@ -62,10 +62,14 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		return nil, util.ContextualizeIfNeeded("Failed to load PKI from config", err)
 	}
 
-	certificate := pki.getDefaultCertificate()
-	v2Cert := pki.getCertificate(cert.Version2)
-	if v2Cert != nil {
-		certificate = v2Cert
+	cs := pki.getCertState()
+	certificate := cs.getCertificate(cert.Version2)
+	if certificate == nil {
+		certificate = cs.getCertificate(cert.Version1)
+	}
+
+	if certificate == nil {
+		panic("No certificates available to configure the firewall")
 	}
 	fw, err := NewFirewallFromConfig(l, certificate, c)
 	if err != nil {

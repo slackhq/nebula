@@ -738,43 +738,73 @@ func (lh *LightHouse) innerQueryServer(addr netip.Addr, nb, out []byte) {
 		return
 	}
 
-	// Send a query to the lighthouses and hope for the best next time
-	cs := lh.ifce.GetCertState()
-	v := cs.defaultVersion
 	msg := &NebulaMeta{
 		Type:    NebulaMeta_HostQuery,
 		Details: &NebulaMetaDetails{},
 	}
-	isV6Query := addr.Is6() && cs.v2Cert != nil
 
-	//always use v2 style for ipv6 queries
-	if v == 2 || isV6Query {
-		msg.Details.VpnAddr = netAddrToProtoAddr(addr)
-	} else if v == 1 {
-		if !addr.Is4() {
-			lh.l.WithField("vpnAddr", addr).Error("Can't query lighthouse for v6 address using a v1 protocol")
-			return
-		}
-		b := addr.As4()
-		msg.Details.OldVpnAddr = binary.BigEndian.Uint32(b[:])
-	} else {
-		panic("unsupported version")
-	}
-
-	query, err := msg.Marshal()
-	if err != nil {
-		lh.l.WithError(err).WithField("vpnAddr", addr).Error("Failed to marshal lighthouse query payload")
-		return
-	}
-
+	var v1Query, v2Query []byte
+	var err error
+	var v cert.Version
+	queried := 0
 	lighthouses := lh.GetLighthouses()
-	lh.metricTx(NebulaMeta_HostQuery, int64(len(lighthouses)))
 
-	for n := range lighthouses {
-		//TODO: there is a slight possibility this lighthouse is using a v2 protocol even if our default is v1
-		// We could facilitate the move to v2 by marshalling a v2 query
-		lh.ifce.SendMessageToVpnIp(header.LightHouse, 0, n, query, nb, out)
+	for lhVpnAddr := range lighthouses {
+		hi := lh.ifce.GetHostInfo(lhVpnAddr)
+		if hi != nil {
+			v = hi.ConnectionState.myCert.Version()
+		} else {
+			v = lh.ifce.GetCertState().defaultVersion
+		}
+
+		if v == cert.Version1 {
+			if !addr.Is4() {
+				lh.l.WithField("queryVpnAddr", addr).WithField("lighthouseAddr", lhVpnAddr).
+					Error("Can't query lighthouse for v6 address using a v1 protocol")
+				continue
+			}
+
+			if v1Query == nil {
+				b := addr.As4()
+				msg.Details.VpnAddr = nil
+				msg.Details.OldVpnAddr = binary.BigEndian.Uint32(b[:])
+
+				v1Query, err = msg.Marshal()
+				if err != nil {
+					lh.l.WithError(err).WithField("queryVpnAddr", addr).
+						WithField("lighthouseAddr", lhVpnAddr).
+						Error("Failed to marshal lighthouse v1 query payload")
+					continue
+				}
+			}
+
+			lh.ifce.SendMessageToVpnIp(header.LightHouse, 0, lhVpnAddr, v1Query, nb, out)
+			queried++
+
+		} else if v == cert.Version2 {
+			if v2Query == nil {
+				msg.Details.OldVpnAddr = 0
+				msg.Details.VpnAddr = netAddrToProtoAddr(addr)
+
+				v2Query, err = msg.Marshal()
+				if err != nil {
+					lh.l.WithError(err).WithField("queryVpnAddr", addr).
+						WithField("lighthouseAddr", lhVpnAddr).
+						Error("Failed to marshal lighthouse v2 query payload")
+					continue
+				}
+			}
+
+			lh.ifce.SendMessageToVpnIp(header.LightHouse, 0, lhVpnAddr, v2Query, nb, out)
+			queried++
+
+		} else {
+			lh.l.Debugf("Can not query lighthouse for %v using unknown protocol version: %v", addr, v)
+			continue
+		}
 	}
+
+	lh.metricTx(NebulaMeta_HostQuery, int64(queried))
 }
 
 func (lh *LightHouse) StartUpdateWorker() {

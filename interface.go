@@ -14,6 +14,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
@@ -327,7 +328,17 @@ func (f *Interface) reloadFirewall(c *config.C) {
 		return
 	}
 
-	fw, err := NewFirewallFromConfig(f.l, f.pki.getDefaultCertificate(), c)
+	cs := f.pki.getCertState()
+	certificate := cs.getCertificate(cert.Version2)
+	if certificate == nil {
+		certificate = cs.getCertificate(cert.Version1)
+	}
+
+	if certificate == nil {
+		panic("No certificate available to reconfigure the firewall")
+	}
+
+	fw, err := NewFirewallFromConfig(f.l, certificate, c)
 	if err != nil {
 		f.l.WithError(err).Error("Error while creating firewall during reload")
 		return
