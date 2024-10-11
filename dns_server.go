@@ -130,7 +130,7 @@ func (d *dnsRecords) parseQuery(m *dns.Msg, w dns.ResponseWriter) {
 				}
 			}
 		case dns.TypeTXT:
-			// We only answer these queries from non nebula nodes or localhost
+			// We only answer these queries from nebula nodes or localhost
 			if !d.isSelfNebulaOrLocalhost(w.RemoteAddr().String()) {
 				return
 			}
