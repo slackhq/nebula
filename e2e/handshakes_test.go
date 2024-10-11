@@ -976,6 +976,12 @@ func TestV2NonPrimaryWithLighthouse(t *testing.T) {
 		},
 		"lighthouse": m{
 			"hosts": []string{lhVpnIpNet[1].Addr().String()},
+			"local_allow_list": m{
+				// Try and block our lighthouse updates from using the actual addresses assigned to this computer
+				// If we start discovering addresses the test router doesn't know about then test traffic cant flow
+				"10.0.0.0/24": true,
+				"::/0":        false,
+			},
 		},
 	}
 	myControl, myVpnIpNet, _, _ := newSimpleServer(cert.Version2, ca, caKey, "me  ", "10.128.0.2/24, ff::2/64", o)

@@ -488,7 +488,7 @@ func (r *R) RouteForAllUntilTxTun(receiver *nebula.Control) []byte {
 			c := r.getControl(a, p.To, p)
 			if c == nil {
 				r.Unlock()
-				panic("No control for udp tx " + a.String())
+				panic(fmt.Sprintf("No control for udp tx %s", p.To))
 			}
 			fp := r.unlockedInjectFlow(cm[x], c, p, false)
 			c.InjectUDPPacket(p)
