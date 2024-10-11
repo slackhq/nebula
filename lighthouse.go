@@ -860,56 +860,90 @@ func (lh *LightHouse) SendUpdate() {
 		}
 	}
 
-	v := lh.ifce.GetCertState().defaultVersion
-	msg := &NebulaMeta{
-		Type: NebulaMeta_HostUpdateNotification,
-		Details: &NebulaMetaDetails{
-			V4AddrPorts: v4,
-			V6AddrPorts: v6,
-		},
-	}
-
-	if v == 1 {
-		var relays []uint32
-		for _, r := range lh.GetRelaysForMe() {
-			if !r.Is4() {
-				continue
-			}
-			b := r.As4()
-			relays = append(relays, binary.BigEndian.Uint32(b[:]))
-		}
-
-		msg.Details.OldRelayVpnAddrs = relays
-		//TODO: assert ipv4
-		b := lh.myVpnNetworks[0].Addr().As4()
-		msg.Details.OldVpnAddr = binary.BigEndian.Uint32(b[:])
-
-	} else if v == 2 {
-		var relays []*Addr
-		for _, r := range lh.GetRelaysForMe() {
-			relays = append(relays, netAddrToProtoAddr(r))
-		}
-		msg.Details.RelayVpnAddrs = relays
-		msg.Details.VpnAddr = netAddrToProtoAddr(lh.myVpnNetworks[0].Addr())
-
-	} else {
-		panic("protocol version not supported")
-	}
-
-	lighthouses := lh.GetLighthouses()
-	lh.metricTx(NebulaMeta_HostUpdateNotification, int64(len(lighthouses)))
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)
 
-	mm, err := msg.Marshal()
-	if err != nil {
-		lh.l.WithError(err).Error("Error while marshaling for lighthouse update")
-		return
+	var v1Update, v2Update []byte
+	var err error
+	updated := 0
+	lighthouses := lh.GetLighthouses()
+
+	for lhVpnAddr := range lighthouses {
+		var v cert.Version
+		hi := lh.ifce.GetHostInfo(lhVpnAddr)
+		if hi != nil {
+			v = hi.ConnectionState.myCert.Version()
+		} else {
+			v = lh.ifce.GetCertState().defaultVersion
+		}
+		if v == cert.Version1 {
+			if v1Update == nil {
+				var relays []uint32
+				for _, r := range lh.GetRelaysForMe() {
+					if !r.Is4() {
+						continue
+					}
+					b := r.As4()
+					relays = append(relays, binary.BigEndian.Uint32(b[:]))
+				}
+				//TODO: assert ipv4
+				b := lh.myVpnNetworks[0].Addr().As4()
+				msg := NebulaMeta{
+					Type: NebulaMeta_HostUpdateNotification,
+					Details: &NebulaMetaDetails{
+						V4AddrPorts:      v4,
+						V6AddrPorts:      v6,
+						OldRelayVpnAddrs: relays,
+						OldVpnAddr:       binary.BigEndian.Uint32(b[:]),
+					},
+				}
+
+				v1Update, err = msg.Marshal()
+				if err != nil {
+					lh.l.WithError(err).WithField("lighthouseAddr", lhVpnAddr).
+						Error("Error while marshaling for lighthouse v1 update")
+					continue
+				}
+			}
+
+			lh.ifce.SendMessageToVpnIp(header.LightHouse, 0, lhVpnAddr, v1Update, nb, out)
+			updated++
+
+		} else if v == cert.Version2 {
+			if v2Update == nil {
+				var relays []*Addr
+				for _, r := range lh.GetRelaysForMe() {
+					relays = append(relays, netAddrToProtoAddr(r))
+				}
+
+				msg := NebulaMeta{
+					Type: NebulaMeta_HostUpdateNotification,
+					Details: &NebulaMetaDetails{
+						V4AddrPorts:   v4,
+						V6AddrPorts:   v6,
+						RelayVpnAddrs: relays,
+						VpnAddr:       netAddrToProtoAddr(lh.myVpnNetworks[0].Addr()),
+					},
+				}
+
+				v2Update, err = msg.Marshal()
+				if err != nil {
+					lh.l.WithError(err).WithField("lighthouseAddr", lhVpnAddr).
+						Error("Error while marshaling for lighthouse v2 update")
+					continue
+				}
+			}
+
+			lh.ifce.SendMessageToVpnIp(header.LightHouse, 0, lhVpnAddr, v2Update, nb, out)
+			updated++
+
+		} else {
+			lh.l.Debugf("Can not update lighthouse using unknown protocol version: %v", v)
+			continue
+		}
 	}
 
-	for vpnIp := range lighthouses {
-		lh.ifce.SendMessageToVpnIp(header.LightHouse, 0, vpnIp, mm, nb, out)
-	}
+	lh.metricTx(NebulaMeta_HostUpdateNotification, int64(updated))
 }
 
 type LightHouseHandler struct {
