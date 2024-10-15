@@ -104,14 +104,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 				return
 			case ForwardingType:
 				// Find the target HostInfo relay object
-				var targetHI *HostInfo
-				var targetRelay *Relay
-				for _, vpnAddr := range hostinfo.vpnAddrs {
-					targetHI, targetRelay, err = f.hostMap.QueryVpnAddrRelayFor(vpnAddr, relay.PeerAddr)
-					if err == nil {
-						break
-					}
-				}
+				targetHI, targetRelay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relay.PeerAddr)
 				if err != nil {
 					hostinfo.logger(f.l).WithField("relayTo", relay.PeerAddr).WithError(err).WithField("hostinfo.vpnAddrs", hostinfo.vpnAddrs).Info("Failed to find target host info by ip")
 					return
