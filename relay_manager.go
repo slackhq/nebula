@@ -280,8 +280,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 
 		msg, err := resp.Marshal()
 		if err != nil {
-			logMsg.
-				WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
+			logMsg.WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
 		} else {
 			f.SendMessageToHostInfo(header.Control, 0, h, msg, make([]byte, 12), make([]byte, mtu))
 			rm.l.WithFields(logrus.Fields{
@@ -335,29 +334,27 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 			}
 
 			if v == cert.Version1 {
-				if !h.vpnAddrs[0].Is4() {
+				if !from.Is4() {
 					//TODO: log it
 					return
 				}
-
-				b := h.vpnAddrs[0].As4()
+				b := from.As4()
 				req.OldRelayFromAddr = binary.BigEndian.Uint32(b[:])
 				b = target.As4()
 				req.OldRelayToAddr = binary.BigEndian.Uint32(b[:])
 			} else {
-				req.RelayFromAddr = netAddrToProtoAddr(h.vpnAddrs[0])
+				req.RelayFromAddr = netAddrToProtoAddr(from)
 				req.RelayToAddr = netAddrToProtoAddr(target)
 			}
 
 			msg, err := req.Marshal()
 			if err != nil {
-				logMsg.
-					WithError(err).Error("relayManager Failed to marshal Control message to create relay")
+				logMsg.WithError(err).Error("relayManager Failed to marshal Control message to create relay")
 			} else {
 				f.SendMessageToHostInfo(header.Control, 0, peer, msg, make([]byte, 12), make([]byte, mtu))
 				rm.l.WithFields(logrus.Fields{
 					//TODO: IPV6-WORK another lazy used to use the req object
-					"relayFrom":           h.vpnAddrs[0],
+					"relayFrom":           from,
 					"relayTo":             target,
 					"initiatorRelayIndex": req.InitiatorRelayIndex,
 					"responderRelayIndex": req.ResponderRelayIndex,
@@ -375,8 +372,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 			}
 			_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, ForwardingType, state)
 			if err != nil {
-				logMsg.
-					WithError(err).Error("relayManager Failed to allocate a local index for relay")
+				logMsg.WithError(err).Error("relayManager Failed to allocate a local index for relay")
 				return
 			}
 		} else {
@@ -397,29 +393,28 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 				}
 
 				if v == cert.Version1 {
-					if !h.vpnAddrs[0].Is4() {
+					if !from.Is4() {
 						//TODO: log it
 						return
 					}
 
-					b := h.vpnAddrs[0].As4()
+					b := from.As4()
 					resp.OldRelayFromAddr = binary.BigEndian.Uint32(b[:])
 					b = target.As4()
 					resp.OldRelayToAddr = binary.BigEndian.Uint32(b[:])
 				} else {
-					resp.RelayFromAddr = netAddrToProtoAddr(h.vpnAddrs[0])
+					resp.RelayFromAddr = netAddrToProtoAddr(from)
 					resp.RelayToAddr = netAddrToProtoAddr(target)
 				}
 
 				msg, err := resp.Marshal()
 				if err != nil {
-					rm.l.
-						WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
+					rm.l.WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
 				} else {
 					f.SendMessageToHostInfo(header.Control, 0, h, msg, make([]byte, 12), make([]byte, mtu))
 					rm.l.WithFields(logrus.Fields{
 						//TODO: IPV6-WORK more lazy, used to use resp object
-						"relayFrom":           h.vpnAddrs[0],
+						"relayFrom":           from,
 						"relayTo":             target,
 						"initiatorRelayIndex": resp.InitiatorRelayIndex,
 						"responderRelayIndex": resp.ResponderRelayIndex,
