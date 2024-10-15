@@ -456,18 +456,19 @@ func (hm *HostMap) QueryVpnAddrsRelayFor(targetIps []netip.Addr, relayHostIp net
 	hm.RLock()
 	defer hm.RUnlock()
 
-	for _, targetIp := range targetIps {
-		h, ok := hm.Hosts[relayHostIp]
-		if !ok {
-			return nil, nil, errors.New("unable to find host")
-		}
-		for h != nil {
+	h, ok := hm.Hosts[relayHostIp]
+	if !ok {
+		return nil, nil, errors.New("unable to find host")
+	}
+
+	for h != nil {
+		for _, targetIp := range targetIps {
 			r, ok := h.relayState.QueryRelayForByIp(targetIp)
 			if ok && r.State == Established {
 				return h, r, nil
 			}
-			h = h.next
 		}
+		h = h.next
 	}
 
 	return nil, nil, errors.New("unable to find host with relay")
