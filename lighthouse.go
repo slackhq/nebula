@@ -23,9 +23,6 @@ import (
 	"github.com/slackhq/nebula/util"
 )
 
-//TODO: if a lighthouse doesn't have an answer, clients AGGRESSIVELY REQUERY.. why? handshake manager and/or getOrHandshake?
-//TODO: nodes are roaming lighthouses, this is bad. How are they learning?
-
 var ErrHostNotKnown = errors.New("host not known")
 
 type LightHouse struct {
@@ -595,7 +592,6 @@ func (lh *LightHouse) addStaticRemotes(i int, d time.Duration, network string, t
 // lighthouse.calculated_remotes configuration. It returns true if any
 // calculated remotes were added
 func (lh *LightHouse) addCalculatedRemotes(vpnAddr netip.Addr) bool {
-	//TODO: this needs to support v6 addresses too
 	tree := lh.getCalculatedRemotes()
 	if tree == nil {
 		return false
@@ -605,11 +601,19 @@ func (lh *LightHouse) addCalculatedRemotes(vpnAddr netip.Addr) bool {
 		return false
 	}
 
-	var calculated []*V4AddrPort
+	var calculatedV4 []*V4AddrPort
+	var calculatedV6 []*V6AddrPort
 	for _, cr := range calculatedRemotes {
-		c := cr.Apply(vpnAddr)
-		if c != nil {
-			calculated = append(calculated, c)
+		if vpnAddr.Is4() {
+			c := cr.ApplyV4(vpnAddr)
+			if c != nil {
+				calculatedV4 = append(calculatedV4, c)
+			}
+		} else if vpnAddr.Is6() {
+			c := cr.ApplyV6(vpnAddr)
+			if c != nil {
+				calculatedV6 = append(calculatedV6, c)
+			}
 		}
 	}
 
@@ -619,9 +623,15 @@ func (lh *LightHouse) addCalculatedRemotes(vpnAddr netip.Addr) bool {
 	defer am.Unlock()
 	lh.Unlock()
 
-	am.unlockedSetV4(lh.myVpnNetworks[0].Addr(), vpnAddr, calculated, lh.unlockedShouldAddV4)
+	if len(calculatedV4) > 0 {
+		am.unlockedSetV4(lh.myVpnNetworks[0].Addr(), vpnAddr, calculatedV4, lh.unlockedShouldAddV4)
+	}
 
-	return len(calculated) > 0
+	if len(calculatedV6) > 0 {
+		am.unlockedSetV6(lh.myVpnNetworks[0].Addr(), vpnAddr, calculatedV6, lh.unlockedShouldAddV6)
+	}
+
+	return len(calculatedV4) > 0 || len(calculatedV6) > 0
 }
 
 // unlockedGetRemoteList
