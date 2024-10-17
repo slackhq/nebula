@@ -152,7 +152,7 @@ func TestFirewall_Drop(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{netip.MustParseAddr("1.2.3.4")},
 	}
-	h.CreateRemoteCIDR(&c)
+	h.buildNetworks(&c)
 
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, &c)
 	assert.Nil(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", netip.Prefix{}, netip.Prefix{}, "", ""))
@@ -332,7 +332,7 @@ func TestFirewall_Drop2(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{network.Addr()},
 	}
-	h.CreateRemoteCIDR(c.Certificate)
+	h.buildNetworks(c.Certificate)
 
 	c1 := cert.CachedCertificate{
 		Certificate: &dummyCert{
@@ -346,7 +346,7 @@ func TestFirewall_Drop2(t *testing.T) {
 			peerCert: &c1,
 		},
 	}
-	h1.CreateRemoteCIDR(c1.Certificate)
+	h1.buildNetworks(c1.Certificate)
 
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
 	assert.Nil(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"default-group", "test-group"}, "", netip.Prefix{}, netip.Prefix{}, "", ""))
@@ -394,7 +394,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{network.Addr()},
 	}
-	h1.CreateRemoteCIDR(c1.Certificate)
+	h1.buildNetworks(c1.Certificate)
 
 	c2 := cert.CachedCertificate{
 		Certificate: &dummyCert{
@@ -409,7 +409,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{network.Addr()},
 	}
-	h2.CreateRemoteCIDR(c2.Certificate)
+	h2.buildNetworks(c2.Certificate)
 
 	c3 := cert.CachedCertificate{
 		Certificate: &dummyCert{
@@ -424,7 +424,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{network.Addr()},
 	}
-	h3.CreateRemoteCIDR(c3.Certificate)
+	h3.buildNetworks(c3.Certificate)
 
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
 	assert.Nil(t, fw.AddRule(true, firewall.ProtoAny, 1, 1, []string{}, "host1", netip.Prefix{}, netip.Prefix{}, "", ""))
@@ -471,7 +471,7 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{network.Addr()},
 	}
-	h.CreateRemoteCIDR(c.Certificate)
+	h.buildNetworks(c.Certificate)
 
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
 	assert.Nil(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", netip.Prefix{}, netip.Prefix{}, "", ""))

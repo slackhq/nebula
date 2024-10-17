@@ -191,8 +191,10 @@ type HostInfo struct {
 	localIndexId    uint32
 	vpnAddrs        []netip.Addr
 	recvError       atomic.Uint32
-	remoteCidr      *bart.Table[struct{}] //TODO: rename `vpnNetworks`
-	relayState      RelayState
+
+	// networks are both all vpn and unsafe networks assigned to this host
+	networks   *bart.Table[struct{}]
+	relayState RelayState
 
 	// HandshakePacket records the packets used to create this hostinfo
 	// We need these to avoid replayed handshake packets creating new hostinfos which causes churn
@@ -652,21 +654,20 @@ func (i *HostInfo) RecvErrorExceeded() bool {
 	return true
 }
 
-func (i *HostInfo) CreateRemoteCIDR(c cert.Certificate) {
+func (i *HostInfo) buildNetworks(c cert.Certificate) {
 	if len(c.Networks()) == 1 && len(c.UnsafeNetworks()) == 0 {
 		// Simple case, no CIDRTree needed
 		return
 	}
 
-	remoteCidr := new(bart.Table[struct{}])
+	i.networks = new(bart.Table[struct{}])
 	for _, network := range c.Networks() {
-		remoteCidr.Insert(network, struct{}{})
+		i.networks.Insert(network, struct{}{})
 	}
 
 	for _, network := range c.UnsafeNetworks() {
-		remoteCidr.Insert(network, struct{}{})
+		i.networks.Insert(network, struct{}{})
 	}
-	i.remoteCidr = remoteCidr
 }
 
 func (i *HostInfo) logger(l *logrus.Logger) *logrus.Entry {
