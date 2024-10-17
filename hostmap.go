@@ -689,9 +689,9 @@ func (i *HostInfo) logger(l *logrus.Logger) *logrus.Entry {
 
 // Utility functions
 
-func localIps(l *logrus.Logger, allowList *LocalAllowList) []netip.Addr {
+func localAddrs(l *logrus.Logger, allowList *LocalAllowList) []netip.Addr {
 	//FIXME: This function is pretty garbage
-	var ips []netip.Addr
+	var finalAddrs []netip.Addr
 	ifaces, _ := net.Interfaces()
 	for _, i := range ifaces {
 		allow := allowList.AllowName(i.Name)
@@ -703,39 +703,38 @@ func localIps(l *logrus.Logger, allowList *LocalAllowList) []netip.Addr {
 			continue
 		}
 		addrs, _ := i.Addrs()
-		for _, addr := range addrs {
-			var ip net.IP
-			switch v := addr.(type) {
+		for _, rawAddr := range addrs {
+			var addr netip.Addr
+			switch v := rawAddr.(type) {
 			case *net.IPNet:
 				//continue
-				ip = v.IP
+				addr, _ = netip.AddrFromSlice(v.IP)
 			case *net.IPAddr:
-				ip = v.IP
+				addr, _ = netip.AddrFromSlice(v.IP)
 			}
 
-			nip, ok := netip.AddrFromSlice(ip)
-			if !ok {
+			if !addr.IsValid() {
 				if l.Level >= logrus.DebugLevel {
-					l.WithField("localIp", ip).Debug("ip was invalid for netip")
+					l.WithField("localAddr", rawAddr).Debug("addr was invalid")
 				}
 				continue
 			}
-			nip = nip.Unmap()
+			addr = addr.Unmap()
 
 			//TODO: Filtering out link local for now, this is probably the most correct thing
 			//TODO: Would be nice to filter out SLAAC MAC based ips as well
-			if nip.IsLoopback() == false && nip.IsLinkLocalUnicast() == false {
-				allow := allowList.Allow(nip)
+			if addr.IsLoopback() == false && addr.IsLinkLocalUnicast() == false {
+				isAllowed := allowList.Allow(addr)
 				if l.Level >= logrus.TraceLevel {
-					l.WithField("localIp", nip).WithField("allow", allow).Trace("localAllowList.Allow")
+					l.WithField("localAddr", addr).WithField("allowed", isAllowed).Trace("localAllowList.Allow")
 				}
-				if !allow {
+				if !isAllowed {
 					continue
 				}
 
-				ips = append(ips, nip)
+				finalAddrs = append(finalAddrs, addr)
 			}
 		}
 	}
-	return ips
+	return finalAddrs
 }

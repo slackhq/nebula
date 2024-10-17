@@ -170,7 +170,7 @@ func (hr *hostnamesResults) Cancel() {
 	}
 }
 
-func (hr *hostnamesResults) GetIPs() []netip.AddrPort {
+func (hr *hostnamesResults) GetAddrs() []netip.AddrPort {
 	var retSlice []netip.AddrPort
 	if hr != nil {
 		p := hr.ips.Load()
@@ -579,7 +579,7 @@ func (r *RemoteList) unlockedCollect() {
 		}
 	}
 
-	dnsAddrs := r.hr.GetIPs()
+	dnsAddrs := r.hr.GetAddrs()
 	for _, addr := range dnsAddrs {
 		if r.shouldAdd == nil || r.shouldAdd(addr.Addr()) {
 			addrs = append(addrs, addr)
