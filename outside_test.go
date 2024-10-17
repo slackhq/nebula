@@ -64,8 +64,8 @@ func Test_newPacket(t *testing.T) {
 
 	assert.Nil(t, err)
 	assert.Equal(t, p.Protocol, uint8(firewall.ProtoTCP))
-	assert.Equal(t, p.LocalIP, netip.MustParseAddr("10.0.0.2"))
-	assert.Equal(t, p.RemoteIP, netip.MustParseAddr("10.0.0.1"))
+	assert.Equal(t, p.LocalAddr, netip.MustParseAddr("10.0.0.2"))
+	assert.Equal(t, p.RemoteAddr, netip.MustParseAddr("10.0.0.1"))
 	assert.Equal(t, p.RemotePort, uint16(3))
 	assert.Equal(t, p.LocalPort, uint16(4))
 
@@ -85,8 +85,8 @@ func Test_newPacket(t *testing.T) {
 
 	assert.Nil(t, err)
 	assert.Equal(t, p.Protocol, uint8(2))
-	assert.Equal(t, p.LocalIP, netip.MustParseAddr("10.0.0.1"))
-	assert.Equal(t, p.RemoteIP, netip.MustParseAddr("10.0.0.2"))
+	assert.Equal(t, p.LocalAddr, netip.MustParseAddr("10.0.0.1"))
+	assert.Equal(t, p.RemoteAddr, netip.MustParseAddr("10.0.0.2"))
 	assert.Equal(t, p.RemotePort, uint16(6))
 	assert.Equal(t, p.LocalPort, uint16(5))
 }
@@ -127,8 +127,8 @@ func Test_newPacket_v6(t *testing.T) {
 
 	assert.Nil(t, err)
 	assert.Equal(t, p.Protocol, uint8(firewall.ProtoUDP))
-	assert.Equal(t, p.RemoteIP, netip.MustParseAddr("ff02::2"))
-	assert.Equal(t, p.LocalIP, netip.MustParseAddr("ff02::1"))
+	assert.Equal(t, p.RemoteAddr, netip.MustParseAddr("ff02::2"))
+	assert.Equal(t, p.LocalAddr, netip.MustParseAddr("ff02::1"))
 	assert.Equal(t, p.RemotePort, uint16(36123))
 	assert.Equal(t, p.LocalPort, uint16(22))
 
@@ -137,8 +137,8 @@ func Test_newPacket_v6(t *testing.T) {
 
 	assert.Nil(t, err)
 	assert.Equal(t, p.Protocol, uint8(firewall.ProtoUDP))
-	assert.Equal(t, p.LocalIP, netip.MustParseAddr("ff02::2"))
-	assert.Equal(t, p.RemoteIP, netip.MustParseAddr("ff02::1"))
+	assert.Equal(t, p.LocalAddr, netip.MustParseAddr("ff02::2"))
+	assert.Equal(t, p.RemoteAddr, netip.MustParseAddr("ff02::1"))
 	assert.Equal(t, p.LocalPort, uint16(36123))
 	assert.Equal(t, p.RemotePort, uint16(22))
 }

@@ -302,11 +302,11 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 	}
 
 	if incoming {
-		fp.RemoteIP, _ = netip.AddrFromSlice(data[8:24])
-		fp.LocalIP, _ = netip.AddrFromSlice(data[24:40])
+		fp.RemoteAddr, _ = netip.AddrFromSlice(data[8:24])
+		fp.LocalAddr, _ = netip.AddrFromSlice(data[24:40])
 	} else {
-		fp.LocalIP, _ = netip.AddrFromSlice(data[8:24])
-		fp.RemoteIP, _ = netip.AddrFromSlice(data[24:40])
+		fp.LocalAddr, _ = netip.AddrFromSlice(data[8:24])
+		fp.RemoteAddr, _ = netip.AddrFromSlice(data[24:40])
 	}
 
 	//TODO: whats a reasonable number of extension headers to attempt to parse?
@@ -417,8 +417,8 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 
 	// Firewall packets are locally oriented
 	if incoming {
-		fp.RemoteIP, _ = netip.AddrFromSlice(data[12:16])
-		fp.LocalIP, _ = netip.AddrFromSlice(data[16:20])
+		fp.RemoteAddr, _ = netip.AddrFromSlice(data[12:16])
+		fp.LocalAddr, _ = netip.AddrFromSlice(data[16:20])
 		if fp.Fragment || fp.Protocol == firewall.ProtoICMP {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
@@ -427,8 +427,8 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4])
 		}
 	} else {
-		fp.LocalIP, _ = netip.AddrFromSlice(data[12:16])
-		fp.RemoteIP, _ = netip.AddrFromSlice(data[16:20])
+		fp.LocalAddr, _ = netip.AddrFromSlice(data[12:16])
+		fp.RemoteAddr, _ = netip.AddrFromSlice(data[16:20])
 		if fp.Fragment || fp.Protocol == firewall.ProtoICMP {
 			fp.RemotePort = 0
 			fp.LocalPort = 0

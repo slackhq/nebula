@@ -191,7 +191,7 @@ type HostInfo struct {
 	localIndexId    uint32
 	vpnAddrs        []netip.Addr
 	recvError       atomic.Uint32
-	remoteCidr      *bart.Table[struct{}]
+	remoteCidr      *bart.Table[struct{}] //TODO: rename `vpnNetworks`
 	relayState      RelayState
 
 	// HandshakePacket records the packets used to create this hostinfo

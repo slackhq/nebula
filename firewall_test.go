@@ -13,6 +13,7 @@ import (
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewFirewall(t *testing.T) {
@@ -128,8 +129,8 @@ func TestFirewall_Drop(t *testing.T) {
 	l.SetOutput(ob)
 
 	p := firewall.Packet{
-		LocalIP:    netip.MustParseAddr("1.2.3.4"),
-		RemoteIP:   netip.MustParseAddr("1.2.3.4"),
+		LocalAddr:  netip.MustParseAddr("1.2.3.4"),
+		RemoteAddr: netip.MustParseAddr("1.2.3.4"),
 		LocalPort:  10,
 		RemotePort: 90,
 		Protocol:   firewall.ProtoUDP,
@@ -166,10 +167,10 @@ func TestFirewall_Drop(t *testing.T) {
 	assert.NoError(t, fw.Drop(p, false, &h, cp, nil))
 
 	// test remote mismatch
-	oldRemote := p.RemoteIP
-	p.RemoteIP = netip.MustParseAddr("1.2.3.10")
+	oldRemote := p.RemoteAddr
+	p.RemoteAddr = netip.MustParseAddr("1.2.3.10")
 	assert.Equal(t, fw.Drop(p, false, &h, cp, nil), ErrInvalidRemoteIP)
-	p.RemoteIP = oldRemote
+	p.RemoteAddr = oldRemote
 
 	// ensure signer doesn't get in the way of group checks
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, &c)
@@ -235,7 +236,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 		}
 		ip := netip.MustParsePrefix("9.254.254.254/32")
 		for n := 0; n < b.N; n++ {
-			assert.False(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 100, LocalIP: ip.Addr()}, true, c, cp))
+			assert.False(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 100, LocalAddr: ip.Addr()}, true, c, cp))
 		}
 	})
 
@@ -261,7 +262,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 			InvertedGroups: map[string]struct{}{"nope": {}},
 		}
 		for n := 0; n < b.N; n++ {
-			assert.False(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 100, LocalIP: pfix.Addr()}, true, c, cp))
+			assert.False(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 100, LocalAddr: pfix.Addr()}, true, c, cp))
 		}
 	})
 
@@ -285,7 +286,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 			InvertedGroups: map[string]struct{}{"good-group": {}},
 		}
 		for n := 0; n < b.N; n++ {
-			assert.True(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 100, LocalIP: pfix.Addr()}, true, c, cp))
+			assert.True(b, ft.match(firewall.Packet{Protocol: firewall.ProtoTCP, LocalPort: 100, LocalAddr: pfix.Addr()}, true, c, cp))
 		}
 	})
 
@@ -308,8 +309,8 @@ func TestFirewall_Drop2(t *testing.T) {
 	l.SetOutput(ob)
 
 	p := firewall.Packet{
-		LocalIP:    netip.MustParseAddr("1.2.3.4"),
-		RemoteIP:   netip.MustParseAddr("1.2.3.4"),
+		LocalAddr:  netip.MustParseAddr("1.2.3.4"),
+		RemoteAddr: netip.MustParseAddr("1.2.3.4"),
 		LocalPort:  10,
 		RemotePort: 90,
 		Protocol:   firewall.ProtoUDP,
@@ -364,8 +365,8 @@ func TestFirewall_Drop3(t *testing.T) {
 	l.SetOutput(ob)
 
 	p := firewall.Packet{
-		LocalIP:    netip.MustParseAddr("1.2.3.4"),
-		RemoteIP:   netip.MustParseAddr("1.2.3.4"),
+		LocalAddr:  netip.MustParseAddr("1.2.3.4"),
+		RemoteAddr: netip.MustParseAddr("1.2.3.4"),
 		LocalPort:  1,
 		RemotePort: 1,
 		Protocol:   firewall.ProtoUDP,
@@ -446,8 +447,8 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 	l.SetOutput(ob)
 
 	p := firewall.Packet{
-		LocalIP:    netip.MustParseAddr("1.2.3.4"),
-		RemoteIP:   netip.MustParseAddr("1.2.3.4"),
+		LocalAddr:  netip.MustParseAddr("1.2.3.4"),
+		RemoteAddr: netip.MustParseAddr("1.2.3.4"),
 		LocalPort:  10,
 		RemotePort: 90,
 		Protocol:   firewall.ProtoUDP,
@@ -622,55 +623,58 @@ func TestNewFirewallFromConfig(t *testing.T) {
 	l := test.NewLogger()
 	// Test a bad rule definition
 	c := &dummyCert{}
+	cs, err := newCertState(cert.Version2, nil, c, false, cert.Curve_CURVE25519, nil)
+	require.NoError(t, err)
+
 	conf := config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": "asdf"}
-	_, err := NewFirewallFromConfig(l, c, conf)
+	_, err = NewFirewallFromConfig(l, cs, conf)
 	assert.EqualError(t, err, "firewall.outbound failed to parse, should be an array of rules")
 
 	// Test both port and code
 	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"port": "1", "code": "2"}}}
-	_, err = NewFirewallFromConfig(l, c, conf)
+	_, err = NewFirewallFromConfig(l, cs, conf)
 	assert.EqualError(t, err, "firewall.outbound rule #0; only one of port or code should be provided")
 
 	// Test missing host, group, cidr, ca_name and ca_sha
 	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{}}}
-	_, err = NewFirewallFromConfig(l, c, conf)
+	_, err = NewFirewallFromConfig(l, cs, conf)
 	assert.EqualError(t, err, "firewall.outbound rule #0; at least one of host, group, cidr, local_cidr, ca_name, or ca_sha must be provided")
 
 	// Test code/port error
 	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"code": "a", "host": "testh"}}}
-	_, err = NewFirewallFromConfig(l, c, conf)
+	_, err = NewFirewallFromConfig(l, cs, conf)
 	assert.EqualError(t, err, "firewall.outbound rule #0; code was not a number; `a`")
 
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"port": "a", "host": "testh"}}}
-	_, err = NewFirewallFromConfig(l, c, conf)
+	_, err = NewFirewallFromConfig(l, cs, conf)
 	assert.EqualError(t, err, "firewall.outbound rule #0; port was not a number; `a`")
 
 	// Test proto error
 	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"code": "1", "host": "testh"}}}
-	_, err = NewFirewallFromConfig(l, c, conf)
+	_, err = NewFirewallFromConfig(l, cs, conf)
 	assert.EqualError(t, err, "firewall.outbound rule #0; proto was not understood; ``")
 
 	// Test cidr parse error
 	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"code": "1", "cidr": "testh", "proto": "any"}}}
-	_, err = NewFirewallFromConfig(l, c, conf)
+	_, err = NewFirewallFromConfig(l, cs, conf)
 	assert.EqualError(t, err, "firewall.outbound rule #0; cidr did not parse; netip.ParsePrefix(\"testh\"): no '/'")
 
 	// Test local_cidr parse error
 	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"code": "1", "local_cidr": "testh", "proto": "any"}}}
-	_, err = NewFirewallFromConfig(l, c, conf)
+	_, err = NewFirewallFromConfig(l, cs, conf)
 	assert.EqualError(t, err, "firewall.outbound rule #0; local_cidr did not parse; netip.ParsePrefix(\"testh\"): no '/'")
 
 	// Test both group and groups
 	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "group": "a", "groups": []string{"b", "c"}}}}
-	_, err = NewFirewallFromConfig(l, c, conf)
+	_, err = NewFirewallFromConfig(l, cs, conf)
 	assert.EqualError(t, err, "firewall.inbound rule #0; only one of group or groups should be defined, both provided")
 }
 

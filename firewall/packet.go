@@ -20,8 +20,8 @@ const (
 )
 
 type Packet struct {
-	LocalIP    netip.Addr
-	RemoteIP   netip.Addr
+	LocalAddr  netip.Addr
+	RemoteAddr netip.Addr
 	LocalPort  uint16
 	RemotePort uint16
 	Protocol   uint8
@@ -30,8 +30,8 @@ type Packet struct {
 
 func (fp *Packet) Copy() *Packet {
 	return &Packet{
-		LocalIP:    fp.LocalIP,
-		RemoteIP:   fp.RemoteIP,
+		LocalAddr:  fp.LocalAddr,
+		RemoteAddr: fp.RemoteAddr,
 		LocalPort:  fp.LocalPort,
 		RemotePort: fp.RemotePort,
 		Protocol:   fp.Protocol,
@@ -52,8 +52,8 @@ func (fp Packet) MarshalJSON() ([]byte, error) {
 		proto = fmt.Sprintf("unknown %v", fp.Protocol)
 	}
 	return json.Marshal(m{
-		"LocalIP":    fp.LocalIP.String(),
-		"RemoteIP":   fp.RemoteIP.String(),
+		"LocalAddr":  fp.LocalAddr.String(),
+		"RemoteAddr": fp.RemoteAddr.String(),
 		"LocalPort":  fp.LocalPort,
 		"RemotePort": fp.RemotePort,
 		"Protocol":   proto,
