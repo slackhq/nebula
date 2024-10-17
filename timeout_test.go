@@ -116,10 +116,10 @@ func TestTimerWheel_Purge(t *testing.T) {
 	assert.Equal(t, 0, tw.current)
 
 	fps := []firewall.Packet{
-		{LocalIP: netip.MustParseAddr("0.0.0.1")},
-		{LocalIP: netip.MustParseAddr("0.0.0.2")},
-		{LocalIP: netip.MustParseAddr("0.0.0.3")},
-		{LocalIP: netip.MustParseAddr("0.0.0.4")},
+		{LocalAddr: netip.MustParseAddr("0.0.0.1")},
+		{LocalAddr: netip.MustParseAddr("0.0.0.2")},
+		{LocalAddr: netip.MustParseAddr("0.0.0.3")},
+		{LocalAddr: netip.MustParseAddr("0.0.0.4")},
 	}
 
 	tw.Add(fps[0], time.Second*1)
