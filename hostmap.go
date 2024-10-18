@@ -454,7 +454,7 @@ func (hm *HostMap) QueryVpnAddr(vpnIp netip.Addr) *HostInfo {
 	return hm.queryVpnAddr(vpnIp, nil)
 }
 
-func (hm *HostMap) QueryVpnAddrRelayFor(targetIp, relayHostIp netip.Addr) (*HostInfo, *Relay, error) {
+func (hm *HostMap) QueryVpnAddrsRelayFor(targetIps []netip.Addr, relayHostIp netip.Addr) (*HostInfo, *Relay, error) {
 	hm.RLock()
 	defer hm.RUnlock()
 
@@ -462,13 +462,17 @@ func (hm *HostMap) QueryVpnAddrRelayFor(targetIp, relayHostIp netip.Addr) (*Host
 	if !ok {
 		return nil, nil, errors.New("unable to find host")
 	}
+
 	for h != nil {
-		r, ok := h.relayState.QueryRelayForByIp(targetIp)
-		if ok && r.State == Established {
-			return h, r, nil
+		for _, targetIp := range targetIps {
+			r, ok := h.relayState.QueryRelayForByIp(targetIp)
+			if ok && r.State == Established {
+				return h, r, nil
+			}
 		}
 		h = h.next
 	}
+
 	return nil, nil, errors.New("unable to find host with relay")
 }
 
