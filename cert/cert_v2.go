@@ -20,8 +20,6 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
-//TODO: should we avoid hex encoding shit on output? Just let it be base64?
-
 const (
 	classConstructed     = 0x20
 	classContextSpecific = 0x80
@@ -217,6 +215,7 @@ func (c *certificateV2) VerifyPrivateKey(curve Curve, key []byte) error {
 func (c *certificateV2) String() string {
 	b, err := json.MarshalIndent(c.marshalJSON(), "", "\t")
 	if err != nil {
+		//TODO: should we panic instead?
 		return "<error marshalling certificate>"
 	}
 	return string(b)
@@ -309,25 +308,36 @@ func (c *certificateV2) marshalJSON() m {
 func (c *certificateV2) Copy() Certificate {
 	nc := &certificateV2{
 		details: detailsV2{
-			name:           c.details.name,
-			groups:         make([]string, len(c.details.groups)),
-			networks:       make([]netip.Prefix, len(c.details.networks)),
-			unsafeNetworks: make([]netip.Prefix, len(c.details.unsafeNetworks)),
-			notBefore:      c.details.notBefore,
-			notAfter:       c.details.notAfter,
-			isCA:           c.details.isCA,
-			issuer:         c.details.issuer,
+			name:      c.details.name,
+			notBefore: c.details.notBefore,
+			notAfter:  c.details.notAfter,
+			isCA:      c.details.isCA,
+			issuer:    c.details.issuer,
 		},
-		curve:     c.curve,
-		publicKey: make([]byte, len(c.publicKey)),
-		signature: make([]byte, len(c.signature)),
+		curve:      c.curve,
+		publicKey:  make([]byte, len(c.publicKey)),
+		signature:  make([]byte, len(c.signature)),
+		rawDetails: make([]byte, len(c.rawDetails)),
 	}
 
+	if c.details.groups != nil {
+		nc.details.groups = make([]string, len(c.details.groups))
+		copy(nc.details.groups, c.details.groups)
+	}
+
+	if c.details.networks != nil {
+		nc.details.networks = make([]netip.Prefix, len(c.details.networks))
+		copy(nc.details.networks, c.details.networks)
+	}
+
+	if c.details.unsafeNetworks != nil {
+		nc.details.unsafeNetworks = make([]netip.Prefix, len(c.details.unsafeNetworks))
+		copy(nc.details.unsafeNetworks, c.details.unsafeNetworks)
+	}
+
+	copy(nc.rawDetails, c.rawDetails)
 	copy(nc.signature, c.signature)
-	copy(nc.details.groups, c.details.groups)
 	copy(nc.publicKey, c.publicKey)
-	copy(nc.details.networks, c.details.networks)
-	copy(nc.details.unsafeNetworks, c.details.unsafeNetworks)
 
 	return nc
 }

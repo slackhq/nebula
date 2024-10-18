@@ -11,7 +11,6 @@ import (
 	"dario.cat/mergo"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/e2e"
 	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v2"
 )
@@ -19,7 +18,7 @@ import (
 type m map[string]interface{}
 
 func newSimpleService(caCrt cert.Certificate, caKey []byte, name string, udpIp netip.Addr, overrides m) *Service {
-	_, _, myPrivKey, myPEM := e2e.NewTestCert(cert.Version2, caCrt, caKey, "a", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{netip.PrefixFrom(udpIp, 24)}, nil, []string{})
+	_, _, myPrivKey, myPEM := cert.NewTestCert(cert.Version2, cert.Curve_CURVE25519, caCrt, caKey, "a", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{netip.PrefixFrom(udpIp, 24)}, nil, []string{})
 	caB, err := caCrt.MarshalPEM()
 	if err != nil {
 		panic(err)
@@ -79,7 +78,7 @@ func newSimpleService(caCrt cert.Certificate, caKey []byte, name string, udpIp n
 }
 
 func TestService(t *testing.T) {
-	ca, _, caKey, _ := e2e.NewTestCaCert(time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	ca, _, caKey, _ := cert.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
 	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
 		"static_host_map": m{},
 		"lighthouse": m{
