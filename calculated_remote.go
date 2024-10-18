@@ -21,7 +21,11 @@ type calculatedRemote struct {
 	port  uint32
 }
 
-func newCalculatedRemote(maskCidr netip.Prefix, port int) (*calculatedRemote, error) {
+func newCalculatedRemote(cidr, maskCidr netip.Prefix, port int) (*calculatedRemote, error) {
+	if maskCidr.Addr().BitLen() != cidr.Addr().BitLen() {
+		return nil, fmt.Errorf("invalid mask: %s for cidr: %s", maskCidr, cidr)
+	}
+
 	masked := maskCidr.Masked()
 	if port < 0 || port > math.MaxUint16 {
 		return nil, fmt.Errorf("invalid port: %d", port)
@@ -38,32 +42,38 @@ func (c *calculatedRemote) String() string {
 	return fmt.Sprintf("CalculatedRemote(mask=%v port=%d)", c.ipNet, c.port)
 }
 
-func (c *calculatedRemote) Apply(ip netip.Addr) *Ip4AndPort {
-	// Combine the masked bytes of the "mask" IP with the unmasked bytes
-	// of the overlay IP
-	if c.ipNet.Addr().Is4() {
-		return c.apply4(ip)
-	}
-	return c.apply6(ip)
-}
-
-func (c *calculatedRemote) apply4(ip netip.Addr) *Ip4AndPort {
-	//TODO: IPV6-WORK this can be less crappy
+func (c *calculatedRemote) ApplyV4(addr netip.Addr) *V4AddrPort {
+	// Combine the masked bytes of the "mask" IP with the unmasked bytes of the overlay IP
 	maskb := net.CIDRMask(c.mask.Bits(), c.mask.Addr().BitLen())
 	mask := binary.BigEndian.Uint32(maskb[:])
 
 	b := c.mask.Addr().As4()
-	maskIp := binary.BigEndian.Uint32(b[:])
+	maskAddr := binary.BigEndian.Uint32(b[:])
 
-	b = ip.As4()
-	intIp := binary.BigEndian.Uint32(b[:])
+	b = addr.As4()
+	intAddr := binary.BigEndian.Uint32(b[:])
 
-	return &Ip4AndPort{(maskIp & mask) | (intIp & ^mask), c.port}
+	return &V4AddrPort{(maskAddr & mask) | (intAddr & ^mask), c.port}
 }
 
-func (c *calculatedRemote) apply6(ip netip.Addr) *Ip4AndPort {
-	//TODO: IPV6-WORK
-	panic("Can not calculate ipv6 remote addresses")
+func (c *calculatedRemote) ApplyV6(addr netip.Addr) *V6AddrPort {
+	mask := net.CIDRMask(c.mask.Bits(), c.mask.Addr().BitLen())
+	maskAddr := c.mask.Addr().As16()
+	calcAddr := addr.As16()
+
+	ap := V6AddrPort{Port: c.port}
+
+	maskb := binary.BigEndian.Uint64(mask[:8])
+	maskAddrb := binary.BigEndian.Uint64(maskAddr[:8])
+	calcAddrb := binary.BigEndian.Uint64(calcAddr[:8])
+	ap.Hi = (maskAddrb & maskb) | (calcAddrb & ^maskb)
+
+	maskb = binary.BigEndian.Uint64(mask[8:])
+	maskAddrb = binary.BigEndian.Uint64(maskAddr[8:])
+	calcAddrb = binary.BigEndian.Uint64(calcAddr[8:])
+	ap.Lo = (maskAddrb & maskb) | (calcAddrb & ^maskb)
+
+	return &ap
 }
 
 func NewCalculatedRemotesFromConfig(c *config.C, k string) (*bart.Table[[]*calculatedRemote], error) {
@@ -89,8 +99,7 @@ func NewCalculatedRemotesFromConfig(c *config.C, k string) (*bart.Table[[]*calcu
 			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s", k, rawCIDR)
 		}
 
-		//TODO: IPV6-WORK this does not verify that rawValue contains the same bits as cidr here
-		entry, err := newCalculatedRemotesListFromConfig(rawValue)
+		entry, err := newCalculatedRemotesListFromConfig(cidr, rawValue)
 		if err != nil {
 			return nil, fmt.Errorf("config '%s.%s': %w", k, rawCIDR, err)
 		}
@@ -101,7 +110,7 @@ func NewCalculatedRemotesFromConfig(c *config.C, k string) (*bart.Table[[]*calcu
 	return calculatedRemotes, nil
 }
 
-func newCalculatedRemotesListFromConfig(raw any) ([]*calculatedRemote, error) {
+func newCalculatedRemotesListFromConfig(cidr netip.Prefix, raw any) ([]*calculatedRemote, error) {
 	rawList, ok := raw.([]any)
 	if !ok {
 		return nil, fmt.Errorf("calculated_remotes entry has invalid type: %T", raw)
@@ -109,7 +118,7 @@ func newCalculatedRemotesListFromConfig(raw any) ([]*calculatedRemote, error) {
 
 	var l []*calculatedRemote
 	for _, e := range rawList {
-		c, err := newCalculatedRemotesEntryFromConfig(e)
+		c, err := newCalculatedRemotesEntryFromConfig(cidr, e)
 		if err != nil {
 			return nil, fmt.Errorf("calculated_remotes entry: %w", err)
 		}
@@ -119,7 +128,7 @@ func newCalculatedRemotesListFromConfig(raw any) ([]*calculatedRemote, error) {
 	return l, nil
 }
 
-func newCalculatedRemotesEntryFromConfig(raw any) (*calculatedRemote, error) {
+func newCalculatedRemotesEntryFromConfig(cidr netip.Prefix, raw any) (*calculatedRemote, error) {
 	rawMap, ok := raw.(map[any]any)
 	if !ok {
 		return nil, fmt.Errorf("invalid type: %T", raw)
@@ -155,5 +164,5 @@ func newCalculatedRemotesEntryFromConfig(raw any) (*calculatedRemote, error) {
 		return nil, fmt.Errorf("invalid port (type %T): %v", rawValue, rawValue)
 	}
 
-	return newCalculatedRemote(maskCidr, port)
+	return newCalculatedRemote(cidr, maskCidr, port)
 }
