@@ -5,7 +5,8 @@
 /nebula-darwin
 /nebula.exe
 /nebula-cert.exe
-/coverage.out
+**/coverage.out
+**/cover.out
 /cpu.pprof
 /build
 /*.tar.gz
