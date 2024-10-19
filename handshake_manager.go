@@ -77,6 +77,20 @@ type HandshakeHostInfo struct {
 	hostinfo *HostInfo
 }
 
+type packetCallback func(t header.MessageType, st header.MessageSubType, h *HostInfo, p, nb, out []byte)
+
+type cachedPacket struct {
+	messageType    header.MessageType
+	messageSubType header.MessageSubType
+	callback       packetCallback
+	packet         []byte
+}
+
+type cachedPacketMetrics struct {
+	sent    metrics.Counter
+	dropped metrics.Counter
+}
+
 func (hh *HandshakeHostInfo) cachePacket(l *logrus.Logger, t header.MessageType, st header.MessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
 	if len(hh.packetStore) < 100 {
 		tempPacket := make([]byte, len(packet))
