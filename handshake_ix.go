@@ -418,6 +418,21 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 	fingerprint := remoteCert.Fingerprint
 	issuer := remoteCert.Certificate.Issuer()
 
+	hostinfo.remoteIndexId = hs.Details.ResponderIndex
+	hostinfo.lastHandshakeTime = hs.Details.Time
+
+	// Store their cert and our symmetric keys
+	ci.peerCert = remoteCert
+	ci.dKey = NewNebulaCipherState(dKey)
+	ci.eKey = NewNebulaCipherState(eKey)
+
+	// Make sure the current udpAddr being used is set for responding
+	if addr.IsValid() {
+		hostinfo.SetRemote(addr)
+	} else {
+		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnIp)
+	}
+
 	// Ensure the right host responded
 	if vpnIp != hostinfo.vpnIp {
 		f.l.WithField("intendedVpnIp", hostinfo.vpnIp).WithField("haveVpnIp", vpnIp).
@@ -435,10 +450,8 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 			newHH.hostinfo.remotes = hostinfo.remotes
 			newHH.hostinfo.remotes.BlockRemote(addr)
 
-			// Get the correct remote list for the host we did handshake with
-			hostinfo.remotes = f.lightHouse.QueryCache(vpnIp)
-
-			f.l.WithField("blockedUdpAddrs", newHH.hostinfo.remotes.CopyBlockedRemotes()).WithField("vpnIp", vpnIp).
+			f.l.WithField("blockedUdpAddrs", newHH.hostinfo.remotes.CopyBlockedRemotes()).
+				WithField("vpnIp", newHH.hostinfo.vpnIp).
 				WithField("remotes", newHH.hostinfo.remotes.CopyAddrs(f.hostMap.GetPreferredRanges())).
 				Info("Blocked addresses for handshakes")
 
@@ -446,6 +459,9 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 			newHH.packetStore = hh.packetStore
 			hh.packetStore = []*cachedPacket{}
 
+			// Get the correct remote list for the host we did handshake with
+			hostinfo.SetRemote(addr)
+			hostinfo.remotes = f.lightHouse.QueryCache(vpnIp)
 			// Finally, put the correct vpn ip in the host info, tell them to close the tunnel, and return true to tear down
 			hostinfo.vpnIp = vpnIp
 			f.sendCloseTunnel(hostinfo)
@@ -467,21 +483,6 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		WithField("durationNs", duration).
 		WithField("sentCachedPackets", len(hh.packetStore)).
 		Info("Handshake message received")
-
-	hostinfo.remoteIndexId = hs.Details.ResponderIndex
-	hostinfo.lastHandshakeTime = hs.Details.Time
-
-	// Store their cert and our symmetric keys
-	ci.peerCert = remoteCert
-	ci.dKey = NewNebulaCipherState(dKey)
-	ci.eKey = NewNebulaCipherState(eKey)
-
-	// Make sure the current udpAddr being used is set for responding
-	if addr.IsValid() {
-		hostinfo.SetRemote(addr)
-	} else {
-		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnIp)
-	}
 
 	// Build up the radix for the firewall if we have subnets in the cert
 	hostinfo.CreateRemoteCIDR(remoteCert.Certificate)

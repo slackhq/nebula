@@ -576,7 +576,9 @@ func (r *RemoteList) unlockedCollect() {
 	dnsAddrs := r.hr.GetIPs()
 	for _, addr := range dnsAddrs {
 		if r.shouldAdd == nil || r.shouldAdd(addr.Addr()) {
-			addrs = append(addrs, addr)
+			if !r.unlockedIsBad(addr) {
+				addrs = append(addrs, addr)
+			}
 		}
 	}
 

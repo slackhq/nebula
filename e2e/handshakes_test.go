@@ -97,15 +97,9 @@ func TestGoodHandshake(t *testing.T) {
 func TestWrongResponderHandshake(t *testing.T) {
 	ca, _, caKey, _ := NewTestCaCert(time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
 
-	// The IPs here are chosen on purpose:
-	// The current remote handling will sort by preference, public, and then lexically.
-	// So we need them to have a higher address than evil (we could apply a preference though)
 	myControl, myVpnIpNet, myUdpAddr, _ := newSimpleServer(ca, caKey, "me", "10.128.0.100/24", nil)
 	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServer(ca, caKey, "them", "10.128.0.99/24", nil)
 	evilControl, evilVpnIp, evilUdpAddr, _ := newSimpleServer(ca, caKey, "evil", "10.128.0.2/24", nil)
-
-	// Add their real udp addr, which should be tried after evil.
-	myControl.InjectLightHouseAddr(theirVpnIpNet.Addr(), theirUdpAddr)
 
 	// Put the evil udp addr in for their vpn Ip, this is a case of being lied to by the lighthouse.
 	myControl.InjectLightHouseAddr(theirVpnIpNet.Addr(), evilUdpAddr)
@@ -119,10 +113,30 @@ func TestWrongResponderHandshake(t *testing.T) {
 	theirControl.Start()
 	evilControl.Start()
 
-	t.Log("Start the handshake process, we will route until we see our cached packet get sent to them")
+	t.Log("Start the handshake process, we will route until we see the evil tunnel closed")
 	myControl.InjectTunUDPPacket(theirVpnIpNet.Addr(), 80, 80, []byte("Hi from me"))
+
+	h := &header.H{}
 	r.RouteForAllExitFunc(func(p *udp.Packet, c *nebula.Control) router.ExitType {
-		h := &header.H{}
+		err := h.Parse(p.Data)
+		if err != nil {
+			panic(err)
+		}
+
+		if h.Type == header.CloseTunnel && p.To == evilUdpAddr {
+			return router.RouteAndExit
+		}
+
+		return router.KeepRouting
+	})
+
+	t.Log("Evil tunnel is closed, inject the correct udp addr for them")
+	myControl.InjectLightHouseAddr(theirVpnIpNet.Addr(), theirUdpAddr)
+	pendingHi := myControl.GetHostInfoByVpnIp(theirVpnIpNet.Addr(), true)
+	assert.NotContains(t, pendingHi.RemoteAddrs, evilUdpAddr)
+
+	t.Log("Route until we see the cached packet")
+	r.RouteForAllExitFunc(func(p *udp.Packet, c *nebula.Control) router.ExitType {
 		err := h.Parse(p.Data)
 		if err != nil {
 			panic(err)
@@ -151,7 +165,90 @@ func TestWrongResponderHandshake(t *testing.T) {
 	t.Log("Ensure ensure I don't have any hostinfo artifacts from evil")
 	assert.Nil(t, myControl.GetHostInfoByVpnIp(evilVpnIp.Addr(), true), "My pending hostmap should not contain evil")
 	assert.Nil(t, myControl.GetHostInfoByVpnIp(evilVpnIp.Addr(), false), "My main hostmap should not contain evil")
-	//NOTE: if evil lost the handshake race it may still have a tunnel since me would reject the handshake since the tunnel is complete
+
+	//TODO: assert hostmaps for everyone
+	r.RenderHostmaps("Final hostmaps", myControl, theirControl, evilControl)
+	t.Log("Success!")
+	myControl.Stop()
+	theirControl.Stop()
+}
+
+func TestWrongResponderHandshakeStaticHostMap(t *testing.T) {
+	ca, _, caKey, _ := NewTestCaCert(time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+
+	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServer(ca, caKey, "them", "10.128.0.99/24", nil)
+	evilControl, evilVpnIp, evilUdpAddr, _ := newSimpleServer(ca, caKey, "evil", "10.128.0.2/24", nil)
+	o := m{
+		"static_host_map": m{
+			theirVpnIpNet.Addr().String(): []string{evilUdpAddr.String()},
+		},
+	}
+	myControl, myVpnIpNet, myUdpAddr, _ := newSimpleServer(ca, caKey, "me", "10.128.0.100/24", o)
+
+	// Put the evil udp addr in for their vpn addr, this is a case of a remote at a static entry changing its vpn addr.
+	myControl.InjectLightHouseAddr(theirVpnIpNet.Addr(), evilUdpAddr)
+
+	// Build a router so we don't have to reason who gets which packet
+	r := router.NewR(t, myControl, theirControl, evilControl)
+	defer r.RenderFlow()
+
+	// Start the servers
+	myControl.Start()
+	theirControl.Start()
+	evilControl.Start()
+
+	t.Log("Start the handshake process, we will route until we see the evil tunnel closed")
+	myControl.InjectTunUDPPacket(theirVpnIpNet.Addr(), 80, 80, []byte("Hi from me"))
+
+	h := &header.H{}
+	r.RouteForAllExitFunc(func(p *udp.Packet, c *nebula.Control) router.ExitType {
+		err := h.Parse(p.Data)
+		if err != nil {
+			panic(err)
+		}
+
+		if h.Type == header.CloseTunnel && p.To == evilUdpAddr {
+			return router.RouteAndExit
+		}
+
+		return router.KeepRouting
+	})
+
+	t.Log("Evil tunnel is closed, inject the correct udp addr for them")
+	myControl.InjectLightHouseAddr(theirVpnIpNet.Addr(), theirUdpAddr)
+	pendingHi := myControl.GetHostInfoByVpnIp(theirVpnIpNet.Addr(), true)
+	assert.NotContains(t, pendingHi.RemoteAddrs, evilUdpAddr)
+
+	t.Log("Route until we see the cached packet")
+	r.RouteForAllExitFunc(func(p *udp.Packet, c *nebula.Control) router.ExitType {
+		err := h.Parse(p.Data)
+		if err != nil {
+			panic(err)
+		}
+
+		if p.To == theirUdpAddr && h.Type == 1 {
+			return router.RouteAndExit
+		}
+
+		return router.KeepRouting
+	})
+
+	//TODO: Assert pending hostmap - I should have a correct hostinfo for them now
+
+	t.Log("My cached packet should be received by them")
+	myCachedPacket := theirControl.GetFromTun(true)
+	assertUdpPacket(t, []byte("Hi from me"), myCachedPacket, myVpnIpNet.Addr(), theirVpnIpNet.Addr(), 80, 80)
+
+	t.Log("Test the tunnel with them")
+	assertHostInfoPair(t, myUdpAddr, theirUdpAddr, myVpnIpNet.Addr(), theirVpnIpNet.Addr(), myControl, theirControl)
+	assertTunnel(t, myVpnIpNet.Addr(), theirVpnIpNet.Addr(), myControl, theirControl, r)
+
+	t.Log("Flush all packets from all controllers")
+	r.FlushAll()
+
+	t.Log("Ensure ensure I don't have any hostinfo artifacts from evil")
+	assert.Nil(t, myControl.GetHostInfoByVpnIp(evilVpnIp.Addr(), true), "My pending hostmap should not contain evil")
+	assert.Nil(t, myControl.GetHostInfoByVpnIp(evilVpnIp.Addr(), false), "My main hostmap should not contain evil")
 
 	//TODO: assert hostmaps for everyone
 	r.RenderHostmaps("Final hostmaps", myControl, theirControl, evilControl)
