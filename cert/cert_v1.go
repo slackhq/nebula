@@ -210,7 +210,8 @@ func (c *certificateV1) getRawDetails() *RawNebulaCertificateDetails {
 func (c *certificateV1) String() string {
 	b, err := json.MarshalIndent(c.marshalJSON(), "", "\t")
 	if err != nil {
-		return "<error marshalling certificate>"
+		//TODO: should we panic instead?
+		return fmt.Sprintf("<error marshalling certificate: %v>", err)
 	}
 	return string(b)
 }
@@ -271,25 +272,34 @@ func (c *certificateV1) marshalJSON() m {
 func (c *certificateV1) Copy() Certificate {
 	nc := &certificateV1{
 		details: detailsV1{
-			name:           c.details.name,
-			groups:         make([]string, len(c.details.groups)),
-			networks:       make([]netip.Prefix, len(c.details.networks)),
-			unsafeNetworks: make([]netip.Prefix, len(c.details.unsafeNetworks)),
-			notBefore:      c.details.notBefore,
-			notAfter:       c.details.notAfter,
-			publicKey:      make([]byte, len(c.details.publicKey)),
-			isCA:           c.details.isCA,
-			issuer:         c.details.issuer,
-			curve:          c.details.curve,
+			name:      c.details.name,
+			notBefore: c.details.notBefore,
+			notAfter:  c.details.notAfter,
+			publicKey: make([]byte, len(c.details.publicKey)),
+			isCA:      c.details.isCA,
+			issuer:    c.details.issuer,
+			curve:     c.details.curve,
 		},
 		signature: make([]byte, len(c.signature)),
 	}
 
+	if c.details.groups != nil {
+		nc.details.groups = make([]string, len(c.details.groups))
+		copy(nc.details.groups, c.details.groups)
+	}
+
+	if c.details.networks != nil {
+		nc.details.networks = make([]netip.Prefix, len(c.details.networks))
+		copy(nc.details.networks, c.details.networks)
+	}
+
+	if c.details.unsafeNetworks != nil {
+		nc.details.unsafeNetworks = make([]netip.Prefix, len(c.details.unsafeNetworks))
+		copy(nc.details.unsafeNetworks, c.details.unsafeNetworks)
+	}
+
 	copy(nc.signature, c.signature)
-	copy(nc.details.groups, c.details.groups)
 	copy(nc.details.publicKey, c.details.publicKey)
-	copy(nc.details.networks, c.details.networks)
-	copy(nc.details.unsafeNetworks, c.details.unsafeNetworks)
 
 	return nc
 }
@@ -391,8 +401,6 @@ func unmarshalCertificateV1(b []byte, publicKey []byte) (*certificateV1, error) 
 			nc.details.unsafeNetworks[i/2] = netip.PrefixFrom(ip, ones)
 		}
 	}
-
-	//do not sort the subnets field for V1 certs
 
 	return &nc, nil
 }
