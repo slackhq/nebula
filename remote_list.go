@@ -13,6 +13,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const MaxRemotes = 10
+
 // forEachFunc is used to benefit folks that want to do work inside the lock
 type forEachFunc func(addr netip.AddrPort, preferred bool)
 
