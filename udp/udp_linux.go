@@ -14,8 +14,6 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/firewall"
-	"github.com/slackhq/nebula/header"
 	"golang.org/x/sys/unix"
 )
 
@@ -120,15 +118,9 @@ func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	}
 }
 
-func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int) {
-	plaintext := make([]byte, MTU)
-	h := &header.H{}
-	fwPacket := &firewall.Packet{}
+func (u *StdConn) ListenOut(r EncReader) {
 	var ip netip.Addr
-	nb := make([]byte, 12, 12)
 
-	//TODO: should we track this?
-	//metric := metrics.GetOrRegisterHistogram("test.batch_read", nil, metrics.NewExpDecaySample(1028, 0.015))
 	msgs, buffers, names := u.PrepareRawMessages(u.batch)
 	read := u.ReadMulti
 	if u.batch == 1 {
@@ -142,26 +134,14 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 			return
 		}
 
-		//metric.Update(int64(n))
 		for i := 0; i < n; i++ {
+			// Its ok to skip the ok check here, the slicing is the only error that can occur and it will panic
 			if u.isV4 {
 				ip, _ = netip.AddrFromSlice(names[i][4:8])
-				//TODO: IPV6-WORK what is not ok?
 			} else {
 				ip, _ = netip.AddrFromSlice(names[i][8:24])
-				//TODO: IPV6-WORK what is not ok?
 			}
-			r(
-				netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])),
-				plaintext[:0],
-				buffers[i][:msgs[i].Len],
-				h,
-				fwPacket,
-				lhf,
-				nb,
-				q,
-				cache.Get(u.l),
-			)
+			r(netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])), buffers[i][:msgs[i].Len])
 		}
 	}
 }
