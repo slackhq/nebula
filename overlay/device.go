@@ -8,7 +8,7 @@ import (
 type Device interface {
 	io.ReadWriteCloser
 	Activate() error
-	Cidr() netip.Prefix
+	Networks() []netip.Prefix
 	Name() string
 	RouteFor(netip.Addr) netip.Addr
 	NewMultiQueueReader() (io.ReadWriteCloser, error)

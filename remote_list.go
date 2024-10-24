@@ -17,8 +17,8 @@ import (
 type forEachFunc func(addr netip.AddrPort, preferred bool)
 
 // The checkFuncs here are to simplify bulk importing LH query response logic into a single function (reset slice and iterate)
-type checkFuncV4 func(vpnIp netip.Addr, to *Ip4AndPort) bool
-type checkFuncV6 func(vpnIp netip.Addr, to *Ip6AndPort) bool
+type checkFuncV4 func(vpnIp netip.Addr, to *V4AddrPort) bool
+type checkFuncV6 func(vpnIp netip.Addr, to *V6AddrPort) bool
 
 // CacheMap is a struct that better represents the lighthouse cache for humans
 // The string key is the owners vpnIp
@@ -48,14 +48,14 @@ type cacheRelay struct {
 
 // cacheV4 stores learned and reported ipv4 records under cache
 type cacheV4 struct {
-	learned  *Ip4AndPort
-	reported []*Ip4AndPort
+	learned  *V4AddrPort
+	reported []*V4AddrPort
 }
 
 // cacheV4 stores learned and reported ipv6 records under cache
 type cacheV6 struct {
-	learned  *Ip6AndPort
-	reported []*Ip6AndPort
+	learned  *V6AddrPort
+	reported []*V6AddrPort
 }
 
 type hostnamePort struct {
@@ -170,7 +170,7 @@ func (hr *hostnamesResults) Cancel() {
 	}
 }
 
-func (hr *hostnamesResults) GetIPs() []netip.AddrPort {
+func (hr *hostnamesResults) GetAddrs() []netip.AddrPort {
 	var retSlice []netip.AddrPort
 	if hr != nil {
 		p := hr.ips.Load()
@@ -188,6 +188,9 @@ func (hr *hostnamesResults) GetIPs() []netip.AddrPort {
 type RemoteList struct {
 	// Every interaction with internals requires a lock!
 	sync.RWMutex
+
+	// The full list of vpn addresses assigned to this host
+	vpnAddrs []netip.Addr
 
 	// A deduplicated set of addresses. Any accessor should lock beforehand.
 	addrs []netip.AddrPort
@@ -212,13 +215,16 @@ type RemoteList struct {
 }
 
 // NewRemoteList creates a new empty RemoteList
-func NewRemoteList(shouldAdd func(netip.Addr) bool) *RemoteList {
-	return &RemoteList{
+func NewRemoteList(vpnAddrs []netip.Addr, shouldAdd func(netip.Addr) bool) *RemoteList {
+	r := &RemoteList{
+		vpnAddrs:  make([]netip.Addr, len(vpnAddrs)),
 		addrs:     make([]netip.AddrPort, 0),
 		relays:    make([]netip.Addr, 0),
 		cache:     make(map[netip.Addr]*cache),
 		shouldAdd: shouldAdd,
 	}
+	copy(r.vpnAddrs, vpnAddrs)
+	return r
 }
 
 func (r *RemoteList) unlockedSetHostnamesResults(hr *hostnamesResults) {
@@ -273,9 +279,9 @@ func (r *RemoteList) LearnRemote(ownerVpnIp netip.Addr, remote netip.AddrPort) {
 	r.Lock()
 	defer r.Unlock()
 	if remote.Addr().Is4() {
-		r.unlockedSetLearnedV4(ownerVpnIp, NewIp4AndPortFromNetIP(remote.Addr(), remote.Port()))
+		r.unlockedSetLearnedV4(ownerVpnIp, netAddrToProtoV4AddrPort(remote.Addr(), remote.Port()))
 	} else {
-		r.unlockedSetLearnedV6(ownerVpnIp, NewIp6AndPortFromNetIP(remote.Addr(), remote.Port()))
+		r.unlockedSetLearnedV6(ownerVpnIp, netAddrToProtoV6AddrPort(remote.Addr(), remote.Port()))
 	}
 }
 
@@ -304,21 +310,21 @@ func (r *RemoteList) CopyCache() *CacheMap {
 
 		if mc.v4 != nil {
 			if mc.v4.learned != nil {
-				c.Learned = append(c.Learned, AddrPortFromIp4AndPort(mc.v4.learned))
+				c.Learned = append(c.Learned, protoV4AddrPortToNetAddrPort(mc.v4.learned))
 			}
 
 			for _, a := range mc.v4.reported {
-				c.Reported = append(c.Reported, AddrPortFromIp4AndPort(a))
+				c.Reported = append(c.Reported, protoV4AddrPortToNetAddrPort(a))
 			}
 		}
 
 		if mc.v6 != nil {
 			if mc.v6.learned != nil {
-				c.Learned = append(c.Learned, AddrPortFromIp6AndPort(mc.v6.learned))
+				c.Learned = append(c.Learned, protoV6AddrPortToNetAddrPort(mc.v6.learned))
 			}
 
 			for _, a := range mc.v6.reported {
-				c.Reported = append(c.Reported, AddrPortFromIp6AndPort(a))
+				c.Reported = append(c.Reported, protoV6AddrPortToNetAddrPort(a))
 			}
 		}
 
@@ -401,14 +407,14 @@ func (r *RemoteList) unlockedIsBad(remote netip.AddrPort) bool {
 
 // unlockedSetLearnedV4 assumes you have the write lock and sets the current learned address for this owner and marks the
 // deduplicated address list as dirty
-func (r *RemoteList) unlockedSetLearnedV4(ownerVpnIp netip.Addr, to *Ip4AndPort) {
+func (r *RemoteList) unlockedSetLearnedV4(ownerVpnIp netip.Addr, to *V4AddrPort) {
 	r.shouldRebuild = true
 	r.unlockedGetOrMakeV4(ownerVpnIp).learned = to
 }
 
 // unlockedSetV4 assumes you have the write lock and resets the reported list of ips for this owner to the list provided
 // and marks the deduplicated address list as dirty
-func (r *RemoteList) unlockedSetV4(ownerVpnIp, vpnIp netip.Addr, to []*Ip4AndPort, check checkFuncV4) {
+func (r *RemoteList) unlockedSetV4(ownerVpnIp, vpnIp netip.Addr, to []*V4AddrPort, check checkFuncV4) {
 	r.shouldRebuild = true
 	c := r.unlockedGetOrMakeV4(ownerVpnIp)
 
@@ -436,12 +442,12 @@ func (r *RemoteList) unlockedSetRelay(ownerVpnIp, vpnIp netip.Addr, to []netip.A
 
 // unlockedPrependV4 assumes you have the write lock and prepends the address in the reported list for this owner
 // This is only useful for establishing static hosts
-func (r *RemoteList) unlockedPrependV4(ownerVpnIp netip.Addr, to *Ip4AndPort) {
+func (r *RemoteList) unlockedPrependV4(ownerVpnIp netip.Addr, to *V4AddrPort) {
 	r.shouldRebuild = true
 	c := r.unlockedGetOrMakeV4(ownerVpnIp)
 
 	// We are doing the easy append because this is rarely called
-	c.reported = append([]*Ip4AndPort{to}, c.reported...)
+	c.reported = append([]*V4AddrPort{to}, c.reported...)
 	if len(c.reported) > MaxRemotes {
 		c.reported = c.reported[:MaxRemotes]
 	}
@@ -449,14 +455,14 @@ func (r *RemoteList) unlockedPrependV4(ownerVpnIp netip.Addr, to *Ip4AndPort) {
 
 // unlockedSetLearnedV6 assumes you have the write lock and sets the current learned address for this owner and marks the
 // deduplicated address list as dirty
-func (r *RemoteList) unlockedSetLearnedV6(ownerVpnIp netip.Addr, to *Ip6AndPort) {
+func (r *RemoteList) unlockedSetLearnedV6(ownerVpnIp netip.Addr, to *V6AddrPort) {
 	r.shouldRebuild = true
 	r.unlockedGetOrMakeV6(ownerVpnIp).learned = to
 }
 
 // unlockedSetV6 assumes you have the write lock and resets the reported list of ips for this owner to the list provided
 // and marks the deduplicated address list as dirty
-func (r *RemoteList) unlockedSetV6(ownerVpnIp, vpnIp netip.Addr, to []*Ip6AndPort, check checkFuncV6) {
+func (r *RemoteList) unlockedSetV6(ownerVpnIp, vpnIp netip.Addr, to []*V6AddrPort, check checkFuncV6) {
 	r.shouldRebuild = true
 	c := r.unlockedGetOrMakeV6(ownerVpnIp)
 
@@ -473,12 +479,12 @@ func (r *RemoteList) unlockedSetV6(ownerVpnIp, vpnIp netip.Addr, to []*Ip6AndPor
 
 // unlockedPrependV6 assumes you have the write lock and prepends the address in the reported list for this owner
 // This is only useful for establishing static hosts
-func (r *RemoteList) unlockedPrependV6(ownerVpnIp netip.Addr, to *Ip6AndPort) {
+func (r *RemoteList) unlockedPrependV6(ownerVpnIp netip.Addr, to *V6AddrPort) {
 	r.shouldRebuild = true
 	c := r.unlockedGetOrMakeV6(ownerVpnIp)
 
 	// We are doing the easy append because this is rarely called
-	c.reported = append([]*Ip6AndPort{to}, c.reported...)
+	c.reported = append([]*V6AddrPort{to}, c.reported...)
 	if len(c.reported) > MaxRemotes {
 		c.reported = c.reported[:MaxRemotes]
 	}
@@ -536,14 +542,14 @@ func (r *RemoteList) unlockedCollect() {
 	for _, c := range r.cache {
 		if c.v4 != nil {
 			if c.v4.learned != nil {
-				u := AddrPortFromIp4AndPort(c.v4.learned)
+				u := protoV4AddrPortToNetAddrPort(c.v4.learned)
 				if !r.unlockedIsBad(u) {
 					addrs = append(addrs, u)
 				}
 			}
 
 			for _, v := range c.v4.reported {
-				u := AddrPortFromIp4AndPort(v)
+				u := protoV4AddrPortToNetAddrPort(v)
 				if !r.unlockedIsBad(u) {
 					addrs = append(addrs, u)
 				}
@@ -552,14 +558,14 @@ func (r *RemoteList) unlockedCollect() {
 
 		if c.v6 != nil {
 			if c.v6.learned != nil {
-				u := AddrPortFromIp6AndPort(c.v6.learned)
+				u := protoV6AddrPortToNetAddrPort(c.v6.learned)
 				if !r.unlockedIsBad(u) {
 					addrs = append(addrs, u)
 				}
 			}
 
 			for _, v := range c.v6.reported {
-				u := AddrPortFromIp6AndPort(v)
+				u := protoV6AddrPortToNetAddrPort(v)
 				if !r.unlockedIsBad(u) {
 					addrs = append(addrs, u)
 				}
@@ -573,7 +579,7 @@ func (r *RemoteList) unlockedCollect() {
 		}
 	}
 
-	dnsAddrs := r.hr.GetIPs()
+	dnsAddrs := r.hr.GetAddrs()
 	for _, addr := range dnsAddrs {
 		if r.shouldAdd == nil || r.shouldAdd(addr.Addr()) {
 			if !r.unlockedIsBad(addr) {
