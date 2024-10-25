@@ -545,7 +545,7 @@ func (lh *LightHouse) addStaticRemotes(i int, d time.Duration, network string, t
 	ctx := lh.ctx
 	lh.Unlock()
 
-	hr, err := NewHostnameResults(ctx, lh.l, d, network, timeout, toAddrs, func() {
+	hr, err := NewHostnamesResults(ctx, lh.l, d, vpnIp, network, timeout, toAddrs, func() {
 		// This callback runs whenever the DNS hostname resolver finds a different set of IP's
 		// in its resolution for hostnames.
 		am.Lock()

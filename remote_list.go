@@ -68,11 +68,12 @@ type hostnamesResults struct {
 	network       string
 	lookupTimeout time.Duration
 	cancelFn      func()
-	l             *logrus.Logger
+	l             logrus.FieldLogger
 	ips           atomic.Pointer[map[netip.AddrPort]struct{}]
 }
 
-func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, network string, timeout time.Duration, hostPorts []string, onUpdate func()) (*hostnamesResults, error) {
+func NewHostnamesResults(ctx context.Context, l logrus.FieldLogger, d time.Duration, vpnIp netip.Addr, network string, timeout time.Duration, hostPorts []string, onUpdate func()) (*hostnamesResults, error) {
+	l = l.WithField("vpnIp", vpnIp)
 	r := &hostnamesResults{
 		hostnames:     make([]hostnamePort, len(hostPorts)),
 		network:       network,
@@ -130,27 +131,33 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 						netipAddrs[netip.AddrPortFrom(a.Unmap(), hostPort.port)] = struct{}{}
 					}
 				}
+
 				origSet := r.ips.Load()
-				different := false
-				for a := range *origSet {
-					if _, ok := netipAddrs[a]; !ok {
-						different = true
-						break
-					}
-				}
-				if !different {
-					for a := range netipAddrs {
-						if _, ok := (*origSet)[a]; !ok {
+				if len(netipAddrs) == 0 && len(*origSet) != 0 {
+					l.WithFields(logrus.Fields{"hostnames": r.hostnames}).Info("No IPs resolved for hostnames, refusing to overwrite existing IPs")
+				} else {
+					different := false
+					for a := range *origSet {
+						if _, ok := netipAddrs[a]; !ok {
 							different = true
 							break
 						}
 					}
+					if !different {
+						for a := range netipAddrs {
+							if _, ok := (*origSet)[a]; !ok {
+								different = true
+								break
+							}
+						}
+					}
+					if different {
+						l.WithFields(logrus.Fields{"origSet": origSet, "newSet": netipAddrs}).Info("DNS results changed for host list")
+						r.ips.Store(&netipAddrs)
+						onUpdate()
+					}
 				}
-				if different {
-					l.WithFields(logrus.Fields{"origSet": origSet, "newSet": netipAddrs}).Info("DNS results changed for host list")
-					r.ips.Store(&netipAddrs)
-					onUpdate()
-				}
+
 				select {
 				case <-newCtx.Done():
 					return
