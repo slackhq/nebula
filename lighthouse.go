@@ -1115,7 +1115,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 func (lhh *LightHouseHandler) sendHostPunchNotification(n *NebulaMeta, fromVpnAddrs []netip.Addr, punchNotifDest netip.Addr, w EncWriter) {
 	// if the other side is v6-only, tell them to punch to the first v6-addr in fromVpnAddrs
 	whereToPunch := fromVpnAddrs[0]
-	if punchNotifDest.Is6() {
+	if !whereToPunch.Is6() && punchNotifDest.Is6() {
 		for i := range fromVpnAddrs {
 			if fromVpnAddrs[i].Is6() {
 				whereToPunch = fromVpnAddrs[i]
@@ -1377,7 +1377,6 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 			//NOTE: we have to allocate a new output buffer here since we are spawning a new goroutine
 			// for each punchBack packet. We should move this into a timerwheel or a single goroutine
 			// managed by a channel.
-			//todo if the host we're punchy-responding to is dual stack and we are not (bc we are v6-only), their primary IP is probably not reachable!
 			w.SendMessageToVpnAddr(header.Test, header.TestRequest, queryVpnAddr, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 		}()
 	}
