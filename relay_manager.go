@@ -137,8 +137,8 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, d []byte, f *Interface) {
 
 func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f *Interface, m *NebulaControl) {
 	rm.l.WithFields(logrus.Fields{
-		"relayFrom":           m.RelayFromAddr,
-		"relayTo":             m.RelayToAddr,
+		"relayFrom":           protoAddrToNetAddr(m.RelayFromAddr),
+		"relayTo":             protoAddrToNetAddr(m.RelayToAddr),
 		"initiatorRelayIndex": m.InitiatorRelayIndex,
 		"responderRelayIndex": m.ResponderRelayIndex,
 		"vpnAddrs":            h.vpnAddrs}).
