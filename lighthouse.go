@@ -1108,11 +1108,26 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 	lhh.lh.metricTx(NebulaMeta_HostQueryReply, 1)
 	w.SendMessageToVpnAddr(header.LightHouse, 0, fromVpnAddrs[0], lhh.pb[:ln], lhh.nb, lhh.out[:0])
 
-	// This signals the other side to punch some zero byte udp packets
-	found, ln, err = lhh.lh.queryAndPrepMessage(fromVpnAddrs[0], func(c *cache) (int, error) {
+	lhh.sendHostPunchNotification(n, fromVpnAddrs, queryVpnAddr, w)
+}
+
+// sendHostPunchNotification signals the other side to punch some zero byte udp packets
+func (lhh *LightHouseHandler) sendHostPunchNotification(n *NebulaMeta, fromVpnAddrs []netip.Addr, punchNotifDest netip.Addr, w EncWriter) {
+	// if the other side is v6-only, tell them to punch to the first v6-addr in fromVpnAddrs
+	whereToPunch := fromVpnAddrs[0]
+	if punchNotifDest.Is6() {
+		for i := range fromVpnAddrs {
+			if fromVpnAddrs[i].Is6() {
+				whereToPunch = fromVpnAddrs[i]
+			}
+		}
+	}
+
+	found, ln, err := lhh.lh.queryAndPrepMessage(whereToPunch, func(c *cache) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostPunchNotification
-		targetHI := lhh.lh.ifce.GetHostInfo(queryVpnAddr)
+		targetHI := lhh.lh.ifce.GetHostInfo(punchNotifDest)
+		var useVersion cert.Version
 		if targetHI == nil {
 			useVersion = lhh.lh.ifce.GetCertState().defaultVersion
 		} else {
@@ -1128,7 +1143,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 			lhh.coalesceAnswers(useVersion, c, n)
 
 		} else if useVersion == cert.Version2 {
-			n.Details.VpnAddr = netAddrToProtoAddr(fromVpnAddrs[0])
+			n.Details.VpnAddr = netAddrToProtoAddr(whereToPunch)
 			lhh.coalesceAnswers(useVersion, c, n)
 
 		} else {
@@ -1148,7 +1163,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 	}
 
 	lhh.lh.metricTx(NebulaMeta_HostPunchNotification, 1)
-	w.SendMessageToVpnAddr(header.LightHouse, 0, queryVpnAddr, lhh.pb[:ln], lhh.nb, lhh.out[:0])
+	w.SendMessageToVpnAddr(header.LightHouse, 0, punchNotifDest, lhh.pb[:ln], lhh.nb, lhh.out[:0])
 }
 
 func (lhh *LightHouseHandler) coalesceAnswers(v cert.Version, c *cache, n *NebulaMeta) {
@@ -1362,6 +1377,7 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 			//NOTE: we have to allocate a new output buffer here since we are spawning a new goroutine
 			// for each punchBack packet. We should move this into a timerwheel or a single goroutine
 			// managed by a channel.
+			//todo if the host we're punchy-responding to is dual stack and we are not (bc we are v6-only), their primary IP is probably not reachable!
 			w.SendMessageToVpnAddr(header.Test, header.TestRequest, queryVpnAddr, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 		}()
 	}
