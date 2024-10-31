@@ -210,7 +210,6 @@ func (c *certificateV1) getRawDetails() *RawNebulaCertificateDetails {
 func (c *certificateV1) String() string {
 	b, err := json.MarshalIndent(c.marshalJSON(), "", "\t")
 	if err != nil {
-		//TODO: should we panic instead?
 		return fmt.Sprintf("<error marshalling certificate: %v>", err)
 	}
 	return string(b)
