@@ -20,8 +20,6 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
-//TODO: should we avoid hex encoding shit on output? Just let it be base64?
-
 const (
 	classConstructed     = 0x20
 	classContextSpecific = 0x80
@@ -125,8 +123,11 @@ func (c *certificateV2) UnsafeNetworks() []netip.Prefix {
 }
 
 func (c *certificateV2) Fingerprint() (string, error) {
-	b := make([]byte, len(c.rawDetails)+1+len(c.publicKey))
-	//TODO: double check this, panic on empty raw details
+	if len(c.rawDetails) == 0 {
+		return "", ErrMissingDetails
+	}
+
+	b := make([]byte, len(c.rawDetails)+1+len(c.publicKey)+len(c.signature))
 	copy(b, c.rawDetails)
 	b[len(c.rawDetails)] = byte(c.curve)
 	copy(b[len(c.rawDetails)+1:], c.publicKey)
@@ -162,27 +163,27 @@ func (c *certificateV2) Expired(t time.Time) bool {
 
 func (c *certificateV2) VerifyPrivateKey(curve Curve, key []byte) error {
 	if curve != c.curve {
-		return fmt.Errorf("curve in cert and private key supplied don't match")
+		return ErrPublicPrivateCurveMismatch
 	}
 	if c.details.isCA {
 		switch curve {
 		case Curve_CURVE25519:
 			// the call to PublicKey below will panic slice bounds out of range otherwise
 			if len(key) != ed25519.PrivateKeySize {
-				return fmt.Errorf("key was not 64 bytes, is invalid ed25519 private key")
+				return ErrInvalidPrivateKey
 			}
 
 			if !ed25519.PublicKey(c.publicKey).Equal(ed25519.PrivateKey(key).Public()) {
-				return fmt.Errorf("public key in cert and private key supplied don't match")
+				return ErrPublicPrivateKeyMismatch
 			}
 		case Curve_P256:
 			privkey, err := ecdh.P256().NewPrivateKey(key)
 			if err != nil {
-				return fmt.Errorf("cannot parse private key as P256")
+				return ErrInvalidPrivateKey
 			}
 			pub := privkey.PublicKey().Bytes()
 			if !bytes.Equal(pub, c.publicKey) {
-				return fmt.Errorf("public key in cert and private key supplied don't match")
+				return ErrPublicPrivateKeyMismatch
 			}
 		default:
 			return fmt.Errorf("invalid curve: %s", curve)
@@ -196,28 +197,33 @@ func (c *certificateV2) VerifyPrivateKey(curve Curve, key []byte) error {
 		var err error
 		pub, err = curve25519.X25519(key, curve25519.Basepoint)
 		if err != nil {
-			return err
+			return ErrInvalidPrivateKey
 		}
 	case Curve_P256:
 		privkey, err := ecdh.P256().NewPrivateKey(key)
 		if err != nil {
-			return err
+			return ErrInvalidPrivateKey
 		}
 		pub = privkey.PublicKey().Bytes()
 	default:
 		return fmt.Errorf("invalid curve: %s", curve)
 	}
 	if !bytes.Equal(pub, c.publicKey) {
-		return fmt.Errorf("public key in cert and private key supplied don't match")
+		return ErrPublicPrivateKeyMismatch
 	}
 
 	return nil
 }
 
 func (c *certificateV2) String() string {
-	b, err := json.MarshalIndent(c.marshalJSON(), "", "\t")
+	mb, err := c.marshalJSON()
 	if err != nil {
-		return "<error marshalling certificate>"
+		return fmt.Sprintf("<error marshalling certificate: %v>", err)
+	}
+
+	b, err := json.MarshalIndent(mb, "", "\t")
+	if err != nil {
+		return fmt.Sprintf("<error marshalling certificate: %v>", err)
 	}
 	return string(b)
 }
@@ -282,11 +288,19 @@ func (c *certificateV2) MarshalPEM() ([]byte, error) {
 }
 
 func (c *certificateV2) MarshalJSON() ([]byte, error) {
-	return json.Marshal(c.marshalJSON())
+	b, err := c.marshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(b)
 }
 
-func (c *certificateV2) marshalJSON() m {
-	fp, _ := c.Fingerprint()
+func (c *certificateV2) marshalJSON() (m, error) {
+	fp, err := c.Fingerprint()
+	if err != nil {
+		return nil, err
+	}
+
 	return m{
 		"details": m{
 			"name":           c.details.name,
@@ -303,31 +317,42 @@ func (c *certificateV2) marshalJSON() m {
 		"curve":       c.curve.String(),
 		"fingerprint": fp,
 		"signature":   fmt.Sprintf("%x", c.Signature()),
-	}
+	}, nil
 }
 
 func (c *certificateV2) Copy() Certificate {
 	nc := &certificateV2{
 		details: detailsV2{
-			name:           c.details.name,
-			groups:         make([]string, len(c.details.groups)),
-			networks:       make([]netip.Prefix, len(c.details.networks)),
-			unsafeNetworks: make([]netip.Prefix, len(c.details.unsafeNetworks)),
-			notBefore:      c.details.notBefore,
-			notAfter:       c.details.notAfter,
-			isCA:           c.details.isCA,
-			issuer:         c.details.issuer,
+			name:      c.details.name,
+			notBefore: c.details.notBefore,
+			notAfter:  c.details.notAfter,
+			isCA:      c.details.isCA,
+			issuer:    c.details.issuer,
 		},
-		curve:     c.curve,
-		publicKey: make([]byte, len(c.publicKey)),
-		signature: make([]byte, len(c.signature)),
+		curve:      c.curve,
+		publicKey:  make([]byte, len(c.publicKey)),
+		signature:  make([]byte, len(c.signature)),
+		rawDetails: make([]byte, len(c.rawDetails)),
 	}
 
+	if c.details.groups != nil {
+		nc.details.groups = make([]string, len(c.details.groups))
+		copy(nc.details.groups, c.details.groups)
+	}
+
+	if c.details.networks != nil {
+		nc.details.networks = make([]netip.Prefix, len(c.details.networks))
+		copy(nc.details.networks, c.details.networks)
+	}
+
+	if c.details.unsafeNetworks != nil {
+		nc.details.unsafeNetworks = make([]netip.Prefix, len(c.details.unsafeNetworks))
+		copy(nc.details.unsafeNetworks, c.details.unsafeNetworks)
+	}
+
+	copy(nc.rawDetails, c.rawDetails)
 	copy(nc.signature, c.signature)
-	copy(nc.details.groups, c.details.groups)
 	copy(nc.publicKey, c.publicKey)
-	copy(nc.details.networks, c.details.networks)
-	copy(nc.details.unsafeNetworks, c.details.unsafeNetworks)
 
 	return nc
 }
