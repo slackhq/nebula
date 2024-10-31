@@ -1,7 +1,5 @@
 package cert
 
-//TODO: this should only be built if performing tests
-
 import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
