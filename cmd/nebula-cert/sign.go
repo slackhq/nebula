@@ -402,7 +402,7 @@ func newKeypair(curve cert.Curve) ([]byte, []byte) {
 	case cert.Curve_CURVE25519:
 		return x25519Keypair()
 	case cert.Curve_P256:
-		return p256KeypairCompressed()
+		return p256Keypair(false) //todo support generating compressed keys
 	default:
 		return nil, nil
 	}
@@ -422,19 +422,14 @@ func x25519Keypair() ([]byte, []byte) {
 	return pubkey, privkey
 }
 
-func p256Keypair() ([]byte, []byte) {
+func p256Keypair(compressed bool) ([]byte, []byte) {
 	privkey, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
 		panic(err)
 	}
-	pubkey := privkey.PublicKey()
-	return pubkey.Bytes(), privkey.Bytes()
-}
-
-func p256KeypairCompressed() ([]byte, []byte) {
-	privkey, err := ecdh.P256().GenerateKey(rand.Reader)
-	if err != nil {
-		panic(err)
+	if !compressed {
+		pubkey := privkey.PublicKey()
+		return pubkey.Bytes(), privkey.Bytes()
 	}
 	pubkeyBytes := privkey.PublicKey().Bytes()
 	pubkey, err := noiseutil.LoadP256Pubkey(pubkeyBytes)

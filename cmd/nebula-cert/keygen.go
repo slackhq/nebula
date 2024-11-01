@@ -62,7 +62,7 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 			pub, rawPriv = x25519Keypair()
 			curve = cert.Curve_CURVE25519
 		case "P256":
-			pub, rawPriv = p256Keypair()
+			pub, rawPriv = p256Keypair(false) //todo support generating compressed keys
 			curve = cert.Curve_P256
 		default:
 			return fmt.Errorf("invalid curve: %s", *cf.curve)
