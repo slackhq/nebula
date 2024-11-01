@@ -31,7 +31,7 @@ func (c nistP11Curve) DH(privkey, pubkey []byte) ([]byte, error) {
 	if !strings.HasPrefix(pkStr, "pkcs11:") {
 		return DHP256.DH(privkey, pubkey)
 	}
-	ecdhPubKey, err := c.curve.NewPublicKey(pubkey)
+	ecdhPubKey, err := LoadECDHPubkey(pubkey)
 	if err != nil {
 		return nil, fmt.Errorf("unable to unmarshal pubkey: %w", err)
 	}

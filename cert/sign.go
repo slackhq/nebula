@@ -1,6 +1,7 @@
 package cert
 
 import (
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -11,6 +12,8 @@ import (
 	"net/netip"
 	"slices"
 	"time"
+
+	"github.com/slackhq/nebula/noiseutil"
 )
 
 // TBSCertificate represents a certificate intended to be signed.
@@ -157,4 +160,19 @@ func comparePrefix(a, b netip.Prefix) int {
 		return a.Bits() - b.Bits()
 	}
 	return addr
+}
+
+func verifyP256PrivateKey(privateKey []byte, detailsPublicBytes []byte) error {
+	privkey, err := ecdh.P256().NewPrivateKey(privateKey)
+	if err != nil {
+		return ErrInvalidPrivateKey
+	}
+	detailsPubkey, err := noiseutil.LoadECDHPubkey(detailsPublicBytes)
+	if err != nil {
+		return fmt.Errorf("cannot parse public key from cert as P256: %w", err)
+	}
+	if !detailsPubkey.Equal(privkey.PublicKey()) {
+		return ErrPublicPrivateKeyMismatch
+	}
+	return nil
 }

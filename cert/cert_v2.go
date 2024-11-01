@@ -2,10 +2,8 @@ package cert
 
 import (
 	"bytes"
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,6 +13,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/slackhq/nebula/noiseutil"
 	"golang.org/x/crypto/cryptobyte"
 	"golang.org/x/crypto/cryptobyte/asn1"
 	"golang.org/x/crypto/curve25519"
@@ -149,8 +148,10 @@ func (c *certificateV2) CheckSignature(key []byte) bool {
 	case Curve_CURVE25519:
 		return ed25519.Verify(key, b, c.signature)
 	case Curve_P256:
-		x, y := elliptic.Unmarshal(elliptic.P256(), key)
-		pubKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+		pubKey, err := noiseutil.LoadP256Pubkey(key)
+		if err != nil {
+			return false
+		}
 		hashed := sha256.Sum256(b)
 		return ecdsa.VerifyASN1(pubKey, hashed[:], c.signature)
 	default:
@@ -166,54 +167,32 @@ func (c *certificateV2) VerifyPrivateKey(curve Curve, key []byte) error {
 	if curve != c.curve {
 		return ErrPublicPrivateCurveMismatch
 	}
-	if c.details.isCA {
-		switch curve {
-		case Curve_CURVE25519:
-			// the call to PublicKey below will panic slice bounds out of range otherwise
-			if len(key) != ed25519.PrivateKeySize {
-				return ErrInvalidPrivateKey
-			}
+	if curve == Curve_P256 {
+		return verifyP256PrivateKey(key, c.publicKey)
+	} else if curve != Curve_CURVE25519 {
+		return fmt.Errorf("invalid curve: %s", curve)
+	}
 
-			if !ed25519.PublicKey(c.publicKey).Equal(ed25519.PrivateKey(key).Public()) {
-				return ErrPublicPrivateKeyMismatch
-			}
-		case Curve_P256:
-			privkey, err := ecdh.P256().NewPrivateKey(key)
-			if err != nil {
-				return ErrInvalidPrivateKey
-			}
-			pub := privkey.PublicKey().Bytes()
-			if !bytes.Equal(pub, c.publicKey) {
-				return ErrPublicPrivateKeyMismatch
-			}
-		default:
-			return fmt.Errorf("invalid curve: %s", curve)
+	if c.details.isCA {
+		// the call to PublicKey below will panic slice bounds out of range otherwise
+		if len(key) != ed25519.PrivateKeySize {
+			return ErrInvalidPrivateKey
+		}
+
+		if !ed25519.PublicKey(c.publicKey).Equal(ed25519.PrivateKey(key).Public()) {
+			return ErrPublicPrivateKeyMismatch
+		}
+		return nil
+	} else {
+		pub, err := curve25519.X25519(key, curve25519.Basepoint)
+		if err != nil {
+			return ErrInvalidPrivateKey
+		}
+		if !bytes.Equal(pub, c.publicKey) {
+			return ErrPublicPrivateKeyMismatch
 		}
 		return nil
 	}
-
-	var pub []byte
-	switch curve {
-	case Curve_CURVE25519:
-		var err error
-		pub, err = curve25519.X25519(key, curve25519.Basepoint)
-		if err != nil {
-			return ErrInvalidPrivateKey
-		}
-	case Curve_P256:
-		privkey, err := ecdh.P256().NewPrivateKey(key)
-		if err != nil {
-			return ErrInvalidPrivateKey
-		}
-		pub = privkey.PublicKey().Bytes()
-	default:
-		return fmt.Errorf("invalid curve: %s", curve)
-	}
-	if !bytes.Equal(pub, c.publicKey) {
-		return ErrPublicPrivateKeyMismatch
-	}
-
-	return nil
 }
 
 func (c *certificateV2) String() string {

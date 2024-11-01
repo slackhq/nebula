@@ -108,16 +108,16 @@ func TestCertificateV1_MarshalJSON(t *testing.T) {
 }
 
 func TestCertificateV1_VerifyPrivateKey(t *testing.T) {
-	ca, _, caKey, _ := NewTestCaCert(Version1, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	ca, _, caKey, _ := NewTestCaCert(Version1, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil, false)
 	err := ca.VerifyPrivateKey(Curve_CURVE25519, caKey)
 	assert.Nil(t, err)
 
-	_, _, caKey2, _ := NewTestCaCert(Version1, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	_, _, caKey2, _ := NewTestCaCert(Version1, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil, false)
 	assert.Nil(t, err)
 	err = ca.VerifyPrivateKey(Curve_CURVE25519, caKey2)
 	assert.NotNil(t, err)
 
-	c, _, priv, _ := NewTestCert(Version1, Curve_CURVE25519, ca, caKey, "test", time.Time{}, time.Time{}, nil, nil, nil)
+	c, _, priv, _ := NewTestCert(Version1, Curve_CURVE25519, ca, caKey, "test", time.Time{}, time.Time{}, nil, nil, nil, false)
 	rawPriv, b, curve, err := UnmarshalPrivateKeyFromPEM(priv)
 	assert.NoError(t, err)
 	assert.Empty(t, b)
@@ -131,16 +131,16 @@ func TestCertificateV1_VerifyPrivateKey(t *testing.T) {
 }
 
 func TestCertificateV1_VerifyPrivateKeyP256(t *testing.T) {
-	ca, _, caKey, _ := NewTestCaCert(Version1, Curve_P256, time.Time{}, time.Time{}, nil, nil, nil)
+	ca, _, caKey, _ := NewTestCaCert(Version1, Curve_P256, time.Time{}, time.Time{}, nil, nil, nil, false)
 	err := ca.VerifyPrivateKey(Curve_P256, caKey)
 	assert.Nil(t, err)
 
-	_, _, caKey2, _ := NewTestCaCert(Version1, Curve_P256, time.Time{}, time.Time{}, nil, nil, nil)
+	_, _, caKey2, _ := NewTestCaCert(Version1, Curve_P256, time.Time{}, time.Time{}, nil, nil, nil, false)
 	assert.Nil(t, err)
 	err = ca.VerifyPrivateKey(Curve_P256, caKey2)
 	assert.NotNil(t, err)
 
-	c, _, priv, _ := NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Time{}, time.Time{}, nil, nil, nil)
+	c, _, priv, _ := NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Time{}, time.Time{}, nil, nil, nil, false)
 	rawPriv, b, curve, err := UnmarshalPrivateKeyFromPEM(priv)
 	assert.NoError(t, err)
 	assert.Empty(t, b)
@@ -191,8 +191,8 @@ func TestMarshalingCertificateV1Consistency(t *testing.T) {
 }
 
 func TestCertificateV1_Copy(t *testing.T) {
-	ca, _, caKey, _ := NewTestCaCert(Version1, Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, nil)
-	c, _, _, _ := NewTestCert(Version1, Curve_CURVE25519, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, nil)
+	ca, _, caKey, _ := NewTestCaCert(Version1, Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, nil, false)
+	c, _, _, _ := NewTestCert(Version1, Curve_CURVE25519, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, nil, false)
 	cc := c.Copy()
 	test.AssertDeepCopyEqual(t, c, cc)
 }

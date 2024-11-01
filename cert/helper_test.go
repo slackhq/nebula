@@ -9,12 +9,15 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/slackhq/nebula/noiseutil"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ed25519"
 )
 
+//todo test compress actually is different
+
 // NewTestCaCert will create a new ca certificate
-func NewTestCaCert(version Version, curve Curve, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string) (Certificate, []byte, []byte, []byte) {
+func NewTestCaCert(version Version, curve Curve, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string, compressKey bool) (Certificate, []byte, []byte, []byte) {
 	var err error
 	var pub, priv []byte
 
@@ -26,8 +29,11 @@ func NewTestCaCert(version Version, curve Curve, before, after time.Time, networ
 		if err != nil {
 			panic(err)
 		}
-
-		pub = elliptic.Marshal(elliptic.P256(), privk.PublicKey.X, privk.PublicKey.Y)
+		if compressKey {
+			pub = elliptic.MarshalCompressed(elliptic.P256(), privk.PublicKey.X, privk.PublicKey.Y)
+		} else {
+			pub = elliptic.Marshal(elliptic.P256(), privk.PublicKey.X, privk.PublicKey.Y)
+		}
 		priv = privk.D.FillBytes(make([]byte, 32))
 	default:
 		// There is no default to allow the underlying lib to respond with an error
@@ -68,7 +74,7 @@ func NewTestCaCert(version Version, curve Curve, before, after time.Time, networ
 
 // NewTestCert will generate a signed certificate with the provided details.
 // Expiry times are defaulted if you do not pass them in
-func NewTestCert(v Version, curve Curve, ca Certificate, key []byte, name string, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string) (Certificate, []byte, []byte, []byte) {
+func NewTestCert(v Version, curve Curve, ca Certificate, key []byte, name string, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string, compressKey bool) (Certificate, []byte, []byte, []byte) {
 	if before.IsZero() {
 		before = time.Now().Add(time.Second * -60).Round(time.Second)
 	}
@@ -82,7 +88,11 @@ func NewTestCert(v Version, curve Curve, ca Certificate, key []byte, name string
 	case Curve_CURVE25519:
 		pub, priv = X25519Keypair()
 	case Curve_P256:
-		pub, priv = P256Keypair()
+		if compressKey {
+			pub, priv = P256KeypairCompressed()
+		} else {
+			pub, priv = P256Keypair()
+		}
 	default:
 		panic("unknown curve")
 	}
@@ -134,4 +144,18 @@ func P256Keypair() ([]byte, []byte) {
 	}
 	pubkey := privkey.PublicKey()
 	return pubkey.Bytes(), privkey.Bytes()
+}
+
+func P256KeypairCompressed() ([]byte, []byte) {
+	privkey, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	pubkeyBytes := privkey.PublicKey().Bytes()
+	pubkey, err := noiseutil.LoadP256Pubkey(pubkeyBytes)
+	if err != nil {
+		panic(err)
+	}
+	out := elliptic.MarshalCompressed(elliptic.P256(), pubkey.X, pubkey.Y)
+	return out, privkey.Bytes()
 }
