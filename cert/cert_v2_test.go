@@ -211,7 +211,7 @@ func testCertificateV2VerifyPrivateKeyP256(t *testing.T, compressKey bool) {
 	err = c.VerifyPrivateKey(Curve_P256, rawPriv)
 	assert.Nil(t, err)
 
-	_, priv2 := P256Keypair()
+	_, priv2 := P256Keypair(compressKey)
 	err = c.VerifyPrivateKey(Curve_P256, priv2)
 	assert.NotNil(t, err)
 }

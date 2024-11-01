@@ -156,8 +156,13 @@ func TestCertificateV1_Verify(t *testing.T) {
 }
 
 func TestCertificateV1_VerifyP256(t *testing.T) {
-	ca, _, caKey, _ := NewTestCaCert(Version1, Curve_P256, time.Now(), time.Now().Add(10*time.Minute), nil, nil, nil, false)
-	c, _, _, _ := NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, nil, false)
+	testCertificateV1VerifyP256(t, false)
+	testCertificateV1VerifyP256(t, true)
+}
+
+func testCertificateV1VerifyP256(t *testing.T, compressKey bool) {
+	ca, _, caKey, _ := NewTestCaCert(Version1, Curve_P256, time.Now(), time.Now().Add(10*time.Minute), nil, nil, nil, compressKey)
+	c, _, _, _ := NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, nil, compressKey)
 
 	caPool := NewCAPool()
 	assert.NoError(t, caPool.AddCA(ca))
@@ -177,11 +182,11 @@ func TestCertificateV1_VerifyP256(t *testing.T) {
 	assert.EqualError(t, err, "root certificate is expired")
 
 	assert.PanicsWithError(t, "certificate is valid before the signing certificate", func() {
-		NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Time{}, time.Time{}, nil, nil, nil, false)
+		NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Time{}, time.Time{}, nil, nil, nil, compressKey)
 	})
 
 	// Test group assertion
-	ca, _, caKey, _ = NewTestCaCert(Version1, Curve_P256, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{"test1", "test2"}, false)
+	ca, _, caKey, _ = NewTestCaCert(Version1, Curve_P256, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{"test1", "test2"}, compressKey)
 	caPem, err := ca.MarshalPEM()
 	assert.Nil(t, err)
 
@@ -191,10 +196,10 @@ func TestCertificateV1_VerifyP256(t *testing.T) {
 	assert.Empty(t, b)
 
 	assert.PanicsWithError(t, "certificate contained a group not present on the signing ca: bad", func() {
-		NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, []string{"test1", "bad"}, false)
+		NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, []string{"test1", "bad"}, compressKey)
 	})
 
-	c, _, _, _ = NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, []string{"test1"}, false)
+	c, _, _, _ = NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, []string{"test1"}, compressKey)
 	_, err = caPool.VerifyCertificate(time.Now(), c)
 	assert.Nil(t, err)
 }
@@ -380,8 +385,13 @@ func TestCertificateV2_Verify(t *testing.T) {
 }
 
 func TestCertificateV2_VerifyP256(t *testing.T) {
-	ca, _, caKey, _ := NewTestCaCert(Version2, Curve_P256, time.Now(), time.Now().Add(10*time.Minute), nil, nil, nil, false)
-	c, _, _, _ := NewTestCert(Version2, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, nil, false)
+	testCertificateV2VerifyP256(t, false)
+	testCertificateV2VerifyP256(t, true)
+}
+
+func testCertificateV2VerifyP256(t *testing.T, compressKey bool) {
+	ca, _, caKey, _ := NewTestCaCert(Version2, Curve_P256, time.Now(), time.Now().Add(10*time.Minute), nil, nil, nil, compressKey)
+	c, _, _, _ := NewTestCert(Version2, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, nil, compressKey)
 
 	caPool := NewCAPool()
 	assert.NoError(t, caPool.AddCA(ca))
@@ -401,11 +411,11 @@ func TestCertificateV2_VerifyP256(t *testing.T) {
 	assert.EqualError(t, err, "root certificate is expired")
 
 	assert.PanicsWithError(t, "certificate is valid before the signing certificate", func() {
-		NewTestCert(Version2, Curve_P256, ca, caKey, "test", time.Time{}, time.Time{}, nil, nil, nil, false)
+		NewTestCert(Version2, Curve_P256, ca, caKey, "test", time.Time{}, time.Time{}, nil, nil, nil, compressKey)
 	})
 
 	// Test group assertion
-	ca, _, caKey, _ = NewTestCaCert(Version2, Curve_P256, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{"test1", "test2"}, false)
+	ca, _, caKey, _ = NewTestCaCert(Version2, Curve_P256, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{"test1", "test2"}, compressKey)
 	caPem, err := ca.MarshalPEM()
 	assert.Nil(t, err)
 
@@ -415,10 +425,10 @@ func TestCertificateV2_VerifyP256(t *testing.T) {
 	assert.Empty(t, b)
 
 	assert.PanicsWithError(t, "certificate contained a group not present on the signing ca: bad", func() {
-		NewTestCert(Version2, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, []string{"test1", "bad"}, false)
+		NewTestCert(Version2, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, []string{"test1", "bad"}, compressKey)
 	})
 
-	c, _, _, _ = NewTestCert(Version2, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, []string{"test1"}, false)
+	c, _, _, _ = NewTestCert(Version2, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, []string{"test1"}, compressKey)
 	_, err = caPool.VerifyCertificate(time.Now(), c)
 	assert.Nil(t, err)
 }

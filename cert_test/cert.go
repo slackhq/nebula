@@ -10,12 +10,13 @@ import (
 	"time"
 
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/noiseutil"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ed25519"
 )
 
 // NewTestCaCert will create a new ca certificate
-func NewTestCaCert(version cert.Version, curve cert.Curve, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string) (cert.Certificate, []byte, []byte, []byte) {
+func NewTestCaCert(version cert.Version, curve cert.Curve, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string, compressKey bool) (cert.Certificate, []byte, []byte, []byte) {
 	var err error
 	var pub, priv []byte
 
@@ -27,8 +28,11 @@ func NewTestCaCert(version cert.Version, curve cert.Curve, before, after time.Ti
 		if err != nil {
 			panic(err)
 		}
-
-		pub = elliptic.Marshal(elliptic.P256(), privk.PublicKey.X, privk.PublicKey.Y)
+		if compressKey {
+			pub = elliptic.MarshalCompressed(elliptic.P256(), privk.PublicKey.X, privk.PublicKey.Y)
+		} else {
+			pub = elliptic.Marshal(elliptic.P256(), privk.PublicKey.X, privk.PublicKey.Y)
+		}
 		priv = privk.D.FillBytes(make([]byte, 32))
 	default:
 		// There is no default to allow the underlying lib to respond with an error
@@ -69,7 +73,7 @@ func NewTestCaCert(version cert.Version, curve cert.Curve, before, after time.Ti
 
 // NewTestCert will generate a signed certificate with the provided details.
 // Expiry times are defaulted if you do not pass them in
-func NewTestCert(v cert.Version, curve cert.Curve, ca cert.Certificate, key []byte, name string, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string) (cert.Certificate, []byte, []byte, []byte) {
+func NewTestCert(v cert.Version, curve cert.Curve, ca cert.Certificate, key []byte, name string, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string, compressKey bool) (cert.Certificate, []byte, []byte, []byte) {
 	if before.IsZero() {
 		before = time.Now().Add(time.Second * -60).Round(time.Second)
 	}
@@ -83,7 +87,7 @@ func NewTestCert(v cert.Version, curve cert.Curve, ca cert.Certificate, key []by
 	case cert.Curve_CURVE25519:
 		pub, priv = X25519Keypair()
 	case cert.Curve_P256:
-		pub, priv = P256Keypair()
+		pub, priv = P256Keypair(compressKey)
 	default:
 		panic("unknown curve")
 	}
@@ -128,11 +132,20 @@ func X25519Keypair() ([]byte, []byte) {
 	return pubkey, privkey
 }
 
-func P256Keypair() ([]byte, []byte) {
+func P256Keypair(compressed bool) ([]byte, []byte) {
 	privkey, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
 		panic(err)
 	}
-	pubkey := privkey.PublicKey()
-	return pubkey.Bytes(), privkey.Bytes()
+	if !compressed {
+		pubkey := privkey.PublicKey()
+		return pubkey.Bytes(), privkey.Bytes()
+	}
+	pubkeyBytes := privkey.PublicKey().Bytes()
+	pubkey, err := noiseutil.LoadP256Pubkey(pubkeyBytes)
+	if err != nil {
+		panic(err)
+	}
+	out := elliptic.MarshalCompressed(elliptic.P256(), pubkey.X, pubkey.Y)
+	return out, privkey.Bytes()
 }

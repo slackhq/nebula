@@ -131,16 +131,21 @@ func TestCertificateV1_VerifyPrivateKey(t *testing.T) {
 }
 
 func TestCertificateV1_VerifyPrivateKeyP256(t *testing.T) {
-	ca, _, caKey, _ := NewTestCaCert(Version1, Curve_P256, time.Time{}, time.Time{}, nil, nil, nil, false)
+	testCertificateV1VerifyPrivateKeyP256(t, false)
+	testCertificateV1VerifyPrivateKeyP256(t, true)
+}
+
+func testCertificateV1VerifyPrivateKeyP256(t *testing.T, compressKey bool) {
+	ca, _, caKey, _ := NewTestCaCert(Version1, Curve_P256, time.Time{}, time.Time{}, nil, nil, nil, compressKey)
 	err := ca.VerifyPrivateKey(Curve_P256, caKey)
 	assert.Nil(t, err)
 
-	_, _, caKey2, _ := NewTestCaCert(Version1, Curve_P256, time.Time{}, time.Time{}, nil, nil, nil, false)
+	_, _, caKey2, _ := NewTestCaCert(Version1, Curve_P256, time.Time{}, time.Time{}, nil, nil, nil, compressKey)
 	assert.Nil(t, err)
 	err = ca.VerifyPrivateKey(Curve_P256, caKey2)
 	assert.NotNil(t, err)
 
-	c, _, priv, _ := NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Time{}, time.Time{}, nil, nil, nil, false)
+	c, _, priv, _ := NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Time{}, time.Time{}, nil, nil, nil, compressKey)
 	rawPriv, b, curve, err := UnmarshalPrivateKeyFromPEM(priv)
 	assert.NoError(t, err)
 	assert.Empty(t, b)
@@ -148,7 +153,7 @@ func TestCertificateV1_VerifyPrivateKeyP256(t *testing.T) {
 	err = c.VerifyPrivateKey(Curve_P256, rawPriv)
 	assert.Nil(t, err)
 
-	_, priv2 := P256Keypair()
+	_, priv2 := P256Keypair(compressKey)
 	err = c.VerifyPrivateKey(Curve_P256, priv2)
 	assert.NotNil(t, err)
 }
@@ -194,6 +199,14 @@ func TestCertificateV1_Copy(t *testing.T) {
 	ca, _, caKey, _ := NewTestCaCert(Version1, Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, nil, false)
 	c, _, _, _ := NewTestCert(Version1, Curve_CURVE25519, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, nil, false)
 	cc := c.Copy()
+	test.AssertDeepCopyEqual(t, c, cc)
+	ca, _, caKey, _ = NewTestCaCert(Version1, Curve_P256, time.Now(), time.Now().Add(10*time.Minute), nil, nil, nil, false)
+	c, _, _, _ = NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, nil, false)
+	cc = c.Copy()
+	test.AssertDeepCopyEqual(t, c, cc)
+	ca, _, caKey, _ = NewTestCaCert(Version1, Curve_P256, time.Now(), time.Now().Add(10*time.Minute), nil, nil, nil, true)
+	c, _, _, _ = NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, nil, true)
+	cc = c.Copy()
 	test.AssertDeepCopyEqual(t, c, cc)
 }
 

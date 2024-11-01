@@ -7,14 +7,26 @@ import (
 	"crypto/rand"
 	"io"
 	"net/netip"
+	"testing"
 	"time"
 
 	"github.com/slackhq/nebula/noiseutil"
+	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ed25519"
 )
 
-//todo test compress actually is different
+func Test_NewTestCaCert(t *testing.T) {
+	c, _, priv, _ := NewTestCaCert(Version2, Curve_P256, time.Now(), time.Now().Add(time.Hour), nil, nil, nil, false)
+	assert.Len(t, c.PublicKey(), 65)
+	c, _, priv, _ = NewTestCaCert(Version2, Curve_P256, time.Now(), time.Now().Add(time.Hour), nil, nil, nil, true)
+	assert.Len(t, c.PublicKey(), 33)
+
+	cc, _, _, _ := NewTestCert(Version2, Curve_P256, c, priv, "uncompressed", time.Now(), time.Now().Add(time.Hour), nil, nil, nil, false)
+	assert.Len(t, cc.PublicKey(), 65)
+	cc, _, _, _ = NewTestCert(Version2, Curve_P256, c, priv, "compressed", time.Now(), time.Now().Add(time.Hour), nil, nil, nil, true)
+	assert.Len(t, cc.PublicKey(), 33)
+}
 
 // NewTestCaCert will create a new ca certificate
 func NewTestCaCert(version Version, curve Curve, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string, compressKey bool) (Certificate, []byte, []byte, []byte) {
@@ -88,11 +100,7 @@ func NewTestCert(v Version, curve Curve, ca Certificate, key []byte, name string
 	case Curve_CURVE25519:
 		pub, priv = X25519Keypair()
 	case Curve_P256:
-		if compressKey {
-			pub, priv = P256KeypairCompressed()
-		} else {
-			pub, priv = P256Keypair()
-		}
+		pub, priv = P256Keypair(compressKey)
 	default:
 		panic("unknown curve")
 	}
@@ -137,19 +145,14 @@ func X25519Keypair() ([]byte, []byte) {
 	return pubkey, privkey
 }
 
-func P256Keypair() ([]byte, []byte) {
+func P256Keypair(compressed bool) ([]byte, []byte) {
 	privkey, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
 		panic(err)
 	}
-	pubkey := privkey.PublicKey()
-	return pubkey.Bytes(), privkey.Bytes()
-}
-
-func P256KeypairCompressed() ([]byte, []byte) {
-	privkey, err := ecdh.P256().GenerateKey(rand.Reader)
-	if err != nil {
-		panic(err)
+	if !compressed {
+		pubkey := privkey.PublicKey()
+		return pubkey.Bytes(), privkey.Bytes()
 	}
 	pubkeyBytes := privkey.PublicKey().Bytes()
 	pubkey, err := noiseutil.LoadP256Pubkey(pubkeyBytes)
