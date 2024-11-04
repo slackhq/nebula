@@ -70,7 +70,7 @@ func (b *Bits) Update(l *logrus.Logger, i uint64) bool {
 			}
             // Set the bit to false to indicate missing packets.
             b.bits[n%b.length] = false
-        }
+		}
 
        // Mark the current packet as received.
        b.bits[i%b.length] = true
