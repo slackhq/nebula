@@ -67,7 +67,7 @@ func (b *Bits) Update(l *logrus.Logger, i uint64) bool {
             if !b.bits[n%b.length] {
                 // Increment the lostCounter for each already-false bit.
                 b.lostCounter.Inc(1)
-            }
+			}
             // Set the bit to false to indicate missing packets.
             b.bits[n%b.length] = false
         }
