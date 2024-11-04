@@ -59,24 +59,32 @@ func (b *Bits) Update(l *logrus.Logger, i uint64) bool {
 		return true
 	}
 
-	// If i packet is greater than current but less than the maximum length of our bitmap,
-	// flip everything in between to false and move ahead.
-	if i > b.current && i < b.current+b.length {
-		// In between current and i need to be zero'd to allow those packets to come in later
-		for n := b.current + 1; n < i; n++ {
-			b.bits[n%b.length] = false
-		}
+    // If i packet is greater than current but less than the maximum length of our bitmap,
+    // flip everything in between to false and move ahead.
+    if i > b.current && i < b.current+b.length {
+         // Check and count packet loss for bits that are already false.
+        for n := b.current + 1; n < i; n++ {
+            if !b.bits[n%b.length] {
+                // Increment the lostCounter for each already-false bit.
+                b.lostCounter++
+            }
+            // Set the bit to false to indicate missing packets.
+            b.bits[n%b.length] = false
+        }
 
-		b.bits[i%b.length] = true
-		b.current = i
-		//l.Debugf("missed %d packets between %d and %d\n", i-b.current, i, b.current)
-		return true
-	}
+       // Mark the current packet as received.
+       b.bits[i%b.length] = true
+       b.current = i
+    
+       // Uncomment this line if you want to log the number of missed packets.
+       // l.Debugf("missed %d packets between %d and %d\n", i-b.current, i, b.current)
+       return true
+}   
 
 	// If i is greater than the delta between current and the total length of our bitmap,
 	// just flip everything in the map and move ahead.
 	if i >= b.current+b.length {
-		// The current window loss will be accounted for later, only record the jump as loss up until then
+	    // The current window loss will be accounted for later, only record the jump as loss up until then
 		lost := maxInt64(0, int64(i-b.current-b.length))
 		//TODO: explain this
 		if b.current == 0 {
