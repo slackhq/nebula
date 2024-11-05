@@ -336,11 +336,11 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 		case false:
 			relaysForMe := []netip.Addr{}
 			for _, v := range c.GetStringSlice("relay.relays", nil) {
-				lh.l.WithField("relay", v).Info("Read relay from config")
-
 				configRIP, err := netip.ParseAddr(v)
-				//TODO: We could print the error here
-				if err == nil {
+				if err != nil {
+					lh.l.WithField("relay", v).WithError(err).Warn("Parse relay from config failed")
+				} else {
+					lh.l.WithField("relay", v).Info("Read relay from config")
 					relaysForMe = append(relaysForMe, configRIP)
 				}
 			}
@@ -891,6 +891,11 @@ func (lh *LightHouse) SendUpdate() {
 		}
 		if v == cert.Version1 {
 			if v1Update == nil {
+				if !lh.myVpnNetworks[0].Addr().Is4() {
+					lh.l.WithField("lighthouseAddr", lhVpnAddr).
+						Warn("cannot update lighthouse using v1 protocol without an IPv4 address")
+					continue
+				}
 				var relays []uint32
 				for _, r := range lh.GetRelaysForMe() {
 					if !r.Is4() {
@@ -899,7 +904,6 @@ func (lh *LightHouse) SendUpdate() {
 					b := r.As4()
 					relays = append(relays, binary.BigEndian.Uint32(b[:]))
 				}
-				//TODO: assert ipv4
 				b := lh.myVpnNetworks[0].Addr().As4()
 				msg := NebulaMeta{
 					Type: NebulaMeta_HostUpdateNotification,
@@ -1056,7 +1060,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 		return
 	}
 
-	var useVersion cert.Version
+	useVersion := cert.Version1
 	var queryVpnAddr netip.Addr
 	if n.Details.OldVpnAddr != 0 {
 		b := [4]byte{}
@@ -1066,13 +1070,18 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 	} else if n.Details.VpnAddr != nil {
 		queryVpnAddr = protoAddrToNetAddr(n.Details.VpnAddr)
 		useVersion = 2
+	} else {
+		if lhh.l.Level >= logrus.DebugLevel {
+			lhh.l.WithField("from", fromVpnAddrs).WithField("details", n.Details).Debugln("Dropping malformed HostQuery")
+		}
+		return
 	}
 
 	//TODO: Maybe instead of marshalling into n we marshal into a new `r` to not nuke our current request data
 	found, ln, err := lhh.lh.queryAndPrepMessage(queryVpnAddr, func(c *cache) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostQueryReply
-		if useVersion == 1 {
+		if useVersion == cert.Version1 {
 			if !queryVpnAddr.Is4() {
 				return 0, fmt.Errorf("invalid vpn addr for v1 handleHostQuery")
 			}
@@ -1199,6 +1208,7 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, fromVpnAddrs [
 	} else if n.Details.VpnAddr != nil {
 		certVpnAddr = protoAddrToNetAddr(n.Details.VpnAddr)
 	}
+	relays := n.Details.GetRelays()
 
 	am := lhh.lh.unlockedGetRemoteList([]netip.Addr{certVpnAddr})
 	am.Lock()
@@ -1206,22 +1216,6 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, fromVpnAddrs [
 
 	am.unlockedSetV4(fromVpnAddrs[0], certVpnAddr, n.Details.V4AddrPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(fromVpnAddrs[0], certVpnAddr, n.Details.V6AddrPorts, lhh.lh.unlockedShouldAddV6)
-
-	var relays []netip.Addr
-	if len(n.Details.OldRelayVpnAddrs) > 0 {
-		b := [4]byte{}
-		for _, r := range n.Details.OldRelayVpnAddrs {
-			binary.BigEndian.PutUint32(b[:], r)
-			relays = append(relays, netip.AddrFrom4(b))
-		}
-	}
-
-	if len(n.Details.RelayVpnAddrs) > 0 {
-		for _, r := range n.Details.RelayVpnAddrs {
-			relays = append(relays, protoAddrToNetAddr(r))
-		}
-	}
-
 	am.unlockedSetRelay(fromVpnAddrs[0], relays)
 	am.Unlock()
 
@@ -1240,28 +1234,34 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 		return
 	}
 
-	//Simple check that the host sent this not someone else
 	var detailsVpnAddr netip.Addr
-	var useVersion cert.Version
+	useVersion := cert.Version1
 	if n.Details.OldVpnAddr != 0 {
 		b := [4]byte{}
 		binary.BigEndian.PutUint32(b[:], n.Details.OldVpnAddr)
 		detailsVpnAddr = netip.AddrFrom4(b)
-		useVersion = 1
+		useVersion = cert.Version1
 	} else if n.Details.VpnAddr != nil {
 		detailsVpnAddr = protoAddrToNetAddr(n.Details.VpnAddr)
-		useVersion = 2
+		useVersion = cert.Version2
+	} else {
+		if lhh.l.Level >= logrus.DebugLevel {
+			lhh.l.WithField("details", n.Details).Debugf("dropping invalid HostUpdateNotification")
+		}
+		return
 	}
 
 	//todo hosts with only v2 certs cannot provide their ipv6 addr when contacting the lighthouse via v4?
 	//todo why do we care about the vpnAddr in the packet? We know where it came from, right?
-
+	//Simple check that the host sent this not someone else
 	if !slices.Contains(fromVpnAddrs, detailsVpnAddr) {
 		if lhh.l.Level >= logrus.DebugLevel {
 			lhh.l.WithField("vpnAddrs", fromVpnAddrs).WithField("answer", detailsVpnAddr).Debugln("Host sent invalid update")
 		}
 		return
 	}
+
+	relays := n.Details.GetRelays()
 
 	lhh.lh.Lock()
 	am := lhh.lh.unlockedGetRemoteList(fromVpnAddrs)
@@ -1270,22 +1270,6 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 
 	am.unlockedSetV4(fromVpnAddrs[0], detailsVpnAddr, n.Details.V4AddrPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(fromVpnAddrs[0], detailsVpnAddr, n.Details.V6AddrPorts, lhh.lh.unlockedShouldAddV6)
-
-	var relays []netip.Addr
-	if len(n.Details.OldRelayVpnAddrs) > 0 {
-		b := [4]byte{}
-		for _, r := range n.Details.OldRelayVpnAddrs {
-			binary.BigEndian.PutUint32(b[:], r)
-			relays = append(relays, netip.AddrFrom4(b))
-		}
-	}
-
-	if len(n.Details.RelayVpnAddrs) > 0 {
-		for _, r := range n.Details.RelayVpnAddrs {
-			relays = append(relays, protoAddrToNetAddr(r))
-		}
-	}
-
 	am.unlockedSetRelay(fromVpnAddrs[0], relays)
 	am.Unlock()
 
@@ -1299,12 +1283,10 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 		}
 		vpnAddrB := fromVpnAddrs[0].As4()
 		n.Details.OldVpnAddr = binary.BigEndian.Uint32(vpnAddrB[:])
-
 	} else if useVersion == cert.Version2 {
 		n.Details.VpnAddr = netAddrToProtoAddr(fromVpnAddrs[0])
-
 	} else {
-		panic("unsupported version")
+		panic("unsupported version") //todo need a test that proves we can never get here so we can remove this
 	}
 
 	ln, err := n.MarshalTo(lhh.pb)
@@ -1318,7 +1300,7 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 }
 
 func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpnAddrs []netip.Addr, w EncWriter) {
-	//TODO: this is kinda stupid
+	//TODO: this is kinda stupid (WHY?)
 	if !lhh.lh.IsAnyLighthouseAddr(fromVpnAddrs) {
 		return
 	}
@@ -1425,4 +1407,22 @@ func netAddrToProtoV6AddrPort(addr netip.Addr, port uint16) *V6AddrPort {
 		Lo:   binary.BigEndian.Uint64(v6Addr[8:]),
 		Port: uint32(port),
 	}
+}
+
+func (d *NebulaMetaDetails) GetRelays() []netip.Addr {
+	var relays []netip.Addr
+	if len(d.OldRelayVpnAddrs) > 0 {
+		b := [4]byte{}
+		for _, r := range d.OldRelayVpnAddrs {
+			binary.BigEndian.PutUint32(b[:], r)
+			relays = append(relays, netip.AddrFrom4(b))
+		}
+	}
+
+	if len(d.RelayVpnAddrs) > 0 {
+		for _, r := range d.RelayVpnAddrs {
+			relays = append(relays, protoAddrToNetAddr(r))
+		}
+	}
+	return relays
 }
