@@ -70,7 +70,7 @@ func (c *Control) InjectRelays(vpnIp netip.Addr, relayVpnIps []netip.Addr) {
 	defer remoteList.Unlock()
 	c.f.lightHouse.Unlock()
 
-	remoteList.unlockedSetRelay(vpnIp, vpnIp, relayVpnIps)
+	remoteList.unlockedSetRelay(vpnIp, relayVpnIps)
 }
 
 // GetFromTun will pull a packet off the tun side of nebula

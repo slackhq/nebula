@@ -41,6 +41,16 @@ func TestRemoteList_Rebuild(t *testing.T) {
 		func(netip.Addr, *V6AddrPort) bool { return true },
 	)
 
+	rl.unlockedSetRelay(
+		netip.MustParseAddr("0.0.0.1"),
+		[]netip.Addr{
+			netip.MustParseAddr("1::1"),
+			netip.MustParseAddr("1.2.3.4"),
+			netip.MustParseAddr("1.2.3.4"),
+			netip.MustParseAddr("1::1"),
+		},
+	)
+
 	rl.Rebuild([]netip.Prefix{})
 	assert.Len(t, rl.addrs, 10, "addrs contains too many entries")
 
@@ -75,6 +85,11 @@ func TestRemoteList_Rebuild(t *testing.T) {
 	assert.Equal(t, "[1::1]:1", rl.addrs[7].String())
 	assert.Equal(t, "[1::1]:2", rl.addrs[8].String())
 	assert.Equal(t, "[1:100::1]:1", rl.addrs[9].String())
+
+	// assert relay deduplicated
+	assert.Len(t, rl.relays, 2)
+	assert.Equal(t, "1.2.3.4", rl.relays[0].String())
+	assert.Equal(t, "1::1", rl.relays[1].String())
 
 	// Ensure we can hoist a specific ipv4 range over anything else
 	rl.Rebuild([]netip.Prefix{netip.MustParsePrefix("172.17.0.0/16")})
