@@ -78,7 +78,7 @@ func (t *TBSCertificate) Sign(signer Certificate, curve Curve, key []byte) (Cert
 
 // readyToSign checks all signing requirements that don't require us to cross-reference with a CA
 func (t *TBSCertificate) readyToSign() error {
-	if t.PublicKey == nil {
+	if len(t.PublicKey) == 0 {
 		return fmt.Errorf("public key not set")
 	}
 
