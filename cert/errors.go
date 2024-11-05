@@ -30,6 +30,7 @@ var (
 	ErrNoPeerStaticKey = errors.New("no peer static key was present")
 	ErrNoPayload       = errors.New("provided payload was empty")
 
-	ErrMissingDetails = errors.New("certificate did not contain details")
-	ErrEmptySignature = errors.New("empty signature")
+	ErrMissingDetails  = errors.New("certificate did not contain details")
+	ErrEmptySignature  = errors.New("empty signature")
+	ErrEmptyRawDetails = errors.New("empty rawDetails not allowed")
 )

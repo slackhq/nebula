@@ -3,6 +3,7 @@ package cert
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/hex"
 	"net/netip"
 	"slices"
 	"testing"
@@ -223,4 +224,44 @@ func TestUnmarshalCertificateV2(t *testing.T) {
 	data := []byte("\x98\x00\x00")
 	_, err := unmarshalCertificateV2(data, nil, Curve_CURVE25519)
 	assert.EqualError(t, err, "bad wire format")
+}
+
+func TestCertificateV2_marshalForSigningStability(t *testing.T) {
+	before := time.Date(1996, time.May, 5, 0, 0, 0, 0, time.UTC)
+	after := before.Add(time.Second * 60).Round(time.Second)
+	pubKey := []byte("1234567890abcedfghij1234567890ab")
+
+	nc := certificateV2{
+		details: detailsV2{
+			name: "testing",
+			networks: []netip.Prefix{
+				mustParsePrefixUnmapped("10.1.1.2/16"),
+				mustParsePrefixUnmapped("10.1.1.1/24"),
+			},
+			unsafeNetworks: []netip.Prefix{
+				mustParsePrefixUnmapped("9.1.1.3/16"),
+				mustParsePrefixUnmapped("9.1.1.2/24"),
+			},
+			groups:    []string{"test-group1", "test-group2", "test-group3"},
+			notBefore: before,
+			notAfter:  after,
+			isCA:      false,
+			issuer:    "1234567890abcdef1234567890abcdef",
+		},
+		signature: []byte("1234567890abcdef1234567890abcdef"),
+		publicKey: pubKey,
+	}
+
+	const expectedRawDetailsStr = "a070800774657374696e67a10e04050a0101021004050a01010118a20e0405090101031004050901010218a3270c0b746573742d67726f7570310c0b746573742d67726f7570320c0b746573742d67726f7570338504318bef808604318befbc87101234567890abcdef1234567890abcdef"
+	expectedRawDetails, err := hex.DecodeString(expectedRawDetailsStr)
+	require.NoError(t, err)
+
+	db, err := nc.details.Marshal()
+	require.NoError(t, err)
+	assert.Equal(t, expectedRawDetails, db)
+
+	expectedForSigning, err := hex.DecodeString(expectedRawDetailsStr + "00313233343536373839306162636564666768696a313233343536373839306162")
+	b, err := nc.marshalForSigning()
+	require.NoError(t, err)
+	assert.Equal(t, expectedForSigning, b)
 }
