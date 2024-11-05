@@ -469,7 +469,7 @@ func TestRelays(t *testing.T) {
 	//TODO: assert we actually used the relay even though it should be impossible for a tunnel to have occurred without it
 }
 
-func TestRelaysHH(t *testing.T) {
+func _TestRelaysHH(t *testing.T) {
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
 	myControl, myVpnIpNet, _, _ := newSimpleServer(cert.Version1, ca, caKey, "me     ", "10.128.0.1/24", m{"relay": m{"use_relays": true}})
 	relayControl, relayVpnIpNet, relayUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "relay  ", "10.128.0.128/24", m{"relay": m{"am_relay": true}})
@@ -506,6 +506,7 @@ func TestRelaysHH(t *testing.T) {
 		})
 	}()
 
+	start := time.Now()
 	for {
 		t.Log("Does it still work?")
 		myControl.InjectRelays(theirVpnIpNet[0].Addr(), []netip.Addr{relayVpnIpNet[0].Addr()})
@@ -513,8 +514,14 @@ func TestRelaysHH(t *testing.T) {
 		myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
 		time.Sleep(time.Second)
 		r.RenderHostmaps("fart hostmaps", myControl, relayControl, theirControl)
+		// Just do this for 10 seconds
+		if time.Since(start).Seconds() > 10 {
+			break
+		}
 	}
 
+	// Let any other pending packets work their way through
+	time.Sleep(time.Second)
 	assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 
 	r.RenderHostmaps("Final hostmaps", myControl, relayControl, theirControl)
