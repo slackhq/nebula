@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -429,7 +430,7 @@ func (r *RemoteList) unlockedSetV4(ownerVpnIp, vpnIp netip.Addr, to []*V4AddrPor
 	}
 }
 
-func (r *RemoteList) unlockedSetRelay(ownerVpnIp, vpnIp netip.Addr, to []netip.Addr) {
+func (r *RemoteList) unlockedSetRelay(ownerVpnIp netip.Addr, to []netip.Addr) {
 	r.shouldRebuild = true
 	c := r.unlockedGetOrMakeRelay(ownerVpnIp)
 
@@ -595,6 +596,21 @@ func (r *RemoteList) unlockedCollect() {
 
 // unlockedSort assumes you have the write lock and performs the deduping and sorting of the address list
 func (r *RemoteList) unlockedSort(preferredRanges []netip.Prefix) {
+	// Use a map to deduplicate any relay addresses
+	dedupedRelays := map[netip.Addr]struct{}{}
+	for _, relay := range r.relays {
+		dedupedRelays[relay] = struct{}{}
+	}
+	r.relays = r.relays[:0]
+	for relay := range dedupedRelays {
+		r.relays = append(r.relays, relay)
+	}
+	// Put them in a somewhat consistent order after de-duplication
+	slices.SortFunc(r.relays, func(a, b netip.Addr) int {
+		return a.Compare(b)
+	})
+
+	// Now the addrs
 	n := len(r.addrs)
 	if n < 2 {
 		return

@@ -1222,7 +1222,7 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, fromVpnAddrs [
 		}
 	}
 
-	am.unlockedSetRelay(fromVpnAddrs[0], certVpnAddr, relays)
+	am.unlockedSetRelay(fromVpnAddrs[0], relays)
 	am.Unlock()
 
 	// Non-blocking attempt to trigger, skip if it would block
@@ -1286,7 +1286,7 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 		}
 	}
 
-	am.unlockedSetRelay(fromVpnAddrs[0], detailsVpnAddr, relays)
+	am.unlockedSetRelay(fromVpnAddrs[0], relays)
 	am.Unlock()
 
 	n = lhh.resetMeta()
