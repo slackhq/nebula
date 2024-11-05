@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/gaissmai/bart"
@@ -367,12 +368,6 @@ func (t *tun) Activate() error {
 		return fmt.Errorf("failed to bring the tun device up: %s", err)
 	}
 
-	// Run the interface
-	ifrf.Flags = ifrf.Flags | unix.IFF_UP | unix.IFF_RUNNING
-	if err = ioctl(t.ioctlFd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
-		return fmt.Errorf("failed to run tun device: %s", err)
-	}
-
 	//set route MTU
 	for i := range t.vpnNetworks {
 		if err = t.setDefaultRoute(t.vpnNetworks[i]); err != nil {
@@ -385,7 +380,11 @@ func (t *tun) Activate() error {
 		return err
 	}
 
-	//todo do we want to keep the link-local address?
+	// Run the interface
+	ifrf.Flags = ifrf.Flags | unix.IFF_UP | unix.IFF_RUNNING
+	if err = ioctl(t.ioctlFd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
+		return fmt.Errorf("failed to run tun device: %s", err)
+	}
 
 	return nil
 }
@@ -400,8 +399,6 @@ func (t *tun) setMTU() {
 }
 
 func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
-	// Default route
-
 	dr := &net.IPNet{
 		IP:   cidr.Masked().Addr().AsSlice(),
 		Mask: net.CIDRMask(cidr.Bits(), cidr.Addr().BitLen()),
@@ -420,7 +417,20 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 	}
 	err := netlink.RouteReplace(&nr)
 	if err != nil {
-		return fmt.Errorf("failed to set mtu %v on the default route %v; %v", t.DefaultMTU, dr, err)
+		t.l.WithError(err).WithField("cidr", cidr).Warn("Failed to set default route MTU, retrying")
+		//retry twice more -- on some systems there appears to be a race condition where if we set routes too soon, netlink says `invalid argument`
+		for i := 0; i < 2; i++ {
+			time.Sleep(100 * time.Millisecond)
+			err = netlink.RouteReplace(&nr)
+			if err == nil {
+				break
+			} else {
+				t.l.WithError(err).WithField("cidr", cidr).WithField("mtu", t.DefaultMTU).Warn("Failed to set default route MTU, retrying")
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("failed to set mtu %v on the default route %v; %v", t.DefaultMTU, dr, err)
+		}
 	}
 
 	return nil
@@ -547,7 +557,6 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 		return
 	}
 
-	//TODO: IPV6-WORK what if not ok?
 	gwAddr, ok := netip.AddrFromSlice(r.Gw)
 	if !ok {
 		t.l.WithField("route", r).Debug("Ignoring route update, invalid gateway address")
@@ -565,12 +574,6 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 	if !withinNetworks {
 		// Gateway isn't in our overlay network, ignore
 		t.l.WithField("route", r).Debug("Ignoring route update, not in our networks")
-		return
-	}
-
-	if x := r.Dst.IP.To4(); x == nil {
-		// Nebula only handles ipv4 on the overlay currently
-		t.l.WithField("route", r).Debug("Ignoring route update, destination is not ipv4")
 		return
 	}
 
@@ -602,11 +605,11 @@ func (t *tun) Close() error {
 	}
 
 	if t.ReadWriteCloser != nil {
-		t.ReadWriteCloser.Close()
+		_ = t.ReadWriteCloser.Close()
 	}
 
 	if t.ioctlFd > 0 {
-		os.NewFile(t.ioctlFd, "ioctlFd").Close()
+		_ = os.NewFile(t.ioctlFd, "ioctlFd").Close()
 	}
 
 	return nil
