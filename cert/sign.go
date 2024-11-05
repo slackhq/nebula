@@ -36,7 +36,7 @@ type beingSignedCertificate interface {
 	// marshalForSigning returns the bytes that should be signed
 	marshalForSigning() ([]byte, error)
 
-	// setSignature sets the signature for the certificate that has just been signed
+	// setSignature sets the signature for the certificate that has just been signed. The signature must not be blank.
 	setSignature([]byte) error
 }
 
@@ -138,7 +138,6 @@ func (t *TBSCertificate) SignWith(signer Certificate, curve Curve, sp SignerLamb
 		return nil, err
 	}
 
-	//TODO: check if we have sig bytes?
 	err = c.setSignature(sig)
 	if err != nil {
 		return nil, err

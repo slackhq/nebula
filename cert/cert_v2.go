@@ -390,6 +390,9 @@ func (c *certificateV2) marshalForSigning() ([]byte, error) {
 }
 
 func (c *certificateV2) setSignature(b []byte) error {
+	if len(b) == 0 {
+		return ErrEmptySignature
+	}
 	c.signature = b
 	return nil
 }
