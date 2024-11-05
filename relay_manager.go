@@ -132,7 +132,6 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, d []byte, f *Interface) {
 	case NebulaControl_CreateRelayResponse:
 		rm.handleCreateRelayResponse(v, h, f, msg)
 	}
-
 }
 
 func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f *Interface, m *NebulaControl) {
@@ -167,8 +166,13 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 		rm.l.WithField("relayTo", peerHostInfo.vpnAddrs[0]).Error("peerRelay does not have Relay state for relayTo")
 		return
 	}
-	if peerRelay.State == PeerRequested {
-		peerRelay.State = Established
+	switch peerRelay.State {
+	case Requested:
+		// I have requested an outstanding request to complete the relay to this peer. How did I end up here?
+	case Established:
+		// The relay to the peer is already established, no remaining work to do.
+	case PeerRequested, Disestablished:
+		peerHostInfo.relayState.UpdateRelayForByIpState(targetAddr, Established)
 		resp := NebulaControl{
 			Type:                NebulaControl_CreateRelayResponse,
 			ResponderRelayIndex: peerRelay.LocalIndex,
@@ -247,6 +251,21 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 						"existingRemoteIndex": existingRelay.RemoteIndex}).Error("Existing relay mismatch with CreateRelayRequest")
 					return
 				}
+			case Disestablished:
+				if existingRelay.RemoteIndex != m.InitiatorRelayIndex {
+					// We got a brand new Relay request, because its index is different than what we saw before.
+					// This should never happen. The peer should never change an index, once created.
+					logMsg.WithFields(logrus.Fields{
+						"existingRemoteIndex": existingRelay.RemoteIndex}).Error("Existing relay mismatch with CreateRelayRequest")
+					return
+				}
+				// Mark the relay as 'Established' because it's safe to use again
+				h.relayState.UpdateRelayForByIpState(from, Established)
+			case PeerRequested:
+				// I should never be in this state, because I am terminal, not forwarding.
+				logMsg.WithFields(logrus.Fields{
+					"existingRemoteIndex": existingRelay.RemoteIndex,
+					"state":               existingRelay.State}).Error("Unexpected Relay State found")
 			}
 		} else {
 			_, err := AddRelay(rm.l, h, f.hostMap, from, &m.InitiatorRelayIndex, TerminalType, Established)
@@ -258,7 +277,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 
 		relay, ok := h.relayState.QueryRelayForByIp(from)
 		if !ok {
-			logMsg.Error("Relay State not found")
+			logMsg.WithField("from", from).Error("Relay State not found")
 			return
 		}
 
@@ -316,7 +335,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 		targetRelay, ok := peer.relayState.QueryRelayForByIp(from)
 		if ok {
 			index = targetRelay.LocalIndex
-			if targetRelay.State == Requested {
+			if targetRelay.State == Requested || targetRelay.State == Disestablished {
 				sendCreateRequest = true
 			}
 		} else {
@@ -328,6 +347,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 			sendCreateRequest = true
 		}
 		if sendCreateRequest {
+			peer.relayState.UpdateRelayForByIpState(from, Requested)
 			// Send a CreateRelayRequest to the peer.
 			req := NebulaControl{
 				Type:                NebulaControl_CreateRelayRequest,
@@ -429,6 +449,8 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 
 			case Requested:
 				// Keep waiting for the other relay to complete
+			case Disestablished:
+			default:
 			}
 		}
 	}
