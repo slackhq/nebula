@@ -1286,7 +1286,8 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 	} else if useVersion == cert.Version2 {
 		n.Details.VpnAddr = netAddrToProtoAddr(fromVpnAddrs[0])
 	} else {
-		panic("unsupported version") //todo need a test that proves we can never get here so we can remove this
+		lhh.l.WithField("useVersion", useVersion).Error("invalid protocol version")
+		return
 	}
 
 	ln, err := n.MarshalTo(lhh.pb)
@@ -1300,7 +1301,9 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 }
 
 func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpnAddrs []netip.Addr, w EncWriter) {
-	//TODO: this is kinda stupid (WHY?)
+	//It's possible the lighthouse is communicating with us using a non primary vpn addr,
+	//which means we need to compare all fromVpnAddrs against all configured lighthouse vpn addrs.
+	//maybe one day we'll have a better idea, if it matters.
 	if !lhh.lh.IsAnyLighthouseAddr(fromVpnAddrs) {
 		return
 	}
