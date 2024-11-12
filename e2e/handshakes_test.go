@@ -522,13 +522,10 @@ func TestReestablishRelays(t *testing.T) {
 		time.Sleep(2 * time.Second)
 	}
 	r.Log("Dead index went away. Woot!")
-	r.RenderHostmaps("fart hostmaps 2", myControl, relayControl, theirControl)
+	r.RenderHostmaps("Me removed hostinfo", myControl, relayControl, theirControl)
 	// Next packet should re-establish a relayed connection and work just great.
 
 	t.Logf("Assert the tunnel...")
-
-	t.Log("Ensure packet traversal from them to me via the relay")
-	r.RenderHostmaps("fart hostmaps 3", myControl, relayControl, theirControl)
 	for {
 		t.Log("RouteForAllUntilTxTun")
 		myControl.InjectLightHouseAddr(relayVpnIpNet[0].Addr(), relayUdpAddr)
