@@ -50,7 +50,7 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 			Error("Unable to handshake with host because no certificate handshake bytes is available")
 	}
 
-	ci, err := NewConnectionState(f.l, cs, crt, true, noise.HandshakeIX)
+	ci, err := NewConnectionState(f.l, cs, crt, true, noise.HandshakeIX, cs.psk.primary)
 	if err != nil {
 		f.l.WithError(err).WithField("vpnAddrs", hh.hostinfo.vpnAddrs).
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).
@@ -104,33 +104,52 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 			Error("Unable to handshake with host because no certificate is available")
 	}
 
-	ci, err := NewConnectionState(f.l, cs, crt, false, noise.HandshakeIX)
-	if err != nil {
-		f.l.WithError(err).WithField("udpAddr", addr).
+	var (
+		err error
+		ci  *ConnectionState
+		msg []byte
+	)
+
+	hs := &NebulaHandshake{}
+
+	for _, psk := range cs.psk.keys {
+		ci, err = NewConnectionState(f.l, cs, crt, false, noise.HandshakeIX, psk)
+		if err != nil {
+			//TODO: should be bother logging this, if we have multiple psks and the error is unrelated it will be verbose.
+			f.l.WithError(err).WithField("udpAddr", addr).
+				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+				Error("Failed to create connection state")
+			continue
+		}
+
+		msg, _, _, err = ci.H.ReadMessage(nil, packet[header.Len:])
+		if err != nil {
+			// Calls to ReadMessage with an incorrect psk should fail, try the next one if we have one
+			continue
+		}
+
+		// Sometimes ReadMessage returns fine with a nil psk even if the handshake is using a psk, ensure our protobuf
+		// comes out clean as well
+		err = hs.Unmarshal(msg)
+		if err == nil {
+			// There was no error, we can continue with this handshake
+			break
+		}
+
+		// The unmarshal failed, try the next psk if we have one
+	}
+
+	// We finished with an error, log it and get out
+	if err != nil || hs.Details == nil {
+		// We aren't logging the error here because we can't be sure of the failure when using psk
+		f.l.WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Error("Failed to create connection state")
+			Error("Was unable to decrypt the handshake")
 		return
 	}
 
 	// Mark packet 1 as seen so it doesn't show up as missed
 	ci.window.Update(f.l, 1)
-
-	msg, _, _, err := ci.H.ReadMessage(nil, packet[header.Len:])
-	if err != nil {
-		f.l.WithError(err).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Error("Failed to call noise.ReadMessage")
-		return
-	}
-
-	hs := &NebulaHandshake{}
-	err = hs.Unmarshal(msg)
-	if err != nil || hs.Details == nil {
-		f.l.WithError(err).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Error("Failed unmarshal handshake message")
-		return
-	}
 
 	rc, err := cert.Recombine(cert.Version(hs.Details.CertVersion), hs.Details.Cert, ci.H.PeerStatic(), ci.Curve())
 	if err != nil {

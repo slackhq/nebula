@@ -19,6 +19,38 @@ pki:
   # After all hosts in the mesh are using a v2 certificate then v1 certificates are no longer needed.
   # default_version: 1
 
+  # psk can be used to mask the contents of handshakes.
+  psk:
+    # `mode` defines how the pre shared keys can be used in a handshake.
+    # `accepting` (the default) will initiate handshakes using an empty key and will try to use any keys provided when
+    # receiving handshakes, including an empty key.
+    # `sending` will initiate handshakes with the first key provided and will try to use any keys provided when
+    # receiving handshakes, including an empty key.
+    # `enforced` will initiate handshakes with the first psk key provided and will try to use any keys provided when
+    # responding to handshakes. An empty key will not be allowed.
+    #
+    # To change a mesh from not using a psk to enforcing psk:
+    # 1. Leave `mode` as `accepting` and configure `psk.keys` to match on all nodes in the mesh and reload.
+    # 2. Change `mode` to `sending` on all nodes in the mesh and reload.
+    # 3. Change `mode` to `enforced` on all nodes in the mesh and reload.
+    #mode: accepting
+
+    # The keys provided are sent through hkdf to ensure the shared secret used in the noise protocol is the
+    # correct byte length.
+    #
+    # Only the first key is used for outbound handshakes but all keys provided will be tried in the order specified, on
+    # incoming handshakes. This is to allow for psk rotation.
+    #
+    # To rotate a primary key:
+    # 1. Put the new key in the 2nd slot on every node in the mesh and reload.
+    # 2. Move the key from the 2nd slot to the 1st slot, the old primary key is now in the 2nd slot, reload.
+    # 3. Remove the old primary key once it is no longer in use on every node in the mesh and reload.
+    #keys:
+    # - shared secret string, this one is used in all outbound handshakes # This is the primary key used when sending handshakes
+    # - this is a fallback key, received handshakes can use this
+    # - another fallback, received handshakes can use this one too
+    # - "\x68\x65\x6c\x6c\x6f\x20\x66\x72\x69\x65\x6e\x64\x73" # for raw bytes if you desire
+
 # The static host map defines a set of hosts with fixed IP addresses on the internet (or any network).
 # A host can have multiple fixed IP addresses defined here, and nebula will try each when establishing a tunnel.
 # The syntax is:
@@ -312,7 +344,6 @@ logging:
   # trigger_buffer is the size of the buffer channel for quickly sending handshakes
   # after receiving the response for lighthouse queries
   #trigger_buffer: 64
-
 
 # Nebula security group configuration
 firewall:

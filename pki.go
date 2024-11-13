@@ -38,6 +38,8 @@ type CertState struct {
 	pkcs11Backed   bool
 	cipher         string
 
+	psk *Psk
+
 	myVpnNetworks            []netip.Prefix
 	myVpnNetworksTable       *bart.Table[struct{}]
 	myVpnAddrs               []netip.Addr
@@ -170,6 +172,16 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 			)
 		}
 	}
+
+	psk, err := NewPskFromConfig(c)
+	if err != nil {
+		return util.NewContextualError("Failed to load psk from config", nil, err)
+	}
+	if len(psk.keys) > 0 {
+		p.l.WithField("pskMode", psk.mode).WithField("keysLen", len(psk.keys)).
+			Info("pre shared keys are in use")
+	}
+	newState.psk = psk
 
 	p.cs.Store(newState)
 

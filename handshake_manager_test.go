@@ -10,6 +10,7 @@ import (
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_NewHandshakeManagerVpnIp(t *testing.T) {
@@ -23,11 +24,15 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 
 	lh := newTestLighthouse()
 
+	psk, err := NewPsk(PskAccepting, nil)
+	require.NoError(t, err)
+
 	cs := &CertState{
 		defaultVersion:   cert.Version1,
 		privateKey:       []byte{},
 		v1Cert:           &dummyCert{version: cert.Version1},
 		v1HandshakeBytes: []byte{},
+		psk:              psk,
 	}
 
 	blah := NewHandshakeManager(l, mainHM, lh, &udp.NoopConn{}, defaultHandshakeConfig)
