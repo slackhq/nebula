@@ -93,6 +93,17 @@ func (rs *RelayState) UpdateRelayForByIpState(vpnIp netip.Addr, state int) {
 	}
 }
 
+func (rs *RelayState) UpdateRelayForByIdxState(idx uint32, state int) {
+	rs.Lock()
+	defer rs.Unlock()
+	if r, ok := rs.relayForByIdx[idx]; ok {
+		newRelay := *r
+		newRelay.State = state
+		rs.relayForByAddr[newRelay.PeerAddr] = &newRelay
+		rs.relayForByIdx[newRelay.LocalIndex] = &newRelay
+	}
+}
+
 func (rs *RelayState) CopyAllRelayFor() []*Relay {
 	rs.RLock()
 	defer rs.RUnlock()
@@ -378,8 +389,8 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 
 func (hm *HostMap) unlockedInnerDeleteHostInfo(hostinfo *HostInfo, addr netip.Addr) {
 	primary, ok := hm.Hosts[addr]
-	isPrimary := primary == hostinfo
-	if ok && isPrimary {
+	isLastHostinfo := hostinfo.next == nil && hostinfo.prev == nil
+	if ok && primary == hostinfo {
 		// The vpn addr pointer points to the same hostinfo as the local index id, we can remove it
 		delete(hm.Hosts, addr)
 		if len(hm.Hosts) == 0 {
@@ -428,7 +439,7 @@ func (hm *HostMap) unlockedInnerDeleteHostInfo(hostinfo *HostInfo, addr netip.Ad
 			Debug("Hostmap hostInfo deleted")
 	}
 
-	if isPrimary {
+	if isLastHostinfo {
 		// I have lost connectivity to my peers. My relay tunnel is likely broken. Mark the next
 		// hops as 'Requested' so that new relay tunnels are created in the future.
 		hm.unlockedDisestablishVpnAddrRelayFor(hostinfo)

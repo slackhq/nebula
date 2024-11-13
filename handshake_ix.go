@@ -400,6 +400,9 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 			return
 		}
 		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
+		// I successfully received a handshake. Just in case I marked this tunnel as 'Disestablished', ensure
+		// it's correctly marked as working.
+		hostinfo.relayState.UpdateRelayForByIdxState(via.remoteIdx, Established)
 		f.SendVia(via.relayHI, via.relay, msg, make([]byte, 12), make([]byte, mtu), false)
 		f.l.WithField("vpnAddrs", vpnAddrs).WithField("relay", via.relayHI.vpnAddrs[0]).
 			WithField("certName", certName).
