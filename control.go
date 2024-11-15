@@ -133,9 +133,9 @@ func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 func (c *Control) GetCertByVpnIp(vpnIp netip.Addr) cert.Certificate {
 	_, found := c.f.myVpnAddrsTable.Lookup(vpnIp)
 	if found {
-		//TODO: we might have 2 certs....
-		//TODO: this should return our latest version cert
-		return c.f.pki.getDefaultCertificate().Copy()
+		// Only returning the default certificate since its impossible
+		// for any other host but ourselves to have more than 1
+		return c.f.pki.getCertState().GetDefaultCertificate().Copy()
 	}
 	hi := c.f.hostMap.QueryVpnAddr(vpnIp)
 	if hi == nil {
@@ -228,13 +228,9 @@ func (c *Control) CloseTunnel(vpnIp netip.Addr, localOnly bool) bool {
 // the int returned is a count of tunnels closed
 func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	//TODO: this is probably better as a function in ConnectionManager or HostMap directly
-	lighthouses := c.f.lightHouse.GetLighthouses()
-
 	shutdown := func(h *HostInfo) {
-		if excludeLighthouses {
-			if _, ok := lighthouses[h.vpnAddrs[0]]; ok {
-				return
-			}
+		if excludeLighthouses && c.f.lightHouse.IsAnyLighthouseAddr(h.vpnAddrs) {
+			return
 		}
 		c.f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 		c.f.closeTunnel(h)

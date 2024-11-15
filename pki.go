@@ -70,16 +70,6 @@ func (p *PKI) getCertState() *CertState {
 	return p.cs.Load()
 }
 
-// TODO: We should remove this
-func (p *PKI) getDefaultCertificate() cert.Certificate {
-	return p.cs.Load().GetDefaultCertificate()
-}
-
-// TODO: We should remove this
-func (p *PKI) getCertificate(v cert.Version) cert.Certificate {
-	return p.cs.Load().getCertificate(v)
-}
-
 func (p *PKI) reload(c *config.C, initial bool) error {
 	err := p.reloadCerts(c, initial)
 	if err != nil {
@@ -300,7 +290,6 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 		// Load the certificate
 		crt, rawCert, err = loadCertificate(rawCert)
 		if err != nil {
-			//TODO: check error
 			return nil, err
 		}
 

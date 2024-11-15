@@ -23,7 +23,6 @@ import (
 )
 
 type FirewallInterface interface {
-	//TODO: name these better addr, localAddr. Are they vpnAddrs?
 	AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, addr, localAddr netip.Prefix, caName string, caSha string) error
 }
 
