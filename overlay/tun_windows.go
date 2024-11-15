@@ -239,11 +239,12 @@ func (t *winTun) Close() error {
 	luid := winipcfg.LUID(t.tun.LUID())
 	_ = luid.FlushRoutes(windows.AF_INET)
 	_ = luid.FlushIPAddresses(windows.AF_INET)
-	/* We don't support IPV6 yet
+
 	_ = luid.FlushRoutes(windows.AF_INET6)
 	_ = luid.FlushIPAddresses(windows.AF_INET6)
-	*/
+
 	_ = luid.FlushDNS(windows.AF_INET)
+	_ = luid.FlushDNS(windows.AF_INET6)
 
 	return t.tun.Close()
 }

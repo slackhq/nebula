@@ -426,17 +426,17 @@ func (n *connectionManager) shouldSwapPrimary(current, primary *HostInfo) bool {
 	// If we are here then we have multiple tunnels for a host pair and neither side believes the same tunnel is primary.
 	// Let's sort this out.
 
-	//TODO: current.vpnIp should become an array of vpnIps
+	// Only one side should swap because if both swap then we may never resolve to a single tunnel.
+	// vpn addr is static across all tunnels for this host pair so lets
+	// use that to determine if we should consider swapping.
 	if current.vpnAddrs[0].Compare(n.intf.myVpnAddrs[0]) < 0 {
-		// Only one side should flip primary because if both flip then we may never resolve to a single tunnel.
-		// vpn ip is static across all tunnels for this host pair so lets use that to determine who is flipping.
-		// The remotes vpn ip is lower than mine. I will not flip.
+		// Their primary vpn addr is less than mine. Do not swap.
 		return false
 	}
 
-	//TODO: we should favor v2 over v1 certificates if configured to send them
-
-	crt := n.intf.pki.getCertificate(current.ConnectionState.myCert.Version())
+	crt := n.intf.pki.getCertState().getCertificate(current.ConnectionState.myCert.Version())
+	// If this tunnel is using the latest certificate then we should swap it to primary for a bit and see if things
+	// settle down.
 	return bytes.Equal(current.ConnectionState.myCert.Signature(), crt.Signature())
 }
 
@@ -495,12 +495,13 @@ func (n *connectionManager) sendPunch(hostinfo *HostInfo) {
 }
 
 func (n *connectionManager) tryRehandshake(hostinfo *HostInfo) {
-	crt := n.intf.pki.getCertificate(hostinfo.ConnectionState.myCert.Version())
-	if bytes.Equal(hostinfo.ConnectionState.myCert.Signature(), crt.Signature()) {
+	cs := n.intf.pki.getCertState()
+	curCrt := hostinfo.ConnectionState.myCert
+	myCrt := cs.getCertificate(curCrt.Version())
+	if curCrt.Version() >= cs.defaultVersion && bytes.Equal(curCrt.Signature(), myCrt.Signature()) == true {
+		// The current tunnel is using the latest certificate and version, no need to rehandshake.
 		return
 	}
-
-	//TODO: we should favor v2 over v1 certificates if configured to send them
 
 	n.l.WithField("vpnAddrs", hostinfo.vpnAddrs).
 		WithField("reason", "local certificate is not current").
