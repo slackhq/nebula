@@ -110,6 +110,94 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	})
 }
 
+func TestListHostMapHostsIter(t *testing.T) {
+	l := logrus.New()
+	hm := newHostMap(l, netip.Prefix{})
+	hm.preferredRanges.Store(&[]netip.Prefix{})
+
+	hosts := []struct {
+		vpnIp         netip.Addr
+		remoteAddr    netip.AddrPort
+		localIndexId  uint32
+		remoteIndexId uint32
+	}{
+		{vpnIp: netip.MustParseAddr("0.0.0.2"), remoteAddr: netip.MustParseAddrPort("0.0.0.101:4445"), localIndexId: 202, remoteIndexId: 201},
+		{vpnIp: netip.MustParseAddr("0.0.0.3"), remoteAddr: netip.MustParseAddrPort("0.0.0.102:4446"), localIndexId: 203, remoteIndexId: 202},
+		{vpnIp: netip.MustParseAddr("0.0.0.4"), remoteAddr: netip.MustParseAddrPort("0.0.0.103:4447"), localIndexId: 204, remoteIndexId: 203},
+	}
+
+	for _, h := range hosts {
+		hm.unlockedAddHostInfo(&HostInfo{
+			remote: h.remoteAddr,
+			ConnectionState: &ConnectionState{
+				peerCert: nil,
+			},
+			localIndexId:  h.localIndexId,
+			remoteIndexId: h.remoteIndexId,
+			vpnIp:         h.vpnIp,
+		}, &Interface{})
+	}
+
+	iter := listHostMapHostsIter(hm)
+	var results []ControlHostInfo
+
+	for h := range iter {
+		results = append(results, *h)
+	}
+
+	assert.Equal(t, len(hosts), len(results), "expected number of hosts in iterator")
+	for i, h := range hosts {
+		assert.Equal(t, h.vpnIp, results[i].VpnIp)
+		assert.Equal(t, h.localIndexId, results[i].LocalIndex)
+		assert.Equal(t, h.remoteIndexId, results[i].RemoteIndex)
+		assert.Equal(t, h.remoteAddr, results[i].CurrentRemote)
+	}
+}
+
+func TestListHostMapIndexesIter(t *testing.T) {
+	l := logrus.New()
+	hm := newHostMap(l, netip.Prefix{})
+	hm.preferredRanges.Store(&[]netip.Prefix{})
+
+	hosts := []struct {
+		vpnIp         netip.Addr
+		remoteAddr    netip.AddrPort
+		localIndexId  uint32
+		remoteIndexId uint32
+	}{
+		{vpnIp: netip.MustParseAddr("0.0.0.2"), remoteAddr: netip.MustParseAddrPort("0.0.0.101:4445"), localIndexId: 202, remoteIndexId: 201},
+		{vpnIp: netip.MustParseAddr("0.0.0.3"), remoteAddr: netip.MustParseAddrPort("0.0.0.102:4446"), localIndexId: 203, remoteIndexId: 202},
+		{vpnIp: netip.MustParseAddr("0.0.0.4"), remoteAddr: netip.MustParseAddrPort("0.0.0.103:4447"), localIndexId: 204, remoteIndexId: 203},
+	}
+
+	for _, h := range hosts {
+		hm.unlockedAddHostInfo(&HostInfo{
+			remote: h.remoteAddr,
+			ConnectionState: &ConnectionState{
+				peerCert: nil,
+			},
+			localIndexId:  h.localIndexId,
+			remoteIndexId: h.remoteIndexId,
+			vpnIp:         h.vpnIp,
+		}, &Interface{})
+	}
+
+	iter := listHostMapIndexesIter(hm)
+	var results []ControlHostInfo
+
+	for h := range iter {
+		results = append(results, *h)
+	}
+
+	assert.Equal(t, len(hosts), len(results), "expected number of hosts in iterator")
+	for i, h := range hosts {
+		assert.Equal(t, h.vpnIp, results[i].VpnIp)
+		assert.Equal(t, h.localIndexId, results[i].LocalIndex)
+		assert.Equal(t, h.remoteIndexId, results[i].RemoteIndex)
+		assert.Equal(t, h.remoteAddr, results[i].CurrentRemote)
+	}
+}
+
 func assertFields(t *testing.T, expected []string, actualStruct interface{}) {
 	val := reflect.ValueOf(actualStruct).Elem()
 	fields := make([]string, val.NumField())
