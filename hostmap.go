@@ -35,6 +35,7 @@ const (
 	Requested = iota
 	PeerRequested
 	Established
+	Disestablished
 )
 
 const (
@@ -77,6 +78,28 @@ func (rs *RelayState) DeleteRelay(ip netip.Addr) {
 	rs.Lock()
 	defer rs.Unlock()
 	delete(rs.relays, ip)
+}
+
+func (rs *RelayState) UpdateRelayForByIpState(vpnIp netip.Addr, state int) {
+	rs.Lock()
+	defer rs.Unlock()
+	if r, ok := rs.relayForByIp[vpnIp]; ok {
+		newRelay := *r
+		newRelay.State = state
+		rs.relayForByIp[newRelay.PeerIp] = &newRelay
+		rs.relayForByIdx[newRelay.LocalIndex] = &newRelay
+	}
+}
+
+func (rs *RelayState) UpdateRelayForByIdxState(idx uint32, state int) {
+	rs.Lock()
+	defer rs.Unlock()
+	if r, ok := rs.relayForByIdx[idx]; ok {
+		newRelay := *r
+		newRelay.State = state
+		rs.relayForByIp[newRelay.PeerIp] = &newRelay
+		rs.relayForByIdx[newRelay.LocalIndex] = &newRelay
+	}
 }
 
 func (rs *RelayState) CopyAllRelayFor() []*Relay {
@@ -361,6 +384,7 @@ func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) {
 
 func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 	primary, ok := hm.Hosts[hostinfo.vpnIp]
+	isLastHostinfo := hostinfo.next == nil && hostinfo.prev == nil
 	if ok && primary == hostinfo {
 		// The vpnIp pointer points to the same hostinfo as the local index id, we can remove it
 		delete(hm.Hosts, hostinfo.vpnIp)
@@ -410,6 +434,12 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 			Debug("Hostmap hostInfo deleted")
 	}
 
+	if isLastHostinfo {
+		// I have lost connectivity to my peers. My relay tunnel is likely broken. Mark the next
+		// hops as 'Disestablished' so that new relay tunnels are created in the future.
+		hm.unlockedDisestablishVpnAddrRelayFor(hostinfo)
+	}
+	// Clean up any local relay indexes for which I am acting as a relay hop
 	for _, localRelayIdx := range hostinfo.relayState.CopyRelayForIdxs() {
 		delete(hm.Relays, localRelayIdx)
 	}
@@ -468,6 +498,27 @@ func (hm *HostMap) QueryVpnIpRelayFor(targetIp, relayHostIp netip.Addr) (*HostIn
 		h = h.next
 	}
 	return nil, nil, errors.New("unable to find host with relay")
+}
+
+func (hm *HostMap) unlockedDisestablishVpnAddrRelayFor(hi *HostInfo) {
+	for _, relayHostIp := range hi.relayState.CopyRelayIps() {
+		if h, ok := hm.Hosts[relayHostIp]; ok {
+			for h != nil {
+				h.relayState.UpdateRelayForByIpState(hi.vpnIp, Disestablished)
+				h = h.next
+			}
+		}
+	}
+	for _, rs := range hi.relayState.CopyAllRelayFor() {
+		if rs.Type == ForwardingType {
+			if h, ok := hm.Hosts[rs.PeerIp]; ok {
+				for h != nil {
+					h.relayState.UpdateRelayForByIpState(hi.vpnIp, Disestablished)
+					h = h.next
+				}
+			}
+		}
+	}
 }
 
 func (hm *HostMap) queryVpnIp(vpnIp netip.Addr, promoteIfce *Interface) *HostInfo {

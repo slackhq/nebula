@@ -278,48 +278,8 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 				continue
 			}
 			// Check the relay HostInfo to see if we already established a relay through it
-			if existingRelay, ok := relayHostInfo.relayState.QueryRelayForByIp(vpnIp); ok {
-				switch existingRelay.State {
-				case Established:
-					hostinfo.logger(hm.l).WithField("relay", relay.String()).Info("Send handshake via relay")
-					hm.f.SendVia(relayHostInfo, existingRelay, hostinfo.HandshakePacket[0], make([]byte, 12), make([]byte, mtu), false)
-				case Requested:
-					hostinfo.logger(hm.l).WithField("relay", relay.String()).Info("Re-send CreateRelay request")
-
-					//TODO: IPV6-WORK
-					myVpnIpB := hm.f.myVpnNet.Addr().As4()
-					theirVpnIpB := vpnIp.As4()
-
-					// Re-send the CreateRelay request, in case the previous one was lost.
-					m := NebulaControl{
-						Type:                NebulaControl_CreateRelayRequest,
-						InitiatorRelayIndex: existingRelay.LocalIndex,
-						RelayFromIp:         binary.BigEndian.Uint32(myVpnIpB[:]),
-						RelayToIp:           binary.BigEndian.Uint32(theirVpnIpB[:]),
-					}
-					msg, err := m.Marshal()
-					if err != nil {
-						hostinfo.logger(hm.l).
-							WithError(err).
-							Error("Failed to marshal Control message to create relay")
-					} else {
-						// This must send over the hostinfo, not over hm.Hosts[ip]
-						hm.f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, make([]byte, 12), make([]byte, mtu))
-						hm.l.WithFields(logrus.Fields{
-							"relayFrom":           hm.f.myVpnNet.Addr(),
-							"relayTo":             vpnIp,
-							"initiatorRelayIndex": existingRelay.LocalIndex,
-							"relay":               relay}).
-							Info("send CreateRelayRequest")
-					}
-				default:
-					hostinfo.logger(hm.l).
-						WithField("vpnIp", vpnIp).
-						WithField("state", existingRelay.State).
-						WithField("relay", relayHostInfo.vpnIp).
-						Errorf("Relay unexpected state")
-				}
-			} else {
+			existingRelay, ok := relayHostInfo.relayState.QueryRelayForByIp(vpnIp)
+			if !ok {
 				// No relays exist or requested yet.
 				if relayHostInfo.remote.IsValid() {
 					idx, err := AddRelay(hm.l, relayHostInfo, hm.mainHostMap, vpnIp, nil, TerminalType, Requested)
@@ -352,6 +312,52 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 							Info("send CreateRelayRequest")
 					}
 				}
+				continue
+			}
+			switch existingRelay.State {
+			case Established:
+				hostinfo.logger(hm.l).WithField("relay", relay.String()).Info("Send handshake via relay")
+				hm.f.SendVia(relayHostInfo, existingRelay, hostinfo.HandshakePacket[0], make([]byte, 12), make([]byte, mtu), false)
+			case Disestablished:
+				// Mark this relay as 'requested'
+				relayHostInfo.relayState.UpdateRelayForByIpState(vpnIp, Requested)
+				fallthrough
+			case Requested:
+				hostinfo.logger(hm.l).WithField("relay", relay.String()).Info("Re-send CreateRelay request")
+				// Re-send the CreateRelay request, in case the previous one was lost.
+				relayFrom := hm.f.myVpnNet.Addr().As4()
+				relayTo := vpnIp.As4()
+				m := NebulaControl{
+					Type:                NebulaControl_CreateRelayRequest,
+					InitiatorRelayIndex: existingRelay.LocalIndex,
+					RelayFromIp:         binary.BigEndian.Uint32(relayFrom[:]),
+					RelayToIp:           binary.BigEndian.Uint32(relayTo[:]),
+				}
+
+				msg, err := m.Marshal()
+				if err != nil {
+					hostinfo.logger(hm.l).
+						WithError(err).
+						Error("Failed to marshal Control message to create relay")
+				} else {
+					// This must send over the hostinfo, not over hm.Hosts[ip]
+					hm.f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, make([]byte, 12), make([]byte, mtu))
+					hm.l.WithFields(logrus.Fields{
+						"relayFrom":           hm.f.myVpnNet,
+						"relayTo":             vpnIp,
+						"initiatorRelayIndex": existingRelay.LocalIndex,
+						"relay":               relay}).
+						Info("send CreateRelayRequest")
+				}
+			case PeerRequested:
+				// PeerRequested only occurs in Forwarding relays, not Terminal relays, and this is a Terminal relay case.
+				fallthrough
+			default:
+				hostinfo.logger(hm.l).
+					WithField("vpnIp", vpnIp).
+					WithField("state", existingRelay.State).
+					WithField("relay", relay).
+					Errorf("Relay unexpected state")
 			}
 		}
 	}
