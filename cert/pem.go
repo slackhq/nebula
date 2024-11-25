@@ -38,8 +38,7 @@ func UnmarshalCertificateFromPEM(b []byte) (Certificate, []byte, error) {
 		}
 		return c, r, nil
 	case CertificateV2Banner:
-		//TODO
-		panic("TODO")
+		return nil, r, ErrInvalidPEMCertificateUnsupported
 	default:
 		return nil, r, ErrInvalidPEMCertificateBanner
 	}

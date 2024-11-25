@@ -61,6 +61,13 @@ IBNWYMep3ysx9zCgknfG5dKtwGTaqF++BWKDYdyl34KX
 -----END NEBULA CERTIFICATE-----
 `
 
+	v2 := `
+# valid PEM with the V2 header
+-----BEGIN NEBULA CERTIFICATE V2-----
+CmYKEG5lYnVsYSBQMjU2IHRlc3Qo4s+7mgYw4tXrsAc6QQRkaW2jFmllYvN4+/k2
+-----END NEBULA CERTIFICATE V2-----
+`
+
 	rootCA := certificateV1{
 		details: detailsV1{
 			Name: "nebula root ca",
@@ -106,4 +113,9 @@ IBNWYMep3ysx9zCgknfG5dKtwGTaqF++BWKDYdyl34KX
 	assert.Nil(t, err)
 	assert.Equal(t, ppppp.CAs[string("a7938893ec8c4ef769b06d7f425e5e46f7a7f5ffa49c3bcf4a86b608caba9159")].Certificate.Name(), rootCAP256.details.Name)
 	assert.Equal(t, len(ppppp.CAs), 1)
+
+	pppppp, err := NewCAPoolFromPEM(append([]byte(p256), []byte(v2)...))
+	assert.Equal(t, err, ErrInvalidPEMCertificateUnsupported)
+	assert.Equal(t, pppppp.CAs[string("a7938893ec8c4ef769b06d7f425e5e46f7a7f5ffa49c3bcf4a86b608caba9159")].Certificate.Name(), rootCAP256.details.Name)
+	assert.Equal(t, len(pppppp.CAs), 1)
 }

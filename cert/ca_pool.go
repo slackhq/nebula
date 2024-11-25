@@ -32,10 +32,14 @@ func NewCAPoolFromPEM(caPEMs []byte) (*CAPool, error) {
 	pool := NewCAPool()
 	var err error
 	var expired bool
+	var caTooNew bool
 	for {
 		caPEMs, err = pool.AddCAFromPEM(caPEMs)
 		if errors.Is(err, ErrExpired) {
 			expired = true
+			err = nil
+		} else if errors.Is(err, ErrInvalidPEMCertificateUnsupported) {
+			caTooNew = true
 			err = nil
 		}
 		if err != nil {
@@ -48,6 +52,8 @@ func NewCAPoolFromPEM(caPEMs []byte) (*CAPool, error) {
 
 	if expired {
 		return pool, ErrExpired
+	} else if caTooNew {
+		return pool, ErrInvalidPEMCertificateUnsupported
 	}
 
 	return pool, nil

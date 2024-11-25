@@ -24,4 +24,5 @@ var (
 	ErrInvalidPEMX25519PrivateKeyBanner  = errors.New("bytes did not contain a proper X25519 private key banner")
 	ErrInvalidPEMEd25519PublicKeyBanner  = errors.New("bytes did not contain a proper Ed25519 public key banner")
 	ErrInvalidPEMEd25519PrivateKeyBanner = errors.New("bytes did not contain a proper Ed25519 private key banner")
+	ErrInvalidPEMCertificateUnsupported  = errors.New("bytes contain an unsupported certificate format")
 )
