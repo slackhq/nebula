@@ -237,6 +237,8 @@ func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.NebulaCAPool, er
 			return nil, errors.New("no valid CA certificates present")
 		}
 
+	} else if errors.Is(err, cert.ErrInvalidPEMCertificateUnsupported) {
+		l.WithError(err).Warn("At least one configured CA is unsupported by this version of nebula. It has been ignored.")
 	} else if err != nil {
 		return nil, fmt.Errorf("error while adding CA certificate to CA trust store: %s", err)
 	}

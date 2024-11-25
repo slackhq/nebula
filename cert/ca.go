@@ -30,10 +30,14 @@ func NewCAPoolFromBytes(caPEMs []byte) (*NebulaCAPool, error) {
 	pool := NewCAPool()
 	var err error
 	var expired bool
+	var caTooNew bool
 	for {
 		caPEMs, err = pool.AddCACertificate(caPEMs)
 		if errors.Is(err, ErrExpired) {
 			expired = true
+			err = nil
+		} else if errors.Is(err, ErrInvalidPEMCertificateUnsupported) {
+			caTooNew = true
 			err = nil
 		}
 		if err != nil {
@@ -46,6 +50,8 @@ func NewCAPoolFromBytes(caPEMs []byte) (*NebulaCAPool, error) {
 
 	if expired {
 		return pool, ErrExpired
+	} else if caTooNew {
+		return pool, ErrInvalidPEMCertificateUnsupported
 	}
 
 	return pool, nil
