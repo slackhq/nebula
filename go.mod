@@ -23,7 +23,7 @@ require (
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/stefanberger/go-pkcs11uri v0.0.0-20230803200340-78284954bff6
-	github.com/stretchr/testify v1.9.0
+	github.com/stretchr/testify v1.10.0
 	github.com/vishvananda/netlink v1.3.0
 	golang.org/x/crypto v0.28.0
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090
