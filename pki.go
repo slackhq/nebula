@@ -223,7 +223,10 @@ func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.NebulaCAPool, er
 		}
 	}
 
-	caPool, err := cert.NewCAPoolFromBytes(rawCA)
+	caPool, warnings, err := cert.NewCAPoolFromBytes(rawCA)
+	for _, w := range warnings {
+		l.WithError(w).Warn("parsing a CA certificate failed")
+	}
 	if errors.Is(err, cert.ErrExpired) {
 		var expired int
 		for _, crt := range caPool.CAs {
@@ -236,9 +239,6 @@ func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.NebulaCAPool, er
 		if expired >= len(caPool.CAs) {
 			return nil, errors.New("no valid CA certificates present")
 		}
-
-	} else if errors.Is(err, cert.ErrInvalidPEMCertificateUnsupported) {
-		l.WithError(err).Warn("At least one configured CA is unsupported by this version of nebula. It has been ignored.")
 	} else if err != nil {
 		return nil, fmt.Errorf("error while adding CA certificate to CA trust store: %s", err)
 	}

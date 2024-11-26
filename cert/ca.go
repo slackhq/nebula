@@ -24,37 +24,40 @@ func NewCAPool() *NebulaCAPool {
 
 // NewCAPoolFromBytes will create a new CA pool from the provided
 // input bytes, which must be a PEM-encoded set of nebula certificates.
+// If the pool contains unsupported certificates, they will generate warnings
+// in the []error return arg.
 // If the pool contains any expired certificates, an ErrExpired will be
 // returned along with the pool. The caller must handle any such errors.
-func NewCAPoolFromBytes(caPEMs []byte) (*NebulaCAPool, error) {
+func NewCAPoolFromBytes(caPEMs []byte) (*NebulaCAPool, []error, error) {
 	pool := NewCAPool()
 	var err error
+	var warnings []error
 	var expired bool
-	var caTooNew bool
 	for {
 		caPEMs, err = pool.AddCACertificate(caPEMs)
 		if errors.Is(err, ErrExpired) {
 			expired = true
 			err = nil
 		} else if errors.Is(err, ErrInvalidPEMCertificateUnsupported) {
-			caTooNew = true
+			warnings = append(warnings, err)
 			err = nil
 		}
 		if err != nil {
-			return nil, err
+			return nil, warnings, err
 		}
 		if len(caPEMs) == 0 || strings.TrimSpace(string(caPEMs)) == "" {
 			break
 		}
 	}
-
+	if len(pool.CAs) == 0 {
+		//this is outside of cert.NewCAPoolFromBytes so we can warn the user about present-but-unsupported certs first
+		return nil, warnings, errors.New("no valid CA certificates present")
+	}
 	if expired {
-		return pool, ErrExpired
-	} else if caTooNew {
-		return pool, ErrInvalidPEMCertificateUnsupported
+		return pool, warnings, ErrExpired
 	}
 
-	return pool, nil
+	return pool, warnings, nil
 }
 
 // AddCACertificate verifies a Nebula CA certificate and adds it to the pool
