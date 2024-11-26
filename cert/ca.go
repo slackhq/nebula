@@ -50,7 +50,6 @@ func NewCAPoolFromBytes(caPEMs []byte) (*NebulaCAPool, []error, error) {
 		}
 	}
 	if len(pool.CAs) == 0 {
-		//this is outside of cert.NewCAPoolFromBytes so we can warn the user about present-but-unsupported certs first
 		return nil, warnings, errors.New("no valid CA certificates present")
 	}
 	if expired {
