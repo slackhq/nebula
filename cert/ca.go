@@ -32,28 +32,28 @@ func NewCAPoolFromBytes(caPEMs []byte) (*NebulaCAPool, []error, error) {
 	pool := NewCAPool()
 	var err error
 	var warnings []error
-	var expired bool
+	good := 0
+
 	for {
 		caPEMs, err = pool.AddCACertificate(caPEMs)
 		if errors.Is(err, ErrExpired) {
-			expired = true
-			err = nil
+			warnings = append(warnings, err)
 		} else if errors.Is(err, ErrInvalidPEMCertificateUnsupported) {
 			warnings = append(warnings, err)
-			err = nil
-		}
-		if err != nil {
+		} else if err != nil {
 			return nil, warnings, err
+		} else {
+			// Only consider a good certificate if there were no errors present
+			good++
 		}
+
 		if len(caPEMs) == 0 || strings.TrimSpace(string(caPEMs)) == "" {
 			break
 		}
 	}
-	if len(pool.CAs) == 0 {
+
+	if good == 0 {
 		return nil, warnings, errors.New("no valid CA certificates present")
-	}
-	if expired {
-		return pool, warnings, ErrExpired
 	}
 
 	return pool, warnings, nil
