@@ -614,14 +614,16 @@ CmYKEG5lYnVsYSBQMjU2IHRlc3Qo4s+7mgYw4tXrsAc6QQRkaW2jFmllYvN4+/k2
 
 	// expired cert, no valid certs
 	ppp, warn, err := NewCAPoolFromBytes([]byte(expired))
-	assert.Nil(t, warn)
-	assert.Equal(t, ErrExpired, err)
-	assert.Equal(t, ppp.CAs[string("152070be6bb19bc9e3bde4c2f0e7d8f4ff5448b4c9856b8eccb314fade0229b0")].Details.Name, "expired")
+	assert.Error(t, err, "no valid CA certificates present")
+	assert.Len(t, warn, 1)
+	assert.Error(t, warn[0], ErrExpired)
+	assert.Nil(t, ppp)
 
 	// expired cert, with valid certs
 	pppp, warn, err := NewCAPoolFromBytes(append([]byte(expired), noNewLines...))
-	assert.Nil(t, warn)
-	assert.Equal(t, ErrExpired, err)
+	assert.Len(t, warn, 1)
+	assert.Nil(t, err)
+	assert.Error(t, warn[0], ErrExpired)
 	assert.Equal(t, pppp.CAs[string("c9bfaf7ce8e84b2eeda2e27b469f4b9617bde192efd214b68891ecda6ed49522")].Details.Name, rootCA.Details.Name)
 	assert.Equal(t, pppp.CAs[string("5c9c3f23e7ee7fe97637cbd3a0a5b854154d1d9aaaf7b566a51f4a88f76b64cd")].Details.Name, rootCA01.Details.Name)
 	assert.Equal(t, pppp.CAs[string("152070be6bb19bc9e3bde4c2f0e7d8f4ff5448b4c9856b8eccb314fade0229b0")].Details.Name, "expired")
