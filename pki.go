@@ -223,22 +223,13 @@ func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.NebulaCAPool, er
 		}
 	}
 
-	caPool, err := cert.NewCAPoolFromBytes(rawCA)
-	if errors.Is(err, cert.ErrExpired) {
-		var expired int
-		for _, crt := range caPool.CAs {
-			if crt.Expired(time.Now()) {
-				expired++
-				l.WithField("cert", crt).Warn("expired certificate present in CA pool")
-			}
-		}
+	caPool, warnings, err := cert.NewCAPoolFromBytes(rawCA)
+	for _, w := range warnings {
+		l.WithError(w).Warn("parsing a CA certificate failed")
+	}
 
-		if expired >= len(caPool.CAs) {
-			return nil, errors.New("no valid CA certificates present")
-		}
-
-	} else if err != nil {
-		return nil, fmt.Errorf("error while adding CA certificate to CA trust store: %s", err)
+	if err != nil {
+		return nil, fmt.Errorf("could not create CA certificate pool: %s", err)
 	}
 
 	for _, fp := range c.GetStringSlice("pki.blocklist", []string{}) {

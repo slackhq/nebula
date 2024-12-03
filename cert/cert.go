@@ -28,6 +28,7 @@ const publicKeyLen = 32
 
 const (
 	CertBanner                       = "NEBULA CERTIFICATE"
+	CertificateV2Banner              = "NEBULA CERTIFICATE V2"
 	X25519PrivateKeyBanner           = "NEBULA X25519 PRIVATE KEY"
 	X25519PublicKeyBanner            = "NEBULA X25519 PUBLIC KEY"
 	EncryptedEd25519PrivateKeyBanner = "NEBULA ED25519 ENCRYPTED PRIVATE KEY"
@@ -162,6 +163,9 @@ func UnmarshalNebulaCertificateFromPEM(b []byte) (*NebulaCertificate, []byte, er
 	p, r := pem.Decode(b)
 	if p == nil {
 		return nil, r, fmt.Errorf("input did not contain a valid PEM encoded block")
+	}
+	if p.Type == CertificateV2Banner {
+		return nil, r, fmt.Errorf("%w: %s", ErrInvalidPEMCertificateUnsupported, p.Type)
 	}
 	if p.Type != CertBanner {
 		return nil, r, fmt.Errorf("bytes did not contain a proper nebula certificate banner")

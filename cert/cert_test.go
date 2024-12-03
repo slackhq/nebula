@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -574,6 +575,13 @@ IBNWYMep3ysx9zCgknfG5dKtwGTaqF++BWKDYdyl34KX
 -----END NEBULA CERTIFICATE-----
 `
 
+	v2 := `
+# valid PEM with the V2 header
+-----BEGIN NEBULA CERTIFICATE V2-----
+CmYKEG5lYnVsYSBQMjU2IHRlc3Qo4s+7mgYw4tXrsAc6QQRkaW2jFmllYvN4+/k2
+-----END NEBULA CERTIFICATE V2-----
+`
+
 	rootCA := NebulaCertificate{
 		Details: NebulaCertificateDetails{
 			Name: "nebula root ca",
@@ -592,33 +600,46 @@ IBNWYMep3ysx9zCgknfG5dKtwGTaqF++BWKDYdyl34KX
 		},
 	}
 
-	p, err := NewCAPoolFromBytes([]byte(noNewLines))
+	p, warn, err := NewCAPoolFromBytes([]byte(noNewLines))
 	assert.Nil(t, err)
+	assert.Nil(t, warn)
 	assert.Equal(t, p.CAs[string("c9bfaf7ce8e84b2eeda2e27b469f4b9617bde192efd214b68891ecda6ed49522")].Details.Name, rootCA.Details.Name)
 	assert.Equal(t, p.CAs[string("5c9c3f23e7ee7fe97637cbd3a0a5b854154d1d9aaaf7b566a51f4a88f76b64cd")].Details.Name, rootCA01.Details.Name)
 
-	pp, err := NewCAPoolFromBytes([]byte(withNewLines))
+	pp, warn, err := NewCAPoolFromBytes([]byte(withNewLines))
 	assert.Nil(t, err)
+	assert.Nil(t, warn)
 	assert.Equal(t, pp.CAs[string("c9bfaf7ce8e84b2eeda2e27b469f4b9617bde192efd214b68891ecda6ed49522")].Details.Name, rootCA.Details.Name)
 	assert.Equal(t, pp.CAs[string("5c9c3f23e7ee7fe97637cbd3a0a5b854154d1d9aaaf7b566a51f4a88f76b64cd")].Details.Name, rootCA01.Details.Name)
 
 	// expired cert, no valid certs
-	ppp, err := NewCAPoolFromBytes([]byte(expired))
-	assert.Equal(t, ErrExpired, err)
-	assert.Equal(t, ppp.CAs[string("152070be6bb19bc9e3bde4c2f0e7d8f4ff5448b4c9856b8eccb314fade0229b0")].Details.Name, "expired")
+	ppp, warn, err := NewCAPoolFromBytes([]byte(expired))
+	assert.Error(t, err, "no valid CA certificates present")
+	assert.Len(t, warn, 1)
+	assert.Error(t, warn[0], ErrExpired)
+	assert.Nil(t, ppp)
 
 	// expired cert, with valid certs
-	pppp, err := NewCAPoolFromBytes(append([]byte(expired), noNewLines...))
-	assert.Equal(t, ErrExpired, err)
+	pppp, warn, err := NewCAPoolFromBytes(append([]byte(expired), noNewLines...))
+	assert.Len(t, warn, 1)
+	assert.Nil(t, err)
+	assert.Error(t, warn[0], ErrExpired)
 	assert.Equal(t, pppp.CAs[string("c9bfaf7ce8e84b2eeda2e27b469f4b9617bde192efd214b68891ecda6ed49522")].Details.Name, rootCA.Details.Name)
 	assert.Equal(t, pppp.CAs[string("5c9c3f23e7ee7fe97637cbd3a0a5b854154d1d9aaaf7b566a51f4a88f76b64cd")].Details.Name, rootCA01.Details.Name)
 	assert.Equal(t, pppp.CAs[string("152070be6bb19bc9e3bde4c2f0e7d8f4ff5448b4c9856b8eccb314fade0229b0")].Details.Name, "expired")
 	assert.Equal(t, len(pppp.CAs), 3)
 
-	ppppp, err := NewCAPoolFromBytes([]byte(p256))
+	ppppp, warn, err := NewCAPoolFromBytes([]byte(p256))
 	assert.Nil(t, err)
+	assert.Nil(t, warn)
 	assert.Equal(t, ppppp.CAs[string("a7938893ec8c4ef769b06d7f425e5e46f7a7f5ffa49c3bcf4a86b608caba9159")].Details.Name, rootCAP256.Details.Name)
 	assert.Equal(t, len(ppppp.CAs), 1)
+
+	pppppp, warn, err := NewCAPoolFromBytes(append([]byte(p256), []byte(v2)...))
+	assert.Nil(t, err)
+	assert.True(t, errors.Is(warn[0], ErrInvalidPEMCertificateUnsupported))
+	assert.Equal(t, pppppp.CAs[string("a7938893ec8c4ef769b06d7f425e5e46f7a7f5ffa49c3bcf4a86b608caba9159")].Details.Name, rootCAP256.Details.Name)
+	assert.Equal(t, len(pppppp.CAs), 1)
 }
 
 func appendByteSlices(b ...[]byte) []byte {
