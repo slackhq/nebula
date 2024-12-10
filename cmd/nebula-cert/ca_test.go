@@ -52,6 +52,7 @@ func Test_caHelp(t *testing.T) {
 			"    \tOptional: path to write the private key to (default \"ca.key\")\n"+
 			"  -out-qr string\n"+
 			"    \tOptional: output a qr code image (png) of the certificate\n"+
+			optionalPkcs11String("  -pkcs11 string\n    \tOptional: PKCS#11 URI to an existing private key\n")+
 			"  -subnets string\n"+
 			"    \tOptional: comma separated list of ipv4 address and network in CIDR notation. This will limit which ipv4 addresses and networks subordinate certs can use in subnets\n",
 		ob.String(),
@@ -108,7 +109,7 @@ func Test_ca(t *testing.T) {
 	// create temp key file
 	keyF, err := os.CreateTemp("", "test.key")
 	assert.Nil(t, err)
-	os.Remove(keyF.Name())
+	assert.Nil(t, os.Remove(keyF.Name()))
 
 	// failed cert write
 	ob.Reset()
@@ -121,8 +122,8 @@ func Test_ca(t *testing.T) {
 	// create temp cert file
 	crtF, err := os.CreateTemp("", "test.crt")
 	assert.Nil(t, err)
-	os.Remove(crtF.Name())
-	os.Remove(keyF.Name())
+	assert.Nil(t, os.Remove(crtF.Name()))
+	assert.Nil(t, os.Remove(keyF.Name()))
 
 	// test proper cert with removed empty groups and subnets
 	ob.Reset()
@@ -134,25 +135,26 @@ func Test_ca(t *testing.T) {
 
 	// read cert and key files
 	rb, _ := os.ReadFile(keyF.Name())
-	lKey, b, err := cert.UnmarshalEd25519PrivateKey(rb)
+	lKey, b, c, err := cert.UnmarshalSigningPrivateKeyFromPEM(rb)
+	assert.Equal(t, cert.Curve_CURVE25519, c)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
 	assert.Len(t, lKey, 64)
 
 	rb, _ = os.ReadFile(crtF.Name())
-	lCrt, b, err := cert.UnmarshalNebulaCertificateFromPEM(rb)
+	lCrt, b, err := cert.UnmarshalCertificateFromPEM(rb)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
 
-	assert.Equal(t, "test", lCrt.Details.Name)
-	assert.Len(t, lCrt.Details.Ips, 0)
-	assert.True(t, lCrt.Details.IsCA)
-	assert.Equal(t, []string{"1", "2", "3", "4", "5"}, lCrt.Details.Groups)
-	assert.Len(t, lCrt.Details.Subnets, 0)
-	assert.Len(t, lCrt.Details.PublicKey, 32)
-	assert.Equal(t, time.Duration(time.Minute*100), lCrt.Details.NotAfter.Sub(lCrt.Details.NotBefore))
-	assert.Equal(t, "", lCrt.Details.Issuer)
-	assert.True(t, lCrt.CheckSignature(lCrt.Details.PublicKey))
+	assert.Equal(t, "test", lCrt.Name())
+	assert.Len(t, lCrt.Networks(), 0)
+	assert.True(t, lCrt.IsCA())
+	assert.Equal(t, []string{"1", "2", "3", "4", "5"}, lCrt.Groups())
+	assert.Len(t, lCrt.UnsafeNetworks(), 0)
+	assert.Len(t, lCrt.PublicKey(), 32)
+	assert.Equal(t, time.Duration(time.Minute*100), lCrt.NotAfter().Sub(lCrt.NotBefore()))
+	assert.Equal(t, "", lCrt.Issuer())
+	assert.True(t, lCrt.CheckSignature(lCrt.PublicKey()))
 
 	// test encrypted key
 	os.Remove(keyF.Name())

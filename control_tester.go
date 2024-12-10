@@ -153,7 +153,7 @@ func (c *Control) GetHostmap() *HostMap {
 	return c.f.hostMap
 }
 
-func (c *Control) GetCert() *cert.NebulaCertificate {
+func (c *Control) GetCert() cert.Certificate {
 	return c.f.pki.GetCertState().Certificate
 }
 

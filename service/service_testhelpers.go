@@ -29,12 +29,12 @@ func (o LogOutputWithPrefix) Write(p []byte) (n int, err error) {
 	return o.out.Write(p)
 }
 
-func newSimpleService(caCrt *cert.NebulaCertificate, caKey []byte, name string, udpIp netip.Addr, overrides m) (*Service, *logrus.Logger) {
+func newSimpleService(caCrt cert.Certificate, caKey []byte, name string, udpIp netip.Addr, overrides m) (*Service, *logrus.Logger) {
 	_, _, myPrivKey, myPEM := e2e.NewTestCert(caCrt, caKey, name,
 		time.Now().Add(-3*time.Minute),
 		time.Now().Add(30*time.Minute),
-		netip.PrefixFrom(udpIp, 24), nil, []string{})
-	caB, err := caCrt.MarshalToPEM()
+		[]netip.Prefix{netip.PrefixFrom(udpIp, 24)}, nil, []string{})
+	caB, err := caCrt.MarshalPEM()
 	if err != nil {
 		panic(err)
 	}

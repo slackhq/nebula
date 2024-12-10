@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 
@@ -14,7 +15,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
-	"golang.org/x/exp/slices"
 )
 
 const (

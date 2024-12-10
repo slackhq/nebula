@@ -491,7 +491,7 @@ func (hm *HostMap) queryVpnIp(vpnIp netip.Addr, promoteIfce *Interface) *HostInf
 func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	if f.serveDns {
 		remoteCert := hostinfo.ConnectionState.peerCert
-		dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ips[0].IP.String())
+		dnsR.Add(remoteCert.Certificate.Name()+".", remoteCert.Certificate.Networks()[0].Addr().String())
 	}
 
 	existing := hm.Hosts[hostinfo.vpnIp]
@@ -585,7 +585,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []netip.Prefix, ifce *Interfac
 	}
 }
 
-func (i *HostInfo) GetCert() *cert.NebulaCertificate {
+func (i *HostInfo) GetCert() *cert.CachedCertificate {
 	if i.ConnectionState != nil {
 		return i.ConnectionState.peerCert
 	}
@@ -647,27 +647,19 @@ func (i *HostInfo) RecvErrorExceeded() bool {
 	return true
 }
 
-func (i *HostInfo) CreateRemoteCIDR(c *cert.NebulaCertificate) {
-	if len(c.Details.Ips) == 1 && len(c.Details.Subnets) == 0 {
+func (i *HostInfo) CreateRemoteCIDR(c cert.Certificate) {
+	if len(c.Networks()) == 1 && len(c.UnsafeNetworks()) == 0 {
 		// Simple case, no CIDRTree needed
 		return
 	}
 
 	remoteCidr := new(bart.Table[struct{}])
-	for _, ip := range c.Details.Ips {
-		//TODO: IPV6-WORK what to do when ip is invalid?
-		nip, _ := netip.AddrFromSlice(ip.IP)
-		nip = nip.Unmap()
-		bits, _ := ip.Mask.Size()
-		remoteCidr.Insert(netip.PrefixFrom(nip, bits), struct{}{})
+	for _, network := range c.Networks() {
+		remoteCidr.Insert(network, struct{}{})
 	}
 
-	for _, n := range c.Details.Subnets {
-		//TODO: IPV6-WORK what to do when ip is invalid?
-		nip, _ := netip.AddrFromSlice(n.IP)
-		nip = nip.Unmap()
-		bits, _ := n.Mask.Size()
-		remoteCidr.Insert(netip.PrefixFrom(nip, bits), struct{}{})
+	for _, network := range c.UnsafeNetworks() {
+		remoteCidr.Insert(network, struct{}{})
 	}
 	i.remoteCidr = remoteCidr
 }
@@ -683,7 +675,7 @@ func (i *HostInfo) logger(l *logrus.Logger) *logrus.Entry {
 
 	if connState := i.ConnectionState; connState != nil {
 		if peerCert := connState.peerCert; peerCert != nil {
-			li = li.WithField("certName", peerCert.Details.Name)
+			li = li.WithField("certName", peerCert.Certificate.Name())
 		}
 	}
 

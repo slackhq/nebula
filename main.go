@@ -68,17 +68,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 	l.WithField("firewallHashes", fw.GetRuleHashes()).Info("Firewall started")
 
-	ones, _ := certificate.Details.Ips[0].Mask.Size()
-	addr, ok := netip.AddrFromSlice(certificate.Details.Ips[0].IP)
-	if !ok {
-		err = util.NewContextualError(
-			"Invalid ip address in certificate",
-			m{"vpnIp": certificate.Details.Ips[0].IP},
-			nil,
-		)
-		return nil, err
-	}
-	tunCidr := netip.PrefixFrom(addr, ones)
+	tunCidr := certificate.Networks()[0]
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
 	if err != nil {
