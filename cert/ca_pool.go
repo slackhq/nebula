@@ -213,7 +213,7 @@ func (ncp *CAPool) GetCAForCert(c Certificate) (*CachedCertificate, error) {
 		return signer, nil
 	}
 
-	return nil, fmt.Errorf("could not find ca for the certificate")
+	return nil, ErrCaNotFound
 }
 
 // GetFingerprints returns an array of trusted CA fingerprints

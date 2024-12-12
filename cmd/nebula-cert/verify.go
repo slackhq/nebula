@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -60,18 +61,28 @@ func verify(args []string, out io.Writer, errOut io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("unable to read crt; %s", err)
 	}
-
-	c, _, err := cert.UnmarshalCertificateFromPEM(rawCert)
-	if err != nil {
-		return fmt.Errorf("error while parsing crt: %s", err)
+	var errs []error
+	for {
+		if len(rawCert) == 0 {
+			break
+		}
+		c, extra, err := cert.UnmarshalCertificateFromPEM(rawCert)
+		if err != nil {
+			return fmt.Errorf("error while parsing crt: %s", err)
+		}
+		rawCert = extra
+		_, err = caPool.VerifyCertificate(time.Now(), c)
+		if err != nil {
+			switch {
+			case errors.Is(err, cert.ErrCaNotFound):
+				errs = append(errs, fmt.Errorf("error while verifying certificate v%d %s with issuer %s: %s", c.Version(), c.Name(), c.Issuer(), err))
+			default:
+				errs = append(errs, fmt.Errorf("error while verifying certificate %+v: %s", c, err))
+			}
+		}
 	}
 
-	_, err = caPool.VerifyCertificate(time.Now(), c)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return errors.Join(errs...)
 }
 
 func verifySummary() string {
