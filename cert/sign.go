@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math/big"
 	"net/netip"
-	"slices"
 	"time"
 )
 
@@ -31,6 +30,7 @@ type TBSCertificate struct {
 
 type beingSignedCertificate interface {
 	// fromTBSCertificate copies the values from the TBSCertificate to this versions internal representation
+	// Implementations must validate the resulting certificate contains valid information
 	fromTBSCertificate(*TBSCertificate) error
 
 	// marshalForSigning returns the bytes that should be signed
@@ -76,88 +76,11 @@ func (t *TBSCertificate) Sign(signer Certificate, curve Curve, key []byte) (Cert
 	}
 }
 
-// readyToSign checks all signing requirements that don't require us to cross-reference with a CA
-func (t *TBSCertificate) readyToSign() error {
-	if len(t.PublicKey) == 0 {
-		return fmt.Errorf("public key not set")
-	}
-
-	if !t.IsCA && len(t.Networks) == 0 {
-		return fmt.Errorf("non-CA certificates must contain at least one network")
-	}
-
-	hasV4Networks := false
-	hasV6Networks := false
-	for _, n := range t.Networks {
-		if !n.IsValid() || !n.Addr().IsValid() {
-			return fmt.Errorf("invalid network: %s", n)
-		}
-		if t.Version == Version1 && n.Addr().Is6() {
-			return fmt.Errorf("certificate v1 may not contain IPv6 networks: %v", t.Networks)
-		}
-		if n.Addr().Zone() != "" {
-			return fmt.Errorf("networks may not contain zones: %s", n)
-		}
-		if n.Addr().Is4In6() {
-			return fmt.Errorf("4in6 networks are not allowed: %s", n)
-		}
-		if !t.IsCA && n.Addr().IsUnspecified() {
-			return fmt.Errorf("non-CA certificates must not use the zero address as a network: %s", n)
-		}
-
-		hasV4Networks = hasV4Networks || n.Addr().Is4()
-		hasV6Networks = hasV6Networks || n.Addr().Is6()
-	}
-
-	slices.SortFunc(t.Networks, comparePrefix)
-	err := findDuplicatePrefix(t.Networks)
-	if err != nil {
-		return err
-	}
-
-	for _, n := range t.UnsafeNetworks {
-		if !n.IsValid() || !n.Addr().IsValid() {
-			return fmt.Errorf("invalid unsafe network: %s", n)
-		}
-		if n.Addr().Zone() != "" {
-			return fmt.Errorf("unsafe_networks may not contain zones: %s", n)
-		}
-		//todo are unsafe networks that overlap networks allowed?
-
-		if n.Addr().Is6() {
-			if t.Version == Version1 {
-				return fmt.Errorf("certificate v1 may not contain IPv6 unsafe networks: %v", t.Networks)
-			}
-			if !hasV6Networks && !t.IsCA {
-				return fmt.Errorf("IPv6 unsafe networks require an IPv6 address assignment")
-			}
-		} else if n.Addr().Is4() {
-			if !hasV4Networks && !t.IsCA {
-				return fmt.Errorf("IPv4 unsafe networks require an IPv4 address assignment")
-			}
-		}
-	}
-
-	slices.SortFunc(t.UnsafeNetworks, comparePrefix)
-	err = findDuplicatePrefix(t.UnsafeNetworks)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // SignWith does the same thing as sign, but uses the function in `sp` to calculate the signature.
 // You should only use SignWith if you do not have direct access to your private key.
 func (t *TBSCertificate) SignWith(signer Certificate, curve Curve, sp SignerLambda) (Certificate, error) {
 	if curve != t.Curve {
 		return nil, fmt.Errorf("curve in cert and private key supplied don't match")
-	}
-
-	//readyToSign sorts Networks and UnsafeNetworks for us
-	err := t.readyToSign()
-	if err != nil {
-		return nil, err
 	}
 
 	if signer != nil {
@@ -185,13 +108,13 @@ func (t *TBSCertificate) SignWith(signer Certificate, curve Curve, sp SignerLamb
 	switch t.Version {
 	case Version1:
 		c = &certificateV1{}
-		err = c.fromTBSCertificate(t)
+		err := c.fromTBSCertificate(t)
 		if err != nil {
 			return nil, err
 		}
 	case Version2:
 		c = &certificateV2{}
-		err = c.fromTBSCertificate(t)
+		err := c.fromTBSCertificate(t)
 		if err != nil {
 			return nil, err
 		}
@@ -237,7 +160,7 @@ func findDuplicatePrefix(sortedPrefixes []netip.Prefix) error {
 	}
 	for i := 1; i < len(sortedPrefixes); i++ {
 		if comparePrefix(sortedPrefixes[i], sortedPrefixes[i-1]) == 0 {
-			return fmt.Errorf("duplicate network detected: %v", sortedPrefixes[i])
+			return NewErrInvalidCertificateProperties("duplicate network detected: %v", sortedPrefixes[i])
 		}
 	}
 	return nil

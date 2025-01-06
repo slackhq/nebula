@@ -2,6 +2,7 @@ package cert
 
 import (
 	"errors"
+	"fmt"
 )
 
 var (
@@ -17,8 +18,7 @@ var (
 	ErrInvalidPrivateKey          = errors.New("invalid private key")
 	ErrPublicPrivateCurveMismatch = errors.New("public key does not match private key curve")
 	ErrPublicPrivateKeyMismatch   = errors.New("public key and private key are not a pair")
-
-	ErrPrivateKeyEncrypted = errors.New("private key must be decrypted")
+	ErrPrivateKeyEncrypted        = errors.New("private key must be decrypted")
 
 	ErrInvalidPEMBlock                   = errors.New("input did not contain a valid PEM encoded block")
 	ErrInvalidPEMCertificateBanner       = errors.New("bytes did not contain a proper certificate banner")
@@ -33,3 +33,15 @@ var (
 	ErrMissingDetails = errors.New("certificate did not contain details")
 	ErrEmptySignature = errors.New("empty signature")
 )
+
+type ErrInvalidCertificateProperties struct {
+	str string
+}
+
+func NewErrInvalidCertificateProperties(format string, a ...any) error {
+	return &ErrInvalidCertificateProperties{fmt.Sprintf(format, a...)}
+}
+
+func (e *ErrInvalidCertificateProperties) Error() string {
+	return e.str
+}
