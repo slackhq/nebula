@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
@@ -467,6 +469,137 @@ func TestRelays(t *testing.T) {
 	assertUdpPacket(t, []byte("Hi from me"), p, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), 80, 80)
 	r.RenderHostmaps("Final hostmaps", myControl, relayControl, theirControl)
 	//TODO: assert we actually used the relay even though it should be impossible for a tunnel to have occurred without it
+}
+
+func TestReestablishRelays(t *testing.T) {
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	myControl, myVpnIpNet, _, _ := newSimpleServer(cert.Version1, ca, caKey, "me     ", "10.128.0.1/24", m{"relay": m{"use_relays": true}})
+	relayControl, relayVpnIpNet, relayUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "relay  ", "10.128.0.128/24", m{"relay": m{"am_relay": true}})
+	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "them   ", "10.128.0.2/24", m{"relay": m{"use_relays": true}})
+
+	// Teach my how to get to the relay and that their can be reached via the relay
+	myControl.InjectLightHouseAddr(relayVpnIpNet[0].Addr(), relayUdpAddr)
+	myControl.InjectRelays(theirVpnIpNet[0].Addr(), []netip.Addr{relayVpnIpNet[0].Addr()})
+	relayControl.InjectLightHouseAddr(theirVpnIpNet[0].Addr(), theirUdpAddr)
+
+	// Build a router so we don't have to reason who gets which packet
+	r := router.NewR(t, myControl, relayControl, theirControl)
+	defer r.RenderFlow()
+
+	// Start the servers
+	myControl.Start()
+	relayControl.Start()
+	theirControl.Start()
+
+	t.Log("Trigger a handshake from me to them via the relay")
+	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
+
+	p := r.RouteForAllUntilTxTun(theirControl)
+	r.Log("Assert the tunnel works")
+	assertUdpPacket(t, []byte("Hi from me"), p, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), 80, 80)
+
+	t.Log("Ensure packet traversal from them to me via the relay")
+	theirControl.InjectTunUDPPacket(myVpnIpNet[0].Addr(), 80, theirVpnIpNet[0].Addr(), 80, []byte("Hi from them"))
+
+	p = r.RouteForAllUntilTxTun(myControl)
+	r.Log("Assert the tunnel works")
+	assertUdpPacket(t, []byte("Hi from them"), p, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), 80, 80)
+
+	// If we break the relay's connection to 'them', 'me' needs to detect and recover the connection
+	r.Log("Close the tunnel")
+	relayControl.CloseTunnel(theirVpnIpNet[0].Addr(), true)
+
+	start := len(myControl.GetHostmap().Indexes)
+	curIndexes := len(myControl.GetHostmap().Indexes)
+	for curIndexes >= start {
+		curIndexes = len(myControl.GetHostmap().Indexes)
+		r.Logf("Wait for the dead index to go away:start=%v indexes, currnet=%v indexes", start, curIndexes)
+		myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me should fail"))
+
+		r.RouteForAllExitFunc(func(p *udp.Packet, c *nebula.Control) router.ExitType {
+			return router.RouteAndExit
+		})
+		time.Sleep(2 * time.Second)
+	}
+	r.Log("Dead index went away. Woot!")
+	r.RenderHostmaps("Me removed hostinfo", myControl, relayControl, theirControl)
+	// Next packet should re-establish a relayed connection and work just great.
+
+	t.Logf("Assert the tunnel...")
+	for {
+		t.Log("RouteForAllUntilTxTun")
+		myControl.InjectLightHouseAddr(relayVpnIpNet[0].Addr(), relayUdpAddr)
+		myControl.InjectRelays(theirVpnIpNet[0].Addr(), []netip.Addr{relayVpnIpNet[0].Addr()})
+		relayControl.InjectLightHouseAddr(theirVpnIpNet[0].Addr(), theirUdpAddr)
+		myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
+
+		p = r.RouteForAllUntilTxTun(theirControl)
+		r.Log("Assert the tunnel works")
+		packet := gopacket.NewPacket(p, layers.LayerTypeIPv4, gopacket.Lazy)
+		v4 := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+		if slices.Compare(v4.SrcIP, myVpnIpNet[0].Addr().AsSlice()) != 0 {
+			t.Logf("SrcIP is unexpected...this is not the packet I'm looking for. Keep looking")
+			continue
+		}
+		if slices.Compare(v4.DstIP, theirVpnIpNet[0].Addr().AsSlice()) != 0 {
+			t.Logf("DstIP is unexpected...this is not the packet I'm looking for. Keep looking")
+			continue
+		}
+
+		udp := packet.Layer(layers.LayerTypeUDP).(*layers.UDP)
+		if udp == nil {
+			t.Log("Not a UDP packet. This is not the packet I'm looking for. Keep looking")
+			continue
+		}
+		data := packet.ApplicationLayer()
+		if data == nil {
+			t.Log("No data found in packet. This is not the packet I'm looking for. Keep looking.")
+			continue
+		}
+		if string(data.Payload()) != "Hi from me" {
+			t.Logf("Unexpected payload: '%v', keep looking", string(data.Payload()))
+			continue
+		}
+		t.Log("I found my lost packet. I am so happy.")
+		break
+	}
+	t.Log("Assert the tunnel works the other way, too")
+	for {
+		t.Log("RouteForAllUntilTxTun")
+		theirControl.InjectTunUDPPacket(myVpnIpNet[0].Addr(), 80, theirVpnIpNet[0].Addr(), 80, []byte("Hi from them"))
+
+		p = r.RouteForAllUntilTxTun(myControl)
+		r.Log("Assert the tunnel works")
+		packet := gopacket.NewPacket(p, layers.LayerTypeIPv4, gopacket.Lazy)
+		v4 := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+		if slices.Compare(v4.DstIP, myVpnIpNet[0].Addr().AsSlice()) != 0 {
+			t.Logf("Dst is unexpected...this is not the packet I'm looking for. Keep looking")
+			continue
+		}
+		if slices.Compare(v4.SrcIP, theirVpnIpNet[0].Addr().AsSlice()) != 0 {
+			t.Logf("SrcIP is unexpected...this is not the packet I'm looking for. Keep looking")
+			continue
+		}
+
+		udp := packet.Layer(layers.LayerTypeUDP).(*layers.UDP)
+		if udp == nil {
+			t.Log("Not a UDP packet. This is not the packet I'm looking for. Keep looking")
+			continue
+		}
+		data := packet.ApplicationLayer()
+		if data == nil {
+			t.Log("No data found in packet. This is not the packet I'm looking for. Keep looking.")
+			continue
+		}
+		if string(data.Payload()) != "Hi from them" {
+			t.Logf("Unexpected payload: '%v', keep looking", string(data.Payload()))
+			continue
+		}
+		t.Log("I found my lost packet. I am so happy.")
+		break
+	}
+	r.RenderHostmaps("Final hostmaps", myControl, relayControl, theirControl)
+
 }
 
 func TestStage1RaceRelays(t *testing.T) {

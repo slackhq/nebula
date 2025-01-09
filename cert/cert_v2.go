@@ -137,8 +137,10 @@ func (c *certificateV2) Fingerprint() (string, error) {
 }
 
 func (c *certificateV2) CheckSignature(key []byte) bool {
+	if len(c.rawDetails) == 0 {
+		return false
+	}
 	b := make([]byte, len(c.rawDetails)+1+len(c.publicKey))
-	//TODO: double check this, panic on empty raw details
 	copy(b, c.rawDetails)
 	b[len(c.rawDetails)] = byte(c.curve)
 	copy(b[len(c.rawDetails)+1:], c.publicKey)
@@ -147,7 +149,6 @@ func (c *certificateV2) CheckSignature(key []byte) bool {
 	case Curve_CURVE25519:
 		return ed25519.Verify(key, b, c.signature)
 	case Curve_P256:
-		//TODO: NewPublicKey
 		x, y := elliptic.Unmarshal(elliptic.P256(), key)
 		pubKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
 		hashed := sha256.Sum256(b)
@@ -229,12 +230,14 @@ func (c *certificateV2) String() string {
 }
 
 func (c *certificateV2) MarshalForHandshakes() ([]byte, error) {
+	if c.rawDetails == nil {
+		return nil, ErrEmptyRawDetails
+	}
 	var b cryptobyte.Builder
 	// Outermost certificate
 	b.AddASN1(asn1.SEQUENCE, func(b *cryptobyte.Builder) {
 
 		// Add the cert details which is already marshalled
-		//TODO: panic on nil rawDetails
 		b.AddBytes(c.rawDetails)
 
 		// Skipping the curve and public key since those come across in a different part of the handshake
@@ -249,6 +252,9 @@ func (c *certificateV2) MarshalForHandshakes() ([]byte, error) {
 }
 
 func (c *certificateV2) Marshal() ([]byte, error) {
+	if c.rawDetails == nil {
+		return nil, ErrEmptyRawDetails
+	}
 	var b cryptobyte.Builder
 	// Outermost certificate
 	b.AddASN1(asn1.SEQUENCE, func(b *cryptobyte.Builder) {
@@ -447,13 +453,11 @@ func (c *certificateV2) validate() error {
 func (c *certificateV2) marshalForSigning() ([]byte, error) {
 	d, err := c.details.Marshal()
 	if err != nil {
-		//TODO: annotate?
-		return nil, err
+		return nil, fmt.Errorf("marshalling certificate details failed: %w", err)
 	}
 	c.rawDetails = d
 
 	b := make([]byte, len(c.rawDetails)+1+len(c.publicKey))
-	//TODO: double check this
 	copy(b, c.rawDetails)
 	b[len(c.rawDetails)] = byte(c.curve)
 	copy(b[len(c.rawDetails)+1:], c.publicKey)
@@ -584,6 +588,10 @@ func unmarshalCertificateV2(b []byte, publicKey []byte, curve Curve) (*certifica
 	if len(publicKey) > 0 {
 		rawPublicKey = publicKey
 	} else if !input.ReadOptionalASN1(&rawPublicKey, nil, TagCertPublicKey) {
+		return nil, ErrBadFormat
+	}
+
+	if len(rawPublicKey) == 0 {
 		return nil, ErrBadFormat
 	}
 

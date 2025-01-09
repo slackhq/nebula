@@ -19,6 +19,7 @@ var (
 	ErrPublicPrivateCurveMismatch = errors.New("public key does not match private key curve")
 	ErrPublicPrivateKeyMismatch   = errors.New("public key and private key are not a pair")
 	ErrPrivateKeyEncrypted        = errors.New("private key must be decrypted")
+	ErrCaNotFound                 = errors.New("could not find ca for the certi
 
 	ErrInvalidPEMBlock                   = errors.New("input did not contain a valid PEM encoded block")
 	ErrInvalidPEMCertificateBanner       = errors.New("bytes did not contain a proper certificate banner")
@@ -30,8 +31,9 @@ var (
 	ErrNoPeerStaticKey = errors.New("no peer static key was present")
 	ErrNoPayload       = errors.New("provided payload was empty")
 
-	ErrMissingDetails = errors.New("certificate did not contain details")
-	ErrEmptySignature = errors.New("empty signature")
+	ErrMissingDetails  = errors.New("certificate did not contain details")
+	ErrEmptySignature  = errors.New("empty signature")
+	ErrEmptyRawDetails = errors.New("empty rawDetails not allowed")
 )
 
 type ErrInvalidCertificateProperties struct {
