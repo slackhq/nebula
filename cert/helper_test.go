@@ -77,6 +77,10 @@ func NewTestCert(v Version, curve Curve, ca Certificate, key []byte, name string
 		after = time.Now().Add(time.Second * 60).Round(time.Second)
 	}
 
+	if len(networks) == 0 {
+		networks = []netip.Prefix{netip.MustParsePrefix("10.0.0.123/8")}
+	}
+
 	var pub, priv []byte
 	switch curve {
 	case Curve_CURVE25519:

@@ -34,6 +34,7 @@ func UnmarshalCertificateFromPEM(b []byte) (Certificate, []byte, error) {
 	var err error
 
 	switch p.Type {
+	// Implementations must validate the resulting certificate contains valid information
 	case CertificateBanner:
 		c, err = unmarshalCertificateV1(p.Bytes, nil)
 	case CertificateV2Banner:

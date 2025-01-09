@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math/big"
 	"net/netip"
-	"slices"
 	"time"
 )
 
@@ -31,6 +30,7 @@ type TBSCertificate struct {
 
 type beingSignedCertificate interface {
 	// fromTBSCertificate copies the values from the TBSCertificate to this versions internal representation
+	// Implementations must validate the resulting certificate contains valid information
 	fromTBSCertificate(*TBSCertificate) error
 
 	// marshalForSigning returns the bytes that should be signed
@@ -83,9 +83,6 @@ func (t *TBSCertificate) SignWith(signer Certificate, curve Curve, sp SignerLamb
 		return nil, fmt.Errorf("curve in cert and private key supplied don't match")
 	}
 
-	//TODO: make sure we have all minimum properties to sign, like a public key
-	//TODO: we need to verify networks and unsafe networks (no duplicates, max of 1 of each version for v2 certs
-
 	if signer != nil {
 		if t.IsCA {
 			return nil, fmt.Errorf("can not sign a CA certificate with another")
@@ -106,9 +103,6 @@ func (t *TBSCertificate) SignWith(signer Certificate, curve Curve, sp SignerLamb
 			return nil, fmt.Errorf("self signed certificates must have IsCA set to true")
 		}
 	}
-
-	slices.SortFunc(t.Networks, comparePrefix)
-	slices.SortFunc(t.UnsafeNetworks, comparePrefix)
 
 	var c beingSignedCertificate
 	switch t.Version {
@@ -157,4 +151,17 @@ func comparePrefix(a, b netip.Prefix) int {
 		return a.Bits() - b.Bits()
 	}
 	return addr
+}
+
+// findDuplicatePrefix returns an error if there is a duplicate prefix in the pre-sorted input slice sortedPrefixes
+func findDuplicatePrefix(sortedPrefixes []netip.Prefix) error {
+	if len(sortedPrefixes) < 2 {
+		return nil
+	}
+	for i := 1; i < len(sortedPrefixes); i++ {
+		if comparePrefix(sortedPrefixes[i], sortedPrefixes[i-1]) == 0 {
+			return NewErrInvalidCertificateProperties("duplicate network detected: %v", sortedPrefixes[i])
+		}
+	}
+	return nil
 }
