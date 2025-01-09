@@ -143,6 +143,7 @@ func unmarshalCertificateFromHandshake(v Version, b []byte, publicKey []byte, cu
 	var err error
 
 	switch v {
+	// Implementations must ensure the result is a valid cert!
 	case VersionPre1, Version1:
 		c, err = unmarshalCertificateV1(b, publicKey)
 	case Version2:

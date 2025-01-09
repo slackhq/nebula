@@ -65,8 +65,8 @@ type certificateV2 struct {
 
 type detailsV2 struct {
 	name           string
-	networks       []netip.Prefix
-	unsafeNetworks []netip.Prefix
+	networks       []netip.Prefix // MUST BE SORTED
+	unsafeNetworks []netip.Prefix // MUST BE SORTED
 	groups         []string
 	isCA           bool
 	notBefore      time.Time
@@ -370,6 +370,77 @@ func (c *certificateV2) fromTBSCertificate(t *TBSCertificate) error {
 	}
 	c.curve = t.Curve
 	c.publicKey = t.PublicKey
+	return c.validate()
+}
+
+func (c *certificateV2) validate() error {
+	// Empty names are allowed
+
+	if len(c.publicKey) == 0 {
+		return ErrInvalidPublicKey
+	}
+
+	if !c.details.isCA && len(c.details.networks) == 0 {
+		return NewErrInvalidCertificateProperties("non-CA certificate must contain at least 1 network")
+	}
+
+	hasV4Networks := false
+	hasV6Networks := false
+	for _, network := range c.details.networks {
+		if !network.IsValid() || !network.Addr().IsValid() {
+			return NewErrInvalidCertificateProperties("invalid network: %s", network)
+		}
+
+		if network.Addr().IsUnspecified() {
+			return NewErrInvalidCertificateProperties("non-CA certificates must not use the zero address as a network: %s", network)
+		}
+
+		if network.Addr().Zone() != "" {
+			return NewErrInvalidCertificateProperties("networks may not contain zones: %s", network)
+		}
+
+		if network.Addr().Is4In6() {
+			return NewErrInvalidCertificateProperties("4in6 networks are not allowed: %s", network)
+		}
+
+		hasV4Networks = hasV4Networks || network.Addr().Is4()
+		hasV6Networks = hasV6Networks || network.Addr().Is6()
+	}
+
+	slices.SortFunc(c.details.networks, comparePrefix)
+	err := findDuplicatePrefix(c.details.networks)
+	if err != nil {
+		return err
+	}
+
+	for _, network := range c.details.unsafeNetworks {
+		if !network.IsValid() || !network.Addr().IsValid() {
+			return NewErrInvalidCertificateProperties("invalid unsafe network: %s", network)
+		}
+
+		if network.Addr().Zone() != "" {
+			return NewErrInvalidCertificateProperties("unsafe networks may not contain zones: %s", network)
+		}
+
+		if !c.details.isCA {
+			if network.Addr().Is6() {
+				if !hasV6Networks {
+					return NewErrInvalidCertificateProperties("IPv6 unsafe networks require an IPv6 address assignment: %s", network)
+				}
+			} else if network.Addr().Is4() {
+				if !hasV4Networks {
+					return NewErrInvalidCertificateProperties("IPv4 unsafe networks require an IPv4 address assignment: %s", network)
+				}
+			}
+		}
+	}
+
+	slices.SortFunc(c.details.unsafeNetworks, comparePrefix)
+	err = findDuplicatePrefix(c.details.unsafeNetworks)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -516,8 +587,6 @@ func unmarshalCertificateV2(b []byte, publicKey []byte, curve Curve) (*certifica
 		return nil, ErrBadFormat
 	}
 
-	//TODO: Assert public key length
-
 	// Grab the signature
 	var rawSignature cryptobyte.String
 	if !input.ReadASN1(&rawSignature, TagCertSignature) || rawSignature.Empty() {
@@ -530,13 +599,20 @@ func unmarshalCertificateV2(b []byte, publicKey []byte, curve Curve) (*certifica
 		return nil, err
 	}
 
-	return &certificateV2{
+	c := &certificateV2{
 		details:    details,
 		rawDetails: rawDetails,
 		curve:      curve,
 		publicKey:  rawPublicKey,
 		signature:  rawSignature,
-	}, nil
+	}
+
+	err = c.validate()
+	if err != nil {
+		return nil, err
+	}
+
+	return c, nil
 }
 
 func unmarshalDetails(b cryptobyte.String) (detailsV2, error) {
@@ -632,9 +708,6 @@ func unmarshalDetails(b cryptobyte.String) (detailsV2, error) {
 	if !b.ReadOptionalASN1(&issuer, nil, TagDetailsIssuer) {
 		return detailsV2{}, ErrBadFormat
 	}
-
-	slices.SortFunc(networks, comparePrefix)
-	slices.SortFunc(unsafeNetworks, comparePrefix)
 
 	return detailsV2{
 		name:           string(name),
