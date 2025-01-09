@@ -19,7 +19,7 @@ var (
 	ErrPublicPrivateCurveMismatch = errors.New("public key does not match private key curve")
 	ErrPublicPrivateKeyMismatch   = errors.New("public key and private key are not a pair")
 	ErrPrivateKeyEncrypted        = errors.New("private key must be decrypted")
-	ErrCaNotFound                 = errors.New("could not find ca for the certi
+	ErrCaNotFound                 = errors.New("could not find ca for the certificate")
 
 	ErrInvalidPEMBlock                   = errors.New("input did not contain a valid PEM encoded block")
 	ErrInvalidPEMCertificateBanner       = errors.New("bytes did not contain a proper certificate banner")
