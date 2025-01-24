@@ -23,8 +23,6 @@ const (
 func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
 	err := h.Parse(packet)
 	if err != nil {
-		// TODO: best if we return this and let caller log
-		// TODO: Might be better to send the literal []byte("holepunch") packet and ignore that?
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
 		if len(packet) > 1 {
 			f.l.WithField("packet", packet).Infof("Error while parsing inbound packet from %s: %s", ip, err)
@@ -139,9 +137,6 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			hostinfo.logger(f.l).WithError(err).WithField("udpAddr", ip).
 				WithField("packet", packet).
 				Error("Failed to decrypt lighthouse packet")
-
-			//TODO: maybe after build 64 is out? 06/14/2018 - NB
-			//f.sendRecvError(net.Addr(addr), header.RemoteIndex)
 			return
 		}
 
@@ -160,9 +155,6 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			hostinfo.logger(f.l).WithError(err).WithField("udpAddr", ip).
 				WithField("packet", packet).
 				Error("Failed to decrypt test packet")
-
-			//TODO: maybe after build 64 is out? 06/14/2018 - NB
-			//f.sendRecvError(net.Addr(addr), header.RemoteIndex)
 			return
 		}
 
@@ -322,7 +314,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 		//fmt.Println(proto, protoAt)
 		switch proto {
 		case layers.IPProtocolICMPv6:
-			//TODO: we need a new protocol in config language "icmpv6"
+			//TODO: Currently we are treating `icmp` in config.yml as either v4 or v6, should we allow distinguishing them?
 			fp.Protocol = uint8(proto)
 			fp.RemotePort = 0
 			fp.LocalPort = 0
@@ -463,8 +455,6 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], messageCounter, nb)
 	if err != nil {
 		hostinfo.logger(f.l).WithError(err).Error("Failed to decrypt packet")
-		//TODO: maybe after build 64 is out? 06/14/2018 - NB
-		//f.sendRecvError(hostinfo.remote, header.RemoteIndex)
 		return false
 	}
 
@@ -511,7 +501,6 @@ func (f *Interface) maybeSendRecvError(endpoint netip.AddrPort, index uint32) {
 func (f *Interface) sendRecvError(endpoint netip.AddrPort, index uint32) {
 	f.messageMetrics.Tx(header.RecvError, 0, 1)
 
-	//TODO: this should be a signed message so we can trust that we should drop the index
 	b := header.Encode(make([]byte, header.Len), header.Version, header.RecvError, 0, index, 0)
 	f.outside.WriteTo(b, endpoint)
 	if f.l.Level >= logrus.DebugLevel {
@@ -547,25 +536,3 @@ func (f *Interface) handleRecvError(addr netip.AddrPort, h *header.H) {
 	// We also delete it from pending hostmap to allow for fast reconnect.
 	f.handshakeManager.DeleteHostInfo(hostinfo)
 }
-
-/*
-func (f *Interface) sendMeta(ci *ConnectionState, endpoint *net.UDPAddr, meta *NebulaMeta) {
-	if ci.eKey != nil {
-		//TODO: log error?
-		return
-	}
-
-	msg, err := proto.Marshal(meta)
-	if err != nil {
-		l.Debugln("failed to encode header")
-	}
-
-	c := ci.messageCounter
-	b := HeaderEncode(nil, Version, uint8(metadata), 0, hostinfo.remoteIndexId, c)
-	ci.messageCounter++
-
-	msg := ci.eKey.EncryptDanger(b, nil, msg, c)
-	//msg := ci.eKey.EncryptDanger(b, nil, []byte(fmt.Sprintf("%d", counter)), c)
-	f.outside.WriteTo(msg, endpoint)
-}
-*/

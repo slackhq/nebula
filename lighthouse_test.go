@@ -16,8 +16,6 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-//TODO: Add a test to ensure udpAddr is copied and not reused
-
 func TestOldIPv4Only(t *testing.T) {
 	// This test ensures our new ipv6 enabled LH protobuf IpAndPorts works with the old style to enable backwards compatibility
 	b := []byte{8, 129, 130, 132, 80, 16, 10}

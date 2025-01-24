@@ -27,7 +27,6 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		}
 	}
 
-	//TODO: seems like a huge bummer
 	_, found := f.myVpnAddrsTable.Lookup(fwPacket.RemoteAddr)
 	if found {
 		// Immediately forward packets from self to self.
@@ -264,7 +263,6 @@ func (f *Interface) SendVia(via *HostInfo,
 
 func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte, q int) {
 	if ci.eKey == nil {
-		//TODO: log warning
 		return
 	}
 	useRelay := !remote.IsValid() && !hostinfo.remote.IsValid()

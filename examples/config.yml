@@ -250,7 +250,6 @@ tun:
   # in nebula configuration files. Default false, not reloadable.
   #use_system_route_table: false
 
-# TODO
 # Configure logging level
 logging:
   # panic, fatal, error, warning, info, or debug. Default is info and is reloadable.

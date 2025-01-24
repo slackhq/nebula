@@ -575,8 +575,6 @@ func BenchmarkLookup(b *testing.B) {
 			ml(m, a)
 		}
 	})
-
-	//TODO: only way array lookup in array will help is if both are sorted, then maybe it's faster
 }
 
 func Test_parsePort(t *testing.T) {

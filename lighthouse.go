@@ -241,7 +241,6 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 
 		lh.remoteAllowList.Store(ral)
 		if !initial {
-			//TODO: a diff will be annoyingly difficult
 			lh.l.Info("lighthouse.remote_allow_list and/or lighthouse.remote_allow_ranges has changed")
 		}
 	}
@@ -254,7 +253,6 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 
 		lh.localAllowList.Store(lal)
 		if !initial {
-			//TODO: a diff will be annoyingly difficult
 			lh.l.Info("lighthouse.local_allow_list has changed")
 		}
 	}
@@ -267,7 +265,6 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 
 		lh.calculatedRemotes.Store(cr)
 		if !initial {
-			//TODO: a diff will be annoyingly difficult
 			lh.l.Info("lighthouse.calculated_remotes has changed")
 		}
 	}
@@ -294,7 +291,6 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 
 		lh.staticList.Store(&staticList)
 		if !initial {
-			//TODO: we should remove any remote list entries for static hosts that were removed/modified?
 			if c.HasChanged("static_host_map") {
 				lh.l.Info("static_host_map has changed")
 			}
@@ -1007,7 +1003,6 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	details.V6AddrPorts = details.V6AddrPorts[:0]
 	details.RelayVpnAddrs = details.RelayVpnAddrs[:0]
 	details.OldRelayVpnAddrs = details.OldRelayVpnAddrs[:0]
-	//TODO: these are unfortunate
 	details.OldVpnAddr = 0
 	details.VpnAddr = nil
 	lhh.meta.Details = details
@@ -1077,7 +1072,6 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 		return
 	}
 
-	//TODO: Maybe instead of marshalling into n we marshal into a new `r` to not nuke our current request data
 	found, ln, err := lhh.lh.queryAndPrepMessage(queryVpnAddr, func(c *cache) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostQueryReply
