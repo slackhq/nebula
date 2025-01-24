@@ -92,11 +92,24 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp neti
 func (rm *relayManager) EstablishRelay(relayHostInfo *HostInfo, m *NebulaControl) (*Relay, error) {
 	relay, ok := relayHostInfo.relayState.CompleteRelayByIdx(m.InitiatorRelayIndex, m.ResponderRelayIndex)
 	if !ok {
-		//TODO: we need to handle possibly logging deprecated fields as well
-		rm.l.WithFields(logrus.Fields{"relay": relayHostInfo.vpnAddrs[0],
+		fields := logrus.Fields{
+			"relay":               relayHostInfo.vpnAddrs[0],
 			"initiatorRelayIndex": m.InitiatorRelayIndex,
-			"relayFrom":           m.RelayFromAddr,
-			"relayTo":             m.RelayToAddr}).Info("relayManager failed to update relay")
+		}
+
+		if m.RelayFromAddr == nil {
+			fields["relayFrom"] = m.OldRelayFromAddr
+		} else {
+			fields["relayFrom"] = m.RelayFromAddr
+		}
+
+		if m.RelayToAddr == nil {
+			fields["relayTo"] = m.OldRelayToAddr
+		} else {
+			fields["relayTo"] = m.RelayToAddr
+		}
+
+		rm.l.WithFields(fields).Info("relayManager failed to update relay")
 		return nil, fmt.Errorf("unknown relay")
 	}
 
