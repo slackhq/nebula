@@ -115,7 +115,6 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, d []byte, f *Interface) {
 	if msg.OldRelayFromAddr > 0 || msg.OldRelayToAddr > 0 {
 		v = cert.Version1
 
-		//TODO: yeah this is junk but maybe its less junky than the other options
 		b := [4]byte{}
 		binary.BigEndian.PutUint32(b[:], msg.OldRelayFromAddr)
 		msg.RelayFromAddr = netAddrToProtoAddr(netip.AddrFrom4(b))
@@ -181,7 +180,12 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 		if v == cert.Version1 {
 			peer := peerHostInfo.vpnAddrs[0]
 			if !peer.Is4() {
-				//TODO: log cant do it
+				rm.l.WithField("relayFrom", peer).
+					WithField("relayTo", target).
+					WithField("initiatorRelayIndex", resp.InitiatorRelayIndex).
+					WithField("responderRelayIndex", resp.ResponderRelayIndex).
+					WithField("vpnAddrs", peerHostInfo.vpnAddrs).
+					Error("Refusing to CreateRelayResponse for a v1 relay with an ipv6 address")
 				return
 			}
 
@@ -303,7 +307,6 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 		} else {
 			f.SendMessageToHostInfo(header.Control, 0, h, msg, make([]byte, 12), make([]byte, mtu))
 			rm.l.WithFields(logrus.Fields{
-				//TODO: IPV6-WORK, this used to use the resp object but I am getting lazy now
 				"relayFrom":           from,
 				"relayTo":             target,
 				"initiatorRelayIndex": resp.InitiatorRelayIndex,
@@ -349,7 +352,12 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 
 		if v == cert.Version1 {
 			if !h.vpnAddrs[0].Is4() {
-				//TODO: log it
+				rm.l.WithField("relayFrom", h.vpnAddrs[0]).
+					WithField("relayTo", target).
+					WithField("initiatorRelayIndex", req.InitiatorRelayIndex).
+					WithField("responderRelayIndex", req.ResponderRelayIndex).
+					WithField("vpnAddr", target).
+					Error("Refusing to CreateRelayRequest for a v1 relay with an ipv6 address")
 				return
 			}
 
@@ -369,7 +377,6 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 		} else {
 			f.SendMessageToHostInfo(header.Control, 0, peer, msg, make([]byte, 12), make([]byte, mtu))
 			rm.l.WithFields(logrus.Fields{
-				//TODO: IPV6-WORK another lazy used to use the req object
 				"relayFrom":           h.vpnAddrs[0],
 				"relayTo":             target,
 				"initiatorRelayIndex": req.InitiatorRelayIndex,
