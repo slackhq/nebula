@@ -38,9 +38,6 @@ func TestConfig_Load(t *testing.T) {
 		"new": "hi",
 	}
 	assert.Equal(t, expected, c.Settings)
-
-	//TODO: test symlinked file
-	//TODO: test symlinked directory
 }
 
 func TestConfig_Get(t *testing.T) {

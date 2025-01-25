@@ -351,7 +351,7 @@ func (t *tun) RouteFor(ip netip.Addr) netip.Addr {
 }
 
 // Get the LinkAddr for the interface of the given name
-// TODO: Is there an easier way to fetch this when we create the interface?
+// Is there an easier way to fetch this when we create the interface?
 // Maybe SIOCGIFINDEX? but this doesn't appear to exist in the darwin headers.
 func getLinkAddr(name string) (*netroute.LinkAddr, error) {
 	rib, err := netroute.FetchRIB(unix.AF_UNSPEC, unix.NET_RT_IFLIST, 0)

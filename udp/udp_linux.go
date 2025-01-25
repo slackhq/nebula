@@ -207,8 +207,6 @@ func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
 			return &net.OpError{Op: "sendto", Err: err}
 		}
 
-		//TODO: handle incomplete writes
-
 		return nil
 	}
 }
@@ -237,8 +235,6 @@ func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
 		if err != 0 {
 			return &net.OpError{Op: "sendto", Err: err}
 		}
-
-		//TODO: handle incomplete writes
 
 		return nil
 	}

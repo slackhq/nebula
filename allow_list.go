@@ -128,7 +128,6 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 
 		ipNet = netip.PrefixFrom(ipNet.Addr().Unmap(), ipNet.Bits())
 
-		// TODO: should we error on duplicate CIDRs in the config?
 		tree.Insert(ipNet, value)
 
 		maskBits := ipNet.Bits()
