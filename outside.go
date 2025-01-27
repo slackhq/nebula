@@ -314,7 +314,6 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 		//fmt.Println(proto, protoAt)
 		switch proto {
 		case layers.IPProtocolICMPv6:
-			//TODO: Currently we are treating `icmp` in config.yml as either v4 or v6, should we allow distinguishing them?
 			fp.Protocol = uint8(proto)
 			fp.RemotePort = 0
 			fp.LocalPort = 0
