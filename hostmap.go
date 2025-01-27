@@ -215,8 +215,12 @@ type HostInfo struct {
 	ConnectionState *ConnectionState
 	remoteIndexId   uint32
 	localIndexId    uint32
-	vpnAddrs        []netip.Addr
-	recvError       atomic.Uint32
+
+	// vpnAddrs is a list of vpn addresses assigned to this host that are within our own vpn networks
+	// The host may have other vpn addresses that are outside our
+	// vpn networks but were removed because they are not usable
+	vpnAddrs  []netip.Addr
+	recvError atomic.Uint32
 
 	// networks are both all vpn and unsafe networks assigned to this host
 	networks   *bart.Table[struct{}]
@@ -712,18 +716,18 @@ func (i *HostInfo) RecvErrorExceeded() bool {
 	return true
 }
 
-func (i *HostInfo) buildNetworks(c cert.Certificate) {
-	if len(c.Networks()) == 1 && len(c.UnsafeNetworks()) == 0 {
+func (i *HostInfo) buildNetworks(networks, unsafeNetworks []netip.Prefix) {
+	if len(networks) == 1 && len(unsafeNetworks) == 0 {
 		// Simple case, no CIDRTree needed
 		return
 	}
 
 	i.networks = new(bart.Table[struct{}])
-	for _, network := range c.Networks() {
+	for _, network := range networks {
 		i.networks.Insert(network, struct{}{})
 	}
 
-	for _, network := range c.UnsafeNetworks() {
+	for _, network := range unsafeNetworks {
 		i.networks.Insert(network, struct{}{})
 	}
 }

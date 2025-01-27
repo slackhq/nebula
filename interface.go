@@ -64,7 +64,7 @@ type Interface struct {
 	myBroadcastAddrsTable *bart.Table[struct{}]
 	myVpnAddrs            []netip.Addr          // A list of addresses assigned to us via our certificate
 	myVpnAddrsTable       *bart.Table[struct{}] // A table of addresses assigned to us via our certificate
-	myVpnNetworks         []netip.Prefix        // A table of networks assigned to us via our certificate
+	myVpnNetworks         []netip.Prefix        // A list of networks assigned to us via our certificate
 	myVpnNetworksTable    *bart.Table[struct{}] // A table of networks assigned to us via our certificate
 	dropLocalBroadcast    bool
 	dropMulticast         bool
