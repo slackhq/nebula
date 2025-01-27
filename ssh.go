@@ -77,9 +77,6 @@ func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) {
 // that callers may invoke to run the configured ssh server. On
 // failure, it returns nil, error.
 func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error) {
-	//TODO conntrack list
-	//TODO print firewall rules or hash?
-
 	listen := c.GetString("sshd.listen", "")
 	if listen == "" {
 		return nil, fmt.Errorf("sshd.listen must be provided")
@@ -93,7 +90,6 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 		return nil, fmt.Errorf("sshd.listen can not use port 22")
 	}
 
-	//TODO: no good way to reload this right now
 	hostKeyPathOrKey := c.GetString("sshd.host_key", "")
 	if hostKeyPathOrKey == "" {
 		return nil, fmt.Errorf("sshd.host_key must be provided")
@@ -418,7 +414,6 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Inter
 func sshListHostMap(hl controlHostLister, a interface{}, w sshd.StringWriter) error {
 	fs, ok := a.(*sshListHostMapFlags)
 	if !ok {
-		//TODO: error
 		return nil
 	}
 
@@ -441,7 +436,6 @@ func sshListHostMap(hl controlHostLister, a interface{}, w sshd.StringWriter) er
 
 		err := js.Encode(hm)
 		if err != nil {
-			//TODO
 			return nil
 		}
 
@@ -460,7 +454,6 @@ func sshListHostMap(hl controlHostLister, a interface{}, w sshd.StringWriter) er
 func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWriter) error {
 	fs, ok := a.(*sshListHostMapFlags)
 	if !ok {
-		//TODO: error
 		return nil
 	}
 
@@ -493,7 +486,6 @@ func sshListLighthouseMap(lightHouse *LightHouse, a interface{}, w sshd.StringWr
 
 		err := js.Encode(addrMap)
 		if err != nil {
-			//TODO
 			return nil
 		}
 
@@ -564,7 +556,6 @@ func sshQueryLighthouse(ifce *Interface, fs interface{}, a []string, w sshd.Stri
 func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
 	flags, ok := fs.(*sshCloseTunnelFlags)
 	if !ok {
-		//TODO: error
 		return nil
 	}
 
@@ -605,7 +596,6 @@ func sshCloseTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
 	flags, ok := fs.(*sshCreateTunnelFlags)
 	if !ok {
-		//TODO: error
 		return nil
 	}
 
@@ -651,7 +641,6 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 func sshChangeRemote(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
 	flags, ok := fs.(*sshChangeRemoteFlags)
 	if !ok {
-		//TODO: error
 		return nil
 	}
 
@@ -781,7 +770,6 @@ func sshLogFormat(l *logrus.Logger, fs interface{}, a []string, w sshd.StringWri
 func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
 	args, ok := fs.(*sshPrintCertFlags)
 	if !ok {
-		//TODO: error
 		return nil
 	}
 
@@ -807,7 +795,6 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 	if args.Json || args.Pretty {
 		b, err := cert.MarshalJSON()
 		if err != nil {
-			//TODO: handle it
 			return nil
 		}
 
@@ -816,7 +803,6 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 			err := json.Indent(buf, b, "", "    ")
 			b = buf.Bytes()
 			if err != nil {
-				//TODO: handle it
 				return nil
 			}
 		}
@@ -827,7 +813,6 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 	if args.Raw {
 		b, err := cert.MarshalPEM()
 		if err != nil {
-			//TODO: handle it
 			return nil
 		}
 
@@ -840,7 +825,6 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 func sshPrintRelays(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
 	args, ok := fs.(*sshPrintTunnelFlags)
 	if !ok {
-		//TODO: error
 		w.WriteLine(fmt.Sprintf("sshPrintRelays failed to convert args type"))
 		return nil
 	}
@@ -938,7 +922,6 @@ func sshPrintRelays(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 func sshPrintTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringWriter) error {
 	args, ok := fs.(*sshPrintTunnelFlags)
 	if !ok {
-		//TODO: error
 		return nil
 	}
 

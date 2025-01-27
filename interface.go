@@ -410,6 +410,8 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 	udpStats := udp.NewUDPStatsEmitter(f.writers)
 
 	certExpirationGauge := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil)
+	certDefaultVersion := metrics.GetOrRegisterGauge("certificate.default_version", nil)
+	certMaxVersion := metrics.GetOrRegisterGauge("certificate.max_version", nil)
 
 	for {
 		select {
@@ -419,8 +421,18 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 			f.firewall.EmitStats()
 			f.handshakeManager.EmitStats()
 			udpStats()
-			certExpirationGauge.Update(int64(f.pki.getCertState().GetDefaultCertificate().NotAfter().Sub(time.Now()) / time.Second))
-			//TODO: we should also report the default certificate version
+
+			certState := f.pki.getCertState()
+			defaultCrt := certState.GetDefaultCertificate()
+			certExpirationGauge.Update(int64(defaultCrt.NotAfter().Sub(time.Now()) / time.Second))
+			certDefaultVersion.Update(int64(defaultCrt.Version()))
+
+			// Report the max certificate version we are capable of using
+			if certState.v2Cert != nil {
+				certMaxVersion.Update(int64(certState.v2Cert.Version()))
+			} else {
+				certMaxVersion.Update(int64(certState.v1Cert.Version()))
+			}
 		}
 	}
 }

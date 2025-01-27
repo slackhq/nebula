@@ -250,7 +250,6 @@ tun:
   # in nebula configuration files. Default false, not reloadable.
   #use_system_route_table: false
 
-# TODO
 # Configure logging level
 logging:
   # panic, fatal, error, warning, info, or debug. Default is info and is reloadable.
@@ -342,9 +341,8 @@ firewall:
   #   host: `any` or a literal hostname, ie `test-host`
   #   group: `any` or a literal group name, ie `default-group`
   #   groups: Same as group but accepts a list of values. Multiple values are AND'd together and a certificate would have to contain all groups to pass
-  #   cidr: a remote CIDR, `0.0.0.0/0` is any ipv4 and `::/0` is any ipv6. //TODO: we have a problem, firewall needs to understand this and should probably allow `any` for both
+  #   cidr: a remote CIDR, `0.0.0.0/0` is any ipv4 and `::/0` is any ipv6.
   #   local_cidr: a local CIDR, `0.0.0.0/0` is any ipv4 and `::/0` is any ipv6. This could be used to filter destinations when using unsafe_routes.
-  #   //TODO: probably should have an `any` that covers both ip versions
   #     If no unsafe networks are present in the certificate(s) or `default_local_cidr_any` is true then the default is any ipv4 or ipv6 network.
   #     Otherwise the default is any vpn network assigned to via the certificate.
   #     `default_local_cidr_any` defaults to false and is deprecated, it will be removed in a future release.

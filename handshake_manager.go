@@ -224,7 +224,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 
 	hh.lastRemotes = remotes
 
-	// TODO: this will generate a load of queries for hosts with only 1 ip
+	// This will generate a load of queries for hosts with only 1 ip
 	// (such as ones registered to the lighthouse with only a private IP)
 	// So we only do it one time after attempting 5 handshakes already.
 	if len(remotes) <= 1 && hh.counter == 5 {

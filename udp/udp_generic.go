@@ -58,7 +58,7 @@ func (u *GenericConn) LocalAddr() (netip.AddrPort, error) {
 }
 
 func (u *GenericConn) ReloadConfig(c *config.C) {
-	// TODO
+
 }
 
 func NewUDPStatsEmitter(udpConns []Conn) func() {

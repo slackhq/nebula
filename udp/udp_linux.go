@@ -17,8 +17,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-//TODO: make it support reload as best you can!
-
 type StdConn struct {
 	sysFd int
 	isV4  bool
@@ -57,7 +55,6 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 		}
 	}
 
-	//TODO: support multiple listening IPs (for limiting ipv6)
 	var sa unix.Sockaddr
 	if ip.Is4() {
 		sa4 := &unix.SockaddrInet4{Port: port}
@@ -71,11 +68,6 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 	if err = unix.Bind(fd, sa); err != nil {
 		return nil, fmt.Errorf("unable to bind to socket: %s", err)
 	}
-
-	//TODO: this may be useful for forcing threads into specific cores
-	//unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU, x)
-	//v, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU)
-	//l.Println(v, err)
 
 	return &StdConn{sysFd: fd, isV4: ip.Is4(), l: l, batch: batch}, err
 }
@@ -215,8 +207,6 @@ func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
 			return &net.OpError{Op: "sendto", Err: err}
 		}
 
-		//TODO: handle incomplete writes
-
 		return nil
 	}
 }
@@ -245,8 +235,6 @@ func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
 		if err != 0 {
 			return &net.OpError{Op: "sendto", Err: err}
 		}
-
-		//TODO: handle incomplete writes
 
 		return nil
 	}
@@ -294,7 +282,6 @@ func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
 }
 
 func (u *StdConn) Close() error {
-	//TODO: this will not interrupt the read loop
 	return syscall.Close(u.sysFd)
 }
 

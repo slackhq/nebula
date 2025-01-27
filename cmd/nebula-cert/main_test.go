@@ -11,8 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-//TODO: all flag parsing continueOnError will print to stderr on its own currently
-
 func Test_help(t *testing.T) {
 	expected := "Usage of " + os.Args[0] + " <global flags> <mode>:\n" +
 		"  Global flags:\n" +

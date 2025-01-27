@@ -16,8 +16,6 @@ import (
 	"golang.org/x/crypto/ed25519"
 )
 
-//TODO: test file permissions
-
 func Test_signSummary(t *testing.T) {
 	assert.Equal(t, "sign <flags>: create and sign a certificate", signSummary())
 }

@@ -94,7 +94,6 @@ func TestGoodHandshake(t *testing.T) {
 	r.RenderHostmaps("Final hostmaps", myControl, theirControl)
 	myControl.Stop()
 	theirControl.Stop()
-	//TODO: assert hostmaps
 }
 
 func TestWrongResponderHandshake(t *testing.T) {
@@ -152,8 +151,6 @@ func TestWrongResponderHandshake(t *testing.T) {
 		return router.KeepRouting
 	})
 
-	//TODO: Assert pending hostmap - I should have a correct hostinfo for them now
-
 	t.Log("My cached packet should be received by them")
 	myCachedPacket := theirControl.GetFromTun(true)
 	assertUdpPacket(t, []byte("Hi from me"), myCachedPacket, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), 80, 80)
@@ -169,7 +166,6 @@ func TestWrongResponderHandshake(t *testing.T) {
 	assert.Nil(t, myControl.GetHostInfoByVpnAddr(evilVpnIp[0].Addr(), true), "My pending hostmap should not contain evil")
 	assert.Nil(t, myControl.GetHostInfoByVpnAddr(evilVpnIp[0].Addr(), false), "My main hostmap should not contain evil")
 
-	//TODO: assert hostmaps for everyone
 	r.RenderHostmaps("Final hostmaps", myControl, theirControl, evilControl)
 	t.Log("Success!")
 	myControl.Stop()
@@ -236,8 +232,6 @@ func TestWrongResponderHandshakeStaticHostMap(t *testing.T) {
 		return router.KeepRouting
 	})
 
-	//TODO: Assert pending hostmap - I should have a correct hostinfo for them now
-
 	t.Log("My cached packet should be received by them")
 	myCachedPacket := theirControl.GetFromTun(true)
 	assertUdpPacket(t, []byte("Hi from me"), myCachedPacket, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), 80, 80)
@@ -254,7 +248,6 @@ func TestWrongResponderHandshakeStaticHostMap(t *testing.T) {
 	assert.Nil(t, myControl.GetHostInfoByVpnAddr(evilVpnIp[0].Addr(), false), "My main hostmap should not contain evil")
 	//NOTE: if evil lost the handshake race it may still have a tunnel since me would reject the handshake since the tunnel is complete
 
-	//TODO: assert hostmaps for everyone
 	r.RenderHostmaps("Final hostmaps", myControl, theirControl, evilControl)
 	t.Log("Success!")
 	myControl.Stop()
@@ -468,7 +461,6 @@ func TestRelays(t *testing.T) {
 	r.Log("Assert the tunnel works")
 	assertUdpPacket(t, []byte("Hi from me"), p, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), 80, 80)
 	r.RenderHostmaps("Final hostmaps", myControl, relayControl, theirControl)
-	//TODO: assert we actually used the relay even though it should be impossible for a tunnel to have occurred without it
 }
 
 func TestReestablishRelays(t *testing.T) {
@@ -647,8 +639,6 @@ func TestStage1RaceRelays(t *testing.T) {
 	myControl.Stop()
 	theirControl.Stop()
 	relayControl.Stop()
-	//
-	////TODO: assert hostmaps
 }
 
 func TestStage1RaceRelays2(t *testing.T) {
@@ -735,9 +725,6 @@ func TestStage1RaceRelays2(t *testing.T) {
 	myControl.Stop()
 	theirControl.Stop()
 	relayControl.Stop()
-
-	//
-	////TODO: assert hostmaps
 }
 
 func TestRehandshakingRelays(t *testing.T) {
@@ -1173,7 +1160,6 @@ func TestRaceRegression(t *testing.T) {
 	myControl.InjectUDPPacket(theirStage1ForMe)
 	theirControl.InjectUDPPacket(myStage1ForThem)
 
-	//TODO: ensure stage 2
 	t.Log("Get both stage 2")
 	myStage2ForThem := myControl.GetFromUDP(true)
 	theirStage2ForMe := theirControl.GetFromUDP(true)
@@ -1237,9 +1223,3 @@ func TestV2NonPrimaryWithLighthouse(t *testing.T) {
 	myControl.Stop()
 	theirControl.Stop()
 }
-
-//TODO: test
-// Race winner renews and handshakes
-// Race loser renews and handshakes
-// Does race winner repin the cert to old?
-//TODO: add a test with many lies

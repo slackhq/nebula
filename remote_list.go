@@ -33,9 +33,6 @@ type Cache struct {
 	Relay    []netip.Addr     `json:"relay"`
 }
 
-//TODO: Seems like we should plop static host entries in here too since the are protected by the lighthouse from deletion
-// We will never clean learned/reported information for them as it stands today
-
 // cache is an internal struct that splits v4 and v6 addresses inside the cache map
 type cache struct {
 	v4    *cacheV4
@@ -275,7 +272,6 @@ func (r *RemoteList) CopyAddrs(preferredRanges []netip.Prefix) []netip.AddrPort 
 // LearnRemote locks and sets the learned slot for the owner vpn ip to the provided addr
 // Currently this is only needed when HostInfo.SetRemote is called as that should cover both handshaking and roaming.
 // It will mark the deduplicated address list as dirty, so do not call it unless new information is available
-// TODO: this needs to support the allow list list
 func (r *RemoteList) LearnRemote(ownerVpnIp netip.Addr, remote netip.AddrPort) {
 	r.Lock()
 	defer r.Unlock()
@@ -386,7 +382,6 @@ func (r *RemoteList) Rebuild(preferredRanges []netip.Prefix) {
 	defer r.Unlock()
 
 	// Only rebuild if the cache changed
-	//TODO: shouldRebuild is probably pointless as we don't check for actual change when lighthouse updates come in
 	if r.shouldRebuild {
 		r.unlockedCollect()
 		r.shouldRebuild = false
@@ -709,7 +704,6 @@ func minInt(a, b int) int {
 
 // isPreferred returns true of the ip is contained in the preferredRanges list
 func isPreferred(ip netip.Addr, preferredRanges []netip.Prefix) bool {
-	//TODO: this would be better in a CIDR6Tree
 	for _, p := range preferredRanges {
 		if p.Contains(ip) {
 			return true

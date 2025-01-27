@@ -780,8 +780,6 @@ func localAddrs(l *logrus.Logger, allowList *LocalAllowList) []netip.Addr {
 			}
 			addr = addr.Unmap()
 
-			//TODO: Filtering out link local for now, this is probably the most correct thing
-			//TODO: Would be nice to filter out SLAAC MAC based ips as well
 			if addr.IsLoopback() == false && addr.IsLinkLocalUnicast() == false {
 				isAllowed := allowList.Allow(addr)
 				if l.Level >= logrus.TraceLevel {
