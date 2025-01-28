@@ -121,7 +121,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 			}
 
 		} else if currentState.v1Cert != nil {
-			//TODO: we should be able to tear this down
+			//TODO: CERT-V2 we should be able to tear this down
 			return util.NewContextualError("v1 certificate was removed, restart required", nil, err)
 		}
 
@@ -173,7 +173,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 
 	p.cs.Store(newState)
 
-	//TODO: newState needs a stringer that does json
+	//TODO: CERT-V2 newState needs a stringer that does json
 	if initial {
 		p.l.WithField("cert", newState).Debug("Client nebula certificate(s)")
 	} else {
@@ -359,14 +359,14 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 			return nil, util.NewContextualError("v1 and v2 curve are not the same, ignoring", nil, nil)
 		}
 
-		//TODO: make sure v2 has v1s address
+		//TODO: CERT-V2 make sure v2 has v1s address
 
 		cs.defaultVersion = dv
 	}
 
 	if v1 != nil {
 		if pkcs11backed {
-			//TODO: We do not currently have a method to verify a public private key pair when the private key is in an hsm
+			//NOTE: We do not currently have a method to verify a public private key pair when the private key is in an hsm
 		} else {
 			if err := v1.VerifyPrivateKey(privateKeyCurve, privateKey); err != nil {
 				return nil, fmt.Errorf("private key is not a pair with public key in nebula cert")
@@ -387,7 +387,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 
 	if v2 != nil {
 		if pkcs11backed {
-			//TODO: We do not currently have a method to verify a public private key pair when the private key is in an hsm
+			//NOTE: We do not currently have a method to verify a public private key pair when the private key is in an hsm
 		} else {
 			if err := v2.VerifyPrivateKey(privateKeyCurve, privateKey); err != nil {
 				return nil, fmt.Errorf("private key is not a pair with public key in nebula cert")

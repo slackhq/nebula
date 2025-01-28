@@ -161,7 +161,7 @@ func assertTunnel(t *testing.T, vpnIpA, vpnIpB netip.Addr, controlA, controlB *n
 
 func assertHostInfoPair(t *testing.T, addrA, addrB netip.AddrPort, vpnNetsA, vpnNetsB []netip.Prefix, controlA, controlB *nebula.Control) {
 	// Get both host infos
-	//TODO: we may want to loop over each vpnAddr and assert all the things
+	//TODO: CERT-V2 we may want to loop over each vpnAddr and assert all the things
 	hBinA := controlA.GetHostInfoByVpnAddr(vpnNetsB[0].Addr(), false)
 	assert.NotNil(t, hBinA, "Host B was not found by vpnAddr in controlA")
 

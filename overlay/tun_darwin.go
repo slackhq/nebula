@@ -294,7 +294,7 @@ func (t *tun) activate6(network netip.Prefix) error {
 			Vltime: 0xffffffff,
 			Pltime: 0xffffffff,
 		},
-		//TODO: should we disable DAD (duplicate address detection) and mark this as a secured address?
+		//TODO: CERT-V2 should we disable DAD (duplicate address detection) and mark this as a secured address?
 		Flags: _IN6_IFF_NODAD,
 	}
 

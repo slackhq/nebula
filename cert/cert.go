@@ -149,7 +149,7 @@ func unmarshalCertificateFromHandshake(v Version, b []byte, publicKey []byte, cu
 	case Version2:
 		c, err = unmarshalCertificateV2(b, publicKey, curve)
 	default:
-		//TODO: make a static var
+		//TODO: CERT-V2 make a static var
 		return nil, fmt.Errorf("unknown certificate version %d", v)
 	}
 
