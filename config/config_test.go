@@ -67,28 +67,28 @@ func TestConfig_GetBool(t *testing.T) {
 	l := test.NewLogger()
 	c := NewC(l)
 	c.Settings["bool"] = true
-	assert.Equal(t, true, c.GetBool("bool", false))
+	assert.True(t, c.GetBool("bool", false))
 
 	c.Settings["bool"] = "true"
-	assert.Equal(t, true, c.GetBool("bool", false))
+	assert.True(t, c.GetBool("bool", false))
 
 	c.Settings["bool"] = false
-	assert.Equal(t, false, c.GetBool("bool", true))
+	assert.False(t, c.GetBool("bool", true))
 
 	c.Settings["bool"] = "false"
-	assert.Equal(t, false, c.GetBool("bool", true))
+	assert.False(t, c.GetBool("bool", true))
 
 	c.Settings["bool"] = "Y"
-	assert.Equal(t, true, c.GetBool("bool", false))
+	assert.True(t, c.GetBool("bool", false))
 
 	c.Settings["bool"] = "yEs"
-	assert.Equal(t, true, c.GetBool("bool", false))
+	assert.True(t, c.GetBool("bool", false))
 
 	c.Settings["bool"] = "N"
-	assert.Equal(t, false, c.GetBool("bool", true))
+	assert.False(t, c.GetBool("bool", true))
 
 	c.Settings["bool"] = "nO"
-	assert.Equal(t, false, c.GetBool("bool", true))
+	assert.False(t, c.GetBool("bool", true))
 }
 
 func TestConfig_HasChanged(t *testing.T) {
