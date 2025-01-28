@@ -81,14 +81,14 @@ func Test_keygen(t *testing.T) {
 	rb, _ := os.ReadFile(keyF.Name())
 	lKey, b, curve, err := cert.UnmarshalPrivateKeyFromPEM(rb)
 	assert.Equal(t, cert.Curve_CURVE25519, curve)
-	assert.Len(t, b, 0)
+	assert.Empty(t, b)
 	assert.Nil(t, err)
 	assert.Len(t, lKey, 32)
 
 	rb, _ = os.ReadFile(pubF.Name())
 	lPub, b, curve, err := cert.UnmarshalPublicKeyFromPEM(rb)
 	assert.Equal(t, cert.Curve_CURVE25519, curve)
-	assert.Len(t, b, 0)
+	assert.Empty(t, b)
 	assert.Nil(t, err)
 	assert.Len(t, lPub, 32)
 }

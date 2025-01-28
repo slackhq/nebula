@@ -260,13 +260,13 @@ func Test_signCert(t *testing.T) {
 	rb, _ := os.ReadFile(keyF.Name())
 	lKey, b, curve, err := cert.UnmarshalPrivateKeyFromPEM(rb)
 	assert.Equal(t, cert.Curve_CURVE25519, curve)
-	assert.Len(t, b, 0)
+	assert.Empty(t, b)
 	assert.Nil(t, err)
 	assert.Len(t, lKey, 32)
 
 	rb, _ = os.ReadFile(crtF.Name())
 	lCrt, b, err := cert.UnmarshalCertificateFromPEM(rb)
-	assert.Len(t, b, 0)
+	assert.Empty(t, b)
 	assert.Nil(t, err)
 
 	assert.Equal(t, "test", lCrt.Name())
@@ -302,7 +302,7 @@ func Test_signCert(t *testing.T) {
 	// read cert file and check pub key matches in-pub
 	rb, _ = os.ReadFile(crtF.Name())
 	lCrt, b, err = cert.UnmarshalCertificateFromPEM(rb)
-	assert.Len(t, b, 0)
+	assert.Empty(t, b)
 	assert.Nil(t, err)
 	assert.Equal(t, lCrt.PublicKey(), inPub)
 

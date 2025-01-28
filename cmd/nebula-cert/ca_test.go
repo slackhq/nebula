@@ -141,20 +141,20 @@ func Test_ca(t *testing.T) {
 	rb, _ := os.ReadFile(keyF.Name())
 	lKey, b, c, err := cert.UnmarshalSigningPrivateKeyFromPEM(rb)
 	assert.Equal(t, cert.Curve_CURVE25519, c)
-	assert.Len(t, b, 0)
+	assert.Empty(t, b)
 	assert.Nil(t, err)
 	assert.Len(t, lKey, 64)
 
 	rb, _ = os.ReadFile(crtF.Name())
 	lCrt, b, err := cert.UnmarshalCertificateFromPEM(rb)
-	assert.Len(t, b, 0)
+	assert.Empty(t, b)
 	assert.Nil(t, err)
 
 	assert.Equal(t, "test", lCrt.Name())
-	assert.Len(t, lCrt.Networks(), 0)
+	assert.Empty(t, lCrt.Networks())
 	assert.True(t, lCrt.IsCA())
 	assert.Equal(t, []string{"1", "2", "3", "4", "5"}, lCrt.Groups())
-	assert.Len(t, lCrt.UnsafeNetworks(), 0)
+	assert.Empty(t, lCrt.UnsafeNetworks())
 	assert.Len(t, lCrt.PublicKey(), 32)
 	assert.Equal(t, time.Duration(time.Minute*100), lCrt.NotAfter().Sub(lCrt.NotBefore()))
 	assert.Equal(t, "", lCrt.Issuer())
@@ -185,7 +185,7 @@ func Test_ca(t *testing.T) {
 	curve, lKey, b, err = cert.DecryptAndUnmarshalSigningPrivateKey(passphrase, rb)
 	assert.Equal(t, cert.Curve_CURVE25519, curve)
 	assert.Nil(t, err)
-	assert.Len(t, b, 0)
+	assert.Empty(t, b)
 	assert.Len(t, lKey, 64)
 
 	// test when reading passsword results in an error
