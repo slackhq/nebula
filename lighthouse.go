@@ -1194,6 +1194,7 @@ func (lhh *LightHouseHandler) coalesceAnswers(v cert.Version, c *cache, n *Nebul
 			}
 
 		} else {
+			//TODO: CERT-V2 don't panic
 			panic("unsupported version")
 		}
 	}
@@ -1257,8 +1258,8 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 		return
 	}
 
-	//todo hosts with only v2 certs cannot provide their ipv6 addr when contacting the lighthouse via v4?
-	//todo why do we care about the vpnAddr in the packet? We know where it came from, right?
+	//TODO: CERT-V2 hosts with only v2 certs cannot provide their ipv6 addr when contacting the lighthouse via v4?
+	//TODO: CERT-V2 why do we care about the vpnAddr in the packet? We know where it came from, right?
 	//Simple check that the host sent this not someone else
 	if !slices.Contains(fromVpnAddrs, detailsVpnAddr) {
 		if lhh.l.Level >= logrus.DebugLevel {
