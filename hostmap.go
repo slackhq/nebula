@@ -353,27 +353,37 @@ func (hm *HostMap) MakePrimary(hostinfo *HostInfo) {
 }
 
 func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) {
-	//TODO: we may need to promote follow on hostinfos from these vpnAddrs as well since their oldHostinfo might not be the same as this one
-	// this really looks like an ideal spot for memory leaks
+	// Get the current primary, if it exists
 	oldHostinfo := hm.Hosts[hostinfo.vpnAddrs[0]]
+
+	// Every address in the hostinfo gets elevated to primary
+	for _, vpnAddr := range hostinfo.vpnAddrs {
+		//NOTE: It is possible that we leave a dangling hostinfo here but connection manager works on
+		// indexes so it should be fine.
+		hm.Hosts[vpnAddr] = hostinfo
+	}
+
+	// If we are already primary then we won't bother re-linking
 	if oldHostinfo == hostinfo {
 		return
 	}
 
+	// Unlink this hostinfo
 	if hostinfo.prev != nil {
 		hostinfo.prev.next = hostinfo.next
 	}
-
 	if hostinfo.next != nil {
 		hostinfo.next.prev = hostinfo.prev
 	}
 
-	hm.Hosts[hostinfo.vpnAddrs[0]] = hostinfo
-
+	// If there wasn't a previous primary then clear out any links
 	if oldHostinfo == nil {
+		hostinfo.next = nil
+		hostinfo.prev = nil
 		return
 	}
 
+	// Relink the hostinfo as primary
 	hostinfo.next = oldHostinfo
 	oldHostinfo.prev = hostinfo
 	hostinfo.prev = nil

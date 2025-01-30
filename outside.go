@@ -234,7 +234,7 @@ func (f *Interface) sendCloseTunnel(h *HostInfo) {
 
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, vpnAddr netip.AddrPort) {
 	if vpnAddr.IsValid() && hostinfo.remote != vpnAddr {
-		//TODO: this is weird now that we can have multiple vpn addrs
+		//TODO: CERT-V2 this is weird now that we can have multiple vpn addrs
 		if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnAddrs[0], vpnAddr.Addr()) {
 			hostinfo.logger(f.l).WithField("newAddr", vpnAddr).Debug("lighthouse.remote_allow_list denied roaming")
 			return
@@ -301,7 +301,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 		fp.RemoteAddr, _ = netip.AddrFromSlice(data[24:40])
 	}
 
-	//TODO: whats a reasonable number of extension headers to attempt to parse?
+	//TODO: CERT-V2 whats a reasonable number of extension headers to attempt to parse?
 	//https://www.ietf.org/archive/id/draft-ietf-6man-eh-limits-00.html
 	protoAt := 6
 	offset := 40
@@ -351,7 +351,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 			return nil
 
 		case layers.IPProtocolIPv6Fragment:
-			//TODO: can we determine the protocol?
+			//TODO: CERT-V2 can we determine the protocol?
 			fp.RemotePort = 0
 			fp.LocalPort = 0
 			fp.Fragment = true

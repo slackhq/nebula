@@ -710,7 +710,7 @@ func (lh *LightHouse) IsLighthouseAddr(vpnAddr netip.Addr) bool {
 	return false
 }
 
-// TODO: IsLighthouseAddr should be sufficient, we just need to update the vpnAddrs for lighthouses after a handshake
+// TODO: CERT-V2 IsLighthouseAddr should be sufficient, we just need to update the vpnAddrs for lighthouses after a handshake
 // so that we know all the lighthouse vpnAddrs, not just the ones we were configured to talk to initially
 func (lh *LightHouse) IsAnyLighthouseAddr(vpnAddr []netip.Addr) bool {
 	l := lh.GetLighthouses()
@@ -1123,7 +1123,7 @@ func (lhh *LightHouseHandler) sendHostPunchNotification(n *NebulaMeta, fromVpnAd
 			if ok {
 				whereToPunch = newDest
 			} else {
-				//TODO this means the destination will have no addresses in common with the punch-ee
+				//TODO: CERT-V2 this means the destination will have no addresses in common with the punch-ee
 				//choosing to do nothing for now, but maybe we return an error?
 			}
 		}
@@ -1194,6 +1194,7 @@ func (lhh *LightHouseHandler) coalesceAnswers(v cert.Version, c *cache, n *Nebul
 			}
 
 		} else {
+			//TODO: CERT-V2 don't panic
 			panic("unsupported version")
 		}
 	}
@@ -1257,8 +1258,8 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 		return
 	}
 
-	//todo hosts with only v2 certs cannot provide their ipv6 addr when contacting the lighthouse via v4?
-	//todo why do we care about the vpnAddr in the packet? We know where it came from, right?
+	//TODO: CERT-V2 hosts with only v2 certs cannot provide their ipv6 addr when contacting the lighthouse via v4?
+	//TODO: CERT-V2 why do we care about the vpnAddr in the packet? We know where it came from, right?
 	//Simple check that the host sent this not someone else
 	if !slices.Contains(fromVpnAddrs, detailsVpnAddr) {
 		if lhh.l.Level >= logrus.DebugLevel {

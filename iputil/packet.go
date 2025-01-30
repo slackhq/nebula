@@ -6,8 +6,6 @@ import (
 	"golang.org/x/net/ipv4"
 )
 
-//TODO: IPV6-WORK can probably delete this
-
 const (
 	// Need 96 bytes for the largest reject packet:
 	// - 20 byte ipv4 header

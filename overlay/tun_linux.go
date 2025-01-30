@@ -290,7 +290,7 @@ func (t *tun) addIPs(link netlink.Link) error {
 
 	//add all new addresses
 	for i := range newAddrs {
-		//todo do we want to stack errors and try as many ops as possible?
+		//TODO: CERT-V2 do we want to stack errors and try as many ops as possible?
 		//AddrReplace still adds new IPs, but if their properties change it will change them as well
 		if err := netlink.AddrReplace(link, newAddrs[i]); err != nil {
 			return err

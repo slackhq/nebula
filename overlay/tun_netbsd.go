@@ -223,7 +223,7 @@ func (t *tun) removeRoutes(routes []Route) error {
 			continue
 		}
 
-		//todo is this right?
+		//TODO: CERT-V2 is this right?
 		cmd := exec.Command("/sbin/route", "-n", "delete", "-net", r.Cidr.String(), t.vpnNetworks[0].Addr().String())
 		t.l.Debug("command: ", cmd.String())
 		if err := cmd.Run(); err != nil {

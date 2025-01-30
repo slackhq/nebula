@@ -13,7 +13,7 @@ import (
 )
 
 func TestControl_GetHostInfoByVpnIp(t *testing.T) {
-	//TODO: with multiple certificate versions we have a problem with this test
+	//TODO: CERT-V2 with multiple certificate versions we have a problem with this test
 	// Some certs versions have different characteristics and each version implements their own Copy() func
 	// which means this is not a good place to test for exposing memory
 	l := test.NewLogger()

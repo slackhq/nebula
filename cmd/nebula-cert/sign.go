@@ -172,7 +172,6 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 
 	if *sf.networks != "" {
 		for _, rs := range strings.Split(*sf.networks, ",") {
-			//TODO: error on duplicates? Mainly only addr matters, having two of the same addr in the same or different prefix space is strange
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
 				n, err := netip.ParsePrefix(rs)
@@ -197,7 +196,6 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	}
 
 	if *sf.unsafeNetworks != "" {
-		//TODO: error on duplicates?
 		for _, rs := range strings.Split(*sf.unsafeNetworks, ",") {
 			rs := strings.Trim(rs, " ")
 			if rs != "" {
