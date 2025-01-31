@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"unsafe"
@@ -36,6 +37,7 @@ type tun struct {
 	routeTree       atomic.Pointer[bart.Table[netip.Addr]]
 	routeChan       chan struct{}
 	useSystemRoutes bool
+	alternativeRoutingTable string  // New field for alternative routing table
 
 	l *logrus.Logger
 }
@@ -125,11 +127,12 @@ func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, multiqueue bool) (
 func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, cidr netip.Prefix) (*tun, error) {
 	t := &tun{
 		ReadWriteCloser: file,
-		fd:              int(file.Fd()),
-		cidr:            cidr,
-		TXQueueLen:      c.GetInt("tun.tx_queue", 500),
+		fd:             int(file.Fd()),
+		cidr:           cidr,
+		TXQueueLen:     c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes: c.GetBool("tun.use_system_route_table", false),
-		l:               l,
+		alternativeRoutingTable: c.GetString("tun.alternative_routing_table", ""),
+		l:              l,
 	}
 
 	err := t.reload(c, true)
@@ -147,14 +150,56 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, cidr netip.Pref
 	return t, nil
 }
 
+func (t *tun) getRoutingTableID() (int, error) {
+	if t.alternativeRoutingTable == "" {
+		return unix.RT_TABLE_MAIN, nil
+	}
+
+	// Try parsing as a number first
+	if tableID, err := strconv.Atoi(t.alternativeRoutingTable); err == nil {
+		return tableID, nil
+	}
+
+	// If it's not a number, look up the table name in /etc/iproute2/rt_tables
+	content, err := os.ReadFile("/etc/iproute2/rt_tables")
+	if err != nil {
+		return 0, fmt.Errorf("failed to read routing tables: %w", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == t.alternativeRoutingTable {
+			tableID, err := strconv.Atoi(fields[0])
+			if err != nil {
+				continue
+			}
+			return tableID, nil
+		}
+	}
+
+	return 0, fmt.Errorf("routing table %s not found", t.alternativeRoutingTable)
+}
+
 func (t *tun) reload(c *config.C, initial bool) error {
 	routeChange, routes, err := getAllRoutesFromConfig(c, t.cidr, initial)
 	if err != nil {
 		return err
 	}
 
-	if !initial && !routeChange && !c.HasChanged("tun.mtu") {
+	if !initial && !routeChange && !c.HasChanged("tun.mtu") && !c.HasChanged("tun.alternative_routing_table") {
 		return nil
+	}
+
+	// Update alternative routing table if changed
+	if !initial && c.HasChanged("tun.alternative_routing_table") {
+		t.alternativeRoutingTable = c.GetString("tun.alternative_routing_table", "")
+		t.l.Infof("Alternative routing table changed to %s", t.alternativeRoutingTable)
 	}
 
 	routeTree, err := makeRouteTree(t.l, routes, true)
@@ -274,7 +319,6 @@ func (t *tun) Activate() error {
 
 	var addr, mask [4]byte
 
-	//TODO: IPV6-WORK
 	addr = t.cidr.Addr().As4()
 	tmask := net.CIDRMask(t.cidr.Bits(), 32)
 	copy(mask[:], tmask)
@@ -364,7 +408,11 @@ func (t *tun) setMTU() {
 }
 
 func (t *tun) setDefaultRoute() error {
-	// Default route
+	// Get the routing table ID
+	tableID, err := t.getRoutingTableID()
+	if err != nil {
+		return fmt.Errorf("failed to get routing table ID: %w", err)
+	}
 
 	dr := &net.IPNet{
 		IP:   t.cidr.Masked().Addr().AsSlice(),
@@ -379,10 +427,11 @@ func (t *tun) setDefaultRoute() error {
 		Scope:     unix.RT_SCOPE_LINK,
 		Src:       net.IP(t.cidr.Addr().AsSlice()),
 		Protocol:  unix.RTPROT_KERNEL,
-		Table:     unix.RT_TABLE_MAIN,
+		Table:     tableID,
 		Type:      unix.RTN_UNICAST,
 	}
-	err := netlink.RouteReplace(&nr)
+
+	err = netlink.RouteReplace(&nr)
 	if err != nil {
 		return fmt.Errorf("failed to set mtu %v on the default route %v; %v", t.DefaultMTU, dr, err)
 	}
@@ -391,7 +440,12 @@ func (t *tun) setDefaultRoute() error {
 }
 
 func (t *tun) addRoutes(logErrors bool) error {
-	// Path routes
+	// Get the routing table ID
+	tableID, err := t.getRoutingTableID()
+	if err != nil {
+		return fmt.Errorf("failed to get routing table ID: %w", err)
+	}
+
 	routes := *t.Routes.Load()
 	for _, r := range routes {
 		if !r.Install {
@@ -409,6 +463,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 			MTU:       r.MTU,
 			AdvMSS:    t.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
+			Table:     tableID,
 		}
 
 		if r.Metric > 0 {
@@ -417,14 +472,17 @@ func (t *tun) addRoutes(logErrors bool) error {
 
 		err := netlink.RouteReplace(&nr)
 		if err != nil {
-			retErr := util.NewContextualError("Failed to add route", map[string]interface{}{"route": r}, err)
+			retErr := util.NewContextualError("Failed to add route", map[string]interface{}{
+				"route": r,
+				"table": t.alternativeRoutingTable,
+			}, err)
 			if logErrors {
 				retErr.Log(t.l)
 			} else {
 				return retErr
 			}
 		} else {
-			t.l.WithField("route", r).Info("Added route")
+			t.l.WithField("route", r).WithField("table", t.alternativeRoutingTable).Info("Added route")
 		}
 	}
 
@@ -432,6 +490,13 @@ func (t *tun) addRoutes(logErrors bool) error {
 }
 
 func (t *tun) removeRoutes(routes []Route) {
+	// Get the routing table ID
+	tableID, err := t.getRoutingTableID()
+	if err != nil {
+		t.l.WithError(err).Error("Failed to get routing table ID")
+		return
+	}
+
 	for _, r := range routes {
 		if !r.Install {
 			continue
@@ -448,6 +513,7 @@ func (t *tun) removeRoutes(routes []Route) {
 			MTU:       r.MTU,
 			AdvMSS:    t.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
+			Table:     tableID,
 		}
 
 		if r.Metric > 0 {
@@ -456,9 +522,9 @@ func (t *tun) removeRoutes(routes []Route) {
 
 		err := netlink.RouteDel(&nr)
 		if err != nil {
-			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
+			t.l.WithError(err).WithField("route", r).WithField("table", t.alternativeRoutingTable).Error("Failed to remove route")
 		} else {
-			t.l.WithField("route", r).Info("Removed route")
+			t.l.WithField("route", r).WithField("table", t.alternativeRoutingTable).Info("Removed route")
 		}
 	}
 }
@@ -515,7 +581,6 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 		return
 	}
 
-	//TODO: IPV6-WORK what if not ok?
 	gwAddr, ok := netip.AddrFromSlice(r.Gw)
 	if !ok {
 		t.l.WithField("route", r).Debug("Ignoring route update, invalid gateway address")
@@ -529,30 +594,35 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 		return
 	}
 
-	if x := r.Dst.IP.To4(); x == nil {
-		// Nebula only handles ipv4 on the overlay currently
-		t.l.WithField("route", r).Debug("Ignoring route update, destination is not ipv4")
-		return
-	}
+	var dst netip.Prefix
+	if r.Dst == nil || r.Dst.IP == nil {
+		// This is a default route (0.0.0.0/0)
+		dst = netip.PrefixFrom(netip.IPv4Unspecified(), 0)
+	} else {
+		if x := r.Dst.IP.To4(); x == nil {
+			// Nebula only handles ipv4 on the overlay currently
+			t.l.WithField("route", r).Debug("Ignoring route update, destination is not ipv4")
+			return
+		}
 
-	dstAddr, ok := netip.AddrFromSlice(r.Dst.IP)
-	if !ok {
-		t.l.WithField("route", r).Debug("Ignoring route update, invalid destination address")
-		return
-	}
+		dstAddr, ok := netip.AddrFromSlice(r.Dst.IP)
+		if !ok {
+			t.l.WithField("route", r).Debug("Ignoring route update, invalid destination address")
+			return
+		}
 
-	ones, _ := r.Dst.Mask.Size()
-	dst := netip.PrefixFrom(dstAddr, ones)
+		ones, _ := r.Dst.Mask.Size()
+		dst = netip.PrefixFrom(dstAddr, ones)
+	}
 
 	newTree := t.routeTree.Load().Clone()
 
 	if r.Type == unix.RTM_NEWROUTE {
-		t.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Adding route")
+		t.l.WithField("destination", dst).WithField("via", gwAddr).Info("Adding route")
 		newTree.Insert(dst, gwAddr)
-
 	} else {
 		newTree.Delete(dst)
-		t.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Removing route")
+		t.l.WithField("destination", dst).WithField("via", gwAddr).Info("Removing route")
 	}
 	t.routeTree.Store(newTree)
 }

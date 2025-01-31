@@ -243,6 +243,9 @@ tun:
   # On linux only, set to true to manage unsafe routes directly on the system route table with gateway routes instead of
   # in nebula configuration files. Default false, not reloadable.
   #use_system_route_table: false
+  # Specify the alternative routing table for created routes.
+  # If unset, defaults to main routing table.
+  #alternative_routing_table: "my_alt_table"
 
 # TODO
 # Configure logging level
