@@ -492,7 +492,7 @@ func (t *tun) watchRoutes() {
 
 	netlinkOptions := netlink.RouteSubscribeOptions{
 		ReceiveBufferSize: t.useSystemRoutesBuffer,
-		ReceiveBufferForceSize: false,
+		ReceiveBufferForceSize: true,
 		ErrorCallback: func (e error) {t.l.WithError(e).Errorf("netlink error")},
 	}
 
