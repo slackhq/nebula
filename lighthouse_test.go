@@ -134,7 +134,9 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 
 	mw := &mockEncWriter{}
 
-	hi := []netip.Addr{vpnIp2}
+	hi := &HostInfo{
+		vpnAddrs: []netip.Addr{vpnIp2},
+	}
 	b.Run("notfound", func(b *testing.B) {
 		lhh := lh.NewRequestHandler()
 		req := &NebulaMeta{
@@ -205,6 +207,7 @@ func TestLighthouse_Memory(t *testing.T) {
 	}
 	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
 	lh.ifce = &mockEncWriter{}
+	lh.queryProtectionTable = &mockQueryProtectionTable{}
 	assert.NoError(t, err)
 	lhh := lh.NewRequestHandler()
 
@@ -327,7 +330,13 @@ func newLHHostRequest(fromAddr netip.AddrPort, myVpnIp, queryVpnIp netip.Addr, l
 	w := &testEncWriter{
 		metaFilter: &filter,
 	}
-	lhh.HandleRequest(fromAddr, []netip.Addr{myVpnIp}, b, w)
+	hi := &HostInfo{
+		vpnAddrs: []netip.Addr{myVpnIp},
+		ConnectionState: &ConnectionState{
+			peerCert: &cert.CachedCertificate{InvertedGroups: map[string]struct{}{}},
+		},
+	}
+	lhh.HandleRequest(fromAddr, hi, b, w)
 	return w.lastReply
 }
 
@@ -357,8 +366,12 @@ func newLHHostUpdate(fromAddr netip.AddrPort, vpnIp netip.Addr, addrs []netip.Ad
 		panic(err)
 	}
 
+	hi := &HostInfo{
+		vpnAddrs: []netip.Addr{vpnIp},
+	}
+
 	w := &testEncWriter{}
-	lhh.HandleRequest(fromAddr, []netip.Addr{vpnIp}, b, w)
+	lhh.HandleRequest(fromAddr, hi, b, w)
 }
 
 type testLhReply struct {
@@ -493,4 +506,86 @@ func Test_findNetworkUnion(t *testing.T) {
 	assert.False(t, ok)
 	out, ok = findNetworkUnion([]netip.Prefix{fc00}, []netip.Addr{a1, afe81})
 	assert.False(t, ok)
+}
+
+func TestQueryProtectionTable(t *testing.T) {
+
+	l := test.NewLogger()
+	var qptRulesV6 = map[string][]netip.Prefix{}
+	var qptRulesV4 = map[string][]netip.Prefix{}
+	var qptRulesComb = map[string][]netip.Prefix{}
+
+	qptRulesV6["test"] = []netip.Prefix{netip.MustParsePrefix("fd00::0/8")}
+	qptRulesV4["test"] = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	qptRulesComb["test"] = []netip.Prefix{netip.MustParsePrefix("fd00::0/8"), netip.MustParsePrefix("10.0.0.0/8")}
+
+	fd001Addr := netip.MustParseAddr("fd00::1")
+	fe111Addr := netip.MustParseAddr("fe11::1")
+	tenDotOneAddr := netip.MustParseAddr("10.0.0.1")
+	oneSevenTwoAddr := netip.MustParseAddr("172.16.0.1")
+
+	invertedGroups := map[string]struct{}{}
+
+	qptv6 := QueryProtectionTable{rules: qptRulesV6}
+	qptv4 := QueryProtectionTable{rules: qptRulesV4}
+	qptComb := QueryProtectionTable{rules: qptRulesComb}
+
+	// These should all fail because there is no group to check against
+	ok := qptv6.check(invertedGroups, fd001Addr, l)
+	assert.False(t, ok)
+	ok = qptv4.check(invertedGroups, fd001Addr, l)
+	assert.False(t, ok)
+	ok = qptComb.check(invertedGroups, fd001Addr, l)
+	assert.False(t, ok)
+	ok = qptv6.check(invertedGroups, fe111Addr, l)
+	assert.False(t, ok)
+	ok = qptv4.check(invertedGroups, fe111Addr, l)
+	assert.False(t, ok)
+	ok = qptComb.check(invertedGroups, fe111Addr, l)
+	assert.False(t, ok)
+	ok = qptv6.check(invertedGroups, tenDotOneAddr, l)
+	assert.False(t, ok)
+	ok = qptv4.check(invertedGroups, tenDotOneAddr, l)
+	assert.False(t, ok)
+	ok = qptComb.check(invertedGroups, tenDotOneAddr, l)
+	assert.False(t, ok)
+	ok = qptv6.check(invertedGroups, oneSevenTwoAddr, l)
+	assert.False(t, ok)
+	ok = qptv4.check(invertedGroups, oneSevenTwoAddr, l)
+	assert.False(t, ok)
+	ok = qptComb.check(invertedGroups, oneSevenTwoAddr, l)
+	assert.False(t, ok)
+
+	invertedGroups["test"] = struct{}{}
+
+	// These should all pass because there is a group to check against
+	ok = qptv6.check(invertedGroups, fd001Addr, l)
+	assert.True(t, ok)
+	ok = qptv4.check(invertedGroups, tenDotOneAddr, l)
+	assert.True(t, ok)
+	ok = qptComb.check(invertedGroups, fd001Addr, l)
+	assert.True(t, ok)
+	ok = qptComb.check(invertedGroups, tenDotOneAddr, l)
+	assert.True(t, ok)
+
+	// These should all fail because the address is not in the group
+	ok = qptv6.check(invertedGroups, fe111Addr, l)
+	assert.False(t, ok)
+	ok = qptv4.check(invertedGroups, oneSevenTwoAddr, l)
+	assert.False(t, ok)
+	ok = qptComb.check(invertedGroups, fe111Addr, l)
+	assert.False(t, ok)
+	ok = qptComb.check(invertedGroups, oneSevenTwoAddr, l)
+	assert.False(t, ok)
+
+	// These should all fail because we are checking v6 against v4 and vice versa
+	ok = qptv6.check(invertedGroups, tenDotOneAddr, l)
+	assert.False(t, ok)
+	ok = qptv4.check(invertedGroups, fd001Addr, l)
+	assert.False(t, ok)
+
+	// These should fail because we are checking incorrect inverted addresses
+	ok = qptv4.check(invertedGroups, fe111Addr, l)
+	assert.False(t, ok)
+	ok = qptv6.check(invertedGroups, oneSevenTwoAddr, l)
 }
