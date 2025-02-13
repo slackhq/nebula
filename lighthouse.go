@@ -1490,6 +1490,11 @@ func newQueryProtectionTableFromConfig(c *config.C) *QueryProtectionTable {
 }
 
 func (l *QueryProtectionTable) check(invertedGroups map[string]struct{}, queryAddr netip.Addr, logger *logrus.Logger) bool {
+
+	if len(l.rules) == 0 {
+		return true
+	}
+
 	for group := range invertedGroups {
 		if prefixes, ok := l.rules[group]; ok {
 			for _, p := range prefixes {
