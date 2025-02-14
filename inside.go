@@ -45,7 +45,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		return
 	}
 
-	hostinfo, ready := f.getOrHandshake(fwPacket.RemoteIP, func(hh *HandshakeHostInfo) {
+	hostinfo, ready := f.getOrHandshakeConsiderRouting(fwPacket, func(hh *HandshakeHostInfo) {
 		hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
 	})
 
@@ -117,24 +117,60 @@ func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *
 	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, out, nb, packet, q)
 }
 
+// This should only called for internal nebula traffic
 func (f *Interface) Handshake(vpnIp netip.Addr) {
-	f.getOrHandshake(vpnIp, nil)
+	f.getOrHandshakeNoRouting(vpnIp, nil)
 }
 
-// getOrHandshake returns nil if the vpnIp is not routable.
+// getOrHandshakeNoRouting returns nil if the vpnIp is not in the VPN net
 // If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
-func (f *Interface) getOrHandshake(vpnIp netip.Addr, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
+func (f *Interface) getOrHandshakeNoRouting(vpnIp netip.Addr, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
 	if !f.myVpnNet.Contains(vpnIp) {
-		possibleGateways := f.inside.RoutesFor(vpnIp)
-		if len(possibleGateways) == 0 {
-			return nil, false
-		}
-
-		// Multipath routes can be defined, but always take the first one for now
-		vpnIp = possibleGateways[0]
+		return nil, false
 	}
 
 	return f.handshakeManager.GetOrHandshake(vpnIp, cacheCallback)
+}
+
+// This is called for external traffic
+// getOrHandshake returns nil if the vpnIp is not routable.
+// If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
+func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
+
+	destinationIp := fwPacket.RemoteIP
+
+	// Host is inside the mesh, no routing
+	if !f.myVpnNet.Contains(destinationIp) {
+		return f.handshakeManager.GetOrHandshake(destinationIp, cacheCallback)
+	}
+
+	availableRoutes := f.inside.RoutesFor(destinationIp)
+	if len(availableRoutes) == 0 {
+		return nil, false
+	} else if len(availableRoutes) == 1 {
+		// Single gateway route
+		return f.handshakeManager.GetOrHandshake(availableRoutes[0], cacheCallback)
+	} else {
+		// Multi gateway route, calculate endpoint
+
+		// This loops over all candidates, prefers the first one found
+		// if not found it will attempt the others
+		var hostInfo *HostInfo
+		var ok bool
+
+		for _, candidate := range availableRoutes {
+			if hostInfo, ok = f.handshakeManager.GetOrHandshake(candidate, cacheCallback); ok {
+				if f.l.Level >= logrus.DebugLevel && len(availableRoutes) > 1 {
+					f.l.WithField("destination", destinationIp).
+						WithField("gateway", candidate).
+						Debugln("Routing via multipathing")
+				}
+				break
+			}
+		}
+
+		return hostInfo, ok
+	}
 }
 
 func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte) {
@@ -161,7 +197,7 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
 func (f *Interface) SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp netip.Addr, p, nb, out []byte) {
-	hostInfo, ready := f.getOrHandshake(vpnIp, func(hh *HandshakeHostInfo) {
+	hostInfo, ready := f.getOrHandshakeNoRouting(vpnIp, func(hh *HandshakeHostInfo) {
 		hh.cachePacket(f.l, t, st, p, f.SendMessageToHostInfo, f.cachedPacketMetrics)
 	})
 
