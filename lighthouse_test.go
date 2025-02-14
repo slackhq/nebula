@@ -509,83 +509,48 @@ func Test_findNetworkUnion(t *testing.T) {
 }
 
 func TestQueryProtectionTable(t *testing.T) {
-
 	l := test.NewLogger()
-	var qptRulesV6 = map[string][]netip.Prefix{}
-	var qptRulesV4 = map[string][]netip.Prefix{}
-	var qptRulesComb = map[string][]netip.Prefix{}
 
-	qptRulesV6["test"] = []netip.Prefix{netip.MustParsePrefix("fd00::0/8")}
-	qptRulesV4["test"] = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
-	qptRulesComb["test"] = []netip.Prefix{netip.MustParsePrefix("fd00::0/8"), netip.MustParsePrefix("10.0.0.0/8")}
+	qpt := QueryProtectionTable{
+		rules: map[string][]string{
+			"group1": {"allowed1", "allowed2"},
+			"group2": {"allowed3"},
+		},
+	}
 
-	fd001Addr := netip.MustParseAddr("fd00::1")
-	fe111Addr := netip.MustParseAddr("fe11::1")
-	tenDotOneAddr := netip.MustParseAddr("10.0.0.1")
-	oneSevenTwoAddr := netip.MustParseAddr("172.16.0.1")
+	invertedGroups := map[string]struct{}{
+		"group1": {},
+	}
+	queriedHostInvertedGroups := map[string]struct{}{
+		"allowed1": {},
+	}
 
-	invertedGroups := map[string]struct{}{}
+	assert.True(t, qpt.check(invertedGroups, queriedHostInvertedGroups, l))
 
-	qptv6 := QueryProtectionTable{rules: qptRulesV6}
-	qptv4 := QueryProtectionTable{rules: qptRulesV4}
-	qptComb := QueryProtectionTable{rules: qptRulesComb}
+	queriedHostInvertedGroups = map[string]struct{}{
+		"notAllowed": {},
+	}
 
-	// These should all fail because there is no group to check against
-	ok := qptv6.check(invertedGroups, fd001Addr, l)
-	assert.False(t, ok)
-	ok = qptv4.check(invertedGroups, fd001Addr, l)
-	assert.False(t, ok)
-	ok = qptComb.check(invertedGroups, fd001Addr, l)
-	assert.False(t, ok)
-	ok = qptv6.check(invertedGroups, fe111Addr, l)
-	assert.False(t, ok)
-	ok = qptv4.check(invertedGroups, fe111Addr, l)
-	assert.False(t, ok)
-	ok = qptComb.check(invertedGroups, fe111Addr, l)
-	assert.False(t, ok)
-	ok = qptv6.check(invertedGroups, tenDotOneAddr, l)
-	assert.False(t, ok)
-	ok = qptv4.check(invertedGroups, tenDotOneAddr, l)
-	assert.False(t, ok)
-	ok = qptComb.check(invertedGroups, tenDotOneAddr, l)
-	assert.False(t, ok)
-	ok = qptv6.check(invertedGroups, oneSevenTwoAddr, l)
-	assert.False(t, ok)
-	ok = qptv4.check(invertedGroups, oneSevenTwoAddr, l)
-	assert.False(t, ok)
-	ok = qptComb.check(invertedGroups, oneSevenTwoAddr, l)
-	assert.False(t, ok)
+	assert.False(t, qpt.check(invertedGroups, queriedHostInvertedGroups, l))
 
-	invertedGroups["test"] = struct{}{}
+	invertedGroups = map[string]struct{}{
+		"group2": {},
+	}
+	queriedHostInvertedGroups = map[string]struct{}{
+		"allowed3": {},
+	}
 
-	// These should all pass because there is a group to check against
-	ok = qptv6.check(invertedGroups, fd001Addr, l)
-	assert.True(t, ok)
-	ok = qptv4.check(invertedGroups, tenDotOneAddr, l)
-	assert.True(t, ok)
-	ok = qptComb.check(invertedGroups, fd001Addr, l)
-	assert.True(t, ok)
-	ok = qptComb.check(invertedGroups, tenDotOneAddr, l)
-	assert.True(t, ok)
+	assert.True(t, qpt.check(invertedGroups, queriedHostInvertedGroups, l))
 
-	// These should all fail because the address is not in the group
-	ok = qptv6.check(invertedGroups, fe111Addr, l)
-	assert.False(t, ok)
-	ok = qptv4.check(invertedGroups, oneSevenTwoAddr, l)
-	assert.False(t, ok)
-	ok = qptComb.check(invertedGroups, fe111Addr, l)
-	assert.False(t, ok)
-	ok = qptComb.check(invertedGroups, oneSevenTwoAddr, l)
-	assert.False(t, ok)
+	invertedGroups = map[string]struct{}{
+		"group3": {},
+	}
+	queriedHostInvertedGroups = map[string]struct{}{
+		"allowed1": {},
+	}
 
-	// These should all fail because we are checking v6 against v4 and vice versa
-	ok = qptv6.check(invertedGroups, tenDotOneAddr, l)
-	assert.False(t, ok)
-	ok = qptv4.check(invertedGroups, fd001Addr, l)
-	assert.False(t, ok)
+	assert.False(t, qpt.check(invertedGroups, queriedHostInvertedGroups, l))
 
-	// These should fail because we are checking incorrect inverted addresses
-	ok = qptv4.check(invertedGroups, fe111Addr, l)
-	assert.False(t, ok)
-	ok = qptv6.check(invertedGroups, oneSevenTwoAddr, l)
+	qpt.rules = map[string][]string{}
+	assert.True(t, qpt.check(invertedGroups, queriedHostInvertedGroups, l))
 }
