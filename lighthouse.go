@@ -1083,7 +1083,9 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, hostInfo *HostInfo,
 		return
 	}
 
-	if !lhh.lh.queryProtectionTable.check(hostInfo.ConnectionState.peerCert.InvertedGroups, queryVpnAddr, lhh.l) {
+	queriedHostInvertedGroups := lhh.lh.ifce.GetHostInfo(queryVpnAddr).ConnectionState.peerCert.InvertedGroups
+
+	if !lhh.lh.queryProtectionTable.check(hostInfo.ConnectionState.peerCert.InvertedGroups, queriedHostInvertedGroups, lhh.l) {
 		lhh.l.Debugln("Dropping HostQuery from", fromVpnAddrs, "for", queryVpnAddr, "due to query protection")
 		return
 	}
@@ -1466,22 +1468,22 @@ func findNetworkUnion(prefixes []netip.Prefix, addrs []netip.Addr) (netip.Addr, 
 }
 
 type lightHouseQueryProtectionTable interface {
-	check(invertedGroups map[string]struct{}, queryAddr netip.Addr, logger *logrus.Logger) bool
+	check(invertedGroups map[string]struct{}, queriedHostInvertedGroups map[string]struct{}, logger *logrus.Logger) bool
 }
 type QueryProtectionTable struct {
-	rules map[string][]netip.Prefix
+	rules map[string][]string
 }
 
 func newQueryProtectionTableFromConfig(c *config.C) *QueryProtectionTable {
 	rawRules := c.GetMap("lighthouse.query_protection", map[interface{}]interface{}{})
 
-	rules := make(map[string][]netip.Prefix)
+	rules := make(map[string][]string)
 	for k, v := range rawRules {
-		var prefixes []netip.Prefix
+		var subgroups []string
 		for _, s := range v.([]interface{}) {
-			prefixes = append(prefixes, netip.MustParsePrefix(s.(string)))
+			subgroups = append(subgroups, s.(string))
 		}
-		rules[k.(string)] = prefixes
+		rules[k.(string)] = subgroups
 	}
 
 	return &QueryProtectionTable{
@@ -1489,30 +1491,30 @@ func newQueryProtectionTableFromConfig(c *config.C) *QueryProtectionTable {
 	}
 }
 
-func (l *QueryProtectionTable) check(invertedGroups map[string]struct{}, queryAddr netip.Addr, logger *logrus.Logger) bool {
+func (l *QueryProtectionTable) check(invertedGroups map[string]struct{}, queriedHostInvertedGroups map[string]struct{}, logger *logrus.Logger) bool {
 
 	if len(l.rules) == 0 {
 		return true
 	}
 
 	for group := range invertedGroups {
-		if prefixes, ok := l.rules[group]; ok {
-			for _, p := range prefixes {
-				if p.Contains(queryAddr) {
+		if allowedGroups, ok := l.rules[group]; ok {
+			for _, allowedGroup := range allowedGroups {
+				if _, ok := queriedHostInvertedGroups[allowedGroup]; ok {
 					return true
 				}
 			}
 		}
 	}
 
-	logger.Debugln("Dropping query about: ", queryAddr)
+	logger.Debugf("Dropped query due to query protection: %s : %s", invertedGroups, queriedHostInvertedGroups)
 	return false
 }
 
 type mockQueryProtectionTable struct {
 }
 
-func (m *mockQueryProtectionTable) check(invertedGroups map[string]struct{}, queryAddr netip.Addr, logger *logrus.Logger) bool {
+func (m *mockQueryProtectionTable) check(invertedGroups map[string]struct{}, queriedHostInvertedGroups map[string]struct{}, logger *logrus.Logger) bool {
 	// It's all good, man
 	return true
 }
