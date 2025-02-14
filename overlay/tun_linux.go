@@ -16,6 +16,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -33,7 +34,7 @@ type tun struct {
 	ioctlFd     uintptr
 
 	Routes          atomic.Pointer[[]Route]
-	routeTree       atomic.Pointer[bart.Table[netip.Addr]]
+	routeTree       atomic.Pointer[bart.Table[[]routing.Gateway]]
 	routeChan       chan struct{}
 	useSystemRoutes bool
 
@@ -230,7 +231,7 @@ func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return file, nil
 }
 
-func (t *tun) RouteFor(ip netip.Addr) netip.Addr {
+func (t *tun) RoutesFor(ip netip.Addr) []routing.Gateway {
 	r, _ := t.routeTree.Load().Lookup(ip)
 	return r
 }
@@ -548,7 +549,7 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 
 	if r.Type == unix.RTM_NEWROUTE {
 		t.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Adding route")
-		newTree.Insert(dst, gwAddr)
+		newTree.Insert(dst, []routing.Gateway{gwAddr})
 
 	} else {
 		newTree.Delete(dst)

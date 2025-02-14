@@ -17,6 +17,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	netroute "golang.org/x/net/route"
 	"golang.org/x/sys/unix"
@@ -28,7 +29,7 @@ type tun struct {
 	cidr       netip.Prefix
 	DefaultMTU int
 	Routes     atomic.Pointer[[]Route]
-	routeTree  atomic.Pointer[bart.Table[netip.Addr]]
+	routeTree  atomic.Pointer[bart.Table[[]routing.Gateway]]
 	linkAddr   *netroute.LinkAddr
 	l          *logrus.Logger
 
@@ -334,12 +335,12 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	return nil
 }
 
-func (t *tun) RouteFor(ip netip.Addr) netip.Addr {
+func (t *tun) RoutesFor(ip netip.Addr) []routing.Gateway {
 	r, ok := t.routeTree.Load().Lookup(ip)
 	if ok {
 		return r
 	}
-	return netip.Addr{}
+	return []routing.Gateway{}
 }
 
 // Get the LinkAddr for the interface of the given name
@@ -388,7 +389,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 	maskAddr := &netroute.Inet4Addr{}
 	routes := *t.Routes.Load()
 	for _, r := range routes {
-		if !r.Via.IsValid() || !r.Install {
+		if len(r.Via) == 0 || !r.Install {
 			// We don't allow route MTUs so only install routes with a via
 			continue
 		}
