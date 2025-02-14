@@ -146,7 +146,7 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 
 	hostinfo, ready := f.getOrHandshakeNoRouting(destinationIp, cacheCallback)
 
-	// Host is inside the mesh, no routing
+	// Host is inside the mesh, no routing required
 	if hostinfo != nil {
 		return hostinfo, ready
 	}
@@ -155,9 +155,11 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 	availableRoutes := f.inside.RoutesFor(destinationIp)
 	if len(availableRoutes) == 0 {
 		// No routes found
+		f.l.WithField("destination", destinationIp).Debug("No routes found!")
 		return nil, false
 	} else if len(availableRoutes) == 1 {
 		// Single gateway route
+		f.l.WithField("destination", destinationIp).WithField("gateway", availableRoutes[0]).Debug("Routing via single gateway")
 		return f.handshakeManager.GetOrHandshake(availableRoutes[0], cacheCallback)
 	} else {
 		// Multi gateway route, calculate gateway
@@ -166,6 +168,8 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 		// if not found it will attempt the others
 		var hostInfo *HostInfo
 		var ok bool
+
+		f.l.WithField("destination", destinationIp).WithField("gateways", availableRoutes).Debug("Routing via multipath gateways")
 
 		for _, candidate := range availableRoutes {
 			if hostInfo, ok = f.handshakeManager.GetOrHandshake(candidate, cacheCallback); ok {
