@@ -11,13 +11,14 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/routing"
 )
 
 type Route struct {
 	MTU     int
 	Metric  int
 	Cidr    netip.Prefix
-	Via     netip.Addr
+	Via     []routing.Gateway
 	Install bool
 }
 
@@ -47,15 +48,24 @@ func (r Route) String() string {
 	return s
 }
 
-func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*bart.Table[netip.Addr], error) {
-	routeTree := new(bart.Table[netip.Addr])
+func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*bart.Table[[]routing.Gateway], error) {
+	routeTree := new(bart.Table[[]routing.Gateway])
 	for _, r := range routes {
 		if !allowMTU && r.MTU > 0 {
 			l.WithField("route", r).Warnf("route MTU is not supported in %s", runtime.GOOS)
 		}
 
-		if r.Via.IsValid() {
-			routeTree.Insert(r.Cidr, r.Via)
+		// Should we expand the contract of this function to always require a valid via?
+		var validVias []routing.Gateway
+
+		for _, via := range r.Via {
+			if via.IsValid() {
+				validVias = append(validVias, via)
+			}
+		}
+
+		if len(validVias) > 0 {
+			routeTree.Insert(r.Cidr, validVias)
 		}
 	}
 	return routeTree, nil
@@ -201,14 +211,29 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 			return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes is not present", i+1)
 		}
 
-		via, ok := rVia.(string)
-		if !ok {
-			return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes is not a string: found %T", i+1, rVia)
+		var viasInConfig = []string{}
+		via, isSingleVia := rVia.(string)
+
+		if !isSingleVia {
+			multiVia, isMultiVia := rVia.([]string)
+
+			if !isMultiVia {
+				return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes is not a string or array of string: found %T", i+1, rVia)
+			}
+
+			viasInConfig = append(viasInConfig, multiVia...)
+		} else {
+			viasInConfig = append(viasInConfig, via)
 		}
 
-		viaVpnIp, err := netip.ParseAddr(via)
-		if err != nil {
-			return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes failed to parse address: %v", i+1, err)
+		var parsedVias = []netip.Addr{}
+		for _, viaString := range viasInConfig {
+			viaVpnIp, err := netip.ParseAddr(viaString)
+			if err != nil {
+				return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes failed to parse address: %v", i+1, err)
+			}
+
+			parsedVias = append(parsedVias, viaVpnIp)
 		}
 
 		rRoute, ok := m["route"]
@@ -226,7 +251,7 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 		}
 
 		r := Route{
-			Via:     viaVpnIp,
+			Via:     parsedVias,
 			MTU:     mtu,
 			Metric:  metric,
 			Install: install,

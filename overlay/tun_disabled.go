@@ -9,6 +9,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/routing"
 )
 
 type disabledTun struct {
@@ -43,8 +44,8 @@ func (*disabledTun) Activate() error {
 	return nil
 }
 
-func (*disabledTun) RouteFor(addr netip.Addr) netip.Addr {
-	return netip.Addr{}
+func (*disabledTun) RoutesFor(addr netip.Addr) []routing.Gateway {
+	return []routing.Gateway{}
 }
 
 func (t *disabledTun) Networks() []netip.Prefix {

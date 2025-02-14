@@ -3,6 +3,7 @@ package overlay
 import (
 	"fmt"
 	"net/netip"
+	"reflect"
 	"testing"
 
 	"github.com/slackhq/nebula/config"
@@ -153,13 +154,19 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 
 	// invalid via
 	for _, invalidValue := range []interface{}{
-		127, false, nil, 1.0, []string{"1", "2"},
+		127, false, nil, 1.0,
 	} {
 		c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": invalidValue}}}
 		routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 		assert.Nil(t, routes)
-		require.EqualError(t, err, fmt.Sprintf("entry 1.via in tun.unsafe_routes is not a string: found %T", invalidValue))
+		require.EqualError(t, err, fmt.Sprintf("entry 1.via in tun.unsafe_routes is not a string or array of string: found %T", invalidValue))
 	}
+
+	// Unparsable list of via
+	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": []string{"1", "2"}}}}
+	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
+	assert.Nil(t, routes)
+	assert.EqualError(t, err, fmt.Sprintf("entry 1.via in tun.unsafe_routes failed to parse address: ParseAddr(\"1\"): unable to parse IP"))
 
 	// unparsable via
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "via": "nope"}}}
@@ -279,8 +286,9 @@ func Test_makeRouteTree(t *testing.T) {
 	assert.True(t, ok)
 
 	nip, err := netip.ParseAddr("192.168.0.1")
+
 	require.NoError(t, err)
-	assert.Equal(t, nip, r)
+	assert.Equal(t, nip, r[0])
 
 	ip, err = netip.ParseAddr("1.0.0.1")
 	require.NoError(t, err)
@@ -289,10 +297,57 @@ func Test_makeRouteTree(t *testing.T) {
 
 	nip, err = netip.ParseAddr("192.168.0.2")
 	require.NoError(t, err)
-	assert.Equal(t, nip, r)
+	assert.Equal(t, nip, r[0])
 
 	ip, err = netip.ParseAddr("1.1.0.1")
 	require.NoError(t, err)
 	r, ok = routeTree.Lookup(ip)
 	assert.False(t, ok)
+}
+
+func sameElements[T comparable](arr1 []T, arr2 []T) bool {
+	if len(arr1) != len(arr2) {
+		return false
+	}
+
+	counts1 := make(map[T]int)
+	counts2 := make(map[T]int)
+
+	for _, v := range arr1 {
+		counts1[v]++
+	}
+	for _, v := range arr2 {
+		counts2[v]++
+	}
+
+	return reflect.DeepEqual(counts1, counts2)
+}
+
+func Test_multipath(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	n, err := netip.ParsePrefix("10.0.0.0/24")
+	assert.NoError(t, err)
+
+	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{
+		map[interface{}]interface{}{"via": []string{"192.168.0.1", "192.168.0.2", "192.168.0.3"}, "route": "1.0.0.0/16"},
+	}}
+
+	routes, err := parseUnsafeRoutes(c, []netip.Prefix{n})
+	assert.NoError(t, err)
+	assert.Len(t, routes, 1)
+	routeTree, err := makeRouteTree(l, routes, true)
+	assert.NoError(t, err)
+
+	ip, err := netip.ParseAddr("1.0.0.2")
+	assert.NoError(t, err)
+	r, ok := routeTree.Lookup(ip)
+	assert.True(t, ok)
+
+	nips := []netip.Addr{}
+	nips = append(nips, netip.MustParseAddr("192.168.0.1"))
+	nips = append(nips, netip.MustParseAddr("192.168.0.2"))
+	nips = append(nips, netip.MustParseAddr("192.168.0.3"))
+
+	assert.ElementsMatch(t, nips, r)
 }

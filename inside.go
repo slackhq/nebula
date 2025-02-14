@@ -127,13 +127,17 @@ func (f *Interface) Handshake(vpnAddr netip.Addr) {
 
 // getOrHandshake returns nil if the vpnAddr is not routable.
 // If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
+
 func (f *Interface) getOrHandshake(vpnAddr netip.Addr, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
 	_, found := f.myVpnNetworksTable.Lookup(vpnAddr)
 	if !found {
-		vpnAddr = f.inside.RouteFor(vpnAddr)
-		if !vpnAddr.IsValid() {
+		possibleGateways := f.inside.RoutesFor(vpnAddr)
+		if len(possibleGateways) == 0 {
 			return nil, false
 		}
+
+		// Multipath routes can be defined, but always take the first one for now
+		vpnAddr = possibleGateways[0]
 	}
 
 	return f.handshakeManager.GetOrHandshake(vpnAddr, cacheCallback)
