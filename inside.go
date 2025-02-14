@@ -140,15 +140,18 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 	destinationIp := fwPacket.RemoteIP
 
 	// Host is inside the mesh, no routing
-	if !f.myVpnNet.Contains(destinationIp) {
+	if f.myVpnNet.Contains(destinationIp) {
+		f.l.WithField("destination", destinationIp).Debug("Inside mesh, no routing required")
 		return f.handshakeManager.GetOrHandshake(destinationIp, cacheCallback)
 	}
 
 	availableRoutes := f.inside.RoutesFor(destinationIp)
 	if len(availableRoutes) == 0 {
+		f.l.WithField("destination", destinationIp).Debug("No routes found!")
 		return nil, false
 	} else if len(availableRoutes) == 1 {
 		// Single gateway route
+		f.l.WithField("destination", destinationIp).WithField("gateway", availableRoutes[0]).Debug("Routing via single gateway")
 		return f.handshakeManager.GetOrHandshake(availableRoutes[0], cacheCallback)
 	} else {
 		// Multi gateway route, calculate endpoint
@@ -157,6 +160,8 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 		// if not found it will attempt the others
 		var hostInfo *HostInfo
 		var ok bool
+
+		f.l.WithField("destination", destinationIp).WithField("gateways", availableRoutes).Debug("Routing via multipath gateways")
 
 		for _, candidate := range availableRoutes {
 			if hostInfo, ok = f.handshakeManager.GetOrHandshake(candidate, cacheCallback); ok {

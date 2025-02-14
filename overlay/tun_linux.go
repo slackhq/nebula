@@ -509,24 +509,60 @@ func (t *tun) watchRoutes() {
 	}()
 }
 
+func (t *tun) getGatewaysFromRoute(r *netlink.Route) []routing.Gateway {
+
+	var gateways []routing.Gateway
+
+	link, err := netlink.LinkByName(t.Device)
+	if err != nil {
+		t.l.WithField("Devicename", t.Device).Error("Ignoring route update: failed to get link by name")
+		return gateways
+	}
+
+	// If this route is relevant to our interface and there is a gateway then add it
+	if r.LinkIndex == link.Attrs().Index && len(r.Gw) > 0 {
+		//TODO: IPV6-WORK what if not ok?
+		gwAddr, ok := netip.AddrFromSlice(r.Gw)
+		if !ok {
+			t.l.WithField("route", r).Debug("Ignoring route update, invalid gateway address")
+		} else {
+			if !t.cidr.Contains(gwAddr) {
+				// Gateway isn't in our overlay network, ignore
+				t.l.WithField("route", r).Debug("Ignoring route update, not in our network")
+			} else {
+				gateways = append(gateways, gwAddr)
+			}
+		}
+	}
+
+	for _, p := range r.MultiPath {
+		// If this route is relevant to our interface and there is a gateway then add it
+		if p.LinkIndex == link.Attrs().Index && len(p.Gw) > 0 {
+			//TODO: IPV6-WORK what if not ok?
+			gwAddr, ok := netip.AddrFromSlice(p.Gw)
+			if !ok {
+				t.l.WithField("route", r).Debug("Ignoring multipath route update, invalid gateway address")
+			} else {
+				if !t.cidr.Contains(gwAddr) {
+					// Gateway isn't in our overlay network, ignore
+					t.l.WithField("route", r).Debug("Ignoring route update, not in our network")
+				} else {
+					gateways = append(gateways, gwAddr)
+				}
+			}
+		}
+	}
+
+	return gateways
+}
+
 func (t *tun) updateRoutes(r netlink.RouteUpdate) {
-	if r.Gw == nil {
-		// Not a gateway route, ignore
-		t.l.WithField("route", r).Debug("Ignoring route update, not a gateway route")
-		return
-	}
 
-	//TODO: IPV6-WORK what if not ok?
-	gwAddr, ok := netip.AddrFromSlice(r.Gw)
-	if !ok {
-		t.l.WithField("route", r).Debug("Ignoring route update, invalid gateway address")
-		return
-	}
+	gateways := t.getGatewaysFromRoute(&r.Route)
 
-	gwAddr = gwAddr.Unmap()
-	if !t.cidr.Contains(gwAddr) {
-		// Gateway isn't in our overlay network, ignore
-		t.l.WithField("route", r).Debug("Ignoring route update, not in our network")
+	if len(gateways) == 0 {
+		// No gateways relevant to our network, no routing changes required.
+		t.l.WithField("route", r).Debug("Ignoring route update, no gateways")
 		return
 	}
 
@@ -548,12 +584,12 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 	newTree := t.routeTree.Load().Clone()
 
 	if r.Type == unix.RTM_NEWROUTE {
-		t.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Adding route")
-		newTree.Insert(dst, []routing.Gateway{gwAddr})
+		t.l.WithField("destination", dst).WithField("via", gateways).Info("Adding route")
+		newTree.Insert(dst, gateways)
 
 	} else {
+		t.l.WithField("destination", dst).WithField("via", gateways).Info("Removing route")
 		newTree.Delete(dst)
-		t.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Removing route")
 	}
 	t.routeTree.Store(newTree)
 }
