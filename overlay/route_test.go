@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 )
@@ -280,7 +281,7 @@ func Test_makeRouteTree(t *testing.T) {
 
 	nip, err := netip.ParseAddr("192.168.0.1")
 	assert.NoError(t, err)
-	assert.Equal(t, nip, r[0])
+	assert.Equal(t, nip, r[0].Ip())
 
 	ip, err = netip.ParseAddr("1.0.0.1")
 	assert.NoError(t, err)
@@ -289,7 +290,7 @@ func Test_makeRouteTree(t *testing.T) {
 
 	nip, err = netip.ParseAddr("192.168.0.2")
 	assert.NoError(t, err)
-	assert.Equal(t, nip, r[0])
+	assert.Equal(t, nip, r[0].Ip())
 
 	ip, err = netip.ParseAddr("1.1.0.1")
 	assert.NoError(t, err)
@@ -336,10 +337,12 @@ func Test_multipath(t *testing.T) {
 	r, ok := routeTree.Lookup(ip)
 	assert.True(t, ok)
 
-	nips := []netip.Addr{}
-	nips = append(nips, netip.MustParseAddr("192.168.0.1"))
-	nips = append(nips, netip.MustParseAddr("192.168.0.2"))
-	nips = append(nips, netip.MustParseAddr("192.168.0.3"))
+	nips := []routing.Gateway{}
+	nips = append(nips, routing.NewGateway(netip.MustParseAddr("192.168.0.1"), 1))
+	nips = append(nips, routing.NewGateway(netip.MustParseAddr("192.168.0.2"), 1))
+	nips = append(nips, routing.NewGateway(netip.MustParseAddr("192.168.0.3"), 1))
+
+	routing.RebalanceGateways(nips)
 
 	assert.ElementsMatch(t, nips, r)
 }

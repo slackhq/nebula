@@ -39,9 +39,11 @@ type UserDevice struct {
 func (d *UserDevice) Activate() error {
 	return nil
 }
-func (d *UserDevice) Cidr() netip.Prefix                        { return d.tunCidr }
-func (d *UserDevice) Name() string                              { return "faketun0" }
-func (d *UserDevice) RoutesFor(ip netip.Addr) []routing.Gateway { return []routing.Gateway{ip} }
+func (d *UserDevice) Cidr() netip.Prefix { return d.tunCidr }
+func (d *UserDevice) Name() string       { return "faketun0" }
+func (d *UserDevice) RoutesFor(ip netip.Addr) []routing.Gateway {
+	return []routing.Gateway{routing.NewGateway(ip, 1)}
+}
 func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return d, nil
 }
