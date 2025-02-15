@@ -36,7 +36,7 @@ type tun struct {
 	routeTree       atomic.Pointer[bart.Table[netip.Addr]]
 	routeChan       chan struct{}
 	useSystemRoutes bool
-	useSystemRoutesBuffer int
+	useSystemRoutesBufferSize int
 
 	l *logrus.Logger
 }
@@ -130,7 +130,7 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, cidr netip.Pref
 		cidr:            cidr,
 		TXQueueLen:      c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes: c.GetBool("tun.use_system_route_table", false),
-		useSystemRoutesBuffer: c.GetInt("tun.use_system_route_table_buffer", 0),
+		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
 		l:               l,
 	}
 
@@ -491,8 +491,8 @@ func (t *tun) watchRoutes() {
 	doneChan := make(chan struct{})
 
 	netlinkOptions := netlink.RouteSubscribeOptions{
-		ReceiveBufferSize: t.useSystemRoutesBuffer,
-		ReceiveBufferForceSize: true,
+		ReceiveBufferSize: t.useSystemRoutesBufferSize,
+		ReceiveBufferForceSize: t.useSystemRoutesBufferSize != 0,
 		ErrorCallback: func (e error) {t.l.WithError(e).Errorf("netlink error")},
 	}
 
