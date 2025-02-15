@@ -8,6 +8,8 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/noiseutil"
+	"github.com/slackhq/nebula/routing"
+	"github.com/zeebo/xxh3"
 )
 
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
@@ -137,6 +139,36 @@ func (f *Interface) getOrHandshakeNoRouting(vpnAddr netip.Addr, cacheCallback fu
 	return nil, false
 }
 
+func hashPacket(p *firewall.Packet) int {
+	hasher := xxh3.Hasher{}
+
+	hasher.Write(p.LocalAddr.AsSlice())
+	hasher.Write(p.RemoteAddr.AsSlice())
+	hasher.Write([]byte{
+		byte(p.LocalPort & 0xFF),
+		byte((p.LocalPort >> 8) & 0xFF),
+		byte(p.RemotePort & 0xFF),
+		byte((p.RemotePort >> 8) & 0xFF),
+		byte(p.Protocol),
+	})
+
+	// Uses xxh3 as it is a fast hash with good distribution
+	return int(hasher.Sum64() & 0x7FFFFFFF)
+}
+
+func balancePacket(fwPacket *firewall.Packet, gateways []routing.Gateway) netip.Addr {
+	hash := hashPacket(fwPacket)
+
+	for i := range gateways {
+		if hash <= gateways[i].UpperBound() {
+			return gateways[i].Ip()
+		}
+	}
+
+	// This should never happen
+	panic("The packet hash value should always fall inside a gateway bucket")
+}
+
 // This is called for external traffic
 // getOrHandshake returns nil if the vpnIp is not routable.
 // If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
@@ -151,38 +183,57 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 		return hostinfo, ready
 	}
 
-	// Host outside the mesh, lookup all possible routes
-	availableRoutes := f.inside.RoutesFor(destinationIp)
-	if len(availableRoutes) == 0 {
-		// No routes found
-		f.l.WithField("destination", destinationIp).Debug("No routes found!")
+	gateways := f.inside.RoutesFor(destinationIp)
+	if len(gateways) == 0 {
 		return nil, false
-	} else if len(availableRoutes) == 1 {
+	} else if len(gateways) == 1 {
 		// Single gateway route
-		f.l.WithField("destination", destinationIp).WithField("gateway", availableRoutes[0]).Debug("Routing via single gateway")
-		return f.handshakeManager.GetOrHandshake(availableRoutes[0], cacheCallback)
+		return f.handshakeManager.GetOrHandshake(gateways[0].Ip(), cacheCallback)
 	} else {
-		// Multi gateway route, calculate gateway
+		// Multi gateway route, perform ECMP categorization
+		gatewayIp := balancePacket(fwPacket, gateways)
 
-		// This loops over all candidates, prefers the first one found
-		// if not found it will attempt the others
+		// Do not pass a cacheCallback, if the node is not reachable we will attempt other nodes
+		// so we don't want to cache the packet to avoid sending duplicate packets if this gateway comes back up.
+		if hostInfo, ready := f.handshakeManager.GetOrHandshake(gatewayIp, nil); ready {
+			return hostInfo, true
+		}
+
+		// It appears the selected gateway cannot be reached, find another gateway to fallback on.
+		// The current implementation breaks ECMP but that seems better than no connectivity.
+		// If ECMP is also required when a gateway is down then connectivity status
+		// for each gateway nees to be kept and the weights recalculated when they go up or down.
+		// This would also need to interact with unsafe_route updates through reloading the config or
+		// use of the use_system_route_table option
+
+		if f.l.Level >= logrus.DebugLevel {
+			f.l.WithField("destination", destinationIp).
+				WithField("originalGateway", gatewayIp).
+				Debugln("Calculated gateway for ECMP not available, attempting other gateways")
+		}
+
 		var hostInfo *HostInfo
-		var ok bool
+		var ready bool
+		var handshakeHostInfo *HandshakeHostInfo
+		var hhReceiver = func(hh *HandshakeHostInfo) {
+			handshakeHostInfo = hh
+		}
 
-		f.l.WithField("destination", destinationIp).WithField("gateways", availableRoutes).Debug("Routing via multipath gateways")
+		for i := range gateways {
+			// Skip the gateway that failed previously
+			if gateways[i].Ip() == gatewayIp {
+				continue
+			}
 
-		for _, candidate := range availableRoutes {
-			if hostInfo, ok = f.handshakeManager.GetOrHandshake(candidate, cacheCallback); ok {
-				if f.l.Level >= logrus.DebugLevel && len(availableRoutes) > 1 {
-					f.l.WithField("destination", destinationIp).
-						WithField("gateway", candidate).
-						Debugln("Routing via multipathing")
-				}
-				break
+			// Store the HandshakeHostInfo for the cache callback
+			if hostInfo, ready = f.handshakeManager.GetOrHandshake(gateways[i].Ip(), hhReceiver); ready {
+				return hostInfo, true
 			}
 		}
 
-		return hostInfo, ok
+		// No gateways reachable, cache packet in last gateway attempted
+		cacheCallback(handshakeHostInfo)
+		return hostInfo, false
 	}
 }
 

@@ -36,6 +36,7 @@ require (
 	google.golang.org/protobuf v1.36.5
 	gopkg.in/yaml.v2 v2.4.0
 	gvisor.dev/gvisor v0.0.0-20240423190808-9d7a357edefe
+	github.com/zeebo/xxh3 v1.0.2
 )
 
 require (
@@ -54,4 +55,5 @@ require (
 	golang.org/x/time v0.5.0 // indirect
 	golang.org/x/tools v0.22.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
 )

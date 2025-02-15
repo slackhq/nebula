@@ -585,7 +585,7 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) []routing.Gateway {
 				// Gateway isn't in our overlay network, ignore
 				t.l.WithField("route", r).Debug("Ignoring route update, not in our network")
 			} else {
-				gateways = append(gateways, gwAddr)
+				gateways = append(gateways, routing.NewGateway(gwAddr, 1))
 			}
 		}
 	}
@@ -603,12 +603,14 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) []routing.Gateway {
 					// Gateway isn't in our overlay network, ignore
 					t.l.WithField("route", r).Debug("Ignoring route update, not in our network")
 				} else {
-					gateways = append(gateways, gwAddr)
+					// p.Hops+1 = weight of the route
+					gateways = append(gateways, routing.NewGateway(gwAddr, p.Hops+1))
 				}
 			}
 		}
 	}
 
+	routing.RebalanceGateways(gateways)
 	return gateways
 }
 

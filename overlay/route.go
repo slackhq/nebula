@@ -18,7 +18,7 @@ type Route struct {
 	MTU     int
 	Metric  int
 	Cidr    netip.Prefix
-	Via     []routing.Gateway
+	Via     []netip.Addr
 	Install bool
 }
 
@@ -55,17 +55,17 @@ func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*bart.Table
 			l.WithField("route", r).Warnf("route MTU is not supported in %s", runtime.GOOS)
 		}
 
-		// Should we expand the contract of this function to always require a valid via?
-		var validVias []routing.Gateway
+		gateways := []routing.Gateway{}
 
 		for _, via := range r.Via {
 			if via.IsValid() {
-				validVias = append(validVias, via)
+				gateways = append(gateways, routing.NewGateway(via, 1))
 			}
 		}
 
-		if len(validVias) > 0 {
-			routeTree.Insert(r.Cidr, validVias)
+		if len(gateways) > 0 {
+			routing.RebalanceGateways(gateways)
+			routeTree.Insert(r.Cidr, gateways)
 		}
 	}
 	return routeTree, nil
