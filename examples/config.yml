@@ -138,6 +138,11 @@ listen:
   # valid values: always, never, private
   # This setting is reloadable.
   #send_recv_error: always
+  # The so_sock option is a Linux-specific feature that allows all outgoing Nebula packets to be tagged with a specific identifier.
+  # This tagging enables IP rule-based filtering. For example, it supports 0.0.0.0/0 unsafe_routes,
+  # allowing for more precise routing decisions based on the packet tags. Default is 0 meaning no mark is set.
+  # This setting is reloadable.
+  #so_mark: 0
 
 # Routines is the number of thread pairs to run that consume from the tun and UDP queues.
 # Currently, this defaults to 1 which means we have 1 tun queue reader and 1
