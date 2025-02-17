@@ -18,7 +18,7 @@ type Route struct {
 	MTU     int
 	Metric  int
 	Cidr    netip.Prefix
-	Via     []netip.Addr
+	Via     []routing.Gateway
 	Install bool
 }
 
@@ -55,14 +55,7 @@ func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*bart.Table
 			l.WithField("route", r).Warnf("route MTU is not supported in %s", runtime.GOOS)
 		}
 
-		gateways := []routing.Gateway{}
-
-		for _, via := range r.Via {
-			if via.IsValid() {
-				gateways = append(gateways, routing.NewGateway(via, 1))
-			}
-		}
-
+		gateways := r.Via
 		if len(gateways) > 0 {
 			routing.RebalanceGateways(gateways)
 			routeTree.Insert(r.Cidr, gateways)
@@ -211,29 +204,63 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 			return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes is not present", i+1)
 		}
 
-		var viasInConfig = []string{}
-		via, isSingleVia := rVia.(string)
+		var gateways []routing.Gateway
 
-		if !isSingleVia {
-			multiVia, isMultiVia := rVia.([]string)
-
-			if !isMultiVia {
-				return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes is not a string or array of string: found %T", i+1, rVia)
-			}
-
-			viasInConfig = append(viasInConfig, multiVia...)
-		} else {
-			viasInConfig = append(viasInConfig, via)
-		}
-
-		var parsedVias = []netip.Addr{}
-		for _, viaString := range viasInConfig {
-			viaVpnIp, err := netip.ParseAddr(viaString)
+		switch via := rVia.(type) {
+		case string:
+			viaIp, err := netip.ParseAddr(via)
 			if err != nil {
 				return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes failed to parse address: %v", i+1, err)
 			}
 
-			parsedVias = append(parsedVias, viaVpnIp)
+			gateways = []routing.Gateway{routing.NewGateway(viaIp, 1)}
+
+		case []interface{}:
+			gateways = make([]routing.Gateway, len(via))
+			for ig, v := range via {
+				gatewayMap, ok := v.(map[interface{}]interface{})
+				if !ok {
+					return nil, fmt.Errorf("entry %v in tun.unsafe_routes[%v].via is invalid", i+1, ig+1)
+				}
+
+				rGateway, ok := gatewayMap["gateway"]
+				if !ok {
+					return nil, fmt.Errorf("entry .gateway in tun.unsafe_routes[%v].via[%v] is not present", i+1, ig+1)
+				}
+
+				parsedGateway, ok := rGateway.(string)
+				if !ok {
+					return nil, fmt.Errorf("entry .gateway in tun.unsafe_routes[%v].via[%v] is not a string", i+1, ig+1)
+				}
+
+				gatewayIp, err := netip.ParseAddr(parsedGateway)
+				if err != nil {
+					return nil, fmt.Errorf("entry .gateway in tun.unsafe_routes[%v].via[%v] failed to parse address: %v", i+1, ig+1, err)
+				}
+
+				rGatewayWeight, ok := gatewayMap["weight"]
+				if !ok {
+					rGatewayWeight = 1
+				}
+
+				gatewayWeight, ok := rGatewayWeight.(int)
+				if !ok {
+					_, err = strconv.ParseInt(rGatewayWeight.(string), 10, 32)
+					if err != nil {
+						return nil, fmt.Errorf("entry .weight in tun.unsafe_routes[%v].via[%v] is not an integer", i+1, ig+1)
+					}
+				}
+
+				if gatewayWeight < 1 || gatewayWeight > math.MaxInt32 {
+					return nil, fmt.Errorf("entry .weight in tun.unsafe_routes[%v].via[%v] is not in range (1-%d) : %v", i+1, ig+1, math.MaxInt32, metric)
+				}
+
+				gateways[ig] = routing.NewGateway(gatewayIp, gatewayWeight)
+
+			}
+
+		default:
+			return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes is not a string or list of gateways: found %T", i+1, rVia)
 		}
 
 		rRoute, ok := m["route"]
@@ -251,7 +278,7 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 		}
 
 		r := Route{
-			Via:     parsedVias,
+			Via:     gateways,
 			MTU:     mtu,
 			Metric:  metric,
 			Install: install,
