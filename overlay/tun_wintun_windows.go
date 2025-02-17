@@ -159,7 +159,7 @@ func (t *winTun) addRoutes(logErrors bool) error {
 		// Add our unsafe route
 		// Remark 1: Windows does not support multipath routes in the routing table
 		// so only add the first via. Multipath routing is always handled inside Nebula, so this does not matter.
-		err := luid.AddRoute(r.Cidr, r.Via[0], uint32(r.Metric))
+		err := luid.AddRoute(r.Cidr, r.Via[0].Ip(), uint32(r.Metric))
 		if err != nil {
 			retErr := util.NewContextualError("Failed to add route", map[string]interface{}{"route": r}, err)
 			if logErrors {
@@ -205,7 +205,7 @@ func (t *winTun) removeRoutes(routes []Route) error {
 		}
 
 		// See Remark 1 about windows not supporting multipath routes
-		err := luid.DeleteRoute(r.Cidr, r.Via[0])
+		err := luid.DeleteRoute(r.Cidr, r.Via[0].Ip())
 		if err != nil {
 			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
 		} else {
