@@ -11,6 +11,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"github.com/slackhq/nebula/wintun"
 	"golang.org/x/sys/windows"
@@ -24,7 +25,7 @@ type winTun struct {
 	cidr      netip.Prefix
 	MTU       int
 	Routes    atomic.Pointer[[]Route]
-	routeTree atomic.Pointer[bart.Table[netip.Addr]]
+	routeTree atomic.Pointer[bart.Table[[]routing.Gateway]]
 	l         *logrus.Logger
 
 	tun *wintun.NativeTun
@@ -150,13 +151,15 @@ func (t *winTun) addRoutes(logErrors bool) error {
 	foundDefault4 := false
 
 	for _, r := range routes {
-		if !r.Via.IsValid() || !r.Install {
+		if len(r.Via) == 0 || !r.Install {
 			// We don't allow route MTUs so only install routes with a via
 			continue
 		}
 
 		// Add our unsafe route
-		err := luid.AddRoute(r.Cidr, r.Via, uint32(r.Metric))
+		// Remark 1: Windows does not support multipath routes in the routing table
+		// so only add the first via. Multipath routing is always handled inside Nebula, so this does not matter.
+		err := luid.AddRoute(r.Cidr, r.Via[0].Ip(), uint32(r.Metric))
 		if err != nil {
 			retErr := util.NewContextualError("Failed to add route", map[string]interface{}{"route": r}, err)
 			if logErrors {
@@ -201,7 +204,8 @@ func (t *winTun) removeRoutes(routes []Route) error {
 			continue
 		}
 
-		err := luid.DeleteRoute(r.Cidr, r.Via)
+		// See Remark 1 about windows not supporting multipath routes
+		err := luid.DeleteRoute(r.Cidr, r.Via[0].Ip())
 		if err != nil {
 			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
 		} else {
@@ -211,7 +215,7 @@ func (t *winTun) removeRoutes(routes []Route) error {
 	return nil
 }
 
-func (t *winTun) RouteFor(ip netip.Addr) netip.Addr {
+func (t *winTun) RoutesFor(ip netip.Addr) []routing.Gateway {
 	r, _ := t.routeTree.Load().Lookup(ip)
 	return r
 }

@@ -8,6 +8,8 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/noiseutil"
+	"github.com/slackhq/nebula/routing"
+	"github.com/zeebo/xxh3"
 )
 
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
@@ -45,7 +47,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		return
 	}
 
-	hostinfo, ready := f.getOrHandshake(fwPacket.RemoteIP, func(hh *HandshakeHostInfo) {
+	hostinfo, ready := f.getOrHandshakeConsiderRouting(fwPacket, func(hh *HandshakeHostInfo) {
 		hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
 	})
 
@@ -117,21 +119,115 @@ func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *
 	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, out, nb, packet, q)
 }
 
+// This should only called for internal nebula traffic
 func (f *Interface) Handshake(vpnIp netip.Addr) {
-	f.getOrHandshake(vpnIp, nil)
+	f.getOrHandshakeNoRouting(vpnIp, nil)
 }
 
-// getOrHandshake returns nil if the vpnIp is not routable.
+// getOrHandshakeNoRouting returns nil if the vpnIp is not in the VPN net
 // If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
-func (f *Interface) getOrHandshake(vpnIp netip.Addr, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
+func (f *Interface) getOrHandshakeNoRouting(vpnIp netip.Addr, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
 	if !f.myVpnNet.Contains(vpnIp) {
-		vpnIp = f.inside.RouteFor(vpnIp)
-		if !vpnIp.IsValid() {
-			return nil, false
-		}
+		return nil, false
 	}
 
 	return f.handshakeManager.GetOrHandshake(vpnIp, cacheCallback)
+}
+
+func hashPacket(p *firewall.Packet) int {
+	hasher := xxh3.Hasher{}
+
+	hasher.Write(p.LocalIP.AsSlice())
+	hasher.Write(p.RemoteIP.AsSlice())
+	hasher.Write([]byte{
+		byte(p.LocalPort & 0xFF),
+		byte((p.LocalPort >> 8) & 0xFF),
+		byte(p.RemotePort & 0xFF),
+		byte((p.RemotePort >> 8) & 0xFF),
+		byte(p.Protocol),
+	})
+
+	// Use xxh3 as it is a fast hash with good distribution
+	return int(hasher.Sum64() & 0x7FFFFFFF)
+}
+
+func balancePacket(fwPacket *firewall.Packet, gateways []routing.Gateway) netip.Addr {
+	hash := hashPacket(fwPacket)
+
+	for i := range gateways {
+		if hash <= gateways[i].UpperBound() {
+			return gateways[i].Ip()
+		}
+	}
+
+	// This should never happen
+	panic("The packet hash value should always fall inside a gateway bucket")
+}
+
+// This is called for external traffic
+// getOrHandshake returns nil if the vpnIp is not routable.
+// If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
+func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
+
+	destinationIp := fwPacket.RemoteIP
+
+	// Host is inside the mesh, no routing
+	if f.myVpnNet.Contains(destinationIp) {
+		return f.handshakeManager.GetOrHandshake(destinationIp, cacheCallback)
+	}
+
+	gateways := f.inside.RoutesFor(destinationIp)
+	if len(gateways) == 0 {
+		return nil, false
+	} else if len(gateways) == 1 {
+		// Single gateway route
+		return f.handshakeManager.GetOrHandshake(gateways[0].Ip(), cacheCallback)
+	} else {
+		// Multi gateway route, perform ECMP categorization
+		gatewayIp := balancePacket(fwPacket, gateways)
+
+		// Do not pass a cacheCallback, if the node is not reachable we will attempt other nodes
+		// so we don't want to cache the packet to avoid sending duplicate packets if this gateway comes back up.
+		if hostInfo, ready := f.handshakeManager.GetOrHandshake(gatewayIp, nil); ready {
+			return hostInfo, true
+		}
+
+		// It appears the selected gateway cannot be reached, find another gateway to fallback on.
+		// The current implementation breaks ECMP but that seems better than no connectivity.
+		// If ECMP is also required when a gateway is down then connectivity status
+		// for each gateway nees to be kept and the weights recalculated when they go up or down.
+		// This would also need to interact with unsafe_route updates through reloading the config or
+		// use of the use_system_route_table option
+
+		if f.l.Level >= logrus.DebugLevel {
+			f.l.WithField("destination", destinationIp).
+				WithField("originalGateway", gatewayIp).
+				Debugln("Calculated gateway for ECMP not available, attempting other gateways")
+		}
+
+		var hostInfo *HostInfo
+		var ready bool
+		var handshakeHostInfo *HandshakeHostInfo
+		var hhReceiver = func(hh *HandshakeHostInfo) {
+			handshakeHostInfo = hh
+		}
+
+		for i := range gateways {
+			// Skip the gateway that failed previously
+			if gateways[i].Ip() == gatewayIp {
+				continue
+			}
+
+			// Store the HandshakeHostInfo for the cache callback
+			if hostInfo, ready = f.handshakeManager.GetOrHandshake(gateways[i].Ip(), hhReceiver); ready {
+				return hostInfo, true
+			}
+		}
+
+		// No gateways reachable, cache packet in last gateway attempted
+		cacheCallback(handshakeHostInfo)
+		return hostInfo, false
+	}
 }
 
 func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte) {
@@ -158,7 +254,7 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
 func (f *Interface) SendMessageToVpnIp(t header.MessageType, st header.MessageSubType, vpnIp netip.Addr, p, nb, out []byte) {
-	hostInfo, ready := f.getOrHandshake(vpnIp, func(hh *HandshakeHostInfo) {
+	hostInfo, ready := f.getOrHandshakeNoRouting(vpnIp, func(hh *HandshakeHostInfo) {
 		hh.cachePacket(f.l, t, st, p, f.SendMessageToHostInfo, f.cachedPacketMetrics)
 	})
 

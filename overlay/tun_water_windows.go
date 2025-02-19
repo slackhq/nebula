@@ -12,6 +12,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"github.com/songgao/water"
 )
@@ -21,7 +22,7 @@ type waterTun struct {
 	cidr      netip.Prefix
 	MTU       int
 	Routes    atomic.Pointer[[]Route]
-	routeTree atomic.Pointer[bart.Table[netip.Addr]]
+	routeTree atomic.Pointer[bart.Table[[]routing.Gateway]]
 	l         *logrus.Logger
 	f         *net.Interface
 	*water.Interface
@@ -141,13 +142,13 @@ func (t *waterTun) addRoutes(logErrors bool) error {
 	// Path routes
 	routes := *t.Routes.Load()
 	for _, r := range routes {
-		if !r.Via.IsValid() || !r.Install {
+		if len(r.Via) == 0 || !r.Install {
 			// We don't allow route MTUs so only install routes with a via
 			continue
 		}
 
 		err := exec.Command(
-			"C:\\Windows\\System32\\route.exe", "add", r.Cidr.String(), r.Via.String(), "IF", strconv.Itoa(t.f.Index), "METRIC", strconv.Itoa(r.Metric),
+			"C:\\Windows\\System32\\route.exe", "add", r.Cidr.String(), r.Via[0].String(), "IF", strconv.Itoa(t.f.Index), "METRIC", strconv.Itoa(r.Metric),
 		).Run()
 
 		if err != nil {
@@ -172,7 +173,7 @@ func (t *waterTun) removeRoutes(routes []Route) {
 		}
 
 		err := exec.Command(
-			"C:\\Windows\\System32\\route.exe", "delete", r.Cidr.String(), r.Via.String(), "IF", strconv.Itoa(t.f.Index), "METRIC", strconv.Itoa(r.Metric),
+			"C:\\Windows\\System32\\route.exe", "delete", r.Cidr.String(), r.Via[0].String(), "IF", strconv.Itoa(t.f.Index), "METRIC", strconv.Itoa(r.Metric),
 		).Run()
 		if err != nil {
 			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
@@ -182,7 +183,7 @@ func (t *waterTun) removeRoutes(routes []Route) {
 	}
 }
 
-func (t *waterTun) RouteFor(ip netip.Addr) netip.Addr {
+func (t *waterTun) RoutesFor(ip netip.Addr) []routing.Gateway {
 	r, _ := t.routeTree.Load().Lookup(ip)
 	return r
 }

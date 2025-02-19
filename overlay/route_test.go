@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 )
@@ -151,7 +152,7 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 		c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": invalidValue}}}
 		routes, err = parseUnsafeRoutes(c, n)
 		assert.Nil(t, routes)
-		assert.EqualError(t, err, fmt.Sprintf("entry 1.via in tun.unsafe_routes is not a string: found %T", invalidValue))
+		assert.EqualError(t, err, fmt.Sprintf("entry 1.via in tun.unsafe_routes is not a string or list of gateways: found %T", invalidValue))
 	}
 
 	// unparsable via
@@ -159,6 +160,24 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	routes, err = parseUnsafeRoutes(c, n)
 	assert.Nil(t, routes)
 	assert.EqualError(t, err, "entry 1.via in tun.unsafe_routes failed to parse address: ParseAddr(\"nope\"): unable to parse IP")
+
+	// unparsable gateway
+	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "via": []interface{}{map[interface{}]interface{}{"gateway": "1"}}}}}
+	routes, err = parseUnsafeRoutes(c, n)
+	assert.Nil(t, routes)
+	assert.EqualError(t, err, "entry .gateway in tun.unsafe_routes[1].via[1] failed to parse address: ParseAddr(\"1\"): unable to parse IP")
+
+	// missing gateway element
+	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "via": []interface{}{map[interface{}]interface{}{"weight": "1"}}}}}
+	routes, err = parseUnsafeRoutes(c, n)
+	assert.Nil(t, routes)
+	assert.EqualError(t, err, "entry .gateway in tun.unsafe_routes[1].via[1] is not present")
+
+	// unparsable weight element
+	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "via": []interface{}{map[interface{}]interface{}{"gateway": "10.0.0.1", "weight": "a"}}}}}
+	routes, err = parseUnsafeRoutes(c, n)
+	assert.Nil(t, routes)
+	assert.EqualError(t, err, "entry .weight in tun.unsafe_routes[1].via[1] is not an integer")
 
 	// missing route
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "500"}}}
@@ -273,7 +292,7 @@ func Test_makeRouteTree(t *testing.T) {
 
 	nip, err := netip.ParseAddr("192.168.0.1")
 	assert.NoError(t, err)
-	assert.Equal(t, nip, r)
+	assert.Equal(t, nip, r[0].Ip())
 
 	ip, err = netip.ParseAddr("1.0.0.1")
 	assert.NoError(t, err)
@@ -282,10 +301,91 @@ func Test_makeRouteTree(t *testing.T) {
 
 	nip, err = netip.ParseAddr("192.168.0.2")
 	assert.NoError(t, err)
-	assert.Equal(t, nip, r)
+	assert.Equal(t, nip, r[0].Ip())
 
 	ip, err = netip.ParseAddr("1.1.0.1")
 	assert.NoError(t, err)
 	r, ok = routeTree.Lookup(ip)
 	assert.False(t, ok)
+}
+
+func Test_makeMultipathUnsafeRouteTree(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	n, err := netip.ParsePrefix("10.0.0.0/24")
+	assert.NoError(t, err)
+
+	c.Settings["tun"] = map[interface{}]interface{}{
+		"unsafe_routes": []interface{}{
+			map[interface{}]interface{}{
+				"route": "192.168.86.0/24",
+				"via":   "192.168.100.10",
+			},
+			map[interface{}]interface{}{
+				"route": "192.168.87.0/24",
+				"via": []interface{}{
+					map[interface{}]interface{}{
+						"gateway": "10.0.0.1",
+					},
+					map[interface{}]interface{}{
+						"gateway": "10.0.0.2",
+					},
+					map[interface{}]interface{}{
+						"gateway": "10.0.0.3",
+					},
+				},
+			},
+			map[interface{}]interface{}{
+				"route": "192.168.89.0/24",
+				"via": []interface{}{
+					map[interface{}]interface{}{
+						"gateway": "10.0.0.1",
+						"weight":  10,
+					},
+					map[interface{}]interface{}{
+						"gateway": "10.0.0.2",
+						"weight":  5,
+					},
+				},
+			},
+		},
+	}
+
+	routes, err := parseUnsafeRoutes(c, n)
+	assert.NoError(t, err)
+	assert.Len(t, routes, 3)
+	routeTree, err := makeRouteTree(l, routes, true)
+	assert.NoError(t, err)
+
+	ip, err := netip.ParseAddr("192.168.86.1")
+	assert.NoError(t, err)
+	r, ok := routeTree.Lookup(ip)
+	assert.True(t, ok)
+
+	nip, err := netip.ParseAddr("192.168.100.10")
+	assert.NoError(t, err)
+	assert.Equal(t, nip, r[0].Ip())
+
+	ip, err = netip.ParseAddr("192.168.87.1")
+	assert.NoError(t, err)
+	r, ok = routeTree.Lookup(ip)
+	assert.True(t, ok)
+
+	expectedGateways := []routing.Gateway{routing.NewGateway(netip.MustParseAddr("10.0.0.1"), 1),
+		routing.NewGateway(netip.MustParseAddr("10.0.0.2"), 1),
+		routing.NewGateway(netip.MustParseAddr("10.0.0.3"), 1)}
+
+	routing.RebalanceGateways(expectedGateways)
+	assert.ElementsMatch(t, expectedGateways, r)
+
+	ip, err = netip.ParseAddr("192.168.89.1")
+	assert.NoError(t, err)
+	r, ok = routeTree.Lookup(ip)
+	assert.True(t, ok)
+
+	expectedGateways = []routing.Gateway{routing.NewGateway(netip.MustParseAddr("10.0.0.1"), 10),
+		routing.NewGateway(netip.MustParseAddr("10.0.0.2"), 5)}
+
+	routing.RebalanceGateways(expectedGateways)
+	assert.ElementsMatch(t, expectedGateways, r)
 }
