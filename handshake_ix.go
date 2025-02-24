@@ -189,15 +189,6 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 			return
 		}
 
-		if addr.IsValid() {
-			// addr can be invalid when the tunnel is being relayed.
-			// We only want to apply the remote allow list for direct tunnels here
-			if !f.lightHouse.GetRemoteAllowList().Allow(vpnAddr, addr.Addr()) {
-				f.l.WithField("vpnAddr", vpnAddr).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
-				return
-			}
-		}
-
 		// vpnAddrs outside our vpn networks are of no use to us, filter them out
 		if _, ok := f.myVpnNetworksTable.Lookup(vpnAddr); !ok {
 			continue
@@ -214,6 +205,15 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 			WithField("issuer", issuer).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("No usable vpn addresses from host, refusing handshake")
 		return
+	}
+
+	if addr.IsValid() {
+		// addr can be invalid when the tunnel is being relayed.
+		// We only want to apply the remote allow list for direct tunnels here
+		if !f.lightHouse.GetRemoteAllowList().AllowAll(vpnAddrs, addr.Addr()) {
+			f.l.WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
+			return
+		}
 	}
 
 	myIndex, err := generateIndex(f.l)
@@ -450,8 +450,8 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 	hostinfo := hh.hostinfo
 	if addr.IsValid() {
 		// The vpnAddr we know about is the one we tried to handshake with, use it to apply the remote allow list.
-		if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnAddrs[0], addr.Addr()) {
-			f.l.WithField("vpnIp", hostinfo.vpnAddrs).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
+		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, addr.Addr()) {
+			f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
 			return false
 		}
 	}
