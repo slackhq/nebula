@@ -61,6 +61,16 @@ lighthouse:
   hosts:
     - "192.168.100.1"
 
+  # This feature allows handshakes only from hosts whose hostname, groups, or IP address are specified in
+  # any inbound firewall rule. By doing so, it prevents unauthorized nodes from establishing a tunnel, conserving
+  # resources on the host and adding an additional security layer that reduces the potential attack surface.
+  # - If enabled on a lighthouse, this will prevent nodes from accessing lighthouse features unless there is an
+  #   incoming rule allowing access. Use allow rules with `port: nebula` to grant access to nodes.
+  # - Similar considerations should be made before enabling the feature on relay nodes, as it can restrict
+  #   access to certain nodes only. Both ends of the relayed tunnel must be allowed to communicate with this node
+  #   for relaying to function.
+  #incoming_handshake_filtering: false
+
   # remote_allow_list allows you to control ip ranges that this node will
   # consider when handshaking to another node. By default, any remote IPs are
   # allowed. You can provide CIDRs here with `true` to allow and `false` to
@@ -340,7 +350,8 @@ firewall:
   # The firewall is default deny. There is no way to write a deny rule.
   # Rules are comprised of a protocol, port, and one or more of host, group, or CIDR
   # Logical evaluation is roughly: port AND proto AND (ca_sha OR ca_name) AND (host OR group OR groups OR cidr) AND (local cidr)
-  # - port: Takes `0` or `any` as any, a single number `80`, a range `200-901`, or `fragment` to match second and further fragments of fragmented packets (since there is no port available).
+  # - port: Takes `0` or `any` as any, a single number `80`, a range `200-901`, `fragment` to match second and further fragments of fragmented
+  #         packets (since there is no port available) or `nebula` to create nebula access rules (udp) for the handshake filtering feature.
   #   code: same as port but makes more sense when talking about ICMP, TODO: this is not currently implemented in a way that works, use `any`
   #   proto: `any`, `tcp`, `udp`, or `icmp`
   #   host: `any` or a literal hostname, ie `test-host`

@@ -327,11 +327,13 @@ func (f *Interface) reloadFirewall(c *config.C) {
 		return
 	}
 
-	fw, err := NewFirewallFromConfig(f.l, f.pki.getCertState(), c)
+	fw, hf, err := NewFirewallFromConfig(f.l, f.pki.getCertState(), c)
 	if err != nil {
 		f.l.WithError(err).Error("Error while creating firewall during reload")
 		return
 	}
+
+	f.lightHouse.hf = hf
 
 	oldFw := f.firewall
 	conntrack := oldFw.Conntrack
