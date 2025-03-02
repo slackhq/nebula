@@ -71,6 +71,11 @@ lighthouse:
   #   for relaying to function.
   #incoming_handshake_filtering: false
 
+  # This setting on a lighthouse determines whether to enforce the host query protection
+  # whitelist received from a node. On a node, this setting controls whether the node
+  # sends its handshake filtering whitelist to the lighthouses at all, not reloadable.
+  #enable_host_query_protection: false
+
   # remote_allow_list allows you to control ip ranges that this node will
   # consider when handshaking to another node. By default, any remote IPs are
   # allowed. You can provide CIDRs here with `true` to allow and `false` to

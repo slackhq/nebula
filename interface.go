@@ -333,6 +333,8 @@ func (f *Interface) reloadFirewall(c *config.C) {
 		return
 	}
 
+	// Set to send updated whitelist to lh after firewall rule reload
+	hf.IsModifiedSinceLastMashalling.Store(true)
 	f.lightHouse.hf = hf
 
 	oldFw := f.firewall

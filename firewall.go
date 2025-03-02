@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gaissmai/bart"
@@ -89,6 +90,9 @@ type HandshakeFilter struct {
 	AllowedCidrs        []netip.Prefix
 	AllowedCANames      map[string]struct{}
 	AllowedCAShas       map[string]struct{}
+
+	IsEmtpy                       atomic.Bool
+	IsModifiedSinceLastMashalling atomic.Bool
 }
 
 // FirewallTable is the entry point for a rule, the evaluation order is:
@@ -1039,7 +1043,7 @@ func parsePort(s string) (startPort, endPort int32, err error) {
 }
 
 func NewHandshakeFilter() *HandshakeFilter {
-	return &HandshakeFilter{
+	hf := &HandshakeFilter{
 		AllowedHosts:        make(map[string]struct{}),
 		AllowedGroups:       make(map[string]struct{}),
 		AllowedGroupsCombos: make([]map[string]struct{}, 0),
@@ -1047,11 +1051,18 @@ func NewHandshakeFilter() *HandshakeFilter {
 		AllowedCANames:      make(map[string]struct{}),
 		AllowedCAShas:       make(map[string]struct{}),
 	}
+
+	hf.IsModifiedSinceLastMashalling.Store(false)
+	hf.IsEmtpy.Store(true)
+
+	return hf
 }
 
 func (hfws *HandshakeFilter) AddRule(groups []string, host string, localIp netip.Prefix, CAName string, CASha string) {
+	ruleAdded := false
 	if host != "" {
 		hfws.AllowedHosts[host] = struct{}{}
+		ruleAdded = true
 	}
 
 	if len(groups) > 1 {
@@ -1066,8 +1077,10 @@ func (hfws *HandshakeFilter) AddRule(groups []string, host string, localIp netip
 				gs,
 			)
 		}
+		ruleAdded = true
 	} else if len(groups) == 1 {
 		hfws.AllowedGroups[groups[0]] = struct{}{}
+		ruleAdded = true
 	}
 
 	if localIp.IsValid() {
@@ -1075,14 +1088,23 @@ func (hfws *HandshakeFilter) AddRule(groups []string, host string, localIp netip
 			hfws.AllowedCidrs,
 			localIp,
 		)
+		ruleAdded = true
 	}
 
 	if CAName != "" {
 		hfws.AllowedCANames[CAName] = struct{}{}
+		ruleAdded = true
 	}
 
 	if CASha != "" {
 		hfws.AllowedCAShas[CASha] = struct{}{}
+		ruleAdded = true
+	}
+
+	hfws.IsModifiedSinceLastMashalling.Store(ruleAdded)
+
+	if ruleAdded {
+		hfws.IsEmtpy.Store(false)
 	}
 }
 
@@ -1132,6 +1154,88 @@ func (hfws *HandshakeFilter) IsHandshakeAllowed(groups []string, host string, vp
 	}
 
 	return false
+}
+
+func (hfws *HandshakeFilter) MarshalToHfw() *HandshakeFilteringWhitelist {
+	hfw := &HandshakeFilteringWhitelist{
+		AllowedHosts:        make([]string, len(hfws.AllowedHosts)),
+		AllowedGroups:       make([]string, len(hfws.AllowedGroups)),
+		AllowedGroupsCombos: make([]*GroupsCombos, len(hfws.AllowedGroupsCombos)),
+		AllowedCidrs:        make([]string, len(hfws.AllowedCidrs)),
+		AllowedCANames:      make([]string, len(hfws.AllowedCANames)),
+		AllowedCAShas:       make([]string, len(hfws.AllowedCAShas)),
+		SetEmpty:            hfws.IsEmtpy.Load(),
+	}
+
+	for host := range hfws.AllowedHosts {
+		hfw.AllowedHosts = append(hfw.AllowedHosts, host)
+	}
+
+	for group := range hfws.AllowedGroups {
+		hfw.AllowedGroups = append(hfw.AllowedGroups, group)
+	}
+
+	for i, groupCombo := range hfws.AllowedGroupsCombos {
+		gc := &GroupsCombos{
+			Group: make([]string, len(groupCombo)),
+		}
+		j := 0
+		for group := range groupCombo {
+			gc.Group[j] = group
+			j += 1
+		}
+		hfw.AllowedGroupsCombos[i] = gc
+	}
+
+	for i, cidr := range hfws.AllowedCidrs {
+		hfw.AllowedCidrs[i] = cidr.String()
+	}
+
+	for ca := range hfws.AllowedCANames {
+		hfw.AllowedCANames = append(hfw.AllowedCANames, ca)
+	}
+
+	for fp := range hfws.AllowedCAShas {
+		hfw.AllowedCAShas = append(hfw.AllowedCAShas, fp)
+	}
+
+	hfws.IsModifiedSinceLastMashalling.Store(false)
+
+	return hfw
+}
+
+func (hfws *HandshakeFilter) UnmarshalFromHfw(hfw *HandshakeFilteringWhitelist) {
+	if hfw == nil {
+		return
+	}
+
+	for _, h := range hfw.AllowedHosts {
+		hfws.AddRule(nil, h, netip.Prefix{}, "", "")
+	}
+
+	for _, g := range hfw.AllowedGroups {
+		hfws.AddRule([]string{g}, "", netip.Prefix{}, "", "")
+	}
+
+	for _, gc := range hfw.AllowedGroupsCombos {
+		hfws.AddRule(gc.Group, "", netip.Prefix{}, "", "")
+	}
+
+	for _, cs := range hfw.AllowedCidrs {
+		c, err := netip.ParsePrefix(cs)
+		if err != nil {
+			continue
+		}
+		hfws.AddRule(nil, "", c, "", "")
+	}
+
+	for _, ca := range hfw.AllowedCANames {
+		hfws.AddRule(nil, "", netip.Prefix{}, ca, "")
+	}
+
+	for _, sha := range hfw.AllowedCAShas {
+		hfws.AddRule(nil, "", netip.Prefix{}, "", sha)
+	}
 }
 
 func isSubset(subset map[string]struct{}, superset []string) bool {

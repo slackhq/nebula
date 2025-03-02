@@ -46,6 +46,9 @@ type LightHouse struct {
 	// Filters incoming handshakes according to the specified firewall rules.
 	hf *HandshakeFilter
 
+	// Controls weather to send the handshake white list rules to the lighthouses.
+	enableHostQueryProtection atomic.Bool
+
 	// filters remote addresses allowed for each host
 	// - When we are a lighthouse, this filters what addresses we store and
 	// respond with.
@@ -78,10 +81,11 @@ type LightHouse struct {
 
 	calculatedRemotes atomic.Pointer[bart.Table[[]*calculatedRemote]] // Maps VpnAddr to []*calculatedRemote
 
-	metrics                  *MessageMetrics
-	metricHolepunchTx        metrics.Counter
-	metricFilteredHandshakes metrics.Counter
-	l                        *logrus.Logger
+	metrics                   *MessageMetrics
+	metricHolepunchTx         metrics.Counter
+	metricFilteredHostQueries metrics.Counter
+	metricFilteredHandshakes  metrics.Counter
+	l                         *logrus.Logger
 }
 
 // NewLightHouseFromConfig will build a Lighthouse struct from the values provided in the config object
@@ -120,13 +124,18 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 	staticList := make(map[netip.Addr]struct{})
 	h.staticList.Store(&staticList)
 	h.incomingHandshakeFiltering.Store(false)
+	h.enableHostQueryProtection.Store(false)
 
 	if c.GetBool("stats.lighthouse_metrics", false) {
 		h.metrics = newLighthouseMetrics()
 		h.metricHolepunchTx = metrics.GetOrRegisterCounter("messages.tx.holepunch", nil)
 		h.metricFilteredHandshakes = metrics.GetOrRegisterCounter("handshakes.filtered", nil)
+		if amLighthouse {
+			h.metricFilteredHostQueries = metrics.GetOrRegisterCounter("lighthouse.hostqueries.filtered", nil)
+		}
 	} else {
 		h.metricHolepunchTx = metrics.NilCounter{}
+		h.metricFilteredHostQueries = metrics.NilCounter{}
 		h.metricFilteredHandshakes = metrics.NilCounter{}
 	}
 
@@ -248,6 +257,13 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 		lh.incomingHandshakeFiltering.Store(c.GetBool("lighthouse.incoming_handshake_filtering", false))
 		if lh.incomingHandshakeFiltering.Load() {
 			lh.l.Info("Incoming handshake filtering enabled")
+		}
+	}
+
+	if initial {
+		lh.enableHostQueryProtection.Store(c.GetBool("lighthouse.enable_host_query_protection", false))
+		if lh.enableHostQueryProtection.Load() {
+			lh.l.Info("Host query protection enabled")
 		}
 	}
 
@@ -537,6 +553,22 @@ func (lh *LightHouse) queryAndPrepMessage(vpnAddr netip.Addr, f func(*cache) (in
 	}
 	lh.RUnlock()
 	return false, 0, nil
+}
+
+func (lh *LightHouse) IsHostQueryAllowed(targetAddr netip.Addr, groups []string, host string, queryAddrs []netip.Addr, CAName string, CASha string) bool {
+	lh.RLock()
+	// Do we have an entry in the main cache?
+	if v, ok := lh.addrMap[targetAddr]; ok {
+		// Swap lh lock for remote list lock
+		v.RLock()
+		defer v.RUnlock()
+
+		lh.RUnlock()
+
+		return v.hf.IsEmtpy.Load() || v.hf.IsHandshakeAllowed(groups, host, queryAddrs, CAName, CASha)
+	}
+	lh.RUnlock()
+	return true
 }
 
 func (lh *LightHouse) DeleteVpnAddrs(allVpnAddrs []netip.Addr) {
@@ -890,11 +922,18 @@ func (lh *LightHouse) SendUpdate() {
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)
 
-	var v1Update, v2Update []byte
+	// cache for v1Update/v2Update with or without hfwl
+	updateMessageCache := map[cert.Version]map[bool][]byte{
+		cert.Version1: map[bool][]byte{},
+		cert.Version2: map[bool][]byte{},
+	}
+
+	sendHfw := lh.enableHostQueryProtection.Load() &&
+		lh.hf.IsModifiedSinceLastMashalling.Load()
+
 	var err error
 	updated := 0
 	lighthouses := lh.GetLighthouses()
-
 	for lhVpnAddr := range lighthouses {
 		var v cert.Version
 		hi := lh.ifce.GetHostInfo(lhVpnAddr)
@@ -903,8 +942,10 @@ func (lh *LightHouse) SendUpdate() {
 		} else {
 			v = lh.ifce.GetCertState().defaultVersion
 		}
+
+		sendHfwToLh := hi == nil || sendHfw
 		if v == cert.Version1 {
-			if v1Update == nil {
+			if _, ok := updateMessageCache[v][sendHfwToLh]; !ok {
 				if !lh.myVpnNetworks[0].Addr().Is4() {
 					lh.l.WithField("lighthouseAddr", lhVpnAddr).
 						Warn("cannot update lighthouse using v1 protocol without an IPv4 address")
@@ -929,7 +970,20 @@ func (lh *LightHouse) SendUpdate() {
 					},
 				}
 
-				v1Update, err = msg.Marshal()
+				if sendHfwToLh {
+					msg.Details.HandshakeFilteringWhitelist = lh.hf.MarshalToHfw()
+					if msg.Details.HandshakeFilteringWhitelist != nil && lh.l.Level >= logrus.DebugLevel {
+						lh.l.WithField("hosts", msg.Details.HandshakeFilteringWhitelist.AllowedHosts).
+							WithField("groups", msg.Details.HandshakeFilteringWhitelist.AllowedGroups).
+							WithField("groupcombos", msg.Details.HandshakeFilteringWhitelist.AllowedGroupsCombos).
+							WithField("cidrs", msg.Details.HandshakeFilteringWhitelist.AllowedCidrs).
+							WithField("canames", msg.Details.HandshakeFilteringWhitelist.AllowedCANames).
+							WithField("cashas", msg.Details.HandshakeFilteringWhitelist.AllowedCAShas).
+							Debug("Sending handshake filtering whitelist to lighthouse")
+					}
+				}
+
+				updateMessageCache[v][sendHfwToLh], err = msg.Marshal()
 				if err != nil {
 					lh.l.WithError(err).WithField("lighthouseAddr", lhVpnAddr).
 						Error("Error while marshaling for lighthouse v1 update")
@@ -937,11 +991,11 @@ func (lh *LightHouse) SendUpdate() {
 				}
 			}
 
-			lh.ifce.SendMessageToVpnAddr(header.LightHouse, 0, lhVpnAddr, v1Update, nb, out)
+			lh.ifce.SendMessageToVpnAddr(header.LightHouse, 0, lhVpnAddr, updateMessageCache[v][sendHfwToLh], nb, out)
 			updated++
 
 		} else if v == cert.Version2 {
-			if v2Update == nil {
+			if _, ok := updateMessageCache[v][sendHfwToLh]; !ok {
 				var relays []*Addr
 				for _, r := range lh.GetRelaysForMe() {
 					relays = append(relays, netAddrToProtoAddr(r))
@@ -957,7 +1011,22 @@ func (lh *LightHouse) SendUpdate() {
 					},
 				}
 
-				v2Update, err = msg.Marshal()
+				if sendHfwToLh {
+					msg.Details.HandshakeFilteringWhitelist = lh.hf.MarshalToHfw()
+					if lh.l.Level >= logrus.DebugLevel {
+						if msg.Details.HandshakeFilteringWhitelist != nil && lh.l.Level >= logrus.DebugLevel {
+							lh.l.WithField("hosts", msg.Details.HandshakeFilteringWhitelist.AllowedHosts).
+								WithField("groups", msg.Details.HandshakeFilteringWhitelist.AllowedGroups).
+								WithField("groupcombos", msg.Details.HandshakeFilteringWhitelist.AllowedGroupsCombos).
+								WithField("cidrs", msg.Details.HandshakeFilteringWhitelist.AllowedCidrs).
+								WithField("canames", msg.Details.HandshakeFilteringWhitelist.AllowedCANames).
+								WithField("cashas", msg.Details.HandshakeFilteringWhitelist.AllowedCAShas).
+								Debug("Sending handshake filtering whitelist to lighthouse")
+						}
+					}
+				}
+
+				updateMessageCache[v][sendHfwToLh], err = msg.Marshal()
 				if err != nil {
 					lh.l.WithError(err).WithField("lighthouseAddr", lhVpnAddr).
 						Error("Error while marshaling for lighthouse v2 update")
@@ -965,7 +1034,7 @@ func (lh *LightHouse) SendUpdate() {
 				}
 			}
 
-			lh.ifce.SendMessageToVpnAddr(header.LightHouse, 0, lhVpnAddr, v2Update, nb, out)
+			lh.ifce.SendMessageToVpnAddr(header.LightHouse, 0, lhVpnAddr, updateMessageCache[v][sendHfwToLh], nb, out)
 			updated++
 
 		} else {
@@ -1023,12 +1092,15 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	details.OldRelayVpnAddrs = details.OldRelayVpnAddrs[:0]
 	details.OldVpnAddr = 0
 	details.VpnAddr = nil
+	details.HandshakeFilteringWhitelist = nil
 	lhh.meta.Details = details
 
 	return lhh.meta
 }
 
-func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, fromVpnAddrs []netip.Addr, p []byte, w EncWriter) {
+func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, hostInfo *HostInfo, p []byte, w EncWriter) {
+	fromVpnAddrs := hostInfo.vpnAddrs
+
 	n := lhh.resetMeta()
 	err := n.Unmarshal(p)
 	if err != nil {
@@ -1047,7 +1119,7 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, fromVpnAddrs [
 
 	switch n.Type {
 	case NebulaMeta_HostQuery:
-		lhh.handleHostQuery(n, fromVpnAddrs, rAddr, w)
+		lhh.handleHostQuery(n, hostInfo, rAddr, w)
 
 	case NebulaMeta_HostQueryReply:
 		lhh.handleHostQueryReply(n, fromVpnAddrs)
@@ -1064,7 +1136,7 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, fromVpnAddrs [
 	}
 }
 
-func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []netip.Addr, addr netip.AddrPort, w EncWriter) {
+func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, hostInfo *HostInfo, addr netip.AddrPort, w EncWriter) {
 	// Exit if we don't answer queries
 	if !lhh.lh.amLighthouse {
 		if lhh.l.Level >= logrus.DebugLevel {
@@ -1073,6 +1145,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 		return
 	}
 
+	fromVpnAddrs := hostInfo.vpnAddrs
 	useVersion := cert.Version1
 	var queryVpnAddr netip.Addr
 	if n.Details.OldVpnAddr != 0 {
@@ -1088,6 +1161,21 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 			lhh.l.WithField("from", fromVpnAddrs).WithField("details", n.Details).Debugln("Dropping malformed HostQuery")
 		}
 		return
+	}
+
+	if lhh.lh.enableHostQueryProtection.Load() {
+		c := hostInfo.ConnectionState.peerCert.Certificate
+		fp, err := c.Fingerprint()
+		if err != nil {
+			lhh.l.WithField("CAName", c.Name()).WithError(err).Warn("could not calculate fingerprint for provided CA")
+			return
+		}
+
+		if !lhh.lh.IsHostQueryAllowed(queryVpnAddr, c.Groups(), c.Name(), fromVpnAddrs, c.Issuer(), fp) {
+			lhh.l.WithField("from", fromVpnAddrs).WithField("queryVpnAddr", queryVpnAddr).Warn("Preventing query due to host query protection")
+			lhh.lh.metricFilteredHostQueries.Inc(1)
+			return
+		}
 	}
 
 	found, ln, err := lhh.lh.queryAndPrepMessage(queryVpnAddr, func(c *cache) (int, error) {
@@ -1287,6 +1375,7 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 	}
 
 	relays := n.Details.GetRelays()
+	hfws := n.Details.GetHandshakeFilteringWhitelist()
 
 	lhh.lh.Lock()
 	am := lhh.lh.unlockedGetRemoteList(fromVpnAddrs)
@@ -1296,7 +1385,20 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 	am.unlockedSetV4(fromVpnAddrs[0], detailsVpnAddr, n.Details.V4AddrPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(fromVpnAddrs[0], detailsVpnAddr, n.Details.V6AddrPorts, lhh.lh.unlockedShouldAddV6)
 	am.unlockedSetRelay(fromVpnAddrs[0], relays)
+	am.unlockedSetHandshakeFilteringWhitelist(hfws)
 	am.Unlock()
+
+	if hfws != nil && lhh.l.Level >= logrus.DebugLevel {
+		lhh.l.WithField("vpnAddrs", fromVpnAddrs).
+			WithField("hosts", hfws.AllowedHosts).
+			WithField("groups", hfws.AllowedGroups).
+			WithField("groupcombos", hfws.AllowedGroupsCombos).
+			WithField("cidrs", hfws.AllowedCidrs).
+			WithField("canames", hfws.AllowedCANames).
+			WithField("cashas", hfws.AllowedCAShas).
+			WithField("setempty", hfws.SetEmpty).
+			Debug("Received host query filter")
+	}
 
 	n = lhh.resetMeta()
 	n.Type = NebulaMeta_HostUpdateNotificationAck

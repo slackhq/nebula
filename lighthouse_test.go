@@ -133,7 +133,9 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 
 	mw := &mockEncWriter{}
 
-	hi := []netip.Addr{vpnIp2}
+	hi := &HostInfo{
+		vpnAddrs: []netip.Addr{vpnIp2},
+	}
 	b.Run("notfound", func(b *testing.B) {
 		lhh := lh.NewRequestHandler()
 		req := &NebulaMeta{
@@ -326,7 +328,10 @@ func newLHHostRequest(fromAddr netip.AddrPort, myVpnIp, queryVpnIp netip.Addr, l
 	w := &testEncWriter{
 		metaFilter: &filter,
 	}
-	lhh.HandleRequest(fromAddr, []netip.Addr{myVpnIp}, b, w)
+	hi := &HostInfo{
+		vpnAddrs: []netip.Addr{myVpnIp},
+	}
+	lhh.HandleRequest(fromAddr, hi, b, w)
 	return w.lastReply
 }
 
@@ -357,7 +362,10 @@ func newLHHostUpdate(fromAddr netip.AddrPort, vpnIp netip.Addr, addrs []netip.Ad
 	}
 
 	w := &testEncWriter{}
-	lhh.HandleRequest(fromAddr, []netip.Addr{vpnIp}, b, w)
+	hi := &HostInfo{
+		vpnAddrs: []netip.Addr{vpnIp},
+	}
+	lhh.HandleRequest(fromAddr, hi, b, w)
 }
 
 type testLhReply struct {
