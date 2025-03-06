@@ -46,8 +46,8 @@ docker exec host2 tcpdump -i eth0 -q -w - -U 2>logs/host2.outside.log >logs/host
 # vagrant ssh -c "tcpdump -i nebula1 -q -w - -U" 2>logs/host3.inside.log >logs/host3.inside.pcap &
 # vagrant ssh -c "tcpdump -i eth0 -q -w - -U" 2>logs/host3.outside.log >logs/host3.outside.pcap &
 
-docker exec host2 ncat -nklv 0.0.0.0 2000 &
-vagrant ssh -c "ncat -nklv 0.0.0.0 2000" &
+#docker exec host2 ncat -nklv 0.0.0.0 2000 &
+#vagrant ssh -c "ncat -nklv 0.0.0.0 2000" &
 #docker exec host2 ncat -e '/usr/bin/echo host2' -nkluv 0.0.0.0 3000 &
 #vagrant ssh -c "ncat -e '/usr/bin/echo host3' -nkluv 0.0.0.0 3000" &
 
@@ -85,11 +85,11 @@ set -x
 vagrant ssh -c "ping -c1 192.168.100.1"
 vagrant ssh -c "ping -c1 192.168.100.2"
 
-set +x
-echo
-echo " *** Testing ncat from host3"
-echo
-set -x
+#set +x
+#echo
+#echo " *** Testing ncat from host3"
+#echo
+#set -x
 #vagrant ssh -c "ncat -nzv -w5 192.168.100.2 2000"
 #vagrant ssh -c "ncat -nzuv -w5 192.168.100.2 3000" | grep -q host2
 
