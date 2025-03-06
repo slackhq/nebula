@@ -30,19 +30,25 @@ func UnmarshalCertificateFromPEM(b []byte) (Certificate, []byte, error) {
 		return nil, r, ErrInvalidPEMBlock
 	}
 
+	var c Certificate
+	var err error
+
 	switch p.Type {
+	// Implementations must validate the resulting certificate contains valid information
 	case CertificateBanner:
-		c, err := unmarshalCertificateV1(p.Bytes, true)
-		if err != nil {
-			return nil, nil, err
-		}
-		return c, r, nil
+		c, err = unmarshalCertificateV1(p.Bytes, nil)
 	case CertificateV2Banner:
-		//TODO
-		panic("TODO")
+		c, err = unmarshalCertificateV2(p.Bytes, nil, Curve_CURVE25519)
 	default:
 		return nil, r, ErrInvalidPEMCertificateBanner
 	}
+
+	if err != nil {
+		return nil, r, err
+	}
+
+	return c, r, nil
+
 }
 
 func MarshalPublicKeyToPEM(curve Curve, b []byte) []byte {

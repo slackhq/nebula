@@ -15,8 +15,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/firewall"
-	"github.com/slackhq/nebula/header"
 )
 
 type GenericConn struct {
@@ -60,7 +58,7 @@ func (u *GenericConn) LocalAddr() (netip.AddrPort, error) {
 }
 
 func (u *GenericConn) ReloadConfig(c *config.C) {
-	// TODO
+
 }
 
 func NewUDPStatsEmitter(udpConns []Conn) func() {
@@ -72,12 +70,8 @@ type rawMessage struct {
 	Len uint32
 }
 
-func (u *GenericConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int) {
-	plaintext := make([]byte, MTU)
+func (u *GenericConn) ListenOut(r EncReader) {
 	buffer := make([]byte, MTU)
-	h := &header.H{}
-	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
 
 	for {
 		// Just read one packet at a time
@@ -87,16 +81,6 @@ func (u *GenericConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *f
 			return
 		}
 
-		r(
-			netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()),
-			plaintext[:0],
-			buffer[:n],
-			h,
-			fwPacket,
-			lhf,
-			nb,
-			q,
-			cache.Get(u.l),
-		)
+		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
 	}
 }

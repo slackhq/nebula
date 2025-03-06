@@ -6,19 +6,16 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"math/big"
 	"net"
 	"net/netip"
 	"time"
 
-	"github.com/slackhq/nebula/pkclient"
 	"golang.org/x/crypto/curve25519"
 	"google.golang.org/protobuf/proto"
 )
@@ -31,71 +28,71 @@ type certificateV1 struct {
 }
 
 type detailsV1 struct {
-	Name      string
-	Ips       []netip.Prefix
-	Subnets   []netip.Prefix
-	Groups    []string
-	NotBefore time.Time
-	NotAfter  time.Time
-	PublicKey []byte
-	IsCA      bool
-	Issuer    string
+	name           string
+	networks       []netip.Prefix
+	unsafeNetworks []netip.Prefix
+	groups         []string
+	notBefore      time.Time
+	notAfter       time.Time
+	publicKey      []byte
+	isCA           bool
+	issuer         string
 
-	Curve Curve
+	curve Curve
 }
 
 type m map[string]interface{}
 
-func (nc *certificateV1) Version() Version {
+func (c *certificateV1) Version() Version {
 	return Version1
 }
 
-func (nc *certificateV1) Curve() Curve {
-	return nc.details.Curve
+func (c *certificateV1) Curve() Curve {
+	return c.details.curve
 }
 
-func (nc *certificateV1) Groups() []string {
-	return nc.details.Groups
+func (c *certificateV1) Groups() []string {
+	return c.details.groups
 }
 
-func (nc *certificateV1) IsCA() bool {
-	return nc.details.IsCA
+func (c *certificateV1) IsCA() bool {
+	return c.details.isCA
 }
 
-func (nc *certificateV1) Issuer() string {
-	return nc.details.Issuer
+func (c *certificateV1) Issuer() string {
+	return c.details.issuer
 }
 
-func (nc *certificateV1) Name() string {
-	return nc.details.Name
+func (c *certificateV1) Name() string {
+	return c.details.name
 }
 
-func (nc *certificateV1) Networks() []netip.Prefix {
-	return nc.details.Ips
+func (c *certificateV1) Networks() []netip.Prefix {
+	return c.details.networks
 }
 
-func (nc *certificateV1) NotAfter() time.Time {
-	return nc.details.NotAfter
+func (c *certificateV1) NotAfter() time.Time {
+	return c.details.notAfter
 }
 
-func (nc *certificateV1) NotBefore() time.Time {
-	return nc.details.NotBefore
+func (c *certificateV1) NotBefore() time.Time {
+	return c.details.notBefore
 }
 
-func (nc *certificateV1) PublicKey() []byte {
-	return nc.details.PublicKey
+func (c *certificateV1) PublicKey() []byte {
+	return c.details.publicKey
 }
 
-func (nc *certificateV1) Signature() []byte {
-	return nc.signature
+func (c *certificateV1) Signature() []byte {
+	return c.signature
 }
 
-func (nc *certificateV1) UnsafeNetworks() []netip.Prefix {
-	return nc.details.Subnets
+func (c *certificateV1) UnsafeNetworks() []netip.Prefix {
+	return c.details.unsafeNetworks
 }
 
-func (nc *certificateV1) Fingerprint() (string, error) {
-	b, err := nc.Marshal()
+func (c *certificateV1) Fingerprint() (string, error) {
+	b, err := c.Marshal()
 	if err != nil {
 		return "", err
 	}
@@ -104,33 +101,33 @@ func (nc *certificateV1) Fingerprint() (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func (nc *certificateV1) CheckSignature(key []byte) bool {
-	b, err := proto.Marshal(nc.getRawDetails())
+func (c *certificateV1) CheckSignature(key []byte) bool {
+	b, err := proto.Marshal(c.getRawDetails())
 	if err != nil {
 		return false
 	}
-	switch nc.details.Curve {
+	switch c.details.curve {
 	case Curve_CURVE25519:
-		return ed25519.Verify(key, b, nc.signature)
+		return ed25519.Verify(key, b, c.signature)
 	case Curve_P256:
 		x, y := elliptic.Unmarshal(elliptic.P256(), key)
 		pubKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
 		hashed := sha256.Sum256(b)
-		return ecdsa.VerifyASN1(pubKey, hashed[:], nc.signature)
+		return ecdsa.VerifyASN1(pubKey, hashed[:], c.signature)
 	default:
 		return false
 	}
 }
 
-func (nc *certificateV1) Expired(t time.Time) bool {
-	return nc.details.NotBefore.After(t) || nc.details.NotAfter.Before(t)
+func (c *certificateV1) Expired(t time.Time) bool {
+	return c.details.notBefore.After(t) || c.details.notAfter.Before(t)
 }
 
-func (nc *certificateV1) VerifyPrivateKey(curve Curve, key []byte) error {
-	if curve != nc.details.Curve {
+func (c *certificateV1) VerifyPrivateKey(curve Curve, key []byte) error {
+	if curve != c.details.curve {
 		return fmt.Errorf("curve in cert and private key supplied don't match")
 	}
-	if nc.details.IsCA {
+	if c.details.isCA {
 		switch curve {
 		case Curve_CURVE25519:
 			// the call to PublicKey below will panic slice bounds out of range otherwise
@@ -138,7 +135,7 @@ func (nc *certificateV1) VerifyPrivateKey(curve Curve, key []byte) error {
 				return fmt.Errorf("key was not 64 bytes, is invalid ed25519 private key")
 			}
 
-			if !ed25519.PublicKey(nc.details.PublicKey).Equal(ed25519.PrivateKey(key).Public()) {
+			if !ed25519.PublicKey(c.details.publicKey).Equal(ed25519.PrivateKey(key).Public()) {
 				return fmt.Errorf("public key in cert and private key supplied don't match")
 			}
 		case Curve_P256:
@@ -147,7 +144,7 @@ func (nc *certificateV1) VerifyPrivateKey(curve Curve, key []byte) error {
 				return fmt.Errorf("cannot parse private key as P256: %w", err)
 			}
 			pub := privkey.PublicKey().Bytes()
-			if !bytes.Equal(pub, nc.details.PublicKey) {
+			if !bytes.Equal(pub, c.details.publicKey) {
 				return fmt.Errorf("public key in cert and private key supplied don't match")
 			}
 		default:
@@ -173,7 +170,7 @@ func (nc *certificateV1) VerifyPrivateKey(curve Curve, key []byte) error {
 	default:
 		return fmt.Errorf("invalid curve: %s", curve)
 	}
-	if !bytes.Equal(pub, nc.details.PublicKey) {
+	if !bytes.Equal(pub, c.details.publicKey) {
 		return fmt.Errorf("public key in cert and private key supplied don't match")
 	}
 
@@ -181,173 +178,219 @@ func (nc *certificateV1) VerifyPrivateKey(curve Curve, key []byte) error {
 }
 
 // getRawDetails marshals the raw details into protobuf ready struct
-func (nc *certificateV1) getRawDetails() *RawNebulaCertificateDetails {
+func (c *certificateV1) getRawDetails() *RawNebulaCertificateDetails {
 	rd := &RawNebulaCertificateDetails{
-		Name:      nc.details.Name,
-		Groups:    nc.details.Groups,
-		NotBefore: nc.details.NotBefore.Unix(),
-		NotAfter:  nc.details.NotAfter.Unix(),
-		PublicKey: make([]byte, len(nc.details.PublicKey)),
-		IsCA:      nc.details.IsCA,
-		Curve:     nc.details.Curve,
+		Name:      c.details.name,
+		Groups:    c.details.groups,
+		NotBefore: c.details.notBefore.Unix(),
+		NotAfter:  c.details.notAfter.Unix(),
+		PublicKey: make([]byte, len(c.details.publicKey)),
+		IsCA:      c.details.isCA,
+		Curve:     c.details.curve,
 	}
 
-	for _, ipNet := range nc.details.Ips {
+	for _, ipNet := range c.details.networks {
 		mask := net.CIDRMask(ipNet.Bits(), ipNet.Addr().BitLen())
 		rd.Ips = append(rd.Ips, addr2int(ipNet.Addr()), ip2int(mask))
 	}
 
-	for _, ipNet := range nc.details.Subnets {
+	for _, ipNet := range c.details.unsafeNetworks {
 		mask := net.CIDRMask(ipNet.Bits(), ipNet.Addr().BitLen())
 		rd.Subnets = append(rd.Subnets, addr2int(ipNet.Addr()), ip2int(mask))
 	}
 
-	copy(rd.PublicKey, nc.details.PublicKey[:])
+	copy(rd.PublicKey, c.details.publicKey[:])
 
 	// I know, this is terrible
-	rd.Issuer, _ = hex.DecodeString(nc.details.Issuer)
+	rd.Issuer, _ = hex.DecodeString(c.details.issuer)
 
 	return rd
 }
 
-func (nc *certificateV1) String() string {
-	if nc == nil {
-		return "Certificate {}\n"
+func (c *certificateV1) String() string {
+	b, err := json.MarshalIndent(c.marshalJSON(), "", "\t")
+	if err != nil {
+		return fmt.Sprintf("<error marshalling certificate: %v>", err)
 	}
-
-	s := "NebulaCertificate {\n"
-	s += "\tDetails {\n"
-	s += fmt.Sprintf("\t\tName: %v\n", nc.details.Name)
-
-	if len(nc.details.Ips) > 0 {
-		s += "\t\tIps: [\n"
-		for _, ip := range nc.details.Ips {
-			s += fmt.Sprintf("\t\t\t%v\n", ip.String())
-		}
-		s += "\t\t]\n"
-	} else {
-		s += "\t\tIps: []\n"
-	}
-
-	if len(nc.details.Subnets) > 0 {
-		s += "\t\tSubnets: [\n"
-		for _, ip := range nc.details.Subnets {
-			s += fmt.Sprintf("\t\t\t%v\n", ip.String())
-		}
-		s += "\t\t]\n"
-	} else {
-		s += "\t\tSubnets: []\n"
-	}
-
-	if len(nc.details.Groups) > 0 {
-		s += "\t\tGroups: [\n"
-		for _, g := range nc.details.Groups {
-			s += fmt.Sprintf("\t\t\t\"%v\"\n", g)
-		}
-		s += "\t\t]\n"
-	} else {
-		s += "\t\tGroups: []\n"
-	}
-
-	s += fmt.Sprintf("\t\tNot before: %v\n", nc.details.NotBefore)
-	s += fmt.Sprintf("\t\tNot After: %v\n", nc.details.NotAfter)
-	s += fmt.Sprintf("\t\tIs CA: %v\n", nc.details.IsCA)
-	s += fmt.Sprintf("\t\tIssuer: %s\n", nc.details.Issuer)
-	s += fmt.Sprintf("\t\tPublic key: %x\n", nc.details.PublicKey)
-	s += fmt.Sprintf("\t\tCurve: %s\n", nc.details.Curve)
-	s += "\t}\n"
-	fp, err := nc.Fingerprint()
-	if err == nil {
-		s += fmt.Sprintf("\tFingerprint: %s\n", fp)
-	}
-	s += fmt.Sprintf("\tSignature: %x\n", nc.Signature())
-	s += "}"
-
-	return s
+	return string(b)
 }
 
-func (nc *certificateV1) MarshalForHandshakes() ([]byte, error) {
-	pubKey := nc.details.PublicKey
-	nc.details.PublicKey = nil
-	rawCertNoKey, err := nc.Marshal()
+func (c *certificateV1) MarshalForHandshakes() ([]byte, error) {
+	pubKey := c.details.publicKey
+	c.details.publicKey = nil
+	rawCertNoKey, err := c.Marshal()
 	if err != nil {
 		return nil, err
 	}
-	nc.details.PublicKey = pubKey
+	c.details.publicKey = pubKey
 	return rawCertNoKey, nil
 }
 
-func (nc *certificateV1) Marshal() ([]byte, error) {
+func (c *certificateV1) Marshal() ([]byte, error) {
 	rc := RawNebulaCertificate{
-		Details:   nc.getRawDetails(),
-		Signature: nc.signature,
+		Details:   c.getRawDetails(),
+		Signature: c.signature,
 	}
 
 	return proto.Marshal(&rc)
 }
 
-func (nc *certificateV1) MarshalPEM() ([]byte, error) {
-	b, err := nc.Marshal()
+func (c *certificateV1) MarshalPEM() ([]byte, error) {
+	b, err := c.Marshal()
 	if err != nil {
 		return nil, err
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: CertificateBanner, Bytes: b}), nil
 }
 
-func (nc *certificateV1) MarshalJSON() ([]byte, error) {
-	fp, _ := nc.Fingerprint()
-	jc := m{
-		"details": m{
-			"name":      nc.details.Name,
-			"ips":       nc.details.Ips,
-			"subnets":   nc.details.Subnets,
-			"groups":    nc.details.Groups,
-			"notBefore": nc.details.NotBefore,
-			"notAfter":  nc.details.NotAfter,
-			"publicKey": fmt.Sprintf("%x", nc.details.PublicKey),
-			"isCa":      nc.details.IsCA,
-			"issuer":    nc.details.Issuer,
-			"curve":     nc.details.Curve.String(),
-		},
-		"fingerprint": fp,
-		"signature":   fmt.Sprintf("%x", nc.Signature()),
-	}
-	return json.Marshal(jc)
+func (c *certificateV1) MarshalJSON() ([]byte, error) {
+	return json.Marshal(c.marshalJSON())
 }
 
-func (nc *certificateV1) Copy() Certificate {
-	c := &certificateV1{
-		details: detailsV1{
-			Name:      nc.details.Name,
-			Groups:    make([]string, len(nc.details.Groups)),
-			Ips:       make([]netip.Prefix, len(nc.details.Ips)),
-			Subnets:   make([]netip.Prefix, len(nc.details.Subnets)),
-			NotBefore: nc.details.NotBefore,
-			NotAfter:  nc.details.NotAfter,
-			PublicKey: make([]byte, len(nc.details.PublicKey)),
-			IsCA:      nc.details.IsCA,
-			Issuer:    nc.details.Issuer,
+func (c *certificateV1) marshalJSON() m {
+	fp, _ := c.Fingerprint()
+	return m{
+		"version": Version1,
+		"details": m{
+			"name":           c.details.name,
+			"networks":       c.details.networks,
+			"unsafeNetworks": c.details.unsafeNetworks,
+			"groups":         c.details.groups,
+			"notBefore":      c.details.notBefore,
+			"notAfter":       c.details.notAfter,
+			"publicKey":      fmt.Sprintf("%x", c.details.publicKey),
+			"isCa":           c.details.isCA,
+			"issuer":         c.details.issuer,
+			"curve":          c.details.curve.String(),
 		},
-		signature: make([]byte, len(nc.signature)),
+		"fingerprint": fp,
+		"signature":   fmt.Sprintf("%x", c.Signature()),
+	}
+}
+
+func (c *certificateV1) Copy() Certificate {
+	nc := &certificateV1{
+		details: detailsV1{
+			name:      c.details.name,
+			notBefore: c.details.notBefore,
+			notAfter:  c.details.notAfter,
+			publicKey: make([]byte, len(c.details.publicKey)),
+			isCA:      c.details.isCA,
+			issuer:    c.details.issuer,
+			curve:     c.details.curve,
+		},
+		signature: make([]byte, len(c.signature)),
 	}
 
-	copy(c.signature, nc.signature)
-	copy(c.details.Groups, nc.details.Groups)
-	copy(c.details.PublicKey, nc.details.PublicKey)
-
-	for i, p := range nc.details.Ips {
-		c.details.Ips[i] = p
+	if c.details.groups != nil {
+		nc.details.groups = make([]string, len(c.details.groups))
+		copy(nc.details.groups, c.details.groups)
 	}
 
-	for i, p := range nc.details.Subnets {
-		c.details.Subnets[i] = p
+	if c.details.networks != nil {
+		nc.details.networks = make([]netip.Prefix, len(c.details.networks))
+		copy(nc.details.networks, c.details.networks)
 	}
 
-	return c
+	if c.details.unsafeNetworks != nil {
+		nc.details.unsafeNetworks = make([]netip.Prefix, len(c.details.unsafeNetworks))
+		copy(nc.details.unsafeNetworks, c.details.unsafeNetworks)
+	}
+
+	copy(nc.signature, c.signature)
+	copy(nc.details.publicKey, c.details.publicKey)
+
+	return nc
+}
+
+func (c *certificateV1) fromTBSCertificate(t *TBSCertificate) error {
+	c.details = detailsV1{
+		name:           t.Name,
+		networks:       t.Networks,
+		unsafeNetworks: t.UnsafeNetworks,
+		groups:         t.Groups,
+		notBefore:      t.NotBefore,
+		notAfter:       t.NotAfter,
+		publicKey:      t.PublicKey,
+		isCA:           t.IsCA,
+		curve:          t.Curve,
+		issuer:         t.issuer,
+	}
+
+	return c.validate()
+}
+
+func (c *certificateV1) validate() error {
+	// Empty names are allowed
+
+	if len(c.details.publicKey) == 0 {
+		return ErrInvalidPublicKey
+	}
+
+	// Original v1 rules allowed multiple networks to be present but ignored all but the first one.
+	// Continue to allow this behavior
+	if !c.details.isCA && len(c.details.networks) == 0 {
+		return NewErrInvalidCertificateProperties("non-CA certificates must contain exactly one network")
+	}
+
+	for _, network := range c.details.networks {
+		if !network.IsValid() || !network.Addr().IsValid() {
+			return NewErrInvalidCertificateProperties("invalid network: %s", network)
+		}
+
+		if network.Addr().Is6() {
+			return NewErrInvalidCertificateProperties("certificate may not contain IPv6 networks: %v", network)
+		}
+
+		if network.Addr().IsUnspecified() {
+			return NewErrInvalidCertificateProperties("non-CA certificates must not use the zero address as a network: %s", network)
+		}
+
+		if network.Addr().Zone() != "" {
+			return NewErrInvalidCertificateProperties("networks may not contain zones: %s", network)
+		}
+	}
+
+	for _, network := range c.details.unsafeNetworks {
+		if !network.IsValid() || !network.Addr().IsValid() {
+			return NewErrInvalidCertificateProperties("invalid unsafe network: %s", network)
+		}
+
+		if network.Addr().Is6() {
+			return NewErrInvalidCertificateProperties("certificate may not contain IPv6 unsafe networks: %v", network)
+		}
+
+		if network.Addr().Zone() != "" {
+			return NewErrInvalidCertificateProperties("unsafe networks may not contain zones: %s", network)
+		}
+	}
+
+	// v1 doesn't bother with sort order or uniqueness of networks or unsafe networks.
+	// We can't modify the unmarshalled data because verification requires re-marshalling and a re-ordered
+	// unsafe networks would result in a different signature.
+
+	return nil
+}
+
+func (c *certificateV1) marshalForSigning() ([]byte, error) {
+	b, err := proto.Marshal(c.getRawDetails())
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func (c *certificateV1) setSignature(b []byte) error {
+	if len(b) == 0 {
+		return ErrEmptySignature
+	}
+	c.signature = b
+	return nil
 }
 
 // unmarshalCertificateV1 will unmarshal a protobuf byte representation of a nebula cert
-func unmarshalCertificateV1(b []byte, assertPublicKey bool) (*certificateV1, error) {
+// if the publicKey is provided here then it is not required to be present in `b`
+func unmarshalCertificateV1(b []byte, publicKey []byte) (*certificateV1, error) {
 	if len(b) == 0 {
 		return nil, fmt.Errorf("nil byte array")
 	}
@@ -371,27 +414,28 @@ func unmarshalCertificateV1(b []byte, assertPublicKey bool) (*certificateV1, err
 
 	nc := certificateV1{
 		details: detailsV1{
-			Name:      rc.Details.Name,
-			Groups:    make([]string, len(rc.Details.Groups)),
-			Ips:       make([]netip.Prefix, len(rc.Details.Ips)/2),
-			Subnets:   make([]netip.Prefix, len(rc.Details.Subnets)/2),
-			NotBefore: time.Unix(rc.Details.NotBefore, 0),
-			NotAfter:  time.Unix(rc.Details.NotAfter, 0),
-			PublicKey: make([]byte, len(rc.Details.PublicKey)),
-			IsCA:      rc.Details.IsCA,
-			Curve:     rc.Details.Curve,
+			name:           rc.Details.Name,
+			groups:         make([]string, len(rc.Details.Groups)),
+			networks:       make([]netip.Prefix, len(rc.Details.Ips)/2),
+			unsafeNetworks: make([]netip.Prefix, len(rc.Details.Subnets)/2),
+			notBefore:      time.Unix(rc.Details.NotBefore, 0),
+			notAfter:       time.Unix(rc.Details.NotAfter, 0),
+			publicKey:      make([]byte, len(rc.Details.PublicKey)),
+			isCA:           rc.Details.IsCA,
+			curve:          rc.Details.Curve,
 		},
 		signature: make([]byte, len(rc.Signature)),
 	}
 
 	copy(nc.signature, rc.Signature)
-	copy(nc.details.Groups, rc.Details.Groups)
-	nc.details.Issuer = hex.EncodeToString(rc.Details.Issuer)
+	copy(nc.details.groups, rc.Details.Groups)
+	nc.details.issuer = hex.EncodeToString(rc.Details.Issuer)
 
-	if len(rc.Details.PublicKey) < publicKeyLen && assertPublicKey {
-		return nil, fmt.Errorf("public key was fewer than 32 bytes; %v", len(rc.Details.PublicKey))
+	if len(publicKey) > 0 {
+		nc.details.publicKey = publicKey
 	}
-	copy(nc.details.PublicKey, rc.Details.PublicKey)
+
+	copy(nc.details.publicKey, rc.Details.PublicKey)
 
 	var ip netip.Addr
 	for i, rawIp := range rc.Details.Ips {
@@ -399,7 +443,7 @@ func unmarshalCertificateV1(b []byte, assertPublicKey bool) (*certificateV1, err
 			ip = int2addr(rawIp)
 		} else {
 			ones, _ := net.IPMask(int2ip(rawIp)).Size()
-			nc.details.Ips[i/2] = netip.PrefixFrom(ip, ones)
+			nc.details.networks[i/2] = netip.PrefixFrom(ip, ones)
 		}
 	}
 
@@ -408,67 +452,16 @@ func unmarshalCertificateV1(b []byte, assertPublicKey bool) (*certificateV1, err
 			ip = int2addr(rawIp)
 		} else {
 			ones, _ := net.IPMask(int2ip(rawIp)).Size()
-			nc.details.Subnets[i/2] = netip.PrefixFrom(ip, ones)
+			nc.details.unsafeNetworks[i/2] = netip.PrefixFrom(ip, ones)
 		}
 	}
 
-	return &nc, nil
-}
-
-func signV1(t *TBSCertificate, curve Curve, key []byte, client *pkclient.PKClient) (*certificateV1, error) {
-	c := &certificateV1{
-		details: detailsV1{
-			Name:      t.Name,
-			Ips:       t.Networks,
-			Subnets:   t.UnsafeNetworks,
-			Groups:    t.Groups,
-			NotBefore: t.NotBefore,
-			NotAfter:  t.NotAfter,
-			PublicKey: t.PublicKey,
-			IsCA:      t.IsCA,
-			Curve:     t.Curve,
-			Issuer:    t.issuer,
-		},
-	}
-	b, err := proto.Marshal(c.getRawDetails())
+	err = nc.validate()
 	if err != nil {
 		return nil, err
 	}
 
-	var sig []byte
-
-	switch curve {
-	case Curve_CURVE25519:
-		signer := ed25519.PrivateKey(key)
-		sig = ed25519.Sign(signer, b)
-	case Curve_P256:
-		if client != nil {
-			sig, err = client.SignASN1(b)
-		} else {
-			signer := &ecdsa.PrivateKey{
-				PublicKey: ecdsa.PublicKey{
-					Curve: elliptic.P256(),
-				},
-				// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L95
-				D: new(big.Int).SetBytes(key),
-			}
-			// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L119
-			signer.X, signer.Y = signer.Curve.ScalarBaseMult(key)
-
-			// We need to hash first for ECDSA
-			// - https://pkg.go.dev/crypto/ecdsa#SignASN1
-			hashed := sha256.Sum256(b)
-			sig, err = ecdsa.SignASN1(rand.Reader, signer, hashed[:])
-			if err != nil {
-				return nil, err
-			}
-		}
-	default:
-		return nil, fmt.Errorf("invalid curve: %s", c.details.Curve)
-	}
-
-	c.signature = sig
-	return c, nil
+	return &nc, nil
 }
 
 func ip2int(ip []byte) uint32 {
