@@ -22,7 +22,7 @@ jobs:
 
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.22'
+        go-version: '1.23'
         check-latest: true
 
     - name: Build
@@ -55,7 +55,7 @@ jobs:
 
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.22'
+        go-version: '1.23'
         check-latest: true
 
     - name: Build
@@ -65,7 +65,7 @@ jobs:
       run: make test-boringcrypto
 
     - name: End 2 end
-      run: make e2evv GOEXPERIMENT=boringcrypto CGO_ENABLED=1
+      run: make e2e GOEXPERIMENT=boringcrypto CGO_ENABLED=1 TEST_ENV="TEST_LOGS=1" TEST_FLAGS="-v -ldflags -checklinkname=0"
 
   test-linux-pkcs11:
     name: Build and test on linux with pkcs11
@@ -97,7 +97,7 @@ jobs:
 
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.22'
+        go-version: '1.23'
         check-latest: true
 
     - name: Build nebula
