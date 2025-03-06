@@ -9,8 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-//TODO: test file permissions
-
 func Test_keygenSummary(t *testing.T) {
 	assert.Equal(t, "keygen <flags>: create a public/private key pair. the public key can be passed to `nebula-cert sign`", keygenSummary())
 }
@@ -26,7 +24,8 @@ func Test_keygenHelp(t *testing.T) {
 			"  -out-key string\n"+
 			"    \tRequired: path to write the private key to\n"+
 			"  -out-pub string\n"+
-			"    \tRequired: path to write the public key to\n",
+			"    \tRequired: path to write the public key to\n"+
+			optionalPkcs11String("  -pkcs11 string\n    \tOptional: PKCS#11 URI to an existing private key\n"),
 		ob.String(),
 	)
 }
@@ -80,13 +79,15 @@ func Test_keygen(t *testing.T) {
 
 	// read cert and key files
 	rb, _ := os.ReadFile(keyF.Name())
-	lKey, b, err := cert.UnmarshalX25519PrivateKey(rb)
+	lKey, b, curve, err := cert.UnmarshalPrivateKeyFromPEM(rb)
+	assert.Equal(t, cert.Curve_CURVE25519, curve)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
 	assert.Len(t, lKey, 32)
 
 	rb, _ = os.ReadFile(pubF.Name())
-	lPub, b, err := cert.UnmarshalX25519PublicKey(rb)
+	lPub, b, curve, err := cert.UnmarshalPublicKeyFromPEM(rb)
+	assert.Equal(t, cert.Curve_CURVE25519, curve)
 	assert.Len(t, b, 0)
 	assert.Nil(t, err)
 	assert.Len(t, lPub, 32)

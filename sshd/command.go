@@ -57,7 +57,6 @@ func execCommand(c *Command, args []string, w StringWriter) error {
 func dumpCommands(c *radix.Tree, w StringWriter) {
 	err := w.WriteLine("Available commands:")
 	if err != nil {
-		//TODO: log
 		return
 	}
 
@@ -67,10 +66,7 @@ func dumpCommands(c *radix.Tree, w StringWriter) {
 	}
 
 	sort.Strings(cmds)
-	err = w.Write(strings.Join(cmds, "\n") + "\n\n")
-	if err != nil {
-		//TODO: log
-	}
+	_ = w.Write(strings.Join(cmds, "\n") + "\n\n")
 }
 
 func lookupCommand(c *radix.Tree, sCmd string) (*Command, error) {
@@ -119,8 +115,6 @@ func helpCallback(commands *radix.Tree, a []string, w StringWriter) (err error) 
 	// We are printing a specific commands help text
 	cmd, err := lookupCommand(commands, a[0])
 	if err != nil {
-		//TODO: handle error
-		//TODO: message the user
 		return
 	}
 

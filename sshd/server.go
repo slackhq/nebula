@@ -80,9 +80,7 @@ func NewSSHServer(l *logrus.Entry) (*SSHServer, error) {
 
 	s.config = &ssh.ServerConfig{
 		PublicKeyCallback: cc.Authenticate,
-		//TODO: AuthLogCallback: s.authAttempt,
-		//TODO: version string
-		ServerVersion: fmt.Sprintf("SSH-2.0-Nebula???"),
+		ServerVersion:     fmt.Sprintf("SSH-2.0-Nebula???"),
 	}
 
 	s.RegisterCommand(&Command{

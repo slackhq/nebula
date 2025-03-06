@@ -96,7 +96,7 @@ func (x NebulaPing_MessageType) String() string {
 }
 
 func (NebulaPing_MessageType) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_2d65afa7693df5ef, []int{4, 0}
+	return fileDescriptor_2d65afa7693df5ef, []int{5, 0}
 }
 
 type NebulaControl_MessageType int32
@@ -124,7 +124,7 @@ func (x NebulaControl_MessageType) String() string {
 }
 
 func (NebulaControl_MessageType) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_2d65afa7693df5ef, []int{8, 0}
+	return fileDescriptor_2d65afa7693df5ef, []int{9, 0}
 }
 
 type NebulaMeta struct {
@@ -180,11 +180,13 @@ func (m *NebulaMeta) GetDetails() *NebulaMetaDetails {
 }
 
 type NebulaMetaDetails struct {
-	VpnIp       uint32        `protobuf:"varint,1,opt,name=VpnIp,proto3" json:"VpnIp,omitempty"`
-	Ip4AndPorts []*Ip4AndPort `protobuf:"bytes,2,rep,name=Ip4AndPorts,proto3" json:"Ip4AndPorts,omitempty"`
-	Ip6AndPorts []*Ip6AndPort `protobuf:"bytes,4,rep,name=Ip6AndPorts,proto3" json:"Ip6AndPorts,omitempty"`
-	RelayVpnIp  []uint32      `protobuf:"varint,5,rep,packed,name=RelayVpnIp,proto3" json:"RelayVpnIp,omitempty"`
-	Counter     uint32        `protobuf:"varint,3,opt,name=counter,proto3" json:"counter,omitempty"`
+	OldVpnAddr       uint32        `protobuf:"varint,1,opt,name=OldVpnAddr,proto3" json:"OldVpnAddr,omitempty"` // Deprecated: Do not use.
+	VpnAddr          *Addr         `protobuf:"bytes,6,opt,name=VpnAddr,proto3" json:"VpnAddr,omitempty"`
+	OldRelayVpnAddrs []uint32      `protobuf:"varint,5,rep,packed,name=OldRelayVpnAddrs,proto3" json:"OldRelayVpnAddrs,omitempty"` // Deprecated: Do not use.
+	RelayVpnAddrs    []*Addr       `protobuf:"bytes,7,rep,name=RelayVpnAddrs,proto3" json:"RelayVpnAddrs,omitempty"`
+	V4AddrPorts      []*V4AddrPort `protobuf:"bytes,2,rep,name=V4AddrPorts,proto3" json:"V4AddrPorts,omitempty"`
+	V6AddrPorts      []*V6AddrPort `protobuf:"bytes,4,rep,name=V6AddrPorts,proto3" json:"V6AddrPorts,omitempty"`
+	Counter          uint32        `protobuf:"varint,3,opt,name=counter,proto3" json:"counter,omitempty"`
 }
 
 func (m *NebulaMetaDetails) Reset()         { *m = NebulaMetaDetails{} }
@@ -220,30 +222,46 @@ func (m *NebulaMetaDetails) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_NebulaMetaDetails proto.InternalMessageInfo
 
-func (m *NebulaMetaDetails) GetVpnIp() uint32 {
+// Deprecated: Do not use.
+func (m *NebulaMetaDetails) GetOldVpnAddr() uint32 {
 	if m != nil {
-		return m.VpnIp
+		return m.OldVpnAddr
 	}
 	return 0
 }
 
-func (m *NebulaMetaDetails) GetIp4AndPorts() []*Ip4AndPort {
+func (m *NebulaMetaDetails) GetVpnAddr() *Addr {
 	if m != nil {
-		return m.Ip4AndPorts
+		return m.VpnAddr
 	}
 	return nil
 }
 
-func (m *NebulaMetaDetails) GetIp6AndPorts() []*Ip6AndPort {
+// Deprecated: Do not use.
+func (m *NebulaMetaDetails) GetOldRelayVpnAddrs() []uint32 {
 	if m != nil {
-		return m.Ip6AndPorts
+		return m.OldRelayVpnAddrs
 	}
 	return nil
 }
 
-func (m *NebulaMetaDetails) GetRelayVpnIp() []uint32 {
+func (m *NebulaMetaDetails) GetRelayVpnAddrs() []*Addr {
 	if m != nil {
-		return m.RelayVpnIp
+		return m.RelayVpnAddrs
+	}
+	return nil
+}
+
+func (m *NebulaMetaDetails) GetV4AddrPorts() []*V4AddrPort {
+	if m != nil {
+		return m.V4AddrPorts
+	}
+	return nil
+}
+
+func (m *NebulaMetaDetails) GetV6AddrPorts() []*V6AddrPort {
+	if m != nil {
+		return m.V6AddrPorts
 	}
 	return nil
 }
@@ -255,23 +273,23 @@ func (m *NebulaMetaDetails) GetCounter() uint32 {
 	return 0
 }
 
-type Ip4AndPort struct {
-	Ip   uint32 `protobuf:"varint,1,opt,name=Ip,proto3" json:"Ip,omitempty"`
-	Port uint32 `protobuf:"varint,2,opt,name=Port,proto3" json:"Port,omitempty"`
+type Addr struct {
+	Hi uint64 `protobuf:"varint,1,opt,name=Hi,proto3" json:"Hi,omitempty"`
+	Lo uint64 `protobuf:"varint,2,opt,name=Lo,proto3" json:"Lo,omitempty"`
 }
 
-func (m *Ip4AndPort) Reset()         { *m = Ip4AndPort{} }
-func (m *Ip4AndPort) String() string { return proto.CompactTextString(m) }
-func (*Ip4AndPort) ProtoMessage()    {}
-func (*Ip4AndPort) Descriptor() ([]byte, []int) {
+func (m *Addr) Reset()         { *m = Addr{} }
+func (m *Addr) String() string { return proto.CompactTextString(m) }
+func (*Addr) ProtoMessage()    {}
+func (*Addr) Descriptor() ([]byte, []int) {
 	return fileDescriptor_2d65afa7693df5ef, []int{2}
 }
-func (m *Ip4AndPort) XXX_Unmarshal(b []byte) error {
+func (m *Addr) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *Ip4AndPort) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *Addr) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_Ip4AndPort.Marshal(b, m, deterministic)
+		return xxx_messageInfo_Addr.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalToSizedBuffer(b)
@@ -281,86 +299,138 @@ func (m *Ip4AndPort) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return b[:n], nil
 	}
 }
-func (m *Ip4AndPort) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_Ip4AndPort.Merge(m, src)
+func (m *Addr) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Addr.Merge(m, src)
 }
-func (m *Ip4AndPort) XXX_Size() int {
+func (m *Addr) XXX_Size() int {
 	return m.Size()
 }
-func (m *Ip4AndPort) XXX_DiscardUnknown() {
-	xxx_messageInfo_Ip4AndPort.DiscardUnknown(m)
+func (m *Addr) XXX_DiscardUnknown() {
+	xxx_messageInfo_Addr.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_Ip4AndPort proto.InternalMessageInfo
+var xxx_messageInfo_Addr proto.InternalMessageInfo
 
-func (m *Ip4AndPort) GetIp() uint32 {
-	if m != nil {
-		return m.Ip
-	}
-	return 0
-}
-
-func (m *Ip4AndPort) GetPort() uint32 {
-	if m != nil {
-		return m.Port
-	}
-	return 0
-}
-
-type Ip6AndPort struct {
-	Hi   uint64 `protobuf:"varint,1,opt,name=Hi,proto3" json:"Hi,omitempty"`
-	Lo   uint64 `protobuf:"varint,2,opt,name=Lo,proto3" json:"Lo,omitempty"`
-	Port uint32 `protobuf:"varint,3,opt,name=Port,proto3" json:"Port,omitempty"`
-}
-
-func (m *Ip6AndPort) Reset()         { *m = Ip6AndPort{} }
-func (m *Ip6AndPort) String() string { return proto.CompactTextString(m) }
-func (*Ip6AndPort) ProtoMessage()    {}
-func (*Ip6AndPort) Descriptor() ([]byte, []int) {
-	return fileDescriptor_2d65afa7693df5ef, []int{3}
-}
-func (m *Ip6AndPort) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *Ip6AndPort) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_Ip6AndPort.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *Ip6AndPort) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_Ip6AndPort.Merge(m, src)
-}
-func (m *Ip6AndPort) XXX_Size() int {
-	return m.Size()
-}
-func (m *Ip6AndPort) XXX_DiscardUnknown() {
-	xxx_messageInfo_Ip6AndPort.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_Ip6AndPort proto.InternalMessageInfo
-
-func (m *Ip6AndPort) GetHi() uint64 {
+func (m *Addr) GetHi() uint64 {
 	if m != nil {
 		return m.Hi
 	}
 	return 0
 }
 
-func (m *Ip6AndPort) GetLo() uint64 {
+func (m *Addr) GetLo() uint64 {
 	if m != nil {
 		return m.Lo
 	}
 	return 0
 }
 
-func (m *Ip6AndPort) GetPort() uint32 {
+type V4AddrPort struct {
+	Addr uint32 `protobuf:"varint,1,opt,name=Addr,proto3" json:"Addr,omitempty"`
+	Port uint32 `protobuf:"varint,2,opt,name=Port,proto3" json:"Port,omitempty"`
+}
+
+func (m *V4AddrPort) Reset()         { *m = V4AddrPort{} }
+func (m *V4AddrPort) String() string { return proto.CompactTextString(m) }
+func (*V4AddrPort) ProtoMessage()    {}
+func (*V4AddrPort) Descriptor() ([]byte, []int) {
+	return fileDescriptor_2d65afa7693df5ef, []int{3}
+}
+func (m *V4AddrPort) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *V4AddrPort) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_V4AddrPort.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *V4AddrPort) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_V4AddrPort.Merge(m, src)
+}
+func (m *V4AddrPort) XXX_Size() int {
+	return m.Size()
+}
+func (m *V4AddrPort) XXX_DiscardUnknown() {
+	xxx_messageInfo_V4AddrPort.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_V4AddrPort proto.InternalMessageInfo
+
+func (m *V4AddrPort) GetAddr() uint32 {
+	if m != nil {
+		return m.Addr
+	}
+	return 0
+}
+
+func (m *V4AddrPort) GetPort() uint32 {
+	if m != nil {
+		return m.Port
+	}
+	return 0
+}
+
+type V6AddrPort struct {
+	Hi   uint64 `protobuf:"varint,1,opt,name=Hi,proto3" json:"Hi,omitempty"`
+	Lo   uint64 `protobuf:"varint,2,opt,name=Lo,proto3" json:"Lo,omitempty"`
+	Port uint32 `protobuf:"varint,3,opt,name=Port,proto3" json:"Port,omitempty"`
+}
+
+func (m *V6AddrPort) Reset()         { *m = V6AddrPort{} }
+func (m *V6AddrPort) String() string { return proto.CompactTextString(m) }
+func (*V6AddrPort) ProtoMessage()    {}
+func (*V6AddrPort) Descriptor() ([]byte, []int) {
+	return fileDescriptor_2d65afa7693df5ef, []int{4}
+}
+func (m *V6AddrPort) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *V6AddrPort) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_V6AddrPort.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *V6AddrPort) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_V6AddrPort.Merge(m, src)
+}
+func (m *V6AddrPort) XXX_Size() int {
+	return m.Size()
+}
+func (m *V6AddrPort) XXX_DiscardUnknown() {
+	xxx_messageInfo_V6AddrPort.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_V6AddrPort proto.InternalMessageInfo
+
+func (m *V6AddrPort) GetHi() uint64 {
+	if m != nil {
+		return m.Hi
+	}
+	return 0
+}
+
+func (m *V6AddrPort) GetLo() uint64 {
+	if m != nil {
+		return m.Lo
+	}
+	return 0
+}
+
+func (m *V6AddrPort) GetPort() uint32 {
 	if m != nil {
 		return m.Port
 	}
@@ -376,7 +446,7 @@ func (m *NebulaPing) Reset()         { *m = NebulaPing{} }
 func (m *NebulaPing) String() string { return proto.CompactTextString(m) }
 func (*NebulaPing) ProtoMessage()    {}
 func (*NebulaPing) Descriptor() ([]byte, []int) {
-	return fileDescriptor_2d65afa7693df5ef, []int{4}
+	return fileDescriptor_2d65afa7693df5ef, []int{5}
 }
 func (m *NebulaPing) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -428,7 +498,7 @@ func (m *NebulaHandshake) Reset()         { *m = NebulaHandshake{} }
 func (m *NebulaHandshake) String() string { return proto.CompactTextString(m) }
 func (*NebulaHandshake) ProtoMessage()    {}
 func (*NebulaHandshake) Descriptor() ([]byte, []int) {
-	return fileDescriptor_2d65afa7693df5ef, []int{5}
+	return fileDescriptor_2d65afa7693df5ef, []int{6}
 }
 func (m *NebulaHandshake) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -482,7 +552,7 @@ func (m *MultiPortDetails) Reset()         { *m = MultiPortDetails{} }
 func (m *MultiPortDetails) String() string { return proto.CompactTextString(m) }
 func (*MultiPortDetails) ProtoMessage()    {}
 func (*MultiPortDetails) Descriptor() ([]byte, []int) {
-	return fileDescriptor_2d65afa7693df5ef, []int{6}
+	return fileDescriptor_2d65afa7693df5ef, []int{7}
 }
 func (m *MultiPortDetails) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -545,6 +615,7 @@ type NebulaHandshakeDetails struct {
 	ResponderIndex     uint32            `protobuf:"varint,3,opt,name=ResponderIndex,proto3" json:"ResponderIndex,omitempty"`
 	Cookie             uint64            `protobuf:"varint,4,opt,name=Cookie,proto3" json:"Cookie,omitempty"`
 	Time               uint64            `protobuf:"varint,5,opt,name=Time,proto3" json:"Time,omitempty"`
+	CertVersion        uint32            `protobuf:"varint,8,opt,name=CertVersion,proto3" json:"CertVersion,omitempty"`
 	InitiatorMultiPort *MultiPortDetails `protobuf:"bytes,6,opt,name=InitiatorMultiPort,proto3" json:"InitiatorMultiPort,omitempty"`
 	ResponderMultiPort *MultiPortDetails `protobuf:"bytes,7,opt,name=ResponderMultiPort,proto3" json:"ResponderMultiPort,omitempty"`
 }
@@ -553,7 +624,7 @@ func (m *NebulaHandshakeDetails) Reset()         { *m = NebulaHandshakeDetails{}
 func (m *NebulaHandshakeDetails) String() string { return proto.CompactTextString(m) }
 func (*NebulaHandshakeDetails) ProtoMessage()    {}
 func (*NebulaHandshakeDetails) Descriptor() ([]byte, []int) {
-	return fileDescriptor_2d65afa7693df5ef, []int{7}
+	return fileDescriptor_2d65afa7693df5ef, []int{8}
 }
 func (m *NebulaHandshakeDetails) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -617,6 +688,13 @@ func (m *NebulaHandshakeDetails) GetTime() uint64 {
 	return 0
 }
 
+func (m *NebulaHandshakeDetails) GetCertVersion() uint32 {
+	if m != nil {
+		return m.CertVersion
+	}
+	return 0
+}
+
 func (m *NebulaHandshakeDetails) GetInitiatorMultiPort() *MultiPortDetails {
 	if m != nil {
 		return m.InitiatorMultiPort
@@ -635,15 +713,17 @@ type NebulaControl struct {
 	Type                NebulaControl_MessageType `protobuf:"varint,1,opt,name=Type,proto3,enum=nebula.NebulaControl_MessageType" json:"Type,omitempty"`
 	InitiatorRelayIndex uint32                    `protobuf:"varint,2,opt,name=InitiatorRelayIndex,proto3" json:"InitiatorRelayIndex,omitempty"`
 	ResponderRelayIndex uint32                    `protobuf:"varint,3,opt,name=ResponderRelayIndex,proto3" json:"ResponderRelayIndex,omitempty"`
-	RelayToIp           uint32                    `protobuf:"varint,4,opt,name=RelayToIp,proto3" json:"RelayToIp,omitempty"`
-	RelayFromIp         uint32                    `protobuf:"varint,5,opt,name=RelayFromIp,proto3" json:"RelayFromIp,omitempty"`
+	OldRelayToAddr      uint32                    `protobuf:"varint,4,opt,name=OldRelayToAddr,proto3" json:"OldRelayToAddr,omitempty"`     // Deprecated: Do not use.
+	OldRelayFromAddr    uint32                    `protobuf:"varint,5,opt,name=OldRelayFromAddr,proto3" json:"OldRelayFromAddr,omitempty"` // Deprecated: Do not use.
+	RelayToAddr         *Addr                     `protobuf:"bytes,6,opt,name=RelayToAddr,proto3" json:"RelayToAddr,omitempty"`
+	RelayFromAddr       *Addr                     `protobuf:"bytes,7,opt,name=RelayFromAddr,proto3" json:"RelayFromAddr,omitempty"`
 }
 
 func (m *NebulaControl) Reset()         { *m = NebulaControl{} }
 func (m *NebulaControl) String() string { return proto.CompactTextString(m) }
 func (*NebulaControl) ProtoMessage()    {}
 func (*NebulaControl) Descriptor() ([]byte, []int) {
-	return fileDescriptor_2d65afa7693df5ef, []int{8}
+	return fileDescriptor_2d65afa7693df5ef, []int{9}
 }
 func (m *NebulaControl) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -693,18 +773,34 @@ func (m *NebulaControl) GetResponderRelayIndex() uint32 {
 	return 0
 }
 
-func (m *NebulaControl) GetRelayToIp() uint32 {
+// Deprecated: Do not use.
+func (m *NebulaControl) GetOldRelayToAddr() uint32 {
 	if m != nil {
-		return m.RelayToIp
+		return m.OldRelayToAddr
 	}
 	return 0
 }
 
-func (m *NebulaControl) GetRelayFromIp() uint32 {
+// Deprecated: Do not use.
+func (m *NebulaControl) GetOldRelayFromAddr() uint32 {
 	if m != nil {
-		return m.RelayFromIp
+		return m.OldRelayFromAddr
 	}
 	return 0
+}
+
+func (m *NebulaControl) GetRelayToAddr() *Addr {
+	if m != nil {
+		return m.RelayToAddr
+	}
+	return nil
+}
+
+func (m *NebulaControl) GetRelayFromAddr() *Addr {
+	if m != nil {
+		return m.RelayFromAddr
+	}
+	return nil
 }
 
 func init() {
@@ -713,8 +809,9 @@ func init() {
 	proto.RegisterEnum("nebula.NebulaControl_MessageType", NebulaControl_MessageType_name, NebulaControl_MessageType_value)
 	proto.RegisterType((*NebulaMeta)(nil), "nebula.NebulaMeta")
 	proto.RegisterType((*NebulaMetaDetails)(nil), "nebula.NebulaMetaDetails")
-	proto.RegisterType((*Ip4AndPort)(nil), "nebula.Ip4AndPort")
-	proto.RegisterType((*Ip6AndPort)(nil), "nebula.Ip6AndPort")
+	proto.RegisterType((*Addr)(nil), "nebula.Addr")
+	proto.RegisterType((*V4AddrPort)(nil), "nebula.V4AddrPort")
+	proto.RegisterType((*V6AddrPort)(nil), "nebula.V6AddrPort")
 	proto.RegisterType((*NebulaPing)(nil), "nebula.NebulaPing")
 	proto.RegisterType((*NebulaHandshake)(nil), "nebula.NebulaHandshake")
 	proto.RegisterType((*MultiPortDetails)(nil), "nebula.MultiPortDetails")
@@ -725,56 +822,61 @@ func init() {
 func init() { proto.RegisterFile("nebula.proto", fileDescriptor_2d65afa7693df5ef) }
 
 var fileDescriptor_2d65afa7693df5ef = []byte{
-	// 784 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x84, 0x55, 0xcd, 0x8e, 0xe3, 0x44,
-	0x10, 0x8e, 0x1d, 0xe7, 0xaf, 0x32, 0xc9, 0x9a, 0x1a, 0x08, 0xc9, 0x0a, 0xac, 0xe0, 0x03, 0xca,
-	0x29, 0xbb, 0xca, 0x2c, 0x23, 0x8e, 0xec, 0x06, 0xa1, 0x44, 0xda, 0x8c, 0x42, 0x13, 0x40, 0xe2,
-	0x82, 0x7a, 0x9c, 0x66, 0x62, 0xc5, 0x71, 0x7b, 0xed, 0x36, 0x9a, 0xbc, 0x05, 0xe2, 0x59, 0x38,
-	0xf2, 0x00, 0xdc, 0xd8, 0x23, 0x47, 0x34, 0x73, 0xe4, 0xc8, 0x0b, 0xa0, 0x6e, 0xff, 0xe6, 0x07,
-	0xb8, 0x75, 0x55, 0x7d, 0x5f, 0xf5, 0xd7, 0x55, 0x5f, 0x1c, 0xb8, 0xf0, 0xd9, 0x6d, 0xec, 0xd1,
-	0x71, 0x10, 0x72, 0xc1, 0xb1, 0x9e, 0x44, 0xf6, 0x5f, 0x3a, 0xc0, 0x8d, 0x3a, 0x2e, 0x98, 0xa0,
-	0x38, 0x01, 0x63, 0xb5, 0x0f, 0x58, 0x5f, 0x1b, 0x6a, 0xa3, 0xee, 0xc4, 0x1a, 0xa7, 0x9c, 0x02,
-	0x31, 0x5e, 0xb0, 0x28, 0xa2, 0x77, 0x4c, 0xa2, 0x88, 0xc2, 0xe2, 0x15, 0x34, 0x3e, 0x67, 0x82,
-	0xba, 0x5e, 0xd4, 0xd7, 0x87, 0xda, 0xa8, 0x3d, 0x19, 0x9c, 0xd2, 0x52, 0x00, 0xc9, 0x90, 0xf6,
-	0xdf, 0x1a, 0xb4, 0x4b, 0xad, 0xb0, 0x09, 0xc6, 0x0d, 0xf7, 0x99, 0x59, 0xc1, 0x0e, 0xb4, 0x66,
-	0x3c, 0x12, 0x5f, 0xc6, 0x2c, 0xdc, 0x9b, 0x1a, 0x22, 0x74, 0xf3, 0x90, 0xb0, 0xc0, 0xdb, 0x9b,
-	0x3a, 0x3e, 0x85, 0x9e, 0xcc, 0x7d, 0x1d, 0xac, 0xa9, 0x60, 0x37, 0x5c, 0xb8, 0x3f, 0xb8, 0x0e,
-	0x15, 0x2e, 0xf7, 0xcd, 0x2a, 0x0e, 0xe0, 0x3d, 0x59, 0x5b, 0xf0, 0x1f, 0xd9, 0xfa, 0xa0, 0x64,
-	0x64, 0xa5, 0x65, 0xec, 0x3b, 0x9b, 0x83, 0x52, 0x0d, 0xbb, 0x00, 0xb2, 0xf4, 0xed, 0x86, 0xd3,
-	0x9d, 0x6b, 0xd6, 0xf1, 0x12, 0x9e, 0x14, 0x71, 0x72, 0x6d, 0x43, 0x2a, 0x5b, 0x52, 0xb1, 0x99,
-	0x6e, 0x98, 0xb3, 0x35, 0x9b, 0x52, 0x59, 0x1e, 0x26, 0x90, 0x16, 0x7e, 0x08, 0x83, 0xf3, 0xca,
-	0x5e, 0x3a, 0x5b, 0x13, 0xec, 0xdf, 0x35, 0x78, 0xe7, 0x64, 0x28, 0xf8, 0x2e, 0xd4, 0xbe, 0x09,
-	0xfc, 0x79, 0xa0, 0xa6, 0xde, 0x21, 0x49, 0x80, 0x2f, 0xa0, 0x3d, 0x0f, 0x5e, 0xbc, 0xf4, 0xd7,
-	0x4b, 0x1e, 0x0a, 0x39, 0xda, 0xea, 0xa8, 0x3d, 0xc1, 0x6c, 0xb4, 0x45, 0x89, 0x94, 0x61, 0x09,
-	0xeb, 0x3a, 0x67, 0x19, 0xc7, 0xac, 0xeb, 0x12, 0x2b, 0x87, 0xa1, 0x05, 0x40, 0x98, 0x47, 0xf7,
-	0x89, 0x8c, 0xda, 0xb0, 0x3a, 0xea, 0x90, 0x52, 0x06, 0xfb, 0xd0, 0x70, 0x78, 0xec, 0x0b, 0x16,
-	0xf6, 0xab, 0x4a, 0x63, 0x16, 0xda, 0xcf, 0x01, 0x8a, 0xeb, 0xb1, 0x0b, 0x7a, 0xfe, 0x0c, 0x7d,
-	0x1e, 0x20, 0x82, 0x21, 0xf3, 0xca, 0x17, 0x1d, 0xa2, 0xce, 0xf6, 0x67, 0x92, 0x71, 0x5d, 0x62,
-	0xcc, 0x5c, 0xc5, 0x30, 0x88, 0x3e, 0x73, 0x65, 0xfc, 0x9a, 0x2b, 0xbc, 0x41, 0xf4, 0xd7, 0x3c,
-	0xef, 0x50, 0x2d, 0x75, 0xb8, 0xcf, 0x2c, 0xbb, 0x74, 0xfd, 0xbb, 0xff, 0xb6, 0xac, 0x44, 0x9c,
-	0xb1, 0x2c, 0x82, 0xb1, 0x72, 0x77, 0x2c, 0xbd, 0x47, 0x9d, 0x6d, 0xfb, 0xc4, 0x90, 0x92, 0x6c,
-	0x56, 0xb0, 0x05, 0xb5, 0x64, 0xbd, 0x9a, 0xfd, 0x3d, 0x3c, 0x49, 0xfa, 0xce, 0xa8, 0xbf, 0x8e,
-	0x36, 0x74, 0xcb, 0xf0, 0xd3, 0xc2, 0xfd, 0x9a, 0x72, 0xff, 0x91, 0x82, 0x1c, 0x79, 0xfc, 0x13,
-	0x90, 0x22, 0x66, 0x3b, 0xea, 0x28, 0x11, 0x17, 0x44, 0x9d, 0xed, 0x9f, 0x35, 0x30, 0x17, 0xb1,
-	0x27, 0x5c, 0xf9, 0xd0, 0x0c, 0x38, 0x84, 0x36, 0xb9, 0xff, 0x2a, 0x0e, 0x02, 0x1e, 0x0a, 0xb6,
-	0x56, 0xd7, 0x34, 0x49, 0x39, 0x25, 0x11, 0xab, 0x12, 0x42, 0x4f, 0x10, 0xa5, 0x14, 0x3e, 0x85,
-	0xe6, 0x2b, 0x1a, 0xb1, 0xd2, 0x2c, 0xf3, 0x58, 0x6e, 0x7f, 0xc5, 0x05, 0xf5, 0x32, 0xcb, 0xc8,
-	0x6a, 0x29, 0x63, 0xff, 0xaa, 0x43, 0xef, 0xfc, 0x63, 0xe4, 0x1b, 0xa6, 0x2c, 0x14, 0x4a, 0xd3,
-	0x05, 0x51, 0x67, 0xfc, 0x18, 0xba, 0x73, 0xdf, 0x15, 0x2e, 0x15, 0x3c, 0x9c, 0xfb, 0x6b, 0x76,
-	0x9f, 0xae, 0xff, 0x28, 0x2b, 0x71, 0x84, 0x45, 0x01, 0xf7, 0xd7, 0x2c, 0xc5, 0x25, 0xc2, 0x8e,
-	0xb2, 0xd8, 0x83, 0xfa, 0x94, 0xf3, 0xad, 0xcb, 0x94, 0x34, 0x83, 0xa4, 0x51, 0xbe, 0xc4, 0x5a,
-	0xb1, 0x44, 0x9c, 0x01, 0xe6, 0xb7, 0xe4, 0x73, 0xec, 0xd7, 0xd5, 0x62, 0xfa, 0xd9, 0x62, 0x8e,
-	0x07, 0x4c, 0xce, 0x70, 0x64, 0xa7, 0x5c, 0x47, 0xd1, 0xa9, 0xf1, 0x7f, 0x9d, 0x4e, 0x39, 0xf6,
-	0x2f, 0x3a, 0x74, 0x92, 0xf1, 0x4d, 0xb9, 0x2f, 0x42, 0xee, 0xe1, 0x27, 0x07, 0x96, 0xfd, 0xe8,
-	0xd0, 0x30, 0x29, 0xe8, 0x8c, 0x6b, 0x9f, 0xc3, 0x65, 0x2e, 0x54, 0xfd, 0x38, 0xcb, 0xd3, 0x3d,
-	0x57, 0x92, 0x8c, 0x5c, 0x50, 0x89, 0x91, 0xcc, 0xf9, 0x5c, 0x09, 0x3f, 0x80, 0x96, 0x8a, 0x56,
-	0x7c, 0x1e, 0xa4, 0x56, 0x28, 0x12, 0xca, 0x89, 0x32, 0xf8, 0x22, 0xe4, 0x3b, 0xf5, 0xa1, 0x90,
-	0xf5, 0x72, 0xca, 0x9e, 0xfd, 0xdb, 0x67, 0xbd, 0x07, 0x38, 0x0d, 0x19, 0x15, 0x4c, 0xa1, 0x09,
-	0x7b, 0x13, 0xb3, 0x48, 0x98, 0x1a, 0xbe, 0x0f, 0x97, 0x07, 0x79, 0x29, 0x29, 0x62, 0xa6, 0xfe,
-	0xea, 0xea, 0xb7, 0x07, 0x4b, 0x7b, 0xfb, 0x60, 0x69, 0x7f, 0x3e, 0x58, 0xda, 0x4f, 0x8f, 0x56,
-	0xe5, 0xed, 0xa3, 0x55, 0xf9, 0xe3, 0xd1, 0xaa, 0x7c, 0x37, 0xb8, 0x73, 0xc5, 0x26, 0xbe, 0x1d,
-	0x3b, 0x7c, 0xf7, 0x2c, 0xf2, 0xa8, 0xb3, 0xdd, 0xbc, 0x79, 0x96, 0x8c, 0xf0, 0xb6, 0xae, 0xfe,
-	0xdd, 0xae, 0xfe, 0x09, 0x00, 0x00, 0xff, 0xff, 0xb2, 0xb5, 0xba, 0xcc, 0xed, 0x06, 0x00, 0x00,
+	// 864 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x84, 0x56, 0x4f, 0x6f, 0xe3, 0x44,
+	0x14, 0x8f, 0x1d, 0xe7, 0x4f, 0x5f, 0x9a, 0xac, 0x79, 0x15, 0x25, 0x5d, 0x89, 0x28, 0xf8, 0x50,
+	0xad, 0x38, 0x64, 0x51, 0x5b, 0x56, 0x1c, 0xd9, 0x06, 0xa1, 0xac, 0xb4, 0xed, 0x96, 0x21, 0x14,
+	0x89, 0x0b, 0x9a, 0xc6, 0x43, 0x63, 0xc5, 0xf1, 0x78, 0xed, 0x31, 0x6a, 0xbe, 0x05, 0xe2, 0xb3,
+	0xf0, 0x21, 0xe0, 0xb6, 0x47, 0x4e, 0x08, 0xb5, 0x47, 0x8e, 0x7c, 0x01, 0x34, 0xe3, 0x7f, 0xe3,
+	0xc4, 0x6c, 0x6f, 0xf3, 0xde, 0xef, 0xf7, 0x7b, 0xfe, 0xcd, 0x9b, 0x79, 0x93, 0xc0, 0x7e, 0xc0,
+	0x6e, 0x12, 0x9f, 0x4e, 0xc2, 0x88, 0x0b, 0x8e, 0xed, 0x34, 0x72, 0xfe, 0x31, 0x01, 0x2e, 0xd5,
+	0xf2, 0x82, 0x09, 0x8a, 0x27, 0x60, 0xcd, 0x37, 0x21, 0x1b, 0x1a, 0x63, 0xe3, 0xd9, 0xe0, 0x64,
+	0x34, 0xc9, 0x34, 0x25, 0x63, 0x72, 0xc1, 0xe2, 0x98, 0xde, 0x32, 0xc9, 0x22, 0x8a, 0x8b, 0xa7,
+	0xd0, 0xf9, 0x8a, 0x09, 0xea, 0xf9, 0xf1, 0xd0, 0x1c, 0x1b, 0xcf, 0x7a, 0x27, 0x47, 0xbb, 0xb2,
+	0x8c, 0x40, 0x72, 0xa6, 0xf3, 0xaf, 0x01, 0x3d, 0xad, 0x14, 0x76, 0xc1, 0xba, 0xe4, 0x01, 0xb3,
+	0x1b, 0xd8, 0x87, 0xbd, 0x19, 0x8f, 0xc5, 0x37, 0x09, 0x8b, 0x36, 0xb6, 0x81, 0x08, 0x83, 0x22,
+	0x24, 0x2c, 0xf4, 0x37, 0xb6, 0x89, 0x4f, 0xe1, 0x50, 0xe6, 0xbe, 0x0b, 0x5d, 0x2a, 0xd8, 0x25,
+	0x17, 0xde, 0x4f, 0xde, 0x82, 0x0a, 0x8f, 0x07, 0x76, 0x13, 0x8f, 0xe0, 0x43, 0x89, 0x5d, 0xf0,
+	0x9f, 0x99, 0x5b, 0x81, 0xac, 0x1c, 0xba, 0x4a, 0x82, 0xc5, 0xb2, 0x02, 0xb5, 0x70, 0x00, 0x20,
+	0xa1, 0xef, 0x97, 0x9c, 0xae, 0x3d, 0xbb, 0x8d, 0x07, 0xf0, 0xa4, 0x8c, 0xd3, 0xcf, 0x76, 0xa4,
+	0xb3, 0x2b, 0x2a, 0x96, 0xd3, 0x25, 0x5b, 0xac, 0xec, 0xae, 0x74, 0x56, 0x84, 0x29, 0x65, 0x0f,
+	0x3f, 0x86, 0xa3, 0x7a, 0x67, 0x2f, 0x17, 0x2b, 0x1b, 0x9c, 0x3f, 0x4c, 0xf8, 0x60, 0xa7, 0x29,
+	0xe8, 0x00, 0xbc, 0xf1, 0xdd, 0xeb, 0x30, 0x78, 0xe9, 0xba, 0x91, 0x6a, 0x7d, 0xff, 0xdc, 0x1c,
+	0x1a, 0x44, 0xcb, 0xe2, 0x31, 0x74, 0x72, 0x42, 0x5b, 0x35, 0x79, 0x3f, 0x6f, 0xb2, 0xcc, 0x91,
+	0x1c, 0xc4, 0x09, 0xd8, 0x6f, 0x7c, 0x97, 0x30, 0x9f, 0x6e, 0xb2, 0x54, 0x3c, 0x6c, 0x8d, 0x9b,
+	0x59, 0xc5, 0x1d, 0x0c, 0x4f, 0xa0, 0x5f, 0x25, 0x77, 0xc6, 0xcd, 0x9d, 0xea, 0x55, 0x0a, 0x9e,
+	0x41, 0xef, 0xfa, 0x4c, 0x2e, 0xaf, 0x78, 0x24, 0xe4, 0xa1, 0x4b, 0x05, 0xe6, 0x8a, 0x12, 0x22,
+	0x3a, 0x4d, 0xa9, 0x5e, 0x94, 0x2a, 0x6b, 0x4b, 0xf5, 0x42, 0x53, 0x95, 0x34, 0x1c, 0x42, 0x67,
+	0xc1, 0x93, 0x40, 0xb0, 0x68, 0xd8, 0x94, 0x8d, 0x21, 0x79, 0xe8, 0x1c, 0x83, 0xa5, 0x76, 0x3c,
+	0x00, 0x73, 0xe6, 0xa9, 0xae, 0x59, 0xc4, 0x9c, 0x79, 0x32, 0x7e, 0xcd, 0xd5, 0x4d, 0xb4, 0x88,
+	0xf9, 0x9a, 0x3b, 0x67, 0x00, 0xa5, 0x0d, 0xc4, 0x54, 0x95, 0x76, 0x99, 0xa4, 0x15, 0x10, 0x2c,
+	0x89, 0x29, 0x4d, 0x9f, 0xa8, 0xb5, 0xf3, 0x25, 0x40, 0x69, 0xe3, 0xb1, 0x6f, 0x14, 0x15, 0x9a,
+	0x5a, 0x85, 0xbb, 0x7c, 0xb0, 0xae, 0xbc, 0xe0, 0xf6, 0xfd, 0x83, 0x25, 0x19, 0x35, 0x83, 0x85,
+	0x60, 0xcd, 0xbd, 0x35, 0xcb, 0xbe, 0xa3, 0xd6, 0x8e, 0xb3, 0x33, 0x36, 0x52, 0x6c, 0x37, 0x70,
+	0x0f, 0x5a, 0xe9, 0x25, 0x34, 0x9c, 0x1f, 0xe1, 0x49, 0x5a, 0x77, 0x46, 0x03, 0x37, 0x5e, 0xd2,
+	0x15, 0xc3, 0x2f, 0xca, 0x19, 0x35, 0xd4, 0xf5, 0xd9, 0x72, 0x50, 0x30, 0xb7, 0x07, 0x55, 0x9a,
+	0x98, 0xad, 0xe9, 0x42, 0x99, 0xd8, 0x27, 0x6a, 0xed, 0xfc, 0x6a, 0x80, 0x7d, 0x91, 0xf8, 0xc2,
+	0x93, 0x1b, 0xcd, 0x89, 0x63, 0xe8, 0x91, 0xbb, 0x6f, 0x93, 0x30, 0xe4, 0x91, 0x60, 0xae, 0xfa,
+	0x4c, 0x97, 0xe8, 0x29, 0xc9, 0x98, 0x6b, 0x0c, 0x33, 0x65, 0x68, 0x29, 0x7c, 0x0a, 0xdd, 0x73,
+	0x1a, 0x33, 0xad, 0x97, 0x45, 0x8c, 0x23, 0x80, 0x39, 0x17, 0xd4, 0xcf, 0xaf, 0x8f, 0x44, 0xb5,
+	0x8c, 0xf3, 0x97, 0x09, 0x87, 0xf5, 0x9b, 0x91, 0x7b, 0x98, 0xb2, 0x48, 0x28, 0x4f, 0xfb, 0x44,
+	0xad, 0xf1, 0x18, 0x06, 0xaf, 0x02, 0x4f, 0x78, 0x54, 0xf0, 0xe8, 0x55, 0xe0, 0xb2, 0xbb, 0xec,
+	0xf8, 0xb7, 0xb2, 0x92, 0x47, 0x58, 0x1c, 0xf2, 0xc0, 0x65, 0x19, 0x2f, 0x35, 0xb6, 0x95, 0xc5,
+	0x43, 0x68, 0x4f, 0x39, 0x5f, 0x79, 0x4c, 0x59, 0xb3, 0x48, 0x16, 0x15, 0x87, 0xd8, 0x2a, 0x0f,
+	0x51, 0x36, 0x42, 0x7a, 0xb8, 0x66, 0x51, 0xec, 0xf1, 0x60, 0xd8, 0x55, 0x05, 0xf5, 0x14, 0xce,
+	0x00, 0x0b, 0x1f, 0x45, 0xa7, 0xb3, 0xc9, 0x1f, 0xe6, 0x47, 0xb7, 0x7d, 0x04, 0xa4, 0x46, 0x23,
+	0x2b, 0x15, 0x4e, 0xcb, 0x4a, 0x9d, 0xc7, 0x2a, 0xed, 0x6a, 0x9c, 0xdf, 0x9a, 0xd0, 0x4f, 0x1b,
+	0x3c, 0xe5, 0x81, 0x88, 0xb8, 0x8f, 0x9f, 0x57, 0x2e, 0xf5, 0x27, 0xd5, 0x2b, 0x95, 0x91, 0x6a,
+	0xee, 0xf5, 0x67, 0x70, 0x50, 0x18, 0x55, 0x2f, 0x8b, 0xde, 0xff, 0x3a, 0x48, 0x2a, 0x0a, 0x43,
+	0x9a, 0x22, 0x3d, 0x89, 0x3a, 0x08, 0x3f, 0x85, 0x41, 0xfe, 0xd6, 0xcd, 0xb9, 0x9a, 0x78, 0xab,
+	0x78, 0x57, 0xb7, 0x10, 0xfd, 0xcd, 0xfc, 0x3a, 0xe2, 0x6b, 0xc5, 0x6e, 0x15, 0xec, 0x1d, 0x0c,
+	0x27, 0xd0, 0xd3, 0x0b, 0xd7, 0xbd, 0xc7, 0x3a, 0xa1, 0x78, 0x63, 0x8b, 0xe2, 0x9d, 0x1a, 0x45,
+	0x95, 0xe2, 0xcc, 0xfe, 0xef, 0xe7, 0xf1, 0x10, 0x70, 0x1a, 0x31, 0x2a, 0x98, 0xe2, 0x13, 0xf6,
+	0x36, 0x61, 0xb1, 0xb0, 0x0d, 0xfc, 0x08, 0x0e, 0x2a, 0x79, 0xd9, 0x92, 0x98, 0xd9, 0xe6, 0xf9,
+	0xe9, 0xef, 0xf7, 0x23, 0xe3, 0xdd, 0xfd, 0xc8, 0xf8, 0xfb, 0x7e, 0x64, 0xfc, 0xf2, 0x30, 0x6a,
+	0xbc, 0x7b, 0x18, 0x35, 0xfe, 0x7c, 0x18, 0x35, 0x7e, 0x38, 0xba, 0xf5, 0xc4, 0x32, 0xb9, 0x99,
+	0x2c, 0xf8, 0xfa, 0x79, 0xec, 0xd3, 0xc5, 0x6a, 0xf9, 0xf6, 0x79, 0x6a, 0xe9, 0xa6, 0xad, 0xfe,
+	0x25, 0x9c, 0xfe, 0x17, 0x00, 0x00, 0xff, 0xff, 0xd6, 0x71, 0x5a, 0xf8, 0x35, 0x08, 0x00, 0x00,
 }
 
 func (m *NebulaMeta) Marshal() (dAtA []byte, err error) {
@@ -837,28 +939,54 @@ func (m *NebulaMetaDetails) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if len(m.RelayVpnIp) > 0 {
-		dAtA3 := make([]byte, len(m.RelayVpnIp)*10)
-		var j2 int
-		for _, num := range m.RelayVpnIp {
-			for num >= 1<<7 {
-				dAtA3[j2] = uint8(uint64(num)&0x7f | 0x80)
-				num >>= 7
-				j2++
+	if len(m.RelayVpnAddrs) > 0 {
+		for iNdEx := len(m.RelayVpnAddrs) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.RelayVpnAddrs[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintNebula(dAtA, i, uint64(size))
 			}
-			dAtA3[j2] = uint8(num)
-			j2++
+			i--
+			dAtA[i] = 0x3a
 		}
-		i -= j2
-		copy(dAtA[i:], dAtA3[:j2])
-		i = encodeVarintNebula(dAtA, i, uint64(j2))
+	}
+	if m.VpnAddr != nil {
+		{
+			size, err := m.VpnAddr.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintNebula(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x32
+	}
+	if len(m.OldRelayVpnAddrs) > 0 {
+		dAtA4 := make([]byte, len(m.OldRelayVpnAddrs)*10)
+		var j3 int
+		for _, num := range m.OldRelayVpnAddrs {
+			for num >= 1<<7 {
+				dAtA4[j3] = uint8(uint64(num)&0x7f | 0x80)
+				num >>= 7
+				j3++
+			}
+			dAtA4[j3] = uint8(num)
+			j3++
+		}
+		i -= j3
+		copy(dAtA[i:], dAtA4[:j3])
+		i = encodeVarintNebula(dAtA, i, uint64(j3))
 		i--
 		dAtA[i] = 0x2a
 	}
-	if len(m.Ip6AndPorts) > 0 {
-		for iNdEx := len(m.Ip6AndPorts) - 1; iNdEx >= 0; iNdEx-- {
+	if len(m.V6AddrPorts) > 0 {
+		for iNdEx := len(m.V6AddrPorts) - 1; iNdEx >= 0; iNdEx-- {
 			{
-				size, err := m.Ip6AndPorts[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				size, err := m.V6AddrPorts[iNdEx].MarshalToSizedBuffer(dAtA[:i])
 				if err != nil {
 					return 0, err
 				}
@@ -874,10 +1002,10 @@ func (m *NebulaMetaDetails) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x18
 	}
-	if len(m.Ip4AndPorts) > 0 {
-		for iNdEx := len(m.Ip4AndPorts) - 1; iNdEx >= 0; iNdEx-- {
+	if len(m.V4AddrPorts) > 0 {
+		for iNdEx := len(m.V4AddrPorts) - 1; iNdEx >= 0; iNdEx-- {
 			{
-				size, err := m.Ip4AndPorts[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				size, err := m.V4AddrPorts[iNdEx].MarshalToSizedBuffer(dAtA[:i])
 				if err != nil {
 					return 0, err
 				}
@@ -888,15 +1016,15 @@ func (m *NebulaMetaDetails) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA[i] = 0x12
 		}
 	}
-	if m.VpnIp != 0 {
-		i = encodeVarintNebula(dAtA, i, uint64(m.VpnIp))
+	if m.OldVpnAddr != 0 {
+		i = encodeVarintNebula(dAtA, i, uint64(m.OldVpnAddr))
 		i--
 		dAtA[i] = 0x8
 	}
 	return len(dAtA) - i, nil
 }
 
-func (m *Ip4AndPort) Marshal() (dAtA []byte, err error) {
+func (m *Addr) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -906,12 +1034,45 @@ func (m *Ip4AndPort) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *Ip4AndPort) MarshalTo(dAtA []byte) (int, error) {
+func (m *Addr) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *Ip4AndPort) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *Addr) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.Lo != 0 {
+		i = encodeVarintNebula(dAtA, i, uint64(m.Lo))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.Hi != 0 {
+		i = encodeVarintNebula(dAtA, i, uint64(m.Hi))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *V4AddrPort) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *V4AddrPort) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *V4AddrPort) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -921,15 +1082,15 @@ func (m *Ip4AndPort) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x10
 	}
-	if m.Ip != 0 {
-		i = encodeVarintNebula(dAtA, i, uint64(m.Ip))
+	if m.Addr != 0 {
+		i = encodeVarintNebula(dAtA, i, uint64(m.Addr))
 		i--
 		dAtA[i] = 0x8
 	}
 	return len(dAtA) - i, nil
 }
 
-func (m *Ip6AndPort) Marshal() (dAtA []byte, err error) {
+func (m *V6AddrPort) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -939,12 +1100,12 @@ func (m *Ip6AndPort) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *Ip6AndPort) MarshalTo(dAtA []byte) (int, error) {
+func (m *V6AddrPort) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *Ip6AndPort) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *V6AddrPort) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -1115,6 +1276,11 @@ func (m *NebulaHandshakeDetails) MarshalToSizedBuffer(dAtA []byte) (int, error) 
 	_ = i
 	var l int
 	_ = l
+	if m.CertVersion != 0 {
+		i = encodeVarintNebula(dAtA, i, uint64(m.CertVersion))
+		i--
+		dAtA[i] = 0x40
+	}
 	if m.ResponderMultiPort != nil {
 		{
 			size, err := m.ResponderMultiPort.MarshalToSizedBuffer(dAtA[:i])
@@ -1189,13 +1355,37 @@ func (m *NebulaControl) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if m.RelayFromIp != 0 {
-		i = encodeVarintNebula(dAtA, i, uint64(m.RelayFromIp))
+	if m.RelayFromAddr != nil {
+		{
+			size, err := m.RelayFromAddr.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintNebula(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x3a
+	}
+	if m.RelayToAddr != nil {
+		{
+			size, err := m.RelayToAddr.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintNebula(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x32
+	}
+	if m.OldRelayFromAddr != 0 {
+		i = encodeVarintNebula(dAtA, i, uint64(m.OldRelayFromAddr))
 		i--
 		dAtA[i] = 0x28
 	}
-	if m.RelayToIp != 0 {
-		i = encodeVarintNebula(dAtA, i, uint64(m.RelayToIp))
+	if m.OldRelayToAddr != 0 {
+		i = encodeVarintNebula(dAtA, i, uint64(m.OldRelayToAddr))
 		i--
 		dAtA[i] = 0x20
 	}
@@ -1250,11 +1440,11 @@ func (m *NebulaMetaDetails) Size() (n int) {
 	}
 	var l int
 	_ = l
-	if m.VpnIp != 0 {
-		n += 1 + sovNebula(uint64(m.VpnIp))
+	if m.OldVpnAddr != 0 {
+		n += 1 + sovNebula(uint64(m.OldVpnAddr))
 	}
-	if len(m.Ip4AndPorts) > 0 {
-		for _, e := range m.Ip4AndPorts {
+	if len(m.V4AddrPorts) > 0 {
+		for _, e := range m.V4AddrPorts {
 			l = e.Size()
 			n += 1 + l + sovNebula(uint64(l))
 		}
@@ -1262,30 +1452,55 @@ func (m *NebulaMetaDetails) Size() (n int) {
 	if m.Counter != 0 {
 		n += 1 + sovNebula(uint64(m.Counter))
 	}
-	if len(m.Ip6AndPorts) > 0 {
-		for _, e := range m.Ip6AndPorts {
+	if len(m.V6AddrPorts) > 0 {
+		for _, e := range m.V6AddrPorts {
 			l = e.Size()
 			n += 1 + l + sovNebula(uint64(l))
 		}
 	}
-	if len(m.RelayVpnIp) > 0 {
+	if len(m.OldRelayVpnAddrs) > 0 {
 		l = 0
-		for _, e := range m.RelayVpnIp {
+		for _, e := range m.OldRelayVpnAddrs {
 			l += sovNebula(uint64(e))
 		}
 		n += 1 + sovNebula(uint64(l)) + l
 	}
+	if m.VpnAddr != nil {
+		l = m.VpnAddr.Size()
+		n += 1 + l + sovNebula(uint64(l))
+	}
+	if len(m.RelayVpnAddrs) > 0 {
+		for _, e := range m.RelayVpnAddrs {
+			l = e.Size()
+			n += 1 + l + sovNebula(uint64(l))
+		}
+	}
 	return n
 }
 
-func (m *Ip4AndPort) Size() (n int) {
+func (m *Addr) Size() (n int) {
 	if m == nil {
 		return 0
 	}
 	var l int
 	_ = l
-	if m.Ip != 0 {
-		n += 1 + sovNebula(uint64(m.Ip))
+	if m.Hi != 0 {
+		n += 1 + sovNebula(uint64(m.Hi))
+	}
+	if m.Lo != 0 {
+		n += 1 + sovNebula(uint64(m.Lo))
+	}
+	return n
+}
+
+func (m *V4AddrPort) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Addr != 0 {
+		n += 1 + sovNebula(uint64(m.Addr))
 	}
 	if m.Port != 0 {
 		n += 1 + sovNebula(uint64(m.Port))
@@ -1293,7 +1508,7 @@ func (m *Ip4AndPort) Size() (n int) {
 	return n
 }
 
-func (m *Ip6AndPort) Size() (n int) {
+func (m *V6AddrPort) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -1394,6 +1609,9 @@ func (m *NebulaHandshakeDetails) Size() (n int) {
 		l = m.ResponderMultiPort.Size()
 		n += 1 + l + sovNebula(uint64(l))
 	}
+	if m.CertVersion != 0 {
+		n += 1 + sovNebula(uint64(m.CertVersion))
+	}
 	return n
 }
 
@@ -1412,11 +1630,19 @@ func (m *NebulaControl) Size() (n int) {
 	if m.ResponderRelayIndex != 0 {
 		n += 1 + sovNebula(uint64(m.ResponderRelayIndex))
 	}
-	if m.RelayToIp != 0 {
-		n += 1 + sovNebula(uint64(m.RelayToIp))
+	if m.OldRelayToAddr != 0 {
+		n += 1 + sovNebula(uint64(m.OldRelayToAddr))
 	}
-	if m.RelayFromIp != 0 {
-		n += 1 + sovNebula(uint64(m.RelayFromIp))
+	if m.OldRelayFromAddr != 0 {
+		n += 1 + sovNebula(uint64(m.OldRelayFromAddr))
+	}
+	if m.RelayToAddr != nil {
+		l = m.RelayToAddr.Size()
+		n += 1 + l + sovNebula(uint64(l))
+	}
+	if m.RelayFromAddr != nil {
+		l = m.RelayFromAddr.Size()
+		n += 1 + l + sovNebula(uint64(l))
 	}
 	return n
 }
@@ -1563,9 +1789,9 @@ func (m *NebulaMetaDetails) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field VpnIp", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field OldVpnAddr", wireType)
 			}
-			m.VpnIp = 0
+			m.OldVpnAddr = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowNebula
@@ -1575,14 +1801,14 @@ func (m *NebulaMetaDetails) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.VpnIp |= uint32(b&0x7F) << shift
+				m.OldVpnAddr |= uint32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
 		case 2:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Ip4AndPorts", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field V4AddrPorts", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -1609,8 +1835,8 @@ func (m *NebulaMetaDetails) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.Ip4AndPorts = append(m.Ip4AndPorts, &Ip4AndPort{})
-			if err := m.Ip4AndPorts[len(m.Ip4AndPorts)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			m.V4AddrPorts = append(m.V4AddrPorts, &V4AddrPort{})
+			if err := m.V4AddrPorts[len(m.V4AddrPorts)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -1635,7 +1861,7 @@ func (m *NebulaMetaDetails) Unmarshal(dAtA []byte) error {
 			}
 		case 4:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Ip6AndPorts", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field V6AddrPorts", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -1662,8 +1888,8 @@ func (m *NebulaMetaDetails) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.Ip6AndPorts = append(m.Ip6AndPorts, &Ip6AndPort{})
-			if err := m.Ip6AndPorts[len(m.Ip6AndPorts)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			m.V6AddrPorts = append(m.V6AddrPorts, &V6AddrPort{})
+			if err := m.V6AddrPorts[len(m.V6AddrPorts)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -1684,7 +1910,7 @@ func (m *NebulaMetaDetails) Unmarshal(dAtA []byte) error {
 						break
 					}
 				}
-				m.RelayVpnIp = append(m.RelayVpnIp, v)
+				m.OldRelayVpnAddrs = append(m.OldRelayVpnAddrs, v)
 			} else if wireType == 2 {
 				var packedLen int
 				for shift := uint(0); ; shift += 7 {
@@ -1719,8 +1945,8 @@ func (m *NebulaMetaDetails) Unmarshal(dAtA []byte) error {
 					}
 				}
 				elementCount = count
-				if elementCount != 0 && len(m.RelayVpnIp) == 0 {
-					m.RelayVpnIp = make([]uint32, 0, elementCount)
+				if elementCount != 0 && len(m.OldRelayVpnAddrs) == 0 {
+					m.OldRelayVpnAddrs = make([]uint32, 0, elementCount)
 				}
 				for iNdEx < postIndex {
 					var v uint32
@@ -1738,11 +1964,81 @@ func (m *NebulaMetaDetails) Unmarshal(dAtA []byte) error {
 							break
 						}
 					}
-					m.RelayVpnIp = append(m.RelayVpnIp, v)
+					m.OldRelayVpnAddrs = append(m.OldRelayVpnAddrs, v)
 				}
 			} else {
-				return fmt.Errorf("proto: wrong wireType = %d for field RelayVpnIp", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field OldRelayVpnAddrs", wireType)
 			}
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field VpnAddr", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthNebula
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.VpnAddr == nil {
+				m.VpnAddr = &Addr{}
+			}
+			if err := m.VpnAddr.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RelayVpnAddrs", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthNebula
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RelayVpnAddrs = append(m.RelayVpnAddrs, &Addr{})
+			if err := m.RelayVpnAddrs[len(m.RelayVpnAddrs)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipNebula(dAtA[iNdEx:])
@@ -1764,7 +2060,7 @@ func (m *NebulaMetaDetails) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *Ip4AndPort) Unmarshal(dAtA []byte) error {
+func (m *Addr) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -1787,17 +2083,17 @@ func (m *Ip4AndPort) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: Ip4AndPort: wiretype end group for non-group")
+			return fmt.Errorf("proto: Addr: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: Ip4AndPort: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: Addr: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Ip", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field Hi", wireType)
 			}
-			m.Ip = 0
+			m.Hi = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowNebula
@@ -1807,7 +2103,95 @@ func (m *Ip4AndPort) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.Ip |= uint32(b&0x7F) << shift
+				m.Hi |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Lo", wireType)
+			}
+			m.Lo = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Lo |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipNebula(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *V4AddrPort) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowNebula
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: V4AddrPort: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: V4AddrPort: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Addr", wireType)
+			}
+			m.Addr = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Addr |= uint32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -1852,7 +2236,7 @@ func (m *Ip4AndPort) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *Ip6AndPort) Unmarshal(dAtA []byte) error {
+func (m *V6AddrPort) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -1875,10 +2259,10 @@ func (m *Ip6AndPort) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: Ip6AndPort: wiretype end group for non-group")
+			return fmt.Errorf("proto: V6AddrPort: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: Ip6AndPort: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: V6AddrPort: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
@@ -2506,6 +2890,25 @@ func (m *NebulaHandshakeDetails) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CertVersion", wireType)
+			}
+			m.CertVersion = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.CertVersion |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipNebula(dAtA[iNdEx:])
@@ -2615,9 +3018,9 @@ func (m *NebulaControl) Unmarshal(dAtA []byte) error {
 			}
 		case 4:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field RelayToIp", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field OldRelayToAddr", wireType)
 			}
-			m.RelayToIp = 0
+			m.OldRelayToAddr = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowNebula
@@ -2627,16 +3030,16 @@ func (m *NebulaControl) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.RelayToIp |= uint32(b&0x7F) << shift
+				m.OldRelayToAddr |= uint32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
 		case 5:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field RelayFromIp", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field OldRelayFromAddr", wireType)
 			}
-			m.RelayFromIp = 0
+			m.OldRelayFromAddr = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowNebula
@@ -2646,11 +3049,83 @@ func (m *NebulaControl) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.RelayFromIp |= uint32(b&0x7F) << shift
+				m.OldRelayFromAddr |= uint32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RelayToAddr", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthNebula
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.RelayToAddr == nil {
+				m.RelayToAddr = &Addr{}
+			}
+			if err := m.RelayToAddr.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RelayFromAddr", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthNebula
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.RelayFromAddr == nil {
+				m.RelayFromAddr = &Addr{}
+			}
+			if err := m.RelayFromAddr.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipNebula(dAtA[iNdEx:])

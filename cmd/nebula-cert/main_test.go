@@ -3,14 +3,13 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
-
-//TODO: all flag parsing continueOnError will print to stderr on its own currently
 
 func Test_help(t *testing.T) {
 	expected := "Usage of " + os.Args[0] + " <global flags> <mode>:\n" +
@@ -77,8 +76,16 @@ func assertHelpError(t *testing.T, err error, msg string) {
 	case *helpError:
 		// good
 	default:
-		t.Fatal("err was not a helpError")
+		t.Fatal(fmt.Sprintf("err was not a helpError: %q, expected %q", err, msg))
 	}
 
 	assert.EqualError(t, err, msg)
+}
+
+func optionalPkcs11String(msg string) string {
+	if p11Supported() {
+		return msg
+	} else {
+		return ""
+	}
 }
