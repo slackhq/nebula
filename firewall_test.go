@@ -440,6 +440,11 @@ func TestFirewall_Drop3(t *testing.T) {
 	// c3 should fail because no match
 	resetConntrack(fw)
 	assert.Equal(t, fw.Drop(p, true, &h3, cp, nil), ErrNoMatchingRule)
+
+	// Test a remote address match
+	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
+	assert.Nil(t, fw.AddRule(true, firewall.ProtoAny, 1, 1, []string{}, "", netip.MustParsePrefix("1.2.3.4/24"), netip.Prefix{}, "", ""))
+	assert.NoError(t, fw.Drop(p, true, &h1, cp, nil))
 }
 
 func TestFirewall_DropConntrackReload(t *testing.T) {
