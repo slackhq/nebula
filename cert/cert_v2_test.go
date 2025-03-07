@@ -51,8 +51,8 @@ func TestCertificateV2_Marshal(t *testing.T) {
 	nc2, err := unmarshalCertificateV2(b, nil, Curve_CURVE25519)
 	assert.NoError(t, err)
 
-	assert.Equal(t, nc.Version(), Version2)
-	assert.Equal(t, nc.Curve(), Curve_CURVE25519)
+	assert.Equal(t, Version2, nc.Version())
+	assert.Equal(t, Curve_CURVE25519, nc.Curve())
 	assert.Equal(t, nc.Signature(), nc2.Signature())
 	assert.Equal(t, nc.Name(), nc2.Name())
 	assert.Equal(t, nc.NotBefore(), nc2.NotBefore())
