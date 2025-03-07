@@ -56,7 +56,7 @@ func Test_verify(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	caFile, err := os.CreateTemp("", "verify-ca")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	defer os.Remove(caFile.Name())
 
 	caFile.WriteString("-----BEGIN NOPE-----")
@@ -83,7 +83,7 @@ func Test_verify(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	certFile, err := os.CreateTemp("", "verify-cert")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	defer os.Remove(certFile.Name())
 
 	certFile.WriteString("-----BEGIN NOPE-----")
@@ -119,5 +119,5 @@ func Test_verify(t *testing.T) {
 	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 }

@@ -26,11 +26,11 @@ func TestConfig_Load(t *testing.T) {
 	os.RemoveAll(dir)
 	os.Mkdir(dir, 0755)
 
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
 	os.WriteFile(filepath.Join(dir, "02.yml"), []byte("outer:\n  inner: override\nnew: hi"), 0644)
-	assert.Nil(t, c.Load(dir))
+	assert.NoError(t, c.Load(dir))
 	expected := map[interface{}]interface{}{
 		"outer": map[interface{}]interface{}{
 			"inner": "override",
@@ -117,11 +117,11 @@ func TestConfig_ReloadConfig(t *testing.T) {
 	l := test.NewLogger()
 	done := make(chan bool, 1)
 	dir, err := os.MkdirTemp("", "config-test")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
 
 	c := NewC(l)
-	assert.Nil(t, c.Load(dir))
+	assert.NoError(t, c.Load(dir))
 
 	assert.False(t, c.HasChanged("outer.inner"))
 	assert.False(t, c.HasChanged("outer"))

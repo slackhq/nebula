@@ -35,7 +35,7 @@ bzBEr00kERQxxTzTsH8cpYEgRoipvmExvg8WP8NdAJEYJosB
 	cert, rest, err := UnmarshalCertificateFromPEM(certBundle)
 	assert.NotNil(t, cert)
 	assert.Equal(t, rest, append(badBanner, invalidPem...))
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// Fail due to invalid banner.
 	cert, rest, err = UnmarshalCertificateFromPEM(rest)
@@ -84,14 +84,14 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 	assert.Len(t, k, 64)
 	assert.Equal(t, rest, appendByteSlices(privP256Key, shortKey, invalidBanner, invalidPem))
 	assert.Equal(t, Curve_CURVE25519, curve)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// Success test case
 	k, rest, curve, err = UnmarshalSigningPrivateKeyFromPEM(rest)
 	assert.Len(t, k, 32)
 	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
 	assert.Equal(t, Curve_P256, curve)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// Fail due to short key
 	k, rest, curve, err = UnmarshalSigningPrivateKeyFromPEM(rest)
@@ -146,14 +146,14 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 	assert.Len(t, k, 32)
 	assert.Equal(t, rest, appendByteSlices(privP256Key, shortKey, invalidBanner, invalidPem))
 	assert.Equal(t, Curve_CURVE25519, curve)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// Success test case
 	k, rest, curve, err = UnmarshalPrivateKeyFromPEM(rest)
 	assert.Len(t, k, 32)
 	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
 	assert.Equal(t, Curve_P256, curve)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// Fail due to short key
 	k, rest, curve, err = UnmarshalPrivateKeyFromPEM(rest)
@@ -202,7 +202,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 	k, rest, curve, err := UnmarshalPublicKeyFromPEM(keyBundle)
 	assert.Equal(t, 32, len(k))
 	assert.Equal(t, Curve_CURVE25519, curve)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
 
 	// Fail due to short key
@@ -260,14 +260,14 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 	// Success test case
 	k, rest, curve, err := UnmarshalPublicKeyFromPEM(keyBundle)
 	assert.Equal(t, 32, len(k))
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, rest, appendByteSlices(pubP256Key, shortKey, invalidBanner, invalidPem))
 	assert.Equal(t, Curve_CURVE25519, curve)
 
 	// Success test case
 	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
 	assert.Equal(t, 65, len(k))
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
 	assert.Equal(t, Curve_P256, curve)
 

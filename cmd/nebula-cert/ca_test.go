@@ -112,8 +112,8 @@ func Test_ca(t *testing.T) {
 
 	// create temp key file
 	keyF, err := os.CreateTemp("", "test.key")
-	assert.Nil(t, err)
-	assert.Nil(t, os.Remove(keyF.Name()))
+	assert.NoError(t, err)
+	assert.NoError(t, os.Remove(keyF.Name()))
 
 	// failed cert write
 	ob.Reset()
@@ -125,15 +125,15 @@ func Test_ca(t *testing.T) {
 
 	// create temp cert file
 	crtF, err := os.CreateTemp("", "test.crt")
-	assert.Nil(t, err)
-	assert.Nil(t, os.Remove(crtF.Name()))
-	assert.Nil(t, os.Remove(keyF.Name()))
+	assert.NoError(t, err)
+	assert.NoError(t, os.Remove(crtF.Name()))
+	assert.NoError(t, os.Remove(keyF.Name()))
 
 	// test proper cert with removed empty groups and subnets
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-version", "1", "-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.Nil(t, ca(args, ob, eb, nopw))
+	assert.NoError(t, ca(args, ob, eb, nopw))
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 
@@ -142,13 +142,13 @@ func Test_ca(t *testing.T) {
 	lKey, b, c, err := cert.UnmarshalSigningPrivateKeyFromPEM(rb)
 	assert.Equal(t, cert.Curve_CURVE25519, c)
 	assert.Empty(t, b)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Len(t, lKey, 64)
 
 	rb, _ = os.ReadFile(crtF.Name())
 	lCrt, b, err := cert.UnmarshalCertificateFromPEM(rb)
 	assert.Empty(t, b)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	assert.Equal(t, "test", lCrt.Name())
 	assert.Empty(t, lCrt.Networks())
@@ -166,7 +166,7 @@ func Test_ca(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-version", "1", "-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.Nil(t, ca(args, ob, eb, testpw))
+	assert.NoError(t, ca(args, ob, eb, testpw))
 	assert.Equal(t, pwPromptOb, ob.String())
 	assert.Equal(t, "", eb.String())
 
@@ -174,7 +174,7 @@ func Test_ca(t *testing.T) {
 	rb, _ = os.ReadFile(keyF.Name())
 	k, _ := pem.Decode(rb)
 	ned, err := cert.UnmarshalNebulaEncryptedData(k.Bytes)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	// we won't know salt in advance, so just check start of string
 	assert.Equal(t, uint32(2*1024*1024), ned.EncryptionMetadata.Argon2Parameters.Memory)
 	assert.Equal(t, uint8(4), ned.EncryptionMetadata.Argon2Parameters.Parallelism)
@@ -184,7 +184,7 @@ func Test_ca(t *testing.T) {
 	var curve cert.Curve
 	curve, lKey, b, err = cert.DecryptAndUnmarshalSigningPrivateKey(passphrase, rb)
 	assert.Equal(t, cert.Curve_CURVE25519, curve)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Empty(t, b)
 	assert.Len(t, lKey, 64)
 
@@ -214,7 +214,7 @@ func Test_ca(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-version", "1", "-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.Nil(t, ca(args, ob, eb, nopw))
+	assert.NoError(t, ca(args, ob, eb, nopw))
 
 	// test that we won't overwrite existing certificate file
 	ob.Reset()

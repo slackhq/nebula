@@ -37,14 +37,14 @@ func TestCertificateV1_Sign(t *testing.T) {
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	c, err := tbs.Sign(&certificateV1{details: detailsV1{notBefore: before, notAfter: after}}, Curve_CURVE25519, priv)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.NotNil(t, c)
 	assert.True(t, c.CheckSignature(pub))
 
 	b, err := c.Marshal()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	uc, err := unmarshalCertificateV1(b, nil)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.NotNil(t, uc)
 }
 
@@ -78,13 +78,13 @@ func TestCertificateV1_SignP256(t *testing.T) {
 	rawPriv := priv.D.FillBytes(make([]byte, 32))
 
 	c, err := tbs.Sign(&certificateV1{details: detailsV1{notBefore: before, notAfter: after}}, Curve_P256, rawPriv)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.NotNil(t, c)
 	assert.True(t, c.CheckSignature(pub))
 
 	b, err := c.Marshal()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	uc, err := unmarshalCertificateV1(b, nil)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.NotNil(t, uc)
 }
