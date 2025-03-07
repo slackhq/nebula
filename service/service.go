@@ -91,9 +91,9 @@ func New(config *config.C, logger *logrus.Logger) (*Service, error) {
 		},
 	})
 
-	ipNet := device.Cidr()
+	ipNet := device.Networks()
 	pa := tcpip.ProtocolAddress{
-		AddressWithPrefix: tcpip.AddrFromSlice(ipNet.Addr().AsSlice()).WithPrefix(),
+		AddressWithPrefix: tcpip.AddrFromSlice(ipNet[0].Addr().AsSlice()).WithPrefix(),
 		Protocol:          ipv4.ProtocolNumber,
 	}
 	if err := s.ipstack.AddProtocolAddress(nicID, pa, stack.AddressProperties{

@@ -11,13 +11,13 @@ import (
 	"gvisor.dev/gvisor/pkg/buffer"
 )
 
-func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr netip.Prefix, routines int) (Device, error) {
-	d, err := NewUserDevice(tunCidr)
+func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
+	d, err := NewUserDevice(vpnNetworks)
 	if err != nil {
 		return nil, err
 	}
 
-	_, routes, err := getAllRoutesFromConfig(c, tunCidr, true)
+	_, routes, err := getAllRoutesFromConfig(c, vpnNetworks, true)
 	if err != nil {
 		return nil, err
 	}
@@ -40,17 +40,17 @@ func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr netip.Prefix
 	return d, nil
 }
 
-func NewUserDevice(tunCidr netip.Prefix) (*UserDevice, error) {
+func NewUserDevice(vpnNetworks []netip.Prefix) (*UserDevice, error) {
 	// these pipes guarantee each write/read will match 1:1
 	return &UserDevice{
-		tunCidr:         tunCidr,
+		vpnNetworks:     vpnNetworks,
 		outboundChannel: make(chan *buffer.View, 16),
 		inboundChannel:  make(chan *buffer.View, 16),
 	}, nil
 }
 
 type UserDevice struct {
-	tunCidr netip.Prefix
+	vpnNetworks []netip.Prefix
 
 	// using channel of *buffer.View significantly improves performance
 	outboundChannel chan *buffer.View
@@ -62,8 +62,8 @@ type UserDevice struct {
 func (d *UserDevice) Activate() error {
 	return nil
 }
-func (d *UserDevice) Cidr() netip.Prefix { return d.tunCidr }
-func (d *UserDevice) Name() string       { return "faketun0" }
+func (d *UserDevice) Networks() []netip.Prefix { return d.vpnNetworks }
+func (d *UserDevice) Name() string             { return "faketun0" }
 func (d *UserDevice) RouteFor(ip netip.Addr) netip.Addr {
 	ptr := d.routeTree.Load()
 	if ptr != nil {

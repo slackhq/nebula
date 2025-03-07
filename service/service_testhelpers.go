@@ -11,8 +11,8 @@ import (
 	"dario.cat/mergo"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/e2e"
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v2"
 )
@@ -30,10 +30,7 @@ func (o LogOutputWithPrefix) Write(p []byte) (n int, err error) {
 }
 
 func newSimpleService(caCrt cert.Certificate, caKey []byte, name string, udpIp netip.Addr, overrides m) (*Service, *logrus.Logger) {
-	_, _, myPrivKey, myPEM := e2e.NewTestCert(caCrt, caKey, name,
-		time.Now().Add(-3*time.Minute),
-		time.Now().Add(30*time.Minute),
-		[]netip.Prefix{netip.PrefixFrom(udpIp, 24)}, nil, []string{})
+	_, _, myPrivKey, myPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, caCrt, caKey, "a", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{netip.PrefixFrom(udpIp, 24)}, nil, []string{})
 	caB, err := caCrt.MarshalPEM()
 	if err != nil {
 		panic(err)
@@ -101,10 +98,7 @@ func newSimpleService(caCrt cert.Certificate, caKey []byte, name string, udpIp n
 
 func CreateTwoConnectedServices(t *testing.T, port int) (*Service, *logrus.Logger, *Service, *logrus.Logger) {
 	port += 100 * (rand.Int() % 10)
-	ca, _, caKey, _ := e2e.NewTestCaCert(
-		time.Now().Add(-9*time.Minute), // ensure that there is no issue due to rounding
-		time.Now().Add(40*time.Minute), // ensure that the certificate is valid for at least the time ot the test execution
-		nil, nil, []string{})
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
 	a, al := newSimpleService(ca, caKey, fmt.Sprintf("a_port_%d_test_name_%s", port, t.Name()), netip.MustParseAddr("10.0.0.1"), m{
 		"static_host_map": m{},
 		"lighthouse": m{

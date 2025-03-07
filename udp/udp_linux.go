@@ -16,12 +16,8 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/firewall"
-	"github.com/slackhq/nebula/header"
 	"golang.org/x/sys/unix"
 )
-
-//TODO: make it support reload as best you can!
 
 type StdConn struct {
 	sysFd  int
@@ -63,7 +59,6 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 		}
 	}
 
-	//TODO: support multiple listening IPs (for limiting ipv6)
 	var sa unix.Sockaddr
 	if ip.Is4() {
 		sa4 := &unix.SockaddrInet4{Port: port}
@@ -77,11 +72,6 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 	if err = unix.Bind(fd, sa); err != nil {
 		return nil, fmt.Errorf("unable to bind to socket: %s", err)
 	}
-
-	//TODO: this may be useful for forcing threads into specific cores
-	//unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU, x)
-	//v, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU)
-	//l.Println(v, err)
 
 	return &StdConn{
 		sysFd:  fd,
@@ -131,7 +121,7 @@ func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	}
 }
 
-func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int) {
+func (u *StdConn) ListenOut(r EncReader) {
 
 	u.wg.Add(1)
 	defer func() {
@@ -140,15 +130,8 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 	if u.closed.Load() {
 		return
 	}
-
-	plaintext := make([]byte, MTU)
-	h := &header.H{}
-	fwPacket := &firewall.Packet{}
 	var ip netip.Addr
-	nb := make([]byte, 12, 12)
 
-	//TODO: should we track this?
-	//metric := metrics.GetOrRegisterHistogram("test.batch_read", nil, metrics.NewExpDecaySample(1028, 0.015))
 	msgs, buffers, names := u.PrepareRawMessages(u.batch)
 	read := u.ReadMulti
 	if u.batch == 1 {
@@ -167,26 +150,14 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 			return
 		}
 
-		//metric.Update(int64(n))
 		for i := 0; i < n; i++ {
+			// Its ok to skip the ok check here, the slicing is the only error that can occur and it will panic
 			if u.isV4 {
 				ip, _ = netip.AddrFromSlice(names[i][4:8])
-				//TODO: IPV6-WORK what is not ok?
 			} else {
 				ip, _ = netip.AddrFromSlice(names[i][8:24])
-				//TODO: IPV6-WORK what is not ok?
 			}
-			r(
-				netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])),
-				plaintext[:0],
-				buffers[i][:msgs[i].Len],
-				h,
-				fwPacket,
-				lhf,
-				nb,
-				q,
-				cache.Get(u.l),
-			)
+			r(netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])), buffers[i][:msgs[i].Len])
 		}
 	}
 }
@@ -260,8 +231,6 @@ func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
 			return &net.OpError{Op: "sendto", Err: err}
 		}
 
-		//TODO: handle incomplete writes
-
 		return nil
 	}
 }
@@ -290,8 +259,6 @@ func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
 		if err != 0 {
 			return &net.OpError{Op: "sendto", Err: err}
 		}
-
-		//TODO: handle incomplete writes
 
 		return nil
 	}

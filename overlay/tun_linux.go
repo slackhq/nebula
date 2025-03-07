@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/gaissmai/bart"
@@ -25,7 +26,7 @@ type tun struct {
 	io.ReadWriteCloser
 	fd          int
 	Device      string
-	cidr        netip.Prefix
+	vpnNetworks []netip.Prefix
 	MaxMTU      int
 	DefaultMTU  int
 	TXQueueLen  int
@@ -40,16 +41,14 @@ type tun struct {
 	l *logrus.Logger
 }
 
+func (t *tun) Networks() []netip.Prefix {
+	return t.vpnNetworks
+}
+
 type ifReq struct {
 	Name  [16]byte
 	Flags uint16
 	pad   [8]byte
-}
-
-type ifreqAddr struct {
-	Name [16]byte
-	Addr unix.RawSockaddrInet4
-	pad  [8]byte
 }
 
 type ifreqMTU struct {
@@ -64,10 +63,10 @@ type ifreqQLEN struct {
 	pad   [8]byte
 }
 
-func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, cidr netip.Prefix) (*tun, error) {
+func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
-	t, err := newTunGeneric(c, l, file, cidr)
+	t, err := newTunGeneric(c, l, file, vpnNetworks)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +76,7 @@ func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, cidr netip.Prefix
 	return t, nil
 }
 
-func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, multiqueue bool) (*tun, error) {
+func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueue bool) (*tun, error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		// If /dev/net/tun doesn't exist, try to create it (will happen in docker)
@@ -112,7 +111,7 @@ func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, multiqueue bool) (
 	name := strings.Trim(string(req.Name[:]), "\x00")
 
 	file := os.NewFile(uintptr(fd), "/dev/net/tun")
-	t, err := newTunGeneric(c, l, file, cidr)
+	t, err := newTunGeneric(c, l, file, vpnNetworks)
 	if err != nil {
 		return nil, err
 	}
@@ -122,11 +121,11 @@ func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, multiqueue bool) (
 	return t, nil
 }
 
-func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, cidr netip.Prefix) (*tun, error) {
+func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []netip.Prefix) (*tun, error) {
 	t := &tun{
 		ReadWriteCloser: file,
 		fd:              int(file.Fd()),
-		cidr:            cidr,
+		vpnNetworks:     vpnNetworks,
 		TXQueueLen:      c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes: c.GetBool("tun.use_system_route_table", false),
 		l:               l,
@@ -148,7 +147,7 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, cidr netip.Pref
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
-	routeChange, routes, err := getAllRoutesFromConfig(c, t.cidr, initial)
+	routeChange, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
 	}
@@ -190,11 +189,13 @@ func (t *tun) reload(c *config.C, initial bool) error {
 		}
 
 		if oldDefaultMTU != newDefaultMTU {
-			err := t.setDefaultRoute()
-			if err != nil {
-				t.l.Warn(err)
-			} else {
-				t.l.Infof("Set default MTU to %v was %v", t.DefaultMTU, oldDefaultMTU)
+			for i := range t.vpnNetworks {
+				err := t.setDefaultRoute(t.vpnNetworks[i])
+				if err != nil {
+					t.l.Warn(err)
+				} else {
+					t.l.Infof("Set default MTU to %v was %v", t.DefaultMTU, oldDefaultMTU)
+				}
 			}
 		}
 
@@ -237,10 +238,10 @@ func (t *tun) RouteFor(ip netip.Addr) netip.Addr {
 
 func (t *tun) Write(b []byte) (int, error) {
 	var nn int
-	max := len(b)
+	maximum := len(b)
 
 	for {
-		n, err := unix.Write(t.fd, b[nn:max])
+		n, err := unix.Write(t.fd, b[nn:maximum])
 		if n > 0 {
 			nn += n
 		}
@@ -265,6 +266,58 @@ func (t *tun) deviceBytes() (o [16]byte) {
 	return
 }
 
+func hasNetlinkAddr(al []*netlink.Addr, x netlink.Addr) bool {
+	for i := range al {
+		if al[i].Equal(x) {
+			return true
+		}
+	}
+	return false
+}
+
+// addIPs uses netlink to add all addresses that don't exist, then it removes ones that should not be there
+func (t *tun) addIPs(link netlink.Link) error {
+	newAddrs := make([]*netlink.Addr, len(t.vpnNetworks))
+	for i := range t.vpnNetworks {
+		newAddrs[i] = &netlink.Addr{
+			IPNet: &net.IPNet{
+				IP:   t.vpnNetworks[i].Addr().AsSlice(),
+				Mask: net.CIDRMask(t.vpnNetworks[i].Bits(), t.vpnNetworks[i].Addr().BitLen()),
+			},
+			Label: t.vpnNetworks[i].Addr().Zone(),
+		}
+	}
+
+	//add all new addresses
+	for i := range newAddrs {
+		//TODO: CERT-V2 do we want to stack errors and try as many ops as possible?
+		//AddrReplace still adds new IPs, but if their properties change it will change them as well
+		if err := netlink.AddrReplace(link, newAddrs[i]); err != nil {
+			return err
+		}
+	}
+
+	//iterate over remainder, remove whoever shouldn't be there
+	al, err := netlink.AddrList(link, netlink.FAMILY_ALL)
+	if err != nil {
+		return fmt.Errorf("failed to get tun address list: %s", err)
+	}
+
+	for i := range al {
+		if hasNetlinkAddr(newAddrs, al[i]) {
+			continue
+		}
+		err = netlink.AddrDel(link, &al[i])
+		if err != nil {
+			t.l.WithError(err).Error("failed to remove address from tun address list")
+		} else {
+			t.l.WithField("removed", al[i].String()).Info("removed address not listed in cert(s)")
+		}
+	}
+
+	return nil
+}
+
 func (t *tun) Activate() error {
 	devName := t.deviceBytes()
 
@@ -272,15 +325,8 @@ func (t *tun) Activate() error {
 		t.watchRoutes()
 	}
 
-	var addr, mask [4]byte
-
-	//TODO: IPV6-WORK
-	addr = t.cidr.Addr().As4()
-	tmask := net.CIDRMask(t.cidr.Bits(), 32)
-	copy(mask[:], tmask)
-
 	s, err := unix.Socket(
-		unix.AF_INET,
+		unix.AF_INET, //because everything we use t.ioctlFd for is address family independent, this is fine
 		unix.SOCK_DGRAM,
 		unix.IPPROTO_IP,
 	)
@@ -289,30 +335,18 @@ func (t *tun) Activate() error {
 	}
 	t.ioctlFd = uintptr(s)
 
-	ifra := ifreqAddr{
-		Name: devName,
-		Addr: unix.RawSockaddrInet4{
-			Family: unix.AF_INET,
-			Addr:   addr,
-		},
-	}
-
-	// Set the device ip address
-	if err = ioctl(t.ioctlFd, unix.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra))); err != nil {
-		return fmt.Errorf("failed to set tun address: %s", err)
-	}
-
-	// Set the device network
-	ifra.Addr.Addr = mask
-	if err = ioctl(t.ioctlFd, unix.SIOCSIFNETMASK, uintptr(unsafe.Pointer(&ifra))); err != nil {
-		return fmt.Errorf("failed to set tun netmask: %s", err)
-	}
-
 	// Set the device name
 	ifrf := ifReq{Name: devName}
 	if err = ioctl(t.ioctlFd, unix.SIOCGIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
 		return fmt.Errorf("failed to set tun device name: %s", err)
 	}
+
+	link, err := netlink.LinkByName(t.Device)
+	if err != nil {
+		return fmt.Errorf("failed to get tun device link: %s", err)
+	}
+
+	t.deviceIndex = link.Attrs().Index
 
 	// Setup our default MTU
 	t.setMTU()
@@ -324,20 +358,21 @@ func (t *tun) Activate() error {
 		t.l.WithError(err).Error("Failed to set tun tx queue length")
 	}
 
+	if err = t.addIPs(link); err != nil {
+		return err
+	}
+
 	// Bring up the interface
 	ifrf.Flags = ifrf.Flags | unix.IFF_UP
 	if err = ioctl(t.ioctlFd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
 		return fmt.Errorf("failed to bring the tun device up: %s", err)
 	}
 
-	link, err := netlink.LinkByName(t.Device)
-	if err != nil {
-		return fmt.Errorf("failed to get tun device link: %s", err)
-	}
-	t.deviceIndex = link.Attrs().Index
-
-	if err = t.setDefaultRoute(); err != nil {
-		return err
+	//set route MTU
+	for i := range t.vpnNetworks {
+		if err = t.setDefaultRoute(t.vpnNetworks[i]); err != nil {
+			return fmt.Errorf("failed to set default route MTU: %w", err)
+		}
 	}
 
 	// Set the routes
@@ -363,12 +398,10 @@ func (t *tun) setMTU() {
 	}
 }
 
-func (t *tun) setDefaultRoute() error {
-	// Default route
-
+func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 	dr := &net.IPNet{
-		IP:   t.cidr.Masked().Addr().AsSlice(),
-		Mask: net.CIDRMask(t.cidr.Bits(), t.cidr.Addr().BitLen()),
+		IP:   cidr.Masked().Addr().AsSlice(),
+		Mask: net.CIDRMask(cidr.Bits(), cidr.Addr().BitLen()),
 	}
 
 	nr := netlink.Route{
@@ -377,14 +410,27 @@ func (t *tun) setDefaultRoute() error {
 		MTU:       t.DefaultMTU,
 		AdvMSS:    t.advMSS(Route{}),
 		Scope:     unix.RT_SCOPE_LINK,
-		Src:       net.IP(t.cidr.Addr().AsSlice()),
+		Src:       net.IP(cidr.Addr().AsSlice()),
 		Protocol:  unix.RTPROT_KERNEL,
 		Table:     unix.RT_TABLE_MAIN,
 		Type:      unix.RTN_UNICAST,
 	}
 	err := netlink.RouteReplace(&nr)
 	if err != nil {
-		return fmt.Errorf("failed to set mtu %v on the default route %v; %v", t.DefaultMTU, dr, err)
+		t.l.WithError(err).WithField("cidr", cidr).Warn("Failed to set default route MTU, retrying")
+		//retry twice more -- on some systems there appears to be a race condition where if we set routes too soon, netlink says `invalid argument`
+		for i := 0; i < 2; i++ {
+			time.Sleep(100 * time.Millisecond)
+			err = netlink.RouteReplace(&nr)
+			if err == nil {
+				break
+			} else {
+				t.l.WithError(err).WithField("cidr", cidr).WithField("mtu", t.DefaultMTU).Warn("Failed to set default route MTU, retrying")
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("failed to set mtu %v on the default route %v; %v", t.DefaultMTU, dr, err)
+		}
 	}
 
 	return nil
@@ -463,10 +509,6 @@ func (t *tun) removeRoutes(routes []Route) {
 	}
 }
 
-func (t *tun) Cidr() netip.Prefix {
-	return t.cidr
-}
-
 func (t *tun) Name() string {
 	return t.Device
 }
@@ -515,7 +557,6 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 		return
 	}
 
-	//TODO: IPV6-WORK what if not ok?
 	gwAddr, ok := netip.AddrFromSlice(r.Gw)
 	if !ok {
 		t.l.WithField("route", r).Debug("Ignoring route update, invalid gateway address")
@@ -523,15 +564,16 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 	}
 
 	gwAddr = gwAddr.Unmap()
-	if !t.cidr.Contains(gwAddr) {
-		// Gateway isn't in our overlay network, ignore
-		t.l.WithField("route", r).Debug("Ignoring route update, not in our network")
-		return
+	withinNetworks := false
+	for i := range t.vpnNetworks {
+		if t.vpnNetworks[i].Contains(gwAddr) {
+			withinNetworks = true
+			break
+		}
 	}
-
-	if x := r.Dst.IP.To4(); x == nil {
-		// Nebula only handles ipv4 on the overlay currently
-		t.l.WithField("route", r).Debug("Ignoring route update, destination is not ipv4")
+	if !withinNetworks {
+		// Gateway isn't in our overlay network, ignore
+		t.l.WithField("route", r).Debug("Ignoring route update, not in our networks")
 		return
 	}
 
@@ -563,11 +605,11 @@ func (t *tun) Close() error {
 	}
 
 	if t.ReadWriteCloser != nil {
-		t.ReadWriteCloser.Close()
+		_ = t.ReadWriteCloser.Close()
 	}
 
 	if t.ioctlFd > 0 {
-		os.NewFile(t.ioctlFd, "ioctlFd").Close()
+		_ = os.NewFile(t.ioctlFd, "ioctlFd").Close()
 	}
 
 	return nil

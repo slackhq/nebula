@@ -4,28 +4,19 @@ import (
 	"net/netip"
 
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/firewall"
-	"github.com/slackhq/nebula/header"
 )
 
 const MTU = 9001
 
 type EncReader func(
 	addr netip.AddrPort,
-	out []byte,
-	packet []byte,
-	header *header.H,
-	fwPacket *firewall.Packet,
-	lhh LightHouseHandlerFunc,
-	nb []byte,
-	q int,
-	localCache firewall.ConntrackCache,
+	payload []byte,
 )
 
 type Conn interface {
 	Rebind() error
 	LocalAddr() (netip.AddrPort, error)
-	ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int)
+	ListenOut(r EncReader)
 	WriteTo(b []byte, addr netip.AddrPort) error
 	ReloadConfig(c *config.C)
 	Close() error
@@ -39,7 +30,7 @@ func (NoopConn) Rebind() error {
 func (NoopConn) LocalAddr() (netip.AddrPort, error) {
 	return netip.AddrPort{}, nil
 }
-func (NoopConn) ListenOut(_ EncReader, _ LightHouseHandlerFunc, _ *firewall.ConntrackCacheTicker, _ int) {
+func (NoopConn) ListenOut(_ EncReader) {
 	return
 }
 func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {

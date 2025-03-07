@@ -1,6 +1,9 @@
-package e2e
+package cert_test
 
 import (
+	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"io"
 	"net/netip"
@@ -11,9 +14,26 @@ import (
 	"golang.org/x/crypto/ed25519"
 )
 
-// NewTestCaCert will generate a CA cert
-func NewTestCaCert(before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string) (cert.Certificate, []byte, []byte, []byte) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+// NewTestCaCert will create a new ca certificate
+func NewTestCaCert(version cert.Version, curve cert.Curve, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string) (cert.Certificate, []byte, []byte, []byte) {
+	var err error
+	var pub, priv []byte
+
+	switch curve {
+	case cert.Curve_CURVE25519:
+		pub, priv, err = ed25519.GenerateKey(rand.Reader)
+	case cert.Curve_P256:
+		privk, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			panic(err)
+		}
+
+		pub = elliptic.Marshal(elliptic.P256(), privk.PublicKey.X, privk.PublicKey.Y)
+		priv = privk.D.FillBytes(make([]byte, 32))
+	default:
+		// There is no default to allow the underlying lib to respond with an error
+	}
+
 	if before.IsZero() {
 		before = time.Now().Add(time.Second * -60).Round(time.Second)
 	}
@@ -22,7 +42,8 @@ func NewTestCaCert(before, after time.Time, networks, unsafeNetworks []netip.Pre
 	}
 
 	t := &cert.TBSCertificate{
-		Version:        cert.Version1,
+		Curve:          curve,
+		Version:        version,
 		Name:           "test ca",
 		NotBefore:      time.Unix(before.Unix(), 0),
 		NotAfter:       time.Unix(after.Unix(), 0),
@@ -33,7 +54,7 @@ func NewTestCaCert(before, after time.Time, networks, unsafeNetworks []netip.Pre
 		IsCA:           true,
 	}
 
-	c, err := t.Sign(nil, cert.Curve_CURVE25519, priv)
+	c, err := t.Sign(nil, curve, priv)
 	if err != nil {
 		panic(err)
 	}
@@ -48,7 +69,7 @@ func NewTestCaCert(before, after time.Time, networks, unsafeNetworks []netip.Pre
 
 // NewTestCert will generate a signed certificate with the provided details.
 // Expiry times are defaulted if you do not pass them in
-func NewTestCert(ca cert.Certificate, key []byte, name string, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string) (cert.Certificate, []byte, []byte, []byte) {
+func NewTestCert(v cert.Version, curve cert.Curve, ca cert.Certificate, key []byte, name string, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string) (cert.Certificate, []byte, []byte, []byte) {
 	if before.IsZero() {
 		before = time.Now().Add(time.Second * -60).Round(time.Second)
 	}
@@ -57,9 +78,19 @@ func NewTestCert(ca cert.Certificate, key []byte, name string, before, after tim
 		after = time.Now().Add(time.Second * 60).Round(time.Second)
 	}
 
-	pub, rawPriv := x25519Keypair()
+	var pub, priv []byte
+	switch curve {
+	case cert.Curve_CURVE25519:
+		pub, priv = X25519Keypair()
+	case cert.Curve_P256:
+		pub, priv = P256Keypair()
+	default:
+		panic("unknown curve")
+	}
+
 	nc := &cert.TBSCertificate{
-		Version:        cert.Version1,
+		Version:        v,
+		Curve:          curve,
 		Name:           name,
 		Networks:       networks,
 		UnsafeNetworks: unsafeNetworks,
@@ -80,10 +111,10 @@ func NewTestCert(ca cert.Certificate, key []byte, name string, before, after tim
 		panic(err)
 	}
 
-	return c, pub, cert.MarshalPrivateKeyToPEM(cert.Curve_CURVE25519, rawPriv), pem
+	return c, pub, cert.MarshalPrivateKeyToPEM(curve, priv), pem
 }
 
-func x25519Keypair() ([]byte, []byte) {
+func X25519Keypair() ([]byte, []byte) {
 	privkey := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, privkey); err != nil {
 		panic(err)
@@ -95,4 +126,13 @@ func x25519Keypair() ([]byte, []byte) {
 	}
 
 	return pubkey, privkey
+}
+
+func P256Keypair() ([]byte, []byte) {
+	privkey, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	pubkey := privkey.PublicKey()
+	return pubkey.Bytes(), privkey.Bytes()
 }
