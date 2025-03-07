@@ -39,14 +39,14 @@ func TestCertificateV1_Marshal(t *testing.T) {
 	}
 
 	b, err := nc.Marshal()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	//t.Log("Cert size:", len(b))
 
 	nc2, err := unmarshalCertificateV1(b, nil)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
-	assert.Equal(t, nc.Version(), Version1)
-	assert.Equal(t, nc.Curve(), Curve_CURVE25519)
+	assert.Equal(t, Version1, nc.Version())
+	assert.Equal(t, Curve_CURVE25519, nc.Curve())
 	assert.Equal(t, nc.Signature(), nc2.Signature())
 	assert.Equal(t, nc.Name(), nc2.Name())
 	assert.Equal(t, nc.NotBefore(), nc2.NotBefore())
@@ -99,8 +99,8 @@ func TestCertificateV1_MarshalJSON(t *testing.T) {
 	}
 
 	b, err := nc.MarshalJSON()
-	assert.Nil(t, err)
-	assert.Equal(
+	assert.NoError(t, err)
+	assert.JSONEq(
 		t,
 		"{\"details\":{\"curve\":\"CURVE25519\",\"groups\":[\"test-group1\",\"test-group2\",\"test-group3\"],\"isCa\":false,\"issuer\":\"1234567890abcedfghij1234567890ab\",\"name\":\"testing\",\"networks\":[\"10.1.1.1/24\",\"10.1.1.2/16\"],\"notAfter\":\"0000-11-30T02:00:00Z\",\"notBefore\":\"0000-11-30T01:00:00Z\",\"publicKey\":\"313233343536373839306162636564666768696a313233343536373839306162\",\"unsafeNetworks\":[\"9.1.1.2/24\",\"9.1.1.3/16\"]},\"fingerprint\":\"3944c53d4267a229295b56cb2d27d459164c010ac97d655063ba421e0670f4ba\",\"signature\":\"313233343536373839306162636564666768696a313233343536373839306162\",\"version\":1}",
 		string(b),
@@ -110,12 +110,12 @@ func TestCertificateV1_MarshalJSON(t *testing.T) {
 func TestCertificateV1_VerifyPrivateKey(t *testing.T) {
 	ca, _, caKey, _ := NewTestCaCert(Version1, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
 	err := ca.VerifyPrivateKey(Curve_CURVE25519, caKey)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	_, _, caKey2, _ := NewTestCaCert(Version1, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	err = ca.VerifyPrivateKey(Curve_CURVE25519, caKey2)
-	assert.NotNil(t, err)
+	assert.Error(t, err)
 
 	c, _, priv, _ := NewTestCert(Version1, Curve_CURVE25519, ca, caKey, "test", time.Time{}, time.Time{}, nil, nil, nil)
 	rawPriv, b, curve, err := UnmarshalPrivateKeyFromPEM(priv)
@@ -123,22 +123,22 @@ func TestCertificateV1_VerifyPrivateKey(t *testing.T) {
 	assert.Empty(t, b)
 	assert.Equal(t, Curve_CURVE25519, curve)
 	err = c.VerifyPrivateKey(Curve_CURVE25519, rawPriv)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	_, priv2 := X25519Keypair()
 	err = c.VerifyPrivateKey(Curve_CURVE25519, priv2)
-	assert.NotNil(t, err)
+	assert.Error(t, err)
 }
 
 func TestCertificateV1_VerifyPrivateKeyP256(t *testing.T) {
 	ca, _, caKey, _ := NewTestCaCert(Version1, Curve_P256, time.Time{}, time.Time{}, nil, nil, nil)
 	err := ca.VerifyPrivateKey(Curve_P256, caKey)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	_, _, caKey2, _ := NewTestCaCert(Version1, Curve_P256, time.Time{}, time.Time{}, nil, nil, nil)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	err = ca.VerifyPrivateKey(Curve_P256, caKey2)
-	assert.NotNil(t, err)
+	assert.Error(t, err)
 
 	c, _, priv, _ := NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Time{}, time.Time{}, nil, nil, nil)
 	rawPriv, b, curve, err := UnmarshalPrivateKeyFromPEM(priv)
@@ -146,11 +146,11 @@ func TestCertificateV1_VerifyPrivateKeyP256(t *testing.T) {
 	assert.Empty(t, b)
 	assert.Equal(t, Curve_P256, curve)
 	err = c.VerifyPrivateKey(Curve_P256, rawPriv)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	_, priv2 := P256Keypair()
 	err = c.VerifyPrivateKey(Curve_P256, priv2)
-	assert.NotNil(t, err)
+	assert.Error(t, err)
 }
 
 // Ensure that upgrading the protobuf library does not change how certificates
@@ -182,11 +182,11 @@ func TestMarshalingCertificateV1Consistency(t *testing.T) {
 	}
 
 	b, err := nc.Marshal()
-	require.Nil(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "0a8e010a0774657374696e671212828284508080fcff0f8182845080feffff0f1a12838284488080fcff0f8282844880feffff0f220b746573742d67726f757031220b746573742d67726f757032220b746573742d67726f75703328cd1c30cdb8ccf0af073a20313233343536373839306162636564666768696a3132333435363738393061624a081234567890abcedf1220313233343536373839306162636564666768696a313233343536373839306162", fmt.Sprintf("%x", b))
 
 	b, err = proto.Marshal(nc.getRawDetails())
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, "0a0774657374696e671212828284508080fcff0f8182845080feffff0f1a12838284488080fcff0f8282844880feffff0f220b746573742d67726f757031220b746573742d67726f757032220b746573742d67726f75703328cd1c30cdb8ccf0af073a20313233343536373839306162636564666768696a3132333435363738393061624a081234567890abcedf", fmt.Sprintf("%x", b))
 }
 

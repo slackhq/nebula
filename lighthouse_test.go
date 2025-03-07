@@ -42,7 +42,7 @@ func Test_lhStaticMapping(t *testing.T) {
 	c.Settings["lighthouse"] = map[interface{}]interface{}{"hosts": []interface{}{lh1}}
 	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"1.1.1.1:4242"}}
 	_, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	lh2 := "10.128.0.3"
 	c = config.NewC(l)

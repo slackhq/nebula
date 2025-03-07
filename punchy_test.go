@@ -15,31 +15,31 @@ func TestNewPunchyFromConfig(t *testing.T) {
 
 	// Test defaults
 	p := NewPunchyFromConfig(l, c)
-	assert.Equal(t, false, p.GetPunch())
-	assert.Equal(t, false, p.GetRespond())
+	assert.False(t, p.GetPunch())
+	assert.False(t, p.GetRespond())
 	assert.Equal(t, time.Second, p.GetDelay())
 	assert.Equal(t, 5*time.Second, p.GetRespondDelay())
 
 	// punchy deprecation
 	c.Settings["punchy"] = true
 	p = NewPunchyFromConfig(l, c)
-	assert.Equal(t, true, p.GetPunch())
+	assert.True(t, p.GetPunch())
 
 	// punchy.punch
 	c.Settings["punchy"] = map[interface{}]interface{}{"punch": true}
 	p = NewPunchyFromConfig(l, c)
-	assert.Equal(t, true, p.GetPunch())
+	assert.True(t, p.GetPunch())
 
 	// punch_back deprecation
 	c.Settings["punch_back"] = true
 	p = NewPunchyFromConfig(l, c)
-	assert.Equal(t, true, p.GetRespond())
+	assert.True(t, p.GetRespond())
 
 	// punchy.respond
 	c.Settings["punchy"] = map[interface{}]interface{}{"respond": true}
 	c.Settings["punch_back"] = false
 	p = NewPunchyFromConfig(l, c)
-	assert.Equal(t, true, p.GetRespond())
+	assert.True(t, p.GetRespond())
 
 	// punchy.delay
 	c.Settings["punchy"] = map[interface{}]interface{}{"delay": "1m"}
@@ -63,7 +63,7 @@ punchy:
 `))
 	p := NewPunchyFromConfig(l, c)
 	assert.Equal(t, delay, p.GetDelay())
-	assert.Equal(t, false, p.GetRespond())
+	assert.False(t, p.GetRespond())
 
 	newDelay, _ := time.ParseDuration("10m")
 	assert.NoError(t, c.ReloadConfigString(`
@@ -73,5 +73,5 @@ punchy:
 `))
 	p.reload(c, false)
 	assert.Equal(t, newDelay, p.GetDelay())
-	assert.Equal(t, true, p.GetRespond())
+	assert.True(t, p.GetRespond())
 }

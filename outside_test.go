@@ -63,7 +63,7 @@ func Test_newPacket(t *testing.T) {
 	b = append(b, []byte{0, 3, 0, 4}...)
 	err = newPacket(b, true, p)
 
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("10.0.0.2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("10.0.0.1"), p.RemoteAddr)
@@ -85,7 +85,7 @@ func Test_newPacket(t *testing.T) {
 	b = append(b, []byte{0, 5, 0, 6}...)
 	err = newPacket(b, false, p)
 
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, uint8(2), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("10.0.0.1"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("10.0.0.2"), p.RemoteAddr)
@@ -134,7 +134,7 @@ func Test_newPacket_v6(t *testing.T) {
 	}
 
 	err = newPacket(buffer.Bytes(), true, p)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, uint8(layers.IPProtocolICMPv6), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
@@ -146,7 +146,7 @@ func Test_newPacket_v6(t *testing.T) {
 	b := buffer.Bytes()
 	b[6] = byte(layers.IPProtocolESP)
 	err = newPacket(b, true, p)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, uint8(layers.IPProtocolESP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
@@ -158,7 +158,7 @@ func Test_newPacket_v6(t *testing.T) {
 	b = buffer.Bytes()
 	b[6] = byte(layers.IPProtocolNoNextHeader)
 	err = newPacket(b, true, p)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, uint8(layers.IPProtocolNoNextHeader), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
@@ -197,7 +197,7 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// incoming
 	err = newPacket(b, true, p)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
@@ -207,7 +207,7 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// outgoing
 	err = newPacket(b, false, p)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.RemoteAddr)
@@ -224,7 +224,7 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// incoming
 	err = newPacket(b, true, p)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
@@ -234,7 +234,7 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// outgoing
 	err = newPacket(b, false, p)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.RemoteAddr)
@@ -279,7 +279,7 @@ func Test_newPacket_v6(t *testing.T) {
 	b = append(b, udpHeader...)
 
 	err = newPacket(b, true, p)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)

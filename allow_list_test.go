@@ -98,7 +98,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 }
 
 func TestAllowList_Allow(t *testing.T) {
-	assert.Equal(t, true, ((*AllowList)(nil)).Allow(netip.MustParseAddr("1.1.1.1")))
+	assert.True(t, ((*AllowList)(nil)).Allow(netip.MustParseAddr("1.1.1.1")))
 
 	tree := new(bart.Table[bool])
 	tree.Insert(netip.MustParsePrefix("0.0.0.0/0"), true)
@@ -111,17 +111,17 @@ func TestAllowList_Allow(t *testing.T) {
 	tree.Insert(netip.MustParsePrefix("::2/128"), false)
 	al := &AllowList{cidrTree: tree}
 
-	assert.Equal(t, true, al.Allow(netip.MustParseAddr("1.1.1.1")))
-	assert.Equal(t, false, al.Allow(netip.MustParseAddr("10.0.0.4")))
-	assert.Equal(t, true, al.Allow(netip.MustParseAddr("10.42.42.42")))
-	assert.Equal(t, false, al.Allow(netip.MustParseAddr("10.42.42.41")))
-	assert.Equal(t, true, al.Allow(netip.MustParseAddr("10.42.0.1")))
-	assert.Equal(t, true, al.Allow(netip.MustParseAddr("::1")))
-	assert.Equal(t, false, al.Allow(netip.MustParseAddr("::2")))
+	assert.True(t, al.Allow(netip.MustParseAddr("1.1.1.1")))
+	assert.False(t, al.Allow(netip.MustParseAddr("10.0.0.4")))
+	assert.True(t, al.Allow(netip.MustParseAddr("10.42.42.42")))
+	assert.False(t, al.Allow(netip.MustParseAddr("10.42.42.41")))
+	assert.True(t, al.Allow(netip.MustParseAddr("10.42.0.1")))
+	assert.True(t, al.Allow(netip.MustParseAddr("::1")))
+	assert.False(t, al.Allow(netip.MustParseAddr("::2")))
 }
 
 func TestLocalAllowList_AllowName(t *testing.T) {
-	assert.Equal(t, true, ((*LocalAllowList)(nil)).AllowName("docker0"))
+	assert.True(t, ((*LocalAllowList)(nil)).AllowName("docker0"))
 
 	rules := []AllowListNameRule{
 		{Name: regexp.MustCompile("^docker.*$"), Allow: false},
@@ -129,9 +129,9 @@ func TestLocalAllowList_AllowName(t *testing.T) {
 	}
 	al := &LocalAllowList{nameRules: rules}
 
-	assert.Equal(t, false, al.AllowName("docker0"))
-	assert.Equal(t, false, al.AllowName("tun0"))
-	assert.Equal(t, true, al.AllowName("eth0"))
+	assert.False(t, al.AllowName("docker0"))
+	assert.False(t, al.AllowName("tun0"))
+	assert.True(t, al.AllowName("eth0"))
 
 	rules = []AllowListNameRule{
 		{Name: regexp.MustCompile("^eth.*$"), Allow: true},
@@ -139,7 +139,7 @@ func TestLocalAllowList_AllowName(t *testing.T) {
 	}
 	al = &LocalAllowList{nameRules: rules}
 
-	assert.Equal(t, false, al.AllowName("docker0"))
-	assert.Equal(t, true, al.AllowName("eth0"))
-	assert.Equal(t, true, al.AllowName("ens5"))
+	assert.False(t, al.AllowName("docker0"))
+	assert.True(t, al.AllowName("eth0"))
+	assert.True(t, al.AllowName("ens5"))
 }

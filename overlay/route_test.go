@@ -18,8 +18,8 @@ func Test_parseRoutes(t *testing.T) {
 
 	// test no routes config
 	routes, err := parseRoutes(c, []netip.Prefix{n})
-	assert.Nil(t, err)
-	assert.Len(t, routes, 0)
+	assert.NoError(t, err)
+	assert.Empty(t, routes)
 
 	// not an array
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": "hi"}
@@ -30,8 +30,8 @@ func Test_parseRoutes(t *testing.T) {
 	// no routes
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{}}
 	routes, err = parseRoutes(c, []netip.Prefix{n})
-	assert.Nil(t, err)
-	assert.Len(t, routes, 0)
+	assert.NoError(t, err)
+	assert.Empty(t, routes)
 
 	// weird route
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{"asdf"}}
@@ -93,7 +93,7 @@ func Test_parseRoutes(t *testing.T) {
 		map[interface{}]interface{}{"mtu": "8000", "route": "10.0.0.1/32"},
 	}}
 	routes, err = parseRoutes(c, []netip.Prefix{n})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Len(t, routes, 2)
 
 	tested := 0
@@ -123,8 +123,8 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 
 	// test no routes config
 	routes, err := parseUnsafeRoutes(c, []netip.Prefix{n})
-	assert.Nil(t, err)
-	assert.Len(t, routes, 0)
+	assert.NoError(t, err)
+	assert.Empty(t, routes)
 
 	// not an array
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": "hi"}
@@ -135,8 +135,8 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	// no routes
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
-	assert.Nil(t, err)
-	assert.Len(t, routes, 0)
+	assert.NoError(t, err)
+	assert.Empty(t, routes)
 
 	// weird route
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{"asdf"}}
@@ -188,13 +188,13 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "route": "1.0.0.0/8"}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Len(t, routes, 1)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// above network range
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "route": "10.0.1.0/24"}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Len(t, routes, 1)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// no mtu
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "route": "1.0.0.0/8"}}}
@@ -228,7 +228,7 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 		map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "1500", "metric": 1234, "route": "1.0.0.2/32"},
 	}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Len(t, routes, 4)
 
 	tested := 0
