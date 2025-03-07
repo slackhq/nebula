@@ -132,13 +132,28 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		return
 	}
 
-	remoteCert, err := cert.RecombineAndValidate(cert.Version(hs.Details.CertVersion), hs.Details.Cert, ci.H.PeerStatic(), ci.Curve(), f.pki.GetCAPool())
+	rc, err := cert.Recombine(cert.Version(hs.Details.CertVersion), hs.Details.Cert, ci.H.PeerStatic(), ci.Curve())
 	if err != nil {
-		e := f.l.WithError(err).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"})
+		f.l.WithError(err).WithField("udpAddr", addr).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+			Info("Handshake did not contain a certificate")
+		return
+	}
 
-		if f.l.Level > logrus.DebugLevel {
-			e = e.WithField("cert", remoteCert)
+	remoteCert, err := f.pki.GetCAPool().VerifyCertificate(time.Now(), rc)
+	if err != nil {
+		fp, err := rc.Fingerprint()
+		if err != nil {
+			fp = "<error generating certificate fingerprint>"
+		}
+
+		e := f.l.WithError(err).WithField("udpAddr", addr).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+			WithField("certVpnNetworks", rc.Networks()).
+			WithField("certFingerprint", fp)
+
+		if f.l.Level >= logrus.DebugLevel {
+			e = e.WithField("cert", rc)
 		}
 
 		e.Info("Invalid certificate from host")
@@ -160,14 +175,10 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 	}
 
 	if len(remoteCert.Certificate.Networks()) == 0 {
-		e := f.l.WithError(err).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"})
-
-		if f.l.Level > logrus.DebugLevel {
-			e = e.WithField("cert", remoteCert)
-		}
-
-		e.Info("Invalid vpn ip from host")
+		f.l.WithError(err).WithField("udpAddr", addr).
+			WithField("cert", remoteCert).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+			Info("No networks in certificate")
 		return
 	}
 
@@ -487,30 +498,42 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		return true
 	}
 
-	remoteCert, err := cert.RecombineAndValidate(cert.Version(hs.Details.CertVersion), hs.Details.Cert, ci.H.PeerStatic(), ci.Curve(), f.pki.GetCAPool())
+	rc, err := cert.Recombine(cert.Version(hs.Details.CertVersion), hs.Details.Cert, ci.H.PeerStatic(), ci.Curve())
 	if err != nil {
-		e := f.l.WithError(err).WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"})
+		f.l.WithError(err).WithField("udpAddr", addr).
+			WithField("vpnAddrs", hostinfo.vpnAddrs).
+			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+			Info("Handshake did not contain a certificate")
+		return true
+	}
 
-		if f.l.Level > logrus.DebugLevel {
-			e = e.WithField("cert", remoteCert)
+	remoteCert, err := f.pki.GetCAPool().VerifyCertificate(time.Now(), rc)
+	if err != nil {
+		fp, err := rc.Fingerprint()
+		if err != nil {
+			fp = "<error generating certificate fingerprint>"
 		}
 
-		e.Error("Invalid certificate from host")
+		e := f.l.WithError(err).WithField("udpAddr", addr).
+			WithField("vpnAddrs", hostinfo.vpnAddrs).
+			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+			WithField("certFingerprint", fp).
+			WithField("certVpnNetworks", rc.Networks())
 
-		// The handshake state machine is complete, if things break now there is no chance to recover. Tear down and start again
+		if f.l.Level >= logrus.DebugLevel {
+			e = e.WithField("cert", rc)
+		}
+
+		e.Info("Invalid certificate from host")
 		return true
 	}
 
 	if len(remoteCert.Certificate.Networks()) == 0 {
-		e := f.l.WithError(err).WithField("udpAddr", addr).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"})
-
-		if f.l.Level > logrus.DebugLevel {
-			e = e.WithField("cert", remoteCert)
-		}
-
-		e.Info("Empty networks from host")
+		f.l.WithError(err).WithField("udpAddr", addr).
+			WithField("vpnAddrs", hostinfo.vpnAddrs).
+			WithField("cert", remoteCert).
+			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+			Info("No networks in certificate")
 		return true
 	}
 

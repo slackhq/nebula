@@ -113,10 +113,10 @@ func (cc *CachedCertificate) String() string {
 	return cc.Certificate.String()
 }
 
-// RecombineAndValidate will attempt to unmarshal a certificate received in a handshake.
+// Recombine will attempt to unmarshal a certificate received in a handshake.
 // Handshakes save space by placing the peers public key in a different part of the packet, we have to
 // reassemble the actual certificate structure with that in mind.
-func RecombineAndValidate(v Version, rawCertBytes, publicKey []byte, curve Curve, caPool *CAPool) (*CachedCertificate, error) {
+func Recombine(v Version, rawCertBytes, publicKey []byte, curve Curve) (Certificate, error) {
 	if publicKey == nil {
 		return nil, ErrNoPeerStaticKey
 	}
@@ -125,29 +125,15 @@ func RecombineAndValidate(v Version, rawCertBytes, publicKey []byte, curve Curve
 		return nil, ErrNoPayload
 	}
 
-	c, err := unmarshalCertificateFromHandshake(v, rawCertBytes, publicKey, curve)
-	if err != nil {
-		return nil, fmt.Errorf("error unmarshaling cert: %w", err)
-	}
-
-	cc, err := caPool.VerifyCertificate(time.Now(), c)
-	if err != nil {
-		return nil, fmt.Errorf("certificate validation failed: %w", err)
-	}
-
-	return cc, nil
-}
-
-func unmarshalCertificateFromHandshake(v Version, b []byte, publicKey []byte, curve Curve) (Certificate, error) {
 	var c Certificate
 	var err error
 
 	switch v {
 	// Implementations must ensure the result is a valid cert!
 	case VersionPre1, Version1:
-		c, err = unmarshalCertificateV1(b, publicKey)
+		c, err = unmarshalCertificateV1(rawCertBytes, publicKey)
 	case Version2:
-		c, err = unmarshalCertificateV2(b, publicKey, curve)
+		c, err = unmarshalCertificateV2(rawCertBytes, publicKey, curve)
 	default:
 		//TODO: CERT-V2 make a static var
 		return nil, fmt.Errorf("unknown certificate version %d", v)
