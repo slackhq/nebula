@@ -112,7 +112,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 
 func TestListHostMapHostsIter(t *testing.T) {
 	l := logrus.New()
-	hm := newHostMap(l, netip.Prefix{})
+	hm := newHostMap(l)
 	hm.preferredRanges.Store(&[]netip.Prefix{})
 
 	hosts := []struct {
@@ -134,7 +134,7 @@ func TestListHostMapHostsIter(t *testing.T) {
 			},
 			localIndexId:  h.localIndexId,
 			remoteIndexId: h.remoteIndexId,
-			vpnIp:         h.vpnIp,
+			vpnAddrs:      []netip.Addr{h.vpnIp},
 		}, &Interface{})
 	}
 
@@ -147,7 +147,7 @@ func TestListHostMapHostsIter(t *testing.T) {
 
 	assert.Equal(t, len(hosts), len(results), "expected number of hosts in iterator")
 	for i, h := range hosts {
-		assert.Equal(t, h.vpnIp, results[i].VpnIp)
+		assert.Equal(t, h.vpnIp, results[i].VpnAddrs[0])
 		assert.Equal(t, h.localIndexId, results[i].LocalIndex)
 		assert.Equal(t, h.remoteIndexId, results[i].RemoteIndex)
 		assert.Equal(t, h.remoteAddr, results[i].CurrentRemote)
@@ -156,7 +156,7 @@ func TestListHostMapHostsIter(t *testing.T) {
 
 func TestListHostMapIndexesIter(t *testing.T) {
 	l := logrus.New()
-	hm := newHostMap(l, netip.Prefix{})
+	hm := newHostMap(l)
 	hm.preferredRanges.Store(&[]netip.Prefix{})
 
 	hosts := []struct {
@@ -178,7 +178,7 @@ func TestListHostMapIndexesIter(t *testing.T) {
 			},
 			localIndexId:  h.localIndexId,
 			remoteIndexId: h.remoteIndexId,
-			vpnIp:         h.vpnIp,
+			vpnAddrs:      []netip.Addr{h.vpnIp},
 		}, &Interface{})
 	}
 
@@ -191,7 +191,7 @@ func TestListHostMapIndexesIter(t *testing.T) {
 
 	assert.Equal(t, len(hosts), len(results), "expected number of hosts in iterator")
 	for i, h := range hosts {
-		assert.Equal(t, h.vpnIp, results[i].VpnIp)
+		assert.Equal(t, h.vpnIp, results[i].VpnAddrs[0])
 		assert.Equal(t, h.localIndexId, results[i].LocalIndex)
 		assert.Equal(t, h.remoteIndexId, results[i].RemoteIndex)
 		assert.Equal(t, h.remoteAddr, results[i].CurrentRemote)
