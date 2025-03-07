@@ -72,9 +72,10 @@ type LightHouse struct {
 
 	calculatedRemotes atomic.Pointer[bart.Table[[]*calculatedRemote]] // Maps VpnAddr to []*calculatedRemote
 
-	metrics           *MessageMetrics
-	metricHolepunchTx metrics.Counter
-	l                 *logrus.Logger
+	metrics              *MessageMetrics
+	metricHolepunchTx    metrics.Counter
+	l                    *logrus.Logger
+	queryProtectionTable lightHouseQueryProtectionTable
 }
 
 // NewLightHouseFromConfig will build a Lighthouse struct from the values provided in the config object
@@ -95,17 +96,21 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 		nebulaPort = uint32(uPort.Port())
 	}
 
+	queryProtection := newQueryProtectionTableFromConfig(c)
+	l.Infof("Loaded rules %v", queryProtection)
+
 	h := LightHouse{
-		ctx:                ctx,
-		amLighthouse:       amLighthouse,
-		myVpnNetworks:      cs.myVpnNetworks,
-		myVpnNetworksTable: cs.myVpnNetworksTable,
-		addrMap:            make(map[netip.Addr]*RemoteList),
-		nebulaPort:         nebulaPort,
-		punchConn:          pc,
-		punchy:             p,
-		queryChan:          make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 64)),
-		l:                  l,
+		ctx:                  ctx,
+		amLighthouse:         amLighthouse,
+		myVpnNetworks:        cs.myVpnNetworks,
+		myVpnNetworksTable:   cs.myVpnNetworksTable,
+		addrMap:              make(map[netip.Addr]*RemoteList),
+		nebulaPort:           nebulaPort,
+		punchConn:            pc,
+		punchy:               p,
+		queryChan:            make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 64)),
+		l:                    l,
+		queryProtectionTable: queryProtection,
 	}
 	lighthouses := make(map[netip.Addr]struct{})
 	h.lighthouses.Store(&lighthouses)
@@ -1010,7 +1015,10 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	return lhh.meta
 }
 
-func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, fromVpnAddrs []netip.Addr, p []byte, w EncWriter) {
+func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, hostInfo *HostInfo, p []byte, w EncWriter) {
+
+	fromVpnAddrs := hostInfo.vpnAddrs
+
 	n := lhh.resetMeta()
 	err := n.Unmarshal(p)
 	if err != nil {
@@ -1029,7 +1037,7 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, fromVpnAddrs [
 
 	switch n.Type {
 	case NebulaMeta_HostQuery:
-		lhh.handleHostQuery(n, fromVpnAddrs, rAddr, w)
+		lhh.handleHostQuery(n, hostInfo, rAddr, w)
 
 	case NebulaMeta_HostQueryReply:
 		lhh.handleHostQueryReply(n, fromVpnAddrs)
@@ -1046,7 +1054,7 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, fromVpnAddrs [
 	}
 }
 
-func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []netip.Addr, addr netip.AddrPort, w EncWriter) {
+func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, hostInfo *HostInfo, addr netip.AddrPort, w EncWriter) {
 	// Exit if we don't answer queries
 	if !lhh.lh.amLighthouse {
 		if lhh.l.Level >= logrus.DebugLevel {
@@ -1054,6 +1062,9 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 		}
 		return
 	}
+
+	// Get the from addrs back
+	fromVpnAddrs := hostInfo.vpnAddrs
 
 	useVersion := cert.Version1
 	var queryVpnAddr netip.Addr
@@ -1069,6 +1080,13 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 		if lhh.l.Level >= logrus.DebugLevel {
 			lhh.l.WithField("from", fromVpnAddrs).WithField("details", n.Details).Debugln("Dropping malformed HostQuery")
 		}
+		return
+	}
+
+	queriedHostInvertedGroups := lhh.lh.ifce.GetHostInfo(queryVpnAddr).ConnectionState.peerCert.InvertedGroups
+
+	if !lhh.lh.queryProtectionTable.check(hostInfo.ConnectionState.peerCert.InvertedGroups, queriedHostInvertedGroups, lhh.l) {
+		lhh.l.Debugln("Dropping HostQuery from", fromVpnAddrs, "for", queryVpnAddr, "due to query protection")
 		return
 	}
 
@@ -1447,4 +1465,56 @@ func findNetworkUnion(prefixes []netip.Prefix, addrs []netip.Addr) (netip.Addr, 
 		}
 	}
 	return netip.Addr{}, false
+}
+
+type lightHouseQueryProtectionTable interface {
+	check(invertedGroups map[string]struct{}, queriedHostInvertedGroups map[string]struct{}, logger *logrus.Logger) bool
+}
+type QueryProtectionTable struct {
+	rules map[string][]string
+}
+
+func newQueryProtectionTableFromConfig(c *config.C) *QueryProtectionTable {
+	rawRules := c.GetMap("lighthouse.query_protection", map[interface{}]interface{}{})
+
+	rules := make(map[string][]string)
+	for k, v := range rawRules {
+		var subgroups []string
+		for _, s := range v.([]interface{}) {
+			subgroups = append(subgroups, s.(string))
+		}
+		rules[k.(string)] = subgroups
+	}
+
+	return &QueryProtectionTable{
+		rules: rules,
+	}
+}
+
+func (l *QueryProtectionTable) check(invertedGroups map[string]struct{}, queriedHostInvertedGroups map[string]struct{}, logger *logrus.Logger) bool {
+
+	if len(l.rules) == 0 {
+		return true
+	}
+
+	for group := range invertedGroups {
+		if allowedGroups, ok := l.rules[group]; ok {
+			for _, allowedGroup := range allowedGroups {
+				if _, ok := queriedHostInvertedGroups[allowedGroup]; ok {
+					return true
+				}
+			}
+		}
+	}
+
+	logger.Debugf("Dropped query due to query protection: %s : %s", invertedGroups, queriedHostInvertedGroups)
+	return false
+}
+
+type mockQueryProtectionTable struct {
+}
+
+func (m *mockQueryProtectionTable) check(invertedGroups map[string]struct{}, queriedHostInvertedGroups map[string]struct{}, logger *logrus.Logger) bool {
+	// It's all good, man
+	return true
 }
