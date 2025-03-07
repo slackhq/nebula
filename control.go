@@ -329,7 +329,7 @@ func listHostMapHostsIter(hl controlHostLister) iter.Seq[*ControlHostInfo] {
 	pr := hl.GetPreferredRanges()
 
 	return iter.Seq[*ControlHostInfo](func(yield func(*ControlHostInfo) bool) {
-		hl.ForEachVpnIp(func(hostinfo *HostInfo) {
+		hl.ForEachVpnAddr(func(hostinfo *HostInfo) {
 			host := copyHostInfo(hostinfo, pr)
 			if !yield(&host) {
 				return // Stop iteration early if yield returns false
