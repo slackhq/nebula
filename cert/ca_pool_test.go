@@ -102,12 +102,12 @@ k+coOv04r+zh33ISyhbsafnYduN17p2eD7CmHvHuerguXD9f32gcxo/KsFCKEjMe
 	assert.Equal(t, pppp.CAs["ce4e6c7a596996eb0d82a8875f0f0137a4b53ce22d2421c9fd7150e7a26f6300"].Certificate.Name(), rootCA.details.name)
 	assert.Equal(t, pppp.CAs["04c585fcd9a49b276df956a22b7ebea3bf23f1fca5a17c0b56ce2e626631969e"].Certificate.Name(), rootCA01.details.name)
 	assert.Equal(t, "expired", pppp.CAs["c39b35a0e8f246203fe4f32b9aa8bfd155f1ae6a6be9d78370641e43397f48f5"].Certificate.Name())
-	assert.Equal(t, 3, len(pppp.CAs))
+	assert.Len(t, pppp.CAs, 3)
 
 	ppppp, err := NewCAPoolFromPEM([]byte(p256))
 	assert.NoError(t, err)
 	assert.Equal(t, ppppp.CAs["552bf7d99bec1fc775a0e4c324bf6d8f789b3078f1919c7960d2e5e0c351ee97"].Certificate.Name(), rootCAP256.details.name)
-	assert.Equal(t, 1, len(ppppp.CAs))
+	assert.Len(t, ppppp.CAs, 1)
 }
 
 func TestCertificateV1_Verify(t *testing.T) {

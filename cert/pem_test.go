@@ -200,7 +200,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 
 	// Success test case
 	k, rest, curve, err := UnmarshalPublicKeyFromPEM(keyBundle)
-	assert.Equal(t, 32, len(k))
+	assert.Len(t, k, 32)
 	assert.Equal(t, Curve_CURVE25519, curve)
 	assert.NoError(t, err)
 	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
@@ -259,14 +259,14 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 
 	// Success test case
 	k, rest, curve, err := UnmarshalPublicKeyFromPEM(keyBundle)
-	assert.Equal(t, 32, len(k))
+	assert.Len(t, k, 32)
 	assert.NoError(t, err)
 	assert.Equal(t, rest, appendByteSlices(pubP256Key, shortKey, invalidBanner, invalidPem))
 	assert.Equal(t, Curve_CURVE25519, curve)
 
 	// Success test case
 	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
-	assert.Equal(t, 65, len(k))
+	assert.Len(t, k, 65)
 	assert.NoError(t, err)
 	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
 	assert.Equal(t, Curve_P256, curve)
