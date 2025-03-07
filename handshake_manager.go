@@ -283,7 +283,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
 			WithField("multiportHandshake", sentMultiport).
 			Info("Handshake message sent")
-	} else if hm.l.IsLevelEnabled(logrus.DebugLevel) {
+	} else if hm.l.Level >= logrus.DebugLevel {
 		hostinfo.logger(hm.l).WithField("udpAddrs", sentTo).
 			WithField("initiatorIndex", hostinfo.localIndexId).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
