@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/service"
 )
@@ -59,7 +61,9 @@ pki:
 	if err := cfg.LoadString(configStr); err != nil {
 		return err
 	}
-	svc, err := service.New(&cfg)
+	l := logrus.New()
+	l.Out = os.Stdout
+	svc, err := service.New(&cfg, l)
 	if err != nil {
 		return err
 	}
