@@ -134,7 +134,9 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 
 	mw := &mockEncWriter{}
 
-	hi := []netip.Addr{vpnIp2}
+	hi := &HostInfo{
+		vpnAddrs: []netip.Addr{vpnIp2},
+	}
 	b.Run("notfound", func(b *testing.B) {
 		lhh := lh.NewRequestHandler()
 		req := &NebulaMeta{
@@ -205,6 +207,7 @@ func TestLighthouse_Memory(t *testing.T) {
 	}
 	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
 	lh.ifce = &mockEncWriter{}
+	lh.queryProtectionTable = &mockQueryProtectionTable{}
 	assert.NoError(t, err)
 	lhh := lh.NewRequestHandler()
 
@@ -327,7 +330,13 @@ func newLHHostRequest(fromAddr netip.AddrPort, myVpnIp, queryVpnIp netip.Addr, l
 	w := &testEncWriter{
 		metaFilter: &filter,
 	}
-	lhh.HandleRequest(fromAddr, []netip.Addr{myVpnIp}, b, w)
+	hi := &HostInfo{
+		vpnAddrs: []netip.Addr{myVpnIp},
+		ConnectionState: &ConnectionState{
+			peerCert: &cert.CachedCertificate{InvertedGroups: map[string]struct{}{}},
+		},
+	}
+	lhh.HandleRequest(fromAddr, hi, b, w)
 	return w.lastReply
 }
 
@@ -357,8 +366,12 @@ func newLHHostUpdate(fromAddr netip.AddrPort, vpnIp netip.Addr, addrs []netip.Ad
 		panic(err)
 	}
 
+	hi := &HostInfo{
+		vpnAddrs: []netip.Addr{vpnIp},
+	}
+
 	w := &testEncWriter{}
-	lhh.HandleRequest(fromAddr, []netip.Addr{vpnIp}, b, w)
+	lhh.HandleRequest(fromAddr, hi, b, w)
 }
 
 type testLhReply struct {
@@ -493,4 +506,51 @@ func Test_findNetworkUnion(t *testing.T) {
 	assert.False(t, ok)
 	out, ok = findNetworkUnion([]netip.Prefix{fc00}, []netip.Addr{a1, afe81})
 	assert.False(t, ok)
+}
+
+func TestQueryProtectionTable(t *testing.T) {
+	l := test.NewLogger()
+
+	qpt := QueryProtectionTable{
+		rules: map[string][]string{
+			"group1": {"allowed1", "allowed2"},
+			"group2": {"allowed3"},
+		},
+	}
+
+	invertedGroups := map[string]struct{}{
+		"group1": {},
+	}
+	queriedHostInvertedGroups := map[string]struct{}{
+		"allowed1": {},
+	}
+
+	assert.True(t, qpt.check(invertedGroups, queriedHostInvertedGroups, l))
+
+	queriedHostInvertedGroups = map[string]struct{}{
+		"notAllowed": {},
+	}
+
+	assert.False(t, qpt.check(invertedGroups, queriedHostInvertedGroups, l))
+
+	invertedGroups = map[string]struct{}{
+		"group2": {},
+	}
+	queriedHostInvertedGroups = map[string]struct{}{
+		"allowed3": {},
+	}
+
+	assert.True(t, qpt.check(invertedGroups, queriedHostInvertedGroups, l))
+
+	invertedGroups = map[string]struct{}{
+		"group3": {},
+	}
+	queriedHostInvertedGroups = map[string]struct{}{
+		"allowed1": {},
+	}
+
+	assert.False(t, qpt.check(invertedGroups, queriedHostInvertedGroups, l))
+
+	qpt.rules = map[string][]string{}
+	assert.True(t, qpt.check(invertedGroups, queriedHostInvertedGroups, l))
 }
