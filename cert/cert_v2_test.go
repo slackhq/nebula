@@ -49,7 +49,7 @@ func TestCertificateV2_Marshal(t *testing.T) {
 	//t.Log("Cert size:", len(b))
 
 	nc2, err := unmarshalCertificateV2(b, nil, Curve_CURVE25519)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	assert.Equal(t, Version2, nc.Version())
 	assert.Equal(t, Curve_CURVE25519, nc.Curve())
@@ -114,14 +114,14 @@ func TestCertificateV2_MarshalJSON(t *testing.T) {
 	}
 
 	b, err := nc.MarshalJSON()
-	assert.ErrorIs(t, err, ErrMissingDetails)
+	require.ErrorIs(t, err, ErrMissingDetails)
 
 	rd, err := nc.details.Marshal()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	nc.rawDetails = rd
 	b, err = nc.MarshalJSON()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.JSONEq(
 		t,
 		"{\"curve\":\"CURVE25519\",\"details\":{\"groups\":[\"test-group1\",\"test-group2\",\"test-group3\"],\"isCa\":false,\"issuer\":\"1234567890abcedf1234567890abcedf\",\"name\":\"testing\",\"networks\":[\"10.1.1.1/24\",\"10.1.1.2/16\"],\"notAfter\":\"0000-11-30T02:00:00Z\",\"notBefore\":\"0000-11-30T01:00:00Z\",\"unsafeNetworks\":[\"9.1.1.2/24\",\"9.1.1.3/16\"]},\"fingerprint\":\"152d9a7400c1e001cb76cffd035215ebb351f69eeb797f7f847dd086e15e56dd\",\"publicKey\":\"3132333435363738393061626365646631323334353637383930616263656466\",\"signature\":\"31323334353637383930616263656466313233343536373839306162636564663132333435363738393061626365646631323334353637383930616263656466\",\"version\":2}",
@@ -132,85 +132,85 @@ func TestCertificateV2_MarshalJSON(t *testing.T) {
 func TestCertificateV2_VerifyPrivateKey(t *testing.T) {
 	ca, _, caKey, _ := NewTestCaCert(Version2, Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
 	err := ca.VerifyPrivateKey(Curve_CURVE25519, caKey)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	err = ca.VerifyPrivateKey(Curve_CURVE25519, caKey[:16])
-	assert.ErrorIs(t, err, ErrInvalidPrivateKey)
+	require.ErrorIs(t, err, ErrInvalidPrivateKey)
 
 	_, caKey2, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	err = ca.VerifyPrivateKey(Curve_CURVE25519, caKey2)
-	assert.ErrorIs(t, err, ErrPublicPrivateKeyMismatch)
+	require.ErrorIs(t, err, ErrPublicPrivateKeyMismatch)
 
 	c, _, priv, _ := NewTestCert(Version2, Curve_CURVE25519, ca, caKey, "test", time.Time{}, time.Time{}, nil, nil, nil)
 	rawPriv, b, curve, err := UnmarshalPrivateKeyFromPEM(priv)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Empty(t, b)
 	assert.Equal(t, Curve_CURVE25519, curve)
 	err = c.VerifyPrivateKey(Curve_CURVE25519, rawPriv)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	_, priv2 := X25519Keypair()
 	err = c.VerifyPrivateKey(Curve_P256, priv2)
-	assert.ErrorIs(t, err, ErrPublicPrivateCurveMismatch)
+	require.ErrorIs(t, err, ErrPublicPrivateCurveMismatch)
 
 	err = c.VerifyPrivateKey(Curve_CURVE25519, priv2)
-	assert.ErrorIs(t, err, ErrPublicPrivateKeyMismatch)
+	require.ErrorIs(t, err, ErrPublicPrivateKeyMismatch)
 
 	err = c.VerifyPrivateKey(Curve_CURVE25519, priv2[:16])
-	assert.ErrorIs(t, err, ErrInvalidPrivateKey)
+	require.ErrorIs(t, err, ErrInvalidPrivateKey)
 
 	ac, ok := c.(*certificateV2)
 	require.True(t, ok)
 	ac.curve = Curve(99)
 	err = c.VerifyPrivateKey(Curve(99), priv2)
-	assert.EqualError(t, err, "invalid curve: 99")
+	require.EqualError(t, err, "invalid curve: 99")
 
 	ca2, _, caKey2, _ := NewTestCaCert(Version2, Curve_P256, time.Time{}, time.Time{}, nil, nil, nil)
 	err = ca.VerifyPrivateKey(Curve_CURVE25519, caKey)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	err = ca2.VerifyPrivateKey(Curve_P256, caKey2[:16])
-	assert.ErrorIs(t, err, ErrInvalidPrivateKey)
+	require.ErrorIs(t, err, ErrInvalidPrivateKey)
 
 	c, _, priv, _ = NewTestCert(Version2, Curve_P256, ca2, caKey2, "test", time.Time{}, time.Time{}, nil, nil, nil)
 	rawPriv, b, curve, err = UnmarshalPrivateKeyFromPEM(priv)
 
 	err = c.VerifyPrivateKey(Curve_P256, priv[:16])
-	assert.ErrorIs(t, err, ErrInvalidPrivateKey)
+	require.ErrorIs(t, err, ErrInvalidPrivateKey)
 
 	err = c.VerifyPrivateKey(Curve_P256, priv)
-	assert.ErrorIs(t, err, ErrInvalidPrivateKey)
+	require.ErrorIs(t, err, ErrInvalidPrivateKey)
 
 	aCa, ok := ca2.(*certificateV2)
 	require.True(t, ok)
 	aCa.curve = Curve(99)
 	err = aCa.VerifyPrivateKey(Curve(99), priv2)
-	assert.EqualError(t, err, "invalid curve: 99")
+	require.EqualError(t, err, "invalid curve: 99")
 
 }
 
 func TestCertificateV2_VerifyPrivateKeyP256(t *testing.T) {
 	ca, _, caKey, _ := NewTestCaCert(Version2, Curve_P256, time.Time{}, time.Time{}, nil, nil, nil)
 	err := ca.VerifyPrivateKey(Curve_P256, caKey)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	_, _, caKey2, _ := NewTestCaCert(Version2, Curve_P256, time.Time{}, time.Time{}, nil, nil, nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	err = ca.VerifyPrivateKey(Curve_P256, caKey2)
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	c, _, priv, _ := NewTestCert(Version2, Curve_P256, ca, caKey, "test", time.Time{}, time.Time{}, nil, nil, nil)
 	rawPriv, b, curve, err := UnmarshalPrivateKeyFromPEM(priv)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Empty(t, b)
 	assert.Equal(t, Curve_P256, curve)
 	err = c.VerifyPrivateKey(Curve_P256, rawPriv)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	_, priv2 := P256Keypair()
 	err = c.VerifyPrivateKey(Curve_P256, priv2)
-	assert.Error(t, err)
+	require.Error(t, err)
 }
 
 func TestCertificateV2_Copy(t *testing.T) {
@@ -223,7 +223,7 @@ func TestCertificateV2_Copy(t *testing.T) {
 func TestUnmarshalCertificateV2(t *testing.T) {
 	data := []byte("\x98\x00\x00")
 	_, err := unmarshalCertificateV2(data, nil, Curve_CURVE25519)
-	assert.EqualError(t, err, "bad wire format")
+	require.EqualError(t, err, "bad wire format")
 }
 
 func TestCertificateV2_marshalForSigningStability(t *testing.T) {

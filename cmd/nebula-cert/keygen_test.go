@@ -7,6 +7,7 @@ import (
 
 	"github.com/slackhq/nebula/cert"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_keygenSummary(t *testing.T) {
@@ -47,33 +48,33 @@ func Test_keygen(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args := []string{"-out-pub", "/do/not/write/pleasepub", "-out-key", "/do/not/write/pleasekey"}
-	assert.EqualError(t, keygen(args, ob, eb), "error while writing out-key: open /do/not/write/pleasekey: "+NoSuchDirError)
+	require.EqualError(t, keygen(args, ob, eb), "error while writing out-key: open /do/not/write/pleasekey: "+NoSuchDirError)
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 
 	// create temp key file
 	keyF, err := os.CreateTemp("", "test.key")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer os.Remove(keyF.Name())
 
 	// failed pub write
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-out-pub", "/do/not/write/pleasepub", "-out-key", keyF.Name()}
-	assert.EqualError(t, keygen(args, ob, eb), "error while writing out-pub: open /do/not/write/pleasepub: "+NoSuchDirError)
+	require.EqualError(t, keygen(args, ob, eb), "error while writing out-pub: open /do/not/write/pleasepub: "+NoSuchDirError)
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 
 	// create temp pub file
 	pubF, err := os.CreateTemp("", "test.pub")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer os.Remove(pubF.Name())
 
 	// test proper keygen
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-out-pub", pubF.Name(), "-out-key", keyF.Name()}
-	assert.NoError(t, keygen(args, ob, eb))
+	require.NoError(t, keygen(args, ob, eb))
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 
@@ -82,13 +83,13 @@ func Test_keygen(t *testing.T) {
 	lKey, b, curve, err := cert.UnmarshalPrivateKeyFromPEM(rb)
 	assert.Equal(t, cert.Curve_CURVE25519, curve)
 	assert.Empty(t, b)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Len(t, lKey, 32)
 
 	rb, _ = os.ReadFile(pubF.Name())
 	lPub, b, curve, err := cert.UnmarshalPublicKeyFromPEM(rb)
 	assert.Equal(t, cert.Curve_CURVE25519, curve)
 	assert.Empty(t, b)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Len(t, lPub, 32)
 }

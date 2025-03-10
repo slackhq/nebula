@@ -19,6 +19,7 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v2"
 )
 
@@ -771,7 +772,7 @@ func TestRehandshakingRelays(t *testing.T) {
 		"key":  string(myNextPrivKey),
 	}
 	rc, err := yaml.Marshal(relayConfig.Settings)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	relayConfig.ReloadConfigString(string(rc))
 
 	for {
@@ -875,7 +876,7 @@ func TestRehandshakingRelaysPrimary(t *testing.T) {
 		"key":  string(myNextPrivKey),
 	}
 	rc, err := yaml.Marshal(relayConfig.Settings)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	relayConfig.ReloadConfigString(string(rc))
 
 	for {
@@ -970,7 +971,7 @@ func TestRehandshaking(t *testing.T) {
 		"key":  string(myNextPrivKey),
 	}
 	rc, err := yaml.Marshal(myConfig.Settings)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	myConfig.ReloadConfigString(string(rc))
 
 	for {
@@ -987,9 +988,9 @@ func TestRehandshaking(t *testing.T) {
 	r.Log("Got the new cert")
 	// Flip their firewall to only allowing the new group to catch the tunnels reverting incorrectly
 	rc, err = yaml.Marshal(theirConfig.Settings)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	var theirNewConfig m
-	assert.NoError(t, yaml.Unmarshal(rc, &theirNewConfig))
+	require.NoError(t, yaml.Unmarshal(rc, &theirNewConfig))
 	theirFirewall := theirNewConfig["firewall"].(map[interface{}]interface{})
 	theirFirewall["inbound"] = []m{{
 		"proto": "any",
@@ -997,7 +998,7 @@ func TestRehandshaking(t *testing.T) {
 		"group": "new group",
 	}}
 	rc, err = yaml.Marshal(theirNewConfig)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	theirConfig.ReloadConfigString(string(rc))
 
 	r.Log("Spin until there is only 1 tunnel")
@@ -1067,7 +1068,7 @@ func TestRehandshakingLoser(t *testing.T) {
 		"key":  string(theirNextPrivKey),
 	}
 	rc, err := yaml.Marshal(theirConfig.Settings)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	theirConfig.ReloadConfigString(string(rc))
 
 	for {
@@ -1083,9 +1084,9 @@ func TestRehandshakingLoser(t *testing.T) {
 
 	// Flip my firewall to only allowing the new group to catch the tunnels reverting incorrectly
 	rc, err = yaml.Marshal(myConfig.Settings)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	var myNewConfig m
-	assert.NoError(t, yaml.Unmarshal(rc, &myNewConfig))
+	require.NoError(t, yaml.Unmarshal(rc, &myNewConfig))
 	theirFirewall := myNewConfig["firewall"].(map[interface{}]interface{})
 	theirFirewall["inbound"] = []m{{
 		"proto": "any",
@@ -1093,7 +1094,7 @@ func TestRehandshakingLoser(t *testing.T) {
 		"group": "their new group",
 	}}
 	rc, err = yaml.Marshal(myNewConfig)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	myConfig.ReloadConfigString(string(rc))
 
 	r.Log("Spin until there is only 1 tunnel")

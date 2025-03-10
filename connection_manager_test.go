@@ -14,6 +14,7 @@ import (
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func newTestLighthouse() *LightHouse {
@@ -223,9 +224,9 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	}
 
 	caCert, err := tbs.Sign(nil, cert.Curve_CURVE25519, privCA)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	ncp := cert.NewCAPool()
-	assert.NoError(t, ncp.AddCA(caCert))
+	require.NoError(t, ncp.AddCA(caCert))
 
 	pubCrt, _, _ := ed25519.GenerateKey(rand.Reader)
 	tbs = &cert.TBSCertificate{
@@ -237,7 +238,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 		PublicKey: pubCrt,
 	}
 	peerCert, err := tbs.Sign(caCert, cert.Curve_CURVE25519, privCA)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	cachedPeerCert, err := ncp.VerifyCertificate(now.Add(time.Second), peerCert)
 

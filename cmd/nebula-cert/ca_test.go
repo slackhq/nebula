@@ -14,6 +14,7 @@ import (
 
 	"github.com/slackhq/nebula/cert"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_caSummary(t *testing.T) {
@@ -106,34 +107,34 @@ func Test_ca(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args := []string{"-version", "1", "-name", "test", "-duration", "100m", "-out-crt", "/do/not/write/pleasecrt", "-out-key", "/do/not/write/pleasekey"}
-	assert.EqualError(t, ca(args, ob, eb, nopw), "error while writing out-key: open /do/not/write/pleasekey: "+NoSuchDirError)
+	require.EqualError(t, ca(args, ob, eb, nopw), "error while writing out-key: open /do/not/write/pleasekey: "+NoSuchDirError)
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 
 	// create temp key file
 	keyF, err := os.CreateTemp("", "test.key")
-	assert.NoError(t, err)
-	assert.NoError(t, os.Remove(keyF.Name()))
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(keyF.Name()))
 
 	// failed cert write
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-version", "1", "-name", "test", "-duration", "100m", "-out-crt", "/do/not/write/pleasecrt", "-out-key", keyF.Name()}
-	assert.EqualError(t, ca(args, ob, eb, nopw), "error while writing out-crt: open /do/not/write/pleasecrt: "+NoSuchDirError)
+	require.EqualError(t, ca(args, ob, eb, nopw), "error while writing out-crt: open /do/not/write/pleasecrt: "+NoSuchDirError)
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 
 	// create temp cert file
 	crtF, err := os.CreateTemp("", "test.crt")
-	assert.NoError(t, err)
-	assert.NoError(t, os.Remove(crtF.Name()))
-	assert.NoError(t, os.Remove(keyF.Name()))
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(crtF.Name()))
+	require.NoError(t, os.Remove(keyF.Name()))
 
 	// test proper cert with removed empty groups and subnets
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-version", "1", "-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.NoError(t, ca(args, ob, eb, nopw))
+	require.NoError(t, ca(args, ob, eb, nopw))
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 
@@ -142,13 +143,13 @@ func Test_ca(t *testing.T) {
 	lKey, b, c, err := cert.UnmarshalSigningPrivateKeyFromPEM(rb)
 	assert.Equal(t, cert.Curve_CURVE25519, c)
 	assert.Empty(t, b)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Len(t, lKey, 64)
 
 	rb, _ = os.ReadFile(crtF.Name())
 	lCrt, b, err := cert.UnmarshalCertificateFromPEM(rb)
 	assert.Empty(t, b)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	assert.Equal(t, "test", lCrt.Name())
 	assert.Empty(t, lCrt.Networks())
@@ -166,7 +167,7 @@ func Test_ca(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-version", "1", "-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.NoError(t, ca(args, ob, eb, testpw))
+	require.NoError(t, ca(args, ob, eb, testpw))
 	assert.Equal(t, pwPromptOb, ob.String())
 	assert.Equal(t, "", eb.String())
 
@@ -174,7 +175,7 @@ func Test_ca(t *testing.T) {
 	rb, _ = os.ReadFile(keyF.Name())
 	k, _ := pem.Decode(rb)
 	ned, err := cert.UnmarshalNebulaEncryptedData(k.Bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	// we won't know salt in advance, so just check start of string
 	assert.Equal(t, uint32(2*1024*1024), ned.EncryptionMetadata.Argon2Parameters.Memory)
 	assert.Equal(t, uint8(4), ned.EncryptionMetadata.Argon2Parameters.Parallelism)
@@ -184,7 +185,7 @@ func Test_ca(t *testing.T) {
 	var curve cert.Curve
 	curve, lKey, b, err = cert.DecryptAndUnmarshalSigningPrivateKey(passphrase, rb)
 	assert.Equal(t, cert.Curve_CURVE25519, curve)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Empty(t, b)
 	assert.Len(t, lKey, 64)
 
@@ -194,7 +195,7 @@ func Test_ca(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-version", "1", "-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.Error(t, ca(args, ob, eb, errpw))
+	require.Error(t, ca(args, ob, eb, errpw))
 	assert.Equal(t, pwPromptOb, ob.String())
 	assert.Equal(t, "", eb.String())
 
@@ -204,7 +205,7 @@ func Test_ca(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-version", "1", "-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.EqualError(t, ca(args, ob, eb, nopw), "no passphrase specified, remove -encrypt flag to write out-key in plaintext")
+	require.EqualError(t, ca(args, ob, eb, nopw), "no passphrase specified, remove -encrypt flag to write out-key in plaintext")
 	assert.Equal(t, strings.Repeat(pwPromptOb, 5), ob.String()) // prompts 5 times before giving up
 	assert.Equal(t, "", eb.String())
 
@@ -214,13 +215,13 @@ func Test_ca(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-version", "1", "-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.NoError(t, ca(args, ob, eb, nopw))
+	require.NoError(t, ca(args, ob, eb, nopw))
 
 	// test that we won't overwrite existing certificate file
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-version", "1", "-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.EqualError(t, ca(args, ob, eb, nopw), "refusing to overwrite existing CA key: "+keyF.Name())
+	require.EqualError(t, ca(args, ob, eb, nopw), "refusing to overwrite existing CA key: "+keyF.Name())
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 
@@ -229,7 +230,7 @@ func Test_ca(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-version", "1", "-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	assert.EqualError(t, ca(args, ob, eb, nopw), "refusing to overwrite existing CA cert: "+crtF.Name())
+	require.EqualError(t, ca(args, ob, eb, nopw), "refusing to overwrite existing CA cert: "+crtF.Name())
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 	os.Remove(keyF.Name())
