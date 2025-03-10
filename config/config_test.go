@@ -19,18 +19,18 @@ func TestConfig_Load(t *testing.T) {
 	// invalid yaml
 	c := NewC(l)
 	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte(" invalid yaml"), 0644)
-	assert.EqualError(t, c.Load(dir), "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[interface {}]interface {}")
+	require.EqualError(t, c.Load(dir), "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[interface {}]interface {}")
 
 	// simple multi config merge
 	c = NewC(l)
 	os.RemoveAll(dir)
 	os.Mkdir(dir, 0755)
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
 	os.WriteFile(filepath.Join(dir, "02.yml"), []byte("outer:\n  inner: override\nnew: hi"), 0644)
-	assert.NoError(t, c.Load(dir))
+	require.NoError(t, c.Load(dir))
 	expected := map[interface{}]interface{}{
 		"outer": map[interface{}]interface{}{
 			"inner": "override",
@@ -117,11 +117,11 @@ func TestConfig_ReloadConfig(t *testing.T) {
 	l := test.NewLogger()
 	done := make(chan bool, 1)
 	dir, err := os.MkdirTemp("", "config-test")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
 
 	c := NewC(l)
-	assert.NoError(t, c.Load(dir))
+	require.NoError(t, c.Load(dir))
 
 	assert.False(t, c.HasChanged("outer.inner"))
 	assert.False(t, c.HasChanged("outer"))

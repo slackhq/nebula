@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCertificateV1_Sign(t *testing.T) {
@@ -37,14 +38,14 @@ func TestCertificateV1_Sign(t *testing.T) {
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	c, err := tbs.Sign(&certificateV1{details: detailsV1{notBefore: before, notAfter: after}}, Curve_CURVE25519, priv)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, c)
 	assert.True(t, c.CheckSignature(pub))
 
 	b, err := c.Marshal()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	uc, err := unmarshalCertificateV1(b, nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, uc)
 }
 
@@ -73,18 +74,18 @@ func TestCertificateV1_SignP256(t *testing.T) {
 	}
 
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	pub := elliptic.Marshal(elliptic.P256(), priv.PublicKey.X, priv.PublicKey.Y)
 	rawPriv := priv.D.FillBytes(make([]byte, 32))
 
 	c, err := tbs.Sign(&certificateV1{details: detailsV1{notBefore: before, notAfter: after}}, Curve_P256, rawPriv)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, c)
 	assert.True(t, c.CheckSignature(pub))
 
 	b, err := c.Marshal()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	uc, err := unmarshalCertificateV1(b, nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, uc)
 }

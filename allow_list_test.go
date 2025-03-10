@@ -9,6 +9,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewAllowListFromConfig(t *testing.T) {
@@ -18,21 +19,21 @@ func TestNewAllowListFromConfig(t *testing.T) {
 		"192.168.0.0": true,
 	}
 	r, err := newAllowListFromConfig(c, "allowlist", nil)
-	assert.EqualError(t, err, "config `allowlist` has invalid CIDR: 192.168.0.0. netip.ParsePrefix(\"192.168.0.0\"): no '/'")
+	require.EqualError(t, err, "config `allowlist` has invalid CIDR: 192.168.0.0. netip.ParsePrefix(\"192.168.0.0\"): no '/'")
 	assert.Nil(t, r)
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"192.168.0.0/16": "abc",
 	}
 	r, err = newAllowListFromConfig(c, "allowlist", nil)
-	assert.EqualError(t, err, "config `allowlist` has invalid value (type string): abc")
+	require.EqualError(t, err, "config `allowlist` has invalid value (type string): abc")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"192.168.0.0/16": true,
 		"10.0.0.0/8":     false,
 	}
 	r, err = newAllowListFromConfig(c, "allowlist", nil)
-	assert.EqualError(t, err, "config `allowlist` contains both true and false rules, but no default set for 0.0.0.0/0")
+	require.EqualError(t, err, "config `allowlist` contains both true and false rules, but no default set for 0.0.0.0/0")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"0.0.0.0/0":      true,
@@ -42,7 +43,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 		"fd00:fd00::/16": false,
 	}
 	r, err = newAllowListFromConfig(c, "allowlist", nil)
-	assert.EqualError(t, err, "config `allowlist` contains both true and false rules, but no default set for ::/0")
+	require.EqualError(t, err, "config `allowlist` contains both true and false rules, but no default set for ::/0")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"0.0.0.0/0":     true,
@@ -75,7 +76,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 		},
 	}
 	lr, err := NewLocalAllowListFromConfig(c, "allowlist")
-	assert.EqualError(t, err, "config `allowlist.interfaces` has invalid value (type string): foo")
+	require.EqualError(t, err, "config `allowlist.interfaces` has invalid value (type string): foo")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"interfaces": map[interface{}]interface{}{
@@ -84,7 +85,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 		},
 	}
 	lr, err = NewLocalAllowListFromConfig(c, "allowlist")
-	assert.EqualError(t, err, "config `allowlist.interfaces` values must all be the same true/false value")
+	require.EqualError(t, err, "config `allowlist.interfaces` values must all be the same true/false value")
 
 	c.Settings["allowlist"] = map[interface{}]interface{}{
 		"interfaces": map[interface{}]interface{}{

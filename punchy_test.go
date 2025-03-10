@@ -7,6 +7,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewPunchyFromConfig(t *testing.T) {
@@ -56,7 +57,7 @@ func TestPunchy_reload(t *testing.T) {
 	l := test.NewLogger()
 	c := config.NewC(l)
 	delay, _ := time.ParseDuration("1m")
-	assert.NoError(t, c.LoadString(`
+	require.NoError(t, c.LoadString(`
 punchy:
   delay: 1m
   respond: false
@@ -66,7 +67,7 @@ punchy:
 	assert.False(t, p.GetRespond())
 
 	newDelay, _ := time.ParseDuration("10m")
-	assert.NoError(t, c.ReloadConfigString(`
+	require.NoError(t, c.ReloadConfigString(`
 punchy:
   delay: 10m
   respond: true

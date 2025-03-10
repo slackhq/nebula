@@ -9,6 +9,7 @@ import (
 
 	"github.com/slackhq/nebula/cert"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ed25519"
 )
 
@@ -50,20 +51,20 @@ func Test_verify(t *testing.T) {
 	err := verify([]string{"-ca", "does_not_exist", "-crt", "does_not_exist"}, ob, eb)
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
-	assert.EqualError(t, err, "error while reading ca: open does_not_exist: "+NoSuchFileError)
+	require.EqualError(t, err, "error while reading ca: open does_not_exist: "+NoSuchFileError)
 
 	// invalid ca at path
 	ob.Reset()
 	eb.Reset()
 	caFile, err := os.CreateTemp("", "verify-ca")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer os.Remove(caFile.Name())
 
 	caFile.WriteString("-----BEGIN NOPE-----")
 	err = verify([]string{"-ca", caFile.Name(), "-crt", "does_not_exist"}, ob, eb)
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
-	assert.EqualError(t, err, "error while adding ca cert to pool: input did not contain a valid PEM encoded block")
+	require.EqualError(t, err, "error while adding ca cert to pool: input did not contain a valid PEM encoded block")
 
 	// make a ca for later
 	caPub, caPriv, _ := ed25519.GenerateKey(rand.Reader)
@@ -77,20 +78,20 @@ func Test_verify(t *testing.T) {
 	err = verify([]string{"-ca", caFile.Name(), "-crt", "does_not_exist"}, ob, eb)
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
-	assert.EqualError(t, err, "unable to read crt: open does_not_exist: "+NoSuchFileError)
+	require.EqualError(t, err, "unable to read crt: open does_not_exist: "+NoSuchFileError)
 
 	// invalid crt at path
 	ob.Reset()
 	eb.Reset()
 	certFile, err := os.CreateTemp("", "verify-cert")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer os.Remove(certFile.Name())
 
 	certFile.WriteString("-----BEGIN NOPE-----")
 	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
-	assert.EqualError(t, err, "error while parsing crt: input did not contain a valid PEM encoded block")
+	require.EqualError(t, err, "error while parsing crt: input did not contain a valid PEM encoded block")
 
 	// unverifiable cert at path
 	crt, _ := NewTestCert(ca, caPriv, "test-cert", time.Now().Add(time.Hour*-1), time.Now().Add(time.Hour), nil, nil, nil)
@@ -107,7 +108,7 @@ func Test_verify(t *testing.T) {
 	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
-	assert.ErrorIs(t, err, cert.ErrSignatureMismatch)
+	require.ErrorIs(t, err, cert.ErrSignatureMismatch)
 
 	// verified cert at path
 	crt, _ = NewTestCert(ca, caPriv, "test-cert", time.Now().Add(time.Hour*-1), time.Now().Add(time.Hour), nil, nil, nil)
@@ -119,5 +120,5 @@ func Test_verify(t *testing.T) {
 	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 }

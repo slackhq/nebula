@@ -15,10 +15,10 @@ func TestCalculatedRemoteApply(t *testing.T) {
 	require.NoError(t, err)
 
 	input, err := netip.ParseAddr("10.0.10.182")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	expected, err := netip.ParseAddr("192.168.1.182")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	assert.Equal(t, netAddrToProtoV4AddrPort(expected, 4242), c.ApplyV4(input))
 
@@ -28,10 +28,10 @@ func TestCalculatedRemoteApply(t *testing.T) {
 	require.NoError(t, err)
 
 	input, err = netip.ParseAddr("beef:beef:beef:beef:beef:beef:beef:beef")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	expected, err = netip.ParseAddr("ffff:ffff:ffff:ffff:beef:beef:beef:beef")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	assert.Equal(t, netAddrToProtoV6AddrPort(expected, 4242), c.ApplyV6(input))
 
@@ -41,10 +41,10 @@ func TestCalculatedRemoteApply(t *testing.T) {
 	require.NoError(t, err)
 
 	input, err = netip.ParseAddr("beef:beef:beef:beef:beef:beef:beef:beef")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	expected, err = netip.ParseAddr("ffff:ffff:ffff:ffff:ffff:beef:beef:beef")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	assert.Equal(t, netAddrToProtoV6AddrPort(expected, 4242), c.ApplyV6(input))
 
@@ -54,10 +54,10 @@ func TestCalculatedRemoteApply(t *testing.T) {
 	require.NoError(t, err)
 
 	input, err = netip.ParseAddr("beef:beef:beef:beef:beef:beef:beef:beef")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	expected, err = netip.ParseAddr("ffff:ffff:ffff:beef:beef:beef:beef:beef")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	assert.Equal(t, netAddrToProtoV6AddrPort(expected, 4242), c.ApplyV6(input))
 }
