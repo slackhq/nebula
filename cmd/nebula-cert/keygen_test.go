@@ -53,7 +53,7 @@ func Test_keygen(t *testing.T) {
 
 	// create temp key file
 	keyF, err := os.CreateTemp("", "test.key")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	defer os.Remove(keyF.Name())
 
 	// failed pub write
@@ -66,14 +66,14 @@ func Test_keygen(t *testing.T) {
 
 	// create temp pub file
 	pubF, err := os.CreateTemp("", "test.pub")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	defer os.Remove(pubF.Name())
 
 	// test proper keygen
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-out-pub", pubF.Name(), "-out-key", keyF.Name()}
-	assert.Nil(t, keygen(args, ob, eb))
+	assert.NoError(t, keygen(args, ob, eb))
 	assert.Equal(t, "", ob.String())
 	assert.Equal(t, "", eb.String())
 
@@ -81,14 +81,14 @@ func Test_keygen(t *testing.T) {
 	rb, _ := os.ReadFile(keyF.Name())
 	lKey, b, curve, err := cert.UnmarshalPrivateKeyFromPEM(rb)
 	assert.Equal(t, cert.Curve_CURVE25519, curve)
-	assert.Len(t, b, 0)
-	assert.Nil(t, err)
+	assert.Empty(t, b)
+	assert.NoError(t, err)
 	assert.Len(t, lKey, 32)
 
 	rb, _ = os.ReadFile(pubF.Name())
 	lPub, b, curve, err := cert.UnmarshalPublicKeyFromPEM(rb)
 	assert.Equal(t, cert.Curve_CURVE25519, curve)
-	assert.Len(t, b, 0)
-	assert.Nil(t, err)
+	assert.Empty(t, b)
+	assert.NoError(t, err)
 	assert.Len(t, lPub, 32)
 }

@@ -61,7 +61,7 @@ qrlJ69wer3ZUHFXA
 
 	// Success test case
 	curve, k, rest, err := DecryptAndUnmarshalSigningPrivateKey(passphrase, keyBundle)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, Curve_CURVE25519, curve)
 	assert.Len(t, k, 64)
 	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
@@ -89,7 +89,7 @@ qrlJ69wer3ZUHFXA
 	curve, k, rest, err = DecryptAndUnmarshalSigningPrivateKey([]byte("invalid passphrase"), privKey)
 	assert.EqualError(t, err, "invalid passphrase or corrupt private key")
 	assert.Nil(t, k)
-	assert.Equal(t, rest, []byte{})
+	assert.Equal(t, []byte{}, rest)
 }
 
 func TestEncryptAndMarshalSigningPrivateKey(t *testing.T) {
@@ -99,14 +99,14 @@ func TestEncryptAndMarshalSigningPrivateKey(t *testing.T) {
 	bytes := []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	kdfParams := NewArgon2Parameters(64*1024, 4, 3)
 	key, err := EncryptAndMarshalSigningPrivateKey(Curve_CURVE25519, bytes, passphrase, kdfParams)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	// Verify the "key" can be decrypted successfully
 	curve, k, rest, err := DecryptAndUnmarshalSigningPrivateKey(passphrase, key)
 	assert.Len(t, k, 64)
 	assert.Equal(t, Curve_CURVE25519, curve)
-	assert.Equal(t, rest, []byte{})
-	assert.Nil(t, err)
+	assert.Equal(t, []byte{}, rest)
+	assert.NoError(t, err)
 
 	// EncryptAndMarshalEd25519PrivateKey does not create any errors itself
 }

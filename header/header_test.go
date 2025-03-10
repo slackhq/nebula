@@ -111,7 +111,7 @@ func TestHeader_String(t *testing.T) {
 
 func TestHeader_MarshalJSON(t *testing.T) {
 	b, err := (&H{100, Test, TestRequest, 99, 98, 97}).MarshalJSON()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(
 		t,
 		"{\"messageCounter\":97,\"remoteIndex\":98,\"reserved\":99,\"subType\":\"testRequest\",\"type\":\"test\",\"version\":100}",
