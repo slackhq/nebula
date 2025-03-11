@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 )
@@ -72,7 +73,7 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp neti
 				Type:       relayType,
 				State:      state,
 				LocalIndex: index,
-				PeerIp:     vpnIp,
+				PeerAddr:   vpnIp,
 			}
 
 			if remoteIdx != nil {
@@ -91,40 +92,71 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp neti
 func (rm *relayManager) EstablishRelay(relayHostInfo *HostInfo, m *NebulaControl) (*Relay, error) {
 	relay, ok := relayHostInfo.relayState.CompleteRelayByIdx(m.InitiatorRelayIndex, m.ResponderRelayIndex)
 	if !ok {
-		rm.l.WithFields(logrus.Fields{"relay": relayHostInfo.vpnIp,
+		fields := logrus.Fields{
+			"relay":               relayHostInfo.vpnAddrs[0],
 			"initiatorRelayIndex": m.InitiatorRelayIndex,
-			"relayFrom":           m.RelayFromIp,
-			"relayTo":             m.RelayToIp}).Info("relayManager failed to update relay")
+		}
+
+		if m.RelayFromAddr == nil {
+			fields["relayFrom"] = m.OldRelayFromAddr
+		} else {
+			fields["relayFrom"] = m.RelayFromAddr
+		}
+
+		if m.RelayToAddr == nil {
+			fields["relayTo"] = m.OldRelayToAddr
+		} else {
+			fields["relayTo"] = m.RelayToAddr
+		}
+
+		rm.l.WithFields(fields).Info("relayManager failed to update relay")
 		return nil, fmt.Errorf("unknown relay")
 	}
 
 	return relay, nil
 }
 
-func (rm *relayManager) HandleControlMsg(h *HostInfo, m *NebulaControl, f *Interface) {
-
-	switch m.Type {
-	case NebulaControl_CreateRelayRequest:
-		rm.handleCreateRelayRequest(h, f, m)
-	case NebulaControl_CreateRelayResponse:
-		rm.handleCreateRelayResponse(h, f, m)
+func (rm *relayManager) HandleControlMsg(h *HostInfo, d []byte, f *Interface) {
+	msg := &NebulaControl{}
+	err := msg.Unmarshal(d)
+	if err != nil {
+		h.logger(f.l).WithError(err).Error("Failed to unmarshal control message")
+		return
 	}
 
+	var v cert.Version
+	if msg.OldRelayFromAddr > 0 || msg.OldRelayToAddr > 0 {
+		v = cert.Version1
+
+		b := [4]byte{}
+		binary.BigEndian.PutUint32(b[:], msg.OldRelayFromAddr)
+		msg.RelayFromAddr = netAddrToProtoAddr(netip.AddrFrom4(b))
+
+		binary.BigEndian.PutUint32(b[:], msg.OldRelayToAddr)
+		msg.RelayToAddr = netAddrToProtoAddr(netip.AddrFrom4(b))
+	} else {
+		v = cert.Version2
+	}
+
+	switch msg.Type {
+	case NebulaControl_CreateRelayRequest:
+		rm.handleCreateRelayRequest(v, h, f, msg)
+	case NebulaControl_CreateRelayResponse:
+		rm.handleCreateRelayResponse(v, h, f, msg)
+	}
 }
 
-func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *NebulaControl) {
+func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f *Interface, m *NebulaControl) {
 	rm.l.WithFields(logrus.Fields{
-		"relayFrom":           m.RelayFromIp,
-		"relayTo":             m.RelayToIp,
+		"relayFrom":           protoAddrToNetAddr(m.RelayFromAddr),
+		"relayTo":             protoAddrToNetAddr(m.RelayToAddr),
 		"initiatorRelayIndex": m.InitiatorRelayIndex,
 		"responderRelayIndex": m.ResponderRelayIndex,
-		"vpnIp":               h.vpnIp}).
+		"vpnAddrs":            h.vpnAddrs}).
 		Info("handleCreateRelayResponse")
-	target := m.RelayToIp
-	//TODO: IPV6-WORK
-	b := [4]byte{}
-	binary.BigEndian.PutUint32(b[:], m.RelayToIp)
-	targetAddr := netip.AddrFrom4(b)
+
+	target := m.RelayToAddr
+	targetAddr := protoAddrToNetAddr(target)
 
 	relay, err := rm.EstablishRelay(h, m)
 	if err != nil {
@@ -136,68 +168,88 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 		return
 	}
 	// I'm the middle man. Let the initiator know that the I've established the relay they requested.
-	peerHostInfo := rm.hostmap.QueryVpnIp(relay.PeerIp)
+	peerHostInfo := rm.hostmap.QueryVpnAddr(relay.PeerAddr)
 	if peerHostInfo == nil {
-		rm.l.WithField("relayTo", relay.PeerIp).Error("Can't find a HostInfo for peer")
+		rm.l.WithField("relayTo", relay.PeerAddr).Error("Can't find a HostInfo for peer")
 		return
 	}
 	peerRelay, ok := peerHostInfo.relayState.QueryRelayForByIp(targetAddr)
 	if !ok {
-		rm.l.WithField("relayTo", peerHostInfo.vpnIp).Error("peerRelay does not have Relay state for relayTo")
+		rm.l.WithField("relayTo", peerHostInfo.vpnAddrs[0]).Error("peerRelay does not have Relay state for relayTo")
 		return
 	}
-	if peerRelay.State == PeerRequested {
-		//TODO: IPV6-WORK
-		b = peerHostInfo.vpnIp.As4()
-		peerRelay.State = Established
+	switch peerRelay.State {
+	case Requested:
+		// I initiated the request to this peer, but haven't heard back from the peer yet. I must wait for this peer
+		// to respond to complete the connection.
+	case PeerRequested, Disestablished, Established:
+		peerHostInfo.relayState.UpdateRelayForByIpState(targetAddr, Established)
 		resp := NebulaControl{
 			Type:                NebulaControl_CreateRelayResponse,
 			ResponderRelayIndex: peerRelay.LocalIndex,
 			InitiatorRelayIndex: peerRelay.RemoteIndex,
-			RelayFromIp:         binary.BigEndian.Uint32(b[:]),
-			RelayToIp:           uint32(target),
 		}
+
+		if v == cert.Version1 {
+			peer := peerHostInfo.vpnAddrs[0]
+			if !peer.Is4() {
+				rm.l.WithField("relayFrom", peer).
+					WithField("relayTo", target).
+					WithField("initiatorRelayIndex", resp.InitiatorRelayIndex).
+					WithField("responderRelayIndex", resp.ResponderRelayIndex).
+					WithField("vpnAddrs", peerHostInfo.vpnAddrs).
+					Error("Refusing to CreateRelayResponse for a v1 relay with an ipv6 address")
+				return
+			}
+
+			b := peer.As4()
+			resp.OldRelayFromAddr = binary.BigEndian.Uint32(b[:])
+			b = targetAddr.As4()
+			resp.OldRelayToAddr = binary.BigEndian.Uint32(b[:])
+		} else {
+			resp.RelayFromAddr = netAddrToProtoAddr(peerHostInfo.vpnAddrs[0])
+			resp.RelayToAddr = target
+		}
+
 		msg, err := resp.Marshal()
 		if err != nil {
-			rm.l.
-				WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
+			rm.l.WithError(err).
+				Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
 		} else {
 			f.SendMessageToHostInfo(header.Control, 0, peerHostInfo, msg, make([]byte, 12), make([]byte, mtu))
 			rm.l.WithFields(logrus.Fields{
-				"relayFrom":           resp.RelayFromIp,
-				"relayTo":             resp.RelayToIp,
+				"relayFrom":           resp.RelayFromAddr,
+				"relayTo":             resp.RelayToAddr,
 				"initiatorRelayIndex": resp.InitiatorRelayIndex,
 				"responderRelayIndex": resp.ResponderRelayIndex,
-				"vpnIp":               peerHostInfo.vpnIp}).
+				"vpnAddrs":            peerHostInfo.vpnAddrs}).
 				Info("send CreateRelayResponse")
 		}
 	}
 }
 
-func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *NebulaControl) {
-	//TODO: IPV6-WORK
-	b := [4]byte{}
-	binary.BigEndian.PutUint32(b[:], m.RelayFromIp)
-	from := netip.AddrFrom4(b)
-
-	binary.BigEndian.PutUint32(b[:], m.RelayToIp)
-	target := netip.AddrFrom4(b)
+func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f *Interface, m *NebulaControl) {
+	from := protoAddrToNetAddr(m.RelayFromAddr)
+	target := protoAddrToNetAddr(m.RelayToAddr)
 
 	logMsg := rm.l.WithFields(logrus.Fields{
 		"relayFrom":           from,
 		"relayTo":             target,
 		"initiatorRelayIndex": m.InitiatorRelayIndex,
-		"vpnIp":               h.vpnIp})
+		"vpnAddrs":            h.vpnAddrs})
 
 	logMsg.Info("handleCreateRelayRequest")
 	// Is the source of the relay me? This should never happen, but did happen due to
 	// an issue migrating relays over to newly re-handshaked host info objects.
-	if from == f.myVpnNet.Addr() {
+	_, found := f.myVpnAddrsTable.Lookup(from)
+	if found {
 		logMsg.WithField("myIP", from).Error("Discarding relay request from myself")
 		return
 	}
+
 	// Is the target of the relay me?
-	if target == f.myVpnNet.Addr() {
+	_, found = f.myVpnAddrsTable.Lookup(target)
+	if found {
 		existingRelay, ok := h.relayState.QueryRelayForByIp(from)
 		if ok {
 			switch existingRelay.State {
@@ -215,6 +267,21 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 						"existingRemoteIndex": existingRelay.RemoteIndex}).Error("Existing relay mismatch with CreateRelayRequest")
 					return
 				}
+			case Disestablished:
+				if existingRelay.RemoteIndex != m.InitiatorRelayIndex {
+					// We got a brand new Relay request, because its index is different than what we saw before.
+					// This should never happen. The peer should never change an index, once created.
+					logMsg.WithFields(logrus.Fields{
+						"existingRemoteIndex": existingRelay.RemoteIndex}).Error("Existing relay mismatch with CreateRelayRequest")
+					return
+				}
+				// Mark the relay as 'Established' because it's safe to use again
+				h.relayState.UpdateRelayForByIpState(from, Established)
+			case PeerRequested:
+				// I should never be in this state, because I am terminal, not forwarding.
+				logMsg.WithFields(logrus.Fields{
+					"existingRemoteIndex": existingRelay.RemoteIndex,
+					"state":               existingRelay.State}).Error("Unexpected Relay State found")
 			}
 		} else {
 			_, err := AddRelay(rm.l, h, f.hostMap, from, &m.InitiatorRelayIndex, TerminalType, Established)
@@ -226,21 +293,26 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 
 		relay, ok := h.relayState.QueryRelayForByIp(from)
 		if !ok {
-			logMsg.Error("Relay State not found")
+			logMsg.WithField("from", from).Error("Relay State not found")
 			return
 		}
-
-		//TODO: IPV6-WORK
-		fromB := from.As4()
-		targetB := target.As4()
 
 		resp := NebulaControl{
 			Type:                NebulaControl_CreateRelayResponse,
 			ResponderRelayIndex: relay.LocalIndex,
 			InitiatorRelayIndex: relay.RemoteIndex,
-			RelayFromIp:         binary.BigEndian.Uint32(fromB[:]),
-			RelayToIp:           binary.BigEndian.Uint32(targetB[:]),
 		}
+
+		if v == cert.Version1 {
+			b := from.As4()
+			resp.OldRelayFromAddr = binary.BigEndian.Uint32(b[:])
+			b = target.As4()
+			resp.OldRelayToAddr = binary.BigEndian.Uint32(b[:])
+		} else {
+			resp.RelayFromAddr = netAddrToProtoAddr(from)
+			resp.RelayToAddr = netAddrToProtoAddr(target)
+		}
+
 		msg, err := resp.Marshal()
 		if err != nil {
 			logMsg.
@@ -248,12 +320,11 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		} else {
 			f.SendMessageToHostInfo(header.Control, 0, h, msg, make([]byte, 12), make([]byte, mtu))
 			rm.l.WithFields(logrus.Fields{
-				//TODO: IPV6-WORK, this used to use the resp object but I am getting lazy now
 				"relayFrom":           from,
 				"relayTo":             target,
 				"initiatorRelayIndex": resp.InitiatorRelayIndex,
 				"responderRelayIndex": resp.ResponderRelayIndex,
-				"vpnIp":               h.vpnIp}).
+				"vpnAddrs":            h.vpnAddrs}).
 				Info("send CreateRelayResponse")
 		}
 		return
@@ -262,7 +333,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		if !rm.GetAmRelay() {
 			return
 		}
-		peer := rm.hostmap.QueryVpnIp(target)
+		peer := rm.hostmap.QueryVpnAddr(target)
 		if peer == nil {
 			// Try to establish a connection to this host. If we get a future relay request,
 			// we'll be ready!
@@ -273,103 +344,68 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			// Only create relays to peers for whom I have a direct connection
 			return
 		}
-		sendCreateRequest := false
 		var index uint32
 		var err error
 		targetRelay, ok := peer.relayState.QueryRelayForByIp(from)
 		if ok {
 			index = targetRelay.LocalIndex
-			if targetRelay.State == Requested {
-				sendCreateRequest = true
-			}
 		} else {
 			// Allocate an index in the hostMap for this relay peer
 			index, err = AddRelay(rm.l, peer, f.hostMap, from, nil, ForwardingType, Requested)
 			if err != nil {
 				return
 			}
-			sendCreateRequest = true
 		}
-		if sendCreateRequest {
-			//TODO: IPV6-WORK
-			fromB := h.vpnIp.As4()
-			targetB := target.As4()
+		peer.relayState.UpdateRelayForByIpState(from, Requested)
+		// Send a CreateRelayRequest to the peer.
+		req := NebulaControl{
+			Type:                NebulaControl_CreateRelayRequest,
+			InitiatorRelayIndex: index,
+		}
 
-			// Send a CreateRelayRequest to the peer.
-			req := NebulaControl{
-				Type:                NebulaControl_CreateRelayRequest,
-				InitiatorRelayIndex: index,
-				RelayFromIp:         binary.BigEndian.Uint32(fromB[:]),
-				RelayToIp:           binary.BigEndian.Uint32(targetB[:]),
+		if v == cert.Version1 {
+			if !h.vpnAddrs[0].Is4() {
+				rm.l.WithField("relayFrom", h.vpnAddrs[0]).
+					WithField("relayTo", target).
+					WithField("initiatorRelayIndex", req.InitiatorRelayIndex).
+					WithField("responderRelayIndex", req.ResponderRelayIndex).
+					WithField("vpnAddr", target).
+					Error("Refusing to CreateRelayRequest for a v1 relay with an ipv6 address")
+				return
 			}
-			msg, err := req.Marshal()
-			if err != nil {
-				logMsg.
-					WithError(err).Error("relayManager Failed to marshal Control message to create relay")
-			} else {
-				f.SendMessageToHostInfo(header.Control, 0, peer, msg, make([]byte, 12), make([]byte, mtu))
-				rm.l.WithFields(logrus.Fields{
-					//TODO: IPV6-WORK another lazy used to use the req object
-					"relayFrom":           h.vpnIp,
-					"relayTo":             target,
-					"initiatorRelayIndex": req.InitiatorRelayIndex,
-					"responderRelayIndex": req.ResponderRelayIndex,
-					"vpnIp":               target}).
-					Info("send CreateRelayRequest")
-			}
+
+			b := h.vpnAddrs[0].As4()
+			req.OldRelayFromAddr = binary.BigEndian.Uint32(b[:])
+			b = target.As4()
+			req.OldRelayToAddr = binary.BigEndian.Uint32(b[:])
+		} else {
+			req.RelayFromAddr = netAddrToProtoAddr(h.vpnAddrs[0])
+			req.RelayToAddr = netAddrToProtoAddr(target)
 		}
+
+		msg, err := req.Marshal()
+		if err != nil {
+			logMsg.
+				WithError(err).Error("relayManager Failed to marshal Control message to create relay")
+		} else {
+			f.SendMessageToHostInfo(header.Control, 0, peer, msg, make([]byte, 12), make([]byte, mtu))
+			rm.l.WithFields(logrus.Fields{
+				"relayFrom":           h.vpnAddrs[0],
+				"relayTo":             target,
+				"initiatorRelayIndex": req.InitiatorRelayIndex,
+				"responderRelayIndex": req.ResponderRelayIndex,
+				"vpnAddr":             target}).
+				Info("send CreateRelayRequest")
+		}
+
 		// Also track the half-created Relay state just received
-		relay, ok := h.relayState.QueryRelayForByIp(target)
+		_, ok = h.relayState.QueryRelayForByIp(target)
 		if !ok {
-			// Add the relay
-			state := PeerRequested
-			if targetRelay != nil && targetRelay.State == Established {
-				state = Established
-			}
-			_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, ForwardingType, state)
+			_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, ForwardingType, PeerRequested)
 			if err != nil {
 				logMsg.
 					WithError(err).Error("relayManager Failed to allocate a local index for relay")
 				return
-			}
-		} else {
-			switch relay.State {
-			case Established:
-				if relay.RemoteIndex != m.InitiatorRelayIndex {
-					// We got a brand new Relay request, because its index is different than what we saw before.
-					// This should never happen. The peer should never change an index, once created.
-					logMsg.WithFields(logrus.Fields{
-						"existingRemoteIndex": relay.RemoteIndex}).Error("Existing relay mismatch with CreateRelayRequest")
-					return
-				}
-				//TODO: IPV6-WORK
-				fromB := h.vpnIp.As4()
-				targetB := target.As4()
-				resp := NebulaControl{
-					Type:                NebulaControl_CreateRelayResponse,
-					ResponderRelayIndex: relay.LocalIndex,
-					InitiatorRelayIndex: relay.RemoteIndex,
-					RelayFromIp:         binary.BigEndian.Uint32(fromB[:]),
-					RelayToIp:           binary.BigEndian.Uint32(targetB[:]),
-				}
-				msg, err := resp.Marshal()
-				if err != nil {
-					rm.l.
-						WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
-				} else {
-					f.SendMessageToHostInfo(header.Control, 0, h, msg, make([]byte, 12), make([]byte, mtu))
-					rm.l.WithFields(logrus.Fields{
-						//TODO: IPV6-WORK more lazy, used to use resp object
-						"relayFrom":           h.vpnIp,
-						"relayTo":             target,
-						"initiatorRelayIndex": resp.InitiatorRelayIndex,
-						"responderRelayIndex": resp.ResponderRelayIndex,
-						"vpnIp":               h.vpnIp}).
-						Info("send CreateRelayResponse")
-				}
-
-			case Requested:
-				// Keep waiting for the other relay to complete
 			}
 		}
 	}

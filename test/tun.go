@@ -16,8 +16,8 @@ func (NoopTun) Activate() error {
 	return nil
 }
 
-func (NoopTun) Cidr() netip.Prefix {
-	return netip.Prefix{}
+func (NoopTun) Networks() []netip.Prefix {
+	return []netip.Prefix{}
 }
 
 func (NoopTun) Name() string {

@@ -40,7 +40,7 @@ ALL_LINUX = linux-amd64 \
 	linux-mips64le \
 	linux-mips-softfloat \
 	linux-riscv64 \
-        linux-loong64
+	linux-loong64
 
 ALL_FREEBSD = freebsd-amd64 \
 	freebsd-arm64
@@ -63,7 +63,7 @@ ALL = $(ALL_LINUX) \
 e2e:
 	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
 
-e2ev: TEST_FLAGS = -v
+e2ev: TEST_FLAGS += -v
 e2ev: e2e
 
 e2evv: TEST_ENV += TEST_LOGS=1
@@ -96,7 +96,7 @@ release-netbsd: $(ALL_NETBSD:%=build/nebula-%.tar.gz)
 
 release-boringcrypto: build/nebula-linux-$(shell go env GOARCH)-boringcrypto.tar.gz
 
-BUILD_ARGS = -trimpath
+BUILD_ARGS += -trimpath
 
 bin-windows: build/windows-amd64/nebula.exe build/windows-amd64/nebula-cert.exe
 	mv $? .
@@ -116,6 +116,10 @@ bin-freebsd-arm64: build/freebsd-arm64/nebula build/freebsd-arm64/nebula-cert
 bin-boringcrypto: build/linux-$(shell go env GOARCH)-boringcrypto/nebula build/linux-$(shell go env GOARCH)-boringcrypto/nebula-cert
 	mv $? .
 
+bin-pkcs11: BUILD_ARGS += -tags pkcs11
+bin-pkcs11: CGO_ENABLED = 1
+bin-pkcs11: bin
+
 bin:
 	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula${NEBULA_CMD_SUFFIX} ${NEBULA_CMD_PATH}
 	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula-cert${NEBULA_CMD_SUFFIX} ./cmd/nebula-cert
@@ -133,6 +137,8 @@ build/linux-mips-softfloat/%: LDFLAGS += -s -w
 # boringcrypto
 build/linux-amd64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
 build/linux-arm64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
+build/linux-amd64-boringcrypto/%: LDFLAGS += -checklinkname=0
+build/linux-arm64-boringcrypto/%: LDFLAGS += -checklinkname=0
 
 build/%/nebula: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
@@ -166,7 +172,10 @@ test:
 	go test -v ./...
 
 test-boringcrypto:
-	GOEXPERIMENT=boringcrypto CGO_ENABLED=1 go test -v ./...
+	GOEXPERIMENT=boringcrypto CGO_ENABLED=1 go test -ldflags "-checklinkname=0" -v ./...
+
+test-pkcs11:
+	CGO_ENABLED=1 go test -v -tags pkcs11 ./...
 
 test-cov-html:
 	go test -coverprofile=coverage.out
@@ -189,7 +198,7 @@ bench-cpu-long:
 	go test -bench=. -benchtime=60s -cpuprofile=cpu.pprof
 	go tool pprof go-audit.test cpu.pprof
 
-proto: nebula.pb.go cert/cert.pb.go
+proto: nebula.pb.go cert/cert_v1.pb.go
 
 nebula.pb.go: nebula.proto .FORCE
 	go build github.com/gogo/protobuf/protoc-gen-gogofaster
