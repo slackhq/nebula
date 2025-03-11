@@ -393,7 +393,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 				t.l.WithField("route", r.Cidr).
 					Warnf("unable to add unsafe_route, identical route already exists")
 			} else {
-				retErr := util.NewContextualError("Failed to add route", map[string]interface{}{"route": r}, err)
+				retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 				if logErrors {
 					retErr.Log(t.l)
 				} else {

@@ -36,7 +36,7 @@ type AllowListNameRule struct {
 
 func NewLocalAllowListFromConfig(c *config.C, k string) (*LocalAllowList, error) {
 	var nameRules []AllowListNameRule
-	handleKey := func(key string, value interface{}) (bool, error) {
+	handleKey := func(key string, value any) (bool, error) {
 		if key == "interfaces" {
 			var err error
 			nameRules, err = getAllowListInterfaces(k, value)
@@ -70,7 +70,7 @@ func NewRemoteAllowListFromConfig(c *config.C, k, rangesKey string) (*RemoteAllo
 
 // If the handleKey func returns true, the rest of the parsing is skipped
 // for this key. This allows parsing of special values like `interfaces`.
-func newAllowListFromConfig(c *config.C, k string, handleKey func(key string, value interface{}) (bool, error)) (*AllowList, error) {
+func newAllowListFromConfig(c *config.C, k string, handleKey func(key string, value any) (bool, error)) (*AllowList, error) {
 	r := c.Get(k)
 	if r == nil {
 		return nil, nil
@@ -81,7 +81,7 @@ func newAllowListFromConfig(c *config.C, k string, handleKey func(key string, va
 
 // If the handleKey func returns true, the rest of the parsing is skipped
 // for this key. This allows parsing of special values like `interfaces`.
-func newAllowList(k string, raw interface{}, handleKey func(key string, value interface{}) (bool, error)) (*AllowList, error) {
+func newAllowList(k string, raw any, handleKey func(key string, value any) (bool, error)) (*AllowList, error) {
 	rawMap, ok := raw.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("config `%s` has invalid type: %T", k, raw)
@@ -168,7 +168,7 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 	return &AllowList{cidrTree: tree}, nil
 }
 
-func getAllowListInterfaces(k string, v interface{}) ([]AllowListNameRule, error) {
+func getAllowListInterfaces(k string, v any) ([]AllowListNameRule, error) {
 	var nameRules []AllowListNameRule
 
 	rawRules, ok := v.(map[string]any)

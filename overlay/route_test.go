@@ -29,61 +29,61 @@ func Test_parseRoutes(t *testing.T) {
 	require.EqualError(t, err, "tun.routes is not an array")
 
 	// no routes
-	c.Settings["tun"] = map[string]any{"routes": []interface{}{}}
+	c.Settings["tun"] = map[string]any{"routes": []any{}}
 	routes, err = parseRoutes(c, []netip.Prefix{n})
 	require.NoError(t, err)
 	assert.Empty(t, routes)
 
 	// weird route
-	c.Settings["tun"] = map[string]any{"routes": []interface{}{"asdf"}}
+	c.Settings["tun"] = map[string]any{"routes": []any{"asdf"}}
 	routes, err = parseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1 in tun.routes is invalid")
 
 	// no mtu
-	c.Settings["tun"] = map[string]any{"routes": []interface{}{map[string]any{}}}
+	c.Settings["tun"] = map[string]any{"routes": []any{map[string]any{}}}
 	routes, err = parseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.mtu in tun.routes is not present")
 
 	// bad mtu
-	c.Settings["tun"] = map[string]any{"routes": []interface{}{map[string]any{"mtu": "nope"}}}
+	c.Settings["tun"] = map[string]any{"routes": []any{map[string]any{"mtu": "nope"}}}
 	routes, err = parseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.mtu in tun.routes is not an integer: strconv.Atoi: parsing \"nope\": invalid syntax")
 
 	// low mtu
-	c.Settings["tun"] = map[string]any{"routes": []interface{}{map[string]any{"mtu": "499"}}}
+	c.Settings["tun"] = map[string]any{"routes": []any{map[string]any{"mtu": "499"}}}
 	routes, err = parseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.mtu in tun.routes is below 500: 499")
 
 	// missing route
-	c.Settings["tun"] = map[string]any{"routes": []interface{}{map[string]any{"mtu": "500"}}}
+	c.Settings["tun"] = map[string]any{"routes": []any{map[string]any{"mtu": "500"}}}
 	routes, err = parseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.route in tun.routes is not present")
 
 	// unparsable route
-	c.Settings["tun"] = map[string]any{"routes": []interface{}{map[string]any{"mtu": "500", "route": "nope"}}}
+	c.Settings["tun"] = map[string]any{"routes": []any{map[string]any{"mtu": "500", "route": "nope"}}}
 	routes, err = parseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.route in tun.routes failed to parse: netip.ParsePrefix(\"nope\"): no '/'")
 
 	// below network range
-	c.Settings["tun"] = map[string]any{"routes": []interface{}{map[string]any{"mtu": "500", "route": "1.0.0.0/8"}}}
+	c.Settings["tun"] = map[string]any{"routes": []any{map[string]any{"mtu": "500", "route": "1.0.0.0/8"}}}
 	routes, err = parseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.route in tun.routes is not contained within the configured vpn networks; route: 1.0.0.0/8, networks: [10.0.0.0/24]")
 
 	// above network range
-	c.Settings["tun"] = map[string]any{"routes": []interface{}{map[string]any{"mtu": "500", "route": "10.0.1.0/24"}}}
+	c.Settings["tun"] = map[string]any{"routes": []any{map[string]any{"mtu": "500", "route": "10.0.1.0/24"}}}
 	routes, err = parseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.route in tun.routes is not contained within the configured vpn networks; route: 10.0.1.0/24, networks: [10.0.0.0/24]")
 
 	// Not in multiple ranges
-	c.Settings["tun"] = map[string]any{"routes": []interface{}{map[string]any{"mtu": "500", "route": "192.0.0.0/24"}}}
+	c.Settings["tun"] = map[string]any{"routes": []any{map[string]any{"mtu": "500", "route": "192.0.0.0/24"}}}
 	routes, err = parseRoutes(c, []netip.Prefix{n, netip.MustParsePrefix("192.1.0.0/24")})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.route in tun.routes is not contained within the configured vpn networks; route: 192.0.0.0/24, networks: [10.0.0.0/24 192.1.0.0/24]")
@@ -134,19 +134,19 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	require.EqualError(t, err, "tun.unsafe_routes is not an array")
 
 	// no routes
-	c.Settings["tun"] = map[string]any{"unsafe_routes": []interface{}{}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	require.NoError(t, err)
 	assert.Empty(t, routes)
 
 	// weird route
-	c.Settings["tun"] = map[string]any{"unsafe_routes": []interface{}{"asdf"}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{"asdf"}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1 in tun.unsafe_routes is invalid")
 
 	// no via
-	c.Settings["tun"] = map[string]any{"unsafe_routes": []interface{}{map[string]any{}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.via in tun.unsafe_routes is not present")
@@ -155,68 +155,68 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	for _, invalidValue := range []any{
 		127, false, nil, 1.0, []string{"1", "2"},
 	} {
-		c.Settings["tun"] = map[string]any{"unsafe_routes": []interface{}{map[string]any{"via": invalidValue}}}
+		c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": invalidValue}}}
 		routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 		assert.Nil(t, routes)
 		require.EqualError(t, err, fmt.Sprintf("entry 1.via in tun.unsafe_routes is not a string: found %T", invalidValue))
 	}
 
 	// unparsable via
-	c.Settings["tun"] = map[string]any{"unsafe_routes": []interface{}{map[string]any{"mtu": "500", "via": "nope"}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"mtu": "500", "via": "nope"}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.via in tun.unsafe_routes failed to parse address: ParseAddr(\"nope\"): unable to parse IP")
 
 	// missing route
-	c.Settings["tun"] = map[string]any{"unsafe_routes": []interface{}{map[string]any{"via": "127.0.0.1", "mtu": "500"}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "mtu": "500"}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.route in tun.unsafe_routes is not present")
 
 	// unparsable route
-	c.Settings["tun"] = map[string]any{"unsafe_routes": []interface{}{map[string]any{"via": "127.0.0.1", "mtu": "500", "route": "nope"}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "mtu": "500", "route": "nope"}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.route in tun.unsafe_routes failed to parse: netip.ParsePrefix(\"nope\"): no '/'")
 
 	// within network range
-	c.Settings["tun"] = map[string]any{"unsafe_routes": []interface{}{map[string]any{"via": "127.0.0.1", "route": "10.0.0.0/24"}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "route": "10.0.0.0/24"}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.route in tun.unsafe_routes is contained within the configured vpn networks; route: 10.0.0.0/24, network: 10.0.0.0/24")
 
 	// below network range
-	c.Settings["tun"] = map[string]any{"unsafe_routes": []interface{}{map[string]any{"via": "127.0.0.1", "route": "1.0.0.0/8"}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "route": "1.0.0.0/8"}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Len(t, routes, 1)
 	require.NoError(t, err)
 
 	// above network range
-	c.Settings["tun"] = map[string]any{"unsafe_routes": []interface{}{map[string]any{"via": "127.0.0.1", "route": "10.0.1.0/24"}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "route": "10.0.1.0/24"}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Len(t, routes, 1)
 	require.NoError(t, err)
 
 	// no mtu
-	c.Settings["tun"] = map[string]any{"unsafe_routes": []interface{}{map[string]any{"via": "127.0.0.1", "route": "1.0.0.0/8"}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "route": "1.0.0.0/8"}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Len(t, routes, 1)
 	assert.Equal(t, 0, routes[0].MTU)
 
 	// bad mtu
-	c.Settings["tun"] = map[string]any{"unsafe_routes": []interface{}{map[string]any{"via": "127.0.0.1", "mtu": "nope"}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "mtu": "nope"}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.mtu in tun.unsafe_routes is not an integer: strconv.Atoi: parsing \"nope\": invalid syntax")
 
 	// low mtu
-	c.Settings["tun"] = map[string]any{"unsafe_routes": []interface{}{map[string]any{"via": "127.0.0.1", "mtu": "499"}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "mtu": "499"}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.mtu in tun.unsafe_routes is below 500: 499")
 
 	// bad install
-	c.Settings["tun"] = map[string]any{"unsafe_routes": []interface{}{map[string]any{"via": "127.0.0.1", "mtu": "9000", "route": "1.0.0.0/29", "install": "nope"}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "mtu": "9000", "route": "1.0.0.0/29", "install": "nope"}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.install in tun.unsafe_routes is not a boolean: strconv.ParseBool: parsing \"nope\": invalid syntax")

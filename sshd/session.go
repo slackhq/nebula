@@ -31,7 +31,7 @@ func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.New
 	s.commands.Insert("logout", &Command{
 		Name:             "logout",
 		ShortDescription: "Ends the current session",
-		Callback: func(a interface{}, args []string, w StringWriter) error {
+		Callback: func(a any, args []string, w StringWriter) error {
 			s.Close()
 			return nil
 		},

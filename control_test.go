@@ -110,7 +110,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	})
 }
 
-func assertFields(t *testing.T, expected []string, actualStruct interface{}) {
+func assertFields(t *testing.T, expected []string, actualStruct any) {
 	val := reflect.ValueOf(actualStruct).Elem()
 	fields := make([]string, val.NumField())
 	for i := 0; i < val.NumField(); i++ {
