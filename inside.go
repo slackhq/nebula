@@ -123,7 +123,7 @@ func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *
 	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, out, nb, packet, q)
 }
 
-// This should only called for internal nebula traffic
+// Handshake will attempt to initiate a tunnel with the provided vpn address if it is within our vpn networks. This is a no-op if the tunnel is already established or being established
 func (f *Interface) Handshake(vpnAddr netip.Addr) {
 	f.getOrHandshakeNoRouting(vpnAddr, nil)
 }
@@ -169,9 +169,8 @@ func balancePacket(fwPacket *firewall.Packet, gateways []routing.Gateway) netip.
 	panic("The packet hash value should always fall inside a gateway bucket")
 }
 
-// This is called for external traffic
-// getOrHandshake returns nil if the vpnIp is not routable.
-// If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
+// getOrHandshakeConsiderRouting will try to find the HostInfo to handle this packet, starting a handshake if necessary.
+// If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel.
 func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
 
 	destinationAddr := fwPacket.RemoteAddr
@@ -195,14 +194,14 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 
 		// Do not pass a cacheCallback, if the node is not reachable we will attempt other nodes
 		// so we don't want to cache the packet to avoid sending duplicate packets if this gateway comes back up.
-		if hostInfo, ready := f.handshakeManager.GetOrHandshake(gatewayIp, nil); ready {
-			return hostInfo, true
+		if hostinfo, ready := f.handshakeManager.GetOrHandshake(gatewayIp, nil); ready {
+			return hostinfo, true
 		}
 
 		// It appears the selected gateway cannot be reached, find another gateway to fallback on.
 		// The current implementation breaks ECMP but that seems better than no connectivity.
 		// If ECMP is also required when a gateway is down then connectivity status
-		// for each gateway nees to be kept and the weights recalculated when they go up or down.
+		// for each gateway needs to be kept and the weights recalculated when they go up or down.
 		// This would also need to interact with unsafe_route updates through reloading the config or
 		// use of the use_system_route_table option
 
@@ -212,8 +211,6 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 				Debugln("Calculated gateway for ECMP not available, attempting other gateways")
 		}
 
-		var hostInfo *HostInfo
-		var ready bool
 		var handshakeHostInfo *HandshakeHostInfo
 		var hhReceiver = func(hh *HandshakeHostInfo) {
 			handshakeHostInfo = hh
@@ -226,14 +223,14 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 			}
 
 			// Store the HandshakeHostInfo for the cache callback
-			if hostInfo, ready = f.handshakeManager.GetOrHandshake(gateways[i].Addr(), hhReceiver); ready {
-				return hostInfo, true
+			if hostinfo, ready = f.handshakeManager.GetOrHandshake(gateways[i].Addr(), hhReceiver); ready {
+				return hostinfo, true
 			}
 		}
 
 		// No gateways reachable, cache packet in last gateway attempted
 		cacheCallback(handshakeHostInfo)
-		return hostInfo, false
+		return hostinfo, false
 	}
 }
 
