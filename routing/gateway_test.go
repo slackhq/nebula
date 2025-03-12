@@ -10,8 +10,8 @@ import (
 func TestRebalance3_2Split(t *testing.T) {
 	gateways := []Gateway{}
 
-	gateways = append(gateways, Gateway{ip: netip.Addr{}, weight: 10})
-	gateways = append(gateways, Gateway{ip: netip.Addr{}, weight: 5})
+	gateways = append(gateways, Gateway{addr: netip.Addr{}, weight: 10})
+	gateways = append(gateways, Gateway{addr: netip.Addr{}, weight: 5})
 
 	RebalanceGateways(gateways)
 
@@ -22,9 +22,9 @@ func TestRebalance3_2Split(t *testing.T) {
 func TestRebalanceEqualSplit(t *testing.T) {
 	gateways := []Gateway{}
 
-	gateways = append(gateways, Gateway{ip: netip.Addr{}, weight: 1})
-	gateways = append(gateways, Gateway{ip: netip.Addr{}, weight: 1})
-	gateways = append(gateways, Gateway{ip: netip.Addr{}, weight: 1})
+	gateways = append(gateways, Gateway{addr: netip.Addr{}, weight: 1})
+	gateways = append(gateways, Gateway{addr: netip.Addr{}, weight: 1})
+	gateways = append(gateways, Gateway{addr: netip.Addr{}, weight: 1})
 
 	RebalanceGateways(gateways)
 

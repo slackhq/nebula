@@ -305,7 +305,7 @@ func Test_makeRouteTree(t *testing.T) {
 
 	nip, err := netip.ParseAddr("192.168.0.1")
 	require.NoError(t, err)
-	assert.Equal(t, nip, r[0].Ip())
+	assert.Equal(t, nip, r[0].Addr())
 
 	ip, err = netip.ParseAddr("1.0.0.1")
 	require.NoError(t, err)
@@ -314,7 +314,7 @@ func Test_makeRouteTree(t *testing.T) {
 
 	nip, err = netip.ParseAddr("192.168.0.2")
 	require.NoError(t, err)
-	assert.Equal(t, nip, r[0].Ip())
+	assert.Equal(t, nip, r[0].Addr())
 
 	ip, err = netip.ParseAddr("1.1.0.1")
 	require.NoError(t, err)
@@ -377,7 +377,7 @@ func Test_makeMultipathUnsafeRouteTree(t *testing.T) {
 
 	nip, err := netip.ParseAddr("192.168.100.10")
 	require.NoError(t, err)
-	assert.Equal(t, nip, r[0].Ip())
+	assert.Equal(t, nip, r[0].Addr())
 
 	ip, err = netip.ParseAddr("192.168.87.1")
 	require.NoError(t, err)

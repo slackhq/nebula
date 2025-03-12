@@ -6,25 +6,25 @@ import (
 )
 
 type Gateway struct {
-	ip         netip.Addr
+	addr       netip.Addr
 	weight     int
 	upperBound int
 }
 
-func NewGateway(ip netip.Addr, weight int) Gateway {
-	return Gateway{ip: ip, weight: weight}
+func NewGateway(addr netip.Addr, weight int) Gateway {
+	return Gateway{addr: addr, weight: weight}
 }
 
 func (g *Gateway) UpperBound() int {
 	return g.upperBound
 }
 
-func (g *Gateway) Ip() netip.Addr {
-	return g.ip
+func (g *Gateway) Addr() netip.Addr {
+	return g.addr
 }
 
 func (g *Gateway) String() string {
-	return fmt.Sprintf("%s:%d/%d", g.ip, g.weight, g.upperBound)
+	return fmt.Sprintf("%s:%d/%d", g.addr, g.weight, g.upperBound)
 }
 
 // Divide and round to nearest integer

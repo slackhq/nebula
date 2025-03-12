@@ -157,7 +157,7 @@ func (t *winTun) addRoutes(logErrors bool) error {
 		// Windows does not support multipath routes natively, so we install only a single route.
 		// This is not a problem as traffic will always be sent to Nebula which handles the multipath routing internally.
 		// In effect this provides multipath routing support to windows supporting loadbalancing and redundancy.
-		err := luid.AddRoute(r.Cidr, r.Via[0].Ip(), uint32(r.Metric))
+		err := luid.AddRoute(r.Cidr, r.Via[0].Addr(), uint32(r.Metric))
 		if err != nil {
 			retErr := util.NewContextualError("Failed to add route", map[string]interface{}{"route": r}, err)
 			if logErrors {
@@ -203,7 +203,7 @@ func (t *winTun) removeRoutes(routes []Route) error {
 		}
 
 		// See comment on luid.AddRoute
-		err := luid.DeleteRoute(r.Cidr, r.Via[0].Ip())
+		err := luid.DeleteRoute(r.Cidr, r.Via[0].Addr())
 		if err != nil {
 			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
 		} else {

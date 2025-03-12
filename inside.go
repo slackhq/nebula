@@ -161,7 +161,7 @@ func balancePacket(fwPacket *firewall.Packet, gateways []routing.Gateway) netip.
 
 	for i := range gateways {
 		if hash <= gateways[i].UpperBound() {
-			return gateways[i].Ip()
+			return gateways[i].Addr()
 		}
 	}
 
@@ -174,21 +174,21 @@ func balancePacket(fwPacket *firewall.Packet, gateways []routing.Gateway) netip.
 // If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
 func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
 
-	destinationIp := fwPacket.RemoteAddr
+	destinationAddr := fwPacket.RemoteAddr
 
-	hostinfo, ready := f.getOrHandshakeNoRouting(destinationIp, cacheCallback)
+	hostinfo, ready := f.getOrHandshakeNoRouting(destinationAddr, cacheCallback)
 
 	// Host is inside the mesh, no routing required
 	if hostinfo != nil {
 		return hostinfo, ready
 	}
 
-	gateways := f.inside.RoutesFor(destinationIp)
+	gateways := f.inside.RoutesFor(destinationAddr)
 	if len(gateways) == 0 {
 		return nil, false
 	} else if len(gateways) == 1 {
 		// Single gateway route
-		return f.handshakeManager.GetOrHandshake(gateways[0].Ip(), cacheCallback)
+		return f.handshakeManager.GetOrHandshake(gateways[0].Addr(), cacheCallback)
 	} else {
 		// Multi gateway route, perform ECMP categorization
 		gatewayIp := balancePacket(fwPacket, gateways)
@@ -207,7 +207,7 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 		// use of the use_system_route_table option
 
 		if f.l.Level >= logrus.DebugLevel {
-			f.l.WithField("destination", destinationIp).
+			f.l.WithField("destination", destinationAddr).
 				WithField("originalGateway", gatewayIp).
 				Debugln("Calculated gateway for ECMP not available, attempting other gateways")
 		}
@@ -221,12 +221,12 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 
 		for i := range gateways {
 			// Skip the gateway that failed previously
-			if gateways[i].Ip() == gatewayIp {
+			if gateways[i].Addr() == gatewayIp {
 				continue
 			}
 
 			// Store the HandshakeHostInfo for the cache callback
-			if hostInfo, ready = f.handshakeManager.GetOrHandshake(gateways[i].Ip(), hhReceiver); ready {
+			if hostInfo, ready = f.handshakeManager.GetOrHandshake(gateways[i].Addr(), hhReceiver); ready {
 				return hostInfo, true
 			}
 		}

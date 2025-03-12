@@ -13,13 +13,13 @@ func TestPacketsAreBalancedEqually(t *testing.T) {
 
 	gateways := []routing.Gateway{}
 
-	gw1Ip := netip.MustParseAddr("1.0.0.1")
-	gw2Ip := netip.MustParseAddr("1.0.0.2")
-	gw3Ip := netip.MustParseAddr("1.0.0.3")
+	gw1Addr := netip.MustParseAddr("1.0.0.1")
+	gw2Addr := netip.MustParseAddr("1.0.0.2")
+	gw3Addr := netip.MustParseAddr("1.0.0.3")
 
-	gateways = append(gateways, routing.NewGateway(gw1Ip, 1))
-	gateways = append(gateways, routing.NewGateway(gw2Ip, 1))
-	gateways = append(gateways, routing.NewGateway(gw3Ip, 1))
+	gateways = append(gateways, routing.NewGateway(gw1Addr, 1))
+	gateways = append(gateways, routing.NewGateway(gw2Addr, 1))
+	gateways = append(gateways, routing.NewGateway(gw3Addr, 1))
 
 	routing.RebalanceGateways(gateways)
 
@@ -41,11 +41,11 @@ func TestPacketsAreBalancedEqually(t *testing.T) {
 		selectedGw := balancePacket(&packet, gateways)
 
 		switch selectedGw {
-		case gw1Ip:
+		case gw1Addr:
 			gw1count += 1
-		case gw2Ip:
+		case gw2Addr:
 			gw2count += 1
-		case gw3Ip:
+		case gw3Addr:
 			gw3count += 1
 		}
 
@@ -62,11 +62,11 @@ func TestPacketsAreBalancedByPriority(t *testing.T) {
 
 	gateways := []routing.Gateway{}
 
-	gw1Ip := netip.MustParseAddr("1.0.0.1")
-	gw2Ip := netip.MustParseAddr("1.0.0.2")
+	gw1Addr := netip.MustParseAddr("1.0.0.1")
+	gw2Addr := netip.MustParseAddr("1.0.0.2")
 
-	gateways = append(gateways, routing.NewGateway(gw1Ip, 10))
-	gateways = append(gateways, routing.NewGateway(gw2Ip, 5))
+	gateways = append(gateways, routing.NewGateway(gw1Addr, 10))
+	gateways = append(gateways, routing.NewGateway(gw2Addr, 5))
 
 	routing.RebalanceGateways(gateways)
 
@@ -87,9 +87,9 @@ func TestPacketsAreBalancedByPriority(t *testing.T) {
 		selectedGw := balancePacket(&packet, gateways)
 
 		switch selectedGw {
-		case gw1Ip:
+		case gw1Addr:
 			gw1count += 1
-		case gw2Ip:
+		case gw2Addr:
 			gw2count += 1
 		}
 
