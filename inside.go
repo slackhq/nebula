@@ -176,7 +176,7 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 		// Store the handshakeHostInfo for later.
 		// If this node is not reachable we will attempt other nodes, if none are reachable we will
 		// cache the packet for this gateway.
-		if hostinfo, ready := f.handshakeManager.GetOrHandshake(gatewayAddr, hhReceiver); ready {
+		if hostinfo, ready = f.handshakeManager.GetOrHandshake(gatewayAddr, hhReceiver); ready {
 			return hostinfo, true
 		}
 
