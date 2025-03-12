@@ -161,9 +161,15 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 		// Multi gateway route, perform ECMP categorization
 		gatewayIp := routing.BalancePacket(fwPacket, gateways)
 
-		// Do not pass a cacheCallback, if the node is not reachable we will attempt other nodes
-		// so we don't want to cache the packet to avoid sending duplicate packets if this gateway comes back up.
-		if hostinfo, ready := f.handshakeManager.GetOrHandshake(gatewayIp, nil); ready {
+		var handshakeInfoForChosenGateway *HandshakeHostInfo
+		var hhReceiver = func(hh *HandshakeHostInfo) {
+			handshakeInfoForChosenGateway = hh
+		}
+
+		// Store the handshakeHostInfo for later.
+		// If this node is not reachable we will attempt other nodes, if none are reachable we will
+		// cache the packet for this gateway.
+		if hostinfo, ready := f.handshakeManager.GetOrHandshake(gatewayIp, hhReceiver); ready {
 			return hostinfo, true
 		}
 
@@ -180,25 +186,20 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 				Debugln("Calculated gateway for ECMP not available, attempting other gateways")
 		}
 
-		var handshakeHostInfo *HandshakeHostInfo
-		var hhReceiver = func(hh *HandshakeHostInfo) {
-			handshakeHostInfo = hh
-		}
-
 		for i := range gateways {
 			// Skip the gateway that failed previously
 			if gateways[i].Addr() == gatewayIp {
 				continue
 			}
 
-			// Store the HandshakeHostInfo for the cache callback
-			if hostinfo, ready = f.handshakeManager.GetOrHandshake(gateways[i].Addr(), hhReceiver); ready {
+			// We do not need the HandshakeHostInfo since we cache the packet in the originally chosen gateway
+			if hostinfo, ready = f.handshakeManager.GetOrHandshake(gateways[i].Addr(), nil); ready {
 				return hostinfo, true
 			}
 		}
 
-		// No gateways reachable, cache packet in last gateway attempted
-		cacheCallback(handshakeHostInfo)
+		// No gateways reachable, cache the packet in the originally chosen gateway
+		cacheCallback(handshakeInfoForChosenGateway)
 		return hostinfo, false
 	}
 }
