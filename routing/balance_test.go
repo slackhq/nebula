@@ -1,27 +1,26 @@
-package nebula
+package routing
 
 import (
 	"net/netip"
 	"testing"
 
 	"github.com/slackhq/nebula/firewall"
-	"github.com/slackhq/nebula/routing"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestPacketsAreBalancedEqually(t *testing.T) {
 
-	gateways := []routing.Gateway{}
+	gateways := []Gateway{}
 
 	gw1Addr := netip.MustParseAddr("1.0.0.1")
 	gw2Addr := netip.MustParseAddr("1.0.0.2")
 	gw3Addr := netip.MustParseAddr("1.0.0.3")
 
-	gateways = append(gateways, routing.NewGateway(gw1Addr, 1))
-	gateways = append(gateways, routing.NewGateway(gw2Addr, 1))
-	gateways = append(gateways, routing.NewGateway(gw3Addr, 1))
+	gateways = append(gateways, NewGateway(gw1Addr, 1))
+	gateways = append(gateways, NewGateway(gw2Addr, 1))
+	gateways = append(gateways, NewGateway(gw3Addr, 1))
 
-	routing.RebalanceGateways(gateways)
+	RebalanceGateways(gateways)
 
 	gw1count := 0
 	gw2count := 0
@@ -38,7 +37,7 @@ func TestPacketsAreBalancedEqually(t *testing.T) {
 			Fragment:   false,
 		}
 
-		selectedGw := balancePacket(&packet, gateways)
+		selectedGw := BalancePacket(&packet, gateways)
 
 		switch selectedGw {
 		case gw1Addr:
@@ -60,15 +59,15 @@ func TestPacketsAreBalancedEqually(t *testing.T) {
 
 func TestPacketsAreBalancedByPriority(t *testing.T) {
 
-	gateways := []routing.Gateway{}
+	gateways := []Gateway{}
 
 	gw1Addr := netip.MustParseAddr("1.0.0.1")
 	gw2Addr := netip.MustParseAddr("1.0.0.2")
 
-	gateways = append(gateways, routing.NewGateway(gw1Addr, 10))
-	gateways = append(gateways, routing.NewGateway(gw2Addr, 5))
+	gateways = append(gateways, NewGateway(gw1Addr, 10))
+	gateways = append(gateways, NewGateway(gw2Addr, 5))
 
-	routing.RebalanceGateways(gateways)
+	RebalanceGateways(gateways)
 
 	gw1count := 0
 	gw2count := 0
@@ -84,7 +83,7 @@ func TestPacketsAreBalancedByPriority(t *testing.T) {
 			Fragment:   false,
 		}
 
-		selectedGw := balancePacket(&packet, gateways)
+		selectedGw := BalancePacket(&packet, gateways)
 
 		switch selectedGw {
 		case gw1Addr:

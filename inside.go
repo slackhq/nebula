@@ -9,7 +9,6 @@ import (
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/routing"
-	"github.com/zeebo/xxh3"
 )
 
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
@@ -139,36 +138,6 @@ func (f *Interface) getOrHandshakeNoRouting(vpnAddr netip.Addr, cacheCallback fu
 	return nil, false
 }
 
-func hashPacket(p *firewall.Packet) int {
-	hasher := xxh3.Hasher{}
-
-	hasher.Write(p.LocalAddr.AsSlice())
-	hasher.Write(p.RemoteAddr.AsSlice())
-	hasher.Write([]byte{
-		byte(p.LocalPort & 0xFF),
-		byte((p.LocalPort >> 8) & 0xFF),
-		byte(p.RemotePort & 0xFF),
-		byte((p.RemotePort >> 8) & 0xFF),
-		byte(p.Protocol),
-	})
-
-	// Uses xxh3 as it is a fast hash with good distribution
-	return int(hasher.Sum64() & 0x7FFFFFFF)
-}
-
-func balancePacket(fwPacket *firewall.Packet, gateways []routing.Gateway) netip.Addr {
-	hash := hashPacket(fwPacket)
-
-	for i := range gateways {
-		if hash <= gateways[i].UpperBound() {
-			return gateways[i].Addr()
-		}
-	}
-
-	// This should never happen
-	panic("The packet hash value should always fall inside a gateway bucket")
-}
-
 // getOrHandshakeConsiderRouting will try to find the HostInfo to handle this packet, starting a handshake if necessary.
 // If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel.
 func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
@@ -190,7 +159,7 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 		return f.handshakeManager.GetOrHandshake(gateways[0].Addr(), cacheCallback)
 	} else {
 		// Multi gateway route, perform ECMP categorization
-		gatewayIp := balancePacket(fwPacket, gateways)
+		gatewayIp := routing.BalancePacket(fwPacket, gateways)
 
 		// Do not pass a cacheCallback, if the node is not reachable we will attempt other nodes
 		// so we don't want to cache the packet to avoid sending duplicate packets if this gateway comes back up.
