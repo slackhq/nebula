@@ -388,7 +388,7 @@ func Test_makeMultipathUnsafeRouteTree(t *testing.T) {
 		routing.NewGateway(netip.MustParseAddr("10.0.0.2"), 1),
 		routing.NewGateway(netip.MustParseAddr("10.0.0.3"), 1)}
 
-	routing.RebalanceGateways(expectedGateways)
+	routing.CalculateBucketsForGateways(expectedGateways)
 	assert.ElementsMatch(t, expectedGateways, r)
 
 	ip, err = netip.ParseAddr("192.168.89.1")
@@ -399,6 +399,6 @@ func Test_makeMultipathUnsafeRouteTree(t *testing.T) {
 	expectedGateways = []routing.Gateway{routing.NewGateway(netip.MustParseAddr("10.0.0.1"), 10),
 		routing.NewGateway(netip.MustParseAddr("10.0.0.2"), 5)}
 
-	routing.RebalanceGateways(expectedGateways)
+	routing.CalculateBucketsForGateways(expectedGateways)
 	assert.ElementsMatch(t, expectedGateways, r)
 }

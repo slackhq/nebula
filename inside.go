@@ -152,14 +152,21 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 	}
 
 	gateways := f.inside.RoutesFor(destinationAddr)
-	if len(gateways) == 0 {
+
+	switch len(gateways) {
+	case 0:
 		return nil, false
-	} else if len(gateways) == 1 {
+	case 1:
 		// Single gateway route
 		return f.handshakeManager.GetOrHandshake(gateways[0].Addr(), cacheCallback)
-	} else {
+	default:
 		// Multi gateway route, perform ECMP categorization
-		gatewayIp := routing.BalancePacket(fwPacket, gateways)
+		gatewayAddr, balancingOk := routing.BalancePacket(fwPacket, gateways)
+
+		if !balancingOk {
+			// This happens if the gateway buckets were not calculated, this _should_ never happen
+			f.l.Error("Gateway buckets not calculated, fallback from ECMP to random routing. Please report this bug.")
+		}
 
 		var handshakeInfoForChosenGateway *HandshakeHostInfo
 		var hhReceiver = func(hh *HandshakeHostInfo) {
@@ -169,7 +176,7 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 		// Store the handshakeHostInfo for later.
 		// If this node is not reachable we will attempt other nodes, if none are reachable we will
 		// cache the packet for this gateway.
-		if hostinfo, ready := f.handshakeManager.GetOrHandshake(gatewayIp, hhReceiver); ready {
+		if hostinfo, ready := f.handshakeManager.GetOrHandshake(gatewayAddr, hhReceiver); ready {
 			return hostinfo, true
 		}
 
@@ -182,13 +189,13 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("destination", destinationAddr).
-				WithField("originalGateway", gatewayIp).
+				WithField("originalGateway", gatewayAddr).
 				Debugln("Calculated gateway for ECMP not available, attempting other gateways")
 		}
 
 		for i := range gateways {
 			// Skip the gateway that failed previously
-			if gateways[i].Addr() == gatewayIp {
+			if gateways[i].Addr() == gatewayAddr {
 				continue
 			}
 
@@ -202,6 +209,7 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 		cacheCallback(handshakeInfoForChosenGateway)
 		return hostinfo, false
 	}
+
 }
 
 func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte) {

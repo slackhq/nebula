@@ -610,7 +610,7 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) []routing.Gateway {
 		}
 	}
 
-	routing.RebalanceGateways(gateways)
+	routing.CalculateBucketsForGateways(gateways)
 	return gateways
 }
 

@@ -57,7 +57,7 @@ func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*bart.Table
 
 		gateways := r.Via
 		if len(gateways) > 0 {
-			routing.RebalanceGateways(gateways)
+			routing.CalculateBucketsForGateways(gateways)
 			routeTree.Insert(r.Cidr, gateways)
 		}
 	}
