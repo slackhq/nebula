@@ -4,25 +4,22 @@ import (
 	"net/netip"
 
 	"github.com/slackhq/nebula/firewall"
-	"github.com/zeebo/xxh3"
 )
 
-// Hashes the packet and always returns a positive integer
+// Hashes the packet source and destination port and always returns a positive integer
+// Based on 'Prospecting for Hash Functions'
+//   - https://nullprogram.com/blog/2018/07/31/
+//   - https://github.com/skeeto/hash-prospector
+//     [16 21f0aaad 15 d35a2d97 15] = 0.10760229515479501
 func hashPacket(p *firewall.Packet) int {
-	hasher := xxh3.Hasher{}
+	x := (uint32(p.LocalPort) << 16) | uint32(p.RemotePort)
+	x ^= x >> 16
+	x *= 0x21f0aaad
+	x ^= x >> 15
+	x *= 0xd35a2d97
+	x ^= x >> 15
 
-	hasher.Write(p.LocalAddr.AsSlice())
-	hasher.Write(p.RemoteAddr.AsSlice())
-	hasher.Write([]byte{
-		byte(p.LocalPort & 0xFF),
-		byte((p.LocalPort >> 8) & 0xFF),
-		byte(p.RemotePort & 0xFF),
-		byte((p.RemotePort >> 8) & 0xFF),
-		byte(p.Protocol),
-	})
-
-	// Uses xxh3 as it is a fast hash with good distribution
-	return int(hasher.Sum64() & 0x7FFFFFFF)
+	return int(x) & 0x7FFFFFFF
 }
 
 // For this function to work correctly it requires that the buckets for the gateways have been calculated
