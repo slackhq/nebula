@@ -703,13 +703,6 @@ func (lh *LightHouse) unlockedShouldAddV6(vpnAddr netip.Addr, to *V6AddrPort) bo
 	return true
 }
 
-// func lhIp6ToAddr(v *Ip6AndPort) netip.Addr {
-// 	var ip [16]byte
-// 	binary.BigEndian.PutUint64(ip[:8], v.Hi)
-// 	binary.BigEndian.PutUint64(ip[8:], v.Lo)
-// 	return netip.AddrFrom16(ip)
-// }
-
 func (lh *LightHouse) IsLighthouseAddr(vpnAddr netip.Addr) bool {
 	if _, ok := lh.GetLighthouses()[vpnAddr]; ok {
 		return true
