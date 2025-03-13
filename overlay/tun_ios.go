@@ -24,7 +24,7 @@ type tun struct {
 	io.ReadWriteCloser
 	vpnNetworks []netip.Prefix
 	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[[]routing.Gateway]]
+	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *logrus.Logger
 }
 
@@ -80,7 +80,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	return nil
 }
 
-func (t *tun) RoutesFor(ip netip.Addr) []routing.Gateway {
+func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 	r, _ := t.routeTree.Load().Lookup(ip)
 	return r
 }

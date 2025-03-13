@@ -20,7 +20,7 @@ type TestTun struct {
 	Device      string
 	vpnNetworks []netip.Prefix
 	Routes      []Route
-	routeTree   *bart.Table[[]routing.Gateway]
+	routeTree   *bart.Table[routing.Gateways]
 	l           *logrus.Logger
 
 	closed    atomic.Bool
@@ -87,7 +87,7 @@ func (t *TestTun) Get(block bool) []byte {
 // Below this is boilerplate implementation to make nebula actually work
 //********************************************************************************************************************//
 
-func (t *TestTun) RoutesFor(ip netip.Addr) []routing.Gateway {
+func (t *TestTun) RoutesFor(ip netip.Addr) routing.Gateways {
 	r, _ := t.routeTree.Lookup(ip)
 	return r
 }

@@ -12,6 +12,6 @@ type Device interface {
 	Activate() error
 	Networks() []netip.Prefix
 	Name() string
-	RoutesFor(netip.Addr) []routing.Gateway
+	RoutesFor(netip.Addr) routing.Gateways
 	NewMultiQueueReader() (io.ReadWriteCloser, error)
 }

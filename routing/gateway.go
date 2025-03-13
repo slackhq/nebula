@@ -10,6 +10,19 @@ const (
 	BucketNotCalculated = -1
 )
 
+type Gateways []Gateway
+
+func (g Gateways) String() string {
+	str := ""
+	for i, gw := range g {
+		str += gw.String()
+		if i < len(g)-1 {
+			str += ", "
+		}
+	}
+	return str
+}
+
 type Gateway struct {
 	addr             netip.Addr
 	weight           int
@@ -29,7 +42,7 @@ func (g *Gateway) Addr() netip.Addr {
 }
 
 func (g *Gateway) String() string {
-	return fmt.Sprintf("%s:%d/%d", g.addr, g.weight, g.bucketUpperBound)
+	return fmt.Sprintf("{addr: %s, weight: %d}", g.addr, g.weight)
 }
 
 // Divide and round to nearest integer

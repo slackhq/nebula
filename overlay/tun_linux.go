@@ -35,7 +35,7 @@ type tun struct {
 	ioctlFd     uintptr
 
 	Routes          atomic.Pointer[[]Route]
-	routeTree       atomic.Pointer[bart.Table[[]routing.Gateway]]
+	routeTree       atomic.Pointer[bart.Table[routing.Gateways]]
 	routeChan       chan struct{}
 	useSystemRoutes bool
 
@@ -232,7 +232,7 @@ func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return file, nil
 }
 
-func (t *tun) RoutesFor(ip netip.Addr) []routing.Gateway {
+func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 	r, _ := t.routeTree.Load().Lookup(ip)
 	return r
 }
@@ -563,9 +563,9 @@ func (t *tun) isGatewayInVpnNetworks(gwAddr netip.Addr) bool {
 	return withinNetworks
 }
 
-func (t *tun) getGatewaysFromRoute(r *netlink.Route) []routing.Gateway {
+func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 
-	var gateways []routing.Gateway
+	var gateways routing.Gateways
 
 	link, err := netlink.LinkByName(t.Device)
 	if err != nil {

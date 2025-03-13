@@ -44,8 +44,8 @@ func (*disabledTun) Activate() error {
 	return nil
 }
 
-func (*disabledTun) RoutesFor(addr netip.Addr) []routing.Gateway {
-	return []routing.Gateway{}
+func (*disabledTun) RoutesFor(addr netip.Addr) routing.Gateways {
+	return routing.Gateways{}
 }
 
 func (t *disabledTun) Networks() []netip.Prefix {

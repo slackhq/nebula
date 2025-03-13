@@ -42,8 +42,8 @@ func (d *UserDevice) Activate() error {
 
 func (d *UserDevice) Networks() []netip.Prefix { return d.vpnNetworks }
 func (d *UserDevice) Name() string             { return "faketun0" }
-func (d *UserDevice) RoutesFor(ip netip.Addr) []routing.Gateway {
-	return []routing.Gateway{routing.NewGateway(ip, 1)}
+func (d *UserDevice) RoutesFor(ip netip.Addr) routing.Gateways {
+	return routing.Gateways{routing.NewGateway(ip, 1)}
 }
 
 func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {

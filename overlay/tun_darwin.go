@@ -29,7 +29,7 @@ type tun struct {
 	vpnNetworks []netip.Prefix
 	DefaultMTU  int
 	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[[]routing.Gateway]]
+	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	linkAddr    *netroute.LinkAddr
 	l           *logrus.Logger
 
@@ -343,12 +343,12 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	return nil
 }
 
-func (t *tun) RoutesFor(ip netip.Addr) []routing.Gateway {
+func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 	r, ok := t.routeTree.Load().Lookup(ip)
 	if ok {
 		return r
 	}
-	return []routing.Gateway{}
+	return routing.Gateways{}
 }
 
 // Get the LinkAddr for the interface of the given name

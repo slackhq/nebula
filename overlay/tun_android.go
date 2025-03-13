@@ -22,7 +22,7 @@ type tun struct {
 	fd          int
 	vpnNetworks []netip.Prefix
 	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[[]routing.Gateway]]
+	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *logrus.Logger
 }
 
@@ -57,7 +57,7 @@ func newTun(_ *config.C, _ *logrus.Logger, _ []netip.Prefix, _ bool) (*tun, erro
 	return nil, fmt.Errorf("newTun not supported in Android")
 }
 
-func (t *tun) RoutesFor(ip netip.Addr) []routing.Gateway {
+func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 	r, _ := t.routeTree.Load().Lookup(ip)
 	return r
 }

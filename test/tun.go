@@ -10,8 +10,8 @@ import (
 
 type NoopTun struct{}
 
-func (NoopTun) RoutesFor(addr netip.Addr) []routing.Gateway {
-	return []routing.Gateway{}
+func (NoopTun) RoutesFor(addr netip.Addr) routing.Gateways {
+	return routing.Gateways{}
 }
 
 func (NoopTun) Activate() error {

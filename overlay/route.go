@@ -18,7 +18,7 @@ type Route struct {
 	MTU     int
 	Metric  int
 	Cidr    netip.Prefix
-	Via     []routing.Gateway
+	Via     routing.Gateways
 	Install bool
 }
 
@@ -48,8 +48,8 @@ func (r Route) String() string {
 	return s
 }
 
-func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*bart.Table[[]routing.Gateway], error) {
-	routeTree := new(bart.Table[[]routing.Gateway])
+func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*bart.Table[routing.Gateways], error) {
+	routeTree := new(bart.Table[routing.Gateways])
 	for _, r := range routes {
 		if !allowMTU && r.MTU > 0 {
 			l.WithField("route", r).Warnf("route MTU is not supported in %s", runtime.GOOS)
@@ -204,7 +204,7 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 			return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes is not present", i+1)
 		}
 
-		var gateways []routing.Gateway
+		var gateways routing.Gateways
 
 		switch via := rVia.(type) {
 		case string:
@@ -213,10 +213,10 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 				return nil, fmt.Errorf("entry %v.via in tun.unsafe_routes failed to parse address: %v", i+1, err)
 			}
 
-			gateways = []routing.Gateway{routing.NewGateway(viaIp, 1)}
+			gateways = routing.Gateways{routing.NewGateway(viaIp, 1)}
 
 		case []interface{}:
-			gateways = make([]routing.Gateway, len(via))
+			gateways = make(routing.Gateways, len(via))
 			for ig, v := range via {
 				gatewayMap, ok := v.(map[interface{}]interface{})
 				if !ok {
@@ -252,7 +252,7 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 				}
 
 				if gatewayWeight < 1 || gatewayWeight > math.MaxInt32 {
-					return nil, fmt.Errorf("entry .weight in tun.unsafe_routes[%v].via[%v] is not in range (1-%d) : %v", i+1, ig+1, math.MaxInt32, metric)
+					return nil, fmt.Errorf("entry .weight in tun.unsafe_routes[%v].via[%v] is not in range (1-%d) : %v", i+1, ig+1, math.MaxInt32, gatewayWeight)
 				}
 
 				gateways[ig] = routing.NewGateway(gatewayIp, gatewayWeight)
