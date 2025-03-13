@@ -8,16 +8,16 @@ import (
 	"github.com/slackhq/nebula/config"
 )
 
-func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr netip.Prefix, routines int) (Device, error) {
-	return NewUserDevice(tunCidr)
+func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
+	return NewUserDevice(vpnNetworks)
 }
 
-func NewUserDevice(tunCidr netip.Prefix) (Device, error) {
+func NewUserDevice(vpnNetworks []netip.Prefix) (Device, error) {
 	// these pipes guarantee each write/read will match 1:1
 	or, ow := io.Pipe()
 	ir, iw := io.Pipe()
 	return &UserDevice{
-		tunCidr:        tunCidr,
+		vpnNetworks:    vpnNetworks,
 		outboundReader: or,
 		outboundWriter: ow,
 		inboundReader:  ir,
@@ -26,7 +26,7 @@ func NewUserDevice(tunCidr netip.Prefix) (Device, error) {
 }
 
 type UserDevice struct {
-	tunCidr netip.Prefix
+	vpnNetworks []netip.Prefix
 
 	outboundReader *io.PipeReader
 	outboundWriter *io.PipeWriter
@@ -38,7 +38,7 @@ type UserDevice struct {
 func (d *UserDevice) Activate() error {
 	return nil
 }
-func (d *UserDevice) Cidr() netip.Prefix                { return d.tunCidr }
+func (d *UserDevice) Networks() []netip.Prefix          { return d.vpnNetworks }
 func (d *UserDevice) Name() string                      { return "faketun0" }
 func (d *UserDevice) RouteFor(ip netip.Addr) netip.Addr { return ip }
 func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {

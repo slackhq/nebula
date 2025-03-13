@@ -19,18 +19,18 @@ func TestConfig_Load(t *testing.T) {
 	// invalid yaml
 	c := NewC(l)
 	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte(" invalid yaml"), 0644)
-	assert.EqualError(t, c.Load(dir), "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[interface {}]interface {}")
+	require.EqualError(t, c.Load(dir), "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[interface {}]interface {}")
 
 	// simple multi config merge
 	c = NewC(l)
 	os.RemoveAll(dir)
 	os.Mkdir(dir, 0755)
 
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
 	os.WriteFile(filepath.Join(dir, "02.yml"), []byte("outer:\n  inner: override\nnew: hi"), 0644)
-	assert.Nil(t, c.Load(dir))
+	require.NoError(t, c.Load(dir))
 	expected := map[interface{}]interface{}{
 		"outer": map[interface{}]interface{}{
 			"inner": "override",
@@ -38,9 +38,6 @@ func TestConfig_Load(t *testing.T) {
 		"new": "hi",
 	}
 	assert.Equal(t, expected, c.Settings)
-
-	//TODO: test symlinked file
-	//TODO: test symlinked directory
 }
 
 func TestConfig_Get(t *testing.T) {
@@ -70,28 +67,28 @@ func TestConfig_GetBool(t *testing.T) {
 	l := test.NewLogger()
 	c := NewC(l)
 	c.Settings["bool"] = true
-	assert.Equal(t, true, c.GetBool("bool", false))
+	assert.True(t, c.GetBool("bool", false))
 
 	c.Settings["bool"] = "true"
-	assert.Equal(t, true, c.GetBool("bool", false))
+	assert.True(t, c.GetBool("bool", false))
 
 	c.Settings["bool"] = false
-	assert.Equal(t, false, c.GetBool("bool", true))
+	assert.False(t, c.GetBool("bool", true))
 
 	c.Settings["bool"] = "false"
-	assert.Equal(t, false, c.GetBool("bool", true))
+	assert.False(t, c.GetBool("bool", true))
 
 	c.Settings["bool"] = "Y"
-	assert.Equal(t, true, c.GetBool("bool", false))
+	assert.True(t, c.GetBool("bool", false))
 
 	c.Settings["bool"] = "yEs"
-	assert.Equal(t, true, c.GetBool("bool", false))
+	assert.True(t, c.GetBool("bool", false))
 
 	c.Settings["bool"] = "N"
-	assert.Equal(t, false, c.GetBool("bool", true))
+	assert.False(t, c.GetBool("bool", true))
 
 	c.Settings["bool"] = "nO"
-	assert.Equal(t, false, c.GetBool("bool", true))
+	assert.False(t, c.GetBool("bool", true))
 }
 
 func TestConfig_HasChanged(t *testing.T) {
@@ -120,11 +117,11 @@ func TestConfig_ReloadConfig(t *testing.T) {
 	l := test.NewLogger()
 	done := make(chan bool, 1)
 	dir, err := os.MkdirTemp("", "config-test")
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
 
 	c := NewC(l)
-	assert.Nil(t, c.Load(dir))
+	require.NoError(t, c.Load(dir))
 
 	assert.False(t, c.HasChanged("outer.inner"))
 	assert.False(t, c.HasChanged("outer"))

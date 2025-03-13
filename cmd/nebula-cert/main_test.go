@@ -9,9 +9,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
-
-//TODO: all flag parsing continueOnError will print to stderr on its own currently
 
 func Test_help(t *testing.T) {
 	expected := "Usage of " + os.Args[0] + " <global flags> <mode>:\n" +
@@ -81,7 +80,7 @@ func assertHelpError(t *testing.T, err error, msg string) {
 		t.Fatal(fmt.Sprintf("err was not a helpError: %q, expected %q", err, msg))
 	}
 
-	assert.EqualError(t, err, msg)
+	require.EqualError(t, err, msg)
 }
 
 func optionalPkcs11String(msg string) string {
