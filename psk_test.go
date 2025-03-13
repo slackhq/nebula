@@ -4,21 +4,22 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewPsk(t *testing.T) {
 	t.Run("mode accepting", func(t *testing.T) {
 		p, err := NewPsk(PskAccepting, nil)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, PskAccepting, p.mode)
 		assert.Nil(t, p.keys[0])
 		assert.Nil(t, p.primary)
 
 		p, err = NewPsk(PskAccepting, []string{"1234567"})
-		assert.Error(t, ErrKeyTooShort)
+		require.ErrorIs(t, err, ErrKeyTooShort)
 
 		p, err = NewPsk(PskAccepting, []string{"hi there friends"})
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, PskAccepting, p.mode)
 		assert.Nil(t, p.primary)
 		assert.Len(t, p.keys, 2)
@@ -33,13 +34,13 @@ func TestNewPsk(t *testing.T) {
 
 	t.Run("mode sending", func(t *testing.T) {
 		p, err := NewPsk(PskSending, nil)
-		assert.Error(t, ErrNotEnoughPskKeys, err)
+		require.ErrorIs(t, err, ErrNotEnoughPskKeys)
 
 		p, err = NewPsk(PskSending, []string{"1234567"})
-		assert.Error(t, ErrKeyTooShort)
+		require.ErrorIs(t, err, ErrKeyTooShort)
 
 		p, err = NewPsk(PskSending, []string{"hi there friends"})
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, PskSending, p.mode)
 		assert.Len(t, p.keys, 2)
 		assert.Nil(t, p.keys[1])
@@ -54,10 +55,10 @@ func TestNewPsk(t *testing.T) {
 
 	t.Run("mode enforced", func(t *testing.T) {
 		p, err := NewPsk(PskEnforced, nil)
-		assert.Error(t, ErrNotEnoughPskKeys, err)
+		require.ErrorIs(t, err, ErrNotEnoughPskKeys)
 
 		p, err = NewPsk(PskEnforced, []string{"hi there friends"})
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, PskEnforced, p.mode)
 		assert.Len(t, p.keys, 1)
 
