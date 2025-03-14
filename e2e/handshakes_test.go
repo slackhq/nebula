@@ -20,7 +20,7 @@ import (
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 func BenchmarkHotPath(b *testing.B) {
@@ -991,7 +991,7 @@ func TestRehandshaking(t *testing.T) {
 	require.NoError(t, err)
 	var theirNewConfig m
 	require.NoError(t, yaml.Unmarshal(rc, &theirNewConfig))
-	theirFirewall := theirNewConfig["firewall"].(map[interface{}]interface{})
+	theirFirewall := theirNewConfig["firewall"].(map[string]any)
 	theirFirewall["inbound"] = []m{{
 		"proto": "any",
 		"port":  "any",
@@ -1087,7 +1087,7 @@ func TestRehandshakingLoser(t *testing.T) {
 	require.NoError(t, err)
 	var myNewConfig m
 	require.NoError(t, yaml.Unmarshal(rc, &myNewConfig))
-	theirFirewall := myNewConfig["firewall"].(map[interface{}]interface{})
+	theirFirewall := myNewConfig["firewall"].(map[string]any)
 	theirFirewall["inbound"] = []m{{
 		"proto": "any",
 		"port":  "any",

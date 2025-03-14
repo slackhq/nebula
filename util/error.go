@@ -9,11 +9,11 @@ import (
 
 type ContextualError struct {
 	RealError error
-	Fields    map[string]interface{}
+	Fields    map[string]any
 	Context   string
 }
 
-func NewContextualError(msg string, fields map[string]interface{}, realError error) *ContextualError {
+func NewContextualError(msg string, fields map[string]any, realError error) *ContextualError {
 	return &ContextualError{Context: msg, Fields: fields, RealError: realError}
 }
 

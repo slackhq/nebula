@@ -41,7 +41,7 @@ type detailsV1 struct {
 	curve Curve
 }
 
-type m map[string]interface{}
+type m = map[string]any
 
 func (c *certificateV1) Version() Version {
 	return Version1

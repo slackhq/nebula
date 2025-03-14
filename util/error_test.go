@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type m map[string]interface{}
+type m = map[string]any
 
 type TestLogWriter struct {
 	Logs []string
