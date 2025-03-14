@@ -4,12 +4,14 @@ import (
 	"errors"
 	"io"
 	"net/netip"
+
+	"github.com/slackhq/nebula/routing"
 )
 
 type NoopTun struct{}
 
-func (NoopTun) RouteFor(addr netip.Addr) netip.Addr {
-	return netip.Addr{}
+func (NoopTun) RoutesFor(addr netip.Addr) routing.Gateways {
+	return routing.Gateways{}
 }
 
 func (NoopTun) Activate() error {

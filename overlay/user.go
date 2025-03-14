@@ -6,6 +6,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/routing"
 )
 
 func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
@@ -38,9 +39,13 @@ type UserDevice struct {
 func (d *UserDevice) Activate() error {
 	return nil
 }
-func (d *UserDevice) Networks() []netip.Prefix          { return d.vpnNetworks }
-func (d *UserDevice) Name() string                      { return "faketun0" }
-func (d *UserDevice) RouteFor(ip netip.Addr) netip.Addr { return ip }
+
+func (d *UserDevice) Networks() []netip.Prefix { return d.vpnNetworks }
+func (d *UserDevice) Name() string             { return "faketun0" }
+func (d *UserDevice) RoutesFor(ip netip.Addr) routing.Gateways {
+	return routing.Gateways{routing.NewGateway(ip, 1)}
+}
+
 func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return d, nil
 }
