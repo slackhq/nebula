@@ -243,7 +243,7 @@ func (c *C) GetInt(k string, d int) int {
 // GetUint32 will get the uint32 for k or return the default d if not found or invalid
 func (c *C) GetUint32(k string, d uint32) uint32 {
 	r := c.GetInt(k, int(d))
-	if uint64(r) > uint64(math.MaxUint32) {
+	if r < 0 || uint64(r) > uint64(math.MaxUint32) {
 		return d
 	}
 	return uint32(r)
