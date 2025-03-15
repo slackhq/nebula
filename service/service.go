@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay"
+	"github.com/slackhq/nebula/util"
 	"golang.org/x/sync/errgroup"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -35,6 +37,7 @@ import (
 const nicID = 1
 
 type Service struct {
+	l       *logrus.Logger
 	eg      *errgroup.Group
 	control *nebula.Control
 	ipstack *stack.Stack
@@ -46,10 +49,7 @@ type Service struct {
 	}
 }
 
-func New(config *config.C) (*Service, error) {
-	logger := logrus.New()
-	logger.Out = os.Stdout
-
+func New(config *config.C, logger *logrus.Logger) (*Service, error) {
 	control, err := nebula.Main(config, false, "custom-app", logger, overlay.NewUserDeviceFromConfig)
 	if err != nil {
 		return nil, err
@@ -59,6 +59,7 @@ func New(config *config.C) (*Service, error) {
 	ctx := control.Context()
 	eg, ctx := errgroup.WithContext(ctx)
 	s := Service{
+		l:       logger,
 		eg:      eg,
 		control: control,
 	}
@@ -107,34 +108,28 @@ func New(config *config.C) (*Service, error) {
 	tcpFwd := tcp.NewForwarder(s.ipstack, tcpReceiveBufferSize, maxInFlightConnectionAttempts, s.tcpHandler)
 	s.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 
-	reader, writer := device.Pipe()
-
-	go func() {
-		<-ctx.Done()
-		reader.Close()
-		writer.Close()
-	}()
+	nebula_tun_reader, nebula_tun_writer := device.Pipe()
 
 	// create Goroutines to forward packets between Nebula and Gvisor
 	eg.Go(func() error {
-		buf := make([]byte, header.IPv4MaximumHeaderSize+header.IPv4MaximumPayloadSize)
+		defer linkEP.Close()
 		for {
-			// this will read exactly one packet
-			n, err := reader.Read(buf)
-			if err != nil {
-				return err
-			}
-			packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
-				Payload: buffer.MakeWithData(bytes.Clone(buf[:n])),
-			})
-			linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
-
-			if err := ctx.Err(); err != nil {
-				return err
+			select {
+			case <-ctx.Done():
+				return nil
+			case view, ok := <-nebula_tun_reader:
+				if !ok {
+					return nil
+				}
+				packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
+					Payload: buffer.MakeWithView(view),
+				})
+				linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
 			}
 		}
 	})
 	eg.Go(func() error {
+		defer close(nebula_tun_writer)
 		for {
 			packet := linkEP.ReadContext(ctx)
 			if packet == nil {
@@ -143,11 +138,7 @@ func New(config *config.C) (*Service, error) {
 				}
 				continue
 			}
-			bufView := packet.ToView()
-			if _, err := bufView.WriteTo(writer); err != nil {
-				return err
-			}
-			bufView.Release()
+			nebula_tun_writer <- packet.ToView()
 		}
 	})
 
@@ -198,6 +189,21 @@ func (s *Service) Dial(network, address string) (net.Conn, error) {
 	return s.DialContext(context.Background(), network, address)
 }
 
+func (s *Service) DialUDP(address string) (*gonet.UDPConn, error) {
+	addr, err := net.ResolveUDPAddr("udp", address)
+	if err != nil {
+		return nil, err
+	}
+
+	fullAddr := tcpip.FullAddress{
+		NIC:  nicID,
+		Addr: tcpip.AddrFromSlice(addr.IP),
+		Port: uint16(addr.Port),
+	}
+
+	return gonet.DialUDP(s.ipstack, nil, &fullAddr, ipv4.ProtocolNumber)
+}
+
 // Listen listens on the provided address. Currently only TCP with wildcard
 // addresses are supported.
 func (s *Service) Listen(network, address string) (net.Listener, error) {
@@ -237,12 +243,46 @@ func (s *Service) Listen(network, address string) (net.Listener, error) {
 	return l, nil
 }
 
+func (s *Service) ListenUDP(address string) (*gonet.UDPConn, error) {
+	addr, err := net.ResolveUDPAddr("udp", address)
+	if err != nil {
+		return nil, err
+	}
+	return gonet.DialUDP(s.ipstack, &tcpip.FullAddress{
+		NIC:      nicID,
+		Addr:     tcpip.AddrFromSlice(addr.IP),
+		Port:     uint16(addr.Port),
+		LinkAddr: "",
+	}, nil, ipv4.ProtocolNumber)
+}
+
 func (s *Service) Wait() error {
-	return s.eg.Wait()
+	err := s.eg.Wait()
+
+	s.ipstack.Destroy()
+
+	return err
 }
 
 func (s *Service) Close() error {
 	s.control.Stop()
+	return nil
+}
+
+func (s *Service) CloseAndWait() error {
+	s.Close()
+	if err := s.Wait(); err != nil {
+		if errors.Is(err, os.ErrClosed) ||
+			errors.Is(err, io.EOF) ||
+			errors.Is(err, context.Canceled) {
+			s.l.Debugf("Stop of nebula service returned: %v", err)
+			return nil
+		} else {
+			util.LogWithContextIfNeeded("Unclean stop", err, s.l)
+			return err
+		}
+	}
+
 	return nil
 }
 

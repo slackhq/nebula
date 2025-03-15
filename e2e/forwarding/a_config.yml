@@ -1,0 +1,35 @@
+pki:
+  ca: ca.crt
+  cert: a.crt
+  key: a.key
+
+static_host_map:
+  "192.168.100.2": ["127.0.0.1:10002"]
+
+logging:
+  level: info
+
+listen:
+  host: 127.0.0.1
+  port: 10001
+
+port_forwarding:
+  enable_without_rules: true
+  inbound:
+    - listen_port: 5201
+      dial_address: "127.0.0.1:15001"
+      protocols: [tcp, udp]
+
+tun:
+  disabled: true
+  mtu: 1300
+
+firewall:
+  outbound:
+    - port: any
+      proto: udp
+      host: any
+  inbound:
+    - port: 5201
+      proto: any
+      host: any
