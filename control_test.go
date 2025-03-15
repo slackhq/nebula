@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/sirupsen/logrus"
@@ -145,6 +146,10 @@ func TestListHostMapHostsIter(t *testing.T) {
 		results = append(results, *h)
 	}
 
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].VpnAddrs[0].Less(results[j].VpnAddrs[0])
+	})
+
 	assert.Equal(t, len(hosts), len(results), "expected number of hosts in iterator")
 	for i, h := range hosts {
 		assert.Equal(t, h.vpnIp, results[i].VpnAddrs[0])
@@ -188,6 +193,10 @@ func TestListHostMapIndexesIter(t *testing.T) {
 	for h := range iter {
 		results = append(results, *h)
 	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].VpnAddrs[0].Less(results[j].VpnAddrs[0])
+	})
 
 	assert.Equal(t, len(hosts), len(results), "expected number of hosts in iterator")
 	for i, h := range hosts {
