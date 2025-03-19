@@ -548,8 +548,7 @@ func TestHandshakeFilter_AddRuleToHandshakeFilter(t *testing.T) {
 	assert.Empty(t, hf.AllowedCAShas)
 
 	hf = NewHandshakeFilter()
-	ti, err := netip.ParsePrefix("1.2.3.4/32")
-	assert.NoError(t, err)
+	ti := netip.MustParsePrefix("1.2.3.4/32")
 	hf.AddRule([]string{}, "", ti, "", "")
 	assert.Contains(t, hf.AllowedCidrs, ti)
 	assert.Empty(t, hf.AllowedGroups)
@@ -604,23 +603,16 @@ func TestHandshakeFilter_IsHandshakeAllowed(t *testing.T) {
 	assert.NotNil(t, hf.AllowedGroupsCombos)
 	assert.NotNil(t, hf.AllowedCidrs)
 
-	ti, err := netip.ParsePrefix("1.2.3.0/24")
-	assert.NoError(t, err)
-	ais := make([]netip.Addr, 2)
-	ai, err := netip.ParseAddr("1.2.3.5")
-	assert.NoError(t, err)
-	ai2, err := netip.ParseAddr("1.1.1.2")
-	assert.NoError(t, err)
-	ais[0] = ai
-	ais[1] = ai2
+	ti := netip.MustParsePrefix("1.2.3.0/24")
+	ais := []netip.Addr{
+		netip.MustParseAddr("1.2.3.5"),
+		netip.MustParseAddr("1.1.1.2"),
+	}
 
-	aos := make([]netip.Addr, 2)
-	ao, err := netip.ParseAddr("1.2.0.1")
-	assert.NoError(t, err)
-	ao2, err := netip.ParseAddr("1.10.0.1")
-	assert.NoError(t, err)
-	aos[0] = ao
-	aos[1] = ao2
+	aos := []netip.Addr{
+		netip.MustParseAddr("1.2.0.1"),
+		netip.MustParseAddr("1.10.0.1"),
+	}
 
 	hf.AddRule([]string{"g1"}, "", netip.Prefix{}, "", "")
 	hf.AddRule([]string{}, "h1", netip.Prefix{}, "", "")
@@ -658,8 +650,7 @@ func TestHandshakeFilter_IsHandshakeAllowed(t *testing.T) {
 	assert.True(t, hf.IsHandshakeAllowed([]string{}, "", []netip.Addr{netip.Addr{}}, "", "3fc204e4d45e8b22ed0879bcd7cb5bf93cdc1c7a309c5dcedddc03aed33a47c6"))
 	assert.False(t, hf.IsHandshakeAllowed([]string{}, "", []netip.Addr{netip.Addr{}}, "", "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"))
 
-	pAny, err := netip.ParsePrefix("0.0.0.0/0")
-	assert.NoError(t, err)
+	pAny := netip.MustParsePrefix("0.0.0.0/0")
 
 	hf = NewHandshakeFilter()
 	hf.AddRule([]string{"any"}, "", netip.Prefix{}, "", "")
