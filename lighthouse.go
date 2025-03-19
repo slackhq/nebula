@@ -106,6 +106,10 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 		nebulaPort = uint32(uPort.Port())
 	}
 
+	if hf == nil {
+		hf = NewHandshakeFilter()
+	}
+
 	h := LightHouse{
 		ctx:                ctx,
 		amLighthouse:       amLighthouse,
