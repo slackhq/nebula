@@ -27,7 +27,7 @@ type ConnectionState struct {
 	writeLock      sync.Mutex
 }
 
-func NewConnectionState(l *logrus.Logger, cs *CertState, crt cert.Certificate, initiator bool, pattern noise.HandshakePattern) (*ConnectionState, error) {
+func NewConnectionState(l *logrus.Logger, cs *CertState, crt cert.Certificate, initiator bool, pattern noise.HandshakePattern, psk []byte) (*ConnectionState, error) {
 	var dhFunc noise.DHFunc
 	switch crt.Curve() {
 	case cert.Curve_CURVE25519:
@@ -56,13 +56,12 @@ func NewConnectionState(l *logrus.Logger, cs *CertState, crt cert.Certificate, i
 	b.Update(l, 0)
 
 	hs, err := noise.NewHandshakeState(noise.Config{
-		CipherSuite:   ncs,
-		Random:        rand.Reader,
-		Pattern:       pattern,
-		Initiator:     initiator,
-		StaticKeypair: static,
-		//NOTE: These should come from CertState (pki.go) when we finally implement it
-		PresharedKey:          []byte{},
+		CipherSuite:           ncs,
+		Random:                rand.Reader,
+		Pattern:               pattern,
+		Initiator:             initiator,
+		StaticKeypair:         static,
+		PresharedKey:          psk,
 		PresharedKeyPlacement: 0,
 	})
 	if err != nil {
