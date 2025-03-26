@@ -1,0 +1,9 @@
+#!/bin/sh
+
+if [ ! -d "$SNAP_COMMON/config" ]; then
+    echo "Config and certs dirs does not exist. Creating..."
+    mkdir -p $SNAP_COMMON/certs
+    mkdir $SNAP_COMMON/config
+fi
+
+exit 0
