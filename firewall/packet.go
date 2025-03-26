@@ -17,6 +17,7 @@ const (
 
 	PortAny      = 0  // Special value for matching `port: any`
 	PortFragment = -1 // Special value for matching `port: fragment`
+	PortNebula   = -2 // Special value for matching `port: nebula`
 )
 
 type Packet struct {

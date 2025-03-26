@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gaissmai/bart"
@@ -80,6 +81,18 @@ type FirewallConntrack struct {
 
 	Conns      map[firewall.Packet]*conn
 	TimerWheel *TimerWheel[firewall.Packet]
+}
+
+type HandshakeFilter struct {
+	AllowedHosts        map[string]struct{}
+	AllowedGroups       map[string]struct{}
+	AllowedGroupsCombos []map[string]struct{}
+	AllowedCidrs        []netip.Prefix
+	AllowedCANames      map[string]struct{}
+	AllowedCAShas       map[string]struct{}
+
+	IsEmtpy                       atomic.Bool
+	IsModifiedSinceLastMashalling atomic.Bool
 }
 
 // FirewallTable is the entry point for a rule, the evaluation order is:
@@ -190,7 +203,7 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 	}
 }
 
-func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firewall, error) {
+func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firewall, *HandshakeFilter, error) {
 	certificate := cs.getCertificate(cert.Version2)
 	if certificate == nil {
 		certificate = cs.getCertificate(cert.Version1)
@@ -208,6 +221,8 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 		certificate,
 		//TODO: max_connections
 	)
+
+	hf := NewHandshakeFilter()
 
 	fw.defaultLocalCIDRAny = c.GetBool("firewall.default_local_cidr_any", false)
 
@@ -233,17 +248,17 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 		fw.OutSendReject = false
 	}
 
-	err := AddFirewallRulesFromConfig(l, false, c, fw)
+	err := AddFirewallRulesFromConfig(l, false, c, fw, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	err = AddFirewallRulesFromConfig(l, true, c, fw)
+	err = AddFirewallRulesFromConfig(l, true, c, fw, hf)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return fw, nil
+	return fw, hf, nil
 }
 
 // AddRule properly creates the in memory rule structure for a firewall table.
@@ -318,7 +333,7 @@ func (f *Firewall) GetRuleHashes() string {
 	return "SHA:" + f.GetRuleHash() + ",FNV:" + strconv.FormatUint(uint64(f.GetRuleHashFNV()), 10)
 }
 
-func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw FirewallInterface) error {
+func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw FirewallInterface, hf *HandshakeFilter) error {
 	var table string
 	if inbound {
 		table = "firewall.inbound"
@@ -411,6 +426,10 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 		err = fw.AddRule(inbound, proto, startPort, endPort, groups, r.Host, cidr, localCidr, r.CAName, r.CASha)
 		if err != nil {
 			return fmt.Errorf("%s rule #%v; `%s`", table, i, err)
+		}
+
+		if hf != nil {
+			hf.AddRule(groups, r.Host, cidr, r.CAName, r.CASha)
 		}
 	}
 
@@ -981,6 +1000,10 @@ func parsePort(s string) (startPort, endPort int32, err error) {
 		startPort = firewall.PortFragment
 		endPort = firewall.PortFragment
 
+	} else if s == "nebula" {
+		startPort = firewall.PortNebula
+		endPort = firewall.PortNebula
+
 	} else if strings.Contains(s, `-`) {
 		sPorts := strings.SplitN(s, `-`, 2)
 		sPorts[0] = strings.Trim(sPorts[0], " ")
@@ -1017,4 +1040,220 @@ func parsePort(s string) (startPort, endPort int32, err error) {
 	}
 
 	return
+}
+
+func NewHandshakeFilter() *HandshakeFilter {
+	hf := &HandshakeFilter{
+		AllowedHosts:        make(map[string]struct{}),
+		AllowedGroups:       make(map[string]struct{}),
+		AllowedGroupsCombos: make([]map[string]struct{}, 0),
+		AllowedCidrs:        make([]netip.Prefix, 0),
+		AllowedCANames:      make(map[string]struct{}),
+		AllowedCAShas:       make(map[string]struct{}),
+	}
+
+	hf.IsModifiedSinceLastMashalling.Store(false)
+	hf.IsEmtpy.Store(true)
+
+	return hf
+}
+
+func (hfws *HandshakeFilter) AddRule(groups []string, host string, localIp netip.Prefix, CAName string, CASha string) {
+	ruleAdded := false
+	if host != "" {
+		hfws.AllowedHosts[host] = struct{}{}
+		ruleAdded = true
+	}
+
+	if len(groups) > 1 {
+		gs := make(map[string]struct{}, len(groups))
+		for i := range groups {
+			gs[groups[i]] = struct{}{}
+		}
+
+		if !containsMap(hfws.AllowedGroupsCombos, gs) {
+			hfws.AllowedGroupsCombos = append(
+				hfws.AllowedGroupsCombos,
+				gs,
+			)
+		}
+		ruleAdded = true
+	} else if len(groups) == 1 {
+		hfws.AllowedGroups[groups[0]] = struct{}{}
+		ruleAdded = true
+	}
+
+	if localIp.IsValid() {
+		hfws.AllowedCidrs = append(
+			hfws.AllowedCidrs,
+			localIp,
+		)
+		ruleAdded = true
+	}
+
+	if CAName != "" {
+		hfws.AllowedCANames[CAName] = struct{}{}
+		ruleAdded = true
+	}
+
+	if CASha != "" {
+		hfws.AllowedCAShas[CASha] = struct{}{}
+		ruleAdded = true
+	}
+
+	hfws.IsModifiedSinceLastMashalling.Store(ruleAdded)
+
+	if ruleAdded {
+		hfws.IsEmtpy.Store(false)
+	}
+}
+
+func (hfws *HandshakeFilter) IsHandshakeAllowed(groups []string, host string, vpnAddrs []netip.Addr, CAName string, CASha string) bool {
+	if _, ok := hfws.AllowedHosts["any"]; ok {
+		return true
+	}
+	if _, ok := hfws.AllowedHosts[host]; ok {
+		return true
+	}
+
+	if _, ok := hfws.AllowedCANames[CAName]; ok {
+		return true
+	}
+
+	if _, ok := hfws.AllowedCAShas[CASha]; ok {
+		return true
+	}
+
+	if len(groups) != 0 {
+		if _, ok := hfws.AllowedGroups["any"]; ok {
+			return true
+		}
+	}
+	for _, g := range groups {
+		if _, ok := hfws.AllowedGroups[g]; ok {
+			return true
+		}
+	}
+
+	for _, c := range hfws.AllowedCidrs {
+		for _, a := range vpnAddrs {
+			if c.Contains(a) {
+				return true
+			}
+		}
+	}
+
+	for _, gc := range hfws.AllowedGroupsCombos {
+		if len(groups) < len(gc) {
+			continue
+		}
+
+		if isSubset(gc, groups) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (hfws *HandshakeFilter) MarshalToHfw() *HandshakeFilteringWhitelist {
+	hfw := &HandshakeFilteringWhitelist{
+		AllowedHosts:        make([]string, len(hfws.AllowedHosts)),
+		AllowedGroups:       make([]string, len(hfws.AllowedGroups)),
+		AllowedGroupsCombos: make([]*GroupsCombos, len(hfws.AllowedGroupsCombos)),
+		AllowedCidrs:        make([]string, len(hfws.AllowedCidrs)),
+		AllowedCANames:      make([]string, len(hfws.AllowedCANames)),
+		AllowedCAShas:       make([]string, len(hfws.AllowedCAShas)),
+		SetEmpty:            hfws.IsEmtpy.Load(),
+	}
+
+	for host := range hfws.AllowedHosts {
+		hfw.AllowedHosts = append(hfw.AllowedHosts, host)
+	}
+
+	for group := range hfws.AllowedGroups {
+		hfw.AllowedGroups = append(hfw.AllowedGroups, group)
+	}
+
+	for i, groupCombo := range hfws.AllowedGroupsCombos {
+		gc := &GroupsCombos{
+			Group: make([]string, len(groupCombo)),
+		}
+		j := 0
+		for group := range groupCombo {
+			gc.Group[j] = group
+			j += 1
+		}
+		hfw.AllowedGroupsCombos[i] = gc
+	}
+
+	for i, cidr := range hfws.AllowedCidrs {
+		hfw.AllowedCidrs[i] = cidr.String()
+	}
+
+	for ca := range hfws.AllowedCANames {
+		hfw.AllowedCANames = append(hfw.AllowedCANames, ca)
+	}
+
+	for fp := range hfws.AllowedCAShas {
+		hfw.AllowedCAShas = append(hfw.AllowedCAShas, fp)
+	}
+
+	hfws.IsModifiedSinceLastMashalling.Store(false)
+
+	return hfw
+}
+
+func (hfws *HandshakeFilter) UnmarshalFromHfw(hfw *HandshakeFilteringWhitelist) {
+	if hfw == nil {
+		return
+	}
+
+	for _, h := range hfw.AllowedHosts {
+		hfws.AddRule(nil, h, netip.Prefix{}, "", "")
+	}
+
+	for _, g := range hfw.AllowedGroups {
+		hfws.AddRule([]string{g}, "", netip.Prefix{}, "", "")
+	}
+
+	for _, gc := range hfw.AllowedGroupsCombos {
+		hfws.AddRule(gc.Group, "", netip.Prefix{}, "", "")
+	}
+
+	for _, cs := range hfw.AllowedCidrs {
+		c, err := netip.ParsePrefix(cs)
+		if err != nil {
+			continue
+		}
+		hfws.AddRule(nil, "", c, "", "")
+	}
+
+	for _, ca := range hfw.AllowedCANames {
+		hfws.AddRule(nil, "", netip.Prefix{}, ca, "")
+	}
+
+	for _, sha := range hfw.AllowedCAShas {
+		hfws.AddRule(nil, "", netip.Prefix{}, "", sha)
+	}
+}
+
+func isSubset(subset map[string]struct{}, superset []string) bool {
+	ls := len(subset)
+	s := make(map[string]struct{}, ls)
+	for _, value := range superset {
+		if _, ok := subset[value]; ok {
+			s[value] = struct{}{}
+		}
+	}
+	return len(s) == ls
+}
+
+func containsMap(slice []map[string]struct{}, target map[string]struct{}) bool {
+	for _, m := range slice {
+		if reflect.DeepEqual(m, target) {
+			return true
+		}
+	}
+	return false
 }

@@ -222,6 +222,14 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		return
 	}
 
+	if f.lightHouse.incomingHandshakeFiltering.Load() {
+		if !f.lightHouse.hf.IsHandshakeAllowed(remoteCert.Certificate.Groups(), certName, vpnAddrs, issuer, fingerprint) {
+			f.l.WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", addr).Warn("handshake filtering denied incoming handshake")
+			f.lightHouse.metricFilteredHandshakes.Inc(1)
+			return
+		}
+	}
+
 	if addr.IsValid() {
 		// addr can be invalid when the tunnel is being relayed.
 		// We only want to apply the remote allow list for direct tunnels here

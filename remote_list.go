@@ -196,6 +196,9 @@ type RemoteList struct {
 	// A set of relay addresses. VpnIp addresses that the remote identified as relays.
 	relays []netip.Addr
 
+	// Handshake filter. Used to filter host queries if a node enables host query protection.
+	hf *HandshakeFilter
+
 	// These are maps to store v4 and v6 addresses per lighthouse
 	// Map key is the vpnIp of the person that told us about this the cached entries underneath.
 	// For learned addresses, this is the vpnIp that sent the packet
@@ -220,6 +223,7 @@ func NewRemoteList(vpnAddrs []netip.Addr, shouldAdd func(netip.Addr) bool) *Remo
 		relays:    make([]netip.Addr, 0),
 		cache:     make(map[netip.Addr]*cache),
 		shouldAdd: shouldAdd,
+		hf:        NewHandshakeFilter(),
 	}
 	copy(r.vpnAddrs, vpnAddrs)
 	return r
@@ -434,6 +438,17 @@ func (r *RemoteList) unlockedSetRelay(ownerVpnIp netip.Addr, to []netip.Addr) {
 
 	// We can't take their array but we can take their pointers
 	c.relay = append(c.relay, to[:minInt(len(to), MaxRemotes)]...)
+}
+
+func (r *RemoteList) unlockedSetHandshakeFilteringWhitelist(hfwl *HandshakeFilteringWhitelist) {
+	if hfwl == nil {
+		return
+	}
+
+	r.hf = NewHandshakeFilter()
+	if !hfwl.GetSetEmpty() {
+		r.hf.UnmarshalFromHfw(hfwl)
+	}
 }
 
 // unlockedPrependV4 assumes you have the write lock and prepends the address in the reported list for this owner

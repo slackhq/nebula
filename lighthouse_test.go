@@ -42,14 +42,14 @@ func Test_lhStaticMapping(t *testing.T) {
 	c := config.NewC(l)
 	c.Settings["lighthouse"] = map[interface{}]interface{}{"hosts": []interface{}{lh1}}
 	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"1.1.1.1:4242"}}
-	_, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	_, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil, nil)
 	require.NoError(t, err)
 
 	lh2 := "10.128.0.3"
 	c = config.NewC(l)
 	c.Settings["lighthouse"] = map[interface{}]interface{}{"hosts": []interface{}{lh1, lh2}}
 	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"100.1.1.1:4242"}}
-	_, err = NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	_, err = NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil, nil)
 	require.EqualError(t, err, "lighthouse 10.128.0.3 does not have a static_host_map entry")
 }
 
@@ -71,7 +71,7 @@ func TestReloadLighthouseInterval(t *testing.T) {
 	}
 
 	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"1.1.1.1:4242"}}
-	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil, nil)
 	require.NoError(t, err)
 	lh.ifce = &mockEncWriter{}
 
@@ -99,7 +99,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	}
 
 	c := config.NewC(l)
-	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil, nil)
 	require.NoError(b, err)
 
 	hAddr := netip.MustParseAddrPort("4.5.6.7:12345")
@@ -133,7 +133,9 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 
 	mw := &mockEncWriter{}
 
-	hi := []netip.Addr{vpnIp2}
+	hi := &HostInfo{
+		vpnAddrs: []netip.Addr{vpnIp2},
+	}
 	b.Run("notfound", func(b *testing.B) {
 		lhh := lh.NewRequestHandler()
 		req := &NebulaMeta{
@@ -202,7 +204,7 @@ func TestLighthouse_Memory(t *testing.T) {
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
 	}
-	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil, nil)
 	lh.ifce = &mockEncWriter{}
 	require.NoError(t, err)
 	lhh := lh.NewRequestHandler()
@@ -288,7 +290,7 @@ func TestLighthouse_reload(t *testing.T) {
 		myVpnNetworksTable: nt,
 	}
 
-	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil, nil)
 	require.NoError(t, err)
 
 	nc := map[interface{}]interface{}{
@@ -326,7 +328,10 @@ func newLHHostRequest(fromAddr netip.AddrPort, myVpnIp, queryVpnIp netip.Addr, l
 	w := &testEncWriter{
 		metaFilter: &filter,
 	}
-	lhh.HandleRequest(fromAddr, []netip.Addr{myVpnIp}, b, w)
+	hi := &HostInfo{
+		vpnAddrs: []netip.Addr{myVpnIp},
+	}
+	lhh.HandleRequest(fromAddr, hi, b, w)
 	return w.lastReply
 }
 
@@ -357,7 +362,10 @@ func newLHHostUpdate(fromAddr netip.AddrPort, vpnIp netip.Addr, addrs []netip.Ad
 	}
 
 	w := &testEncWriter{}
-	lhh.HandleRequest(fromAddr, []netip.Addr{vpnIp}, b, w)
+	hi := &HostInfo{
+		vpnAddrs: []netip.Addr{vpnIp},
+	}
+	lhh.HandleRequest(fromAddr, hi, b, w)
 }
 
 type testLhReply struct {

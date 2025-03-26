@@ -327,11 +327,15 @@ func (f *Interface) reloadFirewall(c *config.C) {
 		return
 	}
 
-	fw, err := NewFirewallFromConfig(f.l, f.pki.getCertState(), c)
+	fw, hf, err := NewFirewallFromConfig(f.l, f.pki.getCertState(), c)
 	if err != nil {
 		f.l.WithError(err).Error("Error while creating firewall during reload")
 		return
 	}
+
+	// Set to send updated whitelist to lh after firewall rule reload
+	hf.IsModifiedSinceLastMashalling.Store(true)
+	f.lightHouse.hf = hf
 
 	oldFw := f.firewall
 	conntrack := oldFw.Conntrack
