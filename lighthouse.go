@@ -40,6 +40,12 @@ type LightHouse struct {
 	// map of vpn addr to answers
 	addrMap map[netip.Addr]*RemoteList
 
+	// Controls incoming handshake filtering based on firewall rules.
+	incomingHandshakeFiltering atomic.Bool
+
+	// Filters incoming handshakes according to the specified firewall rules.
+	hf *HandshakeFilter
+
 	// filters remote addresses allowed for each host
 	// - When we are a lighthouse, this filters what addresses we store and
 	// respond with.
@@ -72,14 +78,15 @@ type LightHouse struct {
 
 	calculatedRemotes atomic.Pointer[bart.Table[[]*calculatedRemote]] // Maps VpnAddr to []*calculatedRemote
 
-	metrics           *MessageMetrics
-	metricHolepunchTx metrics.Counter
-	l                 *logrus.Logger
+	metrics                  *MessageMetrics
+	metricHolepunchTx        metrics.Counter
+	metricFilteredHandshakes metrics.Counter
+	l                        *logrus.Logger
 }
 
 // NewLightHouseFromConfig will build a Lighthouse struct from the values provided in the config object
 // addrMap should be nil unless this is during a config reload
-func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C, cs *CertState, pc udp.Conn, p *Punchy) (*LightHouse, error) {
+func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C, cs *CertState, pc udp.Conn, p *Punchy, hf *HandshakeFilter) (*LightHouse, error) {
 	amLighthouse := c.GetBool("lighthouse.am_lighthouse", false)
 	nebulaPort := uint32(c.GetInt("listen.port", 0))
 	if amLighthouse && nebulaPort == 0 {
@@ -105,18 +112,22 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 		punchConn:          pc,
 		punchy:             p,
 		queryChan:          make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 64)),
+		hf:                 hf,
 		l:                  l,
 	}
 	lighthouses := make(map[netip.Addr]struct{})
 	h.lighthouses.Store(&lighthouses)
 	staticList := make(map[netip.Addr]struct{})
 	h.staticList.Store(&staticList)
+	h.incomingHandshakeFiltering.Store(false)
 
 	if c.GetBool("stats.lighthouse_metrics", false) {
 		h.metrics = newLighthouseMetrics()
 		h.metricHolepunchTx = metrics.GetOrRegisterCounter("messages.tx.holepunch", nil)
+		h.metricFilteredHandshakes = metrics.GetOrRegisterCounter("handshakes.filtered", nil)
 	} else {
 		h.metricHolepunchTx = metrics.NilCounter{}
+		h.metricFilteredHandshakes = metrics.NilCounter{}
 	}
 
 	err := h.reload(c, true)
@@ -230,6 +241,13 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 			}
 
 			lh.StartUpdateWorker()
+		}
+	}
+
+	if initial || c.HasChanged("lighthouse.incoming_handshake_filtering") {
+		lh.incomingHandshakeFiltering.Store(c.GetBool("lighthouse.incoming_handshake_filtering", false))
+		if lh.incomingHandshakeFiltering.Load() {
+			lh.l.Info("Incoming handshake filtering enabled")
 		}
 	}
 

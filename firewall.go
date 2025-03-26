@@ -82,6 +82,15 @@ type FirewallConntrack struct {
 	TimerWheel *TimerWheel[firewall.Packet]
 }
 
+type HandshakeFilter struct {
+	AllowedHosts        map[string]struct{}
+	AllowedGroups       map[string]struct{}
+	AllowedGroupsCombos []map[string]struct{}
+	AllowedCidrs        []netip.Prefix
+	AllowedCANames      map[string]struct{}
+	AllowedCAShas       map[string]struct{}
+}
+
 // FirewallTable is the entry point for a rule, the evaluation order is:
 // Proto AND port AND (CA SHA or CA name) AND local CIDR AND (group OR groups OR name OR remote CIDR)
 type FirewallTable struct {
@@ -190,7 +199,7 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 	}
 }
 
-func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firewall, error) {
+func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firewall, *HandshakeFilter, error) {
 	certificate := cs.getCertificate(cert.Version2)
 	if certificate == nil {
 		certificate = cs.getCertificate(cert.Version1)
@@ -208,6 +217,8 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 		certificate,
 		//TODO: max_connections
 	)
+
+	hf := NewHandshakeFilter()
 
 	fw.defaultLocalCIDRAny = c.GetBool("firewall.default_local_cidr_any", false)
 
@@ -233,17 +244,17 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 		fw.OutSendReject = false
 	}
 
-	err := AddFirewallRulesFromConfig(l, false, c, fw)
+	err := AddFirewallRulesFromConfig(l, false, c, fw, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	err = AddFirewallRulesFromConfig(l, true, c, fw)
+	err = AddFirewallRulesFromConfig(l, true, c, fw, hf)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return fw, nil
+	return fw, hf, nil
 }
 
 // AddRule properly creates the in memory rule structure for a firewall table.
@@ -318,7 +329,7 @@ func (f *Firewall) GetRuleHashes() string {
 	return "SHA:" + f.GetRuleHash() + ",FNV:" + strconv.FormatUint(uint64(f.GetRuleHashFNV()), 10)
 }
 
-func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw FirewallInterface) error {
+func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw FirewallInterface, hf *HandshakeFilter) error {
 	var table string
 	if inbound {
 		table = "firewall.inbound"
@@ -411,6 +422,10 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 		err = fw.AddRule(inbound, proto, startPort, endPort, groups, r.Host, cidr, localCidr, r.CAName, r.CASha)
 		if err != nil {
 			return fmt.Errorf("%s rule #%v; `%s`", table, i, err)
+		}
+
+		if hf != nil {
+			hf.AddRule(groups, r.Host, cidr, r.CAName, r.CASha)
 		}
 	}
 
@@ -981,6 +996,10 @@ func parsePort(s string) (startPort, endPort int32, err error) {
 		startPort = firewall.PortFragment
 		endPort = firewall.PortFragment
 
+	} else if s == "nebula" {
+		startPort = firewall.PortNebula
+		endPort = firewall.PortNebula
+
 	} else if strings.Contains(s, `-`) {
 		sPorts := strings.SplitN(s, `-`, 2)
 		sPorts[0] = strings.Trim(sPorts[0], " ")
@@ -1017,4 +1036,120 @@ func parsePort(s string) (startPort, endPort int32, err error) {
 	}
 
 	return
+}
+
+func NewHandshakeFilter() *HandshakeFilter {
+	return &HandshakeFilter{
+		AllowedHosts:        make(map[string]struct{}),
+		AllowedGroups:       make(map[string]struct{}),
+		AllowedGroupsCombos: make([]map[string]struct{}, 0),
+		AllowedCidrs:        make([]netip.Prefix, 0),
+		AllowedCANames:      make(map[string]struct{}),
+		AllowedCAShas:       make(map[string]struct{}),
+	}
+}
+
+func (hfws *HandshakeFilter) AddRule(groups []string, host string, localIp netip.Prefix, CAName string, CASha string) {
+	if host != "" {
+		hfws.AllowedHosts[host] = struct{}{}
+	}
+
+	if len(groups) > 1 {
+		gs := make(map[string]struct{}, len(groups))
+		for i := range groups {
+			gs[groups[i]] = struct{}{}
+		}
+
+		if !containsMap(hfws.AllowedGroupsCombos, gs) {
+			hfws.AllowedGroupsCombos = append(
+				hfws.AllowedGroupsCombos,
+				gs,
+			)
+		}
+	} else if len(groups) == 1 {
+		hfws.AllowedGroups[groups[0]] = struct{}{}
+	}
+
+	if localIp.IsValid() {
+		hfws.AllowedCidrs = append(
+			hfws.AllowedCidrs,
+			localIp,
+		)
+	}
+
+	if CAName != "" {
+		hfws.AllowedCANames[CAName] = struct{}{}
+	}
+
+	if CASha != "" {
+		hfws.AllowedCAShas[CASha] = struct{}{}
+	}
+}
+
+func (hfws *HandshakeFilter) IsHandshakeAllowed(groups []string, host string, vpnAddrs []netip.Addr, CAName string, CASha string) bool {
+	if _, ok := hfws.AllowedHosts["any"]; ok {
+		return true
+	}
+	if _, ok := hfws.AllowedHosts[host]; ok {
+		return true
+	}
+
+	if _, ok := hfws.AllowedCANames[CAName]; ok {
+		return true
+	}
+
+	if _, ok := hfws.AllowedCAShas[CASha]; ok {
+		return true
+	}
+
+	if len(groups) != 0 {
+		if _, ok := hfws.AllowedGroups["any"]; ok {
+			return true
+		}
+	}
+	for _, g := range groups {
+		if _, ok := hfws.AllowedGroups[g]; ok {
+			return true
+		}
+	}
+
+	for _, c := range hfws.AllowedCidrs {
+		for _, a := range vpnAddrs {
+			if c.Contains(a) {
+				return true
+			}
+		}
+	}
+
+	for _, gc := range hfws.AllowedGroupsCombos {
+		if len(groups) < len(gc) {
+			continue
+		}
+
+		if isSubset(gc, groups) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isSubset(subset map[string]struct{}, superset []string) bool {
+	ls := len(subset)
+	s := make(map[string]struct{}, ls)
+	for _, value := range superset {
+		if _, ok := subset[value]; ok {
+			s[value] = struct{}{}
+		}
+	}
+	return len(s) == ls
+}
+
+func containsMap(slice []map[string]struct{}, target map[string]struct{}) bool {
+	for _, m := range slice {
+		if reflect.DeepEqual(m, target) {
+			return true
+		}
+	}
+	return false
 }
