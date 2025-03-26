@@ -10,7 +10,7 @@ import (
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 func TestConfig_Load(t *testing.T) {
@@ -19,7 +19,7 @@ func TestConfig_Load(t *testing.T) {
 	// invalid yaml
 	c := NewC(l)
 	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte(" invalid yaml"), 0644)
-	require.EqualError(t, c.Load(dir), "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[interface {}]interface {}")
+	require.EqualError(t, c.Load(dir), "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `invalid...` into map[string]interface {}")
 
 	// simple multi config merge
 	c = NewC(l)
@@ -31,8 +31,8 @@ func TestConfig_Load(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "01.yaml"), []byte("outer:\n  inner: hi"), 0644)
 	os.WriteFile(filepath.Join(dir, "02.yml"), []byte("outer:\n  inner: override\nnew: hi"), 0644)
 	require.NoError(t, c.Load(dir))
-	expected := map[interface{}]interface{}{
-		"outer": map[interface{}]interface{}{
+	expected := map[string]any{
+		"outer": map[string]any{
 			"inner": "override",
 		},
 		"new": "hi",
@@ -44,12 +44,12 @@ func TestConfig_Get(t *testing.T) {
 	l := test.NewLogger()
 	// test simple type
 	c := NewC(l)
-	c.Settings["firewall"] = map[interface{}]interface{}{"outbound": "hi"}
+	c.Settings["firewall"] = map[string]any{"outbound": "hi"}
 	assert.Equal(t, "hi", c.Get("firewall.outbound"))
 
 	// test complex type
-	inner := []map[interface{}]interface{}{{"port": "1", "code": "2"}}
-	c.Settings["firewall"] = map[interface{}]interface{}{"outbound": inner}
+	inner := []map[string]any{{"port": "1", "code": "2"}}
+	c.Settings["firewall"] = map[string]any{"outbound": inner}
 	assert.EqualValues(t, inner, c.Get("firewall.outbound"))
 
 	// test missing
@@ -59,7 +59,7 @@ func TestConfig_Get(t *testing.T) {
 func TestConfig_GetStringSlice(t *testing.T) {
 	l := test.NewLogger()
 	c := NewC(l)
-	c.Settings["slice"] = []interface{}{"one", "two"}
+	c.Settings["slice"] = []any{"one", "two"}
 	assert.Equal(t, []string{"one", "two"}, c.GetStringSlice("slice", []string{}))
 }
 
@@ -101,14 +101,14 @@ func TestConfig_HasChanged(t *testing.T) {
 	// Test key change
 	c = NewC(l)
 	c.Settings["test"] = "hi"
-	c.oldSettings = map[interface{}]interface{}{"test": "no"}
+	c.oldSettings = map[string]any{"test": "no"}
 	assert.True(t, c.HasChanged("test"))
 	assert.True(t, c.HasChanged(""))
 
 	// No key change
 	c = NewC(l)
 	c.Settings["test"] = "hi"
-	c.oldSettings = map[interface{}]interface{}{"test": "hi"}
+	c.oldSettings = map[string]any{"test": "hi"}
 	assert.False(t, c.HasChanged("test"))
 	assert.False(t, c.HasChanged(""))
 }
@@ -184,11 +184,11 @@ firewall:
 `),
 	}
 
-	var m map[any]any
+	var m map[string]any
 
 	// merge the same way config.parse() merges
 	for _, b := range configs {
-		var nm map[any]any
+		var nm map[string]any
 		err := yaml.Unmarshal(b, &nm)
 		require.NoError(t, err)
 
@@ -205,15 +205,15 @@ firewall:
 	t.Logf("Merged Config as YAML:\n%s", mYaml)
 
 	// If a bug is present, some items might be replaced instead of merged like we expect
-	expected := map[any]any{
-		"firewall": map[any]any{
+	expected := map[string]any{
+		"firewall": map[string]any{
 			"inbound": []any{
-				map[any]any{"host": "any", "port": "any", "proto": "icmp"},
-				map[any]any{"groups": []any{"server"}, "port": 443, "proto": "tcp"},
-				map[any]any{"groups": []any{"webapp"}, "port": 443, "proto": "tcp"}},
+				map[string]any{"host": "any", "port": "any", "proto": "icmp"},
+				map[string]any{"groups": []any{"server"}, "port": 443, "proto": "tcp"},
+				map[string]any{"groups": []any{"webapp"}, "port": 443, "proto": "tcp"}},
 			"outbound": []any{
-				map[any]any{"host": "any", "port": "any", "proto": "any"}}},
-		"listen": map[any]any{
+				map[string]any{"host": "any", "port": "any", "proto": "any"}}},
+		"listen": map[string]any{
 			"host": "0.0.0.0",
 			"port": 4242,
 		},

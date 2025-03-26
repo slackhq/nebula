@@ -422,7 +422,7 @@ func (lh *LightHouse) loadStaticMap(c *config.C, staticList map[netip.Addr]struc
 		return err
 	}
 
-	shm := c.GetMap("static_host_map", map[interface{}]interface{}{})
+	shm := c.GetMap("static_host_map", map[string]any{})
 	i := 0
 
 	for k, v := range shm {
@@ -436,9 +436,9 @@ func (lh *LightHouse) loadStaticMap(c *config.C, staticList map[netip.Addr]struc
 			return util.NewContextualError("static_host_map key is not in our network, invalid", m{"vpnAddr": vpnAddr, "networks": lh.myVpnNetworks, "entry": i + 1}, nil)
 		}
 
-		vals, ok := v.([]interface{})
+		vals, ok := v.([]any)
 		if !ok {
-			vals = []interface{}{v}
+			vals = []any{v}
 		}
 		remoteAddrs := []string{}
 		for _, v := range vals {

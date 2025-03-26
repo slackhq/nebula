@@ -19,7 +19,7 @@ import (
 // |-----------------------------------------------------------------------|
 // |                               payload...                              |
 
-type m map[string]interface{}
+type m = map[string]any
 
 const (
 	Version uint8 = 1
