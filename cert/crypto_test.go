@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -61,35 +62,35 @@ qrlJ69wer3ZUHFXA
 
 	// Success test case
 	curve, k, rest, err := DecryptAndUnmarshalSigningPrivateKey(passphrase, keyBundle)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, Curve_CURVE25519, curve)
 	assert.Len(t, k, 64)
 	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
 
 	// Fail due to short key
 	curve, k, rest, err = DecryptAndUnmarshalSigningPrivateKey(passphrase, rest)
-	assert.EqualError(t, err, "key was not 64 bytes, is invalid ed25519 private key")
+	require.EqualError(t, err, "key was not 64 bytes, is invalid ed25519 private key")
 	assert.Nil(t, k)
 	assert.Equal(t, rest, appendByteSlices(invalidBanner, invalidPem))
 
 	// Fail due to invalid banner
 	curve, k, rest, err = DecryptAndUnmarshalSigningPrivateKey(passphrase, rest)
-	assert.EqualError(t, err, "bytes did not contain a proper nebula encrypted Ed25519/ECDSA private key banner")
+	require.EqualError(t, err, "bytes did not contain a proper nebula encrypted Ed25519/ECDSA private key banner")
 	assert.Nil(t, k)
 	assert.Equal(t, rest, invalidPem)
 
 	// Fail due to ivalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
 	curve, k, rest, err = DecryptAndUnmarshalSigningPrivateKey(passphrase, rest)
-	assert.EqualError(t, err, "input did not contain a valid PEM encoded block")
+	require.EqualError(t, err, "input did not contain a valid PEM encoded block")
 	assert.Nil(t, k)
 	assert.Equal(t, rest, invalidPem)
 
 	// Fail due to invalid passphrase
 	curve, k, rest, err = DecryptAndUnmarshalSigningPrivateKey([]byte("invalid passphrase"), privKey)
-	assert.EqualError(t, err, "invalid passphrase or corrupt private key")
+	require.EqualError(t, err, "invalid passphrase or corrupt private key")
 	assert.Nil(t, k)
-	assert.Equal(t, rest, []byte{})
+	assert.Equal(t, []byte{}, rest)
 }
 
 func TestEncryptAndMarshalSigningPrivateKey(t *testing.T) {
@@ -99,14 +100,14 @@ func TestEncryptAndMarshalSigningPrivateKey(t *testing.T) {
 	bytes := []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	kdfParams := NewArgon2Parameters(64*1024, 4, 3)
 	key, err := EncryptAndMarshalSigningPrivateKey(Curve_CURVE25519, bytes, passphrase, kdfParams)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	// Verify the "key" can be decrypted successfully
 	curve, k, rest, err := DecryptAndUnmarshalSigningPrivateKey(passphrase, key)
 	assert.Len(t, k, 64)
 	assert.Equal(t, Curve_CURVE25519, curve)
-	assert.Equal(t, rest, []byte{})
-	assert.Nil(t, err)
+	assert.Equal(t, []byte{}, rest)
+	require.NoError(t, err)
 
 	// EncryptAndMarshalEd25519PrivateKey does not create any errors itself
 }

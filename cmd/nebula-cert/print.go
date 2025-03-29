@@ -49,6 +49,8 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 	var qrBytes []byte
 	part := 0
 
+	var jsonCerts []cert.Certificate
+
 	for {
 		c, rawCert, err = cert.UnmarshalCertificateFromPEM(rawCert)
 		if err != nil {
@@ -56,13 +58,10 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 		}
 
 		if *pf.json {
-			b, _ := json.Marshal(c)
-			out.Write(b)
-			out.Write([]byte("\n"))
-
+			jsonCerts = append(jsonCerts, c)
 		} else {
-			out.Write([]byte(c.String()))
-			out.Write([]byte("\n"))
+			_, _ = out.Write([]byte(c.String()))
+			_, _ = out.Write([]byte("\n"))
 		}
 
 		if *pf.outQRPath != "" {
@@ -78,6 +77,12 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 		}
 
 		part++
+	}
+
+	if *pf.json {
+		b, _ := json.Marshal(jsonCerts)
+		_, _ = out.Write(b)
+		_, _ = out.Write([]byte("\n"))
 	}
 
 	if *pf.outQRPath != "" {

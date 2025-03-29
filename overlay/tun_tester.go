@@ -13,22 +13,23 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/routing"
 )
 
 type TestTun struct {
-	Device    string
-	cidr      netip.Prefix
-	Routes    []Route
-	routeTree *bart.Table[netip.Addr]
-	l         *logrus.Logger
+	Device      string
+	vpnNetworks []netip.Prefix
+	Routes      []Route
+	routeTree   *bart.Table[routing.Gateways]
+	l           *logrus.Logger
 
 	closed    atomic.Bool
 	rxPackets chan []byte // Packets to receive into nebula
 	TxPackets chan []byte // Packets transmitted outside by nebula
 }
 
-func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, _ bool) (*TestTun, error) {
-	_, routes, err := getAllRoutesFromConfig(c, cidr, true)
+func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*TestTun, error) {
+	_, routes, err := getAllRoutesFromConfig(c, vpnNetworks, true)
 	if err != nil {
 		return nil, err
 	}
@@ -38,17 +39,17 @@ func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, _ bool) (*TestTun,
 	}
 
 	return &TestTun{
-		Device:    c.GetString("tun.dev", ""),
-		cidr:      cidr,
-		Routes:    routes,
-		routeTree: routeTree,
-		l:         l,
-		rxPackets: make(chan []byte, 10),
-		TxPackets: make(chan []byte, 10),
+		Device:      c.GetString("tun.dev", ""),
+		vpnNetworks: vpnNetworks,
+		Routes:      routes,
+		routeTree:   routeTree,
+		l:           l,
+		rxPackets:   make(chan []byte, 10),
+		TxPackets:   make(chan []byte, 10),
 	}, nil
 }
 
-func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ netip.Prefix) (*TestTun, error) {
+func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*TestTun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported")
 }
 
@@ -86,7 +87,7 @@ func (t *TestTun) Get(block bool) []byte {
 // Below this is boilerplate implementation to make nebula actually work
 //********************************************************************************************************************//
 
-func (t *TestTun) RouteFor(ip netip.Addr) netip.Addr {
+func (t *TestTun) RoutesFor(ip netip.Addr) routing.Gateways {
 	r, _ := t.routeTree.Lookup(ip)
 	return r
 }
@@ -95,8 +96,8 @@ func (t *TestTun) Activate() error {
 	return nil
 }
 
-func (t *TestTun) Cidr() netip.Prefix {
-	return t.cidr
+func (t *TestTun) Networks() []netip.Prefix {
+	return t.vpnNetworks
 }
 
 func (t *TestTun) Name() string {

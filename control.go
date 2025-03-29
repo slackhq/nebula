@@ -19,9 +19,9 @@ import (
 type controlEach func(h *HostInfo)
 
 type controlHostLister interface {
-	QueryVpnIp(vpnIp netip.Addr) *HostInfo
+	QueryVpnAddr(vpnAddr netip.Addr) *HostInfo
 	ForEachIndex(each controlEach)
-	ForEachVpnIp(each controlEach)
+	ForEachVpnAddr(each controlEach)
 	GetPreferredRanges() []netip.Prefix
 }
 
@@ -37,7 +37,7 @@ type Control struct {
 }
 
 type ControlHostInfo struct {
-	VpnIp                  netip.Addr       `json:"vpnIp"`
+	VpnAddrs               []netip.Addr     `json:"vpnAddrs"`
 	LocalIndex             uint32           `json:"localIndex"`
 	RemoteIndex            uint32           `json:"remoteIndex"`
 	RemoteAddrs            []netip.AddrPort `json:"remoteAddrs"`
@@ -131,10 +131,13 @@ func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 
 // GetCertByVpnIp returns the authenticated certificate of the given vpn IP, or nil if not found
 func (c *Control) GetCertByVpnIp(vpnIp netip.Addr) cert.Certificate {
-	if c.f.myVpnNet.Addr() == vpnIp {
-		return c.f.pki.GetCertState().Certificate.Copy()
+	_, found := c.f.myVpnAddrsTable.Lookup(vpnIp)
+	if found {
+		// Only returning the default certificate since its impossible
+		// for any other host but ourselves to have more than 1
+		return c.f.pki.getCertState().GetDefaultCertificate().Copy()
 	}
-	hi := c.f.hostMap.QueryVpnIp(vpnIp)
+	hi := c.f.hostMap.QueryVpnAddr(vpnIp)
 	if hi == nil {
 		return nil
 	}
@@ -148,7 +151,7 @@ func (c *Control) CreateTunnel(vpnIp netip.Addr) {
 
 // PrintTunnel creates a new tunnel to the given vpn ip.
 func (c *Control) PrintTunnel(vpnIp netip.Addr) *ControlHostInfo {
-	hi := c.f.hostMap.QueryVpnIp(vpnIp)
+	hi := c.f.hostMap.QueryVpnAddr(vpnIp)
 	if hi == nil {
 		return nil
 	}
@@ -165,9 +168,9 @@ func (c *Control) QueryLighthouse(vpnIp netip.Addr) *CacheMap {
 	return hi.CopyCache()
 }
 
-// GetHostInfoByVpnIp returns a single tunnels hostInfo, or nil if not found
+// GetHostInfoByVpnAddr returns a single tunnels hostInfo, or nil if not found
 // Caller should take care to Unmap() any 4in6 addresses prior to calling.
-func (c *Control) GetHostInfoByVpnIp(vpnIp netip.Addr, pending bool) *ControlHostInfo {
+func (c *Control) GetHostInfoByVpnAddr(vpnAddr netip.Addr, pending bool) *ControlHostInfo {
 	var hl controlHostLister
 	if pending {
 		hl = c.f.handshakeManager
@@ -175,7 +178,7 @@ func (c *Control) GetHostInfoByVpnIp(vpnIp netip.Addr, pending bool) *ControlHos
 		hl = c.f.hostMap
 	}
 
-	h := hl.QueryVpnIp(vpnIp)
+	h := hl.QueryVpnAddr(vpnAddr)
 	if h == nil {
 		return nil
 	}
@@ -187,7 +190,7 @@ func (c *Control) GetHostInfoByVpnIp(vpnIp netip.Addr, pending bool) *ControlHos
 // SetRemoteForTunnel forces a tunnel to use a specific remote
 // Caller should take care to Unmap() any 4in6 addresses prior to calling.
 func (c *Control) SetRemoteForTunnel(vpnIp netip.Addr, addr netip.AddrPort) *ControlHostInfo {
-	hostInfo := c.f.hostMap.QueryVpnIp(vpnIp)
+	hostInfo := c.f.hostMap.QueryVpnAddr(vpnIp)
 	if hostInfo == nil {
 		return nil
 	}
@@ -200,7 +203,7 @@ func (c *Control) SetRemoteForTunnel(vpnIp netip.Addr, addr netip.AddrPort) *Con
 // CloseTunnel closes a fully established tunnel. If localOnly is false it will notify the remote end as well.
 // Caller should take care to Unmap() any 4in6 addresses prior to calling.
 func (c *Control) CloseTunnel(vpnIp netip.Addr, localOnly bool) bool {
-	hostInfo := c.f.hostMap.QueryVpnIp(vpnIp)
+	hostInfo := c.f.hostMap.QueryVpnAddr(vpnIp)
 	if hostInfo == nil {
 		return false
 	}
@@ -224,19 +227,14 @@ func (c *Control) CloseTunnel(vpnIp netip.Addr, localOnly bool) bool {
 // CloseAllTunnels is just like CloseTunnel except it goes through and shuts them all down, optionally you can avoid shutting down lighthouse tunnels
 // the int returned is a count of tunnels closed
 func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
-	//TODO: this is probably better as a function in ConnectionManager or HostMap directly
-	lighthouses := c.f.lightHouse.GetLighthouses()
-
 	shutdown := func(h *HostInfo) {
-		if excludeLighthouses {
-			if _, ok := lighthouses[h.vpnIp]; ok {
-				return
-			}
+		if excludeLighthouses && c.f.lightHouse.IsAnyLighthouseAddr(h.vpnAddrs) {
+			return
 		}
 		c.f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 		c.f.closeTunnel(h)
 
-		c.l.WithField("vpnIp", h.vpnIp).WithField("udpAddr", h.remote).
+		c.l.WithField("vpnAddrs", h.vpnAddrs).WithField("udpAddr", h.remote).
 			Debug("Sending close tunnel message")
 		closed++
 	}
@@ -246,7 +244,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	// Grab the hostMap lock to access the Relays map
 	c.f.hostMap.Lock()
 	for _, relayingHost := range c.f.hostMap.Relays {
-		relayingHosts[relayingHost.vpnIp] = relayingHost
+		relayingHosts[relayingHost.vpnAddrs[0]] = relayingHost
 	}
 	c.f.hostMap.Unlock()
 
@@ -254,7 +252,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	// Grab the hostMap lock to access the Hosts map
 	c.f.hostMap.Lock()
 	for _, relayHost := range c.f.hostMap.Indexes {
-		if _, ok := relayingHosts[relayHost.vpnIp]; !ok {
+		if _, ok := relayingHosts[relayHost.vpnAddrs[0]]; !ok {
 			hostInfos = append(hostInfos, relayHost)
 		}
 	}
@@ -274,15 +272,18 @@ func (c *Control) Device() overlay.Device {
 }
 
 func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {
-
 	chi := ControlHostInfo{
-		VpnIp:                  h.vpnIp,
+		VpnAddrs:               make([]netip.Addr, len(h.vpnAddrs)),
 		LocalIndex:             h.localIndexId,
 		RemoteIndex:            h.remoteIndexId,
 		RemoteAddrs:            h.remotes.CopyAddrs(preferredRanges),
 		CurrentRelaysToMe:      h.relayState.CopyRelayIps(),
 		CurrentRelaysThroughMe: h.relayState.CopyRelayForIps(),
 		CurrentRemote:          h.remote,
+	}
+
+	for i, a := range h.vpnAddrs {
+		chi.VpnAddrs[i] = a
 	}
 
 	if h.ConnectionState != nil {
@@ -299,7 +300,7 @@ func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {
 func listHostMapHosts(hl controlHostLister) []ControlHostInfo {
 	hosts := make([]ControlHostInfo, 0)
 	pr := hl.GetPreferredRanges()
-	hl.ForEachVpnIp(func(hostinfo *HostInfo) {
+	hl.ForEachVpnAddr(func(hostinfo *HostInfo) {
 		hosts = append(hosts, copyHostInfo(hostinfo, pr))
 	})
 	return hosts

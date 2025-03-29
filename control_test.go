@@ -13,13 +13,13 @@ import (
 )
 
 func TestControl_GetHostInfoByVpnIp(t *testing.T) {
-	//TODO: with multiple certificate versions we have a problem with this test
+	//TODO: CERT-V2 with multiple certificate versions we have a problem with this test
 	// Some certs versions have different characteristics and each version implements their own Copy() func
 	// which means this is not a good place to test for exposing memory
 	l := test.NewLogger()
 	// Special care must be taken to re-use all objects provided to the hostmap and certificate in the expectedInfo object
 	// To properly ensure we are not exposing core memory to the caller
-	hm := newHostMap(l, netip.Prefix{})
+	hm := newHostMap(l)
 	hm.preferredRanges.Store(&[]netip.Prefix{})
 
 	remote1 := netip.MustParseAddrPort("0.0.0.100:4444")
@@ -35,9 +35,9 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		Mask: net.IPMask{255, 255, 255, 0},
 	}
 
-	remotes := NewRemoteList(nil)
-	remotes.unlockedPrependV4(netip.IPv4Unspecified(), NewIp4AndPortFromNetIP(remote1.Addr(), remote1.Port()))
-	remotes.unlockedPrependV6(netip.IPv4Unspecified(), NewIp6AndPortFromNetIP(remote2.Addr(), remote2.Port()))
+	remotes := NewRemoteList([]netip.Addr{netip.IPv4Unspecified()}, nil)
+	remotes.unlockedPrependV4(netip.IPv4Unspecified(), netAddrToProtoV4AddrPort(remote1.Addr(), remote1.Port()))
+	remotes.unlockedPrependV6(netip.IPv4Unspecified(), netAddrToProtoV6AddrPort(remote2.Addr(), remote2.Port()))
 
 	vpnIp, ok := netip.AddrFromSlice(ipNet.IP)
 	assert.True(t, ok)
@@ -51,11 +51,11 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		},
 		remoteIndexId: 200,
 		localIndexId:  201,
-		vpnIp:         vpnIp,
+		vpnAddrs:      []netip.Addr{vpnIp},
 		relayState: RelayState{
-			relays:        map[netip.Addr]struct{}{},
-			relayForByIp:  map[netip.Addr]*Relay{},
-			relayForByIdx: map[uint32]*Relay{},
+			relays:         map[netip.Addr]struct{}{},
+			relayForByAddr: map[netip.Addr]*Relay{},
+			relayForByIdx:  map[uint32]*Relay{},
 		},
 	}, &Interface{})
 
@@ -70,11 +70,11 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		},
 		remoteIndexId: 200,
 		localIndexId:  201,
-		vpnIp:         vpnIp2,
+		vpnAddrs:      []netip.Addr{vpnIp2},
 		relayState: RelayState{
-			relays:        map[netip.Addr]struct{}{},
-			relayForByIp:  map[netip.Addr]*Relay{},
-			relayForByIdx: map[uint32]*Relay{},
+			relays:         map[netip.Addr]struct{}{},
+			relayForByAddr: map[netip.Addr]*Relay{},
+			relayForByIdx:  map[uint32]*Relay{},
 		},
 	}, &Interface{})
 
@@ -85,10 +85,10 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		l: logrus.New(),
 	}
 
-	thi := c.GetHostInfoByVpnIp(vpnIp, false)
+	thi := c.GetHostInfoByVpnAddr(vpnIp, false)
 
 	expectedInfo := ControlHostInfo{
-		VpnIp:                  vpnIp,
+		VpnAddrs:               []netip.Addr{vpnIp},
 		LocalIndex:             201,
 		RemoteIndex:            200,
 		RemoteAddrs:            []netip.AddrPort{remote2, remote1},
@@ -100,13 +100,13 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	}
 
 	// Make sure we don't have any unexpected fields
-	assertFields(t, []string{"VpnIp", "LocalIndex", "RemoteIndex", "RemoteAddrs", "Cert", "MessageCounter", "CurrentRemote", "CurrentRelaysToMe", "CurrentRelaysThroughMe"}, thi)
+	assertFields(t, []string{"VpnAddrs", "LocalIndex", "RemoteIndex", "RemoteAddrs", "Cert", "MessageCounter", "CurrentRemote", "CurrentRelaysToMe", "CurrentRelaysThroughMe"}, thi)
 	assert.EqualValues(t, &expectedInfo, thi)
 	test.AssertDeepCopyEqual(t, &expectedInfo, thi)
 
 	// Make sure we don't panic if the host info doesn't have a cert yet
 	assert.NotPanics(t, func() {
-		thi = c.GetHostInfoByVpnIp(vpnIp2, false)
+		thi = c.GetHostInfoByVpnAddr(vpnIp2, false)
 	})
 }
 

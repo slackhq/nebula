@@ -9,11 +9,12 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/routing"
 )
 
 type disabledTun struct {
-	read chan []byte
-	cidr netip.Prefix
+	read        chan []byte
+	vpnNetworks []netip.Prefix
 
 	// Track these metrics since we don't have the tun device to do it for us
 	tx metrics.Counter
@@ -21,11 +22,11 @@ type disabledTun struct {
 	l  *logrus.Logger
 }
 
-func newDisabledTun(cidr netip.Prefix, queueLen int, metricsEnabled bool, l *logrus.Logger) *disabledTun {
+func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled bool, l *logrus.Logger) *disabledTun {
 	tun := &disabledTun{
-		cidr: cidr,
-		read: make(chan []byte, queueLen),
-		l:    l,
+		vpnNetworks: vpnNetworks,
+		read:        make(chan []byte, queueLen),
+		l:           l,
 	}
 
 	if metricsEnabled {
@@ -43,12 +44,12 @@ func (*disabledTun) Activate() error {
 	return nil
 }
 
-func (*disabledTun) RouteFor(addr netip.Addr) netip.Addr {
-	return netip.Addr{}
+func (*disabledTun) RoutesFor(addr netip.Addr) routing.Gateways {
+	return routing.Gateways{}
 }
 
-func (t *disabledTun) Cidr() netip.Prefix {
-	return t.cidr
+func (t *disabledTun) Networks() []netip.Prefix {
+	return t.vpnNetworks
 }
 
 func (*disabledTun) Name() string {

@@ -128,7 +128,6 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 
 		ipNet = netip.PrefixFrom(ipNet.Addr().Unmap(), ipNet.Bits())
 
-		// TODO: should we error on duplicate CIDRs in the config?
 		tree.Insert(ipNet, value)
 
 		maskBits := ipNet.Bits()
@@ -251,20 +250,20 @@ func getRemoteAllowRanges(c *config.C, k string) (*bart.Table[*AllowList], error
 	return remoteAllowRanges, nil
 }
 
-func (al *AllowList) Allow(ip netip.Addr) bool {
+func (al *AllowList) Allow(addr netip.Addr) bool {
 	if al == nil {
 		return true
 	}
 
-	result, _ := al.cidrTree.Lookup(ip)
+	result, _ := al.cidrTree.Lookup(addr)
 	return result
 }
 
-func (al *LocalAllowList) Allow(ip netip.Addr) bool {
+func (al *LocalAllowList) Allow(udpAddr netip.Addr) bool {
 	if al == nil {
 		return true
 	}
-	return al.AllowList.Allow(ip)
+	return al.AllowList.Allow(udpAddr)
 }
 
 func (al *LocalAllowList) AllowName(name string) bool {
@@ -282,23 +281,37 @@ func (al *LocalAllowList) AllowName(name string) bool {
 	return !al.nameRules[0].Allow
 }
 
-func (al *RemoteAllowList) AllowUnknownVpnIp(ip netip.Addr) bool {
+func (al *RemoteAllowList) AllowUnknownVpnAddr(vpnAddr netip.Addr) bool {
 	if al == nil {
 		return true
 	}
-	return al.AllowList.Allow(ip)
+	return al.AllowList.Allow(vpnAddr)
 }
 
-func (al *RemoteAllowList) Allow(vpnIp netip.Addr, ip netip.Addr) bool {
-	if !al.getInsideAllowList(vpnIp).Allow(ip) {
+func (al *RemoteAllowList) Allow(vpnAddr netip.Addr, udpAddr netip.Addr) bool {
+	if !al.getInsideAllowList(vpnAddr).Allow(udpAddr) {
 		return false
 	}
-	return al.AllowList.Allow(ip)
+	return al.AllowList.Allow(udpAddr)
 }
 
-func (al *RemoteAllowList) getInsideAllowList(vpnIp netip.Addr) *AllowList {
+func (al *RemoteAllowList) AllowAll(vpnAddrs []netip.Addr, udpAddr netip.Addr) bool {
+	if !al.AllowList.Allow(udpAddr) {
+		return false
+	}
+
+	for _, vpnAddr := range vpnAddrs {
+		if !al.getInsideAllowList(vpnAddr).Allow(udpAddr) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (al *RemoteAllowList) getInsideAllowList(vpnAddr netip.Addr) *AllowList {
 	if al.insideAllowLists != nil {
-		inside, ok := al.insideAllowLists.Lookup(vpnIp)
+		inside, ok := al.insideAllowLists.Lookup(vpnAddr)
 		if ok {
 			return inside
 		}

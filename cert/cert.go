@@ -1,15 +1,17 @@
 package cert
 
 import (
+	"fmt"
 	"net/netip"
 	"time"
 )
 
-type Version int
+type Version uint8
 
 const (
-	Version1 Version = 1
-	Version2 Version = 2
+	VersionPre1 Version = 0
+	Version1    Version = 1
+	Version2    Version = 2
 )
 
 type Certificate interface {
@@ -107,23 +109,43 @@ type CachedCertificate struct {
 	signerFingerprint string
 }
 
-// UnmarshalCertificate will attempt to unmarshal a wire protocol level certificate.
-func UnmarshalCertificate(b []byte) (Certificate, error) {
-	c, err := unmarshalCertificateV1(b, true)
-	if err != nil {
-		return nil, err
-	}
-	return c, nil
+func (cc *CachedCertificate) String() string {
+	return cc.Certificate.String()
 }
 
-// UnmarshalCertificateFromHandshake will attempt to unmarshal a certificate received in a handshake.
+// Recombine will attempt to unmarshal a certificate received in a handshake.
 // Handshakes save space by placing the peers public key in a different part of the packet, we have to
 // reassemble the actual certificate structure with that in mind.
-func UnmarshalCertificateFromHandshake(b []byte, publicKey []byte) (Certificate, error) {
-	c, err := unmarshalCertificateV1(b, false)
+func Recombine(v Version, rawCertBytes, publicKey []byte, curve Curve) (Certificate, error) {
+	if publicKey == nil {
+		return nil, ErrNoPeerStaticKey
+	}
+
+	if rawCertBytes == nil {
+		return nil, ErrNoPayload
+	}
+
+	var c Certificate
+	var err error
+
+	switch v {
+	// Implementations must ensure the result is a valid cert!
+	case VersionPre1, Version1:
+		c, err = unmarshalCertificateV1(rawCertBytes, publicKey)
+	case Version2:
+		c, err = unmarshalCertificateV2(rawCertBytes, publicKey, curve)
+	default:
+		//TODO: CERT-V2 make a static var
+		return nil, fmt.Errorf("unknown certificate version %d", v)
+	}
+
 	if err != nil {
 		return nil, err
 	}
-	c.details.PublicKey = publicKey
+
+	if c.Curve() != curve {
+		return nil, fmt.Errorf("certificate curve %s does not match expected %s", c.Curve().String(), curve.String())
+	}
+
 	return c, nil
 }

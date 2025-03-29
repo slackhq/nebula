@@ -14,12 +14,8 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/firewall"
-	"github.com/slackhq/nebula/header"
 	"golang.org/x/sys/unix"
 )
-
-//TODO: make it support reload as best you can!
 
 type StdConn struct {
 	sysFd int
@@ -59,7 +55,6 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 		}
 	}
 
-	//TODO: support multiple listening IPs (for limiting ipv6)
 	var sa unix.Sockaddr
 	if ip.Is4() {
 		sa4 := &unix.SockaddrInet4{Port: port}
@@ -73,11 +68,6 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 	if err = unix.Bind(fd, sa); err != nil {
 		return nil, fmt.Errorf("unable to bind to socket: %s", err)
 	}
-
-	//TODO: this may be useful for forcing threads into specific cores
-	//unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU, x)
-	//v, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU)
-	//l.Println(v, err)
 
 	return &StdConn{sysFd: fd, isV4: ip.Is4(), l: l, batch: batch}, err
 }
@@ -94,12 +84,20 @@ func (u *StdConn) SetSendBuffer(n int) error {
 	return unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_SNDBUFFORCE, n)
 }
 
+func (u *StdConn) SetSoMark(mark int) error {
+	return unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_MARK, mark)
+}
+
 func (u *StdConn) GetRecvBuffer() (int, error) {
 	return unix.GetsockoptInt(int(u.sysFd), unix.SOL_SOCKET, unix.SO_RCVBUF)
 }
 
 func (u *StdConn) GetSendBuffer() (int, error) {
 	return unix.GetsockoptInt(int(u.sysFd), unix.SOL_SOCKET, unix.SO_SNDBUF)
+}
+
+func (u *StdConn) GetSoMark() (int, error) {
+	return unix.GetsockoptInt(int(u.sysFd), unix.SOL_SOCKET, unix.SO_MARK)
 }
 
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
@@ -120,15 +118,9 @@ func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	}
 }
 
-func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int) {
-	plaintext := make([]byte, MTU)
-	h := &header.H{}
-	fwPacket := &firewall.Packet{}
+func (u *StdConn) ListenOut(r EncReader) {
 	var ip netip.Addr
-	nb := make([]byte, 12, 12)
 
-	//TODO: should we track this?
-	//metric := metrics.GetOrRegisterHistogram("test.batch_read", nil, metrics.NewExpDecaySample(1028, 0.015))
 	msgs, buffers, names := u.PrepareRawMessages(u.batch)
 	read := u.ReadMulti
 	if u.batch == 1 {
@@ -142,26 +134,14 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 			return
 		}
 
-		//metric.Update(int64(n))
 		for i := 0; i < n; i++ {
+			// Its ok to skip the ok check here, the slicing is the only error that can occur and it will panic
 			if u.isV4 {
 				ip, _ = netip.AddrFromSlice(names[i][4:8])
-				//TODO: IPV6-WORK what is not ok?
 			} else {
 				ip, _ = netip.AddrFromSlice(names[i][8:24])
-				//TODO: IPV6-WORK what is not ok?
 			}
-			r(
-				netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])),
-				plaintext[:0],
-				buffers[i][:msgs[i].Len],
-				h,
-				fwPacket,
-				lhf,
-				nb,
-				q,
-				cache.Get(u.l),
-			)
+			r(netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])), buffers[i][:msgs[i].Len])
 		}
 	}
 }
@@ -235,8 +215,6 @@ func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
 			return &net.OpError{Op: "sendto", Err: err}
 		}
 
-		//TODO: handle incomplete writes
-
 		return nil
 	}
 }
@@ -265,8 +243,6 @@ func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
 		if err != 0 {
 			return &net.OpError{Op: "sendto", Err: err}
 		}
-
-		//TODO: handle incomplete writes
 
 		return nil
 	}
@@ -302,6 +278,22 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 			u.l.WithError(err).Error("Failed to set listen.write_buffer")
 		}
 	}
+
+	b = c.GetInt("listen.so_mark", 0)
+	s, err := u.GetSoMark()
+	if b > 0 || (err == nil && s != 0) {
+		err := u.SetSoMark(b)
+		if err == nil {
+			s, err := u.GetSoMark()
+			if err == nil {
+				u.l.WithField("mark", s).Info("listen.so_mark was set")
+			} else {
+				u.l.WithError(err).Warn("Failed to get listen.so_mark")
+			}
+		} else {
+			u.l.WithError(err).Error("Failed to set listen.so_mark")
+		}
+	}
 }
 
 func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
@@ -314,7 +306,6 @@ func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
 }
 
 func (u *StdConn) Close() error {
-	//TODO: this will not interrupt the read loop
 	return syscall.Close(u.sysFd)
 }
 

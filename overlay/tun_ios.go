@@ -16,25 +16,26 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 )
 
 type tun struct {
 	io.ReadWriteCloser
-	cidr      netip.Prefix
-	Routes    atomic.Pointer[[]Route]
-	routeTree atomic.Pointer[bart.Table[netip.Addr]]
-	l         *logrus.Logger
+	vpnNetworks []netip.Prefix
+	Routes      atomic.Pointer[[]Route]
+	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
+	l           *logrus.Logger
 }
 
-func newTun(_ *config.C, _ *logrus.Logger, _ netip.Prefix, _ bool) (*tun, error) {
+func newTun(_ *config.C, _ *logrus.Logger, _ []netip.Prefix, _ bool) (*tun, error) {
 	return nil, fmt.Errorf("newTun not supported in iOS")
 }
 
-func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, cidr netip.Prefix) (*tun, error) {
+func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
 	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
 	t := &tun{
-		cidr:            cidr,
+		vpnNetworks:     vpnNetworks,
 		ReadWriteCloser: &tunReadCloser{f: file},
 		l:               l,
 	}
@@ -59,7 +60,7 @@ func (t *tun) Activate() error {
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
-	change, routes, err := getAllRoutesFromConfig(c, t.cidr, initial)
+	change, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
 	if err != nil {
 		return err
 	}
@@ -79,7 +80,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	return nil
 }
 
-func (t *tun) RouteFor(ip netip.Addr) netip.Addr {
+func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 	r, _ := t.routeTree.Load().Lookup(ip)
 	return r
 }
@@ -142,8 +143,8 @@ func (tr *tunReadCloser) Close() error {
 	return tr.f.Close()
 }
 
-func (t *tun) Cidr() netip.Prefix {
-	return t.cidr
+func (t *tun) Networks() []netip.Prefix {
+	return t.vpnNetworks
 }
 
 func (t *tun) Name() string {
