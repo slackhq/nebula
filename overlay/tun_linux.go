@@ -32,10 +32,10 @@ type tun struct {
 	deviceIndex int
 	ioctlFd     uintptr
 
-	Routes          atomic.Pointer[[]Route]
-	routeTree       atomic.Pointer[bart.Table[netip.Addr]]
-	routeChan       chan struct{}
-	useSystemRoutes bool
+	Routes                    atomic.Pointer[[]Route]
+	routeTree                 atomic.Pointer[bart.Table[netip.Addr]]
+	routeChan                 chan struct{}
+	useSystemRoutes           bool
 	useSystemRoutesBufferSize int
 
 	l *logrus.Logger
@@ -125,13 +125,13 @@ func newTun(c *config.C, l *logrus.Logger, cidr netip.Prefix, multiqueue bool) (
 
 func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, cidr netip.Prefix) (*tun, error) {
 	t := &tun{
-		ReadWriteCloser: file,
-		fd:              int(file.Fd()),
-		cidr:            cidr,
-		TXQueueLen:      c.GetInt("tun.tx_queue", 500),
-		useSystemRoutes: c.GetBool("tun.use_system_route_table", false),
+		ReadWriteCloser:           file,
+		fd:                        int(file.Fd()),
+		cidr:                      cidr,
+		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
+		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
 		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
-		l:               l,
+		l:                         l,
 	}
 
 	err := t.reload(c, true)
@@ -491,9 +491,9 @@ func (t *tun) watchRoutes() {
 	doneChan := make(chan struct{})
 
 	netlinkOptions := netlink.RouteSubscribeOptions{
-		ReceiveBufferSize: t.useSystemRoutesBufferSize,
+		ReceiveBufferSize:      t.useSystemRoutesBufferSize,
 		ReceiveBufferForceSize: t.useSystemRoutesBufferSize != 0,
-		ErrorCallback: func (e error) {t.l.WithError(e).Errorf("netlink error")},
+		ErrorCallback:          func(e error) { t.l.WithError(e).Errorf("netlink error") },
 	}
 
 	if err := netlink.RouteSubscribeWithOptions(rch, doneChan, netlinkOptions); err != nil {
