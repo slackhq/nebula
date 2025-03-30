@@ -247,6 +247,9 @@ type HostInfo struct {
 	lastRoam       time.Time
 	lastRoamRemote netip.AddrPort
 
+	// Tracks if the lh ack'd all our hfw messages. if not, the missing message will be resent
+	hfwMessagesAckd map[uint8]bool
+
 	// Used to track other hostinfos for this vpn ip since only 1 can be primary
 	// Synchronised via hostmap lock and not the hostinfo lock.
 	next, prev *HostInfo

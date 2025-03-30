@@ -35,7 +35,7 @@ func getAllRoutesFromConfig(c *config.C, vpnNetworks []netip.Prefix, initial boo
 		return false, nil, nil
 	}
 
-	routes, err := parseRoutes(c, vpnNetworks)
+	routes, err := ParseRoutes(c, vpnNetworks)
 	if err != nil {
 		return true, nil, util.NewContextualError("Could not parse tun.routes", nil, err)
 	}

@@ -222,6 +222,14 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		return
 	}
 
+	if f.lightHouse.incomingHandshakeFiltering.Load() {
+		if !f.lightHouse.hf.IsHandshakeAllowed(remoteCert.Certificate.Groups(), certName, vpnAddrs, issuer, fingerprint) {
+			f.l.WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", addr).Warn("handshake filtering denied incoming handshake")
+			f.lightHouse.metricFilteredHandshakes.Inc(1)
+			return
+		}
+	}
+
 	if addr.IsValid() {
 		// addr can be invalid when the tunnel is being relayed.
 		// We only want to apply the remote allow list for direct tunnels here
@@ -241,7 +249,6 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to generate index")
 		return
 	}
-
 	hostinfo := &HostInfo{
 		ConnectionState:   ci,
 		localIndexId:      myIndex,
@@ -249,6 +256,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		vpnAddrs:          vpnAddrs,
 		HandshakePacket:   make(map[uint8][]byte, 0),
 		lastHandshakeTime: hs.Details.Time,
+		hfwMessagesAckd:   make(map[uint8]bool, 0),
 		relayState: RelayState{
 			relays:         map[netip.Addr]struct{}{},
 			relayForByAddr: map[netip.Addr]*Relay{},

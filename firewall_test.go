@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"net/netip"
+	"strconv"
 	"testing"
 	"time"
 
@@ -510,6 +511,477 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 	assert.Equal(t, fw.Drop(p, false, &h, cp, nil), ErrNoMatchingRule)
 }
 
+func TestHandshakeFilter_AddRuleToHandshakeFilter(t *testing.T) {
+	hf := NewHandshakeFilter()
+	assert.Empty(t, hf.AllowedHosts)
+	assert.Empty(t, hf.AllowedGroups)
+	assert.Empty(t, hf.AllowedGroupsCombos)
+	assert.Empty(t, hf.AllowedCidrs)
+	assert.Empty(t, hf.AllowedCANames)
+	assert.Empty(t, hf.AllowedCAShas)
+
+	assert.True(t, hf.IsEmtpy.Load())
+	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
+	hf.AddRule([]string{}, "", netip.Prefix{}, "", "")
+	assert.Empty(t, hf.AllowedCidrs)
+	assert.Empty(t, hf.AllowedGroups)
+	assert.Empty(t, hf.AllowedGroupsCombos)
+	assert.Empty(t, hf.AllowedHosts)
+	assert.True(t, hf.IsEmtpy.Load())
+	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
+	assert.Empty(t, hf.AllowedCANames)
+	assert.Empty(t, hf.AllowedCAShas)
+
+	hf = NewHandshakeFilter()
+	g := "g1"
+	hf.AddRule([]string{g}, "", netip.Prefix{}, "", "")
+	assert.Empty(t, hf.AllowedCidrs)
+	assert.Contains(t, hf.AllowedGroups, g)
+	assert.Empty(t, hf.AllowedGroupsCombos)
+	assert.Empty(t, hf.AllowedHosts)
+	assert.Empty(t, hf.AllowedCANames)
+	assert.Empty(t, hf.AllowedCAShas)
+	assert.False(t, hf.IsEmtpy.Load())
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+
+	hf = NewHandshakeFilter()
+	h := "h1"
+	hf.AddRule([]string{}, h, netip.Prefix{}, "", "")
+	assert.Empty(t, hf.AllowedCidrs)
+	assert.Empty(t, hf.AllowedGroups)
+	assert.Empty(t, hf.AllowedGroupsCombos)
+	assert.Contains(t, hf.AllowedHosts, h)
+	assert.Empty(t, hf.AllowedCANames)
+	assert.Empty(t, hf.AllowedCAShas)
+	assert.False(t, hf.IsEmtpy.Load())
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+
+	hf = NewHandshakeFilter()
+	ti := netip.MustParsePrefix("1.2.3.4/32")
+	hf.AddRule([]string{}, "", ti, "", "")
+	assert.Contains(t, hf.AllowedCidrs, ti)
+	assert.Empty(t, hf.AllowedGroups)
+	assert.Empty(t, hf.AllowedGroupsCombos)
+	assert.Empty(t, hf.AllowedHosts)
+	assert.Empty(t, hf.AllowedCANames)
+	assert.Empty(t, hf.AllowedCAShas)
+	assert.False(t, hf.IsEmtpy.Load())
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+
+	hf = NewHandshakeFilter()
+	groups := []string{"g1", "g2"}
+	hf.AddRule(groups, "", netip.Prefix{}, "", "")
+	assert.Empty(t, hf.AllowedCidrs)
+	assert.Empty(t, hf.AllowedGroups)
+	assert.Empty(t, hf.AllowedCANames)
+	assert.Empty(t, hf.AllowedCAShas)
+
+	gs := make(map[string]struct{})
+	for i := range groups {
+		gs[groups[i]] = struct{}{}
+	}
+	assert.Len(t, gs, len(groups))
+	assert.Equal(t, hf.AllowedGroupsCombos[0], gs)
+	assert.Empty(t, hf.AllowedHosts)
+	assert.Empty(t, hf.AllowedCANames)
+	assert.Empty(t, hf.AllowedCAShas)
+
+	hf = NewHandshakeFilter()
+	i := "TestCA"
+	hf.AddRule([]string{}, "", netip.Prefix{}, i, "")
+	assert.Empty(t, hf.AllowedCidrs)
+	assert.Empty(t, hf.AllowedGroups)
+	assert.Empty(t, hf.AllowedGroupsCombos)
+	assert.Empty(t, hf.AllowedHosts)
+	assert.Contains(t, hf.AllowedCANames, i)
+	assert.Empty(t, hf.AllowedCAShas)
+
+	hf = NewHandshakeFilter()
+	s := "3fc204e4d45e8b22ed0879bcd7cb5bf93cdc1c7a309c5dcedddc03aed33a47c6"
+	hf.AddRule([]string{}, "", netip.Prefix{}, "", s)
+	assert.Empty(t, hf.AllowedCidrs)
+	assert.Empty(t, hf.AllowedGroups)
+	assert.Empty(t, hf.AllowedGroupsCombos)
+	assert.Empty(t, hf.AllowedHosts)
+	assert.Empty(t, hf.AllowedCANames)
+	assert.Contains(t, hf.AllowedCAShas, s)
+	assert.False(t, hf.IsEmtpy.Load())
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+}
+
+func TestHandshakeFilter_IsHandshakeAllowed(t *testing.T) {
+	hf := NewHandshakeFilter()
+	assert.NotNil(t, hf.AllowedHosts)
+	assert.NotNil(t, hf.AllowedGroups)
+	assert.NotNil(t, hf.AllowedGroupsCombos)
+	assert.NotNil(t, hf.AllowedCidrs)
+
+	ti := netip.MustParsePrefix("1.2.3.0/24")
+	ais := []netip.Addr{
+		netip.MustParseAddr("1.2.3.5"),
+		netip.MustParseAddr("1.1.1.2"),
+	}
+
+	aos := []netip.Addr{
+		netip.MustParseAddr("1.2.0.1"),
+		netip.MustParseAddr("1.10.0.1"),
+	}
+
+	hf.AddRule([]string{"g1"}, "", netip.Prefix{}, "", "")
+	hf.AddRule([]string{}, "h1", netip.Prefix{}, "", "")
+	hf.AddRule([]string{}, "", ti, "", "")
+	hf.AddRule([]string{"g1", "g2"}, "", netip.Prefix{}, "", "")
+	hf.AddRule([]string{"g1", "g2"}, "", netip.Prefix{}, "", "")
+	hf.AddRule([]string{}, "", netip.Prefix{}, "TestCA", "")
+	hf.AddRule([]string{}, "", netip.Prefix{}, "", "3fc204e4d45e8b22ed0879bcd7cb5bf93cdc1c7a309c5dcedddc03aed33a47c6")
+
+	g := []string{"g2", "g3"}
+	g2 := []string{"g1", "g2"}
+	assert.True(t, hf.IsHandshakeAllowed([]string{"g1"}, "", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.False(t, hf.IsHandshakeAllowed([]string{"g2"}, "", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.False(t, hf.IsHandshakeAllowed(g, "", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.True(t, hf.IsHandshakeAllowed(g2, "", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.Len(t, hf.AllowedGroupsCombos[0], 2)
+
+	assert.True(t, hf.IsHandshakeAllowed([]string{"g2", "g1"}, "", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.True(t, hf.IsHandshakeAllowed([]string{"g3", "g2", "g1"}, "", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.False(t, hf.IsHandshakeAllowed([]string{}, "h2", aos, "", ""))
+
+	assert.True(t, hf.IsHandshakeAllowed([]string{}, "h1", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.False(t, hf.IsHandshakeAllowed([]string{}, "h2", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.False(t, hf.IsHandshakeAllowed([]string{}, "", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.False(t, hf.IsHandshakeAllowed([]string{}, "any", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.False(t, hf.IsHandshakeAllowed([]string{"h1"}, "", aos, "", ""))
+
+	assert.True(t, hf.IsHandshakeAllowed([]string{}, "", ais, "", ""))
+	assert.False(t, hf.IsHandshakeAllowed([]string{}, "", aos, "", ""))
+	assert.False(t, hf.IsHandshakeAllowed([]string{"g3"}, "h2", aos, "", ""))
+
+	assert.True(t, hf.IsHandshakeAllowed([]string{}, "", []netip.Addr{netip.Addr{}}, "TestCA", ""))
+	assert.False(t, hf.IsHandshakeAllowed([]string{}, "", []netip.Addr{netip.Addr{}}, "WrongCA", ""))
+
+	assert.True(t, hf.IsHandshakeAllowed([]string{}, "", []netip.Addr{netip.Addr{}}, "", "3fc204e4d45e8b22ed0879bcd7cb5bf93cdc1c7a309c5dcedddc03aed33a47c6"))
+	assert.False(t, hf.IsHandshakeAllowed([]string{}, "", []netip.Addr{netip.Addr{}}, "", "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"))
+
+	pAny := netip.MustParsePrefix("0.0.0.0/0")
+
+	hf = NewHandshakeFilter()
+	hf.AddRule([]string{"any"}, "", netip.Prefix{}, "", "")
+	hf.AddRule([]string{}, "any", netip.Prefix{}, "", "")
+	hf.AddRule([]string{}, "", pAny, "", "")
+
+	assert.True(t, hf.IsHandshakeAllowed([]string{}, "", ais, "", ""))
+	assert.True(t, hf.IsHandshakeAllowed([]string{}, "h3", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.True(t, hf.IsHandshakeAllowed([]string{"g4"}, "", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.True(t, hf.IsHandshakeAllowed([]string{"g4", "g5"}, "", []netip.Addr{netip.Addr{}}, "", ""))
+
+	hf = NewHandshakeFilter()
+	hf.AddRule([]string{}, "any", netip.Prefix{}, "", "")
+	assert.True(t, hf.IsHandshakeAllowed([]string{}, "", ais, "", ""))
+	assert.True(t, hf.IsHandshakeAllowed([]string{}, "h3", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.True(t, hf.IsHandshakeAllowed([]string{"g4"}, "", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.True(t, hf.IsHandshakeAllowed([]string{"g4", "g5"}, "", []netip.Addr{netip.Addr{}}, "", ""))
+
+	hf = NewHandshakeFilter()
+	hf.AddRule([]string{}, "", pAny, "", "")
+	assert.True(t, hf.IsHandshakeAllowed([]string{}, "", ais, "", ""))
+	assert.False(t, hf.IsHandshakeAllowed([]string{}, "h3", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.False(t, hf.IsHandshakeAllowed([]string{"g4"}, "", []netip.Addr{netip.Addr{}}, "", ""))
+	assert.False(t, hf.IsHandshakeAllowed([]string{"g4", "g5"}, "", []netip.Addr{netip.Addr{}}, "", ""))
+}
+
+func TestHandshakeFilter_Marshalling(t *testing.T) {
+	hf := NewHandshakeFilter()
+	assert.NotNil(t, hf.AllowedHosts)
+	assert.NotNil(t, hf.AllowedGroups)
+	assert.NotNil(t, hf.AllowedGroupsCombos)
+	assert.NotNil(t, hf.AllowedCidrs)
+	assert.Empty(t, hf.AllowedCANames)
+	assert.Empty(t, hf.AllowedCAShas)
+	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
+	assert.True(t, hf.IsEmtpy.Load())
+	hfwl := hf.MarshalToHfwList(1300)
+	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
+	assert.Len(t, hfwl, 1)
+	assert.Empty(t, hfwl[0].AllowedGroups)
+	assert.Empty(t, hfwl[0].AllowedGroupsCombos)
+	assert.Empty(t, hfwl[0].AllowedHosts)
+	assert.Empty(t, hfwl[0].AllowedCidrs)
+	assert.Empty(t, hfwl[0].AllowedCANames)
+	assert.Empty(t, hfwl[0].AllowedCAShas)
+	assert.False(t, hfwl[0].Append)
+
+	hf = NewHandshakeFilter()
+	g := "g1"
+	hf.AddRule([]string{g}, "", netip.Prefix{}, "", "")
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+	hfwl = hf.MarshalToHfwList(1300)
+	assert.Len(t, hfwl, 1)
+	assert.Contains(t, hfwl[0].AllowedGroups, g)
+	assert.Empty(t, hfwl[0].AllowedGroupsCombos)
+	assert.Empty(t, hfwl[0].AllowedHosts)
+	assert.Empty(t, hfwl[0].AllowedCidrs)
+	assert.Empty(t, hfwl[0].AllowedCANames)
+	assert.Empty(t, hfwl[0].AllowedCAShas)
+	assert.False(t, hfwl[0].Append)
+	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
+	hf = NewHandshakeFilter()
+	hf = hf.UnmarshalFromHfw(hfwl[0])
+	assert.Empty(t, hf.AllowedGroupsCombos)
+	assert.Empty(t, hf.AllowedHosts)
+	assert.Empty(t, hf.AllowedCidrs)
+	assert.Empty(t, hf.AllowedCANames)
+	assert.Empty(t, hf.AllowedCAShas)
+	assert.Contains(t, hf.AllowedGroups, g)
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+
+	hf = NewHandshakeFilter()
+	gc := []string{"g1", "g2"}
+	hf.AddRule(gc, "", netip.Prefix{}, "", "")
+	assert.Len(t, hf.AllowedGroupsCombos, 1)
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+	hfwl = hf.MarshalToHfwList(1300)
+	assert.Len(t, hfwl, 1)
+	assert.Empty(t, hfwl[0].AllowedGroups)
+	assert.Len(t, hfwl[0].AllowedGroupsCombos, 1)
+	for _, g := range gc {
+		assert.Contains(t, hfwl[0].AllowedGroupsCombos[0].Group, g)
+	}
+	assert.Empty(t, hfwl[0].AllowedHosts)
+	assert.Empty(t, hfwl[0].AllowedCidrs)
+	assert.Empty(t, hfwl[0].AllowedCANames)
+	assert.Empty(t, hfwl[0].AllowedCAShas)
+	assert.False(t, hfwl[0].Append)
+	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
+	hf = NewHandshakeFilter()
+	hf = hf.UnmarshalFromHfw(hfwl[0])
+	assert.Empty(t, hf.AllowedGroups)
+	gs := make(map[string]struct{})
+	for _, g := range hfwl[0].AllowedGroupsCombos[0].Group {
+		gs[g] = struct{}{}
+	}
+	for _, g := range gc {
+		assert.Contains(t, hf.AllowedGroupsCombos[0], g)
+	}
+	assert.Empty(t, hf.AllowedHosts)
+	assert.Empty(t, hf.AllowedCidrs)
+	assert.Empty(t, hf.AllowedCANames)
+	assert.Empty(t, hf.AllowedCAShas)
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+
+	hf = NewHandshakeFilter()
+	h := "h1"
+	hf.AddRule(nil, h, netip.Prefix{}, "", "")
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+	hfwl = hf.MarshalToHfwList(1300)
+	assert.Len(t, hfwl, 1)
+	assert.Empty(t, hfwl[0].AllowedGroups)
+	assert.Empty(t, hfwl[0].AllowedGroupsCombos)
+	assert.Contains(t, hfwl[0].AllowedHosts, h)
+	assert.Empty(t, hfwl[0].AllowedCidrs)
+	assert.Empty(t, hfwl[0].AllowedCANames)
+	assert.Empty(t, hfwl[0].AllowedCAShas)
+	assert.False(t, hfwl[0].Append)
+	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
+	hf = NewHandshakeFilter()
+	hf = hf.UnmarshalFromHfw(hfwl[0])
+	assert.Empty(t, hf.AllowedGroups)
+	assert.Empty(t, hf.AllowedGroupsCombos)
+	assert.Contains(t, hf.AllowedHosts, h)
+	assert.Empty(t, hf.AllowedCidrs)
+	assert.Empty(t, hf.AllowedCANames)
+	assert.Empty(t, hf.AllowedCAShas)
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+
+	hf = NewHandshakeFilter()
+	p, _ := netip.ParsePrefix("10.1.1.1/32")
+	hf.AddRule(nil, "", p, "", "")
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+	hfwl = hf.MarshalToHfwList(1300)
+	assert.Len(t, hfwl, 1)
+	assert.Empty(t, hfwl[0].AllowedGroups)
+	assert.Empty(t, hfwl[0].AllowedGroupsCombos)
+	assert.Empty(t, hfwl[0].AllowedHosts)
+	assert.Equal(t, hfwl[0].AllowedCidrs[0], p.String())
+	assert.Empty(t, hfwl[0].AllowedCANames)
+	assert.Empty(t, hfwl[0].AllowedCAShas)
+	assert.False(t, hfwl[0].Append)
+	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
+	hf = NewHandshakeFilter()
+	hf = hf.UnmarshalFromHfw(hfwl[0])
+	assert.Empty(t, hf.AllowedGroups)
+	assert.Empty(t, hf.AllowedGroupsCombos)
+	assert.Empty(t, hf.AllowedHosts)
+	assert.Contains(t, hf.AllowedCidrs, p)
+	assert.Empty(t, hf.AllowedCANames)
+	assert.Empty(t, hf.AllowedCAShas)
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+
+	hf = NewHandshakeFilter()
+	ca := "TestCA"
+	hf.AddRule(nil, "", netip.Prefix{}, ca, "")
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+	hfwl = hf.MarshalToHfwList(1300)
+	assert.Len(t, hfwl, 1)
+	assert.Empty(t, hfwl[0].AllowedGroups)
+	assert.Empty(t, hfwl[0].AllowedGroupsCombos)
+	assert.Empty(t, hfwl[0].AllowedHosts)
+	assert.Empty(t, hfwl[0].AllowedCidrs)
+	assert.Contains(t, hfwl[0].AllowedCANames, ca)
+	assert.Empty(t, hfwl[0].AllowedCAShas)
+	assert.False(t, hfwl[0].Append)
+	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
+	hf = NewHandshakeFilter()
+	hf = hf.UnmarshalFromHfw(hfwl[0])
+	assert.Empty(t, hf.AllowedGroups)
+	assert.Empty(t, hf.AllowedGroupsCombos)
+	assert.Empty(t, hf.AllowedHosts)
+	assert.Empty(t, hf.AllowedCidrs)
+	assert.Contains(t, hf.AllowedCANames, ca)
+	assert.Empty(t, hf.AllowedCAShas)
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+
+	hf = NewHandshakeFilter()
+	fp := "3fc204e4d45e8b22ed0879bcd7cb5bf93cdc1c7a309c5dcedddc03aed33a47c6"
+	hf.AddRule(nil, "", netip.Prefix{}, "", fp)
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+	hfwl = hf.MarshalToHfwList(1300)
+	assert.Len(t, hfwl, 1)
+	assert.Empty(t, hfwl[0].AllowedGroups)
+	assert.Empty(t, hfwl[0].AllowedGroupsCombos)
+	assert.Empty(t, hfwl[0].AllowedHosts)
+	assert.Empty(t, hfwl[0].AllowedCidrs)
+	assert.Empty(t, hfwl[0].AllowedCANames)
+	assert.Contains(t, hfwl[0].AllowedCAShas, fp)
+	assert.False(t, hfwl[0].Append)
+	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
+	hf = NewHandshakeFilter()
+	hf = hf.UnmarshalFromHfw(hfwl[0])
+	assert.Empty(t, hf.AllowedGroups)
+	assert.Empty(t, hf.AllowedGroupsCombos)
+	assert.Empty(t, hf.AllowedHosts, h)
+	assert.Empty(t, hf.AllowedCidrs)
+	assert.Empty(t, hf.AllowedCANames)
+	assert.Contains(t, hf.AllowedCAShas, fp)
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+}
+
+func TestHandshakeFilter_MarshallingMultiPacket(t *testing.T) {
+	mtu := 1100
+	hf := NewHandshakeFilter()
+	h := "h"
+	for i := 0; i <= 100; i++ {
+		hf.AddRule(nil, h+strconv.Itoa(i), netip.Prefix{}, "", "")
+	}
+
+	g := "g"
+	for i := 0; i <= 100; i++ {
+		hf.AddRule([]string{g + strconv.Itoa(i)}, "", netip.Prefix{}, "", "")
+	}
+
+	for i := 0; i <= 100; i++ {
+		gc := []string{"g1", "g2", "g" + strconv.Itoa(i)}
+		hf.AddRule(gc, "", netip.Prefix{}, "", "")
+	}
+
+	for i := 0; i <= 100; i++ {
+		p, _ := netip.ParsePrefix("10.1.1." + strconv.Itoa(i) + "/32")
+		hf.AddRule(nil, "", p, "", "")
+	}
+
+	ca := "TestCA"
+	for i := 0; i <= 100; i++ {
+		hf.AddRule(nil, "", netip.Prefix{}, ca+strconv.Itoa(i), "")
+	}
+
+	fp := "3fc204e4d45e8b22ed0879bcd7cb5bf93cdc1c7a309c5dcedddc03aed33a47c6"
+	for i := 0; i <= 100; i++ {
+		hf.AddRule(nil, "", netip.Prefix{}, "", fp+strconv.Itoa(i))
+	}
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+	hfwl := hf.MarshalToHfwList(mtu)
+	for _, hfw := range hfwl {
+		assert.LessOrEqual(t, hfw.Size(), mtu)
+	}
+	assert.False(t, hfwl[0].Append)
+	for i := 1; i < len(hfwl); i++ {
+		assert.True(t, hfwl[i].Append)
+	}
+	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
+	hf = NewHandshakeFilter()
+	for _, hfw := range hfwl {
+		hf = hf.UnmarshalFromHfw(hfw)
+	}
+	for i := 0; i <= 100; i++ {
+		assert.Contains(t, hf.AllowedGroups, g+strconv.Itoa(i))
+	}
+	for i := 0; i <= 100; i++ {
+		gc := map[string]struct{}{
+			"g1":                  {},
+			"g2":                  {},
+			"g" + strconv.Itoa(i): {},
+		}
+
+		assert.Contains(t, hf.AllowedGroupsCombos, gc)
+	}
+	for i := 0; i <= 100; i++ {
+		assert.Contains(t, hf.AllowedHosts, h+strconv.Itoa(i))
+	}
+	for i := 0; i <= 100; i++ {
+		p, _ := netip.ParsePrefix("10.1.1." + strconv.Itoa(i) + "/32")
+		assert.Contains(t, hf.AllowedCidrs, p)
+	}
+	for i := 0; i <= 100; i++ {
+		assert.Contains(t, hf.AllowedCANames, ca+strconv.Itoa(i))
+	}
+	for i := 0; i <= 100; i++ {
+		assert.Contains(t, hf.AllowedCAShas, fp+strconv.Itoa(i))
+	}
+
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+}
+
+func Test_isSubset(t *testing.T) {
+	subset := make(map[string]struct{}, 2)
+	subset["g1"] = struct{}{}
+	subset["g2"] = struct{}{}
+	assert.Len(t, subset, 2)
+
+	superset := []string{"g0", "g1", "g", "g2", "g3", "g1", "g2", "g4"}
+	assert.True(t, isSubset(subset, superset))
+	superset = []string{"g0", "g1", "g3"}
+	assert.False(t, isSubset(subset, superset))
+	superset = []string{"g0", "g1", "g1", "g3"}
+	assert.False(t, isSubset(subset, superset))
+}
+
+func Test_containsMap(t *testing.T) {
+	slice := make([]map[string]struct{}, 2)
+
+	m1 := make(map[string]struct{}, 2)
+	m1["g1"] = struct{}{}
+	m1["g2"] = struct{}{}
+	assert.Len(t, m1, 2)
+
+	m2 := make(map[string]struct{}, 2)
+	m2["g2"] = struct{}{}
+	m2["g3"] = struct{}{}
+	assert.Len(t, m1, 2)
+
+	slice[0] = m1
+	slice[1] = m2
+	assert.Len(t, slice, 2)
+
+	assert.True(t, containsMap(slice, m1))
+	assert.True(t, containsMap(slice, m2))
+
+	c1 := make(map[string]struct{}, 2)
+	c1["g1"] = struct{}{}
+	c1["g3"] = struct{}{}
+	assert.Len(t, c1, 2)
+	assert.False(t, containsMap(slice, c1))
+}
+
 func BenchmarkLookup(b *testing.B) {
 	ml := func(m map[string]struct{}, a [][]string) {
 		for n := 0; n < b.N; n++ {
@@ -632,53 +1104,53 @@ func TestNewFirewallFromConfig(t *testing.T) {
 
 	conf := config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": "asdf"}
-	_, err = NewFirewallFromConfig(l, cs, conf)
+	_, _, err = NewFirewallFromConfig(l, cs, conf)
 	require.EqualError(t, err, "firewall.outbound failed to parse, should be an array of rules")
 
 	// Test both port and code
 	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"port": "1", "code": "2"}}}
-	_, err = NewFirewallFromConfig(l, cs, conf)
+	_, _, err = NewFirewallFromConfig(l, cs, conf)
 	require.EqualError(t, err, "firewall.outbound rule #0; only one of port or code should be provided")
 
 	// Test missing host, group, cidr, ca_name and ca_sha
 	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{}}}
-	_, err = NewFirewallFromConfig(l, cs, conf)
+	_, _, err = NewFirewallFromConfig(l, cs, conf)
 	require.EqualError(t, err, "firewall.outbound rule #0; at least one of host, group, cidr, local_cidr, ca_name, or ca_sha must be provided")
 
 	// Test code/port error
 	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"code": "a", "host": "testh"}}}
-	_, err = NewFirewallFromConfig(l, cs, conf)
+	_, _, err = NewFirewallFromConfig(l, cs, conf)
 	require.EqualError(t, err, "firewall.outbound rule #0; code was not a number; `a`")
 
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"port": "a", "host": "testh"}}}
-	_, err = NewFirewallFromConfig(l, cs, conf)
+	_, _, err = NewFirewallFromConfig(l, cs, conf)
 	require.EqualError(t, err, "firewall.outbound rule #0; port was not a number; `a`")
 
 	// Test proto error
 	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"code": "1", "host": "testh"}}}
-	_, err = NewFirewallFromConfig(l, cs, conf)
+	_, _, err = NewFirewallFromConfig(l, cs, conf)
 	require.EqualError(t, err, "firewall.outbound rule #0; proto was not understood; ``")
 
 	// Test cidr parse error
 	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"code": "1", "cidr": "testh", "proto": "any"}}}
-	_, err = NewFirewallFromConfig(l, cs, conf)
+	_, _, err = NewFirewallFromConfig(l, cs, conf)
 	require.EqualError(t, err, "firewall.outbound rule #0; cidr did not parse; netip.ParsePrefix(\"testh\"): no '/'")
 
 	// Test local_cidr parse error
 	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"code": "1", "local_cidr": "testh", "proto": "any"}}}
-	_, err = NewFirewallFromConfig(l, cs, conf)
+	_, _, err = NewFirewallFromConfig(l, cs, conf)
 	require.EqualError(t, err, "firewall.outbound rule #0; local_cidr did not parse; netip.ParsePrefix(\"testh\"): no '/'")
 
 	// Test both group and groups
 	conf = config.NewC(l)
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "group": "a", "groups": []string{"b", "c"}}}}
-	_, err = NewFirewallFromConfig(l, cs, conf)
+	_, _, err = NewFirewallFromConfig(l, cs, conf)
 	require.EqualError(t, err, "firewall.inbound rule #0; only one of group or groups should be defined, both provided")
 }
 
@@ -688,28 +1160,28 @@ func TestAddFirewallRulesFromConfig(t *testing.T) {
 	conf := config.NewC(l)
 	mf := &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "tcp", "host": "a"}}}
-	require.NoError(t, AddFirewallRulesFromConfig(l, false, conf, mf))
+	require.NoError(t, AddFirewallRulesFromConfig(l, false, conf, mf, nil))
 	assert.Equal(t, addRuleCall{incoming: false, proto: firewall.ProtoTCP, startPort: 1, endPort: 1, groups: nil, host: "a", ip: netip.Prefix{}, localIp: netip.Prefix{}}, mf.lastCall)
 
 	// Test adding udp rule
 	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "udp", "host": "a"}}}
-	require.NoError(t, AddFirewallRulesFromConfig(l, false, conf, mf))
+	require.NoError(t, AddFirewallRulesFromConfig(l, false, conf, mf, nil))
 	assert.Equal(t, addRuleCall{incoming: false, proto: firewall.ProtoUDP, startPort: 1, endPort: 1, groups: nil, host: "a", ip: netip.Prefix{}, localIp: netip.Prefix{}}, mf.lastCall)
 
 	// Test adding icmp rule
 	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"outbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "icmp", "host": "a"}}}
-	require.NoError(t, AddFirewallRulesFromConfig(l, false, conf, mf))
+	require.NoError(t, AddFirewallRulesFromConfig(l, false, conf, mf, nil))
 	assert.Equal(t, addRuleCall{incoming: false, proto: firewall.ProtoICMP, startPort: 1, endPort: 1, groups: nil, host: "a", ip: netip.Prefix{}, localIp: netip.Prefix{}}, mf.lastCall)
 
 	// Test adding any rule
 	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "host": "a"}}}
-	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf, nil))
 	assert.Equal(t, addRuleCall{incoming: true, proto: firewall.ProtoAny, startPort: 1, endPort: 1, groups: nil, host: "a", ip: netip.Prefix{}, localIp: netip.Prefix{}}, mf.lastCall)
 
 	// Test adding rule with cidr
@@ -717,49 +1189,49 @@ func TestAddFirewallRulesFromConfig(t *testing.T) {
 	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "cidr": cidr.String()}}}
-	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf, nil))
 	assert.Equal(t, addRuleCall{incoming: true, proto: firewall.ProtoAny, startPort: 1, endPort: 1, groups: nil, ip: cidr, localIp: netip.Prefix{}}, mf.lastCall)
 
 	// Test adding rule with local_cidr
 	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "local_cidr": cidr.String()}}}
-	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf, nil))
 	assert.Equal(t, addRuleCall{incoming: true, proto: firewall.ProtoAny, startPort: 1, endPort: 1, groups: nil, ip: netip.Prefix{}, localIp: cidr}, mf.lastCall)
 
 	// Test adding rule with ca_sha
 	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "ca_sha": "12312313123"}}}
-	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf, nil))
 	assert.Equal(t, addRuleCall{incoming: true, proto: firewall.ProtoAny, startPort: 1, endPort: 1, groups: nil, ip: netip.Prefix{}, localIp: netip.Prefix{}, caSha: "12312313123"}, mf.lastCall)
 
 	// Test adding rule with ca_name
 	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "ca_name": "root01"}}}
-	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf, nil))
 	assert.Equal(t, addRuleCall{incoming: true, proto: firewall.ProtoAny, startPort: 1, endPort: 1, groups: nil, ip: netip.Prefix{}, localIp: netip.Prefix{}, caName: "root01"}, mf.lastCall)
 
 	// Test single group
 	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "group": "a"}}}
-	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf, nil))
 	assert.Equal(t, addRuleCall{incoming: true, proto: firewall.ProtoAny, startPort: 1, endPort: 1, groups: []string{"a"}, ip: netip.Prefix{}, localIp: netip.Prefix{}}, mf.lastCall)
 
 	// Test single groups
 	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "groups": "a"}}}
-	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf, nil))
 	assert.Equal(t, addRuleCall{incoming: true, proto: firewall.ProtoAny, startPort: 1, endPort: 1, groups: []string{"a"}, ip: netip.Prefix{}, localIp: netip.Prefix{}}, mf.lastCall)
 
 	// Test multiple AND groups
 	conf = config.NewC(l)
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "groups": []string{"a", "b"}}}}
-	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf))
+	require.NoError(t, AddFirewallRulesFromConfig(l, true, conf, mf, nil))
 	assert.Equal(t, addRuleCall{incoming: true, proto: firewall.ProtoAny, startPort: 1, endPort: 1, groups: []string{"a", "b"}, ip: netip.Prefix{}, localIp: netip.Prefix{}}, mf.lastCall)
 
 	// Test Add error
@@ -767,7 +1239,7 @@ func TestAddFirewallRulesFromConfig(t *testing.T) {
 	mf = &mockFirewall{}
 	mf.nextCallReturn = errors.New("test error")
 	conf.Settings["firewall"] = map[interface{}]interface{}{"inbound": []interface{}{map[interface{}]interface{}{"port": "1", "proto": "any", "host": "a"}}}
-	require.EqualError(t, AddFirewallRulesFromConfig(l, true, conf, mf), "firewall.inbound rule #0; `test error`")
+	require.EqualError(t, AddFirewallRulesFromConfig(l, true, conf, mf, nil), "firewall.inbound rule #0; `test error`")
 }
 
 func TestFirewall_convertRule(t *testing.T) {

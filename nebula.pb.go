@@ -36,6 +36,8 @@ const (
 	NebulaMeta_PathCheck                 NebulaMeta_MessageType = 8
 	NebulaMeta_PathCheckReply            NebulaMeta_MessageType = 9
 	NebulaMeta_HostUpdateNotificationAck NebulaMeta_MessageType = 10
+	NebulaMeta_HostQueryWhitelist        NebulaMeta_MessageType = 11
+	NebulaMeta_HostQueryWhitelistAck     NebulaMeta_MessageType = 12
 )
 
 var NebulaMeta_MessageType_name = map[int32]string{
@@ -50,6 +52,8 @@ var NebulaMeta_MessageType_name = map[int32]string{
 	8:  "PathCheck",
 	9:  "PathCheckReply",
 	10: "HostUpdateNotificationAck",
+	11: "HostQueryWhitelist",
+	12: "HostQueryWhitelistAck",
 }
 
 var NebulaMeta_MessageType_value = map[string]int32{
@@ -64,6 +68,8 @@ var NebulaMeta_MessageType_value = map[string]int32{
 	"PathCheck":                 8,
 	"PathCheckReply":            9,
 	"HostUpdateNotificationAck": 10,
+	"HostQueryWhitelist":        11,
+	"HostQueryWhitelistAck":     12,
 }
 
 func (x NebulaMeta_MessageType) String() string {
@@ -96,7 +102,7 @@ func (x NebulaPing_MessageType) String() string {
 }
 
 func (NebulaPing_MessageType) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_2d65afa7693df5ef, []int{5, 0}
+	return fileDescriptor_2d65afa7693df5ef, []int{7, 0}
 }
 
 type NebulaControl_MessageType int32
@@ -124,7 +130,7 @@ func (x NebulaControl_MessageType) String() string {
 }
 
 func (NebulaControl_MessageType) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_2d65afa7693df5ef, []int{8, 0}
+	return fileDescriptor_2d65afa7693df5ef, []int{10, 0}
 }
 
 type NebulaMeta struct {
@@ -180,13 +186,15 @@ func (m *NebulaMeta) GetDetails() *NebulaMetaDetails {
 }
 
 type NebulaMetaDetails struct {
-	OldVpnAddr       uint32        `protobuf:"varint,1,opt,name=OldVpnAddr,proto3" json:"OldVpnAddr,omitempty"` // Deprecated: Do not use.
-	VpnAddr          *Addr         `protobuf:"bytes,6,opt,name=VpnAddr,proto3" json:"VpnAddr,omitempty"`
-	OldRelayVpnAddrs []uint32      `protobuf:"varint,5,rep,packed,name=OldRelayVpnAddrs,proto3" json:"OldRelayVpnAddrs,omitempty"` // Deprecated: Do not use.
-	RelayVpnAddrs    []*Addr       `protobuf:"bytes,7,rep,name=RelayVpnAddrs,proto3" json:"RelayVpnAddrs,omitempty"`
-	V4AddrPorts      []*V4AddrPort `protobuf:"bytes,2,rep,name=V4AddrPorts,proto3" json:"V4AddrPorts,omitempty"`
-	V6AddrPorts      []*V6AddrPort `protobuf:"bytes,4,rep,name=V6AddrPorts,proto3" json:"V6AddrPorts,omitempty"`
-	Counter          uint32        `protobuf:"varint,3,opt,name=counter,proto3" json:"counter,omitempty"`
+	OldVpnAddr                  uint32                       `protobuf:"varint,1,opt,name=OldVpnAddr,proto3" json:"OldVpnAddr,omitempty"` // Deprecated: Do not use.
+	VpnAddr                     *Addr                        `protobuf:"bytes,6,opt,name=VpnAddr,proto3" json:"VpnAddr,omitempty"`
+	OldRelayVpnAddrs            []uint32                     `protobuf:"varint,5,rep,packed,name=OldRelayVpnAddrs,proto3" json:"OldRelayVpnAddrs,omitempty"` // Deprecated: Do not use.
+	RelayVpnAddrs               []*Addr                      `protobuf:"bytes,7,rep,name=RelayVpnAddrs,proto3" json:"RelayVpnAddrs,omitempty"`
+	EnableHostQueryFiltering    bool                         `protobuf:"varint,8,opt,name=EnableHostQueryFiltering,proto3" json:"EnableHostQueryFiltering,omitempty"`
+	HandshakeFilteringWhitelist *HandshakeFilteringWhitelist `protobuf:"bytes,9,opt,name=HandshakeFilteringWhitelist,proto3" json:"HandshakeFilteringWhitelist,omitempty"`
+	V4AddrPorts                 []*V4AddrPort                `protobuf:"bytes,2,rep,name=V4AddrPorts,proto3" json:"V4AddrPorts,omitempty"`
+	V6AddrPorts                 []*V6AddrPort                `protobuf:"bytes,4,rep,name=V6AddrPorts,proto3" json:"V6AddrPorts,omitempty"`
+	Counter                     uint32                       `protobuf:"varint,3,opt,name=counter,proto3" json:"counter,omitempty"`
 }
 
 func (m *NebulaMetaDetails) Reset()         { *m = NebulaMetaDetails{} }
@@ -248,6 +256,20 @@ func (m *NebulaMetaDetails) GetOldRelayVpnAddrs() []uint32 {
 func (m *NebulaMetaDetails) GetRelayVpnAddrs() []*Addr {
 	if m != nil {
 		return m.RelayVpnAddrs
+	}
+	return nil
+}
+
+func (m *NebulaMetaDetails) GetEnableHostQueryFiltering() bool {
+	if m != nil {
+		return m.EnableHostQueryFiltering
+	}
+	return false
+}
+
+func (m *NebulaMetaDetails) GetHandshakeFilteringWhitelist() *HandshakeFilteringWhitelist {
+	if m != nil {
+		return m.HandshakeFilteringWhitelist
 	}
 	return nil
 }
@@ -437,6 +459,150 @@ func (m *V6AddrPort) GetPort() uint32 {
 	return 0
 }
 
+type HandshakeFilteringWhitelist struct {
+	AllowedHosts        []string        `protobuf:"bytes,1,rep,name=AllowedHosts,proto3" json:"AllowedHosts,omitempty"`
+	AllowedGroups       []string        `protobuf:"bytes,2,rep,name=AllowedGroups,proto3" json:"AllowedGroups,omitempty"`
+	AllowedGroupsCombos []*GroupsCombos `protobuf:"bytes,3,rep,name=AllowedGroupsCombos,proto3" json:"AllowedGroupsCombos,omitempty"`
+	AllowedCidrs        []string        `protobuf:"bytes,4,rep,name=AllowedCidrs,proto3" json:"AllowedCidrs,omitempty"`
+	AllowedCANames      []string        `protobuf:"bytes,5,rep,name=AllowedCANames,proto3" json:"AllowedCANames,omitempty"`
+	AllowedCAShas       []string        `protobuf:"bytes,6,rep,name=AllowedCAShas,proto3" json:"AllowedCAShas,omitempty"`
+	MessageId           uint32          `protobuf:"varint,7,opt,name=MessageId,proto3" json:"MessageId,omitempty"`
+	Append              bool            `protobuf:"varint,8,opt,name=Append,proto3" json:"Append,omitempty"`
+}
+
+func (m *HandshakeFilteringWhitelist) Reset()         { *m = HandshakeFilteringWhitelist{} }
+func (m *HandshakeFilteringWhitelist) String() string { return proto.CompactTextString(m) }
+func (*HandshakeFilteringWhitelist) ProtoMessage()    {}
+func (*HandshakeFilteringWhitelist) Descriptor() ([]byte, []int) {
+	return fileDescriptor_2d65afa7693df5ef, []int{5}
+}
+func (m *HandshakeFilteringWhitelist) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *HandshakeFilteringWhitelist) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_HandshakeFilteringWhitelist.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *HandshakeFilteringWhitelist) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_HandshakeFilteringWhitelist.Merge(m, src)
+}
+func (m *HandshakeFilteringWhitelist) XXX_Size() int {
+	return m.Size()
+}
+func (m *HandshakeFilteringWhitelist) XXX_DiscardUnknown() {
+	xxx_messageInfo_HandshakeFilteringWhitelist.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_HandshakeFilteringWhitelist proto.InternalMessageInfo
+
+func (m *HandshakeFilteringWhitelist) GetAllowedHosts() []string {
+	if m != nil {
+		return m.AllowedHosts
+	}
+	return nil
+}
+
+func (m *HandshakeFilteringWhitelist) GetAllowedGroups() []string {
+	if m != nil {
+		return m.AllowedGroups
+	}
+	return nil
+}
+
+func (m *HandshakeFilteringWhitelist) GetAllowedGroupsCombos() []*GroupsCombos {
+	if m != nil {
+		return m.AllowedGroupsCombos
+	}
+	return nil
+}
+
+func (m *HandshakeFilteringWhitelist) GetAllowedCidrs() []string {
+	if m != nil {
+		return m.AllowedCidrs
+	}
+	return nil
+}
+
+func (m *HandshakeFilteringWhitelist) GetAllowedCANames() []string {
+	if m != nil {
+		return m.AllowedCANames
+	}
+	return nil
+}
+
+func (m *HandshakeFilteringWhitelist) GetAllowedCAShas() []string {
+	if m != nil {
+		return m.AllowedCAShas
+	}
+	return nil
+}
+
+func (m *HandshakeFilteringWhitelist) GetMessageId() uint32 {
+	if m != nil {
+		return m.MessageId
+	}
+	return 0
+}
+
+func (m *HandshakeFilteringWhitelist) GetAppend() bool {
+	if m != nil {
+		return m.Append
+	}
+	return false
+}
+
+type GroupsCombos struct {
+	Group []string `protobuf:"bytes,1,rep,name=Group,proto3" json:"Group,omitempty"`
+}
+
+func (m *GroupsCombos) Reset()         { *m = GroupsCombos{} }
+func (m *GroupsCombos) String() string { return proto.CompactTextString(m) }
+func (*GroupsCombos) ProtoMessage()    {}
+func (*GroupsCombos) Descriptor() ([]byte, []int) {
+	return fileDescriptor_2d65afa7693df5ef, []int{6}
+}
+func (m *GroupsCombos) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *GroupsCombos) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_GroupsCombos.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *GroupsCombos) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_GroupsCombos.Merge(m, src)
+}
+func (m *GroupsCombos) XXX_Size() int {
+	return m.Size()
+}
+func (m *GroupsCombos) XXX_DiscardUnknown() {
+	xxx_messageInfo_GroupsCombos.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_GroupsCombos proto.InternalMessageInfo
+
+func (m *GroupsCombos) GetGroup() []string {
+	if m != nil {
+		return m.Group
+	}
+	return nil
+}
+
 type NebulaPing struct {
 	Type NebulaPing_MessageType `protobuf:"varint,1,opt,name=Type,proto3,enum=nebula.NebulaPing_MessageType" json:"Type,omitempty"`
 	Time uint64                 `protobuf:"varint,2,opt,name=Time,proto3" json:"Time,omitempty"`
@@ -446,7 +612,7 @@ func (m *NebulaPing) Reset()         { *m = NebulaPing{} }
 func (m *NebulaPing) String() string { return proto.CompactTextString(m) }
 func (*NebulaPing) ProtoMessage()    {}
 func (*NebulaPing) Descriptor() ([]byte, []int) {
-	return fileDescriptor_2d65afa7693df5ef, []int{5}
+	return fileDescriptor_2d65afa7693df5ef, []int{7}
 }
 func (m *NebulaPing) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -498,7 +664,7 @@ func (m *NebulaHandshake) Reset()         { *m = NebulaHandshake{} }
 func (m *NebulaHandshake) String() string { return proto.CompactTextString(m) }
 func (*NebulaHandshake) ProtoMessage()    {}
 func (*NebulaHandshake) Descriptor() ([]byte, []int) {
-	return fileDescriptor_2d65afa7693df5ef, []int{6}
+	return fileDescriptor_2d65afa7693df5ef, []int{8}
 }
 func (m *NebulaHandshake) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -554,7 +720,7 @@ func (m *NebulaHandshakeDetails) Reset()         { *m = NebulaHandshakeDetails{}
 func (m *NebulaHandshakeDetails) String() string { return proto.CompactTextString(m) }
 func (*NebulaHandshakeDetails) ProtoMessage()    {}
 func (*NebulaHandshakeDetails) Descriptor() ([]byte, []int) {
-	return fileDescriptor_2d65afa7693df5ef, []int{7}
+	return fileDescriptor_2d65afa7693df5ef, []int{9}
 }
 func (m *NebulaHandshakeDetails) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -639,7 +805,7 @@ func (m *NebulaControl) Reset()         { *m = NebulaControl{} }
 func (m *NebulaControl) String() string { return proto.CompactTextString(m) }
 func (*NebulaControl) ProtoMessage()    {}
 func (*NebulaControl) Descriptor() ([]byte, []int) {
-	return fileDescriptor_2d65afa7693df5ef, []int{8}
+	return fileDescriptor_2d65afa7693df5ef, []int{10}
 }
 func (m *NebulaControl) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -728,6 +894,8 @@ func init() {
 	proto.RegisterType((*Addr)(nil), "nebula.Addr")
 	proto.RegisterType((*V4AddrPort)(nil), "nebula.V4AddrPort")
 	proto.RegisterType((*V6AddrPort)(nil), "nebula.V6AddrPort")
+	proto.RegisterType((*HandshakeFilteringWhitelist)(nil), "nebula.HandshakeFilteringWhitelist")
+	proto.RegisterType((*GroupsCombos)(nil), "nebula.GroupsCombos")
 	proto.RegisterType((*NebulaPing)(nil), "nebula.NebulaPing")
 	proto.RegisterType((*NebulaHandshake)(nil), "nebula.NebulaHandshake")
 	proto.RegisterType((*NebulaHandshakeDetails)(nil), "nebula.NebulaHandshakeDetails")
@@ -737,57 +905,69 @@ func init() {
 func init() { proto.RegisterFile("nebula.proto", fileDescriptor_2d65afa7693df5ef) }
 
 var fileDescriptor_2d65afa7693df5ef = []byte{
-	// 785 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x84, 0x55, 0xcd, 0x6e, 0xeb, 0x44,
-	0x14, 0x8e, 0x1d, 0x27, 0x4e, 0x4f, 0x7e, 0xae, 0x39, 0x15, 0xc1, 0x41, 0x22, 0x0a, 0x5e, 0x54,
-	0x57, 0x2c, 0x72, 0x51, 0x5a, 0xae, 0x58, 0x72, 0x1b, 0x84, 0xd2, 0xaa, 0x3f, 0x61, 0x54, 0x8a,
-	0xc4, 0x06, 0xb9, 0xf6, 0xd0, 0x58, 0x71, 0x3c, 0xa9, 0x3d, 0x41, 0xcd, 0x5b, 0xf0, 0x30, 0x3c,
-	0x04, 0xec, 0xba, 0x42, 0x2c, 0x51, 0xbb, 0x64, 0xc9, 0x0b, 0xa0, 0x19, 0xff, 0x27, 0x86, 0xbb,
-	0x9b, 0x73, 0xbe, 0xef, 0x3b, 0x73, 0xe6, 0xf3, 0x9c, 0x31, 0x74, 0x02, 0x7a, 0xb7, 0xf1, 0xed,
-	0xf1, 0x3a, 0x64, 0x9c, 0x61, 0x33, 0x8e, 0xac, 0xbf, 0x55, 0x80, 0x2b, 0xb9, 0xbc, 0xa4, 0xdc,
-	0xc6, 0x09, 0x68, 0x37, 0xdb, 0x35, 0x35, 0x95, 0x91, 0xf2, 0xba, 0x37, 0x19, 0x8e, 0x13, 0x4d,
-	0xce, 0x18, 0x5f, 0xd2, 0x28, 0xb2, 0xef, 0xa9, 0x60, 0x11, 0xc9, 0xc5, 0x63, 0xd0, 0xbf, 0xa6,
-	0xdc, 0xf6, 0xfc, 0xc8, 0x54, 0x47, 0xca, 0xeb, 0xf6, 0x64, 0xb0, 0x2f, 0x4b, 0x08, 0x24, 0x65,
-	0x5a, 0xff, 0x28, 0xd0, 0x2e, 0x94, 0xc2, 0x16, 0x68, 0x57, 0x2c, 0xa0, 0x46, 0x0d, 0xbb, 0x70,
-	0x30, 0x63, 0x11, 0xff, 0x76, 0x43, 0xc3, 0xad, 0xa1, 0x20, 0x42, 0x2f, 0x0b, 0x09, 0x5d, 0xfb,
-	0x5b, 0x43, 0xc5, 0x8f, 0xa1, 0x2f, 0x72, 0xdf, 0xad, 0x5d, 0x9b, 0xd3, 0x2b, 0xc6, 0xbd, 0x9f,
-	0x3c, 0xc7, 0xe6, 0x1e, 0x0b, 0x8c, 0x3a, 0x0e, 0xe0, 0x43, 0x81, 0x5d, 0xb2, 0x9f, 0xa9, 0x5b,
-	0x82, 0xb4, 0x14, 0x9a, 0x6f, 0x02, 0x67, 0x51, 0x82, 0x1a, 0xd8, 0x03, 0x10, 0xd0, 0xf7, 0x0b,
-	0x66, 0xaf, 0x3c, 0xa3, 0x89, 0x87, 0xf0, 0x2a, 0x8f, 0xe3, 0x6d, 0x75, 0xd1, 0xd9, 0xdc, 0xe6,
-	0x8b, 0xe9, 0x82, 0x3a, 0x4b, 0xa3, 0x25, 0x3a, 0xcb, 0xc2, 0x98, 0x72, 0x80, 0x9f, 0xc0, 0xa0,
-	0xba, 0xb3, 0x77, 0xce, 0xd2, 0x00, 0xeb, 0x77, 0x15, 0x3e, 0xd8, 0x33, 0x05, 0x2d, 0x80, 0x6b,
-	0xdf, 0xbd, 0x5d, 0x07, 0xef, 0x5c, 0x37, 0x94, 0xd6, 0x77, 0x4f, 0x55, 0x53, 0x21, 0x85, 0x2c,
-	0x1e, 0x81, 0x9e, 0x12, 0x9a, 0xd2, 0xe4, 0x4e, 0x6a, 0xb2, 0xc8, 0x91, 0x14, 0xc4, 0x31, 0x18,
-	0xd7, 0xbe, 0x4b, 0xa8, 0x6f, 0x6f, 0x93, 0x54, 0x64, 0x36, 0x46, 0xf5, 0xa4, 0xe2, 0x1e, 0x86,
-	0x13, 0xe8, 0x96, 0xc9, 0xfa, 0xa8, 0xbe, 0x57, 0xbd, 0x4c, 0xc1, 0x13, 0x68, 0xdf, 0x9e, 0x88,
-	0xe5, 0x9c, 0x85, 0x5c, 0x7c, 0x74, 0xa1, 0xc0, 0x54, 0x91, 0x43, 0xa4, 0x48, 0x93, 0xaa, 0xb7,
-	0xb9, 0x4a, 0xdb, 0x51, 0xbd, 0x2d, 0xa8, 0x72, 0x1a, 0x9a, 0xa0, 0x3b, 0x6c, 0x13, 0x70, 0x1a,
-	0x9a, 0x75, 0x61, 0x0c, 0x49, 0x43, 0xeb, 0x08, 0x34, 0x79, 0xe2, 0x1e, 0xa8, 0x33, 0x4f, 0xba,
-	0xa6, 0x11, 0x75, 0xe6, 0x89, 0xf8, 0x82, 0xc9, 0x9b, 0xa8, 0x11, 0xf5, 0x82, 0x59, 0x27, 0x00,
-	0x79, 0x1b, 0x88, 0xb1, 0x2a, 0x76, 0x99, 0xc4, 0x15, 0x10, 0x34, 0x81, 0x49, 0x4d, 0x97, 0xc8,
-	0xb5, 0xf5, 0x15, 0x40, 0xde, 0xc6, 0xfb, 0xf6, 0xc8, 0x2a, 0xd4, 0x0b, 0x15, 0x1e, 0xd3, 0xc1,
-	0x9a, 0x7b, 0xc1, 0xfd, 0xff, 0x0f, 0x96, 0x60, 0x54, 0x0c, 0x16, 0x82, 0x76, 0xe3, 0xad, 0x68,
-	0xb2, 0x8f, 0x5c, 0x5b, 0xd6, 0xde, 0xd8, 0x08, 0xb1, 0x51, 0xc3, 0x03, 0x68, 0xc4, 0x97, 0x50,
-	0xb1, 0x7e, 0x84, 0x57, 0x71, 0xdd, 0x99, 0x1d, 0xb8, 0xd1, 0xc2, 0x5e, 0x52, 0xfc, 0x32, 0x9f,
-	0x51, 0x45, 0x5e, 0x9f, 0x9d, 0x0e, 0x32, 0xe6, 0xee, 0xa0, 0x8a, 0x26, 0x66, 0x2b, 0xdb, 0x91,
-	0x4d, 0x74, 0x88, 0x5c, 0x5b, 0x7f, 0x28, 0xd0, 0xaf, 0xd6, 0x09, 0xfa, 0x94, 0x86, 0x5c, 0xee,
-	0xd2, 0x21, 0x72, 0x8d, 0x47, 0xd0, 0x3b, 0x0b, 0x3c, 0xee, 0xd9, 0x9c, 0x85, 0x67, 0x81, 0x4b,
-	0x1f, 0x13, 0xa7, 0x77, 0xb2, 0x82, 0x47, 0x68, 0xb4, 0x66, 0x81, 0x4b, 0x13, 0x5e, 0xec, 0xe7,
-	0x4e, 0x16, 0xfb, 0xd0, 0x9c, 0x32, 0xb6, 0xf4, 0xa8, 0xa9, 0x49, 0x67, 0x92, 0x28, 0xf3, 0xab,
-	0x91, 0xfb, 0x85, 0x23, 0x68, 0x8b, 0x1e, 0x6e, 0x69, 0x18, 0x79, 0x2c, 0x30, 0x5b, 0xb2, 0x60,
-	0x31, 0x75, 0xae, 0xb5, 0x9a, 0x86, 0x7e, 0xae, 0xb5, 0x74, 0xa3, 0x65, 0xfd, 0x5a, 0x87, 0x6e,
-	0x7c, 0xb0, 0x29, 0x0b, 0x78, 0xc8, 0x7c, 0xfc, 0xa2, 0xf4, 0xdd, 0x3e, 0x2d, 0xbb, 0x96, 0x90,
-	0x2a, 0x3e, 0xdd, 0xe7, 0x70, 0x98, 0x1d, 0x4e, 0x0e, 0x4f, 0xf1, 0xdc, 0x55, 0x90, 0x50, 0x64,
-	0xc7, 0x2c, 0x28, 0x62, 0x07, 0xaa, 0x20, 0xfc, 0x0c, 0x7a, 0xe9, 0x38, 0xdf, 0x30, 0x79, 0xa9,
-	0xb5, 0xec, 0xe9, 0xd8, 0x41, 0x8a, 0xcf, 0xc2, 0x37, 0x21, 0x5b, 0x49, 0x76, 0x23, 0x63, 0xef,
-	0x61, 0x38, 0x86, 0x76, 0xb1, 0x70, 0xd5, 0x93, 0x53, 0x24, 0x64, 0xcf, 0x48, 0x56, 0x5c, 0xaf,
-	0x50, 0x94, 0x29, 0xd6, 0xec, 0xbf, 0xfe, 0x00, 0x7d, 0xc0, 0x69, 0x48, 0x6d, 0x4e, 0x25, 0x9f,
-	0xd0, 0x87, 0x0d, 0x8d, 0xb8, 0xa1, 0xe0, 0x47, 0x70, 0x58, 0xca, 0x0b, 0x4b, 0x22, 0x6a, 0xa8,
-	0xa7, 0xc7, 0xbf, 0x3d, 0x0f, 0x95, 0xa7, 0xe7, 0xa1, 0xf2, 0xd7, 0xf3, 0x50, 0xf9, 0xe5, 0x65,
-	0x58, 0x7b, 0x7a, 0x19, 0xd6, 0xfe, 0x7c, 0x19, 0xd6, 0x7e, 0x18, 0xdc, 0x7b, 0x7c, 0xb1, 0xb9,
-	0x1b, 0x3b, 0x6c, 0xf5, 0x26, 0xf2, 0x6d, 0x67, 0xb9, 0x78, 0x78, 0x13, 0xb7, 0x74, 0xd7, 0x94,
-	0x3f, 0xc2, 0xe3, 0x7f, 0x03, 0x00, 0x00, 0xff, 0xff, 0xea, 0x6f, 0xbc, 0x50, 0x18, 0x07, 0x00,
-	0x00,
+	// 991 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x84, 0x56, 0xcd, 0x72, 0xe3, 0x44,
+	0x10, 0xb6, 0x2c, 0xf9, 0xaf, 0xfd, 0xb3, 0xa2, 0xb3, 0x18, 0x85, 0x1f, 0x97, 0x11, 0x5b, 0xa9,
+	0x14, 0x07, 0x2f, 0x95, 0x84, 0x2d, 0x8a, 0x13, 0x5e, 0x43, 0x70, 0xb6, 0x36, 0xd9, 0x30, 0x84,
+	0x6c, 0x15, 0x17, 0x4a, 0xb6, 0x86, 0x78, 0xca, 0xb2, 0xc6, 0x2b, 0x8d, 0x61, 0xf3, 0x16, 0x3c,
+	0x01, 0x47, 0x9e, 0x80, 0x87, 0xe0, 0xb8, 0x27, 0xe0, 0x48, 0x25, 0x57, 0x1e, 0x82, 0x9a, 0xd1,
+	0xbf, 0xed, 0x84, 0xdb, 0xf4, 0xd7, 0x5f, 0xb7, 0xbe, 0xee, 0x1e, 0xb5, 0x04, 0x2d, 0x9f, 0x4e,
+	0x56, 0x9e, 0x33, 0x58, 0x06, 0x5c, 0x70, 0xac, 0x46, 0x96, 0xfd, 0xab, 0x0e, 0x70, 0xa6, 0x8e,
+	0xa7, 0x54, 0x38, 0x78, 0x00, 0xc6, 0xc5, 0xf5, 0x92, 0x5a, 0x5a, 0x5f, 0xdb, 0xef, 0x1c, 0xf4,
+	0x06, 0x71, 0x4c, 0xc6, 0x18, 0x9c, 0xd2, 0x30, 0x74, 0xae, 0xa8, 0x64, 0x11, 0xc5, 0xc5, 0x43,
+	0xa8, 0x7d, 0x49, 0x85, 0xc3, 0xbc, 0xd0, 0x2a, 0xf7, 0xb5, 0xfd, 0xe6, 0xc1, 0xee, 0x66, 0x58,
+	0x4c, 0x20, 0x09, 0xd3, 0xfe, 0xad, 0x0c, 0xcd, 0x5c, 0x2a, 0xac, 0x83, 0x71, 0xc6, 0x7d, 0x6a,
+	0x96, 0xb0, 0x0d, 0x8d, 0x31, 0x0f, 0xc5, 0x37, 0x2b, 0x1a, 0x5c, 0x9b, 0x1a, 0x22, 0x74, 0x52,
+	0x93, 0xd0, 0xa5, 0x77, 0x6d, 0x96, 0xf1, 0x5d, 0xe8, 0x4a, 0xec, 0xbb, 0xa5, 0xeb, 0x08, 0x7a,
+	0xc6, 0x05, 0xfb, 0x91, 0x4d, 0x1d, 0xc1, 0xb8, 0x6f, 0xea, 0xb8, 0x0b, 0x6f, 0x4b, 0xdf, 0x29,
+	0xff, 0x89, 0xba, 0x05, 0x97, 0x91, 0xb8, 0xce, 0x57, 0xfe, 0x74, 0x56, 0x70, 0x55, 0xb0, 0x03,
+	0x20, 0x5d, 0x2f, 0x67, 0xdc, 0x59, 0x30, 0xb3, 0x8a, 0x3b, 0xf0, 0x20, 0xb3, 0xa3, 0xc7, 0xd6,
+	0xa4, 0xb2, 0x73, 0x47, 0xcc, 0x46, 0x33, 0x3a, 0x9d, 0x9b, 0x75, 0xa9, 0x2c, 0x35, 0x23, 0x4a,
+	0x03, 0x3f, 0x80, 0xdd, 0xed, 0xca, 0x86, 0xd3, 0xb9, 0x09, 0xd8, 0x05, 0x4c, 0x8b, 0x79, 0x39,
+	0x63, 0x82, 0x7a, 0x2c, 0x14, 0x66, 0x33, 0x51, 0x56, 0xc4, 0x65, 0x48, 0xcb, 0xfe, 0x57, 0x87,
+	0xb7, 0x36, 0xfa, 0x88, 0x36, 0xc0, 0x0b, 0xcf, 0xbd, 0x5c, 0xfa, 0x43, 0xd7, 0x0d, 0xd4, 0xb4,
+	0xda, 0x4f, 0xcb, 0x96, 0x46, 0x72, 0x28, 0xee, 0x41, 0x2d, 0x21, 0x54, 0xd5, 0x5c, 0x5a, 0xc9,
+	0x5c, 0x24, 0x46, 0x12, 0x27, 0x0e, 0xc0, 0x7c, 0xe1, 0xb9, 0x84, 0x7a, 0xce, 0x75, 0x0c, 0x85,
+	0x56, 0xa5, 0xaf, 0xc7, 0x19, 0x37, 0x7c, 0x78, 0x00, 0xed, 0x22, 0xb9, 0xd6, 0xd7, 0x37, 0xb2,
+	0x17, 0x29, 0xf8, 0x39, 0x58, 0x5f, 0xf9, 0xce, 0xc4, 0xa3, 0x69, 0x99, 0xc7, 0xcc, 0x13, 0x34,
+	0x60, 0xfe, 0x95, 0x55, 0xef, 0x6b, 0xfb, 0x75, 0x72, 0xa7, 0x1f, 0x29, 0xbc, 0x37, 0x76, 0x7c,
+	0x37, 0x9c, 0x39, 0x73, 0x9a, 0xa2, 0x69, 0x97, 0xac, 0x86, 0xaa, 0xed, 0xa3, 0xe4, 0xe9, 0xf7,
+	0x50, 0xc9, 0x7d, 0x79, 0xf0, 0x08, 0x9a, 0x97, 0x47, 0x52, 0xed, 0x39, 0x0f, 0x84, 0xbc, 0xca,
+	0xb2, 0x28, 0x4c, 0xd2, 0x66, 0x2e, 0x92, 0xa7, 0xa9, 0xa8, 0x27, 0x59, 0x94, 0xb1, 0x16, 0xf5,
+	0x24, 0x17, 0x95, 0xd1, 0xd0, 0x82, 0xda, 0x94, 0xaf, 0x7c, 0x41, 0x03, 0x4b, 0x97, 0xb3, 0x23,
+	0x89, 0x69, 0xef, 0x81, 0xa1, 0x86, 0xd2, 0x81, 0xf2, 0x98, 0xa9, 0xc1, 0x1a, 0xa4, 0x3c, 0x66,
+	0xd2, 0x7e, 0xce, 0xd5, 0xfb, 0x65, 0x90, 0xf2, 0x73, 0x6e, 0x1f, 0x01, 0x64, 0x32, 0x10, 0xa3,
+	0xa8, 0xe8, 0x22, 0x90, 0x28, 0x03, 0x82, 0x21, 0x7d, 0x2a, 0xa6, 0x4d, 0xd4, 0xd9, 0xfe, 0x02,
+	0x20, 0x93, 0xf1, 0x7f, 0xcf, 0x48, 0x33, 0xe8, 0xb9, 0x0c, 0x7f, 0x95, 0xef, 0x9d, 0x06, 0xda,
+	0xd0, 0x1a, 0x7a, 0x1e, 0xff, 0x99, 0xba, 0x72, 0x92, 0xa1, 0xa5, 0xf5, 0xf5, 0xfd, 0x06, 0x29,
+	0x60, 0xf8, 0x08, 0xda, 0xb1, 0xfd, 0x75, 0xc0, 0x57, 0xcb, 0xa8, 0xd7, 0x0d, 0x52, 0x04, 0xf1,
+	0x18, 0x76, 0x0a, 0xc0, 0x88, 0x2f, 0x26, 0x3c, 0xb4, 0x74, 0xd5, 0xe1, 0x87, 0x49, 0x87, 0xf3,
+	0x3e, 0xb2, 0x2d, 0x20, 0xa7, 0x68, 0xc4, 0xe4, 0x6d, 0x35, 0x0a, 0x8a, 0x14, 0x86, 0x7b, 0xd0,
+	0x49, 0xec, 0xe1, 0x99, 0xb3, 0xa0, 0xd1, 0x0b, 0xd0, 0x20, 0x6b, 0x68, 0x4e, 0xf9, 0x68, 0xf8,
+	0xed, 0xcc, 0x09, 0xad, 0x6a, 0x41, 0x79, 0x04, 0xe2, 0xfb, 0xd0, 0x88, 0x57, 0xdb, 0x89, 0x6b,
+	0xd5, 0x54, 0xf3, 0x32, 0x00, 0xbb, 0x50, 0x1d, 0x2e, 0x97, 0xd4, 0x77, 0xe3, 0x8b, 0x1f, 0x5b,
+	0xf6, 0x23, 0x68, 0x15, 0x74, 0x3f, 0x84, 0x8a, 0xb2, 0xe3, 0x16, 0x46, 0x86, 0xfd, 0x3a, 0x59,
+	0xd7, 0xe7, 0xf2, 0xd5, 0xb8, 0x77, 0x5d, 0x4b, 0xc6, 0x96, 0x75, 0x8d, 0x60, 0x5c, 0xb0, 0x05,
+	0x8d, 0xe7, 0xac, 0xce, 0xb6, 0xbd, 0xb1, 0x8c, 0x65, 0xb0, 0x59, 0xc2, 0x06, 0x54, 0xa2, 0xd5,
+	0xa6, 0xd9, 0x3f, 0xc0, 0x83, 0x28, 0x6f, 0x3a, 0x7e, 0xfc, 0x2c, 0xdb, 0xfc, 0x9a, 0x7a, 0x0b,
+	0xd7, 0x14, 0xa4, 0xcc, 0xf5, 0xf5, 0x2f, 0x45, 0x8c, 0x17, 0xce, 0x54, 0x89, 0x68, 0x11, 0x75,
+	0xb6, 0xff, 0xd4, 0xa0, 0xbb, 0x3d, 0x4e, 0xd2, 0x47, 0x34, 0x10, 0xea, 0x29, 0x2d, 0xa2, 0xce,
+	0x72, 0x66, 0x27, 0x3e, 0x13, 0xcc, 0x11, 0x3c, 0x38, 0xf1, 0x5d, 0xfa, 0x3a, 0xbe, 0xe9, 0x6b,
+	0xa8, 0xe4, 0x11, 0x1a, 0x2e, 0xb9, 0xef, 0xd2, 0x98, 0x17, 0xdd, 0xe7, 0x35, 0x54, 0xce, 0x65,
+	0xc4, 0xf9, 0x9c, 0x51, 0xcb, 0x50, 0x9d, 0x89, 0xad, 0xb4, 0x5f, 0x95, 0xac, 0x5f, 0xd8, 0x87,
+	0xa6, 0xd4, 0x70, 0x49, 0x83, 0x90, 0x71, 0x5f, 0x0d, 0xb2, 0x4d, 0xf2, 0xd0, 0x33, 0xa3, 0x5e,
+	0x35, 0x6b, 0xcf, 0x8c, 0x7a, 0xcd, 0xac, 0xdb, 0xbf, 0xeb, 0xd0, 0x8e, 0x0a, 0x1b, 0x71, 0x5f,
+	0x04, 0xdc, 0xc3, 0x4f, 0x0b, 0x73, 0xfb, 0xb0, 0xd8, 0xb5, 0x98, 0xb4, 0x65, 0x74, 0x9f, 0xc0,
+	0x4e, 0x5a, 0x9c, 0xda, 0xaf, 0xf9, 0xba, 0xb7, 0xb9, 0x64, 0x44, 0x5a, 0x66, 0x2e, 0x22, 0xea,
+	0xc0, 0x36, 0x17, 0x7e, 0x0c, 0x9d, 0x64, 0xe3, 0x5f, 0x70, 0xb5, 0x54, 0x8c, 0xf4, 0xeb, 0xb2,
+	0xe6, 0xc9, 0x7f, 0x39, 0x8e, 0x03, 0xbe, 0x50, 0xec, 0x4a, 0xca, 0xde, 0xf0, 0xe1, 0x00, 0x9a,
+	0xf9, 0xc4, 0xdb, 0xbe, 0x4a, 0x79, 0x42, 0xfa, 0xa5, 0x49, 0x93, 0xd7, 0xb6, 0x44, 0x14, 0x29,
+	0xf6, 0xf8, 0xae, 0xff, 0x8a, 0x2e, 0xe0, 0x28, 0xa0, 0x8e, 0xa0, 0x8a, 0x4f, 0xe8, 0xab, 0x15,
+	0x0d, 0x85, 0xa9, 0xe1, 0x3b, 0xb0, 0x53, 0xc0, 0x65, 0x4b, 0x42, 0x6a, 0x96, 0x9f, 0x1e, 0xfe,
+	0x71, 0xd3, 0xd3, 0xde, 0xdc, 0xf4, 0xb4, 0x7f, 0x6e, 0x7a, 0xda, 0x2f, 0xb7, 0xbd, 0xd2, 0x9b,
+	0xdb, 0x5e, 0xe9, 0xef, 0xdb, 0x5e, 0xe9, 0xfb, 0xdd, 0x2b, 0x26, 0x66, 0xab, 0xc9, 0x60, 0xca,
+	0x17, 0x8f, 0x43, 0xcf, 0x99, 0xce, 0x67, 0xaf, 0x1e, 0x47, 0x92, 0x26, 0x55, 0xf5, 0x7b, 0x75,
+	0xf8, 0x5f, 0x00, 0x00, 0x00, 0xff, 0xff, 0x13, 0xbd, 0x10, 0x52, 0x6e, 0x09, 0x00, 0x00,
 }
 
 func (m *NebulaMeta) Marshal() (dAtA []byte, err error) {
@@ -850,6 +1030,28 @@ func (m *NebulaMetaDetails) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if m.HandshakeFilteringWhitelist != nil {
+		{
+			size, err := m.HandshakeFilteringWhitelist.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintNebula(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x4a
+	}
+	if m.EnableHostQueryFiltering {
+		i--
+		if m.EnableHostQueryFiltering {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x40
+	}
 	if len(m.RelayVpnAddrs) > 0 {
 		for iNdEx := len(m.RelayVpnAddrs) - 1; iNdEx >= 0; iNdEx-- {
 			{
@@ -877,20 +1079,20 @@ func (m *NebulaMetaDetails) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x32
 	}
 	if len(m.OldRelayVpnAddrs) > 0 {
-		dAtA4 := make([]byte, len(m.OldRelayVpnAddrs)*10)
-		var j3 int
+		dAtA5 := make([]byte, len(m.OldRelayVpnAddrs)*10)
+		var j4 int
 		for _, num := range m.OldRelayVpnAddrs {
 			for num >= 1<<7 {
-				dAtA4[j3] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA5[j4] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j3++
+				j4++
 			}
-			dAtA4[j3] = uint8(num)
-			j3++
+			dAtA5[j4] = uint8(num)
+			j4++
 		}
-		i -= j3
-		copy(dAtA[i:], dAtA4[:j3])
-		i = encodeVarintNebula(dAtA, i, uint64(j3))
+		i -= j4
+		copy(dAtA[i:], dAtA5[:j4])
+		i = encodeVarintNebula(dAtA, i, uint64(j4))
 		i--
 		dAtA[i] = 0x2a
 	}
@@ -1035,6 +1237,135 @@ func (m *V6AddrPort) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i = encodeVarintNebula(dAtA, i, uint64(m.Hi))
 		i--
 		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *HandshakeFilteringWhitelist) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *HandshakeFilteringWhitelist) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *HandshakeFilteringWhitelist) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.Append {
+		i--
+		if m.Append {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x40
+	}
+	if m.MessageId != 0 {
+		i = encodeVarintNebula(dAtA, i, uint64(m.MessageId))
+		i--
+		dAtA[i] = 0x38
+	}
+	if len(m.AllowedCAShas) > 0 {
+		for iNdEx := len(m.AllowedCAShas) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.AllowedCAShas[iNdEx])
+			copy(dAtA[i:], m.AllowedCAShas[iNdEx])
+			i = encodeVarintNebula(dAtA, i, uint64(len(m.AllowedCAShas[iNdEx])))
+			i--
+			dAtA[i] = 0x32
+		}
+	}
+	if len(m.AllowedCANames) > 0 {
+		for iNdEx := len(m.AllowedCANames) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.AllowedCANames[iNdEx])
+			copy(dAtA[i:], m.AllowedCANames[iNdEx])
+			i = encodeVarintNebula(dAtA, i, uint64(len(m.AllowedCANames[iNdEx])))
+			i--
+			dAtA[i] = 0x2a
+		}
+	}
+	if len(m.AllowedCidrs) > 0 {
+		for iNdEx := len(m.AllowedCidrs) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.AllowedCidrs[iNdEx])
+			copy(dAtA[i:], m.AllowedCidrs[iNdEx])
+			i = encodeVarintNebula(dAtA, i, uint64(len(m.AllowedCidrs[iNdEx])))
+			i--
+			dAtA[i] = 0x22
+		}
+	}
+	if len(m.AllowedGroupsCombos) > 0 {
+		for iNdEx := len(m.AllowedGroupsCombos) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.AllowedGroupsCombos[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintNebula(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x1a
+		}
+	}
+	if len(m.AllowedGroups) > 0 {
+		for iNdEx := len(m.AllowedGroups) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.AllowedGroups[iNdEx])
+			copy(dAtA[i:], m.AllowedGroups[iNdEx])
+			i = encodeVarintNebula(dAtA, i, uint64(len(m.AllowedGroups[iNdEx])))
+			i--
+			dAtA[i] = 0x12
+		}
+	}
+	if len(m.AllowedHosts) > 0 {
+		for iNdEx := len(m.AllowedHosts) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.AllowedHosts[iNdEx])
+			copy(dAtA[i:], m.AllowedHosts[iNdEx])
+			i = encodeVarintNebula(dAtA, i, uint64(len(m.AllowedHosts[iNdEx])))
+			i--
+			dAtA[i] = 0xa
+		}
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *GroupsCombos) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *GroupsCombos) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *GroupsCombos) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if len(m.Group) > 0 {
+		for iNdEx := len(m.Group) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.Group[iNdEx])
+			copy(dAtA[i:], m.Group[iNdEx])
+			i = encodeVarintNebula(dAtA, i, uint64(len(m.Group[iNdEx])))
+			i--
+			dAtA[i] = 0xa
+		}
 	}
 	return len(dAtA) - i, nil
 }
@@ -1309,6 +1640,13 @@ func (m *NebulaMetaDetails) Size() (n int) {
 			n += 1 + l + sovNebula(uint64(l))
 		}
 	}
+	if m.EnableHostQueryFiltering {
+		n += 2
+	}
+	if m.HandshakeFilteringWhitelist != nil {
+		l = m.HandshakeFilteringWhitelist.Size()
+		n += 1 + l + sovNebula(uint64(l))
+	}
 	return n
 }
 
@@ -1356,6 +1694,72 @@ func (m *V6AddrPort) Size() (n int) {
 	}
 	if m.Port != 0 {
 		n += 1 + sovNebula(uint64(m.Port))
+	}
+	return n
+}
+
+func (m *HandshakeFilteringWhitelist) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if len(m.AllowedHosts) > 0 {
+		for _, s := range m.AllowedHosts {
+			l = len(s)
+			n += 1 + l + sovNebula(uint64(l))
+		}
+	}
+	if len(m.AllowedGroups) > 0 {
+		for _, s := range m.AllowedGroups {
+			l = len(s)
+			n += 1 + l + sovNebula(uint64(l))
+		}
+	}
+	if len(m.AllowedGroupsCombos) > 0 {
+		for _, e := range m.AllowedGroupsCombos {
+			l = e.Size()
+			n += 1 + l + sovNebula(uint64(l))
+		}
+	}
+	if len(m.AllowedCidrs) > 0 {
+		for _, s := range m.AllowedCidrs {
+			l = len(s)
+			n += 1 + l + sovNebula(uint64(l))
+		}
+	}
+	if len(m.AllowedCANames) > 0 {
+		for _, s := range m.AllowedCANames {
+			l = len(s)
+			n += 1 + l + sovNebula(uint64(l))
+		}
+	}
+	if len(m.AllowedCAShas) > 0 {
+		for _, s := range m.AllowedCAShas {
+			l = len(s)
+			n += 1 + l + sovNebula(uint64(l))
+		}
+	}
+	if m.MessageId != 0 {
+		n += 1 + sovNebula(uint64(m.MessageId))
+	}
+	if m.Append {
+		n += 2
+	}
+	return n
+}
+
+func (m *GroupsCombos) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if len(m.Group) > 0 {
+		for _, s := range m.Group {
+			l = len(s)
+			n += 1 + l + sovNebula(uint64(l))
+		}
 	}
 	return n
 }
@@ -1844,6 +2248,62 @@ func (m *NebulaMetaDetails) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field EnableHostQueryFiltering", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.EnableHostQueryFiltering = bool(v != 0)
+		case 9:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field HandshakeFilteringWhitelist", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthNebula
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.HandshakeFilteringWhitelist == nil {
+				m.HandshakeFilteringWhitelist = &HandshakeFilteringWhitelist{}
+			}
+			if err := m.HandshakeFilteringWhitelist.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipNebula(dAtA[iNdEx:])
@@ -2127,6 +2587,371 @@ func (m *V6AddrPort) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipNebula(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *HandshakeFilteringWhitelist) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowNebula
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: HandshakeFilteringWhitelist: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: HandshakeFilteringWhitelist: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AllowedHosts", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthNebula
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AllowedHosts = append(m.AllowedHosts, string(dAtA[iNdEx:postIndex]))
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AllowedGroups", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthNebula
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AllowedGroups = append(m.AllowedGroups, string(dAtA[iNdEx:postIndex]))
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AllowedGroupsCombos", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthNebula
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AllowedGroupsCombos = append(m.AllowedGroupsCombos, &GroupsCombos{})
+			if err := m.AllowedGroupsCombos[len(m.AllowedGroupsCombos)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AllowedCidrs", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthNebula
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AllowedCidrs = append(m.AllowedCidrs, string(dAtA[iNdEx:postIndex]))
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AllowedCANames", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthNebula
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AllowedCANames = append(m.AllowedCANames, string(dAtA[iNdEx:postIndex]))
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AllowedCAShas", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthNebula
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AllowedCAShas = append(m.AllowedCAShas, string(dAtA[iNdEx:postIndex]))
+			iNdEx = postIndex
+		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MessageId", wireType)
+			}
+			m.MessageId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MessageId |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Append", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.Append = bool(v != 0)
+		default:
+			iNdEx = preIndex
+			skippy, err := skipNebula(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *GroupsCombos) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowNebula
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: GroupsCombos: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: GroupsCombos: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Group", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowNebula
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthNebula
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthNebula
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Group = append(m.Group, string(dAtA[iNdEx:postIndex]))
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipNebula(dAtA[iNdEx:])
