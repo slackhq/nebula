@@ -18,73 +18,73 @@ func Test_parseRoutes(t *testing.T) {
 	require.NoError(t, err)
 
 	// test no routes config
-	routes, err := parseRoutes(c, []netip.Prefix{n})
+	routes, err := ParseRoutes(c, []netip.Prefix{n})
 	require.NoError(t, err)
 	assert.Empty(t, routes)
 
 	// not an array
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": "hi"}
-	routes, err = parseRoutes(c, []netip.Prefix{n})
+	routes, err = ParseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "tun.routes is not an array")
 
 	// no routes
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{}}
-	routes, err = parseRoutes(c, []netip.Prefix{n})
+	routes, err = ParseRoutes(c, []netip.Prefix{n})
 	require.NoError(t, err)
 	assert.Empty(t, routes)
 
 	// weird route
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{"asdf"}}
-	routes, err = parseRoutes(c, []netip.Prefix{n})
+	routes, err = ParseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1 in tun.routes is invalid")
 
 	// no mtu
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{}}}
-	routes, err = parseRoutes(c, []netip.Prefix{n})
+	routes, err = ParseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.mtu in tun.routes is not present")
 
 	// bad mtu
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{"mtu": "nope"}}}
-	routes, err = parseRoutes(c, []netip.Prefix{n})
+	routes, err = ParseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.mtu in tun.routes is not an integer: strconv.Atoi: parsing \"nope\": invalid syntax")
 
 	// low mtu
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{"mtu": "499"}}}
-	routes, err = parseRoutes(c, []netip.Prefix{n})
+	routes, err = ParseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.mtu in tun.routes is below 500: 499")
 
 	// missing route
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{"mtu": "500"}}}
-	routes, err = parseRoutes(c, []netip.Prefix{n})
+	routes, err = ParseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.route in tun.routes is not present")
 
 	// unparsable route
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "route": "nope"}}}
-	routes, err = parseRoutes(c, []netip.Prefix{n})
+	routes, err = ParseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.route in tun.routes failed to parse: netip.ParsePrefix(\"nope\"): no '/'")
 
 	// below network range
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "route": "1.0.0.0/8"}}}
-	routes, err = parseRoutes(c, []netip.Prefix{n})
+	routes, err = ParseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.route in tun.routes is not contained within the configured vpn networks; route: 1.0.0.0/8, networks: [10.0.0.0/24]")
 
 	// above network range
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "route": "10.0.1.0/24"}}}
-	routes, err = parseRoutes(c, []netip.Prefix{n})
+	routes, err = ParseRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.route in tun.routes is not contained within the configured vpn networks; route: 10.0.1.0/24, networks: [10.0.0.0/24]")
 
 	// Not in multiple ranges
 	c.Settings["tun"] = map[interface{}]interface{}{"routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "route": "192.0.0.0/24"}}}
-	routes, err = parseRoutes(c, []netip.Prefix{n, netip.MustParsePrefix("192.1.0.0/24")})
+	routes, err = ParseRoutes(c, []netip.Prefix{n, netip.MustParsePrefix("192.1.0.0/24")})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.route in tun.routes is not contained within the configured vpn networks; route: 192.0.0.0/24, networks: [10.0.0.0/24 192.1.0.0/24]")
 
@@ -93,7 +93,7 @@ func Test_parseRoutes(t *testing.T) {
 		map[interface{}]interface{}{"mtu": "9000", "route": "10.0.0.0/29"},
 		map[interface{}]interface{}{"mtu": "8000", "route": "10.0.0.1/32"},
 	}}
-	routes, err = parseRoutes(c, []netip.Prefix{n})
+	routes, err = ParseRoutes(c, []netip.Prefix{n})
 	require.NoError(t, err)
 	assert.Len(t, routes, 2)
 

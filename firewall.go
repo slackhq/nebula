@@ -1156,57 +1156,98 @@ func (hfws *HandshakeFilter) IsHandshakeAllowed(groups []string, host string, vp
 	return false
 }
 
-func (hfws *HandshakeFilter) MarshalToHfw() *HandshakeFilteringWhitelist {
-	hfw := &HandshakeFilteringWhitelist{
-		AllowedHosts:        make([]string, len(hfws.AllowedHosts)),
-		AllowedGroups:       make([]string, len(hfws.AllowedGroups)),
-		AllowedGroupsCombos: make([]*GroupsCombos, len(hfws.AllowedGroupsCombos)),
-		AllowedCidrs:        make([]string, len(hfws.AllowedCidrs)),
-		AllowedCANames:      make([]string, len(hfws.AllowedCANames)),
-		AllowedCAShas:       make([]string, len(hfws.AllowedCAShas)),
-		SetEmpty:            hfws.IsEmtpy.Load(),
+func (hfws *HandshakeFilter) MarshalToHfwList(maxMessageSize int) []*HandshakeFilteringWhitelist {
+	hfwList := make([]*HandshakeFilteringWhitelist, 0)
+	maxMessageSize = maxMessageSize - 10 // account for potential overhead
+
+	appendOldAndGetNewHfw := func(old *HandshakeFilteringWhitelist) *HandshakeFilteringWhitelist {
+		if old != nil {
+			hfwList = append(hfwList, old)
+		}
+		return &HandshakeFilteringWhitelist{
+			AllowedHosts:        make([]string, 0),
+			AllowedGroups:       make([]string, 0),
+			AllowedGroupsCombos: make([]*GroupsCombos, 0),
+			AllowedCidrs:        make([]string, 0),
+			AllowedCANames:      make([]string, 0),
+			AllowedCAShas:       make([]string, 0),
+			Append:              old != nil,
+		}
 	}
 
-	for host := range hfws.AllowedHosts {
-		hfw.AllowedHosts = append(hfw.AllowedHosts, host)
+	type appendToHfw func(hfw *HandshakeFilteringWhitelist, e string)
+	addIteratableToHfw := func(hfw *HandshakeFilteringWhitelist, e string, appendToHfwFunc appendToHfw) *HandshakeFilteringWhitelist {
+		if hfw.Size()+len(e) > maxMessageSize {
+			hfw = appendOldAndGetNewHfw(hfw)
+		}
+		appendToHfwFunc(hfw, e)
+		return hfw
 	}
 
-	for group := range hfws.AllowedGroups {
-		hfw.AllowedGroups = append(hfw.AllowedGroups, group)
+	hfw := appendOldAndGetNewHfw(nil)
+
+	for e := range hfws.AllowedHosts {
+		hfw = addIteratableToHfw(hfw, e, func(h *HandshakeFilteringWhitelist, e string) {
+			h.AllowedHosts = append(h.AllowedHosts, e)
+		})
 	}
 
-	for i, groupCombo := range hfws.AllowedGroupsCombos {
+	for e := range hfws.AllowedGroups {
+		hfw = addIteratableToHfw(hfw, e, func(h *HandshakeFilteringWhitelist, e string) {
+			h.AllowedGroups = append(h.AllowedGroups, e)
+		})
+	}
+
+	for _, groupCombo := range hfws.AllowedGroupsCombos {
 		gc := &GroupsCombos{
 			Group: make([]string, len(groupCombo)),
 		}
+
 		j := 0
+		groupBytes := 0
 		for group := range groupCombo {
 			gc.Group[j] = group
+			groupBytes += len(group)
 			j += 1
 		}
-		hfw.AllowedGroupsCombos[i] = gc
+
+		if hfw.Size()+groupBytes > maxMessageSize {
+			hfw = appendOldAndGetNewHfw(hfw)
+		}
+		hfw.AllowedGroupsCombos = append(hfw.AllowedGroupsCombos, gc)
 	}
 
-	for i, cidr := range hfws.AllowedCidrs {
-		hfw.AllowedCidrs[i] = cidr.String()
+	for _, e := range hfws.AllowedCidrs {
+		hfw = addIteratableToHfw(hfw, e.String(), func(h *HandshakeFilteringWhitelist, e string) {
+			h.AllowedCidrs = append(h.AllowedCidrs, e)
+		})
 	}
 
-	for ca := range hfws.AllowedCANames {
-		hfw.AllowedCANames = append(hfw.AllowedCANames, ca)
+	for e := range hfws.AllowedCANames {
+		hfw = addIteratableToHfw(hfw, e, func(h *HandshakeFilteringWhitelist, e string) {
+			h.AllowedCANames = append(h.AllowedCANames, e)
+		})
 	}
 
-	for fp := range hfws.AllowedCAShas {
-		hfw.AllowedCAShas = append(hfw.AllowedCAShas, fp)
+	for e := range hfws.AllowedCAShas {
+		hfw = addIteratableToHfw(hfw, e, func(h *HandshakeFilteringWhitelist, e string) {
+			h.AllowedCAShas = append(h.AllowedCAShas, e)
+		})
 	}
 
 	hfws.IsModifiedSinceLastMashalling.Store(false)
 
-	return hfw
+	hfwList = append(hfwList, hfw)
+	return hfwList
 }
 
-func (hfws *HandshakeFilter) UnmarshalFromHfw(hfw *HandshakeFilteringWhitelist) {
+func (hfws *HandshakeFilter) UnmarshalFromHfw(hfw *HandshakeFilteringWhitelist) *HandshakeFilter {
 	if hfw == nil {
-		return
+		return hfws
+	}
+
+	if !hfw.Append {
+		hfws = NewHandshakeFilter()
 	}
 
 	for _, h := range hfw.AllowedHosts {
@@ -1236,6 +1277,8 @@ func (hfws *HandshakeFilter) UnmarshalFromHfw(hfw *HandshakeFilteringWhitelist) 
 	for _, sha := range hfw.AllowedCAShas {
 		hfws.AddRule(nil, "", netip.Prefix{}, "", sha)
 	}
+
+	return hfws
 }
 
 func isSubset(subset map[string]struct{}, superset []string) bool {

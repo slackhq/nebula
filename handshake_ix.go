@@ -244,7 +244,6 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to generate index")
 		return
 	}
-
 	hostinfo := &HostInfo{
 		ConnectionState:   ci,
 		localIndexId:      myIndex,
@@ -252,6 +251,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		vpnAddrs:          vpnAddrs,
 		HandshakePacket:   make(map[uint8][]byte, 0),
 		lastHandshakeTime: hs.Details.Time,
+		hfwMessagesAckd:   make(map[uint8]bool, 0),
 		relayState: RelayState{
 			relays:         map[netip.Addr]struct{}{},
 			relayForByAddr: map[netip.Addr]*Relay{},

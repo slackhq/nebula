@@ -16,6 +16,8 @@ message NebulaMeta {
     PathCheck = 8;
     PathCheckReply = 9;
     HostUpdateNotificationAck = 10;
+    HostQueryWhitelist = 11;
+    HostQueryWhitelistAck = 12;
   }
 
   MessageType Type = 1;
@@ -28,7 +30,8 @@ message NebulaMetaDetails {
 
   repeated uint32 OldRelayVpnAddrs = 5 [deprecated = true];
   repeated Addr RelayVpnAddrs = 7;
-  HandshakeFilteringWhitelist HandshakeFilteringWhitelist = 8;
+  bool EnableHostQueryFiltering = 8;
+  HandshakeFilteringWhitelist HandshakeFilteringWhitelist = 9;
 
   repeated V4AddrPort V4AddrPorts = 2;
   repeated V6AddrPort V6AddrPorts = 4;
@@ -58,7 +61,8 @@ message HandshakeFilteringWhitelist {
   repeated string AllowedCidrs = 4;
   repeated string AllowedCANames = 5;
   repeated string AllowedCAShas = 6;
-  bool SetEmpty = 7;
+  uint32 MessageId = 7;
+  bool Append = 8;
 }
 
 message GroupsCombos {

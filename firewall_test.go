@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"net/netip"
+	"strconv"
 	"testing"
 	"time"
 
@@ -699,31 +700,33 @@ func TestHandshakeFilter_Marshalling(t *testing.T) {
 	assert.Empty(t, hf.AllowedCAShas)
 	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
 	assert.True(t, hf.IsEmtpy.Load())
-	hfw := hf.MarshalToHfw()
+	hfwl := hf.MarshalToHfwList(1300)
 	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
-	assert.Empty(t, hfw.AllowedGroups)
-	assert.Empty(t, hfw.AllowedGroupsCombos)
-	assert.Empty(t, hfw.AllowedHosts)
-	assert.Empty(t, hfw.AllowedCidrs)
-	assert.Empty(t, hfw.AllowedCANames)
-	assert.Empty(t, hfw.AllowedCAShas)
-	assert.True(t, hfw.SetEmpty)
+	assert.Equal(t, 1, len(hfwl))
+	assert.Empty(t, hfwl[0].AllowedGroups)
+	assert.Empty(t, hfwl[0].AllowedGroupsCombos)
+	assert.Empty(t, hfwl[0].AllowedHosts)
+	assert.Empty(t, hfwl[0].AllowedCidrs)
+	assert.Empty(t, hfwl[0].AllowedCANames)
+	assert.Empty(t, hfwl[0].AllowedCAShas)
+	assert.False(t, hfwl[0].Append)
 
 	hf = NewHandshakeFilter()
 	g := "g1"
 	hf.AddRule([]string{g}, "", netip.Prefix{}, "", "")
 	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
-	hfw = hf.MarshalToHfw()
-	assert.Contains(t, hfw.AllowedGroups, g)
-	assert.Empty(t, hfw.AllowedGroupsCombos)
-	assert.Empty(t, hfw.AllowedHosts)
-	assert.Empty(t, hfw.AllowedCidrs)
-	assert.Empty(t, hfw.AllowedCANames)
-	assert.Empty(t, hfw.AllowedCAShas)
-	assert.False(t, hfw.SetEmpty)
+	hfwl = hf.MarshalToHfwList(1300)
+	assert.Equal(t, 1, len(hfwl))
+	assert.Contains(t, hfwl[0].AllowedGroups, g)
+	assert.Empty(t, hfwl[0].AllowedGroupsCombos)
+	assert.Empty(t, hfwl[0].AllowedHosts)
+	assert.Empty(t, hfwl[0].AllowedCidrs)
+	assert.Empty(t, hfwl[0].AllowedCANames)
+	assert.Empty(t, hfwl[0].AllowedCAShas)
+	assert.False(t, hfwl[0].Append)
 	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
 	hf = NewHandshakeFilter()
-	hf.UnmarshalFromHfw(hfw)
+	hf = hf.UnmarshalFromHfw(hfwl[0])
 	assert.Empty(t, hf.AllowedGroupsCombos)
 	assert.Empty(t, hf.AllowedHosts)
 	assert.Empty(t, hf.AllowedCidrs)
@@ -737,23 +740,24 @@ func TestHandshakeFilter_Marshalling(t *testing.T) {
 	hf.AddRule(gc, "", netip.Prefix{}, "", "")
 	assert.Len(t, hf.AllowedGroupsCombos, 1)
 	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
-	hfw = hf.MarshalToHfw()
-	assert.Empty(t, hfw.AllowedGroups)
-	assert.Len(t, hfw.AllowedGroupsCombos, 1)
+	hfwl = hf.MarshalToHfwList(1300)
+	assert.Equal(t, 1, len(hfwl))
+	assert.Empty(t, hfwl[0].AllowedGroups)
+	assert.Len(t, hfwl[0].AllowedGroupsCombos, 1)
 	for _, g := range gc {
-		assert.Contains(t, hfw.AllowedGroupsCombos[0].Group, g)
+		assert.Contains(t, hfwl[0].AllowedGroupsCombos[0].Group, g)
 	}
-	assert.Empty(t, hfw.AllowedHosts)
-	assert.Empty(t, hfw.AllowedCidrs)
-	assert.Empty(t, hfw.AllowedCANames)
-	assert.Empty(t, hfw.AllowedCAShas)
-	assert.False(t, hfw.SetEmpty)
+	assert.Empty(t, hfwl[0].AllowedHosts)
+	assert.Empty(t, hfwl[0].AllowedCidrs)
+	assert.Empty(t, hfwl[0].AllowedCANames)
+	assert.Empty(t, hfwl[0].AllowedCAShas)
+	assert.False(t, hfwl[0].Append)
 	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
 	hf = NewHandshakeFilter()
-	hf.UnmarshalFromHfw(hfw)
+	hf = hf.UnmarshalFromHfw(hfwl[0])
 	assert.Empty(t, hf.AllowedGroups)
 	gs := make(map[string]struct{})
-	for _, g := range hfw.AllowedGroupsCombos[0].Group {
+	for _, g := range hfwl[0].AllowedGroupsCombos[0].Group {
 		gs[g] = struct{}{}
 	}
 	for _, g := range gc {
@@ -769,17 +773,18 @@ func TestHandshakeFilter_Marshalling(t *testing.T) {
 	h := "h1"
 	hf.AddRule(nil, h, netip.Prefix{}, "", "")
 	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
-	hfw = hf.MarshalToHfw()
-	assert.Empty(t, hfw.AllowedGroups)
-	assert.Empty(t, hfw.AllowedGroupsCombos)
-	assert.Contains(t, hfw.AllowedHosts, h)
-	assert.Empty(t, hfw.AllowedCidrs)
-	assert.Empty(t, hfw.AllowedCANames)
-	assert.Empty(t, hfw.AllowedCAShas)
-	assert.False(t, hfw.SetEmpty)
+	hfwl = hf.MarshalToHfwList(1300)
+	assert.Equal(t, 1, len(hfwl))
+	assert.Empty(t, hfwl[0].AllowedGroups)
+	assert.Empty(t, hfwl[0].AllowedGroupsCombos)
+	assert.Contains(t, hfwl[0].AllowedHosts, h)
+	assert.Empty(t, hfwl[0].AllowedCidrs)
+	assert.Empty(t, hfwl[0].AllowedCANames)
+	assert.Empty(t, hfwl[0].AllowedCAShas)
+	assert.False(t, hfwl[0].Append)
 	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
 	hf = NewHandshakeFilter()
-	hf.UnmarshalFromHfw(hfw)
+	hf = hf.UnmarshalFromHfw(hfwl[0])
 	assert.Empty(t, hf.AllowedGroups)
 	assert.Empty(t, hf.AllowedGroupsCombos)
 	assert.Contains(t, hf.AllowedHosts, h)
@@ -792,17 +797,18 @@ func TestHandshakeFilter_Marshalling(t *testing.T) {
 	p, _ := netip.ParsePrefix("10.1.1.1/32")
 	hf.AddRule(nil, "", p, "", "")
 	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
-	hfw = hf.MarshalToHfw()
-	assert.Empty(t, hfw.AllowedGroups)
-	assert.Empty(t, hfw.AllowedGroupsCombos)
-	assert.Empty(t, hfw.AllowedHosts)
-	assert.Equal(t, hfw.AllowedCidrs[0], p.String())
-	assert.Empty(t, hfw.AllowedCANames)
-	assert.Empty(t, hfw.AllowedCAShas)
-	assert.False(t, hfw.SetEmpty)
+	hfwl = hf.MarshalToHfwList(1300)
+	assert.Equal(t, 1, len(hfwl))
+	assert.Empty(t, hfwl[0].AllowedGroups)
+	assert.Empty(t, hfwl[0].AllowedGroupsCombos)
+	assert.Empty(t, hfwl[0].AllowedHosts)
+	assert.Equal(t, hfwl[0].AllowedCidrs[0], p.String())
+	assert.Empty(t, hfwl[0].AllowedCANames)
+	assert.Empty(t, hfwl[0].AllowedCAShas)
+	assert.False(t, hfwl[0].Append)
 	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
 	hf = NewHandshakeFilter()
-	hf.UnmarshalFromHfw(hfw)
+	hf = hf.UnmarshalFromHfw(hfwl[0])
 	assert.Empty(t, hf.AllowedGroups)
 	assert.Empty(t, hf.AllowedGroupsCombos)
 	assert.Empty(t, hf.AllowedHosts)
@@ -815,17 +821,18 @@ func TestHandshakeFilter_Marshalling(t *testing.T) {
 	ca := "TestCA"
 	hf.AddRule(nil, "", netip.Prefix{}, ca, "")
 	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
-	hfw = hf.MarshalToHfw()
-	assert.Empty(t, hfw.AllowedGroups)
-	assert.Empty(t, hfw.AllowedGroupsCombos)
-	assert.Empty(t, hfw.AllowedHosts)
-	assert.Empty(t, hfw.AllowedCidrs)
-	assert.Contains(t, hfw.AllowedCANames, ca)
-	assert.Empty(t, hfw.AllowedCAShas)
-	assert.False(t, hfw.SetEmpty)
+	hfwl = hf.MarshalToHfwList(1300)
+	assert.Equal(t, 1, len(hfwl))
+	assert.Empty(t, hfwl[0].AllowedGroups)
+	assert.Empty(t, hfwl[0].AllowedGroupsCombos)
+	assert.Empty(t, hfwl[0].AllowedHosts)
+	assert.Empty(t, hfwl[0].AllowedCidrs)
+	assert.Contains(t, hfwl[0].AllowedCANames, ca)
+	assert.Empty(t, hfwl[0].AllowedCAShas)
+	assert.False(t, hfwl[0].Append)
 	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
 	hf = NewHandshakeFilter()
-	hf.UnmarshalFromHfw(hfw)
+	hf = hf.UnmarshalFromHfw(hfwl[0])
 	assert.Empty(t, hf.AllowedGroups)
 	assert.Empty(t, hf.AllowedGroupsCombos)
 	assert.Empty(t, hf.AllowedHosts)
@@ -838,23 +845,99 @@ func TestHandshakeFilter_Marshalling(t *testing.T) {
 	fp := "3fc204e4d45e8b22ed0879bcd7cb5bf93cdc1c7a309c5dcedddc03aed33a47c6"
 	hf.AddRule(nil, "", netip.Prefix{}, "", fp)
 	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
-	hfw = hf.MarshalToHfw()
-	assert.Empty(t, hfw.AllowedGroups)
-	assert.Empty(t, hfw.AllowedGroupsCombos)
-	assert.Empty(t, hfw.AllowedHosts)
-	assert.Empty(t, hfw.AllowedCidrs)
-	assert.Empty(t, hfw.AllowedCANames)
-	assert.Contains(t, hfw.AllowedCAShas, fp)
-	assert.False(t, hfw.SetEmpty)
+	hfwl = hf.MarshalToHfwList(1300)
+	assert.Equal(t, 1, len(hfwl))
+	assert.Empty(t, hfwl[0].AllowedGroups)
+	assert.Empty(t, hfwl[0].AllowedGroupsCombos)
+	assert.Empty(t, hfwl[0].AllowedHosts)
+	assert.Empty(t, hfwl[0].AllowedCidrs)
+	assert.Empty(t, hfwl[0].AllowedCANames)
+	assert.Contains(t, hfwl[0].AllowedCAShas, fp)
+	assert.False(t, hfwl[0].Append)
 	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
 	hf = NewHandshakeFilter()
-	hf.UnmarshalFromHfw(hfw)
+	hf = hf.UnmarshalFromHfw(hfwl[0])
 	assert.Empty(t, hf.AllowedGroups)
 	assert.Empty(t, hf.AllowedGroupsCombos)
 	assert.Empty(t, hf.AllowedHosts, h)
 	assert.Empty(t, hf.AllowedCidrs)
-	assert.Empty(t, hfw.AllowedCANames)
+	assert.Empty(t, hf.AllowedCANames)
 	assert.Contains(t, hf.AllowedCAShas, fp)
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+}
+
+func TestHandshakeFilter_MarshallingMultiPacket(t *testing.T) {
+	mtu := 1100
+	hf := NewHandshakeFilter()
+	h := "h"
+	for i := 0; i <= 100; i++ {
+		hf.AddRule(nil, h+strconv.Itoa(i), netip.Prefix{}, "", "")
+	}
+
+	g := "g"
+	for i := 0; i <= 100; i++ {
+		hf.AddRule([]string{g + strconv.Itoa(i)}, "", netip.Prefix{}, "", "")
+	}
+
+	for i := 0; i <= 100; i++ {
+		gc := []string{"g1", "g2", "g" + strconv.Itoa(i)}
+		hf.AddRule(gc, "", netip.Prefix{}, "", "")
+	}
+
+	for i := 0; i <= 100; i++ {
+		p, _ := netip.ParsePrefix("10.1.1." + strconv.Itoa(i) + "/32")
+		hf.AddRule(nil, "", p, "", "")
+	}
+
+	ca := "TestCA"
+	for i := 0; i <= 100; i++ {
+		hf.AddRule(nil, "", netip.Prefix{}, ca+strconv.Itoa(i), "")
+	}
+
+	fp := "3fc204e4d45e8b22ed0879bcd7cb5bf93cdc1c7a309c5dcedddc03aed33a47c6"
+	for i := 0; i <= 100; i++ {
+		hf.AddRule(nil, "", netip.Prefix{}, "", fp+strconv.Itoa(i))
+	}
+	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
+	hfwl := hf.MarshalToHfwList(mtu)
+	for _, hfw := range hfwl {
+		assert.LessOrEqual(t, hfw.Size(), mtu)
+	}
+	assert.False(t, hfwl[0].Append)
+	for i := 1; i < len(hfwl); i++ {
+		assert.True(t, hfwl[i].Append)
+	}
+	assert.False(t, hf.IsModifiedSinceLastMashalling.Load())
+	hf = NewHandshakeFilter()
+	for _, hfw := range hfwl {
+		hf = hf.UnmarshalFromHfw(hfw)
+	}
+	for i := 0; i <= 100; i++ {
+		assert.Contains(t, hf.AllowedGroups, g+strconv.Itoa(i))
+	}
+	for i := 0; i <= 100; i++ {
+		gc := map[string]struct{}{
+			"g1":                  {},
+			"g2":                  {},
+			"g" + strconv.Itoa(i): {},
+		}
+
+		assert.Contains(t, hf.AllowedGroupsCombos, gc)
+	}
+	for i := 0; i <= 100; i++ {
+		assert.Contains(t, hf.AllowedHosts, h+strconv.Itoa(i))
+	}
+	for i := 0; i <= 100; i++ {
+		p, _ := netip.ParsePrefix("10.1.1." + strconv.Itoa(i) + "/32")
+		assert.Contains(t, hf.AllowedCidrs, p)
+	}
+	for i := 0; i <= 100; i++ {
+		assert.Contains(t, hf.AllowedCANames, ca+strconv.Itoa(i))
+	}
+	for i := 0; i <= 100; i++ {
+		assert.Contains(t, hf.AllowedCAShas, fp+strconv.Itoa(i))
+	}
+
 	assert.True(t, hf.IsModifiedSinceLastMashalling.Load())
 }
 

@@ -445,10 +445,7 @@ func (r *RemoteList) unlockedSetHandshakeFilteringWhitelist(hfwl *HandshakeFilte
 		return
 	}
 
-	r.hf = NewHandshakeFilter()
-	if !hfwl.GetSetEmpty() {
-		r.hf.UnmarshalFromHfw(hfwl)
-	}
+	r.hf.UnmarshalFromHfw(hfwl)
 }
 
 // unlockedPrependV4 assumes you have the write lock and prepends the address in the reported list for this owner
