@@ -1485,80 +1485,82 @@ func (lhh *LightHouseHandler) handleHostUpdateNotificationAck(n *NebulaMeta, fro
 		return
 	}
 
-	nb := make([]byte, 12, 12)
-	out := make([]byte, mtu)
+	if lhh.lh.enableHostQueryProtection.Load() {
+		nb := make([]byte, 12, 12)
+		out := make([]byte, mtu)
 
-	// make sure to send hfwl to all lighthouses if there were changes
-	if lhh.lh.enableHostQueryProtection.Load() && lhh.lh.hf.IsModifiedSinceLastMashalling.Load() {
-		lighthouses := lhh.lh.GetLighthouses()
-		for lhVpnAddr := range lighthouses {
+		// make sure to send hfwl to all lighthouses if there were changes
+		if lhh.lh.hf.IsModifiedSinceLastMashalling.Load() {
+			lighthouses := lhh.lh.GetLighthouses()
+			for lhVpnAddr := range lighthouses {
+				hi := lhh.lh.ifce.GetHostInfo(lhVpnAddr)
+				if hi == nil {
+					continue
+				}
+
+				hi.hfwMessagesAckd = make(map[uint8]bool, 0)
+			}
+		}
+
+		for _, lhVpnAddr := range fromVpnAddrs {
 			hi := lhh.lh.ifce.GetHostInfo(lhVpnAddr)
 			if hi == nil {
 				continue
 			}
 
-			hi.hfwMessagesAckd = make(map[uint8]bool, 0)
-		}
-	}
-
-	for _, lhVpnAddr := range fromVpnAddrs {
-		hi := lhh.lh.ifce.GetHostInfo(lhVpnAddr)
-		if hi == nil {
-			continue
-		}
-
-		nonAckedHfwMessageCounter := 0
-		for _, value := range hi.hfwMessagesAckd {
-			if !value {
-				nonAckedHfwMessageCounter++
+			nonAckedHfwMessageCounter := 0
+			for _, value := range hi.hfwMessagesAckd {
+				if !value {
+					nonAckedHfwMessageCounter++
+				}
 			}
-		}
 
-		if len(hi.hfwMessagesAckd) == 0 || nonAckedHfwMessageCounter != 0 {
-			lhMtu := lhh.lh.GetMTUForAddr(lhVpnAddr)
-			hfwList := lhh.lh.hf.MarshalToHfwList(lhMtu)
+			if len(hi.hfwMessagesAckd) == 0 || nonAckedHfwMessageCounter != 0 {
+				lhMtu := lhh.lh.GetMTUForAddr(lhVpnAddr)
+				hfwList := lhh.lh.hf.MarshalToHfwList(lhMtu)
 
-			for i, hfw := range hfwList {
-				if _, ok := hi.hfwMessagesAckd[uint8(i)]; ok {
-					if hi.hfwMessagesAckd[uint8(i)] {
-						// skip as already ack'd
-						continue
+				for i, hfw := range hfwList {
+					if _, ok := hi.hfwMessagesAckd[uint8(i)]; ok {
+						if hi.hfwMessagesAckd[uint8(i)] {
+							// skip as already ack'd
+							continue
+						}
 					}
+
+					msg := NebulaMeta{
+						Type: NebulaMeta_HostQueryWhitelist,
+						Details: &NebulaMetaDetails{
+							HandshakeFilteringWhitelist: hfw,
+						},
+					}
+
+					msg.Details.HandshakeFilteringWhitelist.MessageId = uint32(i)
+
+					if msg.Details.HandshakeFilteringWhitelist != nil && lhh.lh.l.Level >= logrus.DebugLevel {
+						lhh.lh.l.WithField("hosts", msg.Details.HandshakeFilteringWhitelist.AllowedHosts).
+							WithField("groups", msg.Details.HandshakeFilteringWhitelist.AllowedGroups).
+							WithField("groupcombos", msg.Details.HandshakeFilteringWhitelist.AllowedGroupsCombos).
+							WithField("cidrs", msg.Details.HandshakeFilteringWhitelist.AllowedCidrs).
+							WithField("canames", msg.Details.HandshakeFilteringWhitelist.AllowedCANames).
+							WithField("cashas", msg.Details.HandshakeFilteringWhitelist.AllowedCAShas).
+							WithField("i", i).
+							Debug("Sending hfw message")
+					}
+					msgSerialized, err := msg.Marshal()
+
+					if err != nil {
+						lhh.lh.l.WithError(err).
+							WithField("lighthouseAddr", lhVpnAddr).
+							Error("Error while marshaling for lighthouse hfw update")
+						break
+					}
+
+					hi.hfwMessagesAckd[uint8(i)] = false
+					lhh.lh.ifce.SendMessageToVpnAddr(header.LightHouse, 0, lhVpnAddr, msgSerialized, nb, out)
 				}
 
-				msg := NebulaMeta{
-					Type: NebulaMeta_HostQueryWhitelist,
-					Details: &NebulaMetaDetails{
-						HandshakeFilteringWhitelist: hfw,
-					},
-				}
-
-				msg.Details.HandshakeFilteringWhitelist.MessageId = uint32(i)
-
-				if msg.Details.HandshakeFilteringWhitelist != nil && lhh.lh.l.Level >= logrus.DebugLevel {
-					lhh.lh.l.WithField("hosts", msg.Details.HandshakeFilteringWhitelist.AllowedHosts).
-						WithField("groups", msg.Details.HandshakeFilteringWhitelist.AllowedGroups).
-						WithField("groupcombos", msg.Details.HandshakeFilteringWhitelist.AllowedGroupsCombos).
-						WithField("cidrs", msg.Details.HandshakeFilteringWhitelist.AllowedCidrs).
-						WithField("canames", msg.Details.HandshakeFilteringWhitelist.AllowedCANames).
-						WithField("cashas", msg.Details.HandshakeFilteringWhitelist.AllowedCAShas).
-						WithField("i", i).
-						Debug("Sending hfw message")
-				}
-				msgSerialized, err := msg.Marshal()
-
-				if err != nil {
-					lhh.lh.l.WithError(err).
-						WithField("lighthouseAddr", lhVpnAddr).
-						Error("Error while marshaling for lighthouse hfw update")
-					break
-				}
-
-				hi.hfwMessagesAckd[uint8(i)] = false
-				lhh.lh.ifce.SendMessageToVpnAddr(header.LightHouse, 0, lhVpnAddr, msgSerialized, nb, out)
+				return
 			}
-
-			return
 		}
 	}
 }
