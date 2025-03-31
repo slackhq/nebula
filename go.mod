@@ -2,7 +2,7 @@ module github.com/slackhq/nebula
 
 go 1.23.6
 
-toolchain go1.23.7
+toolchain go1.24.1
 
 require (
 	dario.cat/mergo v1.0.1
@@ -26,7 +26,7 @@ require (
 	github.com/vishvananda/netlink v1.3.0
 	golang.org/x/crypto v0.36.0
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090
-	golang.org/x/net v0.37.0
+	golang.org/x/net v0.38.0
 	golang.org/x/sync v0.12.0
 	golang.org/x/sys v0.31.0
 	golang.org/x/term v0.30.0
