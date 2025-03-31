@@ -13,7 +13,7 @@ import (
 
 // AssertDeepCopyEqual checks to see if two variables have the same values but DO NOT share any memory
 // There is currently a special case for `time.loc` (as this code traverses into unexported fields)
-func AssertDeepCopyEqual(t *testing.T, a interface{}, b interface{}) {
+func AssertDeepCopyEqual(t *testing.T, a any, b any) {
 	v1 := reflect.ValueOf(a)
 	v2 := reflect.ValueOf(b)
 

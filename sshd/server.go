@@ -86,7 +86,7 @@ func NewSSHServer(l *logrus.Entry) (*SSHServer, error) {
 	s.RegisterCommand(&Command{
 		Name:             "help",
 		ShortDescription: "prints available commands or help <command> for specific usage info",
-		Callback: func(a interface{}, args []string, w StringWriter) error {
+		Callback: func(a any, args []string, w StringWriter) error {
 			return helpCallback(s.commands, args, w)
 		},
 	})

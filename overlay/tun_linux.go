@@ -464,7 +464,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 
 		err := netlink.RouteReplace(&nr)
 		if err != nil {
-			retErr := util.NewContextualError("Failed to add route", map[string]interface{}{"route": r}, err)
+			retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 			if logErrors {
 				retErr.Log(t.l)
 			} else {
