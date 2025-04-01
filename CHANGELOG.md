@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `default_local_cidr_any` now defaults to false, meaning that any firewall rule
+  intended to target an `unsafe_routes` entry must explicitly declare it via the
+  `local_cidr` field. This is almost always the intended behavior. This flag is
+  deprecated and will be removed in a future release.
+
 ## [1.9.4] - 2024-09-09
 
 ### Added
