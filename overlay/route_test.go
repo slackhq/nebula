@@ -163,7 +163,7 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	}
 
 	// Unparsable list of via
-	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": []string{"1", "2"}}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": []string{"1", "2"}}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry 1.via in tun.unsafe_routes is not a string or list of gateways: found []string")
@@ -175,19 +175,19 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	require.EqualError(t, err, "entry 1.via in tun.unsafe_routes failed to parse address: ParseAddr(\"nope\"): unable to parse IP")
 
 	// unparsable gateway
-	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "via": []interface{}{map[interface{}]interface{}{"gateway": "1"}}}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"mtu": "500", "via": []any{map[string]any{"gateway": "1"}}}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry .gateway in tun.unsafe_routes[1].via[1] failed to parse address: ParseAddr(\"1\"): unable to parse IP")
 
 	// missing gateway element
-	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "via": []interface{}{map[interface{}]interface{}{"weight": "1"}}}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"mtu": "500", "via": []any{map[string]any{"weight": "1"}}}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry .gateway in tun.unsafe_routes[1].via[1] is not present")
 
 	// unparsable weight element
-	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"mtu": "500", "via": []interface{}{map[interface{}]interface{}{"gateway": "10.0.0.1", "weight": "a"}}}}}
+	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"mtu": "500", "via": []any{map[string]any{"gateway": "10.0.0.1", "weight": "a"}}}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
 	assert.Nil(t, routes)
 	require.EqualError(t, err, "entry .weight in tun.unsafe_routes[1].via[1] is not an integer")
@@ -328,34 +328,34 @@ func Test_makeMultipathUnsafeRouteTree(t *testing.T) {
 	n, err := netip.ParsePrefix("10.0.0.0/24")
 	require.NoError(t, err)
 
-	c.Settings["tun"] = map[interface{}]interface{}{
-		"unsafe_routes": []interface{}{
-			map[interface{}]interface{}{
+	c.Settings["tun"] = map[string]any{
+		"unsafe_routes": []any{
+			map[string]any{
 				"route": "192.168.86.0/24",
 				"via":   "192.168.100.10",
 			},
-			map[interface{}]interface{}{
+			map[string]any{
 				"route": "192.168.87.0/24",
-				"via": []interface{}{
-					map[interface{}]interface{}{
+				"via": []any{
+					map[string]any{
 						"gateway": "10.0.0.1",
 					},
-					map[interface{}]interface{}{
+					map[string]any{
 						"gateway": "10.0.0.2",
 					},
-					map[interface{}]interface{}{
+					map[string]any{
 						"gateway": "10.0.0.3",
 					},
 				},
 			},
-			map[interface{}]interface{}{
+			map[string]any{
 				"route": "192.168.89.0/24",
-				"via": []interface{}{
-					map[interface{}]interface{}{
+				"via": []any{
+					map[string]any{
 						"gateway": "10.0.0.1",
 						"weight":  10,
 					},
-					map[interface{}]interface{}{
+					map[string]any{
 						"gateway": "10.0.0.2",
 						"weight":  5,
 					},
