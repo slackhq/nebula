@@ -215,10 +215,10 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 
 			gateways = routing.Gateways{routing.NewGateway(viaIp, 1)}
 
-		case []interface{}:
+		case []any:
 			gateways = make(routing.Gateways, len(via))
 			for ig, v := range via {
-				gatewayMap, ok := v.(map[interface{}]interface{})
+				gatewayMap, ok := v.(map[string]any)
 				if !ok {
 					return nil, fmt.Errorf("entry %v in tun.unsafe_routes[%v].via is invalid", i+1, ig+1)
 				}
