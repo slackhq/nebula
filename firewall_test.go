@@ -792,7 +792,7 @@ func TestFirewall_convertRule(t *testing.T) {
 	}
 
 	r, err = convertRule(l, c, "test", 1)
-	assert.Equal(t, "", ob.String())
+	assert.Empty(t, ob.String())
 	require.Error(t, err, "group should contain a single value, an array with more than one entry was provided")
 
 	// Make sure a well formed group is alright

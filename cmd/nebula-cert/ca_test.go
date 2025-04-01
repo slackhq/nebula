@@ -90,26 +90,26 @@ func Test_ca(t *testing.T) {
 	assertHelpError(t, ca(
 		[]string{"-version", "1", "-out-key", "nope", "-out-crt", "nope", "duration", "100m"}, ob, eb, nopw,
 	), "-name is required")
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 
 	// ipv4 only ips
 	assertHelpError(t, ca([]string{"-version", "1", "-name", "ipv6", "-ips", "100::100/100"}, ob, eb, nopw), "invalid -networks definition: v1 certificates can only be ipv4, have 100::100/100")
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 
 	// ipv4 only subnets
 	assertHelpError(t, ca([]string{"-version", "1", "-name", "ipv6", "-subnets", "100::100/100"}, ob, eb, nopw), "invalid -unsafe-networks definition: v1 certificates can only be ipv4, have 100::100/100")
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 
 	// failed key write
 	ob.Reset()
 	eb.Reset()
 	args := []string{"-version", "1", "-name", "test", "-duration", "100m", "-out-crt", "/do/not/write/pleasecrt", "-out-key", "/do/not/write/pleasekey"}
 	require.EqualError(t, ca(args, ob, eb, nopw), "error while writing out-key: open /do/not/write/pleasekey: "+NoSuchDirError)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 
 	// create temp key file
 	keyF, err := os.CreateTemp("", "test.key")
@@ -121,8 +121,8 @@ func Test_ca(t *testing.T) {
 	eb.Reset()
 	args = []string{"-version", "1", "-name", "test", "-duration", "100m", "-out-crt", "/do/not/write/pleasecrt", "-out-key", keyF.Name()}
 	require.EqualError(t, ca(args, ob, eb, nopw), "error while writing out-crt: open /do/not/write/pleasecrt: "+NoSuchDirError)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 
 	// create temp cert file
 	crtF, err := os.CreateTemp("", "test.crt")
@@ -135,8 +135,8 @@ func Test_ca(t *testing.T) {
 	eb.Reset()
 	args = []string{"-version", "1", "-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
 	require.NoError(t, ca(args, ob, eb, nopw))
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 
 	// read cert and key files
 	rb, _ := os.ReadFile(keyF.Name())
@@ -158,7 +158,7 @@ func Test_ca(t *testing.T) {
 	assert.Empty(t, lCrt.UnsafeNetworks())
 	assert.Len(t, lCrt.PublicKey(), 32)
 	assert.Equal(t, time.Duration(time.Minute*100), lCrt.NotAfter().Sub(lCrt.NotBefore()))
-	assert.Equal(t, "", lCrt.Issuer())
+	assert.Empty(t, lCrt.Issuer())
 	assert.True(t, lCrt.CheckSignature(lCrt.PublicKey()))
 
 	// test encrypted key
@@ -169,7 +169,7 @@ func Test_ca(t *testing.T) {
 	args = []string{"-version", "1", "-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
 	require.NoError(t, ca(args, ob, eb, testpw))
 	assert.Equal(t, pwPromptOb, ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, eb.String())
 
 	// read encrypted key file and verify default params
 	rb, _ = os.ReadFile(keyF.Name())
@@ -197,7 +197,7 @@ func Test_ca(t *testing.T) {
 	args = []string{"-version", "1", "-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
 	require.Error(t, ca(args, ob, eb, errpw))
 	assert.Equal(t, pwPromptOb, ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, eb.String())
 
 	// test when user fails to enter a password
 	os.Remove(keyF.Name())
@@ -207,7 +207,7 @@ func Test_ca(t *testing.T) {
 	args = []string{"-version", "1", "-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
 	require.EqualError(t, ca(args, ob, eb, nopw), "no passphrase specified, remove -encrypt flag to write out-key in plaintext")
 	assert.Equal(t, strings.Repeat(pwPromptOb, 5), ob.String()) // prompts 5 times before giving up
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, eb.String())
 
 	// create valid cert/key for overwrite tests
 	os.Remove(keyF.Name())
@@ -222,8 +222,8 @@ func Test_ca(t *testing.T) {
 	eb.Reset()
 	args = []string{"-version", "1", "-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
 	require.EqualError(t, ca(args, ob, eb, nopw), "refusing to overwrite existing CA key: "+keyF.Name())
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 
 	// test that we won't overwrite existing key file
 	os.Remove(keyF.Name())
@@ -231,8 +231,8 @@ func Test_ca(t *testing.T) {
 	eb.Reset()
 	args = []string{"-version", "1", "-name", "test", "-duration", "100m", "-groups", "1,,   2    ,        ,,,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
 	require.EqualError(t, ca(args, ob, eb, nopw), "refusing to overwrite existing CA cert: "+crtF.Name())
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 	os.Remove(keyF.Name())
 
 }
