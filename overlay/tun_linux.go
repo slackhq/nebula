@@ -686,15 +686,24 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 func (t *tun) Close() error {
 	if t.routeChan != nil {
 		close(t.routeChan)
-	}
-
-	if t.ReadWriteCloser != nil {
-		_ = t.ReadWriteCloser.Close()
+		t.routeChan = nil
 	}
 
 	if t.ioctlFd > 0 {
-		_ = os.NewFile(t.ioctlFd, "ioctlFd").Close()
+		err := os.NewFile(t.ioctlFd, "ioctlFd").Close()
+		if err != nil {
+			t.l.WithField("error", err).Error("Failed to close ioctl fd")
+		}
 		t.ioctlFd = 0
+	}
+
+	if t.ReadWriteCloser != nil {
+		err := t.ReadWriteCloser.Close()
+		if err != nil {
+			t.l.WithField("error", err).Error("Failed to close tun file")
+			return err
+		}
+		t.ReadWriteCloser = nil
 	}
 
 	return nil
