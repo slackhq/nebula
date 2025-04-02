@@ -97,12 +97,14 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 	// Fail due to short key
 	k, rest, curve, err = UnmarshalSigningPrivateKeyFromPEM(rest)
 	assert.Nil(t, k)
+	assert.Equal(t, Curve_CURVE25519, curve)
 	assert.Equal(t, rest, appendByteSlices(invalidBanner, invalidPem))
 	require.EqualError(t, err, "key was not 64 bytes, is invalid Ed25519 private key")
 
 	// Fail due to invalid banner
 	k, rest, curve, err = UnmarshalSigningPrivateKeyFromPEM(rest)
 	assert.Nil(t, k)
+	assert.Equal(t, Curve_CURVE25519, curve)
 	assert.Equal(t, rest, invalidPem)
 	require.EqualError(t, err, "bytes did not contain a proper Ed25519/ECDSA private key banner")
 
@@ -110,6 +112,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 	// it's missing the requisite pre-encapsulation boundary.
 	k, rest, curve, err = UnmarshalSigningPrivateKeyFromPEM(rest)
 	assert.Nil(t, k)
+	assert.Equal(t, Curve_CURVE25519, curve)
 	assert.Equal(t, rest, invalidPem)
 	require.EqualError(t, err, "input did not contain a valid PEM encoded block")
 }
@@ -159,12 +162,14 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 	// Fail due to short key
 	k, rest, curve, err = UnmarshalPrivateKeyFromPEM(rest)
 	assert.Nil(t, k)
+	assert.Equal(t, Curve_CURVE25519, curve)
 	assert.Equal(t, rest, appendByteSlices(invalidBanner, invalidPem))
 	require.EqualError(t, err, "key was not 32 bytes, is invalid CURVE25519 private key")
 
 	// Fail due to invalid banner
 	k, rest, curve, err = UnmarshalPrivateKeyFromPEM(rest)
 	assert.Nil(t, k)
+	assert.Equal(t, Curve_CURVE25519, curve)
 	assert.Equal(t, rest, invalidPem)
 	require.EqualError(t, err, "bytes did not contain a proper private key banner")
 
@@ -172,6 +177,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 	// it's missing the requisite pre-encapsulation boundary.
 	k, rest, curve, err = UnmarshalPrivateKeyFromPEM(rest)
 	assert.Nil(t, k)
+	assert.Equal(t, Curve_CURVE25519, curve)
 	assert.Equal(t, rest, invalidPem)
 	require.EqualError(t, err, "input did not contain a valid PEM encoded block")
 }
@@ -275,12 +281,14 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 	// Fail due to short key
 	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
 	assert.Nil(t, k)
+	assert.Equal(t, Curve_CURVE25519, curve)
 	assert.Equal(t, rest, appendByteSlices(invalidBanner, invalidPem))
 	require.EqualError(t, err, "key was not 32 bytes, is invalid CURVE25519 public key")
 
 	// Fail due to invalid banner
 	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
 	assert.Nil(t, k)
+	assert.Equal(t, Curve_CURVE25519, curve)
 	require.EqualError(t, err, "bytes did not contain a proper public key banner")
 	assert.Equal(t, rest, invalidPem)
 
@@ -288,6 +296,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 	// it's missing the requisite pre-encapsulation boundary.
 	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
 	assert.Nil(t, k)
+	assert.Equal(t, Curve_CURVE25519, curve)
 	assert.Equal(t, rest, invalidPem)
 	require.EqualError(t, err, "input did not contain a valid PEM encoded block")
 }

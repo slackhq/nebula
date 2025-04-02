@@ -25,14 +25,14 @@ func TestNewAllowListFromConfig(t *testing.T) {
 	c.Settings["allowlist"] = map[string]any{
 		"192.168.0.0/16": "abc",
 	}
-	r, err = newAllowListFromConfig(c, "allowlist", nil)
+	_, err = newAllowListFromConfig(c, "allowlist", nil)
 	require.EqualError(t, err, "config `allowlist` has invalid value (type string): abc")
 
 	c.Settings["allowlist"] = map[string]any{
 		"192.168.0.0/16": true,
 		"10.0.0.0/8":     false,
 	}
-	r, err = newAllowListFromConfig(c, "allowlist", nil)
+	_, err = newAllowListFromConfig(c, "allowlist", nil)
 	require.EqualError(t, err, "config `allowlist` contains both true and false rules, but no default set for 0.0.0.0/0")
 
 	c.Settings["allowlist"] = map[string]any{
@@ -42,7 +42,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 		"fd00::/8":       true,
 		"fd00:fd00::/16": false,
 	}
-	r, err = newAllowListFromConfig(c, "allowlist", nil)
+	_, err = newAllowListFromConfig(c, "allowlist", nil)
 	require.EqualError(t, err, "config `allowlist` contains both true and false rules, but no default set for ::/0")
 
 	c.Settings["allowlist"] = map[string]any{
@@ -75,7 +75,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 			`docker.*`: "foo",
 		},
 	}
-	lr, err := NewLocalAllowListFromConfig(c, "allowlist")
+	_, err = NewLocalAllowListFromConfig(c, "allowlist")
 	require.EqualError(t, err, "config `allowlist.interfaces` has invalid value (type string): foo")
 
 	c.Settings["allowlist"] = map[string]any{
@@ -84,7 +84,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 			`eth.*`:    true,
 		},
 	}
-	lr, err = NewLocalAllowListFromConfig(c, "allowlist")
+	_, err = NewLocalAllowListFromConfig(c, "allowlist")
 	require.EqualError(t, err, "config `allowlist.interfaces` values must all be the same true/false value")
 
 	c.Settings["allowlist"] = map[string]any{
@@ -92,7 +92,7 @@ func TestNewAllowListFromConfig(t *testing.T) {
 			`docker.*`: false,
 		},
 	}
-	lr, err = NewLocalAllowListFromConfig(c, "allowlist")
+	lr, err := NewLocalAllowListFromConfig(c, "allowlist")
 	if assert.NoError(t, err) {
 		assert.NotNil(t, lr)
 	}

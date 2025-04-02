@@ -97,7 +97,7 @@ func Test_verify(t *testing.T) {
 	crt, _ := NewTestCert(ca, caPriv, "test-cert", time.Now().Add(time.Hour*-1), time.Now().Add(time.Hour), nil, nil, nil)
 	// Slightly evil hack to modify the certificate after it was sealed to generate an invalid signature
 	pub := crt.PublicKey()
-	for i, _ := range pub {
+	for i := range pub {
 		pub[i] = 0
 	}
 	b, _ = crt.MarshalPEM()

@@ -37,6 +37,7 @@ func TestCertificateV1_Sign(t *testing.T) {
 	}
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
 	c, err := tbs.Sign(&certificateV1{details: detailsV1{notBefore: before, notAfter: after}}, Curve_CURVE25519, priv)
 	require.NoError(t, err)
 	assert.NotNil(t, c)

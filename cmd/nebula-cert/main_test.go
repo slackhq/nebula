@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"testing"
@@ -77,7 +76,7 @@ func assertHelpError(t *testing.T, err error, msg string) {
 	case *helpError:
 		// good
 	default:
-		t.Fatal(fmt.Sprintf("err was not a helpError: %q, expected %q", err, msg))
+		t.Fatalf("err was not a helpError: %q, expected %q", err, msg)
 	}
 
 	require.EqualError(t, err, msg)

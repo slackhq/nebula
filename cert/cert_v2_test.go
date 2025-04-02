@@ -113,14 +113,14 @@ func TestCertificateV2_MarshalJSON(t *testing.T) {
 		signature: []byte("1234567890abcedf1234567890abcedf1234567890abcedf1234567890abcedf"),
 	}
 
-	b, err := nc.MarshalJSON()
+	_, err := nc.MarshalJSON()
 	require.ErrorIs(t, err, ErrMissingDetails)
 
 	rd, err := nc.details.Marshal()
 	require.NoError(t, err)
 
 	nc.rawDetails = rd
-	b, err = nc.MarshalJSON()
+	b, err := nc.MarshalJSON()
 	require.NoError(t, err)
 	assert.JSONEq(
 		t,
@@ -174,8 +174,9 @@ func TestCertificateV2_VerifyPrivateKey(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidPrivateKey)
 
 	c, _, priv, _ = NewTestCert(Version2, Curve_P256, ca2, caKey2, "test", time.Time{}, time.Time{}, nil, nil, nil)
-	rawPriv, b, curve, err = UnmarshalPrivateKeyFromPEM(priv)
-
+	_, _, curve, err = UnmarshalPrivateKeyFromPEM(priv)
+	assert.Equal(t, err, nil)
+	assert.Equal(t, curve, Curve_P256)
 	err = c.VerifyPrivateKey(Curve_P256, priv[:16])
 	require.ErrorIs(t, err, ErrInvalidPrivateKey)
 
@@ -261,6 +262,7 @@ func TestCertificateV2_marshalForSigningStability(t *testing.T) {
 	assert.Equal(t, expectedRawDetails, db)
 
 	expectedForSigning, err := hex.DecodeString(expectedRawDetailsStr + "00313233343536373839306162636564666768696a313233343536373839306162")
+	require.NoError(t, err)
 	b, err := nc.marshalForSigning()
 	require.NoError(t, err)
 	assert.Equal(t, expectedForSigning, b)

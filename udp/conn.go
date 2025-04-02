@@ -30,15 +30,11 @@ func (NoopConn) Rebind() error {
 func (NoopConn) LocalAddr() (netip.AddrPort, error) {
 	return netip.AddrPort{}, nil
 }
-func (NoopConn) ListenOut(_ EncReader) {
-	return
-}
+func (NoopConn) ListenOut(_ EncReader) {}
 func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {
 	return nil
 }
-func (NoopConn) ReloadConfig(_ *config.C) {
-	return
-}
+func (NoopConn) ReloadConfig(_ *config.C) {}
 func (NoopConn) Close() error {
 	return nil
 }

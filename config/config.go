@@ -63,7 +63,7 @@ func (c *C) Load(path string) error {
 
 func (c *C) LoadString(raw string) error {
 	if raw == "" {
-		return errors.New("Empty configuration")
+		return errors.New("empty configuration")
 	}
 	return c.parseRaw([]byte(raw))
 }

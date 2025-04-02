@@ -1,8 +1,6 @@
 package pkclient
 
 import (
-	"crypto/ecdsa"
-	"crypto/x509"
 	"fmt"
 	"io"
 	"strconv"
@@ -48,27 +46,6 @@ func FromUrl(pkurl string) (*PKClient, error) {
 	label, _ := uri.GetPathAttribute("object", false)
 
 	return New(module, uint(slotid), pin, id, label)
-}
-
-func ecKeyToArray(key *ecdsa.PublicKey) []byte {
-	x := make([]byte, 32)
-	y := make([]byte, 32)
-	key.X.FillBytes(x)
-	key.Y.FillBytes(y)
-	return append([]byte{0x04}, append(x, y...)...)
-}
-
-func formatPubkeyFromPublicKeyInfoAttr(d []byte) ([]byte, error) {
-	e, err := x509.ParsePKIXPublicKey(d)
-	if err != nil {
-		return nil, err
-	}
-	switch t := e.(type) {
-	case *ecdsa.PublicKey:
-		return ecKeyToArray(e.(*ecdsa.PublicKey)), nil
-	default:
-		return nil, fmt.Errorf("unknown public key type: %T", t)
-	}
 }
 
 func (c *PKClient) Test() error {

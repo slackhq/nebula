@@ -81,7 +81,7 @@ func parseArgonParameters(memory uint, parallelism uint, iterations uint) (*cert
 	return cert.NewArgon2Parameters(uint32(memory), uint8(parallelism), uint32(iterations)), nil
 }
 
-func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error {
+func ca(args []string, out io.Writer, _ io.Writer, pr PasswordReader) error {
 	cf := newCaFlags()
 	err := cf.set.Parse(args)
 	if err != nil {

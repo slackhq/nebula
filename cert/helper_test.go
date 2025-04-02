@@ -21,6 +21,9 @@ func NewTestCaCert(version Version, curve Curve, before, after time.Time, networ
 	switch curve {
 	case Curve_CURVE25519:
 		pub, priv, err = ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			panic(err)
+		}
 	case Curve_P256:
 		privk, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {

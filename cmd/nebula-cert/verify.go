@@ -1,12 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/slackhq/nebula/cert"
@@ -52,7 +52,7 @@ func verify(args []string, out io.Writer, errOut io.Writer) error {
 			return fmt.Errorf("error while adding ca cert to pool: %w", err)
 		}
 
-		if rawCACert == nil || len(rawCACert) == 0 || strings.TrimSpace(string(rawCACert)) == "" {
+		if len(rawCACert) == 0 || len(bytes.TrimSpace(rawCACert)) == 0 {
 			break
 		}
 	}

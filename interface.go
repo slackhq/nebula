@@ -266,7 +266,7 @@ func (f *Interface) listenOut(i int) {
 	plaintext := make([]byte, udp.MTU)
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 
 	li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
 		f.readOutsidePackets(fromUdpAddr, nil, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
@@ -279,7 +279,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
@@ -322,7 +322,7 @@ func (f *Interface) reloadDisconnectInvalid(c *config.C) {
 
 func (f *Interface) reloadFirewall(c *config.C) {
 	//TODO: need to trigger/detect if the certificate changed too
-	if c.HasChanged("firewall") == false {
+	if !c.HasChanged("firewall") {
 		f.l.Debug("No firewall config change detected")
 		return
 	}
@@ -424,7 +424,7 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 
 			certState := f.pki.getCertState()
 			defaultCrt := certState.GetDefaultCertificate()
-			certExpirationGauge.Update(int64(defaultCrt.NotAfter().Sub(time.Now()) / time.Second))
+			certExpirationGauge.Update(int64(time.Until(defaultCrt.NotAfter()) / time.Second))
 			certInitiatingVersion.Update(int64(defaultCrt.Version()))
 
 			// Report the max certificate version we are capable of using

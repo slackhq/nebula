@@ -484,12 +484,12 @@ func Test_findNetworkUnion(t *testing.T) {
 	assert.Equal(t, out, afe81)
 
 	//falsey cases
-	out, ok = findNetworkUnion([]netip.Prefix{oneSevenTwo, fe80}, []netip.Addr{a1})
+	_, ok = findNetworkUnion([]netip.Prefix{oneSevenTwo, fe80}, []netip.Addr{a1})
 	assert.False(t, ok)
-	out, ok = findNetworkUnion([]netip.Prefix{fc00, fe80}, []netip.Addr{a1})
+	_, ok = findNetworkUnion([]netip.Prefix{fc00, fe80}, []netip.Addr{a1})
 	assert.False(t, ok)
-	out, ok = findNetworkUnion([]netip.Prefix{oneSevenTwo, fc00}, []netip.Addr{a1, afe81})
+	_, ok = findNetworkUnion([]netip.Prefix{oneSevenTwo, fc00}, []netip.Addr{a1, afe81})
 	assert.False(t, ok)
-	out, ok = findNetworkUnion([]netip.Prefix{fc00}, []netip.Addr{a1, afe81})
+	_, ok = findNetworkUnion([]netip.Prefix{fc00}, []netip.Addr{a1, afe81})
 	assert.False(t, ok)
 }

@@ -23,7 +23,6 @@ type SSHServer struct {
 	trustedCAs  []ssh.PublicKey
 
 	// List of available commands
-	helpCommand *Command
 	commands    *radix.Tree
 	listener    net.Listener
 
@@ -43,7 +42,7 @@ func NewSSHServer(l *logrus.Entry) (*SSHServer, error) {
 		conns:       make(map[int]*session),
 	}
 
-	cc := ssh.CertChecker{
+	cc := &ssh.CertChecker{
 		IsUserAuthority: func(auth ssh.PublicKey) bool {
 			for _, ca := range s.trustedCAs {
 				if bytes.Equal(ca.Marshal(), auth.Marshal()) {
@@ -77,10 +76,11 @@ func NewSSHServer(l *logrus.Entry) (*SSHServer, error) {
 
 		},
 	}
+	s.certChecker = cc
 
 	s.config = &ssh.ServerConfig{
 		PublicKeyCallback: cc.Authenticate,
-		ServerVersion:     fmt.Sprintf("SSH-2.0-Nebula???"),
+		ServerVersion:     "SSH-2.0-Nebula???",
 	}
 
 	s.RegisterCommand(&Command{

@@ -170,7 +170,6 @@ func (s *session) dispatchCommand(line string, w StringWriter) {
 	}
 
 	_ = execCommand(c, args[1:], w)
-	return
 }
 
 func (s *session) Close() {

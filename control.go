@@ -215,7 +215,7 @@ func (c *Control) CloseTunnel(vpnIp netip.Addr, localOnly bool) bool {
 			hostInfo.ConnectionState,
 			hostInfo,
 			[]byte{},
-			make([]byte, 12, 12),
+			make([]byte, 12),
 			make([]byte, mtu),
 		)
 	}
@@ -231,7 +231,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 		if excludeLighthouses && c.f.lightHouse.IsAnyLighthouseAddr(h.vpnAddrs) {
 			return
 		}
-		c.f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+		c.f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12), make([]byte, mtu))
 		c.f.closeTunnel(h)
 
 		c.l.WithField("vpnAddrs", h.vpnAddrs).WithField("udpAddr", h.remote).
@@ -282,9 +282,7 @@ func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {
 		CurrentRemote:          h.remote,
 	}
 
-	for i, a := range h.vpnAddrs {
-		chi.VpnAddrs[i] = a
-	}
+	copy(chi.VpnAddrs, h.vpnAddrs)
 
 	if h.ConnectionState != nil {
 		chi.MessageCounter = h.ConnectionState.messageCounter.Load()

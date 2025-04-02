@@ -69,7 +69,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	punchy := NewPunchyFromConfig(l, config.NewC(l))
 	nc := newConnectionManager(ctx, l, ifce, 5, 10, punchy)
 	p := []byte("")
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 	out := make([]byte, mtu)
 
 	// Add an ip we have established a connection w/ to hostmap
@@ -151,7 +151,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	punchy := NewPunchyFromConfig(l, config.NewC(l))
 	nc := newConnectionManager(ctx, l, ifce, 5, 10, punchy)
 	p := []byte("")
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 	out := make([]byte, mtu)
 
 	// Add an ip we have established a connection w/ to hostmap
@@ -241,7 +241,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	require.NoError(t, err)
 
 	cachedPeerCert, err := ncp.VerifyCertificate(now.Add(time.Second), peerCert)
-
+	require.NoError(t, err)
 	cs := &CertState{
 		privateKey:       []byte{},
 		v1Cert:           &dummyCert{},

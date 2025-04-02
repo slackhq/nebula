@@ -7,10 +7,10 @@ import "errors"
 type PKClient struct {
 }
 
-var notImplemented = errors.New("not implemented")
+var errNotImplemented = errors.New("not implemented")
 
 func New(hsmPath string, slotId uint, pin string, id string, label string) (*PKClient, error) {
-	return nil, notImplemented
+	return nil, errNotImplemented
 }
 
 func (c *PKClient) Close() error {
@@ -18,13 +18,13 @@ func (c *PKClient) Close() error {
 }
 
 func (c *PKClient) SignASN1(data []byte) ([]byte, error) {
-	return nil, notImplemented
+	return nil, errNotImplemented
 }
 
 func (c *PKClient) DeriveNoise(_ []byte) ([]byte, error) {
-	return nil, notImplemented
+	return nil, errNotImplemented
 }
 
 func (c *PKClient) GetPubKey() ([]byte, error) {
-	return nil, notImplemented
+	return nil, errNotImplemented
 }

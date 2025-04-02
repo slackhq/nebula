@@ -1,12 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/skip2/go-qrcode"
 	"github.com/slackhq/nebula/cert"
@@ -29,7 +29,7 @@ func newPrintFlags() *printFlags {
 	return &pf
 }
 
-func printCert(args []string, out io.Writer, errOut io.Writer) error {
+func printCert(args []string, out io.Writer, _ io.Writer) error {
 	pf := newPrintFlags()
 	err := pf.set.Parse(args)
 	if err != nil {
@@ -72,7 +72,7 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 			qrBytes = append(qrBytes, b...)
 		}
 
-		if rawCert == nil || len(rawCert) == 0 || strings.TrimSpace(string(rawCert)) == "" {
+		if len(rawCert) == 0 || len(bytes.TrimSpace(rawCert)) == 0 {
 			break
 		}
 

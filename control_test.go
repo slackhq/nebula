@@ -26,13 +26,11 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	remote2 := netip.MustParseAddrPort("[1:2:3:4:5:6:7:8]:4444")
 
 	ipNet := net.IPNet{
-		IP:   remote1.Addr().AsSlice(),
-		Mask: net.IPMask{255, 255, 255, 0},
+		IP: remote1.Addr().AsSlice(),
 	}
 
 	ipNet2 := net.IPNet{
-		IP:   remote2.Addr().AsSlice(),
-		Mask: net.IPMask{255, 255, 255, 0},
+		IP: remote2.Addr().AsSlice(),
 	}
 
 	remotes := NewRemoteList([]netip.Addr{netip.IPv4Unspecified()}, nil)
