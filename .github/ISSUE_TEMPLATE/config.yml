@@ -1,13 +1,21 @@
 blank_issues_enabled: true
 contact_links:
+  - name: 💨 Performance Issues
+    url: https://github.com/slackhq/nebula/discussions/new/choose
+    about: 'We ask that you create a discussion instead of an issue for performance-related questions. This allows us to have a more open conversation about the issue and helps us to better understand the problem.'
+
+  - name: 📄 Documentation Issues
+    url: https://github.com/definednet/nebula-docs
+    about: "If you've found an issue with the website documentation, please file it in the nebula-docs repository."
+
+  - name: 📱 Mobile Nebula Issues
+    url: https://github.com/definednet/mobile_nebula
+    about: "If you're using the mobile Nebula app and have found an issue, please file it in the mobile_nebula repository."
+
   - name: 📘 Documentation
     url: https://nebula.defined.net/docs/
-    about: Review documentation.
+    about: 'The documentation is the best place to start if you are new to Nebula.'
 
   - name: 💁 Support/Chat
     url: https://join.slack.com/t/nebulaoss/shared_invite/enQtOTA5MDI4NDg3MTg4LTkwY2EwNTI4NzQyMzc0M2ZlODBjNWI3NTY1MzhiOThiMmZlZjVkMTI0NGY4YTMyNjUwMWEyNzNkZTJmYzQxOGU
-    about: 'This issue tracker is not for support questions. Join us on Slack for assistance!'
-
-  - name: 📱 Mobile Nebula
-    url: https://github.com/definednet/mobile_nebula
-    about: 'This issue tracker is not for mobile support. Try the Mobile Nebula repo instead!'
+    about: 'For faster support, join us on Slack for assistance!'
