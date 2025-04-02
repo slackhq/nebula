@@ -65,7 +65,7 @@ func newConnectionManager(ctx context.Context, l *logrus.Logger, intf *Interface
 		outLock:                 synctrace.NewRWMutex("connection-manager-out"),
 		relayUsed:               make(map[uint32]struct{}),
 		relayUsedLock:           synctrace.NewRWMutex("connection-manager-relay-used"),
-		trafficTimer:            NewLockingTimerWheel[uint32](time.Millisecond*500, max),
+		trafficTimer:            NewLockingTimerWheel[uint32]("traffic-timer", time.Millisecond*500, max),
 		intf:                    intf,
 		pendingDeletion:         make(map[uint32]struct{}),
 		checkInterval:           checkInterval,

@@ -11,12 +11,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"dario.cat/mergo"
 	"github.com/sirupsen/logrus"
+	"github.com/wadey/synctrace"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,13 +27,14 @@ type C struct {
 	oldSettings map[string]any
 	callbacks   []func(*C)
 	l           *logrus.Logger
-	reloadLock  sync.Mutex
+	reloadLock  synctrace.Mutex
 }
 
 func NewC(l *logrus.Logger) *C {
 	return &C{
-		Settings: make(map[string]any),
-		l:        l,
+		Settings:   make(map[string]any),
+		l:          l,
+		reloadLock: synctrace.NewMutex("config-reload"),
 	}
 }
 

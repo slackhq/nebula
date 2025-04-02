@@ -6,12 +6,12 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/gaissmai/bart"
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/wadey/synctrace"
 )
 
 // This whole thing should be rewritten to use context
@@ -21,7 +21,7 @@ var dnsServer *dns.Server
 var dnsAddr string
 
 type dnsRecords struct {
-	sync.RWMutex
+	synctrace.RWMutex
 	l               *logrus.Logger
 	dnsMap4         map[string]netip.Addr
 	dnsMap6         map[string]netip.Addr
@@ -31,6 +31,7 @@ type dnsRecords struct {
 
 func newDnsRecords(l *logrus.Logger, cs *CertState, hostMap *HostMap) *dnsRecords {
 	return &dnsRecords{
+		RWMutex:         synctrace.NewRWMutex("dns-records"),
 		l:               l,
 		dnsMap4:         make(map[string]netip.Addr),
 		dnsMap6:         make(map[string]netip.Addr),

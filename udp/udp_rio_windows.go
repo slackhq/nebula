@@ -11,13 +11,13 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/wadey/synctrace"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/conn/winrio"
 )
@@ -46,7 +46,7 @@ type ringBuffer struct {
 	iocp       windows.Handle
 	isFull     bool
 	cq         winrio.Cq
-	mu         sync.Mutex
+	mu         synctrace.Mutex
 	overlapped windows.Overlapped
 }
 
@@ -64,7 +64,11 @@ func NewRIOListener(l *logrus.Logger, addr netip.Addr, port int) (*RIOConn, erro
 		return nil, errors.New("could not initialize winrio")
 	}
 
-	u := &RIOConn{l: l}
+	u := &RIOConn{
+		l:  l,
+		rx: ringBuffer{mu: synctrace.NewMutex("rio-rx")},
+		tx: ringBuffer{mu: synctrace.NewMutex("rio-tx")},
+	}
 
 	err := u.bind(&windows.SockaddrInet6{Addr: addr.As16(), Port: port})
 	if err != nil {

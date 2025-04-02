@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 
 	"github.com/armon/go-radix"
 	"github.com/sirupsen/logrus"
+	"github.com/wadey/synctrace"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -28,7 +28,7 @@ type SSHServer struct {
 	listener    net.Listener
 
 	// Locks the conns/counter to avoid concurrent map access
-	connsLock sync.Mutex
+	connsLock synctrace.Mutex
 	conns     map[int]*session
 	counter   int
 }
@@ -41,6 +41,7 @@ func NewSSHServer(l *logrus.Entry) (*SSHServer, error) {
 		l:           l,
 		commands:    radix.New(),
 		conns:       make(map[int]*session),
+		connsLock:   synctrace.NewMutex("ssh-server-conns"),
 	}
 
 	cc := ssh.CertChecker{

@@ -10,7 +10,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gaissmai/bart"
@@ -19,6 +18,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
+	"github.com/wadey/synctrace"
 )
 
 type FirewallInterface interface {
@@ -76,7 +76,7 @@ type firewallMetrics struct {
 }
 
 type FirewallConntrack struct {
-	sync.Mutex
+	synctrace.Mutex
 
 	Conns      map[firewall.Packet]*conn
 	TimerWheel *TimerWheel[firewall.Packet]
@@ -164,6 +164,7 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 
 	return &Firewall{
 		Conntrack: &FirewallConntrack{
+			Mutex:      synctrace.NewMutex("firewall-conntrack"),
 			Conns:      make(map[firewall.Packet]*conn),
 			TimerWheel: NewTimerWheel[firewall.Packet](tmin, tmax),
 		},

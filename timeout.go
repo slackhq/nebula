@@ -1,8 +1,9 @@
 package nebula
 
 import (
-	"sync"
 	"time"
+
+	"github.com/wadey/synctrace"
 )
 
 // How many timer objects should be cached
@@ -34,7 +35,7 @@ type TimerWheel[T any] struct {
 }
 
 type LockingTimerWheel[T any] struct {
-	m sync.Mutex
+	m synctrace.Mutex
 	t *TimerWheel[T]
 }
 
@@ -81,8 +82,9 @@ func NewTimerWheel[T any](min, max time.Duration) *TimerWheel[T] {
 }
 
 // NewLockingTimerWheel is version of TimerWheel that is safe for concurrent use with a small performance penalty
-func NewLockingTimerWheel[T any](min, max time.Duration) *LockingTimerWheel[T] {
+func NewLockingTimerWheel[T any](name string, min, max time.Duration) *LockingTimerWheel[T] {
 	return &LockingTimerWheel[T]{
+		m: synctrace.NewMutex(name),
 		t: NewTimerWheel[T](min, max),
 	}
 }
