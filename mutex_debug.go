@@ -19,18 +19,18 @@ type mutexKey = string
 // in the same order, to prevent deadlocks.
 var allowedConcurrentLocks = map[mutexKey][]mutexKey{
 	"connection-manager-in":         {"hostmap"},
-	"connection-manager-out":        {"connection-state-write", "connection-manager-in"},
+	"connection-manager-out":        {"connection-manager-in", "handshake-hostinfo", "handshake-manager"},
 	"connection-manager-relay-used": {"handshake-hostinfo"},
 	"connection-manager-timer":      {"connection-manager-out"},
-	"connection-state-write":        {"hostmap"},
-	"firewall-conntrack":            {"handshake-hostinfo"},
-	"handshake-manager":             {"hostmap"},
-	"handshake-manager-timer":       {"handshake-manager"},
-	"hostmap":                       {"handshake-hostinfo", "lighthouse-query-chan"},
-	"lighthouse":                    {"handshake-manager"},
-	"relay-state":                   {"hostmap", "connection-manager-relay-used"},
-	"remote-list":                   {"lighthouse"},
-	"lighthouse-query-chan":         {"handshake-hostinfo"},
+	// "connection-state-write":        {"hostmap"},
+	"firewall-conntrack":      {"handshake-hostinfo"},
+	"handshake-manager":       {"handshake-hostinfo", "hostmap"},
+	"handshake-manager-timer": {"handshake-manager"},
+	"hostmap":                 {"lighthouse-query-chan", "handshake-hostinfo"},
+	"lighthouse":              {"handshake-hostinfo"},
+	"relay-state":             {"connection-manager-relay-used", "hostmap"},
+	"remote-list":             {"lighthouse", "handshake-manager"},
+	"lighthouse-query-chan":   {"handshake-hostinfo"},
 }
 
 type mutexValue struct {
@@ -42,7 +42,7 @@ func (m mutexValue) String() string {
 	return fmt.Sprintf("%s:%d", m.file, m.line)
 }
 
-var threadLocal routine.ThreadLocal = routine.NewThreadLocalWithInitial(func() any { return map[mutexKey]mutexValue{} })
+var threadLocal = routine.NewThreadLocalWithInitial[map[mutexKey]mutexValue](func() map[mutexKey]mutexValue { return map[mutexKey]mutexValue{} })
 
 var allowedDAG dag.AcyclicGraph
 
@@ -137,7 +137,7 @@ func checkMutex(state map[mutexKey]mutexValue, add mutexKey) {
 }
 
 func chanDebugRecv(key mutexKey) {
-	m := threadLocal.Get().(map[mutexKey]mutexValue)
+	m := threadLocal.Get()
 	checkMutex(m, key)
 	v := mutexValue{}
 	_, v.file, v.line, _ = runtime.Caller(1)
@@ -145,12 +145,12 @@ func chanDebugRecv(key mutexKey) {
 }
 
 func chanDebugSend(key mutexKey) {
-	m := threadLocal.Get().(map[mutexKey]mutexValue)
+	m := threadLocal.Get()
 	checkMutex(m, key)
 }
 
 func (s *syncRWMutex) Lock() {
-	m := threadLocal.Get().(map[mutexKey]mutexValue)
+	m := threadLocal.Get()
 	checkMutex(m, s.mutexKey)
 	v := mutexValue{}
 	_, v.file, v.line, _ = runtime.Caller(1)
@@ -159,13 +159,13 @@ func (s *syncRWMutex) Lock() {
 }
 
 func (s *syncRWMutex) Unlock() {
-	m := threadLocal.Get().(map[mutexKey]mutexValue)
+	m := threadLocal.Get()
 	delete(m, s.mutexKey)
 	s.RWMutex.Unlock()
 }
 
 func (s *syncRWMutex) RLock() {
-	m := threadLocal.Get().(map[mutexKey]mutexValue)
+	m := threadLocal.Get()
 	checkMutex(m, s.mutexKey)
 	v := mutexValue{}
 	_, v.file, v.line, _ = runtime.Caller(1)
@@ -174,13 +174,13 @@ func (s *syncRWMutex) RLock() {
 }
 
 func (s *syncRWMutex) RUnlock() {
-	m := threadLocal.Get().(map[mutexKey]mutexValue)
+	m := threadLocal.Get()
 	delete(m, s.mutexKey)
 	s.RWMutex.RUnlock()
 }
 
 func (s *syncMutex) Lock() {
-	m := threadLocal.Get().(map[mutexKey]mutexValue)
+	m := threadLocal.Get()
 	checkMutex(m, s.mutexKey)
 	v := mutexValue{}
 	_, v.file, v.line, _ = runtime.Caller(1)
@@ -189,7 +189,7 @@ func (s *syncMutex) Lock() {
 }
 
 func (s *syncMutex) Unlock() {
-	m := threadLocal.Get().(map[mutexKey]mutexValue)
+	m := threadLocal.Get()
 	delete(m, s.mutexKey)
 	s.Mutex.Unlock()
 }
