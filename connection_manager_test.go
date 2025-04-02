@@ -44,7 +44,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	hostMap.preferredRanges.Store(&preferredRanges)
 
 	cs := &CertState{
-		defaultVersion:   cert.Version1,
+		outgoingVersion:  cert.Version1,
 		privateKey:       []byte{},
 		v1Cert:           &dummyCert{version: cert.Version1},
 		v1HandshakeBytes: []byte{},
@@ -126,7 +126,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	hostMap.preferredRanges.Store(&preferredRanges)
 
 	cs := &CertState{
-		defaultVersion:   cert.Version1,
+		outgoingVersion:  cert.Version1,
 		privateKey:       []byte{},
 		v1Cert:           &dummyCert{version: cert.Version1},
 		v1HandshakeBytes: []byte{},

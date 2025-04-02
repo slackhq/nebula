@@ -25,7 +25,7 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 
 	// If we're connecting to a v6 address we must use a v2 cert
 	cs := f.pki.getCertState()
-	v := cs.defaultVersion
+	v := cs.outgoingVersion
 	for _, a := range hh.hostinfo.vpnAddrs {
 		if a.Is6() {
 			v = cert.Version2
@@ -101,7 +101,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 	if crt == nil {
 		f.l.WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).
-			WithField("certVersion", cs.defaultVersion).
+			WithField("certVersion", cs.outgoingVersion).
 			Error("Unable to handshake with host because no certificate is available")
 	}
 
