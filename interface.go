@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"os"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -88,6 +88,7 @@ type Interface struct {
 
 	writers []udp.Conn
 	readers []io.ReadWriteCloser
+	wg      sync.WaitGroup
 
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
@@ -210,7 +211,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 // activate creates the interface on the host. After the interface is created, any
 // other services that want to bind listeners to its IP may do so successfully. However,
 // the interface isn't going to process anything until run() is called.
-func (f *Interface) activate() {
+func (f *Interface) activate() error {
 	// actually turn on tun dev
 
 	addr, err := f.outside.LocalAddr()
@@ -238,28 +239,34 @@ func (f *Interface) activate() {
 		if i > 0 {
 			reader, err = f.inside.NewMultiQueueReader()
 			if err != nil {
-				f.l.Fatal(err)
+				return err
 			}
 		}
 		f.readers[i] = reader
 	}
 
-	if err := f.inside.Activate(); err != nil {
+	if err = f.inside.Activate(); err != nil {
 		f.inside.Close()
-		f.l.Fatal(err)
+		return err
 	}
+
+	return nil
 }
 
-func (f *Interface) run() {
+func (f *Interface) run() (func(), error) {
 	// Launch n queues to read packets from udp
 	for i := 0; i < f.routines; i++ {
 		go f.listenOut(i)
+		f.wg.Add(1)
 	}
 
 	// Launch n queues to read packets from tun dev
 	for i := 0; i < f.routines; i++ {
 		go f.listenIn(f.readers[i], i)
+		f.wg.Add(1)
 	}
+
+	return f.wg.Wait, nil
 }
 
 func (f *Interface) listenOut(i int) {
@@ -282,6 +289,8 @@ func (f *Interface) listenOut(i int) {
 	li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
 		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
 	})
+
+	f.wg.Done()
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
@@ -297,17 +306,16 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	for {
 		n, err := reader.Read(packet)
 		if err != nil {
-			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
-				return
+			if !f.closed.Load() {
+				f.l.WithError(err).Error("Error while reading outbound packet")
 			}
-
-			f.l.WithError(err).Error("Error while reading outbound packet")
-			// This only seems to happen when something fatal happens to the fd, so exit.
-			os.Exit(2)
+			break
 		}
 
 		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
 	}
+
+	f.wg.Done()
 }
 
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
