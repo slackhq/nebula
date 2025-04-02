@@ -9,13 +9,13 @@ import (
 	"github.com/armon/go-radix"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 )
 
 type session struct {
 	l        *logrus.Entry
 	c        *ssh.ServerConn
-	term     *terminal.Terminal
+	term     *term.Terminal
 	commands *radix.Tree
 	exitChan chan bool
 }
@@ -106,8 +106,8 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 	}
 }
 
-func (s *session) createTerm(channel ssh.Channel) *terminal.Terminal {
-	term := terminal.NewTerminal(channel, s.c.User()+"@nebula > ")
+func (s *session) createTerm(channel ssh.Channel) *term.Terminal {
+	term := term.NewTerminal(channel, s.c.User()+"@nebula > ")
 	term.AutoCompleteCallback = func(line string, pos int, key rune) (newLine string, newPos int, ok bool) {
 		// key 9 is tab
 		if key == 9 {
