@@ -5,11 +5,11 @@ package router
 
 import (
 	"fmt"
+	"net/netip"
 	"sort"
 	"strings"
 
 	"github.com/slackhq/nebula"
-	"github.com/slackhq/nebula/iputil"
 )
 
 type edge struct {
@@ -58,8 +58,9 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 	var lines []string
 	var globalLines []*edge
 
-	clusterName := strings.Trim(c.GetCert().Details.Name, " ")
-	clusterVpnIp := c.GetCert().Details.Ips[0].IP
+	crt := c.GetCertState().GetDefaultCertificate()
+	clusterName := strings.Trim(crt.Name(), " ")
+	clusterVpnIp := crt.Networks()[0].Addr()
 	r := fmt.Sprintf("\tsubgraph %s[\"%s (%s)\"]\n", clusterName, clusterName, clusterVpnIp)
 
 	hm := c.GetHostmap()
@@ -101,8 +102,8 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 	for _, idx := range indexes {
 		hi, ok := hm.Indexes[idx]
 		if ok {
-			r += fmt.Sprintf("\t\t\t%v.%v[\"%v (%v)\"]\n", clusterName, idx, idx, hi.GetVpnIp())
-			remoteClusterName := strings.Trim(hi.GetCert().Details.Name, " ")
+			r += fmt.Sprintf("\t\t\t%v.%v[\"%v (%v)\"]\n", clusterName, idx, idx, hi.GetVpnAddrs())
+			remoteClusterName := strings.Trim(hi.GetCert().Certificate.Name(), " ")
 			globalLines = append(globalLines, &edge{from: fmt.Sprintf("%v.%v", clusterName, idx), to: fmt.Sprintf("%v.%v", remoteClusterName, hi.GetRemoteIndex())})
 			_ = hi
 		}
@@ -118,14 +119,14 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 	return r, globalLines
 }
 
-func sortedHosts(hosts map[iputil.VpnIp]*nebula.HostInfo) []iputil.VpnIp {
-	keys := make([]iputil.VpnIp, 0, len(hosts))
+func sortedHosts(hosts map[netip.Addr]*nebula.HostInfo) []netip.Addr {
+	keys := make([]netip.Addr, 0, len(hosts))
 	for key := range hosts {
 		keys = append(keys, key)
 	}
 
 	sort.SliceStable(keys, func(i, j int) bool {
-		return keys[i] > keys[j]
+		return keys[i].Compare(keys[j]) > 0
 	})
 
 	return keys

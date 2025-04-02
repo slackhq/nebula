@@ -45,28 +45,27 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 		return fmt.Errorf("unable to read cert; %s", err)
 	}
 
-	var c *cert.NebulaCertificate
+	var c cert.Certificate
 	var qrBytes []byte
 	part := 0
 
+	var jsonCerts []cert.Certificate
+
 	for {
-		c, rawCert, err = cert.UnmarshalNebulaCertificateFromPEM(rawCert)
+		c, rawCert, err = cert.UnmarshalCertificateFromPEM(rawCert)
 		if err != nil {
 			return fmt.Errorf("error while unmarshaling cert: %s", err)
 		}
 
 		if *pf.json {
-			b, _ := json.Marshal(c)
-			out.Write(b)
-			out.Write([]byte("\n"))
-
+			jsonCerts = append(jsonCerts, c)
 		} else {
-			out.Write([]byte(c.String()))
-			out.Write([]byte("\n"))
+			_, _ = out.Write([]byte(c.String()))
+			_, _ = out.Write([]byte("\n"))
 		}
 
 		if *pf.outQRPath != "" {
-			b, err := c.MarshalToPEM()
+			b, err := c.MarshalPEM()
 			if err != nil {
 				return fmt.Errorf("error while marshalling cert to PEM: %s", err)
 			}
@@ -78,6 +77,12 @@ func printCert(args []string, out io.Writer, errOut io.Writer) error {
 		}
 
 		part++
+	}
+
+	if *pf.json {
+		b, _ := json.Marshal(jsonCerts)
+		_, _ = out.Write(b)
+		_, _ = out.Write([]byte("\n"))
 	}
 
 	if *pf.outQRPath != "" {

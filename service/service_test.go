@@ -4,27 +4,23 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"net"
+	"net/netip"
 	"testing"
 	"time"
 
 	"dario.cat/mergo"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/e2e"
 	"golang.org/x/sync/errgroup"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
-type m map[string]interface{}
+type m = map[string]any
 
-func newSimpleService(caCrt *cert.NebulaCertificate, caKey []byte, name string, udpIp net.IP, overrides m) *Service {
-
-	vpnIpNet := &net.IPNet{IP: make([]byte, len(udpIp)), Mask: net.IPMask{255, 255, 255, 0}}
-	copy(vpnIpNet.IP, udpIp)
-
-	_, _, myPrivKey, myPEM := e2e.NewTestCert(caCrt, caKey, "a", time.Now(), time.Now().Add(5*time.Minute), vpnIpNet, nil, []string{})
-	caB, err := caCrt.MarshalToPEM()
+func newSimpleService(caCrt cert.Certificate, caKey []byte, name string, udpIp netip.Addr, overrides m) *Service {
+	_, _, myPrivKey, myPEM := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, caCrt, caKey, "a", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{netip.PrefixFrom(udpIp, 24)}, nil, []string{})
+	caB, err := caCrt.MarshalPEM()
 	if err != nil {
 		panic(err)
 	}
@@ -83,8 +79,8 @@ func newSimpleService(caCrt *cert.NebulaCertificate, caKey []byte, name string, 
 }
 
 func TestService(t *testing.T) {
-	ca, _, caKey, _ := e2e.NewTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
-	a := newSimpleService(ca, caKey, "a", net.IP{10, 0, 0, 1}, m{
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	a := newSimpleService(ca, caKey, "a", netip.MustParseAddr("10.0.0.1"), m{
 		"static_host_map": m{},
 		"lighthouse": m{
 			"am_lighthouse": true,
@@ -94,7 +90,7 @@ func TestService(t *testing.T) {
 			"port": 4243,
 		},
 	})
-	b := newSimpleService(ca, caKey, "b", net.IP{10, 0, 0, 2}, m{
+	b := newSimpleService(ca, caKey, "b", netip.MustParseAddr("10.0.0.2"), m{
 		"static_host_map": m{
 			"10.0.0.1": []string{"localhost:4243"},
 		},

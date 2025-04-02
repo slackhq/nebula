@@ -5,10 +5,12 @@ package nebula
 
 // This file contains functions used to export information to the e2e testing framework
 
-import "github.com/slackhq/nebula/iputil"
+import (
+	"net/netip"
+)
 
-func (i *HostInfo) GetVpnIp() iputil.VpnIp {
-	return i.vpnIp
+func (i *HostInfo) GetVpnAddrs() []netip.Addr {
+	return i.vpnAddrs
 }
 
 func (i *HostInfo) GetLocalIndex() uint32 {

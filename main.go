@@ -2,9 +2,9 @@ package nebula
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -13,10 +13,10 @@ import (
 	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
-type m map[string]interface{}
+type m = map[string]any
 
 func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -60,15 +60,11 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		return nil, util.ContextualizeIfNeeded("Failed to load PKI from config", err)
 	}
 
-	certificate := pki.GetCertState().Certificate
-	fw, err := NewFirewallFromConfig(l, certificate, c)
+	fw, err := NewFirewallFromConfig(l, pki.getCertState(), c)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while loading firewall rules", err)
 	}
 	l.WithField("firewallHashes", fw.GetRuleHashes()).Info("Firewall started")
-
-	// TODO: make sure mask is 4 bytes
-	tunCidr := certificate.Details.Ips[0]
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
 	if err != nil {
@@ -132,7 +128,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			deviceFactory = overlay.NewDeviceFromConfig
 		}
 
-		tun, err = deviceFactory(c, l, tunCidr, routines)
+		tun, err = deviceFactory(c, l, pki.getCertState().myVpnNetworks, routines)
 		if err != nil {
 			return nil, util.ContextualizeIfNeeded("Failed to get a tun/tap device", err)
 		}
@@ -150,21 +146,25 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	if !configTest {
 		rawListenHost := c.GetString("listen.host", "0.0.0.0")
-		var listenHost *net.IPAddr
+		var listenHost netip.Addr
 		if rawListenHost == "[::]" {
 			// Old guidance was to provide the literal `[::]` in `listen.host` but that won't resolve.
-			listenHost = &net.IPAddr{IP: net.IPv6zero}
+			listenHost = netip.IPv6Unspecified()
 
 		} else {
-			listenHost, err = net.ResolveIPAddr("ip", rawListenHost)
+			ips, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", rawListenHost)
 			if err != nil {
 				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
 			}
+			if len(ips) == 0 {
+				return nil, util.ContextualizeIfNeeded("Failed to resolve listen.host", err)
+			}
+			listenHost = ips[0].Unmap()
 		}
 
 		for i := 0; i < routines; i++ {
-			l.Infof("listening %q %d", listenHost.IP, port)
-			udpServer, err := udp.NewListener(l, listenHost.IP, port, routines > 1, c.GetInt("listen.batch", 64))
+			l.Infof("listening on %v", netip.AddrPortFrom(listenHost, uint16(port)))
+			udpServer, err := udp.NewListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
@@ -178,14 +178,14 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 				if err != nil {
 					return nil, util.NewContextualError("Failed to get listening port", nil, err)
 				}
-				port = int(uPort.Port)
+				port = int(uPort.Port())
 			}
 		}
 	}
 
-	hostMap := NewHostMapFromConfig(l, tunCidr, c)
+	hostMap := NewHostMapFromConfig(l, c)
 	punchy := NewPunchyFromConfig(l, c)
-	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, tunCidr, udpConns[0], punchy)
+	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, pki.getCertState(), udpConns[0], punchy)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to initialize lighthouse handler", err)
 	}
@@ -201,7 +201,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	handshakeConfig := HandshakeConfig{
 		tryInterval:   c.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
-		retries:       c.GetInt("handshakes.retries", DefaultHandshakeRetries),
+		retries:       int64(c.GetInt("handshakes.retries", DefaultHandshakeRetries)),
 		triggerBuffer: c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
 		useRelays:     useRelays,
 
@@ -228,7 +228,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		Inside:                  tun,
 		Outside:                 udpConns[0],
 		pki:                     pki,
-		Cipher:                  c.GetString("cipher", "aes"),
 		Firewall:                fw,
 		ServeDns:                serveDns,
 		HandshakeManager:        handshakeManager,
@@ -250,15 +249,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		l:                     l,
 	}
 
-	switch ifConfig.Cipher {
-	case "aes":
-		noiseEndianness = binary.BigEndian
-	case "chachapoly":
-		noiseEndianness = binary.LittleEndian
-	default:
-		return nil, fmt.Errorf("unknown cipher: %v", ifConfig.Cipher)
-	}
-
 	var ifce *Interface
 	if !configTest {
 		ifce, err = NewInterface(ctx, ifConfig)
@@ -266,8 +256,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			return nil, fmt.Errorf("failed to initialize interface: %s", err)
 		}
 
-		// TODO: Better way to attach these, probably want a new interface in InterfaceConfig
-		// I don't want to make this initial commit too far-reaching though
 		ifce.writers = udpConns
 		lightHouse.ifce = ifce
 
@@ -279,8 +267,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		go handshakeManager.Run(ctx)
 	}
 
-	// TODO - stats third-party modules start uncancellable goroutines. Update those libs to accept
-	// a context so that they can exit when the context is Done.
 	statsStart, err := startStats(l, c, buildVersion, configTest)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to start stats emitter", err)
@@ -290,7 +276,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		return nil, nil
 	}
 
-	//TODO: check if we _should_ be emitting stats
 	go ifce.emitStats(ctx, c.GetDuration("stats.interval", time.Second*10))
 
 	attachCommands(l, c, ssh, ifce)
@@ -299,7 +284,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	var dnsStart func()
 	if lightHouse.amLighthouse && serveDns {
 		l.Debugln("Starting dns server")
-		dnsStart = dnsMain(l, hostMap, c)
+		dnsStart = dnsMain(l, pki.getCertState(), hostMap, c)
 	}
 
 	return &Control{
