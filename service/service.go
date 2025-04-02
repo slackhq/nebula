@@ -9,10 +9,13 @@ import (
 	"math"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
 	"sync"
 
+	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay"
 	"golang.org/x/sync/errgroup"
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -43,8 +46,19 @@ type Service struct {
 	}
 }
 
-func New(control *nebula.Control) (*Service, error) {
-	control.Start()
+func New(config *config.C) (*Service, error) {
+	logger := logrus.New()
+	logger.Out = os.Stdout
+
+	control, err := nebula.Main(config, false, "custom-app", logger, overlay.NewUserDeviceFromConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	wait, err := control.Start()
+	if err != nil {
+		return nil, err
+	}
 
 	ctx := control.Context()
 	eg, ctx := errgroup.WithContext(ctx)
@@ -139,6 +153,12 @@ func New(control *nebula.Control) (*Service, error) {
 			}
 			bufView.Release()
 		}
+	})
+
+	// Add the nebula wait function to the group
+	eg.Go(func() error {
+		wait()
+		return nil
 	})
 
 	return &s, nil

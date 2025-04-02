@@ -284,14 +284,14 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 
 	return &Control{
-		ifce,
-		l,
-		ctx,
-		cancel,
-		sshStart,
-		statsStart,
-		dnsStart,
-		lightHouse.StartUpdateWorker,
-		connManager.Start,
+		f:                      ifce,
+		l:                      l,
+		ctx:                    ctx,
+		cancel:                 cancel,
+		sshStart:               sshStart,
+		statsStart:             statsStart,
+		dnsStart:               dnsStart,
+		lighthouseStart:        lightHouse.StartUpdateWorker,
+		connectionManagerStart: connManager.Start,
 	}, nil
 }
