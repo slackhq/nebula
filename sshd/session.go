@@ -9,13 +9,13 @@ import (
 	"github.com/armon/go-radix"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 )
 
 type session struct {
 	l        *logrus.Entry
 	c        *ssh.ServerConn
-	term     *terminal.Terminal
+	term     *term.Terminal
 	commands *radix.Tree
 	exitChan chan bool
 }
@@ -31,7 +31,7 @@ func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.New
 	s.commands.Insert("logout", &Command{
 		Name:             "logout",
 		ShortDescription: "Ends the current session",
-		Callback: func(a interface{}, args []string, w StringWriter) error {
+		Callback: func(a any, args []string, w StringWriter) error {
 			s.Close()
 			return nil
 		},
@@ -62,7 +62,6 @@ func (s *session) handleChannels(chans <-chan ssh.NewChannel) {
 func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 	for req := range in {
 		var err error
-		//TODO: maybe support window sizing?
 		switch req.Type {
 		case "shell":
 			if s.term == nil {
@@ -89,9 +88,7 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			req.Reply(true, nil)
 			s.dispatchCommand(payload.Value, &stringWriter{channel})
 
-			//TODO: Fix error handling and report the proper status back
 			status := struct{ Status uint32 }{uint32(0)}
-			//TODO: I think this is how we shut down a shell as well?
 			channel.SendRequest("exit-status", false, ssh.Marshal(status))
 			channel.Close()
 			return
@@ -109,9 +106,8 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 	}
 }
 
-func (s *session) createTerm(channel ssh.Channel) *terminal.Terminal {
-	//TODO: PS1 with nebula cert name
-	term := terminal.NewTerminal(channel, s.c.User()+"@nebula > ")
+func (s *session) createTerm(channel ssh.Channel) *term.Terminal {
+	term := term.NewTerminal(channel, s.c.User()+"@nebula > ")
 	term.AutoCompleteCallback = func(line string, pos int, key rune) (newLine string, newPos int, ok bool) {
 		// key 9 is tab
 		if key == 9 {
@@ -137,7 +133,6 @@ func (s *session) handleInput(channel ssh.Channel) {
 	for {
 		line, err := s.term.ReadLine()
 		if err != nil {
-			//TODO: log
 			break
 		}
 
@@ -148,7 +143,6 @@ func (s *session) handleInput(channel ssh.Channel) {
 func (s *session) dispatchCommand(line string, w StringWriter) {
 	args, err := shlex.Split(line, true)
 	if err != nil {
-		//todo: LOG IT
 		return
 	}
 
@@ -159,13 +153,11 @@ func (s *session) dispatchCommand(line string, w StringWriter) {
 
 	c, err := lookupCommand(s.commands, args[0])
 	if err != nil {
-		//TODO: handle the error
 		return
 	}
 
 	if c == nil {
 		err := w.WriteLine(fmt.Sprintf("did not understand: %s", line))
-		//TODO: log error
 		_ = err
 
 		dumpCommands(s.commands, w)
@@ -177,10 +169,7 @@ func (s *session) dispatchCommand(line string, w StringWriter) {
 		return
 	}
 
-	err = execCommand(c, args[1:], w)
-	if err != nil {
-		//TODO: log the error
-	}
+	_ = execCommand(c, args[1:], w)
 	return
 }
 

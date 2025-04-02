@@ -22,7 +22,7 @@ jobs:
 
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.22'
+        go-version: '1.24'
         check-latest: true
 
     - name: Build
@@ -30,6 +30,11 @@ jobs:
 
     - name: Vet
       run: make vet
+
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v7
+      with:
+        version: v2.0
 
     - name: Test
       run: make test
@@ -55,7 +60,7 @@ jobs:
 
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.22'
+        go-version: '1.24'
         check-latest: true
 
     - name: Build
@@ -65,14 +70,11 @@ jobs:
       run: make test-boringcrypto
 
     - name: End 2 end
-      run: make e2evv GOEXPERIMENT=boringcrypto CGO_ENABLED=1
+      run: make e2e GOEXPERIMENT=boringcrypto CGO_ENABLED=1 TEST_ENV="TEST_LOGS=1" TEST_FLAGS="-v -ldflags -checklinkname=0"
 
-  test:
-    name: Build and test on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [windows-latest, macos-11]
+  test-linux-pkcs11:
+    name: Build and test on linux with pkcs11
+    runs-on: ubuntu-latest
     steps:
 
     - uses: actions/checkout@v4
@@ -80,6 +82,27 @@ jobs:
     - uses: actions/setup-go@v5
       with:
         go-version: '1.22'
+        check-latest: true
+
+    - name: Build
+      run: make bin-pkcs11
+
+    - name: Test
+      run: make test-pkcs11
+
+  test:
+    name: Build and test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
         check-latest: true
 
     - name: Build nebula
@@ -90,6 +113,11 @@ jobs:
 
     - name: Vet
       run: make vet
+
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v7
+      with:
+        version: v2.0
 
     - name: Test
       run: make test

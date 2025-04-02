@@ -3,23 +3,23 @@ package test
 import (
 	"errors"
 	"io"
-	"net"
+	"net/netip"
 
-	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/routing"
 )
 
 type NoopTun struct{}
 
-func (NoopTun) RouteFor(iputil.VpnIp) iputil.VpnIp {
-	return 0
+func (NoopTun) RoutesFor(addr netip.Addr) routing.Gateways {
+	return routing.Gateways{}
 }
 
 func (NoopTun) Activate() error {
 	return nil
 }
 
-func (NoopTun) Cidr() *net.IPNet {
-	return nil
+func (NoopTun) Networks() []netip.Prefix {
+	return []netip.Prefix{}
 }
 
 func (NoopTun) Name() string {

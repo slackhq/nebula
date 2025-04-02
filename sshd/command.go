@@ -12,7 +12,7 @@ import (
 
 // CommandFlags is a function called before help or command execution to parse command line flags
 // It should return a flag.FlagSet instance and a pointer to the struct that will contain parsed flags
-type CommandFlags func() (*flag.FlagSet, interface{})
+type CommandFlags func() (*flag.FlagSet, any)
 
 // CommandCallback is the function called when your command should execute.
 // fs will be a a pointer to the struct provided by Command.Flags callback, if there was one. -h and -help are reserved
@@ -21,7 +21,7 @@ type CommandFlags func() (*flag.FlagSet, interface{})
 // w is the writer to use when sending messages back to the client.
 // If an error is returned by the callback it is logged locally, the callback should handle messaging errors to the user
 // where appropriate
-type CommandCallback func(fs interface{}, a []string, w StringWriter) error
+type CommandCallback func(fs any, a []string, w StringWriter) error
 
 type Command struct {
 	Name             string
@@ -34,7 +34,7 @@ type Command struct {
 func execCommand(c *Command, args []string, w StringWriter) error {
 	var (
 		fl *flag.FlagSet
-		fs interface{}
+		fs any
 	)
 
 	if c.Flags != nil {
@@ -57,7 +57,6 @@ func execCommand(c *Command, args []string, w StringWriter) error {
 func dumpCommands(c *radix.Tree, w StringWriter) {
 	err := w.WriteLine("Available commands:")
 	if err != nil {
-		//TODO: log
 		return
 	}
 
@@ -67,10 +66,7 @@ func dumpCommands(c *radix.Tree, w StringWriter) {
 	}
 
 	sort.Strings(cmds)
-	err = w.Write(strings.Join(cmds, "\n") + "\n\n")
-	if err != nil {
-		//TODO: log
-	}
+	_ = w.Write(strings.Join(cmds, "\n") + "\n\n")
 }
 
 func lookupCommand(c *radix.Tree, sCmd string) (*Command, error) {
@@ -89,7 +85,7 @@ func lookupCommand(c *radix.Tree, sCmd string) (*Command, error) {
 
 func matchCommand(c *radix.Tree, cmd string) []string {
 	cmds := make([]string, 0)
-	c.WalkPrefix(cmd, func(found string, v interface{}) bool {
+	c.WalkPrefix(cmd, func(found string, v any) bool {
 		cmds = append(cmds, found)
 		return false
 	})
@@ -99,7 +95,7 @@ func matchCommand(c *radix.Tree, cmd string) []string {
 
 func allCommands(c *radix.Tree) []*Command {
 	cmds := make([]*Command, 0)
-	c.WalkPrefix("", func(found string, v interface{}) bool {
+	c.WalkPrefix("", func(found string, v any) bool {
 		cmd, ok := v.(*Command)
 		if ok {
 			cmds = append(cmds, cmd)
@@ -119,8 +115,6 @@ func helpCallback(commands *radix.Tree, a []string, w StringWriter) (err error) 
 	// We are printing a specific commands help text
 	cmd, err := lookupCommand(commands, a[0])
 	if err != nil {
-		//TODO: handle error
-		//TODO: message the user
 		return
 	}
 

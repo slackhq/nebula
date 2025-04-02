@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -17,9 +18,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/firewall"
-	"github.com/slackhq/nebula/header"
-
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/conn/winrio"
 )
@@ -61,16 +59,14 @@ type RIOConn struct {
 	results [packetsPerRing]winrio.Result
 }
 
-func NewRIOListener(l *logrus.Logger, ip net.IP, port int) (*RIOConn, error) {
+func NewRIOListener(l *logrus.Logger, addr netip.Addr, port int) (*RIOConn, error) {
 	if !winrio.Initialize() {
 		return nil, errors.New("could not initialize winrio")
 	}
 
 	u := &RIOConn{l: l}
 
-	addr := [16]byte{}
-	copy(addr[:], ip.To16())
-	err := u.bind(&windows.SockaddrInet6{Addr: addr, Port: port})
+	err := u.bind(&windows.SockaddrInet6{Addr: addr.As16(), Port: port})
 	if err != nil {
 		return nil, fmt.Errorf("bind: %w", err)
 	}
@@ -119,13 +115,8 @@ func (u *RIOConn) bind(sa windows.Sockaddr) error {
 	return nil
 }
 
-func (u *RIOConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int) {
-	plaintext := make([]byte, MTU)
+func (u *RIOConn) ListenOut(r EncReader) {
 	buffer := make([]byte, MTU)
-	h := &header.H{}
-	fwPacket := &firewall.Packet{}
-	udpAddr := &Addr{IP: make([]byte, 16)}
-	nb := make([]byte, 12, 12)
 
 	for {
 		// Just read one packet at a time
@@ -135,11 +126,7 @@ func (u *RIOConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 			return
 		}
 
-		udpAddr.IP = rua.Addr[:]
-		p := (*[2]byte)(unsafe.Pointer(&udpAddr.Port))
-		p[0] = byte(rua.Port >> 8)
-		p[1] = byte(rua.Port)
-		r(udpAddr, plaintext[:0], buffer[:n], h, fwPacket, lhf, nb, q, cache.Get(u.l))
+		r(netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)), buffer[:n])
 	}
 }
 
@@ -231,7 +218,7 @@ retry:
 	return n, ep, nil
 }
 
-func (u *RIOConn) WriteTo(buf []byte, addr *Addr) error {
+func (u *RIOConn) WriteTo(buf []byte, ip netip.AddrPort) error {
 	if !u.isOpen.Load() {
 		return net.ErrClosed
 	}
@@ -274,10 +261,9 @@ func (u *RIOConn) WriteTo(buf []byte, addr *Addr) error {
 
 	packet := u.tx.Push()
 	packet.addr.Family = windows.AF_INET6
-	p := (*[2]byte)(unsafe.Pointer(&packet.addr.Port))
-	p[0] = byte(addr.Port >> 8)
-	p[1] = byte(addr.Port)
-	copy(packet.addr.Addr[:], addr.IP.To16())
+	packet.addr.Addr = ip.Addr().As16()
+	port := ip.Port()
+	packet.addr.Port = (port >> 8) | ((port & 0xff) << 8)
 	copy(packet.data[:], buf)
 
 	dataBuffer := &winrio.Buffer{
@@ -295,17 +281,15 @@ func (u *RIOConn) WriteTo(buf []byte, addr *Addr) error {
 	return winrio.SendEx(u.rq, dataBuffer, 1, nil, addressBuffer, nil, nil, 0, 0)
 }
 
-func (u *RIOConn) LocalAddr() (*Addr, error) {
+func (u *RIOConn) LocalAddr() (netip.AddrPort, error) {
 	sa, err := windows.Getsockname(u.sock)
 	if err != nil {
-		return nil, err
+		return netip.AddrPort{}, err
 	}
 
 	v6 := sa.(*windows.SockaddrInet6)
-	return &Addr{
-		IP:   v6.Addr[:],
-		Port: uint16(v6.Port),
-	}, nil
+	return netip.AddrPortFrom(netip.AddrFrom16(v6.Addr).Unmap(), uint16(v6.Port)), nil
+
 }
 
 func (u *RIOConn) Rebind() error {
