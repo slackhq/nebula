@@ -3,6 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"runtime/debug"
 	"strings"
@@ -70,6 +73,10 @@ func main() {
 		util.LogWithContextIfNeeded("Failed to start", err, l)
 		os.Exit(1)
 	}
+
+	go func() {
+		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
+	}()
 
 	if !*configTest {
 		wait, err := ctrl.Start()
