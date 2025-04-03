@@ -279,6 +279,7 @@ func (f *Interface) listenOut(i int) {
 		f.readOutsidePackets(fromUdpAddr, nil, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
 	})
 
+	f.l.Errorf("udp reader %v is done", i)
 	f.wg.Done()
 }
 
@@ -304,6 +305,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
 	}
 
+	f.l.Errorf("tun reader %v is done", i)
 	f.wg.Done()
 }
 
