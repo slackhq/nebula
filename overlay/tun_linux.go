@@ -65,6 +65,11 @@ type ifreqQLEN struct {
 }
 
 func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
+	err := unix.SetNonblock(deviceFd, true)
+	if err != nil {
+		return nil, err
+	}
+
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
 	t, err := newTunGeneric(c, l, file, vpnNetworks)
@@ -98,6 +103,11 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 		} else {
 			return nil, err
 		}
+	}
+
+	err = unix.SetNonblock(fd, true)
+	if err != nil {
+		return nil, err
 	}
 
 	var req ifReq
