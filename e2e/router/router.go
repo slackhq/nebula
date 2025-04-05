@@ -111,10 +111,6 @@ type ExitFunc func(packet *udp.Packet, receiver *nebula.Control) ExitType
 func NewR(t testing.TB, controls ...*nebula.Control) *R {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	if err := os.MkdirAll("mermaid", 0755); err != nil {
-		panic(err)
-	}
-
 	r := &R{
 		controls:     make(map[netip.AddrPort]*nebula.Control),
 		vpnControls:  make(map[netip.Addr]*nebula.Control),
@@ -194,6 +190,9 @@ func (r *R) renderFlow() {
 		return
 	}
 
+	if err := os.MkdirAll(filepath.Dir(r.fn), 0755); err != nil {
+		panic(err)
+	}
 	f, err := os.OpenFile(r.fn, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0644)
 	if err != nil {
 		panic(err)

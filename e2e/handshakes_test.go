@@ -1224,3 +1224,135 @@ func TestV2NonPrimaryWithLighthouse(t *testing.T) {
 	myControl.Stop()
 	theirControl.Stop()
 }
+
+func TestPSK(t *testing.T) {
+	tests := []struct {
+		name         string
+		myPskMode    nebula.PskMode
+		theirPskMode nebula.PskMode
+	}{
+		// All accepting
+		{
+			name:         "both accepting",
+			myPskMode:    nebula.PskAccepting,
+			theirPskMode: nebula.PskAccepting,
+		},
+
+		// accepting and sending both ways
+		{
+			name:         "accepting to sending",
+			myPskMode:    nebula.PskAccepting,
+			theirPskMode: nebula.PskSending,
+		},
+		{
+			name:         "sending to accepting",
+			myPskMode:    nebula.PskSending,
+			theirPskMode: nebula.PskAccepting,
+		},
+
+		// All sending
+		{
+			name:         "sending to sending",
+			myPskMode:    nebula.PskSending,
+			theirPskMode: nebula.PskSending,
+		},
+
+		// enforced and sending both ways
+		{
+			name:         "enforced to sending",
+			myPskMode:    nebula.PskEnforced,
+			theirPskMode: nebula.PskSending,
+		},
+		{
+			name:         "sending to enforced",
+			myPskMode:    nebula.PskSending,
+			theirPskMode: nebula.PskEnforced,
+		},
+
+		// All enforced
+		{
+			name:         "both enforced",
+			myPskMode:    nebula.PskEnforced,
+			theirPskMode: nebula.PskEnforced,
+		},
+
+		// Enforced can technically handshake with an accepting node, but it is bad to be in this state
+		{
+			name:         "enforced to accepting",
+			myPskMode:    nebula.PskEnforced,
+			theirPskMode: nebula.PskAccepting,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var myPskSettings, theirPskSettings m
+
+			switch test.myPskMode {
+			case nebula.PskAccepting:
+				myPskSettings = m{"psk": &m{"mode": "accepting", "keys": []string{"garbage0", "this is a key"}}}
+			case nebula.PskSending:
+				myPskSettings = m{"psk": &m{"mode": "sending", "keys": []string{"this is a key", "garbage1"}}}
+			case nebula.PskEnforced:
+				myPskSettings = m{"psk": &m{"mode": "enforced", "keys": []string{"this is a key", "garbage2"}}}
+			}
+
+			switch test.theirPskMode {
+			case nebula.PskAccepting:
+				theirPskSettings = m{"psk": &m{"mode": "accepting", "keys": []string{"garbage3", "this is a key"}}}
+			case nebula.PskSending:
+				theirPskSettings = m{"psk": &m{"mode": "sending", "keys": []string{"this is a key", "garbage4"}}}
+			case nebula.PskEnforced:
+				theirPskSettings = m{"psk": &m{"mode": "enforced", "keys": []string{"this is a key", "garbage5"}}}
+			}
+
+			ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, nil)
+			myControl, myVpnIp, myUdpAddr, _ := newSimpleServer(cert.Version2, ca, caKey, "me", "10.0.0.1/24", myPskSettings)
+			theirControl, theirVpnIp, theirUdpAddr, _ := newSimpleServer(cert.Version2, ca, caKey, "them", "10.0.0.2/24", theirPskSettings)
+
+			myControl.InjectLightHouseAddr(theirVpnIp[0].Addr(), theirUdpAddr)
+			r := router.NewR(t, myControl, theirControl)
+
+			// Start the servers
+			myControl.Start()
+			theirControl.Start()
+
+			t.Log("Route until we see our cached packet flow")
+			myControl.InjectTunUDPPacket(theirVpnIp[0].Addr(), 80, myVpnIp[0].Addr(), 80, []byte("Hi from me"))
+			r.RouteForAllExitFunc(func(p *udp.Packet, c *nebula.Control) router.ExitType {
+				h := &header.H{}
+				err := h.Parse(p.Data)
+				if err != nil {
+					panic(err)
+				}
+
+				// If this is the stage 1 handshake packet and I am configured to send with a psk, my cert name should
+				// not appear. It would likely be more obvious to unmarshal the payload and check but this works fine for now
+				if test.myPskMode == nebula.PskEnforced || test.myPskMode == nebula.PskSending {
+					if h.Type == 0 && h.MessageCounter == 1 {
+						assert.NotContains(t, string(p.Data), "test me")
+					}
+				}
+
+				if p.To == theirUdpAddr && h.Type == 1 {
+					return router.RouteAndExit
+				}
+
+				return router.KeepRouting
+			})
+
+			t.Log("My cached packet should be received by them")
+			myCachedPacket := theirControl.GetFromTun(true)
+			assertUdpPacket(t, []byte("Hi from me"), myCachedPacket, myVpnIp[0].Addr(), theirVpnIp[0].Addr(), 80, 80)
+
+			t.Log("Test the tunnel with them")
+			assertHostInfoPair(t, myUdpAddr, theirUdpAddr, myVpnIp, theirVpnIp, myControl, theirControl)
+			assertTunnel(t, myVpnIp[0].Addr(), theirVpnIp[0].Addr(), myControl, theirControl, r)
+
+			myControl.Stop()
+			theirControl.Stop()
+			//TODO: assert hostmaps
+		})
+	}
+
+}
