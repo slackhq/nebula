@@ -63,6 +63,9 @@ ALL = $(ALL_LINUX) \
 e2e:
 	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
 
+e2e-mutex-debug:
+	$(TEST_ENV) go test -tags=mutex_debug,e2e_testing -count=1 $(TEST_FLAGS) ./e2e
+
 e2ev: TEST_FLAGS += -v
 e2ev: e2e
 
@@ -215,6 +218,7 @@ ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) service ${.DEFAULT_GOAL} --no-print-directory
 endif
 
+bin-docker: BUILD_ARGS = -tags=mutex_debug
 bin-docker: bin build/linux-amd64/nebula build/linux-amd64/nebula-cert
 
 smoke-docker: bin-docker

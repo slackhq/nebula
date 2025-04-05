@@ -7,7 +7,6 @@ import (
 	"slices"
 	"sort"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -185,7 +184,7 @@ func (hr *hostnamesResults) GetAddrs() []netip.AddrPort {
 // It serves as a local cache of query replies, host update notifications, and locally learned addresses
 type RemoteList struct {
 	// Every interaction with internals requires a lock!
-	sync.RWMutex
+	syncRWMutex
 
 	// The full list of vpn addresses assigned to this host
 	vpnAddrs []netip.Addr
@@ -215,11 +214,12 @@ type RemoteList struct {
 // NewRemoteList creates a new empty RemoteList
 func NewRemoteList(vpnAddrs []netip.Addr, shouldAdd func(netip.Addr) bool) *RemoteList {
 	r := &RemoteList{
-		vpnAddrs:  make([]netip.Addr, len(vpnAddrs)),
-		addrs:     make([]netip.AddrPort, 0),
-		relays:    make([]netip.Addr, 0),
-		cache:     make(map[netip.Addr]*cache),
-		shouldAdd: shouldAdd,
+		syncRWMutex: newSyncRWMutex("remote-list"),
+		vpnAddrs:    make([]netip.Addr, len(vpnAddrs)),
+		addrs:       make([]netip.AddrPort, 0),
+		relays:      make([]netip.Addr, 0),
+		cache:       make(map[netip.Addr]*cache),
+		shouldAdd:   shouldAdd,
 	}
 	copy(r.vpnAddrs, vpnAddrs)
 	return r
