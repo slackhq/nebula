@@ -24,7 +24,7 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	lh := newTestLighthouse()
 
 	cs := &CertState{
-		outgoingVersion:  cert.Version1,
+		initiatingVersion:  cert.Version1,
 		privateKey:       []byte{},
 		v1Cert:           &dummyCert{version: cert.Version1},
 		v1HandshakeBytes: []byte{},
@@ -98,5 +98,5 @@ func (mw *mockEncWriter) GetHostInfo(_ netip.Addr) *HostInfo {
 }
 
 func (mw *mockEncWriter) GetCertState() *CertState {
-	return &CertState{outgoingVersion: cert.Version2}
+	return &CertState{initiatingVersion: cert.Version2}
 }
