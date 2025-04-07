@@ -1,4 +1,5 @@
-<!-- Thank you for taking the time to submit a pull request!
+<!--
+Thank you for taking the time to submit a pull request!
 
 Please be sure to provide a clear description of what you're trying to achieve with the change.
 
