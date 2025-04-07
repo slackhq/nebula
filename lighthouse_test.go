@@ -417,7 +417,7 @@ func (tw *testEncWriter) GetHostInfo(vpnIp netip.Addr) *HostInfo {
 }
 
 func (tw *testEncWriter) GetCertState() *CertState {
-	return &CertState{defaultVersion: tw.protocolVersion}
+	return &CertState{initiatingVersion: tw.protocolVersion}
 }
 
 // assertIp4InArray asserts every address in want is at the same position in have and that the lengths match

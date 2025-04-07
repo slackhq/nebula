@@ -763,7 +763,7 @@ func (lh *LightHouse) innerQueryServer(addr netip.Addr, nb, out []byte) {
 		if hi != nil {
 			v = hi.ConnectionState.myCert.Version()
 		} else {
-			v = lh.ifce.GetCertState().defaultVersion
+			v = lh.ifce.GetCertState().initiatingVersion
 		}
 
 		if v == cert.Version1 {
@@ -883,7 +883,7 @@ func (lh *LightHouse) SendUpdate() {
 		if hi != nil {
 			v = hi.ConnectionState.myCert.Version()
 		} else {
-			v = lh.ifce.GetCertState().defaultVersion
+			v = lh.ifce.GetCertState().initiatingVersion
 		}
 		if v == cert.Version1 {
 			if v1Update == nil {
@@ -1114,7 +1114,7 @@ func (lhh *LightHouseHandler) sendHostPunchNotification(n *NebulaMeta, fromVpnAd
 		targetHI := lhh.lh.ifce.GetHostInfo(punchNotifDest)
 		var useVersion cert.Version
 		if targetHI == nil {
-			useVersion = lhh.lh.ifce.GetCertState().defaultVersion
+			useVersion = lhh.lh.ifce.GetCertState().initiatingVersion
 		} else {
 			crt := targetHI.GetCert().Certificate
 			useVersion = crt.Version()

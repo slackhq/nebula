@@ -33,10 +33,10 @@ type CertState struct {
 	v2Cert           cert.Certificate
 	v2HandshakeBytes []byte
 
-	defaultVersion cert.Version
-	privateKey     []byte
-	pkcs11Backed   bool
-	cipher         string
+	initiatingVersion cert.Version
+	privateKey        []byte
+	pkcs11Backed      bool
+	cipher            string
 
 	myVpnNetworks            []netip.Prefix
 	myVpnNetworksTable       *bart.Table[struct{}]
@@ -194,7 +194,7 @@ func (p *PKI) reloadCAPool(c *config.C) *util.ContextualError {
 }
 
 func (cs *CertState) GetDefaultCertificate() cert.Certificate {
-	c := cs.getCertificate(cs.defaultVersion)
+	c := cs.getCertificate(cs.initiatingVersion)
 	if c == nil {
 		panic("No default certificate found")
 	}
@@ -317,28 +317,28 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 		return nil, errors.New("no certificates found in pki.cert")
 	}
 
-	useDefaultVersion := uint32(1)
+	useInitiatingVersion := uint32(1)
 	if v1 == nil {
 		// The only condition that requires v2 as the default is if only a v2 certificate is present
 		// We do this to avoid having to configure it specifically in the config file
-		useDefaultVersion = 2
+		useInitiatingVersion = 2
 	}
 
-	rawDefaultVersion := c.GetUint32("pki.default_version", useDefaultVersion)
-	var defaultVersion cert.Version
-	switch rawDefaultVersion {
+	rawInitiatingVersion := c.GetUint32("pki.initiating_version", useInitiatingVersion)
+	var initiatingVersion cert.Version
+	switch rawInitiatingVersion {
 	case 1:
 		if v1 == nil {
-			return nil, fmt.Errorf("can not use pki.default_version 1 without a v1 certificate in pki.cert")
+			return nil, fmt.Errorf("can not use pki.initiating_version 1 without a v1 certificate in pki.cert")
 		}
-		defaultVersion = cert.Version1
+		initiatingVersion = cert.Version1
 	case 2:
-		defaultVersion = cert.Version2
+		initiatingVersion = cert.Version2
 	default:
-		return nil, fmt.Errorf("unknown pki.default_version: %v", rawDefaultVersion)
+		return nil, fmt.Errorf("unknown pki.initiating_version: %v", rawInitiatingVersion)
 	}
 
-	return newCertState(defaultVersion, v1, v2, isPkcs11, curve, rawKey)
+	return newCertState(initiatingVersion, v1, v2, isPkcs11, curve, rawKey)
 }
 
 func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, privateKeyCurve cert.Curve, privateKey []byte) (*CertState, error) {
@@ -361,7 +361,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 
 		//TODO: CERT-V2 make sure v2 has v1s address
 
-		cs.defaultVersion = dv
+		cs.initiatingVersion = dv
 	}
 
 	if v1 != nil {
@@ -380,8 +380,8 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 		cs.v1Cert = v1
 		cs.v1HandshakeBytes = v1hs
 
-		if cs.defaultVersion == 0 {
-			cs.defaultVersion = cert.Version1
+		if cs.initiatingVersion == 0 {
+			cs.initiatingVersion = cert.Version1
 		}
 	}
 
@@ -401,8 +401,8 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 		cs.v2Cert = v2
 		cs.v2HandshakeBytes = v2hs
 
-		if cs.defaultVersion == 0 {
-			cs.defaultVersion = cert.Version2
+		if cs.initiatingVersion == 0 {
+			cs.initiatingVersion = cert.Version2
 		}
 	}
 
