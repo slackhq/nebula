@@ -24,10 +24,10 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	lh := newTestLighthouse()
 
 	cs := &CertState{
-		initiatingVersion:  cert.Version1,
-		privateKey:       []byte{},
-		v1Cert:           &dummyCert{version: cert.Version1},
-		v1HandshakeBytes: []byte{},
+		initiatingVersion: cert.Version1,
+		privateKey:        []byte{},
+		v1Cert:            &dummyCert{version: cert.Version1},
+		v1HandshakeBytes:  []byte{},
 	}
 
 	blah := NewHandshakeManager(l, mainHM, lh, &udp.NoopConn{}, defaultHandshakeConfig)

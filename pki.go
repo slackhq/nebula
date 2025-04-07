@@ -34,9 +34,9 @@ type CertState struct {
 	v2HandshakeBytes []byte
 
 	initiatingVersion cert.Version
-	privateKey      []byte
-	pkcs11Backed    bool
-	cipher          string
+	privateKey        []byte
+	pkcs11Backed      bool
+	cipher            string
 
 	myVpnNetworks            []netip.Prefix
 	myVpnNetworksTable       *bart.Table[struct{}]
