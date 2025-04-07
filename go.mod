@@ -1,7 +1,6 @@
 module github.com/slackhq/nebula
 
 go 1.23.6
-
 toolchain go1.24.1
 
 require (
@@ -10,7 +9,7 @@ require (
 	github.com/armon/go-radix v1.0.0
 	github.com/cyberdelia/go-metrics-graphite v0.0.0-20161219230853-39f87cc3b432
 	github.com/flynn/noise v1.1.0
-	github.com/gaissmai/bart v0.20.1
+	github.com/gaissmai/bart v0.20.3
 	github.com/gogo/protobuf v1.3.2
 	github.com/google/gopacket v1.1.19
 	github.com/kardianos/service v1.2.2
