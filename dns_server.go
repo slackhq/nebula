@@ -184,11 +184,41 @@ func getDnsServerAddr(c *config.C) string {
 	if dnsHost == "[::]" {
 		dnsHost = "::"
 	}
+	return dnsHost
+}
+
+func getDnsServerAddrPort(c *config.C) string {
+	dnsHost := getDnsServerAddr(c)
 	return net.JoinHostPort(dnsHost, strconv.Itoa(c.GetInt("lighthouse.dns.port", 53)))
 }
 
+func shouldServeDns(c *config.C) (bool, error) {
+	if !c.GetBool("lighthouse.serve_dns", false) {
+		return false, nil
+	}
+
+	dnsHostStr := getDnsServerAddr(c)
+	if dnsHostStr == "" { //setting an ip address is required
+		return false, fmt.Errorf("no DNS server IP address set")
+	}
+
+	if c.GetBool("lighthouse.am_lighthouse", false) {
+		return true, nil
+	}
+
+	dnsHost, err := netip.ParseAddr(dnsHostStr)
+	if err != nil {
+		return false, fmt.Errorf("failed to parse lighthouse.dns.host(%s) %v", dnsHostStr, err)
+	}
+	if !dnsHost.IsLoopback() {
+		return false, fmt.Errorf("lighthouse.dns.host(%s) must be loopback on non-lighthouses", dnsHostStr)
+	}
+
+	return true, nil
+}
+
 func startDns(l *logrus.Logger, c *config.C) {
-	dnsAddr = getDnsServerAddr(c)
+	dnsAddr = getDnsServerAddrPort(c)
 	dnsServer = &dns.Server{Addr: dnsAddr, Net: "udp"}
 	l.WithField("dnsListener", dnsAddr).Info("Starting DNS responder")
 	err := dnsServer.ListenAndServe()
@@ -199,7 +229,7 @@ func startDns(l *logrus.Logger, c *config.C) {
 }
 
 func reloadDns(l *logrus.Logger, c *config.C) {
-	if dnsAddr == getDnsServerAddr(c) {
+	if dnsAddr == getDnsServerAddrPort(c) {
 		l.Debug("No DNS server config change detected")
 		return
 	}
