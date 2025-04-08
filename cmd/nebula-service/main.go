@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/debug"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
@@ -17,6 +19,17 @@ import (
 //
 // at compile-time.
 var Build string
+
+func init() {
+	if Build == "" {
+		info, ok := debug.ReadBuildInfo()
+		if !ok {
+			return
+		}
+
+		Build = strings.TrimPrefix(info.Main.Version, "v")
+	}
+}
 
 func main() {
 	serviceFlag := flag.String("service", "", "Control the system service.")
