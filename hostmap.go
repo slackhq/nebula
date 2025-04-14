@@ -568,7 +568,7 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 		dnsR.Add(remoteCert.Certificate.Name()+".", hostinfo.vpnAddrs)
 	}
 	for _, addr := range hostinfo.vpnAddrs {
-		hm.unlockedInnerAddHostInfo(addr, hostinfo, f)
+		hm.unlockedInnerAddHostInfo(addr, hostinfo)
 	}
 
 	hm.Indexes[hostinfo.localIndexId] = hostinfo
@@ -581,7 +581,7 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	}
 }
 
-func (hm *HostMap) unlockedInnerAddHostInfo(vpnAddr netip.Addr, hostinfo *HostInfo, f *Interface) {
+func (hm *HostMap) unlockedInnerAddHostInfo(vpnAddr netip.Addr, hostinfo *HostInfo) {
 	existing := hm.Hosts[vpnAddr]
 	hm.Hosts[vpnAddr] = hostinfo
 
@@ -648,7 +648,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []netip.Prefix, ifce *Interfac
 
 			// Try to send a test packet to that host, this should
 			// cause it to detect a roaming event and switch remotes
-			ifce.sendTo(header.Test, header.TestRequest, i.ConnectionState, i, addr, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			ifce.sendTo(header.Test, header.TestRequest, i.ConnectionState, i, addr, []byte(""), make([]byte, 12), make([]byte, mtu))
 		})
 	}
 
@@ -794,7 +794,7 @@ func localAddrs(l *logrus.Logger, allowList *LocalAllowList) []netip.Addr {
 			}
 			addr = addr.Unmap()
 
-			if addr.IsLoopback() == false && addr.IsLinkLocalUnicast() == false {
+			if !addr.IsLoopback() && !addr.IsLinkLocalUnicast() {
 				isAllowed := allowList.Allow(addr)
 				if l.Level >= logrus.TraceLevel {
 					l.WithField("localAddr", addr).WithField("allowed", isAllowed).Trace("localAllowList.Allow")

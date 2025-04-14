@@ -72,12 +72,14 @@ qrlJ69wer3ZUHFXA
 	require.EqualError(t, err, "key was not 64 bytes, is invalid ed25519 private key")
 	assert.Nil(t, k)
 	assert.Equal(t, rest, appendByteSlices(invalidBanner, invalidPem))
+	assert.Equal(t, curve, Curve_CURVE25519)
 
 	// Fail due to invalid banner
 	curve, k, rest, err = DecryptAndUnmarshalSigningPrivateKey(passphrase, rest)
 	require.EqualError(t, err, "bytes did not contain a proper nebula encrypted Ed25519/ECDSA private key banner")
 	assert.Nil(t, k)
 	assert.Equal(t, rest, invalidPem)
+	assert.Equal(t, curve, Curve_CURVE25519)
 
 	// Fail due to ivalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
@@ -85,12 +87,14 @@ qrlJ69wer3ZUHFXA
 	require.EqualError(t, err, "input did not contain a valid PEM encoded block")
 	assert.Nil(t, k)
 	assert.Equal(t, rest, invalidPem)
+	assert.Equal(t, curve, Curve_CURVE25519)
 
 	// Fail due to invalid passphrase
 	curve, k, rest, err = DecryptAndUnmarshalSigningPrivateKey([]byte("invalid passphrase"), privKey)
 	require.EqualError(t, err, "invalid passphrase or corrupt private key")
 	assert.Nil(t, k)
 	assert.Equal(t, []byte{}, rest)
+	assert.Equal(t, curve, Curve_CURVE25519)
 }
 
 func TestEncryptAndMarshalSigningPrivateKey(t *testing.T) {

@@ -154,7 +154,7 @@ func (n *connectionManager) Run(ctx context.Context) {
 	defer clockSource.Stop()
 
 	p := []byte("")
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 	out := make([]byte, mtu)
 
 	for {
@@ -355,7 +355,7 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, now time.Time
 			decision = tryRehandshake
 
 		} else {
-			if n.shouldSwapPrimary(hostinfo, primary) {
+			if n.shouldSwapPrimary(hostinfo) {
 				decision = swapPrimary
 			} else {
 				// migrate the relays to the primary, if in use.
@@ -384,7 +384,7 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, now time.Time
 	}
 
 	decision := doNothing
-	if hostinfo != nil && hostinfo.ConnectionState != nil && mainHostInfo {
+	if hostinfo.ConnectionState != nil && mainHostInfo {
 		if !outTraffic {
 			// If we aren't sending or receiving traffic then its an unused tunnel and we don't to test the tunnel.
 			// Just maintain NAT state if configured to do so.
@@ -421,7 +421,7 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, now time.Time
 	return decision, hostinfo, nil
 }
 
-func (n *connectionManager) shouldSwapPrimary(current, primary *HostInfo) bool {
+func (n *connectionManager) shouldSwapPrimary(current *HostInfo) bool {
 	// The primary tunnel is the most recent handshake to complete locally and should work entirely fine.
 	// If we are here then we have multiple tunnels for a host pair and neither side believes the same tunnel is primary.
 	// Let's sort this out.
@@ -498,7 +498,7 @@ func (n *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 	cs := n.intf.pki.getCertState()
 	curCrt := hostinfo.ConnectionState.myCert
 	myCrt := cs.getCertificate(curCrt.Version())
-	if curCrt.Version() >= cs.initiatingVersion && bytes.Equal(curCrt.Signature(), myCrt.Signature()) == true {
+	if curCrt.Version() >= cs.initiatingVersion && bytes.Equal(curCrt.Signature(), myCrt.Signature()) {
 		// The current tunnel is using the latest certificate and version, no need to rehandshake.
 		return
 	}

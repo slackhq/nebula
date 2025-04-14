@@ -65,30 +65,16 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	assert.NotContains(t, blah.vpnIps, ip)
 }
 
-func testCountTimerWheelEntries(tw *LockingTimerWheel[netip.Addr]) (c int) {
-	for _, i := range tw.t.wheel {
-		n := i.Head
-		for n != nil {
-			c++
-			n = n.Next
-		}
-	}
-	return c
-}
-
 type mockEncWriter struct {
 }
 
 func (mw *mockEncWriter) SendMessageToVpnAddr(_ header.MessageType, _ header.MessageSubType, _ netip.Addr, _, _, _ []byte) {
-	return
 }
 
 func (mw *mockEncWriter) SendVia(_ *HostInfo, _ *Relay, _, _, _ []byte, _ bool) {
-	return
 }
 
 func (mw *mockEncWriter) SendMessageToHostInfo(_ header.MessageType, _ header.MessageSubType, _ *HostInfo, _, _, _ []byte) {
-	return
 }
 
 func (mw *mockEncWriter) Handshake(_ netip.Addr) {}

@@ -228,7 +228,7 @@ func (f *Interface) closeTunnel(hostInfo *HostInfo) {
 
 // sendCloseTunnel is a helper function to send a proper close tunnel packet to a remote
 func (f *Interface) sendCloseTunnel(h *HostInfo) {
-	f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+	f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12), make([]byte, mtu))
 }
 
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, udpAddr netip.AddrPort) {

@@ -20,8 +20,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const publicKeyLen = 32
-
 type certificateV1 struct {
 	details   detailsV1
 	signature []byte

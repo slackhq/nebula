@@ -606,7 +606,7 @@ func (f *Firewall) evict(p firewall.Packet) {
 		return
 	}
 
-	newT := t.Expires.Sub(time.Now())
+	newT := time.Until(t.Expires)
 
 	// Timeout is in the future, re-add the timer
 	if newT > 0 {
@@ -832,7 +832,7 @@ func (fr *FirewallRule) match(p firewall.Packet, c *cert.CachedCertificate) bool
 	}
 
 	// Shortcut path for if groups, hosts, or cidr contained an `any`
-	if fr.Any.match(p, c) {
+	if fr.Any.match(p) {
 		return true
 	}
 
@@ -849,21 +849,21 @@ func (fr *FirewallRule) match(p firewall.Packet, c *cert.CachedCertificate) bool
 			found = true
 		}
 
-		if found && sg.LocalCIDR.match(p, c) {
+		if found && sg.LocalCIDR.match(p) {
 			return true
 		}
 	}
 
 	if fr.Hosts != nil {
 		if flc, ok := fr.Hosts[c.Certificate.Name()]; ok {
-			if flc.match(p, c) {
+			if flc.match(p) {
 				return true
 			}
 		}
 	}
 
 	for _, v := range fr.CIDR.Supernets(netip.PrefixFrom(p.RemoteAddr, p.RemoteAddr.BitLen())) {
-		if v.match(p, c) {
+		if v.match(p) {
 			return true
 		}
 	}
@@ -892,7 +892,7 @@ func (flc *firewallLocalCIDR) addRule(f *Firewall, localIp netip.Prefix) error {
 	return nil
 }
 
-func (flc *firewallLocalCIDR) match(p firewall.Packet, c *cert.CachedCertificate) bool {
+func (flc *firewallLocalCIDR) match(p firewall.Packet) bool {
 	if flc == nil {
 		return false
 	}

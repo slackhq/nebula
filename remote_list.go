@@ -263,9 +263,7 @@ func (r *RemoteList) CopyAddrs(preferredRanges []netip.Prefix) []netip.AddrPort 
 	r.RLock()
 	defer r.RUnlock()
 	c := make([]netip.AddrPort, len(r.addrs))
-	for i, v := range r.addrs {
-		c[i] = v
-	}
+	copy(c, r.addrs)
 	return c
 }
 
@@ -326,9 +324,7 @@ func (r *RemoteList) CopyCache() *CacheMap {
 		}
 
 		if mc.relay != nil {
-			for _, a := range mc.relay.relay {
-				c.Relay = append(c.Relay, a)
-			}
+			c.Relay = append(c.Relay, mc.relay.relay...)
 		}
 	}
 
@@ -362,9 +358,7 @@ func (r *RemoteList) CopyBlockedRemotes() []netip.AddrPort {
 	defer r.RUnlock()
 
 	c := make([]netip.AddrPort, len(r.badRemotes))
-	for i, v := range r.badRemotes {
-		c[i] = v
-	}
+	copy(c, r.badRemotes)
 	return c
 }
 
@@ -569,9 +563,7 @@ func (r *RemoteList) unlockedCollect() {
 		}
 
 		if c.relay != nil {
-			for _, v := range c.relay.relay {
-				relays = append(relays, v)
-			}
+			relays = append(relays, c.relay.relay...)
 		}
 	}
 
@@ -635,15 +627,15 @@ func (r *RemoteList) unlockedSort(preferredRanges []netip.Prefix) {
 		a4 := a.Addr().Is4()
 		b4 := b.Addr().Is4()
 		switch {
-		case a4 == false && b4 == true:
+		case !a4 && b4:
 			// If i is v6 and j is v4, i is less than j
 			return true
 
-		case a4 == true && b4 == false:
+		case a4 && !b4:
 			// If j is v6 and i is v4, i is not less than j
 			return false
 
-		case a4 == true && b4 == true:
+		case a4 && b4:
 			// i and j are both ipv4
 			aPrivate := a.Addr().IsPrivate()
 			bPrivate := b.Addr().IsPrivate()
@@ -691,7 +683,6 @@ func (r *RemoteList) unlockedSort(preferredRanges []netip.Prefix) {
 	}
 
 	r.addrs = r.addrs[:a+1]
-	return
 }
 
 // minInt returns the minimum integer of a or b

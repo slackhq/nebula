@@ -51,10 +51,7 @@ func (p *program) Stop(s service.Service) error {
 
 func fileExists(filename string) bool {
 	_, err := os.Stat(filename)
-	if os.IsNotExist(err) {
-		return false
-	}
-	return true
+	return !os.IsNotExist(err)
 }
 
 func doService(configPath *string, configTest *bool, build string, serviceFlag *string) {

@@ -29,7 +29,7 @@ func newKeygenFlags() *keygenFlags {
 	return &cf
 }
 
-func keygen(args []string, out io.Writer, errOut io.Writer) error {
+func keygen(args []string, _ io.Writer, _ io.Writer) error {
 	cf := newKeygenFlags()
 	err := cf.set.Parse(args)
 	if err != nil {

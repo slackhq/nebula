@@ -227,6 +227,9 @@ func UnmarshalNebulaEncryptedData(b []byte) (*NebulaEncryptedData, error) {
 }
 
 func unmarshalArgon2Parameters(params *RawNebulaArgon2Parameters) (*Argon2Parameters, error) {
+	// Are we testing the compilers types here?
+	// No value of int32 is lewss than math.MinInt32.
+	// By definition these checks can never be true.
 	if params.Version < math.MinInt32 || params.Version > math.MaxInt32 {
 		return nil, fmt.Errorf("Argon2Parameters Version must be at least %d and no more than %d", math.MinInt32, math.MaxInt32)
 	}

@@ -527,11 +527,11 @@ func sshStartCpuProfile(fs any, a []string, w sshd.StringWriter) error {
 	return err
 }
 
-func sshVersion(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
-	return w.WriteLine(fmt.Sprintf("%s", ifce.version))
+func sshVersion(ifce *Interface, _ any, _ []string, w sshd.StringWriter) error {
+	return w.WriteLine(ifce.version)
 }
 
-func sshQueryLighthouse(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
+func sshQueryLighthouse(ifce *Interface, _ any, a []string, w sshd.StringWriter) error {
 	if len(a) == 0 {
 		return w.WriteLine("No vpn address was provided")
 	}
@@ -584,7 +584,7 @@ func sshCloseTunnel(ifce *Interface, fs any, a []string, w sshd.StringWriter) er
 			hostInfo.ConnectionState,
 			hostInfo,
 			[]byte{},
-			make([]byte, 12, 12),
+			make([]byte, 12),
 			make([]byte, mtu),
 		)
 	}
@@ -614,12 +614,12 @@ func sshCreateTunnel(ifce *Interface, fs any, a []string, w sshd.StringWriter) e
 
 	hostInfo := ifce.hostMap.QueryVpnAddr(vpnAddr)
 	if hostInfo != nil {
-		return w.WriteLine(fmt.Sprintf("Tunnel already exists"))
+		return w.WriteLine("Tunnel already exists")
 	}
 
 	hostInfo = ifce.handshakeManager.QueryVpnAddr(vpnAddr)
 	if hostInfo != nil {
-		return w.WriteLine(fmt.Sprintf("Tunnel already handshaking"))
+		return w.WriteLine("Tunnel already handshaking")
 	}
 
 	var addr netip.AddrPort
@@ -735,7 +735,7 @@ func sshGetMutexProfile(fs any, a []string, w sshd.StringWriter) error {
 	return w.WriteLine(fmt.Sprintf("Mutex profile created at %s", a))
 }
 
-func sshLogLevel(l *logrus.Logger, fs any, a []string, w sshd.StringWriter) error {
+func sshLogLevel(l *logrus.Logger, _ any, a []string, w sshd.StringWriter) error {
 	if len(a) == 0 {
 		return w.WriteLine(fmt.Sprintf("Log level is: %s", l.Level))
 	}
@@ -749,7 +749,7 @@ func sshLogLevel(l *logrus.Logger, fs any, a []string, w sshd.StringWriter) erro
 	return w.WriteLine(fmt.Sprintf("Log level is: %s", l.Level))
 }
 
-func sshLogFormat(l *logrus.Logger, fs any, a []string, w sshd.StringWriter) error {
+func sshLogFormat(l *logrus.Logger, _ any, a []string, w sshd.StringWriter) error {
 	if len(a) == 0 {
 		return w.WriteLine(fmt.Sprintf("Log format is: %s", reflect.TypeOf(l.Formatter)))
 	}
@@ -822,10 +822,10 @@ func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) erro
 	return w.WriteLine(cert.String())
 }
 
-func sshPrintRelays(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
+func sshPrintRelays(ifce *Interface, fs any, _ []string, w sshd.StringWriter) error {
 	args, ok := fs.(*sshPrintTunnelFlags)
 	if !ok {
-		w.WriteLine(fmt.Sprintf("sshPrintRelays failed to convert args type"))
+		w.WriteLine("sshPrintRelays failed to convert args type")
 		return nil
 	}
 

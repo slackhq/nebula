@@ -10,7 +10,7 @@ func p11Supported() bool {
 	return false
 }
 
-func p11Flag(set *flag.FlagSet) *string {
+func p11Flag(_ *flag.FlagSet) *string {
 	var ret = ""
 	return &ret
 }

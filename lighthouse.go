@@ -371,7 +371,7 @@ func (lh *LightHouse) parseLighthouses(c *config.C, lhMap map[netip.Addr]struct{
 	}
 
 	staticList := lh.GetStaticHostList()
-	for lhAddr, _ := range lhMap {
+	for lhAddr := range lhMap {
 		if _, ok := staticList[lhAddr]; !ok {
 			return fmt.Errorf("lighthouse %s does not have a static_host_map entry", lhAddr)
 		}
@@ -654,11 +654,8 @@ func (lh *LightHouse) shouldAdd(vpnAddr netip.Addr, to netip.Addr) bool {
 	}
 
 	_, found := lh.myVpnNetworksTable.Lookup(to)
-	if found {
-		return false
-	}
 
-	return true
+	return !found
 }
 
 // unlockedShouldAddV4 checks if to is allowed by our allow list
@@ -675,11 +672,7 @@ func (lh *LightHouse) unlockedShouldAddV4(vpnAddr netip.Addr, to *V4AddrPort) bo
 	}
 
 	_, found := lh.myVpnNetworksTable.Lookup(udpAddr.Addr())
-	if found {
-		return false
-	}
-
-	return true
+	return !found
 }
 
 // unlockedShouldAddV6 checks if to is allowed by our allow list
@@ -696,11 +689,8 @@ func (lh *LightHouse) unlockedShouldAddV6(vpnAddr netip.Addr, to *V6AddrPort) bo
 	}
 
 	_, found := lh.myVpnNetworksTable.Lookup(udpAddr.Addr())
-	if found {
-		return false
-	}
 
-	return true
+	return !found
 }
 
 func (lh *LightHouse) IsLighthouseAddr(vpnAddr netip.Addr) bool {
@@ -728,7 +718,7 @@ func (lh *LightHouse) startQueryWorker() {
 	}
 
 	go func() {
-		nb := make([]byte, 12, 12)
+		nb := make([]byte, 12)
 		out := make([]byte, mtu)
 
 		for {
@@ -869,7 +859,7 @@ func (lh *LightHouse) SendUpdate() {
 		}
 	}
 
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 	out := make([]byte, mtu)
 
 	var v1Update, v2Update []byte
@@ -971,7 +961,7 @@ type LightHouseHandler struct {
 func (lh *LightHouse) NewRequestHandler() *LightHouseHandler {
 	lhh := &LightHouseHandler{
 		lh:  lh,
-		nb:  make([]byte, 12, 12),
+		nb:  make([]byte, 12),
 		out: make([]byte, mtu),
 		l:   lh.l,
 		pb:  make([]byte, mtu),
@@ -1162,7 +1152,7 @@ func (lhh *LightHouseHandler) coalesceAnswers(v cert.Version, c *cache, n *Nebul
 		if c.v4.learned != nil {
 			n.Details.V4AddrPorts = append(n.Details.V4AddrPorts, c.v4.learned)
 		}
-		if c.v4.reported != nil && len(c.v4.reported) > 0 {
+		if len(c.v4.reported) > 0 {
 			n.Details.V4AddrPorts = append(n.Details.V4AddrPorts, c.v4.reported...)
 		}
 	}
@@ -1171,7 +1161,7 @@ func (lhh *LightHouseHandler) coalesceAnswers(v cert.Version, c *cache, n *Nebul
 		if c.v6.learned != nil {
 			n.Details.V6AddrPorts = append(n.Details.V6AddrPorts, c.v6.learned)
 		}
-		if c.v6.reported != nil && len(c.v6.reported) > 0 {
+		if len(c.v6.reported) > 0 {
 			n.Details.V6AddrPorts = append(n.Details.V6AddrPorts, c.v6.reported...)
 		}
 	}
@@ -1369,7 +1359,7 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 			//NOTE: we have to allocate a new output buffer here since we are spawning a new goroutine
 			// for each punchBack packet. We should move this into a timerwheel or a single goroutine
 			// managed by a channel.
-			w.SendMessageToVpnAddr(header.Test, header.TestRequest, queryVpnAddr, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			w.SendMessageToVpnAddr(header.Test, header.TestRequest, queryVpnAddr, []byte(""), make([]byte, 12), make([]byte, mtu))
 		}()
 	}
 }

@@ -23,7 +23,7 @@ type m = map[string]any
 
 const (
 	Version uint8 = 1
-	Len           = 16
+	Len     int   = 16
 )
 
 type MessageType uint8

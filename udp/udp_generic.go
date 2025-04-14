@@ -33,7 +33,7 @@ func NewGenericListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, b
 	if uc, ok := pc.(*net.UDPConn); ok {
 		return &GenericConn{UDPConn: uc, l: l}, nil
 	}
-	return nil, fmt.Errorf("Unexpected PacketConn: %T %#v", pc, pc)
+	return nil, fmt.Errorf("unexpected PacketConn: %T %#v", pc, pc)
 }
 
 func (u *GenericConn) WriteTo(b []byte, addr netip.AddrPort) error {
@@ -64,10 +64,6 @@ func (u *GenericConn) ReloadConfig(c *config.C) {
 func NewUDPStatsEmitter(udpConns []Conn) func() {
 	// No UDP stats for non-linux
 	return func() {}
-}
-
-type rawMessage struct {
-	Len uint32
 }
 
 func (u *GenericConn) ListenOut(r EncReader) {
