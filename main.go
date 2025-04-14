@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -26,6 +28,14 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			cancel()
 		}
 	}()
+
+	// Default to the module version for buildVersion
+	if buildVersion == "" {
+		info, ok := debug.ReadBuildInfo()
+		if ok {
+			buildVersion = strings.TrimPrefix(info.Main.Version, "v")
+		}
+	}
 
 	l := logger
 	l.Formatter = &logrus.TextFormatter{
