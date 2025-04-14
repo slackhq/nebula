@@ -29,12 +29,8 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	}()
 
-	// Default to the module version for buildVersion
 	if buildVersion == "" {
-		info, ok := debug.ReadBuildInfo()
-		if ok {
-			buildVersion = strings.TrimPrefix(info.Main.Version, "v")
-		}
+		buildVersion = moduleVersion()
 	}
 
 	l := logger
@@ -307,4 +303,19 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		dnsStart,
 		lightHouse.StartUpdateWorker,
 	}, nil
+}
+
+func moduleVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+
+	for _, dep := range info.Deps {
+		if dep.Path == "github.com/slackhq/nebula" {
+			return strings.TrimPrefix(dep.Version, "v")
+		}
+	}
+
+	return ""
 }
