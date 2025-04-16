@@ -61,11 +61,11 @@ type Interface struct {
 	serveDns              bool
 	createTime            time.Time
 	lightHouse            *LightHouse
-	myBroadcastAddrsTable *bart.Table[struct{}]
-	myVpnAddrs            []netip.Addr          // A list of addresses assigned to us via our certificate
-	myVpnAddrsTable       *bart.Table[struct{}] // A table of addresses assigned to us via our certificate
-	myVpnNetworks         []netip.Prefix        // A list of networks assigned to us via our certificate
-	myVpnNetworksTable    *bart.Table[struct{}] // A table of networks assigned to us via our certificate
+	myBroadcastAddrsTable *bart.Lite
+	myVpnAddrs            []netip.Addr // A list of addresses assigned to us via our certificate
+	myVpnAddrsTable       *bart.Lite
+	myVpnNetworks         []netip.Prefix // A list of networks assigned to us via our certificate
+	myVpnNetworksTable    *bart.Lite
 	dropLocalBroadcast    bool
 	dropMulticast         bool
 	routines              int

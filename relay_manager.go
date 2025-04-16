@@ -241,15 +241,13 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 	logMsg.Info("handleCreateRelayRequest")
 	// Is the source of the relay me? This should never happen, but did happen due to
 	// an issue migrating relays over to newly re-handshaked host info objects.
-	_, found := f.myVpnAddrsTable.Lookup(from)
-	if found {
+	if f.myVpnAddrsTable.Contains(from) {
 		logMsg.WithField("myIP", from).Error("Discarding relay request from myself")
 		return
 	}
 
 	// Is the target of the relay me?
-	_, found = f.myVpnAddrsTable.Lookup(target)
-	if found {
+	if f.myVpnAddrsTable.Contains(target) {
 		existingRelay, ok := h.relayState.QueryRelayForByIp(from)
 		if ok {
 			switch existingRelay.State {
