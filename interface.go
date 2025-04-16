@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -262,8 +261,6 @@ func (f *Interface) run() (func(), error) {
 }
 
 func (f *Interface) listenOut(i int) {
-	runtime.LockOSThread()
-
 	var li udp.Conn
 	if i > 0 {
 		li = f.writers[i]
@@ -287,8 +284,6 @@ func (f *Interface) listenOut(i int) {
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
-	runtime.LockOSThread()
-
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
