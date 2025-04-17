@@ -100,7 +100,7 @@ func (c *Control) Start() (func(), error) {
 	// Start reading packets.
 	c.state = Started
 	c.stateLock.Unlock()
-	return c.f.run()
+	return c.f.run(c.ctx)
 }
 
 func (c *Control) State() RunState {
