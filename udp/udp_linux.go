@@ -122,7 +122,7 @@ func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	}
 }
 
-func (u *StdConn) ListenOut(r EncReader) {
+func (u *StdConn) ListenOut(r EncReader) error {
 	var ip netip.Addr
 
 	msgs, buffers, names := u.PrepareRawMessages(u.batch)
@@ -134,8 +134,7 @@ func (u *StdConn) ListenOut(r EncReader) {
 	for {
 		n, err := read(msgs)
 		if err != nil {
-			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
-			return
+			return err
 		}
 
 		for i := 0; i < n; i++ {

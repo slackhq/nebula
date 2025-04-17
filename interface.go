@@ -256,14 +256,14 @@ func (f *Interface) activate() error {
 func (f *Interface) run() (func(), error) {
 	// Launch n queues to read packets from udp
 	for i := 0; i < f.routines; i++ {
-		go f.listenOut(i)
 		f.wg.Add(1)
+		go f.listenOut(i)
 	}
 
 	// Launch n queues to read packets from tun dev
 	for i := 0; i < f.routines; i++ {
-		go f.listenIn(f.readers[i], i)
 		f.wg.Add(1)
+		go f.listenIn(f.readers[i], i)
 	}
 
 	return f.wg.Wait, nil
@@ -285,15 +285,21 @@ func (f *Interface) listenOut(i int) {
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
-	li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
+	err := li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
 		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
 	})
 
-	f.l.Errorf("udp reader %v is done", i)
+	if err != nil && !f.closed.Load() {
+		f.l.WithError(err).Error("Error while reading packet inbound packet, closing")
+		//TODO: Trigger Control to close
+	}
+
+	f.l.Debugf("underlay reader %v is done", i)
 	f.wg.Done()
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
+	runtime.LockOSThread()
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
@@ -305,8 +311,8 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 		n, err := reader.Read(packet)
 		if err != nil {
 			if !f.closed.Load() {
-				//TODO: should we close? yes
-				f.l.WithError(err).Error("Error while reading outbound packet")
+				f.l.WithError(err).Error("Error while reading outbound packet, closing")
+				//TODO: Trigger Control to close
 			}
 			break
 		}
@@ -314,7 +320,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
 	}
 
-	f.l.Errorf("tun reader %v is done", i)
+	f.l.Debugf("overlay reader %v is done", i)
 	f.wg.Done()
 }
 
