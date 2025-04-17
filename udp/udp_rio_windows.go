@@ -140,7 +140,7 @@ func (u *RIOConn) bind(l *logrus.Logger, sa windows.Sockaddr) error {
 	return nil
 }
 
-func (u *RIOConn) ListenOut(r EncReader) {
+func (u *RIOConn) ListenOut(r EncReader) error {
 	buffer := make([]byte, MTU)
 
 	var lastRecvErr time.Time
