@@ -32,7 +32,7 @@ type LightHouse struct {
 	amLighthouse bool
 
 	myVpnNetworks      []netip.Prefix
-	myVpnNetworksTable *bart.Table[struct{}]
+	myVpnNetworksTable *bart.Lite
 	punchConn          udp.Conn
 	punchy             *Punchy
 
@@ -201,8 +201,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 
 			//TODO: we could technically insert all returned addrs instead of just the first one if a dns lookup was used
 			addr := addrs[0].Unmap()
-			_, found := lh.myVpnNetworksTable.Lookup(addr)
-			if found {
+			if lh.myVpnNetworksTable.Contains(addr) {
 				lh.l.WithField("addr", rawAddr).WithField("entry", i+1).
 					Warn("Ignoring lighthouse.advertise_addrs report because it is within the nebula network range")
 				continue
@@ -359,8 +358,7 @@ func (lh *LightHouse) parseLighthouses(c *config.C, lhMap map[netip.Addr]struct{
 			return util.NewContextualError("Unable to parse lighthouse host entry", m{"host": host, "entry": i + 1}, err)
 		}
 
-		_, found := lh.myVpnNetworksTable.Lookup(addr)
-		if !found {
+		if !lh.myVpnNetworksTable.Contains(addr) {
 			return util.NewContextualError("lighthouse host is not in our networks, invalid", m{"vpnAddr": addr, "networks": lh.myVpnNetworks}, nil)
 		}
 		lhMap[addr] = struct{}{}
@@ -431,8 +429,7 @@ func (lh *LightHouse) loadStaticMap(c *config.C, staticList map[netip.Addr]struc
 			return util.NewContextualError("Unable to parse static_host_map entry", m{"host": k, "entry": i + 1}, err)
 		}
 
-		_, found := lh.myVpnNetworksTable.Lookup(vpnAddr)
-		if !found {
+		if !lh.myVpnNetworksTable.Contains(vpnAddr) {
 			return util.NewContextualError("static_host_map key is not in our network, invalid", m{"vpnAddr": vpnAddr, "networks": lh.myVpnNetworks, "entry": i + 1}, nil)
 		}
 
@@ -653,8 +650,7 @@ func (lh *LightHouse) shouldAdd(vpnAddr netip.Addr, to netip.Addr) bool {
 		return false
 	}
 
-	_, found := lh.myVpnNetworksTable.Lookup(to)
-	if found {
+	if lh.myVpnNetworksTable.Contains(to) {
 		return false
 	}
 
@@ -674,8 +670,7 @@ func (lh *LightHouse) unlockedShouldAddV4(vpnAddr netip.Addr, to *V4AddrPort) bo
 		return false
 	}
 
-	_, found := lh.myVpnNetworksTable.Lookup(udpAddr.Addr())
-	if found {
+	if lh.myVpnNetworksTable.Contains(udpAddr.Addr()) {
 		return false
 	}
 
@@ -695,8 +690,7 @@ func (lh *LightHouse) unlockedShouldAddV6(vpnAddr netip.Addr, to *V6AddrPort) bo
 		return false
 	}
 
-	_, found := lh.myVpnNetworksTable.Lookup(udpAddr.Addr())
-	if found {
+	if lh.myVpnNetworksTable.Contains(udpAddr.Addr()) {
 		return false
 	}
 
@@ -856,8 +850,7 @@ func (lh *LightHouse) SendUpdate() {
 
 	lal := lh.GetLocalAllowList()
 	for _, e := range localAddrs(lh.l, lal) {
-		_, found := lh.myVpnNetworksTable.Lookup(e)
-		if found {
+		if lh.myVpnNetworksTable.Contains(e) {
 			continue
 		}
 

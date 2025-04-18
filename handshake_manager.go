@@ -274,8 +274,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 			}
 
 			// Don't relay through the host I'm trying to connect to
-			_, found := hm.f.myVpnAddrsTable.Lookup(relay)
-			if found {
+			if hm.f.myVpnAddrsTable.Contains(relay) {
 				continue
 			}
 

@@ -192,8 +192,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 
 	for _, network := range remoteCert.Certificate.Networks() {
 		vpnAddr := network.Addr()
-		_, found := f.myVpnAddrsTable.Lookup(vpnAddr)
-		if found {
+		if f.myVpnAddrsTable.Contains(vpnAddr) {
 			f.l.WithField("vpnAddr", vpnAddr).WithField("udpAddr", addr).
 				WithField("certName", certName).
 				WithField("certVersion", certVersion).
@@ -204,7 +203,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		}
 
 		// vpnAddrs outside our vpn networks are of no use to us, filter them out
-		if _, ok := f.myVpnNetworksTable.Lookup(vpnAddr); !ok {
+		if !f.myVpnNetworksTable.Contains(vpnAddr) {
 			continue
 		}
 
@@ -579,7 +578,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 	for _, network := range vpnNetworks {
 		// vpnAddrs outside our vpn networks are of no use to us, filter them out
 		vpnAddr := network.Addr()
-		if _, ok := f.myVpnNetworksTable.Lookup(vpnAddr); !ok {
+		if !f.myVpnNetworksTable.Contains(vpnAddr) {
 			continue
 		}
 

@@ -22,14 +22,12 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	// Ignore local broadcast packets
 	if f.dropLocalBroadcast {
-		_, found := f.myBroadcastAddrsTable.Lookup(fwPacket.RemoteAddr)
-		if found {
+		if f.myBroadcastAddrsTable.Contains(fwPacket.RemoteAddr) {
 			return
 		}
 	}
 
-	_, found := f.myVpnAddrsTable.Lookup(fwPacket.RemoteAddr)
-	if found {
+	if f.myVpnAddrsTable.Contains(fwPacket.RemoteAddr) {
 		// Immediately forward packets from self to self.
 		// This should only happen on Darwin-based and FreeBSD hosts, which
 		// routes packets from the Nebula addr to the Nebula addr through the Nebula
@@ -130,8 +128,7 @@ func (f *Interface) Handshake(vpnAddr netip.Addr) {
 // getOrHandshakeNoRouting returns nil if the vpnAddr is not routable.
 // If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
 func (f *Interface) getOrHandshakeNoRouting(vpnAddr netip.Addr, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
-	_, found := f.myVpnNetworksTable.Lookup(vpnAddr)
-	if found {
+	if f.myVpnNetworksTable.Contains(vpnAddr) {
 		return f.handshakeManager.GetOrHandshake(vpnAddr, cacheCallback)
 	}
 
