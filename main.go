@@ -284,7 +284,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	var dnsStart func()
 	if lightHouse.amLighthouse && serveDns {
 		l.Debugln("Starting dns server")
-		dnsStart = dnsMain(l, pki.getCertState(), hostMap, c)
+		dnsStart = dnsMain(ctx, l, pki.getCertState(), hostMap, c)
 	}
 
 	return &Control{
