@@ -115,15 +115,14 @@ func (u *RIOConn) bind(sa windows.Sockaddr) error {
 	return nil
 }
 
-func (u *RIOConn) ListenOut(r EncReader) {
+func (u *RIOConn) ListenOut(r EncReader) error {
 	buffer := make([]byte, MTU)
 
 	for {
 		// Just read one packet at a time
 		n, rua, err := u.receive(buffer)
 		if err != nil {
-			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
-			return
+			return err
 		}
 
 		r(netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)), buffer[:n])

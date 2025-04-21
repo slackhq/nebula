@@ -3,6 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 
 	"github.com/sirupsen/logrus"
@@ -58,10 +61,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	go func() {
+		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
+	}()
+
 	if !*configTest {
-		ctrl.Start()
+		wait, err := ctrl.Start()
+		if err != nil {
+			util.LogWithContextIfNeeded("Error while running", err, l)
+			os.Exit(1)
+		}
+
+		go ctrl.ShutdownBlock()
 		notifyReady(l)
-		ctrl.ShutdownBlock()
+		wait()
+
+		l.Info("Goodbye")
 	}
 
 	os.Exit(0)

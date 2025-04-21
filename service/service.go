@@ -54,7 +54,11 @@ func New(config *config.C) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	control.Start()
+
+	wait, err := control.Start()
+	if err != nil {
+		return nil, err
+	}
 
 	ctx := control.Context()
 	eg, ctx := errgroup.WithContext(ctx)
@@ -149,6 +153,12 @@ func New(config *config.C) (*Service, error) {
 			}
 			bufView.Release()
 		}
+	})
+
+	// Add the nebula wait function to the group
+	eg.Go(func() error {
+		wait()
+		return nil
 	})
 
 	return &s, nil
