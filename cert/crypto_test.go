@@ -26,21 +26,21 @@ func TestNewArgon2Parameters(t *testing.T) {
 }
 
 func TestDecryptAndUnmarshalSigningPrivateKey(t *testing.T) {
-	passphrase := []byte("DO NOT USE THIS KEY")
+	passphrase := []byte("DO NOT USE")
 	privKey := []byte(`# A good key
 -----BEGIN NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
-CjwKC0FFUy0yNTYtR0NNEi0IExCAgIABGAEgBCognnjujd67Vsv99p22wfAjQaDT
-oCMW1mdjkU3gACKNW4MSXOWR9Sts4C81yk1RUku2gvGKs3TB9LYoklLsIizSYOLl
-+Vs//O1T0I1Xbml2XBAROsb/VSoDln/6LMqR4B6fn6B3GOsLBBqRI8daDl9lRMPB
-qrlJ69wer3ZUHFXA
+CjsKC0FFUy0yNTYtR0NNEiwIExCAgAQYAyAEKiCPoDfGQiosxNPTbPn5EsMlc2MI
+c0Bt4oz6gTrFQhX3aBJcimhHKeAuhyTGvllD0Z19fe+DFPcLH3h5VrdjVfIAajg0
+KrbV3n9UHif/Au5skWmquNJzoW1E4MTdRbvpti6o+WdQ49DxjBFhx0YH8LBqrbPU
+0BGkUHmIO7daP24=
 -----END NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
 `)
 	shortKey := []byte(`# A key which, once decrypted, is too short
 -----BEGIN NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
-CjwKC0FFUy0yNTYtR0NNEi0IExCAgIABGAEgBCoga5h8owMEBWRSMMJKzuUvWce7
-k0qlBkQmCxiuLh80MuASW70YcKt8jeEIS2axo2V6zAKA9TSMcCsJW1kDDXEtL/xe
-GLF5T7sDl5COp4LU3pGxpV+KoeQ/S3gQCAAcnaOtnJQX+aSDnbO3jCHyP7U9CHbs
-rQr3bdH3Oy/WiYU=
+CjsKC0FFUy0yNTYtR0NNEiwIExCAgAQYAyAEKiAVJwdfl3r+eqi/vF6S7OMdpjfo
+hAzmTCRnr58Su4AqmBJbCv3zleYCEKYJP6UI3S8ekLMGISsgO4hm5leukCCyqT0Z
+cQ76yrberpzkJKoPLGisX8f+xdy4aXSZl7oEYWQte1+vqbtl/eY9PGZhxUQdcyq7
+hqzIyrRqfUgVuA==
 -----END NEBULA ED25519 ENCRYPTED PRIVATE KEY-----
 `)
 	invalidBanner := []byte(`# Invalid banner (not encrypted)
