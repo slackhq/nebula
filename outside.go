@@ -31,8 +31,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 
 	//l.Error("in packet ", header, packet[HeaderLen:])
 	if ip.IsValid() {
-		_, found := f.myVpnNetworksTable.Lookup(ip.Addr())
-		if found {
+		if f.myVpnNetworksTable.Contains(ip.Addr()) {
 			if f.l.Level >= logrus.DebugLevel {
 				f.l.WithField("udpAddr", ip).Debug("Refusing to process double encrypted packet")
 			}

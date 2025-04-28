@@ -39,10 +39,10 @@ type CertState struct {
 	cipher            string
 
 	myVpnNetworks            []netip.Prefix
-	myVpnNetworksTable       *bart.Table[struct{}]
+	myVpnNetworksTable       *bart.Lite
 	myVpnAddrs               []netip.Addr
-	myVpnAddrsTable          *bart.Table[struct{}]
-	myVpnBroadcastAddrsTable *bart.Table[struct{}]
+	myVpnAddrsTable          *bart.Lite
+	myVpnBroadcastAddrsTable *bart.Lite
 }
 
 func NewPKIFromConfig(l *logrus.Logger, c *config.C) (*PKI, error) {
@@ -345,9 +345,9 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 	cs := CertState{
 		privateKey:               privateKey,
 		pkcs11Backed:             pkcs11backed,
-		myVpnNetworksTable:       new(bart.Table[struct{}]),
-		myVpnAddrsTable:          new(bart.Table[struct{}]),
-		myVpnBroadcastAddrsTable: new(bart.Table[struct{}]),
+		myVpnNetworksTable:       new(bart.Lite),
+		myVpnAddrsTable:          new(bart.Lite),
+		myVpnBroadcastAddrsTable: new(bart.Lite),
 	}
 
 	if v1 != nil && v2 != nil {
@@ -415,16 +415,16 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 
 	for _, network := range crt.Networks() {
 		cs.myVpnNetworks = append(cs.myVpnNetworks, network)
-		cs.myVpnNetworksTable.Insert(network, struct{}{})
+		cs.myVpnNetworksTable.Insert(network)
 
 		cs.myVpnAddrs = append(cs.myVpnAddrs, network.Addr())
-		cs.myVpnAddrsTable.Insert(netip.PrefixFrom(network.Addr(), network.Addr().BitLen()), struct{}{})
+		cs.myVpnAddrsTable.Insert(netip.PrefixFrom(network.Addr(), network.Addr().BitLen()))
 
 		if network.Addr().Is4() {
 			addr := network.Masked().Addr().As4()
 			mask := net.CIDRMask(network.Bits(), network.Addr().BitLen())
 			binary.BigEndian.PutUint32(addr[:], binary.BigEndian.Uint32(addr[:])|^binary.BigEndian.Uint32(mask))
-			cs.myVpnBroadcastAddrsTable.Insert(netip.PrefixFrom(netip.AddrFrom4(addr), network.Addr().BitLen()), struct{}{})
+			cs.myVpnBroadcastAddrsTable.Insert(netip.PrefixFrom(netip.AddrFrom4(addr), network.Addr().BitLen()))
 		}
 	}
 
