@@ -124,6 +124,7 @@ For each host, copy the nebula binary to the host, along with `config.yml` from 
 **DO NOT COPY `ca.key` TO INDIVIDUAL NODES.**
 
 #### 7. Run nebula on each host
+
 ```sh
 ./nebula -config /path/to/config.yml
 ```
@@ -147,6 +148,7 @@ See the [Makefile](Makefile) for more details on build targets
 The default curve used for cryptographic handshakes and signatures is Curve25519. This is the recommended setting for most users. If your deployment has certain compliance requirements, you have the option of creating your CA using `nebula-cert ca -curve P256` to use NIST Curve P256. The CA will then sign certificates using ECDSA P256, and any hosts using these certificates will use P256 for ECDH handshakes.
 
 In addition, Nebula can be built using the [BoringCrypto GOEXPERIMENT](https://github.com/golang/go/blob/go1.20/src/crypto/internal/boring/README.md) by running either of the following make targets:
+
 ```sh
 make bin-boringcrypto
 make release-boringcrypto
