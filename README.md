@@ -28,33 +28,33 @@ Check the [releases](https://github.com/slackhq/nebula/releases/latest) page for
 #### Distribution Packages
 
 - [Arch Linux](https://archlinux.org/packages/extra/x86_64/nebula/)
-    ```
-    $ sudo pacman -S nebula
+    ```sh
+    sudo pacman -S nebula
     ```
 
 - [Fedora Linux](https://src.fedoraproject.org/rpms/nebula)
-    ```
-    $ sudo dnf install nebula
+    ```sh
+    sudo dnf install nebula
     ```
 
 - [Debian Linux](https://packages.debian.org/source/stable/nebula)
-    ```
-    $ sudo apt install nebula
+    ```sh
+    sudo apt install nebula
     ```
 
 - [Alpine Linux](https://pkgs.alpinelinux.org/packages?name=nebula)
-    ```
-    $ sudo apk add nebula
+    ```sh
+    sudo apk add nebula
     ```
 
 - [macOS Homebrew](https://github.com/Homebrew/homebrew-core/blob/HEAD/Formula/n/nebula.rb)
-    ```
-    $ brew install nebula
+    ```sh
+    brew install nebula
     ```
 
 - [Docker](https://hub.docker.com/r/nebulaoss/nebula)
-    ```
-    $ docker pull nebulaoss/nebula
+    ```sh
+    docker pull nebulaoss/nebula
     ```
 
 #### Mobile
@@ -88,7 +88,7 @@ Once you have launched an instance, ensure that Nebula udp traffic (default port
 
 #### 3. A Nebula certificate authority, which will be the root of trust for a particular Nebula network.
 
-```
+```sh
 ./nebula-cert ca -name "Myorganization, Inc"
 ```
 
@@ -99,7 +99,7 @@ This will create files named `ca.key` and `ca.cert` in the current directory. Th
 #### 4. Nebula host keys and certificates generated from that certificate authority
 
 This assumes you have four nodes, named lighthouse1, laptop, server1, host3. You can name the nodes any way you'd like, including FQDN. You'll also need to choose IP addresses and the associated subnet. In this example, we are creating a nebula network that will use 192.168.100.x/24 as its network range. This example also demonstrates nebula groups, which can later be used to define traffic rules in a nebula network.
-```
+```sh
 ./nebula-cert sign -name "lighthouse1" -ip "192.168.100.1/24"
 ./nebula-cert sign -name "laptop" -ip "192.168.100.2/24" -groups "laptop,home,ssh"
 ./nebula-cert sign -name "server1" -ip "192.168.100.9/24" -groups "servers"
@@ -125,7 +125,7 @@ For each host, copy the nebula binary to the host, along with `config.yml` from 
 
 #### 7. Run nebula on each host
 
-```
+```sh
 ./nebula -config /path/to/config.yml
 ```
 
@@ -149,7 +149,7 @@ The default curve used for cryptographic handshakes and signatures is Curve25519
 
 In addition, Nebula can be built using the [BoringCrypto GOEXPERIMENT](https://github.com/golang/go/blob/go1.20/src/crypto/internal/boring/README.md) by running either of the following make targets:
 
-```
+```sh
 make bin-boringcrypto
 make release-boringcrypto
 ```
