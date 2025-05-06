@@ -9,7 +9,6 @@ import (
 	"net/netip"
 	"slices"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,7 +26,7 @@ var ErrHostNotKnown = errors.New("host not known")
 
 type LightHouse struct {
 	//TODO: We need a timer wheel to kick out vpnAddrs that haven't reported in a long time
-	sync.RWMutex //Because we concurrently read and write to our maps
+	syncRWMutex  //Because we concurrently read and write to our maps
 	ctx          context.Context
 	amLighthouse bool
 
@@ -96,6 +95,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 	}
 
 	h := LightHouse{
+		syncRWMutex:        newSyncRWMutex("lighthouse"),
 		ctx:                ctx,
 		amLighthouse:       amLighthouse,
 		myVpnNetworks:      cs.myVpnNetworks,
@@ -472,6 +472,7 @@ func (lh *LightHouse) QueryServer(vpnAddr netip.Addr) {
 		return
 	}
 
+	chanDebugSend("lighthouse-query-chan")
 	lh.queryChan <- vpnAddr
 }
 
@@ -724,6 +725,8 @@ func (lh *LightHouse) startQueryWorker() {
 	go func() {
 		nb := make([]byte, 12, 12)
 		out := make([]byte, mtu)
+
+		chanDebugRecv("lighthouse-query-chan")
 
 		for {
 			select {

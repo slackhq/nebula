@@ -242,6 +242,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 	}
 
 	hostinfo := &HostInfo{
+		syncRWMutex:       newSyncRWMutex("hostinfo"),
 		ConnectionState:   ci,
 		localIndexId:      myIndex,
 		remoteIndexId:     hs.Details.InitiatorIndex,
@@ -249,6 +250,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		HandshakePacket:   make(map[uint8][]byte, 0),
 		lastHandshakeTime: hs.Details.Time,
 		relayState: RelayState{
+			syncRWMutex:    newSyncRWMutex("relay-state"),
 			relays:         map[netip.Addr]struct{}{},
 			relayForByAddr: map[netip.Addr]*Relay{},
 			relayForByIdx:  map[uint32]*Relay{},
