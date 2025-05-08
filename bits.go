@@ -5,6 +5,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// TODO: Pretty sure this is just all sorts of racy now, we need it to be atomic
 type Bits struct {
 	length             uint64
 	current            uint64
@@ -43,7 +44,7 @@ func (b *Bits) Check(l logrus.FieldLogger, i uint64) bool {
 	}
 
 	// Not within the window
-	l.Debugf("rejected a packet (top) %d %d\n", b.current, i)
+	l.Error("rejected a packet (top) %d %d\n", b.current, i)
 	return false
 }
 

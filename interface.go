@@ -202,9 +202,11 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 			dropped: metrics.GetOrRegisterCounter("hostinfo.cached_packets.dropped", nil),
 		},
 
-		inbound:  make(chan *packet.Packet, 1024),
-		outbound: make(chan *[]byte, 1024),
-		l:        c.l,
+		//TODO: configurable size
+		inbound:  make(chan *packet.Packet, 1028),
+		outbound: make(chan *[]byte, 1028),
+
+		l: c.l,
 	}
 
 	ifce.inPool = sync.Pool{New: func() any {
@@ -264,22 +266,22 @@ func (f *Interface) activate() error {
 }
 
 func (f *Interface) run(c context.Context) (func(), error) {
-	// Launch n queues to read packets from udp
 	for i := 0; i < f.routines; i++ {
+		// Launch n queues to read packets from udp
 		f.wg.Add(1)
 		go f.listenOut(i)
-	}
 
-	// Launch n queues to read packets from tun dev
-	for i := 0; i < f.routines; i++ {
+		// Launch n queues to read packets from tun dev
 		f.wg.Add(1)
 		go f.listenIn(f.readers[i], i)
-	}
 
-	// Launch n queues to read packets from tun dev
-	for i := 0; i < f.routines; i++ {
+		// Launch n queues to read packets from tun dev
 		f.wg.Add(1)
-		go f.worker(i, c)
+		go f.workerIn(i, c)
+
+		// Launch n queues to read packets from tun dev
+		f.wg.Add(1)
+		go f.workerOut(i, c)
 	}
 
 	return f.wg.Wait, nil
@@ -298,12 +300,16 @@ func (f *Interface) listenOut(i int) {
 		p := f.inPool.Get().(*packet.Packet)
 		//TODO: have the listener store this in the msgs array after a read instead of doing a copy
 
+		p.Payload = p.Payload[:mtu]
 		copy(p.Payload, payload)
 		p.Payload = p.Payload[:len(payload)]
 		p.Addr = fromUdpAddr
-		select {
-		case f.inbound <- p:
-		}
+		f.inbound <- p
+		//select {
+		//case f.inbound <- p:
+		//default:
+		//	f.l.Error("Dropped packet from inbound channel")
+		//}
 	})
 
 	if err != nil && !f.closed.Load() {
@@ -320,6 +326,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 
 	for {
 		p := f.outPool.Get().(*[]byte)
+		*p = (*p)[:mtu]
 		n, err := reader.Read(*p)
 		if err != nil {
 			if !f.closed.Load() {
@@ -331,33 +338,51 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 
 		*p = (*p)[:n]
 		//TODO: nonblocking channel write
-		select {
-		case f.outbound <- p:
-		}
+		f.outbound <- p
+		//select {
+		//case f.outbound <- p:
+		//default:
+		//	f.l.Error("Dropped packet from outbound channel")
+		//}
 	}
 
 	f.l.Debugf("overlay reader %v is done", i)
 	f.wg.Done()
 }
 
-func (f *Interface) worker(i int, ctx context.Context) {
+func (f *Interface) workerIn(i int, ctx context.Context) {
 	lhh := f.lightHouse.NewRequestHandler()
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
-	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
-	result := make([]byte, mtu)
+	fwPacket2 := &firewall.Packet{}
+	nb2 := make([]byte, 12, 12)
+	result2 := make([]byte, mtu)
 	h := &header.H{}
 
 	for {
 		select {
-		case data := <-f.outbound:
-			f.consumeInsidePacket(*data, fwPacket, nb, result, i, conntrackCache.Get(f.l))
-			*data = (*data)[:mtu]
-			f.outPool.Put(data)
 		case p := <-f.inbound:
-			f.readOutsidePackets(p.Addr, nil, result[:0], p.Payload, h, fwPacket, lhh, nb, i, conntrackCache.Get(f.l))
+			f.readOutsidePackets(p.Addr, nil, result2[:0], p.Payload, h, fwPacket2, lhh, nb2, i, conntrackCache.Get(f.l))
 			p.Payload = p.Payload[:mtu]
 			f.inPool.Put(p)
+		case <-ctx.Done():
+			f.wg.Done()
+			return
+		}
+	}
+}
+
+func (f *Interface) workerOut(i int, ctx context.Context) {
+	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
+	fwPacket1 := &firewall.Packet{}
+	nb1 := make([]byte, 12, 12)
+	result1 := make([]byte, mtu)
+
+	for {
+		select {
+		case data := <-f.outbound:
+			f.consumeInsidePacket(*data, fwPacket1, nb1, result1, i, conntrackCache.Get(f.l))
+			*data = (*data)[:mtu]
+			f.outPool.Put(data)
 		case <-ctx.Done():
 			f.wg.Done()
 			return
