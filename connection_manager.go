@@ -45,7 +45,7 @@ type connectionManager struct {
 	relayUsedLock *sync.RWMutex
 
 	// Track last communication with hosts
-	lastCommMap       map[uint32]*LastCommunication
+	lastCommMap       map[uint32]time.Time
 	lastCommLock      *sync.RWMutex
 	inactivityTimer   *LockingTimerWheel[uint32]
 	inactivityTimeout time.Duration
@@ -78,7 +78,7 @@ func newConnectionManager(ctx context.Context, l *logrus.Logger, intf *Interface
 		outLock:                 &sync.RWMutex{},
 		relayUsed:               make(map[uint32]struct{}),
 		relayUsedLock:           &sync.RWMutex{},
-		lastCommMap:             make(map[uint32]*LastCommunication),
+		lastCommMap:             make(map[uint32]time.Time),
 		lastCommLock:            &sync.RWMutex{},
 		inactivityTimeout:       1 * time.Minute, // Default inactivity timeout: 10 minutes
 		trafficTimer:            NewLockingTimerWheel[uint32](time.Millisecond*500, max),
@@ -107,18 +107,7 @@ func (n *connectionManager) updateLastCommunication(localIndex uint32) {
 
 	now := time.Now()
 	n.lastCommLock.Lock()
-	lastComm, exists := n.lastCommMap[localIndex]
-	if !exists {
-		// First time we've seen this host
-		lastComm = &LastCommunication{
-			timestamp: now,
-			vpnIp:     hostInfo.vpnIp,
-		}
-		n.lastCommMap[localIndex] = lastComm
-	} else {
-		// Update existing record
-		lastComm.timestamp = now
-	}
+	n.lastCommMap[localIndex] = now
 	n.lastCommLock.Unlock()
 
 	// Reset the inactivity timer for this host
@@ -229,7 +218,7 @@ func (n *connectionManager) checkInactiveTunnels() {
 		}
 
 		// Calculate inactivity duration
-		inactiveDuration := now.Sub(lastComm.timestamp)
+		inactiveDuration := now.Sub(lastComm)
 
 		// Check if we've exceeded the inactivity timeout
 		if inactiveDuration >= n.inactivityTimeout {
@@ -244,7 +233,7 @@ func (n *connectionManager) checkInactiveTunnels() {
 			}
 
 			// Log the inactivity and drop the tunnel
-			n.l.WithField("vpnIp", lastComm.vpnIp).
+			n.l.WithField("vpnIp", hostInfo.vpnIp).
 				WithField("localIndex", localIndex).
 				WithField("inactiveDuration", inactiveDuration).
 				WithField("timeout", n.inactivityTimeout).
@@ -311,7 +300,7 @@ func (n *connectionManager) ReloadConfig(c *config.C) {
 		for localIndex, lastComm := range n.lastCommMap {
 			// Calculate remaining time based on last communication
 			now := time.Now()
-			elapsed := now.Sub(lastComm.timestamp)
+			elapsed := now.Sub(lastComm)
 
 			// If the elapsed time exceeds the new timeout, this will be caught
 			// in the next inactivity check. Otherwise, add with remaining time.
@@ -661,12 +650,12 @@ func (n *connectionManager) sendPunch(hostinfo *HostInfo) {
 	if n.punchy.GetTargetEverything() {
 		hostinfo.remotes.ForEach(n.hostMap.GetPreferredRanges(), func(addr netip.AddrPort, preferred bool) {
 			n.metricsTxPunchy.Inc(1)
-			n.intf.outside.WriteTo([]byte{1}, addr)
+			//n.intf.outside.WriteTo([]byte{1}, addr)
 		})
 
 	} else if hostinfo.remote.IsValid() {
 		n.metricsTxPunchy.Inc(1)
-		n.intf.outside.WriteTo([]byte{1}, hostinfo.remote)
+		//n.intf.outside.WriteTo([]byte{1}, hostinfo.remote)
 	}
 }
 
