@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"sync"
 	"time"
 )
 
@@ -34,7 +33,7 @@ type TimerWheel[T any] struct {
 }
 
 type LockingTimerWheel[T any] struct {
-	m sync.Mutex
+	m syncMutex
 	t *TimerWheel[T]
 }
 
@@ -81,8 +80,9 @@ func NewTimerWheel[T any](min, max time.Duration) *TimerWheel[T] {
 }
 
 // NewLockingTimerWheel is version of TimerWheel that is safe for concurrent use with a small performance penalty
-func NewLockingTimerWheel[T any](min, max time.Duration) *LockingTimerWheel[T] {
+func NewLockingTimerWheel[T any](name string, min, max time.Duration) *LockingTimerWheel[T] {
 	return &LockingTimerWheel[T]{
+		m: newSyncMutex(name),
 		t: NewTimerWheel[T](min, max),
 	}
 }

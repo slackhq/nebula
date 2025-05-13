@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"net/netip"
-	"sync"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -28,14 +27,14 @@ const (
 
 type connectionManager struct {
 	in     map[uint32]struct{}
-	inLock *sync.RWMutex
+	inLock syncRWMutex
 
 	out     map[uint32]struct{}
-	outLock *sync.RWMutex
+	outLock syncRWMutex
 
 	// relayUsed holds which relay localIndexs are in use
 	relayUsed     map[uint32]struct{}
-	relayUsedLock *sync.RWMutex
+	relayUsedLock syncRWMutex
 
 	hostMap                 *HostMap
 	trafficTimer            *LockingTimerWheel[uint32]
@@ -60,12 +59,12 @@ func newConnectionManager(ctx context.Context, l *logrus.Logger, intf *Interface
 	nc := &connectionManager{
 		hostMap:                 intf.hostMap,
 		in:                      make(map[uint32]struct{}),
-		inLock:                  &sync.RWMutex{},
+		inLock:                  newSyncRWMutex("connection-manager-in"),
 		out:                     make(map[uint32]struct{}),
-		outLock:                 &sync.RWMutex{},
+		outLock:                 newSyncRWMutex("connection-manager-out"),
 		relayUsed:               make(map[uint32]struct{}),
-		relayUsedLock:           &sync.RWMutex{},
-		trafficTimer:            NewLockingTimerWheel[uint32](time.Millisecond*500, max),
+		relayUsedLock:           newSyncRWMutex("connection-manager-relay-used"),
+		trafficTimer:            NewLockingTimerWheel[uint32]("connection-manager-timer", time.Millisecond*500, max),
 		intf:                    intf,
 		pendingDeletion:         make(map[uint32]struct{}),
 		checkInterval:           checkInterval,

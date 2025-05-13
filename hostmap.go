@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net"
 	"net/netip"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -53,7 +52,7 @@ type Relay struct {
 }
 
 type HostMap struct {
-	sync.RWMutex    //Because we concurrently read and write to our maps
+	syncRWMutex     //Because we concurrently read and write to our maps
 	Indexes         map[uint32]*HostInfo
 	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a Relay HostInfo object
 	RemoteIndexes   map[uint32]*HostInfo
@@ -66,7 +65,7 @@ type HostMap struct {
 // struct, make a copy of an existing value, edit the fileds in the copy, and
 // then store a pointer to the new copy in both realyForBy* maps.
 type RelayState struct {
-	sync.RWMutex
+	syncRWMutex
 
 	relays map[netip.Addr]struct{} // Set of vpnAddr's of Hosts to use as relays to access this peer
 	// For data race avoidance, the contents of a *Relay are treated immutably. To update a *Relay, copy the existing data,
@@ -209,6 +208,7 @@ func (rs *RelayState) InsertRelay(ip netip.Addr, idx uint32, r *Relay) {
 }
 
 type HostInfo struct {
+	syncRWMutex
 	remote          netip.AddrPort
 	remotes         *RemoteList
 	promoteCounter  atomic.Uint32
@@ -288,6 +288,7 @@ func NewHostMapFromConfig(l *logrus.Logger, c *config.C) *HostMap {
 
 func newHostMap(l *logrus.Logger) *HostMap {
 	return &HostMap{
+		syncRWMutex:   newSyncRWMutex("hostmap"),
 		Indexes:       map[uint32]*HostInfo{},
 		Relays:        map[uint32]*HostInfo{},
 		RemoteIndexes: map[uint32]*HostInfo{},
