@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net/netip"
 	"sync"
 	"time"
@@ -227,21 +228,25 @@ func (n *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo)
 		var relayFrom netip.Addr
 		var relayTo netip.Addr
 		switch {
-		case ok && existing.State == Established:
-			// This relay already exists in newhostinfo, then do nothing.
-			continue
-		case ok && existing.State == Requested:
-			// The relay exists in a Requested state; re-send the request
-			index = existing.LocalIndex
-			switch r.Type {
-			case TerminalType:
-				relayFrom = n.intf.myVpnAddrs[0]
-				relayTo = existing.PeerAddr
-			case ForwardingType:
-				relayFrom = existing.PeerAddr
-				relayTo = newhostinfo.vpnAddrs[0]
-			default:
-				// should never happen
+		case ok:
+			switch existing.State {
+			case Established, PeerRequested, Disestablished:
+				// This relay already exists in newhostinfo, then do nothing.
+				continue
+			case Requested:
+				// The relay exists in a Requested state; re-send the request
+				index = existing.LocalIndex
+				switch r.Type {
+				case TerminalType:
+					relayFrom = n.intf.myVpnAddrs[0]
+					relayTo = existing.PeerAddr
+				case ForwardingType:
+					relayFrom = existing.PeerAddr
+					relayTo = newhostinfo.vpnAddrs[0]
+				default:
+					// should never happen
+					panic(fmt.Sprintf("Migrating unknown relay type: %v", r.Type))
+				}
 			}
 		case !ok:
 			n.relayUsedLock.RLock()
@@ -267,6 +272,7 @@ func (n *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo)
 				relayTo = newhostinfo.vpnAddrs[0]
 			default:
 				// should never happen
+				panic(fmt.Sprintf("Migrating unknown relay type: %v", r.Type))
 			}
 		}
 
