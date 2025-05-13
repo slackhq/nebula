@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
@@ -125,13 +126,27 @@ func (u *RIOConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
+	consecutiveErrors := 0
 	for {
 		// Just read one packet at a time
 		n, rua, err := u.receive(buffer)
 		if err != nil {
-			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
-			return
+			if errors.Is(err, net.ErrClosed) {
+				u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
+				return
+			}
+			// Try to suss out whether this is a transient error or something more permanent
+			consecutiveErrors++
+			u.l.WithError(err).WithField("consecutiveErrors", consecutiveErrors).Error("unexpected udp socket recieve error")
+			if consecutiveErrors > 15 {
+				panic("too many consecutive UDP receive errors")
+			} else if consecutiveErrors > 10 {
+				time.Sleep(100 * time.Millisecond)
+			}
+			continue
 		}
+
+		consecutiveErrors = 0
 
 		r(
 			netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)),
