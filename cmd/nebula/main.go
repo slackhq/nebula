@@ -10,6 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/port_forwarder"
 	"github.com/slackhq/nebula/service"
 	"github.com/slackhq/nebula/util"
@@ -66,7 +67,12 @@ func main() {
 	if !*configTest && disabled_tun && (activate_service_anyway || !fwd_list.IsEmpty()) {
 		l.Infof("Configuring user-tun instead of disabled-tun as port forwarding is configured")
 
-		service, err := service.New(c, l)
+		control, err := nebula.Main(c, false, "custom-app", l, overlay.NewUserDeviceFromConfig)
+		if err != nil {
+			panic(err)
+		}
+
+		service, err := service.New(control)
 		if err != nil {
 			util.LogWithContextIfNeeded("Failed to create service", err, l)
 			os.Exit(1)

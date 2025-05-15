@@ -36,6 +36,10 @@ type Control struct {
 	lighthouseStart func()
 }
 
+func (c *Control) GetLogger() *logrus.Logger {
+	return c.l
+}
+
 type ControlHostInfo struct {
 	VpnAddrs               []netip.Addr     `json:"vpnAddrs"`
 	LocalIndex             uint32           `json:"localIndex"`
@@ -131,8 +135,7 @@ func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 
 // GetCertByVpnIp returns the authenticated certificate of the given vpn IP, or nil if not found
 func (c *Control) GetCertByVpnIp(vpnIp netip.Addr) cert.Certificate {
-	_, found := c.f.myVpnAddrsTable.Lookup(vpnIp)
-	if found {
+	if c.f.myVpnAddrsTable.Contains(vpnIp) {
 		// Only returning the default certificate since its impossible
 		// for any other host but ourselves to have more than 1
 		return c.f.pki.getCertState().GetDefaultCertificate().Copy()

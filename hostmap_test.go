@@ -210,8 +210,8 @@ func TestHostMap_reload(t *testing.T) {
 	assert.Empty(t, hm.GetPreferredRanges())
 
 	c.ReloadConfigString("preferred_ranges: [1.1.1.0/24, 10.1.1.0/24]")
-	assert.EqualValues(t, []string{"1.1.1.0/24", "10.1.1.0/24"}, toS(hm.GetPreferredRanges()))
+	assert.Equal(t, []string{"1.1.1.0/24", "10.1.1.0/24"}, toS(hm.GetPreferredRanges()))
 
 	c.ReloadConfigString("preferred_ranges: [1.1.1.1/32]")
-	assert.EqualValues(t, []string{"1.1.1.1/32"}, toS(hm.GetPreferredRanges()))
+	assert.Equal(t, []string{"1.1.1.1/32"}, toS(hm.GetPreferredRanges()))
 }

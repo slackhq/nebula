@@ -17,6 +17,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 )
 
@@ -25,7 +26,7 @@ type tun struct {
 	vpnNetworks []netip.Prefix
 	MTU         int
 	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[netip.Addr]]
+	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *logrus.Logger
 
 	io.ReadWriteCloser
@@ -158,7 +159,7 @@ func (t *tun) Activate() error {
 	return nil
 }
 
-func (t *tun) RouteFor(ip netip.Addr) netip.Addr {
+func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 	r, _ := t.routeTree.Load().Lookup(ip)
 	return r
 }
@@ -166,7 +167,7 @@ func (t *tun) RouteFor(ip netip.Addr) netip.Addr {
 func (t *tun) addRoutes(logErrors bool) error {
 	routes := *t.Routes.Load()
 	for _, r := range routes {
-		if !r.Via.IsValid() || !r.Install {
+		if len(r.Via) == 0 || !r.Install {
 			// We don't allow route MTUs so only install routes with a via
 			continue
 		}
@@ -174,7 +175,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 		cmd := exec.Command("/sbin/route", "-n", "add", "-inet", r.Cidr.String(), t.vpnNetworks[0].Addr().String())
 		t.l.Debug("command: ", cmd.String())
 		if err := cmd.Run(); err != nil {
-			retErr := util.NewContextualError("failed to run 'route add' for unsafe_route", map[string]interface{}{"route": r}, err)
+			retErr := util.NewContextualError("failed to run 'route add' for unsafe_route", map[string]any{"route": r}, err)
 			if logErrors {
 				retErr.Log(t.l)
 			} else {

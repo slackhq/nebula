@@ -16,7 +16,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
-	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/util"
 	"golang.org/x/sync/errgroup"
@@ -49,17 +48,13 @@ type Service struct {
 	}
 }
 
-func New(config *config.C, logger *logrus.Logger) (*Service, error) {
-	control, err := nebula.Main(config, false, "custom-app", logger, overlay.NewUserDeviceFromConfig)
-	if err != nil {
-		return nil, err
-	}
+func New(control *nebula.Control) (*Service, error) {
 	control.Start()
 
 	ctx := control.Context()
 	eg, ctx := errgroup.WithContext(ctx)
 	s := Service{
-		l:       logger,
+		l:       control.GetLogger(),
 		eg:      eg,
 		control: control,
 	}

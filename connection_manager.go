@@ -503,7 +503,7 @@ func (n *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 	cs := n.intf.pki.getCertState()
 	curCrt := hostinfo.ConnectionState.myCert
 	myCrt := cs.getCertificate(curCrt.Version())
-	if curCrt.Version() >= cs.defaultVersion && bytes.Equal(curCrt.Signature(), myCrt.Signature()) == true {
+	if curCrt.Version() >= cs.initiatingVersion && bytes.Equal(curCrt.Signature(), myCrt.Signature()) == true {
 		// The current tunnel is using the latest certificate and version, no need to rehandshake.
 		return
 	}

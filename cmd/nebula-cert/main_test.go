@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_help(t *testing.T) {
@@ -79,7 +80,7 @@ func assertHelpError(t *testing.T, err error, msg string) {
 		t.Fatal(fmt.Sprintf("err was not a helpError: %q, expected %q", err, msg))
 	}
 
-	assert.EqualError(t, err, msg)
+	require.EqualError(t, err, msg)
 }
 
 func optionalPkcs11String(msg string) string {

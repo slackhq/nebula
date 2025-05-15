@@ -13,7 +13,8 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
-	"gopkg.in/yaml.v2"
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestOldIPv4Only(t *testing.T) {
@@ -21,7 +22,7 @@ func TestOldIPv4Only(t *testing.T) {
 	b := []byte{8, 129, 130, 132, 80, 16, 10}
 	var m V4AddrPort
 	err := m.Unmarshal(b)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	ip := netip.MustParseAddr("10.1.1.1")
 	bp := ip.As4()
 	assert.Equal(t, binary.BigEndian.Uint32(bp[:]), m.GetAddr())
@@ -30,8 +31,8 @@ func TestOldIPv4Only(t *testing.T) {
 func Test_lhStaticMapping(t *testing.T) {
 	l := test.NewLogger()
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/16")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
@@ -39,24 +40,24 @@ func Test_lhStaticMapping(t *testing.T) {
 	lh1 := "10.128.0.2"
 
 	c := config.NewC(l)
-	c.Settings["lighthouse"] = map[interface{}]interface{}{"hosts": []interface{}{lh1}}
-	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"1.1.1.1:4242"}}
+	c.Settings["lighthouse"] = map[string]any{"hosts": []any{lh1}}
+	c.Settings["static_host_map"] = map[string]any{lh1: []any{"1.1.1.1:4242"}}
 	_, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	lh2 := "10.128.0.3"
 	c = config.NewC(l)
-	c.Settings["lighthouse"] = map[interface{}]interface{}{"hosts": []interface{}{lh1, lh2}}
-	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"100.1.1.1:4242"}}
+	c.Settings["lighthouse"] = map[string]any{"hosts": []any{lh1, lh2}}
+	c.Settings["static_host_map"] = map[string]any{lh1: []any{"100.1.1.1:4242"}}
 	_, err = NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
-	assert.EqualError(t, err, "lighthouse 10.128.0.3 does not have a static_host_map entry")
+	require.EqualError(t, err, "lighthouse 10.128.0.3 does not have a static_host_map entry")
 }
 
 func TestReloadLighthouseInterval(t *testing.T) {
 	l := test.NewLogger()
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/16")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
@@ -64,34 +65,34 @@ func TestReloadLighthouseInterval(t *testing.T) {
 	lh1 := "10.128.0.2"
 
 	c := config.NewC(l)
-	c.Settings["lighthouse"] = map[interface{}]interface{}{
-		"hosts":    []interface{}{lh1},
+	c.Settings["lighthouse"] = map[string]any{
+		"hosts":    []any{lh1},
 		"interval": "1s",
 	}
 
-	c.Settings["static_host_map"] = map[interface{}]interface{}{lh1: []interface{}{"1.1.1.1:4242"}}
+	c.Settings["static_host_map"] = map[string]any{lh1: []any{"1.1.1.1:4242"}}
 	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	lh.ifce = &mockEncWriter{}
 
 	// The first one routine is kicked off by main.go currently, lets make sure that one dies
-	assert.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 5"))
+	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 5"))
 	assert.Equal(t, int64(5), lh.interval.Load())
 
 	// Subsequent calls are killed off by the LightHouse.Reload function
-	assert.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 10"))
+	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 10"))
 	assert.Equal(t, int64(10), lh.interval.Load())
 
 	// If this completes then nothing is stealing our reload routine
-	assert.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 11"))
+	require.NoError(t, c.ReloadConfigString("lighthouse:\n  interval: 11"))
 	assert.Equal(t, int64(11), lh.interval.Load())
 }
 
 func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	l := test.NewLogger()
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/0")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
@@ -99,9 +100,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 
 	c := config.NewC(l)
 	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
-	if !assert.NoError(b, err) {
-		b.Fatal()
-	}
+	require.NoError(b, err)
 
 	hAddr := netip.MustParseAddrPort("4.5.6.7:12345")
 	hAddr2 := netip.MustParseAddrPort("4.5.6.7:12346")
@@ -145,7 +144,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 			},
 		}
 		p, err := req.Marshal()
-		assert.NoError(b, err)
+		require.NoError(b, err)
 		for n := 0; n < b.N; n++ {
 			lhh.HandleRequest(rAddr, hi, p, mw)
 		}
@@ -160,7 +159,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 			},
 		}
 		p, err := req.Marshal()
-		assert.NoError(b, err)
+		require.NoError(b, err)
 
 		for n := 0; n < b.N; n++ {
 			lhh.HandleRequest(rAddr, hi, p, mw)
@@ -193,19 +192,19 @@ func TestLighthouse_Memory(t *testing.T) {
 	theirVpnIp := netip.MustParseAddr("10.128.0.3")
 
 	c := config.NewC(l)
-	c.Settings["lighthouse"] = map[interface{}]interface{}{"am_lighthouse": true}
-	c.Settings["listen"] = map[interface{}]interface{}{"port": 4242}
+	c.Settings["lighthouse"] = map[string]any{"am_lighthouse": true}
+	c.Settings["listen"] = map[string]any{"port": 4242}
 
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/24")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
 	}
 	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
 	lh.ifce = &mockEncWriter{}
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	lhh := lh.NewRequestHandler()
 
 	// Test that my first update responds with just that
@@ -278,31 +277,31 @@ func TestLighthouse_Memory(t *testing.T) {
 func TestLighthouse_reload(t *testing.T) {
 	l := test.NewLogger()
 	c := config.NewC(l)
-	c.Settings["lighthouse"] = map[interface{}]interface{}{"am_lighthouse": true}
-	c.Settings["listen"] = map[interface{}]interface{}{"port": 4242}
+	c.Settings["lighthouse"] = map[string]any{"am_lighthouse": true}
+	c.Settings["listen"] = map[string]any{"port": 4242}
 
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/24")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
 	}
 
 	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	nc := map[interface{}]interface{}{
-		"static_host_map": map[interface{}]interface{}{
-			"10.128.0.2": []interface{}{"1.1.1.1:4242"},
+	nc := map[string]any{
+		"static_host_map": map[string]any{
+			"10.128.0.2": []any{"1.1.1.1:4242"},
 		},
 	}
 	rc, err := yaml.Marshal(nc)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	c.ReloadConfigString(string(rc))
 
 	err = lh.reload(c, false)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 }
 
 func newLHHostRequest(fromAddr netip.AddrPort, myVpnIp, queryVpnIp netip.Addr, lhh *LightHouseHandler) testLhReply {
@@ -418,7 +417,7 @@ func (tw *testEncWriter) GetHostInfo(vpnIp netip.Addr) *HostInfo {
 }
 
 func (tw *testEncWriter) GetCertState() *CertState {
-	return &CertState{defaultVersion: tw.protocolVersion}
+	return &CertState{initiatingVersion: tw.protocolVersion}
 }
 
 // assertIp4InArray asserts every address in want is at the same position in have and that the lengths match

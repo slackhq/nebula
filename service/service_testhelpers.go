@@ -5,16 +5,19 @@ import (
 	"io"
 	"math/rand"
 	"net/netip"
+	"os"
 	"testing"
 	"time"
 
 	"dario.cat/mergo"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay"
 	"github.com/stretchr/testify/assert"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 type m map[string]interface{}
@@ -89,7 +92,15 @@ func newSimpleService(caCrt cert.Certificate, caKey []byte, name string, udpIp n
 	}
 	l.SetOutput(prefixWriter)
 
-	s, err := New(&c, l)
+	logger := logrus.New()
+	logger.Out = os.Stdout
+
+	control, err := nebula.Main(&c, false, "custom-app", logger, overlay.NewUserDeviceFromConfig)
+	if err != nil {
+		panic(err)
+	}
+
+	s, err := New(control)
 	if err != nil {
 		panic(err)
 	}

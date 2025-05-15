@@ -223,7 +223,7 @@ type HostInfo struct {
 	recvError atomic.Uint32
 
 	// networks are both all vpn and unsafe networks assigned to this host
-	networks   *bart.Table[struct{}]
+	networks   *bart.Lite
 	relayState RelayState
 
 	// HandshakePacket records the packets used to create this hostinfo
@@ -732,13 +732,13 @@ func (i *HostInfo) buildNetworks(networks, unsafeNetworks []netip.Prefix) {
 		return
 	}
 
-	i.networks = new(bart.Table[struct{}])
+	i.networks = new(bart.Lite)
 	for _, network := range networks {
-		i.networks.Insert(network, struct{}{})
+		i.networks.Insert(network)
 	}
 
 	for _, network := range unsafeNetworks {
-		i.networks.Insert(network, struct{}{})
+		i.networks.Insert(network)
 	}
 }
 

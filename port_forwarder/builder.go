@@ -14,7 +14,7 @@ func ymlGetStringOfNode(node interface{}) string {
 	return fmt.Sprintf("%v", node)
 }
 
-func ymlMapGetStringEntry(k string, m map[interface{}]interface{}) string {
+func ymlMapGetStringEntry(k string, m map[string]interface{}) string {
 	v, ok := m[k]
 	if !ok {
 		return ""
@@ -23,7 +23,7 @@ func ymlMapGetStringEntry(k string, m map[interface{}]interface{}) string {
 }
 
 type ymlListNode = []interface{}
-type ymlMapNode = map[interface{}]interface{}
+type ymlMapNode = map[string]interface{}
 type configFactoryFn = func(yml_node ymlMapNode) error
 type configFactoryFnMap = map[string]configFactoryFn
 
@@ -76,30 +76,30 @@ func ParseConfig(
 		for fwd_idx, node := range cfg_fwds_list {
 			node_map, ok := node.(ymlMapNode)
 			if !ok {
-				return fmt.Errorf("child yml node of \"port_forwarding.%s\" needs to be a map", direction)
+				return fmt.Errorf("child yml node of \"port_forwarding.%s[%d]\" needs to be a map", direction, fwd_idx)
 			}
 
 			protocols, ok := node_map["protocols"]
 			if !ok {
-				l.Infof("child yml node of \"port_forwarding.%s\" should have a child \"protocols\"", direction)
+				l.Infof("child yml node of \"port_forwarding.%s[%d]\" should have a child \"protocols\"", direction, fwd_idx)
 				continue
 			}
 
 			protocols_list, ok := protocols.(ymlListNode)
 			if !ok {
-				return fmt.Errorf("child yml node of \"port_forwarding.%s\" needs to have a child \"protocols\" that is a yml list", direction)
+				return fmt.Errorf("child yml node of \"port_forwarding.%s[%d]\" needs to have a child \"protocols\" that is a yml list", direction, fwd_idx)
 			}
 
 			for _, proto := range protocols_list {
 				proto_str := ymlGetStringOfNode(proto)
 				factoryFn, ok := builder.factories[direction][proto_str]
 				if !ok {
-					return fmt.Errorf("child yml node of \"port_forwarding.%s.%d.protocols\" doesn't support: %s", direction, fwd_idx, proto_str)
+					return fmt.Errorf("child yml node of \"port_forwarding.%s[%d].protocols\" doesn't support: %s", direction, fwd_idx, proto_str)
 				}
 
 				err := factoryFn(node_map)
 				if err != nil {
-					return fmt.Errorf("child yml node of \"port_forwarding.%s.%d.protocols\" with proto %s - failed to instantiate forwarder: %v", direction, fwd_idx, proto_str, err)
+					return fmt.Errorf("child yml node of \"port_forwarding.%s[%d].protocols\" with proto %s - failed to instantiate forwarder: %v", direction, fwd_idx, proto_str, err)
 				}
 			}
 		}

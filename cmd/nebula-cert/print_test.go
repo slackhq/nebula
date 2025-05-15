@@ -12,6 +12,7 @@ import (
 
 	"github.com/slackhq/nebula/cert"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_printSummary(t *testing.T) {
@@ -42,30 +43,30 @@ func Test_printCert(t *testing.T) {
 
 	// no path
 	err := printCert([]string{}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 	assertHelpError(t, err, "-path is required")
 
 	// no cert at path
 	ob.Reset()
 	eb.Reset()
 	err = printCert([]string{"-path", "does_not_exist"}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
-	assert.EqualError(t, err, "unable to read cert; open does_not_exist: "+NoSuchFileError)
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
+	require.EqualError(t, err, "unable to read cert; open does_not_exist: "+NoSuchFileError)
 
 	// invalid cert at path
 	ob.Reset()
 	eb.Reset()
 	tf, err := os.CreateTemp("", "print-cert")
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	defer os.Remove(tf.Name())
 
 	tf.WriteString("-----BEGIN NOPE-----")
 	err = printCert([]string{"-path", tf.Name()}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
-	assert.EqualError(t, err, "error while unmarshaling cert: input did not contain a valid PEM encoded block")
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
+	require.EqualError(t, err, "error while unmarshaling cert: input did not contain a valid PEM encoded block")
 
 	// test multiple certs
 	ob.Reset()
@@ -84,7 +85,7 @@ func Test_printCert(t *testing.T) {
 	fp, _ := c.Fingerprint()
 	pk := hex.EncodeToString(c.PublicKey())
 	sig := hex.EncodeToString(c.Signature())
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	assert.Equal(
 		t,
 		//"NebulaCertificate {\n\tDetails {\n\t\tName: test\n\t\tIps: []\n\t\tSubnets: []\n\t\tGroups: [\n\t\t\t\"hi\"\n\t\t]\n\t\tNot before: 0001-01-01 00:00:00 +0000 UTC\n\t\tNot After: 0001-01-01 00:00:00 +0000 UTC\n\t\tIs CA: false\n\t\tIssuer: "+c.Issuer()+"\n\t\tPublic key: "+pk+"\n\t\tCurve: CURVE25519\n\t}\n\tFingerprint: "+fp+"\n\tSignature: "+sig+"\n}\nNebulaCertificate {\n\tDetails {\n\t\tName: test\n\t\tIps: []\n\t\tSubnets: []\n\t\tGroups: [\n\t\t\t\"hi\"\n\t\t]\n\t\tNot before: 0001-01-01 00:00:00 +0000 UTC\n\t\tNot After: 0001-01-01 00:00:00 +0000 UTC\n\t\tIs CA: false\n\t\tIssuer: "+c.Issuer()+"\n\t\tPublic key: "+pk+"\n\t\tCurve: CURVE25519\n\t}\n\tFingerprint: "+fp+"\n\tSignature: "+sig+"\n}\nNebulaCertificate {\n\tDetails {\n\t\tName: test\n\t\tIps: []\n\t\tSubnets: []\n\t\tGroups: [\n\t\t\t\"hi\"\n\t\t]\n\t\tNot before: 0001-01-01 00:00:00 +0000 UTC\n\t\tNot After: 0001-01-01 00:00:00 +0000 UTC\n\t\tIs CA: false\n\t\tIssuer: "+c.Issuer()+"\n\t\tPublic key: "+pk+"\n\t\tCurve: CURVE25519\n\t}\n\tFingerprint: "+fp+"\n\tSignature: "+sig+"\n}\n",
@@ -154,7 +155,7 @@ func Test_printCert(t *testing.T) {
 `,
 		ob.String(),
 	)
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, eb.String())
 
 	// test json
 	ob.Reset()
@@ -169,14 +170,14 @@ func Test_printCert(t *testing.T) {
 	fp, _ = c.Fingerprint()
 	pk = hex.EncodeToString(c.PublicKey())
 	sig = hex.EncodeToString(c.Signature())
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	assert.Equal(
 		t,
 		`[{"details":{"curve":"CURVE25519","groups":["hi"],"isCa":false,"issuer":"`+c.Issuer()+`","name":"test","networks":["10.0.0.123/8"],"notAfter":"0001-01-01T00:00:00Z","notBefore":"0001-01-01T00:00:00Z","publicKey":"`+pk+`","unsafeNetworks":[]},"fingerprint":"`+fp+`","signature":"`+sig+`","version":1},{"details":{"curve":"CURVE25519","groups":["hi"],"isCa":false,"issuer":"`+c.Issuer()+`","name":"test","networks":["10.0.0.123/8"],"notAfter":"0001-01-01T00:00:00Z","notBefore":"0001-01-01T00:00:00Z","publicKey":"`+pk+`","unsafeNetworks":[]},"fingerprint":"`+fp+`","signature":"`+sig+`","version":1},{"details":{"curve":"CURVE25519","groups":["hi"],"isCa":false,"issuer":"`+c.Issuer()+`","name":"test","networks":["10.0.0.123/8"],"notAfter":"0001-01-01T00:00:00Z","notBefore":"0001-01-01T00:00:00Z","publicKey":"`+pk+`","unsafeNetworks":[]},"fingerprint":"`+fp+`","signature":"`+sig+`","version":1}]
 `,
 		ob.String(),
 	)
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, eb.String())
 }
 
 // NewTestCaCert will generate a CA cert

@@ -13,11 +13,11 @@ pki:
   # disconnect_invalid is a toggle to force a client to be disconnected if the certificate is expired or invalid.
   #disconnect_invalid: true
 
-  # default_version controls which certificate version is used in handshakes.
+  # initiating_version controls which certificate version is used when initiating handshakes.
   # This setting only applies if both a v1 and a v2 certificate are configured, in which case it will default to `1`.
   # Once all hosts in the mesh are configured with both a v1 and v2 certificate then this should be changed to `2`.
   # After all hosts in the mesh are using a v2 certificate then v1 certificates are no longer needed.
-  # default_version: 1
+  # initiating_version: 1
 
 # The static host map defines a set of hosts with fixed IP addresses on the internet (or any network).
 # A host can have multiple fixed IP addresses defined here, and nebula will try each when establishing a tunnel.
@@ -126,8 +126,8 @@ lighthouse:
 # Port Nebula will be listening on. The default here is 4242. For a lighthouse node, the port should be defined,
 # however using port 0 will dynamically assign a port and is recommended for roaming nodes.
 listen:
-  # To listen on both any ipv4 and ipv6 use "::"
-  host: 0.0.0.0
+  # To listen on only ipv4, use "0.0.0.0"
+  host: "::"
   port: 4242
   # Sets the max number of packets to pull from the kernel for each syscall (under systems that support recvmmsg)
   # default is 64, does not support reload
@@ -144,6 +144,11 @@ listen:
   # valid values: always, never, private
   # This setting is reloadable.
   #send_recv_error: always
+  # The so_sock option is a Linux-specific feature that allows all outgoing Nebula packets to be tagged with a specific identifier.
+  # This tagging enables IP rule-based filtering. For example, it supports 0.0.0.0/0 unsafe_routes,
+  # allowing for more precise routing decisions based on the packet tags. Default is 0 meaning no mark is set.
+  # This setting is reloadable.
+  #so_mark: 0
 
 # Routines is the number of thread pairs to run that consume from the tun and UDP queues.
 # Currently, this defaults to 1 which means we have 1 tun queue reader and 1
@@ -238,7 +243,28 @@ tun:
 
   # Unsafe routes allows you to route traffic over nebula to non-nebula nodes
   # Unsafe routes should be avoided unless you have hosts/services that cannot run nebula
-  # NOTE: The nebula certificate of the "via" node *MUST* have the "route" defined as a subnet in its certificate
+  # Supports weighted ECMP if you define a list of gateways, this can be used for load balancing or redundancy to hosts outside of nebula
+  # NOTES:
+  # * You will only see a single gateway in the routing table if you are not on linux
+  # * If a gateway is not reachable through the overlay another gateway will be selected to send the traffic through, ignoring weights
+  #
+  # unsafe_routes:
+  # # Multiple gateways without defining a weight defaults to a weight of 1, this will balance traffic equally between the three gateways
+  # - route: 192.168.87.0/24
+  #   via:
+  #     - gateway: 10.0.0.1
+  #     - gateway: 10.0.0.2
+  #     - gateway: 10.0.0.3
+  # # Multiple gateways with a weight, this will balance traffic accordingly
+  # - route: 192.168.87.0/24
+  #   via:
+  #     - gateway: 10.0.0.1
+  #       weight: 10
+  #     - gateway: 10.0.0.2
+  #       weight: 5
+  #
+  # NOTE: The nebula certificate of the "via" node(s) *MUST* have the "route" defined as a subnet in its certificate
+  # `via`: single node or list of gateways to use for this route
   # `mtu`: will default to tun mtu if this option is not specified
   # `metric`: will default to 0 if this option is not specified
   # `install`: will default to true, controls whether this route is installed in the systems routing table.
@@ -253,6 +279,10 @@ tun:
   # On linux only, set to true to manage unsafe routes directly on the system route table with gateway routes instead of
   # in nebula configuration files. Default false, not reloadable.
   #use_system_route_table: false
+  # Buffer size for reading routes updates. 0 means default system buffer size. (/proc/sys/net/core/rmem_default).
+  # If using massive routes updates, for example BGP, you may need to increase this value to avoid packet loss.
+  # SO_RCVBUFFORCE is used to avoid having to raise the system wide max
+  #use_system_route_table_buffer_size: 0
 
 # Configure logging level
 logging:
@@ -324,11 +354,11 @@ firewall:
   outbound_action: drop
   inbound_action: drop
 
-  # Controls the default value for local_cidr. Default is true, will be deprecated after v1.9 and defaulted to false.
-  # This setting only affects nebula hosts with subnets encoded in their certificate. A nebula host acting as an
-  # unsafe router with `default_local_cidr_any: true` will expose their unsafe routes to every inbound rule regardless
-  # of the actual destination for the packet. Setting this to false requires each inbound rule to contain a `local_cidr`
-  # if the intention is to allow traffic to flow to an unsafe route.
+  # THIS FLAG IS DEPRECATED AND WILL BE REMOVED IN A FUTURE RELEASE. (Defaults to false.)
+  # This setting only affects nebula hosts exposing unsafe_routes. When set to false, each inbound rule must contain a
+  # `local_cidr` if the intention is to allow traffic to flow to an unsafe route. When set to true, every firewall rule
+  # will apply to all configured unsafe_routes regardless of the actual destination of the packet, unless `local_cidr`
+  # is explicitly defined. This is usually not the desired behavior and should be avoided!
   #default_local_cidr_any: false
 
   conntrack:
@@ -346,11 +376,9 @@ firewall:
   #   group: `any` or a literal group name, ie `default-group`
   #   groups: Same as group but accepts a list of values. Multiple values are AND'd together and a certificate would have to contain all groups to pass
   #   cidr: a remote CIDR, `0.0.0.0/0` is any ipv4 and `::/0` is any ipv6.
-  #   local_cidr: a local CIDR, `0.0.0.0/0` is any ipv4 and `::/0` is any ipv6. This could be used to filter destinations when using unsafe_routes.
-  #     If no unsafe networks are present in the certificate(s) or `default_local_cidr_any` is true then the default is any ipv4 or ipv6 network.
-  #     Otherwise the default is any vpn network assigned to via the certificate.
-  #     `default_local_cidr_any` defaults to false and is deprecated, it will be removed in a future release.
-  #     If there are unsafe routes present its best to set `local_cidr` to whatever best fits the situation.
+  #   local_cidr: a local CIDR, `0.0.0.0/0` is any ipv4 and `::/0` is any ipv6. This can be used to filter destinations when using unsafe_routes.
+  #     By default, this is set to only the VPN (overlay) networks assigned via the certificate networks field unless `default_local_cidr_any` is set to true.
+  #     If there are unsafe_routes present in this config file, `local_cidr` should be set appropriately for the intended us case.
   #   ca_name: An issuing CA name
   #   ca_sha: An issuing CA shasum
 

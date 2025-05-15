@@ -8,6 +8,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/routing"
 	"gvisor.dev/gvisor/pkg/buffer"
 )
 
@@ -56,23 +57,25 @@ type UserDevice struct {
 	outboundChannel chan *buffer.View
 	inboundChannel  chan *buffer.View
 
-	routeTree atomic.Pointer[bart.Table[netip.Addr]]
+	routeTree atomic.Pointer[bart.Table[routing.Gateways]]
 }
 
 func (d *UserDevice) Activate() error {
 	return nil
 }
+
 func (d *UserDevice) Networks() []netip.Prefix { return d.vpnNetworks }
 func (d *UserDevice) Name() string             { return "faketun0" }
-func (d *UserDevice) RouteFor(ip netip.Addr) netip.Addr {
+func (d *UserDevice) RoutesFor(ip netip.Addr) routing.Gateways {
 	ptr := d.routeTree.Load()
 	if ptr != nil {
 		r, _ := d.routeTree.Load().Lookup(ip)
 		return r
 	} else {
-		return ip
+		return routing.Gateways{routing.NewGateway(ip, 1)}
 	}
 }
+
 func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return d, nil
 }

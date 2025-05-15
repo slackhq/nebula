@@ -61,11 +61,11 @@ type Interface struct {
 	serveDns              bool
 	createTime            time.Time
 	lightHouse            *LightHouse
-	myBroadcastAddrsTable *bart.Table[struct{}]
-	myVpnAddrs            []netip.Addr          // A list of addresses assigned to us via our certificate
-	myVpnAddrsTable       *bart.Table[struct{}] // A table of addresses assigned to us via our certificate
-	myVpnNetworks         []netip.Prefix        // A list of networks assigned to us via our certificate
-	myVpnNetworksTable    *bart.Table[struct{}] // A table of networks assigned to us via our certificate
+	myBroadcastAddrsTable *bart.Lite
+	myVpnAddrs            []netip.Addr // A list of addresses assigned to us via our certificate
+	myVpnAddrsTable       *bart.Lite
+	myVpnNetworks         []netip.Prefix // A list of networks assigned to us via our certificate
+	myVpnNetworksTable    *bart.Lite
 	dropLocalBroadcast    bool
 	dropMulticast         bool
 	routines              int
@@ -410,7 +410,7 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 	udpStats := udp.NewUDPStatsEmitter(f.writers)
 
 	certExpirationGauge := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil)
-	certDefaultVersion := metrics.GetOrRegisterGauge("certificate.default_version", nil)
+	certInitiatingVersion := metrics.GetOrRegisterGauge("certificate.initiating_version", nil)
 	certMaxVersion := metrics.GetOrRegisterGauge("certificate.max_version", nil)
 
 	for {
@@ -425,7 +425,7 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 			certState := f.pki.getCertState()
 			defaultCrt := certState.GetDefaultCertificate()
 			certExpirationGauge.Update(int64(defaultCrt.NotAfter().Sub(time.Now()) / time.Second))
-			certDefaultVersion.Update(int64(defaultCrt.Version()))
+			certInitiatingVersion.Update(int64(defaultCrt.Version()))
 
 			// Report the max certificate version we are capable of using
 			if certState.v2Cert != nil {
