@@ -36,6 +36,10 @@ type Control struct {
 	lighthouseStart func()
 }
 
+func (c *Control) GetLogger() *logrus.Logger {
+	return c.l
+}
+
 type ControlHostInfo struct {
 	VpnAddrs               []netip.Addr     `json:"vpnAddrs"`
 	LocalIndex             uint32           `json:"localIndex"`
