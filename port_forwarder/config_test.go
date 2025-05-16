@@ -6,19 +6,20 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEmptyConfig(t *testing.T) {
 	l := logrus.New()
 	c := config.NewC(l)
 	err := c.LoadString("bla:")
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	fwd_list := NewPortForwardingList()
 	err = ParseConfig(l, c, fwd_list)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
-	assert.Len(t, fwd_list.configPortForwardings, 0)
+	assert.Empty(t, fwd_list.configPortForwardings)
 	assert.True(t, fwd_list.IsEmpty())
 }
 
@@ -36,13 +37,13 @@ port_forwarding:
     dial_address: 127.0.0.1:5599
     protocols: []
 `)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	fwd_list := NewPortForwardingList()
 	err = ParseConfig(l, c, fwd_list)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
-	assert.Len(t, fwd_list.configPortForwardings, 0)
+	assert.Empty(t, fwd_list.configPortForwardings)
 	assert.True(t, fwd_list.IsEmpty())
 }
 
@@ -60,13 +61,13 @@ port_forwarding:
     dial_address: 127.0.0.1:5599
     # protocols: [tc, udp]
 `)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	fwd_list := NewPortForwardingList()
 	err = ParseConfig(l, c, fwd_list)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
-	assert.Len(t, fwd_list.configPortForwardings, 0)
+	assert.Empty(t, fwd_list.configPortForwardings)
 	assert.True(t, fwd_list.IsEmpty())
 }
 
@@ -76,13 +77,13 @@ func TestConfigWithNoProtocols_missing_in_out(t *testing.T) {
 	err := c.LoadString(`
 port_forwarding:
 `)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	fwd_list := NewPortForwardingList()
 	err = ParseConfig(l, c, fwd_list)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
-	assert.Len(t, fwd_list.configPortForwardings, 0)
+	assert.Empty(t, fwd_list.configPortForwardings)
 	assert.True(t, fwd_list.IsEmpty())
 }
 
@@ -100,19 +101,19 @@ port_forwarding:
     dial_address: 127.0.0.1:5599
     protocols: [tcp]
 `)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	fwd_list := NewPortForwardingList()
 	err = ParseConfig(l, c, fwd_list)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, fwd_list.configPortForwardings, 1)
 	assert.False(t, fwd_list.IsEmpty())
 
 	fwd1 := fwd_list.configPortForwardings["inbound.tcp.5580.127.0.0.1:5599"].(ForwardConfigIncomingTcp)
 	assert.NotNil(t, fwd1)
-	assert.Equal(t, fwd1.forwardLocalAddress, "127.0.0.1:5599")
-	assert.Equal(t, int(fwd1.port), 5580)
+	assert.Equal(t, "127.0.0.1:5599", fwd1.forwardLocalAddress)
+	assert.Equal(t, 5580, int(fwd1.port))
 }
 
 func TestConfigWithTcpOut(t *testing.T) {
@@ -129,19 +130,19 @@ port_forwarding:
     dial_address: 127.0.0.1:5599
     protocols: []
 `)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	fwd_list := NewPortForwardingList()
 	err = ParseConfig(l, c, fwd_list)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, fwd_list.configPortForwardings, 1)
 	assert.False(t, fwd_list.IsEmpty())
 
 	fwd1 := fwd_list.configPortForwardings["outbound.tcp.127.0.0.1:3399.192.168.100.92:4499"].(ForwardConfigOutgoingTcp)
 	assert.NotNil(t, fwd1)
-	assert.Equal(t, fwd1.localListen, "127.0.0.1:3399")
-	assert.Equal(t, fwd1.remoteConnect, "192.168.100.92:4499")
+	assert.Equal(t, "127.0.0.1:3399", fwd1.localListen)
+	assert.Equal(t, "192.168.100.92:4499", fwd1.remoteConnect)
 }
 
 func TestConfigWithUdpIn(t *testing.T) {
@@ -158,19 +159,19 @@ port_forwarding:
     dial_address: 127.0.0.1:5599
     protocols: [udp]
 `)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	fwd_list := NewPortForwardingList()
 	err = ParseConfig(l, c, fwd_list)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, fwd_list.configPortForwardings, 1)
 	assert.False(t, fwd_list.IsEmpty())
 
 	fwd1 := fwd_list.configPortForwardings["inbound.udp.5580.127.0.0.1:5599"].(ForwardConfigIncomingUdp)
 	assert.NotNil(t, fwd1)
-	assert.Equal(t, fwd1.forwardLocalAddress, "127.0.0.1:5599")
-	assert.Equal(t, int(fwd1.port), 5580)
+	assert.Equal(t, "127.0.0.1:5599", fwd1.forwardLocalAddress)
+	assert.Equal(t, 5580, int(fwd1.port))
 }
 
 func TestConfigWithUdpOut(t *testing.T) {
@@ -187,19 +188,19 @@ port_forwarding:
     dial_address: 127.0.0.1:5599
     protocols: []
 `)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	fwd_list := NewPortForwardingList()
 	err = ParseConfig(l, c, fwd_list)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, fwd_list.configPortForwardings, 1)
 	assert.False(t, fwd_list.IsEmpty())
 
 	fwd1 := fwd_list.configPortForwardings["outbound.udp.127.0.0.1:3399.192.168.100.92:4499"].(ForwardConfigOutgoingUdp)
 	assert.NotNil(t, fwd1)
-	assert.Equal(t, fwd1.localListen, "127.0.0.1:3399")
-	assert.Equal(t, fwd1.remoteConnect, "192.168.100.92:4499")
+	assert.Equal(t, "127.0.0.1:3399", fwd1.localListen)
+	assert.Equal(t, "192.168.100.92:4499", fwd1.remoteConnect)
 }
 
 func TestConfigWithMultipleMixed(t *testing.T) {
@@ -222,11 +223,11 @@ port_forwarding:
     dial_address: 127.0.0.1:5555
     protocols: [udp]
 `)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	fwd_list := NewPortForwardingList()
 	err = ParseConfig(l, c, fwd_list)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, fwd_list.configPortForwardings, 6)
 	assert.False(t, fwd_list.IsEmpty())
@@ -259,11 +260,11 @@ port_forwarding:
     dial_address: 127.0.0.1:5599
     protocols: [udp, udp]
 `)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	fwd_list := NewPortForwardingList()
 	err = ParseConfig(l, c, fwd_list)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, fwd_list.configPortForwardings, 4)
 	assert.False(t, fwd_list.IsEmpty())

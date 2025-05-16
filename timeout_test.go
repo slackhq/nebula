@@ -14,7 +14,7 @@ func TestNewTimerWheel(t *testing.T) {
 	tw := NewTimerWheel[firewall.Packet](time.Second, time.Second*10)
 	assert.Equal(t, 12, tw.wheelLen)
 	assert.Equal(t, 0, tw.current)
-	assert.Equal(t, false, tw.lastTickValid)
+	assert.False(t, tw.lastTickValid)
 	assert.Equal(t, time.Second*1, tw.tickDuration)
 	assert.Equal(t, time.Second*10, tw.wheelDuration)
 	assert.Len(t, tw.wheel, 12)
@@ -110,9 +110,9 @@ func TestTimerWheel_Add(t *testing.T) {
 func TestTimerWheel_Purge(t *testing.T) {
 	// First advance should set the lastTick and do nothing else
 	tw := NewTimerWheel[firewall.Packet](time.Second, time.Second*10)
-	assert.Equal(t, false, tw.lastTickValid)
+	assert.False(t, tw.lastTickValid)
 	tw.Advance(time.Now())
-	assert.Equal(t, true, tw.lastTickValid)
+	assert.True(t, tw.lastTickValid)
 	assert.Equal(t, 0, tw.current)
 
 	fps := []firewall.Packet{

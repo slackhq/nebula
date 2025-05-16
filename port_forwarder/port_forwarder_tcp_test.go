@@ -43,8 +43,8 @@ func doTestTcpCommunication(
 		fmt.Println("sending ...")
 		t.Log("sending ...")
 		n, err = senderConn.Write(data_sent)
-		require.Nil(t, err)
-		assert.Equal(t, n, len(data_sent))
+		require.NoError(t, err)
+		assert.Len(t, data_sent, n)
 
 		fmt.Println("receiving ...")
 		t.Log("receiving ...")
@@ -56,8 +56,8 @@ func doTestTcpCommunication(
 	}
 	fmt.Println("DONE")
 	t.Log("DONE")
-	require.Nil(t, err)
-	assert.Equal(t, n, len(data_sent))
+	require.NoError(t, err)
+	assert.Len(t, data_sent, n)
 	assert.Equal(t, data_sent, buf[:n])
 }
 
@@ -72,12 +72,12 @@ func doTestTcpCommunicationFail(
 	if err != nil {
 		return
 	}
-	require.Nil(t, err)
-	assert.Equal(t, n, len(data_sent))
+	require.NoError(t, err)
+	assert.Len(t, data_sent, n)
 
 	buf := make([]byte, 100)
 	_, err = receiverConn.Read(buf)
-	assert.NotNil(t, err)
+	assert.Error(t, err)
 }
 
 func tcpListenerNAccept(t *testing.T, listener *net.TCPListener, n int) <-chan net.Conn {
@@ -88,7 +88,9 @@ func tcpListenerNAccept(t *testing.T, listener *net.TCPListener, n int) <-chan n
 		r <- true
 		for range n {
 			conn, err := listener.Accept()
-			require.Nil(t, err)
+			if err != nil {
+				return
+			}
 			c <- conn
 		}
 	}()
@@ -108,7 +110,7 @@ port_forwarding:
     dial_address: 127.0.0.1:5595
     protocols: [tcp]
 `)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
@@ -119,22 +121,22 @@ port_forwarding:
     dial_address: 10.0.0.1:4495
     protocols: [tcp]
 `)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, client_pf.portForwardings, 1)
 
 	client_conn_addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:3395")
-	require.Nil(t, err)
+	require.NoError(t, err)
 	server_conn_addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:5595")
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	server_listen_conn, err := net.ListenTCP("tcp", server_conn_addr)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	defer server_listen_conn.Close()
 	server_listen_conn_accepts := tcpListenerNAccept(t, server_listen_conn, 2)
 
 	client1_conn, err := net.DialTCP("tcp", nil, client_conn_addr)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	defer client1_conn.Close()
 
 	client1_rcv_chan := startReadToChannel(client1_conn)
@@ -142,7 +144,7 @@ port_forwarding:
 	client1_server_side_rcv_chan := startReadToChannel(client1_server_side_conn)
 
 	client2_conn, err := net.DialTCP("tcp", nil, client_conn_addr)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	defer client2_conn.Close()
 
 	client2_rcv_chan := startReadToChannel(client2_conn)
@@ -176,7 +178,7 @@ port_forwarding:
     dial_address: 127.0.0.1:5597
     protocols: [tcp]
 `)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
@@ -187,23 +189,23 @@ port_forwarding:
     dial_address: 10.0.0.1:4497
     protocols: [tcp]
 `)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, client_pf.portForwardings, 1)
 
 	client_conn_addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:3397")
-	require.Nil(t, err)
+	require.NoError(t, err)
 	server_conn_addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:5597")
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	server_listen_conn, err := net.ListenTCP("tcp", server_conn_addr)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	defer server_listen_conn.Close()
 
 	server_listen_conn_accepts := tcpListenerNAccept(t, server_listen_conn, 1)
 
 	client1_conn, err := net.DialTCP("tcp", nil, client_conn_addr)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	defer client1_conn.Close()
 	client1_rcv_chan := startReadToChannel(client1_conn)
 
@@ -229,7 +231,7 @@ port_forwarding:
     dial_address: 127.0.0.1:5596
     protocols: [tcp]
 `)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
@@ -240,10 +242,10 @@ port_forwarding:
     dial_address: 10.0.0.1:4496
     protocols: [tcp]
 `)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	err = client_pf.ApplyChangesByNewFwdList(new_client_fwd_list)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	doTestTcpCommunicationFail(t, "Hello from client 1 side!",
 		client1_conn, client1_server_side_conn)
@@ -252,7 +254,7 @@ port_forwarding:
 		client1_server_side_conn, client1_conn)
 
 	err = server_pf.ApplyChangesByNewFwdList(new_server_fwd_list)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	doTestTcpCommunicationFail(t, "Hello from client 1 side!",
 		client1_conn, client1_server_side_conn)
@@ -271,7 +273,7 @@ port_forwarding:
     dial_address: 127.0.0.1:5599
     protocols: [tcp]
 `)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
@@ -282,22 +284,22 @@ port_forwarding:
     dial_address: 10.0.0.1:4499
     protocols: [tcp]
 `)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, client_pf.portForwardings, 1)
 
 	client_conn_addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:3399")
-	require.Nil(t, err)
+	require.NoError(t, err)
 	server_conn_addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:5599")
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	server_listen_conn, err := net.ListenTCP("tcp", server_conn_addr)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	defer server_listen_conn.Close()
 	server_listen_conn_accepts := tcpListenerNAccept(t, server_listen_conn, 1)
 
 	client1_conn, err := net.DialTCP("tcp", nil, client_conn_addr)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	defer client1_conn.Close()
 	client1_rcv_chan := startReadToChannel(client1_conn)
 
@@ -323,7 +325,7 @@ port_forwarding:
     dial_address: 127.0.0.1:5598
     protocols: [tcp]
 `)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	assert.Len(t, server_pf.portForwardings, 1)
 
@@ -334,10 +336,10 @@ port_forwarding:
     dial_address: 10.0.0.1:4498
     protocols: [tcp]
 `)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	err = server_pf.ApplyChangesByNewFwdList(new_server_fwd_list)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	doTestTcpCommunicationFail(t, "Hello from client 1 side!",
 		client1_conn, client1_server_side_conn)
@@ -346,7 +348,7 @@ port_forwarding:
 		client1_server_side_conn, client1_conn)
 
 	err = client_pf.ApplyChangesByNewFwdList(new_client_fwd_list)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	doTestTcpCommunicationFail(t, "Hello from client 1 side!",
 		client1_conn, client1_server_side_conn)
