@@ -14,7 +14,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"time"
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
@@ -96,6 +95,25 @@ func (u *RIOConn) bind(sa windows.Sockaddr) error {
 	// Enable v4 for this socket
 	syscall.SetsockoptInt(syscall.Handle(u.sock), syscall.IPPROTO_IPV6, syscall.IPV6_V6ONLY, 0)
 
+	// Disable reporting of PORT_UNREACHABLE and NET_UNREACHABLE errors from the UDP socket receive call.
+	// These errors are returned on Windows during UDP receives based on the receipt of ICMP packets. Disable
+	// the UDP receive error returns with these ioctl calls.
+	ret := uint32(0)
+	flag := uint32(0)
+	size := uint32(unsafe.Sizeof(flag))
+	err = syscall.WSAIoctl(syscall.Handle(u.sock), syscall.SIO_UDP_CONNRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
+	if err != nil {
+		return err
+	}
+	ret = 0
+	flag = 0
+	size = uint32(unsafe.Sizeof(flag))
+	SIO_UDP_NETRESET := uint32(syscall.IOC_IN | syscall.IOC_VENDOR | 15)
+	err = syscall.WSAIoctl(syscall.Handle(u.sock), SIO_UDP_NETRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
+	if err != nil {
+		return err
+	}
+
 	err = u.rx.Open()
 	if err != nil {
 		return err
@@ -126,7 +144,6 @@ func (u *RIOConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
-	consecutiveErrors := 0
 	for {
 		// Just read one packet at a time
 		n, rua, err := u.receive(buffer)
@@ -135,18 +152,9 @@ func (u *RIOConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 				u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
 				return
 			}
-			// Try to suss out whether this is a transient error or something more permanent
-			consecutiveErrors++
-			u.l.WithError(err).WithField("consecutiveErrors", consecutiveErrors).Error("unexpected udp socket recieve error")
-			if consecutiveErrors > 15 {
-				panic("too many consecutive UDP receive errors")
-			} else if consecutiveErrors > 10 {
-				time.Sleep(100 * time.Millisecond)
-			}
+			u.l.WithError(err).Error("unexpected udp socket receive error")
 			continue
 		}
-
-		consecutiveErrors = 0
 
 		r(
 			netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)),
