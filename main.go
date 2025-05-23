@@ -199,6 +199,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	hostMap := NewHostMapFromConfig(l, tunCidr, c)
 	punchy := NewPunchyFromConfig(l, c)
+	connManager := newConnectionManagerFromConfig(l, c, hostMap, punchy)
 	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, tunCidr, udpConns[0], punchy)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to initialize lighthouse handler", err)
@@ -234,31 +235,27 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	}
 
-	checkInterval := c.GetInt("timers.connection_alive_interval", 5)
-	pendingDeletionInterval := c.GetInt("timers.pending_deletion_interval", 10)
-
 	ifConfig := &InterfaceConfig{
-		HostMap:                 hostMap,
-		Inside:                  tun,
-		Outside:                 udpConns[0],
-		pki:                     pki,
-		Cipher:                  c.GetString("cipher", "aes"),
-		Firewall:                fw,
-		ServeDns:                serveDns,
-		HandshakeManager:        handshakeManager,
-		lightHouse:              lightHouse,
-		checkInterval:           time.Second * time.Duration(checkInterval),
-		pendingDeletionInterval: time.Second * time.Duration(pendingDeletionInterval),
-		tryPromoteEvery:         c.GetUint32("counters.try_promote", defaultPromoteEvery),
-		reQueryEvery:            c.GetUint32("counters.requery_every_packets", defaultReQueryEvery),
-		reQueryWait:             c.GetDuration("timers.requery_wait_duration", defaultReQueryWait),
-		DropLocalBroadcast:      c.GetBool("tun.drop_local_broadcast", false),
-		DropMulticast:           c.GetBool("tun.drop_multicast", false),
-		routines:                routines,
-		MessageMetrics:          messageMetrics,
-		version:                 buildVersion,
-		relayManager:            NewRelayManager(ctx, l, hostMap, c),
-		punchy:                  punchy,
+		HostMap:            hostMap,
+		Inside:             tun,
+		Outside:            udpConns[0],
+		pki:                pki,
+		Cipher:             c.GetString("cipher", "aes"),
+		Firewall:           fw,
+		ServeDns:           serveDns,
+		HandshakeManager:   handshakeManager,
+		connectionManager:  connManager,
+		lightHouse:         lightHouse,
+		tryPromoteEvery:    c.GetUint32("counters.try_promote", defaultPromoteEvery),
+		reQueryEvery:       c.GetUint32("counters.requery_every_packets", defaultReQueryEvery),
+		reQueryWait:        c.GetDuration("timers.requery_wait_duration", defaultReQueryWait),
+		DropLocalBroadcast: c.GetBool("tun.drop_local_broadcast", false),
+		DropMulticast:      c.GetBool("tun.drop_multicast", false),
+		routines:           routines,
+		MessageMetrics:     messageMetrics,
+		version:            buildVersion,
+		relayManager:       NewRelayManager(ctx, l, hostMap, c),
+		punchy:             punchy,
 
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,
@@ -325,5 +322,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		statsStart,
 		dnsStart,
 		lightHouse.StartUpdateWorker,
+		connManager.Start,
 	}, nil
 }
