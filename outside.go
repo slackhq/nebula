@@ -102,7 +102,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			// Pull the Roaming parts up here, and return in all call paths.
 			f.handleHostRoaming(hostinfo, ip)
 			// Track usage of both the HostInfo and the Relay for the received & authenticated packet
-			f.connectionManager.In(hostinfo.localIndexId)
+			f.connectionManager.In(hostinfo)
 			f.connectionManager.RelayUsed(h.RemoteIndex)
 
 			relay, ok := hostinfo.relayState.QueryRelayForByIdx(h.RemoteIndex)
@@ -246,7 +246,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 
 	f.handleHostRoaming(hostinfo, ip)
 
-	f.connectionManager.In(hostinfo.localIndexId)
+	f.connectionManager.In(hostinfo)
 }
 
 // closeTunnel closes a tunnel locally, it does not send a closeTunnel packet to the remote
@@ -418,7 +418,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return false
 	}
 
-	f.connectionManager.In(hostinfo.localIndexId)
+	f.connectionManager.In(hostinfo)
 	_, err = f.readers[q].Write(out)
 	if err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")
