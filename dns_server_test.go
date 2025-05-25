@@ -12,27 +12,39 @@ import (
 
 func TestParsequery(t *testing.T) {
 	l := logrus.New()
-	hostMap := &HostMap{}
-	ds := newDnsRecords(l, &CertState{}, hostMap)
+	ds := newDnsRecords(l)
 	addrs := []netip.Addr{
 		netip.MustParseAddr("1.2.3.4"),
 		netip.MustParseAddr("1.2.3.5"),
 		netip.MustParseAddr("fd01::24"),
 		netip.MustParseAddr("fd01::25"),
 	}
-	ds.Add("test.com.com", addrs)
+	dnsSuffix = ".com"
+	ds.Add("test.com", addrs)
 
 	m := &dns.Msg{}
-	m.SetQuestion("test.com.com", dns.TypeA)
-	ds.parseQuery(m, nil)
+	m.SetQuestion("test.com.com.", dns.TypeA)
+	ds.parseQuery(m)
 	assert.NotNil(t, m.Answer)
 	assert.Equal(t, "1.2.3.4", m.Answer[0].(*dns.A).A.String())
 
 	m = &dns.Msg{}
-	m.SetQuestion("test.com.com", dns.TypeAAAA)
-	ds.parseQuery(m, nil)
+	m.SetQuestion("test.com.com.", dns.TypeAAAA)
+	ds.parseQuery(m)
 	assert.NotNil(t, m.Answer)
 	assert.Equal(t, "fd01::24", m.Answer[0].(*dns.AAAA).AAAA.String())
+
+	m = &dns.Msg{}
+	m.SetQuestion("4.3.2.1.in-addr.arpa.", dns.TypePTR)
+	ds.parseQuery(m)
+	assert.NotNil(t, m.Answer)
+	assert.Equal(t, "test.com.com.", m.Answer[0].(*dns.PTR).Ptr)
+
+	m = &dns.Msg{}
+	m.SetQuestion("4.2.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.1.0.d.f.ip6.arpa.", dns.TypePTR)
+	ds.parseQuery(m)
+	assert.NotNil(t, m.Answer)
+	assert.Equal(t, "test.com.com.", m.Answer[0].(*dns.PTR).Ptr)
 }
 
 func Test_getDnsServerAddr(t *testing.T) {
