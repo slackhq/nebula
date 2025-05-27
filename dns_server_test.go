@@ -30,12 +30,14 @@ func TestParsequery(t *testing.T) {
 	ds.parseQuery(m)
 	assert.NotNil(t, m.Answer)
 	assert.Equal(t, "1.2.3.4", m.Answer[0].(*dns.A).A.String())
+	assert.Equal(t, "1.2.3.5", m.Answer[1].(*dns.A).A.String())
 
 	m = &dns.Msg{}
 	m.SetQuestion("test.com.com.", dns.TypeAAAA)
 	ds.parseQuery(m)
 	assert.NotNil(t, m.Answer)
 	assert.Equal(t, "fd01::24", m.Answer[0].(*dns.AAAA).AAAA.String())
+	assert.Equal(t, "fd01::25", m.Answer[1].(*dns.AAAA).AAAA.String())
 
 	m = &dns.Msg{}
 	m.SetQuestion("4.3.2.1.in-addr.arpa.", dns.TypePTR)
