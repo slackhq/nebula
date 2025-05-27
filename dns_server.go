@@ -24,67 +24,80 @@ var dnsSuffix string
 type dnsRecords struct {
 	sync.RWMutex
 	l      *logrus.Logger
-	dnsMap map[dns.Question]dns.RR
+	dnsMap map[dns.Question][]dns.RR
 }
 
 func newDnsRecords(l *logrus.Logger) *dnsRecords {
 	return &dnsRecords{
 		l:      l,
-		dnsMap: make(map[dns.Question]dns.RR),
+		dnsMap: make(map[dns.Question][]dns.RR),
 	}
 }
 
-func (d *dnsRecords) AddA(name string, addr netip.Addr) {
-	if addr.Is4() {
-		q := dns.Question{Name: name, Qclass: dns.ClassINET, Qtype: dns.TypeA}
-		qType := dns.TypeToString[q.Qtype]
-		rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", name, qType, addr.String()))
-		if err == nil {
-			d.Lock()
-			defer d.Unlock()
-			d.dnsMap[q] = rr
-			d.l.Debugf("DNS record added %s", rr.String())
+func (d *dnsRecords) AddA(name string, addresses []netip.Addr) {
+	d.Lock()
+	defer d.Unlock()
+	q := dns.Question{Name: name, Qclass: dns.ClassINET, Qtype: dns.TypeA}
+	d.dnsMap[q] = nil
+
+	for _, addr := range addresses {
+		if addr.Is4() {
+			qType := dns.TypeToString[q.Qtype]
+			rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", name, qType, addr.String()))
+			if err == nil {
+				d.dnsMap[q] = append(d.dnsMap[q], rr)
+				d.l.Debugf("DNS record added %s", rr.String())
+			}
 		}
 	}
 }
 
-func (d *dnsRecords) AddAAAA(name string, addr netip.Addr) {
-	if addr.Is6() {
-		q := dns.Question{Name: name, Qclass: dns.ClassINET, Qtype: dns.TypeAAAA}
-		qType := dns.TypeToString[q.Qtype]
-		rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", name, qType, addr.String()))
-		if err == nil {
-			d.Lock()
-			defer d.Unlock()
-			d.dnsMap[q] = rr
-			d.l.Debugf("DNS record added %s", rr.String())
+func (d *dnsRecords) AddAAAA(name string, addresses []netip.Addr) {
+	d.Lock()
+	defer d.Unlock()
+	q := dns.Question{Name: name, Qclass: dns.ClassINET, Qtype: dns.TypeAAAA}
+	d.dnsMap[q] = nil
+
+	for _, addr := range addresses {
+		if addr.Is6() {
+			qType := dns.TypeToString[q.Qtype]
+			rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", name, qType, addr.String()))
+			if err == nil {
+				d.dnsMap[q] = append(d.dnsMap[q], rr)
+				d.l.Debugf("DNS record added %s", rr.String())
+			}
 		}
 	}
 }
 
-func (d *dnsRecords) AddPTR(name string, addr netip.Addr) {
-	arpa, err := dns.ReverseAddr(addr.String())
-	if err == nil {
-		q := dns.Question{Name: arpa, Qclass: dns.ClassINET, Qtype: dns.TypePTR}
-		qType := dns.TypeToString[q.Qtype]
-		rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", arpa, qType, name))
+func (d *dnsRecords) AddPTR(name string, addresses []netip.Addr) {
+	d.Lock()
+	defer d.Unlock()
+
+	for _, addr := range addresses {
+		arpa, err := dns.ReverseAddr(addr.String())
 		if err == nil {
-			d.Lock()
-			defer d.Unlock()
-			d.dnsMap[q] = rr
-			d.l.Debugf("DNS record added %s", rr.String())
+			q := dns.Question{Name: arpa, Qclass: dns.ClassINET, Qtype: dns.TypePTR}
+			qType := dns.TypeToString[q.Qtype]
+			rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", arpa, qType, name))
+			if err == nil {
+				d.dnsMap[q] = []dns.RR{rr}
+				d.l.Debugf("DNS record added %s", rr.String())
+			}
 		}
 	}
 }
 
 func (d *dnsRecords) AddTXT(name string, crt cert.Certificate) {
+	d.Lock()
+	defer d.Unlock()
 	q := dns.Question{Name: name, Qclass: dns.ClassINET, Qtype: dns.TypeTXT}
+	d.dnsMap[q] = nil
+
 	qType := dns.TypeToString[q.Qtype]
 	rr, err := dns.NewRR(fmt.Sprintf("%s %s \"Name: %v\" \"Networks: %v\" \"Groups: %v\" \"UnsafeNetworks: %v\"", name, qType, crt.Name(), crt.Networks(), crt.Groups(), crt.UnsafeNetworks()))
 	if err == nil {
-		d.Lock()
-		defer d.Unlock()
-		d.dnsMap[q] = rr
+		d.dnsMap[q] = []dns.RR{rr}
 		d.l.Debugf("DNS record added %s", rr.String())
 	}
 }
@@ -92,23 +105,10 @@ func (d *dnsRecords) AddTXT(name string, crt cert.Certificate) {
 // Add adds the first IPv4 and IPv6 address that appears in `addresses` as the record for `host`
 func (d *dnsRecords) Add(crt cert.Certificate, addresses []netip.Addr) {
 	host := dns.Fqdn(strings.ToLower(crt.Name() + dnsSuffix))
+	d.AddA(host, addresses)
+	d.AddAAAA(host, addresses)
+	d.AddPTR(host, addresses)
 	d.AddTXT(host, crt)
-	haveV4 := false
-	haveV6 := false
-	for _, addr := range addresses {
-		if addr.Is4() && !haveV4 {
-			d.AddA(host, addr)
-			d.AddPTR(host, addr)
-			haveV4 = true
-		} else if addr.Is6() && !haveV6 {
-			d.AddAAAA(host, addr)
-			d.AddPTR(host, addr)
-			haveV6 = true
-		}
-		if haveV4 && haveV6 {
-			break
-		}
-	}
 }
 
 func (d *dnsRecords) parseQuery(m *dns.Msg) {
@@ -117,7 +117,7 @@ func (d *dnsRecords) parseQuery(m *dns.Msg) {
 		case dns.TypeA, dns.TypeAAAA, dns.TypePTR, dns.TypeTXT:
 			d.RLock()
 			if rr, ok := d.dnsMap[q]; ok {
-				m.Answer = append(m.Answer, rr)
+				m.Answer = append(m.Answer, rr...)
 			}
 			d.RUnlock()
 		}
