@@ -10,6 +10,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 )
 
@@ -76,9 +77,22 @@ func (d *dnsRecords) AddPTR(name string, addr netip.Addr) {
 	}
 }
 
+func (d *dnsRecords) AddTXT(name string, crt cert.Certificate) {
+	q := dns.Question{Name: name, Qclass: dns.ClassINET, Qtype: dns.TypeTXT}
+	qType := dns.TypeToString[q.Qtype]
+	rr, err := dns.NewRR(fmt.Sprintf("%s %s \"Name: %v\" \"Networks: %v\" \"Groups: %v\" \"UnsafeNetworks: %v\"", name, qType, crt.Name(), crt.Networks(), crt.Groups(), crt.UnsafeNetworks()))
+	if err == nil {
+		d.Lock()
+		defer d.Unlock()
+		d.dnsMap[q] = rr
+		d.l.Debugf("DNS record added %s", rr.String())
+	}
+}
+
 // Add adds the first IPv4 and IPv6 address that appears in `addresses` as the record for `host`
-func (d *dnsRecords) Add(name string, addresses []netip.Addr) {
-	host := dns.Fqdn(strings.ToLower(name + dnsSuffix))
+func (d *dnsRecords) Add(crt cert.Certificate, addresses []netip.Addr) {
+	host := dns.Fqdn(strings.ToLower(crt.Name() + dnsSuffix))
+	d.AddTXT(host, crt)
 	haveV4 := false
 	haveV6 := false
 	for _, addr := range addresses {
@@ -100,7 +114,7 @@ func (d *dnsRecords) Add(name string, addresses []netip.Addr) {
 func (d *dnsRecords) parseQuery(m *dns.Msg) {
 	for _, q := range m.Question {
 		switch q.Qtype {
-		case dns.TypeA, dns.TypeAAAA, dns.TypePTR:
+		case dns.TypeA, dns.TypeAAAA, dns.TypePTR, dns.TypeTXT:
 			d.RLock()
 			if rr, ok := d.dnsMap[q]; ok {
 				m.Answer = append(m.Answer, rr)
@@ -132,7 +146,7 @@ func dnsMain(l *logrus.Logger, cs *CertState, c *config.C) func() {
 	dnsSuffix = getDnsSuffix(c)
 
 	// Add self to dns records
-	dnsR.Add(cs.GetDefaultCertificate().Name(), cs.myVpnAddrs)
+	dnsR.Add(cs.GetDefaultCertificate(), cs.myVpnAddrs)
 
 	// attach request handler func
 	dns.HandleFunc(".", dnsR.handleDnsRequest)

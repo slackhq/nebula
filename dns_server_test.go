@@ -20,7 +20,10 @@ func TestParsequery(t *testing.T) {
 		netip.MustParseAddr("fd01::25"),
 	}
 	dnsSuffix = ".com"
-	ds.Add("test.com", addrs)
+	crt := &dummyCert{
+		name: "test.com",
+	}
+	ds.Add(crt, addrs)
 
 	m := &dns.Msg{}
 	m.SetQuestion("test.com.com.", dns.TypeA)
