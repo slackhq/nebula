@@ -102,7 +102,6 @@ func (d *dnsRecords) AddTXT(name string, crt cert.Certificate) {
 	}
 }
 
-// Add adds the first IPv4 and IPv6 address that appears in `addresses` as the record for `host`
 func (d *dnsRecords) Add(crt cert.Certificate, addresses []netip.Addr) {
 	host := dns.Fqdn(strings.ToLower(crt.Name() + dnsSuffix))
 	d.AddA(host, addresses)
