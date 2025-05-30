@@ -312,12 +312,11 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 	offset := ipv6.HeaderLen // Start at the end of the ipv6 header
 	next := 0
 	for {
-		if dataLen < offset {
+		if protoAt >= dataLen {
 			break
 		}
-
 		proto := layers.IPProtocol(data[protoAt])
-		//fmt.Println(proto, protoAt)
+
 		switch proto {
 		case layers.IPProtocolICMPv6, layers.IPProtocolESP, layers.IPProtocolNoNextHeader:
 			fp.Protocol = uint8(proto)
@@ -365,7 +364,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 
 		case layers.IPProtocolAH:
 			// Auth headers, used by IPSec, have a different meaning for header length
-			if dataLen < offset+1 {
+			if dataLen <= offset+1 {
 				break
 			}
 
@@ -373,7 +372,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 
 		default:
 			// Normal ipv6 header length processing
-			if dataLen < offset+1 {
+			if dataLen <= offset+1 {
 				break
 			}
 
