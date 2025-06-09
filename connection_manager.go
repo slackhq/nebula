@@ -554,7 +554,7 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, now time.Time
 
 		if !outTraffic {
 			// Send a punch packet to keep the NAT state alive
-			//n.sendPunch(hostinfo)
+			n.sendPunch(hostinfo)
 		}
 
 		return decision, hostinfo, primary
@@ -575,7 +575,7 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, now time.Time
 		if !outTraffic {
 			// If we aren't sending or receiving traffic then its an unused tunnel and we don't to test the tunnel.
 			// Just maintain NAT state if configured to do so.
-			//n.sendPunch(hostinfo)
+			n.sendPunch(hostinfo)
 			n.trafficTimer.Add(hostinfo.localIndexId, n.checkInterval)
 			return doNothing, nil, nil
 
@@ -585,7 +585,7 @@ func (n *connectionManager) makeTrafficDecision(localIndex uint32, now time.Time
 			// This is similar to the old punchy behavior with a slight optimization.
 			// We aren't receiving traffic but we are sending it, punch on all known
 			// ips in case we need to re-prime NAT state
-			//n.sendPunch(hostinfo)
+			n.sendPunch(hostinfo)
 		}
 
 		if n.l.Level >= logrus.DebugLevel {
@@ -672,12 +672,12 @@ func (n *connectionManager) sendPunch(hostinfo *HostInfo) {
 	if n.punchy.GetTargetEverything() {
 		hostinfo.remotes.ForEach(n.hostMap.GetPreferredRanges(), func(addr netip.AddrPort, preferred bool) {
 			n.metricsTxPunchy.Inc(1)
-			//n.intf.outside.WriteTo([]byte{1}, addr)
+			_ = n.intf.outside.WriteTo([]byte{1}, addr)
 		})
 
 	} else if hostinfo.remote.IsValid() {
 		n.metricsTxPunchy.Inc(1)
-		//n.intf.outside.WriteTo([]byte{1}, hostinfo.remote)
+		_ = n.intf.outside.WriteTo([]byte{1}, hostinfo.remote)
 	}
 }
 
