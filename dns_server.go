@@ -26,7 +26,7 @@ type dnsRecords struct {
 	dnsMap4         map[string]netip.Addr
 	dnsMap6         map[string]netip.Addr
 	hostMap         *HostMap
-	myVpnAddrsTable *bart.Table[struct{}]
+	myVpnAddrsTable *bart.Lite
 }
 
 func newDnsRecords(l *logrus.Logger, cs *CertState, hostMap *HostMap) *dnsRecords {
@@ -113,8 +113,8 @@ func (d *dnsRecords) isSelfNebulaOrLocalhost(addr string) bool {
 		return true
 	}
 
-	_, found := d.myVpnAddrsTable.Lookup(b)
-	return found //if we found it in this table, it's good
+	//if we found it in this table, it's good
+	return d.myVpnAddrsTable.Contains(b)
 }
 
 func (d *dnsRecords) parseQuery(m *dns.Msg, w dns.ResponseWriter) {

@@ -26,7 +26,7 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 
 	// If we're connecting to a v6 address we must use a v2 cert
 	cs := f.pki.getCertState()
-	v := cs.defaultVersion
+	v := cs.initiatingVersion
 	for _, a := range hh.hostinfo.vpnAddrs {
 		if a.Is6() {
 			v = cert.Version2
@@ -102,7 +102,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 	if crt == nil {
 		f.l.WithField("udpAddr", addr).
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).
-			WithField("certVersion", cs.defaultVersion).
+			WithField("certVersion", cs.initiatingVersion).
 			Error("Unable to handshake with host because no certificate is available")
 	}
 
@@ -193,8 +193,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 
 	for _, network := range remoteCert.Certificate.Networks() {
 		vpnAddr := network.Addr()
-		_, found := f.myVpnAddrsTable.Lookup(vpnAddr)
-		if found {
+		if f.myVpnAddrsTable.Contains(vpnAddr) {
 			f.l.WithField("vpnAddr", vpnAddr).WithField("udpAddr", addr).
 				WithField("certName", certName).
 				WithField("certVersion", certVersion).
@@ -205,7 +204,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		}
 
 		// vpnAddrs outside our vpn networks are of no use to us, filter them out
-		if _, ok := f.myVpnNetworksTable.Lookup(vpnAddr); !ok {
+		if !f.myVpnNetworksTable.Contains(vpnAddr) {
 			continue
 		}
 
@@ -581,7 +580,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 	for _, network := range vpnNetworks {
 		// vpnAddrs outside our vpn networks are of no use to us, filter them out
 		vpnAddr := network.Addr()
-		if _, ok := f.myVpnNetworksTable.Lookup(vpnAddr); !ok {
+		if !f.myVpnNetworksTable.Contains(vpnAddr) {
 			continue
 		}
 

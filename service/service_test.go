@@ -5,13 +5,17 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"os"
 	"testing"
 	"time"
 
 	"dario.cat/mergo"
+	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay"
 	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 )
@@ -71,7 +75,15 @@ func newSimpleService(caCrt cert.Certificate, caKey []byte, name string, udpIp n
 		panic(err)
 	}
 
-	s, err := New(&c)
+	logger := logrus.New()
+	logger.Out = os.Stdout
+
+	control, err := nebula.Main(&c, false, "custom-app", logger, overlay.NewUserDeviceFromConfig)
+	if err != nil {
+		panic(err)
+	}
+
+	s, err := New(control)
 	if err != nil {
 		panic(err)
 	}

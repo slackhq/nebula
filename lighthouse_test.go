@@ -31,8 +31,8 @@ func TestOldIPv4Only(t *testing.T) {
 func Test_lhStaticMapping(t *testing.T) {
 	l := test.NewLogger()
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/16")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
@@ -56,8 +56,8 @@ func Test_lhStaticMapping(t *testing.T) {
 func TestReloadLighthouseInterval(t *testing.T) {
 	l := test.NewLogger()
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/16")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
@@ -91,8 +91,8 @@ func TestReloadLighthouseInterval(t *testing.T) {
 func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	l := test.NewLogger()
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/0")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
@@ -196,8 +196,8 @@ func TestLighthouse_Memory(t *testing.T) {
 	c.Settings["listen"] = map[string]any{"port": 4242}
 
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/24")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
@@ -281,8 +281,8 @@ func TestLighthouse_reload(t *testing.T) {
 	c.Settings["listen"] = map[string]any{"port": 4242}
 
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/24")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
@@ -417,7 +417,7 @@ func (tw *testEncWriter) GetHostInfo(vpnIp netip.Addr) *HostInfo {
 }
 
 func (tw *testEncWriter) GetCertState() *CertState {
-	return &CertState{defaultVersion: tw.protocolVersion}
+	return &CertState{initiatingVersion: tw.protocolVersion}
 }
 
 // assertIp4InArray asserts every address in want is at the same position in have and that the lengths match
