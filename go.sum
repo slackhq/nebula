@@ -159,8 +159,8 @@ github.com/vishvananda/netlink v1.3.0 h1:X7l42GfcV4S6E4vHTsw48qbrV+9PVojNfIhZcwQ
 github.com/vishvananda/netlink v1.3.0/go.mod h1:i6NetklAujEcC6fK0JPjT8qSwWyO0HLn4UKG+hGqeJs=
 github.com/vishvananda/netns v0.0.4 h1:Oeaw1EM2JMxD51g9uhtC0D7erkIjgmj8+JZc26m1YX8=
 github.com/vishvananda/netns v0.0.4/go.mod h1:SpkAiCQRtJ6TvvxPnOSyH3BMl6unz3xZlaprSwhNNJM=
-github.com/wadey/synctrace v0.0.0-20250402145118-0d86c014a21f h1:J5/J+fUa6WVnNUXLr4/2qYmvGV0QQ+R8XzAaqa5nyRM=
-github.com/wadey/synctrace v0.0.0-20250402145118-0d86c014a21f/go.mod h1:F2VCml4UxGPgAAqqm9T0ZfnVRWITrQS1EMZM+KCAm/Q=
+github.com/wadey/synctrace v0.0.0-20250612192159-94547ef50dfe h1:dc8Q42VsX+ABr0drJw27f3smvGfcz7eB8rJx+IkVMAo=
+github.com/wadey/synctrace v0.0.0-20250612192159-94547ef50dfe/go.mod h1:F2VCml4UxGPgAAqqm9T0ZfnVRWITrQS1EMZM+KCAm/Q=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 golang.org/x/crypto v0.0.0-20180904163835-0709b304e793/go.mod h1:6SG95UA2DQfeDnfUPMdvaQW0Q7yPrPDi9nlGo2tz2b4=

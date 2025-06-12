@@ -24,7 +24,7 @@ require (
 	github.com/stefanberger/go-pkcs11uri v0.0.0-20230803200340-78284954bff6
 	github.com/stretchr/testify v1.10.0
 	github.com/vishvananda/netlink v1.3.0
-	github.com/wadey/synctrace v0.0.0-20250402145118-0d86c014a21f
+	github.com/wadey/synctrace v0.0.0-20250612192159-94547ef50dfe
 	golang.org/x/crypto v0.37.0
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090
 	golang.org/x/net v0.39.0
