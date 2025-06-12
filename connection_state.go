@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"sync/atomic"
 
 	"github.com/flynn/noise"
@@ -24,7 +23,7 @@ type ConnectionState struct {
 	initiator      bool
 	messageCounter atomic.Uint64
 	window         *Bits
-	writeLock      sync.Mutex
+	writeLock      syncMutex
 }
 
 func NewConnectionState(l *logrus.Logger, cs *CertState, crt cert.Certificate, initiator bool, pattern noise.HandshakePattern) (*ConnectionState, error) {
@@ -76,6 +75,8 @@ func NewConnectionState(l *logrus.Logger, cs *CertState, crt cert.Certificate, i
 		initiator: initiator,
 		window:    b,
 		myCert:    crt,
+
+		writeLock: newSyncMutex("connection-state-write"),
 	}
 	// always start the counter from 2, as packet 1 and packet 2 are handshake packets.
 	ci.messageCounter.Add(2)

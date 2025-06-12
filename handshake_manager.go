@@ -8,7 +8,6 @@ import (
 	"errors"
 	"net/netip"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -45,7 +44,7 @@ type HandshakeConfig struct {
 
 type HandshakeManager struct {
 	// Mutex for interacting with the vpnIps and indexes maps
-	sync.RWMutex
+	syncRWMutex
 
 	vpnIps  map[netip.Addr]*HandshakeHostInfo
 	indexes map[uint32]*HandshakeHostInfo
@@ -66,7 +65,7 @@ type HandshakeManager struct {
 }
 
 type HandshakeHostInfo struct {
-	sync.Mutex
+	syncMutex
 
 	startTime   time.Time        // Time that we first started trying with this handshake
 	ready       bool             // Is the handshake ready
@@ -104,6 +103,7 @@ func (hh *HandshakeHostInfo) cachePacket(l *logrus.Logger, t header.MessageType,
 
 func NewHandshakeManager(l *logrus.Logger, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
+		syncRWMutex:            newSyncRWMutex("handshake-manager"),
 		vpnIps:                 map[netip.Addr]*HandshakeHostInfo{},
 		indexes:                map[uint32]*HandshakeHostInfo{},
 		mainHostMap:            mainHostMap,
@@ -111,7 +111,7 @@ func NewHandshakeManager(l *logrus.Logger, mainHostMap *HostMap, lightHouse *Lig
 		outside:                outside,
 		config:                 config,
 		trigger:                make(chan netip.Addr, config.triggerBuffer),
-		OutboundHandshakeTimer: NewLockingTimerWheel[netip.Addr](config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
+		OutboundHandshakeTimer: NewLockingTimerWheel[netip.Addr]("handshake-manager-timer", config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
 		messageMetrics:         config.messageMetrics,
 		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
 		metricTimedOut:         metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),
@@ -447,9 +447,11 @@ func (hm *HandshakeManager) StartHandshake(vpnAddr netip.Addr, cacheCb func(*Han
 	}
 
 	hostinfo := &HostInfo{
+		syncRWMutex:     newSyncRWMutex("hostinfo"),
 		vpnAddrs:        []netip.Addr{vpnAddr},
 		HandshakePacket: make(map[uint8][]byte, 0),
 		relayState: RelayState{
+			syncRWMutex:    newSyncRWMutex("relay-state"),
 			relays:         map[netip.Addr]struct{}{},
 			relayForByAddr: map[netip.Addr]*Relay{},
 			relayForByIdx:  map[uint32]*Relay{},
@@ -457,6 +459,7 @@ func (hm *HandshakeManager) StartHandshake(vpnAddr netip.Addr, cacheCb func(*Han
 	}
 
 	hh := &HandshakeHostInfo{
+		syncMutex: newSyncMutex("handshake-hostinfo"),
 		hostinfo:  hostinfo,
 		startTime: time.Now(),
 	}
