@@ -116,26 +116,28 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		// naively attempt to decode the private key as though it is not encrypted
 		caKey, _, curve, err = cert.UnmarshalSigningPrivateKeyFromPEM(rawCAKey)
 		if errors.Is(err, cert.ErrPrivateKeyEncrypted) {
-			// ask for a passphrase until we get one
 			var passphrase []byte
-			for i := 0; i < 5; i++ {
-				out.Write([]byte("Enter passphrase: "))
-				passphrase, err = pr.ReadPassword()
-
-				if errors.Is(err, ErrNoTerminal) {
-					return fmt.Errorf("ca-key is encrypted and must be decrypted interactively")
-				} else if err != nil {
-					return fmt.Errorf("error reading password: %s", err)
-				}
-
-				if len(passphrase) > 0 {
-					break
-				}
-			}
+			passphrase = []byte(os.Getenv("CA_PASSPHRASE"))
 			if len(passphrase) == 0 {
-				return fmt.Errorf("cannot open encrypted ca-key without passphrase")
-			}
+				// ask for a passphrase until we get one
+				for i := 0; i < 5; i++ {
+					out.Write([]byte("Enter passphrase: "))
+					passphrase, err = pr.ReadPassword()
 
+					if errors.Is(err, ErrNoTerminal) {
+						return fmt.Errorf("ca-key is encrypted and must be decrypted interactively")
+					} else if err != nil {
+						return fmt.Errorf("error reading password: %s", err)
+					}
+
+					if len(passphrase) > 0 {
+						break
+					}
+				}
+				if len(passphrase) == 0 {
+					return fmt.Errorf("cannot open encrypted ca-key without passphrase")
+				}
+			}
 			curve, caKey, _, err = cert.DecryptAndUnmarshalSigningPrivateKey(passphrase, rawCAKey)
 			if err != nil {
 				return fmt.Errorf("error while parsing encrypted ca-key: %s", err)
