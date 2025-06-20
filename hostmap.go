@@ -245,7 +245,11 @@ type HostInfo struct {
 
 	//TODO: in, out, and others might benefit from being an atomic.Int32. We could collapse connectionManager pendingDeletion, relayUsed, and in/out into this 1 thing
 	in, out, pendingDeletion atomic.Bool
-	lastComms                atomic.Pointer[time.Time]
+
+	// lastUsed tracks the last time ConnectionManager checked the tunnel and it was in use.
+	// This value will be behind against actual tunnel utilization in the hot path.
+	// This should only be used by the ConnectionManagers ticker routine.
+	lastUsed time.Time
 }
 
 type ViaSender struct {

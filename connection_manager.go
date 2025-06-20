@@ -107,20 +107,11 @@ func (cm *connectionManager) getInactivityTimeout() time.Duration {
 }
 
 func (cm *connectionManager) In(h *HostInfo) {
-	if h.in.Swap(true) == false {
-		cm.updateLastCommunication(h)
-	}
+	h.in.Store(true)
 }
 
 func (cm *connectionManager) Out(h *HostInfo) {
-	if h.out.Swap(true) == false {
-		cm.updateLastCommunication(h)
-	}
-}
-
-func (cm *connectionManager) updateLastCommunication(h *HostInfo) {
-	now := time.Now()
-	h.lastComms.Store(&now)
+	h.out.Store(true)
 }
 
 func (cm *connectionManager) RelayUsed(localIndex uint32) {
@@ -138,9 +129,12 @@ func (cm *connectionManager) RelayUsed(localIndex uint32) {
 
 // getAndResetTrafficCheck returns if there was any inbound or outbound traffic within the last tick and
 // resets the state for this local index
-func (cm *connectionManager) getAndResetTrafficCheck(h *HostInfo) (bool, bool) {
+func (cm *connectionManager) getAndResetTrafficCheck(h *HostInfo, now time.Time) (bool, bool) {
 	in := h.in.Swap(false)
 	out := h.out.Swap(false)
+	if in || out {
+		h.lastUsed = now
+	}
 	return in, out
 }
 
@@ -327,7 +321,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 	}
 
 	// Check for traffic on this hostinfo
-	inTraffic, outTraffic := cm.getAndResetTrafficCheck(hostinfo)
+	inTraffic, outTraffic := cm.getAndResetTrafficCheck(hostinfo, now)
 
 	// A hostinfo is determined alive if there is incoming traffic
 	if inTraffic {
@@ -424,13 +418,7 @@ func (cm *connectionManager) isInactive(hostinfo *HostInfo, now time.Time) (time
 		return 0, false
 	}
 
-	lastComm := hostinfo.lastComms.Load()
-	if lastComm == nil {
-		// Strangely we don't have any last communication time recorded
-		return 0, false
-	}
-
-	inactiveDuration := now.Sub(*lastComm)
+	inactiveDuration := now.Sub(hostinfo.lastUsed)
 	if inactiveDuration < cm.getInactivityTimeout() {
 		// It's not considered inactive
 		return inactiveDuration, false

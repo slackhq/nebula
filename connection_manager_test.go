@@ -262,8 +262,16 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	assert.True(t, hostinfo.in.Load())
 
 	now := time.Now()
-	decision, _, _ := nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Second*5))
+	decision, _, _ := nc.makeTrafficDecision(hostinfo.localIndexId, now)
 	assert.Equal(t, tryRehandshake, decision)
+	assert.Equal(t, now, hostinfo.lastUsed)
+	assert.False(t, hostinfo.pendingDeletion.Load())
+	assert.False(t, hostinfo.out.Load())
+	assert.False(t, hostinfo.in.Load())
+
+	decision, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Second*5))
+	assert.Equal(t, doNothing, decision)
+	assert.Equal(t, now, hostinfo.lastUsed)
 	assert.False(t, hostinfo.pendingDeletion.Load())
 	assert.False(t, hostinfo.out.Load())
 	assert.False(t, hostinfo.in.Load())
@@ -271,6 +279,7 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	// Do another traffic check tick, should still not be pending deletion
 	decision, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Second*10))
 	assert.Equal(t, doNothing, decision)
+	assert.Equal(t, now, hostinfo.lastUsed)
 	assert.False(t, hostinfo.pendingDeletion.Load())
 	assert.False(t, hostinfo.out.Load())
 	assert.False(t, hostinfo.in.Load())
@@ -280,6 +289,7 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	// Finally advance beyond the inactivity timeout
 	decision, _, _ = nc.makeTrafficDecision(hostinfo.localIndexId, now.Add(time.Minute*10))
 	assert.Equal(t, closeTunnel, decision)
+	assert.Equal(t, now, hostinfo.lastUsed)
 	assert.False(t, hostinfo.pendingDeletion.Load())
 	assert.False(t, hostinfo.out.Load())
 	assert.False(t, hostinfo.in.Load())
