@@ -4,7 +4,6 @@
 package e2e
 
 import (
-	"fmt"
 	"net/netip"
 	"slices"
 	"testing"
@@ -414,7 +413,7 @@ func TestReestablishRelays(t *testing.T) {
 	curIndexes := len(myControl.GetHostmap().Indexes)
 	for curIndexes >= start {
 		curIndexes = len(myControl.GetHostmap().Indexes)
-		r.Logf("Wait for the dead index to go away:start=%v indexes, currnet=%v indexes", start, curIndexes)
+		r.Logf("Wait for the dead index to go away:start=%v indexes, current=%v indexes", start, curIndexes)
 		myControl.InjectTunUDPPacket(theirVpnIpNet.Addr(), 80, 80, []byte("Hi from me should fail"))
 
 		r.RouteForAllExitFunc(func(p *udp.Packet, c *nebula.Control) router.ExitType {
@@ -964,9 +963,8 @@ func TestRehandshakingLoser(t *testing.T) {
 	t.Log("Stand up a tunnel between me and them")
 	assertTunnel(t, myVpnIpNet.Addr(), theirVpnIpNet.Addr(), myControl, theirControl, r)
 
-	tt1 := myControl.GetHostInfoByVpnIp(theirVpnIpNet.Addr(), false)
-	tt2 := theirControl.GetHostInfoByVpnIp(myVpnIpNet.Addr(), false)
-	fmt.Println(tt1.LocalIndex, tt2.LocalIndex)
+	myControl.GetHostInfoByVpnIp(theirVpnIpNet.Addr(), false)
+	theirControl.GetHostInfoByVpnIp(myVpnIpNet.Addr(), false)
 
 	r.RenderHostmaps("Starting hostmaps", myControl, theirControl)
 

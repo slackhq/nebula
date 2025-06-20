@@ -24,24 +24,23 @@ import (
 const mtu = 9001
 
 type InterfaceConfig struct {
-	HostMap                 *HostMap
-	Outside                 udp.Conn
-	Inside                  overlay.Device
-	pki                     *PKI
-	Cipher                  string
-	Firewall                *Firewall
-	ServeDns                bool
-	HandshakeManager        *HandshakeManager
-	lightHouse              *LightHouse
-	checkInterval           time.Duration
-	pendingDeletionInterval time.Duration
-	DropLocalBroadcast      bool
-	DropMulticast           bool
-	routines                int
-	MessageMetrics          *MessageMetrics
-	version                 string
-	relayManager            *relayManager
-	punchy                  *Punchy
+	HostMap            *HostMap
+	Outside            udp.Conn
+	Inside             overlay.Device
+	pki                *PKI
+	Cipher             string
+	Firewall           *Firewall
+	ServeDns           bool
+	HandshakeManager   *HandshakeManager
+	lightHouse         *LightHouse
+	connectionManager  *connectionManager
+	DropLocalBroadcast bool
+	DropMulticast      bool
+	routines           int
+	MessageMetrics     *MessageMetrics
+	version            string
+	relayManager       *relayManager
+	punchy             *Punchy
 
 	tryPromoteEvery uint32
 	reQueryEvery    uint32
@@ -154,6 +153,9 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	if c.Firewall == nil {
 		return nil, errors.New("no firewall rules")
 	}
+	if c.connectionManager == nil {
+		return nil, errors.New("no connection manager")
+	}
 
 	certificate := c.pki.GetCertState().Certificate
 
@@ -196,6 +198,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		readers:            make([]io.ReadWriteCloser, c.routines),
 		myVpnNet:           myVpnNet,
 		relayManager:       c.relayManager,
+		connectionManager:  c.connectionManager,
 
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
 
@@ -219,7 +222,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	ifce.reQueryEvery.Store(c.reQueryEvery)
 	ifce.reQueryWait.Store(int64(c.reQueryWait))
 
-	ifce.connectionManager = newConnectionManager(ctx, c.l, ifce, c.checkInterval, c.pendingDeletionInterval, c.punchy)
+	ifce.connectionManager.intf = ifce
 
 	return ifce, nil
 }
