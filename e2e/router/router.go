@@ -700,6 +700,7 @@ func (r *R) FlushAll() {
 			r.Unlock()
 			panic("Can't FlushAll for host: " + p.To.String())
 		}
+		receiver.InjectUDPPacket(p)
 		r.Unlock()
 	}
 }
