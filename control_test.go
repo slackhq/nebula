@@ -66,7 +66,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		localIndexId:  201,
 		vpnIp:         vpnIp,
 		relayState: RelayState{
-			relays:        map[netip.Addr]struct{}{},
+			relays:        nil,
 			relayForByIp:  map[netip.Addr]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
 		},
@@ -85,7 +85,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		localIndexId:  201,
 		vpnIp:         vpnIp2,
 		relayState: RelayState{
-			relays:        map[netip.Addr]struct{}{},
+			relays:        nil,
 			relayForByIp:  map[netip.Addr]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
 		},

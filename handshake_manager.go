@@ -403,7 +403,7 @@ func (hm *HandshakeManager) StartHandshake(vpnIp netip.Addr, cacheCb func(*Hands
 		vpnIp:           vpnIp,
 		HandshakePacket: make(map[uint8][]byte, 0),
 		relayState: RelayState{
-			relays:        map[netip.Addr]struct{}{},
+			relays:        nil,
 			relayForByIp:  map[netip.Addr]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
 		},
