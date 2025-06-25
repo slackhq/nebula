@@ -223,24 +223,24 @@ func TestHostMap_RelayState(t *testing.T) {
 	a2 := netip.MustParseAddr("2001::1")
 
 	h1.relayState.InsertRelayTo(a1)
-	assert.Equal(t, h1.relayState.relays, []netip.Addr{a1})
+	assert.Equal(t, []netip.Addr{a1}, h1.relayState.relays)
 	h1.relayState.InsertRelayTo(a2)
-	assert.Equal(t, h1.relayState.relays, []netip.Addr{a1, a2})
+	assert.Equal(t, []netip.Addr{a1, a2}, h1.relayState.relays)
 	// Ensure that the first relay added is the first one returned in the copy
 	currentRelays := h1.relayState.CopyRelayIps()
 	require.Len(t, currentRelays, 2)
-	assert.Equal(t, currentRelays[0], a1)
+	assert.Equal(t, a1, currentRelays[0])
 
 	// Deleting the last one in the list works ok
 	h1.relayState.DeleteRelay(a2)
-	assert.Equal(t, h1.relayState.relays, []netip.Addr{a1})
+	assert.Equal(t, []netip.Addr{a1}, h1.relayState.relays)
 
 	// Deleting an element not in the list works ok
 	h1.relayState.DeleteRelay(a2)
-	assert.Equal(t, h1.relayState.relays, []netip.Addr{a1})
+	assert.Equal(t, []netip.Addr{a1}, h1.relayState.relays)
 
 	// Deleting the only element in the list works ok
 	h1.relayState.DeleteRelay(a1)
-	assert.Equal(t, h1.relayState.relays, []netip.Addr{})
+	assert.Equal(t, []netip.Addr{}, h1.relayState.relays)
 
 }
