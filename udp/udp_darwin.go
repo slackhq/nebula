@@ -7,14 +7,15 @@ package udp
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
 	"net/netip"
-	"os"
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
@@ -25,11 +26,10 @@ import (
 
 type StdConn struct {
 	*net.UDPConn
-	rc          syscall.RawConn
 	isV4        bool
+	sysFd       uintptr
 	writeErrors atomic.Int32
 	l           *logrus.Logger
-	fd          *os.File
 }
 
 var _ Conn = &StdConn{}
@@ -42,11 +42,20 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 	}
 
 	if uc, ok := pc.(*net.UDPConn); ok {
+		c := &StdConn{UDPConn: uc, l: l}
+
 		rc, err := uc.SyscallConn()
 		if err != nil {
 			return nil, fmt.Errorf("failed to open udp socket: %w", err)
 		}
-		c := &StdConn{UDPConn: uc, rc: rc, l: l}
+
+		err = rc.Control(func(fd uintptr) {
+			c.sysFd = fd
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get udp fd: %w", err)
+		}
+
 		la, err := c.LocalAddr()
 		if err != nil {
 			return nil, err
@@ -83,84 +92,70 @@ func NewListenConfig(multi bool) net.ListenConfig {
 	}
 }
 
+//go:linkname sendto golang.org/x/sys/unix.sendto
+//go:noescape
+func sendto(s int, buf []byte, flags int, to unsafe.Pointer, addrlen int32) (err error)
+
 func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
-	var oErr error
-	err := u.rc.Write(func(fd uintptr) bool {
-		// Golang stdlib doesn't handle EAGAIN correctly in some situations so we do writes ourselves
-		// See https://github.com/golang/go/issues/73919
-		var sa syscall.Sockaddr
+	var sa unsafe.Pointer
+	var addrLen int32
 
-		if u.isV4 {
-			if ap.Addr().Is6() {
-				oErr = fmt.Errorf("listener is IPv4, but writing to IPv6 remote")
-				return true
-			}
-			sa = toSockaddr4(ap)
-		} else {
-			sa = toSockaddr6(ap)
+	if u.isV4 {
+		if ap.Addr().Is6() {
+			return fmt.Errorf("listener is IPv4, but writing to IPv6 remote")
 		}
 
-		//NOTE: I really wish there was a Sendto that took a RawSockaddrAny
-		for {
-			err := syscall.Sendto(int(fd), b, 0, sa)
-			if err == nil {
-				// Written, get out before the error handling
-				return true
-			}
+		var rsa unix.RawSockaddrInet6
+		rsa.Family = unix.AF_INET6
+		rsa.Addr = ap.Addr().As16()
+		binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ap.Port())
+		sa = unsafe.Pointer(&rsa)
+		addrLen = syscall.SizeofSockaddrInet4
+	} else {
+		var rsa unix.RawSockaddrInet6
+		rsa.Family = unix.AF_INET6
+		rsa.Addr = ap.Addr().As16()
+		binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ap.Port())
+		sa = unsafe.Pointer(&rsa)
+		addrLen = syscall.SizeofSockaddrInet6
+	}
 
-			if errors.Is(err, syscall.EINTR) {
-				// Write was interrupted, retry
-				continue
-			}
-
-			if errors.Is(err, syscall.EAGAIN) {
-				// Try to suss out whether this is a transient error or something more permanent
-				n := u.writeErrors.Add(1)
-				u.l.WithError(err).WithField("consecutiveErrors", n).Error("unexpected udp socket write error")
-
-				if n > 15 {
-					panic("too many consecutive UDP write errors")
-
-				} else if n > 10 {
-					time.Sleep(100 * time.Millisecond)
-				}
-
-				continue
-			}
-
-			if errors.Is(err, syscall.EBADF) {
-				return true
-			}
-
-			oErr = &net.OpError{Op: "sendto", Err: err}
-			// Unhandled error, return and let the caller decide
-			return true
+	// Golang stdlib doesn't handle EAGAIN correctly in some situations so we do writes ourselves
+	// See https://github.com/golang/go/issues/73919
+	for {
+		//_, _, err := unix.Syscall6(unix.SYS_SENDTO, u.sysFd, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)), 0, sa, addrLen)
+		err := sendto(int(u.sysFd), b, 0, sa, addrLen)
+		if err == nil {
+			// Written, get out before the error handling
+			return nil
 		}
-	})
 
-	if err != nil {
-		return err
+		if errors.Is(err, syscall.EINTR) {
+			// Write was interrupted, retry
+			continue
+		}
+
+		if errors.Is(err, syscall.EAGAIN) {
+			// Try to suss out whether this is a transient error or something more permanent
+			n := u.writeErrors.Add(1)
+			u.l.WithError(err).WithField("consecutiveErrors", n).Error("unexpected udp socket write error")
+
+			if n > 15 {
+				panic("too many consecutive UDP write errors")
+
+			} else if n > 10 {
+				time.Sleep(100 * time.Millisecond)
+			}
+
+			continue
+		}
+
+		if errors.Is(err, syscall.EBADF) {
+			return net.ErrClosed
+		}
+
+		return &net.OpError{Op: "sendto", Err: err}
 	}
-
-	return oErr
-}
-
-func toSockaddr4(ap netip.AddrPort) syscall.Sockaddr {
-	// syscall pkg handles endianness
-	sa4 := &syscall.SockaddrInet4{
-		Addr: ap.Addr().As4(),
-		Port: int(ap.Port()),
-	}
-	return sa4
-}
-
-func toSockaddr6(ap netip.AddrPort) syscall.Sockaddr {
-	// syscall pkg handles endianness
-	sa6 := &syscall.SockaddrInet6{
-		Addr: ap.Addr().As16(),
-		Port: int(ap.Port()),
-	}
-	return sa6
 }
 
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
@@ -218,15 +213,16 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 }
 
 func (u *StdConn) Rebind() error {
-	rc, err := u.UDPConn.SyscallConn()
-	if err != nil {
-		return err
+	var err error
+	if u.isV4 {
+		err = syscall.SetsockoptInt(int(u.sysFd), syscall.IPPROTO_IP, syscall.IP_BOUND_IF, 0)
+	} else {
+		err = syscall.SetsockoptInt(int(u.sysFd), syscall.IPPROTO_IPV6, syscall.IPV6_BOUND_IF, 0)
 	}
 
-	return rc.Control(func(fd uintptr) {
-		err := syscall.SetsockoptInt(int(fd), unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, 0)
-		if err != nil {
-			u.l.WithError(err).Error("Failed to rebind udp socket")
-		}
-	})
+	if err != nil {
+		u.l.WithError(err).Error("Failed to rebind udp socket")
+	}
+
+	return nil
 }
