@@ -6,17 +6,57 @@ package udp
 // Darwin support is primarily implemented in udp_generic, besides NewListenConfig
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/header"
 	"golang.org/x/sys/unix"
 )
 
+type StdConn struct {
+	*net.UDPConn
+	rc          syscall.RawConn
+	isV4        bool
+	writeErrors atomic.Int32
+	l           *logrus.Logger
+	fd          *os.File
+}
+
+var _ Conn = &StdConn{}
+
 func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
-	return NewGenericListener(l, ip, port, multi, batch)
+	lc := NewListenConfig(multi)
+	pc, err := lc.ListenPacket(context.TODO(), "udp", net.JoinHostPort(ip.String(), fmt.Sprintf("%v", port)))
+	if err != nil {
+		return nil, err
+	}
+
+	if uc, ok := pc.(*net.UDPConn); ok {
+		rc, err := uc.SyscallConn()
+		if err != nil {
+			return nil, fmt.Errorf("failed to open udp socket: %w", err)
+		}
+		c := &StdConn{UDPConn: uc, rc: rc, l: l}
+		la, err := c.LocalAddr()
+		if err != nil {
+			return nil, err
+		}
+		c.isV4 = la.Addr().Is4()
+
+		return c, nil
+	}
+
+	return nil, fmt.Errorf("unexpected PacketConn: %T %#v", pc, pc)
 }
 
 func NewListenConfig(multi bool) net.ListenConfig {
@@ -43,7 +83,141 @@ func NewListenConfig(multi bool) net.ListenConfig {
 	}
 }
 
-func (u *GenericConn) Rebind() error {
+func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
+	var oErr error
+	err := u.rc.Write(func(fd uintptr) bool {
+		// Golang stdlib doesn't handle EAGAIN correctly in some situations so we do writes ourselves
+		// See https://github.com/golang/go/issues/73919
+		var sa syscall.Sockaddr
+
+		if u.isV4 {
+			if ap.Addr().Is6() {
+				oErr = fmt.Errorf("listener is IPv4, but writing to IPv6 remote")
+				return true
+			}
+			sa = toSockaddr4(ap)
+		} else {
+			sa = toSockaddr6(ap)
+		}
+
+		//NOTE: I really wish there was a Sendto that took a RawSockaddrAny
+		for {
+			err := syscall.Sendto(int(fd), b, 0, sa)
+			if err == nil {
+				// Written, get out before the error handling
+				return true
+			}
+
+			if errors.Is(err, syscall.EINTR) {
+				// Write was interrupted, retry
+				continue
+			}
+
+			if errors.Is(err, syscall.EAGAIN) {
+				// Try to suss out whether this is a transient error or something more permanent
+				n := u.writeErrors.Add(1)
+				u.l.WithError(err).WithField("consecutiveErrors", n).Error("unexpected udp socket write error")
+
+				if n > 15 {
+					panic("too many consecutive UDP write errors")
+
+				} else if n > 10 {
+					time.Sleep(100 * time.Millisecond)
+				}
+
+				continue
+			}
+
+			if errors.Is(err, syscall.EBADF) {
+				return true
+			}
+
+			oErr = &net.OpError{Op: "sendto", Err: err}
+			// Unhandled error, return and let the caller decide
+			return true
+		}
+	})
+
+	if err != nil {
+		return err
+	}
+
+	return oErr
+}
+
+func toSockaddr4(ap netip.AddrPort) syscall.Sockaddr {
+	// syscall pkg handles endianness
+	sa4 := &syscall.SockaddrInet4{
+		Addr: ap.Addr().As4(),
+		Port: int(ap.Port()),
+	}
+	return sa4
+}
+
+func toSockaddr6(ap netip.AddrPort) syscall.Sockaddr {
+	// syscall pkg handles endianness
+	sa6 := &syscall.SockaddrInet6{
+		Addr: ap.Addr().As16(),
+		Port: int(ap.Port()),
+	}
+	return sa6
+}
+
+func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
+	a := u.UDPConn.LocalAddr()
+
+	switch v := a.(type) {
+	case *net.UDPAddr:
+		addr, ok := netip.AddrFromSlice(v.IP)
+		if !ok {
+			return netip.AddrPort{}, fmt.Errorf("LocalAddr returned invalid IP address: %s", v.IP)
+		}
+		return netip.AddrPortFrom(addr, uint16(v.Port)), nil
+
+	default:
+		return netip.AddrPort{}, fmt.Errorf("LocalAddr returned: %#v", a)
+	}
+}
+
+func (u *StdConn) ReloadConfig(c *config.C) {
+	// TODO
+}
+
+func NewUDPStatsEmitter(udpConns []Conn) func() {
+	// No UDP stats for non-linux
+	return func() {}
+}
+
+func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int) {
+	plaintext := make([]byte, MTU)
+	buffer := make([]byte, MTU)
+	h := &header.H{}
+	fwPacket := &firewall.Packet{}
+	nb := make([]byte, 12, 12)
+
+	for {
+		// Just read one packet at a time
+		n, rua, err := u.ReadFromUDPAddrPort(buffer)
+		if err != nil {
+			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
+			return
+		}
+
+		r(
+			netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()),
+			plaintext[:0],
+			buffer[:n],
+			h,
+			fwPacket,
+			lhf,
+			nb,
+			q,
+			cache.Get(u.l),
+		)
+	}
+}
+
+func (u *StdConn) Rebind() error {
 	rc, err := u.UDPConn.SyscallConn()
 	if err != nil {
 		return err
