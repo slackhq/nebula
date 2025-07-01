@@ -17,8 +17,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/firewall"
-	"github.com/slackhq/nebula/header"
 	"golang.org/x/sys/unix"
 )
 
@@ -169,12 +167,8 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 	return func() {}
 }
 
-func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall.ConntrackCacheTicker, q int) {
-	plaintext := make([]byte, MTU)
+func (u *StdConn) ListenOut(r EncReader) {
 	buffer := make([]byte, MTU)
-	h := &header.H{}
-	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
 
 	for {
 		// Just read one packet at a time
@@ -188,17 +182,7 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 			u.l.WithError(err).Error("unexpected udp socket receive error")
 		}
 
-		r(
-			netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()),
-			plaintext[:0],
-			buffer[:n],
-			h,
-			fwPacket,
-			lhf,
-			nb,
-			q,
-			cache.Get(u.l),
-		)
+		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
 	}
 }
 
