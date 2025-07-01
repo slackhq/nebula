@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/netip"
 	"syscall"
-	"time"
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
@@ -100,7 +99,7 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 
 	if u.isV4 {
 		if ap.Addr().Is6() {
-			return fmt.Errorf("listener is IPv4, but writing to IPv6 remote")
+			return ErrInvalidIPv6RemoteForSocket
 		}
 
 		var rsa unix.RawSockaddrInet6
@@ -118,7 +117,6 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 		addrLen = syscall.SizeofSockaddrInet6
 	}
 
-	writeErrors := 0
 	// Golang stdlib doesn't handle EAGAIN correctly in some situations so we do writes ourselves
 	// See https://github.com/golang/go/issues/73919
 	for {
@@ -135,18 +133,7 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 		}
 
 		if errors.Is(err, syscall.EAGAIN) {
-			// Try to suss out whether this is a transient error or something more permanent
-			writeErrors++
-			u.l.WithError(err).WithField("consecutiveErrors", writeErrors).Error("unexpected udp socket write error")
-
-			if writeErrors > 15 {
-				panic("too many consecutive UDP write errors")
-
-			} else if writeErrors > 10 {
-				time.Sleep(100 * time.Millisecond)
-			}
-
-			continue
+			return &net.OpError{Op: "sendto", Err: unix.EWOULDBLOCK}
 		}
 
 		if errors.Is(err, syscall.EBADF) {
@@ -193,8 +180,12 @@ func (u *StdConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 		// Just read one packet at a time
 		n, rua, err := u.ReadFromUDPAddrPort(buffer)
 		if err != nil {
-			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
-			return
+			if errors.Is(err, net.ErrClosed) {
+				u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
+				return
+			}
+
+			u.l.WithError(err).Error("unexpected udp socket receive error")
 		}
 
 		r(
