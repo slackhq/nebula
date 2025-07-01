@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -26,10 +25,9 @@ import (
 
 type StdConn struct {
 	*net.UDPConn
-	isV4        bool
-	sysFd       uintptr
-	writeErrors atomic.Int32
-	l           *logrus.Logger
+	isV4  bool
+	sysFd uintptr
+	l     *logrus.Logger
 }
 
 var _ Conn = &StdConn{}
@@ -120,6 +118,7 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 		addrLen = syscall.SizeofSockaddrInet6
 	}
 
+	writeErrors := 0
 	// Golang stdlib doesn't handle EAGAIN correctly in some situations so we do writes ourselves
 	// See https://github.com/golang/go/issues/73919
 	for {
@@ -137,13 +136,13 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 
 		if errors.Is(err, syscall.EAGAIN) {
 			// Try to suss out whether this is a transient error or something more permanent
-			n := u.writeErrors.Add(1)
-			u.l.WithError(err).WithField("consecutiveErrors", n).Error("unexpected udp socket write error")
+			writeErrors++
+			u.l.WithError(err).WithField("consecutiveErrors", writeErrors).Error("unexpected udp socket write error")
 
-			if n > 15 {
+			if writeErrors > 15 {
 				panic("too many consecutive UDP write errors")
 
-			} else if n > 10 {
+			} else if writeErrors > 10 {
 				time.Sleep(100 * time.Millisecond)
 			}
 
