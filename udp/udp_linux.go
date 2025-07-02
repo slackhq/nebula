@@ -221,7 +221,7 @@ func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
 
 func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
 	if !ip.Addr().Is4() {
-		return fmt.Errorf("Listener is IPv4, but writing to IPv6 remote")
+		return ErrInvalidIPv6RemoteForSocket
 	}
 
 	var rsa unix.RawSockaddrInet4
