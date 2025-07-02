@@ -450,7 +450,7 @@ func (hm *HandshakeManager) StartHandshake(vpnAddr netip.Addr, cacheCb func(*Han
 		vpnAddrs:        []netip.Addr{vpnAddr},
 		HandshakePacket: make(map[uint8][]byte, 0),
 		relayState: RelayState{
-			relays:         map[netip.Addr]struct{}{},
+			relays:         nil,
 			relayForByAddr: map[netip.Addr]*Relay{},
 			relayForByIdx:  map[uint32]*Relay{},
 		},
