@@ -3,8 +3,6 @@
 
 package udp
 
-// Darwin support is primarily implemented in udp_generic, besides NewListenConfig
-
 import (
 	"context"
 	"encoding/binary"
