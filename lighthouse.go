@@ -1333,27 +1333,34 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 		}
 	}
 
+	var queryVpnAddr netip.Addr
+	if n.Details.OldVpnAddr != 0 {
+		b := [4]byte{}
+		binary.BigEndian.PutUint32(b[:], n.Details.OldVpnAddr)
+		queryVpnAddr = netip.AddrFrom4(b)
+	} else if n.Details.VpnAddr != nil {
+		queryVpnAddr = protoAddrToNetAddr(n.Details.VpnAddr)
+	}
+
+	remoteAllowList := lhh.lh.GetRemoteAllowList()
 	for _, a := range n.Details.V4AddrPorts {
-		punch(protoV4AddrPortToNetAddrPort(a))
+		b := protoV4AddrPortToNetAddrPort(a)
+		if remoteAllowList.Allow(queryVpnAddr, b.Addr()) {
+			punch(b)
+		}
 	}
 
 	for _, a := range n.Details.V6AddrPorts {
-		punch(protoV6AddrPortToNetAddrPort(a))
+		b := protoV6AddrPortToNetAddrPort(a)
+		if remoteAllowList.Allow(queryVpnAddr, b.Addr()) {
+			punch(b)
+		}
 	}
 
 	// This sends a nebula test packet to the host trying to contact us. In the case
 	// of a double nat or other difficult scenario, this may help establish
 	// a tunnel.
 	if lhh.lh.punchy.GetRespond() {
-		var queryVpnAddr netip.Addr
-		if n.Details.OldVpnAddr != 0 {
-			b := [4]byte{}
-			binary.BigEndian.PutUint32(b[:], n.Details.OldVpnAddr)
-			queryVpnAddr = netip.AddrFrom4(b)
-		} else if n.Details.VpnAddr != nil {
-			queryVpnAddr = protoAddrToNetAddr(n.Details.VpnAddr)
-		}
-
 		go func() {
 			time.Sleep(lhh.lh.punchy.GetRespondDelay())
 			if lhh.l.Level >= logrus.DebugLevel {
