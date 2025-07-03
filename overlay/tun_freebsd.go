@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/netip"
-	"os"
 	"os/exec"
-	"strconv"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/gaissmai/bart"
@@ -22,12 +22,17 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
+	"golang.org/x/sys/unix"
 )
 
 const (
 	// FIODGNAME is defined in sys/sys/filio.h on FreeBSD
 	// For 32-bit systems, use FIODGNAME_32 (not defined in this file: 0x80086678)
-	FIODGNAME = 0x80106678
+	FIODGNAME        = 0x80106678
+	TUNSIFMODE       = 0x8004745e
+	TUNSIFHEAD       = 0x80047460
+	OSIOCAIFADDR_IN6 = 0x8088691b
+	IN6_IFF_NODAD    = 0x0020
 )
 
 type fiodgnameArg struct {
@@ -37,13 +42,48 @@ type fiodgnameArg struct {
 }
 
 type ifreqRename struct {
-	Name [16]byte
+	Name [unix.IFNAMSIZ]byte
 	Data uintptr
 }
 
 type ifreqDestroy struct {
-	Name [16]byte
+	Name [unix.IFNAMSIZ]byte
 	pad  [16]byte
+}
+
+type ifReq struct {
+	Name  [unix.IFNAMSIZ]byte
+	Flags uint16
+}
+
+type ifreqMTU struct {
+	Name [unix.IFNAMSIZ]byte
+	MTU  int32
+}
+
+type addrLifetime struct {
+	Expire    uint64
+	Preferred uint64
+	Vltime    uint32
+	Pltime    uint32
+}
+
+type ifreqAlias4 struct {
+	Name     [unix.IFNAMSIZ]byte
+	Addr     unix.RawSockaddrInet4
+	DstAddr  unix.RawSockaddrInet4
+	MaskAddr unix.RawSockaddrInet4
+	VHid     uint32
+}
+
+type ifreqAlias6 struct {
+	Name       [unix.IFNAMSIZ]byte
+	Addr       unix.RawSockaddrInet6
+	DstAddr    unix.RawSockaddrInet6
+	PrefixMask unix.RawSockaddrInet6
+	Flags      uint32
+	Lifetime   addrLifetime
+	VHid       uint32
 }
 
 type tun struct {
@@ -53,27 +93,106 @@ type tun struct {
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *logrus.Logger
+	devFd       int
+}
 
-	io.ReadWriteCloser
+func (t *tun) Read(to []byte) (int, error) {
+	// use readv() to read from the tunnel device, to eliminate the need for copying the buffer
+	if t.devFd < 0 {
+		return -1, syscall.EINVAL
+	}
+
+	// first 4 bytes is protocol family, in network byte order
+	head := make([]byte, 4)
+
+	iovecs := []syscall.Iovec{
+		{&head[0], 4},
+		{&to[0], uint64(len(to))},
+	}
+
+	n, _, errno := syscall.Syscall(syscall.SYS_READV, uintptr(t.devFd), uintptr(unsafe.Pointer(&iovecs[0])), uintptr(2))
+
+	var err error
+	if errno != 0 {
+		err = syscall.Errno(errno)
+	} else {
+		err = nil
+	}
+	// fix bytes read number to exclude header
+	bytesRead := int(n)
+	if bytesRead < 0 {
+		return bytesRead, err
+	} else if bytesRead < 4 {
+		return 0, err
+	} else {
+		return bytesRead - 4, err
+	}
+}
+
+// Write is only valid for single threaded use
+func (t *tun) Write(from []byte) (int, error) {
+	// use writev() to write to the tunnel device, to eliminate the need for copying the buffer
+	if t.devFd < 0 {
+		return -1, syscall.EINVAL
+	}
+
+	if len(from) <= 1 {
+		return 0, syscall.EIO
+	}
+	ipVer := from[0] >> 4
+	var head []byte
+	// first 4 bytes is protocol family, in network byte order
+	if ipVer == 4 {
+		head = []byte{0, 0, 0, syscall.AF_INET}
+	} else if ipVer == 6 {
+		head = []byte{0, 0, 0, syscall.AF_INET6}
+	} else {
+		return 0, fmt.Errorf("unable to determine IP version from packet")
+	}
+	iovecs := []syscall.Iovec{
+		{&head[0], 4},
+		{&from[0], uint64(len(from))},
+	}
+
+	n, _, errno := syscall.Syscall(syscall.SYS_WRITEV, uintptr(t.devFd), uintptr(unsafe.Pointer(&iovecs[0])), uintptr(2))
+
+	var err error
+	if errno != 0 {
+		err = syscall.Errno(errno)
+	} else {
+		err = nil
+	}
+	return int(n) - 4, err
 }
 
 func (t *tun) Close() error {
-	if t.ReadWriteCloser != nil {
-		if err := t.ReadWriteCloser.Close(); err != nil {
-			return err
-		}
-
-		s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_IP)
+	if t.devFd >= 0 {
+		err := syscall.Close(t.devFd)
 		if err != nil {
-			return err
+			t.l.WithError(err).Error("Error closing device")
 		}
-		defer syscall.Close(s)
+		t.devFd = -1
 
-		ifreq := ifreqDestroy{Name: t.deviceBytes()}
+		c := make(chan struct{})
+		go func() {
+			// destroying the interface can block if a read() is still pending. Do this asynchronously.
+			defer close(c)
+			s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_IP)
+			if err == nil {
+				defer syscall.Close(s)
+				ifreq := ifreqDestroy{Name: t.deviceBytes()}
+				err = ioctl(uintptr(s), syscall.SIOCIFDESTROY, uintptr(unsafe.Pointer(&ifreq)))
+			}
+			if err != nil {
+				t.l.WithError(err).Error("Error destroying tunnel")
+			}
+		}()
 
-		// Destroy the interface
-		err = ioctl(uintptr(s), syscall.SIOCIFDESTROY, uintptr(unsafe.Pointer(&ifreq)))
-		return err
+		// wait up to 1 second so we start blocking at the ioctl
+		select {
+		case <-c:
+		case <-time.After(1 * time.Second):
+		}
 	}
 
 	return nil
@@ -85,32 +204,37 @@ func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*tun,
 
 func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
 	// Try to open existing tun device
-	var file *os.File
+	var fd int
 	var err error
 	deviceName := c.GetString("tun.dev", "")
 	if deviceName != "" {
-		file, err = os.OpenFile("/dev/"+deviceName, os.O_RDWR, 0)
+		fd, err = syscall.Open("/dev/"+deviceName, syscall.O_RDWR, 0)
 	}
 	if errors.Is(err, fs.ErrNotExist) || deviceName == "" {
 		// If the device doesn't already exist, request a new one and rename it
-		file, err = os.OpenFile("/dev/tun", os.O_RDWR, 0)
+		fd, err = syscall.Open("/dev/tun", syscall.O_RDWR, 0)
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	rawConn, err := file.SyscallConn()
-	if err != nil {
-		return nil, fmt.Errorf("SyscallConn: %v", err)
+	// Read the name of the interface
+	var name [16]byte
+	arg := fiodgnameArg{length: 16, buf: unsafe.Pointer(&name)}
+	ctrlErr := ioctl(uintptr(fd), FIODGNAME, uintptr(unsafe.Pointer(&arg)))
+
+	if ctrlErr == nil {
+		// set broadcast mode and multicast
+		ifmode := uint32(unix.IFF_BROADCAST | unix.IFF_MULTICAST)
+		ctrlErr = ioctl(uintptr(fd), TUNSIFMODE, uintptr(unsafe.Pointer(&ifmode)))
 	}
 
-	var name [16]byte
-	var ctrlErr error
-	rawConn.Control(func(fd uintptr) {
-		// Read the name of the interface
-		arg := fiodgnameArg{length: 16, buf: unsafe.Pointer(&name)}
-		ctrlErr = ioctl(fd, FIODGNAME, uintptr(unsafe.Pointer(&arg)))
-	})
+	if ctrlErr == nil {
+		// turn on link-layer mode, to support ipv6
+		ifhead := uint32(1)
+		ctrlErr = ioctl(uintptr(fd), TUNSIFHEAD, uintptr(unsafe.Pointer(&ifhead)))
+	}
+
 	if ctrlErr != nil {
 		return nil, err
 	}
@@ -122,11 +246,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 
 	// If the name doesn't match the desired interface name, rename it now
 	if ifName != deviceName {
-		s, err := syscall.Socket(
-			syscall.AF_INET,
-			syscall.SOCK_DGRAM,
-			syscall.IPPROTO_IP,
-		)
+		s, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, unix.IPPROTO_IP)
 		if err != nil {
 			return nil, err
 		}
@@ -149,11 +269,11 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	}
 
 	t := &tun{
-		ReadWriteCloser: file,
-		Device:          deviceName,
-		vpnNetworks:     vpnNetworks,
-		MTU:             c.GetInt("tun.mtu", DefaultMTU),
-		l:               l,
+		Device:      deviceName,
+		vpnNetworks: vpnNetworks,
+		MTU:         c.GetInt("tun.mtu", DefaultMTU),
+		l:           l,
+		devFd:       fd,
 	}
 
 	err = t.reload(c, true)
@@ -172,31 +292,79 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 }
 
 func (t *tun) addIp(cidr netip.Prefix) error {
-	var err error
-	// TODO use syscalls instead of exec.Command
-	cmd := exec.Command("/sbin/ifconfig", t.Device, cidr.String(), cidr.Addr().String())
-	t.l.Debug("command: ", cmd.String())
-	if err = cmd.Run(); err != nil {
-		return fmt.Errorf("failed to run 'ifconfig': %s", err)
+	if cidr.Addr().Is4() {
+		ifr := ifreqAlias4{
+			Name: t.deviceBytes(),
+			Addr: unix.RawSockaddrInet4{
+				Len:    unix.SizeofSockaddrInet4,
+				Family: unix.AF_INET,
+				Addr:   cidr.Addr().As4(),
+			},
+			DstAddr: unix.RawSockaddrInet4{
+				Len:    unix.SizeofSockaddrInet4,
+				Family: unix.AF_INET,
+				Addr:   getBroadcast(cidr).As4(),
+			},
+			MaskAddr: unix.RawSockaddrInet4{
+				Len:    unix.SizeofSockaddrInet4,
+				Family: unix.AF_INET,
+				Addr:   getNetmask(cidr).As4(),
+			},
+			VHid: 0,
+		}
+		s, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, unix.IPPROTO_IP)
+		if err != nil {
+			return err
+		}
+		defer syscall.Close(s)
+		// Note: unix.SIOCAIFADDR corresponds to FreeBSD's OSIOCAIFADDR
+		if err := ioctl(uintptr(s), unix.SIOCAIFADDR, uintptr(unsafe.Pointer(&ifr))); err != nil {
+			return fmt.Errorf("failed to set tun address %s: %s", cidr.Addr().String(), err)
+		}
+	} else if cidr.Addr().Is6() {
+		ifr := ifreqAlias6{
+			Name: t.deviceBytes(),
+			Addr: unix.RawSockaddrInet6{
+				Len:    unix.SizeofSockaddrInet6,
+				Family: unix.AF_INET6,
+				Addr:   cidr.Addr().As16(),
+			},
+			PrefixMask: unix.RawSockaddrInet6{
+				Len:    unix.SizeofSockaddrInet6,
+				Family: unix.AF_INET6,
+				Addr:   getNetmask(cidr).As16(),
+			},
+			Lifetime: addrLifetime{
+				Expire:    0,
+				Preferred: 0,
+				Vltime:    0xffffffff,
+				Pltime:    0xffffffff,
+			},
+			Flags: IN6_IFF_NODAD,
+		}
+		s, err := syscall.Socket(syscall.AF_INET6, syscall.SOCK_DGRAM, syscall.IPPROTO_IP)
+		if err != nil {
+			return err
+		}
+		defer syscall.Close(s)
+
+		if err := ioctl(uintptr(s), OSIOCAIFADDR_IN6, uintptr(unsafe.Pointer(&ifr))); err != nil {
+			return fmt.Errorf("failed to set tun address %s: %s", cidr.Addr().String(), err)
+		}
+	} else {
+		return fmt.Errorf("Unknown address type")
 	}
 
-	cmd = exec.Command("/sbin/route", "-n", "add", "-net", cidr.String(), "-interface", t.Device)
-	t.l.Debug("command: ", cmd.String())
-	if err = cmd.Run(); err != nil {
-		return fmt.Errorf("failed to run 'route add': %s", err)
-	}
-
-	cmd = exec.Command("/sbin/ifconfig", t.Device, "mtu", strconv.Itoa(t.MTU))
-	t.l.Debug("command: ", cmd.String())
-	if err = cmd.Run(); err != nil {
-		return fmt.Errorf("failed to run 'ifconfig': %s", err)
-	}
-
-	// Unsafe path routes
 	return t.addRoutes(false)
 }
 
 func (t *tun) Activate() error {
+	// Setup our default MTU
+	err := t.setMTU()
+	if err != nil {
+		return err
+	}
+
 	for i := range t.vpnNetworks {
 		err := t.addIp(t.vpnNetworks[i])
 		if err != nil {
@@ -204,6 +372,19 @@ func (t *tun) Activate() error {
 		}
 	}
 	return nil
+}
+
+func (t *tun) setMTU() error {
+	// Set the MTU on the device
+	s, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, unix.IPPROTO_IP)
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(s)
+
+	ifm := ifreqMTU{Name: t.deviceBytes(), MTU: int32(t.MTU)}
+	err = ioctl(uintptr(s), unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm)))
+	return err
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
@@ -305,4 +486,38 @@ func (t *tun) deviceBytes() (o [16]byte) {
 		o[i] = byte(c)
 	}
 	return
+}
+
+func flipBytes(b []byte) []byte {
+	for i := 0; i < len(b); i++ {
+		b[i] ^= 0xFF
+	}
+	return b
+}
+func orBytes(a []byte, b []byte) []byte {
+	ret := make([]byte, len(a))
+	for i := 0; i < len(a); i++ {
+		ret[i] = a[i] | b[i]
+	}
+	return ret
+}
+
+func getNetmask(cidr netip.Prefix) netip.Addr {
+	pLen := 128
+	if cidr.Addr().Is4() {
+		pLen = 32
+	}
+
+	addr, _ := netip.AddrFromSlice(net.CIDRMask(cidr.Bits(), pLen))
+	return addr
+}
+
+func getBroadcast(cidr netip.Prefix) netip.Addr {
+	broadcast, _ := netip.AddrFromSlice(
+		orBytes(
+			cidr.Addr().AsSlice(),
+			flipBytes(getNetmask(cidr).AsSlice()),
+		),
+	)
+	return broadcast
 }
