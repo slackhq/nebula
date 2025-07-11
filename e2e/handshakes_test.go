@@ -19,7 +19,8 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
-	"gopkg.in/yaml.v2"
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func BenchmarkHotPath(b *testing.B) {
@@ -505,7 +506,7 @@ func TestReestablishRelays(t *testing.T) {
 	curIndexes := len(myControl.GetHostmap().Indexes)
 	for curIndexes >= start {
 		curIndexes = len(myControl.GetHostmap().Indexes)
-		r.Logf("Wait for the dead index to go away:start=%v indexes, currnet=%v indexes", start, curIndexes)
+		r.Logf("Wait for the dead index to go away:start=%v indexes, current=%v indexes", start, curIndexes)
 		myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me should fail"))
 
 		r.RouteForAllExitFunc(func(p *udp.Packet, c *nebula.Control) router.ExitType {
@@ -771,7 +772,7 @@ func TestRehandshakingRelays(t *testing.T) {
 		"key":  string(myNextPrivKey),
 	}
 	rc, err := yaml.Marshal(relayConfig.Settings)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	relayConfig.ReloadConfigString(string(rc))
 
 	for {
@@ -875,7 +876,7 @@ func TestRehandshakingRelaysPrimary(t *testing.T) {
 		"key":  string(myNextPrivKey),
 	}
 	rc, err := yaml.Marshal(relayConfig.Settings)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	relayConfig.ReloadConfigString(string(rc))
 
 	for {
@@ -970,7 +971,7 @@ func TestRehandshaking(t *testing.T) {
 		"key":  string(myNextPrivKey),
 	}
 	rc, err := yaml.Marshal(myConfig.Settings)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	myConfig.ReloadConfigString(string(rc))
 
 	for {
@@ -987,17 +988,17 @@ func TestRehandshaking(t *testing.T) {
 	r.Log("Got the new cert")
 	// Flip their firewall to only allowing the new group to catch the tunnels reverting incorrectly
 	rc, err = yaml.Marshal(theirConfig.Settings)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	var theirNewConfig m
-	assert.NoError(t, yaml.Unmarshal(rc, &theirNewConfig))
-	theirFirewall := theirNewConfig["firewall"].(map[interface{}]interface{})
+	require.NoError(t, yaml.Unmarshal(rc, &theirNewConfig))
+	theirFirewall := theirNewConfig["firewall"].(map[string]any)
 	theirFirewall["inbound"] = []m{{
 		"proto": "any",
 		"port":  "any",
 		"group": "new group",
 	}}
 	rc, err = yaml.Marshal(theirNewConfig)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	theirConfig.ReloadConfigString(string(rc))
 
 	r.Log("Spin until there is only 1 tunnel")
@@ -1051,6 +1052,9 @@ func TestRehandshakingLoser(t *testing.T) {
 	t.Log("Stand up a tunnel between me and them")
 	assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 
+	myControl.GetHostInfoByVpnAddr(theirVpnIpNet[0].Addr(), false)
+	theirControl.GetHostInfoByVpnAddr(myVpnIpNet[0].Addr(), false)
+
 	r.RenderHostmaps("Starting hostmaps", myControl, theirControl)
 
 	r.Log("Renew their certificate and spin until mine sees it")
@@ -1067,7 +1071,7 @@ func TestRehandshakingLoser(t *testing.T) {
 		"key":  string(theirNextPrivKey),
 	}
 	rc, err := yaml.Marshal(theirConfig.Settings)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	theirConfig.ReloadConfigString(string(rc))
 
 	for {
@@ -1083,17 +1087,17 @@ func TestRehandshakingLoser(t *testing.T) {
 
 	// Flip my firewall to only allowing the new group to catch the tunnels reverting incorrectly
 	rc, err = yaml.Marshal(myConfig.Settings)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	var myNewConfig m
-	assert.NoError(t, yaml.Unmarshal(rc, &myNewConfig))
-	theirFirewall := myNewConfig["firewall"].(map[interface{}]interface{})
+	require.NoError(t, yaml.Unmarshal(rc, &myNewConfig))
+	theirFirewall := myNewConfig["firewall"].(map[string]any)
 	theirFirewall["inbound"] = []m{{
 		"proto": "any",
 		"port":  "any",
 		"group": "their new group",
 	}}
 	rc, err = yaml.Marshal(myNewConfig)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	myConfig.ReloadConfigString(string(rc))
 
 	r.Log("Spin until there is only 1 tunnel")

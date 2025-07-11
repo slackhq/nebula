@@ -13,6 +13,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 )
 
@@ -21,7 +22,7 @@ type tun struct {
 	fd          int
 	vpnNetworks []netip.Prefix
 	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[netip.Addr]]
+	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *logrus.Logger
 }
 
@@ -56,7 +57,7 @@ func newTun(_ *config.C, _ *logrus.Logger, _ []netip.Prefix, _ bool) (*tun, erro
 	return nil, fmt.Errorf("newTun not supported in Android")
 }
 
-func (t *tun) RouteFor(ip netip.Addr) netip.Addr {
+func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 	r, _ := t.routeTree.Load().Lookup(ip)
 	return r
 }

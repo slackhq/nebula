@@ -53,7 +53,7 @@ type Firewall struct {
 
 	// routableNetworks describes the vpn addresses as well as any unsafe networks issued to us in the certificate.
 	// The vpn addresses are a full bit match while the unsafe networks only match the prefix
-	routableNetworks *bart.Table[struct{}]
+	routableNetworks *bart.Lite
 
 	// assignedNetworks is a list of vpn networks assigned to us in the certificate.
 	assignedNetworks  []netip.Prefix
@@ -125,7 +125,7 @@ type firewallPort map[int32]*FirewallCA
 
 type firewallLocalCIDR struct {
 	Any       bool
-	LocalCIDR *bart.Table[struct{}]
+	LocalCIDR *bart.Lite
 }
 
 // NewFirewall creates a new Firewall object. A TimerWheel is created for you from the provided timeouts.
@@ -148,17 +148,17 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		tmax = defaultTimeout
 	}
 
-	routableNetworks := new(bart.Table[struct{}])
+	routableNetworks := new(bart.Lite)
 	var assignedNetworks []netip.Prefix
 	for _, network := range c.Networks() {
 		nprefix := netip.PrefixFrom(network.Addr(), network.Addr().BitLen())
-		routableNetworks.Insert(nprefix, struct{}{})
+		routableNetworks.Insert(nprefix)
 		assignedNetworks = append(assignedNetworks, network)
 	}
 
 	hasUnsafeNetworks := false
 	for _, n := range c.UnsafeNetworks() {
-		routableNetworks.Insert(n, struct{}{})
+		routableNetworks.Insert(n)
 		hasUnsafeNetworks = true
 	}
 
@@ -331,7 +331,7 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 		return nil
 	}
 
-	rs, ok := r.([]interface{})
+	rs, ok := r.([]any)
 	if !ok {
 		return fmt.Errorf("%s failed to parse, should be an array of rules", table)
 	}
@@ -431,8 +431,7 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 
 	// Make sure remote address matches nebula certificate
 	if h.networks != nil {
-		_, ok := h.networks.Lookup(fp.RemoteAddr)
-		if !ok {
+		if !h.networks.Contains(fp.RemoteAddr) {
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrInvalidRemoteIP
 		}
@@ -445,8 +444,7 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	}
 
 	// Make sure we are supposed to be handling this local ip address
-	_, ok := f.routableNetworks.Lookup(fp.LocalAddr)
-	if !ok {
+	if !f.routableNetworks.Contains(fp.LocalAddr) {
 		f.metrics(incoming).droppedLocalAddr.Inc(1)
 		return ErrInvalidLocalIP
 	}
@@ -752,7 +750,7 @@ func (fc *FirewallCA) match(p firewall.Packet, c *cert.CachedCertificate, caPool
 func (fr *FirewallRule) addRule(f *Firewall, groups []string, host string, ip, localCIDR netip.Prefix) error {
 	flc := func() *firewallLocalCIDR {
 		return &firewallLocalCIDR{
-			LocalCIDR: new(bart.Table[struct{}]),
+			LocalCIDR: new(bart.Lite),
 		}
 	}
 
@@ -879,7 +877,7 @@ func (flc *firewallLocalCIDR) addRule(f *Firewall, localIp netip.Prefix) error {
 		}
 
 		for _, network := range f.assignedNetworks {
-			flc.LocalCIDR.Insert(network, struct{}{})
+			flc.LocalCIDR.Insert(network)
 		}
 		return nil
 
@@ -888,7 +886,7 @@ func (flc *firewallLocalCIDR) addRule(f *Firewall, localIp netip.Prefix) error {
 		return nil
 	}
 
-	flc.LocalCIDR.Insert(localIp, struct{}{})
+	flc.LocalCIDR.Insert(localIp)
 	return nil
 }
 
@@ -901,8 +899,7 @@ func (flc *firewallLocalCIDR) match(p firewall.Packet, c *cert.CachedCertificate
 		return true
 	}
 
-	_, ok := flc.LocalCIDR.Lookup(p.LocalAddr)
-	return ok
+	return flc.LocalCIDR.Contains(p.LocalAddr)
 }
 
 type rule struct {
@@ -918,15 +915,15 @@ type rule struct {
 	CASha     string
 }
 
-func convertRule(l *logrus.Logger, p interface{}, table string, i int) (rule, error) {
+func convertRule(l *logrus.Logger, p any, table string, i int) (rule, error) {
 	r := rule{}
 
-	m, ok := p.(map[interface{}]interface{})
+	m, ok := p.(map[string]any)
 	if !ok {
 		return r, errors.New("could not parse rule")
 	}
 
-	toString := func(k string, m map[interface{}]interface{}) string {
+	toString := func(k string, m map[string]any) string {
 		v, ok := m[k]
 		if !ok {
 			return ""
@@ -944,7 +941,7 @@ func convertRule(l *logrus.Logger, p interface{}, table string, i int) (rule, er
 	r.CASha = toString("ca_sha", m)
 
 	// Make sure group isn't an array
-	if v, ok := m["group"].([]interface{}); ok {
+	if v, ok := m["group"].([]any); ok {
 		if len(v) > 1 {
 			return r, errors.New("group should contain a single value, an array with more than one entry was provided")
 		}

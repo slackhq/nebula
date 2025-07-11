@@ -84,12 +84,20 @@ func (u *StdConn) SetSendBuffer(n int) error {
 	return unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_SNDBUFFORCE, n)
 }
 
+func (u *StdConn) SetSoMark(mark int) error {
+	return unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_MARK, mark)
+}
+
 func (u *StdConn) GetRecvBuffer() (int, error) {
 	return unix.GetsockoptInt(int(u.sysFd), unix.SOL_SOCKET, unix.SO_RCVBUF)
 }
 
 func (u *StdConn) GetSendBuffer() (int, error) {
 	return unix.GetsockoptInt(int(u.sysFd), unix.SOL_SOCKET, unix.SO_SNDBUF)
+}
+
+func (u *StdConn) GetSoMark() (int, error) {
+	return unix.GetsockoptInt(int(u.sysFd), unix.SOL_SOCKET, unix.SO_MARK)
 }
 
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
@@ -213,7 +221,7 @@ func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
 
 func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
 	if !ip.Addr().Is4() {
-		return fmt.Errorf("Listener is IPv4, but writing to IPv6 remote")
+		return ErrInvalidIPv6RemoteForSocket
 	}
 
 	var rsa unix.RawSockaddrInet4
@@ -268,6 +276,22 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 			}
 		} else {
 			u.l.WithError(err).Error("Failed to set listen.write_buffer")
+		}
+	}
+
+	b = c.GetInt("listen.so_mark", 0)
+	s, err := u.GetSoMark()
+	if b > 0 || (err == nil && s != 0) {
+		err := u.SetSoMark(b)
+		if err == nil {
+			s, err := u.GetSoMark()
+			if err == nil {
+				u.l.WithField("mark", s).Info("listen.so_mark was set")
+			} else {
+				u.l.WithError(err).Warn("Failed to get listen.so_mark")
+			}
+		} else {
+			u.l.WithError(err).Error("Failed to set listen.so_mark")
 		}
 	}
 }

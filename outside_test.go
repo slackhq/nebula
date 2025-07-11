@@ -12,6 +12,7 @@ import (
 
 	"github.com/slackhq/nebula/firewall"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/net/ipv4"
 )
 
@@ -20,13 +21,13 @@ func Test_newPacket(t *testing.T) {
 
 	// length fails
 	err := newPacket([]byte{}, true, p)
-	assert.ErrorIs(t, err, ErrPacketTooShort)
+	require.ErrorIs(t, err, ErrPacketTooShort)
 
 	err = newPacket([]byte{0x40}, true, p)
-	assert.ErrorIs(t, err, ErrIPv4PacketTooShort)
+	require.ErrorIs(t, err, ErrIPv4PacketTooShort)
 
 	err = newPacket([]byte{0x60}, true, p)
-	assert.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 
 	// length fail with ip options
 	h := ipv4.Header{
@@ -39,15 +40,15 @@ func Test_newPacket(t *testing.T) {
 
 	b, _ := h.Marshal()
 	err = newPacket(b, true, p)
-	assert.ErrorIs(t, err, ErrIPv4InvalidHeaderLength)
+	require.ErrorIs(t, err, ErrIPv4InvalidHeaderLength)
 
 	// not an ipv4 packet
 	err = newPacket([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, true, p)
-	assert.ErrorIs(t, err, ErrUnknownIPVersion)
+	require.ErrorIs(t, err, ErrUnknownIPVersion)
 
 	// invalid ihl
 	err = newPacket([]byte{4<<4 | (8 >> 2 & 0x0f), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, true, p)
-	assert.ErrorIs(t, err, ErrIPv4InvalidHeaderLength)
+	require.ErrorIs(t, err, ErrIPv4InvalidHeaderLength)
 
 	// account for variable ip header length - incoming
 	h = ipv4.Header{
@@ -63,7 +64,7 @@ func Test_newPacket(t *testing.T) {
 	b = append(b, []byte{0, 3, 0, 4}...)
 	err = newPacket(b, true, p)
 
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("10.0.0.2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("10.0.0.1"), p.RemoteAddr)
@@ -85,7 +86,7 @@ func Test_newPacket(t *testing.T) {
 	b = append(b, []byte{0, 5, 0, 6}...)
 	err = newPacket(b, false, p)
 
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, uint8(2), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("10.0.0.1"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("10.0.0.2"), p.RemoteAddr)
@@ -111,10 +112,49 @@ func Test_newPacket_v6(t *testing.T) {
 		FixLengths:       false,
 	}
 	err := gopacket.SerializeLayers(buffer, opt, &ip)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	err = newPacket(buffer.Bytes(), true, p)
-	assert.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+
+	// A v6 packet with a hop-by-hop extension
+	// ICMPv6 Payload (Echo Request)
+	icmpLayer := layers.ICMPv6{
+		TypeCode: layers.ICMPv6TypeEchoRequest,
+	}
+	// Hop-by-Hop Extension Header
+	hopOption := layers.IPv6HopByHopOption{}
+	hopOption.OptionData = []byte{0, 0, 0, 0}
+	hopByHop := layers.IPv6HopByHop{}
+	hopByHop.Options = append(hopByHop.Options, &hopOption)
+
+	ip = layers.IPv6{
+		Version:    6,
+		HopLimit:   128,
+		NextHeader: layers.IPProtocolIPv6Destination,
+		SrcIP:      net.IPv6linklocalallrouters,
+		DstIP:      net.IPv6linklocalallnodes,
+	}
+
+	buffer.Clear()
+	err = gopacket.SerializeLayers(buffer, gopacket.SerializeOptions{
+		ComputeChecksums: false,
+		FixLengths:       true,
+	}, &ip, &hopByHop, &icmpLayer)
+	if err != nil {
+		panic(err)
+	}
+	// Ensure buffer length checks during parsing with the next 2 tests.
+
+	// A full IPv6 header and 1 byte in the first extension, but missing
+	// the length byte.
+	err = newPacket(buffer.Bytes()[:41], true, p)
+	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+
+	// A full IPv6 header plus 1 full extension, but only 1 byte of the
+	// next layer, missing length byte
+	err = newPacket(buffer.Bytes()[:49], true, p)
+	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
 
 	// A good ICMP packet
 	ip = layers.IPv6{
@@ -134,7 +174,7 @@ func Test_newPacket_v6(t *testing.T) {
 	}
 
 	err = newPacket(buffer.Bytes(), true, p)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, uint8(layers.IPProtocolICMPv6), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
@@ -146,7 +186,7 @@ func Test_newPacket_v6(t *testing.T) {
 	b := buffer.Bytes()
 	b[6] = byte(layers.IPProtocolESP)
 	err = newPacket(b, true, p)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, uint8(layers.IPProtocolESP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
@@ -158,7 +198,7 @@ func Test_newPacket_v6(t *testing.T) {
 	b = buffer.Bytes()
 	b[6] = byte(layers.IPProtocolNoNextHeader)
 	err = newPacket(b, true, p)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, uint8(layers.IPProtocolNoNextHeader), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
@@ -170,7 +210,7 @@ func Test_newPacket_v6(t *testing.T) {
 	b = buffer.Bytes()
 	b[6] = 255 // 255 is a reserved protocol number
 	err = newPacket(b, true, p)
-	assert.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
 
 	// A good UDP packet
 	ip = layers.IPv6{
@@ -186,7 +226,7 @@ func Test_newPacket_v6(t *testing.T) {
 		DstPort: layers.UDPPort(22),
 	}
 	err = udp.SetNetworkLayerForChecksum(&ip)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	buffer.Clear()
 	err = gopacket.SerializeLayers(buffer, opt, &ip, &udp, gopacket.Payload([]byte{0xde, 0xad, 0xbe, 0xef}))
@@ -197,7 +237,7 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// incoming
 	err = newPacket(b, true, p)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
@@ -207,7 +247,7 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// outgoing
 	err = newPacket(b, false, p)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.RemoteAddr)
@@ -217,14 +257,14 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// Too short UDP packet
 	err = newPacket(b[:len(b)-10], false, p) // pull off the last 10 bytes
-	assert.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 
 	// A good TCP packet
 	b[6] = byte(layers.IPProtocolTCP)
 
 	// incoming
 	err = newPacket(b, true, p)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
@@ -234,7 +274,7 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// outgoing
 	err = newPacket(b, false, p)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.RemoteAddr)
@@ -244,7 +284,7 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// Too short TCP packet
 	err = newPacket(b[:len(b)-10], false, p) // pull off the last 10 bytes
-	assert.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 
 	// A good UDP packet with an AH header
 	ip = layers.IPv6{
@@ -279,7 +319,7 @@ func Test_newPacket_v6(t *testing.T) {
 	b = append(b, udpHeader...)
 
 	err = newPacket(b, true, p)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
@@ -287,10 +327,14 @@ func Test_newPacket_v6(t *testing.T) {
 	assert.Equal(t, uint16(22), p.LocalPort)
 	assert.False(t, p.Fragment)
 
+	// Ensure buffer bounds checking during processing
+	err = newPacket(b[:41], true, p)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
+
 	// Invalid AH header
 	b = buffer.Bytes()
 	err = newPacket(b, true, p)
-	assert.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
 }
 
 func Test_newPacket_ipv6Fragment(t *testing.T) {
@@ -338,7 +382,7 @@ func Test_newPacket_ipv6Fragment(t *testing.T) {
 
 	// Test first fragment incoming
 	err = newPacket(firstFrag, true, p)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
 	assert.Equal(t, uint8(layers.IPProtocolUDP), p.Protocol)
@@ -348,7 +392,7 @@ func Test_newPacket_ipv6Fragment(t *testing.T) {
 
 	// Test first fragment outgoing
 	err = newPacket(firstFrag, false, p)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.RemoteAddr)
 	assert.Equal(t, uint8(layers.IPProtocolUDP), p.Protocol)
@@ -377,7 +421,7 @@ func Test_newPacket_ipv6Fragment(t *testing.T) {
 
 	// Test second fragment incoming
 	err = newPacket(secondFrag, true, p)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
 	assert.Equal(t, uint8(layers.IPProtocolUDP), p.Protocol)
@@ -387,7 +431,7 @@ func Test_newPacket_ipv6Fragment(t *testing.T) {
 
 	// Test second fragment outgoing
 	err = newPacket(secondFrag, false, p)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.RemoteAddr)
 	assert.Equal(t, uint8(layers.IPProtocolUDP), p.Protocol)
@@ -397,7 +441,7 @@ func Test_newPacket_ipv6Fragment(t *testing.T) {
 
 	// Too short of a fragment packet
 	err = newPacket(secondFrag[:len(secondFrag)-10], false, p)
-	assert.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 }
 
 func BenchmarkParseV6(b *testing.B) {

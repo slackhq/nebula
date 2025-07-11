@@ -22,7 +22,7 @@ jobs:
 
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.23'
+        go-version: '1.24'
         check-latest: true
 
     - name: Build
@@ -30,6 +30,11 @@ jobs:
 
     - name: Vet
       run: make vet
+
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v8
+      with:
+        version: v2.1
 
     - name: Test
       run: make test
@@ -55,7 +60,7 @@ jobs:
 
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.23'
+        go-version: '1.24'
         check-latest: true
 
     - name: Build
@@ -97,7 +102,7 @@ jobs:
 
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.23'
+        go-version: '1.24'
         check-latest: true
 
     - name: Build nebula
@@ -108,6 +113,11 @@ jobs:
 
     - name: Vet
       run: make vet
+
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v8
+      with:
+        version: v2.1
 
     - name: Test
       run: make test

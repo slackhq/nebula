@@ -7,6 +7,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHostMap_MakePrimary(t *testing.T) {
@@ -210,8 +211,36 @@ func TestHostMap_reload(t *testing.T) {
 	assert.Empty(t, hm.GetPreferredRanges())
 
 	c.ReloadConfigString("preferred_ranges: [1.1.1.0/24, 10.1.1.0/24]")
-	assert.EqualValues(t, []string{"1.1.1.0/24", "10.1.1.0/24"}, toS(hm.GetPreferredRanges()))
+	assert.Equal(t, []string{"1.1.1.0/24", "10.1.1.0/24"}, toS(hm.GetPreferredRanges()))
 
 	c.ReloadConfigString("preferred_ranges: [1.1.1.1/32]")
-	assert.EqualValues(t, []string{"1.1.1.1/32"}, toS(hm.GetPreferredRanges()))
+	assert.Equal(t, []string{"1.1.1.1/32"}, toS(hm.GetPreferredRanges()))
+}
+
+func TestHostMap_RelayState(t *testing.T) {
+	h1 := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("0.0.0.1")}, localIndexId: 1}
+	a1 := netip.MustParseAddr("::1")
+	a2 := netip.MustParseAddr("2001::1")
+
+	h1.relayState.InsertRelayTo(a1)
+	assert.Equal(t, []netip.Addr{a1}, h1.relayState.relays)
+	h1.relayState.InsertRelayTo(a2)
+	assert.Equal(t, []netip.Addr{a1, a2}, h1.relayState.relays)
+	// Ensure that the first relay added is the first one returned in the copy
+	currentRelays := h1.relayState.CopyRelayIps()
+	require.Len(t, currentRelays, 2)
+	assert.Equal(t, a1, currentRelays[0])
+
+	// Deleting the last one in the list works ok
+	h1.relayState.DeleteRelay(a2)
+	assert.Equal(t, []netip.Addr{a1}, h1.relayState.relays)
+
+	// Deleting an element not in the list works ok
+	h1.relayState.DeleteRelay(a2)
+	assert.Equal(t, []netip.Addr{a1}, h1.relayState.relays)
+
+	// Deleting the only element in the list works ok
+	h1.relayState.DeleteRelay(a1)
+	assert.Equal(t, []netip.Addr{}, h1.relayState.relays)
+
 }
