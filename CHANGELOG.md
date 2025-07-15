@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.6] - 2025-7-15
+
+### Added
+
+- Drop inactive tunnels (#1413)
+
+### Fixed
+
+- Fix Darwin freeze due to presence of some Network Extensions (#1426)
+- Ensure the same relay tunnel is always used when multiple relay tunnels are present (#1422)
+- Fix Windows freeze due to ICMP error handling (#1412)
+- Fix relay migration panic (#1403)
+
 ## [1.9.5] - 2024-12-05
 
 ### Added
@@ -674,7 +687,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.9.5...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.9.6...HEAD
+[1.9.6]: https://github.com/slackhq/nebula/releases/tag/v1.9.6
 [1.9.5]: https://github.com/slackhq/nebula/releases/tag/v1.9.5
 [1.9.4]: https://github.com/slackhq/nebula/releases/tag/v1.9.4
 [1.9.3]: https://github.com/slackhq/nebula/releases/tag/v1.9.3
