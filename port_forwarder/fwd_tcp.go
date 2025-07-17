@@ -99,18 +99,21 @@ func (pt *PortForwardingCommonTcp) acceptOnLocalListenPort_generic(
 			return err
 		}
 
+		connCtx, cancel := context.WithCancel(pt.ctx)
+
 		pt.l.Debugf("accept TCP connect from local TCP port: %v", connection.RemoteAddr())
 
 		pt.wg.Add(1)
 		go func() {
 			defer pt.wg.Done()
 			defer connection.Close()
-			<-pt.ctx.Done()
+			<-connCtx.Done()
 		}()
 
 		pt.wg.Add(1)
 		go func() {
 			defer pt.wg.Done()
+			defer cancel()
 			err := handleClientConnectionWithErrorReturn(connection)
 			if err != nil {
 				pt.l.Debugf("Closed TCP client connection %s. Err: %+v",
