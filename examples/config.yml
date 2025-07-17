@@ -342,6 +342,18 @@ logging:
   # after receiving the response for lighthouse queries
   #trigger_buffer: 64
 
+# Tunnel manager settings
+#tunnels:
+  # drop_inactive controls whether inactive tunnels are maintained or dropped after the inactive_timeout period has
+  # elapsed.
+  # In general, it is a good idea to enable this setting. It will be enabled by default in a future release.
+  # This setting is reloadable
+  #drop_inactive: false
+
+  # inactivity_timeout controls how long a tunnel MUST NOT see any inbound or outbound traffic before being considered
+  # inactive and eligible to be dropped.
+  # This setting is reloadable
+  #inactivity_timeout: 10m
 
 # Nebula security group configuration
 firewall:

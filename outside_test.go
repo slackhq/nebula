@@ -117,6 +117,45 @@ func Test_newPacket_v6(t *testing.T) {
 	err = newPacket(buffer.Bytes(), true, p)
 	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
 
+	// A v6 packet with a hop-by-hop extension
+	// ICMPv6 Payload (Echo Request)
+	icmpLayer := layers.ICMPv6{
+		TypeCode: layers.ICMPv6TypeEchoRequest,
+	}
+	// Hop-by-Hop Extension Header
+	hopOption := layers.IPv6HopByHopOption{}
+	hopOption.OptionData = []byte{0, 0, 0, 0}
+	hopByHop := layers.IPv6HopByHop{}
+	hopByHop.Options = append(hopByHop.Options, &hopOption)
+
+	ip = layers.IPv6{
+		Version:    6,
+		HopLimit:   128,
+		NextHeader: layers.IPProtocolIPv6Destination,
+		SrcIP:      net.IPv6linklocalallrouters,
+		DstIP:      net.IPv6linklocalallnodes,
+	}
+
+	buffer.Clear()
+	err = gopacket.SerializeLayers(buffer, gopacket.SerializeOptions{
+		ComputeChecksums: false,
+		FixLengths:       true,
+	}, &ip, &hopByHop, &icmpLayer)
+	if err != nil {
+		panic(err)
+	}
+	// Ensure buffer length checks during parsing with the next 2 tests.
+
+	// A full IPv6 header and 1 byte in the first extension, but missing
+	// the length byte.
+	err = newPacket(buffer.Bytes()[:41], true, p)
+	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+
+	// A full IPv6 header plus 1 full extension, but only 1 byte of the
+	// next layer, missing length byte
+	err = newPacket(buffer.Bytes()[:49], true, p)
+	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+
 	// A good ICMP packet
 	ip = layers.IPv6{
 		Version:    6,
@@ -287,6 +326,10 @@ func Test_newPacket_v6(t *testing.T) {
 	assert.Equal(t, uint16(36123), p.RemotePort)
 	assert.Equal(t, uint16(22), p.LocalPort)
 	assert.False(t, p.Fragment)
+
+	// Ensure buffer bounds checking during processing
+	err = newPacket(b[:41], true, p)
+	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 
 	// Invalid AH header
 	b = buffer.Bytes()

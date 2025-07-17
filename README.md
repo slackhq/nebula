@@ -12,7 +12,7 @@ Further documentation can be found [here](https://nebula.defined.net/docs/).
 
 You can read more about Nebula [here](https://medium.com/p/884110a5579).
 
-You can also join the NebulaOSS Slack group [here](https://join.slack.com/t/nebulaoss/shared_invite/zt-2xqe6e7vn-k_KGi8s13nsr7cvHVvHvuQ).
+You can also join the NebulaOSS Slack group [here](https://join.slack.com/t/nebulaoss/shared_invite/zt-39pk4xopc-CUKlGcb5Z39dQ0cK1v7ehA).
 
 ## Supported Platforms
 

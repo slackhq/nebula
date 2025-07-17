@@ -26,14 +26,15 @@ type controlHostLister interface {
 }
 
 type Control struct {
-	f               *Interface
-	l               *logrus.Logger
-	ctx             context.Context
-	cancel          context.CancelFunc
-	sshStart        func()
-	statsStart      func()
-	dnsStart        func()
-	lighthouseStart func()
+	f                      *Interface
+	l                      *logrus.Logger
+	ctx                    context.Context
+	cancel                 context.CancelFunc
+	sshStart               func()
+	statsStart             func()
+	dnsStart               func()
+	lighthouseStart        func()
+	connectionManagerStart func(context.Context)
 }
 
 func (c *Control) GetLogger() *logrus.Logger {
@@ -66,6 +67,9 @@ func (c *Control) Start() {
 	}
 	if c.dnsStart != nil {
 		go c.dnsStart()
+	}
+	if c.connectionManagerStart != nil {
+		go c.connectionManagerStart(c.ctx)
 	}
 	if c.lighthouseStart != nil {
 		c.lighthouseStart()

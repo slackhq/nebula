@@ -81,7 +81,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			// Pull the Roaming parts up here, and return in all call paths.
 			f.handleHostRoaming(hostinfo, ip)
 			// Track usage of both the HostInfo and the Relay for the received & authenticated packet
-			f.connectionManager.In(hostinfo.localIndexId)
+			f.connectionManager.In(hostinfo)
 			f.connectionManager.RelayUsed(h.RemoteIndex)
 
 			relay, ok := hostinfo.relayState.QueryRelayForByIdx(h.RemoteIndex)
@@ -213,7 +213,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 
 	f.handleHostRoaming(hostinfo, ip)
 
-	f.connectionManager.In(hostinfo.localIndexId)
+	f.connectionManager.In(hostinfo)
 }
 
 // closeTunnel closes a tunnel locally, it does not send a closeTunnel packet to the remote
@@ -312,12 +312,11 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 	offset := ipv6.HeaderLen // Start at the end of the ipv6 header
 	next := 0
 	for {
-		if dataLen < offset {
+		if protoAt >= dataLen {
 			break
 		}
-
 		proto := layers.IPProtocol(data[protoAt])
-		//fmt.Println(proto, protoAt)
+
 		switch proto {
 		case layers.IPProtocolICMPv6, layers.IPProtocolESP, layers.IPProtocolNoNextHeader:
 			fp.Protocol = uint8(proto)
@@ -365,7 +364,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 
 		case layers.IPProtocolAH:
 			// Auth headers, used by IPSec, have a different meaning for header length
-			if dataLen < offset+1 {
+			if dataLen <= offset+1 {
 				break
 			}
 
@@ -373,7 +372,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 
 		default:
 			// Normal ipv6 header length processing
-			if dataLen < offset+1 {
+			if dataLen <= offset+1 {
 				break
 			}
 
@@ -499,7 +498,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return false
 	}
 
-	f.connectionManager.In(hostinfo.localIndexId)
+	f.connectionManager.In(hostinfo)
 	_, err = f.readers[q].Write(out)
 	if err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")

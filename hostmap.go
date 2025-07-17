@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -68,7 +69,7 @@ type HostMap struct {
 type RelayState struct {
 	sync.RWMutex
 
-	relays map[netip.Addr]struct{} // Set of vpnAddr's of Hosts to use as relays to access this peer
+	relays []netip.Addr // Ordered set of VpnAddrs of Hosts to use as relays to access this peer
 	// For data race avoidance, the contents of a *Relay are treated immutably. To update a *Relay, copy the existing data,
 	// modify what needs to be updated, and store the new modified copy in the relayForByIp and relayForByIdx maps (with
 	// the RelayState Lock held)
@@ -79,7 +80,12 @@ type RelayState struct {
 func (rs *RelayState) DeleteRelay(ip netip.Addr) {
 	rs.Lock()
 	defer rs.Unlock()
-	delete(rs.relays, ip)
+	for idx, val := range rs.relays {
+		if val == ip {
+			rs.relays = append(rs.relays[:idx], rs.relays[idx+1:]...)
+			return
+		}
+	}
 }
 
 func (rs *RelayState) UpdateRelayForByIpState(vpnIp netip.Addr, state int) {
@@ -124,16 +130,16 @@ func (rs *RelayState) GetRelayForByAddr(addr netip.Addr) (*Relay, bool) {
 func (rs *RelayState) InsertRelayTo(ip netip.Addr) {
 	rs.Lock()
 	defer rs.Unlock()
-	rs.relays[ip] = struct{}{}
+	if !slices.Contains(rs.relays, ip) {
+		rs.relays = append(rs.relays, ip)
+	}
 }
 
 func (rs *RelayState) CopyRelayIps() []netip.Addr {
+	ret := make([]netip.Addr, len(rs.relays))
 	rs.RLock()
 	defer rs.RUnlock()
-	ret := make([]netip.Addr, 0, len(rs.relays))
-	for ip := range rs.relays {
-		ret = append(ret, ip)
-	}
+	copy(ret, rs.relays)
 	return ret
 }
 
@@ -250,6 +256,14 @@ type HostInfo struct {
 	// Used to track other hostinfos for this vpn ip since only 1 can be primary
 	// Synchronised via hostmap lock and not the hostinfo lock.
 	next, prev *HostInfo
+
+	//TODO: in, out, and others might benefit from being an atomic.Int32. We could collapse connectionManager pendingDeletion, relayUsed, and in/out into this 1 thing
+	in, out, pendingDeletion atomic.Bool
+
+	// lastUsed tracks the last time ConnectionManager checked the tunnel and it was in use.
+	// This value will be behind against actual tunnel utilization in the hot path.
+	// This should only be used by the ConnectionManagers ticker routine.
+	lastUsed time.Time
 }
 
 type ViaSender struct {
