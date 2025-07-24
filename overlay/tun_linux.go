@@ -638,6 +638,11 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 		return
 	}
 
+	if r.Dst == nil {
+		t.l.WithField("route", r).Debug("Ignoring route update, no destination address")
+		return
+	}
+
 	dstAddr, ok := netip.AddrFromSlice(r.Dst.IP)
 	if !ok {
 		t.l.WithField("route", r).Debug("Ignoring route update, invalid destination address")
