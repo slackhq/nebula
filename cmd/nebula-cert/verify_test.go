@@ -38,19 +38,19 @@ func Test_verify(t *testing.T) {
 
 	// required args
 	assertHelpError(t, verify([]string{"-ca", "derp"}, ob, eb), "-crt is required")
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 
 	assertHelpError(t, verify([]string{"-crt", "derp"}, ob, eb), "-ca is required")
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 
 	// no ca at path
 	ob.Reset()
 	eb.Reset()
 	err := verify([]string{"-ca", "does_not_exist", "-crt", "does_not_exist"}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 	require.EqualError(t, err, "error while reading ca: open does_not_exist: "+NoSuchFileError)
 
 	// invalid ca at path
@@ -62,8 +62,8 @@ func Test_verify(t *testing.T) {
 
 	caFile.WriteString("-----BEGIN NOPE-----")
 	err = verify([]string{"-ca", caFile.Name(), "-crt", "does_not_exist"}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 	require.EqualError(t, err, "error while adding ca cert to pool: input did not contain a valid PEM encoded block")
 
 	// make a ca for later
@@ -76,8 +76,8 @@ func Test_verify(t *testing.T) {
 
 	// no crt at path
 	err = verify([]string{"-ca", caFile.Name(), "-crt", "does_not_exist"}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 	require.EqualError(t, err, "unable to read crt: open does_not_exist: "+NoSuchFileError)
 
 	// invalid crt at path
@@ -89,8 +89,8 @@ func Test_verify(t *testing.T) {
 
 	certFile.WriteString("-----BEGIN NOPE-----")
 	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 	require.EqualError(t, err, "error while parsing crt: input did not contain a valid PEM encoded block")
 
 	// unverifiable cert at path
@@ -106,8 +106,8 @@ func Test_verify(t *testing.T) {
 	certFile.Write(b)
 
 	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 	require.ErrorIs(t, err, cert.ErrSignatureMismatch)
 
 	// verified cert at path
@@ -118,7 +118,7 @@ func Test_verify(t *testing.T) {
 	certFile.Write(b)
 
 	err = verify([]string{"-ca", caFile.Name(), "-crt", certFile.Name()}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 	require.NoError(t, err)
 }

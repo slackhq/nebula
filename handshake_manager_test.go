@@ -24,10 +24,10 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	lh := newTestLighthouse()
 
 	cs := &CertState{
-		defaultVersion:   cert.Version1,
-		privateKey:       []byte{},
-		v1Cert:           &dummyCert{version: cert.Version1},
-		v1HandshakeBytes: []byte{},
+		initiatingVersion: cert.Version1,
+		privateKey:        []byte{},
+		v1Cert:            &dummyCert{version: cert.Version1},
+		v1HandshakeBytes:  []byte{},
 	}
 
 	blah := NewHandshakeManager(l, mainHM, lh, &udp.NoopConn{}, defaultHandshakeConfig)
@@ -98,5 +98,5 @@ func (mw *mockEncWriter) GetHostInfo(_ netip.Addr) *HostInfo {
 }
 
 func (mw *mockEncWriter) GetCertState() *CertState {
-	return &CertState{defaultVersion: cert.Version2}
+	return &CertState{initiatingVersion: cert.Version2}
 }

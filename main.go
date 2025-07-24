@@ -13,10 +13,10 @@ import (
 	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
-type m map[string]interface{}
+type m = map[string]any
 
 func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -185,6 +185,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	hostMap := NewHostMapFromConfig(l, c)
 	punchy := NewPunchyFromConfig(l, c)
+	connManager := newConnectionManagerFromConfig(l, c, hostMap, punchy)
 	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, pki.getCertState(), udpConns[0], punchy)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to initialize lighthouse handler", err)
@@ -220,31 +221,26 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	}
 
-	checkInterval := c.GetInt("timers.connection_alive_interval", 5)
-	pendingDeletionInterval := c.GetInt("timers.pending_deletion_interval", 10)
-
 	ifConfig := &InterfaceConfig{
-		HostMap:                 hostMap,
-		Inside:                  tun,
-		Outside:                 udpConns[0],
-		pki:                     pki,
-		Firewall:                fw,
-		ServeDns:                serveDns,
-		HandshakeManager:        handshakeManager,
-		lightHouse:              lightHouse,
-		checkInterval:           time.Second * time.Duration(checkInterval),
-		pendingDeletionInterval: time.Second * time.Duration(pendingDeletionInterval),
-		tryPromoteEvery:         c.GetUint32("counters.try_promote", defaultPromoteEvery),
-		reQueryEvery:            c.GetUint32("counters.requery_every_packets", defaultReQueryEvery),
-		reQueryWait:             c.GetDuration("timers.requery_wait_duration", defaultReQueryWait),
-		DropLocalBroadcast:      c.GetBool("tun.drop_local_broadcast", false),
-		DropMulticast:           c.GetBool("tun.drop_multicast", false),
-		routines:                routines,
-		MessageMetrics:          messageMetrics,
-		version:                 buildVersion,
-		relayManager:            NewRelayManager(ctx, l, hostMap, c),
-		punchy:                  punchy,
-
+		HostMap:               hostMap,
+		Inside:                tun,
+		Outside:               udpConns[0],
+		pki:                   pki,
+		Firewall:              fw,
+		ServeDns:              serveDns,
+		HandshakeManager:      handshakeManager,
+		connectionManager:     connManager,
+		lightHouse:            lightHouse,
+		tryPromoteEvery:       c.GetUint32("counters.try_promote", defaultPromoteEvery),
+		reQueryEvery:          c.GetUint32("counters.requery_every_packets", defaultReQueryEvery),
+		reQueryWait:           c.GetDuration("timers.requery_wait_duration", defaultReQueryWait),
+		DropLocalBroadcast:    c.GetBool("tun.drop_local_broadcast", false),
+		DropMulticast:         c.GetBool("tun.drop_multicast", false),
+		routines:              routines,
+		MessageMetrics:        messageMetrics,
+		version:               buildVersion,
+		relayManager:          NewRelayManager(ctx, l, hostMap, c),
+		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,
 	}
@@ -296,5 +292,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		statsStart,
 		dnsStart,
 		lightHouse.StartUpdateWorker,
+		connManager.Start,
 	}, nil
 }

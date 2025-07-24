@@ -43,16 +43,16 @@ func Test_printCert(t *testing.T) {
 
 	// no path
 	err := printCert([]string{}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 	assertHelpError(t, err, "-path is required")
 
 	// no cert at path
 	ob.Reset()
 	eb.Reset()
 	err = printCert([]string{"-path", "does_not_exist"}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 	require.EqualError(t, err, "unable to read cert; open does_not_exist: "+NoSuchFileError)
 
 	// invalid cert at path
@@ -64,8 +64,8 @@ func Test_printCert(t *testing.T) {
 
 	tf.WriteString("-----BEGIN NOPE-----")
 	err = printCert([]string{"-path", tf.Name()}, ob, eb)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 	require.EqualError(t, err, "error while unmarshaling cert: input did not contain a valid PEM encoded block")
 
 	// test multiple certs
@@ -155,7 +155,7 @@ func Test_printCert(t *testing.T) {
 `,
 		ob.String(),
 	)
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, eb.String())
 
 	// test json
 	ob.Reset()
@@ -177,7 +177,7 @@ func Test_printCert(t *testing.T) {
 `,
 		ob.String(),
 	)
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, eb.String())
 }
 
 // NewTestCaCert will generate a CA cert

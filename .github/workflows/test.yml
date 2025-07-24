@@ -32,9 +32,9 @@ jobs:
       run: make vet
 
     - name: golangci-lint
-      uses: golangci/golangci-lint-action@v6
+      uses: golangci/golangci-lint-action@v8
       with:
-        version: v1.64
+        version: v2.1
 
     - name: Test
       run: make test
@@ -115,9 +115,9 @@ jobs:
       run: make vet
 
     - name: golangci-lint
-      uses: golangci/golangci-lint-action@v6
+      uses: golangci/golangci-lint-action@v8
       with:
-        version: v1.64
+        version: v2.1
 
     - name: Test
       run: make test

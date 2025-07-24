@@ -37,20 +37,20 @@ func Test_keygen(t *testing.T) {
 
 	// required args
 	assertHelpError(t, keygen([]string{"-out-pub", "nope"}, ob, eb), "-out-key is required")
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 
 	assertHelpError(t, keygen([]string{"-out-key", "nope"}, ob, eb), "-out-pub is required")
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 
 	// failed key write
 	ob.Reset()
 	eb.Reset()
 	args := []string{"-out-pub", "/do/not/write/pleasepub", "-out-key", "/do/not/write/pleasekey"}
 	require.EqualError(t, keygen(args, ob, eb), "error while writing out-key: open /do/not/write/pleasekey: "+NoSuchDirError)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 
 	// create temp key file
 	keyF, err := os.CreateTemp("", "test.key")
@@ -62,8 +62,8 @@ func Test_keygen(t *testing.T) {
 	eb.Reset()
 	args = []string{"-out-pub", "/do/not/write/pleasepub", "-out-key", keyF.Name()}
 	require.EqualError(t, keygen(args, ob, eb), "error while writing out-pub: open /do/not/write/pleasepub: "+NoSuchDirError)
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 
 	// create temp pub file
 	pubF, err := os.CreateTemp("", "test.pub")
@@ -75,8 +75,8 @@ func Test_keygen(t *testing.T) {
 	eb.Reset()
 	args = []string{"-out-pub", pubF.Name(), "-out-key", keyF.Name()}
 	require.NoError(t, keygen(args, ob, eb))
-	assert.Equal(t, "", ob.String())
-	assert.Equal(t, "", eb.String())
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
 
 	// read cert and key files
 	rb, _ := os.ReadFile(keyF.Name())

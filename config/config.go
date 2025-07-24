@@ -17,14 +17,14 @@ import (
 
 	"dario.cat/mergo"
 	"github.com/sirupsen/logrus"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 type C struct {
 	path        string
 	files       []string
-	Settings    map[interface{}]interface{}
-	oldSettings map[interface{}]interface{}
+	Settings    map[string]any
+	oldSettings map[string]any
 	callbacks   []func(*C)
 	l           *logrus.Logger
 	reloadLock  sync.Mutex
@@ -32,7 +32,7 @@ type C struct {
 
 func NewC(l *logrus.Logger) *C {
 	return &C{
-		Settings: make(map[interface{}]interface{}),
+		Settings: make(map[string]any),
 		l:        l,
 	}
 }
@@ -92,8 +92,8 @@ func (c *C) HasChanged(k string) bool {
 	}
 
 	var (
-		nv interface{}
-		ov interface{}
+		nv any
+		ov any
 	)
 
 	if k == "" {
@@ -147,7 +147,7 @@ func (c *C) ReloadConfig() {
 	c.reloadLock.Lock()
 	defer c.reloadLock.Unlock()
 
-	c.oldSettings = make(map[interface{}]interface{})
+	c.oldSettings = make(map[string]any)
 	for k, v := range c.Settings {
 		c.oldSettings[k] = v
 	}
@@ -167,7 +167,7 @@ func (c *C) ReloadConfigString(raw string) error {
 	c.reloadLock.Lock()
 	defer c.reloadLock.Unlock()
 
-	c.oldSettings = make(map[interface{}]interface{})
+	c.oldSettings = make(map[string]any)
 	for k, v := range c.Settings {
 		c.oldSettings[k] = v
 	}
@@ -201,7 +201,7 @@ func (c *C) GetStringSlice(k string, d []string) []string {
 		return d
 	}
 
-	rv, ok := r.([]interface{})
+	rv, ok := r.([]any)
 	if !ok {
 		return d
 	}
@@ -215,13 +215,13 @@ func (c *C) GetStringSlice(k string, d []string) []string {
 }
 
 // GetMap will get the map for k or return the default d if not found or invalid
-func (c *C) GetMap(k string, d map[interface{}]interface{}) map[interface{}]interface{} {
+func (c *C) GetMap(k string, d map[string]any) map[string]any {
 	r := c.Get(k)
 	if r == nil {
 		return d
 	}
 
-	v, ok := r.(map[interface{}]interface{})
+	v, ok := r.(map[string]any)
 	if !ok {
 		return d
 	}
@@ -243,7 +243,7 @@ func (c *C) GetInt(k string, d int) int {
 // GetUint32 will get the uint32 for k or return the default d if not found or invalid
 func (c *C) GetUint32(k string, d uint32) uint32 {
 	r := c.GetInt(k, int(d))
-	if uint64(r) > uint64(math.MaxUint32) {
+	if r < 0 || uint64(r) > uint64(math.MaxUint32) {
 		return d
 	}
 	return uint32(r)
@@ -266,6 +266,22 @@ func (c *C) GetBool(k string, d bool) bool {
 	return v
 }
 
+func AsBool(v any) (value bool, ok bool) {
+	switch x := v.(type) {
+	case bool:
+		return x, true
+	case string:
+		switch x {
+		case "y", "yes":
+			return true, true
+		case "n", "no":
+			return false, true
+		}
+	}
+
+	return false, false
+}
+
 // GetDuration will get the duration for k or return the default d if not found or invalid
 func (c *C) GetDuration(k string, d time.Duration) time.Duration {
 	r := c.GetString(k, "")
@@ -276,7 +292,7 @@ func (c *C) GetDuration(k string, d time.Duration) time.Duration {
 	return v
 }
 
-func (c *C) Get(k string) interface{} {
+func (c *C) Get(k string) any {
 	return c.get(k, c.Settings)
 }
 
@@ -284,10 +300,10 @@ func (c *C) IsSet(k string) bool {
 	return c.get(k, c.Settings) != nil
 }
 
-func (c *C) get(k string, v interface{}) interface{} {
+func (c *C) get(k string, v any) any {
 	parts := strings.Split(k, ".")
 	for _, p := range parts {
-		m, ok := v.(map[interface{}]interface{})
+		m, ok := v.(map[string]any)
 		if !ok {
 			return nil
 		}
@@ -346,7 +362,7 @@ func (c *C) addFile(path string, direct bool) error {
 }
 
 func (c *C) parseRaw(b []byte) error {
-	var m map[interface{}]interface{}
+	var m map[string]any
 
 	err := yaml.Unmarshal(b, &m)
 	if err != nil {
@@ -358,7 +374,7 @@ func (c *C) parseRaw(b []byte) error {
 }
 
 func (c *C) parse() error {
-	var m map[interface{}]interface{}
+	var m map[string]any
 
 	for _, path := range c.files {
 		b, err := os.ReadFile(path)
@@ -366,7 +382,7 @@ func (c *C) parse() error {
 			return err
 		}
 
-		var nm map[interface{}]interface{}
+		var nm map[string]any
 		err = yaml.Unmarshal(b, &nm)
 		if err != nil {
 			return err

@@ -22,14 +22,12 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	// Ignore local broadcast packets
 	if f.dropLocalBroadcast {
-		_, found := f.myBroadcastAddrsTable.Lookup(fwPacket.RemoteAddr)
-		if found {
+		if f.myBroadcastAddrsTable.Contains(fwPacket.RemoteAddr) {
 			return
 		}
 	}
 
-	_, found := f.myVpnAddrsTable.Lookup(fwPacket.RemoteAddr)
-	if found {
+	if f.myVpnAddrsTable.Contains(fwPacket.RemoteAddr) {
 		// Immediately forward packets from self to self.
 		// This should only happen on Darwin-based and FreeBSD hosts, which
 		// routes packets from the Nebula addr to the Nebula addr through the Nebula
@@ -130,8 +128,7 @@ func (f *Interface) Handshake(vpnAddr netip.Addr) {
 // getOrHandshakeNoRouting returns nil if the vpnAddr is not routable.
 // If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel
 func (f *Interface) getOrHandshakeNoRouting(vpnAddr netip.Addr, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
-	_, found := f.myVpnNetworksTable.Lookup(vpnAddr)
-	if found {
+	if f.myVpnNetworksTable.Contains(vpnAddr) {
 		return f.handshakeManager.GetOrHandshake(vpnAddr, cacheCallback)
 	}
 
@@ -291,7 +288,7 @@ func (f *Interface) SendVia(via *HostInfo,
 	c := via.ConnectionState.messageCounter.Add(1)
 
 	out = header.Encode(out, header.Version, header.Message, header.MessageRelay, relay.RemoteIndex, c)
-	f.connectionManager.Out(via.localIndexId)
+	f.connectionManager.Out(via)
 
 	// Authenticate the header and payload, but do not encrypt for this message type.
 	// The payload consists of the inner, unencrypted Nebula header, as well as the end-to-end encrypted payload.
@@ -359,7 +356,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
 	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)
-	f.connectionManager.Out(hostinfo.localIndexId)
+	f.connectionManager.Out(hostinfo)
 
 	// Query our LH if we haven't since the last time we've been rebound, this will cause the remote to punch against
 	// all our addrs and enable a faster roaming.

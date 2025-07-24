@@ -159,7 +159,7 @@ func (t *winTun) addRoutes(logErrors bool) error {
 		// In effect this provides multipath routing support to windows supporting loadbalancing and redundancy.
 		err := luid.AddRoute(r.Cidr, r.Via[0].Addr(), uint32(r.Metric))
 		if err != nil {
-			retErr := util.NewContextualError("Failed to add route", map[string]interface{}{"route": r}, err)
+			retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 			if logErrors {
 				retErr.Log(t.l)
 				continue

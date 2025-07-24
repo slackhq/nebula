@@ -34,10 +34,11 @@ type tun struct {
 	deviceIndex int
 	ioctlFd     uintptr
 
-	Routes          atomic.Pointer[[]Route]
-	routeTree       atomic.Pointer[bart.Table[routing.Gateways]]
-	routeChan       chan struct{}
-	useSystemRoutes bool
+	Routes                    atomic.Pointer[[]Route]
+	routeTree                 atomic.Pointer[bart.Table[routing.Gateways]]
+	routeChan                 chan struct{}
+	useSystemRoutes           bool
+	useSystemRoutesBufferSize int
 
 	l *logrus.Logger
 }
@@ -124,12 +125,13 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 
 func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []netip.Prefix) (*tun, error) {
 	t := &tun{
-		ReadWriteCloser: file,
-		fd:              int(file.Fd()),
-		vpnNetworks:     vpnNetworks,
-		TXQueueLen:      c.GetInt("tun.tx_queue", 500),
-		useSystemRoutes: c.GetBool("tun.use_system_route_table", false),
-		l:               l,
+		ReadWriteCloser:           file,
+		fd:                        int(file.Fd()),
+		vpnNetworks:               vpnNetworks,
+		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
+		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
+		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
+		l:                         l,
 	}
 
 	err := t.reload(c, true)
@@ -464,7 +466,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 
 		err := netlink.RouteReplace(&nr)
 		if err != nil {
-			retErr := util.NewContextualError("Failed to add route", map[string]interface{}{"route": r}, err)
+			retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 			if logErrors {
 				retErr.Log(t.l)
 			} else {
@@ -531,7 +533,13 @@ func (t *tun) watchRoutes() {
 	rch := make(chan netlink.RouteUpdate)
 	doneChan := make(chan struct{})
 
-	if err := netlink.RouteSubscribe(rch, doneChan); err != nil {
+	netlinkOptions := netlink.RouteSubscribeOptions{
+		ReceiveBufferSize:      t.useSystemRoutesBufferSize,
+		ReceiveBufferForceSize: t.useSystemRoutesBufferSize != 0,
+		ErrorCallback:          func(e error) { t.l.WithError(e).Errorf("netlink error") },
+	}
+
+	if err := netlink.RouteSubscribeWithOptions(rch, doneChan, netlinkOptions); err != nil {
 		t.l.WithError(err).Errorf("failed to subscribe to system route changes")
 		return
 	}
@@ -541,8 +549,14 @@ func (t *tun) watchRoutes() {
 	go func() {
 		for {
 			select {
-			case r := <-rch:
-				t.updateRoutes(r)
+			case r, ok := <-rch:
+				if ok {
+					t.updateRoutes(r)
+				} else {
+					// may be should do something here as
+					// netlink stops sending updates
+					return
+				}
 			case <-doneChan:
 				// netlink.RouteSubscriber will close the rch for us
 				return

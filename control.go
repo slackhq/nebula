@@ -26,14 +26,15 @@ type controlHostLister interface {
 }
 
 type Control struct {
-	f               *Interface
-	l               *logrus.Logger
-	ctx             context.Context
-	cancel          context.CancelFunc
-	sshStart        func()
-	statsStart      func()
-	dnsStart        func()
-	lighthouseStart func()
+	f                      *Interface
+	l                      *logrus.Logger
+	ctx                    context.Context
+	cancel                 context.CancelFunc
+	sshStart               func()
+	statsStart             func()
+	dnsStart               func()
+	lighthouseStart        func()
+	connectionManagerStart func(context.Context)
 }
 
 type ControlHostInfo struct {
@@ -62,6 +63,9 @@ func (c *Control) Start() {
 	}
 	if c.dnsStart != nil {
 		go c.dnsStart()
+	}
+	if c.connectionManagerStart != nil {
+		go c.connectionManagerStart(c.ctx)
 	}
 	if c.lighthouseStart != nil {
 		c.lighthouseStart()
@@ -131,8 +135,7 @@ func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 
 // GetCertByVpnIp returns the authenticated certificate of the given vpn IP, or nil if not found
 func (c *Control) GetCertByVpnIp(vpnIp netip.Addr) cert.Certificate {
-	_, found := c.f.myVpnAddrsTable.Lookup(vpnIp)
-	if found {
+	if c.f.myVpnAddrsTable.Contains(vpnIp) {
 		// Only returning the default certificate since its impossible
 		// for any other host but ourselves to have more than 1
 		return c.f.pki.getCertState().GetDefaultCertificate().Copy()

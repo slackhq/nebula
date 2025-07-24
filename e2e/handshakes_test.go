@@ -20,7 +20,7 @@ import (
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 func BenchmarkHotPath(b *testing.B) {
@@ -506,7 +506,7 @@ func TestReestablishRelays(t *testing.T) {
 	curIndexes := len(myControl.GetHostmap().Indexes)
 	for curIndexes >= start {
 		curIndexes = len(myControl.GetHostmap().Indexes)
-		r.Logf("Wait for the dead index to go away:start=%v indexes, currnet=%v indexes", start, curIndexes)
+		r.Logf("Wait for the dead index to go away:start=%v indexes, current=%v indexes", start, curIndexes)
 		myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me should fail"))
 
 		r.RouteForAllExitFunc(func(p *udp.Packet, c *nebula.Control) router.ExitType {
@@ -991,7 +991,7 @@ func TestRehandshaking(t *testing.T) {
 	require.NoError(t, err)
 	var theirNewConfig m
 	require.NoError(t, yaml.Unmarshal(rc, &theirNewConfig))
-	theirFirewall := theirNewConfig["firewall"].(map[interface{}]interface{})
+	theirFirewall := theirNewConfig["firewall"].(map[string]any)
 	theirFirewall["inbound"] = []m{{
 		"proto": "any",
 		"port":  "any",
@@ -1052,6 +1052,9 @@ func TestRehandshakingLoser(t *testing.T) {
 	t.Log("Stand up a tunnel between me and them")
 	assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 
+	myControl.GetHostInfoByVpnAddr(theirVpnIpNet[0].Addr(), false)
+	theirControl.GetHostInfoByVpnAddr(myVpnIpNet[0].Addr(), false)
+
 	r.RenderHostmaps("Starting hostmaps", myControl, theirControl)
 
 	r.Log("Renew their certificate and spin until mine sees it")
@@ -1087,7 +1090,7 @@ func TestRehandshakingLoser(t *testing.T) {
 	require.NoError(t, err)
 	var myNewConfig m
 	require.NoError(t, yaml.Unmarshal(rc, &myNewConfig))
-	theirFirewall := myNewConfig["firewall"].(map[interface{}]interface{})
+	theirFirewall := myNewConfig["firewall"].(map[string]any)
 	theirFirewall["inbound"] = []m{{
 		"proto": "any",
 		"port":  "any",
