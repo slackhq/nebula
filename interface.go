@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"context"
+	"crypto/fips140"
 	"errors"
 	"fmt"
 	"io"
@@ -217,6 +218,7 @@ func (f *Interface) activate() {
 	f.l.WithField("interface", f.inside.Name()).WithField("networks", f.myVpnNetworks).
 		WithField("build", f.version).WithField("udpAddr", addr).
 		WithField("boringcrypto", boringEnabled()).
+		WithField("fips140", fips140.Enabled()).
 		Info("Nebula interface is active")
 
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
