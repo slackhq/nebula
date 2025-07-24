@@ -1,5 +1,5 @@
-//go:build fips140
-// +build fips140
+//go:build fips140v1.0
+// +build fips140v1.0
 
 package noiseutil
 

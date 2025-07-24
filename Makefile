@@ -120,13 +120,17 @@ bin-pkcs11: BUILD_ARGS += -tags pkcs11
 bin-pkcs11: CGO_ENABLED = 1
 bin-pkcs11: bin
 
+bin-fips140: GOENV += GOFIPS140=v1.0.0
+bin-fips140: LDFLAGS += -checklinkname=0
+bin-fips140: bin
+
 bin:
-	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula${NEBULA_CMD_SUFFIX} ${NEBULA_CMD_PATH}
-	go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula-cert${NEBULA_CMD_SUFFIX} ./cmd/nebula-cert
+	$(GOENV) go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula${NEBULA_CMD_SUFFIX} ${NEBULA_CMD_PATH}
+	$(GOENV) go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula-cert${NEBULA_CMD_SUFFIX} ./cmd/nebula-cert
 
 install:
-	go install $(BUILD_ARGS) -ldflags "$(LDFLAGS)" ${NEBULA_CMD_PATH}
-	go install $(BUILD_ARGS) -ldflags "$(LDFLAGS)" ./cmd/nebula-cert
+	$(GOENV) go install $(BUILD_ARGS) -ldflags "$(LDFLAGS)" ${NEBULA_CMD_PATH}
+	$(GOENV) go install $(BUILD_ARGS) -ldflags "$(LDFLAGS)" ./cmd/nebula-cert
 
 build/linux-arm-%: GOENV += GOARM=$(word 3, $(subst -, ,$*))
 build/linux-mips-%: GOENV += GOMIPS=$(word 3, $(subst -, ,$*))
