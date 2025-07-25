@@ -40,16 +40,12 @@ var CipherAESGCM noise.CipherFunc = cipherFn{cipherAESGCM, "AESGCM"}
 var emptyPrefix = []byte{0, 0, 0, 0}
 
 func cipherAESGCM(k [32]byte) noise.Cipher {
-	// c, err := aes.NewCipher(k[:])
-	// if err != nil {
-	// 	panic(err)
-	// }
 	gcm := aeadAESGCM(k[:], emptyPrefix)
 	return aeadCipher{
 		gcm,
 		func(n uint64) []byte {
-			var nonce [12]byte
-			binary.BigEndian.PutUint64(nonce[4:], n)
+			var nonce [8]byte
+			binary.BigEndian.PutUint64(nonce[:], n)
 			return nonce[:]
 		},
 	}
@@ -66,4 +62,15 @@ func (c aeadCipher) Encrypt(out []byte, n uint64, ad, plaintext []byte) []byte {
 
 func (c aeadCipher) Decrypt(out []byte, n uint64, ad, ciphertext []byte) ([]byte, error) {
 	return c.Open(out, c.nonce(n), ciphertext, ad)
+}
+
+func (c aeadCipher) EncryptDanger(out, ad, plaintext []byte, n uint64, nb []byte) ([]byte, error) {
+	binary.BigEndian.PutUint64(nb[4:], n)
+	out = c.Seal(out, nb[4:], plaintext, ad)
+	return out, nil
+}
+
+func (c aeadCipher) DecryptDanger(out, ad, ciphertext []byte, n uint64, nb []byte) ([]byte, error) {
+	binary.BigEndian.PutUint64(nb[4:], n)
+	return c.Open(out, nb[4:], ciphertext, ad)
 }

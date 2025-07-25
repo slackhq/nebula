@@ -25,6 +25,11 @@ func NewNebulaCipherState(s *noise.CipherState) *NebulaCipherState {
 
 }
 
+type cipherAEADDanger interface {
+	EncryptDanger(out, ad, plaintext []byte, n uint64, nb []byte) ([]byte, error)
+	DecryptDanger(out, ad, plaintext []byte, n uint64, nb []byte) ([]byte, error)
+}
+
 // EncryptDanger encrypts and authenticates a given payload.
 //
 // out is a destination slice to hold the output of the EncryptDanger operation.
@@ -35,20 +40,25 @@ func NewNebulaCipherState(s *noise.CipherState) *NebulaCipherState {
 //     be re-used by callers to minimize garbage collection.
 func (s *NebulaCipherState) EncryptDanger(out, ad, plaintext []byte, n uint64, nb []byte) ([]byte, error) {
 	if s != nil {
-		// TODO: Is this okay now that we have made messageCounter atomic?
-		// Alternative may be to split the counter space into ranges
-		//if n <= s.n {
-		//	return nil, errors.New("CRITICAL: a duplicate counter value was used")
-		//}
-		//s.n = n
-		nb[0] = 0
-		nb[1] = 0
-		nb[2] = 0
-		nb[3] = 0
-		noiseEndianness.PutUint64(nb[4:], n)
-		out = s.c.(cipher.AEAD).Seal(out, nb, plaintext, ad)
-		//l.Debugf("Encryption: outlen: %d, nonce: %d, ad: %s, plainlen %d", len(out), n, ad, len(plaintext))
-		return out, nil
+		switch ce := s.c.(type) {
+		case cipherAEADDanger:
+			return ce.EncryptDanger(out, ad, plaintext, n, nb)
+		default:
+			// TODO: Is this okay now that we have made messageCounter atomic?
+			// Alternative may be to split the counter space into ranges
+			//if n <= s.n {
+			//	return nil, errors.New("CRITICAL: a duplicate counter value was used")
+			//}
+			//s.n = n
+			nb[0] = 0
+			nb[1] = 0
+			nb[2] = 0
+			nb[3] = 0
+			noiseEndianness.PutUint64(nb[4:], n)
+			out = s.c.(cipher.AEAD).Seal(out, nb, plaintext, ad)
+			//l.Debugf("Encryption: outlen: %d, nonce: %d, ad: %s, plainlen %d", len(out), n, ad, len(plaintext))
+			return out, nil
+		}
 	} else {
 		return nil, errors.New("no cipher state available to encrypt")
 	}
@@ -56,12 +66,17 @@ func (s *NebulaCipherState) EncryptDanger(out, ad, plaintext []byte, n uint64, n
 
 func (s *NebulaCipherState) DecryptDanger(out, ad, ciphertext []byte, n uint64, nb []byte) ([]byte, error) {
 	if s != nil {
-		nb[0] = 0
-		nb[1] = 0
-		nb[2] = 0
-		nb[3] = 0
-		noiseEndianness.PutUint64(nb[4:], n)
-		return s.c.(cipher.AEAD).Open(out, nb, ciphertext, ad)
+		switch ce := s.c.(type) {
+		case cipherAEADDanger:
+			return ce.DecryptDanger(out, ad, ciphertext, n, nb)
+		default:
+			nb[0] = 0
+			nb[1] = 0
+			nb[2] = 0
+			nb[3] = 0
+			noiseEndianness.PutUint64(nb[4:], n)
+			return s.c.(cipher.AEAD).Open(out, nb, ciphertext, ad)
+		}
 	} else {
 		return []byte{}, nil
 	}
