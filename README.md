@@ -143,15 +143,22 @@ To build nebula for a specific platform (ex, Windows):
 
 See the [Makefile](Makefile) for more details on build targets
 
-## Curve P256 and BoringCrypto
+## Curve P256, BoringCrypto and FIPS 140-3 mode
 
 The default curve used for cryptographic handshakes and signatures is Curve25519. This is the recommended setting for most users. If your deployment has certain compliance requirements, you have the option of creating your CA using `nebula-cert ca -curve P256` to use NIST Curve P256. The CA will then sign certificates using ECDSA P256, and any hosts using these certificates will use P256 for ECDH handshakes.
 
-In addition, Nebula can be built using the [BoringCrypto GOEXPERIMENT](https://github.com/golang/go/blob/go1.20/src/crypto/internal/boring/README.md) by running either of the following make targets:
+Nebula can be built using the [BoringCrypto GOEXPERIMENT](https://github.com/golang/go/blob/go1.20/src/crypto/internal/boring/README.md) by running either of the following make targets:
 
 ```sh
 make bin-boringcrypto
 make release-boringcrypto
+```
+
+Nebula can also be built using the [FIPS 140-3](https://go.dev/doc/security/fips140) mode of Go by running either of the following make targets:
+
+```sh
+make fips140
+make fips140 release
 ```
 
 This is not the recommended default deployment, but may be useful based on your compliance requirements.

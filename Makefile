@@ -120,10 +120,6 @@ bin-pkcs11: BUILD_ARGS += -tags pkcs11
 bin-pkcs11: CGO_ENABLED = 1
 bin-pkcs11: bin
 
-bin-fips140: GOENV += GOFIPS140=v1.0.0
-bin-fips140: LDFLAGS += -checklinkname=0
-bin-fips140: bin
-
 bin:
 	$(GOENV) go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula${NEBULA_CMD_SUFFIX} ${NEBULA_CMD_PATH}
 	$(GOENV) go build $(BUILD_ARGS) -ldflags "$(LDFLAGS)" -o ./nebula-cert${NEBULA_CMD_SUFFIX} ./cmd/nebula-cert
@@ -219,6 +215,14 @@ ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) service ${.DEFAULT_GOAL} --no-print-directory
 endif
 
+fips140:
+	@echo > $(NULL_FILE)
+	$(eval GOENV += GOFIPS140=v1.0.0)
+	$(eval LDFLAGS += -checklinkname=0)
+ifeq ($(words $(MAKECMDGOALS)),1)
+	@$(MAKE) fips140 ${.DEFAULT_GOAL} --no-print-directory
+endif
+
 bin-docker: bin build/linux-amd64/nebula build/linux-amd64/nebula-cert
 
 smoke-docker: bin-docker
@@ -240,5 +244,5 @@ smoke-vagrant/%: bin-docker build/%/nebula
 	cd .github/workflows/smoke/ && ./smoke-vagrant.sh $*
 
 .FORCE:
-.PHONY: bench bench-cpu bench-cpu-long bin build-test-mobile e2e e2ev e2evv e2evvv e2evvvv proto release service smoke-docker smoke-docker-race test test-cov-html smoke-vagrant/%
+.PHONY: bench bench-cpu bench-cpu-long bin build-test-mobile e2e e2ev e2evv e2evvv e2evvvv fips140 proto release service smoke-docker smoke-docker-race test test-cov-html smoke-vagrant/%
 .DEFAULT_GOAL := bin
