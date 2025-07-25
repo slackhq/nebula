@@ -37,6 +37,7 @@ func (c cipherFn) CipherName() string             { return c.name }
 // CipherAESGCM is the AES256-GCM AEAD cipher (using aeadAESGCM when fips140 is enabled)
 var CipherAESGCM noise.CipherFunc = cipherFn{cipherAESGCM, "AESGCM"}
 
+// tls.aeadAESGCM uses a 4 byte static prefix and an 8 byte nonce
 var emptyPrefix = []byte{0, 0, 0, 0}
 
 func cipherAESGCM(k [32]byte) noise.Cipher {
@@ -44,6 +45,7 @@ func cipherAESGCM(k [32]byte) noise.Cipher {
 	return aeadCipher{
 		gcm,
 		func(n uint64) []byte {
+			// tls.aeadAESGCM uses a 4 byte static prefix and an 8 byte nonce
 			var nonce [8]byte
 			binary.BigEndian.PutUint64(nonce[:], n)
 			return nonce[:]
