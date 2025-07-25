@@ -14,10 +14,15 @@ import (
 )
 
 // EncryptLockNeeded indicates if calls to Encrypt need a lock
-// This is true for boringcrypto because the Seal function verifies that the
+// This is true for fips140 because the Seal function verifies that the
 // nonce is strictly increasing.
 const EncryptLockNeeded = true
 
+// TODO: Use NewGCMWithCounterNonce once available:
+// - https://github.com/golang/go/issues/73110
+// Using tls.aeadAESGCM gives us the TLS 1.2 GCM, which also verifies
+// that the nonce is strictly increasing.
+//
 //go:linkname aeadAESGCM crypto/tls.aeadAESGCM
 func aeadAESGCM(key, noncePrefix []byte) cipher.AEAD
 
