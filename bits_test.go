@@ -212,8 +212,11 @@ func TestBitsLostCounter(t *testing.T) {
 	assert.Equal(t, int64(36), b.lostCounter.Count())
 	assert.Equal(t, int64(0), b.dupeCounter.Count())
 	assert.Equal(t, int64(0), b.outOfWindowCounter.Count())
+}
 
-	b = NewBits(10)
+func TestBitsLostCounterIssue1(t *testing.T) {
+	l := test.NewLogger()
+	b := NewBits(10)
 	b.lostCounter.Clear()
 	b.dupeCounter.Clear()
 	b.outOfWindowCounter.Clear()
@@ -232,6 +235,7 @@ func TestBitsLostCounter(t *testing.T) {
 	assert.True(t, b.Update(l, 11))
 
 	assert.True(t, b.Update(l, 14))
+	// Issue seems to be here, we reset missing packet 8 to false here and don't increment the lost counter
 	assert.True(t, b.Update(l, 19))
 	assert.True(t, b.Update(l, 12))
 	assert.True(t, b.Update(l, 13))
@@ -242,7 +246,8 @@ func TestBitsLostCounter(t *testing.T) {
 	assert.True(t, b.Update(l, 20))
 	assert.True(t, b.Update(l, 21))
 
-	assert.Equal(t, int64(0), b.lostCounter.Count())
+	// We missed packet 8 above
+	assert.Equal(t, int64(1), b.lostCounter.Count())
 	assert.Equal(t, int64(0), b.dupeCounter.Count())
 	assert.Equal(t, int64(0), b.outOfWindowCounter.Count())
 }
