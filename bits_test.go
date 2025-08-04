@@ -212,6 +212,39 @@ func TestBitsLostCounter(t *testing.T) {
 	assert.Equal(t, int64(36), b.lostCounter.Count())
 	assert.Equal(t, int64(0), b.dupeCounter.Count())
 	assert.Equal(t, int64(0), b.outOfWindowCounter.Count())
+
+	b = NewBits(10)
+	b.lostCounter.Clear()
+	b.dupeCounter.Clear()
+	b.outOfWindowCounter.Clear()
+
+	assert.True(t, b.Update(l, 0))
+	assert.True(t, b.Update(l, 4))
+	assert.True(t, b.Update(l, 1))
+	assert.True(t, b.Update(l, 9))
+	assert.True(t, b.Update(l, 2))
+	assert.True(t, b.Update(l, 3))
+	assert.True(t, b.Update(l, 5))
+	assert.True(t, b.Update(l, 6))
+	assert.True(t, b.Update(l, 7))
+	// assert.True(t, b.Update(l, 8))
+	assert.True(t, b.Update(l, 10))
+	assert.True(t, b.Update(l, 11))
+
+	assert.True(t, b.Update(l, 14))
+	assert.True(t, b.Update(l, 19))
+	assert.True(t, b.Update(l, 12))
+	assert.True(t, b.Update(l, 13))
+	assert.True(t, b.Update(l, 15))
+	assert.True(t, b.Update(l, 16))
+	assert.True(t, b.Update(l, 17))
+	assert.True(t, b.Update(l, 18))
+	assert.True(t, b.Update(l, 20))
+	assert.True(t, b.Update(l, 21))
+
+	assert.Equal(t, int64(0), b.lostCounter.Count())
+	assert.Equal(t, int64(0), b.dupeCounter.Count())
+	assert.Equal(t, int64(0), b.outOfWindowCounter.Count())
 }
 
 func BenchmarkBits(b *testing.B) {
