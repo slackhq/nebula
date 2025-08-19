@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
@@ -81,6 +82,8 @@ func (u *GenericConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *f
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
+	var lastRecvErr time.Time
+
 	for {
 		// Just read one packet at a time
 		n, rua, err := u.ReadFromUDPAddrPort(buffer)
@@ -89,7 +92,11 @@ func (u *GenericConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *f
 				u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
 				return
 			}
-			u.l.WithError(err).Warn("unexpected udp socket receive error")
+			// Dampen unexpected message warns to once per minute
+			if lastRecvErr.IsZero() || time.Since(lastRecvErr) > time.Minute {
+				lastRecvErr = time.Now()
+				u.l.WithError(err).Warn("unexpected udp socket receive error")
+			}
 			continue
 		}
 

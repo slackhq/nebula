@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
@@ -149,15 +150,22 @@ func (u *RIOConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
+	var lastRecvErr time.Time
+
 	for {
 		// Just read one packet at a time
 		n, rua, err := u.receive(buffer)
+
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
 				return
 			}
-			u.l.WithError(err).Warn("unexpected udp socket receive error")
+			// Dampen unexpected message warns to once per minute
+			if lastRecvErr.IsZero() || time.Since(lastRecvErr) > time.Minute {
+				lastRecvErr = time.Now()
+				u.l.WithError(err).Warn("unexpected udp socket receive error")
+			}
 			continue
 		}
 
