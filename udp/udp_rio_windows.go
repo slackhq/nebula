@@ -69,7 +69,7 @@ func NewRIOListener(l *logrus.Logger, addr netip.Addr, port int) (*RIOConn, erro
 
 	u := &RIOConn{l: l}
 
-	err := u.bind(&windows.SockaddrInet6{Addr: addr.As16(), Port: port})
+	err := u.bind(l, &windows.SockaddrInet6{Addr: addr.As16(), Port: port})
 	if err != nil {
 		return nil, fmt.Errorf("bind: %w", err)
 	}
@@ -85,11 +85,11 @@ func NewRIOListener(l *logrus.Logger, addr netip.Addr, port int) (*RIOConn, erro
 	return u, nil
 }
 
-func (u *RIOConn) bind(sa windows.Sockaddr) error {
+func (u *RIOConn) bind(l *logrus.Logger, sa windows.Sockaddr) error {
 	var err error
 	u.sock, err = winrio.Socket(windows.AF_INET6, windows.SOCK_DGRAM, windows.IPPROTO_UDP)
 	if err != nil {
-		return err
+		return fmt.Errorf("winrio.Socket error: %w", err)
 	}
 
 	// Enable v4 for this socket
@@ -103,35 +103,40 @@ func (u *RIOConn) bind(sa windows.Sockaddr) error {
 	size := uint32(unsafe.Sizeof(flag))
 	err = syscall.WSAIoctl(syscall.Handle(u.sock), syscall.SIO_UDP_CONNRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
 	if err != nil {
-		return err
+		// This is a best-effort to prevent errors from being returned by the udp recv operation.
+		// Quietly log a failure and continue.
+		l.WithError(err).Debug("failed to set UDP_CONNRESET ioctl")
 	}
+
 	ret = 0
 	flag = 0
 	size = uint32(unsafe.Sizeof(flag))
 	SIO_UDP_NETRESET := uint32(syscall.IOC_IN | syscall.IOC_VENDOR | 15)
 	err = syscall.WSAIoctl(syscall.Handle(u.sock), SIO_UDP_NETRESET, (*byte)(unsafe.Pointer(&flag)), size, nil, 0, &ret, nil, 0)
 	if err != nil {
-		return err
+		// This is a best-effort to prevent errors from being returned by the udp recv operation.
+		// Quietly log a failure and continue.
+		l.WithError(err).Debug("failed to set UDP_NETRESET ioctl")
 	}
 
 	err = u.rx.Open()
 	if err != nil {
-		return err
+		return fmt.Errorf("error rx.Open(): %w", err)
 	}
 
 	err = u.tx.Open()
 	if err != nil {
-		return err
+		return fmt.Errorf("error tx.Open(): %w", err)
 	}
 
 	u.rq, err = winrio.CreateRequestQueue(u.sock, packetsPerRing, 1, packetsPerRing, 1, u.rx.cq, u.tx.cq, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("error CreateRequestQueue: %w", err)
 	}
 
 	err = windows.Bind(u.sock, sa)
 	if err != nil {
-		return err
+		return fmt.Errorf("error windows.Bind(): %w", err)
 	}
 
 	return nil
@@ -152,7 +157,7 @@ func (u *RIOConn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firew
 				u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
 				return
 			}
-			u.l.WithError(err).Error("unexpected udp socket receive error")
+			u.l.WithError(err).Warn("unexpected udp socket receive error")
 			continue
 		}
 
