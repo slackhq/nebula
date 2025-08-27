@@ -706,10 +706,7 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote netip.AddrPort) b
 }
 
 func (i *HostInfo) RecvErrorExceeded() bool {
-	if i.recvError.Add(1) >= maxRecvError {
-		return true
-	}
-	return true
+	return i.recvError.Add(1) >= maxRecvError
 }
 
 func (i *HostInfo) CreateRemoteCIDR(c *cert.NebulaCertificate) {
