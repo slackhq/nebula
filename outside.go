@@ -255,18 +255,17 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, udpAddr netip.AddrPort
 }
 
 func (f *Interface) handleEncrypted(ci *ConnectionState, addr netip.AddrPort, h *header.H) bool {
-	// If connectionstate exists and the replay protector allows, process packet
-	// Else, send recv errors for 300 seconds after a restart to allow fast reconnection.
-	if ci == nil || !ci.window.Check(f.l, h.MessageCounter) {
-		if addr.IsValid() {
-			f.maybeSendRecvError(addr, h.RemoteIndex)
-			return false
-		} else {
-			return false
-		}
+	// If connectionstate exists, process packet
+	// Else, send recv error to allow fast reconnection.
+	if ci != nil {
+		return true
 	}
-
-	return true
+	if addr.IsValid() { // only send recv errors to valid outside-addrs
+		f.maybeSendRecvError(addr, h.RemoteIndex)
+		return false
+	} else {
+		return false
+	}
 }
 
 var (
