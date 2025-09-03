@@ -493,3 +493,76 @@ func Test_findNetworkUnion(t *testing.T) {
 	out, ok = findNetworkUnion([]netip.Prefix{fc00}, []netip.Addr{a1, afe81})
 	assert.False(t, ok)
 }
+
+func TestLighthouse_Deletes(t *testing.T) {
+	l := test.NewLogger()
+
+	myUdpAddr2 := netip.MustParseAddrPort("1.2.3.4:4242")
+
+	testSameHostNotStatic := netip.MustParseAddr("10.128.0.41")
+	testStaticHost := netip.MustParseAddr("10.128.0.42")
+	//myVpnIp := netip.MustParseAddr("10.128.0.2")
+
+	c := config.NewC(l)
+	lh1 := "10.128.0.2"
+	c.Settings["lighthouse"] = map[string]any{
+		"hosts":    []any{lh1},
+		"interval": "1s",
+	}
+
+	c.Settings["listen"] = map[string]any{"port": 4242}
+	c.Settings["static_host_map"] = map[string]any{
+		lh1:           []any{"1.1.1.1:4242"},
+		"10.128.0.42": []any{"1.2.3.4:4242"},
+	}
+
+	myVpnNet := netip.MustParsePrefix("10.128.0.1/24")
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
+	cs := &CertState{
+		myVpnNetworks:      []netip.Prefix{myVpnNet},
+		myVpnNetworksTable: nt,
+	}
+	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	require.NoError(t, err)
+	lh.ifce = &mockEncWriter{}
+
+	lhh := lh.NewRequestHandler()
+
+	//test that we actually have the static entry:
+	out := lh.Query(testStaticHost)
+	assert.True(t, out != nil)
+	assert.True(t, out.vpnAddrs[0] == testStaticHost)
+	out.Rebuild([]netip.Prefix{}) //why tho
+	assert.True(t, out.addrs[0] == myUdpAddr2)
+
+	//bolt on a lower numbered primary IP
+	am := lhh.lh.unlockedGetRemoteList([]netip.Addr{testStaticHost})
+	am.vpnAddrs = []netip.Addr{testSameHostNotStatic, testStaticHost}
+	lh.addrMap[testSameHostNotStatic] = am
+	out.Rebuild([]netip.Prefix{}) //???
+
+	//test that we actually have the static entry:
+	out = lh.Query(testStaticHost)
+	assert.True(t, out != nil)
+	assert.True(t, out.vpnAddrs[0] == testSameHostNotStatic)
+	assert.True(t, out.vpnAddrs[1] == testStaticHost)
+	assert.True(t, out.addrs[0] == myUdpAddr2)
+
+	//test that we actually have the static entry for BOTH:
+	out2 := lh.Query(testSameHostNotStatic)
+	assert.True(t, out2 == out)
+
+	//now do the delete
+	lh.DeleteVpnAddrs([]netip.Addr{testSameHostNotStatic, testStaticHost})
+	//verify
+	out = lh.Query(testSameHostNotStatic)
+	assert.True(t, out != nil)
+	if out == nil {
+		t.Fatal("expected non-nil query for the static host")
+	}
+	assert.True(t, out.vpnAddrs[0] == testSameHostNotStatic)
+	assert.True(t, out.vpnAddrs[1] == testStaticHost)
+	assert.True(t, out.addrs[0] == myUdpAddr2)
+
+}
