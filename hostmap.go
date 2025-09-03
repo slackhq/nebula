@@ -22,7 +22,7 @@ const defaultPromoteEvery = 1000       // Count of packets sent before we try mo
 const defaultReQueryEvery = 5000       // Count of packets sent before re-querying a hostinfo to the lighthouse
 const defaultReQueryWait = time.Minute // Minimum amount of seconds to wait before re-querying a hostinfo the lighthouse. Evaluated every ReQueryEvery
 const MaxRemotes = 10
-const maxRecvError = 4
+const maxRecvError = 1 // TODO this was 4, but changed to 1 to match 1.9.x behavior. Config option?
 
 // MaxHostInfosPerVpnIp is the max number of hostinfos we will track for a given vpn ip
 // 5 allows for an initial handshake and each host pair re-handshaking twice
@@ -734,10 +734,7 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote netip.AddrPort) b
 }
 
 func (i *HostInfo) RecvErrorExceeded() bool {
-	if i.recvError.Add(1) >= maxRecvError {
-		return true
-	}
-	return true
+	return i.recvError.Add(1) >= maxRecvError
 }
 
 func (i *HostInfo) buildNetworks(networks, unsafeNetworks []netip.Prefix) {
