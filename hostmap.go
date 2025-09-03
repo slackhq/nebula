@@ -17,12 +17,10 @@ import (
 	"github.com/slackhq/nebula/header"
 )
 
-// const ProbeLen = 100
 const defaultPromoteEvery = 1000       // Count of packets sent before we try moving a tunnel to a preferred underlay ip address
 const defaultReQueryEvery = 5000       // Count of packets sent before re-querying a hostinfo to the lighthouse
 const defaultReQueryWait = time.Minute // Minimum amount of seconds to wait before re-querying a hostinfo the lighthouse. Evaluated every ReQueryEvery
 const MaxRemotes = 10
-const maxRecvError = 1 // TODO this was 4, but changed to 1 to match 1.9.x behavior. Config option?
 
 // MaxHostInfosPerVpnIp is the max number of hostinfos we will track for a given vpn ip
 // 5 allows for an initial handshake and each host pair re-handshaking twice
@@ -225,8 +223,7 @@ type HostInfo struct {
 	// vpnAddrs is a list of vpn addresses assigned to this host that are within our own vpn networks
 	// The host may have other vpn addresses that are outside our
 	// vpn networks but were removed because they are not usable
-	vpnAddrs  []netip.Addr
-	recvError atomic.Uint32
+	vpnAddrs []netip.Addr
 
 	// networks are both all vpn and unsafe networks assigned to this host
 	networks   *bart.Lite
@@ -731,10 +728,6 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote netip.AddrPort) b
 	}
 
 	return false
-}
-
-func (i *HostInfo) RecvErrorExceeded() bool {
-	return i.recvError.Add(1) >= maxRecvError
 }
 
 func (i *HostInfo) buildNetworks(networks, unsafeNetworks []netip.Prefix) {

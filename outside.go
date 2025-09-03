@@ -539,10 +539,6 @@ func (f *Interface) handleRecvError(addr netip.AddrPort, h *header.H) {
 		return
 	}
 
-	if !hostinfo.RecvErrorExceeded() {
-		return
-	}
-
 	if hostinfo.remote.IsValid() && hostinfo.remote != addr {
 		f.l.Infoln("Someone spoofing recv_errors? ", addr, hostinfo.remote)
 		return
