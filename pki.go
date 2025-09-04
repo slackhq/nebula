@@ -173,7 +173,6 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 
 	p.cs.Store(newState)
 
-	//TODO: CERT-V2 newState needs a stringer that does json
 	if initial {
 		p.l.WithField("cert", newState).Debug("Client nebula certificate(s)")
 	} else {
@@ -359,7 +358,9 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 			return nil, util.NewContextualError("v1 and v2 curve are not the same, ignoring", nil, nil)
 		}
 
-		//TODO: CERT-V2 make sure v2 has v1s address
+		if v1.Networks()[0] != v2.Networks()[0] {
+			return nil, util.NewContextualError("v1 and v2 networks are not the same", nil, nil)
+		}
 
 		cs.initiatingVersion = dv
 	}
