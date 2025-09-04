@@ -529,10 +529,10 @@ func TestLighthouse_Dont_Delete_Static_Hosts(t *testing.T) {
 
 	//test that we actually have the static entry:
 	out := lh.Query(testStaticHost)
-	assert.NotEqual(t, out, nil)
+	assert.NotNil(t, out)
 	assert.Equal(t, out.vpnAddrs[0], testStaticHost)
 	out.Rebuild([]netip.Prefix{}) //why tho
-	assert.True(t, out.addrs[0] == myUdpAddr2)
+	assert.Equal(t, out.addrs[0], myUdpAddr2)
 
 	//bolt on a lower numbered primary IP
 	am := lh.unlockedGetRemoteList([]netip.Addr{testStaticHost})
@@ -542,27 +542,26 @@ func TestLighthouse_Dont_Delete_Static_Hosts(t *testing.T) {
 
 	//test that we actually have the static entry:
 	out = lh.Query(testStaticHost)
-	assert.NotEqual(t, out, nil)
+	assert.NotNil(t, out)
 	assert.Equal(t, out.vpnAddrs[0], testSameHostNotStatic)
 	assert.Equal(t, out.vpnAddrs[1], testStaticHost)
 	assert.Equal(t, out.addrs[0], myUdpAddr2)
 
 	//test that we actually have the static entry for BOTH:
 	out2 := lh.Query(testSameHostNotStatic)
-	assert.True(t, out2 == out)
+	assert.Same(t, out2, out)
 
 	//now do the delete
 	lh.DeleteVpnAddrs([]netip.Addr{testSameHostNotStatic, testStaticHost})
 	//verify
 	out = lh.Query(testSameHostNotStatic)
-	assert.NotEqual(t, out, nil)
+	assert.NotNil(t, out)
 	if out == nil {
 		t.Fatal("expected non-nil query for the static host")
 	}
 	assert.Equal(t, out.vpnAddrs[0], testSameHostNotStatic)
 	assert.Equal(t, out.vpnAddrs[1], testStaticHost)
 	assert.Equal(t, out.addrs[0], myUdpAddr2)
-
 }
 
 func TestLighthouse_DeletesWork(t *testing.T) {
@@ -603,7 +602,7 @@ func TestLighthouse_DeletesWork(t *testing.T) {
 
 	//test that we actually have the entry:
 	out := lh.Query(testHost)
-	assert.NotEqual(t, out, nil)
+	assert.NotNil(t, out)
 	assert.Equal(t, out.vpnAddrs[0], testHost)
 	out.Rebuild([]netip.Prefix{}) //why tho
 	assert.Equal(t, out.addrs[0], myUdpAddr2)
@@ -612,5 +611,5 @@ func TestLighthouse_DeletesWork(t *testing.T) {
 	lh.DeleteVpnAddrs([]netip.Addr{testHost})
 	//verify
 	out = lh.Query(testHost)
-	assert.Equal(t, out, nil)
+	assert.Nil(t, out)
 }
