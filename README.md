@@ -68,6 +68,8 @@ Requires Golang >= version specified in [go.mod](go.mod). Does not auto update.
 ```sh
 go install github.com/slackhq/nebula/cmd/...@latest   # Installs pre-release version
 go install github.com/slackhq/nebula/cmd/...@v1.9.6   # Installs a specific version tag
+
+go run github.com/slackhq/nebula/cmd/nebula@v1.9.6    # Or run directly, no env path setup needed
 ```
 
 ## Technical Overview
