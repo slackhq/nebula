@@ -638,11 +638,7 @@ func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
 		am, ok := lh.addrMap[addr]
 		if ok {
 			if i != 0 {
-				//if we had a record in the cache for a non-primary IPI
-				for _, x := range allAddrs {
-					lh.addrMap[x] = am
-				}
-				lh.addrMap[addr] = am
+				lh.addrMap[allAddrs[0]] = am
 			}
 			return am
 		}
