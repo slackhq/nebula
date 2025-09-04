@@ -631,13 +631,19 @@ func (lh *LightHouse) addCalculatedRemotes(vpnAddr netip.Addr) bool {
 	return len(calculatedV4) > 0 || len(calculatedV6) > 0
 }
 
-// unlockedGetRemoteList
-// assumes you have the lh lock
+// unlockedGetRemoteList assumes you have the lh lock
 func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
 	// before we go and make a new remotelist, we need to make sure we don't have one for any of this set of vpnaddrs yet
-	for _, addr := range allAddrs {
+	for i, addr := range allAddrs {
 		am, ok := lh.addrMap[addr]
 		if ok {
+			if i != 0 {
+				//if we had a record in the cache for a non-primary IPI
+				for _, x := range allAddrs {
+					lh.addrMap[x] = am
+				}
+				lh.addrMap[addr] = am
+			}
 			return am
 		}
 	}
