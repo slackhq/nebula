@@ -494,7 +494,7 @@ func Test_findNetworkUnion(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestLighthouse_Deletes(t *testing.T) {
+func TestLighthouse_Dont_Delete_Static_Hosts(t *testing.T) {
 	l := test.NewLogger()
 
 	myUdpAddr2 := netip.MustParseAddrPort("1.2.3.4:4242")
@@ -527,27 +527,25 @@ func TestLighthouse_Deletes(t *testing.T) {
 	require.NoError(t, err)
 	lh.ifce = &mockEncWriter{}
 
-	lhh := lh.NewRequestHandler()
-
 	//test that we actually have the static entry:
 	out := lh.Query(testStaticHost)
-	assert.True(t, out != nil)
-	assert.True(t, out.vpnAddrs[0] == testStaticHost)
+	assert.NotEqual(t, out, nil)
+	assert.Equal(t, out.vpnAddrs[0], testStaticHost)
 	out.Rebuild([]netip.Prefix{}) //why tho
 	assert.True(t, out.addrs[0] == myUdpAddr2)
 
 	//bolt on a lower numbered primary IP
-	am := lhh.lh.unlockedGetRemoteList([]netip.Addr{testStaticHost})
+	am := lh.unlockedGetRemoteList([]netip.Addr{testStaticHost})
 	am.vpnAddrs = []netip.Addr{testSameHostNotStatic, testStaticHost}
 	lh.addrMap[testSameHostNotStatic] = am
 	out.Rebuild([]netip.Prefix{}) //???
 
 	//test that we actually have the static entry:
 	out = lh.Query(testStaticHost)
-	assert.True(t, out != nil)
-	assert.True(t, out.vpnAddrs[0] == testSameHostNotStatic)
-	assert.True(t, out.vpnAddrs[1] == testStaticHost)
-	assert.True(t, out.addrs[0] == myUdpAddr2)
+	assert.NotEqual(t, out, nil)
+	assert.Equal(t, out.vpnAddrs[0], testSameHostNotStatic)
+	assert.Equal(t, out.vpnAddrs[1], testStaticHost)
+	assert.Equal(t, out.addrs[0], myUdpAddr2)
 
 	//test that we actually have the static entry for BOTH:
 	out2 := lh.Query(testSameHostNotStatic)
@@ -557,12 +555,62 @@ func TestLighthouse_Deletes(t *testing.T) {
 	lh.DeleteVpnAddrs([]netip.Addr{testSameHostNotStatic, testStaticHost})
 	//verify
 	out = lh.Query(testSameHostNotStatic)
-	assert.True(t, out != nil)
+	assert.NotEqual(t, out, nil)
 	if out == nil {
 		t.Fatal("expected non-nil query for the static host")
 	}
-	assert.True(t, out.vpnAddrs[0] == testSameHostNotStatic)
-	assert.True(t, out.vpnAddrs[1] == testStaticHost)
-	assert.True(t, out.addrs[0] == myUdpAddr2)
+	assert.Equal(t, out.vpnAddrs[0], testSameHostNotStatic)
+	assert.Equal(t, out.vpnAddrs[1], testStaticHost)
+	assert.Equal(t, out.addrs[0], myUdpAddr2)
 
+}
+
+func TestLighthouse_DeletesWork(t *testing.T) {
+	l := test.NewLogger()
+
+	myUdpAddr2 := netip.MustParseAddrPort("1.2.3.4:4242")
+	testHost := netip.MustParseAddr("10.128.0.42")
+
+	c := config.NewC(l)
+	lh1 := "10.128.0.2"
+	c.Settings["lighthouse"] = map[string]any{
+		"hosts":    []any{lh1},
+		"interval": "1s",
+	}
+
+	c.Settings["listen"] = map[string]any{"port": 4242}
+	c.Settings["static_host_map"] = map[string]any{
+		lh1: []any{"1.1.1.1:4242"},
+	}
+
+	myVpnNet := netip.MustParsePrefix("10.128.0.1/24")
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
+	cs := &CertState{
+		myVpnNetworks:      []netip.Prefix{myVpnNet},
+		myVpnNetworksTable: nt,
+	}
+	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	require.NoError(t, err)
+	lh.ifce = &mockEncWriter{}
+
+	//insert the host
+	am := lh.unlockedGetRemoteList([]netip.Addr{testHost})
+	am.vpnAddrs = []netip.Addr{testHost}
+	am.addrs = []netip.AddrPort{myUdpAddr2}
+	lh.addrMap[testHost] = am
+	am.Rebuild([]netip.Prefix{}) //???
+
+	//test that we actually have the entry:
+	out := lh.Query(testHost)
+	assert.NotEqual(t, out, nil)
+	assert.Equal(t, out.vpnAddrs[0], testHost)
+	out.Rebuild([]netip.Prefix{}) //why tho
+	assert.Equal(t, out.addrs[0], myUdpAddr2)
+
+	//now do the delete
+	lh.DeleteVpnAddrs([]netip.Addr{testHost})
+	//verify
+	out = lh.Query(testHost)
+	assert.Equal(t, out, nil)
 }

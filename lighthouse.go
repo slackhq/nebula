@@ -636,7 +636,8 @@ func (lh *LightHouse) addCalculatedRemotes(vpnAddr netip.Addr) bool {
 func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
 	var am *RemoteList
 	ok := false
-	for _, addr := range allAddrs { // before we go and make a new remotelist, we need to make sure we don't have one for any of this set of vpnaddrs yet
+	// before we go and make a new remotelist, we need to make sure we don't have one for any of this set of vpnaddrs yet
+	for _, addr := range allAddrs {
 		am, ok = lh.addrMap[addr]
 		if ok {
 			break
