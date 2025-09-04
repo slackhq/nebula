@@ -286,16 +286,18 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, ip netip.AddrPort) {
 
 }
 
+// handleEncrypted returns true if a packet should be processed, false otherwise
 func (f *Interface) handleEncrypted(ci *ConnectionState, addr netip.AddrPort, h *header.H) bool {
-	// If connectionstate exists and the replay protector allows, process packet
-	// Else, send recv errors for 300 seconds after a restart to allow fast reconnection.
-	if ci == nil || !ci.window.Check(f.l, h.MessageCounter) {
+	// If connectionstate does not exist, send a recv error, if possible, to encourage a fast reconnect
+	if ci == nil {
 		if addr.IsValid() {
 			f.maybeSendRecvError(addr, h.RemoteIndex)
-			return false
-		} else {
-			return false
 		}
+		return false
+	}
+	// If the window check fails, refuse to process the packet, but don't send a recv error
+	if !ci.window.Check(f.l, h.MessageCounter) {
+		return false
 	}
 
 	return true
@@ -455,10 +457,6 @@ func (f *Interface) handleRecvError(addr netip.AddrPort, h *header.H) {
 	hostinfo := f.hostMap.QueryReverseIndex(h.RemoteIndex)
 	if hostinfo == nil {
 		f.l.WithField("remoteIndex", h.RemoteIndex).Debugln("Did not find remote index in main hostmap")
-		return
-	}
-
-	if !hostinfo.RecvErrorExceeded() {
 		return
 	}
 
