@@ -644,6 +644,7 @@ func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
 		}
 	}
 
+	//TODO lighthouse.remote_allow_ranges is almost certainly broken in a multiple-address-per-cert scenario
 	am := NewRemoteList(allAddrs, func(a netip.Addr) bool { return lh.shouldAdd(allAddrs[0], a) })
 	for _, addr := range allAddrs {
 		lh.addrMap[addr] = am
