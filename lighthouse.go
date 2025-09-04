@@ -519,11 +519,15 @@ func (lh *LightHouse) queryAndPrepMessage(vpnAddr netip.Addr, f func(*cache) (in
 }
 
 func (lh *LightHouse) DeleteVpnAddrs(allVpnAddrs []netip.Addr) {
-	// First we check the static mapping
-	// and do nothing if it is there
-	if _, ok := lh.GetStaticHostList()[allVpnAddrs[0]]; ok {
-		return
+	// First we check the static host map. If any of the VpnAddrs to be deleted are present, do nothing.
+	staticList := lh.GetStaticHostList()
+	for _, addr := range allVpnAddrs {
+		if _, ok := staticList[addr]; ok {
+			return
+		}
 	}
+
+	// None of the VpnAddrs were present. Now we can do the deletes.
 	lh.Lock()
 	rm, ok := lh.addrMap[allVpnAddrs[0]]
 	if ok {
@@ -627,15 +631,23 @@ func (lh *LightHouse) addCalculatedRemotes(vpnAddr netip.Addr) bool {
 	return len(calculatedV4) > 0 || len(calculatedV6) > 0
 }
 
-// unlockedGetRemoteList
-// assumes you have the lh lock
+// unlockedGetRemoteList assumes you have the lh lock
 func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
-	am, ok := lh.addrMap[allAddrs[0]]
-	if !ok {
-		am = NewRemoteList(allAddrs, func(a netip.Addr) bool { return lh.shouldAdd(allAddrs[0], a) })
-		for _, addr := range allAddrs {
-			lh.addrMap[addr] = am
+	// before we go and make a new remotelist, we need to make sure we don't have one for any of this set of vpnaddrs yet
+	for i, addr := range allAddrs {
+		am, ok := lh.addrMap[addr]
+		if ok {
+			if i != 0 {
+				lh.addrMap[allAddrs[0]] = am
+			}
+			return am
 		}
+	}
+
+	//TODO lighthouse.remote_allow_ranges is almost certainly broken in a multiple-address-per-cert scenario
+	am := NewRemoteList(allAddrs, func(a netip.Addr) bool { return lh.shouldAdd(allAddrs[0], a) })
+	for _, addr := range allAddrs {
+		lh.addrMap[addr] = am
 	}
 	return am
 }

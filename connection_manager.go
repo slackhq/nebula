@@ -356,7 +356,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 			decision = tryRehandshake
 
 		} else {
-			if cm.shouldSwapPrimary(hostinfo, primary) {
+			if cm.shouldSwapPrimary(hostinfo) {
 				decision = swapPrimary
 			} else {
 				// migrate the relays to the primary, if in use.
@@ -447,7 +447,7 @@ func (cm *connectionManager) isInactive(hostinfo *HostInfo, now time.Time) (time
 	return inactiveDuration, true
 }
 
-func (cm *connectionManager) shouldSwapPrimary(current, primary *HostInfo) bool {
+func (cm *connectionManager) shouldSwapPrimary(current *HostInfo) bool {
 	// The primary tunnel is the most recent handshake to complete locally and should work entirely fine.
 	// If we are here then we have multiple tunnels for a host pair and neither side believes the same tunnel is primary.
 	// Let's sort this out.
