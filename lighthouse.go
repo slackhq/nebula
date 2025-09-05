@@ -570,7 +570,7 @@ func (lh *LightHouse) addStaticRemotes(i int, d time.Duration, network string, t
 	am.unlockedSetHostnamesResults(hr)
 
 	for _, addrPort := range hr.GetAddrs() {
-		if !lh.shouldAdd(vpnAddr, addrPort.Addr()) {
+		if !lh.shouldAdd([]netip.Addr{vpnAddr}, addrPort.Addr()) {
 			continue
 		}
 		switch {
@@ -645,18 +645,17 @@ func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
 		}
 	}
 
-	//TODO lighthouse.remote_allow_ranges is almost certainly broken in a multiple-address-per-cert scenario
-	am := NewRemoteList(allAddrs, func(a netip.Addr) bool { return lh.shouldAdd(allAddrs[0], a) })
+	am := NewRemoteList(allAddrs, func(a netip.Addr) bool { return lh.shouldAdd(allAddrs, a) })
 	for _, addr := range allAddrs {
 		lh.addrMap[addr] = am
 	}
 	return am
 }
 
-func (lh *LightHouse) shouldAdd(vpnAddr netip.Addr, to netip.Addr) bool {
-	allow := lh.GetRemoteAllowList().Allow(vpnAddr, to)
+func (lh *LightHouse) shouldAdd(vpnAddrs []netip.Addr, to netip.Addr) bool {
+	allow := lh.GetRemoteAllowList().AllowAll(vpnAddrs, to)
 	if lh.l.Level >= logrus.TraceLevel {
-		lh.l.WithField("vpnAddr", vpnAddr).WithField("udpAddr", to).WithField("allow", allow).
+		lh.l.WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", to).WithField("allow", allow).
 			Trace("remoteAllowList.Allow")
 	}
 	if !allow {
