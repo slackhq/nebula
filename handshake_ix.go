@@ -459,7 +459,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 
 	f.connectionManager.AddTrafficWatch(hostinfo)
 
-	hostinfo.remotes.ResetBlockedRemotes()
+	hostinfo.remotes.RefreshFromHandshake(vpnAddrs)
 
 	return
 }
@@ -667,7 +667,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		f.cachedPacketMetrics.sent.Inc(int64(len(hh.packetStore)))
 	}
 
-	hostinfo.remotes.ResetBlockedRemotes()
+	hostinfo.remotes.RefreshFromHandshake(vpnAddrs)
 	f.metricHandshakes.Update(duration)
 
 	return false
