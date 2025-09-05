@@ -715,8 +715,6 @@ func (lh *LightHouse) IsLighthouseAddr(vpnAddr netip.Addr) bool {
 	return ok
 }
 
-// TODO: CERT-V2 IsLighthouseAddr should be sufficient, we just need to update the vpnAddrs for lighthouses after a handshake
-// so that we know all the lighthouse vpnAddrs, not just the ones we were configured to talk to initially
 func (lh *LightHouse) IsAnyLighthouseAddr(vpnAddr []netip.Addr) bool {
 	l := lh.GetLighthouses()
 	for _, a := range vpnAddr {
