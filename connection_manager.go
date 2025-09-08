@@ -476,8 +476,8 @@ func (cm *connectionManager) swapPrimary(current, primary *HostInfo) {
 }
 
 // isInvalidCertificate will check if we should destroy a tunnel if pki.disconnect_invalid is true and
-// the certificate is no longer valid. Block listed certificates will skip the pki.disconnect_invalid
-// check and return true.
+// the certificate is no longer valid, or if we no longer have a certificate of the same version as the remote.
+// Blocklisted certificates will skip the pki.disconnect_invalid check and return true.
 func (cm *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostInfo) bool {
 	remoteCert := hostinfo.GetCert()
 	if remoteCert == nil {
@@ -488,18 +488,38 @@ func (cm *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostI
 	err := caPool.VerifyCachedCertificate(now, remoteCert)
 	if err == nil {
 		return false
-	}
-
-	if !cm.intf.disconnectInvalid.Load() && err != cert.ErrBlockListed {
+	} else if err == cert.ErrBlockListed { //avoiding errors.Is for speed
 		// Block listed certificates should always be disconnected
-		return false
+		hostinfo.logger(cm.l).WithError(err).
+			WithField("fingerprint", remoteCert.Fingerprint).
+			Info("Remote certificate is blocked, tearing down the tunnel")
+		return true
+	} else if cm.intf.disconnectInvalid.Load() {
+		hostinfo.logger(cm.l).WithError(err).
+			WithField("fingerprint", remoteCert.Fingerprint).
+			Info("Remote certificate is no longer valid, tearing down the tunnel")
+		return true
 	}
 
-	hostinfo.logger(cm.l).WithError(err).
-		WithField("fingerprint", remoteCert.Fingerprint).
-		Info("Remote certificate is no longer valid, tearing down the tunnel")
+	//check that we still have a cert version in common with this connection. If we do not, disconnect.
+	remoteVersion := remoteCert.Certificate.Version()
+	cs := cm.intf.pki.getCertState()
+	out := false
+	switch remoteVersion {
+	case cert.Version1:
+		out = cs.v1Cert == nil
+	case cert.Version2:
+		out = cs.v2Cert == nil
+	default:
+		out = true
+	}
 
-	return true
+	if out {
+		hostinfo.logger(cm.l).WithField("fingerprint", remoteCert.Fingerprint).
+			WithField("version", remoteVersion).
+			Info("We no longer have a certificate in common with remote, tearing down the tunnel")
+	}
+	return out
 }
 
 func (cm *connectionManager) sendPunch(hostinfo *HostInfo) {
