@@ -645,7 +645,7 @@ func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
 		}
 	}
 
-	am := NewRemoteList(allAddrs, func(a netip.Addr) bool { return lh.shouldAdd(allAddrs, a) })
+	am := NewRemoteList(allAddrs, lh.shouldAdd)
 	for _, addr := range allAddrs {
 		lh.addrMap[addr] = am
 	}
