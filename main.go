@@ -291,7 +291,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		sshStart,
 		statsStart,
 		dnsStart,
-		lightHouse.StartUpdateWorker,
+		lightHouse.StartUpdateWorkerNetlink,
 		connManager.Start,
 	}, nil
 }

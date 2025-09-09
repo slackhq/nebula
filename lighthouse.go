@@ -21,6 +21,7 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
+	"github.com/vishvananda/netlink"
 )
 
 var ErrHostNotKnown = errors.New("host not known")
@@ -229,7 +230,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 				lh.updateCancel()
 			}
 
-			lh.StartUpdateWorker()
+			lh.StartUpdateWorkerNetlink()
 		}
 	}
 
@@ -845,10 +846,65 @@ func (lh *LightHouse) StartUpdateWorker() {
 	}()
 }
 
+func (lh *LightHouse) StartUpdateWorkerNetlink() {
+	if lh.amLighthouse {
+		return
+	}
+
+	addrChan := make(chan netlink.AddrUpdate)
+	doneChan := make(chan struct{})
+
+	err := netlink.AddrSubscribe(addrChan, doneChan)
+	if err != nil {
+		lh.l.WithError(err).Error("Failed to subscribe to address updates")
+		return
+	}
+
+	updateCtx, cancel := context.WithCancel(lh.ctx)
+	lh.updateCancel = cancel
+
+	go func() {
+		defer func() {
+			x := struct{}{}
+			doneChan <- x
+		}()
+
+		lh.SendUpdate()
+
+		for {
+			select {
+			case <-updateCtx.Done():
+				return
+			case a := <-addrChan:
+				addr, ok := netip.AddrFromSlice(a.LinkAddress.IP)
+				if !ok {
+					continue
+				}
+				ones, _ := a.LinkAddress.Mask.Size()
+				pfx := netip.PrefixFrom(addr, ones)
+				lh.l.WithFields(logrus.Fields{
+					"LinkAddress": pfx,
+					"LinkIndex":   a.LinkIndex,
+					"Flags":       a.Flags,
+					"Scope":       a.Scope,
+					"NewAddr":     a.NewAddr,
+					"ValidLft":    a.ValidLft,
+					"PreferedLft": a.PreferedLft,
+				}).Warn("Received address update")
+
+				shouldSend := a.PreferedLft != 0 //example criteria
+				if shouldSend {
+					lh.SendUpdate()
+				}
+			}
+		}
+	}()
+}
+
 func (lh *LightHouse) SendUpdate() {
 	var v4 []*V4AddrPort
 	var v6 []*V6AddrPort
-
+	lh.l.Warn("sending lh update!")
 	for _, e := range lh.GetAdvertiseAddrs() {
 		if e.Addr().Is4() {
 			v4 = append(v4, netAddrToProtoV4AddrPort(e.Addr(), e.Port()))
