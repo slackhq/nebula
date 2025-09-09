@@ -20,7 +20,6 @@ import (
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"github.com/vishvananda/netlink"
-	"github.com/vishvananda/netlink/nl"
 	"golang.org/x/sys/unix"
 )
 
@@ -321,34 +320,6 @@ func (t *tun) addIPs(link netlink.Link) error {
 	return nil
 }
 
-func (t *tun) disableLinkLocal() error {
-	/* we want to assemble a message like this:
-	msg
-		index
-		afspec
-			inet6
-				addrGenMode = modeNone
-	*/
-
-	const modeNone = 1
-	addrGenMode := nl.NewRtAttr(unix.IFLA_INET6_ADDR_GEN_MODE, nl.Uint8Attr(modeNone))
-	inet6 := nl.NewRtAttr(unix.AF_INET6, nil)
-	inet6.AddChild(addrGenMode)
-
-	afSpec := nl.NewRtAttr(unix.IFLA_AF_SPEC, nil)
-	afSpec.AddChild(inet6)
-
-	req := nl.NewNetlinkRequest(unix.RTM_SETLINK, unix.NLM_F_ACK)
-	msg := nl.NewIfInfomsg(unix.AF_UNSPEC)
-	msg.Index = int32(t.deviceIndex)
-
-	req.AddData(msg)
-	req.AddData(afSpec)
-
-	_, err := req.Execute(unix.NETLINK_ROUTE, 0)
-	return err
-}
-
 func (t *tun) Activate() error {
 	devName := t.deviceBytes()
 
@@ -389,7 +360,8 @@ func (t *tun) Activate() error {
 		t.l.WithError(err).Error("Failed to set tun tx queue length")
 	}
 
-	if err = t.disableLinkLocal(); err != nil {
+	const modeNone = 1
+	if err = netlink.LinkSetIP6AddrGenMode(link, modeNone); err != nil {
 		t.l.WithError(err).Error("Failed to disable link local address generation")
 	}
 
