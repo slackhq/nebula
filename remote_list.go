@@ -374,7 +374,8 @@ func (r *RemoteList) CopyBlockedRemotes() []netip.AddrPort {
 func (r *RemoteList) RefreshFromHandshake(vpnAddrs []netip.Addr) {
 	r.Lock()
 	r.badRemotes = nil
-	r.vpnAddrs = vpnAddrs //should this be remade and copied, a-la NewRemoteList?
+	r.vpnAddrs = make([]netip.Addr, len(vpnAddrs))
+	copy(r.vpnAddrs, vpnAddrs)
 	r.Unlock()
 }
 
