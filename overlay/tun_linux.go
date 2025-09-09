@@ -360,6 +360,11 @@ func (t *tun) Activate() error {
 		t.l.WithError(err).Error("Failed to set tun tx queue length")
 	}
 
+	const modeNone = 1
+	if err = netlink.LinkSetIP6AddrGenMode(link, modeNone); err != nil {
+		t.l.WithError(err).Warn("Failed to disable link local address generation")
+	}
+
 	if err = t.addIPs(link); err != nil {
 		return err
 	}
