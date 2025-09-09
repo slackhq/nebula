@@ -937,7 +937,6 @@ func (lh *LightHouse) SendUpdate() {
 						V4AddrPorts:   v4,
 						V6AddrPorts:   v6,
 						RelayVpnAddrs: relays,
-						VpnAddr:       netAddrToProtoAddr(lh.myVpnNetworks[0].Addr()),
 					},
 				}
 
