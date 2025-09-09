@@ -362,7 +362,7 @@ func (t *tun) Activate() error {
 
 	const modeNone = 1
 	if err = netlink.LinkSetIP6AddrGenMode(link, modeNone); err != nil {
-		t.l.WithError(err).Error("Failed to disable link local address generation")
+		t.l.WithError(err).Warn("Failed to disable link local address generation")
 	}
 
 	if err = t.addIPs(link); err != nil {
