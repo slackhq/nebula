@@ -124,11 +124,11 @@ func TestCertUpgrade(t *testing.T) {
 		panic(err)
 	}
 
-	r.Logf("reload new v2 config")
+	r.Logf("reload new v2-only config")
 	err = myC.ReloadConfigString(string(cb))
 	assert.NoError(t, err)
-	r.Logf("yay")
-	r.Log("spin until their sees it")
+	r.Log("yay, spin until their sees it")
+	waitStart := time.Now()
 	for {
 		assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 		c := theirControl.GetHostInfoByVpnAddr(myVpnIpNet[0].Addr(), false)
@@ -140,6 +140,10 @@ func TestCertUpgrade(t *testing.T) {
 			if version == cert.Version2 {
 				break
 			}
+		}
+		since := time.Since(waitStart)
+		if since > time.Second*10 {
+			t.Fatal("Cert should be new by now")
 		}
 		time.Sleep(time.Second)
 	}
