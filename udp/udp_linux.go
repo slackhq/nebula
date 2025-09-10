@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
@@ -18,10 +20,12 @@ import (
 )
 
 type StdConn struct {
-	sysFd int
-	isV4  bool
-	l     *logrus.Logger
-	batch int
+	sysFd  int
+	closed atomic.Bool
+	wg     *sync.WaitGroup
+	isV4   bool
+	l      *logrus.Logger
+	batch  int
 }
 
 func maybeIPV4(ip net.IP) (net.IP, bool) {
@@ -69,7 +73,14 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 		return nil, fmt.Errorf("unable to bind to socket: %s", err)
 	}
 
-	return &StdConn{sysFd: fd, isV4: ip.Is4(), l: l, batch: batch}, err
+	return &StdConn{
+		sysFd:  fd,
+		closed: atomic.Bool{},
+		wg:     &sync.WaitGroup{},
+		isV4:   ip.Is4(),
+		l:      l,
+		batch:  batch,
+	}, err
 }
 
 func (u *StdConn) Rebind() error {
@@ -119,6 +130,14 @@ func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 }
 
 func (u *StdConn) ListenOut(r EncReader) {
+
+	u.wg.Add(1)
+	defer func() {
+		u.wg.Done()
+	}()
+	if u.closed.Load() {
+		return
+	}
 	var ip netip.Addr
 
 	msgs, buffers, names := u.PrepareRawMessages(u.batch)
@@ -131,6 +150,11 @@ func (u *StdConn) ListenOut(r EncReader) {
 		n, err := read(msgs)
 		if err != nil {
 			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
+			return
+		}
+
+		if u.closed.Load() {
+			u.l.Debug("flag for closing connection is set, exiting read loop")
 			return
 		}
 
@@ -306,6 +330,20 @@ func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
 }
 
 func (u *StdConn) Close() error {
+	if !u.closed.CompareAndSwap(false, true) {
+		// already closed by e.g. other thread
+		return nil
+	}
+	err := syscall.Shutdown(u.sysFd, syscall.SHUT_RDWR)
+	if err != nil {
+		errno, ok := err.(syscall.Errno)
+		// connection might have been terminated by remote before
+		wasDisconnected := ok && (errno == syscall.ENOTCONN)
+		if !wasDisconnected {
+			panic(fmt.Sprintf("error while shutdown of UDP socket: %v", err))
+		}
+	}
+	u.wg.Wait()
 	return syscall.Close(u.sysFd)
 }
 
