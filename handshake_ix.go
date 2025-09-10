@@ -167,12 +167,11 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		if rc == nil {
 			f.l.WithError(err).WithField("udpAddr", addr).
 				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).WithField("cert", remoteCert).
-				Info("Unable to handshake with host due to missing certificate version")
-			return
+				Info("Might be unable to handshake with host due to missing certificate version")
+		} else {
+			// Record the certificate we are actually using
+			ci.myCert = rc
 		}
-
-		// Record the certificate we are actually using
-		ci.myCert = rc
 	}
 
 	if len(remoteCert.Certificate.Networks()) == 0 {
