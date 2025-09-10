@@ -22,7 +22,7 @@ func newTestLighthouse() *LightHouse {
 		addrMap:   map[netip.Addr]*RemoteList{},
 		queryChan: make(chan netip.Addr, 10),
 	}
-	lighthouses := map[netip.Addr]struct{}{}
+	lighthouses := []netip.Addr{}
 	staticList := map[netip.Addr]struct{}{}
 
 	lh.lighthouses.Store(&lighthouses)
