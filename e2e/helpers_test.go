@@ -129,6 +129,109 @@ func newSimpleServer(v cert.Version, caCrt cert.Certificate, caKey []byte, name 
 	return control, vpnNetworks, udpAddr, c
 }
 
+// newSimpleServer creates a nebula instance with fewer assumptions
+func newServer(caCrt []cert.Certificate, certs []cert.Certificate, key []byte, overrides m) (*nebula.Control, []netip.Prefix, netip.AddrPort, *config.C) {
+	l := NewTestLogger()
+
+	vpnNetworks := certs[len(certs)-1].Networks()
+
+	var udpAddr netip.AddrPort
+	if vpnNetworks[0].Addr().Is4() {
+		budpIp := vpnNetworks[0].Addr().As4()
+		budpIp[1] -= 128
+		udpAddr = netip.AddrPortFrom(netip.AddrFrom4(budpIp), 4242)
+	} else {
+		budpIp := vpnNetworks[0].Addr().As16()
+		// beef for funsies
+		budpIp[2] = 190
+		budpIp[3] = 239
+		udpAddr = netip.AddrPortFrom(netip.AddrFrom16(budpIp), 4242)
+	}
+
+	caStr := ""
+	for _, ca := range caCrt {
+		x, err := ca.MarshalPEM()
+		if err != nil {
+			panic(err)
+		}
+		caStr += string(x)
+	}
+	certStr := ""
+	for _, c := range certs {
+		x, err := c.MarshalPEM()
+		if err != nil {
+			panic(err)
+		}
+		certStr += string(x)
+	}
+
+	mc := m{
+		"pki": m{
+			"ca":   caStr,
+			"cert": certStr,
+			"key":  string(key),
+		},
+		//"tun": m{"disabled": true},
+		"firewall": m{
+			"outbound": []m{{
+				"proto": "any",
+				"port":  "any",
+				"host":  "any",
+			}},
+			"inbound": []m{{
+				"proto": "any",
+				"port":  "any",
+				"host":  "any",
+			}},
+		},
+		//"handshakes": m{
+		//	"try_interval": "1s",
+		//},
+		"listen": m{
+			"host": udpAddr.Addr().String(),
+			"port": udpAddr.Port(),
+		},
+		"logging": m{
+			"timestamp_format": fmt.Sprintf("%v 15:04:05.000000", certs[0].Name()),
+			"level":            l.Level.String(),
+		},
+		"timers": m{
+			"pending_deletion_interval": 2,
+			"connection_alive_interval": 2,
+		},
+	}
+
+	if overrides != nil {
+		final := m{}
+		err := mergo.Merge(&final, overrides, mergo.WithAppendSlice)
+		if err != nil {
+			panic(err)
+		}
+		err = mergo.Merge(&final, mc, mergo.WithAppendSlice)
+		if err != nil {
+			panic(err)
+		}
+		mc = final
+	}
+
+	cb, err := yaml.Marshal(mc)
+	if err != nil {
+		panic(err)
+	}
+
+	c := config.NewC(l)
+	cStr := string(cb)
+	c.LoadString(cStr)
+
+	control, err := nebula.Main(c, false, "e2e-test", l, nil)
+
+	if err != nil {
+		panic(err)
+	}
+
+	return control, vpnNetworks, udpAddr, c
+}
+
 type doneCb func()
 
 func deadline(t *testing.T, seconds time.Duration) doneCb {
