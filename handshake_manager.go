@@ -74,7 +74,8 @@ type HandshakeHostInfo struct {
 	lastRemotes []netip.AddrPort // Remotes that we sent to during the previous attempt
 	packetStore []*cachedPacket  // A set of packets to be transmitted once the handshake completes
 
-	hostinfo *HostInfo
+	hostinfo                  *HostInfo
+	initiatingVersionOverride cert.Version
 }
 
 func (hh *HandshakeHostInfo) cachePacket(l *logrus.Logger, t header.MessageType, st header.MessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {

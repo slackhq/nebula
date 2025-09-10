@@ -224,12 +224,81 @@ func TestCertDowngrade(t *testing.T) {
 	for {
 		assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 		c := theirControl.GetHostInfoByVpnAddr(myVpnIpNet[0].Addr(), false)
-		if c == nil {
+		c2 := myControl.GetHostInfoByVpnAddr(theirVpnIpNet[0].Addr(), false)
+		if c == nil || c2 == nil {
 			r.Log("nil")
 		} else {
 			version := c.Cert.Version()
-			r.Logf("version %d", version)
+			theirVersion := c2.Cert.Version()
+			r.Logf("version %d,%d", version, theirVersion)
 			if version == cert.Version1 {
+				break
+			}
+		}
+		since := time.Since(waitStart)
+		if since > time.Second*5 {
+			r.Log("wtf")
+		}
+		if since > time.Second*10 {
+			r.Log("wtf")
+			t.Fatal("Cert should be new by now")
+		}
+		time.Sleep(time.Second)
+	}
+
+	r.RenderHostmaps("Final hostmaps", myControl, theirControl)
+
+	myControl.Stop()
+	theirControl.Stop()
+}
+
+func TestCertMismatchCorrection(t *testing.T) {
+	// The goal of this test is to ensure the shortest inactivity timeout will close the tunnel on both sides
+	// under ideal conditions
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	ca2, _, caKey2, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+
+	myCert, _, myPrivKey, _ := cert_test.NewTestCert(cert.Version1, cert.Curve_CURVE25519, ca, caKey, "me", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{netip.MustParsePrefix("10.128.0.1/24")}, nil, []string{})
+	myCert2, _ := cert_test.NewTestCertDifferentVersion(myCert, cert.Version2, ca2, caKey2)
+
+	theirCert, _, theirPrivKey, _ := cert_test.NewTestCert(cert.Version1, cert.Curve_CURVE25519, ca, caKey, "them", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{netip.MustParsePrefix("10.128.0.2/24")}, nil, []string{})
+	theirCert2, _ := cert_test.NewTestCertDifferentVersion(theirCert, cert.Version2, ca2, caKey2)
+
+	myControl, myVpnIpNet, myUdpAddr, _ := newServer([]cert.Certificate{ca, ca2}, []cert.Certificate{myCert2}, myPrivKey, m{})
+	theirControl, theirVpnIpNet, theirUdpAddr, _ := newServer([]cert.Certificate{ca, ca2}, []cert.Certificate{theirCert, theirCert2}, theirPrivKey, m{})
+
+	// Share our underlay information
+	myControl.InjectLightHouseAddr(theirVpnIpNet[0].Addr(), theirUdpAddr)
+	theirControl.InjectLightHouseAddr(myVpnIpNet[0].Addr(), myUdpAddr)
+
+	// Start the servers
+	myControl.Start()
+	theirControl.Start()
+
+	r := router.NewR(t, myControl, theirControl)
+	defer r.RenderFlow()
+
+	r.Log("Assert the tunnel between me and them works")
+	//assertTunnel(t, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), theirControl, myControl, r)
+	//r.Log("yay")
+	assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
+	r.Log("yay")
+	//todo ???
+	time.Sleep(1 * time.Second)
+	r.FlushAll()
+
+	waitStart := time.Now()
+	for {
+		assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
+		c := theirControl.GetHostInfoByVpnAddr(myVpnIpNet[0].Addr(), false)
+		c2 := myControl.GetHostInfoByVpnAddr(theirVpnIpNet[0].Addr(), false)
+		if c == nil || c2 == nil {
+			r.Log("nil")
+		} else {
+			version := c.Cert.Version()
+			theirVersion := c2.Cert.Version()
+			r.Logf("version %d,%d", version, theirVersion)
+			if version == theirVersion {
 				break
 			}
 		}
