@@ -461,6 +461,10 @@ func (cm *connectionManager) shouldSwapPrimary(current *HostInfo) bool {
 	}
 
 	crt := cm.intf.pki.getCertState().getCertificate(current.ConnectionState.myCert.Version())
+	if crt == nil {
+		//my cert was reloaded away. We should definitely swap from this tunnel
+		return true
+	}
 	// If this tunnel is using the latest certificate then we should swap it to primary for a bit and see if things
 	// settle down.
 	return bytes.Equal(current.ConnectionState.myCert.Signature(), crt.Signature())
@@ -551,7 +555,7 @@ func (cm *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 	cs := cm.intf.pki.getCertState()
 	curCrt := hostinfo.ConnectionState.myCert
 	myCrt := cs.getCertificate(curCrt.Version())
-	if curCrt.Version() >= cs.initiatingVersion && bytes.Equal(curCrt.Signature(), myCrt.Signature()) == true {
+	if myCrt != nil && curCrt.Version() >= cs.initiatingVersion && bytes.Equal(curCrt.Signature(), myCrt.Signature()) == true {
 		// The current tunnel is using the latest certificate and version, no need to rehandshake.
 		return
 	}
