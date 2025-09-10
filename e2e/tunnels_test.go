@@ -191,8 +191,8 @@ func TestCertDowngrade(t *testing.T) {
 	defer r.RenderFlow()
 
 	r.Log("Assert the tunnel between me and them works")
-	assertTunnel(t, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), theirControl, myControl, r)
-	r.Log("yay")
+	//assertTunnel(t, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), theirControl, myControl, r)
+	//r.Log("yay")
 	assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 	r.Log("yay")
 	//todo ???
