@@ -354,7 +354,6 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 
 		if mainHostInfo {
 			decision = tryRehandshake
-
 		} else {
 			if cm.shouldSwapPrimary(hostinfo) {
 				decision = swapPrimary
@@ -461,6 +460,10 @@ func (cm *connectionManager) shouldSwapPrimary(current *HostInfo) bool {
 	}
 
 	crt := cm.intf.pki.getCertState().getCertificate(current.ConnectionState.myCert.Version())
+	if crt == nil {
+		//my cert was reloaded away. We should definitely swap from this tunnel
+		return true
+	}
 	// If this tunnel is using the latest certificate then we should swap it to primary for a bit and see if things
 	// settle down.
 	return bytes.Equal(current.ConnectionState.myCert.Signature(), crt.Signature())
@@ -476,8 +479,8 @@ func (cm *connectionManager) swapPrimary(current, primary *HostInfo) {
 }
 
 // isInvalidCertificate will check if we should destroy a tunnel if pki.disconnect_invalid is true and
-// the certificate is no longer valid. Block listed certificates will skip the pki.disconnect_invalid
-// check and return true.
+// the certificate is no longer valid, or if we no longer have a certificate of the same version as the remote.
+// Blocklisted certificates will skip the pki.disconnect_invalid check and return true.
 func (cm *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostInfo) bool {
 	remoteCert := hostinfo.GetCert()
 	if remoteCert == nil {
@@ -488,18 +491,38 @@ func (cm *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostI
 	err := caPool.VerifyCachedCertificate(now, remoteCert)
 	if err == nil {
 		return false
-	}
-
-	if !cm.intf.disconnectInvalid.Load() && err != cert.ErrBlockListed {
+	} else if err == cert.ErrBlockListed { //avoiding errors.Is for speed
 		// Block listed certificates should always be disconnected
-		return false
+		hostinfo.logger(cm.l).WithError(err).
+			WithField("fingerprint", remoteCert.Fingerprint).
+			Info("Remote certificate is blocked, tearing down the tunnel")
+		return true
+	} else if cm.intf.disconnectInvalid.Load() {
+		hostinfo.logger(cm.l).WithError(err).
+			WithField("fingerprint", remoteCert.Fingerprint).
+			Info("Remote certificate is no longer valid, tearing down the tunnel")
+		return true
 	}
 
-	hostinfo.logger(cm.l).WithError(err).
-		WithField("fingerprint", remoteCert.Fingerprint).
-		Info("Remote certificate is no longer valid, tearing down the tunnel")
+	//check that we still have a cert version in common with this connection. If we do not, disconnect.
+	remoteVersion := remoteCert.Certificate.Version()
+	cs := cm.intf.pki.getCertState()
+	out := false
+	switch remoteVersion {
+	case cert.Version1:
+		out = cs.v1Cert == nil
+	case cert.Version2:
+		out = cs.v2Cert == nil
+	default:
+		out = true
+	}
 
-	return true
+	if out {
+		hostinfo.logger(cm.l).WithField("fingerprint", remoteCert.Fingerprint).
+			WithField("version", remoteVersion).
+			Info("We no longer have a certificate in common with remote, tearing down the tunnel")
+	}
+	return out
 }
 
 func (cm *connectionManager) sendPunch(hostinfo *HostInfo) {
@@ -530,8 +553,32 @@ func (cm *connectionManager) sendPunch(hostinfo *HostInfo) {
 func (cm *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 	cs := cm.intf.pki.getCertState()
 	curCrt := hostinfo.ConnectionState.myCert
-	myCrt := cs.getCertificate(curCrt.Version())
-	if curCrt.Version() >= cs.initiatingVersion && bytes.Equal(curCrt.Signature(), myCrt.Signature()) == true {
+	curCrtVersion := curCrt.Version()
+	myCrt := cs.getCertificate(curCrtVersion)
+	if myCrt == nil {
+		cm.l.WithField("vpnAddrs", hostinfo.vpnAddrs).
+			WithField("version", curCrtVersion).
+			WithField("reason", "local certificate removed").
+			Info("Re-handshaking with remote")
+		cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)
+		return
+	}
+	peerCrt := hostinfo.ConnectionState.peerCert
+	if peerCrt != nil && curCrtVersion < peerCrt.Certificate.Version() {
+		// if our certificate version is less than theirs, and we have a matching version available, rehandshake?
+		if cs.getCertificate(peerCrt.Certificate.Version()) != nil {
+			cm.l.WithField("vpnAddrs", hostinfo.vpnAddrs).
+				WithField("version", curCrtVersion).
+				WithField("peerVersion", peerCrt.Certificate.Version()).
+				WithField("reason", "local certificate version lower than peer, attempting to correct").
+				Info("Re-handshaking with remote")
+			cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], func(hh *HandshakeHostInfo) {
+				hh.initiatingVersionOverride = peerCrt.Certificate.Version()
+			})
+			return
+		}
+	}
+	if curCrtVersion >= cs.initiatingVersion && bytes.Equal(curCrt.Signature(), myCrt.Signature()) == true {
 		// The current tunnel is using the latest certificate and version, no need to rehandshake.
 		return
 	}

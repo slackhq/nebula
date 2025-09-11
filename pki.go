@@ -100,55 +100,62 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 		currentState := p.cs.Load()
 		if newState.v1Cert != nil {
 			if currentState.v1Cert == nil {
-				return util.NewContextualError("v1 certificate was added, restart required", nil, err)
-			}
+				//adding certs is fine, actually. Networks-in-common confirmed in newCertState().
+			} else {
+				// did IP in cert change? if so, don't set
+				if !slices.Equal(currentState.v1Cert.Networks(), newState.v1Cert.Networks()) {
+					return util.NewContextualError(
+						"Networks in new cert was different from old",
+						m{"new_networks": newState.v1Cert.Networks(), "old_networks": currentState.v1Cert.Networks()},
+						nil,
+					)
+				}
 
-			// did IP in cert change? if so, don't set
-			if !slices.Equal(currentState.v1Cert.Networks(), newState.v1Cert.Networks()) {
-				return util.NewContextualError(
-					"Networks in new cert was different from old",
-					m{"new_networks": newState.v1Cert.Networks(), "old_networks": currentState.v1Cert.Networks()},
-					nil,
-				)
+				if currentState.v1Cert.Curve() != newState.v1Cert.Curve() {
+					return util.NewContextualError(
+						"Curve in new cert was different from old",
+						m{"new_curve": newState.v1Cert.Curve(), "old_curve": currentState.v1Cert.Curve()},
+						nil,
+					)
+				}
 			}
-
-			if currentState.v1Cert.Curve() != newState.v1Cert.Curve() {
-				return util.NewContextualError(
-					"Curve in new cert was different from old",
-					m{"new_curve": newState.v1Cert.Curve(), "old_curve": currentState.v1Cert.Curve()},
-					nil,
-				)
-			}
-
-		} else if currentState.v1Cert != nil {
-			//TODO: CERT-V2 we should be able to tear this down
-			return util.NewContextualError("v1 certificate was removed, restart required", nil, err)
 		}
 
 		if newState.v2Cert != nil {
 			if currentState.v2Cert == nil {
-				return util.NewContextualError("v2 certificate was added, restart required", nil, err)
-			}
+				//adding certs is fine, actually
+			} else {
+				// did IP in cert change? if so, don't set
+				if !slices.Equal(currentState.v2Cert.Networks(), newState.v2Cert.Networks()) {
+					return util.NewContextualError(
+						"Networks in new cert was different from old",
+						m{"new_networks": newState.v2Cert.Networks(), "old_networks": currentState.v2Cert.Networks()},
+						nil,
+					)
+				}
 
-			// did IP in cert change? if so, don't set
-			if !slices.Equal(currentState.v2Cert.Networks(), newState.v2Cert.Networks()) {
-				return util.NewContextualError(
-					"Networks in new cert was different from old",
-					m{"new_networks": newState.v2Cert.Networks(), "old_networks": currentState.v2Cert.Networks()},
-					nil,
-				)
-			}
-
-			if currentState.v2Cert.Curve() != newState.v2Cert.Curve() {
-				return util.NewContextualError(
-					"Curve in new cert was different from old",
-					m{"new_curve": newState.v2Cert.Curve(), "old_curve": currentState.v2Cert.Curve()},
-					nil,
-				)
+				if currentState.v2Cert.Curve() != newState.v2Cert.Curve() {
+					return util.NewContextualError(
+						"Curve in new cert was different from old",
+						m{"new_curve": newState.v2Cert.Curve(), "old_curve": currentState.v2Cert.Curve()},
+						nil,
+					)
+				}
 			}
 
 		} else if currentState.v2Cert != nil {
-			return util.NewContextualError("v2 certificate was removed, restart required", nil, err)
+			//newState.v1Cert is non-nil bc empty certstates aren't permitted
+			if newState.v1Cert == nil {
+				return util.NewContextualError("v1 and v2 certs are nil, this should be impossible", nil, err)
+			}
+			//if we're going to v1-only, we need to make sure we didn't orphan any v2-cert vpnaddrs
+			if !slices.Equal(currentState.v2Cert.Networks(), newState.v1Cert.Networks()) {
+				return util.NewContextualError(
+					"Removing a V2 cert is not permitted unless it has identical networks to the new V1 cert",
+					m{"new_networks": newState.v1Cert.Networks(), "old_networks": currentState.v2Cert.Networks()},
+					nil,
+				)
+			}
 		}
 
 		// Cipher cant be hot swapped so just leave it at what it was before
