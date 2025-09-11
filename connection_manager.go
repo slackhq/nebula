@@ -567,11 +567,10 @@ func (cm *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 	if peerCrt != nil && curCrtVersion < peerCrt.Certificate.Version() {
 		// if our certificate version is less than theirs, and we have a matching version available, rehandshake?
 		if cs.getCertificate(peerCrt.Certificate.Version()) != nil {
-			//todo trigger rehandshake with specific cert?
 			cm.l.WithField("vpnAddrs", hostinfo.vpnAddrs).
 				WithField("version", curCrtVersion).
 				WithField("peerVersion", peerCrt.Certificate.Version()).
-				WithField("reason", "local certificate version mismatch with peer, correcting").
+				WithField("reason", "local certificate version lower than peer, attempting to correct").
 				Info("Re-handshaking with remote")
 			cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], func(hh *HandshakeHostInfo) {
 				hh.initiatingVersionOverride = peerCrt.Certificate.Version()
