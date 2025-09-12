@@ -71,7 +71,7 @@ func (p *PKI) getCertState() *CertState {
 }
 
 func (p *PKI) reload(c *config.C, initial bool) error {
-	err := p.reloadCerts(c, initial)
+	err := p.loadCerts(c, initial)
 	if err != nil {
 		if initial {
 			return err
@@ -90,77 +90,93 @@ func (p *PKI) reload(c *config.C, initial bool) error {
 	return nil
 }
 
-func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
+func checkCertReload(oldCert, newCert cert.Certificate) error {
+	//changing the IPs or curve of existing certs is forbidden
+	if !slices.Equal(oldCert.Networks(), newCert.Networks()) {
+		return util.NewContextualError("Networks in new cert was different from old", m{"new_networks": newCert.Networks(), "old_networks": oldCert.Networks()}, nil)
+	}
+
+	if oldCert.Curve() != newCert.Curve() {
+		return util.NewContextualError("Curve in new cert was different from old", m{"new_curve": newCert.Curve(), "old_curve": oldCert.Curve()}, nil)
+	}
+	return nil
+}
+
+func checkCertV1Reload(currentState *CertState, newState *CertState) error {
+	if newState.v1Cert == nil {
+		return nil //removing a V1 cert is always acceptable
+	}
+	if currentState.v1Cert == nil {
+		return nil //going from no-v1-cert to has-a-v1-cert is also always okay
+	}
+	return checkCertReload(currentState.v1Cert, newState.v1Cert)
+}
+
+func checkCertV2Reload(currentState *CertState, newState *CertState) error {
+	if currentState.v2Cert == nil {
+		return nil //adding a v2 cert is always okay, as long as it doesn't conflict with old-v1?
+	}
+
+	if newState.v2Cert == nil {
+		//removing a v2 cert. Make sure our networks are identical to V1, so we don't orphan vpnaddrs:
+		if !slices.Equal(currentState.v2Cert.Networks(), newState.v1Cert.Networks()) {
+			return util.NewContextualError(
+				"Removing a V2 cert is not permitted unless it has identical networks to the new V1 cert",
+				m{"new_networks": newState.v1Cert.Networks(), "old_networks": currentState.v2Cert.Networks()},
+				nil)
+		}
+		return nil
+	}
+
+	return checkCertReload(currentState.v2Cert, newState.v2Cert)
+}
+
+func (p *PKI) reloadCerts(newState *CertState) *util.ContextualError {
+	currentState := p.cs.Load()
+
+	// Cipher cant be hot swapped so just leave it at what it was before
+	newState.cipher = currentState.cipher
+	if newState.v1Cert == nil && newState.v2Cert == nil {
+		return util.NewContextualError("Impossible! v1Cert and v2Cert cannot both be nil", m{}, nil)
+	}
+
+	err := checkCertV1Reload(currentState, newState)
+	if err != nil {
+		return util.NewContextualError("Cert V1 reload check failed", m{}, err)
+	}
+	err = checkCertV2Reload(currentState, newState)
+	if err != nil {
+		return util.NewContextualError("Cert V2 reload check failed", m{}, err)
+	}
+
+	// cross check vpnaddrs on certstate objects too, to handle removing v1 and adding v2
+	if slices.Equal(newState.myVpnNetworks, currentState.myVpnNetworks) {
+		return util.NewContextualError("VPN address change not permitted",
+			m{"new_networks": newState.myVpnNetworks, "old_networks": currentState.myVpnNetworks}, nil)
+	}
+	if newState.GetDefaultCertificate().Curve() != currentState.GetDefaultCertificate().Curve() {
+		return util.NewContextualError(
+			"Curve in new cert was different differs across cert versions",
+			m{
+				"new_curve": newState.GetDefaultCertificate().Curve(),
+				"old_curve": currentState.GetDefaultCertificate().Curve(),
+			}, nil)
+	}
+
+	return nil
+}
+
+func (p *PKI) loadCerts(c *config.C, initial bool) *util.ContextualError {
 	newState, err := newCertStateFromConfig(c)
 	if err != nil {
 		return util.NewContextualError("Could not load client cert", nil, err)
 	}
 
 	if !initial {
-		currentState := p.cs.Load()
-		if newState.v1Cert != nil {
-			if currentState.v1Cert == nil {
-				//adding certs is fine, actually. Networks-in-common confirmed in newCertState().
-			} else {
-				// did IP in cert change? if so, don't set
-				if !slices.Equal(currentState.v1Cert.Networks(), newState.v1Cert.Networks()) {
-					return util.NewContextualError(
-						"Networks in new cert was different from old",
-						m{"new_networks": newState.v1Cert.Networks(), "old_networks": currentState.v1Cert.Networks()},
-						nil,
-					)
-				}
-
-				if currentState.v1Cert.Curve() != newState.v1Cert.Curve() {
-					return util.NewContextualError(
-						"Curve in new cert was different from old",
-						m{"new_curve": newState.v1Cert.Curve(), "old_curve": currentState.v1Cert.Curve()},
-						nil,
-					)
-				}
-			}
+		err := p.reloadCerts(newState)
+		if err != nil {
+			return err
 		}
-
-		if newState.v2Cert != nil {
-			if currentState.v2Cert == nil {
-				//adding certs is fine, actually
-			} else {
-				// did IP in cert change? if so, don't set
-				if !slices.Equal(currentState.v2Cert.Networks(), newState.v2Cert.Networks()) {
-					return util.NewContextualError(
-						"Networks in new cert was different from old",
-						m{"new_networks": newState.v2Cert.Networks(), "old_networks": currentState.v2Cert.Networks()},
-						nil,
-					)
-				}
-
-				if currentState.v2Cert.Curve() != newState.v2Cert.Curve() {
-					return util.NewContextualError(
-						"Curve in new cert was different from old",
-						m{"new_curve": newState.v2Cert.Curve(), "old_curve": currentState.v2Cert.Curve()},
-						nil,
-					)
-				}
-			}
-
-		} else if currentState.v2Cert != nil {
-			//newState.v1Cert is non-nil bc empty certstates aren't permitted
-			if newState.v1Cert == nil {
-				return util.NewContextualError("v1 and v2 certs are nil, this should be impossible", nil, err)
-			}
-			//if we're going to v1-only, we need to make sure we didn't orphan any v2-cert vpnaddrs
-			if !slices.Equal(currentState.v2Cert.Networks(), newState.v1Cert.Networks()) {
-				return util.NewContextualError(
-					"Removing a V2 cert is not permitted unless it has identical networks to the new V1 cert",
-					m{"new_networks": newState.v1Cert.Networks(), "old_networks": currentState.v2Cert.Networks()},
-					nil,
-				)
-			}
-		}
-
-		// Cipher cant be hot swapped so just leave it at what it was before
-		newState.cipher = currentState.cipher
-
 	} else {
 		newState.cipher = c.GetString("cipher", "aes")
 		//TODO: this sucks and we should make it not a global
