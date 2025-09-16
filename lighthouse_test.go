@@ -31,8 +31,8 @@ func TestOldIPv4Only(t *testing.T) {
 func Test_lhStaticMapping(t *testing.T) {
 	l := test.NewLogger()
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/16")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
@@ -56,8 +56,8 @@ func Test_lhStaticMapping(t *testing.T) {
 func TestReloadLighthouseInterval(t *testing.T) {
 	l := test.NewLogger()
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/16")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
@@ -91,8 +91,8 @@ func TestReloadLighthouseInterval(t *testing.T) {
 func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	l := test.NewLogger()
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/0")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
@@ -196,8 +196,8 @@ func TestLighthouse_Memory(t *testing.T) {
 	c.Settings["listen"] = map[string]any{"port": 4242}
 
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/24")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
@@ -281,8 +281,8 @@ func TestLighthouse_reload(t *testing.T) {
 	c.Settings["listen"] = map[string]any{"port": 4242}
 
 	myVpnNet := netip.MustParsePrefix("10.128.0.1/24")
-	nt := new(bart.Table[struct{}])
-	nt.Insert(myVpnNet, struct{}{})
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
 	cs := &CertState{
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
@@ -417,7 +417,7 @@ func (tw *testEncWriter) GetHostInfo(vpnIp netip.Addr) *HostInfo {
 }
 
 func (tw *testEncWriter) GetCertState() *CertState {
-	return &CertState{defaultVersion: tw.protocolVersion}
+	return &CertState{initiatingVersion: tw.protocolVersion}
 }
 
 // assertIp4InArray asserts every address in want is at the same position in have and that the lengths match
@@ -492,4 +492,124 @@ func Test_findNetworkUnion(t *testing.T) {
 	assert.False(t, ok)
 	out, ok = findNetworkUnion([]netip.Prefix{fc00}, []netip.Addr{a1, afe81})
 	assert.False(t, ok)
+}
+
+func TestLighthouse_Dont_Delete_Static_Hosts(t *testing.T) {
+	l := test.NewLogger()
+
+	myUdpAddr2 := netip.MustParseAddrPort("1.2.3.4:4242")
+
+	testSameHostNotStatic := netip.MustParseAddr("10.128.0.41")
+	testStaticHost := netip.MustParseAddr("10.128.0.42")
+	//myVpnIp := netip.MustParseAddr("10.128.0.2")
+
+	c := config.NewC(l)
+	lh1 := "10.128.0.2"
+	c.Settings["lighthouse"] = map[string]any{
+		"hosts":    []any{lh1},
+		"interval": "1s",
+	}
+
+	c.Settings["listen"] = map[string]any{"port": 4242}
+	c.Settings["static_host_map"] = map[string]any{
+		lh1:           []any{"1.1.1.1:4242"},
+		"10.128.0.42": []any{"1.2.3.4:4242"},
+	}
+
+	myVpnNet := netip.MustParsePrefix("10.128.0.1/24")
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
+	cs := &CertState{
+		myVpnNetworks:      []netip.Prefix{myVpnNet},
+		myVpnNetworksTable: nt,
+	}
+	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	require.NoError(t, err)
+	lh.ifce = &mockEncWriter{}
+
+	//test that we actually have the static entry:
+	out := lh.Query(testStaticHost)
+	assert.NotNil(t, out)
+	assert.Equal(t, out.vpnAddrs[0], testStaticHost)
+	out.Rebuild([]netip.Prefix{}) //why tho
+	assert.Equal(t, out.addrs[0], myUdpAddr2)
+
+	//bolt on a lower numbered primary IP
+	am := lh.unlockedGetRemoteList([]netip.Addr{testStaticHost})
+	am.vpnAddrs = []netip.Addr{testSameHostNotStatic, testStaticHost}
+	lh.addrMap[testSameHostNotStatic] = am
+	out.Rebuild([]netip.Prefix{}) //???
+
+	//test that we actually have the static entry:
+	out = lh.Query(testStaticHost)
+	assert.NotNil(t, out)
+	assert.Equal(t, out.vpnAddrs[0], testSameHostNotStatic)
+	assert.Equal(t, out.vpnAddrs[1], testStaticHost)
+	assert.Equal(t, out.addrs[0], myUdpAddr2)
+
+	//test that we actually have the static entry for BOTH:
+	out2 := lh.Query(testSameHostNotStatic)
+	assert.Same(t, out2, out)
+
+	//now do the delete
+	lh.DeleteVpnAddrs([]netip.Addr{testSameHostNotStatic, testStaticHost})
+	//verify
+	out = lh.Query(testSameHostNotStatic)
+	assert.NotNil(t, out)
+	if out == nil {
+		t.Fatal("expected non-nil query for the static host")
+	}
+	assert.Equal(t, out.vpnAddrs[0], testSameHostNotStatic)
+	assert.Equal(t, out.vpnAddrs[1], testStaticHost)
+	assert.Equal(t, out.addrs[0], myUdpAddr2)
+}
+
+func TestLighthouse_DeletesWork(t *testing.T) {
+	l := test.NewLogger()
+
+	myUdpAddr2 := netip.MustParseAddrPort("1.2.3.4:4242")
+	testHost := netip.MustParseAddr("10.128.0.42")
+
+	c := config.NewC(l)
+	lh1 := "10.128.0.2"
+	c.Settings["lighthouse"] = map[string]any{
+		"hosts":    []any{lh1},
+		"interval": "1s",
+	}
+
+	c.Settings["listen"] = map[string]any{"port": 4242}
+	c.Settings["static_host_map"] = map[string]any{
+		lh1: []any{"1.1.1.1:4242"},
+	}
+
+	myVpnNet := netip.MustParsePrefix("10.128.0.1/24")
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
+	cs := &CertState{
+		myVpnNetworks:      []netip.Prefix{myVpnNet},
+		myVpnNetworksTable: nt,
+	}
+	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	require.NoError(t, err)
+	lh.ifce = &mockEncWriter{}
+
+	//insert the host
+	am := lh.unlockedGetRemoteList([]netip.Addr{testHost})
+	am.vpnAddrs = []netip.Addr{testHost}
+	am.addrs = []netip.AddrPort{myUdpAddr2}
+	lh.addrMap[testHost] = am
+	am.Rebuild([]netip.Prefix{}) //???
+
+	//test that we actually have the entry:
+	out := lh.Query(testHost)
+	assert.NotNil(t, out)
+	assert.Equal(t, out.vpnAddrs[0], testHost)
+	out.Rebuild([]netip.Prefix{}) //why tho
+	assert.Equal(t, out.addrs[0], myUdpAddr2)
+
+	//now do the delete
+	lh.DeleteVpnAddrs([]netip.Addr{testHost})
+	//verify
+	out = lh.Query(testHost)
+	assert.Nil(t, out)
 }

@@ -33,16 +33,16 @@ type CertState struct {
 	v2Cert           cert.Certificate
 	v2HandshakeBytes []byte
 
-	defaultVersion cert.Version
-	privateKey     []byte
-	pkcs11Backed   bool
-	cipher         string
+	initiatingVersion cert.Version
+	privateKey        []byte
+	pkcs11Backed      bool
+	cipher            string
 
 	myVpnNetworks            []netip.Prefix
-	myVpnNetworksTable       *bart.Table[struct{}]
+	myVpnNetworksTable       *bart.Lite
 	myVpnAddrs               []netip.Addr
-	myVpnAddrsTable          *bart.Table[struct{}]
-	myVpnBroadcastAddrsTable *bart.Table[struct{}]
+	myVpnAddrsTable          *bart.Lite
+	myVpnBroadcastAddrsTable *bart.Lite
 }
 
 func NewPKIFromConfig(l *logrus.Logger, c *config.C) (*PKI, error) {
@@ -173,7 +173,6 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 
 	p.cs.Store(newState)
 
-	//TODO: CERT-V2 newState needs a stringer that does json
 	if initial {
 		p.l.WithField("cert", newState).Debug("Client nebula certificate(s)")
 	} else {
@@ -194,7 +193,7 @@ func (p *PKI) reloadCAPool(c *config.C) *util.ContextualError {
 }
 
 func (cs *CertState) GetDefaultCertificate() cert.Certificate {
-	c := cs.getCertificate(cs.defaultVersion)
+	c := cs.getCertificate(cs.initiatingVersion)
 	if c == nil {
 		panic("No default certificate found")
 	}
@@ -317,37 +316,37 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 		return nil, errors.New("no certificates found in pki.cert")
 	}
 
-	useDefaultVersion := uint32(1)
+	useInitiatingVersion := uint32(1)
 	if v1 == nil {
 		// The only condition that requires v2 as the default is if only a v2 certificate is present
 		// We do this to avoid having to configure it specifically in the config file
-		useDefaultVersion = 2
+		useInitiatingVersion = 2
 	}
 
-	rawDefaultVersion := c.GetUint32("pki.default_version", useDefaultVersion)
-	var defaultVersion cert.Version
-	switch rawDefaultVersion {
+	rawInitiatingVersion := c.GetUint32("pki.initiating_version", useInitiatingVersion)
+	var initiatingVersion cert.Version
+	switch rawInitiatingVersion {
 	case 1:
 		if v1 == nil {
-			return nil, fmt.Errorf("can not use pki.default_version 1 without a v1 certificate in pki.cert")
+			return nil, fmt.Errorf("can not use pki.initiating_version 1 without a v1 certificate in pki.cert")
 		}
-		defaultVersion = cert.Version1
+		initiatingVersion = cert.Version1
 	case 2:
-		defaultVersion = cert.Version2
+		initiatingVersion = cert.Version2
 	default:
-		return nil, fmt.Errorf("unknown pki.default_version: %v", rawDefaultVersion)
+		return nil, fmt.Errorf("unknown pki.initiating_version: %v", rawInitiatingVersion)
 	}
 
-	return newCertState(defaultVersion, v1, v2, isPkcs11, curve, rawKey)
+	return newCertState(initiatingVersion, v1, v2, isPkcs11, curve, rawKey)
 }
 
 func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, privateKeyCurve cert.Curve, privateKey []byte) (*CertState, error) {
 	cs := CertState{
 		privateKey:               privateKey,
 		pkcs11Backed:             pkcs11backed,
-		myVpnNetworksTable:       new(bart.Table[struct{}]),
-		myVpnAddrsTable:          new(bart.Table[struct{}]),
-		myVpnBroadcastAddrsTable: new(bart.Table[struct{}]),
+		myVpnNetworksTable:       new(bart.Lite),
+		myVpnAddrsTable:          new(bart.Lite),
+		myVpnBroadcastAddrsTable: new(bart.Lite),
 	}
 
 	if v1 != nil && v2 != nil {
@@ -359,9 +358,11 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 			return nil, util.NewContextualError("v1 and v2 curve are not the same, ignoring", nil, nil)
 		}
 
-		//TODO: CERT-V2 make sure v2 has v1s address
+		if v1.Networks()[0] != v2.Networks()[0] {
+			return nil, util.NewContextualError("v1 and v2 networks are not the same", nil, nil)
+		}
 
-		cs.defaultVersion = dv
+		cs.initiatingVersion = dv
 	}
 
 	if v1 != nil {
@@ -380,8 +381,8 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 		cs.v1Cert = v1
 		cs.v1HandshakeBytes = v1hs
 
-		if cs.defaultVersion == 0 {
-			cs.defaultVersion = cert.Version1
+		if cs.initiatingVersion == 0 {
+			cs.initiatingVersion = cert.Version1
 		}
 	}
 
@@ -401,8 +402,8 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 		cs.v2Cert = v2
 		cs.v2HandshakeBytes = v2hs
 
-		if cs.defaultVersion == 0 {
-			cs.defaultVersion = cert.Version2
+		if cs.initiatingVersion == 0 {
+			cs.initiatingVersion = cert.Version2
 		}
 	}
 
@@ -415,16 +416,16 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 
 	for _, network := range crt.Networks() {
 		cs.myVpnNetworks = append(cs.myVpnNetworks, network)
-		cs.myVpnNetworksTable.Insert(network, struct{}{})
+		cs.myVpnNetworksTable.Insert(network)
 
 		cs.myVpnAddrs = append(cs.myVpnAddrs, network.Addr())
-		cs.myVpnAddrsTable.Insert(netip.PrefixFrom(network.Addr(), network.Addr().BitLen()), struct{}{})
+		cs.myVpnAddrsTable.Insert(netip.PrefixFrom(network.Addr(), network.Addr().BitLen()))
 
 		if network.Addr().Is4() {
 			addr := network.Masked().Addr().As4()
 			mask := net.CIDRMask(network.Bits(), network.Addr().BitLen())
 			binary.BigEndian.PutUint32(addr[:], binary.BigEndian.Uint32(addr[:])|^binary.BigEndian.Uint32(mask))
-			cs.myVpnBroadcastAddrsTable.Insert(netip.PrefixFrom(netip.AddrFrom4(addr), network.Addr().BitLen()), struct{}{})
+			cs.myVpnBroadcastAddrsTable.Insert(netip.PrefixFrom(netip.AddrFrom4(addr), network.Addr().BitLen()))
 		}
 	}
 

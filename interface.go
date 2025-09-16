@@ -24,23 +24,23 @@ import (
 const mtu = 9001
 
 type InterfaceConfig struct {
-	HostMap                 *HostMap
-	Outside                 udp.Conn
-	Inside                  overlay.Device
-	pki                     *PKI
-	Firewall                *Firewall
-	ServeDns                bool
-	HandshakeManager        *HandshakeManager
-	lightHouse              *LightHouse
-	checkInterval           time.Duration
-	pendingDeletionInterval time.Duration
-	DropLocalBroadcast      bool
-	DropMulticast           bool
-	routines                int
-	MessageMetrics          *MessageMetrics
-	version                 string
-	relayManager            *relayManager
-	punchy                  *Punchy
+	HostMap            *HostMap
+	Outside            udp.Conn
+	Inside             overlay.Device
+	pki                *PKI
+	Cipher             string
+	Firewall           *Firewall
+	ServeDns           bool
+	HandshakeManager   *HandshakeManager
+	lightHouse         *LightHouse
+	connectionManager  *connectionManager
+	DropLocalBroadcast bool
+	DropMulticast      bool
+	routines           int
+	MessageMetrics     *MessageMetrics
+	version            string
+	relayManager       *relayManager
+	punchy             *Punchy
 
 	tryPromoteEvery uint32
 	reQueryEvery    uint32
@@ -61,11 +61,11 @@ type Interface struct {
 	serveDns              bool
 	createTime            time.Time
 	lightHouse            *LightHouse
-	myBroadcastAddrsTable *bart.Table[struct{}]
-	myVpnAddrs            []netip.Addr          // A list of addresses assigned to us via our certificate
-	myVpnAddrsTable       *bart.Table[struct{}] // A table of addresses assigned to us via our certificate
-	myVpnNetworks         []netip.Prefix        // A list of networks assigned to us via our certificate
-	myVpnNetworksTable    *bart.Table[struct{}] // A table of networks assigned to us via our certificate
+	myBroadcastAddrsTable *bart.Lite
+	myVpnAddrs            []netip.Addr // A list of addresses assigned to us via our certificate
+	myVpnAddrsTable       *bart.Lite
+	myVpnNetworks         []netip.Prefix // A list of networks assigned to us via our certificate
+	myVpnNetworksTable    *bart.Lite
 	dropLocalBroadcast    bool
 	dropMulticast         bool
 	routines              int
@@ -157,6 +157,9 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	if c.Firewall == nil {
 		return nil, errors.New("no firewall rules")
 	}
+	if c.connectionManager == nil {
+		return nil, errors.New("no connection manager")
+	}
 
 	cs := c.pki.getCertState()
 	ifce := &Interface{
@@ -181,7 +184,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		myVpnAddrsTable:       cs.myVpnAddrsTable,
 		myBroadcastAddrsTable: cs.myVpnBroadcastAddrsTable,
 		relayManager:          c.relayManager,
-
+		connectionManager:     c.connectionManager,
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
@@ -198,7 +201,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	ifce.reQueryEvery.Store(c.reQueryEvery)
 	ifce.reQueryWait.Store(int64(c.reQueryWait))
 
-	ifce.connectionManager = newConnectionManager(ctx, c.l, ifce, c.checkInterval, c.pendingDeletionInterval, c.punchy)
+	ifce.connectionManager.intf = ifce
 
 	return ifce, nil
 }
@@ -410,7 +413,7 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 	udpStats := udp.NewUDPStatsEmitter(f.writers)
 
 	certExpirationGauge := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil)
-	certDefaultVersion := metrics.GetOrRegisterGauge("certificate.default_version", nil)
+	certInitiatingVersion := metrics.GetOrRegisterGauge("certificate.initiating_version", nil)
 	certMaxVersion := metrics.GetOrRegisterGauge("certificate.max_version", nil)
 
 	for {
@@ -425,7 +428,7 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 			certState := f.pki.getCertState()
 			defaultCrt := certState.GetDefaultCertificate()
 			certExpirationGauge.Update(int64(defaultCrt.NotAfter().Sub(time.Now()) / time.Second))
-			certDefaultVersion.Update(int64(defaultCrt.Version()))
+			certInitiatingVersion.Update(int64(defaultCrt.Version()))
 
 			// Report the max certificate version we are capable of using
 			if certState.v2Cert != nil {

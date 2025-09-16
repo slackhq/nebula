@@ -4,7 +4,7 @@ It lets you seamlessly connect computers anywhere in the world. Nebula is portab
 It can be used to connect a small number of computers, but is also able to connect tens of thousands of computers.
 
 Nebula incorporates a number of existing concepts like encryption, security groups, certificates,
-and tunneling, and each of those individual pieces existed before Nebula in various forms.
+and tunneling.
 What makes Nebula different to existing offerings is that it brings all of these ideas together,
 resulting in a sum that is greater than its individual parts.
 
@@ -12,7 +12,7 @@ Further documentation can be found [here](https://nebula.defined.net/docs/).
 
 You can read more about Nebula [here](https://medium.com/p/884110a5579).
 
-You can also join the NebulaOSS Slack group [here](https://join.slack.com/t/nebulaoss/shared_invite/zt-2xqe6e7vn-k_KGi8s13nsr7cvHVvHvuQ).
+You can also join the NebulaOSS Slack group [here](https://join.slack.com/t/nebulaoss/shared_invite/zt-39pk4xopc-CUKlGcb5Z39dQ0cK1v7ehA).
 
 ## Supported Platforms
 
@@ -28,33 +28,33 @@ Check the [releases](https://github.com/slackhq/nebula/releases/latest) page for
 #### Distribution Packages
 
 - [Arch Linux](https://archlinux.org/packages/extra/x86_64/nebula/)
-    ```
-    $ sudo pacman -S nebula
+    ```sh
+    sudo pacman -S nebula
     ```
 
 - [Fedora Linux](https://src.fedoraproject.org/rpms/nebula)
-    ```
-    $ sudo dnf install nebula
+    ```sh
+    sudo dnf install nebula
     ```
 
 - [Debian Linux](https://packages.debian.org/source/stable/nebula)
-    ```
-    $ sudo apt install nebula
+    ```sh
+    sudo apt install nebula
     ```
 
 - [Alpine Linux](https://pkgs.alpinelinux.org/packages?name=nebula)
-    ```
-    $ sudo apk add nebula
+    ```sh
+    sudo apk add nebula
     ```
 
 - [macOS Homebrew](https://github.com/Homebrew/homebrew-core/blob/HEAD/Formula/n/nebula.rb)
-    ```
-    $ brew install nebula
+    ```sh
+    brew install nebula
     ```
 
 - [Docker](https://hub.docker.com/r/nebulaoss/nebula)
-    ```
-    $ docker pull nebulaoss/nebula
+    ```sh
+    docker pull nebulaoss/nebula
     ```
 
 #### Mobile
@@ -64,10 +64,10 @@ Check the [releases](https://github.com/slackhq/nebula/releases/latest) page for
 
 ## Technical Overview
 
-Nebula is a mutually authenticated peer-to-peer software defined network based on the [Noise Protocol Framework](https://noiseprotocol.org/).
+Nebula is a mutually authenticated peer-to-peer software-defined network based on the [Noise Protocol Framework](https://noiseprotocol.org/).
 Nebula uses certificates to assert a node's IP address, name, and membership within user-defined groups.
 Nebula's user-defined groups allow for provider agnostic traffic filtering between nodes.
-Discovery nodes allow individual peers to find each other and optionally use UDP hole punching to establish connections from behind most firewalls or NATs.
+Discovery nodes (aka lighthouses) allow individual peers to find each other and optionally use UDP hole punching to establish connections from behind most firewalls or NATs.
 Users can move data between nodes in any number of cloud service providers, datacenters, and endpoints, without needing to maintain a particular addressing scheme.
 
 Nebula uses Elliptic-curve Diffie-Hellman (`ECDH`) key exchange and `AES-256-GCM` in its default configuration.
@@ -82,28 +82,34 @@ To set up a Nebula network, you'll need:
 
 #### 2. (Optional, but you really should..) At least one discovery node with a routable IP address, which we call a lighthouse.
 
-Nebula lighthouses allow nodes to find each other, anywhere in the world. A lighthouse is the only node in a Nebula network whose IP should not change. Running a lighthouse requires very few compute resources, and you can easily use the least expensive option from a cloud hosting provider. If you're not sure which provider to use, a number of us have used $5/mo [DigitalOcean](https://digitalocean.com) droplets as lighthouses.
+Nebula lighthouses allow nodes to find each other, anywhere in the world. A lighthouse is the only node in a Nebula network whose IP should not change. Running a lighthouse requires very few compute resources, and you can easily use the least expensive option from a cloud hosting provider. If you're not sure which provider to use, a number of us have used $6/mo [DigitalOcean](https://digitalocean.com) droplets as lighthouses.
 
-  Once you have launched an instance, ensure that Nebula udp traffic (default port udp/4242) can reach it over the internet.
-
+Once you have launched an instance, ensure that Nebula udp traffic (default port udp/4242) can reach it over the internet.
 
 #### 3. A Nebula certificate authority, which will be the root of trust for a particular Nebula network.
 
-  ```
-  ./nebula-cert ca -name "Myorganization, Inc"
-  ```
-  This will create files named `ca.key` and `ca.cert` in the current directory. The `ca.key` file is the most sensitive file you'll create, because it is the key used to sign the certificates for individual nebula nodes/hosts. Please store this file somewhere safe, preferably with strong encryption.
+```sh
+./nebula-cert ca -name "Myorganization, Inc"
+```
+
+This will create files named `ca.key` and `ca.cert` in the current directory. The `ca.key` file is the most sensitive file you'll create, because it is the key used to sign the certificates for individual nebula nodes/hosts. Please store this file somewhere safe, preferably with strong encryption.
+
+**Be aware!** By default, certificate authorities have a 1-year lifetime before expiration. See [this guide](https://nebula.defined.net/docs/guides/rotating-certificate-authority/) for details on rotating a CA.
 
 #### 4. Nebula host keys and certificates generated from that certificate authority
+
 This assumes you have four nodes, named lighthouse1, laptop, server1, host3. You can name the nodes any way you'd like, including FQDN. You'll also need to choose IP addresses and the associated subnet. In this example, we are creating a nebula network that will use 192.168.100.x/24 as its network range. This example also demonstrates nebula groups, which can later be used to define traffic rules in a nebula network.
-```
+```sh
 ./nebula-cert sign -name "lighthouse1" -ip "192.168.100.1/24"
 ./nebula-cert sign -name "laptop" -ip "192.168.100.2/24" -groups "laptop,home,ssh"
 ./nebula-cert sign -name "server1" -ip "192.168.100.9/24" -groups "servers"
 ./nebula-cert sign -name "host3" -ip "192.168.100.10/24"
 ```
 
+By default, host certificates will expire 1 second before the CA expires. Use the `-duration` flag to specify a shorter lifetime.
+
 #### 5. Configuration files for each host
+
 Download a copy of the nebula [example configuration](https://github.com/slackhq/nebula/blob/master/examples/config.yml).
 
 * On the lighthouse node, you'll need to ensure `am_lighthouse: true` is set.
@@ -118,9 +124,12 @@ For each host, copy the nebula binary to the host, along with `config.yml` from 
 **DO NOT COPY `ca.key` TO INDIVIDUAL NODES.**
 
 #### 7. Run nebula on each host
-```
+
+```sh
 ./nebula -config /path/to/config.yml
 ```
+
+For more detailed instructions, [find the full documentation here](https://nebula.defined.net/docs/).
 
 ## Building Nebula from source
 
@@ -140,14 +149,14 @@ The default curve used for cryptographic handshakes and signatures is Curve25519
 
 In addition, Nebula can be built using the [BoringCrypto GOEXPERIMENT](https://github.com/golang/go/blob/go1.20/src/crypto/internal/boring/README.md) by running either of the following make targets:
 
-    make bin-boringcrypto
-    make release-boringcrypto
+```sh
+make bin-boringcrypto
+make release-boringcrypto
+```
 
 This is not the recommended default deployment, but may be useful based on your compliance requirements.
 
 ## Credits
 
 Nebula was created at Slack Technologies, Inc by Nate Brown and Ryan Huber, with contributions from Oliver Fross, Alan Lam, Wade Simmons, and Lining Wang.
-
-
 

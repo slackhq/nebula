@@ -34,10 +34,11 @@ type tun struct {
 	deviceIndex int
 	ioctlFd     uintptr
 
-	Routes          atomic.Pointer[[]Route]
-	routeTree       atomic.Pointer[bart.Table[routing.Gateways]]
-	routeChan       chan struct{}
-	useSystemRoutes bool
+	Routes                    atomic.Pointer[[]Route]
+	routeTree                 atomic.Pointer[bart.Table[routing.Gateways]]
+	routeChan                 chan struct{}
+	useSystemRoutes           bool
+	useSystemRoutesBufferSize int
 
 	l *logrus.Logger
 }
@@ -124,12 +125,13 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 
 func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []netip.Prefix) (*tun, error) {
 	t := &tun{
-		ReadWriteCloser: file,
-		fd:              int(file.Fd()),
-		vpnNetworks:     vpnNetworks,
-		TXQueueLen:      c.GetInt("tun.tx_queue", 500),
-		useSystemRoutes: c.GetBool("tun.use_system_route_table", false),
-		l:               l,
+		ReadWriteCloser:           file,
+		fd:                        int(file.Fd()),
+		vpnNetworks:               vpnNetworks,
+		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
+		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
+		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
+		l:                         l,
 	}
 
 	err := t.reload(c, true)
@@ -291,7 +293,6 @@ func (t *tun) addIPs(link netlink.Link) error {
 
 	//add all new addresses
 	for i := range newAddrs {
-		//TODO: CERT-V2 do we want to stack errors and try as many ops as possible?
 		//AddrReplace still adds new IPs, but if their properties change it will change them as well
 		if err := netlink.AddrReplace(link, newAddrs[i]); err != nil {
 			return err
@@ -357,6 +358,11 @@ func (t *tun) Activate() error {
 	if err = ioctl(t.ioctlFd, unix.SIOCSIFTXQLEN, uintptr(unsafe.Pointer(&ifrq))); err != nil {
 		// If we can't set the queue length nebula will still work but it may lead to packet loss
 		t.l.WithError(err).Error("Failed to set tun tx queue length")
+	}
+
+	const modeNone = 1
+	if err = netlink.LinkSetIP6AddrGenMode(link, modeNone); err != nil {
+		t.l.WithError(err).Warn("Failed to disable link local address generation")
 	}
 
 	if err = t.addIPs(link); err != nil {
@@ -531,7 +537,13 @@ func (t *tun) watchRoutes() {
 	rch := make(chan netlink.RouteUpdate)
 	doneChan := make(chan struct{})
 
-	if err := netlink.RouteSubscribe(rch, doneChan); err != nil {
+	netlinkOptions := netlink.RouteSubscribeOptions{
+		ReceiveBufferSize:      t.useSystemRoutesBufferSize,
+		ReceiveBufferForceSize: t.useSystemRoutesBufferSize != 0,
+		ErrorCallback:          func(e error) { t.l.WithError(e).Errorf("netlink error") },
+	}
+
+	if err := netlink.RouteSubscribeWithOptions(rch, doneChan, netlinkOptions); err != nil {
 		t.l.WithError(err).Errorf("failed to subscribe to system route changes")
 		return
 	}
@@ -541,8 +553,14 @@ func (t *tun) watchRoutes() {
 	go func() {
 		for {
 			select {
-			case r := <-rch:
-				t.updateRoutes(r)
+			case r, ok := <-rch:
+				if ok {
+					t.updateRoutes(r)
+				} else {
+					// may be should do something here as
+					// netlink stops sending updates
+					return
+				}
 			case <-doneChan:
 				// netlink.RouteSubscriber will close the rch for us
 				return
@@ -621,6 +639,11 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 	if len(gateways) == 0 {
 		// No gateways relevant to our network, no routing changes required.
 		t.l.WithField("route", r).Debug("Ignoring route update, no gateways")
+		return
+	}
+
+	if r.Dst == nil {
+		t.l.WithField("route", r).Debug("Ignoring route update, no destination address")
 		return
 	}
 

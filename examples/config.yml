@@ -13,11 +13,11 @@ pki:
   # disconnect_invalid is a toggle to force a client to be disconnected if the certificate is expired or invalid.
   #disconnect_invalid: true
 
-  # default_version controls which certificate version is used in handshakes.
+  # initiating_version controls which certificate version is used when initiating handshakes.
   # This setting only applies if both a v1 and a v2 certificate are configured, in which case it will default to `1`.
   # Once all hosts in the mesh are configured with both a v1 and v2 certificate then this should be changed to `2`.
   # After all hosts in the mesh are using a v2 certificate then v1 certificates are no longer needed.
-  # default_version: 1
+  # initiating_version: 1
 
 # The static host map defines a set of hosts with fixed IP addresses on the internet (or any network).
 # A host can have multiple fixed IP addresses defined here, and nebula will try each when establishing a tunnel.
@@ -275,6 +275,10 @@ tun:
   # On linux only, set to true to manage unsafe routes directly on the system route table with gateway routes instead of
   # in nebula configuration files. Default false, not reloadable.
   #use_system_route_table: false
+  # Buffer size for reading routes updates. 0 means default system buffer size. (/proc/sys/net/core/rmem_default).
+  # If using massive routes updates, for example BGP, you may need to increase this value to avoid packet loss.
+  # SO_RCVBUFFORCE is used to avoid having to raise the system wide max
+  #use_system_route_table_buffer_size: 0
 
 # Configure logging level
 logging:
@@ -334,6 +338,18 @@ logging:
   # after receiving the response for lighthouse queries
   #trigger_buffer: 64
 
+# Tunnel manager settings
+#tunnels:
+  # drop_inactive controls whether inactive tunnels are maintained or dropped after the inactive_timeout period has
+  # elapsed.
+  # In general, it is a good idea to enable this setting. It will be enabled by default in a future release.
+  # This setting is reloadable
+  #drop_inactive: false
+
+  # inactivity_timeout controls how long a tunnel MUST NOT see any inbound or outbound traffic before being considered
+  # inactive and eligible to be dropped.
+  # This setting is reloadable
+  #inactivity_timeout: 10m
 
 # Nebula security group configuration
 firewall:
