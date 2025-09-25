@@ -54,6 +54,21 @@ func UnmarshalCertificateFromPEM(b []byte) (Certificate, []byte, error) {
 
 }
 
+func marshalCertPublicKeyToPEM(c Certificate) []byte {
+	switch c.Curve() {
+	case Curve_CURVE25519:
+		if c.IsCA() {
+			return pem.EncodeToMemory(&pem.Block{Type: Ed25519PublicKeyBanner, Bytes: c.PublicKey()})
+		} else {
+			return pem.EncodeToMemory(&pem.Block{Type: X25519PublicKeyBanner, Bytes: c.PublicKey()})
+		}
+	case Curve_P256:
+		return MarshalPublicKeyToPEM(Curve_P256, c.PublicKey())
+	default:
+		return nil
+	}
+}
+
 func MarshalPublicKeyToPEM(curve Curve, b []byte) []byte {
 	switch curve {
 	case Curve_CURVE25519:
