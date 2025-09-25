@@ -349,12 +349,17 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 	rawInitiatingVersion := c.GetUint32("pki.initiating_version", useInitiatingVersion)
 	var initiatingVersion cert.Version
 	switch rawInitiatingVersion {
+	case 0:
+		//TODO
 	case 1:
 		if v1 == nil {
 			return nil, fmt.Errorf("can not use pki.initiating_version 1 without a v1 certificate in pki.cert")
 		}
 		initiatingVersion = cert.Version1
 	case 2:
+		if v2 == nil {
+			return nil, fmt.Errorf("can not use pki.initiating_version 2 without a v2 certificate in pki.cert")
+		}
 		initiatingVersion = cert.Version2
 	default:
 		return nil, fmt.Errorf("unknown pki.initiating_version: %v", rawInitiatingVersion)
