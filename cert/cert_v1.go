@@ -83,6 +83,10 @@ func (c *certificateV1) PublicKey() []byte {
 	return c.details.publicKey
 }
 
+func (c *certificateV1) PublicKeyPem() []byte {
+	return marshalCertPublicKeyToPEM(c)
+}
+
 func (c *certificateV1) Signature() []byte {
 	return c.signature
 }

@@ -20,6 +20,9 @@ const (
 	P256PublicKeyBanner                = "NEBULA P256 PUBLIC KEY"
 	EncryptedECDSAP256PrivateKeyBanner = "NEBULA ECDSA P256 ENCRYPTED PRIVATE KEY"
 	ECDSAP256PrivateKeyBanner          = "NEBULA ECDSA P256 PRIVATE KEY"
+
+	// Deprecated: oldP256PublicKeyBanner is in use some places still
+	oldP256PublicKeyBanner = "NEBULA ECDSA P256 PUBLIC KEY"
 )
 
 // UnmarshalCertificateFromPEM will try to unmarshal the first pem block in a byte array, returning any non consumed
@@ -51,6 +54,21 @@ func UnmarshalCertificateFromPEM(b []byte) (Certificate, []byte, error) {
 
 }
 
+func marshalCertPublicKeyToPEM(c Certificate) []byte {
+	switch c.Curve() {
+	case Curve_CURVE25519:
+		if c.IsCA() {
+			return pem.EncodeToMemory(&pem.Block{Type: Ed25519PublicKeyBanner, Bytes: c.PublicKey()})
+		} else {
+			return pem.EncodeToMemory(&pem.Block{Type: X25519PublicKeyBanner, Bytes: c.PublicKey()})
+		}
+	case Curve_P256:
+		return MarshalPublicKeyToPEM(Curve_P256, c.PublicKey())
+	default:
+		return nil
+	}
+}
+
 func MarshalPublicKeyToPEM(curve Curve, b []byte) []byte {
 	switch curve {
 	case Curve_CURVE25519:
@@ -73,7 +91,7 @@ func UnmarshalPublicKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) {
 	case X25519PublicKeyBanner, Ed25519PublicKeyBanner:
 		expectedLen = 32
 		curve = Curve_CURVE25519
-	case P256PublicKeyBanner:
+	case P256PublicKeyBanner, oldP256PublicKeyBanner:
 		// Uncompressed
 		expectedLen = 65
 		curve = Curve_P256
