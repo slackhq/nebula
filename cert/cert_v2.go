@@ -149,8 +149,10 @@ func (c *certificateV2) CheckSignature(key []byte) bool {
 	case Curve_CURVE25519:
 		return ed25519.Verify(key, b, c.signature)
 	case Curve_P256:
-		x, y := elliptic.Unmarshal(elliptic.P256(), key)
-		pubKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+		pubKey, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), key)
+		if err != nil {
+			return false
+		}
 		hashed := sha256.Sum256(b)
 		return ecdsa.VerifyASN1(pubKey, hashed[:], c.signature)
 	default:
