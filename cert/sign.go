@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
-	"math/big"
 	"net/netip"
 	"time"
 )
@@ -55,15 +54,10 @@ func (t *TBSCertificate) Sign(signer Certificate, curve Curve, key []byte) (Cert
 		}
 		return t.SignWith(signer, curve, sp)
 	case Curve_P256:
-		pk := &ecdsa.PrivateKey{
-			PublicKey: ecdsa.PublicKey{
-				Curve: elliptic.P256(),
-			},
-			// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L95
-			D: new(big.Int).SetBytes(key),
+		pk, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), key)
+		if err != nil {
+			return nil, err
 		}
-		// ref: https://github.com/golang/go/blob/go1.19/src/crypto/x509/sec1.go#L119
-		pk.X, pk.Y = pk.Curve.ScalarBaseMult(key)
 		sp := func(certBytes []byte) ([]byte, error) {
 			// We need to hash first for ECDSA
 			// - https://pkg.go.dev/crypto/ecdsa#SignASN1
