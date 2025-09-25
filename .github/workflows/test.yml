@@ -22,7 +22,7 @@ jobs:
 
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.24'
+        go-version: '1.25'
         check-latest: true
 
     - name: Build
@@ -60,7 +60,7 @@ jobs:
 
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.24'
+        go-version: '1.25'
         check-latest: true
 
     - name: Build
@@ -81,7 +81,7 @@ jobs:
 
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.22'
+        go-version: '1.25'
         check-latest: true
 
     - name: Build
@@ -102,7 +102,7 @@ jobs:
 
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.24'
+        go-version: '1.25'
         check-latest: true
 
     - name: Build nebula
