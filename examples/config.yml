@@ -13,11 +13,15 @@ pki:
   # disconnect_invalid is a toggle to force a client to be disconnected if the certificate is expired or invalid.
   #disconnect_invalid: true
 
-  # initiating_version controls which certificate version is used when initiating handshakes.
+  # initiating_version locks which certificate version is used when initiating handshakes.
+  # You do not need to touch this setting unless your network has "mixed" v1 and v2 certificates.
   # This setting only applies if both a v1 and a v2 certificate are configured, in which case it will default to `1`.
   # Once all hosts in the mesh are configured with both a v1 and v2 certificate then this should be changed to `2`.
   # After all hosts in the mesh are using a v2 certificate then v1 certificates are no longer needed.
-  # initiating_version: 1
+  # If initiating_version is set to 0, or unset, hosts will initiate handshakes with their lowest available
+  # certificate version, and if they receive a higher versioned certificate in the handshake reply, they will
+  # re-handshake with that host if they also have a higher versioned certificate.
+  # initiating_version: 0
 
 # The static host map defines a set of hosts with fixed IP addresses on the internet (or any network).
 # A host can have multiple fixed IP addresses defined here, and nebula will try each when establishing a tunnel.
