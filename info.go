@@ -83,11 +83,17 @@ func setupInfoServer(l *logrus.Logger, hm *HostMap) *http.ServeMux {
 // startInfo stands up a REST API that serves information about what Nebula is doing to other services
 // Right now, this is just hostmap info,
 func startInfo(l *logrus.Logger, c *config.C, configTest bool, hm *HostMap) (func(), error) {
-	listen := c.GetString("info.listen", "") //todo this should probably refuse non-localhost, right?
+	listen := c.GetString("info.listen", "")
 	if listen == "" {
 		return nil, nil
 	}
-
+	addrPort, err := netip.ParseAddrPort(listen)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse info.listen address: %w", err)
+	}
+	if err = shouldAllowBinding(addrPort.Addr()); err != nil {
+		l.WithError(err).Warn("Specified info.listen address is not private") // TODO phrasing, what if we add non-nebula-ip check?
+	}
 	var startFn func()
 	if configTest {
 		return startFn, nil
@@ -106,4 +112,14 @@ func startInfo(l *logrus.Logger, c *config.C, configTest bool, hm *HostMap) (fun
 	}
 
 	return startFn, nil
+}
+
+// https://github.com/slackhq/nebula/pull/1457#issuecomment-3275781278
+// > Refusing to bind to (non-localhost || non-nebula-ip) feels right to me
+// If in the future we want to check for a non-nebula-ip we can add that check in here
+func shouldAllowBinding(listen netip.Addr) error {
+	if !listen.IsLoopback() {
+		return fmt.Errorf("info.listen is not a loopback address: %s", listen.String())
+	}
+	return nil
 }
