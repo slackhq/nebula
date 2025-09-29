@@ -1063,7 +1063,8 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 				Debugln("Dropping malformed HostQuery")
 		}
 		return
-	} else if useVersion == cert.Version1 && queryVpnAddr.Is6() {
+	}
+	if useVersion == cert.Version1 && queryVpnAddr.Is6() {
 		// this case really shouldn't be possible to represent, but reject it anyway.
 		if lhh.l.Level >= logrus.DebugLevel {
 			lhh.l.WithField("vpnAddrs", fromVpnAddrs).WithField("queryVpnAddr", queryVpnAddr).
