@@ -106,15 +106,15 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 				if !slices.Equal(currentState.v1Cert.Networks(), newState.v1Cert.Networks()) {
 					return util.NewContextualError(
 						"Networks in new cert was different from old",
-						m{"new_networks": newState.v1Cert.Networks(), "old_networks": currentState.v1Cert.Networks()},
+						m{"new_networks": newState.v1Cert.Networks(), "old_networks": currentState.v1Cert.Networks(), "cert_version": cert.Version1},
 						nil,
 					)
 				}
 
 				if currentState.v1Cert.Curve() != newState.v1Cert.Curve() {
 					return util.NewContextualError(
-						"Curve in new cert was different from old",
-						m{"new_curve": newState.v1Cert.Curve(), "old_curve": currentState.v1Cert.Curve()},
+						"Curve in new v1 cert was different from old",
+						m{"new_curve": newState.v1Cert.Curve(), "old_curve": currentState.v1Cert.Curve(), "cert_version": cert.Version1},
 						nil,
 					)
 				}
@@ -129,7 +129,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 				if !slices.Equal(currentState.v2Cert.Networks(), newState.v2Cert.Networks()) {
 					return util.NewContextualError(
 						"Networks in new cert was different from old",
-						m{"new_networks": newState.v2Cert.Networks(), "old_networks": currentState.v2Cert.Networks()},
+						m{"new_networks": newState.v2Cert.Networks(), "old_networks": currentState.v2Cert.Networks(), "cert_version": cert.Version2},
 						nil,
 					)
 				}
@@ -137,7 +137,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 				if currentState.v2Cert.Curve() != newState.v2Cert.Curve() {
 					return util.NewContextualError(
 						"Curve in new cert was different from old",
-						m{"new_curve": newState.v2Cert.Curve(), "old_curve": currentState.v2Cert.Curve()},
+						m{"new_curve": newState.v2Cert.Curve(), "old_curve": currentState.v2Cert.Curve(), "cert_version": cert.Version2},
 						nil,
 					)
 				}
@@ -152,7 +152,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 			if !slices.Equal(currentState.v2Cert.Networks(), newState.v1Cert.Networks()) {
 				return util.NewContextualError(
 					"Removing a V2 cert is not permitted unless it has identical networks to the new V1 cert",
-					m{"new_networks": newState.v1Cert.Networks(), "old_networks": currentState.v2Cert.Networks()},
+					m{"new_v1_networks": newState.v1Cert.Networks(), "old_v2_networks": currentState.v2Cert.Networks()},
 					nil,
 				)
 			}
