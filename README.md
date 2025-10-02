@@ -63,7 +63,7 @@ Check the [releases](https://github.com/slackhq/nebula/releases/latest) page for
 - [Android](https://play.google.com/store/apps/details?id=net.defined.mobile_nebula&pcampaignid=pcampaignidMKT-Other-global-all-co-prtnr-py-PartBadge-Mar2515-1)
 
 #### Build from source  
-Requires Golang >= version specified in [go.mod](go.mod). Does not auto update.
+Requires Golang >= version specified in [go.mod](go.mod). Does not auto update, must be updated manually with `go install` or with a tool like [gup](https://github.com/nao1215/gup) or [go-global-update](https://github.com/Gelio/go-global-update).
 
 ```sh
 go install github.com/slackhq/nebula/cmd/...@latest   # Installs pre-release version
