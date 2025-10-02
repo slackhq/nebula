@@ -561,14 +561,20 @@ func (cm *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 			return
 		}
 	}
-	if curCrtVersion >= cs.initiatingVersion && bytes.Equal(curCrt.Signature(), myCrt.Signature()) == true {
-		// The current tunnel is using the latest certificate and version, no need to rehandshake.
+	if !bytes.Equal(curCrt.Signature(), myCrt.Signature()) {
+		cm.l.WithField("vpnAddrs", hostinfo.vpnAddrs).
+			WithField("reason", "local certificate is not current").
+			Info("Re-handshaking with remote")
+
+		cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)
 		return
 	}
+	if curCrtVersion < cs.initiatingVersion {
+		cm.l.WithField("vpnAddrs", hostinfo.vpnAddrs).
+			WithField("reason", "current cert version < pki.initiatingVersion").
+			Info("Re-handshaking with remote")
 
-	cm.l.WithField("vpnAddrs", hostinfo.vpnAddrs).
-		WithField("reason", "local certificate is not current").
-		Info("Re-handshaking with remote")
-
-	cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)
+		cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)
+		return
+	}
 }
