@@ -58,7 +58,7 @@ type Certificate interface {
 	// PublicKey is the raw bytes to be used in asymmetric cryptographic operations.
 	PublicKey() []byte
 
-	// PublicKeyPem is the value of PublicKey marshalled to PEM
+	// MarshalPublicKeyPEM is the value of PublicKey marshalled to PEM
 	MarshalPublicKeyPEM() []byte
 
 	// Curve identifies which curve was used for the PublicKey and Signature.
