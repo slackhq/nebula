@@ -4,6 +4,7 @@
 package overlay
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -101,12 +102,18 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 		}
 	}
 
+	tunNameTemplate := c.GetString("tun.dev", "nebula%d")
+	tunName, err := findNextTunName(tunNameTemplate)
+	if err != nil {
+		return nil, err
+	}
+
 	var req ifReq
 	req.Flags = uint16(unix.IFF_TUN | unix.IFF_NO_PI)
 	if multiqueue {
 		req.Flags |= unix.IFF_MULTI_QUEUE
 	}
-	copy(req.Name[:], c.GetString("tun.dev", ""))
+	copy(req.Name[:], tunName)
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
 		return nil, err
 	}
@@ -121,6 +128,38 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 	t.Device = name
 
 	return t, nil
+}
+
+func findNextTunName(tunName string) (string, error) {
+	if !strings.HasSuffix(tunName, "%d") {
+		return tunName, nil
+	}
+	if len(tunName) == 2 {
+		return "", errors.New("please don't name your tun device '%d'")
+	}
+	tunNameTemplate := tunName[:len(tunName)-2]
+	links, err := netlink.LinkList()
+	if err != nil {
+		return "", err
+	}
+	var candidateName string
+	for i := 0; i < 100000; i++ {
+		candidateName = fmt.Sprintf("%s%d", tunNameTemplate, i)
+		good := true
+		for _, link := range links {
+			if candidateName == link.Attrs().Name {
+				good = false
+				break
+			}
+		}
+		if good {
+			if len(candidateName) > 16 {
+				return "", errors.New("you have too many nebula networks")
+			}
+			return candidateName, nil
+		}
+	}
+	return "", errors.New("failed to find a tun device name")
 }
 
 func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []netip.Prefix) (*tun, error) {
@@ -582,9 +621,7 @@ func (t *tun) isGatewayInVpnNetworks(gwAddr netip.Addr) bool {
 }
 
 func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
-
 	var gateways routing.Gateways
-
 	link, err := netlink.LinkByName(t.Device)
 	if err != nil {
 		t.l.WithField("Devicename", t.Device).Error("Ignoring route update: failed to get link by name")
@@ -633,9 +670,7 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 }
 
 func (t *tun) updateRoutes(r netlink.RouteUpdate) {
-
 	gateways := t.getGatewaysFromRoute(&r.Route)
-
 	if len(gateways) == 0 {
 		// No gateways relevant to our network, no routing changes required.
 		t.l.WithField("route", r).Debug("Ignoring route update, no gateways")
