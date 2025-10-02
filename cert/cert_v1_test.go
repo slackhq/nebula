@@ -1,6 +1,7 @@
 package cert
 
 import (
+	"crypto/ed25519"
 	"fmt"
 	"net/netip"
 	"testing"
@@ -13,6 +14,7 @@ import (
 )
 
 func TestCertificateV1_Marshal(t *testing.T) {
+	t.Parallel()
 	before := time.Now().Add(time.Second * -60).Round(time.Second)
 	after := time.Now().Add(time.Second * 60).Round(time.Second)
 	pubKey := []byte("1234567890abcedfghij1234567890ab")
@@ -58,6 +60,58 @@ func TestCertificateV1_Marshal(t *testing.T) {
 	assert.Equal(t, nc.UnsafeNetworks(), nc2.UnsafeNetworks())
 
 	assert.Equal(t, nc.Groups(), nc2.Groups())
+}
+
+func TestCertificateV1_PublicKeyPem(t *testing.T) {
+	t.Parallel()
+	before := time.Now().Add(time.Second * -60).Round(time.Second)
+	after := time.Now().Add(time.Second * 60).Round(time.Second)
+	pubKey := ed25519.PublicKey("1234567890abcedfghij1234567890ab")
+
+	nc := certificateV1{
+		details: detailsV1{
+			name:           "testing",
+			networks:       []netip.Prefix{},
+			unsafeNetworks: []netip.Prefix{},
+			groups:         []string{"test-group1", "test-group2", "test-group3"},
+			notBefore:      before,
+			notAfter:       after,
+			publicKey:      pubKey,
+			isCA:           false,
+			issuer:         "1234567890abcedfghij1234567890ab",
+		},
+		signature: []byte("1234567890abcedfghij1234567890ab"),
+	}
+
+	assert.Equal(t, Version1, nc.Version())
+	assert.Equal(t, Curve_CURVE25519, nc.Curve())
+	pubPem := "-----BEGIN NEBULA X25519 PUBLIC KEY-----\nMTIzNDU2Nzg5MGFiY2VkZmdoaWoxMjM0NTY3ODkwYWI=\n-----END NEBULA X25519 PUBLIC KEY-----\n"
+	assert.Equal(t, string(nc.MarshalPublicKeyPEM()), pubPem)
+	assert.False(t, nc.IsCA())
+
+	nc.details.isCA = true
+	assert.Equal(t, Curve_CURVE25519, nc.Curve())
+	pubPem = "-----BEGIN NEBULA ED25519 PUBLIC KEY-----\nMTIzNDU2Nzg5MGFiY2VkZmdoaWoxMjM0NTY3ODkwYWI=\n-----END NEBULA ED25519 PUBLIC KEY-----\n"
+	assert.Equal(t, string(nc.MarshalPublicKeyPEM()), pubPem)
+	assert.True(t, nc.IsCA())
+
+	pubP256KeyPem := []byte(`-----BEGIN NEBULA P256 PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAA=
+-----END NEBULA P256 PUBLIC KEY-----
+`)
+	pubP256Key, _, _, err := UnmarshalPublicKeyFromPEM(pubP256KeyPem)
+	require.NoError(t, err)
+	nc.details.curve = Curve_P256
+	nc.details.publicKey = pubP256Key
+	assert.Equal(t, Curve_P256, nc.Curve())
+	assert.Equal(t, string(nc.MarshalPublicKeyPEM()), string(pubP256KeyPem))
+	assert.True(t, nc.IsCA())
+
+	nc.details.isCA = false
+	assert.Equal(t, Curve_P256, nc.Curve())
+	assert.Equal(t, string(nc.MarshalPublicKeyPEM()), string(pubP256KeyPem))
+	assert.False(t, nc.IsCA())
 }
 
 func TestCertificateV1_Expired(t *testing.T) {
