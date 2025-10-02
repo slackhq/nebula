@@ -24,7 +24,7 @@ jobs:
 
     - uses: actions/setup-go@v6
       with:
-        go-version-file: 'go.mod'
+        go-version: '1.25'
         check-latest: true
 
     - name: add hashicorp source
