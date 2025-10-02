@@ -68,14 +68,14 @@ type HandshakeManager struct {
 type HandshakeHostInfo struct {
 	sync.Mutex
 
-	startTime   time.Time        // Time that we first started trying with this handshake
-	ready       bool             // Is the handshake ready
-	counter     int64            // How many attempts have we made so far
-	lastRemotes []netip.AddrPort // Remotes that we sent to during the previous attempt
-	packetStore []*cachedPacket  // A set of packets to be transmitted once the handshake completes
+	startTime                 time.Time        // Time that we first started trying with this handshake
+	ready                     bool             // Is the handshake ready
+	initiatingVersionOverride cert.Version     // Should we use a non-default cert version for this handshake?
+	counter                   int64            // How many attempts have we made so far
+	lastRemotes               []netip.AddrPort // Remotes that we sent to during the previous attempt
+	packetStore               []*cachedPacket  // A set of packets to be transmitted once the handshake completes
 
-	hostinfo                  *HostInfo
-	initiatingVersionOverride cert.Version
+	hostinfo *HostInfo
 }
 
 func (hh *HandshakeHostInfo) cachePacket(l *logrus.Logger, t header.MessageType, st header.MessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
