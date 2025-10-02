@@ -166,14 +166,18 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 
 	if remoteCert.Certificate.Version() != ci.myCert.Version() {
 		// We started off using the wrong certificate version, lets see if we can match the version that was sent to us
-		rc := cs.getCertificate(remoteCert.Certificate.Version())
-		if rc == nil {
-			f.l.WithError(err).WithField("udpAddr", addr).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).WithField("cert", remoteCert).
-				Info("Might be unable to handshake with host due to missing certificate version")
+		myCertOtherVersion := cs.getCertificate(remoteCert.Certificate.Version())
+		if myCertOtherVersion == nil {
+			if f.l.Level >= logrus.DebugLevel {
+				f.l.WithError(err).WithFields(m{
+					"udpAddr":   addr,
+					"handshake": m{"stage": 1, "style": "ix_psk0"},
+					"cert":      remoteCert,
+				}).Debug("Might be unable to handshake with host due to missing certificate version")
+			}
 		} else {
 			// Record the certificate we are actually using
-			ci.myCert = rc
+			ci.myCert = myCertOtherVersion
 		}
 	}
 
