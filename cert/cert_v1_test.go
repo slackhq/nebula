@@ -86,13 +86,13 @@ func TestCertificateV1_PublicKeyPem(t *testing.T) {
 	assert.Equal(t, Version1, nc.Version())
 	assert.Equal(t, Curve_CURVE25519, nc.Curve())
 	pubPem := "-----BEGIN NEBULA X25519 PUBLIC KEY-----\nMTIzNDU2Nzg5MGFiY2VkZmdoaWoxMjM0NTY3ODkwYWI=\n-----END NEBULA X25519 PUBLIC KEY-----\n"
-	assert.Equal(t, string(nc.PublicKeyPEM()), pubPem)
+	assert.Equal(t, string(nc.MarshalPublicKeyPEM()), pubPem)
 	assert.False(t, nc.IsCA())
 
 	nc.details.isCA = true
 	assert.Equal(t, Curve_CURVE25519, nc.Curve())
 	pubPem = "-----BEGIN NEBULA ED25519 PUBLIC KEY-----\nMTIzNDU2Nzg5MGFiY2VkZmdoaWoxMjM0NTY3ODkwYWI=\n-----END NEBULA ED25519 PUBLIC KEY-----\n"
-	assert.Equal(t, string(nc.PublicKeyPEM()), pubPem)
+	assert.Equal(t, string(nc.MarshalPublicKeyPEM()), pubPem)
 	assert.True(t, nc.IsCA())
 
 	pubP256KeyPem := []byte(`-----BEGIN NEBULA P256 PUBLIC KEY-----
@@ -105,12 +105,12 @@ AAAAAAAAAAAAAAAAAAAAAAA=
 	nc.details.curve = Curve_P256
 	nc.details.publicKey = pubP256Key
 	assert.Equal(t, Curve_P256, nc.Curve())
-	assert.Equal(t, string(nc.PublicKeyPEM()), string(pubP256KeyPem))
+	assert.Equal(t, string(nc.MarshalPublicKeyPEM()), string(pubP256KeyPem))
 	assert.True(t, nc.IsCA())
 
 	nc.details.isCA = false
 	assert.Equal(t, Curve_P256, nc.Curve())
-	assert.Equal(t, string(nc.PublicKeyPEM()), string(pubP256KeyPem))
+	assert.Equal(t, string(nc.MarshalPublicKeyPEM()), string(pubP256KeyPem))
 	assert.False(t, nc.IsCA())
 }
 

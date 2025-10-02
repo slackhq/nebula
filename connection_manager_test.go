@@ -446,7 +446,7 @@ func (d *dummyCert) PublicKey() []byte {
 	return d.publicKey
 }
 
-func (d *dummyCert) PublicKeyPEM() []byte {
+func (d *dummyCert) MarshalPublicKeyPEM() []byte {
 	return cert.MarshalPublicKeyToPEM(d.curve, d.publicKey)
 }
 

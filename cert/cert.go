@@ -59,7 +59,7 @@ type Certificate interface {
 	PublicKey() []byte
 
 	// PublicKeyPem is the value of PublicKey marshalled to PEM
-	PublicKeyPEM() []byte
+	MarshalPublicKeyPEM() []byte
 
 	// Curve identifies which curve was used for the PublicKey and Signature.
 	Curve() Curve
