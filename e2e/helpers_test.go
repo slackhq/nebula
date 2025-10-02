@@ -129,7 +129,7 @@ func newSimpleServer(v cert.Version, caCrt cert.Certificate, caKey []byte, name 
 	return control, vpnNetworks, udpAddr, c
 }
 
-// newSimpleServer creates a nebula instance with fewer assumptions
+// newServer creates a nebula instance with fewer assumptions
 func newServer(caCrt []cert.Certificate, certs []cert.Certificate, key []byte, overrides m) (*nebula.Control, []netip.Prefix, netip.AddrPort, *config.C) {
 	l := NewTestLogger()
 
