@@ -114,7 +114,7 @@ func (c *certificateV2) PublicKey() []byte {
 	return c.publicKey
 }
 
-func (c *certificateV2) PublicKeyPem() []byte {
+func (c *certificateV2) PublicKeyPEM() []byte {
 	return marshalCertPublicKeyToPEM(c)
 }
 
