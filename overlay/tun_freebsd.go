@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net"
 	"net/netip"
 	"sync/atomic"
 	"syscall"
@@ -310,7 +309,7 @@ func (t *tun) addIp(cidr netip.Prefix) error {
 			MaskAddr: unix.RawSockaddrInet4{
 				Len:    unix.SizeofSockaddrInet4,
 				Family: unix.AF_INET,
-				Addr:   getNetmask(cidr).As4(),
+				Addr:   prefixToMask(cidr).As4(),
 			},
 			VHid: 0,
 		}
@@ -337,7 +336,7 @@ func (t *tun) addIp(cidr netip.Prefix) error {
 			PrefixMask: unix.RawSockaddrInet6{
 				Len:    unix.SizeofSockaddrInet6,
 				Family: unix.AF_INET6,
-				Addr:   getNetmask(cidr).As16(),
+				Addr:   prefixToMask(cidr).As16(),
 			},
 			Lifetime: addrLifetime{
 				Expire:    0,
@@ -516,21 +515,11 @@ func orBytes(a []byte, b []byte) []byte {
 	return ret
 }
 
-func getNetmask(cidr netip.Prefix) netip.Addr {
-	pLen := 128
-	if cidr.Addr().Is4() {
-		pLen = 32
-	}
-
-	addr, _ := netip.AddrFromSlice(net.CIDRMask(cidr.Bits(), pLen))
-	return addr
-}
-
 func getBroadcast(cidr netip.Prefix) netip.Addr {
 	broadcast, _ := netip.AddrFromSlice(
 		orBytes(
 			cidr.Addr().AsSlice(),
-			flipBytes(getNetmask(cidr).AsSlice()),
+			flipBytes(prefixToMask(cidr).AsSlice()),
 		),
 	)
 	return broadcast
