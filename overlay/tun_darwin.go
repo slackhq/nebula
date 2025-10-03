@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/netip"
 	"os"
 	"sync/atomic"
@@ -553,14 +552,4 @@ func (t *tun) Name() string {
 
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
-}
-
-func prefixToMask(prefix netip.Prefix) netip.Addr {
-	pLen := 128
-	if prefix.Addr().Is4() {
-		pLen = 32
-	}
-
-	addr, _ := netip.AddrFromSlice(net.CIDRMask(prefix.Bits(), pLen))
-	return addr
 }
