@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"net"
 	"net/netip"
 
 	"github.com/sirupsen/logrus"
@@ -69,4 +70,14 @@ func findRemovedRoutes(newRoutes, oldRoutes []Route) []Route {
 	}
 
 	return removed
+}
+
+func prefixToMask(prefix netip.Prefix) netip.Addr {
+	pLen := 128
+	if prefix.Addr().Is4() {
+		pLen = 32
+	}
+
+	addr, _ := netip.AddrFromSlice(net.CIDRMask(prefix.Bits(), pLen))
+	return addr
 }
