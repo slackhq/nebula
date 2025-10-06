@@ -299,6 +299,8 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 						InitiatorRelayIndex: idx,
 					}
 
+					relayFrom := hm.f.myVpnAddrs[0]
+
 					switch relayHostInfo.GetCert().Certificate.Version() {
 					case cert.Version1:
 						if !hm.f.myVpnAddrs[0].Is4() {
@@ -316,7 +318,13 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 						b = vpnIp.As4()
 						m.OldRelayToAddr = binary.BigEndian.Uint32(b[:])
 					case cert.Version2:
-						m.RelayFromAddr = netAddrToProtoAddr(hm.f.myVpnAddrs[0])
+						if vpnIp.Is4() {
+							relayFrom = hm.f.myVpnAddrs[0]
+						} else {
+							//todo do this smarter
+							relayFrom = hm.f.myVpnAddrs[len(hm.f.myVpnAddrs)-1]
+						}
+						m.RelayFromAddr = netAddrToProtoAddr(relayFrom)
 						m.RelayToAddr = netAddrToProtoAddr(vpnIp)
 					default:
 						hostinfo.logger(hm.l).Error("Unknown certificate version found while creating relay")
@@ -331,7 +339,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 					} else {
 						hm.f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, make([]byte, 12), make([]byte, mtu))
 						hm.l.WithFields(logrus.Fields{
-							"relayFrom":           hm.f.myVpnAddrs[0],
+							"relayFrom":           relayFrom,
 							"relayTo":             vpnIp,
 							"initiatorRelayIndex": idx,
 							"relay":               relay}).
@@ -357,6 +365,8 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 					InitiatorRelayIndex: existingRelay.LocalIndex,
 				}
 
+				relayFrom := hm.f.myVpnAddrs[0]
+
 				switch relayHostInfo.GetCert().Certificate.Version() {
 				case cert.Version1:
 					if !hm.f.myVpnAddrs[0].Is4() {
@@ -374,7 +384,14 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 					b = vpnIp.As4()
 					m.OldRelayToAddr = binary.BigEndian.Uint32(b[:])
 				case cert.Version2:
-					m.RelayFromAddr = netAddrToProtoAddr(hm.f.myVpnAddrs[0])
+					if vpnIp.Is4() {
+						relayFrom = hm.f.myVpnAddrs[0]
+					} else {
+						//todo do this smarter
+						relayFrom = hm.f.myVpnAddrs[len(hm.f.myVpnAddrs)-1]
+					}
+
+					m.RelayFromAddr = netAddrToProtoAddr(relayFrom)
 					m.RelayToAddr = netAddrToProtoAddr(vpnIp)
 				default:
 					hostinfo.logger(hm.l).Error("Unknown certificate version found while creating relay")
@@ -389,7 +406,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 					// This must send over the hostinfo, not over hm.Hosts[ip]
 					hm.f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, make([]byte, 12), make([]byte, mtu))
 					hm.l.WithFields(logrus.Fields{
-						"relayFrom":           hm.f.myVpnAddrs[0],
+						"relayFrom":           relayFrom,
 						"relayTo":             vpnIp,
 						"initiatorRelayIndex": existingRelay.LocalIndex,
 						"relay":               relay}).

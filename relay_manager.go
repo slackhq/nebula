@@ -190,6 +190,7 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 			InitiatorRelayIndex: peerRelay.RemoteIndex,
 		}
 
+		relayFrom := h.vpnAddrs[0]
 		if v == cert.Version1 {
 			peer := peerHostInfo.vpnAddrs[0]
 			if !peer.Is4() {
@@ -207,7 +208,13 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 			b = targetAddr.As4()
 			resp.OldRelayToAddr = binary.BigEndian.Uint32(b[:])
 		} else {
-			resp.RelayFromAddr = netAddrToProtoAddr(peerHostInfo.vpnAddrs[0])
+			if targetAddr.Is4() {
+				relayFrom = h.vpnAddrs[0]
+			} else {
+				//todo do this smarter
+				relayFrom = h.vpnAddrs[len(h.vpnAddrs)-1]
+			}
+			resp.RelayFromAddr = netAddrToProtoAddr(relayFrom)
 			resp.RelayToAddr = target
 		}
 
@@ -360,7 +367,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 			Type:                NebulaControl_CreateRelayRequest,
 			InitiatorRelayIndex: index,
 		}
-
+		relayFrom := h.vpnAddrs[0]
 		if v == cert.Version1 {
 			if !h.vpnAddrs[0].Is4() {
 				rm.l.WithField("relayFrom", h.vpnAddrs[0]).
@@ -377,7 +384,13 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 			b = target.As4()
 			req.OldRelayToAddr = binary.BigEndian.Uint32(b[:])
 		} else {
-			req.RelayFromAddr = netAddrToProtoAddr(h.vpnAddrs[0])
+			if target.Is4() {
+				relayFrom = h.vpnAddrs[0]
+			} else {
+				//todo do this smarter
+				relayFrom = h.vpnAddrs[len(h.vpnAddrs)-1]
+			}
+			req.RelayFromAddr = netAddrToProtoAddr(relayFrom)
 			req.RelayToAddr = netAddrToProtoAddr(target)
 		}
 
@@ -388,7 +401,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 		} else {
 			f.SendMessageToHostInfo(header.Control, 0, peer, msg, make([]byte, 12), make([]byte, mtu))
 			rm.l.WithFields(logrus.Fields{
-				"relayFrom":           h.vpnAddrs[0],
+				"relayFrom":           relayFrom,
 				"relayTo":             target,
 				"initiatorRelayIndex": req.InitiatorRelayIndex,
 				"responderRelayIndex": req.ResponderRelayIndex,
