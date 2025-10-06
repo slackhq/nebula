@@ -220,12 +220,10 @@ type HostInfo struct {
 	remoteIndexId   uint32
 	localIndexId    uint32
 
-	// vpnAddrs is a list of vpn addresses assigned to this host that are within our own vpn networks
-	// The host may have other vpn addresses that are outside our
-	// vpn networks but were removed because they are not usable
+	// vpnAddrs is a list of vpn addresses assigned to this host
 	vpnAddrs []netip.Addr
 
-	// networks are both all vpn and unsafe networks assigned to this host
+	// networks is a combination of specific vpn addresses (not prefixes!) and full unsafe networks assigned to this host.
 	networks   *bart.Lite
 	relayState RelayState
 
