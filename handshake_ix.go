@@ -183,17 +183,18 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		return
 	}
 
-	var vpnAddrs []netip.Addr
-	var filteredNetworks []netip.Prefix
 	certName := remoteCert.Certificate.Name()
 	certVersion := remoteCert.Certificate.Version()
 	fingerprint := remoteCert.Fingerprint
 	issuer := remoteCert.Certificate.Issuer()
+	vpnNetworks := remoteCert.Certificate.Networks()
 
-	for _, network := range remoteCert.Certificate.Networks() {
+	anyVpnAddrsInCommon := false
+	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
+	for i, network := range vpnNetworks {
 		vpnAddr := network.Addr()
 		if f.myVpnAddrsTable.Contains(vpnAddr) {
-			f.l.WithField("vpnAddr", vpnAddr).WithField("udpAddr", addr).
+			f.l.WithField("vpnNetworks", vpnNetworks).WithField("udpAddr", addr).
 				WithField("certName", certName).
 				WithField("certVersion", certVersion).
 				WithField("fingerprint", fingerprint).
@@ -201,18 +202,15 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Refusing to handshake with myself")
 			return
 		}
-
-		// vpnAddrs outside our vpn networks are of no use to us, filter them out
-		if !f.myVpnNetworksTable.Contains(vpnAddr) {
-			continue
+		vpnAddrs[i] = network.Addr()
+		if f.myVpnNetworksTable.Contains(vpnAddr) {
+			anyVpnAddrsInCommon = true
 		}
-
-		filteredNetworks = append(filteredNetworks, network)
-		vpnAddrs = append(vpnAddrs, vpnAddr)
 	}
 
-	if len(vpnAddrs) == 0 {
-		f.l.WithError(err).WithField("udpAddr", addr).
+	if !anyVpnAddrsInCommon {
+		f.l.WithField("vpnNetworks", vpnNetworks).
+			WithField("udpAddr", addr).
 			WithField("certName", certName).
 			WithField("certVersion", certVersion).
 			WithField("fingerprint", fingerprint).
@@ -332,7 +330,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 
 	hostinfo.remotes = f.lightHouse.QueryCache(vpnAddrs)
 	hostinfo.SetRemote(addr)
-	hostinfo.buildNetworks(filteredNetworks, remoteCert.Certificate.UnsafeNetworks())
+	hostinfo.buildNetworks(remoteCert.Certificate.Networks(), remoteCert.Certificate.UnsafeNetworks())
 
 	existing, err := f.handshakeManager.CheckAndComplete(hostinfo, 0, f)
 	if err != nil {
@@ -573,20 +571,16 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
 	}
 
-	var vpnAddrs []netip.Addr
-	var filteredNetworks []netip.Prefix
-	for _, network := range vpnNetworks {
-		// vpnAddrs outside our vpn networks are of no use to us, filter them out
-		vpnAddr := network.Addr()
-		if !f.myVpnNetworksTable.Contains(vpnAddr) {
-			continue
+	anyVpnAddrsInCommon := false
+	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
+	for i, network := range vpnNetworks {
+		vpnAddrs[i] = network.Addr()
+		if f.myVpnNetworksTable.Contains(network.Addr()) {
+			anyVpnAddrsInCommon = true
 		}
-
-		filteredNetworks = append(filteredNetworks, network)
-		vpnAddrs = append(vpnAddrs, vpnAddr)
 	}
 
-	if len(vpnAddrs) == 0 {
+	if !anyVpnAddrsInCommon {
 		f.l.WithError(err).WithField("udpAddr", addr).
 			WithField("certName", certName).
 			WithField("certVersion", certVersion).
@@ -609,6 +603,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		f.handshakeManager.DeleteHostInfo(hostinfo)
 
 		// Create a new hostinfo/handshake for the intended vpn ip
+		//TODO is hostinfo.vpnAddrs[0] always the address to use?
 		f.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], func(newHH *HandshakeHostInfo) {
 			// Block the current used address
 			newHH.hostinfo.remotes = hostinfo.remotes
@@ -648,7 +643,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 
 	// Build up the radix for the firewall if we have subnets in the cert
 	hostinfo.vpnAddrs = vpnAddrs
-	hostinfo.buildNetworks(filteredNetworks, remoteCert.Certificate.UnsafeNetworks())
+	hostinfo.buildNetworks(remoteCert.Certificate.Networks(), remoteCert.Certificate.UnsafeNetworks())
 
 	// Complete our handshake and update metrics, this will replace any existing tunnels for the vpnAddrs here
 	f.handshakeManager.Complete(hostinfo, f)
