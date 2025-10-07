@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"fmt"
 	"net"
 	"net/netip"
 
@@ -104,4 +105,18 @@ func getBroadcast(cidr netip.Prefix) netip.Addr {
 		),
 	)
 	return broadcast
+}
+
+func selectGateway(dest netip.Prefix, gateways []netip.Prefix) (netip.Prefix, error) {
+	for _, gateway := range gateways {
+		if dest.Addr().Is4() && gateway.Addr().Is4() {
+			return gateway, nil
+		}
+
+		if dest.Addr().Is6() && gateway.Addr().Is6() {
+			return gateway, nil
+		}
+	}
+
+	return netip.Prefix{}, fmt.Errorf("no gateway found for %v in the list of vpn networks", dest)
 }
