@@ -714,8 +714,7 @@ func (i *HostInfo) CreateRemoteCIDR(c *cert.NebulaCertificate) {
 		//TODO: IPV6-WORK what to do when ip is invalid?
 		nip, _ := netip.AddrFromSlice(ip.IP)
 		nip = nip.Unmap()
-		bits, _ := ip.Mask.Size()
-		remoteCidr.Insert(netip.PrefixFrom(nip, bits), struct{}{})
+		remoteCidr.Insert(netip.PrefixFrom(nip, nip.BitLen()), struct{}{})
 	}
 
 	for _, n := range c.Details.Subnets {
