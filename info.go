@@ -78,7 +78,7 @@ func startInfo(l *logrus.Logger, c *config.C, configTest bool, hm *HostMap) (fun
 	listenAddr := c.GetString("info.listen", "")
 	var startFn func()
 	if configTest {
-		//TODO validate that lisstenAddr is an acceptable value as part of the config test
+		//TODO validate that listenAddr is an acceptable value as part of the config test
 		return startFn, nil
 	}
 	if err := os.RemoveAll(listenAddr); err != nil {
