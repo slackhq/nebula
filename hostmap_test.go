@@ -1,9 +1,11 @@
 package nebula
 
 import (
+	"net"
 	"net/netip"
 	"testing"
 
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
@@ -85,6 +87,40 @@ func TestHostMap_MakePrimary(t *testing.T) {
 	assert.Equal(t, h3.localIndexId, h1.prev.localIndexId)
 	assert.Equal(t, h1.localIndexId, h2.prev.localIndexId)
 	assert.Nil(t, h2.next)
+}
+
+func TestHostInfo_CreateRemoteCIDR(t *testing.T) {
+	h := HostInfo{}
+	c := &cert.NebulaCertificate{
+		Details: cert.NebulaCertificateDetails{
+			Ips: []*net.IPNet{
+				{
+					IP:   net.IPv4(1, 2, 3, 4),
+					Mask: net.IPv4Mask(255, 255, 255, 0),
+				},
+			},
+		},
+	}
+
+	// remoteCidr should be empty with only 1 ip address present in the certificate
+	h.CreateRemoteCIDR(c)
+	assert.Empty(t, h.remoteCidr)
+
+	// remoteCidr should be populated if there is also a subnet in the certificate
+	c.Details.Subnets = []*net.IPNet{
+		{
+			IP:   net.IPv4(9, 2, 3, 4),
+			Mask: net.IPv4Mask(255, 255, 255, 0),
+		},
+	}
+	h.CreateRemoteCIDR(c)
+	assert.NotEmpty(t, h.remoteCidr)
+	_, ok := h.remoteCidr.Lookup(netip.MustParseAddr("1.2.3.0"))
+	assert.False(t, ok, "An ip address within the certificates network should not be found")
+	_, ok = h.remoteCidr.Lookup(netip.MustParseAddr("1.2.3.4"))
+	assert.True(t, ok, "An exact ip address match should be found")
+	_, ok = h.remoteCidr.Lookup(netip.MustParseAddr("9.2.3.4"))
+	assert.True(t, ok, "An ip address within the subnets should be found")
 }
 
 func TestHostMap_DeleteHostInfo(t *testing.T) {
