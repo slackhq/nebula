@@ -64,7 +64,7 @@ type tun struct {
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
 
 func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*tun, error) {
-	return nil, fmt.Errorf("newTunFromFd not supported in NetBSD")
+	return nil, fmt.Errorf("newTunFromFd not supported in openbsd")
 }
 
 func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
@@ -311,7 +311,7 @@ func (t *tun) Name() string {
 }
 
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for netbsd")
+	return nil, fmt.Errorf("TODO: multiqueue not implemented for openbsd")
 }
 
 func (t *tun) addRoutes(logErrors bool) error {
