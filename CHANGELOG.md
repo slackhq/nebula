@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.7] - 2025-10-8
+
+### Security
+
+- Fix an opportunity for emitting a packet that was sent with a spoofed source address within the configured vpn network. (#1494)
+
+### Changed
+
+- Disable sending `recv_error` messages when a packet is received outside the allowable counter window. (#1459)
+- Improve error messages and remove some unnecessary fatal conditions in the Windows and generic udp listener. (#1543)
+
 ## [1.9.6] - 2025-7-15
 
 ### Added
@@ -687,7 +698,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.9.6...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.9.7...HEAD
+[1.9.7]: https://github.com/slackhq/nebula/releases/tag/v1.9.7
 [1.9.6]: https://github.com/slackhq/nebula/releases/tag/v1.9.6
 [1.9.5]: https://github.com/slackhq/nebula/releases/tag/v1.9.5
 [1.9.4]: https://github.com/slackhq/nebula/releases/tag/v1.9.4
