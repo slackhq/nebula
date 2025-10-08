@@ -404,6 +404,14 @@ func newKeypair(curve cert.Curve) ([]byte, []byte) {
 	}
 }
 
+func x25519KeyFromPriv(priv []byte) ([]byte, []byte) {
+	pubkey, err := curve25519.X25519(priv, curve25519.Basepoint)
+	if err != nil {
+		panic(err)
+	}
+	return pubkey, priv
+}
+
 func x25519Keypair() ([]byte, []byte) {
 	privkey := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, privkey); err != nil {
