@@ -547,17 +547,3 @@ func delRoute(prefix netip.Prefix, gateways []netip.Prefix) error {
 
 	return nil
 }
-
-func selectGateway(dest netip.Prefix, gateways []netip.Prefix) (netip.Prefix, error) {
-	for _, gateway := range gateways {
-		if dest.Addr().Is4() && gateway.Addr().Is4() {
-			return gateway, nil
-		}
-
-		if dest.Addr().Is6() && gateway.Addr().Is6() {
-			return gateway, nil
-		}
-	}
-
-	return netip.Prefix{}, fmt.Errorf("no gateway found for %v in the list of vpn networks", dest)
-}
