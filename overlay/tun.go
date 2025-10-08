@@ -81,3 +81,27 @@ func prefixToMask(prefix netip.Prefix) netip.Addr {
 	addr, _ := netip.AddrFromSlice(net.CIDRMask(prefix.Bits(), pLen))
 	return addr
 }
+
+func flipBytes(b []byte) []byte {
+	for i := 0; i < len(b); i++ {
+		b[i] ^= 0xFF
+	}
+	return b
+}
+func orBytes(a []byte, b []byte) []byte {
+	ret := make([]byte, len(a))
+	for i := 0; i < len(a); i++ {
+		ret[i] = a[i] | b[i]
+	}
+	return ret
+}
+
+func getBroadcast(cidr netip.Prefix) netip.Addr {
+	broadcast, _ := netip.AddrFromSlice(
+		orBytes(
+			cidr.Addr().AsSlice(),
+			flipBytes(prefixToMask(cidr).AsSlice()),
+		),
+	)
+	return broadcast
+}
