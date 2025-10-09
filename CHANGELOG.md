@@ -7,11 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.9.7] - 2025-10-8
+## [1.9.7] - 2025-10-10
 
 ### Security
 
-- Fix an opportunity for emitting a packet that was sent with a spoofed source address within the configured vpn network. (#1494)
+- Fix an issue where Nebula could incorrectly accept and process a packet from an erroneous source IP when the sender's
+  certificate is configured with unsafe_routes (cert v1/v2) or multiple IPs (cert v2). (#1494)
 
 ### Changed
 
