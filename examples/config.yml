@@ -369,6 +369,13 @@ firewall:
   # is explicitly defined. This is usually not the desired behavior and should be avoided!
   #default_local_cidr_any: false
 
+  # Allow one Nebula peer to route packets to another peer if they can both handle the destination address or the
+  # source address. By default, Nebula only allows a packet through a firewall if the sending peer can handle the
+  # source address and the receiving peer can handle the destination address, but in case where you'd want multi-hop
+  # routing, you can enable this option to relax the rule slightly.
+  # This option is needed for each peer that wants to route traffic in this way, but it's not needed for other hosts.
+  #unsafe_peer_routing: false
+
   conntrack:
     tcp_timeout: 12m
     udp_timeout: 3m
