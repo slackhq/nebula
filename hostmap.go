@@ -212,6 +212,13 @@ func (rs *RelayState) InsertRelay(ip netip.Addr, idx uint32, r *Relay) {
 	rs.relayForByIdx[idx] = r
 }
 
+type NetworkType uint8
+
+const (
+	VpnAddress NetworkType = iota
+	UnsafeNetwork
+)
+
 type HostInfo struct {
 	remote          netip.AddrPort
 	remotes         *RemoteList
@@ -225,8 +232,8 @@ type HostInfo struct {
 	// vpn networks but were removed because they are not usable
 	vpnAddrs []netip.Addr
 
-	// networks are both all vpn and unsafe networks assigned to this host
-	networks   *bart.Lite
+	// networks are both all vpn addresses and unsafe networks assigned to this host
+	networks   *bart.Table[NetworkType]
 	relayState RelayState
 
 	// HandshakePacket records the packets used to create this hostinfo
@@ -736,14 +743,13 @@ func (i *HostInfo) buildNetworks(networks, unsafeNetworks []netip.Prefix) {
 		return
 	}
 
-	i.networks = new(bart.Lite)
+	i.networks = new(bart.Table[NetworkType])
 	for _, network := range networks {
-		nprefix := netip.PrefixFrom(network.Addr(), network.Addr().BitLen())
-		i.networks.Insert(nprefix)
+		i.networks.Insert(netip.PrefixFrom(network.Addr(), network.Addr().BitLen()), VpnAddress)
 	}
 
 	for _, network := range unsafeNetworks {
-		i.networks.Insert(network)
+		i.networks.Insert(network, UnsafeNetwork)
 	}
 }
 
