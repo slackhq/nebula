@@ -155,6 +155,8 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 		"vpnAddrs":            h.vpnAddrs}).
 		Info("handleCreateRelayResponse")
 
+	//peer == relayFrom
+	//target == relayTo
 	target := m.RelayToAddr
 	targetAddr := protoAddrToNetAddr(target)
 
@@ -195,7 +197,7 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 			peer := peerHostInfo.vpnAddrs[0]
 			if !peer.Is4() {
 				rm.l.WithField("relayFrom", peer).
-					WithField("relayTo", target).
+					WithField("relayTo", targetAddr).
 					WithField("initiatorRelayIndex", resp.InitiatorRelayIndex).
 					WithField("responderRelayIndex", resp.ResponderRelayIndex).
 					WithField("vpnAddrs", peerHostInfo.vpnAddrs).
@@ -208,12 +210,21 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 			b = targetAddr.As4()
 			resp.OldRelayToAddr = binary.BigEndian.Uint32(b[:])
 		} else {
-			if targetAddr.Is4() {
-				relayFrom = h.vpnAddrs[0]
-			} else {
-				//todo do this smarter
-				relayFrom = h.vpnAddrs[len(h.vpnAddrs)-1]
+			ok = false
+			peerNetworks := h.GetCert().Certificate.Networks()
+			for i := range peerNetworks {
+				if peerNetworks[i].Contains(targetAddr) {
+					relayFrom = peerNetworks[i].Addr()
+					ok = true
+					break
+				}
 			}
+			if !ok {
+				rm.l.WithFields(logrus.Fields{"from": f.myVpnNetworks, "to": targetAddr}).
+					Error("cannot establish relay, no networks in common")
+				return
+			}
+
 			resp.RelayFromAddr = netAddrToProtoAddr(relayFrom)
 			resp.RelayToAddr = target
 		}
@@ -225,8 +236,8 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 		} else {
 			f.SendMessageToHostInfo(header.Control, 0, peerHostInfo, msg, make([]byte, 12), make([]byte, mtu))
 			rm.l.WithFields(logrus.Fields{
-				"relayFrom":           resp.RelayFromAddr,
-				"relayTo":             resp.RelayToAddr,
+				"relayFrom":           relayFrom,
+				"relayTo":             targetAddr,
 				"initiatorRelayIndex": resp.InitiatorRelayIndex,
 				"responderRelayIndex": resp.ResponderRelayIndex,
 				"vpnAddrs":            peerHostInfo.vpnAddrs}).
@@ -369,8 +380,8 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 		}
 		relayFrom := h.vpnAddrs[0]
 		if v == cert.Version1 {
-			if !h.vpnAddrs[0].Is4() {
-				rm.l.WithField("relayFrom", h.vpnAddrs[0]).
+			if !relayFrom.Is4() {
+				rm.l.WithField("relayFrom", relayFrom).
 					WithField("relayTo", target).
 					WithField("initiatorRelayIndex", req.InitiatorRelayIndex).
 					WithField("responderRelayIndex", req.ResponderRelayIndex).
@@ -379,17 +390,26 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 				return
 			}
 
-			b := h.vpnAddrs[0].As4()
+			b := relayFrom.As4()
 			req.OldRelayFromAddr = binary.BigEndian.Uint32(b[:])
 			b = target.As4()
 			req.OldRelayToAddr = binary.BigEndian.Uint32(b[:])
 		} else {
-			if target.Is4() {
-				relayFrom = h.vpnAddrs[0]
-			} else {
-				//todo do this smarter
-				relayFrom = h.vpnAddrs[len(h.vpnAddrs)-1]
+			ok = false
+			peerNetworks := h.GetCert().Certificate.Networks()
+			for i := range peerNetworks {
+				if peerNetworks[i].Contains(target) {
+					relayFrom = peerNetworks[i].Addr()
+					ok = true
+					break
+				}
 			}
+			if !ok {
+				rm.l.WithFields(logrus.Fields{"from": f.myVpnNetworks, "to": target}).
+					Error("cannot establish relay, no networks in common")
+				return
+			}
+
 			req.RelayFromAddr = netAddrToProtoAddr(relayFrom)
 			req.RelayToAddr = netAddrToProtoAddr(target)
 		}

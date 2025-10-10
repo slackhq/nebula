@@ -300,47 +300,27 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 						InitiatorRelayIndex: idx,
 					}
 
-					relayFrom := hm.f.myVpnAddrs[0]
-
 					switch relayHostInfo.GetCert().Certificate.Version() {
 					case cert.Version1:
-						if !hm.f.myVpnAddrs[0].Is4() {
-							hostinfo.logger(hm.l).Error("can not establish v1 relay with a v6 network because the relay is not running a current nebula version")
-							continue
-						}
-
-						if !vpnIp.Is4() {
-							hostinfo.logger(hm.l).Error("can not establish v1 relay with a v6 remote network because the relay is not running a current nebula version")
-							continue
-						}
-
-						b := hm.f.myVpnAddrs[0].As4()
-						m.OldRelayFromAddr = binary.BigEndian.Uint32(b[:])
-						b = vpnIp.As4()
-						m.OldRelayToAddr = binary.BigEndian.Uint32(b[:])
+						err = buildRelayInfoCertV1(&m, hm.f.myVpnNetworks, vpnIp)
 					case cert.Version2:
-						if vpnIp.Is4() {
-							relayFrom = hm.f.myVpnAddrs[0]
-						} else {
-							//todo do this smarter
-							relayFrom = hm.f.myVpnAddrs[len(hm.f.myVpnAddrs)-1]
-						}
-						m.RelayFromAddr = netAddrToProtoAddr(relayFrom)
-						m.RelayToAddr = netAddrToProtoAddr(vpnIp)
+						err = buildRelayInfoCertV2(&m, hm.f.myVpnNetworks, vpnIp)
 					default:
-						hostinfo.logger(hm.l).Error("Unknown certificate version found while creating relay")
+						err = errors.New("unknown certificate version found while creating relay")
+					}
+					if err != nil {
+						hostinfo.logger(hm.l).WithError(err).Error("Refusing to relay")
 						continue
 					}
 
 					msg, err := m.Marshal()
 					if err != nil {
-						hostinfo.logger(hm.l).
-							WithError(err).
+						hostinfo.logger(hm.l).WithError(err).
 							Error("Failed to marshal Control message to create relay")
 					} else {
 						hm.f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, make([]byte, 12), make([]byte, mtu))
 						hm.l.WithFields(logrus.Fields{
-							"relayFrom":           relayFrom,
+							"relayFrom":           m.GetRelayFrom(),
 							"relayTo":             vpnIp,
 							"initiatorRelayIndex": idx,
 							"relay":               relay}).
@@ -366,48 +346,27 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 					InitiatorRelayIndex: existingRelay.LocalIndex,
 				}
 
-				relayFrom := hm.f.myVpnAddrs[0]
-
+				var err error
 				switch relayHostInfo.GetCert().Certificate.Version() {
 				case cert.Version1:
-					if !hm.f.myVpnAddrs[0].Is4() {
-						hostinfo.logger(hm.l).Error("can not establish v1 relay with a v6 network because the relay is not running a current nebula version")
-						continue
-					}
-
-					if !vpnIp.Is4() {
-						hostinfo.logger(hm.l).Error("can not establish v1 relay with a v6 remote network because the relay is not running a current nebula version")
-						continue
-					}
-
-					b := hm.f.myVpnAddrs[0].As4()
-					m.OldRelayFromAddr = binary.BigEndian.Uint32(b[:])
-					b = vpnIp.As4()
-					m.OldRelayToAddr = binary.BigEndian.Uint32(b[:])
+					err = buildRelayInfoCertV1(&m, hm.f.myVpnNetworks, vpnIp)
 				case cert.Version2:
-					if vpnIp.Is4() {
-						relayFrom = hm.f.myVpnAddrs[0]
-					} else {
-						//todo do this smarter
-						relayFrom = hm.f.myVpnAddrs[len(hm.f.myVpnAddrs)-1]
-					}
-
-					m.RelayFromAddr = netAddrToProtoAddr(relayFrom)
-					m.RelayToAddr = netAddrToProtoAddr(vpnIp)
+					err = buildRelayInfoCertV2(&m, hm.f.myVpnNetworks, vpnIp)
 				default:
-					hostinfo.logger(hm.l).Error("Unknown certificate version found while creating relay")
+					err = errors.New("unknown certificate version found while creating relay")
+				}
+				if err != nil {
+					hostinfo.logger(hm.l).WithError(err).Error("Refusing to relay")
 					continue
 				}
 				msg, err := m.Marshal()
 				if err != nil {
-					hostinfo.logger(hm.l).
-						WithError(err).
-						Error("Failed to marshal Control message to create relay")
+					hostinfo.logger(hm.l).WithError(err).Error("Failed to marshal Control message to create relay")
 				} else {
 					// This must send over the hostinfo, not over hm.Hosts[ip]
 					hm.f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, make([]byte, 12), make([]byte, mtu))
 					hm.l.WithFields(logrus.Fields{
-						"relayFrom":           relayFrom,
+						"relayFrom":           m.GetRelayFrom(),
 						"relayTo":             vpnIp,
 						"initiatorRelayIndex": existingRelay.LocalIndex,
 						"relay":               relay}).
@@ -741,4 +700,33 @@ func generateIndex(l *logrus.Logger) (uint32, error) {
 
 func hsTimeout(tries int64, interval time.Duration) time.Duration {
 	return time.Duration(tries / 2 * ((2 * int64(interval)) + (tries-1)*int64(interval)))
+}
+
+var errNoRelayTooOld = errors.New("can not establish v1 relay with a v6 network because the relay is not running a current nebula version")
+
+func buildRelayInfoCertV1(m *NebulaControl, myVpnNetworks []netip.Prefix, peerVpnIp netip.Addr) error {
+	relayFrom := myVpnNetworks[0].Addr()
+	if !relayFrom.Is4() {
+		return errNoRelayTooOld
+	}
+	if !peerVpnIp.Is4() {
+		return errNoRelayTooOld
+	}
+
+	b := relayFrom.As4()
+	m.OldRelayFromAddr = binary.BigEndian.Uint32(b[:])
+	b = peerVpnIp.As4()
+	m.OldRelayToAddr = binary.BigEndian.Uint32(b[:])
+	return nil
+}
+
+func buildRelayInfoCertV2(m *NebulaControl, myVpnNetworks []netip.Prefix, peerVpnIp netip.Addr) error {
+	for i := range myVpnNetworks {
+		if myVpnNetworks[i].Contains(peerVpnIp) {
+			m.RelayFromAddr = netAddrToProtoAddr(myVpnNetworks[i].Addr())
+			m.RelayToAddr = netAddrToProtoAddr(peerVpnIp)
+			return nil
+		}
+	}
+	return errors.New("cannot establish relay, no networks in common")
 }

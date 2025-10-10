@@ -1425,7 +1425,7 @@ func (d *NebulaMetaDetails) GetRelays() []netip.Addr {
 	return relays
 }
 
-// FindNetworkUnion returns the first netip.Addr contained in the list of provided netip.Prefix, if able
+// findNetworkUnion returns the first netip.Addr of addrs contained in the list of provided netip.Prefix, if able
 func findNetworkUnion(prefixes []netip.Prefix, addrs []netip.Addr) (netip.Addr, bool) {
 	for i := range prefixes {
 		for j := range addrs {
@@ -1448,5 +1448,15 @@ func (d *NebulaMetaDetails) GetVpnAddrAndVersion() (netip.Addr, cert.Version, er
 		return detailsVpnAddr, cert.Version2, nil
 	} else {
 		return netip.Addr{}, cert.Version1, ErrBadDetailsVpnAddr
+	}
+}
+
+func (d *NebulaControl) GetRelayFrom() netip.Addr {
+	if d.OldRelayFromAddr != 0 {
+		b := [4]byte{}
+		binary.BigEndian.PutUint32(b[:], d.OldRelayFromAddr)
+		return netip.AddrFrom4(b)
+	} else {
+		return protoAddrToNetAddr(d.RelayFromAddr)
 	}
 }

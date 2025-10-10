@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"net/netip"
 	"slices"
@@ -513,16 +512,18 @@ func (hm *HostMap) QueryVpnAddr(vpnIp netip.Addr) *HostInfo {
 	return hm.queryVpnAddr(vpnIp, nil)
 }
 
+var errUnableToFindHost = errors.New("unable to find host")
+var errUnableToFindHostWithRelay = errors.New("unable to find host with relay")
+
 func (hm *HostMap) QueryVpnAddrsRelayFor(targetIps []netip.Addr, relayHostIp netip.Addr) (*HostInfo, *Relay, error) {
 	hm.RLock()
 	defer hm.RUnlock()
 
 	h, ok := hm.Hosts[relayHostIp]
 	if !ok {
-		return nil, nil, errors.New("unable to find host")
+		return nil, nil, errUnableToFindHost
 	}
 
-	lastH := h
 	for h != nil {
 		for _, targetIp := range targetIps {
 			r, ok := h.relayState.QueryRelayForByIp(targetIp)
@@ -530,12 +531,10 @@ func (hm *HostMap) QueryVpnAddrsRelayFor(targetIps []netip.Addr, relayHostIp net
 				return h, r, nil
 			}
 		}
-		lastH = h
 		h = h.next
 	}
 
-	//todo no merge
-	return nil, nil, fmt.Errorf("unable to find host with relay: %v", lastH)
+	return nil, nil, errUnableToFindHostWithRelay
 }
 
 func (hm *HostMap) unlockedDisestablishVpnAddrRelayFor(hi *HostInfo) {
