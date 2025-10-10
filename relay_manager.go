@@ -331,8 +331,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 
 		msg, err := resp.Marshal()
 		if err != nil {
-			logMsg.
-				WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
+			logMsg.WithError(err).Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay")
 		} else {
 			f.SendMessageToHostInfo(header.Control, 0, h, msg, make([]byte, 12), make([]byte, mtu))
 			rm.l.WithFields(logrus.Fields{
@@ -416,8 +415,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 
 		msg, err := req.Marshal()
 		if err != nil {
-			logMsg.
-				WithError(err).Error("relayManager Failed to marshal Control message to create relay")
+			logMsg.WithError(err).Error("relayManager Failed to marshal Control message to create relay")
 		} else {
 			f.SendMessageToHostInfo(header.Control, 0, peer, msg, make([]byte, 12), make([]byte, mtu))
 			rm.l.WithFields(logrus.Fields{
@@ -434,8 +432,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 		if !ok {
 			_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, ForwardingType, PeerRequested)
 			if err != nil {
-				logMsg.
-					WithError(err).Error("relayManager Failed to allocate a local index for relay")
+				logMsg.WithError(err).Error("relayManager Failed to allocate a local index for relay")
 				return
 			}
 		}
