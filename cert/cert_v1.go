@@ -83,6 +83,10 @@ func (c *certificateV1) PublicKey() []byte {
 	return c.details.publicKey
 }
 
+func (c *certificateV1) MarshalPublicKeyPEM() []byte {
+	return marshalCertPublicKeyToPEM(c)
+}
+
 func (c *certificateV1) Signature() []byte {
 	return c.signature
 }
@@ -110,8 +114,10 @@ func (c *certificateV1) CheckSignature(key []byte) bool {
 	case Curve_CURVE25519:
 		return ed25519.Verify(key, b, c.signature)
 	case Curve_P256:
-		x, y := elliptic.Unmarshal(elliptic.P256(), key)
-		pubKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+		pubKey, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), key)
+		if err != nil {
+			return false
+		}
 		hashed := sha256.Sum256(b)
 		return ecdsa.VerifyASN1(pubKey, hashed[:], c.signature)
 	default:

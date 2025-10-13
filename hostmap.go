@@ -738,7 +738,8 @@ func (i *HostInfo) buildNetworks(networks, unsafeNetworks []netip.Prefix) {
 
 	i.networks = new(bart.Lite)
 	for _, network := range networks {
-		i.networks.Insert(network)
+		nprefix := netip.PrefixFrom(network.Addr(), network.Addr().BitLen())
+		i.networks.Insert(nprefix)
 	}
 
 	for _, network := range unsafeNetworks {
