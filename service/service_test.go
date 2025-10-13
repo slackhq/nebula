@@ -16,8 +16,8 @@ import (
 	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay"
+	"go.yaml.in/yaml/v3"
 	"golang.org/x/sync/errgroup"
-	"gopkg.in/yaml.v3"
 )
 
 type m = map[string]any
