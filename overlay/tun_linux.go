@@ -137,13 +137,19 @@ func findNextTunName(tunName string) (string, error) {
 	if len(tunName) == 2 {
 		return "", errors.New("please don't name your tun device '%d'")
 	}
-	tunNameTemplate := tunName[:len(tunName)-2]
+
+	if (len(tunName) - len("%d") + len("0")) > unix.IFNAMSIZ {
+		return "", fmt.Errorf("your tun device name template %s would result in a name longer than the maximum allowed length of %d", tunName, unix.IFNAMSIZ)
+	}
+
+	tunNameTemplate := tunName[:len(tunName)-len("%d")]
 	links, err := netlink.LinkList()
 	if err != nil {
 		return "", err
 	}
 	var candidateName string
-	for i := 0; i < 100000; i++ {
+	i := 0
+	for {
 		candidateName = fmt.Sprintf("%s%d", tunNameTemplate, i)
 		good := true
 		for _, link := range links {
@@ -152,10 +158,10 @@ func findNextTunName(tunName string) (string, error) {
 				break
 			}
 		}
+		if len(candidateName) > unix.IFNAMSIZ {
+			return "", fmt.Errorf("first available tun device is %s, which is longer than the max allowed size of %d", candidateName, unix.IFNAMSIZ)
+		}
 		if good {
-			if len(candidateName) > 16 {
-				return "", errors.New("you have too many nebula networks")
-			}
 			return candidateName, nil
 		}
 	}
