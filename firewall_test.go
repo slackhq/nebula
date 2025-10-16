@@ -736,6 +736,141 @@ func TestFirewall_DropIPSpoofing(t *testing.T) {
 	assert.Equal(t, fw.Drop(p, true, &h1, cp, nil), ErrInvalidRemoteIP)
 }
 
+func TestFirewall_DropUnsafePeerRouting(t *testing.T) {
+	l := test.NewLogger()
+	ob := &bytes.Buffer{}
+	l.SetOutput(ob)
+
+	anyNetwork := netip.MustParsePrefix("0.0.0.0/0")
+	unsafeNetwork := netip.MustParsePrefix("198.51.100.0/24")
+
+	c := cert.CachedCertificate{
+		Certificate: &dummyCert{
+			name:           "host-owner",
+			networks:       []netip.Prefix{netip.MustParsePrefix("192.0.2.1/24")},
+			unsafeNetworks: []netip.Prefix{unsafeNetwork},
+		},
+	}
+
+	// This is a peer that we want to route to/from.
+	c1 := cert.CachedCertificate{
+		Certificate: &dummyCert{
+			name:           "peer",
+			networks:       []netip.Prefix{netip.MustParsePrefix("192.0.2.2/24")},
+			unsafeNetworks: []netip.Prefix{unsafeNetwork},
+			issuer:         "signer-sha",
+		},
+	}
+	h1 := HostInfo{
+		ConnectionState: &ConnectionState{
+			peerCert: &c1,
+		},
+		vpnAddrs: []netip.Addr{c1.Certificate.Networks()[0].Addr()},
+	}
+	h1.buildNetworks(c1.Certificate.Networks(), c1.Certificate.UnsafeNetworks())
+
+	// This is another host in the Nebula network.
+	c2 := cert.CachedCertificate{
+		Certificate: &dummyCert{
+			name:           "host",
+			networks:       []netip.Prefix{netip.MustParsePrefix("192.0.2.3/24")},
+			unsafeNetworks: []netip.Prefix{},
+			issuer:         "signer-sha",
+		},
+	}
+	h2 := HostInfo{
+		ConnectionState: &ConnectionState{
+			peerCert: &c2,
+		},
+		vpnAddrs: []netip.Addr{c2.Certificate.Networks()[0].Addr()},
+	}
+	h2.buildNetworks(c2.Certificate.Networks(), c2.Certificate.UnsafeNetworks())
+
+	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
+	fw2 := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
+	fw2.unsafePeerRouting = true
+
+	// Add firewall rules. Due to `default_local_cidr_any` we need to explicitly add CIDR for unsafe network.
+	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 1, 1, []string{}, "", netip.Prefix{}, anyNetwork, "", ""))
+	require.NoError(t, fw.AddRule(false, firewall.ProtoAny, 1, 1, []string{}, "", netip.Prefix{}, anyNetwork, "", ""))
+	require.NoError(t, fw2.AddRule(true, firewall.ProtoAny, 1, 1, []string{}, "", netip.Prefix{}, anyNetwork, "", ""))
+	require.NoError(t, fw2.AddRule(false, firewall.ProtoAny, 1, 1, []string{}, "", netip.Prefix{}, anyNetwork, "", ""))
+	cp := cert.NewCAPool()
+
+	// Packet initially send from `host` to us should pass both config.
+	p := firewall.Packet{
+		LocalAddr:  netip.MustParseAddr("198.51.100.42"),
+		RemoteAddr: netip.MustParseAddr("192.0.2.3"),
+		LocalPort:  1,
+		RemotePort: 1,
+		Protocol:   firewall.ProtoUDP,
+		Fragment:   false,
+	}
+
+	require.NoError(t, fw.Drop(p, true, &h2, cp, nil))
+	require.NoError(t, fw2.Drop(p, true, &h2, cp, nil))
+
+	pRev := firewall.Packet{
+		LocalAddr:  netip.MustParseAddr("192.0.2.3"),
+		RemoteAddr: netip.MustParseAddr("198.51.100.42"),
+		LocalPort:  1,
+		RemotePort: 1,
+		Protocol:   firewall.ProtoUDP,
+		Fragment:   false,
+	}
+
+	// Forward to `peer`, should only pass `fw2`.
+	assert.Equal(t, fw.Drop(pRev, false, &h1, cp, nil), ErrInvalidLocalIP)
+	require.NoError(t, fw2.Drop(pRev, false, &h1, cp, nil))
+
+	// Now let's test receiving end, check when the packet is received via `peer`.
+	resetConntrack(fw)
+	resetConntrack(fw2)
+	assert.Equal(t, fw.Drop(p, true, &h1, cp, nil), ErrInvalidRemoteIP)
+	require.NoError(t, fw2.Drop(p, true, &h1, cp, nil))
+
+	// The reverse direction, forward traffic to `peer` for it to reach `host`.
+	assert.Equal(t, fw.Drop(p, false, &h1, cp, nil), ErrInvalidRemoteIP)
+	require.NoError(t, fw2.Drop(p, false, &h1, cp, nil))
+
+	// Now let's test the receving end of the reverse direction, check when he packet is received via `peer`.
+	resetConntrack(fw)
+	resetConntrack(fw2)
+	assert.Equal(t, fw.Drop(pRev, true, &h1, cp, nil), ErrInvalidLocalIP)
+	require.NoError(t, fw2.Drop(pRev, true, &h1, cp, nil))
+
+	// Final reply to `host`. This time it's allowed regardless the config.
+	require.NoError(t, fw.Drop(p, false, &h2, cp, nil))
+	require.NoError(t, fw2.Drop(p, false, &h2, cp, nil))
+
+	// Try some cases where the address is *not* covered by certificate and ensure they're rejected.
+	p = firewall.Packet{
+		LocalAddr:  netip.MustParseAddr("203.0.113.42"),
+		RemoteAddr: netip.MustParseAddr("192.0.2.3"),
+		LocalPort:  1,
+		RemotePort: 1,
+		Protocol:   firewall.ProtoUDP,
+		Fragment:   false,
+	}
+	pRev = firewall.Packet{
+		LocalAddr:  netip.MustParseAddr("192.0.2.3"),
+		RemoteAddr: netip.MustParseAddr("203.0.113.42"),
+		LocalPort:  1,
+		RemotePort: 1,
+		Protocol:   firewall.ProtoUDP,
+		Fragment:   false,
+	}
+	resetConntrack(fw2)
+	assert.Equal(t, fw2.Drop(p, true, &h2, cp, nil), ErrInvalidLocalIP)
+	assert.Equal(t, fw2.Drop(pRev, false, &h1, cp, nil), ErrInvalidRemoteIP)
+	resetConntrack(fw2)
+	assert.Equal(t, fw2.Drop(p, true, &h1, cp, nil), ErrInvalidRemoteIP)
+	assert.Equal(t, fw2.Drop(p, false, &h1, cp, nil), ErrInvalidRemoteIP)
+	resetConntrack(fw2)
+	assert.Equal(t, fw.Drop(pRev, true, &h1, cp, nil), ErrInvalidRemoteIP)
+	assert.Equal(t, fw.Drop(p, false, &h2, cp, nil), ErrInvalidLocalIP)
+}
+
 func BenchmarkLookup(b *testing.B) {
 	ml := func(m map[string]struct{}, a [][]string) {
 		for n := 0; n < b.N; n++ {
