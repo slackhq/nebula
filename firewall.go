@@ -429,6 +429,7 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 		return nil
 	}
 
+	// TODO if we don't have a network in common with this packet's source IP, (and it's not for an unsafe_network), do we reject it?
 	// Make sure remote address matches nebula certificate
 	if h.networks != nil {
 		if !h.networks.Contains(fp.RemoteAddr) {
