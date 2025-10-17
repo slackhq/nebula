@@ -133,6 +133,8 @@ build/linux-mips-softfloat/%: LDFLAGS += -s -w
 # boringcrypto
 build/linux-amd64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
 build/linux-arm64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
+build/linux-amd64-boringcrypto/%: LDFLAGS += -checklinkname=0
+build/linux-arm64-boringcrypto/%: LDFLAGS += -checklinkname=0
 
 build/%/nebula: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
@@ -166,7 +168,7 @@ test:
 	go test -v ./...
 
 test-boringcrypto:
-	GOEXPERIMENT=boringcrypto CGO_ENABLED=1 go test -v ./...
+	GOEXPERIMENT=boringcrypto CGO_ENABLED=1 go test -ldflags "-checklinkname=0" -v ./...
 
 test-cov-html:
 	go test -coverprofile=coverage.out
