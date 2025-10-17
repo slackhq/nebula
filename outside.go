@@ -138,7 +138,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			return
 		}
 
-		lhf.HandleRequest(ip, hostinfo.vpnAddrs, d, f)
+		lhf.HandleRequest(ip, hostinfo, d, f)
 
 		// Fallthrough to the bottom to record incoming traffic
 

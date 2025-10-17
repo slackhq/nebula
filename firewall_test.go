@@ -392,7 +392,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 		c := &cert.CachedCertificate{
 			Certificate: &dummyCert{
 				name:     "nope",
-				networks: []netip.Prefix{netip.MustParsePrefix("fd99:99/128")},
+				networks: []netip.Prefix{netip.MustParsePrefix("fd99::99/128")},
 			},
 			InvertedGroups: map[string]struct{}{"nope": {}},
 		}

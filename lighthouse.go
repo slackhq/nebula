@@ -1017,17 +1017,17 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	return lhh.meta
 }
 
-func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, fromVpnAddrs []netip.Addr, p []byte, w EncWriter) {
+func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, hostinfo *HostInfo, p []byte, w EncWriter) {
 	n := lhh.resetMeta()
 	err := n.Unmarshal(p)
 	if err != nil {
-		lhh.l.WithError(err).WithField("vpnAddrs", fromVpnAddrs).WithField("udpAddr", rAddr).
+		lhh.l.WithError(err).WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("udpAddr", rAddr).
 			Error("Failed to unmarshal lighthouse packet")
 		return
 	}
 
 	if n.Details == nil {
-		lhh.l.WithField("vpnAddrs", fromVpnAddrs).WithField("udpAddr", rAddr).
+		lhh.l.WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("udpAddr", rAddr).
 			Error("Invalid lighthouse update")
 		return
 	}
@@ -1036,24 +1036,24 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, fromVpnAddrs [
 
 	switch n.Type {
 	case NebulaMeta_HostQuery:
-		lhh.handleHostQuery(n, fromVpnAddrs, rAddr, w)
+		lhh.handleHostQuery(n, hostinfo, rAddr, w)
 
 	case NebulaMeta_HostQueryReply:
-		lhh.handleHostQueryReply(n, fromVpnAddrs)
+		lhh.handleHostQueryReply(n, hostinfo.vpnAddrs)
 
 	case NebulaMeta_HostUpdateNotification:
-		lhh.handleHostUpdateNotification(n, fromVpnAddrs, w)
+		lhh.handleHostUpdateNotification(n, hostinfo, w)
 
 	case NebulaMeta_HostMovedNotification:
 	case NebulaMeta_HostPunchNotification:
-		lhh.handleHostPunchNotification(n, fromVpnAddrs, w)
+		lhh.handleHostPunchNotification(n, hostinfo.vpnAddrs, w)
 
 	case NebulaMeta_HostUpdateNotificationAck:
 		// noop
 	}
 }
 
-func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []netip.Addr, addr netip.AddrPort, w EncWriter) {
+func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, hostinfo *HostInfo, addr netip.AddrPort, w EncWriter) {
 	// Exit if we don't answer queries
 	if !lhh.lh.amLighthouse {
 		if lhh.l.Level >= logrus.DebugLevel {
@@ -1065,7 +1065,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 	queryVpnAddr, useVersion, err := n.Details.GetVpnAddrAndVersion()
 	if err != nil {
 		if lhh.l.Level >= logrus.DebugLevel {
-			lhh.l.WithField("from", fromVpnAddrs).WithField("details", n.Details).
+			lhh.l.WithField("from", hostinfo.vpnAddrs).WithField("details", n.Details).
 				Debugln("Dropping malformed HostQuery")
 		}
 		return
@@ -1073,7 +1073,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 	if useVersion == cert.Version1 && queryVpnAddr.Is6() {
 		// this case really shouldn't be possible to represent, but reject it anyway.
 		if lhh.l.Level >= logrus.DebugLevel {
-			lhh.l.WithField("vpnAddrs", fromVpnAddrs).WithField("queryVpnAddr", queryVpnAddr).
+			lhh.l.WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("queryVpnAddr", queryVpnAddr).
 				Debugln("invalid vpn addr for v1 handleHostQuery")
 		}
 		return
@@ -1099,14 +1099,14 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 	}
 
 	if err != nil {
-		lhh.l.WithError(err).WithField("vpnAddrs", fromVpnAddrs).Error("Failed to marshal lighthouse host query reply")
+		lhh.l.WithError(err).WithField("vpnAddrs", hostinfo.vpnAddrs).Error("Failed to marshal lighthouse host query reply")
 		return
 	}
 
 	lhh.lh.metricTx(NebulaMeta_HostQueryReply, 1)
-	w.SendMessageToVpnAddr(header.LightHouse, 0, fromVpnAddrs[0], lhh.pb[:ln], lhh.nb, lhh.out[:0])
+	w.SendMessageToHostInfo(header.LightHouse, 0, hostinfo, lhh.pb[:ln], lhh.nb, lhh.out[:0])
 
-	lhh.sendHostPunchNotification(n, fromVpnAddrs, queryVpnAddr, w)
+	lhh.sendHostPunchNotification(n, hostinfo.vpnAddrs, queryVpnAddr, w)
 }
 
 // sendHostPunchNotification signals the other side to punch some zero byte udp packets
@@ -1115,20 +1115,34 @@ func (lhh *LightHouseHandler) sendHostPunchNotification(n *NebulaMeta, fromVpnAd
 	found, ln, err := lhh.lh.queryAndPrepMessage(whereToPunch, func(c *cache) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostPunchNotification
-		targetHI := lhh.lh.ifce.GetHostInfo(punchNotifDest)
+		punchNotifDestHI := lhh.lh.ifce.GetHostInfo(punchNotifDest)
 		var useVersion cert.Version
-		if targetHI == nil {
+		if punchNotifDestHI == nil {
 			useVersion = lhh.lh.ifce.GetCertState().initiatingVersion
 		} else {
-			crt := targetHI.GetCert().Certificate
-			useVersion = crt.Version()
 			// we can only retarget if we have a hostinfo
-			newDest, ok := findNetworkUnion(crt.Networks(), fromVpnAddrs)
+			punchNotifDestCrt := punchNotifDestHI.GetCert().Certificate
+			useVersion = punchNotifDestCrt.Version()
+			punchNotifDestNetworks := punchNotifDestCrt.Networks()
+
+			//if we (the lighthouse) don't have a network in common with punchNotifDest, try to find one
+			if !lhh.lh.myVpnNetworksTable.Contains(punchNotifDest) {
+				newPunchNotifDest, ok := findNetworkUnion(lhh.lh.myVpnNetworks, punchNotifDestHI.vpnAddrs)
+				if ok {
+					punchNotifDest = newPunchNotifDest
+				} else {
+					if lhh.l.Level >= logrus.DebugLevel {
+						lhh.l.WithField("to", punchNotifDestNetworks).Debugln("unable to notify host to host, no addresses in common")
+					}
+				}
+			}
+
+			newWhereToPunch, ok := findNetworkUnion(punchNotifDestNetworks, fromVpnAddrs)
 			if ok {
-				whereToPunch = newDest
+				whereToPunch = newWhereToPunch
 			} else {
 				if lhh.l.Level >= logrus.DebugLevel {
-					lhh.l.WithField("to", crt.Networks()).Debugln("unable to punch to host, no addresses in common")
+					lhh.l.WithFields(m{"from": fromVpnAddrs, "to": punchNotifDestNetworks}).Debugln("unable to punch to host, no addresses in common with requestor")
 				}
 			}
 		}
@@ -1234,7 +1248,8 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, fromVpnAddrs [
 	}
 }
 
-func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVpnAddrs []netip.Addr, w EncWriter) {
+func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, hostinfo *HostInfo, w EncWriter) {
+	fromVpnAddrs := hostinfo.vpnAddrs
 	if !lhh.lh.amLighthouse {
 		if lhh.l.Level >= logrus.DebugLevel {
 			lhh.l.Debugln("I am not a lighthouse, do not take host updates: ", fromVpnAddrs)
@@ -1302,7 +1317,7 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 	}
 
 	lhh.lh.metricTx(NebulaMeta_HostUpdateNotificationAck, 1)
-	w.SendMessageToVpnAddr(header.LightHouse, 0, fromVpnAddrs[0], lhh.pb[:ln], lhh.nb, lhh.out[:0])
+	w.SendMessageToHostInfo(header.LightHouse, 0, hostinfo, lhh.pb[:ln], lhh.nb, lhh.out[:0])
 }
 
 func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpnAddrs []netip.Addr, w EncWriter) {
