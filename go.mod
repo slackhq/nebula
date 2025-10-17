@@ -1,8 +1,6 @@
 module github.com/slackhq/nebula
 
-go 1.22.0
-
-toolchain go1.22.2
+go 1.24.0
 
 require (
 	dario.cat/mergo v1.0.0
@@ -10,7 +8,7 @@ require (
 	github.com/armon/go-radix v1.0.0
 	github.com/cyberdelia/go-metrics-graphite v0.0.0-20161219230853-39f87cc3b432
 	github.com/flynn/noise v1.1.0
-	github.com/gaissmai/bart v0.11.1
+	github.com/gaissmai/bart v0.25.1
 	github.com/gogo/protobuf v1.3.2
 	github.com/google/gopacket v1.1.19
 	github.com/kardianos/service v1.2.2
@@ -23,12 +21,12 @@ require (
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/stretchr/testify v1.9.0
 	github.com/vishvananda/netlink v1.2.1-beta.2
-	golang.org/x/crypto v0.26.0
+	golang.org/x/crypto v0.43.0
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090
-	golang.org/x/net v0.28.0
+	golang.org/x/net v0.45.0
 	golang.org/x/sync v0.8.0
-	golang.org/x/sys v0.24.0
-	golang.org/x/term v0.23.0
+	golang.org/x/sys v0.37.0
+	golang.org/x/term v0.36.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard v0.0.0-20230325221338-052af4a8072b
 	golang.zx2c4.com/wireguard/windows v0.5.3
@@ -39,7 +37,6 @@ require (
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/bits-and-blooms/bitset v1.13.0 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/btree v1.1.2 // indirect

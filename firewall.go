@@ -862,16 +862,13 @@ func (fr *FirewallRule) match(p firewall.Packet, c *cert.NebulaCertificate) bool
 		}
 	}
 
-	matched := false
-	prefix := netip.PrefixFrom(p.RemoteIP, p.RemoteIP.BitLen())
-	fr.CIDR.EachLookupPrefix(prefix, func(prefix netip.Prefix, val *firewallLocalCIDR) bool {
-		if prefix.Contains(p.RemoteIP) && val.match(p, c) {
-			matched = true
-			return false
+	for _, v := range fr.CIDR.Supernets(netip.PrefixFrom(p.RemoteIP, p.RemoteIP.BitLen())) {
+		if v.match(p, c) {
+			return true
 		}
-		return true
-	})
-	return matched
+	}
+
+	return false
 }
 
 func (flc *firewallLocalCIDR) addRule(f *Firewall, localIp netip.Prefix) error {
