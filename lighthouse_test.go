@@ -132,8 +132,13 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	)
 
 	mw := &mockEncWriter{}
-
-	hi := []netip.Addr{vpnIp2}
+	hostinfo := &HostInfo{
+		ConnectionState: &ConnectionState{
+			eKey: nil,
+			dKey: nil,
+		},
+		vpnAddrs: []netip.Addr{vpnIp2},
+	}
 	b.Run("notfound", func(b *testing.B) {
 		lhh := lh.NewRequestHandler()
 		req := &NebulaMeta{
@@ -146,7 +151,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 		p, err := req.Marshal()
 		require.NoError(b, err)
 		for n := 0; n < b.N; n++ {
-			lhh.HandleRequest(rAddr, hi, p, mw)
+			lhh.HandleRequest(rAddr, hostinfo, p, mw)
 		}
 	})
 	b.Run("found", func(b *testing.B) {
@@ -162,7 +167,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 		require.NoError(b, err)
 
 		for n := 0; n < b.N; n++ {
-			lhh.HandleRequest(rAddr, hi, p, mw)
+			lhh.HandleRequest(rAddr, hostinfo, p, mw)
 		}
 	})
 }
@@ -326,7 +331,14 @@ func newLHHostRequest(fromAddr netip.AddrPort, myVpnIp, queryVpnIp netip.Addr, l
 	w := &testEncWriter{
 		metaFilter: &filter,
 	}
-	lhh.HandleRequest(fromAddr, []netip.Addr{myVpnIp}, b, w)
+	hostinfo := &HostInfo{
+		ConnectionState: &ConnectionState{
+			eKey: nil,
+			dKey: nil,
+		},
+		vpnAddrs: []netip.Addr{myVpnIp},
+	}
+	lhh.HandleRequest(fromAddr, hostinfo, b, w)
 	return w.lastReply
 }
 
@@ -355,9 +367,15 @@ func newLHHostUpdate(fromAddr netip.AddrPort, vpnIp netip.Addr, addrs []netip.Ad
 	if err != nil {
 		panic(err)
 	}
-
+	hostinfo := &HostInfo{
+		ConnectionState: &ConnectionState{
+			eKey: nil,
+			dKey: nil,
+		},
+		vpnAddrs: []netip.Addr{vpnIp},
+	}
 	w := &testEncWriter{}
-	lhh.HandleRequest(fromAddr, []netip.Addr{vpnIp}, b, w)
+	lhh.HandleRequest(fromAddr, hostinfo, b, w)
 }
 
 type testLhReply struct {
