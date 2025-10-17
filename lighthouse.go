@@ -1115,20 +1115,34 @@ func (lhh *LightHouseHandler) sendHostPunchNotification(n *NebulaMeta, fromVpnAd
 	found, ln, err := lhh.lh.queryAndPrepMessage(whereToPunch, func(c *cache) (int, error) {
 		n = lhh.resetMeta()
 		n.Type = NebulaMeta_HostPunchNotification
-		targetHI := lhh.lh.ifce.GetHostInfo(punchNotifDest)
+		punchNotifDestHI := lhh.lh.ifce.GetHostInfo(punchNotifDest)
 		var useVersion cert.Version
-		if targetHI == nil {
+		if punchNotifDestHI == nil {
 			useVersion = lhh.lh.ifce.GetCertState().initiatingVersion
 		} else {
-			crt := targetHI.GetCert().Certificate
-			useVersion = crt.Version()
 			// we can only retarget if we have a hostinfo
-			newDest, ok := findNetworkUnion(crt.Networks(), fromVpnAddrs)
+			punchNotifDestCrt := punchNotifDestHI.GetCert().Certificate
+			useVersion = punchNotifDestCrt.Version()
+			punchNotifDestNetworks := punchNotifDestCrt.Networks()
+
+			//if we (the lighthouse) don't have a network in common with punchNotifDest, try to find one
+			if !lhh.lh.myVpnNetworksTable.Contains(punchNotifDest) {
+				newPunchNotifDest, ok := findNetworkUnion(lhh.lh.myVpnNetworks, punchNotifDestHI.vpnAddrs)
+				if ok {
+					punchNotifDest = newPunchNotifDest
+				} else {
+					if lhh.l.Level >= logrus.DebugLevel {
+						lhh.l.WithField("to", punchNotifDestNetworks).Debugln("unable to notify host to host, no addresses in common")
+					}
+				}
+			}
+
+			newWhereToPunch, ok := findNetworkUnion(punchNotifDestNetworks, fromVpnAddrs)
 			if ok {
-				whereToPunch = newDest
+				whereToPunch = newWhereToPunch
 			} else {
 				if lhh.l.Level >= logrus.DebugLevel {
-					lhh.l.WithField("to", crt.Networks()).Debugln("unable to punch to host, no addresses in common")
+					lhh.l.WithFields(m{"from": fromVpnAddrs, "to": punchNotifDestNetworks}).Debugln("unable to punch to host, no addresses in common with requestor")
 				}
 			}
 		}
