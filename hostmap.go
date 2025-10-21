@@ -212,6 +212,18 @@ func (rs *RelayState) InsertRelay(ip netip.Addr, idx uint32, r *Relay) {
 	rs.relayForByIdx[idx] = r
 }
 
+type NetworkType uint8
+
+const (
+	NetworkTypeUnknown NetworkType = iota
+	// NetworkTypeVPN is a network that overlaps one or more of the vpnNetworks in our certificate
+	NetworkTypeVPN
+	// NetworkTypeVPNPeer is a network that does not overlap one of our networks
+	NetworkTypeVPNPeer
+	// NetworkTypeUnsafe is a network from Certificate.UnsafeNetworks()
+	NetworkTypeUnsafe
+)
+
 type HostInfo struct {
 	remote          netip.AddrPort
 	remotes         *RemoteList
@@ -225,8 +237,8 @@ type HostInfo struct {
 	// vpn networks but were removed because they are not usable
 	vpnAddrs []netip.Addr
 
-	// networks are both all vpn and unsafe networks assigned to this host
-	networks   *bart.Lite
+	// networks is a combination of specific vpn addresses (not prefixes!) and full unsafe networks assigned to this host.
+	networks   *bart.Table[NetworkType]
 	relayState RelayState
 
 	// HandshakePacket records the packets used to create this hostinfo
@@ -730,20 +742,27 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote netip.AddrPort) b
 	return false
 }
 
-func (i *HostInfo) buildNetworks(networks, unsafeNetworks []netip.Prefix) {
+func (i *HostInfo) buildNetworks(myVpnNetworksTable *bart.Lite, networks, unsafeNetworks []netip.Prefix) {
 	if len(networks) == 1 && len(unsafeNetworks) == 0 {
-		// Simple case, no CIDRTree needed
-		return
+		if myVpnNetworksTable.Contains(networks[0].Addr()) {
+			return // Simple case, no CIDRTree needed
+		}
 	}
 
-	i.networks = new(bart.Lite)
+	i.networks = new(bart.Table[NetworkType])
 	for _, network := range networks {
+		var nwType NetworkType
+		if myVpnNetworksTable.Contains(network.Addr()) {
+			nwType = NetworkTypeVPN
+		} else {
+			nwType = NetworkTypeVPNPeer
+		}
 		nprefix := netip.PrefixFrom(network.Addr(), network.Addr().BitLen())
-		i.networks.Insert(nprefix)
+		i.networks.Insert(nprefix, nwType)
 	}
 
 	for _, network := range unsafeNetworks {
-		i.networks.Insert(network)
+		i.networks.Insert(network, NetworkTypeUnsafe)
 	}
 }
 
