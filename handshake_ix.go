@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"net/netip"
-	"slices"
 	"time"
 
 	"github.com/flynn/noise"
@@ -564,6 +563,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
 	}
 
+	correctHostResponded := false
 	anyVpnAddrsInCommon := false
 	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
 	for i, network := range vpnNetworks {
@@ -571,11 +571,14 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		if f.myVpnNetworksTable.Contains(network.Addr()) {
 			anyVpnAddrsInCommon = true
 		}
+		if hostinfo.vpnAddrs[0] == network.Addr() {
+			// todo is it more correct to see if any of hostinfo.vpnAddrs are in the cert? it should have len==1, but one day it might not?
+			correctHostResponded = true
+		}
 	}
 
 	// Ensure the right host responded
-	// todo is it more correct to see if any of hostinfo.vpnAddrs are in the cert? it should have len==1, but one day it might not?
-	if !slices.Contains(vpnAddrs, hostinfo.vpnAddrs[0]) {
+	if !correctHostResponded {
 		f.l.WithField("intendedVpnAddrs", hostinfo.vpnAddrs).WithField("haveVpnNetworks", vpnNetworks).
 			WithField("udpAddr", addr).
 			WithField("certName", certName).
