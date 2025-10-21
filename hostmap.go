@@ -512,13 +512,16 @@ func (hm *HostMap) QueryVpnAddr(vpnIp netip.Addr) *HostInfo {
 	return hm.queryVpnAddr(vpnIp, nil)
 }
 
+var errUnableToFindHost = errors.New("unable to find host")
+var errUnableToFindHostWithRelay = errors.New("unable to find host with relay")
+
 func (hm *HostMap) QueryVpnAddrsRelayFor(targetIps []netip.Addr, relayHostIp netip.Addr) (*HostInfo, *Relay, error) {
 	hm.RLock()
 	defer hm.RUnlock()
 
 	h, ok := hm.Hosts[relayHostIp]
 	if !ok {
-		return nil, nil, errors.New("unable to find host")
+		return nil, nil, errUnableToFindHost
 	}
 
 	for h != nil {
@@ -531,7 +534,7 @@ func (hm *HostMap) QueryVpnAddrsRelayFor(targetIps []netip.Addr, relayHostIp net
 		h = h.next
 	}
 
-	return nil, nil, errors.New("unable to find host with relay")
+	return nil, nil, errUnableToFindHostWithRelay
 }
 
 func (hm *HostMap) unlockedDisestablishVpnAddrRelayFor(hi *HostInfo) {
