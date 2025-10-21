@@ -22,6 +22,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/e2e/router"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
 
@@ -180,10 +181,10 @@ func assertHostInfoPair(t *testing.T, addrA, addrB netip.AddrPort, vpnNetsA, vpn
 	// Get both host infos
 	//TODO: CERT-V2 we may want to loop over each vpnAddr and assert all the things
 	hBinA := controlA.GetHostInfoByVpnAddr(vpnNetsB[0].Addr(), false)
-	assert.NotNil(t, hBinA, "Host B was not found by vpnAddr in controlA")
+	require.NotNil(t, hBinA, "Host B was not found by vpnAddr in controlA")
 
 	hAinB := controlB.GetHostInfoByVpnAddr(vpnNetsA[0].Addr(), false)
-	assert.NotNil(t, hAinB, "Host A was not found by vpnAddr in controlB")
+	require.NotNil(t, hAinB, "Host A was not found by vpnAddr in controlB")
 
 	// Check that both vpn and real addr are correct
 	assert.EqualValues(t, getAddrs(vpnNetsB), hBinA.VpnAddrs, "Host B VpnIp is wrong in control A")
