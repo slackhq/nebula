@@ -208,17 +208,6 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		}
 	}
 
-	if !anyVpnAddrsInCommon {
-		f.l.WithField("vpnNetworks", vpnNetworks).
-			WithField("udpAddr", addr).
-			WithField("certName", certName).
-			WithField("certVersion", certVersion).
-			WithField("fingerprint", fingerprint).
-			WithField("issuer", issuer).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("No usable vpn addresses from host, refusing handshake")
-		return
-	}
-
 	if addr.IsValid() {
 		// addr can be invalid when the tunnel is being relayed.
 		// We only want to apply the remote allow list for direct tunnels here
@@ -253,26 +242,30 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		},
 	}
 
-	f.l.WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", addr).
-		WithField("certName", certName).
-		WithField("certVersion", certVersion).
-		WithField("fingerprint", fingerprint).
-		WithField("issuer", issuer).
-		WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-		WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-		Info("Handshake message received")
+	msgRxL := f.l.WithFields(m{
+		"vpnAddrs":       vpnAddrs,
+		"udpAddr":        addr,
+		"certName":       certName,
+		"certVersion":    certVersion,
+		"fingerprint":    fingerprint,
+		"issuer":         issuer,
+		"initiatorIndex": hs.Details.InitiatorIndex,
+		"responderIndex": hs.Details.ResponderIndex,
+		"remoteIndex":    h.RemoteIndex,
+		"handshake":      m{"stage": 1, "style": "ix_psk0"},
+	})
+
+	if anyVpnAddrsInCommon {
+		msgRxL.Info("Handshake message received")
+	} else {
+		//todo warn if not lighthouse or relay?
+		msgRxL.Info("Handshake message received, but no vpnNetworks in common.")
+	}
 
 	hs.Details.ResponderIndex = myIndex
 	hs.Details.Cert = cs.getHandshakeBytes(ci.myCert.Version())
 	if hs.Details.Cert == nil {
-		f.l.WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", addr).
-			WithField("certName", certName).
-			WithField("certVersion", certVersion).
-			WithField("fingerprint", fingerprint).
-			WithField("issuer", issuer).
-			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			WithField("certVersion", ci.myCert.Version()).
+		msgRxL.WithField("myCertVersion", ci.myCert.Version()).
 			Error("Unable to handshake with host because no certificate handshake bytes is available")
 		return
 	}
@@ -580,17 +573,8 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		}
 	}
 
-	if !anyVpnAddrsInCommon {
-		f.l.WithError(err).WithField("udpAddr", addr).
-			WithField("certName", certName).
-			WithField("certVersion", certVersion).
-			WithField("fingerprint", fingerprint).
-			WithField("issuer", issuer).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).Error("No usable vpn addresses from host, refusing handshake")
-		return true
-	}
-
 	// Ensure the right host responded
+	// todo is it more correct to see if any of hostinfo.vpnAddrs are in the cert? it should have len==1, but one day it might not?
 	if !slices.Contains(vpnAddrs, hostinfo.vpnAddrs[0]) {
 		f.l.WithField("intendedVpnAddrs", hostinfo.vpnAddrs).WithField("haveVpnNetworks", vpnNetworks).
 			WithField("udpAddr", addr).
@@ -630,7 +614,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 	ci.window.Update(f.l, 2)
 
 	duration := time.Since(hh.startTime).Nanoseconds()
-	f.l.WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", addr).
+	msgRxL := f.l.WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", addr).
 		WithField("certName", certName).
 		WithField("certVersion", certVersion).
 		WithField("fingerprint", fingerprint).
@@ -638,8 +622,13 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 		WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 		WithField("durationNs", duration).
-		WithField("sentCachedPackets", len(hh.packetStore)).
-		Info("Handshake message received")
+		WithField("sentCachedPackets", len(hh.packetStore))
+	if anyVpnAddrsInCommon {
+		msgRxL.Info("Handshake message received")
+	} else {
+		//todo warn if not lighthouse or relay?
+		msgRxL.Info("Handshake message received, but no vpnNetworks in common.")
+	}
 
 	// Build up the radix for the firewall if we have subnets in the cert
 	hostinfo.vpnAddrs = vpnAddrs
