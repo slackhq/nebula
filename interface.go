@@ -110,6 +110,16 @@ type EncWriter interface {
 	GetCertState() *CertState
 }
 
+// BatchReader is an interface for readers that support vectorized packet reading
+type BatchReader interface {
+	BatchRead() ([][]byte, []int, error)
+}
+
+// BatchWriter is an interface for writers that support vectorized packet writing
+type BatchWriter interface {
+	BatchWrite([][]byte) (int, error)
+}
+
 type sendRecvErrorConfig uint8
 
 const (
@@ -279,6 +289,16 @@ func (f *Interface) listenOut(i int) {
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	runtime.LockOSThread()
 
+	// Check if reader supports batch operations
+	if batchReader, ok := reader.(BatchReader); ok {
+		err := f.listenInBatch(batchReader, i)
+		if err != nil {
+			f.l.WithError(err).Error("Fatal error in batch packet reader, exiting goroutine")
+		}
+		return
+	}
+
+	// Fall back to single-packet mode
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
@@ -293,13 +313,76 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 				return
 			}
 
-			f.l.WithError(err).Error("Error while reading outbound packet")
-			// This only seems to happen when something fatal happens to the fd, so exit.
-			os.Exit(2)
+			f.l.WithError(err).Error("Fatal error while reading outbound packet, exiting goroutine")
+			return
 		}
 
 		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
 	}
+}
+
+// listenInBatch handles vectorized packet reading for improved performance
+func (f *Interface) listenInBatch(reader BatchReader, i int) error {
+	// Allocate per-packet state
+	fwPackets := make([]*firewall.Packet, 64) // Match batch size
+	outBuffers := make([][]byte, 64)
+	nbBuffers := make([][]byte, 64)
+
+	for j := 0; j < 64; j++ {
+		fwPackets[j] = &firewall.Packet{}
+		outBuffers[j] = make([]byte, mtu)
+		nbBuffers[j] = make([]byte, 12, 12)
+	}
+
+	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
+
+	for {
+		packets, sizes, err := reader.BatchRead()
+		if err != nil {
+			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
+				return nil
+			}
+
+			return fmt.Errorf("error while batch reading outbound packets: %w", err)
+		}
+
+		// Process each packet in the batch
+		cache := conntrackCache.Get(f.l)
+		for idx := 0; idx < len(packets); idx++ {
+			if idx < len(sizes) && sizes[idx] > 0 {
+				// Use modulo to reuse fw packet state if batch is larger than our pre-allocated state
+				stateIdx := idx % len(fwPackets)
+				f.consumeInsidePacket(packets[idx][:sizes[idx]], fwPackets[stateIdx], nbBuffers[stateIdx], outBuffers[stateIdx], i, cache)
+			}
+		}
+	}
+}
+
+// writeTunBatch attempts to write multiple packets to the TUN device using batch operations if supported
+func (f *Interface) writeTunBatch(q int, packets [][]byte) error {
+	if len(packets) == 0 {
+		return nil
+	}
+
+	// Check if the reader/writer supports batch operations
+	if batchWriter, ok := f.readers[q].(BatchWriter); ok {
+		_, err := batchWriter.BatchWrite(packets)
+		return err
+	}
+
+	// Fall back to writing packets individually
+	for _, packet := range packets {
+		if _, err := f.readers[q].Write(packet); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeTun writes a single packet to the TUN device
+func (f *Interface) writeTun(q int, packet []byte) error {
+	_, err := f.readers[q].Write(packet)
+	return err
 }
 
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {

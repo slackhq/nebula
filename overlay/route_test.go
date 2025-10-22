@@ -225,6 +225,7 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	// no mtu
 	c.Settings["tun"] = map[string]any{"unsafe_routes": []any{map[string]any{"via": "127.0.0.1", "route": "1.0.0.0/8"}}}
 	routes, err = parseUnsafeRoutes(c, []netip.Prefix{n})
+	require.NoError(t, err)
 	assert.Len(t, routes, 1)
 	assert.Equal(t, 0, routes[0].MTU)
 
@@ -318,7 +319,7 @@ func Test_makeRouteTree(t *testing.T) {
 
 	ip, err = netip.ParseAddr("1.1.0.1")
 	require.NoError(t, err)
-	r, ok = routeTree.Lookup(ip)
+	_, ok = routeTree.Lookup(ip)
 	assert.False(t, ok)
 }
 
