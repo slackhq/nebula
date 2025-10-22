@@ -1047,6 +1047,45 @@ func TestFirewall_convertRule(t *testing.T) {
 	assert.Equal(t, "group1", r.Group)
 }
 
+func TestFirewall_convertRuleSanity(t *testing.T) {
+	l := test.NewLogger()
+	ob := &bytes.Buffer{}
+	l.SetOutput(ob)
+
+	noWarningPlease := []map[string]any{
+		{"group": "group1"},
+		{"groups": []any{"group2"}},
+		{"host": "bob"},
+		{"cidr": "1.1.1.1/1"},
+		{"groups": []any{"group2"}, "host": "bob"},
+		{"cidr": "1.1.1.1/1", "host": "bob"},
+		{"groups": []any{"group2"}, "cidr": "1.1.1.1/1"},
+		{"groups": []any{"group2"}, "cidr": "1.1.1.1/1", "host": "bob"},
+	}
+	for _, c := range noWarningPlease {
+		r, err := convertRule(l, c, "test", 1)
+		require.NoError(t, err)
+		require.NoError(t, r.sanity(), "should not generate a sanity warning, %+v", c)
+	}
+
+	yesWarningPlease := []map[string]any{
+		{"group": "group1"},
+		{"groups": []any{"group2"}},
+		{"cidr": "1.1.1.1/1"},
+		{"groups": []any{"group2"}, "host": "bob"},
+		{"cidr": "1.1.1.1/1", "host": "bob"},
+		{"groups": []any{"group2"}, "cidr": "1.1.1.1/1"},
+		{"groups": []any{"group2"}, "cidr": "1.1.1.1/1", "host": "bob"},
+	}
+	for _, c := range yesWarningPlease {
+		c["host"] = "any"
+		r, err := convertRule(l, c, "test", 1)
+		require.NoError(t, err)
+		err = r.sanity()
+		require.Error(t, err, "I wanted a warning: %+v", c)
+	}
+}
+
 type addRuleCall struct {
 	incoming  bool
 	proto     uint8

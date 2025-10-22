@@ -408,6 +408,10 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			}
 		}
 
+		if warning := r.sanity(); warning != nil {
+			l.Warnf("%s rule #%v; %s", table, i, warning)
+		}
+
 		err = fw.AddRule(inbound, proto, startPort, endPort, groups, r.Host, cidr, localCidr, r.CAName, r.CASha)
 		if err != nil {
 			return fmt.Errorf("%s rule #%v; `%s`", table, i, err)
@@ -967,6 +971,38 @@ func convertRule(l *logrus.Logger, p any, table string, i int) (rule, error) {
 	}
 
 	return r, nil
+}
+
+// sanity returns an error if the rule would be evaluated in a way that would short-circuit a configured check on a wildcard value
+// rules are evaluated as "port AND proto AND (ca_sha OR ca_name) AND (host OR group OR groups OR cidr) AND local_cidr"
+func (r *rule) sanity() error {
+	//port, proto, local_cidr are AND, no need to check here
+	//ca_sha and ca_name don't have a wildcard value, no need to check here
+	groupsEmpty := r.Group == "" && len(r.Groups) == 0
+	hostEmpty := r.Host == ""
+	cidrEmpty := r.Cidr == ""
+
+	if (groupsEmpty && hostEmpty && cidrEmpty) == true {
+		return nil //no content!
+	}
+	if r.Host != "any" {
+		return nil //this being evaluated with OR is not intuitive, but at least it doesn't leave your network wide-open
+	}
+
+	if !groupsEmpty {
+		groupString := r.Group
+		if len(r.Groups) != 0 {
+			groupString = fmt.Sprintf("%s + %s", groupString, r.Groups)
+		}
+		return fmt.Errorf("groups specified as %s, but host=any will match any host, regardless of groups", groupString)
+	}
+
+	if !cidrEmpty {
+		return fmt.Errorf("cidr specified as %s, but host=any will match any host, regardless of cidr", r.Cidr)
+	}
+
+	//host is any, but groups and cidr are blank
+	return nil
 }
 
 func parsePort(s string) (startPort, endPort int32, err error) {
