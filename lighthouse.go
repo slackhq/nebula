@@ -360,7 +360,8 @@ func (lh *LightHouse) parseLighthouses(c *config.C) ([]netip.Addr, error) {
 		}
 
 		if !lh.myVpnNetworksTable.Contains(addr) {
-			return nil, util.NewContextualError("lighthouse host is not in our networks, invalid", m{"vpnAddr": addr, "networks": lh.myVpnNetworks}, nil)
+			lh.l.WithFields(m{"vpnAddr": addr, "networks": lh.myVpnNetworks}).
+				Warn("lighthouse host is not in our networks, this might be a mistake")
 		}
 		out[i] = addr
 	}
@@ -431,7 +432,8 @@ func (lh *LightHouse) loadStaticMap(c *config.C, staticList map[netip.Addr]struc
 		}
 
 		if !lh.myVpnNetworksTable.Contains(vpnAddr) {
-			return util.NewContextualError("static_host_map key is not in our network, invalid", m{"vpnAddr": vpnAddr, "networks": lh.myVpnNetworks, "entry": i + 1}, nil)
+			lh.l.WithFields(m{"vpnAddr": vpnAddr, "networks": lh.myVpnNetworks, "entry": i + 1}).
+				Warn("static_host_map key is not in our network, this might be a mistake")
 		}
 
 		vals, ok := v.([]any)

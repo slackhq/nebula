@@ -174,6 +174,10 @@ func (c *Control) GetHostmap() *HostMap {
 	return c.f.hostMap
 }
 
+func (c *Control) GetF() *Interface {
+	return c.f
+}
+
 func (c *Control) GetCertState() *CertState {
 	return c.f.pki.getCertState()
 }
