@@ -114,6 +114,33 @@ func NewTestCert(v cert.Version, curve cert.Curve, ca cert.Certificate, key []by
 	return c, pub, cert.MarshalPrivateKeyToPEM(curve, priv), pem
 }
 
+func NewTestCertDifferentVersion(c cert.Certificate, v cert.Version, ca cert.Certificate, key []byte) (cert.Certificate, []byte) {
+	nc := &cert.TBSCertificate{
+		Version:        v,
+		Curve:          c.Curve(),
+		Name:           c.Name(),
+		Networks:       c.Networks(),
+		UnsafeNetworks: c.UnsafeNetworks(),
+		Groups:         c.Groups(),
+		NotBefore:      time.Unix(c.NotBefore().Unix(), 0),
+		NotAfter:       time.Unix(c.NotAfter().Unix(), 0),
+		PublicKey:      c.PublicKey(),
+		IsCA:           false,
+	}
+
+	c, err := nc.Sign(ca, ca.Curve(), key)
+	if err != nil {
+		panic(err)
+	}
+
+	pem, err := c.MarshalPEM()
+	if err != nil {
+		panic(err)
+	}
+
+	return c, pem
+}
+
 func X25519Keypair() ([]byte, []byte) {
 	privkey := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, privkey); err != nil {
