@@ -63,6 +63,7 @@ type Firewall struct {
 	rulesVersion uint16
 
 	defaultLocalCIDRAny bool
+	unsafePeerRouting   bool
 	incomingMetrics     firewallMetrics
 	outgoingMetrics     firewallMetrics
 
@@ -210,6 +211,7 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 	)
 
 	fw.defaultLocalCIDRAny = c.GetBool("firewall.default_local_cidr_any", false)
+	fw.unsafePeerRouting = c.GetBool("firewall.unsafe_peer_routing", false)
 
 	inboundAction := c.GetString("firewall.inbound_action", "drop")
 	switch inboundAction {
@@ -431,7 +433,10 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 
 	// Make sure remote address matches nebula certificate
 	if h.networks != nil {
-		if !h.networks.Contains(fp.RemoteAddr) {
+		// In case where `unsafe-peer-routing` is enabled, we also accept the packet if we only can handle LocalAddr.
+		// This is to support multi-hop routing via Nebula, e.g. a peer is fowarding an ingress traffic to us.
+		if !(h.networks.Contains(fp.RemoteAddr) ||
+			f.unsafePeerRouting && h.networks.Contains(fp.LocalAddr)) {
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrInvalidRemoteIP
 		}
@@ -444,7 +449,11 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	}
 
 	// Make sure we are supposed to be handling this local ip address
-	if !f.routableNetworks.Contains(fp.LocalAddr) {
+	//
+	// In case where `unsafe-peer-routing` is enabled, we also accept the packet if we can only handle RemoteAddr.
+	// This is to support multi-hop routing via Nebula, e.g. we are forwarding an ingress traffic to a peer.
+	if !(f.routableNetworks.Contains(fp.LocalAddr) ||
+		f.unsafePeerRouting && f.routableNetworks.Contains(fp.RemoteAddr)) {
 		f.metrics(incoming).droppedLocalAddr.Inc(1)
 		return ErrInvalidLocalIP
 	}
