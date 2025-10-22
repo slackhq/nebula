@@ -191,8 +191,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 	anyVpnAddrsInCommon := false
 	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
 	for i, network := range vpnNetworks {
-		vpnAddr := network.Addr()
-		if f.myVpnAddrsTable.Contains(vpnAddr) {
+		if f.myVpnAddrsTable.Contains(network.Addr()) {
 			f.l.WithField("vpnNetworks", vpnNetworks).WithField("udpAddr", addr).
 				WithField("certName", certName).
 				WithField("certVersion", certVersion).
@@ -202,7 +201,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 			return
 		}
 		vpnAddrs[i] = network.Addr()
-		if f.myVpnNetworksTable.Contains(vpnAddr) {
+		if f.myVpnNetworksTable.Contains(network.Addr()) {
 			anyVpnAddrsInCommon = true
 		}
 	}
