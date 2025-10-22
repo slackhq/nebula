@@ -59,6 +59,10 @@ func newSimpleServer(v cert.Version, caCrt cert.Certificate, caKey []byte, name 
 }
 
 func newSimpleServerWithUdp(v cert.Version, caCrt cert.Certificate, caKey []byte, name string, sVpnNetworks string, udpAddr netip.AddrPort, overrides m) (*nebula.Control, []netip.Prefix, netip.AddrPort, *config.C) {
+	return newSimpleServerWithUdpAndUnsafeNetworks(v, caCrt, caKey, name, sVpnNetworks, udpAddr, "", overrides)
+}
+
+func newSimpleServerWithUdpAndUnsafeNetworks(v cert.Version, caCrt cert.Certificate, caKey []byte, name string, sVpnNetworks string, udpAddr netip.AddrPort, sUnsafeNetworks string, overrides m) (*nebula.Control, []netip.Prefix, netip.AddrPort, *config.C) {
 	l := NewTestLogger()
 
 	var vpnNetworks []netip.Prefix
@@ -74,7 +78,31 @@ func newSimpleServerWithUdp(v cert.Version, caCrt cert.Certificate, caKey []byte
 		panic("no vpn networks")
 	}
 
-	_, _, myPrivKey, myPEM := cert_test.NewTestCert(v, cert.Curve_CURVE25519, caCrt, caKey, name, time.Now(), time.Now().Add(5*time.Minute), vpnNetworks, nil, []string{})
+	firewallInbound := []m{{
+		"proto": "any",
+		"port":  "any",
+		"host":  "any",
+	}}
+
+	var unsafeNetworks []netip.Prefix
+	if sUnsafeNetworks != "" {
+		firewallInbound = []m{{
+			"proto":      "any",
+			"port":       "any",
+			"host":       "any",
+			"local_cidr": "0.0.0.0/0",
+		}}
+
+		for _, sn := range strings.Split(sUnsafeNetworks, ",") {
+			x, err := netip.ParsePrefix(strings.TrimSpace(sn))
+			if err != nil {
+				panic(err)
+			}
+			unsafeNetworks = append(unsafeNetworks, x)
+		}
+	}
+
+	_, _, myPrivKey, myPEM := cert_test.NewTestCert(v, cert.Curve_CURVE25519, caCrt, caKey, name, time.Now(), time.Now().Add(5*time.Minute), vpnNetworks, unsafeNetworks, []string{})
 
 	caB, err := caCrt.MarshalPEM()
 	if err != nil {
@@ -94,11 +122,7 @@ func newSimpleServerWithUdp(v cert.Version, caCrt cert.Certificate, caKey []byte
 				"port":  "any",
 				"host":  "any",
 			}},
-			"inbound": []m{{
-				"proto": "any",
-				"port":  "any",
-				"host":  "any",
-			}},
+			"inbound": firewallInbound,
 		},
 		//"handshakes": m{
 		//	"try_interval": "1s",
