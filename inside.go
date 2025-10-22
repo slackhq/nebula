@@ -139,7 +139,6 @@ func (f *Interface) getOrHandshakeNoRouting(vpnAddr netip.Addr, cacheCallback fu
 // getOrHandshakeConsiderRouting will try to find the HostInfo to handle this packet, starting a handshake if necessary.
 // If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel.
 func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
-
 	destinationAddr := fwPacket.RemoteAddr
 
 	hostinfo, ready := f.getOrHandshakeNoRouting(destinationAddr, cacheCallback)
