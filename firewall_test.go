@@ -1024,7 +1024,7 @@ func TestFirewall_convertRule(t *testing.T) {
 	r, err := convertRule(l, c, "test", 1)
 	assert.Contains(t, ob.String(), "test rule #1; group was an array with a single value, converting to simple value")
 	require.NoError(t, err)
-	assert.Equal(t, "group1", r.Group)
+	assert.Equal(t, []string{"group1"}, r.Groups)
 
 	// Ensure group array of > 1 is errord
 	ob.Reset()
@@ -1044,7 +1044,7 @@ func TestFirewall_convertRule(t *testing.T) {
 
 	r, err = convertRule(l, c, "test", 1)
 	require.NoError(t, err)
-	assert.Equal(t, "group1", r.Group)
+	assert.Equal(t, []string{"group1"}, r.Groups)
 }
 
 func TestFirewall_convertRuleSanity(t *testing.T) {
@@ -1081,6 +1081,23 @@ func TestFirewall_convertRuleSanity(t *testing.T) {
 		c["host"] = "any"
 		r, err := convertRule(l, c, "test", 1)
 		require.NoError(t, err)
+		err = r.sanity()
+		require.Error(t, err, "I wanted a warning: %+v", c)
+	}
+	//reset the list
+	yesWarningPlease = []map[string]any{
+		{"group": "group1"},
+		{"groups": []any{"group2"}},
+		{"cidr": "1.1.1.1/1"},
+		{"groups": []any{"group2"}, "host": "bob"},
+		{"cidr": "1.1.1.1/1", "host": "bob"},
+		{"groups": []any{"group2"}, "cidr": "1.1.1.1/1"},
+		{"groups": []any{"group2"}, "cidr": "1.1.1.1/1", "host": "bob"},
+	}
+	for _, c := range yesWarningPlease {
+		r, err := convertRule(l, c, "test", 1)
+		require.NoError(t, err)
+		r.Groups = append(r.Groups, "any")
 		err = r.sanity()
 		require.Error(t, err, "I wanted a warning: %+v", c)
 	}

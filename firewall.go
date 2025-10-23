@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -337,7 +338,6 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 	}
 
 	for i, t := range rs {
-		var groups []string
 		r, err := convertRule(l, t, table, i)
 		if err != nil {
 			return fmt.Errorf("%s rule #%v; %s", table, i, err)
@@ -347,21 +347,8 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			return fmt.Errorf("%s rule #%v; only one of port or code should be provided", table, i)
 		}
 
-		if r.Host == "" && len(r.Groups) == 0 && r.Group == "" && r.Cidr == "" && r.LocalCidr == "" && r.CAName == "" && r.CASha == "" {
+		if r.Host == "" && len(r.Groups) == 0 && r.Cidr == "" && r.LocalCidr == "" && r.CAName == "" && r.CASha == "" {
 			return fmt.Errorf("%s rule #%v; at least one of host, group, cidr, local_cidr, ca_name, or ca_sha must be provided", table, i)
-		}
-
-		if len(r.Groups) > 0 {
-			groups = r.Groups
-		}
-
-		if r.Group != "" {
-			// Check if we have both groups and group provided in the rule config
-			if len(groups) > 0 {
-				return fmt.Errorf("%s rule #%v; only one of group or groups should be defined, both provided", table, i)
-			}
-
-			groups = []string{r.Group}
 		}
 
 		var sPort, errPort string
@@ -412,7 +399,7 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			l.Warnf("%s rule #%v; %s", table, i, warning)
 		}
 
-		err = fw.AddRule(inbound, proto, startPort, endPort, groups, r.Host, cidr, localCidr, r.CAName, r.CASha)
+		err = fw.AddRule(inbound, proto, startPort, endPort, r.Groups, r.Host, cidr, localCidr, r.CAName, r.CASha)
 		if err != nil {
 			return fmt.Errorf("%s rule #%v; `%s`", table, i, err)
 		}
@@ -911,7 +898,6 @@ type rule struct {
 	Code      string
 	Proto     string
 	Host      string
-	Group     string
 	Groups    []string
 	Cidr      string
 	LocalCidr string
@@ -953,7 +939,8 @@ func convertRule(l *logrus.Logger, p any, table string, i int) (rule, error) {
 		l.Warnf("%s rule #%v; group was an array with a single value, converting to simple value", table, i)
 		m["group"] = v[0]
 	}
-	r.Group = toString("group", m)
+
+	singleGroup := toString("group", m)
 
 	if rg, ok := m["groups"]; ok {
 		switch reflect.TypeOf(rg).Kind() {
@@ -970,6 +957,15 @@ func convertRule(l *logrus.Logger, p any, table string, i int) (rule, error) {
 		}
 	}
 
+	//flatten group vs groups
+	if singleGroup != "" {
+		// Check if we have both groups and group provided in the rule config
+		if len(r.Groups) > 0 {
+			return r, fmt.Errorf("only one of group or groups should be defined, both provided")
+		}
+		r.Groups = []string{singleGroup}
+	}
+
 	return r, nil
 }
 
@@ -978,30 +974,40 @@ func convertRule(l *logrus.Logger, p any, table string, i int) (rule, error) {
 func (r *rule) sanity() error {
 	//port, proto, local_cidr are AND, no need to check here
 	//ca_sha and ca_name don't have a wildcard value, no need to check here
-	groupsEmpty := r.Group == "" && len(r.Groups) == 0
+	groupsEmpty := len(r.Groups) == 0
 	hostEmpty := r.Host == ""
 	cidrEmpty := r.Cidr == ""
 
 	if (groupsEmpty && hostEmpty && cidrEmpty) == true {
 		return nil //no content!
 	}
-	if r.Host != "any" {
-		return nil //this being evaluated with OR is not intuitive, but at least it doesn't leave your network wide-open
+
+	groupsHasAny := slices.Contains(r.Groups, "any")
+	if groupsHasAny && len(r.Groups) > 1 {
+		return fmt.Errorf("groups spec [%s] contains the group '\"any\". This rule will ignore the other groups specified", r.Groups)
 	}
 
-	if !groupsEmpty {
-		groupString := r.Group
-		if len(r.Groups) != 0 {
-			groupString = fmt.Sprintf("%s + %s", groupString, r.Groups)
+	if r.Host == "any" {
+		if !groupsEmpty {
+			return fmt.Errorf("groups specified as %s, but host=any will match any host, regardless of groups", r.Groups)
 		}
-		return fmt.Errorf("groups specified as %s, but host=any will match any host, regardless of groups", groupString)
+
+		if !cidrEmpty {
+			return fmt.Errorf("cidr specified as %s, but host=any will match any host, regardless of cidr", r.Cidr)
+		}
 	}
 
-	if !cidrEmpty {
-		return fmt.Errorf("cidr specified as %s, but host=any will match any host, regardless of cidr", r.Cidr)
+	if groupsHasAny {
+		if !hostEmpty && r.Host != "any" {
+			return fmt.Errorf("groups spec [%s] contains the group '\"any\". This rule will ignore the specified host %s", r.Groups, r.Host)
+		}
+		if !cidrEmpty {
+			return fmt.Errorf("groups spec [%s] contains the group '\"any\". This rule will ignore the specified cidr %s", r.Groups, r.Cidr)
+		}
 	}
 
-	//host is any, but groups and cidr are blank
+	//todo alert on cidr-any
+
 	return nil
 }
 
