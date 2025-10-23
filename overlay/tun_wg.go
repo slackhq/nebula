@@ -24,9 +24,9 @@ type wgTun struct {
 	MaxMTU      int
 	DefaultMTU  int
 
-	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	routeChan   chan struct{}
+	Routes    atomic.Pointer[[]Route]
+	routeTree atomic.Pointer[bart.Table[routing.Gateways]]
+	routeChan chan struct{}
 
 	// Platform-specific route management
 	routeManager *tun
