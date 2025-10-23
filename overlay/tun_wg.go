@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"sync"
 	"sync/atomic"
 
 	"github.com/gaissmai/bart"
@@ -37,7 +36,7 @@ type wgTun struct {
 
 // BatchReader interface for readers that support vectorized I/O
 type BatchReader interface {
-	BatchRead() ([][]byte, []int, error)
+	BatchRead(buffers [][]byte, sizes []int) (int, error)
 }
 
 // BatchWriter interface for writers that support vectorized I/O
@@ -47,23 +46,11 @@ type BatchWriter interface {
 
 // wgTunReader wraps a single TUN queue for multi-queue support
 type wgTunReader struct {
-	parent     *wgTun
-	tunDevice  wgtun.Device
-	buffers    [][]byte
-	sizes      []int
-	offset     int
-	batchSize  int
-	l          *logrus.Logger
+	parent    *wgTun
+	tunDevice wgtun.Device
+	offset    int
+	l         *logrus.Logger
 }
-
-var (
-	bufferPool = sync.Pool{
-		New: func() interface{} {
-			buf := make([]byte, 9001) // MTU size
-			return &buf
-		},
-	}
-)
 
 func (t *wgTun) Networks() []netip.Prefix {
 	return t.vpnNetworks
@@ -210,23 +197,9 @@ func (t *wgTun) reload(c *config.C, initial bool) error {
 }
 
 // BatchRead reads multiple packets from the TUN device using vectorized I/O
-func (r *wgTunReader) BatchRead() ([][]byte, []int, error) {
-	// Reuse buffers from pool
-	if len(r.buffers) == 0 {
-		r.buffers = make([][]byte, r.batchSize)
-		r.sizes = make([]int, r.batchSize)
-		for i := 0; i < r.batchSize; i++ {
-			buf := bufferPool.Get().(*[]byte)
-			r.buffers[i] = (*buf)[:cap(*buf)]
-		}
-	}
-
-	n, err := r.tunDevice.Read(r.buffers, r.sizes, r.offset)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return r.buffers[:n], r.sizes[:n], nil
+// The caller provides buffers and sizes slices, and this function returns the number of packets read.
+func (r *wgTunReader) BatchRead(buffers [][]byte, sizes []int) (int, error) {
+	return r.tunDevice.Read(buffers, sizes, r.offset)
 }
 
 // Read implements io.Reader for wgTunReader (single packet for compatibility)
@@ -262,16 +235,6 @@ func (r *wgTunReader) BatchWrite(packets [][]byte) (int, error) {
 }
 
 func (r *wgTunReader) Close() error {
-	// Return buffers to pool
-	for i := range r.buffers {
-		if r.buffers[i] != nil {
-			bufferPool.Put(&r.buffers[i])
-			r.buffers[i] = nil
-		}
-	}
-	r.buffers = nil
-	r.sizes = nil
-
 	if r.tunDevice != nil {
 		return r.tunDevice.Close()
 	}

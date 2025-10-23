@@ -47,6 +47,7 @@ type InterfaceConfig struct {
 	reQueryWait     time.Duration
 
 	ConntrackCacheTimeout time.Duration
+	batchSize             int
 	l                     *logrus.Logger
 }
 
@@ -84,6 +85,7 @@ type Interface struct {
 	version     string
 
 	conntrackCacheTimeout time.Duration
+	batchSize             int
 
 	writers []udp.Conn
 	readers []io.ReadWriteCloser
@@ -112,7 +114,7 @@ type EncWriter interface {
 
 // BatchReader is an interface for readers that support vectorized packet reading
 type BatchReader interface {
-	BatchRead() ([][]byte, []int, error)
+	BatchRead(buffers [][]byte, sizes []int) (int, error)
 }
 
 // BatchWriter is an interface for writers that support vectorized packet writing
@@ -196,6 +198,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		relayManager:          c.relayManager,
 		connectionManager:     c.connectionManager,
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
+		batchSize:             c.batchSize,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -323,21 +326,28 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 
 // listenInBatch handles vectorized packet reading for improved performance
 func (f *Interface) listenInBatch(reader BatchReader, i int) error {
-	// Allocate per-packet state
-	fwPackets := make([]*firewall.Packet, 64) // Match batch size
-	outBuffers := make([][]byte, 64)
-	nbBuffers := make([][]byte, 64)
+	// Allocate per-packet state and buffers for batch reading
+	batchSize := f.batchSize
+	if batchSize <= 0 {
+		batchSize = 64 // Fallback to default if not configured
+	}
+	fwPackets := make([]*firewall.Packet, batchSize)
+	outBuffers := make([][]byte, batchSize)
+	nbBuffers := make([][]byte, batchSize)
+	packets := make([][]byte, batchSize)
+	sizes := make([]int, batchSize)
 
-	for j := 0; j < 64; j++ {
+	for j := 0; j < batchSize; j++ {
 		fwPackets[j] = &firewall.Packet{}
 		outBuffers[j] = make([]byte, mtu)
-		nbBuffers[j] = make([]byte, 12, 12)
+		nbBuffers[j] = make([]byte, 12)
+		packets[j] = make([]byte, mtu)
 	}
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
 	for {
-		packets, sizes, err := reader.BatchRead()
+		n, err := reader.BatchRead(packets, sizes)
 		if err != nil {
 			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
 				return nil
@@ -348,8 +358,8 @@ func (f *Interface) listenInBatch(reader BatchReader, i int) error {
 
 		// Process each packet in the batch
 		cache := conntrackCache.Get(f.l)
-		for idx := 0; idx < len(packets); idx++ {
-			if idx < len(sizes) && sizes[idx] > 0 {
+		for idx := 0; idx < n; idx++ {
+			if sizes[idx] > 0 {
 				// Use modulo to reuse fw packet state if batch is larger than our pre-allocated state
 				stateIdx := idx % len(fwPackets)
 				f.consumeInsidePacket(packets[idx][:sizes[idx]], fwPackets[stateIdx], nbBuffers[stateIdx], outBuffers[stateIdx], i, cache)

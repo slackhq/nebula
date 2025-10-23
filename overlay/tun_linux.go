@@ -323,7 +323,6 @@ func (rm *tun) NewMultiQueueReader(t *wgTun) (io.ReadWriteCloser, error) {
 	return &wgTunReader{
 		parent:    t,
 		tunDevice: t.tunDevice,
-		batchSize: 64, // Default batch size
 		offset:    0,
 		l:         t.l,
 	}, nil
