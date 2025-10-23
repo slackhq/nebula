@@ -68,7 +68,22 @@ func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*wgTu
 }
 
 func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*wgTun, error) {
-	deviceName := c.GetString("tun.dev", "utun")
+	name := c.GetString("tun.dev", "")
+	deviceName := "utun"
+
+	// Parse device name to handle utun[0-9]+ format
+	if name != "" && name != "utun" {
+		ifIndex := -1
+		_, err := fmt.Sscanf(name, "utun%d", &ifIndex)
+		if err != nil || ifIndex < 0 {
+			// NOTE: we don't make this error so we don't break existing
+			// configs that set a name before it was used.
+			l.Warn("interface name must be utun[0-9]+ on Darwin, ignoring")
+		} else {
+			deviceName = name
+		}
+	}
+
 	mtu := c.GetInt("tun.mtu", DefaultMTU)
 
 	// Create WireGuard TUN device
