@@ -24,6 +24,7 @@ import (
 type tun struct {
 	deviceIndex               int
 	ioctlFd                   uintptr
+	txQueueLen                int
 	useSystemRoutes           bool
 	useSystemRoutesBufferSize int
 }
@@ -55,6 +56,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 
 	// Create Linux-specific route manager
 	routeManager := &tun{
+		txQueueLen:                c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
 		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
 	}
@@ -97,6 +99,7 @@ func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []net
 
 	// Create Linux-specific route manager
 	routeManager := &tun{
+		txQueueLen:                c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
 		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
 	}
@@ -147,14 +150,13 @@ func (rm *tun) Activate(t *wgTun) error {
 	}
 	rm.ioctlFd = uintptr(s)
 
-	// Set the MTU
 	rm.SetMTU(t, t.MaxMTU)
 
 	// Set the transmit queue length
-	txQueueLen := 500 // default
 	devName := deviceBytes(name)
-	ifrq := ifreqQLEN{Name: devName, Value: int32(txQueueLen)}
+	ifrq := ifreqQLEN{Name: devName, Value: int32(rm.txQueueLen)}
 	if err = ioctl(t.routeManager.ioctlFd, unix.SIOCSIFTXQLEN, uintptr(unsafe.Pointer(&ifrq))); err != nil {
+		// If we can't set the queue length nebula will still work but it may lead to packet loss
 		t.l.WithError(err).Error("Failed to set tun tx queue length")
 	}
 
@@ -327,8 +329,6 @@ func (rm *tun) NewMultiQueueReader(t *wgTun) (io.ReadWriteCloser, error) {
 		l:         t.l,
 	}, nil
 }
-
-// Helper functions
 
 func deviceBytes(name string) [16]byte {
 	var o [16]byte
