@@ -242,6 +242,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		relayManager:          NewRelayManager(ctx, l, hostMap, c),
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
+		batchSize:             c.GetInt("tun.batch_size", 64),
 		l:                     l,
 	}
 

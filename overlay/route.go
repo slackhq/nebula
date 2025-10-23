@@ -3,7 +3,6 @@ package overlay
 import (
 	"fmt"
 	"math"
-	"net"
 	"net/netip"
 	"runtime"
 	"strconv"
@@ -304,30 +303,4 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 	}
 
 	return routes, nil
-}
-
-func ipWithin(o *net.IPNet, i *net.IPNet) bool {
-	// Make sure o contains the lowest form of i
-	if !o.Contains(i.IP.Mask(i.Mask)) {
-		return false
-	}
-
-	// Find the max ip in i
-	ip4 := i.IP.To4()
-	if ip4 == nil {
-		return false
-	}
-
-	last := make(net.IP, len(ip4))
-	copy(last, ip4)
-	for x := range ip4 {
-		last[x] |= ^i.Mask[x]
-	}
-
-	// Make sure o contains the max
-	if !o.Contains(last) {
-		return false
-	}
-
-	return true
 }

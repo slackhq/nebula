@@ -547,3 +547,41 @@ func delRoute(prefix netip.Prefix, gateways []netip.Prefix) error {
 
 	return nil
 }
+
+func ioctl(a1, a2, a3 uintptr) error {
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, a1, a2, a3)
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+func prefixToMask(prefix netip.Prefix) netip.Addr {
+	bits := prefix.Bits()
+	if prefix.Addr().Is4() {
+		mask := ^uint32(0) << (32 - bits)
+		return netip.AddrFrom4([4]byte{
+			byte(mask >> 24),
+			byte(mask >> 16),
+			byte(mask >> 8),
+			byte(mask),
+		})
+	}
+	var mask [16]byte
+	for i := 0; i < bits/8; i++ {
+		mask[i] = 0xff
+	}
+	if bits%8 != 0 {
+		mask[bits/8] = ^byte(0) << (8 - bits%8)
+	}
+	return netip.AddrFrom16(mask)
+}
+
+func selectGateway(prefix netip.Prefix, gateways []netip.Prefix) (netip.Prefix, error) {
+	for _, gw := range gateways {
+		if prefix.Addr().Is4() == gw.Addr().Is4() {
+			return gw, nil
+		}
+	}
+	return netip.Prefix{}, fmt.Errorf("no suitable gateway found for prefix %v", prefix)
+}
