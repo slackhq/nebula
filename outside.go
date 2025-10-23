@@ -333,12 +333,13 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 			}
 
 			fp.Protocol = uint8(proto)
+			ports := data[offset : offset+4]
 			if incoming {
-				fp.RemotePort = binary.BigEndian.Uint16(data[offset : offset+2])
-				fp.LocalPort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+				fp.RemotePort = binary.BigEndian.Uint16(ports[0:2])
+				fp.LocalPort = binary.BigEndian.Uint16(ports[2:4])
 			} else {
-				fp.LocalPort = binary.BigEndian.Uint16(data[offset : offset+2])
-				fp.RemotePort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+				fp.LocalPort = binary.BigEndian.Uint16(ports[0:2])
+				fp.RemotePort = binary.BigEndian.Uint16(ports[2:4])
 			}
 
 			fp.Fragment = false
