@@ -45,7 +45,7 @@ jobs:
     - name: Build test mobile
       run: make build-test-mobile
 
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v5
       with:
         name: e2e packet flow linux-latest
         path: e2e/mermaid/linux-latest
@@ -125,7 +125,7 @@ jobs:
     - name: End 2 end
       run: make e2evv
 
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v5
       with:
         name: e2e packet flow ${{ matrix.os }}
         path: e2e/mermaid/${{ matrix.os }}
