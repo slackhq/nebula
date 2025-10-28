@@ -177,7 +177,7 @@ func TestFirewall_Drop(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{netip.MustParseAddr("1.2.3.4")},
 	}
-	h.buildNetworks(myVpnNetworksTable, c.networks, c.unsafeNetworks)
+	h.buildNetworks(myVpnNetworksTable, &c)
 
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, &c)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", netip.Prefix{}, netip.Prefix{}, "", ""))
@@ -256,7 +256,7 @@ func TestFirewall_DropV6(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{netip.MustParseAddr("fd12::34")},
 	}
-	h.buildNetworks(myVpnNetworksTable, c.networks, c.unsafeNetworks)
+	h.buildNetworks(myVpnNetworksTable, &c)
 
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, &c)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", netip.Prefix{}, netip.Prefix{}, "", ""))
@@ -486,7 +486,7 @@ func TestFirewall_Drop2(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{network.Addr()},
 	}
-	h.buildNetworks(myVpnNetworksTable, c.Certificate.Networks(), c.Certificate.UnsafeNetworks())
+	h.buildNetworks(myVpnNetworksTable, c.Certificate)
 
 	c1 := cert.CachedCertificate{
 		Certificate: &dummyCert{
@@ -501,7 +501,7 @@ func TestFirewall_Drop2(t *testing.T) {
 			peerCert: &c1,
 		},
 	}
-	h1.buildNetworks(myVpnNetworksTable, c1.Certificate.Networks(), c1.Certificate.UnsafeNetworks())
+	h1.buildNetworks(myVpnNetworksTable, c1.Certificate)
 
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"default-group", "test-group"}, "", netip.Prefix{}, netip.Prefix{}, "", ""))
@@ -551,7 +551,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{network.Addr()},
 	}
-	h1.buildNetworks(myVpnNetworksTable, c1.Certificate.Networks(), c1.Certificate.UnsafeNetworks())
+	h1.buildNetworks(myVpnNetworksTable, c1.Certificate)
 
 	c2 := cert.CachedCertificate{
 		Certificate: &dummyCert{
@@ -566,7 +566,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{network.Addr()},
 	}
-	h2.buildNetworks(myVpnNetworksTable, c2.Certificate.Networks(), c2.Certificate.UnsafeNetworks())
+	h2.buildNetworks(myVpnNetworksTable, c2.Certificate)
 
 	c3 := cert.CachedCertificate{
 		Certificate: &dummyCert{
@@ -581,7 +581,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{network.Addr()},
 	}
-	h3.buildNetworks(myVpnNetworksTable, c3.Certificate.Networks(), c3.Certificate.UnsafeNetworks())
+	h3.buildNetworks(myVpnNetworksTable, c3.Certificate)
 
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 1, 1, []string{}, "host1", netip.Prefix{}, netip.Prefix{}, "", ""))
@@ -632,7 +632,7 @@ func TestFirewall_Drop3V6(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{network.Addr()},
 	}
-	h.buildNetworks(myVpnNetworksTable, c.Certificate.Networks(), c.Certificate.UnsafeNetworks())
+	h.buildNetworks(myVpnNetworksTable, c.Certificate)
 
 	// Test a remote address match
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
@@ -673,7 +673,7 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{network.Addr()},
 	}
-	h.buildNetworks(myVpnNetworksTable, c.Certificate.Networks(), c.Certificate.UnsafeNetworks())
+	h.buildNetworks(myVpnNetworksTable, c.Certificate)
 
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", netip.Prefix{}, netip.Prefix{}, "", ""))
@@ -733,7 +733,7 @@ func TestFirewall_DropIPSpoofing(t *testing.T) {
 		},
 		vpnAddrs: []netip.Addr{c1.Certificate.Networks()[0].Addr()},
 	}
-	h1.buildNetworks(myVpnNetworksTable, c1.Certificate.Networks(), c1.Certificate.UnsafeNetworks())
+	h1.buildNetworks(myVpnNetworksTable, c1.Certificate)
 
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
 
@@ -1101,7 +1101,7 @@ func buildTestCase(setup testsetup, err error, theirPrefixes ...netip.Prefix) te
 	for i := range theirPrefixes {
 		h.vpnAddrs[i] = theirPrefixes[i].Addr()
 	}
-	h.buildNetworks(setup.myVpnNetworksTable, c1.networks, c1.unsafeNetworks)
+	h.buildNetworks(setup.myVpnNetworksTable, &c1)
 	p := firewall.Packet{
 		LocalAddr:  setup.c.Networks()[0].Addr(), //todo?
 		RemoteAddr: theirPrefixes[0].Addr(),
