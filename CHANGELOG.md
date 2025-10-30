@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Experimental Linux UDP offload support: enable `listen.enable_gso` and
+  `listen.enable_gro` to activate UDP_SEGMENT batching and GRO receive
+  splitting. Includes automatic capability probing, per-packet fallbacks, and
+  runtime metrics/logs for visibility.
+
 ### Changed
 
 - `default_local_cidr_any` now defaults to false, meaning that any firewall rule
