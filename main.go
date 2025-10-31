@@ -120,6 +120,8 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		l.WithField("duration", conntrackCacheTimeout).Info("Using routine-local conntrack cache")
 	}
 
+	udp.SetDisableUDPCsum(c.GetBool("listen.disable_udp_checksum", false))
+
 	var tun overlay.Device
 	if !configTest {
 		c.CatchHUP(ctx)
@@ -221,6 +223,9 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	}
 
+	decryptWorkers := c.GetInt("listen.decrypt_workers", 0)
+	decryptQueueDepth := c.GetInt("listen.decrypt_queue_depth", 0)
+
 	ifConfig := &InterfaceConfig{
 		HostMap:               hostMap,
 		Inside:                tun,
@@ -243,6 +248,8 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,
+		DecryptWorkers:        decryptWorkers,
+		DecryptQueueDepth:     decryptQueueDepth,
 	}
 
 	var ifce *Interface

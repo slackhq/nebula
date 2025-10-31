@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/bits"
 	"net/netip"
 	"os"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -21,7 +23,12 @@ import (
 	"github.com/slackhq/nebula/udp"
 )
 
-const mtu = 9001
+const (
+	mtu                        = 9001
+	tunReadBufferSize          = mtu * 8
+	defaultDecryptWorkerFactor = 2
+	defaultInboundQueueDepth   = 1024
+)
 
 type InterfaceConfig struct {
 	HostMap            *HostMap
@@ -48,6 +55,8 @@ type InterfaceConfig struct {
 
 	ConntrackCacheTimeout time.Duration
 	l                     *logrus.Logger
+	DecryptWorkers        int
+	DecryptQueueDepth     int
 }
 
 type Interface struct {
@@ -92,7 +101,167 @@ type Interface struct {
 	messageMetrics      *MessageMetrics
 	cachedPacketMetrics *cachedPacketMetrics
 
-	l *logrus.Logger
+	l              *logrus.Logger
+	ctx            context.Context
+	udpListenWG    sync.WaitGroup
+	inboundPool    sync.Pool
+	decryptWG      sync.WaitGroup
+	decryptQueues  []*inboundRing
+	decryptWorkers int
+	decryptStates  []decryptWorkerState
+	decryptCounter atomic.Uint32
+}
+
+type inboundPacket struct {
+	addr    netip.AddrPort
+	payload []byte
+	release func()
+	queue   int
+}
+
+type decryptWorkerState struct {
+	queue  *inboundRing
+	notify chan struct{}
+}
+
+type decryptContext struct {
+	ctTicker *firewall.ConntrackCacheTicker
+	plain    []byte
+	head     header.H
+	fwPacket firewall.Packet
+	light    *LightHouseHandler
+	nebula   []byte
+}
+
+type inboundCell struct {
+	seq atomic.Uint64
+	pkt *inboundPacket
+}
+
+type inboundRing struct {
+	mask       uint64
+	cells      []inboundCell
+	enqueuePos atomic.Uint64
+	dequeuePos atomic.Uint64
+}
+
+func newInboundRing(capacity int) *inboundRing {
+	if capacity < 2 {
+		capacity = 2
+	}
+	size := nextPowerOfTwo(uint32(capacity))
+	if size < 2 {
+		size = 2
+	}
+	ring := &inboundRing{
+		mask:  uint64(size - 1),
+		cells: make([]inboundCell, size),
+	}
+	for i := range ring.cells {
+		ring.cells[i].seq.Store(uint64(i))
+	}
+	return ring
+}
+
+func nextPowerOfTwo(v uint32) uint32 {
+	if v == 0 {
+		return 1
+	}
+	return 1 << (32 - bits.LeadingZeros32(v-1))
+}
+
+func (r *inboundRing) Enqueue(pkt *inboundPacket) bool {
+	var cell *inboundCell
+	pos := r.enqueuePos.Load()
+	for {
+		cell = &r.cells[pos&r.mask]
+		seq := cell.seq.Load()
+		diff := int64(seq) - int64(pos)
+		if diff == 0 {
+			if r.enqueuePos.CompareAndSwap(pos, pos+1) {
+				break
+			}
+		} else if diff < 0 {
+			return false
+		} else {
+			pos = r.enqueuePos.Load()
+		}
+	}
+	cell.pkt = pkt
+	cell.seq.Store(pos + 1)
+	return true
+}
+
+func (r *inboundRing) Dequeue() (*inboundPacket, bool) {
+	var cell *inboundCell
+	pos := r.dequeuePos.Load()
+	for {
+		cell = &r.cells[pos&r.mask]
+		seq := cell.seq.Load()
+		diff := int64(seq) - int64(pos+1)
+		if diff == 0 {
+			if r.dequeuePos.CompareAndSwap(pos, pos+1) {
+				break
+			}
+		} else if diff < 0 {
+			return nil, false
+		} else {
+			pos = r.dequeuePos.Load()
+		}
+	}
+	pkt := cell.pkt
+	cell.pkt = nil
+	cell.seq.Store(pos + r.mask + 1)
+	return pkt, true
+}
+
+func (f *Interface) getInboundPacket() *inboundPacket {
+	if pkt, ok := f.inboundPool.Get().(*inboundPacket); ok && pkt != nil {
+		return pkt
+	}
+	return &inboundPacket{}
+}
+
+func (f *Interface) putInboundPacket(pkt *inboundPacket) {
+	if pkt == nil {
+		return
+	}
+	pkt.addr = netip.AddrPort{}
+	pkt.payload = nil
+	pkt.release = nil
+	pkt.queue = 0
+	f.inboundPool.Put(pkt)
+}
+
+func newDecryptContext(f *Interface) *decryptContext {
+	return &decryptContext{
+		ctTicker: firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout),
+		plain:    make([]byte, udp.MTU),
+		head:     header.H{},
+		fwPacket: firewall.Packet{},
+		light:    f.lightHouse.NewRequestHandler(),
+		nebula:   make([]byte, 12, 12),
+	}
+}
+
+func (f *Interface) processInboundPacket(pkt *inboundPacket, ctx *decryptContext) {
+	if pkt == nil {
+		return
+	}
+	defer func() {
+		if pkt.release != nil {
+			pkt.release()
+		}
+		f.putInboundPacket(pkt)
+	}()
+
+	ctx.head = header.H{}
+	ctx.fwPacket = firewall.Packet{}
+	var cache firewall.ConntrackCache
+	if ctx.ctTicker != nil {
+		cache = ctx.ctTicker.Get(f.l)
+	}
+	f.readOutsidePackets(pkt.addr, nil, ctx.plain[:0], pkt.payload, &ctx.head, &ctx.fwPacket, ctx.light, ctx.nebula, pkt.queue, cache)
 }
 
 type EncWriter interface {
@@ -162,6 +331,32 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	}
 
 	cs := c.pki.getCertState()
+	decryptWorkers := c.DecryptWorkers
+	if decryptWorkers < 0 {
+		decryptWorkers = 0
+	}
+	if decryptWorkers == 0 {
+		decryptWorkers = c.routines * defaultDecryptWorkerFactor
+		if decryptWorkers < c.routines {
+			decryptWorkers = c.routines
+		}
+	}
+	if decryptWorkers < 0 {
+		decryptWorkers = 0
+	}
+
+	queueDepth := c.DecryptQueueDepth
+	if queueDepth <= 0 {
+		queueDepth = defaultInboundQueueDepth
+	}
+	minDepth := c.routines * 64
+	if minDepth <= 0 {
+		minDepth = 64
+	}
+	if queueDepth < minDepth {
+		queueDepth = minDepth
+	}
+
 	ifce := &Interface{
 		pki:                   c.pki,
 		hostMap:               c.HostMap,
@@ -194,7 +389,10 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 			dropped: metrics.GetOrRegisterCounter("hostinfo.cached_packets.dropped", nil),
 		},
 
-		l: c.l,
+		l:              c.l,
+		ctx:            ctx,
+		inboundPool:    sync.Pool{New: func() any { return &inboundPacket{} }},
+		decryptWorkers: decryptWorkers,
 	}
 
 	ifce.tryPromoteEvery.Store(c.tryPromoteEvery)
@@ -202,6 +400,19 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	ifce.reQueryWait.Store(int64(c.reQueryWait))
 
 	ifce.connectionManager.intf = ifce
+
+	if decryptWorkers > 0 {
+		ifce.decryptQueues = make([]*inboundRing, decryptWorkers)
+		ifce.decryptStates = make([]decryptWorkerState, decryptWorkers)
+		for i := 0; i < decryptWorkers; i++ {
+			queue := newInboundRing(queueDepth)
+			ifce.decryptQueues[i] = queue
+			ifce.decryptStates[i] = decryptWorkerState{
+				queue:  queue,
+				notify: make(chan struct{}, 1),
+			}
+		}
+	}
 
 	return ifce, nil
 }
@@ -242,8 +453,68 @@ func (f *Interface) activate() {
 	}
 }
 
+func (f *Interface) startDecryptWorkers() {
+	if f.decryptWorkers <= 0 || len(f.decryptQueues) == 0 {
+		return
+	}
+	f.decryptWG.Add(f.decryptWorkers)
+	for i := 0; i < f.decryptWorkers; i++ {
+		go f.decryptWorker(i)
+	}
+}
+
+func (f *Interface) decryptWorker(id int) {
+	defer f.decryptWG.Done()
+	if id < 0 || id >= len(f.decryptStates) {
+		return
+	}
+	state := f.decryptStates[id]
+	if state.queue == nil {
+		return
+	}
+	ctx := newDecryptContext(f)
+	for {
+		for {
+			pkt, ok := state.queue.Dequeue()
+			if !ok {
+				break
+			}
+			f.processInboundPacket(pkt, ctx)
+		}
+		if f.closed.Load() || f.ctx.Err() != nil {
+			for {
+				pkt, ok := state.queue.Dequeue()
+				if !ok {
+					return
+				}
+				f.processInboundPacket(pkt, ctx)
+			}
+		}
+		select {
+		case <-f.ctx.Done():
+		case <-state.notify:
+		}
+	}
+}
+
+func (f *Interface) notifyDecryptWorker(idx int) {
+	if idx < 0 || idx >= len(f.decryptStates) {
+		return
+	}
+	state := f.decryptStates[idx]
+	if state.notify == nil {
+		return
+	}
+	select {
+	case state.notify <- struct{}{}:
+	default:
+	}
+}
+
 func (f *Interface) run() {
+	f.startDecryptWorkers()
 	// Launch n queues to read packets from udp
+	f.udpListenWG.Add(f.routines)
 	for i := 0; i < f.routines; i++ {
 		go f.listenOut(i)
 	}
@@ -256,6 +527,7 @@ func (f *Interface) run() {
 
 func (f *Interface) listenOut(i int) {
 	runtime.LockOSThread()
+	defer f.udpListenWG.Done()
 
 	var li udp.Conn
 	if i > 0 {
@@ -264,23 +536,78 @@ func (f *Interface) listenOut(i int) {
 		li = f.outside
 	}
 
-	ctCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
-	lhh := f.lightHouse.NewRequestHandler()
-	plaintext := make([]byte, udp.MTU)
-	h := &header.H{}
-	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
+	useWorkers := f.decryptWorkers > 0 && len(f.decryptQueues) > 0
+	var (
+		inlineTicker  *firewall.ConntrackCacheTicker
+		inlineHandler *LightHouseHandler
+		inlinePlain   []byte
+		inlineHeader  header.H
+		inlinePacket  firewall.Packet
+		inlineNB      []byte
+		inlineCtx     *decryptContext
+	)
 
-	li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
-		f.readOutsidePackets(fromUdpAddr, nil, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
+	if useWorkers {
+		inlineCtx = newDecryptContext(f)
+	} else {
+		inlineTicker = firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
+		inlineHandler = f.lightHouse.NewRequestHandler()
+		inlinePlain = make([]byte, udp.MTU)
+		inlineNB = make([]byte, 12, 12)
+	}
+
+	li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte, release func()) {
+		if !useWorkers {
+			if release != nil {
+				defer release()
+			}
+			select {
+			case <-f.ctx.Done():
+				return
+			default:
+			}
+			inlineHeader = header.H{}
+			inlinePacket = firewall.Packet{}
+			var cache firewall.ConntrackCache
+			if inlineTicker != nil {
+				cache = inlineTicker.Get(f.l)
+			}
+			f.readOutsidePackets(fromUdpAddr, nil, inlinePlain[:0], payload, &inlineHeader, &inlinePacket, inlineHandler, inlineNB, i, cache)
+			return
+		}
+
+		if f.ctx.Err() != nil {
+			if release != nil {
+				release()
+			}
+			return
+		}
+
+		pkt := f.getInboundPacket()
+		pkt.addr = fromUdpAddr
+		pkt.payload = payload
+		pkt.release = release
+		pkt.queue = i
+
+		queueCount := len(f.decryptQueues)
+		if queueCount == 0 {
+			f.processInboundPacket(pkt, inlineCtx)
+			return
+		}
+		w := int(f.decryptCounter.Add(1)-1) % queueCount
+		if w < 0 || w >= queueCount || !f.decryptQueues[w].Enqueue(pkt) {
+			f.processInboundPacket(pkt, inlineCtx)
+			return
+		}
+		f.notifyDecryptWorker(w)
 	})
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	runtime.LockOSThread()
 
-	packet := make([]byte, mtu)
-	out := make([]byte, mtu)
+	packet := make([]byte, tunReadBufferSize)
+	out := make([]byte, tunReadBufferSize)
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
@@ -456,6 +783,19 @@ func (f *Interface) Close() error {
 		if err != nil {
 			f.l.WithError(err).Error("Error while closing udp socket")
 		}
+	}
+
+	f.udpListenWG.Wait()
+	if f.decryptWorkers > 0 {
+		for _, state := range f.decryptStates {
+			if state.notify != nil {
+				select {
+				case state.notify <- struct{}{}:
+				default:
+				}
+			}
+		}
+		f.decryptWG.Wait()
 	}
 
 	// Release the tun device

@@ -25,14 +25,17 @@ import (
 
 type tun struct {
 	io.ReadWriteCloser
-	fd          int
-	Device      string
-	vpnNetworks []netip.Prefix
-	MaxMTU      int
-	DefaultMTU  int
-	TXQueueLen  int
-	deviceIndex int
-	ioctlFd     uintptr
+	fd            int
+	Device        string
+	vpnNetworks   []netip.Prefix
+	MaxMTU        int
+	DefaultMTU    int
+	TXQueueLen    int
+	deviceIndex   int
+	ioctlFd       uintptr
+	enableVnetHdr bool
+	vnetHdrLen    int
+	queues        []*tunQueue
 
 	Routes                    atomic.Pointer[[]Route]
 	routeTree                 atomic.Pointer[bart.Table[routing.Gateways]]
@@ -65,10 +68,90 @@ type ifreqQLEN struct {
 	pad   [8]byte
 }
 
+const (
+	virtioNetHdrLen     = 12
+	tunDefaultMaxPacket = 65536
+)
+
+type tunQueue struct {
+	file          *os.File
+	fd            int
+	enableVnetHdr bool
+	vnetHdrLen    int
+	maxPacket     int
+	writeScratch  []byte
+	readScratch   []byte
+	l             *logrus.Logger
+}
+
+func newTunQueue(file *os.File, enableVnetHdr bool, vnetHdrLen, maxPacket int, l *logrus.Logger) *tunQueue {
+	if maxPacket <= 0 {
+		maxPacket = tunDefaultMaxPacket
+	}
+	q := &tunQueue{
+		file:          file,
+		fd:            int(file.Fd()),
+		enableVnetHdr: enableVnetHdr,
+		vnetHdrLen:    vnetHdrLen,
+		maxPacket:     maxPacket,
+		l:             l,
+	}
+	if enableVnetHdr {
+		q.growReadScratch(maxPacket)
+	}
+	return q
+}
+
+func (q *tunQueue) growReadScratch(packetSize int) {
+	needed := q.vnetHdrLen + packetSize
+	if needed < q.vnetHdrLen+DefaultMTU {
+		needed = q.vnetHdrLen + DefaultMTU
+	}
+	if q.readScratch == nil || cap(q.readScratch) < needed {
+		q.readScratch = make([]byte, needed)
+	} else {
+		q.readScratch = q.readScratch[:needed]
+	}
+}
+
+func (q *tunQueue) setMaxPacket(packet int) {
+	if packet <= 0 {
+		packet = DefaultMTU
+	}
+	q.maxPacket = packet
+	if q.enableVnetHdr {
+		q.growReadScratch(packet)
+	}
+}
+
+func configureVnetHdr(fd int, hdrLen int, l *logrus.Logger) error {
+	features, err := unix.IoctlGetInt(fd, unix.TUNGETFEATURES)
+	if err == nil && features&unix.IFF_VNET_HDR == 0 {
+		return fmt.Errorf("kernel does not support IFF_VNET_HDR")
+	}
+	if err := unix.IoctlSetInt(fd, unix.TUNSETVNETHDRSZ, hdrLen); err != nil {
+		return err
+	}
+	offload := unix.TUN_F_CSUM | unix.TUN_F_UFO
+	if err := unix.IoctlSetInt(fd, unix.TUNSETOFFLOAD, offload); err != nil {
+		if l != nil {
+			l.WithError(err).Warn("Failed to enable TUN offload features")
+		}
+	}
+	return nil
+}
+
 func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
+	enableVnetHdr := c.GetBool("tun.enable_vnet_hdr", false)
+	if enableVnetHdr {
+		if err := configureVnetHdr(deviceFd, virtioNetHdrLen, l); err != nil {
+			l.WithError(err).Warn("Failed to configure VNET header support on provided tun fd; disabling")
+			enableVnetHdr = false
+		}
+	}
 
-	t, err := newTunGeneric(c, l, file, vpnNetworks)
+	t, err := newTunGeneric(c, l, file, vpnNetworks, enableVnetHdr)
 	if err != nil {
 		return nil, err
 	}
@@ -106,14 +189,25 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 	if multiqueue {
 		req.Flags |= unix.IFF_MULTI_QUEUE
 	}
+	enableVnetHdr := c.GetBool("tun.enable_vnet_hdr", false)
+	if enableVnetHdr {
+		req.Flags |= unix.IFF_VNET_HDR
+	}
 	copy(req.Name[:], c.GetString("tun.dev", ""))
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
 		return nil, err
 	}
 	name := strings.Trim(string(req.Name[:]), "\x00")
 
+	if enableVnetHdr {
+		if err := configureVnetHdr(fd, virtioNetHdrLen, l); err != nil {
+			l.WithError(err).Warn("Failed to configure VNET header support on tun device; disabling")
+			enableVnetHdr = false
+		}
+	}
+
 	file := os.NewFile(uintptr(fd), "/dev/net/tun")
-	t, err := newTunGeneric(c, l, file, vpnNetworks)
+	t, err := newTunGeneric(c, l, file, vpnNetworks, enableVnetHdr)
 	if err != nil {
 		return nil, err
 	}
@@ -123,20 +217,29 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 	return t, nil
 }
 
-func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []netip.Prefix) (*tun, error) {
+func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []netip.Prefix, enableVnetHdr bool) (*tun, error) {
+	queue := newTunQueue(file, enableVnetHdr, virtioNetHdrLen, tunDefaultMaxPacket, l)
 	t := &tun{
-		ReadWriteCloser:           file,
+		ReadWriteCloser:           queue,
 		fd:                        int(file.Fd()),
 		vpnNetworks:               vpnNetworks,
 		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
 		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
 		l:                         l,
+		enableVnetHdr:             enableVnetHdr,
+		vnetHdrLen:                virtioNetHdrLen,
+		queues:                    []*tunQueue{queue},
 	}
 
 	err := t.reload(c, true)
 	if err != nil {
 		return nil, err
+	}
+	if enableVnetHdr {
+		for _, q := range t.queues {
+			q.setMaxPacket(t.MaxMTU)
+		}
 	}
 
 	c.RegisterReloadCallback(func(c *config.C) {
@@ -180,6 +283,11 @@ func (t *tun) reload(c *config.C, initial bool) error {
 
 	t.MaxMTU = newMaxMTU
 	t.DefaultMTU = newDefaultMTU
+	if t.enableVnetHdr {
+		for _, q := range t.queues {
+			q.setMaxPacket(t.MaxMTU)
+		}
+	}
 
 	// Teach nebula how to handle the routes before establishing them in the system table
 	oldRoutes := t.Routes.Swap(&routes)
@@ -224,14 +332,87 @@ func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 
 	var req ifReq
 	req.Flags = uint16(unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_MULTI_QUEUE)
+	if t.enableVnetHdr {
+		req.Flags |= unix.IFF_VNET_HDR
+	}
 	copy(req.Name[:], t.Device)
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
 		return nil, err
 	}
 
 	file := os.NewFile(uintptr(fd), "/dev/net/tun")
+	queue := newTunQueue(file, t.enableVnetHdr, t.vnetHdrLen, t.MaxMTU, t.l)
+	if t.enableVnetHdr {
+		if err := configureVnetHdr(fd, t.vnetHdrLen, t.l); err != nil {
+			queue.enableVnetHdr = false
+		}
+	}
+	t.queues = append(t.queues, queue)
 
-	return file, nil
+	return queue, nil
+}
+
+func (q *tunQueue) Read(p []byte) (int, error) {
+	if !q.enableVnetHdr {
+		return q.file.Read(p)
+	}
+
+	if len(p)+q.vnetHdrLen > cap(q.readScratch) {
+		q.growReadScratch(len(p))
+	}
+
+	buf := q.readScratch[:cap(q.readScratch)]
+	n, err := q.file.Read(buf)
+	if n <= 0 {
+		return n, err
+	}
+	if n < q.vnetHdrLen {
+		if err == nil {
+			err = io.ErrUnexpectedEOF
+		}
+		return 0, err
+	}
+
+	payload := buf[q.vnetHdrLen:n]
+	if len(payload) > len(p) {
+		copy(p, payload[:len(p)])
+		if err == nil {
+			err = io.ErrShortBuffer
+		}
+		return len(p), err
+	}
+	copy(p, payload)
+	return len(payload), err
+}
+
+func (q *tunQueue) Write(b []byte) (int, error) {
+	if !q.enableVnetHdr {
+		return unix.Write(q.fd, b)
+	}
+
+	total := q.vnetHdrLen + len(b)
+	if cap(q.writeScratch) < total {
+		q.writeScratch = make([]byte, total)
+	} else {
+		q.writeScratch = q.writeScratch[:total]
+	}
+
+	for i := 0; i < q.vnetHdrLen; i++ {
+		q.writeScratch[i] = 0
+	}
+	copy(q.writeScratch[q.vnetHdrLen:], b)
+
+	n, err := unix.Write(q.fd, q.writeScratch)
+	if n >= q.vnetHdrLen {
+		n -= q.vnetHdrLen
+	} else {
+		n = 0
+	}
+	return n, err
+}
+
+func (q *tunQueue) Close() error {
+	return q.file.Close()
 }
 
 func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {

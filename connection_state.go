@@ -13,7 +13,10 @@ import (
 	"github.com/slackhq/nebula/noiseutil"
 )
 
-const ReplayWindow = 1024
+// ReplayWindow controls the size of the sliding window used to detect replays.
+// High-bandwidth links with GRO/GSO can reorder more than a thousand packets in
+// flight, so keep this comfortably above the largest expected burst.
+const ReplayWindow = 32768
 
 type ConnectionState struct {
 	eKey           *NebulaCipherState

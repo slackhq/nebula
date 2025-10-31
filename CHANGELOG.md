@@ -7,12 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Experimental Linux UDP offload support: enable `listen.enable_gso` and
+  `listen.enable_gro` to activate UDP_SEGMENT batching and GRO receive
+  splitting. Includes automatic capability probing, per-packet fallbacks, and
+  runtime metrics/logs for visibility.
+- Optional Linux TUN `virtio_net_hdr` support: set `tun.enable_vnet_hdr` to
+  have Nebula negotiate VNET headers and offload flags so future batches can
+  be delivered to the kernel with metadata instead of per-packet writes.
+- Linux UDP send sharding can now be tuned with `listen.send_shards`; defaults
+  to `GOMAXPROCS` but can be increased to stripe heavy peers across more
+  goroutines.
+
 ### Changed
 
 - `default_local_cidr_any` now defaults to false, meaning that any firewall rule
   intended to target an `unsafe_routes` entry must explicitly declare it via the
   `local_cidr` field. This is almost always the intended behavior. This flag is
   deprecated and will be removed in a future release.
+- UDP receive path now enqueues into per-worker lock-free rings, restoring the
+  `listen.decrypt_workers`/`listen.decrypt_queue_depth` tuning knobs while
+  eliminating the mutex contention from the old shared channel.
+- Increased replay protection window to 32k packets so high-throughput links
+  tolerate larger bursts of reordering without tripping the anti-replay logic.
 
 ## [1.9.4] - 2024-09-09
 
