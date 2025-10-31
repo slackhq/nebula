@@ -180,9 +180,7 @@ func (u *StdConn) ListenOut(r EncReader) {
 			u.l.WithError(err).Error("unexpected udp socket receive error")
 		}
 
-		payload := make([]byte, n)
-		copy(payload, buffer[:n])
-		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), payload, func() {})
+		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n], nil)
 	}
 }
 

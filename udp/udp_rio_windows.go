@@ -149,9 +149,7 @@ func (u *RIOConn) ListenOut(r EncReader) {
 			continue
 		}
 
-		payload := make([]byte, n)
-		copy(payload, buffer[:n])
-		r(netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)), payload, func() {})
+		r(netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)), buffer[:n], nil)
 	}
 }
 

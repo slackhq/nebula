@@ -344,6 +344,9 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	if decryptWorkers < 0 {
 		decryptWorkers = 0
 	}
+	if runtime.GOOS != "linux" {
+		decryptWorkers = 0
+	}
 
 	queueDepth := c.DecryptQueueDepth
 	if queueDepth <= 0 {

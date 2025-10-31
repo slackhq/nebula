@@ -452,12 +452,23 @@ func (s *sendShard) flushPendingLocked() error {
 	if queue == nil {
 		err = s.processTask(task)
 	} else {
-		defer func() {
-			if r := recover(); r != nil {
-				err = s.processTask(task)
+		sent := false
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					err = s.processTask(task)
+					sent = true
+				}
+			}()
+			select {
+			case queue <- task:
+				sent = true
+			default:
 			}
 		}()
-		queue <- task
+		if !sent {
+			err = s.processTask(task)
+		}
 	}
 	s.mu.Lock()
 	return err
