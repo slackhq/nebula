@@ -222,7 +222,7 @@ func (u *StdConn) ListenOut(r EncReader) {
 				}
 			}
 
-			r(addr, buffers[i][:payloadLen], 0)
+			r(addr, buffers[i][:payloadLen])
 		}
 	}
 }
@@ -627,7 +627,7 @@ func (u *StdConn) emitSegments(r EncReader, addr netip.AddrPort, payload []byte,
 
 		//segment := append([]byte(nil), payload[start:end]...)
 		//q := numSegments % 4 //TODO
-		r(addr, payload[start:end], 0)
+		r(addr, payload[start:end])
 		numSegments++
 		//segments = append(segments, segment)
 		start = end
