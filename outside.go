@@ -470,7 +470,13 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], messageCounter, nb)
 	if err != nil {
-		hostinfo.logger(f.l).WithError(err).Error("Failed to decrypt packet")
+		hostinfo.logger(f.l).
+			WithError(err).
+			WithField("tag", "decrypt-debug").
+			WithField("remoteIndexLocal", hostinfo.localIndexId).
+			WithField("messageCounter", messageCounter).
+			WithField("packet_len", len(packet)).
+			Error("Failed to decrypt packet")
 		return false
 	}
 

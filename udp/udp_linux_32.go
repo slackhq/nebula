@@ -30,17 +30,29 @@ type rawMessage struct {
 	Len uint32
 }
 
-func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
+func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte, [][]byte) {
+	controlLen := int(u.controlLen.Load())
+
 	msgs := make([]rawMessage, n)
 	buffers := make([][]byte, n)
 	names := make([][]byte, n)
 
+	var controls [][]byte
+	if controlLen > 0 {
+		controls = make([][]byte, n)
+	}
+
 	for i := range msgs {
-		buffers[i] = make([]byte, MTU)
+		size := int(u.groBufSize.Load())
+		if size < MTU {
+			size = MTU
+		}
+		buf := u.borrowRxBuffer(size)
+		buffers[i] = buf
 		names[i] = make([]byte, unix.SizeofSockaddrInet6)
 
 		vs := []iovec{
-			{Base: &buffers[i][0], Len: uint32(len(buffers[i]))},
+			{Base: &buf[0], Len: uint32(len(buf))},
 		}
 
 		msgs[i].Hdr.Iov = &vs[0]
@@ -48,7 +60,22 @@ func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
 
 		msgs[i].Hdr.Name = &names[i][0]
 		msgs[i].Hdr.Namelen = uint32(len(names[i]))
+
+		if controlLen > 0 {
+			controls[i] = make([]byte, controlLen)
+			msgs[i].Hdr.Control = &controls[i][0]
+			msgs[i].Hdr.Controllen = controllen(len(controls[i]))
+		} else {
+			msgs[i].Hdr.Control = nil
+			msgs[i].Hdr.Controllen = controllen(0)
+		}
 	}
 
-	return msgs, buffers, names
+	return msgs, buffers, names, controls
+}
+
+func setIovecBase(msg *rawMessage, buf []byte) {
+	iov := (*iovec)(msg.Hdr.Iov)
+	iov.Base = &buf[0]
+	iov.Len = uint32(len(buf))
 }

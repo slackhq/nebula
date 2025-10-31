@@ -11,6 +11,7 @@ const MTU = 9001
 type EncReader func(
 	addr netip.AddrPort,
 	payload []byte,
+	release func(),
 )
 
 type Conn interface {
