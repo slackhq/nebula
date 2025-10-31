@@ -1354,6 +1354,13 @@ func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
 }
 
 func (u *StdConn) Close() error {
+	// Attempt to unblock any outstanding sendmsg/sendmmsg calls so the shard
+	// workers can drain promptly during shutdown. Ignoring errors here is fine
+	// because some platforms/kernels may not support shutdown on UDP sockets.
+	if err := unix.Shutdown(u.sysFd, unix.SHUT_WR); err != nil && err != unix.ENOTCONN && err != unix.EINVAL && err != unix.EBADF {
+		u.l.WithError(err).Debug("Failed to shutdown UDP socket for close")
+	}
+
 	var flushErr error
 	for _, shard := range u.sendShards {
 		if shard == nil {
