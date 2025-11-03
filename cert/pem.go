@@ -1,6 +1,7 @@
 package cert
 
 import (
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"time"
@@ -249,9 +250,11 @@ func UnmarshalNebulaCertificateFromPEM(b []byte) (*NebulaCertificate, []byte, er
 
 	// Handle issuer
 	if c.Issuer() != "" {
-		// Convert hex string fingerprint back to bytes (this is an approximation)
-		// The old API used raw bytes, new API uses hex string
-		nc.Details.Issuer = []byte(c.Issuer())
+		issuerBytes, err := hex.DecodeString(c.Issuer())
+		if err != nil {
+			return nil, rest, fmt.Errorf("failed to decode issuer fingerprint: %w", err)
+		}
+		nc.Details.Issuer = issuerBytes
 	}
 
 	return nc, rest, nil
