@@ -52,6 +52,7 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).
 			WithField("certVersion", v).
 			Error("Unable to handshake with host because no certificate handshake bytes is available")
+		return false
 	}
 
 	ci, err := NewConnectionState(f.l, cs, crt, true, noise.HandshakeIX)
@@ -107,6 +108,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).
 			WithField("certVersion", cs.initiatingVersion).
 			Error("Unable to handshake with host because no certificate is available")
+		return
 	}
 
 	ci, err := NewConnectionState(f.l, cs, crt, false, noise.HandshakeIX)
@@ -147,8 +149,8 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 
 	remoteCert, err := f.pki.GetCAPool().VerifyCertificate(time.Now(), rc)
 	if err != nil {
-		fp, err := rc.Fingerprint()
-		if err != nil {
+		fp, fperr := rc.Fingerprint()
+		if fperr != nil {
 			fp = "<error generating certificate fingerprint>"
 		}
 
