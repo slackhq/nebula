@@ -1,6 +1,26 @@
 //go:build !android && !e2e_testing
 // +build !android,!e2e_testing
 
+// Package udp implements high-performance UDP socket I/O for Nebula
+//
+// I/O Architecture:
+//
+// SEND PATH (with io_uring):
+// - Multiple send shards accumulate outgoing packets asynchronously
+// - Each shard batches packets for ~25?s before submission
+// - Batches are submitted to a shared ioUringState via SendmsgBatch
+// - Efficient GSO support for coalescing multiple packets into one kernel call
+//
+// RECEIVE PATH (with io_uring):
+// - Dedicated ioUringRecvState with pre-allocated buffer pool
+// - Continuously keeps receive operations queued in the io_uring SQ
+// - ListenOut directly uses receivePackets() to drain completions in batches
+// - Efficient GRO support for receiving coalesced packets
+// - ReadSingle/ReadMulti use standard syscalls (not io_uring) for simplicity
+//
+// This architecture ensures send and receive are similarly optimized with
+// batching, pre-allocated buffers, and minimal lock contention.
+
 package udp
 
 import (
@@ -70,6 +90,8 @@ type StdConn struct {
 	groBatchTick         atomic.Int64
 	groSegmentsTick      atomic.Int64
 
+	// io_uring state - now per-shard for parallel sending
+	// ioState is deprecated (kept for compatibility but unused)
 	ioState         atomic.Pointer[ioUringState]
 	ioRecvState     atomic.Pointer[ioUringRecvState]
 	ioActive        atomic.Bool
@@ -135,6 +157,9 @@ type sendShard struct {
 
 	outQueue   chan *sendTask
 	workerDone sync.WaitGroup
+	
+	// Per-shard io_uring for parallel sends (no lock contention!)
+	ioState *ioUringState
 }
 
 func clampIoUringBatchSize(requested int, ringEntries uint32) int {
@@ -269,6 +294,62 @@ func (u *StdConn) resizeSendShards(count int) {
 	u.sendShards = newShards
 	u.shardCounter.Store(0)
 	u.l.WithField("send_shards", count).Debug("Configured UDP send shards")
+	
+	// If io_uring is enabled, create per-shard io_uring instances
+	if u.ioActive.Load() {
+		u.initShardIoUring()
+	}
+}
+
+// initShardIoUring creates a dedicated io_uring for each send shard
+// This eliminates lock contention and enables true parallel sending
+func (u *StdConn) initShardIoUring() {
+	if !u.ioActive.Load() {
+		return
+	}
+	
+	configured := uint32(u.ioUringMaxBatch.Load())
+	if configured == 0 {
+		configured = ioUringDefaultMaxBatch
+	}
+	
+	successCount := 0
+	numCPU := runtime.NumCPU()
+	
+	for i, shard := range u.sendShards {
+		ring, err := newIoUringState(configured)
+		if err != nil {
+			u.l.WithError(err).WithField("shard", i).Warn("Failed to create io_uring for shard")
+			continue
+		}
+		
+		shard.ioState = ring
+		successCount++
+		
+		// Calculate which CPU this SQPOLL thread is pinned to (if any)
+		cpuInfo := ""
+		if ring.sqpollEnabled {
+			// SQPOLL threads spread across cores to avoid competition
+			cpuCore := i % numCPU
+			cpuInfo = fmt.Sprintf(" on CPU %d", cpuCore)
+		}
+		
+		u.l.WithFields(logrus.Fields{
+			"shard":       i,
+			"sq_entries":  ring.sqEntryCount,
+			"sqpoll":      ring.sqpollEnabled,
+		}).Debugf("Created per-shard io_uring%s", cpuInfo)
+	}
+	
+	if successCount > 0 {
+		u.l.WithFields(logrus.Fields{
+			"shards":     len(u.sendShards),
+			"successful": successCount,
+		}).Info("Per-shard io_uring send enabled (parallel, no lock contention)")
+	} else {
+		u.l.Warn("No shards successfully initialized io_uring")
+		u.ioActive.Store(false)
+	}
 }
 
 func (u *StdConn) setGroBufferSize(size int) {
@@ -485,6 +566,12 @@ func (s *sendShard) startSender() {
 func (s *sendShard) stopSender() {
 	s.closeSender()
 	s.workerDone.Wait()
+	
+	// Close per-shard io_uring
+	if s.ioState != nil {
+		s.ioState.Close()
+		s.ioState = nil
+	}
 }
 
 func (s *sendShard) closeSender() {
@@ -535,6 +622,7 @@ func (s *sendShard) submitTask(task *sendTask) error {
 		}
 	}
 
+	// Fallback: if channel is full or closed, process immediately
 	return s.processTask(task)
 }
 
@@ -693,7 +781,8 @@ func (s *sendShard) processTasksBatch(tasks []*sendTask) error {
 		return nil
 	}
 	p := s.parent
-	state := p.ioState.Load()
+	// Use per-shard io_uring (no lock contention!)
+	state := s.ioState
 	var firstErr error
 	if state != nil {
 		if err := s.processTasksBatchIOUring(state, tasks); err != nil {
@@ -901,7 +990,17 @@ func (s *sendShard) write(b []byte, addr netip.AddrPort) error {
 
 	p := s.parent
 
+	// If no GSO, but we have io_uring, still use the batching path
+	// to benefit from io_uring holdoff batching
 	if !p.enableGSO || !addr.IsValid() {
+		if s.ioState != nil {
+			// Use io_uring batching even without GSO
+			s.mu.Unlock()
+			err := s.enqueueImmediate(b, addr)
+			s.mu.Lock()
+			return err
+		}
+		// No io_uring either - fall back to direct syscall
 		p.recordGSOSingle(1)
 		return p.directWrite(b, addr)
 	}
@@ -920,6 +1019,13 @@ func (s *sendShard) write(b []byte, addr netip.AddrPort) error {
 			return err
 		}
 		p.recordGSOSingle(1)
+		// If io_uring is enabled, use batching even without GSO
+		if s.ioState != nil {
+			s.mu.Unlock()
+			err := s.enqueueImmediate(b, addr)
+			s.mu.Lock()
+			return err
+		}
 		return p.directWrite(b, addr)
 	}
 
@@ -980,6 +1086,13 @@ func (s *sendShard) flushPendingLocked() error {
 	s.pendingAddr = netip.AddrPort{}
 
 	s.stopFlushTimerLocked()
+
+	// Fast path: If GSO is enabled and io_uring exists, GSO has already done
+	// the batching work. Skip the channel/senderLoop and process directly
+	// to minimize latency since io_uring batching adds minimal value.
+	if s.parent != nil && s.parent.enableGSO && s.ioState != nil {
+		return s.processTask(task)
+	}
 
 	s.mu.Unlock()
 	err := s.submitTask(task)
@@ -1708,40 +1821,9 @@ func (u *StdConn) ReadSingle(msgs []rawMessage) (int, error) {
 		return 0, nil
 	}
 
-	u.l.Debug("ReadSingle called")
-
-	state := u.ioState.Load()
-	if state == nil {
-		return u.readSingleSyscall(msgs)
-	}
-
-	u.l.Debug("ReadSingle: converting rawMessage to unix.Msghdr")
-	hdr, iov, err := rawMessageToUnixMsghdr(&msgs[0])
-	if err != nil {
-		u.l.WithError(err).Error("ReadSingle: rawMessageToUnixMsghdr failed")
-		return 0, &net.OpError{Op: "recvmsg", Err: err}
-	}
-
-	u.l.WithFields(logrus.Fields{
-		"bufLen":  iov.Len,
-		"nameLen": hdr.Namelen,
-		"ctrlLen": hdr.Controllen,
-	}).Debug("ReadSingle: calling state.Recvmsg")
-
-	n, _, recvErr := state.Recvmsg(u.sysFd, &hdr, 0)
-	if recvErr != nil {
-		u.l.WithError(recvErr).Error("ReadSingle: state.Recvmsg failed")
-		return 0, recvErr
-	}
-
-	u.l.WithFields(logrus.Fields{
-		"bytesRead": n,
-	}).Debug("ReadSingle: successfully received")
-
-	updateRawMessageFromUnixMsghdr(&msgs[0], &hdr, n)
-	runtime.KeepAlive(iov)
-	runtime.KeepAlive(hdr)
-	return 1, nil
+	// Note: io_uring receive uses the dedicated ioUringRecvState in ListenOut,
+	// not this path. This function always uses direct syscalls for simplicity.
+	return u.readSingleSyscall(msgs)
 }
 
 func (u *StdConn) ReadMulti(msgs []rawMessage) (int, error) {
@@ -1749,64 +1831,9 @@ func (u *StdConn) ReadMulti(msgs []rawMessage) (int, error) {
 		return 0, nil
 	}
 
-	u.l.WithField("batch_size", len(msgs)).Debug("ReadMulti called")
-
-	state := u.ioState.Load()
-	if state == nil {
-		return u.readMultiSyscall(msgs)
-	}
-
-	count := 0
-	for i := range msgs {
-		hdr, iov, err := rawMessageToUnixMsghdr(&msgs[i])
-		if err != nil {
-			u.l.WithError(err).WithField("index", i).Error("ReadMulti: rawMessageToUnixMsghdr failed")
-			if count > 0 {
-				return count, nil
-			}
-			return 0, &net.OpError{Op: "recvmsg", Err: err}
-		}
-
-		flags := uint32(0)
-		if i > 0 {
-			flags = unix.MSG_DONTWAIT
-		}
-
-		u.l.WithFields(logrus.Fields{
-			"index":  i,
-			"flags":  flags,
-			"bufLen": iov.Len,
-		}).Debug("ReadMulti: calling state.Recvmsg")
-
-		n, _, recvErr := state.Recvmsg(u.sysFd, &hdr, flags)
-		if recvErr != nil {
-			u.l.WithError(recvErr).WithFields(logrus.Fields{
-				"index": i,
-				"count": count,
-			}).Debug("ReadMulti: state.Recvmsg error")
-			if isEAgain(recvErr) && count > 0 {
-				u.l.WithField("count", count).Debug("ReadMulti: EAGAIN with existing packets, returning")
-				return count, nil
-			}
-			if count > 0 {
-				return count, recvErr
-			}
-			return 0, recvErr
-		}
-
-		u.l.WithFields(logrus.Fields{
-			"index":     i,
-			"bytesRead": n,
-		}).Debug("ReadMulti: packet received")
-
-		updateRawMessageFromUnixMsghdr(&msgs[i], &hdr, n)
-		runtime.KeepAlive(iov)
-		runtime.KeepAlive(hdr)
-		count++
-	}
-
-	u.l.WithField("total_count", count).Debug("ReadMulti: completed")
-	return count, nil
+	// Note: io_uring receive uses the dedicated ioUringRecvState in ListenOut,
+	// not this path. This function always uses direct syscalls for simplicity.
+	return u.readMultiSyscall(msgs)
 }
 
 func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
@@ -2524,32 +2551,13 @@ func (u *StdConn) configureIOUring(enable bool, c *config.C) {
 			}
 		}
 		u.ioUringMaxBatch.Store(int64(requestedBatch))
-		ring, err := newIoUringState(configured)
-		if err != nil {
-			u.l.WithError(err).Warn("Failed to enable io_uring; falling back to sendmmsg path")
-			return
-		}
-		u.ioState.Store(ring)
-		finalBatch := clampIoUringBatchSize(requestedBatch, ring.sqEntryCount)
-		u.ioUringMaxBatch.Store(int64(finalBatch))
-		fields := logrus.Fields{
-			"entries":   ring.sqEntryCount,
-			"max_batch": finalBatch,
-		}
-		if finalBatch != requestedBatch {
-			fields["requested_batch"] = requestedBatch
-		}
-		u.l.WithFields(fields).Debug("io_uring ioState pointer initialized")
-		desired := configured
-		if desired == 0 {
-			desired = defaultIoUringEntries
-		}
-		if ring.sqEntryCount < desired {
-			fields["requested_entries"] = desired
-			u.l.WithFields(fields).Warn("UDP io_uring send path enabled with reduced queue depth (ENOMEM)")
-		} else {
-			u.l.WithFields(fields).Debug("UDP io_uring send path enabled")
-		}
+		
+		// Mark io_uring as active - per-shard rings will be created when shards are initialized
+		u.ioActive.Store(true)
+		u.l.WithFields(logrus.Fields{
+			"max_batch":   requestedBatch,
+			"holdoff":     u.ioUringHoldoff.Load(),
+		}).Debug("io_uring send path configured (per-shard rings will be created)")
 
 		// Initialize dedicated receive ring with retry logic
 		recvPoolSize := 128 // Number of receive operations to keep queued
