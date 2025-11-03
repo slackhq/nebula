@@ -127,6 +127,7 @@ type sendShard struct {
 	pendingSegSize  int
 	flushTimer      *time.Timer
 	controlBuf      []byte
+	controlScratch  []byte
 
 	mmsgHeaders []linuxMmsgHdr
 	mmsgIovecs  []unix.Iovec
@@ -723,9 +724,13 @@ func (s *sendShard) processTasksBatchIOUring(state *ioUringState, tasks []*sendT
 	if s.parent != nil && s.parent.ioUringMaxBatch.Load() > 0 {
 		maxSeg = int(s.parent.ioUringMaxBatch.Load())
 	}
+	gsoCount := 0
 	for _, task := range tasks {
 		if task == nil || len(task.buf) == 0 {
 			continue
+		}
+		if s.parent != nil && s.parent.enableGSO && task.segments > 1 {
+			gsoCount++
 		}
 		if task.segSize > 0 && task.segSize < len(task.buf) {
 			capEstimate += (len(task.buf) + task.segSize - 1) / task.segSize
@@ -739,6 +744,20 @@ func (s *sendShard) processTasksBatchIOUring(state *ioUringState, tasks []*sendT
 	if capEstimate > maxSeg {
 		capEstimate = maxSeg
 	}
+	if gsoCount < 0 {
+		gsoCount = 0
+	}
+	cmsgSize := unix.CmsgSpace(2)
+	neededCtrl := gsoCount * cmsgSize
+	if neededCtrl > 0 {
+		if cap(s.controlScratch) < neededCtrl {
+			s.controlScratch = make([]byte, neededCtrl)
+		}
+		s.controlScratch = s.controlScratch[:neededCtrl]
+	} else {
+		s.controlScratch = s.controlScratch[:0]
+	}
+	controlOffset := 0
 	items := make([]*batchSendItem, 0, capEstimate)
 	for _, task := range tasks {
 		if task == nil || len(task.buf) == 0 {
@@ -746,7 +765,16 @@ func (s *sendShard) processTasksBatchIOUring(state *ioUringState, tasks []*sendT
 		}
 		useGSO := s.parent.enableGSO && task.segments > 1
 		if useGSO {
-			control := make([]byte, unix.CmsgSpace(2))
+			var control []byte
+			if controlOffset+cmsgSize <= len(s.controlScratch) {
+				control = s.controlScratch[controlOffset : controlOffset+cmsgSize]
+				for i := range control {
+					control[i] = 0
+				}
+				controlOffset += cmsgSize
+			} else {
+				control = make([]byte, cmsgSize)
+			}
 			hdr := (*unix.Cmsghdr)(unsafe.Pointer(&control[0]))
 			setCmsgLen(hdr, 2)
 			hdr.Level = unix.SOL_UDP
