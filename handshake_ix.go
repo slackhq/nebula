@@ -28,7 +28,7 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 	if hh.initiatingVersionOverride != cert.VersionPre1 {
 		v = hh.initiatingVersionOverride
 	} else if v < cert.Version2 {
-		// If we're connecting to a v6 address we must use a v2 cert
+		// If we're connecting to a v6 address we should encourage use of a V2 cert
 		for _, a := range hh.hostinfo.vpnAddrs {
 			if a.Is6() {
 				v = cert.Version2

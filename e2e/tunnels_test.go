@@ -237,7 +237,7 @@ func TestCertDowngrade(t *testing.T) {
 		}
 		since := time.Since(waitStart)
 		if since > time.Second*5 {
-			r.Log("wtf")
+			r.Log("it is unusual that the cert is not new yet, but not a failure yet")
 		}
 		if since > time.Second*10 {
 			r.Log("wtf")
