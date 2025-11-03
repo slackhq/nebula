@@ -82,6 +82,6 @@ func (u *GenericConn) ListenOut(r EncReader) {
 			return
 		}
 
-		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
+		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n], nil)
 	}
 }

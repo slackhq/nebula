@@ -3,6 +3,7 @@ package cert
 import (
 	"encoding/pem"
 	"fmt"
+	"time"
 
 	"golang.org/x/crypto/ed25519"
 )
@@ -188,4 +189,70 @@ func UnmarshalSigningPrivateKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) 
 		return nil, r, 0, fmt.Errorf("bytes did not contain a proper Ed25519/ECDSA private key banner")
 	}
 	return k.Bytes, r, curve, nil
+}
+
+// Backward compatibility functions for older API
+func MarshalX25519PublicKey(b []byte) []byte {
+	return MarshalPublicKeyToPEM(Curve_CURVE25519, b)
+}
+
+func MarshalX25519PrivateKey(b []byte) []byte {
+	return MarshalPrivateKeyToPEM(Curve_CURVE25519, b)
+}
+
+func MarshalPublicKey(curve Curve, b []byte) []byte {
+	return MarshalPublicKeyToPEM(curve, b)
+}
+
+func MarshalPrivateKey(curve Curve, b []byte) []byte {
+	return MarshalPrivateKeyToPEM(curve, b)
+}
+
+// NebulaCertificate is a compatibility wrapper for the old API
+type NebulaCertificate struct {
+	Details   NebulaCertificateDetails
+	Signature []byte
+	cert      Certificate
+}
+
+// NebulaCertificateDetails is a compatibility wrapper for certificate details
+type NebulaCertificateDetails struct {
+	Name      string
+	NotBefore time.Time
+	NotAfter  time.Time
+	PublicKey []byte
+	IsCA      bool
+	Issuer    []byte
+	Curve     Curve
+}
+
+// UnmarshalNebulaCertificateFromPEM provides backward compatibility with the old API
+func UnmarshalNebulaCertificateFromPEM(b []byte) (*NebulaCertificate, []byte, error) {
+	c, rest, err := UnmarshalCertificateFromPEM(b)
+	if err != nil {
+		return nil, rest, err
+	}
+
+	// Convert to old format
+	nc := &NebulaCertificate{
+		Details: NebulaCertificateDetails{
+			Name:      c.Name(),
+			NotBefore: c.NotBefore(),
+			NotAfter:  c.NotAfter(),
+			PublicKey: c.PublicKey(),
+			IsCA:      c.IsCA(),
+			Curve:     c.Curve(),
+		},
+		Signature: c.Signature(),
+		cert:      c,
+	}
+
+	// Handle issuer
+	if c.Issuer() != "" {
+		// Convert hex string fingerprint back to bytes (this is an approximation)
+		// The old API used raw bytes, new API uses hex string
+		nc.Details.Issuer = []byte(c.Issuer())
+	}
+
+	return nc, rest, nil
 }

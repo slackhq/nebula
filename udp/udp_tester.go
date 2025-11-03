@@ -112,7 +112,7 @@ func (u *TesterConn) ListenOut(r EncReader) {
 		if !ok {
 			return
 		}
-		r(p.From, p.Data)
+		r(p.From, p.Data, func() {})
 	}
 }
 

@@ -271,7 +271,10 @@ func (f *Interface) listenOut(i int) {
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
-	li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
+	li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte, release func()) {
+		if release != nil {
+			defer release()
+		}
 		f.readOutsidePackets(fromUdpAddr, nil, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
 	})
 }
