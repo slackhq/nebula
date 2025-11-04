@@ -98,7 +98,9 @@ func NewStdNetBind() *StdNetBind {
 func NewStdNetBindForAddr(addr netip.Addr, reusePort bool) *StdNetBind {
 	b := newStdNetBind()
 	if addr.IsValid() {
-		if addr.Is4() {
+		if addr.IsUnspecified() {
+			// keep dual-stack defaults with empty listen addresses
+		} else if addr.Is4() {
 			b.listenAddr4 = addr.Unmap().String()
 			b.bindV4 = true
 			b.bindV6 = false
