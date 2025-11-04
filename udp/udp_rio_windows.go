@@ -151,8 +151,7 @@ func (u *RIOConn) ListenOut(r EncReader) error {
 
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
-				u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
-				return
+				return err
 			}
 			// Dampen unexpected message warns to once per minute
 			if lastRecvErr.IsZero() || time.Since(lastRecvErr) > time.Minute {
