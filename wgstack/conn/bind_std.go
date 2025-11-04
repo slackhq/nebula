@@ -456,7 +456,19 @@ func (s *StdNetBind) send4(conn *net.UDPConn, pc *ipv4.PacketConn, ep Endpoint, 
 	if runtime.GOOS == "linux" && pc != nil {
 		for {
 			n, err = pc.WriteBatch((*msgs)[start:len(bufs)], 0)
-			if err != nil || n == len((*msgs)[start:len(bufs)]) {
+			if err != nil {
+				if errors.Is(err, syscall.EAFNOSUPPORT) {
+					for j := start; j < len(bufs); j++ {
+						_, _, werr := conn.WriteMsgUDP(bufs[j], (*msgs)[j].OOB, ua)
+						if werr != nil {
+							err = werr
+							break
+						}
+					}
+				}
+				break
+			}
+			if n == len((*msgs)[start:len(bufs)]) {
 				break
 			}
 			start += n
@@ -494,7 +506,19 @@ func (s *StdNetBind) send6(conn *net.UDPConn, pc *ipv6.PacketConn, ep Endpoint, 
 	if runtime.GOOS == "linux" && pc != nil {
 		for {
 			n, err = pc.WriteBatch((*msgs)[start:len(bufs)], 0)
-			if err != nil || n == len((*msgs)[start:len(bufs)]) {
+			if err != nil {
+				if errors.Is(err, syscall.EAFNOSUPPORT) {
+					for j := start; j < len(bufs); j++ {
+						_, _, werr := conn.WriteMsgUDP(bufs[j], (*msgs)[j].OOB, ua)
+						if werr != nil {
+							err = werr
+							break
+						}
+					}
+				}
+				break
+			}
+			if n == len((*msgs)[start:len(bufs)]) {
 				break
 			}
 			start += n
