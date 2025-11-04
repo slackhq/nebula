@@ -144,6 +144,20 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	// set up our UDP listener
 	udpConns := make([]udp.Conn, routines)
 	port := c.GetInt("listen.port", 0)
+	enableGSO := c.GetBool("listen.enable_gso", true)
+	enableGRO := c.GetBool("listen.enable_gro", true)
+	gsoMaxSegments := c.GetInt("listen.gso_max_segments", defaultGSOMaxSegments)
+	if gsoMaxSegments <= 0 {
+		gsoMaxSegments = defaultGSOMaxSegments
+	}
+	if gsoMaxSegments > maxKernelGSOSegments {
+		gsoMaxSegments = maxKernelGSOSegments
+	}
+	gsoFlushTimeout := c.GetDuration("listen.gso_flush_timeout", defaultGSOFlushInterval)
+	if gsoFlushTimeout < 0 {
+		gsoFlushTimeout = 0
+	}
+	batchQueueDepth := c.GetInt("batch.queue_depth", 0)
 
 	if !configTest {
 		rawListenHost := c.GetString("listen.host", "0.0.0.0")
@@ -179,6 +193,11 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
 			udpServer.ReloadConfig(c)
+			if cfg, ok := udpServer.(interface {
+				ConfigureOffload(bool, bool, int)
+			}); ok {
+				cfg.ConfigureOffload(enableGSO, enableGRO, gsoMaxSegments)
+			}
 			udpConns[i] = udpServer
 
 			// If port is dynamic, discover it before the next pass through the for loop
@@ -246,12 +265,17 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		reQueryWait:           c.GetDuration("timers.requery_wait_duration", defaultReQueryWait),
 		DropLocalBroadcast:    c.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:         c.GetBool("tun.drop_multicast", false),
+		EnableGSO:             enableGSO,
+		EnableGRO:             enableGRO,
+		GSOMaxSegments:        gsoMaxSegments,
 		routines:              routines,
 		MessageMetrics:        messageMetrics,
 		version:               buildVersion,
 		relayManager:          NewRelayManager(ctx, l, hostMap, c),
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
+		BatchFlushInterval:    gsoFlushTimeout,
+		BatchQueueDepth:       batchQueueDepth,
 		l:                     l,
 	}
 
@@ -263,6 +287,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 
 		ifce.writers = udpConns
+		ifce.applyOffloadConfig(enableGSO, enableGRO, gsoMaxSegments)
 		lightHouse.ifce = ifce
 
 		ifce.RegisterConfigChangeCallbacks(c)

@@ -20,8 +20,12 @@ type WGConn struct {
 	bind      *wgconn.StdNetBind
 	recvers   []wgconn.ReceiveFunc
 	batch     int
+	reqBatch  int
 	localIP   netip.Addr
 	localPort uint16
+	enableGSO bool
+	enableGRO bool
+	gsoMaxSeg int
 	closed    atomic.Bool
 
 	closeOnce sync.Once
@@ -34,7 +38,9 @@ func NewWireguardListener(l *logrus.Logger, ip netip.Addr, port int, multi bool,
 	if err != nil {
 		return nil, err
 	}
-	if batch <= 0 || batch > bind.BatchSize() {
+	if batch <= 0 {
+		batch = bind.BatchSize()
+	} else if batch > bind.BatchSize() {
 		batch = bind.BatchSize()
 	}
 	return &WGConn{
@@ -42,6 +48,7 @@ func NewWireguardListener(l *logrus.Logger, ip netip.Addr, port int, multi bool,
 		bind:      bind,
 		recvers:   recvers,
 		batch:     batch,
+		reqBatch:  batch,
 		localIP:   ip,
 		localPort: actualPort,
 	}, nil
@@ -116,6 +123,92 @@ func (c *WGConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	}
 	ep := &wgconn.StdNetEndpoint{AddrPort: addr}
 	return c.bind.Send([][]byte{b}, ep)
+}
+
+func (c *WGConn) WriteBatch(datagrams []Datagram) error {
+	if len(datagrams) == 0 {
+		return nil
+	}
+	if c.closed.Load() {
+		return net.ErrClosed
+	}
+	max := c.batch
+	if max <= 0 {
+		max = len(datagrams)
+		if max == 0 {
+			max = 1
+		}
+	}
+	bufs := make([][]byte, 0, max)
+	var (
+		current  netip.AddrPort
+		endpoint *wgconn.StdNetEndpoint
+		haveAddr bool
+	)
+	flush := func() error {
+		if len(bufs) == 0 || endpoint == nil {
+			bufs = bufs[:0]
+			return nil
+		}
+		err := c.bind.Send(bufs, endpoint)
+		bufs = bufs[:0]
+		return err
+	}
+
+	for _, d := range datagrams {
+		if len(d.Payload) == 0 || !d.Addr.IsValid() {
+			continue
+		}
+		if !haveAddr || d.Addr != current {
+			if err := flush(); err != nil {
+				return err
+			}
+			current = d.Addr
+			endpoint = &wgconn.StdNetEndpoint{AddrPort: current}
+			haveAddr = true
+		}
+		bufs = append(bufs, d.Payload)
+		if len(bufs) >= max {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	return flush()
+}
+
+func (c *WGConn) ConfigureOffload(enableGSO, enableGRO bool, maxSegments int) {
+	c.enableGSO = enableGSO
+	c.enableGRO = enableGRO
+	if maxSegments <= 0 {
+		maxSegments = 1
+	} else if maxSegments > wgconn.IdealBatchSize {
+		maxSegments = wgconn.IdealBatchSize
+	}
+	c.gsoMaxSeg = maxSegments
+
+	effectiveBatch := c.reqBatch
+	if enableGSO && c.bind != nil {
+		bindBatch := c.bind.BatchSize()
+		if effectiveBatch < bindBatch {
+			if c.l != nil {
+				c.l.WithFields(logrus.Fields{
+					"requested": c.reqBatch,
+					"effective": bindBatch,
+				}).Warn("listen.batch below wireguard minimum; using bind batch size for UDP GSO support")
+			}
+			effectiveBatch = bindBatch
+		}
+	}
+	c.batch = effectiveBatch
+
+	if c.l != nil {
+		c.l.WithFields(logrus.Fields{
+			"enableGSO":      enableGSO,
+			"enableGRO":      enableGRO,
+			"gsoMaxSegments": maxSegments,
+		}).Debug("configured wireguard UDP offload")
+	}
 }
 
 func (c *WGConn) ReloadConfig(*config.C) {

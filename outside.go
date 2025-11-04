@@ -12,6 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/overlay"
 	"golang.org/x/net/ipv4"
 )
 
@@ -466,22 +467,41 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 }
 
 func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) bool {
-	var err error
+	var (
+		err error
+		pkt *overlay.Packet
+	)
+
+	if f.batches.tunQueue(q) != nil {
+		pkt = f.batches.newPacket()
+		if pkt != nil {
+			out = pkt.Payload()[:0]
+		}
+	}
 
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], messageCounter, nb)
 	if err != nil {
+		if pkt != nil {
+			pkt.Release()
+		}
 		hostinfo.logger(f.l).WithError(err).Error("Failed to decrypt packet")
 		return false
 	}
 
 	err = newPacket(out, true, fwPacket)
 	if err != nil {
+		if pkt != nil {
+			pkt.Release()
+		}
 		hostinfo.logger(f.l).WithError(err).WithField("packet", out).
 			Warnf("Error while validating inbound packet")
 		return false
 	}
 
 	if !hostinfo.ConnectionState.window.Update(f.l, messageCounter) {
+		if pkt != nil {
+			pkt.Release()
+		}
 		hostinfo.logger(f.l).WithField("fwPacket", fwPacket).
 			Debugln("dropping out of window packet")
 		return false
@@ -489,6 +509,9 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 
 	dropReason := f.firewall.Drop(*fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason != nil {
+		if pkt != nil {
+			pkt.Release()
+		}
 		// NOTE: We give `packet` as the `out` here since we already decrypted from it and we don't need it anymore
 		// This gives us a buffer to build the reject packet in
 		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, packet, q)
@@ -501,8 +524,17 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	}
 
 	f.connectionManager.In(hostinfo)
-	_, err = f.readers[q].Write(out)
-	if err != nil {
+	if pkt != nil {
+		pkt.Len = len(out)
+		if f.batches.enqueueTun(q, pkt) {
+			f.observeTunQueueLen(q)
+			return true
+		}
+		f.writePacketToTun(q, pkt)
+		return true
+	}
+
+	if _, err = f.readers[q].Write(out); err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")
 	}
 	return true

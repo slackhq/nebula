@@ -8,6 +8,7 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/noiseutil"
+	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -335,8 +336,20 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	if ci.eKey == nil {
 		return
 	}
-	useRelay := !remote.IsValid() && !hostinfo.remote.IsValid()
+	target := remote
+	if !target.IsValid() {
+		target = hostinfo.remote
+	}
+	useRelay := !target.IsValid()
 	fullOut := out
+
+	var pkt *overlay.Packet
+	if !useRelay && f.batches.Enabled() {
+		pkt = f.batches.newPacket()
+		if pkt != nil {
+			out = pkt.Payload()[:0]
+		}
+	}
 
 	if useRelay {
 		if len(out) < header.Len {
@@ -376,36 +389,61 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		ci.writeLock.Unlock()
 	}
 	if err != nil {
+		if pkt != nil {
+			pkt.Release()
+		}
 		hostinfo.logger(f.l).WithError(err).
-			WithField("udpAddr", remote).WithField("counter", c).
+			WithField("udpAddr", target).WithField("counter", c).
 			WithField("attemptedCounter", c).
 			Error("Failed to encrypt outgoing packet")
 		return
 	}
 
-	if remote.IsValid() {
-		err = f.writers[q].WriteTo(out, remote)
-		if err != nil {
-			hostinfo.logger(f.l).WithError(err).
-				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
-		}
-	} else if hostinfo.remote.IsValid() {
-		err = f.writers[q].WriteTo(out, hostinfo.remote)
-		if err != nil {
-			hostinfo.logger(f.l).WithError(err).
-				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
-		}
-	} else {
-		// Try to send via a relay
-		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
-			relayHostInfo, relay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relayIP)
-			if err != nil {
-				hostinfo.relayState.DeleteRelay(relayIP)
-				hostinfo.logger(f.l).WithField("relay", relayIP).WithError(err).Info("sendNoMetrics failed to find HostInfo")
-				continue
+	if target.IsValid() {
+		if pkt != nil {
+			pkt.Len = len(out)
+			if f.l.Level >= logrus.DebugLevel {
+				f.l.WithFields(logrus.Fields{
+					"queue":        q,
+					"dest":         target,
+					"payload_len":  pkt.Len,
+					"use_batches":  true,
+					"remote_index": hostinfo.remoteIndexId,
+				}).Debug("enqueueing packet to UDP batch queue")
 			}
-			f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true)
-			break
+			if f.tryQueuePacket(q, pkt, target) {
+				return
+			}
+			if f.l.Level >= logrus.DebugLevel {
+				f.l.WithFields(logrus.Fields{
+					"queue": q,
+					"dest":  target,
+				}).Debug("failed to enqueue packet; falling back to immediate send")
+			}
+			f.writeImmediatePacket(q, pkt, target, hostinfo)
+			return
 		}
+		if f.tryQueueDatagram(q, out, target) {
+			return
+		}
+		f.writeImmediate(q, out, target, hostinfo)
+		return
+	}
+
+	// fall back to relay path
+	if pkt != nil {
+		pkt.Release()
+	}
+
+	// Try to send via a relay
+	for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
+		relayHostInfo, relay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relayIP)
+		if err != nil {
+			hostinfo.relayState.DeleteRelay(relayIP)
+			hostinfo.logger(f.l).WithField("relay", relayIP).WithError(err).Info("sendNoMetrics failed to find HostInfo")
+			continue
+		}
+		f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true)
+		break
 	}
 }

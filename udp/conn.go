@@ -22,6 +22,18 @@ type Conn interface {
 	Close() error
 }
 
+// Datagram represents a UDP payload destined to a specific address.
+type Datagram struct {
+	Payload []byte
+	Addr    netip.AddrPort
+}
+
+// BatchConn can send multiple datagrams in one syscall.
+type BatchConn interface {
+	Conn
+	WriteBatch(pkts []Datagram) error
+}
+
 type NoopConn struct{}
 
 func (NoopConn) Rebind() error {

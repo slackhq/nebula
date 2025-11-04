@@ -21,7 +21,13 @@ import (
 	"github.com/slackhq/nebula/udp"
 )
 
-const mtu = 9001
+const (
+	mtu                          = 9001
+	defaultGSOFlushInterval      = 150 * time.Microsecond
+	defaultBatchQueueDepthFactor = 4
+	defaultGSOMaxSegments        = 8
+	maxKernelGSOSegments         = 64
+)
 
 type InterfaceConfig struct {
 	HostMap            *HostMap
@@ -36,6 +42,9 @@ type InterfaceConfig struct {
 	connectionManager  *connectionManager
 	DropLocalBroadcast bool
 	DropMulticast      bool
+	EnableGSO          bool
+	EnableGRO          bool
+	GSOMaxSegments     int
 	routines           int
 	MessageMetrics     *MessageMetrics
 	version            string
@@ -47,6 +56,8 @@ type InterfaceConfig struct {
 	reQueryWait     time.Duration
 
 	ConntrackCacheTimeout time.Duration
+	BatchFlushInterval    time.Duration
+	BatchQueueDepth       int
 	l                     *logrus.Logger
 }
 
@@ -84,9 +95,20 @@ type Interface struct {
 	version     string
 
 	conntrackCacheTimeout time.Duration
+	batchQueueDepth       int
+	enableGSO             bool
+	enableGRO             bool
+	gsoMaxSegments        int
+	batchUDPQueueGauge    metrics.Gauge
+	batchUDPFlushCounter  metrics.Counter
+	batchTunQueueGauge    metrics.Gauge
+	batchTunFlushCounter  metrics.Counter
+	batchFlushInterval    atomic.Int64
+	sendSem               chan struct{}
 
 	writers []udp.Conn
 	readers []io.ReadWriteCloser
+	batches batchPipelines
 
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
@@ -161,6 +183,22 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		return nil, errors.New("no connection manager")
 	}
 
+	if c.GSOMaxSegments <= 0 {
+		c.GSOMaxSegments = defaultGSOMaxSegments
+	}
+	if c.GSOMaxSegments > maxKernelGSOSegments {
+		c.GSOMaxSegments = maxKernelGSOSegments
+	}
+	if c.BatchQueueDepth <= 0 {
+		c.BatchQueueDepth = c.routines * defaultBatchQueueDepthFactor
+	}
+	if c.BatchFlushInterval < 0 {
+		c.BatchFlushInterval = 0
+	}
+	if c.BatchFlushInterval == 0 && c.EnableGSO {
+		c.BatchFlushInterval = defaultGSOFlushInterval
+	}
+
 	cs := c.pki.getCertState()
 	ifce := &Interface{
 		pki:                   c.pki,
@@ -186,6 +224,10 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		relayManager:          c.relayManager,
 		connectionManager:     c.connectionManager,
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
+		batchQueueDepth:       c.BatchQueueDepth,
+		enableGSO:             c.EnableGSO,
+		enableGRO:             c.EnableGRO,
+		gsoMaxSegments:        c.GSOMaxSegments,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -198,8 +240,25 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	}
 
 	ifce.tryPromoteEvery.Store(c.tryPromoteEvery)
+	ifce.batchUDPQueueGauge = metrics.GetOrRegisterGauge("batch.udp.queue_depth", nil)
+	ifce.batchUDPFlushCounter = metrics.GetOrRegisterCounter("batch.udp.flushes", nil)
+	ifce.batchTunQueueGauge = metrics.GetOrRegisterGauge("batch.tun.queue_depth", nil)
+	ifce.batchTunFlushCounter = metrics.GetOrRegisterCounter("batch.tun.flushes", nil)
+	ifce.batchFlushInterval.Store(int64(c.BatchFlushInterval))
+	ifce.sendSem = make(chan struct{}, c.routines)
+	ifce.batches.init(c.Inside, c.routines, c.BatchQueueDepth, c.GSOMaxSegments)
 	ifce.reQueryEvery.Store(c.reQueryEvery)
 	ifce.reQueryWait.Store(int64(c.reQueryWait))
+	if c.l.Level >= logrus.DebugLevel {
+		c.l.WithFields(logrus.Fields{
+			"enableGSO":       c.EnableGSO,
+			"enableGRO":       c.EnableGRO,
+			"gsoMaxSegments":  c.GSOMaxSegments,
+			"batchQueueDepth": c.BatchQueueDepth,
+			"batchFlush":      c.BatchFlushInterval,
+			"batching":        ifce.batches.Enabled(),
+		}).Debug("initialized batch pipelines")
+	}
 
 	ifce.connectionManager.intf = ifce
 
@@ -248,6 +307,18 @@ func (f *Interface) run() {
 		go f.listenOut(i)
 	}
 
+	if f.l.Level >= logrus.DebugLevel {
+		f.l.WithField("batching", f.batches.Enabled()).Debug("starting interface run loops")
+	}
+
+	if f.batches.Enabled() {
+		for i := 0; i < f.routines; i++ {
+			go f.runInsideBatchWorker(i)
+			go f.runTunWriteQueue(i)
+			go f.runSendQueue(i)
+		}
+	}
+
 	// Launch n queues to read packets from tun dev
 	for i := 0; i < f.routines; i++ {
 		go f.listenIn(f.readers[i], i)
@@ -279,6 +350,17 @@ func (f *Interface) listenOut(i int) {
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	runtime.LockOSThread()
 
+	if f.batches.Enabled() {
+		if br, ok := reader.(overlay.BatchReader); ok {
+			f.listenInBatchLocked(reader, br, i)
+			return
+		}
+	}
+
+	f.listenInLegacyLocked(reader, i)
+}
+
+func (f *Interface) listenInLegacyLocked(reader io.ReadWriteCloser, i int) {
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
@@ -299,6 +381,489 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 		}
 
 		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
+	}
+}
+
+func (f *Interface) listenInBatchLocked(raw io.ReadWriteCloser, reader overlay.BatchReader, i int) {
+	pool := f.batches.Pool()
+	if pool == nil {
+		f.l.Warn("batch pipeline enabled without an allocated pool; falling back to single-packet reads")
+		f.listenInLegacyLocked(raw, i)
+		return
+	}
+
+	for {
+		packets, err := reader.ReadIntoBatch(pool)
+		if err != nil {
+			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
+				return
+			}
+
+			f.l.WithError(err).Error("Error while reading outbound packet batch")
+			os.Exit(2)
+		}
+
+		if len(packets) == 0 {
+			continue
+		}
+
+		for _, pkt := range packets {
+			if pkt == nil {
+				continue
+			}
+			if !f.batches.enqueueRx(i, pkt) {
+				pkt.Release()
+			}
+		}
+	}
+}
+
+func (f *Interface) runInsideBatchWorker(i int) {
+	queue := f.batches.rxQueue(i)
+	if queue == nil {
+		return
+	}
+
+	out := make([]byte, mtu)
+	fwPacket := &firewall.Packet{}
+	nb := make([]byte, 12, 12)
+	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
+
+	for pkt := range queue {
+		if pkt == nil {
+			continue
+		}
+		f.consumeInsidePacket(pkt.Payload(), fwPacket, nb, out, i, conntrackCache.Get(f.l))
+		pkt.Release()
+	}
+}
+
+func (f *Interface) runSendQueue(i int) {
+	queue := f.batches.txQueue(i)
+	if queue == nil {
+		if f.l.Level >= logrus.DebugLevel {
+			f.l.WithField("queue", i).Debug("tx queue not initialized; batching disabled for writer")
+		}
+		return
+	}
+	writer := f.writerForIndex(i)
+	if writer == nil {
+		if f.l.Level >= logrus.DebugLevel {
+			f.l.WithField("queue", i).Debug("no UDP writer for batch queue")
+		}
+		return
+	}
+	if f.l.Level >= logrus.DebugLevel {
+		f.l.WithField("queue", i).Debug("send queue worker started")
+	}
+	defer func() {
+		if f.l.Level >= logrus.WarnLevel {
+			f.l.WithField("queue", i).Warn("send queue worker exited")
+		}
+	}()
+
+	batchCap := f.batches.batchSizeHint()
+	if batchCap <= 0 {
+		batchCap = 1
+	}
+	gsoLimit := f.effectiveGSOMaxSegments()
+	if gsoLimit > batchCap {
+		batchCap = gsoLimit
+	}
+	pending := make([]queuedDatagram, 0, batchCap)
+	var (
+		flushTimer *time.Timer
+		flushC     <-chan time.Time
+	)
+	dispatch := func(reason string, timerFired bool) {
+		if len(pending) == 0 {
+			return
+		}
+		batch := pending
+		f.flushAndReleaseBatch(i, writer, batch, reason)
+		for idx := range batch {
+			batch[idx] = queuedDatagram{}
+		}
+		pending = pending[:0]
+		if flushTimer != nil {
+			if !timerFired {
+				if !flushTimer.Stop() {
+					select {
+					case <-flushTimer.C:
+					default:
+					}
+				}
+			}
+			flushTimer = nil
+			flushC = nil
+		}
+	}
+	armTimer := func() {
+		delay := f.currentBatchFlushInterval()
+		if delay <= 0 {
+			dispatch("nogso", false)
+			return
+		}
+		if flushTimer == nil {
+			flushTimer = time.NewTimer(delay)
+			flushC = flushTimer.C
+		}
+	}
+
+	for {
+		select {
+		case d := <-queue:
+			if d.packet == nil {
+				continue
+			}
+			if f.l.Level >= logrus.DebugLevel {
+				f.l.WithFields(logrus.Fields{
+					"queue":       i,
+					"payload_len": d.packet.Len,
+					"dest":        d.addr,
+				}).Debug("send queue received packet")
+			}
+			pending = append(pending, d)
+			if gsoLimit > 0 && len(pending) >= gsoLimit {
+				dispatch("gso", false)
+				continue
+			}
+			if len(pending) >= cap(pending) {
+				dispatch("cap", false)
+				continue
+			}
+			armTimer()
+			f.observeUDPQueueLen(i)
+		case <-flushC:
+			dispatch("timer", true)
+		}
+	}
+}
+
+func (f *Interface) runTunWriteQueue(i int) {
+	queue := f.batches.tunQueue(i)
+	if queue == nil {
+		return
+	}
+	writer := f.batches.inside
+	if writer == nil {
+		return
+	}
+
+	batchCap := f.batches.batchSizeHint()
+	if batchCap <= 0 {
+		batchCap = 1
+	}
+	pending := make([]*overlay.Packet, 0, batchCap)
+	var (
+		flushTimer *time.Timer
+		flushC     <-chan time.Time
+	)
+	flush := func(reason string, timerFired bool) {
+		if len(pending) == 0 {
+			return
+		}
+		if _, err := writer.WriteBatch(pending); err != nil {
+			f.l.WithError(err).
+				WithField("queue", i).
+				WithField("reason", reason).
+				Warn("Failed to write tun batch")
+		}
+		for idx := range pending {
+			if pending[idx] != nil {
+				pending[idx].Release()
+			}
+		}
+		pending = pending[:0]
+		if flushTimer != nil {
+			if !timerFired {
+				if !flushTimer.Stop() {
+					select {
+					case <-flushTimer.C:
+					default:
+					}
+				}
+			}
+			flushTimer = nil
+			flushC = nil
+		}
+	}
+	armTimer := func() {
+		delay := f.currentBatchFlushInterval()
+		if delay <= 0 {
+			return
+		}
+		if flushTimer == nil {
+			flushTimer = time.NewTimer(delay)
+			flushC = flushTimer.C
+		}
+	}
+
+	for {
+		select {
+		case pkt := <-queue:
+			if pkt == nil {
+				continue
+			}
+			pending = append(pending, pkt)
+			if len(pending) >= cap(pending) {
+				flush("cap", false)
+				continue
+			}
+			armTimer()
+			f.observeTunQueueLen(i)
+		case <-flushC:
+			flush("timer", true)
+		}
+	}
+}
+
+func (f *Interface) flushAndReleaseBatch(index int, writer udp.Conn, batch []queuedDatagram, reason string) {
+	if len(batch) == 0 {
+		return
+	}
+	f.flushDatagrams(index, writer, batch, reason)
+	for idx := range batch {
+		if batch[idx].packet != nil {
+			batch[idx].packet.Release()
+			batch[idx].packet = nil
+		}
+	}
+	if f.batchUDPFlushCounter != nil {
+		f.batchUDPFlushCounter.Inc(int64(len(batch)))
+	}
+}
+
+func (f *Interface) flushDatagrams(index int, writer udp.Conn, batch []queuedDatagram, reason string) {
+	if len(batch) == 0 {
+		return
+	}
+	if f.l.Level >= logrus.DebugLevel {
+		f.l.WithFields(logrus.Fields{
+			"writer":  index,
+			"reason":  reason,
+			"pending": len(batch),
+		}).Debug("udp batch flush summary")
+	}
+	maxSeg := f.effectiveGSOMaxSegments()
+	if bw, ok := writer.(udp.BatchConn); ok {
+		chunkCap := maxSeg
+		if chunkCap <= 0 {
+			chunkCap = len(batch)
+		}
+		chunk := make([]udp.Datagram, 0, chunkCap)
+		var (
+			currentAddr netip.AddrPort
+			segments    int
+		)
+		flushChunk := func() {
+			if len(chunk) == 0 {
+				return
+			}
+			if f.l.Level >= logrus.DebugLevel {
+				f.l.WithFields(logrus.Fields{
+					"writer":        index,
+					"segments":      len(chunk),
+					"dest":          chunk[0].Addr,
+					"reason":        reason,
+					"pending_total": len(batch),
+				}).Debug("flushing UDP batch")
+			}
+			if err := bw.WriteBatch(chunk); err != nil {
+				f.l.WithError(err).
+					WithField("writer", index).
+					WithField("reason", reason).
+					Warn("Failed to write UDP batch")
+			}
+			chunk = chunk[:0]
+			segments = 0
+		}
+		for _, item := range batch {
+			if item.packet == nil || !item.addr.IsValid() {
+				continue
+			}
+			payload := item.packet.Payload()[:item.packet.Len]
+			if segments == 0 {
+				currentAddr = item.addr
+			}
+			if item.addr != currentAddr || (maxSeg > 0 && segments >= maxSeg) {
+				flushChunk()
+				currentAddr = item.addr
+			}
+			chunk = append(chunk, udp.Datagram{Payload: payload, Addr: item.addr})
+			segments++
+		}
+		flushChunk()
+		return
+	}
+	for _, item := range batch {
+		if item.packet == nil || !item.addr.IsValid() {
+			continue
+		}
+		if f.l.Level >= logrus.DebugLevel {
+			f.l.WithFields(logrus.Fields{
+				"writer":   index,
+				"reason":   reason,
+				"dest":     item.addr,
+				"segments": 1,
+			}).Debug("flushing UDP batch")
+		}
+		if err := writer.WriteTo(item.packet.Payload()[:item.packet.Len], item.addr); err != nil {
+			f.l.WithError(err).
+				WithField("writer", index).
+				WithField("udpAddr", item.addr).
+				WithField("reason", reason).
+				Warn("Failed to write UDP packet")
+		}
+	}
+}
+
+func (f *Interface) tryQueueDatagram(q int, buf []byte, addr netip.AddrPort) bool {
+	if !addr.IsValid() || !f.batches.Enabled() {
+		return false
+	}
+	pkt := f.batches.newPacket()
+	if pkt == nil {
+		return false
+	}
+	payload := pkt.Payload()
+	if len(payload) < len(buf) {
+		pkt.Release()
+		return false
+	}
+	copy(payload, buf)
+	pkt.Len = len(buf)
+	if f.batches.enqueueTx(q, pkt, addr) {
+		f.observeUDPQueueLen(q)
+		return true
+	}
+	pkt.Release()
+	return false
+}
+
+func (f *Interface) writerForIndex(i int) udp.Conn {
+	if i < 0 || i >= len(f.writers) {
+		return nil
+	}
+	return f.writers[i]
+}
+
+func (f *Interface) writeImmediate(q int, buf []byte, addr netip.AddrPort, hostinfo *HostInfo) {
+	writer := f.writerForIndex(q)
+	if writer == nil {
+		f.l.WithField("udpAddr", addr).
+			WithField("writer", q).
+			Error("Failed to write outgoing packet: no writer available")
+		return
+	}
+	if err := writer.WriteTo(buf, addr); err != nil {
+		hostinfo.logger(f.l).
+			WithError(err).
+			WithField("udpAddr", addr).
+			Error("Failed to write outgoing packet")
+	}
+}
+
+func (f *Interface) tryQueuePacket(q int, pkt *overlay.Packet, addr netip.AddrPort) bool {
+	if pkt == nil || !addr.IsValid() || !f.batches.Enabled() {
+		return false
+	}
+	if f.batches.enqueueTx(q, pkt, addr) {
+		f.observeUDPQueueLen(q)
+		return true
+	}
+	return false
+}
+
+func (f *Interface) writeImmediatePacket(q int, pkt *overlay.Packet, addr netip.AddrPort, hostinfo *HostInfo) {
+	if pkt == nil {
+		return
+	}
+	writer := f.writerForIndex(q)
+	if writer == nil {
+		f.l.WithField("udpAddr", addr).
+			WithField("writer", q).
+			Error("Failed to write outgoing packet: no writer available")
+		pkt.Release()
+		return
+	}
+	if err := writer.WriteTo(pkt.Payload()[:pkt.Len], addr); err != nil {
+		hostinfo.logger(f.l).
+			WithError(err).
+			WithField("udpAddr", addr).
+			Error("Failed to write outgoing packet")
+	}
+	pkt.Release()
+}
+
+func (f *Interface) writePacketToTun(q int, pkt *overlay.Packet) {
+	if pkt == nil {
+		return
+	}
+	writer := f.readers[q]
+	if writer == nil {
+		pkt.Release()
+		return
+	}
+	if _, err := writer.Write(pkt.Payload()[:pkt.Len]); err != nil {
+		f.l.WithError(err).Error("Failed to write to tun")
+	}
+	pkt.Release()
+}
+
+func (f *Interface) observeUDPQueueLen(i int) {
+	if f.batchUDPQueueGauge == nil {
+		return
+	}
+	f.batchUDPQueueGauge.Update(int64(f.batches.txQueueLen(i)))
+}
+
+func (f *Interface) observeTunQueueLen(i int) {
+	if f.batchTunQueueGauge == nil {
+		return
+	}
+	f.batchTunQueueGauge.Update(int64(f.batches.tunQueueLen(i)))
+}
+
+func (f *Interface) currentBatchFlushInterval() time.Duration {
+	if v := f.batchFlushInterval.Load(); v > 0 {
+		return time.Duration(v)
+	}
+	return 0
+}
+
+func (f *Interface) effectiveGSOMaxSegments() int {
+	max := f.gsoMaxSegments
+	if max <= 0 {
+		max = defaultGSOMaxSegments
+	}
+	if max > maxKernelGSOSegments {
+		max = maxKernelGSOSegments
+	}
+	if !f.enableGSO {
+		return 1
+	}
+	return max
+}
+
+type udpOffloadConfigurator interface {
+	ConfigureOffload(enableGSO, enableGRO bool, maxSegments int)
+}
+
+func (f *Interface) applyOffloadConfig(enableGSO, enableGRO bool, maxSegments int) {
+	if maxSegments <= 0 {
+		maxSegments = defaultGSOMaxSegments
+	}
+	if maxSegments > maxKernelGSOSegments {
+		maxSegments = maxKernelGSOSegments
+	}
+	f.enableGSO = enableGSO
+	f.enableGRO = enableGRO
+	f.gsoMaxSegments = maxSegments
+	for _, writer := range f.writers {
+		if cfg, ok := writer.(udpOffloadConfigurator); ok {
+			cfg.ConfigureOffload(enableGSO, enableGRO, maxSegments)
+		}
 	}
 }
 
@@ -403,6 +968,42 @@ func (f *Interface) reloadMisc(c *config.C) {
 		n := c.GetDuration("timers.requery_wait_duration", defaultReQueryWait)
 		f.reQueryWait.Store(int64(n))
 		f.l.Info("timers.requery_wait_duration has changed")
+	}
+
+	if c.HasChanged("listen.gso_flush_timeout") {
+		d := c.GetDuration("listen.gso_flush_timeout", defaultGSOFlushInterval)
+		if d < 0 {
+			d = 0
+		}
+		f.batchFlushInterval.Store(int64(d))
+		f.l.WithField("duration", d).Info("listen.gso_flush_timeout has changed")
+	} else if c.HasChanged("batch.flush_interval") {
+		d := c.GetDuration("batch.flush_interval", defaultGSOFlushInterval)
+		if d < 0 {
+			d = 0
+		}
+		f.batchFlushInterval.Store(int64(d))
+		f.l.WithField("duration", d).Warn("batch.flush_interval is deprecated; use listen.gso_flush_timeout")
+	}
+
+	if c.HasChanged("batch.queue_depth") {
+		n := c.GetInt("batch.queue_depth", f.batchQueueDepth)
+		if n != f.batchQueueDepth {
+			f.batchQueueDepth = n
+			f.l.Warn("batch.queue_depth changes require a restart to take effect")
+		}
+	}
+
+	if c.HasChanged("listen.enable_gso") || c.HasChanged("listen.enable_gro") || c.HasChanged("listen.gso_max_segments") {
+		enableGSO := c.GetBool("listen.enable_gso", f.enableGSO)
+		enableGRO := c.GetBool("listen.enable_gro", f.enableGRO)
+		maxSeg := c.GetInt("listen.gso_max_segments", f.gsoMaxSegments)
+		f.applyOffloadConfig(enableGSO, enableGRO, maxSeg)
+		f.l.WithFields(logrus.Fields{
+			"enableGSO":      enableGSO,
+			"enableGRO":      enableGRO,
+			"gsoMaxSegments": maxSeg,
+		}).Info("listen GSO/GRO configuration updated")
 	}
 }
 
