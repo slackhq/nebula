@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -70,7 +71,8 @@ type ifreqQLEN struct {
 func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
-	useWG := c.GetBool("tun.use_wireguard_stack", c.GetBool("listen.use_wireguard_stack", false))
+	useWGDefault := runtime.GOOS == "linux"
+	useWG := c.GetBool("tun.use_wireguard_stack", c.GetBool("listen.use_wireguard_stack", useWGDefault))
 	t, err := newTunGeneric(c, l, file, vpnNetworks, useWG)
 	if err != nil {
 		return nil, err
@@ -116,7 +118,8 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 	name := strings.Trim(string(req.Name[:]), "\x00")
 
 	file := os.NewFile(uintptr(fd), "/dev/net/tun")
-	useWG := c.GetBool("tun.use_wireguard_stack", c.GetBool("listen.use_wireguard_stack", false))
+	useWGDefault := runtime.GOOS == "linux"
+	useWG := c.GetBool("tun.use_wireguard_stack", c.GetBool("listen.use_wireguard_stack", useWGDefault))
 	t, err := newTunGeneric(c, l, file, vpnNetworks, useWG)
 	if err != nil {
 		return nil, err

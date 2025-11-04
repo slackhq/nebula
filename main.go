@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"runtime"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -162,17 +163,18 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			listenHost = ips[0].Unmap()
 		}
 
-	useWG := c.GetBool("listen.use_wireguard_stack", false)
-	var mkListener func(*logrus.Logger, netip.Addr, int, bool, int) (udp.Conn, error)
-	if useWG {
-		mkListener = udp.NewWireguardListener
-	} else {
-		mkListener = udp.NewListener
-	}
+		useWGDefault := runtime.GOOS == "linux"
+		useWG := c.GetBool("listen.use_wireguard_stack", useWGDefault)
+		var mkListener func(*logrus.Logger, netip.Addr, int, bool, int) (udp.Conn, error)
+		if useWG {
+			mkListener = udp.NewWireguardListener
+		} else {
+			mkListener = udp.NewListener
+		}
 
-	for i := 0; i < routines; i++ {
-		l.Infof("listening on %v", netip.AddrPortFrom(listenHost, uint16(port)))
-		udpServer, err := mkListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
+		for i := 0; i < routines; i++ {
+			l.Infof("listening on %v", netip.AddrPortFrom(listenHost, uint16(port)))
+			udpServer, err := mkListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
