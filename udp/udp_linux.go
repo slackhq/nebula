@@ -15,6 +15,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/packet"
 	"golang.org/x/sys/unix"
 )
 
@@ -118,10 +119,10 @@ func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	}
 }
 
-func (u *StdConn) ListenOut(r EncReader) error {
+func (u *StdConn) ListenOut(pg PacketBufferGetter, pc chan *packet.Packet) error {
 	var ip netip.Addr
 
-	msgs, buffers, names := u.PrepareRawMessages(u.batch)
+	msgs, packets, names := u.PrepareRawMessages(u.batch, pg)
 	read := u.ReadMulti
 	if u.batch == 1 {
 		read = u.ReadSingle
@@ -134,13 +135,21 @@ func (u *StdConn) ListenOut(r EncReader) error {
 		}
 
 		for i := 0; i < n; i++ {
+			out := packets[i]
+			out.Payload = out.Payload[:msgs[i].Len]
+
 			// Its ok to skip the ok check here, the slicing is the only error that can occur and it will panic
 			if u.isV4 {
 				ip, _ = netip.AddrFromSlice(names[i][4:8])
 			} else {
 				ip, _ = netip.AddrFromSlice(names[i][8:24])
 			}
-			r(netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])), buffers[i][:msgs[i].Len])
+			out.Addr = netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4]))
+			pc <- out
+
+			//rotate this packet out so we don't overwrite it
+			packets[i] = pg()
+			msgs[i].Hdr.Iov.Base = &packets[i].Payload[0]
 		}
 	}
 }

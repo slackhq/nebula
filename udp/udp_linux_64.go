@@ -7,6 +7,7 @@
 package udp
 
 import (
+	"github.com/slackhq/nebula/packet"
 	"golang.org/x/sys/unix"
 )
 
@@ -33,17 +34,20 @@ type rawMessage struct {
 	Pad0 [4]byte
 }
 
-func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
+func (u *StdConn) PrepareRawMessages(n int, pg PacketBufferGetter) ([]rawMessage, []*packet.Packet, [][]byte) {
 	msgs := make([]rawMessage, n)
-	buffers := make([][]byte, n)
 	names := make([][]byte, n)
 
+	packets := make([]*packet.Packet, n)
+	for i := range packets {
+		packets[i] = pg()
+	}
+
 	for i := range msgs {
-		buffers[i] = make([]byte, MTU)
 		names[i] = make([]byte, unix.SizeofSockaddrInet6)
 
 		vs := []iovec{
-			{Base: &buffers[i][0], Len: uint64(len(buffers[i]))},
+			{Base: &packets[i].Payload[0], Len: uint64(packet.Size)},
 		}
 
 		msgs[i].Hdr.Iov = &vs[0]
@@ -53,5 +57,5 @@ func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
 		msgs[i].Hdr.Namelen = uint32(len(names[i]))
 	}
 
-	return msgs, buffers, names
+	return msgs, packets, names
 }

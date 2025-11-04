@@ -4,19 +4,19 @@ import (
 	"net/netip"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/packet"
 )
 
 const MTU = 9001
 
-type EncReader func(
-	addr netip.AddrPort,
-	payload []byte,
-)
+type EncReader func(*packet.Packet)
+
+type PacketBufferGetter func() *packet.Packet
 
 type Conn interface {
 	Rebind() error
 	LocalAddr() (netip.AddrPort, error)
-	ListenOut(r EncReader) error
+	ListenOut(pg PacketBufferGetter, pc chan *packet.Packet) error
 	WriteTo(b []byte, addr netip.AddrPort) error
 	ReloadConfig(c *config.C)
 	Close() error

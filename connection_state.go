@@ -15,7 +15,7 @@ import (
 
 // TODO: In a 5Gbps test, 1024 is not sufficient. With a 1400 MTU this is about 1.4Gbps of window, assuming full packets.
 // 4092 should be sufficient for 5Gbps
-const ReplayWindow = 1024
+const ReplayWindow = 8192
 
 type ConnectionState struct {
 	eKey           *NebulaCipherState
