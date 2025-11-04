@@ -435,8 +435,20 @@ func CreateTUNFromFile(file *os.File, mtu int) (Device, error) {
 		events:  make(chan Event, 5),
 	}
 
-	var err error
-	tun.index, err = getIFIndex("tun")
+	name, err := tun.Name()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine TUN name: %w", err)
+	}
+
+	if err := tun.initFromFlags(name); err != nil {
+		return nil, fmt.Errorf("failed to query TUN flags: %w", err)
+	}
+
+	if tun.batchSize == 0 {
+		tun.batchSize = 1
+	}
+
+	tun.index, err = getIFIndex(name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get TUN index: %w", err)
 	}

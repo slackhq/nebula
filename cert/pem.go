@@ -1,8 +1,10 @@
 package cert
 
 import (
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"time"
 
 	"golang.org/x/crypto/ed25519"
 )
@@ -136,6 +138,101 @@ func MarshalSigningPrivateKeyToPEM(curve Curve, b []byte) []byte {
 	default:
 		return nil
 	}
+}
+
+// Backward compatibility functions for older API
+func MarshalX25519PublicKey(b []byte) []byte {
+	return MarshalPublicKeyToPEM(Curve_CURVE25519, b)
+}
+
+func MarshalX25519PrivateKey(b []byte) []byte {
+	return MarshalPrivateKeyToPEM(Curve_CURVE25519, b)
+}
+
+func MarshalPublicKey(curve Curve, b []byte) []byte {
+	return MarshalPublicKeyToPEM(curve, b)
+}
+
+func MarshalPrivateKey(curve Curve, b []byte) []byte {
+	return MarshalPrivateKeyToPEM(curve, b)
+}
+
+// NebulaCertificate is a compatibility wrapper for the old API
+type NebulaCertificate struct {
+	Details   NebulaCertificateDetails
+	Signature []byte
+	cert      Certificate
+}
+
+// NebulaCertificateDetails is a compatibility wrapper for certificate details
+type NebulaCertificateDetails struct {
+	Name      string
+	NotBefore time.Time
+	NotAfter  time.Time
+	PublicKey []byte
+	IsCA      bool
+	Issuer    []byte
+	Curve     Curve
+}
+
+// UnmarshalNebulaCertificateFromPEM provides backward compatibility with the old API
+func UnmarshalNebulaCertificateFromPEM(b []byte) (*NebulaCertificate, []byte, error) {
+	c, rest, err := UnmarshalCertificateFromPEM(b)
+	if err != nil {
+		return nil, rest, err
+	}
+
+	issuerBytes, err := func() ([]byte, error) {
+		issuer := c.Issuer()
+		if issuer == "" {
+			return nil, nil
+		}
+		decoded, err := hex.DecodeString(issuer)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode issuer fingerprint: %w", err)
+		}
+		return decoded, nil
+	}()
+	if err != nil {
+		return nil, rest, err
+	}
+
+	pubKey := c.PublicKey()
+	if pubKey != nil {
+		pubKey = append([]byte(nil), pubKey...)
+	}
+
+	sig := c.Signature()
+	if sig != nil {
+		sig = append([]byte(nil), sig...)
+	}
+
+	return &NebulaCertificate{
+		Details: NebulaCertificateDetails{
+			Name:      c.Name(),
+			NotBefore: c.NotBefore(),
+			NotAfter:  c.NotAfter(),
+			PublicKey: pubKey,
+			IsCA:      c.IsCA(),
+			Issuer:    issuerBytes,
+			Curve:     c.Curve(),
+		},
+		Signature: sig,
+		cert:      c,
+	}, rest, nil
+}
+
+// IssuerString returns the issuer in hex format for compatibility
+func (n *NebulaCertificate) IssuerString() string {
+	if n.Details.Issuer == nil {
+		return ""
+	}
+	return hex.EncodeToString(n.Details.Issuer)
+}
+
+// Certificate returns the underlying certificate (read-only)
+func (n *NebulaCertificate) Certificate() Certificate {
+	return n.cert
 }
 
 // UnmarshalPrivateKeyFromPEM will try to unmarshal the first pem block in a byte array, returning any non
