@@ -162,9 +162,17 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			listenHost = ips[0].Unmap()
 		}
 
-		for i := 0; i < routines; i++ {
-			l.Infof("listening on %v", netip.AddrPortFrom(listenHost, uint16(port)))
-			udpServer, err := udp.NewListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
+	useWG := c.GetBool("listen.use_wireguard_stack", false)
+	var mkListener func(*logrus.Logger, netip.Addr, int, bool, int) (udp.Conn, error)
+	if useWG {
+		mkListener = udp.NewWireguardListener
+	} else {
+		mkListener = udp.NewListener
+	}
+
+	for i := 0; i < routines; i++ {
+		l.Infof("listening on %v", netip.AddrPortFrom(listenHost, uint16(port)))
+		udpServer, err := mkListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
