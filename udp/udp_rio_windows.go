@@ -338,6 +338,50 @@ func (u *RIOConn) Rebind() error {
 
 func (u *RIOConn) ReloadConfig(*config.C) {}
 
+// BatchSize returns 1 since RIO reads packets one at a time
+func (u *RIOConn) BatchSize() int {
+	return 1
+}
+
+// ListenOutBatch - fallback to single-packet reads for RIO
+func (u *RIOConn) ListenOutBatch(r EncBatchReader) {
+	buffer := make([]byte, MTU)
+	addrs := make([]netip.AddrPort, 1)
+	payloads := make([][]byte, 1)
+
+	var lastRecvErr time.Time
+
+	for {
+		n, rua, err := u.receive(buffer)
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
+				return
+			}
+			if lastRecvErr.IsZero() || time.Since(lastRecvErr) > time.Minute {
+				lastRecvErr = time.Now()
+				u.l.WithError(err).Warn("unexpected udp socket receive error")
+			}
+			continue
+		}
+
+		addrs[0] = netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8))
+		payloads[0] = buffer[:n]
+		r(addrs, payloads, 1)
+	}
+}
+
+// WriteMulti sends multiple packets - fallback implementation
+func (u *RIOConn) WriteMulti(packets [][]byte, addrs []netip.AddrPort) (int, error) {
+	for i := range packets {
+		err := u.WriteTo(packets[i], addrs[i])
+		if err != nil {
+			return i, err
+		}
+	}
+	return len(packets), nil
+}
+
 func (u *RIOConn) Close() error {
 	if !u.isOpen.CompareAndSwap(true, false) {
 		return nil

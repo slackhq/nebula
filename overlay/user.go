@@ -50,8 +50,34 @@ func (d *UserDevice) SupportsMultiqueue() bool {
 	return true
 }
 
-func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (d *UserDevice) NewMultiQueueReader() (BatchReadWriter, error) {
 	return d, nil
+}
+
+// BatchRead reads a single packet (batch size 1 for UserDevice)
+func (d *UserDevice) BatchRead(bufs [][]byte, sizes []int) (int, error) {
+	n, err := d.Read(bufs[0])
+	if err != nil {
+		return 0, err
+	}
+	sizes[0] = n
+	return 1, nil
+}
+
+// WriteBatch writes packets individually (no batching for UserDevice)
+func (d *UserDevice) WriteBatch(bufs [][]byte, offset int) (int, error) {
+	for i, buf := range bufs {
+		_, err := d.Write(buf[offset:])
+		if err != nil {
+			return i, err
+		}
+	}
+	return len(bufs), nil
+}
+
+// BatchSize returns 1 for UserDevice (no batching)
+func (d *UserDevice) BatchSize() int {
+	return 1
 }
 
 func (d *UserDevice) Pipe() (*io.PipeReader, *io.PipeWriter) {

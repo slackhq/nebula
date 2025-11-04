@@ -11,6 +11,7 @@ import (
 )
 
 const DefaultMTU = 1300
+const VirtioNetHdrLen = 10 // Size of virtio_net_hdr structure
 
 type NameError struct {
 	Name       string
