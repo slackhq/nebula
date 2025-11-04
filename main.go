@@ -75,7 +75,8 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	if c.GetBool("sshd.enabled", false) {
 		sshStart, err = configSSH(l, ssh, c)
 		if err != nil {
-			return nil, util.ContextualizeIfNeeded("Error while configuring the sshd", err)
+			l.WithError(err).Warn("Failed to configure sshd, ssh debugging will not be available")
+			sshStart = nil
 		}
 	}
 
