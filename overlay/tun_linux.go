@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"strings"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -21,10 +20,12 @@ import (
 	"github.com/slackhq/nebula/util"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
+	wgtun "golang.zx2c4.com/wireguard/tun"
 )
 
 type tun struct {
 	io.ReadWriteCloser
+	wgDevice    wgtun.Device
 	fd          int
 	Device      string
 	vpnNetworks []netip.Prefix
@@ -66,58 +67,58 @@ type ifreqQLEN struct {
 }
 
 func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
-	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
+	wgDev, name, err := wgtun.CreateUnmonitoredTUNFromFD(deviceFd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create TUN from FD: %w", err)
+	}
 
+	file := wgDev.File()
 	t, err := newTunGeneric(c, l, file, vpnNetworks)
 	if err != nil {
+		_ = wgDev.Close()
 		return nil, err
 	}
 
-	t.Device = "tun0"
+	t.wgDevice = wgDev
+	t.Device = name
 
 	return t, nil
 }
 
 func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueue bool) (*tun, error) {
-	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
-	if err != nil {
-		// If /dev/net/tun doesn't exist, try to create it (will happen in docker)
-		if os.IsNotExist(err) {
-			err = os.MkdirAll("/dev/net", 0755)
-			if err != nil {
-				return nil, fmt.Errorf("/dev/net/tun doesn't exist, failed to mkdir -p /dev/net: %w", err)
-			}
-			err = unix.Mknod("/dev/net/tun", unix.S_IFCHR|0600, int(unix.Mkdev(10, 200)))
-			if err != nil {
-				return nil, fmt.Errorf("failed to create /dev/net/tun: %w", err)
-			}
-
-			fd, err = unix.Open("/dev/net/tun", os.O_RDWR, 0)
-			if err != nil {
-				return nil, fmt.Errorf("created /dev/net/tun, but still failed: %w", err)
-			}
-		} else {
-			return nil, err
+	// Check if /dev/net/tun exists, create if needed (for docker containers)
+	if _, err := os.Stat("/dev/net/tun"); os.IsNotExist(err) {
+		if err := os.MkdirAll("/dev/net", 0755); err != nil {
+			return nil, fmt.Errorf("/dev/net/tun doesn't exist, failed to mkdir -p /dev/net: %w", err)
+		}
+		if err := unix.Mknod("/dev/net/tun", unix.S_IFCHR|0600, int(unix.Mkdev(10, 200))); err != nil {
+			return nil, fmt.Errorf("failed to create /dev/net/tun: %w", err)
 		}
 	}
 
-	var req ifReq
-	req.Flags = uint16(unix.IFF_TUN | unix.IFF_NO_PI)
-	if multiqueue {
-		req.Flags |= unix.IFF_MULTI_QUEUE
-	}
-	copy(req.Name[:], c.GetString("tun.dev", ""))
-	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
-		return nil, err
-	}
-	name := strings.Trim(string(req.Name[:]), "\x00")
+	devName := c.GetString("tun.dev", "")
+	mtu := c.GetInt("tun.mtu", DefaultMTU)
 
-	file := os.NewFile(uintptr(fd), "/dev/net/tun")
+	// Create TUN device using wireguard library
+	wgDev, err := wgtun.CreateTUN(devName, mtu)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create TUN device: %w", err)
+	}
+
+	name, err := wgDev.Name()
+	if err != nil {
+		_ = wgDev.Close()
+		return nil, fmt.Errorf("failed to get TUN device name: %w", err)
+	}
+
+	file := wgDev.File()
 	t, err := newTunGeneric(c, l, file, vpnNetworks)
 	if err != nil {
+		_ = wgDev.Close()
 		return nil, err
 	}
 
+	t.wgDevice = wgDev
 	t.Device = name
 
 	return t, nil
@@ -240,6 +241,20 @@ func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 }
 
 func (t *tun) Write(b []byte) (int, error) {
+	if t.wgDevice != nil {
+		// Use wireguard device for writing
+		bufs := [][]byte{b}
+		n, err := t.wgDevice.Write(bufs, 0)
+		if err != nil {
+			return 0, err
+		}
+		if n != 1 {
+			return 0, fmt.Errorf("expected to write 1 packet, wrote %d", n)
+		}
+		return len(b), nil
+	}
+
+	// Fallback to direct fd write if no wireguard device
 	var nn int
 	maximum := len(b)
 
@@ -672,6 +687,10 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 func (t *tun) Close() error {
 	if t.routeChan != nil {
 		close(t.routeChan)
+	}
+
+	if t.wgDevice != nil {
+		_ = t.wgDevice.Close()
 	}
 
 	if t.ReadWriteCloser != nil {
