@@ -188,8 +188,11 @@ func (w *wireguardTunIO) WriteBatch(packets []*Packet) (int, error) {
 		w.writeBuffers[i] = pkt.Buf[:limit]
 	}
 	n, err := w.dev.Write(w.writeBuffers[:len(packets)], offset)
+	if err != nil {
+		return n, err
+	}
 	releasePackets(packets)
-	return n, err
+	return n, nil
 }
 
 func (w *wireguardTunIO) BatchHeadroom() int {

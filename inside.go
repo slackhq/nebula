@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"net/netip"
+	"unsafe"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
@@ -384,6 +385,11 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	}
 
 	var err error
+	if len(p) > 0 && slicesOverlap(out, p) {
+		tmp := make([]byte, len(p))
+		copy(tmp, p)
+		p = tmp
+	}
 	out, err = ci.eKey.EncryptDanger(out, out, p, c, nb)
 	if noiseutil.EncryptLockNeeded {
 		ci.writeLock.Unlock()
@@ -446,4 +452,18 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true)
 		break
 	}
+}
+
+// slicesOverlap reports whether the two byte slices share any portion of memory.
+// cipher.AEAD.Seal requires plaintext and dst to live in disjoint regions.
+func slicesOverlap(a, b []byte) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+
+	aStart := uintptr(unsafe.Pointer(&a[0]))
+	aEnd := aStart + uintptr(len(a))
+	bStart := uintptr(unsafe.Pointer(&b[0]))
+	bEnd := bStart + uintptr(len(b))
+	return aStart < bEnd && bStart < aEnd
 }
