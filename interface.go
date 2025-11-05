@@ -827,6 +827,15 @@ func (f *Interface) writePacketToTun(q int, pkt *overlay.Packet) {
 		pkt.Release()
 		return
 	}
+	if bw, ok := writer.(interface {
+		WriteBatch([]*overlay.Packet) (int, error)
+	}); ok {
+		if _, err := bw.WriteBatch([]*overlay.Packet{pkt}); err != nil {
+			f.l.WithError(err).WithField("queue", q).Warn("Failed to write tun packet via batch writer")
+			pkt.Release()
+		}
+		return
+	}
 	if _, err := writer.Write(pkt.Payload()[:pkt.Len]); err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")
 	}

@@ -62,7 +62,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 
 		switch h.Subtype {
 		case header.MessageNone:
-			if !f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache) {
+			if !f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache, ip, h.RemoteIndex) {
 				return
 			}
 		case header.MessageRelay:
@@ -466,7 +466,7 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	return out, nil
 }
 
-func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) bool {
+func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache, addr netip.AddrPort, recvIndex uint32) bool {
 	var (
 		err error
 		pkt *overlay.Packet
@@ -485,6 +485,9 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 			pkt.Release()
 		}
 		hostinfo.logger(f.l).WithError(err).Error("Failed to decrypt packet")
+		if addr.IsValid() {
+			f.maybeSendRecvError(addr, recvIndex)
+		}
 		return false
 	}
 
