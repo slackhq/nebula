@@ -179,7 +179,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 		useWGDefault := runtime.GOOS == "linux"
 		useWG := c.GetBool("listen.use_wireguard_stack", useWGDefault)
-		var mkListener func(*logrus.Logger, netip.Addr, int, bool, int) (udp.Conn, error)
+		var mkListener func(*logrus.Logger, netip.Addr, int, bool, int, int) (udp.Conn, error)
 		if useWG {
 			mkListener = udp.NewWireguardListener
 		} else {
@@ -188,10 +188,11 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 		for i := 0; i < routines; i++ {
 			l.Infof("listening on %v", netip.AddrPortFrom(listenHost, uint16(port)))
-			udpServer, err := mkListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
+			udpServer, err := mkListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64), i)
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
+			//todo set bpf on zeroth socket
 			udpServer.ReloadConfig(c)
 			if cfg, ok := udpServer.(interface {
 				ConfigureOffload(bool, bool, int)

@@ -46,6 +46,7 @@ type StdNetBind struct {
 
 	blackhole4 bool
 	blackhole6 bool
+	q          int
 }
 
 // NewStdNetBind creates a bind that listens on all interfaces.
@@ -56,8 +57,9 @@ func NewStdNetBind() *StdNetBind {
 // NewStdNetBindForAddr creates a bind that listens on a specific address.
 // If addr is IPv4, only the IPv4 socket will be created. For IPv6, only the
 // IPv6 socket will be created.
-func NewStdNetBindForAddr(addr netip.Addr, reusePort bool) *StdNetBind {
+func NewStdNetBindForAddr(addr netip.Addr, reusePort bool, q int) *StdNetBind {
 	b := NewStdNetBind()
+	b.q = q
 	//if addr.IsValid() {
 	//	if addr.IsUnspecified() {
 	//		// keep dual-stack defaults with empty listen addresses
@@ -147,10 +149,22 @@ func (e *StdNetEndpoint) DstToString() string {
 	return e.AddrPort.String()
 }
 
-func listenNet(network string, port int) (*net.UDPConn, int, error) {
-	conn, err := listenConfig().ListenPacket(context.Background(), network, ":"+strconv.Itoa(port))
+func listenNet(network string, port int, q int) (*net.UDPConn, int, error) {
+	lc := listenConfig(q)
+
+	conn, err := lc.ListenPacket(context.Background(), network, ":"+strconv.Itoa(port))
 	if err != nil {
 		return nil, 0, err
+	}
+
+	if q == 0 {
+		if EvilFdZero == 0 {
+			panic("fuck")
+		}
+		err = reusePortHax(EvilFdZero)
+		if err != nil {
+			return nil, 0, fmt.Errorf("reuse port hax: %v", err)
+		}
 	}
 
 	// Retrieve port.
@@ -185,13 +199,13 @@ again:
 	var v4pc *ipv4.PacketConn
 	var v6pc *ipv6.PacketConn
 
-	v4conn, port, err = listenNet("udp4", port)
+	v4conn, port, err = listenNet("udp4", port, s.q)
 	if err != nil && !errors.Is(err, syscall.EAFNOSUPPORT) {
 		return nil, 0, err
 	}
 
 	// Listen on the same port as we're using for ipv4.
-	v6conn, port, err = listenNet("udp6", port)
+	v6conn, port, err = listenNet("udp6", port, s.q)
 	if uport == 0 && errors.Is(err, syscall.EADDRINUSE) && tries < 100 {
 		v4conn.Close()
 		tries++

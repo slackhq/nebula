@@ -27,13 +27,13 @@ type WGConn struct {
 	enableGRO bool
 	gsoMaxSeg int
 	closed    atomic.Bool
-
+	q         int
 	closeOnce sync.Once
 }
 
 // NewWireguardListener creates a UDP listener backed by WireGuard's StdNetBind.
-func NewWireguardListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
-	bind := wgconn.NewStdNetBindForAddr(ip, multi)
+func NewWireguardListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch int, q int) (Conn, error) {
+	bind := wgconn.NewStdNetBindForAddr(ip, multi, q)
 	recvers, actualPort, err := bind.Open(uint16(port))
 	if err != nil {
 		return nil, err
@@ -51,6 +51,7 @@ func NewWireguardListener(l *logrus.Logger, ip netip.Addr, port int, multi bool,
 		reqBatch:  batch,
 		localIP:   ip,
 		localPort: actualPort,
+		q:         q,
 	}, nil
 }
 
@@ -71,7 +72,7 @@ func (c *WGConn) listen(fn wgconn.ReceiveFunc, r EncReader) {
 	batchSize := c.batch
 	packets := make([][]byte, batchSize)
 	for i := range packets {
-		packets[i] = make([]byte, MTU)
+		packets[i] = make([]byte, 0xffff)
 	}
 	sizes := make([]int, batchSize)
 	endpoints := make([]wgconn.Endpoint, batchSize)

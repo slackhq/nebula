@@ -6,6 +6,7 @@
 package conn
 
 import (
+	"fmt"
 	"net"
 
 	"golang.org/x/sys/unix"
@@ -16,12 +17,15 @@ func supportsUDPOffload(conn *net.UDPConn) (txOffload, rxOffload bool) {
 	if err != nil {
 		return
 	}
+	a := 0
 	err = rc.Control(func(fd uintptr) {
-		_, errSyscall := unix.GetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_SEGMENT)
-		txOffload = errSyscall == nil
+		a, err = unix.GetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_SEGMENT)
+
+		txOffload = err == nil
 		opt, errSyscall := unix.GetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_GRO)
 		rxOffload = errSyscall == nil && opt == 1
 	})
+	fmt.Printf("%d", a)
 	if err != nil {
 		return false, false
 	}

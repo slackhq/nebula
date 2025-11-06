@@ -32,7 +32,7 @@ func maybeIPV4(ip net.IP) (net.IP, bool) {
 	return ip, false
 }
 
-func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
+func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch int, q int) (Conn, error) {
 	af := unix.AF_INET6
 	if ip.Is4() {
 		af = unix.AF_INET
