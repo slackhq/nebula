@@ -30,13 +30,16 @@ type rawMessage struct {
 	Len uint32
 }
 
-func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
+func (u *StdConn) PrepareRawMessages(n int, bufSize int) ([]rawMessage, [][]byte, [][]byte) {
+	if bufSize <= 0 {
+		bufSize = MTU
+	}
 	msgs := make([]rawMessage, n)
 	buffers := make([][]byte, n)
 	names := make([][]byte, n)
 
 	for i := range msgs {
-		buffers[i] = make([]byte, MTU)
+		buffers[i] = make([]byte, bufSize)
 		names[i] = make([]byte, unix.SizeofSockaddrInet6)
 
 		vs := []iovec{
@@ -65,6 +68,10 @@ func setRawMessageControl(msg *rawMessage, buf []byte) {
 
 func getRawMessageControlLen(msg *rawMessage) int {
 	return int(msg.Hdr.Controllen)
+}
+
+func getRawMessageFlags(msg *rawMessage) int {
+	return int(msg.Hdr.Flags)
 }
 
 func setCmsgLen(h *unix.Cmsghdr, l int) {
