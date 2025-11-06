@@ -34,6 +34,24 @@ type rawMessage struct {
 	Pad0 [4]byte
 }
 
+func setRawMessageControl(msg *rawMessage, buf []byte) {
+	if len(buf) == 0 {
+		msg.Hdr.Control = nil
+		msg.Hdr.Controllen = 0
+		return
+	}
+	msg.Hdr.Control = &buf[0]
+	msg.Hdr.Controllen = uint64(len(buf))
+}
+
+func getRawMessageControlLen(msg *rawMessage) int {
+	return int(msg.Hdr.Controllen)
+}
+
+func setCmsgLen(h *unix.Cmsghdr, l int) {
+	h.Len = uint64(l)
+}
+
 func (u *StdConn) PrepareRawMessages(n int, pg PacketBufferGetter) ([]rawMessage, []*packet.Packet, [][]byte) {
 	msgs := make([]rawMessage, n)
 	names := make([][]byte, n)
@@ -42,6 +60,7 @@ func (u *StdConn) PrepareRawMessages(n int, pg PacketBufferGetter) ([]rawMessage
 	for i := range packets {
 		packets[i] = pg()
 	}
+	//todo?
 
 	for i := range msgs {
 		names[i] = make([]byte, unix.SizeofSockaddrInet6)
@@ -55,6 +74,13 @@ func (u *StdConn) PrepareRawMessages(n int, pg PacketBufferGetter) ([]rawMessage
 
 		msgs[i].Hdr.Name = &names[i][0]
 		msgs[i].Hdr.Namelen = uint32(len(names[i]))
+		if u.enableGRO {
+			msgs[i].Hdr.Control = &packets[i].Control[0]
+			msgs[i].Hdr.Controllen = uint64(len(packets[i].Control))
+		} else {
+			msgs[i].Hdr.Control = nil
+			msgs[i].Hdr.Controllen = 0
+		}
 	}
 
 	return msgs, packets, names

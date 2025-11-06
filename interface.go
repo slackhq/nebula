@@ -207,7 +207,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		l: c.l,
 	}
 
-	ifce.pktPool = packet.NewPool()
+	ifce.pktPool = packet.GetPool()
 
 	ifce.tryPromoteEvery.Store(c.tryPromoteEvery)
 	ifce.reQueryEvery.Store(c.reQueryEvery)
@@ -327,6 +327,26 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	f.wg.Done()
 }
 
+//// todo why? understand!
+//func normalizeGROSegSize(segSize, total int) int {
+//	if segCount > 1 && total > 0 {
+//		avg := total / segCount
+//		if avg > 0 {
+//			if segSize > avg {
+//				if segSize-8 == avg {
+//					segSize = avg
+//				} else if segSize > total {
+//					segSize = avg
+//				}
+//			}
+//		}
+//	}
+//	if segSize > total {
+//		segSize = total
+//	}
+//	return segSize
+//}
+
 func (f *Interface) workerIn(i int, ctx context.Context) {
 	lhh := f.lightHouse.NewRequestHandler()
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
@@ -338,7 +358,18 @@ func (f *Interface) workerIn(i int, ctx context.Context) {
 	for {
 		select {
 		case p := <-f.inbound:
-			f.readOutsidePackets(p.Addr, nil, result2[:0], p.Payload, h, fwPacket2, lhh, nb2, i, conntrackCache.Get(f.l))
+			if p.SegSize > 0 && p.SegSize < len(p.Payload) {
+				for offset := 0; offset < len(p.Payload); offset += p.SegSize {
+					end := offset + p.SegSize
+					if end > len(p.Payload) {
+						end = len(p.Payload)
+					}
+					f.readOutsidePackets(p.Addr, nil, result2[:0], p.Payload[offset:end], h, fwPacket2, lhh, nb2, i, conntrackCache.Get(f.l))
+				}
+			} else {
+				f.readOutsidePackets(p.Addr, nil, result2[:0], p.Payload, h, fwPacket2, lhh, nb2, i, conntrackCache.Get(f.l))
+			}
+
 			f.pktPool.Put(p)
 		case <-ctx.Done():
 			f.wg.Done()
@@ -357,7 +388,7 @@ func (f *Interface) workerOut(i int, ctx context.Context) {
 		select {
 		case data := <-f.outbound:
 			f.consumeInsidePacket(data.Payload, fwPacket1, nb1, result1, i, conntrackCache.Get(f.l))
-			f.pktPool.Put(data)
+			//f.pktPool.Put(data) //todo if err pls put packet back
 		case <-ctx.Done():
 			f.wg.Done()
 			return

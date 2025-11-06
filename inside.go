@@ -8,6 +8,7 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/noiseutil"
+	"github.com/slackhq/nebula/packet"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -324,7 +325,7 @@ func (f *Interface) SendVia(via *HostInfo,
 		via.logger(f.l).WithError(err).Info("Failed to EncryptDanger in sendVia")
 		return
 	}
-	err = f.writers[0].WriteTo(out, via.remote)
+	err = f.writers[0].WriteDirect(out, via.remote)
 	if err != nil {
 		via.logger(f.l).WithError(err).Info("Failed to WriteTo in sendVia")
 	}
@@ -384,19 +385,29 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	}
 
 	if remote.IsValid() {
-		err = f.writers[q].WriteTo(out, remote)
+		pkt := packet.GetPool().Get()
+		copy(pkt.Payload[:], out)
+		pkt.Payload = pkt.Payload[:len(out)]
+		pkt.Addr = remote
+		err = f.writers[q].WriteTo(pkt)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).
 				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
 		}
 	} else if hostinfo.remote.IsValid() {
-		err = f.writers[q].WriteTo(out, hostinfo.remote)
+		pkt := packet.GetPool().Get()
+		copy(pkt.Payload, out)
+		pkt.Payload = pkt.Payload[:len(out)]
+		pkt.Addr = hostinfo.remote
+		err = f.writers[q].WriteTo(pkt)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).
 				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
 		}
 	} else {
 		// Try to send via a relay
+
+		//todo relay is slow sorryyy
 		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
 			relayHostInfo, relay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relayIP)
 			if err != nil {

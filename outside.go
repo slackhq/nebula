@@ -519,7 +519,7 @@ func (f *Interface) sendRecvError(endpoint netip.AddrPort, index uint32) {
 	f.messageMetrics.Tx(header.RecvError, 0, 1)
 
 	b := header.Encode(make([]byte, header.Len), header.Version, header.RecvError, 0, index, 0)
-	_ = f.outside.WriteTo(b, endpoint)
+	_ = f.outside.WriteDirect(b, endpoint)
 	if f.l.Level >= logrus.DebugLevel {
 		f.l.WithField("index", index).
 			WithField("udpAddr", endpoint).
