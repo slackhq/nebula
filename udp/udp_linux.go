@@ -23,8 +23,8 @@ import (
 var readTimeout = unix.NsecToTimeval(int64(time.Millisecond * 500))
 
 const (
-	defaultGSOMaxSegments    = 8
-	defaultGSOFlushTimeout   = 150 * time.Microsecond
+	defaultGSOMaxSegments    = 128
+	defaultGSOFlushTimeout   = 80 * time.Microsecond
 	defaultGROReadBufferSize = MTU * defaultGSOMaxSegments
 	maxGSOBatchBytes         = 0xFFFF
 )
@@ -565,7 +565,7 @@ func (u *StdConn) configureGRO(c *config.C) {
 		return
 	}
 
-	enable := c.GetBool("listen.enable_gro", false)
+	enable := c.GetBool("listen.enable_gro", true)
 	if enable == u.enableGRO {
 		if enable {
 			if size := c.GetInt("listen.gro_read_buffer", 0); size > 0 {
@@ -594,7 +594,7 @@ func (u *StdConn) configureGRO(c *config.C) {
 }
 
 func (u *StdConn) configureGSO(c *config.C) {
-	enable := c.GetBool("listen.enable_gso", false)
+	enable := c.GetBool("listen.enable_gso", true)
 	if !enable {
 		u.disableGSO()
 	} else {
