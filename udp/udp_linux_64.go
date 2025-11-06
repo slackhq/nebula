@@ -55,3 +55,21 @@ func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
 
 	return msgs, buffers, names
 }
+
+func setRawMessageControl(msg *rawMessage, buf []byte) {
+	if len(buf) == 0 {
+		msg.Hdr.Control = nil
+		msg.Hdr.Controllen = 0
+		return
+	}
+	msg.Hdr.Control = &buf[0]
+	msg.Hdr.Controllen = uint64(len(buf))
+}
+
+func getRawMessageControlLen(msg *rawMessage) int {
+	return int(msg.Hdr.Controllen)
+}
+
+func setCmsgLen(h *unix.Cmsghdr, l int) {
+	h.Len = uint64(l)
+}
