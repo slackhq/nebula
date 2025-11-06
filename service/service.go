@@ -9,13 +9,10 @@ import (
 	"math"
 	"net"
 	"net/netip"
-	"os"
 	"strings"
 	"sync"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
-	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay"
 	"golang.org/x/sync/errgroup"
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -46,15 +43,7 @@ type Service struct {
 	}
 }
 
-func New(config *config.C) (*Service, error) {
-	logger := logrus.New()
-	logger.Out = os.Stdout
-
-	control, err := nebula.Main(config, false, "custom-app", logger, overlay.NewUserDeviceFromConfig)
-	if err != nil {
-		return nil, err
-	}
-
+func New(control *nebula.Control) (*Service, error) {
 	wait, err := control.Start()
 	if err != nil {
 		return nil, err
