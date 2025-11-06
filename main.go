@@ -221,6 +221,13 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	}
 
+	batchCfg := BatchConfig{
+		InboundBatchSize:      c.GetInt("batch.inbound_size", inboundBatchSizeDefault),
+		OutboundBatchSize:     c.GetInt("batch.outbound_size", outboundBatchSizeDefault),
+		FlushInterval:         c.GetDuration("batch.flush_interval", batchFlushIntervalDefault),
+		MaxOutstandingPerChan: c.GetInt("batch.max_outstanding", maxOutstandingBatchesDefault),
+	}
+
 	ifConfig := &InterfaceConfig{
 		HostMap:               hostMap,
 		Inside:                tun,
@@ -242,6 +249,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		relayManager:          NewRelayManager(ctx, l, hostMap, c),
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
+		BatchConfig:           batchCfg,
 		l:                     l,
 	}
 

@@ -25,10 +25,10 @@ import (
 const (
 	mtu = 9001
 
-	inboundBatchSize      = 32
-	outboundBatchSize     = 32
-	batchFlushInterval    = 50 * time.Microsecond
-	maxOutstandingBatches = 1028
+	inboundBatchSizeDefault      = 32
+	outboundBatchSizeDefault     = 32
+	batchFlushIntervalDefault    = 50 * time.Microsecond
+	maxOutstandingBatchesDefault = 1028
 )
 
 type InterfaceConfig struct {
@@ -55,7 +55,15 @@ type InterfaceConfig struct {
 	reQueryWait     time.Duration
 
 	ConntrackCacheTimeout time.Duration
+	BatchConfig           BatchConfig
 	l                     *logrus.Logger
+}
+
+type BatchConfig struct {
+	InboundBatchSize      int
+	OutboundBatchSize     int
+	FlushInterval         time.Duration
+	MaxOutstandingPerChan int
 }
 
 type Interface struct {
@@ -111,15 +119,20 @@ type Interface struct {
 
 	packetBatchPool   sync.Pool
 	outboundBatchPool sync.Pool
+
+	inboundBatchSize      int
+	outboundBatchSize     int
+	batchFlushInterval    time.Duration
+	maxOutstandingPerChan int
 }
 
 type packetBatch struct {
 	packets []*packet.Packet
 }
 
-func newPacketBatch() *packetBatch {
+func newPacketBatch(capacity int) *packetBatch {
 	return &packetBatch{
-		packets: make([]*packet.Packet, 0, inboundBatchSize),
+		packets: make([]*packet.Packet, 0, capacity),
 	}
 }
 
@@ -140,7 +153,7 @@ func (f *Interface) getPacketBatch() *packetBatch {
 		b.reset()
 		return b
 	}
-	return newPacketBatch()
+	return newPacketBatch(f.inboundBatchSize)
 }
 
 func (f *Interface) releasePacketBatch(b *packetBatch) {
@@ -152,8 +165,8 @@ type outboundBatch struct {
 	payloads []*[]byte
 }
 
-func newOutboundBatch() *outboundBatch {
-	return &outboundBatch{payloads: make([]*[]byte, 0, outboundBatchSize)}
+func newOutboundBatch(capacity int) *outboundBatch {
+	return &outboundBatch{payloads: make([]*[]byte, 0, capacity)}
 }
 
 func (b *outboundBatch) add(buf *[]byte) {
@@ -173,7 +186,7 @@ func (f *Interface) getOutboundBatch() *outboundBatch {
 		b.reset()
 		return b
 	}
-	return newOutboundBatch()
+	return newOutboundBatch(f.outboundBatchSize)
 }
 
 func (f *Interface) releaseOutboundBatch(b *outboundBatch) {
@@ -248,6 +261,20 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	}
 
 	cs := c.pki.getCertState()
+
+	bc := c.BatchConfig
+	if bc.InboundBatchSize <= 0 {
+		bc.InboundBatchSize = inboundBatchSizeDefault
+	}
+	if bc.OutboundBatchSize <= 0 {
+		bc.OutboundBatchSize = outboundBatchSizeDefault
+	}
+	if bc.FlushInterval <= 0 {
+		bc.FlushInterval = batchFlushIntervalDefault
+	}
+	if bc.MaxOutstandingPerChan <= 0 {
+		bc.MaxOutstandingPerChan = maxOutstandingBatchesDefault
+	}
 	ifce := &Interface{
 		pki:                   c.pki,
 		hostMap:               c.HostMap,
@@ -280,16 +307,20 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 			dropped: metrics.GetOrRegisterCounter("hostinfo.cached_packets.dropped", nil),
 		},
 
-		//TODO: configurable size
 		inbound:  make([]chan *packetBatch, c.routines),
 		outbound: make([]chan *outboundBatch, c.routines),
 
 		l: c.l,
+
+		inboundBatchSize:      bc.InboundBatchSize,
+		outboundBatchSize:     bc.OutboundBatchSize,
+		batchFlushInterval:    bc.FlushInterval,
+		maxOutstandingPerChan: bc.MaxOutstandingPerChan,
 	}
 
 	for i := 0; i < c.routines; i++ {
-		ifce.inbound[i] = make(chan *packetBatch, maxOutstandingBatches)
-		ifce.outbound[i] = make(chan *outboundBatch, maxOutstandingBatches)
+		ifce.inbound[i] = make(chan *packetBatch, ifce.maxOutstandingPerChan)
+		ifce.outbound[i] = make(chan *outboundBatch, ifce.maxOutstandingPerChan)
 	}
 
 	ifce.inPool = sync.Pool{New: func() any {
@@ -302,11 +333,11 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	}}
 
 	ifce.packetBatchPool = sync.Pool{New: func() any {
-		return newPacketBatch()
+		return newPacketBatch(ifce.inboundBatchSize)
 	}}
 
 	ifce.outboundBatchPool = sync.Pool{New: func() any {
-		return newOutboundBatch()
+		return newOutboundBatch(ifce.outboundBatchSize)
 	}}
 
 	ifce.tryPromoteEvery.Store(c.tryPromoteEvery)
@@ -411,7 +442,7 @@ func (f *Interface) listenOut(i int) {
 		p.Addr = fromUdpAddr
 		batch.add(p)
 
-		if len(batch.packets) >= inboundBatchSize || time.Since(lastFlush) >= batchFlushInterval {
+		if len(batch.packets) >= f.inboundBatchSize || time.Since(lastFlush) >= f.batchFlushInterval {
 			flush(false)
 		}
 	})
@@ -465,7 +496,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 		*p = (*p)[:n]
 		batch.add(p)
 
-		if len(batch.payloads) >= outboundBatchSize || time.Since(lastFlush) >= batchFlushInterval {
+		if len(batch.payloads) >= f.outboundBatchSize || time.Since(lastFlush) >= f.batchFlushInterval {
 			flush(false)
 		}
 	}

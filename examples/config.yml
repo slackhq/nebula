@@ -132,6 +132,13 @@ listen:
   # Sets the max number of packets to pull from the kernel for each syscall (under systems that support recvmmsg)
   # default is 64, does not support reload
   #batch: 64
+
+# Control batching between UDP and TUN pipelines
+#batch:
+#  inbound_size: 32        # packets to queue from UDP before handing to workers
+#  outbound_size: 32       # packets to queue from TUN before handing to workers
+#  flush_interval: 50us    # flush partially filled batches after this duration
+#  max_outstanding: 1028   # batches buffered per routine on each channel
   # Configure socket buffers for the udp side (outside), leave unset to use the system defaults. Values will be doubled by the kernel
   # Default is net.core.rmem_default and net.core.wmem_default (/proc/sys/net/core/rmem_default and /proc/sys/net/core/rmem_default)
   # Maximum is limited by memory in the system, SO_RCVBUFFORCE and SO_SNDBUFFORCE is used to avoid having to raise the system wide
