@@ -11,19 +11,19 @@ import (
 	"github.com/slackhq/nebula/routing"
 )
 
-func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, queue func(netip.AddrPort, int), q int, localCache firewall.ConntrackCache) bool {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
 		}
-		return
+		return false
 	}
 
 	// Ignore local broadcast packets
 	if f.dropLocalBroadcast {
 		if f.myBroadcastAddrsTable.Contains(fwPacket.RemoteAddr) {
-			return
+			return false
 		}
 	}
 
@@ -40,12 +40,12 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		}
 		// Otherwise, drop. On linux, we should never see these packets - Linux
 		// routes packets from the nebula addr to the nebula addr through the loopback device.
-		return
+		return false
 	}
 
 	// Ignore multicast packets
 	if f.dropMulticast && fwPacket.RemoteAddr.IsMulticast() {
-		return
+		return false
 	}
 
 	hostinfo, ready := f.getOrHandshakeConsiderRouting(fwPacket, func(hh *HandshakeHostInfo) {
@@ -59,26 +59,26 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 				WithField("fwPacket", fwPacket).
 				Debugln("dropping outbound packet, vpnAddr not in our vpn networks or in unsafe networks")
 		}
-		return
+		return false
 	}
 
 	if !ready {
-		return
+		return false
 	}
 
 	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
-		f.sendNoMetrics(header.Message, 0, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, packet, nb, out, q)
-
-	} else {
-		f.rejectInside(packet, out, q)
-		if f.l.Level >= logrus.DebugLevel {
-			hostinfo.logger(f.l).
-				WithField("fwPacket", fwPacket).
-				WithField("reason", dropReason).
-				Debugln("dropping outbound packet")
-		}
+		return f.sendNoMetrics(header.Message, 0, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, packet, nb, out, queue, q)
 	}
+
+	f.rejectInside(packet, out, q)
+	if f.l.Level >= logrus.DebugLevel {
+		hostinfo.logger(f.l).
+			WithField("fwPacket", fwPacket).
+			WithField("reason", dropReason).
+			Debugln("dropping outbound packet")
+	}
+	return false
 }
 
 func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
@@ -117,7 +117,7 @@ func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *
 		return
 	}
 
-	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, out, nb, packet, q)
+	_ = f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, out, nb, packet, nil, q)
 }
 
 // Handshake will attempt to initiate a tunnel with the provided vpn address if it is within our vpn networks. This is a no-op if the tunnel is already established or being established
@@ -228,7 +228,7 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 		return
 	}
 
-	f.sendNoMetrics(header.Message, st, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, p, nb, out, 0)
+	_ = f.sendNoMetrics(header.Message, st, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, p, nb, out, nil, 0)
 }
 
 // SendMessageToVpnAddr handles real addr:port lookup and sends to the current best known address for vpnAddr
@@ -258,12 +258,12 @@ func (f *Interface) SendMessageToHostInfo(t header.MessageType, st header.Messag
 
 func (f *Interface) send(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, p, nb, out []byte) {
 	f.messageMetrics.Tx(t, st, 1)
-	f.sendNoMetrics(t, st, ci, hostinfo, netip.AddrPort{}, p, nb, out, 0)
+	_ = f.sendNoMetrics(t, st, ci, hostinfo, netip.AddrPort{}, p, nb, out, nil, 0)
 }
 
 func (f *Interface) sendTo(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte) {
 	f.messageMetrics.Tx(t, st, 1)
-	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
+	_ = f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, nil, 0)
 }
 
 // SendVia sends a payload through a Relay tunnel. No authentication or encryption is done
@@ -331,9 +331,12 @@ func (f *Interface) SendVia(via *HostInfo,
 	f.connectionManager.RelayUsed(relay.LocalIndex)
 }
 
-func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte, q int) {
+// sendNoMetrics encrypts and writes/queues an outbound packet. It returns true
+// when the payload has been handed to a caller-provided queue (meaning the
+// caller is responsible for flushing it later).
+func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte, queue func(netip.AddrPort, int), q int) bool {
 	if ci.eKey == nil {
-		return
+		return false
 	}
 	useRelay := !remote.IsValid() && !hostinfo.remote.IsValid()
 	fullOut := out
@@ -380,32 +383,39 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 			WithField("udpAddr", remote).WithField("counter", c).
 			WithField("attemptedCounter", c).
 			Error("Failed to encrypt outgoing packet")
-		return
+		return false
 	}
 
-	if remote.IsValid() {
-		err = f.writers[q].WriteTo(out, remote)
-		if err != nil {
-			hostinfo.logger(f.l).WithError(err).
-				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
-		}
-	} else if hostinfo.remote.IsValid() {
-		err = f.writers[q].WriteTo(out, hostinfo.remote)
-		if err != nil {
-			hostinfo.logger(f.l).WithError(err).
-				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
-		}
-	} else {
-		// Try to send via a relay
-		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
-			relayHostInfo, relay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relayIP)
-			if err != nil {
-				hostinfo.relayState.DeleteRelay(relayIP)
-				hostinfo.logger(f.l).WithField("relay", relayIP).WithError(err).Info("sendNoMetrics failed to find HostInfo")
-				continue
-			}
-			f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true)
-			break
-		}
+	dest := remote
+	if !dest.IsValid() {
+		dest = hostinfo.remote
 	}
+
+	if dest.IsValid() {
+		if queue != nil {
+			queue(dest, len(out))
+			return true
+		}
+
+		err = f.writers[q].WriteTo(out, dest)
+		if err != nil {
+			hostinfo.logger(f.l).WithError(err).
+				WithField("udpAddr", dest).Error("Failed to write outgoing packet")
+		}
+		return false
+	}
+
+	// Try to send via a relay
+	for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
+		relayHostInfo, relay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relayIP)
+		if err != nil {
+			hostinfo.relayState.DeleteRelay(relayIP)
+			hostinfo.logger(f.l).WithField("relay", relayIP).WithError(err).Info("sendNoMetrics failed to find HostInfo")
+			continue
+		}
+		f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true)
+		break
+	}
+
+	return false
 }

@@ -29,6 +29,7 @@ const (
 	outboundBatchSizeDefault     = 32
 	batchFlushIntervalDefault    = 50 * time.Microsecond
 	maxOutstandingBatchesDefault = 1028
+	sendBatchSizeDefault         = 32
 )
 
 type InterfaceConfig struct {
@@ -120,10 +121,19 @@ type Interface struct {
 	packetBatchPool   sync.Pool
 	outboundBatchPool sync.Pool
 
+	sendPool      sync.Pool
+	sendBatchSize int
+
 	inboundBatchSize      int
 	outboundBatchSize     int
 	batchFlushInterval    time.Duration
 	maxOutstandingPerChan int
+}
+
+type outboundSend struct {
+	buf    *[]byte
+	length int
+	addr   netip.AddrPort
 }
 
 type packetBatch struct {
@@ -192,6 +202,48 @@ func (f *Interface) getOutboundBatch() *outboundBatch {
 func (f *Interface) releaseOutboundBatch(b *outboundBatch) {
 	b.reset()
 	f.outboundBatchPool.Put(b)
+}
+
+func (f *Interface) getSendBuffer() *[]byte {
+	if v := f.sendPool.Get(); v != nil {
+		buf := v.(*[]byte)
+		*buf = (*buf)[:0]
+		return buf
+	}
+	b := make([]byte, mtu)
+	return &b
+}
+
+func (f *Interface) releaseSendBuffer(buf *[]byte) {
+	if buf == nil {
+		return
+	}
+	*buf = (*buf)[:0]
+	f.sendPool.Put(buf)
+}
+
+func (f *Interface) flushSendQueue(q int, pending *[]outboundSend) {
+	if len(*pending) == 0 {
+		return
+	}
+
+	batch := make([]udp.BatchPacket, len(*pending))
+	for i, entry := range *pending {
+		batch[i] = udp.BatchPacket{
+			Payload: (*entry.buf)[:entry.length],
+			Addr:    entry.addr,
+		}
+	}
+
+	sent, err := f.writers[q].WriteBatch(batch)
+	if err != nil {
+		f.l.WithError(err).WithField("sent", sent).Error("Failed to batch send packets")
+	}
+
+	for _, entry := range *pending {
+		f.releaseSendBuffer(entry.buf)
+	}
+	*pending = (*pending)[:0]
 }
 
 type EncWriter interface {
@@ -316,6 +368,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		outboundBatchSize:     bc.OutboundBatchSize,
 		batchFlushInterval:    bc.FlushInterval,
 		maxOutstandingPerChan: bc.MaxOutstandingPerChan,
+		sendBatchSize:         bc.OutboundBatchSize,
 	}
 
 	for i := 0; i < c.routines; i++ {
@@ -338,6 +391,11 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 
 	ifce.outboundBatchPool = sync.Pool{New: func() any {
 		return newOutboundBatch(ifce.outboundBatchSize)
+	}}
+
+	ifce.sendPool = sync.Pool{New: func() any {
+		buf := make([]byte, mtu)
+		return &buf
 	}}
 
 	ifce.tryPromoteEvery.Store(c.tryPromoteEvery)
@@ -539,18 +597,39 @@ func (f *Interface) workerOut(i int, ctx context.Context) {
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 	fwPacket1 := &firewall.Packet{}
 	nb1 := make([]byte, 12, 12)
-	result1 := make([]byte, mtu)
+	pending := make([]outboundSend, 0, f.sendBatchSize)
 
 	for {
 		select {
 		case batch := <-f.outbound[i]:
 			for _, data := range batch.payloads {
-				f.consumeInsidePacket(*data, fwPacket1, nb1, result1, i, conntrackCache.Get(f.l))
+				sendBuf := f.getSendBuffer()
+				buf := (*sendBuf)[:0]
+				queue := func(addr netip.AddrPort, length int) {
+					pending = append(pending, outboundSend{
+						buf:    sendBuf,
+						length: length,
+						addr:   addr,
+					})
+					if len(pending) >= f.sendBatchSize {
+						f.flushSendQueue(i, &pending)
+					}
+				}
+				sent := f.consumeInsidePacket(*data, fwPacket1, nb1, buf, queue, i, conntrackCache.Get(f.l))
+				if !sent {
+					f.releaseSendBuffer(sendBuf)
+				}
 				*data = (*data)[:mtu]
 				f.outPool.Put(data)
 			}
 			f.releaseOutboundBatch(batch)
+			if len(pending) > 0 {
+				f.flushSendQueue(i, &pending)
+			}
 		case <-ctx.Done():
+			if len(pending) > 0 {
+				f.flushSendQueue(i, &pending)
+			}
 			f.wg.Done()
 			return
 		}

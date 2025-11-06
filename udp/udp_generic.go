@@ -42,6 +42,17 @@ func (u *GenericConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	return err
 }
 
+func (u *GenericConn) WriteBatch(pkts []BatchPacket) (int, error) {
+	sent := 0
+	for _, pkt := range pkts {
+		if err := u.WriteTo(pkt.Payload, pkt.Addr); err != nil {
+			return sent, err
+		}
+		sent++
+	}
+	return sent, nil
+}
+
 func (u *GenericConn) LocalAddr() (netip.AddrPort, error) {
 	a := u.UDPConn.LocalAddr()
 

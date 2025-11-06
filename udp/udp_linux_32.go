@@ -77,3 +77,13 @@ func getRawMessageFlags(msg *rawMessage) int {
 func setCmsgLen(h *unix.Cmsghdr, l int) {
 	h.Len = uint32(l)
 }
+
+func setIovecSlice(iov *iovec, b []byte) {
+	if len(b) == 0 {
+		iov.Base = nil
+		iov.Len = 0
+		return
+	}
+	iov.Base = &b[0]
+	iov.Len = uint32(len(b))
+}

@@ -106,6 +106,17 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	return nil
 }
 
+func (u *TesterConn) WriteBatch(pkts []BatchPacket) (int, error) {
+	sent := 0
+	for _, pkt := range pkts {
+		if err := u.WriteTo(pkt.Payload, pkt.Addr); err != nil {
+			return sent, err
+		}
+		sent++
+	}
+	return sent, nil
+}
+
 func (u *TesterConn) ListenOut(r EncReader) {
 	for {
 		p, ok := <-u.RxPackets

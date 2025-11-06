@@ -18,8 +18,14 @@ type Conn interface {
 	LocalAddr() (netip.AddrPort, error)
 	ListenOut(r EncReader) error
 	WriteTo(b []byte, addr netip.AddrPort) error
+	WriteBatch(pkts []BatchPacket) (int, error)
 	ReloadConfig(c *config.C)
 	Close() error
+}
+
+type BatchPacket struct {
+	Payload []byte
+	Addr    netip.AddrPort
 }
 
 type NoopConn struct{}
@@ -35,6 +41,9 @@ func (NoopConn) ListenOut(_ EncReader) error {
 }
 func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {
 	return nil
+}
+func (NoopConn) WriteBatch(_ []BatchPacket) (int, error) {
+	return 0, nil
 }
 func (NoopConn) ReloadConfig(_ *config.C) {
 	return

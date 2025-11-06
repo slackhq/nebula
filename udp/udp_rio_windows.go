@@ -304,6 +304,17 @@ func (u *RIOConn) WriteTo(buf []byte, ip netip.AddrPort) error {
 	return winrio.SendEx(u.rq, dataBuffer, 1, nil, addressBuffer, nil, nil, 0, 0)
 }
 
+func (u *RIOConn) WriteBatch(pkts []BatchPacket) (int, error) {
+	sent := 0
+	for _, pkt := range pkts {
+		if err := u.WriteTo(pkt.Payload, pkt.Addr); err != nil {
+			return sent, err
+		}
+		sent++
+	}
+	return sent, nil
+}
+
 func (u *RIOConn) LocalAddr() (netip.AddrPort, error) {
 	sa, err := windows.Getsockname(u.sock)
 	if err != nil {

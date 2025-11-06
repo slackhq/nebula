@@ -343,6 +343,118 @@ func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
 	return u.writeTo6(b, ip)
 }
 
+func (u *StdConn) WriteBatch(pkts []BatchPacket) (int, error) {
+	if len(pkts) == 0 {
+		return 0, nil
+	}
+
+	msgs := make([]rawMessage, 0, len(pkts))
+	iovs := make([]iovec, 0, len(pkts))
+	names := make([][unix.SizeofSockaddrInet6]byte, 0, len(pkts))
+
+	sent := 0
+
+	for _, pkt := range pkts {
+		if len(pkt.Payload) == 0 {
+			sent++
+			continue
+		}
+
+		if u.enableGSO && pkt.Addr.IsValid() {
+			if err := u.queueGSOPacket(pkt.Payload, pkt.Addr); err == nil {
+				sent++
+				continue
+			} else if !errors.Is(err, errGSOFallback) {
+				return sent, err
+			}
+		}
+
+		if !pkt.Addr.IsValid() {
+			if err := u.WriteTo(pkt.Payload, pkt.Addr); err != nil {
+				return sent, err
+			}
+			sent++
+			continue
+		}
+
+		msgs = append(msgs, rawMessage{})
+		iovs = append(iovs, iovec{})
+		names = append(names, [unix.SizeofSockaddrInet6]byte{})
+
+		idx := len(msgs) - 1
+		msg := &msgs[idx]
+		iov := &iovs[idx]
+		name := &names[idx]
+
+		setIovecSlice(iov, pkt.Payload)
+		msg.Hdr.Iov = iov
+		msg.Hdr.Iovlen = 1
+		setRawMessageControl(msg, nil)
+		msg.Hdr.Flags = 0
+
+		nameLen, err := u.encodeSockaddr(name[:], pkt.Addr)
+		if err != nil {
+			return sent, err
+		}
+		msg.Hdr.Name = &name[0]
+		msg.Hdr.Namelen = nameLen
+	}
+
+	if len(msgs) == 0 {
+		return sent, nil
+	}
+
+	offset := 0
+	for offset < len(msgs) {
+		n, _, errno := unix.Syscall6(
+			unix.SYS_SENDMMSG,
+			uintptr(u.sysFd),
+			uintptr(unsafe.Pointer(&msgs[offset])),
+			uintptr(len(msgs)-offset),
+			0,
+			0,
+			0,
+		)
+
+		if errno != 0 {
+			if errno == unix.EINTR {
+				continue
+			}
+			return sent + offset, &net.OpError{Op: "sendmmsg", Err: errno}
+		}
+
+		if n == 0 {
+			break
+		}
+		offset += int(n)
+	}
+
+	return sent + len(msgs), nil
+}
+
+func (u *StdConn) encodeSockaddr(dst []byte, addr netip.AddrPort) (uint32, error) {
+	if u.isV4 {
+		if !addr.Addr().Is4() {
+			return 0, fmt.Errorf("Listener is IPv4, but writing to IPv6 remote")
+		}
+		var sa unix.RawSockaddrInet4
+		sa.Family = unix.AF_INET
+		sa.Addr = addr.Addr().As4()
+		binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&sa.Port))[:], addr.Port())
+		size := unix.SizeofSockaddrInet4
+		copy(dst[:size], (*(*[unix.SizeofSockaddrInet4]byte)(unsafe.Pointer(&sa)))[:])
+		return uint32(size), nil
+	}
+
+	var sa unix.RawSockaddrInet6
+	sa.Family = unix.AF_INET6
+	sa.Addr = addr.Addr().As16()
+	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&sa.Port))[:], addr.Port())
+	size := unix.SizeofSockaddrInet6
+	copy(dst[:size], (*(*[unix.SizeofSockaddrInet6]byte)(unsafe.Pointer(&sa)))[:])
+	return uint32(size), nil
+}
+
 func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
 	var rsa unix.RawSockaddrInet6
 	rsa.Family = unix.AF_INET6
