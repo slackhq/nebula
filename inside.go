@@ -2,16 +2,18 @@ package nebula
 
 import (
 	"net/netip"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/noiseutil"
+	"github.com/slackhq/nebula/packet"
 	"github.com/slackhq/nebula/routing"
 )
 
-func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb []byte, out *packet.Packet, q int, localCache firewall.ConntrackCache, now time.Time) {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
 		if f.l.Level >= logrus.DebugLevel {
@@ -53,7 +55,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	})
 
 	if hostinfo == nil {
-		f.rejectInside(packet, out, q)
+		f.rejectInside(packet, out.Payload, q) //todo vector?
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("vpnAddr", fwPacket.RemoteAddr).
 				WithField("fwPacket", fwPacket).
@@ -66,12 +68,11 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		return
 	}
 
-	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache, now)
 	if dropReason == nil {
-		f.sendNoMetrics(header.Message, 0, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, packet, nb, out, q)
-
+		f.sendNoMetricsDelayed(header.Message, 0, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, packet, nb, out, q)
 	} else {
-		f.rejectInside(packet, out, q)
+		f.rejectInside(packet, out.Payload, q) //todo vector?
 		if f.l.Level >= logrus.DebugLevel {
 			hostinfo.logger(f.l).
 				WithField("fwPacket", fwPacket).
@@ -218,7 +219,7 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 	}
 
 	// check if packet is in outbound fw rules
-	dropReason := f.firewall.Drop(*fp, false, hostinfo, f.pki.GetCAPool(), nil)
+	dropReason := f.firewall.Drop(*fp, false, hostinfo, f.pki.GetCAPool(), nil, time.Now())
 	if dropReason != nil {
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("fwPacket", fp).
@@ -406,6 +407,84 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 				continue
 			}
 			f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true)
+			break
+		}
+	}
+}
+
+func (f *Interface) sendNoMetricsDelayed(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb []byte, out *packet.Packet, q int) {
+	if ci.eKey == nil {
+		return
+	}
+	useRelay := !remote.IsValid() && !hostinfo.remote.IsValid()
+	fullOut := out.Payload
+
+	if useRelay {
+		if len(out.Payload) < header.Len {
+			// out always has a capacity of mtu, but not always a length greater than the header.Len.
+			// Grow it to make sure the next operation works.
+			out.Payload = out.Payload[:header.Len]
+		}
+		// Save a header's worth of data at the front of the 'out' buffer.
+		out.Payload = out.Payload[header.Len:]
+	}
+
+	if noiseutil.EncryptLockNeeded {
+		// NOTE: for goboring AESGCMTLS we need to lock because of the nonce check
+		ci.writeLock.Lock()
+	}
+	c := ci.messageCounter.Add(1)
+
+	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
+	out.Payload = header.Encode(out.Payload, header.Version, t, st, hostinfo.remoteIndexId, c)
+	f.connectionManager.Out(hostinfo)
+
+	// Query our LH if we haven't since the last time we've been rebound, this will cause the remote to punch against
+	// all our addrs and enable a faster roaming.
+	if t != header.CloseTunnel && hostinfo.lastRebindCount != f.rebindCount {
+		//NOTE: there is an update hole if a tunnel isn't used and exactly 256 rebinds occur before the tunnel is
+		// finally used again. This tunnel would eventually be torn down and recreated if this action didn't help.
+		f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
+		hostinfo.lastRebindCount = f.rebindCount
+		if f.l.Level >= logrus.DebugLevel {
+			f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).Debug("Lighthouse update triggered for punch due to rebind counter")
+		}
+	}
+
+	var err error
+	out.Payload, err = ci.eKey.EncryptDanger(out.Payload, out.Payload, p, c, nb)
+	if noiseutil.EncryptLockNeeded {
+		ci.writeLock.Unlock()
+	}
+	if err != nil {
+		hostinfo.logger(f.l).WithError(err).
+			WithField("udpAddr", remote).WithField("counter", c).
+			WithField("attemptedCounter", c).
+			Error("Failed to encrypt outgoing packet")
+		return
+	}
+
+	if remote.IsValid() {
+		err = f.writers[q].Prep(out, remote)
+		if err != nil {
+			hostinfo.logger(f.l).WithError(err).WithField("udpAddr", remote).Error("Failed to write outgoing packet")
+		}
+	} else if hostinfo.remote.IsValid() {
+		err = f.writers[q].Prep(out, hostinfo.remote)
+		if err != nil {
+			hostinfo.logger(f.l).WithError(err).WithField("udpAddr", remote).Error("Failed to write outgoing packet")
+		}
+	} else {
+		// Try to send via a relay
+		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
+			relayHostInfo, relay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relayIP)
+			if err != nil {
+				hostinfo.relayState.DeleteRelay(relayIP)
+				hostinfo.logger(f.l).WithField("relay", relayIP).WithError(err).Info("sendNoMetrics failed to find HostInfo")
+				continue
+			}
+			//todo vector!!
+			f.SendVia(relayHostInfo, relay, out.Payload, nb, fullOut[:header.Len+len(out.Payload)], true)
 			break
 		}
 	}

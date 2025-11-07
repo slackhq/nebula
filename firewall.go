@@ -403,9 +403,9 @@ var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
 // Drop returns an error if the packet should be dropped, explaining why. It
 // returns nil if the packet should not be dropped.
-func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) error {
+func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache, now time.Time) error {
 	// Check if we spoke to this tuple, if we did then allow this packet
-	if f.inConns(fp, h, caPool, localCache) {
+	if f.inConns(fp, h, caPool, localCache, now) {
 		return nil
 	}
 
@@ -454,7 +454,7 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	}
 
 	// We always want to conntrack since it is a faster operation
-	f.addConn(fp, incoming)
+	f.addConn(fp, incoming, now)
 
 	return nil
 }
@@ -483,7 +483,7 @@ func (f *Firewall) EmitStats() {
 	metrics.GetOrRegisterGauge("firewall.rules.hash", nil).Update(int64(f.GetRuleHashFNV()))
 }
 
-func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) bool {
+func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache, now time.Time) bool {
 	if localCache != nil {
 		if _, ok := localCache[fp]; ok {
 			return true
@@ -495,7 +495,7 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 	// Purge every time we test
 	ep, has := conntrack.TimerWheel.Purge()
 	if has {
-		f.evict(ep)
+		f.evict(ep, now)
 	}
 
 	c, ok := conntrack.Conns[fp]
@@ -542,11 +542,11 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 
 	switch fp.Protocol {
 	case firewall.ProtoTCP:
-		c.Expires = time.Now().Add(f.TCPTimeout)
+		c.Expires = now.Add(f.TCPTimeout)
 	case firewall.ProtoUDP:
-		c.Expires = time.Now().Add(f.UDPTimeout)
+		c.Expires = now.Add(f.UDPTimeout)
 	default:
-		c.Expires = time.Now().Add(f.DefaultTimeout)
+		c.Expires = now.Add(f.DefaultTimeout)
 	}
 
 	conntrack.Unlock()
@@ -558,7 +558,7 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 	return true
 }
 
-func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
+func (f *Firewall) addConn(fp firewall.Packet, incoming bool, now time.Time) {
 	var timeout time.Duration
 	c := &conn{}
 
@@ -574,7 +574,7 @@ func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
 	conntrack := f.Conntrack
 	conntrack.Lock()
 	if _, ok := conntrack.Conns[fp]; !ok {
-		conntrack.TimerWheel.Advance(time.Now())
+		conntrack.TimerWheel.Advance(now)
 		conntrack.TimerWheel.Add(fp, timeout)
 	}
 
@@ -582,14 +582,14 @@ func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
 	// firewall reload
 	c.incoming = incoming
 	c.rulesVersion = f.rulesVersion
-	c.Expires = time.Now().Add(timeout)
+	c.Expires = now.Add(timeout)
 	conntrack.Conns[fp] = c
 	conntrack.Unlock()
 }
 
 // Evict checks if a conntrack entry has expired, if so it is removed, if not it is re-added to the wheel
 // Caller must own the connMutex lock!
-func (f *Firewall) evict(p firewall.Packet) {
+func (f *Firewall) evict(p firewall.Packet, now time.Time) {
 	// Are we still tracking this conn?
 	conntrack := f.Conntrack
 	t, ok := conntrack.Conns[p]
@@ -597,11 +597,11 @@ func (f *Firewall) evict(p firewall.Packet) {
 		return
 	}
 
-	newT := t.Expires.Sub(time.Now())
+	newT := t.Expires.Sub(now)
 
 	// Timeout is in the future, re-add the timer
 	if newT > 0 {
-		conntrack.TimerWheel.Advance(time.Now())
+		conntrack.TimerWheel.Advance(now)
 		conntrack.TimerWheel.Add(p, newT)
 		return
 	}

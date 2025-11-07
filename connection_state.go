@@ -13,7 +13,7 @@ import (
 	"github.com/slackhq/nebula/noiseutil"
 )
 
-const ReplayWindow = 1024
+const ReplayWindow = 4096
 
 type ConnectionState struct {
 	eKey           *NebulaCipherState

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/netip"
 	"os"
 	"runtime"
@@ -18,10 +17,12 @@ import (
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
+	"github.com/slackhq/nebula/packet"
 	"github.com/slackhq/nebula/udp"
 )
 
 const mtu = 9001
+const batch = 1024 //todo config!
 
 type InterfaceConfig struct {
 	HostMap            *HostMap
@@ -86,11 +87,17 @@ type Interface struct {
 	conntrackCacheTimeout time.Duration
 
 	writers []udp.Conn
-	readers []io.ReadWriteCloser
+	readers []overlay.TunDev
 
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
 	cachedPacketMetrics *cachedPacketMetrics
+
+	listenInN  int
+	listenOutN int
+
+	listenInMetric  metrics.Histogram
+	listenOutMetric metrics.Histogram
 
 	l *logrus.Logger
 }
@@ -177,7 +184,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		routines:              c.routines,
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
-		readers:               make([]io.ReadWriteCloser, c.routines),
+		readers:               make([]overlay.TunDev, c.routines),
 		myVpnNetworks:         cs.myVpnNetworks,
 		myVpnNetworksTable:    cs.myVpnNetworksTable,
 		myVpnAddrs:            cs.myVpnAddrs,
@@ -196,6 +203,8 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 
 		l: c.l,
 	}
+	ifce.listenInMetric = metrics.GetOrRegisterHistogram("vhost.listenIn.n", nil, metrics.NewExpDecaySample(1028, 0.015))
+	ifce.listenOutMetric = metrics.GetOrRegisterHistogram("vhost.listenOut.n", nil, metrics.NewExpDecaySample(1028, 0.015))
 
 	ifce.tryPromoteEvery.Store(c.tryPromoteEvery)
 	ifce.reQueryEvery.Store(c.reQueryEvery)
@@ -232,7 +241,7 @@ func (f *Interface) activate() {
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
 
 	// Prepare n tun queues
-	var reader io.ReadWriteCloser = f.inside
+	var reader overlay.TunDev = f.inside
 	for i := 0; i < f.routines; i++ {
 		if i > 0 {
 			reader, err = f.inside.NewMultiQueueReader()
@@ -261,40 +270,72 @@ func (f *Interface) run() {
 	}
 }
 
-func (f *Interface) listenOut(i int) {
+func (f *Interface) listenOut(q int) {
 	runtime.LockOSThread()
 
 	var li udp.Conn
-	if i > 0 {
-		li = f.writers[i]
+	if q > 0 {
+		li = f.writers[q]
 	} else {
 		li = f.outside
 	}
 
 	ctCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 	lhh := f.lightHouse.NewRequestHandler()
-	plaintext := make([]byte, udp.MTU)
+
+	outPackets := make([]*packet.OutPacket, batch)
+	for i := 0; i < batch; i++ {
+		outPackets[i] = packet.NewOut()
+	}
+
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
-	li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
+	toSend := make([][]byte, batch)
+
+	li.ListenOut(func(pkts []*packet.Packet) {
+		toSend = toSend[:0]
+		for i := range outPackets {
+			outPackets[i].Valid = false
+			outPackets[i].SegCounter = 0
+		}
+
+		//todo f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
+		f.readOutsidePacketsMany(pkts, outPackets, h, fwPacket, lhh, nb, q, ctCache.Get(f.l), time.Now())
+		//we opportunistically tx, but try to also send stragglers
+		if _, err := f.readers[q].WriteMany(outPackets, q); err != nil {
+			f.l.WithError(err).Error("Failed to send packets")
+		}
+		//todo I broke this
+		//n := len(toSend)
+		//if f.l.Level == logrus.DebugLevel {
+		//	f.listenOutMetric.Update(int64(n))
+		//}
+		//f.listenOutN = n
+
 	})
 }
 
-func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
+func (f *Interface) listenIn(reader overlay.TunDev, queueNum int) {
 	runtime.LockOSThread()
 
-	packet := make([]byte, mtu)
-	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
+	packets := make([]*packet.VirtIOPacket, batch)
+	outPackets := make([]*packet.Packet, batch)
+	for i := 0; i < batch; i++ {
+		packets[i] = packet.NewVIO()
+		outPackets[i] = packet.New(false) //todo?
+	}
+
 	for {
-		n, err := reader.Read(packet)
+		n, err := reader.ReadMany(packets, queueNum)
+
+		//todo!!
 		if err != nil {
 			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
 				return
@@ -305,7 +346,22 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 			os.Exit(2)
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
+		if f.l.Level == logrus.DebugLevel {
+			f.listenInMetric.Update(int64(n))
+		}
+		f.listenInN = n
+
+		now := time.Now()
+		for i, pkt := range packets[:n] {
+			outPackets[i].OutLen = -1
+			f.consumeInsidePacket(pkt.Payload, fwPacket, nb, outPackets[i], queueNum, conntrackCache.Get(f.l), now)
+			reader.RecycleRxSeg(pkt, i == (n-1), queueNum) //todo handle err?
+			pkt.Reset()
+		}
+		_, err = f.writers[queueNum].WriteBatch(outPackets[:n])
+		if err != nil {
+			f.l.WithError(err).Error("Error while writing outbound packets")
+		}
 	}
 }
 
@@ -443,6 +499,11 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 			} else {
 				certMaxVersion.Update(int64(certState.v1Cert.Version()))
 			}
+			if f.l.Level != logrus.DebugLevel {
+				f.listenInMetric.Update(int64(f.listenInN))
+				f.listenOutMetric.Update(int64(f.listenOutN))
+			}
+
 		}
 	}
 }

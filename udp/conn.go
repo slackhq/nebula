@@ -4,13 +4,13 @@ import (
 	"net/netip"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/packet"
 )
 
 const MTU = 9001
 
 type EncReader func(
-	addr netip.AddrPort,
-	payload []byte,
+	[]*packet.Packet,
 )
 
 type Conn interface {
@@ -19,6 +19,8 @@ type Conn interface {
 	ListenOut(r EncReader)
 	WriteTo(b []byte, addr netip.AddrPort) error
 	ReloadConfig(c *config.C)
+	Prep(pkt *packet.Packet, addr netip.AddrPort) error
+	WriteBatch(pkt []*packet.Packet) (int, error)
 	SupportsMultipleReaders() bool
 	Close() error
 }
