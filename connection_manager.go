@@ -518,12 +518,12 @@ func (cm *connectionManager) sendPunch(hostinfo *HostInfo) {
 	if cm.punchy.GetTargetEverything() {
 		hostinfo.remotes.ForEach(cm.hostMap.GetPreferredRanges(), func(addr netip.AddrPort, preferred bool) {
 			cm.metricsTxPunchy.Inc(1)
-			cm.intf.outside.WriteDirect([]byte{1}, addr)
+			cm.intf.outside.WriteTo([]byte{1}, addr)
 		})
 
 	} else if hostinfo.remote.IsValid() {
 		cm.metricsTxPunchy.Inc(1)
-		cm.intf.outside.WriteDirect([]byte{1}, hostinfo.remote)
+		cm.intf.outside.WriteTo([]byte{1}, hostinfo.remote)
 	}
 }
 

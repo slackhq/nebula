@@ -327,26 +327,6 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	f.wg.Done()
 }
 
-//// todo why? understand!
-//func normalizeGROSegSize(segSize, total int) int {
-//	if segCount > 1 && total > 0 {
-//		avg := total / segCount
-//		if avg > 0 {
-//			if segSize > avg {
-//				if segSize-8 == avg {
-//					segSize = avg
-//				} else if segSize > total {
-//					segSize = avg
-//				}
-//			}
-//		}
-//	}
-//	if segSize > total {
-//		segSize = total
-//	}
-//	return segSize
-//}
-
 func (f *Interface) workerIn(i int, ctx context.Context) {
 	lhh := f.lightHouse.NewRequestHandler()
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
@@ -388,7 +368,7 @@ func (f *Interface) workerOut(i int, ctx context.Context) {
 		select {
 		case data := <-f.outbound:
 			f.consumeInsidePacket(data.Payload, fwPacket1, nb1, result1, i, conntrackCache.Get(f.l))
-			//f.pktPool.Put(data) //todo if err pls put packet back
+			f.pktPool.Put(data)
 		case <-ctx.Done():
 			f.wg.Done()
 			return

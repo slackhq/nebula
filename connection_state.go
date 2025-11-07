@@ -15,8 +15,7 @@ import (
 
 // TODO: In a 5Gbps test, 1024 is not sufficient. With a 1400 MTU this is about 1.4Gbps of window, assuming full packets.
 // 4092 should be sufficient for 5Gbps
-// TODO this is a horrible amount of RAM to waste per-tunnel
-const ReplayWindow = 0xffff / 2
+const ReplayWindow = 8192
 
 type ConnectionState struct {
 	eKey           *NebulaCipherState

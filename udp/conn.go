@@ -17,8 +17,7 @@ type Conn interface {
 	Rebind() error
 	LocalAddr() (netip.AddrPort, error)
 	ListenOut(pg PacketBufferGetter, pc chan *packet.Packet) error
-	WriteTo(p *packet.Packet) error
-	WriteDirect(b []byte, port netip.AddrPort) error
+	WriteTo(b []byte, addr netip.AddrPort) error
 	ReloadConfig(c *config.C)
 	Close() error
 }

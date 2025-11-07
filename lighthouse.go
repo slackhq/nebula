@@ -1329,7 +1329,7 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 		go func() {
 			time.Sleep(lhh.lh.punchy.GetDelay())
 			lhh.lh.metricHolepunchTx.Inc(1)
-			lhh.lh.punchConn.WriteDirect(empty, vpnPeer)
+			lhh.lh.punchConn.WriteTo(empty, vpnPeer)
 		}()
 
 		if lhh.l.Level >= logrus.DebugLevel {
