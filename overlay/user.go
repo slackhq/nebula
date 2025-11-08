@@ -3,37 +3,61 @@ package overlay
 import (
 	"io"
 	"net/netip"
+	"sync/atomic"
 
+	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/routing"
+	"gvisor.dev/gvisor/pkg/buffer"
 )
 
 func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
-	return NewUserDevice(vpnNetworks)
+	d, err := NewUserDevice(vpnNetworks)
+	if err != nil {
+		return nil, err
+	}
+
+	_, routes, err := getAllRoutesFromConfig(c, vpnNetworks, true)
+	if err != nil {
+		return nil, err
+	}
+
+	routeTree, err := makeRouteTree(l, routes, true)
+	if err != nil {
+		return nil, err
+	}
+
+	newDefaultMTU := c.GetInt("tun.mtu", DefaultMTU)
+	for i, r := range routes {
+		if r.MTU == 0 {
+			routes[i].MTU = newDefaultMTU
+		}
+	}
+
+	// this is needed to enable the "unsafe_routes" feature in combination with port forwarding.
+	d.routeTree.Store(routeTree)
+
+	return d, nil
 }
 
-func NewUserDevice(vpnNetworks []netip.Prefix) (Device, error) {
+func NewUserDevice(vpnNetworks []netip.Prefix) (*UserDevice, error) {
 	// these pipes guarantee each write/read will match 1:1
-	or, ow := io.Pipe()
-	ir, iw := io.Pipe()
 	return &UserDevice{
-		vpnNetworks:    vpnNetworks,
-		outboundReader: or,
-		outboundWriter: ow,
-		inboundReader:  ir,
-		inboundWriter:  iw,
+		vpnNetworks:     vpnNetworks,
+		outboundChannel: make(chan *buffer.View, 16),
+		inboundChannel:  make(chan *buffer.View, 16),
 	}, nil
 }
 
 type UserDevice struct {
 	vpnNetworks []netip.Prefix
 
-	outboundReader *io.PipeReader
-	outboundWriter *io.PipeWriter
+	// using channel of *buffer.View significantly improves performance
+	outboundChannel chan *buffer.View
+	inboundChannel  chan *buffer.View
 
-	inboundReader *io.PipeReader
-	inboundWriter *io.PipeWriter
+	routeTree atomic.Pointer[bart.Table[routing.Gateways]]
 }
 
 func (d *UserDevice) Activate() error {
@@ -43,25 +67,55 @@ func (d *UserDevice) Activate() error {
 func (d *UserDevice) Networks() []netip.Prefix { return d.vpnNetworks }
 func (d *UserDevice) Name() string             { return "faketun0" }
 func (d *UserDevice) RoutesFor(ip netip.Addr) routing.Gateways {
-	return routing.Gateways{routing.NewGateway(ip, 1)}
+	ptr := d.routeTree.Load()
+	if ptr != nil {
+		r, _ := d.routeTree.Load().Lookup(ip)
+		return r
+	} else {
+		return routing.Gateways{routing.NewGateway(ip, 1)}
+	}
 }
 
 func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return d, nil
 }
 
-func (d *UserDevice) Pipe() (*io.PipeReader, *io.PipeWriter) {
-	return d.inboundReader, d.outboundWriter
+func (d *UserDevice) Pipe() (<-chan *buffer.View, chan<- *buffer.View) {
+	return d.inboundChannel, d.outboundChannel
 }
 
 func (d *UserDevice) Read(p []byte) (n int, err error) {
-	return d.outboundReader.Read(p)
+	view, ok := <-d.outboundChannel
+	if !ok {
+		return 0, io.EOF
+	}
+	return view.Read(p)
 }
+func (d *UserDevice) WriteTo(w io.Writer) (n int64, err error) {
+	view, ok := <-d.outboundChannel
+	if !ok {
+		return 0, io.EOF
+	}
+	return view.WriteTo(w)
+}
+
 func (d *UserDevice) Write(p []byte) (n int, err error) {
-	return d.inboundWriter.Write(p)
+	view := buffer.NewViewWithData(p)
+	d.inboundChannel <- view
+	return view.Size(), nil
 }
+func (d *UserDevice) ReadFrom(r io.Reader) (n int64, err error) {
+	view := buffer.NewViewSize(2048)
+	n, err = view.ReadFrom(r)
+	if n > 0 {
+		d.inboundChannel <- view
+	}
+	return
+}
+
 func (d *UserDevice) Close() error {
-	d.inboundWriter.Close()
-	d.outboundWriter.Close()
+	// There is nothing to be done for the UserDevice.
+	// It doesn't start any goroutines on its own.
+	// It doesn't manage any resources that needs closing.
 	return nil
 }

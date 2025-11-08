@@ -16,7 +16,8 @@ type TimerWheel[T any] struct {
 	wheelLen int
 
 	// Last time we ticked, since we are lazy ticking
-	lastTick *time.Time
+	lastTickValid bool
+	lastTick      time.Time
 
 	// Durations of a tick and the entire wheel
 	tickDuration  time.Duration
@@ -168,13 +169,14 @@ func (tw *TimerWheel[T]) findWheel(timeout time.Duration) (i int) {
 
 // Advance will move the wheel forward by the appropriate number of ticks for the provided time and all items
 // passed over will be moved to the expired list. Calling Purge is necessary to remove them entirely.
-func (tw *TimerWheel[T]) Advance(now time.Time) {
-	if tw.lastTick == nil {
-		tw.lastTick = &now
+func (tw *TimerWheel[T]) Advance(now1 time.Time) {
+	if !tw.lastTickValid {
+		tw.lastTick = now1
+		tw.lastTickValid = true
 	}
 
 	// We want to round down
-	ticks := int(now.Sub(*tw.lastTick) / tw.tickDuration)
+	ticks := int(now1.Sub(tw.lastTick) / tw.tickDuration)
 	adv := ticks
 	if ticks > tw.wheelLen {
 		ticks = tw.wheelLen
@@ -203,7 +205,7 @@ func (tw *TimerWheel[T]) Advance(now time.Time) {
 
 	// Advance the tick based on duration to avoid losing some accuracy
 	newTick := tw.lastTick.Add(tw.tickDuration * time.Duration(adv))
-	tw.lastTick = &newTick
+	tw.lastTick = newTick
 }
 
 func (lw *LockingTimerWheel[T]) Add(v T, timeout time.Duration) *TimeoutItem[T] {

@@ -29,6 +29,11 @@ const (
 	sendTestPacket trafficDecision = 6
 )
 
+// The data written into this variable is never used.
+// Its there to avoid a fresh dynamic memory allocation of 1 byte
+// for each time its used.
+var BYTE_SLICE_ONE []byte = []byte{1}
+
 type connectionManager struct {
 	// relayUsed holds which relay localIndexs are in use
 	relayUsed     map[uint32]struct{}
@@ -524,12 +529,12 @@ func (cm *connectionManager) sendPunch(hostinfo *HostInfo) {
 	if cm.punchy.GetTargetEverything() {
 		hostinfo.remotes.ForEach(cm.hostMap.GetPreferredRanges(), func(addr netip.AddrPort, preferred bool) {
 			cm.metricsTxPunchy.Inc(1)
-			cm.intf.outside.WriteTo([]byte{1}, addr)
+			cm.intf.outside.WriteTo(BYTE_SLICE_ONE, addr)
 		})
 
 	} else if hostinfo.remote.IsValid() {
 		cm.metricsTxPunchy.Inc(1)
-		cm.intf.outside.WriteTo([]byte{1}, hostinfo.remote)
+		cm.intf.outside.WriteTo(BYTE_SLICE_ONE, hostinfo.remote)
 	}
 }
 

@@ -37,6 +37,10 @@ type Control struct {
 	connectionManagerStart func(context.Context)
 }
 
+func (c *Control) GetLogger() *logrus.Logger {
+	return c.l
+}
+
 type ControlHostInfo struct {
 	VpnAddrs               []netip.Addr     `json:"vpnAddrs"`
 	LocalIndex             uint32           `json:"localIndex"`
