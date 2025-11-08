@@ -29,7 +29,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 		return
 	}
 
-	//l.Error("in packet ", header, packet[HeaderLen:])
+	//f.l.Error("in packet ", h)
 	if ip.IsValid() {
 		if f.myVpnNetworksTable.Contains(ip.Addr()) {
 			if f.l.Level >= logrus.DebugLevel {

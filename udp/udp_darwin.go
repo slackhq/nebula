@@ -165,7 +165,7 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 	return func() {}
 }
 
-func (u *StdConn) ListenOut(r EncReader) {
+func (u *StdConn) ListenOut(r EncReader) error {
 	buffer := make([]byte, MTU)
 
 	for {
@@ -173,8 +173,7 @@ func (u *StdConn) ListenOut(r EncReader) {
 		n, rua, err := u.ReadFromUDPAddrPort(buffer)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
-				u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
-				return
+				return err
 			}
 
 			u.l.WithError(err).Error("unexpected udp socket receive error")

@@ -16,7 +16,7 @@ type EncReader func(
 type Conn interface {
 	Rebind() error
 	LocalAddr() (netip.AddrPort, error)
-	ListenOut(r EncReader)
+	ListenOut(r EncReader) error
 	WriteTo(b []byte, addr netip.AddrPort) error
 	ReloadConfig(c *config.C)
 	Close() error
@@ -30,8 +30,8 @@ func (NoopConn) Rebind() error {
 func (NoopConn) LocalAddr() (netip.AddrPort, error) {
 	return netip.AddrPort{}, nil
 }
-func (NoopConn) ListenOut(_ EncReader) {
-	return
+func (NoopConn) ListenOut(_ EncReader) error {
+	return nil
 }
 func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {
 	return nil
