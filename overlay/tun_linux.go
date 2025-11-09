@@ -594,7 +594,7 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 	// If this route is relevant to our interface and there is a gateway then add it
 	if r.LinkIndex == link.Attrs().Index {
 		var gw net.IP = r.Gw
-		if len(r.Gw) == 0 && r.Via != nil {
+		if len(gw) == 0 && r.Via != nil {
 			via, ok := r.Via.(*netlink.Via)
 			if !ok {
 				t.l.WithField("route", r).Debug("Ignoring route update, invalid via type")
@@ -623,8 +623,8 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 		// If this route is relevant to our interface and there is a gateway then add it
 		if p.LinkIndex == link.Attrs().Index {
 			var gw net.IP = p.Gw
-			if len(p.Gw) == 0 && r.Via != nil {
-				via, ok := r.Via.(*netlink.Via)
+			if len(gw) == 0 && p.Via != nil {
+				via, ok := p.Via.(*netlink.Via)
 				if !ok {
 					t.l.WithField("route", r).Debug("Ignoring multipath route update, invalid via type")
 				}
