@@ -598,8 +598,9 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 			via, ok := r.Via.(*netlink.Via)
 			if !ok {
 				t.l.WithField("route", r).Debug("Ignoring route update, invalid via type")
+			} else {
+				gw = via.Addr
 			}
-			gw = via.Addr
 		}
 
 		if len(gw) > 0 {
@@ -627,8 +628,9 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 				via, ok := p.Via.(*netlink.Via)
 				if !ok {
 					t.l.WithField("route", r).Debug("Ignoring multipath route update, invalid via type")
+				} else {
+					gw = via.Addr
 				}
-				gw = via.Addr
 			}
 
 			if len(gw) > 0 {
