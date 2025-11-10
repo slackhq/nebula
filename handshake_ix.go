@@ -9,6 +9,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/udp"
 )
 
 // NOISE IX Handshakes
@@ -72,6 +73,15 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 			Cert:           crtHs,
 			CertVersion:    uint32(v),
 		},
+	}
+
+	if f.multiPort.Tx || f.multiPort.Rx {
+		hs.Details.InitiatorMultiPort = &MultiPortDetails{
+			RxSupported: f.multiPort.Rx,
+			TxSupported: f.multiPort.Tx,
+			BasePort:    uint32(f.multiPort.TxBasePort),
+			TotalPorts:  uint32(f.multiPort.TxPorts),
+		}
 	}
 
 	hsBytes, err := hs.Marshal()
@@ -250,6 +260,26 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		return
 	}
 
+	var multiportTx, multiportRx bool
+	if f.multiPort.Rx || f.multiPort.Tx {
+		if hs.Details.InitiatorMultiPort != nil {
+			multiportTx = hs.Details.InitiatorMultiPort.RxSupported && f.multiPort.Tx
+			multiportRx = hs.Details.InitiatorMultiPort.TxSupported && f.multiPort.Rx
+		}
+
+		hs.Details.ResponderMultiPort = &MultiPortDetails{
+			TxSupported: f.multiPort.Tx,
+			RxSupported: f.multiPort.Rx,
+			BasePort:    uint32(f.multiPort.TxBasePort),
+			TotalPorts:  uint32(f.multiPort.TxPorts),
+		}
+	}
+	if hs.Details.InitiatorMultiPort != nil && hs.Details.InitiatorMultiPort.BasePort != uint32(addr.Port()) {
+		// The other side sent us a handshake from a different port, make sure
+		// we send responses back to the BasePort
+		addr = netip.AddrPortFrom(addr.Addr(), uint16(hs.Details.InitiatorMultiPort.BasePort))
+	}
+
 	hostinfo := &HostInfo{
 		ConnectionState:   ci,
 		localIndexId:      myIndex,
@@ -257,6 +287,8 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		vpnAddrs:          vpnAddrs,
 		HandshakePacket:   make(map[uint8][]byte, 0),
 		lastHandshakeTime: hs.Details.Time,
+		multiportTx:       multiportTx,
+		multiportRx:       multiportRx,
 		relayState: RelayState{
 			relays:         nil,
 			relayForByAddr: map[netip.Addr]*Relay{},
@@ -271,6 +303,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		WithField("issuer", issuer).
 		WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 		WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+		WithField("multiportTx", multiportTx).WithField("multiportRx", multiportRx).
 		Info("Handshake message received")
 
 	hs.Details.ResponderIndex = myIndex
@@ -347,6 +380,10 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 	if err != nil {
 		switch err {
 		case ErrAlreadySeen:
+			if hostinfo.multiportRx {
+				// The other host is sending to us with multiport, so only grab the IP
+				addr = netip.AddrPortFrom(addr.Addr(), hostinfo.remote.Port())
+			}
 			// Update remote if preferred
 			if existing.SetRemoteIfPreferred(f.hostMap, addr) {
 				// Send a test packet to ensure the other side has also switched to
@@ -357,7 +394,14 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 			msg = existing.HandshakePacket[2]
 			f.messageMetrics.Tx(header.Handshake, header.MessageSubType(msg[1]), 1)
 			if addr.IsValid() {
-				err := f.outside.WriteTo(msg, addr)
+				if multiportTx {
+					// TODO remove alloc here
+					raw := make([]byte, len(msg)+udp.RawOverhead)
+					copy(raw[udp.RawOverhead:], msg)
+					err = f.udpRaw.WriteTo(raw, udp.RandomSendPort.UDPSendPort(f.multiPort.TxPorts), addr)
+				} else {
+					err = f.outside.WriteTo(msg, addr)
+				}
 				if err != nil {
 					f.l.WithField("vpnAddrs", existing.vpnAddrs).WithField("udpAddr", addr).
 						WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
@@ -426,7 +470,14 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 	// Do the send
 	f.messageMetrics.Tx(header.Handshake, header.MessageSubType(msg[1]), 1)
 	if addr.IsValid() {
-		err = f.outside.WriteTo(msg, addr)
+		if multiportTx {
+			// TODO remove alloc here
+			raw := make([]byte, len(msg)+udp.RawOverhead)
+			copy(raw[udp.RawOverhead:], msg)
+			err = f.udpRaw.WriteTo(raw, udp.RandomSendPort.UDPSendPort(f.multiPort.TxPorts), addr)
+		} else {
+			err = f.outside.WriteTo(msg, addr)
+		}
 		if err != nil {
 			f.l.WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", addr).
 				WithField("certName", certName).
@@ -520,6 +571,20 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 
 		// The handshake state machine is complete, if things break now there is no chance to recover. Tear down and start again
 		return true
+	}
+
+	if (f.multiPort.Tx || f.multiPort.Rx) && hs.Details.ResponderMultiPort != nil {
+		hostinfo.multiportTx = hs.Details.ResponderMultiPort.RxSupported && f.multiPort.Tx
+		hostinfo.multiportRx = hs.Details.ResponderMultiPort.TxSupported && f.multiPort.Rx
+	}
+
+	if hs.Details.ResponderMultiPort != nil && hs.Details.ResponderMultiPort.BasePort != uint32(addr.Port()) {
+		// The other side sent us a handshake from a different port, make sure
+		// we send responses back to the BasePort
+		addr = netip.AddrPortFrom(
+			addr.Addr(),
+			uint16(hs.Details.ResponderMultiPort.BasePort),
+		)
 	}
 
 	rc, err := cert.Recombine(cert.Version(hs.Details.CertVersion), hs.Details.Cert, ci.H.PeerStatic(), ci.Curve())
@@ -653,6 +718,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 		WithField("durationNs", duration).
 		WithField("sentCachedPackets", len(hh.packetStore)).
+		WithField("multiportTx", hostinfo.multiportTx).WithField("multiportRx", hostinfo.multiportRx).
 		Info("Handshake message received")
 
 	// Build up the radix for the firewall if we have subnets in the cert
