@@ -523,9 +523,13 @@ func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.CAPool, error) {
 		return nil, fmt.Errorf("error while adding CA certificate to CA trust store: %s", err)
 	}
 
-	for _, fp := range c.GetStringSlice("pki.blocklist", []string{}) {
-		l.WithField("fingerprint", fp).Info("Blocklisting cert")
-		caPool.BlocklistFingerprint(fp)
+	bl := c.GetStringSlice("pki.blocklist", []string{})
+	if len(bl) > 0 {
+		for _, fp := range bl {
+			caPool.BlocklistFingerprint(fp)
+		}
+
+		l.WithField("fingerprintCount", len(bl)).Info("Blocklisted certificates")
 	}
 
 	return caPool, nil
