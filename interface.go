@@ -341,6 +341,10 @@ func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchRe
 		outs[idx] = outBuf[virtioNetHdrLen:] // Slice starting after headroom
 	}
 
+	// Pre-allocate batch accumulation buffers for sending
+	batchPackets := make([][]byte, 0, batchSize)
+	batchAddrs := make([]netip.AddrPort, 0, batchSize)
+
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
 	for {
@@ -356,7 +360,7 @@ func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchRe
 		}
 
 		// Process all packets in the batch at once
-		f.consumeInsidePackets(bufs, sizes, n, outs, i, conntrackCache.Get(f.l))
+		f.consumeInsidePackets(bufs, sizes, n, outs, i, conntrackCache.Get(f.l), &batchPackets, &batchAddrs)
 	}
 }
 

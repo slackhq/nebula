@@ -18,14 +18,16 @@ import (
 // outs: slice of output buffers (one per packet) with virtio headroom
 // q: queue index
 // localCache: firewall conntrack cache
-func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count int, outs [][]byte, q int, localCache firewall.ConntrackCache) {
+// batchPackets: pre-allocated slice for accumulating encrypted packets
+// batchAddrs: pre-allocated slice for accumulating destination addresses
+func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count int, outs [][]byte, q int, localCache firewall.ConntrackCache, batchPackets *[][]byte, batchAddrs *[]netip.AddrPort) {
 	// Reusable per-packet state
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
-	// Accumulate encrypted packets for batch sending
-	batchPackets := make([][]byte, 0, count)
-	batchAddrs := make([]netip.AddrPort, 0, count)
+	// Reset batch accumulation slices (reuse capacity)
+	*batchPackets = (*batchPackets)[:0]
+	*batchAddrs = (*batchAddrs)[:0]
 
 	// Process each packet in the batch
 	for i := 0; i < count; i++ {
@@ -137,15 +139,15 @@ func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count in
 		}
 
 		// Add to batch
-		batchPackets = append(batchPackets, out)
-		batchAddrs = append(batchAddrs, hostinfo.remote)
+		*batchPackets = append(*batchPackets, out)
+		*batchAddrs = append(*batchAddrs, hostinfo.remote)
 	}
 
 	// Send all accumulated packets in one batch
-	if len(batchPackets) > 0 {
-		n, err := f.writers[q].WriteMulti(batchPackets, batchAddrs)
+	if len(*batchPackets) > 0 {
+		n, err := f.writers[q].WriteMulti(*batchPackets, *batchAddrs)
 		if err != nil {
-			f.l.WithError(err).WithField("sent", n).WithField("total", len(batchPackets)).Error("Failed to send batch")
+			f.l.WithError(err).WithField("sent", n).WithField("total", len(*batchPackets)).Error("Failed to send batch")
 		}
 	}
 }
