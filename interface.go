@@ -276,9 +276,26 @@ func (f *Interface) listenOut(i int) {
 	})
 }
 
+// BatchReader is an interface for devices that support reading multiple packets at once
+type BatchReader interface {
+	BatchRead(bufs [][]byte, sizes []int) (int, error)
+	BatchSize() int
+}
+
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	runtime.LockOSThread()
 
+	// Check if reader supports batching
+	batchReader, supportsBatching := reader.(BatchReader)
+
+	if supportsBatching {
+		f.listenInBatch(reader, batchReader, i)
+	} else {
+		f.listenInSingle(reader, i)
+	}
+}
+
+func (f *Interface) listenInSingle(reader io.ReadWriteCloser, i int) {
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
@@ -299,6 +316,42 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 		}
 
 		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
+	}
+}
+
+func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchReader, i int) {
+	batchSize := batchReader.BatchSize()
+
+	// Allocate buffers for batch reading
+	bufs := make([][]byte, batchSize)
+	for idx := range bufs {
+		bufs[idx] = make([]byte, mtu)
+	}
+	sizes := make([]int, batchSize)
+
+	// Per-packet state (reused across batches)
+	out := make([]byte, mtu)
+	fwPacket := &firewall.Packet{}
+	nb := make([]byte, 12, 12)
+
+	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
+
+	for {
+		n, err := batchReader.BatchRead(bufs, sizes)
+		if err != nil {
+			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
+				return
+			}
+
+			f.l.WithError(err).Error("Error while batch reading outbound packets")
+			// This only seems to happen when something fatal happens to the fd, so exit.
+			os.Exit(2)
+		}
+
+		// Process each packet in the batch
+		for j := 0; j < n; j++ {
+			f.consumeInsidePacket(bufs[j][:sizes[j]], fwPacket, nb, out, i, conntrackCache.Get(f.l))
+		}
 	}
 }
 
