@@ -140,6 +140,17 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 	}
 }
 
+// WriteMulti sends multiple packets - fallback implementation without sendmmsg
+func (u *StdConn) WriteMulti(packets [][]byte, addrs []netip.AddrPort) (int, error) {
+	for i := range packets {
+		err := u.WriteTo(packets[i], addrs[i])
+		if err != nil {
+			return i, err
+		}
+	}
+	return len(packets), nil
+}
+
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	a := u.UDPConn.LocalAddr()
 

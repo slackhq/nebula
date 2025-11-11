@@ -194,6 +194,19 @@ func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
 	return u.writeTo6(b, ip)
 }
 
+func (u *StdConn) WriteMulti(packets [][]byte, addrs []netip.AddrPort) (int, error) {
+	if len(packets) != len(addrs) {
+		return 0, fmt.Errorf("packets and addrs length mismatch")
+	}
+	if len(packets) == 0 {
+		return 0, nil
+	}
+	if u.isV4 {
+		return u.writeMulti4(packets, addrs)
+	}
+	return u.writeMulti6(packets, addrs)
+}
+
 func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
 	var rsa unix.RawSockaddrInet6
 	rsa.Family = unix.AF_INET6
@@ -245,6 +258,78 @@ func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
 		}
 
 		return nil
+	}
+}
+
+func (u *StdConn) writeMulti4(packets [][]byte, addrs []netip.AddrPort) (int, error) {
+	msgs, iovecs, names := u.PrepareWriteMessages4(len(packets))
+
+	for i := range packets {
+		if !addrs[i].Addr().Is4() {
+			return i, ErrInvalidIPv6RemoteForSocket
+		}
+
+		// Setup the packet buffer
+		iovecs[i].Base = &packets[i][0]
+		iovecs[i].Len = uint64(len(packets[i]))
+
+		// Setup the destination address
+		rsa := (*unix.RawSockaddrInet4)(unsafe.Pointer(&names[i][0]))
+		rsa.Family = unix.AF_INET
+		rsa.Addr = addrs[i].Addr().As4()
+		binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], addrs[i].Port())
+	}
+
+	for {
+		n, _, err := unix.Syscall6(
+			unix.SYS_SENDMMSG,
+			uintptr(u.sysFd),
+			uintptr(unsafe.Pointer(&msgs[0])),
+			uintptr(len(msgs)),
+			0,
+			0,
+			0,
+		)
+
+		if err != 0 {
+			return int(n), &net.OpError{Op: "sendmmsg", Err: err}
+		}
+
+		return int(n), nil
+	}
+}
+
+func (u *StdConn) writeMulti6(packets [][]byte, addrs []netip.AddrPort) (int, error) {
+	msgs, iovecs, names := u.PrepareWriteMessages6(len(packets))
+
+	for i := range packets {
+		// Setup the packet buffer
+		iovecs[i].Base = &packets[i][0]
+		iovecs[i].Len = uint64(len(packets[i]))
+
+		// Setup the destination address
+		rsa := (*unix.RawSockaddrInet6)(unsafe.Pointer(&names[i][0]))
+		rsa.Family = unix.AF_INET6
+		rsa.Addr = addrs[i].Addr().As16()
+		binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], addrs[i].Port())
+	}
+
+	for {
+		n, _, err := unix.Syscall6(
+			unix.SYS_SENDMMSG,
+			uintptr(u.sysFd),
+			uintptr(unsafe.Pointer(&msgs[0])),
+			uintptr(len(msgs)),
+			0,
+			0,
+			0,
+		)
+
+		if err != 0 {
+			return int(n), &net.OpError{Op: "sendmmsg", Err: err}
+		}
+
+		return int(n), nil
 	}
 }
 

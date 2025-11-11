@@ -333,12 +333,13 @@ func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchRe
 	}
 	sizes := make([]int, batchSize)
 
-	// Per-packet state (reused across batches)
-	// Allocate out buffer with virtio header headroom to avoid copies on write
-	outBuf := make([]byte, virtioNetHdrLen+mtu)
-	out := outBuf[virtioNetHdrLen:]
-	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
+	// Allocate output buffers for batch processing (one per packet)
+	// Each has virtio header headroom to avoid copies on write
+	outs := make([][]byte, batchSize)
+	for idx := range outs {
+		outBuf := make([]byte, virtioNetHdrLen+mtu)
+		outs[idx] = outBuf[virtioNetHdrLen:] // Slice starting after headroom
+	}
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
@@ -354,10 +355,8 @@ func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchRe
 			os.Exit(2)
 		}
 
-		// Process each packet in the batch
-		for j := 0; j < n; j++ {
-			f.consumeInsidePacket(bufs[j][:sizes[j]], fwPacket, nb, out, i, conntrackCache.Get(f.l))
-		}
+		// Process all packets in the batch at once
+		f.consumeInsidePackets(bufs, sizes, n, outs, i, conntrackCache.Get(f.l))
 	}
 }
 

@@ -11,6 +11,145 @@ import (
 	"github.com/slackhq/nebula/routing"
 )
 
+// consumeInsidePackets processes multiple packets in a batch for improved performance
+// packets: slice of packet buffers to process
+// sizes: slice of packet sizes
+// count: number of packets to process
+// outs: slice of output buffers (one per packet) with virtio headroom
+// q: queue index
+// localCache: firewall conntrack cache
+func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count int, outs [][]byte, q int, localCache firewall.ConntrackCache) {
+	// Reusable per-packet state
+	fwPacket := &firewall.Packet{}
+	nb := make([]byte, 12, 12)
+
+	// Accumulate encrypted packets for batch sending
+	batchPackets := make([][]byte, 0, count)
+	batchAddrs := make([]netip.AddrPort, 0, count)
+
+	// Process each packet in the batch
+	for i := 0; i < count; i++ {
+		packet := packets[i][:sizes[i]]
+		out := outs[i]
+
+		// Inline the consumeInsidePacket logic for better performance
+		err := newPacket(packet, false, fwPacket)
+		if err != nil {
+			if f.l.Level >= logrus.DebugLevel {
+				f.l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
+			}
+			continue
+		}
+
+		// Ignore local broadcast packets
+		if f.dropLocalBroadcast {
+			if f.myBroadcastAddrsTable.Contains(fwPacket.RemoteAddr) {
+				continue
+			}
+		}
+
+		if f.myVpnAddrsTable.Contains(fwPacket.RemoteAddr) {
+			// Immediately forward packets from self to self.
+			if immediatelyForwardToSelf {
+				_, err := f.readers[q].Write(packet)
+				if err != nil {
+					f.l.WithError(err).Error("Failed to forward to tun")
+				}
+			}
+			continue
+		}
+
+		// Ignore multicast packets
+		if f.dropMulticast && fwPacket.RemoteAddr.IsMulticast() {
+			continue
+		}
+
+		hostinfo, ready := f.getOrHandshakeConsiderRouting(fwPacket, func(hh *HandshakeHostInfo) {
+			hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
+		})
+
+		if hostinfo == nil {
+			f.rejectInside(packet, out, q)
+			if f.l.Level >= logrus.DebugLevel {
+				f.l.WithField("vpnAddr", fwPacket.RemoteAddr).
+					WithField("fwPacket", fwPacket).
+					Debugln("dropping outbound packet, vpnAddr not in our vpn networks or in unsafe networks")
+			}
+			continue
+		}
+
+		if !ready {
+			continue
+		}
+
+		dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
+		if dropReason != nil {
+			f.rejectInside(packet, out, q)
+			if f.l.Level >= logrus.DebugLevel {
+				hostinfo.logger(f.l).
+					WithField("fwPacket", fwPacket).
+					WithField("reason", dropReason).
+					Debugln("dropping outbound packet")
+			}
+			continue
+		}
+
+		// Encrypt and prepare packet for batch sending
+		ci := hostinfo.ConnectionState
+		if ci.eKey == nil {
+			continue
+		}
+
+		// Check if this needs relay - if so, send immediately and skip batching
+		useRelay := !hostinfo.remote.IsValid()
+		if useRelay {
+			// Handle relay sends individually (less common path)
+			f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, packet, nb, out, q)
+			continue
+		}
+
+		// Encrypt the packet for batch sending
+		if noiseutil.EncryptLockNeeded {
+			ci.writeLock.Lock()
+		}
+		c := ci.messageCounter.Add(1)
+		out = header.Encode(out, header.Version, header.Message, 0, hostinfo.remoteIndexId, c)
+		f.connectionManager.Out(hostinfo)
+
+		// Query lighthouse if needed
+		if hostinfo.lastRebindCount != f.rebindCount {
+			f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
+			hostinfo.lastRebindCount = f.rebindCount
+			if f.l.Level >= logrus.DebugLevel {
+				f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).Debug("Lighthouse update triggered for punch due to rebind counter")
+			}
+		}
+
+		out, err = ci.eKey.EncryptDanger(out, out, packet, c, nb)
+		if noiseutil.EncryptLockNeeded {
+			ci.writeLock.Unlock()
+		}
+		if err != nil {
+			hostinfo.logger(f.l).WithError(err).
+				WithField("counter", c).
+				Error("Failed to encrypt outgoing packet")
+			continue
+		}
+
+		// Add to batch
+		batchPackets = append(batchPackets, out)
+		batchAddrs = append(batchAddrs, hostinfo.remote)
+	}
+
+	// Send all accumulated packets in one batch
+	if len(batchPackets) > 0 {
+		n, err := f.writers[q].WriteMulti(batchPackets, batchAddrs)
+		if err != nil {
+			f.l.WithError(err).WithField("sent", n).WithField("total", len(batchPackets)).Error("Failed to send batch")
+		}
+	}
+}
+
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
