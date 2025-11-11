@@ -297,7 +297,10 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 
 func (f *Interface) listenInSingle(reader io.ReadWriteCloser, i int) {
 	packet := make([]byte, mtu)
-	out := make([]byte, mtu)
+	// Allocate out buffer with virtio header headroom (10 bytes) to avoid copies on write
+	const virtioNetHdrLen = 10
+	outBuf := make([]byte, virtioNetHdrLen+mtu)
+	out := outBuf[virtioNetHdrLen:] // Use slice starting after headroom
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
@@ -321,6 +324,7 @@ func (f *Interface) listenInSingle(reader io.ReadWriteCloser, i int) {
 
 func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchReader, i int) {
 	batchSize := batchReader.BatchSize()
+	const virtioNetHdrLen = 10
 
 	// Allocate buffers for batch reading
 	bufs := make([][]byte, batchSize)
@@ -330,7 +334,9 @@ func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchRe
 	sizes := make([]int, batchSize)
 
 	// Per-packet state (reused across batches)
-	out := make([]byte, mtu)
+	// Allocate out buffer with virtio header headroom to avoid copies on write
+	outBuf := make([]byte, virtioNetHdrLen+mtu)
+	out := outBuf[virtioNetHdrLen:]
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
