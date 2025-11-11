@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"net/netip"
-	"slices"
 	"time"
 
 	"github.com/flynn/noise"
@@ -192,17 +191,17 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		return
 	}
 
-	var vpnAddrs []netip.Addr
-	var filteredNetworks []netip.Prefix
 	certName := remoteCert.Certificate.Name()
 	certVersion := remoteCert.Certificate.Version()
 	fingerprint := remoteCert.Fingerprint
 	issuer := remoteCert.Certificate.Issuer()
+	vpnNetworks := remoteCert.Certificate.Networks()
 
-	for _, network := range remoteCert.Certificate.Networks() {
-		vpnAddr := network.Addr()
-		if f.myVpnAddrsTable.Contains(vpnAddr) {
-			f.l.WithField("vpnAddr", vpnAddr).WithField("udpAddr", addr).
+	anyVpnAddrsInCommon := false
+	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
+	for i, network := range vpnNetworks {
+		if f.myVpnAddrsTable.Contains(network.Addr()) {
+			f.l.WithField("vpnNetworks", vpnNetworks).WithField("udpAddr", addr).
 				WithField("certName", certName).
 				WithField("certVersion", certVersion).
 				WithField("fingerprint", fingerprint).
@@ -210,24 +209,10 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Refusing to handshake with myself")
 			return
 		}
-
-		// vpnAddrs outside our vpn networks are of no use to us, filter them out
-		if !f.myVpnNetworksTable.Contains(vpnAddr) {
-			continue
+		vpnAddrs[i] = network.Addr()
+		if f.myVpnNetworksTable.Contains(network.Addr()) {
+			anyVpnAddrsInCommon = true
 		}
-
-		filteredNetworks = append(filteredNetworks, network)
-		vpnAddrs = append(vpnAddrs, vpnAddr)
-	}
-
-	if len(vpnAddrs) == 0 {
-		f.l.WithError(err).WithField("udpAddr", addr).
-			WithField("certName", certName).
-			WithField("certVersion", certVersion).
-			WithField("fingerprint", fingerprint).
-			WithField("issuer", issuer).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("No usable vpn addresses from host, refusing handshake")
-		return
 	}
 
 	if addr.IsValid() {
@@ -264,26 +249,30 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 		},
 	}
 
-	f.l.WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", addr).
-		WithField("certName", certName).
-		WithField("certVersion", certVersion).
-		WithField("fingerprint", fingerprint).
-		WithField("issuer", issuer).
-		WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-		WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-		Info("Handshake message received")
+	msgRxL := f.l.WithFields(m{
+		"vpnAddrs":       vpnAddrs,
+		"udpAddr":        addr,
+		"certName":       certName,
+		"certVersion":    certVersion,
+		"fingerprint":    fingerprint,
+		"issuer":         issuer,
+		"initiatorIndex": hs.Details.InitiatorIndex,
+		"responderIndex": hs.Details.ResponderIndex,
+		"remoteIndex":    h.RemoteIndex,
+		"handshake":      m{"stage": 1, "style": "ix_psk0"},
+	})
+
+	if anyVpnAddrsInCommon {
+		msgRxL.Info("Handshake message received")
+	} else {
+		//todo warn if not lighthouse or relay?
+		msgRxL.Info("Handshake message received, but no vpnNetworks in common.")
+	}
 
 	hs.Details.ResponderIndex = myIndex
 	hs.Details.Cert = cs.getHandshakeBytes(ci.myCert.Version())
 	if hs.Details.Cert == nil {
-		f.l.WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", addr).
-			WithField("certName", certName).
-			WithField("certVersion", certVersion).
-			WithField("fingerprint", fingerprint).
-			WithField("issuer", issuer).
-			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			WithField("certVersion", ci.myCert.Version()).
+		msgRxL.WithField("myCertVersion", ci.myCert.Version()).
 			Error("Unable to handshake with host because no certificate handshake bytes is available")
 		return
 	}
@@ -341,7 +330,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 
 	hostinfo.remotes = f.lightHouse.QueryCache(vpnAddrs)
 	hostinfo.SetRemote(addr)
-	hostinfo.buildNetworks(f.myVpnNetworksTable, filteredNetworks, remoteCert.Certificate.UnsafeNetworks())
+	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
 
 	existing, err := f.handshakeManager.CheckAndComplete(hostinfo, 0, f)
 	if err != nil {
@@ -582,31 +571,22 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
 	}
 
-	var vpnAddrs []netip.Addr
-	var filteredNetworks []netip.Prefix
-	for _, network := range vpnNetworks {
-		// vpnAddrs outside our vpn networks are of no use to us, filter them out
-		vpnAddr := network.Addr()
-		if !f.myVpnNetworksTable.Contains(vpnAddr) {
-			continue
+	correctHostResponded := false
+	anyVpnAddrsInCommon := false
+	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
+	for i, network := range vpnNetworks {
+		vpnAddrs[i] = network.Addr()
+		if f.myVpnNetworksTable.Contains(network.Addr()) {
+			anyVpnAddrsInCommon = true
 		}
-
-		filteredNetworks = append(filteredNetworks, network)
-		vpnAddrs = append(vpnAddrs, vpnAddr)
-	}
-
-	if len(vpnAddrs) == 0 {
-		f.l.WithError(err).WithField("udpAddr", addr).
-			WithField("certName", certName).
-			WithField("certVersion", certVersion).
-			WithField("fingerprint", fingerprint).
-			WithField("issuer", issuer).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).Error("No usable vpn addresses from host, refusing handshake")
-		return true
+		if hostinfo.vpnAddrs[0] == network.Addr() {
+			// todo is it more correct to see if any of hostinfo.vpnAddrs are in the cert? it should have len==1, but one day it might not?
+			correctHostResponded = true
+		}
 	}
 
 	// Ensure the right host responded
-	if !slices.Contains(vpnAddrs, hostinfo.vpnAddrs[0]) {
+	if !correctHostResponded {
 		f.l.WithField("intendedVpnAddrs", hostinfo.vpnAddrs).WithField("haveVpnNetworks", vpnNetworks).
 			WithField("udpAddr", addr).
 			WithField("certName", certName).
@@ -618,6 +598,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		f.handshakeManager.DeleteHostInfo(hostinfo)
 
 		// Create a new hostinfo/handshake for the intended vpn ip
+		//TODO is hostinfo.vpnAddrs[0] always the address to use?
 		f.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], func(newHH *HandshakeHostInfo) {
 			// Block the current used address
 			newHH.hostinfo.remotes = hostinfo.remotes
@@ -644,7 +625,7 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 	ci.window.Update(f.l, 2)
 
 	duration := time.Since(hh.startTime).Nanoseconds()
-	f.l.WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", addr).
+	msgRxL := f.l.WithField("vpnAddrs", vpnAddrs).WithField("udpAddr", addr).
 		WithField("certName", certName).
 		WithField("certVersion", certVersion).
 		WithField("fingerprint", fingerprint).
@@ -652,12 +633,17 @@ func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via *ViaSender, hh *Ha
 		WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
 		WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 		WithField("durationNs", duration).
-		WithField("sentCachedPackets", len(hh.packetStore)).
-		Info("Handshake message received")
+		WithField("sentCachedPackets", len(hh.packetStore))
+	if anyVpnAddrsInCommon {
+		msgRxL.Info("Handshake message received")
+	} else {
+		//todo warn if not lighthouse or relay?
+		msgRxL.Info("Handshake message received, but no vpnNetworks in common.")
+	}
 
 	// Build up the radix for the firewall if we have subnets in the cert
 	hostinfo.vpnAddrs = vpnAddrs
-	hostinfo.buildNetworks(f.myVpnNetworksTable, filteredNetworks, remoteCert.Certificate.UnsafeNetworks())
+	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
 
 	// Complete our handshake and update metrics, this will replace any existing tunnels for the vpnAddrs here
 	f.handshakeManager.Complete(hostinfo, f)

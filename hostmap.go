@@ -742,26 +742,25 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote netip.AddrPort) b
 	return false
 }
 
-func (i *HostInfo) buildNetworks(myVpnNetworksTable *bart.Lite, networks, unsafeNetworks []netip.Prefix) {
-	if len(networks) == 1 && len(unsafeNetworks) == 0 {
-		if myVpnNetworksTable.Contains(networks[0].Addr()) {
+// buildNetworks fills in the networks field of HostInfo. It accepts a cert.Certificate so you never ever mix the network types up.
+func (i *HostInfo) buildNetworks(myVpnNetworksTable *bart.Lite, c cert.Certificate) {
+	if len(c.Networks()) == 1 && len(c.UnsafeNetworks()) == 0 {
+		if myVpnNetworksTable.Contains(c.Networks()[0].Addr()) {
 			return // Simple case, no CIDRTree needed
 		}
 	}
 
 	i.networks = new(bart.Table[NetworkType])
-	for _, network := range networks {
-		var nwType NetworkType
-		if myVpnNetworksTable.Contains(network.Addr()) {
-			nwType = NetworkTypeVPN
-		} else {
-			nwType = NetworkTypeVPNPeer
-		}
+	for _, network := range c.Networks() {
 		nprefix := netip.PrefixFrom(network.Addr(), network.Addr().BitLen())
-		i.networks.Insert(nprefix, nwType)
+		if myVpnNetworksTable.Contains(network.Addr()) {
+			i.networks.Insert(nprefix, NetworkTypeVPN)
+		} else {
+			i.networks.Insert(nprefix, NetworkTypeVPNPeer)
+		}
 	}
 
-	for _, network := range unsafeNetworks {
+	for _, network := range c.UnsafeNetworks() {
 		i.networks.Insert(network, NetworkTypeUnsafe)
 	}
 }

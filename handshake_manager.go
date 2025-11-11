@@ -269,12 +269,12 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		hostinfo.logger(hm.l).WithField("relays", hostinfo.remotes.relays).Info("Attempt to relay through hosts")
 		// Send a RelayRequest to all known Relay IP's
 		for _, relay := range hostinfo.remotes.relays {
-			// Don't relay to myself
+			// Don't relay through the host I'm trying to connect to
 			if relay == vpnIp {
 				continue
 			}
 
-			// Don't relay through the host I'm trying to connect to
+			// Don't relay to myself
 			if hm.f.myVpnAddrsTable.Contains(relay) {
 				continue
 			}
