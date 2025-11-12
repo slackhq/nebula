@@ -746,7 +746,7 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote netip.AddrPort) b
 func (i *HostInfo) buildNetworks(myVpnNetworksTable *bart.Lite, c cert.Certificate) {
 	if len(c.Networks()) == 1 && len(c.UnsafeNetworks()) == 0 {
 		if myVpnNetworksTable.Contains(c.Networks()[0].Addr()) {
-			return // Simple case, no CIDRTree needed
+			return // Simple case, no BART needed
 		}
 	}
 
