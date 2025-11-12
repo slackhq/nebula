@@ -433,7 +433,7 @@ func (lh *LightHouse) loadStaticMap(c *config.C, staticList map[netip.Addr]struc
 
 		if !lh.myVpnNetworksTable.Contains(vpnAddr) {
 			lh.l.WithFields(m{"vpnAddr": vpnAddr, "networks": lh.myVpnNetworks, "entry": i + 1}).
-				Warn("static_host_map key is not in our network, this might be a mistake")
+				Warn("static_host_map key is not within our networks, layer 3 network traffic to this host will not work")
 		}
 
 		vals, ok := v.([]any)
