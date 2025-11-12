@@ -418,8 +418,8 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 }
 
 var ErrUnknownNetworkType = errors.New("unknown network type")
-var ErrPeerRejected = errors.New("remote address is not within a subnet that we handle")
-var ErrInvalidRemoteIP = errors.New("remote address is not in remote certificate subnets")
+var ErrPeerRejected = errors.New("remote address is not within a network that we handle")
+var ErrInvalidRemoteIP = errors.New("remote address is not in remote certificate networks")
 var ErrInvalidLocalIP = errors.New("local address is not in list of handled local addresses")
 var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
