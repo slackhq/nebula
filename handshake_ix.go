@@ -23,13 +23,17 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 		return false
 	}
 
-	// If we're connecting to a v6 address we must use a v2 cert
 	cs := f.pki.getCertState()
 	v := cs.initiatingVersion
-	for _, a := range hh.hostinfo.vpnAddrs {
-		if a.Is6() {
-			v = cert.Version2
-			break
+	if hh.initiatingVersionOverride != cert.VersionPre1 {
+		v = hh.initiatingVersionOverride
+	} else if v < cert.Version2 {
+		// If we're connecting to a v6 address we should encourage use of a V2 cert
+		for _, a := range hh.hostinfo.vpnAddrs {
+			if a.Is6() {
+				v = cert.Version2
+				break
+			}
 		}
 	}
 
@@ -48,6 +52,7 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).
 			WithField("certVersion", v).
 			Error("Unable to handshake with host because no certificate handshake bytes is available")
+		return false
 	}
 
 	ci, err := NewConnectionState(f.l, cs, crt, true, noise.HandshakeIX)
@@ -103,6 +108,7 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).
 			WithField("certVersion", cs.initiatingVersion).
 			Error("Unable to handshake with host because no certificate is available")
+		return
 	}
 
 	ci, err := NewConnectionState(f.l, cs, crt, false, noise.HandshakeIX)
@@ -143,8 +149,8 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 
 	remoteCert, err := f.pki.GetCAPool().VerifyCertificate(time.Now(), rc)
 	if err != nil {
-		fp, err := rc.Fingerprint()
-		if err != nil {
+		fp, fperr := rc.Fingerprint()
+		if fperr != nil {
 			fp = "<error generating certificate fingerprint>"
 		}
 
@@ -163,16 +169,19 @@ func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via *ViaSender, packet
 
 	if remoteCert.Certificate.Version() != ci.myCert.Version() {
 		// We started off using the wrong certificate version, lets see if we can match the version that was sent to us
-		rc := cs.getCertificate(remoteCert.Certificate.Version())
-		if rc == nil {
-			f.l.WithError(err).WithField("udpAddr", addr).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).WithField("cert", remoteCert).
-				Info("Unable to handshake with host due to missing certificate version")
-			return
+		myCertOtherVersion := cs.getCertificate(remoteCert.Certificate.Version())
+		if myCertOtherVersion == nil {
+			if f.l.Level >= logrus.DebugLevel {
+				f.l.WithError(err).WithFields(m{
+					"udpAddr":   addr,
+					"handshake": m{"stage": 1, "style": "ix_psk0"},
+					"cert":      remoteCert,
+				}).Debug("Might be unable to handshake with host due to missing certificate version")
+			}
+		} else {
+			// Record the certificate we are actually using
+			ci.myCert = myCertOtherVersion
 		}
-
-		// Record the certificate we are actually using
-		ci.myCert = rc
 	}
 
 	if len(remoteCert.Certificate.Networks()) == 0 {
