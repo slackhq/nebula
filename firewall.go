@@ -418,9 +418,9 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 }
 
 var ErrUnknownNetworkType = errors.New("unknown network type")
-var ErrPeerRejected = errors.New("remote IP is not within a subnet that we handle")
-var ErrInvalidRemoteIP = errors.New("remote IP is not in remote certificate subnets")
-var ErrInvalidLocalIP = errors.New("local IP is not in list of handled local IPs")
+var ErrPeerRejected = errors.New("remote address is not within a subnet that we handle")
+var ErrInvalidRemoteIP = errors.New("remote address is not in remote certificate subnets")
+var ErrInvalidLocalIP = errors.New("local address is not in list of handled local addresses")
 var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
 // Drop returns an error if the packet should be dropped, explaining why. It
