@@ -361,7 +361,7 @@ func (lh *LightHouse) parseLighthouses(c *config.C) ([]netip.Addr, error) {
 
 		if !lh.myVpnNetworksTable.Contains(addr) {
 			lh.l.WithFields(m{"vpnAddr": addr, "networks": lh.myVpnNetworks}).
-				Warn("lighthouse host is not in our networks, this might be a mistake")
+				Warn("lighthouse host is not within our networks, lighthouse functionality will work but layer 3 network traffic to the lighthouse will not")
 		}
 		out[i] = addr
 	}
