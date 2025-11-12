@@ -22,6 +22,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/e2e/router"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -29,8 +30,6 @@ type m = map[string]any
 
 // newSimpleServer creates a nebula instance with many assumptions
 func newSimpleServer(v cert.Version, caCrt cert.Certificate, caKey []byte, name string, sVpnNetworks string, overrides m) (*nebula.Control, []netip.Prefix, netip.AddrPort, *config.C) {
-	l := NewTestLogger()
-
 	var vpnNetworks []netip.Prefix
 	for _, sn := range strings.Split(sVpnNetworks, ",") {
 		vpnIpNet, err := netip.ParsePrefix(strings.TrimSpace(sn))
@@ -56,7 +55,54 @@ func newSimpleServer(v cert.Version, caCrt cert.Certificate, caKey []byte, name 
 		budpIp[3] = 239
 		udpAddr = netip.AddrPortFrom(netip.AddrFrom16(budpIp), 4242)
 	}
-	_, _, myPrivKey, myPEM := cert_test.NewTestCert(v, cert.Curve_CURVE25519, caCrt, caKey, name, time.Now(), time.Now().Add(5*time.Minute), vpnNetworks, nil, []string{})
+	return newSimpleServerWithUdp(v, caCrt, caKey, name, sVpnNetworks, udpAddr, overrides)
+}
+
+func newSimpleServerWithUdp(v cert.Version, caCrt cert.Certificate, caKey []byte, name string, sVpnNetworks string, udpAddr netip.AddrPort, overrides m) (*nebula.Control, []netip.Prefix, netip.AddrPort, *config.C) {
+	return newSimpleServerWithUdpAndUnsafeNetworks(v, caCrt, caKey, name, sVpnNetworks, udpAddr, "", overrides)
+}
+
+func newSimpleServerWithUdpAndUnsafeNetworks(v cert.Version, caCrt cert.Certificate, caKey []byte, name string, sVpnNetworks string, udpAddr netip.AddrPort, sUnsafeNetworks string, overrides m) (*nebula.Control, []netip.Prefix, netip.AddrPort, *config.C) {
+	l := NewTestLogger()
+
+	var vpnNetworks []netip.Prefix
+	for _, sn := range strings.Split(sVpnNetworks, ",") {
+		vpnIpNet, err := netip.ParsePrefix(strings.TrimSpace(sn))
+		if err != nil {
+			panic(err)
+		}
+		vpnNetworks = append(vpnNetworks, vpnIpNet)
+	}
+
+	if len(vpnNetworks) == 0 {
+		panic("no vpn networks")
+	}
+
+	firewallInbound := []m{{
+		"proto": "any",
+		"port":  "any",
+		"host":  "any",
+	}}
+
+	var unsafeNetworks []netip.Prefix
+	if sUnsafeNetworks != "" {
+		firewallInbound = []m{{
+			"proto":      "any",
+			"port":       "any",
+			"host":       "any",
+			"local_cidr": "0.0.0.0/0",
+		}}
+
+		for _, sn := range strings.Split(sUnsafeNetworks, ",") {
+			x, err := netip.ParsePrefix(strings.TrimSpace(sn))
+			if err != nil {
+				panic(err)
+			}
+			unsafeNetworks = append(unsafeNetworks, x)
+		}
+	}
+
+	_, _, myPrivKey, myPEM := cert_test.NewTestCert(v, cert.Curve_CURVE25519, caCrt, caKey, name, time.Now(), time.Now().Add(5*time.Minute), vpnNetworks, unsafeNetworks, []string{})
 
 	caB, err := caCrt.MarshalPEM()
 	if err != nil {
@@ -76,11 +122,7 @@ func newSimpleServer(v cert.Version, caCrt cert.Certificate, caKey []byte, name 
 				"port":  "any",
 				"host":  "any",
 			}},
-			"inbound": []m{{
-				"proto": "any",
-				"port":  "any",
-				"host":  "any",
-			}},
+			"inbound": firewallInbound,
 		},
 		//"handshakes": m{
 		//	"try_interval": "1s",
@@ -266,10 +308,10 @@ func assertHostInfoPair(t *testing.T, addrA, addrB netip.AddrPort, vpnNetsA, vpn
 	// Get both host infos
 	//TODO: CERT-V2 we may want to loop over each vpnAddr and assert all the things
 	hBinA := controlA.GetHostInfoByVpnAddr(vpnNetsB[0].Addr(), false)
-	assert.NotNil(t, hBinA, "Host B was not found by vpnAddr in controlA")
+	require.NotNil(t, hBinA, "Host B was not found by vpnAddr in controlA")
 
 	hAinB := controlB.GetHostInfoByVpnAddr(vpnNetsA[0].Addr(), false)
-	assert.NotNil(t, hAinB, "Host A was not found by vpnAddr in controlB")
+	require.NotNil(t, hAinB, "Host A was not found by vpnAddr in controlB")
 
 	// Check that both vpn and real addr are correct
 	assert.EqualValues(t, getAddrs(vpnNetsB), hBinA.VpnAddrs, "Host B VpnIp is wrong in control A")

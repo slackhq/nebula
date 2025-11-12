@@ -417,8 +417,10 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 	return nil
 }
 
-var ErrInvalidRemoteIP = errors.New("remote IP is not in remote certificate subnets")
-var ErrInvalidLocalIP = errors.New("local IP is not in list of handled local IPs")
+var ErrUnknownNetworkType = errors.New("unknown network type")
+var ErrPeerRejected = errors.New("remote address is not within a network that we handle")
+var ErrInvalidRemoteIP = errors.New("remote address is not in remote certificate networks")
+var ErrInvalidLocalIP = errors.New("local address is not in list of handled local addresses")
 var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
 // Drop returns an error if the packet should be dropped, explaining why. It
@@ -429,17 +431,30 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 		return nil
 	}
 
-	// Make sure remote address matches nebula certificate
-	if h.networks != nil {
-		if !h.networks.Contains(fp.RemoteAddr) {
-			f.metrics(incoming).droppedRemoteAddr.Inc(1)
-			return ErrInvalidRemoteIP
-		}
-	} else {
+	// Make sure remote address matches nebula certificate, and determine how to treat it
+	if h.networks == nil {
 		// Simple case: Certificate has one address and no unsafe networks
 		if h.vpnAddrs[0] != fp.RemoteAddr {
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrInvalidRemoteIP
+		}
+	} else {
+		nwType, ok := h.networks.Lookup(fp.RemoteAddr)
+		if !ok {
+			f.metrics(incoming).droppedRemoteAddr.Inc(1)
+			return ErrInvalidRemoteIP
+		}
+		switch nwType {
+		case NetworkTypeVPN:
+			break // nothing special
+		case NetworkTypeVPNPeer:
+			f.metrics(incoming).droppedRemoteAddr.Inc(1)
+			return ErrPeerRejected // reject for now, one day this may have different FW rules
+		case NetworkTypeUnsafe:
+			break // nothing special, one day this may have different FW rules
+		default:
+			f.metrics(incoming).droppedRemoteAddr.Inc(1)
+			return ErrUnknownNetworkType //should never happen
 		}
 	}
 
