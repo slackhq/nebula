@@ -308,7 +308,7 @@ func (u *StdConn) writeMulti4(packets [][]byte, addrs []netip.AddrPort) (int, er
 
 			// Setup the packet buffer
 			iovecs[i].Base = &packets[pktIdx][0]
-			iovecs[i].Len = uint64(len(packets[pktIdx]))
+			iovecs[i].Len = uint(len(packets[pktIdx]))
 
 			// Setup the destination address
 			rsa := (*unix.RawSockaddrInet4)(unsafe.Pointer(&names[i][0]))
@@ -365,7 +365,7 @@ func (u *StdConn) writeMulti6(packets [][]byte, addrs []netip.AddrPort) (int, er
 
 			// Setup the packet buffer
 			iovecs[i].Base = &packets[pktIdx][0]
-			iovecs[i].Len = uint64(len(packets[pktIdx]))
+			iovecs[i].Len = uint(len(packets[pktIdx]))
 
 			// Setup the destination address
 			rsa := (*unix.RawSockaddrInet6)(unsafe.Pointer(&names[i][0]))
