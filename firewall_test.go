@@ -104,13 +104,13 @@ func TestFirewall_AddRule(t *testing.T) {
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 	require.NoError(t, fw.AddRule(false, firewall.ProtoAny, 1, 1, []string{}, "", netip.Prefix{}, ti, "", ""))
 	assert.NotNil(t, fw.OutRules.AnyProto[1].Any.Any)
-	_, ok = fw.OutRules.AnyProto[1].Any.Any.LocalCIDR.Get(ti)
+	ok = fw.OutRules.AnyProto[1].Any.Any.LocalCIDR.Get(ti)
 	assert.True(t, ok)
 
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 	require.NoError(t, fw.AddRule(false, firewall.ProtoAny, 1, 1, []string{}, "", netip.Prefix{}, ti6, "", ""))
 	assert.NotNil(t, fw.OutRules.AnyProto[1].Any.Any)
-	_, ok = fw.OutRules.AnyProto[1].Any.Any.LocalCIDR.Get(ti6)
+	ok = fw.OutRules.AnyProto[1].Any.Any.LocalCIDR.Get(ti6)
 	assert.True(t, ok)
 
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
