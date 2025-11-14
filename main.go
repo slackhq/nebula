@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -26,6 +28,10 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			cancel()
 		}
 	}()
+
+	if buildVersion == "" {
+		buildVersion = moduleVersion()
+	}
 
 	l := logger
 	l.Formatter = &logrus.TextFormatter{
@@ -295,4 +301,19 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		lightHouse.StartUpdateWorker,
 		connManager.Start,
 	}, nil
+}
+
+func moduleVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+
+	for _, dep := range info.Deps {
+		if dep.Path == "github.com/slackhq/nebula" {
+			return strings.TrimPrefix(dep.Version, "v")
+		}
+	}
+
+	return ""
 }
