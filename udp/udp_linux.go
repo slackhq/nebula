@@ -151,12 +151,16 @@ func (u *StdConn) ListenOut(r EncReader) {
 		read = u.ReadSingle
 	}
 
+	udpBatchHist := metrics.GetOrRegisterHistogram("batch.udp_read_size", nil, metrics.NewUniformSample(1024))
+
 	for {
 		n, err := read(msgs)
 		if err != nil {
 			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
 			return
 		}
+
+		udpBatchHist.Update(int64(n))
 
 		for i := 0; i < n; i++ {
 			// Its ok to skip the ok check here, the slicing is the only error that can occur and it will panic

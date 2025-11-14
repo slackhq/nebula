@@ -347,6 +347,8 @@ func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchRe
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
+	tunBatchHist := metrics.GetOrRegisterHistogram("batch.tun_read_size", nil, metrics.NewUniformSample(1024))
+
 	for {
 		n, err := batchReader.BatchRead(bufs, sizes)
 		if err != nil {
@@ -358,6 +360,8 @@ func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchRe
 			// This only seems to happen when something fatal happens to the fd, so exit.
 			os.Exit(2)
 		}
+
+		tunBatchHist.Update(int64(n))
 
 		// Process all packets in the batch at once
 		f.consumeInsidePackets(bufs, sizes, n, outs, i, conntrackCache.Get(f.l), &batchPackets, &batchAddrs)

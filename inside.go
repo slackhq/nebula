@@ -3,6 +3,7 @@ package nebula
 import (
 	"net/netip"
 
+	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
@@ -145,9 +146,12 @@ func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count in
 
 	// Send all accumulated packets in one batch
 	if len(*batchPackets) > 0 {
+		batchSize := len(*batchPackets)
+		metrics.GetOrRegisterHistogram("batch.udp_write_size", nil, metrics.NewUniformSample(1024)).Update(int64(batchSize))
+
 		n, err := f.writers[q].WriteMulti(*batchPackets, *batchAddrs)
 		if err != nil {
-			f.l.WithError(err).WithField("sent", n).WithField("total", len(*batchPackets)).Error("Failed to send batch")
+			f.l.WithError(err).WithField("sent", n).WithField("total", batchSize).Error("Failed to send batch")
 		}
 	}
 }

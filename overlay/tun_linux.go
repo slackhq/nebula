@@ -128,6 +128,7 @@ func (w *wgDeviceWrapper) Close() error {
 
 // BatchRead implements batching for multiqueue readers
 func (w *wgDeviceWrapper) BatchRead(bufs [][]byte, sizes []int) (int, error) {
+	// The zero here is offset.
 	return w.dev.Read(bufs, sizes, 0)
 }
 
