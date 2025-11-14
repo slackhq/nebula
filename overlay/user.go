@@ -1,11 +1,13 @@
 package overlay
 
 import (
+	"fmt"
 	"io"
 	"net/netip"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/packet"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -46,7 +48,7 @@ func (d *UserDevice) RoutesFor(ip netip.Addr) routing.Gateways {
 	return routing.Gateways{routing.NewGateway(ip, 1)}
 }
 
-func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (d *UserDevice) NewMultiQueueReader() (TunDev, error) {
 	return d, nil
 }
 
@@ -64,4 +66,20 @@ func (d *UserDevice) Close() error {
 	d.inboundWriter.Close()
 	d.outboundWriter.Close()
 	return nil
+}
+
+func (d *UserDevice) ReadMany(b []*packet.VirtIOPacket, _ int) (int, error) {
+	return d.Read(b[0].Payload)
+}
+
+func (d *UserDevice) AllocSeg(pkt *packet.OutPacket, q int) (int, error) {
+	return 0, fmt.Errorf("user: AllocSeg not implemented")
+}
+
+func (d *UserDevice) WriteOne(x *packet.OutPacket, kick bool, q int) (int, error) {
+	return 0, fmt.Errorf("user: WriteOne not implemented")
+}
+
+func (d *UserDevice) WriteMany(x []*packet.OutPacket, q int) (int, error) {
+	return 0, fmt.Errorf("user: WriteMany not implemented")
 }
