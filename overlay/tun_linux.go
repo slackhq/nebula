@@ -592,28 +592,21 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 	}
 
 	// If this route is relevant to our interface and there is a gateway then add it
-	if r.LinkIndex == link.Attrs().Index && len(r.Gw) > 0 {
-		gwAddr, ok := netip.AddrFromSlice(r.Gw)
-		if !ok {
-			t.l.WithField("route", r).Debug("Ignoring route update, invalid gateway address")
-		} else {
-			gwAddr = gwAddr.Unmap()
-
-			if !t.isGatewayInVpnNetworks(gwAddr) {
-				// Gateway isn't in our overlay network, ignore
-				t.l.WithField("route", r).Debug("Ignoring route update, not in our network")
+	if r.LinkIndex == link.Attrs().Index {
+		var gw net.IP = r.Gw
+		if len(gw) == 0 && r.Via != nil {
+			via, ok := r.Via.(*netlink.Via)
+			if !ok {
+				t.l.WithField("route", r).Debug("Ignoring route update, invalid via type")
 			} else {
-				gateways = append(gateways, routing.NewGateway(gwAddr, 1))
+				gw = via.Addr
 			}
 		}
-	}
 
-	for _, p := range r.MultiPath {
-		// If this route is relevant to our interface and there is a gateway then add it
-		if p.LinkIndex == link.Attrs().Index && len(p.Gw) > 0 {
-			gwAddr, ok := netip.AddrFromSlice(p.Gw)
+		if len(gw) > 0 {
+			gwAddr, ok := netip.AddrFromSlice(gw)
 			if !ok {
-				t.l.WithField("route", r).Debug("Ignoring multipath route update, invalid gateway address")
+				t.l.WithField("route", r).Debug("Ignoring route update, invalid gateway address")
 			} else {
 				gwAddr = gwAddr.Unmap()
 
@@ -621,8 +614,39 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 					// Gateway isn't in our overlay network, ignore
 					t.l.WithField("route", r).Debug("Ignoring route update, not in our network")
 				} else {
-					// p.Hops+1 = weight of the route
-					gateways = append(gateways, routing.NewGateway(gwAddr, p.Hops+1))
+					gateways = append(gateways, routing.NewGateway(gwAddr, 1))
+				}
+			}
+		}
+	}
+
+	for _, p := range r.MultiPath {
+		// If this route is relevant to our interface and there is a gateway then add it
+		if p.LinkIndex == link.Attrs().Index {
+			var gw net.IP = p.Gw
+			if len(gw) == 0 && p.Via != nil {
+				via, ok := p.Via.(*netlink.Via)
+				if !ok {
+					t.l.WithField("route", r).Debug("Ignoring multipath route update, invalid via type")
+				} else {
+					gw = via.Addr
+				}
+			}
+
+			if len(gw) > 0 {
+				gwAddr, ok := netip.AddrFromSlice(gw)
+				if !ok {
+					t.l.WithField("route", r).Debug("Ignoring multipath route update, invalid gateway address")
+				} else {
+					gwAddr = gwAddr.Unmap()
+
+					if !t.isGatewayInVpnNetworks(gwAddr) {
+						// Gateway isn't in our overlay network, ignore
+						t.l.WithField("route", r).Debug("Ignoring route update, not in our network")
+					} else {
+						// p.Hops+1 = weight of the route
+						gateways = append(gateways, routing.NewGateway(gwAddr, p.Hops+1))
+					}
 				}
 			}
 		}
