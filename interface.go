@@ -276,11 +276,31 @@ func (f *Interface) listenOut(i int) {
 	})
 }
 
+// BatchReader is an interface for devices that support reading multiple packets at once
+type BatchReader interface {
+	BatchRead(bufs [][]byte, sizes []int) (int, error)
+	BatchSize() int
+}
+
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	runtime.LockOSThread()
 
+	// Check if reader supports batching
+	batchReader, supportsBatching := reader.(BatchReader)
+
+	if supportsBatching {
+		f.listenInBatch(reader, batchReader, i)
+	} else {
+		f.listenInSingle(reader, i)
+	}
+}
+
+func (f *Interface) listenInSingle(reader io.ReadWriteCloser, i int) {
 	packet := make([]byte, mtu)
-	out := make([]byte, mtu)
+	// Allocate out buffer with virtio header headroom (10 bytes) to avoid copies on write
+	const virtioNetHdrLen = 10
+	outBuf := make([]byte, virtioNetHdrLen+mtu)
+	out := outBuf[virtioNetHdrLen:] // Use slice starting after headroom
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
@@ -299,6 +319,48 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 		}
 
 		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
+	}
+}
+
+func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchReader, i int) {
+	batchSize := batchReader.BatchSize()
+	const virtioNetHdrLen = 10
+
+	// Allocate buffers for batch reading
+	bufs := make([][]byte, batchSize)
+	for idx := range bufs {
+		bufs[idx] = make([]byte, mtu)
+	}
+	sizes := make([]int, batchSize)
+
+	// Allocate output buffers for batch processing (one per packet)
+	// Each has virtio header headroom to avoid copies on write
+	outs := make([][]byte, batchSize)
+	for idx := range outs {
+		outBuf := make([]byte, virtioNetHdrLen+mtu)
+		outs[idx] = outBuf[virtioNetHdrLen:] // Slice starting after headroom
+	}
+
+	// Pre-allocate batch accumulation buffers for sending
+	batchPackets := make([][]byte, 0, batchSize)
+	batchAddrs := make([]netip.AddrPort, 0, batchSize)
+
+	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
+
+	for {
+		n, err := batchReader.BatchRead(bufs, sizes)
+		if err != nil {
+			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
+				return
+			}
+
+			f.l.WithError(err).Error("Error while batch reading outbound packets")
+			// This only seems to happen when something fatal happens to the fd, so exit.
+			os.Exit(2)
+		}
+
+		// Process all packets in the batch at once
+		f.consumeInsidePackets(bufs, sizes, n, outs, i, conntrackCache.Get(f.l), &batchPackets, &batchAddrs)
 	}
 }
 
