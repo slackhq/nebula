@@ -177,10 +177,10 @@ func Test_ca(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-version", "1", "-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
-	os.Setenv("CA_PASSPHRASE", string(passphrase))
+	os.Setenv("NEBULA_CA_PASSPHRASE", string(passphrase))
 	require.NoError(t, ca(args, ob, eb, testpw))
 	assert.Empty(t, eb.String())
-	os.Setenv("CA_PASSPHRASE", "")
+	os.Setenv("NEBULA_CA_PASSPHRASE", "")
 
 	// read encrypted key file and verify default params
 	rb, _ = os.ReadFile(keyF.Name())

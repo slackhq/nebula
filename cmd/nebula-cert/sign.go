@@ -117,7 +117,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		caKey, _, curve, err = cert.UnmarshalSigningPrivateKeyFromPEM(rawCAKey)
 		if errors.Is(err, cert.ErrPrivateKeyEncrypted) {
 			var passphrase []byte
-			passphrase = []byte(os.Getenv("CA_PASSPHRASE"))
+			passphrase = []byte(os.Getenv("NEBULA_CA_PASSPHRASE"))
 			if len(passphrase) == 0 {
 				// ask for a passphrase until we get one
 				for i := 0; i < 5; i++ {

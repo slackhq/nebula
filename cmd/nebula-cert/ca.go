@@ -173,7 +173,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 
 	var passphrase []byte
 	if !isP11 && *cf.encryption {
-		passphrase = []byte(os.Getenv("CA_PASSPHRASE"))
+		passphrase = []byte(os.Getenv("NEBULA_CA_PASSPHRASE"))
 		if len(passphrase) == 0 {
 			for i := 0; i < 5; i++ {
 				out.Write([]byte("Enter passphrase: "))

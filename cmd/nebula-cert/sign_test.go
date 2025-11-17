@@ -383,10 +383,10 @@ func Test_signCert(t *testing.T) {
 	os.Remove(crtF.Name())
 	os.Remove(keyF.Name())
 	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", crtF.Name(), "-out-key", keyF.Name(), "-duration", "100m", "-subnets", "10.1.1.1/32, ,   10.2.2.2/32   ,   ,  ,, 10.5.5.5/32", "-groups", "1,,   2    ,        ,,,3,4,5"}
-	os.Setenv("CA_PASSPHRASE", string(passphrase))
+	os.Setenv("NEBULA_CA_PASSPHRASE", string(passphrase))
 	require.NoError(t, signCert(args, ob, eb, testpw))
 	assert.Empty(t, eb.String())
-	os.Setenv("CA_PASSPHRASE", "")
+	os.Setenv("NEBULA_CA_PASSPHRASE", "")
 
 	// test with the wrong password
 	ob.Reset()
@@ -402,12 +402,12 @@ func Test_signCert(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 
-	os.Setenv("CA_PASSPHRASE", "invalid password")
+	os.Setenv("NEBULA_CA_PASSPHRASE", "invalid password")
 	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", crtF.Name(), "-out-key", keyF.Name(), "-duration", "100m", "-subnets", "10.1.1.1/32, ,   10.2.2.2/32   ,   ,  ,, 10.5.5.5/32", "-groups", "1,,   2    ,        ,,,3,4,5"}
 	require.EqualError(t, signCert(args, ob, eb, nopw), "error while parsing encrypted ca-key: invalid passphrase or corrupt private key")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
-	os.Setenv("CA_PASSPHRASE", "")
+	os.Setenv("NEBULA_CA_PASSPHRASE", "")
 
 	// test with the user not entering a password
 	ob.Reset()
