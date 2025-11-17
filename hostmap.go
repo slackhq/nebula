@@ -1,7 +1,9 @@
 package nebula
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"slices"
@@ -276,9 +278,25 @@ type HostInfo struct {
 }
 
 type ViaSender struct {
+	UdpAddr   netip.AddrPort
 	relayHI   *HostInfo // relayHI is the host info object of the relay
 	remoteIdx uint32    // remoteIdx is the index included in the header of the received packet
 	relay     *Relay    // relay contains the rest of the relay information, including the PeerIP of the host trying to communicate with us.
+	IsRelayed bool      // IsRelayed is true if the packet was sent through a relay
+}
+
+func (v ViaSender) String() string {
+	if v.IsRelayed {
+		return fmt.Sprintf("%s (relayed)", v.UdpAddr)
+	}
+	return v.UdpAddr.String()
+}
+
+func (v ViaSender) MarshalJSON() ([]byte, error) {
+	if v.IsRelayed {
+		return json.Marshal(m{"direct": v.UdpAddr})
+	}
+	return json.Marshal(m{"relay": v.UdpAddr})
 }
 
 type cachedPacket struct {
@@ -694,6 +712,7 @@ func (i *HostInfo) GetCert() *cert.CachedCertificate {
 	return nil
 }
 
+// TODO: Maybe use ViaSender here?
 func (i *HostInfo) SetRemote(remote netip.AddrPort) {
 	// We copy here because we likely got this remote from a source that reuses the object
 	if i.remote != remote {
@@ -704,14 +723,14 @@ func (i *HostInfo) SetRemote(remote netip.AddrPort) {
 
 // SetRemoteIfPreferred returns true if the remote was changed. The lastRoam
 // time on the HostInfo will also be updated.
-func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote netip.AddrPort) bool {
-	if !newRemote.IsValid() {
-		// relays have nil udp Addrs
+func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, via ViaSender) bool {
+	if via.IsRelayed {
 		return false
 	}
+
 	currentRemote := i.remote
 	if !currentRemote.IsValid() {
-		i.SetRemote(newRemote)
+		i.SetRemote(via.UdpAddr)
 		return true
 	}
 
@@ -724,7 +743,7 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote netip.AddrPort) b
 			return false
 		}
 
-		if l.Contains(newRemote.Addr()) {
+		if l.Contains(via.UdpAddr.Addr()) {
 			newIsPreferred = true
 		}
 	}
@@ -734,7 +753,7 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote netip.AddrPort) b
 		i.lastRoam = time.Now()
 		i.lastRoamRemote = currentRemote
 
-		i.SetRemote(newRemote)
+		i.SetRemote(via.UdpAddr)
 
 		return true
 	}
