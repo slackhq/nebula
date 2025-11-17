@@ -1,0 +1,37 @@
+package packet
+
+import (
+	"github.com/slackhq/nebula/util/virtio"
+)
+
+type VirtIOPacket struct {
+	Payload   []byte
+	Header    virtio.NetHdr
+	Chains    []uint16
+	ChainRefs [][]byte
+	// OfferDescriptorChains(chains []uint16, kick bool) error
+}
+
+func NewVIO() *VirtIOPacket {
+	out := new(VirtIOPacket)
+	out.Payload = nil
+	out.ChainRefs = make([][]byte, 0, 4)
+	out.Chains = make([]uint16, 0, 8)
+	return out
+}
+
+func (v *VirtIOPacket) Reset() {
+	v.Payload = nil
+	v.ChainRefs = v.ChainRefs[:0]
+	v.Chains = v.Chains[:0]
+}
+
+type VirtIOTXPacket struct {
+	VirtIOPacket
+}
+
+func NewVIOTX(isV4 bool) *VirtIOTXPacket {
+	out := new(VirtIOTXPacket)
+	out.VirtIOPacket = *NewVIO()
+	return out
+}

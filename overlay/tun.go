@@ -2,15 +2,28 @@ package overlay
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/packet"
 	"github.com/slackhq/nebula/util"
 )
 
 const DefaultMTU = 1300
+
+type TunDev interface {
+	io.WriteCloser
+	ReadMany(x []*packet.VirtIOPacket, q int) (int, error)
+
+	//todo this interface sux
+	AllocSeg(pkt *packet.OutPacket, q int) (int, error)
+	WriteOne(x *packet.OutPacket, kick bool, q int) (int, error)
+	WriteMany(x []*packet.OutPacket, q int) (int, error)
+	RecycleRxSeg(pkt *packet.VirtIOPacket, kick bool, q int) error
+}
 
 // TODO: We may be able to remove routines
 type DeviceFactory func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error)
@@ -26,11 +39,11 @@ func NewDeviceFromConfig(c *config.C, l *logrus.Logger, vpnNetworks []netip.Pref
 	}
 }
 
-func NewFdDeviceFromConfig(fd *int) DeviceFactory {
-	return func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
-		return newTunFromFd(c, l, *fd, vpnNetworks)
-	}
-}
+//func NewFdDeviceFromConfig(fd *int) DeviceFactory {
+//	return func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
+//		return newTunFromFd(c, l, *fd, vpnNetworks)
+//	}
+//}
 
 func getAllRoutesFromConfig(c *config.C, vpnNetworks []netip.Prefix, initial bool) (bool, []Route, error) {
 	if !initial && !c.HasChanged("tun.routes") && !c.HasChanged("tun.unsafe_routes") {

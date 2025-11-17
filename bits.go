@@ -43,7 +43,7 @@ func (b *Bits) Check(l logrus.FieldLogger, i uint64) bool {
 	}
 
 	// Not within the window
-	l.Debugf("rejected a packet (top) %d %d\n", b.current, i)
+	l.Debugf("rejected a packet (top) %d %d delta %d\n", b.current, i, b.current-i)
 	return false
 }
 
