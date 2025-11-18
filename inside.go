@@ -21,10 +21,9 @@ import (
 // localCache: firewall conntrack cache
 // batchPackets: pre-allocated slice for accumulating encrypted packets
 // batchAddrs: pre-allocated slice for accumulating destination addresses
-func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count int, outs [][]byte, q int, localCache firewall.ConntrackCache, batchPackets *[][]byte, batchAddrs *[]netip.AddrPort) {
+func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count int, outs [][]byte, nb []byte, q int, localCache firewall.ConntrackCache, batchPackets *[][]byte, batchAddrs *[]netip.AddrPort) {
 	// Reusable per-packet state
 	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
 
 	// Reset batch accumulation slices (reuse capacity)
 	*batchPackets = (*batchPackets)[:0]

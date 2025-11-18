@@ -345,6 +345,9 @@ func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchRe
 	batchPackets := make([][]byte, 0, batchSize)
 	batchAddrs := make([]netip.AddrPort, 0, batchSize)
 
+	// Pre-allocate nonce buffer (reused for all encryptions)
+	nb := make([]byte, 12, 12)
+
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
 	tunBatchHist := metrics.GetOrRegisterHistogram("batch.tun_read_size", nil, metrics.NewUniformSample(1024))
@@ -364,7 +367,7 @@ func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchRe
 		tunBatchHist.Update(int64(n))
 
 		// Process all packets in the batch at once
-		f.consumeInsidePackets(bufs, sizes, n, outs, i, conntrackCache.Get(f.l), &batchPackets, &batchAddrs)
+		f.consumeInsidePackets(bufs, sizes, n, outs, nb, i, conntrackCache.Get(f.l), &batchPackets, &batchAddrs)
 	}
 }
 
