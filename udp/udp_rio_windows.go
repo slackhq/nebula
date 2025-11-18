@@ -315,6 +315,10 @@ func (u *RIOConn) LocalAddr() (netip.AddrPort, error) {
 
 }
 
+func (u *RIOConn) SupportsMultipleReaders() bool {
+	return false
+}
+
 func (u *RIOConn) Rebind() error {
 	return nil
 }

@@ -549,6 +549,10 @@ func (t *tun) Name() string {
 	return t.Device
 }
 
+func (t *tun) SupportsMultiqueue() bool {
+	return false
+}
+
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
 }

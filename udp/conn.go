@@ -19,6 +19,7 @@ type Conn interface {
 	ListenOut(r EncReader)
 	WriteTo(b []byte, addr netip.AddrPort) error
 	ReloadConfig(c *config.C)
+	SupportsMultipleReaders() bool
 	Close() error
 }
 
@@ -32,6 +33,9 @@ func (NoopConn) LocalAddr() (netip.AddrPort, error) {
 }
 func (NoopConn) ListenOut(_ EncReader) {
 	return
+}
+func (NoopConn) SupportsMultipleReaders() bool {
+	return false
 }
 func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {
 	return nil
