@@ -102,6 +102,11 @@ func (w *wgDeviceWrapper) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
+func (w *wgDeviceWrapper) WriteBatch(bufs [][]byte, offset int) (int, error) {
+	// Pass all buffers to WireGuard's batch write
+	return w.dev.Write(bufs, offset)
+}
+
 func (w *wgDeviceWrapper) Close() error {
 	return w.dev.Close()
 }
@@ -434,6 +439,22 @@ func (t *tun) Write(b []byte) (int, error) {
 			return nn, io.ErrUnexpectedEOF
 		}
 	}
+}
+
+// WriteBatch writes multiple packets to the TUN device in a single syscall
+func (t *tun) WriteBatch(bufs [][]byte, offset int) (int, error) {
+	if t.wgDevice != nil {
+		return t.wgDevice.Write(bufs, offset)
+	}
+
+	// Fallback: write individually (shouldn't happen in normal operation)
+	for i, buf := range bufs {
+		_, err := t.Write(buf)
+		if err != nil {
+			return i, err
+		}
+	}
+	return len(bufs), nil
 }
 
 func (t *tun) deviceBytes() (o [16]byte) {

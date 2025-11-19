@@ -174,6 +174,46 @@ func (u *StdConn) ListenOut(r EncReader) {
 	}
 }
 
+func (u *StdConn) ListenOutBatch(r EncBatchReader) {
+	var ip netip.Addr
+
+	msgs, buffers, names := u.PrepareRawMessages(u.batch)
+	read := u.ReadMulti
+	if u.batch == 1 {
+		read = u.ReadSingle
+	}
+
+	udpBatchHist := metrics.GetOrRegisterHistogram("batch.udp_read_size", nil, metrics.NewUniformSample(1024))
+
+	// Pre-allocate slices for batch callback
+	addrs := make([]netip.AddrPort, u.batch)
+	payloads := make([][]byte, u.batch)
+
+	for {
+		n, err := read(msgs)
+		if err != nil {
+			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
+			return
+		}
+
+		udpBatchHist.Update(int64(n))
+
+		// Prepare batch data
+		for i := 0; i < n; i++ {
+			if u.isV4 {
+				ip, _ = netip.AddrFromSlice(names[i][4:8])
+			} else {
+				ip, _ = netip.AddrFromSlice(names[i][8:24])
+			}
+			addrs[i] = netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4]))
+			payloads[i] = buffers[i][:msgs[i].Len]
+		}
+
+		// Call batch callback with all packets
+		r(addrs, payloads, n)
+	}
+}
+
 func (u *StdConn) ReadSingle(msgs []rawMessage) (int, error) {
 	for {
 		n, _, err := unix.Syscall6(
@@ -461,6 +501,10 @@ func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
 		return err
 	}
 	return nil
+}
+
+func (u *StdConn) BatchSize() int {
+	return u.batch
 }
 
 func (u *StdConn) Close() error {

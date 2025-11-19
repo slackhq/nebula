@@ -116,6 +116,31 @@ func (u *TesterConn) ListenOut(r EncReader) {
 	}
 }
 
+func (u *TesterConn) ListenOutBatch(r EncBatchReader) {
+	addrs := make([]netip.AddrPort, 1)
+	payloads := make([][]byte, 1)
+
+	for {
+		p, ok := <-u.RxPackets
+		if !ok {
+			return
+		}
+		addrs[0] = p.From
+		payloads[0] = p.Data
+		r(addrs, payloads, 1)
+	}
+}
+
+func (u *TesterConn) WriteMulti(packets [][]byte, addrs []netip.AddrPort) (int, error) {
+	for i := range packets {
+		err := u.WriteTo(packets[i], addrs[i])
+		if err != nil {
+			return i, err
+		}
+	}
+	return len(packets), nil
+}
+
 func (u *TesterConn) ReloadConfig(*config.C) {}
 
 func NewUDPStatsEmitter(_ []Conn) func() {
@@ -125,6 +150,10 @@ func NewUDPStatsEmitter(_ []Conn) func() {
 
 func (u *TesterConn) LocalAddr() (netip.AddrPort, error) {
 	return u.Addr, nil
+}
+
+func (u *TesterConn) BatchSize() int {
+	return 1
 }
 
 func (u *TesterConn) Rebind() error {
