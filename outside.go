@@ -137,7 +137,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			return
 		}
 
-		lhf.HandleRequest(ip, hostinfo.vpnAddrs, d, f)
+		lhf.HandleRequest(ip, hostinfo.vpnAddrs, d[virtioNetHdrLen:], f)
 
 		// Fallthrough to the bottom to record incoming traffic
 
@@ -159,7 +159,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			// This testRequest might be from TryPromoteBest, so we should roam
 			// to the new IP address before responding
 			f.handleHostRoaming(hostinfo, ip)
-			f.send(header.Test, header.TestReply, ci, hostinfo, d, nb, out)
+			f.send(header.Test, header.TestReply, ci, hostinfo, d[virtioNetHdrLen:], nb, out)
 		}
 
 		// Fallthrough to the bottom to record incoming traffic
@@ -202,7 +202,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			return
 		}
 
-		f.relayManager.HandleControlMsg(hostinfo, d, f)
+		f.relayManager.HandleControlMsg(hostinfo, d[virtioNetHdrLen:], f)
 
 	default:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
@@ -634,7 +634,7 @@ func (f *Interface) readOutsidePacketsBatch(addrs []netip.AddrPort, payloads [][
 
 			case header.MessageRelay:
 				// Skip relay packets in batch mode for now (less common path)
-				f.readOutsidePackets(addr, nil, out[:virtioNetHdrLen], payload, h, fwPacket, lhf, nb, q, localCache)
+				f.readOutsidePackets(addr, nil, out, payload, h, fwPacket, lhf, nb, q, localCache)
 
 			default:
 				hostinfo.logger(f.l).Debugf("unexpected message subtype %d", h.Subtype)
@@ -642,7 +642,7 @@ func (f *Interface) readOutsidePacketsBatch(addrs []netip.AddrPort, payloads [][
 
 		default:
 			// Handle non-Message types using single-packet path
-			f.readOutsidePackets(addr, nil, out[:virtioNetHdrLen], payload, h, fwPacket, lhf, nb, q, localCache)
+			f.readOutsidePackets(addr, nil, out, payload, h, fwPacket, lhf, nb, q, localCache)
 		}
 	}
 
