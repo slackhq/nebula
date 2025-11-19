@@ -22,6 +22,7 @@ import (
 )
 
 const mtu = 9001
+const virtioNetHdrLen = overlay.VirtioNetHdrLen
 
 type InterfaceConfig struct {
 	HostMap            *HostMap
@@ -48,6 +49,12 @@ type InterfaceConfig struct {
 
 	ConntrackCacheTimeout time.Duration
 	l                     *logrus.Logger
+}
+
+type batchMetrics struct {
+	udpReadSize  metrics.Histogram
+	tunReadSize  metrics.Histogram
+	udpWriteSize metrics.Histogram
 }
 
 type Interface struct {
@@ -91,6 +98,7 @@ type Interface struct {
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
 	cachedPacketMetrics *cachedPacketMetrics
+	batchMetrics        *batchMetrics
 
 	l *logrus.Logger
 }
@@ -193,6 +201,11 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 			sent:    metrics.GetOrRegisterCounter("hostinfo.cached_packets.sent", nil),
 			dropped: metrics.GetOrRegisterCounter("hostinfo.cached_packets.dropped", nil),
 		},
+		batchMetrics: &batchMetrics{
+			udpReadSize:  metrics.GetOrRegisterHistogram("batch.udp_read_size", nil, metrics.NewUniformSample(1024)),
+			tunReadSize:  metrics.GetOrRegisterHistogram("batch.tun_read_size", nil, metrics.NewUniformSample(1024)),
+			udpWriteSize: metrics.GetOrRegisterHistogram("batch.udp_write_size", nil, metrics.NewUniformSample(1024)),
+		},
 
 		l: c.l,
 	}
@@ -266,23 +279,50 @@ func (f *Interface) listenOut(i int) {
 
 	ctCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 	lhh := f.lightHouse.NewRequestHandler()
-	plaintext := make([]byte, udp.MTU)
+
+	// Pre-allocate output buffers for batch processing
+	batchSize := li.BatchSize()
+	outs := make([][]byte, batchSize)
+	for idx := range outs {
+		// Allocate full buffer with virtio header space
+		outs[idx] = make([]byte, virtioNetHdrLen, virtioNetHdrLen+udp.MTU)
+	}
+
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 
-	li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
-		f.readOutsidePackets(fromUdpAddr, nil, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
+	li.ListenOutBatch(func(addrs []netip.AddrPort, payloads [][]byte, count int) {
+		f.readOutsidePacketsBatch(addrs, payloads, count, outs[:count], nb, i, h, fwPacket, lhh, ctCache.Get(f.l))
 	})
+}
+
+// BatchReader is an interface for devices that support reading multiple packets at once
+type BatchReader interface {
+	BatchRead(bufs [][]byte, sizes []int) (int, error)
+	BatchSize() int
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	runtime.LockOSThread()
 
+	// Check if reader supports batching
+	batchReader, supportsBatching := reader.(BatchReader)
+
+	if supportsBatching {
+		f.listenInBatch(reader, batchReader, i)
+	} else {
+		f.listenInSingle(reader, i)
+	}
+}
+
+func (f *Interface) listenInSingle(reader io.ReadWriteCloser, i int) {
 	packet := make([]byte, mtu)
-	out := make([]byte, mtu)
+	// Allocate out buffer with virtio header headroom (10 bytes) to avoid copies on write
+	outBuf := make([]byte, virtioNetHdrLen+mtu)
+	out := outBuf[virtioNetHdrLen:] // Use slice starting after headroom
 	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
@@ -299,6 +339,52 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 		}
 
 		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
+	}
+}
+
+func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchReader, i int) {
+	batchSize := batchReader.BatchSize()
+
+	// Allocate buffers for batch reading
+	bufs := make([][]byte, batchSize)
+	for idx := range bufs {
+		bufs[idx] = make([]byte, mtu)
+	}
+	sizes := make([]int, batchSize)
+
+	// Allocate output buffers for batch processing (one per packet)
+	// Each has virtio header headroom to avoid copies on write
+	outs := make([][]byte, batchSize)
+	for idx := range outs {
+		outBuf := make([]byte, virtioNetHdrLen+mtu)
+		outs[idx] = outBuf[virtioNetHdrLen:] // Slice starting after headroom
+	}
+
+	// Pre-allocate batch accumulation buffers for sending
+	batchPackets := make([][]byte, 0, batchSize)
+	batchAddrs := make([]netip.AddrPort, 0, batchSize)
+
+	// Pre-allocate nonce buffer (reused for all encryptions)
+	nb := make([]byte, 12)
+
+	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
+
+	for {
+		n, err := batchReader.BatchRead(bufs, sizes)
+		if err != nil {
+			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
+				return
+			}
+
+			f.l.WithError(err).Error("Error while batch reading outbound packets")
+			// This only seems to happen when something fatal happens to the fd, so exit.
+			os.Exit(2)
+		}
+
+		f.batchMetrics.tunReadSize.Update(int64(n))
+
+		// Process all packets in the batch at once
+		f.consumeInsidePackets(bufs, sizes, n, outs, nb, i, conntrackCache.Get(f.l), &batchPackets, &batchAddrs)
 	}
 }
 

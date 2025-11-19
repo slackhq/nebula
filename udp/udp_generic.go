@@ -85,3 +85,42 @@ func (u *GenericConn) ListenOut(r EncReader) {
 		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
 	}
 }
+
+// ListenOutBatch - fallback to single-packet reads for generic platforms
+func (u *GenericConn) ListenOutBatch(r EncBatchReader) {
+	buffer := make([]byte, MTU)
+	addrs := make([]netip.AddrPort, 1)
+	payloads := make([][]byte, 1)
+
+	for {
+		// Just read one packet at a time and call batch callback with count=1
+		n, rua, err := u.ReadFromUDPAddrPort(buffer)
+		if err != nil {
+			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
+			return
+		}
+
+		addrs[0] = netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port())
+		payloads[0] = buffer[:n]
+		r(addrs, payloads, 1)
+	}
+}
+
+// WriteMulti sends multiple packets - fallback implementation
+func (u *GenericConn) WriteMulti(packets [][]byte, addrs []netip.AddrPort) (int, error) {
+	for i := range packets {
+		err := u.WriteTo(packets[i], addrs[i])
+		if err != nil {
+			return i, err
+		}
+	}
+	return len(packets), nil
+}
+
+func (u *GenericConn) BatchSize() int {
+	return 1
+}
+
+func (u *GenericConn) Rebind() error {
+	return nil
+}

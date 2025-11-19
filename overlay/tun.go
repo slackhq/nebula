@@ -11,6 +11,7 @@ import (
 )
 
 const DefaultMTU = 1300
+const VirtioNetHdrLen = 10 // Size of virtio_net_hdr structure
 
 // TODO: We may be able to remove routines
 type DeviceFactory func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error)

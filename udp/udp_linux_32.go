@@ -12,7 +12,7 @@ import (
 
 type iovec struct {
 	Base *byte
-	Len  uint32
+	Len  uint
 }
 
 type msghdr struct {
@@ -40,7 +40,7 @@ func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
 		names[i] = make([]byte, unix.SizeofSockaddrInet6)
 
 		vs := []iovec{
-			{Base: &buffers[i][0], Len: uint32(len(buffers[i]))},
+			{Base: &buffers[i][0], Len: uint(len(buffers[i]))},
 		}
 
 		msgs[i].Hdr.Iov = &vs[0]
