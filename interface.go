@@ -22,6 +22,7 @@ import (
 )
 
 const mtu = 9001
+const virtioNetHdrLen = overlay.VirtioNetHdrLen
 
 type InterfaceConfig struct {
 	HostMap            *HostMap
@@ -266,13 +267,16 @@ func (f *Interface) listenOut(i int) {
 
 	ctCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 	lhh := f.lightHouse.NewRequestHandler()
-	plaintext := make([]byte, udp.MTU)
+
+	// Allocate plaintext buffer with virtio header headroom to avoid copies on TUN write
+	plaintext := make([]byte, virtioNetHdrLen+udp.MTU)
+
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 
 	li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
-		f.readOutsidePackets(fromUdpAddr, nil, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
+		f.readOutsidePackets(fromUdpAddr, nil, plaintext[:virtioNetHdrLen], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
 	})
 }
 
@@ -298,11 +302,10 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 func (f *Interface) listenInSingle(reader io.ReadWriteCloser, i int) {
 	packet := make([]byte, mtu)
 	// Allocate out buffer with virtio header headroom (10 bytes) to avoid copies on write
-	const virtioNetHdrLen = 10
 	outBuf := make([]byte, virtioNetHdrLen+mtu)
 	out := outBuf[virtioNetHdrLen:] // Use slice starting after headroom
 	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
@@ -324,7 +327,6 @@ func (f *Interface) listenInSingle(reader io.ReadWriteCloser, i int) {
 
 func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchReader, i int) {
 	batchSize := batchReader.BatchSize()
-	const virtioNetHdrLen = 10
 
 	// Allocate buffers for batch reading
 	bufs := make([][]byte, batchSize)
@@ -346,7 +348,7 @@ func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchRe
 	batchAddrs := make([]netip.AddrPort, 0, batchSize)
 
 	// Pre-allocate nonce buffer (reused for all encryptions)
-	nb := make([]byte, 12, 12)
+	nb := make([]byte, 12)
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 

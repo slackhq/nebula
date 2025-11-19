@@ -66,10 +66,6 @@ type ifreqQLEN struct {
 	pad   [8]byte
 }
 
-const (
-	virtioNetHdrLen = 10 // Size of virtio_net_hdr structure
-)
-
 // wgDeviceWrapper wraps a wireguard Device to implement io.ReadWriteCloser
 // This allows multiqueue readers to use the same wireguard Device batching as the main device
 type wgDeviceWrapper struct {
@@ -92,27 +88,11 @@ func (w *wgDeviceWrapper) Read(b []byte) (int, error) {
 }
 
 func (w *wgDeviceWrapper) Write(b []byte) (int, error) {
-	// Check if buffer has the expected headroom pattern to avoid copy
-	var buf []byte
-
-	if cap(b) >= len(b)+virtioNetHdrLen {
-		buf = b[:cap(b)]
-		if len(buf) == len(b)+virtioNetHdrLen {
-			// Perfect! Buffer has headroom, no copy needed
-			buf = buf[:len(b)+virtioNetHdrLen]
-		} else {
-			// Unexpected capacity, safer to copy
-			buf = make([]byte, virtioNetHdrLen+len(b))
-			copy(buf[virtioNetHdrLen:], b)
-		}
-	} else {
-		// No headroom, need to allocate and copy
-		buf = make([]byte, virtioNetHdrLen+len(b))
-		copy(buf[virtioNetHdrLen:], b)
-	}
-
-	bufs := [][]byte{buf}
-	n, err := w.dev.Write(bufs, virtioNetHdrLen)
+	// Buffer b should have virtio header space (10 bytes) at the beginning
+	// The decrypted packet data starts at offset 10
+	// Pass the full buffer to WireGuard with offset=virtioNetHdrLen
+	bufs := [][]byte{b}
+	n, err := w.dev.Write(bufs, VirtioNetHdrLen)
 	if err != nil {
 		return 0, err
 	}
@@ -419,32 +399,11 @@ func (t *tun) BatchSize() int {
 
 func (t *tun) Write(b []byte) (int, error) {
 	if t.wgDevice != nil {
-		// Use wireguard device which handles virtio headers internally
-		// Check if buffer has the expected headroom pattern:
-		// cap(b) should be len(b) + virtioNetHdrLen, indicating pre-allocated headroom
-		var buf []byte
-
-		if cap(b) >= len(b)+virtioNetHdrLen {
-			// Buffer likely has headroom - use unsafe to access it
-			// Create a slice that includes the headroom by re-slicing from capacity
-			buf = b[:cap(b)]
-			// Check if we have exactly the right amount of extra capacity
-			if len(buf) == len(b)+virtioNetHdrLen {
-				// Perfect! This buffer was allocated with headroom, no copy needed
-				buf = buf[:len(b)+virtioNetHdrLen]
-			} else {
-				// Unexpected capacity, safer to copy
-				buf = make([]byte, virtioNetHdrLen+len(b))
-				copy(buf[virtioNetHdrLen:], b)
-			}
-		} else {
-			// No headroom, need to allocate and copy
-			buf = make([]byte, virtioNetHdrLen+len(b))
-			copy(buf[virtioNetHdrLen:], b)
-		}
-
-		bufs := [][]byte{buf}
-		n, err := t.wgDevice.Write(bufs, virtioNetHdrLen)
+		// Buffer b should have virtio header space (10 bytes) at the beginning
+		// The decrypted packet data starts at offset 10
+		// Pass the full buffer to WireGuard with offset=virtioNetHdrLen
+		bufs := [][]byte{b}
+		n, err := t.wgDevice.Write(bufs, VirtioNetHdrLen)
 		if err != nil {
 			return 0, err
 		}
