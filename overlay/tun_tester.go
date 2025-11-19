@@ -132,6 +132,29 @@ func (t *TestTun) Read(b []byte) (int, error) {
 	return len(p), nil
 }
 
-func (t *TestTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *TestTun) NewMultiQueueReader() (BatchReadWriter, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented")
+}
+
+func (t *TestTun) BatchRead(bufs [][]byte, sizes []int) (int, error) {
+	n, err := t.Read(bufs[0])
+	if err != nil {
+		return 0, err
+	}
+	sizes[0] = n
+	return 1, nil
+}
+
+func (t *TestTun) WriteBatch(bufs [][]byte, offset int) (int, error) {
+	for i, buf := range bufs {
+		_, err := t.Write(buf[offset:])
+		if err != nil {
+			return i, err
+		}
+	}
+	return len(bufs), nil
+}
+
+func (t *TestTun) BatchSize() int {
+	return 1
 }

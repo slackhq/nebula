@@ -312,7 +312,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	return nil
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *tun) NewMultiQueueReader() (BatchReadWriter, error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		return nil, err

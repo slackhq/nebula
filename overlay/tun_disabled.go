@@ -105,8 +105,34 @@ func (t *disabledTun) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func (t *disabledTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *disabledTun) NewMultiQueueReader() (BatchReadWriter, error) {
 	return t, nil
+}
+
+// BatchRead reads a single packet (batch size 1 for disabled tun)
+func (t *disabledTun) BatchRead(bufs [][]byte, sizes []int) (int, error) {
+	n, err := t.Read(bufs[0])
+	if err != nil {
+		return 0, err
+	}
+	sizes[0] = n
+	return 1, nil
+}
+
+// WriteBatch writes packets individually (no batching for disabled tun)
+func (t *disabledTun) WriteBatch(bufs [][]byte, offset int) (int, error) {
+	for i, buf := range bufs {
+		_, err := t.Write(buf[offset:])
+		if err != nil {
+			return i, err
+		}
+	}
+	return len(bufs), nil
+}
+
+// BatchSize returns 1 for disabled tun (no batching)
+func (t *disabledTun) BatchSize() int {
+	return 1
 }
 
 func (t *disabledTun) Close() error {

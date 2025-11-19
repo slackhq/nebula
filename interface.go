@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/netip"
 	"os"
 	"runtime"
@@ -52,9 +51,10 @@ type InterfaceConfig struct {
 }
 
 type batchMetrics struct {
-	udpReadSize  metrics.Histogram
-	tunReadSize  metrics.Histogram
-	udpWriteSize metrics.Histogram
+	udpReadSize   metrics.Histogram
+	tunReadSize   metrics.Histogram
+	udpWriteSize  metrics.Histogram
+	tunWriteSize  metrics.Histogram
 }
 
 type Interface struct {
@@ -93,7 +93,7 @@ type Interface struct {
 	conntrackCacheTimeout time.Duration
 
 	writers []udp.Conn
-	readers []io.ReadWriteCloser
+	readers []overlay.BatchReadWriter
 
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
@@ -185,7 +185,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		routines:              c.routines,
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
-		readers:               make([]io.ReadWriteCloser, c.routines),
+		readers:               make([]overlay.BatchReadWriter, c.routines),
 		myVpnNetworks:         cs.myVpnNetworks,
 		myVpnNetworksTable:    cs.myVpnNetworksTable,
 		myVpnAddrs:            cs.myVpnAddrs,
@@ -205,6 +205,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 			udpReadSize:  metrics.GetOrRegisterHistogram("batch.udp_read_size", nil, metrics.NewUniformSample(1024)),
 			tunReadSize:  metrics.GetOrRegisterHistogram("batch.tun_read_size", nil, metrics.NewUniformSample(1024)),
 			udpWriteSize: metrics.GetOrRegisterHistogram("batch.udp_write_size", nil, metrics.NewUniformSample(1024)),
+			tunWriteSize: metrics.GetOrRegisterHistogram("batch.tun_write_size", nil, metrics.NewUniformSample(1024)),
 		},
 
 		l: c.l,
@@ -238,7 +239,7 @@ func (f *Interface) activate() {
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
 
 	// Prepare n tun queues
-	var reader io.ReadWriteCloser = f.inside
+	var reader overlay.BatchReadWriter = f.inside
 	for i := 0; i < f.routines; i++ {
 		if i > 0 {
 			reader, err = f.inside.NewMultiQueueReader()
@@ -297,53 +298,10 @@ func (f *Interface) listenOut(i int) {
 	})
 }
 
-// BatchReader is an interface for devices that support reading multiple packets at once
-type BatchReader interface {
-	BatchRead(bufs [][]byte, sizes []int) (int, error)
-	BatchSize() int
-}
-
-func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
+func (f *Interface) listenIn(reader overlay.BatchReadWriter, i int) {
 	runtime.LockOSThread()
 
-	// Check if reader supports batching
-	batchReader, supportsBatching := reader.(BatchReader)
-
-	if supportsBatching {
-		f.listenInBatch(reader, batchReader, i)
-	} else {
-		f.listenInSingle(reader, i)
-	}
-}
-
-func (f *Interface) listenInSingle(reader io.ReadWriteCloser, i int) {
-	packet := make([]byte, mtu)
-	// Allocate out buffer with virtio header headroom (10 bytes) to avoid copies on write
-	outBuf := make([]byte, virtioNetHdrLen+mtu)
-	out := outBuf[virtioNetHdrLen:] // Use slice starting after headroom
-	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12)
-
-	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
-
-	for {
-		n, err := reader.Read(packet)
-		if err != nil {
-			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
-				return
-			}
-
-			f.l.WithError(err).Error("Error while reading outbound packet")
-			// This only seems to happen when something fatal happens to the fd, so exit.
-			os.Exit(2)
-		}
-
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
-	}
-}
-
-func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchReader, i int) {
-	batchSize := batchReader.BatchSize()
+	batchSize := reader.BatchSize()
 
 	// Allocate buffers for batch reading
 	bufs := make([][]byte, batchSize)
@@ -370,7 +328,7 @@ func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchRe
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
 	for {
-		n, err := batchReader.BatchRead(bufs, sizes)
+		n, err := reader.BatchRead(bufs, sizes)
 		if err != nil {
 			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
 				return

@@ -6,7 +6,6 @@ package overlay
 import (
 	"crypto"
 	"fmt"
-	"io"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -234,8 +233,34 @@ func (t *winTun) Write(b []byte) (int, error) {
 	return t.tun.Write(b, 0)
 }
 
-func (t *winTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *winTun) NewMultiQueueReader() (BatchReadWriter, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
+}
+
+// BatchRead reads a single packet (batch size 1 for Windows)
+func (t *winTun) BatchRead(bufs [][]byte, sizes []int) (int, error) {
+	n, err := t.Read(bufs[0])
+	if err != nil {
+		return 0, err
+	}
+	sizes[0] = n
+	return 1, nil
+}
+
+// WriteBatch writes packets individually (no batching for Windows)
+func (t *winTun) WriteBatch(bufs [][]byte, offset int) (int, error) {
+	for i, buf := range bufs {
+		_, err := t.Write(buf[offset:])
+		if err != nil {
+			return i, err
+		}
+	}
+	return len(bufs), nil
+}
+
+// BatchSize returns 1 for Windows (no batching)
+func (t *winTun) BatchSize() int {
+	return 1
 }
 
 func (t *winTun) Close() error {
