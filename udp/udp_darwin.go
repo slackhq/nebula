@@ -98,9 +98,9 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 			return ErrInvalidIPv6RemoteForSocket
 		}
 
-		var rsa unix.RawSockaddrInet6
-		rsa.Family = unix.AF_INET6
-		rsa.Addr = ap.Addr().As16()
+		var rsa unix.RawSockaddrInet4
+		rsa.Family = unix.AF_INET
+		rsa.Addr = ap.Addr().As4()
 		binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ap.Port())
 		sa = unsafe.Pointer(&rsa)
 		addrLen = syscall.SizeofSockaddrInet4
