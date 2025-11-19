@@ -106,7 +106,7 @@ func (t *disabledTun) Write(b []byte) (int, error) {
 }
 
 func (t *disabledTun) SupportsMultiqueue() bool {
-	return false
+	return true
 }
 
 func (t *disabledTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
