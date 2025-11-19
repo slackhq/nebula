@@ -216,6 +216,10 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	return nil
 }
 
+func (t *tun) SupportsMultiqueue() bool {
+	return true
+}
+
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {

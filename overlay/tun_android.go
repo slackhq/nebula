@@ -95,6 +95,10 @@ func (t *tun) Name() string {
 	return "android"
 }
 
+func (t *tun) SupportsMultiqueue() bool {
+	return false
+}
+
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for android")
 }

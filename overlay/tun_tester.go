@@ -132,6 +132,10 @@ func (t *TestTun) Read(b []byte) (int, error) {
 	return len(p), nil
 }
 
+func (t *TestTun) SupportsMultiqueue() bool {
+	return false
+}
+
 func (t *TestTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented")
 }

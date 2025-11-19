@@ -184,6 +184,10 @@ func (u *StdConn) ListenOut(r EncReader) {
 	}
 }
 
+func (u *StdConn) SupportsMultipleReaders() bool {
+	return false
+}
+
 func (u *StdConn) Rebind() error {
 	var err error
 	if u.isV4 {

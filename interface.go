@@ -222,6 +222,13 @@ func (f *Interface) activate() {
 		WithField("boringcrypto", boringEnabled()).
 		Info("Nebula interface is active")
 
+	if f.routines > 1 {
+		if !f.inside.SupportsMultiqueue() || !f.outside.SupportsMultipleReaders() {
+			f.routines = 1
+			f.l.Warn("routines is not supported on this platform, falling back to a single routine")
+		}
+	}
+
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
 
 	// Prepare n tun queues

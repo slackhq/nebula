@@ -34,6 +34,10 @@ func (NoopTun) Write([]byte) (int, error) {
 	return 0, nil
 }
 
+func (NoopTun) SupportsMultiqueue() bool {
+	return false
+}
+
 func (NoopTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, errors.New("unsupported")
 }
