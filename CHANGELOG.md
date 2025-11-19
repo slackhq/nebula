@@ -7,12 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - ????
+
+### Added
+
+- PKCS11 support for P256 keys when built with `pkcs11` tag (#1153)
+- ASN.1 based v2 nebula certificates with support for ipv6 and multiple ip addresses.
+  Certificates now have a unified interface for external implementations. (#1212, #1216, #1345)
+  **TODO: External documentation link!**
+- Add the ability to mark packets on linux to better target nebula packets in iptables/nftables. (#1331)
+- Add ECMP support for `unsafe_routes`. (#1332)
+
 ### Changed
 
 - `default_local_cidr_any` now defaults to false, meaning that any firewall rule
   intended to target an `unsafe_routes` entry must explicitly declare it via the
   `local_cidr` field. This is almost always the intended behavior. This flag is
-  deprecated and will be removed in a future release.
+  deprecated and will be removed in a future release. (#1373)
+
+### Fixed
+
+- Fix moving a udp address from one vpn address to another in the `static_host_map`
+  which could cause rapid re-handshaking with an incorrect remote. (#1259)
+- Improve smoke tests in environments where the docker network is not the default. (#1347)
 
 ## [1.9.7] - 2025-10-10
 
@@ -706,7 +723,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.9.7...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/slackhq/nebula/releases/tag/v1.10.0
 [1.9.7]: https://github.com/slackhq/nebula/releases/tag/v1.9.7
 [1.9.6]: https://github.com/slackhq/nebula/releases/tag/v1.9.6
 [1.9.5]: https://github.com/slackhq/nebula/releases/tag/v1.9.5
