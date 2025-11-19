@@ -51,6 +51,12 @@ type InterfaceConfig struct {
 	l                     *logrus.Logger
 }
 
+type batchMetrics struct {
+	udpReadSize  metrics.Histogram
+	tunReadSize  metrics.Histogram
+	udpWriteSize metrics.Histogram
+}
+
 type Interface struct {
 	hostMap               *HostMap
 	outside               udp.Conn
@@ -92,6 +98,7 @@ type Interface struct {
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
 	cachedPacketMetrics *cachedPacketMetrics
+	batchMetrics        *batchMetrics
 
 	l *logrus.Logger
 }
@@ -193,6 +200,11 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		cachedPacketMetrics: &cachedPacketMetrics{
 			sent:    metrics.GetOrRegisterCounter("hostinfo.cached_packets.sent", nil),
 			dropped: metrics.GetOrRegisterCounter("hostinfo.cached_packets.dropped", nil),
+		},
+		batchMetrics: &batchMetrics{
+			udpReadSize:  metrics.GetOrRegisterHistogram("batch.udp_read_size", nil, metrics.NewUniformSample(1024)),
+			tunReadSize:  metrics.GetOrRegisterHistogram("batch.tun_read_size", nil, metrics.NewUniformSample(1024)),
+			udpWriteSize: metrics.GetOrRegisterHistogram("batch.udp_write_size", nil, metrics.NewUniformSample(1024)),
 		},
 
 		l: c.l,
@@ -352,8 +364,6 @@ func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchRe
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
-	tunBatchHist := metrics.GetOrRegisterHistogram("batch.tun_read_size", nil, metrics.NewUniformSample(1024))
-
 	for {
 		n, err := batchReader.BatchRead(bufs, sizes)
 		if err != nil {
@@ -366,7 +376,7 @@ func (f *Interface) listenInBatch(reader io.ReadWriteCloser, batchReader BatchRe
 			os.Exit(2)
 		}
 
-		tunBatchHist.Update(int64(n))
+		f.batchMetrics.tunReadSize.Update(int64(n))
 
 		// Process all packets in the batch at once
 		f.consumeInsidePackets(bufs, sizes, n, outs, nb, i, conntrackCache.Get(f.l), &batchPackets, &batchAddrs)
