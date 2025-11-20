@@ -285,12 +285,11 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 
 	switch version {
 	case cert.Version1:
-		// Make sure we at least have an ip
+		// Make sure we have only one ipv4 address
 		if len(v4Networks) != 1 {
 			return newHelpErrorf("invalid -networks definition: v1 certificates can only have a single ipv4 address")
 		}
 
-		// If we are asked to mint a v1 certificate only then we cant just ignore any v6 addresses
 		if len(v6Networks) > 0 {
 			return newHelpErrorf("invalid -networks definition: v1 certificates can only contain ipv4 addresses")
 		}
