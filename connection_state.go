@@ -50,11 +50,6 @@ func NewConnectionState(l *logrus.Logger, cs *CertState, crt cert.Certificate, i
 	}
 
 	static := noise.DHKey{Private: cs.privateKey, Public: crt.PublicKey()}
-
-	b := NewBits(ReplayWindow)
-	// Clear out bit 0, we never transmit it, and we don't want it showing as packet loss
-	b.Update(l, 0)
-
 	hs, err := noise.NewHandshakeState(noise.Config{
 		CipherSuite:   ncs,
 		Random:        rand.Reader,
@@ -74,7 +69,7 @@ func NewConnectionState(l *logrus.Logger, cs *CertState, crt cert.Certificate, i
 	ci := &ConnectionState{
 		H:         hs,
 		initiator: initiator,
-		window:    b,
+		window:    NewBits(ReplayWindow),
 		myCert:    crt,
 	}
 	// always start the counter from 2, as packet 1 and packet 2 are handshake packets.
