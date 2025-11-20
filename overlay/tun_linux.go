@@ -608,7 +608,7 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 	for _, p := range r.MultiPath {
 		// If this route is relevant to our interface and there is a gateway then add it
 		if p.LinkIndex == link.Attrs().Index {
-			gwAddr, ok := getGatewayAddr(r.Gw, r.Via)
+			gwAddr, ok := getGatewayAddr(p.Gw, p.Via)
 			if ok {
 				if t.isGatewayInVpnNetworks(gwAddr) {
 					gateways = append(gateways, routing.NewGateway(gwAddr, p.Hops+1))
