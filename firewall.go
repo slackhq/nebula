@@ -237,21 +237,25 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 		fw.OutSendReject = false
 	}
 
+	// outbound rules
 	err := AddFirewallRulesFromConfig(l, false, false, c, fw)
 	if err != nil {
 		return nil, err
 	}
 
+	// unsafe outbound rules
 	err = AddFirewallRulesFromConfig(l, true, false, c, fw)
 	if err != nil {
 		return nil, err
 	}
 
+	// inbound rules
 	err = AddFirewallRulesFromConfig(l, false, true, c, fw)
 	if err != nil {
 		return nil, err
 	}
 
+	// unsafe inbound rules
 	err = AddFirewallRulesFromConfig(l, true, true, c, fw)
 	if err != nil {
 		return nil, err
