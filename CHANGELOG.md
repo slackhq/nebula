@@ -7,12 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - ????
+
+### Added
+
+- PKCS11 support for P256 keys when built with `pkcs11` tag (#1153)
+- ASN.1 based v2 nebula certificates with support for ipv6 and multiple ip addresses.
+  Certificates now have a unified interface for external implementations. (#1212, #1216, #1345)
+  **TODO: External documentation link!**
+- Add the ability to mark packets on linux to better target nebula packets in iptables/nftables. (#1331)
+- Add ECMP support for `unsafe_routes`. (#1332)
+
 ### Changed
 
 - `default_local_cidr_any` now defaults to false, meaning that any firewall rule
   intended to target an `unsafe_routes` entry must explicitly declare it via the
   `local_cidr` field. This is almost always the intended behavior. This flag is
-  deprecated and will be removed in a future release.
+  deprecated and will be removed in a future release. (#1373)
+
+### Fixed
+
+- Fix moving a udp address from one vpn address to another in the `static_host_map`
+  which could cause rapid re-handshaking with an incorrect remote. (#1259)
+- Improve smoke tests in environments where the docker network is not the default. (#1347)
+
+## [1.9.7] - 2025-10-10
+
+### Security
+
+- Fix an issue where Nebula could incorrectly accept and process a packet from an erroneous source IP when the sender's
+  certificate is configured with unsafe_routes (cert v1/v2) or multiple IPs (cert v2). (#1494)
+
+### Changed
+
+- Disable sending `recv_error` messages when a packet is received outside the allowable counter window. (#1459)
+- Improve error messages and remove some unnecessary fatal conditions in the Windows and generic udp listener. (#1543)
+
+## [1.9.6] - 2025-7-15
+
+### Added
+
+- Support dropping inactive tunnels. This is disabled by default in this release but can be enabled with `tunnels.drop_inactive`. See example config for more details. (#1413)
+
+### Fixed
+
+- Fix Darwin freeze due to presence of some Network Extensions (#1426)
+- Ensure the same relay tunnel is always used when multiple relay tunnels are present (#1422)
+- Fix Windows freeze due to ICMP error handling (#1412)
+- Fix relay migration panic (#1403)
+
+## [1.9.5] - 2024-12-05
+
+### Added
+
+- Gracefully ignore v2 certificates. (#1282)
+
+### Fixed
+
+- Fix relays that refuse to re-establish after one of the remote tunnel pairs breaks. (#1277)
 
 ## [1.9.4] - 2024-09-09
 
@@ -671,7 +723,11 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.9.4...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/slackhq/nebula/releases/tag/v1.10.0
+[1.9.7]: https://github.com/slackhq/nebula/releases/tag/v1.9.7
+[1.9.6]: https://github.com/slackhq/nebula/releases/tag/v1.9.6
+[1.9.5]: https://github.com/slackhq/nebula/releases/tag/v1.9.5
 [1.9.4]: https://github.com/slackhq/nebula/releases/tag/v1.9.4
 [1.9.3]: https://github.com/slackhq/nebula/releases/tag/v1.9.3
 [1.9.2]: https://github.com/slackhq/nebula/releases/tag/v1.9.2
