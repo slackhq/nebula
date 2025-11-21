@@ -1339,6 +1339,7 @@ func TestFirewall_Drop_EnforceIPMatch(t *testing.T) {
 }
 
 type addRuleCall struct {
+	unsafe    bool
 	incoming  bool
 	proto     uint8
 	startPort int32
@@ -1358,6 +1359,7 @@ type mockFirewall struct {
 
 func (mf *mockFirewall) AddRule(unsafe, incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, ip, localIp, caName string, caSha string) error {
 	mf.lastCall = addRuleCall{
+		unsafe:    unsafe,
 		incoming:  incoming,
 		proto:     proto,
 		startPort: startPort,
