@@ -85,8 +85,9 @@ func newSimpleServerWithUdpAndUnsafeNetworks(v cert.Version, caCrt cert.Certific
 	}}
 
 	var unsafeNetworks []netip.Prefix
+	var firewallUnsafeInbound []m
 	if sUnsafeNetworks != "" {
-		firewallInbound = []m{{
+		firewallUnsafeInbound = []m{{
 			"proto":      "any",
 			"port":       "any",
 			"host":       "any",
@@ -122,7 +123,8 @@ func newSimpleServerWithUdpAndUnsafeNetworks(v cert.Version, caCrt cert.Certific
 				"port":  "any",
 				"host":  "any",
 			}},
-			"inbound": firewallInbound,
+			"inbound":        firewallInbound,
+			"unsafe_inbound": firewallUnsafeInbound,
 		},
 		//"handshakes": m{
 		//	"try_interval": "1s",
