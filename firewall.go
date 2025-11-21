@@ -23,7 +23,7 @@ import (
 )
 
 type FirewallInterface interface {
-	AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, addr, localAddr netip.Prefix, caName string, caSha string) error
+	AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr string, caName string, caSha string) error
 }
 
 type conn struct {
@@ -248,22 +248,11 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 }
 
 // AddRule properly creates the in memory rule structure for a firewall table.
-func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, ip, localIp netip.Prefix, caName string, caSha string) error {
-	// Under gomobile, stringing a nil pointer with fmt causes an abort in debug mode for iOS
-	// https://github.com/golang/go/issues/14131
-	sIp := ""
-	if ip.IsValid() {
-		sIp = ip.String()
-	}
-	lIp := ""
-	if localIp.IsValid() {
-		lIp = localIp.String()
-	}
-
+func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr, caName string, caSha string) error {
 	// We need this rule string because we generate a hash. Removing this will break firewall reload.
 	ruleString := fmt.Sprintf(
 		"incoming: %v, proto: %v, startPort: %v, endPort: %v, groups: %v, host: %v, ip: %v, localIp: %v, caName: %v, caSha: %s",
-		incoming, proto, startPort, endPort, groups, host, sIp, lIp, caName, caSha,
+		incoming, proto, startPort, endPort, groups, host, cidr, localCidr, caName, caSha,
 	)
 	f.rules += ruleString + "\n"
 
@@ -271,7 +260,7 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 	if !incoming {
 		direction = "outgoing"
 	}
-	f.l.WithField("firewallRule", m{"direction": direction, "proto": proto, "startPort": startPort, "endPort": endPort, "groups": groups, "host": host, "ip": sIp, "localIp": lIp, "caName": caName, "caSha": caSha}).
+	f.l.WithField("firewallRule", m{"direction": direction, "proto": proto, "startPort": startPort, "endPort": endPort, "groups": groups, "host": host, "cidr": cidr, "localCidr": localCidr, "caName": caName, "caSha": caSha}).
 		Info("Firewall rule added")
 
 	var (
@@ -298,7 +287,7 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 		return fmt.Errorf("unknown protocol %v", proto)
 	}
 
-	return fp.addRule(f, startPort, endPort, groups, host, ip, localIp, caName, caSha)
+	return fp.addRule(f, startPort, endPort, groups, host, cidr, localCidr, caName, caSha)
 }
 
 // GetRuleHash returns a hash representation of all inbound and outbound rules
@@ -379,17 +368,15 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			return fmt.Errorf("%s rule #%v; proto was not understood; `%s`", table, i, r.Proto)
 		}
 
-		var cidr netip.Prefix
-		if r.Cidr != "" {
-			cidr, err = netip.ParsePrefix(r.Cidr)
+		if r.Cidr != "" && r.Cidr != "any" {
+			_, err = netip.ParsePrefix(r.Cidr)
 			if err != nil {
 				return fmt.Errorf("%s rule #%v; cidr did not parse; %s", table, i, err)
 			}
 		}
 
-		var localCidr netip.Prefix
-		if r.LocalCidr != "" {
-			localCidr, err = netip.ParsePrefix(r.LocalCidr)
+		if r.LocalCidr != "" && r.LocalCidr != "any" {
+			_, err = netip.ParsePrefix(r.LocalCidr)
 			if err != nil {
 				return fmt.Errorf("%s rule #%v; local_cidr did not parse; %s", table, i, err)
 			}
@@ -399,7 +386,7 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			l.Warnf("%s rule #%v; %s", table, i, warning)
 		}
 
-		err = fw.AddRule(inbound, proto, startPort, endPort, r.Groups, r.Host, cidr, localCidr, r.CAName, r.CASha)
+		err = fw.AddRule(inbound, proto, startPort, endPort, r.Groups, r.Host, r.Cidr, r.LocalCidr, r.CAName, r.CASha)
 		if err != nil {
 			return fmt.Errorf("%s rule #%v; `%s`", table, i, err)
 		}
@@ -646,7 +633,7 @@ func (ft *FirewallTable) match(p firewall.Packet, incoming bool, c *cert.CachedC
 	return false
 }
 
-func (fp firewallPort) addRule(f *Firewall, startPort int32, endPort int32, groups []string, host string, ip, localIp netip.Prefix, caName string, caSha string) error {
+func (fp firewallPort) addRule(f *Firewall, startPort int32, endPort int32, groups []string, host string, cidr, localCidr, caName string, caSha string) error {
 	if startPort > endPort {
 		return fmt.Errorf("start port was lower than end port")
 	}
@@ -659,7 +646,7 @@ func (fp firewallPort) addRule(f *Firewall, startPort int32, endPort int32, grou
 			}
 		}
 
-		if err := fp[i].addRule(f, groups, host, ip, localIp, caName, caSha); err != nil {
+		if err := fp[i].addRule(f, groups, host, cidr, localCidr, caName, caSha); err != nil {
 			return err
 		}
 	}
@@ -690,7 +677,7 @@ func (fp firewallPort) match(p firewall.Packet, incoming bool, c *cert.CachedCer
 	return fp[firewall.PortAny].match(p, c, caPool)
 }
 
-func (fc *FirewallCA) addRule(f *Firewall, groups []string, host string, ip, localIp netip.Prefix, caName, caSha string) error {
+func (fc *FirewallCA) addRule(f *Firewall, groups []string, host string, cidr, localCidr, caName, caSha string) error {
 	fr := func() *FirewallRule {
 		return &FirewallRule{
 			Hosts:  make(map[string]*firewallLocalCIDR),
@@ -704,14 +691,14 @@ func (fc *FirewallCA) addRule(f *Firewall, groups []string, host string, ip, loc
 			fc.Any = fr()
 		}
 
-		return fc.Any.addRule(f, groups, host, ip, localIp)
+		return fc.Any.addRule(f, groups, host, cidr, localCidr)
 	}
 
 	if caSha != "" {
 		if _, ok := fc.CAShas[caSha]; !ok {
 			fc.CAShas[caSha] = fr()
 		}
-		err := fc.CAShas[caSha].addRule(f, groups, host, ip, localIp)
+		err := fc.CAShas[caSha].addRule(f, groups, host, cidr, localCidr)
 		if err != nil {
 			return err
 		}
@@ -721,7 +708,7 @@ func (fc *FirewallCA) addRule(f *Firewall, groups []string, host string, ip, loc
 		if _, ok := fc.CANames[caName]; !ok {
 			fc.CANames[caName] = fr()
 		}
-		err := fc.CANames[caName].addRule(f, groups, host, ip, localIp)
+		err := fc.CANames[caName].addRule(f, groups, host, cidr, localCidr)
 		if err != nil {
 			return err
 		}
@@ -753,24 +740,24 @@ func (fc *FirewallCA) match(p firewall.Packet, c *cert.CachedCertificate, caPool
 	return fc.CANames[s.Certificate.Name()].match(p, c)
 }
 
-func (fr *FirewallRule) addRule(f *Firewall, groups []string, host string, ip, localCIDR netip.Prefix) error {
+func (fr *FirewallRule) addRule(f *Firewall, groups []string, host, cidr, localCidr string) error {
 	flc := func() *firewallLocalCIDR {
 		return &firewallLocalCIDR{
 			LocalCIDR: new(bart.Lite),
 		}
 	}
 
-	if fr.isAny(groups, host, ip) {
+	if fr.isAny(groups, host, cidr) {
 		if fr.Any == nil {
 			fr.Any = flc()
 		}
 
-		return fr.Any.addRule(f, localCIDR)
+		return fr.Any.addRule(f, localCidr)
 	}
 
 	if len(groups) > 0 {
 		nlc := flc()
-		err := nlc.addRule(f, localCIDR)
+		err := nlc.addRule(f, localCidr)
 		if err != nil {
 			return err
 		}
@@ -786,30 +773,34 @@ func (fr *FirewallRule) addRule(f *Firewall, groups []string, host string, ip, l
 		if nlc == nil {
 			nlc = flc()
 		}
-		err := nlc.addRule(f, localCIDR)
+		err := nlc.addRule(f, localCidr)
 		if err != nil {
 			return err
 		}
 		fr.Hosts[host] = nlc
 	}
 
-	if ip.IsValid() {
-		nlc, _ := fr.CIDR.Get(ip)
-		if nlc == nil {
-			nlc = flc()
-		}
-		err := nlc.addRule(f, localCIDR)
+	if cidr != "" {
+		c, err := netip.ParsePrefix(cidr)
 		if err != nil {
 			return err
 		}
-		fr.CIDR.Insert(ip, nlc)
+		nlc, _ := fr.CIDR.Get(c)
+		if nlc == nil {
+			nlc = flc()
+		}
+		err = nlc.addRule(f, localCidr)
+		if err != nil {
+			return err
+		}
+		fr.CIDR.Insert(c, nlc)
 	}
 
 	return nil
 }
 
-func (fr *FirewallRule) isAny(groups []string, host string, ip netip.Prefix) bool {
-	if len(groups) == 0 && host == "" && !ip.IsValid() {
+func (fr *FirewallRule) isAny(groups []string, host string, cidr string) bool {
+	if len(groups) == 0 && host == "" && cidr == "" {
 		return true
 	}
 
@@ -823,7 +814,7 @@ func (fr *FirewallRule) isAny(groups []string, host string, ip netip.Prefix) boo
 		return true
 	}
 
-	if ip.IsValid() && ip.Bits() == 0 {
+	if cidr == "any" {
 		return true
 	}
 
@@ -875,8 +866,13 @@ func (fr *FirewallRule) match(p firewall.Packet, c *cert.CachedCertificate) bool
 	return false
 }
 
-func (flc *firewallLocalCIDR) addRule(f *Firewall, localIp netip.Prefix) error {
-	if !localIp.IsValid() {
+func (flc *firewallLocalCIDR) addRule(f *Firewall, localCidr string) error {
+	if localCidr == "any" {
+		flc.Any = true
+		return nil
+	}
+
+	if localCidr == "" {
 		if !f.hasUnsafeNetworks || f.defaultLocalCIDRAny {
 			flc.Any = true
 			return nil
@@ -887,12 +883,13 @@ func (flc *firewallLocalCIDR) addRule(f *Firewall, localIp netip.Prefix) error {
 		}
 		return nil
 
-	} else if localIp.Bits() == 0 {
-		flc.Any = true
-		return nil
 	}
 
-	flc.LocalCIDR.Insert(localIp)
+	c, err := netip.ParsePrefix(localCidr)
+	if err != nil {
+		return err
+	}
+	flc.LocalCIDR.Insert(c)
 	return nil
 }
 
