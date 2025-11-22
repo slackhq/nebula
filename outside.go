@@ -54,8 +54,6 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	switch h.Type {
 	case header.Message:
-		// TODO handleEncrypted sends directly to addr on error. Handle this in the tunneling case.
-		//TODO: RELAY-WORK ip could be relayed here
 		if !f.handleEncrypted(ci, via, h) {
 			return
 		}
@@ -146,21 +144,19 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 			return
 		}
 
-		//NOTE: via should never be a relayed from here
+		//TODO: assert via is not relayed
 		lhf.HandleRequest(via.UdpAddr, hostinfo.vpnAddrs, d, f)
 
 		// Fallthrough to the bottom to record incoming traffic
 
 	case header.Test:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		//TODO: RELAY-WORK ip could be relayed here
 		if !f.handleEncrypted(ci, via, h) {
 			return
 		}
 
 		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 		if err != nil {
-			//TODO: RELAY-WORK ip could be relayed here
 			hostinfo.logger(f.l).WithError(err).WithField("from", via).
 				WithField("packet", packet).
 				Error("Failed to decrypt test packet")
@@ -170,9 +166,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		if h.Subtype == header.TestRequest {
 			// This testRequest might be from TryPromoteBest, so we should roam
 			// to the new IP address before responding
-			//TODO: RELAY-WORK ip could be relayed here
 			f.handleHostRoaming(hostinfo, via)
-			//TODO: RELAY-WORK ip could be relayed here
 			f.send(header.Test, header.TestReply, ci, hostinfo, d, nb, out)
 		}
 
@@ -183,24 +177,20 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	case header.Handshake:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		//TODO: RELAY-WORK ip could be relayed here
 		f.handshakeManager.HandleIncoming(via, packet, h)
 		return
 
 	case header.RecvError:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		//TODO: RELAY-WORK we should probably support recv_error better in the relays, pass via directly to handleRecvError
 		f.handleRecvError(via.UdpAddr, h)
 		return
 
 	case header.CloseTunnel:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		//TODO: RELAY-WORK ip could be relayed here
 		if !f.handleEncrypted(ci, via, h) {
 			return
 		}
 
-		//TODO: RELAY-WORK ip could be relayed here
 		hostinfo.logger(f.l).WithField("from", via).
 			Info("Close tunnel received, tearing down.")
 
@@ -208,15 +198,12 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		return
 
 	case header.Control:
-		//TODO: RELAY-WORK ip could be relayed here
 		if !f.handleEncrypted(ci, via, h) {
 			return
 		}
 
 		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 		if err != nil {
-
-			//TODO: RELAY-WORK ip could be relayed here
 			hostinfo.logger(f.l).WithError(err).WithField("from", via).
 				WithField("packet", packet).
 				Error("Failed to decrypt Control packet")
@@ -227,7 +214,6 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	default:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		//TODO: RELAY-WORK ip could be relayed here
 		hostinfo.logger(f.l).Debugf("Unexpected packet received from %s", via)
 		return
 	}
