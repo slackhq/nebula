@@ -99,7 +99,7 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 	return true
 }
 
-func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) {
+func ixHandshakeStage1(f *Interface, via *ViaSender, packet []byte, h *header.H) {
 	cs := f.pki.getCertState()
 	crt := cs.GetDefaultCertificate()
 	if crt == nil {
@@ -457,7 +457,7 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 	return
 }
 
-func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packet []byte, h *header.H) bool {
+func ixHandshakeStage2(f *Interface, via *ViaSender, hh *HandshakeHostInfo, packet []byte, h *header.H) bool {
 	if hh == nil {
 		// Nothing here to tear down, got a bogus stage 2 packet
 		return true

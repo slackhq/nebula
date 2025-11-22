@@ -136,7 +136,7 @@ func (hm *HandshakeManager) Run(ctx context.Context) {
 	}
 }
 
-func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *header.H) {
+func (hm *HandshakeManager) HandleIncoming(via *ViaSender, packet []byte, h *header.H) {
 	// First remote allow list check before we know the vpnIp
 	if !via.IsRelayed {
 		if !hm.lightHouse.GetRemoteAllowList().AllowUnknownVpnAddr(via.UdpAddr.Addr()) {
