@@ -338,7 +338,7 @@ func (r *RemoteList) CopyCache() *CacheMap {
 }
 
 // BlockRemote locks and records the address as bad, it will be excluded from the deduplicated address list
-func (r *RemoteList) BlockRemote(bad *ViaSender) {
+func (r *RemoteList) BlockRemote(bad ViaSender) {
 	if bad.IsRelayed {
 		return
 	}

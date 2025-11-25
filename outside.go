@@ -19,7 +19,7 @@ const (
 	minFwPacketLen = 4
 )
 
-func (f *Interface) readOutsidePackets(via *ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
 	err := h.Parse(packet)
 	if err != nil {
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
@@ -95,14 +95,14 @@ func (f *Interface) readOutsidePackets(via *ViaSender, out []byte, packet []byte
 			case TerminalType:
 				// If I am the target of this relay, process the unwrapped packet
 				// From this recursive point, all these variables are 'burned'. We shouldn't rely on them again.
-				rVia := ViaSender{
+				via = ViaSender{
 					UdpAddr:   via.UdpAddr,
 					relayHI:   hostinfo,
 					remoteIdx: relay.RemoteIndex,
 					relay:     relay,
 					IsRelayed: true,
 				}
-				f.readOutsidePackets(&rVia, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
+				f.readOutsidePackets(via, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
 				return
 			case ForwardingType:
 				// Find the target HostInfo relay object
@@ -237,7 +237,7 @@ func (f *Interface) sendCloseTunnel(h *HostInfo) {
 	f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 }
 
-func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via *ViaSender) {
+func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
 	if !via.IsRelayed && hostinfo.remote != via.UdpAddr {
 		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, via.UdpAddr.Addr()) {
 			hostinfo.logger(f.l).WithField("newAddr", via.UdpAddr).Debug("lighthouse.remote_allow_list denied roaming")
@@ -262,7 +262,7 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via *ViaSender) {
 }
 
 // handleEncrypted returns true if a packet should be processed, false otherwise
-func (f *Interface) handleEncrypted(ci *ConnectionState, via *ViaSender, h *header.H) bool {
+func (f *Interface) handleEncrypted(ci *ConnectionState, via ViaSender, h *header.H) bool {
 	// If connectionstate does not exist, send a recv error, if possible, to encourage a fast reconnect
 	if ci == nil {
 		if !via.IsRelayed {
