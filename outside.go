@@ -19,21 +19,21 @@ const (
 	minFwPacketLen = 4
 )
 
-func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
 	err := h.Parse(packet)
 	if err != nil {
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
 		if len(packet) > 1 {
-			f.l.WithField("packet", packet).Infof("Error while parsing inbound packet from %s: %s", ip, err)
+			f.l.WithField("packet", packet).Infof("Error while parsing inbound packet from %s: %s", via, err)
 		}
 		return
 	}
 
 	//l.Error("in packet ", header, packet[HeaderLen:])
-	if ip.IsValid() {
-		if f.myVpnNetworksTable.Contains(ip.Addr()) {
+	if !via.IsRelayed {
+		if f.myVpnNetworksTable.Contains(via.UdpAddr.Addr()) {
 			if f.l.Level >= logrus.DebugLevel {
-				f.l.WithField("udpAddr", ip).Debug("Refusing to process double encrypted packet")
+				f.l.WithField("from", via).Debug("Refusing to process double encrypted packet")
 			}
 			return
 		}
@@ -54,8 +54,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 
 	switch h.Type {
 	case header.Message:
-		// TODO handleEncrypted sends directly to addr on error. Handle this in the tunneling case.
-		if !f.handleEncrypted(ci, ip, h) {
+		if !f.handleEncrypted(ci, via, h) {
 			return
 		}
 
@@ -79,7 +78,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			// Successfully validated the thing. Get rid of the Relay header.
 			signedPayload = signedPayload[header.Len:]
 			// Pull the Roaming parts up here, and return in all call paths.
-			f.handleHostRoaming(hostinfo, ip)
+			f.handleHostRoaming(hostinfo, via)
 			// Track usage of both the HostInfo and the Relay for the received & authenticated packet
 			f.connectionManager.In(hostinfo)
 			f.connectionManager.RelayUsed(h.RemoteIndex)
@@ -96,7 +95,14 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 			case TerminalType:
 				// If I am the target of this relay, process the unwrapped packet
 				// From this recursive point, all these variables are 'burned'. We shouldn't rely on them again.
-				f.readOutsidePackets(netip.AddrPort{}, &ViaSender{relayHI: hostinfo, remoteIdx: relay.RemoteIndex, relay: relay}, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
+				via = ViaSender{
+					UdpAddr:   via.UdpAddr,
+					relayHI:   hostinfo,
+					remoteIdx: relay.RemoteIndex,
+					relay:     relay,
+					IsRelayed: true,
+				}
+				f.readOutsidePackets(via, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
 				return
 			case ForwardingType:
 				// Find the target HostInfo relay object
@@ -126,31 +132,32 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 
 	case header.LightHouse:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		if !f.handleEncrypted(ci, ip, h) {
+		if !f.handleEncrypted(ci, via, h) {
 			return
 		}
 
 		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 		if err != nil {
-			hostinfo.logger(f.l).WithError(err).WithField("udpAddr", ip).
+			hostinfo.logger(f.l).WithError(err).WithField("from", via).
 				WithField("packet", packet).
 				Error("Failed to decrypt lighthouse packet")
 			return
 		}
 
-		lhf.HandleRequest(ip, hostinfo.vpnAddrs, d, f)
+		//TODO: assert via is not relayed
+		lhf.HandleRequest(via.UdpAddr, hostinfo.vpnAddrs, d, f)
 
 		// Fallthrough to the bottom to record incoming traffic
 
 	case header.Test:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		if !f.handleEncrypted(ci, ip, h) {
+		if !f.handleEncrypted(ci, via, h) {
 			return
 		}
 
 		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 		if err != nil {
-			hostinfo.logger(f.l).WithError(err).WithField("udpAddr", ip).
+			hostinfo.logger(f.l).WithError(err).WithField("from", via).
 				WithField("packet", packet).
 				Error("Failed to decrypt test packet")
 			return
@@ -159,7 +166,7 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 		if h.Subtype == header.TestRequest {
 			// This testRequest might be from TryPromoteBest, so we should roam
 			// to the new IP address before responding
-			f.handleHostRoaming(hostinfo, ip)
+			f.handleHostRoaming(hostinfo, via)
 			f.send(header.Test, header.TestReply, ci, hostinfo, d, nb, out)
 		}
 
@@ -170,34 +177,34 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 
 	case header.Handshake:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		f.handshakeManager.HandleIncoming(ip, via, packet, h)
+		f.handshakeManager.HandleIncoming(via, packet, h)
 		return
 
 	case header.RecvError:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		f.handleRecvError(ip, h)
+		f.handleRecvError(via.UdpAddr, h)
 		return
 
 	case header.CloseTunnel:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		if !f.handleEncrypted(ci, ip, h) {
+		if !f.handleEncrypted(ci, via, h) {
 			return
 		}
 
-		hostinfo.logger(f.l).WithField("udpAddr", ip).
+		hostinfo.logger(f.l).WithField("from", via).
 			Info("Close tunnel received, tearing down.")
 
 		f.closeTunnel(hostinfo)
 		return
 
 	case header.Control:
-		if !f.handleEncrypted(ci, ip, h) {
+		if !f.handleEncrypted(ci, via, h) {
 			return
 		}
 
 		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 		if err != nil {
-			hostinfo.logger(f.l).WithError(err).WithField("udpAddr", ip).
+			hostinfo.logger(f.l).WithError(err).WithField("from", via).
 				WithField("packet", packet).
 				Error("Failed to decrypt Control packet")
 			return
@@ -207,11 +214,11 @@ func (f *Interface) readOutsidePackets(ip netip.AddrPort, via *ViaSender, out []
 
 	default:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		hostinfo.logger(f.l).Debugf("Unexpected packet received from %s", ip)
+		hostinfo.logger(f.l).Debugf("Unexpected packet received from %s", via)
 		return
 	}
 
-	f.handleHostRoaming(hostinfo, ip)
+	f.handleHostRoaming(hostinfo, via)
 
 	f.connectionManager.In(hostinfo)
 }
@@ -230,36 +237,36 @@ func (f *Interface) sendCloseTunnel(h *HostInfo) {
 	f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 }
 
-func (f *Interface) handleHostRoaming(hostinfo *HostInfo, udpAddr netip.AddrPort) {
-	if udpAddr.IsValid() && hostinfo.remote != udpAddr {
-		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, udpAddr.Addr()) {
-			hostinfo.logger(f.l).WithField("newAddr", udpAddr).Debug("lighthouse.remote_allow_list denied roaming")
+func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
+	if !via.IsRelayed && hostinfo.remote != via.UdpAddr {
+		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, via.UdpAddr.Addr()) {
+			hostinfo.logger(f.l).WithField("newAddr", via.UdpAddr).Debug("lighthouse.remote_allow_list denied roaming")
 			return
 		}
 
-		if !hostinfo.lastRoam.IsZero() && udpAddr == hostinfo.lastRoamRemote && time.Since(hostinfo.lastRoam) < RoamingSuppressSeconds*time.Second {
+		if !hostinfo.lastRoam.IsZero() && via.UdpAddr == hostinfo.lastRoamRemote && time.Since(hostinfo.lastRoam) < RoamingSuppressSeconds*time.Second {
 			if f.l.Level >= logrus.DebugLevel {
-				hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", udpAddr).
+				hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", via.UdpAddr).
 					Debugf("Suppressing roam back to previous remote for %d seconds", RoamingSuppressSeconds)
 			}
 			return
 		}
 
-		hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", udpAddr).
+		hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", via.UdpAddr).
 			Info("Host roamed to new udp ip/port.")
 		hostinfo.lastRoam = time.Now()
 		hostinfo.lastRoamRemote = hostinfo.remote
-		hostinfo.SetRemote(udpAddr)
+		hostinfo.SetRemote(via.UdpAddr)
 	}
 
 }
 
 // handleEncrypted returns true if a packet should be processed, false otherwise
-func (f *Interface) handleEncrypted(ci *ConnectionState, addr netip.AddrPort, h *header.H) bool {
+func (f *Interface) handleEncrypted(ci *ConnectionState, via ViaSender, h *header.H) bool {
 	// If connectionstate does not exist, send a recv error, if possible, to encourage a fast reconnect
 	if ci == nil {
-		if addr.IsValid() {
-			f.maybeSendRecvError(addr, h.RemoteIndex)
+		if !via.IsRelayed {
+			f.maybeSendRecvError(via.UdpAddr, h.RemoteIndex)
 		}
 		return false
 	}

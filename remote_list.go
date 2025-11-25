@@ -338,21 +338,21 @@ func (r *RemoteList) CopyCache() *CacheMap {
 }
 
 // BlockRemote locks and records the address as bad, it will be excluded from the deduplicated address list
-func (r *RemoteList) BlockRemote(bad netip.AddrPort) {
-	if !bad.IsValid() {
-		// relays can have nil udp Addrs
+func (r *RemoteList) BlockRemote(bad ViaSender) {
+	if bad.IsRelayed {
 		return
 	}
+
 	r.Lock()
 	defer r.Unlock()
 
 	// Check if we already blocked this addr
-	if r.unlockedIsBad(bad) {
+	if r.unlockedIsBad(bad.UdpAddr) {
 		return
 	}
 
 	// We copy here because we are taking something else's memory and we can't trust everything
-	r.badRemotes = append(r.badRemotes, bad)
+	r.badRemotes = append(r.badRemotes, bad.UdpAddr)
 
 	// Mark the next interaction must recollect/dedupe
 	r.shouldRebuild = true
