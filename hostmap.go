@@ -294,9 +294,9 @@ func (v ViaSender) String() string {
 
 func (v ViaSender) MarshalJSON() ([]byte, error) {
 	if v.IsRelayed {
-		return json.Marshal(m{"direct": v.UdpAddr})
+		return json.Marshal(m{"relay": v.UdpAddr})
 	}
-	return json.Marshal(m{"relay": v.UdpAddr})
+	return json.Marshal(m{"direct": v.UdpAddr})
 }
 
 type cachedPacket struct {
