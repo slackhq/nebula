@@ -136,11 +136,11 @@ func (hm *HandshakeManager) Run(ctx context.Context) {
 	}
 }
 
-func (hm *HandshakeManager) HandleIncoming(addr netip.AddrPort, via *ViaSender, packet []byte, h *header.H) {
+func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *header.H) {
 	// First remote allow list check before we know the vpnIp
-	if addr.IsValid() {
-		if !hm.lightHouse.GetRemoteAllowList().AllowUnknownVpnAddr(addr.Addr()) {
-			hm.l.WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
+	if !via.IsRelayed {
+		if !hm.lightHouse.GetRemoteAllowList().AllowUnknownVpnAddr(via.UdpAddr.Addr()) {
+			hm.l.WithField("from", via).Debug("lighthouse.remote_allow_list denied incoming handshake")
 			return
 		}
 	}
@@ -149,11 +149,11 @@ func (hm *HandshakeManager) HandleIncoming(addr netip.AddrPort, via *ViaSender, 
 	case header.HandshakeIXPSK0:
 		switch h.MessageCounter {
 		case 1:
-			ixHandshakeStage1(hm.f, addr, via, packet, h)
+			ixHandshakeStage1(hm.f, via, packet, h)
 
 		case 2:
 			newHostinfo := hm.queryIndex(h.RemoteIndex)
-			tearDown := ixHandshakeStage2(hm.f, addr, via, newHostinfo, packet, h)
+			tearDown := ixHandshakeStage2(hm.f, via, newHostinfo, packet, h)
 			if tearDown && newHostinfo != nil {
 				hm.DeleteHostInfo(newHostinfo.hostinfo)
 			}
