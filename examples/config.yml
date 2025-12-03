@@ -280,6 +280,11 @@ tun:
   # SO_RCVBUFFORCE is used to avoid having to raise the system wide max
   #use_system_route_table_buffer_size: 0
 
+  # On linux only, set the routing table id where nebula installs routes. 
+  # This includes the assigned IPs in the certificate and the unsafe_routes.
+  # Defaults to using the 'main' table (id 254).
+  #route_table_id: 254
+
 # Configure logging level
 logging:
   # panic, fatal, error, warning, info, or debug. Default is info and is reloadable.
