@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.7] - 2025-10-10
+
+The master branch has been heavily updated for some major changes, and in the meantime,
+maintenance has been occurring on the release-1.9 branch. Please refer to the release-1.9
+branch changelog for releases 1.9.5-1.9.7:
+
+<https://github.com/slackhq/nebula/blob/release-1.9/CHANGELOG.md>
+
 ### Changed
 
 - `default_local_cidr_any` now defaults to false, meaning that any firewall rule
