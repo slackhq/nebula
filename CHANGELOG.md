@@ -9,19 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.10.0] - 2025-12-04
 
+See the [v1.10.0](https://github.com/slackhq/nebula/milestone/16?closed=1) milestone for a complete list of changes.
+
 ### Added
 
 - Support for ipv6 and multiple ipv4/6 addresses in the overlay.
   A new v2 ASN.1 based certificate format.
   Certificates now have a unified interface for external implementations.
   (#1212, #1216, #1345, #1359, #1381, #1419, #1464, #1466, #1451, #1476, #1467, #1481, #1399, #1488, #1492, #1495, #1468, #1521, #1535, #1538)
-  **TODO: External documentation link!**
 - Add the ability to mark packets on linux to better target nebula packets in iptables/nftables. (#1331)
 - Add ECMP support for `unsafe_routes`. (#1332)
 - PKCS11 support for P256 keys when built with `pkcs11` tag (#1153, #1482)
 
 ### Changed
 
+- **NOTE**: `default_local_cidr_any` now defaults to false, meaning that any firewall rule
+  intended to target an `unsafe_routes` entry must explicitly declare it via the
+  `local_cidr` field. This is almost always the intended behavior. This flag is
+  deprecated and will be removed in a future release. (#1373)
 - Improve logging when a relay is in use on an inbound packet. (#1533)
 - Avoid fatal errors if `rountines` is > 1 on systems that don't support more than 1 routine. (#1531)
 - Log a warning if a firewall rule contains an `any` that negates a more restrictive filter. (#1513)
@@ -30,10 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Log only the count of blocklisted certificate fingerprints instead of the entire list. (#1525)
 - Don't fatal when the ssh server is unable to be configured successfully. (#1520)
 - Update to build against go v1.25. (#1483)
-- `default_local_cidr_any` now defaults to false, meaning that any firewall rule
-  intended to target an `unsafe_routes` entry must explicitly declare it via the
-  `local_cidr` field. This is almost always the intended behavior. This flag is
-  deprecated and will be removed in a future release. (#1373)
 - Allow projects using `nebula` as a library with userspace networking to configure the `logger` and build version. (#1239) 
 - Upgrade to `yaml.v3`. (#1148, #1371, #1438, #1478)
 
