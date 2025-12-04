@@ -127,6 +127,10 @@ func (u *TesterConn) LocalAddr() (netip.AddrPort, error) {
 	return u.Addr, nil
 }
 
+func (u *TesterConn) SupportsMultipleReaders() bool {
+	return false
+}
+
 func (u *TesterConn) Rebind() error {
 	return nil
 }

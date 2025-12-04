@@ -43,7 +43,7 @@ type signFlags struct {
 func newSignFlags() *signFlags {
 	sf := signFlags{set: flag.NewFlagSet("sign", flag.ContinueOnError)}
 	sf.set.Usage = func() {}
-	sf.version = sf.set.Uint("version", 0, "Optional: version of the certificate format to use, the default is to create both v1 and v2 certificates.")
+	sf.version = sf.set.Uint("version", 0, "Optional: version of the certificate format to use. The default is to match the version of the signing CA")
 	sf.caKeyPath = sf.set.String("ca-key", "ca.key", "Optional: path to the signing CA key")
 	sf.caCertPath = sf.set.String("ca-crt", "ca.crt", "Optional: path to the signing CA cert")
 	sf.name = sf.set.String("name", "", "Required: name of the cert, usually a hostname")
@@ -116,26 +116,28 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		// naively attempt to decode the private key as though it is not encrypted
 		caKey, _, curve, err = cert.UnmarshalSigningPrivateKeyFromPEM(rawCAKey)
 		if errors.Is(err, cert.ErrPrivateKeyEncrypted) {
-			// ask for a passphrase until we get one
 			var passphrase []byte
-			for i := 0; i < 5; i++ {
-				out.Write([]byte("Enter passphrase: "))
-				passphrase, err = pr.ReadPassword()
-
-				if errors.Is(err, ErrNoTerminal) {
-					return fmt.Errorf("ca-key is encrypted and must be decrypted interactively")
-				} else if err != nil {
-					return fmt.Errorf("error reading password: %s", err)
-				}
-
-				if len(passphrase) > 0 {
-					break
-				}
-			}
+			passphrase = []byte(os.Getenv("NEBULA_CA_PASSPHRASE"))
 			if len(passphrase) == 0 {
-				return fmt.Errorf("cannot open encrypted ca-key without passphrase")
-			}
+				// ask for a passphrase until we get one
+				for i := 0; i < 5; i++ {
+					out.Write([]byte("Enter passphrase: "))
+					passphrase, err = pr.ReadPassword()
 
+					if errors.Is(err, ErrNoTerminal) {
+						return fmt.Errorf("ca-key is encrypted and must be decrypted interactively")
+					} else if err != nil {
+						return fmt.Errorf("error reading password: %s", err)
+					}
+
+					if len(passphrase) > 0 {
+						break
+					}
+				}
+				if len(passphrase) == 0 {
+					return fmt.Errorf("cannot open encrypted ca-key without passphrase")
+				}
+			}
 			curve, caKey, _, err = cert.DecryptAndUnmarshalSigningPrivateKey(passphrase, rawCAKey)
 			if err != nil {
 				return fmt.Errorf("error while parsing encrypted ca-key: %s", err)
@@ -163,6 +165,10 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 
 	if caCert.Expired(time.Now()) {
 		return fmt.Errorf("ca certificate is expired")
+	}
+
+	if version == 0 {
+		version = caCert.Version()
 	}
 
 	// if no duration is given, expire one second before the root expires
@@ -277,21 +283,19 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	notBefore := time.Now()
 	notAfter := notBefore.Add(*sf.duration)
 
-	if version == 0 || version == cert.Version1 {
-		// Make sure we at least have an ip
+	switch version {
+	case cert.Version1:
+		// Make sure we have only one ipv4 address
 		if len(v4Networks) != 1 {
 			return newHelpErrorf("invalid -networks definition: v1 certificates can only have a single ipv4 address")
 		}
 
-		if version == cert.Version1 {
-			// If we are asked to mint a v1 certificate only then we cant just ignore any v6 addresses
-			if len(v6Networks) > 0 {
-				return newHelpErrorf("invalid -networks definition: v1 certificates can only be ipv4")
-			}
+		if len(v6Networks) > 0 {
+			return newHelpErrorf("invalid -networks definition: v1 certificates can only contain ipv4 addresses")
+		}
 
-			if len(v6UnsafeNetworks) > 0 {
-				return newHelpErrorf("invalid -unsafe-networks definition: v1 certificates can only be ipv4")
-			}
+		if len(v6UnsafeNetworks) > 0 {
+			return newHelpErrorf("invalid -unsafe-networks definition: v1 certificates can only contain ipv4 addresses")
 		}
 
 		t := &cert.TBSCertificate{
@@ -321,9 +325,8 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 
 		crts = append(crts, nc)
-	}
 
-	if version == 0 || version == cert.Version2 {
+	case cert.Version2:
 		t := &cert.TBSCertificate{
 			Version:        cert.Version2,
 			Name:           *sf.name,
@@ -351,6 +354,9 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 
 		crts = append(crts, nc)
+	default:
+		// this should be unreachable
+		return fmt.Errorf("invalid version: %d", version)
 	}
 
 	if !isP11 && *sf.inPubPath == "" {

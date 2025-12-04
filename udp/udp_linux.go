@@ -72,6 +72,10 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 	return &StdConn{sysFd: fd, isV4: ip.Is4(), l: l, batch: batch}, err
 }
 
+func (u *StdConn) SupportsMultipleReaders() bool {
+	return true
+}
+
 func (u *StdConn) Rebind() error {
 	return nil
 }

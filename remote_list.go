@@ -190,7 +190,7 @@ type RemoteList struct {
 	// The full list of vpn addresses assigned to this host
 	vpnAddrs []netip.Addr
 
-	// A deduplicated set of addresses. Any accessor should lock beforehand.
+	// A deduplicated set of underlay addresses. Any accessor should lock beforehand.
 	addrs []netip.AddrPort
 
 	// A set of relay addresses. VpnIp addresses that the remote identified as relays.
@@ -201,8 +201,10 @@ type RemoteList struct {
 	// For learned addresses, this is the vpnIp that sent the packet
 	cache map[netip.Addr]*cache
 
-	hr        *hostnamesResults
-	shouldAdd func(netip.Addr) bool
+	hr *hostnamesResults
+
+	// shouldAdd is a nillable function that decides if x should be added to addrs.
+	shouldAdd func(vpnAddrs []netip.Addr, x netip.Addr) bool
 
 	// This is a list of remotes that we have tried to handshake with and have returned from the wrong vpn ip.
 	// They should not be tried again during a handshake
@@ -213,7 +215,7 @@ type RemoteList struct {
 }
 
 // NewRemoteList creates a new empty RemoteList
-func NewRemoteList(vpnAddrs []netip.Addr, shouldAdd func(netip.Addr) bool) *RemoteList {
+func NewRemoteList(vpnAddrs []netip.Addr, shouldAdd func([]netip.Addr, netip.Addr) bool) *RemoteList {
 	r := &RemoteList{
 		vpnAddrs:  make([]netip.Addr, len(vpnAddrs)),
 		addrs:     make([]netip.AddrPort, 0),
@@ -336,21 +338,21 @@ func (r *RemoteList) CopyCache() *CacheMap {
 }
 
 // BlockRemote locks and records the address as bad, it will be excluded from the deduplicated address list
-func (r *RemoteList) BlockRemote(bad netip.AddrPort) {
-	if !bad.IsValid() {
-		// relays can have nil udp Addrs
+func (r *RemoteList) BlockRemote(bad ViaSender) {
+	if bad.IsRelayed {
 		return
 	}
+
 	r.Lock()
 	defer r.Unlock()
 
 	// Check if we already blocked this addr
-	if r.unlockedIsBad(bad) {
+	if r.unlockedIsBad(bad.UdpAddr) {
 		return
 	}
 
 	// We copy here because we are taking something else's memory and we can't trust everything
-	r.badRemotes = append(r.badRemotes, bad)
+	r.badRemotes = append(r.badRemotes, bad.UdpAddr)
 
 	// Mark the next interaction must recollect/dedupe
 	r.shouldRebuild = true
@@ -366,6 +368,15 @@ func (r *RemoteList) CopyBlockedRemotes() []netip.AddrPort {
 		c[i] = v
 	}
 	return c
+}
+
+// RefreshFromHandshake locks and updates the RemoteList to account for data learned upon a completed handshake
+func (r *RemoteList) RefreshFromHandshake(vpnAddrs []netip.Addr) {
+	r.Lock()
+	r.badRemotes = nil
+	r.vpnAddrs = make([]netip.Addr, len(vpnAddrs))
+	copy(r.vpnAddrs, vpnAddrs)
+	r.Unlock()
 }
 
 // ResetBlockedRemotes locks and clears the blocked remotes list
@@ -577,7 +588,7 @@ func (r *RemoteList) unlockedCollect() {
 
 	dnsAddrs := r.hr.GetAddrs()
 	for _, addr := range dnsAddrs {
-		if r.shouldAdd == nil || r.shouldAdd(addr.Addr()) {
+		if r.shouldAdd == nil || r.shouldAdd(r.vpnAddrs, addr.Addr()) {
 			if !r.unlockedIsBad(addr) {
 				addrs = append(addrs, addr)
 			}

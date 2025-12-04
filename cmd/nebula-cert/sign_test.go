@@ -55,7 +55,7 @@ func Test_signHelp(t *testing.T) {
 			"  -unsafe-networks string\n"+
 			"    \tOptional: comma separated list of ip address and network in CIDR notation. Unsafe networks this cert can route for\n"+
 			"  -version uint\n"+
-			"    \tOptional: version of the certificate format to use, the default is to create both v1 and v2 certificates.\n",
+			"    \tOptional: version of the certificate format to use. The default is to match the version of the signing CA\n",
 		ob.String(),
 	)
 }
@@ -204,7 +204,7 @@ func Test_signCert(t *testing.T) {
 	ob.Reset()
 	eb.Reset()
 	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m", "-subnets", "100::100/100"}
-	assertHelpError(t, signCert(args, ob, eb, nopw), "invalid -unsafe-networks definition: v1 certificates can only be ipv4")
+	assertHelpError(t, signCert(args, ob, eb, nopw), "invalid -unsafe-networks definition: v1 certificates can only contain ipv4 addresses")
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 
@@ -379,6 +379,15 @@ func Test_signCert(t *testing.T) {
 	assert.Equal(t, "Enter passphrase: ", ob.String())
 	assert.Empty(t, eb.String())
 
+	// test with the proper password in the environment
+	os.Remove(crtF.Name())
+	os.Remove(keyF.Name())
+	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", crtF.Name(), "-out-key", keyF.Name(), "-duration", "100m", "-subnets", "10.1.1.1/32, ,   10.2.2.2/32   ,   ,  ,, 10.5.5.5/32", "-groups", "1,,   2    ,        ,,,3,4,5"}
+	os.Setenv("NEBULA_CA_PASSPHRASE", string(passphrase))
+	require.NoError(t, signCert(args, ob, eb, testpw))
+	assert.Empty(t, eb.String())
+	os.Setenv("NEBULA_CA_PASSPHRASE", "")
+
 	// test with the wrong password
 	ob.Reset()
 	eb.Reset()
@@ -388,6 +397,17 @@ func Test_signCert(t *testing.T) {
 	require.Error(t, signCert(args, ob, eb, testpw))
 	assert.Equal(t, "Enter passphrase: ", ob.String())
 	assert.Empty(t, eb.String())
+
+	// test with the wrong password in environment
+	ob.Reset()
+	eb.Reset()
+
+	os.Setenv("NEBULA_CA_PASSPHRASE", "invalid password")
+	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", crtF.Name(), "-out-key", keyF.Name(), "-duration", "100m", "-subnets", "10.1.1.1/32, ,   10.2.2.2/32   ,   ,  ,, 10.5.5.5/32", "-groups", "1,,   2    ,        ,,,3,4,5"}
+	require.EqualError(t, signCert(args, ob, eb, nopw), "error while parsing encrypted ca-key: invalid passphrase or corrupt private key")
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
+	os.Setenv("NEBULA_CA_PASSPHRASE", "")
 
 	// test with the user not entering a password
 	ob.Reset()

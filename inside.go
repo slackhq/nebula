@@ -121,9 +121,10 @@ func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *
 	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, out, nb, packet, q, nil)
 }
 
-// Handshake will attempt to initiate a tunnel with the provided vpn address if it is within our vpn networks. This is a no-op if the tunnel is already established or being established
+// Handshake will attempt to initiate a tunnel with the provided vpn address. This is a no-op if the tunnel is already established or being established
+// it does not check if it is within our vpn networks!
 func (f *Interface) Handshake(vpnAddr netip.Addr) {
-	f.getOrHandshakeNoRouting(vpnAddr, nil)
+	f.handshakeManager.GetOrHandshake(vpnAddr, nil)
 }
 
 // getOrHandshakeNoRouting returns nil if the vpnAddr is not routable.
@@ -139,7 +140,6 @@ func (f *Interface) getOrHandshakeNoRouting(vpnAddr netip.Addr, cacheCallback fu
 // getOrHandshakeConsiderRouting will try to find the HostInfo to handle this packet, starting a handshake if necessary.
 // If the 2nd return var is false then the hostinfo is not ready to be used in a tunnel.
 func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cacheCallback func(*HandshakeHostInfo)) (*HostInfo, bool) {
-
 	destinationAddr := fwPacket.RemoteAddr
 
 	hostinfo, ready := f.getOrHandshakeNoRouting(destinationAddr, cacheCallback)
@@ -232,9 +232,10 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 	f.sendNoMetrics(header.Message, st, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, p, nb, out, 0, nil)
 }
 
-// SendMessageToVpnAddr handles real addr:port lookup and sends to the current best known address for vpnAddr
+// SendMessageToVpnAddr handles real addr:port lookup and sends to the current best known address for vpnAddr.
+// This function ignores myVpnNetworksTable, and will always attempt to treat the address as a vpnAddr
 func (f *Interface) SendMessageToVpnAddr(t header.MessageType, st header.MessageSubType, vpnAddr netip.Addr, p, nb, out []byte) {
-	hostInfo, ready := f.getOrHandshakeNoRouting(vpnAddr, func(hh *HandshakeHostInfo) {
+	hostInfo, ready := f.handshakeManager.GetOrHandshake(vpnAddr, func(hh *HandshakeHostInfo) {
 		hh.cachePacket(f.l, t, st, p, f.SendMessageToHostInfo, f.cachedPacketMetrics)
 	})
 

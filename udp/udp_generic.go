@@ -85,3 +85,7 @@ func (u *GenericConn) ListenOut(r EncReader) {
 		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
 	}
 }
+
+func (u *GenericConn) SupportsMultipleReaders() bool {
+	return false
+}

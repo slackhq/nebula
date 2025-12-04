@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,7 +23,7 @@ import (
 )
 
 type FirewallInterface interface {
-	AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, addr, localAddr netip.Prefix, caName string, caSha string) error
+	AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr string, caName string, caSha string) error
 }
 
 type conn struct {
@@ -247,22 +248,11 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 }
 
 // AddRule properly creates the in memory rule structure for a firewall table.
-func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, ip, localIp netip.Prefix, caName string, caSha string) error {
-	// Under gomobile, stringing a nil pointer with fmt causes an abort in debug mode for iOS
-	// https://github.com/golang/go/issues/14131
-	sIp := ""
-	if ip.IsValid() {
-		sIp = ip.String()
-	}
-	lIp := ""
-	if localIp.IsValid() {
-		lIp = localIp.String()
-	}
-
+func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr, caName string, caSha string) error {
 	// We need this rule string because we generate a hash. Removing this will break firewall reload.
 	ruleString := fmt.Sprintf(
 		"incoming: %v, proto: %v, startPort: %v, endPort: %v, groups: %v, host: %v, ip: %v, localIp: %v, caName: %v, caSha: %s",
-		incoming, proto, startPort, endPort, groups, host, sIp, lIp, caName, caSha,
+		incoming, proto, startPort, endPort, groups, host, cidr, localCidr, caName, caSha,
 	)
 	f.rules += ruleString + "\n"
 
@@ -270,7 +260,7 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 	if !incoming {
 		direction = "outgoing"
 	}
-	f.l.WithField("firewallRule", m{"direction": direction, "proto": proto, "startPort": startPort, "endPort": endPort, "groups": groups, "host": host, "ip": sIp, "localIp": lIp, "caName": caName, "caSha": caSha}).
+	f.l.WithField("firewallRule", m{"direction": direction, "proto": proto, "startPort": startPort, "endPort": endPort, "groups": groups, "host": host, "cidr": cidr, "localCidr": localCidr, "caName": caName, "caSha": caSha}).
 		Info("Firewall rule added")
 
 	var (
@@ -297,7 +287,7 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 		return fmt.Errorf("unknown protocol %v", proto)
 	}
 
-	return fp.addRule(f, startPort, endPort, groups, host, ip, localIp, caName, caSha)
+	return fp.addRule(f, startPort, endPort, groups, host, cidr, localCidr, caName, caSha)
 }
 
 // GetRuleHash returns a hash representation of all inbound and outbound rules
@@ -337,7 +327,6 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 	}
 
 	for i, t := range rs {
-		var groups []string
 		r, err := convertRule(l, t, table, i)
 		if err != nil {
 			return fmt.Errorf("%s rule #%v; %s", table, i, err)
@@ -347,21 +336,8 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			return fmt.Errorf("%s rule #%v; only one of port or code should be provided", table, i)
 		}
 
-		if r.Host == "" && len(r.Groups) == 0 && r.Group == "" && r.Cidr == "" && r.LocalCidr == "" && r.CAName == "" && r.CASha == "" {
+		if r.Host == "" && len(r.Groups) == 0 && r.Cidr == "" && r.LocalCidr == "" && r.CAName == "" && r.CASha == "" {
 			return fmt.Errorf("%s rule #%v; at least one of host, group, cidr, local_cidr, ca_name, or ca_sha must be provided", table, i)
-		}
-
-		if len(r.Groups) > 0 {
-			groups = r.Groups
-		}
-
-		if r.Group != "" {
-			// Check if we have both groups and group provided in the rule config
-			if len(groups) > 0 {
-				return fmt.Errorf("%s rule #%v; only one of group or groups should be defined, both provided", table, i)
-			}
-
-			groups = []string{r.Group}
 		}
 
 		var sPort, errPort string
@@ -392,23 +368,25 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			return fmt.Errorf("%s rule #%v; proto was not understood; `%s`", table, i, r.Proto)
 		}
 
-		var cidr netip.Prefix
-		if r.Cidr != "" {
-			cidr, err = netip.ParsePrefix(r.Cidr)
+		if r.Cidr != "" && r.Cidr != "any" {
+			_, err = netip.ParsePrefix(r.Cidr)
 			if err != nil {
 				return fmt.Errorf("%s rule #%v; cidr did not parse; %s", table, i, err)
 			}
 		}
 
-		var localCidr netip.Prefix
-		if r.LocalCidr != "" {
-			localCidr, err = netip.ParsePrefix(r.LocalCidr)
+		if r.LocalCidr != "" && r.LocalCidr != "any" {
+			_, err = netip.ParsePrefix(r.LocalCidr)
 			if err != nil {
 				return fmt.Errorf("%s rule #%v; local_cidr did not parse; %s", table, i, err)
 			}
 		}
 
-		err = fw.AddRule(inbound, proto, startPort, endPort, groups, r.Host, cidr, localCidr, r.CAName, r.CASha)
+		if warning := r.sanity(); warning != nil {
+			l.Warnf("%s rule #%v; %s", table, i, warning)
+		}
+
+		err = fw.AddRule(inbound, proto, startPort, endPort, r.Groups, r.Host, r.Cidr, r.LocalCidr, r.CAName, r.CASha)
 		if err != nil {
 			return fmt.Errorf("%s rule #%v; `%s`", table, i, err)
 		}
@@ -417,8 +395,10 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 	return nil
 }
 
-var ErrInvalidRemoteIP = errors.New("remote IP is not in remote certificate subnets")
-var ErrInvalidLocalIP = errors.New("local IP is not in list of handled local IPs")
+var ErrUnknownNetworkType = errors.New("unknown network type")
+var ErrPeerRejected = errors.New("remote address is not within a network that we handle")
+var ErrInvalidRemoteIP = errors.New("remote address is not in remote certificate networks")
+var ErrInvalidLocalIP = errors.New("local address is not in list of handled local addresses")
 var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
 // Drop returns an error if the packet should be dropped, explaining why. It
@@ -429,17 +409,30 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 		return nil
 	}
 
-	// Make sure remote address matches nebula certificate
-	if h.networks != nil {
-		if !h.networks.Contains(fp.RemoteAddr) {
-			f.metrics(incoming).droppedRemoteAddr.Inc(1)
-			return ErrInvalidRemoteIP
-		}
-	} else {
+	// Make sure remote address matches nebula certificate, and determine how to treat it
+	if h.networks == nil {
 		// Simple case: Certificate has one address and no unsafe networks
 		if h.vpnAddrs[0] != fp.RemoteAddr {
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrInvalidRemoteIP
+		}
+	} else {
+		nwType, ok := h.networks.Lookup(fp.RemoteAddr)
+		if !ok {
+			f.metrics(incoming).droppedRemoteAddr.Inc(1)
+			return ErrInvalidRemoteIP
+		}
+		switch nwType {
+		case NetworkTypeVPN:
+			break // nothing special
+		case NetworkTypeVPNPeer:
+			f.metrics(incoming).droppedRemoteAddr.Inc(1)
+			return ErrPeerRejected // reject for now, one day this may have different FW rules
+		case NetworkTypeUnsafe:
+			break // nothing special, one day this may have different FW rules
+		default:
+			f.metrics(incoming).droppedRemoteAddr.Inc(1)
+			return ErrUnknownNetworkType //should never happen
 		}
 	}
 
@@ -640,7 +633,7 @@ func (ft *FirewallTable) match(p firewall.Packet, incoming bool, c *cert.CachedC
 	return false
 }
 
-func (fp firewallPort) addRule(f *Firewall, startPort int32, endPort int32, groups []string, host string, ip, localIp netip.Prefix, caName string, caSha string) error {
+func (fp firewallPort) addRule(f *Firewall, startPort int32, endPort int32, groups []string, host string, cidr, localCidr, caName string, caSha string) error {
 	if startPort > endPort {
 		return fmt.Errorf("start port was lower than end port")
 	}
@@ -653,7 +646,7 @@ func (fp firewallPort) addRule(f *Firewall, startPort int32, endPort int32, grou
 			}
 		}
 
-		if err := fp[i].addRule(f, groups, host, ip, localIp, caName, caSha); err != nil {
+		if err := fp[i].addRule(f, groups, host, cidr, localCidr, caName, caSha); err != nil {
 			return err
 		}
 	}
@@ -684,7 +677,7 @@ func (fp firewallPort) match(p firewall.Packet, incoming bool, c *cert.CachedCer
 	return fp[firewall.PortAny].match(p, c, caPool)
 }
 
-func (fc *FirewallCA) addRule(f *Firewall, groups []string, host string, ip, localIp netip.Prefix, caName, caSha string) error {
+func (fc *FirewallCA) addRule(f *Firewall, groups []string, host string, cidr, localCidr, caName, caSha string) error {
 	fr := func() *FirewallRule {
 		return &FirewallRule{
 			Hosts:  make(map[string]*firewallLocalCIDR),
@@ -698,14 +691,14 @@ func (fc *FirewallCA) addRule(f *Firewall, groups []string, host string, ip, loc
 			fc.Any = fr()
 		}
 
-		return fc.Any.addRule(f, groups, host, ip, localIp)
+		return fc.Any.addRule(f, groups, host, cidr, localCidr)
 	}
 
 	if caSha != "" {
 		if _, ok := fc.CAShas[caSha]; !ok {
 			fc.CAShas[caSha] = fr()
 		}
-		err := fc.CAShas[caSha].addRule(f, groups, host, ip, localIp)
+		err := fc.CAShas[caSha].addRule(f, groups, host, cidr, localCidr)
 		if err != nil {
 			return err
 		}
@@ -715,7 +708,7 @@ func (fc *FirewallCA) addRule(f *Firewall, groups []string, host string, ip, loc
 		if _, ok := fc.CANames[caName]; !ok {
 			fc.CANames[caName] = fr()
 		}
-		err := fc.CANames[caName].addRule(f, groups, host, ip, localIp)
+		err := fc.CANames[caName].addRule(f, groups, host, cidr, localCidr)
 		if err != nil {
 			return err
 		}
@@ -747,24 +740,24 @@ func (fc *FirewallCA) match(p firewall.Packet, c *cert.CachedCertificate, caPool
 	return fc.CANames[s.Certificate.Name()].match(p, c)
 }
 
-func (fr *FirewallRule) addRule(f *Firewall, groups []string, host string, ip, localCIDR netip.Prefix) error {
+func (fr *FirewallRule) addRule(f *Firewall, groups []string, host, cidr, localCidr string) error {
 	flc := func() *firewallLocalCIDR {
 		return &firewallLocalCIDR{
 			LocalCIDR: new(bart.Lite),
 		}
 	}
 
-	if fr.isAny(groups, host, ip) {
+	if fr.isAny(groups, host, cidr) {
 		if fr.Any == nil {
 			fr.Any = flc()
 		}
 
-		return fr.Any.addRule(f, localCIDR)
+		return fr.Any.addRule(f, localCidr)
 	}
 
 	if len(groups) > 0 {
 		nlc := flc()
-		err := nlc.addRule(f, localCIDR)
+		err := nlc.addRule(f, localCidr)
 		if err != nil {
 			return err
 		}
@@ -780,30 +773,34 @@ func (fr *FirewallRule) addRule(f *Firewall, groups []string, host string, ip, l
 		if nlc == nil {
 			nlc = flc()
 		}
-		err := nlc.addRule(f, localCIDR)
+		err := nlc.addRule(f, localCidr)
 		if err != nil {
 			return err
 		}
 		fr.Hosts[host] = nlc
 	}
 
-	if ip.IsValid() {
-		nlc, _ := fr.CIDR.Get(ip)
-		if nlc == nil {
-			nlc = flc()
-		}
-		err := nlc.addRule(f, localCIDR)
+	if cidr != "" {
+		c, err := netip.ParsePrefix(cidr)
 		if err != nil {
 			return err
 		}
-		fr.CIDR.Insert(ip, nlc)
+		nlc, _ := fr.CIDR.Get(c)
+		if nlc == nil {
+			nlc = flc()
+		}
+		err = nlc.addRule(f, localCidr)
+		if err != nil {
+			return err
+		}
+		fr.CIDR.Insert(c, nlc)
 	}
 
 	return nil
 }
 
-func (fr *FirewallRule) isAny(groups []string, host string, ip netip.Prefix) bool {
-	if len(groups) == 0 && host == "" && !ip.IsValid() {
+func (fr *FirewallRule) isAny(groups []string, host string, cidr string) bool {
+	if len(groups) == 0 && host == "" && cidr == "" {
 		return true
 	}
 
@@ -817,7 +814,7 @@ func (fr *FirewallRule) isAny(groups []string, host string, ip netip.Prefix) boo
 		return true
 	}
 
-	if ip.IsValid() && ip.Bits() == 0 {
+	if cidr == "any" {
 		return true
 	}
 
@@ -869,8 +866,13 @@ func (fr *FirewallRule) match(p firewall.Packet, c *cert.CachedCertificate) bool
 	return false
 }
 
-func (flc *firewallLocalCIDR) addRule(f *Firewall, localIp netip.Prefix) error {
-	if !localIp.IsValid() {
+func (flc *firewallLocalCIDR) addRule(f *Firewall, localCidr string) error {
+	if localCidr == "any" {
+		flc.Any = true
+		return nil
+	}
+
+	if localCidr == "" {
 		if !f.hasUnsafeNetworks || f.defaultLocalCIDRAny {
 			flc.Any = true
 			return nil
@@ -881,12 +883,13 @@ func (flc *firewallLocalCIDR) addRule(f *Firewall, localIp netip.Prefix) error {
 		}
 		return nil
 
-	} else if localIp.Bits() == 0 {
-		flc.Any = true
-		return nil
 	}
 
-	flc.LocalCIDR.Insert(localIp)
+	c, err := netip.ParsePrefix(localCidr)
+	if err != nil {
+		return err
+	}
+	flc.LocalCIDR.Insert(c)
 	return nil
 }
 
@@ -907,7 +910,6 @@ type rule struct {
 	Code      string
 	Proto     string
 	Host      string
-	Group     string
 	Groups    []string
 	Cidr      string
 	LocalCidr string
@@ -949,7 +951,8 @@ func convertRule(l *logrus.Logger, p any, table string, i int) (rule, error) {
 		l.Warnf("%s rule #%v; group was an array with a single value, converting to simple value", table, i)
 		m["group"] = v[0]
 	}
-	r.Group = toString("group", m)
+
+	singleGroup := toString("group", m)
 
 	if rg, ok := m["groups"]; ok {
 		switch reflect.TypeOf(rg).Kind() {
@@ -966,7 +969,58 @@ func convertRule(l *logrus.Logger, p any, table string, i int) (rule, error) {
 		}
 	}
 
+	//flatten group vs groups
+	if singleGroup != "" {
+		// Check if we have both groups and group provided in the rule config
+		if len(r.Groups) > 0 {
+			return r, fmt.Errorf("only one of group or groups should be defined, both provided")
+		}
+		r.Groups = []string{singleGroup}
+	}
+
 	return r, nil
+}
+
+// sanity returns an error if the rule would be evaluated in a way that would short-circuit a configured check on a wildcard value
+// rules are evaluated as "port AND proto AND (ca_sha OR ca_name) AND (host OR group OR groups OR cidr) AND local_cidr"
+func (r *rule) sanity() error {
+	//port, proto, local_cidr are AND, no need to check here
+	//ca_sha and ca_name don't have a wildcard value, no need to check here
+	groupsEmpty := len(r.Groups) == 0
+	hostEmpty := r.Host == ""
+	cidrEmpty := r.Cidr == ""
+
+	if (groupsEmpty && hostEmpty && cidrEmpty) == true {
+		return nil //no content!
+	}
+
+	groupsHasAny := slices.Contains(r.Groups, "any")
+	if groupsHasAny && len(r.Groups) > 1 {
+		return fmt.Errorf("groups spec [%s] contains the group '\"any\". This rule will ignore the other groups specified", r.Groups)
+	}
+
+	if r.Host == "any" {
+		if !groupsEmpty {
+			return fmt.Errorf("groups specified as %s, but host=any will match any host, regardless of groups", r.Groups)
+		}
+
+		if !cidrEmpty {
+			return fmt.Errorf("cidr specified as %s, but host=any will match any host, regardless of cidr", r.Cidr)
+		}
+	}
+
+	if groupsHasAny {
+		if !hostEmpty && r.Host != "any" {
+			return fmt.Errorf("groups spec [%s] contains the group '\"any\". This rule will ignore the specified host %s", r.Groups, r.Host)
+		}
+		if !cidrEmpty {
+			return fmt.Errorf("groups spec [%s] contains the group '\"any\". This rule will ignore the specified cidr %s", r.Groups, r.Cidr)
+		}
+	}
+
+	//todo alert on cidr-any
+
+	return nil
 }
 
 func parsePort(s string) (startPort, endPort int32, err error) {

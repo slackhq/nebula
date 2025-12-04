@@ -234,6 +234,10 @@ func (t *winTun) Write(b []byte) (int, error) {
 	return t.tun.Write(b, 0)
 }
 
+func (t *winTun) SupportsMultiqueue() bool {
+	return false
+}
+
 func (t *winTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
 }

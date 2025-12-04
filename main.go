@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -13,7 +15,7 @@ import (
 	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 type m = map[string]any
@@ -26,6 +28,10 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			cancel()
 		}
 	}()
+
+	if buildVersion == "" {
+		buildVersion = moduleVersion()
+	}
 
 	l := logger
 	l.Formatter = &logrus.TextFormatter{
@@ -75,7 +81,8 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	if c.GetBool("sshd.enabled", false) {
 		sshStart, err = configSSH(l, ssh, c)
 		if err != nil {
-			return nil, util.ContextualizeIfNeeded("Error while configuring the sshd", err)
+			l.WithError(err).Warn("Failed to configure sshd, ssh debugging will not be available")
+			sshStart = nil
 		}
 	}
 
@@ -327,4 +334,19 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		lightHouse.StartUpdateWorker,
 		connManager.Start,
 	}, nil
+}
+
+func moduleVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+
+	for _, dep := range info.Deps {
+		if dep.Path == "github.com/slackhq/nebula" {
+			return strings.TrimPrefix(dep.Version, "v")
+		}
+	}
+
+	return ""
 }

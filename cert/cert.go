@@ -58,6 +58,9 @@ type Certificate interface {
 	// PublicKey is the raw bytes to be used in asymmetric cryptographic operations.
 	PublicKey() []byte
 
+	// MarshalPublicKeyPEM is the value of PublicKey marshalled to PEM
+	MarshalPublicKeyPEM() []byte
+
 	// Curve identifies which curve was used for the PublicKey and Signature.
 	Curve() Curve
 
@@ -135,8 +138,7 @@ func Recombine(v Version, rawCertBytes, publicKey []byte, curve Curve) (Certific
 	case Version2:
 		c, err = unmarshalCertificateV2(rawCertBytes, publicKey, curve)
 	default:
-		//TODO: CERT-V2 make a static var
-		return nil, fmt.Errorf("unknown certificate version %d", v)
+		return nil, ErrUnknownVersion
 	}
 
 	if err != nil {

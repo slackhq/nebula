@@ -5,9 +5,27 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
+	"strings"
 )
 
+// A version string that can be set with
+//
+//	-ldflags "-X main.Build=SOMEVERSION"
+//
+// at compile-time.
 var Build string
+
+func init() {
+	if Build == "" {
+		info, ok := debug.ReadBuildInfo()
+		if !ok {
+			return
+		}
+
+		Build = strings.TrimPrefix(info.Main.Version, "v")
+	}
+}
 
 type helpError struct {
 	s string

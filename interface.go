@@ -234,6 +234,13 @@ func (f *Interface) activate() {
 		WithField("boringcrypto", boringEnabled()).
 		Info("Nebula interface is active")
 
+	if f.routines > 1 {
+		if !f.inside.SupportsMultiqueue() || !f.outside.SupportsMultipleReaders() {
+			f.routines = 1
+			f.l.Warn("routines is not supported on this platform, falling back to a single routine")
+		}
+	}
+
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
 
 	metrics.GetOrRegisterGauge("multiport.tx_ports", nil).Update(int64(f.multiPort.TxPorts))
@@ -286,7 +293,7 @@ func (f *Interface) listenOut(i int) {
 	nb := make([]byte, 12, 12)
 
 	li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
-		f.readOutsidePackets(fromUdpAddr, nil, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
 	})
 }
 
