@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	ed25519_std "crypto/ed25519"
 	"github.com/skip2/go-qrcode"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/pkclient"
@@ -24,6 +25,7 @@ type caFlags struct {
 	name             *string
 	duration         *time.Duration
 	outKeyPath       *string
+	inKeyPath        *string
 	outCertPath      *string
 	outQRPath        *string
 	groups           *string
@@ -50,6 +52,7 @@ func newCaFlags() *caFlags {
 	cf.version = cf.set.Uint("version", uint(cert.Version2), "Optional: version of the certificate format to use")
 	cf.duration = cf.set.Duration("duration", time.Duration(time.Hour*8760), "Optional: amount of time the certificate should be valid for. Valid time units are seconds: \"s\", minutes: \"m\", hours: \"h\"")
 	cf.outKeyPath = cf.set.String("out-key", "ca.key", "Optional: path to write the private key to")
+	cf.inKeyPath = cf.set.String("in-key", "", "Optional: path to read private key for the new certificate")
 	cf.outCertPath = cf.set.String("out-crt", "ca.crt", "Optional: path to write the certificate to")
 	cf.outQRPath = cf.set.String("out-qr", "", "Optional: output a qr code image (png) of the certificate")
 	cf.groups = cf.set.String("groups", "", "Optional: comma separated list of groups. This will limit which groups subordinate certs can use")
@@ -95,6 +98,9 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 	}
 	if !isP11 {
 		if err = mustFlagString("out-key", cf.outKeyPath); err != nil {
+			if err = mustFlagString("in-key", cf.outKeyPath); err != nil {
+				return err
+			}
 			return err
 		}
 	}
@@ -223,9 +229,25 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		switch *cf.curve {
 		case "25519", "X25519", "Curve25519", "CURVE25519":
 			curve = cert.Curve_CURVE25519
-			pub, rawPriv, err = ed25519.GenerateKey(rand.Reader)
-			if err != nil {
-				return fmt.Errorf("error while generating ed25519 keys: %s", err)
+			if *cf.inKeyPath == "" {
+				pub, rawPriv, err = ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					return fmt.Errorf("error while generating ed25519 keys: %s", err)
+				}
+			} else {
+				var err error
+				rawPrivFile, err := os.ReadFile(*cf.inKeyPath)
+				if err != nil {
+					return err
+				}
+				rawPriv, _, _, err = cert.UnmarshalSigningPrivateKeyFromPEM(rawPrivFile)
+
+				// type ed25519.PrivateKey
+				privEd25519 := ed25519_std.PrivateKey(rawPriv)
+				// .Public returns a crypto.PublicKey which is
+				// an alias for any
+				pub = privEd25519.Public().(ed25519.PublicKey)
+
 			}
 		case "P256":
 			var key *ecdsa.PrivateKey
@@ -263,7 +285,10 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 
 	if !isP11 {
 		if _, err := os.Stat(*cf.outKeyPath); err == nil {
-			return fmt.Errorf("refusing to overwrite existing CA key: %s", *cf.outKeyPath)
+			// Check if we already have a private key
+			if *cf.inKeyPath == "" {
+				return fmt.Errorf("refusing to overwrite existing CA key: %s", *cf.outKeyPath)
+			}
 		}
 	}
 
@@ -294,9 +319,12 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 			b = cert.MarshalSigningPrivateKeyToPEM(curve, rawPriv)
 		}
 
-		err = os.WriteFile(*cf.outKeyPath, b, 0600)
-		if err != nil {
-			return fmt.Errorf("error while writing out-key: %s", err)
+		// Do not write private key if one was provided
+		if *cf.inKeyPath != "" {
+			err = os.WriteFile(*cf.outKeyPath, b, 0600)
+			if err != nil {
+				return fmt.Errorf("error while writing out-key: %s", err)
+			}
 		}
 	}
 
