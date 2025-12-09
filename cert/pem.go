@@ -86,7 +86,7 @@ func MarshalSigningPublicKeyToPEM(curve Curve, b []byte) []byte {
 	case Curve_CURVE25519:
 		return pem.EncodeToMemory(&pem.Block{Type: Ed25519PublicKeyBanner, Bytes: b})
 	case Curve_P256:
-		return pem.EncodeToMemory(&pem.Block{Type: P256PublicKeyBanner, Bytes: b})
+		return pem.EncodeToMemory(&pem.Block{Type: ECDSAP256PublicKeyBanner, Bytes: b})
 	default:
 		return nil
 	}
