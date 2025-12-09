@@ -100,12 +100,18 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 AAAAAAAAAAAAAAAAAAAAAAA=
 -----END NEBULA P256 PUBLIC KEY-----
 `)
+
+	pubP256KeyPemCA := []byte(`-----BEGIN NEBULA ECDSA P256 PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAA=
+-----END NEBULA ECDSA P256 PUBLIC KEY-----
+`)
 	pubP256Key, _, _, err := UnmarshalPublicKeyFromPEM(pubP256KeyPem)
 	require.NoError(t, err)
 	nc.details.curve = Curve_P256
 	nc.details.publicKey = pubP256Key
 	assert.Equal(t, Curve_P256, nc.Curve())
-	assert.Equal(t, string(nc.MarshalPublicKeyPEM()), string(pubP256KeyPem))
+	assert.Equal(t, string(nc.MarshalPublicKeyPEM()), string(pubP256KeyPemCA))
 	assert.True(t, nc.IsCA())
 
 	nc.details.isCA = false
