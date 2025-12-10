@@ -192,7 +192,7 @@ func (u *StdConn) ReadMulti(msgs []rawMessage) (int, error) {
 }
 
 func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
-	if u.isV4 {
+	if u.isV4 && ip.Addr().Is4() {
 		return u.writeTo4(b, ip)
 	}
 	return u.writeTo6(b, ip)
