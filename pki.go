@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -487,25 +488,25 @@ func loadCertificate(b []byte) (cert.Certificate, []byte, error) {
 }
 
 func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.CAPool, error) {
-	var rawCA []byte
-	var err error
-
 	caPathOrPEM := c.GetString("pki.ca", "")
 	if caPathOrPEM == "" {
 		return nil, errors.New("no pki.ca path or PEM data provided")
 	}
 
-	if strings.Contains(caPathOrPEM, "-----BEGIN") {
-		rawCA = []byte(caPathOrPEM)
+	var caReader io.ReadCloser
+	var err error
 
+	if strings.Contains(caPathOrPEM, "-----BEGIN") {
+		caReader = io.NopCloser(strings.NewReader(caPathOrPEM))
 	} else {
-		rawCA, err = os.ReadFile(caPathOrPEM)
+		caReader, err = os.Open(caPathOrPEM)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read pki.ca file %s: %s", caPathOrPEM, err)
 		}
 	}
+	defer caReader.Close()
 
-	caPool, err := cert.NewCAPoolFromPEM(rawCA)
+	caPool, err := cert.NewCAPoolFromPEMReader(caReader)
 	if errors.Is(err, cert.ErrExpired) {
 		var expired int
 		for _, crt := range caPool.CAs {
