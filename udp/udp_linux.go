@@ -192,7 +192,7 @@ func (u *StdConn) ReadMulti(msgs []rawMessage) (int, error) {
 }
 
 func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
-	if u.isV4 && ip.Addr().Is4() {
+	if u.isV4 {
 		return u.writeTo4(b, ip)
 	}
 	return u.writeTo6(b, ip)
@@ -224,10 +224,6 @@ func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
 }
 
 func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
-	if !ip.Addr().Is4() {
-		return ErrInvalidIPv6RemoteForSocket
-	}
-
 	var rsa unix.RawSockaddrInet4
 	rsa.Family = unix.AF_INET
 	rsa.Addr = ip.Addr().As4()
