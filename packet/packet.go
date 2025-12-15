@@ -19,9 +19,7 @@ type Packet struct {
 	Name    []byte
 	SegSize int
 
-	//todo should this hold out as well?
-	OutLen int
-
+	ReadyToSend  bool
 	wasSegmented bool
 	isV4         bool
 }
@@ -71,7 +69,6 @@ func (p *Packet) updateCtrl(ctrlLen int) {
 
 // Update sets a Packet into "just received, not processed" state
 func (p *Packet) Update(ctrlLen int) {
-	p.OutLen = -1
 	p.updateCtrl(ctrlLen)
 }
 

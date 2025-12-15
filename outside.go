@@ -181,9 +181,7 @@ func (f *Interface) readOutsidePacketsMany(packets []*packet.Packet, out []*pack
 			}
 		}
 
-		//todo per-segment!
 		for segment := range pkt.Segments() {
-
 			err := h.Parse(segment)
 			if err != nil {
 				// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
@@ -208,7 +206,6 @@ func (f *Interface) readOutsidePacketsMany(packets []*packet.Packet, out []*pack
 
 			switch h.Type {
 			case header.Message:
-				// TODO handleEncrypted sends directly to addr on error. Handle this in the tunneling case.
 				if !f.handleEncrypted(ci, via, h) {
 					return
 				}
@@ -676,7 +673,6 @@ func (f *Interface) decryptToTunDelayWrite(hostinfo *HostInfo, messageCounter ui
 	}
 
 	f.connectionManager.In(hostinfo)
-	pkt.OutLen += len(inSegment)
 	out.Segments[seg] = out.Segments[seg][:len(out.SegmentHeaders[seg])+len(out.SegmentPayloads[seg])]
 	return true
 }

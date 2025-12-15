@@ -271,9 +271,6 @@ func (dev *Device) TransmitPackets(pkts []*packet.OutPacket) error {
 	return nil
 }
 
-// TODO: Make above methods cancelable by taking a context.Context argument?
-// TODO: Implement zero-copy variants to transmit and receive packets?
-
 // processChains processes as many chains as needed to create one packet. The number of processed chains is returned.
 func (dev *Device) processChains(pkt *packet.VirtIOPacket, chains []virtqueue.UsedElement) (int, error) {
 	//read first element to see how many descriptors we need:

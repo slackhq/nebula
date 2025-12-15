@@ -352,7 +352,7 @@ func (f *Interface) listenIn(reader overlay.TunDev, queueNum int) {
 
 		now := time.Now()
 		for i, pkt := range packets[:n] {
-			outPackets[i].OutLen = -1
+			outPackets[i].ReadyToSend = false
 			f.consumeInsidePacket(pkt.Payload, fwPacket, nb, outPackets[i], queueNum, conntrackCache.Get(f.l), now)
 			reader.RecycleRxSeg(pkt, i == (n-1), queueNum) //todo handle err?
 			pkt.Reset()

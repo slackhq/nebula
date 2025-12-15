@@ -220,8 +220,8 @@ func (u *StdConn) Prep(pkt *packet.Packet, addr netip.AddrPort) error {
 	if err != nil {
 		return err
 	}
+	pkt.ReadyToSend = true
 	pkt.Name = pkt.Name[:nl]
-	pkt.OutLen = len(pkt.Payload)
 	return nil
 }
 
@@ -239,7 +239,7 @@ func (u *StdConn) WriteBatch(pkts []*packet.Packet) (int, error) {
 	//segmenting := false
 	idx := 0
 	for _, pkt := range pkts {
-		if len(pkt.Payload) == 0 || pkt.OutLen == -1 {
+		if !pkt.ReadyToSend || len(pkt.Payload) == 0 {
 			sent++
 			continue
 		}
