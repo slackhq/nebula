@@ -301,7 +301,6 @@ func (f *Interface) listenOut(q int) {
 			outPackets[i].SegCounter = 0
 		}
 
-		//todo f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
 		f.readOutsidePacketsMany(pkts, outPackets, h, fwPacket, lhh, nb, q, ctCache.Get(f.l), time.Now())
 		//we opportunistically tx, but try to also send stragglers
 		if _, err := f.readers[q].WriteMany(outPackets, q); err != nil {
