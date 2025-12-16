@@ -9,7 +9,6 @@ type VirtIOPacket struct {
 	Header    virtio.NetHdr
 	Chains    []uint16
 	ChainRefs [][]byte
-	// OfferDescriptorChains(chains []uint16, kick bool) error
 }
 
 func NewVIO() *VirtIOPacket {
@@ -24,14 +23,4 @@ func (v *VirtIOPacket) Reset() {
 	v.Payload = nil
 	v.ChainRefs = v.ChainRefs[:0]
 	v.Chains = v.Chains[:0]
-}
-
-type VirtIOTXPacket struct {
-	VirtIOPacket
-}
-
-func NewVIOTX(isV4 bool) *VirtIOTXPacket {
-	out := new(VirtIOTXPacket)
-	out.VirtIOPacket = *NewVIO()
-	return out
 }

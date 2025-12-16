@@ -10,11 +10,9 @@ type OutPacket struct {
 	SegmentPayloads [][]byte
 	SegmentHeaders  [][]byte
 	SegmentIDs      []uint16
-	//todo virtio header?
-	SegSize      int
-	SegCounter   int
-	Valid        bool
-	wasSegmented bool
+
+	SegSize    int
+	SegCounter int
 
 	Scratch []byte
 }
@@ -35,12 +33,9 @@ func (pkt *OutPacket) Reset() {
 	pkt.SegmentHeaders = pkt.SegmentHeaders[:0]
 	pkt.SegmentIDs = pkt.SegmentIDs[:0]
 	pkt.SegSize = 0
-	pkt.Valid = false
-	pkt.wasSegmented = false
 }
 
 func (pkt *OutPacket) UseSegment(segID uint16, seg []byte, isV6 bool) int {
-	pkt.Valid = true
 	pkt.SegmentIDs = append(pkt.SegmentIDs, segID)
 	pkt.Segments = append(pkt.Segments, seg) //todo do we need this?
 

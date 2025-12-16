@@ -297,7 +297,6 @@ func (f *Interface) listenOut(q int) {
 	li.ListenOut(func(pkts []*packet.Packet) {
 		toSend = toSend[:0]
 		for i := range outPackets {
-			outPackets[i].Valid = false
 			outPackets[i].SegCounter = 0
 		}
 
