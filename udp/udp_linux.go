@@ -216,6 +216,7 @@ func (u *StdConn) WriteToBatch(b []byte, ip netip.AddrPort) error {
 }
 
 func (u *StdConn) Prep(pkt *packet.Packet, addr netip.AddrPort) error {
+	//todo move this into pkt
 	nl, err := u.encodeSockaddr(pkt.Name, addr)
 	if err != nil {
 		return err

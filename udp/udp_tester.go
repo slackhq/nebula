@@ -11,6 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/packet"
 )
 
 type Packet struct {
@@ -38,6 +39,11 @@ type TesterConn struct {
 
 	closed atomic.Bool
 	l      *logrus.Logger
+}
+
+func (u *TesterConn) Prep(pkt *packet.Packet, addr netip.AddrPort) error {
+	pkt.ReadyToSend = true
+	return pkt.SetAddrPort(addr)
 }
 
 func NewListener(l *logrus.Logger, ip netip.Addr, port int, _ bool, _ int) (Conn, error) {
@@ -90,6 +96,19 @@ func (u *TesterConn) Get(block bool) *Packet {
 // Below this is boilerplate implementation to make nebula actually work
 //********************************************************************************************************************//
 
+func (u *TesterConn) WriteBatch(pkts []*packet.Packet) (int, error) {
+	for _, pkt := range pkts {
+		if !pkt.ReadyToSend {
+			continue
+		}
+		err := u.WriteTo(pkt.Payload, pkt.AddrPort())
+		if err != nil {
+			return 0, err
+		}
+	}
+	return len(pkts), nil
+}
+
 func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	if u.closed.Load() {
 		return io.ErrClosedPipe
@@ -99,6 +118,9 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 		Data: make([]byte, len(b), len(b)),
 		From: u.Addr,
 		To:   addr,
+	}
+	if addr.Addr().IsUnspecified() {
+		panic("invalid address")
 	}
 
 	copy(p.Data, b)
@@ -112,7 +134,15 @@ func (u *TesterConn) ListenOut(r EncReader) {
 		if !ok {
 			return
 		}
-		r(p.From, p.Data)
+		x := packet.New(p.From.Addr().Is4())
+		x.Payload = p.Data
+		x.SetSegSizeForTX()
+		err := x.SetAddrPort(p.From)
+		if err != nil {
+			panic(err)
+		}
+		y := []*packet.Packet{x}
+		r(y)
 	}
 }
 

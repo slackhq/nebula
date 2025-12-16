@@ -2,6 +2,7 @@ package packet
 
 import (
 	"encoding/binary"
+	"fmt"
 	"iter"
 	"net/netip"
 	"slices"
@@ -42,6 +43,39 @@ func (p *Packet) AddrPort() netip.AddrPort {
 		ip, _ = netip.AddrFromSlice(p.Name[8:24])
 	}
 	return netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(p.Name[2:4]))
+}
+
+func (p *Packet) encodeSockaddr(dst []byte, addr netip.AddrPort) (uint32, error) {
+	//todo no chance this works on windows?
+	if p.isV4 {
+		if !addr.Addr().Is4() {
+			return 0, fmt.Errorf("Listener is IPv4, but writing to IPv6 remote")
+		}
+		var sa unix.RawSockaddrInet4
+		sa.Family = unix.AF_INET
+		sa.Addr = addr.Addr().As4()
+		binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&sa.Port))[:], addr.Port())
+		size := unix.SizeofSockaddrInet4
+		copy(dst[:size], (*(*[unix.SizeofSockaddrInet4]byte)(unsafe.Pointer(&sa)))[:])
+		return uint32(size), nil
+	}
+
+	var sa unix.RawSockaddrInet6
+	sa.Family = unix.AF_INET6
+	sa.Addr = addr.Addr().As16()
+	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&sa.Port))[:], addr.Port())
+	size := unix.SizeofSockaddrInet6
+	copy(dst[:size], (*(*[unix.SizeofSockaddrInet6]byte)(unsafe.Pointer(&sa)))[:])
+	return uint32(size), nil
+}
+
+func (p *Packet) SetAddrPort(addr netip.AddrPort) error {
+	nl, err := p.encodeSockaddr(p.Name, addr)
+	if err != nil {
+		return err
+	}
+	p.Name = p.Name[:nl]
+	return nil
 }
 
 func (p *Packet) updateCtrl(ctrlLen int) {
