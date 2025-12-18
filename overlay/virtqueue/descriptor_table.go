@@ -268,18 +268,13 @@ func (dt *DescriptorTable) createDescriptorForInputs() (uint16, error) {
 	return head, nil
 }
 
-func (dt *DescriptorTable) getDescriptorItem(head uint16) ([]byte, error) {
-	if int(head) > len(dt.descriptors) {
-		return nil, fmt.Errorf("%w: index out of range", ErrInvalidDescriptorChain)
-	}
-
+func (dt *DescriptorTable) getDescriptorItem(head uint16) []byte {
 	desc := &dt.descriptors[head] //todo this is a pretty nasty hack with no checks
 
 	// The descriptor address points to memory not managed by Go, so this
 	// conversion is safe. See https://github.com/golang/go/issues/58625
 	//goland:noinspection GoVetUnsafePointer
-	bs := unsafe.Slice((*byte)(unsafe.Pointer(desc.address)), desc.length)
-	return bs, nil
+	return unsafe.Slice((*byte)(unsafe.Pointer(desc.address)), desc.length)
 }
 
 // checkUnusedDescriptorLength asserts that the length of an unused descriptor

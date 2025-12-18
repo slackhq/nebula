@@ -223,10 +223,7 @@ func (dev *Device) GetPacketForTx() (uint16, []byte, error) {
 	if err != nil {
 		return 0, nil, fmt.Errorf("transmit queue: %w", err)
 	}
-	buf, err := dev.TransmitQueue.GetDescriptorItem(idx)
-	if err != nil {
-		return 0, nil, fmt.Errorf("get descriptor chain: %w", err)
-	}
+	buf := dev.TransmitQueue.GetDescriptorItem(idx)
 	return idx, buf, nil
 }
 
@@ -273,10 +270,7 @@ func (dev *Device) ProcessRxChain(pkt *VirtIOPacket, chain virtqueue.UsedElement
 	//read first element to see how many descriptors we need:
 	pkt.Reset()
 	idx := uint16(chain.DescriptorIndex)
-	buf, err := dev.ReceiveQueue.GetDescriptorItem(idx)
-	if err != nil {
-		return 0, fmt.Errorf("get descriptor chain: %w", err)
-	}
+	buf := dev.ReceiveQueue.GetDescriptorItem(idx)
 
 	// The specification requires that the first descriptor chain starts
 	// with a virtio-net header. It is not clear, whether it is also
@@ -284,20 +278,25 @@ func (dev *Device) ProcessRxChain(pkt *VirtIOPacket, chain virtqueue.UsedElement
 	// descriptor chain, but it is reasonable to assume that this is
 	// always the case.
 	// The decode method already does the buffer length check.
-	if err = pkt.header.Decode(buf); err != nil {
-		// The device misbehaved. There is no way we can gracefully
-		// recover from this, because we don't know how many of the
-		// following descriptor chains belong to this packet.
-		return 0, fmt.Errorf("decode vnethdr: %w", err)
-	}
+
+	//HACK: we only want the last bit of the header, the NumBuffers field. So, let's grab just that:
+	//numBuffers := binary.BigEndian.Uint16(buf[virtio.NetHdrSize-3:])
+	//even bigger hack: apparently this is hitting some kind of memory access pitfall? Let's only grab the last byte:
+	//numBuffers := buf[virtio.NetHdrSize-2]
+
+	//if err = pkt.header.Decode(buf); err != nil {
+	//	// The device misbehaved. There is no way we can gracefully
+	//	// recover from this, because we don't know how many of the
+	//	// following descriptor chains belong to this packet.
+	//	return 0, fmt.Errorf("decode vnethdr: %w", err)
+	//}
 
 	//we have the header now: what do we need to do?
-	if int(pkt.header.NumBuffers) > 1 {
-		return 0, fmt.Errorf("number of buffers is greater than number of chains %d", 1)
-	}
-	if int(pkt.header.NumBuffers) != 1 {
-		return 0, fmt.Errorf("too smol-brain to handle more than one buffer per chain item right now: %d chains, %d bufs", 1, int(pkt.header.NumBuffers))
-	}
+	//todo we're ignoring the header lol
+	//if int(numBuffers) != 1 {
+	//	return 0, fmt.Errorf("too smol-brain to handle more than one buffer per Chain item right now: %d chains, %d bufs", 1, int(numBuffers))
+	//}
+
 	if chain.Length > 16000 {
 		//todo!
 		return 1, fmt.Errorf("too big packet length: %d", chain.Length)
@@ -311,8 +310,8 @@ func (dev *Device) ProcessRxChain(pkt *VirtIOPacket, chain virtqueue.UsedElement
 
 type VirtIOPacket struct {
 	payload []byte
-	header  virtio.NetHdr
-	Chains  []uint16
+	//header  virtio.NetHdr
+	Chains []uint16
 }
 
 func NewVIO() *VirtIOPacket {
@@ -328,8 +327,8 @@ func (v *VirtIOPacket) Reset() {
 }
 
 func (v *VirtIOPacket) GetPayload() []byte {
-	return v.payload
+	return v.payload //todo this could be dev.ReceiveQueue.GetDescriptorItem(idx)
 }
 func (v *VirtIOPacket) SetPayload(x []byte) {
-	v.payload = x //todo?
+	v.payload = x
 }

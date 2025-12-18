@@ -340,7 +340,7 @@ func (sq *SplitQueue) OfferInDescriptorChains() (uint16, error) {
 // Be careful to only access the returned buffer slices when the device is no
 // longer using them. They must not be accessed after
 // [SplitQueue.FreeDescriptorChain] has been called.
-func (sq *SplitQueue) GetDescriptorItem(head uint16) ([]byte, error) {
+func (sq *SplitQueue) GetDescriptorItem(head uint16) []byte {
 	sq.descriptorTable.descriptors[head].length = uint32(sq.descriptorTable.itemSize)
 	return sq.descriptorTable.getDescriptorItem(head)
 }
@@ -350,13 +350,19 @@ func (sq *SplitQueue) SetDescSize(head uint16, sz int) {
 	sq.descriptorTable.descriptors[int(head)].length = uint32(sz)
 }
 
-func (sq *SplitQueue) OfferDescriptorChains(chains []uint16, kick bool) error {
-	//todo not doing this may break eventually?
-	//not called under lock
-	//if err := sq.descriptorTable.freeDescriptorChain(head); err != nil {
-	//	return fmt.Errorf("free: %w", err)
-	//}
+func (sq *SplitQueue) OfferDescriptor(chain uint16, kick bool) error {
+	// Make the descriptor chain available to the device.
+	sq.availableRing.offerSingle(chain)
 
+	// Notify the device to make it process the updated available ring.
+	if kick {
+		return sq.Kick()
+	}
+
+	return nil
+}
+
+func (sq *SplitQueue) OfferDescriptorChains(chains []uint16, kick bool) error {
 	// Make the descriptor chain available to the device.
 	sq.availableRing.offer(chains)
 
