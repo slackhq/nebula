@@ -4,6 +4,7 @@
 package overlay
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/netip"
@@ -181,6 +182,14 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []n
 	})
 
 	return t, nil
+}
+
+func (t *tun) NewPacketArrays(batchSize int) []TunPacket {
+	inPackets := make([]TunPacket, batchSize)
+	for i := 0; i < batchSize; i++ {
+		inPackets[i] = vhostnet.NewVIO()
+	}
+	return inPackets
 }
 
 func (t *tun) reload(c *config.C, initial bool) error {
@@ -725,12 +734,25 @@ func (t *tun) Close() error {
 	return nil
 }
 
-func (t *tun) ReadMany(p []*packet.VirtIOPacket, q int) (int, error) {
-	n, err := t.vdev[q].ReceivePackets(p) //we are TXing
+func (t *tun) ReadMany(p []TunPacket, q int) (int, error) {
+	err := t.vdev[q].ReceiveQueue.WaitForUsedElements(context.TODO())
 	if err != nil {
 		return 0, err
 	}
-	return n, nil
+	i := 0
+	for i = 0; i < len(p); i++ {
+		item, ok := t.vdev[q].ReceiveQueue.TakeSingleNoBlock()
+		if !ok {
+			break
+		}
+		pkt := p[i].(*vhostnet.VirtIOPacket) //todo I'm not happy about this but I don't want to change how memory is "owned" rn
+		_, err = t.vdev[q].ProcessRxChain(pkt, item)
+		if err != nil {
+			return i, err
+		}
+		i++
+	}
+	return i, nil
 }
 
 func (t *tun) Write(b []byte) (int, error) {
@@ -783,6 +805,9 @@ func (t *tun) WriteMany(x []*packet.OutPacket, q int) (int, error) {
 	return maximum, nil
 }
 
-func (t *tun) RecycleRxSeg(pkt *packet.VirtIOPacket, kick bool, q int) error {
-	return t.vdev[q].ReceiveQueue.OfferDescriptorChains(pkt.Chains, kick)
+func (t *tun) RecycleRxSeg(pkt TunPacket, kick bool, q int) error {
+	vpkt := pkt.(*vhostnet.VirtIOPacket)
+	err := t.vdev[q].ReceiveQueue.OfferDescriptorChains(vpkt.Chains, kick)
+	vpkt.Reset() //intentionally ignoring err!
+	return err
 }

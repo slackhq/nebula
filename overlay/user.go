@@ -38,7 +38,18 @@ type UserDevice struct {
 	inboundWriter *io.PipeWriter
 }
 
-func (d *UserDevice) RecycleRxSeg(pkt *packet.VirtIOPacket, kick bool, q int) error {
+func (d *UserDevice) NewPacketArrays(batchSize int) []TunPacket {
+	//inPackets := make([]TunPacket, batchSize)
+	//outPackets := make([]OutPacket, batchSize)
+	panic("not implemented") //todo!
+	//for i := 0; i < batchSize; i++ {
+	//	inPackets[i] = vhostnet.NewVIO()
+	//	outPackets[i] = packet.New(false)
+	//}
+	//return inPackets, outPackets
+}
+
+func (d *UserDevice) RecycleRxSeg(pkt TunPacket, kick bool, q int) error {
 	return nil
 }
 
@@ -76,8 +87,12 @@ func (d *UserDevice) Close() error {
 	return nil
 }
 
-func (d *UserDevice) ReadMany(b []*packet.VirtIOPacket, _ int) (int, error) {
-	return d.Read(b[0].Payload)
+func (d *UserDevice) ReadMany(b []TunPacket, _ int) (int, error) {
+	_, err := d.Read(b[0].GetPayload())
+	if err != nil {
+		return 0, err
+	}
+	return 1, nil
 }
 
 func (d *UserDevice) AllocSeg(pkt *packet.OutPacket, q int) (int, error) {

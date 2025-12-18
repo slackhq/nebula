@@ -16,13 +16,15 @@ const DefaultMTU = 1300
 
 type TunDev interface {
 	io.WriteCloser
-	ReadMany(x []*packet.VirtIOPacket, q int) (int, error)
+	NewPacketArrays(batchSize int) []TunPacket
+
+	ReadMany(x []TunPacket, q int) (int, error)
+	RecycleRxSeg(pkt TunPacket, kick bool, q int) error
 
 	//todo this interface sux
 	AllocSeg(pkt *packet.OutPacket, q int) (int, error)
 	WriteOne(x *packet.OutPacket, kick bool, q int) (int, error)
 	WriteMany(x []*packet.OutPacket, q int) (int, error)
-	RecycleRxSeg(pkt *packet.VirtIOPacket, kick bool, q int) error
 }
 
 // TODO: We may be able to remove routines
@@ -31,8 +33,8 @@ type DeviceFactory func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefi
 func NewDeviceFromConfig(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
 	switch {
 	case c.GetBool("tun.disabled", false):
-		tun := newDisabledTun(vpnNetworks, c.GetInt("tun.tx_queue", 500), c.GetBool("stats.message_metrics", false), l)
-		return tun, nil
+		t := newDisabledTun(vpnNetworks, c.GetInt("tun.tx_queue", 500), c.GetBool("stats.message_metrics", false), l)
+		return t, nil
 
 	default:
 		return newTun(c, l, vpnNetworks, routines > 1)

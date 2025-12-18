@@ -84,17 +84,11 @@ func (r *UsedRing) Address() uintptr {
 	return uintptr(unsafe.Pointer(r.flags))
 }
 
-// take returns all new [UsedElement]s that the device put into the ring and
-// that weren't already returned by a previous call to this method.
-// had a lock, I removed it
-func (r *UsedRing) take(maxToTake int) (int, []UsedElement) {
-	//r.mu.Lock()
-	//defer r.mu.Unlock()
-
+func (r *UsedRing) availableToTake() int {
 	ringIndex := *r.ringIndex
 	if ringIndex == r.lastIndex {
 		// Nothing new.
-		return 0, nil
+		return 0
 	}
 
 	// Calculate the number new used elements that we can read from the ring.
@@ -102,6 +96,16 @@ func (r *UsedRing) take(maxToTake int) (int, []UsedElement) {
 	count := int(ringIndex - r.lastIndex)
 	if count < 0 {
 		count += 0xffff
+	}
+	return count
+}
+
+// take returns all new [UsedElement]s that the device put into the ring and
+// that weren't already returned by a previous call to this method.
+func (r *UsedRing) take(maxToTake int) (int, []UsedElement) {
+	count := r.availableToTake()
+	if count == 0 {
+		return 0, nil
 	}
 
 	stillNeedToTake := 0
@@ -128,21 +132,13 @@ func (r *UsedRing) take(maxToTake int) (int, []UsedElement) {
 	return stillNeedToTake, elems
 }
 
-func (r *UsedRing) takeOne() (uint16, bool) {
+func (r *UsedRing) takeOne() (UsedElement, bool) {
 	//r.mu.Lock()
 	//defer r.mu.Unlock()
 
-	ringIndex := *r.ringIndex
-	if ringIndex == r.lastIndex {
-		// Nothing new.
-		return 0xffff, false
-	}
-
-	// Calculate the number new used elements that we can read from the ring.
-	// The ring index may wrap, so special handling for that case is needed.
-	count := int(ringIndex - r.lastIndex)
-	if count < 0 {
-		count += 0xffff
+	count := r.availableToTake()
+	if count == 0 {
+		return UsedElement{}, false
 	}
 
 	// The number of new elements can never exceed the queue size.
@@ -150,11 +146,7 @@ func (r *UsedRing) takeOne() (uint16, bool) {
 		panic("used ring contains more new elements than the ring is long")
 	}
 
-	if count == 0 {
-		return 0xffff, false
-	}
-
-	out := r.ring[r.lastIndex%uint16(len(r.ring))].GetHead()
+	out := r.ring[r.lastIndex%uint16(len(r.ring))]
 	r.lastIndex++
 
 	return out, true

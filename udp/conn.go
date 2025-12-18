@@ -10,7 +10,7 @@ import (
 const MTU = 9001
 
 type EncReader func(
-	[]*packet.Packet,
+	[]*packet.UDPPacket,
 )
 
 type Conn interface {
@@ -19,8 +19,8 @@ type Conn interface {
 	ListenOut(r EncReader)
 	WriteTo(b []byte, addr netip.AddrPort) error
 	ReloadConfig(c *config.C)
-	Prep(pkt *packet.Packet, addr netip.AddrPort) error
-	WriteBatch(pkt []*packet.Packet) (int, error)
+	Prep(pkt *packet.UDPPacket, addr netip.AddrPort) error
+	WriteBatch(pkt []*packet.UDPPacket) (int, error)
 	SupportsMultipleReaders() bool
 	Close() error
 }

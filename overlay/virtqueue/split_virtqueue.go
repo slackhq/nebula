@@ -128,8 +128,7 @@ func NewSplitQueue(queueSize int, itemSize int) (_ *SplitQueue, err error) {
 		return nil, err
 	}
 
-	// Consume used buffer notifications in the background.
-	sq.stop = sq.startConsumeUsedRing()
+	sq.stop = sq.kickSelfToExit()
 
 	return &sq, nil
 }
@@ -169,9 +168,7 @@ func (sq *SplitQueue) CallEventFD() int {
 	return sq.callEventFD.FD()
 }
 
-// startConsumeUsedRing starts a goroutine that runs [consumeUsedRing].
-// A function is returned that can be used to gracefully cancel it. todo rename
-func (sq *SplitQueue) startConsumeUsedRing() func() error {
+func (sq *SplitQueue) kickSelfToExit() func() error {
 	return func() error {
 
 		// The goroutine blocks until it receives a signal on the event file
@@ -185,7 +182,15 @@ func (sq *SplitQueue) startConsumeUsedRing() func() error {
 	}
 }
 
-func (sq *SplitQueue) TakeSingle(ctx context.Context) (uint16, error) {
+func (sq *SplitQueue) TakeSingleIndex(ctx context.Context) (uint16, error) {
+	element, err := sq.TakeSingle(ctx)
+	if err != nil {
+		return 0xffff, err
+	}
+	return element.GetHead(), nil
+}
+
+func (sq *SplitQueue) TakeSingle(ctx context.Context) (UsedElement, error) {
 	var n int
 	var err error
 	for ctx.Err() == nil {
@@ -195,7 +200,7 @@ func (sq *SplitQueue) TakeSingle(ctx context.Context) (uint16, error) {
 		}
 		// Wait for a signal from the device.
 		if n, err = sq.epoll.Block(); err != nil {
-			return 0, fmt.Errorf("wait: %w", err)
+			return UsedElement{}, fmt.Errorf("wait: %w", err)
 		}
 
 		if n > 0 {
@@ -208,7 +213,31 @@ func (sq *SplitQueue) TakeSingle(ctx context.Context) (uint16, error) {
 			}
 		}
 	}
-	return 0, ctx.Err()
+	return UsedElement{}, ctx.Err()
+}
+
+func (sq *SplitQueue) TakeSingleNoBlock() (UsedElement, bool) {
+	return sq.usedRing.takeOne()
+}
+
+func (sq *SplitQueue) WaitForUsedElements(ctx context.Context) error {
+	if sq.usedRing.availableToTake() != 0 {
+		return nil
+	}
+	for ctx.Err() == nil {
+		// Wait for a signal from the device.
+		n, err := sq.epoll.Block()
+		if err != nil {
+			return fmt.Errorf("wait: %w", err)
+		}
+		if n > 0 {
+			_ = sq.epoll.Clear()
+			if sq.usedRing.availableToTake() != 0 {
+				return nil
+			}
+		}
+	}
+	return ctx.Err()
 }
 
 func (sq *SplitQueue) BlockAndGetHeadsCapped(ctx context.Context, maxToTake int) ([]UsedElement, error) {
@@ -235,7 +264,7 @@ func (sq *SplitQueue) BlockAndGetHeadsCapped(ctx context.Context, maxToTake int)
 			return nil, fmt.Errorf("wait: %w", err)
 		}
 		if n > 0 {
-			_ = sq.epoll.Clear() //???
+			_ = sq.epoll.Clear()
 			stillNeedToTake, out = sq.usedRing.take(maxToTake)
 			sq.more = stillNeedToTake
 			return out, nil
@@ -296,16 +325,14 @@ func (sq *SplitQueue) OfferInDescriptorChains() (uint16, error) {
 	sq.availableRing.offerSingle(head)
 
 	// Notify the device to make it process the updated available ring.
-	if err := sq.kickEventFD.Kick(); err != nil {
+	if err = sq.kickEventFD.Kick(); err != nil {
 		return head, fmt.Errorf("notify device: %w", err)
 	}
 
 	return head, nil
 }
 
-// GetDescriptorChain returns the device-readable buffers (out buffers) and
-// device-writable buffers (in buffers) of the descriptor chain with the given
-// head index.
+// GetDescriptorItem returns the buffer of a given index
 // The head index must be one that was returned by a previous call to
 // [SplitQueue.OfferDescriptorChain] and the descriptor chain must not have been
 // freed yet.
@@ -313,35 +340,9 @@ func (sq *SplitQueue) OfferInDescriptorChains() (uint16, error) {
 // Be careful to only access the returned buffer slices when the device is no
 // longer using them. They must not be accessed after
 // [SplitQueue.FreeDescriptorChain] has been called.
-func (sq *SplitQueue) GetDescriptorChain(head uint16) (outBuffers, inBuffers [][]byte, err error) {
-	return sq.descriptorTable.getDescriptorChain(head)
-}
-
 func (sq *SplitQueue) GetDescriptorItem(head uint16) ([]byte, error) {
 	sq.descriptorTable.descriptors[head].length = uint32(sq.descriptorTable.itemSize)
 	return sq.descriptorTable.getDescriptorItem(head)
-}
-
-func (sq *SplitQueue) GetDescriptorInbuffers(head uint16, inBuffers *[][]byte) error {
-	return sq.descriptorTable.getDescriptorInbuffers(head, inBuffers)
-}
-
-// FreeDescriptorChain frees the descriptor chain with the given head index.
-// The head index must be one that was returned by a previous call to
-// [SplitQueue.OfferDescriptorChain] and the descriptor chain must not have been
-// freed yet.
-//
-// This creates new room in the queue which can be used by following
-// [SplitQueue.OfferDescriptorChain] calls.
-// When there are outstanding calls for [SplitQueue.OfferDescriptorChain] that
-// are waiting for free room in the queue, they may become unblocked by this.
-func (sq *SplitQueue) FreeDescriptorChain(head uint16) error {
-	//not called under lock
-	if err := sq.descriptorTable.freeDescriptorChain(head); err != nil {
-		return fmt.Errorf("free: %w", err)
-	}
-
-	return nil
 }
 
 func (sq *SplitQueue) SetDescSize(head uint16, sz int) {

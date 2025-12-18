@@ -294,7 +294,7 @@ func (f *Interface) listenOut(q int) {
 
 	toSend := make([][]byte, batch)
 
-	li.ListenOut(func(pkts []*packet.Packet) {
+	li.ListenOut(func(pkts []*packet.UDPPacket) {
 		toSend = toSend[:0]
 		for i := range outPackets {
 			outPackets[i].SegCounter = 0
@@ -323,11 +323,11 @@ func (f *Interface) listenIn(reader overlay.TunDev, queueNum int) {
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
-	packets := make([]*packet.VirtIOPacket, batch)
-	outPackets := make([]*packet.Packet, batch)
+	packets := reader.NewPacketArrays(batch)
+
+	outPackets := make([]*packet.UDPPacket, batch)
 	for i := 0; i < batch; i++ {
-		packets[i] = packet.NewVIO()
-		outPackets[i] = packet.New(false) //todo?
+		outPackets[i] = packet.New(false) //todo isv4?
 	}
 
 	for {
@@ -352,9 +352,8 @@ func (f *Interface) listenIn(reader overlay.TunDev, queueNum int) {
 		now := time.Now()
 		for i, pkt := range packets[:n] {
 			outPackets[i].ReadyToSend = false
-			f.consumeInsidePacket(pkt.Payload, fwPacket, nb, outPackets[i], queueNum, conntrackCache.Get(f.l), now)
+			f.consumeInsidePacket(pkt.GetPayload(), fwPacket, nb, outPackets[i], queueNum, conntrackCache.Get(f.l), now)
 			reader.RecycleRxSeg(pkt, i == (n-1), queueNum) //todo handle err?
-			pkt.Reset()
 		}
 		_, err = f.writers[queueNum].WriteBatch(outPackets[:n])
 		if err != nil {

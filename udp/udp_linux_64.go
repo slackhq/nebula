@@ -52,9 +52,9 @@ func setCmsgLen(h *unix.Cmsghdr, l int) {
 	h.Len = uint64(l)
 }
 
-func (u *StdConn) PrepareRawMessages(n int, isV4 bool) ([]rawMessage, []*packet.Packet) {
+func (u *StdConn) PrepareRawMessages(n int, isV4 bool) ([]rawMessage, []*packet.UDPPacket) {
 	msgs := make([]rawMessage, n)
-	packets := make([]*packet.Packet, n)
+	packets := make([]*packet.UDPPacket, n)
 
 	for i := range msgs {
 		packets[i] = packet.New(isV4)

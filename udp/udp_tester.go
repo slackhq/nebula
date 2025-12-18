@@ -41,7 +41,7 @@ type TesterConn struct {
 	l      *logrus.Logger
 }
 
-func (u *TesterConn) Prep(pkt *packet.Packet, addr netip.AddrPort) error {
+func (u *TesterConn) Prep(pkt *packet.UDPPacket, addr netip.AddrPort) error {
 	pkt.ReadyToSend = true
 	return pkt.SetAddrPort(addr)
 }
@@ -96,7 +96,7 @@ func (u *TesterConn) Get(block bool) *Packet {
 // Below this is boilerplate implementation to make nebula actually work
 //********************************************************************************************************************//
 
-func (u *TesterConn) WriteBatch(pkts []*packet.Packet) (int, error) {
+func (u *TesterConn) WriteBatch(pkts []*packet.UDPPacket) (int, error) {
 	for _, pkt := range pkts {
 		if !pkt.ReadyToSend {
 			continue
@@ -141,7 +141,7 @@ func (u *TesterConn) ListenOut(r EncReader) {
 		if err != nil {
 			panic(err)
 		}
-		y := []*packet.Packet{x}
+		y := []*packet.UDPPacket{x}
 		r(y)
 	}
 }

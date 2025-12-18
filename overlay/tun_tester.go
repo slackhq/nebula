@@ -106,7 +106,7 @@ func (t *TestTun) Name() string {
 	return t.Device
 }
 
-func (t *TestTun) ReadMany(x []*packet.VirtIOPacket, q int) (int, error) {
+func (t *TestTun) ReadMany(x []TunPacket, q int) (int, error) {
 	p, ok := <-t.rxPackets
 	if !ok {
 		return 0, os.ErrClosed
@@ -165,7 +165,7 @@ func (t *TestTun) WriteMany(x []*packet.OutPacket, q int) (int, error) {
 	return len(x), nil
 }
 
-func (t *TestTun) RecycleRxSeg(pkt *packet.VirtIOPacket, kick bool, q int) error {
+func (t *TestTun) RecycleRxSeg(pkt *TunPacket, kick bool, q int) error {
 	//todo this ought to maybe track something
 	return nil
 }

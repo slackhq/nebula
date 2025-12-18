@@ -14,7 +14,7 @@ import (
 
 const Size = 0xffff
 
-type Packet struct {
+type UDPPacket struct {
 	Payload []byte
 	Control []byte
 	Name    []byte
@@ -25,8 +25,8 @@ type Packet struct {
 	isV4         bool
 }
 
-func New(isV4 bool) *Packet {
-	return &Packet{
+func New(isV4 bool) *UDPPacket {
+	return &UDPPacket{
 		Payload: make([]byte, Size),
 		Control: make([]byte, unix.CmsgSpace(2)),
 		Name:    make([]byte, unix.SizeofSockaddrInet6),
@@ -34,7 +34,7 @@ func New(isV4 bool) *Packet {
 	}
 }
 
-func (p *Packet) AddrPort() netip.AddrPort {
+func (p *UDPPacket) AddrPort() netip.AddrPort {
 	var ip netip.Addr
 	// Its ok to skip the ok check here, the slicing is the only error that can occur and it will panic
 	if p.isV4 {
@@ -45,7 +45,7 @@ func (p *Packet) AddrPort() netip.AddrPort {
 	return netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(p.Name[2:4]))
 }
 
-func (p *Packet) encodeSockaddr(dst []byte, addr netip.AddrPort) (uint32, error) {
+func (p *UDPPacket) encodeSockaddr(dst []byte, addr netip.AddrPort) (uint32, error) {
 	//todo no chance this works on windows?
 	if p.isV4 {
 		if !addr.Addr().Is4() {
@@ -69,7 +69,7 @@ func (p *Packet) encodeSockaddr(dst []byte, addr netip.AddrPort) (uint32, error)
 	return uint32(size), nil
 }
 
-func (p *Packet) SetAddrPort(addr netip.AddrPort) error {
+func (p *UDPPacket) SetAddrPort(addr netip.AddrPort) error {
 	nl, err := p.encodeSockaddr(p.Name, addr)
 	if err != nil {
 		return err
@@ -78,7 +78,7 @@ func (p *Packet) SetAddrPort(addr netip.AddrPort) error {
 	return nil
 }
 
-func (p *Packet) updateCtrl(ctrlLen int) {
+func (p *UDPPacket) updateCtrl(ctrlLen int) {
 	p.SegSize = len(p.Payload)
 	p.wasSegmented = false
 	if ctrlLen == 0 {
@@ -101,12 +101,12 @@ func (p *Packet) updateCtrl(ctrlLen int) {
 	}
 }
 
-// Update sets a Packet into "just received, not processed" state
-func (p *Packet) Update(ctrlLen int) {
+// Update sets a UDPPacket into "just received, not processed" state
+func (p *UDPPacket) Update(ctrlLen int) {
 	p.updateCtrl(ctrlLen)
 }
 
-func (p *Packet) SetSegSizeForTX() {
+func (p *UDPPacket) SetSegSizeForTX() {
 	p.SegSize = len(p.Payload)
 	hdr := (*unix.Cmsghdr)(unsafe.Pointer(&p.Control[0]))
 	hdr.Level = unix.SOL_UDP
@@ -115,7 +115,7 @@ func (p *Packet) SetSegSizeForTX() {
 	binary.NativeEndian.PutUint16(p.Control[unix.CmsgLen(0):unix.CmsgLen(0)+2], uint16(p.SegSize))
 }
 
-func (p *Packet) CompatibleForSegmentationWith(otherP *Packet, currentTotalSize int) bool {
+func (p *UDPPacket) CompatibleForSegmentationWith(otherP *UDPPacket, currentTotalSize int) bool {
 	//same dest
 	if !slices.Equal(p.Name, otherP.Name) {
 		return false
@@ -134,7 +134,7 @@ func (p *Packet) CompatibleForSegmentationWith(otherP *Packet, currentTotalSize 
 	return true
 }
 
-func (p *Packet) Segments() iter.Seq[[]byte] {
+func (p *UDPPacket) Segments() iter.Seq[[]byte] {
 	return func(yield func([]byte) bool) {
 		//cursor := 0
 		for offset := 0; offset < len(p.Payload); offset += p.SegSize {

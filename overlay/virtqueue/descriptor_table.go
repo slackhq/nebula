@@ -10,10 +10,6 @@ import (
 )
 
 var (
-	// ErrDescriptorChainEmpty is returned when a descriptor chain would contain
-	// no buffers, which is not allowed.
-	ErrDescriptorChainEmpty = errors.New("empty descriptor chains are not allowed")
-
 	// ErrNotEnoughFreeDescriptors is returned when the free descriptors are
 	// exhausted, meaning that the queue is full.
 	ErrNotEnoughFreeDescriptors = errors.New("not enough free descriptors, queue is full")
@@ -272,59 +268,6 @@ func (dt *DescriptorTable) createDescriptorForInputs() (uint16, error) {
 	return head, nil
 }
 
-// TODO: Implement a zero-copy variant of createDescriptorChain?
-
-// getDescriptorChain returns the device-readable buffers (out buffers) and
-// device-writable buffers (in buffers) of the descriptor chain that starts with
-// the given head index. The descriptor chain must have been created using
-// [createDescriptorChain] and must not have been freed yet (meaning that the
-// head index must not be contained in the free chain).
-//
-// Be careful to only access the returned buffer slices when the device has not
-// yet or is no longer using them. They must not be accessed after
-// [freeDescriptorChain] has been called.
-func (dt *DescriptorTable) getDescriptorChain(head uint16) (outBuffers, inBuffers [][]byte, err error) {
-	if int(head) > len(dt.descriptors) {
-		return nil, nil, fmt.Errorf("%w: index out of range", ErrInvalidDescriptorChain)
-	}
-
-	// Iterate over the chain. The iteration is limited to the queue size to
-	// avoid ending up in an endless loop when things go very wrong.
-	next := head
-	for range len(dt.descriptors) {
-		if next == dt.freeHeadIndex {
-			return nil, nil, fmt.Errorf("%w: must not be part of the free chain", ErrInvalidDescriptorChain)
-		}
-
-		desc := &dt.descriptors[next]
-
-		// The descriptor address points to memory not managed by Go, so this
-		// conversion is safe. See https://github.com/golang/go/issues/58625
-		//goland:noinspection GoVetUnsafePointer
-		bs := unsafe.Slice((*byte)(unsafe.Pointer(desc.address)), desc.length)
-
-		if desc.flags&descriptorFlagWritable == 0 {
-			outBuffers = append(outBuffers, bs)
-		} else {
-			inBuffers = append(inBuffers, bs)
-		}
-
-		// Is this the tail of the chain?
-		if desc.flags&descriptorFlagHasNext == 0 {
-			break
-		}
-
-		// Detect loops.
-		if desc.next == head {
-			return nil, nil, fmt.Errorf("%w: contains a loop", ErrInvalidDescriptorChain)
-		}
-
-		next = desc.next
-	}
-
-	return
-}
-
 func (dt *DescriptorTable) getDescriptorItem(head uint16) ([]byte, error) {
 	if int(head) > len(dt.descriptors) {
 		return nil, fmt.Errorf("%w: index out of range", ErrInvalidDescriptorChain)
@@ -337,121 +280,6 @@ func (dt *DescriptorTable) getDescriptorItem(head uint16) ([]byte, error) {
 	//goland:noinspection GoVetUnsafePointer
 	bs := unsafe.Slice((*byte)(unsafe.Pointer(desc.address)), desc.length)
 	return bs, nil
-}
-
-func (dt *DescriptorTable) getDescriptorInbuffers(head uint16, inBuffers *[][]byte) error {
-	if int(head) > len(dt.descriptors) {
-		return fmt.Errorf("%w: index out of range", ErrInvalidDescriptorChain)
-	}
-
-	// Iterate over the chain. The iteration is limited to the queue size to
-	// avoid ending up in an endless loop when things go very wrong.
-	next := head
-	for range len(dt.descriptors) {
-		if next == dt.freeHeadIndex {
-			return fmt.Errorf("%w: must not be part of the free chain", ErrInvalidDescriptorChain)
-		}
-
-		desc := &dt.descriptors[next]
-
-		// The descriptor address points to memory not managed by Go, so this
-		// conversion is safe. See https://github.com/golang/go/issues/58625
-		//goland:noinspection GoVetUnsafePointer
-		bs := unsafe.Slice((*byte)(unsafe.Pointer(desc.address)), desc.length)
-
-		if desc.flags&descriptorFlagWritable == 0 {
-			return fmt.Errorf("there should not be an outbuffer in %d", head)
-		} else {
-			*inBuffers = append(*inBuffers, bs)
-		}
-
-		// Is this the tail of the chain?
-		if desc.flags&descriptorFlagHasNext == 0 {
-			break
-		}
-
-		// Detect loops.
-		if desc.next == head {
-			return fmt.Errorf("%w: contains a loop", ErrInvalidDescriptorChain)
-		}
-
-		next = desc.next
-	}
-
-	return nil
-}
-
-// freeDescriptorChain can be used to free a descriptor chain when it is no
-// longer in use. The descriptor chain that starts with the given index will be
-// put back into the free chain, so the descriptors can be used for later calls
-// of [createDescriptorChain].
-// The descriptor chain must have been created using [createDescriptorChain] and
-// must not have been freed yet (meaning that the head index must not be
-// contained in the free chain).
-func (dt *DescriptorTable) freeDescriptorChain(head uint16) error {
-	if int(head) > len(dt.descriptors) {
-		return fmt.Errorf("%w: index out of range", ErrInvalidDescriptorChain)
-	}
-
-	// Iterate over the chain. The iteration is limited to the queue size to
-	// avoid ending up in an endless loop when things go very wrong.
-	next := head
-	var tailDesc *Descriptor
-	var chainLen uint16
-	for range len(dt.descriptors) {
-		if next == dt.freeHeadIndex {
-			return fmt.Errorf("%w: must not be part of the free chain", ErrInvalidDescriptorChain)
-		}
-
-		desc := &dt.descriptors[next]
-		chainLen++
-
-		// Set the length of all unused descriptors back to zero.
-		desc.length = 0
-
-		// Unset all flags except the next flag.
-		desc.flags &= descriptorFlagHasNext
-
-		// Is this the tail of the chain?
-		if desc.flags&descriptorFlagHasNext == 0 {
-			tailDesc = desc
-			break
-		}
-
-		// Detect loops.
-		if desc.next == head {
-			return fmt.Errorf("%w: contains a loop", ErrInvalidDescriptorChain)
-		}
-
-		next = desc.next
-	}
-	if tailDesc == nil {
-		// A descriptor chain longer than the queue size but without loops
-		// should be impossible.
-		panic(fmt.Sprintf("could not find a tail for descriptor chain starting at %d", head))
-	}
-
-	// The tail descriptor does not have the next flag set, but when it comes
-	// back into the free chain, it should have.
-	tailDesc.flags = descriptorFlagHasNext
-
-	if dt.freeHeadIndex == noFreeHead {
-		// The whole free chain was used up, so we turn this returned descriptor
-		// chain into the new free chain by completing the circle and using its
-		// head.
-		tailDesc.next = head
-		dt.freeHeadIndex = head
-	} else {
-		// Attach the returned chain at the beginning of the free chain but
-		// right after the free chain head.
-		freeHeadDesc := &dt.descriptors[dt.freeHeadIndex]
-		tailDesc.next = freeHeadDesc.next
-		freeHeadDesc.next = head
-	}
-
-	dt.freeNum += chainLen
-
-	return nil
 }
 
 // checkUnusedDescriptorLength asserts that the length of an unused descriptor

@@ -24,7 +24,11 @@ type disabledTun struct {
 	l  *logrus.Logger
 }
 
-func (*disabledTun) RecycleRxSeg(pkt *packet.VirtIOPacket, kick bool, q int) error {
+func (t *disabledTun) NewPacketArrays(batchSize int) []TunPacket {
+	panic("implement me") //TODO
+}
+
+func (*disabledTun) RecycleRxSeg(pkt TunPacket, kick bool, q int) error {
 	return nil
 }
 
@@ -131,8 +135,8 @@ func (t *disabledTun) WriteMany(x []*packet.OutPacket, q int) (int, error) {
 	return 0, fmt.Errorf("tun_disabled: WriteMany not implemented")
 }
 
-func (t *disabledTun) ReadMany(b []*packet.VirtIOPacket, _ int) (int, error) {
-	return t.Read(b[0].Payload)
+func (t *disabledTun) ReadMany(b []TunPacket, _ int) (int, error) {
+	return t.Read(b[0].GetPayload())
 }
 
 func (t *disabledTun) NewMultiQueueReader() (TunDev, error) {

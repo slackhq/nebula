@@ -215,7 +215,7 @@ func (u *StdConn) WriteToBatch(b []byte, ip netip.AddrPort) error {
 	return u.writeTo6(b, ip)
 }
 
-func (u *StdConn) Prep(pkt *packet.Packet, addr netip.AddrPort) error {
+func (u *StdConn) Prep(pkt *packet.UDPPacket, addr netip.AddrPort) error {
 	//todo move this into pkt
 	nl, err := u.encodeSockaddr(pkt.Name, addr)
 	if err != nil {
@@ -226,7 +226,7 @@ func (u *StdConn) Prep(pkt *packet.Packet, addr netip.AddrPort) error {
 	return nil
 }
 
-func (u *StdConn) WriteBatch(pkts []*packet.Packet) (int, error) {
+func (u *StdConn) WriteBatch(pkts []*packet.UDPPacket) (int, error) {
 	if len(pkts) == 0 {
 		return 0, nil
 	}
@@ -235,7 +235,7 @@ func (u *StdConn) WriteBatch(pkts []*packet.Packet) (int, error) {
 	//u.iovs = u.iovs[:0]
 
 	sent := 0
-	var mostRecentPkt *packet.Packet
+	var mostRecentPkt *packet.UDPPacket
 	mostRecentPktSize := 0
 	//segmenting := false
 	idx := 0
