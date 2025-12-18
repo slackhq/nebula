@@ -123,6 +123,9 @@ func NewDevice(options ...Option) (*Device, error) {
 	if err = dev.refillReceiveQueue(); err != nil {
 		return nil, fmt.Errorf("refill receive queue: %w", err)
 	}
+	if err = dev.prefillTxQueue(); err != nil {
+		return nil, fmt.Errorf("refill tx queue: %w", err)
+	}
 
 	dev.initialized = true
 
@@ -147,6 +150,27 @@ func (dev *Device) refillReceiveQueue() error {
 			}
 			return fmt.Errorf("offer descriptor chain: %w", err)
 		}
+	}
+}
+
+func (dev *Device) prefillTxQueue() error {
+	for {
+		dt := dev.TransmitQueue.DescriptorTable()
+		for {
+			x, _, err := dt.CreateDescriptorForOutputs()
+			if err != nil {
+				if errors.Is(err, virtqueue.ErrNotEnoughFreeDescriptors) {
+					// Queue is full, job is done.
+					return nil
+				}
+				return err
+			}
+			err = dev.TransmitQueue.OfferDescriptorChains([]uint16{x}, false)
+			if err != nil {
+				return err
+			}
+		}
+
 	}
 }
 
@@ -211,15 +235,16 @@ func createQueue(controlFD int, queueIndex int, queueSize int, itemSize int) (*v
 func (dev *Device) GetPacketForTx() (uint16, []byte, error) {
 	var err error
 	var idx uint16
-	if !dev.fullTable {
-		idx, err = dev.TransmitQueue.DescriptorTable().CreateDescriptorForOutputs()
-		if err == virtqueue.ErrNotEnoughFreeDescriptors {
-			dev.fullTable = true
-			idx, err = dev.TransmitQueue.TakeSingleIndex(context.TODO())
-		}
-	} else {
-		idx, err = dev.TransmitQueue.TakeSingleIndex(context.TODO())
-	}
+	//if !dev.fullTable {
+	//	idx, err = dev.TransmitQueue.DescriptorTable().CreateDescriptorForOutputs()
+	//	if err == virtqueue.ErrNotEnoughFreeDescriptors {
+	//		dev.fullTable = true
+	//		idx, err = dev.TransmitQueue.TakeSingleIndex(context.TODO())
+	//	}
+	//} else {
+	//	idx, err = dev.TransmitQueue.TakeSingleIndex(context.TODO())
+	//}
+	idx, err = dev.TransmitQueue.TakeSingleIndex(context.TODO())
 	if err != nil {
 		return 0, nil, fmt.Errorf("transmit queue: %w", err)
 	}
@@ -304,26 +329,26 @@ func (dev *Device) ProcessRxChain(pkt *VirtIOPacket, chain virtqueue.UsedElement
 
 	//shift the buffer out of out:
 	pkt.payload = buf[virtio.NetHdrSize:chain.Length]
-	pkt.Chains = append(pkt.Chains, idx)
+	pkt.Chain = idx
 	return 1, nil
 }
 
 type VirtIOPacket struct {
 	payload []byte
 	//header  virtio.NetHdr
-	Chains []uint16
+	Chain uint16
 }
 
 func NewVIO() *VirtIOPacket {
 	out := new(VirtIOPacket)
 	out.payload = nil
-	out.Chains = make([]uint16, 0, 8)
+	out.Chain = 0
 	return out
 }
 
 func (v *VirtIOPacket) Reset() {
 	v.payload = nil
-	v.Chains = v.Chains[:0]
+	v.Chain = 0
 }
 
 func (v *VirtIOPacket) GetPayload() []byte {

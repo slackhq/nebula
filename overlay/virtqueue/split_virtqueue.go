@@ -301,7 +301,6 @@ func (sq *SplitQueue) BlockAndGetHeadsCapped(ctx context.Context, maxToTake int)
 // and any further calls to [SplitQueue.OfferDescriptorChain] will stall.
 
 func (sq *SplitQueue) OfferInDescriptorChains() (uint16, error) {
-	// Create a descriptor chain for the given buffers.
 	var (
 		head uint16
 		err  error
@@ -348,18 +347,6 @@ func (sq *SplitQueue) GetDescriptorItem(head uint16) []byte {
 func (sq *SplitQueue) SetDescSize(head uint16, sz int) {
 	//not called under lock
 	sq.descriptorTable.descriptors[int(head)].length = uint32(sz)
-}
-
-func (sq *SplitQueue) OfferDescriptor(chain uint16, kick bool) error {
-	// Make the descriptor chain available to the device.
-	sq.availableRing.offerSingle(chain)
-
-	// Notify the device to make it process the updated available ring.
-	if kick {
-		return sq.Kick()
-	}
-
-	return nil
 }
 
 func (sq *SplitQueue) OfferDescriptorChains(chains []uint16, kick bool) error {

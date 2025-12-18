@@ -455,11 +455,11 @@ func newPacket(data []byte, incoming bool, fp *firewall.Packet) error {
 		return ErrPacketTooShort
 	}
 
-	version := int((data[0] >> 4) & 0x0f)
-	switch version {
-	case ipv4.Version:
+	//version := int((data[0] >> 4) & 0x0f)
+	switch data[0] & 0xf0 {
+	case ipv4.Version << 4:
 		return parseV4(data, incoming, fp)
-	case ipv6.Version:
+	case ipv6.Version << 4:
 		return parseV6(data, incoming, fp)
 	}
 	return ErrUnknownIPVersion

@@ -87,17 +87,15 @@ func (p *UDPPacket) updateCtrl(ctrlLen int) {
 	if len(p.Control) == 0 {
 		return
 	}
-	cmsgs, err := unix.ParseSocketControlMessage(p.Control)
+	header, data, _ /*remain*/, err := unix.ParseOneSocketControlMessage(p.Control)
 	if err != nil {
 		return // oh well
 	}
 
-	for _, c := range cmsgs {
-		if c.Header.Level == unix.SOL_UDP && c.Header.Type == unix.UDP_GRO && len(c.Data) >= 2 {
-			p.wasSegmented = true
-			p.SegSize = int(binary.LittleEndian.Uint16(c.Data[:2]))
-			return
-		}
+	if header.Level == unix.SOL_UDP && header.Type == unix.UDP_GRO && len(data) >= 2 {
+		p.wasSegmented = true
+		p.SegSize = int(binary.LittleEndian.Uint16(data[:2]))
+		return
 	}
 }
 

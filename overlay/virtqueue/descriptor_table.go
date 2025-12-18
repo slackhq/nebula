@@ -168,12 +168,12 @@ func (dt *DescriptorTable) releaseBuffers() error {
 	return nil
 }
 
-func (dt *DescriptorTable) CreateDescriptorForOutputs() (uint16, error) {
+func (dt *DescriptorTable) CreateDescriptorForOutputs() (uint16, uint32, error) {
 	//todo just fill the damn table
 	// Do we still have enough free descriptors?
 
 	if 1 > dt.freeNum {
-		return 0, ErrNotEnoughFreeDescriptors
+		return 0, 0, ErrNotEnoughFreeDescriptors
 	}
 
 	// Above validation ensured that there is at least one free descriptor, so
@@ -216,7 +216,7 @@ func (dt *DescriptorTable) CreateDescriptorForOutputs() (uint16, error) {
 		dt.descriptors[dt.freeHeadIndex].next = next
 	}
 
-	return head, nil
+	return head, desc.length, nil
 }
 
 func (dt *DescriptorTable) createDescriptorForInputs() (uint16, error) {

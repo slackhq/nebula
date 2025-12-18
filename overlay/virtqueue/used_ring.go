@@ -153,11 +153,7 @@ func (r *UsedRing) takeOne() (UsedElement, bool) {
 }
 
 // InitOfferSingle is only used to pre-fill the used queue at startup, and should not be used if the device is running!
-func (r *UsedRing) InitOfferSingle(x uint16, size int) {
-	//always called under lock
-	//r.mu.Lock()
-	//defer r.mu.Unlock()
-
+func (r *UsedRing) InitOfferSingle(x uint16, size uint32) {
 	offset := 0
 	// Add descriptor chain heads to the ring.
 
@@ -166,10 +162,8 @@ func (r *UsedRing) InitOfferSingle(x uint16, size int) {
 	// size) is always a power of 2 and smaller than the highest possible
 	// 16-bit value.
 	insertIndex := int(*r.ringIndex+uint16(offset)) % len(r.ring)
-	r.ring[insertIndex] = UsedElement{
-		DescriptorIndex: uint32(x),
-		Length:          uint32(size),
-	}
+	r.ring[insertIndex].DescriptorIndex = uint32(x)
+	r.ring[insertIndex].Length = size
 
 	// Increase the ring index by the number of descriptor chains added to the ring.
 	*r.ringIndex += 1

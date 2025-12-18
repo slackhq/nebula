@@ -806,8 +806,11 @@ func (t *tun) WriteMany(x []*packet.OutPacket, q int) (int, error) {
 }
 
 func (t *tun) RecycleRxSeg(pkt TunPacket, kick bool, q int) error {
+	if pkt.GetPayload() == nil {
+		return nil
+	}
 	vpkt := pkt.(*vhostnet.VirtIOPacket)
-	err := t.vdev[q].ReceiveQueue.OfferDescriptorChains(vpkt.Chains, kick)
+	err := t.vdev[q].ReceiveQueue.OfferDescriptorChains([]uint16{vpkt.Chain}, kick)
 	vpkt.Reset() //intentionally ignoring err!
 	return err
 }
