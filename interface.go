@@ -270,6 +270,22 @@ func (f *Interface) run() {
 	}
 }
 
+type Scratches struct {
+	h        *header.H
+	nb       []byte
+	fwPacket *firewall.Packet
+	scratch  []byte
+}
+
+func NewScratches() *Scratches {
+	return &Scratches{
+		h:        &header.H{},
+		fwPacket: &firewall.Packet{},
+		nb:       make([]byte, 12),
+		scratch:  make([]byte, udp.MTU),
+	}
+}
+
 func (f *Interface) listenOut(q int) {
 	runtime.LockOSThread()
 
@@ -288,17 +304,14 @@ func (f *Interface) listenOut(q int) {
 		outPackets[i] = packet.NewOut()
 	}
 
-	h := &header.H{}
-	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
-	scratch := make([]byte, udp.MTU)
+	scratches := NewScratches()
 
 	toSend := make([][]byte, batch)
 
 	li.ListenOut(func(pkts []*packet.UDPPacket) {
 		toSend = toSend[:0]
 
-		f.readOutsidePacketsMany(pkts, outPackets, h, fwPacket, lhh, nb, scratch, q, ctCache.Get(f.l), time.Now())
+		f.readOutsidePacketsMany(pkts, outPackets, lhh, scratches, q, ctCache.Get(f.l), time.Now())
 		//we opportunistically tx, but try to also send stragglers
 		if _, err := f.readers[q].WriteMany(outPackets, q); err != nil {
 			f.l.WithError(err).Error("Failed to send packets")
