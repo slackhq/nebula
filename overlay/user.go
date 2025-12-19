@@ -1,11 +1,13 @@
 package overlay
 
 import (
+	"fmt"
 	"io"
 	"net/netip"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/packet"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -36,6 +38,21 @@ type UserDevice struct {
 	inboundWriter *io.PipeWriter
 }
 
+func (d *UserDevice) NewPacketArrays(batchSize int) []TunPacket {
+	//inPackets := make([]TunPacket, batchSize)
+	//outPackets := make([]OutPacket, batchSize)
+	panic("not implemented") //todo!
+	//for i := 0; i < batchSize; i++ {
+	//	inPackets[i] = vhostnet.NewVIO()
+	//	outPackets[i] = packet.New(false)
+	//}
+	//return inPackets, outPackets
+}
+
+func (d *UserDevice) RecycleRxSeg(pkt TunPacket, kick bool, q int) error {
+	return nil
+}
+
 func (d *UserDevice) Activate() error {
 	return nil
 }
@@ -50,7 +67,7 @@ func (d *UserDevice) SupportsMultiqueue() bool {
 	return true
 }
 
-func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (d *UserDevice) NewMultiQueueReader() (TunDev, error) {
 	return d, nil
 }
 
@@ -68,4 +85,24 @@ func (d *UserDevice) Close() error {
 	d.inboundWriter.Close()
 	d.outboundWriter.Close()
 	return nil
+}
+
+func (d *UserDevice) ReadMany(b []TunPacket, _ int) (int, error) {
+	_, err := d.Read(b[0].GetPayload())
+	if err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
+func (d *UserDevice) AllocSeg(pkt *packet.OutPacket, q int) (int, error) {
+	return 0, fmt.Errorf("user: AllocSeg not implemented")
+}
+
+func (d *UserDevice) WriteOne(x *packet.OutPacket, kick bool, q int) (int, error) {
+	return 0, fmt.Errorf("user: WriteOne not implemented")
+}
+
+func (d *UserDevice) WriteMany(x []*packet.OutPacket, q int) (int, error) {
+	return 0, fmt.Errorf("user: WriteMany not implemented")
 }

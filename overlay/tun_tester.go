@@ -13,6 +13,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/packet"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -26,6 +27,7 @@ type TestTun struct {
 	closed    atomic.Bool
 	rxPackets chan []byte // Packets to receive into nebula
 	TxPackets chan []byte // Packets transmitted outside by nebula
+	buffers   [][]byte
 }
 
 func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*TestTun, error) {
@@ -104,15 +106,68 @@ func (t *TestTun) Name() string {
 	return t.Device
 }
 
-func (t *TestTun) Write(b []byte) (n int, err error) {
+func (t *TestTun) ReadMany(x []TunPacket, q int) (int, error) {
+	p, ok := <-t.rxPackets
+	if !ok {
+		return 0, os.ErrClosed
+	}
+	x[0].Payload = p
+	return 1, nil
+}
+
+func (t *TestTun) AllocSeg(pkt *packet.OutPacket, q int) (int, error) {
+	buf := make([]byte, 9000)
+	t.buffers = append(t.buffers, buf)
+	idx := len(t.buffers) - 1
+	isV6 := false //todo?
+	x := pkt.UseSegment(uint16(idx), buf, isV6)
+	return x, nil
+}
+
+func (t *TestTun) Write(b []byte) (int, error) {
+	//todo garbagey
+	out := packet.NewOut()
+	x, err := t.AllocSeg(out, 0)
+	if err != nil {
+		return 0, err
+	}
+	copy(out.SegmentPayloads[x], b)
+	return t.WriteOne(out, true, 0)
+}
+
+func (t *TestTun) WriteOne(x *packet.OutPacket, kick bool, q int) (int, error) {
 	if t.closed.Load() {
 		return 0, io.ErrClosedPipe
 	}
+	if len(x.SegmentIDs) == 0 {
+		return 0, nil
+	}
+	for i, _ := range x.SegmentIDs {
+		t.TxPackets <- x.SegmentPayloads[i]
+	}
+	//todo if kick, delete alloced seg
 
-	packet := make([]byte, len(b), len(b))
-	copy(packet, b)
-	t.TxPackets <- packet
-	return len(b), nil
+	return 1, nil
+}
+
+func (t *TestTun) WriteMany(x []*packet.OutPacket, q int) (int, error) {
+	if len(x) == 0 {
+		return 0, nil
+	}
+
+	for _, pkt := range x {
+		_, err := t.WriteOne(pkt, true, q)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	return len(x), nil
+}
+
+func (t *TestTun) RecycleRxSeg(pkt *TunPacket, kick bool, q int) error {
+	//todo this ought to maybe track something
+	return nil
 }
 
 func (t *TestTun) Close() error {
@@ -123,19 +178,10 @@ func (t *TestTun) Close() error {
 	return nil
 }
 
-func (t *TestTun) Read(b []byte) (int, error) {
-	p, ok := <-t.rxPackets
-	if !ok {
-		return 0, os.ErrClosed
-	}
-	copy(b, p)
-	return len(p), nil
-}
-
 func (t *TestTun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *TestTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *TestTun) NewMultiQueueReader() (TunDev, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented")
 }

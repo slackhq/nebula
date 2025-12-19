@@ -7,6 +7,7 @@
 package udp
 
 import (
+	"github.com/slackhq/nebula/packet"
 	"golang.org/x/sys/unix"
 )
 
@@ -33,25 +34,59 @@ type rawMessage struct {
 	Pad0 [4]byte
 }
 
-func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
+func setRawMessageControl(msg *rawMessage, buf []byte) {
+	if len(buf) == 0 {
+		msg.Hdr.Control = nil
+		msg.Hdr.Controllen = 0
+		return
+	}
+	msg.Hdr.Control = &buf[0]
+	msg.Hdr.Controllen = uint64(len(buf))
+}
+
+func getRawMessageControlLen(msg *rawMessage) int {
+	return int(msg.Hdr.Controllen)
+}
+
+func setCmsgLen(h *unix.Cmsghdr, l int) {
+	h.Len = uint64(l)
+}
+
+func (u *StdConn) PrepareRawMessages(n int, isV4 bool) ([]rawMessage, []*packet.UDPPacket) {
 	msgs := make([]rawMessage, n)
-	buffers := make([][]byte, n)
-	names := make([][]byte, n)
+	packets := make([]*packet.UDPPacket, n)
 
 	for i := range msgs {
-		buffers[i] = make([]byte, MTU)
-		names[i] = make([]byte, unix.SizeofSockaddrInet6)
+		packets[i] = packet.New(isV4)
 
 		vs := []iovec{
-			{Base: &buffers[i][0], Len: uint64(len(buffers[i]))},
+			{Base: &packets[i].Payload[0], Len: uint64(packet.Size)},
 		}
 
 		msgs[i].Hdr.Iov = &vs[0]
 		msgs[i].Hdr.Iovlen = uint64(len(vs))
 
-		msgs[i].Hdr.Name = &names[i][0]
-		msgs[i].Hdr.Namelen = uint32(len(names[i]))
+		msgs[i].Hdr.Name = &packets[i].Name[0]
+		msgs[i].Hdr.Namelen = uint32(len(packets[i].Name))
+
+		if u.enableGRO {
+			msgs[i].Hdr.Control = &packets[i].Control[0]
+			msgs[i].Hdr.Controllen = uint64(len(packets[i].Control))
+		} else {
+			msgs[i].Hdr.Control = nil
+			msgs[i].Hdr.Controllen = 0
+		}
 	}
 
-	return msgs, buffers, names
+	return msgs, packets
+}
+
+func setIovecSlice(iov *iovec, b []byte) {
+	if len(b) == 0 {
+		iov.Base = nil
+		iov.Len = 0
+		return
+	}
+	iov.Base = &b[0]
+	iov.Len = uint64(len(b))
 }

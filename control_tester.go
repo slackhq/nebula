@@ -80,7 +80,8 @@ func (c *Control) GetFromTun(block bool) []byte {
 
 // GetFromUDP will pull a udp packet off the udp side of nebula
 func (c *Control) GetFromUDP(block bool) *udp.Packet {
-	return c.f.outside.(*udp.TesterConn).Get(block)
+	out := c.f.outside.(*udp.TesterConn).Get(block)
+	return out
 }
 
 func (c *Control) GetUDPTxChan() <-chan *udp.Packet {

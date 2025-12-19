@@ -9,6 +9,8 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/overlay/virtqueue"
+	"github.com/slackhq/nebula/packet"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -20,6 +22,14 @@ type disabledTun struct {
 	tx metrics.Counter
 	rx metrics.Counter
 	l  *logrus.Logger
+}
+
+func (t *disabledTun) NewPacketArrays(batchSize int) []TunPacket {
+	panic("implement me") //TODO
+}
+
+func (*disabledTun) RecycleRxSeg(pkt TunPacket, kick bool, q int) error {
+	return nil
 }
 
 func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled bool, l *logrus.Logger) *disabledTun {
@@ -38,6 +48,10 @@ func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled boo
 	}
 
 	return tun
+}
+
+func (*disabledTun) GetQueues() []*virtqueue.SplitQueue {
+	return nil
 }
 
 func (*disabledTun) Activate() error {
@@ -109,7 +123,23 @@ func (t *disabledTun) SupportsMultiqueue() bool {
 	return true
 }
 
-func (t *disabledTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *disabledTun) AllocSeg(pkt *packet.OutPacket, q int) (int, error) {
+	return 0, fmt.Errorf("tun_disabled: AllocSeg not implemented")
+}
+
+func (t *disabledTun) WriteOne(x *packet.OutPacket, kick bool, q int) (int, error) {
+	return 0, fmt.Errorf("tun_disabled: WriteOne not implemented")
+}
+
+func (t *disabledTun) WriteMany(x []*packet.OutPacket, q int) (int, error) {
+	return 0, fmt.Errorf("tun_disabled: WriteMany not implemented")
+}
+
+func (t *disabledTun) ReadMany(b []TunPacket, _ int) (int, error) {
+	return t.Read(b[0].GetPayload())
+}
+
+func (t *disabledTun) NewMultiQueueReader() (TunDev, error) {
 	return t, nil
 }
 
