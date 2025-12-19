@@ -6,15 +6,14 @@ import (
 )
 
 type OutPacket struct {
-	Segments        [][]byte
+	Segments [][]byte
+	// SegmentHeaders maps to the first virtio.NetHdrSize+14 bytes of Segments[n]
+	SegmentHeaders [][]byte
+	// SegmentPayloads maps to the remaining bytes of Segments[n]
 	SegmentPayloads [][]byte
-	SegmentHeaders  [][]byte
-	SegmentIDs      []uint16
-
-	SegSize    int
-	SegCounter int
-
-	Scratch []byte
+	// SegmentIDs is the list of underlying buffer IDs of Segments.
+	// SegmentIDs, Segments, SegmentHeaders, SegmentPayloads should all have the same length at all times!
+	SegmentIDs []uint16
 }
 
 func NewOut() *OutPacket {
@@ -23,7 +22,6 @@ func NewOut() *OutPacket {
 	out.SegmentHeaders = make([][]byte, 0, 64)
 	out.SegmentPayloads = make([][]byte, 0, 64)
 	out.SegmentIDs = make([]uint16, 0, 64)
-	out.Scratch = make([]byte, Size)
 	return out
 }
 
@@ -32,7 +30,19 @@ func (pkt *OutPacket) Reset() {
 	pkt.SegmentPayloads = pkt.SegmentPayloads[:0]
 	pkt.SegmentHeaders = pkt.SegmentHeaders[:0]
 	pkt.SegmentIDs = pkt.SegmentIDs[:0]
-	pkt.SegSize = 0
+}
+
+// DestroyLastSegment removes the contents of the last segment in the list.
+// Use this to handle firewall drops or similar, but still hand the segment buffer back to the underlying driver.
+// Implementations shall discard zero-length segments internally.
+func (pkt *OutPacket) DestroyLastSegment() {
+	if len(pkt.Segments) == 0 {
+		return
+	}
+	lastSeg := len(pkt.SegmentIDs) - 1
+	pkt.SegmentPayloads[lastSeg] = pkt.SegmentPayloads[lastSeg][:0]
+	pkt.SegmentHeaders[lastSeg] = pkt.SegmentHeaders[lastSeg][:0]
+	pkt.Segments[lastSeg] = pkt.Segments[lastSeg][:0]
 }
 
 func (pkt *OutPacket) UseSegment(segID uint16, seg []byte, isV6 bool) int {

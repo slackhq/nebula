@@ -122,7 +122,7 @@ func NewDevice(options ...Option) (*Device, error) {
 		return nil, fmt.Errorf("refill receive queue: %w", err)
 	}
 	if err = dev.prefillTxQueue(); err != nil {
-		return nil, fmt.Errorf("refill tx queue: %w", err)
+		return nil, fmt.Errorf("prefill tx queue: %w", err)
 	}
 
 	// Make sure to clean up even when the device gets garbage collected without

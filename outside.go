@@ -102,7 +102,7 @@ func (f *Interface) handleRelayPackets(via *ViaSender, hostinfo *HostInfo, segme
 	return false
 }
 
-func (f *Interface) readOutsideSegment(via ViaSender, segment []byte, out *packet.OutPacket, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, now time.Time) {
+func (f *Interface) readOutsideSegment(via ViaSender, segment []byte, out *packet.OutPacket, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, scratch []byte, q int, localCache firewall.ConntrackCache, now time.Time) {
 	err := h.Parse(segment)
 	if err != nil {
 		// Hole punch packets are 0 or 1 byte big, so let's ignore printing those errors
@@ -116,7 +116,7 @@ func (f *Interface) readOutsideSegment(via ViaSender, segment []byte, out *packe
 	// verify if we've seen this index before, otherwise respond to the handshake initiation
 	if h.Type == header.Message && h.Subtype == header.MessageRelay {
 		hostinfo = f.hostMap.QueryRelayIndex(h.RemoteIndex)
-		keepGoing := f.handleRelayPackets(&via, hostinfo, &segment, out.Scratch[:0], h, nb)
+		keepGoing := f.handleRelayPackets(&via, hostinfo, &segment, scratch[:0], h, nb)
 		if !keepGoing {
 			return
 		}
@@ -139,10 +139,7 @@ func (f *Interface) readOutsideSegment(via ViaSender, segment []byte, out *packe
 		switch h.Subtype {
 		case header.MessageNone:
 			if !f.decryptToTunDelayWrite(hostinfo, h.MessageCounter, out, segment, fwPacket, nb, q, localCache, now) {
-				//todo we've allocated a segment we aren't using.
-				//Unfortunately, we can't un-allocate it.
-				//Saving it for "next time" is also problematic.
-				//todo we need to give the segment back, but we don't want to actually send the packet to the tun. blanking the slice is probably the way to go?
+				out.DestroyLastSegment() //prevent a rejected segment from being used
 				return
 			}
 		case header.MessageRelay:
@@ -156,7 +153,7 @@ func (f *Interface) readOutsideSegment(via ViaSender, segment []byte, out *packe
 			return
 		}
 
-		d, err := f.decrypt(hostinfo, h.MessageCounter, out.Scratch, segment, h, nb)
+		d, err := f.decrypt(hostinfo, h.MessageCounter, scratch, segment, h, nb)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).WithField("udpAddr", via.UdpAddr).
 				WithField("packet", segment).
@@ -174,7 +171,7 @@ func (f *Interface) readOutsideSegment(via ViaSender, segment []byte, out *packe
 			return
 		}
 
-		d, err := f.decrypt(hostinfo, h.MessageCounter, out.Scratch, segment, h, nb)
+		d, err := f.decrypt(hostinfo, h.MessageCounter, scratch, segment, h, nb)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).WithField("udpAddr", via).
 				WithField("packet", segment).
@@ -186,7 +183,7 @@ func (f *Interface) readOutsideSegment(via ViaSender, segment []byte, out *packe
 			// This testRequest might be from TryPromoteBest, so we should roam
 			// to the new IP address before responding
 			f.handleHostRoaming(hostinfo, via)
-			f.send(header.Test, header.TestReply, ci, hostinfo, d, nb, out.Scratch)
+			f.send(header.Test, header.TestReply, ci, hostinfo, d, nb, scratch)
 		}
 
 		// Fallthrough to the bottom to record incoming traffic
@@ -221,7 +218,7 @@ func (f *Interface) readOutsideSegment(via ViaSender, segment []byte, out *packe
 			return
 		}
 
-		d, err := f.decrypt(hostinfo, h.MessageCounter, out.Scratch, segment, h, nb)
+		d, err := f.decrypt(hostinfo, h.MessageCounter, scratch, segment, h, nb)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).WithField("udpAddr", via).
 				WithField("packet", segment).
@@ -242,9 +239,9 @@ func (f *Interface) readOutsideSegment(via ViaSender, segment []byte, out *packe
 	f.connectionManager.In(hostinfo)
 }
 
-func (f *Interface) readOutsidePacketsMany(packets []*packet.UDPPacket, out []*packet.OutPacket, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, now time.Time) {
+func (f *Interface) readOutsidePacketsMany(packets []*packet.UDPPacket, out []*packet.OutPacket, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, scratch []byte, q int, localCache firewall.ConntrackCache, now time.Time) {
 	for i, pkt := range packets {
-		out[i].Scratch = out[i].Scratch[:0]
+		scratch = scratch[:0]
 		via := ViaSender{UdpAddr: pkt.AddrPort()}
 
 		//l.Error("in packet ", header, packet[HeaderLen:])
@@ -258,7 +255,7 @@ func (f *Interface) readOutsidePacketsMany(packets []*packet.UDPPacket, out []*p
 		}
 
 		for segment := range pkt.Segments() {
-			f.readOutsideSegment(via, segment, out[i], h, fwPacket, lhf, nb, q, localCache, now)
+			f.readOutsideSegment(via, segment, out[i], h, fwPacket, lhf, nb, scratch, q, localCache, now)
 		}
 		//_, err := f.readers[q].WriteOne(out[i], false, q)
 		//if err != nil {

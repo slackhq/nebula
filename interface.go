@@ -291,16 +291,14 @@ func (f *Interface) listenOut(q int) {
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
+	scratch := make([]byte, udp.MTU)
 
 	toSend := make([][]byte, batch)
 
 	li.ListenOut(func(pkts []*packet.UDPPacket) {
 		toSend = toSend[:0]
-		for i := range outPackets {
-			outPackets[i].SegCounter = 0
-		}
 
-		f.readOutsidePacketsMany(pkts, outPackets, h, fwPacket, lhh, nb, q, ctCache.Get(f.l), time.Now())
+		f.readOutsidePacketsMany(pkts, outPackets, h, fwPacket, lhh, nb, scratch, q, ctCache.Get(f.l), time.Now())
 		//we opportunistically tx, but try to also send stragglers
 		if _, err := f.readers[q].WriteMany(outPackets, q); err != nil {
 			f.l.WithError(err).Error("Failed to send packets")
