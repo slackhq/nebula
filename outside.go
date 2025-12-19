@@ -22,19 +22,18 @@ const (
 
 // handleRelayPackets handles relay packets. Returns false if there's nothing left to do, true for continuing to process an unwrapped TerminalType packet
 // scratch must be large enough to contain a packet to be relayed if needed
-func (f *Interface) handleRelayPackets(via ViaSender, hostinfo *HostInfo, segment *[]byte, scratch []byte, h *header.H, nb []byte) (*ViaSender, bool) {
+func (f *Interface) handleRelayPackets(via ViaSender, hostinfo *HostInfo, segment []byte, scratch []byte, h *header.H, nb []byte) ([]byte, *ViaSender, bool) {
 	var err error
 	// The entire body is sent as AD, not encrypted.
 	// The packet consists of a 16-byte parsed Nebula header, Associated Data-protected payload, and a trailing 16-byte AEAD signature value.
 	// The packet is guaranteed to be at least 16 bytes at this point, b/c it got past the h.Parse() call above. If it's
 	// otherwise malformed (meaning, there is no trailing 16 byte AEAD value), then this will result in at worst a 0-length slice
 	// which will gracefully fail in the DecryptDanger call.
-	seg := *segment
-	signedPayload := seg[:len(*segment)-hostinfo.ConnectionState.dKey.Overhead()]
-	signatureValue := seg[len(*segment)-hostinfo.ConnectionState.dKey.Overhead():]
+	signedPayload := segment[:len(segment)-hostinfo.ConnectionState.dKey.Overhead()]
+	signatureValue := segment[len(segment)-hostinfo.ConnectionState.dKey.Overhead():]
 	scratch, err = hostinfo.ConnectionState.dKey.DecryptDanger(scratch, signedPayload, signatureValue, h.MessageCounter, nb)
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
 	// Successfully validated the thing. Get rid of the Relay header.
 	signedPayload = signedPayload[header.Len:]
@@ -49,7 +48,7 @@ func (f *Interface) handleRelayPackets(via ViaSender, hostinfo *HostInfo, segmen
 		// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
 		// its internal mapping. This should never happen.
 		hostinfo.logger(f.l).WithFields(logrus.Fields{"vpnAddrs": hostinfo.vpnAddrs, "remoteIndex": h.RemoteIndex}).Error("HostInfo missing remote relay index")
-		return nil, false
+		return nil, nil, false
 	}
 
 	switch relay.Type {
@@ -65,7 +64,7 @@ func (f *Interface) handleRelayPackets(via ViaSender, hostinfo *HostInfo, segmen
 			if len(signedPayload) > 1 {
 				f.l.WithField("packet", segment).Infof("Error while parsing inbound packet from %s: %s", via, err)
 			}
-			return nil, false
+			return nil, nil, false
 		}
 		newVia := &ViaSender{
 			UdpAddr:   via.UdpAddr,
@@ -74,15 +73,14 @@ func (f *Interface) handleRelayPackets(via ViaSender, hostinfo *HostInfo, segmen
 			relay:     relay,
 			IsRelayed: true,
 		}
-		*segment = signedPayload
 		//continue flowing through readOutsideSegment()
-		return newVia, true
+		return signedPayload, newVia, true
 	case ForwardingType:
 		// Find the target HostInfo relay object
 		targetHI, targetRelay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relay.PeerAddr)
 		if err != nil {
 			hostinfo.logger(f.l).WithField("relayTo", relay.PeerAddr).WithError(err).WithField("hostinfo.vpnAddrs", hostinfo.vpnAddrs).Info("Failed to find target host info by ip")
-			return nil, false
+			return nil, nil, false
 		}
 
 		// If that relay is Established, forward the payload through it
@@ -100,7 +98,7 @@ func (f *Interface) handleRelayPackets(via ViaSender, hostinfo *HostInfo, segmen
 			hostinfo.logger(f.l).WithFields(logrus.Fields{"relayTo": relay.PeerAddr, "relayFrom": hostinfo.vpnAddrs[0], "targetRelayState": targetRelay.State}).Info("Unexpected target relay state")
 		}
 	}
-	return nil, false
+	return nil, nil, false
 }
 
 func (f *Interface) readOutsideSegment(via ViaSender, segment []byte, out *packet.OutPacket, lhf *LightHouseHandler, s *Scratches, q int, localCache firewall.ConntrackCache, now time.Time) {
@@ -118,12 +116,12 @@ func (f *Interface) readOutsideSegment(via ViaSender, segment []byte, out *packe
 	// verify if we've seen this index before, otherwise respond to the handshake initiation
 	if h.Type == header.Message && h.Subtype == header.MessageRelay {
 		hostinfo = f.hostMap.QueryRelayIndex(h.RemoteIndex)
-		newVia, keepGoing := f.handleRelayPackets(via, hostinfo, &segment, s.scratch, h, s.nb)
+		newSegment, newVia, keepGoing := f.handleRelayPackets(via, hostinfo, segment, s.scratch, h, s.nb)
 		if !keepGoing {
 			return
 		}
 		via = *newVia
-
+		segment = newSegment
 	} else {
 		hostinfo = f.hostMap.QueryIndex(h.RemoteIndex)
 	}
