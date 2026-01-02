@@ -105,14 +105,14 @@ func (d *dnsRecords) Add(crt cert.Certificate) {
 }
 
 func (d *dnsRecords) parseQuery(m *dns.Msg) {
+	d.RLock()
+	defer d.RUnlock()
 	for _, q := range m.Question {
 		switch q.Qtype {
 		case dns.TypeA, dns.TypeAAAA, dns.TypePTR, dns.TypeTXT:
-			d.RLock()
 			if rr, ok := d.dnsMap[q]; ok {
 				m.Answer = append(m.Answer, rr...)
 			}
-			d.RUnlock()
 		}
 	}
 
