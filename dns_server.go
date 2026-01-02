@@ -3,7 +3,6 @@ package nebula
 import (
 	"fmt"
 	"net"
-	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,14 +33,14 @@ func newDnsRecords(l *logrus.Logger) *dnsRecords {
 	}
 }
 
-func (d *dnsRecords) addA(name string, addresses []netip.Addr) {
+func (d *dnsRecords) addA(name string, crt cert.Certificate) {
 	q := dns.Question{Name: name, Qclass: dns.ClassINET, Qtype: dns.TypeA}
 	d.dnsMap[q] = nil
 
-	for _, addr := range addresses {
-		if addr.Is4() {
+	for _, n := range crt.Networks() {
+		if n.Addr().Is4() {
 			qType := dns.TypeToString[q.Qtype]
-			rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", name, qType, addr.String()))
+			rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", name, qType, n.Addr().String()))
 			if err == nil {
 				d.dnsMap[q] = append(d.dnsMap[q], rr)
 				d.l.Debugf("DNS record added %s", rr.String())
@@ -50,14 +49,14 @@ func (d *dnsRecords) addA(name string, addresses []netip.Addr) {
 	}
 } 
 
-func (d *dnsRecords) addAAAA(name string, addresses []netip.Addr) {
+func (d *dnsRecords) addAAAA(name string, crt cert.Certificate) {
 	q := dns.Question{Name: name, Qclass: dns.ClassINET, Qtype: dns.TypeAAAA}
 	d.dnsMap[q] = nil
 
-	for _, addr := range addresses {
-		if addr.Is6() {
+	for _, n := range crt.Networks() {
+		if n.Addr().Is6() {
 			qType := dns.TypeToString[q.Qtype]
-			rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", name, qType, addr.String()))
+			rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", name, qType, n.Addr().String()))
 			if err == nil {
 				d.dnsMap[q] = append(d.dnsMap[q], rr)
 				d.l.Debugf("DNS record added %s", rr.String())
@@ -66,9 +65,9 @@ func (d *dnsRecords) addAAAA(name string, addresses []netip.Addr) {
 	}
 } 
 
-func (d *dnsRecords) addPTR(name string, addresses []netip.Addr) {
-	for _, addr := range addresses {
-		arpa, err := dns.ReverseAddr(addr.String())
+func (d *dnsRecords) addPTR(name string, crt cert.Certificate) {
+	for _, n := range crt.Networks() {
+		arpa, err := dns.ReverseAddr(n.Addr().String())
 		if err == nil {
 			q := dns.Question{Name: arpa, Qclass: dns.ClassINET, Qtype: dns.TypePTR}
 			qType := dns.TypeToString[q.Qtype]
@@ -93,15 +92,15 @@ func (d *dnsRecords) addTXT(name string, crt cert.Certificate) {
 	}
 } 
 
-func (d *dnsRecords) Add(crt cert.Certificate, addresses []netip.Addr) {
+func (d *dnsRecords) Add(crt cert.Certificate) {
 	host := dns.Fqdn(strings.ToLower(crt.Name() + dnsSuffix))
 	
 	d.Lock()
 	defer d.Unlock()
 
-	d.addA(host, addresses)
-	d.addAAAA(host, addresses)
-	d.addPTR(host, addresses)
+	d.addA(host, crt)
+	d.addAAAA(host, crt)
+	d.addPTR(host, crt)
 	d.addTXT(host, crt)
 }
 
@@ -140,7 +139,7 @@ func dnsMain(l *logrus.Logger, cs *CertState, c *config.C) func() {
 	dnsSuffix = getDnsSuffix(c)
 
 	// Add self to dns records
-	dnsR.Add(cs.GetDefaultCertificate(), cs.myVpnAddrs)
+	dnsR.Add(cs.GetDefaultCertificate())
 
 	// attach request handler func
 	dns.HandleFunc(".", dnsR.handleDnsRequest)

@@ -565,7 +565,7 @@ func (hm *HostMap) queryVpnAddr(vpnIp netip.Addr, promoteIfce *Interface) *HostI
 func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	if f.serveDns {
 		remoteCert := hostinfo.ConnectionState.peerCert
-		dnsR.Add(remoteCert.Certificate, hostinfo.vpnAddrs)
+		dnsR.Add(remoteCert.Certificate)
 	}
 	for _, addr := range hostinfo.vpnAddrs {
 		hm.unlockedInnerAddHostInfo(addr, hostinfo, f)

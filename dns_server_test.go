@@ -13,17 +13,18 @@ import (
 func TestParsequery(t *testing.T) {
 	l := logrus.New()
 	ds := newDnsRecords(l)
-	addrs := []netip.Addr{
-		netip.MustParseAddr("1.2.3.4"),
-		netip.MustParseAddr("1.2.3.5"),
-		netip.MustParseAddr("fd01::24"),
-		netip.MustParseAddr("fd01::25"),
+	networks := []netip.Prefix{
+		netip.MustParsePrefix("1.2.3.4/24"),
+		netip.MustParsePrefix("1.2.3.5/32"),
+		netip.MustParsePrefix("fd01::24/64"),
+		netip.MustParsePrefix("fd01::25/128"),
 	}
 	dnsSuffix = ".com"
 	crt := &dummyCert{
 		name: "test.com",
+		networks: networks,
 	}
-	ds.Add(crt, addrs)
+	ds.Add(crt)
 
 	m := &dns.Msg{}
 	m.SetQuestion("test.com.com.", dns.TypeA)
