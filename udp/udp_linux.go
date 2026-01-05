@@ -146,37 +146,37 @@ func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	}
 }
 
-func (u *StdConn) ListenOut(r EncReader) {
-	var ip netip.Addr
+// func (u *StdConn) ListenOut(r EncReader) {
+// 	var ip netip.Addr
 
-	msgs, buffers, names := u.PrepareRawMessages(u.batch)
-	read := u.ReadMulti
-	if u.batch == 1 {
-		read = u.ReadSingle
-	}
+// 	msgs, buffers, names := u.PrepareRawMessages(u.batch)
+// 	read := u.ReadMulti
+// 	if u.batch == 1 {
+// 		read = u.ReadSingle
+// 	}
 
-	udpBatchHist := metrics.GetOrRegisterHistogram("batch.udp_read_size", nil, metrics.NewUniformSample(1024))
+// 	udpBatchHist := metrics.GetOrRegisterHistogram("batch.udp_read_size", nil, metrics.NewUniformSample(1024))
 
-	for {
-		n, err := read(msgs)
-		if err != nil {
-			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
-			return
-		}
+// 	for {
+// 		n, err := read(msgs)
+// 		if err != nil {
+// 			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
+// 			return
+// 		}
 
-		udpBatchHist.Update(int64(n))
+// 		udpBatchHist.Update(int64(n))
 
-		for i := 0; i < n; i++ {
-			// Its ok to skip the ok check here, the slicing is the only error that can occur and it will panic
-			if u.isV4 {
-				ip, _ = netip.AddrFromSlice(names[i][4:8])
-			} else {
-				ip, _ = netip.AddrFromSlice(names[i][8:24])
-			}
-			r(netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])), buffers[i][:msgs[i].Len])
-		}
-	}
-}
+// 		for i := 0; i < n; i++ {
+// 			// Its ok to skip the ok check here, the slicing is the only error that can occur and it will panic
+// 			if u.isV4 {
+// 				ip, _ = netip.AddrFromSlice(names[i][4:8])
+// 			} else {
+// 				ip, _ = netip.AddrFromSlice(names[i][8:24])
+// 			}
+// 			r(netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])), buffers[i][:msgs[i].Len])
+// 		}
+// 	}
+// }
 
 func (u *StdConn) ListenOutBatch(r EncBatchReader) {
 	var ip netip.Addr

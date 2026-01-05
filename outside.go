@@ -560,14 +560,13 @@ func (f *Interface) handleRecvError(addr netip.AddrPort, h *header.H) {
 
 // readOutsidePacketsBatch processes multiple packets received from UDP in a batch
 // and writes all successfully decrypted packets to TUN in a single operation
-func (f *Interface) readOutsidePacketsBatch(vias []ViaSender, payloads [][]byte, count int, outs [][]byte, nb []byte, q int, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, localCache firewall.ConntrackCache) {
+func (f *Interface) readOutsidePacketsBatch(addrs []netip.AddrPort, payloads [][]byte, count int, outs [][]byte, nb []byte, q int, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, localCache firewall.ConntrackCache) {
 	// Pre-allocate slice for accumulating successful decryptions
 	tunPackets := make([][]byte, 0, count)
 
 	for i := 0; i < count; i++ {
 		payload := payloads[i]
-		via := vias[i]
-		addr := via.UdpAddr
+		addr := addrs[i]
 		out := outs[i]
 
 		// Parse header
@@ -602,7 +601,7 @@ func (f *Interface) readOutsidePacketsBatch(vias []ViaSender, payloads [][]byte,
 
 		switch h.Type {
 		case header.Message:
-			if !f.handleEncrypted(ci, via, h) {
+			if !f.handleEncrypted(ci, ViaSender{UdpAddr: addr}, h) {
 				continue
 			}
 
@@ -643,7 +642,7 @@ func (f *Interface) readOutsidePacketsBatch(vias []ViaSender, payloads [][]byte,
 
 			case header.MessageRelay:
 				// Skip relay packets in batch mode for now (less common path)
-				f.readOutsidePackets(via, out[:virtioNetHdrLen], payload, h, fwPacket, lhf, nb, q, localCache)
+				f.readOutsidePackets(ViaSender{UdpAddr: addr}, out[:virtioNetHdrLen], payload, h, fwPacket, lhf, nb, q, localCache)
 
 			default:
 				hostinfo.logger(f.l).Debugf("unexpected message subtype %d", h.Subtype)
@@ -651,8 +650,7 @@ func (f *Interface) readOutsidePacketsBatch(vias []ViaSender, payloads [][]byte,
 
 		default:
 			// Handle non-Message types using single-packet path
-			// JRW TODO RED ALERT! MERGE WTF?!?!
-			f.readOutsidePackets(via, out[:virtioNetHdrLen], payload, h, fwPacket, lhf, nb, q, localCache)
+			f.readOutsidePackets(ViaSender{UdpAddr: addr}, out[:virtioNetHdrLen], payload, h, fwPacket, lhf, nb, q, localCache)
 		}
 	}
 

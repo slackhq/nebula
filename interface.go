@@ -51,10 +51,10 @@ type InterfaceConfig struct {
 }
 
 type batchMetrics struct {
-	udpReadSize   metrics.Histogram
-	tunReadSize   metrics.Histogram
-	udpWriteSize  metrics.Histogram
-	tunWriteSize  metrics.Histogram
+	udpReadSize  metrics.Histogram
+	tunReadSize  metrics.Histogram
+	udpWriteSize metrics.Histogram
+	tunWriteSize metrics.Histogram
 }
 
 type Interface struct {
@@ -300,9 +300,9 @@ func (f *Interface) listenOut(i int) {
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12)
 
-	li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
-		// JRW TODO RED ALERT WTF MERGE?!~?!
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, outs[0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
+	li.ListenOutBatch(func(addrs []netip.AddrPort, payloads [][]byte, count int) {
+		f.readOutsidePacketsBatch(addrs, payloads, count, outs[:count], nb, i, h, fwPacket, lhh, ctCache.Get(f.l))
+
 	})
 }
 

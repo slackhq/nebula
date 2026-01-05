@@ -22,7 +22,6 @@ type EncBatchReader func(
 type Conn interface {
 	Rebind() error
 	LocalAddr() (netip.AddrPort, error)
-	ListenOut(r EncReader)
 	ListenOutBatch(r EncBatchReader)
 	WriteTo(b []byte, addr netip.AddrPort) error
 	WriteMulti(packets [][]byte, addrs []netip.AddrPort) (int, error)
@@ -40,25 +39,23 @@ func (NoopConn) Rebind() error {
 func (NoopConn) LocalAddr() (netip.AddrPort, error) {
 	return netip.AddrPort{}, nil
 }
-func (NoopConn) ListenOut(_ EncReader) {
-	return
-}
+
+func (NoopConn) ListenOut(_ EncReader) {}
+
 func (NoopConn) SupportsMultipleReaders() bool {
 	return false
 }
 
-func (NoopConn) ListenOutBatch(_ EncBatchReader) {
-	return
-}
+func (NoopConn) ListenOutBatch(_ EncBatchReader) {}
+
 func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {
 	return nil
 }
 func (NoopConn) WriteMulti(_ [][]byte, _ []netip.AddrPort) (int, error) {
 	return 0, nil
 }
-func (NoopConn) ReloadConfig(_ *config.C) {
-	return
-}
+func (NoopConn) ReloadConfig(_ *config.C) {}
+
 func (NoopConn) BatchSize() int {
 	return 1
 }
