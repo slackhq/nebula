@@ -435,13 +435,18 @@ func unmarshalCertificateV1(b []byte, publicKey []byte) (*certificateV1, error) 
 
 	copy(nc.signature, rc.Signature)
 	copy(nc.details.groups, rc.Details.Groups)
+	copy(nc.details.publicKey, rc.Details.PublicKey)
 	nc.details.issuer = hex.EncodeToString(rc.Details.Issuer)
 
+	// If a public key is passed in as an argument, the certificate pubkey must be empty
+	// and the passed-in pubkey copied into the cert.
 	if len(publicKey) > 0 {
-		nc.details.publicKey = publicKey
+		if len(nc.details.publicKey) != 0 {
+			return nil, ErrCertPubkeyPresent
+		}
+		nc.details.publicKey = make([]byte, len(publicKey))
+		copy(nc.details.publicKey, publicKey)
 	}
-
-	copy(nc.details.publicKey, rc.Details.PublicKey)
 
 	var ip netip.Addr
 	for i, rawIp := range rc.Details.Ips {
