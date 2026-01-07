@@ -426,7 +426,7 @@ func unmarshalCertificateV1(b []byte, publicKey []byte) (*certificateV1, error) 
 			unsafeNetworks: make([]netip.Prefix, len(rc.Details.Subnets)/2),
 			notBefore:      time.Unix(rc.Details.NotBefore, 0),
 			notAfter:       time.Unix(rc.Details.NotAfter, 0),
-			publicKey:      make([]byte, len(rc.Details.PublicKey)),
+			publicKey:      nil,
 			isCA:           rc.Details.IsCA,
 			curve:          rc.Details.Curve,
 		},
@@ -435,17 +435,19 @@ func unmarshalCertificateV1(b []byte, publicKey []byte) (*certificateV1, error) 
 
 	copy(nc.signature, rc.Signature)
 	copy(nc.details.groups, rc.Details.Groups)
-	copy(nc.details.publicKey, rc.Details.PublicKey)
 	nc.details.issuer = hex.EncodeToString(rc.Details.Issuer)
 
 	// If a public key is passed in as an argument, the certificate pubkey must be empty
 	// and the passed-in pubkey copied into the cert.
 	if len(publicKey) > 0 {
-		if len(nc.details.publicKey) != 0 {
+		if len(rc.Details.PublicKey) != 0 {
 			return nil, ErrCertPubkeyPresent
 		}
 		nc.details.publicKey = make([]byte, len(publicKey))
 		copy(nc.details.publicKey, publicKey)
+	} else {
+		nc.details.publicKey = make([]byte, len(rc.Details.PublicKey))
+		copy(nc.details.publicKey, rc.Details.PublicKey)
 	}
 
 	var ip netip.Addr
