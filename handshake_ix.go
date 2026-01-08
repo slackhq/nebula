@@ -171,6 +171,7 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 		f.l.WithField("from", via).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
 			WithField("cert", remoteCert).Info("public key mismatch between certificate and handshake")
+		return
 	}
 
 	if remoteCert.Certificate.Version() != ci.myCert.Version() {
@@ -546,6 +547,7 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 		f.l.WithField("from", via).
 			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
 			WithField("cert", remoteCert).Info("public key mismatch between certificate and handshake")
+		return true
 	}
 
 	if len(remoteCert.Certificate.Networks()) == 0 {
