@@ -592,13 +592,13 @@ func unmarshalCertificateV2(b []byte, publicKey []byte, curve Curve) (*certifica
 	// Maybe grab the public key
 	var rawPublicKey cryptobyte.String
 	if len(publicKey) > 0 {
-		rawPublicKey = make(cryptobyte.String, len(publicKey))
-		copy(rawPublicKey, publicKey)
 		// If a public key is passed in, then the handshake certificate must
 		// not have a public key present
 		if input.PeekASN1Tag(TagCertPublicKey) {
 			return nil, ErrCertPubkeyPresent
 		}
+		rawPublicKey = make(cryptobyte.String, len(publicKey))
+		copy(rawPublicKey, publicKey)
 	} else if !input.ReadOptionalASN1(&rawPublicKey, nil, TagCertPublicKey) {
 		return nil, ErrBadFormat
 	}
