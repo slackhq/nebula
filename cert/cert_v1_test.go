@@ -62,6 +62,62 @@ func TestCertificateV1_Marshal(t *testing.T) {
 	assert.Equal(t, nc.Groups(), nc2.Groups())
 }
 
+func TestCertificateV1_Unmarshal(t *testing.T) {
+	t.Parallel()
+	before := time.Now().Add(time.Second * -60).Round(time.Second)
+	after := time.Now().Add(time.Second * 60).Round(time.Second)
+	pubKey := []byte("1234567890abcedfghij1234567890ab")
+	invalidPubkey := []byte("00000000000000000000000000000000")
+
+	nc := certificateV1{
+		details: detailsV1{
+			name: "testing",
+			networks: []netip.Prefix{
+				mustParsePrefixUnmapped("10.1.1.1/24"),
+				mustParsePrefixUnmapped("10.1.1.2/16"),
+			},
+			unsafeNetworks: []netip.Prefix{
+				mustParsePrefixUnmapped("9.1.1.2/24"),
+				mustParsePrefixUnmapped("9.1.1.3/16"),
+			},
+			groups:    []string{"test-group1", "test-group2", "test-group3"},
+			notBefore: before,
+			notAfter:  after,
+			publicKey: pubKey,
+			isCA:      false,
+			issuer:    "1234567890abcedfghij1234567890ab",
+		},
+		signature: []byte("1234567890abcedfghij1234567890ab"),
+	}
+
+	// This certificate has a pubkey included
+	certWithPubkey, err := nc.Marshal()
+	require.NoError(t, err)
+
+	// This certificate is missing the pubkey section
+	certWithoutPubkey, err := nc.MarshalForHandshakes()
+	require.NoError(t, err)
+
+	// Cert has no pubkey and no pubkey passed in must fail to validate
+	isNil, err := unmarshalCertificateV1(certWithoutPubkey, nil)
+	require.Error(t, err)
+
+	// Cert has different pubkey than one passed in must fail
+	isNil, err = unmarshalCertificateV1(certWithPubkey, invalidPubkey)
+	require.Nil(t, isNil)
+	require.Error(t, err)
+
+	// Cert has pubkey and no pubkey argument works ok
+	_, err = unmarshalCertificateV1(certWithPubkey, nil)
+	require.NoError(t, err)
+
+	// Cert has no pubkey and valid, correctly signed pubkey passed in
+	nc2, err := unmarshalCertificateV1(certWithoutPubkey, pubKey)
+	require.NoError(t, err)
+
+	assert.Equal(t, pubKey, nc2.PublicKey())
+}
+
 func TestCertificateV1_PublicKeyPem(t *testing.T) {
 	t.Parallel()
 	before := time.Now().Add(time.Second * -60).Round(time.Second)

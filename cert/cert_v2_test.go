@@ -76,6 +76,58 @@ func TestCertificateV2_Marshal(t *testing.T) {
 	assert.Equal(t, nc.Groups(), nc2.Groups())
 }
 
+func TestCertificateV2_Unmarshal(t *testing.T) {
+	t.Parallel()
+	before := time.Now().Add(time.Second * -60).Round(time.Second)
+	after := time.Now().Add(time.Second * 60).Round(time.Second)
+	pubKey := []byte("1234567890abcedfghij1234567890ab")
+
+	nc := certificateV2{
+		details: detailsV2{
+			name: "testing",
+			networks: []netip.Prefix{
+				mustParsePrefixUnmapped("10.1.1.2/16"),
+				mustParsePrefixUnmapped("10.1.1.1/24"),
+			},
+			unsafeNetworks: []netip.Prefix{
+				mustParsePrefixUnmapped("9.1.1.3/16"),
+				mustParsePrefixUnmapped("9.1.1.2/24"),
+			},
+			groups:    []string{"test-group1", "test-group2", "test-group3"},
+			notBefore: before,
+			notAfter:  after,
+			isCA:      false,
+			issuer:    "1234567890abcdef1234567890abcdef",
+		},
+		signature: []byte("1234567890abcdef1234567890abcdef"),
+		publicKey: pubKey,
+	}
+
+	db, err := nc.details.Marshal()
+	require.NoError(t, err)
+	nc.rawDetails = db
+
+	certWithPubkey, err := nc.Marshal()
+	require.NoError(t, err)
+	//t.Log("Cert size:", len(b))
+	certWithoutPubkey, err := nc.MarshalForHandshakes()
+	require.NoError(t, err)
+
+	// Cert must not have a pubkey if one is passed in as an argument
+	_, err = unmarshalCertificateV2(certWithPubkey, pubKey, Curve_CURVE25519)
+	require.ErrorIs(t, err, ErrCertPubkeyPresent)
+
+	// Certs must have pubkeys
+	_, err = unmarshalCertificateV2(certWithoutPubkey, nil, Curve_CURVE25519)
+	require.ErrorIs(t, err, ErrBadFormat)
+
+	// Ensure proper unmarshal if a pubkey is passed in
+	nc2, err := unmarshalCertificateV2(certWithoutPubkey, pubKey, Curve_CURVE25519)
+	require.NoError(t, err)
+
+	assert.Equal(t, nc.PublicKey(), nc2.PublicKey())
+}
+
 func TestCertificateV2_PublicKeyPem(t *testing.T) {
 	t.Parallel()
 	before := time.Now().Add(time.Second * -60).Round(time.Second)
