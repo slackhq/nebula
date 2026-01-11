@@ -47,7 +47,7 @@ func (d *dnsRecords) addA(name string, crt cert.Certificate) {
 			}
 		}
 	}
-} 
+}
 
 func (d *dnsRecords) addAAAA(name string, crt cert.Certificate) {
 	q := dns.Question{Name: name, Qclass: dns.ClassINET, Qtype: dns.TypeAAAA}
@@ -63,7 +63,7 @@ func (d *dnsRecords) addAAAA(name string, crt cert.Certificate) {
 			}
 		}
 	}
-} 
+}
 
 func (d *dnsRecords) addPTR(name string, crt cert.Certificate) {
 	for _, n := range crt.Networks() {
@@ -78,23 +78,23 @@ func (d *dnsRecords) addPTR(name string, crt cert.Certificate) {
 			}
 		}
 	}
-} 
+}
 
 func (d *dnsRecords) addTXT(name string, crt cert.Certificate) {
 	q := dns.Question{Name: name, Qclass: dns.ClassINET, Qtype: dns.TypeTXT}
 	d.dnsMap[q] = nil
 
 	qType := dns.TypeToString[q.Qtype]
-	rr, err := dns.NewRR(fmt.Sprintf("%s %s \"Name: %v\" \"Networks: %v\" \"Groups: %v\" \"UnsafeNetworks: %v\"", name, qType, crt.Name(), crt.Networks(), crt.Groups(), crt.UnsafeNetworks()))
+	rr, err := dns.NewRR(fmt.Sprintf("%s %s \"Name: %v\" \"Networks: %v\" \"Groups: %v\" \"UnsafeNetworks: %v\" \"NotBefore: %v\" \"NotAfter: %v\" \"PublicKey: %x\" \"Issuer: %v\"", name, qType, crt.Name(), crt.Networks(), crt.Groups(), crt.UnsafeNetworks(), crt.NotBefore(), crt.NotAfter(), crt.PublicKey(), crt.Issuer()))
 	if err == nil {
 		d.dnsMap[q] = []dns.RR{rr}
 		d.l.Debugf("DNS record added %s", rr.String())
 	}
-} 
+}
 
 func (d *dnsRecords) Add(crt cert.Certificate) {
 	host := dns.Fqdn(strings.ToLower(crt.Name() + dnsSuffix))
-	
+
 	d.Lock()
 	defer d.Unlock()
 
