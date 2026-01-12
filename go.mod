@@ -12,7 +12,7 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/google/gopacket v1.1.19
 	github.com/kardianos/service v1.2.4
-	github.com/miekg/dns v1.1.68
+	github.com/miekg/dns v1.1.70
 	github.com/miekg/pkcs11 v1.1.2-0.20231115102856-9078ad6b9d4b
 	github.com/nbrownus/go-metrics-prometheus v0.0.0-20210712211119-974a6260965f
 	github.com/prometheus/client_golang v1.23.2
@@ -49,7 +49,7 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/mod v0.24.0 // indirect
+	golang.org/x/mod v0.31.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
-	golang.org/x/tools v0.33.0 // indirect
+	golang.org/x/tools v0.40.0 // indirect
 )
