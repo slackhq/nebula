@@ -77,7 +77,8 @@ type Interface struct {
 	reQueryEvery    atomic.Uint32
 	reQueryWait     atomic.Int64
 
-	sendRecvErrorConfig sendRecvErrorConfig
+	sendRecvErrorConfig   recvErrorConfig
+	acceptRecvErrorConfig recvErrorConfig
 
 	// rebindCount is used to decide if an active tunnel should trigger a punch notification through a lighthouse
 	rebindCount int8
@@ -110,34 +111,34 @@ type EncWriter interface {
 	GetCertState() *CertState
 }
 
-type sendRecvErrorConfig uint8
+type recvErrorConfig uint8
 
 const (
-	sendRecvErrorAlways sendRecvErrorConfig = iota
-	sendRecvErrorNever
-	sendRecvErrorPrivate
+	recvErrorAlways recvErrorConfig = iota
+	recvErrorNever
+	recvErrorPrivate
 )
 
-func (s sendRecvErrorConfig) ShouldSendRecvError(endpoint netip.AddrPort) bool {
+func (s recvErrorConfig) ShouldRecvError(endpoint netip.AddrPort) bool {
 	switch s {
-	case sendRecvErrorPrivate:
+	case recvErrorPrivate:
 		return endpoint.Addr().IsPrivate()
-	case sendRecvErrorAlways:
+	case recvErrorAlways:
 		return true
-	case sendRecvErrorNever:
+	case recvErrorNever:
 		return false
 	default:
-		panic(fmt.Errorf("invalid sendRecvErrorConfig value: %d", s))
+		panic(fmt.Errorf("invalid recvErrorConfig value: %d", s))
 	}
 }
 
-func (s sendRecvErrorConfig) String() string {
+func (s recvErrorConfig) String() string {
 	switch s {
-	case sendRecvErrorAlways:
+	case recvErrorAlways:
 		return "always"
-	case sendRecvErrorNever:
+	case recvErrorNever:
 		return "never"
-	case sendRecvErrorPrivate:
+	case recvErrorPrivate:
 		return "private"
 	default:
 		return fmt.Sprintf("invalid(%d)", s)
@@ -312,6 +313,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
 	c.RegisterReloadCallback(f.reloadFirewall)
 	c.RegisterReloadCallback(f.reloadSendRecvError)
+	c.RegisterReloadCallback(f.reloadAcceptRecvError)
 	c.RegisterReloadCallback(f.reloadDisconnectInvalid)
 	c.RegisterReloadCallback(f.reloadMisc)
 
@@ -375,21 +377,45 @@ func (f *Interface) reloadSendRecvError(c *config.C) {
 
 		switch stringValue {
 		case "always":
-			f.sendRecvErrorConfig = sendRecvErrorAlways
+			f.sendRecvErrorConfig = recvErrorAlways
 		case "never":
-			f.sendRecvErrorConfig = sendRecvErrorNever
+			f.sendRecvErrorConfig = recvErrorNever
 		case "private":
-			f.sendRecvErrorConfig = sendRecvErrorPrivate
+			f.sendRecvErrorConfig = recvErrorPrivate
 		default:
 			if c.GetBool("listen.send_recv_error", true) {
-				f.sendRecvErrorConfig = sendRecvErrorAlways
+				f.sendRecvErrorConfig = recvErrorAlways
 			} else {
-				f.sendRecvErrorConfig = sendRecvErrorNever
+				f.sendRecvErrorConfig = recvErrorNever
 			}
 		}
 
 		f.l.WithField("sendRecvError", f.sendRecvErrorConfig.String()).
 			Info("Loaded send_recv_error config")
+	}
+}
+
+func (f *Interface) reloadAcceptRecvError(c *config.C) {
+	if c.InitialLoad() || c.HasChanged("listen.accept_recv_error") {
+		stringValue := c.GetString("listen.accept_recv_error", "always")
+
+		switch stringValue {
+		case "always":
+			f.acceptRecvErrorConfig = recvErrorAlways
+		case "never":
+			f.acceptRecvErrorConfig = recvErrorNever
+		case "private":
+			f.acceptRecvErrorConfig = recvErrorPrivate
+		default:
+			if c.GetBool("listen.accept_recv_error", true) {
+				f.acceptRecvErrorConfig = recvErrorAlways
+			} else {
+				f.acceptRecvErrorConfig = recvErrorNever
+			}
+		}
+
+		f.l.WithField("acceptRecvError", f.acceptRecvErrorConfig.String()).
+			Info("Loaded accept_recv_error config")
 	}
 }
 
