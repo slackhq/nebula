@@ -516,7 +516,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 }
 
 func (f *Interface) maybeSendRecvError(endpoint netip.AddrPort, index uint32) {
-	if f.sendRecvErrorConfig.ShouldSendRecvError(endpoint) {
+	if f.sendRecvErrorConfig.ShouldRecvError(endpoint) {
 		f.sendRecvError(endpoint, index)
 	}
 }
@@ -534,6 +534,13 @@ func (f *Interface) sendRecvError(endpoint netip.AddrPort, index uint32) {
 }
 
 func (f *Interface) handleRecvError(addr netip.AddrPort, h *header.H) {
+	if !f.acceptRecvErrorConfig.ShouldRecvError(addr) {
+		f.l.WithField("index", h.RemoteIndex).
+			WithField("udpAddr", addr).
+			Debug("Recv error received, ignoring")
+		return
+	}
+
 	if f.l.Level >= logrus.DebugLevel {
 		f.l.WithField("index", h.RemoteIndex).
 			WithField("udpAddr", addr).
