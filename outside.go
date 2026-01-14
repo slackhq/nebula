@@ -430,7 +430,7 @@ func recalcIPv4Checksum(data []byte) {
 	binary.BigEndian.PutUint16(data[10:12], checksum)
 }
 
-func (f *Interface) unSnat(data []byte, fp *firewall.Packet) *HostInfo {
+func (f *Interface) unSnat(data []byte, fp *firewall.Packet) netip.Addr {
 	var mapping SnatMapping
 	var ok bool
 	switch fp.Protocol {
@@ -439,17 +439,17 @@ func (f *Interface) unSnat(data []byte, fp *firewall.Packet) *HostInfo {
 		mapping, ok = f.snatMaps.ICMP.m[0]
 	default:
 		f.l.WithField("fwPacket", fp).Warn("Unsupported unSNAT protocol")
-		return nil
+		return netip.Addr{}
 	}
 	if !ok {
 		f.l.WithField("fwPacket", fp).Warn("got a snat packet we don't know how to unsnat")
-		return nil
+		return netip.Addr{}
 	}
 
 	copy(data[16:], mapping.Src.Addr().AsSlice())
 
 	recalcIPv4Checksum(data)
-	return mapping.SrcHostInfo
+	return mapping.SrcVpnIp
 }
 
 func (f *Interface) applySnat(data []byte, fp *firewall.Packet, hostinfo *HostInfo) {
@@ -464,8 +464,8 @@ func (f *Interface) applySnat(data []byte, fp *firewall.Packet, hostinfo *HostIn
 	switch fp.Protocol {
 	case firewall.ProtoICMP, firewall.ProtoICMPv6:
 		f.snatMaps.ICMP.m[0] = SnatMapping{
-			Src:         netip.AddrPortFrom(fp.RemoteAddr, fp.RemotePort),
-			SrcHostInfo: hostinfo,
+			Src:      netip.AddrPortFrom(fp.RemoteAddr, fp.RemotePort),
+			SrcVpnIp: hostinfo.vpnAddrs[0], //todo I hope this is ipv6
 		}
 	case firewall.ProtoTCP:
 		//todo
