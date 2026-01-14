@@ -400,6 +400,7 @@ var ErrPeerRejected = errors.New("remote address is not within a network that we
 var ErrInvalidRemoteIP = errors.New("remote address is not in remote certificate networks")
 var ErrInvalidLocalIP = errors.New("local address is not in list of handled local addresses")
 var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
+var ErrSnatRequired = errors.New("snat required to pass traffic")
 
 // Drop returns an error if the packet should be dropped, explaining why. It
 // returns nil if the packet should not be dropped.
@@ -408,11 +409,11 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	if f.inConns(fp, h, caPool, localCache) {
 		return nil
 	}
-	if fp.IsIPv4() && h.HasOnlyV6Addresses() {
-		//todo!!! special case: fp.RemoteAddr is v4, and cert is v6 only. We want to accept and do NAT internally
-	}
 
 	// Make sure remote address matches nebula certificate, and determine how to treat it
+
+	var err error
+	specialSnatMode := false
 
 	if h.networks == nil {
 		// Simple case: Certificate has one address and no unsafe networks
@@ -421,7 +422,7 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 			return ErrInvalidRemoteIP //todo!
 		}
 	} else {
-		//todo check for srcsnortaddr here too
+		//todo check for srcsnortaddr here too?
 		nwType, ok := h.networks.Lookup(fp.RemoteAddr)
 		if !ok {
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
@@ -434,6 +435,10 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrPeerRejected // reject for now, one day this may have different FW rules
 		case NetworkTypeUnsafe:
+			if fp.IsIPv4() && h.HasOnlyV6Addresses() {
+				//err = ErrSnatRequired
+				specialSnatMode = true
+			}
 			break // nothing special, one day this may have different FW rules
 		default:
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
@@ -442,11 +447,11 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	}
 
 	// Make sure we are supposed to be handling this local ip address
-	//todo probably bad!
-	//if !f.routableNetworks.Contains(fp.LocalAddr) {
-	//	f.metrics(incoming).droppedLocalAddr.Inc(1)
-	//	return ErrInvalidLocalIP
-	//}
+	//todo I'm not sure I trust this heuristic
+	if !specialSnatMode && !f.routableNetworks.Contains(fp.LocalAddr) {
+		f.metrics(incoming).droppedLocalAddr.Inc(1)
+		return ErrInvalidLocalIP
+	}
 
 	table := f.OutRules
 	if incoming {
@@ -462,7 +467,7 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	// We always want to conntrack since it is a faster operation
 	f.addConn(fp, incoming)
 
-	return nil
+	return err
 }
 
 func (f *Firewall) metrics(incoming bool) firewallMetrics {

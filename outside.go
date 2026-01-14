@@ -576,7 +576,11 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	//todo apply srcsnort here?
 	//todo rp_filter will need to be set or defeated somehow
 	if fwPacket.IsIPv4() && hostinfo.HasOnlyV6Addresses() {
-		f.applySnat(out, fwPacket, hostinfo)
+		if len(f.pki.getCertState().GetDefaultCertificate().UnsafeNetworks()) != 0 {
+			//todo do not snat if you are not a router for the destination -- for now, just if you're not a router
+			//f.myVpnNetworksTable.Contains(fwPacket.RemoteAddr)
+			f.applySnat(out, fwPacket, hostinfo)
+		}
 	}
 
 	dropReason := f.firewall.Drop(*fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
