@@ -51,8 +51,8 @@ type InterfaceConfig struct {
 }
 
 type SnatMapping struct {
-	Src         netip.AddrPort
-	SrcHostInfo *HostInfo
+	Src      netip.AddrPort
+	SrcVpnIp netip.Addr
 }
 
 type SnatMap struct {
