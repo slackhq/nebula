@@ -155,6 +155,7 @@ func Test_newPacket_v6(t *testing.T) {
 	// next layer, missing length byte
 	err = newPacket(buffer.Bytes()[:49], true, p)
 	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	err = nil
 
 	// A good ICMP packet
 	ip = layers.IPv6{
@@ -165,20 +166,26 @@ func Test_newPacket_v6(t *testing.T) {
 		DstIP:      net.IPv6linklocalallnodes,
 	}
 
-	icmp := layers.ICMPv6{}
-
-	buffer.Clear()
-	err = gopacket.SerializeLayers(buffer, opt, &ip, &icmp)
-	if err != nil {
-		panic(err)
+	icmp := layers.ICMPv6{
+		TypeCode: 0x55,
+		Checksum: 0x1234,
 	}
 
-	err = newPacket(buffer.Bytes(), true, p)
-	require.NoError(t, err)
+	buffer.Clear()
+	require.NoError(t, gopacket.SerializeLayers(buffer, opt, &ip, &icmp))
+	require.Error(t, newPacket(buffer.Bytes(), true, p))
+
+	buffer.Clear()
+	echo := layers.ICMPv6Echo{
+		Identifier: 0xabcd,
+		SeqNumber:  1234,
+	}
+	require.NoError(t, gopacket.SerializeLayers(buffer, opt, &ip, &icmp, &echo))
+	require.NoError(t, newPacket(buffer.Bytes(), true, p))
 	assert.Equal(t, uint8(layers.IPProtocolICMPv6), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
-	assert.Equal(t, uint16(0), p.RemotePort)
+	assert.Equal(t, uint16(0xabcd), p.RemotePort)
 	assert.Equal(t, uint16(0), p.LocalPort)
 	assert.False(t, p.Fragment)
 

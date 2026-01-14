@@ -735,6 +735,150 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 	assert.Equal(t, fw.Drop(p, false, &h, cp, nil), ErrNoMatchingRule)
 }
 
+func TestFirewall_ICMPPortBehavior(t *testing.T) {
+	l := test.NewLogger()
+	ob := &bytes.Buffer{}
+	l.SetOutput(ob)
+	myVpnNetworksTable := new(bart.Lite)
+	myVpnNetworksTable.Insert(netip.MustParsePrefix("1.1.1.1/8"))
+
+	network := netip.MustParsePrefix("1.2.3.4/24")
+
+	c := cert.CachedCertificate{
+		Certificate: &dummyCert{
+			name:     "host1",
+			networks: []netip.Prefix{network},
+			groups:   []string{"default-group"},
+			issuer:   "signer-shasum",
+		},
+		InvertedGroups: map[string]struct{}{"default-group": {}},
+	}
+	h := HostInfo{
+		ConnectionState: &ConnectionState{
+			peerCert: &c,
+		},
+		vpnAddrs: []netip.Addr{network.Addr()},
+	}
+	h.buildNetworks(myVpnNetworksTable, c.Certificate)
+
+	cp := cert.NewCAPool()
+
+	templ := firewall.Packet{
+		LocalAddr:  netip.MustParseAddr("1.2.3.4"),
+		RemoteAddr: netip.MustParseAddr("1.2.3.4"),
+		Protocol:   firewall.ProtoICMP,
+		Fragment:   false,
+	}
+
+	t.Run("ICMP allowed", func(t *testing.T) {
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
+		require.NoError(t, fw.AddRule(true, firewall.ProtoICMP, 0, 0, []string{"any"}, "", "", "", "", ""))
+		t.Run("zero ports", func(t *testing.T) {
+			p := templ.Copy()
+			p.LocalPort = 0
+			p.RemotePort = 0
+			// Drop outbound
+			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			// Allow inbound
+			resetConntrack(fw)
+			require.NoError(t, fw.Drop(*p, true, &h, cp, nil))
+			//now also allow outbound
+			require.NoError(t, fw.Drop(*p, false, &h, cp, nil))
+		})
+
+		t.Run("nonzero ports", func(t *testing.T) {
+			p := templ.Copy()
+			p.LocalPort = 0xabcd
+			p.RemotePort = 0x1234
+			// Drop outbound
+			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			// Allow inbound
+			resetConntrack(fw)
+			require.NoError(t, fw.Drop(*p, true, &h, cp, nil))
+			//now also allow outbound
+			require.NoError(t, fw.Drop(*p, false, &h, cp, nil))
+		})
+	})
+
+	t.Run("Any proto, some ports allowed", func(t *testing.T) {
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
+		require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 80, 444, []string{"any"}, "", "", "", "", ""))
+		t.Run("zero ports, still blocked", func(t *testing.T) {
+			p := templ.Copy()
+			p.LocalPort = 0
+			p.RemotePort = 0
+			// Drop outbound
+			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			// Allow inbound
+			resetConntrack(fw)
+			assert.Equal(t, fw.Drop(*p, true, &h, cp, nil), ErrNoMatchingRule)
+			//now also allow outbound
+			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+		})
+
+		t.Run("nonzero ports, still blocked", func(t *testing.T) {
+			p := templ.Copy()
+			p.LocalPort = 0xabcd
+			p.RemotePort = 0x1234
+			// Drop outbound
+			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			// Allow inbound
+			resetConntrack(fw)
+			assert.Equal(t, fw.Drop(*p, true, &h, cp, nil), ErrNoMatchingRule)
+			//now also allow outbound
+			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+		})
+
+		t.Run("nonzero, matching ports, still blocked", func(t *testing.T) {
+			p := templ.Copy()
+			p.LocalPort = 80
+			p.RemotePort = 80
+			// Drop outbound
+			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			// Allow inbound
+			resetConntrack(fw)
+			assert.Equal(t, fw.Drop(*p, true, &h, cp, nil), ErrNoMatchingRule)
+			//now also allow outbound
+			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+		})
+	})
+	t.Run("Any proto, any port", func(t *testing.T) {
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
+		require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "", "", ""))
+		t.Run("zero ports, allowed", func(t *testing.T) {
+			resetConntrack(fw)
+			p := templ.Copy()
+			p.LocalPort = 0
+			p.RemotePort = 0
+			// Drop outbound
+			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			// Allow inbound
+			resetConntrack(fw)
+			require.NoError(t, fw.Drop(*p, true, &h, cp, nil))
+			//now also allow outbound
+			require.NoError(t, fw.Drop(*p, false, &h, cp, nil))
+		})
+
+		t.Run("nonzero ports, allowed", func(t *testing.T) {
+			resetConntrack(fw)
+			p := templ.Copy()
+			p.LocalPort = 0xabcd
+			p.RemotePort = 0x1234
+			// Drop outbound
+			assert.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+			// Allow inbound
+			resetConntrack(fw)
+			require.NoError(t, fw.Drop(*p, true, &h, cp, nil))
+			//now also allow outbound
+			require.NoError(t, fw.Drop(*p, false, &h, cp, nil))
+			//different ID is blocked
+			p.RemotePort++
+			require.Equal(t, fw.Drop(*p, false, &h, cp, nil), ErrNoMatchingRule)
+		})
+	})
+
+}
+
 func TestFirewall_DropIPSpoofing(t *testing.T) {
 	l := test.NewLogger()
 	ob := &bytes.Buffer{}
