@@ -56,6 +56,7 @@ type Interface struct {
 	inside                overlay.Device
 	pki                   *PKI
 	firewall              *Firewall
+	snatAddr              netip.Addr
 	connectionManager     *connectionManager
 	handshakeManager      *HandshakeManager
 	serveDns              bool
@@ -339,7 +340,7 @@ func (f *Interface) reloadFirewall(c *config.C) {
 		return
 	}
 
-	fw, err := NewFirewallFromConfig(f.l, f.pki.getCertState(), c)
+	fw, err := NewFirewallFromConfig(f.l, f.pki.getCertState(), c, f.firewall.snatAddr)
 	if err != nil {
 		f.l.WithError(err).Error("Error while creating firewall during reload")
 		return

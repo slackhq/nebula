@@ -9,7 +9,7 @@ import (
 	"github.com/slackhq/nebula/routing"
 )
 
-func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
+func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix, routines int) (Device, error) {
 	return NewUserDevice(vpnNetworks)
 }
 
