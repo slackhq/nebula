@@ -28,6 +28,10 @@ type Packet struct {
 	Fragment   bool
 }
 
+func (fp *Packet) IsIPv4() bool {
+	return fp.LocalAddr.Is4() && fp.RemoteAddr.Is4()
+}
+
 func (fp *Packet) Copy() *Packet {
 	return &Packet{
 		LocalAddr:  fp.LocalAddr,

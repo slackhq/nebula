@@ -400,6 +400,85 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 	return ErrIPv6CouldNotFindPayload
 }
 
+var srcsnortaddr = netip.MustParseAddr("169.254.55.96")
+
+func CalculateIPv4Checksum(header []byte) uint16 {
+	//todo this should be elsewhere
+	headerLen := int(header[0]&0x0F) * 4
+
+	if len(header) < headerLen {
+		return 0
+	}
+
+	var sum uint32
+	for i := 0; i < headerLen; i += 2 {
+		word := uint32(binary.BigEndian.Uint16(header[i : i+2]))
+		sum += word
+	}
+
+	for sum > 0xFFFF {
+		sum = (sum & 0xFFFF) + (sum >> 16)
+	}
+
+	return uint16(^sum)
+}
+
+func recalcIPv4Checksum(data []byte) {
+	data[10] = 0
+	data[11] = 0
+	checksum := CalculateIPv4Checksum(data)
+	binary.BigEndian.PutUint16(data[10:12], checksum)
+}
+
+func (f *Interface) unSnat(data []byte, fp *firewall.Packet) *HostInfo {
+	var mapping SnatMapping
+	var ok bool
+	switch fp.Protocol {
+	case firewall.ProtoICMP:
+		//todo hack
+		mapping, ok = f.snatMaps.ICMP.m[0]
+	default:
+		f.l.WithField("fwPacket", fp).Warn("Unsupported unSNAT protocol")
+		return nil
+	}
+	if !ok {
+		f.l.WithField("fwPacket", fp).Warn("got a snat packet we don't know how to unsnat")
+		return nil
+	}
+
+	copy(data[16:], mapping.Src.Addr().AsSlice())
+
+	recalcIPv4Checksum(data)
+	return mapping.SrcHostInfo
+}
+
+func (f *Interface) applySnat(data []byte, fp *firewall.Packet, hostinfo *HostInfo) {
+	if !f.snatMaps.snatIP.Is4() {
+		return //bad!
+	}
+
+	//todo math should exist to take existing checksum, old ip, new ip, and set new checksum, right?
+
+	//todo set srcport
+	//todo record mapping somehow??? sadly the somehow has to be safe/sane across all routines
+	switch fp.Protocol {
+	case firewall.ProtoICMP, firewall.ProtoICMPv6:
+		f.snatMaps.ICMP.m[0] = SnatMapping{
+			Src:         netip.AddrPortFrom(fp.RemoteAddr, fp.RemotePort),
+			SrcHostInfo: hostinfo,
+		}
+	case firewall.ProtoTCP:
+		//todo
+	case firewall.ProtoUDP:
+		//also todo
+	}
+
+	fp.RemoteAddr = f.snatMaps.snatIP
+	copy(data[12:], f.snatMaps.snatIP.AsSlice())
+
+	recalcIPv4Checksum(data)
+}
+
 func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 	// Do we at least have an ipv4 header worth of data?
 	if len(data) < ipv4.HeaderLen {
@@ -492,6 +571,12 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		hostinfo.logger(f.l).WithField("fwPacket", fwPacket).
 			Debugln("dropping out of window packet")
 		return false
+	}
+
+	//todo apply srcsnort here?
+	//todo rp_filter will need to be set or defeated somehow
+	if fwPacket.IsIPv4() && hostinfo.HasOnlyV6Addresses() {
+		f.applySnat(out, fwPacket, hostinfo)
 	}
 
 	dropReason := f.firewall.Drop(*fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
