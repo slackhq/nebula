@@ -48,9 +48,20 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		return
 	}
 
-	hostinfo, ready := f.getOrHandshakeConsiderRouting(fwPacket, func(hh *HandshakeHostInfo) {
-		hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
-	})
+	var hostinfo *HostInfo
+	var ready bool
+
+	if fwPacket.RemoteAddr == f.snatMaps.snatIP {
+		//todo unsnat happens here
+		hostinfo = f.unSnat(packet, fwPacket) //todo bail if we can't unsnat?
+		ready = hostinfo != nil               //todo feels hacky and bad
+	}
+
+	if hostinfo == nil { //if we didn't unsnat
+		hostinfo, ready = f.getOrHandshakeConsiderRouting(fwPacket, func(hh *HandshakeHostInfo) {
+			hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
+		})
+	}
 
 	if hostinfo == nil {
 		f.rejectInside(packet, out, q)
