@@ -730,8 +730,6 @@ func (f *Firewall) dupeConn(fp firewall.Packet, c *conn) {
 		conntrack.TimerWheel.Add(fp, f.packetTimeout(fp))
 	}
 
-	// Record which rulesVersion allowed this connection, so we can retest after
-	// firewall reload
 	conntrack.Conns[fp] = c
 	conntrack.Unlock()
 }
