@@ -145,7 +145,6 @@ func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count in
 	// Send all accumulated packets in one batch
 	if len(*batchPackets) > 0 {
 		batchSize := len(*batchPackets)
-		f.batchMetrics.udpWriteSize.Update(int64(batchSize))
 
 		n, err := f.writers[q].WriteMulti(*batchPackets, *batchAddrs)
 		if err != nil {

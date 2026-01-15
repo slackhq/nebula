@@ -51,10 +51,7 @@ type InterfaceConfig struct {
 }
 
 type batchMetrics struct {
-	udpReadSize  metrics.Histogram
-	tunReadSize  metrics.Histogram
-	udpWriteSize metrics.Histogram
-	tunWriteSize metrics.Histogram
+	udpReadSize metrics.Histogram
 }
 
 type Interface struct {
@@ -202,10 +199,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 			dropped: metrics.GetOrRegisterCounter("hostinfo.cached_packets.dropped", nil),
 		},
 		batchMetrics: &batchMetrics{
-			udpReadSize:  metrics.GetOrRegisterHistogram("batch.udp_read_size", nil, metrics.NewUniformSample(1024)),
-			tunReadSize:  metrics.GetOrRegisterHistogram("batch.tun_read_size", nil, metrics.NewUniformSample(1024)),
-			udpWriteSize: metrics.GetOrRegisterHistogram("batch.udp_write_size", nil, metrics.NewUniformSample(1024)),
-			tunWriteSize: metrics.GetOrRegisterHistogram("batch.tun_write_size", nil, metrics.NewUniformSample(1024)),
+			udpReadSize: metrics.GetOrRegisterHistogram("batch.udp_read_size", nil, metrics.NewUniformSample(1024)),
 		},
 
 		l: c.l,
@@ -346,8 +340,6 @@ func (f *Interface) listenIn(reader overlay.BatchReadWriter, i int) {
 			// This only seems to happen when something fatal happens to the fd, so exit.
 			os.Exit(2)
 		}
-
-		f.batchMetrics.tunReadSize.Update(int64(n))
 
 		// Process all packets in the batch at once
 		f.consumeInsidePackets(bufs, sizes, n, outs, nb, i, conntrackCache.Get(f.l), &batchPackets, &batchAddrs)

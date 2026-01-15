@@ -659,6 +659,6 @@ func (f *Interface) readOutsidePacketsBatch(addrs []netip.AddrPort, payloads [][
 		if err != nil {
 			f.l.WithError(err).WithField("sent", n).WithField("total", len(tunPackets)).Error("Failed to batch write to tun")
 		}
-		f.batchMetrics.tunWriteSize.Update(int64(len(tunPackets)))
+
 	}
 }
