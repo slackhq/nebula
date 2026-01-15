@@ -438,16 +438,18 @@ func (f *Firewall) unSnat(data []byte, fp *firewall.Packet, c *conn, caPool *cer
 		return netip.Addr{}
 	}
 
+	oldIP := netip.AddrPortFrom(f.snatAddr, fp.RemotePort)
+
 	//change dst IP
 	copy(data[16:], c.snat.Src.Addr().AsSlice())
 
-	recalcIPv4Checksum(data)
+	recalcIPv4Checksum(data, oldIP.Addr(), c.snat.Src.Addr())
+
 	switch fp.Protocol {
 	case firewall.ProtoUDP:
-		recalcUDPv4Checksum(data, f.snatAddr, c.snat.Src.Addr(), fp.RemotePort, c.snat.Src.Port())
+		recalcUDPv4Checksum(data, oldIP, c.snat.Src)
 	case firewall.ProtoTCP:
-		recalcTCPv4Checksum(data, f.snatAddr, c.snat.Src.Addr(), fp.RemotePort, c.snat.Src.Port())
-
+		recalcTCPv4Checksum(data, oldIP, c.snat.Src)
 	}
 	return c.snat.SrcVpnIp
 }
@@ -455,6 +457,7 @@ func (f *Firewall) unSnat(data []byte, fp *firewall.Packet, c *conn, caPool *cer
 func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo *HostInfo) {
 	//todo math should exist to take existing checksum, old ip, new ip, and set new checksum, right?
 
+	newIP := netip.AddrPortFrom(f.snatAddr, fp.RemotePort) //todo actually change remoteport
 	//todo set srcport
 	c.snat.Src = netip.AddrPortFrom(fp.RemoteAddr, fp.RemotePort)
 	c.snat.SrcVpnIp = hostinfo.vpnAddrs[0] //todo I hope this is ipv6
@@ -463,23 +466,19 @@ func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo
 	//change src IP
 	copy(data[12:], f.snatAddr.AsSlice())
 
-	recalcIPv4Checksum(data)
+	recalcIPv4Checksum(data, c.snat.Src.Addr(), newIP.Addr())
 	switch fp.Protocol {
 	case firewall.ProtoUDP:
 		//todo change the port
-		recalcUDPv4Checksum(data, c.snat.Src.Addr(), f.snatAddr, c.snat.Src.Port(), fp.RemotePort)
+		recalcUDPv4Checksum(data, c.snat.Src, newIP)
 	case firewall.ProtoTCP:
-		recalcTCPv4Checksum(data, c.snat.Src.Addr(), f.snatAddr, c.snat.Src.Port(), fp.RemotePort)
+		recalcTCPv4Checksum(data, c.snat.Src, newIP)
 	}
 }
 
 // Drop returns an error if the packet should be dropped, explaining why. It
 // returns nil if the packet should not be dropped.
 func (f *Firewall) Drop(fp firewall.Packet, pkt []byte, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) error {
-	// Check if we spoke to this tuple, if we did then allow this packet
-	c := f.inConns(fp, h, caPool, localCache)
-	//can't return yet, need to snat maybe
-
 	var err error
 	specialSnatMode := false
 
@@ -488,8 +487,11 @@ func (f *Firewall) Drop(fp firewall.Packet, pkt []byte, incoming bool, h *HostIn
 		table = f.InRules
 	}
 
+	// Check if we spoke to this tuple, if we did then allow this packet
+	c := f.inConns(fp, h, caPool, localCache)
 	if c != nil {
-		specialSnatMode = fp.IsIPv4() && h.HasOnlyV6Addresses() //todo?
+		//can't return yet, need to snat maybe
+		specialSnatMode = fp.IsIPv4() && h.HasOnlyV6Addresses() //todo I wish I only set this once somehow
 		goto snat
 	}
 

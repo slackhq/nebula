@@ -5,36 +5,14 @@ import (
 	"net/netip"
 )
 
-func CalculateIPv4Checksum(header []byte) uint16 {
-	//todo this should be elsewhere
-	headerLen := int(header[0]&0x0F) * 4
-
-	if len(header) < headerLen {
-		return 0
-	}
-
-	var sum uint32
-	for i := 0; i < headerLen; i += 2 {
-		word := uint32(binary.BigEndian.Uint16(header[i : i+2]))
-		sum += word
-	}
-
-	for sum > 0xFFFF {
-		sum = (sum & 0xFFFF) + (sum >> 16)
-	}
-
-	return uint16(^sum)
-}
-
-func recalcIPv4Checksum(data []byte) {
-	data[10] = 0
-	data[11] = 0
-	checksum := CalculateIPv4Checksum(data)
+func recalcIPv4Checksum(data []byte, oldSrcIP netip.Addr, newSrcIP netip.Addr) {
+	oldChecksum := binary.BigEndian.Uint16(data[10:12])
+	//because of how checksums work, we can re-use this function
+	checksum := calcNewTransportChecksum(oldChecksum, oldSrcIP, 0, newSrcIP, 0)
 	binary.BigEndian.PutUint16(data[10:12], checksum)
 }
 
-func CalcNewUDPChecksum(oldChecksum uint16, oldSrcIP, newSrcIP netip.Addr, oldSrcPort, newSrcPort uint16) uint16 {
-	// Convert IPs to uint32
+func calcNewTransportChecksum(oldChecksum uint16, oldSrcIP netip.Addr, oldSrcPort uint16, newSrcIP netip.Addr, newSrcPort uint16) uint16 {
 	oldIP := binary.BigEndian.Uint32(oldSrcIP.AsSlice())
 	newIP := binary.BigEndian.Uint32(newSrcIP.AsSlice())
 
@@ -64,16 +42,20 @@ func CalcNewUDPChecksum(oldChecksum uint16, oldSrcIP, newSrcIP netip.Addr, oldSr
 	return ^uint16(checksum)
 }
 
-func recalcUDPv4Checksum(data []byte, oldSrcIP, newSrcIP netip.Addr, oldSrcPort, newSrcPort uint16) {
-	const UDPChecksumOffset = 20 + 6 //todo pls no options pls, big bad stupid hack
-	oldcsum := binary.BigEndian.Uint16(data[UDPChecksumOffset : UDPChecksumOffset+2])
-	checksum := CalcNewUDPChecksum(oldcsum, oldSrcIP, newSrcIP, oldSrcPort, newSrcPort)
-	binary.BigEndian.PutUint16(data[UDPChecksumOffset:UDPChecksumOffset+2], checksum)
+func recalcV4TransportChecksum(offsetInsideHeader int, data []byte, oldSrcIP netip.AddrPort, newSrcIP netip.AddrPort) {
+	ipHeaderOffset := int(data[0]&0x0F) * 4
+	offset := ipHeaderOffset + offsetInsideHeader
+	oldcsum := binary.BigEndian.Uint16(data[offset : offset+2])
+	checksum := calcNewTransportChecksum(oldcsum, oldSrcIP.Addr(), oldSrcIP.Port(), newSrcIP.Addr(), newSrcIP.Port())
+	binary.BigEndian.PutUint16(data[offset:offset+2], checksum)
 }
 
-func recalcTCPv4Checksum(data []byte, oldSrcIP, newSrcIP netip.Addr, oldSrcPort, newSrcPort uint16) {
-	const TCPChecksumOffset = 20 + 16 //todo pls no options pls, big bad stupid hack
-	oldcsum := binary.BigEndian.Uint16(data[TCPChecksumOffset : TCPChecksumOffset+2])
-	checksum := CalcNewUDPChecksum(oldcsum, oldSrcIP, newSrcIP, oldSrcPort, newSrcPort)
-	binary.BigEndian.PutUint16(data[TCPChecksumOffset:TCPChecksumOffset+2], checksum)
+func recalcUDPv4Checksum(data []byte, oldSrcIP netip.AddrPort, newSrcIP netip.AddrPort) {
+	const offsetInsideHeader = 6
+	recalcV4TransportChecksum(offsetInsideHeader, data, oldSrcIP, newSrcIP)
+}
+
+func recalcTCPv4Checksum(data []byte, oldSrcIP netip.AddrPort, newSrcIP netip.AddrPort) {
+	const offsetInsideHeader = 16
+	recalcV4TransportChecksum(offsetInsideHeader, data, oldSrcIP, newSrcIP)
 }
