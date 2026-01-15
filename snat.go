@@ -70,3 +70,10 @@ func recalcUDPv4Checksum(data []byte, oldSrcIP, newSrcIP netip.Addr, oldSrcPort,
 	checksum := CalcNewUDPChecksum(oldcsum, oldSrcIP, newSrcIP, oldSrcPort, newSrcPort)
 	binary.BigEndian.PutUint16(data[UDPChecksumOffset:UDPChecksumOffset+2], checksum)
 }
+
+func recalcTCPv4Checksum(data []byte, oldSrcIP, newSrcIP netip.Addr, oldSrcPort, newSrcPort uint16) {
+	const TCPChecksumOffset = 20 + 16 //todo pls no options pls, big bad stupid hack
+	oldcsum := binary.BigEndian.Uint16(data[TCPChecksumOffset : TCPChecksumOffset+2])
+	checksum := CalcNewUDPChecksum(oldcsum, oldSrcIP, newSrcIP, oldSrcPort, newSrcPort)
+	binary.BigEndian.PutUint16(data[TCPChecksumOffset:TCPChecksumOffset+2], checksum)
+}
