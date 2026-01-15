@@ -99,11 +99,6 @@ type FirewallConntrack struct {
 
 	Conns      map[firewall.Packet]*conn
 	TimerWheel *TimerWheel[firewall.Packet]
-	// SNATFlows maps protocol->source_port->original packet info for unsnatting.
-	// the srcport to use for outgoing snat flows is stored in Conns.
-	// When a flow is expired from Conns, it needs to be removed from SNATFlows as well.
-	// todo if we put "both" keys into Conns, we can potentially avoid this problem
-	SNATFlows map[int]map[uint16]snatInfo
 }
 
 // FirewallTable is the entry point for a rule, the evaluation order is:
@@ -435,7 +430,7 @@ var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 func (f *Firewall) unSnat(data []byte, fp *firewall.Packet, c *conn) netip.Addr {
 	if c == nil {
 		//unfortunately this needs to lock. Surely there's a better way, but I need to make this flow at all first.
-		c = f.peek(*fp, nil)
+		c = f.peek(*fp)
 	}
 	if c == nil {
 		return netip.Addr{}
@@ -479,7 +474,7 @@ func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo
 
 		//find a new port to use, if needed
 		for {
-			existingFlow := f.peek(*fp, nil) //locking and unlocking for each peek is slow, but simple for now
+			existingFlow := f.peek(*fp) //locking and unlocking for each peek is slow, but simple for now
 			if existingFlow == nil {
 				break //yay, we can use this port
 			}
@@ -627,13 +622,7 @@ func (f *Firewall) EmitStats() {
 	metrics.GetOrRegisterGauge("firewall.rules.hash", nil).Update(int64(f.GetRuleHashFNV()))
 }
 
-func (f *Firewall) peek(fp firewall.Packet, localCache firewall.ConntrackCache) *conn {
-	//big todo, this cache needs to know snat info as well
-	//if localCache != nil {
-	//	if out, ok := localCache[fp]; ok {
-	//		return out
-	//	}
-	//}
+func (f *Firewall) peek(fp firewall.Packet) *conn {
 	conntrack := f.Conntrack
 	conntrack.Lock()
 
