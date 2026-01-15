@@ -438,12 +438,16 @@ func (f *Firewall) unSnat(data []byte, fp *firewall.Packet, c *conn, caPool *cer
 		return netip.Addr{}
 	}
 
+	//change dst IP
 	copy(data[16:], c.snat.Src.Addr().AsSlice())
 
 	recalcIPv4Checksum(data)
 	switch fp.Protocol {
 	case firewall.ProtoUDP:
 		recalcUDPv4Checksum(data, f.snatAddr, c.snat.Src.Addr(), fp.RemotePort, c.snat.Src.Port())
+	case firewall.ProtoTCP:
+		recalcTCPv4Checksum(data, f.snatAddr, c.snat.Src.Addr(), fp.RemotePort, c.snat.Src.Port())
+
 	}
 	return c.snat.SrcVpnIp
 }
@@ -452,21 +456,11 @@ func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo
 	//todo math should exist to take existing checksum, old ip, new ip, and set new checksum, right?
 
 	//todo set srcport
-	//todo record mapping somehow??? sadly the somehow has to be safe/sane across all routines
-	//switch fp.Protocol {
-	//case firewall.ProtoICMP:
-	//
-	//
-	//case firewall.ProtoTCP:
-	//	//todo
-	//case firewall.ProtoUDP:
-	//	//also todo
-	//}
-	//
 	c.snat.Src = netip.AddrPortFrom(fp.RemoteAddr, fp.RemotePort)
 	c.snat.SrcVpnIp = hostinfo.vpnAddrs[0] //todo I hope this is ipv6
 	fp.RemoteAddr = f.snatAddr
 
+	//change src IP
 	copy(data[12:], f.snatAddr.AsSlice())
 
 	recalcIPv4Checksum(data)
@@ -475,7 +469,7 @@ func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo
 		//todo change the port
 		recalcUDPv4Checksum(data, c.snat.Src.Addr(), f.snatAddr, c.snat.Src.Port(), fp.RemotePort)
 	case firewall.ProtoTCP:
-		//todo recalc checksum
+		recalcTCPv4Checksum(data, c.snat.Src.Addr(), f.snatAddr, c.snat.Src.Port(), fp.RemotePort)
 	}
 }
 
