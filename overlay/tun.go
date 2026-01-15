@@ -22,22 +22,22 @@ func (e *NameError) Error() string {
 }
 
 // TODO: We may be able to remove routines
-type DeviceFactory func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error)
+type DeviceFactory func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix, routines int) (Device, error)
 
-func NewDeviceFromConfig(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
+func NewDeviceFromConfig(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix, routines int) (Device, error) {
 	switch {
 	case c.GetBool("tun.disabled", false):
 		tun := newDisabledTun(vpnNetworks, c.GetInt("tun.tx_queue", 500), c.GetBool("stats.message_metrics", false), l)
 		return tun, nil
 
 	default:
-		return newTun(c, l, vpnNetworks, routines > 1)
+		return newTun(c, l, vpnNetworks, unsafeNetworks, routines > 1)
 	}
 }
 
 func NewFdDeviceFromConfig(fd *int) DeviceFactory {
-	return func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
-		return newTunFromFd(c, l, *fd, vpnNetworks)
+	return func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix, routines int) (Device, error) {
+		return newTunFromFd(c, l, *fd, vpnNetworks, unsafeNetworks)
 	}
 }
 
