@@ -26,6 +26,15 @@ type FirewallInterface interface {
 	AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr string, caName string, caSha string) error
 }
 
+type snatInfo struct {
+	Src      netip.AddrPort
+	SrcVpnIp netip.Addr
+}
+
+func (s *snatInfo) Valid() bool {
+	return s.Src.IsValid()
+}
+
 type conn struct {
 	Expires time.Time // Time when this conntrack entry will expire
 
@@ -34,6 +43,9 @@ type conn struct {
 	// fields pack for free after the uint32 above
 	incoming     bool
 	rulesVersion uint16
+
+	//for SNAT support
+	snat snatInfo
 }
 
 // TODO: need conntrack max tracked connections handling
@@ -66,6 +78,7 @@ type Firewall struct {
 	defaultLocalCIDRAny bool
 	incomingMetrics     firewallMetrics
 	outgoingMetrics     firewallMetrics
+	snatAddr            netip.Addr
 
 	l *logrus.Logger
 }
@@ -81,6 +94,11 @@ type FirewallConntrack struct {
 
 	Conns      map[firewall.Packet]*conn
 	TimerWheel *TimerWheel[firewall.Packet]
+	// SNATFlows maps protocol->source_port->original packet info for unsnatting.
+	// the srcport to use for outgoing snat flows is stored in Conns.
+	// When a flow is expired from Conns, it needs to be removed from SNATFlows as well.
+	// todo if we put "both" keys into Conns, we can potentially avoid this problem
+	SNATFlows map[int]map[uint16]snatInfo
 }
 
 // FirewallTable is the entry point for a rule, the evaluation order is:
@@ -163,6 +181,11 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		hasUnsafeNetworks = true
 	}
 
+	snatAddr := netip.Addr{}
+	if hasUnsafeNetworks {
+		snatAddr = netip.MustParseAddr("169.254.55.96")
+	}
+
 	return &Firewall{
 		Conntrack: &FirewallConntrack{
 			Conns:      make(map[firewall.Packet]*conn),
@@ -176,6 +199,7 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		routableNetworks:  routableNetworks,
 		assignedNetworks:  assignedNetworks,
 		hasUnsafeNetworks: hasUnsafeNetworks,
+		snatAddr:          snatAddr,
 		l:                 l,
 
 		incomingMetrics: firewallMetrics{
@@ -402,24 +426,88 @@ var ErrInvalidLocalIP = errors.New("local address is not in list of handled loca
 var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 var ErrSnatRequired = errors.New("snat required to pass traffic")
 
-// Drop returns an error if the packet should be dropped, explaining why. It
-// returns nil if the packet should not be dropped.
-func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) error {
-	// Check if we spoke to this tuple, if we did then allow this packet
-	if f.inConns(fp, h, caPool, localCache) {
-		return nil
+func (f *Firewall) unSnat(data []byte, fp *firewall.Packet, c *conn, caPool *cert.CAPool) netip.Addr {
+	if c == nil {
+		//unfortunately this needs to lock. Surely there's a better way, but I need to make this flow at all first.
+		c = f.peek(*fp, nil, caPool, nil)
+	}
+	if c == nil {
+		return netip.Addr{}
+	}
+	if !c.snat.Valid() {
+		return netip.Addr{}
 	}
 
-	// Make sure remote address matches nebula certificate, and determine how to treat it
+	copy(data[16:], c.snat.Src.Addr().AsSlice())
+
+	recalcIPv4Checksum(data)
+	switch fp.Protocol {
+	case firewall.ProtoUDP:
+		recalcUDPv4Checksum(data, f.snatAddr, c.snat.Src.Addr(), fp.RemotePort, c.snat.Src.Port())
+	}
+	return c.snat.SrcVpnIp
+}
+
+func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo *HostInfo) {
+	//todo math should exist to take existing checksum, old ip, new ip, and set new checksum, right?
+
+	//todo set srcport
+	//todo record mapping somehow??? sadly the somehow has to be safe/sane across all routines
+	//switch fp.Protocol {
+	//case firewall.ProtoICMP:
+	//
+	//
+	//case firewall.ProtoTCP:
+	//	//todo
+	//case firewall.ProtoUDP:
+	//	//also todo
+	//}
+	//
+	c.snat.Src = netip.AddrPortFrom(fp.RemoteAddr, fp.RemotePort)
+	c.snat.SrcVpnIp = hostinfo.vpnAddrs[0] //todo I hope this is ipv6
+	fp.RemoteAddr = f.snatAddr
+
+	copy(data[12:], f.snatAddr.AsSlice())
+
+	recalcIPv4Checksum(data)
+	switch fp.Protocol {
+	case firewall.ProtoUDP:
+		//todo change the port
+		recalcUDPv4Checksum(data, c.snat.Src.Addr(), f.snatAddr, c.snat.Src.Port(), fp.RemotePort)
+	case firewall.ProtoTCP:
+		//todo recalc checksum
+	}
+}
+
+// Drop returns an error if the packet should be dropped, explaining why. It
+// returns nil if the packet should not be dropped.
+func (f *Firewall) Drop(fp firewall.Packet, pkt []byte, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) error {
+	// Check if we spoke to this tuple, if we did then allow this packet
+	c := f.inConns(fp, h, caPool, localCache)
+	//can't return yet, need to snat maybe
 
 	var err error
 	specialSnatMode := false
 
+	table := f.OutRules
+	if incoming {
+		table = f.InRules
+	}
+
+	if c != nil {
+		specialSnatMode = fp.IsIPv4() && h.HasOnlyV6Addresses() //todo?
+		goto snat
+	}
+
+	// Make sure remote address matches nebula certificate, and determine how to treat it
 	if h.networks == nil {
 		// Simple case: Certificate has one address and no unsafe networks
-		if h.vpnAddrs[0] != fp.RemoteAddr && fp.RemoteAddr != srcsnortaddr /*todo get this from interface */ {
-			f.metrics(incoming).droppedRemoteAddr.Inc(1)
-			return ErrInvalidRemoteIP //todo!
+		if h.vpnAddrs[0] != fp.RemoteAddr {
+			specialSnatMode = fp.IsIPv4() && h.HasOnlyV6Addresses()
+			if !specialSnatMode {
+				f.metrics(incoming).droppedRemoteAddr.Inc(1)
+				return ErrInvalidRemoteIP //todo!
+			}
 		}
 	} else {
 		//todo check for srcsnortaddr here too?
@@ -435,10 +523,7 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrPeerRejected // reject for now, one day this may have different FW rules
 		case NetworkTypeUnsafe:
-			if fp.IsIPv4() && h.HasOnlyV6Addresses() {
-				//err = ErrSnatRequired
-				specialSnatMode = true
-			}
+			specialSnatMode = fp.IsIPv4() && h.HasOnlyV6Addresses()
 			break // nothing special, one day this may have different FW rules
 		default:
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
@@ -453,11 +538,6 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 		return ErrInvalidLocalIP
 	}
 
-	table := f.OutRules
-	if incoming {
-		table = f.InRules
-	}
-
 	// We now know which firewall table to check against
 	if !table.match(fp, incoming, h.ConnectionState.peerCert, caPool) {
 		f.metrics(incoming).droppedNoRule.Inc(1)
@@ -465,7 +545,22 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	}
 
 	// We always want to conntrack since it is a faster operation
-	f.addConn(fp, incoming)
+	c = f.addConn(fp, incoming)
+
+snat:
+	if incoming {
+		//todo rp_filter will need to be set or defeated somehow
+		if specialSnatMode {
+			if f.hasUnsafeNetworks {
+				//todo do not snat if you are not a router for the destination -- for now, just if you're not a router
+				//f.myVpnNetworksTable.Contains(fwPacket.RemoteAddr)
+				f.applySnat(pkt, &fp, c, h)
+				f.dupeConn(fp, c)
+			}
+		}
+	} else { //outgoing
+
+	}
 
 	return err
 }
@@ -494,12 +589,35 @@ func (f *Firewall) EmitStats() {
 	metrics.GetOrRegisterGauge("firewall.rules.hash", nil).Update(int64(f.GetRuleHashFNV()))
 }
 
-func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) bool {
-	if localCache != nil {
-		if _, ok := localCache[fp]; ok {
-			return true
-		}
+func (f *Firewall) peek(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) *conn {
+	//big todo, this cache needs to know snat info as well
+	//if localCache != nil {
+	//	if out, ok := localCache[fp]; ok {
+	//		return out
+	//	}
+	//}
+	conntrack := f.Conntrack
+	conntrack.Lock()
+
+	// Purge every time we test
+	ep, has := conntrack.TimerWheel.Purge()
+	if has {
+		f.evict(ep)
 	}
+
+	c := conntrack.Conns[fp]
+
+	conntrack.Unlock()
+	return c
+}
+
+func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) *conn {
+	//big todo, this cache needs to know snat info as well
+	//if localCache != nil {
+	//	if out, ok := localCache[fp]; ok {
+	//		return out
+	//	}
+	//}
 	conntrack := f.Conntrack
 	conntrack.Lock()
 
@@ -513,7 +631,7 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 
 	if !ok {
 		conntrack.Unlock()
-		return false
+		return nil
 	}
 
 	if c.rulesVersion != f.rulesVersion {
@@ -536,7 +654,7 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 			}
 			delete(conntrack.Conns, fp)
 			conntrack.Unlock()
-			return false
+			return nil
 		}
 
 		if f.l.Level >= logrus.DebugLevel {
@@ -566,12 +684,11 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 		localCache[fp] = struct{}{}
 	}
 
-	return true
+	return c
 }
 
-func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
+func (f *Firewall) packetTimeout(fp firewall.Packet) time.Duration {
 	var timeout time.Duration
-	c := &conn{}
 
 	switch fp.Protocol {
 	case firewall.ProtoTCP:
@@ -581,7 +698,27 @@ func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
 	default:
 		timeout = f.DefaultTimeout
 	}
+	return timeout
+}
 
+func (f *Firewall) dupeConn(fp firewall.Packet, c *conn) {
+	conntrack := f.Conntrack
+	conntrack.Lock()
+	if _, ok := conntrack.Conns[fp]; !ok {
+		conntrack.TimerWheel.Advance(time.Now())
+		conntrack.TimerWheel.Add(fp, f.packetTimeout(fp))
+	}
+
+	// Record which rulesVersion allowed this connection, so we can retest after
+	// firewall reload
+	conntrack.Conns[fp] = c
+	conntrack.Unlock()
+}
+
+func (f *Firewall) addConn(fp firewall.Packet, incoming bool) *conn {
+	c := &conn{}
+
+	timeout := f.packetTimeout(fp)
 	conntrack := f.Conntrack
 	conntrack.Lock()
 	if _, ok := conntrack.Conns[fp]; !ok {
@@ -596,6 +733,7 @@ func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
 	c.Expires = time.Now().Add(timeout)
 	conntrack.Conns[fp] = c
 	conntrack.Unlock()
+	return c
 }
 
 // Evict checks if a conntrack entry has expired, if so it is removed, if not it is re-added to the wheel
