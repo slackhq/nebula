@@ -67,7 +67,7 @@ func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*tun,
 	return nil, fmt.Errorf("newTunFromFd not supported in openbsd")
 }
 
-func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
+func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix, _ bool) (*tun, error) {
 	// Try to open tun device
 	var err error
 	deviceName := c.GetString("tun.dev", "")
