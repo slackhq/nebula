@@ -51,7 +51,10 @@ type InterfaceConfig struct {
 }
 
 type batchMetrics struct {
-	udpReadSize metrics.Histogram
+	udpReadSize      metrics.Histogram
+	encryptionTime   metrics.Histogram // Time spent in encryption (including lock waits)
+	batchSize        metrics.Histogram // Dynamic batch sizes being used
+	lockAcquisitions metrics.Counter   // Number of lock acquisitions (should be minimal)
 }
 
 type Interface struct {
