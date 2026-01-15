@@ -50,26 +50,6 @@ type InterfaceConfig struct {
 	l                     *logrus.Logger
 }
 
-type SnatMapping struct {
-	Src      netip.AddrPort
-	SrcVpnIp netip.Addr
-}
-
-type SnatMap struct {
-	m map[uint16]SnatMapping
-}
-
-func (s *SnatMap) addMapping(src netip.AddrPort) {
-
-}
-
-type SnatMaps struct {
-	TCP    SnatMap
-	UDP    SnatMap
-	ICMP   SnatMap //todo index?
-	snatIP netip.Addr
-}
-
 type Interface struct {
 	hostMap               *HostMap
 	outside               udp.Conn
@@ -105,9 +85,8 @@ type Interface struct {
 
 	conntrackCacheTimeout time.Duration
 
-	writers  []udp.Conn
-	readers  []io.ReadWriteCloser
-	snatMaps *SnatMaps //todo this needs some kind of atomic semantics for cross-routine access
+	writers []udp.Conn
+	readers []io.ReadWriteCloser
 
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
@@ -184,33 +163,21 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 
 	cs := c.pki.getCertState()
 	ifce := &Interface{
-		pki:                c.pki,
-		hostMap:            c.HostMap,
-		outside:            c.Outside,
-		inside:             c.Inside,
-		firewall:           c.Firewall,
-		serveDns:           c.ServeDns,
-		handshakeManager:   c.HandshakeManager,
-		createTime:         time.Now(),
-		lightHouse:         c.lightHouse,
-		dropLocalBroadcast: c.DropLocalBroadcast,
-		dropMulticast:      c.DropMulticast,
-		routines:           c.routines,
-		version:            c.version,
-		writers:            make([]udp.Conn, c.routines),
-		readers:            make([]io.ReadWriteCloser, c.routines),
-		snatMaps: &SnatMaps{
-			TCP: SnatMap{
-				m: map[uint16]SnatMapping{},
-			},
-			UDP: SnatMap{
-				m: map[uint16]SnatMapping{},
-			},
-			ICMP: SnatMap{
-				m: map[uint16]SnatMapping{},
-			},
-			snatIP: srcsnortaddr, //todo this should be source of truthed here
-		},
+		pki:                   c.pki,
+		hostMap:               c.HostMap,
+		outside:               c.Outside,
+		inside:                c.Inside,
+		firewall:              c.Firewall,
+		serveDns:              c.ServeDns,
+		handshakeManager:      c.HandshakeManager,
+		createTime:            time.Now(),
+		lightHouse:            c.lightHouse,
+		dropLocalBroadcast:    c.DropLocalBroadcast,
+		dropMulticast:         c.DropMulticast,
+		routines:              c.routines,
+		version:               c.version,
+		writers:               make([]udp.Conn, c.routines),
+		readers:               make([]io.ReadWriteCloser, c.routines),
 		myVpnNetworks:         cs.myVpnNetworks,
 		myVpnNetworksTable:    cs.myVpnNetworksTable,
 		myVpnAddrs:            cs.myVpnAddrs,
