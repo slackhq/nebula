@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -27,8 +28,12 @@ type FirewallInterface interface {
 }
 
 type snatInfo struct {
-	Src      netip.AddrPort
+	//Src is the source IP+port to write into unsafe-route-bound packet
+	Src netip.AddrPort
+	//SrcVpnIp is the overlay IP associated with this flow. It's needed to associate reply traffic so we can get it back to the right host.
 	SrcVpnIp netip.Addr
+	//SnatPort is the port to rewrite into an overlay-bound packet
+	SnatPort uint16
 }
 
 func (s *snatInfo) Valid() bool {
@@ -167,12 +172,14 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		tmax = defaultTimeout
 	}
 
+	hasV4Networks := false
 	routableNetworks := new(bart.Lite)
 	var assignedNetworks []netip.Prefix
 	for _, network := range c.Networks() {
 		nprefix := netip.PrefixFrom(network.Addr(), network.Addr().BitLen())
 		routableNetworks.Insert(nprefix)
 		assignedNetworks = append(assignedNetworks, network)
+		hasV4Networks = hasV4Networks || network.Addr().Is4()
 	}
 
 	hasUnsafeNetworks := false
@@ -182,8 +189,8 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 	}
 
 	snatAddr := netip.Addr{}
-	if hasUnsafeNetworks {
-		snatAddr = netip.MustParseAddr("169.254.55.96")
+	if hasUnsafeNetworks && !hasV4Networks {
+		snatAddr = netip.MustParseAddr("169.254.55.96") //todo this needs to come from the config, or perhaps the tun
 	}
 
 	return &Firewall{
@@ -424,12 +431,11 @@ var ErrPeerRejected = errors.New("remote address is not within a network that we
 var ErrInvalidRemoteIP = errors.New("remote address is not in remote certificate networks")
 var ErrInvalidLocalIP = errors.New("local address is not in list of handled local addresses")
 var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
-var ErrSnatRequired = errors.New("snat required to pass traffic")
 
-func (f *Firewall) unSnat(data []byte, fp *firewall.Packet, c *conn, caPool *cert.CAPool) netip.Addr {
+func (f *Firewall) unSnat(data []byte, fp *firewall.Packet, c *conn) netip.Addr {
 	if c == nil {
 		//unfortunately this needs to lock. Surely there's a better way, but I need to make this flow at all first.
-		c = f.peek(*fp, nil, caPool, nil)
+		c = f.peek(*fp, nil)
 	}
 	if c == nil {
 		return netip.Addr{}
@@ -442,36 +448,73 @@ func (f *Firewall) unSnat(data []byte, fp *firewall.Packet, c *conn, caPool *cer
 
 	//change dst IP
 	copy(data[16:], c.snat.Src.Addr().AsSlice())
-
 	recalcIPv4Checksum(data, oldIP.Addr(), c.snat.Src.Addr())
+	ipHeaderLen := int(data[0]&0x0F) * 4
+	//dst port is at offset 2
+	dstport := ipHeaderLen + 2
 
 	switch fp.Protocol {
 	case firewall.ProtoUDP:
+		binary.BigEndian.PutUint16(data[dstport:dstport+2], c.snat.Src.Port())
 		recalcUDPv4Checksum(data, oldIP, c.snat.Src)
 	case firewall.ProtoTCP:
+		binary.BigEndian.PutUint16(data[dstport:dstport+2], c.snat.Src.Port())
 		recalcTCPv4Checksum(data, oldIP, c.snat.Src)
 	}
 	return c.snat.SrcVpnIp
 }
 
 func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo *HostInfo) {
-	//todo math should exist to take existing checksum, old ip, new ip, and set new checksum, right?
-
-	newIP := netip.AddrPortFrom(f.snatAddr, fp.RemotePort) //todo actually change remoteport
 	//todo set srcport
-	c.snat.Src = netip.AddrPortFrom(fp.RemoteAddr, fp.RemotePort)
-	c.snat.SrcVpnIp = hostinfo.vpnAddrs[0] //todo I hope this is ipv6
-	fp.RemoteAddr = f.snatAddr
+	if c.snat.Valid() {
+		//old flow
+		fp.RemoteAddr = f.snatAddr
+		fp.RemotePort = c.snat.SnatPort
+	} else if hostinfo.vpnAddrs[0].Is6() {
+		//we got a new flow
+		c.snat.Src = netip.AddrPortFrom(fp.RemoteAddr, fp.RemotePort)
+		c.snat.SrcVpnIp = hostinfo.vpnAddrs[0]
 
+		fp.RemoteAddr = f.snatAddr
+
+		//find a new port to use, if needed
+		for {
+			existingFlow := f.peek(*fp, nil) //locking and unlocking for each peek is slow, but simple for now
+			if existingFlow == nil {
+				break //yay, we can use this port
+			}
+			//increment and retry. There's probably better strategies out there
+			fp.RemotePort++
+			if fp.RemotePort < 0x7ff {
+				fp.RemotePort += 0x7ff // keep it ephemeral for now
+			} //todo if we're totally out of ports this loops forever. Probably not good.
+		}
+		c.snat.SnatPort = fp.RemotePort
+	} else {
+		f.l.WithFields(logrus.Fields{
+			"fp":       *fp,
+			"conn":     *c,
+			"hostinfo": hostinfo,
+		}).Error("this packet cannot be snatted")
+		return
+	}
+
+	newIP := netip.AddrPortFrom(f.snatAddr, fp.RemotePort)
 	//change src IP
 	copy(data[12:], f.snatAddr.AsSlice())
-
 	recalcIPv4Checksum(data, c.snat.Src.Addr(), newIP.Addr())
+	ipHeaderLen := int(data[0]&0x0F) * 4
+
 	switch fp.Protocol {
+	case firewall.ProtoICMP:
+		//todo!
 	case firewall.ProtoUDP:
-		//todo change the port
+		//src port is at offset 0
+		binary.BigEndian.PutUint16(data[ipHeaderLen:ipHeaderLen+2], c.snat.SnatPort)
 		recalcUDPv4Checksum(data, c.snat.Src, newIP)
 	case firewall.ProtoTCP:
+		//src port is at offset 0
+		binary.BigEndian.PutUint16(data[ipHeaderLen:ipHeaderLen+2], c.snat.SnatPort)
 		recalcTCPv4Checksum(data, c.snat.Src, newIP)
 	}
 }
@@ -585,7 +628,7 @@ func (f *Firewall) EmitStats() {
 	metrics.GetOrRegisterGauge("firewall.rules.hash", nil).Update(int64(f.GetRuleHashFNV()))
 }
 
-func (f *Firewall) peek(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) *conn {
+func (f *Firewall) peek(fp firewall.Packet, localCache firewall.ConntrackCache) *conn {
 	//big todo, this cache needs to know snat info as well
 	//if localCache != nil {
 	//	if out, ok := localCache[fp]; ok {

@@ -51,11 +51,11 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	var hostinfo *HostInfo
 	var ready bool
 
-	snatMode := fwPacket.RemoteAddr == f.firewall.snatAddr
+	snatMode := f.firewall.snatAddr.IsValid() && fwPacket.RemoteAddr == f.firewall.snatAddr
 
 	if snatMode {
 		//todo unsnat happens here, would be nice to not
-		destVpnAddr := f.firewall.unSnat(packet, fwPacket, nil, f.pki.GetCAPool()) //todo bail if we can't unsnat?
+		destVpnAddr := f.firewall.unSnat(packet, fwPacket, nil) //todo bail if we can't unsnat?
 		if destVpnAddr.IsValid() {
 			hostinfo, ready = f.getOrHandshakeNoRouting(destVpnAddr, func(hh *HandshakeHostInfo) {
 				hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
