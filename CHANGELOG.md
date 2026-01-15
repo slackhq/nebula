@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-01-15
+
+See the [v1.10.1](https://github.com/slackhq/nebula/milestone/26?closed=1) milestone for a complete list of changes.
+
+### Fixed
+
+- Fix a bug where an unsafe route derived from the system route table could be lost on a config reload. (#1573)
+- Fix the PEM banner for ECDSA P256 public keys. (#1552)
+- Fix a regression on Windows from 1.9.x where nebula could fall back to a less performant UDP listener if 
+  non-critical ioctls failed. (#1568)
+- Fix a bug in handshake processing when a peer sends an unexpected public key. (#1566)
+
+### Added
+
+- Add a config option to control accepting `recv_error` packets which defaults to `always`. (#1569)
+
+### Changed
+
+- Various dependency updates. (#1541, #1549, #1550, #1557, #1558, #1560, #1561, #1570, #1571)
+
 ## [1.10.0] - 2025-12-04
 
 See the [v1.10.0](https://github.com/slackhq/nebula/milestone/16?closed=1) milestone for a complete list of changes.
@@ -744,7 +764,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.10.1...HEAD
+[1.10.1]: https://github.com/slackhq/nebula/releases/tag/v1.10.1
 [1.10.0]: https://github.com/slackhq/nebula/releases/tag/v1.10.0
 [1.9.7]: https://github.com/slackhq/nebula/releases/tag/v1.9.7
 [1.9.6]: https://github.com/slackhq/nebula/releases/tag/v1.9.6
