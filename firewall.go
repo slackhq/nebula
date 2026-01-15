@@ -522,8 +522,7 @@ func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo
 // Drop returns an error if the packet should be dropped, explaining why. It
 // returns nil if the packet should not be dropped.
 func (f *Firewall) Drop(fp firewall.Packet, pkt []byte, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) error {
-	var err error
-	specialSnatMode := false
+	specialSnatMode := f.hasUnsafeNetworks && fp.IsIPv4() && h.HasOnlyV6Addresses() //todo I wish I only set this once somehow
 
 	table := f.OutRules
 	if incoming {
@@ -531,10 +530,15 @@ func (f *Firewall) Drop(fp firewall.Packet, pkt []byte, incoming bool, h *HostIn
 	}
 
 	// Check if we spoke to this tuple, if we did then allow this packet
+	// Check the cache first, iff not snatting
+	if localCache != nil && !specialSnatMode {
+		if _, ok := localCache[fp]; ok {
+			return nil //packet matched the cache, we're not snatting, we can return early!
+		}
+	}
 	c := f.inConns(fp, h, caPool, localCache)
 	if c != nil {
 		//can't return yet, need to snat maybe
-		specialSnatMode = fp.IsIPv4() && h.HasOnlyV6Addresses() //todo I wish I only set this once somehow
 		goto snat
 	}
 
@@ -542,12 +546,11 @@ func (f *Firewall) Drop(fp firewall.Packet, pkt []byte, incoming bool, h *HostIn
 	if h.networks == nil {
 		// Simple case: Certificate has one address and no unsafe networks
 		if h.vpnAddrs[0] != fp.RemoteAddr {
-			specialSnatMode = fp.IsIPv4() && h.HasOnlyV6Addresses()
 			if !specialSnatMode {
 				f.metrics(incoming).droppedRemoteAddr.Inc(1)
 				return ErrInvalidRemoteIP //todo!
-			}
-		}
+			} //else we're in special snat mode, and we need to apply more checks below
+		} //else? all good, fall through
 	} else {
 		//todo check for srcsnortaddr here too?
 		nwType, ok := h.networks.Lookup(fp.RemoteAddr)
@@ -559,10 +562,12 @@ func (f *Firewall) Drop(fp firewall.Packet, pkt []byte, incoming bool, h *HostIn
 		case NetworkTypeVPN:
 			break // nothing special
 		case NetworkTypeVPNPeer:
+			//todo we might need a specialSnatMode case in here to handle routers with v4 addresses when we don't also have a v4 address?
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrPeerRejected // reject for now, one day this may have different FW rules
 		case NetworkTypeUnsafe:
-			specialSnatMode = fp.IsIPv4() && h.HasOnlyV6Addresses()
+			//intentionally excluding f.hasUnsafeNetworks -- this is what lets routers talk back to us with our unsafe traffic!
+			specialSnatMode = fp.IsIPv4() && h.HasOnlyV6Addresses() && f.assignedNetworks[0].Addr().Is6()
 			break // nothing special, one day this may have different FW rules
 		default:
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
@@ -588,20 +593,14 @@ func (f *Firewall) Drop(fp firewall.Packet, pkt []byte, incoming bool, h *HostIn
 
 snat:
 	if incoming {
-		//todo rp_filter will need to be set or defeated somehow
 		if specialSnatMode {
-			if f.hasUnsafeNetworks {
-				//todo do not snat if you are not a router for the destination -- for now, just if you're not a router
-				//f.myVpnNetworksTable.Contains(fwPacket.RemoteAddr)
-				f.applySnat(pkt, &fp, c, h)
-				f.dupeConn(fp, c)
-			}
+			//todo do not snat if you are not a router for the destination -- for now, just if you're not a router
+			f.applySnat(pkt, &fp, c, h)
+			f.dupeConn(fp, c) //track the snatted flow with the same expiration as the unsnatted version
 		}
-	} else { //outgoing
+	} //outgoing snat is handled before this function is called (for now!)
 
-	}
-
-	return err
+	return nil
 }
 
 func (f *Firewall) metrics(incoming bool) firewallMetrics {
@@ -651,12 +650,6 @@ func (f *Firewall) peek(fp firewall.Packet, localCache firewall.ConntrackCache) 
 }
 
 func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) *conn {
-	//big todo, this cache needs to know snat info as well
-	//if localCache != nil {
-	//	if out, ok := localCache[fp]; ok {
-	//		return out
-	//	}
-	//}
 	conntrack := f.Conntrack
 	conntrack.Lock()
 
