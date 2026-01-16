@@ -202,7 +202,10 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 			dropped: metrics.GetOrRegisterCounter("hostinfo.cached_packets.dropped", nil),
 		},
 		batchMetrics: &batchMetrics{
-			udpReadSize: metrics.GetOrRegisterHistogram("batch.udp_read_size", nil, metrics.NewUniformSample(1024)),
+			udpReadSize:      metrics.GetOrRegisterHistogram("batch.udp_read_size", nil, metrics.NewUniformSample(1024)),
+			encryptionTime:   metrics.GetOrRegisterHistogram("batch.encryption_time_ns", nil, metrics.NewUniformSample(1024)),
+			batchSize:        metrics.GetOrRegisterHistogram("batch.size", nil, metrics.NewUniformSample(1024)),
+			lockAcquisitions: metrics.GetOrRegisterCounter("batch.lock_acquisitions", nil),
 		},
 
 		l: c.l,

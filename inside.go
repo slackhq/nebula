@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"net/netip"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
@@ -10,6 +11,14 @@ import (
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/routing"
 )
+
+// preEncryptionPacket holds packet data before batch encryption
+type preEncryptionPacket struct {
+	hostinfo *HostInfo
+	ci       *ConnectionState
+	packet   []byte
+	out      []byte
+}
 
 // consumeInsidePackets processes multiple packets in a batch for improved performance
 // packets: slice of packet buffers to process
@@ -27,6 +36,9 @@ func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count in
 	// Reset batch accumulation slices (reuse capacity)
 	*batchPackets = (*batchPackets)[:0]
 	*batchAddrs = (*batchAddrs)[:0]
+
+	// Collect packets for batched encryption
+	preEncryptionBatch := make([]preEncryptionPacket, 0, count)
 
 	// Process each packet in the batch
 	for i := 0; i < count; i++ {
@@ -95,7 +107,7 @@ func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count in
 			continue
 		}
 
-		// Encrypt and prepare packet for batch sending
+		// Prepare packet for batch encryption
 		ci := hostinfo.ConnectionState
 		if ci.eKey == nil {
 			continue
@@ -109,12 +121,49 @@ func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count in
 			continue
 		}
 
-		// Encrypt the packet for batch sending
+		// Collect for batched encryption
+		preEncryptionBatch = append(preEncryptionBatch, preEncryptionPacket{
+			hostinfo: hostinfo,
+			ci:       ci,
+			packet:   packet,
+			out:      out,
+		})
+	}
+
+	// BATCH ENCRYPTION: Process all collected packets
+	if len(preEncryptionBatch) > 0 {
+		f.encryptBatch(preEncryptionBatch, nb, batchPackets, batchAddrs)
+	}
+
+	// Send all accumulated packets in one batch
+	if len(*batchPackets) > 0 {
+		batchSize := len(*batchPackets)
+		n, err := f.writers[q].WriteMulti(*batchPackets, *batchAddrs)
+		if err != nil {
+			f.l.WithError(err).WithField("sent", n).WithField("total", batchSize).Error("Failed to send batch")
+		}
+	}
+}
+
+// encryptBatch processes multiple packets, reducing lock contention by batching
+func (f *Interface) encryptBatch(batch []preEncryptionPacket, nb []byte, batchPackets *[][]byte, batchAddrs *[]netip.AddrPort) {
+	lockStart := time.Now()
+
+	for i := range batch {
+		ci := batch[i].ci
+		hostinfo := batch[i].hostinfo
+
+		// Validate packet data to prevent nil pointer dereference
+		if ci == nil || hostinfo == nil {
+			continue
+		}
+
 		if noiseutil.EncryptLockNeeded {
 			ci.writeLock.Lock()
 		}
+
 		c := ci.messageCounter.Add(1)
-		out = header.Encode(out, header.Version, header.Message, 0, hostinfo.remoteIndexId, c)
+		out := header.Encode(batch[i].out, header.Version, header.Message, 0, hostinfo.remoteIndexId, c)
 		f.connectionManager.Out(hostinfo)
 
 		// Query lighthouse if needed
@@ -126,10 +175,13 @@ func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count in
 			}
 		}
 
-		out, err = ci.eKey.EncryptDanger(out, out, packet, c, nb)
+		var err error
+		out, err = ci.eKey.EncryptDanger(out, out, batch[i].packet, c, nb)
+
 		if noiseutil.EncryptLockNeeded {
 			ci.writeLock.Unlock()
 		}
+
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).
 				WithField("counter", c).
@@ -137,19 +189,18 @@ func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count in
 			continue
 		}
 
-		// Add to batch
+		// Add to output batches
 		*batchPackets = append(*batchPackets, out)
 		*batchAddrs = append(*batchAddrs, hostinfo.remote)
 	}
 
-	// Send all accumulated packets in one batch
-	if len(*batchPackets) > 0 {
-		batchSize := len(*batchPackets)
-		n, err := f.writers[q].WriteMulti(*batchPackets, *batchAddrs)
-		if err != nil {
-			f.l.WithError(err).WithField("sent", n).WithField("total", batchSize).Error("Failed to send batch")
-		}
+	// Record metrics
+	encryptionTime := time.Since(lockStart)
+	if noiseutil.EncryptLockNeeded {
+		f.batchMetrics.lockAcquisitions.Inc(int64(len(batch)))
 	}
+	f.batchMetrics.encryptionTime.Update(encryptionTime.Nanoseconds())
+	f.batchMetrics.batchSize.Update(int64(len(batch)))
 }
 
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
