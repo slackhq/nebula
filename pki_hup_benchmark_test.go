@@ -72,6 +72,7 @@ func buildCABundle(b *testing.B, count int) (cert.Certificate, []byte, []byte) {
 	)
 
 	buf := bytes.NewBuffer(pem)
+	buf.Write([]byte("\n# a comment!\n"))
 
 	for i := 1; i < count; i++ {
 		_, _, _, extraPEM := cert_test.NewTestCaCert(
@@ -83,7 +84,7 @@ func buildCABundle(b *testing.B, count int) (cert.Certificate, []byte, []byte) {
 			nil,
 			nil,
 		)
-
+		buf.Write([]byte("\n# a comment!\n"))
 		buf.Write(extraPEM)
 	}
 

@@ -1,6 +1,7 @@
 package cert
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/pem"
 	"errors"
@@ -9,6 +10,8 @@ import (
 	"net/netip"
 	"slices"
 	"time"
+
+	"github.com/slackhq/nebula/util"
 )
 
 type CAPool struct {
@@ -38,48 +41,42 @@ func NewCAPoolFromPEM(caPEMs []byte) (*CAPool, error) {
 // The reader must contain a PEM-encoded set of nebula certificates.
 func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 	pool := NewCAPool()
-	buf := make([]byte, 0, 64*1024)
-	tmp := make([]byte, 32*1024)
+
 	var expired bool
 
+	scanner := bufio.NewScanner(r)
+	scanner.Split(util.SplitPEM)
+
 	for {
-		n, err := r.Read(tmp)
-		if n > 0 {
-			buf = append(buf, tmp[:n]...)
-
-			for {
-				var block *pem.Block
-				block, buf = pem.Decode(buf)
-				if block == nil {
-					break
-				}
-
-				c, err := unmarshalCertificateBlock(block)
-				if err != nil {
-					return nil, err
-				}
-
-				err = pool.AddCA(c)
-				if errors.Is(err, ErrExpired) {
-					expired = true
-					continue
-				}
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
-
-		if errors.Is(err, io.EOF) {
+		ready := scanner.Scan()
+		if !ready {
 			break
 		}
+		pemBytes := scanner.Bytes()
+		if scanner.Err() != nil {
+			return nil, scanner.Err()
+		}
+
+		block, rest := pem.Decode(pemBytes)
+		if len(bytes.TrimSpace(rest)) > 0 {
+			return nil, ErrInvalidPEMBlock
+		}
+		if block == nil {
+			break
+		}
+
+		c, err := unmarshalCertificateBlock(block)
 		if err != nil {
 			return nil, err
 		}
-	}
 
-	if len(bytes.TrimSpace(buf)) > 0 {
-		return nil, ErrInvalidPEMBlock
+		err = pool.AddCA(c)
+		if errors.Is(err, ErrExpired) {
+			expired = true
+			continue
+		} else if err != nil {
+			return nil, err
+		}
 	}
 
 	if expired {
