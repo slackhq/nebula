@@ -441,7 +441,7 @@ func (c *certificateV2) validate() error {
 				}
 			} else if network.Addr().Is4() {
 				if !hasV4Networks {
-					return NewErrInvalidCertificateProperties("IPv4 unsafe networks require an IPv4 address assignment: %s", network)
+					//return NewErrInvalidCertificateProperties("IPv4 unsafe networks require an IPv4 address assignment: %s", network)
 				}
 			}
 		}

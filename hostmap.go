@@ -224,6 +224,7 @@ const (
 	NetworkTypeVPNPeer
 	// NetworkTypeUnsafe is a network from Certificate.UnsafeNetworks()
 	NetworkTypeUnsafe
+	//todo consider NetworkTypeLinkLocal or NetworkTypeSNAT
 )
 
 type HostInfo struct {
@@ -275,6 +276,15 @@ type HostInfo struct {
 	// This value will be behind against actual tunnel utilization in the hot path.
 	// This should only be used by the ConnectionManagers ticker routine.
 	lastUsed time.Time
+}
+
+func (i *HostInfo) HasOnlyV6Addresses() bool {
+	for _, vpnIp := range i.vpnAddrs {
+		if !vpnIp.Is6() {
+			return false
+		}
+	}
+	return true
 }
 
 type ViaSender struct {
