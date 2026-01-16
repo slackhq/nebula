@@ -47,17 +47,8 @@ func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count in
 	*batchPackets = (*batchPackets)[:0]
 	*batchAddrs = (*batchAddrs)[:0]
 
-	// Get pooled slice for batched encryption (reduces allocations)
-	preEncryptionBatchPtr := preEncryptionBatchPool.Get().(*[]preEncryptionPacket)
-	preEncryptionBatch := (*preEncryptionBatchPtr)[:0]
-	defer func() {
-		// Clear references to allow GC and return to pool
-		for i := range preEncryptionBatch {
-			preEncryptionBatch[i] = preEncryptionPacket{}
-		}
-		*preEncryptionBatchPtr = preEncryptionBatch[:0]
-		preEncryptionBatchPool.Put(preEncryptionBatchPtr)
-	}()
+	// Collect packets for batched encryption
+	preEncryptionBatch := make([]preEncryptionPacket, 0, count)
 
 	// Process each packet in the batch
 	for i := 0; i < count; i++ {
