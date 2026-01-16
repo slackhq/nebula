@@ -47,15 +47,8 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Split(util.SplitPEM)
 
-	for {
-		ready := scanner.Scan()
-		if !ready {
-			break
-		}
+	for scanner.Scan() {
 		pemBytes := scanner.Bytes()
-		if scanner.Err() != nil {
-			return nil, scanner.Err()
-		}
 
 		block, rest := pem.Decode(pemBytes)
 		if len(bytes.TrimSpace(rest)) > 0 {
@@ -77,6 +70,9 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 		} else if err != nil {
 			return nil, err
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
 	}
 
 	if expired {
