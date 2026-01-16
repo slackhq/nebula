@@ -284,6 +284,47 @@ tun:
   # SO_RCVBUFFORCE is used to avoid having to raise the system wide max
   #use_system_route_table_buffer_size: 0
 
+  # EXPERIMENTAL: This option may change or disappear in the future.
+  # Multiport spreads outgoing UDP packets across multiple UDP send ports,
+  # which allows nebula to work around any issues on the underlay network.
+  # Some example issues this could work around:
+  #  - UDP rate limits on a per flow basis.
+  #  - Partial underlay network failure in which some flows work and some don't
+  # Agreement is done during the handshake to decide if multiport mode will
+  # be used for a given tunnel (one side must have tx_enabled set, the other
+  # side must have rx_enabled set)
+  #
+  # NOTE: you cannot use multiport on a host if you are relying on UDP hole
+  # punching to get through a NAT or firewall.
+  #
+  # NOTE: Linux only (uses raw sockets to send). Also currently only works
+  # with IPv4 underlay network remotes.
+  #
+  # The default values are listed below:
+  #multiport:
+    # This host support sending via multiple UDP ports.
+    #tx_enabled: false
+    #
+    # This host supports receiving packets sent from multiple UDP ports.
+    #rx_enabled: false
+    #
+    # How many UDP ports to use when sending. The lowest source port will be
+    # listen.port and go up to (but not including) listen.port + tx_ports.
+    #tx_ports: 100
+    #
+    # NOTE: All of your hosts must be running a version of Nebula that supports
+    # multiport if you want to enable this feature. Older versions of Nebula
+    # will be confused by these multiport handshakes.
+    #
+    # If handshakes are not getting a response, attempt to transmit handshakes
+    # using random UDP source ports (to get around partial underlay network
+    # failures).
+    #tx_handshake: false
+    #
+    # How many unresponded handshakes we should send before we attempt to
+    # send multiport handshakes.
+    #tx_handshake_delay: 2
+
 # Configure logging level
 logging:
   # panic, fatal, error, warning, info, or debug. Default is info and is reloadable.
