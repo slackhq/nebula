@@ -40,6 +40,7 @@ type tun struct {
 	routeChan                 chan struct{}
 	useSystemRoutes           bool
 	useSystemRoutesBufferSize int
+	routeTableId              int
 
 	// These are routes learned from `tun.use_system_route_table`
 	// stored here to make it easier to restore them after a reload
@@ -137,6 +138,7 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []n
 		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
 		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
+		routeTableId:              c.GetInt("tun.route_table_id", unix.RT_TABLE_MAIN),
 		l:                         l,
 	}
 
@@ -305,6 +307,10 @@ func (t *tun) addIPs(link netlink.Link) error {
 				Mask: net.CIDRMask(t.vpnNetworks[i].Bits(), t.vpnNetworks[i].Addr().BitLen()),
 			},
 			Label: t.vpnNetworks[i].Addr().Zone(),
+			// Do not create a route when assigning the IP, routes are instead managed with setDefaultRoute
+			// This way we make sure that routes have the correct MTU during creation and
+			// they can be created directly in a routing table of our choice
+			Flags: unix.IFA_F_NOPREFIXROUTE,
 		}
 	}
 
@@ -436,12 +442,13 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 		Scope:     unix.RT_SCOPE_LINK,
 		Src:       net.IP(cidr.Addr().AsSlice()),
 		Protocol:  unix.RTPROT_KERNEL,
-		Table:     unix.RT_TABLE_MAIN,
+		Table:     t.routeTableId,
 		Type:      unix.RTN_UNICAST,
 	}
 	err := netlink.RouteReplace(&nr)
 	if err != nil {
-		t.l.WithError(err).WithField("cidr", cidr).Warn("Failed to set default route MTU, retrying")
+		t.l.WithError(err).WithField("cidr", cidr).WithField("mtu", t.DefaultMTU).WithField("table", t.routeTableId).
+			Warn("Failed to add default route, retrying")
 		//retry twice more -- on some systems there appears to be a race condition where if we set routes too soon, netlink says `invalid argument`
 		for i := 0; i < 2; i++ {
 			time.Sleep(100 * time.Millisecond)
@@ -449,13 +456,16 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 			if err == nil {
 				break
 			} else {
-				t.l.WithError(err).WithField("cidr", cidr).WithField("mtu", t.DefaultMTU).Warn("Failed to set default route MTU, retrying")
+				t.l.WithError(err).WithField("cidr", cidr).WithField("mtu", t.DefaultMTU).WithField("table", t.routeTableId).
+					Warn("Failed to add default route, retrying")
 			}
 		}
 		if err != nil {
-			return fmt.Errorf("failed to set mtu %v on the default route %v; %v", t.DefaultMTU, dr, err)
+			return fmt.Errorf("failed to create default route %v; %v", dr, err)
 		}
 	}
+
+	t.l.WithField("cidr", cidr).WithField("mtu", t.DefaultMTU).WithField("table", t.routeTableId).Info("Added default route")
 
 	return nil
 }
@@ -479,6 +489,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 			MTU:       r.MTU,
 			AdvMSS:    t.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
+			Table:     t.routeTableId,
 		}
 
 		if r.Metric > 0 {
@@ -494,7 +505,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 				return retErr
 			}
 		} else {
-			t.l.WithField("route", r).Info("Added route")
+			t.l.WithField("route", r).WithField("table", t.routeTableId).Info("Added route")
 		}
 	}
 
@@ -518,6 +529,7 @@ func (t *tun) removeRoutes(routes []Route) {
 			MTU:       r.MTU,
 			AdvMSS:    t.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
+			Table:     t.routeTableId,
 		}
 
 		if r.Metric > 0 {
@@ -526,9 +538,9 @@ func (t *tun) removeRoutes(routes []Route) {
 
 		err := netlink.RouteDel(&nr)
 		if err != nil {
-			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
+			t.l.WithError(err).WithField("route", r).WithField("table", t.routeTableId).Error("Failed to remove route")
 		} else {
-			t.l.WithField("route", r).Info("Removed route")
+			t.l.WithField("route", r).WithField("table", t.routeTableId).Info("Removed route")
 		}
 	}
 }
