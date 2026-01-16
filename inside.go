@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -18,6 +19,15 @@ type preEncryptionPacket struct {
 	ci       *ConnectionState
 	packet   []byte
 	out      []byte
+}
+
+// Pool for preEncryptionBatch slices to reduce allocations
+var preEncryptionBatchPool = sync.Pool{
+	New: func() any {
+		// Pre-allocate with reasonable capacity
+		batch := make([]preEncryptionPacket, 0, 128)
+		return &batch
+	},
 }
 
 // consumeInsidePackets processes multiple packets in a batch for improved performance
@@ -37,8 +47,17 @@ func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count in
 	*batchPackets = (*batchPackets)[:0]
 	*batchAddrs = (*batchAddrs)[:0]
 
-	// Collect packets for batched encryption
-	preEncryptionBatch := make([]preEncryptionPacket, 0, count)
+	// Get pooled slice for batched encryption (reduces allocations)
+	preEncryptionBatchPtr := preEncryptionBatchPool.Get().(*[]preEncryptionPacket)
+	preEncryptionBatch := (*preEncryptionBatchPtr)[:0]
+	defer func() {
+		// Clear references to allow GC and return to pool
+		for i := range preEncryptionBatch {
+			preEncryptionBatch[i] = preEncryptionPacket{}
+		}
+		*preEncryptionBatchPtr = preEncryptionBatch[:0]
+		preEncryptionBatchPool.Put(preEncryptionBatchPtr)
+	}()
 
 	// Process each packet in the batch
 	for i := 0; i < count; i++ {
@@ -145,59 +164,111 @@ func (f *Interface) consumeInsidePackets(packets [][]byte, sizes []int, count in
 	}
 }
 
-// encryptBatch processes multiple packets, reducing lock contention by batching
+// encryptBatch processes multiple packets, grouping by ConnectionState to reduce lock acquisitions
 func (f *Interface) encryptBatch(batch []preEncryptionPacket, nb []byte, batchPackets *[][]byte, batchAddrs *[]netip.AddrPort) {
 	lockStart := time.Now()
+	lockAcquisitions := int64(0)
 
-	for i := range batch {
-		ci := batch[i].ci
-		hostinfo := batch[i].hostinfo
+	if noiseutil.EncryptLockNeeded {
+		// Group packets by ConnectionState to minimize lock acquisitions
+		// Process packets in order but batch lock acquisitions per CI
+		var currentCI *ConnectionState
+		var lockHeld bool
 
-		// Validate packet data to prevent nil pointer dereference
-		if ci == nil || hostinfo == nil {
-			continue
-		}
+		for i := range batch {
+			ci := batch[i].ci
+			hostinfo := batch[i].hostinfo
 
-		if noiseutil.EncryptLockNeeded {
-			ci.writeLock.Lock()
-		}
-
-		c := ci.messageCounter.Add(1)
-		out := header.Encode(batch[i].out, header.Version, header.Message, 0, hostinfo.remoteIndexId, c)
-		f.connectionManager.Out(hostinfo)
-
-		// Query lighthouse if needed
-		if hostinfo.lastRebindCount != f.rebindCount {
-			f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
-			hostinfo.lastRebindCount = f.rebindCount
-			if f.l.Level >= logrus.DebugLevel {
-				f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).Debug("Lighthouse update triggered for punch due to rebind counter")
+			// Validate packet data to prevent nil pointer dereference
+			if ci == nil || hostinfo == nil {
+				continue
 			}
+
+			// Switch locks if we're moving to a different ConnectionState
+			if ci != currentCI {
+				if lockHeld {
+					currentCI.writeLock.Unlock()
+				}
+				ci.writeLock.Lock()
+				lockAcquisitions++
+				currentCI = ci
+				lockHeld = true
+			}
+
+			c := ci.messageCounter.Add(1)
+			out := header.Encode(batch[i].out, header.Version, header.Message, 0, hostinfo.remoteIndexId, c)
+			f.connectionManager.Out(hostinfo)
+
+			// Query lighthouse if needed
+			if hostinfo.lastRebindCount != f.rebindCount {
+				f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
+				hostinfo.lastRebindCount = f.rebindCount
+				if f.l.Level >= logrus.DebugLevel {
+					f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).Debug("Lighthouse update triggered for punch due to rebind counter")
+				}
+			}
+
+			var err error
+			out, err = ci.eKey.EncryptDanger(out, out, batch[i].packet, c, nb)
+			if err != nil {
+				hostinfo.logger(f.l).WithError(err).
+					WithField("counter", c).
+					Error("Failed to encrypt outgoing packet")
+				continue
+			}
+
+			// Add to output batches
+			*batchPackets = append(*batchPackets, out)
+			*batchAddrs = append(*batchAddrs, hostinfo.remote)
 		}
 
-		var err error
-		out, err = ci.eKey.EncryptDanger(out, out, batch[i].packet, c, nb)
-
-		if noiseutil.EncryptLockNeeded {
-			ci.writeLock.Unlock()
+		// Release final lock
+		if lockHeld {
+			currentCI.writeLock.Unlock()
 		}
+	} else {
+		// No locks needed - process directly
+		for i := range batch {
+			ci := batch[i].ci
+			hostinfo := batch[i].hostinfo
 
-		if err != nil {
-			hostinfo.logger(f.l).WithError(err).
-				WithField("counter", c).
-				Error("Failed to encrypt outgoing packet")
-			continue
+			// Validate packet data to prevent nil pointer dereference
+			if ci == nil || hostinfo == nil {
+				continue
+			}
+
+			c := ci.messageCounter.Add(1)
+			out := header.Encode(batch[i].out, header.Version, header.Message, 0, hostinfo.remoteIndexId, c)
+			f.connectionManager.Out(hostinfo)
+
+			// Query lighthouse if needed
+			if hostinfo.lastRebindCount != f.rebindCount {
+				f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
+				hostinfo.lastRebindCount = f.rebindCount
+				if f.l.Level >= logrus.DebugLevel {
+					f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).Debug("Lighthouse update triggered for punch due to rebind counter")
+				}
+			}
+
+			var err error
+			out, err = ci.eKey.EncryptDanger(out, out, batch[i].packet, c, nb)
+			if err != nil {
+				hostinfo.logger(f.l).WithError(err).
+					WithField("counter", c).
+					Error("Failed to encrypt outgoing packet")
+				continue
+			}
+
+			// Add to output batches
+			*batchPackets = append(*batchPackets, out)
+			*batchAddrs = append(*batchAddrs, hostinfo.remote)
 		}
-
-		// Add to output batches
-		*batchPackets = append(*batchPackets, out)
-		*batchAddrs = append(*batchAddrs, hostinfo.remote)
 	}
 
 	// Record metrics
 	encryptionTime := time.Since(lockStart)
 	if noiseutil.EncryptLockNeeded {
-		f.batchMetrics.lockAcquisitions.Inc(int64(len(batch)))
+		f.batchMetrics.lockAcquisitions.Inc(lockAcquisitions)
 	}
 	f.batchMetrics.encryptionTime.Update(encryptionTime.Nanoseconds())
 	f.batchMetrics.batchSize.Update(int64(len(batch)))

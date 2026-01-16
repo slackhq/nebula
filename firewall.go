@@ -77,11 +77,17 @@ type firewallMetrics struct {
 }
 
 type FirewallConntrack struct {
-	sync.Mutex
+	sync.RWMutex
 
 	Conns      map[firewall.Packet]*conn
 	TimerWheel *TimerWheel[firewall.Packet]
+
+	// purgeCounter tracks lookups to trigger periodic purge instead of every lookup
+	purgeCounter uint32
 }
+
+// purgeInterval defines how many lookups between purge attempts
+const conntrackPurgeInterval = 1024
 
 // FirewallTable is the entry point for a rule, the evaluation order is:
 // Proto AND port AND (CA SHA or CA name) AND local CIDR AND (group OR groups OR name OR remote CIDR)
@@ -475,9 +481,9 @@ func (f *Firewall) Destroy() {
 
 func (f *Firewall) EmitStats() {
 	conntrack := f.Conntrack
-	conntrack.Lock()
+	conntrack.RLock()
 	conntrackCount := len(conntrack.Conns)
-	conntrack.Unlock()
+	conntrack.RUnlock()
 	metrics.GetOrRegisterGauge("firewall.conntrack.count", nil).Update(int64(conntrackCount))
 	metrics.GetOrRegisterGauge("firewall.rules.version", nil).Update(int64(f.rulesVersion))
 	metrics.GetOrRegisterGauge("firewall.rules.hash", nil).Update(int64(f.GetRuleHashFNV()))
@@ -490,22 +496,40 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 		}
 	}
 	conntrack := f.Conntrack
-	conntrack.Lock()
 
-	// Purge every time we test
-	ep, has := conntrack.TimerWheel.Purge()
-	if has {
-		f.evict(ep)
+	// Fast path: RLock for lookup only
+	conntrack.RLock()
+	c, ok := conntrack.Conns[fp]
+	if !ok {
+		conntrack.RUnlock()
+		return false
 	}
 
-	c, ok := conntrack.Conns[fp]
+	// Check if we need to validate against new rules (requires write lock)
+	needsRulesCheck := c.rulesVersion != f.rulesVersion
+	conntrack.RUnlock()
 
+	// Slow path: need write lock for expiry update and possibly rules check
+	conntrack.Lock()
+
+	// Periodic purge instead of every lookup (major CPU savings)
+	conntrack.purgeCounter++
+	if conntrack.purgeCounter >= conntrackPurgeInterval {
+		conntrack.purgeCounter = 0
+		ep, has := conntrack.TimerWheel.Purge()
+		if has {
+			f.evict(ep)
+		}
+	}
+
+	// Re-check after acquiring write lock (entry may have been deleted)
+	c, ok = conntrack.Conns[fp]
 	if !ok {
 		conntrack.Unlock()
 		return false
 	}
 
-	if c.rulesVersion != f.rulesVersion {
+	if needsRulesCheck && c.rulesVersion != f.rulesVersion {
 		// This conntrack entry was for an older rule set, validate
 		// it still passes with the current rule set
 		table := f.OutRules
