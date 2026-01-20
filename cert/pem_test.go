@@ -44,7 +44,7 @@ bzBEr00kERQxxTzTsH8cpYEgRoipvmExvg8WP8NdAJEYJosB
 	assert.Equal(t, rest, invalidPem)
 	require.EqualError(t, err, "bytes did not contain a proper certificate banner")
 
-	// Fail due to ivalid PEM format, because
+	// Fail due to invalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
 	cert, rest, err = UnmarshalCertificateFromPEM(rest)
 	assert.Nil(t, cert)
@@ -106,7 +106,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 	assert.Equal(t, rest, invalidPem)
 	require.EqualError(t, err, "bytes did not contain a proper Ed25519/ECDSA private key banner")
 
-	// Fail due to ivalid PEM format, because
+	// Fail due to invalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
 	k, rest, curve, err = UnmarshalSigningPrivateKeyFromPEM(rest)
 	assert.Nil(t, k)
@@ -168,7 +168,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 	assert.Equal(t, rest, invalidPem)
 	require.EqualError(t, err, "bytes did not contain a proper private key banner")
 
-	// Fail due to ivalid PEM format, because
+	// Fail due to invalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
 	k, rest, curve, err = UnmarshalPrivateKeyFromPEM(rest)
 	assert.Nil(t, k)
@@ -221,7 +221,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 	require.EqualError(t, err, "bytes did not contain a proper public key banner")
 	assert.Equal(t, rest, invalidPem)
 
-	// Fail due to ivalid PEM format, because
+	// Fail due to invalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
 	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
 	assert.Nil(t, k)
@@ -299,7 +299,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 	require.EqualError(t, err, "bytes did not contain a proper public key banner")
 	assert.Equal(t, rest, invalidPem)
 
-	// Fail due to ivalid PEM format, because
+	// Fail due to invalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
 	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
 	assert.Nil(t, k)
