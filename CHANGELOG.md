@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.2] - 2026-01-21
+
+## What's Changed
+
+### Fixed
+
+- Fix panic when using `use_system_route_table` introduced in v1.10.1. (#1580)
+
+### Changed
+
+- Fix some typos in comments. (#1582)
+- Dependency updates. (#1581)
+
 ## [1.10.1] - 2026-01-16
 
 See the [v1.10.1](https://github.com/slackhq/nebula/milestone/26?closed=1) milestone for a complete list of changes.
@@ -764,7 +777,8 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.10.1...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.10.2...HEAD
+[1.10.2]: https://github.com/slackhq/nebula/releases/tag/v1.10.2
 [1.10.1]: https://github.com/slackhq/nebula/releases/tag/v1.10.1
 [1.10.0]: https://github.com/slackhq/nebula/releases/tag/v1.10.0
 [1.9.7]: https://github.com/slackhq/nebula/releases/tag/v1.9.7
