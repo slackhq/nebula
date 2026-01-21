@@ -200,7 +200,7 @@ func Test_ca(t *testing.T) {
 	assert.Empty(t, b)
 	assert.Len(t, lKey, 64)
 
-	// test when reading passsword results in an error
+	// test when reading password results in an error
 	os.Remove(keyF.Name())
 	os.Remove(crtF.Name())
 	ob.Reset()

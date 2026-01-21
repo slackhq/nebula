@@ -298,6 +298,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		ifce.RegisterConfigChangeCallbacks(c)
 		ifce.reloadDisconnectInvalid(c)
 		ifce.reloadSendRecvError(c)
+		ifce.reloadAcceptRecvError(c)
 
 		handshakeManager.f = ifce
 		go handshakeManager.Run(ctx)

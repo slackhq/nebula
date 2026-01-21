@@ -119,6 +119,7 @@ func (cc *CachedCertificate) String() string {
 // Recombine will attempt to unmarshal a certificate received in a handshake.
 // Handshakes save space by placing the peers public key in a different part of the packet, we have to
 // reassemble the actual certificate structure with that in mind.
+// Implementations MUST assert the public key is not in the raw certificate bytes if the passed in public key is not empty.
 func Recombine(v Version, rawCertBytes, publicKey []byte, curve Curve) (Certificate, error) {
 	if publicKey == nil {
 		return nil, ErrNoPeerStaticKey

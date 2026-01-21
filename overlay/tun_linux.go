@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -39,6 +40,11 @@ type tun struct {
 	routeChan                 chan struct{}
 	useSystemRoutes           bool
 	useSystemRoutesBufferSize int
+
+	// These are routes learned from `tun.use_system_route_table`
+	// stored here to make it easier to restore them after a reload
+	routesFromSystem     map[netip.Prefix]routing.Gateways
+	routesFromSystemLock sync.Mutex
 
 	l *logrus.Logger
 }
@@ -131,6 +137,7 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []n
 		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
 		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
+		routesFromSystem:          map[netip.Prefix]routing.Gateways{},
 		l:                         l,
 	}
 
@@ -163,6 +170,13 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	if err != nil {
 		return err
 	}
+
+	// Bring along any routes learned from the system route table on reload
+	t.routesFromSystemLock.Lock()
+	for dst, gw := range t.routesFromSystem {
+		routeTree.Insert(dst, gw)
+	}
+	t.routesFromSystemLock.Unlock()
 
 	oldDefaultMTU := t.DefaultMTU
 	oldMaxMTU := t.MaxMTU
@@ -673,14 +687,18 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 
 	newTree := t.routeTree.Load().Clone()
 
+	t.routesFromSystemLock.Lock()
 	if r.Type == unix.RTM_NEWROUTE {
 		t.l.WithField("destination", dst).WithField("via", gateways).Info("Adding route")
+		t.routesFromSystem[dst] = gateways
 		newTree.Insert(dst, gateways)
 
 	} else {
 		t.l.WithField("destination", dst).WithField("via", gateways).Info("Removing route")
+		delete(t.routesFromSystem, dst)
 		newTree.Delete(dst)
 	}
+	t.routesFromSystemLock.Unlock()
 	t.routeTree.Store(newTree)
 }
 

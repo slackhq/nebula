@@ -79,7 +79,7 @@ qrlJ69wer3ZUHFXA
 	assert.Nil(t, k)
 	assert.Equal(t, rest, invalidPem)
 
-	// Fail due to ivalid PEM format, because
+	// Fail due to invalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
 	curve, k, rest, err = DecryptAndUnmarshalSigningPrivateKey(passphrase, rest)
 	require.EqualError(t, err, "input did not contain a valid PEM encoded block")

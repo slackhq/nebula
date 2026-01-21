@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"bytes"
 	"net/netip"
 	"time"
 
@@ -173,6 +174,13 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 		}
 
 		e.Info("Invalid certificate from host")
+		return
+	}
+
+	if !bytes.Equal(remoteCert.Certificate.PublicKey(), ci.H.PeerStatic()) {
+		f.l.WithField("from", via).
+			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+			WithField("cert", remoteCert).Info("public key mismatch between certificate and handshake")
 		return
 	}
 
@@ -600,6 +608,12 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 		}
 
 		e.Info("Invalid certificate from host")
+		return true
+	}
+	if !bytes.Equal(remoteCert.Certificate.PublicKey(), ci.H.PeerStatic()) {
+		f.l.WithField("from", via).
+			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
+			WithField("cert", remoteCert).Info("public key mismatch between certificate and handshake")
 		return true
 	}
 

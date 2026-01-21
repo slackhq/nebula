@@ -22,7 +22,7 @@ const EncryptLockNeeded = true
 // NewGCMTLS is no longer exposed in go1.19+, so we need to link it in
 // See: https://github.com/golang/go/issues/56326
 //
-// NewGCMTLS is the internal method used with boringcrypto that provices a
+// NewGCMTLS is the internal method used with boringcrypto that provides a
 // validated mode of AES-GCM which enforces the nonce is strictly
 // monotonically increasing.  This is the TLS 1.2 specification for nonce
 // generation (which also matches the method used by the Noise Protocol)
