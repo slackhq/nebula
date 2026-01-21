@@ -9,8 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.10.2] - 2026-01-21
 
-## What's Changed
-
 ### Fixed
 
 - Fix panic when using `use_system_route_table` introduced in v1.10.1. (#1580)
