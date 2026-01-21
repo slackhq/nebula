@@ -59,3 +59,33 @@ func recalcTCPv4Checksum(data []byte, oldSrcIP netip.AddrPort, newSrcIP netip.Ad
 	const offsetInsideHeader = 16
 	recalcV4TransportChecksum(offsetInsideHeader, data, oldSrcIP, newSrcIP)
 }
+
+func calcNewICMPChecksum(oldChecksum uint16, oldCode uint16, newCode uint16, oldID uint16, newID uint16) uint16 {
+	// Start with inverted checksum
+	checksum := uint32(^oldChecksum)
+
+	// Subtract old stuff
+	checksum += uint32(^oldCode)
+	checksum += uint32(^oldID)
+
+	// Add new stuff
+	checksum += uint32(newCode)
+	checksum += uint32(newID)
+
+	// Fold carries
+	for checksum > 0xFFFF {
+		checksum = (checksum & 0xFFFF) + (checksum >> 16)
+	}
+
+	// Return ones' complement
+	return ^uint16(checksum)
+}
+
+func recalcICMPv4Checksum(data []byte, oldCode uint16, newCode uint16, oldID uint16, newID uint16) {
+	const offsetInsideHeader = 2
+	ipHeaderOffset := int(data[0]&0x0F) * 4
+	offset := ipHeaderOffset + offsetInsideHeader
+	oldChecksum := binary.BigEndian.Uint16(data[offset : offset+2])
+	checksum := calcNewICMPChecksum(oldChecksum, oldCode, newCode, oldID, newID)
+	binary.BigEndian.PutUint16(data[offset:offset+2], checksum)
+}
