@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix panic when using `use_system_route_table` introduced in v1.10.1. (#1580)
+- Fix panic when using `use_system_route_table` that was introduced in v1.10.1. (#1580)
 
 ### Changed
 
