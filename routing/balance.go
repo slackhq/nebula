@@ -12,7 +12,12 @@ import (
 //   - https://github.com/skeeto/hash-prospector
 //     [16 21f0aaad 15 d35a2d97 15] = 0.10760229515479501
 func hashPacket(p *firewall.Packet) int {
-	x := (uint32(p.LocalPort) << 16) | uint32(p.RemotePort)
+	var x uint32
+	if p.Protocol == firewall.ProtoICMP {
+		x = 0 //Don't attempt to use ICMP's code/id/etc to balance
+	} else {
+		x = (uint32(p.LocalPort) << 16) | uint32(p.RemotePort)
+	}
 	x ^= x >> 16
 	x *= 0x21f0aaad
 	x ^= x >> 15

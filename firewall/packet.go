@@ -22,7 +22,11 @@ const (
 type Packet struct {
 	LocalAddr  netip.Addr
 	RemoteAddr netip.Addr
-	LocalPort  uint16
+	// LocalPort is the destination port for incoming traffic, or the source port for outgoing.
+	// For ICMP, it's the "identifier". This is only used for connection tracking, actual firewall rules will not filter on ICMP identifier
+	LocalPort uint16
+	// RemotePort is the source port for incoming traffic, or the destination port for outgoing.
+	// For ICMP, it's "code". //todo also store "type?" would need to decode replies, which sucks
 	RemotePort uint16
 	Protocol   uint8
 	Fragment   bool
