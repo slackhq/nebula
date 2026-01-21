@@ -449,6 +449,10 @@ func (f *Firewall) unSnat(data []byte, fp *firewall.Packet, c *conn) netip.Addr 
 	dstport := ipHeaderLen + 2
 
 	switch fp.Protocol {
+	case firewall.ProtoICMP:
+		binary.BigEndian.PutUint16(data[ipHeaderLen+4:ipHeaderLen+6], c.snat.Src.Port())
+		icmpCode := uint16(data[ipHeaderLen+1]) //todo not snatting on this yet (but Linux would)
+		recalcICMPv4Checksum(data, icmpCode, icmpCode, c.snat.SnatPort, c.snat.Src.Port())
 	case firewall.ProtoUDP:
 		binary.BigEndian.PutUint16(data[dstport:dstport+2], c.snat.Src.Port())
 		recalcUDPv4Checksum(data, oldIP, c.snat.Src)
@@ -460,7 +464,6 @@ func (f *Firewall) unSnat(data []byte, fp *firewall.Packet, c *conn) netip.Addr 
 }
 
 func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo *HostInfo) {
-	//todo set srcport
 	if c.snat.Valid() {
 		//old flow
 		fp.RemoteAddr = f.snatAddr
@@ -471,7 +474,6 @@ func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo
 		c.snat.SrcVpnIp = hostinfo.vpnAddrs[0]
 
 		fp.RemoteAddr = f.snatAddr
-
 		//find a new port to use, if needed
 		for {
 			existingFlow := f.peek(*fp) //locking and unlocking for each peek is slow, but simple for now
@@ -494,7 +496,7 @@ func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo
 		return
 	}
 
-	newIP := netip.AddrPortFrom(f.snatAddr, fp.RemotePort)
+	newIP := netip.AddrPortFrom(f.snatAddr, c.snat.SnatPort)
 	//change src IP
 	copy(data[12:], f.snatAddr.AsSlice())
 	recalcIPv4Checksum(data, c.snat.Src.Addr(), newIP.Addr())
@@ -502,7 +504,9 @@ func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo
 
 	switch fp.Protocol {
 	case firewall.ProtoICMP:
-		//todo!
+		binary.BigEndian.PutUint16(data[ipHeaderLen+4:ipHeaderLen+6], c.snat.SnatPort)
+		icmpCode := uint16(data[ipHeaderLen+1]) //todo not snatting on this yet (but Linux would)
+		recalcICMPv4Checksum(data, icmpCode, icmpCode, c.snat.Src.Port(), c.snat.SnatPort)
 	case firewall.ProtoUDP:
 		//src port is at offset 0
 		binary.BigEndian.PutUint16(data[ipHeaderLen:ipHeaderLen+2], c.snat.SnatPort)

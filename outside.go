@@ -437,14 +437,9 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 		if fp.Fragment {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
-		} else if fp.Protocol == firewall.ProtoICMP {
-			//todo remove comment
-			//icmpType := data[ihl]
-			//icmpCode := data[ihl+1]
-			//icmpChecksum := data[ihl+2 : ihl+4]
-			//icmpIdentifier := data[ihl+4 : ihl+6]
-			fp.RemotePort = uint16(data[ihl+1])                         //code
-			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+4 : ihl+6]) //identifier
+		} else if fp.Protocol == firewall.ProtoICMP { //note that orientation doesn't matter on ICMP
+			fp.RemotePort = binary.BigEndian.Uint16(data[ihl+4 : ihl+6]) //identifier
+			fp.LocalPort = uint16(data[ihl+1])                           //code
 		} else {
 			fp.RemotePort = binary.BigEndian.Uint16(data[ihl : ihl+2])  //src port
 			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4]) //dst port
@@ -455,9 +450,9 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 		if fp.Fragment {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
-		} else if fp.Protocol == firewall.ProtoICMP {
-			fp.RemotePort = uint16(data[ihl+1])                         //code
-			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+4 : ihl+6]) //identifier
+		} else if fp.Protocol == firewall.ProtoICMP { //note that orientation doesn't matter on ICMP
+			fp.RemotePort = binary.BigEndian.Uint16(data[ihl+4 : ihl+6]) //identifier
+			fp.LocalPort = uint16(data[ihl+1])                           //code
 		} else {
 			fp.LocalPort = binary.BigEndian.Uint16(data[ihl : ihl+2])    //src port
 			fp.RemotePort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4]) //dst port
