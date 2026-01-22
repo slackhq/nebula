@@ -844,7 +844,7 @@ func TestFirewall_ICMPPortBehavior(t *testing.T) {
 	t.Run("Any proto, any port", func(t *testing.T) {
 		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c.Certificate)
 		require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "", "", ""))
-		t.Run("zero ports, still blocked", func(t *testing.T) {
+		t.Run("zero ports, allowed", func(t *testing.T) {
 			p := templ.Copy()
 			p.LocalPort = 0
 			p.RemotePort = 0
@@ -857,7 +857,7 @@ func TestFirewall_ICMPPortBehavior(t *testing.T) {
 			require.NoError(t, fw.Drop(*p, nil, false, &h, cp, nil))
 		})
 
-		t.Run("nonzero ports, still blocked", func(t *testing.T) {
+		t.Run("nonzero ports, allowed", func(t *testing.T) {
 			p := templ.Copy()
 			p.LocalPort = 0xabcd
 			p.RemotePort = 0x1234
@@ -867,6 +867,20 @@ func TestFirewall_ICMPPortBehavior(t *testing.T) {
 			resetConntrack(fw)
 			require.NoError(t, fw.Drop(*p, nil, true, &h, cp, nil))
 			//now also allow outbound
+			require.NoError(t, fw.Drop(*p, nil, false, &h, cp, nil))
+		})
+
+		t.Run("nonzero ports, allowed", func(t *testing.T) {
+			p := templ.Copy()
+			p.LocalPort = 0xabcd
+			p.RemotePort = 0x1234
+			// Drop outbound
+			assert.Equal(t, fw.Drop(*p, nil, false, &h, cp, nil), ErrNoMatchingRule)
+			// Allow inbound
+			resetConntrack(fw)
+			require.NoError(t, fw.Drop(*p, nil, true, &h, cp, nil))
+			//now also allow outbound with a different ID
+			p.RemotePort++
 			require.NoError(t, fw.Drop(*p, nil, false, &h, cp, nil))
 		})
 	})
