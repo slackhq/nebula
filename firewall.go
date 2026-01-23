@@ -151,7 +151,7 @@ type firewallLocalCIDR struct {
 
 // NewFirewall creates a new Firewall object. A TimerWheel is created for you from the provided timeouts.
 // The certificate provided should be the highest version loaded in memory.
-func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Duration, c cert.Certificate) *Firewall {
+func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Duration, c cert.Certificate, snatAddr netip.Addr) *Firewall {
 	//TODO: error on 0 duration
 	var tmin, tmax time.Duration
 
@@ -185,9 +185,8 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		hasUnsafeNetworks = true
 	}
 
-	snatAddr := netip.Addr{}
-	if hasUnsafeNetworks && !hasV4Networks {
-		snatAddr = netip.MustParseAddr("169.254.55.96") //todo this needs to come from the config, or perhaps the tun
+	if !hasUnsafeNetworks || hasV4Networks {
+		snatAddr = netip.Addr{} //disable using the special snat address if it doesn't make sense to use it
 	}
 
 	return &Firewall{
@@ -219,7 +218,7 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 	}
 }
 
-func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firewall, error) {
+func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C, snatAddr netip.Addr) (*Firewall, error) {
 	certificate := cs.getCertificate(cert.Version2)
 	if certificate == nil {
 		certificate = cs.getCertificate(cert.Version1)
@@ -229,14 +228,7 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 		panic("No certificate available to reconfigure the firewall")
 	}
 
-	fw := NewFirewall(
-		l,
-		c.GetDuration("firewall.conntrack.tcp_timeout", time.Minute*12),
-		c.GetDuration("firewall.conntrack.udp_timeout", time.Minute*3),
-		c.GetDuration("firewall.conntrack.default_timeout", time.Minute*10),
-		certificate,
-		//TODO: max_connections
-	)
+	fw := NewFirewall(l, c.GetDuration("firewall.conntrack.tcp_timeout", time.Minute*12), c.GetDuration("firewall.conntrack.udp_timeout", time.Minute*3), c.GetDuration("firewall.conntrack.default_timeout", time.Minute*10), certificate, snatAddr)
 
 	fw.defaultLocalCIDRAny = c.GetBool("firewall.default_local_cidr_any", false)
 
