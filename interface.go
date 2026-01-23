@@ -93,6 +93,8 @@ type Interface struct {
 	messageMetrics      *MessageMetrics
 	cachedPacketMetrics *cachedPacketMetrics
 
+	events chan firewall.Event
+
 	l *logrus.Logger
 }
 
@@ -194,6 +196,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 			sent:    metrics.GetOrRegisterCounter("hostinfo.cached_packets.sent", nil),
 			dropped: metrics.GetOrRegisterCounter("hostinfo.cached_packets.dropped", nil),
 		},
+		events: make(chan firewall.Event, 100), //todo configurable
 
 		l: c.l,
 	}

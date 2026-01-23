@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"net/netip"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
@@ -53,7 +54,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	})
 
 	if hostinfo == nil {
-		f.rejectInside(packet, out, q)
+		f.rejectInside(fwPacket, packet, out, q)
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("vpnAddr", fwPacket.RemoteAddr).
 				WithField("fwPacket", fwPacket).
@@ -66,12 +67,12 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		return
 	}
 
-	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache, nil)
 	if dropReason == nil {
 		f.sendNoMetrics(header.Message, 0, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, packet, nb, out, q)
 
 	} else {
-		f.rejectInside(packet, out, q)
+		f.rejectInside(fwPacket, packet, out, q)
 		if f.l.Level >= logrus.DebugLevel {
 			hostinfo.logger(f.l).
 				WithField("fwPacket", fwPacket).
@@ -81,7 +82,10 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	}
 }
 
-func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
+func (f *Interface) rejectInside(fp *firewall.Packet, packet []byte, out []byte, q int) {
+	if f.firewall.InLogDrop {
+		//todo
+	}
 	if !f.firewall.InSendReject {
 		return
 	}
@@ -97,7 +101,16 @@ func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
 	}
 }
 
-func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *HostInfo, nb, out []byte, q int) {
+func (f *Interface) rejectOutside(fp *firewall.Packet, packet []byte, ci *ConnectionState, hostinfo *HostInfo, nb, out []byte, q int) {
+	if f.firewall.OutLogDrop {
+		e := firewall.Event{
+			Packet: *fp,
+			At:     time.Now(),
+			Remote: hostinfo.remote, //todo if nil capture relay?
+		}
+		f.events <- e
+	}
+
 	if !f.firewall.OutSendReject {
 		return
 	}
@@ -218,7 +231,7 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 	}
 
 	// check if packet is in outbound fw rules
-	dropReason := f.firewall.Drop(*fp, false, hostinfo, f.pki.GetCAPool(), nil)
+	dropReason := f.firewall.Drop(*fp, false, hostinfo, f.pki.GetCAPool(), nil, nil)
 	if dropReason != nil {
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("fwPacket", fp).

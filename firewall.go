@@ -45,6 +45,8 @@ type Firewall struct {
 
 	InSendReject  bool
 	OutSendReject bool
+	InLogDrop     bool
+	OutLogDrop    bool
 
 	//TODO: we should have many more options for TCP, an option for ICMP, and mimic the kernel a bit better
 	// https://www.kernel.org/doc/Documentation/networking/nf_conntrack-sysctl.txt
@@ -216,6 +218,7 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 	switch inboundAction {
 	case "reject":
 		fw.InSendReject = true
+		fw.InLogDrop = true //todo
 	case "drop":
 		fw.InSendReject = false
 	default:
@@ -227,6 +230,7 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 	switch outboundAction {
 	case "reject":
 		fw.OutSendReject = true
+		fw.OutLogDrop = true //todo
 	case "drop":
 		fw.OutSendReject = false
 	default:
@@ -401,9 +405,11 @@ var ErrInvalidRemoteIP = errors.New("remote address is not in remote certificate
 var ErrInvalidLocalIP = errors.New("local address is not in list of handled local addresses")
 var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
+type DropHandler func(fp firewall.Packet, incoming bool, h *HostInfo, err error)
+
 // Drop returns an error if the packet should be dropped, explaining why. It
 // returns nil if the packet should not be dropped.
-func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) error {
+func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache, onDrop DropHandler) error {
 	// Check if we spoke to this tuple, if we did then allow this packet
 	if f.inConns(fp, h, caPool, localCache) {
 		return nil

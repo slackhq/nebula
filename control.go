@@ -1,7 +1,11 @@
 package nebula
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -9,6 +13,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
 )
@@ -71,8 +76,49 @@ func (c *Control) Start() {
 		c.lighthouseStart()
 	}
 
+	go c.firewallEventSender(c.ctx)
+
 	// Start reading packets.
 	c.f.run()
+}
+
+func (c *Control) firewallEventSender(ctx context.Context) {
+	events := make([]firewall.Event, 1, 100) //todo configurable
+	for {
+		select {
+		//todo exceptionally lazy
+		case e := <-c.f.events:
+			events = append(events, e)
+			for { //slurp up everything into one big post
+				x := false
+				select {
+				case e = <-c.f.events:
+					events = append(events, e)
+				default:
+					x = true
+				}
+				if x {
+					break
+				}
+			}
+			if len(events) >= 5 {
+				out, err := json.Marshal(&events)
+				if err != nil {
+					c.l.WithError(err).Errorf("failed to marshal event")
+				} else {
+					r := io.Reader(bytes.NewBuffer(out))
+					_, err = http.Post("http://127.0.0.1:8080/nebula/event", "application/json", r)
+					if err != nil {
+						c.l.WithError(err).Errorf("failed to post event")
+					}
+				}
+				events = events[:0]
+			}
+
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (c *Control) Context() context.Context {

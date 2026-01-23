@@ -44,7 +44,7 @@ func (fp Packet) MarshalJSON() ([]byte, error) {
 	switch fp.Protocol {
 	case ProtoTCP:
 		proto = "tcp"
-	case ProtoICMP:
+	case ProtoICMP, ProtoICMPv6:
 		proto = "icmp"
 	case ProtoUDP:
 		proto = "udp"
