@@ -654,19 +654,6 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 
 	c, ok := conntrack.Conns[fp]
 
-	if !ok && fp.Protocol == firewall.ProtoICMP {
-		//todo this seems like it will also bite me
-		oldRemote := fp.RemotePort
-		oldLocal := fp.LocalPort
-		fp.RemotePort = 0
-		fp.LocalPort = 0
-		c, ok = conntrack.Conns[fp]
-		if ok {
-			fp.RemotePort = oldRemote
-			fp.LocalPort = oldLocal
-		}
-	}
-
 	if !ok {
 		conntrack.Unlock()
 		return nil
@@ -768,15 +755,6 @@ func (f *Firewall) addConn(fp firewall.Packet, incoming bool) *conn {
 	c.rulesVersion = f.rulesVersion
 	c.Expires = time.Now().Add(timeout)
 	conntrack.Conns[fp] = c
-
-	//todo will this bite me somehow?
-	if fp.Protocol == firewall.ProtoICMP {
-		//not required for ICMPv6 because we don't decode or SNAT it
-		//create a duplicate conntrack entry with all the port information zeroed?
-		fp.RemotePort = 0
-		fp.LocalPort = 0
-		conntrack.Conns[fp] = c
-	}
 
 	conntrack.Unlock()
 	return c
