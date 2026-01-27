@@ -74,7 +74,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 		l.WithError(err).Debug("Failed to create wintun device, retrying")
 		tunDevice, err = wintun.CreateTUNWithRequestedGUID(deviceName, guid, t.MTU)
 		if err != nil {
-			return nil, NameError{
+			return nil, &NameError{
 				Name:       deviceName,
 				Underlying: fmt.Errorf("create TUN device failed: %w", err),
 			}
