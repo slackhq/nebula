@@ -112,9 +112,13 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 	if multiqueue {
 		req.Flags |= unix.IFF_MULTI_QUEUE
 	}
-	copy(req.Name[:], c.GetString("tun.dev", ""))
+	nameStr := c.GetString("tun.dev", "")
+	copy(req.Name[:], nameStr)
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
-		return nil, err
+		return nil, &NameError{
+			Name:       nameStr,
+			Underlying: err,
+		}
 	}
 	name := strings.Trim(string(req.Name[:]), "\x00")
 
@@ -713,6 +717,7 @@ func (t *tun) Close() error {
 
 	if t.ioctlFd > 0 {
 		_ = os.NewFile(t.ioctlFd, "ioctlFd").Close()
+		t.ioctlFd = 0
 	}
 
 	return nil
