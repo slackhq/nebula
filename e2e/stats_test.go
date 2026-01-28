@@ -36,8 +36,12 @@ func TestPrometheusStats(t *testing.T) {
 	myControl.Start()
 	defer myControl.Stop()
 
-	// Fetch metrics from the Prometheus endpoint
-	resp, err := http.Get("http://127.0.0.1:9090/metrics")
+	// Fetch metrics from the Prometheus endpoint with context
+	ctx := t.Context()
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://127.0.0.1:9090/metrics", nil)
+	require.NoError(t, err, "Failed to create request")
+
+	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err, "Failed to fetch metrics endpoint")
 	defer resp.Body.Close()
 
