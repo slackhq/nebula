@@ -1378,6 +1378,13 @@ func TestGoodHandshakeUnsafeDest(t *testing.T) {
 		"tun": m{
 			"unsafe_routes": []m{route},
 		},
+		"firewall": m{
+			"unsafe_outbound": []m{{
+				"port":  "any",
+				"proto": "any",
+				"host":  "any",
+			}},
+		},
 	}
 	myControl, myVpnIpNet, myUdpAddr, myConfig := newSimpleServer(cert.Version2, ca, caKey, "me", "10.128.0.1/24", myCfg)
 	t.Logf("my config %v", myConfig)

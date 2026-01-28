@@ -23,16 +23,15 @@ import (
 )
 
 type FirewallInterface interface {
-	AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr string, caName string, caSha string) error
+	AddRule(unsafe, incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr string, caName string, caSha string) error
 }
 
 type conn struct {
 	Expires time.Time // Time when this conntrack entry will expire
 
-	// record why the original connection passed the firewall, so we can re-validate
-	// after ruleset changes. Note, rulesVersion is a uint16 so that these two
-	// fields pack for free after the uint32 above
+	// record why the original connection passed the firewall, so we can re-validate after ruleset changes.
 	incoming     bool
+	unsafe       bool
 	rulesVersion uint16
 }
 
@@ -40,8 +39,10 @@ type conn struct {
 type Firewall struct {
 	Conntrack *FirewallConntrack
 
-	InRules  *FirewallTable
-	OutRules *FirewallTable
+	InRules        *FirewallTable
+	OutRules       *FirewallTable
+	UnsafeInRules  *FirewallTable
+	UnsafeOutRules *FirewallTable
 
 	InSendReject  bool
 	OutSendReject bool
@@ -54,7 +55,7 @@ type Firewall struct {
 
 	// routableNetworks describes the vpn addresses as well as any unsafe networks issued to us in the certificate.
 	// The vpn addresses are a full bit match while the unsafe networks only match the prefix
-	routableNetworks *bart.Lite
+	routableNetworks *bart.Table[NetworkType]
 
 	// assignedNetworks is a list of vpn networks assigned to us in the certificate.
 	assignedNetworks  []netip.Prefix
@@ -149,17 +150,16 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		tmax = defaultTimeout
 	}
 
-	routableNetworks := new(bart.Lite)
+	routableNetworks := new(bart.Table[NetworkType])
 	var assignedNetworks []netip.Prefix
 	for _, network := range c.Networks() {
-		nprefix := netip.PrefixFrom(network.Addr(), network.Addr().BitLen())
-		routableNetworks.Insert(nprefix)
+		routableNetworks.Insert(netip.PrefixFrom(network.Addr(), network.Addr().BitLen()), NetworkTypeVPN)
 		assignedNetworks = append(assignedNetworks, network)
 	}
 
 	hasUnsafeNetworks := false
 	for _, n := range c.UnsafeNetworks() {
-		routableNetworks.Insert(n)
+		routableNetworks.Insert(n, NetworkTypeUnsafe)
 		hasUnsafeNetworks = true
 	}
 
@@ -170,6 +170,8 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		},
 		InRules:           newFirewallTable(),
 		OutRules:          newFirewallTable(),
+		UnsafeInRules:     newFirewallTable(),
+		UnsafeOutRules:    newFirewallTable(),
 		TCPTimeout:        tcpTimeout,
 		UDPTimeout:        UDPTimeout,
 		DefaultTimeout:    defaultTimeout,
@@ -212,6 +214,7 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 
 	fw.defaultLocalCIDRAny = c.GetBool("firewall.default_local_cidr_any", false)
 
+	//TODO: do we also need firewall.unsafe_inbound_action and firewall.unsafe_outbound_action?
 	inboundAction := c.GetString("firewall.inbound_action", "drop")
 	switch inboundAction {
 	case "reject":
@@ -234,12 +237,26 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 		fw.OutSendReject = false
 	}
 
-	err := AddFirewallRulesFromConfig(l, false, c, fw)
+	// outbound rules
+	err := AddFirewallRulesFromConfig(l, false, false, c, fw)
 	if err != nil {
 		return nil, err
 	}
 
-	err = AddFirewallRulesFromConfig(l, true, c, fw)
+	// unsafe outbound rules
+	err = AddFirewallRulesFromConfig(l, true, false, c, fw)
+	if err != nil {
+		return nil, err
+	}
+
+	// inbound rules
+	err = AddFirewallRulesFromConfig(l, false, true, c, fw)
+	if err != nil {
+		return nil, err
+	}
+
+	// unsafe inbound rules
+	err = AddFirewallRulesFromConfig(l, true, true, c, fw)
 	if err != nil {
 		return nil, err
 	}
@@ -248,11 +265,11 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 }
 
 // AddRule properly creates the in memory rule structure for a firewall table.
-func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr, caName string, caSha string) error {
+func (f *Firewall) AddRule(unsafe, incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr, caName string, caSha string) error {
 	// We need this rule string because we generate a hash. Removing this will break firewall reload.
 	ruleString := fmt.Sprintf(
-		"incoming: %v, proto: %v, startPort: %v, endPort: %v, groups: %v, host: %v, ip: %v, localIp: %v, caName: %v, caSha: %s",
-		incoming, proto, startPort, endPort, groups, host, cidr, localCidr, caName, caSha,
+		"unsafe: %v, incoming: %v, proto: %v, startPort: %v, endPort: %v, groups: %v, host: %v, ip: %v, localIp: %v, caName: %v, caSha: %s",
+		unsafe, incoming, proto, startPort, endPort, groups, host, cidr, localCidr, caName, caSha,
 	)
 	f.rules += ruleString + "\n"
 
@@ -260,8 +277,12 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 	if !incoming {
 		direction = "outgoing"
 	}
-	f.l.WithField("firewallRule", m{"direction": direction, "proto": proto, "startPort": startPort, "endPort": endPort, "groups": groups, "host": host, "cidr": cidr, "localCidr": localCidr, "caName": caName, "caSha": caSha}).
-		Info("Firewall rule added")
+
+	fields := m{"direction": direction, "proto": proto, "startPort": startPort, "endPort": endPort, "groups": groups, "host": host, "cidr": cidr, "localCidr": localCidr, "caName": caName, "caSha": caSha}
+	if unsafe {
+		fields["unsafe"] = true
+	}
+	f.l.WithField("firewallRule", fields).Info("Firewall rule added")
 
 	var (
 		ft *FirewallTable
@@ -269,9 +290,18 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 	)
 
 	if incoming {
-		ft = f.InRules
+		if unsafe {
+			ft = f.UnsafeInRules
+		} else {
+			ft = f.InRules
+		}
+
 	} else {
-		ft = f.OutRules
+		if unsafe {
+			ft = f.UnsafeOutRules
+		} else {
+			ft = f.OutRules
+		}
 	}
 
 	switch proto {
@@ -308,12 +338,21 @@ func (f *Firewall) GetRuleHashes() string {
 	return "SHA:" + f.GetRuleHash() + ",FNV:" + strconv.FormatUint(uint64(f.GetRuleHashFNV()), 10)
 }
 
-func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw FirewallInterface) error {
+func AddFirewallRulesFromConfig(l *logrus.Logger, unsafe, inbound bool, c *config.C, fw FirewallInterface) error {
 	var table string
 	if inbound {
-		table = "firewall.inbound"
+		if unsafe {
+			table = "firewall.unsafe_inbound"
+		} else {
+			table = "firewall.inbound"
+		}
+
 	} else {
-		table = "firewall.outbound"
+		if unsafe {
+			table = "firewall.unsafe_outbound"
+		} else {
+			table = "firewall.outbound"
+		}
 	}
 
 	r := c.Get(table)
@@ -386,7 +425,7 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			l.Warnf("%s rule #%v; %s", table, i, warning)
 		}
 
-		err = fw.AddRule(inbound, proto, startPort, endPort, r.Groups, r.Host, r.Cidr, r.LocalCidr, r.CAName, r.CASha)
+		err = fw.AddRule(unsafe, inbound, proto, startPort, endPort, r.Groups, r.Host, r.Cidr, r.LocalCidr, r.CAName, r.CASha)
 		if err != nil {
 			return fmt.Errorf("%s rule #%v; `%s`", table, i, err)
 		}
@@ -409,6 +448,9 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 		return nil
 	}
 
+	var remoteNetworkType NetworkType
+	var ok bool
+
 	// Make sure remote address matches nebula certificate, and determine how to treat it
 	if h.networks == nil {
 		// Simple case: Certificate has one address and no unsafe networks
@@ -416,13 +458,14 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrInvalidRemoteIP
 		}
+		remoteNetworkType = NetworkTypeVPN
 	} else {
-		nwType, ok := h.networks.Lookup(fp.RemoteAddr)
+		remoteNetworkType, ok = h.networks.Lookup(fp.RemoteAddr)
 		if !ok {
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
 			return ErrInvalidRemoteIP
 		}
-		switch nwType {
+		switch remoteNetworkType {
 		case NetworkTypeVPN:
 			break // nothing special
 		case NetworkTypeVPNPeer:
@@ -437,14 +480,27 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	}
 
 	// Make sure we are supposed to be handling this local ip address
-	if !f.routableNetworks.Contains(fp.LocalAddr) {
+	localNetworkType, ok := f.routableNetworks.Lookup(fp.LocalAddr)
+	if !ok {
 		f.metrics(incoming).droppedLocalAddr.Inc(1)
 		return ErrInvalidLocalIP
 	}
 
-	table := f.OutRules
+	useUnsafe := remoteNetworkType == NetworkTypeUnsafe || localNetworkType == NetworkTypeUnsafe
+
+	var table *FirewallTable
 	if incoming {
-		table = f.InRules
+		if useUnsafe {
+			table = f.UnsafeInRules
+		} else {
+			table = f.InRules
+		}
+	} else {
+		if useUnsafe {
+			table = f.UnsafeOutRules
+		} else {
+			table = f.OutRules
+		}
 	}
 
 	// We now know which firewall table to check against
@@ -454,12 +510,13 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	}
 
 	// We always want to conntrack since it is a faster operation
-	f.addConn(fp, incoming)
+	f.addConn(fp, useUnsafe, incoming)
 
 	return nil
 }
 
 func (f *Firewall) metrics(incoming bool) firewallMetrics {
+	//TODO: need unsafe metrics too
 	if incoming {
 		return f.incomingMetrics
 	} else {
@@ -499,7 +556,6 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 	}
 
 	c, ok := conntrack.Conns[fp]
-
 	if !ok {
 		conntrack.Unlock()
 		return false
@@ -508,9 +564,19 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 	if c.rulesVersion != f.rulesVersion {
 		// This conntrack entry was for an older rule set, validate
 		// it still passes with the current rule set
-		table := f.OutRules
+		var table *FirewallTable
 		if c.incoming {
-			table = f.InRules
+			if c.unsafe {
+				table = f.UnsafeInRules
+			} else {
+				table = f.InRules
+			}
+		} else {
+			if c.unsafe {
+				table = f.UnsafeOutRules
+			} else {
+				table = f.OutRules
+			}
 		}
 
 		// We now know which firewall table to check against
@@ -519,6 +585,7 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 				h.logger(f.l).
 					WithField("fwPacket", fp).
 					WithField("incoming", c.incoming).
+					WithField("unsafe", c.unsafe).
 					WithField("rulesVersion", f.rulesVersion).
 					WithField("oldRulesVersion", c.rulesVersion).
 					Debugln("dropping old conntrack entry, does not match new ruleset")
@@ -532,6 +599,7 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 			h.logger(f.l).
 				WithField("fwPacket", fp).
 				WithField("incoming", c.incoming).
+				WithField("unsafe", c.unsafe).
 				WithField("rulesVersion", f.rulesVersion).
 				WithField("oldRulesVersion", c.rulesVersion).
 				Debugln("keeping old conntrack entry, does match new ruleset")
@@ -558,7 +626,7 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 	return true
 }
 
-func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
+func (f *Firewall) addConn(fp firewall.Packet, unsafe, incoming bool) {
 	var timeout time.Duration
 	c := &conn{}
 
@@ -581,6 +649,7 @@ func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
 	// Record which rulesVersion allowed this connection, so we can retest after
 	// firewall reload
 	c.incoming = incoming
+	c.unsafe = unsafe
 	c.rulesVersion = f.rulesVersion
 	c.Expires = time.Now().Add(timeout)
 	conntrack.Conns[fp] = c
@@ -937,6 +1006,7 @@ func convertRule(l *logrus.Logger, p any, table string, i int) (rule, error) {
 	r.Code = toString("code", m)
 	r.Proto = toString("proto", m)
 	r.Host = toString("host", m)
+	//TODO: create an alias to remote_cidr and deprecate cidr?
 	r.Cidr = toString("cidr", m)
 	r.LocalCidr = toString("local_cidr", m)
 	r.CAName = toString("ca_name", m)
