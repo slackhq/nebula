@@ -4,6 +4,7 @@
 package overlay
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -107,12 +108,18 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 		}
 	}
 
+	tunNameTemplate := c.GetString("tun.dev", "nebula%d")
+	tunName, err := findNextTunName(tunNameTemplate)
+	if err != nil {
+		return nil, err
+	}
+
 	var req ifReq
 	req.Flags = uint16(unix.IFF_TUN | unix.IFF_NO_PI)
 	if multiqueue {
 		req.Flags |= unix.IFF_MULTI_QUEUE
 	}
-	copy(req.Name[:], c.GetString("tun.dev", ""))
+	copy(req.Name[:], tunName)
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
 		return nil, err
 	}
@@ -127,6 +134,44 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 	t.Device = name
 
 	return t, nil
+}
+
+func findNextTunName(tunName string) (string, error) {
+	if !strings.HasSuffix(tunName, "%d") {
+		return tunName, nil
+	}
+	if len(tunName) == 2 {
+		return "", errors.New("please don't name your tun device '%d'")
+	}
+
+	if (len(tunName) - len("%d") + len("0")) > unix.IFNAMSIZ {
+		return "", fmt.Errorf("your tun device name template %s would result in a name longer than the maximum allowed length of %d", tunName, unix.IFNAMSIZ)
+	}
+
+	tunNameTemplate := tunName[:len(tunName)-len("%d")]
+	links, err := netlink.LinkList()
+	if err != nil {
+		return "", err
+	}
+	var candidateName string
+	i := 0
+	for {
+		candidateName = fmt.Sprintf("%s%d", tunNameTemplate, i)
+		good := true
+		for _, link := range links {
+			if candidateName == link.Attrs().Name {
+				good = false
+				break
+			}
+		}
+		if len(candidateName) > unix.IFNAMSIZ {
+			return "", fmt.Errorf("first available tun device is %s, which is longer than the max allowed size of %d", candidateName, unix.IFNAMSIZ)
+		}
+		if good {
+			return candidateName, nil
+		}
+	}
+	return "", errors.New("failed to find a tun device name")
 }
 
 func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []netip.Prefix) (*tun, error) {
@@ -601,7 +646,6 @@ func (t *tun) isGatewayInVpnNetworks(gwAddr netip.Addr) bool {
 
 func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 	var gateways routing.Gateways
-
 	link, err := netlink.LinkByName(t.Device)
 	if err != nil {
 		t.l.WithField("deviceName", t.Device).Error("Ignoring route update: failed to get link by name")
