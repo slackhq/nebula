@@ -62,6 +62,16 @@ Check the [releases](https://github.com/slackhq/nebula/releases/latest) page for
 - [iOS](https://apps.apple.com/us/app/mobile-nebula/id1509587936?itsct=apps_box&amp;itscg=30200)
 - [Android](https://play.google.com/store/apps/details?id=net.defined.mobile_nebula&pcampaignid=pcampaignidMKT-Other-global-all-co-prtnr-py-PartBadge-Mar2515-1)
 
+#### Build from source  
+Requires Golang >= version specified in [go.mod](https://github.com/slackhq/nebula/blob/master/go.mod#L3). Does not auto update, must be updated manually with `go install` or with a tool like [gup](https://github.com/nao1215/gup) or [go-global-update](https://github.com/Gelio/go-global-update).
+
+```sh
+go install github.com/slackhq/nebula/cmd/...@latest   # Installs pre-release version
+go install github.com/slackhq/nebula/cmd/...@v1.9.6   # Installs a specific version tag
+
+go run github.com/slackhq/nebula/cmd/nebula@v1.9.6    # Or run directly, no env path setup needed
+```
+
 ## Technical Overview
 
 Nebula is a mutually authenticated peer-to-peer software-defined network based on the [Noise Protocol Framework](https://noiseprotocol.org/).
