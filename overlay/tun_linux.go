@@ -26,14 +26,15 @@ import (
 
 type tun struct {
 	io.ReadWriteCloser
-	fd          int
-	Device      string
-	vpnNetworks []netip.Prefix
-	MaxMTU      int
-	DefaultMTU  int
-	TXQueueLen  int
-	deviceIndex int
-	ioctlFd     uintptr
+	fd             int
+	Device         string
+	vpnNetworks    []netip.Prefix
+	unsafeNetworks []netip.Prefix
+	MaxMTU         int
+	DefaultMTU     int
+	TXQueueLen     int
+	deviceIndex    int
+	ioctlFd        uintptr
 
 	Routes                    atomic.Pointer[[]Route]
 	routeTree                 atomic.Pointer[bart.Table[routing.Gateways]]
@@ -71,10 +72,10 @@ type ifreqQLEN struct {
 	pad   [8]byte
 }
 
-func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
+func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix) (*tun, error) {
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
-	t, err := newTunGeneric(c, l, file, vpnNetworks)
+	t, err := newTunGeneric(c, l, file, vpnNetworks, unsafeNetworks)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +85,7 @@ func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []net
 	return t, nil
 }
 
-func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueue bool) (*tun, error) {
+func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix, multiqueue bool) (*tun, error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		// If /dev/net/tun doesn't exist, try to create it (will happen in docker)
@@ -123,7 +124,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 	name := strings.Trim(string(req.Name[:]), "\x00")
 
 	file := os.NewFile(uintptr(fd), "/dev/net/tun")
-	t, err := newTunGeneric(c, l, file, vpnNetworks)
+	t, err := newTunGeneric(c, l, file, vpnNetworks, unsafeNetworks)
 	if err != nil {
 		return nil, err
 	}
@@ -133,11 +134,12 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 	return t, nil
 }
 
-func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []netip.Prefix) (*tun, error) {
+func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix) (*tun, error) {
 	t := &tun{
 		ReadWriteCloser:           file,
 		fd:                        int(file.Fd()),
 		vpnNetworks:               vpnNetworks,
+		unsafeNetworks:            unsafeNetworks,
 		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
 		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
@@ -427,6 +429,27 @@ func (t *tun) setMTU() {
 	}
 }
 
+func (t *tun) setSnatRoute() error {
+	snataddr := netip.MustParsePrefix("169.254.55.96/32") //todo get this from elsewhere? Or maybe we should pick it, and feed it back out to the firewall?
+	dr := &net.IPNet{
+		IP:   snataddr.Masked().Addr().AsSlice(),
+		Mask: net.CIDRMask(snataddr.Bits(), snataddr.Addr().BitLen()),
+	}
+
+	nr := netlink.Route{
+		LinkIndex: t.deviceIndex,
+		Dst:       dr,
+		//todo do we need these other options?
+		//MTU:       t.DefaultMTU,
+		//AdvMSS:    t.advMSS(Route{}),
+		Scope: unix.RT_SCOPE_LINK,
+		//Protocol: unix.RTPROT_KERNEL,
+		Table: unix.RT_TABLE_MAIN,
+		Type:  unix.RTN_UNICAST,
+	}
+	return netlink.RouteReplace(&nr)
+}
+
 func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 	dr := &net.IPNet{
 		IP:   cidr.Masked().Addr().AsSlice(),
@@ -501,6 +524,18 @@ func (t *tun) addRoutes(logErrors bool) error {
 		} else {
 			t.l.WithField("route", r).Info("Added route")
 		}
+	}
+
+	onlyV6Addresses := false
+	for _, n := range t.vpnNetworks {
+		if n.Addr().Is6() {
+			onlyV6Addresses = true
+			break
+		}
+	}
+
+	if len(t.unsafeNetworks) != 0 && onlyV6Addresses {
+		return t.setSnatRoute()
 	}
 
 	return nil
