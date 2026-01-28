@@ -35,19 +35,46 @@ func TestPrometheusStats(t *testing.T) {
 	myControl.Start()
 	defer myControl.Stop()
 
-	// Fetch metrics from the Prometheus endpoint with context
+	// Fetch metrics from the Prometheus endpoint with context and retries
 	ctx := t.Context()
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://127.0.0.1:9090/metrics", nil)
-	require.NoError(t, err, "Failed to create request")
+	var resp *http.Response
+	var body []byte
 
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err, "Failed to fetch metrics endpoint")
-	defer resp.Body.Close()
+	// Retry fetching metrics for up to 3 seconds
+	timeout := time.After(3 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
-	assert.Equal(t, http.StatusOK, resp.StatusCode, "Metrics endpoint should return 200 OK")
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatal("Context cancelled while waiting for metrics endpoint")
+		case <-timeout:
+			t.Fatal("Timeout waiting for metrics endpoint to become available")
+		case <-ticker.C:
+			req, err := http.NewRequestWithContext(ctx, "GET", "http://127.0.0.1:9090/metrics", nil)
+			if err != nil {
+				continue
+			}
 
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err, "Failed to read metrics response")
+			resp, err = http.DefaultClient.Do(req)
+			if err != nil {
+				continue
+			}
+
+			if resp.StatusCode == http.StatusOK {
+				body, err = io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if err == nil {
+					goto success
+				}
+			} else {
+				resp.Body.Close()
+			}
+		}
+	}
+
+success:
 
 	metricsOutput := string(body)
 
