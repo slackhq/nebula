@@ -65,6 +65,13 @@ message NebulaHandshake {
   bytes Hmac = 2;
 }
 
+message MultiPortDetails {
+  bool RxSupported = 1;
+  bool TxSupported = 2;
+  uint32 BasePort = 3;
+  uint32 TotalPorts = 4;
+}
+
 message NebulaHandshakeDetails {
   bytes Cert = 1;
   uint32 InitiatorIndex = 2;
@@ -72,8 +79,9 @@ message NebulaHandshakeDetails {
   uint64 Cookie = 4;
   uint64 Time = 5;
   uint32 CertVersion = 8;
-  // reserved for WIP multiport
-  reserved 6, 7;
+
+  MultiPortDetails InitiatorMultiPort = 6;
+  MultiPortDetails ResponderMultiPort = 7;
 }
 
 message NebulaControl {
