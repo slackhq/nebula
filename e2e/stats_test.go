@@ -62,35 +62,58 @@ func TestPrometheusStats(t *testing.T) {
 func TestGraphiteStats(t *testing.T) {
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
 
+	ctx := t.Context()
+
 	// Create a mock Graphite server
 	listener, err := net.Listen("tcp", "127.0.0.1:2003")
 	require.NoError(t, err, "Failed to create mock Graphite listener")
-	defer listener.Close()
+
+	// Channel to signal goroutine completion
+	done := make(chan struct{})
 
 	// Channel to receive stats data
 	statsChan := make(chan string, 1)
 
+	// Close listener when context is cancelled
+	go func() {
+		<-ctx.Done()
+		listener.Close()
+	}()
+
 	// Start accepting connections
 	go func() {
+		defer close(done)
+
 		conn, err := listener.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				// Context was cancelled, this is expected
+				return
+			}
 			t.Logf("Accept error: %v", err)
 			return
 		}
 		defer conn.Close()
 
-		// Set a read timeout
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-
 		// Read all data sent by the stats system
 		data, err := io.ReadAll(conn)
 		if err != nil {
+			if ctx.Err() != nil {
+				// Context was cancelled
+				return
+			}
 			t.Logf("Read error: %v", err)
 			return
 		}
 
 		statsChan <- string(data)
 	}()
+
+	// Ensure goroutine completes before test exits
+	t.Cleanup(func() {
+		listener.Close()
+		<-done
+	})
 
 	// Create a server with Graphite stats configured
 	myControl, _, _, _ := newSimpleServer(cert.Version1, ca, caKey, "me", "10.128.0.1/24", m{
