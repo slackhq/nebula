@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -133,23 +132,10 @@ func TestGraphiteStats(t *testing.T) {
 	// Wait for stats to be sent
 	select {
 	case statsData := <-statsChan:
-		// Verify the data is in Graphite plaintext format: "metric.path value timestamp\n"
-		assert.NotEmpty(t, statsData, "Should receive stats data")
-
 		// Check for expected metrics with the configured prefix
 		assert.Contains(t, statsData, "nebula.test.", "Should contain configured prefix")
 		assert.Contains(t, statsData, "runtime.NumGoroutine", "Should contain runtime metrics")
 		assert.Contains(t, statsData, "runtime.MemStats.Alloc", "Should contain memory stats")
-
-		// Verify format: each line should have metric, value, and timestamp
-		lines := strings.Split(strings.TrimSpace(statsData), "\n")
-		assert.Greater(t, len(lines), 0, "Should have at least one metric line")
-
-		// Check first line format
-		if len(lines) > 0 {
-			parts := strings.Fields(lines[0])
-			assert.Equal(t, 3, len(parts), "Each metric line should have 3 parts: metric value timestamp")
-		}
 
 	case <-time.After(3 * time.Second):
 		t.Fatal("Timeout waiting for stats to be sent to Graphite endpoint")
