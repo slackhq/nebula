@@ -12,6 +12,15 @@ import (
 
 const DefaultMTU = 1300
 
+type NameError struct {
+	Name       string
+	Underlying error
+}
+
+func (e *NameError) Error() string {
+	return fmt.Sprintf("could not set tun device name: %s because %s", e.Name, e.Underlying)
+}
+
 // TODO: We may be able to remove routines
 type DeviceFactory func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error)
 
