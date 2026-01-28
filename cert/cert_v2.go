@@ -396,7 +396,6 @@ func (c *certificateV2) validate() error {
 		return NewErrInvalidCertificateProperties("non-CA certificate must contain at least 1 network")
 	}
 
-	hasV4Networks := false
 	hasV6Networks := false
 	for _, network := range c.details.networks {
 		if !network.IsValid() || !network.Addr().IsValid() {
@@ -415,7 +414,6 @@ func (c *certificateV2) validate() error {
 			return NewErrInvalidCertificateProperties("4in6 networks are not allowed: %s", network)
 		}
 
-		hasV4Networks = hasV4Networks || network.Addr().Is4()
 		hasV6Networks = hasV6Networks || network.Addr().Is6()
 	}
 
@@ -438,10 +436,6 @@ func (c *certificateV2) validate() error {
 			if network.Addr().Is6() {
 				if !hasV6Networks {
 					return NewErrInvalidCertificateProperties("IPv6 unsafe networks require an IPv6 address assignment: %s", network)
-				}
-			} else if network.Addr().Is4() {
-				if !hasV4Networks {
-					return NewErrInvalidCertificateProperties("IPv4 unsafe networks require an IPv4 address assignment: %s", network)
 				}
 			}
 		}
