@@ -10,7 +10,6 @@ package udp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -83,15 +82,6 @@ func (u *GenericConn) ListenOut(r EncReader) error {
 		n, rua, err := u.ReadFromUDPAddrPort(buffer)
 		if err != nil {
 			return err
-			if errors.Is(err, net.ErrClosed) {
-				return err
-			}
-			// Dampen unexpected message warns to once per minute
-			if lastRecvErr.IsZero() || time.Since(lastRecvErr) > time.Minute {
-				lastRecvErr = time.Now()
-				u.l.WithError(err).Warn("unexpected udp socket receive error")
-			}
-			continue
 		}
 
 		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
