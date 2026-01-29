@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
@@ -74,8 +73,6 @@ type rawMessage struct {
 
 func (u *GenericConn) ListenOut(r EncReader) error {
 	buffer := make([]byte, MTU)
-
-	var lastRecvErr time.Time
 
 	for {
 		// Just read one packet at a time
