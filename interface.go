@@ -507,12 +507,14 @@ func (f *Interface) Close() error {
 	}
 
 	// Release the tun readers
-	for i, u := range f.readers {
-		err := u.Close()
-		if err != nil {
-			f.l.WithError(err).WithField("i", i).Error("Error while closing tun device")
+	for i, r := range f.readers {
+		if i == 0 {
+			continue // f.readers[0] is f.inside, which we want to save for last, since it closes other stuff too
+		}
+		if err := r.Close(); err != nil {
+			f.l.WithError(err).Error("Error while closing tun reader")
 		}
 	}
 
-	return nil
+	return f.inside.Close()
 }

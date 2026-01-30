@@ -162,7 +162,7 @@ func (u *StdConn) ReadSingle(msgs []rawMessage) (int, error) {
 		)
 
 		if err != 0 {
-			if err == unix.EAGAIN || err == unix.EINTR {
+			if err == unix.EAGAIN || err == unix.EINTR || err == unix.EWOULDBLOCK {
 				continue
 			}
 			return 0, &net.OpError{Op: "recvmsg", Err: err}
@@ -184,12 +184,12 @@ func (u *StdConn) ReadMulti(msgs []rawMessage) (int, error) {
 			0,
 			0,
 		)
-		if err == unix.EAGAIN || err == unix.EINTR {
-			if n == 0 {
-				continue
-			} else {
+		if err == unix.EAGAIN || err == unix.EINTR || err == unix.EWOULDBLOCK {
+			if int64(n) > 0 {
 				//ran out of time, but have some messages to return
 				return int(n), nil
+			} else {
+				continue
 			}
 		} else if err != 0 {
 			return 0, &net.OpError{Op: "recvmmsg", Err: err}
