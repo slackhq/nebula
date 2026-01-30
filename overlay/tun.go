@@ -1,6 +1,8 @@
 package overlay
 
 import (
+	"fmt"
+	"net"
 	"net/netip"
 
 	"github.com/sirupsen/logrus"
@@ -9,6 +11,15 @@ import (
 )
 
 const DefaultMTU = 1300
+
+type NameError struct {
+	Name       string
+	Underlying error
+}
+
+func (e *NameError) Error() string {
+	return fmt.Sprintf("could not set tun device name: %s because %s", e.Name, e.Underlying)
+}
 
 // TODO: We may be able to remove routines
 type DeviceFactory func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error)
@@ -69,4 +80,52 @@ func findRemovedRoutes(newRoutes, oldRoutes []Route) []Route {
 	}
 
 	return removed
+}
+
+func prefixToMask(prefix netip.Prefix) netip.Addr {
+	pLen := 128
+	if prefix.Addr().Is4() {
+		pLen = 32
+	}
+
+	addr, _ := netip.AddrFromSlice(net.CIDRMask(prefix.Bits(), pLen))
+	return addr
+}
+
+func flipBytes(b []byte) []byte {
+	for i := 0; i < len(b); i++ {
+		b[i] ^= 0xFF
+	}
+	return b
+}
+func orBytes(a []byte, b []byte) []byte {
+	ret := make([]byte, len(a))
+	for i := 0; i < len(a); i++ {
+		ret[i] = a[i] | b[i]
+	}
+	return ret
+}
+
+func getBroadcast(cidr netip.Prefix) netip.Addr {
+	broadcast, _ := netip.AddrFromSlice(
+		orBytes(
+			cidr.Addr().AsSlice(),
+			flipBytes(prefixToMask(cidr).AsSlice()),
+		),
+	)
+	return broadcast
+}
+
+func selectGateway(dest netip.Prefix, gateways []netip.Prefix) (netip.Prefix, error) {
+	for _, gateway := range gateways {
+		if dest.Addr().Is4() && gateway.Addr().Is4() {
+			return gateway, nil
+		}
+
+		if dest.Addr().Is6() && gateway.Addr().Is6() {
+			return gateway, nil
+		}
+	}
+
+	return netip.Prefix{}, fmt.Errorf("no gateway found for %v in the list of vpn networks", dest)
 }

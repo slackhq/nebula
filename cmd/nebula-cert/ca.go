@@ -173,23 +173,26 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 
 	var passphrase []byte
 	if !isP11 && *cf.encryption {
-		for i := 0; i < 5; i++ {
-			out.Write([]byte("Enter passphrase: "))
-			passphrase, err = pr.ReadPassword()
-
-			if err == ErrNoTerminal {
-				return fmt.Errorf("out-key must be encrypted interactively")
-			} else if err != nil {
-				return fmt.Errorf("error reading passphrase: %s", err)
-			}
-
-			if len(passphrase) > 0 {
-				break
-			}
-		}
-
+		passphrase = []byte(os.Getenv("NEBULA_CA_PASSPHRASE"))
 		if len(passphrase) == 0 {
-			return fmt.Errorf("no passphrase specified, remove -encrypt flag to write out-key in plaintext")
+			for i := 0; i < 5; i++ {
+				out.Write([]byte("Enter passphrase: "))
+				passphrase, err = pr.ReadPassword()
+
+				if err == ErrNoTerminal {
+					return fmt.Errorf("out-key must be encrypted interactively")
+				} else if err != nil {
+					return fmt.Errorf("error reading passphrase: %s", err)
+				}
+
+				if len(passphrase) > 0 {
+					break
+				}
+			}
+
+			if len(passphrase) == 0 {
+				return fmt.Errorf("no passphrase specified, remove -encrypt flag to write out-key in plaintext")
+			}
 		}
 	}
 

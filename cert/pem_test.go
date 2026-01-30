@@ -44,7 +44,7 @@ bzBEr00kERQxxTzTsH8cpYEgRoipvmExvg8WP8NdAJEYJosB
 	assert.Equal(t, rest, invalidPem)
 	require.EqualError(t, err, "bytes did not contain a proper certificate banner")
 
-	// Fail due to ivalid PEM format, because
+	// Fail due to invalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
 	cert, rest, err = UnmarshalCertificateFromPEM(rest)
 	assert.Nil(t, cert)
@@ -106,7 +106,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 	assert.Equal(t, rest, invalidPem)
 	require.EqualError(t, err, "bytes did not contain a proper Ed25519/ECDSA private key banner")
 
-	// Fail due to ivalid PEM format, because
+	// Fail due to invalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
 	k, rest, curve, err = UnmarshalSigningPrivateKeyFromPEM(rest)
 	assert.Nil(t, k)
@@ -168,7 +168,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 	assert.Equal(t, rest, invalidPem)
 	require.EqualError(t, err, "bytes did not contain a proper private key banner")
 
-	// Fail due to ivalid PEM format, because
+	// Fail due to invalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
 	k, rest, curve, err = UnmarshalPrivateKeyFromPEM(rest)
 	assert.Nil(t, k)
@@ -177,6 +177,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 }
 
 func TestUnmarshalPublicKeyFromPEM(t *testing.T) {
+	t.Parallel()
 	pubKey := []byte(`# A good key
 -----BEGIN NEBULA ED25519 PUBLIC KEY-----
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
@@ -220,7 +221,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 	require.EqualError(t, err, "bytes did not contain a proper public key banner")
 	assert.Equal(t, rest, invalidPem)
 
-	// Fail due to ivalid PEM format, because
+	// Fail due to invalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
 	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
 	assert.Nil(t, k)
@@ -230,6 +231,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 }
 
 func TestUnmarshalX25519PublicKey(t *testing.T) {
+	t.Parallel()
 	pubKey := []byte(`# A good key
 -----BEGIN NEBULA X25519 PUBLIC KEY-----
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
@@ -240,6 +242,12 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 AAAAAAAAAAAAAAAAAAAAAAA=
 -----END NEBULA P256 PUBLIC KEY-----
+`)
+	oldPubP256Key := []byte(`# A good key
+-----BEGIN NEBULA ECDSA P256 PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAA=
+-----END NEBULA ECDSA P256 PUBLIC KEY-----
 `)
 	shortKey := []byte(`# A short key
 -----BEGIN NEBULA X25519 PUBLIC KEY-----
@@ -256,14 +264,21 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 -END NEBULA X25519 PUBLIC KEY-----`)
 
-	keyBundle := appendByteSlices(pubKey, pubP256Key, shortKey, invalidBanner, invalidPem)
+	keyBundle := appendByteSlices(pubKey, pubP256Key, oldPubP256Key, shortKey, invalidBanner, invalidPem)
 
 	// Success test case
 	k, rest, curve, err := UnmarshalPublicKeyFromPEM(keyBundle)
 	assert.Len(t, k, 32)
 	require.NoError(t, err)
-	assert.Equal(t, rest, appendByteSlices(pubP256Key, shortKey, invalidBanner, invalidPem))
+	assert.Equal(t, rest, appendByteSlices(pubP256Key, oldPubP256Key, shortKey, invalidBanner, invalidPem))
 	assert.Equal(t, Curve_CURVE25519, curve)
+
+	// Success test case
+	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
+	assert.Len(t, k, 65)
+	require.NoError(t, err)
+	assert.Equal(t, rest, appendByteSlices(oldPubP256Key, shortKey, invalidBanner, invalidPem))
+	assert.Equal(t, Curve_P256, curve)
 
 	// Success test case
 	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
@@ -284,7 +299,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 	require.EqualError(t, err, "bytes did not contain a proper public key banner")
 	assert.Equal(t, rest, invalidPem)
 
-	// Fail due to ivalid PEM format, because
+	// Fail due to invalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
 	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
 	assert.Nil(t, k)

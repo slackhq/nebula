@@ -58,6 +58,9 @@ type Certificate interface {
 	// PublicKey is the raw bytes to be used in asymmetric cryptographic operations.
 	PublicKey() []byte
 
+	// MarshalPublicKeyPEM is the value of PublicKey marshalled to PEM
+	MarshalPublicKeyPEM() []byte
+
 	// Curve identifies which curve was used for the PublicKey and Signature.
 	Curve() Curve
 
@@ -116,6 +119,7 @@ func (cc *CachedCertificate) String() string {
 // Recombine will attempt to unmarshal a certificate received in a handshake.
 // Handshakes save space by placing the peers public key in a different part of the packet, we have to
 // reassemble the actual certificate structure with that in mind.
+// Implementations MUST assert the public key is not in the raw certificate bytes if the passed in public key is not empty.
 func Recombine(v Version, rawCertBytes, publicKey []byte, curve Curve) (Certificate, error) {
 	if publicKey == nil {
 		return nil, ErrNoPeerStaticKey
@@ -135,8 +139,7 @@ func Recombine(v Version, rawCertBytes, publicKey []byte, curve Curve) (Certific
 	case Version2:
 		c, err = unmarshalCertificateV2(rawCertBytes, publicKey, curve)
 	default:
-		//TODO: CERT-V2 make a static var
-		return nil, fmt.Errorf("unknown certificate version %d", v)
+		return nil, ErrUnknownVersion
 	}
 
 	if err != nil {

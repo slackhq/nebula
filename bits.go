@@ -9,14 +9,13 @@ type Bits struct {
 	length             uint64
 	current            uint64
 	bits               []bool
-	firstSeen          bool
 	lostCounter        metrics.Counter
 	dupeCounter        metrics.Counter
 	outOfWindowCounter metrics.Counter
 }
 
 func NewBits(bits uint64) *Bits {
-	return &Bits{
+	b := &Bits{
 		length:             bits,
 		bits:               make([]bool, bits, bits),
 		current:            0,
@@ -24,34 +23,37 @@ func NewBits(bits uint64) *Bits {
 		dupeCounter:        metrics.GetOrRegisterCounter("network.packets.duplicate", nil),
 		outOfWindowCounter: metrics.GetOrRegisterCounter("network.packets.out_of_window", nil),
 	}
+
+	// There is no counter value 0, mark it to avoid counting a lost packet later.
+	b.bits[0] = true
+	b.current = 0
+	return b
 }
 
-func (b *Bits) Check(l logrus.FieldLogger, i uint64) bool {
+func (b *Bits) Check(l *logrus.Logger, i uint64) bool {
 	// If i is the next number, return true.
-	if i > b.current || (i == 0 && b.firstSeen == false && b.current < b.length) {
+	if i > b.current {
 		return true
 	}
 
-	// If i is within the window, check if it's been set already. The first window will fail this check
-	if i > b.current-b.length {
-		return !b.bits[i%b.length]
-	}
-
-	// If i is within the first window
-	if i < b.length {
+	// If i is within the window, check if it's been set already.
+	if i > b.current-b.length || i < b.length && b.current < b.length {
 		return !b.bits[i%b.length]
 	}
 
 	// Not within the window
-	l.Debugf("rejected a packet (top) %d %d\n", b.current, i)
+	if l.Level >= logrus.DebugLevel {
+		l.Debugf("rejected a packet (top) %d %d\n", b.current, i)
+	}
 	return false
 }
 
 func (b *Bits) Update(l *logrus.Logger, i uint64) bool {
 	// If i is the next number, return true and update current.
 	if i == b.current+1 {
-		// Report missed packets, we can only understand what was missed after the first window has been gone through
-		if i > b.length && b.bits[i%b.length] == false {
+		// Check if the oldest bit was lost since we are shifting the window by 1 and occupying it with this counter
+		// The very first window can only be tracked as lost once we are on the 2nd window or greater
+		if b.bits[i%b.length] == false && i > b.length {
 			b.lostCounter.Inc(1)
 		}
 		b.bits[i%b.length] = true
@@ -59,61 +61,32 @@ func (b *Bits) Update(l *logrus.Logger, i uint64) bool {
 		return true
 	}
 
-	// If i packet is greater than current but less than the maximum length of our bitmap,
-	// flip everything in between to false and move ahead.
-	if i > b.current && i < b.current+b.length {
-		// In between current and i need to be zero'd to allow those packets to come in later
-		for n := b.current + 1; n < i; n++ {
+	// If i is a jump, adjust the window, record lost, update current, and return true
+	if i > b.current {
+		lost := int64(0)
+		// Zero out the bits between the current and the new counter value, limited by the window size,
+		// since the window is shifting
+		for n := b.current + 1; n <= min(i, b.current+b.length); n++ {
+			if b.bits[n%b.length] == false && n > b.length {
+				lost++
+			}
 			b.bits[n%b.length] = false
 		}
 
-		b.bits[i%b.length] = true
-		b.current = i
-		//l.Debugf("missed %d packets between %d and %d\n", i-b.current, i, b.current)
-		return true
-	}
-
-	// If i is greater than the delta between current and the total length of our bitmap,
-	// just flip everything in the map and move ahead.
-	if i >= b.current+b.length {
-		// The current window loss will be accounted for later, only record the jump as loss up until then
-		lost := maxInt64(0, int64(i-b.current-b.length))
-		//TODO: explain this
-		if b.current == 0 {
-			lost++
-		}
-
-		for n := range b.bits {
-			// Don't want to count the first window as a loss
-			//TODO: this is likely wrong, we are wanting to track only the bit slots that we aren't going to track anymore and this is marking everything as missed
-			//if b.bits[n] == false {
-			//	lost++
-			//}
-			b.bits[n] = false
-		}
-
+		// Only record any skipped packets as a result of the window moving further than the window length
+		// Any loss within the new window will be accounted for in future calls
+		lost += max(0, int64(i-b.current-b.length))
 		b.lostCounter.Inc(lost)
 
-		if l.Level >= logrus.DebugLevel {
-			l.WithField("receiveWindow", m{"accepted": true, "currentCounter": b.current, "incomingCounter": i, "reason": "window shifting"}).
-				Debug("Receive window")
-		}
 		b.bits[i%b.length] = true
 		b.current = i
 		return true
 	}
 
-	// Allow for the 0 packet to come in within the first window
-	if i == 0 && b.firstSeen == false && b.current < b.length {
-		b.firstSeen = true
-		b.bits[i%b.length] = true
-		return true
-	}
-
-	// If i is within the window of current minus length (the total pat window size),
-	// allow it and flip to true but to NOT change current. We also have to account for the first window
-	if ((b.current >= b.length && i > b.current-b.length) || (b.current < b.length && i < b.length)) && i <= b.current {
-		if b.current == i {
+	// If i is within the current window but below the current counter,
+	// Check to see if it's a duplicate
+	if i > b.current-b.length || i < b.length && b.current < b.length {
+		if b.current == i || b.bits[i%b.length] == true {
 			if l.Level >= logrus.DebugLevel {
 				l.WithField("receiveWindow", m{"accepted": false, "currentCounter": b.current, "incomingCounter": i, "reason": "duplicate"}).
 					Debug("Receive window")
@@ -122,18 +95,8 @@ func (b *Bits) Update(l *logrus.Logger, i uint64) bool {
 			return false
 		}
 
-		if b.bits[i%b.length] == true {
-			if l.Level >= logrus.DebugLevel {
-				l.WithField("receiveWindow", m{"accepted": false, "currentCounter": b.current, "incomingCounter": i, "reason": "old duplicate"}).
-					Debug("Receive window")
-			}
-			b.dupeCounter.Inc(1)
-			return false
-		}
-
 		b.bits[i%b.length] = true
 		return true
-
 	}
 
 	// In all other cases, fail and don't change current.
@@ -146,12 +109,4 @@ func (b *Bits) Update(l *logrus.Logger, i uint64) bool {
 			Debug("Receive window")
 	}
 	return false
-}
-
-func maxInt64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-
-	return b
 }

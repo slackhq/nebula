@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -39,6 +40,11 @@ type tun struct {
 	routeChan                 chan struct{}
 	useSystemRoutes           bool
 	useSystemRoutesBufferSize int
+
+	// These are routes learned from `tun.use_system_route_table`
+	// stored here to make it easier to restore them after a reload
+	routesFromSystem     map[netip.Prefix]routing.Gateways
+	routesFromSystemLock sync.Mutex
 
 	l *logrus.Logger
 }
@@ -106,9 +112,13 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 	if multiqueue {
 		req.Flags |= unix.IFF_MULTI_QUEUE
 	}
-	copy(req.Name[:], c.GetString("tun.dev", ""))
+	nameStr := c.GetString("tun.dev", "")
+	copy(req.Name[:], nameStr)
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
-		return nil, err
+		return nil, &NameError{
+			Name:       nameStr,
+			Underlying: err,
+		}
 	}
 	name := strings.Trim(string(req.Name[:]), "\x00")
 
@@ -131,6 +141,7 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []n
 		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
 		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
+		routesFromSystem:          map[netip.Prefix]routing.Gateways{},
 		l:                         l,
 	}
 
@@ -163,6 +174,13 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	if err != nil {
 		return err
 	}
+
+	// Bring along any routes learned from the system route table on reload
+	t.routesFromSystemLock.Lock()
+	for dst, gw := range t.routesFromSystem {
+		routeTree.Insert(dst, gw)
+	}
+	t.routesFromSystemLock.Unlock()
 
 	oldDefaultMTU := t.DefaultMTU
 	oldMaxMTU := t.MaxMTU
@@ -214,6 +232,10 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	}
 
 	return nil
+}
+
+func (t *tun) SupportsMultiqueue() bool {
+	return true
 }
 
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
@@ -293,7 +315,6 @@ func (t *tun) addIPs(link netlink.Link) error {
 
 	//add all new addresses
 	for i := range newAddrs {
-		//TODO: CERT-V2 do we want to stack errors and try as many ops as possible?
 		//AddrReplace still adds new IPs, but if their properties change it will change them as well
 		if err := netlink.AddrReplace(link, newAddrs[i]); err != nil {
 			return err
@@ -359,6 +380,11 @@ func (t *tun) Activate() error {
 	if err = ioctl(t.ioctlFd, unix.SIOCSIFTXQLEN, uintptr(unsafe.Pointer(&ifrq))); err != nil {
 		// If we can't set the queue length nebula will still work but it may lead to packet loss
 		t.l.WithError(err).Error("Failed to set tun tx queue length")
+	}
+
+	const modeNone = 1
+	if err = netlink.LinkSetIP6AddrGenMode(link, modeNone); err != nil {
+		t.l.WithError(err).Warn("Failed to disable link local address generation")
 	}
 
 	if err = t.addIPs(link); err != nil {
@@ -578,48 +604,42 @@ func (t *tun) isGatewayInVpnNetworks(gwAddr netip.Addr) bool {
 }
 
 func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
-
 	var gateways routing.Gateways
 
 	link, err := netlink.LinkByName(t.Device)
 	if err != nil {
-		t.l.WithField("Devicename", t.Device).Error("Ignoring route update: failed to get link by name")
+		t.l.WithField("deviceName", t.Device).Error("Ignoring route update: failed to get link by name")
 		return gateways
 	}
 
 	// If this route is relevant to our interface and there is a gateway then add it
-	if r.LinkIndex == link.Attrs().Index && len(r.Gw) > 0 {
-		gwAddr, ok := netip.AddrFromSlice(r.Gw)
-		if !ok {
-			t.l.WithField("route", r).Debug("Ignoring route update, invalid gateway address")
-		} else {
-			gwAddr = gwAddr.Unmap()
-
-			if !t.isGatewayInVpnNetworks(gwAddr) {
-				// Gateway isn't in our overlay network, ignore
-				t.l.WithField("route", r).Debug("Ignoring route update, not in our network")
-			} else {
+	if r.LinkIndex == link.Attrs().Index {
+		gwAddr, ok := getGatewayAddr(r.Gw, r.Via)
+		if ok {
+			if t.isGatewayInVpnNetworks(gwAddr) {
 				gateways = append(gateways, routing.NewGateway(gwAddr, 1))
+			} else {
+				// Gateway isn't in our overlay network, ignore
+				t.l.WithField("route", r).Debug("Ignoring route update, gateway is not in our network")
 			}
+		} else {
+			t.l.WithField("route", r).Debug("Ignoring route update, invalid gateway or via address")
 		}
 	}
 
 	for _, p := range r.MultiPath {
 		// If this route is relevant to our interface and there is a gateway then add it
-		if p.LinkIndex == link.Attrs().Index && len(p.Gw) > 0 {
-			gwAddr, ok := netip.AddrFromSlice(p.Gw)
-			if !ok {
-				t.l.WithField("route", r).Debug("Ignoring multipath route update, invalid gateway address")
-			} else {
-				gwAddr = gwAddr.Unmap()
-
-				if !t.isGatewayInVpnNetworks(gwAddr) {
-					// Gateway isn't in our overlay network, ignore
-					t.l.WithField("route", r).Debug("Ignoring route update, not in our network")
-				} else {
-					// p.Hops+1 = weight of the route
+		if p.LinkIndex == link.Attrs().Index {
+			gwAddr, ok := getGatewayAddr(p.Gw, p.Via)
+			if ok {
+				if t.isGatewayInVpnNetworks(gwAddr) {
 					gateways = append(gateways, routing.NewGateway(gwAddr, p.Hops+1))
+				} else {
+					// Gateway isn't in our overlay network, ignore
+					t.l.WithField("route", r).Debug("Ignoring route update, gateway is not in our network")
 				}
+			} else {
+				t.l.WithField("route", r).Debug("Ignoring route update, invalid gateway or via address")
 			}
 		}
 	}
@@ -628,13 +648,35 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 	return gateways
 }
 
+func getGatewayAddr(gw net.IP, via netlink.Destination) (netip.Addr, bool) {
+	// Try to use the old RTA_GATEWAY first
+	gwAddr, ok := netip.AddrFromSlice(gw)
+	if !ok {
+		// Fallback to the new RTA_VIA
+		rVia, ok := via.(*netlink.Via)
+		if ok {
+			gwAddr, ok = netip.AddrFromSlice(rVia.Addr)
+		}
+	}
+
+	if gwAddr.IsValid() {
+		gwAddr = gwAddr.Unmap()
+		return gwAddr, true
+	}
+
+	return netip.Addr{}, false
+}
+
 func (t *tun) updateRoutes(r netlink.RouteUpdate) {
-
 	gateways := t.getGatewaysFromRoute(&r.Route)
-
 	if len(gateways) == 0 {
 		// No gateways relevant to our network, no routing changes required.
 		t.l.WithField("route", r).Debug("Ignoring route update, no gateways")
+		return
+	}
+
+	if r.Dst == nil {
+		t.l.WithField("route", r).Debug("Ignoring route update, no destination address")
 		return
 	}
 
@@ -649,14 +691,18 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 
 	newTree := t.routeTree.Load().Clone()
 
+	t.routesFromSystemLock.Lock()
 	if r.Type == unix.RTM_NEWROUTE {
 		t.l.WithField("destination", dst).WithField("via", gateways).Info("Adding route")
+		t.routesFromSystem[dst] = gateways
 		newTree.Insert(dst, gateways)
 
 	} else {
 		t.l.WithField("destination", dst).WithField("via", gateways).Info("Removing route")
+		delete(t.routesFromSystem, dst)
 		newTree.Delete(dst)
 	}
+	t.routesFromSystemLock.Unlock()
 	t.routeTree.Store(newTree)
 }
 
@@ -671,6 +717,7 @@ func (t *tun) Close() error {
 
 	if t.ioctlFd > 0 {
 		_ = os.NewFile(t.ioctlFd, "ioctlFd").Close()
+		t.ioctlFd = 0
 	}
 
 	return nil

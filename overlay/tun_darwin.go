@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/netip"
 	"os"
 	"sync/atomic"
@@ -295,7 +294,6 @@ func (t *tun) activate6(network netip.Prefix) error {
 			Vltime: 0xffffffff,
 			Pltime: 0xffffffff,
 		},
-		//TODO: CERT-V2 should we disable DAD (duplicate address detection) and mark this as a secured address?
 		Flags: _IN6_IFF_NODAD,
 	}
 
@@ -551,16 +549,10 @@ func (t *tun) Name() string {
 	return t.Device
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
+func (t *tun) SupportsMultiqueue() bool {
+	return false
 }
 
-func prefixToMask(prefix netip.Prefix) netip.Addr {
-	pLen := 128
-	if prefix.Addr().Is4() {
-		pLen = 32
-	}
-
-	addr, _ := netip.AddrFromSlice(net.CIDRMask(prefix.Bits(), pLen))
-	return addr
+func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
 }

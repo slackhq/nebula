@@ -83,6 +83,10 @@ func (c *certificateV1) PublicKey() []byte {
 	return c.details.publicKey
 }
 
+func (c *certificateV1) MarshalPublicKeyPEM() []byte {
+	return marshalCertPublicKeyToPEM(c)
+}
+
 func (c *certificateV1) Signature() []byte {
 	return c.signature
 }
@@ -110,8 +114,10 @@ func (c *certificateV1) CheckSignature(key []byte) bool {
 	case Curve_CURVE25519:
 		return ed25519.Verify(key, b, c.signature)
 	case Curve_P256:
-		x, y := elliptic.Unmarshal(elliptic.P256(), key)
-		pubKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+		pubKey, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), key)
+		if err != nil {
+			return false
+		}
 		hashed := sha256.Sum256(b)
 		return ecdsa.VerifyASN1(pubKey, hashed[:], c.signature)
 	default:
@@ -420,7 +426,7 @@ func unmarshalCertificateV1(b []byte, publicKey []byte) (*certificateV1, error) 
 			unsafeNetworks: make([]netip.Prefix, len(rc.Details.Subnets)/2),
 			notBefore:      time.Unix(rc.Details.NotBefore, 0),
 			notAfter:       time.Unix(rc.Details.NotAfter, 0),
-			publicKey:      make([]byte, len(rc.Details.PublicKey)),
+			publicKey:      nil,
 			isCA:           rc.Details.IsCA,
 			curve:          rc.Details.Curve,
 		},
@@ -431,11 +437,18 @@ func unmarshalCertificateV1(b []byte, publicKey []byte) (*certificateV1, error) 
 	copy(nc.details.groups, rc.Details.Groups)
 	nc.details.issuer = hex.EncodeToString(rc.Details.Issuer)
 
+	// If a public key is passed in as an argument, the certificate pubkey must be empty
+	// and the passed-in pubkey copied into the cert.
 	if len(publicKey) > 0 {
-		nc.details.publicKey = publicKey
+		if len(rc.Details.PublicKey) != 0 {
+			return nil, ErrCertPubkeyPresent
+		}
+		nc.details.publicKey = make([]byte, len(publicKey))
+		copy(nc.details.publicKey, publicKey)
+	} else {
+		nc.details.publicKey = make([]byte, len(rc.Details.PublicKey))
+		copy(nc.details.publicKey, rc.Details.PublicKey)
 	}
-
-	copy(nc.details.publicKey, rc.Details.PublicKey)
 
 	var ip netip.Addr
 	for i, rawIp := range rc.Details.Ips {

@@ -7,12 +7,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.2] - 2026-01-21
+
+### Fixed
+
+- Fix panic when using `use_system_route_table` that was introduced in v1.10.1. (#1580)
+
 ### Changed
 
-- `default_local_cidr_any` now defaults to false, meaning that any firewall rule
+- Fix some typos in comments. (#1582)
+- Dependency updates. (#1581)
+
+## [1.10.1] - 2026-01-16
+
+See the [v1.10.1](https://github.com/slackhq/nebula/milestone/26?closed=1) milestone for a complete list of changes.
+
+### Fixed
+
+- Fix a bug where an unsafe route derived from the system route table could be lost on a config reload. (#1573)
+- Fix the PEM banner for ECDSA P256 public keys. (#1552)
+- Fix a regression on Windows from 1.9.x where nebula could fall back to a less performant UDP listener if 
+  non-critical ioctls failed. (#1568)
+- Fix a bug in handshake processing when a peer sends an unexpected public key. (#1566)
+
+### Added
+
+- Add a config option to control accepting `recv_error` packets which defaults to `always`. (#1569)
+
+### Changed
+
+- Various dependency updates. (#1541, #1549, #1550, #1557, #1558, #1560, #1561, #1570, #1571)
+
+## [1.10.0] - 2025-12-04
+
+See the [v1.10.0](https://github.com/slackhq/nebula/milestone/16?closed=1) milestone for a complete list of changes.
+
+### Added
+
+- Support for ipv6 and multiple ipv4/6 addresses in the overlay.
+  A new v2 ASN.1 based certificate format.
+  Certificates now have a unified interface for external implementations.
+  (#1212, #1216, #1345, #1359, #1381, #1419, #1464, #1466, #1451, #1476, #1467, #1481, #1399, #1488, #1492, #1495, #1468, #1521, #1535, #1538)
+- Add the ability to mark packets on linux to better target nebula packets in iptables/nftables. (#1331)
+- Add ECMP support for `unsafe_routes`. (#1332)
+- PKCS11 support for P256 keys when built with `pkcs11` tag (#1153, #1482)
+
+### Changed
+
+- **NOTE**: `default_local_cidr_any` now defaults to false, meaning that any firewall rule
   intended to target an `unsafe_routes` entry must explicitly declare it via the
   `local_cidr` field. This is almost always the intended behavior. This flag is
-  deprecated and will be removed in a future release.
+  deprecated and will be removed in a future release. (#1373)
+- Improve logging when a relay is in use on an inbound packet. (#1533)
+- Avoid fatal errors if `rountines` is > 1 on systems that don't support more than 1 routine. (#1531)
+- Log a warning if a firewall rule contains an `any` that negates a more restrictive filter. (#1513)
+- Accept encrypted CA passphrase from an environment variable. (#1421)
+- Allow handshaking with any trusted remote. (#1509)
+- Log only the count of blocklisted certificate fingerprints instead of the entire list. (#1525)
+- Don't fatal when the ssh server is unable to be configured successfully. (#1520)
+- Update to build against go v1.25. (#1483)
+- Allow projects using `nebula` as a library with userspace networking to configure the `logger` and build version. (#1239) 
+- Upgrade to `yaml.v3`. (#1148, #1371, #1438, #1478)
+
+### Fixed
+
+- Fix a potential bug with udp ipv4 only on darwin. (#1532)
+- Improve lost packet statistics. (#1441, #1537)
+- Honor `remote_allow_list` in hole punch response. (#1186)
+- Fix a panic when `tun.use_system_route_table` is `true` and a route lacks a destination. (#1437) 
+- Fix an issue when `tun.use_system_route_table: true` could result in heavy CPU utilization when many thousands of routes
+  are present. (#1326) 
+- Fix tests for 32 bit machines. (#1394)
+- Fix a possible 32bit integer underflow in config handling. (#1353)
+- Fix moving a udp address from one vpn address to another in the `static_host_map`
+  which could cause rapid re-handshaking with an incorrect remote. (#1259)
+- Improve smoke tests in environments where the docker network is not the default. (#1347)
+
+## [1.9.7] - 2025-10-10
+
+### Security
+
+- Fix an issue where Nebula could incorrectly accept and process a packet from an erroneous source IP when the sender's
+  certificate is configured with unsafe_routes (cert v1/v2) or multiple IPs (cert v2). (#1494)
+
+### Changed
+
+- Disable sending `recv_error` messages when a packet is received outside the allowable counter window. (#1459)
+- Improve error messages and remove some unnecessary fatal conditions in the Windows and generic udp listener. (#1453)
+
+## [1.9.6] - 2025-7-15
+
+### Added
+
+- Support dropping inactive tunnels. This is disabled by default in this release but can be enabled with `tunnels.drop_inactive`. See example config for more details. (#1413)
+
+### Fixed
+
+- Fix Darwin freeze due to presence of some Network Extensions (#1426)
+- Ensure the same relay tunnel is always used when multiple relay tunnels are present (#1422)
+- Fix Windows freeze due to ICMP error handling (#1412)
+- Fix relay migration panic (#1403)
+
+## [1.9.5] - 2024-12-05
+
+### Added
+
+- Gracefully ignore v2 certificates. (#1282)
+
+### Fixed
+
+- Fix relays that refuse to re-establish after one of the remote tunnel pairs breaks. (#1277)
 
 ## [1.9.4] - 2024-09-09
 
@@ -671,7 +775,13 @@ created.)
 
 - Initial public release.
 
-[Unreleased]: https://github.com/slackhq/nebula/compare/v1.9.4...HEAD
+[Unreleased]: https://github.com/slackhq/nebula/compare/v1.10.2...HEAD
+[1.10.2]: https://github.com/slackhq/nebula/releases/tag/v1.10.2
+[1.10.1]: https://github.com/slackhq/nebula/releases/tag/v1.10.1
+[1.10.0]: https://github.com/slackhq/nebula/releases/tag/v1.10.0
+[1.9.7]: https://github.com/slackhq/nebula/releases/tag/v1.9.7
+[1.9.6]: https://github.com/slackhq/nebula/releases/tag/v1.9.6
+[1.9.5]: https://github.com/slackhq/nebula/releases/tag/v1.9.5
 [1.9.4]: https://github.com/slackhq/nebula/releases/tag/v1.9.4
 [1.9.3]: https://github.com/slackhq/nebula/releases/tag/v1.9.3
 [1.9.2]: https://github.com/slackhq/nebula/releases/tag/v1.9.2

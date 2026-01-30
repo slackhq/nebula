@@ -114,6 +114,10 @@ func (c *certificateV2) PublicKey() []byte {
 	return c.publicKey
 }
 
+func (c *certificateV2) MarshalPublicKeyPEM() []byte {
+	return marshalCertPublicKeyToPEM(c)
+}
+
 func (c *certificateV2) Signature() []byte {
 	return c.signature
 }
@@ -149,8 +153,10 @@ func (c *certificateV2) CheckSignature(key []byte) bool {
 	case Curve_CURVE25519:
 		return ed25519.Verify(key, b, c.signature)
 	case Curve_P256:
-		x, y := elliptic.Unmarshal(elliptic.P256(), key)
-		pubKey := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+		pubKey, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), key)
+		if err != nil {
+			return false
+		}
 		hashed := sha256.Sum256(b)
 		return ecdsa.VerifyASN1(pubKey, hashed[:], c.signature)
 	default:
@@ -586,7 +592,13 @@ func unmarshalCertificateV2(b []byte, publicKey []byte, curve Curve) (*certifica
 	// Maybe grab the public key
 	var rawPublicKey cryptobyte.String
 	if len(publicKey) > 0 {
-		rawPublicKey = publicKey
+		// If a public key is passed in, then the handshake certificate must
+		// not have a public key present
+		if input.PeekASN1Tag(TagCertPublicKey) {
+			return nil, ErrCertPubkeyPresent
+		}
+		rawPublicKey = make(cryptobyte.String, len(publicKey))
+		copy(rawPublicKey, publicKey)
 	} else if !input.ReadOptionalASN1(&rawPublicKey, nil, TagCertPublicKey) {
 		return nil, ErrBadFormat
 	}

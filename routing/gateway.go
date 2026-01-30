@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	// Sentinal value
+	// Sentinel value
 	BucketNotCalculated = -1
 )
 

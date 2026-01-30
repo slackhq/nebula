@@ -7,19 +7,26 @@ import (
 	"golang.org/x/crypto/ed25519"
 )
 
-const (
-	CertificateBanner                = "NEBULA CERTIFICATE"
-	CertificateV2Banner              = "NEBULA CERTIFICATE V2"
-	X25519PrivateKeyBanner           = "NEBULA X25519 PRIVATE KEY"
-	X25519PublicKeyBanner            = "NEBULA X25519 PUBLIC KEY"
-	EncryptedEd25519PrivateKeyBanner = "NEBULA ED25519 ENCRYPTED PRIVATE KEY"
-	Ed25519PrivateKeyBanner          = "NEBULA ED25519 PRIVATE KEY"
-	Ed25519PublicKeyBanner           = "NEBULA ED25519 PUBLIC KEY"
+const ( //cert banners
+	CertificateBanner   = "NEBULA CERTIFICATE"
+	CertificateV2Banner = "NEBULA CERTIFICATE V2"
+)
 
-	P256PrivateKeyBanner               = "NEBULA P256 PRIVATE KEY"
-	P256PublicKeyBanner                = "NEBULA P256 PUBLIC KEY"
+const ( //key-agreement-key banners
+	X25519PrivateKeyBanner = "NEBULA X25519 PRIVATE KEY"
+	X25519PublicKeyBanner  = "NEBULA X25519 PUBLIC KEY"
+	P256PrivateKeyBanner   = "NEBULA P256 PRIVATE KEY"
+	P256PublicKeyBanner    = "NEBULA P256 PUBLIC KEY"
+)
+
+/* including "ECDSA" in the P256 banners is a clue that these keys should be used only for signing */
+const ( //signing key banners
 	EncryptedECDSAP256PrivateKeyBanner = "NEBULA ECDSA P256 ENCRYPTED PRIVATE KEY"
 	ECDSAP256PrivateKeyBanner          = "NEBULA ECDSA P256 PRIVATE KEY"
+	ECDSAP256PublicKeyBanner           = "NEBULA ECDSA P256 PUBLIC KEY"
+	EncryptedEd25519PrivateKeyBanner   = "NEBULA ED25519 ENCRYPTED PRIVATE KEY"
+	Ed25519PrivateKeyBanner            = "NEBULA ED25519 PRIVATE KEY"
+	Ed25519PublicKeyBanner             = "NEBULA ED25519 PUBLIC KEY"
 )
 
 // UnmarshalCertificateFromPEM will try to unmarshal the first pem block in a byte array, returning any non consumed
@@ -51,12 +58,35 @@ func UnmarshalCertificateFromPEM(b []byte) (Certificate, []byte, error) {
 
 }
 
+func marshalCertPublicKeyToPEM(c Certificate) []byte {
+	if c.IsCA() {
+		return MarshalSigningPublicKeyToPEM(c.Curve(), c.PublicKey())
+	} else {
+		return MarshalPublicKeyToPEM(c.Curve(), c.PublicKey())
+	}
+}
+
+// MarshalPublicKeyToPEM returns a PEM representation of a public key used for ECDH.
+// if your public key came from a certificate, prefer Certificate.PublicKeyPEM() if possible, to avoid mistakes!
 func MarshalPublicKeyToPEM(curve Curve, b []byte) []byte {
 	switch curve {
 	case Curve_CURVE25519:
 		return pem.EncodeToMemory(&pem.Block{Type: X25519PublicKeyBanner, Bytes: b})
 	case Curve_P256:
 		return pem.EncodeToMemory(&pem.Block{Type: P256PublicKeyBanner, Bytes: b})
+	default:
+		return nil
+	}
+}
+
+// MarshalSigningPublicKeyToPEM returns a PEM representation of a public key used for signing.
+// if your public key came from a certificate, prefer Certificate.PublicKeyPEM() if possible, to avoid mistakes!
+func MarshalSigningPublicKeyToPEM(curve Curve, b []byte) []byte {
+	switch curve {
+	case Curve_CURVE25519:
+		return pem.EncodeToMemory(&pem.Block{Type: Ed25519PublicKeyBanner, Bytes: b})
+	case Curve_P256:
+		return pem.EncodeToMemory(&pem.Block{Type: ECDSAP256PublicKeyBanner, Bytes: b})
 	default:
 		return nil
 	}
@@ -73,7 +103,7 @@ func UnmarshalPublicKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) {
 	case X25519PublicKeyBanner, Ed25519PublicKeyBanner:
 		expectedLen = 32
 		curve = Curve_CURVE25519
-	case P256PublicKeyBanner:
+	case P256PublicKeyBanner, ECDSAP256PublicKeyBanner:
 		// Uncompressed
 		expectedLen = 65
 		curve = Curve_P256
