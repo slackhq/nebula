@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/rcrowley/go-metrics"
@@ -16,6 +17,8 @@ import (
 	"github.com/slackhq/nebula/config"
 	"golang.org/x/sys/unix"
 )
+
+var readTimeout = unix.NsecToTimeval(int64(3 * time.Second))
 
 type StdConn struct {
 	sysFd int
@@ -45,6 +48,11 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 		if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
 			return nil, fmt.Errorf("unable to set SO_REUSEPORT: %s", err)
 		}
+	}
+
+	// Set a read timeout
+	if err = unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &readTimeout); err != nil {
+		return nil, fmt.Errorf("unable to set SO_RCVTIMEO: %s", err)
 	}
 
 	var sa unix.Sockaddr
@@ -154,6 +162,9 @@ func (u *StdConn) ReadSingle(msgs []rawMessage) (int, error) {
 		)
 
 		if err != 0 {
+			if err == unix.EAGAIN || err == unix.EINTR {
+				continue
+			}
 			return 0, &net.OpError{Op: "recvmsg", Err: err}
 		}
 
@@ -175,6 +186,9 @@ func (u *StdConn) ReadMulti(msgs []rawMessage) (int, error) {
 		)
 
 		if err != 0 {
+			if err == unix.EAGAIN || err == unix.EINTR {
+				continue
+			}
 			return 0, &net.OpError{Op: "recvmmsg", Err: err}
 		}
 
@@ -301,7 +315,6 @@ func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
 }
 
 func (u *StdConn) Close() error {
-	_ = syscall.Shutdown(u.sysFd, syscall.SHUT_RDWR)
 	return syscall.Close(u.sysFd)
 }
 
