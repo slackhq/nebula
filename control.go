@@ -2,9 +2,11 @@ package nebula
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/sirupsen/logrus"
@@ -12,6 +14,16 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
 )
+
+type RunState int
+
+const (
+	Stopped  RunState = 0 // The control has yet to be started
+	Started  RunState = 1 // The control has been started
+	Stopping RunState = 2 // The control is stopping
+)
+
+var ErrAlreadyStarted = errors.New("nebula is already started")
 
 // Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
 // core. This means copying IP objects, slices, de-referencing pointers and taking the actual value, etc
@@ -26,6 +38,9 @@ type controlHostLister interface {
 }
 
 type Control struct {
+	stateLock sync.Mutex
+	state     RunState
+
 	f                      *Interface
 	l                      *logrus.Logger
 	ctx                    context.Context
@@ -49,10 +64,21 @@ type ControlHostInfo struct {
 	CurrentRelaysThroughMe []netip.Addr     `json:"currentRelaysThroughMe"`
 }
 
-// Start actually runs nebula, this is a nonblocking call. To block use Control.ShutdownBlock()
-func (c *Control) Start() {
+// Start actually runs nebula, this is a nonblocking call.
+// The returned function can be used to wait for nebula to fully stop.
+func (c *Control) Start() (func(), error) {
+	c.stateLock.Lock()
+	if c.state != Stopped {
+		c.stateLock.Unlock()
+		return nil, ErrAlreadyStarted
+	}
+
 	// Activate the interface
-	c.f.activate()
+	err := c.f.activate()
+	if err != nil {
+		c.stateLock.Unlock()
+		return nil, err
+	}
 
 	// Call all the delayed funcs that waited patiently for the interface to be created.
 	if c.sshStart != nil {
@@ -72,15 +98,33 @@ func (c *Control) Start() {
 	}
 
 	// Start reading packets.
-	c.f.run()
+	c.state = Started
+	c.stateLock.Unlock()
+	return c.f.run()
+}
+
+func (c *Control) State() RunState {
+	c.stateLock.Lock()
+	defer c.stateLock.Unlock()
+	return c.state
 }
 
 func (c *Control) Context() context.Context {
 	return c.ctx
 }
 
-// Stop signals nebula to shutdown and close all tunnels, returns after the shutdown is complete
+// Stop is a non-blocking call that signals nebula to close all tunnels and shut down
 func (c *Control) Stop() {
+	c.stateLock.Lock()
+	if c.state != Started {
+		c.stateLock.Unlock()
+		// We are stopping or stopped already
+		return
+	}
+
+	c.state = Stopping
+	c.stateLock.Unlock()
+
 	// Stop the handshakeManager (and other services), to prevent new tunnels from
 	// being created while we're shutting them all down.
 	c.cancel()
@@ -89,7 +133,7 @@ func (c *Control) Stop() {
 	if err := c.f.Close(); err != nil {
 		c.l.WithError(err).Error("Close interface failed")
 	}
-	c.l.Info("Goodbye")
+	c.state = Stopped
 }
 
 // ShutdownBlock will listen for and block on term and interrupt signals, calling Control.Stop() once signalled
