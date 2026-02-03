@@ -9,7 +9,74 @@ import (
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/routing"
+	"github.com/slackhq/nebula/udp"
 )
+
+// consumeInsidePacketBatched is a variant of consumeInsidePacket that queues
+// outgoing packets into pendingPackets instead of sending them immediately.
+// The caller is responsible for flushing pendingPackets with WriteBatch.
+func (f *Interface) consumeInsidePacketBatched(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache, pendingPackets *[]udp.BatchPacket) {
+	err := newPacket(packet, false, fwPacket)
+	if err != nil {
+		if f.l.Level >= logrus.DebugLevel {
+			f.l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
+		}
+		return
+	}
+
+	// Ignore local broadcast packets
+	if f.dropLocalBroadcast {
+		if f.myBroadcastAddrsTable.Contains(fwPacket.RemoteAddr) {
+			return
+		}
+	}
+
+	if f.myVpnAddrsTable.Contains(fwPacket.RemoteAddr) {
+		if immediatelyForwardToSelf {
+			_, err := f.readers[q].Write(packet)
+			if err != nil {
+				f.l.WithError(err).Error("Failed to forward to tun")
+			}
+		}
+		return
+	}
+
+	// Ignore multicast packets
+	if f.dropMulticast && fwPacket.RemoteAddr.IsMulticast() {
+		return
+	}
+
+	hostinfo, ready := f.getOrHandshakeConsiderRouting(fwPacket, func(hh *HandshakeHostInfo) {
+		hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
+	})
+
+	if hostinfo == nil {
+		f.rejectInside(packet, out, q)
+		if f.l.Level >= logrus.DebugLevel {
+			f.l.WithField("vpnAddr", fwPacket.RemoteAddr).
+				WithField("fwPacket", fwPacket).
+				Debugln("dropping outbound packet, vpnAddr not in our vpn networks or in unsafe networks")
+		}
+		return
+	}
+
+	if !ready {
+		return
+	}
+
+	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
+	if dropReason == nil {
+		f.sendNoMetricsBatched(header.Message, 0, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, packet, nb, out, q, pendingPackets)
+	} else {
+		f.rejectInside(packet, out, q)
+		if f.l.Level >= logrus.DebugLevel {
+			hostinfo.logger(f.l).
+				WithField("fwPacket", fwPacket).
+				WithField("reason", dropReason).
+				Debugln("dropping outbound packet")
+		}
+	}
+}
 
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
 	err := newPacket(packet, false, fwPacket)
@@ -408,4 +475,76 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 			break
 		}
 	}
+}
+
+// sendNoMetricsBatched is like sendNoMetrics but queues the packet for batched sending
+// instead of sending immediately. The caller must flush pendingPackets with WriteBatch.
+func (f *Interface) sendNoMetricsBatched(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte, q int, pendingPackets *[]udp.BatchPacket) {
+	if ci.eKey == nil {
+		return
+	}
+	useRelay := !remote.IsValid() && !hostinfo.remote.IsValid()
+	fullOut := out
+
+	if useRelay {
+		if len(out) < header.Len {
+			out = out[:header.Len]
+		}
+		out = out[header.Len:]
+	}
+
+	if noiseutil.EncryptLockNeeded {
+		ci.writeLock.Lock()
+	}
+	c := ci.messageCounter.Add(1)
+
+	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)
+	f.connectionManager.Out(hostinfo)
+
+	if t != header.CloseTunnel && hostinfo.lastRebindCount != f.rebindCount {
+		f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
+		hostinfo.lastRebindCount = f.rebindCount
+		if f.l.Level >= logrus.DebugLevel {
+			f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).Debug("Lighthouse update triggered for punch due to rebind counter")
+		}
+	}
+
+	var err error
+	out, err = ci.eKey.EncryptDanger(out, out, p, c, nb)
+	if noiseutil.EncryptLockNeeded {
+		ci.writeLock.Unlock()
+	}
+	if err != nil {
+		hostinfo.logger(f.l).WithError(err).
+			WithField("udpAddr", remote).WithField("counter", c).
+			WithField("attemptedCounter", c).
+			Error("Failed to encrypt outgoing packet")
+		return
+	}
+
+	// Queue the packet for batched sending
+	var addr netip.AddrPort
+	if remote.IsValid() {
+		addr = remote
+	} else if hostinfo.remote.IsValid() {
+		addr = hostinfo.remote
+	} else {
+		// Relay path - send immediately, not batched
+		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
+			relayHostInfo, relay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relayIP)
+			if err != nil {
+				hostinfo.relayState.DeleteRelay(relayIP)
+				hostinfo.logger(f.l).WithField("relay", relayIP).WithError(err).Info("sendNoMetricsBatched failed to find HostInfo")
+				continue
+			}
+			f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true)
+			break
+		}
+		return
+	}
+
+	// Copy the payload since the buffer will be reused
+	payload := make([]byte, len(out))
+	copy(payload, out)
+	*pendingPackets = append(*pendingPackets, udp.BatchPacket{Payload: payload, Addr: addr})
 }
