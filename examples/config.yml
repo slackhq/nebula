@@ -318,6 +318,11 @@ logging:
   #subsystem: nebula
   #interval: 10s
 
+  # enables pprof endpoints on the stats listener
+  # endpoints: /debug/pprof/, /debug/pprof/cmdline, /debug/pprof/profile,
+  #            /debug/pprof/symbol, /debug/pprof/trace
+  #pprof: false
+
   # enables counter metrics for meta packets
   #   e.g.: `messages.tx.handshake`
   # NOTE: `message.{tx,rx}.recv_error` is always emitted
