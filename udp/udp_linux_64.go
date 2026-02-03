@@ -55,3 +55,15 @@ func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
 
 	return msgs, buffers, names
 }
+
+func setIovecBase(iov *iovec, base *byte) {
+	iov.Base = base
+}
+
+func setIovecLen(iov *iovec, l int) {
+	iov.Len = uint64(l)
+}
+
+func setMsghdrIovlen(hdr *msghdr, l int) {
+	hdr.Iovlen = uint64(l)
+}

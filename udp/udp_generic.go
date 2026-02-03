@@ -101,3 +101,12 @@ func (u *GenericConn) ListenOut(r EncReader) {
 func (u *GenericConn) SupportsMultipleReaders() bool {
 	return false
 }
+
+func (u *GenericConn) WriteBatch(pkts []BatchPacket) (int, error) {
+	for i := range pkts {
+		if err := u.WriteTo(pkts[i].Payload, pkts[i].Addr); err != nil {
+			return i, err
+		}
+	}
+	return len(pkts), nil
+}

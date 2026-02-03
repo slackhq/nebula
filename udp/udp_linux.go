@@ -313,6 +313,69 @@ func (u *StdConn) Close() error {
 	return syscall.Close(u.sysFd)
 }
 
+func (u *StdConn) WriteBatch(pkts []BatchPacket) (int, error) {
+	if len(pkts) == 0 {
+		return 0, nil
+	}
+
+	msgs := make([]rawMessage, len(pkts))
+	iovecs := make([]iovec, len(pkts))
+	var names4 []unix.RawSockaddrInet4
+	var names6 []unix.RawSockaddrInet6
+
+	if u.isV4 {
+		names4 = make([]unix.RawSockaddrInet4, len(pkts))
+	} else {
+		names6 = make([]unix.RawSockaddrInet6, len(pkts))
+	}
+
+	for i := range pkts {
+		setIovecBase(&iovecs[i], &pkts[i].Payload[0])
+		setIovecLen(&iovecs[i], len(pkts[i].Payload))
+		msgs[i].Hdr.Iov = &iovecs[i]
+		setMsghdrIovlen(&msgs[i].Hdr, 1)
+
+		if u.isV4 {
+			names4[i].Family = unix.AF_INET
+			names4[i].Addr = pkts[i].Addr.Addr().As4()
+			binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&names4[i].Port))[:], pkts[i].Addr.Port())
+			msgs[i].Hdr.Name = (*byte)(unsafe.Pointer(&names4[i]))
+			msgs[i].Hdr.Namelen = unix.SizeofSockaddrInet4
+		} else {
+			names6[i].Family = unix.AF_INET6
+			names6[i].Addr = pkts[i].Addr.Addr().As16()
+			binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&names6[i].Port))[:], pkts[i].Addr.Port())
+			msgs[i].Hdr.Name = (*byte)(unsafe.Pointer(&names6[i]))
+			msgs[i].Hdr.Namelen = unix.SizeofSockaddrInet6
+		}
+	}
+
+	var sent int
+	for sent < len(msgs) {
+		n, _, errno := unix.Syscall6(
+			unix.SYS_SENDMMSG,
+			uintptr(u.sysFd),
+			uintptr(unsafe.Pointer(&msgs[sent])),
+			uintptr(len(msgs)-sent),
+			0,
+			0,
+			0,
+		)
+
+		if errno == unix.EINTR {
+			continue
+		}
+
+		if errno != 0 {
+			return sent, &net.OpError{Op: "sendmmsg", Err: errno}
+		}
+
+		sent += int(n)
+	}
+
+	return sent, nil
+}
+
 func NewUDPStatsEmitter(udpConns []Conn) func() {
 	// Check if our kernel supports SO_MEMINFO before registering the gauges
 	var udpGauges [][unix.SK_MEMINFO_VARS]metrics.Gauge

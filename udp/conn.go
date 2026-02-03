@@ -13,11 +13,18 @@ type EncReader func(
 	payload []byte,
 )
 
+// BatchPacket represents a single packet in a batch write operation
+type BatchPacket struct {
+	Payload []byte
+	Addr    netip.AddrPort
+}
+
 type Conn interface {
 	Rebind() error
 	LocalAddr() (netip.AddrPort, error)
 	ListenOut(r EncReader)
 	WriteTo(b []byte, addr netip.AddrPort) error
+	WriteBatch(pkts []BatchPacket) (int, error)
 	ReloadConfig(c *config.C)
 	SupportsMultipleReaders() bool
 	Close() error
@@ -39,6 +46,9 @@ func (NoopConn) SupportsMultipleReaders() bool {
 }
 func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {
 	return nil
+}
+func (NoopConn) WriteBatch(pkts []BatchPacket) (int, error) {
+	return len(pkts), nil
 }
 func (NoopConn) ReloadConfig(_ *config.C) {
 	return

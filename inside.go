@@ -69,7 +69,6 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
 		f.sendNoMetrics(header.Message, 0, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, packet, nb, out, q)
-
 	} else {
 		f.rejectInside(packet, out, q)
 		if f.l.Level >= logrus.DebugLevel {

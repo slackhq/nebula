@@ -202,3 +202,12 @@ func (u *StdConn) Rebind() error {
 
 	return nil
 }
+
+func (u *StdConn) WriteBatch(pkts []BatchPacket) (int, error) {
+	for i := range pkts {
+		if err := u.WriteTo(pkts[i].Payload, pkts[i].Addr); err != nil {
+			return i, err
+		}
+	}
+	return len(pkts), nil
+}
