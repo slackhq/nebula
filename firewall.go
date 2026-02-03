@@ -103,6 +103,15 @@ type FirewallConntrack struct {
 	TimerWheel *TimerWheel[firewall.Packet]
 }
 
+func (ct *FirewallConntrack) dupeConnUnlocked(fp firewall.Packet, c *conn, timeout time.Duration) {
+	if _, ok := ct.Conns[fp]; !ok {
+		ct.TimerWheel.Advance(time.Now())
+		ct.TimerWheel.Add(fp, timeout)
+	}
+
+	ct.Conns[fp] = c
+}
+
 // FirewallTable is the entry point for a rule, the evaluation order is:
 // Proto AND port AND (CA SHA or CA name) AND local CIDR AND (group OR groups OR name OR remote CIDR)
 type FirewallTable struct {
@@ -328,6 +337,11 @@ func (f *Firewall) GetRuleHashes() string {
 	return "SHA:" + f.GetRuleHash() + ",FNV:" + strconv.FormatUint(uint64(f.GetRuleHashFNV()), 10)
 }
 
+func (f *Firewall) ShouldUnSNAT(fp *firewall.Packet) bool {
+	// f.snatAddr is only valid if we're a snat-capable router
+	return f.snatAddr.IsValid() && fp.RemoteAddr == f.snatAddr
+}
+
 func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw FirewallInterface) error {
 	var table string
 	if inbound {
@@ -421,43 +435,70 @@ var ErrInvalidRemoteIP = errors.New("remote address is not in remote certificate
 var ErrInvalidLocalIP = errors.New("local address is not in list of handled local addresses")
 var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
-func (f *Firewall) unSnat(data []byte, fp *firewall.Packet, c *conn) netip.Addr {
-	if c == nil {
-		//unfortunately this needs to lock. Surely there's a better way, but I need to make this flow at all first.
-		c = f.peek(*fp)
-	}
+func (f *Firewall) unSnat(data []byte, fp *firewall.Packet) netip.Addr {
+	c := f.peek(*fp) //unfortunately this needs to lock. Surely there's a better way.
 	if c == nil {
 		return netip.Addr{}
 	}
 	if !c.snat.Valid() {
 		return netip.Addr{}
 	}
-
 	oldIP := netip.AddrPortFrom(f.snatAddr, fp.RemotePort)
-
-	//change dst IP
-	copy(data[16:], c.snat.Src.Addr().AsSlice())
-	recalcIPv4Checksum(data, oldIP.Addr(), c.snat.Src.Addr())
-	ipHeaderLen := int(data[0]&0x0F) * 4
-	//dst port is at offset 2
-	dstport := ipHeaderLen + 2
-
-	switch fp.Protocol {
-	case firewall.ProtoICMP:
-		binary.BigEndian.PutUint16(data[ipHeaderLen+4:ipHeaderLen+6], c.snat.Src.Port())
-		icmpCode := uint16(data[ipHeaderLen+1]) //todo not snatting on this yet (but Linux would)
-		recalcICMPv4Checksum(data, icmpCode, icmpCode, c.snat.SnatPort, c.snat.Src.Port())
-	case firewall.ProtoUDP:
-		binary.BigEndian.PutUint16(data[dstport:dstport+2], c.snat.Src.Port())
-		recalcUDPv4Checksum(data, oldIP, c.snat.Src)
-	case firewall.ProtoTCP:
-		binary.BigEndian.PutUint16(data[dstport:dstport+2], c.snat.Src.Port())
-		recalcTCPv4Checksum(data, oldIP, c.snat.Src)
-	}
+	rewritePacket(data, fp, oldIP, c.snat.Src, 16, 2)
 	return c.snat.SrcVpnIp
 }
 
+func rewritePacket(data []byte, fp *firewall.Packet, oldIP netip.AddrPort, newIP netip.AddrPort, ipOffset int, portOffset int) {
+	//change address
+	copy(data[ipOffset:], newIP.Addr().AsSlice())
+	recalcIPv4Checksum(data, oldIP.Addr(), newIP.Addr())
+	ipHeaderLen := int(data[0]&0x0F) * 4
+
+	switch fp.Protocol {
+	case firewall.ProtoICMP:
+		binary.BigEndian.PutUint16(data[ipHeaderLen+4:ipHeaderLen+6], newIP.Port()) //we use the ID field as a "port" for ICMP
+		icmpCode := uint16(data[ipHeaderLen+1])                                     //todo not snatting on code yet (but Linux would)
+		recalcICMPv4Checksum(data, icmpCode, icmpCode, oldIP.Port(), newIP.Port())
+	case firewall.ProtoUDP:
+		dstport := ipHeaderLen + portOffset
+		binary.BigEndian.PutUint16(data[dstport:dstport+2], newIP.Port())
+		recalcUDPv4Checksum(data, oldIP, newIP)
+	case firewall.ProtoTCP:
+		dstport := ipHeaderLen + portOffset
+		binary.BigEndian.PutUint16(data[dstport:dstport+2], newIP.Port())
+		recalcTCPv4Checksum(data, oldIP, newIP)
+	}
+}
+
+func (f *Firewall) findUsableSNATPort(fp *firewall.Packet, c *conn) error {
+	oldPort := fp.RemotePort
+	conntrack := f.Conntrack
+	conntrack.Lock()
+	defer conntrack.Unlock()
+	for numPortsChecked := 0; numPortsChecked < 0x7ff; numPortsChecked++ {
+		_, ok := conntrack.Conns[*fp]
+		if !ok {
+			//yay, we can use this port
+			//track the snatted flow with the same expiration as the unsnatted version
+			conntrack.dupeConnUnlocked(*fp, c, f.packetTimeout(*fp))
+			return nil
+		}
+		//increment and retry. There's probably better strategies out there
+		fp.RemotePort++
+		if fp.RemotePort < 0x7ff {
+			fp.RemotePort += 0x7ff // keep it ephemeral for now
+		}
+	}
+
+	//if we made it here, we failed
+	fp.RemotePort = oldPort
+	return ErrCannotSNAT
+}
+
 func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo *HostInfo) error {
+	if !f.snatAddr.IsValid() {
+		return ErrCannotSNAT
+	}
 	if c.snat.Valid() {
 		//old flow
 		fp.RemoteAddr = f.snatAddr
@@ -466,117 +507,118 @@ func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo
 		//we got a new flow
 		c.snat.Src = netip.AddrPortFrom(fp.RemoteAddr, fp.RemotePort)
 		c.snat.SrcVpnIp = hostinfo.vpnAddrs[0]
-
 		fp.RemoteAddr = f.snatAddr
 		//find a new port to use, if needed
-		numPortsChecked := 0
-		for {
-			existingFlow := f.peek(*fp) //locking and unlocking for each peek is slow, but simple for now
-			if existingFlow == nil {
-				break //yay, we can use this port
-			}
-			//increment and retry. There's probably better strategies out there
-			fp.RemotePort++
-			numPortsChecked++
-			if fp.RemotePort < 0x7ff {
-				fp.RemotePort += 0x7ff // keep it ephemeral for now
-			} //without this, if we're totally out of ports, this would loop forever.
-			if numPortsChecked >= 0x7ff {
-				return ErrCannotSNAT
-			}
+		err := f.findUsableSNATPort(fp, c)
+		if err != nil {
+			return err
 		}
-		f.dupeConn(*fp, c) //track the snatted flow with the same expiration as the unsnatted version
 		c.snat.SnatPort = fp.RemotePort
 	} else {
 		return ErrCannotSNAT
 	}
 
 	newIP := netip.AddrPortFrom(f.snatAddr, c.snat.SnatPort)
-	//change src IP
-	copy(data[12:], f.snatAddr.AsSlice())
-	recalcIPv4Checksum(data, c.snat.Src.Addr(), newIP.Addr())
-	ipHeaderLen := int(data[0]&0x0F) * 4
-
-	switch fp.Protocol {
-	case firewall.ProtoICMP:
-		binary.BigEndian.PutUint16(data[ipHeaderLen+4:ipHeaderLen+6], c.snat.SnatPort)
-		icmpCode := uint16(data[ipHeaderLen+1]) //todo not snatting on this yet (but Linux would)
-		recalcICMPv4Checksum(data, icmpCode, icmpCode, c.snat.Src.Port(), c.snat.SnatPort)
-	case firewall.ProtoUDP:
-		//src port is at offset 0
-		binary.BigEndian.PutUint16(data[ipHeaderLen:ipHeaderLen+2], c.snat.SnatPort)
-		recalcUDPv4Checksum(data, c.snat.Src, newIP)
-	case firewall.ProtoTCP:
-		//src port is at offset 0
-		binary.BigEndian.PutUint16(data[ipHeaderLen:ipHeaderLen+2], c.snat.SnatPort)
-		recalcTCPv4Checksum(data, c.snat.Src, newIP)
-	default:
-		return ErrCannotSNAT
-	}
+	rewritePacket(data, fp, c.snat.Src, newIP, 12, 0)
 	return nil
+}
+
+func (f *Firewall) checkIPMatchesCert(h *HostInfo, fp firewall.Packet) (NetworkType, error) {
+	specialSnatMode := fp.IsIPv4() && h.HasOnlyV6Addresses() //a host with a v4 assignment in their cert must always use it
+
+	if h.networks == nil {
+		// Simple case: Certificate has one address and no unsafe networks
+		if h.vpnAddrs[0] == fp.RemoteAddr {
+			return NetworkTypeVPN, nil //easy!
+		} else if specialSnatMode {
+			return NetworkTypeUncheckedSNATPeer, nil
+		} else {
+			return NetworkTypeUnknown, ErrInvalidRemoteIP
+		}
+	} else {
+		//todo check for srcsnortaddr here too?
+		nwType, ok := h.networks.Lookup(fp.RemoteAddr)
+		if !ok {
+			if specialSnatMode {
+				return NetworkTypeUncheckedSNATPeer, nil
+			}
+			return NetworkTypeUnknown, ErrInvalidRemoteIP
+		}
+		switch nwType {
+		case NetworkTypeVPN:
+			return nwType, nil
+		case NetworkTypeVPNPeer:
+			//todo we might need a specialSnatMode case in here to handle routers with v4 addresses when we don't also have a v4 address?
+			return nwType, ErrPeerRejected // reject for now, one day this may have different FW rules
+		case NetworkTypeUnsafe:
+			return nwType, nil // nothing special, one day this may have different FW rules
+		default:
+			return NetworkTypeUnknown, ErrUnknownNetworkType //should never happen
+		}
+	}
+}
+
+func (f *Firewall) willingToHandleLocalAddr(incoming bool, fp firewall.Packet, remoteNwType NetworkType) error {
+	if f.routableNetworks.Contains(fp.LocalAddr) {
+		return nil //easy
+	}
+
+	//watch out, when incoming, this function decides if we will deliver a packet locally
+	//when outgoing, much less important, it just decides if we're willing to tx
+	switch remoteNwType {
+	// we never want to accept unconntracked inbound traffic from these network types, but outbound is okay.
+	// It's the recipient's job to validate and accept or deny the packet.
+	case NetworkTypeUncheckedSNATPeer, NetworkTypeUnsafe:
+		if incoming {
+			return ErrInvalidLocalIP
+		}
+		return nil
+	default:
+		return ErrInvalidLocalIP
+	}
 }
 
 // Drop returns an error if the packet should be dropped, explaining why. It
 // returns nil if the packet should not be dropped.
 func (f *Firewall) Drop(fp firewall.Packet, pkt []byte, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) error {
-	specialSnatMode := f.hasUnsafeNetworks && fp.IsIPv4() && h.HasOnlyV6Addresses() //todo I wish I only set this once somehow
-
 	table := f.OutRules
 	if incoming {
 		table = f.InRules
 	}
 
+	snatmode := fp.IsIPv4() && h.HasOnlyV6Addresses() && f.snatAddr.IsValid()
+	if snatmode {
+		//if this is an IPv4 packet from a V6 only host, and we're configured to snat that kind of traffic, it must be snatted,
+		//so it can never be in the localcache, which lacks SNAT data
+		//nil out the pointer to avoid ever using it
+		localCache = nil
+	}
+
 	// Check if we spoke to this tuple, if we did then allow this packet
-	// Check the cache first, iff not snatting
-	if localCache != nil && !specialSnatMode {
+	if localCache != nil {
 		if _, ok := localCache[fp]; ok {
-			return nil //packet matched the cache, we're not snatting, we can return early!
+			return nil //packet matched the cache, we're not snatting, we can return early
 		}
 	}
 	c := f.inConns(fp, h, caPool, localCache)
 	if c != nil {
-		//can't return yet, need to snat maybe
-		goto snat
+		if incoming && snatmode {
+			return f.applySnat(pkt, &fp, c, h)
+		}
+		return nil
 	}
 
 	// Make sure remote address matches nebula certificate, and determine how to treat it
-	if h.networks == nil {
-		// Simple case: Certificate has one address and no unsafe networks
-		if h.vpnAddrs[0] != fp.RemoteAddr {
-			if !specialSnatMode {
-				f.metrics(incoming).droppedRemoteAddr.Inc(1)
-				return ErrInvalidRemoteIP
-			} //else we're in special snat mode, and we need to apply more checks below
-		} //else? all good, fall through
-	} else {
-		//todo check for srcsnortaddr here too?
-		nwType, ok := h.networks.Lookup(fp.RemoteAddr)
-		if !ok {
-			f.metrics(incoming).droppedRemoteAddr.Inc(1)
-			return ErrInvalidRemoteIP
-		}
-		switch nwType {
-		case NetworkTypeVPN:
-			break // nothing special
-		case NetworkTypeVPNPeer:
-			//todo we might need a specialSnatMode case in here to handle routers with v4 addresses when we don't also have a v4 address?
-			f.metrics(incoming).droppedRemoteAddr.Inc(1)
-			return ErrPeerRejected // reject for now, one day this may have different FW rules
-		case NetworkTypeUnsafe:
-			//intentionally excluding f.hasUnsafeNetworks -- this is what lets routers talk back to us with our unsafe traffic!
-			specialSnatMode = fp.IsIPv4() && h.HasOnlyV6Addresses() && f.assignedNetworks[0].Addr().Is6()
-			break // nothing special, one day this may have different FW rules
-		default:
-			f.metrics(incoming).droppedRemoteAddr.Inc(1)
-			return ErrUnknownNetworkType //should never happen
-		}
+	nwType, err := f.checkIPMatchesCert(h, fp)
+	if err != nil {
+		f.metrics(incoming).droppedRemoteAddr.Inc(1)
+		return err
 	}
 
 	// Make sure we are supposed to be handling this local ip address
-	//todo I'm not sure I trust this heuristic
-	if !specialSnatMode && !f.routableNetworks.Contains(fp.LocalAddr) {
+	if err = f.willingToHandleLocalAddr(incoming, fp, nwType); err != nil {
 		f.metrics(incoming).droppedLocalAddr.Inc(1)
-		return ErrInvalidLocalIP
+		return err
 	}
 
 	// We now know which firewall table to check against
@@ -588,18 +630,12 @@ func (f *Firewall) Drop(fp firewall.Packet, pkt []byte, incoming bool, h *HostIn
 	// We always want to conntrack since it is a faster operation
 	c = f.addConn(fp, incoming)
 
-snat:
-	if incoming {
-		if specialSnatMode {
-			//todo do not snat if you are not a router for the destination -- for now, just if you're not a router
-			err := f.applySnat(pkt, &fp, c, h)
-			if err != nil {
-				return err
-			}
-		}
-	} //outgoing snat is handled before this function is called (for now!)
-
-	return nil
+	if incoming && nwType == NetworkTypeUncheckedSNATPeer {
+		return f.applySnat(pkt, &fp, c, h)
+	} else {
+		//outgoing snat is handled before this function is called
+		return nil
+	}
 }
 
 func (f *Firewall) metrics(incoming bool) firewallMetrics {
@@ -610,7 +646,7 @@ func (f *Firewall) metrics(incoming bool) firewallMetrics {
 	}
 }
 
-// Destroy cleans up any known cyclical references so the object can be free'd my GC. This should be called if a new
+// Destroy cleans up any known cyclical references so the object can be freed by GC. This should be called if a new
 // firewall object is created
 func (f *Firewall) Destroy() {
 	//TODO: clean references if/when needed
@@ -724,18 +760,6 @@ func (f *Firewall) packetTimeout(fp firewall.Packet) time.Duration {
 		timeout = f.DefaultTimeout
 	}
 	return timeout
-}
-
-func (f *Firewall) dupeConn(fp firewall.Packet, c *conn) {
-	conntrack := f.Conntrack
-	conntrack.Lock()
-	if _, ok := conntrack.Conns[fp]; !ok {
-		conntrack.TimerWheel.Advance(time.Now())
-		conntrack.TimerWheel.Add(fp, f.packetTimeout(fp))
-	}
-
-	conntrack.Conns[fp] = c
-	conntrack.Unlock()
 }
 
 func (f *Firewall) addConn(fp firewall.Packet, incoming bool) *conn {

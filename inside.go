@@ -48,24 +48,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		return
 	}
 
-	var hostinfo *HostInfo
-	var ready bool
-
-	snatMode := f.firewall.snatAddr.IsValid() && fwPacket.RemoteAddr == f.firewall.snatAddr
-
-	if snatMode {
-		//todo unsnat happens here, would be nice to not
-		destVpnAddr := f.firewall.unSnat(packet, fwPacket, nil) //todo bail if we can't unsnat?
-		if destVpnAddr.IsValid() {
-			hostinfo, ready = f.getOrHandshakeNoRouting(destVpnAddr, func(hh *HandshakeHostInfo) {
-				hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
-			})
-		} //otherwise, hostinfo will be nil
-	} else { //if we didn't need to unsnat
-		hostinfo, ready = f.getOrHandshakeConsiderRouting(fwPacket, func(hh *HandshakeHostInfo) {
-			hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
-		})
-	}
+	hostinfo, ready := f.getHostinfo(packet, fwPacket)
 
 	if hostinfo == nil {
 		f.rejectInside(packet, out, q)
@@ -92,6 +75,26 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 				WithField("reason", dropReason).
 				Debugln("dropping outbound packet")
 		}
+	}
+}
+
+func (f *Interface) getHostinfo(packet []byte, fwPacket *firewall.Packet) (*HostInfo, bool) {
+	if f.firewall.ShouldUnSNAT(fwPacket) {
+		//todo unsnat packet re-writing also happens here, would be nice to not,
+		//todo but we need to do the unsnat lookup to find the hostinfo so we can run the firewall checks
+		destVpnAddr := f.firewall.unSnat(packet, fwPacket) //todo bail if we can't unsnat?
+		if destVpnAddr.IsValid() {
+			//because this was a snatted packet, we know it has an on-overlay destination, so no routing should be required.
+			return f.getOrHandshakeNoRouting(destVpnAddr, func(hh *HandshakeHostInfo) {
+				hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
+			})
+		} else {
+			return nil, false
+		}
+	} else { //if we didn't need to unsnat
+		return f.getOrHandshakeConsiderRouting(fwPacket, func(hh *HandshakeHostInfo) {
+			hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
+		})
 	}
 }
 
