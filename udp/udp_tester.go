@@ -135,6 +135,10 @@ func (u *TesterConn) SupportsGSO() bool {
 	return false
 }
 
+func (u *TesterConn) SupportsGRO() bool {
+	return false
+}
+
 func (u *TesterConn) Rebind() error {
 	return nil
 }

@@ -28,6 +28,7 @@ type Conn interface {
 	ReloadConfig(c *config.C)
 	SupportsMultipleReaders() bool
 	SupportsGSO() bool
+	SupportsGRO() bool
 	Close() error
 }
 
@@ -46,6 +47,9 @@ func (NoopConn) SupportsMultipleReaders() bool {
 	return false
 }
 func (NoopConn) SupportsGSO() bool {
+	return false
+}
+func (NoopConn) SupportsGRO() bool {
 	return false
 }
 func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {

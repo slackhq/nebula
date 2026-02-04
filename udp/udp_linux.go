@@ -24,6 +24,7 @@ type StdConn struct {
 	l            *logrus.Logger
 	batch        int
 	gsoSupported bool
+	groSupported bool
 }
 
 func maybeIPV4(ip net.IP) (net.IP, bool) {
@@ -41,9 +42,21 @@ func supportsUDPOffload(fd int) bool {
 	return err == nil
 }
 
+// supportsUDPGRO checks if the kernel supports UDP GRO (Generic Receive Offload)
+// and attempts to enable it on the socket.
+func supportsUDPGRO(fd int) bool {
+	// Try to enable UDP_GRO
+	err := unix.SetsockoptInt(fd, unix.IPPROTO_UDP, unix.UDP_GRO, 1)
+	return err == nil
+}
+
 const (
-	// Maximum number of datagrams that can be coalesced with GSO
+	// Maximum number of datagrams that can be coalesced with GSO/GRO
 	udpSegmentMaxDatagrams = 64
+
+	// Maximum size of a GRO coalesced packet (64KB is the practical limit)
+	// This is udpSegmentMaxDatagrams * MTU but capped at 65535
+	groMaxPacketSize = 65535
 )
 
 // setGSOSize writes a UDP_SEGMENT control message to the provided buffer
@@ -60,6 +73,38 @@ func setGSOSize(control []byte, gsoSize uint16) int {
 	binary.NativeEndian.PutUint16(control[unix.SizeofCmsghdr:], gsoSize)
 
 	return unix.CmsgSpace(2) // aligned size
+}
+
+// getGROSize parses a control message buffer to extract the UDP_GRO segment size.
+// Returns 0 if no GRO control message is present (meaning the packet is not coalesced).
+func getGROSize(control []byte, controlLen int) uint16 {
+	if controlLen < unix.SizeofCmsghdr {
+		return 0
+	}
+
+	// Parse control messages
+	for offset := 0; offset < controlLen; {
+		if offset+unix.SizeofCmsghdr > controlLen {
+			break
+		}
+
+		cmsg := (*unix.Cmsghdr)(unsafe.Pointer(&control[offset]))
+		cmsgDataLen := int(cmsg.Len) - unix.SizeofCmsghdr
+		if cmsgDataLen < 0 {
+			break
+		}
+
+		if cmsg.Level == unix.IPPROTO_UDP && cmsg.Type == unix.UDP_GRO {
+			if cmsgDataLen >= 2 {
+				return binary.NativeEndian.Uint16(control[offset+unix.SizeofCmsghdr:])
+			}
+		}
+
+		// Move to next control message (aligned)
+		offset += unix.CmsgSpace(cmsgDataLen)
+	}
+
+	return 0
 }
 
 func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
@@ -104,7 +149,12 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 		l.Info("UDP GSO offload is supported")
 	}
 
-	return &StdConn{sysFd: fd, isV4: ip.Is4(), l: l, batch: batch, gsoSupported: gsoSupported}, err
+	groSupported := supportsUDPGRO(fd)
+	if groSupported {
+		l.Info("UDP GRO offload is supported and enabled")
+	}
+
+	return &StdConn{sysFd: fd, isV4: ip.Is4(), l: l, batch: batch, gsoSupported: gsoSupported, groSupported: groSupported}, err
 }
 
 func (u *StdConn) SupportsMultipleReaders() bool {
@@ -113,6 +163,10 @@ func (u *StdConn) SupportsMultipleReaders() bool {
 
 func (u *StdConn) SupportsGSO() bool {
 	return u.gsoSupported
+}
+
+func (u *StdConn) SupportsGRO() bool {
+	return u.groSupported
 }
 
 func (u *StdConn) Rebind() error {
@@ -164,13 +218,27 @@ func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 func (u *StdConn) ListenOut(r EncReader) {
 	var ip netip.Addr
 
-	msgs, buffers, names := u.PrepareRawMessages(u.batch)
+	msgs, buffers, names, controls := u.PrepareRawMessages(u.batch)
 	read := u.ReadMulti
 	if u.batch == 1 {
 		read = u.ReadSingle
 	}
 
+	// Store the original control buffer size for resetting after each read
+	controlLen := 0
+	if u.groSupported && len(controls) > 0 && len(controls[0]) > 0 {
+		controlLen = len(controls[0])
+	}
+
 	for {
+		// Reset Controllen before each read - the kernel updates this field
+		// after recvmsg to indicate actual received control data length
+		if controlLen > 0 {
+			for i := range msgs {
+				setMsghdrControllen(&msgs[i].Hdr, controlLen)
+			}
+		}
+
 		n, err := read(msgs)
 		if err != nil {
 			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
@@ -178,13 +246,36 @@ func (u *StdConn) ListenOut(r EncReader) {
 		}
 
 		for i := 0; i < n; i++ {
-			// Its ok to skip the ok check here, the slicing is the only error that can occur and it will panic
+			// Extract source address
 			if u.isV4 {
 				ip, _ = netip.AddrFromSlice(names[i][4:8])
 			} else {
 				ip, _ = netip.AddrFromSlice(names[i][8:24])
 			}
-			r(netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])), buffers[i][:msgs[i].Len])
+			srcAddr := netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4]))
+
+			// Check for GRO coalesced packet
+			totalLen := int(msgs[i].Len)
+			segmentSize := uint16(0)
+			if controlLen > 0 {
+				segmentSize = getGROSize(controls[i], getMsghdrControllen(&msgs[i].Hdr))
+			}
+
+			if segmentSize > 0 && totalLen > int(segmentSize) {
+				// This is a GRO coalesced packet - split it into individual datagrams
+				for offset := 0; offset < totalLen; {
+					packetLen := int(segmentSize)
+					if offset+packetLen > totalLen {
+						// Last packet may be smaller
+						packetLen = totalLen - offset
+					}
+					r(srcAddr, buffers[i][offset:offset+packetLen])
+					offset += packetLen
+				}
+			} else {
+				// Single packet, no coalescing
+				r(srcAddr, buffers[i][:totalLen])
+			}
 		}
 	}
 }
@@ -519,20 +610,23 @@ func (u *StdConn) sendGSO(pkts []BatchPacket, dst netip.AddrPort, segmentSize, t
 	hdr.Control = &control[0]
 	setMsghdrControllen(&hdr, controlLen)
 
+	// Declare sockaddr at function scope so it remains valid for the syscall
+	// (must not go out of scope before the syscall is made)
+	var rsa4 unix.RawSockaddrInet4
+	var rsa6 unix.RawSockaddrInet6
+
 	// Set destination address
 	if u.isV4 {
-		var rsa unix.RawSockaddrInet4
-		rsa.Family = unix.AF_INET
-		rsa.Addr = dst.Addr().As4()
-		binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], dst.Port())
-		hdr.Name = (*byte)(unsafe.Pointer(&rsa))
+		rsa4.Family = unix.AF_INET
+		rsa4.Addr = dst.Addr().As4()
+		binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa4.Port))[:], dst.Port())
+		hdr.Name = (*byte)(unsafe.Pointer(&rsa4))
 		hdr.Namelen = unix.SizeofSockaddrInet4
 	} else {
-		var rsa unix.RawSockaddrInet6
-		rsa.Family = unix.AF_INET6
-		rsa.Addr = dst.Addr().As16()
-		binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], dst.Port())
-		hdr.Name = (*byte)(unsafe.Pointer(&rsa))
+		rsa6.Family = unix.AF_INET6
+		rsa6.Addr = dst.Addr().As16()
+		binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa6.Port))[:], dst.Port())
+		hdr.Name = (*byte)(unsafe.Pointer(&rsa6))
 		hdr.Namelen = unix.SizeofSockaddrInet6
 	}
 

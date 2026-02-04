@@ -336,6 +336,10 @@ func (u *RIOConn) SupportsGSO() bool {
 	return false
 }
 
+func (u *RIOConn) SupportsGRO() bool {
+	return false
+}
+
 func (u *RIOConn) Rebind() error {
 	return nil
 }
