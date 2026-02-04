@@ -250,7 +250,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,
-		tunBatchSize:          c.GetInt("tun.batch", 64),
+		tunBatchSize:          c.GetInt("listen.batch", 64),
 	}
 
 	var ifce *Interface

@@ -27,6 +27,7 @@ type Conn interface {
 	WriteBatch(pkts []BatchPacket) (int, error)
 	ReloadConfig(c *config.C)
 	SupportsMultipleReaders() bool
+	SupportsGSO() bool
 	Close() error
 }
 
@@ -42,6 +43,9 @@ func (NoopConn) ListenOut(_ EncReader) {
 	return
 }
 func (NoopConn) SupportsMultipleReaders() bool {
+	return false
+}
+func (NoopConn) SupportsGSO() bool {
 	return false
 }
 func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {

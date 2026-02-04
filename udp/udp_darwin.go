@@ -188,6 +188,10 @@ func (u *StdConn) SupportsMultipleReaders() bool {
 	return false
 }
 
+func (u *StdConn) SupportsGSO() bool {
+	return false
+}
+
 func (u *StdConn) Rebind() error {
 	var err error
 	if u.isV4 {

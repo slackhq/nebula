@@ -332,6 +332,10 @@ func (u *RIOConn) SupportsMultipleReaders() bool {
 	return false
 }
 
+func (u *RIOConn) SupportsGSO() bool {
+	return false
+}
+
 func (u *RIOConn) Rebind() error {
 	return nil
 }

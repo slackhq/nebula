@@ -131,6 +131,10 @@ func (u *TesterConn) SupportsMultipleReaders() bool {
 	return false
 }
 
+func (u *TesterConn) SupportsGSO() bool {
+	return false
+}
+
 func (u *TesterConn) Rebind() error {
 	return nil
 }

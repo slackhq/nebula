@@ -67,3 +67,7 @@ func setIovecLen(iov *iovec, l int) {
 func setMsghdrIovlen(hdr *msghdr, l int) {
 	hdr.Iovlen = uint64(l)
 }
+
+func setMsghdrControllen(hdr *msghdr, l int) {
+	hdr.Controllen = uint64(l)
+}
