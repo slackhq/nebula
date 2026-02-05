@@ -37,17 +37,18 @@ docker run --name host4 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN -
 sleep 1
 
 # grab tcpdump pcaps for debugging
-docker exec lighthouse1 tcpdump -i nebula1 -q -w - -U 2>logs/lighthouse1.inside.log >logs/lighthouse1.inside.pcap &
+docker exec lighthouse1 tcpdump -i tun0 -q -w - -U 2>logs/lighthouse1.inside.log >logs/lighthouse1.inside.pcap &
 docker exec lighthouse1 tcpdump -i eth0 -q -w - -U 2>logs/lighthouse1.outside.log >logs/lighthouse1.outside.pcap &
-docker exec host2 tcpdump -i nebula1 -q -w - -U 2>logs/host2.inside.log >logs/host2.inside.pcap &
+docker exec host2 tcpdump -i tun0 -q -w - -U 2>logs/host2.inside.log >logs/host2.inside.pcap &
 docker exec host2 tcpdump -i eth0 -q -w - -U 2>logs/host2.outside.log >logs/host2.outside.pcap &
-docker exec host3 tcpdump -i nebula1 -q -w - -U 2>logs/host3.inside.log >logs/host3.inside.pcap &
+docker exec host3 tcpdump -i tun0 -q -w - -U 2>logs/host3.inside.log >logs/host3.inside.pcap &
 docker exec host3 tcpdump -i eth0 -q -w - -U 2>logs/host3.outside.log >logs/host3.outside.pcap &
-docker exec host4 tcpdump -i nebula1 -q -w - -U 2>logs/host4.inside.log >logs/host4.inside.pcap &
+docker exec host4 tcpdump -i tun0 -q -w - -U 2>logs/host4.inside.log >logs/host4.inside.pcap &
 docker exec host4 tcpdump -i eth0 -q -w - -U 2>logs/host4.outside.log >logs/host4.outside.pcap &
 
 docker exec host2 ncat -nklv 0.0.0.0 2000 &
 docker exec host3 ncat -nklv 0.0.0.0 2000 &
+docker exec host4 ncat -nkluv 0.0.0.0 4000 &
 docker exec host2 ncat -e '/usr/bin/echo host2' -nkluv 0.0.0.0 3000 &
 docker exec host3 ncat -e '/usr/bin/echo host3' -nkluv 0.0.0.0 3000 &
 
@@ -119,11 +120,11 @@ echo
 echo " *** Testing conntrack"
 echo
 set -x
-# host2 can ping host3 now that host3 pinged it first
-docker exec host2 ping -c1 192.168.100.3
-# host4 can ping host2 once conntrack established
-docker exec host2 ping -c1 192.168.100.4
-docker exec host4 ping -c1 192.168.100.2
+
+# host2 speaking to host4 on UDP 4000 should allow it to reply, when firewall rules would normally not permit this
+docker exec host2 sh -c "/usr/bin/echo host2 | ncat -nuv 192.168.100.4 4000"
+docker exec host2 ncat -e '/usr/bin/echo helloagainfromhost2' -nkluv 0.0.0.0 4000 &
+docker exec host4 sh -c "/usr/bin/echo host4 | ncat -nuv 192.168.100.2 4000"
 
 docker exec host4 sh -c 'kill 1'
 docker exec host3 sh -c 'kill 1'

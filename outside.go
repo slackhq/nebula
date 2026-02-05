@@ -329,7 +329,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 		switch proto {
 		case layers.IPProtocolICMPv6, layers.IPProtocolESP, layers.IPProtocolNoNextHeader:
 			fp.Protocol = uint8(proto)
-			fp.RemotePort = 0
+			fp.RemotePort = 0 //we don't attempt to parse ICMPv6 because we don't SNAT it
 			fp.LocalPort = 0
 			fp.Fragment = false
 			return nil
@@ -434,22 +434,28 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 	if incoming {
 		fp.RemoteAddr, _ = netip.AddrFromSlice(data[12:16])
 		fp.LocalAddr, _ = netip.AddrFromSlice(data[16:20])
-		if fp.Fragment || fp.Protocol == firewall.ProtoICMP {
+		if fp.Fragment {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
+		} else if fp.Protocol == firewall.ProtoICMP { //note that orientation doesn't matter on ICMP
+			fp.RemotePort = binary.BigEndian.Uint16(data[ihl+4 : ihl+6]) //identifier
+			fp.LocalPort = uint16(data[ihl+1])                           //code
 		} else {
-			fp.RemotePort = binary.BigEndian.Uint16(data[ihl : ihl+2])
-			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4])
+			fp.RemotePort = binary.BigEndian.Uint16(data[ihl : ihl+2])  //src port
+			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4]) //dst port
 		}
 	} else {
 		fp.LocalAddr, _ = netip.AddrFromSlice(data[12:16])
 		fp.RemoteAddr, _ = netip.AddrFromSlice(data[16:20])
-		if fp.Fragment || fp.Protocol == firewall.ProtoICMP {
+		if fp.Fragment {
 			fp.RemotePort = 0
 			fp.LocalPort = 0
+		} else if fp.Protocol == firewall.ProtoICMP { //note that orientation doesn't matter on ICMP
+			fp.RemotePort = binary.BigEndian.Uint16(data[ihl+4 : ihl+6]) //identifier
+			fp.LocalPort = uint16(data[ihl+1])                           //code
 		} else {
-			fp.LocalPort = binary.BigEndian.Uint16(data[ihl : ihl+2])
-			fp.RemotePort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4])
+			fp.LocalPort = binary.BigEndian.Uint16(data[ihl : ihl+2])    //src port
+			fp.RemotePort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4]) //dst port
 		}
 	}
 
@@ -494,7 +500,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return false
 	}
 
-	dropReason := f.firewall.Drop(*fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(*fwPacket, out, true, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason != nil {
 		// NOTE: We give `packet` as the `out` here since we already decrypted from it and we don't need it anymore
 		// This gives us a buffer to build the reject packet in
