@@ -24,6 +24,7 @@ import (
 )
 
 var ErrCannotSNAT = errors.New("cannot snat this packet")
+var ErrSNATIdentityMismatch = errors.New("refusing to SNAT for mismatched host")
 
 type FirewallInterface interface {
 	AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr string, caName string, caSha string) error
@@ -39,6 +40,9 @@ type snatInfo struct {
 }
 
 func (s *snatInfo) Valid() bool {
+	if s == nil {
+		return false
+	}
 	return s.Src.IsValid()
 }
 
@@ -52,7 +56,7 @@ type conn struct {
 	rulesVersion uint16
 
 	//for SNAT support
-	snat snatInfo
+	snat *snatInfo
 }
 
 // TODO: need conntrack max tracked connections handling
@@ -500,20 +504,26 @@ func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo
 		return ErrCannotSNAT
 	}
 	if c.snat.Valid() {
-		//old flow
+		//old flow: make sure it came from the right place
+		if !slices.Contains(hostinfo.vpnAddrs, c.snat.SrcVpnIp) {
+			return ErrSNATIdentityMismatch
+		}
 		fp.RemoteAddr = f.snatAddr
 		fp.RemotePort = c.snat.SnatPort
 	} else if hostinfo.vpnAddrs[0].Is6() {
 		//we got a new flow
-		c.snat.Src = netip.AddrPortFrom(fp.RemoteAddr, fp.RemotePort)
-		c.snat.SrcVpnIp = hostinfo.vpnAddrs[0]
+		c.snat = &snatInfo{
+			Src:      netip.AddrPortFrom(fp.RemoteAddr, fp.RemotePort),
+			SrcVpnIp: hostinfo.vpnAddrs[0],
+		}
 		fp.RemoteAddr = f.snatAddr
 		//find a new port to use, if needed
 		err := f.findUsableSNATPort(fp, c)
 		if err != nil {
+			c.snat = nil
 			return err
 		}
-		c.snat.SnatPort = fp.RemotePort
+		c.snat.SnatPort = fp.RemotePort //may have been updated inside f.findUsableSNATPort
 	} else {
 		return ErrCannotSNAT
 	}
@@ -523,44 +533,51 @@ func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo
 	return nil
 }
 
-func (f *Firewall) checkIPMatchesCert(h *HostInfo, fp firewall.Packet) (NetworkType, error) {
-	specialSnatMode := fp.IsIPv4() && h.HasOnlyV6Addresses() //a host with a v4 assignment in their cert must always use it
-
+func (f *Firewall) identifyNetworkType(h *HostInfo, fp firewall.Packet) NetworkType {
 	if h.networks == nil {
 		// Simple case: Certificate has one address and no unsafe networks
 		if h.vpnAddrs[0] == fp.RemoteAddr {
-			return NetworkTypeVPN, nil //easy!
-		} else if specialSnatMode {
-			return NetworkTypeUncheckedSNATPeer, nil
+			return NetworkTypeVPN
+		} else if fp.IsIPv4() && h.HasOnlyV6Addresses() {
+			return NetworkTypeUncheckedSNATPeer
 		} else {
-			return NetworkTypeUnknown, ErrInvalidRemoteIP
+			return NetworkTypeInvalidPeer
 		}
+	} else if nwType, ok := h.networks.Lookup(fp.RemoteAddr); ok {
+		//todo check for if fp.RemoteAddr is our f.snatAddr here too? Does that need a special case?
+		return nwType //will return NetworkTypeVPN or NetworkTypeUnsafe
+	} else if fp.IsIPv4() && h.HasOnlyV6Addresses() { //todo surely I'm smart enough to avoid writing these branches twice
+		return NetworkTypeUncheckedSNATPeer
 	} else {
-		//todo check for srcsnortaddr here too?
-		nwType, ok := h.networks.Lookup(fp.RemoteAddr)
-		if !ok {
-			if specialSnatMode {
-				return NetworkTypeUncheckedSNATPeer, nil
-			}
-			return NetworkTypeUnknown, ErrInvalidRemoteIP
+		return NetworkTypeInvalidPeer
+	}
+}
+
+func (f *Firewall) allowNetworkType(nwType NetworkType) error {
+	switch nwType {
+	case NetworkTypeVPN:
+		return nil
+	case NetworkTypeInvalidPeer:
+		return ErrInvalidRemoteIP
+	case NetworkTypeVPNPeer:
+		//todo we might need a specialSnatMode case in here to handle routers with v4 addresses when we don't also have a v4 address?
+		return ErrPeerRejected // reject for now, one day this may have different FW rules
+	case NetworkTypeUnsafe:
+		return nil // nothing special, one day this may have different FW rules
+	case NetworkTypeUncheckedSNATPeer:
+		if f.snatAddr.IsValid() {
+			return nil //todo is this enough?
+		} else {
+			return ErrInvalidRemoteIP
 		}
-		switch nwType {
-		case NetworkTypeVPN:
-			return nwType, nil
-		case NetworkTypeVPNPeer:
-			//todo we might need a specialSnatMode case in here to handle routers with v4 addresses when we don't also have a v4 address?
-			return nwType, ErrPeerRejected // reject for now, one day this may have different FW rules
-		case NetworkTypeUnsafe:
-			return nwType, nil // nothing special, one day this may have different FW rules
-		default:
-			return NetworkTypeUnknown, ErrUnknownNetworkType //should never happen
-		}
+	default:
+		return ErrUnknownNetworkType //should never happen
 	}
 }
 
 func (f *Firewall) willingToHandleLocalAddr(incoming bool, fp firewall.Packet, remoteNwType NetworkType) error {
 	if f.routableNetworks.Contains(fp.LocalAddr) {
-		return nil //easy
+		return nil //easy, this should handle NetworkTypeVPN in all cases, and NetworkTypeUnsafe on the router side
 	}
 
 	//watch out, when incoming, this function decides if we will deliver a packet locally
@@ -569,6 +586,7 @@ func (f *Firewall) willingToHandleLocalAddr(incoming bool, fp firewall.Packet, r
 	// we never want to accept unconntracked inbound traffic from these network types, but outbound is okay.
 	// It's the recipient's job to validate and accept or deny the packet.
 	case NetworkTypeUncheckedSNATPeer, NetworkTypeUnsafe:
+		//NetworkTypeUnsafe needed here to allow inbound from an unsafe-router
 		if incoming {
 			return ErrInvalidLocalIP
 		}
@@ -609,14 +627,14 @@ func (f *Firewall) Drop(fp firewall.Packet, pkt []byte, incoming bool, h *HostIn
 	}
 
 	// Make sure remote address matches nebula certificate, and determine how to treat it
-	nwType, err := f.checkIPMatchesCert(h, fp)
-	if err != nil {
+	remoteNetworkType := f.identifyNetworkType(h, fp)
+	if err := f.allowNetworkType(remoteNetworkType); err != nil {
 		f.metrics(incoming).droppedRemoteAddr.Inc(1)
 		return err
 	}
 
 	// Make sure we are supposed to be handling this local ip address
-	if err = f.willingToHandleLocalAddr(incoming, fp, nwType); err != nil {
+	if err := f.willingToHandleLocalAddr(incoming, fp, remoteNetworkType); err != nil {
 		f.metrics(incoming).droppedLocalAddr.Inc(1)
 		return err
 	}
@@ -630,7 +648,7 @@ func (f *Firewall) Drop(fp firewall.Packet, pkt []byte, incoming bool, h *HostIn
 	// We always want to conntrack since it is a faster operation
 	c = f.addConn(fp, incoming)
 
-	if incoming && nwType == NetworkTypeUncheckedSNATPeer {
+	if incoming && remoteNetworkType == NetworkTypeUncheckedSNATPeer {
 		return f.applySnat(pkt, &fp, c, h)
 	} else {
 		//outgoing snat is handled before this function is called

@@ -226,7 +226,7 @@ const (
 	NetworkTypeUnsafe
 	// NetworkTypeUncheckedSNATPeer is used to indicate traffic we're willing to route, but never deliver to a NetworkTypeVPN
 	NetworkTypeUncheckedSNATPeer
-	//todo consider NetworkTypeLinkLocal or NetworkTypeSNAT
+	NetworkTypeInvalidPeer
 )
 
 type HostInfo struct {
