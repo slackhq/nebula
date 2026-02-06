@@ -597,3 +597,31 @@ func TestCertificateV2_Verify_Subnets(t *testing.T) {
 	_, err = caPool.VerifyCertificate(time.Now(), c)
 	require.NoError(t, err)
 }
+
+func TestCertificateV2_CurveMismatch(t *testing.T) {
+	caIp1 := mustParsePrefixUnmapped("10.0.0.0/16")
+	caIp2 := mustParsePrefixUnmapped("192.168.0.0/24")
+	ca, _, caKey, _ := NewTestCaCert(Version2, Curve_P256, time.Now(), time.Now().Add(10*time.Minute), []netip.Prefix{caIp1, caIp2}, nil, []string{"test"})
+
+	caPem, err := ca.MarshalPEM()
+	require.NoError(t, err)
+
+	caPool := NewCAPool()
+	b, err := caPool.AddCAFromPEM(caPem)
+	require.NoError(t, err)
+	assert.Empty(t, b)
+
+	// ip is outside the network
+	cIp1 := mustParsePrefixUnmapped("10.0.0.1/24")
+	c, _, _, _ := NewTestCert(Version2, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), []netip.Prefix{cIp1}, nil, []string{"test"})
+
+	fp, _ := c.Fingerprint()
+	_, err = caPool.verify(c, time.Now(), fp, c.Issuer())
+	require.NoError(t, err)
+	//
+	c2 := c.(*certificateV2)
+	c2.curve = Curve_CURVE25519
+	fp, _ = c.Fingerprint()
+	_, err = caPool.verify(c, time.Now(), fp, c.Issuer())
+	require.Error(t, err)
+}
