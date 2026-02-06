@@ -141,10 +141,23 @@ func (ncp *CAPool) VerifyCertificate(now time.Time, c Certificate) (*CachedCerti
 		return nil, err
 	}
 
+	// Pre nebula v1.10.3 could generate signatures in either high or low s form and validation
+	// of signatures allowed for either. Nebula v1.10.3 and beyond clamps signature generation to low-s form
+	// but validation still allows for either. Since a change in the signature bytes affects the fingerprint, we
+	// need to test both forms until such a time comes that we enforce low-s form on signature validation.
+	fp2, err := CalculateAlternateFingerprint(c)
+	if err != nil {
+		return nil, fmt.Errorf("could not calculate alternate fingerprint to verify: %w", err)
+	}
+	if fp2 != "" && ncp.IsBlocklisted(fp2) {
+		return nil, ErrBlockListed
+	}
+
 	cc := CachedCertificate{
 		Certificate:       c,
 		InvertedGroups:    make(map[string]struct{}),
 		Fingerprint:       fp,
+		fingerprint2:      fp2,
 		signerFingerprint: signer.Fingerprint,
 	}
 
@@ -158,6 +171,11 @@ func (ncp *CAPool) VerifyCertificate(now time.Time, c Certificate) (*CachedCerti
 // VerifyCachedCertificate is the same as VerifyCertificate other than it operates on a pre-verified structure and
 // is a cheaper operation to perform as a result.
 func (ncp *CAPool) VerifyCachedCertificate(now time.Time, c *CachedCertificate) error {
+	// Check any available alternate fingerprint forms for this certificate, re P256 high-s/low-s
+	if c.fingerprint2 != "" && ncp.IsBlocklisted(c.fingerprint2) {
+		return ErrBlockListed
+	}
+
 	_, err := ncp.verify(c.Certificate, now, c.Fingerprint, c.signerFingerprint)
 	return err
 }

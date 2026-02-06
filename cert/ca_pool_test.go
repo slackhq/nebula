@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slackhq/nebula/cert/p256"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -170,6 +171,15 @@ func TestCertificateV1_VerifyP256(t *testing.T) {
 	_, err = caPool.VerifyCertificate(time.Now(), c)
 	require.EqualError(t, err, "certificate is in the block list")
 
+	// Create a copy of the cert and swap to the alternate form for the signature
+	nc := c.Copy()
+	b, err := p256.Swap(c.Signature())
+	require.NoError(t, err)
+	require.NoError(t, nc.(*certificateV1).setSignature(b))
+
+	_, err = caPool.VerifyCertificate(time.Now(), nc)
+	require.EqualError(t, err, "certificate is in the block list")
+
 	caPool.ResetCertBlocklist()
 	_, err = caPool.VerifyCertificate(time.Now(), c)
 	require.NoError(t, err)
@@ -187,7 +197,7 @@ func TestCertificateV1_VerifyP256(t *testing.T) {
 	require.NoError(t, err)
 
 	caPool = NewCAPool()
-	b, err := caPool.AddCAFromPEM(caPem)
+	b, err = caPool.AddCAFromPEM(caPem)
 	require.NoError(t, err)
 	assert.Empty(t, b)
 
@@ -196,7 +206,17 @@ func TestCertificateV1_VerifyP256(t *testing.T) {
 	})
 
 	c, _, _, _ = NewTestCert(Version1, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, []string{"test1"})
-	_, err = caPool.VerifyCertificate(time.Now(), c)
+	cc, err := caPool.VerifyCertificate(time.Now(), c)
+	require.NoError(t, err)
+
+	// Reset the blocklist and block the alternate form fingerprint
+	caPool.ResetCertBlocklist()
+	caPool.BlocklistFingerprint(cc.fingerprint2)
+	err = caPool.VerifyCachedCertificate(time.Now(), cc)
+	require.EqualError(t, err, "certificate is in the block list")
+
+	caPool.ResetCertBlocklist()
+	err = caPool.VerifyCachedCertificate(time.Now(), cc)
 	require.NoError(t, err)
 }
 
@@ -394,6 +414,15 @@ func TestCertificateV2_VerifyP256(t *testing.T) {
 	_, err = caPool.VerifyCertificate(time.Now(), c)
 	require.EqualError(t, err, "certificate is in the block list")
 
+	// Create a copy of the cert and swap to the alternate form for the signature
+	nc := c.Copy()
+	b, err := p256.Swap(c.Signature())
+	require.NoError(t, err)
+	require.NoError(t, nc.(*certificateV2).setSignature(b))
+
+	_, err = caPool.VerifyCertificate(time.Now(), nc)
+	require.EqualError(t, err, "certificate is in the block list")
+
 	caPool.ResetCertBlocklist()
 	_, err = caPool.VerifyCertificate(time.Now(), c)
 	require.NoError(t, err)
@@ -411,7 +440,7 @@ func TestCertificateV2_VerifyP256(t *testing.T) {
 	require.NoError(t, err)
 
 	caPool = NewCAPool()
-	b, err := caPool.AddCAFromPEM(caPem)
+	b, err = caPool.AddCAFromPEM(caPem)
 	require.NoError(t, err)
 	assert.Empty(t, b)
 
@@ -420,7 +449,17 @@ func TestCertificateV2_VerifyP256(t *testing.T) {
 	})
 
 	c, _, _, _ = NewTestCert(Version2, Curve_P256, ca, caKey, "test", time.Now(), time.Now().Add(5*time.Minute), nil, nil, []string{"test1"})
-	_, err = caPool.VerifyCertificate(time.Now(), c)
+	cc, err := caPool.VerifyCertificate(time.Now(), c)
+	require.NoError(t, err)
+
+	// Reset the blocklist and block the alternate form fingerprint
+	caPool.ResetCertBlocklist()
+	caPool.BlocklistFingerprint(cc.fingerprint2)
+	err = caPool.VerifyCachedCertificate(time.Now(), cc)
+	require.EqualError(t, err, "certificate is in the block list")
+
+	caPool.ResetCertBlocklist()
+	err = caPool.VerifyCachedCertificate(time.Now(), cc)
 	require.NoError(t, err)
 }
 
