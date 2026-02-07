@@ -3,14 +3,13 @@ package nebula
 import (
 	"fmt"
 	"net"
-	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
 
-	"github.com/gaissmai/bart"
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 )
 
@@ -19,128 +18,100 @@ import (
 var dnsR *dnsRecords
 var dnsServer *dns.Server
 var dnsAddr string
+var dnsSuffix string
 
 type dnsRecords struct {
 	sync.RWMutex
-	l               *logrus.Logger
-	dnsMap4         map[string]netip.Addr
-	dnsMap6         map[string]netip.Addr
-	hostMap         *HostMap
-	myVpnAddrsTable *bart.Lite
+	l      *logrus.Logger
+	dnsMap map[dns.Question][]dns.RR
 }
 
-func newDnsRecords(l *logrus.Logger, cs *CertState, hostMap *HostMap) *dnsRecords {
+func newDnsRecords(l *logrus.Logger) *dnsRecords {
 	return &dnsRecords{
-		l:               l,
-		dnsMap4:         make(map[string]netip.Addr),
-		dnsMap6:         make(map[string]netip.Addr),
-		hostMap:         hostMap,
-		myVpnAddrsTable: cs.myVpnAddrsTable,
+		l:      l,
+		dnsMap: make(map[dns.Question][]dns.RR),
 	}
 }
 
-func (d *dnsRecords) Query(q uint16, data string) netip.Addr {
-	data = strings.ToLower(data)
-	d.RLock()
-	defer d.RUnlock()
-	switch q {
-	case dns.TypeA:
-		if r, ok := d.dnsMap4[data]; ok {
-			return r
-		}
-	case dns.TypeAAAA:
-		if r, ok := d.dnsMap6[data]; ok {
-			return r
+func (d *dnsRecords) addA(name string, crt cert.Certificate) {
+	q := dns.Question{Name: name, Qclass: dns.ClassINET, Qtype: dns.TypeA}
+	d.dnsMap[q] = nil
+
+	for _, n := range crt.Networks() {
+		if n.Addr().Is4() {
+			qType := dns.TypeToString[q.Qtype]
+			rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", name, qType, n.Addr().String()))
+			if err == nil {
+				d.dnsMap[q] = append(d.dnsMap[q], rr)
+				d.l.Debugf("DNS record added %s", rr.String())
+			}
 		}
 	}
-
-	return netip.Addr{}
 }
 
-func (d *dnsRecords) QueryCert(data string) string {
-	ip, err := netip.ParseAddr(data[:len(data)-1])
-	if err != nil {
-		return ""
-	}
+func (d *dnsRecords) addAAAA(name string, crt cert.Certificate) {
+	q := dns.Question{Name: name, Qclass: dns.ClassINET, Qtype: dns.TypeAAAA}
+	d.dnsMap[q] = nil
 
-	hostinfo := d.hostMap.QueryVpnAddr(ip)
-	if hostinfo == nil {
-		return ""
+	for _, n := range crt.Networks() {
+		if n.Addr().Is6() {
+			qType := dns.TypeToString[q.Qtype]
+			rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", name, qType, n.Addr().String()))
+			if err == nil {
+				d.dnsMap[q] = append(d.dnsMap[q], rr)
+				d.l.Debugf("DNS record added %s", rr.String())
+			}
+		}
 	}
-
-	q := hostinfo.GetCert()
-	if q == nil {
-		return ""
-	}
-
-	b, err := q.Certificate.MarshalJSON()
-	if err != nil {
-		return ""
-	}
-	return string(b)
 }
 
-// Add adds the first IPv4 and IPv6 address that appears in `addresses` as the record for `host`
-func (d *dnsRecords) Add(host string, addresses []netip.Addr) {
-	host = strings.ToLower(host)
+func (d *dnsRecords) addPTR(name string, crt cert.Certificate) {
+	for _, n := range crt.Networks() {
+		arpa, err := dns.ReverseAddr(n.Addr().String())
+		if err == nil {
+			q := dns.Question{Name: arpa, Qclass: dns.ClassINET, Qtype: dns.TypePTR}
+			qType := dns.TypeToString[q.Qtype]
+			rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", arpa, qType, name))
+			if err == nil {
+				d.dnsMap[q] = []dns.RR{rr}
+				d.l.Debugf("DNS record added %s", rr.String())
+			}
+		}
+	}
+}
+
+func (d *dnsRecords) addTXT(name string, crt cert.Certificate) {
+	q := dns.Question{Name: name, Qclass: dns.ClassINET, Qtype: dns.TypeTXT}
+	d.dnsMap[q] = nil
+
+	qType := dns.TypeToString[q.Qtype]
+	rr, err := dns.NewRR(fmt.Sprintf("%s %s \"Name: %v\" \"Networks: %v\" \"Groups: %v\" \"UnsafeNetworks: %v\" \"NotBefore: %v\" \"NotAfter: %v\" \"PublicKey: %x\" \"Issuer: %v\"", name, qType, crt.Name(), crt.Networks(), crt.Groups(), crt.UnsafeNetworks(), crt.NotBefore(), crt.NotAfter(), crt.PublicKey(), crt.Issuer()))
+	if err == nil {
+		d.dnsMap[q] = []dns.RR{rr}
+		d.l.Debugf("DNS record added %s", rr.String())
+	}
+}
+
+func (d *dnsRecords) Add(crt cert.Certificate) {
+	host := dns.Fqdn(strings.ToLower(crt.Name() + dnsSuffix))
+
 	d.Lock()
 	defer d.Unlock()
-	haveV4 := false
-	haveV6 := false
-	for _, addr := range addresses {
-		if addr.Is4() && !haveV4 {
-			d.dnsMap4[host] = addr
-			haveV4 = true
-		} else if addr.Is6() && !haveV6 {
-			d.dnsMap6[host] = addr
-			haveV6 = true
-		}
-		if haveV4 && haveV6 {
-			break
-		}
-	}
+
+	d.addA(host, crt)
+	d.addAAAA(host, crt)
+	d.addPTR(host, crt)
+	d.addTXT(host, crt)
 }
 
-func (d *dnsRecords) isSelfNebulaOrLocalhost(addr string) bool {
-	a, _, _ := net.SplitHostPort(addr)
-	b, err := netip.ParseAddr(a)
-	if err != nil {
-		return false
-	}
-
-	if b.IsLoopback() {
-		return true
-	}
-
-	//if we found it in this table, it's good
-	return d.myVpnAddrsTable.Contains(b)
-}
-
-func (d *dnsRecords) parseQuery(m *dns.Msg, w dns.ResponseWriter) {
+func (d *dnsRecords) parseQuery(m *dns.Msg) {
+	d.RLock()
+	defer d.RUnlock()
 	for _, q := range m.Question {
 		switch q.Qtype {
-		case dns.TypeA, dns.TypeAAAA:
-			qType := dns.TypeToString[q.Qtype]
-			d.l.Debugf("Query for %s %s", qType, q.Name)
-			ip := d.Query(q.Qtype, q.Name)
-			if ip.IsValid() {
-				rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", q.Name, qType, ip))
-				if err == nil {
-					m.Answer = append(m.Answer, rr)
-				}
-			}
-		case dns.TypeTXT:
-			// We only answer these queries from nebula nodes or localhost
-			if !d.isSelfNebulaOrLocalhost(w.RemoteAddr().String()) {
-				return
-			}
-			d.l.Debugf("Query for TXT %s", q.Name)
-			ip := d.QueryCert(q.Name)
-			if ip != "" {
-				rr, err := dns.NewRR(fmt.Sprintf("%s TXT %s", q.Name, ip))
-				if err == nil {
-					m.Answer = append(m.Answer, rr)
-				}
+		case dns.TypeA, dns.TypeAAAA, dns.TypePTR, dns.TypeTXT:
+			if rr, ok := d.dnsMap[q]; ok {
+				m.Answer = append(m.Answer, rr...)
 			}
 		}
 	}
@@ -157,14 +128,18 @@ func (d *dnsRecords) handleDnsRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 	switch r.Opcode {
 	case dns.OpcodeQuery:
-		d.parseQuery(m, w)
+		d.parseQuery(m)
 	}
 
 	w.WriteMsg(m)
 }
 
-func dnsMain(l *logrus.Logger, cs *CertState, hostMap *HostMap, c *config.C) func() {
-	dnsR = newDnsRecords(l, cs, hostMap)
+func dnsMain(l *logrus.Logger, cs *CertState, c *config.C) func() {
+	dnsR = newDnsRecords(l)
+	dnsSuffix = getDnsSuffix(c)
+
+	// Add self to dns records
+	dnsR.Add(cs.GetDefaultCertificate())
 
 	// attach request handler func
 	dns.HandleFunc(".", dnsR.handleDnsRequest)
@@ -185,6 +160,11 @@ func getDnsServerAddr(c *config.C) string {
 		dnsHost = "::"
 	}
 	return net.JoinHostPort(dnsHost, strconv.Itoa(c.GetInt("lighthouse.dns.port", 53)))
+}
+
+func getDnsSuffix(c *config.C) string {
+	suffix := strings.TrimSpace(c.GetString("lighthouse.dns.suffix", ""))
+	return suffix
 }
 
 func startDns(l *logrus.Logger, c *config.C) {
