@@ -81,7 +81,13 @@ type FirewallConntrack struct {
 
 	Conns      map[firewall.Packet]*conn
 	TimerWheel *TimerWheel[firewall.Packet]
+
+	// purgeCounter tracks lookups to trigger periodic purge instead of every lookup
+	purgeCounter uint32
 }
+
+// purgeInterval defines how many lookups between purge attempts
+const conntrackPurgeInterval = 1024
 
 // FirewallTable is the entry point for a rule, the evaluation order is:
 // Proto AND port AND (CA SHA or CA name) AND local CIDR AND (group OR groups OR name OR remote CIDR)
@@ -492,14 +498,17 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 	conntrack := f.Conntrack
 	conntrack.Lock()
 
-	// Purge every time we test
-	ep, has := conntrack.TimerWheel.Purge()
-	if has {
-		f.evict(ep)
+	// Periodic purge instead of every lookup (major CPU savings)
+	conntrack.purgeCounter++
+	if conntrack.purgeCounter >= conntrackPurgeInterval {
+		conntrack.purgeCounter = 0
+		ep, has := conntrack.TimerWheel.Purge()
+		if has {
+			f.evict(ep)
+		}
 	}
 
 	c, ok := conntrack.Conns[fp]
-
 	if !ok {
 		conntrack.Unlock()
 		return false

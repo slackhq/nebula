@@ -1,10 +1,11 @@
-package test
+package device
 
 import (
 	"errors"
 	"io"
 	"net/netip"
 
+	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -38,10 +39,25 @@ func (NoopTun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (NoopTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (NoopTun) NewMultiQueueReader() (overlay.BatchReadWriter, error) {
 	return nil, errors.New("unsupported")
 }
 
 func (NoopTun) Close() error {
 	return nil
+}
+
+// BatchRead implements BatchReadWriter interface
+func (NoopTun) BatchRead(bufs [][]byte, sizes []int) (int, error) {
+	return 0, io.EOF
+}
+
+// WriteBatch implements BatchReadWriter interface
+func (NoopTun) WriteBatch(bufs [][]byte, offset int) (int, error) {
+	return len(bufs), nil
+}
+
+// BatchSize implements BatchReadWriter interface
+func (NoopTun) BatchSize() int {
+	return 1
 }

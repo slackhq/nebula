@@ -109,8 +109,12 @@ func (t *TestTun) Write(b []byte) (n int, err error) {
 		return 0, io.ErrClosedPipe
 	}
 
-	packet := make([]byte, len(b), len(b))
-	copy(packet, b)
+	// Skip virtio header (consistent with production Linux tun)
+	// The buffer b has VirtioNetHdrLen bytes of header followed by the actual packet
+	data := b[VirtioNetHdrLen:]
+
+	packet := make([]byte, len(data))
+	copy(packet, data)
 	t.TxPackets <- packet
 	return len(b), nil
 }
@@ -136,6 +140,34 @@ func (t *TestTun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *TestTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *TestTun) NewMultiQueueReader() (BatchReadWriter, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented")
+}
+
+func (t *TestTun) BatchRead(bufs [][]byte, sizes []int) (int, error) {
+	n, err := t.Read(bufs[0])
+	if err != nil {
+		return 0, err
+	}
+	sizes[0] = n
+	return 1, nil
+}
+
+func (t *TestTun) WriteBatch(bufs [][]byte, offset int) (int, error) {
+	if t.closed.Load() {
+		return 0, io.ErrClosedPipe
+	}
+
+	for _, buf := range bufs {
+		// Strip the header at offset and send directly to channel
+		data := buf[offset:]
+		packet := make([]byte, len(data))
+		copy(packet, data)
+		t.TxPackets <- packet
+	}
+	return len(bufs), nil
+}
+
+func (t *TestTun) BatchSize() int {
+	return 1
 }
