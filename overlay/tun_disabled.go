@@ -8,6 +8,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/routing"
 )
@@ -87,21 +88,45 @@ func (t *disabledTun) handleICMPEchoRequest(b []byte) bool {
 	default:
 		t.l.Debugf("tun_disabled: dropped ICMP Echo Reply response")
 	}
-
+	if t.l.Level >= logrus.DebugLevel {
+		t.l.WithField("raw", prettyPacket(b)).Debugf("Disabled tun responded to ICMP Echo Request")
+	}
 	return true
+}
+
+func (t *disabledTun) handleOtherPackets(b []byte) error {
+	fp := &firewall.Packet{}
+	err := firewall.NewPacket(b, true, fp)
+	if err != nil {
+		return err
+	}
+	out := make([]byte, len(b)) //todo do something!
+
+	// attempt to write it, but don't block
+	select {
+	case t.read <- out:
+	default:
+		t.l.Debugf("tun_disabled: dropped reply")
+	}
+
+	return err
 }
 
 func (t *disabledTun) Write(b []byte) (int, error) {
 	t.rx.Inc(1)
-
-	// Check for ICMP Echo Request before spending time doing the full parsing
 	if t.handleICMPEchoRequest(b) {
+		return len(b), nil
+	}
+	if err := t.handleOtherPackets(b); err != nil {
 		if t.l.Level >= logrus.DebugLevel {
-			t.l.WithField("raw", prettyPacket(b)).Debugf("Disabled tun responded to ICMP Echo Request")
+			t.l.WithField("raw", prettyPacket(b)).WithError(err).Debugf("Disabled tun failed to respond")
 		}
-	} else if t.l.Level >= logrus.DebugLevel {
+		return len(b), nil
+	}
+	if t.l.Level >= logrus.DebugLevel {
 		t.l.WithField("raw", prettyPacket(b)).Debugf("Disabled tun received unexpected payload")
 	}
+
 	return len(b), nil
 }
 
