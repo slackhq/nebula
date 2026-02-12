@@ -105,11 +105,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		// deprecated and undocumented
 		tunQueues := c.GetInt("tun.routines", 1)
 		udpQueues := c.GetInt("listen.routines", 1)
-		if tunQueues > udpQueues {
-			routines = tunQueues
-		} else {
-			routines = udpQueues
-		}
+		routines = max(tunQueues, udpQueues)
 		if routines != 1 {
 			l.WithField("routines", routines).Warn("Setting tun.routines and listen.routines is deprecated. Use `routines` instead")
 		}

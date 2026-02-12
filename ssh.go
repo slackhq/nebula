@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
@@ -831,9 +832,7 @@ func sshPrintRelays(ifce *Interface, fs any, a []string, w sshd.StringWriter) er
 
 	relays := map[uint32]*HostInfo{}
 	ifce.hostMap.Lock()
-	for k, v := range ifce.hostMap.Relays {
-		relays[k] = v
-	}
+	maps.Copy(relays, ifce.hostMap.Relays)
 	ifce.hostMap.Unlock()
 
 	type RelayFor struct {

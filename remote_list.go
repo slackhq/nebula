@@ -404,12 +404,7 @@ func (r *RemoteList) Rebuild(preferredRanges []netip.Prefix) {
 
 // unlockedIsBad assumes you have the write lock and checks if the remote matches any entry in the blocked address list
 func (r *RemoteList) unlockedIsBad(remote netip.AddrPort) bool {
-	for _, v := range r.badRemotes {
-		if v == remote {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(r.badRemotes, remote)
 }
 
 // unlockedSetLearnedV4 assumes you have the write lock and sets the current learned address for this owner and marks the

@@ -804,10 +804,8 @@ func (fr *FirewallRule) isAny(groups []string, host string, cidr string) bool {
 		return true
 	}
 
-	for _, group := range groups {
-		if group == "any" {
-			return true
-		}
+	if slices.Contains(groups, "any") {
+		return true
 	}
 
 	if host == "any" {

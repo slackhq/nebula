@@ -713,21 +713,14 @@ func (lh *LightHouse) unlockedShouldAddV6(vpnAddr netip.Addr, to *V6AddrPort) bo
 
 func (lh *LightHouse) IsLighthouseAddr(vpnAddr netip.Addr) bool {
 	l := lh.GetLighthouses()
-	for i := range l {
-		if l[i] == vpnAddr {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(l, vpnAddr)
 }
 
 func (lh *LightHouse) IsAnyLighthouseAddr(vpnAddrs []netip.Addr) bool {
 	l := lh.GetLighthouses()
 	for i := range vpnAddrs {
-		for j := range l {
-			if l[j] == vpnAddrs[i] {
-				return true
-			}
+		if slices.Contains(l, vpnAddrs[i]) {
+			return true
 		}
 	}
 	return false

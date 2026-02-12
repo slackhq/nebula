@@ -574,7 +574,7 @@ func BenchmarkParseV6(b *testing.B) {
 	}
 
 	evilBytes := buffer.Bytes()
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		evilBytes = append(evilBytes, hopHeader...)
 	}
 	evilBytes = append(evilBytes, lastHopHeader...)

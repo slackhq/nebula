@@ -55,7 +55,7 @@ func (rm *relayManager) setAmRelay(v bool) {
 func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp netip.Addr, remoteIdx *uint32, relayType int, state int) (uint32, error) {
 	hm.Lock()
 	defer hm.Unlock()
-	for i := 0; i < 32; i++ {
+	for range 32 {
 		index, err := generateIndex(l)
 		if err != nil {
 			return 0, err
