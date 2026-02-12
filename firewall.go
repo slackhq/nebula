@@ -340,20 +340,6 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			return fmt.Errorf("%s rule #%v; at least one of host, group, cidr, local_cidr, ca_name, or ca_sha must be provided", table, i)
 		}
 
-		var sPort, errPort string
-		if r.Code != "" {
-			errPort = "code"
-			sPort = r.Code
-		} else {
-			errPort = "port"
-			sPort = r.Port
-		}
-
-		startPort, endPort, err := parsePort(sPort)
-		if err != nil {
-			return fmt.Errorf("%s rule #%v; %s %s", table, i, errPort, err)
-		}
-
 		var proto uint8
 		switch r.Proto {
 		case "any":
@@ -366,6 +352,27 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			proto = firewall.ProtoICMP
 		default:
 			return fmt.Errorf("%s rule #%v; proto was not understood; `%s`", table, i, r.Proto)
+		}
+
+		var startPort, endPort int32
+		if proto == firewall.ProtoICMP {
+			//ICMP traffic doesn't have ports, so we always coerce to "any", even if a value is provided
+			startPort = firewall.PortAny
+			endPort = firewall.PortAny
+		} else {
+			var sPort, errPort string
+			if r.Code != "" {
+				errPort = "code"
+				sPort = r.Code
+			} else {
+				errPort = "port"
+				sPort = r.Port
+			}
+
+			startPort, endPort, err = parsePort(sPort)
+			if err != nil {
+				return fmt.Errorf("%s rule #%v; %s %s", table, i, errPort, err)
+			}
 		}
 
 		if r.Cidr != "" && r.Cidr != "any" {
@@ -658,6 +665,13 @@ func (fp firewallPort) match(p firewall.Packet, incoming bool, c *cert.CachedCer
 	// We don't have any allowed ports, bail
 	if fp == nil {
 		return false
+	}
+
+	// this branch is here to catch traffic from FirewallTable.Any.match and FirewallTable.ICMP.match
+	if p.Protocol == firewall.ProtoICMP || p.Protocol == firewall.ProtoICMPv6 {
+		// port numbers are re-used for connection tracking of ICMP,
+		// but we don't want to actually filter on them.
+		return fp[firewall.PortAny].match(p, c, caPool)
 	}
 
 	var port int32
@@ -1016,6 +1030,10 @@ func (r *rule) sanity() error {
 		if !cidrEmpty {
 			return fmt.Errorf("groups spec [%s] contains the group '\"any\". This rule will ignore the specified cidr %s", r.Groups, r.Cidr)
 		}
+	}
+
+	if r.Code != "" {
+		return fmt.Errorf("code specified as [%s]. Support for 'code' will be dropped in a future release, as it has never been functional", r.Code)
 	}
 
 	//todo alert on cidr-any
