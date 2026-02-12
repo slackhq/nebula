@@ -919,11 +919,11 @@ func TestNewFirewallFromConfig(t *testing.T) {
 
 	// Test code/port error
 	conf = config.NewC(l)
-	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"code": "a", "host": "testh"}}}
+	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"code": "a", "host": "testh", "proto": "any"}}}
 	_, err = NewFirewallFromConfig(l, cs, conf)
 	require.EqualError(t, err, "firewall.outbound rule #0; code was not a number; `a`")
 
-	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"port": "a", "host": "testh"}}}
+	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"port": "a", "host": "testh", "proto": "any"}}}
 	_, err = NewFirewallFromConfig(l, cs, conf)
 	require.EqualError(t, err, "firewall.outbound rule #0; port was not a number; `a`")
 
