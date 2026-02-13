@@ -4,6 +4,7 @@
 package overlay
 
 import (
+	"crypto/rand"
 	"fmt"
 	"io"
 	"net"
@@ -46,6 +47,8 @@ type tun struct {
 	// stored here to make it easier to restore them after a reload
 	routesFromSystem     map[netip.Prefix]routing.Gateways
 	routesFromSystemLock sync.Mutex
+
+	snatAddr netip.Prefix
 
 	l *logrus.Logger
 }
@@ -162,6 +165,59 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []n
 	return t, nil
 }
 
+func (t *tun) prepareSnatAddr(c *config.C, initial bool, routes []Route) netip.Prefix {
+	if !initial {
+		return netip.Prefix{} //I don't wanna think about reloading this yet
+	}
+	if !t.vpnNetworks[0].Addr().Is6() {
+		return netip.Prefix{} //if we have an IPv4 assignment within the overlay, we don't need a snat address
+	}
+
+	addSnatAddr := false
+	for _, un := range t.unsafeNetworks { //if we are an unsafe router for an IPv4 range
+		if un.Addr().Is4() {
+			addSnatAddr = true
+			break
+		}
+	}
+	for _, route := range routes { //or if we have a route defined into an IPv4 range
+		if route.Cidr.Addr().Is4() {
+			addSnatAddr = true //todo should this only apply to unsafe routes?
+			break
+		}
+	}
+	if !addSnatAddr {
+		return netip.Prefix{}
+	}
+
+	var err error
+	out := netip.Addr{}
+	if a := c.GetString("tun.snat_address_for_4over6", ""); a != "" {
+		out, err = netip.ParseAddr(a)
+		if err != nil {
+			t.l.WithField("value", a).WithError(err).Warn("failed to parse tun.snat_address_for_4over6, will use a random value")
+		} else if !out.Is4() || !out.IsLinkLocalUnicast() {
+			t.l.WithField("value", t.snatAddr).Warn("tun.snat_address_for_4over6 must be an IPv4 address")
+		}
+	}
+	if !out.IsValid() {
+		octets := []byte{169, 254, 0, 0}
+		_, _ = rand.Read(octets[2:4])
+		if octets[3] == 0 {
+			octets[3] = 1 //please no .0 addresses
+		} else if octets[2] == 255 && octets[3] == 255 {
+			octets[3] = 254 //please no broadcast addresses
+		}
+		ok := false
+		out, ok = netip.AddrFromSlice(octets)
+		if !ok {
+			t.l.Error("failed to produce a valid IPv4 address for tun.snat_address_for_4over6")
+			return netip.Prefix{}
+		}
+	}
+	return netip.PrefixFrom(out, 32)
+}
+
 func (t *tun) reload(c *config.C, initial bool) error {
 	routeChange, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
 	if err != nil {
@@ -171,6 +227,8 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	if !initial && !routeChange && !c.HasChanged("tun.mtu") {
 		return nil
 	}
+
+	t.snatAddr = t.prepareSnatAddr(c, initial, routes)
 
 	routeTree, err := makeRouteTree(t.l, routes, true)
 	if err != nil {
@@ -314,6 +372,16 @@ func (t *tun) addIPs(link netlink.Link) error {
 			Label: t.vpnNetworks[i].Addr().Zone(),
 		}
 	}
+	if t.snatAddr.IsValid() {
+		newAddrs = append(newAddrs, &netlink.Addr{
+			IPNet: &net.IPNet{
+				IP:   t.snatAddr.Addr().AsSlice(),
+				Mask: net.CIDRMask(t.snatAddr.Bits(), t.snatAddr.Addr().BitLen()),
+			},
+			Label: t.snatAddr.Addr().Zone(),
+		})
+		t.l.WithField("address", t.snatAddr).Info("Adding SNAT address")
+	}
 
 	//add all new addresses
 	for i := range newAddrs {
@@ -402,7 +470,12 @@ func (t *tun) Activate() error {
 	//set route MTU
 	for i := range t.vpnNetworks {
 		if err = t.setDefaultRoute(t.vpnNetworks[i]); err != nil {
-			return fmt.Errorf("failed to set default route MTU: %w", err)
+			return fmt.Errorf("failed to set default route MTU for %s: %w", t.vpnNetworks[i], err)
+		}
+	}
+	if t.snatAddr.IsValid() {
+		if err = t.setDefaultRoute(t.snatAddr); err != nil {
+			return fmt.Errorf("failed to set default route MTU for %s: %w", t.snatAddr, err)
 		}
 	}
 
@@ -430,10 +503,9 @@ func (t *tun) setMTU() {
 }
 
 func (t *tun) setSnatRoute() error {
-	snataddr := netip.MustParsePrefix("169.254.55.96/32") //todo get this from elsewhere? Or maybe we should pick it, and feed it back out to the firewall?
 	dr := &net.IPNet{
-		IP:   snataddr.Masked().Addr().AsSlice(),
-		Mask: net.CIDRMask(snataddr.Bits(), snataddr.Addr().BitLen()),
+		IP:   t.snatAddr.Masked().Addr().AsSlice(),
+		Mask: net.CIDRMask(t.snatAddr.Bits(), t.snatAddr.Addr().BitLen()),
 	}
 
 	nr := netlink.Route{
@@ -526,19 +598,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 		}
 	}
 
-	onlyV6Addresses := false
-	for _, n := range t.vpnNetworks {
-		if n.Addr().Is6() {
-			onlyV6Addresses = true
-			break
-		}
-	}
-
-	if len(t.unsafeNetworks) != 0 && onlyV6Addresses {
-		return t.setSnatRoute()
-	}
-
-	return nil
+	return t.setSnatRoute()
 }
 
 func (t *tun) removeRoutes(routes []Route) {
