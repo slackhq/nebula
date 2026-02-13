@@ -1059,7 +1059,7 @@ func parsePort(s string) (int32, int32, error) {
 	if !strings.Contains(s, `-`) {
 		rPort, err := strconv.Atoi(s)
 		if err != nil {
-			return -2, -2, fmt.Errorf("was not a number; `%s`", s)
+			return notAPort, notAPort, fmt.Errorf("was not a number; `%s`", s)
 		}
 		return int32(rPort), int32(rPort), nil
 	}
