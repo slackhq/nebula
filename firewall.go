@@ -346,20 +346,6 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			return fmt.Errorf("%s rule #%v; at least one of host, group, cidr, local_cidr, ca_name, or ca_sha must be provided", table, i)
 		}
 
-		var proto uint8
-		switch r.Proto {
-		case "any":
-			proto = firewall.ProtoAny
-		case "tcp":
-			proto = firewall.ProtoTCP
-		case "udp":
-			proto = firewall.ProtoUDP
-		case "icmp":
-			proto = firewall.ProtoICMP
-		default:
-			return fmt.Errorf("%s rule #%v; proto was not understood; `%s`", table, i, r.Proto)
-		}
-
 		var sPort, errPort string
 		if r.Code != "" {
 			errPort = "code"
@@ -369,7 +355,28 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			sPort = r.Port
 		}
 
-		startPort, endPort, err := parsePort(sPort)
+		var proto uint8
+		var startPort, endPort int32
+		switch r.Proto {
+		case "any":
+			proto = firewall.ProtoAny
+			startPort, endPort, err = parsePort(sPort)
+		case "tcp":
+			proto = firewall.ProtoTCP
+			startPort, endPort, err = parsePort(sPort)
+		case "udp":
+			proto = firewall.ProtoUDP
+			startPort, endPort, err = parsePort(sPort)
+		case "icmp":
+			proto = firewall.ProtoICMP
+			startPort = firewall.PortAny
+			endPort = firewall.PortAny
+			if sPort != "" {
+				l.WithField("port", sPort).Warn("ignoring port specification for ICMP firewall rule")
+			}
+		default:
+			return fmt.Errorf("%s rule #%v; proto was not understood; `%s`", table, i, r.Proto)
+		}
 		if err != nil {
 			return fmt.Errorf("%s rule #%v; %s %s", table, i, errPort, err)
 		}
