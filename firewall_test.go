@@ -87,9 +87,10 @@ func TestFirewall_AddRule(t *testing.T) {
 
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoICMP, 1, 1, []string{}, "h1", "", "", "", ""))
-	assert.Nil(t, fw.InRules.ICMP[1].Any.Any)
-	assert.Empty(t, fw.InRules.ICMP[1].Any.Groups)
-	assert.Contains(t, fw.InRules.ICMP[1].Any.Hosts, "h1")
+	//no matter what port is given for icmp, it should end up as "any"
+	assert.Nil(t, fw.InRules.ICMP[firewall.PortAny].Any.Any)
+	assert.Empty(t, fw.InRules.ICMP[firewall.PortAny].Any.Groups)
+	assert.Contains(t, fw.InRules.ICMP[firewall.PortAny].Any.Hosts, "h1")
 
 	fw = NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 	require.NoError(t, fw.AddRule(false, firewall.ProtoAny, 1, 1, []string{}, "", ti.String(), "", "", ""))
@@ -919,11 +920,11 @@ func TestNewFirewallFromConfig(t *testing.T) {
 
 	// Test code/port error
 	conf = config.NewC(l)
-	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"code": "a", "host": "testh"}}}
+	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"code": "a", "host": "testh", "proto": "any"}}}
 	_, err = NewFirewallFromConfig(l, cs, conf)
 	require.EqualError(t, err, "firewall.outbound rule #0; code was not a number; `a`")
 
-	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"port": "a", "host": "testh"}}}
+	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"port": "a", "host": "testh", "proto": "any"}}}
 	_, err = NewFirewallFromConfig(l, cs, conf)
 	require.EqualError(t, err, "firewall.outbound rule #0; port was not a number; `a`")
 
@@ -973,7 +974,14 @@ func TestAddFirewallRulesFromConfig(t *testing.T) {
 	mf = &mockFirewall{}
 	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"port": "1", "proto": "icmp", "host": "a"}}}
 	require.NoError(t, AddFirewallRulesFromConfig(l, false, conf, mf))
-	assert.Equal(t, addRuleCall{incoming: false, proto: firewall.ProtoICMP, startPort: 1, endPort: 1, groups: nil, host: "a", ip: "", localIp: ""}, mf.lastCall)
+	assert.Equal(t, addRuleCall{incoming: false, proto: firewall.ProtoICMP, startPort: firewall.PortAny, endPort: firewall.PortAny, groups: nil, host: "a", ip: "", localIp: ""}, mf.lastCall)
+
+	// Test adding icmp rule no port
+	conf = config.NewC(l)
+	mf = &mockFirewall{}
+	conf.Settings["firewall"] = map[string]any{"outbound": []any{map[string]any{"proto": "icmp", "host": "a"}}}
+	require.NoError(t, AddFirewallRulesFromConfig(l, false, conf, mf))
+	assert.Equal(t, addRuleCall{incoming: false, proto: firewall.ProtoICMP, startPort: firewall.PortAny, endPort: firewall.PortAny, groups: nil, host: "a", ip: "", localIp: ""}, mf.lastCall)
 
 	// Test adding any rule
 	conf = config.NewC(l)

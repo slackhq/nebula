@@ -249,20 +249,6 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 
 // AddRule properly creates the in memory rule structure for a firewall table.
 func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, cidr, localCidr, caName string, caSha string) error {
-	// We need this rule string because we generate a hash. Removing this will break firewall reload.
-	ruleString := fmt.Sprintf(
-		"incoming: %v, proto: %v, startPort: %v, endPort: %v, groups: %v, host: %v, ip: %v, localIp: %v, caName: %v, caSha: %s",
-		incoming, proto, startPort, endPort, groups, host, cidr, localCidr, caName, caSha,
-	)
-	f.rules += ruleString + "\n"
-
-	direction := "incoming"
-	if !incoming {
-		direction = "outgoing"
-	}
-	f.l.WithField("firewallRule", m{"direction": direction, "proto": proto, "startPort": startPort, "endPort": endPort, "groups": groups, "host": host, "cidr": cidr, "localCidr": localCidr, "caName": caName, "caSha": caSha}).
-		Info("Firewall rule added")
-
 	var (
 		ft *FirewallTable
 		fp firewallPort
@@ -280,12 +266,32 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 	case firewall.ProtoUDP:
 		fp = ft.UDP
 	case firewall.ProtoICMP, firewall.ProtoICMPv6:
+		//ICMP traffic doesn't have ports, so we always coerce to "any", even if a value is provided
+		if startPort != firewall.PortAny {
+			f.l.WithField("startPort", startPort).Warn("ignoring port specification for ICMP firewall rule")
+		}
+		startPort = firewall.PortAny
+		endPort = firewall.PortAny
 		fp = ft.ICMP
 	case firewall.ProtoAny:
 		fp = ft.AnyProto
 	default:
 		return fmt.Errorf("unknown protocol %v", proto)
 	}
+
+	// We need this rule string because we generate a hash. Removing this will break firewall reload.
+	ruleString := fmt.Sprintf(
+		"incoming: %v, proto: %v, startPort: %v, endPort: %v, groups: %v, host: %v, ip: %v, localIp: %v, caName: %v, caSha: %s",
+		incoming, proto, startPort, endPort, groups, host, cidr, localCidr, caName, caSha,
+	)
+	f.rules += ruleString + "\n"
+
+	direction := "incoming"
+	if !incoming {
+		direction = "outgoing"
+	}
+	f.l.WithField("firewallRule", m{"direction": direction, "proto": proto, "startPort": startPort, "endPort": endPort, "groups": groups, "host": host, "cidr": cidr, "localCidr": localCidr, "caName": caName, "caSha": caSha}).
+		Info("Firewall rule added")
 
 	return fp.addRule(f, startPort, endPort, groups, host, cidr, localCidr, caName, caSha)
 }
@@ -349,23 +355,30 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			sPort = r.Port
 		}
 
-		startPort, endPort, err := parsePort(sPort)
-		if err != nil {
-			return fmt.Errorf("%s rule #%v; %s %s", table, i, errPort, err)
-		}
-
 		var proto uint8
+		var startPort, endPort int32
 		switch r.Proto {
 		case "any":
 			proto = firewall.ProtoAny
+			startPort, endPort, err = parsePort(sPort)
 		case "tcp":
 			proto = firewall.ProtoTCP
+			startPort, endPort, err = parsePort(sPort)
 		case "udp":
 			proto = firewall.ProtoUDP
+			startPort, endPort, err = parsePort(sPort)
 		case "icmp":
 			proto = firewall.ProtoICMP
+			startPort = firewall.PortAny
+			endPort = firewall.PortAny
+			if sPort != "" {
+				l.WithField("port", sPort).Warn("ignoring port specification for ICMP firewall rule")
+			}
 		default:
 			return fmt.Errorf("%s rule #%v; proto was not understood; `%s`", table, i, r.Proto)
+		}
+		if err != nil {
+			return fmt.Errorf("%s rule #%v; %s %s", table, i, errPort, err)
 		}
 
 		if r.Cidr != "" && r.Cidr != "any" {
@@ -658,6 +671,13 @@ func (fp firewallPort) match(p firewall.Packet, incoming bool, c *cert.CachedCer
 	// We don't have any allowed ports, bail
 	if fp == nil {
 		return false
+	}
+
+	// this branch is here to catch traffic from FirewallTable.Any.match and FirewallTable.ICMP.match
+	if p.Protocol == firewall.ProtoICMP || p.Protocol == firewall.ProtoICMPv6 {
+		// port numbers are re-used for connection tracking of ICMP,
+		// but we don't want to actually filter on them.
+		return fp[firewall.PortAny].match(p, c, caPool)
 	}
 
 	var port int32
@@ -1018,54 +1038,56 @@ func (r *rule) sanity() error {
 		}
 	}
 
+	if r.Code != "" {
+		return fmt.Errorf("code specified as [%s]. Support for 'code' will be dropped in a future release, as it has never been functional", r.Code)
+	}
+
 	//todo alert on cidr-any
 
 	return nil
 }
 
-func parsePort(s string) (startPort, endPort int32, err error) {
+func parsePort(s string) (int32, int32, error) {
+	var err error
+	const notAPort int32 = -2
 	if s == "any" {
-		startPort = firewall.PortAny
-		endPort = firewall.PortAny
-
-	} else if s == "fragment" {
-		startPort = firewall.PortFragment
-		endPort = firewall.PortFragment
-
-	} else if strings.Contains(s, `-`) {
-		sPorts := strings.SplitN(s, `-`, 2)
-		sPorts[0] = strings.Trim(sPorts[0], " ")
-		sPorts[1] = strings.Trim(sPorts[1], " ")
-
-		if len(sPorts) != 2 || sPorts[0] == "" || sPorts[1] == "" {
-			return 0, 0, fmt.Errorf("appears to be a range but could not be parsed; `%s`", s)
-		}
-
-		rStartPort, err := strconv.Atoi(sPorts[0])
-		if err != nil {
-			return 0, 0, fmt.Errorf("beginning range was not a number; `%s`", sPorts[0])
-		}
-
-		rEndPort, err := strconv.Atoi(sPorts[1])
-		if err != nil {
-			return 0, 0, fmt.Errorf("ending range was not a number; `%s`", sPorts[1])
-		}
-
-		startPort = int32(rStartPort)
-		endPort = int32(rEndPort)
-
-		if startPort == firewall.PortAny {
-			endPort = firewall.PortAny
-		}
-
-	} else {
+		return firewall.PortAny, firewall.PortAny, nil
+	}
+	if s == "fragment" {
+		return firewall.PortFragment, firewall.PortFragment, nil
+	}
+	if !strings.Contains(s, `-`) {
 		rPort, err := strconv.Atoi(s)
 		if err != nil {
-			return 0, 0, fmt.Errorf("was not a number; `%s`", s)
+			return notAPort, notAPort, fmt.Errorf("was not a number; `%s`", s)
 		}
-		startPort = int32(rPort)
-		endPort = startPort
+		return int32(rPort), int32(rPort), nil
 	}
 
-	return
+	sPorts := strings.SplitN(s, `-`, 2)
+	for i := range sPorts {
+		sPorts[i] = strings.Trim(sPorts[i], " ")
+	}
+	if len(sPorts) != 2 || sPorts[0] == "" || sPorts[1] == "" {
+		return notAPort, notAPort, fmt.Errorf("appears to be a range but could not be parsed; `%s`", s)
+	}
+
+	rStartPort, err := strconv.Atoi(sPorts[0])
+	if err != nil {
+		return notAPort, notAPort, fmt.Errorf("beginning range was not a number; `%s`", sPorts[0])
+	}
+
+	rEndPort, err := strconv.Atoi(sPorts[1])
+	if err != nil {
+		return notAPort, notAPort, fmt.Errorf("ending range was not a number; `%s`", sPorts[1])
+	}
+
+	startPort := int32(rStartPort)
+	endPort := int32(rEndPort)
+
+	if startPort == firewall.PortAny {
+		endPort = firewall.PortAny
+	}
+
+	return startPort, endPort, nil
 }
