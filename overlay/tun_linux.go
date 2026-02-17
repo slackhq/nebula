@@ -329,7 +329,7 @@ func (t *tun) addIPs(link netlink.Link) error {
 		}
 	}
 
-	if t.snatAddr.IsValid() && len(t.vpnNetworks) > 0 { //TODO unsafe-routers should be able to snat and be snatted
+	if t.snatAddr.IsValid() && len(t.unsafeNetworks) == 0 { //TODO unsafe-routers should be able to snat and be snatted
 		newAddrs = append(newAddrs, &netlink.Addr{
 			IPNet: &net.IPNet{
 				IP:   t.snatAddr.Addr().AsSlice(),
@@ -431,11 +431,11 @@ func (t *tun) Activate() error {
 		}
 	}
 	//TODO snat and be snatted
-	//if t.snatAddr.IsValid() {
-	//	if err = t.setDefaultRoute(t.snatAddr); err != nil {
-	//		return fmt.Errorf("failed to set default route MTU for %s: %w", t.snatAddr, err)
-	//	}
-	//}
+	if t.snatAddr.IsValid() && len(t.unsafeNetworks) == 0 {
+		if err = t.setDefaultRoute(t.snatAddr); err != nil {
+			return fmt.Errorf("failed to set default route MTU for %s: %w", t.snatAddr, err)
+		}
+	}
 
 	// Set the routes
 	if err = t.addRoutes(false); err != nil {
@@ -446,6 +446,14 @@ func (t *tun) Activate() error {
 	ifrf.Flags = ifrf.Flags | unix.IFF_UP | unix.IFF_RUNNING
 	if err = ioctl(t.ioctlFd, unix.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifrf))); err != nil {
 		return fmt.Errorf("failed to run tun device: %s", err)
+	}
+
+	//todo hmmmmmm
+	if len(t.unsafeNetworks) != 0 {
+		err = os.WriteFile(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/accept_local", t.Device), []byte("1"), os.FileMode(0o644))
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -556,6 +564,9 @@ func (t *tun) addRoutes(logErrors bool) error {
 		}
 	}
 
+	if len(t.unsafeNetworks) == 0 {
+		return nil
+	}
 	return t.setSnatRoute()
 }
 

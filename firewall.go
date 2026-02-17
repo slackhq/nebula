@@ -356,7 +356,9 @@ func (f *Firewall) GetRuleHashes() string {
 func (f *Firewall) SetSNATAddressFromInterface(i *Interface) {
 	//address-mutation-avoidance is done inside Interface, the firewall doesn't need to care
 	//todo should snatted conntracks get expired out? Probably not needed until if/when we allow reload
-	f.snatAddr = i.inside.SNATAddress().Addr()
+	if f.hasUnsafeNetworks { //todo this logic???
+		f.snatAddr = i.inside.SNATAddress().Addr()
+	}
 }
 
 func (f *Firewall) ShouldUnSNAT(fp *firewall.Packet) bool {
