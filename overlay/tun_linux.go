@@ -449,12 +449,13 @@ func (t *tun) Activate() error {
 	}
 
 	//todo hmmmmmm
-	if len(t.unsafeNetworks) != 0 {
-		err = os.WriteFile(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/accept_local", t.Device), []byte("1"), os.FileMode(0o644))
-		if err != nil {
-			return err
-		}
-	}
+	//pretty sure this is avoidable
+	//if len(t.unsafeNetworks) != 0 {
+	//	err = os.WriteFile(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/accept_local", t.Device), []byte("1"), os.FileMode(0o644))
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
 
 	return nil
 }

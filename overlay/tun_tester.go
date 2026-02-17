@@ -20,6 +20,7 @@ type TestTun struct {
 	Device         string
 	vpnNetworks    []netip.Prefix
 	unsafeNetworks []netip.Prefix
+	snatAddr       netip.Prefix
 	Routes         []Route
 	routeTree      *bart.Table[routing.Gateways]
 	l              *logrus.Logger
@@ -39,7 +40,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNet
 		return nil, err
 	}
 
-	return &TestTun{
+	tt := &TestTun{
 		Device:         c.GetString("tun.dev", ""),
 		vpnNetworks:    vpnNetworks,
 		unsafeNetworks: unsafeNetworks,
@@ -48,7 +49,9 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNet
 		l:              l,
 		rxPackets:      make(chan []byte, 10),
 		TxPackets:      make(chan []byte, 10),
-	}, nil
+	}
+	tt.snatAddr = prepareSnatAddr(tt, l, c, routes)
+	return tt, nil
 }
 
 func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix, _ []netip.Prefix) (*TestTun, error) {
@@ -142,10 +145,10 @@ func (t *TestTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented")
 }
 
-func (t *tun) UnsafeNetworks() []netip.Prefix {
-	return t.UnsafeNetworks()
+func (t *TestTun) UnsafeNetworks() []netip.Prefix {
+	return t.unsafeNetworks
 }
 
-func (t *tun) SNATAddress() netip.Prefix {
-	return netip.Prefix{}
+func (t *TestTun) SNATAddress() netip.Prefix {
+	return t.snatAddr
 }
