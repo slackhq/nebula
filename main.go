@@ -66,8 +66,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		return nil, util.ContextualizeIfNeeded("Failed to load PKI from config", err)
 	}
 
-	snatAddr := netip.MustParseAddr("169.254.55.96") //todo get this from tun!
-	fw, err := NewFirewallFromConfig(l, pki.getCertState(), c, snatAddr)
+	fw, err := NewFirewallFromConfig(l, pki.getCertState(), c)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while loading firewall rules", err)
 	}

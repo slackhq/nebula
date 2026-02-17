@@ -10,6 +10,16 @@ import (
 
 type NoopTun struct{}
 
+func (NoopTun) Routes() []Route {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (NoopTun) UnsafeNetworks() []netip.Prefix {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (NoopTun) RoutesFor(addr netip.Addr) routing.Gateways {
 	return routing.Gateways{}
 }

@@ -49,14 +49,16 @@ type ifreq struct {
 }
 
 type tun struct {
-	Device      string
-	vpnNetworks []netip.Prefix
-	MTU         int
-	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	l           *logrus.Logger
-	f           *os.File
-	fd          int
+	Device         string
+	vpnNetworks    []netip.Prefix
+	unsafeNetworks []netip.Prefix
+	snatAddr       netip.Prefix
+	MTU            int
+	Routes         atomic.Pointer[[]Route]
+	routeTree      atomic.Pointer[bart.Table[routing.Gateways]]
+	l              *logrus.Logger
+	f              *os.File
+	fd             int
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
 	out []byte
 }
@@ -89,12 +91,13 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNet
 	}
 
 	t := &tun{
-		f:           os.NewFile(uintptr(fd), ""),
-		fd:          fd,
-		Device:      deviceName,
-		vpnNetworks: vpnNetworks,
-		MTU:         c.GetInt("tun.mtu", DefaultMTU),
-		l:           l,
+		f:              os.NewFile(uintptr(fd), ""),
+		fd:             fd,
+		Device:         deviceName,
+		vpnNetworks:    vpnNetworks,
+		unsafeNetworks: unsafeNetworks,
+		MTU:            c.GetInt("tun.mtu", DefaultMTU),
+		l:              l,
 	}
 
 	err = t.reload(c, true)
@@ -304,6 +307,14 @@ func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 
 func (t *tun) Networks() []netip.Prefix {
 	return t.vpnNetworks
+}
+
+func (t *tun) UnsafeNetworks() []netip.Prefix {
+	return t.unsafeNetworks
+}
+
+func (t *tun) SNATAddress() netip.Prefix {
+	return t.snatAddr
 }
 
 func (t *tun) Name() string {

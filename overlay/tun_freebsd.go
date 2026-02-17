@@ -86,14 +86,16 @@ type ifreqAlias6 struct {
 }
 
 type tun struct {
-	Device      string
-	vpnNetworks []netip.Prefix
-	MTU         int
-	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	linkAddr    *netroute.LinkAddr
-	l           *logrus.Logger
-	devFd       int
+	Device         string
+	vpnNetworks    []netip.Prefix
+	unsafeNetworks []netip.Prefix
+	snatAddr       netip.Prefix
+	MTU            int
+	Routes         atomic.Pointer[[]Route]
+	routeTree      atomic.Pointer[bart.Table[routing.Gateways]]
+	linkAddr       *netroute.LinkAddr
+	l              *logrus.Logger
+	devFd          int
 }
 
 func (t *tun) Read(to []byte) (int, error) {
@@ -270,11 +272,12 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNet
 	}
 
 	t := &tun{
-		Device:      deviceName,
-		vpnNetworks: vpnNetworks,
-		MTU:         c.GetInt("tun.mtu", DefaultMTU),
-		l:           l,
-		devFd:       fd,
+		Device:         deviceName,
+		vpnNetworks:    vpnNetworks,
+		unsafeNetworks: unsafeNetworks,
+		MTU:            c.GetInt("tun.mtu", DefaultMTU),
+		l:              l,
+		devFd:          fd,
 	}
 
 	err = t.reload(c, true)
@@ -444,6 +447,14 @@ func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 
 func (t *tun) Networks() []netip.Prefix {
 	return t.vpnNetworks
+}
+
+func (t *tun) UnsafeNetworks() []netip.Prefix {
+	return t.unsafeNetworks
+}
+
+func (t *tun) SNATAddress() netip.Prefix {
+	return t.snatAddr
 }
 
 func (t *tun) Name() string {

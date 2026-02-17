@@ -17,11 +17,12 @@ import (
 )
 
 type TestTun struct {
-	Device      string
-	vpnNetworks []netip.Prefix
-	Routes      []Route
-	routeTree   *bart.Table[routing.Gateways]
-	l           *logrus.Logger
+	Device         string
+	vpnNetworks    []netip.Prefix
+	unsafeNetworks []netip.Prefix
+	Routes         []Route
+	routeTree      *bart.Table[routing.Gateways]
+	l              *logrus.Logger
 
 	closed    atomic.Bool
 	rxPackets chan []byte // Packets to receive into nebula
@@ -39,13 +40,14 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNet
 	}
 
 	return &TestTun{
-		Device:      c.GetString("tun.dev", ""),
-		vpnNetworks: vpnNetworks,
-		Routes:      routes,
-		routeTree:   routeTree,
-		l:           l,
-		rxPackets:   make(chan []byte, 10),
-		TxPackets:   make(chan []byte, 10),
+		Device:         c.GetString("tun.dev", ""),
+		vpnNetworks:    vpnNetworks,
+		unsafeNetworks: unsafeNetworks,
+		Routes:         routes,
+		routeTree:      routeTree,
+		l:              l,
+		rxPackets:      make(chan []byte, 10),
+		TxPackets:      make(chan []byte, 10),
 	}, nil
 }
 
@@ -138,4 +140,12 @@ func (t *TestTun) SupportsMultiqueue() bool {
 
 func (t *TestTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented")
+}
+
+func (t *tun) UnsafeNetworks() []netip.Prefix {
+	return t.UnsafeNetworks()
+}
+
+func (t *tun) SNATAddress() netip.Prefix {
+	return netip.Prefix{}
 }

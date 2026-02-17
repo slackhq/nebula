@@ -11,6 +11,8 @@ type Device interface {
 	io.ReadWriteCloser
 	Activate() error
 	Networks() []netip.Prefix
+	UnsafeNetworks() []netip.Prefix
+	SNATAddress() netip.Prefix
 	Name() string
 	RoutesFor(netip.Addr) routing.Gateways
 	SupportsMultiqueue() bool

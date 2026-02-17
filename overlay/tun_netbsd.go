@@ -58,14 +58,16 @@ type addrLifetime struct {
 }
 
 type tun struct {
-	Device      string
-	vpnNetworks []netip.Prefix
-	MTU         int
-	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	l           *logrus.Logger
-	f           *os.File
-	fd          int
+	Device         string
+	vpnNetworks    []netip.Prefix
+	unsafeNetworks []netip.Prefix
+	snatAddr       netip.Prefix
+	MTU            int
+	Routes         atomic.Pointer[[]Route]
+	routeTree      atomic.Pointer[bart.Table[routing.Gateways]]
+	l              *logrus.Logger
+	f              *os.File
+	fd             int
 }
 
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
@@ -384,6 +386,14 @@ func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 
 func (t *tun) Networks() []netip.Prefix {
 	return t.vpnNetworks
+}
+
+func (t *tun) UnsafeNetworks() []netip.Prefix {
+	return t.unsafeNetworks
+}
+
+func (t *tun) SNATAddress() netip.Prefix {
+	return t.snatAddr
 }
 
 func (t *tun) Name() string {

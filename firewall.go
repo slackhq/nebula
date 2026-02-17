@@ -215,7 +215,6 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		routableNetworks:  routableNetworks,
 		assignedNetworks:  assignedNetworks,
 		hasUnsafeNetworks: hasUnsafeNetworks,
-		snatAddr:          snatAddr,
 		l:                 l,
 
 		incomingMetrics: firewallMetrics{
@@ -231,7 +230,7 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 	}
 }
 
-func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C, snatAddr netip.Addr) (*Firewall, error) {
+func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firewall, error) {
 	certificate := cs.getCertificate(cert.Version2)
 	if certificate == nil {
 		certificate = cs.getCertificate(cert.Version1)
@@ -241,7 +240,14 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C, snatAdd
 		panic("No certificate available to reconfigure the firewall")
 	}
 
-	fw := NewFirewall(l, c.GetDuration("firewall.conntrack.tcp_timeout", time.Minute*12), c.GetDuration("firewall.conntrack.udp_timeout", time.Minute*3), c.GetDuration("firewall.conntrack.default_timeout", time.Minute*10), certificate, snatAddr)
+	fw := NewFirewall(
+		l,
+		c.GetDuration("firewall.conntrack.tcp_timeout", time.Minute*12),
+		c.GetDuration("firewall.conntrack.udp_timeout", time.Minute*3),
+		c.GetDuration("firewall.conntrack.default_timeout", time.Minute*10),
+		certificate,
+		netip.Addr{},
+	)
 
 	fw.defaultLocalCIDRAny = c.GetBool("firewall.default_local_cidr_any", false)
 
@@ -345,6 +351,12 @@ func (f *Firewall) GetRuleHashFNV() uint32 {
 // GetRuleHashes returns both the sha256 and FNV-1 hashes, suitable for logging
 func (f *Firewall) GetRuleHashes() string {
 	return "SHA:" + f.GetRuleHash() + ",FNV:" + strconv.FormatUint(uint64(f.GetRuleHashFNV()), 10)
+}
+
+func (f *Firewall) SetSNATAddressFromInterface(i *Interface) {
+	//address-mutation-avoidance is done inside Interface, the firewall doesn't need to care
+	//todo should snatted conntracks get expired out? Probably not needed until if/when we allow reload
+	f.snatAddr = i.inside.SNATAddress().Addr()
 }
 
 func (f *Firewall) ShouldUnSNAT(fp *firewall.Packet) bool {

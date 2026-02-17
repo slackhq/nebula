@@ -36,6 +36,14 @@ type UserDevice struct {
 	inboundWriter *io.PipeWriter
 }
 
+func (d *UserDevice) UnsafeNetworks() []netip.Prefix {
+	return nil
+}
+
+func (d *UserDevice) SNATAddress() netip.Prefix {
+	return netip.Prefix{}
+}
+
 func (d *UserDevice) Activate() error {
 	return nil
 }

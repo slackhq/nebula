@@ -28,12 +28,14 @@ import (
 const tunGUIDLabel = "Fixed Nebula Windows GUID v1"
 
 type winTun struct {
-	Device      string
-	vpnNetworks []netip.Prefix
-	MTU         int
-	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	l           *logrus.Logger
+	Device         string
+	vpnNetworks    []netip.Prefix
+	unsafeNetworks []netip.Prefix
+	snatAddr       netip.Prefix
+	MTU            int
+	Routes         atomic.Pointer[[]Route]
+	routeTree      atomic.Pointer[bart.Table[routing.Gateways]]
+	l              *logrus.Logger
 
 	tun *wintun.NativeTun
 }
@@ -55,10 +57,11 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNet
 	}
 
 	t := &winTun{
-		Device:      deviceName,
-		vpnNetworks: vpnNetworks,
-		MTU:         c.GetInt("tun.mtu", DefaultMTU),
-		l:           l,
+		Device:         deviceName,
+		vpnNetworks:    vpnNetworks,
+		unsafeNetworks: unsafeNetworks,
+		MTU:            c.GetInt("tun.mtu", DefaultMTU),
+		l:              l,
 	}
 
 	err = t.reload(c, true)
@@ -100,6 +103,10 @@ func (t *winTun) reload(c *config.C, initial bool) error {
 
 	if !initial && !change {
 		return nil
+	}
+
+	if !initial {
+		t.snatAddr = prepareSnatAddr(t, t.l, c, routes)
 	}
 
 	routeTree, err := makeRouteTree(t.l, routes, false)
@@ -223,6 +230,14 @@ func (t *winTun) RoutesFor(ip netip.Addr) routing.Gateways {
 
 func (t *winTun) Networks() []netip.Prefix {
 	return t.vpnNetworks
+}
+
+func (t *winTun) UnsafeNetworks() []netip.Prefix {
+	return t.unsafeNetworks
+}
+
+func (t *winTun) SNATAddress() netip.Prefix {
+	return t.snatAddr
 }
 
 func (t *winTun) Name() string {

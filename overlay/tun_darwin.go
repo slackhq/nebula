@@ -24,13 +24,15 @@ import (
 
 type tun struct {
 	io.ReadWriteCloser
-	Device      string
-	vpnNetworks []netip.Prefix
-	DefaultMTU  int
-	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	linkAddr    *netroute.LinkAddr
-	l           *logrus.Logger
+	Device         string
+	vpnNetworks    []netip.Prefix
+	unsafeNetworks []netip.Prefix
+	snatAddr       netip.Prefix
+	DefaultMTU     int
+	Routes         atomic.Pointer[[]Route]
+	routeTree      atomic.Pointer[bart.Table[routing.Gateways]]
+	linkAddr       *netroute.LinkAddr
+	l              *logrus.Logger
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
 	out []byte
@@ -127,6 +129,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNet
 		ReadWriteCloser: os.NewFile(uintptr(fd), ""),
 		Device:          name,
 		vpnNetworks:     vpnNetworks,
+		unsafeNetworks:  unsafeNetworks,
 		DefaultMTU:      c.GetInt("tun.mtu", DefaultMTU),
 		l:               l,
 	}
@@ -543,6 +546,14 @@ func (t *tun) Write(from []byte) (int, error) {
 
 func (t *tun) Networks() []netip.Prefix {
 	return t.vpnNetworks
+}
+
+func (t *tun) UnsafeNetworks() []netip.Prefix {
+	return t.unsafeNetworks
+}
+
+func (t *tun) SNATAddress() netip.Prefix {
+	return t.snatAddr
 }
 
 func (t *tun) Name() string {

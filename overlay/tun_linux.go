@@ -4,7 +4,6 @@
 package overlay
 
 import (
-	"crypto/rand"
 	"fmt"
 	"io"
 	"net"
@@ -55,6 +54,14 @@ type tun struct {
 
 func (t *tun) Networks() []netip.Prefix {
 	return t.vpnNetworks
+}
+
+func (t *tun) UnsafeNetworks() []netip.Prefix {
+	return t.unsafeNetworks
+}
+
+func (t *tun) SNATAddress() netip.Prefix {
+	return t.snatAddr
 }
 
 type ifReq struct {
@@ -165,59 +172,6 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []n
 	return t, nil
 }
 
-func (t *tun) prepareSnatAddr(c *config.C, initial bool, routes []Route) netip.Prefix {
-	if !initial {
-		return netip.Prefix{} //I don't wanna think about reloading this yet
-	}
-	if !t.vpnNetworks[0].Addr().Is6() {
-		return netip.Prefix{} //if we have an IPv4 assignment within the overlay, we don't need a snat address
-	}
-
-	addSnatAddr := false
-	for _, un := range t.unsafeNetworks { //if we are an unsafe router for an IPv4 range
-		if un.Addr().Is4() {
-			addSnatAddr = true
-			break
-		}
-	}
-	for _, route := range routes { //or if we have a route defined into an IPv4 range
-		if route.Cidr.Addr().Is4() {
-			addSnatAddr = true //todo should this only apply to unsafe routes?
-			break
-		}
-	}
-	if !addSnatAddr {
-		return netip.Prefix{}
-	}
-
-	var err error
-	out := netip.Addr{}
-	if a := c.GetString("tun.snat_address_for_4over6", ""); a != "" {
-		out, err = netip.ParseAddr(a)
-		if err != nil {
-			t.l.WithField("value", a).WithError(err).Warn("failed to parse tun.snat_address_for_4over6, will use a random value")
-		} else if !out.Is4() || !out.IsLinkLocalUnicast() {
-			t.l.WithField("value", t.snatAddr).Warn("tun.snat_address_for_4over6 must be an IPv4 address")
-		}
-	}
-	if !out.IsValid() {
-		octets := []byte{169, 254, 0, 0}
-		_, _ = rand.Read(octets[2:4])
-		if octets[3] == 0 {
-			octets[3] = 1 //please no .0 addresses
-		} else if octets[2] == 255 && octets[3] == 255 {
-			octets[3] = 254 //please no broadcast addresses
-		}
-		ok := false
-		out, ok = netip.AddrFromSlice(octets)
-		if !ok {
-			t.l.Error("failed to produce a valid IPv4 address for tun.snat_address_for_4over6")
-			return netip.Prefix{}
-		}
-	}
-	return netip.PrefixFrom(out, 32)
-}
-
 func (t *tun) reload(c *config.C, initial bool) error {
 	routeChange, routes, err := getAllRoutesFromConfig(c, t.vpnNetworks, initial)
 	if err != nil {
@@ -228,7 +182,9 @@ func (t *tun) reload(c *config.C, initial bool) error {
 		return nil
 	}
 
-	t.snatAddr = t.prepareSnatAddr(c, initial, routes)
+	if !initial {
+		t.snatAddr = prepareSnatAddr(t, t.l, c, routes)
+	}
 
 	routeTree, err := makeRouteTree(t.l, routes, true)
 	if err != nil {

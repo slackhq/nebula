@@ -22,6 +22,13 @@ type disabledTun struct {
 	l  *logrus.Logger
 }
 
+func (*disabledTun) UnsafeNetworks() []netip.Prefix {
+	return nil
+}
+func (*disabledTun) SNATAddress() netip.Prefix {
+	return netip.Prefix{}
+}
+
 func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled bool, l *logrus.Logger) *disabledTun {
 	tun := &disabledTun{
 		vpnNetworks: vpnNetworks,
