@@ -216,6 +216,11 @@ func (t *tun) Activate() error {
 			}
 		}
 	}
+	if t.snatAddr.IsValid() && t.snatAddr.Addr().Is4() {
+		if err = t.activate4(t.snatAddr); err != nil {
+			return err
+		}
+	}
 
 	// Run the interface
 	ifrf.Flags = ifrf.Flags | unix.IFF_UP | unix.IFF_RUNNING
@@ -315,6 +320,10 @@ func (t *tun) reload(c *config.C, initial bool) error {
 
 	if !initial && !change {
 		return nil
+	}
+
+	if !initial {
+		t.snatAddr = prepareSnatAddr(t, t.l, c, routes)
 	}
 
 	routeTree, err := makeRouteTree(t.l, routes, false)

@@ -139,7 +139,12 @@ func (t *winTun) reload(c *config.C, initial bool) error {
 func (t *winTun) Activate() error {
 	luid := winipcfg.LUID(t.tun.LUID())
 
-	err := luid.SetIPAddresses(t.vpnNetworks)
+	prefixes := t.vpnNetworks
+	if t.snatAddr.IsValid() {
+		prefixes = append(prefixes, t.snatAddr)
+	}
+
+	err := luid.SetIPAddresses(prefixes)
 	if err != nil {
 		return fmt.Errorf("failed to set address: %w", err)
 	}
