@@ -1,5 +1,4 @@
 //go:build boringcrypto
-// +build boringcrypto
 
 package nebula
 

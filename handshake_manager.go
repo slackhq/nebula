@@ -590,7 +590,7 @@ func (hm *HandshakeManager) allocateIndex(hh *HandshakeHostInfo) error {
 	hm.Lock()
 	defer hm.Unlock()
 
-	for i := 0; i < 32; i++ {
+	for range 32 {
 		index, err := generateIndex(hm.l)
 		if err != nil {
 			return err

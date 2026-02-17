@@ -134,7 +134,7 @@ func TestTimerWheel_Purge(t *testing.T) {
 	assert.True(t, tw.lastTick.After(lastTick))
 
 	// Make sure we get all 4 packets back
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		p, has := tw.Purge()
 		assert.True(t, has)
 		assert.Equal(t, fps[i], p)
@@ -149,7 +149,7 @@ func TestTimerWheel_Purge(t *testing.T) {
 	// Make sure we cached the free'd items
 	assert.Equal(t, 4, tw.itemsCached)
 	ci := tw.itemCache
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		assert.NotNil(t, ci)
 		ci = ci.Next
 	}
