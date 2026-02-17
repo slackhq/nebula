@@ -182,7 +182,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 		return nil
 	}
 
-	if !initial {
+	if initial {
 		t.snatAddr = prepareSnatAddr(t, t.l, c, routes)
 	}
 
@@ -328,7 +328,8 @@ func (t *tun) addIPs(link netlink.Link) error {
 			Label: t.vpnNetworks[i].Addr().Zone(),
 		}
 	}
-	if t.snatAddr.IsValid() {
+
+	if t.snatAddr.IsValid() && len(t.vpnNetworks) > 0 { //TODO unsafe-routers should be able to snat and be snatted
 		newAddrs = append(newAddrs, &netlink.Addr{
 			IPNet: &net.IPNet{
 				IP:   t.snatAddr.Addr().AsSlice(),
@@ -429,11 +430,12 @@ func (t *tun) Activate() error {
 			return fmt.Errorf("failed to set default route MTU for %s: %w", t.vpnNetworks[i], err)
 		}
 	}
-	if t.snatAddr.IsValid() {
-		if err = t.setDefaultRoute(t.snatAddr); err != nil {
-			return fmt.Errorf("failed to set default route MTU for %s: %w", t.snatAddr, err)
-		}
-	}
+	//TODO snat and be snatted
+	//if t.snatAddr.IsValid() {
+	//	if err = t.setDefaultRoute(t.snatAddr); err != nil {
+	//		return fmt.Errorf("failed to set default route MTU for %s: %w", t.snatAddr, err)
+	//	}
+	//}
 
 	// Set the routes
 	if err = t.addRoutes(false); err != nil {

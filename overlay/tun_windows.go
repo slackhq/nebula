@@ -105,7 +105,7 @@ func (t *winTun) reload(c *config.C, initial bool) error {
 		return nil
 	}
 
-	if !initial {
+	if initial {
 		t.snatAddr = prepareSnatAddr(t, t.l, c, routes)
 	}
 

@@ -273,6 +273,10 @@ func (t *tun) reload(c *config.C, initial bool) error {
 		return nil
 	}
 
+	if initial {
+		t.snatAddr = prepareSnatAddr(t, t.l, c, routes)
+	}
+
 	routeTree, err := makeRouteTree(t.l, routes, false)
 	if err != nil {
 		return err
