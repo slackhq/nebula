@@ -37,25 +37,27 @@ func UnmarshalCertificateFromPEM(b []byte) (Certificate, []byte, error) {
 		return nil, r, ErrInvalidPEMBlock
 	}
 
-	var c Certificate
-	var err error
-
-	switch p.Type {
-	// Implementations must validate the resulting certificate contains valid information
-	case CertificateBanner:
-		c, err = unmarshalCertificateV1(p.Bytes, nil)
-	case CertificateV2Banner:
-		c, err = unmarshalCertificateV2(p.Bytes, nil, Curve_CURVE25519)
-	default:
-		return nil, r, ErrInvalidPEMCertificateBanner
-	}
-
+	c, err := unmarshalCertificateBlock(p)
 	if err != nil {
 		return nil, r, err
 	}
 
 	return c, r, nil
 
+}
+
+// unmarshalCertificateBlock decodes a single PEM block into a certificate.
+// It expects a Nebula certificate banner and returns ErrInvalidPEMCertificateBanner otherwise.
+func unmarshalCertificateBlock(block *pem.Block) (Certificate, error) {
+	switch block.Type {
+	// Implementations must validate the resulting certificate contains valid information
+	case CertificateBanner:
+		return unmarshalCertificateV1(block.Bytes, nil)
+	case CertificateV2Banner:
+		return unmarshalCertificateV2(block.Bytes, nil, Curve_CURVE25519)
+	default:
+		return nil, ErrInvalidPEMCertificateBanner
+	}
 }
 
 func marshalCertPublicKeyToPEM(c Certificate) []byte {
