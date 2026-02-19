@@ -1,7 +1,6 @@
 on:
-  push:
-    tags:
-    - 'v[0-9]+.[0-9]+.[0-9]*'
+  release:
+    types: [published]
 
 name: Create release and upload binaries
 
@@ -18,8 +17,10 @@ jobs:
           check-latest: true
 
       - name: Build
+        env:
+          TAG: ${{ github.event.release.tag_name }}
         run: |
-          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" release-linux release-freebsd release-openbsd release-netbsd
+          make BUILD_NUMBER="${TAG#v}" release-linux release-freebsd release-openbsd release-netbsd
           mkdir release
           mv build/*.tar.gz release
 
@@ -41,16 +42,18 @@ jobs:
           check-latest: true
 
       - name: Build
+        env:
+          TAG: ${{ github.event.release.tag_name }}
         run: |
-          echo $Env:GITHUB_REF.Substring(11)
+          echo $Env:TAG.Substring(1)
           mkdir build\windows-amd64
           $Env:GOARCH = "amd64"
-          go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\windows-amd64\nebula.exe ./cmd/nebula-service
-          go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\windows-amd64\nebula-cert.exe ./cmd/nebula-cert
+          go build -trimpath -ldflags "-X main.Build=$($Env:TAG.Substring(1))" -o build\windows-amd64\nebula.exe ./cmd/nebula-service
+          go build -trimpath -ldflags "-X main.Build=$($Env:TAG.Substring(1))" -o build\windows-amd64\nebula-cert.exe ./cmd/nebula-cert
           mkdir build\windows-arm64
           $Env:GOARCH = "arm64"
-          go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\windows-arm64\nebula.exe ./cmd/nebula-service
-          go build -trimpath -ldflags "-X main.Build=$($Env:GITHUB_REF.Substring(11))" -o build\windows-arm64\nebula-cert.exe ./cmd/nebula-cert
+          go build -trimpath -ldflags "-X main.Build=$($Env:TAG.Substring(1))" -o build\windows-arm64\nebula.exe ./cmd/nebula-service
+          go build -trimpath -ldflags "-X main.Build=$($Env:TAG.Substring(1))" -o build\windows-arm64\nebula-cert.exe ./cmd/nebula-cert
           mkdir build\dist\windows
           mv dist\windows\wintun build\dist\windows\
 
@@ -84,11 +87,12 @@ jobs:
         env:
           AC_USERNAME: ${{ secrets.AC_USERNAME }}
           AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           rm -rf release
           mkdir release
-          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" service build/darwin-amd64/nebula build/darwin-amd64/nebula-cert
-          make BUILD_NUMBER="${GITHUB_REF#refs/tags/v}" service build/darwin-arm64/nebula build/darwin-arm64/nebula-cert
+          make BUILD_NUMBER="${TAG#v}" service build/darwin-amd64/nebula build/darwin-amd64/nebula-cert
+          make BUILD_NUMBER="${TAG#v}" service build/darwin-arm64/nebula build/darwin-arm64/nebula-cert
           lipo -create -output ./release/nebula ./build/darwin-amd64/nebula ./build/darwin-arm64/nebula
           lipo -create -output ./release/nebula-cert ./build/darwin-amd64/nebula-cert ./build/darwin-arm64/nebula-cert
 
@@ -149,11 +153,12 @@ jobs:
         env:
           DOCKER_IMAGE_REPO: ${{ vars.DOCKER_IMAGE_REPO || 'nebulaoss/nebula' }}
           DOCKER_IMAGE_TAG: ${{ vars.DOCKER_IMAGE_TAG || 'latest' }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           mkdir -p build/linux-{amd64,arm64}
           tar -zxvf artifacts/nebula-linux-amd64.tar.gz -C build/linux-amd64/
           tar -zxvf artifacts/nebula-linux-arm64.tar.gz -C build/linux-arm64/
-          docker buildx build . --push -f docker/Dockerfile --platform linux/amd64,linux/arm64 --tag "${DOCKER_IMAGE_REPO}:${DOCKER_IMAGE_TAG}" --tag "${DOCKER_IMAGE_REPO}:${GITHUB_REF#refs/tags/v}"
+          docker buildx build . --push -f docker/Dockerfile --platform linux/amd64,linux/arm64 --tag "${DOCKER_IMAGE_REPO}:${DOCKER_IMAGE_TAG}" --tag "${DOCKER_IMAGE_REPO}:${TAG#v}"
 
   release:
     name: Create and Upload Release
@@ -211,8 +216,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd artifacts
-          gh release create \
-            --verify-tag \
-            --title "Release ${{ github.ref_name }}" \
-            "${{ github.ref_name }}" \
+          gh release upload \
+            "${{ github.event.release.tag_name }}" \
             SHASUM256.txt *-latest/*.zip *-latest/*.tar.gz
