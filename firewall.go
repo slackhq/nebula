@@ -510,8 +510,8 @@ func (f *Firewall) findUsableSNATPort(fp *firewall.Packet, c *conn) error {
 		}
 		//increment and retry. There's probably better strategies out there
 		fp.RemotePort++
-		if fp.RemotePort < 0x7ff {
-			fp.RemotePort += 0x7ff // keep it ephemeral for now
+		if fp.RemotePort < 0x7fff {
+			fp.RemotePort += 0x7fff // keep it ephemeral for now
 		}
 	}
 
