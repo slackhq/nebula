@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"runtime"
 	"strconv"
 	"time"
@@ -93,6 +94,8 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildV
 		return nil, fmt.Errorf("stats.path should not be empty")
 	}
 
+	enablePprof := c.GetBool("stats.pprof", false)
+
 	pr := prometheus.NewRegistry()
 	pClient := mp.NewPrometheusProvider(metrics.DefaultRegistry, namespace, subsystem, pr, i)
 	if !configTest {
@@ -119,6 +122,14 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildV
 		startFn = func() {
 			l.Infof("Prometheus stats listening on %s at %s", listen, path)
 			http.Handle(path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: l}))
+			if enablePprof {
+				l.Info("pprof endpoints enabled on stats listener")
+				http.HandleFunc("GET /debug/pprof/", pprof.Index)
+				http.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
+				http.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+				http.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
+				http.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+			}
 			log.Fatal(http.ListenAndServe(listen, nil))
 		}
 	}
