@@ -327,10 +327,26 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 		proto := layers.IPProtocol(data[protoAt])
 
 		switch proto {
-		case layers.IPProtocolICMPv6, layers.IPProtocolESP, layers.IPProtocolNoNextHeader:
+		case layers.IPProtocolESP, layers.IPProtocolNoNextHeader:
 			fp.Protocol = uint8(proto)
 			fp.RemotePort = 0
 			fp.LocalPort = 0
+			fp.Fragment = false
+			return nil
+
+		case layers.IPProtocolICMPv6:
+			if dataLen < offset+6 {
+				return ErrIPv6PacketTooShort
+			}
+			fp.Protocol = uint8(proto)
+			fp.LocalPort = 0 //incoming vs outgoing doesn't matter for icmpv6
+			icmptype := data[offset+1]
+			switch icmptype {
+			case layers.ICMPv6TypeEchoRequest, layers.ICMPv6TypeEchoReply:
+				fp.RemotePort = binary.BigEndian.Uint16(data[offset+4 : offset+6]) //identifier
+			default:
+				fp.RemotePort = 0
+			}
 			fp.Fragment = false
 			return nil
 
@@ -423,34 +439,38 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 
 	// Accounting for a variable header length, do we have enough data for our src/dst tuples?
 	minLen := ihl
-	if !fp.Fragment && fp.Protocol != firewall.ProtoICMP {
-		minLen += minFwPacketLen
+	if !fp.Fragment {
+		if fp.Protocol == firewall.ProtoICMP {
+			minLen += minFwPacketLen + 2
+		} else {
+			minLen += minFwPacketLen
+		}
 	}
+
 	if len(data) < minLen {
 		return ErrIPv4InvalidHeaderLength
 	}
 
-	// Firewall packets are locally oriented
-	if incoming {
+	if incoming { // Firewall packets are locally oriented
 		fp.RemoteAddr, _ = netip.AddrFromSlice(data[12:16])
 		fp.LocalAddr, _ = netip.AddrFromSlice(data[16:20])
-		if fp.Fragment || fp.Protocol == firewall.ProtoICMP {
-			fp.RemotePort = 0
-			fp.LocalPort = 0
-		} else {
-			fp.RemotePort = binary.BigEndian.Uint16(data[ihl : ihl+2])
-			fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4])
-		}
 	} else {
 		fp.LocalAddr, _ = netip.AddrFromSlice(data[12:16])
 		fp.RemoteAddr, _ = netip.AddrFromSlice(data[16:20])
-		if fp.Fragment || fp.Protocol == firewall.ProtoICMP {
-			fp.RemotePort = 0
-			fp.LocalPort = 0
-		} else {
-			fp.LocalPort = binary.BigEndian.Uint16(data[ihl : ihl+2])
-			fp.RemotePort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4])
-		}
+	}
+
+	if fp.Fragment {
+		fp.RemotePort = 0
+		fp.LocalPort = 0
+	} else if fp.Protocol == firewall.ProtoICMP { //note that orientation doesn't matter on ICMP
+		fp.RemotePort = binary.BigEndian.Uint16(data[ihl+4 : ihl+6]) //identifier
+		fp.LocalPort = 0                                             //code would be uint16(data[ihl+1])
+	} else if incoming {
+		fp.RemotePort = binary.BigEndian.Uint16(data[ihl : ihl+2])  //src port
+		fp.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4]) //dst port
+	} else {
+		fp.LocalPort = binary.BigEndian.Uint16(data[ihl : ihl+2])    //src port
+		fp.RemotePort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4]) //dst port
 	}
 
 	return nil

@@ -480,7 +480,7 @@ func (f *Firewall) metrics(incoming bool) firewallMetrics {
 	}
 }
 
-// Destroy cleans up any known cyclical references so the object can be free'd my GC. This should be called if a new
+// Destroy cleans up any known cyclical references so the object can be freed by GC. This should be called if a new
 // firewall object is created
 func (f *Firewall) Destroy() {
 	//TODO: clean references if/when needed
