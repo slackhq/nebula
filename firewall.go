@@ -353,7 +353,6 @@ func (f *Firewall) SetSNATAddressFromInterface(i *Interface) {
 	//todo should snatted conntracks get expired out? Probably not needed until if/when we allow reload
 	f.snatAddr = i.inside.SNATAddress().Addr()
 	f.unsafeIPv4Origin = i.inside.UnsafeIPv4OriginAddress().Addr()
-	//f.routableNetworks.Insert(i.inside.UnsafeIPv4OriginAddress()) //todo is this the right idea?
 }
 
 func (f *Firewall) ShouldUnSNAT(fp *firewall.Packet) bool {
@@ -525,6 +524,9 @@ func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo
 	if !f.snatAddr.IsValid() {
 		return ErrCannotSNAT
 	}
+	if f.snatAddr == fp.LocalAddr { //a packet that came from UDP (incoming) should never ever have our snat address on it
+		return ErrSNATIdentityMismatch
+	}
 	if c.snat.Valid() {
 		//old flow: make sure it came from the right place
 		if !slices.Contains(hostinfo.vpnAddrs, c.snat.SrcVpnIp) {
@@ -562,7 +564,6 @@ func (f *Firewall) identifyRemoteNetworkType(h *HostInfo, fp firewall.Packet) Ne
 			return NetworkTypeVPN
 		} //else, fallthrough
 	} else if nwType, ok := h.networks.Lookup(fp.RemoteAddr); ok {
-		//todo check for if fp.RemoteAddr is our f.snatAddr here too? Does that need a special case?
 		return nwType //will return NetworkTypeVPN or NetworkTypeUnsafe
 	}
 
@@ -581,7 +582,7 @@ func (f *Firewall) allowRemoteNetworkType(nwType NetworkType, fp firewall.Packet
 	case NetworkTypeInvalidPeer:
 		return ErrInvalidRemoteIP
 	case NetworkTypeVPNPeer:
-		//todo we might need a specialSnatMode case in here to handle routers with v4 addresses when we don't also have a v4 address?
+		//one day we might need a specialSnatMode case in here to handle routers with v4 addresses when we don't also have a v4 address?
 		return ErrPeerRejected // reject for now, one day this may have different FW rules
 	case NetworkTypeUnsafe:
 		return nil // nothing special, one day this may have different FW rules
@@ -589,8 +590,11 @@ func (f *Firewall) allowRemoteNetworkType(nwType NetworkType, fp firewall.Packet
 		if f.unsafeIPv4Origin.IsValid() && fp.LocalAddr == f.unsafeIPv4Origin {
 			return nil //the client case
 		}
-		if f.snatAddr.IsValid() { //todo
-			return nil //todo is this enough?
+		if f.snatAddr.IsValid() {
+			if fp.RemoteAddr == f.snatAddr {
+				return ErrInvalidRemoteIP //we should never get a packet with our SNAT addr as the destination, or "from" our SNAT addr
+			}
+			return nil
 		} else {
 			return ErrInvalidRemoteIP
 		}
@@ -603,35 +607,14 @@ func (f *Firewall) willingToHandleLocalAddr(incoming bool, fp firewall.Packet, r
 	if f.routableNetworks.Contains(fp.LocalAddr) {
 		return nil //easy, this should handle NetworkTypeVPN in all cases, and NetworkTypeUnsafe on the router side
 	}
-	if incoming { //at least for now, reject all traffic other than what we've already decided is routable
+	if incoming { //at least for now, reject all traffic other than what we've already decided is locally routable
 		return ErrInvalidLocalIP
 	}
 
-	//now, all traffic is outgoing. Outgoing traffic to these types is not required to be considered inbound-routable
-	//todo is this right??? can/should these rules be tighter?
+	//below this line, all traffic is outgoing. Outgoing traffic to NetworkTypeUnsafe is not required to be considered inbound-routable
 	if remoteNwType == NetworkTypeUnsafe {
 		return nil
 	}
-	//if remoteNwType == NetworkTypeUncheckedSNATPeer {
-	//	return nil
-	//}
-
-	//todo
-
-	////watch out, when incoming, this function decides if we will deliver a packet locally
-	////when outgoing, much less important, it just decides if we're willing to tx
-	//switch remoteNwType {
-	//// we never want to accept unconntracked inbound traffic from these network types, but outbound is okay.
-	//// It's the recipient's job to validate and accept or deny the packet.
-	//case NetworkTypeUncheckedSNATPeer, NetworkTypeUnsafe:
-	//	//NetworkTypeUnsafe needed here to allow inbound from an unsafe-router
-	//	if incoming {
-	//		return ErrInvalidLocalIP
-	//	}
-	//	return nil
-	//default:
-	//	return ErrInvalidLocalIP
-	//}
 
 	return ErrInvalidLocalIP
 }
