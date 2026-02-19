@@ -332,11 +332,28 @@ func (u *RIOConn) SupportsMultipleReaders() bool {
 	return false
 }
 
+func (u *RIOConn) SupportsGSO() bool {
+	return false
+}
+
+func (u *RIOConn) SupportsGRO() bool {
+	return false
+}
+
 func (u *RIOConn) Rebind() error {
 	return nil
 }
 
 func (u *RIOConn) ReloadConfig(*config.C) {}
+
+func (u *RIOConn) WriteBatch(pkts []BatchPacket) (int, error) {
+	for i := range pkts {
+		if err := u.WriteTo(pkts[i].Payload, pkts[i].Addr); err != nil {
+			return i, err
+		}
+	}
+	return len(pkts), nil
+}
 
 func (u *RIOConn) Close() error {
 	if !u.isOpen.CompareAndSwap(true, false) {

@@ -30,13 +30,26 @@ type rawMessage struct {
 	Len uint32
 }
 
-func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
+func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte, [][]byte) {
 	msgs := make([]rawMessage, n)
 	buffers := make([][]byte, n)
 	names := make([][]byte, n)
+	controls := make([][]byte, n)
+
+	// Use larger buffers if GRO is enabled to hold coalesced packets
+	bufSize := MTU
+	if u.groSupported {
+		bufSize = groMaxPacketSize
+	}
+
+	// Control buffer size for receiving UDP_GRO segment size
+	controlSize := 0
+	if u.groSupported {
+		controlSize = unix.CmsgSpace(2) // space for uint16 segment size
+	}
 
 	for i := range msgs {
-		buffers[i] = make([]byte, MTU)
+		buffers[i] = make([]byte, bufSize)
 		names[i] = make([]byte, unix.SizeofSockaddrInet6)
 
 		vs := []iovec{
@@ -48,7 +61,34 @@ func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
 
 		msgs[i].Hdr.Name = &names[i][0]
 		msgs[i].Hdr.Namelen = uint32(len(names[i]))
+
+		// Set up control message buffer for GRO
+		if controlSize > 0 {
+			controls[i] = make([]byte, controlSize)
+			msgs[i].Hdr.Control = &controls[i][0]
+			msgs[i].Hdr.Controllen = uint32(controlSize)
+		}
 	}
 
-	return msgs, buffers, names
+	return msgs, buffers, names, controls
+}
+
+func setIovecBase(iov *iovec, base *byte) {
+	iov.Base = base
+}
+
+func setIovecLen(iov *iovec, l int) {
+	iov.Len = uint32(l)
+}
+
+func setMsghdrIovlen(hdr *msghdr, l int) {
+	hdr.Iovlen = uint32(l)
+}
+
+func setMsghdrControllen(hdr *msghdr, l int) {
+	hdr.Controllen = uint32(l)
+}
+
+func getMsghdrControllen(hdr *msghdr) int {
+	return int(hdr.Controllen)
 }
