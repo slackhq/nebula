@@ -190,6 +190,10 @@ func (ncp *CAPool) verify(c Certificate, now time.Time, certFp string, signerFp 
 		return nil, err
 	}
 
+	if signer.Certificate.Curve() != c.Curve() {
+		return nil, ErrCurveMismatch
+	}
+
 	if signer.Certificate.Expired(now) {
 		return nil, ErrRootExpired
 	}
