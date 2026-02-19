@@ -14,7 +14,7 @@ require (
 	github.com/google/gopacket v1.1.19
 	github.com/kardianos/service v1.2.4
 	github.com/miekg/dns v1.1.70
-	github.com/miekg/pkcs11 v1.1.2-0.20231115102856-9078ad6b9d4b
+	github.com/miekg/pkcs11 v1.1.2
 	github.com/nbrownus/go-metrics-prometheus v0.0.0-20210712211119-974a6260965f
 	github.com/prometheus/client_golang v1.23.2
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475
