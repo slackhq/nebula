@@ -44,7 +44,10 @@ type Service struct {
 }
 
 func New(control *nebula.Control) (*Service, error) {
-	control.Start()
+	wait, err := control.Start()
+	if err != nil {
+		return nil, err
+	}
 
 	ctx := control.Context()
 	eg, ctx := errgroup.WithContext(ctx)
@@ -139,6 +142,12 @@ func New(control *nebula.Control) (*Service, error) {
 			}
 			bufView.Release()
 		}
+	})
+
+	// Add the nebula wait function to the group
+	eg.Go(func() error {
+		wait()
+		return nil
 	})
 
 	return &s, nil

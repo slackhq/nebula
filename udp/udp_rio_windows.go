@@ -140,7 +140,7 @@ func (u *RIOConn) bind(l *logrus.Logger, sa windows.Sockaddr) error {
 	return nil
 }
 
-func (u *RIOConn) ListenOut(r EncReader) {
+func (u *RIOConn) ListenOut(r EncReader) error {
 	buffer := make([]byte, MTU)
 
 	var lastRecvErr time.Time
@@ -151,8 +151,7 @@ func (u *RIOConn) ListenOut(r EncReader) {
 
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
-				u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
-				return
+				return err
 			}
 			// Dampen unexpected message warns to once per minute
 			if lastRecvErr.IsZero() || time.Since(lastRecvErr) > time.Minute {

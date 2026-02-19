@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/rcrowley/go-metrics"
@@ -17,19 +18,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+var readTimeout = unix.NsecToTimeval(int64(3 * time.Second))
+
 type StdConn struct {
 	sysFd int
 	isV4  bool
 	l     *logrus.Logger
 	batch int
-}
-
-func maybeIPV4(ip net.IP) (net.IP, bool) {
-	ip4 := ip.To4()
-	if ip4 != nil {
-		return ip4, true
-	}
-	return ip, false
 }
 
 func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
@@ -53,6 +48,11 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 		if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
 			return nil, fmt.Errorf("unable to set SO_REUSEPORT: %s", err)
 		}
+	}
+
+	// Set a read timeout
+	if err = unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &readTimeout); err != nil {
+		return nil, fmt.Errorf("unable to set SO_RCVTIMEO: %s", err)
 	}
 
 	var sa unix.Sockaddr
@@ -122,7 +122,7 @@ func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	}
 }
 
-func (u *StdConn) ListenOut(r EncReader) {
+func (u *StdConn) ListenOut(r EncReader) error {
 	var ip netip.Addr
 
 	msgs, buffers, names := u.PrepareRawMessages(u.batch)
@@ -134,8 +134,7 @@ func (u *StdConn) ListenOut(r EncReader) {
 	for {
 		n, err := read(msgs)
 		if err != nil {
-			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
-			return
+			return err
 		}
 
 		for i := 0; i < n; i++ {
@@ -163,6 +162,9 @@ func (u *StdConn) ReadSingle(msgs []rawMessage) (int, error) {
 		)
 
 		if err != 0 {
+			if err == unix.EAGAIN || err == unix.EINTR || err == unix.EWOULDBLOCK {
+				continue
+			}
 			return 0, &net.OpError{Op: "recvmsg", Err: err}
 		}
 
@@ -182,8 +184,14 @@ func (u *StdConn) ReadMulti(msgs []rawMessage) (int, error) {
 			0,
 			0,
 		)
-
-		if err != 0 {
+		if err == unix.EAGAIN || err == unix.EINTR || err == unix.EWOULDBLOCK {
+			if int64(n) > 0 {
+				//ran out of time, but have some messages to return
+				return int(n), nil
+			} else {
+				continue
+			}
+		} else if err != 0 {
 			return 0, &net.OpError{Op: "recvmmsg", Err: err}
 		}
 

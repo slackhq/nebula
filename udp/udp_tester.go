@@ -6,6 +6,7 @@ package udp
 import (
 	"io"
 	"net/netip"
+	"os"
 	"sync/atomic"
 
 	"github.com/sirupsen/logrus"
@@ -106,11 +107,11 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	return nil
 }
 
-func (u *TesterConn) ListenOut(r EncReader) {
+func (u *TesterConn) ListenOut(r EncReader) error {
 	for {
 		p, ok := <-u.RxPackets
 		if !ok {
-			return
+			return os.ErrClosed
 		}
 		r(p.From, p.Data)
 	}
