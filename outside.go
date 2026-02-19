@@ -340,8 +340,8 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 			}
 			fp.Protocol = uint8(proto)
 			fp.LocalPort = 0 //incoming vs outgoing doesn't matter for icmpv6
-			code := data[offset+1]
-			switch code {
+			icmptype := data[offset+1]
+			switch icmptype {
 			case layers.ICMPv6TypeEchoRequest, layers.ICMPv6TypeEchoReply:
 				fp.RemotePort = binary.BigEndian.Uint16(data[offset+4 : offset+6]) //identifier
 			default:
