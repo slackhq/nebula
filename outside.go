@@ -339,9 +339,14 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 				return ErrIPv6PacketTooShort
 			}
 			fp.Protocol = uint8(proto)
-			//incoming vs outgoing doesn't matter for icmpv6
-			fp.RemotePort = binary.BigEndian.Uint16(data[offset+4 : offset+6]) //identifier
-			fp.LocalPort = 0                                                   //code would be uint16(data[offset+1])
+			fp.LocalPort = 0 //incoming vs outgoing doesn't matter for icmpv6
+			code := data[offset+1]
+			switch code {
+			case layers.ICMPv6TypeEchoRequest, layers.ICMPv6TypeEchoReply:
+				fp.RemotePort = binary.BigEndian.Uint16(data[offset+4 : offset+6]) //identifier
+			default:
+				fp.RemotePort = 0
+			}
 			fp.Fragment = false
 			return nil
 
