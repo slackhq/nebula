@@ -61,6 +61,9 @@ type HandshakeManager struct {
 	f                      *Interface
 	l                      *logrus.Logger
 
+	multiPort MultiPortConfig
+	udpRaw    *udp.RawConn
+
 	// can be used to trigger outbound handshake for the given vpnIp
 	trigger chan netip.Addr
 }
@@ -237,6 +240,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 
 	// Send the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
 	var sentTo []netip.AddrPort
+	var sentMultiport bool
 	hostinfo.remotes.ForEach(hm.mainHostMap.GetPreferredRanges(), func(addr netip.AddrPort, _ bool) {
 		hm.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
 		err := hm.outside.WriteTo(hostinfo.HandshakePacket[0], addr)
@@ -249,6 +253,27 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		} else {
 			sentTo = append(sentTo, addr)
 		}
+
+		// Attempt a multiport handshake if we are past the TxHandshakeDelay attempts
+		if hm.multiPort.TxHandshake && hm.udpRaw != nil && hh.counter >= hm.multiPort.TxHandshakeDelay {
+			sentMultiport = true
+			// We need to re-allocate with 8 bytes at the start of SOCK_RAW
+			raw := hostinfo.HandshakePacket[0x80]
+			if raw == nil {
+				raw = make([]byte, len(hostinfo.HandshakePacket[0])+udp.RawOverhead)
+				copy(raw[udp.RawOverhead:], hostinfo.HandshakePacket[0])
+				hostinfo.HandshakePacket[0x80] = raw
+			}
+
+			hm.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
+			err = hm.udpRaw.WriteTo(raw, udp.RandomSendPort.UDPSendPort(hm.multiPort.TxPorts), addr)
+			if err != nil {
+				hostinfo.logger(hm.l).WithField("udpAddr", addr).
+					WithField("initiatorIndex", hostinfo.localIndexId).
+					WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+					WithError(err).Error("Failed to send handshake message")
+			}
+		}
 	})
 
 	// Don't be too noisy or confusing if we fail to send a handshake - if we don't get through we'll eventually log a timeout,
@@ -257,6 +282,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		hostinfo.logger(hm.l).WithField("udpAddrs", sentTo).
 			WithField("initiatorIndex", hostinfo.localIndexId).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
+			WithField("multiportHandshake", sentMultiport).
 			Info("Handshake message sent")
 	} else if hm.l.Level >= logrus.DebugLevel {
 		hostinfo.logger(hm.l).WithField("udpAddrs", sentTo).

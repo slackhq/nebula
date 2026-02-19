@@ -88,12 +88,24 @@ type Interface struct {
 
 	writers []udp.Conn
 	readers []io.ReadWriteCloser
+	udpRaw  *udp.RawConn
+
+	multiPort MultiPortConfig
 
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
 	cachedPacketMetrics *cachedPacketMetrics
 
 	l *logrus.Logger
+}
+
+type MultiPortConfig struct {
+	Tx               bool
+	Rx               bool
+	TxBasePort       uint16
+	TxPorts          int
+	TxHandshake      bool
+	TxHandshakeDelay int64
 }
 
 type EncWriter interface {
@@ -231,6 +243,8 @@ func (f *Interface) activate() {
 	}
 
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
+
+	metrics.GetOrRegisterGauge("multiport.tx_ports", nil).Update(int64(f.multiPort.TxPorts))
 
 	// Prepare n tun queues
 	var reader io.ReadWriteCloser = f.inside
@@ -445,6 +459,8 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 
 	udpStats := udp.NewUDPStatsEmitter(f.writers)
 
+	var rawStats func()
+
 	certExpirationGauge := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil)
 	certInitiatingVersion := metrics.GetOrRegisterGauge("certificate.initiating_version", nil)
 	certMaxVersion := metrics.GetOrRegisterGauge("certificate.max_version", nil)
@@ -462,6 +478,13 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 			defaultCrt := certState.GetDefaultCertificate()
 			certExpirationGauge.Update(int64(defaultCrt.NotAfter().Sub(time.Now()) / time.Second))
 			certInitiatingVersion.Update(int64(defaultCrt.Version()))
+
+			if f.udpRaw != nil {
+				if rawStats == nil {
+					rawStats = udp.NewRawStatsEmitter(f.udpRaw)
+				}
+				rawStats()
+			}
 
 			// Report the max certificate version we are capable of using
 			if certState.v2Cert != nil {

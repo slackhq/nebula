@@ -48,6 +48,10 @@ listen:
 
 tun:
   dev: ${TUN_DEV:-tun0}
+  multiport:
+    tx_enabled: ${MULTIPORT_TX:-false}
+    rx_enabled: ${MULTIPORT_RX:-false}
+    tx_handshake: ${MULTIPORT_HANDSHAKE:-false}
 
 firewall:
   inbound_action: reject

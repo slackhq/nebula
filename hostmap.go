@@ -243,6 +243,12 @@ type HostInfo struct {
 	networks   *bart.Table[NetworkType]
 	relayState RelayState
 
+	// If true, we should send to this remote using multiport
+	multiportTx bool
+
+	// If true, we will receive from this remote using multiport
+	multiportRx bool
+
 	// HandshakePacket records the packets used to create this hostinfo
 	// We need these to avoid replayed handshake packets creating new hostinfos which causes churn
 	HandshakePacket map[uint8][]byte
