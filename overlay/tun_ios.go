@@ -22,11 +22,12 @@ import (
 
 type tun struct {
 	io.ReadWriteCloser
-	vpnNetworks    []netip.Prefix
-	unsafeNetworks []netip.Prefix
-	Routes         atomic.Pointer[[]Route]
-	routeTree      atomic.Pointer[bart.Table[routing.Gateways]]
-	l              *logrus.Logger
+	vpnNetworks      []netip.Prefix
+	unsafeNetworks   []netip.Prefix
+	unsafeIPv4Origin netip.Prefix
+	Routes           atomic.Pointer[[]Route]
+	routeTree        atomic.Pointer[bart.Table[routing.Gateways]]
+	l                *logrus.Logger
 }
 
 func newTun(_ *config.C, _ *logrus.Logger, _ []netip.Prefix, _ []netip.Prefix, _ bool) (*tun, error) {
@@ -70,6 +71,8 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	if !initial && !change {
 		return nil
 	}
+
+	t.unsafeIPv4Origin = prepareUnsafeOriginAddr(t, t.l, c, routes)
 
 	routeTree, err := makeRouteTree(t.l, routes, false)
 	if err != nil {
@@ -153,8 +156,12 @@ func (t *tun) UnsafeNetworks() []netip.Prefix {
 	return t.unsafeNetworks
 }
 
+func (t *tun) UnsafeIPv4OriginAddress() netip.Prefix {
+	return t.unsafeIPv4Origin
+}
+
 func (t *tun) SNATAddress() netip.Prefix {
-	return t.snatAddr
+	return netip.Prefix{}
 }
 
 func (t *tun) Name() string {

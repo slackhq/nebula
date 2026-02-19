@@ -43,6 +43,9 @@ func (d *UserDevice) UnsafeNetworks() []netip.Prefix {
 func (d *UserDevice) SNATAddress() netip.Prefix {
 	return netip.Prefix{}
 }
+func (d *UserDevice) UnsafeIPv4OriginAddress() netip.Prefix {
+	return netip.Prefix{}
+}
 
 func (d *UserDevice) Activate() error {
 	return nil

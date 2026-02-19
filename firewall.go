@@ -89,6 +89,7 @@ type Firewall struct {
 	defaultLocalCIDRAny bool
 	incomingMetrics     firewallMetrics
 	outgoingMetrics     firewallMetrics
+	unsafeIPv4Origin    netip.Addr
 	snatAddr            netip.Addr
 
 	l *logrus.Logger
@@ -182,24 +183,18 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 		tmax = defaultTimeout
 	}
 
-	hasV4Networks := false
 	routableNetworks := new(bart.Lite)
 	var assignedNetworks []netip.Prefix
 	for _, network := range c.Networks() {
 		nprefix := netip.PrefixFrom(network.Addr(), network.Addr().BitLen())
 		routableNetworks.Insert(nprefix)
 		assignedNetworks = append(assignedNetworks, network)
-		hasV4Networks = hasV4Networks || network.Addr().Is4()
 	}
 
 	hasUnsafeNetworks := false
 	for _, n := range c.UnsafeNetworks() {
 		routableNetworks.Insert(n)
 		hasUnsafeNetworks = true
-	}
-
-	if !hasUnsafeNetworks || hasV4Networks {
-		snatAddr = netip.Addr{} //disable using the special snat address if it doesn't make sense to use it
 	}
 
 	return &Firewall{
@@ -356,9 +351,9 @@ func (f *Firewall) GetRuleHashes() string {
 func (f *Firewall) SetSNATAddressFromInterface(i *Interface) {
 	//address-mutation-avoidance is done inside Interface, the firewall doesn't need to care
 	//todo should snatted conntracks get expired out? Probably not needed until if/when we allow reload
-	if f.hasUnsafeNetworks { //todo this logic???
-		f.snatAddr = i.inside.SNATAddress().Addr()
-	}
+	f.snatAddr = i.inside.SNATAddress().Addr()
+	f.unsafeIPv4Origin = i.inside.UnsafeIPv4OriginAddress().Addr()
+	//f.routableNetworks.Insert(i.inside.UnsafeIPv4OriginAddress()) //todo is this the right idea?
 }
 
 func (f *Firewall) ShouldUnSNAT(fp *firewall.Packet) bool {
@@ -560,27 +555,26 @@ func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo
 	return nil
 }
 
-func (f *Firewall) identifyNetworkType(h *HostInfo, fp firewall.Packet) NetworkType {
+func (f *Firewall) identifyRemoteNetworkType(h *HostInfo, fp firewall.Packet) NetworkType {
 	if h.networks == nil {
 		// Simple case: Certificate has one address and no unsafe networks
 		if h.vpnAddrs[0] == fp.RemoteAddr {
 			return NetworkTypeVPN
-		} else if fp.IsIPv4() && h.HasOnlyV6Addresses() {
-			return NetworkTypeUncheckedSNATPeer
-		} else {
-			return NetworkTypeInvalidPeer
-		}
+		} //else, fallthrough
 	} else if nwType, ok := h.networks.Lookup(fp.RemoteAddr); ok {
 		//todo check for if fp.RemoteAddr is our f.snatAddr here too? Does that need a special case?
 		return nwType //will return NetworkTypeVPN or NetworkTypeUnsafe
-	} else if fp.IsIPv4() && h.HasOnlyV6Addresses() { //todo surely I'm smart enough to avoid writing these branches twice
+	}
+
+	//RemoteAddr not in our networks table
+	if f.snatAddr.IsValid() && fp.IsIPv4() && h.HasOnlyV6Addresses() {
 		return NetworkTypeUncheckedSNATPeer
 	} else {
 		return NetworkTypeInvalidPeer
 	}
 }
 
-func (f *Firewall) allowNetworkType(nwType NetworkType) error {
+func (f *Firewall) allowRemoteNetworkType(nwType NetworkType, fp firewall.Packet) error {
 	switch nwType {
 	case NetworkTypeVPN:
 		return nil
@@ -592,7 +586,10 @@ func (f *Firewall) allowNetworkType(nwType NetworkType) error {
 	case NetworkTypeUnsafe:
 		return nil // nothing special, one day this may have different FW rules
 	case NetworkTypeUncheckedSNATPeer:
-		if f.snatAddr.IsValid() {
+		if f.unsafeIPv4Origin.IsValid() && fp.LocalAddr == f.unsafeIPv4Origin {
+			return nil //the client case
+		}
+		if f.snatAddr.IsValid() { //todo
 			return nil //todo is this enough?
 		} else {
 			return ErrInvalidRemoteIP
@@ -606,21 +603,37 @@ func (f *Firewall) willingToHandleLocalAddr(incoming bool, fp firewall.Packet, r
 	if f.routableNetworks.Contains(fp.LocalAddr) {
 		return nil //easy, this should handle NetworkTypeVPN in all cases, and NetworkTypeUnsafe on the router side
 	}
-
-	//watch out, when incoming, this function decides if we will deliver a packet locally
-	//when outgoing, much less important, it just decides if we're willing to tx
-	switch remoteNwType {
-	// we never want to accept unconntracked inbound traffic from these network types, but outbound is okay.
-	// It's the recipient's job to validate and accept or deny the packet.
-	case NetworkTypeUncheckedSNATPeer, NetworkTypeUnsafe:
-		//NetworkTypeUnsafe needed here to allow inbound from an unsafe-router
-		if incoming {
-			return ErrInvalidLocalIP
-		}
-		return nil
-	default:
+	if incoming { //at least for now, reject all traffic other than what we've already decided is routable
 		return ErrInvalidLocalIP
 	}
+
+	//now, all traffic is outgoing. Outgoing traffic to these types is not required to be considered inbound-routable
+	//todo is this right??? can/should these rules be tighter?
+	if remoteNwType == NetworkTypeUnsafe {
+		return nil
+	}
+	//if remoteNwType == NetworkTypeUncheckedSNATPeer {
+	//	return nil
+	//}
+
+	//todo
+
+	////watch out, when incoming, this function decides if we will deliver a packet locally
+	////when outgoing, much less important, it just decides if we're willing to tx
+	//switch remoteNwType {
+	//// we never want to accept unconntracked inbound traffic from these network types, but outbound is okay.
+	//// It's the recipient's job to validate and accept or deny the packet.
+	//case NetworkTypeUncheckedSNATPeer, NetworkTypeUnsafe:
+	//	//NetworkTypeUnsafe needed here to allow inbound from an unsafe-router
+	//	if incoming {
+	//		return ErrInvalidLocalIP
+	//	}
+	//	return nil
+	//default:
+	//	return ErrInvalidLocalIP
+	//}
+
+	return ErrInvalidLocalIP
 }
 
 // Drop returns an error if the packet should be dropped, explaining why. It
@@ -654,8 +667,8 @@ func (f *Firewall) Drop(fp firewall.Packet, pkt []byte, incoming bool, h *HostIn
 	}
 
 	// Make sure remote address matches nebula certificate, and determine how to treat it
-	remoteNetworkType := f.identifyNetworkType(h, fp)
-	if err := f.allowNetworkType(remoteNetworkType); err != nil {
+	remoteNetworkType := f.identifyRemoteNetworkType(h, fp)
+	if err := f.allowRemoteNetworkType(remoteNetworkType, fp); err != nil {
 		f.metrics(incoming).droppedRemoteAddr.Inc(1)
 		return err
 	}

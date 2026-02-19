@@ -24,15 +24,15 @@ import (
 
 type tun struct {
 	io.ReadWriteCloser
-	Device         string
-	vpnNetworks    []netip.Prefix
-	unsafeNetworks []netip.Prefix
-	snatAddr       netip.Prefix
-	DefaultMTU     int
-	Routes         atomic.Pointer[[]Route]
-	routeTree      atomic.Pointer[bart.Table[routing.Gateways]]
-	linkAddr       *netroute.LinkAddr
-	l              *logrus.Logger
+	Device           string
+	vpnNetworks      []netip.Prefix
+	unsafeNetworks   []netip.Prefix
+	unsafeIPv4Origin netip.Prefix
+	DefaultMTU       int
+	Routes           atomic.Pointer[[]Route]
+	routeTree        atomic.Pointer[bart.Table[routing.Gateways]]
+	linkAddr         *netroute.LinkAddr
+	l                *logrus.Logger
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
 	out []byte
@@ -216,8 +216,8 @@ func (t *tun) Activate() error {
 			}
 		}
 	}
-	if t.snatAddr.IsValid() && t.snatAddr.Addr().Is4() {
-		if err = t.activate4(t.snatAddr); err != nil {
+	if t.unsafeIPv4Origin.IsValid() && t.unsafeIPv4Origin.Addr().Is4() {
+		if err = t.activate4(t.unsafeIPv4Origin); err != nil {
 			return err
 		}
 	}
@@ -323,7 +323,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	}
 
 	if initial {
-		t.snatAddr = prepareSnatAddr(t, t.l, c, routes)
+		t.unsafeIPv4Origin = prepareUnsafeOriginAddr(t, t.l, c, routes)
 	}
 
 	routeTree, err := makeRouteTree(t.l, routes, false)
@@ -561,8 +561,12 @@ func (t *tun) UnsafeNetworks() []netip.Prefix {
 	return t.unsafeNetworks
 }
 
+func (t *tun) UnsafeIPv4OriginAddress() netip.Prefix {
+	return t.unsafeIPv4Origin
+}
+
 func (t *tun) SNATAddress() netip.Prefix {
-	return t.snatAddr
+	return netip.Prefix{}
 }
 
 func (t *tun) Name() string {

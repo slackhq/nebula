@@ -22,13 +22,6 @@ type disabledTun struct {
 	l  *logrus.Logger
 }
 
-func (*disabledTun) UnsafeNetworks() []netip.Prefix {
-	return nil
-}
-func (*disabledTun) SNATAddress() netip.Prefix {
-	return netip.Prefix{}
-}
-
 func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled bool, l *logrus.Logger) *disabledTun {
 	tun := &disabledTun{
 		vpnNetworks: vpnNetworks,
@@ -57,6 +50,17 @@ func (*disabledTun) RoutesFor(addr netip.Addr) routing.Gateways {
 
 func (t *disabledTun) Networks() []netip.Prefix {
 	return t.vpnNetworks
+}
+
+func (*disabledTun) UnsafeNetworks() []netip.Prefix {
+	return nil
+}
+func (*disabledTun) SNATAddress() netip.Prefix {
+	return netip.Prefix{}
+}
+
+func (*disabledTun) UnsafeIPv4OriginAddress() netip.Prefix {
+	return netip.Prefix{}
 }
 
 func (*disabledTun) Name() string {

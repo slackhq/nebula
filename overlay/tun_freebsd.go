@@ -86,16 +86,16 @@ type ifreqAlias6 struct {
 }
 
 type tun struct {
-	Device         string
-	vpnNetworks    []netip.Prefix
-	unsafeNetworks []netip.Prefix
-	snatAddr       netip.Prefix
-	MTU            int
-	Routes         atomic.Pointer[[]Route]
-	routeTree      atomic.Pointer[bart.Table[routing.Gateways]]
-	linkAddr       *netroute.LinkAddr
-	l              *logrus.Logger
-	devFd          int
+	Device           string
+	vpnNetworks      []netip.Prefix
+	unsafeNetworks   []netip.Prefix
+	unsafeIPv4Origin netip.Prefix
+	MTU              int
+	Routes           atomic.Pointer[[]Route]
+	routeTree        atomic.Pointer[bart.Table[routing.Gateways]]
+	linkAddr         *netroute.LinkAddr
+	l                *logrus.Logger
+	devFd            int
 }
 
 func (t *tun) Read(to []byte) (int, error) {
@@ -414,7 +414,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	}
 
 	if initial {
-		t.snatAddr = prepareSnatAddr(t, t.l, c, routes)
+		t.unsafeIPv4Origin = prepareUnsafeOriginAddr(t, t.l, c, routes)
 	}
 
 	routeTree, err := makeRouteTree(t.l, routes, false)
@@ -457,8 +457,12 @@ func (t *tun) UnsafeNetworks() []netip.Prefix {
 	return t.unsafeNetworks
 }
 
+func (t *tun) UnsafeIPv4OriginAddress() netip.Prefix {
+	return t.unsafeIPv4Origin
+}
+
 func (t *tun) SNATAddress() netip.Prefix {
-	return t.snatAddr
+	return netip.Prefix{}
 }
 
 func (t *tun) Name() string {

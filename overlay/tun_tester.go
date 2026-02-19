@@ -17,13 +17,14 @@ import (
 )
 
 type TestTun struct {
-	Device         string
-	vpnNetworks    []netip.Prefix
-	unsafeNetworks []netip.Prefix
-	snatAddr       netip.Prefix
-	Routes         []Route
-	routeTree      *bart.Table[routing.Gateways]
-	l              *logrus.Logger
+	Device           string
+	vpnNetworks      []netip.Prefix
+	unsafeNetworks   []netip.Prefix
+	snatAddr         netip.Prefix
+	unsafeIPv4Origin netip.Prefix
+	Routes           []Route
+	routeTree        *bart.Table[routing.Gateways]
+	l                *logrus.Logger
 
 	closed    atomic.Bool
 	rxPackets chan []byte // Packets to receive into nebula
@@ -50,7 +51,8 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNet
 		rxPackets:      make(chan []byte, 10),
 		TxPackets:      make(chan []byte, 10),
 	}
-	tt.snatAddr = prepareSnatAddr(tt, l, c, routes)
+	tt.unsafeIPv4Origin = prepareUnsafeOriginAddr(tt, l, c, routes)
+	tt.snatAddr = prepareSnatAddr(tt, tt.l, c)
 	return tt, nil
 }
 
@@ -147,6 +149,10 @@ func (t *TestTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 
 func (t *TestTun) UnsafeNetworks() []netip.Prefix {
 	return t.unsafeNetworks
+}
+
+func (t *TestTun) UnsafeIPv4OriginAddress() netip.Prefix {
+	return t.unsafeIPv4Origin
 }
 
 func (t *TestTun) SNATAddress() netip.Prefix {

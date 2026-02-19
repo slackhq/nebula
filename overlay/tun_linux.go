@@ -47,7 +47,8 @@ type tun struct {
 	routesFromSystem     map[netip.Prefix]routing.Gateways
 	routesFromSystemLock sync.Mutex
 
-	snatAddr netip.Prefix
+	snatAddr         netip.Prefix
+	unsafeIPv4Origin netip.Prefix
 
 	l *logrus.Logger
 }
@@ -58,6 +59,10 @@ func (t *tun) Networks() []netip.Prefix {
 
 func (t *tun) UnsafeNetworks() []netip.Prefix {
 	return t.unsafeNetworks
+}
+
+func (t *tun) UnsafeIPv4OriginAddress() netip.Prefix {
+	return t.unsafeIPv4Origin
 }
 
 func (t *tun) SNATAddress() netip.Prefix {
@@ -183,7 +188,8 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	}
 
 	if initial {
-		t.snatAddr = prepareSnatAddr(t, t.l, c, routes)
+		t.unsafeIPv4Origin = prepareUnsafeOriginAddr(t, t.l, c, routes) //todo MUST be different from t.snatAddr!
+		t.snatAddr = prepareSnatAddr(t, t.l, c)
 	}
 
 	routeTree, err := makeRouteTree(t.l, routes, true)
@@ -329,15 +335,15 @@ func (t *tun) addIPs(link netlink.Link) error {
 		}
 	}
 
-	if t.snatAddr.IsValid() && len(t.unsafeNetworks) == 0 { //TODO unsafe-routers should be able to snat and be snatted
+	if t.unsafeIPv4Origin.IsValid() {
 		newAddrs = append(newAddrs, &netlink.Addr{
 			IPNet: &net.IPNet{
-				IP:   t.snatAddr.Addr().AsSlice(),
-				Mask: net.CIDRMask(t.snatAddr.Bits(), t.snatAddr.Addr().BitLen()),
+				IP:   t.unsafeIPv4Origin.Addr().AsSlice(),
+				Mask: net.CIDRMask(t.unsafeIPv4Origin.Bits(), t.unsafeIPv4Origin.Addr().BitLen()),
 			},
-			Label: t.snatAddr.Addr().Zone(),
+			Label: t.unsafeIPv4Origin.Addr().Zone(),
 		})
-		t.l.WithField("address", t.snatAddr).Info("Adding SNAT address")
+		t.l.WithField("address", t.unsafeIPv4Origin).Info("Adding origin address for IPv4 unsafe_routes")
 	}
 
 	//add all new addresses
@@ -431,9 +437,9 @@ func (t *tun) Activate() error {
 		}
 	}
 	//TODO snat and be snatted
-	if t.snatAddr.IsValid() && len(t.unsafeNetworks) == 0 {
-		if err = t.setDefaultRoute(t.snatAddr); err != nil {
-			return fmt.Errorf("failed to set default route MTU for %s: %w", t.snatAddr, err)
+	if t.unsafeIPv4Origin.IsValid() {
+		if err = t.setDefaultRoute(t.unsafeIPv4Origin); err != nil {
+			return fmt.Errorf("failed to set default route MTU for %s: %w", t.unsafeIPv4Origin, err)
 		}
 	}
 
@@ -565,10 +571,10 @@ func (t *tun) addRoutes(logErrors bool) error {
 		}
 	}
 
-	if len(t.unsafeNetworks) == 0 {
-		return nil
+	if t.snatAddr.IsValid() {
+		return t.setSnatRoute()
 	}
-	return t.setSnatRoute()
+	return nil
 }
 
 func (t *tun) removeRoutes(routes []Route) {

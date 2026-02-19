@@ -131,52 +131,75 @@ func selectGateway(dest netip.Prefix, gateways []netip.Prefix) (netip.Prefix, er
 	return netip.Prefix{}, fmt.Errorf("no gateway found for %v in the list of vpn networks", dest)
 }
 
-func prepareSnatAddr(d Device, l *logrus.Logger, c *config.C, routes []Route) netip.Prefix {
+func genLinkLocal() netip.Prefix {
+	octets := []byte{169, 254, 0, 0}
+	_, _ = rand.Read(octets[2:4])
+	if octets[3] == 0 {
+		octets[3] = 1 //please no .0 addresses
+	} else if octets[2] == 255 && octets[3] == 255 {
+		octets[3] = 254 //please no broadcast addresses
+	}
+	out, _ := netip.AddrFromSlice(octets)
+	return netip.PrefixFrom(out, 32)
+}
+
+// prepareUnsafeOriginAddr provides the IPv4 address used on IPv6-only clients that need to access IPv4 unsafe routes
+func prepareUnsafeOriginAddr(d Device, l *logrus.Logger, c *config.C, routes []Route) netip.Prefix {
+	if !d.Networks()[0].Addr().Is6() {
+		return netip.Prefix{} //if we have an IPv4 assignment within the overlay, we don't need an unsafe origin address
+	}
+
+	needed := false
+	for _, route := range routes { //or if we have a route defined into an IPv4 range
+		if route.Cidr.Addr().Is4() {
+			needed = true //todo should this only apply to unsafe routes? almost certainly
+			break
+		}
+	}
+	if !needed {
+		return netip.Prefix{}
+	}
+
+	//todo better config name for sure
+	if a := c.GetString("tun.unsafe_origin_address_for_4over6", ""); a != "" {
+		out, err := netip.ParseAddr(a)
+		if err != nil {
+			l.WithField("value", a).WithError(err).Warn("failed to parse tun.unsafe_origin_address_for_4over6, will use a random value")
+		} else if !out.Is4() || !out.IsLinkLocalUnicast() {
+			l.WithField("value", out).Warn("tun.unsafe_origin_address_for_4over6 must be an IPv4 address")
+		} else if out.IsValid() {
+			return netip.PrefixFrom(out, 32)
+		}
+	}
+	return genLinkLocal()
+}
+
+// prepareSnatAddr provides the address that an IPv6-only unsafe router should use to SNAT traffic before handing it to the operating system
+func prepareSnatAddr(d Device, l *logrus.Logger, c *config.C) netip.Prefix {
 	if !d.Networks()[0].Addr().Is6() {
 		return netip.Prefix{} //if we have an IPv4 assignment within the overlay, we don't need a snat address
 	}
 
-	addSnatAddr := false
+	needed := false
 	for _, un := range d.UnsafeNetworks() { //if we are an unsafe router for an IPv4 range
 		if un.Addr().Is4() {
-			addSnatAddr = true
+			needed = true
 			break
 		}
 	}
-	for _, route := range routes { //or if we have a route defined into an IPv4 range
-		if route.Cidr.Addr().Is4() {
-			addSnatAddr = true //todo should this only apply to unsafe routes?
-			break
-		}
-	}
-	if !addSnatAddr {
+	if !needed {
 		return netip.Prefix{}
 	}
 
-	var err error
-	out := netip.Addr{}
 	if a := c.GetString("tun.snat_address_for_4over6", ""); a != "" {
-		out, err = netip.ParseAddr(a)
+		out, err := netip.ParseAddr(a)
 		if err != nil {
 			l.WithField("value", a).WithError(err).Warn("failed to parse tun.snat_address_for_4over6, will use a random value")
 		} else if !out.Is4() || !out.IsLinkLocalUnicast() {
 			l.WithField("value", out).Warn("tun.snat_address_for_4over6 must be an IPv4 address")
+		} else if out.IsValid() {
+			return netip.PrefixFrom(out, 32)
 		}
 	}
-	if !out.IsValid() {
-		octets := []byte{169, 254, 0, 0}
-		_, _ = rand.Read(octets[2:4])
-		if octets[3] == 0 {
-			octets[3] = 1 //please no .0 addresses
-		} else if octets[2] == 255 && octets[3] == 255 {
-			octets[3] = 254 //please no broadcast addresses
-		}
-		ok := false
-		out, ok = netip.AddrFromSlice(octets)
-		if !ok {
-			l.Error("failed to produce a valid IPv4 address for tun.snat_address_for_4over6")
-			return netip.Prefix{}
-		}
-	}
-	return netip.PrefixFrom(out, 32)
+	return genLinkLocal()
 }

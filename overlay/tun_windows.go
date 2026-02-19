@@ -28,14 +28,14 @@ import (
 const tunGUIDLabel = "Fixed Nebula Windows GUID v1"
 
 type winTun struct {
-	Device         string
-	vpnNetworks    []netip.Prefix
-	unsafeNetworks []netip.Prefix
-	snatAddr       netip.Prefix
-	MTU            int
-	Routes         atomic.Pointer[[]Route]
-	routeTree      atomic.Pointer[bart.Table[routing.Gateways]]
-	l              *logrus.Logger
+	Device           string
+	vpnNetworks      []netip.Prefix
+	unsafeNetworks   []netip.Prefix
+	unsafeIPv4Origin netip.Prefix
+	MTU              int
+	Routes           atomic.Pointer[[]Route]
+	routeTree        atomic.Pointer[bart.Table[routing.Gateways]]
+	l                *logrus.Logger
 
 	tun *wintun.NativeTun
 }
@@ -106,7 +106,7 @@ func (t *winTun) reload(c *config.C, initial bool) error {
 	}
 
 	if initial {
-		t.snatAddr = prepareSnatAddr(t, t.l, c, routes)
+		t.unsafeIPv4Origin = prepareUnsafeOriginAddr(t, t.l, c, routes)
 	}
 
 	routeTree, err := makeRouteTree(t.l, routes, false)
@@ -140,8 +140,8 @@ func (t *winTun) Activate() error {
 	luid := winipcfg.LUID(t.tun.LUID())
 
 	prefixes := t.vpnNetworks
-	if t.snatAddr.IsValid() {
-		prefixes = append(prefixes, t.snatAddr)
+	if t.unsafeIPv4Origin.IsValid() {
+		prefixes = append(prefixes, t.unsafeIPv4Origin)
 	}
 
 	err := luid.SetIPAddresses(prefixes)
@@ -241,8 +241,12 @@ func (t *winTun) UnsafeNetworks() []netip.Prefix {
 	return t.unsafeNetworks
 }
 
+func (t *winTun) UnsafeIPv4OriginAddress() netip.Prefix {
+	return t.unsafeIPv4Origin
+}
+
 func (t *winTun) SNATAddress() netip.Prefix {
-	return t.snatAddr
+	return netip.Prefix{}
 }
 
 func (t *winTun) Name() string {

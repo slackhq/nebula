@@ -18,6 +18,10 @@ func (NoopTun) SNATAddress() netip.Prefix {
 	return netip.Prefix{}
 }
 
+func (NoopTun) UnsafeIPv4OriginAddress() netip.Prefix {
+	return netip.Prefix{}
+}
+
 func (NoopTun) RoutesFor(addr netip.Addr) routing.Gateways {
 	return routing.Gateways{}
 }
