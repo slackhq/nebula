@@ -841,7 +841,7 @@ func TestFirewall_ApplySnat_CrossHostHijack(t *testing.T) {
 	hB := &HostInfo{vpnAddrs: []netip.Addr{hostB}}
 
 	err := fw.applySnat(pkt, &fp, cn, hB)
-	assert.ErrorIs(t, err, ErrSNATIdentityMismatch)
+	require.ErrorIs(t, err, ErrSNATIdentityMismatch)
 	assert.Equal(t, canonicalUDPHijack, pkt, "packet bytes must be unmodified after identity mismatch")
 }
 
@@ -907,7 +907,7 @@ func TestFirewall_ApplySnat_MixedStackRejected(t *testing.T) {
 		}}
 
 		err := fw.applySnat(pkt, &fp, cn, h)
-		require.Error(t, err, ErrCannotSNAT)
+		require.ErrorIs(t, err, ErrCannotSNAT)
 		assert.Equal(t, canonicalUDPTest, pkt, "packet bytes must be unmodified on error")
 	})
 }
@@ -1101,7 +1101,7 @@ func TestFirewall_Drop_FirewallBlocksSNAT(t *testing.T) {
 	cp := cert.NewCAPool()
 
 	err := fw.Drop(fp, pkt, true, h, cp, nil)
-	assert.ErrorIs(t, err, ErrNoMatchingRule, "firewall should block SNAT-eligible traffic that doesn't match rules")
+	require.ErrorIs(t, err, ErrNoMatchingRule, "firewall should block SNAT-eligible traffic that doesn't match rules")
 	assert.Equal(t, canonicalUDPBlocked, pkt, "packet must not be rewritten when firewall blocks it")
 }
 
@@ -1274,7 +1274,7 @@ func TestFirewall_Drop_IPv4HostNotSNATted(t *testing.T) {
 		cp := cert.NewCAPool()
 
 		err := fw.Drop(fp, pkt, true, h, cp, nil)
-		assert.ErrorIs(t, err, ErrPeerRejected, "IPv4 peer should be rejected as VPNPeer, not treated as SNAT")
+		require.Error(t, err, ErrPeerRejected, "IPv4 peer should be rejected as VPNPeer, not treated as SNAT")
 		assert.Equal(t, canonicalUDPV4Traffic, pkt, "packet must not be rewritten when peer is rejected")
 	})
 
