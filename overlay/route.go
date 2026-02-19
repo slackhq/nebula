@@ -37,6 +37,9 @@ func (r Route) Equal(t Route) bool {
 	if r.Install != t.Install {
 		return false
 	}
+	if r.Via.String() != t.Via.String() {
+		return false
+	}
 	return true
 }
 
