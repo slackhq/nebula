@@ -167,7 +167,7 @@ func Test_newPacket_v6(t *testing.T) {
 	}
 
 	icmp := layers.ICMPv6{
-		TypeCode: 0x55,
+		TypeCode: layers.ICMPv6TypeEchoRequest,
 		Checksum: 0x1234,
 	}
 
