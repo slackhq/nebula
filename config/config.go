@@ -20,6 +20,13 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+const (
+// Maximum allowed config file size (5MB)
+maxConfigFileSize = 5 * 1024 * 1024
+// Maximum number of keys in a single config file
+maxConfigKeys = 10000
+)
+
 type C struct {
 	path        string
 	files       []string
@@ -369,6 +376,11 @@ func (c *C) parseRaw(b []byte) error {
 		return err
 	}
 
+	// Check number of configuration keys
+	if len(m) > maxConfigKeys {
+		return fmt.Errorf("config string has too many keys: %d keys, max: %d", len(m), maxConfigKeys)
+	}
+
 	c.Settings = m
 	return nil
 }
@@ -382,7 +394,17 @@ func (c *C) parse() error {
 			return err
 		}
 
+	// Check config file size before parsing
+	if len(b) > maxConfigFileSize {
+		return fmt.Errorf("config file too large: %s (%d bytes, max: %d bytes)", path, len(b), maxConfigFileSize)
+	}
+
 		var nm map[string]any
+	// Check number of configuration keys
+	if len(nm) > maxConfigKeys {
+		return fmt.Errorf("config file has too many keys: %s (%d keys, max: %d)", path, len(nm), maxConfigKeys)
+	}
+
 		err = yaml.Unmarshal(b, &nm)
 		if err != nil {
 			return err
