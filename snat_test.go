@@ -461,7 +461,7 @@ func TestFirewall_FindUsableSNATPort(t *testing.T) {
 		}
 		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
 
-		// Fill all 0x7ff ports
+		// Fill all ports
 		baseFP := firewall.Packet{
 			LocalAddr:  netip.MustParseAddr("192.168.1.1"),
 			RemoteAddr: snatAddr,
@@ -469,16 +469,16 @@ func TestFirewall_FindUsableSNATPort(t *testing.T) {
 			Protocol:   firewall.ProtoUDP,
 		}
 		fw.Conntrack.Lock()
-		for i := 0; i < 0x7ff; i++ {
+		for i := 0; i < 65535; i++ {
 			fp := baseFP
-			fp.RemotePort = uint16(0x7ff + i)
+			fp.RemotePort = uint16(i)
 			fw.Conntrack.Conns[fp] = &conn{}
 		}
 		fw.Conntrack.Unlock()
 
-		// Try to find a port starting from 0x7ff
+		// Try to find a port starting from 0x8000
 		fp := baseFP
-		fp.RemotePort = 0x7ff
+		fp.RemotePort = 0x8000
 		cn := &conn{}
 		err := fw.findUsableSNATPort(&fp, cn)
 		assert.ErrorIs(t, err, ErrCannotSNAT)
