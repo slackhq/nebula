@@ -86,14 +86,16 @@ type ifreqAlias6 struct {
 }
 
 type tun struct {
-	Device      string
-	vpnNetworks []netip.Prefix
-	MTU         int
-	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	linkAddr    *netroute.LinkAddr
-	l           *logrus.Logger
-	devFd       int
+	Device           string
+	vpnNetworks      []netip.Prefix
+	unsafeNetworks   []netip.Prefix
+	unsafeIPv4Origin netip.Prefix
+	MTU              int
+	Routes           atomic.Pointer[[]Route]
+	routeTree        atomic.Pointer[bart.Table[routing.Gateways]]
+	linkAddr         *netroute.LinkAddr
+	l                *logrus.Logger
+	devFd            int
 }
 
 func (t *tun) Read(to []byte) (int, error) {
@@ -199,11 +201,11 @@ func (t *tun) Close() error {
 	return nil
 }
 
-func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*tun, error) {
+func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix, _ []netip.Prefix) (*tun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in FreeBSD")
 }
 
-func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
+func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix, _ bool) (*tun, error) {
 	// Try to open existing tun device
 	var fd int
 	var err error
@@ -270,11 +272,12 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	}
 
 	t := &tun{
-		Device:      deviceName,
-		vpnNetworks: vpnNetworks,
-		MTU:         c.GetInt("tun.mtu", DefaultMTU),
-		l:           l,
-		devFd:       fd,
+		Device:         deviceName,
+		vpnNetworks:    vpnNetworks,
+		unsafeNetworks: unsafeNetworks,
+		MTU:            c.GetInt("tun.mtu", DefaultMTU),
+		l:              l,
+		devFd:          fd,
 	}
 
 	err = t.reload(c, true)
@@ -410,6 +413,10 @@ func (t *tun) reload(c *config.C, initial bool) error {
 		return nil
 	}
 
+	if initial {
+		t.unsafeIPv4Origin = prepareUnsafeOriginAddr(t, t.l, c, routes)
+	}
+
 	routeTree, err := makeRouteTree(t.l, routes, false)
 	if err != nil {
 		return err
@@ -444,6 +451,18 @@ func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 
 func (t *tun) Networks() []netip.Prefix {
 	return t.vpnNetworks
+}
+
+func (t *tun) UnsafeNetworks() []netip.Prefix {
+	return t.unsafeNetworks
+}
+
+func (t *tun) UnsafeIPv4OriginAddress() netip.Prefix {
+	return t.unsafeIPv4Origin
+}
+
+func (t *tun) SNATAddress() netip.Prefix {
+	return netip.Prefix{}
 }
 
 func (t *tun) Name() string {

@@ -9,7 +9,7 @@ import (
 	"github.com/slackhq/nebula/routing"
 )
 
-func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
+func NewUserDeviceFromConfig(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix, routines int) (Device, error) {
 	return NewUserDevice(vpnNetworks)
 }
 
@@ -34,6 +34,17 @@ type UserDevice struct {
 
 	inboundReader *io.PipeReader
 	inboundWriter *io.PipeWriter
+}
+
+func (d *UserDevice) UnsafeNetworks() []netip.Prefix {
+	return nil
+}
+
+func (d *UserDevice) SNATAddress() netip.Prefix {
+	return netip.Prefix{}
+}
+func (d *UserDevice) UnsafeIPv4OriginAddress() netip.Prefix {
+	return netip.Prefix{}
 }
 
 func (d *UserDevice) Activate() error {
