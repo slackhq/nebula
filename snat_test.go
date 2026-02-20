@@ -1274,7 +1274,7 @@ func TestFirewall_Drop_IPv4HostNotSNATted(t *testing.T) {
 		cp := cert.NewCAPool()
 
 		err := fw.Drop(fp, pkt, true, h, cp, nil)
-		require.Error(t, err, ErrPeerRejected, "IPv4 peer should be rejected as VPNPeer, not treated as SNAT")
+		require.ErrorIs(t, err, ErrPeerRejected, "IPv4 peer should be rejected as VPNPeer, not treated as SNAT")
 		assert.Equal(t, canonicalUDPV4Traffic, pkt, "packet must not be rewritten when peer is rejected")
 	})
 
