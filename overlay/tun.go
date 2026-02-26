@@ -3,6 +3,7 @@ package overlay
 import (
 	"crypto/rand"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 
@@ -131,9 +132,18 @@ func selectGateway(dest netip.Prefix, gateways []netip.Prefix) (netip.Prefix, er
 	return netip.Prefix{}, fmt.Errorf("no gateway found for %v in the list of vpn networks", dest)
 }
 
-func genLinkLocal() netip.Prefix {
+// genLinkLocal generates a random IPv4 link-local address.
+// If randomizer is nil, it uses rand.Reader to find two random bytes
+func genLinkLocal(randomizer io.Reader) netip.Prefix {
+	if randomizer == nil {
+		randomizer = rand.Reader
+	}
 	octets := []byte{169, 254, 0, 0}
-	_, _ = rand.Read(octets[2:4])
+	_, _ = randomizer.Read(octets[2:4])
+	return coerceLinkLocal(octets)
+}
+
+func coerceLinkLocal(octets []byte) netip.Prefix {
 	if octets[3] == 0 {
 		octets[3] = 1 //please no .0 addresses
 	} else if octets[2] == 255 && octets[3] == 255 {
@@ -171,7 +181,7 @@ func prepareUnsafeOriginAddr(d Device, l *logrus.Logger, c *config.C, routes []R
 			return netip.PrefixFrom(out, 32)
 		}
 	}
-	return genLinkLocal()
+	return genLinkLocal(nil)
 }
 
 // prepareSnatAddr provides the address that an IPv6-only unsafe router should use to SNAT traffic before handing it to the operating system
@@ -201,5 +211,5 @@ func prepareSnatAddr(d Device, l *logrus.Logger, c *config.C) netip.Prefix {
 			return netip.PrefixFrom(out, 32)
 		}
 	}
-	return genLinkLocal()
+	return genLinkLocal(nil)
 }
