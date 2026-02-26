@@ -908,13 +908,6 @@ func (fp firewallPort) match(p firewall.Packet, incoming bool, c *cert.CachedCer
 
 	var port int32
 
-	if p.Protocol == firewall.ProtoICMP {
-		// port numbers are re-used for connection tracking and SNAT,
-		// but we don't want to actually filter on them for ICMP
-		// ICMP6 is omitted because we don't attempt to parse code/identifier/etc out of ICMP6
-		return fp[firewall.PortAny].match(p, c, caPool)
-	}
-
 	if p.Fragment {
 		port = firewall.PortFragment
 	} else if incoming {
