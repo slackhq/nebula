@@ -413,7 +413,7 @@ func TestFirewall_FindUsableSNATPort(t *testing.T) {
 			networks:       []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 			unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
 		}
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 
 		fp := firewall.Packet{
 			LocalAddr:  netip.MustParseAddr("192.168.1.1"),
@@ -434,7 +434,7 @@ func TestFirewall_FindUsableSNATPort(t *testing.T) {
 			networks:       []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 			unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
 		}
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 
 		fp := firewall.Packet{
 			LocalAddr:  netip.MustParseAddr("192.168.1.1"),
@@ -459,7 +459,7 @@ func TestFirewall_FindUsableSNATPort(t *testing.T) {
 			networks:       []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 			unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
 		}
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 
 		// Fill all ports
 		baseFP := firewall.Packet{
@@ -498,7 +498,7 @@ func TestFirewall_ApplySnat(t *testing.T) {
 			networks:       []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 			unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")},
 		}
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 		fw.snatAddr = snatAddr
 
 		pkt := slices.Clone(canonicalUDPTest)
@@ -531,7 +531,7 @@ func TestFirewall_ApplySnat(t *testing.T) {
 			networks:       []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 			unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")},
 		}
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 		fw.snatAddr = snatAddr
 
 		pkt := slices.Clone(canonicalUDPTest)
@@ -564,7 +564,7 @@ func TestFirewall_ApplySnat(t *testing.T) {
 			networks:       []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 			unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")},
 		}
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 		fw.snatAddr = snatAddr
 
 		pkt := slices.Clone(canonicalUDPTest)
@@ -593,7 +593,7 @@ func TestFirewall_ApplySnat(t *testing.T) {
 		c := &dummyCert{
 			networks: []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 		}
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, netip.Addr{})
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 
 		pkt := slices.Clone(canonicalUDPTest)
 		fp := firewall.Packet{
@@ -615,7 +615,7 @@ func TestFirewall_ApplySnat(t *testing.T) {
 			networks:       []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 			unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")},
 		}
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 		fw.snatAddr = snatAddr
 
 		pkt := slices.Clone(canonicalUDPTest)
@@ -648,7 +648,7 @@ func TestFirewall_UnSnat(t *testing.T) {
 			networks:       []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 			unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")},
 		}
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 		fw.snatAddr = snatAddr
 
 		// Create a conntrack entry for the snatted flow
@@ -693,7 +693,7 @@ func TestFirewall_UnSnat(t *testing.T) {
 			networks:       []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 			unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")},
 		}
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 		fw.snatAddr = snatAddr
 
 		pkt := slices.Clone(canonicalUDPReply)
@@ -727,7 +727,7 @@ func TestFirewall_Drop_SNATFullFlow(t *testing.T) {
 		issuer:         "signer-shasum",
 	}
 
-	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, myCert, snatAddr)
+	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, myCert)
 	fw.snatAddr = snatAddr
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "any", "", ""))
 
@@ -816,7 +816,7 @@ func TestFirewall_ApplySnat_CrossHostHijack(t *testing.T) {
 		networks:       []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 		unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")},
 	}
-	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 	fw.snatAddr = snatAddr
 
 	// Simulate Host A having established a flow
@@ -860,7 +860,7 @@ func TestFirewall_ApplySnat_MixedStackRejected(t *testing.T) {
 	}
 
 	t.Run("v6 first then v4", func(t *testing.T) {
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 		fw.snatAddr = snatAddr
 
 		pkt := slices.Clone(canonicalUDPTest)
@@ -887,7 +887,7 @@ func TestFirewall_ApplySnat_MixedStackRejected(t *testing.T) {
 	})
 
 	t.Run("v4 first then v6", func(t *testing.T) {
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 		fw.snatAddr = snatAddr
 
 		pkt := slices.Clone(canonicalUDPTest)
@@ -923,7 +923,7 @@ func TestFirewall_ApplySnat_PacketUnmodifiedOnError(t *testing.T) {
 		c := &dummyCert{
 			networks: []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 		}
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, netip.Addr{})
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 
 		pkt := slices.Clone(canonicalUDPTest)
 
@@ -948,7 +948,7 @@ func TestFirewall_ApplySnat_PacketUnmodifiedOnError(t *testing.T) {
 			networks:       []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 			unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")},
 		}
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 		fw.snatAddr = snatAddr
 
 		pkt := slices.Clone(canonicalUDPTest)
@@ -980,7 +980,7 @@ func TestFirewall_ApplySnat_PacketUnmodifiedOnError(t *testing.T) {
 			networks:       []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 			unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")},
 		}
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 		fw.snatAddr = snatAddr
 
 		pkt := slices.Clone(canonicalUDPTest)
@@ -1013,7 +1013,7 @@ func TestFirewall_UnSnat_NonSNATConntrack(t *testing.T) {
 		networks:       []netip.Prefix{netip.MustParsePrefix("fd00::1/128")},
 		unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")},
 	}
-	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c, snatAddr)
+	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 	fw.snatAddr = snatAddr
 
 	// Create a conntrack entry with snat=nil (a normal non-SNAT connection)
@@ -1061,7 +1061,7 @@ func TestFirewall_Drop_FirewallBlocksSNAT(t *testing.T) {
 		issuer:         "signer-shasum",
 	}
 
-	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, myCert, snatAddr)
+	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, myCert)
 	fw.snatAddr = snatAddr
 	// Only allow port 80 inbound
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 80, 80, []string{"any"}, "", "", "any", "", ""))
@@ -1121,7 +1121,7 @@ func TestFirewall_Drop_SNATLocalAddrNotRoutable(t *testing.T) {
 		issuer:         "signer-shasum",
 	}
 
-	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, myCert, snatAddr)
+	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, myCert)
 	fw.snatAddr = snatAddr
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "any", "", ""))
 
@@ -1176,7 +1176,7 @@ func TestFirewall_Drop_NoSnatAddrRejectsV6Peer(t *testing.T) {
 		issuer:   "signer-shasum",
 	}
 
-	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, myCert, netip.Addr{})
+	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, myCert)
 	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "any", "", ""))
 
 	peerV6Addr := netip.MustParseAddr("fd00::2")
@@ -1236,7 +1236,7 @@ func TestFirewall_Drop_IPv4HostNotSNATted(t *testing.T) {
 			issuer:         "signer-shasum",
 		}
 
-		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, myCert, snatAddr)
+		fw := NewFirewall(l, time.Second, time.Minute, time.Hour, myCert)
 		fw.snatAddr = snatAddr
 		require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "any", "", ""))
 

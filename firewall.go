@@ -165,7 +165,7 @@ type firewallLocalCIDR struct {
 
 // NewFirewall creates a new Firewall object. A TimerWheel is created for you from the provided timeouts.
 // The certificate provided should be the highest version loaded in memory.
-func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Duration, c cert.Certificate, snatAddr netip.Addr) *Firewall {
+func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Duration, c cert.Certificate) *Firewall {
 	//TODO: error on 0 duration
 	var tmin, tmax time.Duration
 
@@ -241,7 +241,6 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 		c.GetDuration("firewall.conntrack.udp_timeout", time.Minute*3),
 		c.GetDuration("firewall.conntrack.default_timeout", time.Minute*10),
 		certificate,
-		netip.Addr{},
 	)
 
 	fw.defaultLocalCIDRAny = c.GetBool("firewall.default_local_cidr_any", false)
