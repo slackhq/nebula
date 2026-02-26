@@ -97,7 +97,7 @@ func (t *tun) Networks() []netip.Prefix {
 }
 
 func (t *tun) UnsafeNetworks() []netip.Prefix {
-	return t.UnsafeNetworks()
+	return t.unsafeNetworks
 }
 
 func (t *tun) UnsafeIPv4OriginAddress() netip.Prefix {
