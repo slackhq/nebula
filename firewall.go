@@ -496,11 +496,12 @@ func rewritePacket(data []byte, fp *firewall.Packet, oldIP netip.AddrPort, newIP
 }
 
 func (f *Firewall) findUsableSNATPort(fp *firewall.Packet, c *conn) error {
+	const halfThePorts = 0x7fff
 	oldPort := fp.RemotePort
 	conntrack := f.Conntrack
 	conntrack.Lock()
 	defer conntrack.Unlock()
-	for numPortsChecked := 0; numPortsChecked < 0x7ff; numPortsChecked++ {
+	for numPortsChecked := 0; numPortsChecked < halfThePorts; numPortsChecked++ {
 		_, ok := conntrack.Conns[*fp]
 		if !ok {
 			//yay, we can use this port
@@ -510,8 +511,8 @@ func (f *Firewall) findUsableSNATPort(fp *firewall.Packet, c *conn) error {
 		}
 		//increment and retry. There's probably better strategies out there
 		fp.RemotePort++
-		if fp.RemotePort < 0x7fff {
-			fp.RemotePort += 0x7fff // keep it ephemeral for now
+		if fp.RemotePort < halfThePorts {
+			fp.RemotePort += halfThePorts // keep it ephemeral for now
 		}
 	}
 
