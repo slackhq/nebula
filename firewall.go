@@ -108,15 +108,6 @@ type FirewallConntrack struct {
 	TimerWheel *TimerWheel[firewall.Packet]
 }
 
-func (ct *FirewallConntrack) dupeConnUnlocked(fp firewall.Packet, c *conn, timeout time.Duration) {
-	if _, ok := ct.Conns[fp]; !ok {
-		ct.TimerWheel.Advance(time.Now())
-		ct.TimerWheel.Add(fp, timeout)
-	}
-
-	ct.Conns[fp] = c
-}
-
 // FirewallTable is the entry point for a rule, the evaluation order is:
 // Proto AND port AND (CA SHA or CA name) AND local CIDR AND (group OR groups OR name OR remote CIDR)
 type FirewallTable struct {
@@ -505,7 +496,7 @@ func (f *Firewall) findUsableSNATPort(fp *firewall.Packet, c *conn) error {
 		if !ok {
 			//yay, we can use this port
 			//track the snatted flow with the same expiration as the unsnatted version
-			conntrack.dupeConnUnlocked(*fp, c, f.packetTimeout(*fp))
+			conntrack.Conns[*fp] = c
 			return nil
 		}
 		//increment and retry. There's probably better strategies out there
