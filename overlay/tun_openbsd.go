@@ -49,25 +49,27 @@ type ifreq struct {
 }
 
 type tun struct {
-	Device      string
-	vpnNetworks []netip.Prefix
-	MTU         int
-	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	l           *logrus.Logger
-	f           *os.File
-	fd          int
+	Device           string
+	vpnNetworks      []netip.Prefix
+	unsafeNetworks   []netip.Prefix
+	unsafeIPv4Origin netip.Prefix
+	MTU              int
+	Routes           atomic.Pointer[[]Route]
+	routeTree        atomic.Pointer[bart.Table[routing.Gateways]]
+	l                *logrus.Logger
+	f                *os.File
+	fd               int
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
 	out []byte
 }
 
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
 
-func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*tun, error) {
+func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix, _ []netip.Prefix) (*tun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in openbsd")
 }
 
-func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
+func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix, _ bool) (*tun, error) {
 	// Try to open tun device
 	var err error
 	deviceName := c.GetString("tun.dev", "")
@@ -89,12 +91,13 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	}
 
 	t := &tun{
-		f:           os.NewFile(uintptr(fd), ""),
-		fd:          fd,
-		Device:      deviceName,
-		vpnNetworks: vpnNetworks,
-		MTU:         c.GetInt("tun.mtu", DefaultMTU),
-		l:           l,
+		f:              os.NewFile(uintptr(fd), ""),
+		fd:             fd,
+		Device:         deviceName,
+		vpnNetworks:    vpnNetworks,
+		unsafeNetworks: unsafeNetworks,
+		MTU:            c.GetInt("tun.mtu", DefaultMTU),
+		l:              l,
 	}
 
 	err = t.reload(c, true)
@@ -270,6 +273,10 @@ func (t *tun) reload(c *config.C, initial bool) error {
 		return nil
 	}
 
+	if initial {
+		t.unsafeIPv4Origin = prepareUnsafeOriginAddr(t, t.l, c, routes)
+	}
+
 	routeTree, err := makeRouteTree(t.l, routes, false)
 	if err != nil {
 		return err
@@ -304,6 +311,18 @@ func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 
 func (t *tun) Networks() []netip.Prefix {
 	return t.vpnNetworks
+}
+
+func (t *tun) UnsafeNetworks() []netip.Prefix {
+	return t.unsafeNetworks
+}
+
+func (t *tun) UnsafeIPv4OriginAddress() netip.Prefix {
+	return t.unsafeIPv4Origin
+}
+
+func (t *tun) SNATAddress() netip.Prefix {
+	return netip.Prefix{}
 }
 
 func (t *tun) Name() string {

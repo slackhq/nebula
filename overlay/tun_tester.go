@@ -17,18 +17,21 @@ import (
 )
 
 type TestTun struct {
-	Device      string
-	vpnNetworks []netip.Prefix
-	Routes      []Route
-	routeTree   *bart.Table[routing.Gateways]
-	l           *logrus.Logger
+	Device           string
+	vpnNetworks      []netip.Prefix
+	unsafeNetworks   []netip.Prefix
+	snatAddr         netip.Prefix
+	unsafeIPv4Origin netip.Prefix
+	Routes           []Route
+	routeTree        *bart.Table[routing.Gateways]
+	l                *logrus.Logger
 
 	closed    atomic.Bool
 	rxPackets chan []byte // Packets to receive into nebula
 	TxPackets chan []byte // Packets transmitted outside by nebula
 }
 
-func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*TestTun, error) {
+func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix, _ bool) (*TestTun, error) {
 	_, routes, err := getAllRoutesFromConfig(c, vpnNetworks, true)
 	if err != nil {
 		return nil, err
@@ -38,18 +41,22 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 		return nil, err
 	}
 
-	return &TestTun{
-		Device:      c.GetString("tun.dev", ""),
-		vpnNetworks: vpnNetworks,
-		Routes:      routes,
-		routeTree:   routeTree,
-		l:           l,
-		rxPackets:   make(chan []byte, 10),
-		TxPackets:   make(chan []byte, 10),
-	}, nil
+	tt := &TestTun{
+		Device:         c.GetString("tun.dev", ""),
+		vpnNetworks:    vpnNetworks,
+		unsafeNetworks: unsafeNetworks,
+		Routes:         routes,
+		routeTree:      routeTree,
+		l:              l,
+		rxPackets:      make(chan []byte, 10),
+		TxPackets:      make(chan []byte, 10),
+	}
+	tt.unsafeIPv4Origin = prepareUnsafeOriginAddr(tt, l, c, routes)
+	tt.snatAddr = prepareSnatAddr(tt, tt.l, c)
+	return tt, nil
 }
 
-func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*TestTun, error) {
+func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix, _ []netip.Prefix) (*TestTun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported")
 }
 
@@ -138,4 +145,16 @@ func (t *TestTun) SupportsMultiqueue() bool {
 
 func (t *TestTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented")
+}
+
+func (t *TestTun) UnsafeNetworks() []netip.Prefix {
+	return t.unsafeNetworks
+}
+
+func (t *TestTun) UnsafeIPv4OriginAddress() netip.Prefix {
+	return t.unsafeIPv4Origin
+}
+
+func (t *TestTun) SNATAddress() netip.Prefix {
+	return t.snatAddr
 }

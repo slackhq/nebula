@@ -19,14 +19,16 @@ import (
 
 type tun struct {
 	io.ReadWriteCloser
-	fd          int
-	vpnNetworks []netip.Prefix
-	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	l           *logrus.Logger
+	fd               int
+	vpnNetworks      []netip.Prefix
+	unsafeNetworks   []netip.Prefix
+	unsafeIPv4Origin netip.Prefix
+	Routes           atomic.Pointer[[]Route]
+	routeTree        atomic.Pointer[bart.Table[routing.Gateways]]
+	l                *logrus.Logger
 }
 
-func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
+func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix) (*tun, error) {
 	// XXX Android returns an fd in non-blocking mode which is necessary for shutdown to work properly.
 	// Be sure not to call file.Fd() as it will set the fd to blocking mode.
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
@@ -35,6 +37,7 @@ func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []net
 		ReadWriteCloser: file,
 		fd:              deviceFd,
 		vpnNetworks:     vpnNetworks,
+		unsafeNetworks:  unsafeNetworks,
 		l:               l,
 	}
 
@@ -53,7 +56,7 @@ func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []net
 	return t, nil
 }
 
-func newTun(_ *config.C, _ *logrus.Logger, _ []netip.Prefix, _ bool) (*tun, error) {
+func newTun(_ *config.C, _ *logrus.Logger, _ []netip.Prefix, _ []netip.Prefix, _ bool) (*tun, error) {
 	return nil, fmt.Errorf("newTun not supported in Android")
 }
 
@@ -76,6 +79,8 @@ func (t *tun) reload(c *config.C, initial bool) error {
 		return nil
 	}
 
+	t.unsafeIPv4Origin = prepareUnsafeOriginAddr(t, t.l, c, routes)
+
 	routeTree, err := makeRouteTree(t.l, routes, false)
 	if err != nil {
 		return err
@@ -89,6 +94,18 @@ func (t *tun) reload(c *config.C, initial bool) error {
 
 func (t *tun) Networks() []netip.Prefix {
 	return t.vpnNetworks
+}
+
+func (t *tun) UnsafeNetworks() []netip.Prefix {
+	return t.unsafeNetworks
+}
+
+func (t *tun) UnsafeIPv4OriginAddress() netip.Prefix {
+	return t.unsafeIPv4Origin
+}
+
+func (t *tun) SNATAddress() netip.Prefix {
+	return netip.Prefix{}
 }
 
 func (t *tun) Name() string {

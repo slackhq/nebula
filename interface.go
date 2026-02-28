@@ -248,6 +248,7 @@ func (f *Interface) activate() {
 		f.inside.Close()
 		f.l.Fatal(err)
 	}
+	f.firewall.SetSNATAddressFromInterface(f)
 }
 
 func (f *Interface) run() {
@@ -344,6 +345,7 @@ func (f *Interface) reloadFirewall(c *config.C) {
 		f.l.WithError(err).Error("Error while creating firewall during reload")
 		return
 	}
+	fw.SetSNATAddressFromInterface(f)
 
 	oldFw := f.firewall
 	conntrack := oldFw.Conntrack

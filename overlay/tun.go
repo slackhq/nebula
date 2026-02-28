@@ -1,7 +1,9 @@
 package overlay
 
 import (
+	"crypto/rand"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 
@@ -22,22 +24,22 @@ func (e *NameError) Error() string {
 }
 
 // TODO: We may be able to remove routines
-type DeviceFactory func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error)
+type DeviceFactory func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix, routines int) (Device, error)
 
-func NewDeviceFromConfig(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
+func NewDeviceFromConfig(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix, routines int) (Device, error) {
 	switch {
 	case c.GetBool("tun.disabled", false):
 		tun := newDisabledTun(vpnNetworks, c.GetInt("tun.tx_queue", 500), c.GetBool("stats.message_metrics", false), l)
 		return tun, nil
 
 	default:
-		return newTun(c, l, vpnNetworks, routines > 1)
+		return newTun(c, l, vpnNetworks, unsafeNetworks, routines > 1)
 	}
 }
 
 func NewFdDeviceFromConfig(fd *int) DeviceFactory {
-	return func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
-		return newTunFromFd(c, l, *fd, vpnNetworks)
+	return func(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix, routines int) (Device, error) {
+		return newTunFromFd(c, l, *fd, vpnNetworks, unsafeNetworks)
 	}
 }
 
@@ -128,4 +130,86 @@ func selectGateway(dest netip.Prefix, gateways []netip.Prefix) (netip.Prefix, er
 	}
 
 	return netip.Prefix{}, fmt.Errorf("no gateway found for %v in the list of vpn networks", dest)
+}
+
+// genLinkLocal generates a random IPv4 link-local address.
+// If randomizer is nil, it uses rand.Reader to find two random bytes
+func genLinkLocal(randomizer io.Reader) netip.Prefix {
+	if randomizer == nil {
+		randomizer = rand.Reader
+	}
+	octets := []byte{169, 254, 0, 0}
+	_, _ = randomizer.Read(octets[2:4])
+	return coerceLinkLocal(octets)
+}
+
+func coerceLinkLocal(octets []byte) netip.Prefix {
+	if octets[3] == 0 {
+		octets[3] = 1 //please no .0 addresses
+	} else if octets[2] == 255 && octets[3] == 255 {
+		octets[3] = 254 //please no broadcast addresses
+	}
+	out, _ := netip.AddrFromSlice(octets)
+	return netip.PrefixFrom(out, 32)
+}
+
+// prepareUnsafeOriginAddr provides the IPv4 address used on IPv6-only clients that need to access IPv4 unsafe routes
+func prepareUnsafeOriginAddr(d Device, l *logrus.Logger, c *config.C, routes []Route) netip.Prefix {
+	if !d.Networks()[0].Addr().Is6() {
+		return netip.Prefix{} //if we have an IPv4 assignment within the overlay, we don't need an unsafe origin address
+	}
+
+	needed := false
+	for _, route := range routes { //or if we have a route defined into an IPv4 range
+		if route.Cidr.Addr().Is4() {
+			needed = true //todo should this only apply to unsafe routes? almost certainly
+			break
+		}
+	}
+	if !needed {
+		return netip.Prefix{}
+	}
+
+	//todo better config name for sure
+	if a := c.GetString("tun.unsafe_origin_address_for_4over6", ""); a != "" {
+		out, err := netip.ParseAddr(a)
+		if err != nil {
+			l.WithField("value", a).WithError(err).Warn("failed to parse tun.unsafe_origin_address_for_4over6, will use a random value")
+		} else if !out.Is4() || !out.IsLinkLocalUnicast() {
+			l.WithField("value", out).Warn("tun.unsafe_origin_address_for_4over6 must be an IPv4 address")
+		} else if out.IsValid() {
+			return netip.PrefixFrom(out, 32)
+		}
+	}
+	return genLinkLocal(nil)
+}
+
+// prepareSnatAddr provides the address that an IPv6-only unsafe router should use to SNAT traffic before handing it to the operating system
+func prepareSnatAddr(d Device, l *logrus.Logger, c *config.C) netip.Prefix {
+	if !d.Networks()[0].Addr().Is6() {
+		return netip.Prefix{} //if we have an IPv4 assignment within the overlay, we don't need a snat address
+	}
+
+	needed := false
+	for _, un := range d.UnsafeNetworks() { //if we are an unsafe router for an IPv4 range
+		if un.Addr().Is4() {
+			needed = true
+			break
+		}
+	}
+	if !needed {
+		return netip.Prefix{}
+	}
+
+	if a := c.GetString("tun.snat_address_for_4over6", ""); a != "" {
+		out, err := netip.ParseAddr(a)
+		if err != nil {
+			l.WithField("value", a).WithError(err).Warn("failed to parse tun.snat_address_for_4over6, will use a random value")
+		} else if !out.Is4() || !out.IsLinkLocalUnicast() {
+			l.WithField("value", out).Warn("tun.snat_address_for_4over6 must be an IPv4 address")
+		} else if out.IsValid() {
+			return netip.PrefixFrom(out, 32)
+		}
+	}
+	return genLinkLocal(nil)
 }

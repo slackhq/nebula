@@ -28,21 +28,23 @@ import (
 const tunGUIDLabel = "Fixed Nebula Windows GUID v1"
 
 type winTun struct {
-	Device      string
-	vpnNetworks []netip.Prefix
-	MTU         int
-	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	l           *logrus.Logger
+	Device           string
+	vpnNetworks      []netip.Prefix
+	unsafeNetworks   []netip.Prefix
+	unsafeIPv4Origin netip.Prefix
+	MTU              int
+	Routes           atomic.Pointer[[]Route]
+	routeTree        atomic.Pointer[bart.Table[routing.Gateways]]
+	l                *logrus.Logger
 
 	tun *wintun.NativeTun
 }
 
-func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (Device, error) {
+func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix, _ []netip.Prefix) (Device, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Windows")
 }
 
-func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*winTun, error) {
+func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, unsafeNetworks []netip.Prefix, _ bool) (*winTun, error) {
 	err := checkWinTunExists()
 	if err != nil {
 		return nil, fmt.Errorf("can not load the wintun driver: %w", err)
@@ -55,10 +57,11 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	}
 
 	t := &winTun{
-		Device:      deviceName,
-		vpnNetworks: vpnNetworks,
-		MTU:         c.GetInt("tun.mtu", DefaultMTU),
-		l:           l,
+		Device:         deviceName,
+		vpnNetworks:    vpnNetworks,
+		unsafeNetworks: unsafeNetworks,
+		MTU:            c.GetInt("tun.mtu", DefaultMTU),
+		l:              l,
 	}
 
 	err = t.reload(c, true)
@@ -102,6 +105,10 @@ func (t *winTun) reload(c *config.C, initial bool) error {
 		return nil
 	}
 
+	if initial {
+		t.unsafeIPv4Origin = prepareUnsafeOriginAddr(t, t.l, c, routes)
+	}
+
 	routeTree, err := makeRouteTree(t.l, routes, false)
 	if err != nil {
 		return err
@@ -132,7 +139,12 @@ func (t *winTun) reload(c *config.C, initial bool) error {
 func (t *winTun) Activate() error {
 	luid := winipcfg.LUID(t.tun.LUID())
 
-	err := luid.SetIPAddresses(t.vpnNetworks)
+	prefixes := t.vpnNetworks
+	if t.unsafeIPv4Origin.IsValid() {
+		prefixes = append(prefixes, t.unsafeIPv4Origin)
+	}
+
+	err := luid.SetIPAddresses(prefixes)
 	if err != nil {
 		return fmt.Errorf("failed to set address: %w", err)
 	}
@@ -223,6 +235,18 @@ func (t *winTun) RoutesFor(ip netip.Addr) routing.Gateways {
 
 func (t *winTun) Networks() []netip.Prefix {
 	return t.vpnNetworks
+}
+
+func (t *winTun) UnsafeNetworks() []netip.Prefix {
+	return t.unsafeNetworks
+}
+
+func (t *winTun) UnsafeIPv4OriginAddress() netip.Prefix {
+	return t.unsafeIPv4Origin
+}
+
+func (t *winTun) SNATAddress() netip.Prefix {
+	return netip.Prefix{}
 }
 
 func (t *winTun) Name() string {

@@ -439,11 +439,7 @@ func (c *certificateV2) validate() error {
 				if !hasV6Networks {
 					return NewErrInvalidCertificateProperties("IPv6 unsafe networks require an IPv6 address assignment: %s", network)
 				}
-			} else if network.Addr().Is4() {
-				if !hasV4Networks {
-					return NewErrInvalidCertificateProperties("IPv4 unsafe networks require an IPv4 address assignment: %s", network)
-				}
-			}
+			} // as long as we have any IP address, IPv4 UnsafeNetworks are allowed
 		}
 	}
 
