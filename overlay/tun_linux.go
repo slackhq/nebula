@@ -436,7 +436,7 @@ func (t *tun) Activate() error {
 			return fmt.Errorf("failed to set default route MTU for %s: %w", t.vpnNetworks[i], err)
 		}
 	}
-	//TODO snat and be snatted
+
 	if t.unsafeIPv4Origin.IsValid() {
 		if err = t.setDefaultRoute(t.unsafeIPv4Origin); err != nil {
 			return fmt.Errorf("failed to set default route MTU for %s: %w", t.unsafeIPv4Origin, err)
@@ -475,10 +475,7 @@ func (t *tun) setSnatRoute() error {
 	nr := netlink.Route{
 		LinkIndex: t.deviceIndex,
 		Dst:       dr,
-		//todo do we need these other options?
-		//MTU:       t.DefaultMTU,
-		//AdvMSS:    t.advMSS(Route{}),
-		Scope: unix.RT_SCOPE_LINK,
+		Scope:     unix.RT_SCOPE_LINK,
 		//Protocol: unix.RTPROT_KERNEL,
 		Table: unix.RT_TABLE_MAIN,
 		Type:  unix.RTN_UNICAST,

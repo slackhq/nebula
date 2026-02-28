@@ -422,7 +422,7 @@ func TestFirewall_FindUsableSNATPort(t *testing.T) {
 			RemotePort: 12345,
 			Protocol:   firewall.ProtoUDP,
 		}
-		cn := &conn{}
+		cn := &conn{snat: &snatInfo{}}
 		err := fw.findUsableSNATPort(&fp, cn)
 		require.NoError(t, err)
 		// Port should have been assigned
@@ -448,7 +448,7 @@ func TestFirewall_FindUsableSNATPort(t *testing.T) {
 		fw.Conntrack.Conns[fp] = &conn{}
 		fw.Conntrack.Unlock()
 
-		cn := &conn{}
+		cn := &conn{snat: &snatInfo{}}
 		err := fw.findUsableSNATPort(&fp, cn)
 		require.NoError(t, err)
 		assert.NotEqual(t, uint16(12345), fp.RemotePort, "should pick a different port")
@@ -479,7 +479,7 @@ func TestFirewall_FindUsableSNATPort(t *testing.T) {
 		// Try to find a port starting from 0x8000
 		fp := baseFP
 		fp.RemotePort = 0x8000
-		cn := &conn{}
+		cn := &conn{snat: &snatInfo{}}
 		err := fw.findUsableSNATPort(&fp, cn)
 		assert.ErrorIs(t, err, ErrCannotSNAT)
 	})

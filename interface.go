@@ -56,7 +56,6 @@ type Interface struct {
 	inside                overlay.Device
 	pki                   *PKI
 	firewall              *Firewall
-	snatAddr              netip.Addr
 	connectionManager     *connectionManager
 	handshakeManager      *HandshakeManager
 	serveDns              bool
