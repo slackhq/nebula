@@ -223,12 +223,12 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 
 func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firewall, error) {
 	certificate := cs.getCertificate(cert.Version2)
-	if certificate == nil {
+	if certificate == nil { //todo if config.initiating_version is set to 1, and unsafe_networks differ, things will suck
 		certificate = cs.getCertificate(cert.Version1)
 	}
 
 	if certificate == nil {
-		panic("No certificate available to reconfigure the firewall")
+		return nil, errors.New("no certificate available to reconfigure the firewall")
 	}
 
 	fw := NewFirewall(
