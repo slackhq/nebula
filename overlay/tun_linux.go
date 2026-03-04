@@ -560,6 +560,10 @@ func (t *tun) addRoutes(logErrors bool) error {
 	}
 
 	if t.snatAddr.IsValid() {
+		//at least for Linux, we need to set a return route for the SNATted traffic in order to satisfy the reverse-path filter,
+		//and to help the kernel deliver our reply traffic to the tun device.
+		//however, it is important that we do not actually /assign/ the SNAT address,
+		//since link-local addresses will not be routed between interfaces without significant trickery.
 		return t.setSnatRoute()
 	}
 	return nil
