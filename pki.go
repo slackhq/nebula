@@ -102,7 +102,7 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 			if currentState.v1Cert == nil {
 				//adding certs is fine, actually. Networks-in-common confirmed in newCertState().
 			} else {
-				// did IP in cert change? if so, don't set
+				// did IP in cert change? if so, don't set. If we ever allow this, need to set p.firewallReloadNeeded
 				if !slices.Equal(currentState.v1Cert.Networks(), newState.v1Cert.Networks()) {
 					return util.NewContextualError(
 						"Networks in new cert was different from old",
@@ -156,6 +156,14 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 					nil,
 				)
 			}
+		}
+
+		newUN := newState.GetDefaultCertificate().UnsafeNetworks()
+		oldUN := currentState.GetDefaultCertificate().UnsafeNetworks()
+		if !slices.Equal(newUN, oldUN) {
+			//todo I don't love this, because other clients will see the new assignments and act on them, but we will not be able to.
+			//I think we need to wire this into the firewall reload.
+			p.l.WithFields(m{"previous": oldUN, "new": newUN}).Warning("UnsafeNetworks assignments differ. A restart is required in order for this to take effect.")
 		}
 
 		// Cipher cant be hot swapped so just leave it at what it was before
