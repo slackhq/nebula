@@ -224,8 +224,8 @@ const (
 	NetworkTypeVPNPeer
 	// NetworkTypeUnsafe is a network from Certificate.UnsafeNetworks()
 	NetworkTypeUnsafe
-	// NetworkTypeUncheckedSNATPeer is used to indicate traffic we're willing to route, but never deliver to a NetworkTypeVPN
-	NetworkTypeUncheckedSNATPeer
+	// NetworkTypeUnverifiedSNATPeer is used to indicate traffic we're willing to route, but never deliver to a NetworkTypeVPN
+	NetworkTypeUnverifiedSNATPeer
 	NetworkTypeInvalidPeer
 )
 

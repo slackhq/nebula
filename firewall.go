@@ -566,7 +566,7 @@ func (f *Firewall) identifyRemoteNetworkType(h *HostInfo, fp firewall.Packet) Ne
 
 	//RemoteAddr not in our networks table
 	if f.snatAddr.IsValid() && fp.IsIPv4() && h.HasOnlyV6Addresses() {
-		return NetworkTypeUncheckedSNATPeer
+		return NetworkTypeUnverifiedSNATPeer
 	} else {
 		return NetworkTypeInvalidPeer
 	}
@@ -583,7 +583,7 @@ func (f *Firewall) allowRemoteNetworkType(nwType NetworkType, fp firewall.Packet
 		return ErrPeerRejected // reject for now, one day this may have different FW rules
 	case NetworkTypeUnsafe:
 		return nil // nothing special, one day this may have different FW rules
-	case NetworkTypeUncheckedSNATPeer:
+	case NetworkTypeUnverifiedSNATPeer:
 		if f.unsafeIPv4Origin.IsValid() && fp.LocalAddr == f.unsafeIPv4Origin {
 			return nil //the client case
 		}
@@ -668,7 +668,7 @@ func (f *Firewall) Drop(fp firewall.Packet, pkt []byte, incoming bool, h *HostIn
 	// We always want to conntrack since it is a faster operation
 	c = f.addConn(fp, incoming)
 
-	if incoming && remoteNetworkType == NetworkTypeUncheckedSNATPeer {
+	if incoming && remoteNetworkType == NetworkTypeUnverifiedSNATPeer {
 		return f.applySnat(pkt, &fp, c, h)
 	} else {
 		//outgoing snat is handled before this function is called

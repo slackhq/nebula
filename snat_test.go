@@ -335,7 +335,7 @@ func TestFirewall_IdentifyNetworkType_SNATPeer(t *testing.T) {
 			RemoteAddr: netip.MustParseAddr("10.0.0.1"),
 			LocalAddr:  netip.MustParseAddr("192.168.1.1"),
 		}
-		assert.Equal(t, NetworkTypeUncheckedSNATPeer, fw.identifyRemoteNetworkType(h, fp))
+		assert.Equal(t, NetworkTypeUnverifiedSNATPeer, fw.identifyRemoteNetworkType(h, fp))
 	})
 
 	t.Run("v4 packet from v4 host is not snat peer", func(t *testing.T) {
@@ -373,12 +373,12 @@ func TestFirewall_AllowNetworkType_SNAT(t *testing.T) {
 	//todo fix!
 	//t.Run("snat peer allowed with snat addr", func(t *testing.T) {
 	//	fw := &Firewall{snatAddr: netip.MustParseAddr("169.254.55.96")}
-	//	assert.NoError(t, fw.allowRemoteNetworkType(NetworkTypeUncheckedSNATPeer, fp))
+	//	assert.NoError(t, fw.allowRemoteNetworkType(NetworkTypeUnverifiedSNATPeer, fp))
 	//})
 	//
 	//t.Run("snat peer rejected without snat addr", func(t *testing.T) {
 	//	fw := &Firewall{}
-	//	assert.ErrorIs(t, fw.allowRemoteNetworkType(NetworkTypeUncheckedSNATPeer, fp), ErrInvalidRemoteIP)
+	//	assert.ErrorIs(t, fw.allowRemoteNetworkType(NetworkTypeUnverifiedSNATPeer, fp), ErrInvalidRemoteIP)
 	//})
 
 	t.Run("vpn always allowed", func(t *testing.T) {
@@ -1291,7 +1291,7 @@ func TestFirewall_Drop_IPv4HostNotSNATted(t *testing.T) {
 		}
 		nwType := fw.identifyRemoteNetworkType(h, fp)
 		assert.Equal(t, NetworkTypeVPN, nwType, "v4 peer using its own VPN addr should be NetworkTypeVPN")
-		assert.NotEqual(t, NetworkTypeUncheckedSNATPeer, nwType, "must NOT be classified as SNAT peer")
+		assert.NotEqual(t, NetworkTypeUnverifiedSNATPeer, nwType, "must NOT be classified as SNAT peer")
 	})
 
 	t.Run("identifyRemoteNetworkType v4 peer with mismatched source", func(t *testing.T) {
@@ -1305,6 +1305,6 @@ func TestFirewall_Drop_IPv4HostNotSNATted(t *testing.T) {
 		}
 		nwType := fw.identifyRemoteNetworkType(h, fp)
 		assert.Equal(t, NetworkTypeInvalidPeer, nwType, "v4 peer with mismatched source should be InvalidPeer")
-		assert.NotEqual(t, NetworkTypeUncheckedSNATPeer, nwType, "must NOT be classified as SNAT peer")
+		assert.NotEqual(t, NetworkTypeUnverifiedSNATPeer, nwType, "must NOT be classified as SNAT peer")
 	})
 }
