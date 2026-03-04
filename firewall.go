@@ -25,6 +25,7 @@ import (
 
 var ErrCannotSNAT = errors.New("cannot SNAT this packet")
 var ErrSNATIdentityMismatch = errors.New("refusing to SNAT for mismatched host")
+var ErrSNATAddressCollision = errors.New("refusing to accept an incoming packet with my SNAT address")
 
 const ipv4SourcePosition = 12
 const ipv4DestinationPosition = 16
@@ -522,7 +523,7 @@ func (f *Firewall) applySnat(data []byte, fp *firewall.Packet, c *conn, hostinfo
 		return ErrCannotSNAT
 	}
 	if f.snatAddr == fp.LocalAddr { //a packet that came from UDP (incoming) should never ever have our snat address on it
-		return ErrSNATIdentityMismatch
+		return ErrSNATAddressCollision
 	}
 	if c.snat.Valid() {
 		//old flow: make sure it came from the right place
