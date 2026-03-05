@@ -14,15 +14,31 @@ RFC 8899 (DPLPMTUD) solves this by actively probing each peer's path to find the
 
 ### Overhead Budget
 
-| Layer                       | IPv4     | IPv6     |
-| --------------------------- | -------- | -------- |
-| IP header                   | 20 B     | 40 B     |
-| UDP header                  | 8 B      | 8 B      |
-| Nebula header               | 16 B     | 16 B     |
-| AEAD tag (ChaCha20/AES-GCM) | 16 B     | 16 B     |
-| **Total overhead**          | **60 B** | **80 B** |
+**Direct tunnel (most common):**
 
-So `PLPMTU_to_TUN_MTU = PLPMTU - overhead` (60 or 80 depending on outer IP version).
+| Layer                        | IPv4     | IPv6     |
+| ---------------------------- | -------- | -------- |
+| IP header                    | 20 B     | 40 B     |
+| UDP header                   | 8 B      | 8 B      |
+| TCP length prefix (if TCP)   | (+4 B)   | (+4 B)   |
+| Nebula header                | 16 B     | 16 B     |
+| AEAD tag (ChaCha20/AES-GCM)  | 16 B     | 16 B     |
+| **Total (UDP underlay)**     | **60 B** | **80 B** |
+| **Total (TCP underlay)**     | **64 B** | **84 B** |
+
+**Relayed tunnel** — adds a second Nebula header + AEAD tag for the relay hop's authentication envelope (`SendVia` in `inside.go:278`). The relay node authenticates (not encrypts) the inner packet as AD, wrapping it in its own header:
+
+| Layer                        | IPv4     | IPv6     |
+| ---------------------------- | -------- | -------- |
+| IP + UDP (or TCP)            | 28 B     | 48 B     |
+| Relay Nebula header          | 16 B     | 16 B     |
+| Relay AEAD tag               | 16 B     | 16 B     |
+| Inner Nebula header          | 16 B     | 16 B     |
+| Inner AEAD tag               | 16 B     | 16 B     |
+| **Total (UDP, relayed)**     | **92 B** | **112 B** |
+| **Total (TCP, relayed)**     | **96 B** | **116 B** |
+
+So `PLPMTU_to_TUN_MTU = PLPMTU - overhead` where overhead depends on the path type. PLPMTUD must use the correct overhead for the active path (direct vs relayed, UDP vs TCP underlay).
 
 ### Existing Probe Mechanism: Test Packets
 
@@ -277,22 +293,35 @@ State transitions on probe ack/timeout would be driven by:
 - **TestProbeReply received:** Match echoed `probe_size` from reply payload against outstanding `probeSize`, advance state machine
 - **Timer expiry:** Increment `probeCount`, retry or transition
 
-### Interaction with tun.mtu
+### Interaction with tun.mtu — The Hard Part
 
-Two modes:
+PLPMTUD discovers the *underlay* path's capacity per-peer, but the TUN device MTU controls what the OS *sends into the tunnel*. Discovering a larger PLPMTU is useless if the OS still caps packets at `tun.mtu=1300`. The primary goal is **MTU growth** (discovering that a LAN peer can use jumbo frames), which is the opposite of classical PMTUD (which only reduces). This creates a fundamental tension:
 
-**Mode 1: Per-peer MTU (recommended initial implementation)**
+**Option 1: Large TUN MTU + per-peer PTB (recommended)**
 
-- Keep `tun.mtu` as the TUN device MTU (unchanged)
-- PLPMTUD sets a per-hostinfo effective MTU
-- On `inside.go` send path, clamp packet size to `min(tun.mtu, hostinfo.plpmtu - overhead)`
-- If inner packet exceeds peer's PLPMTU, generate ICMP Fragmentation Needed back into the TUN (enables inner path MTU discovery)
+- Set TUN device MTU to the maximum plausible value (e.g., 8921 for jumbo over IPv6)
+- Modify TCP MSS in flight (MSS clamping) to a conservative default so TCP works before any probing completes
+- When sending to a peer whose discovered PLPMTU is smaller than the inner packet, drop the packet and inject ICMP PTB (Fragmentation Needed / Packet Too Big) back into the TUN with the peer's effective TUN MTU
+- The inner stack's own PMTUD then converges to the per-peer limit
+- On roam / new tunnel, PLPMTU starts at BASE → PTB storms are likely until probing converges (seconds to minutes). TCP recovers via PMTUD; UDP overlay traffic suffers until probing completes
+- **Pro:** Immediate benefit for peers with large path MTU — OS sends jumbo packets from the start
+- **Con:** Startup/roam latency; UDP overlay relies heavily on PTB during convergence; MSS clamping complexity
 
-**Mode 2: Dynamic TUN MTU**
+**Option 2: Per-peer route MTU**
 
-- Adjust TUN device MTU to the maximum discovered PLPMTU across all active peers
-- More complex; requires re-notifying the OS, and the TUN MTU is shared across all peers
-- Better left as a future optimization
+- Keep TUN device MTU at the default (1300)
+- When PLPMTUD discovers a larger PLPMTU for a peer, install a host route (`/32` or `/128`) with an elevated MTU for that peer's VPN address
+- The OS routing table immediately advertises the larger MTU to applications for that specific destination
+- **Pro:** Immediate per-peer MTU with no PTB storms; OS handles everything correctly
+- **Con:** Many host routes in large networks (one per peer with non-default PLPMTU); route management complexity; **may not work on Windows** (route MTU support varies); Linux-only per-route MTU is already implemented in `overlay/tun_linux.go` via netlink AdvMSS, but Darwin/FreeBSD have limited support
+
+**Option 3: Nebula-layer fragmentation**
+
+- Run TUN at large MTU, fragment oversized Nebula packets into multiple datagrams, reassemble at the receiver
+- **Pro:** Transparent to the inner stack, no PTB needed
+- **Con:** Significant protocol complexity (fragment headers, reassembly buffers, reordering, fragment loss handling). Essentially reimplementing IP fragmentation. Not recommended.
+
+**Recommendation:** Option 1 for initial implementation. It's the most general approach and doesn't depend on platform-specific route table capabilities. Option 2 could be explored as a Linux-specific optimization in Phase 2, using the existing `tun_linux.go` netlink route infrastructure. Option 3 should be avoided.
 
 ### PTB Message Integration (Optional Enhancement)
 
