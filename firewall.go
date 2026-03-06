@@ -230,7 +230,7 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 	case "drop":
 		fw.OutSendReject = false
 	default:
-		l.WithField("action", inboundAction).Warn("invalid firewall.outbound_action, defaulting to `drop`")
+		l.WithField("action", outboundAction).Warn("invalid firewall.outbound_action, defaulting to `drop`")
 		fw.OutSendReject = false
 	}
 
