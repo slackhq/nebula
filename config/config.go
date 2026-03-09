@@ -406,9 +406,9 @@ func readDirNames(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
 
 	paths, err := f.Readdirnames(-1)
-	f.Close()
 	if err != nil {
 		return nil, err
 	}
