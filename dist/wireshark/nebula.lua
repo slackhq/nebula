@@ -92,7 +92,7 @@ function nebula.prefs_changed()
     DissectorTable.get("udp.port"):remove_all(nebula)
 
     if nebula.prefs.all_ports and default_settings.all_ports ~= nebula.prefs.all_ports then
-        default_settings.all_port = nebula.prefs.all_ports
+        default_settings.all_ports = nebula.prefs.all_ports
 
         for i=0, 65535 do
             DissectorTable.get("udp.port"):add(i, nebula)
