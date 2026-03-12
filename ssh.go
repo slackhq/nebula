@@ -189,7 +189,10 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 }
 
 func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Interface) {
-	sandboxDir := c.GetString("sshd.sandbox_dir", "")
+	// sandboxDir defaults to a dir in temp. The intention is that end user will
+	// create this dir as needed. Overriding this config value to "" allows
+	// writing to anywhere in the system.
+	sandboxDir := c.GetString("sshd.sandbox_dir", "/var/tmp/nebula-debug")
 
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "list-hostmap",
