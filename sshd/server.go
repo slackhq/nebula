@@ -16,16 +16,13 @@ type SSHServer struct {
 	config *ssh.ServerConfig
 	l      *logrus.Entry
 
-	certChecker *ssh.CertChecker
-
 	// Map of user -> authorized keys
 	trustedKeys map[string]map[string]bool
 	trustedCAs  []ssh.PublicKey
 
 	// List of available commands
-	helpCommand *Command
-	commands    *radix.Tree
-	listener    net.Listener
+	commands *radix.Tree
+	listener net.Listener
 
 	// Locks the conns/counter to avoid concurrent map access
 	connsLock sync.Mutex
@@ -184,7 +181,11 @@ func (s *SSHServer) run() {
 
 		if err != nil {
 			l := s.l.WithError(err).WithField("remoteAddress", c.RemoteAddr())
-			if conn != nil {
+			if conn == nil {
+				// conn is nil when the handshake failed before authentication
+				// close the raw TCP connection to avoid leaking the file descriptor.
+				c.Close()
+			} else {
 				l = l.WithField("sshUser", conn.User())
 				conn.Close()
 			}
