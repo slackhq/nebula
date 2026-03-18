@@ -181,11 +181,7 @@ func (s *SSHServer) run() {
 
 		if err != nil {
 			l := s.l.WithError(err).WithField("remoteAddress", c.RemoteAddr())
-			if conn == nil {
-				// conn is nil when the handshake failed before authentication
-				// close the raw TCP connection to avoid leaking the file descriptor.
-				c.Close()
-			} else {
+			if conn != nil {
 				l = l.WithField("sshUser", conn.User())
 				conn.Close()
 			}
