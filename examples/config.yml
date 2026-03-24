@@ -206,7 +206,7 @@ punchy:
     #- "ssh public key string"
   # sandbox_dir restricts file paths for profiling commands (start-cpu-profile, save-heap-profile,
   # save-mutex-profile) to the specified directory. Relative paths will be resolved within this directory,
-  # and absolute paths outside of it will be rejected. Default is /var/tmp/nebula-debug.
+  # and absolute paths outside of it will be rejected. Default is $TMP/nebula-debug.
   # The directory is NOT automatically created.
   # Overriding this to "" is the same as "/" and will allow overwriting any path on the host.
   #sandbox_dir: /var/tmp/nebula-debug
