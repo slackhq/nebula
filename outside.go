@@ -190,6 +190,13 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		if !f.handleEncrypted(ci, via, h) {
 			return
 		}
+		_, err = f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
+		if err != nil {
+			hostinfo.logger(f.l).WithError(err).WithField("from", via).
+				WithField("packet", packet).
+				Error("Failed to decrypt CloseTunnel packet")
+			return
+		}
 
 		hostinfo.logger(f.l).WithField("from", via).
 			Info("Close tunnel received, tearing down.")
