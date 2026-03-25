@@ -12,6 +12,8 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/e2e/router"
+	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
 )
@@ -364,4 +366,107 @@ func TestCrossStackRelaysWork(t *testing.T) {
 	//myControl.Stop()
 	//theirControl.Stop()
 	//relayControl.Stop()
+}
+
+func TestCloseTunnelAuthenticated(t *testing.T) {
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	myControl, myVpnIpNet, myUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "me", "10.128.0.1/24", m{"tunnels": m{"drop_inactive": true, "inactivity_timeout": "5s"}})
+	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "them", "10.128.0.2/24", m{"tunnels": m{"drop_inactive": true, "inactivity_timeout": "10m"}})
+
+	// Share our underlay information
+	myControl.InjectLightHouseAddr(theirVpnIpNet[0].Addr(), theirUdpAddr)
+	theirControl.InjectLightHouseAddr(myVpnIpNet[0].Addr(), myUdpAddr)
+
+	// Start the servers
+	myControl.Start()
+	theirControl.Start()
+
+	r := router.NewR(t, myControl, theirControl)
+
+	r.Log("Assert the tunnel between me and them works")
+	assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
+
+	r.Log("Close the tunnel")
+	myControl.CloseTunnel(theirVpnIpNet[0].Addr(), false)
+	r.FlushAll()
+
+	waitStart := time.Now()
+	for {
+		myIndexes := len(myControl.GetHostmap().Indexes)
+		theirIndexes := len(theirControl.GetHostmap().Indexes)
+		if myIndexes == 0 && theirIndexes == 0 {
+			break
+		}
+
+		since := time.Since(waitStart)
+		r.Logf("my tunnels: %v; their tunnels: %v; duration: %v", myIndexes, theirIndexes, since)
+		if since > time.Second*6 {
+			t.Fatal("Tunnel should have been declared inactive after 2 seconds and before 6 seconds")
+		}
+
+		time.Sleep(1 * time.Second)
+		//r.FlushAll()
+	}
+
+	r.Logf("Happy path success, tunnels were dropped within %v", time.Since(waitStart))
+
+	myControl.InjectLightHouseAddr(theirVpnIpNet[0].Addr(), theirUdpAddr)
+	theirControl.InjectLightHouseAddr(myVpnIpNet[0].Addr(), myUdpAddr)
+	r.Log("Assert another tunnel between me and them works")
+	assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
+	hi := myControl.GetHostInfoByVpnAddr(theirVpnIpNet[0].Addr(), false)
+	if hi == nil {
+		t.Fatal("There is no hostinfo for this tunnel")
+	}
+	myHi := theirControl.GetHostInfoByVpnAddr(myVpnIpNet[0].Addr(), false)
+	if myHi == nil {
+		t.Fatal("There is no hostinfo for my tunnel")
+	}
+	r.Log("It does")
+
+	buf := make([]byte, 1024)
+	hdr := header.H{
+		Version:        1,
+		Type:           header.CloseTunnel,
+		Subtype:        0,
+		Reserved:       0,
+		RemoteIndex:    hi.RemoteIndex,
+		MessageCounter: 5,
+	}
+	out, err := hdr.Encode(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pkt := &udp.Packet{
+		To:   hi.CurrentRemote,
+		From: myHi.CurrentRemote,
+		Data: out,
+	}
+	r.InjectUDPPacket(myControl, theirControl, pkt)
+	r.Log("Injected bogus close tunnel. Let's see!")
+	waitStart = time.Now()
+	for {
+		myIndexes := len(myControl.GetHostmap().Indexes)
+		theirIndexes := len(theirControl.GetHostmap().Indexes)
+		if myIndexes == 0 {
+			t.Fatal("myIndexes should not be 0")
+		}
+		if theirIndexes == 0 {
+			t.Fatal("theirIndexes should not be 0, they should have rejected this bogus packet")
+		}
+
+		since := time.Since(waitStart)
+		r.Logf("my tunnels: %v; their tunnels: %v; duration: %v", myIndexes, theirIndexes, since)
+		if since > time.Second*4 {
+			t.Log("The tunnel would have been gone by now")
+			break
+		}
+
+		time.Sleep(1 * time.Second)
+		r.FlushAll()
+	}
+
+	myControl.Stop()
+	theirControl.Stop()
 }
