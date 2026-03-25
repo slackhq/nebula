@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"context"
+	"iter"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -124,6 +125,14 @@ func (c *Control) ListHostmapHosts(pendingMap bool) []ControlHostInfo {
 	}
 }
 
+// ListHostmapHostsIter returns an iter with details about the actual or pending (handshaking) hostmap by vpn ip
+func (c *Control) ListHostmapHostsIter(pendingMap bool) iter.Seq[ControlHostInfo] {
+	if pendingMap {
+		return listHostMapHostsIter(c.f.handshakeManager)
+	}
+	return listHostMapHostsIter(c.f.hostMap)
+}
+
 // ListHostmapIndexes returns details about the actual or pending (handshaking) hostmap by local index id
 func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 	if pendingMap {
@@ -131,6 +140,14 @@ func (c *Control) ListHostmapIndexes(pendingMap bool) []ControlHostInfo {
 	} else {
 		return listHostMapIndexes(c.f.hostMap)
 	}
+}
+
+// ListHostmapIndexesIter returns an iter with details about the actual or pending (handshaking) hostmap by local index id
+func (c *Control) ListHostmapIndexesIter(pendingMap bool) iter.Seq[ControlHostInfo] {
+	if pendingMap {
+		return listHostMapIndexesIter(c.f.handshakeManager)
+	}
+	return listHostMapIndexesIter(c.f.hostMap)
 }
 
 // GetCertByVpnIp returns the authenticated certificate of the given vpn IP, or nil if not found
@@ -309,6 +326,25 @@ func listHostMapHosts(hl controlHostLister) []ControlHostInfo {
 	return hosts
 }
 
+func listHostMapHostsIter(hl controlHostLister) iter.Seq[ControlHostInfo] {
+	pr := hl.GetPreferredRanges()
+
+	return func(yield func(ControlHostInfo) bool) {
+		stopped := false
+
+		hl.ForEachVpnAddr(func(hostinfo *HostInfo) {
+			if stopped {
+				return
+			}
+
+			host := copyHostInfo(hostinfo, pr)
+			if !yield(host) {
+				stopped = true
+			}
+		})
+	}
+}
+
 func listHostMapIndexes(hl controlHostLister) []ControlHostInfo {
 	hosts := make([]ControlHostInfo, 0)
 	pr := hl.GetPreferredRanges()
@@ -316,4 +352,23 @@ func listHostMapIndexes(hl controlHostLister) []ControlHostInfo {
 		hosts = append(hosts, copyHostInfo(hostinfo, pr))
 	})
 	return hosts
+}
+
+func listHostMapIndexesIter(hl controlHostLister) iter.Seq[ControlHostInfo] {
+	pr := hl.GetPreferredRanges()
+
+	return func(yield func(ControlHostInfo) bool) {
+		stopped := false
+
+		hl.ForEachIndex(func(hostinfo *HostInfo) {
+			if stopped {
+				return
+			}
+
+			host := copyHostInfo(hostinfo, pr)
+			if !yield(host) {
+				stopped = true
+			}
+		})
+	}
 }
