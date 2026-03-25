@@ -72,6 +72,11 @@ type ifreqQLEN struct {
 }
 
 func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
+	err := unix.SetNonblock(deviceFd, true)
+	if err != nil {
+		return nil, err
+	}
+
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
 	t, err := newTunGeneric(c, l, file, vpnNetworks)
@@ -122,6 +127,11 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 	}
 	name := strings.Trim(string(req.Name[:]), "\x00")
 
+	err = unix.SetNonblock(fd, true)
+	if err != nil {
+		return nil, err
+	}
+
 	file := os.NewFile(uintptr(fd), "/dev/net/tun")
 	t, err := newTunGeneric(c, l, file, vpnNetworks)
 	if err != nil {
@@ -145,7 +155,12 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []n
 		l:                         l,
 	}
 
-	err := t.reload(c, true)
+	err := unix.SetNonblock(t.fd, true)
+	if err != nil {
+		return nil, err
+	}
+
+	err = t.reload(c, true)
 	if err != nil {
 		return nil, err
 	}
@@ -251,6 +266,11 @@ func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 		return nil, err
 	}
 
+	err = unix.SetNonblock(fd, true)
+	if err != nil {
+		return nil, err
+	}
+
 	file := os.NewFile(uintptr(fd), "/dev/net/tun")
 
 	return file, nil
@@ -259,29 +279,6 @@ func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 	r, _ := t.routeTree.Load().Lookup(ip)
 	return r
-}
-
-func (t *tun) Write(b []byte) (int, error) {
-	var nn int
-	maximum := len(b)
-
-	for {
-		n, err := unix.Write(t.fd, b[nn:maximum])
-		if n > 0 {
-			nn += n
-		}
-		if nn == len(b) {
-			return nn, err
-		}
-
-		if err != nil {
-			return nn, err
-		}
-
-		if n == 0 {
-			return nn, io.ErrUnexpectedEOF
-		}
-	}
 }
 
 func (t *tun) deviceBytes() (o [16]byte) {
@@ -712,11 +709,17 @@ func (t *tun) Close() error {
 	}
 
 	if t.ReadWriteCloser != nil {
-		_ = t.ReadWriteCloser.Close()
+		err := t.ReadWriteCloser.Close()
+		if err != nil {
+			t.l.WithField("error", err).Error("Failed to close read/write connection")
+		}
 	}
 
 	if t.ioctlFd > 0 {
-		_ = os.NewFile(t.ioctlFd, "ioctlFd").Close()
+		err := os.NewFile(t.ioctlFd, "ioctlFd").Close()
+		if err != nil {
+			t.l.WithField("error", err).Error("Failed to close ioctl fd")
+		}
 		t.ioctlFd = 0
 	}
 

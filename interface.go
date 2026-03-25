@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"os"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -88,6 +88,7 @@ type Interface struct {
 
 	writers []udp.Conn
 	readers []io.ReadWriteCloser
+	wg      sync.WaitGroup
 
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
@@ -210,7 +211,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 // activate creates the interface on the host. After the interface is created, any
 // other services that want to bind listeners to its IP may do so successfully. However,
 // the interface isn't going to process anything until run() is called.
-func (f *Interface) activate() {
+func (f *Interface) activate() error {
 	// actually turn on tun dev
 
 	addr, err := f.outside.LocalAddr()
@@ -238,33 +239,38 @@ func (f *Interface) activate() {
 		if i > 0 {
 			reader, err = f.inside.NewMultiQueueReader()
 			if err != nil {
-				f.l.Fatal(err)
+				return err
 			}
 		}
 		f.readers[i] = reader
 	}
 
-	if err := f.inside.Activate(); err != nil {
+	if err = f.inside.Activate(); err != nil {
 		f.inside.Close()
-		f.l.Fatal(err)
+		return err
 	}
+
+	return nil
 }
 
-func (f *Interface) run() {
+func (f *Interface) run() (func(), error) {
 	// Launch n queues to read packets from udp
 	for i := 0; i < f.routines; i++ {
+		f.wg.Add(1)
 		go f.listenOut(i)
 	}
 
 	// Launch n queues to read packets from tun dev
 	for i := 0; i < f.routines; i++ {
+		f.wg.Add(1)
 		go f.listenIn(f.readers[i], i)
 	}
+
+	return f.wg.Wait, nil
 }
 
 func (f *Interface) listenOut(i int) {
 	runtime.LockOSThread()
-
 	var li udp.Conn
 	if i > 0 {
 		li = f.writers[i]
@@ -279,14 +285,21 @@ func (f *Interface) listenOut(i int) {
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
-	li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
+	err := li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
 		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
 	})
+
+	if err != nil && !f.closed.Load() {
+		f.l.WithError(err).Error("Error while reading packet inbound packet, closing")
+		//TODO: Trigger Control to close
+	}
+
+	f.l.Debugf("underlay reader %v is done", i)
+	f.wg.Done()
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	runtime.LockOSThread()
-
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
@@ -297,17 +310,18 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	for {
 		n, err := reader.Read(packet)
 		if err != nil {
-			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
-				return
+			if !f.closed.Load() {
+				f.l.WithError(err).Error("Error while reading outbound packet, closing")
+				//TODO: Trigger Control to close
 			}
-
-			f.l.WithError(err).Error("Error while reading outbound packet")
-			// This only seems to happen when something fatal happens to the fd, so exit.
-			os.Exit(2)
+			break
 		}
 
 		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
 	}
+
+	f.l.Debugf("overlay reader %v is done", i)
+	f.wg.Done()
 }
 
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
@@ -484,21 +498,23 @@ func (f *Interface) GetCertState() *CertState {
 func (f *Interface) Close() error {
 	f.closed.Store(true)
 
+	// Release the udp readers
 	for _, u := range f.writers {
 		err := u.Close()
 		if err != nil {
 			f.l.WithError(err).Error("Error while closing udp socket")
 		}
 	}
+
+	// Release the tun readers
 	for i, r := range f.readers {
 		if i == 0 {
-			continue // f.readers[0] is f.inside, which we want to save for last
+			continue // f.readers[0] is f.inside, which we want to save for last, since it closes other stuff too
 		}
 		if err := r.Close(); err != nil {
 			f.l.WithError(err).Error("Error while closing tun reader")
 		}
 	}
 
-	// Release the tun device
 	return f.inside.Close()
 }
