@@ -283,6 +283,15 @@ tun:
   # If using massive routes updates, for example BGP, you may need to increase this value to avoid packet loss.
   # SO_RCVBUFFORCE is used to avoid having to raise the system wide max
   #use_system_route_table_buffer_size: 0
+  #
+  # When using the feature to carry IPv4 unsafe_routes through a IPv6-only overlay network (4over6),
+  # the system still needs to use IPv4 addresses to pass that traffic. 
+  # By default, they are randomly chosen out of 169.254.0.0/16 at startup, but if you need them to be static, you can set them here.
+  # Setting these options is not required for use of the 4over6 feature.
+  # this is the address that a client will use as a source IP for packets sent to the router
+  #unsafe_origin_address_for_4over6: 169.254.55.96
+  # this is the IP the router will use internally to hairpin-NAT 4over6 traffic before it hits the operating system.
+  #snat_address_for_4over6: 169.254.12.34
 
 # Configure logging level
 logging:
