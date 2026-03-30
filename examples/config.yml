@@ -342,6 +342,14 @@ logging:
   # after receiving the response for lighthouse queries
   #trigger_buffer: 64
 
+  # max_rate limits the number of new handshakes per second. Both incoming and outgoing new
+  # handshakes count against this limit. Once the limit is reached, new handshakes are dropped
+  # until the next second. A value of 0 means unlimited (default).
+  # This is useful for preventing DoS attacks that attempt to exhaust CPU with handshake crypto.
+  # Running `openssl speed ecdhp256` on your hardware can be a good rule of thumb for choosing
+  # a max, as each handshake performs similar DH operations.
+  #max_rate: 0
+
 # Tunnel manager settings
 #tunnels:
   # drop_inactive controls whether inactive tunnels are maintained or dropped after the inactive_timeout period has
