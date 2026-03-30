@@ -1,17 +1,22 @@
 package util
 
 import (
-	"bufio"
 	"bytes"
+	"errors"
 )
+
+var ErrTruncatedPEMBlock = errors.New("truncated PEM block")
 
 // SplitPEM is a split function for bufio.Scanner that returns each PEM block.
 func SplitPEM(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	// Look for the start of a PEM block
 	start := bytes.Index(data, []byte("-----BEGIN "))
 	if start == -1 {
-		if atEOF && len(data) > 0 {
-			// No PEM block found, skip remaining data
+		if atEOF && len(bytes.TrimSpace(data)) > 0 {
+			// Non-whitespace content with no PEM block
+			return 0, nil, ErrTruncatedPEMBlock
+		}
+		if atEOF {
 			return len(data), nil, nil
 		}
 		// Request more data
@@ -23,7 +28,7 @@ func SplitPEM(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	if endMarkerStart == -1 {
 		if atEOF {
 			// Incomplete PEM block at EOF
-			return 0, nil, bufio.ErrFinalToken
+			return 0, nil, ErrTruncatedPEMBlock
 		}
 		// Need more data to find the end
 		return 0, nil, nil

@@ -55,7 +55,7 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 			return nil, ErrInvalidPEMBlock
 		}
 		if block == nil {
-			break
+			return nil, ErrInvalidPEMBlock
 		}
 
 		c, err := unmarshalCertificateBlock(block)
@@ -72,7 +72,7 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, ErrInvalidPEMBlock
 	}
 
 	if expired {
