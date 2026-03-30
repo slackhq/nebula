@@ -175,44 +175,45 @@ func (s *SSHServer) run() {
 			}
 			return
 		}
-
-		conn, chans, reqs, err := ssh.NewServerConn(c, s.config)
-		fp := ""
-		if conn != nil {
-			fp = conn.Permissions.Extensions["fp"]
-		}
-
-		if err != nil {
-			l := s.l.WithError(err).WithField("remoteAddress", c.RemoteAddr())
+		go func(c net.Conn) {
+			conn, chans, reqs, err := ssh.NewServerConn(c, s.config)
+			fp := ""
 			if conn != nil {
-				l = l.WithField("sshUser", conn.User())
-				conn.Close()
+				fp = conn.Permissions.Extensions["fp"]
 			}
-			if fp != "" {
-				l = l.WithField("sshFingerprint", fp)
+
+			if err != nil {
+				l := s.l.WithError(err).WithField("remoteAddress", c.RemoteAddr())
+				if conn != nil {
+					l = l.WithField("sshUser", conn.User())
+					conn.Close()
+				}
+				if fp != "" {
+					l = l.WithField("sshFingerprint", fp)
+				}
+				l.Warn("failed to handshake")
+				return
 			}
-			l.Warn("failed to handshake")
-			continue
-		}
 
-		l := s.l.WithField("sshUser", conn.User())
-		l.WithField("remoteAddress", c.RemoteAddr()).WithField("sshFingerprint", fp).Info("ssh user logged in")
+			l := s.l.WithField("sshUser", conn.User())
+			l.WithField("remoteAddress", c.RemoteAddr()).WithField("sshFingerprint", fp).Info("ssh user logged in")
 
-		session := NewSession(s.commands, conn, chans, l.WithField("subsystem", "sshd.session"))
-		s.connsLock.Lock()
-		s.counter++
-		counter := s.counter
-		s.conns[counter] = session
-		s.connsLock.Unlock()
+			session := NewSession(s.commands, conn, chans, l.WithField("subsystem", "sshd.session"))
+			s.connsLock.Lock()
+			s.counter++
+			counter := s.counter
+			s.conns[counter] = session
+			s.connsLock.Unlock()
 
-		go ssh.DiscardRequests(reqs)
-		go func() {
+			go ssh.DiscardRequests(reqs)
+
+			s.l.WithField("id", counter).Debug("Wait for session to end...")
 			<-session.exitChan
 			s.l.WithField("id", counter).Debug("closing conn")
 			s.connsLock.Lock()
 			delete(s.conns, counter)
 			s.connsLock.Unlock()
-		}()
+		}(c)
 	}
 }
 

@@ -60,6 +60,7 @@ func (s *session) handleChannels(chans <-chan ssh.NewChannel) {
 }
 
 func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
+	defer s.Close()
 	for req := range in {
 		var err error
 		switch req.Type {
