@@ -52,7 +52,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		ci = hostinfo.ConnectionState
 	}
 
-	// don't get Rx metrics for message, since you can see those in the tun metrics
+	// don't keep Rx metrics for message type, since you can see those in the tun metrics
 	if h.Type != header.Message {
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
 	}
