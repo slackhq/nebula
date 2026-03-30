@@ -57,12 +57,11 @@ Check the [releases](https://github.com/slackhq/nebula/releases/latest) page for
     docker pull nebulaoss/nebula
     ```
 
-#### Mobile
+#### Mobile ([source code](https://github.com/DefinedNet/mobile_nebula))
 
 - [iOS](https://apps.apple.com/us/app/mobile-nebula/id1509587936?itsct=apps_box&amp;itscg=30200)
 - [Android](https://play.google.com/store/apps/details?id=net.defined.mobile_nebula&pcampaignid=pcampaignidMKT-Other-global-all-co-prtnr-py-PartBadge-Mar2515-1)
 
-Source code: [DefinedNet/mobile_nebula](https://github.com/DefinedNet/mobile_nebula)
 
 ## Technical Overview
 
