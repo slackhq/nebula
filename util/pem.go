@@ -37,17 +37,18 @@ func SplitPEM(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	// Find the actual end of the END line (after the newline)
 	endMarkerStart += start
 	endLineEnd := bytes.IndexByte(data[endMarkerStart:], '\n')
+	var end int
 	if endLineEnd == -1 {
 		if atEOF {
 			// END marker without newline at EOF - take it anyway
-			endLineEnd = len(data) - endMarkerStart
+			end = len(data)
 		} else {
 			// Need more data
 			return 0, nil, nil
 		}
+	} else {
+		end = endMarkerStart + endLineEnd + 1
 	}
-
-	end := endMarkerStart + endLineEnd + 1
 
 	// Extract the PEM block
 	pemBlock := data[start:end]
