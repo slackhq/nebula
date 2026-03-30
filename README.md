@@ -62,6 +62,8 @@ Check the [releases](https://github.com/slackhq/nebula/releases/latest) page for
 - [iOS](https://apps.apple.com/us/app/mobile-nebula/id1509587936?itsct=apps_box&amp;itscg=30200)
 - [Android](https://play.google.com/store/apps/details?id=net.defined.mobile_nebula&pcampaignid=pcampaignidMKT-Other-global-all-co-prtnr-py-PartBadge-Mar2515-1)
 
+Source code: [DefinedNet/mobile_nebula](https://github.com/DefinedNet/mobile_nebula)
+
 ## Technical Overview
 
 Nebula is a mutually authenticated peer-to-peer software-defined network based on the [Noise Protocol Framework](https://noiseprotocol.org/).
@@ -75,6 +77,8 @@ Nebula uses Elliptic-curve Diffie-Hellman (`ECDH`) key exchange and `AES-256-GCM
 Nebula was created to provide a mechanism for groups of hosts to communicate securely, even across the internet, while enabling expressive firewall definitions similar in style to cloud security groups.
 
 ## Getting started (quickly)
+
+**Don't want to manage your own PKI and lighthouses?** [Managed Nebula](https://www.defined.net/) from Defined Networking handles all of this for you.
 
 To set up a Nebula network, you'll need:
 
