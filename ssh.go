@@ -533,7 +533,11 @@ func sshSanitizeFilePath(sandboxDir, filePath string) (string, error) {
 	cleaned := filepath.Clean(filePath)
 
 	// Ensure the resolved path is within the sandbox directory
-	if !strings.HasPrefix(cleaned, filepath.Clean(sandboxDir)+string(filepath.Separator)) && cleaned != filepath.Clean(sandboxDir) {
+	cleanedSandbox := filepath.Clean(sandboxDir)
+	if cleaned == cleanedSandbox {
+		return "", fmt.Errorf("path %q resolves to the sandbox directory itself %q", filePath, sandboxDir)
+	}
+	if !strings.HasPrefix(cleaned, cleanedSandbox+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %q is outside the sandbox directory %q", filePath, sandboxDir)
 	}
 
