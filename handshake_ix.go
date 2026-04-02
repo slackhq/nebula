@@ -462,9 +462,7 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 
 	hostinfo.remotes.RefreshFromHandshake(vpnAddrs)
 
-	// If we just completed a handshake with a lighthouse, immediately send
-	// an update so it has our current addresses without waiting for the next
-	// periodic update.
+	// Don't wait for UpdateWorker
 	if f.lightHouse.IsAnyLighthouseAddr(vpnAddrs) {
 		f.lightHouse.TriggerUpdate()
 	}
@@ -681,9 +679,7 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 	hostinfo.remotes.RefreshFromHandshake(vpnAddrs)
 	f.metricHandshakes.Update(duration)
 
-	// If we just completed a handshake with a lighthouse, immediately send
-	// an update so it has our current addresses without waiting for the next
-	// periodic update.
+	// Don't wait for UpdateWorker
 	if f.lightHouse.IsAnyLighthouseAddr(vpnAddrs) {
 		f.lightHouse.TriggerUpdate()
 	}
