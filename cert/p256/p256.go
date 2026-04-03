@@ -44,7 +44,12 @@ func swap(r, s []byte) ([]byte, []byte, error) {
 	}
 	sNormalized := nMod.Nat().Sub(bigS, nMod)
 
-	return r, sNormalized.Bytes(nMod), nil
+	result := sNormalized.Bytes(nMod)
+	for len(result) > 1 && result[0] == 0 {
+		result = result[1:]
+	}
+
+	return r, result, nil
 }
 
 func Normalize(sig []byte) ([]byte, error) {

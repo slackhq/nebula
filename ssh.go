@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"runtime/pprof"
@@ -188,6 +189,12 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 }
 
 func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Interface) {
+	// sandboxDir defaults to a dir in temp. The intention is that end user will
+	// create this dir as needed. Overriding this config value to "" allows
+	// writing to anywhere in the system.
+	defaultDir := filepath.Join(os.TempDir(), "nebula-debug")
+	sandboxDir := c.GetString("sshd.sandbox_dir", defaultDir)
+
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "list-hostmap",
 		ShortDescription: "List all known previously connected hosts",
@@ -246,7 +253,9 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Inter
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "start-cpu-profile",
 		ShortDescription: "Starts a cpu profile and write output to the provided file, ex: `cpu-profile.pb.gz`",
-		Callback:         sshStartCpuProfile,
+		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+			return sshStartCpuProfile(sandboxDir, fs, a, w)
+		},
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
@@ -261,7 +270,9 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Inter
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "save-heap-profile",
 		ShortDescription: "Saves a heap profile to the provided path, ex: `heap-profile.pb.gz`",
-		Callback:         sshGetHeapProfile,
+		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+			return sshGetHeapProfile(sandboxDir, fs, a, w)
+		},
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
@@ -273,7 +284,9 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Inter
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "save-mutex-profile",
 		ShortDescription: "Saves a mutex profile to the provided path, ex: `mutex-profile.pb.gz`",
-		Callback:         sshGetMutexProfile,
+		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+			return sshGetMutexProfile(sandboxDir, fs, a, w)
+		},
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
@@ -506,13 +519,43 @@ func sshListLighthouseMap(lightHouse *LightHouse, a any, w sshd.StringWriter) er
 	return nil
 }
 
-func sshStartCpuProfile(fs any, a []string, w sshd.StringWriter) error {
+// sshSanitizeFilePath validates that the given file path is within the sandbox directory.
+// If sandboxDir is empty, the path is returned as-is for backwards compatibility.
+func sshSanitizeFilePath(sandboxDir, filePath string) (string, error) {
+	if sandboxDir == "" {
+		return filePath, nil
+	}
+
+	// Clean and resolve the path relative to the sandbox directory
+	if !filepath.IsAbs(filePath) {
+		filePath = filepath.Join(sandboxDir, filePath)
+	}
+	cleaned := filepath.Clean(filePath)
+
+	// Ensure the resolved path is within the sandbox directory
+	cleanedSandbox := filepath.Clean(sandboxDir)
+	if cleaned == cleanedSandbox {
+		return "", fmt.Errorf("path %q resolves to the sandbox directory itself %q", filePath, sandboxDir)
+	}
+	if !strings.HasPrefix(cleaned, cleanedSandbox+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q is outside the sandbox directory %q", filePath, sandboxDir)
+	}
+
+	return cleaned, nil
+}
+
+func sshStartCpuProfile(sandboxDir string, fs any, a []string, w sshd.StringWriter) error {
 	if len(a) == 0 {
 		err := w.WriteLine("No path to write profile provided")
 		return err
 	}
 
-	file, err := os.Create(a[0])
+	filePath, err := sshSanitizeFilePath(sandboxDir, a[0])
+	if err != nil {
+		return w.WriteLine(err.Error())
+	}
+
+	file, err := os.Create(filePath)
 	if err != nil {
 		err = w.WriteLine(fmt.Sprintf("Unable to create profile file: %s", err))
 		return err
@@ -676,12 +719,17 @@ func sshChangeRemote(ifce *Interface, fs any, a []string, w sshd.StringWriter) e
 	return w.WriteLine("Changed")
 }
 
-func sshGetHeapProfile(fs any, a []string, w sshd.StringWriter) error {
+func sshGetHeapProfile(sandboxDir string, fs any, a []string, w sshd.StringWriter) error {
 	if len(a) == 0 {
 		return w.WriteLine("No path to write profile provided")
 	}
 
-	file, err := os.Create(a[0])
+	filePath, err := sshSanitizeFilePath(sandboxDir, a[0])
+	if err != nil {
+		return w.WriteLine(err.Error())
+	}
+
+	file, err := os.Create(filePath)
 	if err != nil {
 		err = w.WriteLine(fmt.Sprintf("Unable to create profile file: %s", err))
 		return err
@@ -712,12 +760,17 @@ func sshMutexProfileFraction(fs any, a []string, w sshd.StringWriter) error {
 	return w.WriteLine(fmt.Sprintf("New value: %d. Old value: %d", newRate, oldRate))
 }
 
-func sshGetMutexProfile(fs any, a []string, w sshd.StringWriter) error {
+func sshGetMutexProfile(sandboxDir string, fs any, a []string, w sshd.StringWriter) error {
 	if len(a) == 0 {
 		return w.WriteLine("No path to write profile provided")
 	}
 
-	file, err := os.Create(a[0])
+	filePath, err := sshSanitizeFilePath(sandboxDir, a[0])
+	if err != nil {
+		return w.WriteLine(err.Error())
+	}
+
+	file, err := os.Create(filePath)
 	if err != nil {
 		return w.WriteLine(fmt.Sprintf("Unable to create profile file: %s", err))
 	}
