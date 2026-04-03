@@ -16,16 +16,13 @@ type SSHServer struct {
 	config *ssh.ServerConfig
 	l      *logrus.Entry
 
-	certChecker *ssh.CertChecker
-
 	// Map of user -> authorized keys
 	trustedKeys map[string]map[string]bool
 	trustedCAs  []ssh.PublicKey
 
 	// List of available commands
-	helpCommand *Command
-	commands    *radix.Tree
-	listener    net.Listener
+	commands *radix.Tree
+	listener net.Listener
 
 	// Locks the conns/counter to avoid concurrent map access
 	connsLock sync.Mutex
