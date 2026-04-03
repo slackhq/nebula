@@ -52,6 +52,17 @@ func (t *disabledTun) Networks() []netip.Prefix {
 	return t.vpnNetworks
 }
 
+func (*disabledTun) UnsafeNetworks() []netip.Prefix {
+	return nil
+}
+func (*disabledTun) SNATAddress() netip.Prefix {
+	return netip.Prefix{}
+}
+
+func (*disabledTun) UnsafeIPv4OriginAddress() netip.Prefix {
+	return netip.Prefix{}
+}
+
 func (*disabledTun) Name() string {
 	return "disabled"
 }
