@@ -48,6 +48,8 @@ type InterfaceConfig struct {
 
 	ConntrackCacheTimeout time.Duration
 	l                     *logrus.Logger
+
+	tunBatchSize int // batch size for TUN read/write batching, 0 to disable
 }
 
 type Interface struct {
@@ -86,8 +88,9 @@ type Interface struct {
 
 	conntrackCacheTimeout time.Duration
 
-	writers []udp.Conn
-	readers []io.ReadWriteCloser
+	writers      []udp.Conn
+	readers      []io.ReadWriteCloser
+	tunBatchSize int // batch size for TUN read/write batching
 
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
@@ -187,6 +190,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		relayManager:          c.relayManager,
 		connectionManager:     c.connectionManager,
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
+		tunBatchSize:          c.tunBatchSize,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -244,6 +248,15 @@ func (f *Interface) activate() {
 		f.readers[i] = reader
 	}
 
+	// Enable batch reading on all readers if batch size > 1
+	if f.tunBatchSize > 1 {
+		for i := 0; i < f.routines; i++ {
+			if err := overlay.EnableBatchReading(f.readers[i]); err != nil {
+				f.l.WithError(err).WithField("routine", i).Warn("Failed to enable batch reading, falling back to single reads")
+			}
+		}
+	}
+
 	if err := f.inside.Activate(); err != nil {
 		f.inside.Close()
 		f.l.Fatal(err)
@@ -287,12 +300,20 @@ func (f *Interface) listenOut(i int) {
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	runtime.LockOSThread()
 
+	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
+
+	// Check if batch reading is available and enabled
+	batchReader := overlay.AsBatchReader(reader)
+	if batchReader != nil && f.tunBatchSize > 1 {
+		f.listenInBatched(reader, batchReader, i, conntrackCache)
+		return
+	}
+
+	// Fallback to single-packet reading
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
-
-	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
 	for {
 		n, err := reader.Read(packet)
@@ -307,6 +328,54 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 		}
 
 		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
+	}
+}
+
+func (f *Interface) listenInBatched(reader io.ReadWriteCloser, batchReader overlay.BatchReader, i int, conntrackCache *firewall.ConntrackCacheTicker) {
+	batchSize := f.tunBatchSize
+
+	// Pre-allocate buffers for batch reading
+	packets := make([][]byte, batchSize)
+	for j := range packets {
+		packets[j] = make([]byte, mtu)
+	}
+	sizes := make([]int, batchSize)
+
+	// Pre-allocate buffers for packet processing
+	out := make([]byte, mtu)
+	fwPacket := &firewall.Packet{}
+	nb := make([]byte, 12, 12)
+
+	// Pre-allocate buffer for batched UDP writes
+	pendingPackets := make([]udp.BatchPacket, 0, batchSize)
+
+	for {
+		// Read a batch of packets from TUN
+		n, err := batchReader.ReadBatch(packets, sizes)
+		if err != nil {
+			if errors.Is(err, os.ErrClosed) && f.closed.Load() {
+				return
+			}
+
+			f.l.WithError(err).Error("Error while reading outbound packets")
+			os.Exit(2)
+		}
+
+		if n == 0 {
+			continue
+		}
+
+		// Process all packets in the batch
+		cache := conntrackCache.Get(f.l)
+		for j := 0; j < n; j++ {
+			f.consumeInsidePacketBatched(packets[j][:sizes[j]], fwPacket, nb, out, i, cache, &pendingPackets)
+		}
+
+		// Flush all pending UDP writes
+		if len(pendingPackets) > 0 {
+			f.writers[i].WriteBatch(pendingPackets)
+			pendingPackets = pendingPackets[:0]
+		}
 	}
 }
 
