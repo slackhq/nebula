@@ -1369,6 +1369,81 @@ func TestV2NonPrimaryWithOffNetLighthouse(t *testing.T) {
 	theirControl.Stop()
 }
 
+func TestLighthouseUpdateOnReload(t *testing.T) {
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+
+	// Create the lighthouse
+	lhControl, lhVpnIpNet, lhUdpAddr, _ := newSimpleServer(cert.Version2, ca, caKey, "lh", "10.128.0.1/24", m{"lighthouse": m{"am_lighthouse": true}})
+
+	// Create a client with NO lighthouse configured and a long update interval.
+	// The initial SendUpdate at startup will be a no-op since no lighthouses are known.
+	myControl, myVpnIpNet, _, myConfig := newSimpleServer(cert.Version2, ca, caKey, "me", "10.128.0.2/24", m{
+		"lighthouse": m{
+			"interval": 600,
+			"local_allow_list": m{
+				"10.0.0.0/24": true,
+				"::/0":        false,
+			},
+		},
+	})
+
+	r := router.NewR(t, lhControl, myControl)
+	defer r.RenderFlow()
+
+	lhControl.Start()
+	myControl.Start()
+
+	// Drain any startup packets (there should be none meaningful)
+	r.FlushAll()
+
+	// Verify lighthouse has no knowledge of the client
+	assert.Nil(t, lhControl.QueryLighthouse(myVpnIpNet[0].Addr()))
+
+	// Build a new config that adds the lighthouse
+	newSettings := make(m)
+	for k, v := range myConfig.Settings {
+		newSettings[k] = v
+	}
+	newSettings["static_host_map"] = m{
+		lhVpnIpNet[0].Addr().String(): []any{lhUdpAddr.String()},
+	}
+	newSettings["lighthouse"] = m{
+		"hosts":    []any{lhVpnIpNet[0].Addr().String()},
+		"interval": 600,
+		"local_allow_list": m{
+			"10.0.0.0/24": true,
+			"::/0":        false,
+		},
+	}
+	newCfg, err := yaml.Marshal(newSettings)
+	require.NoError(t, err)
+
+	// Reload the config. The lighthouse.hosts change triggers TriggerUpdate,
+	// which wakes the update worker. It calls SendUpdate, initiating a
+	// handshake to the new lighthouse and caching the HostUpdateNotification.
+	require.NoError(t, myConfig.ReloadConfigString(string(newCfg)))
+
+	// Route until the lighthouse receives the HostUpdateNotification.
+	// This covers: handshake stage 1, stage 2, then the cached update.
+	done := make(chan struct{})
+	go func() {
+		r.RouteForAllUntilAfterMsgTypeTo(lhControl, header.LightHouse, 0)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for lighthouse update after config reload")
+	}
+
+	// Verify lighthouse now has the client's addresses
+	assert.NotNil(t, lhControl.QueryLighthouse(myVpnIpNet[0].Addr()))
+
+	r.RenderHostmaps("Final hostmaps", lhControl, myControl)
+	lhControl.Stop()
+	myControl.Stop()
+}
+
 func TestGoodHandshakeUnsafeDest(t *testing.T) {
 	unsafePrefix := "192.168.6.0/24"
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
