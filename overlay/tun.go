@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/netip"
@@ -11,6 +12,8 @@ import (
 )
 
 const DefaultMTU = 1300
+
+var globalDnsRouteManager *DnsRouteManager
 
 type NameError struct {
 	Name       string
@@ -42,7 +45,7 @@ func NewFdDeviceFromConfig(fd *int) DeviceFactory {
 }
 
 func getAllRoutesFromConfig(c *config.C, vpnNetworks []netip.Prefix, initial bool) (bool, []Route, error) {
-	if !initial && !c.HasChanged("tun.routes") && !c.HasChanged("tun.unsafe_routes") {
+	if !initial && !c.HasChanged("tun.routes") && !c.HasChanged("tun.unsafe_routes") && !c.HasChanged("tun.unsafe_dns_routes") {
 		return false, nil, nil
 	}
 
@@ -57,7 +60,41 @@ func getAllRoutesFromConfig(c *config.C, vpnNetworks []netip.Prefix, initial boo
 	}
 
 	routes = append(routes, unsafeRoutes...)
+
+	// Add DNS routes if DNS route manager exists
+	if globalDnsRouteManager != nil {
+		dnsRoutes := globalDnsRouteManager.GetResolvedRoutes()
+		routes = append(routes, dnsRoutes...)
+	}
+
 	return true, routes, nil
+}
+
+// InitializeDnsRouteManager creates and initializes the global DNS route manager
+func InitializeDnsRouteManager(ctx context.Context, c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix) error {
+	dnsRoutes, err := parseUnsafeDnsRoutes(c, vpnNetworks)
+	if err != nil {
+		return util.NewContextualError("Could not parse tun.unsafe_dns_routes", nil, err)
+	}
+
+	if len(dnsRoutes) > 0 {
+		drm, err := NewDnsRouteManager(ctx, l, c, dnsRoutes)
+		if err != nil {
+			return util.NewContextualError("Could not create DNS route manager", nil, err)
+		}
+		globalDnsRouteManager = drm
+		l.WithField("num_routes", len(dnsRoutes)).Info("DNS route manager initialized")
+	}
+
+	return nil
+}
+
+// CloseDnsRouteManager stops the global DNS route manager
+func CloseDnsRouteManager() {
+	if globalDnsRouteManager != nil {
+		globalDnsRouteManager.Close()
+		globalDnsRouteManager = nil
+	}
 }
 
 // findRemovedRoutes will return all routes that are not present in the newRoutes list and would affect the system route table.

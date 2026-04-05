@@ -141,6 +141,14 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 				tun.Close()
 			}
 		}()
+
+		// Initialize DNS route manager for unsafe_dns_routes
+		err = overlay.InitializeDnsRouteManager(ctx, c, l, pki.getCertState().myVpnNetworks)
+		if err != nil {
+			return nil, util.ContextualizeIfNeeded("Failed to initialize DNS route manager", err)
+		}
+
+		defer overlay.CloseDnsRouteManager()
 	}
 
 	// set up our UDP listener
