@@ -45,6 +45,7 @@ func TestPrometheusStats(t *testing.T) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
+out:
 	for {
 		select {
 		case <-ctx.Done():
@@ -66,15 +67,13 @@ func TestPrometheusStats(t *testing.T) {
 				body, err = io.ReadAll(resp.Body)
 				resp.Body.Close()
 				if err == nil {
-					goto success
+					break out
 				}
 			} else {
 				resp.Body.Close()
 			}
 		}
 	}
-
-success:
 
 	metricsOutput := string(body)
 
