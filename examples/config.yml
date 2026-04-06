@@ -282,6 +282,33 @@ tun:
     #  metric: 100
     #  install: true
 
+  # Unsafe DNS routes allows you to route traffic over nebula to non-nebula nodes based on DNS hostnames
+  # The hostnames will be periodically resolved and routes updated automatically
+  # This is similar to unsafe_routes but uses DNS hostnames instead of static IP CIDRs
+  # NOTES:
+  # * The nebula certificate of the "via" node(s) *MUST* have the resolved IPs as subnets in its certificate
+  # * DNS resolution happens periodically based on `unsafe_dns_routes_cadence` (default: 30s)
+  # * Each resolved IP gets a /32 (IPv4) or /128 (IPv6) route automatically
+  # * This setting is reloadable
+  #
+  # unsafe_dns_routes:
+  # - host: example.com
+  #   via: 192.168.100.99
+  #   mtu: 1300
+  #   metric: 100
+  # - host: api.example.org
+  #   via:
+  #     - gateway: 10.0.0.1
+  #       weight: 10
+  #     - gateway: 10.0.0.2
+  #       weight: 5
+
+  # Cadence for DNS resolution of unsafe_dns_routes (default: 30s)
+  #unsafe_dns_routes_cadence: 30s
+
+  # Timeout for DNS lookups for unsafe_dns_routes (default: 5s)
+  #unsafe_dns_routes_lookup_timeout: 5s
+
   # On linux only, set to true to manage unsafe routes directly on the system route table with gateway routes instead of
   # in nebula configuration files. Default false, not reloadable.
   #use_system_route_table: false

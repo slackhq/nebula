@@ -306,6 +306,158 @@ func parseUnsafeRoutes(c *config.C, networks []netip.Prefix) ([]Route, error) {
 	return routes, nil
 }
 
+type DnsRoute struct {
+	Host   string
+	Via    routing.Gateways
+	MTU    int
+	Metric int
+}
+
+func parseUnsafeDnsRoutes(c *config.C, networks []netip.Prefix) ([]DnsRoute, error) {
+	var err error
+
+	r := c.Get("tun.unsafe_dns_routes")
+	if r == nil {
+		return []DnsRoute{}, nil
+	}
+
+	rawRoutes, ok := r.([]any)
+	if !ok {
+		return nil, fmt.Errorf("tun.unsafe_dns_routes is not an array")
+	}
+
+	if len(rawRoutes) < 1 {
+		return []DnsRoute{}, nil
+	}
+
+	routes := make([]DnsRoute, len(rawRoutes))
+	for i, r := range rawRoutes {
+		m, ok := r.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("entry %v in tun.unsafe_dns_routes is invalid", i+1)
+		}
+
+		var mtu int
+		if rMtu, ok := m["mtu"]; ok {
+			mtu, ok = rMtu.(int)
+			if !ok {
+				mtu, err = strconv.Atoi(rMtu.(string))
+				if err != nil {
+					return nil, fmt.Errorf("entry %v.mtu in tun.unsafe_dns_routes is not an integer: %v", i+1, err)
+				}
+			}
+
+			if mtu != 0 && mtu < 500 {
+				return nil, fmt.Errorf("entry %v.mtu in tun.unsafe_dns_routes is below 500: %v", i+1, mtu)
+			}
+		}
+
+		rMetric, ok := m["metric"]
+		if !ok {
+			rMetric = 0
+		}
+
+		metric, ok := rMetric.(int)
+		if !ok {
+			_, err = strconv.ParseInt(rMetric.(string), 10, 32)
+			if err != nil {
+				return nil, fmt.Errorf("entry %v.metric in tun.unsafe_dns_routes is not an integer: %v", i+1, err)
+			}
+		}
+
+		if metric < 0 || metric > math.MaxInt32 {
+			return nil, fmt.Errorf("entry %v.metric in tun.unsafe_dns_routes is not in range (0-%d) : %v", i+1, math.MaxInt32, metric)
+		}
+
+		rVia, ok := m["via"]
+		if !ok {
+			return nil, fmt.Errorf("entry %v.via in tun.unsafe_dns_routes is not present", i+1)
+		}
+
+		var gateways routing.Gateways
+
+		switch via := rVia.(type) {
+		case string:
+			viaIp, err := netip.ParseAddr(via)
+			if err != nil {
+				return nil, fmt.Errorf("entry %v.via in tun.unsafe_dns_routes failed to parse address: %v", i+1, err)
+			}
+
+			gateways = routing.Gateways{routing.NewGateway(viaIp, 1)}
+
+		case []any:
+			gateways = make(routing.Gateways, len(via))
+			for ig, v := range via {
+				gatewayMap, ok := v.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("entry %v in tun.unsafe_dns_routes[%v].via is invalid", i+1, ig+1)
+				}
+
+				rGateway, ok := gatewayMap["gateway"]
+				if !ok {
+					return nil, fmt.Errorf("entry .gateway in tun.unsafe_dns_routes[%v].via[%v] is not present", i+1, ig+1)
+				}
+
+				parsedGateway, ok := rGateway.(string)
+				if !ok {
+					return nil, fmt.Errorf("entry .gateway in tun.unsafe_dns_routes[%v].via[%v] is not a string", i+1, ig+1)
+				}
+
+				gatewayIp, err := netip.ParseAddr(parsedGateway)
+				if err != nil {
+					return nil, fmt.Errorf("entry .gateway in tun.unsafe_dns_routes[%v].via[%v] failed to parse address: %v", i+1, ig+1, err)
+				}
+
+				rGatewayWeight, ok := gatewayMap["weight"]
+				if !ok {
+					rGatewayWeight = 1
+				}
+
+				gatewayWeight, ok := rGatewayWeight.(int)
+				if !ok {
+					_, err = strconv.ParseInt(rGatewayWeight.(string), 10, 32)
+					if err != nil {
+						return nil, fmt.Errorf("entry .weight in tun.unsafe_dns_routes[%v].via[%v] is not an integer", i+1, ig+1)
+					}
+				}
+
+				if gatewayWeight < 1 || gatewayWeight > math.MaxInt32 {
+					return nil, fmt.Errorf("entry .weight in tun.unsafe_dns_routes[%v].via[%v] is not in range (1-%d) : %v", i+1, ig+1, math.MaxInt32, gatewayWeight)
+				}
+
+				gateways[ig] = routing.NewGateway(gatewayIp, gatewayWeight)
+
+			}
+
+		default:
+			return nil, fmt.Errorf("entry %v.via in tun.unsafe_dns_routes is not a string or list of gateways: found %T", i+1, rVia)
+		}
+
+		rHost, ok := m["host"]
+		if !ok {
+			return nil, fmt.Errorf("entry %v.host in tun.unsafe_dns_routes is not present", i+1)
+		}
+
+		host, ok := rHost.(string)
+		if !ok {
+			return nil, fmt.Errorf("entry %v.host in tun.unsafe_dns_routes is not a string", i+1)
+		}
+
+		if host == "" {
+			return nil, fmt.Errorf("entry %v.host in tun.unsafe_dns_routes is empty", i+1)
+		}
+
+		routes[i] = DnsRoute{
+			Host:   host,
+			Via:    gateways,
+			MTU:    mtu,
+			Metric: metric,
+		}
+	}
+
+	return routes, nil
+}
+
 func ipWithin(o *net.IPNet, i *net.IPNet) bool {
 	// Make sure o contains the lowest form of i
 	if !o.Contains(i.IP.Mask(i.Mask)) {
