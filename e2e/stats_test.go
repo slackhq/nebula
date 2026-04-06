@@ -4,9 +4,11 @@
 package e2e
 
 import (
+	"bufio"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,6 +91,13 @@ func TestGraphiteStats(t *testing.T) {
 
 	ctx := t.Context()
 
+	// expected metrics
+	checks := map[string]string{
+		"nebula.test.":           "Should contain configured prefix",
+		"runtime.NumGoroutine":   "Should contain runtime metrics",
+		"runtime.MemStats.Alloc": "Should contain memory stats",
+	}
+
 	// Create a mock Graphite server
 	listener, err := net.Listen("tcp", "127.0.0.1:2003")
 	require.NoError(t, err, "Failed to create mock Graphite listener")
@@ -120,18 +129,24 @@ func TestGraphiteStats(t *testing.T) {
 		}
 		defer conn.Close()
 
-		// Read all data sent by the stats system
-		data, err := io.ReadAll(conn)
-		if err != nil {
-			if ctx.Err() != nil {
-				// Context was cancelled
-				return
-			}
-			t.Logf("Read error: %v", err)
-			return
-		}
+		scanner := bufio.NewScanner(conn)
+		seen := make(map[string]bool)
+		var sb strings.Builder
 
-		statsChan <- string(data)
+		for scanner.Scan() {
+			line := scanner.Text()
+			sb.WriteString(line + "\n")
+			for needle := range checks {
+				if strings.Contains(line, needle) {
+					seen[needle] = true
+				}
+			}
+			// scan until we see all checks
+			if len(seen) == len(checks) {
+				break
+			}
+		}
+		statsChan <- sb.String()
 	}()
 
 	// Ensure goroutine completes before test exits
@@ -158,11 +173,10 @@ func TestGraphiteStats(t *testing.T) {
 	// Wait for stats to be sent
 	select {
 	case statsData := <-statsChan:
-		// Check for expected metrics with the configured prefix
-		assert.Contains(t, statsData, "nebula.test.", "Should contain configured prefix")
-		assert.Contains(t, statsData, "runtime.NumGoroutine", "Should contain runtime metrics")
-		assert.Contains(t, statsData, "runtime.MemStats.Alloc", "Should contain memory stats")
-
+		for needle, msg := range checks {
+			// Check for expected metrics with the configured prefix
+			assert.Contains(t, statsData, needle, msg)
+		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Timeout waiting for stats to be sent to Graphite endpoint")
 	}
