@@ -48,9 +48,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		return
 	}
 
-	hostinfo, ready := f.getOrHandshakeConsiderRouting(fwPacket, func(hh *HandshakeHostInfo) {
-		hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
-	})
+	hostinfo, ready := f.getHostinfo(packet, fwPacket)
 
 	if hostinfo == nil {
 		f.rejectInside(packet, out, q)
@@ -66,10 +64,9 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		return
 	}
 
-	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(*fwPacket, packet, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
 		f.sendNoMetrics(header.Message, 0, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, packet, nb, out, q)
-
 	} else {
 		f.rejectInside(packet, out, q)
 		if f.l.Level >= logrus.DebugLevel {
@@ -78,6 +75,26 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 				WithField("reason", dropReason).
 				Debugln("dropping outbound packet")
 		}
+	}
+}
+
+func (f *Interface) getHostinfo(packet []byte, fwPacket *firewall.Packet) (*HostInfo, bool) {
+	if f.firewall.ShouldUnSNAT(fwPacket) {
+		//unsnat packet re-writing also happens here, would be nice to not,
+		//but we need to do the unsnat lookup to find the hostinfo so we can run the firewall checks
+		destVpnAddr := f.firewall.unSnat(packet, fwPacket)
+		if destVpnAddr.IsValid() {
+			//because this was a snatted packet, we know it has an on-overlay destination, so no routing should be required.
+			return f.getOrHandshakeNoRouting(destVpnAddr, func(hh *HandshakeHostInfo) {
+				hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
+			})
+		} else {
+			return nil, false
+		}
+	} else { //if we didn't need to unsnat
+		return f.getOrHandshakeConsiderRouting(fwPacket, func(hh *HandshakeHostInfo) {
+			hh.cachePacket(f.l, header.Message, 0, packet, f.sendMessageNow, f.cachedPacketMetrics)
+		})
 	}
 }
 
@@ -218,7 +235,7 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 	}
 
 	// check if packet is in outbound fw rules
-	dropReason := f.firewall.Drop(*fp, false, hostinfo, f.pki.GetCAPool(), nil)
+	dropReason := f.firewall.Drop(*fp, p, false, hostinfo, f.pki.GetCAPool(), nil)
 	if dropReason != nil {
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("fwPacket", fp).
