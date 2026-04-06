@@ -131,6 +131,14 @@ func (u *TesterConn) SupportsMultipleReaders() bool {
 	return false
 }
 
+func (u *TesterConn) SupportsGSO() bool {
+	return false
+}
+
+func (u *TesterConn) SupportsGRO() bool {
+	return false
+}
+
 func (u *TesterConn) Rebind() error {
 	return nil
 }
@@ -141,4 +149,13 @@ func (u *TesterConn) Close() error {
 		close(u.TxPackets)
 	}
 	return nil
+}
+
+func (u *TesterConn) WriteBatch(pkts []BatchPacket) (int, error) {
+	for i := range pkts {
+		if err := u.WriteTo(pkts[i].Payload, pkts[i].Addr); err != nil {
+			return i, err
+		}
+	}
+	return len(pkts), nil
 }

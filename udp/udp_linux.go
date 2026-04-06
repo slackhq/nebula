@@ -5,6 +5,7 @@ package udp
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -18,10 +19,12 @@ import (
 )
 
 type StdConn struct {
-	sysFd int
-	isV4  bool
-	l     *logrus.Logger
-	batch int
+	sysFd        int
+	isV4         bool
+	l            *logrus.Logger
+	batch        int
+	gsoSupported bool
+	groSupported bool
 }
 
 func maybeIPV4(ip net.IP) (net.IP, bool) {
@@ -30,6 +33,78 @@ func maybeIPV4(ip net.IP) (net.IP, bool) {
 		return ip4, true
 	}
 	return ip, false
+}
+
+// supportsUDPOffload checks if the kernel supports UDP GSO (Generic Segmentation Offload)
+// by attempting to get the UDP_SEGMENT socket option.
+func supportsUDPOffload(fd int) bool {
+	_, err := unix.GetsockoptInt(fd, unix.IPPROTO_UDP, unix.UDP_SEGMENT)
+	return err == nil
+}
+
+// supportsUDPGRO checks if the kernel supports UDP GRO (Generic Receive Offload)
+// and attempts to enable it on the socket.
+func supportsUDPGRO(fd int) bool {
+	// Try to enable UDP_GRO
+	err := unix.SetsockoptInt(fd, unix.IPPROTO_UDP, unix.UDP_GRO, 1)
+	return err == nil
+}
+
+const (
+	// Maximum number of datagrams that can be coalesced with GSO/GRO
+	udpSegmentMaxDatagrams = 64
+
+	// Maximum size of a GRO coalesced packet (64KB is the practical limit)
+	// This is udpSegmentMaxDatagrams * MTU but capped at 65535
+	groMaxPacketSize = 65535
+)
+
+// setGSOSize writes a UDP_SEGMENT control message to the provided buffer
+// with the given segment size. Returns the actual control message length.
+func setGSOSize(control []byte, gsoSize uint16) int {
+	// Build the cmsghdr structure
+	cmsgLen := unix.CmsgLen(2) // 2 bytes for uint16 segment size
+	cmsg := (*unix.Cmsghdr)(unsafe.Pointer(&control[0]))
+	cmsg.Level = unix.IPPROTO_UDP
+	cmsg.Type = unix.UDP_SEGMENT
+	cmsg.SetLen(cmsgLen)
+
+	// Write the segment size after the header (after cmsghdr)
+	binary.NativeEndian.PutUint16(control[unix.SizeofCmsghdr:], gsoSize)
+
+	return unix.CmsgSpace(2) // aligned size
+}
+
+// getGROSize parses a control message buffer to extract the UDP_GRO segment size.
+// Returns 0 if no GRO control message is present (meaning the packet is not coalesced).
+func getGROSize(control []byte, controlLen int) uint16 {
+	if controlLen < unix.SizeofCmsghdr {
+		return 0
+	}
+
+	// Parse control messages
+	for offset := 0; offset < controlLen; {
+		if offset+unix.SizeofCmsghdr > controlLen {
+			break
+		}
+
+		cmsg := (*unix.Cmsghdr)(unsafe.Pointer(&control[offset]))
+		cmsgDataLen := int(cmsg.Len) - unix.SizeofCmsghdr
+		if cmsgDataLen < 0 {
+			break
+		}
+
+		if cmsg.Level == unix.IPPROTO_UDP && cmsg.Type == unix.UDP_GRO {
+			if cmsgDataLen >= 2 {
+				return binary.NativeEndian.Uint16(control[offset+unix.SizeofCmsghdr:])
+			}
+		}
+
+		// Move to next control message (aligned)
+		offset += unix.CmsgSpace(cmsgDataLen)
+	}
+
+	return 0
 }
 
 func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
@@ -69,11 +144,29 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 		return nil, fmt.Errorf("unable to bind to socket: %s", err)
 	}
 
-	return &StdConn{sysFd: fd, isV4: ip.Is4(), l: l, batch: batch}, err
+	gsoSupported := supportsUDPOffload(fd)
+	if gsoSupported {
+		l.Info("UDP GSO offload is supported")
+	}
+
+	groSupported := supportsUDPGRO(fd)
+	if groSupported {
+		l.Info("UDP GRO offload is supported and enabled")
+	}
+
+	return &StdConn{sysFd: fd, isV4: ip.Is4(), l: l, batch: batch, gsoSupported: gsoSupported, groSupported: groSupported}, err
 }
 
 func (u *StdConn) SupportsMultipleReaders() bool {
 	return true
+}
+
+func (u *StdConn) SupportsGSO() bool {
+	return u.gsoSupported
+}
+
+func (u *StdConn) SupportsGRO() bool {
+	return u.groSupported
 }
 
 func (u *StdConn) Rebind() error {
@@ -125,13 +218,27 @@ func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 func (u *StdConn) ListenOut(r EncReader) {
 	var ip netip.Addr
 
-	msgs, buffers, names := u.PrepareRawMessages(u.batch)
+	msgs, buffers, names, controls := u.PrepareRawMessages(u.batch)
 	read := u.ReadMulti
 	if u.batch == 1 {
 		read = u.ReadSingle
 	}
 
+	// Store the original control buffer size for resetting after each read
+	controlLen := 0
+	if u.groSupported && len(controls) > 0 && len(controls[0]) > 0 {
+		controlLen = len(controls[0])
+	}
+
 	for {
+		// Reset Controllen before each read - the kernel updates this field
+		// after recvmsg to indicate actual received control data length
+		if controlLen > 0 {
+			for i := range msgs {
+				setMsghdrControllen(&msgs[i].Hdr, controlLen)
+			}
+		}
+
 		n, err := read(msgs)
 		if err != nil {
 			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
@@ -139,13 +246,36 @@ func (u *StdConn) ListenOut(r EncReader) {
 		}
 
 		for i := 0; i < n; i++ {
-			// Its ok to skip the ok check here, the slicing is the only error that can occur and it will panic
+			// Extract source address
 			if u.isV4 {
 				ip, _ = netip.AddrFromSlice(names[i][4:8])
 			} else {
 				ip, _ = netip.AddrFromSlice(names[i][8:24])
 			}
-			r(netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])), buffers[i][:msgs[i].Len])
+			srcAddr := netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4]))
+
+			// Check for GRO coalesced packet
+			totalLen := int(msgs[i].Len)
+			segmentSize := uint16(0)
+			if controlLen > 0 {
+				segmentSize = getGROSize(controls[i], getMsghdrControllen(&msgs[i].Hdr))
+			}
+
+			if segmentSize > 0 && totalLen > int(segmentSize) {
+				// This is a GRO coalesced packet - split it into individual datagrams
+				for offset := 0; offset < totalLen; {
+					packetLen := int(segmentSize)
+					if offset+packetLen > totalLen {
+						// Last packet may be smaller
+						packetLen = totalLen - offset
+					}
+					r(srcAddr, buffers[i][offset:offset+packetLen])
+					offset += packetLen
+				}
+			} else {
+				// Single packet, no coalescing
+				r(srcAddr, buffers[i][:totalLen])
+			}
 		}
 	}
 }
@@ -311,6 +441,226 @@ func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
 
 func (u *StdConn) Close() error {
 	return syscall.Close(u.sysFd)
+}
+
+func (u *StdConn) WriteBatch(pkts []BatchPacket) (int, error) {
+	if len(pkts) == 0 {
+		return 0, nil
+	}
+
+	// If GSO is supported, try to coalesce packets to the same destination
+	if u.gsoSupported {
+		return u.writeBatchGSO(pkts)
+	}
+
+	return u.writeBatchSendmmsg(pkts)
+}
+
+// writeBatchSendmmsg sends packets using sendmmsg without GSO coalescing
+func (u *StdConn) writeBatchSendmmsg(pkts []BatchPacket) (int, error) {
+	msgs := make([]rawMessage, len(pkts))
+	iovecs := make([]iovec, len(pkts))
+	var names4 []unix.RawSockaddrInet4
+	var names6 []unix.RawSockaddrInet6
+
+	if u.isV4 {
+		names4 = make([]unix.RawSockaddrInet4, len(pkts))
+	} else {
+		names6 = make([]unix.RawSockaddrInet6, len(pkts))
+	}
+
+	for i := range pkts {
+		setIovecBase(&iovecs[i], &pkts[i].Payload[0])
+		setIovecLen(&iovecs[i], len(pkts[i].Payload))
+		msgs[i].Hdr.Iov = &iovecs[i]
+		setMsghdrIovlen(&msgs[i].Hdr, 1)
+
+		if u.isV4 {
+			names4[i].Family = unix.AF_INET
+			names4[i].Addr = pkts[i].Addr.Addr().As4()
+			binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&names4[i].Port))[:], pkts[i].Addr.Port())
+			msgs[i].Hdr.Name = (*byte)(unsafe.Pointer(&names4[i]))
+			msgs[i].Hdr.Namelen = unix.SizeofSockaddrInet4
+		} else {
+			names6[i].Family = unix.AF_INET6
+			names6[i].Addr = pkts[i].Addr.Addr().As16()
+			binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&names6[i].Port))[:], pkts[i].Addr.Port())
+			msgs[i].Hdr.Name = (*byte)(unsafe.Pointer(&names6[i]))
+			msgs[i].Hdr.Namelen = unix.SizeofSockaddrInet6
+		}
+	}
+
+	var sent int
+	for sent < len(msgs) {
+		n, _, errno := unix.Syscall6(
+			unix.SYS_SENDMMSG,
+			uintptr(u.sysFd),
+			uintptr(unsafe.Pointer(&msgs[sent])),
+			uintptr(len(msgs)-sent),
+			0,
+			0,
+			0,
+		)
+
+		if errno == unix.EINTR {
+			continue
+		}
+
+		if errno != 0 {
+			return sent, &net.OpError{Op: "sendmmsg", Err: errno}
+		}
+
+		sent += int(n)
+	}
+
+	return sent, nil
+}
+
+// writeBatchGSO sends packets using GSO coalescing when possible.
+// Packets to the same destination with the same size are coalesced into a single
+// GSO message. Mixed destinations or sizes fall back to individual sendmmsg calls.
+func (u *StdConn) writeBatchGSO(pkts []BatchPacket) (int, error) {
+	// Group packets by destination and try to coalesce
+	totalSent := 0
+	i := 0
+
+	for i < len(pkts) {
+		// Find a run of packets to the same destination with compatible sizes
+		startIdx := i
+		dst := pkts[i].Addr
+		segmentSize := len(pkts[i].Payload)
+
+		// Count how many packets we can coalesce (same destination, same size except possibly last)
+		coalescedCount := 1
+		totalSize := segmentSize
+		for i+coalescedCount < len(pkts) && coalescedCount < udpSegmentMaxDatagrams {
+			next := pkts[i+coalescedCount]
+			if next.Addr != dst {
+				break
+			}
+			nextSize := len(next.Payload)
+			// For GSO, all packets except the last must have the same size
+			// The last packet can be smaller (but not larger)
+			if nextSize != segmentSize {
+				// Check if this could be the last packet (smaller is ok)
+				if nextSize < segmentSize && i+coalescedCount == len(pkts)-1 {
+					coalescedCount++
+					totalSize += nextSize
+				}
+				break
+			}
+			coalescedCount++
+			totalSize += nextSize
+		}
+
+		// If we have multiple packets to coalesce, use GSO
+		if coalescedCount > 1 {
+			err := u.sendGSO(pkts[startIdx:startIdx+coalescedCount], dst, segmentSize, totalSize)
+			if err != nil {
+				// If GSO fails (e.g., EIO due to NIC not supporting checksum offload),
+				// disable GSO and fall back to sendmmsg for the rest
+				if isGSOError(err) {
+					u.l.WithError(err).Warn("GSO send failed, disabling GSO for this connection")
+					u.gsoSupported = false
+					// Send remaining packets with sendmmsg
+					remaining, rerr := u.writeBatchSendmmsg(pkts[startIdx:])
+					return totalSent + remaining, rerr
+				}
+				return totalSent, err
+			}
+			totalSent += coalescedCount
+			i += coalescedCount
+		} else {
+			// Single packet, send without GSO overhead
+			err := u.WriteTo(pkts[i].Payload, pkts[i].Addr)
+			if err != nil {
+				return totalSent, err
+			}
+			totalSent++
+			i++
+		}
+	}
+
+	return totalSent, nil
+}
+
+// sendGSO sends coalesced packets using UDP GSO
+func (u *StdConn) sendGSO(pkts []BatchPacket, dst netip.AddrPort, segmentSize, totalSize int) error {
+	// Allocate a buffer large enough for all packet payloads
+	coalescedBuf := make([]byte, totalSize)
+	offset := 0
+	for _, pkt := range pkts {
+		copy(coalescedBuf[offset:], pkt.Payload)
+		offset += len(pkt.Payload)
+	}
+
+	// Prepare control message with GSO segment size
+	control := make([]byte, unix.CmsgSpace(2))
+	controlLen := setGSOSize(control, uint16(segmentSize))
+
+	// Prepare the iovec
+	iov := iovec{}
+	setIovecBase(&iov, &coalescedBuf[0])
+	setIovecLen(&iov, totalSize)
+
+	// Prepare the msghdr
+	var hdr msghdr
+	hdr.Iov = &iov
+	setMsghdrIovlen(&hdr, 1)
+	hdr.Control = &control[0]
+	setMsghdrControllen(&hdr, controlLen)
+
+	// Declare sockaddr at function scope so it remains valid for the syscall
+	// (must not go out of scope before the syscall is made)
+	var rsa4 unix.RawSockaddrInet4
+	var rsa6 unix.RawSockaddrInet6
+
+	// Set destination address
+	if u.isV4 {
+		rsa4.Family = unix.AF_INET
+		rsa4.Addr = dst.Addr().As4()
+		binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa4.Port))[:], dst.Port())
+		hdr.Name = (*byte)(unsafe.Pointer(&rsa4))
+		hdr.Namelen = unix.SizeofSockaddrInet4
+	} else {
+		rsa6.Family = unix.AF_INET6
+		rsa6.Addr = dst.Addr().As16()
+		binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa6.Port))[:], dst.Port())
+		hdr.Name = (*byte)(unsafe.Pointer(&rsa6))
+		hdr.Namelen = unix.SizeofSockaddrInet6
+	}
+
+	for {
+		_, _, errno := unix.Syscall6(
+			unix.SYS_SENDMSG,
+			uintptr(u.sysFd),
+			uintptr(unsafe.Pointer(&hdr)),
+			0,
+			0,
+			0,
+			0,
+		)
+
+		if errno == unix.EINTR {
+			continue
+		}
+
+		if errno != 0 {
+			return &net.OpError{Op: "sendmsg", Err: errno}
+		}
+
+		return nil
+	}
+}
+
+// isGSOError returns true if the error indicates GSO is not supported by the NIC
+func isGSOError(err error) bool {
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		return false
+	}
+	// EIO typically means the NIC doesn't support checksum offload required for GSO
+	return errors.Is(opErr.Err, unix.EIO)
 }
 
 func NewUDPStatsEmitter(udpConns []Conn) func() {
