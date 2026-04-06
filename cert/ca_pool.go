@@ -10,8 +10,6 @@ import (
 	"net/netip"
 	"slices"
 	"time"
-
-	"github.com/slackhq/nebula/util"
 )
 
 type CAPool struct {
@@ -45,7 +43,7 @@ func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 	var expired bool
 
 	scanner := bufio.NewScanner(r)
-	scanner.Split(util.SplitPEM)
+	scanner.Split(SplitPEM)
 
 	for scanner.Scan() {
 		pemBytes := scanner.Bytes()
