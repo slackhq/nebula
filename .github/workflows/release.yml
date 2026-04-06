@@ -209,10 +209,11 @@ jobs:
         id: create_release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
           cd artifacts
           gh release create \
             --verify-tag \
-            --title "Release ${{ github.ref_name }}" \
-            "${{ github.ref_name }}" \
+            --title "Release ${GITHUB_REF_NAME}" \
+            "${GITHUB_REF_NAME}" \
             SHASUM256.txt *-latest/*.zip *-latest/*.tar.gz
