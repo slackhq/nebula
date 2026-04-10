@@ -74,42 +74,25 @@ func Test_HandshakeManagerRateLimit(t *testing.T) {
 
 	lh := newTestLighthouse()
 
-	cs := &CertState{
-		initiatingVersion: cert.Version1,
-		privateKey:        []byte{},
-		v1Cert:            &dummyCert{version: cert.Version1},
-		v1HandshakeBytes:  []byte{},
-	}
-
 	config := defaultHandshakeConfig
 	config.maxHandshakeRate = 2
 
 	hm := NewHandshakeManager(l, mainHM, lh, &udp.NoopConn{}, config)
 	hm.f = &Interface{handshakeManager: hm, pki: &PKI{}, l: l}
-	hm.f.pki.cs.Store(cs)
+
+	now := time.Now()
 
 	// Should allow up to maxHandshakeRate handshakes
-	ip1 := netip.MustParseAddr("172.1.1.1")
-	ip2 := netip.MustParseAddr("172.1.1.2")
-	ip3 := netip.MustParseAddr("172.1.1.3")
-
-	h1 := hm.StartHandshake(ip1, nil)
-	assert.NotNil(t, h1, "first handshake should be allowed")
-
-	h2 := hm.StartHandshake(ip2, nil)
-	assert.NotNil(t, h2, "second handshake should be allowed")
-
-	// Third should be rate limited
-	h3 := hm.StartHandshake(ip3, nil)
-	assert.Nil(t, h3, "third handshake should be rate limited")
+	hm.Lock()
+	assert.True(t, hm.handshakeRateAllow(now), "first handshake should be allowed")
+	assert.True(t, hm.handshakeRateAllow(now), "second handshake should be allowed")
+	assert.False(t, hm.handshakeRateAllow(now), "third handshake should be rate limited")
+	hm.Unlock()
 
 	// After advancing time by 1 second, tokens should refill
 	hm.Lock()
-	hm.rateLastTick = hm.rateLastTick.Add(-time.Second)
+	assert.True(t, hm.handshakeRateAllow(now.Add(time.Second)), "handshake should be allowed after token refill")
 	hm.Unlock()
-
-	h3 = hm.StartHandshake(ip3, nil)
-	assert.NotNil(t, h3, "handshake should be allowed after token refill")
 }
 
 func Test_HandshakeManagerRateLimitUnlimited(t *testing.T) {

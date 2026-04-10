@@ -496,14 +496,6 @@ func (hm *HandshakeManager) StartHandshake(vpnAddr netip.Addr, cacheCb func(*Han
 		return hh.hostinfo
 	}
 
-	// Check rate limit for new outbound handshakes
-	if !hm.handshakeRateAllow(time.Now()) {
-		hm.metricRateLimited.Inc(1)
-		hm.l.WithField("vpnAddr", vpnAddr).Debug("Handshake rate limit reached, dropping outbound handshake")
-		hm.Unlock()
-		return nil
-	}
-
 	hostinfo := &HostInfo{
 		vpnAddrs:        []netip.Addr{vpnAddr},
 		HandshakePacket: make(map[uint8][]byte, 0),
