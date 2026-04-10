@@ -23,22 +23,25 @@ const (
 	DefaultHandshakeRetries       = 10
 	DefaultHandshakeTriggerBuffer = 64
 	DefaultUseRelays              = true
+	DefaultMaxHandshakeRate       = 0 // 0 means unlimited
 )
 
 var (
 	defaultHandshakeConfig = HandshakeConfig{
-		tryInterval:   DefaultHandshakeTryInterval,
-		retries:       DefaultHandshakeRetries,
-		triggerBuffer: DefaultHandshakeTriggerBuffer,
-		useRelays:     DefaultUseRelays,
+		tryInterval:      DefaultHandshakeTryInterval,
+		retries:          DefaultHandshakeRetries,
+		triggerBuffer:    DefaultHandshakeTriggerBuffer,
+		useRelays:        DefaultUseRelays,
+		maxHandshakeRate: DefaultMaxHandshakeRate,
 	}
 )
 
 type HandshakeConfig struct {
-	tryInterval   time.Duration
-	retries       int64
-	triggerBuffer int
-	useRelays     bool
+	tryInterval      time.Duration
+	retries          int64
+	triggerBuffer    int
+	useRelays        bool
+	maxHandshakeRate int
 
 	messageMetrics *MessageMetrics
 }
@@ -58,8 +61,14 @@ type HandshakeManager struct {
 	messageMetrics         *MessageMetrics
 	metricInitiated        metrics.Counter
 	metricTimedOut         metrics.Counter
+	metricRateLimited      metrics.Counter
 	f                      *Interface
 	l                      *logrus.Logger
+
+	// Rate limiting for new handshakes (token bucket)
+	rateBucket   int // tokens currently available
+	rateMax      int // max tokens (== max handshakes per second), 0 means unlimited
+	rateLastTick time.Time
 
 	// can be used to trigger outbound handshake for the given vpnIp
 	trigger chan netip.Addr
@@ -116,8 +125,39 @@ func NewHandshakeManager(l *logrus.Logger, mainHostMap *HostMap, lightHouse *Lig
 		messageMetrics:         config.messageMetrics,
 		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
 		metricTimedOut:         metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),
+		metricRateLimited:      metrics.GetOrRegisterCounter("handshake_manager.rate_limited", nil),
+		rateBucket:             config.maxHandshakeRate,
+		rateMax:                config.maxHandshakeRate,
+		rateLastTick:           time.Now(),
 		l:                      l,
 	}
+}
+
+// handshakeRateAllow checks the token bucket rate limiter and returns true if a
+// new handshake is allowed. Must be called with hm.Lock held.
+func (hm *HandshakeManager) handshakeRateAllow(now time.Time) bool {
+	if hm.rateMax == 0 {
+		return true
+	}
+
+	// Refill tokens based on elapsed time
+	elapsed := now.Sub(hm.rateLastTick)
+	if elapsed >= time.Second {
+		// Add tokens for full seconds elapsed
+		tokens := int(elapsed/time.Second) * hm.rateMax
+		hm.rateBucket += tokens
+		if hm.rateBucket > hm.rateMax {
+			hm.rateBucket = hm.rateMax
+		}
+		hm.rateLastTick = now
+	}
+
+	if hm.rateBucket > 0 {
+		hm.rateBucket--
+		return true
+	}
+
+	return false
 }
 
 func (hm *HandshakeManager) Run(ctx context.Context) {
@@ -149,6 +189,15 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 	case header.HandshakeIXPSK0:
 		switch h.MessageCounter {
 		case 1:
+			// Check rate limit for new incoming handshakes
+			hm.Lock()
+			allowed := hm.handshakeRateAllow(time.Now())
+			hm.Unlock()
+			if !allowed {
+				hm.metricRateLimited.Inc(1)
+				hm.l.WithField("from", via).Debug("Handshake rate limit reached, dropping incoming handshake")
+				return
+			}
 			ixHandshakeStage1(hm.f, via, packet, h)
 
 		case 2:

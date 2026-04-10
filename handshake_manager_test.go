@@ -65,6 +65,68 @@ func Test_NewHandshakeManagerVpnIp(t *testing.T) {
 	assert.NotContains(t, blah.vpnIps, ip)
 }
 
+func Test_HandshakeManagerRateLimit(t *testing.T) {
+	l := test.NewLogger()
+	localrange := netip.MustParsePrefix("10.1.1.1/24")
+	preferredRanges := []netip.Prefix{localrange}
+	mainHM := newHostMap(l)
+	mainHM.preferredRanges.Store(&preferredRanges)
+
+	lh := newTestLighthouse()
+
+	config := defaultHandshakeConfig
+	config.maxHandshakeRate = 2
+
+	hm := NewHandshakeManager(l, mainHM, lh, &udp.NoopConn{}, config)
+	hm.f = &Interface{handshakeManager: hm, pki: &PKI{}, l: l}
+
+	now := time.Now()
+
+	// Should allow up to maxHandshakeRate handshakes
+	hm.Lock()
+	assert.True(t, hm.handshakeRateAllow(now), "first handshake should be allowed")
+	assert.True(t, hm.handshakeRateAllow(now), "second handshake should be allowed")
+	assert.False(t, hm.handshakeRateAllow(now), "third handshake should be rate limited")
+	hm.Unlock()
+
+	// After advancing time by 1 second, tokens should refill
+	hm.Lock()
+	assert.True(t, hm.handshakeRateAllow(now.Add(time.Second)), "handshake should be allowed after token refill")
+	hm.Unlock()
+}
+
+func Test_HandshakeManagerRateLimitUnlimited(t *testing.T) {
+	l := test.NewLogger()
+	localrange := netip.MustParsePrefix("10.1.1.1/24")
+	preferredRanges := []netip.Prefix{localrange}
+	mainHM := newHostMap(l)
+	mainHM.preferredRanges.Store(&preferredRanges)
+
+	lh := newTestLighthouse()
+
+	cs := &CertState{
+		initiatingVersion: cert.Version1,
+		privateKey:        []byte{},
+		v1Cert:            &dummyCert{version: cert.Version1},
+		v1HandshakeBytes:  []byte{},
+	}
+
+	// Default config has maxHandshakeRate=0 (unlimited)
+	hm := NewHandshakeManager(l, mainHM, lh, &udp.NoopConn{}, defaultHandshakeConfig)
+	hm.f = &Interface{handshakeManager: hm, pki: &PKI{}, l: l}
+	hm.f.pki.cs.Store(cs)
+
+	// Should allow many handshakes with no limit
+	// Limited to 10 due to test lighthouse query channel buffer
+	for i := 0; i < 10; i++ {
+		ip := netip.MustParseAddr("172.1.1.1").As16()
+		ip[15] = byte(i + 1)
+		addr := netip.AddrFrom16(ip)
+		h := hm.StartHandshake(addr, nil)
+		assert.NotNil(t, h, "handshake %d should be allowed with unlimited rate", i)
+	}
+}
+
 func testCountTimerWheelEntries(tw *LockingTimerWheel[netip.Addr]) (c int) {
 	for _, i := range tw.t.wheel {
 		n := i.Head
