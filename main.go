@@ -272,6 +272,11 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		return nil, util.ContextualizeIfNeeded("Failed to start stats emitter", err)
 	}
 
+	infoStart, err := startInfo(l, c, configTest, hostMap)
+	if err != nil {
+		return nil, util.ContextualizeIfNeeded("Failed to start info socket", err)
+	}
+
 	if configTest {
 		return nil, nil
 	}
@@ -297,6 +302,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		dnsStart,
 		lightHouse.StartUpdateWorker,
 		connManager.Start,
+		infoStart,
 	}, nil
 }
 
