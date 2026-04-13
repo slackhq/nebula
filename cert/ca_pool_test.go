@@ -1,7 +1,10 @@
 package cert
 
 import (
+	"bytes"
+	"io"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,6 +113,60 @@ k+coOv04r+zh33ISyhbsafnYduN17p2eD7CmHvHuerguXD9f32gcxo/KsFCKEjMe
 	require.NoError(t, err)
 	assert.Equal(t, ppppp.CAs["552bf7d99bec1fc775a0e4c324bf6d8f789b3078f1919c7960d2e5e0c351ee97"].Certificate.Name(), rootCAP256.details.name)
 	assert.Len(t, ppppp.CAs, 1)
+}
+
+// oneByteReader wraps a reader to return at most 1 byte per Read call,
+// exercising the streaming accumulation logic in NewCAPoolFromPEMReader.
+type oneByteReader struct {
+	r io.Reader
+}
+
+func (o *oneByteReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	return o.r.Read(p[:1])
+}
+
+func TestNewCAPoolFromPEMReader_EmptyReader(t *testing.T) {
+	pool, err := NewCAPoolFromPEMReader(bytes.NewReader(nil))
+	require.NoError(t, err)
+	assert.Empty(t, pool.CAs)
+
+	pool, err = NewCAPoolFromPEMReader(strings.NewReader("   \n\t\n  "))
+	require.NoError(t, err)
+	assert.Empty(t, pool.CAs)
+}
+
+func TestNewCAPoolFromPEMReader_OneByteReads(t *testing.T) {
+	ca1, _, _, pem1 := NewTestCaCert(Version2, Curve_CURVE25519, time.Now(), time.Now().Add(time.Hour), nil, nil, nil)
+	ca2, _, _, pem2 := NewTestCaCert(Version2, Curve_CURVE25519, time.Now(), time.Now().Add(time.Hour), nil, nil, nil)
+
+	bundle := append(pem1, pem2...)
+	pool, err := NewCAPoolFromPEMReader(&oneByteReader{r: bytes.NewReader(bundle)})
+	require.NoError(t, err)
+	assert.Len(t, pool.CAs, 2)
+
+	fp1, err := ca1.Fingerprint()
+	require.NoError(t, err)
+	fp2, err := ca2.Fingerprint()
+	require.NoError(t, err)
+
+	assert.Contains(t, pool.CAs, fp1)
+	assert.Contains(t, pool.CAs, fp2)
+}
+
+func TestNewCAPoolFromPEMReader_TruncatedPEM(t *testing.T) {
+	_, err := NewCAPoolFromPEMReader(strings.NewReader("-----BEGIN NEBULA CERTIFICATE-----\npartialdata"))
+	assert.ErrorIs(t, err, ErrInvalidPEMBlock)
+}
+
+func TestNewCAPoolFromPEMReader_TrailingGarbage(t *testing.T) {
+	_, _, _, pem1 := NewTestCaCert(Version2, Curve_CURVE25519, time.Now(), time.Now().Add(time.Hour), nil, nil, nil)
+
+	bundle := append(pem1, []byte("some trailing garbage")...)
+	_, err := NewCAPoolFromPEMReader(bytes.NewReader(bundle))
+	assert.ErrorIs(t, err, ErrInvalidPEMBlock)
 }
 
 func TestCertificateV1_Verify(t *testing.T) {
