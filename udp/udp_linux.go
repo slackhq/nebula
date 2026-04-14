@@ -135,8 +135,19 @@ func (u *StdConn) GetSoMark() (int, error) {
 }
 
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
-	addr := u.udpConn.LocalAddr()
-	return netip.ParseAddrPort(addr.String())
+	a := u.udpConn.LocalAddr()
+
+	switch v := a.(type) {
+	case *net.UDPAddr:
+		addr, ok := netip.AddrFromSlice(v.IP)
+		if !ok {
+			return netip.AddrPort{}, fmt.Errorf("LocalAddr returned invalid IP address: %s", v.IP)
+		}
+		return netip.AddrPortFrom(addr, uint16(v.Port)), nil
+
+	default:
+		return netip.AddrPort{}, fmt.Errorf("LocalAddr returned: %#v", a)
+	}
 }
 
 func recvmmsg(fd uintptr, msgs []rawMessage) (int, bool, error) {
