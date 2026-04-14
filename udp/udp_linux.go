@@ -234,64 +234,8 @@ func (u *StdConn) ListenOut(r EncReader) {
 }
 
 func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
-	if u.isV4 {
-		return u.writeTo4(b, ip)
-	}
-	return u.writeTo6(b, ip)
-}
-
-func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
-	var rsa unix.RawSockaddrInet6
-	rsa.Family = unix.AF_INET6
-	rsa.Addr = ip.Addr().As16()
-	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ip.Port())
-
-	for {
-		_, _, err := unix.Syscall6(
-			unix.SYS_SENDTO,
-			uintptr(u.sockFd),
-			uintptr(unsafe.Pointer(&b[0])),
-			uintptr(len(b)),
-			uintptr(0),
-			uintptr(unsafe.Pointer(&rsa)),
-			uintptr(unix.SizeofSockaddrInet6),
-		)
-
-		if err != 0 {
-			return &net.OpError{Op: "sendto", Err: err}
-		}
-
-		return nil
-	}
-}
-
-func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
-	if !ip.Addr().Is4() {
-		return ErrInvalidIPv6RemoteForSocket
-	}
-
-	var rsa unix.RawSockaddrInet4
-	rsa.Family = unix.AF_INET
-	rsa.Addr = ip.Addr().As4()
-	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ip.Port())
-
-	for {
-		_, _, err := unix.Syscall6(
-			unix.SYS_SENDTO,
-			uintptr(u.sockFd),
-			uintptr(unsafe.Pointer(&b[0])),
-			uintptr(len(b)),
-			uintptr(0),
-			uintptr(unsafe.Pointer(&rsa)),
-			uintptr(unix.SizeofSockaddrInet4),
-		)
-
-		if err != 0 {
-			return &net.OpError{Op: "sendto", Err: err}
-		}
-
-		return nil
-	}
+	_, err := u.udpConn.WriteToUDPAddrPort(b, ip)
+	return err
 }
 
 func (u *StdConn) ReloadConfig(c *config.C) {
