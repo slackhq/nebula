@@ -44,8 +44,12 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 	if multi {
 		lc.Control = setReusePort
 	}
+	network := "udp"
+	if ip.Is4() { //todo I am not a fan of this, would prefer a default where we always bind dual-stack unless given a non-wildcard v4 addr
+		network = "udp4"
+	}
 	//this context is only used during the bind operation, you can't cancel it to kill the socket
-	pc, err := lc.ListenPacket(context.Background(), "udp", listen.String())
+	pc, err := lc.ListenPacket(context.Background(), network, listen.String())
 	if err != nil {
 		return nil, fmt.Errorf("unable to open socket: %s", err)
 	}
@@ -55,6 +59,7 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 		_ = udpConn.Close()
 		return nil, err
 	}
+	udpConn.LocalAddr().String()
 
 	return &StdConn{
 		udpConn: udpConn,
@@ -190,7 +195,7 @@ func (u *StdConn) listenOutBatch(r EncReader) {
 			return
 		}
 		if operr != nil {
-			u.l.WithError(err).Debug("operr: udp socket is closed, exiting read loop")
+			u.l.WithError(operr).Debug("operr: udp socket is closed, exiting read loop")
 			return
 		}
 
@@ -278,7 +283,10 @@ func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
 	}
 	var opErr error
 	err := u.rawConn.Control(func(fd uintptr) {
-		_, _, opErr = unix.Syscall6(unix.SYS_GETSOCKOPT, fd, uintptr(unix.SOL_SOCKET), uintptr(unix.SO_MEMINFO), uintptr(unsafe.Pointer(meminfo)), uintptr(unsafe.Pointer(&vallen)), 0)
+		_, _, syserr := unix.Syscall6(unix.SYS_GETSOCKOPT, fd, uintptr(unix.SOL_SOCKET), uintptr(unix.SO_MEMINFO), uintptr(unsafe.Pointer(meminfo)), uintptr(unsafe.Pointer(&vallen)), 0)
+		if syserr != 0 {
+			opErr = syserr
+		}
 	})
 	if err != nil {
 		return err
