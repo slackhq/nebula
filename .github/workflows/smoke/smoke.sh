@@ -124,6 +124,7 @@ set -x
 # host2 speaking to host4 on UDP 4000 should allow it to reply, when firewall rules would normally not permit this
 docker exec host2 sh -c "/usr/bin/echo host2 | ncat -nuv 192.168.100.4 4000"
 docker exec host2 ncat -e '/usr/bin/echo helloagainfromhost2' -nkluv 0.0.0.0 4000 &
+sleep 1
 docker exec host4 sh -c "/usr/bin/echo host4 | ncat -nuv 192.168.100.2 4000"
 
 docker exec host4 sh -c 'kill 1'
