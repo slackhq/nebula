@@ -261,29 +261,6 @@ func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 	return r
 }
 
-func (t *tun) Write(b []byte) (int, error) {
-	var nn int
-	maximum := len(b)
-
-	for {
-		n, err := unix.Write(t.fd, b[nn:maximum])
-		if n > 0 {
-			nn += n
-		}
-		if nn == len(b) {
-			return nn, err
-		}
-
-		if err != nil {
-			return nn, err
-		}
-
-		if n == 0 {
-			return nn, io.ErrUnexpectedEOF
-		}
-	}
-}
-
 func (t *tun) deviceBytes() (o [16]byte) {
 	for i, c := range t.Device {
 		o[i] = byte(c)
