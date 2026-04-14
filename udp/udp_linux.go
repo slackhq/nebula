@@ -21,7 +21,6 @@ import (
 type StdConn struct {
 	udpConn *net.UDPConn
 	rawConn syscall.RawConn
-	sockFd  int
 	isV4    bool
 	l       *logrus.Logger
 	batch   int
@@ -61,20 +60,9 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 		return nil, err
 	}
 
-	//steal the socket's fd for sending
-	var sockFd uintptr
-	err = rawConn.Control(func(fd uintptr) {
-		sockFd = fd
-	})
-	if err != nil {
-		_ = udpConn.Close()
-		return nil, err
-	}
-
 	return &StdConn{
 		udpConn: udpConn,
 		rawConn: rawConn,
-		sockFd:  int(sockFd),
 		isV4:    ip.Is4(),
 		l:       l,
 		batch:   batch,
