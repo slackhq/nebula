@@ -60,7 +60,6 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 		_ = udpConn.Close()
 		return nil, err
 	}
-	udpConn.LocalAddr().String()
 
 	//steal the socket's fd for sending
 	var sockFd uintptr
