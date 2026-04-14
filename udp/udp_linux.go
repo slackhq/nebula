@@ -44,12 +44,8 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 	if multi {
 		lc.Control = setReusePort
 	}
-	network := "udp"
-	if ip.Is4() { //todo I am not a fan of this, would prefer a default where we always bind dual-stack unless given a non-wildcard v4 addr
-		network = "udp4"
-	}
 	//this context is only used during the bind operation, you can't cancel it to kill the socket
-	pc, err := lc.ListenPacket(context.Background(), network, listen.String())
+	pc, err := lc.ListenPacket(context.Background(), "udp", listen.String())
 	if err != nil {
 		return nil, fmt.Errorf("unable to open socket: %s", err)
 	}
@@ -59,14 +55,22 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 		_ = udpConn.Close()
 		return nil, err
 	}
-
-	return &StdConn{
+	//gotta find out if we got an AF_INET6 socket or not:
+	out := &StdConn{
 		udpConn: udpConn,
 		rawConn: rawConn,
-		isV4:    ip.Is4(),
 		l:       l,
 		batch:   batch,
-	}, err
+	}
+
+	af, err := out.getSockOptInt(unix.SO_DOMAIN)
+	if err != nil {
+		_ = out.Close()
+		return nil, err
+	}
+	out.isV4 = af == unix.AF_INET
+
+	return out, nil
 }
 
 func (u *StdConn) SupportsMultipleReaders() bool {
