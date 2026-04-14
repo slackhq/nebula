@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/noise"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay/overlaytest"
@@ -47,7 +46,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 		initiatingVersion: cert.Version1,
 		privateKey:        []byte{},
 		v1Cert:            &dummyCert{version: cert.Version1},
-		v1HandshakeBytes:  []byte{},
+		v1Credential:      nil,
 	}
 
 	lh := newTestLighthouse()
@@ -80,7 +79,6 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	}
 	hostinfo.ConnectionState = &ConnectionState{
 		myCert: &dummyCert{version: cert.Version1},
-		H:      &noise.HandshakeState{},
 	}
 	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
 
@@ -130,7 +128,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 		initiatingVersion: cert.Version1,
 		privateKey:        []byte{},
 		v1Cert:            &dummyCert{version: cert.Version1},
-		v1HandshakeBytes:  []byte{},
+		v1Credential:      nil,
 	}
 
 	lh := newTestLighthouse()
@@ -163,7 +161,6 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	}
 	hostinfo.ConnectionState = &ConnectionState{
 		myCert: &dummyCert{version: cert.Version1},
-		H:      &noise.HandshakeState{},
 	}
 	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
 
@@ -215,7 +212,7 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 		initiatingVersion: cert.Version1,
 		privateKey:        []byte{},
 		v1Cert:            &dummyCert{version: cert.Version1},
-		v1HandshakeBytes:  []byte{},
+		v1Credential:      nil,
 	}
 
 	lh := newTestLighthouse()
@@ -249,7 +246,6 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	}
 	hostinfo.ConnectionState = &ConnectionState{
 		myCert: &dummyCert{version: cert.Version1},
-		H:      &noise.HandshakeState{},
 	}
 	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
 
@@ -340,9 +336,9 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	cachedPeerCert, err := ncp.VerifyCertificate(now.Add(time.Second), peerCert)
 
 	cs := &CertState{
-		privateKey:       []byte{},
-		v1Cert:           &dummyCert{},
-		v1HandshakeBytes: []byte{},
+		privateKey:   []byte{},
+		v1Cert:       &dummyCert{},
+		v1Credential: nil,
 	}
 
 	lh := newTestLighthouse()
@@ -372,7 +368,6 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			myCert:   &dummyCert{},
 			peerCert: cachedPeerCert,
-			H:        &noise.HandshakeState{},
 		},
 	}
 	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
