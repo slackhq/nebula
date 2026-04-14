@@ -12,15 +12,24 @@ type endianness interface {
 	PutUint64(b []byte, v uint64)
 }
 
-var noiseEndianness endianness = binary.BigEndian
-
 type NebulaCipherState struct {
-	c cipher.AEAD
+	c               cipher.AEAD
+	nonceEndianness endianness
+	//k [32]byte
+	//n uint64
 }
 
-func NewNebulaCipherState(s *noise.CipherState) *NebulaCipherState {
+func NewNebulaCipherState(s *noise.CipherState, nonceEndianness endianness) *NebulaCipherState {
 	x := s.Cipher()
-	return &NebulaCipherState{c: x.(cipher.AEAD)}
+	return &NebulaCipherState{c: x.(cipher.AEAD), nonceEndianness: nonceEndianness}
+}
+
+// nonceEndiannessForCipher returns the nonce counter byte order Nebula uses for the given cipher.
+func nonceEndiannessForCipher(cipher string) endianness {
+	if cipher == "chachapoly" {
+		return binary.LittleEndian
+	}
+	return binary.BigEndian
 }
 
 // EncryptDanger encrypts and authenticates a given payload.
@@ -43,7 +52,7 @@ func (s *NebulaCipherState) EncryptDanger(out, ad, plaintext []byte, n uint64, n
 		nb[1] = 0
 		nb[2] = 0
 		nb[3] = 0
-		noiseEndianness.PutUint64(nb[4:], n)
+		s.nonceEndianness.PutUint64(nb[4:], n)
 		out = s.c.Seal(out, nb, plaintext, ad)
 		//l.Debugf("Encryption: outlen: %d, nonce: %d, ad: %s, plainlen %d", len(out), n, ad, len(plaintext))
 		return out, nil
@@ -58,7 +67,7 @@ func (s *NebulaCipherState) DecryptDanger(out, ad, ciphertext []byte, n uint64, 
 		nb[1] = 0
 		nb[2] = 0
 		nb[3] = 0
-		noiseEndianness.PutUint64(nb[4:], n)
+		s.nonceEndianness.PutUint64(nb[4:], n)
 		return s.c.Open(out, nb, ciphertext, ad)
 	} else {
 		return []byte{}, nil

@@ -11,9 +11,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flynn/noise"
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
 )
@@ -76,6 +78,7 @@ type HandshakeHostInfo struct {
 	packetStore               []*cachedPacket  // A set of packets to be transmitted once the handshake completes
 
 	hostinfo *HostInfo
+	machine  *handshake.Machine[*cert.CachedCertificate] // The handshake state machine, set during stage 0 (initiator) or beginHandshake (responder multi-message)
 }
 
 func (hh *HandshakeHostInfo) cachePacket(l *logrus.Logger, t header.MessageType, st header.MessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
@@ -145,19 +148,17 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 		}
 	}
 
-	switch h.Subtype {
-	case header.HandshakeIXPSK0:
-		switch h.MessageCounter {
-		case 1:
-			ixHandshakeStage1(hm.f, via, packet, h)
+	// Case 1: Existing pending handshake, feed packet to the stored Machine
+	if hh := hm.queryIndex(h.RemoteIndex); hh != nil {
+		hm.continueHandshake(via, hh, packet, h)
+		return
+	}
 
-		case 2:
-			newHostinfo := hm.queryIndex(h.RemoteIndex)
-			tearDown := ixHandshakeStage2(hm.f, via, newHostinfo, packet, h)
-			if tearDown && newHostinfo != nil {
-				hm.DeleteHostInfo(newHostinfo.hostinfo)
-			}
-		}
+	// Case 2: First message of a new handshake, start as responder.
+	// Any other message counter without a matching pending index is an
+	// orphaned packet (e.g., late retransmit after timeout) and is dropped.
+	if h.MessageCounter == 1 {
+		hm.beginHandshake(via, packet, h)
 	}
 }
 
@@ -199,7 +200,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 
 	// Check if we have a handshake packet to transmit yet
 	if !hh.ready {
-		if !ixHandshakeStage0(hm.f, hh) {
+		if !hm.buildStage0Packet(hh) {
 			hm.OutboundHandshakeTimer.Add(vpnIp, hm.config.tryInterval*time.Duration(hh.counter))
 			return
 		}
@@ -584,7 +585,7 @@ func (hm *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 // allocateIndex generates a unique localIndexId for this HostInfo
 // and adds it to the pendingHostMap. Will error if we are unable to generate
 // a unique localIndexId
-func (hm *HandshakeManager) allocateIndex(hh *HandshakeHostInfo) error {
+func (hm *HandshakeManager) allocateIndex(hh *HandshakeHostInfo) (uint32, error) {
 	hm.mainHostMap.RLock()
 	defer hm.mainHostMap.RUnlock()
 	hm.Lock()
@@ -593,7 +594,7 @@ func (hm *HandshakeManager) allocateIndex(hh *HandshakeHostInfo) error {
 	for range 32 {
 		index, err := generateIndex(hm.l)
 		if err != nil {
-			return err
+			return 0, err
 		}
 
 		_, inPending := hm.indexes[index]
@@ -602,11 +603,11 @@ func (hm *HandshakeManager) allocateIndex(hh *HandshakeHostInfo) error {
 		if !inMain && !inPending {
 			hh.hostinfo.localIndexId = index
 			hm.indexes[index] = hh
-			return nil
+			return index, nil
 		}
 	}
 
-	return errors.New("failed to generate unique localIndexId")
+	return 0, errors.New("failed to generate unique localIndexId")
 }
 
 func (hm *HandshakeManager) DeleteHostInfo(hostinfo *HostInfo) {
@@ -724,4 +725,422 @@ func generateIndex(l *logrus.Logger) (uint32, error) {
 
 func hsTimeout(tries int64, interval time.Duration) time.Duration {
 	return time.Duration(tries / 2 * ((2 * int64(interval)) + (tries-1)*int64(interval)))
+}
+
+// buildStage0Packet creates the initial handshake packet for the initiator.
+func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
+	cs := hm.f.pki.getCertState()
+	v := cs.DefaultVersion()
+	if hh.initiatingVersionOverride != cert.VersionPre1 {
+		v = hh.initiatingVersionOverride
+	} else if v < cert.Version2 {
+		for _, a := range hh.hostinfo.vpnAddrs {
+			if a.Is6() {
+				v = cert.Version2
+				break
+			}
+		}
+	}
+
+	cred := cs.GetHandshakeCredential(v)
+	if cred == nil {
+		hm.f.l.WithField("vpnAddrs", hh.hostinfo.vpnAddrs).WithField("certVersion", v).
+			Error("Unable to handshake with host because no certificate is available")
+		return false
+	}
+
+	hs, err := cred.NewHandshakeState(true, noise.HandshakeIX)
+	if err != nil {
+		hm.f.l.WithError(err).WithField("vpnAddrs", hh.hostinfo.vpnAddrs).
+			Error("Failed to create noise handshake state")
+		return false
+	}
+
+	machine, err := handshake.NewMachine(
+		hs, v, cs.GetHandshakeCredential,
+		hm.certVerifier(), func() (uint32, error) { return hm.allocateIndex(hh) },
+		true, header.HandshakeIXPSK0,
+	)
+	if err != nil {
+		hm.f.l.WithError(err).WithField("vpnAddrs", hh.hostinfo.vpnAddrs).
+			Error("Failed to create handshake machine")
+		return false
+	}
+
+	msg, err := machine.Initiate(nil)
+	if err != nil {
+		hm.f.l.WithError(err).WithField("vpnAddrs", hh.hostinfo.vpnAddrs).
+			Error("Failed to initiate handshake")
+		return false
+	}
+
+	ci := &ConnectionState{
+		myCert:    cred.Cert,
+		initiator: true,
+		window:    NewBits(ReplayWindow),
+	}
+
+	hh.hostinfo.ConnectionState = ci
+	hh.hostinfo.HandshakePacket[0] = msg
+	hh.machine = machine
+	hh.ready = true
+	return true
+}
+
+// beginHandshake handles an incoming handshake packet that doesn't match any
+// existing pending handshake. It creates a new responder Machine and processes
+// the first message.
+func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *header.H) {
+	f := hm.f
+	cs := f.pki.getCertState()
+
+	v := cs.DefaultVersion()
+	cred := cs.GetHandshakeCredential(v)
+	if cred == nil {
+		f.l.WithField("from", via).WithField("certVersion", v).
+			Error("Unable to handshake with host because no certificate is available")
+		return
+	}
+
+	hs, err := cred.NewHandshakeState(false, noise.HandshakeIX)
+	if err != nil {
+		f.l.WithError(err).WithField("from", via).Error("Failed to create noise handshake state")
+		return
+	}
+
+	machine, err := handshake.NewMachine(
+		hs, v, cs.GetHandshakeCredential,
+		hm.certVerifier(), func() (uint32, error) { return generateIndex(f.l) },
+		false, header.HandshakeIXPSK0,
+	)
+	if err != nil {
+		f.l.WithError(err).WithField("from", via).Error("Failed to create handshake machine")
+		return
+	}
+
+	response, result, err := machine.ProcessPacket(nil, packet)
+	if err != nil {
+		f.l.WithError(err).WithField("from", via).Error("Failed to process handshake packet")
+		return
+	}
+
+	if result == nil {
+		// Multi-message pattern: not yet complete.
+		//TODO: register in hm.indexes so continueHandshake can find us
+		hm.sendHandshakeResponse(via, response, nil)
+		return
+	}
+
+	remoteCert := result.RemoteCert
+	if remoteCert == nil {
+		f.l.WithField("from", via).Error("Handshake did not produce a peer certificate")
+		return
+	}
+
+	// Validate peer identity
+	vpnAddrs, ok := hm.validatePeerCert(via, remoteCert)
+	if !ok {
+		return
+	}
+
+	hostinfo := &HostInfo{
+		ConnectionState:   buildConnectionState(result, nonceEndiannessForCipher(cs.cipher)),
+		localIndexId:      result.LocalIndex,
+		remoteIndexId:     result.RemoteIndex,
+		vpnAddrs:          vpnAddrs,
+		HandshakePacket:   make(map[uint8][]byte, 0),
+		lastHandshakeTime: result.HandshakeTime,
+		relayState: RelayState{
+			relays:         nil,
+			relayForByAddr: map[netip.Addr]*Relay{},
+			relayForByIdx:  map[uint32]*Relay{},
+		},
+	}
+
+	f.l.WithField("vpnAddrs", vpnAddrs).WithField("from", via).
+		WithField("certName", remoteCert.Certificate.Name()).
+		WithField("initiatorIndex", result.RemoteIndex).
+		WithField("responderIndex", result.LocalIndex).
+		Info("Handshake message received")
+
+	hostinfo.HandshakePacket[0] = make([]byte, len(packet[header.Len:]))
+	copy(hostinfo.HandshakePacket[0], packet[header.Len:])
+
+	if response != nil {
+		hostinfo.HandshakePacket[2] = make([]byte, len(response))
+		copy(hostinfo.HandshakePacket[2], response)
+	}
+
+	hostinfo.remotes = f.lightHouse.QueryCache(vpnAddrs)
+	if !via.IsRelayed {
+		hostinfo.SetRemote(via.UdpAddr)
+	}
+	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
+
+	existing, err := hm.CheckAndComplete(hostinfo, 0, f)
+	if err != nil {
+		hm.handleCheckAndCompleteError(err, existing, hostinfo, via, response, h)
+		return
+	}
+
+	hm.sendHandshakeResponse(via, response, hostinfo)
+	f.connectionManager.AddTrafficWatch(hostinfo)
+	hostinfo.remotes.RefreshFromHandshake(vpnAddrs)
+
+	// Don't wait for UpdateWorker
+	if f.lightHouse.IsAnyLighthouseAddr(vpnAddrs) {
+		f.lightHouse.TriggerUpdate()
+	}
+}
+
+// continueHandshake feeds an incoming packet to an existing pending handshake Machine.
+func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostInfo, packet []byte, h *header.H) {
+	f := hm.f
+
+	hh.Lock()
+	defer hh.Unlock()
+
+	hostinfo := hh.hostinfo
+	if !via.IsRelayed {
+		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, via.UdpAddr.Addr()) {
+			f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
+				Debug("lighthouse.remote_allow_list denied incoming handshake")
+			return
+		}
+	}
+
+	machine := hh.machine
+	if machine == nil {
+		f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
+			Error("No handshake machine available for continuation")
+		hm.DeleteHostInfo(hostinfo)
+		return
+	}
+
+	response, result, err := machine.ProcessPacket(nil, packet)
+	if err != nil {
+		f.l.WithError(err).WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
+			Error("Failed to process handshake packet")
+		if machine.Failed() {
+			hm.DeleteHostInfo(hostinfo)
+		}
+		return
+	}
+
+	if response != nil {
+		hm.sendHandshakeResponse(via, response, hostinfo)
+	}
+
+	if result == nil {
+		return
+	}
+
+	// Handshake complete, set keys on the ConnectionState
+	ci := hostinfo.ConnectionState
+	ci.peerCert = result.RemoteCert
+	ne := nonceEndiannessForCipher(f.pki.getCertState().cipher)
+	ci.eKey = NewNebulaCipherState(result.EKey, ne)
+	ci.dKey = NewNebulaCipherState(result.DKey, ne)
+	ci.messageCounter.Add(result.MessageIndex)
+	for i := uint64(1); i <= result.MessageIndex; i++ {
+		ci.window.Update(nil, i)
+	}
+	// Note: ci.myCert is not updated here. It was set when the ConnectionState
+	// was created (buildStage0Packet) and reflects the cert version we actually
+	// used in the handshake. The Machine's version negotiation may have noted
+	// a better version for next time, but this handshake already used the original.
+
+	remoteCert := result.RemoteCert
+	if remoteCert == nil {
+		f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
+			Error("Handshake completed without peer certificate")
+		hm.DeleteHostInfo(hostinfo)
+		return
+	}
+
+	vpnNetworks := remoteCert.Certificate.Networks()
+	hostinfo.remoteIndexId = result.RemoteIndex
+	hostinfo.lastHandshakeTime = result.HandshakeTime
+
+	if !via.IsRelayed {
+		hostinfo.SetRemote(via.UdpAddr)
+	} else {
+		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
+	}
+
+	// Verify correct host responded (initiator check)
+	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
+	correctHostResponded := false
+	for i, network := range vpnNetworks {
+		vpnAddrs[i] = network.Addr()
+		if hostinfo.vpnAddrs[0] == network.Addr() {
+			correctHostResponded = true
+		}
+	}
+
+	if !correctHostResponded {
+		f.l.WithField("intendedVpnAddrs", hostinfo.vpnAddrs).WithField("haveVpnNetworks", vpnNetworks).
+			WithField("from", via).Info("Incorrect host responded to handshake")
+
+		hm.DeleteHostInfo(hostinfo)
+		hm.StartHandshake(hostinfo.vpnAddrs[0], func(newHH *HandshakeHostInfo) {
+			newHH.hostinfo.remotes = hostinfo.remotes
+			newHH.hostinfo.remotes.BlockRemote(via)
+			newHH.packetStore = hh.packetStore
+			hh.packetStore = []*cachedPacket{}
+			hostinfo.vpnAddrs = vpnAddrs
+			f.sendCloseTunnel(hostinfo)
+		})
+		return
+	}
+
+	duration := time.Since(hh.startTime).Nanoseconds()
+	f.l.WithField("vpnAddrs", vpnAddrs).WithField("from", via).
+		WithField("certName", remoteCert.Certificate.Name()).
+		WithField("durationNs", duration).
+		WithField("sentCachedPackets", len(hh.packetStore)).
+		Info("Handshake message received")
+
+	hostinfo.vpnAddrs = vpnAddrs
+	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
+
+	hm.Complete(hostinfo, f)
+	f.connectionManager.AddTrafficWatch(hostinfo)
+
+	if len(hh.packetStore) > 0 {
+		if f.l.Level >= logrus.DebugLevel {
+			hostinfo.logger(f.l).Debugf("Sending %d stored packets", len(hh.packetStore))
+		}
+		nb := make([]byte, 12, 12)
+		out := make([]byte, mtu)
+		for _, cp := range hh.packetStore {
+			cp.callback(cp.messageType, cp.messageSubType, hostinfo, cp.packet, nb, out)
+		}
+		f.cachedPacketMetrics.sent.Inc(int64(len(hh.packetStore)))
+	}
+
+	hostinfo.remotes.RefreshFromHandshake(vpnAddrs)
+	f.metricHandshakes.Update(duration)
+
+	// Don't wait for UpdateWorker
+	if f.lightHouse.IsAnyLighthouseAddr(vpnAddrs) {
+		f.lightHouse.TriggerUpdate()
+	}
+}
+
+// validatePeerCert checks the peer certificate for self-connection and remote allow list.
+// Returns the VPN addrs and true if valid, false if rejected.
+func (hm *HandshakeManager) validatePeerCert(via ViaSender, remoteCert *cert.CachedCertificate) ([]netip.Addr, bool) {
+	f := hm.f
+	vpnNetworks := remoteCert.Certificate.Networks()
+	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
+
+	for i, network := range vpnNetworks {
+		if f.myVpnAddrsTable.Contains(network.Addr()) {
+			f.l.WithField("vpnNetworks", vpnNetworks).WithField("from", via).
+				Error("Refusing to handshake with myself")
+			return nil, false
+		}
+		vpnAddrs[i] = network.Addr()
+	}
+
+	if !via.IsRelayed {
+		if !f.lightHouse.GetRemoteAllowList().AllowAll(vpnAddrs, via.UdpAddr.Addr()) {
+			f.l.WithField("vpnAddrs", vpnAddrs).WithField("from", via).
+				Debug("lighthouse.remote_allow_list denied incoming handshake")
+			return nil, false
+		}
+	}
+
+	return vpnAddrs, true
+}
+
+// sendHandshakeResponse sends a handshake response via the appropriate transport.
+func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hostinfo *HostInfo) {
+	if msg == nil {
+		return
+	}
+
+	f := hm.f
+	f.messageMetrics.Tx(header.Handshake, header.MessageSubType(msg[1]), 1)
+
+	if !via.IsRelayed {
+		err := f.outside.WriteTo(msg, via.UdpAddr)
+		if err != nil {
+			f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
+				WithError(err).Error("Failed to send handshake message")
+		} else {
+			f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
+				Info("Handshake message sent")
+		}
+	} else {
+		if via.relay == nil {
+			f.l.Error("Handshake send failed: both addr and via.relay are nil.")
+			return
+		}
+		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
+		via.relayHI.relayState.UpdateRelayForByIdxState(via.remoteIdx, Established)
+		f.SendVia(via.relayHI, via.relay, msg, make([]byte, 12), make([]byte, mtu), false)
+		f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("relay", via.relayHI.vpnAddrs[0]).
+			Info("Handshake message sent")
+	}
+}
+
+// handleCheckAndCompleteError handles errors from CheckAndComplete.
+func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hostinfo *HostInfo, via ViaSender, cachedResponse []byte, h *header.H) {
+	f := hm.f
+
+	switch err {
+	case ErrAlreadySeen:
+		if existing.SetRemoteIfPreferred(f.hostMap, via) {
+			f.SendMessageToVpnAddr(header.Test, header.TestRequest, hostinfo.vpnAddrs[0], []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+		}
+		// Resend cached response
+		if msg := existing.HandshakePacket[2]; msg != nil {
+			hm.sendHandshakeResponse(via, msg, existing)
+		}
+
+	case ErrExistingHostInfo:
+		f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
+			WithField("oldHandshakeTime", existing.lastHandshakeTime).
+			WithField("newHandshakeTime", hostinfo.lastHandshakeTime).
+			Info("Handshake too old")
+		f.SendMessageToVpnAddr(header.Test, header.TestRequest, hostinfo.vpnAddrs[0], []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+
+	case ErrLocalIndexCollision:
+		f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
+			WithField("localIndex", hostinfo.localIndexId).
+			Error("Failed to add HostInfo due to localIndex collision")
+
+	default:
+		f.l.WithError(err).WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
+			Error("Failed to add HostInfo to HostMap")
+	}
+}
+
+// buildConnectionState constructs a ConnectionState from a completed handshake.
+func buildConnectionState(r *handshake.CompletedHandshake[*cert.CachedCertificate], nonceEndianness endianness) *ConnectionState {
+	ci := &ConnectionState{
+		myCert:    r.MyCert,
+		peerCert:  r.RemoteCert,
+		eKey:      NewNebulaCipherState(r.EKey, nonceEndianness),
+		dKey:      NewNebulaCipherState(r.DKey, nonceEndianness),
+		initiator: r.Initiator,
+		window:    NewBits(ReplayWindow),
+	}
+	ci.messageCounter.Add(r.MessageIndex)
+
+	// Mark handshake message counters as seen so they don't count as lost
+	for i := uint64(1); i <= r.MessageIndex; i++ {
+		ci.window.Update(nil, i)
+	}
+
+	return ci
+}
+
+// certVerifier returns a CertVerifier that validates certs against the current CA pool.
+func (hm *HandshakeManager) certVerifier() handshake.CertVerifier[*cert.CachedCertificate] {
+	return func(c cert.Certificate) (*cert.CachedCertificate, error) {
+		return hm.f.pki.GetCAPool().VerifyCertificate(time.Now(), c)
+	}
 }
