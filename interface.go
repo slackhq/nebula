@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -296,7 +295,6 @@ func (f *Interface) listenOut(i int) {
 	}
 
 	f.l.Debugf("underlay reader %v is done", i)
-	f.wg.Done()
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
@@ -321,7 +319,6 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	}
 
 	f.l.Debugf("overlay reader %v is done", i)
-	f.wg.Done()
 }
 
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
