@@ -703,7 +703,6 @@ func (t *tun) Close() error {
 			t.l.WithField("error", err).Error("Failed to close tun file")
 			return err
 		}
-		t.ReadWriteCloser = nil
 	}
 
 	return nil
