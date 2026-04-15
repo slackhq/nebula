@@ -6,7 +6,6 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 
 	"github.com/sirupsen/logrus"
