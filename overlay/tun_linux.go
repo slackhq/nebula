@@ -240,7 +240,7 @@ func (t *tun) SupportsMultiqueue() bool {
 }
 
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
+	fd, err := unix.Open("/dev/net/tun", os.O_RDWR|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
