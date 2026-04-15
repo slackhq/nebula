@@ -186,13 +186,13 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 func newTunGeneric(c *config.C, l *logrus.Logger, fd int, vpnNetworks []netip.Prefix) (*tun, error) {
 	shutdownFd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
 	if err != nil {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		return nil, fmt.Errorf("failed to create eventfd: %w", err)
 	}
 
-	if err := unix.SetNonblock(fd, true); err != nil {
-		unix.Close(fd)
-		unix.Close(shutdownFd)
+	if err = unix.SetNonblock(fd, true); err != nil {
+		_ = unix.Close(fd)
+		_ = unix.Close(shutdownFd)
 		return nil, fmt.Errorf("failed to set tun fd non-blocking: %w", err)
 	}
 
@@ -309,12 +309,12 @@ func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	req.Flags = uint16(unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_MULTI_QUEUE)
 	copy(req.Name[:], t.Device)
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		return nil, err
 	}
 
 	if err = unix.SetNonblock(fd, true); err != nil {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		return nil, err
 	}
 
@@ -757,7 +757,7 @@ func (t *tun) Close() error {
 	if t.shutdownFd >= 0 {
 		var buf [8]byte
 		binary.NativeEndian.PutUint64(buf[:], 1)
-		unix.Write(t.shutdownFd, buf[:])
+		_, _ = unix.Write(t.shutdownFd, buf[:])
 	}
 
 	if t.tunFd != nil {
@@ -765,7 +765,7 @@ func (t *tun) Close() error {
 	}
 
 	if t.shutdownFd >= 0 {
-		unix.Close(t.shutdownFd)
+		_ = unix.Close(t.shutdownFd)
 		t.shutdownFd = -1
 	}
 
