@@ -72,6 +72,7 @@ type ifreqQLEN struct {
 }
 
 func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
+	//todo if this actually gets called, it should check+set O_NONBLOCK
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
 	t, err := newTunGeneric(c, l, file, vpnNetworks)
@@ -85,7 +86,7 @@ func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []net
 }
 
 func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueue bool) (*tun, error) {
-	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
+	fd, err := unix.Open("/dev/net/tun", os.O_RDWR|unix.O_NONBLOCK, 0)
 	if err != nil {
 		// If /dev/net/tun doesn't exist, try to create it (will happen in docker)
 		if os.IsNotExist(err) {
@@ -98,7 +99,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 				return nil, fmt.Errorf("failed to create /dev/net/tun: %w", err)
 			}
 
-			fd, err = unix.Open("/dev/net/tun", os.O_RDWR, 0)
+			fd, err = unix.Open("/dev/net/tun", os.O_RDWR|unix.O_NONBLOCK, 0)
 			if err != nil {
 				return nil, fmt.Errorf("created /dev/net/tun, but still failed: %w", err)
 			}
