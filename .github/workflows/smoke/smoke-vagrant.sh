@@ -29,6 +29,17 @@ docker run --name lighthouse1 --rm "$CONTAINER" -config lighthouse1.yml -test
 docker run --name host2 --rm "$CONTAINER" -config host2.yml -test
 
 vagrant up
+
+# OpenBSD: synced folders are disabled because Vagrant's rsync installer
+# uses ftp.openbsd.org which no longer hosts packages for older releases.
+# Copy build artifacts in via scp instead.
+case "$1" in
+    openbsd-*)
+        vagrant ssh -c "sudo mkdir -p /nebula" -- -T
+        tar -cf - -C build . | vagrant ssh -c "sudo tar -xf - -C /nebula && sudo chmod -R a+r /nebula" -- -T
+        ;;
+esac
+
 vagrant ssh -c "cd /nebula && /nebula/$1-nebula -config host3.yml -test" -- -T
 
 docker run --name lighthouse1 --device /dev/net/tun:/dev/net/tun --cap-add NET_ADMIN --rm "$CONTAINER" -config lighthouse1.yml 2>&1 | tee logs/lighthouse1 | sed -u 's/^/  [lighthouse1]  /' &
