@@ -290,7 +290,7 @@ func (f *Interface) listenOut(i int) {
 	})
 
 	if err != nil && !f.closed.Load() {
-		f.l.WithError(err).Error("Error while reading packet inbound packet, closing")
+		f.l.WithError(err).Error("Error while reading inbound packet, closing")
 		//TODO: Trigger Control to close
 	}
 
