@@ -284,7 +284,7 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 }
 
 func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
-	const vallen uint32 = 4 * unix.SK_MEMINFO_VARS
+	var vallen uint32 = 4 * unix.SK_MEMINFO_VARS
 
 	if u.rawConn == nil {
 		return fmt.Errorf("no UDP connection")

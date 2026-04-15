@@ -133,7 +133,9 @@ func (c *Control) Stop() {
 	if err := c.f.Close(); err != nil {
 		c.l.WithError(err).Error("Close interface failed")
 	}
+	c.stateLock.Lock()
 	c.state = Stopped
+	c.stateLock.Unlock()
 }
 
 // ShutdownBlock will listen for and block on term and interrupt signals, calling Control.Stop() once signalled
