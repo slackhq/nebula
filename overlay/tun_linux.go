@@ -4,6 +4,7 @@
 package overlay
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
