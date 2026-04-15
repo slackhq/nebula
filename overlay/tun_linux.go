@@ -26,7 +26,6 @@ import (
 
 type tun struct {
 	io.ReadWriteCloser
-	fd          int
 	Device      string
 	vpnNetworks []netip.Prefix
 	MaxMTU      int
@@ -137,7 +136,6 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []netip.Prefix) (*tun, error) {
 	t := &tun{
 		ReadWriteCloser:           file,
-		fd:                        int(file.Fd()),
 		vpnNetworks:               vpnNetworks,
 		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
