@@ -294,7 +294,7 @@ func (f *Interface) listenOut(i int) {
 		//TODO: Trigger Control to close
 	}
 
-	f.l.Debugf("underlay reader %v is done", i)
+	f.l.Infof("underlay reader %v is done", i)
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
@@ -318,7 +318,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
 	}
 
-	f.l.Debugf("overlay reader %v is done", i)
+	f.l.Infof("overlay reader %v is done", i)
 }
 
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
@@ -493,13 +493,14 @@ func (f *Interface) GetCertState() *CertState {
 }
 
 func (f *Interface) Close() error {
+	var err error
 	f.closed.Store(true)
 
 	// Release the udp readers
-	for _, u := range f.writers {
-		err := u.Close()
+	for i, u := range f.writers {
+		err = u.Close()
 		if err != nil {
-			f.l.WithError(err).Error("Error while closing udp socket")
+			f.l.WithError(err).WithField("writer", i).Error("Error while closing udp socket")
 		}
 	}
 
@@ -508,11 +509,10 @@ func (f *Interface) Close() error {
 		if i == 0 {
 			continue // f.readers[0] is f.inside, which we want to save for last, since it closes other stuff too
 		}
-		if err := r.Close(); err != nil {
-			f.l.WithError(err).Error("Error while closing tun reader")
+		if err = r.Close(); err != nil {
+			f.l.WithError(err).WithField("reader", i).Error("Error while closing tun reader")
 		}
 	}
 
-	// Release the tun device
 	return f.inside.Close()
 }
