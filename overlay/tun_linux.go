@@ -831,18 +831,18 @@ func (t *tun) Close() error {
 		}
 		err := t.readers[i].Close()
 		if err != nil {
-			t.l.WithField("reader", i).WithError(err).Error("Error closing tun reader")
+			t.l.WithField("reader", i).WithError(err).Error("error closing tun reader")
 		} else {
-			t.l.WithField("reader", i).Info("Closed tun reader")
+			t.l.WithField("reader", i).Info("closed tun reader")
 		}
 	}
 
 	//this is t.readers[0] too
 	err := t.tunFile.Close()
 	if err != nil {
-		t.l.WithField("reader", 0).WithError(err).Error("Error closing tun reader")
+		t.l.WithField("reader", 0).WithError(err).Error("error closing tun reader")
 	} else {
-		t.l.WithField("reader", 0).Info("Closed tun reader")
+		t.l.WithField("reader", 0).Info("closed tun reader")
 	}
 	return err
 }

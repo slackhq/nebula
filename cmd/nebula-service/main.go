@@ -85,7 +85,12 @@ func main() {
 		}
 
 		go ctrl.ShutdownBlock()
-		wait()
+
+		if err := wait(); err != nil {
+			l.WithError(err).Error("Nebula stopped due to fatal error")
+			l.Info("Goodbye")
+			os.Exit(2)
+		}
 
 		l.Info("Goodbye")
 	}

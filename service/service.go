@@ -144,10 +144,10 @@ func New(control *nebula.Control) (*Service, error) {
 		}
 	})
 
-	// Add the nebula wait function to the group
+	// Add the nebula wait function to the group so a fatal reader error
+	// propagates out through errgroup.Wait().
 	eg.Go(func() error {
-		wait()
-		return nil
+		return wait()
 	})
 
 	return &s, nil

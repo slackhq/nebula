@@ -65,8 +65,11 @@ type ControlHostInfo struct {
 }
 
 // Start actually runs nebula, this is a nonblocking call.
-// The returned function can be used to wait for nebula to fully stop.
-func (c *Control) Start() (func(), error) {
+// The returned function blocks until nebula has fully stopped and returns the
+// first fatal reader error (if any). A nil error means nebula shut down
+// gracefully; a non-nil error means a reader hit an unexpected failure that
+// triggered the shutdown.
+func (c *Control) Start() (func() error, error) {
 	c.stateLock.Lock()
 	if c.state != Stopped {
 		c.stateLock.Unlock()
@@ -96,6 +99,8 @@ func (c *Control) Start() (func(), error) {
 	if c.lighthouseStart != nil {
 		c.lighthouseStart()
 	}
+
+	c.f.triggerShutdown = c.Stop
 
 	// Start reading packets.
 	c.state = Started

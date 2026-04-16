@@ -89,6 +89,12 @@ type Interface struct {
 	readers []io.ReadWriteCloser
 	wg      sync.WaitGroup
 
+	// fatalErr holds the first unexpected reader error that caused shutdown.
+	// nil means "no fatal error" (yet)
+	fatalErr atomic.Pointer[error]
+	// triggerShutdown is a function that will be run exactly once, when onFatal swaps something non-nil into fatalErr
+	triggerShutdown func()
+
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
 	cachedPacketMetrics *cachedPacketMetrics
@@ -244,6 +250,7 @@ func (f *Interface) activate() error {
 		f.readers[i] = reader
 	}
 
+	f.wg.Add(1) // for us to wait on Close() to return
 	if err = f.inside.Activate(); err != nil {
 		f.inside.Close()
 		return err
@@ -252,7 +259,7 @@ func (f *Interface) activate() error {
 	return nil
 }
 
-func (f *Interface) run() (func(), error) {
+func (f *Interface) run() (func() error, error) {
 	// Launch n queues to read packets from udp
 	for i := 0; i < f.routines; i++ {
 		f.wg.Go(func() {
@@ -267,7 +274,24 @@ func (f *Interface) run() (func(), error) {
 		})
 	}
 
-	return f.wg.Wait, nil
+	return func() error {
+		f.wg.Wait()
+		if e := f.fatalErr.Load(); e != nil {
+			return *e
+		}
+		return nil
+	}, nil
+}
+
+// onFatal stores the first fatal reader error, and calls triggerShutdown if it was the first one
+func (f *Interface) onFatal(err error) {
+	swapped := f.fatalErr.CompareAndSwap(nil, &err)
+	if !swapped {
+		return
+	}
+	if f.triggerShutdown != nil {
+		f.triggerShutdown()
+	}
 }
 
 func (f *Interface) listenOut(i int) {
@@ -291,7 +315,7 @@ func (f *Interface) listenOut(i int) {
 
 	if err != nil && !f.closed.Load() {
 		f.l.WithError(err).Error("Error while reading inbound packet, closing")
-		//TODO: Trigger Control to close
+		f.onFatal(err)
 	}
 
 	f.l.Infof("underlay reader %v is done", i)
@@ -310,7 +334,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 		if err != nil {
 			if !f.closed.Load() {
 				f.l.WithError(err).WithField("reader", i).Error("Error while reading outbound packet, closing")
-				//TODO: Trigger Control to close
+				f.onFatal(err)
 			}
 			break
 		}
@@ -505,5 +529,7 @@ func (f *Interface) Close() error {
 	}
 
 	// Release the tun device (closing the tun also closes all readers)
-	return f.inside.Close()
+	err = f.inside.Close()
+	f.wg.Done()
+	return err
 }
