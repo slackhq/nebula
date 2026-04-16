@@ -49,10 +49,19 @@ jobs:
     - name: netbsd-amd64
       run: make smoke-vagrant/netbsd-amd64
 
-    - name: linux-386
-      run: make smoke-vagrant/linux-386
-
     - name: linux-amd64-ipv6disable
       run: make smoke-vagrant/linux-amd64-ipv6disable
+
+    # linux-386 runs last because it requires disabling KVM to use VirtualBox,
+    # which prevents libvirt (used by the other tests) from working after this point.
+    - name: install virtualbox for i386 test
+      run: |
+        sudo apt-get install -y virtualbox
+        sudo rmmod kvm_amd kvm_intel kvm 2>/dev/null || true
+
+    - name: linux-386
+      env:
+        VAGRANT_DEFAULT_PROVIDER: virtualbox
+      run: make smoke-vagrant/linux-386
 
     timeout-minutes: 30
