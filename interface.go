@@ -485,15 +485,7 @@ func (f *Interface) Close() error {
 			f.l.WithError(err).Error("Error while closing udp socket")
 		}
 	}
-	for i, r := range f.readers {
-		if i == 0 {
-			continue // f.readers[0] is f.inside, which we want to save for last
-		}
-		if err := r.Close(); err != nil {
-			f.l.WithError(err).Error("Error while closing tun reader")
-		}
-	}
 
-	// Release the tun device
+	// Release the tun device (closing the tun also closes all readers)
 	return f.inside.Close()
 }
