@@ -23,6 +23,17 @@ const tunReadBufSize = 65535
 // an IP+TCP header. 128KiB comfortably covers the 64KiB payload ceiling.
 const tunSegBufSize = 131072
 
+// tunSegBufCap is the total size we allocate for the per-reader segment
+// buffer. It is sized as one worst-case TSO superpacket (tunSegBufSize) plus
+// the same again as drain headroom so a ReadBatch wake can accumulate
+// additional packets after an initial big read without overflowing.
+const tunSegBufCap = tunSegBufSize * 2
+
+// tunDrainCap caps how many packets a single ReadBatch will accumulate via
+// the post-wake drain loop. Sized to soak up a burst of small ACKs while
+// bounding how much work a single caller holds before handing off.
+const tunDrainCap = 64
+
 type virtioNetHdr struct {
 	Flags      uint8
 	GSOType    uint8
@@ -47,6 +58,14 @@ func (h *virtioNetHdr) decode(b []byte) {
 // IP packets, each appended to *out as a slice of scratch. scratch must be
 // sized to hold every segment (including replicated headers).
 func segmentInto(pkt []byte, hdr virtioNetHdr, out *[][]byte, scratch []byte) error {
+	// When RSC_INFO is set the csum_start/csum_offset fields are repurposed to
+	// carry coalescing info rather than checksum offsets. A TUN writing via
+	// IFF_VNET_HDR should never emit this, but if it did we would silently
+	// miscompute the segment checksums — refuse the packet instead.
+	if hdr.Flags&unix.VIRTIO_NET_HDR_F_RSC_INFO != 0 {
+		return fmt.Errorf("virtio RSC_INFO flag not supported on TUN reads")
+	}
+
 	switch hdr.GSOType {
 	case unix.VIRTIO_NET_HDR_GSO_NONE:
 		if len(pkt) > len(scratch) {
