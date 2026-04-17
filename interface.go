@@ -309,18 +309,28 @@ func (f *Interface) listenOut(i int) {
 
 	ctCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 	lhh := f.lightHouse.NewRequestHandler()
-	plaintext := make([]byte, udp.MTU)
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
+	// plaintexts is a ring of decrypt scratches, one per packet in a UDP
+	// recvmmsg batch. The coalescer borrows payload slices from here and
+	// requires they stay valid until Flush — so we rotate each packet and
+	// reset only in the batch-end flush callback.
+	var plaintexts [][]byte
+	idx := 0
 	coalescer := f.tunCoalescers[i]
 	err := li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
+		if idx >= len(plaintexts) {
+			plaintexts = append(plaintexts, make([]byte, udp.MTU))
+		}
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintexts[idx][:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
+		idx++
 	}, func() {
 		if err := coalescer.Flush(); err != nil {
 			f.l.WithError(err).Error("Failed to flush tun coalescer")
 		}
+		idx = 0
 	})
 
 	if err != nil && !f.closed.Load() {

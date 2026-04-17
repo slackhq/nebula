@@ -31,21 +31,24 @@ type Device interface {
 	NewMultiQueueReader() (Queue, error)
 }
 
-// GSOWriter is implemented by Queues that can write a TCP TSO superpacket as
-// a single virtio_net_hdr + payload writev, letting the kernel segment on
-// egress. Callers type-assert on it; backends that don't support GSO return
-// false from Supported and all coalescing logic is skipped.
+// GSOWriter is implemented by Queues that can emit a TCP TSO superpacket
+// assembled from a header prefix plus one or more borrowed payload
+// fragments, in a single vectored write (writev with a leading
+// virtio_net_hdr). This lets the coalescer avoid copying payload bytes
+// between the caller's decrypt buffer and the TUN. Backends without GSO
+// support return false from GSOSupported and coalescing is skipped.
 //
-// pkt must contain the IPv4/IPv6 + TCP header plus the concatenated
-// coalesced payload. hdrLen is the total L3+L4 header length (where the
-// payload starts). csumStart is the byte offset where the TCP header
-// begins (= IP header length). gsoSize is the MSS — every segment except
-// possibly the last must be exactly this many payload bytes. isV6 selects
-// GSO_TCPV4 vs GSO_TCPV6.
+// hdr contains the IPv4/IPv6 + TCP header prefix (mutable — callers will
+// have filled in total length and pseudo-header partial). pays are
+// non-overlapping payload fragments whose concatenation is the full
+// superpacket payload; they are read-only from the writer's perspective
+// and must remain valid until the call returns. gsoSize is the MSS:
+// every segment except possibly the last is exactly that many bytes.
+// csumStart is the byte offset where the TCP header begins within hdr.
 //
-// pkt's TCP checksum field must already hold the pseudo-header partial
+// hdr's TCP checksum field must already hold the pseudo-header partial
 // sum (single-fold, not inverted), per virtio NEEDS_CSUM semantics.
 type GSOWriter interface {
-	WriteGSO(pkt []byte, gsoSize uint16, isV6 bool, hdrLen, csumStart uint16) error
+	WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, isV6 bool, csumStart uint16) error
 	GSOSupported() bool
 }
