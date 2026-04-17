@@ -30,7 +30,7 @@ type TestTun struct {
 	rxPackets chan []byte // Packets to receive into nebula
 	TxPackets chan []byte // Packets transmitted outside by nebula
 
-	batchRet [1][]byte
+	batchRet [1]tio.Packet
 }
 
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*TestTun, error) {
@@ -51,7 +51,9 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*T
 		l:           l,
 		rxPackets:   make(chan []byte, 10),
 		TxPackets:   make(chan []byte, 10),
-		batchRet: [1][]byte{make([]byte, udp.MTU)},
+		batchRet: [1]tio.Packet{
+			tio.Packet{Bytes: make([]byte, udp.MTU)},
+		},
 	}, nil
 }
 
@@ -166,13 +168,13 @@ func (t *TestTun) Close() error {
 	return nil
 }
 
-func (t *TestTun) Read() ([][]byte, error) {
-	t.batchRet[0] = t.batchRet[0][:udp.MTU]
-	n, err := t.read(t.batchRet[0])
+func (t *TestTun) Read() ([]tio.Packet, error) {
+	t.batchRet[0].Bytes = t.batchRet[0].Bytes[:udp.MTU]
+	n, err := t.read(t.batchRet[0].Bytes)
 	if err != nil {
 		return nil, err
 	}
-	t.batchRet[0] = t.batchRet[0][:n]
+	t.batchRet[0].Bytes = t.batchRet[0].Bytes[:n]
 	return t.batchRet[:], nil
 }
 

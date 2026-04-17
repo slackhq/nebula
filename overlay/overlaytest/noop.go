@@ -31,7 +31,7 @@ func (NoopTun) Name() string {
 	return "noop"
 }
 
-func (NoopTun) Read() ([][]byte, error) {
+func (NoopTun) Read() ([]tio.Packet, error) {
 	return nil, nil
 }
 

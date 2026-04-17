@@ -33,7 +33,7 @@ type tun struct {
 	l           *slog.Logger
 
 	readBuf  []byte
-	batchRet [1][]byte
+	batchRet [1]tio.Packet
 }
 
 type ifReq struct {
@@ -554,12 +554,12 @@ func (t *tun) readOne(to []byte) (int, error) {
 	return n - 4, nil
 }
 
-func (t *tun) Read() ([][]byte, error) {
+func (t *tun) Read() ([]tio.Packet, error) {
 	n, err := t.readOne(t.readBuf)
 	if err != nil {
 		return nil, err
 	}
-	t.batchRet[0] = t.readBuf[:n]
+	t.batchRet[0] = tio.Packet{Bytes: t.readBuf[:n]}
 	return t.batchRet[:], nil
 }
 
