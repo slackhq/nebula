@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,7 +45,13 @@ type tunFile struct {
 	segBuf     []byte   // backing store for segmented output
 	pending    [][]byte // segments waiting to be drained by Read
 	pendingIdx int
+	writeIovs  [2]unix.Iovec // preallocated iovecs for vnetHdr writes; iovs[0] is fixed to zeroVnetHdr
 }
+
+// zeroVnetHdr is the 10-byte virtio_net_hdr we prepend to every TUN write when
+// IFF_VNET_HDR is active. All-zero signals "no GSO, no checksum offload"; the
+// kernel accepts the packet as-is.
+var zeroVnetHdr [virtioNetHdrLen]byte
 
 // newFriend makes a tunFile for a MultiQueueReader that copies the shutdown eventfd from the parent tun
 func (r *tunFile) newFriend(fd int) (*tunFile, error) {
@@ -67,6 +74,8 @@ func (r *tunFile) newFriend(fd int) (*tunFile, error) {
 	if r.vnetHdr {
 		out.readBuf = make([]byte, tunReadBufSize)
 		out.segBuf = make([]byte, tunSegBufSize)
+		out.writeIovs[0].Base = &zeroVnetHdr[0]
+		out.writeIovs[0].SetLen(virtioNetHdrLen)
 	}
 	return out, nil
 }
@@ -98,6 +107,8 @@ func newTunFd(fd int, vnetHdr bool) (*tunFile, error) {
 	if vnetHdr {
 		out.readBuf = make([]byte, tunReadBufSize)
 		out.segBuf = make([]byte, tunSegBufSize)
+		out.writeIovs[0].Base = &zeroVnetHdr[0]
+		out.writeIovs[0].SetLen(virtioNetHdrLen)
 	}
 
 	return out, nil
@@ -203,10 +214,6 @@ func (r *tunFile) Read(buf []byte) (int, error) {
 	}
 }
 
-// zeroVnetHdr is the prefix we prepend to every write when IFF_VNET_HDR is
-// active and we have no offload info to convey.
-var zeroVnetHdr [virtioNetHdrLen]byte
-
 func (r *tunFile) Write(buf []byte) (int, error) {
 	if !r.vnetHdr {
 		for {
@@ -225,25 +232,34 @@ func (r *tunFile) Write(buf []byte) (int, error) {
 		}
 	}
 
-	iovs := [][]byte{zeroVnetHdr[:], buf}
+	if len(buf) == 0 {
+		return 0, nil
+	}
+	// Point the payload iovec at the caller's buffer. iovs[0] is pre-wired
+	// to zeroVnetHdr during tunFile construction so we don't rebuild it here.
+	r.writeIovs[1].Base = &buf[0]
+	r.writeIovs[1].SetLen(len(buf))
+	iovPtr := uintptr(unsafe.Pointer(&r.writeIovs[0]))
 	for {
-		n, err := unix.Writev(r.fd, iovs)
-		if err == nil {
-			if n < virtioNetHdrLen {
+		n, _, errno := unix.Syscall(unix.SYS_WRITEV, uintptr(r.fd), iovPtr, 2)
+		if errno == 0 {
+			runtime.KeepAlive(buf)
+			if int(n) < virtioNetHdrLen {
 				return 0, io.ErrShortWrite
 			}
-			return n - virtioNetHdrLen, nil
+			return int(n) - virtioNetHdrLen, nil
 		}
-		if err == unix.EAGAIN {
-			if err = r.blockOnWrite(); err != nil {
+		if errno == unix.EAGAIN {
+			if err := r.blockOnWrite(); err != nil {
 				return 0, err
 			}
 			continue
 		}
-		if err == unix.EINTR {
+		if errno == unix.EINTR {
 			continue
 		}
-		return 0, err
+		runtime.KeepAlive(buf)
+		return 0, errno
 	}
 }
 

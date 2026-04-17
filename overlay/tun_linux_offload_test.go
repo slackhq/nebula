@@ -5,6 +5,7 @@ package overlay
 
 import (
 	"encoding/binary"
+	"os"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -243,5 +244,34 @@ func TestSegmentRejectsUDP(t *testing.T) {
 	var out [][]byte
 	if err := segmentInto(nil, hdr, &out, nil); err == nil {
 		t.Fatalf("expected rejection for UDP GSO")
+	}
+}
+
+// TestTunFileWriteVnetHdrNoAlloc verifies the IFF_VNET_HDR fast-path write is
+// allocation-free. We write to /dev/null so every call succeeds synchronously.
+func TestTunFileWriteVnetHdrNoAlloc(t *testing.T) {
+	fd, err := unix.Open("/dev/null", os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open /dev/null: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Close(fd) })
+
+	tf := &tunFile{fd: fd, vnetHdr: true}
+	tf.writeIovs[0].Base = &zeroVnetHdr[0]
+	tf.writeIovs[0].SetLen(virtioNetHdrLen)
+
+	payload := make([]byte, 1400)
+	// Warm up (first call may trigger one-time internal allocations elsewhere).
+	if _, err := tf.Write(payload); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		if _, err := tf.Write(payload); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("Write allocated %.1f times per call, want 0", allocs)
 	}
 }
