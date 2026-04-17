@@ -9,10 +9,11 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/noiseutil"
+	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/routing"
 )
 
-func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb []byte, sendBatch batch.TxBatcher, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
@@ -37,7 +38,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		// routes packets from the Nebula addr to the Nebula addr through the Nebula
 		// TUN device.
 		if immediatelyForwardToSelf {
-			_, err := f.readers[q].Write(packet)
+			_, err := f.readers[q].WriteFromSelf(packet)
 			if err != nil {
 				f.l.Error("Failed to forward to tun", "error", err)
 			}
@@ -57,7 +58,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 	})
 
 	if hostinfo == nil {
-		f.rejectInside(packet, out, q)
+		f.rejectInside(packet, rejectBuf, q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			f.l.Debug("dropping outbound packet, vpnAddr not in our vpn networks or in unsafe networks",
 				"vpnAddr", fwPacket.RemoteAddr,
@@ -73,10 +74,9 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
-		f.sendNoMetrics(header.Message, 0, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, packet, nb, out, q)
-
+		f.sendInsideMessage(hostinfo, packet, nb, sendBatch, rejectBuf, q)
 	} else {
-		f.rejectInside(packet, out, q)
+		f.rejectInside(packet, rejectBuf, q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("dropping outbound packet",
 				"fwPacket", fwPacket,
@@ -84,6 +84,67 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 			)
 		}
 	}
+}
+
+// sendInsideMessage encrypts a firewall-approved inside packet into the
+// caller's batch slot for later sendmmsg flush. When hostinfo.remote is not
+// valid we fall through to the relay slow path via the unbatched sendNoMetrics
+// so relay behavior is unchanged.
+func (f *Interface) sendInsideMessage(hostinfo *HostInfo, p, nb []byte, sendBatch batch.TxBatcher, rejectBuf []byte, q int) {
+	ci := hostinfo.ConnectionState
+	if ci.eKey == nil {
+		return
+	}
+
+	if !hostinfo.remote.IsValid() {
+		// Slow path: relay fallback. Reuse rejectBuf as the ciphertext
+		// scratch; sendNoMetrics arranges header space for SendVia.
+		f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, p, nb, rejectBuf, q)
+		return
+	}
+
+	scratch := sendBatch.Next()
+	if scratch == nil {
+		// Batch full: bypass batching and send this packet directly so we
+		// never drop traffic on over-subscribed iterations.
+		f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, p, nb, rejectBuf, q)
+		return
+	}
+
+	if noiseutil.EncryptLockNeeded {
+		ci.writeLock.Lock()
+	}
+	c := ci.messageCounter.Add(1)
+
+	out := header.Encode(scratch, header.Version, header.Message, 0, hostinfo.remoteIndexId, c)
+	f.connectionManager.Out(hostinfo)
+
+	if hostinfo.lastRebindCount != f.rebindCount {
+		//NOTE: there is an update hole if a tunnel isn't used and exactly 256 rebinds occur before the tunnel is
+		// finally used again. This tunnel would eventually be torn down and recreated if this action didn't help.
+		f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
+		hostinfo.lastRebindCount = f.rebindCount
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("Lighthouse update triggered for punch due to rebind counter",
+				"vpnAddrs", hostinfo.vpnAddrs,
+			)
+		}
+	}
+
+	out, err := ci.eKey.EncryptDanger(out, out, p, c, nb)
+	if noiseutil.EncryptLockNeeded {
+		ci.writeLock.Unlock()
+	}
+	if err != nil {
+		hostinfo.logger(f.l).Error("Failed to encrypt outgoing packet",
+			"error", err,
+			"udpAddr", hostinfo.remote,
+			"counter", c,
+		)
+		return
+	}
+
+	sendBatch.Commit(len(out), hostinfo.remote)
 }
 
 func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
@@ -96,7 +157,7 @@ func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
 		return
 	}
 
-	_, err := f.readers[q].Write(out)
+	_, err := f.readers[q].WriteFromSelf(out)
 	if err != nil {
 		f.l.Error("Failed to write to tun", "error", err)
 	}

@@ -572,7 +572,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	}
 
 	f.connectionManager.In(hostinfo)
-	_, err = f.readers[q].Write(out)
+	err = f.batchers[q].Commit(out)
 	if err != nil {
 		f.l.Error("Failed to write to tun", "error", err)
 	}
