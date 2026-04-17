@@ -116,6 +116,17 @@ func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
 	return nil
 }
 
+func (u *TesterConn) WriteSegmented(bufs [][]byte, addr netip.AddrPort, _ int) error {
+	for _, b := range bufs {
+		if err := u.WriteTo(b, addr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (u *TesterConn) SupportsGSO() bool { return false }
+
 func (u *TesterConn) ListenOut(r EncReader) error {
 	for {
 		p, ok := <-u.RxPackets

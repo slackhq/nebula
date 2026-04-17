@@ -50,6 +50,74 @@ func TestSendBatchBookkeeping(t *testing.T) {
 	}
 }
 
+func TestBatchSegmentable(t *testing.T) {
+	ap := netip.MustParseAddrPort("10.0.0.1:4242")
+	other := netip.MustParseAddrPort("10.0.0.2:4242")
+
+	mk := func(addrs []netip.AddrPort, sizes []int) *sendBatch {
+		b := newSendBatch(len(addrs), 64)
+		for i, a := range addrs {
+			s := b.Next()
+			for j := 0; j < sizes[i]; j++ {
+				s = append(s, byte(j))
+			}
+			b.Commit(len(s), a)
+		}
+		return b
+	}
+
+	t.Run("uniform same dst", func(t *testing.T) {
+		b := mk([]netip.AddrPort{ap, ap, ap}, []int{10, 10, 10})
+		seg, ok := batchSegmentable(b)
+		if !ok || seg != 10 {
+			t.Fatalf("got seg=%d ok=%v", seg, ok)
+		}
+	})
+
+	t.Run("last segment short ok", func(t *testing.T) {
+		b := mk([]netip.AddrPort{ap, ap, ap}, []int{10, 10, 4})
+		seg, ok := batchSegmentable(b)
+		if !ok || seg != 10 {
+			t.Fatalf("got seg=%d ok=%v", seg, ok)
+		}
+	})
+
+	t.Run("mixed dst rejected", func(t *testing.T) {
+		b := mk([]netip.AddrPort{ap, other, ap}, []int{10, 10, 10})
+		if _, ok := batchSegmentable(b); ok {
+			t.Fatalf("expected rejection for mixed dst")
+		}
+	})
+
+	t.Run("mid-batch short rejected", func(t *testing.T) {
+		b := mk([]netip.AddrPort{ap, ap, ap}, []int{10, 4, 10})
+		if _, ok := batchSegmentable(b); ok {
+			t.Fatalf("expected rejection for short mid-batch")
+		}
+	})
+
+	t.Run("mid-batch longer rejected", func(t *testing.T) {
+		b := mk([]netip.AddrPort{ap, ap, ap}, []int{10, 11, 10})
+		if _, ok := batchSegmentable(b); ok {
+			t.Fatalf("expected rejection for longer mid-batch")
+		}
+	})
+
+	t.Run("last longer rejected", func(t *testing.T) {
+		b := mk([]netip.AddrPort{ap, ap, ap}, []int{10, 10, 11})
+		if _, ok := batchSegmentable(b); ok {
+			t.Fatalf("expected rejection for longer last segment")
+		}
+	})
+
+	t.Run("first zero rejected", func(t *testing.T) {
+		b := mk([]netip.AddrPort{ap, ap}, []int{0, 10})
+		if _, ok := batchSegmentable(b); ok {
+			t.Fatalf("expected rejection for zero first")
+		}
+	})
+}
+
 func TestSendBatchSlotsDoNotOverlap(t *testing.T) {
 	b := newSendBatch(3, 8)
 	ap := netip.MustParseAddrPort("10.0.0.1:80")

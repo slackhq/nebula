@@ -149,6 +149,17 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
 	return nil
 }
 
+func (u *StdConn) WriteSegmented(bufs [][]byte, addr netip.AddrPort, _ int) error {
+	for _, b := range bufs {
+		if err := u.WriteTo(b, addr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (u *StdConn) SupportsGSO() bool { return false }
+
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	a := u.UDPConn.LocalAddr()
 

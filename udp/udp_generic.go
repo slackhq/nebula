@@ -51,6 +51,17 @@ func (u *GenericConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
 	return nil
 }
 
+func (u *GenericConn) WriteSegmented(bufs [][]byte, addr netip.AddrPort, _ int) error {
+	for _, b := range bufs {
+		if _, err := u.UDPConn.WriteToUDPAddrPort(b, addr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (u *GenericConn) SupportsGSO() bool { return false }
+
 func (u *GenericConn) LocalAddr() (netip.AddrPort, error) {
 	a := u.UDPConn.LocalAddr()
 

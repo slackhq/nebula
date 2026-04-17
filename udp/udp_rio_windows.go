@@ -325,6 +325,17 @@ func (u *RIOConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
 	return nil
 }
 
+func (u *RIOConn) WriteSegmented(bufs [][]byte, addr netip.AddrPort, _ int) error {
+	for _, b := range bufs {
+		if err := u.WriteTo(b, addr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (u *RIOConn) SupportsGSO() bool { return false }
+
 func (u *RIOConn) LocalAddr() (netip.AddrPort, error) {
 	sa, err := windows.Getsockname(u.sock)
 	if err != nil {
