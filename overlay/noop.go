@@ -1,8 +1,7 @@
-package test
+package overlay
 
 import (
 	"errors"
-	"io"
 	"net/netip"
 
 	"github.com/slackhq/nebula/routing"
@@ -26,11 +25,15 @@ func (NoopTun) Name() string {
 	return "noop"
 }
 
-func (NoopTun) Read([]byte) (int, error) {
-	return 0, nil
+func (NoopTun) Read() ([][]byte, error) {
+	return nil, nil
 }
 
 func (NoopTun) Write([]byte) (int, error) {
+	return 0, nil
+}
+
+func (NoopTun) WriteReject(p []byte) (int, error) {
 	return 0, nil
 }
 
@@ -38,7 +41,7 @@ func (NoopTun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (NoopTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (NoopTun) NewMultiQueueReader() (Queue, error) {
 	return nil, errors.New("unsupported")
 }
 

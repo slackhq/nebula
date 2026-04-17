@@ -24,6 +24,32 @@ type StdConn struct {
 	isV4    bool
 	l       *logrus.Logger
 	batch   int
+
+	// sendmmsg scratch. Each queue has its own StdConn, so no locking is
+	// needed. Sized to MaxWriteBatch at construction; WriteBatch chunks
+	// larger inputs.
+	writeMsgs  []rawMessage
+	writeIovs  []iovec
+	writeNames [][]byte
+
+	// Preallocated closure + in/out slots for sendmmsg, so the hot path
+	// does not heap-allocate a fresh closure per call.
+	writeChunk int
+	writeSent  int
+	writeErrno syscall.Errno
+	writeFunc  func(fd uintptr) bool
+
+	// UDP GSO (sendmsg with UDP_SEGMENT cmsg) support. gsoSupported is
+	// probed once at socket creation. When true, WriteSegmented takes a
+	// single-syscall GSO path; otherwise it falls back to a WriteTo loop.
+	gsoSupported bool
+	gsoMsg       msghdr
+	gsoIovs      []iovec
+	gsoName      []byte // SizeofSockaddrInet6
+	gsoCmsg      []byte // CmsgSpace(2)
+	gsoSent      int
+	gsoErrno     syscall.Errno
+	gsoFunc      func(fd uintptr) bool
 }
 
 func setReusePort(network, address string, c syscall.RawConn) error {
@@ -70,7 +96,59 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 	}
 	out.isV4 = af == unix.AF_INET
 
+	out.prepareWriteMessages(MaxWriteBatch)
+	out.writeFunc = out.sendmmsgRawWrite
+
+	out.prepareGSO()
+
 	return out, nil
+}
+
+// maxGSOSegments caps the per-sendmsg GSO fan-out. Linux kernels have
+// historically capped UDP_MAX_SEGMENTS at 64; newer kernels raise it to 128
+// but we stay conservative so the same code works everywhere.
+const maxGSOSegments = 64
+
+// maxGSOBytes bounds the total payload per sendmsg() when UDP_SEGMENT is
+// set. The kernel stitches all iovecs into a single skb whose length the
+// UDP length field can represent, and also enforces sk_gso_max_size (which
+// on most devices is 65536). We use 65535 so ciphertext + headers always
+// fits, avoiding EMSGSIZE on large TSO superpackets.
+const maxGSOBytes = 65535
+
+// prepareGSO probes UDP_SEGMENT support and, on success, sets up the
+// reusable sendmsg scratch (iovecs, sockaddr, cmsg) plus the preallocated
+// raw-write closure used to avoid heap allocations on the hot path.
+func (u *StdConn) prepareGSO() {
+	var probeErr error
+	if err := u.rawConn.Control(func(fd uintptr) {
+		probeErr = unix.SetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_SEGMENT, 0)
+	}); err != nil {
+		return
+	}
+	if probeErr != nil {
+		return
+	}
+	u.gsoSupported = true
+	u.gsoIovs = make([]iovec, maxGSOSegments)
+	u.gsoName = make([]byte, unix.SizeofSockaddrInet6)
+	u.gsoCmsg = make([]byte, unix.CmsgSpace(2))
+
+	// Wire up the static pieces of gsoMsg. Iovlen / Controllen / Namelen /
+	// cmsg contents get refreshed per call; Iov, Name, Control pointers are
+	// fixed because the scratch slices never move.
+	u.gsoMsg.Iov = &u.gsoIovs[0]
+	u.gsoMsg.Name = &u.gsoName[0]
+	u.gsoMsg.Control = &u.gsoCmsg[0]
+
+	// Prepopulate the cmsg header. Len/Level/Type are constant for our use;
+	// only the 2-byte gso_size payload changes per call.
+	cmsghdr := (*unix.Cmsghdr)(unsafe.Pointer(&u.gsoCmsg[0]))
+	cmsghdr.Level = unix.SOL_UDP
+	cmsghdr.Type = unix.UDP_SEGMENT
+	setCmsgLen(cmsghdr, unix.CmsgLen(2))
+
+	u.gsoFunc = u.sendmsgRawWriteGSO
 }
 
 func (u *StdConn) SupportsMultipleReaders() bool {
@@ -171,7 +249,7 @@ func recvmmsg(fd uintptr, msgs []rawMessage) (int, bool, error) {
 	return int(n), true, nil
 }
 
-func (u *StdConn) listenOutSingle(r EncReader) error {
+func (u *StdConn) listenOutSingle(r EncReader, flush func()) error {
 	var err error
 	var n int
 	var from netip.AddrPort
@@ -184,10 +262,11 @@ func (u *StdConn) listenOutSingle(r EncReader) error {
 		}
 		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
 		r(from, buffer[:n])
+		flush()
 	}
 }
 
-func (u *StdConn) listenOutBatch(r EncReader) error {
+func (u *StdConn) listenOutBatch(r EncReader, flush func()) error {
 	var ip netip.Addr
 	var n int
 	var operr error
@@ -219,20 +298,254 @@ func (u *StdConn) listenOutBatch(r EncReader) error {
 			}
 			r(netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])), buffers[i][:msgs[i].Len])
 		}
+		// End-of-batch: let callers (e.g. TUN write coalescer) flush any
+		// state they accumulated across this batch.
+		flush()
 	}
 }
 
-func (u *StdConn) ListenOut(r EncReader) error {
+func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 	if u.batch == 1 {
-		return u.listenOutSingle(r)
+		return u.listenOutSingle(r, flush)
 	} else {
-		return u.listenOutBatch(r)
+		return u.listenOutBatch(r, flush)
 	}
 }
 
 func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
 	_, err := u.udpConn.WriteToUDPAddrPort(b, ip)
 	return err
+}
+
+// WriteBatch sends bufs via sendmmsg(2) using the preallocated scratch on
+// StdConn. Chunks larger than the scratch are processed in multiple syscalls.
+// If sendmmsg returns a fatal error mid-chunk we fall back to single WriteTo
+// calls for the remainder so the caller still gets best-effort delivery.
+func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
+	if len(bufs) != len(addrs) {
+		return fmt.Errorf("WriteBatch: len(bufs)=%d != len(addrs)=%d", len(bufs), len(addrs))
+	}
+	//u.l.WithField("bufs", len(bufs)).Info("WriteBatch")
+	i := 0
+	for i < len(bufs) {
+		chunk := len(bufs) - i
+		if chunk > len(u.writeMsgs) {
+			chunk = len(u.writeMsgs)
+		}
+
+		for k := 0; k < chunk; k++ {
+			b := bufs[i+k]
+			if len(b) == 0 {
+				// sendmmsg with an empty iovec is legal but pointless; fall
+				// through after filling the slot so Base is still valid.
+				u.writeIovs[k].Base = nil
+				setIovLen(&u.writeIovs[k], 0)
+			} else {
+				u.writeIovs[k].Base = &b[0]
+				setIovLen(&u.writeIovs[k], len(b))
+			}
+			nlen, err := writeSockaddr(u.writeNames[k], addrs[i+k], u.isV4)
+			if err != nil {
+				return err
+			}
+			u.writeMsgs[k].Hdr.Namelen = uint32(nlen)
+		}
+
+		sent, serr := u.sendmmsg(chunk)
+		if serr != nil {
+			if sent <= 0 {
+				// nothing went out; fall back to WriteTo for this chunk.
+				for k := 0; k < chunk; k++ {
+					if err := u.WriteTo(bufs[i+k], addrs[i+k]); err != nil {
+						return err
+					}
+				}
+				i += chunk
+				continue
+			}
+			// partial: treat as success for the sent packets and retry the
+			// remainder on the next outer-loop iteration.
+		}
+		if sent == 0 {
+			return fmt.Errorf("sendmmsg made no progress")
+		}
+		i += sent
+	}
+	return nil
+}
+
+// sendmmsgRawWrite is the preallocated callback passed to rawConn.Write. It
+// reads its input (u.writeChunk) and writes its outputs (u.writeSent,
+// u.writeErrno) through StdConn fields so the closure itself does not
+// capture per-call locals and therefore does not heap-allocate.
+func (u *StdConn) sendmmsgRawWrite(fd uintptr) bool {
+	r1, _, errno := unix.Syscall6(
+		unix.SYS_SENDMMSG,
+		fd,
+		uintptr(unsafe.Pointer(&u.writeMsgs[0])),
+		uintptr(u.writeChunk),
+		0,
+		0,
+		0,
+	)
+	if errno == syscall.EAGAIN || errno == syscall.EWOULDBLOCK {
+		return false
+	}
+	u.writeSent = int(r1)
+	u.writeErrno = errno
+	return true
+}
+
+func (u *StdConn) SupportsGSO() bool {
+	return u.gsoSupported
+}
+
+// WriteSegmented sends bufs to addr as a UDP GSO superpacket. The kernel
+// emits one datagram per iovec on the wire; all iovecs except the last must
+// be exactly segSize bytes. Non-GSO kernels hit the WriteTo fallback.
+// Called with len(bufs) >= 1. len(bufs) > maxGSOSegments is chunked.
+func (u *StdConn) WriteSegmented(bufs [][]byte, addr netip.AddrPort, segSize int) error {
+	if len(bufs) == 0 {
+		return nil
+	}
+	if !u.gsoSupported {
+		for _, b := range bufs {
+			if err := u.WriteTo(b, addr); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	nlen, err := writeSockaddr(u.gsoName, addr, u.isV4)
+	if err != nil {
+		return err
+	}
+	u.gsoMsg.Namelen = uint32(nlen)
+	setMsgControllen(&u.gsoMsg, unix.CmsgSpace(2))
+
+	// Cap the per-syscall fan-out by both segment count and total bytes.
+	// Kernel rejects sendmsg with EMSGSIZE when segCount*segSize would
+	// exceed sk_gso_max_size (typically 65536). For segSize > maxGSOBytes
+	// we can't use GSO at all and must fall back per-packet.
+	segsByBytes := maxGSOBytes / segSize
+	if segsByBytes == 0 {
+		for _, b := range bufs {
+			if werr := u.WriteTo(b, addr); werr != nil {
+				return werr
+			}
+		}
+		return nil
+	}
+	maxChunk := maxGSOSegments
+	if segsByBytes < maxChunk {
+		maxChunk = segsByBytes
+	}
+
+	i := 0
+	for i < len(bufs) {
+		chunk := len(bufs) - i
+		if chunk > maxChunk {
+			chunk = maxChunk
+		}
+		for k := 0; k < chunk; k++ {
+			b := bufs[i+k]
+			if len(b) == 0 {
+				u.gsoIovs[k].Base = nil
+				setIovLen(&u.gsoIovs[k], 0)
+			} else {
+				u.gsoIovs[k].Base = &b[0]
+				setIovLen(&u.gsoIovs[k], len(b))
+			}
+		}
+		setMsgIovlen(&u.gsoMsg, chunk)
+		binary.NativeEndian.PutUint16(u.gsoCmsg[unix.CmsgLen(0):unix.CmsgLen(0)+2], uint16(segSize))
+
+		if serr := u.sendmsgGSO(); serr != nil {
+			// Fall back to a per-packet loop for the remainder of the
+			// batch. Dropping the GSO call entirely is safer than
+			// returning mid-superpacket and losing bytes.
+			for k := 0; k < chunk; k++ {
+				if werr := u.WriteTo(bufs[i+k], addr); werr != nil {
+					return werr
+				}
+			}
+		}
+		i += chunk
+	}
+	return nil
+}
+
+// sendmsgRawWriteGSO is the preallocated rawConn.Write callback for the GSO
+// path. Reads the prebuilt u.gsoMsg and writes u.gsoSent / u.gsoErrno.
+func (u *StdConn) sendmsgRawWriteGSO(fd uintptr) bool {
+	r1, _, errno := unix.Syscall(
+		unix.SYS_SENDMSG,
+		fd,
+		uintptr(unsafe.Pointer(&u.gsoMsg)),
+		0,
+	)
+	if errno == syscall.EAGAIN || errno == syscall.EWOULDBLOCK {
+		return false
+	}
+	u.gsoSent = int(r1)
+	u.gsoErrno = errno
+	return true
+}
+
+func (u *StdConn) sendmsgGSO() error {
+	u.gsoSent = 0
+	u.gsoErrno = 0
+	if err := u.rawConn.Write(u.gsoFunc); err != nil {
+		return err
+	}
+	if u.gsoErrno != 0 {
+		return &net.OpError{Op: "sendmsg", Err: u.gsoErrno}
+	}
+	return nil
+}
+
+func (u *StdConn) sendmmsg(n int) (int, error) {
+	u.writeChunk = n
+	u.writeSent = 0
+	u.writeErrno = 0
+	if err := u.rawConn.Write(u.writeFunc); err != nil {
+		return u.writeSent, err
+	}
+	if u.writeErrno != 0 {
+		return u.writeSent, &net.OpError{Op: "sendmmsg", Err: u.writeErrno}
+	}
+	return u.writeSent, nil
+}
+
+// writeSockaddr encodes addr into buf (which must be at least
+// SizeofSockaddrInet6 bytes). Returns the number of bytes used. If isV4 is
+// true and addr is not a v4 (or v4-in-v6) address, returns an error.
+func writeSockaddr(buf []byte, addr netip.AddrPort, isV4 bool) (int, error) {
+	ap := addr.Addr().Unmap()
+	if isV4 {
+		if !ap.Is4() {
+			return 0, ErrInvalidIPv6RemoteForSocket
+		}
+		// struct sockaddr_in: { sa_family_t(2), in_port_t(2, BE), in_addr(4), zero(8) }
+		// sa_family is host endian.
+		binary.NativeEndian.PutUint16(buf[0:2], unix.AF_INET)
+		binary.BigEndian.PutUint16(buf[2:4], addr.Port())
+		ip4 := ap.As4()
+		copy(buf[4:8], ip4[:])
+		for j := 8; j < 16; j++ {
+			buf[j] = 0
+		}
+		return unix.SizeofSockaddrInet4, nil
+	}
+	// struct sockaddr_in6: { sa_family_t(2), in_port_t(2, BE), flowinfo(4), in6_addr(16), scope_id(4) }
+	binary.NativeEndian.PutUint16(buf[0:2], unix.AF_INET6)
+	binary.BigEndian.PutUint16(buf[2:4], addr.Port())
+	binary.NativeEndian.PutUint32(buf[4:8], 0)
+	ip6 := addr.Addr().As16()
+	copy(buf[8:24], ip6[:])
+	binary.NativeEndian.PutUint32(buf[24:28], 0)
+	return unix.SizeofSockaddrInet6, nil
 }
 
 func (u *StdConn) ReloadConfig(c *config.C) {

@@ -6,7 +6,6 @@ package overlay
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net/netip"
 	"os"
 	"regexp"
@@ -59,6 +58,25 @@ type tun struct {
 	fd          int
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
 	out []byte
+
+	readBuf  []byte
+	batchRet [1][]byte
+}
+
+func (t *tun) Read() ([][]byte, error) {
+	if t.readBuf == nil {
+		t.readBuf = make([]byte, defaultBatchBufSize)
+	}
+	n, err := t.readOne(t.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	t.batchRet[0] = t.readBuf[:n]
+	return t.batchRet[:], nil
+}
+
+func (t *tun) WriteReject(p []byte) (int, error) {
+	return t.Write(p)
 }
 
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
@@ -124,7 +142,7 @@ func (t *tun) Close() error {
 	return nil
 }
 
-func (t *tun) Read(to []byte) (int, error) {
+func (t *tun) readOne(to []byte) (int, error) {
 	buf := make([]byte, len(to)+4)
 
 	n, err := t.f.Read(buf)
@@ -314,7 +332,7 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *tun) NewMultiQueueReader() (Queue, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for openbsd")
 }
 

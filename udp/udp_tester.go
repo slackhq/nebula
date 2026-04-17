@@ -107,13 +107,34 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	return nil
 }
 
-func (u *TesterConn) ListenOut(r EncReader) error {
+func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
+	for i, b := range bufs {
+		if err := u.WriteTo(b, addrs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (u *TesterConn) WriteSegmented(bufs [][]byte, addr netip.AddrPort, _ int) error {
+	for _, b := range bufs {
+		if err := u.WriteTo(b, addr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (u *TesterConn) SupportsGSO() bool { return false }
+
+func (u *TesterConn) ListenOut(r EncReader, flush func()) error {
 	for {
 		p, ok := <-u.RxPackets
 		if !ok {
 			return os.ErrClosed
 		}
 		r(p.From, p.Data)
+		flush()
 	}
 }
 

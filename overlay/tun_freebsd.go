@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net/netip"
 	"os"
@@ -101,6 +100,9 @@ type tun struct {
 	readPoll  [2]unix.PollFd
 	writePoll [2]unix.PollFd
 	closed    atomic.Bool
+
+	readBuf  []byte
+	batchRet [1][]byte
 }
 
 // blockOnRead waits until the tun fd is readable or shutdown has been signaled.
@@ -155,7 +157,23 @@ func (t *tun) blockOnWrite() error {
 	return nil
 }
 
-func (t *tun) Read(to []byte) (int, error) {
+func (t *tun) Read() ([][]byte, error) {
+	if t.readBuf == nil {
+		t.readBuf = make([]byte, defaultBatchBufSize)
+	}
+	n, err := t.readOne(t.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	t.batchRet[0] = t.readBuf[:n]
+	return t.batchRet[:], nil
+}
+
+func (t *tun) WriteReject(p []byte) (int, error) {
+	return t.Write(p)
+}
+
+func (t *tun) readOne(to []byte) (int, error) {
 	// first 4 bytes is protocol family, in network byte order
 	var head [4]byte
 	iovecs := [2]syscall.Iovec{
@@ -563,7 +581,7 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *tun) NewMultiQueueReader() (Queue, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for freebsd")
 }
 
