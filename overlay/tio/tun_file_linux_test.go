@@ -15,7 +15,7 @@ import (
 )
 
 // newReadPipe returns a read fd. The matching write fd is registered for cleanup.
-// The caller takes ownership of the read fd (pass it to newOffload / newFriend).
+// The caller takes ownership of the read fd (pass it into a QueueSet).
 func newReadPipe(t *testing.T) int {
 	t.Helper()
 	var fds [2]int
@@ -29,7 +29,7 @@ func newReadPipe(t *testing.T) int {
 func TestPoll_WakeForShutdown_WakesFriends(t *testing.T) {
 	pipe1 := newReadPipe(t)
 	pipe2 := newReadPipe(t)
-	parent, err := NewPollContainer()
+	parent, err := NewPollQueueSet()
 	require.NoError(t, err)
 	require.NoError(t, parent.Add(pipe1))
 	require.NoError(t, parent.Add(pipe2))

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	ReplayWindow = 1024
+	ReplayWindow = 8192
 
 	// RehandshakeAfterMessages rolls keys inside the AES-GCM data-volume margin (~2^-36 advantage at 64KB frames).
 	RehandshakeAfterMessages = uint64(1) << 34

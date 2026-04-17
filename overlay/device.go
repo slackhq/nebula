@@ -18,7 +18,7 @@ type Device interface {
 	Networks() []netip.Prefix
 	Name() string
 	RoutesFor(netip.Addr) routing.Gateways
-	SupportsMultiqueue() bool //todo remove?
+	SupportsMultiqueue() bool
 	NewMultiQueueReader() error
 	Readers() []tio.Queue
 }
