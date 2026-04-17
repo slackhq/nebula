@@ -47,15 +47,15 @@ type winTun struct {
 	tun *wintun.NativeTun
 
 	readBuf  []byte
-	batchRet [1][]byte
+	batchRet [1]tio.Packet
 }
 
-func (t *winTun) Read() ([][]byte, error) {
+func (t *winTun) Read() ([]tio.Packet, error) {
 	n, err := t.tun.Read(t.readBuf, 0)
 	if err != nil {
 		return nil, err
 	}
-	t.batchRet[0] = t.readBuf[:n]
+	t.batchRet[0] = tio.Packet{Bytes: t.readBuf[:n]}
 	return t.batchRet[:], nil
 }
 

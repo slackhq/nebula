@@ -14,20 +14,15 @@ type RxBatcher interface {
 }
 
 type TxBatcher interface {
-	// Next returns a zero-length slice with slotCap capacity over the next unused
-	// slot's backing bytes. The caller writes into the returned slice and then
-	// calls Commit with the final length and destination. Next returns nil when
-	// the batch is full.
-	Next() []byte
-	// Commit records the slot just returned by Next as a packet of length n
-	// destined for dst.
-	Commit(n int, dst netip.AddrPort)
-	// Reset clears committed slots; backing storage is retained for reuse.
-	Reset()
-	// Len returns the number of committed packets.
-	Len() int
-	// Cap returns the maximum number of slots in the batch.
-	Cap() int
-	// Get returns the buffers needed to send the batch
-	Get() ([][]byte, []netip.AddrPort)
+	// Reserve creates a pkt to borrow
+	Reserve(sz int) []byte
+	// Commit borrows pkt and records its destination plus the 2-bit
+	// IP-level ECN codepoint to set on the outer (carrier) header. The
+	// caller must keep pkt valid until the next Flush. Pass 0 (Not-ECT)
+	// to leave the outer ECN field unset.
+	Commit(pkt []byte, dst netip.AddrPort, outerECN byte)
+	// Flush emits every queued packet via the underlying batch writer in
+	// arrival order. Returns the first error observed. After Flush returns,
+	// borrowed payload slices may be recycled.
+	Flush() error
 }

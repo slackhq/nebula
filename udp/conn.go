@@ -11,12 +11,25 @@ const MTU = 9001
 // MaxWriteBatch is the largest batch any Conn.WriteBatch implementation is
 // required to accept. Callers SHOULD NOT pass more than this per call; Linux
 // backends preallocate sendmmsg scratch sized to this value, so exceeding it
-// only costs a chunked retry.
+// only costs additional sendmmsg chunks within a single WriteBatch call.
 const MaxWriteBatch = 128
+
+// RxMeta carries per-packet metadata extracted from the RX path (ancillary
+// data, kernel offload state, etc.) and passed to EncReader callbacks.
+// Backends that do not produce a particular signal leave its zero value.
+//
+// OuterECN is the 2-bit IP-level ECN codepoint stamped on the carrier
+// datagram (extracted from IP_TOS / IPV6_TCLASS cmsg on Linux). Zero
+// means Not-ECT, which is also the value backends without ECN RX support
+// supply on every packet.
+type RxMeta struct {
+	OuterECN byte
+}
 
 type EncReader func(
 	addr netip.AddrPort,
 	payload []byte,
+	meta RxMeta,
 )
 
 type Conn interface {
@@ -30,11 +43,14 @@ type Conn interface {
 	ListenOut(r EncReader, flush func()) error
 	WriteTo(b []byte, addr netip.AddrPort) error
 	// WriteBatch sends a contiguous batch of packets, each with its own
-	// destination. bufs and addrs must have the same length. Linux uses
-	// sendmmsg(2) for a single syscall; other backends fall back to a
-	// WriteTo loop. Returns on the first error; callers may observe a
-	// partial send if some packets went out before the error.
-	WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error
+	// destination. bufs and addrs must have the same length. outerECNs may
+	// be nil (treated as all-zero / Not-ECT); when non-nil it must have the
+	// same length as bufs, and outerECNs[i] is the 2-bit IP-level ECN
+	// codepoint to set on packet i's outer header. Linux uses sendmmsg(2)
+	// for a single syscall and attaches the value as IP_TOS / IPV6_TCLASS
+	// cmsg; other backends ignore it. Returns on the first error; callers
+	// may observe a partial send if some packets went out before the error.
+	WriteBatch(bufs [][]byte, addrs []netip.AddrPort, outerECNs []byte) error
 	ReloadConfig(c *config.C)
 	SupportsMultipleReaders() bool
 	Close() error
@@ -57,7 +73,7 @@ func (NoopConn) SupportsMultipleReaders() bool {
 func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {
 	return nil
 }
-func (NoopConn) WriteBatch(_ [][]byte, _ []netip.AddrPort) error {
+func (NoopConn) WriteBatch(_ [][]byte, _ []netip.AddrPort, _ []byte) error {
 	return nil
 }
 func (NoopConn) ReloadConfig(_ *config.C) {

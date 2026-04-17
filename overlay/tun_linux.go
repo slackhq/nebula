@@ -25,7 +25,7 @@ import (
 )
 
 type tun struct {
-	readers     tio.Container
+	readers     tio.QueueSet
 	closeLock   sync.Mutex
 	Device      string
 	vpnNetworks []netip.Prefix
@@ -34,6 +34,14 @@ type tun struct {
 	TXQueueLen  int
 	deviceIndex int
 	ioctlFd     uintptr
+	vnetHdr     bool
+	// routeFeatureECN, when true, sets RTAX_FEATURE_ECN on every route we
+	// install for the tun. The kernel then actively negotiates ECN for
+	// connections destined to those prefixes (equivalent to `ip route
+	// change ... features ecn`) regardless of net.ipv4.tcp_ecn, so flows
+	// across the nebula mesh use ECN even when the host default is the
+	// passive setting (=2). Disable via tunnels.ecn=false.
+	routeFeatureECN bool
 
 	Routes                    atomic.Pointer[[]Route]
 	routeTree                 atomic.Pointer[bart.Table[routing.Gateways]]
@@ -72,7 +80,9 @@ type ifreqQLEN struct {
 }
 
 func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
-	t, err := newTunGeneric(c, l, deviceFd, vpnNetworks)
+	// We don't know what flags the caller opened this fd with and can't turn
+	// on IFF_VNET_HDR after TUNSETIFF, so skip offload on inherited fds.
+	t, err := newTunGeneric(c, l, deviceFd, false, false, vpnNetworks)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +127,18 @@ func tunSetIff(fd int, name string, flags uint16) (string, error) {
 	return strings.Trim(string(req.Name[:]), "\x00"), nil
 }
 
+// tsoOffloadFlags are the TUN_F_* bits we ask the kernel to enable when a
+// TSO-capable TUN is available. CSUM is required as a prerequisite for TSO.
+// TSO_ECN tells the kernel we propagate ECN correctly through coalesce and
+// segmentation, so it can deliver superpackets whose seed has CWR/ECE set
+// or whose IP-level codepoint is CE.
+const tsoOffloadFlags = unix.TUN_F_CSUM | unix.TUN_F_TSO4 | unix.TUN_F_TSO6 | unix.TUN_F_TSO_ECN
+
+// usoOffloadFlags adds UDP Segmentation Offload to tsoOffloadFlags. Requires
+// Linux ≥ 6.2; older kernels reject it and we fall back to TCP-only TSO via
+// tsoOffloadFlags.
+const usoOffloadFlags = tsoOffloadFlags | unix.TUN_F_USO4 | unix.TUN_F_USO6
+
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue bool) (*tun, error) {
 	baseFlags := uint16(unix.IFF_TUN | unix.IFF_NO_PI)
 	if multiqueue {
@@ -124,17 +146,51 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 	}
 	nameStr := c.GetString("tun.dev", "")
 
+	// First try to enable IFF_VNET_HDR via TUNSETIFF and negotiate TUN_F_*
+	// offloads via TUNSETOFFLOAD so we can receive TSO/USO superpackets.
+	// We try TSO+USO first, fall back to TSO-only on kernels without USO
+	// (Linux < 6.2), and finally give up on virtio headers entirely and
+	// reopen as a plain TUN if neither offload mask is accepted.
 	fd, err := openTunDev()
 	if err != nil {
 		return nil, err
 	}
-	name, err := tunSetIff(fd, nameStr, baseFlags)
+	vnetHdr := true
+	usoEnabled := false
+	name, err := tunSetIff(fd, nameStr, baseFlags|unix.IFF_VNET_HDR)
 	if err != nil {
 		_ = unix.Close(fd)
-		return nil, &NameError{Name: nameStr, Underlying: err}
+		vnetHdr = false
+	} else {
+		// Try TSO+USO first. On kernels without USO support (Linux < 6.2)
+		// the ioctl returns EINVAL; fall back to the TCP-only mask before
+		// giving up on VNET_HDR entirely.
+		if err = ioctl(uintptr(fd), unix.TUNSETOFFLOAD, uintptr(usoOffloadFlags)); err == nil {
+			usoEnabled = true
+		} else if err = ioctl(uintptr(fd), unix.TUNSETOFFLOAD, uintptr(tsoOffloadFlags)); err != nil {
+			l.Warn("Failed to enable TUN offload (TSO); proceeding without virtio headers", "error", err)
+			_ = unix.Close(fd)
+			vnetHdr = false
+		}
 	}
 
-	t, err := newTunGeneric(c, l, fd, vpnNetworks)
+	if !vnetHdr {
+		fd, err = openTunDev()
+		if err != nil {
+			return nil, err
+		}
+		name, err = tunSetIff(fd, nameStr, baseFlags)
+		if err != nil {
+			_ = unix.Close(fd)
+			return nil, &NameError{Name: nameStr, Underlying: err}
+		}
+	}
+
+	if vnetHdr {
+		l.Info("TUN offload enabled", "tso", true, "uso", usoEnabled)
+	}
+
+	t, err := newTunGeneric(c, l, fd, vnetHdr, usoEnabled, vpnNetworks)
 	if err != nil {
 		return nil, err
 	}
@@ -145,25 +201,34 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 }
 
 // newTunGeneric does all the stuff common to different tun initialization paths. It will close your files on error.
-func newTunGeneric(c *config.C, l *slog.Logger, fd int, vpnNetworks []netip.Prefix) (*tun, error) {
-	container, err := tio.NewPollContainer()
+func newTunGeneric(c *config.C, l *slog.Logger, fd int, vnetHdr, usoEnabled bool, vpnNetworks []netip.Prefix) (*tun, error) {
+	var qs tio.QueueSet
+	var err error
+	if vnetHdr {
+		qs, err = tio.NewOffloadQueueSet(usoEnabled)
+	} else {
+		qs, err = tio.NewPollQueueSet()
+	}
+
 	if err != nil {
 		_ = unix.Close(fd)
 		return nil, err
 	}
-	err = container.Add(fd)
+	err = qs.Add(fd)
 	if err != nil {
 		_ = unix.Close(fd)
 		return nil, err
 	}
 
 	t := &tun{
-		readers:                   container,
+		readers:                   qs,
 		closeLock:                 sync.Mutex{},
+		vnetHdr:                   vnetHdr,
 		vpnNetworks:               vpnNetworks,
 		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
 		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
+		routeFeatureECN:           c.GetBool("tunnels.ecn", true),
 		routesFromSystem:          map[netip.Prefix]routing.Gateways{},
 		l:                         l,
 	}
@@ -271,9 +336,19 @@ func (t *tun) NewMultiQueueReader() error {
 	}
 
 	flags := uint16(unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_MULTI_QUEUE)
+	if t.vnetHdr {
+		flags |= unix.IFF_VNET_HDR
+	}
 	if _, err = tunSetIff(fd, t.Device, flags); err != nil {
 		_ = unix.Close(fd)
 		return err
+	}
+
+	if t.vnetHdr {
+		if err = ioctl(uintptr(fd), unix.TUNSETOFFLOAD, uintptr(tsoOffloadFlags)); err != nil {
+			_ = unix.Close(fd)
+			return fmt.Errorf("failed to enable offload on multiqueue tun fd: %w", err)
+		}
 	}
 
 	err = t.readers.Add(fd)
@@ -450,6 +525,18 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 		Table:     unix.RT_TABLE_MAIN,
 		Type:      unix.RTN_UNICAST,
 	}
+	// Match the metric the kernel uses for its auto-installed connected
+	// route, so RouteReplace overwrites it in place instead of adding a
+	// second route at a worse metric. IPv6 connected routes are installed
+	// at metric 256 (IP6_RT_PRIO_KERN); IPv4 uses 0. Without this, the
+	// kernel route wins lookups and our MTU / AdvMSS / Features never
+	// apply on v6.
+	if cidr.Addr().Is6() {
+		nr.Priority = 256
+	}
+	if t.routeFeatureECN {
+		nr.Features |= unix.RTAX_FEATURE_ECN
+	}
 	err := netlink.RouteReplace(&nr)
 	if err != nil {
 		t.l.Warn("Failed to set default route MTU, retrying", "error", err, "cidr", cidr)
@@ -498,6 +585,9 @@ func (t *tun) addRoutes(logErrors bool) error {
 
 		if r.Metric > 0 {
 			nr.Priority = r.Metric
+		}
+		if t.routeFeatureECN {
+			nr.Features |= unix.RTAX_FEATURE_ECN
 		}
 
 		err := netlink.RouteReplace(&nr)

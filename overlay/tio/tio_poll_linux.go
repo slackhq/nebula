@@ -21,7 +21,7 @@ type Poll struct {
 	closed    atomic.Bool
 
 	readBuf  []byte
-	batchRet [1][]byte
+	batchRet [1]Packet
 }
 
 func newPoll(fd int, shutdownFd int) (*Poll, error) {
@@ -97,12 +97,12 @@ func (t *Poll) blockOnWrite() error {
 	return nil
 }
 
-func (t *Poll) Read() ([][]byte, error) {
+func (t *Poll) Read() ([]Packet, error) {
 	n, err := t.readOne(t.readBuf)
 	if err != nil {
 		return nil, err
 	}
-	t.batchRet[0] = t.readBuf[:n]
+	t.batchRet[0] = Packet{Bytes: t.readBuf[:n]}
 	return t.batchRet[:], nil
 }
 

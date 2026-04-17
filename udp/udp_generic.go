@@ -44,7 +44,7 @@ func (u *GenericConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	return err
 }
 
-func (u *GenericConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
+func (u *GenericConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) error {
 	for i, b := range bufs {
 		if _, err := u.UDPConn.WriteToUDPAddrPort(b, addrs[i]); err != nil {
 			return err
@@ -102,7 +102,7 @@ func (u *GenericConn) ListenOut(r EncReader, flush func()) error {
 			continue
 		}
 
-		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
+		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n], RxMeta{})
 		flush()
 	}
 }
