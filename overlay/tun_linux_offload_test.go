@@ -247,6 +247,62 @@ func TestSegmentRejectsUDP(t *testing.T) {
 	}
 }
 
+func BenchmarkSegmentTCPv4(b *testing.B) {
+	sizes := []struct {
+		name   string
+		payLen int
+		mss    int
+	}{
+		{"64KiB_MSS1460", 65000, 1460},
+		{"16KiB_MSS1460", 16384, 1460},
+		{"4KiB_MSS1460", 4096, 1460},
+	}
+	for _, sz := range sizes {
+		b.Run(sz.name, func(b *testing.B) {
+			const ipLen = 20
+			const tcpLen = 20
+			pkt := make([]byte, ipLen+tcpLen+sz.payLen)
+			pkt[0] = 0x45
+			binary.BigEndian.PutUint16(pkt[2:4], uint16(ipLen+tcpLen+sz.payLen))
+			binary.BigEndian.PutUint16(pkt[4:6], 0x4242)
+			pkt[8] = 64
+			pkt[9] = unix.IPPROTO_TCP
+			copy(pkt[12:16], []byte{10, 0, 0, 1})
+			copy(pkt[16:20], []byte{10, 0, 0, 2})
+			binary.BigEndian.PutUint16(pkt[20:22], 12345)
+			binary.BigEndian.PutUint16(pkt[22:24], 80)
+			binary.BigEndian.PutUint32(pkt[24:28], 10000)
+			binary.BigEndian.PutUint32(pkt[28:32], 20000)
+			pkt[32] = 0x50
+			pkt[33] = 0x18
+			binary.BigEndian.PutUint16(pkt[34:36], 65535)
+			for i := 0; i < sz.payLen; i++ {
+				pkt[ipLen+tcpLen+i] = byte(i)
+			}
+			hdr := virtioNetHdr{
+				Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
+				GSOType:    unix.VIRTIO_NET_HDR_GSO_TCPV4,
+				HdrLen:     uint16(ipLen + tcpLen),
+				GSOSize:    uint16(sz.mss),
+				CsumStart:  uint16(ipLen),
+				CsumOffset: 16,
+			}
+
+			scratch := make([]byte, tunSegBufSize)
+			out := make([][]byte, 0, 64)
+
+			b.SetBytes(int64(len(pkt)))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				out = out[:0]
+				if err := segmentTCP(pkt, hdr, &out, scratch); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 // TestTunFileWriteVnetHdrNoAlloc verifies the IFF_VNET_HDR fast-path write is
 // allocation-free. We write to /dev/null so every call succeeds synchronously.
 func TestTunFileWriteVnetHdrNoAlloc(t *testing.T) {
