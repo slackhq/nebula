@@ -44,6 +44,15 @@ func (u *GenericConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	return err
 }
 
+func (u *GenericConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
+	for i, b := range bufs {
+		if _, err := u.UDPConn.WriteToUDPAddrPort(b, addrs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (u *GenericConn) LocalAddr() (netip.AddrPort, error) {
 	a := u.UDPConn.LocalAddr()
 
@@ -73,7 +82,7 @@ type rawMessage struct {
 	Len uint32
 }
 
-func (u *GenericConn) ListenOut(r EncReader) error {
+func (u *GenericConn) ListenOut(r EncReader, flush func()) error {
 	buffer := make([]byte, MTU)
 
 	var lastRecvErr time.Time
@@ -94,6 +103,7 @@ func (u *GenericConn) ListenOut(r EncReader) error {
 		}
 
 		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
+		flush()
 	}
 }
 
