@@ -4,58 +4,63 @@ import "net/netip"
 
 const SendBatchCap = 128
 
-// SendBatch accumulates encrypted UDP packets for potential TX offloading.
+// batchWriter is the minimal subset of udp.Conn needed by SendBatch to flush.
+type batchWriter interface {
+	WriteBatch(bufs [][]byte, addrs []netip.AddrPort, outerECNs []byte) error
+}
+
+// SendBatch accumulates encrypted UDP packets and flushes them via WriteBatch.
 // One SendBatch is owned by each listenIn goroutine; no locking is needed.
-// The backing storage holds up to batchCap packets of slotCap bytes each;
-// bufs and dsts are parallel slices of committed slots.
+// The backing arena grows on demand: when there isn't room for the next slot
+// we allocate a fresh backing array. Already-committed slices keep referencing
+// the old array and remain valid until Flush drops them.
 type SendBatch struct {
-	bufs     [][]byte
-	dsts     []netip.AddrPort
-	backing  []byte
-	slotCap  int
-	batchCap int
-	nextSlot int
+	out     batchWriter
+	bufs    [][]byte
+	dsts    []netip.AddrPort
+	ecns    []byte
+	backing []byte
 }
 
-func NewSendBatch(batchCap, slotCap int) *SendBatch {
+func NewSendBatch(out batchWriter, batchCap, slotCap int) *SendBatch {
 	return &SendBatch{
-		bufs:     make([][]byte, 0, batchCap),
-		dsts:     make([]netip.AddrPort, 0, batchCap),
-		backing:  make([]byte, batchCap*slotCap),
-		slotCap:  slotCap,
-		batchCap: batchCap,
+		out:     out,
+		bufs:    make([][]byte, 0, batchCap),
+		dsts:    make([]netip.AddrPort, 0, batchCap),
+		ecns:    make([]byte, 0, batchCap),
+		backing: make([]byte, 0, batchCap*slotCap),
 	}
 }
 
-func (b *SendBatch) Next() []byte {
-	if b.nextSlot >= b.batchCap {
-		return nil
+func (b *SendBatch) Reserve(sz int) []byte {
+	if len(b.backing)+sz > cap(b.backing) {
+		// Grow: allocate a fresh backing. Already-committed slices still
+		// reference the old array and remain valid until Flush drops them.
+		newCap := max(cap(b.backing)*2, sz)
+		b.backing = make([]byte, 0, newCap)
 	}
-	start := b.nextSlot * b.slotCap
-	return b.backing[start : start : start+b.slotCap] //set len to 0 but cap to slotCap
+	start := len(b.backing)
+	b.backing = b.backing[:start+sz]
+	return b.backing[start : start+sz : start+sz]
 }
 
-func (b *SendBatch) Commit(n int, dst netip.AddrPort) {
-	start := b.nextSlot * b.slotCap
-	b.bufs = append(b.bufs, b.backing[start:start+n])
+func (b *SendBatch) Commit(pkt []byte, dst netip.AddrPort, outerECN byte) {
+	b.bufs = append(b.bufs, pkt)
 	b.dsts = append(b.dsts, dst)
-	b.nextSlot++
+	b.ecns = append(b.ecns, outerECN)
 }
 
-func (b *SendBatch) Reset() {
+func (b *SendBatch) Flush() error {
+	var err error
+	if len(b.bufs) > 0 {
+		err = b.out.WriteBatch(b.bufs, b.dsts, b.ecns)
+	}
+	for i := range b.bufs {
+		b.bufs[i] = nil
+	}
 	b.bufs = b.bufs[:0]
 	b.dsts = b.dsts[:0]
-	b.nextSlot = 0
-}
-
-func (b *SendBatch) Len() int {
-	return len(b.bufs)
-}
-
-func (b *SendBatch) Cap() int {
-	return b.batchCap
-}
-
-func (b *SendBatch) Get() ([][]byte, []netip.AddrPort) {
-	return b.bufs, b.dsts
+	b.ecns = b.ecns[:0]
+	b.backing = b.backing[:0]
+	return err
 }

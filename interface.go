@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,7 +49,14 @@ type InterfaceConfig struct {
 	reQueryWait     time.Duration
 
 	ConntrackCacheTimeout time.Duration
-	l                     *slog.Logger
+
+	// CpuAffinity, when non-empty, names the CPUs each TUN reader goroutine
+	// should pin to. Queue i pins to CpuAffinity[i % len(CpuAffinity)] —
+	// shorter lists than `routines` cycle. Empty list keeps the default
+	// pin-to-(i % NumCPU) behavior.
+	CpuAffinity []int
+
+	l *slog.Logger
 }
 
 type Interface struct {
@@ -72,7 +80,16 @@ type Interface struct {
 	routines              int
 	disconnectInvalid     atomic.Bool
 	closed                atomic.Bool
-	relayManager          *relayManager
+	// cpuAffinity, when non-empty, names the CPUs each TUN reader goroutine
+	// should pin to. Queue i pins to cpuAffinity[i % len(cpuAffinity)].
+	// Empty falls back to the default pin-to-(i % NumCPU) behavior.
+	cpuAffinity []int
+	// ecnEnabled gates RFC 6040 underlay ECN propagation. When true,
+	// inside.go copies the inner ECN onto the outer carrier on encap and
+	// decryptToTun folds outer CE into the inner header on decap. Toggle
+	// via tunnels.ecn (default true).
+	ecnEnabled   atomic.Bool
+	relayManager *relayManager
 
 	tryPromoteEvery atomic.Uint32
 	reQueryEvery    atomic.Uint32
@@ -202,6 +219,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		relayManager:          c.relayManager,
 		connectionManager:     c.connectionManager,
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
+		cpuAffinity:           c.CpuAffinity,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -260,7 +278,16 @@ func (f *Interface) activate() error {
 	}
 	f.readers = f.inside.Readers()
 	for i := range f.readers {
-		f.batchers[i] = batch.NewPassthrough(f.readers[i])
+		caps := tio.QueueCapabilities(f.readers[i])
+		if caps.TSO || caps.USO {
+			// Multi-lane: TCP gets coalesced when TSO is on, UDP when USO
+			// is on, everything else (and either lane disabled) falls
+			// through to passthrough so non-IP / non-TCP-UDP traffic still
+			// reaches the TUN.
+			f.batchers[i] = batch.NewMultiCoalescer(f.readers[i], caps.TSO, caps.USO)
+		} else {
+			f.batchers[i] = batch.NewPassthrough(f.readers[i])
+		}
 	}
 
 	f.wg.Add(1) // for us to wait on Close() to return
@@ -322,15 +349,13 @@ func (f *Interface) listenOut(i int) {
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
-	coalescer := f.batchers[i]
-
-	listener := func(fromUdpAddr netip.AddrPort, payload []byte) {
+	listener := func(fromUdpAddr netip.AddrPort, payload []byte, meta udp.RxMeta) {
 		plaintext := f.batchers[i].Reserve(len(payload))
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get())
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(), meta)
 	}
 
 	flusher := func() {
-		if err := coalescer.Flush(); err != nil {
+		if err := f.batchers[i].Flush(); err != nil {
 			f.l.Error("Failed to flush tun coalescer", "error", err)
 		}
 	}
@@ -346,8 +371,27 @@ func (f *Interface) listenOut(i int) {
 }
 
 func (f *Interface) listenIn(reader tio.Queue, i int) {
+	// Pin this goroutine to one CPU. LockOSThread alone keeps the goroutine
+	// on a single OS thread but the kernel can still migrate that thread
+	// across CPUs — XPS reads smp_processor_id() at sendmmsg time and picks
+	// the TX ring from the current CPU's xps_cpus map, so an unpinned
+	// thread bouncing between CPUs spreads one nebula flow's packets across
+	// multiple TX rings, which the rings then drain at independent rates
+	// and the wire delivers reordered.
+	//
+	// Pinning keeps every sendmmsg from this goroutine going through the
+	// same TX ring, so the wire sees per-flow order. Cost: less scheduler
+	// flexibility — if i % NumCPU collides between two TUN reader
+	// goroutines they share a CPU.
+	cpu := i % runtime.NumCPU()
+	if n := len(f.cpuAffinity); n > 0 {
+		cpu = f.cpuAffinity[i%n]
+	}
+	if err := pinThreadToCPU(cpu); err != nil {
+		f.l.Warn("failed to pin tun reader to CPU", "queue", i, "cpu", cpu, "err", err)
+	}
 	rejectBuf := make([]byte, mtu)
-	sb := batch.NewSendBatch(batch.SendBatchCap, udp.MTU+32)
+	sb := batch.NewSendBatch(f.writers[i], batch.SendBatchCap, udp.MTU+32)
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
@@ -363,27 +407,15 @@ func (f *Interface) listenIn(reader tio.Queue, i int) {
 			break
 		}
 
-		sb.Reset()
 		for _, pkt := range pkts {
-			if sb.Len() >= sb.Cap() {
-				f.flushBatch(sb, i)
-				sb.Reset()
-			}
 			f.consumeInsidePacket(pkt, fwPacket, nb, sb, rejectBuf, i, conntrackCache.Get())
 		}
-		if sb.Len() > 0 {
-			f.flushBatch(sb, i)
+		if err := sb.Flush(); err != nil {
+			f.l.Error("Failed to write outgoing batch", "error", err, "writer", i)
 		}
 	}
 
 	f.l.Debug("overlay reader is done", "reader", i)
-}
-
-func (f *Interface) flushBatch(sb batch.TxBatcher, q int) {
-	bufs, dsts := sb.Get()
-	if err := f.writers[q].WriteBatch(bufs, dsts); err != nil {
-		f.l.Error("Failed to write outgoing batch", "error", err, "writer", q)
-	}
 }
 
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
@@ -392,6 +424,7 @@ func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
 	c.RegisterReloadCallback(f.reloadAcceptRecvError)
 	c.RegisterReloadCallback(f.reloadDisconnectInvalid)
 	c.RegisterReloadCallback(f.reloadMisc)
+	c.RegisterReloadCallback(f.reloadEcn)
 
 	for _, udpConn := range f.writers {
 		c.RegisterReloadCallback(udpConn.ReloadConfig)
@@ -512,6 +545,20 @@ func (f *Interface) reloadMisc(c *config.C) {
 		n := c.GetDuration("timers.requery_wait_duration", defaultReQueryWait)
 		f.reQueryWait.Store(int64(n))
 		f.l.Info("timers.requery_wait_duration has changed")
+	}
+}
+
+// reloadEcn syncs Interface.ecnEnabled with the tunnels.ecn config knob.
+// Default is enabled (RFC 6040 normal mode); set false on the rare path
+// where an underlay middlebox rewrites or drops ECN bits unpredictably.
+func (f *Interface) reloadEcn(c *config.C) {
+	initial := c.InitialLoad()
+	if initial || c.HasChanged("tunnels.ecn") {
+		v := c.GetBool("tunnels.ecn", true)
+		f.ecnEnabled.Store(v)
+		if !initial {
+			f.l.Info("tunnels.ecn changed", "enabled", v)
+		}
 	}
 }
 
