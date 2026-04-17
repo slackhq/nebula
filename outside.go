@@ -542,7 +542,7 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, p
 		return
 	}
 
-	_, err = f.readers[q].Write(out)
+	err = f.batchers[q].Commit(out)
 	if err != nil {
 		f.l.Error("Failed to write to tun", "error", err)
 	}
