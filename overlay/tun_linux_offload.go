@@ -228,16 +228,45 @@ func segmentTCP(pkt []byte, hdr virtioNetHdr, out *[][]byte, scratch []byte) err
 	return nil
 }
 
+// checksumBytes returns the Internet-checksum partial sum of b, seeded with
+// initial. Result is a 32-bit accumulator; the caller folds to 16.
+//
+// Wide-word variant: each 8-byte load contributes four 16-bit lanes to a
+// 64-bit accumulator, cutting the number of loads, shifts, and slice reslices
+// ~4x versus the naive Uint16 loop. The 64-bit accumulator has ample headroom
+// — worst case is (initial=2^32) + (64KiB / 2) * 0xffff ≈ 2.5 * 10^9, far
+// below 2^64 — so no mid-loop fold is needed.
 func checksumBytes(b []byte, initial uint32) uint32 {
-	sum := initial
-	for len(b) >= 2 {
-		sum += uint32(binary.BigEndian.Uint16(b[:2]))
+	sum := uint64(initial)
+	for len(b) >= 16 {
+		w1 := binary.BigEndian.Uint64(b[:8])
+		w2 := binary.BigEndian.Uint64(b[8:16])
+		sum += (w1 >> 48) + ((w1 >> 32) & 0xffff) + ((w1 >> 16) & 0xffff) + (w1 & 0xffff)
+		sum += (w2 >> 48) + ((w2 >> 32) & 0xffff) + ((w2 >> 16) & 0xffff) + (w2 & 0xffff)
+		b = b[16:]
+	}
+	if len(b) >= 8 {
+		w := binary.BigEndian.Uint64(b[:8])
+		sum += (w >> 48) + ((w >> 32) & 0xffff) + ((w >> 16) & 0xffff) + (w & 0xffff)
+		b = b[8:]
+	}
+	if len(b) >= 4 {
+		w := binary.BigEndian.Uint32(b[:4])
+		sum += uint64(w>>16) + uint64(w&0xffff)
+		b = b[4:]
+	}
+	if len(b) >= 2 {
+		sum += uint64(binary.BigEndian.Uint16(b[:2]))
 		b = b[2:]
 	}
 	if len(b) == 1 {
-		sum += uint32(b[0]) << 8
+		sum += uint64(b[0]) << 8
 	}
-	return sum
+	// Fold 64 → 32. The checksum is one's complement, so carries are
+	// end-around-added; once the high 32 bits are zero we're done.
+	sum = (sum & 0xffffffff) + (sum >> 32)
+	sum = (sum & 0xffffffff) + (sum >> 32)
+	return uint32(sum)
 }
 
 func checksumFold(sum uint32) uint16 {
