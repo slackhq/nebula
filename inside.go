@@ -15,14 +15,7 @@ import (
 	"github.com/slackhq/nebula/routing"
 )
 
-func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packet, nb []byte, sendBatch batch.TxBatcher, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
-	// borrowed: pkt.Bytes is owned by the originating tio.Queue and is
-	// only valid until the next Read on that queue. Every consumer below
-	// (parse, self-forward, handshake cache, sendInsideMessage) reads it
-	// synchronously; do not retain pkt outside this call. If a future
-	// caller needs to keep the packet, use pkt.Clone() to detach it from
-	// the borrow.
-	//
+func (f *Interface) consumeInsidePacket(pkt wire.Packet, fwPacket *firewall.Packet, nb []byte, sendBatch batch.TxBatcher, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
 	// pkt.Bytes is either one IP datagram (GSO zero) or a TSO/USO
 	// superpacket. In both cases the L3+L4 headers at the start describe
 	// the same 5-tuple every segment will share, so a single newPacket /
@@ -52,10 +45,6 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 		// routes packets from the Nebula addr to the Nebula addr through the Nebula
 		// TUN device.
 		if immediatelyForwardToSelf {
-			// Write copies into the kernel queue synchronously, so seg's lifetime ends at return.
-			// A self-forwarded superpacket would be re-handed to the
-			// kernel as one giant blob; segment first so the loopback
-			// path sees one IP datagram per Write.
 			err := tio.SegmentSuperpacket(pkt, func(seg []byte) error {
 				_, werr := f.readers[q].Write(seg)
 				return werr
@@ -107,7 +96,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 
 	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
-		f.sendInsideMessage(hostinfo, pkt, nb, sendBatch, rejectBuf, q)
+		f.sendInsideMessage(hostinfo, pkt, nb, sendBatch)
 	} else {
 		f.rejectInside(packet, rejectBuf, q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
@@ -521,6 +510,10 @@ func (f *Interface) SendVia(via *HostInfo,
 	nocopy bool,
 ) {
 	toSend, err := f.prepareSendVia(via, relay, ad, nb, out, nocopy)
+	if err != nil {
+		via.logger(f.l).Info("Failed to prepareSendVia", "error", err)
+		return
+	}
 	err = f.writers[0].WriteTo(toSend, via.remote)
 	if err != nil {
 		via.logger(f.l).Info("Failed to WriteTo in sendVia", "error", err)

@@ -407,7 +407,7 @@ func (f *Interface) listenIn(reader tio.Queue, q int) {
 			f.consumeInsidePacket(packets[i], fwPacket, nb, sb, rejectBuf, q, ctCache)
 		}
 		if err := sb.Flush(); err != nil {
-			f.l.Error("Failed to write outgoing batch", "error", err, "writer", i)
+			f.l.Error("Failed to write outgoing batch", "error", err, "writer", q)
 		}
 	}
 

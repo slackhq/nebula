@@ -27,7 +27,7 @@ func (w *fakeBatchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns
 
 func TestSendBatchReserveCommitFlush(t *testing.T) {
 	fw := &fakeBatchWriter{}
-	b := NewSendBatch(fw, 4, 32)
+	b := NewSendBatch(fw, 4, NewArena(32))
 
 	ap := netip.MustParseAddrPort("10.0.0.1:4242")
 	for i := 0; i < 4; i++ {
@@ -71,7 +71,7 @@ func TestSendBatchReserveCommitFlush(t *testing.T) {
 
 func TestSendBatchSlotsDoNotOverlap(t *testing.T) {
 	fw := &fakeBatchWriter{}
-	b := NewSendBatch(fw, 3, 8)
+	b := NewSendBatch(fw, 3, NewArena(8))
 	ap := netip.MustParseAddrPort("10.0.0.1:80")
 
 	for i := 0; i < 3; i++ {
@@ -93,7 +93,7 @@ func TestSendBatchSlotsDoNotOverlap(t *testing.T) {
 func TestSendBatchGrowPreservesCommitted(t *testing.T) {
 	fw := &fakeBatchWriter{}
 	// Tiny initial backing forces a grow on the second Reserve.
-	b := NewSendBatch(fw, 1, 4)
+	b := NewSendBatch(fw, 1, NewArena(4))
 	ap := netip.MustParseAddrPort("10.0.0.1:80")
 
 	s1 := b.Reserve(4)
