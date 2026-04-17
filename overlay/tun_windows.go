@@ -6,7 +6,6 @@ package overlay
 import (
 	"crypto"
 	"fmt"
-	"io"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -36,6 +35,21 @@ type winTun struct {
 	l           *logrus.Logger
 
 	tun *wintun.NativeTun
+
+	readBuf  []byte
+	batchRet [1][]byte
+}
+
+func (t *winTun) ReadBatch() ([][]byte, error) {
+	if t.readBuf == nil {
+		t.readBuf = make([]byte, defaultBatchBufSize)
+	}
+	n, err := t.Read(t.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	t.batchRet[0] = t.readBuf[:n]
+	return t.batchRet[:], nil
 }
 
 func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (Device, error) {
@@ -241,7 +255,7 @@ func (t *winTun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *winTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *winTun) NewMultiQueueReader() (Queue, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
 }
 

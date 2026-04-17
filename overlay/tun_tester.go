@@ -26,6 +26,21 @@ type TestTun struct {
 	closed    atomic.Bool
 	rxPackets chan []byte // Packets to receive into nebula
 	TxPackets chan []byte // Packets transmitted outside by nebula
+
+	readBuf  []byte
+	batchRet [1][]byte
+}
+
+func (t *TestTun) ReadBatch() ([][]byte, error) {
+	if t.readBuf == nil {
+		t.readBuf = make([]byte, defaultBatchBufSize)
+	}
+	n, err := t.Read(t.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	t.batchRet[0] = t.readBuf[:n]
+	return t.batchRet[:], nil
 }
 
 func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*TestTun, error) {
@@ -136,6 +151,6 @@ func (t *TestTun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *TestTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *TestTun) NewMultiQueueReader() (Queue, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented")
 }

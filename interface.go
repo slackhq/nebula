@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -86,7 +85,7 @@ type Interface struct {
 	conntrackCacheTimeout time.Duration
 
 	writers []udp.Conn
-	readers []io.ReadWriteCloser
+	readers []overlay.Queue
 	wg      sync.WaitGroup
 
 	// fatalErr holds the first unexpected reader error that caused shutdown.
@@ -184,7 +183,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		routines:              c.routines,
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
-		readers:               make([]io.ReadWriteCloser, c.routines),
+		readers:               make([]overlay.Queue, c.routines),
 		myVpnNetworks:         cs.myVpnNetworks,
 		myVpnNetworksTable:    cs.myVpnNetworksTable,
 		myVpnAddrs:            cs.myVpnAddrs,
@@ -239,7 +238,7 @@ func (f *Interface) activate() error {
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
 
 	// Prepare n tun queues
-	var reader io.ReadWriteCloser = f.inside
+	var reader overlay.Queue = f.inside
 	for i := 0; i < f.routines; i++ {
 		if i > 0 {
 			reader, err = f.inside.NewMultiQueueReader()
@@ -321,8 +320,7 @@ func (f *Interface) listenOut(i int) {
 	f.l.Infof("underlay reader %v is done", i)
 }
 
-func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
-	packet := make([]byte, mtu)
+func (f *Interface) listenIn(reader overlay.Queue, i int) {
 	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
@@ -330,7 +328,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
 	for {
-		n, err := reader.Read(packet)
+		batch, err := reader.ReadBatch()
 		if err != nil {
 			if !f.closed.Load() {
 				f.l.WithError(err).WithField("reader", i).Error("Error while reading outbound packet, closing")
@@ -339,7 +337,9 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 			break
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
+		for _, pkt := range batch {
+			f.consumeInsidePacket(pkt, fwPacket, nb, out, i, conntrackCache.Get(f.l))
+		}
 	}
 
 	f.l.Infof("overlay reader %v is done", i)

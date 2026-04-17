@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net/netip"
 	"sync/atomic"
@@ -94,6 +93,21 @@ type tun struct {
 	linkAddr    *netroute.LinkAddr
 	l           *logrus.Logger
 	devFd       int
+
+	readBuf  []byte
+	batchRet [1][]byte
+}
+
+func (t *tun) ReadBatch() ([][]byte, error) {
+	if t.readBuf == nil {
+		t.readBuf = make([]byte, defaultBatchBufSize)
+	}
+	n, err := t.Read(t.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	t.batchRet[0] = t.readBuf[:n]
+	return t.batchRet[:], nil
 }
 
 func (t *tun) Read(to []byte) (int, error) {
@@ -454,7 +468,7 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *tun) NewMultiQueueReader() (Queue, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for freebsd")
 }
 

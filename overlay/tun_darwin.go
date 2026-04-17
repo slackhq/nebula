@@ -34,6 +34,9 @@ type tun struct {
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
 	out []byte
+
+	readBuf  []byte
+	batchRet [1][]byte
 }
 
 type ifReq struct {
@@ -512,6 +515,18 @@ func (t *tun) Read(to []byte) (int, error) {
 	return n - 4, err
 }
 
+func (t *tun) ReadBatch() ([][]byte, error) {
+	if t.readBuf == nil {
+		t.readBuf = make([]byte, defaultBatchBufSize)
+	}
+	n, err := t.Read(t.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	t.batchRet[0] = t.readBuf[:n]
+	return t.batchRet[:], nil
+}
+
 // Write is only valid for single threaded use
 func (t *tun) Write(from []byte) (int, error) {
 	buf := t.out
@@ -553,6 +568,6 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *tun) NewMultiQueueReader() (Queue, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
 }

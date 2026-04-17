@@ -62,6 +62,7 @@ func (r *tunFile) newFriend(fd int) (*tunFile, error) {
 		fd:         fd,
 		shutdownFd: r.shutdownFd,
 		vnetHdr:    r.vnetHdr,
+		readBuf:    make([]byte, tunReadBufSize),
 		readPoll: [2]unix.PollFd{
 			{Fd: int32(fd), Events: unix.POLLIN},
 			{Fd: int32(r.shutdownFd), Events: unix.POLLIN},
@@ -72,7 +73,6 @@ func (r *tunFile) newFriend(fd int) (*tunFile, error) {
 		},
 	}
 	if r.vnetHdr {
-		out.readBuf = make([]byte, tunReadBufSize)
 		out.segBuf = make([]byte, tunSegBufSize)
 		out.writeIovs[0].Base = &zeroVnetHdr[0]
 		out.writeIovs[0].SetLen(virtioNetHdrLen)
@@ -95,6 +95,7 @@ func newTunFd(fd int, vnetHdr bool) (*tunFile, error) {
 		shutdownFd: shutdownFd,
 		lastOne:    true,
 		vnetHdr:    vnetHdr,
+		readBuf:    make([]byte, tunReadBufSize),
 		readPoll: [2]unix.PollFd{
 			{Fd: int32(fd), Events: unix.POLLIN},
 			{Fd: int32(shutdownFd), Events: unix.POLLIN},
@@ -105,7 +106,6 @@ func newTunFd(fd int, vnetHdr bool) (*tunFile, error) {
 		},
 	}
 	if vnetHdr {
-		out.readBuf = make([]byte, tunReadBufSize)
 		out.segBuf = make([]byte, tunSegBufSize)
 		out.writeIovs[0].Base = &zeroVnetHdr[0]
 		out.writeIovs[0].SetLen(virtioNetHdrLen)
@@ -181,11 +181,39 @@ func (r *tunFile) readRaw(buf []byte) (int, error) {
 	}
 }
 
-func (r *tunFile) Read(buf []byte) (int, error) {
-	if !r.vnetHdr {
-		return r.readRaw(buf)
-	}
+// ReadBatch reads one superpacket from the tun and returns the resulting
+// packets. Slices point into the tunFile's internal buffers and are only
+// valid until the next ReadBatch / Read / Close on this Queue.
+func (r *tunFile) ReadBatch() ([][]byte, error) {
+	r.pending = r.pending[:0]
+	r.pendingIdx = 0
 
+	for {
+		n, err := r.readRaw(r.readBuf)
+		if err != nil {
+			return nil, err
+		}
+		if !r.vnetHdr {
+			r.pending = append(r.pending, r.readBuf[:n])
+			return r.pending, nil
+		}
+		if n < virtioNetHdrLen {
+			return nil, fmt.Errorf("short tun read: %d < %d", n, virtioNetHdrLen)
+		}
+		var hdr virtioNetHdr
+		hdr.decode(r.readBuf[:virtioNetHdrLen])
+		if err := segmentInto(r.readBuf[virtioNetHdrLen:n], hdr, &r.pending, r.segBuf); err != nil {
+			// Drop and read again — a bad packet should not kill the reader.
+			continue
+		}
+		return r.pending, nil
+	}
+}
+
+// Read drains segments produced by the last ReadBatch one at a time; when the
+// batch is exhausted it fetches a fresh one. Kept for io.Reader compatibility;
+// batch-aware callers should use ReadBatch directly.
+func (r *tunFile) Read(buf []byte) (int, error) {
 	for {
 		if r.pendingIdx < len(r.pending) {
 			seg := r.pending[r.pendingIdx]
@@ -195,21 +223,8 @@ func (r *tunFile) Read(buf []byte) (int, error) {
 			}
 			return copy(buf, seg), nil
 		}
-		r.pending = r.pending[:0]
-		r.pendingIdx = 0
-
-		n, err := r.readRaw(r.readBuf)
-		if err != nil {
+		if _, err := r.ReadBatch(); err != nil {
 			return 0, err
-		}
-		if n < virtioNetHdrLen {
-			return 0, fmt.Errorf("short tun read: %d < %d", n, virtioNetHdrLen)
-		}
-		var hdr virtioNetHdr
-		hdr.decode(r.readBuf[:virtioNetHdrLen])
-		if err := segmentInto(r.readBuf[virtioNetHdrLen:n], hdr, &r.pending, r.segBuf); err != nil {
-			// Drop and read again — a bad packet should not kill the reader.
-			continue
 		}
 	}
 }
@@ -540,7 +555,7 @@ func (t *tun) SupportsMultiqueue() bool {
 	return true
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *tun) NewMultiQueueReader() (Queue, error) {
 	t.closeLock.Lock()
 	defer t.closeLock.Unlock()
 

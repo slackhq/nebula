@@ -20,6 +20,21 @@ type disabledTun struct {
 	tx metrics.Counter
 	rx metrics.Counter
 	l  *logrus.Logger
+
+	readBuf  []byte
+	batchRet [1][]byte
+}
+
+func (t *disabledTun) ReadBatch() ([][]byte, error) {
+	if t.readBuf == nil {
+		t.readBuf = make([]byte, defaultBatchBufSize)
+	}
+	n, err := t.Read(t.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	t.batchRet[0] = t.readBuf[:n]
+	return t.batchRet[:], nil
 }
 
 func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled bool, l *logrus.Logger) *disabledTun {
@@ -109,7 +124,7 @@ func (t *disabledTun) SupportsMultiqueue() bool {
 	return true
 }
 
-func (t *disabledTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *disabledTun) NewMultiQueueReader() (Queue, error) {
 	return t, nil
 }
 

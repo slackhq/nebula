@@ -34,6 +34,21 @@ type UserDevice struct {
 
 	inboundReader *io.PipeReader
 	inboundWriter *io.PipeWriter
+
+	readBuf  []byte
+	batchRet [1][]byte
+}
+
+func (d *UserDevice) ReadBatch() ([][]byte, error) {
+	if d.readBuf == nil {
+		d.readBuf = make([]byte, defaultBatchBufSize)
+	}
+	n, err := d.Read(d.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	d.batchRet[0] = d.readBuf[:n]
+	return d.batchRet[:], nil
 }
 
 func (d *UserDevice) Activate() error {
@@ -50,7 +65,7 @@ func (d *UserDevice) SupportsMultiqueue() bool {
 	return true
 }
 
-func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (d *UserDevice) NewMultiQueueReader() (Queue, error) {
 	return d, nil
 }
 
