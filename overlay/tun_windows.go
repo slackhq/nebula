@@ -6,7 +6,6 @@ package overlay
 import (
 	"crypto"
 	"fmt"
-	"io"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -18,6 +17,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"github.com/slackhq/nebula/wintun"
@@ -36,6 +36,22 @@ type winTun struct {
 	l           *logrus.Logger
 
 	tun *wintun.NativeTun
+
+	readBuf  []byte
+	batchRet [1][]byte
+}
+
+func (t *winTun) Read() ([][]byte, error) {
+	n, err := t.tun.Read(t.readBuf, 0)
+	if err != nil {
+		return nil, err
+	}
+	t.batchRet[0] = t.readBuf[:n]
+	return t.batchRet[:], nil
+}
+
+func (t *winTun) WriteFromSelf(p []byte) (int, error) {
+	return t.Write(p)
 }
 
 func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (Device, error) {
@@ -55,6 +71,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	}
 
 	t := &winTun{
+		readBuf:     make([]byte, defaultBatchBufSize),
 		Device:      deviceName,
 		vpnNetworks: vpnNetworks,
 		MTU:         c.GetInt("tun.mtu", DefaultMTU),
@@ -229,10 +246,6 @@ func (t *winTun) Name() string {
 	return t.Device
 }
 
-func (t *winTun) Read(b []byte) (int, error) {
-	return t.tun.Read(b, 0)
-}
-
 func (t *winTun) Write(b []byte) (int, error) {
 	return t.tun.Write(b, 0)
 }
@@ -241,8 +254,12 @@ func (t *winTun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *winTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
+func (t *winTun) NewMultiQueueReader() error {
+	return fmt.Errorf("TODO: multiqueue not implemented for windows")
+}
+
+func (t *winTun) Readers() []tio.Queue {
+	return []tio.Queue{t}
 }
 
 func (t *winTun) Close() error {

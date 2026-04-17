@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net/netip"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	netroute "golang.org/x/net/route"
@@ -101,6 +101,9 @@ type tun struct {
 	readPoll  [2]unix.PollFd
 	writePoll [2]unix.PollFd
 	closed    atomic.Bool
+
+	readBuf  []byte
+	batchRet [1][]byte
 }
 
 // blockOnRead waits until the tun fd is readable or shutdown has been signaled.
@@ -155,7 +158,20 @@ func (t *tun) blockOnWrite() error {
 	return nil
 }
 
-func (t *tun) Read(to []byte) (int, error) {
+func (t *tun) Read() ([][]byte, error) {
+	n, err := t.readOne(t.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	t.batchRet[0] = t.readBuf[:n]
+	return t.batchRet[:], nil
+}
+
+func (t *tun) WriteFromSelf(p []byte) (int, error) {
+	return t.Write(p)
+}
+
+func (t *tun) readOne(to []byte) (int, error) {
 	// first 4 bytes is protocol family, in network byte order
 	var head [4]byte
 	iovecs := [2]syscall.Iovec{
@@ -373,6 +389,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 		MTU:         c.GetInt("tun.mtu", DefaultMTU),
 		l:           l,
 		fd:          fd,
+		readBuf:     make([]byte, defaultBatchBufSize),
 		shutdownR:   shutdownR,
 		shutdownW:   shutdownW,
 		readPoll: [2]unix.PollFd{
@@ -563,8 +580,8 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for freebsd")
+func (t *tun) NewMultiQueueReader() error {
+	return fmt.Errorf("TODO: multiqueue not implemented for freebsd")
 }
 
 func (t *tun) addRoutes(logErrors bool) error {
@@ -589,6 +606,10 @@ func (t *tun) addRoutes(logErrors bool) error {
 	}
 
 	return nil
+}
+
+func (t *tun) Readers() []tio.Queue {
+	return []tio.Queue{t}
 }
 
 func (t *tun) removeRoutes(routes []Route) error {

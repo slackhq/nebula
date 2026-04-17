@@ -16,6 +16,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	netroute "golang.org/x/net/route"
@@ -23,7 +24,7 @@ import (
 )
 
 type tun struct {
-	io.ReadWriteCloser
+	rwc         io.ReadWriteCloser
 	Device      string
 	vpnNetworks []netip.Prefix
 	DefaultMTU  int
@@ -34,6 +35,9 @@ type tun struct {
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
 	out []byte
+
+	readBuf  []byte
+	batchRet [1][]byte
 }
 
 type ifReq struct {
@@ -124,11 +128,12 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	}
 
 	t := &tun{
-		ReadWriteCloser: os.NewFile(uintptr(fd), ""),
-		Device:          name,
-		vpnNetworks:     vpnNetworks,
-		DefaultMTU:      c.GetInt("tun.mtu", DefaultMTU),
-		l:               l,
+		rwc:         os.NewFile(uintptr(fd), ""),
+		Device:      name,
+		vpnNetworks: vpnNetworks,
+		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
+		l:           l,
+		readBuf:     make([]byte, defaultBatchBufSize),
 	}
 
 	err = t.reload(c, true)
@@ -158,8 +163,8 @@ func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*tun,
 }
 
 func (t *tun) Close() error {
-	if t.ReadWriteCloser != nil {
-		return t.ReadWriteCloser.Close()
+	if t.rwc != nil {
+		return t.rwc.Close()
 	}
 	return nil
 }
@@ -503,13 +508,26 @@ func delRoute(prefix netip.Prefix, gateway netroute.Addr) error {
 	return nil
 }
 
-func (t *tun) Read(to []byte) (int, error) {
+func (t *tun) readOne(to []byte) (int, error) {
 	buf := make([]byte, len(to)+4)
 
-	n, err := t.ReadWriteCloser.Read(buf)
+	n, err := t.rwc.Read(buf)
 
 	copy(to, buf[4:])
 	return n - 4, err
+}
+
+func (t *tun) Read() ([][]byte, error) {
+	n, err := t.readOne(t.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	t.batchRet[0] = t.readBuf[:n]
+	return t.batchRet[:], nil
+}
+
+func (t *tun) WriteFromSelf(p []byte) (int, error) {
+	return t.Write(p)
 }
 
 // Write is only valid for single threaded use
@@ -537,7 +555,7 @@ func (t *tun) Write(from []byte) (int, error) {
 
 	copy(buf[4:], from)
 
-	n, err := t.ReadWriteCloser.Write(buf)
+	n, err := t.rwc.Write(buf)
 	return n - 4, err
 }
 
@@ -553,6 +571,10 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
+func (t *tun) NewMultiQueueReader() error {
+	return fmt.Errorf("TODO: multiqueue not implemented for darwin")
+}
+
+func (t *tun) Readers() []tio.Queue {
+	return []tio.Queue{t}
 }

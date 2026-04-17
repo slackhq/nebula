@@ -140,6 +140,15 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 	}
 }
 
+func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
+	for i, b := range bufs {
+		if err := u.WriteTo(b, addrs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	a := u.UDPConn.LocalAddr()
 
@@ -165,7 +174,7 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 	return func() {}
 }
 
-func (u *StdConn) ListenOut(r EncReader) error {
+func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 	buffer := make([]byte, MTU)
 
 	for {
@@ -180,6 +189,7 @@ func (u *StdConn) ListenOut(r EncReader) error {
 		}
 
 		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
+		flush()
 	}
 }
 
