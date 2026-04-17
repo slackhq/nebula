@@ -24,6 +24,13 @@ type StdConn struct {
 	isV4    bool
 	l       *logrus.Logger
 	batch   int
+
+	// sendmmsg scratch. Each queue has its own StdConn, so no locking is
+	// needed. Sized to MaxWriteBatch at construction; WriteBatch chunks
+	// larger inputs.
+	writeMsgs  []rawMessage
+	writeIovs  []iovec
+	writeNames [][]byte
 }
 
 func setReusePort(network, address string, c syscall.RawConn) error {
@@ -69,6 +76,8 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 		return nil, err
 	}
 	out.isV4 = af == unix.AF_INET
+
+	out.prepareWriteMessages(MaxWriteBatch)
 
 	return out, nil
 }
@@ -233,6 +242,121 @@ func (u *StdConn) ListenOut(r EncReader) error {
 func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
 	_, err := u.udpConn.WriteToUDPAddrPort(b, ip)
 	return err
+}
+
+// WriteBatch sends bufs via sendmmsg(2) using the preallocated scratch on
+// StdConn. Chunks larger than the scratch are processed in multiple syscalls.
+// If sendmmsg returns a fatal error mid-chunk we fall back to single WriteTo
+// calls for the remainder so the caller still gets best-effort delivery.
+func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
+	if len(bufs) != len(addrs) {
+		return fmt.Errorf("WriteBatch: len(bufs)=%d != len(addrs)=%d", len(bufs), len(addrs))
+	}
+
+	i := 0
+	for i < len(bufs) {
+		chunk := len(bufs) - i
+		if chunk > len(u.writeMsgs) {
+			chunk = len(u.writeMsgs)
+		}
+
+		for k := 0; k < chunk; k++ {
+			b := bufs[i+k]
+			if len(b) == 0 {
+				// sendmmsg with an empty iovec is legal but pointless; fall
+				// through after filling the slot so Base is still valid.
+				u.writeIovs[k].Base = nil
+				setIovLen(&u.writeIovs[k], 0)
+			} else {
+				u.writeIovs[k].Base = &b[0]
+				setIovLen(&u.writeIovs[k], len(b))
+			}
+			nlen, err := writeSockaddr(u.writeNames[k], addrs[i+k], u.isV4)
+			if err != nil {
+				return err
+			}
+			u.writeMsgs[k].Hdr.Namelen = uint32(nlen)
+		}
+
+		sent, serr := u.sendmmsg(chunk)
+		if serr != nil {
+			if sent <= 0 {
+				// nothing went out; fall back to WriteTo for this chunk.
+				for k := 0; k < chunk; k++ {
+					if err := u.WriteTo(bufs[i+k], addrs[i+k]); err != nil {
+						return err
+					}
+				}
+				i += chunk
+				continue
+			}
+			// partial: treat as success for the sent packets and retry the
+			// remainder on the next outer-loop iteration.
+		}
+		if sent == 0 {
+			return fmt.Errorf("sendmmsg made no progress")
+		}
+		i += sent
+	}
+	return nil
+}
+
+func (u *StdConn) sendmmsg(n int) (int, error) {
+	var sent int
+	var sysErr error
+	err := u.rawConn.Write(func(fd uintptr) (done bool) {
+		r1, _, errno := unix.Syscall6(
+			unix.SYS_SENDMMSG,
+			fd,
+			uintptr(unsafe.Pointer(&u.writeMsgs[0])),
+			uintptr(n),
+			0,
+			0,
+			0,
+		)
+		if errno == syscall.EAGAIN || errno == syscall.EWOULDBLOCK {
+			return false
+		}
+		sent = int(r1)
+		if errno != 0 {
+			sysErr = &net.OpError{Op: "sendmmsg", Err: errno}
+		}
+		return true
+	})
+	if err != nil {
+		return sent, err
+	}
+	return sent, sysErr
+}
+
+// writeSockaddr encodes addr into buf (which must be at least
+// SizeofSockaddrInet6 bytes). Returns the number of bytes used. If isV4 is
+// true and addr is not a v4 (or v4-in-v6) address, returns an error.
+func writeSockaddr(buf []byte, addr netip.AddrPort, isV4 bool) (int, error) {
+	ap := addr.Addr().Unmap()
+	if isV4 {
+		if !ap.Is4() {
+			return 0, ErrInvalidIPv6RemoteForSocket
+		}
+		// struct sockaddr_in: { sa_family_t(2), in_port_t(2, BE), in_addr(4), zero(8) }
+		// sa_family is host endian.
+		binary.NativeEndian.PutUint16(buf[0:2], unix.AF_INET)
+		binary.BigEndian.PutUint16(buf[2:4], addr.Port())
+		ip4 := ap.As4()
+		copy(buf[4:8], ip4[:])
+		for j := 8; j < 16; j++ {
+			buf[j] = 0
+		}
+		return unix.SizeofSockaddrInet4, nil
+	}
+	// struct sockaddr_in6: { sa_family_t(2), in_port_t(2, BE), flowinfo(4), in6_addr(16), scope_id(4) }
+	binary.NativeEndian.PutUint16(buf[0:2], unix.AF_INET6)
+	binary.BigEndian.PutUint16(buf[2:4], addr.Port())
+	binary.NativeEndian.PutUint32(buf[4:8], 0)
+	ip6 := addr.Addr().As16()
+	copy(buf[8:24], ip6[:])
+	binary.NativeEndian.PutUint32(buf[24:28], 0)
+	return unix.SizeofSockaddrInet6, nil
 }
 
 func (u *StdConn) ReloadConfig(c *config.C) {

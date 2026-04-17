@@ -107,6 +107,15 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	return nil
 }
 
+func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
+	for i, b := range bufs {
+		if err := u.WriteTo(b, addrs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (u *TesterConn) ListenOut(r EncReader) error {
 	for {
 		p, ok := <-u.RxPackets
