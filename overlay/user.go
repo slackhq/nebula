@@ -1,11 +1,13 @@
 package overlay
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"net/netip"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -28,12 +30,28 @@ func NewUserDevice(vpnNetworks []netip.Prefix) (Device, error) {
 
 type UserDevice struct {
 	vpnNetworks []netip.Prefix
+	numReaders  int
 
 	outboundReader *io.PipeReader
 	outboundWriter *io.PipeWriter
 
 	inboundReader *io.PipeReader
 	inboundWriter *io.PipeWriter
+
+	readBuf  []byte
+	batchRet [1]tio.Packet
+}
+
+func (d *UserDevice) Read() ([]tio.Packet, error) {
+	if d.readBuf == nil {
+		d.readBuf = make([]byte, defaultBatchBufSize)
+	}
+	n, err := d.outboundReader.Read(d.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	d.batchRet[0] = tio.Packet{Bytes: d.readBuf[:n]}
+	return d.batchRet[:], nil
 }
 
 func (d *UserDevice) Activate() error {
@@ -47,23 +65,25 @@ func (d *UserDevice) RoutesFor(ip netip.Addr) routing.Gateways {
 }
 
 func (d *UserDevice) SupportsMultiqueue() bool {
-	return true
+	return false
 }
 
-func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return d, nil
+func (d *UserDevice) NewMultiQueueReader() error {
+	return errors.New("not implemented")
+}
+
+func (d *UserDevice) Readers() []tio.Queue {
+	return []tio.Queue{d}
 }
 
 func (d *UserDevice) Pipe() (*io.PipeReader, *io.PipeWriter) {
 	return d.inboundReader, d.outboundWriter
 }
 
-func (d *UserDevice) Read(p []byte) (n int, err error) {
-	return d.outboundReader.Read(p)
-}
 func (d *UserDevice) Write(p []byte) (n int, err error) {
 	return d.inboundWriter.Write(p)
 }
+
 func (d *UserDevice) Close() error {
 	d.inboundWriter.Close()
 	d.outboundWriter.Close()

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/netip"
 	"sync"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
+	"github.com/slackhq/nebula/overlay/tio"
 
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
@@ -88,7 +88,7 @@ type Interface struct {
 
 	ctx     context.Context
 	writers []udp.Conn
-	readers []io.ReadWriteCloser
+	readers []tio.Queue
 	wg      sync.WaitGroup
 
 	// fatalErr holds the first unexpected reader error that caused shutdown.
@@ -187,7 +187,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		routines:              c.routines,
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
-		readers:               make([]io.ReadWriteCloser, c.routines),
+		readers:               make([]tio.Queue, c.routines),
 		myVpnNetworks:         cs.myVpnNetworks,
 		myVpnNetworksTable:    cs.myVpnNetworksTable,
 		myVpnAddrs:            cs.myVpnAddrs,
@@ -245,16 +245,14 @@ func (f *Interface) activate() error {
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
 
 	// Prepare n tun queues
-	var reader io.ReadWriteCloser = f.inside
 	for i := 0; i < f.routines; i++ {
 		if i > 0 {
-			reader, err = f.inside.NewMultiQueueReader()
-			if err != nil {
+			if err = f.inside.NewMultiQueueReader(); err != nil {
 				return err
 			}
 		}
-		f.readers[i] = reader
 	}
+	f.readers = f.inside.Readers()
 
 	f.wg.Add(1) // for us to wait on Close() to return
 	if err = f.inside.Activate(); err != nil {
@@ -328,8 +326,7 @@ func (f *Interface) listenOut(i int) {
 	f.l.Debug("underlay reader is done", "reader", i)
 }
 
-func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
-	packet := make([]byte, mtu)
+func (f *Interface) listenIn(reader tio.Queue, i int) {
 	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
@@ -337,7 +334,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
 
 	for {
-		n, err := reader.Read(packet)
+		pkts, err := reader.Read()
 		if err != nil {
 			if !f.closed.Load() {
 				f.l.Error("Error while reading outbound packet, closing", "error", err, "reader", i)
@@ -345,8 +342,10 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 			}
 			break
 		}
+		for _, pkt := range pkts {
+			f.consumeInsidePacket(pkt.Bytes, fwPacket, nb, out, i, conntrackCache.Get())
+		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get())
 	}
 
 	f.l.Debug("overlay reader is done", "reader", i)
