@@ -48,6 +48,12 @@ type tunFile struct {
 	pending    [][]byte // segments waiting to be drained by Read
 	pendingIdx int
 	writeIovs  [2]unix.Iovec // preallocated iovecs for vnetHdr writes; iovs[0] is fixed to zeroVnetHdr
+
+	// gsoHdrBuf is a per-queue 10-byte scratch for the virtio_net_hdr emitted
+	// by WriteGSO. Separate from zeroVnetHdr so a concurrent non-GSO Write on
+	// another queue never observes a half-written header.
+	gsoHdrBuf [virtioNetHdrLen]byte
+	gsoIovs   [2]unix.Iovec
 }
 
 // zeroVnetHdr is the 10-byte virtio_net_hdr we prepend to every TUN write when
@@ -78,6 +84,8 @@ func (r *tunFile) newFriend(fd int) (*tunFile, error) {
 		out.segBuf = make([]byte, tunSegBufCap)
 		out.writeIovs[0].Base = &zeroVnetHdr[0]
 		out.writeIovs[0].SetLen(virtioNetHdrLen)
+		out.gsoIovs[0].Base = &out.gsoHdrBuf[0]
+		out.gsoIovs[0].SetLen(virtioNetHdrLen)
 	}
 	return out, nil
 }
@@ -111,6 +119,8 @@ func newTunFd(fd int, vnetHdr bool) (*tunFile, error) {
 		out.segBuf = make([]byte, tunSegBufCap)
 		out.writeIovs[0].Base = &zeroVnetHdr[0]
 		out.writeIovs[0].SetLen(virtioNetHdrLen)
+		out.gsoIovs[0].Base = &out.gsoHdrBuf[0]
+		out.gsoIovs[0].SetLen(virtioNetHdrLen)
 	}
 
 	return out, nil
@@ -328,6 +338,64 @@ func (r *tunFile) Write(buf []byte) (int, error) {
 		}
 		runtime.KeepAlive(buf)
 		return 0, errno
+	}
+}
+
+// GSOSupported reports whether this queue was opened with IFF_VNET_HDR and
+// can accept WriteGSO. When false, callers should fall back to per-segment
+// Write calls.
+func (r *tunFile) GSOSupported() bool { return r.vnetHdr }
+
+// WriteGSO emits pkt as a single TCP TSO superpacket via writev. pkt must
+// contain a full IPv4/IPv6 + TCP header prefix followed by the concatenated
+// coalesced payload. The TCP checksum field must already hold the
+// pseudo-header partial (NEEDS_CSUM semantics). gsoSize is the MSS; every
+// segment except the last must be exactly that many payload bytes.
+func (r *tunFile) WriteGSO(pkt []byte, gsoSize uint16, isV6 bool, hdrLen, csumStart uint16) error {
+	if !r.vnetHdr {
+		return fmt.Errorf("WriteGSO called on tun without IFF_VNET_HDR")
+	}
+	if len(pkt) == 0 {
+		return nil
+	}
+	hdr := virtioNetHdr{
+		Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
+		HdrLen:     hdrLen,
+		GSOSize:    gsoSize,
+		CsumStart:  csumStart,
+		CsumOffset: 16, // TCP checksum field lives 16 bytes into the TCP header
+	}
+	if isV6 {
+		hdr.GSOType = unix.VIRTIO_NET_HDR_GSO_TCPV6
+	} else {
+		hdr.GSOType = unix.VIRTIO_NET_HDR_GSO_TCPV4
+	}
+	hdr.encode(r.gsoHdrBuf[:])
+
+	r.gsoIovs[1].Base = &pkt[0]
+	r.gsoIovs[1].SetLen(len(pkt))
+	iovPtr := uintptr(unsafe.Pointer(&r.gsoIovs[0]))
+	for {
+		n, _, errno := syscall.RawSyscall(unix.SYS_WRITEV, uintptr(r.fd), iovPtr, 2)
+		if errno == 0 {
+			runtime.KeepAlive(pkt)
+			if int(n) < virtioNetHdrLen {
+				return io.ErrShortWrite
+			}
+			return nil
+		}
+		if errno == unix.EAGAIN {
+			runtime.KeepAlive(pkt)
+			if err := r.blockOnWrite(); err != nil {
+				return err
+			}
+			continue
+		}
+		if errno == unix.EINTR {
+			continue
+		}
+		runtime.KeepAlive(pkt)
+		return errno
 	}
 }
 

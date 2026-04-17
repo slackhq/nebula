@@ -91,7 +91,7 @@ type rawMessage struct {
 	Len uint32
 }
 
-func (u *GenericConn) ListenOut(r EncReader) error {
+func (u *GenericConn) ListenOut(r EncReader, flush func()) error {
 	buffer := make([]byte, MTU)
 
 	for {
@@ -102,6 +102,7 @@ func (u *GenericConn) ListenOut(r EncReader) error {
 		}
 
 		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
+		flush()
 	}
 }
 

@@ -249,7 +249,7 @@ func recvmmsg(fd uintptr, msgs []rawMessage) (int, bool, error) {
 	return int(n), true, nil
 }
 
-func (u *StdConn) listenOutSingle(r EncReader) error {
+func (u *StdConn) listenOutSingle(r EncReader, flush func()) error {
 	var err error
 	var n int
 	var from netip.AddrPort
@@ -262,10 +262,11 @@ func (u *StdConn) listenOutSingle(r EncReader) error {
 		}
 		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
 		r(from, buffer[:n])
+		flush()
 	}
 }
 
-func (u *StdConn) listenOutBatch(r EncReader) error {
+func (u *StdConn) listenOutBatch(r EncReader, flush func()) error {
 	var ip netip.Addr
 	var n int
 	var operr error
@@ -297,14 +298,17 @@ func (u *StdConn) listenOutBatch(r EncReader) error {
 			}
 			r(netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])), buffers[i][:msgs[i].Len])
 		}
+		// End-of-batch: let callers (e.g. TUN write coalescer) flush any
+		// state they accumulated across this batch.
+		flush()
 	}
 }
 
-func (u *StdConn) ListenOut(r EncReader) error {
+func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 	if u.batch == 1 {
-		return u.listenOutSingle(r)
+		return u.listenOutSingle(r, flush)
 	} else {
-		return u.listenOutBatch(r)
+		return u.listenOutBatch(r, flush)
 	}
 }
 

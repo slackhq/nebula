@@ -127,13 +127,14 @@ func (u *TesterConn) WriteSegmented(bufs [][]byte, addr netip.AddrPort, _ int) e
 
 func (u *TesterConn) SupportsGSO() bool { return false }
 
-func (u *TesterConn) ListenOut(r EncReader) error {
+func (u *TesterConn) ListenOut(r EncReader, flush func()) error {
 	for {
 		p, ok := <-u.RxPackets
 		if !ok {
 			return os.ErrClosed
 		}
 		r(p.From, p.Data)
+		flush()
 	}
 }
 

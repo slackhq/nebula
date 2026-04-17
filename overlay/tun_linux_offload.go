@@ -54,6 +54,18 @@ func (h *virtioNetHdr) decode(b []byte) {
 	h.CsumOffset = binary.NativeEndian.Uint16(b[8:10])
 }
 
+// encode is the inverse of decode: writes the virtio_net_hdr fields into b
+// (must be at least virtioNetHdrLen bytes). Used to emit a TSO superpacket
+// on egress.
+func (h *virtioNetHdr) encode(b []byte) {
+	b[0] = h.Flags
+	b[1] = h.GSOType
+	binary.NativeEndian.PutUint16(b[2:4], h.HdrLen)
+	binary.NativeEndian.PutUint16(b[4:6], h.GSOSize)
+	binary.NativeEndian.PutUint16(b[6:8], h.CsumStart)
+	binary.NativeEndian.PutUint16(b[8:10], h.CsumOffset)
+}
+
 // segmentInto splits a TUN-side packet described by hdr into one or more
 // IP packets, each appended to *out as a slice of scratch. scratch must be
 // sized to hold every segment (including replicated headers).

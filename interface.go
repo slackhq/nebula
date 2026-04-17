@@ -86,7 +86,11 @@ type Interface struct {
 
 	writers []udp.Conn
 	readers []overlay.Queue
-	wg      sync.WaitGroup
+	// tunCoalescers is one tcpCoalescer per tun queue, wrapping readers[i].
+	// decryptToTun sends plaintext into the coalescer; listenOut calls its
+	// Flush at the end of each UDP recvmmsg batch.
+	tunCoalescers []*tcpCoalescer
+	wg            sync.WaitGroup
 
 	// fatalErr holds the first unexpected reader error that caused shutdown.
 	// nil means "no fatal error" (yet)
@@ -184,6 +188,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
 		readers:               make([]overlay.Queue, c.routines),
+		tunCoalescers:         make([]*tcpCoalescer, c.routines),
 		myVpnNetworks:         cs.myVpnNetworks,
 		myVpnNetworksTable:    cs.myVpnNetworksTable,
 		myVpnAddrs:            cs.myVpnAddrs,
@@ -247,6 +252,7 @@ func (f *Interface) activate() error {
 			}
 		}
 		f.readers[i] = reader
+		f.tunCoalescers[i] = newTCPCoalescer(reader)
 	}
 
 	f.wg.Add(1) // for us to wait on Close() to return
@@ -308,8 +314,13 @@ func (f *Interface) listenOut(i int) {
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
+	coalescer := f.tunCoalescers[i]
 	err := li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
 		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
+	}, func() {
+		if err := coalescer.Flush(); err != nil {
+			f.l.WithError(err).Error("Failed to flush tun coalescer")
+		}
 	})
 
 	if err != nil && !f.closed.Load() {
