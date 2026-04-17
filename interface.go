@@ -321,14 +321,15 @@ func (f *Interface) listenOut(i int) {
 }
 
 func (f *Interface) listenIn(reader overlay.Queue, i int) {
-	out := make([]byte, mtu)
+	rejectBuf := make([]byte, mtu)
+	batch := newSendBatch(sendBatchCap, udp.MTU+32)
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
 	for {
-		batch, err := reader.ReadBatch()
+		pkts, err := reader.ReadBatch()
 		if err != nil {
 			if !f.closed.Load() {
 				f.l.WithError(err).WithField("reader", i).Error("Error while reading outbound packet, closing")
@@ -337,12 +338,26 @@ func (f *Interface) listenIn(reader overlay.Queue, i int) {
 			break
 		}
 
-		for _, pkt := range batch {
-			f.consumeInsidePacket(pkt, fwPacket, nb, out, i, conntrackCache.Get(f.l))
+		batch.Reset()
+		for _, pkt := range pkts {
+			if batch.Len() >= batch.Cap() {
+				f.flushBatch(batch, i)
+				batch.Reset()
+			}
+			f.consumeInsidePacket(pkt, fwPacket, nb, batch, rejectBuf, i, conntrackCache.Get(f.l))
+		}
+		if batch.Len() > 0 {
+			f.flushBatch(batch, i)
 		}
 	}
 
 	f.l.Infof("overlay reader %v is done", i)
+}
+
+func (f *Interface) flushBatch(batch *sendBatch, q int) {
+	if err := f.writers[q].WriteBatch(batch.bufs, batch.dsts); err != nil {
+		f.l.WithError(err).WithField("writer", q).Error("Failed to write outgoing batch")
+	}
 }
 
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
