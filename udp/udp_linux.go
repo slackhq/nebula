@@ -162,9 +162,12 @@ func (u *StdConn) recvmsg(msgs []rawMessage) (int, error) {
 	return 1, nil
 }
 
-func (u *StdConn) ListenOut(r EncReader) error {
+func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 	var ip netip.Addr
-	msgs, buffers, names := u.PrepareRawMessages(u.batch)
+
+	bufSize := MTU
+	msgs, buffers, names := u.PrepareRawMessages(u.batch, bufSize)
+
 	read := u.recvmmsg
 	if u.batch == 1 {
 		read = u.recvmsg
@@ -188,8 +191,14 @@ func (u *StdConn) ListenOut(r EncReader) error {
 			} else {
 				ip, _ = netip.AddrFromSlice(names[i][8:24])
 			}
-			r(netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])), buffers[i][:msgs[i].Len])
+			from := netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4]))
+			payload := buffers[i][:msgs[i].Len]
+
+			r(from, payload)
 		}
+		// End-of-batch: let callers (e.g. TUN write coalescer) flush any
+		// state they accumulated across this batch.
+		flush()
 	}
 }
 
@@ -248,6 +257,19 @@ func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
 		}
 		return nil
 	}
+}
+
+func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
+	if len(bufs) != len(addrs) {
+		return fmt.Errorf("WriteBatch: len(bufs)=%d != len(addrs)=%d", len(bufs), len(addrs))
+	}
+	//todo use sendmmsg
+	for i := 0; i < len(bufs); i++ {
+		if _, err := u.udpConn.WriteToUDPAddrPort(bufs[i], addrs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (u *StdConn) ReloadConfig(c *config.C) {
