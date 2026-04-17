@@ -31,6 +31,13 @@ type StdConn struct {
 	writeMsgs  []rawMessage
 	writeIovs  []iovec
 	writeNames [][]byte
+
+	// Preallocated closure + in/out slots for sendmmsg, so the hot path
+	// does not heap-allocate a fresh closure per call.
+	writeChunk int
+	writeSent  int
+	writeErrno syscall.Errno
+	writeFunc  func(fd uintptr) bool
 }
 
 func setReusePort(network, address string, c syscall.RawConn) error {
@@ -78,6 +85,7 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch in
 	out.isV4 = af == unix.AF_INET
 
 	out.prepareWriteMessages(MaxWriteBatch)
+	out.writeFunc = out.sendmmsgRawWrite
 
 	return out, nil
 }
@@ -252,7 +260,7 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
 	if len(bufs) != len(addrs) {
 		return fmt.Errorf("WriteBatch: len(bufs)=%d != len(addrs)=%d", len(bufs), len(addrs))
 	}
-
+	//u.l.WithField("bufs", len(bufs)).Info("WriteBatch")
 	i := 0
 	for i < len(bufs) {
 		chunk := len(bufs) - i
@@ -301,32 +309,39 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
 	return nil
 }
 
-func (u *StdConn) sendmmsg(n int) (int, error) {
-	var sent int
-	var sysErr error
-	err := u.rawConn.Write(func(fd uintptr) (done bool) {
-		r1, _, errno := unix.Syscall6(
-			unix.SYS_SENDMMSG,
-			fd,
-			uintptr(unsafe.Pointer(&u.writeMsgs[0])),
-			uintptr(n),
-			0,
-			0,
-			0,
-		)
-		if errno == syscall.EAGAIN || errno == syscall.EWOULDBLOCK {
-			return false
-		}
-		sent = int(r1)
-		if errno != 0 {
-			sysErr = &net.OpError{Op: "sendmmsg", Err: errno}
-		}
-		return true
-	})
-	if err != nil {
-		return sent, err
+// sendmmsgRawWrite is the preallocated callback passed to rawConn.Write. It
+// reads its input (u.writeChunk) and writes its outputs (u.writeSent,
+// u.writeErrno) through StdConn fields so the closure itself does not
+// capture per-call locals and therefore does not heap-allocate.
+func (u *StdConn) sendmmsgRawWrite(fd uintptr) bool {
+	r1, _, errno := unix.Syscall6(
+		unix.SYS_SENDMMSG,
+		fd,
+		uintptr(unsafe.Pointer(&u.writeMsgs[0])),
+		uintptr(u.writeChunk),
+		0,
+		0,
+		0,
+	)
+	if errno == syscall.EAGAIN || errno == syscall.EWOULDBLOCK {
+		return false
 	}
-	return sent, sysErr
+	u.writeSent = int(r1)
+	u.writeErrno = errno
+	return true
+}
+
+func (u *StdConn) sendmmsg(n int) (int, error) {
+	u.writeChunk = n
+	u.writeSent = 0
+	u.writeErrno = 0
+	if err := u.rawConn.Write(u.writeFunc); err != nil {
+		return u.writeSent, err
+	}
+	if u.writeErrno != 0 {
+		return u.writeSent, &net.OpError{Op: "sendmmsg", Err: u.writeErrno}
+	}
+	return u.writeSent, nil
 }
 
 // writeSockaddr encodes addr into buf (which must be at least

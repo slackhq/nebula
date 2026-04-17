@@ -355,6 +355,12 @@ func (f *Interface) listenIn(reader overlay.Queue, i int) {
 }
 
 func (f *Interface) flushBatch(batch *sendBatch, q int) {
+	if len(batch.bufs) == 1 {
+		if err := f.writers[q].WriteTo(batch.bufs[0], batch.dsts[0]); err != nil {
+			f.l.WithError(err).WithField("writer", q).Error("Failed to write outgoing single-batch")
+		}
+		return
+	}
 	if err := f.writers[q].WriteBatch(batch.bufs, batch.dsts); err != nil {
 		f.l.WithError(err).WithField("writer", q).Error("Failed to write outgoing batch")
 	}
