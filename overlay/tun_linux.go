@@ -143,6 +143,8 @@ func (r *tunFile) Read(buf []byte) (int, error) {
 				return 0, err
 			}
 			continue
+		} else if err == unix.EINTR {
+			continue
 		} else if err == unix.EBADF {
 			return 0, os.ErrClosed
 		} else {
