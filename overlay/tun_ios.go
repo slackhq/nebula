@@ -16,17 +16,38 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"golang.org/x/sys/unix"
 )
 
 type tun struct {
-	io.ReadWriteCloser
+	rwc         io.ReadWriteCloser
 	vpnNetworks []netip.Prefix
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *slog.Logger
+
+	readBuf  []byte
+	batchRet [1][]byte
+}
+
+func (t *tun) Read() ([][]byte, error) {
+	n, err := t.rwc.Read(t.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	t.batchRet[0] = t.readBuf[:n]
+	return t.batchRet[:], nil
+}
+
+func (t *tun) Write(p []byte) (int, error) {
+	return t.rwc.Write(p)
+}
+
+func (t *tun) Close() error {
+	return t.rwc.Close()
 }
 
 func newTun(_ *config.C, _ *slog.Logger, _ []netip.Prefix, _ bool) (*tun, error) {
@@ -42,9 +63,10 @@ func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip
 
 	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
 	t := &tun{
-		vpnNetworks:     vpnNetworks,
-		ReadWriteCloser: &tunReadCloser{f: file},
-		l:               l,
+		vpnNetworks: vpnNetworks,
+		rwc:         &tunReadCloser{f: file},
+		l:           l,
+		readBuf:     make([]byte, defaultBatchBufSize),
 	}
 
 	err := t.reload(c, true)
@@ -163,6 +185,10 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for ios")
+func (t *tun) NewMultiQueueReader() error {
+	return fmt.Errorf("TODO: multiqueue not implemented for ios")
+}
+
+func (t *tun) Readers() []tio.Queue {
+	return []tio.Queue{t}
 }

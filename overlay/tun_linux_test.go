@@ -3,7 +3,9 @@
 
 package overlay
 
-import "testing"
+import (
+	"testing"
+)
 
 var runAdvMSSTests = []struct {
 	name     string
