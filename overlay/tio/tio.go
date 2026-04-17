@@ -117,7 +117,8 @@ func QueueCapabilities(q Queue) Capabilities {
 type GSOProto uint8
 
 const (
-	GSOProtoTCP GSOProto = iota
+	GSOProtoNone GSOProto = iota
+	GSOProtoTCP
 	GSOProtoUDP
 )
 

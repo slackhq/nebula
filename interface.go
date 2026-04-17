@@ -353,8 +353,7 @@ func (f *Interface) listenOut(i int) {
 	nb := make([]byte, 12, 12)
 
 	listener := func(fromUdpAddr netip.AddrPort, payload []byte, meta udp.RxMeta) {
-		plaintext := f.batchers[i].Reserve(len(payload))
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(), meta)
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, payload, h, fwPacket, lhh, nb, i, ctCache.Get(), meta)
 	}
 
 	flusher := func() {
