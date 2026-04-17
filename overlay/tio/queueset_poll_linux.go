@@ -8,20 +8,20 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type pollContainer struct {
+type pollQueueSet struct {
 	pq []*Poll
 	// pqi is exactly the same as pq, but stored as the interface type
 	pqi        []Queue
 	shutdownFd int
 }
 
-func NewPollContainer() (Container, error) {
+func NewPollQueueSet() (QueueSet, error) {
 	shutdownFd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create eventfd: %w", err)
 	}
 
-	out := &pollContainer{
+	out := &pollQueueSet{
 		pq:         []*Poll{},
 		pqi:        []Queue{},
 		shutdownFd: shutdownFd,
@@ -30,11 +30,11 @@ func NewPollContainer() (Container, error) {
 	return out, nil
 }
 
-func (c *pollContainer) Queues() []Queue {
+func (c *pollQueueSet) Queues() []Queue {
 	return c.pqi
 }
 
-func (c *pollContainer) Add(fd int) error {
+func (c *pollQueueSet) Add(fd int) error {
 	x, err := newPoll(fd, c.shutdownFd)
 	if err != nil {
 		return err
@@ -45,14 +45,14 @@ func (c *pollContainer) Add(fd int) error {
 	return nil
 }
 
-func (c *pollContainer) wakeForShutdown() error {
+func (c *pollQueueSet) wakeForShutdown() error {
 	var buf [8]byte
 	binary.NativeEndian.PutUint64(buf[:], 1)
 	_, err := unix.Write(int(c.shutdownFd), buf[:])
 	return err
 }
 
-func (c *pollContainer) Close() error {
+func (c *pollQueueSet) Close() error {
 	errs := []error{}
 
 	if err := c.wakeForShutdown(); err != nil {

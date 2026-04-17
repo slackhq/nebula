@@ -157,7 +157,7 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 		return nil
 	}
 }
-func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
+func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) error {
 	for i, b := range bufs {
 		if err := u.WriteTo(b, addrs[i]); err != nil {
 			return err
@@ -172,7 +172,7 @@ func (u *TesterConn) ListenOut(r EncReader, flush func()) error {
 		case <-u.done:
 			return os.ErrClosed
 		case p := <-u.RxPackets:
-			r(p.From, p.Data)
+			r(p.From, p.Data, RxMeta{})
 			p.Release()
 			flush()
 		}

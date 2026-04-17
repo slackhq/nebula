@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"sync/atomic"
 	"time"
+
+	"github.com/slackhq/nebula/logging"
 )
 
 // ConntrackCache is used as a local routine cache to know if a given flow
@@ -56,8 +58,8 @@ func (c *ConntrackCacheTicker) Get() ConntrackCache {
 	if tick := c.cacheTick.Load(); tick != c.cacheV {
 		c.cacheV = tick
 		if ll := len(c.cache); ll > 0 {
-			if c.l.Enabled(context.Background(), slog.LevelDebug) {
-				c.l.Debug("resetting conntrack cache", "len", ll)
+			if c.l.Enabled(context.Background(), logging.LevelTrace) {
+				c.l.Log(context.Background(), logging.LevelTrace, "resetting conntrack cache", "len", ll)
 			}
 			c.cache = make(ConntrackCache, ll)
 		}
