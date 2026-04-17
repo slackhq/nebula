@@ -12,13 +12,14 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
-	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/wire"
 
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
+	"github.com/slackhq/nebula/overlay/batch"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -90,7 +91,11 @@ type Interface struct {
 	ctx     context.Context
 	writers []udp.Conn
 	readers []tio.Queue
-	wg      sync.WaitGroup
+	// batchers is one per tun queue, wrapping readers[i].
+	// decryptToTun sends plaintext into the batch.RxBatcher;
+	// listenOut calls its Flush at the end of each UDP recvmmsg batch.
+	batchers []batch.RxBatcher
+	wg       sync.WaitGroup
 
 	// fatalErr holds the first unexpected reader error that caused shutdown.
 	// nil means "no fatal error" (yet)
@@ -189,6 +194,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
 		readers:               make([]tio.Queue, c.routines),
+		batchers:              make([]batch.RxBatcher, c.routines),
 		myVpnNetworks:         cs.myVpnNetworks,
 		myVpnNetworksTable:    cs.myVpnNetworksTable,
 		myVpnAddrs:            cs.myVpnAddrs,
@@ -254,6 +260,10 @@ func (f *Interface) activate() error {
 		}
 	}
 	f.readers = f.inside.Readers()
+	for i := range f.readers {
+		arena := batch.NewArena(batch.DefaultPassthroughArenaCap)
+		f.batchers[i] = batch.NewPassthrough(f.readers[i], arena)
+	}
 
 	f.wg.Add(1) // for us to wait on Close() to return
 	if err = f.inside.Activate(); err != nil {
@@ -310,14 +320,22 @@ func (f *Interface) listenOut(i int) {
 
 	ctCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
 	lhh := f.lightHouse.NewRequestHandler()
-	plaintext := make([]byte, udp.MTU)
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
-	err := li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get())
-	})
+	listener := func(fromUdpAddr netip.AddrPort, payload []byte, meta udp.RxMeta) {
+		plaintext := f.batchers[i].Reserve(len(payload))
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(), meta)
+	}
+
+	flusher := func() {
+		if err := f.batchers[i].Flush(); err != nil {
+			f.l.Error("Failed to flush tun coalescer", "error", err)
+		}
+	}
+
+	err := li.ListenOut(listener, flusher)
 
 	if err != nil && !f.closed.Load() {
 		f.l.Error("Error while reading inbound packet, closing", "error", err)
@@ -332,6 +350,9 @@ func (f *Interface) listenIn(reader tio.Queue, q int) {
 	// TODO get the amount of bonus info from the reader
 	packets := make([]wire.TunPacket, 1)
 	out := make([]byte, mtu)
+	rejectBuf := make([]byte, mtu)
+	arenaSize := batch.SendBatchCap * (udp.MTU + 32)
+	sb := batch.NewSendBatch(f.writers[q], batch.SendBatchCap, batch.NewArena(arenaSize))
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
@@ -346,9 +367,13 @@ func (f *Interface) listenIn(reader tio.Queue, q int) {
 			}
 			break
 		}
+
 		ctCache := conntrackCache.Get()
-		for i := range n {
-			f.consumeInsidePacket(packets[i].Bytes, fwPacket, nb, out, q, ctCache)
+		for i := range n{
+			f.consumeInsidePacket(packets[i], fwPacket, nb, sb, rejectBuf, q, ctCache)
+		}
+		if err := sb.Flush(); err != nil {
+			f.l.Error("Failed to write outgoing batch", "error", err, "writer", q)
 		}
 	}
 

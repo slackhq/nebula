@@ -8,6 +8,10 @@ import (
 	"github.com/slackhq/nebula/routing"
 )
 
+// defaultBatchBufSize is the per-Queue scratch size for Read on backends
+// that don't do TSO segmentation. 65535 covers any single IP packet.
+const defaultBatchBufSize = 65535
+
 type Device interface {
 	io.Closer
 	Activate() error
