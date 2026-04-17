@@ -13,6 +13,8 @@ type Container interface {
 
 	// Add takes a tun fd, adds it to the container, and prepares it for use as a Queue
 	Add(fd int) error
+
+	io.Closer
 }
 
 // Queue is a readable/writable Poll queue. One Queue is driven by a single

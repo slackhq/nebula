@@ -34,6 +34,7 @@ type tun struct {
 	TXQueueLen  int
 	deviceIndex int
 	ioctlFd     uintptr
+	vnetHdr     bool
 
 	Routes                    atomic.Pointer[[]Route]
 	routeTree                 atomic.Pointer[bart.Table[routing.Gateways]]
@@ -72,7 +73,9 @@ type ifreqQLEN struct {
 }
 
 func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
-	t, err := newTunGeneric(c, l, deviceFd, vpnNetworks)
+	// We don't know what flags the caller opened this fd with and can't turn
+	// on IFF_VNET_HDR after TUNSETIFF, so skip offload on inherited fds.
+	t, err := newTunGeneric(c, l, deviceFd, false, vpnNetworks)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +120,10 @@ func tunSetIff(fd int, name string, flags uint16) (string, error) {
 	return strings.Trim(string(req.Name[:]), "\x00"), nil
 }
 
+// tsoOffloadFlags are the TUN_F_* bits we ask the kernel to enable when a
+// TSO-capable TUN is available. CSUM is required as a prerequisite for TSO.
+const tsoOffloadFlags = unix.TUN_F_CSUM | unix.TUN_F_TSO4 | unix.TUN_F_TSO6
+
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue bool) (*tun, error) {
 	baseFlags := uint16(unix.IFF_TUN | unix.IFF_NO_PI)
 	if multiqueue {
@@ -124,17 +131,37 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 	}
 	nameStr := c.GetString("tun.dev", "")
 
+	// First try to open with IFF_VNET_HDR + TUNSETOFFLOAD so we can receive
+	// TSO superpackets. If either step fails (older kernel, unprivileged
+	// container, etc.) we close and fall back to a plain TUN.
 	fd, err := openTunDev()
 	if err != nil {
 		return nil, err
 	}
-	name, err := tunSetIff(fd, nameStr, baseFlags)
+	vnetHdr := true
+	name, err := tunSetIff(fd, nameStr, baseFlags|unix.IFF_VNET_HDR)
 	if err != nil {
 		_ = unix.Close(fd)
-		return nil, &NameError{Name: nameStr, Underlying: err}
+		vnetHdr = false
+	} else if err = ioctl(uintptr(fd), unix.TUNSETOFFLOAD, uintptr(tsoOffloadFlags)); err != nil {
+		l.Warn("Failed to enable TUN offload (TSO); proceeding without virtio headers", "error", err)
+		_ = unix.Close(fd)
+		vnetHdr = false
 	}
 
-	t, err := newTunGeneric(c, l, fd, vpnNetworks)
+	if !vnetHdr {
+		fd, err = openTunDev()
+		if err != nil {
+			return nil, err
+		}
+		name, err = tunSetIff(fd, nameStr, baseFlags)
+		if err != nil {
+			_ = unix.Close(fd)
+			return nil, &NameError{Name: nameStr, Underlying: err}
+		}
+	}
+
+	t, err := newTunGeneric(c, l, fd, vnetHdr, vpnNetworks)
 	if err != nil {
 		return nil, err
 	}
@@ -145,8 +172,15 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 }
 
 // newTunGeneric does all the stuff common to different tun initialization paths. It will close your files on error.
-func newTunGeneric(c *config.C, l *slog.Logger, fd int, vpnNetworks []netip.Prefix) (*tun, error) {
-	container, err := tio.NewPollContainer()
+func newTunGeneric(c *config.C, l *slog.Logger, fd int, vnetHdr bool, vpnNetworks []netip.Prefix) (*tun, error) {
+	var container tio.Container
+	var err error
+	if vnetHdr {
+		container, err = tio.NewOffloadContainer()
+	} else {
+		container, err = tio.NewPollContainer()
+	}
+
 	if err != nil {
 		_ = unix.Close(fd)
 		return nil, err
@@ -160,6 +194,7 @@ func newTunGeneric(c *config.C, l *slog.Logger, fd int, vpnNetworks []netip.Pref
 	t := &tun{
 		readers:                   container,
 		closeLock:                 sync.Mutex{},
+		vnetHdr:                   vnetHdr,
 		vpnNetworks:               vpnNetworks,
 		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
@@ -271,9 +306,19 @@ func (t *tun) NewMultiQueueReader() error {
 	}
 
 	flags := uint16(unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_MULTI_QUEUE)
+	if t.vnetHdr {
+		flags |= unix.IFF_VNET_HDR
+	}
 	if _, err = tunSetIff(fd, t.Device, flags); err != nil {
 		_ = unix.Close(fd)
 		return err
+	}
+
+	if t.vnetHdr {
+		if err = ioctl(uintptr(fd), unix.TUNSETOFFLOAD, uintptr(tsoOffloadFlags)); err != nil {
+			_ = unix.Close(fd)
+			return fmt.Errorf("failed to enable offload on multiqueue tun fd: %w", err)
+		}
 	}
 
 	err = t.readers.Add(fd)
