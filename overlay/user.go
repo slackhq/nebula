@@ -39,10 +39,10 @@ type UserDevice struct {
 	inboundWriter *io.PipeWriter
 
 	readBuf  []byte
-	batchRet [1][]byte
+	batchRet [1]tio.Packet
 }
 
-func (d *UserDevice) Read() ([][]byte, error) {
+func (d *UserDevice) Read() ([]tio.Packet, error) {
 	if d.readBuf == nil {
 		d.readBuf = make([]byte, defaultBatchBufSize)
 	}
@@ -50,7 +50,7 @@ func (d *UserDevice) Read() ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	d.batchRet[0] = d.readBuf[:n]
+	d.batchRet[0] = tio.Packet{Bytes: d.readBuf[:n]}
 	return d.batchRet[:], nil
 }
 

@@ -23,23 +23,41 @@ type disabledTun struct {
 	rx         metrics.Counter
 	l          *slog.Logger
 	numReaders int
-
-	batchRet [1][]byte
 }
 
-func (t *disabledTun) Read() ([][]byte, error) {
-	r, ok := <-t.read
+// disabledQueue is one tio.Queue view onto a shared disabledTun. Each queue
+// owns a private batchRet so concurrent Read calls from different reader
+// goroutines do not race on the returned slice.
+type disabledQueue struct {
+	parent   *disabledTun
+	batchRet [1]tio.Packet
+}
+
+func (q *disabledQueue) Read() ([]tio.Packet, error) {
+	r, ok := <-q.parent.read
 	if !ok {
 		return nil, io.EOF
 	}
 
-	t.tx.Inc(1)
-	if t.l.Enabled(context.Background(), slog.LevelDebug) {
-		t.l.Debug("Write payload", "raw", prettyPacket(r))
+	q.parent.tx.Inc(1)
+	if q.parent.l.Enabled(context.Background(), slog.LevelDebug) {
+		q.parent.l.Debug("Write payload", "raw", prettyPacket(r))
 	}
 
-	t.batchRet[0] = r
-	return t.batchRet[:], nil
+	q.batchRet[0] = tio.Packet{Bytes: r}
+	return q.batchRet[:], nil
+}
+
+// Write on a queue forwards to the underlying disabledTun. All queues share
+// one ICMP-handling/log path so this is a thin pass-through.
+func (q *disabledQueue) Write(b []byte) (int, error) {
+	return q.parent.Write(b)
+}
+
+// Close on a queue is a no-op. The shared channel and metrics are owned by
+// the disabledTun; Close on the device tears them down once for everybody.
+func (q *disabledQueue) Close() error {
+	return nil
 }
 
 func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled bool, l *slog.Logger) *disabledTun {
@@ -120,7 +138,7 @@ func (t *disabledTun) NewMultiQueueReader() error {
 func (t *disabledTun) Readers() []tio.Queue {
 	out := make([]tio.Queue, t.numReaders)
 	for i := range t.numReaders {
-		out[i] = t
+		out[i] = &disabledQueue{parent: t}
 	}
 	return out
 }

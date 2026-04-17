@@ -140,7 +140,7 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 	}
 }
 
-func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
+func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) error {
 	for i, b := range bufs {
 		if err := u.WriteTo(b, addrs[i]); err != nil {
 			return err
@@ -188,7 +188,7 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 			u.l.Error("unexpected udp socket receive error", "error", err)
 		}
 
-		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
+		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n], RxMeta{})
 		flush()
 	}
 }
