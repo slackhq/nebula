@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -301,8 +302,13 @@ func (r *tunFile) Write(buf []byte) (int, error) {
 	r.writeIovs[1].Base = &buf[0]
 	r.writeIovs[1].SetLen(len(buf))
 	iovPtr := uintptr(unsafe.Pointer(&r.writeIovs[0]))
+	// The TUN fd is non-blocking (set in newTunFd / newFriend), so writev
+	// either completes promptly or returns EAGAIN — it cannot park the
+	// goroutine inside the kernel. That lets us use syscall.RawSyscall and
+	// skip the runtime.entersyscall / exitsyscall bookkeeping on every
+	// packet; we only pay that cost when we fall through to blockOnWrite.
 	for {
-		n, _, errno := unix.Syscall(unix.SYS_WRITEV, uintptr(r.fd), iovPtr, 2)
+		n, _, errno := syscall.RawSyscall(unix.SYS_WRITEV, uintptr(r.fd), iovPtr, 2)
 		if errno == 0 {
 			runtime.KeepAlive(buf)
 			if int(n) < virtioNetHdrLen {
@@ -311,6 +317,7 @@ func (r *tunFile) Write(buf []byte) (int, error) {
 			return int(n) - virtioNetHdrLen, nil
 		}
 		if errno == unix.EAGAIN {
+			runtime.KeepAlive(buf)
 			if err := r.blockOnWrite(); err != nil {
 				return 0, err
 			}
