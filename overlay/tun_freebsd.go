@@ -110,6 +110,10 @@ func (t *tun) ReadBatch() ([][]byte, error) {
 	return t.batchRet[:], nil
 }
 
+func (t *tun) WriteReject(p []byte) (int, error) {
+	return t.Write(p)
+}
+
 func (t *tun) Read(to []byte) (int, error) {
 	// use readv() to read from the tunnel device, to eliminate the need for copying the buffer
 	if t.devFd < 0 {

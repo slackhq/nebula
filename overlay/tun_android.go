@@ -41,6 +41,10 @@ func (t *tun) ReadBatch() ([][]byte, error) {
 	return t.batchRet[:], nil
 }
 
+func (t *tun) WriteReject(p []byte) (int, error) {
+	return t.Write(p)
+}
+
 func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
 	// XXX Android returns an fd in non-blocking mode which is necessary for shutdown to work properly.
 	// Be sure not to call file.Fd() as it will set the fd to blocking mode.

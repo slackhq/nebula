@@ -47,7 +47,12 @@ type tunFile struct {
 	segOff     int      // cursor into segBuf for the current ReadBatch drain
 	pending    [][]byte // segments waiting to be drained by Read
 	pendingIdx int
-	writeIovs  [2]unix.Iovec // preallocated iovecs for vnetHdr writes; iovs[0] is fixed to zeroVnetHdr
+	writeIovs  [2]unix.Iovec // preallocated iovecs for Write (coalescer passthrough); iovs[0] is fixed to zeroVnetHdr
+	// rejectIovs is a second preallocated iovec scratch used exclusively by
+	// WriteReject (reject + self-forward from the inside path). It mirrors
+	// writeIovs but lets listenIn goroutines emit reject packets without
+	// racing with the listenOut coalescer that owns writeIovs.
+	rejectIovs [2]unix.Iovec
 
 	// gsoHdrBuf is a per-queue 10-byte scratch for the virtio_net_hdr emitted
 	// by WriteGSO. Separate from zeroVnetHdr so a concurrent non-GSO Write on
@@ -92,6 +97,8 @@ func (r *tunFile) newFriend(fd int) (*tunFile, error) {
 		out.segBuf = make([]byte, tunSegBufCap)
 		out.writeIovs[0].Base = &zeroVnetHdr[0]
 		out.writeIovs[0].SetLen(virtioNetHdrLen)
+		out.rejectIovs[0].Base = &zeroVnetHdr[0]
+		out.rejectIovs[0].SetLen(virtioNetHdrLen)
 		out.gsoIovs = make([]unix.Iovec, 2, 2+gsoInitialPayIovs)
 		out.gsoIovs[0].Base = &out.gsoHdrBuf[0]
 		out.gsoIovs[0].SetLen(virtioNetHdrLen)
@@ -128,6 +135,8 @@ func newTunFd(fd int, vnetHdr bool) (*tunFile, error) {
 		out.segBuf = make([]byte, tunSegBufCap)
 		out.writeIovs[0].Base = &zeroVnetHdr[0]
 		out.writeIovs[0].SetLen(virtioNetHdrLen)
+		out.rejectIovs[0].Base = &zeroVnetHdr[0]
+		out.rejectIovs[0].SetLen(virtioNetHdrLen)
 		out.gsoIovs = make([]unix.Iovec, 2, 2+gsoInitialPayIovs)
 		out.gsoIovs[0].Base = &out.gsoHdrBuf[0]
 		out.gsoIovs[0].SetLen(virtioNetHdrLen)
@@ -297,6 +306,19 @@ func (r *tunFile) Read(buf []byte) (int, error) {
 }
 
 func (r *tunFile) Write(buf []byte) (int, error) {
+	return r.writeWithScratch(buf, &r.writeIovs)
+}
+
+// WriteReject emits a packet using a dedicated iovec scratch (rejectIovs)
+// distinct from the one used by the coalescer's Write path. This avoids a
+// data race between the inside (listenIn) goroutine emitting reject or
+// self-forward packets and the outside (listenOut) goroutine flushing TCP
+// coalescer passthroughs on the same tunFile.
+func (r *tunFile) WriteReject(buf []byte) (int, error) {
+	return r.writeWithScratch(buf, &r.rejectIovs)
+}
+
+func (r *tunFile) writeWithScratch(buf []byte, iovs *[2]unix.Iovec) (int, error) {
 	if !r.vnetHdr {
 		for {
 			if n, err := unix.Write(r.fd, buf); err == nil {
@@ -319,9 +341,9 @@ func (r *tunFile) Write(buf []byte) (int, error) {
 	}
 	// Point the payload iovec at the caller's buffer. iovs[0] is pre-wired
 	// to zeroVnetHdr during tunFile construction so we don't rebuild it here.
-	r.writeIovs[1].Base = &buf[0]
-	r.writeIovs[1].SetLen(len(buf))
-	iovPtr := uintptr(unsafe.Pointer(&r.writeIovs[0]))
+	iovs[1].Base = &buf[0]
+	iovs[1].SetLen(len(buf))
+	iovPtr := uintptr(unsafe.Pointer(&iovs[0]))
 	// The TUN fd is non-blocking (set in newTunFd / newFriend), so writev
 	// either completes promptly or returns EAGAIN — it cannot park the
 	// goroutine inside the kernel. That lets us use syscall.RawSyscall and

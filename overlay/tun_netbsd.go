@@ -82,6 +82,10 @@ func (t *tun) ReadBatch() ([][]byte, error) {
 	return t.batchRet[:], nil
 }
 
+func (t *tun) WriteReject(p []byte) (int, error) {
+	return t.Write(p)
+}
+
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
 
 func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*tun, error) {

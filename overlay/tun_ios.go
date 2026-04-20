@@ -43,6 +43,10 @@ func (t *tun) ReadBatch() ([][]byte, error) {
 	return t.batchRet[:], nil
 }
 
+func (t *tun) WriteReject(p []byte) (int, error) {
+	return t.Write(p)
+}
+
 func newTun(_ *config.C, _ *logrus.Logger, _ []netip.Prefix, _ bool) (*tun, error) {
 	return nil, fmt.Errorf("newTun not supported in iOS")
 }

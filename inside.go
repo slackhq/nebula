@@ -33,7 +33,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		// routes packets from the Nebula addr to the Nebula addr through the Nebula
 		// TUN device.
 		if immediatelyForwardToSelf {
-			_, err := f.readers[q].Write(packet)
+			_, err := f.readers[q].WriteReject(packet)
 			if err != nil {
 				f.l.WithError(err).Error("Failed to forward to tun")
 			}
@@ -148,7 +148,7 @@ func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
 		return
 	}
 
-	_, err := f.readers[q].Write(out)
+	_, err := f.readers[q].WriteReject(out)
 	if err != nil {
 		f.l.WithError(err).Error("Failed to write to tun")
 	}

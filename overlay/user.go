@@ -79,6 +79,9 @@ func (d *UserDevice) Read(p []byte) (n int, err error) {
 func (d *UserDevice) Write(p []byte) (n int, err error) {
 	return d.inboundWriter.Write(p)
 }
+func (d *UserDevice) WriteReject(p []byte) (n int, err error) {
+	return d.Write(p)
+}
 func (d *UserDevice) Close() error {
 	d.inboundWriter.Close()
 	d.outboundWriter.Close()

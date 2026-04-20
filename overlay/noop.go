@@ -37,6 +37,10 @@ func (NoopTun) Write([]byte) (int, error) {
 	return 0, nil
 }
 
+func (NoopTun) WriteReject(p []byte) (int, error) {
+	return 0, nil
+}
+
 func (NoopTun) SupportsMultiqueue() bool {
 	return false
 }

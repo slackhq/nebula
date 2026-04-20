@@ -19,6 +19,12 @@ const defaultBatchBufSize = 65535
 type Queue interface {
 	io.ReadWriteCloser
 	ReadBatch() ([][]byte, error)
+	// WriteReject writes a single packet that originated from the inside
+	// path (reject replies or self-forward) using scratch state distinct
+	// from Write, so it can run concurrently with Write on the same Queue
+	// without a data race. On backends without a shared-scratch Write, a
+	// trivial delegation to Write is acceptable.
+	WriteReject(p []byte) (int, error)
 }
 
 type Device interface {

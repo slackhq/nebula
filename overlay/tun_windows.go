@@ -52,6 +52,10 @@ func (t *winTun) ReadBatch() ([][]byte, error) {
 	return t.batchRet[:], nil
 }
 
+func (t *winTun) WriteReject(p []byte) (int, error) {
+	return t.Write(p)
+}
+
 func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (Device, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Windows")
 }

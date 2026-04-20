@@ -130,6 +130,10 @@ func (t *TestTun) Write(b []byte) (n int, err error) {
 	return len(b), nil
 }
 
+func (t *TestTun) WriteReject(b []byte) (int, error) {
+	return t.Write(b)
+}
+
 func (t *TestTun) Close() error {
 	if t.closed.CompareAndSwap(false, true) {
 		close(t.rxPackets)
