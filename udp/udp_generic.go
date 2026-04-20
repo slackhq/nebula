@@ -83,7 +83,6 @@ func (u *GenericConn) ListenOut(r EncReader) error {
 		n, rua, err := u.ReadFromUDPAddrPort(buffer)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
-				u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
 				return err
 			}
 			// Dampen unexpected message warns to once per minute
