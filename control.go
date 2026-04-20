@@ -27,6 +27,7 @@ const (
 
 var ErrAlreadyStarted = errors.New("nebula is already started")
 var ErrAlreadyStopped = errors.New("nebula cannot be restarted")
+var ErrUnknownState = errors.New("nebula state is invalid")
 
 // Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
 // core. This means copying IP objects, slices, de-referencing pointers and taking the actual value, etc
@@ -83,12 +84,13 @@ func (c *Control) Start() (func() error, error) {
 	case StateStarted:
 		return nil, ErrAlreadyStarted
 	default:
-		return nil, errors.New("invalid state")
+		return nil, ErrUnknownState
 	}
 
 	// Activate the interface
 	err := c.f.activate()
 	if err != nil {
+		c.state = StateStopped
 		return nil, err
 	}
 
