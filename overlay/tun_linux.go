@@ -4,6 +4,7 @@
 package overlay
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -24,9 +25,175 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// tunFile wraps a TUN file descriptor with poll-based reads. The FD provided will be changed to non-blocking.
+// A shared eventfd allows Close to wake all readers blocked in poll.
+type tunFile struct {
+	fd         int
+	shutdownFd int
+	lastOne    bool
+	readPoll   [2]unix.PollFd
+	writePoll  [2]unix.PollFd
+	closed     bool
+}
+
+// newFriend makes a tunFile for a MultiQueueReader that copies the shutdown eventfd from the parent tun
+func (r *tunFile) newFriend(fd int) (*tunFile, error) {
+	if err := unix.SetNonblock(fd, true); err != nil {
+		return nil, fmt.Errorf("failed to set tun fd non-blocking: %w", err)
+	}
+	return &tunFile{
+		fd:         fd,
+		shutdownFd: r.shutdownFd,
+		readPoll: [2]unix.PollFd{
+			{Fd: int32(fd), Events: unix.POLLIN},
+			{Fd: int32(r.shutdownFd), Events: unix.POLLIN},
+		},
+		writePoll: [2]unix.PollFd{
+			{Fd: int32(fd), Events: unix.POLLOUT},
+			{Fd: int32(r.shutdownFd), Events: unix.POLLIN},
+		},
+	}, nil
+}
+
+func newTunFd(fd int) (*tunFile, error) {
+	if err := unix.SetNonblock(fd, true); err != nil {
+		return nil, fmt.Errorf("failed to set tun fd non-blocking: %w", err)
+	}
+
+	shutdownFd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create eventfd: %w", err)
+	}
+
+	out := &tunFile{
+		fd:         fd,
+		shutdownFd: shutdownFd,
+		lastOne:    true,
+		readPoll: [2]unix.PollFd{
+			{Fd: int32(fd), Events: unix.POLLIN},
+			{Fd: int32(shutdownFd), Events: unix.POLLIN},
+		},
+		writePoll: [2]unix.PollFd{
+			{Fd: int32(fd), Events: unix.POLLOUT},
+			{Fd: int32(shutdownFd), Events: unix.POLLIN},
+		},
+	}
+
+	return out, nil
+}
+
+func (r *tunFile) blockOnRead() error {
+	const problemFlags = unix.POLLHUP | unix.POLLNVAL | unix.POLLERR
+	var err error
+	for {
+		_, err = unix.Poll(r.readPoll[:], -1)
+		if err != unix.EINTR {
+			break
+		}
+	}
+	//always reset these!
+	tunEvents := r.readPoll[0].Revents
+	shutdownEvents := r.readPoll[1].Revents
+	r.readPoll[0].Revents = 0
+	r.readPoll[1].Revents = 0
+	//do the err check before trusting the potentially bogus bits we just got
+	if err != nil {
+		return err
+	}
+	if shutdownEvents&(unix.POLLIN|problemFlags) != 0 {
+		return os.ErrClosed
+	} else if tunEvents&problemFlags != 0 {
+		return os.ErrClosed
+	}
+	return nil
+}
+
+func (r *tunFile) blockOnWrite() error {
+	const problemFlags = unix.POLLHUP | unix.POLLNVAL | unix.POLLERR
+	var err error
+	for {
+		_, err = unix.Poll(r.writePoll[:], -1)
+		if err != unix.EINTR {
+			break
+		}
+	}
+	//always reset these!
+	tunEvents := r.writePoll[0].Revents
+	shutdownEvents := r.writePoll[1].Revents
+	r.writePoll[0].Revents = 0
+	r.writePoll[1].Revents = 0
+	//do the err check before trusting the potentially bogus bits we just got
+	if err != nil {
+		return err
+	}
+	if shutdownEvents&(unix.POLLIN|problemFlags) != 0 {
+		return os.ErrClosed
+	} else if tunEvents&problemFlags != 0 {
+		return os.ErrClosed
+	}
+	return nil
+}
+
+func (r *tunFile) Read(buf []byte) (int, error) {
+	for {
+		if n, err := unix.Read(r.fd, buf); err == nil {
+			return n, nil
+		} else if err == unix.EAGAIN {
+			if err = r.blockOnRead(); err != nil {
+				return 0, err
+			}
+			continue
+		} else if err == unix.EINTR {
+			continue
+		} else if err == unix.EBADF {
+			return 0, os.ErrClosed
+		} else {
+			return 0, err
+		}
+	}
+}
+
+func (r *tunFile) Write(buf []byte) (int, error) {
+	for {
+		if n, err := unix.Write(r.fd, buf); err == nil {
+			return n, nil
+		} else if err == unix.EAGAIN {
+			if err = r.blockOnWrite(); err != nil {
+				return 0, err
+			}
+			continue
+		} else if err == unix.EINTR {
+			continue
+		} else if err == unix.EBADF {
+			return 0, os.ErrClosed
+		} else {
+			return 0, err
+		}
+	}
+}
+
+func (r *tunFile) wakeForShutdown() error {
+	var buf [8]byte
+	binary.NativeEndian.PutUint64(buf[:], 1)
+	_, err := unix.Write(int(r.readPoll[1].Fd), buf[:])
+	return err
+}
+
+func (r *tunFile) Close() error {
+	if r.closed { // avoid closing more than once. Technically a fd could get re-used, which would be a problem
+		return nil
+	}
+	r.closed = true
+	if r.lastOne {
+		_ = unix.Close(r.shutdownFd)
+	}
+	return unix.Close(r.fd)
+}
+
 type tun struct {
-	io.ReadWriteCloser
-	fd          int
+	*tunFile
+	readers     []*tunFile
+	closeLock   sync.Mutex
 	Device      string
 	vpnNetworks []netip.Prefix
 	MaxMTU      int
@@ -72,9 +239,7 @@ type ifreqQLEN struct {
 }
 
 func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
-	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
-
-	t, err := newTunGeneric(c, l, file, vpnNetworks)
+	t, err := newTunGeneric(c, l, deviceFd, vpnNetworks)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +280,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 	nameStr := c.GetString("tun.dev", "")
 	copy(req.Name[:], nameStr)
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
+		_ = unix.Close(fd)
 		return nil, &NameError{
 			Name:       nameStr,
 			Underlying: err,
@@ -122,8 +288,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 	}
 	name := strings.Trim(string(req.Name[:]), "\x00")
 
-	file := os.NewFile(uintptr(fd), "/dev/net/tun")
-	t, err := newTunGeneric(c, l, file, vpnNetworks)
+	t, err := newTunGeneric(c, l, fd, vpnNetworks)
 	if err != nil {
 		return nil, err
 	}
@@ -133,10 +298,17 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 	return t, nil
 }
 
-func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []netip.Prefix) (*tun, error) {
+// newTunGeneric does all the stuff common to different tun initialization paths. It will close your files on error.
+func newTunGeneric(c *config.C, l *logrus.Logger, fd int, vpnNetworks []netip.Prefix) (*tun, error) {
+	tfd, err := newTunFd(fd)
+	if err != nil {
+		_ = unix.Close(fd)
+		return nil, err
+	}
 	t := &tun{
-		ReadWriteCloser:           file,
-		fd:                        int(file.Fd()),
+		tunFile:                   tfd,
+		readers:                   []*tunFile{tfd},
+		closeLock:                 sync.Mutex{},
 		vpnNetworks:               vpnNetworks,
 		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
@@ -145,8 +317,8 @@ func newTunGeneric(c *config.C, l *logrus.Logger, file *os.File, vpnNetworks []n
 		l:                         l,
 	}
 
-	err := t.reload(c, true)
-	if err != nil {
+	if err = t.reload(c, true); err != nil {
+		_ = t.Close()
 		return nil, err
 	}
 
@@ -239,6 +411,9 @@ func (t *tun) SupportsMultiqueue() bool {
 }
 
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+	t.closeLock.Lock()
+	defer t.closeLock.Unlock()
+
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		return nil, err
@@ -248,12 +423,19 @@ func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	req.Flags = uint16(unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_MULTI_QUEUE)
 	copy(req.Name[:], t.Device)
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
+		_ = unix.Close(fd)
 		return nil, err
 	}
 
-	file := os.NewFile(uintptr(fd), "/dev/net/tun")
+	out, err := t.tunFile.newFriend(fd)
+	if err != nil {
+		_ = unix.Close(fd)
+		return nil, err
+	}
 
-	return file, nil
+	t.readers = append(t.readers, out)
+
+	return out, nil
 }
 
 func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
@@ -684,18 +866,40 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 }
 
 func (t *tun) Close() error {
+	t.closeLock.Lock()
+	defer t.closeLock.Unlock()
+
 	if t.routeChan != nil {
 		close(t.routeChan)
+		t.routeChan = nil
 	}
 
-	if t.ReadWriteCloser != nil {
-		_ = t.ReadWriteCloser.Close()
-	}
+	// Signal all readers blocked in poll to wake up and exit
+	_ = t.tunFile.wakeForShutdown()
 
 	if t.ioctlFd > 0 {
-		_ = os.NewFile(t.ioctlFd, "ioctlFd").Close()
+		_ = unix.Close(int(t.ioctlFd))
 		t.ioctlFd = 0
 	}
 
-	return nil
+	for i := range t.readers {
+		if i == 0 {
+			continue //we want to close the zeroth reader last
+		}
+		err := t.readers[i].Close()
+		if err != nil {
+			t.l.WithField("reader", i).WithError(err).Error("error closing tun reader")
+		} else {
+			t.l.WithField("reader", i).Info("closed tun reader")
+		}
+	}
+
+	//this is t.readers[0] too
+	err := t.tunFile.Close()
+	if err != nil {
+		t.l.WithField("reader", 0).WithError(err).Error("error closing tun reader")
+	} else {
+		t.l.WithField("reader", 0).Info("closed tun reader")
+	}
+	return err
 }

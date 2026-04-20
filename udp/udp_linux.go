@@ -171,7 +171,7 @@ func recvmmsg(fd uintptr, msgs []rawMessage) (int, bool, error) {
 	return int(n), true, nil
 }
 
-func (u *StdConn) listenOutSingle(r EncReader) {
+func (u *StdConn) listenOutSingle(r EncReader) error {
 	var err error
 	var n int
 	var from netip.AddrPort
@@ -180,15 +180,14 @@ func (u *StdConn) listenOutSingle(r EncReader) {
 	for {
 		n, from, err = u.udpConn.ReadFromUDPAddrPort(buffer)
 		if err != nil {
-			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
-			return
+			return err
 		}
 		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
 		r(from, buffer[:n])
 	}
 }
 
-func (u *StdConn) listenOutBatch(r EncReader) {
+func (u *StdConn) listenOutBatch(r EncReader) error {
 	var ip netip.Addr
 	var n int
 	var operr error
@@ -205,12 +204,10 @@ func (u *StdConn) listenOutBatch(r EncReader) {
 	for {
 		err := u.rawConn.Read(reader)
 		if err != nil {
-			u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
-			return
+			return err
 		}
 		if operr != nil {
-			u.l.WithError(operr).Debug("operr: udp socket is closed, exiting read loop")
-			return
+			return operr
 		}
 
 		for i := 0; i < n; i++ {
@@ -225,14 +222,11 @@ func (u *StdConn) listenOutBatch(r EncReader) {
 	}
 }
 
-func (u *StdConn) ListenOut(r EncReader) {
+func (u *StdConn) ListenOut(r EncReader) error {
 	if u.batch == 1 {
-		//save some ram by not calling PrepareRawMessages for fields we won't use
-		//we could also make this path more common by calling recvmmsg with msgs[:1],
-		//but that's still the recvmmsg syscall, which would be a change
-		u.listenOutSingle(r)
+		return u.listenOutSingle(r)
 	} else {
-		u.listenOutBatch(r)
+		return u.listenOutBatch(r)
 	}
 }
 

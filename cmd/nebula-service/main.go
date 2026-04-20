@@ -78,8 +78,20 @@ func main() {
 	}
 
 	if !*configTest {
-		ctrl.Start()
-		ctrl.ShutdownBlock()
+		wait, err := ctrl.Start()
+		if err != nil {
+			util.LogWithContextIfNeeded("Error while running", err, l)
+			os.Exit(1)
+		}
+
+		go ctrl.ShutdownBlock()
+
+		if err := wait(); err != nil {
+			l.WithError(err).Error("Nebula stopped due to fatal error")
+			os.Exit(2)
+		}
+
+		l.Info("Goodbye")
 	}
 
 	os.Exit(0)
