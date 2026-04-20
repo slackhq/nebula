@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io"
 
@@ -392,51 +393,39 @@ func headersMatch(a, b []byte, isV6 bool, ipHdrLen int) bool {
 	if isV6 {
 		// IPv6: bytes [0:4] = version/TC/flow-label, [6:8] = next_hdr/hop,
 		// [8:40] = src+dst. Skip [4:6] payload length.
-		if !bytesEq(a[0:4], b[0:4]) {
+		if !bytes.Equal(a[0:4], b[0:4]) {
 			return false
 		}
-		if !bytesEq(a[6:40], b[6:40]) {
+		if !bytes.Equal(a[6:40], b[6:40]) {
 			return false
 		}
 	} else {
 		// IPv4: [0:2] version/IHL/TOS, [6:10] flags/fragoff/TTL/proto,
 		// [12:20] src+dst. Skip [2:4] total len, [4:6] id, [10:12] csum.
-		if !bytesEq(a[0:2], b[0:2]) {
+		if !bytes.Equal(a[0:2], b[0:2]) {
 			return false
 		}
-		if !bytesEq(a[6:10], b[6:10]) {
+		if !bytes.Equal(a[6:10], b[6:10]) {
 			return false
 		}
-		if !bytesEq(a[12:20], b[12:20]) {
+		if !bytes.Equal(a[12:20], b[12:20]) {
 			return false
 		}
 	}
 	// TCP: compare [0:4] ports, [8:13] ack+dataoff, [14:16] window,
 	// [18:tcpHdrLen] options (incl. urgent).
 	tcp := ipHdrLen
-	if !bytesEq(a[tcp:tcp+4], b[tcp:tcp+4]) {
+	if !bytes.Equal(a[tcp:tcp+4], b[tcp:tcp+4]) {
 		return false
 	}
-	if !bytesEq(a[tcp+8:tcp+13], b[tcp+8:tcp+13]) {
+	if !bytes.Equal(a[tcp+8:tcp+13], b[tcp+8:tcp+13]) {
 		return false
 	}
-	if !bytesEq(a[tcp+14:tcp+16], b[tcp+14:tcp+16]) {
+	if !bytes.Equal(a[tcp+14:tcp+16], b[tcp+14:tcp+16]) {
 		return false
 	}
-	if !bytesEq(a[tcp+18:], b[tcp+18:]) {
+	if !bytes.Equal(a[tcp+18:], b[tcp+18:]) {
 		return false
-	}
-	return true
-}
-
-func bytesEq(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
 	}
 	return true
 }

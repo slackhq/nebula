@@ -47,7 +47,7 @@ type tunFile struct {
 	segOff     int      // cursor into segBuf for the current ReadBatch drain
 	pending    [][]byte // segments waiting to be drained by Read
 	pendingIdx int
-	writeIovs  [2]unix.Iovec // preallocated iovecs for Write (coalescer passthrough); iovs[0] is fixed to zeroVnetHdr
+	writeIovs  [2]unix.Iovec // preallocated iovecs for Write (coalescer passthrough); iovs[0] is fixed to validVnetHdr
 	// rejectIovs is a second preallocated iovec scratch used exclusively by
 	// WriteReject (reject + self-forward from the inside path). It mirrors
 	// writeIovs but lets listenIn goroutines emit reject packets without
@@ -55,7 +55,7 @@ type tunFile struct {
 	rejectIovs [2]unix.Iovec
 
 	// gsoHdrBuf is a per-queue 10-byte scratch for the virtio_net_hdr emitted
-	// by WriteGSO. Separate from zeroVnetHdr so a concurrent non-GSO Write on
+	// by WriteGSO. Separate from validVnetHdr so a concurrent non-GSO Write on
 	// another queue never observes a half-written header.
 	gsoHdrBuf [virtioNetHdrLen]byte
 	// gsoIovs is the writev iovec scratch for WriteGSO. Sized to hold the
@@ -69,10 +69,15 @@ type tunFile struct {
 // any reallocations.
 const gsoInitialPayIovs = 66
 
-// zeroVnetHdr is the 10-byte virtio_net_hdr we prepend to every TUN write when
-// IFF_VNET_HDR is active. All-zero signals "no GSO, no checksum offload"; the
-// kernel accepts the packet as-is.
-var zeroVnetHdr [virtioNetHdrLen]byte
+// validVnetHdr is the 10-byte virtio_net_hdr we prepend to every non-GSO TUN
+// write. Only flag set is VIRTIO_NET_HDR_F_DATA_VALID, which marks the skb
+// CHECKSUM_UNNECESSARY so the receiving network stack skips L4 checksum
+// verification. All packets that reach the plain Write / WriteReject paths
+// already carry a valid L4 checksum (either supplied by a remote peer whose
+// ciphertext we AEAD-authenticated, or produced by finishChecksum during TSO
+// segmentation, or built locally by CreateRejectPacket), so trusting them is
+// safe.
+var validVnetHdr = [virtioNetHdrLen]byte{unix.VIRTIO_NET_HDR_F_DATA_VALID}
 
 // newFriend makes a tunFile for a MultiQueueReader that copies the shutdown eventfd from the parent tun
 func (r *tunFile) newFriend(fd int) (*tunFile, error) {
@@ -95,9 +100,9 @@ func (r *tunFile) newFriend(fd int) (*tunFile, error) {
 	}
 	if r.vnetHdr {
 		out.segBuf = make([]byte, tunSegBufCap)
-		out.writeIovs[0].Base = &zeroVnetHdr[0]
+		out.writeIovs[0].Base = &validVnetHdr[0]
 		out.writeIovs[0].SetLen(virtioNetHdrLen)
-		out.rejectIovs[0].Base = &zeroVnetHdr[0]
+		out.rejectIovs[0].Base = &validVnetHdr[0]
 		out.rejectIovs[0].SetLen(virtioNetHdrLen)
 		out.gsoIovs = make([]unix.Iovec, 2, 2+gsoInitialPayIovs)
 		out.gsoIovs[0].Base = &out.gsoHdrBuf[0]
@@ -133,9 +138,9 @@ func newTunFd(fd int, vnetHdr bool) (*tunFile, error) {
 	}
 	if vnetHdr {
 		out.segBuf = make([]byte, tunSegBufCap)
-		out.writeIovs[0].Base = &zeroVnetHdr[0]
+		out.writeIovs[0].Base = &validVnetHdr[0]
 		out.writeIovs[0].SetLen(virtioNetHdrLen)
-		out.rejectIovs[0].Base = &zeroVnetHdr[0]
+		out.rejectIovs[0].Base = &validVnetHdr[0]
 		out.rejectIovs[0].SetLen(virtioNetHdrLen)
 		out.gsoIovs = make([]unix.Iovec, 2, 2+gsoInitialPayIovs)
 		out.gsoIovs[0].Base = &out.gsoHdrBuf[0]
@@ -340,7 +345,7 @@ func (r *tunFile) writeWithScratch(buf []byte, iovs *[2]unix.Iovec) (int, error)
 		return 0, nil
 	}
 	// Point the payload iovec at the caller's buffer. iovs[0] is pre-wired
-	// to zeroVnetHdr during tunFile construction so we don't rebuild it here.
+	// to validVnetHdr during tunFile construction so we don't rebuild it here.
 	iovs[1].Base = &buf[0]
 	iovs[1].SetLen(len(buf))
 	iovPtr := uintptr(unsafe.Pointer(&iovs[0]))

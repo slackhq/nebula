@@ -313,7 +313,7 @@ func TestTunFileWriteVnetHdrNoAlloc(t *testing.T) {
 	t.Cleanup(func() { _ = unix.Close(fd) })
 
 	tf := &tunFile{fd: fd, vnetHdr: true}
-	tf.writeIovs[0].Base = &zeroVnetHdr[0]
+	tf.writeIovs[0].Base = &validVnetHdr[0]
 	tf.writeIovs[0].SetLen(virtioNetHdrLen)
 
 	payload := make([]byte, 1400)
