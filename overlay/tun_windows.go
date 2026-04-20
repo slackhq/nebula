@@ -40,11 +40,11 @@ type winTun struct {
 	batchRet [1][]byte
 }
 
-func (t *winTun) ReadBatch() ([][]byte, error) {
+func (t *winTun) Read() ([][]byte, error) {
 	if t.readBuf == nil {
 		t.readBuf = make([]byte, defaultBatchBufSize)
 	}
-	n, err := t.Read(t.readBuf)
+	n, err := t.tun.Read(t.readBuf, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -245,10 +245,6 @@ func (t *winTun) Networks() []netip.Prefix {
 
 func (t *winTun) Name() string {
 	return t.Device
-}
-
-func (t *winTun) Read(b []byte) (int, error) {
-	return t.tun.Read(b, 0)
 }
 
 func (t *winTun) Write(b []byte) (int, error) {

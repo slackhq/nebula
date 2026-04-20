@@ -350,7 +350,7 @@ func (f *Interface) listenIn(reader overlay.Queue, i int) {
 	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
 
 	for {
-		pkts, err := reader.ReadBatch()
+		pkts, err := reader.Read()
 		if err != nil {
 			if !f.closed.Load() {
 				f.l.WithError(err).WithField("reader", i).Error("Error while reading outbound packet, closing")

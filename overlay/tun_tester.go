@@ -27,19 +27,15 @@ type TestTun struct {
 	rxPackets chan []byte // Packets to receive into nebula
 	TxPackets chan []byte // Packets transmitted outside by nebula
 
-	readBuf  []byte
 	batchRet [1][]byte
 }
 
-func (t *TestTun) ReadBatch() ([][]byte, error) {
-	if t.readBuf == nil {
-		t.readBuf = make([]byte, defaultBatchBufSize)
+func (t *TestTun) Read() ([][]byte, error) {
+	p, ok := <-t.rxPackets
+	if !ok {
+		return nil, os.ErrClosed
 	}
-	n, err := t.Read(t.readBuf)
-	if err != nil {
-		return nil, err
-	}
-	t.batchRet[0] = t.readBuf[:n]
+	t.batchRet[0] = p
 	return t.batchRet[:], nil
 }
 
@@ -140,15 +136,6 @@ func (t *TestTun) Close() error {
 		close(t.TxPackets)
 	}
 	return nil
-}
-
-func (t *TestTun) Read(b []byte) (int, error) {
-	p, ok := <-t.rxPackets
-	if !ok {
-		return 0, os.ErrClosed
-	}
-	copy(b, p)
-	return len(p), nil
 }
 
 func (t *TestTun) SupportsMultiqueue() bool {

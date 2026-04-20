@@ -7,18 +7,27 @@ import (
 	"github.com/slackhq/nebula/routing"
 )
 
-// defaultBatchBufSize is the per-Queue scratch size for ReadBatch on backends
+// defaultBatchBufSize is the per-Queue scratch size for Read on backends
 // that don't do TSO segmentation. 65535 covers any single IP packet.
 const defaultBatchBufSize = 65535
 
-// Queue is a readable/writable tun queue. ReadBatch returns one or more
-// packets; the returned slices are borrowed from the queue's internal buffer
-// and are only valid until the next ReadBatch / Read / Close on this Queue.
-// Callers must encrypt or copy each slice before the next call. Not safe for
-// concurrent use — one goroutine per Queue.
+// Queue is a readable/writable tun queue. One Queue is driven by a single
+// read goroutine plus concurrent writers (see Write / WriteReject below).
 type Queue interface {
-	io.ReadWriteCloser
-	ReadBatch() ([][]byte, error)
+	io.Closer
+
+	// Read returns one or more packets. The returned slices are borrowed
+	// from the Queue's internal buffer and are only valid until the next
+	// Read or Close on this Queue — callers must encrypt or copy each
+	// slice before the next call. Not safe for concurrent Reads; exactly
+	// one goroutine per Queue reads.
+	Read() ([][]byte, error)
+
+	// Write emits a single packet on the plaintext (outside→inside)
+	// delivery path. May run concurrently with WriteReject on the same
+	// Queue, but not with itself.
+	Write(p []byte) (int, error)
+
 	// WriteReject writes a single packet that originated from the inside
 	// path (reject replies or self-forward) using scratch state distinct
 	// from Write, so it can run concurrently with Write on the same Queue

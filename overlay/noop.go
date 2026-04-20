@@ -25,11 +25,7 @@ func (NoopTun) Name() string {
 	return "noop"
 }
 
-func (NoopTun) Read([]byte) (int, error) {
-	return 0, nil
-}
-
-func (NoopTun) ReadBatch() ([][]byte, error) {
+func (NoopTun) Read() ([][]byte, error) {
 	return nil, nil
 }
 

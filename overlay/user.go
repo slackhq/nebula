@@ -39,11 +39,11 @@ type UserDevice struct {
 	batchRet [1][]byte
 }
 
-func (d *UserDevice) ReadBatch() ([][]byte, error) {
+func (d *UserDevice) Read() ([][]byte, error) {
 	if d.readBuf == nil {
 		d.readBuf = make([]byte, defaultBatchBufSize)
 	}
-	n, err := d.Read(d.readBuf)
+	n, err := d.outboundReader.Read(d.readBuf)
 	if err != nil {
 		return nil, err
 	}
@@ -73,9 +73,6 @@ func (d *UserDevice) Pipe() (*io.PipeReader, *io.PipeWriter) {
 	return d.inboundReader, d.outboundWriter
 }
 
-func (d *UserDevice) Read(p []byte) (n int, err error) {
-	return d.outboundReader.Read(p)
-}
 func (d *UserDevice) Write(p []byte) (n int, err error) {
 	return d.inboundWriter.Write(p)
 }

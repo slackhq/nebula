@@ -21,19 +21,21 @@ type disabledTun struct {
 	rx metrics.Counter
 	l  *logrus.Logger
 
-	readBuf  []byte
 	batchRet [1][]byte
 }
 
-func (t *disabledTun) ReadBatch() ([][]byte, error) {
-	if t.readBuf == nil {
-		t.readBuf = make([]byte, defaultBatchBufSize)
+func (t *disabledTun) Read() ([][]byte, error) {
+	r, ok := <-t.read
+	if !ok {
+		return nil, io.EOF
 	}
-	n, err := t.Read(t.readBuf)
-	if err != nil {
-		return nil, err
+
+	t.tx.Inc(1)
+	if t.l.Level >= logrus.DebugLevel {
+		t.l.WithField("raw", prettyPacket(r)).Debugf("Write payload")
 	}
-	t.batchRet[0] = t.readBuf[:n]
+
+	t.batchRet[0] = r
 	return t.batchRet[:], nil
 }
 
@@ -69,24 +71,6 @@ func (t *disabledTun) Networks() []netip.Prefix {
 
 func (*disabledTun) Name() string {
 	return "disabled"
-}
-
-func (t *disabledTun) Read(b []byte) (int, error) {
-	r, ok := <-t.read
-	if !ok {
-		return 0, io.EOF
-	}
-
-	if len(r) > len(b) {
-		return 0, fmt.Errorf("packet larger than mtu: %d > %d bytes", len(r), len(b))
-	}
-
-	t.tx.Inc(1)
-	if t.l.Level >= logrus.DebugLevel {
-		t.l.WithField("raw", prettyPacket(r)).Debugf("Write payload")
-	}
-
-	return copy(b, r), nil
 }
 
 func (t *disabledTun) handleICMPEchoRequest(b []byte) bool {

@@ -23,7 +23,7 @@ import (
 )
 
 type tun struct {
-	io.ReadWriteCloser
+	rwc         io.ReadWriteCloser
 	Device      string
 	vpnNetworks []netip.Prefix
 	DefaultMTU  int
@@ -127,11 +127,11 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	}
 
 	t := &tun{
-		ReadWriteCloser: os.NewFile(uintptr(fd), ""),
-		Device:          name,
-		vpnNetworks:     vpnNetworks,
-		DefaultMTU:      c.GetInt("tun.mtu", DefaultMTU),
-		l:               l,
+		rwc:         os.NewFile(uintptr(fd), ""),
+		Device:      name,
+		vpnNetworks: vpnNetworks,
+		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
+		l:           l,
 	}
 
 	err = t.reload(c, true)
@@ -161,8 +161,8 @@ func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*tun,
 }
 
 func (t *tun) Close() error {
-	if t.ReadWriteCloser != nil {
-		return t.ReadWriteCloser.Close()
+	if t.rwc != nil {
+		return t.rwc.Close()
 	}
 	return nil
 }
@@ -506,20 +506,20 @@ func delRoute(prefix netip.Prefix, gateway netroute.Addr) error {
 	return nil
 }
 
-func (t *tun) Read(to []byte) (int, error) {
+func (t *tun) readOne(to []byte) (int, error) {
 	buf := make([]byte, len(to)+4)
 
-	n, err := t.ReadWriteCloser.Read(buf)
+	n, err := t.rwc.Read(buf)
 
 	copy(to, buf[4:])
 	return n - 4, err
 }
 
-func (t *tun) ReadBatch() ([][]byte, error) {
+func (t *tun) Read() ([][]byte, error) {
 	if t.readBuf == nil {
 		t.readBuf = make([]byte, defaultBatchBufSize)
 	}
-	n, err := t.Read(t.readBuf)
+	n, err := t.readOne(t.readBuf)
 	if err != nil {
 		return nil, err
 	}
@@ -556,7 +556,7 @@ func (t *tun) Write(from []byte) (int, error) {
 
 	copy(buf[4:], from)
 
-	n, err := t.ReadWriteCloser.Write(buf)
+	n, err := t.rwc.Write(buf)
 	return n - 4, err
 }
 

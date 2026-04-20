@@ -41,13 +41,12 @@ type tunFile struct {
 	// kernel successfully accepted TUNSETOFFLOAD. Reads include a leading
 	// virtio_net_hdr and may carry a TSO superpacket we must segment;
 	// writes must prepend a zeroed virtio_net_hdr.
-	vnetHdr    bool
-	readBuf    []byte   // scratch for a single raw read (virtio hdr + superpacket)
-	segBuf     []byte   // backing store for segmented output
-	segOff     int      // cursor into segBuf for the current ReadBatch drain
-	pending    [][]byte // segments waiting to be drained by Read
-	pendingIdx int
-	writeIovs  [2]unix.Iovec // preallocated iovecs for Write (coalescer passthrough); iovs[0] is fixed to validVnetHdr
+	vnetHdr   bool
+	readBuf   []byte        // scratch for a single raw read (virtio hdr + superpacket)
+	segBuf    []byte        // backing store for segmented output
+	segOff    int           // cursor into segBuf for the current Read drain
+	pending   [][]byte      // segments returned from the most recent Read
+	writeIovs [2]unix.Iovec // preallocated iovecs for Write (coalescer passthrough); iovs[0] is fixed to validVnetHdr
 	// rejectIovs is a second preallocated iovec scratch used exclusively by
 	// WriteReject (reject + self-forward from the inside path). It mirrors
 	// writeIovs but lets listenIn goroutines emit reject packets without
@@ -217,16 +216,15 @@ func (r *tunFile) readRaw(buf []byte) (int, error) {
 	}
 }
 
-// ReadBatch reads one or more superpackets from the tun and returns the
+// Read reads one or more superpackets from the tun and returns the
 // resulting packets. The first read blocks via poll; once the fd is known
 // readable we drain additional packets non-blocking until the kernel queue
 // is empty (EAGAIN), we've collected tunDrainCap packets, or we're out of
 // segBuf headroom. This amortizes the poll wake over bursts of small
 // packets (e.g. TCP ACKs). Slices point into the tunFile's internal buffers
-// and are only valid until the next ReadBatch / Read / Close on this Queue.
-func (r *tunFile) ReadBatch() ([][]byte, error) {
+// and are only valid until the next Read or Close on this Queue.
+func (r *tunFile) Read() ([][]byte, error) {
 	r.pending = r.pending[:0]
-	r.pendingIdx = 0
 	r.segOff = 0
 
 	// Initial (blocking) read. Retry on decode errors so a single bad
@@ -289,25 +287,6 @@ func (r *tunFile) decodeRead(n int) error {
 		r.segOff += len(r.pending[k])
 	}
 	return nil
-}
-
-// Read drains segments produced by the last ReadBatch one at a time; when the
-// batch is exhausted it fetches a fresh one. Kept for io.Reader compatibility;
-// batch-aware callers should use ReadBatch directly.
-func (r *tunFile) Read(buf []byte) (int, error) {
-	for {
-		if r.pendingIdx < len(r.pending) {
-			seg := r.pending[r.pendingIdx]
-			r.pendingIdx++
-			if len(seg) > len(buf) {
-				return 0, io.ErrShortBuffer
-			}
-			return copy(buf, seg), nil
-		}
-		if _, err := r.ReadBatch(); err != nil {
-			return 0, err
-		}
-	}
 }
 
 func (r *tunFile) Write(buf []byte) (int, error) {

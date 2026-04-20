@@ -18,7 +18,7 @@ import (
 )
 
 type tun struct {
-	io.ReadWriteCloser
+	rwc         io.ReadWriteCloser
 	fd          int
 	vpnNetworks []netip.Prefix
 	Routes      atomic.Pointer[[]Route]
@@ -29,11 +29,11 @@ type tun struct {
 	batchRet [1][]byte
 }
 
-func (t *tun) ReadBatch() ([][]byte, error) {
+func (t *tun) Read() ([][]byte, error) {
 	if t.readBuf == nil {
 		t.readBuf = make([]byte, defaultBatchBufSize)
 	}
-	n, err := t.Read(t.readBuf)
+	n, err := t.rwc.Read(t.readBuf)
 	if err != nil {
 		return nil, err
 	}
@@ -41,8 +41,16 @@ func (t *tun) ReadBatch() ([][]byte, error) {
 	return t.batchRet[:], nil
 }
 
+func (t *tun) Write(p []byte) (int, error) {
+	return t.rwc.Write(p)
+}
+
 func (t *tun) WriteReject(p []byte) (int, error) {
-	return t.Write(p)
+	return t.rwc.Write(p)
+}
+
+func (t *tun) Close() error {
+	return t.rwc.Close()
 }
 
 func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
@@ -51,10 +59,10 @@ func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []net
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
 	t := &tun{
-		ReadWriteCloser: file,
-		fd:              deviceFd,
-		vpnNetworks:     vpnNetworks,
-		l:               l,
+		rwc:         file,
+		fd:          deviceFd,
+		vpnNetworks: vpnNetworks,
+		l:           l,
 	}
 
 	err := t.reload(c, true)

@@ -63,11 +63,11 @@ type tun struct {
 	batchRet [1][]byte
 }
 
-func (t *tun) ReadBatch() ([][]byte, error) {
+func (t *tun) Read() ([][]byte, error) {
 	if t.readBuf == nil {
 		t.readBuf = make([]byte, defaultBatchBufSize)
 	}
-	n, err := t.Read(t.readBuf)
+	n, err := t.readOne(t.readBuf)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +142,7 @@ func (t *tun) Close() error {
 	return nil
 }
 
-func (t *tun) Read(to []byte) (int, error) {
+func (t *tun) readOne(to []byte) (int, error) {
 	buf := make([]byte, len(to)+4)
 
 	n, err := t.f.Read(buf)

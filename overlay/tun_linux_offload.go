@@ -25,11 +25,11 @@ const tunSegBufSize = 131072
 
 // tunSegBufCap is the total size we allocate for the per-reader segment
 // buffer. It is sized as one worst-case TSO superpacket (tunSegBufSize) plus
-// the same again as drain headroom so a ReadBatch wake can accumulate
+// the same again as drain headroom so a Read wake can accumulate
 // additional packets after an initial big read without overflowing.
 const tunSegBufCap = tunSegBufSize * 2
 
-// tunDrainCap caps how many packets a single ReadBatch will accumulate via
+// tunDrainCap caps how many packets a single Read will accumulate via
 // the post-wake drain loop. Sized to soak up a burst of small ACKs while
 // bounding how much work a single caller holds before handing off.
 const tunDrainCap = 64

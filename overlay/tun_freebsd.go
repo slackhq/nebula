@@ -98,11 +98,11 @@ type tun struct {
 	batchRet [1][]byte
 }
 
-func (t *tun) ReadBatch() ([][]byte, error) {
+func (t *tun) Read() ([][]byte, error) {
 	if t.readBuf == nil {
 		t.readBuf = make([]byte, defaultBatchBufSize)
 	}
-	n, err := t.Read(t.readBuf)
+	n, err := t.readOne(t.readBuf)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func (t *tun) WriteReject(p []byte) (int, error) {
 	return t.Write(p)
 }
 
-func (t *tun) Read(to []byte) (int, error) {
+func (t *tun) readOne(to []byte) (int, error) {
 	// use readv() to read from the tunnel device, to eliminate the need for copying the buffer
 	if t.devFd < 0 {
 		return -1, syscall.EINVAL
