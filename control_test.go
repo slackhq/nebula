@@ -79,6 +79,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	}, &Interface{})
 
 	c := Control{
+		state: StateReady,
 		f: &Interface{
 			hostMap: hm,
 		},

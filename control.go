@@ -18,12 +18,15 @@ import (
 type RunState int
 
 const (
-	Stopped  RunState = 0 // The control has yet to be started
-	Started  RunState = 1 // The control has been started
-	Stopping RunState = 2 // The control is stopping
+	StateUnknown RunState = iota
+	StateReady
+	StateStarted
+	StateStopping
+	StateStopped
 )
 
 var ErrAlreadyStarted = errors.New("nebula is already started")
+var ErrAlreadyStopped = errors.New("nebula cannot be restarted")
 
 // Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
 // core. This means copying IP objects, slices, de-referencing pointers and taking the actual value, etc
@@ -71,15 +74,21 @@ type ControlHostInfo struct {
 // triggered the shutdown.
 func (c *Control) Start() (func() error, error) {
 	c.stateLock.Lock()
-	if c.state != Stopped {
-		c.stateLock.Unlock()
+	defer c.stateLock.Unlock()
+	switch c.state {
+	case StateReady:
+		//yay!
+	case StateStopped, StateStopping:
+		return nil, ErrAlreadyStopped
+	case StateStarted:
 		return nil, ErrAlreadyStarted
+	default:
+		return nil, errors.New("invalid state")
 	}
 
 	// Activate the interface
 	err := c.f.activate()
 	if err != nil {
-		c.stateLock.Unlock()
 		return nil, err
 	}
 
@@ -103,9 +112,13 @@ func (c *Control) Start() (func() error, error) {
 	c.f.triggerShutdown = c.Stop
 
 	// Start reading packets.
-	c.state = Started
-	c.stateLock.Unlock()
-	return c.f.run()
+	out, err := c.f.run()
+	if err != nil {
+		c.state = StateStopped
+		return nil, err
+	}
+	c.state = StateStarted
+	return out, nil
 }
 
 func (c *Control) State() RunState {
@@ -121,13 +134,13 @@ func (c *Control) Context() context.Context {
 // Stop is a non-blocking call that signals nebula to close all tunnels and shut down
 func (c *Control) Stop() {
 	c.stateLock.Lock()
-	if c.state != Started {
+	if c.state != StateStarted {
 		c.stateLock.Unlock()
 		// We are stopping or stopped already
 		return
 	}
 
-	c.state = Stopping
+	c.state = StateStopping
 	c.stateLock.Unlock()
 
 	// Stop the handshakeManager (and other services), to prevent new tunnels from
@@ -139,7 +152,7 @@ func (c *Control) Stop() {
 		c.l.WithError(err).Error("Close interface failed")
 	}
 	c.stateLock.Lock()
-	c.state = Stopped
+	c.state = StateStopped
 	c.stateLock.Unlock()
 }
 
