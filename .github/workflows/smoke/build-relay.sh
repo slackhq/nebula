@@ -16,8 +16,10 @@ relay:
   am_relay: true
 EOF
 
-    export LIGHTHOUSES="192.168.100.1 172.17.0.2:4242"
-    export REMOTE_ALLOW_LIST='{"172.17.0.4/32": false, "172.17.0.5/32": false}'
+    # TEST-NET-3 placeholder IPs; smoke-relay.sh seds them to real container IPs.
+    # Mapping: .2 lighthouse1, .3 host2, .4 host3, .5 host4.
+    export LIGHTHOUSES="192.168.100.1 203.0.113.2:4242"
+    export REMOTE_ALLOW_LIST='{"203.0.113.4/32": false, "203.0.113.5/32": false}'
 
     HOST="host2" ../genconfig.sh >host2.yml <<EOF
 relay:
@@ -25,7 +27,7 @@ relay:
     - 192.168.100.1
 EOF
 
-    export REMOTE_ALLOW_LIST='{"172.17.0.3/32": false}'
+    export REMOTE_ALLOW_LIST='{"203.0.113.3/32": false}'
 
     HOST="host3" ../genconfig.sh >host3.yml
 
