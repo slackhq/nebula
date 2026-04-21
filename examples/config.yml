@@ -310,6 +310,9 @@ logging:
   # As an example, to log as RFC3339 with millisecond precision, set to:
   #timestamp_format: "2006-01-02T15:04:05.000Z07:00"
 
+# The stats section is reloadable. A HUP may change the backend, toggle stats
+# on or off, switch the listen/host address, or pick up new DNS for the
+# configured graphite host.
 #stats:
   #type: graphite
   #prefix: nebula
@@ -327,10 +330,12 @@ logging:
   # enables counter metrics for meta packets
   #   e.g.: `messages.tx.handshake`
   # NOTE: `message.{tx,rx}.recv_error` is always emitted
+  # Not reloadable.
   #message_metrics: false
 
   # enables detailed counter metrics for lighthouse packets
   #   e.g.: `lighthouse.rx.HostQuery`
+  # Not reloadable.
   #lighthouse_metrics: false
 
 # Handshake Manager Settings
