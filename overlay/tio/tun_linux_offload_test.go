@@ -9,16 +9,13 @@ import (
 	"testing"
 
 	"golang.org/x/sys/unix"
+	"gvisor.dev/gvisor/pkg/tcpip/checksum"
 )
 
-// verifyChecksum confirms that the one's-complement sum across `b`, optionally
-// seeded with a pseudo-header sum, folds to all-ones (valid).
-func verifyChecksum(b []byte, pseudo uint32) bool {
-	sum := checksumBytes(b, pseudo)
-	for sum>>16 != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	return uint16(sum) == 0xffff
+// verifyChecksum confirms that the one's-complement sum across `b`, seeded
+// with a folded pseudo-header sum, equals all-ones (valid).
+func verifyChecksum(b []byte, pseudo uint16) bool {
+	return checksum.Checksum(b, pseudo) == 0xffff
 }
 
 // buildTSOv4 builds a synthetic IPv4/TCP TSO superpacket with a payload of
