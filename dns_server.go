@@ -28,9 +28,10 @@ type dnsServer struct {
 	mux *dns.ServeMux
 
 	// enabled mirrors `lighthouse.serve_dns && lighthouse.am_lighthouse`.
-	// Start and reload consult it so callers don't need to know the gating
-	// rules; Add always populates so entries are ready if DNS is later
-	// enabled via SIGHUP.
+	// Start, Add, and reload consult it so callers don't need to know the
+	// gating rules. When it toggles off via reload, accumulated records are
+	// cleared so a later re-enable starts with a fresh map populated from
+	// new handshakes.
 	enabled atomic.Bool
 
 	serverMu sync.Mutex
@@ -111,6 +112,9 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 		if running != nil {
 			d.Stop()
 		}
+		// Drop any records that accumulated while enabled; a later re-enable
+		// will repopulate from fresh handshakes.
+		d.clearRecords()
 		return nil
 	}
 
@@ -253,8 +257,19 @@ func (d *dnsServer) QueryCert(data string) string {
 	return string(b)
 }
 
+// clearRecords drops all DNS records.
+func (d *dnsServer) clearRecords() {
+	d.Lock()
+	defer d.Unlock()
+	clear(d.dnsMap4)
+	clear(d.dnsMap6)
+}
+
 // Add adds the first IPv4 and IPv6 address that appears in `addresses` as the record for `host`
 func (d *dnsServer) Add(host string, addresses []netip.Addr) {
+	if !d.enabled.Load() {
+		return
+	}
 	host = strings.ToLower(host)
 	d.Lock()
 	defer d.Unlock()

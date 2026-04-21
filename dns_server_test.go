@@ -25,6 +25,7 @@ func TestParsequery(t *testing.T) {
 		dnsMap6: make(map[string]netip.Addr),
 		hostMap: hostMap,
 	}
+	ds.enabled.Store(true)
 	addrs := []netip.Addr{
 		netip.MustParseAddr("1.2.3.4"),
 		netip.MustParseAddr("1.2.3.5"),
