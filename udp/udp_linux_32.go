@@ -53,22 +53,6 @@ func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
 	return msgs, buffers, names
 }
 
-// prepareWriteMessages allocates one Mmsghdr/iovec/sockaddr scratch per slot,
-// wired up so each writeMsgs[i] already points at writeIovs[i] and
-// writeNames[i]. Callers fill in the iovec Base/Len, the sockaddr bytes, and
-// Namelen before each sendmmsg.
-func (u *StdConn) prepareWriteMessages(n int) {
-	u.writeMsgs = make([]rawMessage, n)
-	u.writeIovs = make([]iovec, n)
-	u.writeNames = make([][]byte, n)
-	for i := range u.writeMsgs {
-		u.writeNames[i] = make([]byte, unix.SizeofSockaddrInet6)
-		u.writeMsgs[i].Hdr.Iov = &u.writeIovs[i]
-		u.writeMsgs[i].Hdr.Iovlen = 1
-		u.writeMsgs[i].Hdr.Name = &u.writeNames[i][0]
-	}
-}
-
 func setIovLen(v *iovec, n int) {
 	v.Len = uint32(n)
 }
