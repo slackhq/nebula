@@ -216,22 +216,28 @@ func (d *dnsServer) Stop() {
 	d.shutdownServer(srv, started, "stop")
 }
 
-func (d *dnsServer) Query(q uint16, data string) netip.Addr {
+// Query returns the address for the given name and query type. The second
+// return value reports whether the name is known at all (in either A or AAAA),
+// which lets callers distinguish NODATA from NXDOMAIN.
+func (d *dnsServer) Query(q uint16, data string) (netip.Addr, bool) {
 	data = strings.ToLower(data)
 	d.RLock()
 	defer d.RUnlock()
+	addr4, haveV4 := d.dnsMap4[data]
+	addr6, haveV6 := d.dnsMap6[data]
+	nameExists := haveV4 || haveV6
 	switch q {
 	case dns.TypeA:
-		if r, ok := d.dnsMap4[data]; ok {
-			return r
+		if haveV4 {
+			return addr4, nameExists
 		}
 	case dns.TypeAAAA:
-		if r, ok := d.dnsMap6[data]; ok {
-			return r
+		if haveV6 {
+			return addr6, nameExists
 		}
 	}
 
-	return netip.Addr{}
+	return netip.Addr{}, nameExists
 }
 
 func (d *dnsServer) QueryCert(data string) string {
@@ -305,12 +311,20 @@ func (d *dnsServer) isSelfNebulaOrLocalhost(addr string) bool {
 }
 
 func (d *dnsServer) parseQuery(m *dns.Msg, w dns.ResponseWriter) {
+	// Per RFC 2308 §2.2, a name that exists but has no record of the requested
+	// type must be answered with NOERROR and an empty answer section (NODATA),
+	// not NXDOMAIN (RFC 2308 §2.1), which is reserved for names that do not
+	// exist at all.
+	anyNameExists := false
 	for _, q := range m.Question {
 		switch q.Qtype {
 		case dns.TypeA, dns.TypeAAAA:
 			qType := dns.TypeToString[q.Qtype]
 			d.l.Debugf("Query for %s %s", qType, q.Name)
-			ip := d.Query(q.Qtype, q.Name)
+			ip, nameExists := d.Query(q.Qtype, q.Name)
+			if nameExists {
+				anyNameExists = true
+			}
 			if ip.IsValid() {
 				rr, err := dns.NewRR(fmt.Sprintf("%s %s %s", q.Name, qType, ip))
 				if err == nil {
@@ -333,7 +347,7 @@ func (d *dnsServer) parseQuery(m *dns.Msg, w dns.ResponseWriter) {
 		}
 	}
 
-	if len(m.Answer) == 0 {
+	if len(m.Answer) == 0 && !anyNameExists {
 		m.Rcode = dns.RcodeNameError
 	}
 }
