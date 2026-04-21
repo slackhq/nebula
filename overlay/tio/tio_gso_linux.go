@@ -90,7 +90,7 @@ func newTunFd(fd int, shutdownFd int) (*tunFile, error) {
 			{Fd: int32(shutdownFd), Events: unix.POLLIN},
 		},
 
-		segBuf:  make([]byte, tunSegBufSize),
+		segBuf:  make([]byte, tunSegBufCap),
 		gsoIovs: make([]unix.Iovec, 2, 2+gsoInitialPayIovs),
 	}
 
