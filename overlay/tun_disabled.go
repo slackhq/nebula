@@ -9,6 +9,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -17,9 +18,27 @@ type disabledTun struct {
 	vpnNetworks []netip.Prefix
 
 	// Track these metrics since we don't have the tun device to do it for us
-	tx metrics.Counter
-	rx metrics.Counter
-	l  *logrus.Logger
+	tx         metrics.Counter
+	rx         metrics.Counter
+	l          *logrus.Logger
+	numReaders int
+
+	batchRet [1][]byte
+}
+
+func (t *disabledTun) Read() ([][]byte, error) {
+	r, ok := <-t.read
+	if !ok {
+		return nil, io.EOF
+	}
+
+	t.tx.Inc(1)
+	if t.l.Level >= logrus.DebugLevel {
+		t.l.WithField("raw", prettyPacket(r)).Debugf("Write payload")
+	}
+
+	t.batchRet[0] = r
+	return t.batchRet[:], nil
 }
 
 func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled bool, l *logrus.Logger) *disabledTun {
@@ -27,6 +46,7 @@ func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled boo
 		vpnNetworks: vpnNetworks,
 		read:        make(chan []byte, queueLen),
 		l:           l,
+		numReaders:  1,
 	}
 
 	if metricsEnabled {
@@ -54,24 +74,6 @@ func (t *disabledTun) Networks() []netip.Prefix {
 
 func (*disabledTun) Name() string {
 	return "disabled"
-}
-
-func (t *disabledTun) Read(b []byte) (int, error) {
-	r, ok := <-t.read
-	if !ok {
-		return 0, io.EOF
-	}
-
-	if len(r) > len(b) {
-		return 0, fmt.Errorf("packet larger than mtu: %d > %d bytes", len(r), len(b))
-	}
-
-	t.tx.Inc(1)
-	if t.l.Level >= logrus.DebugLevel {
-		t.l.WithField("raw", prettyPacket(r)).Debugf("Write payload")
-	}
-
-	return copy(b, r), nil
 }
 
 func (t *disabledTun) handleICMPEchoRequest(b []byte) bool {
@@ -105,12 +107,25 @@ func (t *disabledTun) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
+func (t *disabledTun) WriteReject(b []byte) (int, error) {
+	return t.Write(b)
+}
+
 func (t *disabledTun) SupportsMultiqueue() bool {
 	return true
 }
 
-func (t *disabledTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return t, nil
+func (t *disabledTun) NewMultiQueueReader() error {
+	t.numReaders++
+	return nil
+}
+
+func (t *disabledTun) Readers() []tio.Queue {
+	out := make([]tio.Queue, t.numReaders)
+	for i := range t.numReaders {
+		out[i] = t
+	}
+	return out
 }
 
 func (t *disabledTun) Close() error {

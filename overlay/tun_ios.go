@@ -16,16 +16,44 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 )
 
 type tun struct {
-	io.ReadWriteCloser
+	rwc         io.ReadWriteCloser
 	vpnNetworks []netip.Prefix
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *logrus.Logger
+
+	readBuf  []byte
+	batchRet [1][]byte
+}
+
+func (t *tun) Read() ([][]byte, error) {
+	if t.readBuf == nil {
+		t.readBuf = make([]byte, defaultBatchBufSize)
+	}
+	n, err := t.rwc.Read(t.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	t.batchRet[0] = t.readBuf[:n]
+	return t.batchRet[:], nil
+}
+
+func (t *tun) Write(p []byte) (int, error) {
+	return t.rwc.Write(p)
+}
+
+func (t *tun) WriteReject(p []byte) (int, error) {
+	return t.rwc.Write(p)
+}
+
+func (t *tun) Close() error {
+	return t.rwc.Close()
 }
 
 func newTun(_ *config.C, _ *logrus.Logger, _ []netip.Prefix, _ bool) (*tun, error) {
@@ -35,9 +63,9 @@ func newTun(_ *config.C, _ *logrus.Logger, _ []netip.Prefix, _ bool) (*tun, erro
 func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
 	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
 	t := &tun{
-		vpnNetworks:     vpnNetworks,
-		ReadWriteCloser: &tunReadCloser{f: file},
-		l:               l,
+		vpnNetworks: vpnNetworks,
+		rwc:         &tunReadCloser{f: file},
+		l:           l,
 	}
 
 	err := t.reload(c, true)
@@ -155,6 +183,6 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *tun) NewMultiQueueReader() (tio.Queue, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for ios")
 }

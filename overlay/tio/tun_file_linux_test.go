@@ -1,7 +1,7 @@
 //go:build linux && !android && !e2e_testing
 // +build linux,!android,!e2e_testing
 
-package overlay
+package tio
 
 import (
 	"errors"

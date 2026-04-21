@@ -10,6 +10,7 @@ import (
 	"github.com/flynn/noise"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
@@ -52,7 +53,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	lh := newTestLighthouse()
 	ifce := &Interface{
 		hostMap:          hostMap,
-		inside:           &test.NoopTun{},
+		inside:           &overlay.NoopTun{},
 		outside:          &udp.NoopConn{},
 		firewall:         &Firewall{},
 		lightHouse:       lh,
@@ -135,7 +136,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	lh := newTestLighthouse()
 	ifce := &Interface{
 		hostMap:          hostMap,
-		inside:           &test.NoopTun{},
+		inside:           &overlay.NoopTun{},
 		outside:          &udp.NoopConn{},
 		firewall:         &Firewall{},
 		lightHouse:       lh,
@@ -220,7 +221,7 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	lh := newTestLighthouse()
 	ifce := &Interface{
 		hostMap:          hostMap,
-		inside:           &test.NoopTun{},
+		inside:           &overlay.NoopTun{},
 		outside:          &udp.NoopConn{},
 		firewall:         &Firewall{},
 		lightHouse:       lh,
@@ -347,7 +348,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	lh := newTestLighthouse()
 	ifce := &Interface{
 		hostMap:          hostMap,
-		inside:           &test.NoopTun{},
+		inside:           &overlay.NoopTun{},
 		outside:          &udp.NoopConn{},
 		firewall:         &Firewall{},
 		lightHouse:       lh,
