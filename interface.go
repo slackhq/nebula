@@ -29,7 +29,7 @@ type InterfaceConfig struct {
 	pki                *PKI
 	Cipher             string
 	Firewall           *Firewall
-	ServeDns           bool
+	DnsServer          *dnsServer
 	HandshakeManager   *HandshakeManager
 	lightHouse         *LightHouse
 	connectionManager  *connectionManager
@@ -57,7 +57,7 @@ type Interface struct {
 	firewall              *Firewall
 	connectionManager     *connectionManager
 	handshakeManager      *HandshakeManager
-	serveDns              bool
+	dnsServer             *dnsServer
 	createTime            time.Time
 	lightHouse            *LightHouse
 	myBroadcastAddrsTable *bart.Lite
@@ -175,7 +175,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		outside:               c.Outside,
 		inside:                c.Inside,
 		firewall:              c.Firewall,
-		serveDns:              c.ServeDns,
+		dnsServer:             c.DnsServer,
 		handshakeManager:      c.HandshakeManager,
 		createTime:            time.Now(),
 		lightHouse:            c.lightHouse,

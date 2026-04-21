@@ -604,9 +604,9 @@ func (hm *HostMap) queryVpnAddr(vpnIp netip.Addr, promoteIfce *Interface) *HostI
 // unlockedAddHostInfo assumes you have a write-lock and will add a hostinfo object to the hostmap Indexes and RemoteIndexes maps.
 // If an entry exists for the Hosts table (vpnIp -> hostinfo) then the provided hostinfo will be made primary
 func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
-	if f.serveDns {
+	if f.dnsServer != nil {
 		remoteCert := hostinfo.ConnectionState.peerCert
-		dnsR.Add(remoteCert.Certificate.Name()+".", hostinfo.vpnAddrs)
+		f.dnsServer.Add(remoteCert.Certificate.Name()+".", hostinfo.vpnAddrs)
 	}
 	for _, addr := range hostinfo.vpnAddrs {
 		hm.unlockedInnerAddHostInfo(addr, hostinfo, f)

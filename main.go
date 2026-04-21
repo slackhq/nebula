@@ -215,13 +215,9 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
 
-	serveDns := false
-	if c.GetBool("lighthouse.serve_dns", false) {
-		if c.GetBool("lighthouse.am_lighthouse", false) {
-			serveDns = true
-		} else {
-			l.Warn("DNS server refusing to run because this host is not a lighthouse.")
-		}
+	ds, err := newDnsServerFromConfig(ctx, l, pki.getCertState(), hostMap, c)
+	if err != nil {
+		l.WithError(err).Warn("Failed to start DNS responder")
 	}
 
 	ifConfig := &InterfaceConfig{
@@ -230,7 +226,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		Outside:               udpConns[0],
 		pki:                   pki,
 		Firewall:              fw,
-		ServeDns:              serveDns,
+		DnsServer:             ds,
 		HandshakeManager:      handshakeManager,
 		connectionManager:     connManager,
 		lightHouse:            lightHouse,
@@ -280,13 +276,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	attachCommands(l, c, ssh, ifce)
 
-	// Start DNS server last to allow using the nebula IP as lighthouse.dns.host
-	var dnsStart func()
-	if lightHouse.amLighthouse && serveDns {
-		l.Debugln("Starting dns server")
-		dnsStart = dnsMain(l, pki.getCertState(), hostMap, c)
-	}
-
 	return &Control{
 		state:                  StateReady,
 		f:                      ifce,
@@ -295,7 +284,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		cancel:                 cancel,
 		sshStart:               sshStart,
 		statsStart:             statsStart,
-		dnsStart:               dnsStart,
+		dnsStart:               ds.Start,
 		lighthouseStart:        lightHouse.StartUpdateWorker,
 		connectionManagerStart: connManager.Start,
 	}, nil
