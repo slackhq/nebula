@@ -176,7 +176,8 @@ func Test_ca(t *testing.T) {
 	os.Remove(crtF.Name())
 	ob.Reset()
 	eb.Reset()
-	args = []string{"-version", "1", "-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
+	// Use -argon-memory < 2*1024*1024 for 32-bit archs
+	args = []string{"-version", "1", "-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name(), "-argon-memory", "262144"}
 	os.Setenv("NEBULA_CA_PASSPHRASE", string(passphrase))
 	require.NoError(t, ca(args, ob, eb, testpw))
 	assert.Empty(t, eb.String())
@@ -188,7 +189,7 @@ func Test_ca(t *testing.T) {
 	ned, err := cert.UnmarshalNebulaEncryptedData(k.Bytes)
 	require.NoError(t, err)
 	// we won't know salt in advance, so just check start of string
-	assert.Equal(t, uint32(2*1024*1024), ned.EncryptionMetadata.Argon2Parameters.Memory)
+	assert.Equal(t, uint32(256*1024), ned.EncryptionMetadata.Argon2Parameters.Memory)
 	assert.Equal(t, uint8(4), ned.EncryptionMetadata.Argon2Parameters.Parallelism)
 	assert.Equal(t, uint32(1), ned.EncryptionMetadata.Argon2Parameters.Iterations)
 
