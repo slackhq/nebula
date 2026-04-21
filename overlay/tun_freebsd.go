@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"net/netip"
+	"os"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -93,107 +94,184 @@ type tun struct {
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	linkAddr    *netroute.LinkAddr
 	l           *logrus.Logger
-	devFd       int
+
+	fd        int
+	shutdownR int // read end of the shutdown pipe; closing the write end wakes blocked polls
+	shutdownW int // write end of the shutdown pipe; closing this signals shutdown to any blocked reader/writer
+	readPoll  [2]unix.PollFd
+	writePoll [2]unix.PollFd
+	closed    atomic.Bool
+}
+
+// blockOnRead waits until the tun fd is readable or shutdown has been signaled.
+// Returns os.ErrClosed if Close was called.
+func (t *tun) blockOnRead() error {
+	const problemFlags = unix.POLLHUP | unix.POLLNVAL | unix.POLLERR
+	var err error
+	for {
+		_, err = unix.Poll(t.readPoll[:], -1)
+		if err != unix.EINTR {
+			break
+		}
+	}
+	tunEvents := t.readPoll[0].Revents
+	shutdownEvents := t.readPoll[1].Revents
+	t.readPoll[0].Revents = 0
+	t.readPoll[1].Revents = 0
+	if err != nil {
+		return err
+	}
+	if shutdownEvents&(unix.POLLIN|problemFlags) != 0 {
+		return os.ErrClosed
+	}
+	if tunEvents&problemFlags != 0 {
+		return os.ErrClosed
+	}
+	return nil
+}
+
+func (t *tun) blockOnWrite() error {
+	const problemFlags = unix.POLLHUP | unix.POLLNVAL | unix.POLLERR
+	var err error
+	for {
+		_, err = unix.Poll(t.writePoll[:], -1)
+		if err != unix.EINTR {
+			break
+		}
+	}
+	tunEvents := t.writePoll[0].Revents
+	shutdownEvents := t.writePoll[1].Revents
+	t.writePoll[0].Revents = 0
+	t.writePoll[1].Revents = 0
+	if err != nil {
+		return err
+	}
+	if shutdownEvents&(unix.POLLIN|problemFlags) != 0 {
+		return os.ErrClosed
+	}
+	if tunEvents&problemFlags != 0 {
+		return os.ErrClosed
+	}
+	return nil
 }
 
 func (t *tun) Read(to []byte) (int, error) {
-	// use readv() to read from the tunnel device, to eliminate the need for copying the buffer
-	if t.devFd < 0 {
-		return -1, syscall.EINVAL
-	}
-
 	// first 4 bytes is protocol family, in network byte order
-	head := make([]byte, 4)
-
-	iovecs := []syscall.Iovec{
+	var head [4]byte
+	iovecs := [2]syscall.Iovec{
 		{&head[0], 4},
 		{&to[0], uint64(len(to))},
 	}
-
-	n, _, errno := syscall.Syscall(syscall.SYS_READV, uintptr(t.devFd), uintptr(unsafe.Pointer(&iovecs[0])), uintptr(2))
-
-	var err error
-	if errno != 0 {
-		err = syscall.Errno(errno)
-	} else {
-		err = nil
-	}
-	// fix bytes read number to exclude header
-	bytesRead := int(n)
-	if bytesRead < 0 {
-		return bytesRead, err
-	} else if bytesRead < 4 {
-		return 0, err
-	} else {
-		return bytesRead - 4, err
+	for {
+		n, _, errno := syscall.Syscall(syscall.SYS_READV, uintptr(t.fd), uintptr(unsafe.Pointer(&iovecs[0])), 2)
+		if errno == 0 {
+			bytesRead := int(n)
+			if bytesRead < 4 {
+				return 0, nil
+			}
+			return bytesRead - 4, nil
+		}
+		switch errno {
+		case unix.EAGAIN:
+			if err := t.blockOnRead(); err != nil {
+				return 0, err
+			}
+		case unix.EINTR:
+			// retry
+		case unix.EBADF:
+			return 0, os.ErrClosed
+		default:
+			return 0, errno
+		}
 	}
 }
 
 // Write is only valid for single threaded use
 func (t *tun) Write(from []byte) (int, error) {
-	// use writev() to write to the tunnel device, to eliminate the need for copying the buffer
-	if t.devFd < 0 {
-		return -1, syscall.EINVAL
-	}
-
 	if len(from) <= 1 {
 		return 0, syscall.EIO
 	}
+
 	ipVer := from[0] >> 4
-	var head []byte
+	var head [4]byte
 	// first 4 bytes is protocol family, in network byte order
-	if ipVer == 4 {
-		head = []byte{0, 0, 0, syscall.AF_INET}
-	} else if ipVer == 6 {
-		head = []byte{0, 0, 0, syscall.AF_INET6}
-	} else {
+	switch ipVer {
+	case 4:
+		head[3] = syscall.AF_INET
+	case 6:
+		head[3] = syscall.AF_INET6
+	default:
 		return 0, fmt.Errorf("unable to determine IP version from packet")
 	}
-	iovecs := []syscall.Iovec{
+
+	iovecs := [2]syscall.Iovec{
 		{&head[0], 4},
 		{&from[0], uint64(len(from))},
 	}
-
-	n, _, errno := syscall.Syscall(syscall.SYS_WRITEV, uintptr(t.devFd), uintptr(unsafe.Pointer(&iovecs[0])), uintptr(2))
-
-	var err error
-	if errno != 0 {
-		err = syscall.Errno(errno)
-	} else {
-		err = nil
+	for {
+		n, _, errno := syscall.Syscall(syscall.SYS_WRITEV, uintptr(t.fd), uintptr(unsafe.Pointer(&iovecs[0])), 2)
+		if errno == 0 {
+			return int(n) - 4, nil
+		}
+		switch errno {
+		case unix.EAGAIN:
+			if err := t.blockOnWrite(); err != nil {
+				return 0, err
+			}
+		case unix.EINTR:
+			// retry
+		case unix.EBADF:
+			return 0, os.ErrClosed
+		default:
+			return 0, errno
+		}
 	}
-
-	return int(n) - 4, err
 }
 
 func (t *tun) Close() error {
-	if t.devFd >= 0 {
-		err := syscall.Close(t.devFd)
-		if err != nil {
+	if t.closed.Swap(true) {
+		return nil
+	}
+
+	// Closing the write end of the shutdown pipe causes any blocked Poll to
+	// return with POLLHUP on the shutdown fd, so readers/writers wake up and
+	// exit with os.ErrClosed.
+	if t.shutdownW >= 0 {
+		_ = unix.Close(t.shutdownW)
+		t.shutdownW = -1
+	}
+
+	if t.fd >= 0 {
+		if err := unix.Close(t.fd); err != nil {
 			t.l.WithError(err).Error("Error closing device")
 		}
-		t.devFd = -1
+		t.fd = -1
+	}
 
-		c := make(chan struct{})
-		go func() {
-			// destroying the interface can block if a read() is still pending. Do this asynchronously.
-			defer close(c)
-			s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_IP)
-			if err == nil {
-				defer syscall.Close(s)
-				ifreq := ifreqDestroy{Name: t.deviceBytes()}
-				err = ioctl(uintptr(s), syscall.SIOCIFDESTROY, uintptr(unsafe.Pointer(&ifreq)))
-			}
-			if err != nil {
-				t.l.WithError(err).Error("Error destroying tunnel")
-			}
-		}()
+	if t.shutdownR >= 0 {
+		_ = unix.Close(t.shutdownR)
+		t.shutdownR = -1
+	}
 
-		// wait up to 1 second so we start blocking at the ioctl
-		select {
-		case <-c:
-		case <-time.After(1 * time.Second):
+	c := make(chan struct{})
+	go func() {
+		// destroying the interface can block if a read() is still pending. Do this asynchronously.
+		defer close(c)
+		s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_IP)
+		if err == nil {
+			defer syscall.Close(s)
+			ifreq := ifreqDestroy{Name: t.deviceBytes()}
+			err = ioctl(uintptr(s), syscall.SIOCIFDESTROY, uintptr(unsafe.Pointer(&ifreq)))
 		}
+		if err != nil {
+			t.l.WithError(err).Error("Error destroying tunnel")
+		}
+	}()
+
+	// wait up to 1 second so we start blocking at the ioctl
+	select {
+	case <-c:
+	case <-time.After(1 * time.Second):
 	}
 
 	return nil
@@ -209,15 +287,37 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	var err error
 	deviceName := c.GetString("tun.dev", "")
 	if deviceName != "" {
-		fd, err = syscall.Open("/dev/"+deviceName, syscall.O_RDWR, 0)
+		fd, err = unix.Open("/dev/"+deviceName, os.O_RDWR, 0)
 	}
 	if errors.Is(err, fs.ErrNotExist) || deviceName == "" {
 		// If the device doesn't already exist, request a new one and rename it
-		fd, err = syscall.Open("/dev/tun", syscall.O_RDWR, 0)
+		fd, err = unix.Open("/dev/tun", os.O_RDWR, 0)
 	}
 	if err != nil {
 		return nil, err
 	}
+
+	if err = unix.SetNonblock(fd, true); err != nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("failed to set tun device as nonblocking: %w", err)
+	}
+
+	// Shutdown pipe lets Close wake any reader/writer blocked in Poll.
+	var pipeFds [2]int
+	if err = unix.Pipe2(pipeFds[:], unix.O_CLOEXEC|unix.O_NONBLOCK); err != nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("failed to create shutdown pipe: %w", err)
+	}
+	shutdownR, shutdownW := pipeFds[0], pipeFds[1]
+
+	closeOnErr := true
+	defer func() {
+		if closeOnErr {
+			_ = unix.Close(fd)
+			_ = unix.Close(shutdownR)
+			_ = unix.Close(shutdownW)
+		}
+	}()
 
 	// Read the name of the interface
 	var name [16]byte
@@ -237,7 +337,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	}
 
 	if ctrlErr != nil {
-		return nil, err
+		return nil, ctrlErr
 	}
 
 	ifName := string(bytes.TrimRight(name[:], "\x00"))
@@ -253,8 +353,6 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 		}
 		defer syscall.Close(s)
 
-		fd := uintptr(s)
-
 		var fromName [16]byte
 		var toName [16]byte
 		copy(fromName[:], ifName)
@@ -266,7 +364,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 		}
 
 		// Set the device name
-		_ = ioctl(fd, syscall.SIOCSIFNAME, uintptr(unsafe.Pointer(&ifrr)))
+		_ = ioctl(uintptr(s), syscall.SIOCSIFNAME, uintptr(unsafe.Pointer(&ifrr)))
 	}
 
 	t := &tun{
@@ -274,13 +372,24 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 		vpnNetworks: vpnNetworks,
 		MTU:         c.GetInt("tun.mtu", DefaultMTU),
 		l:           l,
-		devFd:       fd,
+		fd:          fd,
+		shutdownR:   shutdownR,
+		shutdownW:   shutdownW,
+		readPoll: [2]unix.PollFd{
+			{Fd: int32(fd), Events: unix.POLLIN},
+			{Fd: int32(shutdownR), Events: unix.POLLIN},
+		},
+		writePoll: [2]unix.PollFd{
+			{Fd: int32(fd), Events: unix.POLLOUT},
+			{Fd: int32(shutdownR), Events: unix.POLLIN},
+		},
 	}
 
 	err = t.reload(c, true)
 	if err != nil {
 		return nil, err
 	}
+	closeOnErr = false
 
 	c.RegisterReloadCallback(func(c *config.C) {
 		err := t.reload(c, false)
