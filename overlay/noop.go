@@ -42,8 +42,12 @@ func (NoopTun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (NoopTun) NewMultiQueueReader() (tio.Queue, error) {
-	return nil, errors.New("unsupported")
+func (NoopTun) NewMultiQueueReader() error {
+	return errors.New("unsupported")
+}
+
+func (NoopTun) Readers() []tio.Queue {
+	return []tio.Queue{NoopTun{}}
 }
 
 func (NoopTun) Close() error {
