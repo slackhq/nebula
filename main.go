@@ -3,7 +3,10 @@ package nebula
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"net/netip"
 	"runtime/debug"
 	"strings"
@@ -48,6 +51,11 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		// Print the final config
 		l.Println(string(b))
 	}
+
+	//todo!!!
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
 
 	err := configLogger(l, c)
 	if err != nil {

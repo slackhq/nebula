@@ -6,6 +6,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -28,6 +29,7 @@ func NewUserDevice(vpnNetworks []netip.Prefix) (Device, error) {
 
 type UserDevice struct {
 	vpnNetworks []netip.Prefix
+	numReaders  int
 
 	outboundReader *io.PipeReader
 	outboundWriter *io.PipeWriter
@@ -65,8 +67,17 @@ func (d *UserDevice) SupportsMultiqueue() bool {
 	return true
 }
 
-func (d *UserDevice) NewMultiQueueReader() (Queue, error) {
-	return d, nil
+func (d *UserDevice) NewMultiQueueReader() error {
+	d.numReaders++
+	return nil
+}
+
+func (d *UserDevice) Readers() []tio.Queue {
+	out := make([]tio.Queue, d.numReaders)
+	for i := range d.numReaders {
+		out[i] = d
+	}
+	return out
 }
 
 func (d *UserDevice) Pipe() (*io.PipeReader, *io.PipeWriter) {

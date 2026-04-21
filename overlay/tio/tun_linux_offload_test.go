@@ -1,7 +1,7 @@
 //go:build linux && !android && !e2e_testing
 // +build linux,!android,!e2e_testing
 
-package overlay
+package tio
 
 import (
 	"encoding/binary"
@@ -23,7 +23,7 @@ func verifyChecksum(b []byte, pseudo uint32) bool {
 
 // buildTSOv4 builds a synthetic IPv4/TCP TSO superpacket with a payload of
 // `payLen` bytes split at `mss`.
-func buildTSOv4(t *testing.T, payLen, mss int) ([]byte, virtioNetHdr) {
+func buildTSOv4(t *testing.T, payLen, mss int) ([]byte, VirtioNetHdr) {
 	t.Helper()
 	const ipLen = 20
 	const tcpLen = 20
@@ -53,7 +53,7 @@ func buildTSOv4(t *testing.T, payLen, mss int) ([]byte, virtioNetHdr) {
 		pkt[ipLen+tcpLen+i] = byte(i & 0xff)
 	}
 
-	return pkt, virtioNetHdr{
+	return pkt, VirtioNetHdr{
 		Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
 		GSOType:    unix.VIRTIO_NET_HDR_GSO_TCPV4,
 		HdrLen:     uint16(ipLen + tcpLen),
@@ -174,7 +174,7 @@ func TestSegmentTCPv6(t *testing.T) {
 		pkt[ipLen+tcpLen+i] = byte(i)
 	}
 
-	hdr := virtioNetHdr{
+	hdr := VirtioNetHdr{
 		Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
 		GSOType:    unix.VIRTIO_NET_HDR_GSO_TCPV6,
 		HdrLen:     uint16(ipLen + tcpLen),
@@ -240,7 +240,7 @@ func TestSegmentGSONonePassesThrough(t *testing.T) {
 }
 
 func TestSegmentRejectsUDP(t *testing.T) {
-	hdr := virtioNetHdr{GSOType: unix.VIRTIO_NET_HDR_GSO_UDP}
+	hdr := VirtioNetHdr{GSOType: unix.VIRTIO_NET_HDR_GSO_UDP}
 	var out [][]byte
 	if err := segmentInto(nil, hdr, &out, nil); err == nil {
 		t.Fatalf("expected rejection for UDP GSO")
@@ -279,7 +279,7 @@ func BenchmarkSegmentTCPv4(b *testing.B) {
 			for i := 0; i < sz.payLen; i++ {
 				pkt[ipLen+tcpLen+i] = byte(i)
 			}
-			hdr := virtioNetHdr{
+			hdr := VirtioNetHdr{
 				Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
 				GSOType:    unix.VIRTIO_NET_HDR_GSO_TCPV4,
 				HdrLen:     uint16(ipLen + tcpLen),
@@ -312,7 +312,7 @@ func TestTunFileWriteVnetHdrNoAlloc(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = unix.Close(fd) })
 
-	tf := &tunFile{fd: fd, vnetHdr: true}
+	tf := &tunFile{fd: fd}
 	tf.writeIovs[0].Base = &validVnetHdr[0]
 	tf.writeIovs[0].SetLen(virtioNetHdrLen)
 

@@ -4,478 +4,28 @@
 package overlay
 
 import (
-	"encoding/binary"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"os"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 	"unsafe"
 
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
 
-// tunFile wraps a TUN file descriptor with poll-based reads. The FD provided will be changed to non-blocking.
-// A shared eventfd allows Close to wake all readers blocked in poll.
-type tunFile struct {
-	fd         int
-	shutdownFd int
-	lastOne    bool
-	readPoll   [2]unix.PollFd
-	writePoll  [2]unix.PollFd
-	closed     bool
-
-	// vnetHdr is true when this fd was opened with IFF_VNET_HDR and the
-	// kernel successfully accepted TUNSETOFFLOAD. Reads include a leading
-	// virtio_net_hdr and may carry a TSO superpacket we must segment;
-	// writes must prepend a zeroed virtio_net_hdr.
-	vnetHdr   bool
-	readBuf   []byte        // scratch for a single raw read (virtio hdr + superpacket)
-	segBuf    []byte        // backing store for segmented output
-	segOff    int           // cursor into segBuf for the current Read drain
-	pending   [][]byte      // segments returned from the most recent Read
-	writeIovs [2]unix.Iovec // preallocated iovecs for Write (coalescer passthrough); iovs[0] is fixed to validVnetHdr
-	// rejectIovs is a second preallocated iovec scratch used exclusively by
-	// WriteReject (reject + self-forward from the inside path). It mirrors
-	// writeIovs but lets listenIn goroutines emit reject packets without
-	// racing with the listenOut coalescer that owns writeIovs.
-	rejectIovs [2]unix.Iovec
-
-	// gsoHdrBuf is a per-queue 10-byte scratch for the virtio_net_hdr emitted
-	// by WriteGSO. Separate from validVnetHdr so a concurrent non-GSO Write on
-	// another queue never observes a half-written header.
-	gsoHdrBuf [virtioNetHdrLen]byte
-	// gsoIovs is the writev iovec scratch for WriteGSO. Sized to hold the
-	// virtio header + IP/TCP header + up to gsoInitialPayIovs payload
-	// fragments; grown on demand if a coalescer pushes more.
-	gsoIovs []unix.Iovec
-}
-
-// gsoInitialPayIovs is the starting capacity (in payload fragments) of
-// tunFile.gsoIovs. Sized to cover the default coalesce segment cap without
-// any reallocations.
-const gsoInitialPayIovs = 66
-
-// validVnetHdr is the 10-byte virtio_net_hdr we prepend to every non-GSO TUN
-// write. Only flag set is VIRTIO_NET_HDR_F_DATA_VALID, which marks the skb
-// CHECKSUM_UNNECESSARY so the receiving network stack skips L4 checksum
-// verification. All packets that reach the plain Write / WriteReject paths
-// already carry a valid L4 checksum (either supplied by a remote peer whose
-// ciphertext we AEAD-authenticated, or produced by finishChecksum during TSO
-// segmentation, or built locally by CreateRejectPacket), so trusting them is
-// safe.
-var validVnetHdr = [virtioNetHdrLen]byte{unix.VIRTIO_NET_HDR_F_DATA_VALID}
-
-// newFriend makes a tunFile for a MultiQueueReader that copies the shutdown eventfd from the parent tun
-func (r *tunFile) newFriend(fd int) (*tunFile, error) {
-	if err := unix.SetNonblock(fd, true); err != nil {
-		return nil, fmt.Errorf("failed to set tun fd non-blocking: %w", err)
-	}
-	out := &tunFile{
-		fd:         fd,
-		shutdownFd: r.shutdownFd,
-		vnetHdr:    r.vnetHdr,
-		readBuf:    make([]byte, tunReadBufSize),
-		readPoll: [2]unix.PollFd{
-			{Fd: int32(fd), Events: unix.POLLIN},
-			{Fd: int32(r.shutdownFd), Events: unix.POLLIN},
-		},
-		writePoll: [2]unix.PollFd{
-			{Fd: int32(fd), Events: unix.POLLOUT},
-			{Fd: int32(r.shutdownFd), Events: unix.POLLIN},
-		},
-	}
-	if r.vnetHdr {
-		out.segBuf = make([]byte, tunSegBufCap)
-		out.writeIovs[0].Base = &validVnetHdr[0]
-		out.writeIovs[0].SetLen(virtioNetHdrLen)
-		out.rejectIovs[0].Base = &validVnetHdr[0]
-		out.rejectIovs[0].SetLen(virtioNetHdrLen)
-		out.gsoIovs = make([]unix.Iovec, 2, 2+gsoInitialPayIovs)
-		out.gsoIovs[0].Base = &out.gsoHdrBuf[0]
-		out.gsoIovs[0].SetLen(virtioNetHdrLen)
-	}
-	return out, nil
-}
-
-func newTunFd(fd int, vnetHdr bool) (*tunFile, error) {
-	if err := unix.SetNonblock(fd, true); err != nil {
-		return nil, fmt.Errorf("failed to set tun fd non-blocking: %w", err)
-	}
-
-	shutdownFd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create eventfd: %w", err)
-	}
-
-	out := &tunFile{
-		fd:         fd,
-		shutdownFd: shutdownFd,
-		lastOne:    true,
-		vnetHdr:    vnetHdr,
-		readBuf:    make([]byte, tunReadBufSize),
-		readPoll: [2]unix.PollFd{
-			{Fd: int32(fd), Events: unix.POLLIN},
-			{Fd: int32(shutdownFd), Events: unix.POLLIN},
-		},
-		writePoll: [2]unix.PollFd{
-			{Fd: int32(fd), Events: unix.POLLOUT},
-			{Fd: int32(shutdownFd), Events: unix.POLLIN},
-		},
-	}
-	if vnetHdr {
-		out.segBuf = make([]byte, tunSegBufCap)
-		out.writeIovs[0].Base = &validVnetHdr[0]
-		out.writeIovs[0].SetLen(virtioNetHdrLen)
-		out.rejectIovs[0].Base = &validVnetHdr[0]
-		out.rejectIovs[0].SetLen(virtioNetHdrLen)
-		out.gsoIovs = make([]unix.Iovec, 2, 2+gsoInitialPayIovs)
-		out.gsoIovs[0].Base = &out.gsoHdrBuf[0]
-		out.gsoIovs[0].SetLen(virtioNetHdrLen)
-	}
-
-	return out, nil
-}
-
-func (r *tunFile) blockOnRead() error {
-	const problemFlags = unix.POLLHUP | unix.POLLNVAL | unix.POLLERR
-	var err error
-	for {
-		_, err = unix.Poll(r.readPoll[:], -1)
-		if err != unix.EINTR {
-			break
-		}
-	}
-	//always reset these!
-	tunEvents := r.readPoll[0].Revents
-	shutdownEvents := r.readPoll[1].Revents
-	r.readPoll[0].Revents = 0
-	r.readPoll[1].Revents = 0
-	//do the err check before trusting the potentially bogus bits we just got
-	if err != nil {
-		return err
-	}
-	if shutdownEvents&(unix.POLLIN|problemFlags) != 0 {
-		return os.ErrClosed
-	} else if tunEvents&problemFlags != 0 {
-		return os.ErrClosed
-	}
-	return nil
-}
-
-func (r *tunFile) blockOnWrite() error {
-	const problemFlags = unix.POLLHUP | unix.POLLNVAL | unix.POLLERR
-	var err error
-	for {
-		_, err = unix.Poll(r.writePoll[:], -1)
-		if err != unix.EINTR {
-			break
-		}
-	}
-	//always reset these!
-	tunEvents := r.writePoll[0].Revents
-	shutdownEvents := r.writePoll[1].Revents
-	r.writePoll[0].Revents = 0
-	r.writePoll[1].Revents = 0
-	//do the err check before trusting the potentially bogus bits we just got
-	if err != nil {
-		return err
-	}
-	if shutdownEvents&(unix.POLLIN|problemFlags) != 0 {
-		return os.ErrClosed
-	} else if tunEvents&problemFlags != 0 {
-		return os.ErrClosed
-	}
-	return nil
-}
-
-func (r *tunFile) readRaw(buf []byte) (int, error) {
-	for {
-		if n, err := unix.Read(r.fd, buf); err == nil {
-			return n, nil
-		} else if err == unix.EAGAIN {
-			if err = r.blockOnRead(); err != nil {
-				return 0, err
-			}
-			continue
-		} else if err == unix.EINTR {
-			continue
-		} else if err == unix.EBADF {
-			return 0, os.ErrClosed
-		} else {
-			return 0, err
-		}
-	}
-}
-
-// Read reads one or more superpackets from the tun and returns the
-// resulting packets. The first read blocks via poll; once the fd is known
-// readable we drain additional packets non-blocking until the kernel queue
-// is empty (EAGAIN), we've collected tunDrainCap packets, or we're out of
-// segBuf headroom. This amortizes the poll wake over bursts of small
-// packets (e.g. TCP ACKs). Slices point into the tunFile's internal buffers
-// and are only valid until the next Read or Close on this Queue.
-func (r *tunFile) Read() ([][]byte, error) {
-	r.pending = r.pending[:0]
-	r.segOff = 0
-
-	// Initial (blocking) read. Retry on decode errors so a single bad
-	// packet does not stall the reader.
-	for {
-		n, err := r.readRaw(r.readBuf)
-		if err != nil {
-			return nil, err
-		}
-		if !r.vnetHdr {
-			r.pending = append(r.pending, r.readBuf[:n])
-			// Non-vnetHdr mode shares one readBuf so we can't drain safely
-			// without copying; return the single packet as before.
-			return r.pending, nil
-		}
-		if err := r.decodeRead(n); err != nil {
-			// Drop and read again — a bad packet should not kill the reader.
-			continue
-		}
-		break
-	}
-
-	// Drain: non-blocking reads until the kernel queue is empty, the drain
-	// cap is reached, or segBuf no longer has room for another worst-case
-	// superpacket.
-	for len(r.pending) < tunDrainCap && tunSegBufCap-r.segOff >= tunSegBufSize {
-		n, err := unix.Read(r.fd, r.readBuf)
-		if err != nil {
-			// EAGAIN / EINTR / anything else: stop draining. We already
-			// have a valid batch from the first read.
-			break
-		}
-		if n <= 0 {
-			break
-		}
-		if err := r.decodeRead(n); err != nil {
-			// Drop this packet and stop the drain; we'd rather hand off
-			// what we have than keep spinning here.
-			break
-		}
-	}
-
-	return r.pending, nil
-}
-
-// decodeRead decodes the virtio header plus payload in r.readBuf[:n], appends
-// the segments to r.pending, and advances r.segOff by the total scratch used.
-// Caller must have already ensured r.vnetHdr is true.
-func (r *tunFile) decodeRead(n int) error {
-	if n < virtioNetHdrLen {
-		return fmt.Errorf("short tun read: %d < %d", n, virtioNetHdrLen)
-	}
-	var hdr virtioNetHdr
-	hdr.decode(r.readBuf[:virtioNetHdrLen])
-	before := len(r.pending)
-	if err := segmentInto(r.readBuf[virtioNetHdrLen:n], hdr, &r.pending, r.segBuf[r.segOff:]); err != nil {
-		return err
-	}
-	for k := before; k < len(r.pending); k++ {
-		r.segOff += len(r.pending[k])
-	}
-	return nil
-}
-
-func (r *tunFile) Write(buf []byte) (int, error) {
-	return r.writeWithScratch(buf, &r.writeIovs)
-}
-
-// WriteReject emits a packet using a dedicated iovec scratch (rejectIovs)
-// distinct from the one used by the coalescer's Write path. This avoids a
-// data race between the inside (listenIn) goroutine emitting reject or
-// self-forward packets and the outside (listenOut) goroutine flushing TCP
-// coalescer passthroughs on the same tunFile.
-func (r *tunFile) WriteReject(buf []byte) (int, error) {
-	return r.writeWithScratch(buf, &r.rejectIovs)
-}
-
-func (r *tunFile) writeWithScratch(buf []byte, iovs *[2]unix.Iovec) (int, error) {
-	if !r.vnetHdr {
-		for {
-			if n, err := unix.Write(r.fd, buf); err == nil {
-				return n, nil
-			} else if err == unix.EAGAIN {
-				if err = r.blockOnWrite(); err != nil {
-					return 0, err
-				}
-				continue
-			} else if err == unix.EINTR {
-				continue
-			} else if err == unix.EBADF {
-				return 0, os.ErrClosed
-			} else {
-				return 0, err
-			}
-		}
-	}
-
-	if len(buf) == 0 {
-		return 0, nil
-	}
-	// Point the payload iovec at the caller's buffer. iovs[0] is pre-wired
-	// to validVnetHdr during tunFile construction so we don't rebuild it here.
-	iovs[1].Base = &buf[0]
-	iovs[1].SetLen(len(buf))
-	iovPtr := uintptr(unsafe.Pointer(&iovs[0]))
-	// The TUN fd is non-blocking (set in newTunFd / newFriend), so writev
-	// either completes promptly or returns EAGAIN — it cannot park the
-	// goroutine inside the kernel. That lets us use syscall.RawSyscall and
-	// skip the runtime.entersyscall / exitsyscall bookkeeping on every
-	// packet; we only pay that cost when we fall through to blockOnWrite.
-	for {
-		n, _, errno := syscall.RawSyscall(unix.SYS_WRITEV, uintptr(r.fd), iovPtr, 2)
-		if errno == 0 {
-			runtime.KeepAlive(buf)
-			if int(n) < virtioNetHdrLen {
-				return 0, io.ErrShortWrite
-			}
-			return int(n) - virtioNetHdrLen, nil
-		}
-		if errno == unix.EAGAIN {
-			runtime.KeepAlive(buf)
-			if err := r.blockOnWrite(); err != nil {
-				return 0, err
-			}
-			continue
-		}
-		if errno == unix.EINTR {
-			continue
-		}
-		runtime.KeepAlive(buf)
-		return 0, errno
-	}
-}
-
-// GSOSupported reports whether this queue was opened with IFF_VNET_HDR and
-// can accept WriteGSO. When false, callers should fall back to per-segment
-// Write calls.
-func (r *tunFile) GSOSupported() bool { return r.vnetHdr }
-
-// WriteGSO emits a TCP TSO superpacket in a single writev. hdr is the
-// IPv4/IPv6 + TCP header prefix (already finalized — total length, IP csum,
-// and TCP pseudo-header partial set by the caller). pays are payload
-// fragments whose concatenation forms the full coalesced payload; each
-// slice is read-only and must stay valid until return. gsoSize is the MSS;
-// every segment except possibly the last is exactly gsoSize bytes.
-// csumStart is the byte offset where the TCP header begins within hdr.
-func (r *tunFile) WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, isV6 bool, csumStart uint16) error {
-	if !r.vnetHdr {
-		return fmt.Errorf("WriteGSO called on tun without IFF_VNET_HDR")
-	}
-	if len(hdr) == 0 || len(pays) == 0 {
-		return nil
-	}
-
-	// Build the virtio_net_hdr. When pays total to <= gsoSize the kernel
-	// would produce a single segment; keep NEEDS_CSUM semantics but skip
-	// the GSO type so the kernel doesn't spuriously mark this as TSO.
-	vhdr := virtioNetHdr{
-		Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
-		HdrLen:     uint16(len(hdr)),
-		GSOSize:    gsoSize,
-		CsumStart:  csumStart,
-		CsumOffset: 16, // TCP checksum field lives 16 bytes into the TCP header
-	}
-	var totalPay int
-	for _, p := range pays {
-		totalPay += len(p)
-	}
-	if totalPay > int(gsoSize) {
-		if isV6 {
-			vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_TCPV6
-		} else {
-			vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_TCPV4
-		}
-	} else {
-		vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_NONE
-		vhdr.GSOSize = 0
-	}
-	vhdr.encode(r.gsoHdrBuf[:])
-
-	// Build the iovec array: [virtio_hdr, hdr, pays...]. r.gsoIovs[0] is
-	// wired to gsoHdrBuf at construction and never changes.
-	need := 2 + len(pays)
-	if cap(r.gsoIovs) < need {
-		grown := make([]unix.Iovec, need)
-		grown[0] = r.gsoIovs[0]
-		r.gsoIovs = grown
-	} else {
-		r.gsoIovs = r.gsoIovs[:need]
-	}
-	r.gsoIovs[1].Base = &hdr[0]
-	r.gsoIovs[1].SetLen(len(hdr))
-	for i, p := range pays {
-		r.gsoIovs[2+i].Base = &p[0]
-		r.gsoIovs[2+i].SetLen(len(p))
-	}
-
-	iovPtr := uintptr(unsafe.Pointer(&r.gsoIovs[0]))
-	iovCnt := uintptr(len(r.gsoIovs))
-	for {
-		n, _, errno := syscall.RawSyscall(unix.SYS_WRITEV, uintptr(r.fd), iovPtr, iovCnt)
-		if errno == 0 {
-			runtime.KeepAlive(hdr)
-			runtime.KeepAlive(pays)
-			if int(n) < virtioNetHdrLen {
-				return io.ErrShortWrite
-			}
-			return nil
-		}
-		if errno == unix.EAGAIN {
-			runtime.KeepAlive(hdr)
-			runtime.KeepAlive(pays)
-			if err := r.blockOnWrite(); err != nil {
-				return err
-			}
-			continue
-		}
-		if errno == unix.EINTR {
-			continue
-		}
-		runtime.KeepAlive(hdr)
-		runtime.KeepAlive(pays)
-		return errno
-	}
-}
-
-func (r *tunFile) wakeForShutdown() error {
-	var buf [8]byte
-	binary.NativeEndian.PutUint64(buf[:], 1)
-	_, err := unix.Write(int(r.readPoll[1].Fd), buf[:])
-	return err
-}
-
-func (r *tunFile) Close() error {
-	if r.closed { // avoid closing more than once. Technically a fd could get re-used, which would be a problem
-		return nil
-	}
-	r.closed = true
-	if r.lastOne {
-		_ = unix.Close(r.shutdownFd)
-	}
-	return unix.Close(r.fd)
-}
-
 type tun struct {
-	*tunFile
-	readers     []*tunFile
+	readers     tio.Container
 	closeLock   sync.Mutex
 	Device      string
 	vpnNetworks []netip.Prefix
@@ -484,6 +34,7 @@ type tun struct {
 	TXQueueLen  int
 	deviceIndex int
 	ioctlFd     uintptr
+	vnetHdr     bool
 
 	Routes                    atomic.Pointer[[]Route]
 	routeTree                 atomic.Pointer[bart.Table[routing.Gateways]]
@@ -622,15 +173,28 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 
 // newTunGeneric does all the stuff common to different tun initialization paths. It will close your files on error.
 func newTunGeneric(c *config.C, l *logrus.Logger, fd int, vnetHdr bool, vpnNetworks []netip.Prefix) (*tun, error) {
-	tfd, err := newTunFd(fd, vnetHdr)
+	var container tio.Container
+	var err error
+	if vnetHdr {
+		container, err = tio.NewGSOContainer()
+	} else {
+		container, err = tio.NewPollContainer()
+	}
+
 	if err != nil {
 		_ = unix.Close(fd)
 		return nil, err
 	}
+	err = container.Add(fd)
+	if err != nil {
+		_ = unix.Close(fd)
+		return nil, err
+	}
+
 	t := &tun{
-		tunFile:                   tfd,
-		readers:                   []*tunFile{tfd},
+		readers:                   container,
 		closeLock:                 sync.Mutex{},
+		vnetHdr:                   vnetHdr,
 		vpnNetworks:               vpnNetworks,
 		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
@@ -732,13 +296,13 @@ func (t *tun) SupportsMultiqueue() bool {
 	return true
 }
 
-func (t *tun) NewMultiQueueReader() (Queue, error) {
+func (t *tun) NewMultiQueueReader() error {
 	t.closeLock.Lock()
 	defer t.closeLock.Unlock()
 
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	flags := uint16(unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_MULTI_QUEUE)
@@ -747,25 +311,23 @@ func (t *tun) NewMultiQueueReader() (Queue, error) {
 	}
 	if _, err = tunSetIff(fd, t.Device, flags); err != nil {
 		_ = unix.Close(fd)
-		return nil, err
+		return err
 	}
 
 	if t.vnetHdr {
 		if err = ioctl(uintptr(fd), unix.TUNSETOFFLOAD, uintptr(tsoOffloadFlags)); err != nil {
 			_ = unix.Close(fd)
-			return nil, fmt.Errorf("failed to enable offload on multiqueue tun fd: %w", err)
+			return fmt.Errorf("failed to enable offload on multiqueue tun fd: %w", err)
 		}
 	}
 
-	out, err := t.tunFile.newFriend(fd)
+	err = t.readers.Add(fd)
 	if err != nil {
 		_ = unix.Close(fd)
-		return nil, err
+		return err
 	}
 
-	t.readers = append(t.readers, out)
-
-	return out, nil
+	return nil
 }
 
 func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
@@ -1195,6 +757,10 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 	t.routeTree.Store(newTree)
 }
 
+func (t *tun) Readers() []tio.Queue {
+	return t.readers.Queues()
+}
+
 func (t *tun) Close() error {
 	t.closeLock.Lock()
 	defer t.closeLock.Unlock()
@@ -1204,32 +770,10 @@ func (t *tun) Close() error {
 		t.routeChan = nil
 	}
 
-	// Signal all readers blocked in poll to wake up and exit
-	_ = t.tunFile.wakeForShutdown()
-
 	if t.ioctlFd > 0 {
 		_ = unix.Close(int(t.ioctlFd))
 		t.ioctlFd = 0
 	}
 
-	for i := range t.readers {
-		if i == 0 {
-			continue //we want to close the zeroth reader last
-		}
-		err := t.readers[i].Close()
-		if err != nil {
-			t.l.WithField("reader", i).WithError(err).Error("error closing tun reader")
-		} else {
-			t.l.WithField("reader", i).Info("closed tun reader")
-		}
-	}
-
-	//this is t.readers[0] too
-	err := t.tunFile.Close()
-	if err != nil {
-		t.l.WithField("reader", 0).WithError(err).Error("error closing tun reader")
-	} else {
-		t.l.WithField("reader", 0).Info("closed tun reader")
-	}
-	return err
+	return t.readers.Close()
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -142,6 +143,6 @@ func (t *TestTun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *TestTun) NewMultiQueueReader() (Queue, error) {
+func (t *TestTun) NewMultiQueueReader() (tio.Queue, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented")
 }

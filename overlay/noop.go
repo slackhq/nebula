@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/netip"
 
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -41,7 +42,7 @@ func (NoopTun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (NoopTun) NewMultiQueueReader() (Queue, error) {
+func (NoopTun) NewMultiQueueReader() (tio.Queue, error) {
 	return nil, errors.New("unsupported")
 }
 

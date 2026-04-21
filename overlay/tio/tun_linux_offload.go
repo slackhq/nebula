@@ -1,7 +1,7 @@
 //go:build linux && !android && !e2e_testing
 // +build linux,!android,!e2e_testing
 
-package overlay
+package tio
 
 import (
 	"encoding/binary"
@@ -10,66 +10,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Size of the legacy struct virtio_net_hdr that the kernel prepends/expects on
-// a TUN opened with IFF_VNET_HDR (TUNSETVNETHDRSZ not set).
-const virtioNetHdrLen = 10
-
-// Maximum size we accept for a single read from a TUN with IFF_VNET_HDR. A
-// TSO superpacket can be up to 64KiB of payload plus a single L2/L3/L4 header
-// prefix plus the virtio header.
-const tunReadBufSize = 65535
-
-// Space for segmented output. Worst case is many small segments, each paying
-// an IP+TCP header. 128KiB comfortably covers the 64KiB payload ceiling.
-const tunSegBufSize = 131072
-
-// tunSegBufCap is the total size we allocate for the per-reader segment
-// buffer. It is sized as one worst-case TSO superpacket (tunSegBufSize) plus
-// the same again as drain headroom so a Read wake can accumulate
-// additional packets after an initial big read without overflowing.
-const tunSegBufCap = tunSegBufSize * 2
-
-// tunDrainCap caps how many packets a single Read will accumulate via
-// the post-wake drain loop. Sized to soak up a burst of small ACKs while
-// bounding how much work a single caller holds before handing off.
-const tunDrainCap = 64
-
-type virtioNetHdr struct {
-	Flags      uint8
-	GSOType    uint8
-	HdrLen     uint16
-	GSOSize    uint16
-	CsumStart  uint16
-	CsumOffset uint16
-}
-
-// decode reads a virtio_net_hdr in host byte order (TUN default; we never
-// call TUNSETVNETLE so the kernel matches our endianness).
-func (h *virtioNetHdr) decode(b []byte) {
-	h.Flags = b[0]
-	h.GSOType = b[1]
-	h.HdrLen = binary.NativeEndian.Uint16(b[2:4])
-	h.GSOSize = binary.NativeEndian.Uint16(b[4:6])
-	h.CsumStart = binary.NativeEndian.Uint16(b[6:8])
-	h.CsumOffset = binary.NativeEndian.Uint16(b[8:10])
-}
-
-// encode is the inverse of decode: writes the virtio_net_hdr fields into b
-// (must be at least virtioNetHdrLen bytes). Used to emit a TSO superpacket
-// on egress.
-func (h *virtioNetHdr) encode(b []byte) {
-	b[0] = h.Flags
-	b[1] = h.GSOType
-	binary.NativeEndian.PutUint16(b[2:4], h.HdrLen)
-	binary.NativeEndian.PutUint16(b[4:6], h.GSOSize)
-	binary.NativeEndian.PutUint16(b[6:8], h.CsumStart)
-	binary.NativeEndian.PutUint16(b[8:10], h.CsumOffset)
-}
-
 // segmentInto splits a TUN-side packet described by hdr into one or more
 // IP packets, each appended to *out as a slice of scratch. scratch must be
 // sized to hold every segment (including replicated headers).
-func segmentInto(pkt []byte, hdr virtioNetHdr, out *[][]byte, scratch []byte) error {
+func segmentInto(pkt []byte, hdr VirtioNetHdr, out *[][]byte, scratch []byte) error {
 	// When RSC_INFO is set the csum_start/csum_offset fields are repurposed to
 	// carry coalescing info rather than checksum offsets. A TUN writing via
 	// IFF_VNET_HDR should never emit this, but if it did we would silently
@@ -105,7 +49,7 @@ func segmentInto(pkt []byte, hdr virtioNetHdr, out *[][]byte, scratch []byte) er
 // handed us with NEEDS_CSUM set. csum_start / csum_offset point at the 16-bit
 // checksum field; we zero it, fold a full sum (the field was pre-loaded with
 // the pseudo-header partial sum by the kernel), and store the result.
-func finishChecksum(seg []byte, hdr virtioNetHdr) error {
+func finishChecksum(seg []byte, hdr VirtioNetHdr) error {
 	cs := int(hdr.CsumStart)
 	co := int(hdr.CsumOffset)
 	if cs+co+2 > len(seg) {
@@ -129,7 +73,7 @@ func finishChecksum(seg []byte, hdr virtioNetHdr) error {
 // are each summed once up front — every segment reuses those three pre-folded
 // uint32 values and combines them with small per-segment deltas (seq, flags,
 // tcpLen, ip_id, total_len) that are cheap to fold in.
-func segmentTCP(pkt []byte, hdr virtioNetHdr, out *[][]byte, scratch []byte) error {
+func segmentTCP(pkt []byte, hdr VirtioNetHdr, out *[][]byte, scratch []byte) error {
 	if hdr.GSOSize == 0 {
 		return fmt.Errorf("gso_size is zero")
 	}

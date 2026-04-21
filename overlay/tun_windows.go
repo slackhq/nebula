@@ -17,6 +17,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"github.com/slackhq/nebula/wintun"
@@ -255,7 +256,7 @@ func (t *winTun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *winTun) NewMultiQueueReader() (Queue, error) {
+func (t *winTun) NewMultiQueueReader() (tio.Queue, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
 }
 

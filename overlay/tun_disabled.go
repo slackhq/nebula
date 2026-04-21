@@ -9,6 +9,7 @@ import (
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -17,9 +18,10 @@ type disabledTun struct {
 	vpnNetworks []netip.Prefix
 
 	// Track these metrics since we don't have the tun device to do it for us
-	tx metrics.Counter
-	rx metrics.Counter
-	l  *logrus.Logger
+	tx         metrics.Counter
+	rx         metrics.Counter
+	l          *logrus.Logger
+	numReaders int
 
 	batchRet [1][]byte
 }
@@ -44,6 +46,7 @@ func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled boo
 		vpnNetworks: vpnNetworks,
 		read:        make(chan []byte, queueLen),
 		l:           l,
+		numReaders:  1,
 	}
 
 	if metricsEnabled {
@@ -112,8 +115,17 @@ func (t *disabledTun) SupportsMultiqueue() bool {
 	return true
 }
 
-func (t *disabledTun) NewMultiQueueReader() (Queue, error) {
-	return t, nil
+func (t *disabledTun) NewMultiQueueReader() error {
+	t.numReaders++
+	return nil
+}
+
+func (t *disabledTun) Readers() []tio.Queue {
+	out := make([]tio.Queue, t.numReaders)
+	for i := range t.numReaders {
+		out[i] = t
+	}
+	return out
 }
 
 func (t *disabledTun) Close() error {

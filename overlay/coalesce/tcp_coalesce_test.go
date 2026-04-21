@@ -1,4 +1,4 @@
-package nebula
+package coalesce
 
 import (
 	"encoding/binary"
@@ -114,7 +114,7 @@ const (
 
 func TestCoalescerPassthroughWhenGSOUnavailable(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: false}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	pkt := buildTCPv4(1000, tcpAck, []byte("hello"))
 	if err := c.Add(pkt); err != nil {
 		t.Fatal(err)
@@ -133,7 +133,7 @@ func TestCoalescerPassthroughWhenGSOUnavailable(t *testing.T) {
 
 func TestCoalescerNonTCPPassthrough(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	pkt := make([]byte, 28)
 	pkt[0] = 0x45
 	binary.BigEndian.PutUint16(pkt[2:4], 28)
@@ -153,7 +153,7 @@ func TestCoalescerNonTCPPassthrough(t *testing.T) {
 
 func TestCoalescerSeedThenFlushAlone(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	pkt := buildTCPv4(1000, tcpAck, make([]byte, 1000))
 	if err := c.Add(pkt); err != nil {
 		t.Fatal(err)
@@ -180,7 +180,7 @@ func TestCoalescerSeedThenFlushAlone(t *testing.T) {
 
 func TestCoalescerCoalescesAdjacentACKs(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	pay := make([]byte, 1200)
 	if err := c.Add(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
@@ -220,7 +220,7 @@ func TestCoalescerCoalescesAdjacentACKs(t *testing.T) {
 
 func TestCoalescerRejectsSeqGap(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	pay := make([]byte, 1200)
 	if err := c.Add(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
@@ -239,7 +239,7 @@ func TestCoalescerRejectsSeqGap(t *testing.T) {
 
 func TestCoalescerRejectsFlagMismatch(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	pay := make([]byte, 1200)
 	if err := c.Add(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
@@ -260,7 +260,7 @@ func TestCoalescerRejectsFlagMismatch(t *testing.T) {
 
 func TestCoalescerRejectsFIN(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	fin := buildTCPv4(1000, tcpAck|tcpFin, []byte("x"))
 	if err := c.Add(fin); err != nil {
 		t.Fatal(err)
@@ -276,7 +276,7 @@ func TestCoalescerRejectsFIN(t *testing.T) {
 
 func TestCoalescerShortLastSegmentClosesChain(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	full := make([]byte, 1200)
 	half := make([]byte, 500)
 	if err := c.Add(buildTCPv4(1000, tcpAck, full)); err != nil {
@@ -311,7 +311,7 @@ func TestCoalescerShortLastSegmentClosesChain(t *testing.T) {
 
 func TestCoalescerPSHFinalizesChain(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	pay := make([]byte, 1200)
 	if err := c.Add(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
@@ -336,7 +336,7 @@ func TestCoalescerPSHFinalizesChain(t *testing.T) {
 
 func TestCoalescerRejectsDifferentFlow(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	pay := make([]byte, 1200)
 	p1 := buildTCPv4(1000, tcpAck, pay)
 	p2 := buildTCPv4(2200, tcpAck, pay)
@@ -358,7 +358,7 @@ func TestCoalescerRejectsDifferentFlow(t *testing.T) {
 
 func TestCoalescerRejectsIPOptions(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	pay := make([]byte, 500)
 	pkt := buildTCPv4(1000, tcpAck, pay)
 	// Bump IHL to 6 to simulate 4 bytes of IP options. Don't actually add
@@ -378,7 +378,7 @@ func TestCoalescerRejectsIPOptions(t *testing.T) {
 
 func TestCoalescerCapBySegments(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	pay := make([]byte, 512)
 	seq := uint32(1000)
 	for i := 0; i < tcpCoalesceMaxSegs+5; i++ {
@@ -402,7 +402,7 @@ func TestCoalescerCapBySegments(t *testing.T) {
 // flows coalesce independently in a single Flush.
 func TestCoalescerMultipleFlowsInSameBatch(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	pay := make([]byte, 1200)
 
 	// Flow A: sport 1000. Flow B: sport 3000.
@@ -459,7 +459,7 @@ func TestCoalescerMultipleFlowsInSameBatch(t *testing.T) {
 // writing passthrough packets synchronously.
 func TestCoalescerPreservesArrivalOrder(t *testing.T) {
 	w := &orderedFakeWriter{gsoEnabled: true}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	// Sequence: coalesceable TCP, ICMP (passthrough), coalesceable TCP on
 	// a different flow. Expected emit order: gso(X), plain(ICMP), gso(Y).
 	pay := make([]byte, 1200)
@@ -525,7 +525,7 @@ func stringSliceEq(a, b []string) bool {
 // packet (SYN) mid-flow only flushes its own flow, not others.
 func TestCoalescerInterleavedFlowsPreserveOrdering(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := newTCPCoalescer(w)
+	c := NewTCPCoalescer(w)
 	pay := make([]byte, 1200)
 
 	// Flow A two segments.

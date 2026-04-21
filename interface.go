@@ -16,6 +16,8 @@ import (
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
+	"github.com/slackhq/nebula/overlay/coalesce"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -85,11 +87,11 @@ type Interface struct {
 	conntrackCacheTimeout time.Duration
 
 	writers []udp.Conn
-	readers []overlay.Queue
+	readers []tio.Queue
 	// tunCoalescers is one tcpCoalescer per tun queue, wrapping readers[i].
 	// decryptToTun sends plaintext into the coalescer; listenOut calls its
 	// Flush at the end of each UDP recvmmsg batch.
-	tunCoalescers []*tcpCoalescer
+	tunCoalescers []*coalesce.TCPCoalescer
 	wg            sync.WaitGroup
 
 	// fatalErr holds the first unexpected reader error that caused shutdown.
@@ -187,8 +189,8 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		routines:              c.routines,
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
-		readers:               make([]overlay.Queue, c.routines),
-		tunCoalescers:         make([]*tcpCoalescer, c.routines),
+		readers:               make([]tio.Queue, c.routines),
+		tunCoalescers:         make([]*coalesce.TCPCoalescer, c.routines),
 		myVpnNetworks:         cs.myVpnNetworks,
 		myVpnNetworksTable:    cs.myVpnNetworksTable,
 		myVpnAddrs:            cs.myVpnAddrs,
@@ -243,16 +245,17 @@ func (f *Interface) activate() error {
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
 
 	// Prepare n tun queues
-	var reader overlay.Queue = f.inside
 	for i := 0; i < f.routines; i++ {
 		if i > 0 {
-			reader, err = f.inside.NewMultiQueueReader()
+			err = f.inside.NewMultiQueueReader()
 			if err != nil {
 				return err
 			}
 		}
-		f.readers[i] = reader
-		f.tunCoalescers[i] = newTCPCoalescer(reader)
+	}
+	f.readers = f.inside.Readers()
+	for i := range f.readers {
+		f.tunCoalescers[i] = coalesce.NewTCPCoalescer(f.readers[i]) //todo don't always do this
 	}
 
 	f.wg.Add(1) // for us to wait on Close() to return
@@ -342,7 +345,7 @@ func (f *Interface) listenOut(i int) {
 	f.l.Debugf("underlay reader %v is done", i)
 }
 
-func (f *Interface) listenIn(reader overlay.Queue, i int) {
+func (f *Interface) listenIn(reader tio.Queue, i int) {
 	rejectBuf := make([]byte, mtu)
 	batch := newSendBatch(sendBatchCap, udp.MTU+32)
 	fwPacket := &firewall.Packet{}

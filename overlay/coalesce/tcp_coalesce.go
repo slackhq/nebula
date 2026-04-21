@@ -1,11 +1,11 @@
-package nebula
+package coalesce
 
 import (
 	"bytes"
 	"encoding/binary"
 	"io"
 
-	"github.com/slackhq/nebula/overlay"
+	"github.com/slackhq/nebula/overlay/tio"
 )
 
 // ipProtoTCP is the IANA protocol number for TCP. Hardcoded instead of
@@ -66,14 +66,14 @@ type coalesceSlot struct {
 	payIovs [][]byte
 }
 
-// tcpCoalescer accumulates adjacent in-flow TCP data segments across
+// TCPCoalescer accumulates adjacent in-flow TCP data segments across
 // multiple concurrent flows and emits each flow's run as a single TSO
-// superpacket via overlay.GSOWriter. All output — coalesced or not — is
+// superpacket via tio.GSOWriter. All output — coalesced or not — is
 // deferred until Flush so arrival order is preserved on the wire. Owns
 // no locks; one coalescer per TUN write queue.
-type tcpCoalescer struct {
+type TCPCoalescer struct {
 	plainW io.Writer
-	gsoW   overlay.GSOWriter // nil when the queue doesn't support TSO
+	gsoW   tio.GSOWriter // nil when the queue doesn't support TSO
 
 	// slots is the ordered event queue. Flush walks it once and emits each
 	// entry as either a WriteGSO (coalesced) or a plainW.Write (passthrough).
@@ -86,14 +86,14 @@ type tcpCoalescer struct {
 	pool      []*coalesceSlot // free list for reuse
 }
 
-func newTCPCoalescer(w io.Writer) *tcpCoalescer {
-	c := &tcpCoalescer{
+func NewTCPCoalescer(w io.Writer) *TCPCoalescer {
+	c := &TCPCoalescer{
 		plainW:    w,
 		slots:     make([]*coalesceSlot, 0, initialSlots),
 		openSlots: make(map[flowKey]*coalesceSlot, initialSlots),
 		pool:      make([]*coalesceSlot, 0, initialSlots),
 	}
-	if gw, ok := w.(overlay.GSOWriter); ok && gw.GSOSupported() {
+	if gw, ok := w.(tio.GSOWriter); ok && gw.GSOSupported() {
 		c.gsoW = gw
 	}
 	return c
@@ -197,7 +197,7 @@ func (p parsedTCP) coalesceable() bool {
 // Add borrows pkt. The caller must keep pkt valid until the next Flush,
 // whether or not the packet was coalesced — passthrough (non-admissible)
 // packets are queued and written at Flush time, not synchronously.
-func (c *tcpCoalescer) Add(pkt []byte) error {
+func (c *TCPCoalescer) Add(pkt []byte) error {
 	if c.gsoW == nil {
 		c.addPassthrough(pkt)
 		return nil
@@ -237,7 +237,7 @@ func (c *tcpCoalescer) Add(pkt []byte) error {
 // via WriteGSO; passthrough slots go out via plainW.Write. Returns the
 // first error observed; keeps draining so one bad packet doesn't hold up
 // the rest. After Flush returns, borrowed payload slices may be recycled.
-func (c *tcpCoalescer) Flush() error {
+func (c *TCPCoalescer) Flush() error {
 	var first error
 	for _, s := range c.slots {
 		var err error
@@ -261,14 +261,14 @@ func (c *tcpCoalescer) Flush() error {
 	return first
 }
 
-func (c *tcpCoalescer) addPassthrough(pkt []byte) {
+func (c *TCPCoalescer) addPassthrough(pkt []byte) {
 	s := c.take()
 	s.passthrough = true
 	s.rawPkt = pkt
 	c.slots = append(c.slots, s)
 }
 
-func (c *tcpCoalescer) seed(pkt []byte, info parsedTCP) {
+func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 	if info.hdrLen > tcpCoalesceHdrCap || info.hdrLen+info.payLen > tcpCoalesceBufSize {
 		// Pathological shape — can't fit our scratch, emit as-is.
 		c.addPassthrough(pkt)
@@ -297,7 +297,7 @@ func (c *tcpCoalescer) seed(pkt []byte, info parsedTCP) {
 // canAppend reports whether info's packet extends the slot's seed: same
 // header shape and stable contents, adjacent seq, not oversized, chain not
 // closed.
-func (c *tcpCoalescer) canAppend(s *coalesceSlot, pkt []byte, info parsedTCP) bool {
+func (c *TCPCoalescer) canAppend(s *coalesceSlot, pkt []byte, info parsedTCP) bool {
 	if s.psh {
 		return false
 	}
@@ -322,7 +322,7 @@ func (c *tcpCoalescer) canAppend(s *coalesceSlot, pkt []byte, info parsedTCP) bo
 	return true
 }
 
-func (c *tcpCoalescer) appendPayload(s *coalesceSlot, pkt []byte, info parsedTCP) {
+func (c *TCPCoalescer) appendPayload(s *coalesceSlot, pkt []byte, info parsedTCP) {
 	s.payIovs = append(s.payIovs, pkt[info.hdrLen:info.hdrLen+info.payLen])
 	s.numSeg++
 	s.totalPay += info.payLen
@@ -332,7 +332,7 @@ func (c *tcpCoalescer) appendPayload(s *coalesceSlot, pkt []byte, info parsedTCP
 	}
 }
 
-func (c *tcpCoalescer) take() *coalesceSlot {
+func (c *TCPCoalescer) take() *coalesceSlot {
 	if n := len(c.pool); n > 0 {
 		s := c.pool[n-1]
 		c.pool[n-1] = nil
@@ -342,7 +342,7 @@ func (c *tcpCoalescer) take() *coalesceSlot {
 	return &coalesceSlot{}
 }
 
-func (c *tcpCoalescer) release(s *coalesceSlot) {
+func (c *TCPCoalescer) release(s *coalesceSlot) {
 	s.passthrough = false
 	s.rawPkt = nil
 	for i := range s.payIovs {
@@ -357,7 +357,7 @@ func (c *tcpCoalescer) release(s *coalesceSlot) {
 
 // flushSlot patches the header and calls WriteGSO. Does not remove the
 // slot from c.slots.
-func (c *tcpCoalescer) flushSlot(s *coalesceSlot) error {
+func (c *TCPCoalescer) flushSlot(s *coalesceSlot) error {
 	total := s.hdrLen + s.totalPay
 	l4Len := total - s.ipHdrLen
 	hdr := s.hdrBuf[:s.hdrLen]

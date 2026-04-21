@@ -13,6 +13,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 )
@@ -126,6 +127,6 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (Queue, error) {
+func (t *tun) NewMultiQueueReader() (tio.Queue, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for android")
 }
