@@ -57,11 +57,11 @@ func fileExists(filename string) bool {
 	return true
 }
 
-func doService(configPath *string, configTest *bool, build string, serviceFlag *string) {
+func doService(configPath *string, configTest *bool, build string, serviceFlag *string) error {
 	if *configPath == "" {
 		ex, err := os.Executable()
 		if err != nil {
-			panic(err)
+			return err
 		}
 		*configPath = filepath.Dir(ex) + "/config.yaml"
 		if !fileExists(*configPath) {
@@ -88,13 +88,13 @@ func doService(configPath *string, configTest *bool, build string, serviceFlag *
 	// - above, in `Run` we create a `logrus.Logger` which is what nebula expects to use
 	s, err := service.New(prg, svcConfig)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	errs := make(chan error, 5)
 	logger, err = s.Logger(errs)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	go func() {
@@ -109,18 +109,16 @@ func doService(configPath *string, configTest *bool, build string, serviceFlag *
 
 	switch *serviceFlag {
 	case "run":
-		err = s.Run()
-		if err != nil {
+		if err := s.Run(); err != nil {
 			// Route any errors to the system logger
 			logger.Error(err)
 		}
 	default:
-		err := service.Control(s, *serviceFlag)
-		if err != nil {
+		if err := service.Control(s, *serviceFlag); err != nil {
 			log.Printf("Valid actions: %q\n", service.ControlAction)
-			log.Fatal(err)
+			return err
 		}
-		return
 	}
 
+	return nil
 }

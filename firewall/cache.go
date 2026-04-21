@@ -1,6 +1,7 @@
 package firewall
 
 import (
+	"context"
 	"sync/atomic"
 	"time"
 
@@ -18,7 +19,7 @@ type ConntrackCacheTicker struct {
 	cache ConntrackCache
 }
 
-func NewConntrackCacheTicker(d time.Duration) *ConntrackCacheTicker {
+func NewConntrackCacheTicker(ctx context.Context, d time.Duration) *ConntrackCacheTicker {
 	if d == 0 {
 		return nil
 	}
@@ -27,15 +28,21 @@ func NewConntrackCacheTicker(d time.Duration) *ConntrackCacheTicker {
 		cache: ConntrackCache{},
 	}
 
-	go c.tick(d)
+	go c.tick(ctx, d)
 
 	return c
 }
 
-func (c *ConntrackCacheTicker) tick(d time.Duration) {
+func (c *ConntrackCacheTicker) tick(ctx context.Context, d time.Duration) {
+	t := time.NewTicker(d)
+	defer t.Stop()
 	for {
-		time.Sleep(d)
-		c.cacheTick.Add(1)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.cacheTick.Add(1)
+		}
 	}
 }
 
