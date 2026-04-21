@@ -45,15 +45,15 @@ type dnsServer struct {
 }
 
 // newDnsServerFromConfig builds a dnsServer, applies the initial config, and
-// registers a reload callback. A goroutine watches ctx so the responder is
-// shut down cleanly when nebula stops. The reload callback is registered
-// before the initial config is applied, so a SIGHUP can later enable, fix,
-// or disable DNS even if the initial application failed.
+// registers a reload callback. The reload callback is registered before the
+// initial config is applied, so a SIGHUP can later enable, fix, or disable
+// DNS even if the initial application failed.
 //
 // The dnsServer internally gates on `lighthouse.serve_dns &&
 // lighthouse.am_lighthouse`. Start and Add are safe to call unconditionally,
-// they no-op when DNS isn't enabled. The returned pointer is always non-nil,
-// even on error.
+// they no-op when DNS isn't enabled. Each Start invocation owns a ctx-cancel
+// watcher that tears the listener down on nebula shutdown. The returned
+// pointer is always non-nil, even on error.
 func newDnsServerFromConfig(ctx context.Context, l *logrus.Logger, cs *CertState, hostMap *HostMap, c *config.C) (*dnsServer, error) {
 	ds := &dnsServer{
 		l:               l,
@@ -71,11 +71,6 @@ func newDnsServerFromConfig(ctx context.Context, l *logrus.Logger, cs *CertState
 			l.WithError(err).Error("Failed to reload DNS responder from config")
 		}
 	})
-
-	go func() {
-		<-ctx.Done()
-		ds.Stop()
-	}()
 
 	if err := ds.reload(c, true); err != nil {
 		return ds, err
@@ -105,11 +100,10 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 	d.enabled.Store(enabled)
 	d.serverMu.Unlock()
 
-	if initial && wantsDns && !amLighthouse {
-		d.l.Warn("DNS server refusing to run because this host is not a lighthouse.")
-	}
-
 	if initial {
+		if wantsDns && !amLighthouse {
+			d.l.Warn("DNS server refusing to run because this host is not a lighthouse.")
+		}
 		return nil
 	}
 
@@ -179,8 +173,20 @@ func (d *dnsServer) Start() {
 	d.started = started
 	d.serverMu.Unlock()
 
+	// Per-invocation ctx watcher. Exits when Start does, so we don't leak a
+	// watcher per reload-driven restart.
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-d.ctx.Done():
+			d.shutdownServer(server, started, "shutdown")
+		case <-done:
+		}
+	}()
+
 	d.l.WithField("dnsListener", addr).Info("Starting DNS responder")
 	err := server.ListenAndServe()
+	close(done)
 
 	// If the listener never bound (bind error) NotifyStartedFunc never fires,
 	// so close started here to release any Stop caller waiting on it.
