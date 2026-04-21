@@ -85,6 +85,7 @@ type Interface struct {
 
 	conntrackCacheTimeout time.Duration
 
+	ctx     context.Context
 	writers []udp.Conn
 	readers []io.ReadWriteCloser
 	wg      sync.WaitGroup
@@ -170,6 +171,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 
 	cs := c.pki.getCertState()
 	ifce := &Interface{
+		ctx:                   ctx,
 		pki:                   c.pki,
 		hostMap:               c.HostMap,
 		outside:               c.Outside,
@@ -303,7 +305,7 @@ func (f *Interface) listenOut(i int) {
 		li = f.outside
 	}
 
-	ctCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
+	ctCache := firewall.NewConntrackCacheTicker(f.ctx, f.conntrackCacheTimeout)
 	lhh := f.lightHouse.NewRequestHandler()
 	plaintext := make([]byte, udp.MTU)
 	h := &header.H{}
@@ -328,7 +330,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
-	conntrackCache := firewall.NewConntrackCacheTicker(f.conntrackCacheTimeout)
+	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, f.conntrackCacheTimeout)
 
 	for {
 		n, err := reader.Read(packet)
