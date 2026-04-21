@@ -54,7 +54,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	//todo!!!
 	go func() {
-		log.Println(http.ListenAndServe("localhost:6060", nil))
+		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
 	}()
 
 	err := configLogger(l, c)
