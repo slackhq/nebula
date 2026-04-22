@@ -4,12 +4,13 @@
 package udp
 
 import (
+	"context"
 	"io"
+	"log/slog"
 	"net/netip"
 	"os"
 	"sync/atomic"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 )
@@ -38,10 +39,10 @@ type TesterConn struct {
 	TxPackets chan *Packet // Packets transmitted outside by nebula
 
 	closed atomic.Bool
-	l      *logrus.Logger
+	l      *slog.Logger
 }
 
-func NewListener(l *logrus.Logger, ip netip.Addr, port int, _ bool, _ int) (Conn, error) {
+func NewListener(l *slog.Logger, ip netip.Addr, port int, _ bool, _ int) (Conn, error) {
 	return &TesterConn{
 		Addr:      netip.AddrPortFrom(ip, uint16(port)),
 		RxPackets: make(chan *Packet, 10),
@@ -62,11 +63,12 @@ func (u *TesterConn) Send(packet *Packet) {
 	if err := h.Parse(packet.Data); err != nil {
 		panic(err)
 	}
-	if u.l.Level >= logrus.DebugLevel {
-		u.l.WithField("header", h).
-			WithField("udpAddr", packet.From).
-			WithField("dataLen", len(packet.Data)).
-			Debug("UDP receiving injected packet")
+	if u.l.Enabled(context.Background(), slog.LevelDebug) {
+		u.l.Debug("UDP receiving injected packet",
+			slog.Any("header", h),
+			slog.Any("udpAddr", packet.From),
+			slog.Int("dataLen", len(packet.Data)),
+		)
 	}
 	u.RxPackets <- packet
 }
