@@ -11,6 +11,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/udp"
@@ -263,7 +264,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		go handshakeManager.Run(ctx)
 	}
 
-	statsStart, err := startStats(l, c, buildVersion, configTest)
+	statsStart, err := startStats(logbridge.FromLogrus(l), c, buildVersion, configTest)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to start stats emitter", err)
 	}
