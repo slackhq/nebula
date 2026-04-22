@@ -7,6 +7,7 @@ import (
 	"crypto"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -16,9 +17,7 @@ import (
 	"unsafe"
 
 	"github.com/gaissmai/bart"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"github.com/slackhq/nebula/wintun"
@@ -34,16 +33,16 @@ type winTun struct {
 	MTU         int
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	l           *logrus.Logger
+	l           *slog.Logger
 
 	tun *wintun.NativeTun
 }
 
-func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (Device, error) {
+func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (Device, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Windows")
 }
 
-func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*winTun, error) {
+func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*winTun, error) {
 	err := checkWinTunExists()
 	if err != nil {
 		return nil, fmt.Errorf("can not load the wintun driver: %w", err)
@@ -72,7 +71,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	if err != nil {
 		// Windows 10 has an issue with unclean shutdowns not fully cleaning up the wintun device.
 		// Trying a second time resolves the issue.
-		l.WithError(err).Debug("Failed to create wintun device, retrying")
+		l.Debug("Failed to create wintun device, retrying", slog.Any("error", err))
 		tunDevice, err = wintun.CreateTUNWithRequestedGUID(deviceName, guid, t.MTU)
 		if err != nil {
 			return nil, &NameError{
@@ -86,7 +85,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	c.RegisterReloadCallback(func(c *config.C) {
 		err := t.reload(c, false)
 		if err != nil {
-			util.LogWithContextIfNeeded("failed to reload tun device", err, logbridge.FromLogrus(t.l))
+			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
 		}
 	})
 
@@ -116,14 +115,14 @@ func (t *winTun) reload(c *config.C, initial bool) error {
 		// Remove first, if the system removes a wanted route hopefully it will be re-added next
 		err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes))
 		if err != nil {
-			util.LogWithContextIfNeeded("Failed to remove routes", err, logbridge.FromLogrus(t.l))
+			util.LogWithContextIfNeeded("Failed to remove routes", err, t.l)
 		}
 
 		// Ensure any routes we actually want are installed
 		err = t.addRoutes(true)
 		if err != nil {
 			// Catch any stray logs
-			util.LogWithContextIfNeeded("Failed to add routes", err, logbridge.FromLogrus(t.l))
+			util.LogWithContextIfNeeded("Failed to add routes", err, t.l)
 		}
 	}
 
@@ -165,13 +164,13 @@ func (t *winTun) addRoutes(logErrors bool) error {
 		if err != nil {
 			retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 			if logErrors {
-				retErr.Log(logbridge.FromLogrus(t.l))
+				retErr.Log(t.l)
 				continue
 			} else {
 				return retErr
 			}
 		} else {
-			t.l.WithField("route", r).Info("Added route")
+			t.l.Info("Added route", slog.Any("route", r))
 		}
 
 		if !foundDefault4 {
@@ -209,9 +208,9 @@ func (t *winTun) removeRoutes(routes []Route) error {
 		// See comment on luid.AddRoute
 		err := luid.DeleteRoute(r.Cidr, r.Via[0].Addr())
 		if err != nil {
-			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
+			t.l.Error("Failed to remove route", slog.Any("error", err), slog.Any("route", r))
 		} else {
-			t.l.WithField("route", r).Info("Removed route")
+			t.l.Info("Removed route", slog.Any("route", r))
 		}
 	}
 	return nil
