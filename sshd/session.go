@@ -44,6 +44,7 @@ func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.New
 }
 
 func (s *session) handleChannels(chans <-chan ssh.NewChannel) {
+	defer s.Close()
 	for newChannel := range chans {
 		if newChannel.ChannelType() != "session" {
 			s.l.WithField("sshChannelType", newChannel.ChannelType()).Error("unknown channel type")
@@ -62,7 +63,6 @@ func (s *session) handleChannels(chans <-chan ssh.NewChannel) {
 }
 
 func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
-	defer s.Close()
 	for req := range in {
 		var err error
 		switch req.Type {
@@ -130,7 +130,6 @@ func (s *session) createTerm(channel ssh.Channel) *term.Terminal {
 }
 
 func (s *session) handleInput() {
-	defer s.Close()
 	w := &stringWriter{w: s.term}
 	for {
 		line, err := s.term.ReadLine()
