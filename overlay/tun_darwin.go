@@ -16,6 +16,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	netroute "golang.org/x/net/route"
@@ -139,7 +140,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	c.RegisterReloadCallback(func(c *config.C) {
 		err := t.reload(c, false)
 		if err != nil {
-			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+			util.LogWithContextIfNeeded("failed to reload tun device", err, logbridge.FromLogrus(t.l))
 		}
 	})
 
@@ -327,14 +328,14 @@ func (t *tun) reload(c *config.C, initial bool) error {
 		// Remove first, if the system removes a wanted route hopefully it will be re-added next
 		err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes))
 		if err != nil {
-			util.LogWithContextIfNeeded("Failed to remove routes", err, t.l)
+			util.LogWithContextIfNeeded("Failed to remove routes", err, logbridge.FromLogrus(t.l))
 		}
 
 		// Ensure any routes we actually want are installed
 		err = t.addRoutes(true)
 		if err != nil {
 			// Catch any stray logs
-			util.LogWithContextIfNeeded("Failed to add routes", err, t.l)
+			util.LogWithContextIfNeeded("Failed to add routes", err, logbridge.FromLogrus(t.l))
 		}
 	}
 
@@ -394,7 +395,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 			} else {
 				retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 				if logErrors {
-					retErr.Log(t.l)
+					retErr.Log(logbridge.FromLogrus(t.l))
 				} else {
 					return retErr
 				}

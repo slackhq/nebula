@@ -130,7 +130,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 		err := h.reload(c, false)
 		switch v := err.(type) {
 		case *util.ContextualError:
-			v.Log(l)
+			v.Log(logbridge.FromLogrus(l))
 		case error:
 			l.WithError(err).Error("failed to reload lighthouse")
 		}
