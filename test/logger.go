@@ -2,9 +2,11 @@ package test
 
 import (
 	"io"
+	"log/slog"
 	"os"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/logbridge"
 )
 
 func NewLogger() *logrus.Logger {
@@ -26,4 +28,11 @@ func NewLogger() *logrus.Logger {
 	}
 
 	return l
+}
+
+// NewSlogLogger returns a *slog.Logger backed by NewLogger via logbridge.
+// Used while subsystems migrate from logrus to slog so individual tests
+// can flip without waiting for the test infrastructure to move.
+func NewSlogLogger() *slog.Logger {
+	return logbridge.FromLogrus(NewLogger())
 }
