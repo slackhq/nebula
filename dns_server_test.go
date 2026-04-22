@@ -16,6 +16,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type stubDNSWriter struct{}
+
+func (stubDNSWriter) LocalAddr() net.Addr { return &net.UDPAddr{} }
+func (stubDNSWriter) RemoteAddr() net.Addr {
+	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 5353}
+}
+func (stubDNSWriter) Write([]byte) (int, error) { return 0, nil }
+func (stubDNSWriter) WriteMsg(*dns.Msg) error   { return nil }
+func (stubDNSWriter) Close() error              { return nil }
+func (stubDNSWriter) TsigStatus() error         { return nil }
+func (stubDNSWriter) TsigTimersOnly(bool)       {}
+func (stubDNSWriter) Hijack()                   {}
+
 func TestParsequery(t *testing.T) {
 	l := slog.New(slog.NewTextHandler(io.Discard, nil))
 	hostMap := &HostMap{}
@@ -33,18 +46,56 @@ func TestParsequery(t *testing.T) {
 		netip.MustParseAddr("fd01::25"),
 	}
 	ds.Add("test.com.com", addrs)
+	ds.Add("v4only.com.com", []netip.Addr{netip.MustParseAddr("1.2.3.6")})
+	ds.Add("v6only.com.com", []netip.Addr{netip.MustParseAddr("fd01::26")})
 
 	m := &dns.Msg{}
 	m.SetQuestion("test.com.com", dns.TypeA)
 	ds.parseQuery(m, nil)
 	assert.NotNil(t, m.Answer)
 	assert.Equal(t, "1.2.3.4", m.Answer[0].(*dns.A).A.String())
+	assert.Equal(t, dns.RcodeSuccess, m.Rcode)
 
 	m = &dns.Msg{}
 	m.SetQuestion("test.com.com", dns.TypeAAAA)
 	ds.parseQuery(m, nil)
 	assert.NotNil(t, m.Answer)
 	assert.Equal(t, "fd01::24", m.Answer[0].(*dns.AAAA).AAAA.String())
+	assert.Equal(t, dns.RcodeSuccess, m.Rcode)
+
+	// A known name with no record of the requested type should return NODATA
+	// (NOERROR with empty answer), not NXDOMAIN.
+	m = &dns.Msg{}
+	m.SetQuestion("v4only.com.com", dns.TypeAAAA)
+	ds.parseQuery(m, nil)
+	assert.Empty(t, m.Answer)
+	assert.Equal(t, dns.RcodeSuccess, m.Rcode)
+
+	m = &dns.Msg{}
+	m.SetQuestion("v6only.com.com", dns.TypeA)
+	ds.parseQuery(m, nil)
+	assert.Empty(t, m.Answer)
+	assert.Equal(t, dns.RcodeSuccess, m.Rcode)
+
+	// An unknown name should still return NXDOMAIN.
+	m = &dns.Msg{}
+	m.SetQuestion("unknown.com.com", dns.TypeA)
+	ds.parseQuery(m, nil)
+	assert.Empty(t, m.Answer)
+	assert.Equal(t, dns.RcodeNameError, m.Rcode)
+
+	// short lookups should not fail
+	m = &dns.Msg{}
+	m.Question = []dns.Question{{Name: "", Qtype: dns.TypeTXT, Qclass: dns.ClassINET}}
+	ds.parseQuery(m, stubDNSWriter{})
+	assert.Empty(t, m.Answer)
+	assert.Equal(t, dns.RcodeNameError, m.Rcode)
+
+	m = &dns.Msg{}
+	m.Question = []dns.Question{{Name: ".", Qtype: dns.TypeTXT, Qclass: dns.ClassINET}}
+	ds.parseQuery(m, stubDNSWriter{})
+	assert.Empty(t, m.Answer)
+	assert.Equal(t, dns.RcodeNameError, m.Rcode)
 }
 
 func Test_getDnsServerAddr(t *testing.T) {

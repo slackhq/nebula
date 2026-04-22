@@ -70,7 +70,8 @@ type LightHouse struct {
 	// Addr's of relays that can be used by peers to access me
 	relaysForMe atomic.Pointer[[]netip.Addr]
 
-	queryChan chan netip.Addr
+	updateTrigger chan struct{}
+	queryChan     chan netip.Addr
 
 	calculatedRemotes atomic.Pointer[bart.Table[[]*calculatedRemote]] // Maps VpnAddr to []*calculatedRemote
 
@@ -106,6 +107,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 		nebulaPort:         nebulaPort,
 		punchConn:          pc,
 		punchy:             p,
+		updateTrigger:      make(chan struct{}, 1),
 		queryChan:          make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 64)),
 		l:                  l,
 	}
@@ -317,6 +319,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 		if !initial {
 			//NOTE: we are not tearing down existing lighthouse connections because they might be used for non lighthouse traffic
 			lh.l.Info("lighthouse.hosts has changed")
+			lh.TriggerUpdate()
 		}
 	}
 
@@ -842,9 +845,22 @@ func (lh *LightHouse) StartUpdateWorker() {
 				return
 			case <-clockSource.C:
 				continue
+			case <-lh.updateTrigger:
+				continue
 			}
 		}
 	}()
+}
+
+// TriggerUpdate requests an immediate lighthouse update. This is a non-blocking
+// operation intended to be called after a handshake completes with a lighthouse,
+// so the lighthouse has our current addresses without waiting for the next
+// periodic update.
+func (lh *LightHouse) TriggerUpdate() {
+	select {
+	case lh.updateTrigger <- struct{}{}:
+	default:
+	}
 }
 
 func (lh *LightHouse) SendUpdate() {
