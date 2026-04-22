@@ -23,9 +23,8 @@ import (
 
 // statsServer owns nebula's stats subsystem: the periodic metric capture
 // goroutine and (for prometheus) an HTTP listener. It mirrors the lifecycle
-// shape of dnsServer: constructor wires the reload callback and a ctx watcher,
-// reload reconciles state with the latest config, Start runs any blocking
-// listener, Stop tears the runtime down.
+// shape of dnsServer: constructor wires the reload callback, reload records
+// config, Start builds and runs the runtime, Stop tears it down.
 type statsServer struct {
 	l            *logrus.Logger
 	ctx          context.Context
@@ -36,10 +35,18 @@ type statsServer struct {
 	// it so callers don't need to know the gating rules.
 	enabled atomic.Bool
 
-	runMu     sync.Mutex
-	runCfg    *statsConfig
-	runCancel context.CancelFunc // cancels the active capture loop
-	listener  *http.Server       // active prometheus listener, nil otherwise
+	runMu  sync.Mutex
+	runCfg *statsConfig
+	run    *statsRuntime // non-nil while a runtime is live
+}
+
+// statsRuntime is the live state owned by a single Start invocation. Start
+// stashes a pointer under runMu; Stop and Start's own exit path use pointer
+// equality to tell "my runtime" apart from one that replaced it after a
+// reload.
+type statsRuntime struct {
+	cancel   context.CancelFunc
+	listener *http.Server // nil for graphite
 }
 
 // statsConfig is the snapshot of stats-related config that drives the runtime.
@@ -47,8 +54,11 @@ type statsServer struct {
 type statsConfig struct {
 	typ      string
 	interval time.Duration
+	graphite graphiteConfig
+	prom     promConfig
+}
 
-	// graphite
+type graphiteConfig struct {
 	protocol string
 	host     string
 	// resolvedAddr is the string form of host resolved at config-load time.
@@ -56,8 +66,9 @@ type statsConfig struct {
 	// when stats.host hasn't been edited.
 	resolvedAddr string
 	prefix       string
+}
 
-	// prometheus
+type promConfig struct {
 	listen    string
 	path      string
 	namespace string
@@ -65,15 +76,12 @@ type statsConfig struct {
 }
 
 // newStatsServerFromConfig builds a statsServer, applies the initial config,
-// and registers a reload callback. A goroutine watches ctx so the runtime
-// shuts down cleanly when nebula stops. The reload callback is registered
-// before the initial config is applied, so a SIGHUP can later enable, fix,
-// or disable stats even if the initial application failed.
+// and registers a reload callback. The reload callback is registered before
+// the initial config is applied so a SIGHUP can later enable, fix, or disable
+// stats even if the initial application failed.
 //
-// The statsServer internally gates on stats.type / interval / etc; Start is
-// safe to call unconditionally, it no-ops when stats aren't enabled or there
-// is no listener to run. The returned pointer is always non-nil, even on
-// error.
+// Start is safe to call unconditionally: it no-ops when stats are disabled.
+// The returned pointer is always non-nil, even on error.
 func newStatsServerFromConfig(ctx context.Context, l *logrus.Logger, c *config.C, buildVersion string, configTest bool) (*statsServer, error) {
 	s := &statsServer{
 		l:            l,
@@ -88,66 +96,148 @@ func newStatsServerFromConfig(ctx context.Context, l *logrus.Logger, c *config.C
 		}
 	})
 
-	go func() {
-		<-ctx.Done()
-		s.Stop()
-	}()
-
 	if err := s.reload(c, true); err != nil {
 		return s, err
 	}
 	return s, nil
 }
 
-// reload applies the latest config and reconciles the running state with it.
-// If the relevant config didn't change it does nothing. Otherwise it tears
-// down the current runtime and builds a new one from the new config. On a
-// non-initial reload it also restarts the listener goroutine; on initial
-// reload Control.Start is what launches the first listener via statsStart.
+// reload records the latest config. On the initial call it only records it;
+// Control.Start is what launches the first runtime via statsStart. On later
+// calls it reconciles the running runtime with the new config:
+//
+//   - newly enabled -> spawn Start
+//   - newly disabled -> Stop the runtime
+//   - config changed (still enabled) -> Stop the old, Start the new
+//   - no change -> no-op
 func (s *statsServer) reload(c *config.C, initial bool) error {
 	newCfg, err := loadStatsConfig(c)
 	if err != nil {
 		return err
 	}
+	enabled := newCfg.typ != "" && newCfg.typ != "none"
 
 	s.runMu.Lock()
-	defer s.runMu.Unlock()
-
-	if s.runCfg != nil && *s.runCfg == newCfg {
-		return nil
-	}
-
-	s.unlockedTearDown()
+	sameCfg := s.runCfg != nil && *s.runCfg == newCfg
 	s.runCfg = &newCfg
+	running := s.run != nil
+	s.runMu.Unlock()
 
-	if newCfg.typ == "" || newCfg.typ == "none" {
+	s.enabled.Store(enabled)
+
+	if initial || sameCfg {
 		return nil
 	}
 
-	if s.configTest {
-		// Validate only; don't spawn or bind.
-		return nil
+	if running {
+		s.Stop()
 	}
-
-	listener, err := s.unlockedStartRuntime(newCfg)
-	if err != nil {
-		return err
-	}
-	s.listener = listener
-	s.enabled.Store(true)
-
-	if !initial && listener != nil {
-		// Replace the listener goroutine that exited when we tore down the
-		// previous runtime.
+	if enabled && !s.configTest {
 		go s.Start()
 	}
 	return nil
 }
 
-// unlockedStartRuntime spawns the capture loop and (for prometheus) returns a
-// configured but un-served http.Server. Caller holds runMu and must record
-// s.runCancel.
-func (s *statsServer) unlockedStartRuntime(cfg statsConfig) (*http.Server, error) {
+// Start builds the runtime from the latest config, spawns the capture loop,
+// and blocks until Stop is called or ctx fires. For prometheus it also serves
+// the HTTP listener. For graphite it blocks on the capture loop's context.
+// Safe to call when stats are disabled or already running (both no-op).
+func (s *statsServer) Start() {
+	if !s.enabled.Load() || s.configTest {
+		return
+	}
+
+	s.runMu.Lock()
+	if s.ctx.Err() != nil || s.run != nil || s.runCfg == nil {
+		s.runMu.Unlock()
+		return
+	}
+	cfg := *s.runCfg
+	captureFns, listener := s.buildRuntime(cfg)
+	runCtx, cancel := context.WithCancel(s.ctx)
+	rt := &statsRuntime{cancel: cancel, listener: listener}
+	s.run = rt
+	s.runMu.Unlock()
+
+	go captureStatsLoop(runCtx, cfg.interval, captureFns)
+
+	cleanExit := true
+	if listener == nil {
+		// Graphite: no HTTP listener to serve; block until teardown.
+		<-runCtx.Done()
+	} else {
+		cleanExit = s.serveListener(listener)
+	}
+
+	// Clear our runtime only if nothing has replaced it. Stop races through
+	// here too but leaves s.run == nil, so the pointer check skips.
+	s.runMu.Lock()
+	if s.run == rt {
+		rt.cancel()
+		s.run = nil
+		// A listener that exited with an error (e.g., bind conflict) leaves
+		// runCfg cached as if it were applied. Drop it so a SIGHUP with the
+		// same config re-triggers Start once the user fixes the underlying
+		// problem.
+		if !cleanExit {
+			s.runCfg = nil
+		}
+	}
+	s.runMu.Unlock()
+}
+
+// serveListener runs ListenAndServe and ensures ctx cancellation unblocks it.
+// Returns true if the listener exited cleanly (Stop, ctx cancellation, or any
+// other http.ErrServerClosed path), false on an unexpected error.
+func (s *statsServer) serveListener(listener *http.Server) bool {
+	// Per-invocation watcher: ctx cancellation triggers a listener shutdown
+	// which in turn unblocks ListenAndServe. Closing `done` on exit keeps
+	// the watcher from outliving this call.
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-s.ctx.Done():
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := listener.Shutdown(shutdownCtx); err != nil {
+				s.l.WithError(err).Warn("Failed to shut down prometheus stats listener")
+			}
+		case <-done:
+		}
+	}()
+	defer close(done)
+
+	s.l.WithField("addr", listener.Addr).Info("Starting prometheus stats listener")
+	err := listener.ListenAndServe()
+	if err == nil || errors.Is(err, http.ErrServerClosed) {
+		return true
+	}
+	s.l.WithError(err).Error("Prometheus stats listener exited")
+	return false
+}
+
+// Stop tears down the active runtime, if any. Idempotent.
+func (s *statsServer) Stop() {
+	s.runMu.Lock()
+	rt := s.run
+	s.run = nil
+	s.runMu.Unlock()
+	if rt == nil {
+		return
+	}
+	rt.cancel()
+	if rt.listener != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := rt.listener.Shutdown(shutdownCtx); err != nil {
+			s.l.WithError(err).Warn("Failed to shut down prometheus stats listener")
+		}
+		cancel()
+	}
+}
+
+// buildRuntime produces the capture functions and, for prometheus, an un-served
+// http.Server from cfg. cfg has already been validated by loadStatsConfig.
+func (s *statsServer) buildRuntime(cfg statsConfig) ([]func(), *http.Server) {
 	// rcrowley/go-metrics guards these registrations with a private sync.Once,
 	// so subsequent reloads are no-ops.
 	metrics.RegisterDebugGCStats(metrics.DefaultRegistry)
@@ -158,22 +248,17 @@ func (s *statsServer) unlockedStartRuntime(cfg statsConfig) (*http.Server, error
 		func() { metrics.CaptureRuntimeMemStatsOnce(metrics.DefaultRegistry) },
 	}
 
-	var listener *http.Server
-
 	switch cfg.typ {
 	case "graphite":
 		// loadStatsConfig already resolved and validated the address; re-parse
 		// the resolved form (no DNS lookup) to get a *net.TCPAddr.
-		addr, err := net.ResolveTCPAddr(cfg.protocol, cfg.resolvedAddr)
-		if err != nil {
-			return nil, fmt.Errorf("error while setting up graphite sink: %s", err)
-		}
+		addr, _ := net.ResolveTCPAddr(cfg.graphite.protocol, cfg.graphite.resolvedAddr)
 		gcfg := graphite.Config{
 			Addr:          addr,
 			Registry:      metrics.DefaultRegistry,
 			FlushInterval: cfg.interval,
 			DurationUnit:  time.Nanosecond,
-			Prefix:        cfg.prefix,
+			Prefix:        cfg.graphite.prefix,
 			Percentiles:   []float64{0.5, 0.75, 0.95, 0.99, 0.999},
 		}
 		captureFns = append(captureFns, func() {
@@ -183,13 +268,14 @@ func (s *statsServer) unlockedStartRuntime(cfg statsConfig) (*http.Server, error
 		})
 		s.l.WithFields(logrus.Fields{
 			"interval": cfg.interval,
-			"prefix":   cfg.prefix,
+			"prefix":   cfg.graphite.prefix,
 			"addr":     addr,
 		}).Info("Starting graphite stats")
+		return captureFns, nil
 
 	case "prometheus":
 		pr := prometheus.NewRegistry()
-		pClient := mp.NewPrometheusProvider(metrics.DefaultRegistry, cfg.namespace, cfg.subsystem, pr, cfg.interval)
+		pClient := mp.NewPrometheusProvider(metrics.DefaultRegistry, cfg.prom.namespace, cfg.prom.subsystem, pr, cfg.interval)
 		captureFns = append(captureFns, func() {
 			if err := pClient.UpdatePrometheusMetricsOnce(); err != nil {
 				s.l.WithError(err).Error("Prometheus metrics update failed")
@@ -197,8 +283,8 @@ func (s *statsServer) unlockedStartRuntime(cfg statsConfig) (*http.Server, error
 		})
 
 		g := prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: cfg.namespace,
-			Subsystem: cfg.subsystem,
+			Namespace: cfg.prom.namespace,
+			Subsystem: cfg.prom.subsystem,
 			Name:      "info",
 			Help:      "Version information for the Nebula binary",
 			ConstLabels: prometheus.Labels{
@@ -211,66 +297,10 @@ func (s *statsServer) unlockedStartRuntime(cfg statsConfig) (*http.Server, error
 		g.Set(1)
 
 		mux := http.NewServeMux()
-		mux.Handle(cfg.path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: s.l}))
-		listener = &http.Server{Addr: cfg.listen, Handler: mux}
-
-	default:
-		return nil, fmt.Errorf("stats.type was not understood: %s", cfg.typ)
+		mux.Handle(cfg.prom.path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: s.l}))
+		return captureFns, &http.Server{Addr: cfg.prom.listen, Handler: mux}
 	}
-
-	runCtx, cancel := context.WithCancel(s.ctx)
-	go captureStatsLoop(runCtx, cfg.interval, captureFns)
-	s.runCancel = cancel
-	return listener, nil
-}
-
-// unlockedTearDown stops the active capture loop and shuts down any active
-// listener. Caller holds runMu.
-func (s *statsServer) unlockedTearDown() {
-	s.enabled.Store(false)
-	if s.runCancel != nil {
-		s.runCancel()
-		s.runCancel = nil
-	}
-	if s.listener != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := s.listener.Shutdown(shutdownCtx); err != nil {
-			s.l.WithError(err).Warn("Failed to shut down prometheus stats listener")
-		}
-		cancel()
-		s.listener = nil
-	}
-}
-
-// Start runs the prometheus listener until Stop is called or the listener
-// errors. For graphite or disabled stats it returns immediately - the capture
-// loop runs independently. Safe to call when stats are disabled. This is what
-// Control.statsStart points at.
-func (s *statsServer) Start() {
-	if !s.enabled.Load() {
-		return
-	}
-
-	s.runMu.Lock()
-	listener := s.listener
-	s.runMu.Unlock()
-
-	if listener == nil {
-		return
-	}
-
-	s.l.WithField("addr", listener.Addr).Info("Starting prometheus stats listener")
-	if err := listener.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		s.l.WithError(err).Error("Prometheus stats listener exited")
-	}
-}
-
-// Stop tears down the active runtime. Idempotent.
-func (s *statsServer) Stop() {
-	s.runMu.Lock()
-	defer s.runMu.Unlock()
-	s.unlockedTearDown()
-	s.runCfg = nil
+	return captureFns, nil
 }
 
 // captureStatsLoop runs each fn on every tick of d until ctx is cancelled.
@@ -304,28 +334,28 @@ func loadStatsConfig(c *config.C) (statsConfig, error) {
 
 	switch cfg.typ {
 	case "graphite":
-		cfg.protocol = c.GetString("stats.protocol", "tcp")
-		cfg.host = c.GetString("stats.host", "")
-		if cfg.host == "" {
+		cfg.graphite.protocol = c.GetString("stats.protocol", "tcp")
+		cfg.graphite.host = c.GetString("stats.host", "")
+		if cfg.graphite.host == "" {
 			return cfg, errors.New("stats.host can not be empty")
 		}
-		addr, err := net.ResolveTCPAddr(cfg.protocol, cfg.host)
+		addr, err := net.ResolveTCPAddr(cfg.graphite.protocol, cfg.graphite.host)
 		if err != nil {
 			return cfg, fmt.Errorf("error while setting up graphite sink: %s", err)
 		}
-		cfg.resolvedAddr = addr.String()
-		cfg.prefix = c.GetString("stats.prefix", "nebula")
+		cfg.graphite.resolvedAddr = addr.String()
+		cfg.graphite.prefix = c.GetString("stats.prefix", "nebula")
 	case "prometheus":
-		cfg.listen = c.GetString("stats.listen", "")
-		if cfg.listen == "" {
+		cfg.prom.listen = c.GetString("stats.listen", "")
+		if cfg.prom.listen == "" {
 			return cfg, errors.New("stats.listen should not be empty")
 		}
-		cfg.path = c.GetString("stats.path", "")
-		if cfg.path == "" {
+		cfg.prom.path = c.GetString("stats.path", "")
+		if cfg.prom.path == "" {
 			return cfg, errors.New("stats.path should not be empty")
 		}
-		cfg.namespace = c.GetString("stats.namespace", "")
-		cfg.subsystem = c.GetString("stats.subsystem", "")
+		cfg.prom.namespace = c.GetString("stats.namespace", "")
+		cfg.prom.subsystem = c.GetString("stats.subsystem", "")
 	default:
 		return cfg, fmt.Errorf("stats.type was not understood: %s", cfg.typ)
 	}
