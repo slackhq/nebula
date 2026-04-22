@@ -241,6 +241,9 @@ func (d *dnsServer) Query(q uint16, data string) (netip.Addr, bool) {
 }
 
 func (d *dnsServer) QueryCert(data string) string {
+	if len(data) < 2 {
+		return ""
+	}
 	ip, err := netip.ParseAddr(data[:len(data)-1])
 	if err != nil {
 		return ""
