@@ -62,7 +62,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	})
 
-	pki, err := NewPKIFromConfig(l, c)
+	pki, err := NewPKIFromConfig(logbridge.FromLogrus(l), c)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to load PKI from config", err)
 	}
