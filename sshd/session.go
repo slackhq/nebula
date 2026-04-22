@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/anmitsu/go-shlex"
 	"github.com/armon/go-radix"
@@ -13,11 +14,12 @@ import (
 )
 
 type session struct {
-	l        *logrus.Entry
-	c        *ssh.ServerConn
-	term     *term.Terminal
-	commands *radix.Tree
-	exitChan chan bool
+	l         *logrus.Entry
+	c         *ssh.ServerConn
+	term      *term.Terminal
+	commands  *radix.Tree
+	exitChan  chan struct{}
+	closeOnce sync.Once
 }
 
 func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.NewChannel, l *logrus.Entry) *session {
@@ -25,7 +27,7 @@ func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.New
 		commands: radix.NewFromMap(commands.ToMap()),
 		l:        l,
 		c:        conn,
-		exitChan: make(chan bool),
+		exitChan: make(chan struct{}),
 	}
 
 	s.commands.Insert("logout", &Command{
@@ -101,7 +103,6 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 
 		if err != nil {
 			s.l.WithError(err).Info("Error handling ssh session requests")
-			s.Close()
 			return
 		}
 	}
@@ -124,11 +125,11 @@ func (s *session) createTerm(channel ssh.Channel) *term.Terminal {
 		return "", 0, false
 	}
 
-	go s.handleInput(channel)
+	go s.handleInput()
 	return term
 }
 
-func (s *session) handleInput(channel ssh.Channel) {
+func (s *session) handleInput() {
 	defer s.Close()
 	w := &stringWriter{w: s.term}
 	for {
@@ -171,10 +172,11 @@ func (s *session) dispatchCommand(line string, w StringWriter) {
 	}
 
 	_ = execCommand(c, args[1:], w)
-	return
 }
 
 func (s *session) Close() {
-	s.c.Close()
-	s.exitChan <- true
+	s.closeOnce.Do(func() {
+		s.c.Close()
+		close(s.exitChan)
+	})
 }
