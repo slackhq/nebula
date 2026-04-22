@@ -12,8 +12,9 @@ import (
 	"net/netip"
 	"syscall"
 
-	"golang.org/x/sys/unix"
 	"log/slog"
+
+	"golang.org/x/sys/unix"
 )
 
 func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
