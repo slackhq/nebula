@@ -9,6 +9,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/logbridge"
 )
 
 // NOISE IX Handshakes
@@ -232,7 +233,7 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 		}
 	}
 
-	myIndex, err := generateIndex(f.l)
+	myIndex, err := generateIndex(logbridge.FromLogrus(f.l))
 	if err != nil {
 		f.l.WithError(err).WithField("vpnAddrs", vpnAddrs).WithField("from", via).
 			WithField("certName", certName).
