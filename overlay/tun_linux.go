@@ -19,6 +19,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"github.com/vishvananda/netlink"
@@ -325,7 +326,7 @@ func newTunGeneric(c *config.C, l *logrus.Logger, fd int, vpnNetworks []netip.Pr
 	c.RegisterReloadCallback(func(c *config.C) {
 		err := t.reload(c, false)
 		if err != nil {
-			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+			util.LogWithContextIfNeeded("failed to reload tun device", err, logbridge.FromLogrus(t.l))
 		}
 	})
 
@@ -399,7 +400,7 @@ func (t *tun) reload(c *config.C, initial bool) error {
 		err = t.addRoutes(true)
 		if err != nil {
 			// This should never be called since addRoutes should log its own errors in a reload condition
-			util.LogWithContextIfNeeded("Failed to refresh routes", err, t.l)
+			util.LogWithContextIfNeeded("Failed to refresh routes", err, logbridge.FromLogrus(t.l))
 		}
 	}
 
@@ -653,7 +654,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 		if err != nil {
 			retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 			if logErrors {
-				retErr.Log(t.l)
+				retErr.Log(logbridge.FromLogrus(t.l))
 			} else {
 				return retErr
 			}

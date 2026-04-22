@@ -10,6 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/util"
 )
 
@@ -76,14 +77,14 @@ func main() {
 
 	ctrl, err := nebula.Main(c, *configTest, Build, l, nil)
 	if err != nil {
-		util.LogWithContextIfNeeded("Failed to start", err, l)
+		util.LogWithContextIfNeeded("Failed to start", err, logbridge.FromLogrus(l))
 		os.Exit(1)
 	}
 
 	if !*configTest {
 		wait, err := ctrl.Start()
 		if err != nil {
-			util.LogWithContextIfNeeded("Error while running", err, l)
+			util.LogWithContextIfNeeded("Error while running", err, logbridge.FromLogrus(l))
 			os.Exit(1)
 		}
 
