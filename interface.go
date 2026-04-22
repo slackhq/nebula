@@ -16,6 +16,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/udp"
 )
@@ -305,7 +306,7 @@ func (f *Interface) listenOut(i int) {
 		li = f.outside
 	}
 
-	ctCache := firewall.NewConntrackCacheTicker(f.ctx, f.conntrackCacheTimeout)
+	ctCache := firewall.NewConntrackCacheTicker(f.ctx, logbridge.FromLogrus(f.l), f.conntrackCacheTimeout)
 	lhh := f.lightHouse.NewRequestHandler()
 	plaintext := make([]byte, udp.MTU)
 	h := &header.H{}
@@ -313,7 +314,7 @@ func (f *Interface) listenOut(i int) {
 	nb := make([]byte, 12, 12)
 
 	err := li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get())
 	})
 
 	if err != nil && !f.closed.Load() {
@@ -330,7 +331,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
-	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, f.conntrackCacheTimeout)
+	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, logbridge.FromLogrus(f.l), f.conntrackCacheTimeout)
 
 	for {
 		n, err := reader.Read(packet)
@@ -342,7 +343,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 			break
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
+		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get())
 	}
 
 	f.l.Debugf("overlay reader %v is done", i)
