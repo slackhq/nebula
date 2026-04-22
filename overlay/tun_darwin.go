@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/netip"
 	"os"
 	"sync/atomic"
@@ -14,9 +15,7 @@ import (
 	"unsafe"
 
 	"github.com/gaissmai/bart"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	netroute "golang.org/x/net/route"
@@ -31,7 +30,7 @@ type tun struct {
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	linkAddr    *netroute.LinkAddr
-	l           *logrus.Logger
+	l           *slog.Logger
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
 	out []byte
@@ -80,7 +79,7 @@ type ifreqAlias6 struct {
 	Lifetime   addrLifetime
 }
 
-func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
+func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
 	name := c.GetString("tun.dev", "")
 	ifIndex := -1
 	if name != "" && name != "utun" {
@@ -140,7 +139,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	c.RegisterReloadCallback(func(c *config.C) {
 		err := t.reload(c, false)
 		if err != nil {
-			util.LogWithContextIfNeeded("failed to reload tun device", err, logbridge.FromLogrus(t.l))
+			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
 		}
 	})
 
@@ -154,7 +153,7 @@ func (t *tun) deviceBytes() (o [16]byte) {
 	return
 }
 
-func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*tun, error) {
+func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*tun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
 }
 
@@ -328,14 +327,14 @@ func (t *tun) reload(c *config.C, initial bool) error {
 		// Remove first, if the system removes a wanted route hopefully it will be re-added next
 		err := t.removeRoutes(findRemovedRoutes(routes, *oldRoutes))
 		if err != nil {
-			util.LogWithContextIfNeeded("Failed to remove routes", err, logbridge.FromLogrus(t.l))
+			util.LogWithContextIfNeeded("Failed to remove routes", err, t.l)
 		}
 
 		// Ensure any routes we actually want are installed
 		err = t.addRoutes(true)
 		if err != nil {
 			// Catch any stray logs
-			util.LogWithContextIfNeeded("Failed to add routes", err, logbridge.FromLogrus(t.l))
+			util.LogWithContextIfNeeded("Failed to add routes", err, t.l)
 		}
 	}
 
@@ -390,18 +389,17 @@ func (t *tun) addRoutes(logErrors bool) error {
 		err := addRoute(r.Cidr, t.linkAddr)
 		if err != nil {
 			if errors.Is(err, unix.EEXIST) {
-				t.l.WithField("route", r.Cidr).
-					Warnf("unable to add unsafe_route, identical route already exists")
+				t.l.Warn("unable to add unsafe_route, identical route already exists", slog.Any("route", r.Cidr))
 			} else {
 				retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 				if logErrors {
-					retErr.Log(logbridge.FromLogrus(t.l))
+					retErr.Log(t.l)
 				} else {
 					return retErr
 				}
 			}
 		} else {
-			t.l.WithField("route", r).Info("Added route")
+			t.l.Info("Added route", slog.Any("route", r))
 		}
 	}
 
@@ -416,9 +414,9 @@ func (t *tun) removeRoutes(routes []Route) error {
 
 		err := delRoute(r.Cidr, t.linkAddr)
 		if err != nil {
-			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
+			t.l.Error("Failed to remove route", slog.Any("error", err), slog.Any("route", r))
 		} else {
-			t.l.WithField("route", r).Info("Removed route")
+			t.l.Info("Removed route", slog.Any("route", r))
 		}
 	}
 	return nil
