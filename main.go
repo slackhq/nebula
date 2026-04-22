@@ -11,6 +11,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/udp"
@@ -215,7 +216,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
 
-	ds, err := newDnsServerFromConfig(ctx, l, pki.getCertState(), hostMap, c)
+	ds, err := newDnsServerFromConfig(ctx, logbridge.FromLogrus(l), pki.getCertState(), hostMap, c)
 	if err != nil {
 		l.WithError(err).Warn("Failed to start DNS responder")
 	}
