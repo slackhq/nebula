@@ -189,7 +189,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	hostMap := NewHostMapFromConfig(l, c)
 	punchy := NewPunchyFromConfig(logbridge.FromLogrus(l), c)
-	connManager := newConnectionManagerFromConfig(l, c, hostMap, punchy)
+	connManager := newConnectionManagerFromConfig(logbridge.FromLogrus(l), c, hostMap, punchy)
 	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, pki.getCertState(), udpConns[0], punchy)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to initialize lighthouse handler", err)

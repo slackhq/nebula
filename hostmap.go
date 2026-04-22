@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"slices"
@@ -782,6 +783,31 @@ func (i *HostInfo) buildNetworks(myVpnNetworksTable *bart.Lite, c cert.Certifica
 	for _, network := range c.UnsafeNetworks() {
 		i.networks.Insert(network, NetworkTypeUnsafe)
 	}
+}
+
+// slogger is the slog-native sibling of logger, pre-binding the same set of
+// per-hostinfo fields. Added alongside logger during the logrus -> slog
+// migration; callers that already hold a *slog.Logger use this, callers that
+// still hold *logrus.Logger continue to use logger. When hostmap itself
+// migrates, logger goes away and this is renamed back.
+func (i *HostInfo) slogger(l *slog.Logger) *slog.Logger {
+	if i == nil {
+		return l
+	}
+
+	li := l.With(
+		slog.Any("vpnAddrs", i.vpnAddrs),
+		slog.Uint64("localIndex", uint64(i.localIndexId)),
+		slog.Uint64("remoteIndex", uint64(i.remoteIndexId)),
+	)
+
+	if connState := i.ConnectionState; connState != nil {
+		if peerCert := connState.peerCert; peerCert != nil {
+			li = li.With(slog.String("certName", peerCert.Certificate.Name()))
+		}
+	}
+
+	return li
 }
 
 func (i *HostInfo) logger(l *logrus.Logger) *logrus.Entry {
