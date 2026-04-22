@@ -280,7 +280,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	return &Control{
 		state:                  StateReady,
 		f:                      ifce,
-		l:                      l,
+		l:                      logbridge.FromLogrus(l),
 		ctx:                    ctx,
 		cancel:                 cancel,
 		sshStart:               sshStart,
