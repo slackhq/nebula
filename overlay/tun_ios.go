@@ -16,6 +16,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 )
@@ -48,7 +49,7 @@ func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []net
 	c.RegisterReloadCallback(func(c *config.C) {
 		err := t.reload(c, false)
 		if err != nil {
-			util.LogWithContextIfNeeded("failed to reload tun device", err, t.l)
+			util.LogWithContextIfNeeded("failed to reload tun device", err, logbridge.FromLogrus(t.l))
 		}
 	})
 

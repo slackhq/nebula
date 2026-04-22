@@ -19,6 +19,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 )
@@ -129,7 +130,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *logrus.Logger, c *config.C,
 		err := h.reload(c, false)
 		switch v := err.(type) {
 		case *util.ContextualError:
-			v.Log(l)
+			v.Log(logbridge.FromLogrus(l))
 		case error:
 			l.WithError(err).Error("failed to reload lighthouse")
 		}

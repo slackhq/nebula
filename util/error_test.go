@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/logbridge"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,15 +29,25 @@ func (tl *TestLogWriter) Reset() {
 	tl.Logs = tl.Logs[:0]
 }
 
-func TestContextualError_Log(t *testing.T) {
-	l := logrus.New()
-	l.Formatter = &logrus.TextFormatter{
+// newTextLogger returns a *slog.Logger that writes through the logbridge to
+// a logrus text formatter. This lets the tests assert on the exact pre-
+// migration logrus text output, proving the flat-attr shape that Log and
+// LogWithContextIfNeeded produce is byte-for-byte identical to what
+// logrus WithFields(...).WithError(...).Error(...) used to emit.
+func newTextLogger() (*logrus.Logger, *TestLogWriter) {
+	lr := logrus.New()
+	lr.Formatter = &logrus.TextFormatter{
 		DisableTimestamp: true,
 		DisableColors:    true,
 	}
-
 	tl := NewTestLogWriter()
-	l.Out = tl
+	lr.Out = tl
+	return lr, tl
+}
+
+func TestContextualError_Log(t *testing.T) {
+	lr, tl := newTextLogger()
+	l := logbridge.FromLogrus(lr)
 
 	// Test a full context line
 	tl.Reset()
@@ -70,14 +81,8 @@ func TestContextualError_Log(t *testing.T) {
 }
 
 func TestLogWithContextIfNeeded(t *testing.T) {
-	l := logrus.New()
-	l.Formatter = &logrus.TextFormatter{
-		DisableTimestamp: true,
-		DisableColors:    true,
-	}
-
-	tl := NewTestLogWriter()
-	l.Out = tl
+	lr, tl := newTextLogger()
+	l := logbridge.FromLogrus(lr)
 
 	// Test ignoring fallback context
 	tl.Reset()

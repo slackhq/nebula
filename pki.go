@@ -18,6 +18,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/util"
 )
 
@@ -56,7 +57,7 @@ func NewPKIFromConfig(l *logrus.Logger, c *config.C) (*PKI, error) {
 	c.RegisterReloadCallback(func(c *config.C) {
 		rErr := pki.reload(c, false)
 		if rErr != nil {
-			util.LogWithContextIfNeeded("Failed to reload PKI from config", rErr, l)
+			util.LogWithContextIfNeeded("Failed to reload PKI from config", rErr, logbridge.FromLogrus(l))
 		}
 	})
 
@@ -77,7 +78,7 @@ func (p *PKI) reload(c *config.C, initial bool) error {
 		if initial {
 			return err
 		}
-		err.Log(p.l)
+		err.Log(logbridge.FromLogrus(p.l))
 	}
 
 	err = p.reloadCAPool(c)
@@ -85,7 +86,7 @@ func (p *PKI) reload(c *config.C, initial bool) error {
 		if initial {
 			return err
 		}
-		err.Log(p.l)
+		err.Log(logbridge.FromLogrus(p.l))
 	}
 
 	return nil
