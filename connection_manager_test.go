@@ -64,7 +64,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 
 	// Create manager
 	conf := config.NewC(l)
-	punchy := NewPunchyFromConfig(l, conf)
+	punchy := NewPunchyFromConfig(test.NewSlogLogger(), conf)
 	nc := newConnectionManagerFromConfig(l, conf, hostMap, punchy)
 	nc.intf = ifce
 	p := []byte("")
@@ -147,7 +147,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 
 	// Create manager
 	conf := config.NewC(l)
-	punchy := NewPunchyFromConfig(l, conf)
+	punchy := NewPunchyFromConfig(test.NewSlogLogger(), conf)
 	nc := newConnectionManagerFromConfig(l, conf, hostMap, punchy)
 	nc.intf = ifce
 	p := []byte("")
@@ -235,7 +235,7 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	conf.Settings["tunnels"] = map[string]any{
 		"drop_inactive": true,
 	}
-	punchy := NewPunchyFromConfig(l, conf)
+	punchy := NewPunchyFromConfig(test.NewSlogLogger(), conf)
 	nc := newConnectionManagerFromConfig(l, conf, hostMap, punchy)
 	assert.True(t, nc.dropInactive.Load())
 	nc.intf = ifce
@@ -361,7 +361,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 
 	// Create manager
 	conf := config.NewC(l)
-	punchy := NewPunchyFromConfig(l, conf)
+	punchy := NewPunchyFromConfig(test.NewSlogLogger(), conf)
 	nc := newConnectionManagerFromConfig(l, conf, hostMap, punchy)
 	nc.intf = ifce
 	ifce.connectionManager = nc
