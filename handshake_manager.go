@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"log/slog"
 	"net/netip"
 	"slices"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -290,7 +292,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 			if !ok {
 				// No relays exist or requested yet.
 				if relayHostInfo.remote.IsValid() {
-					idx, err := AddRelay(hm.l, relayHostInfo, hm.mainHostMap, vpnIp, nil, TerminalType, Requested)
+					idx, err := AddRelay(logbridge.FromLogrus(hm.l), relayHostInfo, hm.mainHostMap, vpnIp, nil, TerminalType, Requested)
 					if err != nil {
 						hostinfo.logger(hm.l).WithField("relay", relay.String()).WithError(err).Info("Failed to add relay to hostmap")
 					}
@@ -591,7 +593,7 @@ func (hm *HandshakeManager) allocateIndex(hh *HandshakeHostInfo) error {
 	defer hm.Unlock()
 
 	for range 32 {
-		index, err := generateIndex(hm.l)
+		index, err := generateIndex(logbridge.FromLogrus(hm.l))
 		if err != nil {
 			return err
 		}
@@ -700,7 +702,7 @@ func (hm *HandshakeManager) EmitStats() {
 
 // Utility functions below
 
-func generateIndex(l *logrus.Logger) (uint32, error) {
+func generateIndex(l *slog.Logger) (uint32, error) {
 	b := make([]byte, 4)
 
 	// Let zero mean we don't know the ID, so don't generate zero
@@ -708,16 +710,15 @@ func generateIndex(l *logrus.Logger) (uint32, error) {
 	for index == 0 {
 		_, err := rand.Read(b)
 		if err != nil {
-			l.Errorln(err)
+			l.Error("Failed to generate index", slog.Any("error", err))
 			return 0, err
 		}
 
 		index = binary.BigEndian.Uint32(b)
 	}
 
-	if l.Level >= logrus.DebugLevel {
-		l.WithField("index", index).
-			Debug("Generated index")
+	if l.Enabled(context.Background(), slog.LevelDebug) {
+		l.Debug("Generated index", slog.Any("index", index))
 	}
 	return index, nil
 }

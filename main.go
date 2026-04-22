@@ -239,7 +239,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		routines:              routines,
 		MessageMetrics:        messageMetrics,
 		version:               buildVersion,
-		relayManager:          NewRelayManager(ctx, l, hostMap, c),
+		relayManager:          NewRelayManager(ctx, logbridge.FromLogrus(l), hostMap, c),
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		l:                     l,
