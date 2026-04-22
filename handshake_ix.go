@@ -55,7 +55,7 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 		return false
 	}
 
-	ci, err := NewConnectionState(f.l, cs, crt, true, noise.HandshakeIX)
+	ci, err := NewConnectionState(cs, crt, true, noise.HandshakeIX)
 	if err != nil {
 		f.l.WithError(err).WithField("vpnAddrs", hh.hostinfo.vpnAddrs).
 			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).
@@ -111,7 +111,7 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 		return
 	}
 
-	ci, err := NewConnectionState(f.l, cs, crt, false, noise.HandshakeIX)
+	ci, err := NewConnectionState(cs, crt, false, noise.HandshakeIX)
 	if err != nil {
 		f.l.WithError(err).WithField("from", via).
 			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).

@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 
 	"github.com/flynn/noise"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/noiseutil"
 )
@@ -27,7 +26,7 @@ type ConnectionState struct {
 	writeLock      sync.Mutex
 }
 
-func NewConnectionState(l *logrus.Logger, cs *CertState, crt cert.Certificate, initiator bool, pattern noise.HandshakePattern) (*ConnectionState, error) {
+func NewConnectionState(cs *CertState, crt cert.Certificate, initiator bool, pattern noise.HandshakePattern) (*ConnectionState, error) {
 	var dhFunc noise.DHFunc
 	switch crt.Curve() {
 	case cert.Curve_CURVE25519:
