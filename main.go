@@ -73,14 +73,14 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 	l.WithField("firewallHashes", fw.GetRuleHashes()).Info("Firewall started")
 
-	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
+	ssh, err := sshd.NewSSHServer(logbridge.FromLogrus(l).With("subsystem", "sshd"))
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while creating SSH server", err)
 	}
-	wireSSHReload(l, ssh, c)
+	wireSSHReload(logbridge.FromLogrus(l), ssh, c)
 	var sshStart func()
 	if c.GetBool("sshd.enabled", false) {
-		sshStart, err = configSSH(l, ssh, c)
+		sshStart, err = configSSH(logbridge.FromLogrus(l), ssh, c)
 		if err != nil {
 			l.WithError(err).Warn("Failed to configure sshd, ssh debugging will not be available")
 			sshStart = nil
