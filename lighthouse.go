@@ -19,6 +19,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 )
@@ -559,7 +560,7 @@ func (lh *LightHouse) addStaticRemotes(i int, d time.Duration, network string, t
 	ctx := lh.ctx
 	lh.Unlock()
 
-	hr, err := NewHostnameResults(ctx, lh.l, d, network, timeout, toAddrs, func() {
+	hr, err := NewHostnameResults(ctx, logbridge.FromLogrus(lh.l), d, network, timeout, toAddrs, func() {
 		// This callback runs whenever the DNS hostname resolver finds a different set of addr's
 		// in its resolution for hostnames.
 		am.Lock()
