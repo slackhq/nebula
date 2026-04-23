@@ -259,10 +259,12 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 	if !via.IsRelayed {
 		// We only want to apply the remote allow list for direct tunnels here
 		if !f.lightHouse.GetRemoteAllowList().AllowAll(vpnAddrs, via.UdpAddr.Addr()) {
-			f.l.Debug("lighthouse.remote_allow_list denied incoming handshake",
-				slog.Any("vpnAddrs", vpnAddrs),
-				slog.Any("from", via),
-			)
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				f.l.Debug("lighthouse.remote_allow_list denied incoming handshake",
+					slog.Any("vpnAddrs", vpnAddrs),
+					slog.Any("from", via),
+				)
+			}
 			return
 		}
 	}
@@ -567,10 +569,12 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 	if !via.IsRelayed {
 		// The vpnAddr we know about is the one we tried to handshake with, use it to apply the remote allow list.
 		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, via.UdpAddr.Addr()) {
-			f.l.Debug("lighthouse.remote_allow_list denied incoming handshake",
-				slog.Any("vpnAddrs", hostinfo.vpnAddrs),
-				slog.Any("from", via),
-			)
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				f.l.Debug("lighthouse.remote_allow_list denied incoming handshake",
+					slog.Any("vpnAddrs", hostinfo.vpnAddrs),
+					slog.Any("from", via),
+				)
+			}
 			return false
 		}
 	}

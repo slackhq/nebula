@@ -549,11 +549,12 @@ func (lh *LightHouse) DeleteVpnAddrs(allVpnAddrs []netip.Addr) {
 	lh.Lock()
 	rm, ok := lh.addrMap[allVpnAddrs[0]]
 	if ok {
+		debugEnabled := lh.l.Enabled(context.Background(), slog.LevelDebug)
 		for _, addr := range allVpnAddrs {
 			srm := lh.addrMap[addr]
 			if srm == rm {
 				delete(lh.addrMap, addr)
-				if lh.l.Enabled(context.Background(), slog.LevelDebug) {
+				if debugEnabled {
 					lh.l.Debug("deleting from lighthouse", slog.Any("vpnAddr", addr))
 				}
 			}
