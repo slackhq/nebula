@@ -36,3 +36,12 @@ func NewLogger() *logrus.Logger {
 func NewSlogLogger() *slog.Logger {
 	return logbridge.FromLogrus(NewLogger())
 }
+
+// NewSlogLoggerWithOutput returns a *slog.Logger whose output is captured by
+// w. Bridges through a fresh logrus.Logger so tests that assert on text-format
+// output continue to work during the slog transition.
+func NewSlogLoggerWithOutput(w io.Writer) *slog.Logger {
+	lr := logrus.New()
+	lr.SetOutput(w)
+	return logbridge.FromLogrus(lr)
+}

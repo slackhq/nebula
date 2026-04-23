@@ -120,7 +120,7 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, d []byte, f *Interface) {
 	msg := &NebulaControl{}
 	err := msg.Unmarshal(d)
 	if err != nil {
-		h.logger(f.l).WithError(err).Error("Failed to unmarshal control message")
+		h.logger(f.l).Error("Failed to unmarshal control message", slog.Any("error", err))
 		return
 	}
 

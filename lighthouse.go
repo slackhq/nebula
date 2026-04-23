@@ -876,7 +876,7 @@ func (lh *LightHouse) SendUpdate() {
 	}
 
 	lal := lh.GetLocalAllowList()
-	for _, e := range localAddrs(lh.l, lal) {
+	for _, e := range localAddrs(logbridge.FromLogrus(lh.l), lal) {
 		if lh.myVpnNetworksTable.Contains(e) {
 			continue
 		}
