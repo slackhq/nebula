@@ -799,13 +799,16 @@ func sshGetMutexProfile(sandboxDir string, fs any, a []string, w sshd.StringWrit
 }
 
 func sshLogLevel(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error {
-	rh, ok := HandlerOf(l)
+	ctrl, ok := l.Handler().(interface {
+		GetLevel() slog.Level
+		SetLevel(slog.Level)
+	})
 	if !ok {
 		return w.WriteLine("Log level is not reconfigurable on this logger")
 	}
 
 	if len(a) == 0 {
-		return w.WriteLine(fmt.Sprintf("Log level is: %s", logLevelName(rh.GetLevel())))
+		return w.WriteLine(fmt.Sprintf("Log level is: %s", logLevelName(ctrl.GetLevel())))
 	}
 
 	level, err := parseLogLevel(strings.ToLower(a[0]))
@@ -813,24 +816,27 @@ func sshLogLevel(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error 
 		return w.WriteLine(fmt.Sprintf("Unknown log level %s. Possible log levels: trace, debug, info, warn, error", a))
 	}
 
-	rh.SetLevel(level)
-	return w.WriteLine(fmt.Sprintf("Log level is: %s", logLevelName(rh.GetLevel())))
+	ctrl.SetLevel(level)
+	return w.WriteLine(fmt.Sprintf("Log level is: %s", logLevelName(ctrl.GetLevel())))
 }
 
 func sshLogFormat(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error {
-	rh, ok := HandlerOf(l)
+	ctrl, ok := l.Handler().(interface {
+		GetFormat() string
+		SetFormat(string) error
+	})
 	if !ok {
 		return w.WriteLine("Log format is not reconfigurable on this logger")
 	}
 
 	if len(a) == 0 {
-		return w.WriteLine(fmt.Sprintf("Log format is: %s", rh.GetFormat()))
+		return w.WriteLine(fmt.Sprintf("Log format is: %s", ctrl.GetFormat()))
 	}
 
-	if err := rh.SetFormat(strings.ToLower(a[0])); err != nil {
+	if err := ctrl.SetFormat(strings.ToLower(a[0])); err != nil {
 		return err
 	}
-	return w.WriteLine(fmt.Sprintf("Log format is: %s", rh.GetFormat()))
+	return w.WriteLine(fmt.Sprintf("Log format is: %s", ctrl.GetFormat()))
 }
 
 func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {

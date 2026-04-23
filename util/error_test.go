@@ -3,9 +3,9 @@ package util
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"testing"
 
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,32 +28,15 @@ func (tl *TestLogWriter) Reset() {
 	tl.Logs = tl.Logs[:0]
 }
 
-// newTextLogger returns a *slog.Logger wired to a capturing writer and
-// configured to drop timestamps so the tests can pin the line verbatim.
-// The goal is to lock in the flat-attr shape Log and LogWithContextIfNeeded
-// produce so future changes cannot silently rearrange operator-visible
-// output.
-func newTextLogger() (*slog.Logger, *TestLogWriter) {
-	tl := NewTestLogWriter()
-	h := slog.NewTextHandler(tl, &slog.HandlerOptions{
-		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
-			if a.Key == slog.TimeKey {
-				return slog.Attr{}
-			}
-			return a
-		},
-	})
-	return slog.New(h), tl
-}
-
 func TestContextualError_Log(t *testing.T) {
-	l, tl := newTextLogger()
+	tl := NewTestLogWriter()
+	l := test.NewLoggerWithOutput(tl)
 
 	// Test a full context line
 	tl.Reset()
 	e := NewContextualError("test message", m{"field": "1"}, errors.New("error"))
 	e.Log(l)
-	assert.Equal(t, []string{"level=ERROR msg=\"test message\" error=error field=1\n"}, tl.Logs)
+	assert.Equal(t, []string{"level=ERROR msg=\"test message\" field=1 error=error\n"}, tl.Logs)
 
 	// Test a line with an error and msg but no fields
 	tl.Reset()
@@ -81,13 +64,14 @@ func TestContextualError_Log(t *testing.T) {
 }
 
 func TestLogWithContextIfNeeded(t *testing.T) {
-	l, tl := newTextLogger()
+	tl := NewTestLogWriter()
+	l := test.NewLoggerWithOutput(tl)
 
 	// Test ignoring fallback context
 	tl.Reset()
 	e := NewContextualError("test message", m{"field": "1"}, errors.New("error"))
 	LogWithContextIfNeeded("This should get thrown away", e, l)
-	assert.Equal(t, []string{"level=ERROR msg=\"test message\" error=error field=1\n"}, tl.Logs)
+	assert.Equal(t, []string{"level=ERROR msg=\"test message\" field=1 error=error\n"}, tl.Logs)
 
 	// Test using fallback context
 	tl.Reset()

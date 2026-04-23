@@ -13,17 +13,40 @@ import (
 	"github.com/slackhq/nebula/config"
 )
 
-// LogLevelTrace matches logrus.TraceLevel so "trace" in logging.level still
-// enables the noisiest logs. slog itself has no builtin trace level.
+// LogLevelTrace is a custom slog level below Debug, used when logging.level
+// is "trace". slog has no builtin trace level; the value is one step below
+// slog.LevelDebug in slog's 4-point spacing.
 const LogLevelTrace = slog.Level(-8)
 
-// ReconfigurableHandler is the slog.Handler returned by NewLogger. It
-// supports atomic format and level changes at runtime, and its inner handler
-// can be replaced wholesale to plug in platform-specific log sinks such as
-// the Windows Event Viewer. All derived handlers (produced via
-// WithAttrs/WithGroup) share the same root so reload-driven changes
-// propagate to every logger in the process.
-type ReconfigurableHandler struct {
+// NewLogger returns a *slog.Logger whose level, format, and timestamp
+// emission can be reconfigured by configLogger on startup and on SIGHUP.
+// The default configuration is info-level text output so log calls made
+// before configLogger runs still produce output. Timestamps follow slog's
+// default RFC3339Nano format; set logging.disable_timestamp in config to
+// suppress them.
+//
+// configLogger and the SSH debug commands discover the reconfig surface via
+// structural type-assertion on l.Handler(), so replacement implementations
+// (tests, platform-specific sinks) need only implement the subset of
+// {SetLevel(slog.Level), SetFormat(string) error, SetDisableTimestamp(bool)}
+// they care about. Callers that do not need reconfig can pass a plain
+// *slog.Logger to nebula.Main; configLogger becomes a no-op for handlers it
+// does not recognize.
+func NewLogger(w io.Writer) *slog.Logger {
+	root := &handlerRoot{
+		w:      w,
+		format: "text",
+	}
+	root.level.Set(slog.LevelInfo)
+	root.rebuild()
+	return slog.New(&reconfigurableHandler{root: root})
+}
+
+// reconfigurableHandler is a slog.Handler whose underlying handler can be
+// swapped atomically. All derived handlers (produced via WithAttrs/WithGroup)
+// share the same root so reload-driven changes propagate to every logger in
+// the process.
+type reconfigurableHandler struct {
 	root *handlerRoot
 	// mods is the ordered chain of WithAttrs/WithGroup ops to replay onto the
 	// current inner handler every time a record is handled.
@@ -35,59 +58,22 @@ type handlerRoot struct {
 	level slog.LevelVar
 	inner atomic.Pointer[slog.Handler]
 
-	// mu guards format, timestampFormat, disableTimestamp, and pinned.
-	// Level uses its own atomic via slog.LevelVar.
+	// mu guards format. Level uses its own atomic via slog.LevelVar, and
+	// disableTimestamp uses atomic.Bool so Handle can consult it on every
+	// record without taking a mutex on the log path.
 	mu               sync.Mutex
 	format           string
-	timestampFormat  string
-	disableTimestamp bool
-	// pinned is set by ReplaceInner and prevents configLogger rebuilds from
-	// clobbering a platform-specific inner handler. Level changes still
-	// propagate because they go through the shared LevelVar.
-	pinned bool
-}
-
-// NewLogger returns a *slog.Logger whose level and format can later be
-// reconfigured by configLogger or by the SSH debug commands. The default
-// configuration is info-level text output so log calls made before
-// configLogger runs still produce output.
-func NewLogger(w io.Writer) *slog.Logger {
-	root := &handlerRoot{
-		w:               w,
-		format:          "text",
-		timestampFormat: time.RFC3339,
-	}
-	root.level.Set(slog.LevelInfo)
-	root.rebuild()
-	return slog.New(&ReconfigurableHandler{root: root})
+	disableTimestamp atomic.Bool
 }
 
 // rebuild constructs a fresh inner handler from the current format and
-// timestamp settings and stores it atomically. It is a no-op when a platform
-// handler has been pinned via ReplaceInner.
+// level settings and stores it atomically.
 func (r *handlerRoot) rebuild() {
 	r.mu.Lock()
-	if r.pinned {
-		r.mu.Unlock()
-		return
-	}
 	format := r.format
-	timestampFormat := r.timestampFormat
-	disableTimestamp := r.disableTimestamp
 	r.mu.Unlock()
 
-	replaceAttr := func(groups []string, a slog.Attr) slog.Attr {
-		if len(groups) == 0 && a.Key == slog.TimeKey {
-			if disableTimestamp {
-				return slog.Attr{}
-			}
-			if a.Value.Kind() == slog.KindTime {
-				return slog.String(slog.TimeKey, a.Value.Time().Format(timestampFormat))
-			}
-		}
-		return a
-	}
-	opts := &slog.HandlerOptions{Level: &r.level, ReplaceAttr: replaceAttr}
+	opts := &slog.HandlerOptions{Level: &r.level}
 
 	var h slog.Handler
 	switch format {
@@ -99,7 +85,7 @@ func (r *handlerRoot) rebuild() {
 	r.inner.Store(&h)
 }
 
-func (rh *ReconfigurableHandler) current() slog.Handler {
+func (rh *reconfigurableHandler) current() slog.Handler {
 	h := *rh.root.inner.Load()
 	for _, mod := range rh.mods {
 		h = mod(h)
@@ -107,53 +93,53 @@ func (rh *ReconfigurableHandler) current() slog.Handler {
 	return h
 }
 
-// Enabled reports whether the current level admits l. Always uses the root
-// LevelVar so derived handlers see level changes immediately.
-func (rh *ReconfigurableHandler) Enabled(_ context.Context, l slog.Level) bool {
+func (rh *reconfigurableHandler) Enabled(_ context.Context, l slog.Level) bool {
 	return rh.root.level.Level() <= l
 }
 
-// Handle dispatches r to the current inner handler after replaying any
-// WithAttrs/WithGroup modifications that produced this derived handler.
-func (rh *ReconfigurableHandler) Handle(ctx context.Context, r slog.Record) error {
+func (rh *reconfigurableHandler) Handle(ctx context.Context, r slog.Record) error {
+	if rh.root.disableTimestamp.Load() {
+		r.Time = time.Time{}
+	}
 	return rh.current().Handle(ctx, r)
 }
 
-func (rh *ReconfigurableHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+func (rh *reconfigurableHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return rh
 	}
 	mods := make([]func(slog.Handler) slog.Handler, len(rh.mods)+1)
 	copy(mods, rh.mods)
 	mods[len(rh.mods)] = func(h slog.Handler) slog.Handler { return h.WithAttrs(attrs) }
-	return &ReconfigurableHandler{root: rh.root, mods: mods}
+	return &reconfigurableHandler{root: rh.root, mods: mods}
 }
 
-func (rh *ReconfigurableHandler) WithGroup(name string) slog.Handler {
+func (rh *reconfigurableHandler) WithGroup(name string) slog.Handler {
 	if name == "" {
 		return rh
 	}
 	mods := make([]func(slog.Handler) slog.Handler, len(rh.mods)+1)
 	copy(mods, rh.mods)
 	mods[len(rh.mods)] = func(h slog.Handler) slog.Handler { return h.WithGroup(name) }
-	return &ReconfigurableHandler{root: rh.root, mods: mods}
+	return &reconfigurableHandler{root: rh.root, mods: mods}
 }
 
-// SetLevel updates the log level, affecting every logger derived from this
-// root. Thanks to slog.LevelVar no handler rebuild is needed.
-func (rh *ReconfigurableHandler) SetLevel(level slog.Level) {
+// SetLevel satisfies the structural level-setter interface used by
+// configLogger and sshLogLevel. Changes propagate to every derived logger
+// via the shared LevelVar.
+func (rh *reconfigurableHandler) SetLevel(level slog.Level) {
 	rh.root.level.Set(level)
 }
 
-// GetLevel returns the current log level.
-func (rh *ReconfigurableHandler) GetLevel() slog.Level {
+// GetLevel is the structural counterpart used by sshLogLevel to report the
+// current level.
+func (rh *reconfigurableHandler) GetLevel() slog.Level {
 	return rh.root.level.Level()
 }
 
-// SetFormat swaps the output format atomically. Valid formats are "text" and
-// "json". It is a no-op when a platform handler has been pinned via
-// ReplaceInner.
-func (rh *ReconfigurableHandler) SetFormat(format string) error {
+// SetFormat satisfies the structural format-setter interface. Valid formats
+// are "text" and "json". The inner handler is rebuilt and swapped.
+func (rh *reconfigurableHandler) SetFormat(format string) error {
 	switch format {
 	case "text", "json":
 	default:
@@ -166,66 +152,45 @@ func (rh *ReconfigurableHandler) SetFormat(format string) error {
 	return nil
 }
 
-// GetFormat returns the currently configured output format.
-func (rh *ReconfigurableHandler) GetFormat() string {
+// GetFormat is the structural counterpart used by sshLogFormat.
+func (rh *reconfigurableHandler) GetFormat() string {
 	rh.root.mu.Lock()
 	defer rh.root.mu.Unlock()
 	return rh.root.format
 }
 
-// ReplaceInner swaps the inner handler with h and marks the root as pinned,
-// so subsequent calls to configLogger and SetFormat leave the inner handler
-// alone. Level changes continue to propagate via the shared LevelVar. Used
-// by platform hooks (e.g., Windows event log) that provide a bespoke sink.
-func (rh *ReconfigurableHandler) ReplaceInner(h slog.Handler) {
-	rh.root.mu.Lock()
-	rh.root.pinned = true
-	rh.root.mu.Unlock()
-	rh.root.inner.Store(&h)
+// SetDisableTimestamp satisfies the optional timestamp-toggle interface
+// used by configLogger.
+func (rh *reconfigurableHandler) SetDisableTimestamp(v bool) {
+	rh.root.disableTimestamp.Store(v)
 }
 
-// HandlerOf returns the ReconfigurableHandler underlying l, if l was created
-// by NewLogger (or any derivative). Callers use this to adjust level/format
-// at runtime or to replace the inner handler.
-func HandlerOf(l *slog.Logger) (*ReconfigurableHandler, bool) {
-	rh, ok := l.Handler().(*ReconfigurableHandler)
-	return rh, ok
-}
-
-// configLogger reads logging.level/format/timestamp settings from c and
-// applies them to l. l must be a logger returned by NewLogger; otherwise
-// configLogger returns an error.
+// configLogger reads logging.level, logging.format, and (optionally)
+// logging.disable_timestamp from c and applies them to l. The reconfig
+// surface is discovered via structural type-assertion on l.Handler(), so
+// foreign handlers silently opt out of whichever capabilities they do not
+// implement.
 func configLogger(l *slog.Logger, c *config.C) error {
-	rh, ok := HandlerOf(l)
-	if !ok {
-		return fmt.Errorf("logger is not reconfigurable")
-	}
+	h := l.Handler()
 
 	lvl, err := parseLogLevel(strings.ToLower(c.GetString("logging.level", "info")))
 	if err != nil {
 		return err
 	}
+	if ls, ok := h.(interface{ SetLevel(slog.Level) }); ok {
+		ls.SetLevel(lvl)
+	}
 
 	format := strings.ToLower(c.GetString("logging.format", "text"))
-	switch format {
-	case "text", "json":
-	default:
-		return fmt.Errorf("unknown log format `%s`. possible formats: %s", format, []string{"text", "json"})
+	if fs, ok := h.(interface{ SetFormat(string) error }); ok {
+		if err := fs.SetFormat(format); err != nil {
+			return err
+		}
 	}
 
-	timestampFormat := c.GetString("logging.timestamp_format", "")
-	if timestampFormat == "" {
-		timestampFormat = time.RFC3339
+	if ts, ok := h.(interface{ SetDisableTimestamp(bool) }); ok {
+		ts.SetDisableTimestamp(c.GetBool("logging.disable_timestamp", false))
 	}
-
-	rh.root.mu.Lock()
-	rh.root.format = format
-	rh.root.timestampFormat = timestampFormat
-	rh.root.disableTimestamp = c.GetBool("logging.disable_timestamp", false)
-	rh.root.mu.Unlock()
-
-	rh.root.level.Set(lvl)
-	rh.root.rebuild()
 	return nil
 }
 
@@ -242,7 +207,8 @@ func parseLogLevel(s string) (slog.Level, error) {
 	case "error":
 		return slog.LevelError, nil
 	case "fatal", "panic":
-		// logrus had these; slog collapses them into error.
+		// Accepted for backwards compatibility with older configs. slog has
+		// no fatal or panic level; both map to error.
 		return slog.LevelError, nil
 	default:
 		return 0, fmt.Errorf("not a valid logging level: %q", s)
