@@ -1,6 +1,7 @@
 package util
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"testing"
@@ -11,73 +12,56 @@ import (
 
 type m = map[string]any
 
-type TestLogWriter struct {
-	Logs []string
-}
-
-func NewTestLogWriter() *TestLogWriter {
-	return &TestLogWriter{Logs: make([]string, 0)}
-}
-
-func (tl *TestLogWriter) Write(p []byte) (n int, err error) {
-	tl.Logs = append(tl.Logs, string(p))
-	return len(p), nil
-}
-
-func (tl *TestLogWriter) Reset() {
-	tl.Logs = tl.Logs[:0]
-}
-
 func TestContextualError_Log(t *testing.T) {
-	tl := NewTestLogWriter()
-	l := test.NewLoggerWithOutput(tl)
+	buf := &bytes.Buffer{}
+	l := test.NewLoggerWithOutput(buf)
 
 	// Test a full context line
-	tl.Reset()
+	buf.Reset()
 	e := NewContextualError("test message", m{"field": "1"}, errors.New("error"))
 	e.Log(l)
-	assert.Equal(t, []string{"level=ERROR msg=\"test message\" field=1 error=error\n"}, tl.Logs)
+	assert.Equal(t, "level=ERROR msg=\"test message\" field=1 error=error\n", buf.String())
 
 	// Test a line with an error and msg but no fields
-	tl.Reset()
+	buf.Reset()
 	e = NewContextualError("test message", nil, errors.New("error"))
 	e.Log(l)
-	assert.Equal(t, []string{"level=ERROR msg=\"test message\" error=error\n"}, tl.Logs)
+	assert.Equal(t, "level=ERROR msg=\"test message\" error=error\n", buf.String())
 
 	// Test just a context and fields
-	tl.Reset()
+	buf.Reset()
 	e = NewContextualError("test message", m{"field": "1"}, nil)
 	e.Log(l)
-	assert.Equal(t, []string{"level=ERROR msg=\"test message\" field=1\n"}, tl.Logs)
+	assert.Equal(t, "level=ERROR msg=\"test message\" field=1\n", buf.String())
 
 	// Test just a context
-	tl.Reset()
+	buf.Reset()
 	e = NewContextualError("test message", nil, nil)
 	e.Log(l)
-	assert.Equal(t, []string{"level=ERROR msg=\"test message\"\n"}, tl.Logs)
+	assert.Equal(t, "level=ERROR msg=\"test message\"\n", buf.String())
 
 	// Test just an error
-	tl.Reset()
+	buf.Reset()
 	e = NewContextualError("", nil, errors.New("error"))
 	e.Log(l)
-	assert.Equal(t, []string{"level=ERROR msg=\"\" error=error\n"}, tl.Logs)
+	assert.Equal(t, "level=ERROR msg=\"\" error=error\n", buf.String())
 }
 
 func TestLogWithContextIfNeeded(t *testing.T) {
-	tl := NewTestLogWriter()
-	l := test.NewLoggerWithOutput(tl)
+	buf := &bytes.Buffer{}
+	l := test.NewLoggerWithOutput(buf)
 
 	// Test ignoring fallback context
-	tl.Reset()
+	buf.Reset()
 	e := NewContextualError("test message", m{"field": "1"}, errors.New("error"))
 	LogWithContextIfNeeded("This should get thrown away", e, l)
-	assert.Equal(t, []string{"level=ERROR msg=\"test message\" field=1 error=error\n"}, tl.Logs)
+	assert.Equal(t, "level=ERROR msg=\"test message\" field=1 error=error\n", buf.String())
 
 	// Test using fallback context
-	tl.Reset()
+	buf.Reset()
 	err := fmt.Errorf("this is a normal error")
 	LogWithContextIfNeeded("Fallback context woo", err, l)
-	assert.Equal(t, []string{"level=ERROR msg=\"Fallback context woo\" error=\"this is a normal error\"\n"}, tl.Logs)
+	assert.Equal(t, "level=ERROR msg=\"Fallback context woo\" error=\"this is a normal error\"\n", buf.String())
 }
 
 func TestContextualizeIfNeeded(t *testing.T) {

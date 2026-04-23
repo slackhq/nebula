@@ -38,6 +38,18 @@ func NewLoggerWithOutput(w io.Writer) *slog.Logger {
 	return slog.New(&stripTimeHandler{inner: slog.NewTextHandler(w, nil)})
 }
 
+// NewLoggerWithOutputAndLevel is NewLoggerWithOutput with an explicit level
+// so tests can exercise Enabled-gated paths.
+func NewLoggerWithOutputAndLevel(w io.Writer, level slog.Level) *slog.Logger {
+	return slog.New(&stripTimeHandler{inner: slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})})
+}
+
+// NewJSONLoggerWithOutput returns a *slog.Logger emitting JSON to w with
+// timestamps suppressed, for tests that pin the JSON shape.
+func NewJSONLoggerWithOutput(w io.Writer, level slog.Level) *slog.Logger {
+	return slog.New(&stripTimeHandler{inner: slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level})})
+}
+
 // stripTimeHandler zeros each record's time before delegating so slog's
 // built-in handlers skip emitting the time attribute. Used to avoid
 // timestamp-dependent assertions in tests without resorting to ReplaceAttr.

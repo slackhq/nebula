@@ -79,12 +79,10 @@ punchy:
 	assert.True(t, p.GetRespond())
 }
 
-// The tests below pin the shape of each log line Punchy produces, so the
-// slog migration cannot silently change what operators grep for. The
-// messages are intentionally different from the pre-migration logrus Infof
-// output (e.g. "punchy.respond changed to true" became
-// "punchy.respond changed" with a structured respond=true field); this test
-// locks in the new structured shape.
+// The tests below pin the shape of each log line Punchy produces so changes
+// cannot silently break whatever operators are grepping for. The assertions
+// are on the structured message + attrs (e.g. "punchy.respond changed" with
+// a respond=true field) rather than a formatted string.
 //
 // Punchy.reload also emits a spurious "Changing punchy.punch with reload is
 // not supported" warning whenever any key under punchy changes, because of
