@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/anmitsu/go-shlex"
 	"github.com/armon/go-radix"
@@ -14,20 +13,19 @@ import (
 )
 
 type session struct {
-	l         *logrus.Entry
-	c         *ssh.ServerConn
-	term      *term.Terminal
-	commands  *radix.Tree
-	exitChan  chan struct{}
-	closeOnce sync.Once
+	l        *logrus.Entry
+	c        *ssh.ServerConn
+	term     *term.Terminal
+	commands *radix.Tree
+	cancel   func()
 }
 
-func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.NewChannel, l *logrus.Entry) *session {
+func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.NewChannel, cancel func(), l *logrus.Entry) *session {
 	s := &session{
 		commands: radix.NewFromMap(commands.ToMap()),
 		l:        l,
 		c:        conn,
-		exitChan: make(chan struct{}),
+		cancel:   cancel,
 	}
 
 	s.commands.Insert("logout", &Command{
@@ -174,8 +172,5 @@ func (s *session) dispatchCommand(line string, w StringWriter) {
 }
 
 func (s *session) Close() {
-	s.closeOnce.Do(func() {
-		s.c.Close()
-		close(s.exitChan)
-	})
+	s.cancel()
 }
