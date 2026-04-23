@@ -172,5 +172,6 @@ func (s *session) dispatchCommand(line string, w StringWriter) {
 }
 
 func (s *session) Close() {
+	s.c.Close()
 	s.cancel()
 }
