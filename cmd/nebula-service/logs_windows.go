@@ -7,55 +7,45 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // newPlatformLogger returns a *slog.Logger that routes every log record
 // through the Windows service logger so records end up in the Windows Event
 // Viewer. Formatting is delegated to slog's builtin text or JSON handler
-// (controlled by logging.format) writing into a shared buffer; the
-// formatted line is then forwarded to the service logger at a severity
-// matching the record's level. The handler exposes SetLevel/SetFormat
-// structurally so configLogger and the SSH debug commands honor
-// logging.level and logging.format on startup and SIGHUP.
+// writing into a shared buffer; the formatted line is then forwarded to the
+// service logger at a severity matching the record's level. Both a text
+// and a json handler are pre-derived at each WithAttrs/WithGroup call so a
+// SetFormat flip propagates instantly without rebuilding anything.
 func newPlatformLogger() *slog.Logger {
-	root := &serviceHandlerRoot{format: "text"}
+	root := &serviceHandlerRoot{}
 	root.level.Set(slog.LevelInfo)
-	return slog.New(&serviceHandler{root: root, inner: root.buildInner()})
+	opts := &slog.HandlerOptions{Level: &root.level}
+	return slog.New(&serviceHandler{
+		root: root,
+		text: slog.NewTextHandler(&root.buf, opts),
+		json: slog.NewJSONHandler(&root.buf, opts),
+	})
 }
 
-// serviceHandlerRoot owns the per-logger mutable state shared across
-// WithAttrs/WithGroup derivations: the LevelVar, the output buffer used by
-// every Handle call (serialized under buf.mu), and the currently configured
-// format string.
+// serviceHandlerRoot holds the per-logger mutable state shared across
+// WithAttrs/WithGroup derivations. The buffer is shared because Handle
+// serializes on mu before each serialize + route + reset cycle.
 type serviceHandlerRoot struct {
-	level slog.LevelVar
+	level    slog.LevelVar
+	jsonMode atomic.Bool
 
-	// mu serializes Handle's reset+serialize+route cycle against itself and
-	// against rebuilds triggered by SetFormat.
 	mu  sync.Mutex
 	buf bytes.Buffer
-
-	// format is protected by mu.
-	format string
 }
 
-// buildInner constructs a fresh slog.Handler that writes into the shared
-// buf, honoring the current format. mu must be held.
-func (r *serviceHandlerRoot) buildInner() slog.Handler {
-	opts := &slog.HandlerOptions{Level: &r.level}
-	switch r.format {
-	case "json":
-		return slog.NewJSONHandler(&r.buf, opts)
-	default:
-		return slog.NewTextHandler(&r.buf, opts)
-	}
-}
-
-// serviceHandler defers record formatting to a slog builtin handler and
-// routes the formatted line to the Windows service logger by severity.
+// serviceHandler dispatches each record to either a text or a json
+// slog.Handler (both write into the shared buffer), then forwards the
+// formatted line to the Windows service logger at the matching severity.
 type serviceHandler struct {
-	root  *serviceHandlerRoot
-	inner slog.Handler // writes to root.buf; carries accumulated WithAttrs/WithGroup state
+	root *serviceHandlerRoot
+	text slog.Handler
+	json slog.Handler
 }
 
 func (sh *serviceHandler) Enabled(_ context.Context, l slog.Level) bool {
@@ -66,9 +56,17 @@ func (sh *serviceHandler) Handle(ctx context.Context, r slog.Record) error {
 	sh.root.mu.Lock()
 	defer sh.root.mu.Unlock()
 	sh.root.buf.Reset()
-	if err := sh.inner.Handle(ctx, r); err != nil {
+
+	var err error
+	if sh.root.jsonMode.Load() {
+		err = sh.json.Handle(ctx, r)
+	} else {
+		err = sh.text.Handle(ctx, r)
+	}
+	if err != nil {
 		return err
 	}
+
 	line := strings.TrimRight(sh.root.buf.String(), "\n")
 	switch {
 	case r.Level >= slog.LevelError:
@@ -84,45 +82,48 @@ func (sh *serviceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return sh
 	}
-	return &serviceHandler{root: sh.root, inner: sh.inner.WithAttrs(attrs)}
+	return &serviceHandler{
+		root: sh.root,
+		text: sh.text.WithAttrs(attrs),
+		json: sh.json.WithAttrs(attrs),
+	}
 }
 
 func (sh *serviceHandler) WithGroup(name string) slog.Handler {
 	if name == "" {
 		return sh
 	}
-	return &serviceHandler{root: sh.root, inner: sh.inner.WithGroup(name)}
+	return &serviceHandler{
+		root: sh.root,
+		text: sh.text.WithGroup(name),
+		json: sh.json.WithGroup(name),
+	}
 }
 
-// SetLevel lets configLogger and the SSH commands honor logging.level. The
-// LevelVar lives on the shared root so derived handlers pick up changes.
+// SetLevel lets configLogger and SSH commands honor logging.level.
 func (sh *serviceHandler) SetLevel(lvl slog.Level) { sh.root.level.Set(lvl) }
 
 // GetLevel is the structural counterpart used by sshLogLevel.
 func (sh *serviceHandler) GetLevel() slog.Level { return sh.root.level.Level() }
 
-// SetFormat rebuilds this handler's inner so future records serialize using
-// the new format. Called on startup and on SIGHUP. Derived handlers created
-// BEFORE a format change continue to use the prior format, which is fine
-// for the common case where configLogger runs before subsystems construct
-// their loggers; format reload after subsystems have derived is uncommon on
-// Windows service deployments.
+// SetFormat flips which inner handler Handle dispatches to. The change
+// propagates to every derived handler immediately; no rebuild is required.
 func (sh *serviceHandler) SetFormat(format string) error {
 	switch format {
-	case "text", "json":
+	case "text":
+		sh.root.jsonMode.Store(false)
+	case "json":
+		sh.root.jsonMode.Store(true)
 	default:
 		return fmt.Errorf("unknown log format `%s`. possible formats: %s", format, []string{"text", "json"})
 	}
-	sh.root.mu.Lock()
-	defer sh.root.mu.Unlock()
-	sh.root.format = format
-	sh.inner = sh.root.buildInner()
 	return nil
 }
 
 // GetFormat is the structural counterpart used by sshLogFormat.
 func (sh *serviceHandler) GetFormat() string {
-	sh.root.mu.Lock()
-	defer sh.root.mu.Unlock()
-	return sh.root.format
+	if sh.root.jsonMode.Load() {
+		return "json"
+	}
+	return "text"
 }

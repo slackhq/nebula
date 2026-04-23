@@ -7,10 +7,10 @@ import (
 	"testing"
 )
 
-// BenchmarkLogger_* compare the reconfigurableHandler returned by NewLogger
-// against a stock slog text handler. The key thing we care about is the
-// per-log cost on a logger that has been derived via .With(), because that
-// is the shape subsystems store on their structs (HostInfo.logger(),
+// BenchmarkLogger_* compare the nebulaHandler returned by NewLogger against
+// a stock slog text handler. The key thing we care about is the per-log
+// cost on a logger that has been derived via .With(), because that is the
+// shape subsystems store on their structs (HostInfo.logger(),
 // lh.l.With("subsystem", ...), etc.) and call from hot paths.
 
 func BenchmarkLogger_Stock_RootInfo(b *testing.B) {
@@ -22,7 +22,7 @@ func BenchmarkLogger_Stock_RootInfo(b *testing.B) {
 	}
 }
 
-func BenchmarkLogger_Reconfig_RootInfo(b *testing.B) {
+func BenchmarkLogger_Nebula_RootInfo(b *testing.B) {
 	l := NewLogger(io.Discard)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -43,7 +43,7 @@ func BenchmarkLogger_Stock_DerivedInfo(b *testing.B) {
 	}
 }
 
-func BenchmarkLogger_Reconfig_DerivedInfo(b *testing.B) {
+func BenchmarkLogger_Nebula_DerivedInfo(b *testing.B) {
 	l := NewLogger(io.Discard).With(
 		slog.String("subsystem", "bench"),
 		slog.Int("localIndex", 1234),
@@ -74,7 +74,7 @@ func BenchmarkLogger_Stock_DerivedEnabledGateMiss(b *testing.B) {
 	}
 }
 
-func BenchmarkLogger_Reconfig_DerivedEnabledGateMiss(b *testing.B) {
+func BenchmarkLogger_Nebula_DerivedEnabledGateMiss(b *testing.B) {
 	l := NewLogger(io.Discard).With(
 		slog.String("subsystem", "bench"),
 		slog.Int("localIndex", 1234),

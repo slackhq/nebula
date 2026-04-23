@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,13 +18,13 @@ import (
 const LogLevelTrace = slog.Level(-8)
 
 // NewLogger returns a *slog.Logger whose level, format, and timestamp
-// emission can be reconfigured by configLogger on startup and on SIGHUP.
-// The default configuration is info-level text output so log calls made
-// before configLogger runs still produce output. Timestamps follow slog's
-// default RFC3339Nano format; set logging.disable_timestamp in config to
-// suppress them.
+// emission can be reconfigured at runtime via configLogger and the SSH
+// debug commands. The default configuration is info-level text output so
+// log calls made before configLogger runs still produce output. Timestamps
+// follow slog's default RFC3339Nano format; set logging.disable_timestamp
+// in config to suppress them.
 //
-// configLogger and the SSH debug commands discover the reconfig surface via
+// configLogger and the SSH commands discover the reconfig surface via
 // structural type-assertion on l.Handler(), so replacement implementations
 // (tests, platform-specific sinks) need only implement the subset of
 // {SetLevel(slog.Level), SetFormat(string) error, SetDisableTimestamp(bool)}
@@ -33,137 +32,110 @@ const LogLevelTrace = slog.Level(-8)
 // *slog.Logger to nebula.Main; configLogger becomes a no-op for handlers it
 // does not recognize.
 func NewLogger(w io.Writer) *slog.Logger {
-	root := &handlerRoot{
-		w:      w,
-		format: "text",
-	}
+	root := &handlerRoot{}
 	root.level.Set(slog.LevelInfo)
-	root.rebuild()
-	return slog.New(&reconfigurableHandler{root: root})
+	opts := &slog.HandlerOptions{Level: &root.level}
+	return slog.New(&nebulaHandler{
+		root: root,
+		text: slog.NewTextHandler(w, opts),
+		json: slog.NewJSONHandler(w, opts),
+	})
 }
 
-// reconfigurableHandler is a slog.Handler whose underlying handler can be
-// swapped atomically. All derived handlers (produced via WithAttrs/WithGroup)
-// share the same root so reload-driven changes propagate to every logger in
-// the process.
-type reconfigurableHandler struct {
-	root *handlerRoot
-	// mods is the ordered chain of WithAttrs/WithGroup ops to replay onto the
-	// current inner handler every time a record is handled.
-	mods []func(slog.Handler) slog.Handler
-}
-
+// handlerRoot carries the reconfiguration state shared by every logger
+// derived from a NewLogger call. All fields are consulted on the log path
+// and updated lock-free.
 type handlerRoot struct {
-	w     io.Writer
-	level slog.LevelVar
-	inner atomic.Pointer[slog.Handler]
-
-	// mu guards format. Level uses its own atomic via slog.LevelVar, and
-	// disableTimestamp uses atomic.Bool so Handle can consult it on every
-	// record without taking a mutex on the log path.
-	mu               sync.Mutex
-	format           string
+	level            slog.LevelVar
 	disableTimestamp atomic.Bool
+	// jsonMode picks which of the pre-derived inner handlers nebulaHandler.Handle
+	// dispatches to. Flipping it propagates instantly to every derived logger
+	// without rebuilding or chain-replaying anything.
+	jsonMode atomic.Bool
 }
 
-// rebuild constructs a fresh inner handler from the current format and
-// level settings and stores it atomically.
-func (r *handlerRoot) rebuild() {
-	r.mu.Lock()
-	format := r.format
-	r.mu.Unlock()
-
-	opts := &slog.HandlerOptions{Level: &r.level}
-
-	var h slog.Handler
-	switch format {
-	case "json":
-		h = slog.NewJSONHandler(r.w, opts)
-	default:
-		h = slog.NewTextHandler(r.w, opts)
-	}
-	r.inner.Store(&h)
+// nebulaHandler is the slog.Handler returned by NewLogger. It holds two
+// pre-derived slog handlers -- one text, one json -- both built from the
+// same accumulated WithAttrs/WithGroup state. Handle picks which one to
+// dispatch to based on handlerRoot.jsonMode, so a SetFormat call takes
+// effect immediately across the whole process without having to rebuild
+// any derived loggers.
+type nebulaHandler struct {
+	root *handlerRoot
+	text slog.Handler
+	json slog.Handler
 }
 
-func (rh *reconfigurableHandler) current() slog.Handler {
-	h := *rh.root.inner.Load()
-	for _, mod := range rh.mods {
-		h = mod(h)
-	}
-	return h
+func (h *nebulaHandler) Enabled(_ context.Context, l slog.Level) bool {
+	return h.root.level.Level() <= l
 }
 
-func (rh *reconfigurableHandler) Enabled(_ context.Context, l slog.Level) bool {
-	return rh.root.level.Level() <= l
-}
-
-func (rh *reconfigurableHandler) Handle(ctx context.Context, r slog.Record) error {
-	if rh.root.disableTimestamp.Load() {
+func (h *nebulaHandler) Handle(ctx context.Context, r slog.Record) error {
+	if h.root.disableTimestamp.Load() {
 		r.Time = time.Time{}
 	}
-	return rh.current().Handle(ctx, r)
+	if h.root.jsonMode.Load() {
+		return h.json.Handle(ctx, r)
+	}
+	return h.text.Handle(ctx, r)
 }
 
-func (rh *reconfigurableHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+func (h *nebulaHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
-		return rh
+		return h
 	}
-	mods := make([]func(slog.Handler) slog.Handler, len(rh.mods)+1)
-	copy(mods, rh.mods)
-	mods[len(rh.mods)] = func(h slog.Handler) slog.Handler { return h.WithAttrs(attrs) }
-	return &reconfigurableHandler{root: rh.root, mods: mods}
+	return &nebulaHandler{
+		root: h.root,
+		text: h.text.WithAttrs(attrs),
+		json: h.json.WithAttrs(attrs),
+	}
 }
 
-func (rh *reconfigurableHandler) WithGroup(name string) slog.Handler {
+func (h *nebulaHandler) WithGroup(name string) slog.Handler {
 	if name == "" {
-		return rh
+		return h
 	}
-	mods := make([]func(slog.Handler) slog.Handler, len(rh.mods)+1)
-	copy(mods, rh.mods)
-	mods[len(rh.mods)] = func(h slog.Handler) slog.Handler { return h.WithGroup(name) }
-	return &reconfigurableHandler{root: rh.root, mods: mods}
+	return &nebulaHandler{
+		root: h.root,
+		text: h.text.WithGroup(name),
+		json: h.json.WithGroup(name),
+	}
 }
 
-// SetLevel satisfies the structural level-setter interface used by
-// configLogger and sshLogLevel. Changes propagate to every derived logger
-// via the shared LevelVar.
-func (rh *reconfigurableHandler) SetLevel(level slog.Level) {
-	rh.root.level.Set(level)
-}
+// SetLevel updates the effective log level. Propagates to every derived
+// logger via the shared LevelVar.
+func (h *nebulaHandler) SetLevel(level slog.Level) { h.root.level.Set(level) }
 
-// GetLevel is the structural counterpart used by sshLogLevel to report the
-// current level.
-func (rh *reconfigurableHandler) GetLevel() slog.Level {
-	return rh.root.level.Level()
-}
+// GetLevel reports the current log level.
+func (h *nebulaHandler) GetLevel() slog.Level { return h.root.level.Level() }
 
-// SetFormat satisfies the structural format-setter interface. Valid formats
-// are "text" and "json". The inner handler is rebuilt and swapped.
-func (rh *reconfigurableHandler) SetFormat(format string) error {
+// SetFormat flips the output format atomically. Valid formats are "text"
+// and "json". Every derived logger sees the new format on its next Handle
+// call; no rebuild or registration is required.
+func (h *nebulaHandler) SetFormat(format string) error {
 	switch format {
-	case "text", "json":
+	case "text":
+		h.root.jsonMode.Store(false)
+	case "json":
+		h.root.jsonMode.Store(true)
 	default:
 		return fmt.Errorf("unknown log format `%s`. possible formats: %s", format, []string{"text", "json"})
 	}
-	rh.root.mu.Lock()
-	rh.root.format = format
-	rh.root.mu.Unlock()
-	rh.root.rebuild()
 	return nil
 }
 
-// GetFormat is the structural counterpart used by sshLogFormat.
-func (rh *reconfigurableHandler) GetFormat() string {
-	rh.root.mu.Lock()
-	defer rh.root.mu.Unlock()
-	return rh.root.format
+// GetFormat reports the currently selected format name.
+func (h *nebulaHandler) GetFormat() string {
+	if h.root.jsonMode.Load() {
+		return "json"
+	}
+	return "text"
 }
 
-// SetDisableTimestamp satisfies the optional timestamp-toggle interface
-// used by configLogger.
-func (rh *reconfigurableHandler) SetDisableTimestamp(v bool) {
-	rh.root.disableTimestamp.Store(v)
-}
+// SetDisableTimestamp toggles whether Handle zeroes r.Time before
+// dispatching (slog's builtin text/json handlers skip emitting the time
+// attribute on a zero time).
+func (h *nebulaHandler) SetDisableTimestamp(v bool) { h.root.disableTimestamp.Store(v) }
 
 // configLogger reads logging.level, logging.format, and (optionally)
 // logging.disable_timestamp from c and applies them to l. The reconfig
