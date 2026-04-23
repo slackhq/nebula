@@ -6,21 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 )
 
 // The tests below pin the log format produced by ConntrackCacheTicker.Get
-// so the slog migration cannot silently change what operators grep for.
-// The ticker's internal state (cache + cacheTick) is poked directly to
-// avoid racing a goroutine-driven tick in tests.
-
-// stripTime drops the time attribute so assertions can pin the line verbatim.
-func stripTime(_ []string, a slog.Attr) slog.Attr {
-	if a.Key == slog.TimeKey {
-		return slog.Attr{}
-	}
-	return a
-}
+// so changes cannot silently break what operators are grepping for. The
+// ticker's internal state (cache + cacheTick) is poked directly to avoid
+// racing a goroutine-driven tick in tests.
 
 func newFixedTicker(t *testing.T, l *slog.Logger, cacheLen int) *ConntrackCacheTicker {
 	t.Helper()
@@ -37,10 +30,7 @@ func newFixedTicker(t *testing.T, l *slog.Logger, cacheLen int) *ConntrackCacheT
 
 func TestConntrackCacheTicker_Get_TextFormat(t *testing.T) {
 	buf := &bytes.Buffer{}
-	l := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{
-		Level:       slog.LevelDebug,
-		ReplaceAttr: stripTime,
-	}))
+	l := test.NewLoggerWithOutputAndLevel(buf, slog.LevelDebug)
 
 	c := newFixedTicker(t, l, 3)
 	c.Get()
@@ -50,10 +40,7 @@ func TestConntrackCacheTicker_Get_TextFormat(t *testing.T) {
 
 func TestConntrackCacheTicker_Get_JSONFormat(t *testing.T) {
 	buf := &bytes.Buffer{}
-	l := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{
-		Level:       slog.LevelDebug,
-		ReplaceAttr: stripTime,
-	}))
+	l := test.NewJSONLoggerWithOutput(buf, slog.LevelDebug)
 
 	c := newFixedTicker(t, l, 2)
 	c.Get()
@@ -63,10 +50,7 @@ func TestConntrackCacheTicker_Get_JSONFormat(t *testing.T) {
 
 func TestConntrackCacheTicker_Get_QuietBelowDebug(t *testing.T) {
 	buf := &bytes.Buffer{}
-	l := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{
-		Level:       slog.LevelInfo,
-		ReplaceAttr: stripTime,
-	}))
+	l := test.NewLoggerWithOutputAndLevel(buf, slog.LevelInfo)
 
 	c := newFixedTicker(t, l, 5)
 	c.Get()
@@ -76,10 +60,7 @@ func TestConntrackCacheTicker_Get_QuietBelowDebug(t *testing.T) {
 
 func TestConntrackCacheTicker_Get_QuietWhenCacheEmpty(t *testing.T) {
 	buf := &bytes.Buffer{}
-	l := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{
-		Level:       slog.LevelDebug,
-		ReplaceAttr: stripTime,
-	}))
+	l := test.NewLoggerWithOutputAndLevel(buf, slog.LevelDebug)
 
 	c := newFixedTicker(t, l, 0)
 	c.Get()

@@ -244,7 +244,9 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	default:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
-		hostinfo.logger(f.l).Debug("Unexpected packet received", slog.Any("from", via))
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("Unexpected packet received", slog.Any("from", via))
+		}
 		return
 	}
 
@@ -270,7 +272,9 @@ func (f *Interface) sendCloseTunnel(h *HostInfo) {
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
 	if !via.IsRelayed && hostinfo.remote != via.UdpAddr {
 		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, via.UdpAddr.Addr()) {
-			hostinfo.logger(f.l).Debug("lighthouse.remote_allow_list denied roaming", slog.Any("newAddr", via.UdpAddr))
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				hostinfo.logger(f.l).Debug("lighthouse.remote_allow_list denied roaming", slog.Any("newAddr", via.UdpAddr))
+			}
 			return
 		}
 
@@ -519,7 +523,9 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	}
 
 	if !hostinfo.ConnectionState.window.Update(f.l, mc) {
-		hostinfo.logger(f.l).Debug("dropping out of window packet", slog.Any("header", h))
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("dropping out of window packet", slog.Any("header", h))
+		}
 		return nil, errors.New("out of window packet")
 	}
 
@@ -545,7 +551,9 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	}
 
 	if !hostinfo.ConnectionState.window.Update(f.l, messageCounter) {
-		hostinfo.logger(f.l).Debug("dropping out of window packet", slog.Any("fwPacket", fwPacket))
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("dropping out of window packet", slog.Any("fwPacket", fwPacket))
+		}
 		return false
 	}
 

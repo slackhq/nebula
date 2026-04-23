@@ -1,89 +1,129 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"strings"
-
-	"github.com/kardianos/service"
-	"github.com/slackhq/nebula"
+	"sync"
+	"sync/atomic"
 )
 
-// HookLogger routes every log record through the service logger so that
-// output ends up in the Windows Event Viewer. configLogger-driven level
-// changes continue to take effect via the shared LevelVar, but format and
-// timestamp config is ignored since the service logger receives pre-built
-// lines.
-func HookLogger(l *slog.Logger) {
-	rh, ok := nebula.HandlerOf(l)
-	if !ok {
-		return
-	}
-	rh.ReplaceInner(&serviceHandler{sl: logger})
-}
-
-// serviceHandler formats each record into a simple "msg key=value" line and
-// forwards it to the Windows service logger at the appropriate severity.
-type serviceHandler struct {
-	sl     service.Logger
-	attrs  []slog.Attr
-	prefix string
-}
-
-func (sh *serviceHandler) Enabled(_ context.Context, _ slog.Level) bool {
-	// The outer ReconfigurableHandler gates on the shared LevelVar; by the
-	// time a record reaches us, it is already admitted.
-	return true
-}
-
-func (sh *serviceHandler) Handle(_ context.Context, r slog.Record) error {
-	var sb strings.Builder
-	if sh.prefix != "" {
-		sb.WriteString(sh.prefix)
-		sb.WriteString(" ")
-	}
-	sb.WriteString(r.Message)
-	for _, a := range sh.attrs {
-		writeAttr(&sb, a)
-	}
-	r.Attrs(func(a slog.Attr) bool {
-		writeAttr(&sb, a)
-		return true
+// newPlatformLogger returns a *slog.Logger that routes every log record
+// through the Windows service logger so records end up in the Windows Event
+// Viewer. Formatting is delegated to slog's builtin text or JSON handler
+// writing into a shared buffer; the formatted line is then forwarded to the
+// service logger at a severity matching the record's level. Both a text
+// and a json handler are pre-derived at each WithAttrs/WithGroup call so a
+// SetFormat flip propagates instantly without rebuilding anything.
+func newPlatformLogger() *slog.Logger {
+	root := &serviceHandlerRoot{}
+	root.level.Set(slog.LevelInfo)
+	opts := &slog.HandlerOptions{Level: &root.level}
+	return slog.New(&serviceHandler{
+		root: root,
+		text: slog.NewTextHandler(&root.buf, opts),
+		json: slog.NewJSONHandler(&root.buf, opts),
 	})
-	line := sb.String()
+}
+
+// serviceHandlerRoot holds the per-logger mutable state shared across
+// WithAttrs/WithGroup derivations. The buffer is shared because Handle
+// serializes on mu before each serialize + route + reset cycle.
+type serviceHandlerRoot struct {
+	level    slog.LevelVar
+	jsonMode atomic.Bool
+
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+// serviceHandler dispatches each record to either a text or a json
+// slog.Handler (both write into the shared buffer), then forwards the
+// formatted line to the Windows service logger at the matching severity.
+type serviceHandler struct {
+	root *serviceHandlerRoot
+	text slog.Handler
+	json slog.Handler
+}
+
+func (sh *serviceHandler) Enabled(_ context.Context, l slog.Level) bool {
+	return sh.root.level.Level() <= l
+}
+
+func (sh *serviceHandler) Handle(ctx context.Context, r slog.Record) error {
+	sh.root.mu.Lock()
+	defer sh.root.mu.Unlock()
+	sh.root.buf.Reset()
+
+	var err error
+	if sh.root.jsonMode.Load() {
+		err = sh.json.Handle(ctx, r)
+	} else {
+		err = sh.text.Handle(ctx, r)
+	}
+	if err != nil {
+		return err
+	}
+
+	line := strings.TrimRight(sh.root.buf.String(), "\n")
 	switch {
 	case r.Level >= slog.LevelError:
-		return sh.sl.Error(line)
+		return logger.Error(line)
 	case r.Level >= slog.LevelWarn:
-		return sh.sl.Warning(line)
+		return logger.Warning(line)
 	default:
-		return sh.sl.Info(line)
+		return logger.Info(line)
 	}
 }
 
 func (sh *serviceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	merged := make([]slog.Attr, 0, len(sh.attrs)+len(attrs))
-	merged = append(merged, sh.attrs...)
-	merged = append(merged, attrs...)
-	return &serviceHandler{sl: sh.sl, attrs: merged, prefix: sh.prefix}
+	if len(attrs) == 0 {
+		return sh
+	}
+	return &serviceHandler{
+		root: sh.root,
+		text: sh.text.WithAttrs(attrs),
+		json: sh.json.WithAttrs(attrs),
+	}
 }
 
 func (sh *serviceHandler) WithGroup(name string) slog.Handler {
 	if name == "" {
 		return sh
 	}
-	prefix := sh.prefix
-	if prefix != "" {
-		prefix += "."
+	return &serviceHandler{
+		root: sh.root,
+		text: sh.text.WithGroup(name),
+		json: sh.json.WithGroup(name),
 	}
-	prefix += name
-	return &serviceHandler{sl: sh.sl, attrs: sh.attrs, prefix: prefix}
 }
 
-func writeAttr(sb *strings.Builder, a slog.Attr) {
-	sb.WriteString(" ")
-	sb.WriteString(a.Key)
-	sb.WriteString("=")
-	fmt.Fprintf(sb, "%v", a.Value.Resolve().Any())
+// SetLevel lets configLogger and SSH commands honor logging.level.
+func (sh *serviceHandler) SetLevel(lvl slog.Level) { sh.root.level.Set(lvl) }
+
+// GetLevel is the structural counterpart used by sshLogLevel.
+func (sh *serviceHandler) GetLevel() slog.Level { return sh.root.level.Level() }
+
+// SetFormat flips which inner handler Handle dispatches to. The change
+// propagates to every derived handler immediately; no rebuild is required.
+func (sh *serviceHandler) SetFormat(format string) error {
+	switch format {
+	case "text":
+		sh.root.jsonMode.Store(false)
+	case "json":
+		sh.root.jsonMode.Store(true)
+	default:
+		return fmt.Errorf("unknown log format `%s`. possible formats: %s", format, []string{"text", "json"})
+	}
+	return nil
+}
+
+// GetFormat is the structural counterpart used by sshLogFormat.
+func (sh *serviceHandler) GetFormat() string {
+	if sh.root.jsonMode.Load() {
+		return "json"
+	}
+	return "text"
 }

@@ -24,8 +24,7 @@ func (p *program) Start(s service.Service) error {
 	// Start should not block.
 	logger.Info("Nebula service starting.")
 
-	l := nebula.NewLogger(os.Stdout)
-	HookLogger(l)
+	l := newPlatformLogger()
 
 	c := config.NewC(l)
 	err := c.Load(*p.configPath)
@@ -84,7 +83,7 @@ func doService(configPath *string, configTest *bool, build string, serviceFlag *
 	// Here are what the different loggers are doing:
 	// - `log` is the standard go log utility, meant to be used while the process is still attached to stdout/stderr
 	// - `logger` is the service log utility that may be attached to a special place depending on OS (Windows will have it attached to the event log)
-	// - above, in `Run` we create a `*slog.Logger` via nebula.NewLogger which is what nebula expects to use
+	// - in program.Start we build a *slog.Logger via newPlatformLogger; on non-Windows that is a stdout-backed slog logger, on Windows it routes records through the service logger
 	s, err := service.New(prg, svcConfig)
 	if err != nil {
 		return err

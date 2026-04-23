@@ -1,4 +1,6 @@
-package test
+// Package overlaytest provides fakes of overlay.Device for tests that do
+// not want to touch a real tun device or route table.
+package overlaytest
 
 import (
 	"errors"
@@ -8,6 +10,9 @@ import (
 	"github.com/slackhq/nebula/routing"
 )
 
+// NoopTun is an overlay.Device that silently discards every read and write.
+// Useful in tests that need to construct a nebula Interface but do not
+// exercise the datapath.
 type NoopTun struct{}
 
 func (NoopTun) RoutesFor(addr netip.Addr) routing.Gateways {

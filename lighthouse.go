@@ -549,11 +549,12 @@ func (lh *LightHouse) DeleteVpnAddrs(allVpnAddrs []netip.Addr) {
 	lh.Lock()
 	rm, ok := lh.addrMap[allVpnAddrs[0]]
 	if ok {
+		debugEnabled := lh.l.Enabled(context.Background(), slog.LevelDebug)
 		for _, addr := range allVpnAddrs {
 			srm := lh.addrMap[addr]
 			if srm == rm {
 				delete(lh.addrMap, addr)
-				if lh.l.Enabled(context.Background(), slog.LevelDebug) {
+				if debugEnabled {
 					lh.l.Debug("deleting from lighthouse", slog.Any("vpnAddr", addr))
 				}
 			}
@@ -672,7 +673,7 @@ func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
 func (lh *LightHouse) shouldAdd(vpnAddrs []netip.Addr, to netip.Addr) bool {
 	allow := lh.GetRemoteAllowList().AllowAll(vpnAddrs, to)
 	if lh.l.Enabled(context.Background(), LogLevelTrace) {
-		lh.l.Log(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
+		lh.l.LogAttrs(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
 			slog.Any("vpnAddrs", vpnAddrs),
 			slog.Any("udpAddr", to),
 			slog.Bool("allow", allow),
@@ -694,7 +695,7 @@ func (lh *LightHouse) unlockedShouldAddV4(vpnAddr netip.Addr, to *V4AddrPort) bo
 	udpAddr := protoV4AddrPortToNetAddrPort(to)
 	allow := lh.GetRemoteAllowList().Allow(vpnAddr, udpAddr.Addr())
 	if lh.l.Enabled(context.Background(), LogLevelTrace) {
-		lh.l.Log(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
+		lh.l.LogAttrs(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
 			slog.Any("vpnAddr", vpnAddr),
 			slog.Any("udpAddr", udpAddr),
 			slog.Bool("allow", allow),
@@ -717,7 +718,7 @@ func (lh *LightHouse) unlockedShouldAddV6(vpnAddr netip.Addr, to *V6AddrPort) bo
 	udpAddr := protoV6AddrPortToNetAddrPort(to)
 	allow := lh.GetRemoteAllowList().Allow(vpnAddr, udpAddr.Addr())
 	if lh.l.Enabled(context.Background(), LogLevelTrace) {
-		lh.l.Log(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
+		lh.l.LogAttrs(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
 			slog.Any("vpnAddr", vpnAddr),
 			slog.Any("udpAddr", udpAddr),
 			slog.Bool("allow", allow),
@@ -842,7 +843,8 @@ func (lh *LightHouse) innerQueryServer(addr netip.Addr, nb, out []byte) {
 			queried++
 
 		} else {
-			lh.l.Debug("Can not query lighthouse using unknown protocol version",
+			lh.l.Debug("unsupported protocol version",
+				slog.String("op", "query"),
 				slog.Any("queryVpnAddr", addr),
 				slog.Any("version", v),
 			)
@@ -1004,7 +1006,8 @@ func (lh *LightHouse) SendUpdate() {
 			updated++
 
 		} else {
-			lh.l.Debug("Can not update lighthouse using unknown protocol version",
+			lh.l.Debug("unsupported protocol version",
+				slog.String("op", "update"),
 				slog.Any("version", v),
 			)
 			continue
@@ -1262,7 +1265,10 @@ func (lhh *LightHouseHandler) coalesceAnswers(v cert.Version, c *cache, n *Nebul
 			}
 		} else {
 			if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
-				lhh.l.Debug("unsupported protocol version", slog.Any("version", v))
+				lhh.l.Debug("unsupported protocol version",
+					slog.String("op", "coalesceAnswers"),
+					slog.Any("version", v),
+				)
 			}
 		}
 	}
