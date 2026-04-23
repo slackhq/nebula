@@ -8,21 +8,21 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type gsoContainer struct {
-	pq []*tunFile
+type offloadContainer struct {
+	pq []*Offload
 	// pqi is exactly the same as pq, but stored as the interface type
 	pqi        []Queue
 	shutdownFd int
 }
 
-func NewGSOContainer() (Container, error) {
+func NewOffloadContainer() (Container, error) {
 	shutdownFd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create eventfd: %w", err)
 	}
 
-	out := &gsoContainer{
-		pq:         []*tunFile{},
+	out := &offloadContainer{
+		pq:         []*Offload{},
 		pqi:        []Queue{},
 		shutdownFd: shutdownFd,
 	}
@@ -30,12 +30,12 @@ func NewGSOContainer() (Container, error) {
 	return out, nil
 }
 
-func (c *gsoContainer) Queues() []Queue {
+func (c *offloadContainer) Queues() []Queue {
 	return c.pqi
 }
 
-func (c *gsoContainer) Add(fd int) error {
-	x, err := newTunFd(fd, c.shutdownFd)
+func (c *offloadContainer) Add(fd int) error {
+	x, err := newOffload(fd, c.shutdownFd)
 	if err != nil {
 		return err
 	}
@@ -45,14 +45,14 @@ func (c *gsoContainer) Add(fd int) error {
 	return nil
 }
 
-func (c *gsoContainer) wakeForShutdown() error {
+func (c *offloadContainer) wakeForShutdown() error {
 	var buf [8]byte
 	binary.NativeEndian.PutUint64(buf[:], 1)
-	_, err := unix.Write(int(c.shutdownFd), buf[:])
+	_, err := unix.Write(c.shutdownFd, buf[:])
 	return err
 }
 
-func (c *gsoContainer) Close() error {
+func (c *offloadContainer) Close() error {
 	errs := []error{}
 
 	// Signal all readers blocked in poll to wake up and exit

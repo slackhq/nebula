@@ -176,7 +176,7 @@ func newTunGeneric(c *config.C, l *logrus.Logger, fd int, vnetHdr bool, vpnNetwo
 	var container tio.Container
 	var err error
 	if vnetHdr {
-		container, err = tio.NewGSOContainer()
+		container, err = tio.NewOffloadContainer()
 	} else {
 		container, err = tio.NewPollContainer()
 	}

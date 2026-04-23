@@ -24,6 +24,7 @@ func NewUserDevice(vpnNetworks []netip.Prefix) (Device, error) {
 		outboundWriter: ow,
 		inboundReader:  ir,
 		inboundWriter:  iw,
+		numReaders:     1,
 	}, nil
 }
 

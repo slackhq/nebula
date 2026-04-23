@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
 
 // newReadPipe returns a read fd. The matching write fd is registered for cleanup.
-// The caller takes ownership of the read fd (pass it to newTunFd / newFriend).
+// The caller takes ownership of the read fd (pass it to newOffload / newFriend).
 func newReadPipe(t *testing.T) int {
 	t.Helper()
 	var fds [2]int
@@ -25,70 +26,35 @@ func newReadPipe(t *testing.T) int {
 	return fds[0]
 }
 
-func TestTunFile_WakeForShutdown_UnblocksRead(t *testing.T) {
-	tf, err := newTunFd(newReadPipe(t))
+func TestOffload_WakeForShutdown_WakesFriends(t *testing.T) {
+	pipe1 := newReadPipe(t)
+	pipe2 := newReadPipe(t)
+	parent, err := NewOffloadContainer()
 	if err != nil {
-		t.Fatalf("newTunFd: %v", err)
+		t.Fatalf("newOffload: %v", err)
 	}
-	t.Cleanup(func() { _ = tf.Close() })
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := tf.Read(make([]byte, 64))
-		done <- err
-	}()
-
-	// Verify Read is actually blocked in poll.
-	select {
-	case err := <-done:
-		t.Fatalf("Read returned before shutdown signal: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	if err := tf.wakeForShutdown(); err != nil {
-		t.Fatalf("wakeForShutdown: %v", err)
-	}
-
-	select {
-	case err := <-done:
-		if !errors.Is(err, os.ErrClosed) {
-			t.Fatalf("expected os.ErrClosed, got %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Read did not wake on shutdown")
-	}
-}
-
-func TestTunFile_WakeForShutdown_WakesFriends(t *testing.T) {
-	parent, err := newTunFd(newReadPipe(t))
-	if err != nil {
-		t.Fatalf("newTunFd: %v", err)
-	}
-	friend, err := parent.newFriend(newReadPipe(t))
-	if err != nil {
-		_ = parent.Close()
-		t.Fatalf("newFriend: %v", err)
-	}
+	require.NoError(t, parent.Add(pipe1))
+	require.NoError(t, parent.Add(pipe2))
 	t.Cleanup(func() {
-		_ = friend.Close()
-		_ = parent.Close()
+		_ = unix.Close(pipe1)
+		_ = unix.Close(pipe2)
 	})
 
-	readers := []*tunFile{parent, friend}
+	readers := parent.Queues()
 	errs := make([]error, len(readers))
 	var wg sync.WaitGroup
 	for i, r := range readers {
 		wg.Add(1)
-		go func(i int, r *tunFile) {
+		go func(i int, r Queue) {
 			defer wg.Done()
-			_, errs[i] = r.Read(make([]byte, 64))
+			_, errs[i] = r.Read()
 		}(i, r)
 	}
 
 	time.Sleep(50 * time.Millisecond)
 
-	if err := parent.wakeForShutdown(); err != nil {
-		t.Fatalf("wakeForShutdown: %v", err)
+	if err := parent.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 
 	done := make(chan struct{})
@@ -107,9 +73,9 @@ func TestTunFile_WakeForShutdown_WakesFriends(t *testing.T) {
 }
 
 func TestTunFile_Close_Idempotent(t *testing.T) {
-	tf, err := newTunFd(newReadPipe(t))
+	tf, err := newOffload(newReadPipe(t), 1)
 	if err != nil {
-		t.Fatalf("newTunFd: %v", err)
+		t.Fatalf("newOffload: %v", err)
 	}
 	if err := tf.Close(); err != nil {
 		t.Fatalf("first Close: %v", err)
