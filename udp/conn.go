@@ -35,16 +35,6 @@ type Conn interface {
 	// WriteTo loop. Returns on the first error; callers may observe a
 	// partial send if some packets went out before the error.
 	WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error
-	// WriteSegmented sends bufs as a single UDP GSO sendmsg when the kernel
-	// supports it: all bufs go to the same addr, each must be exactly segSize
-	// bytes except the last which may be shorter. The kernel emits one
-	// datagram per buf on the wire. Backends / kernels without GSO support
-	// fall back to a per-packet WriteTo loop. Returns on the first error.
-	WriteSegmented(bufs [][]byte, addr netip.AddrPort, segSize int) error
-	// SupportsGSO reports whether WriteSegmented takes the single-syscall
-	// GSO path. Callers use this to decide at batch-assembly time whether
-	// the uniform-size / same-dst check is worth running.
-	SupportsGSO() bool
 	ReloadConfig(c *config.C)
 	SupportsMultipleReaders() bool
 	Close() error
@@ -69,12 +59,6 @@ func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {
 }
 func (NoopConn) WriteBatch(_ [][]byte, _ []netip.AddrPort) error {
 	return nil
-}
-func (NoopConn) WriteSegmented(_ [][]byte, _ netip.AddrPort, _ int) error {
-	return nil
-}
-func (NoopConn) SupportsGSO() bool {
-	return false
 }
 func (NoopConn) ReloadConfig(_ *config.C) {
 	return

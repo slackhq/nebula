@@ -12,7 +12,8 @@ import (
 )
 
 // Space for segmented output. Worst case is many small segments, each paying
-// an IP+TCP header. 128KiB comfortably covers the 64KiB payload ceiling.
+// an IP+TCP header. Should be a multiple of 64KiB.
+// const tunSegBufSize = 0xffff * 8 TODO larger? config?
 const tunSegBufSize = 131072
 
 // tunSegBufCap is the total size we allocate for the per-reader segment
@@ -24,7 +25,7 @@ const tunSegBufCap = tunSegBufSize * 2
 // tunDrainCap caps how many packets a single Read will accumulate via
 // the post-wake drain loop. Sized to soak up a burst of small ACKs while
 // bounding how much work a single caller holds before handing off.
-const tunDrainCap = 64
+const tunDrainCap = 64 //256
 
 // gsoInitialPayIovs is the starting capacity (in payload fragments) of
 // Offload.gsoIovs. Sized to cover the default coalesce segment cap without

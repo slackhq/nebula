@@ -54,13 +54,6 @@ type StdConn struct {
 	// probed once at socket creation. When true, WriteSegmented takes a
 	// single-syscall GSO path; otherwise it falls back to a WriteTo loop.
 	gsoSupported bool
-	gsoMsg       msghdr
-	gsoIovs      []iovec
-	gsoName      []byte // SizeofSockaddrInet6
-	gsoCmsg      []byte // CmsgSpace(2)
-	gsoSent      int
-	gsoErrno     syscall.Errno
-	gsoFunc      func(fd uintptr) bool
 }
 
 func setReusePort(network, address string, c syscall.RawConn) error {
@@ -155,9 +148,7 @@ const maxGSOSegments = 64
 // fits, avoiding EMSGSIZE on large TSO superpackets.
 const maxGSOBytes = 65535
 
-// prepareGSO probes UDP_SEGMENT support and, on success, sets up the
-// reusable sendmsg scratch (iovecs, sockaddr, cmsg) plus the preallocated
-// raw-write closure used to avoid heap allocations on the hot path.
+// prepareGSO probes UDP_SEGMENT support
 func (u *StdConn) prepareGSO() {
 	var probeErr error
 	if err := u.rawConn.Control(func(fd uintptr) {
@@ -169,25 +160,6 @@ func (u *StdConn) prepareGSO() {
 		return
 	}
 	u.gsoSupported = true
-	u.gsoIovs = make([]iovec, maxGSOSegments)
-	u.gsoName = make([]byte, unix.SizeofSockaddrInet6)
-	u.gsoCmsg = make([]byte, unix.CmsgSpace(2))
-
-	// Wire up the static pieces of gsoMsg. Iovlen / Controllen / Namelen /
-	// cmsg contents get refreshed per call; Iov, Name, Control pointers are
-	// fixed because the scratch slices never move.
-	u.gsoMsg.Iov = &u.gsoIovs[0]
-	u.gsoMsg.Name = &u.gsoName[0]
-	u.gsoMsg.Control = &u.gsoCmsg[0]
-
-	// Prepopulate the cmsg header. Len/Level/Type are constant for our use;
-	// only the 2-byte gso_size payload changes per call.
-	cmsghdr := (*unix.Cmsghdr)(unsafe.Pointer(&u.gsoCmsg[0]))
-	cmsghdr.Level = unix.SOL_UDP
-	cmsghdr.Type = unix.UDP_SEGMENT
-	setCmsgLen(cmsghdr, unix.CmsgLen(2))
-
-	u.gsoFunc = u.sendmsgRawWriteGSO
 }
 
 func (u *StdConn) SupportsMultipleReaders() bool {
@@ -514,115 +486,6 @@ func (u *StdConn) sendmmsgRawWrite(fd uintptr) bool {
 	u.writeSent = int(r1)
 	u.writeErrno = errno
 	return true
-}
-
-func (u *StdConn) SupportsGSO() bool {
-	return u.gsoSupported
-}
-
-// WriteSegmented sends bufs to addr as a UDP GSO superpacket. The kernel
-// emits one datagram per iovec on the wire; all iovecs except the last must
-// be exactly segSize bytes. Non-GSO kernels hit the WriteTo fallback.
-// Called with len(bufs) >= 1. len(bufs) > maxGSOSegments is chunked.
-func (u *StdConn) WriteSegmented(bufs [][]byte, addr netip.AddrPort, segSize int) error {
-	if len(bufs) == 0 {
-		return nil
-	}
-	if !u.gsoSupported {
-		for _, b := range bufs {
-			if err := u.WriteTo(b, addr); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	nlen, err := writeSockaddr(u.gsoName, addr, u.isV4)
-	if err != nil {
-		return err
-	}
-	u.gsoMsg.Namelen = uint32(nlen)
-	setMsgControllen(&u.gsoMsg, unix.CmsgSpace(2))
-
-	// Cap the per-syscall fan-out by both segment count and total bytes.
-	// Kernel rejects sendmsg with EMSGSIZE when segCount*segSize would
-	// exceed sk_gso_max_size (typically 65536). For segSize > maxGSOBytes
-	// we can't use GSO at all and must fall back per-packet.
-	segsByBytes := maxGSOBytes / segSize
-	if segsByBytes == 0 {
-		for _, b := range bufs {
-			if werr := u.WriteTo(b, addr); werr != nil {
-				return werr
-			}
-		}
-		return nil
-	}
-	maxChunk := maxGSOSegments
-	if segsByBytes < maxChunk {
-		maxChunk = segsByBytes
-	}
-
-	i := 0
-	for i < len(bufs) {
-		chunk := len(bufs) - i
-		if chunk > maxChunk {
-			chunk = maxChunk
-		}
-		for k := 0; k < chunk; k++ {
-			b := bufs[i+k]
-			if len(b) == 0 {
-				u.gsoIovs[k].Base = nil
-				setIovLen(&u.gsoIovs[k], 0)
-			} else {
-				u.gsoIovs[k].Base = &b[0]
-				setIovLen(&u.gsoIovs[k], len(b))
-			}
-		}
-		setMsgIovlen(&u.gsoMsg, chunk)
-		binary.NativeEndian.PutUint16(u.gsoCmsg[unix.CmsgLen(0):unix.CmsgLen(0)+2], uint16(segSize))
-
-		if serr := u.sendmsgGSO(); serr != nil {
-			// Fall back to a per-packet loop for the remainder of the
-			// batch. Dropping the GSO call entirely is safer than
-			// returning mid-superpacket and losing bytes.
-			for k := 0; k < chunk; k++ {
-				if werr := u.WriteTo(bufs[i+k], addr); werr != nil {
-					return werr
-				}
-			}
-		}
-		i += chunk
-	}
-	return nil
-}
-
-// sendmsgRawWriteGSO is the preallocated rawConn.Write callback for the GSO
-// path. Reads the prebuilt u.gsoMsg and writes u.gsoSent / u.gsoErrno.
-func (u *StdConn) sendmsgRawWriteGSO(fd uintptr) bool {
-	r1, _, errno := unix.Syscall(
-		unix.SYS_SENDMSG,
-		fd,
-		uintptr(unsafe.Pointer(&u.gsoMsg)),
-		0,
-	)
-	if errno == syscall.EAGAIN || errno == syscall.EWOULDBLOCK {
-		return false
-	}
-	u.gsoSent = int(r1)
-	u.gsoErrno = errno
-	return true
-}
-
-func (u *StdConn) sendmsgGSO() error {
-	u.gsoSent = 0
-	u.gsoErrno = 0
-	if err := u.rawConn.Write(u.gsoFunc); err != nil {
-		return err
-	}
-	if u.gsoErrno != 0 {
-		return &net.OpError{Op: "sendmsg", Err: u.gsoErrno}
-	}
-	return nil
 }
 
 func (u *StdConn) sendmmsg(n int) (int, error) {

@@ -380,52 +380,9 @@ func (f *Interface) listenIn(reader tio.Queue, i int) {
 }
 
 func (f *Interface) flushBatch(batch *sendBatch, q int) {
-	//if len(batch.bufs) == 1 {
-	//	if err := f.writers[q].WriteTo(batch.bufs[0], batch.dsts[0]); err != nil {
-	//		f.l.WithError(err).WithField("writer", q).Error("Failed to write outgoing single-batch")
-	//	}
-	//	return
-	//}
-	w := f.writers[q]
-	if w.SupportsGSO() {
-		if segSize, ok := batchSegmentable(batch); ok {
-			if err := w.WriteSegmented(batch.bufs, batch.dsts[0], segSize); err != nil {
-				f.l.WithError(err).WithField("writer", q).Error("Failed to write outgoing GSO batch")
-			}
-			return
-		}
-	}
-	if err := w.WriteBatch(batch.bufs, batch.dsts); err != nil {
+	if err := f.writers[q].WriteBatch(batch.bufs, batch.dsts); err != nil {
 		f.l.WithError(err).WithField("writer", q).Error("Failed to write outgoing batch")
 	}
-}
-
-// batchSegmentable reports whether a batch can be emitted as a single UDP GSO
-// superpacket: all packets go to the same destination, and every packet
-// except possibly the last has the same length. Returns the segment size on
-// success. The single-packet case is handled in flushBatch before this runs.
-func batchSegmentable(b *sendBatch) (int, bool) {
-	segSize := len(b.bufs[0])
-	if segSize == 0 {
-		return 0, false
-	}
-	dst := b.dsts[0]
-	last := len(b.bufs) - 1
-	for i := 1; i <= last; i++ {
-		if b.dsts[i] != dst {
-			return 0, false
-		}
-		if i < last {
-			if len(b.bufs[i]) != segSize {
-				return 0, false
-			}
-		} else {
-			if len(b.bufs[i]) == 0 || len(b.bufs[i]) > segSize {
-				return 0, false
-			}
-		}
-	}
-	return segSize, true
 }
 
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
