@@ -82,7 +82,7 @@ docker exec host4 tcpdump -i eth0 -q -w - -U 2>logs/host4.outside.log >logs/host
 
 docker exec host2 ncat -nklv 0.0.0.0 2000 &
 docker exec host3 ncat -nklv 0.0.0.0 2000 &
-docker exec host4 ncat -nkluv 0.0.0.0 4000 &
+docker exec host4 ncat -e '/usr/bin/echo helloagainfromhost4' -nkluv 0.0.0.0 4000 &
 docker exec host2 ncat -e '/usr/bin/echo host2' -nkluv 0.0.0.0 3000 &
 docker exec host3 ncat -e '/usr/bin/echo host3' -nkluv 0.0.0.0 3000 &
 
@@ -155,11 +155,11 @@ echo " *** Testing conntrack"
 echo
 set -x
 
-# host2 speaking to host4 on UDP 4000 should allow it to reply, when firewall rules would normally not permit this
-docker exec host2 sh -c "/usr/bin/echo host2 | ncat -nuv 192.168.100.4 4000"
-docker exec host2 ncat -e '/usr/bin/echo helloagainfromhost2' -nkluv 0.0.0.0 4000 &
-sleep 1
-docker exec host4 sh -c "/usr/bin/echo host4 | ncat -nuv 192.168.100.2 4000"
+# host4's outbound firewall only allows ICMP to the lighthouse, so host4
+# cannot initiate UDP to host2. Once host2 initiates a flow to host4:4000,
+# conntrack must let host4's listener reply on that flow. If it doesn't,
+# the echo back from host4 never reaches host2.
+docker exec host2 sh -c "(/usr/bin/echo host2; sleep 2) | ncat -nuv 192.168.100.4 4000" | grep -q helloagainfromhost4
 
 docker exec host4 sh -c 'kill 1'
 docker exec host3 sh -c 'kill 1'
