@@ -4,7 +4,6 @@
 package e2e
 
 import (
-	"log/slog"
 	"net/netip"
 	"slices"
 	"testing"
