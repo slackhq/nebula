@@ -159,7 +159,7 @@ set -x
 # cannot initiate UDP to host2. Once host2 initiates a flow to host4:4000,
 # conntrack must let host4's listener reply on that flow. If it doesn't,
 # the echo back from host4 never reaches host2.
-docker exec host2 sh -c "/usr/bin/echo host2 | ncat -nuv -w2 192.168.100.4 4000" | grep -q helloagainfromhost4
+docker exec host2 sh -c "(/usr/bin/echo host2; sleep 2) | ncat -nuv 192.168.100.4 4000" | grep -q helloagainfromhost4
 
 docker exec host4 sh -c 'kill 1'
 docker exec host3 sh -c 'kill 1'
