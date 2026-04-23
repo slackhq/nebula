@@ -41,7 +41,7 @@ func BenchmarkReloadConfigWithCAs(b *testing.B) {
 			c := config.NewC(l)
 			require.NoError(b, c.Load(dir))
 
-			_, err := NewPKIFromConfig(test.NewSlogLogger(), c)
+			_, err := NewPKIFromConfig(test.NewLogger(), c)
 			require.NoError(b, err)
 
 			b.ReportAllocs()

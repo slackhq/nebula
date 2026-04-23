@@ -19,7 +19,7 @@ import (
 )
 
 func TestNewFirewall(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	c := &dummyCert{}
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
 	conntrack := fw.Conntrack
@@ -59,7 +59,7 @@ func TestNewFirewall(t *testing.T) {
 
 func TestFirewall_AddRule(t *testing.T) {
 	ob := &bytes.Buffer{}
-	l := test.NewSlogLoggerWithOutput(ob)
+	l := test.NewLoggerWithOutput(ob)
 
 	c := &dummyCert{}
 	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, c)
@@ -177,7 +177,7 @@ func TestFirewall_AddRule(t *testing.T) {
 
 func TestFirewall_Drop(t *testing.T) {
 	ob := &bytes.Buffer{}
-	l := test.NewSlogLoggerWithOutput(ob)
+	l := test.NewLoggerWithOutput(ob)
 	myVpnNetworksTable := new(bart.Lite)
 	myVpnNetworksTable.Insert(netip.MustParsePrefix("1.1.1.1/8"))
 	p := firewall.Packet{
@@ -253,7 +253,7 @@ func TestFirewall_Drop(t *testing.T) {
 
 func TestFirewall_DropV6(t *testing.T) {
 	ob := &bytes.Buffer{}
-	l := test.NewSlogLoggerWithOutput(ob)
+	l := test.NewLoggerWithOutput(ob)
 
 	myVpnNetworksTable := new(bart.Lite)
 	myVpnNetworksTable.Insert(netip.MustParsePrefix("fd00::/7"))
@@ -483,7 +483,7 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 
 func TestFirewall_Drop2(t *testing.T) {
 	ob := &bytes.Buffer{}
-	l := test.NewSlogLoggerWithOutput(ob)
+	l := test.NewLoggerWithOutput(ob)
 	myVpnNetworksTable := new(bart.Lite)
 	myVpnNetworksTable.Insert(netip.MustParsePrefix("1.1.1.1/8"))
 
@@ -541,7 +541,7 @@ func TestFirewall_Drop2(t *testing.T) {
 
 func TestFirewall_Drop3(t *testing.T) {
 	ob := &bytes.Buffer{}
-	l := test.NewSlogLoggerWithOutput(ob)
+	l := test.NewLoggerWithOutput(ob)
 	myVpnNetworksTable := new(bart.Lite)
 	myVpnNetworksTable.Insert(netip.MustParsePrefix("1.1.1.1/8"))
 
@@ -629,7 +629,7 @@ func TestFirewall_Drop3(t *testing.T) {
 
 func TestFirewall_Drop3V6(t *testing.T) {
 	ob := &bytes.Buffer{}
-	l := test.NewSlogLoggerWithOutput(ob)
+	l := test.NewLoggerWithOutput(ob)
 	myVpnNetworksTable := new(bart.Lite)
 	myVpnNetworksTable.Insert(netip.MustParsePrefix("fd00::/7"))
 
@@ -666,7 +666,7 @@ func TestFirewall_Drop3V6(t *testing.T) {
 
 func TestFirewall_DropConntrackReload(t *testing.T) {
 	ob := &bytes.Buffer{}
-	l := test.NewSlogLoggerWithOutput(ob)
+	l := test.NewLoggerWithOutput(ob)
 	myVpnNetworksTable := new(bart.Lite)
 	myVpnNetworksTable.Insert(netip.MustParsePrefix("1.1.1.1/8"))
 
@@ -730,7 +730,7 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 
 func TestFirewall_ICMPPortBehavior(t *testing.T) {
 	ob := &bytes.Buffer{}
-	l := test.NewSlogLoggerWithOutput(ob)
+	l := test.NewLoggerWithOutput(ob)
 	myVpnNetworksTable := new(bart.Lite)
 	myVpnNetworksTable.Insert(netip.MustParsePrefix("1.1.1.1/8"))
 
@@ -873,7 +873,7 @@ func TestFirewall_ICMPPortBehavior(t *testing.T) {
 
 func TestFirewall_DropIPSpoofing(t *testing.T) {
 	ob := &bytes.Buffer{}
-	l := test.NewSlogLoggerWithOutput(ob)
+	l := test.NewLoggerWithOutput(ob)
 	myVpnNetworksTable := new(bart.Lite)
 	myVpnNetworksTable.Insert(netip.MustParsePrefix("192.0.2.1/24"))
 
@@ -1030,7 +1030,7 @@ func Test_parsePort(t *testing.T) {
 }
 
 func TestNewFirewallFromConfig(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	// Test a bad rule definition
 	c := &dummyCert{}
 	cs, err := newCertState(cert.Version2, nil, c, false, cert.Curve_CURVE25519, nil)
@@ -1089,7 +1089,7 @@ func TestNewFirewallFromConfig(t *testing.T) {
 }
 
 func TestAddFirewallRulesFromConfig(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	// Test adding tcp rule
 	conf := config.NewC(test.NewLogger())
 	mf := &mockFirewall{}
@@ -1226,7 +1226,7 @@ func TestAddFirewallRulesFromConfig(t *testing.T) {
 
 func TestFirewall_convertRule(t *testing.T) {
 	ob := &bytes.Buffer{}
-	l := test.NewSlogLoggerWithOutput(ob)
+	l := test.NewLoggerWithOutput(ob)
 
 	// Ensure group array of 1 is converted and a warning is printed
 	c := map[string]any{
@@ -1263,7 +1263,7 @@ func TestFirewall_convertRule(t *testing.T) {
 
 func TestFirewall_convertRuleSanity(t *testing.T) {
 	ob := &bytes.Buffer{}
-	l := test.NewSlogLoggerWithOutput(ob)
+	l := test.NewLoggerWithOutput(ob)
 
 	noWarningPlease := []map[string]any{
 		{"group": "group1"},
@@ -1406,7 +1406,7 @@ func newSetupFromCert(t *testing.T, l *slog.Logger, c dummyCert) testsetup {
 func TestFirewall_Drop_EnforceIPMatch(t *testing.T) {
 	t.Parallel()
 	ob := &bytes.Buffer{}
-	l := test.NewSlogLoggerWithOutput(ob)
+	l := test.NewLoggerWithOutput(ob)
 
 	myPrefix := netip.MustParsePrefix("1.1.1.1/8")
 	// for now, it's okay that these are all "incoming", the logic this test tries to check doesn't care about in/out

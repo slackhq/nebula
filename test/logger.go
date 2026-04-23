@@ -4,44 +4,34 @@ import (
 	"io"
 	"log/slog"
 	"os"
-
-	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/logbridge"
 )
 
-func NewLogger() *logrus.Logger {
-	l := logrus.New()
+// logLevelTrace mirrors nebula.LogLevelTrace. Duplicated to keep this package
+// free of an import cycle on the nebula package.
+const logLevelTrace = slog.Level(-8)
 
+// NewLogger returns a *slog.Logger suitable for use in tests. Output goes to
+// io.Discard by default; set TEST_LOGS=1 (info), 2 (debug), or 3 (trace) to
+// stream output to stderr for local debugging.
+func NewLogger() *slog.Logger {
 	v := os.Getenv("TEST_LOGS")
 	if v == "" {
-		l.SetOutput(io.Discard)
-		return l
+		return slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
+	level := slog.LevelInfo
 	switch v {
 	case "2":
-		l.SetLevel(logrus.DebugLevel)
+		level = slog.LevelDebug
 	case "3":
-		l.SetLevel(logrus.TraceLevel)
-	default:
-		l.SetLevel(logrus.InfoLevel)
+		level = logLevelTrace
 	}
-
-	return l
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 }
 
-// NewSlogLogger returns a *slog.Logger backed by NewLogger via logbridge.
-// Used while subsystems migrate from logrus to slog so individual tests
-// can flip without waiting for the test infrastructure to move.
-func NewSlogLogger() *slog.Logger {
-	return logbridge.FromLogrus(NewLogger())
-}
-
-// NewSlogLoggerWithOutput returns a *slog.Logger whose output is captured by
-// w. Bridges through a fresh logrus.Logger so tests that assert on text-format
-// output continue to work during the slog transition.
-func NewSlogLoggerWithOutput(w io.Writer) *slog.Logger {
-	lr := logrus.New()
-	lr.SetOutput(w)
-	return logbridge.FromLogrus(lr)
+// NewLoggerWithOutput returns a *slog.Logger whose text output is captured by
+// w. Tests asserting on output format should compose their own handler if
+// they need timestamp suppression or other tweaks.
+func NewLoggerWithOutput(w io.Writer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(w, nil))
 }

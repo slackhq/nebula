@@ -11,7 +11,7 @@ import (
 )
 
 func TestHostMap_MakePrimary(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	hm := newHostMap(l)
 
 	f := &Interface{}
@@ -85,7 +85,7 @@ func TestHostMap_MakePrimary(t *testing.T) {
 }
 
 func TestHostMap_DeleteHostInfo(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	hm := newHostMap(l)
 
 	f := &Interface{}
@@ -195,7 +195,7 @@ func TestHostMap_DeleteHostInfo(t *testing.T) {
 }
 
 func TestHostMap_reload(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	c := config.NewC(test.NewLogger())
 
 	hm := NewHostMapFromConfig(l, c)

@@ -15,7 +15,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	//TODO: CERT-V2 with multiple certificate versions we have a problem with this test
 	// Some certs versions have different characteristics and each version implements their own Copy() func
 	// which means this is not a good place to test for exposing memory
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	// Special care must be taken to re-use all objects provided to the hostmap and certificate in the expectedInfo object
 	// To properly ensure we are not exposing core memory to the caller
 	hm := newHostMap(l)
@@ -82,7 +82,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		f: &Interface{
 			hostMap: hm,
 		},
-		l: test.NewSlogLogger(),
+		l: test.NewLogger(),
 	}
 
 	thi := c.GetHostInfoByVpnAddr(vpnIp, false)
