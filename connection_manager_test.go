@@ -32,7 +32,7 @@ func newTestLighthouse() *LightHouse {
 }
 
 func Test_NewConnectionManagerTest(t *testing.T) {
-	l := test.NewLogger()
+	l := test.NewSlogLogger()
 	//_, tuncidr, _ := net.ParseCIDR("1.1.1.1/24")
 	localrange := netip.MustParsePrefix("10.1.1.1/24")
 	vpnIp := netip.MustParseAddr("172.1.1.2")
@@ -63,7 +63,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	ifce.pki.cs.Store(cs)
 
 	// Create manager
-	conf := config.NewC(l)
+	conf := config.NewC(test.NewLogger())
 	punchy := NewPunchyFromConfig(test.NewSlogLogger(), conf)
 	nc := newConnectionManagerFromConfig(test.NewSlogLogger(), conf, hostMap, punchy)
 	nc.intf = ifce
@@ -115,7 +115,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 }
 
 func Test_NewConnectionManagerTest2(t *testing.T) {
-	l := test.NewLogger()
+	l := test.NewSlogLogger()
 	//_, tuncidr, _ := net.ParseCIDR("1.1.1.1/24")
 	localrange := netip.MustParsePrefix("10.1.1.1/24")
 	vpnIp := netip.MustParseAddr("172.1.1.2")
@@ -146,7 +146,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	ifce.pki.cs.Store(cs)
 
 	// Create manager
-	conf := config.NewC(l)
+	conf := config.NewC(test.NewLogger())
 	punchy := NewPunchyFromConfig(test.NewSlogLogger(), conf)
 	nc := newConnectionManagerFromConfig(test.NewSlogLogger(), conf, hostMap, punchy)
 	nc.intf = ifce
@@ -201,7 +201,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 }
 
 func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
-	l := test.NewLogger()
+	l := test.NewSlogLogger()
 	localrange := netip.MustParsePrefix("10.1.1.1/24")
 	vpnAddrs := []netip.Addr{netip.MustParseAddr("172.1.1.2")}
 	preferredRanges := []netip.Prefix{localrange}
@@ -231,7 +231,7 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	ifce.pki.cs.Store(cs)
 
 	// Create manager
-	conf := config.NewC(l)
+	conf := config.NewC(test.NewLogger())
 	conf.Settings["tunnels"] = map[string]any{
 		"drop_inactive": true,
 	}
@@ -299,7 +299,7 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 // Disconnect only if disconnectInvalid: true is set.
 func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	now := time.Now()
-	l := test.NewLogger()
+	l := test.NewSlogLogger()
 
 	vpncidr := netip.MustParsePrefix("172.1.1.1/24")
 	localrange := netip.MustParsePrefix("10.1.1.1/24")
@@ -360,7 +360,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	ifce.disconnectInvalid.Store(true)
 
 	// Create manager
-	conf := config.NewC(l)
+	conf := config.NewC(test.NewLogger())
 	punchy := NewPunchyFromConfig(test.NewSlogLogger(), conf)
 	nc := newConnectionManagerFromConfig(test.NewSlogLogger(), conf, hostMap, punchy)
 	nc.intf = ifce

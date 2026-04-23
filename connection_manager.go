@@ -300,7 +300,7 @@ func (cm *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo
 			req.RelayFromAddr = netAddrToProtoAddr(relayFrom)
 			req.RelayToAddr = netAddrToProtoAddr(relayTo)
 		default:
-			newhostinfo.slogger(cm.l).Error("Unknown certificate version found while attempting to migrate relay")
+			newhostinfo.logger(cm.l).Error("Unknown certificate version found while attempting to migrate relay")
 			continue
 		}
 
@@ -348,7 +348,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 	if inTraffic {
 		decision := doNothing
 		if cm.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.slogger(cm.l).Debug("Tunnel status",
+			hostinfo.logger(cm.l).Debug("Tunnel status",
 				slog.Any("tunnelCheck", m{"state": "alive", "method": "passive"}),
 			)
 		}
@@ -377,7 +377,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 
 	if hostinfo.pendingDeletion.Load() {
 		// We have already sent a test packet and nothing was returned, this hostinfo is dead
-		hostinfo.slogger(cm.l).Info("Tunnel status",
+		hostinfo.logger(cm.l).Info("Tunnel status",
 			slog.Any("tunnelCheck", m{"state": "dead", "method": "active"}),
 		)
 
@@ -390,7 +390,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 			inactiveFor, isInactive := cm.isInactive(hostinfo, now)
 			if isInactive {
 				// Tunnel is inactive, tear it down
-				hostinfo.slogger(cm.l).Info("Dropping tunnel due to inactivity",
+				hostinfo.logger(cm.l).Info("Dropping tunnel due to inactivity",
 					slog.Duration("inactiveDuration", inactiveFor),
 					slog.Bool("primary", mainHostInfo),
 				)
@@ -413,7 +413,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 		}
 
 		if cm.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.slogger(cm.l).Debug("Tunnel status",
+			hostinfo.logger(cm.l).Debug("Tunnel status",
 				slog.Any("tunnelCheck", m{"state": "testing", "method": "active"}),
 			)
 		}
@@ -423,7 +423,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 
 	} else {
 		if cm.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.slogger(cm.l).Debug("Hostinfo sadness")
+			hostinfo.logger(cm.l).Debug("Hostinfo sadness")
 		}
 	}
 
@@ -495,13 +495,13 @@ func (cm *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostI
 		return false //cert is still valid! yay!
 	} else if err == cert.ErrBlockListed { //avoiding errors.Is for speed
 		// Block listed certificates should always be disconnected
-		hostinfo.slogger(cm.l).Info("Remote certificate is blocked, tearing down the tunnel",
+		hostinfo.logger(cm.l).Info("Remote certificate is blocked, tearing down the tunnel",
 			slog.Any("error", err),
 			slog.Any("fingerprint", remoteCert.Fingerprint),
 		)
 		return true
 	} else if cm.intf.disconnectInvalid.Load() {
-		hostinfo.slogger(cm.l).Info("Remote certificate is no longer valid, tearing down the tunnel",
+		hostinfo.logger(cm.l).Info("Remote certificate is no longer valid, tearing down the tunnel",
 			slog.Any("error", err),
 			slog.Any("fingerprint", remoteCert.Fingerprint),
 		)

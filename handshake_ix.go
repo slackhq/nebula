@@ -2,14 +2,14 @@ package nebula
 
 import (
 	"bytes"
+	"context"
+	"log/slog"
 	"net/netip"
 	"time"
 
 	"github.com/flynn/noise"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/logbridge"
 )
 
 // NOISE IX Handshakes
@@ -19,8 +19,11 @@ import (
 func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 	err := f.handshakeManager.allocateIndex(hh)
 	if err != nil {
-		f.l.WithError(err).WithField("vpnAddrs", hh.hostinfo.vpnAddrs).
-			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to generate index")
+		f.l.Error("Failed to generate index",
+			slog.Any("error", err),
+			slog.Any("vpnAddrs", hh.hostinfo.vpnAddrs),
+			slog.Any("handshake", m{"stage": 0, "style": "ix_psk0"}),
+		)
 		return false
 	}
 
@@ -40,28 +43,32 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 
 	crt := cs.getCertificate(v)
 	if crt == nil {
-		f.l.WithField("vpnAddrs", hh.hostinfo.vpnAddrs).
-			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).
-			WithField("certVersion", v).
-			Error("Unable to handshake with host because no certificate is available")
+		f.l.Error("Unable to handshake with host because no certificate is available",
+			slog.Any("vpnAddrs", hh.hostinfo.vpnAddrs),
+			slog.Any("handshake", m{"stage": 0, "style": "ix_psk0"}),
+			slog.Any("certVersion", v),
+		)
 		return false
 	}
 
 	crtHs := cs.getHandshakeBytes(v)
 	if crtHs == nil {
-		f.l.WithField("vpnAddrs", hh.hostinfo.vpnAddrs).
-			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).
-			WithField("certVersion", v).
-			Error("Unable to handshake with host because no certificate handshake bytes is available")
+		f.l.Error("Unable to handshake with host because no certificate handshake bytes is available",
+			slog.Any("vpnAddrs", hh.hostinfo.vpnAddrs),
+			slog.Any("handshake", m{"stage": 0, "style": "ix_psk0"}),
+			slog.Any("certVersion", v),
+		)
 		return false
 	}
 
 	ci, err := NewConnectionState(cs, crt, true, noise.HandshakeIX)
 	if err != nil {
-		f.l.WithError(err).WithField("vpnAddrs", hh.hostinfo.vpnAddrs).
-			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).
-			WithField("certVersion", v).
-			Error("Failed to create connection state")
+		f.l.Error("Failed to create connection state",
+			slog.Any("error", err),
+			slog.Any("vpnAddrs", hh.hostinfo.vpnAddrs),
+			slog.Any("handshake", m{"stage": 0, "style": "ix_psk0"}),
+			slog.Any("certVersion", v),
+		)
 		return false
 	}
 	hh.hostinfo.ConnectionState = ci
@@ -77,9 +84,12 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 
 	hsBytes, err := hs.Marshal()
 	if err != nil {
-		f.l.WithError(err).WithField("vpnAddrs", hh.hostinfo.vpnAddrs).
-			WithField("certVersion", v).
-			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to marshal handshake message")
+		f.l.Error("Failed to marshal handshake message",
+			slog.Any("error", err),
+			slog.Any("vpnAddrs", hh.hostinfo.vpnAddrs),
+			slog.Any("certVersion", v),
+			slog.Any("handshake", m{"stage": 0, "style": "ix_psk0"}),
+		)
 		return false
 	}
 
@@ -87,8 +97,11 @@ func ixHandshakeStage0(f *Interface, hh *HandshakeHostInfo) bool {
 
 	msg, _, _, err := ci.H.WriteMessage(h, hsBytes)
 	if err != nil {
-		f.l.WithError(err).WithField("vpnAddrs", hh.hostinfo.vpnAddrs).
-			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).Error("Failed to call noise.WriteMessage")
+		f.l.Error("Failed to call noise.WriteMessage",
+			slog.Any("error", err),
+			slog.Any("vpnAddrs", hh.hostinfo.vpnAddrs),
+			slog.Any("handshake", m{"stage": 0, "style": "ix_psk0"}),
+		)
 		return false
 	}
 
@@ -105,18 +118,21 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 	cs := f.pki.getCertState()
 	crt := cs.GetDefaultCertificate()
 	if crt == nil {
-		f.l.WithField("from", via).
-			WithField("handshake", m{"stage": 0, "style": "ix_psk0"}).
-			WithField("certVersion", cs.initiatingVersion).
-			Error("Unable to handshake with host because no certificate is available")
+		f.l.Error("Unable to handshake with host because no certificate is available",
+			slog.Any("from", via),
+			slog.Any("handshake", m{"stage": 0, "style": "ix_psk0"}),
+			slog.Any("certVersion", cs.initiatingVersion),
+		)
 		return
 	}
 
 	ci, err := NewConnectionState(cs, crt, false, noise.HandshakeIX)
 	if err != nil {
-		f.l.WithError(err).WithField("from", via).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Error("Failed to create connection state")
+		f.l.Error("Failed to create connection state",
+			slog.Any("error", err),
+			slog.Any("from", via),
+			slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+		)
 		return
 	}
 
@@ -125,26 +141,32 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 
 	msg, _, _, err := ci.H.ReadMessage(nil, packet[header.Len:])
 	if err != nil {
-		f.l.WithError(err).WithField("from", via).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Error("Failed to call noise.ReadMessage")
+		f.l.Error("Failed to call noise.ReadMessage",
+			slog.Any("error", err),
+			slog.Any("from", via),
+			slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+		)
 		return
 	}
 
 	hs := &NebulaHandshake{}
 	err = hs.Unmarshal(msg)
 	if err != nil || hs.Details == nil {
-		f.l.WithError(err).WithField("from", via).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Error("Failed unmarshal handshake message")
+		f.l.Error("Failed unmarshal handshake message",
+			slog.Any("error", err),
+			slog.Any("from", via),
+			slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+		)
 		return
 	}
 
 	rc, err := cert.Recombine(cert.Version(hs.Details.CertVersion), hs.Details.Cert, ci.H.PeerStatic(), ci.Curve())
 	if err != nil {
-		f.l.WithError(err).WithField("from", via).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Info("Handshake did not contain a certificate")
+		f.l.Info("Handshake did not contain a certificate",
+			slog.Any("error", err),
+			slog.Any("from", via),
+			slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+		)
 		return
 	}
 
@@ -155,23 +177,27 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 			fp = "<error generating certificate fingerprint>"
 		}
 
-		e := f.l.WithError(err).WithField("from", via).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			WithField("certVpnNetworks", rc.Networks()).
-			WithField("certFingerprint", fp)
-
-		if f.l.Level >= logrus.DebugLevel {
-			e = e.WithField("cert", rc)
+		attrs := []slog.Attr{
+			slog.Any("error", err),
+			slog.Any("from", via),
+			slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+			slog.Any("certVpnNetworks", rc.Networks()),
+			slog.String("certFingerprint", fp),
+		}
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			attrs = append(attrs, slog.Any("cert", rc))
 		}
 
-		e.Info("Invalid certificate from host")
+		f.l.LogAttrs(context.Background(), slog.LevelInfo, "Invalid certificate from host", attrs...)
 		return
 	}
 
 	if !bytes.Equal(remoteCert.Certificate.PublicKey(), ci.H.PeerStatic()) {
-		f.l.WithField("from", via).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			WithField("cert", remoteCert).Info("public key mismatch between certificate and handshake")
+		f.l.Info("public key mismatch between certificate and handshake",
+			slog.Any("from", via),
+			slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+			slog.Any("cert", remoteCert),
+		)
 		return
 	}
 
@@ -179,12 +205,13 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 		// We started off using the wrong certificate version, lets see if we can match the version that was sent to us
 		myCertOtherVersion := cs.getCertificate(remoteCert.Certificate.Version())
 		if myCertOtherVersion == nil {
-			if f.l.Level >= logrus.DebugLevel {
-				f.l.WithError(err).WithFields(m{
-					"from":      via,
-					"handshake": m{"stage": 1, "style": "ix_psk0"},
-					"cert":      remoteCert,
-				}).Debug("Might be unable to handshake with host due to missing certificate version")
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				f.l.Debug("Might be unable to handshake with host due to missing certificate version",
+					slog.Any("error", err),
+					slog.Any("from", via),
+					slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+					slog.Any("cert", remoteCert),
+				)
 			}
 		} else {
 			// Record the certificate we are actually using
@@ -193,10 +220,12 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 	}
 
 	if len(remoteCert.Certificate.Networks()) == 0 {
-		f.l.WithError(err).WithField("from", via).
-			WithField("cert", remoteCert).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Info("No networks in certificate")
+		f.l.Info("No networks in certificate",
+			slog.Any("error", err),
+			slog.Any("from", via),
+			slog.Any("cert", remoteCert),
+			slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+		)
 		return
 	}
 
@@ -210,12 +239,15 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
 	for i, network := range vpnNetworks {
 		if f.myVpnAddrsTable.Contains(network.Addr()) {
-			f.l.WithField("vpnNetworks", vpnNetworks).WithField("from", via).
-				WithField("certName", certName).
-				WithField("certVersion", certVersion).
-				WithField("fingerprint", fingerprint).
-				WithField("issuer", issuer).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Refusing to handshake with myself")
+			f.l.Error("Refusing to handshake with myself",
+				slog.Any("vpnNetworks", vpnNetworks),
+				slog.Any("from", via),
+				slog.String("certName", certName),
+				slog.Any("certVersion", certVersion),
+				slog.String("fingerprint", fingerprint),
+				slog.String("issuer", issuer),
+				slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+			)
 			return
 		}
 		vpnAddrs[i] = network.Addr()
@@ -227,20 +259,26 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 	if !via.IsRelayed {
 		// We only want to apply the remote allow list for direct tunnels here
 		if !f.lightHouse.GetRemoteAllowList().AllowAll(vpnAddrs, via.UdpAddr.Addr()) {
-			f.l.WithField("vpnAddrs", vpnAddrs).WithField("from", via).
-				Debug("lighthouse.remote_allow_list denied incoming handshake")
+			f.l.Debug("lighthouse.remote_allow_list denied incoming handshake",
+				slog.Any("vpnAddrs", vpnAddrs),
+				slog.Any("from", via),
+			)
 			return
 		}
 	}
 
-	myIndex, err := generateIndex(logbridge.FromLogrus(f.l))
+	myIndex, err := generateIndex(f.l)
 	if err != nil {
-		f.l.WithError(err).WithField("vpnAddrs", vpnAddrs).WithField("from", via).
-			WithField("certName", certName).
-			WithField("certVersion", certVersion).
-			WithField("fingerprint", fingerprint).
-			WithField("issuer", issuer).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to generate index")
+		f.l.Error("Failed to generate index",
+			slog.Any("error", err),
+			slog.Any("vpnAddrs", vpnAddrs),
+			slog.Any("from", via),
+			slog.String("certName", certName),
+			slog.Any("certVersion", certVersion),
+			slog.String("fingerprint", fingerprint),
+			slog.String("issuer", issuer),
+			slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+		)
 		return
 	}
 
@@ -258,18 +296,18 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 		},
 	}
 
-	msgRxL := f.l.WithFields(m{
-		"vpnAddrs":       vpnAddrs,
-		"from":           via,
-		"certName":       certName,
-		"certVersion":    certVersion,
-		"fingerprint":    fingerprint,
-		"issuer":         issuer,
-		"initiatorIndex": hs.Details.InitiatorIndex,
-		"responderIndex": hs.Details.ResponderIndex,
-		"remoteIndex":    h.RemoteIndex,
-		"handshake":      m{"stage": 1, "style": "ix_psk0"},
-	})
+	msgRxL := f.l.With(
+		slog.Any("vpnAddrs", vpnAddrs),
+		slog.Any("from", via),
+		slog.String("certName", certName),
+		slog.Any("certVersion", certVersion),
+		slog.String("fingerprint", fingerprint),
+		slog.String("issuer", issuer),
+		slog.Uint64("initiatorIndex", uint64(hs.Details.InitiatorIndex)),
+		slog.Uint64("responderIndex", uint64(hs.Details.ResponderIndex)),
+		slog.Uint64("remoteIndex", uint64(h.RemoteIndex)),
+		slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+	)
 
 	if anyVpnAddrsInCommon {
 		msgRxL.Info("Handshake message received")
@@ -281,8 +319,9 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 	hs.Details.ResponderIndex = myIndex
 	hs.Details.Cert = cs.getHandshakeBytes(ci.myCert.Version())
 	if hs.Details.Cert == nil {
-		msgRxL.WithField("myCertVersion", ci.myCert.Version()).
-			Error("Unable to handshake with host because no certificate handshake bytes is available")
+		msgRxL.Error("Unable to handshake with host because no certificate handshake bytes is available",
+			slog.Any("myCertVersion", ci.myCert.Version()),
+		)
 		return
 	}
 
@@ -292,32 +331,43 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 
 	hsBytes, err := hs.Marshal()
 	if err != nil {
-		f.l.WithError(err).WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
-			WithField("certName", certName).
-			WithField("certVersion", certVersion).
-			WithField("fingerprint", fingerprint).
-			WithField("issuer", issuer).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to marshal handshake message")
+		f.l.Error("Failed to marshal handshake message",
+			slog.Any("error", err),
+			slog.Any("vpnAddrs", hostinfo.vpnAddrs),
+			slog.Any("from", via),
+			slog.String("certName", certName),
+			slog.Any("certVersion", certVersion),
+			slog.String("fingerprint", fingerprint),
+			slog.String("issuer", issuer),
+			slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+		)
 		return
 	}
 
 	nh := header.Encode(make([]byte, header.Len), header.Version, header.Handshake, header.HandshakeIXPSK0, hs.Details.InitiatorIndex, 2)
 	msg, dKey, eKey, err := ci.H.WriteMessage(nh, hsBytes)
 	if err != nil {
-		f.l.WithError(err).WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
-			WithField("certName", certName).
-			WithField("certVersion", certVersion).
-			WithField("fingerprint", fingerprint).
-			WithField("issuer", issuer).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Failed to call noise.WriteMessage")
+		f.l.Error("Failed to call noise.WriteMessage",
+			slog.Any("error", err),
+			slog.Any("vpnAddrs", hostinfo.vpnAddrs),
+			slog.Any("from", via),
+			slog.String("certName", certName),
+			slog.Any("certVersion", certVersion),
+			slog.String("fingerprint", fingerprint),
+			slog.String("issuer", issuer),
+			slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+		)
 		return
 	} else if dKey == nil || eKey == nil {
-		f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
-			WithField("certName", certName).
-			WithField("certVersion", certVersion).
-			WithField("fingerprint", fingerprint).
-			WithField("issuer", issuer).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).Error("Noise did not arrive at a key")
+		f.l.Error("Noise did not arrive at a key",
+			slog.Any("vpnAddrs", hostinfo.vpnAddrs),
+			slog.Any("from", via),
+			slog.String("certName", certName),
+			slog.Any("certVersion", certVersion),
+			slog.String("fingerprint", fingerprint),
+			slog.String("issuer", issuer),
+			slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+		)
 		return
 	}
 
@@ -359,13 +409,20 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 			if !via.IsRelayed {
 				err := f.outside.WriteTo(msg, via.UdpAddr)
 				if err != nil {
-					f.l.WithField("vpnAddrs", existing.vpnAddrs).WithField("from", via).
-						WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-						WithError(err).Error("Failed to send handshake message")
+					f.l.Error("Failed to send handshake message",
+						slog.Any("vpnAddrs", existing.vpnAddrs),
+						slog.Any("from", via),
+						slog.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+						slog.Bool("cached", true),
+						slog.Any("error", err),
+					)
 				} else {
-					f.l.WithField("vpnAddrs", existing.vpnAddrs).WithField("from", via).
-						WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-						Info("Handshake message sent")
+					f.l.Info("Handshake message sent",
+						slog.Any("vpnAddrs", existing.vpnAddrs),
+						slog.Any("from", via),
+						slog.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+						slog.Bool("cached", true),
+					)
 				}
 				return
 			} else {
@@ -375,50 +432,67 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 				}
 				hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
 				f.SendVia(via.relayHI, via.relay, msg, make([]byte, 12), make([]byte, mtu), false)
-				f.l.WithField("vpnAddrs", existing.vpnAddrs).WithField("relay", via.relayHI.vpnAddrs[0]).
-					WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
-					Info("Handshake message sent")
+				f.l.Info("Handshake message sent",
+					slog.Any("vpnAddrs", existing.vpnAddrs),
+					slog.Any("relay", via.relayHI.vpnAddrs[0]),
+					slog.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+					slog.Bool("cached", true),
+				)
 				return
 			}
 		case ErrExistingHostInfo:
 			// This means there was an existing tunnel and this handshake was older than the one we are currently based on
-			f.l.WithField("vpnAddrs", vpnAddrs).WithField("from", via).
-				WithField("certName", certName).
-				WithField("certVersion", certVersion).
-				WithField("oldHandshakeTime", existing.lastHandshakeTime).
-				WithField("newHandshakeTime", hostinfo.lastHandshakeTime).
-				WithField("fingerprint", fingerprint).
-				WithField("issuer", issuer).
-				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-				Info("Handshake too old")
+			f.l.Info("Handshake too old",
+				slog.Any("vpnAddrs", vpnAddrs),
+				slog.Any("from", via),
+				slog.String("certName", certName),
+				slog.Any("certVersion", certVersion),
+				slog.Uint64("oldHandshakeTime", existing.lastHandshakeTime),
+				slog.Uint64("newHandshakeTime", hostinfo.lastHandshakeTime),
+				slog.String("fingerprint", fingerprint),
+				slog.String("issuer", issuer),
+				slog.Uint64("initiatorIndex", uint64(hs.Details.InitiatorIndex)),
+				slog.Uint64("responderIndex", uint64(hs.Details.ResponderIndex)),
+				slog.Uint64("remoteIndex", uint64(h.RemoteIndex)),
+				slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+			)
 
 			// Send a test packet to trigger an authenticated tunnel test, this should suss out any lingering tunnel issues
 			f.SendMessageToVpnAddr(header.Test, header.TestRequest, vpnAddrs[0], []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 			return
 		case ErrLocalIndexCollision:
 			// This means we failed to insert because of collision on localIndexId. Just let the next handshake packet retry
-			f.l.WithField("vpnAddrs", vpnAddrs).WithField("from", via).
-				WithField("certName", certName).
-				WithField("certVersion", certVersion).
-				WithField("fingerprint", fingerprint).
-				WithField("issuer", issuer).
-				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-				WithField("localIndex", hostinfo.localIndexId).WithField("collision", existing.vpnAddrs).
-				Error("Failed to add HostInfo due to localIndex collision")
+			f.l.Error("Failed to add HostInfo due to localIndex collision",
+				slog.Any("vpnAddrs", vpnAddrs),
+				slog.Any("from", via),
+				slog.String("certName", certName),
+				slog.Any("certVersion", certVersion),
+				slog.String("fingerprint", fingerprint),
+				slog.String("issuer", issuer),
+				slog.Uint64("initiatorIndex", uint64(hs.Details.InitiatorIndex)),
+				slog.Uint64("responderIndex", uint64(hs.Details.ResponderIndex)),
+				slog.Uint64("remoteIndex", uint64(h.RemoteIndex)),
+				slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+				slog.Uint64("localIndex", uint64(hostinfo.localIndexId)),
+				slog.Any("collision", existing.vpnAddrs),
+			)
 			return
 		default:
 			// Shouldn't happen, but just in case someone adds a new error type to CheckAndComplete
 			// And we forget to update it here
-			f.l.WithError(err).WithField("vpnAddrs", vpnAddrs).WithField("from", via).
-				WithField("certName", certName).
-				WithField("certVersion", certVersion).
-				WithField("fingerprint", fingerprint).
-				WithField("issuer", issuer).
-				WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-				WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-				Error("Failed to add HostInfo to HostMap")
+			f.l.Error("Failed to add HostInfo to HostMap",
+				slog.Any("error", err),
+				slog.Any("vpnAddrs", vpnAddrs),
+				slog.Any("from", via),
+				slog.String("certName", certName),
+				slog.Any("certVersion", certVersion),
+				slog.String("fingerprint", fingerprint),
+				slog.String("issuer", issuer),
+				slog.Uint64("initiatorIndex", uint64(hs.Details.InitiatorIndex)),
+				slog.Uint64("responderIndex", uint64(hs.Details.ResponderIndex)),
+				slog.Uint64("remoteIndex", uint64(h.RemoteIndex)),
+				slog.Any("handshake", m{"stage": 1, "style": "ix_psk0"}),
+			)
 			return
 		}
 	}
@@ -427,15 +501,20 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 	f.messageMetrics.Tx(header.Handshake, header.MessageSubType(msg[1]), 1)
 	if !via.IsRelayed {
 		err = f.outside.WriteTo(msg, via.UdpAddr)
-		log := f.l.WithField("vpnAddrs", vpnAddrs).WithField("from", via).
-			WithField("certName", certName).
-			WithField("certVersion", certVersion).
-			WithField("fingerprint", fingerprint).
-			WithField("issuer", issuer).
-			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"})
+		log := f.l.With(
+			slog.Any("vpnAddrs", vpnAddrs),
+			slog.Any("from", via),
+			slog.String("certName", certName),
+			slog.Any("certVersion", certVersion),
+			slog.String("fingerprint", fingerprint),
+			slog.String("issuer", issuer),
+			slog.Uint64("initiatorIndex", uint64(hs.Details.InitiatorIndex)),
+			slog.Uint64("responderIndex", uint64(hs.Details.ResponderIndex)),
+			slog.Uint64("remoteIndex", uint64(h.RemoteIndex)),
+			slog.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+		)
 		if err != nil {
-			log.WithError(err).Error("Failed to send handshake")
+			log.Error("Failed to send handshake", slog.Any("error", err))
 		} else {
 			log.Info("Handshake message sent")
 		}
@@ -449,14 +528,18 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 		// it's correctly marked as working.
 		via.relayHI.relayState.UpdateRelayForByIdxState(via.remoteIdx, Established)
 		f.SendVia(via.relayHI, via.relay, msg, make([]byte, 12), make([]byte, mtu), false)
-		f.l.WithField("vpnAddrs", vpnAddrs).WithField("relay", via.relayHI.vpnAddrs[0]).
-			WithField("certName", certName).
-			WithField("certVersion", certVersion).
-			WithField("fingerprint", fingerprint).
-			WithField("issuer", issuer).
-			WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-			WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			Info("Handshake message sent")
+		f.l.Info("Handshake message sent",
+			slog.Any("vpnAddrs", vpnAddrs),
+			slog.Any("relay", via.relayHI.vpnAddrs[0]),
+			slog.String("certName", certName),
+			slog.Any("certVersion", certVersion),
+			slog.String("fingerprint", fingerprint),
+			slog.String("issuer", issuer),
+			slog.Uint64("initiatorIndex", uint64(hs.Details.InitiatorIndex)),
+			slog.Uint64("responderIndex", uint64(hs.Details.ResponderIndex)),
+			slog.Uint64("remoteIndex", uint64(h.RemoteIndex)),
+			slog.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+		)
 	}
 
 	f.connectionManager.AddTrafficWatch(hostinfo)
@@ -484,7 +567,10 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 	if !via.IsRelayed {
 		// The vpnAddr we know about is the one we tried to handshake with, use it to apply the remote allow list.
 		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, via.UdpAddr.Addr()) {
-			f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).Debug("lighthouse.remote_allow_list denied incoming handshake")
+			f.l.Debug("lighthouse.remote_allow_list denied incoming handshake",
+				slog.Any("vpnAddrs", hostinfo.vpnAddrs),
+				slog.Any("from", via),
+			)
 			return false
 		}
 	}
@@ -492,18 +578,24 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 	ci := hostinfo.ConnectionState
 	msg, eKey, dKey, err := ci.H.ReadMessage(nil, packet[header.Len:])
 	if err != nil {
-		f.l.WithError(err).WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("header", h).
-			Error("Failed to call noise.ReadMessage")
+		f.l.Error("Failed to call noise.ReadMessage",
+			slog.Any("error", err),
+			slog.Any("vpnAddrs", hostinfo.vpnAddrs),
+			slog.Any("from", via),
+			slog.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+			slog.Any("header", h),
+		)
 
 		// We don't want to tear down the connection on a bad ReadMessage because it could be an attacker trying
 		// to DOS us. Every other error condition after should to allow a possible good handshake to complete in the
 		// near future
 		return false
 	} else if dKey == nil || eKey == nil {
-		f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			Error("Noise did not arrive at a key")
+		f.l.Error("Noise did not arrive at a key",
+			slog.Any("vpnAddrs", hostinfo.vpnAddrs),
+			slog.Any("from", via),
+			slog.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+		)
 
 		// This should be impossible in IX but just in case, if we get here then there is no chance to recover
 		// the handshake state machine. Tear it down
@@ -513,8 +605,12 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 	hs := &NebulaHandshake{}
 	err = hs.Unmarshal(msg)
 	if err != nil || hs.Details == nil {
-		f.l.WithError(err).WithField("vpnAddrs", hostinfo.vpnAddrs).WithField("from", via).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).Error("Failed unmarshal handshake message")
+		f.l.Error("Failed unmarshal handshake message",
+			slog.Any("error", err),
+			slog.Any("vpnAddrs", hostinfo.vpnAddrs),
+			slog.Any("from", via),
+			slog.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+		)
 
 		// The handshake state machine is complete, if things break now there is no chance to recover. Tear down and start again
 		return true
@@ -522,10 +618,12 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 
 	rc, err := cert.Recombine(cert.Version(hs.Details.CertVersion), hs.Details.Cert, ci.H.PeerStatic(), ci.Curve())
 	if err != nil {
-		f.l.WithError(err).WithField("from", via).
-			WithField("vpnAddrs", hostinfo.vpnAddrs).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			Info("Handshake did not contain a certificate")
+		f.l.Info("Handshake did not contain a certificate",
+			slog.Any("error", err),
+			slog.Any("from", via),
+			slog.Any("vpnAddrs", hostinfo.vpnAddrs),
+			slog.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+		)
 		return true
 	}
 
@@ -536,32 +634,38 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 			fp = "<error generating certificate fingerprint>"
 		}
 
-		e := f.l.WithError(err).WithField("from", via).
-			WithField("vpnAddrs", hostinfo.vpnAddrs).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			WithField("certFingerprint", fp).
-			WithField("certVpnNetworks", rc.Networks())
-
-		if f.l.Level >= logrus.DebugLevel {
-			e = e.WithField("cert", rc)
+		attrs := []slog.Attr{
+			slog.Any("error", err),
+			slog.Any("from", via),
+			slog.Any("vpnAddrs", hostinfo.vpnAddrs),
+			slog.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+			slog.String("certFingerprint", fp),
+			slog.Any("certVpnNetworks", rc.Networks()),
+		}
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			attrs = append(attrs, slog.Any("cert", rc))
 		}
 
-		e.Info("Invalid certificate from host")
+		f.l.LogAttrs(context.Background(), slog.LevelInfo, "Invalid certificate from host", attrs...)
 		return true
 	}
 	if !bytes.Equal(remoteCert.Certificate.PublicKey(), ci.H.PeerStatic()) {
-		f.l.WithField("from", via).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			WithField("cert", remoteCert).Info("public key mismatch between certificate and handshake")
+		f.l.Info("public key mismatch between certificate and handshake",
+			slog.Any("from", via),
+			slog.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+			slog.Any("cert", remoteCert),
+		)
 		return true
 	}
 
 	if len(remoteCert.Certificate.Networks()) == 0 {
-		f.l.WithError(err).WithField("from", via).
-			WithField("vpnAddrs", hostinfo.vpnAddrs).
-			WithField("cert", remoteCert).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			Info("No networks in certificate")
+		f.l.Info("No networks in certificate",
+			slog.Any("error", err),
+			slog.Any("from", via),
+			slog.Any("vpnAddrs", hostinfo.vpnAddrs),
+			slog.Any("cert", remoteCert),
+			slog.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+		)
 		return true
 	}
 
@@ -602,12 +706,14 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 
 	// Ensure the right host responded
 	if !correctHostResponded {
-		f.l.WithField("intendedVpnAddrs", hostinfo.vpnAddrs).WithField("haveVpnNetworks", vpnNetworks).
-			WithField("from", via).
-			WithField("certName", certName).
-			WithField("certVersion", certVersion).
-			WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-			Info("Incorrect host responded to handshake")
+		f.l.Info("Incorrect host responded to handshake",
+			slog.Any("intendedVpnAddrs", hostinfo.vpnAddrs),
+			slog.Any("haveVpnNetworks", vpnNetworks),
+			slog.Any("from", via),
+			slog.String("certName", certName),
+			slog.Any("certVersion", certVersion),
+			slog.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+		)
 
 		// Release our old handshake from pending, it should not continue
 		f.handshakeManager.DeleteHostInfo(hostinfo)
@@ -619,10 +725,11 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 			newHH.hostinfo.remotes = hostinfo.remotes
 			newHH.hostinfo.remotes.BlockRemote(via)
 
-			f.l.WithField("blockedUdpAddrs", newHH.hostinfo.remotes.CopyBlockedRemotes()).
-				WithField("vpnNetworks", vpnNetworks).
-				WithField("remotes", newHH.hostinfo.remotes.CopyAddrs(f.hostMap.GetPreferredRanges())).
-				Info("Blocked addresses for handshakes")
+			f.l.Info("Blocked addresses for handshakes",
+				slog.Any("blockedUdpAddrs", newHH.hostinfo.remotes.CopyBlockedRemotes()),
+				slog.Any("vpnNetworks", vpnNetworks),
+				slog.Any("remotes", newHH.hostinfo.remotes.CopyAddrs(f.hostMap.GetPreferredRanges())),
+			)
 
 			// Swap the packet store to benefit the original intended recipient
 			newHH.packetStore = hh.packetStore
@@ -640,15 +747,20 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 	ci.window.Update(f.l, 2)
 
 	duration := time.Since(hh.startTime).Nanoseconds()
-	msgRxL := f.l.WithField("vpnAddrs", vpnAddrs).WithField("from", via).
-		WithField("certName", certName).
-		WithField("certVersion", certVersion).
-		WithField("fingerprint", fingerprint).
-		WithField("issuer", issuer).
-		WithField("initiatorIndex", hs.Details.InitiatorIndex).WithField("responderIndex", hs.Details.ResponderIndex).
-		WithField("remoteIndex", h.RemoteIndex).WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).
-		WithField("durationNs", duration).
-		WithField("sentCachedPackets", len(hh.packetStore))
+	msgRxL := f.l.With(
+		slog.Any("vpnAddrs", vpnAddrs),
+		slog.Any("from", via),
+		slog.String("certName", certName),
+		slog.Any("certVersion", certVersion),
+		slog.String("fingerprint", fingerprint),
+		slog.String("issuer", issuer),
+		slog.Uint64("initiatorIndex", uint64(hs.Details.InitiatorIndex)),
+		slog.Uint64("responderIndex", uint64(hs.Details.ResponderIndex)),
+		slog.Uint64("remoteIndex", uint64(h.RemoteIndex)),
+		slog.Any("handshake", m{"stage": 2, "style": "ix_psk0"}),
+		slog.Int64("durationNs", duration),
+		slog.Int("sentCachedPackets", len(hh.packetStore)),
+	)
 	if anyVpnAddrsInCommon {
 		msgRxL.Info("Handshake message received")
 	} else {
@@ -664,8 +776,10 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 	f.handshakeManager.Complete(hostinfo, f)
 	f.connectionManager.AddTrafficWatch(hostinfo)
 
-	if f.l.Level >= logrus.DebugLevel {
-		hostinfo.logger(f.l).Debugf("Sending %d stored packets", len(hh.packetStore))
+	if f.l.Enabled(context.Background(), slog.LevelDebug) {
+		hostinfo.logger(f.l).Debug("Sending stored packets",
+			slog.Int("count", len(hh.packetStore)),
+		)
 	}
 
 	if len(hh.packetStore) > 0 {

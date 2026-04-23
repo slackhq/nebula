@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -12,11 +13,10 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
-	"github.com/sirupsen/logrus"
+
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/udp"
 )
@@ -47,7 +47,7 @@ type InterfaceConfig struct {
 	reQueryWait     time.Duration
 
 	ConntrackCacheTimeout time.Duration
-	l                     *logrus.Logger
+	l                     *slog.Logger
 }
 
 type Interface struct {
@@ -101,7 +101,7 @@ type Interface struct {
 	messageMetrics      *MessageMetrics
 	cachedPacketMetrics *cachedPacketMetrics
 
-	l *logrus.Logger
+	l *slog.Logger
 }
 
 type EncWriter interface {
@@ -224,13 +224,16 @@ func (f *Interface) activate() error {
 
 	addr, err := f.outside.LocalAddr()
 	if err != nil {
-		f.l.WithError(err).Error("Failed to get udp listen address")
+		f.l.Error("Failed to get udp listen address", slog.Any("error", err))
 	}
 
-	f.l.WithField("interface", f.inside.Name()).WithField("networks", f.myVpnNetworks).
-		WithField("build", f.version).WithField("udpAddr", addr).
-		WithField("boringcrypto", boringEnabled()).
-		Info("Nebula interface is active")
+	f.l.Info("Nebula interface is active",
+		slog.String("interface", f.inside.Name()),
+		slog.Any("networks", f.myVpnNetworks),
+		slog.String("build", f.version),
+		slog.Any("udpAddr", addr),
+		slog.Bool("boringcrypto", boringEnabled()),
+	)
 
 	if f.routines > 1 {
 		if !f.inside.SupportsMultiqueue() || !f.outside.SupportsMultipleReaders() {
@@ -306,7 +309,7 @@ func (f *Interface) listenOut(i int) {
 		li = f.outside
 	}
 
-	ctCache := firewall.NewConntrackCacheTicker(f.ctx, logbridge.FromLogrus(f.l), f.conntrackCacheTimeout)
+	ctCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
 	lhh := f.lightHouse.NewRequestHandler()
 	plaintext := make([]byte, udp.MTU)
 	h := &header.H{}
@@ -318,11 +321,11 @@ func (f *Interface) listenOut(i int) {
 	})
 
 	if err != nil && !f.closed.Load() {
-		f.l.WithError(err).Error("Error while reading inbound packet, closing")
+		f.l.Error("Error while reading inbound packet, closing", slog.Any("error", err))
 		f.onFatal(err)
 	}
 
-	f.l.Debugf("underlay reader %v is done", i)
+	f.l.Debug("underlay reader is done", slog.Int("reader", i))
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
@@ -331,13 +334,13 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
-	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, logbridge.FromLogrus(f.l), f.conntrackCacheTimeout)
+	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
 
 	for {
 		n, err := reader.Read(packet)
 		if err != nil {
 			if !f.closed.Load() {
-				f.l.WithError(err).WithField("reader", i).Error("Error while reading outbound packet, closing")
+				f.l.Error("Error while reading outbound packet, closing", slog.Any("error", err), slog.Int("reader", i))
 				f.onFatal(err)
 			}
 			break
@@ -346,7 +349,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get())
 	}
 
-	f.l.Debugf("overlay reader %v is done", i)
+	f.l.Debug("overlay reader is done", slog.Int("reader", i))
 }
 
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
@@ -366,7 +369,7 @@ func (f *Interface) reloadDisconnectInvalid(c *config.C) {
 	if initial || c.HasChanged("pki.disconnect_invalid") {
 		f.disconnectInvalid.Store(c.GetBool("pki.disconnect_invalid", true))
 		if !initial {
-			f.l.Infof("pki.disconnect_invalid changed to %v", f.disconnectInvalid.Load())
+			f.l.Info("pki.disconnect_invalid changed", slog.Bool("value", f.disconnectInvalid.Load()))
 		}
 	}
 }
@@ -380,7 +383,7 @@ func (f *Interface) reloadFirewall(c *config.C) {
 
 	fw, err := NewFirewallFromConfig(f.l, f.pki.getCertState(), c)
 	if err != nil {
-		f.l.WithError(err).Error("Error while creating firewall during reload")
+		f.l.Error("Error while creating firewall during reload", slog.Any("error", err))
 		return
 	}
 
@@ -393,10 +396,11 @@ func (f *Interface) reloadFirewall(c *config.C) {
 	// If rulesVersion is back to zero, we have wrapped all the way around. Be
 	// safe and just reset conntrack in this case.
 	if fw.rulesVersion == 0 {
-		f.l.WithField("firewallHashes", fw.GetRuleHashes()).
-			WithField("oldFirewallHashes", oldFw.GetRuleHashes()).
-			WithField("rulesVersion", fw.rulesVersion).
-			Warn("firewall rulesVersion has overflowed, resetting conntrack")
+		f.l.Warn("firewall rulesVersion has overflowed, resetting conntrack",
+			slog.Any("firewallHashes", fw.GetRuleHashes()),
+			slog.Any("oldFirewallHashes", oldFw.GetRuleHashes()),
+			slog.Any("rulesVersion", fw.rulesVersion),
+		)
 	} else {
 		fw.Conntrack = conntrack
 	}
@@ -404,10 +408,11 @@ func (f *Interface) reloadFirewall(c *config.C) {
 	f.firewall = fw
 
 	oldFw.Destroy()
-	f.l.WithField("firewallHashes", fw.GetRuleHashes()).
-		WithField("oldFirewallHashes", oldFw.GetRuleHashes()).
-		WithField("rulesVersion", fw.rulesVersion).
-		Info("New firewall has been installed")
+	f.l.Info("New firewall has been installed",
+		slog.Any("firewallHashes", fw.GetRuleHashes()),
+		slog.Any("oldFirewallHashes", oldFw.GetRuleHashes()),
+		slog.Any("rulesVersion", fw.rulesVersion),
+	)
 }
 
 func (f *Interface) reloadSendRecvError(c *config.C) {
@@ -429,8 +434,7 @@ func (f *Interface) reloadSendRecvError(c *config.C) {
 			}
 		}
 
-		f.l.WithField("sendRecvError", f.sendRecvErrorConfig.String()).
-			Info("Loaded send_recv_error config")
+		f.l.Info("Loaded send_recv_error config", slog.String("sendRecvError", f.sendRecvErrorConfig.String()))
 	}
 }
 
@@ -453,8 +457,7 @@ func (f *Interface) reloadAcceptRecvError(c *config.C) {
 			}
 		}
 
-		f.l.WithField("acceptRecvError", f.acceptRecvErrorConfig.String()).
-			Info("Loaded accept_recv_error config")
+		f.l.Info("Loaded accept_recv_error config", slog.String("acceptRecvError", f.acceptRecvErrorConfig.String()))
 	}
 }
 
@@ -528,7 +531,7 @@ func (f *Interface) Close() error {
 	for i, u := range f.writers {
 		err := u.Close()
 		if err != nil {
-			f.l.WithError(err).WithField("writer", i).Error("Error while closing udp socket")
+			f.l.Error("Error while closing udp socket", slog.Any("error", err), slog.Int("writer", i))
 			errs = append(errs, err)
 		}
 	}
