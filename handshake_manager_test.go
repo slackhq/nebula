@@ -13,7 +13,7 @@ import (
 )
 
 func Test_NewHandshakeManagerVpnIp(t *testing.T) {
-	l := test.NewLogger()
+	l := test.NewSlogLogger()
 	localrange := netip.MustParsePrefix("10.1.1.1/24")
 	ip := netip.MustParseAddr("172.1.1.2")
 

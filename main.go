@@ -67,7 +67,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		return nil, util.ContextualizeIfNeeded("Failed to load PKI from config", err)
 	}
 
-	fw, err := NewFirewallFromConfig(l, pki.getCertState(), c)
+	fw, err := NewFirewallFromConfig(logbridge.FromLogrus(l), pki.getCertState(), c)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while loading firewall rules", err)
 	}
@@ -187,7 +187,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	}
 
-	hostMap := NewHostMapFromConfig(l, c)
+	hostMap := NewHostMapFromConfig(logbridge.FromLogrus(l), c)
 	punchy := NewPunchyFromConfig(logbridge.FromLogrus(l), c)
 	connManager := newConnectionManagerFromConfig(logbridge.FromLogrus(l), c, hostMap, punchy)
 	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, pki.getCertState(), udpConns[0], punchy)
@@ -213,7 +213,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		messageMetrics: messageMetrics,
 	}
 
-	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
+	handshakeManager := NewHandshakeManager(logbridge.FromLogrus(l), hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
 
 	ds, err := newDnsServerFromConfig(ctx, logbridge.FromLogrus(l), pki.getCertState(), hostMap, c)
@@ -242,7 +242,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		relayManager:          NewRelayManager(ctx, logbridge.FromLogrus(l), hostMap, c),
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
-		l:                     l,
+		l:                     logbridge.FromLogrus(l),
 	}
 
 	var ifce *Interface
