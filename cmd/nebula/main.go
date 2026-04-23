@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"runtime/debug"
 	"strings"
@@ -81,7 +80,7 @@ func main() {
 		notifyReady(l)
 
 		if err := wait(); err != nil {
-			l.Error("Nebula stopped due to fatal error", slog.Any("error", err))
+			l.Error("Nebula stopped due to fatal error", "error", err)
 			os.Exit(2)
 		}
 

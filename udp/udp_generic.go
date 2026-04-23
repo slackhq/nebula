@@ -88,7 +88,7 @@ func (u *GenericConn) ListenOut(r EncReader) error {
 			// Dampen unexpected message warns to once per minute
 			if lastRecvErr.IsZero() || time.Since(lastRecvErr) > time.Minute {
 				lastRecvErr = time.Now()
-				u.l.Warn("unexpected udp socket receive error", slog.Any("error", err))
+				u.l.Warn("unexpected udp socket receive error", "error", err)
 			}
 			continue
 		}

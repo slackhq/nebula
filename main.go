@@ -52,7 +52,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	c.RegisterReloadCallback(func(c *config.C) {
 		err := configLogger(l, c)
 		if err != nil {
-			l.Error("Failed to configure the logger", slog.Any("error", err))
+			l.Error("Failed to configure the logger", "error", err)
 		}
 	})
 
@@ -65,7 +65,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while loading firewall rules", err)
 	}
-	l.Info("Firewall started", slog.Any("firewallHashes", fw.GetRuleHashes()))
+	l.Info("Firewall started", "firewallHashes", fw.GetRuleHashes())
 
 	ssh, err := sshd.NewSSHServer(l.With("subsystem", "sshd"))
 	if err != nil {
@@ -76,7 +76,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	if c.GetBool("sshd.enabled", false) {
 		sshStart, err = configSSH(l, ssh, c)
 		if err != nil {
-			l.Warn("Failed to configure sshd, ssh debugging will not be available", slog.Any("error", err))
+			l.Warn("Failed to configure sshd, ssh debugging will not be available", "error", err)
 			sshStart = nil
 		}
 	}
@@ -94,7 +94,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 			routines = 1
 		}
 		if routines > 1 {
-			l.Info("Using multiple routines", slog.Int("routines", routines))
+			l.Info("Using multiple routines", "routines", routines)
 		}
 	} else {
 		// deprecated and undocumented
@@ -102,7 +102,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		udpQueues := c.GetInt("listen.routines", 1)
 		routines = max(tunQueues, udpQueues)
 		if routines != 1 {
-			l.Warn("Setting tun.routines and listen.routines is deprecated. Use `routines` instead", slog.Int("routines", routines))
+			l.Warn("Setting tun.routines and listen.routines is deprecated. Use `routines` instead", "routines", routines)
 		}
 	}
 
@@ -115,7 +115,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		conntrackCacheTimeout = 1 * time.Second
 	}
 	if conntrackCacheTimeout > 0 {
-		l.Info("Using routine-local conntrack cache", slog.Duration("duration", conntrackCacheTimeout))
+		l.Info("Using routine-local conntrack cache", "duration", conntrackCacheTimeout)
 	}
 
 	var tun overlay.Device
@@ -161,7 +161,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		}
 
 		for i := 0; i < routines; i++ {
-			l.Info("listening", slog.Any("addr", netip.AddrPortFrom(listenHost, uint16(port))))
+			l.Info("listening", "addr", netip.AddrPortFrom(listenHost, uint16(port)))
 			udpServer, err := udp.NewListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
@@ -212,7 +212,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 	ds, err := newDnsServerFromConfig(ctx, l, pki.getCertState(), hostMap, c)
 	if err != nil {
-		l.Warn("Failed to start DNS responder", slog.Any("error", err))
+		l.Warn("Failed to start DNS responder", "error", err)
 	}
 
 	ifConfig := &InterfaceConfig{

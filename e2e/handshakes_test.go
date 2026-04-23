@@ -799,18 +799,18 @@ func TestStage1RaceRelays2(t *testing.T) {
 	t.Log("Wait until we remove extra tunnels")
 	l.Info("Wait until we remove extra tunnels")
 	l.Info("Waiting for hostinfos to be removed...",
-		slog.Int("myControl", len(myControl.GetHostmap().Indexes)),
-		slog.Int("theirControl", len(theirControl.GetHostmap().Indexes)),
-		slog.Int("relayControl", len(relayControl.GetHostmap().Indexes)),
+		"myControl", len(myControl.GetHostmap().Indexes),
+		"theirControl", len(theirControl.GetHostmap().Indexes),
+		"relayControl", len(relayControl.GetHostmap().Indexes),
 	)
 	hostInfos := len(myControl.GetHostmap().Indexes) + len(theirControl.GetHostmap().Indexes) + len(relayControl.GetHostmap().Indexes)
 	retries := 60
 	for hostInfos > 6 && retries > 0 {
 		hostInfos = len(myControl.GetHostmap().Indexes) + len(theirControl.GetHostmap().Indexes) + len(relayControl.GetHostmap().Indexes)
 		l.Info("Waiting for hostinfos to be removed...",
-			slog.Int("myControl", len(myControl.GetHostmap().Indexes)),
-			slog.Int("theirControl", len(theirControl.GetHostmap().Indexes)),
-			slog.Int("relayControl", len(relayControl.GetHostmap().Indexes)),
+			"myControl", len(myControl.GetHostmap().Indexes),
+			"theirControl", len(theirControl.GetHostmap().Indexes),
+			"relayControl", len(relayControl.GetHostmap().Indexes),
 		)
 		assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 		t.Log("Connection manager hasn't ticked yet")

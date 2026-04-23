@@ -57,7 +57,7 @@ func (c *ConntrackCacheTicker) Get() ConntrackCache {
 		c.cacheV = tick
 		if ll := len(c.cache); ll > 0 {
 			if c.l.Enabled(context.Background(), slog.LevelDebug) {
-				c.l.Debug("resetting conntrack cache", slog.Int("len", ll))
+				c.l.Debug("resetting conntrack cache", "len", ll)
 			}
 			c.cache = make(ConntrackCache, ll)
 		}

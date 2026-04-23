@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -30,7 +29,7 @@ func (stubDNSWriter) TsigTimersOnly(bool)       {}
 func (stubDNSWriter) Hijack()                   {}
 
 func TestParsequery(t *testing.T) {
-	l := slog.New(slog.NewTextHandler(io.Discard, nil))
+	l := slog.New(slog.DiscardHandler)
 	hostMap := &HostMap{}
 	ds := &dnsServer{
 		l:       l,
@@ -137,7 +136,7 @@ func Test_getDnsServerAddr(t *testing.T) {
 
 func newTestDnsServer(t *testing.T) (*dnsServer, *config.C) {
 	t.Helper()
-	sl := slog.New(slog.NewTextHandler(io.Discard, nil))
+	sl := slog.New(slog.DiscardHandler)
 	ds := &dnsServer{
 		l:       sl,
 		ctx:     context.Background(),

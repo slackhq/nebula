@@ -103,7 +103,7 @@ func (u *RIOConn) bind(l *slog.Logger, sa windows.Sockaddr) error {
 	if err != nil {
 		// This is a best-effort to prevent errors from being returned by the udp recv operation.
 		// Quietly log a failure and continue.
-		l.Debug("failed to set UDP_CONNRESET ioctl", slog.Any("error", err))
+		l.Debug("failed to set UDP_CONNRESET ioctl", "error", err)
 	}
 
 	ret = 0
@@ -114,7 +114,7 @@ func (u *RIOConn) bind(l *slog.Logger, sa windows.Sockaddr) error {
 	if err != nil {
 		// This is a best-effort to prevent errors from being returned by the udp recv operation.
 		// Quietly log a failure and continue.
-		l.Debug("failed to set UDP_NETRESET ioctl", slog.Any("error", err))
+		l.Debug("failed to set UDP_NETRESET ioctl", "error", err)
 	}
 
 	err = u.rx.Open()
@@ -156,7 +156,7 @@ func (u *RIOConn) ListenOut(r EncReader) error {
 			// Dampen unexpected message warns to once per minute
 			if lastRecvErr.IsZero() || time.Since(lastRecvErr) > time.Minute {
 				lastRecvErr = time.Now()
-				u.l.Warn("unexpected udp socket receive error", slog.Any("error", err))
+				u.l.Warn("unexpected udp socket receive error", "error", err)
 			}
 			continue
 		}

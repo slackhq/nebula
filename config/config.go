@@ -108,16 +108,16 @@ func (c *C) HasChanged(k string) bool {
 	newVals, err := yaml.Marshal(nv)
 	if err != nil {
 		c.l.Error("Error while marshaling new config",
-			slog.String("config_path", k),
-			slog.Any("error", err),
+			"config_path", k,
+			"error", err,
 		)
 	}
 
 	oldVals, err := yaml.Marshal(ov)
 	if err != nil {
 		c.l.Error("Error while marshaling old config",
-			slog.String("config_path", k),
-			slog.Any("error", err),
+			"config_path", k,
+			"error", err,
 		)
 	}
 
@@ -161,8 +161,8 @@ func (c *C) ReloadConfig() {
 	err := c.Load(c.path)
 	if err != nil {
 		c.l.Error("Error occurred while reloading config",
-			slog.String("config_path", c.path),
-			slog.Any("error", err),
+			"config_path", c.path,
+			"error", err,
 		)
 		return
 	}

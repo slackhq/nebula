@@ -245,7 +245,7 @@ func (t *tun) Close() error {
 
 	if t.fd >= 0 {
 		if err := unix.Close(t.fd); err != nil {
-			t.l.Error("Error closing device", slog.Any("error", err))
+			t.l.Error("Error closing device", "error", err)
 		}
 		t.fd = -1
 	}
@@ -266,7 +266,7 @@ func (t *tun) Close() error {
 			err = ioctl(uintptr(s), syscall.SIOCIFDESTROY, uintptr(unsafe.Pointer(&ifreq)))
 		}
 		if err != nil {
-			t.l.Error("Error destroying tunnel", slog.Any("error", err))
+			t.l.Error("Error destroying tunnel", "error", err)
 		}
 	}()
 
@@ -586,7 +586,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 				return retErr
 			}
 		} else {
-			t.l.Info("Added route", slog.Any("route", r))
+			t.l.Info("Added route", "route", r)
 		}
 	}
 
@@ -601,9 +601,9 @@ func (t *tun) removeRoutes(routes []Route) error {
 
 		err := delRoute(r.Cidr, t.linkAddr)
 		if err != nil {
-			t.l.Error("Failed to remove route", slog.Any("error", err), slog.Any("route", r))
+			t.l.Error("Failed to remove route", "error", err, "route", r)
 		} else {
-			t.l.Info("Removed route", slog.Any("route", r))
+			t.l.Info("Removed route", "route", r)
 		}
 	}
 	return nil

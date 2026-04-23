@@ -176,7 +176,7 @@ func (u *StdConn) ListenOut(r EncReader) error {
 				return err
 			}
 
-			u.l.Error("unexpected udp socket receive error", slog.Any("error", err))
+			u.l.Error("unexpected udp socket receive error", "error", err)
 		}
 
 		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
@@ -196,7 +196,7 @@ func (u *StdConn) Rebind() error {
 	}
 
 	if err != nil {
-		u.l.Error("Failed to rebind udp socket", slog.Any("error", err))
+		u.l.Error("Failed to rebind udp socket", "error", err)
 	}
 
 	return nil

@@ -24,7 +24,7 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 		return rc, nil
 	}
 
-	l.Error("Falling back to standard udp sockets", slog.Any("error", err))
+	l.Error("Falling back to standard udp sockets", "error", err)
 	return NewGenericListener(l, ip, port, multi, batch)
 }
 

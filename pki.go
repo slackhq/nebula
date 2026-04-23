@@ -182,9 +182,9 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 	p.cs.Store(newState)
 
 	if initial {
-		p.l.Debug("Client nebula certificate(s)", slog.Any("cert", newState))
+		p.l.Debug("Client nebula certificate(s)", "cert", newState)
 	} else {
-		p.l.Info("Client certificate(s) refreshed from disk", slog.Any("cert", newState))
+		p.l.Info("Client certificate(s) refreshed from disk", "cert", newState)
 	}
 	return nil
 }
@@ -196,7 +196,7 @@ func (p *PKI) reloadCAPool(c *config.C) *util.ContextualError {
 	}
 
 	p.caPool.Store(caPool)
-	p.l.Debug("Trusted CA fingerprints", slog.Any("fingerprints", caPool.GetFingerprints()))
+	p.l.Debug("Trusted CA fingerprints", "fingerprints", caPool.GetFingerprints())
 	return nil
 }
 
@@ -512,7 +512,7 @@ func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 		for _, crt := range caPool.CAs {
 			if crt.Certificate.Expired(time.Now()) {
 				expired++
-				l.Warn("expired certificate present in CA pool", slog.Any("cert", crt))
+				l.Warn("expired certificate present in CA pool", "cert", crt)
 			}
 		}
 
@@ -530,7 +530,7 @@ func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 			caPool.BlocklistFingerprint(fp)
 		}
 
-		l.Info("Blocklisted certificates", slog.Int("fingerprintCount", len(bl)))
+		l.Info("Blocklisted certificates", "fingerprintCount", len(bl))
 	}
 
 	return caPool, nil

@@ -33,7 +33,7 @@ func LogWithContextIfNeeded(msg string, err error, l *slog.Logger) {
 	case *ContextualError:
 		v.Log(l)
 	default:
-		l.Error(msg, slog.Any("error", err))
+		l.Error(msg, "error", err)
 	}
 }
 
@@ -62,5 +62,8 @@ func (ce *ContextualError) Log(l *slog.Logger) {
 	if ce.RealError != nil {
 		attrs = append(attrs, slog.Any("error", ce.RealError))
 	}
+	// LogAttrs is intentional: attrs is built from a map[string]any so it has
+	// no pair-form equivalent.
+	//nolint:sloglint
 	l.LogAttrs(context.Background(), slog.LevelError, ce.Context, attrs...)
 }

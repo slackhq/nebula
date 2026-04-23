@@ -74,9 +74,9 @@ func startGraphiteStats(l *slog.Logger, i time.Duration, c *config.C, configTest
 
 	if !configTest {
 		l.Info("Starting graphite",
-			slog.Duration("interval", i),
-			slog.String("prefix", prefix),
-			slog.String("addr", addr.String()),
+			"interval", i,
+			"prefix", prefix,
+			"addr", addr.String(),
 		)
 		go graphite.Graphite(metrics.DefaultRegistry, i, prefix, addr)
 	}
@@ -125,8 +125,8 @@ func startPrometheusStats(l *slog.Logger, i time.Duration, c *config.C, buildVer
 		errLog := slog.NewLogLogger(l.Handler(), slog.LevelError)
 		startFn = func() {
 			l.Info("Prometheus stats listening",
-				slog.String("listen", listen),
-				slog.String("path", path),
+				"listen", listen,
+				"path", path,
 			)
 			http.Handle(path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: errLog}))
 			log.Fatal(http.ListenAndServe(listen, nil))

@@ -86,8 +86,8 @@ func (cm *connectionManager) reload(c *config.C, initial bool) {
 		cm.inactivityTimeout.Store((int64)(c.GetDuration("tunnels.inactivity_timeout", 10*time.Minute)))
 		if !initial {
 			cm.l.Info("Inactivity timeout has changed",
-				slog.Duration("oldDuration", old),
-				slog.Duration("newDuration", cm.getInactivityTimeout()),
+				"oldDuration", old,
+				"newDuration", cm.getInactivityTimeout(),
 			)
 		}
 	}
@@ -97,8 +97,8 @@ func (cm *connectionManager) reload(c *config.C, initial bool) {
 		cm.dropInactive.Store(c.GetBool("tunnels.drop_inactive", false))
 		if !initial {
 			cm.l.Info("Drop inactive setting has changed",
-				slog.Bool("oldBool", old),
-				slog.Bool("newBool", cm.dropInactive.Load()),
+				"oldBool", old,
+				"newBool", cm.dropInactive.Load(),
 			)
 		}
 	}
@@ -258,7 +258,7 @@ func (cm *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo
 			var err error
 			index, err = AddRelay(cm.l, newhostinfo, cm.hostMap, r.PeerAddr, nil, r.Type, Requested)
 			if err != nil {
-				cm.l.Error("failed to migrate relay to new hostinfo", slog.Any("error", err))
+				cm.l.Error("failed to migrate relay to new hostinfo", "error", err)
 				continue
 			}
 			switch r.Type {
@@ -306,15 +306,15 @@ func (cm *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo
 
 		msg, err := req.Marshal()
 		if err != nil {
-			cm.l.Error("failed to marshal Control message to migrate relay", slog.Any("error", err))
+			cm.l.Error("failed to marshal Control message to migrate relay", "error", err)
 		} else {
 			cm.intf.SendMessageToHostInfo(header.Control, 0, newhostinfo, msg, make([]byte, 12), make([]byte, mtu))
 			cm.l.Info("send CreateRelayRequest",
-				slog.Any("relayFrom", req.RelayFromAddr),
-				slog.Any("relayTo", req.RelayToAddr),
-				slog.Uint64("initiatorRelayIndex", uint64(req.InitiatorRelayIndex)),
-				slog.Uint64("responderRelayIndex", uint64(req.ResponderRelayIndex)),
-				slog.Any("vpnAddrs", newhostinfo.vpnAddrs),
+				"relayFrom", req.RelayFromAddr,
+				"relayTo", req.RelayToAddr,
+				"initiatorRelayIndex", uint64(req.InitiatorRelayIndex),
+				"responderRelayIndex", uint64(req.ResponderRelayIndex),
+				"vpnAddrs", newhostinfo.vpnAddrs,
 			)
 		}
 	}
@@ -327,7 +327,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 
 	hostinfo := cm.hostMap.Indexes[localIndex]
 	if hostinfo == nil {
-		cm.l.Debug("Not found in hostmap", slog.Uint64("localIndex", uint64(localIndex)))
+		cm.l.Debug("Not found in hostmap", "localIndex", uint64(localIndex))
 		return doNothing, nil, nil
 	}
 
@@ -349,7 +349,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 		decision := doNothing
 		if cm.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(cm.l).Debug("Tunnel status",
-				slog.Any("tunnelCheck", m{"state": "alive", "method": "passive"}),
+				"tunnelCheck", m{"state": "alive", "method": "passive"},
 			)
 		}
 		hostinfo.pendingDeletion.Store(false)
@@ -378,7 +378,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 	if hostinfo.pendingDeletion.Load() {
 		// We have already sent a test packet and nothing was returned, this hostinfo is dead
 		hostinfo.logger(cm.l).Info("Tunnel status",
-			slog.Any("tunnelCheck", m{"state": "dead", "method": "active"}),
+			"tunnelCheck", m{"state": "dead", "method": "active"},
 		)
 
 		return deleteTunnel, hostinfo, nil
@@ -391,8 +391,8 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 			if isInactive {
 				// Tunnel is inactive, tear it down
 				hostinfo.logger(cm.l).Info("Dropping tunnel due to inactivity",
-					slog.Duration("inactiveDuration", inactiveFor),
-					slog.Bool("primary", mainHostInfo),
+					"inactiveDuration", inactiveFor,
+					"primary", mainHostInfo,
 				)
 
 				return closeTunnel, hostinfo, primary
@@ -414,7 +414,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 
 		if cm.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(cm.l).Debug("Tunnel status",
-				slog.Any("tunnelCheck", m{"state": "testing", "method": "active"}),
+				"tunnelCheck", m{"state": "testing", "method": "active"},
 			)
 		}
 
@@ -496,14 +496,14 @@ func (cm *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostI
 	} else if err == cert.ErrBlockListed { //avoiding errors.Is for speed
 		// Block listed certificates should always be disconnected
 		hostinfo.logger(cm.l).Info("Remote certificate is blocked, tearing down the tunnel",
-			slog.Any("error", err),
-			slog.Any("fingerprint", remoteCert.Fingerprint),
+			"error", err,
+			"fingerprint", remoteCert.Fingerprint,
 		)
 		return true
 	} else if cm.intf.disconnectInvalid.Load() {
 		hostinfo.logger(cm.l).Info("Remote certificate is no longer valid, tearing down the tunnel",
-			slog.Any("error", err),
-			slog.Any("fingerprint", remoteCert.Fingerprint),
+			"error", err,
+			"fingerprint", remoteCert.Fingerprint,
 		)
 		return true
 	} else {
@@ -544,9 +544,9 @@ func (cm *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 	myCrt := cs.getCertificate(curCrtVersion)
 	if myCrt == nil {
 		cm.l.Info("Re-handshaking with remote",
-			slog.Any("vpnAddrs", hostinfo.vpnAddrs),
-			slog.Any("version", curCrtVersion),
-			slog.String("reason", "local certificate removed"),
+			"vpnAddrs", hostinfo.vpnAddrs,
+			"version", curCrtVersion,
+			"reason", "local certificate removed",
 		)
 		cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)
 		return
@@ -556,10 +556,10 @@ func (cm *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 		// if our certificate version is less than theirs, and we have a matching version available, rehandshake?
 		if cs.getCertificate(peerCrt.Certificate.Version()) != nil {
 			cm.l.Info("Re-handshaking with remote",
-				slog.Any("vpnAddrs", hostinfo.vpnAddrs),
-				slog.Any("version", curCrtVersion),
-				slog.Any("peerVersion", peerCrt.Certificate.Version()),
-				slog.String("reason", "local certificate version lower than peer, attempting to correct"),
+				"vpnAddrs", hostinfo.vpnAddrs,
+				"version", curCrtVersion,
+				"peerVersion", peerCrt.Certificate.Version(),
+				"reason", "local certificate version lower than peer, attempting to correct",
 			)
 			cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], func(hh *HandshakeHostInfo) {
 				hh.initiatingVersionOverride = peerCrt.Certificate.Version()
@@ -569,8 +569,8 @@ func (cm *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 	}
 	if !bytes.Equal(curCrt.Signature(), myCrt.Signature()) {
 		cm.l.Info("Re-handshaking with remote",
-			slog.Any("vpnAddrs", hostinfo.vpnAddrs),
-			slog.String("reason", "local certificate is not current"),
+			"vpnAddrs", hostinfo.vpnAddrs,
+			"reason", "local certificate is not current",
 		)
 
 		cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)
@@ -578,8 +578,8 @@ func (cm *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 	}
 	if curCrtVersion < cs.initiatingVersion {
 		cm.l.Info("Re-handshaking with remote",
-			slog.Any("vpnAddrs", hostinfo.vpnAddrs),
-			slog.String("reason", "current cert version < pki.initiatingVersion"),
+			"vpnAddrs", hostinfo.vpnAddrs,
+			"reason", "current cert version < pki.initiatingVersion",
 		)
 
 		cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)

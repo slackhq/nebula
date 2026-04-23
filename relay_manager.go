@@ -29,7 +29,7 @@ func NewRelayManager(ctx context.Context, l *slog.Logger, hostmap *HostMap, c *c
 	c.RegisterReloadCallback(func(c *config.C) {
 		err := rm.reload(c, false)
 		if err != nil {
-			rm.l.Error("Failed to reload relay_manager", slog.Any("error", err))
+			rm.l.Error("Failed to reload relay_manager", "error", err)
 		}
 	})
 	return rm
@@ -105,10 +105,10 @@ func (rm *relayManager) EstablishRelay(relayHostInfo *HostInfo, m *NebulaControl
 		}
 
 		rm.l.Info("relayManager failed to update relay",
-			slog.Any("relay", relayHostInfo.vpnAddrs[0]),
-			slog.Any("initiatorRelayIndex", m.InitiatorRelayIndex),
-			slog.Any("relayFrom", relayFrom),
-			slog.Any("relayTo", relayTo),
+			"relay", relayHostInfo.vpnAddrs[0],
+			"initiatorRelayIndex", m.InitiatorRelayIndex,
+			"relayFrom", relayFrom,
+			"relayTo", relayTo,
 		)
 		return nil, fmt.Errorf("unknown relay")
 	}
@@ -120,7 +120,7 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, d []byte, f *Interface) {
 	msg := &NebulaControl{}
 	err := msg.Unmarshal(d)
 	if err != nil {
-		h.logger(f.l).Error("Failed to unmarshal control message", slog.Any("error", err))
+		h.logger(f.l).Error("Failed to unmarshal control message", "error", err)
 		return
 	}
 
@@ -148,11 +148,11 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, d []byte, f *Interface) {
 
 func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f *Interface, m *NebulaControl) {
 	rm.l.Info("handleCreateRelayResponse",
-		slog.Any("relayFrom", protoAddrToNetAddr(m.RelayFromAddr)),
-		slog.Any("relayTo", protoAddrToNetAddr(m.RelayToAddr)),
-		slog.Any("initiatorRelayIndex", m.InitiatorRelayIndex),
-		slog.Any("responderRelayIndex", m.ResponderRelayIndex),
-		slog.Any("vpnAddrs", h.vpnAddrs),
+		"relayFrom", protoAddrToNetAddr(m.RelayFromAddr),
+		"relayTo", protoAddrToNetAddr(m.RelayToAddr),
+		"initiatorRelayIndex", m.InitiatorRelayIndex,
+		"responderRelayIndex", m.ResponderRelayIndex,
+		"vpnAddrs", h.vpnAddrs,
 	)
 
 	target := m.RelayToAddr
@@ -160,7 +160,7 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 
 	relay, err := rm.EstablishRelay(h, m)
 	if err != nil {
-		rm.l.Error("Failed to update relay for relayTo", slog.Any("error", err))
+		rm.l.Error("Failed to update relay for relayTo", "error", err)
 		return
 	}
 	// Do I need to complete the relays now?
@@ -170,12 +170,12 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 	// I'm the middle man. Let the initiator know that the I've established the relay they requested.
 	peerHostInfo := rm.hostmap.QueryVpnAddr(relay.PeerAddr)
 	if peerHostInfo == nil {
-		rm.l.Error("Can't find a HostInfo for peer", slog.Any("relayTo", relay.PeerAddr))
+		rm.l.Error("Can't find a HostInfo for peer", "relayTo", relay.PeerAddr)
 		return
 	}
 	peerRelay, ok := peerHostInfo.relayState.QueryRelayForByIp(targetAddr)
 	if !ok {
-		rm.l.Error("peerRelay does not have Relay state for relayTo", slog.Any("relayTo", peerHostInfo.vpnAddrs[0]))
+		rm.l.Error("peerRelay does not have Relay state for relayTo", "relayTo", peerHostInfo.vpnAddrs[0])
 		return
 	}
 	switch peerRelay.State {
@@ -194,11 +194,11 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 			peer := peerHostInfo.vpnAddrs[0]
 			if !peer.Is4() {
 				rm.l.Error("Refusing to CreateRelayResponse for a v1 relay with an ipv6 address",
-					slog.Any("relayFrom", peer),
-					slog.Any("relayTo", target),
-					slog.Any("initiatorRelayIndex", resp.InitiatorRelayIndex),
-					slog.Any("responderRelayIndex", resp.ResponderRelayIndex),
-					slog.Any("vpnAddrs", peerHostInfo.vpnAddrs),
+					"relayFrom", peer,
+					"relayTo", target,
+					"initiatorRelayIndex", resp.InitiatorRelayIndex,
+					"responderRelayIndex", resp.ResponderRelayIndex,
+					"vpnAddrs", peerHostInfo.vpnAddrs,
 				)
 				return
 			}
@@ -214,15 +214,15 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 
 		msg, err := resp.Marshal()
 		if err != nil {
-			rm.l.Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay", slog.Any("error", err))
+			rm.l.Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay", "error", err)
 		} else {
 			f.SendMessageToHostInfo(header.Control, 0, peerHostInfo, msg, make([]byte, 12), make([]byte, mtu))
 			rm.l.Info("send CreateRelayResponse",
-				slog.Any("relayFrom", resp.RelayFromAddr),
-				slog.Any("relayTo", resp.RelayToAddr),
-				slog.Any("initiatorRelayIndex", resp.InitiatorRelayIndex),
-				slog.Any("responderRelayIndex", resp.ResponderRelayIndex),
-				slog.Any("vpnAddrs", peerHostInfo.vpnAddrs),
+				"relayFrom", resp.RelayFromAddr,
+				"relayTo", resp.RelayToAddr,
+				"initiatorRelayIndex", resp.InitiatorRelayIndex,
+				"responderRelayIndex", resp.ResponderRelayIndex,
+				"vpnAddrs", peerHostInfo.vpnAddrs,
 			)
 		}
 	}
@@ -233,17 +233,17 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 	target := protoAddrToNetAddr(m.RelayToAddr)
 
 	logMsg := rm.l.With(
-		slog.Any("relayFrom", from),
-		slog.Any("relayTo", target),
-		slog.Any("initiatorRelayIndex", m.InitiatorRelayIndex),
-		slog.Any("vpnAddrs", h.vpnAddrs),
+		"relayFrom", from,
+		"relayTo", target,
+		"initiatorRelayIndex", m.InitiatorRelayIndex,
+		"vpnAddrs", h.vpnAddrs,
 	)
 
 	logMsg.Info("handleCreateRelayRequest")
 	// Is the source of the relay me? This should never happen, but did happen due to
 	// an issue migrating relays over to newly re-handshaked host info objects.
 	if f.myVpnAddrsTable.Contains(from) {
-		logMsg.Error("Discarding relay request from myself", slog.Any("myIP", from))
+		logMsg.Error("Discarding relay request from myself", "myIP", from)
 		return
 	}
 
@@ -263,7 +263,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 					// We got a brand new Relay request, because its index is different than what we saw before.
 					// This should never happen. The peer should never change an index, once created.
 					logMsg.Error("Existing relay mismatch with CreateRelayRequest",
-						slog.Any("existingRemoteIndex", existingRelay.RemoteIndex))
+						"existingRemoteIndex", existingRelay.RemoteIndex)
 					return
 				}
 			case Disestablished:
@@ -271,7 +271,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 					// We got a brand new Relay request, because its index is different than what we saw before.
 					// This should never happen. The peer should never change an index, once created.
 					logMsg.Error("Existing relay mismatch with CreateRelayRequest",
-						slog.Any("existingRemoteIndex", existingRelay.RemoteIndex))
+						"existingRemoteIndex", existingRelay.RemoteIndex)
 					return
 				}
 				// Mark the relay as 'Established' because it's safe to use again
@@ -279,20 +279,20 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 			case PeerRequested:
 				// I should never be in this state, because I am terminal, not forwarding.
 				logMsg.Error("Unexpected Relay State found",
-					slog.Any("existingRemoteIndex", existingRelay.RemoteIndex),
-					slog.Any("state", existingRelay.State))
+					"existingRemoteIndex", existingRelay.RemoteIndex,
+					"state", existingRelay.State)
 			}
 		} else {
 			_, err := AddRelay(rm.l, h, f.hostMap, from, &m.InitiatorRelayIndex, TerminalType, Established)
 			if err != nil {
-				logMsg.Error("Failed to add relay", slog.Any("error", err))
+				logMsg.Error("Failed to add relay", "error", err)
 				return
 			}
 		}
 
 		relay, ok := h.relayState.QueryRelayForByIp(from)
 		if !ok {
-			logMsg.Error("Relay State not found", slog.Any("from", from))
+			logMsg.Error("Relay State not found", "from", from)
 			return
 		}
 
@@ -314,15 +314,15 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 
 		msg, err := resp.Marshal()
 		if err != nil {
-			logMsg.Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay", slog.Any("error", err))
+			logMsg.Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay", "error", err)
 		} else {
 			f.SendMessageToHostInfo(header.Control, 0, h, msg, make([]byte, 12), make([]byte, mtu))
 			rm.l.Info("send CreateRelayResponse",
-				slog.Any("relayFrom", from),
-				slog.Any("relayTo", target),
-				slog.Any("initiatorRelayIndex", resp.InitiatorRelayIndex),
-				slog.Any("responderRelayIndex", resp.ResponderRelayIndex),
-				slog.Any("vpnAddrs", h.vpnAddrs),
+				"relayFrom", from,
+				"relayTo", target,
+				"initiatorRelayIndex", resp.InitiatorRelayIndex,
+				"responderRelayIndex", resp.ResponderRelayIndex,
+				"vpnAddrs", h.vpnAddrs,
 			)
 		}
 		return
@@ -364,11 +364,11 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 		if v == cert.Version1 {
 			if !h.vpnAddrs[0].Is4() {
 				rm.l.Error("Refusing to CreateRelayRequest for a v1 relay with an ipv6 address",
-					slog.Any("relayFrom", h.vpnAddrs[0]),
-					slog.Any("relayTo", target),
-					slog.Any("initiatorRelayIndex", req.InitiatorRelayIndex),
-					slog.Any("responderRelayIndex", req.ResponderRelayIndex),
-					slog.Any("vpnAddr", target),
+					"relayFrom", h.vpnAddrs[0],
+					"relayTo", target,
+					"initiatorRelayIndex", req.InitiatorRelayIndex,
+					"responderRelayIndex", req.ResponderRelayIndex,
+					"vpnAddr", target,
 				)
 				return
 			}
@@ -384,15 +384,15 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 
 		msg, err := req.Marshal()
 		if err != nil {
-			logMsg.Error("relayManager Failed to marshal Control message to create relay", slog.Any("error", err))
+			logMsg.Error("relayManager Failed to marshal Control message to create relay", "error", err)
 		} else {
 			f.SendMessageToHostInfo(header.Control, 0, peer, msg, make([]byte, 12), make([]byte, mtu))
 			rm.l.Info("send CreateRelayRequest",
-				slog.Any("relayFrom", h.vpnAddrs[0]),
-				slog.Any("relayTo", target),
-				slog.Any("initiatorRelayIndex", req.InitiatorRelayIndex),
-				slog.Any("responderRelayIndex", req.ResponderRelayIndex),
-				slog.Any("vpnAddr", target),
+				"relayFrom", h.vpnAddrs[0],
+				"relayTo", target,
+				"initiatorRelayIndex", req.InitiatorRelayIndex,
+				"responderRelayIndex", req.ResponderRelayIndex,
+				"vpnAddr", target,
 			)
 		}
 
@@ -401,7 +401,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 		if !ok {
 			_, err := AddRelay(rm.l, h, f.hostMap, target, &m.InitiatorRelayIndex, ForwardingType, PeerRequested)
 			if err != nil {
-				logMsg.Error("relayManager Failed to allocate a local index for relay", slog.Any("error", err))
+				logMsg.Error("relayManager Failed to allocate a local index for relay", "error", err)
 				return
 			}
 		}

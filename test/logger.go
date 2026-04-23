@@ -18,7 +18,7 @@ const logLevelTrace = slog.Level(-8)
 func NewLogger() *slog.Logger {
 	v := os.Getenv("TEST_LOGS")
 	if v == "" {
-		return slog.New(slog.NewTextHandler(io.Discard, nil))
+		return slog.New(slog.DiscardHandler)
 	}
 
 	level := slog.LevelInfo

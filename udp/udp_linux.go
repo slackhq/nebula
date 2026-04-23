@@ -242,12 +242,12 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 		if err == nil {
 			s, err := u.GetRecvBuffer()
 			if err == nil {
-				u.l.Info("listen.read_buffer was set", slog.Int("size", s))
+				u.l.Info("listen.read_buffer was set", "size", s)
 			} else {
-				u.l.Warn("Failed to get listen.read_buffer", slog.Any("error", err))
+				u.l.Warn("Failed to get listen.read_buffer", "error", err)
 			}
 		} else {
-			u.l.Error("Failed to set listen.read_buffer", slog.Any("error", err))
+			u.l.Error("Failed to set listen.read_buffer", "error", err)
 		}
 	}
 
@@ -257,12 +257,12 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 		if err == nil {
 			s, err := u.GetSendBuffer()
 			if err == nil {
-				u.l.Info("listen.write_buffer was set", slog.Int("size", s))
+				u.l.Info("listen.write_buffer was set", "size", s)
 			} else {
-				u.l.Warn("Failed to get listen.write_buffer", slog.Any("error", err))
+				u.l.Warn("Failed to get listen.write_buffer", "error", err)
 			}
 		} else {
-			u.l.Error("Failed to set listen.write_buffer", slog.Any("error", err))
+			u.l.Error("Failed to set listen.write_buffer", "error", err)
 		}
 	}
 
@@ -273,12 +273,12 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 		if err == nil {
 			s, err := u.GetSoMark()
 			if err == nil {
-				u.l.Info("listen.so_mark was set", slog.Int("mark", s))
+				u.l.Info("listen.so_mark was set", "mark", s)
 			} else {
-				u.l.Warn("Failed to get listen.so_mark", slog.Any("error", err))
+				u.l.Warn("Failed to get listen.so_mark", "error", err)
 			}
 		} else {
-			u.l.Error("Failed to set listen.so_mark", slog.Any("error", err))
+			u.l.Error("Failed to set listen.so_mark", "error", err)
 		}
 	}
 }

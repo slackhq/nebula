@@ -92,7 +92,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 
 	err = unix.SetNonblock(fd, true)
 	if err != nil {
-		l.Warn("Failed to set the tun device as nonblocking", slog.Any("error", err))
+		l.Warn("Failed to set the tun device as nonblocking", "error", err)
 	}
 
 	t := &tun{
@@ -416,7 +416,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 				return retErr
 			}
 		} else {
-			t.l.Info("Added route", slog.Any("route", r))
+			t.l.Info("Added route", "route", r)
 		}
 	}
 
@@ -431,9 +431,9 @@ func (t *tun) removeRoutes(routes []Route) error {
 
 		err := delRoute(r.Cidr, t.vpnNetworks)
 		if err != nil {
-			t.l.Error("Failed to remove route", slog.Any("error", err), slog.Any("route", r))
+			t.l.Error("Failed to remove route", "error", err, "route", r)
 		} else {
-			t.l.Info("Removed route", slog.Any("route", r))
+			t.l.Info("Removed route", "route", r)
 		}
 	}
 	return nil

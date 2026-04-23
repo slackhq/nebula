@@ -46,8 +46,8 @@ func (b *Bits) Check(l *slog.Logger, i uint64) bool {
 	// Not within the window
 	if l.Enabled(context.Background(), slog.LevelDebug) {
 		l.Debug("rejected a packet (top)",
-			slog.Uint64("current", b.current),
-			slog.Uint64("incoming", i),
+			"current", b.current,
+			"incoming", i,
 		)
 	}
 	return false
@@ -94,10 +94,10 @@ func (b *Bits) Update(l *slog.Logger, i uint64) bool {
 		if b.current == i || b.bits[i%b.length] == true {
 			if l.Enabled(context.Background(), slog.LevelDebug) {
 				l.Debug("Receive window",
-					slog.Bool("accepted", false),
-					slog.Uint64("currentCounter", b.current),
-					slog.Uint64("incomingCounter", i),
-					slog.String("reason", "duplicate"),
+					"accepted", false,
+					"currentCounter", b.current,
+					"incomingCounter", i,
+					"reason", "duplicate",
 				)
 			}
 			b.dupeCounter.Inc(1)
@@ -112,10 +112,10 @@ func (b *Bits) Update(l *slog.Logger, i uint64) bool {
 	b.outOfWindowCounter.Inc(1)
 	if l.Enabled(context.Background(), slog.LevelDebug) {
 		l.Debug("Receive window",
-			slog.Bool("accepted", false),
-			slog.Uint64("currentCounter", b.current),
-			slog.Uint64("incomingCounter", i),
-			slog.String("reason", "nonsense"),
+			"accepted", false,
+			"currentCounter", b.current,
+			"incomingCounter", i,
+			"reason", "nonsense",
 		)
 	}
 	return false

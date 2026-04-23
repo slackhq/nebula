@@ -2,7 +2,21 @@ version: "2"
 linters:
   default: none
   enable:
+    - sloglint
     - testifylint
+  settings:
+    sloglint:
+      # Enforce key-value pair form for Info/Debug/Warn/Error/Log/With and
+      # the package-level slog equivalents. Use l.Log(ctx, level, ...) for
+      # custom levels instead of LogAttrs when you can.
+      #
+      # LogAttrs is also flagged by this rule because it takes ...slog.Attr;
+      # the few legitimate sites (where attrs is built up as a []slog.Attr)
+      # carry a //nolint:sloglint with rationale.
+      kv-only: true
+      # no-mixed-args is on by default: forbids mixing kv and attrs in one call.
+      # discard-handler is on by default (since Go 1.24): suggests
+      # slog.DiscardHandler over slog.NewTextHandler(io.Discard, nil).
   exclusions:
     generated: lax
     presets:

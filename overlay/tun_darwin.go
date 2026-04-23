@@ -389,7 +389,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 		err := addRoute(r.Cidr, t.linkAddr)
 		if err != nil {
 			if errors.Is(err, unix.EEXIST) {
-				t.l.Warn("unable to add unsafe_route, identical route already exists", slog.Any("route", r.Cidr))
+				t.l.Warn("unable to add unsafe_route, identical route already exists", "route", r.Cidr)
 			} else {
 				retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 				if logErrors {
@@ -399,7 +399,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 				}
 			}
 		} else {
-			t.l.Info("Added route", slog.Any("route", r))
+			t.l.Info("Added route", "route", r)
 		}
 	}
 
@@ -414,9 +414,9 @@ func (t *tun) removeRoutes(routes []Route) error {
 
 		err := delRoute(r.Cidr, t.linkAddr)
 		if err != nil {
-			t.l.Error("Failed to remove route", slog.Any("error", err), slog.Any("route", r))
+			t.l.Error("Failed to remove route", "error", err, "route", r)
 		} else {
-			t.l.Info("Removed route", slog.Any("route", r))
+			t.l.Info("Removed route", "route", r)
 		}
 	}
 	return nil

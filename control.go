@@ -151,7 +151,7 @@ func (c *Control) Stop() {
 
 	c.CloseAllTunnels(false)
 	if err := c.f.Close(); err != nil {
-		c.l.Error("Close interface failed", slog.Any("error", err))
+		c.l.Error("Close interface failed", "error", err)
 	}
 	c.stateLock.Lock()
 	c.state = StateStopped
@@ -166,7 +166,7 @@ func (c *Control) ShutdownBlock() {
 
 	rawSig := <-sigChan
 	sig := rawSig.String()
-	c.l.Info("Caught signal, shutting down", slog.String("signal", sig))
+	c.l.Info("Caught signal, shutting down", "signal", sig)
 	c.Stop()
 }
 
@@ -304,8 +304,8 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 		c.f.closeTunnel(h)
 
 		c.l.Debug("Sending close tunnel message",
-			slog.Any("vpnAddrs", h.vpnAddrs),
-			slog.Any("udpAddr", h.remote),
+			"vpnAddrs", h.vpnAddrs,
+			"udpAddr", h.remote,
 		)
 		closed++
 	}
