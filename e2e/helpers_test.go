@@ -15,7 +15,8 @@ import (
 	"dario.cat/mergo"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
-	"github.com/sirupsen/logrus"
+	"log/slog"
+
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
@@ -133,7 +134,7 @@ func newSimpleServerWithUdpAndUnsafeNetworks(v cert.Version, caCrt cert.Certific
 		},
 		"logging": m{
 			"timestamp_format": fmt.Sprintf("%v 15:04:05.000000", name),
-			"level":            l.Level.String(),
+			"level":            testLogLevelName(),
 		},
 		"timers": m{
 			"pending_deletion_interval": 2,
@@ -235,7 +236,7 @@ func newServer(caCrt []cert.Certificate, certs []cert.Certificate, key []byte, o
 		},
 		"logging": m{
 			"timestamp_format": fmt.Sprintf("%v 15:04:05.000000", certs[0].Name()),
-			"level":            l.Level.String(),
+			"level":            testLogLevelName(),
 		},
 		"timers": m{
 			"pending_deletion_interval": 2,
@@ -379,24 +380,32 @@ func getAddrs(ns []netip.Prefix) []netip.Addr {
 	return a
 }
 
-func NewTestLogger() *logrus.Logger {
-	l := logrus.New()
-
+func NewTestLogger() *slog.Logger {
 	v := os.Getenv("TEST_LOGS")
 	if v == "" {
-		l.SetOutput(io.Discard)
-		l.SetLevel(logrus.PanicLevel)
-		return l
+		return slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
+	level := slog.LevelInfo
 	switch v {
 	case "2":
-		l.SetLevel(logrus.DebugLevel)
+		level = slog.LevelDebug
 	case "3":
-		l.SetLevel(logrus.TraceLevel)
-	default:
-		l.SetLevel(logrus.InfoLevel)
+		level = nebula.LogLevelTrace
 	}
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+}
 
-	return l
+// testLogLevelName returns the level name string accepted by configLogger for
+// the current TEST_LOGS setting. Kept in sync with NewTestLogger.
+func testLogLevelName() string {
+	switch os.Getenv("TEST_LOGS") {
+	case "2":
+		return "debug"
+	case "3":
+		return "trace"
+	case "":
+		return "info"
+	}
+	return "info"
 }

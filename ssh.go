@@ -12,14 +12,12 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/sshd"
@@ -199,7 +197,7 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error)
 	return runner, nil
 }
 
-func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Interface) {
+func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interface) {
 	// sandboxDir defaults to a dir in temp. The intention is that end user will
 	// create this dir as needed. Overriding this config value to "" allows
 	// writing to anywhere in the system.
@@ -800,36 +798,39 @@ func sshGetMutexProfile(sandboxDir string, fs any, a []string, w sshd.StringWrit
 	return w.WriteLine(fmt.Sprintf("Mutex profile created at %s", a))
 }
 
-func sshLogLevel(l *logrus.Logger, fs any, a []string, w sshd.StringWriter) error {
+func sshLogLevel(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error {
+	rh, ok := HandlerOf(l)
+	if !ok {
+		return w.WriteLine("Log level is not reconfigurable on this logger")
+	}
+
 	if len(a) == 0 {
-		return w.WriteLine(fmt.Sprintf("Log level is: %s", l.Level))
+		return w.WriteLine(fmt.Sprintf("Log level is: %s", logLevelName(rh.GetLevel())))
 	}
 
-	level, err := logrus.ParseLevel(a[0])
+	level, err := parseLogLevel(strings.ToLower(a[0]))
 	if err != nil {
-		return w.WriteLine(fmt.Sprintf("Unknown log level %s. Possible log levels: %s", a, logrus.AllLevels))
+		return w.WriteLine(fmt.Sprintf("Unknown log level %s. Possible log levels: trace, debug, info, warn, error", a))
 	}
 
-	l.SetLevel(level)
-	return w.WriteLine(fmt.Sprintf("Log level is: %s", l.Level))
+	rh.SetLevel(level)
+	return w.WriteLine(fmt.Sprintf("Log level is: %s", logLevelName(rh.GetLevel())))
 }
 
-func sshLogFormat(l *logrus.Logger, fs any, a []string, w sshd.StringWriter) error {
+func sshLogFormat(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error {
+	rh, ok := HandlerOf(l)
+	if !ok {
+		return w.WriteLine("Log format is not reconfigurable on this logger")
+	}
+
 	if len(a) == 0 {
-		return w.WriteLine(fmt.Sprintf("Log format is: %s", reflect.TypeOf(l.Formatter)))
+		return w.WriteLine(fmt.Sprintf("Log format is: %s", rh.GetFormat()))
 	}
 
-	logFormat := strings.ToLower(a[0])
-	switch logFormat {
-	case "text":
-		l.Formatter = &logrus.TextFormatter{}
-	case "json":
-		l.Formatter = &logrus.JSONFormatter{}
-	default:
-		return fmt.Errorf("unknown log format `%s`. possible formats: %s", logFormat, []string{"text", "json"})
+	if err := rh.SetFormat(strings.ToLower(a[0])); err != nil {
+		return err
 	}
-
-	return w.WriteLine(fmt.Sprintf("Log format is: %s", reflect.TypeOf(l.Formatter)))
+	return w.WriteLine(fmt.Sprintf("Log format is: %s", rh.GetFormat()))
 }
 
 func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {

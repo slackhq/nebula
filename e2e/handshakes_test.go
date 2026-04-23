@@ -4,6 +4,7 @@
 package e2e
 
 import (
+	"log/slog"
 	"net/netip"
 	"slices"
 	"testing"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
@@ -798,22 +798,20 @@ func TestStage1RaceRelays2(t *testing.T) {
 
 	t.Log("Wait until we remove extra tunnels")
 	l.Info("Wait until we remove extra tunnels")
-	l.WithFields(
-		logrus.Fields{
-			"myControl":    len(myControl.GetHostmap().Indexes),
-			"theirControl": len(theirControl.GetHostmap().Indexes),
-			"relayControl": len(relayControl.GetHostmap().Indexes),
-		}).Info("Waiting for hostinfos to be removed...")
+	l.Info("Waiting for hostinfos to be removed...",
+		slog.Int("myControl", len(myControl.GetHostmap().Indexes)),
+		slog.Int("theirControl", len(theirControl.GetHostmap().Indexes)),
+		slog.Int("relayControl", len(relayControl.GetHostmap().Indexes)),
+	)
 	hostInfos := len(myControl.GetHostmap().Indexes) + len(theirControl.GetHostmap().Indexes) + len(relayControl.GetHostmap().Indexes)
 	retries := 60
 	for hostInfos > 6 && retries > 0 {
 		hostInfos = len(myControl.GetHostmap().Indexes) + len(theirControl.GetHostmap().Indexes) + len(relayControl.GetHostmap().Indexes)
-		l.WithFields(
-			logrus.Fields{
-				"myControl":    len(myControl.GetHostmap().Indexes),
-				"theirControl": len(theirControl.GetHostmap().Indexes),
-				"relayControl": len(relayControl.GetHostmap().Indexes),
-			}).Info("Waiting for hostinfos to be removed...")
+		l.Info("Waiting for hostinfos to be removed...",
+			slog.Int("myControl", len(myControl.GetHostmap().Indexes)),
+			slog.Int("theirControl", len(theirControl.GetHostmap().Indexes)),
+			slog.Int("relayControl", len(relayControl.GetHostmap().Indexes)),
+		)
 		assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 		t.Log("Connection manager hasn't ticked yet")
 		time.Sleep(time.Second)

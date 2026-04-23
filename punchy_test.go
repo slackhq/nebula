@@ -1,13 +1,12 @@
 package nebula
 
 import (
-	"io"
+	"context"
+	"log/slog"
 	"testing"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +17,7 @@ func TestNewPunchyFromConfig(t *testing.T) {
 	c := config.NewC(l)
 
 	// Test defaults
-	p := NewPunchyFromConfig(test.NewSlogLogger(), c)
+	p := NewPunchyFromConfig(test.NewLogger(), c)
 	assert.False(t, p.GetPunch())
 	assert.False(t, p.GetRespond())
 	assert.Equal(t, time.Second, p.GetDelay())
@@ -26,33 +25,33 @@ func TestNewPunchyFromConfig(t *testing.T) {
 
 	// punchy deprecation
 	c.Settings["punchy"] = true
-	p = NewPunchyFromConfig(test.NewSlogLogger(), c)
+	p = NewPunchyFromConfig(test.NewLogger(), c)
 	assert.True(t, p.GetPunch())
 
 	// punchy.punch
 	c.Settings["punchy"] = map[string]any{"punch": true}
-	p = NewPunchyFromConfig(test.NewSlogLogger(), c)
+	p = NewPunchyFromConfig(test.NewLogger(), c)
 	assert.True(t, p.GetPunch())
 
 	// punch_back deprecation
 	c.Settings["punch_back"] = true
-	p = NewPunchyFromConfig(test.NewSlogLogger(), c)
+	p = NewPunchyFromConfig(test.NewLogger(), c)
 	assert.True(t, p.GetRespond())
 
 	// punchy.respond
 	c.Settings["punchy"] = map[string]any{"respond": true}
 	c.Settings["punch_back"] = false
-	p = NewPunchyFromConfig(test.NewSlogLogger(), c)
+	p = NewPunchyFromConfig(test.NewLogger(), c)
 	assert.True(t, p.GetRespond())
 
 	// punchy.delay
 	c.Settings["punchy"] = map[string]any{"delay": "1m"}
-	p = NewPunchyFromConfig(test.NewSlogLogger(), c)
+	p = NewPunchyFromConfig(test.NewLogger(), c)
 	assert.Equal(t, time.Minute, p.GetDelay())
 
 	// punchy.respond_delay
 	c.Settings["punchy"] = map[string]any{"respond_delay": "1m"}
-	p = NewPunchyFromConfig(test.NewSlogLogger(), c)
+	p = NewPunchyFromConfig(test.NewLogger(), c)
 	assert.Equal(t, time.Minute, p.GetRespondDelay())
 }
 
@@ -65,7 +64,7 @@ punchy:
   delay: 1m
   respond: false
 `))
-	p := NewPunchyFromConfig(test.NewSlogLogger(), c)
+	p := NewPunchyFromConfig(test.NewLogger(), c)
 	assert.Equal(t, delay, p.GetDelay())
 	assert.False(t, p.GetRespond())
 
@@ -94,133 +93,145 @@ punchy:
 // entry counts so that warning is tolerated without being locked into
 // the format.
 
-type capturingHook struct {
-	entries []*logrus.Entry
+type capturedEntry struct {
+	Level slog.Level
+	Msg   string
+	Attrs map[string]any
 }
 
-func (h *capturingHook) Levels() []logrus.Level { return logrus.AllLevels }
+// capturingHandler is a slog.Handler that records each Record it receives so
+// tests can assert on the level, message, and attribute map of individual log
+// lines without coupling to any specific text format.
+type capturingHandler struct {
+	entries []capturedEntry
+}
 
-func (h *capturingHook) Fire(e *logrus.Entry) error {
-	dup := *e
-	dup.Data = logrus.Fields{}
-	for k, v := range e.Data {
-		dup.Data[k] = v
+func (h *capturingHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+
+func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
+	e := capturedEntry{
+		Level: r.Level,
+		Msg:   r.Message,
+		Attrs: make(map[string]any),
 	}
-	h.entries = append(h.entries, &dup)
+	r.Attrs(func(a slog.Attr) bool {
+		e.Attrs[a.Key] = a.Value.Resolve().Any()
+		return true
+	})
+	h.entries = append(h.entries, e)
 	return nil
 }
 
-func newCapturingPunchyLogger(t *testing.T) (*logrus.Logger, *capturingHook) {
+func (h *capturingHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *capturingHandler) WithGroup(_ string) slog.Handler      { return h }
+
+func newCapturingPunchyLogger(t *testing.T) (*slog.Logger, *capturingHandler) {
 	t.Helper()
-	lr := logrus.New()
-	lr.SetOutput(io.Discard)
-	lr.SetLevel(logrus.DebugLevel)
-	hook := &capturingHook{}
-	lr.AddHook(hook)
-	return lr, hook
+	hook := &capturingHandler{}
+	return slog.New(hook), hook
 }
 
-func findEntry(t *testing.T, entries []*logrus.Entry, msg string) *logrus.Entry {
+func findEntry(t *testing.T, entries []capturedEntry, msg string) capturedEntry {
 	t.Helper()
 	for _, e := range entries {
-		if e.Message == msg {
+		if e.Msg == msg {
 			return e
 		}
 	}
 	t.Fatalf("no entry with message %q among %d entries", msg, len(entries))
-	return nil
+	return capturedEntry{}
 }
 
 func TestPunchy_LogFormat_InitialEnabled(t *testing.T) {
-	lr, hook := newCapturingPunchyLogger(t)
+	l, hook := newCapturingPunchyLogger(t)
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(`punchy: {punch: true}`))
 
-	NewPunchyFromConfig(logbridge.FromLogrus(lr), c)
+	NewPunchyFromConfig(l, c)
 
 	entry := findEntry(t, hook.entries, "punchy enabled")
-	assert.Equal(t, logrus.InfoLevel, entry.Level)
-	assert.Empty(t, entry.Data)
+	assert.Equal(t, slog.LevelInfo, entry.Level)
+	assert.Empty(t, entry.Attrs)
 }
 
 func TestPunchy_LogFormat_InitialDisabled(t *testing.T) {
-	lr, hook := newCapturingPunchyLogger(t)
+	l, hook := newCapturingPunchyLogger(t)
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(`punchy: {punch: false}`))
 
-	NewPunchyFromConfig(logbridge.FromLogrus(lr), c)
+	NewPunchyFromConfig(l, c)
 
 	entry := findEntry(t, hook.entries, "punchy disabled")
-	assert.Equal(t, logrus.InfoLevel, entry.Level)
-	assert.Empty(t, entry.Data)
+	assert.Equal(t, slog.LevelInfo, entry.Level)
+	assert.Empty(t, entry.Attrs)
 }
 
 func TestPunchy_LogFormat_ReloadPunchUnsupported(t *testing.T) {
-	lr, hook := newCapturingPunchyLogger(t)
+	l, hook := newCapturingPunchyLogger(t)
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(`punchy: {punch: false}`))
-	NewPunchyFromConfig(logbridge.FromLogrus(lr), c)
+	NewPunchyFromConfig(l, c)
 	hook.entries = nil
 
 	require.NoError(t, c.ReloadConfigString(`punchy: {punch: true}`))
 
 	entry := findEntry(t, hook.entries, "Changing punchy.punch with reload is not supported, ignoring.")
-	assert.Equal(t, logrus.WarnLevel, entry.Level)
-	assert.Empty(t, entry.Data)
+	assert.Equal(t, slog.LevelWarn, entry.Level)
+	assert.Empty(t, entry.Attrs)
 }
 
 func TestPunchy_LogFormat_ReloadRespond(t *testing.T) {
-	lr, hook := newCapturingPunchyLogger(t)
+	l, hook := newCapturingPunchyLogger(t)
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(`punchy: {respond: false}`))
-	NewPunchyFromConfig(logbridge.FromLogrus(lr), c)
+	NewPunchyFromConfig(l, c)
 	hook.entries = nil
 
 	require.NoError(t, c.ReloadConfigString(`punchy: {respond: true}`))
 
 	entry := findEntry(t, hook.entries, "punchy.respond changed")
-	assert.Equal(t, logrus.InfoLevel, entry.Level)
-	assert.Equal(t, logrus.Fields{"respond": true}, entry.Data)
+	assert.Equal(t, slog.LevelInfo, entry.Level)
+	assert.Equal(t, map[string]any{"respond": true}, entry.Attrs)
 }
 
 func TestPunchy_LogFormat_ReloadDelay(t *testing.T) {
-	lr, hook := newCapturingPunchyLogger(t)
+	l, hook := newCapturingPunchyLogger(t)
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(`punchy: {delay: 1s}`))
-	NewPunchyFromConfig(logbridge.FromLogrus(lr), c)
+	NewPunchyFromConfig(l, c)
 	hook.entries = nil
 
 	require.NoError(t, c.ReloadConfigString(`punchy: {delay: 10s}`))
 
 	entry := findEntry(t, hook.entries, "punchy.delay changed")
-	assert.Equal(t, logrus.InfoLevel, entry.Level)
-	assert.Equal(t, logrus.Fields{"delay": 10 * time.Second}, entry.Data)
+	assert.Equal(t, slog.LevelInfo, entry.Level)
+	assert.Equal(t, map[string]any{"delay": 10 * time.Second}, entry.Attrs)
 }
 
 func TestPunchy_LogFormat_ReloadTargetAllRemotes(t *testing.T) {
-	lr, hook := newCapturingPunchyLogger(t)
+	l, hook := newCapturingPunchyLogger(t)
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(`punchy: {target_all_remotes: false}`))
-	NewPunchyFromConfig(logbridge.FromLogrus(lr), c)
+	NewPunchyFromConfig(l, c)
 	hook.entries = nil
 
 	require.NoError(t, c.ReloadConfigString(`punchy: {target_all_remotes: true}`))
 
 	entry := findEntry(t, hook.entries, "punchy.target_all_remotes changed")
-	assert.Equal(t, logrus.InfoLevel, entry.Level)
-	assert.Equal(t, logrus.Fields{"target_all_remotes": true}, entry.Data)
+	assert.Equal(t, slog.LevelInfo, entry.Level)
+	assert.Equal(t, map[string]any{"target_all_remotes": true}, entry.Attrs)
 }
 
 func TestPunchy_LogFormat_ReloadRespondDelay(t *testing.T) {
-	lr, hook := newCapturingPunchyLogger(t)
+	l, hook := newCapturingPunchyLogger(t)
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(`punchy: {respond_delay: 5s}`))
-	NewPunchyFromConfig(logbridge.FromLogrus(lr), c)
+	NewPunchyFromConfig(l, c)
 	hook.entries = nil
 
 	require.NoError(t, c.ReloadConfigString(`punchy: {respond_delay: 15s}`))
 
 	entry := findEntry(t, hook.entries, "punchy.respond_delay changed")
-	assert.Equal(t, logrus.InfoLevel, entry.Level)
-	assert.Equal(t, logrus.Fields{"respond_delay": 15 * time.Second}, entry.Data)
+	assert.Equal(t, slog.LevelInfo, entry.Level)
+	assert.Equal(t, map[string]any{"respond_delay": 15 * time.Second}, entry.Attrs)
 }
