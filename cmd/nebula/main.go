@@ -3,14 +3,13 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"runtime/debug"
 	"strings"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/util"
 )
 
@@ -56,8 +55,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	l := logrus.New()
-	l.Out = os.Stdout
+	l := nebula.NewLogger(os.Stdout)
 
 	c := config.NewC(l)
 	err := c.Load(*configPath)
@@ -68,14 +66,14 @@ func main() {
 
 	ctrl, err := nebula.Main(c, *configTest, Build, l, nil)
 	if err != nil {
-		util.LogWithContextIfNeeded("Failed to start", err, logbridge.FromLogrus(l))
+		util.LogWithContextIfNeeded("Failed to start", err, l)
 		os.Exit(1)
 	}
 
 	if !*configTest {
 		wait, err := ctrl.Start()
 		if err != nil {
-			util.LogWithContextIfNeeded("Error while running", err, logbridge.FromLogrus(l))
+			util.LogWithContextIfNeeded("Error while running", err, l)
 			os.Exit(1)
 		}
 
@@ -83,7 +81,7 @@ func main() {
 		notifyReady(l)
 
 		if err := wait(); err != nil {
-			l.WithError(err).Error("Nebula stopped due to fatal error")
+			l.Error("Nebula stopped due to fatal error", slog.Any("error", err))
 			os.Exit(2)
 		}
 

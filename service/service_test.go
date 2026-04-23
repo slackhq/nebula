@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"dario.cat/mergo"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
@@ -75,8 +74,7 @@ func newSimpleService(caCrt cert.Certificate, caKey []byte, name string, udpIp n
 		panic(err)
 	}
 
-	logger := logrus.New()
-	logger.Out = os.Stdout
+	logger := nebula.NewLogger(os.Stdout)
 
 	control, err := nebula.Main(&c, false, "custom-app", logger, overlay.NewUserDeviceFromConfig)
 	if err != nil {

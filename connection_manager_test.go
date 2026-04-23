@@ -32,7 +32,7 @@ func newTestLighthouse() *LightHouse {
 }
 
 func Test_NewConnectionManagerTest(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	//_, tuncidr, _ := net.ParseCIDR("1.1.1.1/24")
 	localrange := netip.MustParsePrefix("10.1.1.1/24")
 	vpnIp := netip.MustParseAddr("172.1.1.2")
@@ -64,8 +64,8 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 
 	// Create manager
 	conf := config.NewC(test.NewLogger())
-	punchy := NewPunchyFromConfig(test.NewSlogLogger(), conf)
-	nc := newConnectionManagerFromConfig(test.NewSlogLogger(), conf, hostMap, punchy)
+	punchy := NewPunchyFromConfig(test.NewLogger(), conf)
+	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
 	nc.intf = ifce
 	p := []byte("")
 	nb := make([]byte, 12, 12)
@@ -115,7 +115,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 }
 
 func Test_NewConnectionManagerTest2(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	//_, tuncidr, _ := net.ParseCIDR("1.1.1.1/24")
 	localrange := netip.MustParsePrefix("10.1.1.1/24")
 	vpnIp := netip.MustParseAddr("172.1.1.2")
@@ -147,8 +147,8 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 
 	// Create manager
 	conf := config.NewC(test.NewLogger())
-	punchy := NewPunchyFromConfig(test.NewSlogLogger(), conf)
-	nc := newConnectionManagerFromConfig(test.NewSlogLogger(), conf, hostMap, punchy)
+	punchy := NewPunchyFromConfig(test.NewLogger(), conf)
+	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
 	nc.intf = ifce
 	p := []byte("")
 	nb := make([]byte, 12, 12)
@@ -201,7 +201,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 }
 
 func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	localrange := netip.MustParsePrefix("10.1.1.1/24")
 	vpnAddrs := []netip.Addr{netip.MustParseAddr("172.1.1.2")}
 	preferredRanges := []netip.Prefix{localrange}
@@ -235,8 +235,8 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	conf.Settings["tunnels"] = map[string]any{
 		"drop_inactive": true,
 	}
-	punchy := NewPunchyFromConfig(test.NewSlogLogger(), conf)
-	nc := newConnectionManagerFromConfig(test.NewSlogLogger(), conf, hostMap, punchy)
+	punchy := NewPunchyFromConfig(test.NewLogger(), conf)
+	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
 	assert.True(t, nc.dropInactive.Load())
 	nc.intf = ifce
 
@@ -299,7 +299,7 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 // Disconnect only if disconnectInvalid: true is set.
 func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	now := time.Now()
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 
 	vpncidr := netip.MustParsePrefix("172.1.1.1/24")
 	localrange := netip.MustParsePrefix("10.1.1.1/24")
@@ -361,8 +361,8 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 
 	// Create manager
 	conf := config.NewC(test.NewLogger())
-	punchy := NewPunchyFromConfig(test.NewSlogLogger(), conf)
-	nc := newConnectionManagerFromConfig(test.NewSlogLogger(), conf, hostMap, punchy)
+	punchy := NewPunchyFromConfig(test.NewLogger(), conf)
+	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
 	nc.intf = ifce
 	ifce.connectionManager = nc
 

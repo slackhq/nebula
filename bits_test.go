@@ -8,7 +8,7 @@ import (
 )
 
 func TestBits(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	b := NewBits(10)
 
 	// make sure it is the right size
@@ -71,7 +71,7 @@ func TestBits(t *testing.T) {
 }
 
 func TestBitsLargeJumps(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	b := NewBits(10)
 	b.lostCounter.Clear()
 
@@ -88,7 +88,7 @@ func TestBitsLargeJumps(t *testing.T) {
 }
 
 func TestBitsDupeCounter(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	b := NewBits(10)
 	b.lostCounter.Clear()
 	b.dupeCounter.Clear()
@@ -113,7 +113,7 @@ func TestBitsDupeCounter(t *testing.T) {
 }
 
 func TestBitsOutOfWindowCounter(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	b := NewBits(10)
 	b.lostCounter.Clear()
 	b.dupeCounter.Clear()
@@ -142,7 +142,7 @@ func TestBitsOutOfWindowCounter(t *testing.T) {
 }
 
 func TestBitsLostCounter(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	b := NewBits(10)
 	b.lostCounter.Clear()
 	b.dupeCounter.Clear()
@@ -222,7 +222,7 @@ func TestBitsLostCounter(t *testing.T) {
 }
 
 func TestBitsLostCounterIssue1(t *testing.T) {
-	l := test.NewSlogLogger()
+	l := test.NewLogger()
 	b := NewBits(10)
 	b.lostCounter.Clear()
 	b.dupeCounter.Clear()

@@ -3,8 +3,8 @@
 
 package main
 
-import "github.com/sirupsen/logrus"
+import "log/slog"
 
-func HookLogger(l *logrus.Logger) {
+func HookLogger(l *slog.Logger) {
 	// Do nothing, let the logs flow to stdout/stderr
 }

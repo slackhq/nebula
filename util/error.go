@@ -51,16 +51,18 @@ func (ce *ContextualError) Unwrap() error {
 	return ce.RealError
 }
 
-// Log emits ce as a single error-level log line with Fields and RealError
+// Log emits ce as a single error-level log line with RealError and Fields
 // promoted to top-level attributes, matching the flat shape that logrus
-// WithFields(...).WithError(...).Error(Context) produced pre-migration.
+// WithError(...).WithFields(...).Error(Context) produced pre-migration.
+// error is emitted before any custom fields so operators scanning for it do
+// not have to hunt through case-specific context.
 func (ce *ContextualError) Log(l *slog.Logger) {
 	attrs := make([]slog.Attr, 0, len(ce.Fields)+1)
-	for k, v := range ce.Fields {
-		attrs = append(attrs, slog.Any(k, v))
-	}
 	if ce.RealError != nil {
 		attrs = append(attrs, slog.Any("error", ce.RealError))
+	}
+	for k, v := range ce.Fields {
+		attrs = append(attrs, slog.Any(k, v))
 	}
 	l.LogAttrs(context.Background(), slog.LevelError, ce.Context, attrs...)
 }

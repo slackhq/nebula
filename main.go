@@ -3,15 +3,14 @@ package nebula
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"runtime/debug"
 	"strings"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/logbridge"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/udp"
@@ -21,7 +20,7 @@ import (
 
 type m = map[string]any
 
-func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
+func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Automatically cancel the context if Main returns an error, to signal all created goroutines to quit.
 	defer func() {
@@ -34,11 +33,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		buildVersion = moduleVersion()
 	}
 
-	l := logger
-	l.Formatter = &logrus.TextFormatter{
-		FullTimestamp: true,
-	}
-
 	// Print the config if in test, the exit comes later
 	if configTest {
 		b, err := yaml.Marshal(c.Settings)
@@ -47,7 +41,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 
 		// Print the final config
-		l.Println(string(b))
+		l.Info(string(b))
 	}
 
 	err := configLogger(l, c)
@@ -58,31 +52,31 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	c.RegisterReloadCallback(func(c *config.C) {
 		err := configLogger(l, c)
 		if err != nil {
-			l.WithError(err).Error("Failed to configure the logger")
+			l.Error("Failed to configure the logger", slog.Any("error", err))
 		}
 	})
 
-	pki, err := NewPKIFromConfig(logbridge.FromLogrus(l), c)
+	pki, err := NewPKIFromConfig(l, c)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to load PKI from config", err)
 	}
 
-	fw, err := NewFirewallFromConfig(logbridge.FromLogrus(l), pki.getCertState(), c)
+	fw, err := NewFirewallFromConfig(l, pki.getCertState(), c)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while loading firewall rules", err)
 	}
-	l.WithField("firewallHashes", fw.GetRuleHashes()).Info("Firewall started")
+	l.Info("Firewall started", slog.Any("firewallHashes", fw.GetRuleHashes()))
 
-	ssh, err := sshd.NewSSHServer(logbridge.FromLogrus(l).With("subsystem", "sshd"))
+	ssh, err := sshd.NewSSHServer(l.With("subsystem", "sshd"))
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while creating SSH server", err)
 	}
-	wireSSHReload(logbridge.FromLogrus(l), ssh, c)
+	wireSSHReload(l, ssh, c)
 	var sshStart func()
 	if c.GetBool("sshd.enabled", false) {
-		sshStart, err = configSSH(logbridge.FromLogrus(l), ssh, c)
+		sshStart, err = configSSH(l, ssh, c)
 		if err != nil {
-			l.WithError(err).Warn("Failed to configure sshd, ssh debugging will not be available")
+			l.Warn("Failed to configure sshd, ssh debugging will not be available", slog.Any("error", err))
 			sshStart = nil
 		}
 	}
@@ -100,7 +94,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			routines = 1
 		}
 		if routines > 1 {
-			l.WithField("routines", routines).Info("Using multiple routines")
+			l.Info("Using multiple routines", slog.Int("routines", routines))
 		}
 	} else {
 		// deprecated and undocumented
@@ -108,7 +102,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		udpQueues := c.GetInt("listen.routines", 1)
 		routines = max(tunQueues, udpQueues)
 		if routines != 1 {
-			l.WithField("routines", routines).Warn("Setting tun.routines and listen.routines is deprecated. Use `routines` instead")
+			l.Warn("Setting tun.routines and listen.routines is deprecated. Use `routines` instead", slog.Int("routines", routines))
 		}
 	}
 
@@ -121,7 +115,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		conntrackCacheTimeout = 1 * time.Second
 	}
 	if conntrackCacheTimeout > 0 {
-		l.WithField("duration", conntrackCacheTimeout).Info("Using routine-local conntrack cache")
+		l.Info("Using routine-local conntrack cache", slog.Duration("duration", conntrackCacheTimeout))
 	}
 
 	var tun overlay.Device
@@ -132,7 +126,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			deviceFactory = overlay.NewDeviceFromConfig
 		}
 
-		tun, err = deviceFactory(c, logbridge.FromLogrus(l), pki.getCertState().myVpnNetworks, routines)
+		tun, err = deviceFactory(c, l, pki.getCertState().myVpnNetworks, routines)
 		if err != nil {
 			return nil, util.ContextualizeIfNeeded("Failed to get a tun/tap device", err)
 		}
@@ -167,8 +161,8 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 
 		for i := 0; i < routines; i++ {
-			l.Infof("listening on %v", netip.AddrPortFrom(listenHost, uint16(port)))
-			udpServer, err := udp.NewListener(logbridge.FromLogrus(l), listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
+			l.Info("listening", slog.Any("addr", netip.AddrPortFrom(listenHost, uint16(port))))
+			udpServer, err := udp.NewListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}
@@ -187,9 +181,9 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 	}
 
-	hostMap := NewHostMapFromConfig(logbridge.FromLogrus(l), c)
-	punchy := NewPunchyFromConfig(logbridge.FromLogrus(l), c)
-	connManager := newConnectionManagerFromConfig(logbridge.FromLogrus(l), c, hostMap, punchy)
+	hostMap := NewHostMapFromConfig(l, c)
+	punchy := NewPunchyFromConfig(l, c)
+	connManager := newConnectionManagerFromConfig(l, c, hostMap, punchy)
 	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, pki.getCertState(), udpConns[0], punchy)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to initialize lighthouse handler", err)
@@ -213,12 +207,12 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		messageMetrics: messageMetrics,
 	}
 
-	handshakeManager := NewHandshakeManager(logbridge.FromLogrus(l), hostMap, lightHouse, udpConns[0], handshakeConfig)
+	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
 
-	ds, err := newDnsServerFromConfig(ctx, logbridge.FromLogrus(l), pki.getCertState(), hostMap, c)
+	ds, err := newDnsServerFromConfig(ctx, l, pki.getCertState(), hostMap, c)
 	if err != nil {
-		l.WithError(err).Warn("Failed to start DNS responder")
+		l.Warn("Failed to start DNS responder", slog.Any("error", err))
 	}
 
 	ifConfig := &InterfaceConfig{
@@ -239,10 +233,10 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		routines:              routines,
 		MessageMetrics:        messageMetrics,
 		version:               buildVersion,
-		relayManager:          NewRelayManager(ctx, logbridge.FromLogrus(l), hostMap, c),
+		relayManager:          NewRelayManager(ctx, l, hostMap, c),
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
-		l:                     logbridge.FromLogrus(l),
+		l:                     l,
 	}
 
 	var ifce *Interface
@@ -264,7 +258,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		go handshakeManager.Run(ctx)
 	}
 
-	statsStart, err := startStats(logbridge.FromLogrus(l), c, buildVersion, configTest)
+	statsStart, err := startStats(l, c, buildVersion, configTest)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to start stats emitter", err)
 	}
@@ -280,7 +274,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	return &Control{
 		state:                  StateReady,
 		f:                      ifce,
-		l:                      logbridge.FromLogrus(l),
+		l:                      l,
 		ctx:                    ctx,
 		cancel:                 cancel,
 		sshStart:               sshStart,
