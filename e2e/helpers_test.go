@@ -12,10 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"log/slog"
+
 	"dario.cat/mergo"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
-	"log/slog"
 
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
