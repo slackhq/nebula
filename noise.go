@@ -15,14 +15,12 @@ type endianness interface {
 var noiseEndianness endianness = binary.BigEndian
 
 type NebulaCipherState struct {
-	c noise.Cipher
-	//k [32]byte
-	//n uint64
+	c cipher.AEAD
 }
 
 func NewNebulaCipherState(s *noise.CipherState) *NebulaCipherState {
-	return &NebulaCipherState{c: s.Cipher()}
-
+	x := s.Cipher()
+	return &NebulaCipherState{c: x.(cipher.AEAD)}
 }
 
 // EncryptDanger encrypts and authenticates a given payload.
@@ -46,7 +44,7 @@ func (s *NebulaCipherState) EncryptDanger(out, ad, plaintext []byte, n uint64, n
 		nb[2] = 0
 		nb[3] = 0
 		noiseEndianness.PutUint64(nb[4:], n)
-		out = s.c.(cipher.AEAD).Seal(out, nb, plaintext, ad)
+		out = s.c.Seal(out, nb, plaintext, ad)
 		//l.Debugf("Encryption: outlen: %d, nonce: %d, ad: %s, plainlen %d", len(out), n, ad, len(plaintext))
 		return out, nil
 	} else {
@@ -61,7 +59,7 @@ func (s *NebulaCipherState) DecryptDanger(out, ad, ciphertext []byte, n uint64, 
 		nb[2] = 0
 		nb[3] = 0
 		noiseEndianness.PutUint64(nb[4:], n)
-		return s.c.(cipher.AEAD).Open(out, nb, ciphertext, ad)
+		return s.c.Open(out, nb, ciphertext, ad)
 	} else {
 		return []byte{}, nil
 	}
@@ -69,7 +67,7 @@ func (s *NebulaCipherState) DecryptDanger(out, ad, ciphertext []byte, n uint64, 
 
 func (s *NebulaCipherState) Overhead() int {
 	if s != nil {
-		return s.c.(cipher.AEAD).Overhead()
+		return s.c.Overhead()
 	}
 	return 0
 }
