@@ -32,6 +32,15 @@ const tunDrainCap = 64 //256
 // any reallocations.
 const gsoInitialPayIovs = 66
 
+// gsoWriteBufCap is the initial per-queue coalesce scratch capacity used by
+// WriteGSO to assemble [virtio_hdr || IP/TCP hdr || pays...] into a single
+// contiguous buffer so we can emit the superpacket via a single write()
+// instead of writev(). One worst-case TSO superpacket is bounded by the
+// virtio spec at 64KiB; 128KiB gives comfortable slack for the 10-byte
+// virtio header, the IP/TCP header, and any future size bumps. Grown on
+// demand if a superpacket exceeds this.
+const gsoWriteBufCap = tunSegBufSize
+
 // validVnetHdr is the 10-byte virtio_net_hdr we prepend to every non-GSO TUN
 // write. Only flag set is VIRTIO_NET_HDR_F_DATA_VALID, which marks the skb
 // CHECKSUM_UNNECESSARY so the receiving network stack skips L4 checksum
@@ -65,10 +74,20 @@ type Offload struct {
 	// by WriteGSO. Separate from validVnetHdr so a concurrent non-GSO Write on
 	// another queue never observes a half-written header.
 	gsoHdrBuf [virtioNetHdrLen]byte
-	// gsoIovs is the writev iovec scratch for WriteGSO. Sized to hold the
-	// virtio header + IP/TCP header + up to gsoInitialPayIovs payload
-	// fragments; grown on demand if a coalescer pushes more.
+	// gsoIovs is a legacy writev iovec scratch. No longer used by the
+	// WriteGSO path (which coalesces into gsoWriteBuf and uses a single
+	// write()) but retained for any other iovec-based path that may use it.
 	gsoIovs []unix.Iovec
+
+	// gsoWriteBuf is a per-queue scratch used by WriteGSO to coalesce the
+	// virtio_net_hdr + IP/TCP header + payload fragments into a single
+	// contiguous buffer, which is then written to the TUN fd with one
+	// write() syscall. This mirrors wireguard-go's approach and avoids
+	// triggering a kernel refcount use-after-free in skb_set_owner_w /
+	// sock_wfree observed on Linux 4.19 TUN when scatter-gather writev is
+	// combined with GSO-flagged virtio_net_hdr in the tun_chr_write_iter
+	// path. Grown on demand if a superpacket exceeds the initial cap.
+	gsoWriteBuf []byte
 }
 
 func newOffload(fd int, shutdownFd int) (*Offload, error) {
@@ -90,8 +109,9 @@ func newOffload(fd int, shutdownFd int) (*Offload, error) {
 			{Fd: int32(shutdownFd), Events: unix.POLLIN},
 		},
 
-		segBuf:  make([]byte, tunSegBufCap),
-		gsoIovs: make([]unix.Iovec, 2, 2+gsoInitialPayIovs),
+		segBuf:      make([]byte, tunSegBufCap),
+		gsoIovs:     make([]unix.Iovec, 2, 2+gsoInitialPayIovs),
+		gsoWriteBuf: make([]byte, 0, gsoWriteBufCap),
 	}
 
 	out.writeIovs[0].Base = &validVnetHdr[0]
@@ -291,18 +311,59 @@ func (r *Offload) rawWrite(iovs []unix.Iovec) (int, error) {
 	}
 }
 
+// rawWriteSingle writes buf to the TUN fd with a single write() syscall.
+// Unlike rawWrite (which uses writev), this avoids the kernel
+// scatter-gather path that triggers a use-after-free in
+// tun_chr_write_iter → sock_alloc_send_pskb → skb_set_owner_w on Linux
+// 4.19 TUN when the virtio_net_hdr requests TSO segmentation. The caller
+// is responsible for including the virtio_net_hdr prefix in buf.
+func (r *Offload) rawWriteSingle(buf []byte) (int, error) {
+	for {
+		n, err := unix.Write(r.fd, buf)
+		if err == nil {
+			if n < virtioNetHdrLen {
+				return 0, io.ErrShortWrite
+			}
+			return n - virtioNetHdrLen, nil
+		}
+		if err == unix.EAGAIN {
+			if werr := r.blockOnWrite(); werr != nil {
+				return 0, werr
+			}
+			continue
+		}
+		if err == unix.EINTR {
+			continue
+		}
+		if err == unix.EBADF {
+			return 0, os.ErrClosed
+		}
+		return 0, err
+	}
+}
+
 // GSOSupported reports whether this queue was opened with IFF_VNET_HDR and
 // can accept WriteGSO. When false, callers should fall back to per-segment
 // Write calls.
 func (r *Offload) GSOSupported() bool { return true }
 
-// WriteGSO emits a TCP TSO superpacket in a single writev. hdr is the
-// IPv4/IPv6 + TCP header prefix (already finalized — total length, IP csum,
-// and TCP pseudo-header partial set by the caller). pays are payload
-// fragments whose concatenation forms the full coalesced payload; each
-// slice is read-only and must stay valid until return. gsoSize is the MSS;
-// every segment except possibly the last is exactly gsoSize bytes.
-// csumStart is the byte offset where the TCP header begins within hdr.
+// WriteGSO emits a TCP TSO superpacket. hdr is the IPv4/IPv6 + TCP header
+// prefix (already finalized — total length, IP csum, and TCP pseudo-header
+// partial set by the caller). pays are payload fragments whose concatenation
+// forms the full coalesced payload. gsoSize is the MSS; every segment except
+// possibly the last is exactly gsoSize bytes. csumStart is the byte offset
+// where the TCP header begins within hdr.
+//
+// Implementation note: this path coalesces [virtio_hdr || hdr || pays...]
+// into a single contiguous scratch buffer (r.gsoWriteBuf) and emits it via
+// one write() syscall rather than writev() with a scatter-gather iovec.
+// The scatter-gather path triggered a kernel-side use-after-free on Linux
+// 4.19 TUN where tun_chr_write_iter → sock_alloc_send_pskb →
+// skb_set_owner_w could be invoked with a zero sk_wmem_alloc, crashing
+// the router. The single-write path mirrors wireguard-go's design (see
+// golang.zx2c4.com/wireguard/tun/tun_linux.go Write — it always coalesces
+// GRO-merged data into a single contiguous buffer before calling
+// tunFile.Write) and has no equivalent failure mode.
 func (r *Offload) WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, isV6 bool, csumStart uint16) error {
 	if len(hdr) == 0 || len(pays) == 0 {
 		return nil
@@ -334,24 +395,26 @@ func (r *Offload) WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, isV6 bool,
 	}
 	vhdr.encode(r.gsoHdrBuf[:])
 
-	// Build the iovec array: [virtio_hdr, hdr, pays...]. r.gsoIovs[0] is
-	// wired to gsoHdrBuf at construction and never changes.
-	need := 2 + len(pays)
-	if cap(r.gsoIovs) < need {
-		grown := make([]unix.Iovec, need)
-		grown[0] = r.gsoIovs[0]
-		r.gsoIovs = grown
+	// Coalesce [virtio_hdr || hdr || pays...] into a single contiguous
+	// buffer. This avoids the kernel scatter-gather write path entirely.
+	need := virtioNetHdrLen + len(hdr) + totalPay
+	if cap(r.gsoWriteBuf) < need {
+		// Grow geometrically to amortize reallocs.
+		newCap := cap(r.gsoWriteBuf) * 2
+		if newCap < need {
+			newCap = need
+		}
+		r.gsoWriteBuf = make([]byte, 0, newCap)
 	} else {
-		r.gsoIovs = r.gsoIovs[:need]
+		r.gsoWriteBuf = r.gsoWriteBuf[:0]
 	}
-	r.gsoIovs[1].Base = &hdr[0]
-	r.gsoIovs[1].SetLen(len(hdr))
-	for i, p := range pays {
-		r.gsoIovs[2+i].Base = &p[0]
-		r.gsoIovs[2+i].SetLen(len(p))
+	r.gsoWriteBuf = append(r.gsoWriteBuf, r.gsoHdrBuf[:]...)
+	r.gsoWriteBuf = append(r.gsoWriteBuf, hdr...)
+	for _, p := range pays {
+		r.gsoWriteBuf = append(r.gsoWriteBuf, p...)
 	}
 
-	_, err := r.rawWrite(r.gsoIovs)
+	_, err := r.rawWriteSingle(r.gsoWriteBuf)
 	return err
 }
 
