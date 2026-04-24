@@ -9,6 +9,7 @@ import (
 	"github.com/kardianos/service"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/logging"
 )
 
 var logger service.Logger
@@ -31,6 +32,15 @@ func (p *program) Start(s service.Service) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %s", err)
 	}
+
+	if err := logging.ApplyConfig(l, c); err != nil {
+		return fmt.Errorf("failed to apply logging config: %s", err)
+	}
+	c.RegisterReloadCallback(func(c *config.C) {
+		if err := logging.ApplyConfig(l, c); err != nil {
+			l.Error("Failed to reconfigure logger on reload", "error", err)
+		}
+	})
 
 	p.control, err = nebula.Main(c, *p.configTest, Build, l, nil)
 	if err != nil {

@@ -19,6 +19,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 )
@@ -672,8 +673,8 @@ func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
 
 func (lh *LightHouse) shouldAdd(vpnAddrs []netip.Addr, to netip.Addr) bool {
 	allow := lh.GetRemoteAllowList().AllowAll(vpnAddrs, to)
-	if lh.l.Enabled(context.Background(), LogLevelTrace) {
-		lh.l.Log(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
+	if lh.l.Enabled(context.Background(), logging.LevelTrace) {
+		lh.l.Log(context.Background(), logging.LevelTrace, "remoteAllowList.Allow",
 			"vpnAddrs", vpnAddrs,
 			"udpAddr", to,
 			"allow", allow,
@@ -694,8 +695,8 @@ func (lh *LightHouse) shouldAdd(vpnAddrs []netip.Addr, to netip.Addr) bool {
 func (lh *LightHouse) unlockedShouldAddV4(vpnAddr netip.Addr, to *V4AddrPort) bool {
 	udpAddr := protoV4AddrPortToNetAddrPort(to)
 	allow := lh.GetRemoteAllowList().Allow(vpnAddr, udpAddr.Addr())
-	if lh.l.Enabled(context.Background(), LogLevelTrace) {
-		lh.l.Log(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
+	if lh.l.Enabled(context.Background(), logging.LevelTrace) {
+		lh.l.Log(context.Background(), logging.LevelTrace, "remoteAllowList.Allow",
 			"vpnAddr", vpnAddr,
 			"udpAddr", udpAddr,
 			"allow", allow,
@@ -717,8 +718,8 @@ func (lh *LightHouse) unlockedShouldAddV4(vpnAddr netip.Addr, to *V4AddrPort) bo
 func (lh *LightHouse) unlockedShouldAddV6(vpnAddr netip.Addr, to *V6AddrPort) bool {
 	udpAddr := protoV6AddrPortToNetAddrPort(to)
 	allow := lh.GetRemoteAllowList().Allow(vpnAddr, udpAddr.Addr())
-	if lh.l.Enabled(context.Background(), LogLevelTrace) {
-		lh.l.Log(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
+	if lh.l.Enabled(context.Background(), logging.LevelTrace) {
+		lh.l.Log(context.Background(), logging.LevelTrace, "remoteAllowList.Allow",
 			"vpnAddr", vpnAddr,
 			"udpAddr", udpAddr,
 			"allow", allow,

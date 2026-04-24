@@ -22,6 +22,7 @@ import (
 	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/e2e/router"
+	"github.com/slackhq/nebula/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.yaml.in/yaml/v3"
@@ -389,13 +390,13 @@ func NewTestLogger() *slog.Logger {
 	case "2":
 		level = slog.LevelDebug
 	case "3":
-		level = nebula.LogLevelTrace
+		level = logging.LevelTrace
 	}
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 }
 
-// testLogLevelName returns the level name string accepted by configLogger for
-// the current TEST_LOGS setting. Kept in sync with NewTestLogger.
+// testLogLevelName returns the level name string accepted by logging.ApplyConfig
+// for the current TEST_LOGS setting. Kept in sync with NewTestLogger.
 func testLogLevelName() string {
 	switch os.Getenv("TEST_LOGS") {
 	case "2":

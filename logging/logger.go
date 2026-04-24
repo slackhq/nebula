@@ -1,4 +1,9 @@
-package nebula
+// Package logging wires the nebula runtime-reconfigurable slog handler used
+// by nebula.Main and the nebula CLI binaries. Callers build a logger with
+// NewLogger, then call ApplyConfig at startup and from a config reload
+// callback to push logging.level, logging.format, and
+// logging.disable_timestamp changes onto the logger without rebuilding it.
+package logging
 
 import (
 	"context"
@@ -8,34 +13,41 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/slackhq/nebula/config"
 )
 
-// LogLevelTrace is a custom slog level below Debug, used when logging.level
-// is "trace". slog has no builtin trace level; the value is one step below
+// Config is the subset of *config.C that ApplyConfig reads. Declaring it
+// here keeps the logging package from depending on config directly, which
+// would cycle through the shared test helpers (test.NewLogger imports
+// logging, and config's tests import test). *config.C satisfies this
+// interface structurally with no adapter.
+type Config interface {
+	GetString(key, def string) string
+	GetBool(key string, def bool) bool
+}
+
+// LevelTrace is a custom slog level below Debug, used when logging.level is
+// "trace". slog has no builtin trace level; the value is one step below
 // slog.LevelDebug in slog's 4-point spacing.
-const LogLevelTrace = slog.Level(-8)
+const LevelTrace = slog.Level(-8)
 
 // NewLogger returns a *slog.Logger whose level, format, and timestamp
-// emission can be reconfigured at runtime via configLogger and the SSH
-// debug commands. The default configuration is info-level text output so
-// log calls made before configLogger runs still produce output. Timestamps
+// emission can be reconfigured at runtime via ApplyConfig and the SSH debug
+// commands. The default configuration is info-level text output so log
+// calls made before ApplyConfig runs still produce output. Timestamps
 // follow slog's default RFC3339Nano format; set logging.disable_timestamp
 // in config to suppress them.
 //
-// configLogger and the SSH commands discover the reconfig surface via
+// ApplyConfig and the SSH commands discover the reconfig surface via
 // structural type-assertion on l.Handler(), so replacement implementations
 // (tests, platform-specific sinks) need only implement the subset of
 // {SetLevel(slog.Level), SetFormat(string) error, SetDisableTimestamp(bool)}
-// they care about. Callers that do not need reconfig can pass a plain
-// *slog.Logger to nebula.Main; configLogger becomes a no-op for handlers it
-// does not recognize.
+// they care about. Callers that pass a plain *slog.Logger without these
+// methods get a silent no-op; reconfiguration is always opt-in.
 func NewLogger(w io.Writer) *slog.Logger {
 	root := &handlerRoot{}
 	root.level.Set(slog.LevelInfo)
 	opts := &slog.HandlerOptions{Level: &root.level}
-	return slog.New(&nebulaHandler{
+	return slog.New(&handler{
 		root: root,
 		text: slog.NewTextHandler(w, opts),
 		json: slog.NewJSONHandler(w, opts),
@@ -48,29 +60,29 @@ func NewLogger(w io.Writer) *slog.Logger {
 type handlerRoot struct {
 	level            slog.LevelVar
 	disableTimestamp atomic.Bool
-	// jsonMode picks which of the pre-derived inner handlers nebulaHandler.Handle
+	// jsonMode picks which of the pre-derived inner handlers handler.Handle
 	// dispatches to. Flipping it propagates instantly to every derived logger
 	// without rebuilding or chain-replaying anything.
 	jsonMode atomic.Bool
 }
 
-// nebulaHandler is the slog.Handler returned by NewLogger. It holds two
+// handler is the slog.Handler returned by NewLogger. It holds two
 // pre-derived slog handlers -- one text, one json -- both built from the
 // same accumulated WithAttrs/WithGroup state. Handle picks which one to
 // dispatch to based on handlerRoot.jsonMode, so a SetFormat call takes
 // effect immediately across the whole process without having to rebuild
 // any derived loggers.
-type nebulaHandler struct {
+type handler struct {
 	root *handlerRoot
 	text slog.Handler
 	json slog.Handler
 }
 
-func (h *nebulaHandler) Enabled(_ context.Context, l slog.Level) bool {
+func (h *handler) Enabled(_ context.Context, l slog.Level) bool {
 	return h.root.level.Level() <= l
 }
 
-func (h *nebulaHandler) Handle(ctx context.Context, r slog.Record) error {
+func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 	if h.root.disableTimestamp.Load() {
 		r.Time = time.Time{}
 	}
@@ -80,22 +92,22 @@ func (h *nebulaHandler) Handle(ctx context.Context, r slog.Record) error {
 	return h.text.Handle(ctx, r)
 }
 
-func (h *nebulaHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+func (h *handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return h
 	}
-	return &nebulaHandler{
+	return &handler{
 		root: h.root,
 		text: h.text.WithAttrs(attrs),
 		json: h.json.WithAttrs(attrs),
 	}
 }
 
-func (h *nebulaHandler) WithGroup(name string) slog.Handler {
+func (h *handler) WithGroup(name string) slog.Handler {
 	if name == "" {
 		return h
 	}
-	return &nebulaHandler{
+	return &handler{
 		root: h.root,
 		text: h.text.WithGroup(name),
 		json: h.json.WithGroup(name),
@@ -104,15 +116,15 @@ func (h *nebulaHandler) WithGroup(name string) slog.Handler {
 
 // SetLevel updates the effective log level. Propagates to every derived
 // logger via the shared LevelVar.
-func (h *nebulaHandler) SetLevel(level slog.Level) { h.root.level.Set(level) }
+func (h *handler) SetLevel(level slog.Level) { h.root.level.Set(level) }
 
 // GetLevel reports the current log level.
-func (h *nebulaHandler) GetLevel() slog.Level { return h.root.level.Level() }
+func (h *handler) GetLevel() slog.Level { return h.root.level.Level() }
 
 // SetFormat flips the output format atomically. Valid formats are "text"
 // and "json". Every derived logger sees the new format on its next Handle
 // call; no rebuild or registration is required.
-func (h *nebulaHandler) SetFormat(format string) error {
+func (h *handler) SetFormat(format string) error {
 	switch format {
 	case "text":
 		h.root.jsonMode.Store(false)
@@ -125,7 +137,7 @@ func (h *nebulaHandler) SetFormat(format string) error {
 }
 
 // GetFormat reports the currently selected format name.
-func (h *nebulaHandler) GetFormat() string {
+func (h *handler) GetFormat() string {
 	if h.root.jsonMode.Load() {
 		return "json"
 	}
@@ -135,17 +147,22 @@ func (h *nebulaHandler) GetFormat() string {
 // SetDisableTimestamp toggles whether Handle zeroes r.Time before
 // dispatching (slog's builtin text/json handlers skip emitting the time
 // attribute on a zero time).
-func (h *nebulaHandler) SetDisableTimestamp(v bool) { h.root.disableTimestamp.Store(v) }
+func (h *handler) SetDisableTimestamp(v bool) { h.root.disableTimestamp.Store(v) }
 
-// configLogger reads logging.level, logging.format, and (optionally)
+// ApplyConfig reads logging.level, logging.format, and (optionally)
 // logging.disable_timestamp from c and applies them to l. The reconfig
 // surface is discovered via structural type-assertion on l.Handler(), so
 // foreign handlers silently opt out of whichever capabilities they do not
 // implement.
-func configLogger(l *slog.Logger, c *config.C) error {
+//
+// nebula.Main does NOT call this function on your behalf; callers that want
+// config-driven log level / format / timestamp updates invoke it at
+// startup and register it as a reload callback themselves. This keeps the
+// library from mutating an embedder's logger without their say-so.
+func ApplyConfig(l *slog.Logger, c Config) error {
 	h := l.Handler()
 
-	lvl, err := parseLogLevel(strings.ToLower(c.GetString("logging.level", "info")))
+	lvl, err := ParseLevel(strings.ToLower(c.GetString("logging.level", "info")))
 	if err != nil {
 		return err
 	}
@@ -166,10 +183,14 @@ func configLogger(l *slog.Logger, c *config.C) error {
 	return nil
 }
 
-func parseLogLevel(s string) (slog.Level, error) {
+// ParseLevel converts a config-string level name ("trace", "debug", "info",
+// "warn"/"warning", "error", "fatal"/"panic") to a slog.Level. "fatal" and
+// "panic" are accepted for backwards compatibility with pre-slog configs
+// and both map to slog.LevelError.
+func ParseLevel(s string) (slog.Level, error) {
 	switch s {
 	case "trace":
-		return LogLevelTrace, nil
+		return LevelTrace, nil
 	case "debug":
 		return slog.LevelDebug, nil
 	case "info":
@@ -179,19 +200,17 @@ func parseLogLevel(s string) (slog.Level, error) {
 	case "error":
 		return slog.LevelError, nil
 	case "fatal", "panic":
-		// Accepted for backwards compatibility with older configs. slog has
-		// no fatal or panic level; both map to error.
 		return slog.LevelError, nil
 	default:
 		return 0, fmt.Errorf("not a valid logging level: %q", s)
 	}
 }
 
-// logLevelName returns a human-readable name for a slog.Level matching the
-// strings accepted by parseLogLevel.
-func logLevelName(l slog.Level) string {
+// LevelName returns a human-readable name for a slog.Level matching the
+// strings accepted by ParseLevel.
+func LevelName(l slog.Level) string {
 	switch {
-	case l <= LogLevelTrace:
+	case l <= LevelTrace:
 		return "trace"
 	case l <= slog.LevelDebug:
 		return "debug"

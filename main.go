@@ -44,18 +44,6 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		l.Info(string(b))
 	}
 
-	err := configLogger(l, c)
-	if err != nil {
-		return nil, util.ContextualizeIfNeeded("Failed to configure the logger", err)
-	}
-
-	c.RegisterReloadCallback(func(c *config.C) {
-		err := configLogger(l, c)
-		if err != nil {
-			l.Error("Failed to configure the logger", "error", err)
-		}
-	})
-
 	pki, err := NewPKIFromConfig(l, c)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to load PKI from config", err)

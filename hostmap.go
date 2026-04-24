@@ -18,6 +18,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/logging"
 )
 
 const defaultPromoteEvery = 1000       // Count of packets sent before we try moving a tunnel to a preferred underlay ip address
@@ -821,8 +822,8 @@ func localAddrs(l *slog.Logger, allowList *LocalAllowList) []netip.Addr {
 	ifaces, _ := net.Interfaces()
 	for _, i := range ifaces {
 		allow := allowList.AllowName(i.Name)
-		if l.Enabled(context.Background(), LogLevelTrace) {
-			l.Log(context.Background(), LogLevelTrace, "localAllowList.AllowName",
+		if l.Enabled(context.Background(), logging.LevelTrace) {
+			l.Log(context.Background(), logging.LevelTrace, "localAllowList.AllowName",
 				"interfaceName", i.Name,
 				"allow", allow,
 			)
@@ -852,8 +853,8 @@ func localAddrs(l *slog.Logger, allowList *LocalAllowList) []netip.Addr {
 
 			if addr.IsLoopback() == false && addr.IsLinkLocalUnicast() == false {
 				isAllowed := allowList.Allow(addr)
-				if l.Enabled(context.Background(), LogLevelTrace) {
-					l.Log(context.Background(), LogLevelTrace, "localAllowList.Allow",
+				if l.Enabled(context.Background(), logging.LevelTrace) {
+					l.Log(context.Background(), logging.LevelTrace, "localAllowList.Allow",
 						"localAddr", addr,
 						"allowed", isAllowed,
 					)

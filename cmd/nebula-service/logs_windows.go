@@ -100,7 +100,7 @@ func (sh *serviceHandler) WithGroup(name string) slog.Handler {
 	}
 }
 
-// SetLevel lets configLogger and SSH commands honor logging.level.
+// SetLevel lets logging.ApplyConfig and the SSH commands honor logging.level.
 func (sh *serviceHandler) SetLevel(lvl slog.Level) { sh.root.level.Set(lvl) }
 
 // GetLevel is the structural counterpart used by sshLogLevel.
