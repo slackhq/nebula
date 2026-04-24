@@ -263,13 +263,12 @@ func (r *Offload) writeWithScratch(buf []byte, iovs *[2]unix.Iovec) (int, error)
 	// to validVnetHdr during Offload construction so we don't rebuild it here.
 	iovs[1].Base = &buf[0]
 	iovs[1].SetLen(len(buf))
-	iovPtr := unsafe.Pointer(&iovs[0])
-	return r.rawWrite(iovPtr, 2)
+	return r.rawWrite(unsafe.Slice(&iovs[0], len(iovs)))
 }
 
-func (r *Offload) rawWrite(iovs unsafe.Pointer, iovcnt int) (int, error) {
+func (r *Offload) rawWrite(iovs []unix.Iovec) (int, error) {
 	for {
-		n, _, errno := syscall.Syscall(unix.SYS_WRITEV, uintptr(r.fd), uintptr(iovs), uintptr(iovcnt))
+		n, _, errno := syscall.Syscall(unix.SYS_WRITEV, uintptr(r.fd), uintptr(unsafe.Pointer(&iovs[0])), uintptr(len(iovs)))
 		if errno == 0 {
 			if int(n) < virtioNetHdrLen {
 				return 0, io.ErrShortWrite
@@ -352,9 +351,7 @@ func (r *Offload) WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, isV6 bool,
 		r.gsoIovs[2+i].SetLen(len(p))
 	}
 
-	iovPtr := unsafe.Pointer(&r.gsoIovs[0])
-	iovCnt := len(r.gsoIovs)
-	_, err := r.rawWrite(iovPtr, iovCnt)
+	_, err := r.rawWrite(r.gsoIovs)
 	return err
 }
 
