@@ -4,14 +4,15 @@
 package overlay
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/netip"
 	"os"
 	"sync/atomic"
 
 	"github.com/gaissmai/bart"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/routing"
 )
@@ -21,14 +22,14 @@ type TestTun struct {
 	vpnNetworks []netip.Prefix
 	Routes      []Route
 	routeTree   *bart.Table[routing.Gateways]
-	l           *logrus.Logger
+	l           *slog.Logger
 
 	closed    atomic.Bool
 	rxPackets chan []byte // Packets to receive into nebula
 	TxPackets chan []byte // Packets transmitted outside by nebula
 }
 
-func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*TestTun, error) {
+func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*TestTun, error) {
 	_, routes, err := getAllRoutesFromConfig(c, vpnNetworks, true)
 	if err != nil {
 		return nil, err
@@ -49,7 +50,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	}, nil
 }
 
-func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*TestTun, error) {
+func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*TestTun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported")
 }
 
@@ -61,8 +62,8 @@ func (t *TestTun) Send(packet []byte) {
 		return
 	}
 
-	if t.l.Level >= logrus.DebugLevel {
-		t.l.WithField("dataLen", len(packet)).Debug("Tun receiving injected packet")
+	if t.l.Enabled(context.Background(), slog.LevelDebug) {
+		t.l.Debug("Tun receiving injected packet", "dataLen", len(packet))
 	}
 	t.rxPackets <- packet
 }

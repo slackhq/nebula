@@ -2,7 +2,7 @@ package nebula
 
 import (
 	"context"
-	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"strconv"
@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,7 +29,7 @@ func (stubDNSWriter) TsigTimersOnly(bool)       {}
 func (stubDNSWriter) Hijack()                   {}
 
 func TestParsequery(t *testing.T) {
-	l := logrus.New()
+	l := slog.New(slog.DiscardHandler)
 	hostMap := &HostMap{}
 	ds := &dnsServer{
 		l:       l,
@@ -137,10 +136,9 @@ func Test_getDnsServerAddr(t *testing.T) {
 
 func newTestDnsServer(t *testing.T) (*dnsServer, *config.C) {
 	t.Helper()
-	l := logrus.New()
-	l.Out = io.Discard
+	sl := slog.New(slog.DiscardHandler)
 	ds := &dnsServer{
-		l:       l,
+		l:       sl,
 		ctx:     context.Background(),
 		dnsMap4: make(map[string]netip.Addr),
 		dnsMap6: make(map[string]netip.Addr),
@@ -148,7 +146,7 @@ func newTestDnsServer(t *testing.T) (*dnsServer, *config.C) {
 	}
 	ds.mux = dns.NewServeMux()
 	ds.mux.HandleFunc(".", ds.handleDnsRequest)
-	return ds, config.NewC(l)
+	return ds, config.NewC(nil)
 }
 
 func setDnsConfig(c *config.C, host string, port string, amLighthouse, serveDns bool) {

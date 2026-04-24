@@ -3,6 +3,7 @@ package nebula
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"strconv"
@@ -12,13 +13,12 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/miekg/dns"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 )
 
 type dnsServer struct {
 	sync.RWMutex
-	l               *logrus.Logger
+	l               *slog.Logger
 	ctx             context.Context
 	dnsMap4         map[string]netip.Addr
 	dnsMap6         map[string]netip.Addr
@@ -55,7 +55,7 @@ type dnsServer struct {
 // they no-op when DNS isn't enabled. Each Start invocation owns a ctx-cancel
 // watcher that tears the listener down on nebula shutdown. The returned
 // pointer is always non-nil, even on error.
-func newDnsServerFromConfig(ctx context.Context, l *logrus.Logger, cs *CertState, hostMap *HostMap, c *config.C) (*dnsServer, error) {
+func newDnsServerFromConfig(ctx context.Context, l *slog.Logger, cs *CertState, hostMap *HostMap, c *config.C) (*dnsServer, error) {
 	ds := &dnsServer{
 		l:               l,
 		ctx:             ctx,
@@ -69,7 +69,7 @@ func newDnsServerFromConfig(ctx context.Context, l *logrus.Logger, cs *CertState
 
 	c.RegisterReloadCallback(func(c *config.C) {
 		if err := ds.reload(c, false); err != nil {
-			l.WithError(err).Error("Failed to reload DNS responder from config")
+			ds.l.Error("Failed to reload DNS responder from config", "error", err)
 		}
 	})
 
@@ -145,7 +145,7 @@ func (d *dnsServer) shutdownServer(srv *dns.Server, started chan struct{}, reaso
 		<-started
 	}
 	if err := srv.Shutdown(); err != nil {
-		d.l.WithError(err).WithField("reason", reason).Warn("Failed to shut down the DNS responder")
+		d.l.Warn("Failed to shut down the DNS responder", "reason", reason, "error", err)
 	}
 }
 
@@ -188,7 +188,7 @@ func (d *dnsServer) Start() {
 		}
 	}()
 
-	d.l.WithField("dnsListener", addr).Info("Starting DNS responder")
+	d.l.Info("Starting DNS responder", "dnsListener", addr)
 	err := server.ListenAndServe()
 	close(done)
 
@@ -201,7 +201,7 @@ func (d *dnsServer) Start() {
 	}
 
 	if err != nil {
-		d.l.WithError(err).Warn("Failed to run the DNS responder")
+		d.l.Warn("Failed to run the DNS responder", "error", err)
 	}
 }
 
@@ -314,6 +314,7 @@ func (d *dnsServer) isSelfNebulaOrLocalhost(addr string) bool {
 }
 
 func (d *dnsServer) parseQuery(m *dns.Msg, w dns.ResponseWriter) {
+	debugEnabled := d.l.Enabled(context.Background(), slog.LevelDebug)
 	// Per RFC 2308 §2.2, a name that exists but has no record of the requested
 	// type must be answered with NOERROR and an empty answer section (NODATA),
 	// not NXDOMAIN (RFC 2308 §2.1), which is reserved for names that do not
@@ -323,7 +324,9 @@ func (d *dnsServer) parseQuery(m *dns.Msg, w dns.ResponseWriter) {
 		switch q.Qtype {
 		case dns.TypeA, dns.TypeAAAA:
 			qType := dns.TypeToString[q.Qtype]
-			d.l.Debugf("Query for %s %s", qType, q.Name)
+			if debugEnabled {
+				d.l.Debug("DNS query", "type", qType, "name", q.Name)
+			}
 			ip, nameExists := d.Query(q.Qtype, q.Name)
 			if nameExists {
 				anyNameExists = true
@@ -339,7 +342,9 @@ func (d *dnsServer) parseQuery(m *dns.Msg, w dns.ResponseWriter) {
 			if !d.isSelfNebulaOrLocalhost(w.RemoteAddr().String()) {
 				return
 			}
-			d.l.Debugf("Query for TXT %s", q.Name)
+			if debugEnabled {
+				d.l.Debug("DNS query", "type", "TXT", "name", q.Name)
+			}
 			ip := d.QueryCert(q.Name)
 			if ip != "" {
 				rr, err := dns.NewRR(fmt.Sprintf("%s TXT %s", q.Name, ip))

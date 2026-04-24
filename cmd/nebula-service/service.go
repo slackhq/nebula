@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 
 	"github.com/kardianos/service"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/logging"
 )
 
 var logger service.Logger
@@ -25,14 +25,22 @@ func (p *program) Start(s service.Service) error {
 	// Start should not block.
 	logger.Info("Nebula service starting.")
 
-	l := logrus.New()
-	HookLogger(l)
+	l := newPlatformLogger()
 
 	c := config.NewC(l)
 	err := c.Load(*p.configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %s", err)
 	}
+
+	if err := logging.ApplyConfig(l, c); err != nil {
+		return fmt.Errorf("failed to apply logging config: %s", err)
+	}
+	c.RegisterReloadCallback(func(c *config.C) {
+		if err := logging.ApplyConfig(l, c); err != nil {
+			l.Error("Failed to reconfigure logger on reload", "error", err)
+		}
+	})
 
 	p.control, err = nebula.Main(c, *p.configTest, Build, l, nil)
 	if err != nil {
@@ -85,7 +93,7 @@ func doService(configPath *string, configTest *bool, build string, serviceFlag *
 	// Here are what the different loggers are doing:
 	// - `log` is the standard go log utility, meant to be used while the process is still attached to stdout/stderr
 	// - `logger` is the service log utility that may be attached to a special place depending on OS (Windows will have it attached to the event log)
-	// - above, in `Run` we create a `logrus.Logger` which is what nebula expects to use
+	// - in program.Start we build a *slog.Logger via newPlatformLogger; on non-Windows that is a stdout-backed slog logger, on Windows it routes records through the service logger
 	s, err := service.New(prg, svcConfig)
 	if err != nil {
 		return err

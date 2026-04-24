@@ -5,16 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 
 	"github.com/armon/go-radix"
-	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 )
 
 type SSHServer struct {
 	config *ssh.ServerConfig
-	l      *logrus.Entry
+	l      *slog.Logger
 
 	certChecker *ssh.CertChecker
 
@@ -33,7 +33,7 @@ type SSHServer struct {
 }
 
 // NewSSHServer creates a new ssh server rigged with default commands and prepares to listen
-func NewSSHServer(l *logrus.Entry) (*SSHServer, error) {
+func NewSSHServer(l *slog.Logger) (*SSHServer, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &SSHServer{
@@ -121,7 +121,7 @@ func (s *SSHServer) AddTrustedCA(pubKey string) error {
 	}
 
 	s.trustedCAs = append(s.trustedCAs, pk)
-	s.l.WithField("sshKey", pubKey).Info("Trusted CA key")
+	s.l.Info("Trusted CA key", "sshKey", pubKey)
 	return nil
 }
 
@@ -139,7 +139,10 @@ func (s *SSHServer) AddAuthorizedKey(user, pubKey string) error {
 	}
 
 	tk[string(pk.Marshal())] = true
-	s.l.WithField("sshKey", pubKey).WithField("sshUser", user).Info("Authorized ssh key")
+	s.l.Info("Authorized ssh key",
+		"sshKey", pubKey,
+		"sshUser", user,
+	)
 	return nil
 }
 
@@ -156,7 +159,7 @@ func (s *SSHServer) Run(addr string) error {
 		return err
 	}
 
-	s.l.WithField("sshListener", addr).Info("SSH server is listening")
+	s.l.Info("SSH server is listening", "sshListener", addr)
 
 	// Run loops until there is an error
 	s.run()
@@ -172,7 +175,7 @@ func (s *SSHServer) run() {
 		c, err := s.listener.Accept()
 		if err != nil {
 			if !errors.Is(err, net.ErrClosed) {
-				s.l.WithError(err).Warn("Error in listener, shutting down")
+				s.l.Warn("Error in listener, shutting down", "error", err)
 			}
 			return
 		}
@@ -193,23 +196,29 @@ func (s *SSHServer) run() {
 			}
 
 			if err != nil {
-				l := s.l.WithError(err).WithField("remoteAddress", c.RemoteAddr())
+				l := s.l.With(
+					"error", err,
+					"remoteAddress", c.RemoteAddr(),
+				)
 				if conn != nil {
-					l = l.WithField("sshUser", conn.User())
+					l = l.With("sshUser", conn.User())
 					conn.Close()
 				}
 				if fp != "" {
-					l = l.WithField("sshFingerprint", fp)
+					l = l.With("sshFingerprint", fp)
 				}
 				l.Warn("failed to handshake")
 				sessionCancel()
 				return
 			}
 
-			l := s.l.WithField("sshUser", conn.User())
-			l.WithField("remoteAddress", c.RemoteAddr()).WithField("sshFingerprint", fp).Info("ssh user logged in")
+			l := s.l.With("sshUser", conn.User())
+			l.Info("ssh user logged in",
+				"remoteAddress", c.RemoteAddr(),
+				"sshFingerprint", fp,
+			)
 
-			NewSession(s.commands, conn, chans, sessionCancel, l.WithField("subsystem", "sshd.session"))
+			NewSession(s.commands, conn, chans, sessionCancel, l.With("subsystem", "sshd.session"))
 
 			go ssh.DiscardRequests(reqs)
 
@@ -221,7 +230,7 @@ func (s *SSHServer) Stop() {
 	// Close the listener, this will cause all session to terminate as well, see SSHServer.Run
 	if s.listener != nil {
 		if err := s.listener.Close(); err != nil {
-			s.l.WithError(err).Warn("Failed to close the sshd listener")
+			s.l.Warn("Failed to close the sshd listener", "error", err)
 		}
 	}
 }

@@ -7,9 +7,9 @@ import (
 	"net"
 	"os"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/service"
 )
@@ -64,8 +64,7 @@ pki:
 		return err
 	}
 
-	logger := logrus.New()
-	logger.Out = os.Stdout
+	logger := logging.NewLogger(os.Stdout)
 
 	ctrl, err := nebula.Main(&cfg, false, "custom-app", logger, overlay.NewUserDeviceFromConfig)
 	if err != nil {

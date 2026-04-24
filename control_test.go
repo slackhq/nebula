@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
@@ -83,7 +82,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 		f: &Interface{
 			hostMap: hm,
 		},
-		l: logrus.New(),
+		l: test.NewLogger(),
 	}
 
 	thi := c.GetHostInfoByVpnAddr(vpnIp, false)

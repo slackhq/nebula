@@ -3,13 +3,13 @@ package nebula
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"runtime/debug"
 	"strings"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/sshd"
@@ -20,7 +20,7 @@ import (
 
 type m = map[string]any
 
-func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
+func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, deviceFactory overlay.DeviceFactory) (retcon *Control, reterr error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Automatically cancel the context if Main returns an error, to signal all created goroutines to quit.
 	defer func() {
@@ -33,11 +33,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		buildVersion = moduleVersion()
 	}
 
-	l := logger
-	l.Formatter = &logrus.TextFormatter{
-		FullTimestamp: true,
-	}
-
 	// Print the config if in test, the exit comes later
 	if configTest {
 		b, err := yaml.Marshal(c.Settings)
@@ -46,20 +41,8 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 
 		// Print the final config
-		l.Println(string(b))
+		l.Info(string(b))
 	}
-
-	err := configLogger(l, c)
-	if err != nil {
-		return nil, util.ContextualizeIfNeeded("Failed to configure the logger", err)
-	}
-
-	c.RegisterReloadCallback(func(c *config.C) {
-		err := configLogger(l, c)
-		if err != nil {
-			l.WithError(err).Error("Failed to configure the logger")
-		}
-	})
 
 	pki, err := NewPKIFromConfig(l, c)
 	if err != nil {
@@ -70,9 +53,9 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while loading firewall rules", err)
 	}
-	l.WithField("firewallHashes", fw.GetRuleHashes()).Info("Firewall started")
+	l.Info("Firewall started", "firewallHashes", fw.GetRuleHashes())
 
-	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
+	ssh, err := sshd.NewSSHServer(l.With("subsystem", "sshd"))
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while creating SSH server", err)
 	}
@@ -81,7 +64,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	if c.GetBool("sshd.enabled", false) {
 		sshStart, err = configSSH(l, ssh, c)
 		if err != nil {
-			l.WithError(err).Warn("Failed to configure sshd, ssh debugging will not be available")
+			l.Warn("Failed to configure sshd, ssh debugging will not be available", "error", err)
 			sshStart = nil
 		}
 	}
@@ -99,7 +82,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 			routines = 1
 		}
 		if routines > 1 {
-			l.WithField("routines", routines).Info("Using multiple routines")
+			l.Info("Using multiple routines", "routines", routines)
 		}
 	} else {
 		// deprecated and undocumented
@@ -107,7 +90,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		udpQueues := c.GetInt("listen.routines", 1)
 		routines = max(tunQueues, udpQueues)
 		if routines != 1 {
-			l.WithField("routines", routines).Warn("Setting tun.routines and listen.routines is deprecated. Use `routines` instead")
+			l.Warn("Setting tun.routines and listen.routines is deprecated. Use `routines` instead", "routines", routines)
 		}
 	}
 
@@ -120,7 +103,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		conntrackCacheTimeout = 1 * time.Second
 	}
 	if conntrackCacheTimeout > 0 {
-		l.WithField("duration", conntrackCacheTimeout).Info("Using routine-local conntrack cache")
+		l.Info("Using routine-local conntrack cache", "duration", conntrackCacheTimeout)
 	}
 
 	var tun overlay.Device
@@ -166,7 +149,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		}
 
 		for i := 0; i < routines; i++ {
-			l.Infof("listening on %v", netip.AddrPortFrom(listenHost, uint16(port)))
+			l.Info("listening", "addr", netip.AddrPortFrom(listenHost, uint16(port)))
 			udpServer, err := udp.NewListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
@@ -217,7 +200,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 
 	ds, err := newDnsServerFromConfig(ctx, l, pki.getCertState(), hostMap, c)
 	if err != nil {
-		l.WithError(err).Warn("Failed to start DNS responder")
+		l.Warn("Failed to start DNS responder", "error", err)
 	}
 
 	ifConfig := &InterfaceConfig{

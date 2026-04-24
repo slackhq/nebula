@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"os"
@@ -17,7 +18,6 @@ import (
 	"unsafe"
 
 	"github.com/gaissmai/bart"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
@@ -213,7 +213,7 @@ type tun struct {
 	routesFromSystem     map[netip.Prefix]routing.Gateways
 	routesFromSystemLock sync.Mutex
 
-	l *logrus.Logger
+	l *slog.Logger
 }
 
 func (t *tun) Networks() []netip.Prefix {
@@ -238,7 +238,7 @@ type ifreqQLEN struct {
 	pad   [8]byte
 }
 
-func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
+func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
 	t, err := newTunGeneric(c, l, deviceFd, vpnNetworks)
 	if err != nil {
 		return nil, err
@@ -249,7 +249,7 @@ func newTunFromFd(c *config.C, l *logrus.Logger, deviceFd int, vpnNetworks []net
 	return t, nil
 }
 
-func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueue bool) (*tun, error) {
+func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue bool) (*tun, error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		// If /dev/net/tun doesn't exist, try to create it (will happen in docker)
@@ -299,7 +299,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 }
 
 // newTunGeneric does all the stuff common to different tun initialization paths. It will close your files on error.
-func newTunGeneric(c *config.C, l *logrus.Logger, fd int, vpnNetworks []netip.Prefix) (*tun, error) {
+func newTunGeneric(c *config.C, l *slog.Logger, fd int, vpnNetworks []netip.Prefix) (*tun, error) {
 	tfd, err := newTunFd(fd)
 	if err != nil {
 		_ = unix.Close(fd)
@@ -378,16 +378,16 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	if !initial {
 		if oldMaxMTU != newMaxMTU {
 			t.setMTU()
-			t.l.Infof("Set max MTU to %v was %v", t.MaxMTU, oldMaxMTU)
+			t.l.Info("Set max MTU", "mtu", t.MaxMTU, "oldMTU", oldMaxMTU)
 		}
 
 		if oldDefaultMTU != newDefaultMTU {
 			for i := range t.vpnNetworks {
 				err := t.setDefaultRoute(t.vpnNetworks[i])
 				if err != nil {
-					t.l.Warn(err)
+					t.l.Warn(err.Error())
 				} else {
-					t.l.Infof("Set default MTU to %v was %v", t.DefaultMTU, oldDefaultMTU)
+					t.l.Info("Set default MTU", "mtu", t.DefaultMTU, "oldMTU", oldDefaultMTU)
 				}
 			}
 		}
@@ -492,9 +492,9 @@ func (t *tun) addIPs(link netlink.Link) error {
 		}
 		err = netlink.AddrDel(link, &al[i])
 		if err != nil {
-			t.l.WithError(err).Error("failed to remove address from tun address list")
+			t.l.Error("failed to remove address from tun address list", "error", err)
 		} else {
-			t.l.WithField("removed", al[i].String()).Info("removed address not listed in cert(s)")
+			t.l.Info("removed address not listed in cert(s)", "removed", al[i].String())
 		}
 	}
 
@@ -538,12 +538,12 @@ func (t *tun) Activate() error {
 	ifrq := ifreqQLEN{Name: devName, Value: int32(t.TXQueueLen)}
 	if err = ioctl(t.ioctlFd, unix.SIOCSIFTXQLEN, uintptr(unsafe.Pointer(&ifrq))); err != nil {
 		// If we can't set the queue length nebula will still work but it may lead to packet loss
-		t.l.WithError(err).Error("Failed to set tun tx queue length")
+		t.l.Error("Failed to set tun tx queue length", "error", err)
 	}
 
 	const modeNone = 1
 	if err = netlink.LinkSetIP6AddrGenMode(link, modeNone); err != nil {
-		t.l.WithError(err).Warn("Failed to disable link local address generation")
+		t.l.Warn("Failed to disable link local address generation", "error", err)
 	}
 
 	if err = t.addIPs(link); err != nil {
@@ -582,7 +582,7 @@ func (t *tun) setMTU() {
 	ifm := ifreqMTU{Name: t.deviceBytes(), MTU: int32(t.MaxMTU)}
 	if err := ioctl(t.ioctlFd, unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
 		// This is currently a non fatal condition because the route table must have the MTU set appropriately as well
-		t.l.WithError(err).Error("Failed to set tun mtu")
+		t.l.Error("Failed to set tun mtu", "error", err)
 	}
 }
 
@@ -605,7 +605,7 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 	}
 	err := netlink.RouteReplace(&nr)
 	if err != nil {
-		t.l.WithError(err).WithField("cidr", cidr).Warn("Failed to set default route MTU, retrying")
+		t.l.Warn("Failed to set default route MTU, retrying", "error", err, "cidr", cidr)
 		//retry twice more -- on some systems there appears to be a race condition where if we set routes too soon, netlink says `invalid argument`
 		for i := 0; i < 2; i++ {
 			time.Sleep(100 * time.Millisecond)
@@ -613,7 +613,11 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 			if err == nil {
 				break
 			} else {
-				t.l.WithError(err).WithField("cidr", cidr).WithField("mtu", t.DefaultMTU).Warn("Failed to set default route MTU, retrying")
+				t.l.Warn("Failed to set default route MTU, retrying",
+					"error", err,
+					"cidr", cidr,
+					"mtu", t.DefaultMTU,
+				)
 			}
 		}
 		if err != nil {
@@ -658,7 +662,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 				return retErr
 			}
 		} else {
-			t.l.WithField("route", r).Info("Added route")
+			t.l.Info("Added route", "route", r)
 		}
 	}
 
@@ -690,9 +694,9 @@ func (t *tun) removeRoutes(routes []Route) {
 
 		err := netlink.RouteDel(&nr)
 		if err != nil {
-			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
+			t.l.Error("Failed to remove route", "error", err, "route", r)
 		} else {
-			t.l.WithField("route", r).Info("Removed route")
+			t.l.Info("Removed route", "route", r)
 		}
 	}
 }
@@ -721,11 +725,11 @@ func (t *tun) watchRoutes() {
 	netlinkOptions := netlink.RouteSubscribeOptions{
 		ReceiveBufferSize:      t.useSystemRoutesBufferSize,
 		ReceiveBufferForceSize: t.useSystemRoutesBufferSize != 0,
-		ErrorCallback:          func(e error) { t.l.WithError(e).Errorf("netlink error") },
+		ErrorCallback:          func(e error) { t.l.Error("netlink error", "error", e) },
 	}
 
 	if err := netlink.RouteSubscribeWithOptions(rch, doneChan, netlinkOptions); err != nil {
-		t.l.WithError(err).Errorf("failed to subscribe to system route changes")
+		t.l.Error("failed to subscribe to system route changes", "error", err)
 		return
 	}
 
@@ -767,7 +771,7 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 
 	link, err := netlink.LinkByName(t.Device)
 	if err != nil {
-		t.l.WithField("deviceName", t.Device).Error("Ignoring route update: failed to get link by name")
+		t.l.Error("Ignoring route update: failed to get link by name", "deviceName", t.Device)
 		return gateways
 	}
 
@@ -779,10 +783,10 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 				gateways = append(gateways, routing.NewGateway(gwAddr, 1))
 			} else {
 				// Gateway isn't in our overlay network, ignore
-				t.l.WithField("route", r).Debug("Ignoring route update, gateway is not in our network")
+				t.l.Debug("Ignoring route update, gateway is not in our network", "route", r)
 			}
 		} else {
-			t.l.WithField("route", r).Debug("Ignoring route update, invalid gateway or via address")
+			t.l.Debug("Ignoring route update, invalid gateway or via address", "route", r)
 		}
 	}
 
@@ -795,10 +799,10 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 					gateways = append(gateways, routing.NewGateway(gwAddr, p.Hops+1))
 				} else {
 					// Gateway isn't in our overlay network, ignore
-					t.l.WithField("route", r).Debug("Ignoring route update, gateway is not in our network")
+					t.l.Debug("Ignoring route update, gateway is not in our network", "route", r)
 				}
 			} else {
-				t.l.WithField("route", r).Debug("Ignoring route update, invalid gateway or via address")
+				t.l.Debug("Ignoring route update, invalid gateway or via address", "route", r)
 			}
 		}
 	}
@@ -830,18 +834,18 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 	gateways := t.getGatewaysFromRoute(&r.Route)
 	if len(gateways) == 0 {
 		// No gateways relevant to our network, no routing changes required.
-		t.l.WithField("route", r).Debug("Ignoring route update, no gateways")
+		t.l.Debug("Ignoring route update, no gateways", "route", r)
 		return
 	}
 
 	if r.Dst == nil {
-		t.l.WithField("route", r).Debug("Ignoring route update, no destination address")
+		t.l.Debug("Ignoring route update, no destination address", "route", r)
 		return
 	}
 
 	dstAddr, ok := netip.AddrFromSlice(r.Dst.IP)
 	if !ok {
-		t.l.WithField("route", r).Debug("Ignoring route update, invalid destination address")
+		t.l.Debug("Ignoring route update, invalid destination address", "route", r)
 		return
 	}
 
@@ -852,12 +856,12 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 
 	t.routesFromSystemLock.Lock()
 	if r.Type == unix.RTM_NEWROUTE {
-		t.l.WithField("destination", dst).WithField("via", gateways).Info("Adding route")
+		t.l.Info("Adding route", "destination", dst, "via", gateways)
 		t.routesFromSystem[dst] = gateways
 		newTree.Insert(dst, gateways)
 
 	} else {
-		t.l.WithField("destination", dst).WithField("via", gateways).Info("Removing route")
+		t.l.Info("Removing route", "destination", dst, "via", gateways)
 		delete(t.routesFromSystem, dst)
 		newTree.Delete(dst)
 	}
@@ -888,18 +892,18 @@ func (t *tun) Close() error {
 		}
 		err := t.readers[i].Close()
 		if err != nil {
-			t.l.WithField("reader", i).WithError(err).Error("error closing tun reader")
+			t.l.Error("error closing tun reader", "reader", i, "error", err)
 		} else {
-			t.l.WithField("reader", i).Info("closed tun reader")
+			t.l.Info("closed tun reader", "reader", i)
 		}
 	}
 
 	//this is t.readers[0] too
 	err := t.tunFile.Close()
 	if err != nil {
-		t.l.WithField("reader", 0).WithError(err).Error("error closing tun reader")
+		t.l.Error("error closing tun reader", "reader", 0, "error", err)
 	} else {
-		t.l.WithField("reader", 0).Info("closed tun reader")
+		t.l.Info("closed tun reader", "reader", 0)
 	}
 	return err
 }

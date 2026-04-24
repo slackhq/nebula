@@ -6,21 +6,21 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/sshd"
 )
 
@@ -57,12 +57,12 @@ type sshDeviceInfoFlags struct {
 	Pretty bool
 }
 
-func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) {
+func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 	c.RegisterReloadCallback(func(c *config.C) {
 		if c.GetBool("sshd.enabled", false) {
 			sshRun, err := configSSH(l, ssh, c)
 			if err != nil {
-				l.WithError(err).Error("Failed to reconfigure the sshd")
+				l.Error("Failed to reconfigure the sshd", "error", err)
 				ssh.Stop()
 			}
 			if sshRun != nil {
@@ -78,7 +78,7 @@ func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) {
 // updates the passed-in SSHServer. On success, it returns a function
 // that callers may invoke to run the configured ssh server. On
 // failure, it returns nil, error.
-func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error) {
+func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error) {
 	listen := c.GetString("sshd.listen", "")
 	if listen == "" {
 		return nil, fmt.Errorf("sshd.listen must be provided")
@@ -120,7 +120,7 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 	for _, caAuthorizedKey := range rawCAs {
 		err := ssh.AddTrustedCA(caAuthorizedKey)
 		if err != nil {
-			l.WithError(err).WithField("sshCA", caAuthorizedKey).Warn("SSH CA had an error, ignoring")
+			l.Warn("SSH CA had an error, ignoring", "error", err, "sshCA", caAuthorizedKey)
 			continue
 		}
 	}
@@ -131,13 +131,13 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 		for _, rk := range keys {
 			kDef, ok := rk.(map[string]any)
 			if !ok {
-				l.WithField("sshKeyConfig", rk).Warn("Authorized user had an error, ignoring")
+				l.Warn("Authorized user had an error, ignoring", "sshKeyConfig", rk)
 				continue
 			}
 
 			user, ok := kDef["user"].(string)
 			if !ok {
-				l.WithField("sshKeyConfig", rk).Warn("Authorized user is missing the user field")
+				l.Warn("Authorized user is missing the user field", "sshKeyConfig", rk)
 				continue
 			}
 
@@ -146,7 +146,11 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 			case string:
 				err := ssh.AddAuthorizedKey(user, v)
 				if err != nil {
-					l.WithError(err).WithField("sshKeyConfig", rk).WithField("sshKey", v).Warn("Failed to authorize key")
+					l.Warn("Failed to authorize key",
+						"error", err,
+						"sshKeyConfig", rk,
+						"sshKey", v,
+					)
 					continue
 				}
 
@@ -154,19 +158,25 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 				for _, subK := range v {
 					sk, ok := subK.(string)
 					if !ok {
-						l.WithField("sshKeyConfig", rk).WithField("sshKey", subK).Warn("Did not understand ssh key")
+						l.Warn("Did not understand ssh key",
+							"sshKeyConfig", rk,
+							"sshKey", subK,
+						)
 						continue
 					}
 
 					err := ssh.AddAuthorizedKey(user, sk)
 					if err != nil {
-						l.WithError(err).WithField("sshKeyConfig", sk).Warn("Failed to authorize key")
+						l.Warn("Failed to authorize key",
+							"error", err,
+							"sshKeyConfig", sk,
+						)
 						continue
 					}
 				}
 
 			default:
-				l.WithField("sshKeyConfig", rk).Warn("Authorized user is missing the keys field or was not understood")
+				l.Warn("Authorized user is missing the keys field or was not understood", "sshKeyConfig", rk)
 			}
 		}
 	} else {
@@ -178,7 +188,7 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 		ssh.Stop()
 		runner = func() {
 			if err := ssh.Run(listen); err != nil {
-				l.WithField("err", err).Warn("Failed to run the SSH server")
+				l.Warn("Failed to run the SSH server", "error", err)
 			}
 		}
 	} else {
@@ -188,7 +198,7 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 	return runner, nil
 }
 
-func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Interface) {
+func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interface) {
 	// sandboxDir defaults to a dir in temp. The intention is that end user will
 	// create this dir as needed. Overriding this config value to "" allows
 	// writing to anywhere in the system.
@@ -789,36 +799,45 @@ func sshGetMutexProfile(sandboxDir string, fs any, a []string, w sshd.StringWrit
 	return w.WriteLine(fmt.Sprintf("Mutex profile created at %s", a))
 }
 
-func sshLogLevel(l *logrus.Logger, fs any, a []string, w sshd.StringWriter) error {
+func sshLogLevel(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error {
+	ctrl, ok := l.Handler().(interface {
+		GetLevel() slog.Level
+		SetLevel(slog.Level)
+	})
+	if !ok {
+		return w.WriteLine("Log level is not reconfigurable on this logger")
+	}
+
 	if len(a) == 0 {
-		return w.WriteLine(fmt.Sprintf("Log level is: %s", l.Level))
+		return w.WriteLine(fmt.Sprintf("Log level is: %s", logging.LevelName(ctrl.GetLevel())))
 	}
 
-	level, err := logrus.ParseLevel(a[0])
+	level, err := logging.ParseLevel(strings.ToLower(a[0]))
 	if err != nil {
-		return w.WriteLine(fmt.Sprintf("Unknown log level %s. Possible log levels: %s", a, logrus.AllLevels))
+		return w.WriteLine(fmt.Sprintf("Unknown log level %s. Possible log levels: trace, debug, info, warn, error", a))
 	}
 
-	l.SetLevel(level)
-	return w.WriteLine(fmt.Sprintf("Log level is: %s", l.Level))
+	ctrl.SetLevel(level)
+	return w.WriteLine(fmt.Sprintf("Log level is: %s", logging.LevelName(ctrl.GetLevel())))
 }
 
-func sshLogFormat(l *logrus.Logger, fs any, a []string, w sshd.StringWriter) error {
+func sshLogFormat(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error {
+	ctrl, ok := l.Handler().(interface {
+		GetFormat() string
+		SetFormat(string) error
+	})
+	if !ok {
+		return w.WriteLine("Log format is not reconfigurable on this logger")
+	}
+
 	if len(a) == 0 {
-		return w.WriteLine(fmt.Sprintf("Log format is: %s", reflect.TypeOf(l.Formatter)))
+		return w.WriteLine(fmt.Sprintf("Log format is: %s", ctrl.GetFormat()))
 	}
 
-	logFormat := strings.ToLower(a[0])
-	switch logFormat {
-	case "text":
-		l.Formatter = &logrus.TextFormatter{}
-	case "json":
-		l.Formatter = &logrus.JSONFormatter{}
-	default:
-		return fmt.Errorf("unknown log format `%s`. possible formats: %s", logFormat, []string{"text", "json"})
+	if err := ctrl.SetFormat(strings.ToLower(a[0])); err != nil {
+		return err
 	}
-
-	return w.WriteLine(fmt.Sprintf("Log format is: %s", reflect.TypeOf(l.Formatter)))
+	return w.WriteLine(fmt.Sprintf("Log format is: %s", ctrl.GetFormat()))
 }
 
 func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {

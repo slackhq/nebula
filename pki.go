@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"os"
@@ -15,7 +16,6 @@ import (
 	"time"
 
 	"github.com/gaissmai/bart"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/util"
@@ -24,7 +24,7 @@ import (
 type PKI struct {
 	cs     atomic.Pointer[CertState]
 	caPool atomic.Pointer[cert.CAPool]
-	l      *logrus.Logger
+	l      *slog.Logger
 }
 
 type CertState struct {
@@ -46,7 +46,7 @@ type CertState struct {
 	myVpnBroadcastAddrsTable *bart.Lite
 }
 
-func NewPKIFromConfig(l *logrus.Logger, c *config.C) (*PKI, error) {
+func NewPKIFromConfig(l *slog.Logger, c *config.C) (*PKI, error) {
 	pki := &PKI{l: l}
 	err := pki.reload(c, true)
 	if err != nil {
@@ -182,9 +182,9 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 	p.cs.Store(newState)
 
 	if initial {
-		p.l.WithField("cert", newState).Debug("Client nebula certificate(s)")
+		p.l.Debug("Client nebula certificate(s)", "cert", newState)
 	} else {
-		p.l.WithField("cert", newState).Info("Client certificate(s) refreshed from disk")
+		p.l.Info("Client certificate(s) refreshed from disk", "cert", newState)
 	}
 	return nil
 }
@@ -196,7 +196,7 @@ func (p *PKI) reloadCAPool(c *config.C) *util.ContextualError {
 	}
 
 	p.caPool.Store(caPool)
-	p.l.WithField("fingerprints", caPool.GetFingerprints()).Debug("Trusted CA fingerprints")
+	p.l.Debug("Trusted CA fingerprints", "fingerprints", caPool.GetFingerprints())
 	return nil
 }
 
@@ -487,7 +487,7 @@ func loadCertificate(b []byte) (cert.Certificate, []byte, error) {
 	return c, b, nil
 }
 
-func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.CAPool, error) {
+func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 	caPathOrPEM := c.GetString("pki.ca", "")
 	if caPathOrPEM == "" {
 		return nil, errors.New("no pki.ca path or PEM data provided")
@@ -512,7 +512,7 @@ func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.CAPool, error) {
 		for _, crt := range caPool.CAs {
 			if crt.Certificate.Expired(time.Now()) {
 				expired++
-				l.WithField("cert", crt).Warn("expired certificate present in CA pool")
+				l.Warn("expired certificate present in CA pool", "cert", crt)
 			}
 		}
 
@@ -530,7 +530,7 @@ func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.CAPool, error) {
 			caPool.BlocklistFingerprint(fp)
 		}
 
-		l.WithField("fingerprintCount", len(bl)).Info("Blocklisted certificates")
+		l.Info("Blocklisted certificates", "fingerprintCount", len(bl))
 	}
 
 	return caPool, nil

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"runtime"
@@ -15,14 +16,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rcrowley/go-metrics"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 )
 
 // startStats initializes stats from config. On success, if any further work
 // is needed to serve stats, it returns a func to handle that work. If no
 // work is needed, it'll return nil. On failure, it returns nil, error.
-func startStats(l *logrus.Logger, c *config.C, buildVersion string, configTest bool) (func(), error) {
+func startStats(l *slog.Logger, c *config.C, buildVersion string, configTest bool) (func(), error) {
 	mType := c.GetString("stats.type", "")
 	if mType == "" || mType == "none" {
 		return nil, nil
@@ -59,7 +59,7 @@ func startStats(l *logrus.Logger, c *config.C, buildVersion string, configTest b
 	return startFn, nil
 }
 
-func startGraphiteStats(l *logrus.Logger, i time.Duration, c *config.C, configTest bool) error {
+func startGraphiteStats(l *slog.Logger, i time.Duration, c *config.C, configTest bool) error {
 	proto := c.GetString("stats.protocol", "tcp")
 	host := c.GetString("stats.host", "")
 	if host == "" {
@@ -73,13 +73,17 @@ func startGraphiteStats(l *logrus.Logger, i time.Duration, c *config.C, configTe
 	}
 
 	if !configTest {
-		l.Infof("Starting graphite. Interval: %s, prefix: %s, addr: %s", i, prefix, addr)
+		l.Info("Starting graphite",
+			"interval", i,
+			"prefix", prefix,
+			"addr", addr.String(),
+		)
 		go graphite.Graphite(metrics.DefaultRegistry, i, prefix, addr)
 	}
 	return nil
 }
 
-func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildVersion string, configTest bool) (func(), error) {
+func startPrometheusStats(l *slog.Logger, i time.Duration, c *config.C, buildVersion string, configTest bool) (func(), error) {
 	namespace := c.GetString("stats.namespace", "")
 	subsystem := c.GetString("stats.subsystem", "")
 
@@ -116,9 +120,15 @@ func startPrometheusStats(l *logrus.Logger, i time.Duration, c *config.C, buildV
 
 	var startFn func()
 	if !configTest {
+		// promhttp.HandlerOpts.ErrorLog needs a stdlib-shaped Println logger,
+		// so bridge our slog.Logger back to a *log.Logger that emits at Error.
+		errLog := slog.NewLogLogger(l.Handler(), slog.LevelError)
 		startFn = func() {
-			l.Infof("Prometheus stats listening on %s at %s", listen, path)
-			http.Handle(path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: l}))
+			l.Info("Prometheus stats listening",
+				"listen", listen,
+				"path", path,
+			)
+			http.Handle(path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: errLog}))
 			log.Fatal(http.ListenAndServe(listen, nil))
 		}
 	}

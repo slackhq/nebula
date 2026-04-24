@@ -295,7 +295,7 @@ func Test_makeRouteTree(t *testing.T) {
 	routes, err := parseUnsafeRoutes(c, []netip.Prefix{n})
 	require.NoError(t, err)
 	assert.Len(t, routes, 2)
-	routeTree, err := makeRouteTree(l, routes, true)
+	routeTree, err := makeRouteTree(test.NewLogger(), routes, true)
 	require.NoError(t, err)
 
 	ip, err := netip.ParseAddr("1.0.0.2")
@@ -367,7 +367,7 @@ func Test_makeMultipathUnsafeRouteTree(t *testing.T) {
 	routes, err := parseUnsafeRoutes(c, []netip.Prefix{n})
 	require.NoError(t, err)
 	assert.Len(t, routes, 3)
-	routeTree, err := makeRouteTree(l, routes, true)
+	routeTree, err := makeRouteTree(test.NewLogger(), routes, true)
 	require.NoError(t, err)
 
 	ip, err := netip.ParseAddr("192.168.86.1")

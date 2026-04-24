@@ -3,13 +3,13 @@ package nebula
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/netip"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
@@ -46,7 +46,7 @@ type Control struct {
 	state     RunState
 
 	f                      *Interface
-	l                      *logrus.Logger
+	l                      *slog.Logger
 	ctx                    context.Context
 	cancel                 context.CancelFunc
 	sshStart               func()
@@ -151,7 +151,7 @@ func (c *Control) Stop() {
 
 	c.CloseAllTunnels(false)
 	if err := c.f.Close(); err != nil {
-		c.l.WithError(err).Error("Close interface failed")
+		c.l.Error("Close interface failed", "error", err)
 	}
 	c.stateLock.Lock()
 	c.state = StateStopped
@@ -166,7 +166,7 @@ func (c *Control) ShutdownBlock() {
 
 	rawSig := <-sigChan
 	sig := rawSig.String()
-	c.l.WithField("signal", sig).Info("Caught signal, shutting down")
+	c.l.Info("Caught signal, shutting down", "signal", sig)
 	c.Stop()
 }
 
@@ -303,8 +303,10 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 		c.f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 		c.f.closeTunnel(h)
 
-		c.l.WithField("vpnAddrs", h.vpnAddrs).WithField("udpAddr", h.remote).
-			Debug("Sending close tunnel message")
+		c.l.Debug("Sending close tunnel message",
+			"vpnAddrs", h.vpnAddrs,
+			"udpAddr", h.remote,
+		)
 		closed++
 	}
 

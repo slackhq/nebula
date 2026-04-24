@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"sync"
@@ -17,7 +18,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/conn/winrio"
@@ -53,14 +53,14 @@ type ringBuffer struct {
 
 type RIOConn struct {
 	isOpen  atomic.Bool
-	l       *logrus.Logger
+	l       *slog.Logger
 	sock    windows.Handle
 	rx, tx  ringBuffer
 	rq      winrio.Rq
 	results [packetsPerRing]winrio.Result
 }
 
-func NewRIOListener(l *logrus.Logger, addr netip.Addr, port int) (*RIOConn, error) {
+func NewRIOListener(l *slog.Logger, addr netip.Addr, port int) (*RIOConn, error) {
 	if !winrio.Initialize() {
 		return nil, errors.New("could not initialize winrio")
 	}
@@ -83,7 +83,7 @@ func NewRIOListener(l *logrus.Logger, addr netip.Addr, port int) (*RIOConn, erro
 	return u, nil
 }
 
-func (u *RIOConn) bind(l *logrus.Logger, sa windows.Sockaddr) error {
+func (u *RIOConn) bind(l *slog.Logger, sa windows.Sockaddr) error {
 	var err error
 	u.sock, err = winrio.Socket(windows.AF_INET6, windows.SOCK_DGRAM, windows.IPPROTO_UDP)
 	if err != nil {
@@ -103,7 +103,7 @@ func (u *RIOConn) bind(l *logrus.Logger, sa windows.Sockaddr) error {
 	if err != nil {
 		// This is a best-effort to prevent errors from being returned by the udp recv operation.
 		// Quietly log a failure and continue.
-		l.WithError(err).Debug("failed to set UDP_CONNRESET ioctl")
+		l.Debug("failed to set UDP_CONNRESET ioctl", "error", err)
 	}
 
 	ret = 0
@@ -114,7 +114,7 @@ func (u *RIOConn) bind(l *logrus.Logger, sa windows.Sockaddr) error {
 	if err != nil {
 		// This is a best-effort to prevent errors from being returned by the udp recv operation.
 		// Quietly log a failure and continue.
-		l.WithError(err).Debug("failed to set UDP_NETRESET ioctl")
+		l.Debug("failed to set UDP_NETRESET ioctl", "error", err)
 	}
 
 	err = u.rx.Open()
@@ -156,7 +156,7 @@ func (u *RIOConn) ListenOut(r EncReader) error {
 			// Dampen unexpected message warns to once per minute
 			if lastRecvErr.IsZero() || time.Since(lastRecvErr) > time.Minute {
 				lastRecvErr = time.Now()
-				u.l.WithError(err).Warn("unexpected udp socket receive error")
+				u.l.Warn("unexpected udp socket receive error", "error", err)
 			}
 			continue
 		}

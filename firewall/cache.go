@@ -2,10 +2,9 @@ package firewall
 
 import (
 	"context"
+	"log/slog"
 	"sync/atomic"
 	"time"
-
-	"github.com/sirupsen/logrus"
 )
 
 // ConntrackCache is used as a local routine cache to know if a given flow
@@ -16,15 +15,17 @@ type ConntrackCacheTicker struct {
 	cacheV    uint64
 	cacheTick atomic.Uint64
 
+	l     *slog.Logger
 	cache ConntrackCache
 }
 
-func NewConntrackCacheTicker(ctx context.Context, d time.Duration) *ConntrackCacheTicker {
+func NewConntrackCacheTicker(ctx context.Context, l *slog.Logger, d time.Duration) *ConntrackCacheTicker {
 	if d == 0 {
 		return nil
 	}
 
 	c := &ConntrackCacheTicker{
+		l:     l,
 		cache: ConntrackCache{},
 	}
 
@@ -48,15 +49,15 @@ func (c *ConntrackCacheTicker) tick(ctx context.Context, d time.Duration) {
 
 // Get checks if the cache ticker has moved to the next version before returning
 // the map. If it has moved, we reset the map.
-func (c *ConntrackCacheTicker) Get(l *logrus.Logger) ConntrackCache {
+func (c *ConntrackCacheTicker) Get() ConntrackCache {
 	if c == nil {
 		return nil
 	}
 	if tick := c.cacheTick.Load(); tick != c.cacheV {
 		c.cacheV = tick
 		if ll := len(c.cache); ll > 0 {
-			if l.Level == logrus.DebugLevel {
-				l.WithField("len", ll).Debug("resetting conntrack cache")
+			if c.l.Enabled(context.Background(), slog.LevelDebug) {
+				c.l.Debug("resetting conntrack cache", "len", ll)
 			}
 			c.cache = make(ConntrackCache, ll)
 		}

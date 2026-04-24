@@ -10,6 +10,7 @@ import (
 	"github.com/flynn/noise"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/overlaytest"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
@@ -52,7 +53,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	lh := newTestLighthouse()
 	ifce := &Interface{
 		hostMap:          hostMap,
-		inside:           &test.NoopTun{},
+		inside:           &overlaytest.NoopTun{},
 		outside:          &udp.NoopConn{},
 		firewall:         &Firewall{},
 		lightHouse:       lh,
@@ -63,9 +64,9 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	ifce.pki.cs.Store(cs)
 
 	// Create manager
-	conf := config.NewC(l)
-	punchy := NewPunchyFromConfig(l, conf)
-	nc := newConnectionManagerFromConfig(l, conf, hostMap, punchy)
+	conf := config.NewC(test.NewLogger())
+	punchy := NewPunchyFromConfig(test.NewLogger(), conf)
+	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
 	nc.intf = ifce
 	p := []byte("")
 	nb := make([]byte, 12, 12)
@@ -135,7 +136,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	lh := newTestLighthouse()
 	ifce := &Interface{
 		hostMap:          hostMap,
-		inside:           &test.NoopTun{},
+		inside:           &overlaytest.NoopTun{},
 		outside:          &udp.NoopConn{},
 		firewall:         &Firewall{},
 		lightHouse:       lh,
@@ -146,9 +147,9 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	ifce.pki.cs.Store(cs)
 
 	// Create manager
-	conf := config.NewC(l)
-	punchy := NewPunchyFromConfig(l, conf)
-	nc := newConnectionManagerFromConfig(l, conf, hostMap, punchy)
+	conf := config.NewC(test.NewLogger())
+	punchy := NewPunchyFromConfig(test.NewLogger(), conf)
+	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
 	nc.intf = ifce
 	p := []byte("")
 	nb := make([]byte, 12, 12)
@@ -220,7 +221,7 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	lh := newTestLighthouse()
 	ifce := &Interface{
 		hostMap:          hostMap,
-		inside:           &test.NoopTun{},
+		inside:           &overlaytest.NoopTun{},
 		outside:          &udp.NoopConn{},
 		firewall:         &Firewall{},
 		lightHouse:       lh,
@@ -231,12 +232,12 @@ func Test_NewConnectionManager_DisconnectInactive(t *testing.T) {
 	ifce.pki.cs.Store(cs)
 
 	// Create manager
-	conf := config.NewC(l)
+	conf := config.NewC(test.NewLogger())
 	conf.Settings["tunnels"] = map[string]any{
 		"drop_inactive": true,
 	}
-	punchy := NewPunchyFromConfig(l, conf)
-	nc := newConnectionManagerFromConfig(l, conf, hostMap, punchy)
+	punchy := NewPunchyFromConfig(test.NewLogger(), conf)
+	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
 	assert.True(t, nc.dropInactive.Load())
 	nc.intf = ifce
 
@@ -347,7 +348,7 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	lh := newTestLighthouse()
 	ifce := &Interface{
 		hostMap:          hostMap,
-		inside:           &test.NoopTun{},
+		inside:           &overlaytest.NoopTun{},
 		outside:          &udp.NoopConn{},
 		firewall:         &Firewall{},
 		lightHouse:       lh,
@@ -360,9 +361,9 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	ifce.disconnectInvalid.Store(true)
 
 	// Create manager
-	conf := config.NewC(l)
-	punchy := NewPunchyFromConfig(l, conf)
-	nc := newConnectionManagerFromConfig(l, conf, hostMap, punchy)
+	conf := config.NewC(test.NewLogger())
+	punchy := NewPunchyFromConfig(test.NewLogger(), conf)
+	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
 	nc.intf = ifce
 	ifce.connectionManager = nc
 

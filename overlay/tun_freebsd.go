@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/netip"
 	"os"
 	"sync/atomic"
@@ -17,8 +18,9 @@ import (
 	"unsafe"
 
 	"github.com/gaissmai/bart"
-	"github.com/sirupsen/logrus"
+
 	"github.com/slackhq/nebula/config"
+
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	netroute "golang.org/x/net/route"
@@ -93,7 +95,7 @@ type tun struct {
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	linkAddr    *netroute.LinkAddr
-	l           *logrus.Logger
+	l           *slog.Logger
 
 	fd        int
 	shutdownR int // read end of the shutdown pipe; closing the write end wakes blocked polls
@@ -243,7 +245,7 @@ func (t *tun) Close() error {
 
 	if t.fd >= 0 {
 		if err := unix.Close(t.fd); err != nil {
-			t.l.WithError(err).Error("Error closing device")
+			t.l.Error("Error closing device", "error", err)
 		}
 		t.fd = -1
 	}
@@ -264,7 +266,7 @@ func (t *tun) Close() error {
 			err = ioctl(uintptr(s), syscall.SIOCIFDESTROY, uintptr(unsafe.Pointer(&ifreq)))
 		}
 		if err != nil {
-			t.l.WithError(err).Error("Error destroying tunnel")
+			t.l.Error("Error destroying tunnel", "error", err)
 		}
 	}()
 
@@ -277,11 +279,11 @@ func (t *tun) Close() error {
 	return nil
 }
 
-func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*tun, error) {
+func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*tun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in FreeBSD")
 }
 
-func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
+func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
 	// Try to open existing tun device
 	var fd int
 	var err error
@@ -584,7 +586,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 				return retErr
 			}
 		} else {
-			t.l.WithField("route", r).Info("Added route")
+			t.l.Info("Added route", "route", r)
 		}
 	}
 
@@ -599,9 +601,9 @@ func (t *tun) removeRoutes(routes []Route) error {
 
 		err := delRoute(r.Cidr, t.linkAddr)
 		if err != nil {
-			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
+			t.l.Error("Failed to remove route", "error", err, "route", r)
 		} else {
-			t.l.WithField("route", r).Info("Removed route")
+			t.l.Info("Removed route", "route", r)
 		}
 	}
 	return nil

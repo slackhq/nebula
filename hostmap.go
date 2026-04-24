@@ -1,9 +1,11 @@
 package nebula
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"slices"
@@ -13,10 +15,10 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/logging"
 )
 
 const defaultPromoteEvery = 1000       // Count of packets sent before we try moving a tunnel to a preferred underlay ip address
@@ -60,7 +62,7 @@ type HostMap struct {
 	RemoteIndexes   map[uint32]*HostInfo
 	Hosts           map[netip.Addr]*HostInfo
 	preferredRanges atomic.Pointer[[]netip.Prefix]
-	l               *logrus.Logger
+	l               *slog.Logger
 }
 
 // For synchronization, treat the pointed-to Relay struct as immutable. To edit the Relay
@@ -313,7 +315,7 @@ type cachedPacketMetrics struct {
 	dropped metrics.Counter
 }
 
-func NewHostMapFromConfig(l *logrus.Logger, c *config.C) *HostMap {
+func NewHostMapFromConfig(l *slog.Logger, c *config.C) *HostMap {
 	hm := newHostMap(l)
 
 	hm.reload(c, true)
@@ -321,13 +323,12 @@ func NewHostMapFromConfig(l *logrus.Logger, c *config.C) *HostMap {
 		hm.reload(c, false)
 	})
 
-	l.WithField("preferredRanges", hm.GetPreferredRanges()).
-		Info("Main HostMap created")
+	l.Info("Main HostMap created", "preferredRanges", hm.GetPreferredRanges())
 
 	return hm
 }
 
-func newHostMap(l *logrus.Logger) *HostMap {
+func newHostMap(l *slog.Logger) *HostMap {
 	return &HostMap{
 		Indexes:       map[uint32]*HostInfo{},
 		Relays:        map[uint32]*HostInfo{},
@@ -346,7 +347,10 @@ func (hm *HostMap) reload(c *config.C, initial bool) {
 			preferredRange, err := netip.ParsePrefix(rawPreferredRange)
 
 			if err != nil {
-				hm.l.WithError(err).WithField("range", rawPreferredRanges).Warn("Failed to parse preferred ranges, ignoring")
+				hm.l.Warn("Failed to parse preferred ranges, ignoring",
+					"error", err,
+					"range", rawPreferredRanges,
+				)
 				continue
 			}
 
@@ -355,7 +359,10 @@ func (hm *HostMap) reload(c *config.C, initial bool) {
 
 		oldRanges := hm.preferredRanges.Swap(&preferredRanges)
 		if !initial {
-			hm.l.WithField("oldPreferredRanges", *oldRanges).WithField("newPreferredRanges", preferredRanges).Info("preferred_ranges changed")
+			hm.l.Info("preferred_ranges changed",
+				"oldPreferredRanges", *oldRanges,
+				"newPreferredRanges", preferredRanges,
+			)
 		}
 	}
 }
@@ -488,10 +495,11 @@ func (hm *HostMap) unlockedInnerDeleteHostInfo(hostinfo *HostInfo, addr netip.Ad
 		hm.Indexes = map[uint32]*HostInfo{}
 	}
 
-	if hm.l.Level >= logrus.DebugLevel {
-		hm.l.WithField("hostMap", m{"mapTotalSize": len(hm.Hosts),
-			"vpnAddrs": hostinfo.vpnAddrs, "indexNumber": hostinfo.localIndexId, "remoteIndexNumber": hostinfo.remoteIndexId}).
-			Debug("Hostmap hostInfo deleted")
+	if hm.l.Enabled(context.Background(), slog.LevelDebug) {
+		hm.l.Debug("Hostmap hostInfo deleted",
+			"hostMap", m{"mapTotalSize": len(hm.Hosts),
+				"vpnAddrs": hostinfo.vpnAddrs, "indexNumber": hostinfo.localIndexId, "remoteIndexNumber": hostinfo.remoteIndexId},
+		)
 	}
 
 	if isLastHostinfo {
@@ -615,10 +623,11 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	hm.Indexes[hostinfo.localIndexId] = hostinfo
 	hm.RemoteIndexes[hostinfo.remoteIndexId] = hostinfo
 
-	if hm.l.Level >= logrus.DebugLevel {
-		hm.l.WithField("hostMap", m{"vpnAddrs": hostinfo.vpnAddrs, "mapTotalSize": len(hm.Hosts),
-			"hostinfo": m{"existing": true, "localIndexId": hostinfo.localIndexId, "vpnAddrs": hostinfo.vpnAddrs}}).
-			Debug("Hostmap vpnIp added")
+	if hm.l.Enabled(context.Background(), slog.LevelDebug) {
+		hm.l.Debug("Hostmap vpnIp added",
+			"hostMap", m{"vpnAddrs": hostinfo.vpnAddrs, "mapTotalSize": len(hm.Hosts),
+				"hostinfo": m{"existing": true, "localIndexId": hostinfo.localIndexId, "vpnAddrs": hostinfo.vpnAddrs}},
+		)
 	}
 }
 
@@ -784,18 +793,21 @@ func (i *HostInfo) buildNetworks(myVpnNetworksTable *bart.Lite, c cert.Certifica
 	}
 }
 
-func (i *HostInfo) logger(l *logrus.Logger) *logrus.Entry {
+// logger returns a derived slog.Logger with per-hostinfo fields pre-bound.
+func (i *HostInfo) logger(l *slog.Logger) *slog.Logger {
 	if i == nil {
-		return logrus.NewEntry(l)
+		return l
 	}
 
-	li := l.WithField("vpnAddrs", i.vpnAddrs).
-		WithField("localIndex", i.localIndexId).
-		WithField("remoteIndex", i.remoteIndexId)
+	li := l.With(
+		"vpnAddrs", i.vpnAddrs,
+		"localIndex", i.localIndexId,
+		"remoteIndex", i.remoteIndexId,
+	)
 
 	if connState := i.ConnectionState; connState != nil {
 		if peerCert := connState.peerCert; peerCert != nil {
-			li = li.WithField("certName", peerCert.Certificate.Name())
+			li = li.With("certName", peerCert.Certificate.Name())
 		}
 	}
 
@@ -804,14 +816,17 @@ func (i *HostInfo) logger(l *logrus.Logger) *logrus.Entry {
 
 // Utility functions
 
-func localAddrs(l *logrus.Logger, allowList *LocalAllowList) []netip.Addr {
+func localAddrs(l *slog.Logger, allowList *LocalAllowList) []netip.Addr {
 	//FIXME: This function is pretty garbage
 	var finalAddrs []netip.Addr
 	ifaces, _ := net.Interfaces()
 	for _, i := range ifaces {
 		allow := allowList.AllowName(i.Name)
-		if l.Level >= logrus.TraceLevel {
-			l.WithField("interfaceName", i.Name).WithField("allow", allow).Trace("localAllowList.AllowName")
+		if l.Enabled(context.Background(), logging.LevelTrace) {
+			l.Log(context.Background(), logging.LevelTrace, "localAllowList.AllowName",
+				"interfaceName", i.Name,
+				"allow", allow,
+			)
 		}
 
 		if !allow {
@@ -829,8 +844,8 @@ func localAddrs(l *logrus.Logger, allowList *LocalAllowList) []netip.Addr {
 			}
 
 			if !addr.IsValid() {
-				if l.Level >= logrus.DebugLevel {
-					l.WithField("localAddr", rawAddr).Debug("addr was invalid")
+				if l.Enabled(context.Background(), slog.LevelDebug) {
+					l.Debug("addr was invalid", "localAddr", rawAddr)
 				}
 				continue
 			}
@@ -838,8 +853,11 @@ func localAddrs(l *logrus.Logger, allowList *LocalAllowList) []netip.Addr {
 
 			if addr.IsLoopback() == false && addr.IsLinkLocalUnicast() == false {
 				isAllowed := allowList.Allow(addr)
-				if l.Level >= logrus.TraceLevel {
-					l.WithField("localAddr", addr).WithField("allowed", isAllowed).Trace("localAllowList.Allow")
+				if l.Enabled(context.Background(), logging.LevelTrace) {
+					l.Log(context.Background(), logging.LevelTrace, "localAllowList.Allow",
+						"localAddr", addr,
+						"allowed", isAllowed,
+					)
 				}
 				if !isAllowed {
 					continue

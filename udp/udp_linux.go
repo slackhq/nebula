@@ -7,13 +7,13 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"syscall"
 	"unsafe"
 
 	"github.com/rcrowley/go-metrics"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"golang.org/x/sys/unix"
 )
@@ -22,7 +22,7 @@ type StdConn struct {
 	udpConn *net.UDPConn
 	rawConn syscall.RawConn
 	isV4    bool
-	l       *logrus.Logger
+	l       *slog.Logger
 	batch   int
 }
 
@@ -38,7 +38,7 @@ func setReusePort(network, address string, c syscall.RawConn) error {
 	return opErr
 }
 
-func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
+func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
 	listen := netip.AddrPortFrom(ip, uint16(port))
 	lc := net.ListenConfig{}
 	if multi {
@@ -242,12 +242,12 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 		if err == nil {
 			s, err := u.GetRecvBuffer()
 			if err == nil {
-				u.l.WithField("size", s).Info("listen.read_buffer was set")
+				u.l.Info("listen.read_buffer was set", "size", s)
 			} else {
-				u.l.WithError(err).Warn("Failed to get listen.read_buffer")
+				u.l.Warn("Failed to get listen.read_buffer", "error", err)
 			}
 		} else {
-			u.l.WithError(err).Error("Failed to set listen.read_buffer")
+			u.l.Error("Failed to set listen.read_buffer", "error", err)
 		}
 	}
 
@@ -257,12 +257,12 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 		if err == nil {
 			s, err := u.GetSendBuffer()
 			if err == nil {
-				u.l.WithField("size", s).Info("listen.write_buffer was set")
+				u.l.Info("listen.write_buffer was set", "size", s)
 			} else {
-				u.l.WithError(err).Warn("Failed to get listen.write_buffer")
+				u.l.Warn("Failed to get listen.write_buffer", "error", err)
 			}
 		} else {
-			u.l.WithError(err).Error("Failed to set listen.write_buffer")
+			u.l.Error("Failed to set listen.write_buffer", "error", err)
 		}
 	}
 
@@ -273,12 +273,12 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 		if err == nil {
 			s, err := u.GetSoMark()
 			if err == nil {
-				u.l.WithField("mark", s).Info("listen.so_mark was set")
+				u.l.Info("listen.so_mark was set", "mark", s)
 			} else {
-				u.l.WithError(err).Warn("Failed to get listen.so_mark")
+				u.l.Warn("Failed to get listen.so_mark", "error", err)
 			}
 		} else {
-			u.l.WithError(err).Error("Failed to set listen.so_mark")
+			u.l.Error("Failed to set listen.so_mark", "error", err)
 		}
 	}
 }

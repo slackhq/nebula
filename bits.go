@@ -1,8 +1,10 @@
 package nebula
 
 import (
+	"context"
+	"log/slog"
+
 	"github.com/rcrowley/go-metrics"
-	"github.com/sirupsen/logrus"
 )
 
 type Bits struct {
@@ -30,7 +32,7 @@ func NewBits(bits uint64) *Bits {
 	return b
 }
 
-func (b *Bits) Check(l *logrus.Logger, i uint64) bool {
+func (b *Bits) Check(l *slog.Logger, i uint64) bool {
 	// If i is the next number, return true.
 	if i > b.current {
 		return true
@@ -42,13 +44,16 @@ func (b *Bits) Check(l *logrus.Logger, i uint64) bool {
 	}
 
 	// Not within the window
-	if l.Level >= logrus.DebugLevel {
-		l.Debugf("rejected a packet (top) %d %d\n", b.current, i)
+	if l.Enabled(context.Background(), slog.LevelDebug) {
+		l.Debug("rejected a packet (top)",
+			"current", b.current,
+			"incoming", i,
+		)
 	}
 	return false
 }
 
-func (b *Bits) Update(l *logrus.Logger, i uint64) bool {
+func (b *Bits) Update(l *slog.Logger, i uint64) bool {
 	// If i is the next number, return true and update current.
 	if i == b.current+1 {
 		// Check if the oldest bit was lost since we are shifting the window by 1 and occupying it with this counter
@@ -87,9 +92,13 @@ func (b *Bits) Update(l *logrus.Logger, i uint64) bool {
 	// Check to see if it's a duplicate
 	if i > b.current-b.length || i < b.length && b.current < b.length {
 		if b.current == i || b.bits[i%b.length] == true {
-			if l.Level >= logrus.DebugLevel {
-				l.WithField("receiveWindow", m{"accepted": false, "currentCounter": b.current, "incomingCounter": i, "reason": "duplicate"}).
-					Debug("Receive window")
+			if l.Enabled(context.Background(), slog.LevelDebug) {
+				l.Debug("Receive window",
+					"accepted", false,
+					"currentCounter", b.current,
+					"incomingCounter", i,
+					"reason", "duplicate",
+				)
 			}
 			b.dupeCounter.Inc(1)
 			return false
@@ -101,12 +110,13 @@ func (b *Bits) Update(l *logrus.Logger, i uint64) bool {
 
 	// In all other cases, fail and don't change current.
 	b.outOfWindowCounter.Inc(1)
-	if l.Level >= logrus.DebugLevel {
-		l.WithField("accepted", false).
-			WithField("currentCounter", b.current).
-			WithField("incomingCounter", i).
-			WithField("reason", "nonsense").
-			Debug("Receive window")
+	if l.Enabled(context.Background(), slog.LevelDebug) {
+		l.Debug("Receive window",
+			"accepted", false,
+			"currentCounter", b.current,
+			"incomingCounter", i,
+			"reason", "nonsense",
+		)
 	}
 	return false
 }

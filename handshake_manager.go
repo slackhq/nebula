@@ -6,13 +6,13 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"log/slog"
 	"net/netip"
 	"slices"
 	"sync"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
@@ -59,7 +59,7 @@ type HandshakeManager struct {
 	metricInitiated        metrics.Counter
 	metricTimedOut         metrics.Counter
 	f                      *Interface
-	l                      *logrus.Logger
+	l                      *slog.Logger
 
 	// can be used to trigger outbound handshake for the given vpnIp
 	trigger chan netip.Addr
@@ -78,32 +78,32 @@ type HandshakeHostInfo struct {
 	hostinfo *HostInfo
 }
 
-func (hh *HandshakeHostInfo) cachePacket(l *logrus.Logger, t header.MessageType, st header.MessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
+func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, st header.MessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
 	if len(hh.packetStore) < 100 {
 		tempPacket := make([]byte, len(packet))
 		copy(tempPacket, packet)
 
 		hh.packetStore = append(hh.packetStore, &cachedPacket{t, st, f, tempPacket})
-		if l.Level >= logrus.DebugLevel {
-			hh.hostinfo.logger(l).
-				WithField("length", len(hh.packetStore)).
-				WithField("stored", true).
-				Debugf("Packet store")
+		if l.Enabled(context.Background(), slog.LevelDebug) {
+			hh.hostinfo.logger(l).Debug("Packet store",
+				"length", len(hh.packetStore),
+				"stored", true,
+			)
 		}
 
 	} else {
 		m.dropped.Inc(1)
 
-		if l.Level >= logrus.DebugLevel {
-			hh.hostinfo.logger(l).
-				WithField("length", len(hh.packetStore)).
-				WithField("stored", false).
-				Debugf("Packet store")
+		if l.Enabled(context.Background(), slog.LevelDebug) {
+			hh.hostinfo.logger(l).Debug("Packet store",
+				"length", len(hh.packetStore),
+				"stored", false,
+			)
 		}
 	}
 }
 
-func NewHandshakeManager(l *logrus.Logger, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
+func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
 		vpnIps:                 map[netip.Addr]*HandshakeHostInfo{},
 		indexes:                map[uint32]*HandshakeHostInfo{},
@@ -140,7 +140,7 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 	// First remote allow list check before we know the vpnIp
 	if !via.IsRelayed {
 		if !hm.lightHouse.GetRemoteAllowList().AllowUnknownVpnAddr(via.UdpAddr.Addr()) {
-			hm.l.WithField("from", via).Debug("lighthouse.remote_allow_list denied incoming handshake")
+			hm.l.Debug("lighthouse.remote_allow_list denied incoming handshake", "from", via)
 			return
 		}
 	}
@@ -183,12 +183,13 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 	hostinfo := hh.hostinfo
 	// If we are out of time, clean up
 	if hh.counter >= hm.config.retries {
-		hh.hostinfo.logger(hm.l).WithField("udpAddrs", hh.hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges())).
-			WithField("initiatorIndex", hh.hostinfo.localIndexId).
-			WithField("remoteIndex", hh.hostinfo.remoteIndexId).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			WithField("durationNs", time.Since(hh.startTime).Nanoseconds()).
-			Info("Handshake timed out")
+		hh.hostinfo.logger(hm.l).Info("Handshake timed out",
+			"udpAddrs", hh.hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges()),
+			"initiatorIndex", hh.hostinfo.localIndexId,
+			"remoteIndex", hh.hostinfo.remoteIndexId,
+			"handshake", m{"stage": 1, "style": "ix_psk0"},
+			"durationNs", time.Since(hh.startTime).Nanoseconds(),
+		)
 		hm.metricTimedOut.Inc(1)
 		hm.DeleteHostInfo(hostinfo)
 		return
@@ -241,10 +242,12 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		hm.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
 		err := hm.outside.WriteTo(hostinfo.HandshakePacket[0], addr)
 		if err != nil {
-			hostinfo.logger(hm.l).WithField("udpAddr", addr).
-				WithField("initiatorIndex", hostinfo.localIndexId).
-				WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-				WithError(err).Error("Failed to send handshake message")
+			hostinfo.logger(hm.l).Error("Failed to send handshake message",
+				"udpAddr", addr,
+				"initiatorIndex", hostinfo.localIndexId,
+				"handshake", m{"stage": 1, "style": "ix_psk0"},
+				"error", err,
+			)
 
 		} else {
 			sentTo = append(sentTo, addr)
@@ -254,19 +257,21 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 	// Don't be too noisy or confusing if we fail to send a handshake - if we don't get through we'll eventually log a timeout,
 	// so only log when the list of remotes has changed
 	if remotesHaveChanged {
-		hostinfo.logger(hm.l).WithField("udpAddrs", sentTo).
-			WithField("initiatorIndex", hostinfo.localIndexId).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Info("Handshake message sent")
-	} else if hm.l.Level >= logrus.DebugLevel {
-		hostinfo.logger(hm.l).WithField("udpAddrs", sentTo).
-			WithField("initiatorIndex", hostinfo.localIndexId).
-			WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-			Debug("Handshake message sent")
+		hostinfo.logger(hm.l).Info("Handshake message sent",
+			"udpAddrs", sentTo,
+			"initiatorIndex", hostinfo.localIndexId,
+			"handshake", m{"stage": 1, "style": "ix_psk0"},
+		)
+	} else if hm.l.Enabled(context.Background(), slog.LevelDebug) {
+		hostinfo.logger(hm.l).Debug("Handshake message sent",
+			"udpAddrs", sentTo,
+			"initiatorIndex", hostinfo.localIndexId,
+			"handshake", m{"stage": 1, "style": "ix_psk0"},
+		)
 	}
 
 	if hm.config.useRelays && len(hostinfo.remotes.relays) > 0 {
-		hostinfo.logger(hm.l).WithField("relays", hostinfo.remotes.relays).Info("Attempt to relay through hosts")
+		hostinfo.logger(hm.l).Info("Attempt to relay through hosts", "relays", hostinfo.remotes.relays)
 		// Send a RelayRequest to all known Relay IP's
 		for _, relay := range hostinfo.remotes.relays {
 			// Don't relay through the host I'm trying to connect to
@@ -281,7 +286,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 
 			relayHostInfo := hm.mainHostMap.QueryVpnAddr(relay)
 			if relayHostInfo == nil || !relayHostInfo.remote.IsValid() {
-				hostinfo.logger(hm.l).WithField("relay", relay.String()).Info("Establish tunnel to relay target")
+				hostinfo.logger(hm.l).Info("Establish tunnel to relay target", "relay", relay.String())
 				hm.f.Handshake(relay)
 				continue
 			}
@@ -292,7 +297,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 				if relayHostInfo.remote.IsValid() {
 					idx, err := AddRelay(hm.l, relayHostInfo, hm.mainHostMap, vpnIp, nil, TerminalType, Requested)
 					if err != nil {
-						hostinfo.logger(hm.l).WithField("relay", relay.String()).WithError(err).Info("Failed to add relay to hostmap")
+						hostinfo.logger(hm.l).Info("Failed to add relay to hostmap", "relay", relay.String(), "error", err)
 					}
 
 					m := NebulaControl{
@@ -326,17 +331,15 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 
 					msg, err := m.Marshal()
 					if err != nil {
-						hostinfo.logger(hm.l).
-							WithError(err).
-							Error("Failed to marshal Control message to create relay")
+						hostinfo.logger(hm.l).Error("Failed to marshal Control message to create relay", "error", err)
 					} else {
 						hm.f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, make([]byte, 12), make([]byte, mtu))
-						hm.l.WithFields(logrus.Fields{
-							"relayFrom":           hm.f.myVpnAddrs[0],
-							"relayTo":             vpnIp,
-							"initiatorRelayIndex": idx,
-							"relay":               relay}).
-							Info("send CreateRelayRequest")
+						hm.l.Info("send CreateRelayRequest",
+							"relayFrom", hm.f.myVpnAddrs[0],
+							"relayTo", vpnIp,
+							"initiatorRelayIndex", idx,
+							"relay", relay,
+						)
 					}
 				}
 				continue
@@ -344,14 +347,14 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 
 			switch existingRelay.State {
 			case Established:
-				hostinfo.logger(hm.l).WithField("relay", relay.String()).Info("Send handshake via relay")
+				hostinfo.logger(hm.l).Info("Send handshake via relay", "relay", relay.String())
 				hm.f.SendVia(relayHostInfo, existingRelay, hostinfo.HandshakePacket[0], make([]byte, 12), make([]byte, mtu), false)
 			case Disestablished:
 				// Mark this relay as 'requested'
 				relayHostInfo.relayState.UpdateRelayForByIpState(vpnIp, Requested)
 				fallthrough
 			case Requested:
-				hostinfo.logger(hm.l).WithField("relay", relay.String()).Info("Re-send CreateRelay request")
+				hostinfo.logger(hm.l).Info("Re-send CreateRelay request", "relay", relay.String())
 				// Re-send the CreateRelay request, in case the previous one was lost.
 				m := NebulaControl{
 					Type:                NebulaControl_CreateRelayRequest,
@@ -383,28 +386,26 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 				}
 				msg, err := m.Marshal()
 				if err != nil {
-					hostinfo.logger(hm.l).
-						WithError(err).
-						Error("Failed to marshal Control message to create relay")
+					hostinfo.logger(hm.l).Error("Failed to marshal Control message to create relay", "error", err)
 				} else {
 					// This must send over the hostinfo, not over hm.Hosts[ip]
 					hm.f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, make([]byte, 12), make([]byte, mtu))
-					hm.l.WithFields(logrus.Fields{
-						"relayFrom":           hm.f.myVpnAddrs[0],
-						"relayTo":             vpnIp,
-						"initiatorRelayIndex": existingRelay.LocalIndex,
-						"relay":               relay}).
-						Info("send CreateRelayRequest")
+					hm.l.Info("send CreateRelayRequest",
+						"relayFrom", hm.f.myVpnAddrs[0],
+						"relayTo", vpnIp,
+						"initiatorRelayIndex", existingRelay.LocalIndex,
+						"relay", relay,
+					)
 				}
 			case PeerRequested:
 				// PeerRequested only occurs in Forwarding relays, not Terminal relays, and this is a Terminal relay case.
 				fallthrough
 			default:
-				hostinfo.logger(hm.l).
-					WithField("vpnIp", vpnIp).
-					WithField("state", existingRelay.State).
-					WithField("relay", relay).
-					Errorf("Relay unexpected state")
+				hostinfo.logger(hm.l).Error("Relay unexpected state",
+					"vpnIp", vpnIp,
+					"state", existingRelay.State,
+					"relay", relay,
+				)
 
 			}
 		}
@@ -549,9 +550,10 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 	if found && existingRemoteIndex != nil && existingRemoteIndex.vpnAddrs[0] != hostinfo.vpnAddrs[0] {
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
-		hostinfo.logger(hm.l).
-			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", existingRemoteIndex.vpnAddrs).
-			Info("New host shadows existing host remoteIndex")
+		hostinfo.logger(hm.l).Info("New host shadows existing host remoteIndex",
+			"remoteIndex", hostinfo.remoteIndexId,
+			"collision", existingRemoteIndex.vpnAddrs,
+		)
 	}
 
 	hm.mainHostMap.unlockedAddHostInfo(hostinfo, f)
@@ -571,9 +573,10 @@ func (hm *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 	if found && existingRemoteIndex != nil {
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
-		hostinfo.logger(hm.l).
-			WithField("remoteIndex", hostinfo.remoteIndexId).WithField("collision", existingRemoteIndex.vpnAddrs).
-			Info("New host shadows existing host remoteIndex")
+		hostinfo.logger(hm.l).Info("New host shadows existing host remoteIndex",
+			"remoteIndex", hostinfo.remoteIndexId,
+			"collision", existingRemoteIndex.vpnAddrs,
+		)
 	}
 
 	// We need to remove from the pending hostmap first to avoid undoing work when after to the main hostmap.
@@ -629,10 +632,11 @@ func (hm *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 		hm.indexes = map[uint32]*HandshakeHostInfo{}
 	}
 
-	if hm.l.Level >= logrus.DebugLevel {
-		hm.l.WithField("hostMap", m{"mapTotalSize": len(hm.vpnIps),
-			"vpnAddrs": hostinfo.vpnAddrs, "indexNumber": hostinfo.localIndexId, "remoteIndexNumber": hostinfo.remoteIndexId}).
-			Debug("Pending hostmap hostInfo deleted")
+	if hm.l.Enabled(context.Background(), slog.LevelDebug) {
+		hm.l.Debug("Pending hostmap hostInfo deleted",
+			"hostMap", m{"mapTotalSize": len(hm.vpnIps),
+				"vpnAddrs": hostinfo.vpnAddrs, "indexNumber": hostinfo.localIndexId, "remoteIndexNumber": hostinfo.remoteIndexId},
+		)
 	}
 }
 
@@ -700,7 +704,7 @@ func (hm *HandshakeManager) EmitStats() {
 
 // Utility functions below
 
-func generateIndex(l *logrus.Logger) (uint32, error) {
+func generateIndex(l *slog.Logger) (uint32, error) {
 	b := make([]byte, 4)
 
 	// Let zero mean we don't know the ID, so don't generate zero
@@ -708,16 +712,15 @@ func generateIndex(l *logrus.Logger) (uint32, error) {
 	for index == 0 {
 		_, err := rand.Read(b)
 		if err != nil {
-			l.Errorln(err)
+			l.Error("Failed to generate index", "error", err)
 			return 0, err
 		}
 
 		index = binary.BigEndian.Uint32(b)
 	}
 
-	if l.Level >= logrus.DebugLevel {
-		l.WithField("index", index).
-			Debug("Generated index")
+	if l.Enabled(context.Background(), slog.LevelDebug) {
+		l.Debug("Generated index", "index", index)
 	}
 	return index, nil
 }

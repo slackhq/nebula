@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/netip"
 	"os"
 	"sync/atomic"
@@ -14,7 +15,6 @@ import (
 	"unsafe"
 
 	"github.com/gaissmai/bart"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
@@ -30,7 +30,7 @@ type tun struct {
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	linkAddr    *netroute.LinkAddr
-	l           *logrus.Logger
+	l           *slog.Logger
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
 	out []byte
@@ -79,7 +79,7 @@ type ifreqAlias6 struct {
 	Lifetime   addrLifetime
 }
 
-func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
+func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*tun, error) {
 	name := c.GetString("tun.dev", "")
 	ifIndex := -1
 	if name != "" && name != "utun" {
@@ -153,7 +153,7 @@ func (t *tun) deviceBytes() (o [16]byte) {
 	return
 }
 
-func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (*tun, error) {
+func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*tun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
 }
 
@@ -389,8 +389,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 		err := addRoute(r.Cidr, t.linkAddr)
 		if err != nil {
 			if errors.Is(err, unix.EEXIST) {
-				t.l.WithField("route", r.Cidr).
-					Warnf("unable to add unsafe_route, identical route already exists")
+				t.l.Warn("unable to add unsafe_route, identical route already exists", "route", r.Cidr)
 			} else {
 				retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 				if logErrors {
@@ -400,7 +399,7 @@ func (t *tun) addRoutes(logErrors bool) error {
 				}
 			}
 		} else {
-			t.l.WithField("route", r).Info("Added route")
+			t.l.Info("Added route", "route", r)
 		}
 	}
 
@@ -415,9 +414,9 @@ func (t *tun) removeRoutes(routes []Route) error {
 
 		err := delRoute(r.Cidr, t.linkAddr)
 		if err != nil {
-			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
+			t.l.Error("Failed to remove route", "error", err, "route", r)
 		} else {
-			t.l.WithField("route", r).Info("Removed route")
+			t.l.Info("Removed route", "route", r)
 		}
 	}
 	return nil
