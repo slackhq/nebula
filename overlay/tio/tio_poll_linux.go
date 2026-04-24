@@ -3,6 +3,7 @@ package tio
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
@@ -120,6 +121,13 @@ func (t *Poll) readOne(to []byte) (int, error) {
 	}
 	for {
 		n, _, errno := syscall.Syscall(syscall.SYS_READV, uintptr(t.fd), uintptr(unsafe.Pointer(&iovecs[0])), 2)
+		// Pin the iovec + destination buffer backing array across the syscall.
+		// Without these the Go runtime may move/GC them while the kernel is
+		// still writing via DMA (we pass the iovec as uintptr, which hides it
+		// from escape analysis). Same class of bug as rawWrite in the Offload
+		// path.
+		runtime.KeepAlive(iovecs)
+		runtime.KeepAlive(to)
 		if errno == 0 {
 			bytesRead := int(n)
 			if bytesRead < 4 {
@@ -166,6 +174,10 @@ func (t *Poll) Write(from []byte) (int, error) {
 	}
 	for {
 		n, _, errno := syscall.Syscall(syscall.SYS_WRITEV, uintptr(t.fd), uintptr(unsafe.Pointer(&iovecs[0])), 2)
+		// Pin the iovec + source buffer backing array across the syscall.
+		// See readOne's KeepAlive comment for rationale.
+		runtime.KeepAlive(iovecs)
+		runtime.KeepAlive(from)
 		if errno == 0 {
 			return int(n) - 4, nil
 		}
