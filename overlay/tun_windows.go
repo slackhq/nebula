@@ -71,7 +71,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 	if err != nil {
 		// Windows 10 has an issue with unclean shutdowns not fully cleaning up the wintun device.
 		// Trying a second time resolves the issue.
-		l.Debug("Failed to create wintun device, retrying", slog.Any("error", err))
+		l.Debug("Failed to create wintun device, retrying", "error", err)
 		tunDevice, err = wintun.CreateTUNWithRequestedGUID(deviceName, guid, t.MTU)
 		if err != nil {
 			return nil, &NameError{
@@ -170,7 +170,7 @@ func (t *winTun) addRoutes(logErrors bool) error {
 				return retErr
 			}
 		} else {
-			t.l.Info("Added route", slog.Any("route", r))
+			t.l.Info("Added route", "route", r)
 		}
 
 		if !foundDefault4 {
@@ -208,9 +208,9 @@ func (t *winTun) removeRoutes(routes []Route) error {
 		// See comment on luid.AddRoute
 		err := luid.DeleteRoute(r.Cidr, r.Via[0].Addr())
 		if err != nil {
-			t.l.Error("Failed to remove route", slog.Any("error", err), slog.Any("route", r))
+			t.l.Error("Failed to remove route", "error", err, "route", r)
 		} else {
-			t.l.Info("Removed route", slog.Any("route", r))
+			t.l.Info("Removed route", "route", r)
 		}
 	}
 	return nil

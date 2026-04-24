@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"runtime/debug"
 	"strings"
@@ -54,7 +53,7 @@ func main() {
 
 	if *serviceFlag != "" {
 		if err := doService(configPath, configTest, Build, serviceFlag); err != nil {
-			l.Error("Service command failed", slog.Any("error", err))
+			l.Error("Service command failed", "error", err)
 			os.Exit(1)
 		}
 		return
@@ -89,7 +88,7 @@ func main() {
 		go ctrl.ShutdownBlock()
 
 		if err := wait(); err != nil {
-			l.Error("Nebula stopped due to fatal error", slog.Any("error", err))
+			l.Error("Nebula stopped due to fatal error", "error", err)
 			os.Exit(2)
 		}
 

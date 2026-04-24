@@ -70,9 +70,9 @@ func (u *TesterConn) Send(packet *Packet) {
 	}
 	if u.l.Enabled(context.Background(), slog.LevelDebug) {
 		u.l.Debug("UDP receiving injected packet",
-			slog.Any("header", h),
-			slog.Any("udpAddr", packet.From),
-			slog.Int("dataLen", len(packet.Data)),
+			"header", h,
+			"udpAddr", packet.From,
+			"dataLen", len(packet.Data),
 		)
 	}
 	select {

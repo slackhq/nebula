@@ -220,7 +220,7 @@ func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewal
 	case "drop":
 		fw.InSendReject = false
 	default:
-		l.Warn("invalid firewall.inbound_action, defaulting to `drop`", slog.String("action", inboundAction))
+		l.Warn("invalid firewall.inbound_action, defaulting to `drop`", "action", inboundAction)
 		fw.InSendReject = false
 	}
 
@@ -231,7 +231,7 @@ func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewal
 	case "drop":
 		fw.OutSendReject = false
 	default:
-		l.Warn("invalid firewall.outbound_action, defaulting to `drop`", slog.String("action", outboundAction))
+		l.Warn("invalid firewall.outbound_action, defaulting to `drop`", "action", outboundAction)
 		fw.OutSendReject = false
 	}
 
@@ -269,7 +269,7 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 	case firewall.ProtoICMP, firewall.ProtoICMPv6:
 		//ICMP traffic doesn't have ports, so we always coerce to "any", even if a value is provided
 		if startPort != firewall.PortAny {
-			f.l.Warn("ignoring port specification for ICMP firewall rule", slog.Any("startPort", startPort))
+			f.l.Warn("ignoring port specification for ICMP firewall rule", "startPort", startPort)
 		}
 		startPort = firewall.PortAny
 		endPort = firewall.PortAny
@@ -291,8 +291,9 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 	if !incoming {
 		direction = "outgoing"
 	}
-	f.l.With(slog.Any("firewallRule", m{"direction": direction, "proto": proto, "startPort": startPort, "endPort": endPort, "groups": groups, "host": host, "cidr": cidr, "localCidr": localCidr, "caName": caName, "caSha": caSha})).
-		Info("Firewall rule added")
+	f.l.Info("Firewall rule added",
+		"firewallRule", m{"direction": direction, "proto": proto, "startPort": startPort, "endPort": endPort, "groups": groups, "host": host, "cidr": cidr, "localCidr": localCidr, "caName": caName, "caSha": caSha},
+	)
 
 	return fp.addRule(f, startPort, endPort, groups, host, cidr, localCidr, caName, caSha)
 }
@@ -373,7 +374,7 @@ func AddFirewallRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, fw Fi
 			startPort = firewall.PortAny
 			endPort = firewall.PortAny
 			if sPort != "" {
-				l.Warn("ignoring port specification for ICMP firewall rule", slog.String("port", sPort))
+				l.Warn("ignoring port specification for ICMP firewall rule", "port", sPort)
 			}
 		default:
 			return fmt.Errorf("%s rule #%v; proto was not understood; `%s`", table, i, r.Proto)
@@ -398,9 +399,9 @@ func AddFirewallRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, fw Fi
 
 		if warning := r.sanity(); warning != nil {
 			l.Warn("firewall rule sanity check",
-				slog.String("table", table),
-				slog.Int("rule", i),
-				slog.Any("warning", warning),
+				"table", table,
+				"rule", i,
+				"warning", warning,
 			)
 		}
 
@@ -535,10 +536,10 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 		if !table.match(fp, c.incoming, h.ConnectionState.peerCert, caPool) {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				h.logger(f.l).Debug("dropping old conntrack entry, does not match new ruleset",
-					slog.Any("fwPacket", fp),
-					slog.Bool("incoming", c.incoming),
-					slog.Any("rulesVersion", f.rulesVersion),
-					slog.Any("oldRulesVersion", c.rulesVersion),
+					"fwPacket", fp,
+					"incoming", c.incoming,
+					"rulesVersion", f.rulesVersion,
+					"oldRulesVersion", c.rulesVersion,
 				)
 			}
 			delete(conntrack.Conns, fp)
@@ -548,10 +549,10 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			h.logger(f.l).Debug("keeping old conntrack entry, does match new ruleset",
-				slog.Any("fwPacket", fp),
-				slog.Bool("incoming", c.incoming),
-				slog.Any("rulesVersion", f.rulesVersion),
-				slog.Any("oldRulesVersion", c.rulesVersion),
+				"fwPacket", fp,
+				"incoming", c.incoming,
+				"rulesVersion", f.rulesVersion,
+				"oldRulesVersion", c.rulesVersion,
 			)
 		}
 
@@ -972,8 +973,8 @@ func convertRule(l *slog.Logger, p any, table string, i int) (rule, error) {
 		}
 
 		l.Warn("group was an array with a single value, converting to simple value",
-			slog.String("table", table),
-			slog.Int("rule", i),
+			"table", table,
+			"rule", i,
 		)
 		m["group"] = v[0]
 	}

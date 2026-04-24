@@ -121,9 +121,9 @@ func NewHostnameResults(ctx context.Context, l *slog.Logger, d time.Duration, ne
 					timeoutCancel()
 					if err != nil {
 						l.Error("DNS resolution failed for static_map host",
-							slog.String("hostname", hostPort.name),
-							slog.String("network", r.network),
-							slog.Any("error", err),
+							"hostname", hostPort.name,
+							"network", r.network,
+							"error", err,
 						)
 						continue
 					}
@@ -149,8 +149,8 @@ func NewHostnameResults(ctx context.Context, l *slog.Logger, d time.Duration, ne
 				}
 				if different {
 					l.Info("DNS results changed for host list",
-						slog.Any("origSet", origSet),
-						slog.Any("newSet", netipAddrs),
+						"origSet", origSet,
+						"newSet", netipAddrs,
 					)
 					r.ips.Store(&netipAddrs)
 					onUpdate()

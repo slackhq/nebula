@@ -26,9 +26,9 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
 		if len(packet) > 1 {
 			f.l.Info("Error while parsing inbound packet",
-				slog.Any("from", via),
-				slog.Any("error", err),
-				slog.Any("packet", packet),
+				"from", via,
+				"error", err,
+				"packet", packet,
 			)
 		}
 		return
@@ -38,7 +38,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	if !via.IsRelayed {
 		if f.myVpnNetworksTable.Contains(via.UdpAddr.Addr()) {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
-				f.l.Debug("Refusing to process double encrypted packet", slog.Any("from", via))
+				f.l.Debug("Refusing to process double encrypted packet", "from", via)
 			}
 			return
 		}
@@ -93,8 +93,8 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 				// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
 				// its internal mapping. This should never happen.
 				hostinfo.logger(f.l).Error("HostInfo missing remote relay index",
-					slog.Any("vpnAddrs", hostinfo.vpnAddrs),
-					slog.Uint64("remoteIndex", uint64(h.RemoteIndex)),
+					"vpnAddrs", hostinfo.vpnAddrs,
+					"remoteIndex", uint64(h.RemoteIndex),
 				)
 				return
 			}
@@ -117,9 +117,9 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 				targetHI, targetRelay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relay.PeerAddr)
 				if err != nil {
 					hostinfo.logger(f.l).Info("Failed to find target host info by ip",
-						slog.Any("relayTo", relay.PeerAddr),
-						slog.Any("error", err),
-						slog.Any("hostinfo.vpnAddrs", hostinfo.vpnAddrs),
+						"relayTo", relay.PeerAddr,
+						"error", err,
+						"hostinfo.vpnAddrs", hostinfo.vpnAddrs,
 					)
 					return
 				}
@@ -137,9 +137,9 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 					}
 				} else {
 					hostinfo.logger(f.l).Info("Unexpected target relay state",
-						slog.Any("relayTo", relay.PeerAddr),
-						slog.Any("relayFrom", hostinfo.vpnAddrs[0]),
-						slog.Any("targetRelayState", targetRelay.State),
+						"relayTo", relay.PeerAddr,
+						"relayFrom", hostinfo.vpnAddrs[0],
+						"targetRelayState", targetRelay.State,
 					)
 					return
 				}
@@ -155,9 +155,9 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 		if err != nil {
 			hostinfo.logger(f.l).Error("Failed to decrypt lighthouse packet",
-				slog.Any("error", err),
-				slog.Any("from", via),
-				slog.Any("packet", packet),
+				"error", err,
+				"from", via,
+				"packet", packet,
 			)
 			return
 		}
@@ -176,9 +176,9 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 		if err != nil {
 			hostinfo.logger(f.l).Error("Failed to decrypt test packet",
-				slog.Any("error", err),
-				slog.Any("from", via),
-				slog.Any("packet", packet),
+				"error", err,
+				"from", via,
+				"packet", packet,
 			)
 			return
 		}
@@ -213,14 +213,14 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		_, err = f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 		if err != nil {
 			hostinfo.logger(f.l).Error("Failed to decrypt CloseTunnel packet",
-				slog.Any("error", err),
-				slog.Any("from", via),
-				slog.Any("packet", packet),
+				"error", err,
+				"from", via,
+				"packet", packet,
 			)
 			return
 		}
 
-		hostinfo.logger(f.l).Info("Close tunnel received, tearing down.", slog.Any("from", via))
+		hostinfo.logger(f.l).Info("Close tunnel received, tearing down.", "from", via)
 
 		f.closeTunnel(hostinfo)
 		return
@@ -233,9 +233,9 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 		if err != nil {
 			hostinfo.logger(f.l).Error("Failed to decrypt Control packet",
-				slog.Any("error", err),
-				slog.Any("from", via),
-				slog.Any("packet", packet),
+				"error", err,
+				"from", via,
+				"packet", packet,
 			)
 			return
 		}
@@ -245,7 +245,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	default:
 		f.messageMetrics.Rx(h.Type, h.Subtype, 1)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("Unexpected packet received", slog.Any("from", via))
+			hostinfo.logger(f.l).Debug("Unexpected packet received", "from", via)
 		}
 		return
 	}
@@ -273,7 +273,7 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
 	if !via.IsRelayed && hostinfo.remote != via.UdpAddr {
 		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, via.UdpAddr.Addr()) {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
-				hostinfo.logger(f.l).Debug("lighthouse.remote_allow_list denied roaming", slog.Any("newAddr", via.UdpAddr))
+				hostinfo.logger(f.l).Debug("lighthouse.remote_allow_list denied roaming", "newAddr", via.UdpAddr)
 			}
 			return
 		}
@@ -281,17 +281,17 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
 		if !hostinfo.lastRoam.IsZero() && via.UdpAddr == hostinfo.lastRoamRemote && time.Since(hostinfo.lastRoam) < RoamingSuppressSeconds*time.Second {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				hostinfo.logger(f.l).Debug("Suppressing roam back to previous remote",
-					slog.Int("suppressSeconds", RoamingSuppressSeconds),
-					slog.Any("udpAddr", hostinfo.remote),
-					slog.Any("newAddr", via.UdpAddr),
+					"suppressSeconds", RoamingSuppressSeconds,
+					"udpAddr", hostinfo.remote,
+					"newAddr", via.UdpAddr,
 				)
 			}
 			return
 		}
 
 		hostinfo.logger(f.l).Info("Host roamed to new udp ip/port.",
-			slog.Any("udpAddr", hostinfo.remote),
-			slog.Any("newAddr", via.UdpAddr),
+			"udpAddr", hostinfo.remote,
+			"newAddr", via.UdpAddr,
 		)
 		hostinfo.lastRoam = time.Now()
 		hostinfo.lastRoamRemote = hostinfo.remote
@@ -524,7 +524,7 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 
 	if !hostinfo.ConnectionState.window.Update(f.l, mc) {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("dropping out of window packet", slog.Any("header", h))
+			hostinfo.logger(f.l).Debug("dropping out of window packet", "header", h)
 		}
 		return nil, errors.New("out of window packet")
 	}
@@ -537,22 +537,22 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], messageCounter, nb)
 	if err != nil {
-		hostinfo.logger(f.l).Error("Failed to decrypt packet", slog.Any("error", err))
+		hostinfo.logger(f.l).Error("Failed to decrypt packet", "error", err)
 		return false
 	}
 
 	err = newPacket(out, true, fwPacket)
 	if err != nil {
 		hostinfo.logger(f.l).Warn("Error while validating inbound packet",
-			slog.Any("error", err),
-			slog.Any("packet", out),
+			"error", err,
+			"packet", out,
 		)
 		return false
 	}
 
 	if !hostinfo.ConnectionState.window.Update(f.l, messageCounter) {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("dropping out of window packet", slog.Any("fwPacket", fwPacket))
+			hostinfo.logger(f.l).Debug("dropping out of window packet", "fwPacket", fwPacket)
 		}
 		return false
 	}
@@ -564,8 +564,8 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, packet, q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("dropping inbound packet",
-				slog.Any("fwPacket", fwPacket),
-				slog.Any("reason", dropReason),
+				"fwPacket", fwPacket,
+				"reason", dropReason,
 			)
 		}
 		return false
@@ -574,7 +574,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	f.connectionManager.In(hostinfo)
 	_, err = f.readers[q].Write(out)
 	if err != nil {
-		f.l.Error("Failed to write to tun", slog.Any("error", err))
+		f.l.Error("Failed to write to tun", "error", err)
 	}
 	return true
 }
@@ -592,8 +592,8 @@ func (f *Interface) sendRecvError(endpoint netip.AddrPort, index uint32) {
 	_ = f.outside.WriteTo(b, endpoint)
 	if f.l.Enabled(context.Background(), slog.LevelDebug) {
 		f.l.Debug("Recv error sent",
-			slog.Uint64("index", uint64(index)),
-			slog.Any("udpAddr", endpoint),
+			"index", uint64(index),
+			"udpAddr", endpoint,
 		)
 	}
 }
@@ -601,29 +601,29 @@ func (f *Interface) sendRecvError(endpoint netip.AddrPort, index uint32) {
 func (f *Interface) handleRecvError(addr netip.AddrPort, h *header.H) {
 	if !f.acceptRecvErrorConfig.ShouldRecvError(addr) {
 		f.l.Debug("Recv error received, ignoring",
-			slog.Uint64("index", uint64(h.RemoteIndex)),
-			slog.Any("udpAddr", addr),
+			"index", uint64(h.RemoteIndex),
+			"udpAddr", addr,
 		)
 		return
 	}
 
 	if f.l.Enabled(context.Background(), slog.LevelDebug) {
 		f.l.Debug("Recv error received",
-			slog.Uint64("index", uint64(h.RemoteIndex)),
-			slog.Any("udpAddr", addr),
+			"index", uint64(h.RemoteIndex),
+			"udpAddr", addr,
 		)
 	}
 
 	hostinfo := f.hostMap.QueryReverseIndex(h.RemoteIndex)
 	if hostinfo == nil {
-		f.l.Debug("Did not find remote index in main hostmap", slog.Uint64("remoteIndex", uint64(h.RemoteIndex)))
+		f.l.Debug("Did not find remote index in main hostmap", "remoteIndex", uint64(h.RemoteIndex))
 		return
 	}
 
 	if hostinfo.remote.IsValid() && hostinfo.remote != addr {
 		f.l.Info("Someone spoofing recv_errors?",
-			slog.Any("addr", addr),
-			slog.Any("hostinfoRemote", hostinfo.remote),
+			"addr", addr,
+			"hostinfoRemote", hostinfo.remote,
 		)
 		return
 	}

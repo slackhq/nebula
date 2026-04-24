@@ -61,7 +61,7 @@ func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 		if c.GetBool("sshd.enabled", false) {
 			sshRun, err := configSSH(l, ssh, c)
 			if err != nil {
-				l.Error("Failed to reconfigure the sshd", slog.Any("error", err))
+				l.Error("Failed to reconfigure the sshd", "error", err)
 				ssh.Stop()
 			}
 			if sshRun != nil {
@@ -119,7 +119,7 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error)
 	for _, caAuthorizedKey := range rawCAs {
 		err := ssh.AddTrustedCA(caAuthorizedKey)
 		if err != nil {
-			l.Warn("SSH CA had an error, ignoring", slog.Any("error", err), slog.String("sshCA", caAuthorizedKey))
+			l.Warn("SSH CA had an error, ignoring", "error", err, "sshCA", caAuthorizedKey)
 			continue
 		}
 	}
@@ -130,13 +130,13 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error)
 		for _, rk := range keys {
 			kDef, ok := rk.(map[string]any)
 			if !ok {
-				l.Warn("Authorized user had an error, ignoring", slog.Any("sshKeyConfig", rk))
+				l.Warn("Authorized user had an error, ignoring", "sshKeyConfig", rk)
 				continue
 			}
 
 			user, ok := kDef["user"].(string)
 			if !ok {
-				l.Warn("Authorized user is missing the user field", slog.Any("sshKeyConfig", rk))
+				l.Warn("Authorized user is missing the user field", "sshKeyConfig", rk)
 				continue
 			}
 
@@ -146,9 +146,9 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error)
 				err := ssh.AddAuthorizedKey(user, v)
 				if err != nil {
 					l.Warn("Failed to authorize key",
-						slog.Any("error", err),
-						slog.Any("sshKeyConfig", rk),
-						slog.String("sshKey", v),
+						"error", err,
+						"sshKeyConfig", rk,
+						"sshKey", v,
 					)
 					continue
 				}
@@ -158,8 +158,8 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error)
 					sk, ok := subK.(string)
 					if !ok {
 						l.Warn("Did not understand ssh key",
-							slog.Any("sshKeyConfig", rk),
-							slog.Any("sshKey", subK),
+							"sshKeyConfig", rk,
+							"sshKey", subK,
 						)
 						continue
 					}
@@ -167,15 +167,15 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error)
 					err := ssh.AddAuthorizedKey(user, sk)
 					if err != nil {
 						l.Warn("Failed to authorize key",
-							slog.Any("error", err),
-							slog.String("sshKeyConfig", sk),
+							"error", err,
+							"sshKeyConfig", sk,
 						)
 						continue
 					}
 				}
 
 			default:
-				l.Warn("Authorized user is missing the keys field or was not understood", slog.Any("sshKeyConfig", rk))
+				l.Warn("Authorized user is missing the keys field or was not understood", "sshKeyConfig", rk)
 			}
 		}
 	} else {
@@ -187,7 +187,7 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error)
 		ssh.Stop()
 		runner = func() {
 			if err := ssh.Run(listen); err != nil {
-				l.Warn("Failed to run the SSH server", slog.Any("error", err))
+				l.Warn("Failed to run the SSH server", "error", err)
 			}
 		}
 	} else {

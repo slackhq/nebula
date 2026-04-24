@@ -14,11 +14,11 @@ import (
 // lh.l.With("subsystem", ...), etc.) and call from hot paths.
 
 func BenchmarkLogger_Stock_RootInfo(b *testing.B) {
-	l := slog.New(slog.NewTextHandler(io.Discard, nil))
+	l := slog.New(slog.DiscardHandler)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		l.Info("hello", slog.Int("i", i))
+		l.Info("hello", "i", i)
 	}
 }
 
@@ -27,31 +27,31 @@ func BenchmarkLogger_Nebula_RootInfo(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		l.Info("hello", slog.Int("i", i))
+		l.Info("hello", "i", i)
 	}
 }
 
 func BenchmarkLogger_Stock_DerivedInfo(b *testing.B) {
-	l := slog.New(slog.NewTextHandler(io.Discard, nil)).With(
-		slog.String("subsystem", "bench"),
-		slog.Int("localIndex", 1234),
+	l := slog.New(slog.DiscardHandler).With(
+		"subsystem", "bench",
+		"localIndex", 1234,
 	)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		l.Info("hello", slog.Int("i", i))
+		l.Info("hello", "i", i)
 	}
 }
 
 func BenchmarkLogger_Nebula_DerivedInfo(b *testing.B) {
 	l := NewLogger(io.Discard).With(
-		slog.String("subsystem", "bench"),
-		slog.Int("localIndex", 1234),
+		"subsystem", "bench",
+		"localIndex", 1234,
 	)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		l.Info("hello", slog.Int("i", i))
+		l.Info("hello", "i", i)
 	}
 }
 
@@ -60,31 +60,31 @@ func BenchmarkLogger_Nebula_DerivedInfo(b *testing.B) {
 // the active level. This is the dominant pattern in inside.go/outside.go and
 // what we pay on every packet.
 func BenchmarkLogger_Stock_DerivedEnabledGateMiss(b *testing.B) {
-	l := slog.New(slog.NewTextHandler(io.Discard, nil)).With(
-		slog.String("subsystem", "bench"),
-		slog.Int("localIndex", 1234),
+	l := slog.New(slog.DiscardHandler).With(
+		"subsystem", "bench",
+		"localIndex", 1234,
 	)
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if l.Enabled(ctx, slog.LevelDebug) {
-			l.Debug("hello", slog.Int("i", i))
+			l.Debug("hello", "i", i)
 		}
 	}
 }
 
 func BenchmarkLogger_Nebula_DerivedEnabledGateMiss(b *testing.B) {
 	l := NewLogger(io.Discard).With(
-		slog.String("subsystem", "bench"),
-		slog.Int("localIndex", 1234),
+		"subsystem", "bench",
+		"localIndex", 1234,
 	)
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if l.Enabled(ctx, slog.LevelDebug) {
-			l.Debug("hello", slog.Int("i", i))
+			l.Debug("hello", "i", i)
 		}
 	}
 }

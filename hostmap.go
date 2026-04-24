@@ -322,7 +322,7 @@ func NewHostMapFromConfig(l *slog.Logger, c *config.C) *HostMap {
 		hm.reload(c, false)
 	})
 
-	l.Info("Main HostMap created", slog.Any("preferredRanges", hm.GetPreferredRanges()))
+	l.Info("Main HostMap created", "preferredRanges", hm.GetPreferredRanges())
 
 	return hm
 }
@@ -347,8 +347,8 @@ func (hm *HostMap) reload(c *config.C, initial bool) {
 
 			if err != nil {
 				hm.l.Warn("Failed to parse preferred ranges, ignoring",
-					slog.Any("error", err),
-					slog.Any("range", rawPreferredRanges),
+					"error", err,
+					"range", rawPreferredRanges,
 				)
 				continue
 			}
@@ -359,8 +359,8 @@ func (hm *HostMap) reload(c *config.C, initial bool) {
 		oldRanges := hm.preferredRanges.Swap(&preferredRanges)
 		if !initial {
 			hm.l.Info("preferred_ranges changed",
-				slog.Any("oldPreferredRanges", *oldRanges),
-				slog.Any("newPreferredRanges", preferredRanges),
+				"oldPreferredRanges", *oldRanges,
+				"newPreferredRanges", preferredRanges,
 			)
 		}
 	}
@@ -496,8 +496,8 @@ func (hm *HostMap) unlockedInnerDeleteHostInfo(hostinfo *HostInfo, addr netip.Ad
 
 	if hm.l.Enabled(context.Background(), slog.LevelDebug) {
 		hm.l.Debug("Hostmap hostInfo deleted",
-			slog.Any("hostMap", m{"mapTotalSize": len(hm.Hosts),
-				"vpnAddrs": hostinfo.vpnAddrs, "indexNumber": hostinfo.localIndexId, "remoteIndexNumber": hostinfo.remoteIndexId}),
+			"hostMap", m{"mapTotalSize": len(hm.Hosts),
+				"vpnAddrs": hostinfo.vpnAddrs, "indexNumber": hostinfo.localIndexId, "remoteIndexNumber": hostinfo.remoteIndexId},
 		)
 	}
 
@@ -624,8 +624,8 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 
 	if hm.l.Enabled(context.Background(), slog.LevelDebug) {
 		hm.l.Debug("Hostmap vpnIp added",
-			slog.Any("hostMap", m{"vpnAddrs": hostinfo.vpnAddrs, "mapTotalSize": len(hm.Hosts),
-				"hostinfo": m{"existing": true, "localIndexId": hostinfo.localIndexId, "vpnAddrs": hostinfo.vpnAddrs}}),
+			"hostMap", m{"vpnAddrs": hostinfo.vpnAddrs, "mapTotalSize": len(hm.Hosts),
+				"hostinfo": m{"existing": true, "localIndexId": hostinfo.localIndexId, "vpnAddrs": hostinfo.vpnAddrs}},
 		)
 	}
 }
@@ -799,14 +799,14 @@ func (i *HostInfo) logger(l *slog.Logger) *slog.Logger {
 	}
 
 	li := l.With(
-		slog.Any("vpnAddrs", i.vpnAddrs),
-		slog.Uint64("localIndex", uint64(i.localIndexId)),
-		slog.Uint64("remoteIndex", uint64(i.remoteIndexId)),
+		"vpnAddrs", i.vpnAddrs,
+		"localIndex", uint64(i.localIndexId),
+		"remoteIndex", uint64(i.remoteIndexId),
 	)
 
 	if connState := i.ConnectionState; connState != nil {
 		if peerCert := connState.peerCert; peerCert != nil {
-			li = li.With(slog.String("certName", peerCert.Certificate.Name()))
+			li = li.With("certName", peerCert.Certificate.Name())
 		}
 	}
 
@@ -822,9 +822,9 @@ func localAddrs(l *slog.Logger, allowList *LocalAllowList) []netip.Addr {
 	for _, i := range ifaces {
 		allow := allowList.AllowName(i.Name)
 		if l.Enabled(context.Background(), LogLevelTrace) {
-			l.LogAttrs(context.Background(), LogLevelTrace, "localAllowList.AllowName",
-				slog.String("interfaceName", i.Name),
-				slog.Bool("allow", allow),
+			l.Log(context.Background(), LogLevelTrace, "localAllowList.AllowName",
+				"interfaceName", i.Name,
+				"allow", allow,
 			)
 		}
 
@@ -844,7 +844,7 @@ func localAddrs(l *slog.Logger, allowList *LocalAllowList) []netip.Addr {
 
 			if !addr.IsValid() {
 				if l.Enabled(context.Background(), slog.LevelDebug) {
-					l.Debug("addr was invalid", slog.Any("localAddr", rawAddr))
+					l.Debug("addr was invalid", "localAddr", rawAddr)
 				}
 				continue
 			}
@@ -853,9 +853,9 @@ func localAddrs(l *slog.Logger, allowList *LocalAllowList) []netip.Addr {
 			if addr.IsLoopback() == false && addr.IsLinkLocalUnicast() == false {
 				isAllowed := allowList.Allow(addr)
 				if l.Enabled(context.Background(), LogLevelTrace) {
-					l.LogAttrs(context.Background(), LogLevelTrace, "localAllowList.Allow",
-						slog.Any("localAddr", addr),
-						slog.Bool("allowed", isAllowed),
+					l.Log(context.Background(), LogLevelTrace, "localAllowList.Allow",
+						"localAddr", addr,
+						"allowed", isAllowed,
 					)
 				}
 				if !isAllowed {

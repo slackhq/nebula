@@ -53,8 +53,8 @@ func makeRouteTree(l *slog.Logger, routes []Route, allowMTU bool) (*bart.Table[r
 	for _, r := range routes {
 		if !allowMTU && r.MTU > 0 {
 			l.Warn("route MTU is not supported on this platform",
-				slog.String("goos", runtime.GOOS),
-				slog.Any("route", r),
+				"goos", runtime.GOOS,
+				"route", r,
 			)
 		}
 

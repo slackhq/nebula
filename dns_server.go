@@ -69,7 +69,7 @@ func newDnsServerFromConfig(ctx context.Context, l *slog.Logger, cs *CertState, 
 
 	c.RegisterReloadCallback(func(c *config.C) {
 		if err := ds.reload(c, false); err != nil {
-			ds.l.Error("Failed to reload DNS responder from config", slog.Any("error", err))
+			ds.l.Error("Failed to reload DNS responder from config", "error", err)
 		}
 	})
 
@@ -145,7 +145,7 @@ func (d *dnsServer) shutdownServer(srv *dns.Server, started chan struct{}, reaso
 		<-started
 	}
 	if err := srv.Shutdown(); err != nil {
-		d.l.Warn("Failed to shut down the DNS responder", slog.String("reason", reason), slog.Any("error", err))
+		d.l.Warn("Failed to shut down the DNS responder", "reason", reason, "error", err)
 	}
 }
 
@@ -188,7 +188,7 @@ func (d *dnsServer) Start() {
 		}
 	}()
 
-	d.l.Info("Starting DNS responder", slog.String("dnsListener", addr))
+	d.l.Info("Starting DNS responder", "dnsListener", addr)
 	err := server.ListenAndServe()
 	close(done)
 
@@ -201,7 +201,7 @@ func (d *dnsServer) Start() {
 	}
 
 	if err != nil {
-		d.l.Warn("Failed to run the DNS responder", slog.Any("error", err))
+		d.l.Warn("Failed to run the DNS responder", "error", err)
 	}
 }
 
@@ -325,7 +325,7 @@ func (d *dnsServer) parseQuery(m *dns.Msg, w dns.ResponseWriter) {
 		case dns.TypeA, dns.TypeAAAA:
 			qType := dns.TypeToString[q.Qtype]
 			if debugEnabled {
-				d.l.Debug("DNS query", slog.String("type", qType), slog.String("name", q.Name))
+				d.l.Debug("DNS query", "type", qType, "name", q.Name)
 			}
 			ip, nameExists := d.Query(q.Qtype, q.Name)
 			if nameExists {
@@ -343,7 +343,7 @@ func (d *dnsServer) parseQuery(m *dns.Msg, w dns.ResponseWriter) {
 				return
 			}
 			if debugEnabled {
-				d.l.Debug("DNS query", slog.String("type", "TXT"), slog.String("name", q.Name))
+				d.l.Debug("DNS query", "type", "TXT", "name", q.Name)
 			}
 			ip := d.QueryCert(q.Name)
 			if ip != "" {

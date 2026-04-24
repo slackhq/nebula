@@ -4,7 +4,6 @@
 package e2e
 
 import (
-	"log/slog"
 	"net/netip"
 	"slices"
 	"testing"
@@ -749,7 +748,6 @@ func TestStage1RaceRelays2(t *testing.T) {
 	myControl, myVpnIpNet, myUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "me     ", "10.128.0.1/24", m{"relay": m{"use_relays": true}})
 	relayControl, relayVpnIpNet, relayUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "relay  ", "10.128.0.128/24", m{"relay": m{"am_relay": true}})
 	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "them   ", "10.128.0.2/24", m{"relay": m{"use_relays": true}})
-	l := NewTestLogger()
 
 	// Teach my how to get to the relay and that their can be reached via the relay
 	myControl.InjectLightHouseAddr(relayVpnIpNet[0].Addr(), relayUdpAddr)
@@ -771,46 +769,40 @@ func TestStage1RaceRelays2(t *testing.T) {
 	theirControl.Start()
 
 	r.Log("Get a tunnel between me and relay")
-	l.Info("Get a tunnel between me and relay")
 	assertTunnel(t, myVpnIpNet[0].Addr(), relayVpnIpNet[0].Addr(), myControl, relayControl, r)
 
 	r.Log("Get a tunnel between them and relay")
-	l.Info("Get a tunnel between them and relay")
 	assertTunnel(t, theirVpnIpNet[0].Addr(), relayVpnIpNet[0].Addr(), theirControl, relayControl, r)
 
 	r.Log("Trigger a handshake from both them and me via relay to them and me")
-	l.Info("Trigger a handshake from both them and me via relay to them and me")
 	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me"))
 	theirControl.InjectTunUDPPacket(myVpnIpNet[0].Addr(), 80, theirVpnIpNet[0].Addr(), 80, []byte("Hi from them"))
 
 	//r.RouteUntilAfterMsgType(myControl, header.Control, header.MessageNone)
 	//r.RouteUntilAfterMsgType(theirControl, header.Control, header.MessageNone)
 
-	r.Log("Wait for a packet from them to me")
-	l.Info("Wait for a packet from them to me; myControl")
+	r.Log("Wait for a packet from them to me; myControl")
 	r.RouteForAllUntilTxTun(myControl)
-	l.Info("Wait for a packet from them to me; theirControl")
+	r.Log("Wait for a packet from them to me; theirControl")
 	r.RouteForAllUntilTxTun(theirControl)
 
 	r.Log("Assert the tunnel works")
-	l.Info("Assert the tunnel works")
 	assertTunnel(t, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), theirControl, myControl, r)
 
 	t.Log("Wait until we remove extra tunnels")
-	l.Info("Wait until we remove extra tunnels")
-	l.Info("Waiting for hostinfos to be removed...",
-		slog.Int("myControl", len(myControl.GetHostmap().Indexes)),
-		slog.Int("theirControl", len(theirControl.GetHostmap().Indexes)),
-		slog.Int("relayControl", len(relayControl.GetHostmap().Indexes)),
+	t.Logf("Waiting for hostinfos to be removed... myControl=%d theirControl=%d relayControl=%d",
+		len(myControl.GetHostmap().Indexes),
+		len(theirControl.GetHostmap().Indexes),
+		len(relayControl.GetHostmap().Indexes),
 	)
 	hostInfos := len(myControl.GetHostmap().Indexes) + len(theirControl.GetHostmap().Indexes) + len(relayControl.GetHostmap().Indexes)
 	retries := 60
 	for hostInfos > 6 && retries > 0 {
 		hostInfos = len(myControl.GetHostmap().Indexes) + len(theirControl.GetHostmap().Indexes) + len(relayControl.GetHostmap().Indexes)
-		l.Info("Waiting for hostinfos to be removed...",
-			slog.Int("myControl", len(myControl.GetHostmap().Indexes)),
-			slog.Int("theirControl", len(theirControl.GetHostmap().Indexes)),
-			slog.Int("relayControl", len(relayControl.GetHostmap().Indexes)),
+		t.Logf("Waiting for hostinfos to be removed... myControl=%d theirControl=%d relayControl=%d",
+			len(myControl.GetHostmap().Indexes),
+			len(theirControl.GetHostmap().Indexes),
+			len(relayControl.GetHostmap().Indexes),
 		)
 		assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 		t.Log("Connection manager hasn't ticked yet")
@@ -819,7 +811,6 @@ func TestStage1RaceRelays2(t *testing.T) {
 	}
 
 	r.Log("Assert the tunnel works")
-	l.Info("Assert the tunnel works")
 	assertTunnel(t, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), theirControl, myControl, r)
 
 	myControl.Stop()

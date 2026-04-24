@@ -69,7 +69,7 @@ func (t *disabledTun) Read(b []byte) (int, error) {
 
 	t.tx.Inc(1)
 	if t.l.Enabled(context.Background(), slog.LevelDebug) {
-		t.l.Debug("Write payload", slog.Any("raw", prettyPacket(r)))
+		t.l.Debug("Write payload", "raw", prettyPacket(r))
 	}
 
 	return copy(b, r), nil
@@ -98,10 +98,10 @@ func (t *disabledTun) Write(b []byte) (int, error) {
 	// Check for ICMP Echo Request before spending time doing the full parsing
 	if t.handleICMPEchoRequest(b) {
 		if t.l.Enabled(context.Background(), slog.LevelDebug) {
-			t.l.Debug("Disabled tun responded to ICMP Echo Request", slog.Any("raw", prettyPacket(b)))
+			t.l.Debug("Disabled tun responded to ICMP Echo Request", "raw", prettyPacket(b))
 		}
 	} else if t.l.Enabled(context.Background(), slog.LevelDebug) {
-		t.l.Debug("Disabled tun received unexpected payload", slog.Any("raw", prettyPacket(b)))
+		t.l.Debug("Disabled tun received unexpected payload", "raw", prettyPacket(b))
 	}
 	return len(b), nil
 }

@@ -4,7 +4,6 @@
 package e2e
 
 import (
-	"fmt"
 	"io"
 	"net/netip"
 	"os"
@@ -134,8 +133,7 @@ func newSimpleServerWithUdpAndUnsafeNetworks(v cert.Version, caCrt cert.Certific
 			"port": udpAddr.Port(),
 		},
 		"logging": m{
-			"timestamp_format": fmt.Sprintf("%v 15:04:05.000000", name),
-			"level":            testLogLevelName(),
+			"level": testLogLevelName(),
 		},
 		"timers": m{
 			"pending_deletion_interval": 2,
@@ -236,8 +234,7 @@ func newServer(caCrt []cert.Certificate, certs []cert.Certificate, key []byte, o
 			"port": udpAddr.Port(),
 		},
 		"logging": m{
-			"timestamp_format": fmt.Sprintf("%v 15:04:05.000000", certs[0].Name()),
-			"level":            testLogLevelName(),
+			"level": testLogLevelName(),
 		},
 		"timers": m{
 			"pending_deletion_interval": 2,

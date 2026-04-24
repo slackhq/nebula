@@ -63,7 +63,7 @@ func (t *TestTun) Send(packet []byte) {
 	}
 
 	if t.l.Enabled(context.Background(), slog.LevelDebug) {
-		t.l.Debug("Tun receiving injected packet", slog.Int("dataLen", len(packet)))
+		t.l.Debug("Tun receiving injected packet", "dataLen", len(packet))
 	}
 	t.rxPackets <- packet
 }

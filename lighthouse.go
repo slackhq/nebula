@@ -133,7 +133,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		case *util.ContextualError:
 			v.Log(l)
 		case error:
-			l.Error("failed to reload lighthouse", slog.Any("error", err))
+			l.Error("failed to reload lighthouse", "error", err)
 		}
 	})
 
@@ -206,8 +206,8 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 			addr := addrs[0].Unmap()
 			if lh.myVpnNetworksTable.Contains(addr) {
 				lh.l.Warn("Ignoring lighthouse.advertise_addrs report because it is within the nebula network range",
-					slog.String("addr", rawAddr),
-					slog.Int("entry", i+1),
+					"addr", rawAddr,
+					"entry", i+1,
 				)
 				continue
 			}
@@ -227,7 +227,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 
 		if !initial {
 			lh.l.Info("lighthouse.interval changed",
-				slog.Int64("interval", lh.interval.Load()),
+				"interval", lh.interval.Load(),
 			)
 
 			if lh.updateCancel != nil {
@@ -341,11 +341,11 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 				configRIP, err := netip.ParseAddr(v)
 				if err != nil {
 					lh.l.Warn("Parse relay from config failed",
-						slog.String("relay", v),
-						slog.Any("error", err),
+						"relay", v,
+						"error", err,
 					)
 				} else {
-					lh.l.Info("Read relay from config", slog.String("relay", v))
+					lh.l.Info("Read relay from config", "relay", v)
 					relaysForMe = append(relaysForMe, configRIP)
 				}
 			}
@@ -371,8 +371,8 @@ func (lh *LightHouse) parseLighthouses(c *config.C) ([]netip.Addr, error) {
 
 		if !lh.myVpnNetworksTable.Contains(addr) {
 			lh.l.Warn("lighthouse host is not within our networks, lighthouse functionality will work but layer 3 network traffic to the lighthouse will not",
-				slog.Any("vpnAddr", addr),
-				slog.Any("networks", lh.myVpnNetworks),
+				"vpnAddr", addr,
+				"networks", lh.myVpnNetworks,
 			)
 		}
 		out[i] = addr
@@ -445,9 +445,9 @@ func (lh *LightHouse) loadStaticMap(c *config.C, staticList map[netip.Addr]struc
 
 		if !lh.myVpnNetworksTable.Contains(vpnAddr) {
 			lh.l.Warn("static_host_map key is not within our networks, layer 3 network traffic to this host will not work",
-				slog.Any("vpnAddr", vpnAddr),
-				slog.Any("networks", lh.myVpnNetworks),
-				slog.Int("entry", i+1),
+				"vpnAddr", vpnAddr,
+				"networks", lh.myVpnNetworks,
+				"entry", i+1,
 			)
 		}
 
@@ -555,7 +555,7 @@ func (lh *LightHouse) DeleteVpnAddrs(allVpnAddrs []netip.Addr) {
 			if srm == rm {
 				delete(lh.addrMap, addr)
 				if debugEnabled {
-					lh.l.Debug("deleting from lighthouse", slog.Any("vpnAddr", addr))
+					lh.l.Debug("deleting from lighthouse", "vpnAddr", addr)
 				}
 			}
 		}
@@ -673,10 +673,10 @@ func (lh *LightHouse) unlockedGetRemoteList(allAddrs []netip.Addr) *RemoteList {
 func (lh *LightHouse) shouldAdd(vpnAddrs []netip.Addr, to netip.Addr) bool {
 	allow := lh.GetRemoteAllowList().AllowAll(vpnAddrs, to)
 	if lh.l.Enabled(context.Background(), LogLevelTrace) {
-		lh.l.LogAttrs(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
-			slog.Any("vpnAddrs", vpnAddrs),
-			slog.Any("udpAddr", to),
-			slog.Bool("allow", allow),
+		lh.l.Log(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
+			"vpnAddrs", vpnAddrs,
+			"udpAddr", to,
+			"allow", allow,
 		)
 	}
 	if !allow {
@@ -695,10 +695,10 @@ func (lh *LightHouse) unlockedShouldAddV4(vpnAddr netip.Addr, to *V4AddrPort) bo
 	udpAddr := protoV4AddrPortToNetAddrPort(to)
 	allow := lh.GetRemoteAllowList().Allow(vpnAddr, udpAddr.Addr())
 	if lh.l.Enabled(context.Background(), LogLevelTrace) {
-		lh.l.LogAttrs(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
-			slog.Any("vpnAddr", vpnAddr),
-			slog.Any("udpAddr", udpAddr),
-			slog.Bool("allow", allow),
+		lh.l.Log(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
+			"vpnAddr", vpnAddr,
+			"udpAddr", udpAddr,
+			"allow", allow,
 		)
 	}
 
@@ -718,10 +718,10 @@ func (lh *LightHouse) unlockedShouldAddV6(vpnAddr netip.Addr, to *V6AddrPort) bo
 	udpAddr := protoV6AddrPortToNetAddrPort(to)
 	allow := lh.GetRemoteAllowList().Allow(vpnAddr, udpAddr.Addr())
 	if lh.l.Enabled(context.Background(), LogLevelTrace) {
-		lh.l.LogAttrs(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
-			slog.Any("vpnAddr", vpnAddr),
-			slog.Any("udpAddr", udpAddr),
-			slog.Bool("allow", allow),
+		lh.l.Log(context.Background(), LogLevelTrace, "remoteAllowList.Allow",
+			"vpnAddr", vpnAddr,
+			"udpAddr", udpAddr,
+			"allow", allow,
 		)
 	}
 
@@ -798,8 +798,8 @@ func (lh *LightHouse) innerQueryServer(addr netip.Addr, nb, out []byte) {
 		if v == cert.Version1 {
 			if !addr.Is4() {
 				lh.l.Error("Can't query lighthouse for v6 address using a v1 protocol",
-					slog.Any("queryVpnAddr", addr),
-					slog.Any("lighthouseAddr", lhVpnAddr),
+					"queryVpnAddr", addr,
+					"lighthouseAddr", lhVpnAddr,
 				)
 				continue
 			}
@@ -812,9 +812,9 @@ func (lh *LightHouse) innerQueryServer(addr netip.Addr, nb, out []byte) {
 				v1Query, err = msg.Marshal()
 				if err != nil {
 					lh.l.Error("Failed to marshal lighthouse v1 query payload",
-						slog.Any("error", err),
-						slog.Any("queryVpnAddr", addr),
-						slog.Any("lighthouseAddr", lhVpnAddr),
+						"error", err,
+						"queryVpnAddr", addr,
+						"lighthouseAddr", lhVpnAddr,
 					)
 					continue
 				}
@@ -831,9 +831,9 @@ func (lh *LightHouse) innerQueryServer(addr netip.Addr, nb, out []byte) {
 				v2Query, err = msg.Marshal()
 				if err != nil {
 					lh.l.Error("Failed to marshal lighthouse v2 query payload",
-						slog.Any("error", err),
-						slog.Any("queryVpnAddr", addr),
-						slog.Any("lighthouseAddr", lhVpnAddr),
+						"error", err,
+						"queryVpnAddr", addr,
+						"lighthouseAddr", lhVpnAddr,
 					)
 					continue
 				}
@@ -844,9 +844,9 @@ func (lh *LightHouse) innerQueryServer(addr netip.Addr, nb, out []byte) {
 
 		} else {
 			lh.l.Debug("unsupported protocol version",
-				slog.String("op", "query"),
-				slog.Any("queryVpnAddr", addr),
-				slog.Any("version", v),
+				"op", "query",
+				"queryVpnAddr", addr,
+				"version", v,
 			)
 			continue
 		}
@@ -940,7 +940,7 @@ func (lh *LightHouse) SendUpdate() {
 			if v1Update == nil {
 				if !lh.myVpnNetworks[0].Addr().Is4() {
 					lh.l.Warn("cannot update lighthouse using v1 protocol without an IPv4 address",
-						slog.Any("lighthouseAddr", lhVpnAddr),
+						"lighthouseAddr", lhVpnAddr,
 					)
 					continue
 				}
@@ -966,8 +966,8 @@ func (lh *LightHouse) SendUpdate() {
 				v1Update, err = msg.Marshal()
 				if err != nil {
 					lh.l.Error("Error while marshaling for lighthouse v1 update",
-						slog.Any("error", err),
-						slog.Any("lighthouseAddr", lhVpnAddr),
+						"error", err,
+						"lighthouseAddr", lhVpnAddr,
 					)
 					continue
 				}
@@ -995,8 +995,8 @@ func (lh *LightHouse) SendUpdate() {
 				v2Update, err = msg.Marshal()
 				if err != nil {
 					lh.l.Error("Error while marshaling for lighthouse v2 update",
-						slog.Any("error", err),
-						slog.Any("lighthouseAddr", lhVpnAddr),
+						"error", err,
+						"lighthouseAddr", lhVpnAddr,
 					)
 					continue
 				}
@@ -1007,8 +1007,8 @@ func (lh *LightHouse) SendUpdate() {
 
 		} else {
 			lh.l.Debug("unsupported protocol version",
-				slog.String("op", "update"),
-				slog.Any("version", v),
+				"op", "update",
+				"version", v,
 			)
 			continue
 		}
@@ -1073,17 +1073,17 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, fromVpnAddrs [
 	err := n.Unmarshal(p)
 	if err != nil {
 		lhh.l.Error("Failed to unmarshal lighthouse packet",
-			slog.Any("error", err),
-			slog.Any("vpnAddrs", fromVpnAddrs),
-			slog.Any("udpAddr", rAddr),
+			"error", err,
+			"vpnAddrs", fromVpnAddrs,
+			"udpAddr", rAddr,
 		)
 		return
 	}
 
 	if n.Details == nil {
 		lhh.l.Error("Invalid lighthouse update",
-			slog.Any("vpnAddrs", fromVpnAddrs),
-			slog.Any("udpAddr", rAddr),
+			"vpnAddrs", fromVpnAddrs,
+			"udpAddr", rAddr,
 		)
 		return
 	}
@@ -1113,7 +1113,7 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 	// Exit if we don't answer queries
 	if !lhh.lh.amLighthouse {
 		if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
-			lhh.l.Debug("I don't answer queries, but received one", slog.Any("from", addr))
+			lhh.l.Debug("I don't answer queries, but received one", "from", addr)
 		}
 		return
 	}
@@ -1122,8 +1122,8 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 	if err != nil {
 		if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
 			lhh.l.Debug("Dropping malformed HostQuery",
-				slog.Any("from", fromVpnAddrs),
-				slog.Any("details", n.Details),
+				"from", fromVpnAddrs,
+				"details", n.Details,
 			)
 		}
 		return
@@ -1132,8 +1132,8 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 		// this case really shouldn't be possible to represent, but reject it anyway.
 		if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
 			lhh.l.Debug("invalid vpn addr for v1 handleHostQuery",
-				slog.Any("vpnAddrs", fromVpnAddrs),
-				slog.Any("queryVpnAddr", queryVpnAddr),
+				"vpnAddrs", fromVpnAddrs,
+				"queryVpnAddr", queryVpnAddr,
 			)
 		}
 		return
@@ -1160,8 +1160,8 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, fromVpnAddrs []neti
 
 	if err != nil {
 		lhh.l.Error("Failed to marshal lighthouse host query reply",
-			slog.Any("error", err),
-			slog.Any("vpnAddrs", fromVpnAddrs),
+			"error", err,
+			"vpnAddrs", fromVpnAddrs,
 		)
 		return
 	}
@@ -1192,7 +1192,7 @@ func (lhh *LightHouseHandler) sendHostPunchNotification(n *NebulaMeta, fromVpnAd
 			} else {
 				if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
 					lhh.l.Debug("unable to punch to host, no addresses in common",
-						slog.Any("to", crt.Networks()),
+						"to", crt.Networks(),
 					)
 				}
 			}
@@ -1220,8 +1220,8 @@ func (lhh *LightHouseHandler) sendHostPunchNotification(n *NebulaMeta, fromVpnAd
 
 	if err != nil {
 		lhh.l.Error("Failed to marshal lighthouse host was queried for",
-			slog.Any("error", err),
-			slog.Any("vpnAddrs", fromVpnAddrs),
+			"error", err,
+			"vpnAddrs", fromVpnAddrs,
 		)
 		return
 	}
@@ -1266,8 +1266,8 @@ func (lhh *LightHouseHandler) coalesceAnswers(v cert.Version, c *cache, n *Nebul
 		} else {
 			if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
 				lhh.l.Debug("unsupported protocol version",
-					slog.String("op", "coalesceAnswers"),
-					slog.Any("version", v),
+					"op", "coalesceAnswers",
+					"version", v,
 				)
 			}
 		}
@@ -1283,8 +1283,8 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, fromVpnAddrs [
 	if err != nil {
 		if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
 			lhh.l.Error("dropping malformed HostQueryReply",
-				slog.Any("error", err),
-				slog.Any("vpnAddrs", fromVpnAddrs),
+				"error", err,
+				"vpnAddrs", fromVpnAddrs,
 			)
 		}
 		return
@@ -1311,7 +1311,7 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, fromVpnAddrs [
 func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVpnAddrs []netip.Addr, w EncWriter) {
 	if !lhh.lh.amLighthouse {
 		if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
-			lhh.l.Debug("I am not a lighthouse, do not take host updates", slog.Any("from", fromVpnAddrs))
+			lhh.l.Debug("I am not a lighthouse, do not take host updates", "from", fromVpnAddrs)
 		}
 		return
 	}
@@ -1336,8 +1336,8 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 	if detailsVpnAddr.IsValid() && !slices.Contains(fromVpnAddrs, detailsVpnAddr) {
 		if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
 			lhh.l.Debug("Host sent invalid update",
-				slog.Any("vpnAddrs", fromVpnAddrs),
-				slog.Any("answer", detailsVpnAddr),
+				"vpnAddrs", fromVpnAddrs,
+				"answer", detailsVpnAddr,
 			)
 		}
 		return
@@ -1361,7 +1361,7 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 	case cert.Version1:
 		if !fromVpnAddrs[0].Is4() {
 			lhh.l.Error("Can not send HostUpdateNotificationAck for a ipv6 vpn ip in a v1 message",
-				slog.Any("vpnAddrs", fromVpnAddrs),
+				"vpnAddrs", fromVpnAddrs,
 			)
 			return
 		}
@@ -1370,15 +1370,15 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 	case cert.Version2:
 		// do nothing, we want to send a blank message
 	default:
-		lhh.l.Error("invalid protocol version", slog.Any("useVersion", useVersion))
+		lhh.l.Error("invalid protocol version", "useVersion", useVersion)
 		return
 	}
 
 	ln, err := n.MarshalTo(lhh.pb)
 	if err != nil {
 		lhh.l.Error("Failed to marshal lighthouse host update ack",
-			slog.Any("error", err),
-			slog.Any("vpnAddrs", fromVpnAddrs),
+			"error", err,
+			"vpnAddrs", fromVpnAddrs,
 		)
 		return
 	}
@@ -1398,8 +1398,8 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 	if err != nil {
 		if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
 			lhh.l.Debug("dropping invalid HostPunchNotification",
-				slog.Any("details", n.Details),
-				slog.Any("error", err),
+				"details", n.Details,
+				"error", err,
 			)
 		}
 		return
@@ -1419,8 +1419,8 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 
 		if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
 			lhh.l.Debug("Punching",
-				slog.Any("vpnPeer", vpnPeer),
-				slog.Any("logVpnAddr", logVpnAddr),
+				"vpnPeer", vpnPeer,
+				"logVpnAddr", logVpnAddr,
 			)
 		}
 	}
@@ -1448,7 +1448,7 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 			time.Sleep(lhh.lh.punchy.GetRespondDelay())
 			if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
 				lhh.l.Debug("Sending a nebula test packet",
-					slog.Any("vpnAddr", detailsVpnAddr),
+					"vpnAddr", detailsVpnAddr,
 				)
 			}
 			//NOTE: we have to allocate a new output buffer here since we are spawning a new goroutine

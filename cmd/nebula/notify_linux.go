@@ -21,19 +21,19 @@ func notifyReady(l *slog.Logger) {
 
 	conn, err := net.DialTimeout("unixgram", sockName, time.Second)
 	if err != nil {
-		l.Error("failed to connect to systemd notification socket", slog.Any("error", err))
+		l.Error("failed to connect to systemd notification socket", "error", err)
 		return
 	}
 	defer conn.Close()
 
 	err = conn.SetWriteDeadline(time.Now().Add(time.Second))
 	if err != nil {
-		l.Error("failed to set the write deadline for the systemd notification socket", slog.Any("error", err))
+		l.Error("failed to set the write deadline for the systemd notification socket", "error", err)
 		return
 	}
 
 	if _, err = conn.Write([]byte(SdNotifyReady)); err != nil {
-		l.Error("failed to signal the systemd notification socket", slog.Any("error", err))
+		l.Error("failed to signal the systemd notification socket", "error", err)
 		return
 	}
 

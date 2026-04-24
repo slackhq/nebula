@@ -45,14 +45,14 @@ func (s *session) handleChannels(chans <-chan ssh.NewChannel) {
 	defer s.Close()
 	for newChannel := range chans {
 		if newChannel.ChannelType() != "session" {
-			s.l.Error("unknown channel type", slog.String("sshChannelType", newChannel.ChannelType()))
+			s.l.Error("unknown channel type", "sshChannelType", newChannel.ChannelType())
 			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
 			continue
 		}
 
 		channel, requests, err := newChannel.Accept()
 		if err != nil {
-			s.l.Warn("could not accept channel", slog.Any("error", err))
+			s.l.Warn("could not accept channel", "error", err)
 			continue
 		}
 
@@ -95,12 +95,12 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			return
 
 		default:
-			s.l.Debug("Rejected unknown request", slog.String("sshRequest", req.Type))
+			s.l.Debug("Rejected unknown request", "sshRequest", req.Type)
 			err = req.Reply(false, nil)
 		}
 
 		if err != nil {
-			s.l.Info("Error handling ssh session requests", slog.Any("error", err))
+			s.l.Info("Error handling ssh session requests", "error", err)
 			return
 		}
 	}
