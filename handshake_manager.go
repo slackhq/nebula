@@ -185,8 +185,8 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 	if hh.counter >= hm.config.retries {
 		hh.hostinfo.logger(hm.l).Info("Handshake timed out",
 			"udpAddrs", hh.hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges()),
-			"initiatorIndex", uint64(hh.hostinfo.localIndexId),
-			"remoteIndex", uint64(hh.hostinfo.remoteIndexId),
+			"initiatorIndex", hh.hostinfo.localIndexId,
+			"remoteIndex", hh.hostinfo.remoteIndexId,
 			"handshake", m{"stage": 1, "style": "ix_psk0"},
 			"durationNs", time.Since(hh.startTime).Nanoseconds(),
 		)
@@ -244,7 +244,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		if err != nil {
 			hostinfo.logger(hm.l).Error("Failed to send handshake message",
 				"udpAddr", addr,
-				"initiatorIndex", uint64(hostinfo.localIndexId),
+				"initiatorIndex", hostinfo.localIndexId,
 				"handshake", m{"stage": 1, "style": "ix_psk0"},
 				"error", err,
 			)
@@ -259,13 +259,13 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 	if remotesHaveChanged {
 		hostinfo.logger(hm.l).Info("Handshake message sent",
 			"udpAddrs", sentTo,
-			"initiatorIndex", uint64(hostinfo.localIndexId),
+			"initiatorIndex", hostinfo.localIndexId,
 			"handshake", m{"stage": 1, "style": "ix_psk0"},
 		)
 	} else if hm.l.Enabled(context.Background(), slog.LevelDebug) {
 		hostinfo.logger(hm.l).Debug("Handshake message sent",
 			"udpAddrs", sentTo,
-			"initiatorIndex", uint64(hostinfo.localIndexId),
+			"initiatorIndex", hostinfo.localIndexId,
 			"handshake", m{"stage": 1, "style": "ix_psk0"},
 		)
 	}
@@ -337,7 +337,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 						hm.l.Info("send CreateRelayRequest",
 							"relayFrom", hm.f.myVpnAddrs[0],
 							"relayTo", vpnIp,
-							"initiatorRelayIndex", uint64(idx),
+							"initiatorRelayIndex", idx,
 							"relay", relay,
 						)
 					}
@@ -393,7 +393,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 					hm.l.Info("send CreateRelayRequest",
 						"relayFrom", hm.f.myVpnAddrs[0],
 						"relayTo", vpnIp,
-						"initiatorRelayIndex", uint64(existingRelay.LocalIndex),
+						"initiatorRelayIndex", existingRelay.LocalIndex,
 						"relay", relay,
 					)
 				}
@@ -551,7 +551,7 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
 		hostinfo.logger(hm.l).Info("New host shadows existing host remoteIndex",
-			"remoteIndex", uint64(hostinfo.remoteIndexId),
+			"remoteIndex", hostinfo.remoteIndexId,
 			"collision", existingRemoteIndex.vpnAddrs,
 		)
 	}
@@ -574,7 +574,7 @@ func (hm *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
 		hostinfo.logger(hm.l).Info("New host shadows existing host remoteIndex",
-			"remoteIndex", uint64(hostinfo.remoteIndexId),
+			"remoteIndex", hostinfo.remoteIndexId,
 			"collision", existingRemoteIndex.vpnAddrs,
 		)
 	}

@@ -801,8 +801,8 @@ func (i *HostInfo) logger(l *slog.Logger) *slog.Logger {
 
 	li := l.With(
 		"vpnAddrs", i.vpnAddrs,
-		"localIndex", uint64(i.localIndexId),
-		"remoteIndex", uint64(i.remoteIndexId),
+		"localIndex", i.localIndexId,
+		"remoteIndex", i.remoteIndexId,
 	)
 
 	if connState := i.ConnectionState; connState != nil {
