@@ -81,19 +81,3 @@ func setMsgControllen(m *msghdr, n int) {
 func setCmsgLen(h *unix.Cmsghdr, n int) {
 	h.Len = uint64(n)
 }
-
-func setIovLen(v *iovec, n int) {
-	v.Len = uint64(n)
-}
-
-func setMsgIovlen(m *msghdr, n int) {
-	m.Iovlen = uint64(n)
-}
-
-func setMsgControllen(m *msghdr, n int) {
-	m.Controllen = uint64(n)
-}
-
-func setCmsgLen(h *unix.Cmsghdr, n int) {
-	h.Len = uint64(n)
-}
