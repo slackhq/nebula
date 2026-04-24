@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
@@ -264,12 +265,23 @@ func (r *Offload) writeWithScratch(buf []byte, iovs *[2]unix.Iovec) (int, error)
 	iovs[1].Base = &buf[0]
 	iovs[1].SetLen(len(buf))
 	iovPtr := unsafe.Pointer(&iovs[0])
-	return r.rawWrite(iovPtr, 2)
+	// Pin the caller's buffer AND the iovec array through the syscall.
+	return r.rawWrite(iovPtr, 2, buf, iovs)
 }
 
-func (r *Offload) rawWrite(iovs unsafe.Pointer, iovcnt int) (int, error) {
+func (r *Offload) rawWrite(iovs unsafe.Pointer, iovcnt int, keepAlive ...interface{}) (int, error) {
 	for {
 		n, _, errno := syscall.Syscall(unix.SYS_WRITEV, uintptr(r.fd), uintptr(iovs), uintptr(iovcnt))
+		// Anchor the iovec array + every user-supplied payload slice
+		// through the syscall return. Without these, Go's GC may move or
+		// collect the underlying backing arrays while the kernel is still
+		// reading them via DMA (we pass the iovec as uintptr, so the
+		// compiler does not keep it live). Observed in practice as a
+		// kernel refcount underflow on tun_chr_write_iter / sock_wfree.
+		runtime.KeepAlive(iovs)
+		for _, ka := range keepAlive {
+			runtime.KeepAlive(ka)
+		}
 		if errno == 0 {
 			if int(n) < virtioNetHdrLen {
 				return 0, io.ErrShortWrite
@@ -354,7 +366,11 @@ func (r *Offload) WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, isV6 bool,
 
 	iovPtr := unsafe.Pointer(&r.gsoIovs[0])
 	iovCnt := len(r.gsoIovs)
-	_, err := r.rawWrite(iovPtr, iovCnt)
+	// Pin EVERYTHING the kernel might still read via DMA: the backing iovec
+	// slice, the IP/TCP header buffer, and every individual payload
+	// fragment. Skipping any of these risks a use-after-free in
+	// tun_chr_write_iter if GC runs mid-syscall.
+	_, err := r.rawWrite(iovPtr, iovCnt, r.gsoIovs, hdr, pays)
 	return err
 }
 
