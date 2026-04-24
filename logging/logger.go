@@ -44,45 +44,54 @@ const LevelTrace = slog.Level(-8)
 // they care about. Callers that pass a plain *slog.Logger without these
 // methods get a silent no-op; reconfiguration is always opt-in.
 func NewLogger(w io.Writer) *slog.Logger {
+	return slog.New(NewHandler(w))
+}
+
+// NewHandler builds the *Handler that NewLogger wraps. Exported for
+// platform-specific sinks (notably cmd/nebula-service/logs_windows.go)
+// that want to wrap the handler with extra behavior, such as tagging each
+// record with its Event Log severity, while still benefiting from all the
+// level / format / timestamp / WithAttrs machinery implemented here.
+func NewHandler(w io.Writer) *Handler {
 	root := &handlerRoot{}
 	root.level.Set(slog.LevelInfo)
 	opts := &slog.HandlerOptions{Level: &root.level}
-	return slog.New(&handler{
+	return &Handler{
 		root: root,
 		text: slog.NewTextHandler(w, opts),
 		json: slog.NewJSONHandler(w, opts),
-	})
+	}
 }
 
 // handlerRoot carries the reconfiguration state shared by every logger
-// derived from a NewLogger call. All fields are consulted on the log path
-// and updated lock-free.
+// derived from a NewHandler call. All fields are consulted on the log
+// path and updated lock-free.
 type handlerRoot struct {
 	level            slog.LevelVar
 	disableTimestamp atomic.Bool
-	// jsonMode picks which of the pre-derived inner handlers handler.Handle
+	// jsonMode picks which of the pre-derived inner handlers Handler.Handle
 	// dispatches to. Flipping it propagates instantly to every derived logger
 	// without rebuilding or chain-replaying anything.
 	jsonMode atomic.Bool
 }
 
-// handler is the slog.Handler returned by NewLogger. It holds two
+// Handler is the slog.Handler returned by NewHandler. It holds two
 // pre-derived slog handlers -- one text, one json -- both built from the
 // same accumulated WithAttrs/WithGroup state. Handle picks which one to
 // dispatch to based on handlerRoot.jsonMode, so a SetFormat call takes
 // effect immediately across the whole process without having to rebuild
 // any derived loggers.
-type handler struct {
+type Handler struct {
 	root *handlerRoot
 	text slog.Handler
 	json slog.Handler
 }
 
-func (h *handler) Enabled(_ context.Context, l slog.Level) bool {
+func (h *Handler) Enabled(_ context.Context, l slog.Level) bool {
 	return h.root.level.Level() <= l
 }
 
-func (h *handler) Handle(ctx context.Context, r slog.Record) error {
+func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	if h.root.disableTimestamp.Load() {
 		r.Time = time.Time{}
 	}
@@ -92,22 +101,22 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 	return h.text.Handle(ctx, r)
 }
 
-func (h *handler) WithAttrs(attrs []slog.Attr) slog.Handler {
+func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return h
 	}
-	return &handler{
+	return &Handler{
 		root: h.root,
 		text: h.text.WithAttrs(attrs),
 		json: h.json.WithAttrs(attrs),
 	}
 }
 
-func (h *handler) WithGroup(name string) slog.Handler {
+func (h *Handler) WithGroup(name string) slog.Handler {
 	if name == "" {
 		return h
 	}
-	return &handler{
+	return &Handler{
 		root: h.root,
 		text: h.text.WithGroup(name),
 		json: h.json.WithGroup(name),
@@ -116,15 +125,15 @@ func (h *handler) WithGroup(name string) slog.Handler {
 
 // SetLevel updates the effective log level. Propagates to every derived
 // logger via the shared LevelVar.
-func (h *handler) SetLevel(level slog.Level) { h.root.level.Set(level) }
+func (h *Handler) SetLevel(level slog.Level) { h.root.level.Set(level) }
 
 // GetLevel reports the current log level.
-func (h *handler) GetLevel() slog.Level { return h.root.level.Level() }
+func (h *Handler) GetLevel() slog.Level { return h.root.level.Level() }
 
 // SetFormat flips the output format atomically. Valid formats are "text"
 // and "json". Every derived logger sees the new format on its next Handle
 // call; no rebuild or registration is required.
-func (h *handler) SetFormat(format string) error {
+func (h *Handler) SetFormat(format string) error {
 	switch format {
 	case "text":
 		h.root.jsonMode.Store(false)
@@ -137,7 +146,7 @@ func (h *handler) SetFormat(format string) error {
 }
 
 // GetFormat reports the currently selected format name.
-func (h *handler) GetFormat() string {
+func (h *Handler) GetFormat() string {
 	if h.root.jsonMode.Load() {
 		return "json"
 	}
@@ -147,7 +156,7 @@ func (h *handler) GetFormat() string {
 // SetDisableTimestamp toggles whether Handle zeroes r.Time before
 // dispatching (slog's builtin text/json handlers skip emitting the time
 // attribute on a zero time).
-func (h *handler) SetDisableTimestamp(v bool) { h.root.disableTimestamp.Store(v) }
+func (h *Handler) SetDisableTimestamp(v bool) { h.root.disableTimestamp.Store(v) }
 
 // ApplyConfig reads logging.level, logging.format, and (optionally)
 // logging.disable_timestamp from c and applies them to l. The reconfig
