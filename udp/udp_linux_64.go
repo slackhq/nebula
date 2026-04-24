@@ -33,13 +33,13 @@ type rawMessage struct {
 	Pad0 [4]byte
 }
 
-func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
+func (u *StdConn) PrepareRawMessages(n, bufSize int) ([]rawMessage, [][]byte, [][]byte) {
 	msgs := make([]rawMessage, n)
 	buffers := make([][]byte, n)
 	names := make([][]byte, n)
 
 	for i := range msgs {
-		buffers[i] = make([]byte, MTU)
+		buffers[i] = make([]byte, bufSize)
 		names[i] = make([]byte, unix.SizeofSockaddrInet6)
 
 		vs := []iovec{
@@ -54,4 +54,20 @@ func (u *StdConn) PrepareRawMessages(n int) ([]rawMessage, [][]byte, [][]byte) {
 	}
 
 	return msgs, buffers, names
+}
+
+func setIovLen(v *iovec, n int) {
+	v.Len = uint64(n)
+}
+
+func setMsgIovlen(m *msghdr, n int) {
+	m.Iovlen = uint64(n)
+}
+
+func setMsgControllen(m *msghdr, n int) {
+	m.Controllen = uint64(n)
+}
+
+func setCmsgLen(h *unix.Cmsghdr, n int) {
+	h.Len = uint64(n)
 }

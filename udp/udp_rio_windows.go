@@ -140,7 +140,7 @@ func (u *RIOConn) bind(l *logrus.Logger, sa windows.Sockaddr) error {
 	return nil
 }
 
-func (u *RIOConn) ListenOut(r EncReader) error {
+func (u *RIOConn) ListenOut(r EncReader, flush func()) error {
 	buffer := make([]byte, MTU)
 
 	var lastRecvErr time.Time
@@ -162,6 +162,7 @@ func (u *RIOConn) ListenOut(r EncReader) error {
 		}
 
 		r(netip.AddrPortFrom(netip.AddrFrom16(rua.Addr).Unmap(), (rua.Port>>8)|((rua.Port&0xff)<<8)), buffer[:n])
+		flush()
 	}
 }
 
@@ -314,6 +315,15 @@ func (u *RIOConn) WriteTo(buf []byte, ip netip.AddrPort) error {
 	}
 
 	return winrio.SendEx(u.rq, dataBuffer, 1, nil, addressBuffer, nil, nil, 0, 0)
+}
+
+func (u *RIOConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
+	for i, b := range bufs {
+		if err := u.WriteTo(b, addrs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (u *RIOConn) LocalAddr() (netip.AddrPort, error) {

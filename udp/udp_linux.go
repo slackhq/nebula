@@ -171,7 +171,7 @@ func recvmmsg(fd uintptr, msgs []rawMessage) (int, bool, error) {
 	return int(n), true, nil
 }
 
-func (u *StdConn) listenOutSingle(r EncReader) error {
+func (u *StdConn) listenOutSingle(r EncReader, flush func()) error {
 	var err error
 	var n int
 	var from netip.AddrPort
@@ -184,15 +184,17 @@ func (u *StdConn) listenOutSingle(r EncReader) error {
 		}
 		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
 		r(from, buffer[:n])
+		flush()
 	}
 }
 
-func (u *StdConn) listenOutBatch(r EncReader) error {
+func (u *StdConn) listenOutBatch(r EncReader, flush func()) error {
 	var ip netip.Addr
 	var n int
 	var operr error
 
-	msgs, buffers, names := u.PrepareRawMessages(u.batch)
+	bufSize := MTU
+	msgs, buffers, names := u.PrepareRawMessages(u.batch, bufSize)
 
 	//reader needs to capture variables from this function, since it's used as a lambda with rawConn.Read
 	//defining it outside the loop so it gets re-used
@@ -217,22 +219,41 @@ func (u *StdConn) listenOutBatch(r EncReader) error {
 			} else {
 				ip, _ = netip.AddrFromSlice(names[i][8:24])
 			}
-			r(netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])), buffers[i][:msgs[i].Len])
+			from := netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4]))
+			payload := buffers[i][:msgs[i].Len]
+
+			r(from, payload)
 		}
+		// End-of-batch: let callers (e.g. TUN write coalescer) flush any
+		// state they accumulated across this batch.
+		flush()
 	}
 }
 
-func (u *StdConn) ListenOut(r EncReader) error {
+func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 	if u.batch == 1 {
-		return u.listenOutSingle(r)
+		return u.listenOutSingle(r, flush)
 	} else {
-		return u.listenOutBatch(r)
+		return u.listenOutBatch(r, flush)
 	}
 }
 
 func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
 	_, err := u.udpConn.WriteToUDPAddrPort(b, ip)
 	return err
+}
+
+func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort) error {
+	if len(bufs) != len(addrs) {
+		return fmt.Errorf("WriteBatch: len(bufs)=%d != len(addrs)=%d", len(bufs), len(addrs))
+	}
+	//todo use sendmmsg
+	for i := 0; i < len(bufs); i++ {
+		if _, err := u.udpConn.WriteToUDPAddrPort(bufs[i], addrs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (u *StdConn) ReloadConfig(c *config.C) {
