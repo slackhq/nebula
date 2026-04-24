@@ -35,7 +35,7 @@ const gsoInitialPayIovs = 66
 // validVnetHdr is the 10-byte virtio_net_hdr we prepend to every non-GSO TUN
 // write. Only flag set is VIRTIO_NET_HDR_F_DATA_VALID, which marks the skb
 // CHECKSUM_UNNECESSARY so the receiving network stack skips L4 checksum
-// verification. All packets that reach the plain Write / WriteReject paths
+// verification. All packets that reach the plain Write / WriteFromSelf paths
 // already carry a valid L4 checksum (either supplied by a remote peer whose
 // ciphertext we AEAD-authenticated, or produced by finishChecksum during TSO
 // segmentation, or built locally by CreateRejectPacket), so trusting them is
@@ -56,7 +56,7 @@ type Offload struct {
 	pending    [][]byte      // segments returned from the most recent Read
 	writeIovs  [2]unix.Iovec // preallocated iovecs for Write (coalescer passthrough); iovs[0] is fixed to validVnetHdr
 	// rejectIovs is a second preallocated iovec scratch used exclusively by
-	// WriteReject (reject + self-forward from the inside path). It mirrors
+	// WriteFromSelf (reject + self-forward from the inside path). It mirrors
 	// writeIovs but lets listenIn goroutines emit reject packets without
 	// racing with the listenOut coalescer that owns writeIovs.
 	rejectIovs [2]unix.Iovec
@@ -246,12 +246,12 @@ func (r *Offload) Write(buf []byte) (int, error) {
 	return r.writeWithScratch(buf, &r.writeIovs)
 }
 
-// WriteReject emits a packet using a dedicated iovec scratch (rejectIovs)
+// WriteFromSelf emits a packet using a dedicated iovec scratch (rejectIovs)
 // distinct from the one used by the coalescer's Write path. This avoids a
 // data race between the inside (listenIn) goroutine emitting reject or
 // self-forward packets and the outside (listenOut) goroutine flushing TCP
 // coalescer passthroughs on the same Offload.
-func (r *Offload) WriteReject(buf []byte) (int, error) {
+func (r *Offload) WriteFromSelf(buf []byte) (int, error) {
 	return r.writeWithScratch(buf, &r.rejectIovs)
 }
 

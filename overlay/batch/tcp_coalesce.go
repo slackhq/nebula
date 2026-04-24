@@ -1,4 +1,4 @@
-package coalesce
+package batch
 
 import (
 	"bytes"
@@ -84,6 +84,8 @@ type TCPCoalescer struct {
 	// when a non-admissible packet for that flow arrives, or in Flush.
 	openSlots map[flowKey]*coalesceSlot
 	pool      []*coalesceSlot // free list for reuse
+
+	backing []byte
 }
 
 func NewTCPCoalescer(w io.Writer) *TCPCoalescer {
@@ -92,6 +94,7 @@ func NewTCPCoalescer(w io.Writer) *TCPCoalescer {
 		slots:     make([]*coalesceSlot, 0, initialSlots),
 		openSlots: make(map[flowKey]*coalesceSlot, initialSlots),
 		pool:      make([]*coalesceSlot, 0, initialSlots),
+		backing:   make([]byte, 0, initialSlots*65535),
 	}
 	if gw, ok := w.(tio.GSOWriter); ok && gw.GSOSupported() {
 		c.gsoW = gw
@@ -194,10 +197,22 @@ func (p parsedTCP) coalesceable() bool {
 	return p.payLen > 0
 }
 
-// Add borrows pkt. The caller must keep pkt valid until the next Flush,
+func (c *TCPCoalescer) Reserve(sz int) []byte {
+	if len(c.backing)+sz > cap(c.backing) {
+		// Grow: allocate a fresh backing. Already-committed slices still
+		// reference the old array and remain valid until Flush drops them.
+		newCap := max(cap(c.backing)*2, sz)
+		c.backing = make([]byte, 0, newCap)
+	}
+	start := len(c.backing)
+	c.backing = c.backing[:start+sz]
+	return c.backing[start : start+sz : start+sz] //return zero length, sz-cap slice
+}
+
+// Commit borrows pkt. The caller must keep pkt valid until the next Flush,
 // whether or not the packet was coalesced — passthrough (non-admissible)
 // packets are queued and written at Flush time, not synchronously.
-func (c *TCPCoalescer) Add(pkt []byte) error {
+func (c *TCPCoalescer) Commit(pkt []byte) error {
 	if c.gsoW == nil {
 		c.addPassthrough(pkt)
 		return nil
@@ -258,6 +273,8 @@ func (c *TCPCoalescer) Flush() error {
 	for k := range c.openSlots {
 		delete(c.openSlots, k)
 	}
+
+	c.backing = c.backing[:0]
 	return first
 }
 

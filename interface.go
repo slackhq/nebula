@@ -260,7 +260,7 @@ func (f *Interface) activate() error {
 	}
 	f.readers = f.inside.Readers()
 	for i := range f.readers {
-		f.batchers[i] = batch.NewPassthrough(f.readers[i])
+		f.batchers[i] = batch.NewTCPCoalescer(f.readers[i])
 	}
 
 	f.wg.Add(1) // for us to wait on Close() to return

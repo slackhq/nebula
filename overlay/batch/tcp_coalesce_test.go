@@ -1,4 +1,4 @@
-package coalesce
+package batch
 
 import (
 	"encoding/binary"
@@ -116,7 +116,7 @@ func TestCoalescerPassthroughWhenGSOUnavailable(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: false}
 	c := NewTCPCoalescer(w)
 	pkt := buildTCPv4(1000, tcpAck, []byte("hello"))
-	if err := c.Add(pkt); err != nil {
+	if err := c.Commit(pkt); err != nil {
 		t.Fatal(err)
 	}
 	// No sync write — passthrough is deferred to Flush.
@@ -140,7 +140,7 @@ func TestCoalescerNonTCPPassthrough(t *testing.T) {
 	pkt[9] = 1
 	copy(pkt[12:16], []byte{10, 0, 0, 1})
 	copy(pkt[16:20], []byte{10, 0, 0, 2})
-	if err := c.Add(pkt); err != nil {
+	if err := c.Commit(pkt); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flush(); err != nil {
@@ -155,7 +155,7 @@ func TestCoalescerSeedThenFlushAlone(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := NewTCPCoalescer(w)
 	pkt := buildTCPv4(1000, tcpAck, make([]byte, 1000))
-	if err := c.Add(pkt); err != nil {
+	if err := c.Commit(pkt); err != nil {
 		t.Fatal(err)
 	}
 	if len(w.writes) != 0 || len(w.gsoWrites) != 0 {
@@ -182,13 +182,13 @@ func TestCoalescerCoalescesAdjacentACKs(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := NewTCPCoalescer(w)
 	pay := make([]byte, 1200)
-	if err := c.Add(buildTCPv4(1000, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(buildTCPv4(2200, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4(2200, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(buildTCPv4(3400, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4(3400, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flush(); err != nil {
@@ -222,10 +222,10 @@ func TestCoalescerRejectsSeqGap(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := NewTCPCoalescer(w)
 	pay := make([]byte, 1200)
-	if err := c.Add(buildTCPv4(1000, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(buildTCPv4(3000, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4(3000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flush(); err != nil {
@@ -241,13 +241,13 @@ func TestCoalescerRejectsFlagMismatch(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := NewTCPCoalescer(w)
 	pay := make([]byte, 1200)
-	if err := c.Add(buildTCPv4(1000, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
 	// SYN|ACK is non-admissible. Must flush matching flow's slot (gso)
 	// and then plain-write the SYN packet itself.
 	syn := buildTCPv4(2200, tcpSyn|tcpAck, pay)
-	if err := c.Add(syn); err != nil {
+	if err := c.Commit(syn); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flush(); err != nil {
@@ -262,7 +262,7 @@ func TestCoalescerRejectsFIN(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := NewTCPCoalescer(w)
 	fin := buildTCPv4(1000, tcpAck|tcpFin, []byte("x"))
-	if err := c.Add(fin); err != nil {
+	if err := c.Commit(fin); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flush(); err != nil {
@@ -279,15 +279,15 @@ func TestCoalescerShortLastSegmentClosesChain(t *testing.T) {
 	c := NewTCPCoalescer(w)
 	full := make([]byte, 1200)
 	half := make([]byte, 500)
-	if err := c.Add(buildTCPv4(1000, tcpAck, full)); err != nil {
+	if err := c.Commit(buildTCPv4(1000, tcpAck, full)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(buildTCPv4(2200, tcpAck, half)); err != nil {
+	if err := c.Commit(buildTCPv4(2200, tcpAck, half)); err != nil {
 		t.Fatal(err)
 	}
 	// Chain now closed; next packet seeds a new slot on the same flow
 	// after flushing the old one.
-	if err := c.Add(buildTCPv4(2700, tcpAck, full)); err != nil {
+	if err := c.Commit(buildTCPv4(2700, tcpAck, full)); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flush(); err != nil {
@@ -313,13 +313,13 @@ func TestCoalescerPSHFinalizesChain(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := NewTCPCoalescer(w)
 	pay := make([]byte, 1200)
-	if err := c.Add(buildTCPv4(1000, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(buildTCPv4(2200, tcpAckPsh, pay)); err != nil {
+	if err := c.Commit(buildTCPv4(2200, tcpAckPsh, pay)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(buildTCPv4(3400, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4(3400, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flush(); err != nil {
@@ -341,10 +341,10 @@ func TestCoalescerRejectsDifferentFlow(t *testing.T) {
 	p1 := buildTCPv4(1000, tcpAck, pay)
 	p2 := buildTCPv4(2200, tcpAck, pay)
 	binary.BigEndian.PutUint16(p2[20:22], 9999)
-	if err := c.Add(p1); err != nil {
+	if err := c.Commit(p1); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(p2); err != nil {
+	if err := c.Commit(p2); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flush(); err != nil {
@@ -364,7 +364,7 @@ func TestCoalescerRejectsIPOptions(t *testing.T) {
 	// Bump IHL to 6 to simulate 4 bytes of IP options. Don't actually add
 	// bytes — parser should bail before it matters.
 	pkt[0] = 0x46
-	if err := c.Add(pkt); err != nil {
+	if err := c.Commit(pkt); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flush(); err != nil {
@@ -382,7 +382,7 @@ func TestCoalescerCapBySegments(t *testing.T) {
 	pay := make([]byte, 512)
 	seq := uint32(1000)
 	for i := 0; i < tcpCoalesceMaxSegs+5; i++ {
-		if err := c.Add(buildTCPv4(seq, tcpAck, pay)); err != nil {
+		if err := c.Commit(buildTCPv4(seq, tcpAck, pay)); err != nil {
 			t.Fatal(err)
 		}
 		seq += uint32(len(pay))
@@ -406,22 +406,22 @@ func TestCoalescerMultipleFlowsInSameBatch(t *testing.T) {
 	pay := make([]byte, 1200)
 
 	// Flow A: sport 1000. Flow B: sport 3000.
-	if err := c.Add(buildTCPv4Ports(1000, 2000, 100, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4Ports(1000, 2000, 100, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(buildTCPv4Ports(3000, 2000, 500, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4Ports(3000, 2000, 500, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(buildTCPv4Ports(1000, 2000, 1300, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4Ports(1000, 2000, 1300, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(buildTCPv4Ports(3000, 2000, 1700, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4Ports(3000, 2000, 1700, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(buildTCPv4Ports(1000, 2000, 2500, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4Ports(1000, 2000, 2500, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(buildTCPv4Ports(3000, 2000, 2900, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4Ports(3000, 2000, 2900, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flush(); err != nil {
@@ -463,7 +463,7 @@ func TestCoalescerPreservesArrivalOrder(t *testing.T) {
 	// Sequence: coalesceable TCP, ICMP (passthrough), coalesceable TCP on
 	// a different flow. Expected emit order: gso(X), plain(ICMP), gso(Y).
 	pay := make([]byte, 1200)
-	if err := c.Add(buildTCPv4Ports(1000, 2000, 100, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4Ports(1000, 2000, 100, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
 	icmp := make([]byte, 28)
@@ -472,10 +472,10 @@ func TestCoalescerPreservesArrivalOrder(t *testing.T) {
 	icmp[9] = 1
 	copy(icmp[12:16], []byte{10, 0, 0, 1})
 	copy(icmp[16:20], []byte{10, 0, 0, 3})
-	if err := c.Add(icmp); err != nil {
+	if err := c.Commit(icmp); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(buildTCPv4Ports(3000, 2000, 500, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4Ports(3000, 2000, 500, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
 	// Nothing should have hit the writer synchronously.
@@ -529,26 +529,26 @@ func TestCoalescerInterleavedFlowsPreserveOrdering(t *testing.T) {
 	pay := make([]byte, 1200)
 
 	// Flow A two segments.
-	if err := c.Add(buildTCPv4Ports(1000, 2000, 100, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4Ports(1000, 2000, 100, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(buildTCPv4Ports(1000, 2000, 1300, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4Ports(1000, 2000, 1300, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
 	// Flow B two segments.
-	if err := c.Add(buildTCPv4Ports(3000, 2000, 500, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4Ports(3000, 2000, 500, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Add(buildTCPv4Ports(3000, 2000, 1700, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4Ports(3000, 2000, 1700, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
 	// Flow A SYN (non-admissible) — must flush only flow A's slot.
 	syn := buildTCPv4Ports(1000, 2000, 9999, tcpSyn|tcpAck, pay)
-	if err := c.Add(syn); err != nil {
+	if err := c.Commit(syn); err != nil {
 		t.Fatal(err)
 	}
 	// Flow B continues — should still be coalesced with its seed.
-	if err := c.Add(buildTCPv4Ports(3000, 2000, 2900, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4Ports(3000, 2000, 2900, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flush(); err != nil {
