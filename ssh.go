@@ -20,6 +20,7 @@ import (
 
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/sshd"
 )
 
@@ -808,16 +809,16 @@ func sshLogLevel(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error 
 	}
 
 	if len(a) == 0 {
-		return w.WriteLine(fmt.Sprintf("Log level is: %s", logLevelName(ctrl.GetLevel())))
+		return w.WriteLine(fmt.Sprintf("Log level is: %s", logging.LevelName(ctrl.GetLevel())))
 	}
 
-	level, err := parseLogLevel(strings.ToLower(a[0]))
+	level, err := logging.ParseLevel(strings.ToLower(a[0]))
 	if err != nil {
 		return w.WriteLine(fmt.Sprintf("Unknown log level %s. Possible log levels: trace, debug, info, warn, error", a))
 	}
 
 	ctrl.SetLevel(level)
-	return w.WriteLine(fmt.Sprintf("Log level is: %s", logLevelName(ctrl.GetLevel())))
+	return w.WriteLine(fmt.Sprintf("Log level is: %s", logging.LevelName(ctrl.GetLevel())))
 }
 
 func sshLogFormat(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error {

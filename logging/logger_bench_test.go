@@ -1,4 +1,4 @@
-package nebula
+package logging
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// BenchmarkLogger_* compare the nebulaHandler returned by NewLogger against
-// a stock slog text handler. The key thing we care about is the per-log
+// BenchmarkLogger_* compare the handler returned by NewLogger against a
+// stock slog text handler. The key thing we care about is the per-log
 // cost on a logger that has been derived via .With(), because that is the
 // shape subsystems store on their structs (HostInfo.logger(),
 // lh.l.With("subsystem", ...), etc.) and call from hot paths.

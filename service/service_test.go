@@ -14,6 +14,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/overlay"
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/sync/errgroup"
@@ -74,7 +75,7 @@ func newSimpleService(caCrt cert.Certificate, caKey []byte, name string, udpIp n
 		panic(err)
 	}
 
-	logger := nebula.NewLogger(os.Stdout)
+	logger := logging.NewLogger(os.Stdout)
 
 	control, err := nebula.Main(&c, false, "custom-app", logger, overlay.NewUserDeviceFromConfig)
 	if err != nil {

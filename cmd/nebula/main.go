@@ -9,6 +9,7 @@ import (
 
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/util"
 )
 
@@ -54,7 +55,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	l := nebula.NewLogger(os.Stdout)
+	l := logging.NewLogger(os.Stdout)
 
 	c := config.NewC(l)
 	err := c.Load(*configPath)
@@ -62,6 +63,16 @@ func main() {
 		fmt.Printf("failed to load config: %s", err)
 		os.Exit(1)
 	}
+
+	if err := logging.ApplyConfig(l, c); err != nil {
+		fmt.Printf("failed to apply logging config: %s", err)
+		os.Exit(1)
+	}
+	c.RegisterReloadCallback(func(c *config.C) {
+		if err := logging.ApplyConfig(l, c); err != nil {
+			l.Error("Failed to reconfigure logger on reload", "error", err)
+		}
+	})
 
 	ctrl, err := nebula.Main(c, *configTest, Build, l, nil)
 	if err != nil {
