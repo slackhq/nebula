@@ -139,7 +139,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, multiqueu
 		return nil, err
 	}
 	vnetHdr := true
-	name, err := tunSetIff(fd, nameStr, baseFlags|unix.IFF_VNET_HDR|unix.IFF_NAPI)
+	name, err := tunSetIff(fd, nameStr, baseFlags|unix.IFF_VNET_HDR)
 	if err != nil {
 		_ = unix.Close(fd)
 		vnetHdr = false
@@ -307,7 +307,7 @@ func (t *tun) NewMultiQueueReader() error {
 
 	flags := uint16(unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_MULTI_QUEUE)
 	if t.vnetHdr {
-		flags |= unix.IFF_VNET_HDR | unix.IFF_NAPI
+		flags |= unix.IFF_VNET_HDR
 	}
 	if _, err = tunSetIff(fd, t.Device, flags); err != nil {
 		_ = unix.Close(fd)
