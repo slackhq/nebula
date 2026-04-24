@@ -308,9 +308,9 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 		"certVersion", certVersion,
 		"fingerprint", fingerprint,
 		"issuer", issuer,
-		"initiatorIndex", uint64(hs.Details.InitiatorIndex),
-		"responderIndex", uint64(hs.Details.ResponderIndex),
-		"remoteIndex", uint64(h.RemoteIndex),
+		"initiatorIndex", hs.Details.InitiatorIndex,
+		"responderIndex", hs.Details.ResponderIndex,
+		"remoteIndex", h.RemoteIndex,
 		"handshake", m{"stage": 1, "style": "ix_psk0"},
 	)
 
@@ -456,9 +456,9 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 				"newHandshakeTime", hostinfo.lastHandshakeTime,
 				"fingerprint", fingerprint,
 				"issuer", issuer,
-				"initiatorIndex", uint64(hs.Details.InitiatorIndex),
-				"responderIndex", uint64(hs.Details.ResponderIndex),
-				"remoteIndex", uint64(h.RemoteIndex),
+				"initiatorIndex", hs.Details.InitiatorIndex,
+				"responderIndex", hs.Details.ResponderIndex,
+				"remoteIndex", h.RemoteIndex,
 				"handshake", m{"stage": 1, "style": "ix_psk0"},
 			)
 
@@ -474,11 +474,11 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 				"certVersion", certVersion,
 				"fingerprint", fingerprint,
 				"issuer", issuer,
-				"initiatorIndex", uint64(hs.Details.InitiatorIndex),
-				"responderIndex", uint64(hs.Details.ResponderIndex),
-				"remoteIndex", uint64(h.RemoteIndex),
+				"initiatorIndex", hs.Details.InitiatorIndex,
+				"responderIndex", hs.Details.ResponderIndex,
+				"remoteIndex", h.RemoteIndex,
 				"handshake", m{"stage": 1, "style": "ix_psk0"},
-				"localIndex", uint64(hostinfo.localIndexId),
+				"localIndex", hostinfo.localIndexId,
 				"collision", existing.vpnAddrs,
 			)
 			return
@@ -493,9 +493,9 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 				"certVersion", certVersion,
 				"fingerprint", fingerprint,
 				"issuer", issuer,
-				"initiatorIndex", uint64(hs.Details.InitiatorIndex),
-				"responderIndex", uint64(hs.Details.ResponderIndex),
-				"remoteIndex", uint64(h.RemoteIndex),
+				"initiatorIndex", hs.Details.InitiatorIndex,
+				"responderIndex", hs.Details.ResponderIndex,
+				"remoteIndex", h.RemoteIndex,
 				"handshake", m{"stage": 1, "style": "ix_psk0"},
 			)
 			return
@@ -513,9 +513,9 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 			"certVersion", certVersion,
 			"fingerprint", fingerprint,
 			"issuer", issuer,
-			"initiatorIndex", uint64(hs.Details.InitiatorIndex),
-			"responderIndex", uint64(hs.Details.ResponderIndex),
-			"remoteIndex", uint64(h.RemoteIndex),
+			"initiatorIndex", hs.Details.InitiatorIndex,
+			"responderIndex", hs.Details.ResponderIndex,
+			"remoteIndex", h.RemoteIndex,
 			"handshake", m{"stage": 2, "style": "ix_psk0"},
 		)
 		if err != nil {
@@ -540,9 +540,9 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 			"certVersion", certVersion,
 			"fingerprint", fingerprint,
 			"issuer", issuer,
-			"initiatorIndex", uint64(hs.Details.InitiatorIndex),
-			"responderIndex", uint64(hs.Details.ResponderIndex),
-			"remoteIndex", uint64(h.RemoteIndex),
+			"initiatorIndex", hs.Details.InitiatorIndex,
+			"responderIndex", hs.Details.ResponderIndex,
+			"remoteIndex", h.RemoteIndex,
 			"handshake", m{"stage": 2, "style": "ix_psk0"},
 		)
 	}
@@ -764,9 +764,9 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 		"certVersion", certVersion,
 		"fingerprint", fingerprint,
 		"issuer", issuer,
-		"initiatorIndex", uint64(hs.Details.InitiatorIndex),
-		"responderIndex", uint64(hs.Details.ResponderIndex),
-		"remoteIndex", uint64(h.RemoteIndex),
+		"initiatorIndex", hs.Details.InitiatorIndex,
+		"responderIndex", hs.Details.ResponderIndex,
+		"remoteIndex", h.RemoteIndex,
 		"handshake", m{"stage": 2, "style": "ix_psk0"},
 		"durationNs", duration,
 		"sentCachedPackets", len(hh.packetStore),

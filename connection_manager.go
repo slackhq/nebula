@@ -312,8 +312,8 @@ func (cm *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo
 			cm.l.Info("send CreateRelayRequest",
 				"relayFrom", req.RelayFromAddr,
 				"relayTo", req.RelayToAddr,
-				"initiatorRelayIndex", uint64(req.InitiatorRelayIndex),
-				"responderRelayIndex", uint64(req.ResponderRelayIndex),
+				"initiatorRelayIndex", req.InitiatorRelayIndex,
+				"responderRelayIndex", req.ResponderRelayIndex,
 				"vpnAddrs", newhostinfo.vpnAddrs,
 			)
 		}
@@ -327,7 +327,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 
 	hostinfo := cm.hostMap.Indexes[localIndex]
 	if hostinfo == nil {
-		cm.l.Debug("Not found in hostmap", "localIndex", uint64(localIndex))
+		cm.l.Debug("Not found in hostmap", "localIndex", localIndex)
 		return doNothing, nil, nil
 	}
 

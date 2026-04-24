@@ -94,7 +94,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 				// its internal mapping. This should never happen.
 				hostinfo.logger(f.l).Error("HostInfo missing remote relay index",
 					"vpnAddrs", hostinfo.vpnAddrs,
-					"remoteIndex", uint64(h.RemoteIndex),
+					"remoteIndex", h.RemoteIndex,
 				)
 				return
 			}
@@ -592,7 +592,7 @@ func (f *Interface) sendRecvError(endpoint netip.AddrPort, index uint32) {
 	_ = f.outside.WriteTo(b, endpoint)
 	if f.l.Enabled(context.Background(), slog.LevelDebug) {
 		f.l.Debug("Recv error sent",
-			"index", uint64(index),
+			"index", index,
 			"udpAddr", endpoint,
 		)
 	}
@@ -601,7 +601,7 @@ func (f *Interface) sendRecvError(endpoint netip.AddrPort, index uint32) {
 func (f *Interface) handleRecvError(addr netip.AddrPort, h *header.H) {
 	if !f.acceptRecvErrorConfig.ShouldRecvError(addr) {
 		f.l.Debug("Recv error received, ignoring",
-			"index", uint64(h.RemoteIndex),
+			"index", h.RemoteIndex,
 			"udpAddr", addr,
 		)
 		return
@@ -609,14 +609,14 @@ func (f *Interface) handleRecvError(addr netip.AddrPort, h *header.H) {
 
 	if f.l.Enabled(context.Background(), slog.LevelDebug) {
 		f.l.Debug("Recv error received",
-			"index", uint64(h.RemoteIndex),
+			"index", h.RemoteIndex,
 			"udpAddr", addr,
 		)
 	}
 
 	hostinfo := f.hostMap.QueryReverseIndex(h.RemoteIndex)
 	if hostinfo == nil {
-		f.l.Debug("Did not find remote index in main hostmap", "remoteIndex", uint64(h.RemoteIndex))
+		f.l.Debug("Did not find remote index in main hostmap", "remoteIndex", h.RemoteIndex)
 		return
 	}
 
