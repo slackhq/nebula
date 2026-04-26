@@ -675,6 +675,9 @@ func sshCreateTunnel(ifce *Interface, fs any, a []string, w sshd.StringWriter) e
 	}
 
 	hostInfo = ifce.handshakeManager.StartHandshake(vpnAddr, nil)
+	if hostInfo == nil {
+		return w.WriteLine("Handshake rate limit reached")
+	}
 	if addr.IsValid() {
 		hostInfo.SetRemote(addr)
 	}

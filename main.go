@@ -204,10 +204,11 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	useRelays := c.GetBool("relay.use_relays", DefaultUseRelays) && !c.GetBool("relay.am_relay", false)
 
 	handshakeConfig := HandshakeConfig{
-		tryInterval:   c.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
-		retries:       int64(c.GetInt("handshakes.retries", DefaultHandshakeRetries)),
-		triggerBuffer: c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
-		useRelays:     useRelays,
+		tryInterval:      c.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
+		retries:          int64(c.GetInt("handshakes.retries", DefaultHandshakeRetries)),
+		triggerBuffer:    c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
+		useRelays:        useRelays,
+		maxHandshakeRate: c.GetInt("handshakes.max_rate", DefaultMaxHandshakeRate),
 
 		messageMetrics: messageMetrics,
 	}
