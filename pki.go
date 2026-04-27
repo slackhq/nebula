@@ -14,10 +14,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/flynn/noise"
 	"github.com/gaissmai/bart"
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/handshake"
+	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/util"
 )
 
@@ -28,11 +31,11 @@ type PKI struct {
 }
 
 type CertState struct {
-	v1Cert           cert.Certificate
-	v1HandshakeBytes []byte
+	v1Cert       cert.Certificate
+	v1Credential *handshake.HandshakeCredential
 
-	v2Cert           cert.Certificate
-	v2HandshakeBytes []byte
+	v2Cert       cert.Certificate
+	v2Credential *handshake.HandshakeCredential
 
 	initiatingVersion cert.Version
 	privateKey        []byte
@@ -92,7 +95,24 @@ func (p *PKI) reload(c *config.C, initial bool) error {
 }
 
 func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
-	newState, err := newCertStateFromConfig(c)
+	var cipher string
+	if initial {
+		cipher = c.GetString("cipher", "aes")
+		switch cipher {
+		case "aes", "chachapoly":
+		default:
+			return util.NewContextualError(
+				"unknown cipher",
+				m{"cipher": cipher},
+				nil,
+			)
+		}
+	} else {
+		// Cipher cant be hot swapped so just leave it at what it was before
+		cipher = p.cs.Load().cipher
+	}
+
+	newState, err := newCertStateFromConfig(c, cipher)
 	if err != nil {
 		return util.NewContextualError("Could not load client cert", nil, err)
 	}
@@ -158,25 +178,6 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 				)
 			}
 		}
-
-		// Cipher cant be hot swapped so just leave it at what it was before
-		newState.cipher = currentState.cipher
-
-	} else {
-		newState.cipher = c.GetString("cipher", "aes")
-		//TODO: this sucks and we should make it not a global
-		switch newState.cipher {
-		case "aes":
-			noiseEndianness = binary.BigEndian
-		case "chachapoly":
-			noiseEndianness = binary.LittleEndian
-		default:
-			return util.NewContextualError(
-				"unknown cipher",
-				m{"cipher": newState.cipher},
-				nil,
-			)
-		}
 	}
 
 	p.cs.Store(newState)
@@ -208,6 +209,20 @@ func (cs *CertState) GetDefaultCertificate() cert.Certificate {
 	return c
 }
 
+// DefaultVersion returns the preferred cert version for initiating handshakes.
+func (cs *CertState) DefaultVersion() cert.Version { return cs.initiatingVersion }
+
+// GetHandshakeCredential returns the pre-computed handshake credential for the given version, or nil.
+func (cs *CertState) GetHandshakeCredential(v cert.Version) *handshake.HandshakeCredential {
+	switch v {
+	case cert.Version1:
+		return cs.v1Credential
+	case cert.Version2:
+		return cs.v2Credential
+	}
+	return nil
+}
+
 func (cs *CertState) getCertificate(v cert.Version) cert.Certificate {
 	switch v {
 	case cert.Version1:
@@ -219,17 +234,53 @@ func (cs *CertState) getCertificate(v cert.Version) cert.Certificate {
 	return nil
 }
 
-// getHandshakeBytes returns the cached bytes to be used in a handshake message for the requested version.
-// Callers must check if the return []byte is nil.
-func (cs *CertState) getHandshakeBytes(v cert.Version) []byte {
-	switch v {
-	case cert.Version1:
-		return cs.v1HandshakeBytes
-	case cert.Version2:
-		return cs.v2HandshakeBytes
-	default:
-		return nil
+func (cs *CertState) buildCredentials() error {
+	if cs.v1Cert != nil {
+		v1hs, err := cs.v1Cert.MarshalForHandshakes()
+		if err != nil {
+			return fmt.Errorf("error marshalling v1 certificate for handshake: %w", err)
+		}
+		ncs, err := newCipherSuite(cs.v1Cert.Curve(), cs.pkcs11Backed, cs.cipher)
+		if err != nil {
+			return err
+		}
+		cs.v1Credential = handshake.NewHandshakeCredential(cs.v1Cert, v1hs, cs.privateKey, ncs)
 	}
+
+	if cs.v2Cert != nil {
+		v2hs, err := cs.v2Cert.MarshalForHandshakes()
+		if err != nil {
+			return fmt.Errorf("error marshalling v2 certificate for handshake: %w", err)
+		}
+		ncs, err := newCipherSuite(cs.v2Cert.Curve(), cs.pkcs11Backed, cs.cipher)
+		if err != nil {
+			return err
+		}
+		cs.v2Credential = handshake.NewHandshakeCredential(cs.v2Cert, v2hs, cs.privateKey, ncs)
+	}
+
+	return nil
+}
+
+func newCipherSuite(curve cert.Curve, pkcs11backed bool, cipher string) (noise.CipherSuite, error) {
+	var dhFunc noise.DHFunc
+	switch curve {
+	case cert.Curve_CURVE25519:
+		dhFunc = noise.DH25519
+	case cert.Curve_P256:
+		if pkcs11backed {
+			dhFunc = noiseutil.DHP256PKCS11
+		} else {
+			dhFunc = noiseutil.DHP256
+		}
+	default:
+		return nil, fmt.Errorf("unsupported curve: %s", curve)
+	}
+
+	if cipher == "chachapoly" {
+		return noise.NewCipherSuite(dhFunc, noise.CipherChaChaPoly, noise.HashSHA256), nil
+	}
+	return noise.NewCipherSuite(dhFunc, noiseutil.CipherAESGCM, noise.HashSHA256), nil
 }
 
 func (cs *CertState) String() string {
@@ -261,7 +312,7 @@ func (cs *CertState) MarshalJSON() ([]byte, error) {
 	return json.Marshal(msg)
 }
 
-func newCertStateFromConfig(c *config.C) (*CertState, error) {
+func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 	var err error
 
 	privPathOrPEM := c.GetString("pki.key", "")
@@ -345,13 +396,14 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 		return nil, fmt.Errorf("unknown pki.initiating_version: %v", rawInitiatingVersion)
 	}
 
-	return newCertState(initiatingVersion, v1, v2, isPkcs11, curve, rawKey)
+	return newCertState(initiatingVersion, v1, v2, isPkcs11, curve, rawKey, cipher)
 }
 
-func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, privateKeyCurve cert.Curve, privateKey []byte) (*CertState, error) {
+func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, privateKeyCurve cert.Curve, privateKey []byte, cipher string) (*CertState, error) {
 	cs := CertState{
 		privateKey:               privateKey,
 		pkcs11Backed:             pkcs11backed,
+		cipher:                   cipher,
 		myVpnNetworksTable:       new(bart.Lite),
 		myVpnAddrsTable:          new(bart.Lite),
 		myVpnBroadcastAddrsTable: new(bart.Lite),
@@ -382,12 +434,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 			}
 		}
 
-		v1hs, err := v1.MarshalForHandshakes()
-		if err != nil {
-			return nil, fmt.Errorf("error marshalling certificate for handshake: %w", err)
-		}
 		cs.v1Cert = v1
-		cs.v1HandshakeBytes = v1hs
 
 		if cs.initiatingVersion == 0 {
 			cs.initiatingVersion = cert.Version1
@@ -403,12 +450,7 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 			}
 		}
 
-		v2hs, err := v2.MarshalForHandshakes()
-		if err != nil {
-			return nil, fmt.Errorf("error marshalling certificate for handshake: %w", err)
-		}
 		cs.v2Cert = v2
-		cs.v2HandshakeBytes = v2hs
 
 		if cs.initiatingVersion == 0 {
 			cs.initiatingVersion = cert.Version2
@@ -435,6 +477,10 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 			binary.BigEndian.PutUint32(addr[:], binary.BigEndian.Uint32(addr[:])|^binary.BigEndian.Uint32(mask))
 			cs.myVpnBroadcastAddrsTable.Insert(netip.PrefixFrom(netip.AddrFrom4(addr), network.Addr().BitLen()))
 		}
+	}
+
+	if err := cs.buildCredentials(); err != nil {
+		return nil, fmt.Errorf("failed to build handshake credentials: %w", err)
 	}
 
 	return &cs, nil
