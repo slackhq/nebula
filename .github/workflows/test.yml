@@ -72,6 +72,27 @@ jobs:
     - name: End 2 end
       run: make e2e GOEXPERIMENT=boringcrypto CGO_ENABLED=1 TEST_ENV="TEST_LOGS=1" TEST_FLAGS="-v -ldflags -checklinkname=0"
 
+  test-linux-fips140:
+    name: Build and test on linux with fips140=on
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/checkout@v6
+
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.25'
+        check-latest: true
+
+    - name: Build
+      run: make fips140
+
+    - name: Test
+      run: make fips140 test
+
+    - name: End 2 end
+      run: make fips140 e2evv
+
   test-linux-pkcs11:
     name: Build and test on linux with pkcs11
     runs-on: ubuntu-latest

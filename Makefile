@@ -220,6 +220,8 @@ fips140:
 	$(eval GOENV += GOFIPS140=v1.0.0)
 	$(eval GOENV += GODEBUG=fips140=on)
 	$(eval LDFLAGS += -checklinkname=0)
+	$(eval TEST_FLAGS += -ldflags -checklinkname=0)
+	$(eval TEST_ENV += $(GOENV))
 ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) fips140 ${.DEFAULT_GOAL} --no-print-directory
 endif
@@ -229,6 +231,8 @@ fips140only:
 	$(eval GOENV += GOFIPS140=v1.0.0)
 	$(eval GOENV += GODEBUG=fips140=only)
 	$(eval LDFLAGS += -checklinkname=0)
+	$(eval TEST_FLAGS += -ldflags -checklinkname=0)
+	$(eval TEST_ENV += $(GOENV))
 ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) fips140only ${.DEFAULT_GOAL} --no-print-directory
 endif
@@ -236,14 +240,14 @@ endif
 bin-docker: bin build/linux-amd64/nebula build/linux-amd64/nebula-cert
 
 smoke-docker: bin-docker
-	cd .github/workflows/smoke/ && ./build.sh
-	cd .github/workflows/smoke/ && ./smoke.sh
-	cd .github/workflows/smoke/ && NAME="smoke-p256" CURVE="P256" ./build.sh
-	cd .github/workflows/smoke/ && NAME="smoke-p256" ./smoke.sh
+	cd .github/workflows/smoke/ && $(GOENV) ./build.sh
+	cd .github/workflows/smoke/ && $(GOENV)./smoke.sh
+	cd .github/workflows/smoke/ && $(GOENV) NAME="smoke-p256" CURVE="P256" ./build.sh
+	cd .github/workflows/smoke/ && $(GOENV) NAME="smoke-p256" ./smoke.sh
 
 smoke-relay-docker: bin-docker
-	cd .github/workflows/smoke/ && ./build-relay.sh
-	cd .github/workflows/smoke/ && ./smoke-relay.sh
+	cd .github/workflows/smoke/ && $(GOENV) ./build-relay.sh
+	cd .github/workflows/smoke/ && $(GOENV) ./smoke-relay.sh
 
 smoke-docker-race: BUILD_ARGS = -race
 smoke-docker-race: CGO_ENABLED = 1

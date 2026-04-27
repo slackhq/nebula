@@ -233,7 +233,8 @@ func (f *Interface) activate() error {
 		"build", f.version,
 		"udpAddr", addr,
 		"boringcrypto", boringEnabled(),
-		"fips140", fips140version(),
+		"fips140", getFIPS140(),
+		"fips140version", getFIPS140Version(),
 	)
 
 	if f.routines > 1 {
