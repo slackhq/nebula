@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"context"
-	"crypto/fips140"
 	"errors"
 	"fmt"
 	"io"
@@ -234,7 +233,7 @@ func (f *Interface) activate() error {
 		"build", f.version,
 		"udpAddr", addr,
 		"boringcrypto", boringEnabled(),
-		"fips140", fips140.Enabled(),
+		"fips140", fips140version(),
 	)
 
 	if f.routines > 1 {
