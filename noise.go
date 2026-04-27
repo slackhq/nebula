@@ -23,6 +23,11 @@ func NewNebulaCipherState(s *noise.CipherState) *NebulaCipherState {
 	return &NebulaCipherState{c: x.(cipher.AEAD)}
 }
 
+type cipherAEADDanger interface {
+	EncryptDanger(out, ad, plaintext []byte, n uint64, nb []byte) ([]byte, error)
+	DecryptDanger(out, ad, plaintext []byte, n uint64, nb []byte) ([]byte, error)
+}
+
 // EncryptDanger encrypts and authenticates a given payload.
 //
 // out is a destination slice to hold the output of the EncryptDanger operation.
