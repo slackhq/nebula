@@ -54,10 +54,10 @@ jobs:
 
     - name: setup docker image for fips140
       working-directory: ./.github/workflows/smoke
-      run: NAME="smoke-fips140" CURVE=P256 GOFIPS140=v1.0.0 LDFLAGS=-checklinkname=0 ./build.sh
+      run: NAME="smoke-fips140" CURVE=P256 GOFIPS140=v1.0.0 GODEBUG=fips140=only LDFLAGS=-checklinkname=0 ./build.sh
 
     - name: run smoke-fips140
       working-directory: ./.github/workflows/smoke
-      run: NAME="smoke-fips140" ./smoke.sh
+      run: NAME="smoke-fips140" GODEBUG=fips140=only ./smoke.sh
 
     timeout-minutes: 10

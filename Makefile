@@ -218,9 +218,19 @@ endif
 fips140:
 	@echo > $(NULL_FILE)
 	$(eval GOENV += GOFIPS140=v1.0.0)
+	$(eval GOENV += GODEBUG=fips140=on)
 	$(eval LDFLAGS += -checklinkname=0)
 ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) fips140 ${.DEFAULT_GOAL} --no-print-directory
+endif
+
+fips140only:
+	@echo > $(NULL_FILE)
+	$(eval GOENV += GOFIPS140=v1.0.0)
+	$(eval GOENV += GODEBUG=fips140=only)
+	$(eval LDFLAGS += -checklinkname=0)
+ifeq ($(words $(MAKECMDGOALS)),1)
+	@$(MAKE) fips140only ${.DEFAULT_GOAL} --no-print-directory
 endif
 
 bin-docker: bin build/linux-amd64/nebula build/linux-amd64/nebula-cert
