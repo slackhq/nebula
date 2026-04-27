@@ -65,14 +65,3 @@ func (c aeadCipher) Encrypt(out []byte, n uint64, ad, plaintext []byte) []byte {
 func (c aeadCipher) Decrypt(out []byte, n uint64, ad, ciphertext []byte) ([]byte, error) {
 	return c.Open(out, c.nonce(n), ciphertext, ad)
 }
-
-func (c aeadCipher) EncryptDanger(out, ad, plaintext []byte, n uint64, nb []byte) ([]byte, error) {
-	binary.BigEndian.PutUint64(nb[4:], n)
-	out = c.Seal(out, nb[4:], plaintext, ad)
-	return out, nil
-}
-
-func (c aeadCipher) DecryptDanger(out, ad, ciphertext []byte, n uint64, nb []byte) ([]byte, error) {
-	binary.BigEndian.PutUint64(nb[4:], n)
-	return c.Open(out, nb[4:], ciphertext, ad)
-}
