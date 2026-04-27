@@ -5,9 +5,15 @@ set -e -x
 rm -rf ./build
 mkdir ./build
 
-# TODO: Assumes your docker bridge network is a /24, and the first container that launches will be .1
-# - We could make this better by launching the lighthouse first and then fetching what IP it is.
-NET="$(docker network inspect bridge -f '{{ range .IPAM.Config }}{{ .Subnet }}{{ end }}' | cut -d. -f1-3)"
+# Smoke containers run on a dedicated docker network whose subnet is allocated
+# at smoke time, not known at build time. Configs are written with TEST-NET-3
+# placeholder IPs (RFC 5737) and smoke.sh / smoke-vagrant.sh / smoke-relay.sh
+# sed the real container IPs in before starting nebula.
+#
+# Placeholder mapping (last octet == fixed container slot):
+#   203.0.113.2 -> lighthouse1, 203.0.113.3 -> host2,
+#   203.0.113.4 -> host3,       203.0.113.5 -> host4.
+LIGHTHOUSE_IP="203.0.113.2"
 
 (
     cd build
@@ -25,16 +31,16 @@ NET="$(docker network inspect bridge -f '{{ range .IPAM.Config }}{{ .Subnet }}{{
         ../genconfig.sh >lighthouse1.yml
 
     HOST="host2" \
-        LIGHTHOUSES="192.168.100.1 $NET.2:4242" \
+        LIGHTHOUSES="192.168.100.1 $LIGHTHOUSE_IP:4242" \
         ../genconfig.sh >host2.yml
 
     HOST="host3" \
-        LIGHTHOUSES="192.168.100.1 $NET.2:4242" \
+        LIGHTHOUSES="192.168.100.1 $LIGHTHOUSE_IP:4242" \
         INBOUND='[{"port": "any", "proto": "icmp", "group": "lighthouse"}]' \
         ../genconfig.sh >host3.yml
 
     HOST="host4" \
-        LIGHTHOUSES="192.168.100.1 $NET.2:4242" \
+        LIGHTHOUSES="192.168.100.1 $LIGHTHOUSE_IP:4242" \
         OUTBOUND='[{"port": "any", "proto": "icmp", "group": "lighthouse"}]' \
         ../genconfig.sh >host4.yml
 

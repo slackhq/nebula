@@ -64,7 +64,7 @@ func Test_verify(t *testing.T) {
 	err = verify([]string{"-ca", caFile.Name(), "-crt", "does_not_exist"}, ob, eb)
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
-	require.EqualError(t, err, "error while adding ca cert to pool: input did not contain a valid PEM encoded block")
+	require.ErrorIs(t, err, cert.ErrInvalidPEMBlock)
 
 	// make a ca for later
 	caPub, caPriv, _ := ed25519.GenerateKey(rand.Reader)

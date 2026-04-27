@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"net"
 	"net/netip"
@@ -9,7 +10,6 @@ import (
 	"strconv"
 
 	"github.com/gaissmai/bart"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/routing"
 )
@@ -48,11 +48,14 @@ func (r Route) String() string {
 	return s
 }
 
-func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*bart.Table[routing.Gateways], error) {
+func makeRouteTree(l *slog.Logger, routes []Route, allowMTU bool) (*bart.Table[routing.Gateways], error) {
 	routeTree := new(bart.Table[routing.Gateways])
 	for _, r := range routes {
 		if !allowMTU && r.MTU > 0 {
-			l.WithField("route", r).Warnf("route MTU is not supported in %s", runtime.GOOS)
+			l.Warn("route MTU is not supported on this platform",
+				"goos", runtime.GOOS,
+				"route", r,
+			)
 		}
 
 		gateways := r.Via

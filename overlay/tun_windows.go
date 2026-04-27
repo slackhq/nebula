@@ -7,6 +7,7 @@ import (
 	"crypto"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -16,7 +17,6 @@ import (
 	"unsafe"
 
 	"github.com/gaissmai/bart"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
@@ -33,16 +33,16 @@ type winTun struct {
 	MTU         int
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	l           *logrus.Logger
+	l           *slog.Logger
 
 	tun *wintun.NativeTun
 }
 
-func newTunFromFd(_ *config.C, _ *logrus.Logger, _ int, _ []netip.Prefix) (Device, error) {
+func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (Device, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Windows")
 }
 
-func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (*winTun, error) {
+func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*winTun, error) {
 	err := checkWinTunExists()
 	if err != nil {
 		return nil, fmt.Errorf("can not load the wintun driver: %w", err)
@@ -71,7 +71,7 @@ func newTun(c *config.C, l *logrus.Logger, vpnNetworks []netip.Prefix, _ bool) (
 	if err != nil {
 		// Windows 10 has an issue with unclean shutdowns not fully cleaning up the wintun device.
 		// Trying a second time resolves the issue.
-		l.WithError(err).Debug("Failed to create wintun device, retrying")
+		l.Debug("Failed to create wintun device, retrying", "error", err)
 		tunDevice, err = wintun.CreateTUNWithRequestedGUID(deviceName, guid, t.MTU)
 		if err != nil {
 			return nil, &NameError{
@@ -170,7 +170,7 @@ func (t *winTun) addRoutes(logErrors bool) error {
 				return retErr
 			}
 		} else {
-			t.l.WithField("route", r).Info("Added route")
+			t.l.Info("Added route", "route", r)
 		}
 
 		if !foundDefault4 {
@@ -208,9 +208,9 @@ func (t *winTun) removeRoutes(routes []Route) error {
 		// See comment on luid.AddRoute
 		err := luid.DeleteRoute(r.Cidr, r.Via[0].Addr())
 		if err != nil {
-			t.l.WithError(err).WithField("route", r).Error("Failed to remove route")
+			t.l.Error("Failed to remove route", "error", err, "route", r)
 		} else {
-			t.l.WithField("route", r).Info("Removed route")
+			t.l.Info("Removed route", "route", r)
 		}
 	}
 	return nil

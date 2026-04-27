@@ -2,30 +2,30 @@ package sshd
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
 	"github.com/anmitsu/go-shlex"
 	"github.com/armon/go-radix"
-	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 )
 
 type session struct {
-	l        *logrus.Entry
+	l        *slog.Logger
 	c        *ssh.ServerConn
 	term     *term.Terminal
 	commands *radix.Tree
-	exitChan chan bool
+	cancel   func()
 }
 
-func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.NewChannel, l *logrus.Entry) *session {
+func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.NewChannel, cancel func(), l *slog.Logger) *session {
 	s := &session{
 		commands: radix.NewFromMap(commands.ToMap()),
 		l:        l,
 		c:        conn,
-		exitChan: make(chan bool),
+		cancel:   cancel,
 	}
 
 	s.commands.Insert("logout", &Command{
@@ -42,16 +42,17 @@ func NewSession(commands *radix.Tree, conn *ssh.ServerConn, chans <-chan ssh.New
 }
 
 func (s *session) handleChannels(chans <-chan ssh.NewChannel) {
+	defer s.Close()
 	for newChannel := range chans {
 		if newChannel.ChannelType() != "session" {
-			s.l.WithField("sshChannelType", newChannel.ChannelType()).Error("unknown channel type")
+			s.l.Error("unknown channel type", "sshChannelType", newChannel.ChannelType())
 			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
 			continue
 		}
 
 		channel, requests, err := newChannel.Accept()
 		if err != nil {
-			s.l.WithError(err).Warn("could not accept channel")
+			s.l.Warn("could not accept channel", "error", err)
 			continue
 		}
 
@@ -94,13 +95,12 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			return
 
 		default:
-			s.l.WithField("sshRequest", req.Type).Debug("Rejected unknown request")
+			s.l.Debug("Rejected unknown request", "sshRequest", req.Type)
 			err = req.Reply(false, nil)
 		}
 
 		if err != nil {
-			s.l.WithError(err).Info("Error handling ssh session requests")
-			s.Close()
+			s.l.Info("Error handling ssh session requests", "error", err)
 			return
 		}
 	}
@@ -123,12 +123,11 @@ func (s *session) createTerm(channel ssh.Channel) *term.Terminal {
 		return "", 0, false
 	}
 
-	go s.handleInput(channel)
+	go s.handleInput()
 	return term
 }
 
-func (s *session) handleInput(channel ssh.Channel) {
-	defer s.Close()
+func (s *session) handleInput() {
 	w := &stringWriter{w: s.term}
 	for {
 		line, err := s.term.ReadLine()
@@ -170,10 +169,9 @@ func (s *session) dispatchCommand(line string, w StringWriter) {
 	}
 
 	_ = execCommand(c, args[1:], w)
-	return
 }
 
 func (s *session) Close() {
 	s.c.Close()
-	s.exitChan <- true
+	s.cancel()
 }

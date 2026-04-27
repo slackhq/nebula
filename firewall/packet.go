@@ -22,7 +22,10 @@ const (
 type Packet struct {
 	LocalAddr  netip.Addr
 	RemoteAddr netip.Addr
-	LocalPort  uint16
+	// LocalPort is the destination port for incoming traffic, or the source port for outgoing. Zero for ICMP.
+	LocalPort uint16
+	// RemotePort is the source port for incoming traffic, or the destination port for outgoing.
+	// For ICMP, it's the "identifier". This is only used for connection tracking, actual firewall rules will not filter on ICMP identifier
 	RemotePort uint16
 	Protocol   uint8
 	Fragment   bool
@@ -46,6 +49,8 @@ func (fp Packet) MarshalJSON() ([]byte, error) {
 		proto = "tcp"
 	case ProtoICMP:
 		proto = "icmp"
+	case ProtoICMPv6:
+		proto = "icmpv6"
 	case ProtoUDP:
 		proto = "udp"
 	default:

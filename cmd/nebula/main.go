@@ -7,9 +7,9 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/util"
 )
 
@@ -55,8 +55,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	l := logrus.New()
-	l.Out = os.Stdout
+	l := logging.NewLogger(os.Stdout)
 
 	c := config.NewC(l)
 	err := c.Load(*configPath)
@@ -65,6 +64,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := logging.ApplyConfig(l, c); err != nil {
+		fmt.Printf("failed to apply logging config: %s", err)
+		os.Exit(1)
+	}
+	c.RegisterReloadCallback(func(c *config.C) {
+		if err := logging.ApplyConfig(l, c); err != nil {
+			l.Error("Failed to reconfigure logger on reload", "error", err)
+		}
+	})
+
 	ctrl, err := nebula.Main(c, *configTest, Build, l, nil)
 	if err != nil {
 		util.LogWithContextIfNeeded("Failed to start", err, l)
@@ -72,9 +81,21 @@ func main() {
 	}
 
 	if !*configTest {
-		ctrl.Start()
+		wait, err := ctrl.Start()
+		if err != nil {
+			util.LogWithContextIfNeeded("Error while running", err, l)
+			os.Exit(1)
+		}
+
+		go ctrl.ShutdownBlock()
 		notifyReady(l)
-		ctrl.ShutdownBlock()
+
+		if err := wait(); err != nil {
+			l.Error("Nebula stopped due to fatal error", "error", err)
+			os.Exit(2)
+		}
+
+		l.Info("Goodbye")
 	}
 
 	os.Exit(0)

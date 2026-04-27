@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/netip"
 	"time"
+
+	"github.com/slackhq/nebula/cert/p256"
 )
 
 // TBSCertificate represents a certificate intended to be signed.
@@ -124,6 +126,13 @@ func (t *TBSCertificate) SignWith(signer Certificate, curve Curve, sp SignerLamb
 	sig, err := sp(certBytes)
 	if err != nil {
 		return nil, err
+	}
+
+	if curve == Curve_P256 {
+		sig, err = p256.Normalize(sig)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	err = c.setSignature(sig)

@@ -1,5 +1,4 @@
 //go:build e2e_testing
-// +build e2e_testing
 
 package nebula
 

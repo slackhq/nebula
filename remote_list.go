@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/netip"
 	"slices"
@@ -10,8 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/sirupsen/logrus"
 )
 
 // forEachFunc is used to benefit folks that want to do work inside the lock
@@ -66,11 +65,11 @@ type hostnamesResults struct {
 	network       string
 	lookupTimeout time.Duration
 	cancelFn      func()
-	l             *logrus.Logger
+	l             *slog.Logger
 	ips           atomic.Pointer[map[netip.AddrPort]struct{}]
 }
 
-func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, network string, timeout time.Duration, hostPorts []string, onUpdate func()) (*hostnamesResults, error) {
+func NewHostnameResults(ctx context.Context, l *slog.Logger, d time.Duration, network string, timeout time.Duration, hostPorts []string, onUpdate func()) (*hostnamesResults, error) {
 	r := &hostnamesResults{
 		hostnames:     make([]hostnamePort, len(hostPorts)),
 		network:       network,
@@ -121,7 +120,11 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 					addrs, err := net.DefaultResolver.LookupNetIP(timeoutCtx, r.network, hostPort.name)
 					timeoutCancel()
 					if err != nil {
-						l.WithFields(logrus.Fields{"hostname": hostPort.name, "network": r.network}).WithError(err).Error("DNS resolution failed for static_map host")
+						l.Error("DNS resolution failed for static_map host",
+							"hostname", hostPort.name,
+							"network", r.network,
+							"error", err,
+						)
 						continue
 					}
 					for _, a := range addrs {
@@ -145,7 +148,10 @@ func NewHostnameResults(ctx context.Context, l *logrus.Logger, d time.Duration, 
 					}
 				}
 				if different {
-					l.WithFields(logrus.Fields{"origSet": origSet, "newSet": netipAddrs}).Info("DNS results changed for host list")
+					l.Info("DNS results changed for host list",
+						"origSet", origSet,
+						"newSet", netipAddrs,
+					)
 					r.ips.Store(&netipAddrs)
 					onUpdate()
 				}
@@ -404,12 +410,7 @@ func (r *RemoteList) Rebuild(preferredRanges []netip.Prefix) {
 
 // unlockedIsBad assumes you have the write lock and checks if the remote matches any entry in the blocked address list
 func (r *RemoteList) unlockedIsBad(remote netip.AddrPort) bool {
-	for _, v := range r.badRemotes {
-		if v == remote {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(r.badRemotes, remote)
 }
 
 // unlockedSetLearnedV4 assumes you have the write lock and sets the current learned address for this owner and marks the

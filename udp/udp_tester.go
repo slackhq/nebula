@@ -4,11 +4,13 @@
 package udp
 
 import (
+	"context"
 	"io"
+	"log/slog"
 	"net/netip"
-	"sync/atomic"
+	"os"
+	"sync"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 )
@@ -36,15 +38,24 @@ type TesterConn struct {
 	RxPackets chan *Packet // Packets to receive into nebula
 	TxPackets chan *Packet // Packets transmitted outside by nebula
 
-	closed atomic.Bool
-	l      *logrus.Logger
+	// done is closed exactly once by Close. Senders select on it so they
+	// never race with a channel close; readers exit when it fires. The
+	// packet channels are intentionally never closed - that was the source
+	// of `send on closed channel` panics when a WriteTo/Send from another
+	// goroutine passed the close check and reached the send just after
+	// Close ran.
+	done      chan struct{}
+	closeOnce sync.Once
+
+	l *slog.Logger
 }
 
-func NewListener(l *logrus.Logger, ip netip.Addr, port int, _ bool, _ int) (Conn, error) {
+func NewListener(l *slog.Logger, ip netip.Addr, port int, _ bool, _ int) (Conn, error) {
 	return &TesterConn{
 		Addr:      netip.AddrPortFrom(ip, uint16(port)),
 		RxPackets: make(chan *Packet, 10),
 		TxPackets: make(chan *Packet, 10),
+		done:      make(chan struct{}),
 		l:         l,
 	}, nil
 }
@@ -53,21 +64,21 @@ func NewListener(l *logrus.Logger, ip netip.Addr, port int, _ bool, _ int) (Conn
 // this is an encrypted packet or a handshake message in most cases
 // packets were transmitted from another nebula node, you can send them with Tun.Send
 func (u *TesterConn) Send(packet *Packet) {
-	if u.closed.Load() {
-		return
-	}
-
 	h := &header.H{}
 	if err := h.Parse(packet.Data); err != nil {
 		panic(err)
 	}
-	if u.l.Level >= logrus.DebugLevel {
-		u.l.WithField("header", h).
-			WithField("udpAddr", packet.From).
-			WithField("dataLen", len(packet.Data)).
-			Debug("UDP receiving injected packet")
+	if u.l.Enabled(context.Background(), slog.LevelDebug) {
+		u.l.Debug("UDP receiving injected packet",
+			"header", h,
+			"udpAddr", packet.From,
+			"dataLen", len(packet.Data),
+		)
 	}
-	u.RxPackets <- packet
+	select {
+	case <-u.done:
+	case u.RxPackets <- packet:
+	}
 }
 
 // Get will pull a UdpPacket from the transmit queue
@@ -75,7 +86,12 @@ func (u *TesterConn) Send(packet *Packet) {
 // packets were ingested from the tun side (in most cases), you can send them with Tun.Send
 func (u *TesterConn) Get(block bool) *Packet {
 	if block {
-		return <-u.TxPackets
+		select {
+		case <-u.done:
+			return nil
+		case p := <-u.TxPackets:
+			return p
+		}
 	}
 
 	select {
@@ -91,10 +107,6 @@ func (u *TesterConn) Get(block bool) *Packet {
 //********************************************************************************************************************//
 
 func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
-	if u.closed.Load() {
-		return io.ErrClosedPipe
-	}
-
 	p := &Packet{
 		Data: make([]byte, len(b), len(b)),
 		From: u.Addr,
@@ -102,17 +114,22 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	}
 
 	copy(p.Data, b)
-	u.TxPackets <- p
-	return nil
+	select {
+	case <-u.done:
+		return io.ErrClosedPipe
+	case u.TxPackets <- p:
+		return nil
+	}
 }
 
-func (u *TesterConn) ListenOut(r EncReader) {
+func (u *TesterConn) ListenOut(r EncReader) error {
 	for {
-		p, ok := <-u.RxPackets
-		if !ok {
-			return
+		select {
+		case <-u.done:
+			return os.ErrClosed
+		case p := <-u.RxPackets:
+			r(p.From, p.Data)
 		}
-		r(p.From, p.Data)
 	}
 }
 
@@ -136,9 +153,8 @@ func (u *TesterConn) Rebind() error {
 }
 
 func (u *TesterConn) Close() error {
-	if u.closed.CompareAndSwap(false, true) {
-		close(u.RxPackets)
-		close(u.TxPackets)
-	}
+	u.closeOnce.Do(func() {
+		close(u.done)
+	})
 	return nil
 }
