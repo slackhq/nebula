@@ -56,6 +56,9 @@ func checkVirtioValid(pkt []byte, hdr VirtioNetHdr) error {
 	if hdr.Flags&unix.VIRTIO_NET_HDR_F_RSC_INFO != 0 {
 		return fmt.Errorf("virtio RSC_INFO flag not supported on TUN reads")
 	}
+	if len(pkt) < ipv4HeaderMinLen {
+		return fmt.Errorf("packet too short")
+	}
 	ipVersion := pkt[0] >> 4
 	switch hdr.GSOType {
 	case unix.VIRTIO_NET_HDR_GSO_TCPV4:

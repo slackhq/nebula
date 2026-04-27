@@ -80,7 +80,7 @@ func newOffload(fd int, shutdownFd int) (*Offload, error) {
 		fd:         fd,
 		shutdownFd: shutdownFd,
 		closed:     atomic.Bool{},
-		readBuf:    make([]byte, tunReadBufSize),
+		readBuf:    make([]byte, virtioNetHdrLen+tunReadBufSize),
 		readPoll: [2]unix.PollFd{
 			{Fd: int32(fd), Events: unix.POLLIN},
 			{Fd: int32(shutdownFd), Events: unix.POLLIN},
