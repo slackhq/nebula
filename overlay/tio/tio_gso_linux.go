@@ -225,7 +225,6 @@ func (r *Offload) Read() ([][]byte, error) {
 
 // decodeRead decodes the virtio header plus payload in r.readBuf[:n], appends
 // the segments to r.pending, and advances r.segOff by the total scratch used.
-// Caller must have already ensured r.vnetHdr is true.
 func (r *Offload) decodeRead(n int) error {
 	if n < virtioNetHdrLen {
 		return fmt.Errorf("short tun read: %d < %d", n, virtioNetHdrLen)
