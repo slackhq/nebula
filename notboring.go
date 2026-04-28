@@ -30,5 +30,5 @@ func getFIPS140Version() string {
 	}
 	// TODO: Add as a backup once we bump to go1.26+
 	// return fips140.Version()
-	return ""
+	return "on"
 }
