@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/test"
@@ -99,4 +100,83 @@ func (mw *mockEncWriter) GetHostInfo(_ netip.Addr) *HostInfo {
 
 func (mw *mockEncWriter) GetCertState() *CertState {
 	return &CertState{initiatingVersion: cert.Version2}
+}
+
+func TestValidatePeerCert(t *testing.T) {
+	l := test.NewLogger()
+
+	myNetwork := netip.MustParsePrefix("10.0.0.1/24")
+	myAddrTable := new(bart.Lite)
+	myAddrTable.Insert(netip.PrefixFrom(myNetwork.Addr(), myNetwork.Addr().BitLen()))
+	myNetTable := new(bart.Lite)
+	myNetTable.Insert(myNetwork.Masked())
+
+	newHM := func() *HandshakeManager {
+		hm := NewHandshakeManager(l, newHostMap(l), newTestLighthouse(), &udp.NoopConn{}, defaultHandshakeConfig)
+		hm.f = &Interface{
+			handshakeManager:   hm,
+			pki:                &PKI{},
+			l:                  l,
+			myVpnAddrsTable:    myAddrTable,
+			myVpnNetworksTable: myNetTable,
+			lightHouse:         hm.lightHouse,
+		}
+		return hm
+	}
+
+	cached := func(networks ...netip.Prefix) *cert.CachedCertificate {
+		return &cert.CachedCertificate{
+			Certificate: &dummyCert{name: "peer", networks: networks},
+		}
+	}
+
+	via := ViaSender{
+		UdpAddr:   netip.MustParseAddrPort("198.51.100.7:4242"),
+		IsRelayed: true, // skip the remote allow list (covered separately)
+	}
+
+	t.Run("addr inside our networks sets anyVpnAddrsInCommon", func(t *testing.T) {
+		hm := newHM()
+		// 10.0.0.2 falls inside our 10.0.0.0/24
+		addrs, common, ok := hm.validatePeerCert(via, cached(netip.MustParsePrefix("10.0.0.2/24")))
+		assert.True(t, ok)
+		assert.True(t, common)
+		assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.0.0.2")}, addrs)
+	})
+
+	t.Run("addr outside our networks leaves anyVpnAddrsInCommon false", func(t *testing.T) {
+		hm := newHM()
+		addrs, common, ok := hm.validatePeerCert(via, cached(netip.MustParsePrefix("192.168.1.5/24")))
+		assert.True(t, ok)
+		assert.False(t, common)
+		assert.Equal(t, []netip.Addr{netip.MustParseAddr("192.168.1.5")}, addrs)
+	})
+
+	t.Run("any matching network is enough", func(t *testing.T) {
+		hm := newHM()
+		addrs, common, ok := hm.validatePeerCert(via, cached(
+			netip.MustParsePrefix("192.168.1.5/24"),
+			netip.MustParsePrefix("10.0.0.42/24"),
+		))
+		assert.True(t, ok)
+		assert.True(t, common)
+		assert.Len(t, addrs, 2)
+	})
+
+	t.Run("self-handshake is rejected", func(t *testing.T) {
+		hm := newHM()
+		// 10.0.0.1 is in myVpnAddrsTable
+		addrs, common, ok := hm.validatePeerCert(via, cached(netip.MustParsePrefix("10.0.0.1/24")))
+		assert.False(t, ok)
+		assert.False(t, common)
+		assert.Nil(t, addrs)
+	})
+
+	t.Run("cert with no networks is rejected", func(t *testing.T) {
+		hm := newHM()
+		addrs, common, ok := hm.validatePeerCert(via, cached())
+		assert.False(t, ok)
+		assert.False(t, common)
+		assert.Nil(t, addrs)
+	})
 }

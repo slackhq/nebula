@@ -877,7 +877,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 	}
 
 	// Validate peer identity
-	vpnAddrs, ok := hm.validatePeerCert(via, remoteCert)
+	vpnAddrs, anyVpnAddrsInCommon, ok := hm.validatePeerCert(via, remoteCert)
 	if !ok {
 		return
 	}
@@ -896,7 +896,11 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		},
 	}
 
-	f.l.Info("Handshake message received",
+	msg := "Handshake message received"
+	if !anyVpnAddrsInCommon {
+		msg = "Handshake message received, but no vpnNetworks in common."
+	}
+	f.l.Info(msg,
 		"vpnAddrs", vpnAddrs,
 		"from", via,
 		"certName", remoteCert.Certificate.Name(),
@@ -947,9 +951,10 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	defer hh.Unlock()
 
 	// Re-verify hh is still tracked. Between queryIndex returning and us taking
-	// hh.Lock, another goroutine may have deleted it (timeout in handleOutbound,
-	// for instance). DeleteHostInfo always runs while holding hh.Lock, so once
-	// we have it, no further deletes can interleave.
+	// hh.Lock, handleOutbound may have timed out and deleted it. Once we hold
+	// hh.Lock no other deleter can race our index: handleOutbound also takes
+	// hh.Lock first, and handleRecvError targets a main-hostmap entry with a
+	// different localIndexId.
 	hm.RLock()
 	cur, ok := hm.indexes[hh.hostinfo.localIndexId]
 	hm.RUnlock()
@@ -1020,6 +1025,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	// Verify correct host responded (initiator check)
 	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
 	correctHostResponded := false
+	anyVpnAddrsInCommon := false
 	for i, network := range vpnNetworks {
 		// inside.go drops self-routed packets at the firewall stage, but we'd
 		// rather not let a self-handshake complete in the first place: it
@@ -1042,6 +1048,9 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		vpnAddrs[i] = network.Addr()
 		if hostinfo.vpnAddrs[0] == network.Addr() {
 			correctHostResponded = true
+		}
+		if f.myVpnNetworksTable.Contains(network.Addr()) {
+			anyVpnAddrsInCommon = true
 		}
 	}
 
@@ -1070,7 +1079,11 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	}
 
 	duration := time.Since(hh.startTime).Nanoseconds()
-	f.l.Info("Handshake message received",
+	msg := "Handshake message received"
+	if !anyVpnAddrsInCommon {
+		msg = "Handshake message received, but no vpnNetworks in common."
+	}
+	f.l.Info(msg,
 		"vpnAddrs", vpnAddrs,
 		"from", via,
 		"certName", remoteCert.Certificate.Name(),
@@ -1112,8 +1125,9 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 }
 
 // validatePeerCert checks the peer certificate for self-connection and remote allow list.
-// Returns the VPN addrs and true if valid, false if rejected.
-func (hm *HandshakeManager) validatePeerCert(via ViaSender, remoteCert *cert.CachedCertificate) ([]netip.Addr, bool) {
+// Returns the VPN addrs, whether any of them fall within one of our own VPN
+// networks, and true if valid; false if rejected.
+func (hm *HandshakeManager) validatePeerCert(via ViaSender, remoteCert *cert.CachedCertificate) ([]netip.Addr, bool, bool) {
 	f := hm.f
 	vpnNetworks := remoteCert.Certificate.Networks()
 
@@ -1124,10 +1138,11 @@ func (hm *HandshakeManager) validatePeerCert(via ViaSender, remoteCert *cert.Cac
 	if len(vpnNetworks) == 0 {
 		f.l.Info("No networks in certificate",
 			"from", via, "cert", remoteCert)
-		return nil, false
+		return nil, false, false
 	}
 
 	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
+	anyVpnAddrsInCommon := false
 
 	for i, network := range vpnNetworks {
 		if f.myVpnAddrsTable.Contains(network.Addr()) {
@@ -1139,20 +1154,23 @@ func (hm *HandshakeManager) validatePeerCert(via ViaSender, remoteCert *cert.Cac
 				"fingerprint", remoteCert.Fingerprint,
 				"issuer", remoteCert.Certificate.Issuer(),
 			)
-			return nil, false
+			return nil, false, false
 		}
 		vpnAddrs[i] = network.Addr()
+		if f.myVpnNetworksTable.Contains(network.Addr()) {
+			anyVpnAddrsInCommon = true
+		}
 	}
 
 	if !via.IsRelayed {
 		if !f.lightHouse.GetRemoteAllowList().AllowAll(vpnAddrs, via.UdpAddr.Addr()) {
 			f.l.Debug("lighthouse.remote_allow_list denied incoming handshake",
 				"vpnAddrs", vpnAddrs, "from", via)
-			return nil, false
+			return nil, false, false
 		}
 	}
 
-	return vpnAddrs, true
+	return vpnAddrs, anyVpnAddrsInCommon, true
 }
 
 // sendHandshakeResponse sends a handshake response via the appropriate transport.
