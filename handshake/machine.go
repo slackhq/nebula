@@ -14,6 +14,11 @@ import (
 // IndexAllocator is called by the Machine to allocate a local index for the
 // handshake. It is called at most once, when the first outgoing message that
 // carries a payload is built.
+//
+// Implementations MUST NOT return 0. Zero is reserved as a sentinel meaning
+// "no index assigned" on the wire and in the payload-presence checks. If an
+// allocator ever returned 0, a legitimate handshake's payload could be
+// indistinguishable from an empty one and would be rejected.
 type IndexAllocator func() (uint32, error)
 
 // CertVerifier is called by the Machine after reconstructing the peer's

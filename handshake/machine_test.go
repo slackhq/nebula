@@ -121,6 +121,11 @@ func TestMachineProcessPacketErrors(t *testing.T) {
 		_, _, err = initM.ProcessPacket(nil, corrupted)
 		require.Error(t, err)
 		assert.False(t, initM.Failed(), "noise failure should be recoverable")
+
+		// And the machine should still complete a real handshake afterward.
+		_, result, err := initM.ProcessPacket(nil, resp)
+		require.NoError(t, err)
+		require.NotNil(t, result, "initiator should complete on the legitimate response")
 	})
 
 	t.Run("invalid cert is fatal", func(t *testing.T) {
@@ -155,6 +160,12 @@ func TestMachineProcessPacketErrors(t *testing.T) {
 		_, _, err = respM.ProcessPacket(nil, bad)
 		require.ErrorIs(t, err, ErrSubtypeMismatch)
 		assert.False(t, respM.Failed(), "subtype mismatch should not kill the machine")
+
+		// And the machine should still complete a real handshake afterward.
+		resp, result, err := respM.ProcessPacket(nil, msg1)
+		require.NoError(t, err)
+		require.NotNil(t, result, "responder should complete on the legitimate stage-1 packet")
+		assert.NotEmpty(t, resp, "responder should produce a stage-2 reply")
 	})
 }
 

@@ -976,10 +976,14 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 
 	response, result, err := machine.ProcessPacket(nil, packet)
 	if err != nil {
-		f.l.Error("Failed to process handshake packet",
-			"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
+		// Recoverable errors are routine noise, log at Debug. Fatal errors get a Warn.
 		if machine.Failed() {
+			f.l.Warn("Failed to process handshake packet, abandoning",
+				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
 			hm.DeleteHostInfo(hostinfo)
+		} else {
+			f.l.Debug("Failed to process handshake packet",
+				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
 		}
 		return
 	}
@@ -1017,6 +1021,24 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
 	correctHostResponded := false
 	for i, network := range vpnNetworks {
+		// inside.go drops self-routed packets at the firewall stage, but we'd
+		// rather not let a self-handshake complete in the first place: it
+		// wastes a hostmap slot, suppresses no log, and obscures routing
+		// misconfig. Explicit refusal here mirrors the responder-side check
+		// in validatePeerCert.
+		if f.myVpnAddrsTable.Contains(network.Addr()) {
+			f.l.Error("Refusing to handshake with myself",
+				"vpnNetworks", vpnNetworks,
+				"from", via,
+				"certName", remoteCert.Certificate.Name(),
+				"certVersion", remoteCert.Certificate.Version(),
+				"fingerprint", remoteCert.Fingerprint,
+				"issuer", remoteCert.Certificate.Issuer(),
+				"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
+			)
+			hm.DeleteHostInfo(hostinfo)
+			return
+		}
 		vpnAddrs[i] = network.Addr()
 		if hostinfo.vpnAddrs[0] == network.Addr() {
 			correctHostResponded = true
