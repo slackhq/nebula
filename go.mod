@@ -1,6 +1,6 @@
 module github.com/slackhq/nebula
 
-go 1.26
+go 1.25.0
 
 require (
 	dario.cat/mergo v1.0.2
