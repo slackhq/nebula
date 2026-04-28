@@ -34,7 +34,7 @@ jobs:
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v9
       with:
-        version: v2.5
+        version: v2.11
 
     - name: Test
       run: make test
@@ -138,7 +138,7 @@ jobs:
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v9
       with:
-        version: v2.5
+        version: v2.11
 
     - name: Test
       run: make test
