@@ -1,6 +1,8 @@
 package tio
 
-import "io"
+import (
+	"io"
+)
 
 // defaultBatchBufSize is the per-Queue scratch size for Read on backends
 // that don't do TSO segmentation. 65535 covers any single IP packet.
@@ -53,6 +55,6 @@ type Queue interface {
 // hdr's TCP checksum field must already hold the pseudo-header partial
 // sum (single-fold, not inverted), per virtio NEEDS_CSUM semantics.
 type GSOWriter interface {
-	WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, isV6 bool, csumStart uint16) error
+	WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, csumStart uint16) error
 	GSOSupported() bool
 }

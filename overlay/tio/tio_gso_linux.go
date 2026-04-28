@@ -298,7 +298,7 @@ func (r *Offload) GSOSupported() bool { return true }
 // slice is read-only and must stay valid until return. gsoSize is the MSS;
 // every segment except possibly the last is exactly gsoSize bytes.
 // csumStart is the byte offset where the TCP header begins within hdr.
-func (r *Offload) WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, isV6 bool, csumStart uint16) error {
+func (r *Offload) WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, csumStart uint16) error {
 	if len(hdr) == 0 || len(pays) == 0 {
 		return nil
 	}
@@ -309,7 +309,7 @@ func (r *Offload) WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, isV6 bool,
 	vhdr := VirtioNetHdr{
 		Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
 		HdrLen:     uint16(len(hdr)),
-		GSOSize:    gsoSize,
+		GSOSize:    uint16(len(pays[0])),
 		CsumStart:  csumStart,
 		CsumOffset: 16, // TCP checksum field lives 16 bytes into the TCP header
 	}
@@ -318,10 +318,14 @@ func (r *Offload) WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, isV6 bool,
 		totalPay += len(p)
 	}
 	if totalPay > int(gsoSize) {
-		if isV6 {
+		ipVer := hdr[0] >> 4
+		if ipVer == 6 {
 			vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_TCPV6
-		} else {
+		} else if ipVer == 4 {
 			vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_TCPV4
+		} else {
+			vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_NONE
+			vhdr.GSOSize = 0
 		}
 	} else {
 		vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_NONE
