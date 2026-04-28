@@ -108,10 +108,6 @@ func (t *disabledTun) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func (t *disabledTun) WriteFromSelf(b []byte) (int, error) {
-	return t.Write(b)
-}
-
 func (t *disabledTun) SupportsMultiqueue() bool {
 	return true
 }

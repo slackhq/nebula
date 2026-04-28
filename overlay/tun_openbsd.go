@@ -73,10 +73,6 @@ func (t *tun) Read() ([][]byte, error) {
 	return t.batchRet[:], nil
 }
 
-func (t *tun) WriteFromSelf(p []byte) (int, error) {
-	return t.Write(p)
-}
-
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
 
 func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*tun, error) {

@@ -162,7 +162,3 @@ func (t *Poll) Close() error {
 
 	return err
 }
-
-func (t *Poll) WriteFromSelf(p []byte) (int, error) {
-	return t.Write(p)
-}

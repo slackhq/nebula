@@ -50,10 +50,6 @@ func (t *winTun) Read() ([][]byte, error) {
 	return t.batchRet[:], nil
 }
 
-func (t *winTun) WriteFromSelf(p []byte) (int, error) {
-	return t.Write(p)
-}
-
 func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (Device, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Windows")
 }

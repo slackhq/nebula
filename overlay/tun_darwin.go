@@ -525,10 +525,6 @@ func (t *tun) Read() ([][]byte, error) {
 	return t.batchRet[:], nil
 }
 
-func (t *tun) WriteFromSelf(p []byte) (int, error) {
-	return t.Write(p)
-}
-
 // Write is only valid for single threaded use
 func (t *tun) Write(from []byte) (int, error) {
 	buf := t.out

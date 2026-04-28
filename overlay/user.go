@@ -88,9 +88,7 @@ func (d *UserDevice) Pipe() (*io.PipeReader, *io.PipeWriter) {
 func (d *UserDevice) Write(p []byte) (n int, err error) {
 	return d.inboundWriter.Write(p)
 }
-func (d *UserDevice) WriteFromSelf(p []byte) (n int, err error) {
-	return d.Write(p)
-}
+
 func (d *UserDevice) Close() error {
 	d.inboundWriter.Close()
 	d.outboundWriter.Close()

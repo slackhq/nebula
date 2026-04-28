@@ -23,21 +23,12 @@ type Queue interface {
 	// Read returns one or more packets. The returned slices are borrowed
 	// from the Queue's internal buffer and are only valid until the next
 	// Read or Close on this Queue - callers must encrypt or copy each
-	// slice before the next call. Not safe for concurrent Reads; exactly
-	// one goroutine per Queue reads.
+	// slice before the next call. Not safe for concurrent Reads.
 	Read() ([][]byte, error)
 
 	// Write emits a single packet on the plaintext (outside→inside)
-	// delivery path. May run concurrently with WriteFromSelf on the same
-	// Queue, but not with itself.
+	// delivery path. Not safe for concurrent Writes.
 	Write(p []byte) (int, error)
-
-	// WriteFromSelf writes a single packet that originated from the inside
-	// path (reject replies or self-forward) using scratch state distinct
-	// from Write, so it can run concurrently with Write on the same Queue
-	// without a data race. On backends without a shared-scratch Write, a
-	// trivial delegation to Write is acceptable.
-	WriteFromSelf(p []byte) (int, error)
 }
 
 // GSOWriter is implemented by Queues that can emit a TCP TSO superpacket

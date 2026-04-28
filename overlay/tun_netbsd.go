@@ -80,10 +80,6 @@ func (t *tun) Read() ([][]byte, error) {
 	return t.batchRet[:], nil
 }
 
-func (t *tun) WriteFromSelf(p []byte) (int, error) {
-	return t.Write(p)
-}
-
 func (t *tun) Readers() []tio.Queue {
 	return []tio.Queue{t}
 }

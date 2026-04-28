@@ -45,10 +45,6 @@ func (t *tun) Write(p []byte) (int, error) {
 	return t.rwc.Write(p)
 }
 
-func (t *tun) WriteFromSelf(p []byte) (int, error) {
-	return t.rwc.Write(p)
-}
-
 func (t *tun) Close() error {
 	return t.rwc.Close()
 }

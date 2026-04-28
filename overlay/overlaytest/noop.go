@@ -39,10 +39,6 @@ func (NoopTun) Write([]byte) (int, error) {
 	return 0, nil
 }
 
-func (NoopTun) WriteFromSelf(p []byte) (int, error) {
-	return 0, nil
-}
-
 func (NoopTun) SupportsMultiqueue() bool {
 	return false
 }

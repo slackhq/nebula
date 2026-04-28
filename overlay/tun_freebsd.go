@@ -168,10 +168,6 @@ func (t *tun) Read() ([][]byte, error) {
 	return t.batchRet[:], nil
 }
 
-func (t *tun) WriteFromSelf(p []byte) (int, error) {
-	return t.Write(p)
-}
-
 func (t *tun) readOne(to []byte) (int, error) {
 	// first 4 bytes is protocol family, in network byte order
 	var head [4]byte
