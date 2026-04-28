@@ -50,16 +50,10 @@ type Offload struct {
 	readPoll   [2]unix.PollFd
 	writePoll  [2]unix.PollFd
 	closed     atomic.Bool
-	readBuf    []byte        // scratch for a single raw read (virtio hdr + superpacket)
-	segBuf     []byte        // backing store for segmented output
-	segOff     int           // cursor into segBuf for the current Read drain
-	pending    [][]byte      // segments returned from the most recent Read
-	writeIovs  [2]unix.Iovec // preallocated iovecs for Write (coalescer passthrough); iovs[0] is fixed to validVnetHdr
-	// rejectIovs is a second preallocated iovec scratch used exclusively by
-	// WriteFromSelf (reject + self-forward from the inside path). It mirrors
-	// writeIovs but lets listenIn goroutines emit reject packets without
-	// racing with the listenOut coalescer that owns writeIovs.
-	rejectIovs [2]unix.Iovec
+	readBuf    []byte   // scratch for a single raw read (virtio hdr + superpacket)
+	segBuf     []byte   // backing store for segmented output
+	segOff     int      // cursor into segBuf for the current Read drain
+	pending    [][]byte // segments returned from the most recent Read
 
 	// gsoHdrBuf is a per-queue 10-byte scratch for the virtio_net_hdr emitted
 	// by WriteGSO. Separate from validVnetHdr so a concurrent non-GSO Write on
@@ -94,10 +88,6 @@ func newOffload(fd int, shutdownFd int) (*Offload, error) {
 		gsoIovs: make([]unix.Iovec, 2, 2+gsoInitialPayIovs),
 	}
 
-	out.writeIovs[0].Base = &validVnetHdr[0]
-	out.writeIovs[0].SetLen(virtioNetHdrLen)
-	out.rejectIovs[0].Base = &validVnetHdr[0]
-	out.rejectIovs[0].SetLen(virtioNetHdrLen)
 	out.gsoIovs[0].Base = &out.gsoHdrBuf[0]
 	out.gsoIovs[0].SetLen(virtioNetHdrLen)
 
@@ -242,7 +232,13 @@ func (r *Offload) decodeRead(n int) error {
 }
 
 func (r *Offload) Write(buf []byte) (int, error) {
-	return r.writeWithScratch(buf, &r.writeIovs)
+	iovs := [2]unix.Iovec{
+		{Base: &validVnetHdr[0]},
+		{Base: &buf[0]},
+	}
+	iovs[0].SetLen(virtioNetHdrLen)
+	iovs[1].SetLen(len(buf))
+	return r.writeWithScratch(buf, &iovs)
 }
 
 // WriteFromSelf emits a packet using a dedicated iovec scratch (rejectIovs)
@@ -251,7 +247,7 @@ func (r *Offload) Write(buf []byte) (int, error) {
 // self-forward packets and the outside (listenOut) goroutine flushing TCP
 // coalescer passthroughs on the same Offload.
 func (r *Offload) WriteFromSelf(buf []byte) (int, error) {
-	return r.writeWithScratch(buf, &r.rejectIovs)
+	return r.Write(buf)
 }
 
 func (r *Offload) writeWithScratch(buf []byte, iovs *[2]unix.Iovec) (int, error) {
