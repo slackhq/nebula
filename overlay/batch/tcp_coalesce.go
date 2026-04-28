@@ -397,7 +397,7 @@ func (c *TCPCoalescer) flushSlot(s *coalesceSlot) error {
 	tcsum := s.ipHdrLen + 16
 	binary.BigEndian.PutUint16(hdr[tcsum:tcsum+2], foldOnceNoInvert(psum))
 
-	return c.gsoW.WriteGSO(hdr, s.payIovs, uint16(s.gsoSize), uint16(s.ipHdrLen))
+	return c.gsoW.WriteGSO(hdr[:s.ipHdrLen], hdr[s.ipHdrLen:], s.payIovs)
 }
 
 // headersMatch compares two IP+TCP header prefixes for byte-for-byte

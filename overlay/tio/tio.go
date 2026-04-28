@@ -55,6 +55,13 @@ type Queue interface {
 // hdr's TCP checksum field must already hold the pseudo-header partial
 // sum (single-fold, not inverted), per virtio NEEDS_CSUM semantics.
 type GSOWriter interface {
-	WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, csumStart uint16) error
+	// WriteGSO emits a TCP TSO superpacket in a single writev. hdr is the
+	// IPv4/IPv6 + TCP header prefix (already finalized — total length, IP csum,
+	// and TCP pseudo-header partial set by the caller). pays are payload
+	// fragments whose concatenation forms the full coalesced payload; each
+	// slice is read-only and must stay valid until return.
+	// every segment in pays except possibly the last is exactly the same size.
+	// csumStart is the byte offset where the TCP header begins within hdr.
+	WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte) error
 	GSOSupported() bool
 }
