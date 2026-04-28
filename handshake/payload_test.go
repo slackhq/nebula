@@ -244,6 +244,40 @@ func TestPayloadUnmarshalErrors(t *testing.T) {
 		assert.Error(t, err)
 	})
 
+	t.Run("cert with wrong wire type rejected", func(t *testing.T) {
+		// fieldCert as Varint instead of Bytes.
+		var details []byte
+		details = protowire.AppendTag(details, fieldCert, protowire.VarintType)
+		details = protowire.AppendVarint(details, 42)
+		_, err := UnmarshalPayload(wrapDetails(details))
+		assert.Error(t, err)
+	})
+
+	t.Run("initiator index with wrong wire type rejected", func(t *testing.T) {
+		// fieldInitiatorIndex as Bytes instead of Varint.
+		var details []byte
+		details = protowire.AppendTag(details, fieldInitiatorIndex, protowire.BytesType)
+		details = protowire.AppendBytes(details, []byte{1, 2, 3})
+		_, err := UnmarshalPayload(wrapDetails(details))
+		assert.Error(t, err)
+	})
+
+	t.Run("time with wrong wire type rejected", func(t *testing.T) {
+		var details []byte
+		details = protowire.AppendTag(details, fieldTime, protowire.BytesType)
+		details = protowire.AppendBytes(details, []byte{1, 2, 3})
+		_, err := UnmarshalPayload(wrapDetails(details))
+		assert.Error(t, err)
+	})
+
+	t.Run("cert version with wrong wire type rejected", func(t *testing.T) {
+		var details []byte
+		details = protowire.AppendTag(details, fieldCertVersion, protowire.BytesType)
+		details = protowire.AppendBytes(details, []byte{1, 2, 3})
+		_, err := UnmarshalPayload(wrapDetails(details))
+		assert.Error(t, err)
+	})
+
 }
 
 // FuzzPayload feeds arbitrary bytes through UnmarshalPayload to confirm it

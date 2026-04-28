@@ -32,7 +32,7 @@ const (
 
 // MarshalPayload encodes a handshake payload in protobuf wire format compatible
 // with NebulaHandshake{Details: NebulaHandshakeDetails{...}}.
-// The result is appended to out, which may be nil.
+// Returns out (which may be nil), with the marshalled Payload appended to it.
 func MarshalPayload(out []byte, p Payload) []byte {
 	var details []byte
 
@@ -104,36 +104,55 @@ func unmarshalPayloadDetails(p *Payload, b []byte) error {
 		}
 		b = b[n:]
 
-		switch {
-		case num == fieldCert && typ == protowire.BytesType:
+		// For known field numbers, reject any non-matching wire type as a
+		// hard error rather than silently skipping. The caller will catch
+		// missing-field cases downstream, but a wire-type mismatch on a tag
+		// we know is a peer protocol violation worth flagging here.
+		switch num {
+		case fieldCert:
+			if typ != protowire.BytesType {
+				return errInvalidHandshakeDetails
+			}
 			v, n := protowire.ConsumeBytes(b)
 			if n < 0 {
 				return errInvalidHandshakeDetails
 			}
 			p.Cert = append([]byte(nil), v...)
 			b = b[n:]
-		case num == fieldInitiatorIndex && typ == protowire.VarintType:
+		case fieldInitiatorIndex:
+			if typ != protowire.VarintType {
+				return errInvalidHandshakeDetails
+			}
 			v, n := protowire.ConsumeVarint(b)
 			if n < 0 {
 				return errInvalidHandshakeDetails
 			}
 			p.InitiatorIndex = uint32(v)
 			b = b[n:]
-		case num == fieldResponderIndex && typ == protowire.VarintType:
+		case fieldResponderIndex:
+			if typ != protowire.VarintType {
+				return errInvalidHandshakeDetails
+			}
 			v, n := protowire.ConsumeVarint(b)
 			if n < 0 {
 				return errInvalidHandshakeDetails
 			}
 			p.ResponderIndex = uint32(v)
 			b = b[n:]
-		case num == fieldTime && typ == protowire.VarintType:
+		case fieldTime:
+			if typ != protowire.VarintType {
+				return errInvalidHandshakeDetails
+			}
 			v, n := protowire.ConsumeVarint(b)
 			if n < 0 {
 				return errInvalidHandshakeDetails
 			}
 			p.Time = v
 			b = b[n:]
-		case num == fieldCertVersion && typ == protowire.VarintType:
+		case fieldCertVersion:
+			if typ != protowire.VarintType {
+				return errInvalidHandshakeDetails
+			}
 			v, n := protowire.ConsumeVarint(b)
 			if n < 0 {
 				return errInvalidHandshakeDetails
