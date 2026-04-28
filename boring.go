@@ -4,4 +4,9 @@ package nebula
 
 import "crypto/boring"
 
-var boringEnabled = boring.Enabled
+func getFIPS140() string {
+	if boring.Enabled() {
+		return "boringcrypto"
+	}
+	return "off"
+}
