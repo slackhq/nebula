@@ -36,14 +36,6 @@ const EncryptLockNeeded = true
 //go:linkname newGCMTLS crypto/internal/boring.NewGCMTLS
 func newGCMTLS(c cipher.Block) (cipher.AEAD, error)
 
-type cipherFn struct {
-	fn   func([32]byte) noise.Cipher
-	name string
-}
-
-func (c cipherFn) Cipher(k [32]byte) noise.Cipher { return c.fn(k) }
-func (c cipherFn) CipherName() string             { return c.name }
-
 // CipherAESGCM is the AES256-GCM AEAD cipher (using NewGCMTLS when GoBoring is present)
 var CipherAESGCM noise.CipherFunc = cipherFn{cipherAESGCMBoring, "AESGCM"}
 
@@ -56,7 +48,7 @@ func cipherAESGCMBoring(k [32]byte) noise.Cipher {
 	if err != nil {
 		panic(err)
 	}
-	return aeadCipher{
+	return &aeadCipher{
 		gcm,
 		func(n uint64) []byte {
 			var nonce [12]byte
@@ -71,10 +63,22 @@ type aeadCipher struct {
 	nonce func(uint64) []byte
 }
 
-func (c aeadCipher) Encrypt(out []byte, n uint64, ad, plaintext []byte) []byte {
+func (c *aeadCipher) Encrypt(out []byte, n uint64, ad, plaintext []byte) []byte {
 	return c.Seal(out, c.nonce(n), plaintext, ad)
 }
 
-func (c aeadCipher) Decrypt(out []byte, n uint64, ad, ciphertext []byte) ([]byte, error) {
+func (c *aeadCipher) Decrypt(out []byte, n uint64, ad, ciphertext []byte) ([]byte, error) {
+	return c.Open(out, c.nonce(n), ciphertext, ad)
+}
+
+// EncryptDanger / DecryptDanger ignore the caller's nb buffer for boring: the
+// strict-nonce path needs c.nonce() either way (the AEAD verifies the nonce
+// is monotonically increasing, so reusing a stale nb buffer would risk a
+// panic if it ever drifted out of order).
+func (c *aeadCipher) EncryptDanger(out, ad, plaintext []byte, n uint64, nb []byte) ([]byte, error) {
+	return c.Seal(out, c.nonce(n), plaintext, ad), nil
+}
+
+func (c *aeadCipher) DecryptDanger(out, ad, ciphertext []byte, n uint64, nb []byte) ([]byte, error) {
 	return c.Open(out, c.nonce(n), ciphertext, ad)
 }

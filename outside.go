@@ -73,7 +73,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 			// The packet consists of a 16-byte parsed Nebula header, Associated Data-protected payload, and a trailing 16-byte AEAD signature value.
 			// The packet is guaranteed to be at least 16 bytes at this point, b/c it got past the h.Parse() call above. If it's
 			// otherwise malformed (meaning, there is no trailing 16 byte AEAD value), then this will result in at worst a 0-length slice
-			// which will gracefully fail in the DecryptDanger call.
+			// which will gracefully fail in the Decrypt call.
 			signedPayload := packet[:len(packet)-hostinfo.ConnectionState.dKey.Overhead()]
 			signatureValue := packet[len(packet)-hostinfo.ConnectionState.dKey.Overhead():]
 			out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, signedPayload, signatureValue, h.MessageCounter, nb)

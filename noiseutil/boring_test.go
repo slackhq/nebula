@@ -33,8 +33,7 @@ func TestNewGCMTLS(t *testing.T) {
 
 	var keyArray [32]byte
 	copy(keyArray[:], key)
-	c := CipherAESGCM.Cipher(keyArray)
-	aead := c.(aeadCipher).AEAD
+	aead := CipherAESGCM.Cipher(keyArray).(*aeadCipher).AEAD
 
 	dst := aead.Seal([]byte{}, iv, plaintext, aad)
 	assert.Equal(t, expected, dst)

@@ -10,6 +10,7 @@ import (
 	"github.com/flynn/noise"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/noiseutil"
 )
 
 // NOISE IX Handshakes
@@ -389,8 +390,8 @@ func ixHandshakeStage1(f *Interface, via ViaSender, packet []byte, h *header.H) 
 	ci.window.Update(f.l, 2)
 
 	ci.peerCert = remoteCert
-	ci.dKey = NewNebulaCipherState(dKey)
-	ci.eKey = NewNebulaCipherState(eKey)
+	ci.dKey = dKey.Cipher().(noiseutil.Cipher)
+	ci.eKey = eKey.Cipher().(noiseutil.Cipher)
 
 	hostinfo.remotes = f.lightHouse.QueryCache(vpnAddrs)
 	if !via.IsRelayed {
@@ -690,8 +691,8 @@ func ixHandshakeStage2(f *Interface, via ViaSender, hh *HandshakeHostInfo, packe
 
 	// Store their cert and our symmetric keys
 	ci.peerCert = remoteCert
-	ci.dKey = NewNebulaCipherState(dKey)
-	ci.eKey = NewNebulaCipherState(eKey)
+	ci.dKey = dKey.Cipher().(noiseutil.Cipher)
+	ci.eKey = eKey.Cipher().(noiseutil.Cipher)
 
 	// Make sure the current udpAddr being used is set for responding
 	if !via.IsRelayed {

@@ -15,8 +15,8 @@ import (
 const ReplayWindow = 1024
 
 type ConnectionState struct {
-	eKey           *NebulaCipherState
-	dKey           *NebulaCipherState
+	eKey           noiseutil.Cipher
+	dKey           noiseutil.Cipher
 	H              *noise.HandshakeState
 	myCert         cert.Certificate
 	peerCert       *cert.CachedCertificate
@@ -43,7 +43,7 @@ func NewConnectionState(cs *CertState, crt cert.Certificate, initiator bool, pat
 
 	var ncs noise.CipherSuite
 	if cs.cipher == "chachapoly" {
-		ncs = noise.NewCipherSuite(dhFunc, noise.CipherChaChaPoly, noise.HashSHA256)
+		ncs = noise.NewCipherSuite(dhFunc, noiseutil.CipherChaChaPoly, noise.HashSHA256)
 	} else {
 		ncs = noise.NewCipherSuite(dhFunc, noiseutil.CipherAESGCM, noise.HashSHA256)
 	}

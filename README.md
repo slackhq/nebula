@@ -156,13 +156,9 @@ make bin-boringcrypto
 make release-boringcrypto
 ```
 
-Nebula can also be built to support the [FIPS 140-3](https://go.dev/doc/security/fips140) mode of Go by running either of the following make targets. (This sets GOFIPS140=v1.0.0,
-which must be done at compile time so that the correct AES-GCM can be used for FIPS 140-3 enforcement mode).
+Every Nebula build includes Go's [FIPS 140-3 module](https://go.dev/doc/security/fips140) (the Makefile builds with `GOFIPS140=v1.0.0`). The default behavior is unchanged because the Makefile passes `-ldflags -X runtime.godebugDefault=fips140=off`, so `GODEBUG=fips140` defaults to `off` in the binary. To turn FIPS 140-3 enforcement on, set `GODEBUG=fips140=on` in the environment before running Nebula or `nebula-cert`. Switching modes does not require a rebuild.
 
-```sh
-make fips140
-make fips140 release
-```
+In FIPS 140-3 mode the Go Cryptographic Module enforces FIPS-approved algorithms only. Plan your CA and host certificates accordingly (e.g. `nebula-cert ca -curve P256`).
 
 This is not the recommended default deployment, but may be useful based on your compliance requirements.
 

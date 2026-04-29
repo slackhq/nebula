@@ -25,7 +25,16 @@ endif
 DOCKER_IMAGE_REPO ?= nebulaoss/nebula
 DOCKER_IMAGE_TAG ?= latest
 
-LDFLAGS = -X main.Build=$(BUILD_NUMBER)
+# -X main.Build sets the version string. -X runtime.godebugDefault makes the
+# binary act like a standard build by default even though the FIPS module is
+# linked in via GOFIPS140 below; operators opt in at runtime via GODEBUG.
+# -checklinkname=0 lets us link against crypto/tls.aeadAESGCM, the strict-nonce
+# AES-GCM the noiseutil package uses when fips140 is enabled.
+LDFLAGS = -X main.Build=$(BUILD_NUMBER) -X runtime.godebugDefault=fips140=off -checklinkname=0
+
+# Always link the Go Cryptographic Module so the resulting binary supports
+# FIPS 140-3 mode at runtime (GODEBUG=fips140=on).
+GOENV += GOFIPS140=v1.0.0
 
 ALL_LINUX = linux-amd64 \
 	linux-386 \
@@ -61,7 +70,7 @@ ALL = $(ALL_LINUX) \
 	windows-arm64
 
 e2e:
-	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
+	$(TEST_ENV) $(GOENV) go test -ldflags "$(LDFLAGS)" -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
 
 e2ev: TEST_FLAGS += -v
 e2ev: e2e
@@ -134,11 +143,10 @@ build/linux-mips-%: GOENV += GOMIPS=$(word 3, $(subst -, ,$*))
 # Build an extra small binary for mips-softfloat
 build/linux-mips-softfloat/%: LDFLAGS += -s -w
 
-# boringcrypto
-build/linux-amd64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
-build/linux-arm64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
-build/linux-amd64-boringcrypto/%: LDFLAGS += -checklinkname=0
-build/linux-arm64-boringcrypto/%: LDFLAGS += -checklinkname=0
+# boringcrypto - mutually exclusive with GOFIPS140, so we strip it from GOENV
+# (go errors with "cannot use GOFIPS140 with GOEXPERIMENT=boringcrypto").
+build/linux-amd64-boringcrypto/%: GOENV := $(filter-out GOFIPS140=%,$(GOENV)) GOEXPERIMENT=boringcrypto CGO_ENABLED=1
+build/linux-arm64-boringcrypto/%: GOENV := $(filter-out GOFIPS140=%,$(GOENV)) GOEXPERIMENT=boringcrypto CGO_ENABLED=1
 
 build/%/nebula: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
@@ -169,13 +177,25 @@ vet:
 	go vet $(VET_FLAGS) -v ./...
 
 test:
-	$(TEST_ENV) go test $(TEST_FLAGS) -v ./...
+	$(TEST_ENV) $(GOENV) go test -ldflags "$(LDFLAGS)" $(TEST_FLAGS) -v ./...
+
+# Builds a tiny binary using the same GOENV/LDFLAGS as nebula and asserts that
+# fips140 defaults to off but GODEBUG=fips140=on overrides at runtime. Run in
+# CI so a broken Makefile (missing GOFIPS140 or godebugDefault linker flag)
+# fails loudly instead of silently shipping a binary in the wrong FIPS state.
+verify-fips-default:
+	GOENV="$(GOENV)" LDFLAGS="$(LDFLAGS)" sh scripts/verify-fips-default.sh
 
 test-boringcrypto:
 	GOEXPERIMENT=boringcrypto CGO_ENABLED=1 go test -ldflags "-checklinkname=0" -v ./...
 
+# boringcrypto and GOFIPS140 are mutually exclusive (go errors on the combination),
+# so e2e under boringcrypto needs its own target that doesn't carry GOFIPS140.
+e2e-boringcrypto:
+	GOEXPERIMENT=boringcrypto CGO_ENABLED=1 TEST_LOGS=1 go test -ldflags "-checklinkname=0" -tags=e2e_testing -count=1 -v ./e2e
+
 test-pkcs11:
-	CGO_ENABLED=1 go test -v -tags pkcs11 ./...
+	CGO_ENABLED=1 $(GOENV) go test -ldflags "$(LDFLAGS)" -v -tags pkcs11 ./...
 
 test-cov-html:
 	go test -coverprofile=coverage.out
@@ -215,21 +235,11 @@ ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) service ${.DEFAULT_GOAL} --no-print-directory
 endif
 
-fips140:
-	@echo > $(NULL_FILE)
-	$(eval GOENV += GOFIPS140=v1.0.0)
-	$(eval LDFLAGS += -checklinkname=0)
-	$(eval TEST_FLAGS += -ldflags -checklinkname=0)
-	$(eval TEST_ENV += $(GOENV))
-ifeq ($(words $(MAKECMDGOALS)),1)
-	@$(MAKE) fips140 ${.DEFAULT_GOAL} --no-print-directory
-endif
-
 bin-docker: bin build/linux-amd64/nebula build/linux-amd64/nebula-cert
 
 smoke-docker: bin-docker
 	cd .github/workflows/smoke/ && $(GOENV) ./build.sh
-	cd .github/workflows/smoke/ && $(GOENV)./smoke.sh
+	cd .github/workflows/smoke/ && $(GOENV) ./smoke.sh
 	cd .github/workflows/smoke/ && $(GOENV) NAME="smoke-p256" CURVE="P256" ./build.sh
 	cd .github/workflows/smoke/ && $(GOENV) NAME="smoke-p256" ./smoke.sh
 
@@ -246,5 +256,5 @@ smoke-vagrant/%: bin-docker build/%/nebula
 	cd .github/workflows/smoke/ && ./smoke-vagrant.sh $*
 
 .FORCE:
-.PHONY: bench bench-cpu bench-cpu-long bin build-test-mobile e2e e2ev e2evv e2evvv e2evvvv fips140 proto release service smoke-docker smoke-docker-race test test-cov-html smoke-vagrant/%
+.PHONY: bench bench-cpu bench-cpu-long bin build-test-mobile e2e e2ev e2evv e2evvv e2evvvv proto release service smoke-docker smoke-docker-race test test-cov-html verify-fips-default smoke-vagrant/%
 .DEFAULT_GOAL := bin

@@ -51,4 +51,4 @@ LIGHTHOUSE_IP="203.0.113.2"
     ../../../../nebula-cert sign -name "host4" -groups "host,host4" -ip "192.168.100.4/24"
 )
 
-docker build -t "nebula:${NAME:-smoke}" .
+docker build --build-arg GODEBUG="${GODEBUG:-}" -t "nebula:${NAME:-smoke}" .

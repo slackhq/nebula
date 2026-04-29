@@ -330,7 +330,7 @@ func (f *Interface) SendVia(via *HostInfo,
 		via.ConnectionState.writeLock.Unlock()
 	}
 	if err != nil {
-		via.logger(f.l).Info("Failed to EncryptDanger in sendVia", "error", err)
+		via.logger(f.l).Info("Failed to Encrypt in sendVia", "error", err)
 		return
 	}
 	err = f.writers[0].WriteTo(out, via.remote)
