@@ -34,7 +34,7 @@ const gsoInitialPayIovs = 66
 
 // validVnetHdr is the 10-byte virtio_net_hdr we prepend to every non-GSO TUN
 // write. Only flag set is VIRTIO_NET_HDR_F_DATA_VALID, which marks the skb
-// CHECKSUM_UNNECESSARY so the receiving network stack skips L4 checksum
+// CHECKSUM_UNNECESSARY so the receiving network stack skips L4 checks
 // verification. All packets that reach the plain Write / WriteFromSelf paths
 // already carry a valid L4 checksum (either supplied by a remote peer whose
 // ciphertext we AEAD-authenticated, or produced by finishChecksum during TSO

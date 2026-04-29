@@ -310,8 +310,6 @@ func TestTunFileWriteVnetHdrNoAlloc(t *testing.T) {
 	t.Cleanup(func() { _ = unix.Close(fd) })
 
 	tf := &Offload{fd: fd}
-	tf.writeIovs[0].Base = &validVnetHdr[0]
-	tf.writeIovs[0].SetLen(virtioNetHdrLen)
 
 	payload := make([]byte, 1400)
 	// Warm up (first call may trigger one-time internal allocations elsewhere).

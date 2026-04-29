@@ -6,14 +6,17 @@ import (
 )
 
 // fakeTunWriter records plain Writes and WriteGSO calls without touching a
-// real TUN fd. WriteGSO preserves the split between hdr and borrowed pays
-// so tests can inspect each independently.
+// real TUN fd. WriteGSO records the IP header, transport header, and
+// borrowed payload fragments separately so tests can inspect each.
 type fakeTunWriter struct {
 	gsoEnabled bool
 	writes     [][]byte
 	gsoWrites  []fakeGSOWrite
 }
 
+// fakeGSOWrite captures one WriteGSO call. hdr is the concatenation of the
+// IP and transport headers (in that order), gsoSize / isV6 / csumStart are
+// derived from the call so existing assertions keep working unchanged.
 type fakeGSOWrite struct {
 	hdr       []byte
 	pays      [][]byte
@@ -47,21 +50,27 @@ func (w *fakeTunWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (w *fakeTunWriter) WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, isV6 bool, csumStart uint16) error {
-	hcopy := make([]byte, len(hdr))
+func (w *fakeTunWriter) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte) error {
+	hcopy := make([]byte, len(hdr)+len(transportHdr))
 	copy(hcopy, hdr)
+	copy(hcopy[len(hdr):], transportHdr)
 	paysCopy := make([][]byte, len(pays))
 	for i, p := range pays {
 		pc := make([]byte, len(p))
 		copy(pc, p)
 		paysCopy[i] = pc
 	}
+	var gsoSize uint16
+	if len(pays) > 1 {
+		gsoSize = uint16(len(pays[0]))
+	}
+	isV6 := len(hdr) > 0 && hdr[0]>>4 == 6
 	w.gsoWrites = append(w.gsoWrites, fakeGSOWrite{
 		hdr:       hcopy,
 		pays:      paysCopy,
 		gsoSize:   gsoSize,
 		isV6:      isV6,
-		csumStart: csumStart,
+		csumStart: uint16(len(hdr)),
 	})
 	return nil
 }
@@ -502,7 +511,7 @@ func (w *orderedFakeWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (w *orderedFakeWriter) WriteGSO(hdr []byte, pays [][]byte, gsoSize uint16, isV6 bool, csumStart uint16) error {
+func (w *orderedFakeWriter) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte) error {
 	w.events = append(w.events, "gso")
 	return nil
 }
