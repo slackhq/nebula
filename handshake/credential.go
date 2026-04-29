@@ -49,4 +49,9 @@ func (hc *Credential) buildHandshakeState(initiator bool, pattern noise.Handshak
 
 // GetCredentialFunc returns the handshake credential for the given version,
 // or nil if that version is not available.
+//
+// Implementations must return credentials drawn from a snapshot stable for
+// the lifetime of any single Machine. The Machine may call this multiple
+// times during a handshake (e.g. when negotiating to the peer's version)
+// and assumes the underlying static keypair is consistent across calls.
 type GetCredentialFunc func(v cert.Version) *Credential

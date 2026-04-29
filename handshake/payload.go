@@ -2,6 +2,7 @@ package handshake
 
 import (
 	"errors"
+	"math"
 
 	"google.golang.org/protobuf/encoding/protowire"
 )
@@ -108,6 +109,7 @@ func unmarshalPayloadDetails(p *Payload, b []byte) error {
 		// hard error rather than silently skipping. The caller will catch
 		// missing-field cases downstream, but a wire-type mismatch on a tag
 		// we know is a peer protocol violation worth flagging here.
+		// Repeated occurrences of a singular field follow proto3 last-wins.
 		switch num {
 		case fieldCert:
 			if typ != protowire.BytesType {
@@ -124,7 +126,7 @@ func unmarshalPayloadDetails(p *Payload, b []byte) error {
 				return errInvalidHandshakeDetails
 			}
 			v, n := protowire.ConsumeVarint(b)
-			if n < 0 {
+			if n < 0 || v > math.MaxUint32 {
 				return errInvalidHandshakeDetails
 			}
 			p.InitiatorIndex = uint32(v)
@@ -134,7 +136,7 @@ func unmarshalPayloadDetails(p *Payload, b []byte) error {
 				return errInvalidHandshakeDetails
 			}
 			v, n := protowire.ConsumeVarint(b)
-			if n < 0 {
+			if n < 0 || v > math.MaxUint32 {
 				return errInvalidHandshakeDetails
 			}
 			p.ResponderIndex = uint32(v)
@@ -154,7 +156,7 @@ func unmarshalPayloadDetails(p *Payload, b []byte) error {
 				return errInvalidHandshakeDetails
 			}
 			v, n := protowire.ConsumeVarint(b)
-			if n < 0 {
+			if n < 0 || v > math.MaxUint32 {
 				return errInvalidHandshakeDetails
 			}
 			p.CertVersion = uint32(v)

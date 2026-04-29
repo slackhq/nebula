@@ -46,6 +46,13 @@ type Result struct {
 //
 // A Machine is not safe for concurrent use. The caller must ensure that
 // Initiate and ProcessPacket are not called concurrently.
+//
+// Error contract: when ProcessPacket or Initiate returns an error, callers
+// must check Failed() to decide what to do next. If Failed() is false the
+// underlying noise state was not advanced (the packet was rejected before
+// ReadMessage took effect, or the rejection is non-fatal like a stale
+// retransmit) and the Machine can accept another packet. If Failed() is
+// true the Machine is unrecoverable and the caller must abandon it.
 type Machine struct {
 	hs             *noise.HandshakeState
 	getCred        GetCredentialFunc

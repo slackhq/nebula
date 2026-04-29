@@ -171,17 +171,27 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 		}
 	}
 
-	// Case 1: Existing pending handshake, feed packet to the stored Machine
-	if hh := hm.queryIndex(h.RemoteIndex); hh != nil {
-		hm.continueHandshake(via, hh, packet)
+	// First message of a new handshake. The wire format requires RemoteIndex
+	// to be zero here (the initiator has no responder index to fill in yet),
+	// and generateIndex never allocates 0, so any non-zero RemoteIndex on a
+	// stage-1 packet is malformed or someone probing for an index collision.
+	// Drop without paying the cost of running noise on a pending Machine.
+	if h.MessageCounter == 1 {
+		if h.RemoteIndex != 0 {
+			hm.l.Debug("dropping stage-1 handshake with non-zero RemoteIndex",
+				"from", via, "remoteIndex", h.RemoteIndex)
+			return
+		}
+		hm.beginHandshake(via, packet, h)
 		return
 	}
 
-	// Case 2: First message of a new handshake, start as responder.
-	// Any other message counter without a matching pending index is an
-	// orphaned packet (e.g., late retransmit after timeout) and is dropped.
-	if h.MessageCounter == 1 {
-		hm.beginHandshake(via, packet, h)
+	// Continuation message must match a pending handshake by index.
+	// Anything else is an orphaned packet (e.g., late retransmit after
+	// timeout) and is dropped.
+	if hh := hm.queryIndex(h.RemoteIndex); hh != nil {
+		hm.continueHandshake(via, hh, packet)
+		return
 	}
 }
 
@@ -815,13 +825,9 @@ func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
 		return false
 	}
 
-	ci := &ConnectionState{
-		myCert:    cred.Cert,
-		initiator: true,
-		window:    NewBits(ReplayWindow),
-	}
-
-	hh.hostinfo.ConnectionState = ci
+	// hostinfo.ConnectionState stays nil until the handshake completes in
+	// continueHandshake. Pre-completion control surfaces guard with nil
+	// checks; the data plane never observes a pending hostinfo.
 	hh.hostinfo.HandshakePacket[handshakePacketStage0] = msg
 	hh.machine = machine
 	hh.ready = true
@@ -883,7 +889,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 	}
 
 	hostinfo := &HostInfo{
-		ConnectionState:   buildConnectionState(result),
+		ConnectionState:   newConnectionStateFromResult(result),
 		localIndexId:      result.LocalIndex,
 		remoteIndexId:     result.RemoteIndex,
 		vpnAddrs:          vpnAddrs,
@@ -1001,8 +1007,8 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		return
 	}
 
-	// Handshake complete; populate keys/counter/window on the existing ConnectionState.
-	applyHandshakeResult(hostinfo.ConnectionState, result)
+	// Handshake complete; build the ConnectionState now that we have keys and a verified peer cert.
+	hostinfo.ConnectionState = newConnectionStateFromResult(result)
 
 	remoteCert := result.RemoteCert
 	if remoteCert == nil {
@@ -1218,6 +1224,8 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 			return
 		}
 		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
+		// We received a valid handshake on this relay, so make sure the relay
+		// state reflects that, in case it had been marked Disestablished.
 		via.relayHI.relayState.UpdateRelayForByIdxState(via.remoteIdx, Established)
 		f.SendVia(via.relayHI, via.relay, msg, make([]byte, 12), make([]byte, mtu), false)
 		f.l.Info("Handshake message sent", append(logFields, "relay", via.relayHI.vpnAddrs[0])...)
@@ -1288,36 +1296,6 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 			"responderIndex", hostinfo.localIndexId,
 			"handshake", hsFields,
 		)
-	}
-}
-
-// buildConnectionState constructs a ConnectionState from a completed handshake.
-// Used by responders, who don't have a pre-existing ConnectionState.
-func buildConnectionState(r *handshake.Result) *ConnectionState {
-	ci := &ConnectionState{
-		myCert:    r.MyCert,
-		initiator: r.Initiator,
-		window:    NewBits(ReplayWindow),
-	}
-	applyHandshakeResult(ci, r)
-	return ci
-}
-
-// applyHandshakeResult populates the post-handshake fields of an existing
-// ConnectionState (peer cert, cipher keys, message counter, replay window).
-// myCert and initiator are left untouched: the initiator path sets them when
-// the ConnectionState is first created in buildStage0Packet, and that cert
-// reflects the version actually used on the wire (any version negotiation the
-// Machine did applies to the next handshake, not this one).
-func applyHandshakeResult(ci *ConnectionState, r *handshake.Result) {
-	ci.peerCert = r.RemoteCert
-	ci.eKey = NewNebulaCipherState(r.EKey)
-	ci.dKey = NewNebulaCipherState(r.DKey)
-	ci.messageCounter.Add(r.MessageIndex)
-
-	// Mark handshake message counters as seen so they don't count as lost
-	for i := uint64(1); i <= r.MessageIndex; i++ {
-		ci.window.Update(nil, i)
 	}
 }
 

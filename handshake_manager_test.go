@@ -180,3 +180,58 @@ func TestValidatePeerCert(t *testing.T) {
 		assert.Nil(t, addrs)
 	})
 }
+
+func TestHandleIncomingDispatch(t *testing.T) {
+	l := test.NewLogger()
+
+	newHM := func() *HandshakeManager {
+		hm := NewHandshakeManager(l, newHostMap(l), newTestLighthouse(), &udp.NoopConn{}, defaultHandshakeConfig)
+		hm.f = &Interface{
+			handshakeManager: hm,
+			pki:              &PKI{},
+			l:                l,
+		}
+		return hm
+	}
+
+	via := ViaSender{
+		UdpAddr:   netip.MustParseAddrPort("198.51.100.7:4242"),
+		IsRelayed: true, // bypass remote allow list
+	}
+
+	// A packet body of zero length is fine for these tests: dispatch is
+	// gated on header fields, and we assert that we never reach noise/cert
+	// processing for any of the malformed shapes here.
+	pkt := make([]byte, header.Len)
+
+	t.Run("unsupported subtype dropped", func(t *testing.T) {
+		hm := newHM()
+		h := &header.H{Type: header.Handshake, Subtype: header.MessageSubType(99), MessageCounter: 1}
+		hm.HandleIncoming(via, pkt, h)
+		assert.Empty(t, hm.indexes, "no pending handshake should be created")
+	})
+
+	t.Run("stage-1 with non-zero RemoteIndex dropped", func(t *testing.T) {
+		hm := newHM()
+		h := &header.H{
+			Type:           header.Handshake,
+			Subtype:        header.HandshakeIXPSK0,
+			RemoteIndex:    0xdeadbeef,
+			MessageCounter: 1,
+		}
+		hm.HandleIncoming(via, pkt, h)
+		assert.Empty(t, hm.indexes, "spoofed stage-1 must not create a pending machine")
+	})
+
+	t.Run("continuation with no matching pending index dropped", func(t *testing.T) {
+		hm := newHM()
+		h := &header.H{
+			Type:           header.Handshake,
+			Subtype:        header.HandshakeIXPSK0,
+			RemoteIndex:    0xcafef00d,
+			MessageCounter: 2,
+		}
+		hm.HandleIncoming(via, pkt, h)
+		assert.Empty(t, hm.indexes, "orphan stage-2 must not create state")
+	})
+}

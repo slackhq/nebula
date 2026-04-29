@@ -2,6 +2,7 @@ package handshake
 
 import (
 	"bytes"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -274,6 +275,36 @@ func TestPayloadUnmarshalErrors(t *testing.T) {
 		var details []byte
 		details = protowire.AppendTag(details, fieldCertVersion, protowire.BytesType)
 		details = protowire.AppendBytes(details, []byte{1, 2, 3})
+		_, err := UnmarshalPayload(wrapDetails(details))
+		assert.Error(t, err)
+	})
+
+	t.Run("repeated singular field follows proto3 last-wins", func(t *testing.T) {
+		// Per proto3, multiple instances of a singular field are accepted and
+		// the last value wins. We keep this behavior so that peers using
+		// alternative encoders aren't rejected.
+		var details []byte
+		details = protowire.AppendTag(details, fieldInitiatorIndex, protowire.VarintType)
+		details = protowire.AppendVarint(details, 1)
+		details = protowire.AppendTag(details, fieldInitiatorIndex, protowire.VarintType)
+		details = protowire.AppendVarint(details, 42)
+		got, err := UnmarshalPayload(wrapDetails(details))
+		require.NoError(t, err)
+		assert.Equal(t, uint32(42), got.InitiatorIndex)
+	})
+
+	t.Run("initiator index varint overflow rejected", func(t *testing.T) {
+		var details []byte
+		details = protowire.AppendTag(details, fieldInitiatorIndex, protowire.VarintType)
+		details = protowire.AppendVarint(details, math.MaxUint32+1)
+		_, err := UnmarshalPayload(wrapDetails(details))
+		assert.Error(t, err)
+	})
+
+	t.Run("cert version varint overflow rejected", func(t *testing.T) {
+		var details []byte
+		details = protowire.AppendTag(details, fieldCertVersion, protowire.VarintType)
+		details = protowire.AppendVarint(details, math.MaxUint32+1)
 		_, err := UnmarshalPayload(wrapDetails(details))
 		assert.Error(t, err)
 	})
