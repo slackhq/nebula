@@ -12,7 +12,7 @@ import (
 	"github.com/slackhq/nebula/noiseutil"
 )
 
-const ReplayWindow = 1024
+const ReplayWindow = 1024 //todo I've started seeing out-of-window messages in testing?
 
 type ConnectionState struct {
 	eKey           *NebulaCipherState
