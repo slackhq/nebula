@@ -9,6 +9,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	ct "github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/noiseutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -279,12 +280,17 @@ func TestMachineAESCipher(t *testing.T) {
 		cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil,
 	)
 	caPool := ct.NewTestCAPool(ca)
-	// AES cipher test requires building the handshake state with AES, which
-	// is done by the manager in production. Our test helper always uses
-	// chachapoly. This test verifies the Machine works regardless of cipher
-	// by running a standard handshake (chachapoly).
-	initCS := newTestCertState(t, ca, caKey, "init", []netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")})
-	respCS := newTestCertState(t, ca, caKey, "resp", []netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")})
+
+	initCS := newTestCertStateWithCipher(
+		t, ca, caKey, "init",
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")},
+		noiseutil.CipherAESGCM,
+	)
+	respCS := newTestCertStateWithCipher(
+		t, ca, caKey, "resp",
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")},
+		noiseutil.CipherAESGCM,
+	)
 
 	initR, respR := doFullHandshake(t, initCS, respCS, caPool)
 
@@ -293,6 +299,12 @@ func TestMachineAESCipher(t *testing.T) {
 	pt1, err := respR.DKey.Decrypt(nil, nil, ct1)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("works"), pt1)
+
+	ct2, err := respR.EKey.Encrypt(nil, nil, []byte("back"))
+	require.NoError(t, err)
+	pt2, err := initR.DKey.Decrypt(nil, nil, ct2)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("back"), pt2)
 }
 
 func TestResultFields(t *testing.T) {

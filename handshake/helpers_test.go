@@ -25,6 +25,13 @@ func (s *testCertState) getCredential(v cert.Version) *Credential {
 func newTestCertState(
 	t *testing.T, ca cert.Certificate, caKey []byte, name string, networks []netip.Prefix,
 ) *testCertState {
+	return newTestCertStateWithCipher(t, ca, caKey, name, networks, noise.CipherChaChaPoly)
+}
+
+func newTestCertStateWithCipher(
+	t *testing.T, ca cert.Certificate, caKey []byte, name string, networks []netip.Prefix,
+	cipher noise.CipherFunc,
+) *testCertState {
 	t.Helper()
 	c, _, rawPrivKey, _ := ct.NewTestCert(
 		cert.Version2, cert.Curve_CURVE25519, ca, caKey,
@@ -37,7 +44,7 @@ func newTestCertState(
 	hsBytes, err := c.MarshalForHandshakes()
 	require.NoError(t, err)
 
-	ncs := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
+	ncs := noise.NewCipherSuite(noise.DH25519, cipher, noise.HashSHA256)
 	return &testCertState{
 		version: cert.Version2,
 		creds: map[cert.Version]*Credential{
