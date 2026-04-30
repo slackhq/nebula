@@ -343,6 +343,39 @@ func TestCoalescerPSHFinalizesChain(t *testing.T) {
 	}
 }
 
+// TestCoalescerPropagatesPSHFromAppended ensures that when an appended
+// segment carries PSH (or is short, sealing the chain), the PSH bit ends
+// up in the emitted superpacket's TCP flags. The kernel TSO path keeps
+// PSH only on the last segment iff the input header has it set; if the
+// coalescer drops it the sender's push signal never reaches the receiver.
+func TestCoalescerPropagatesPSHFromAppended(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := NewTCPCoalescer(w)
+	pay := make([]byte, 1200)
+	// Seed has no PSH; second segment carries PSH and seals the chain.
+	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv4(2200, tcpAckPsh, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(0); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 1 {
+		t.Fatalf("want 1 gso write got %d", len(w.gsoWrites))
+	}
+	g := w.gsoWrites[0]
+	const ipHdrLen = 20
+	flags := g.hdr[ipHdrLen+13]
+	if flags&tcpPsh == 0 {
+		t.Fatalf("PSH lost from coalesced superpacket: flags=0x%02x", flags)
+	}
+	if flags&tcpAck == 0 {
+		t.Fatalf("ACK missing from coalesced superpacket: flags=0x%02x", flags)
+	}
+}
+
 func TestCoalescerRejectsDifferentFlow(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := NewTCPCoalescer(w)

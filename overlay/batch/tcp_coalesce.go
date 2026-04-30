@@ -344,6 +344,11 @@ func (c *TCPCoalescer) appendPayload(s *coalesceSlot, pkt []byte, info parsedTCP
 	s.numSeg++
 	s.totalPay += info.payLen
 	s.nextSeq = info.seq + uint32(info.payLen)
+	if info.flags&0x08 != 0 {
+		// Propagate PSH into the seed header so kernel TSO sets it on the
+		// last segment. Without this the sender's push signal is dropped.
+		s.hdrBuf[s.ipHdrLen+13] |= 0x08
+	}
 	if info.payLen < s.gsoSize || info.flags&0x08 != 0 {
 		s.psh = true
 	}
