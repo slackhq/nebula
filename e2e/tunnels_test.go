@@ -19,6 +19,7 @@ import (
 )
 
 func TestDropInactiveTunnels(t *testing.T) {
+	t.Parallel()
 	// The goal of this test is to ensure the shortest inactivity timeout will close the tunnel on both sides
 	// under ideal conditions
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
@@ -63,6 +64,7 @@ func TestDropInactiveTunnels(t *testing.T) {
 }
 
 func TestCertUpgrade(t *testing.T) {
+	t.Parallel()
 	// The goal of this test is to ensure the shortest inactivity timeout will close the tunnel on both sides
 	// under ideal conditions
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
@@ -157,6 +159,7 @@ func TestCertUpgrade(t *testing.T) {
 }
 
 func TestCertDowngrade(t *testing.T) {
+	t.Parallel()
 	// The goal of this test is to ensure the shortest inactivity timeout will close the tunnel on both sides
 	// under ideal conditions
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
@@ -255,6 +258,7 @@ func TestCertDowngrade(t *testing.T) {
 }
 
 func TestCertMismatchCorrection(t *testing.T) {
+	t.Parallel()
 	// The goal of this test is to ensure the shortest inactivity timeout will close the tunnel on both sides
 	// under ideal conditions
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
@@ -322,6 +326,7 @@ func TestCertMismatchCorrection(t *testing.T) {
 }
 
 func TestCrossStackRelaysWork(t *testing.T) {
+	t.Parallel()
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
 	myControl, myVpnIpNet, _, _ := newSimpleServer(cert.Version2, ca, caKey, "me     ", "10.128.0.1/24,fc00::1/64", m{"relay": m{"use_relays": true}})
 	relayControl, relayVpnIpNet, relayUdpAddr, _ := newSimpleServer(cert.Version2, ca, caKey, "relay  ", "10.128.0.128/24,fc00::128/64", m{"relay": m{"am_relay": true}})
@@ -369,6 +374,7 @@ func TestCrossStackRelaysWork(t *testing.T) {
 }
 
 func TestCloseTunnelAuthenticated(t *testing.T) {
+	t.Parallel()
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
 	myControl, myVpnIpNet, myUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "me", "10.128.0.1/24", m{"tunnels": m{"drop_inactive": true, "inactivity_timeout": "5s"}})
 	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "them", "10.128.0.2/24", m{"tunnels": m{"drop_inactive": true, "inactivity_timeout": "10m"}})
