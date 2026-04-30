@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
@@ -35,7 +36,7 @@ const gsoInitialPayIovs = 66
 // validVnetHdr is the 10-byte virtio_net_hdr we prepend to every non-GSO TUN
 // write. Only flag set is VIRTIO_NET_HDR_F_DATA_VALID, which marks the skb
 // CHECKSUM_UNNECESSARY so the receiving network stack skips L4 checks
-// verification. All packets that reach the plain Write / WriteFromSelf paths
+// verification. All packets that reach the plain Write paths
 // already carry a valid L4 checksum (either supplied by a remote peer whose
 // ciphertext we AEAD-authenticated, or produced by finishChecksum during TSO
 // segmentation, or built locally by CreateRejectPacket), so trusting them is
@@ -49,6 +50,7 @@ type Offload struct {
 	shutdownFd int
 	readPoll   [2]unix.PollFd
 	writePoll  [2]unix.PollFd
+	writeLock  sync.Mutex //there's more than one potential write source per-routine, so we need this to protect writePoll
 	closed     atomic.Bool
 	readBuf    []byte   // scratch for a single raw read (virtio hdr + superpacket)
 	segBuf     []byte   // backing store for segmented output
@@ -83,6 +85,7 @@ func newOffload(fd int, shutdownFd int) (*Offload, error) {
 			{Fd: int32(fd), Events: unix.POLLOUT},
 			{Fd: int32(shutdownFd), Events: unix.POLLIN},
 		},
+		writeLock: sync.Mutex{},
 
 		segBuf:  make([]byte, tunSegBufCap),
 		gsoIovs: make([]unix.Iovec, 2, 2+gsoInitialPayIovs),
@@ -130,10 +133,12 @@ func (r *Offload) blockOnWrite() error {
 		}
 	}
 	//always reset these!
+	r.writeLock.Lock()
 	tunEvents := r.writePoll[0].Revents
 	shutdownEvents := r.writePoll[1].Revents
 	r.writePoll[0].Revents = 0
 	r.writePoll[1].Revents = 0
+	r.writeLock.Unlock()
 	//do the err check before trusting the potentially bogus bits we just got
 	if err != nil {
 		return err
@@ -239,15 +244,6 @@ func (r *Offload) Write(buf []byte) (int, error) {
 	iovs[0].SetLen(virtioNetHdrLen)
 	iovs[1].SetLen(len(buf))
 	return r.writeWithScratch(buf, &iovs)
-}
-
-// WriteFromSelf emits a packet using a dedicated iovec scratch (rejectIovs)
-// distinct from the one used by the coalescer's Write path. This avoids a
-// data race between the inside (listenIn) goroutine emitting reject or
-// self-forward packets and the outside (listenOut) goroutine flushing TCP
-// coalescer passthroughs on the same Offload.
-func (r *Offload) WriteFromSelf(buf []byte) (int, error) {
-	return r.Write(buf)
 }
 
 func (r *Offload) writeWithScratch(buf []byte, iovs *[2]unix.Iovec) (int, error) {
