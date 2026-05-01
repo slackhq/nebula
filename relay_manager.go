@@ -57,7 +57,7 @@ func (rm *relayManager) GetUseRelays() bool {
 // For each candidate relay it either kicks off a handshake to the relay, sends a CreateRelayRequest, retransmits
 // one that may have been lost, or, once the relay is Established, forwards the in-progress
 // stage 0 handshake packet for vpnIp through it.
-func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hostinfo *HostInfo) {
+func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hostinfo *HostInfo, stage0 []byte) {
 	if !rm.GetUseRelays() || len(hostinfo.remotes.relays) == 0 {
 		return
 	}
@@ -139,7 +139,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hostinfo *Ho
 		switch existingRelay.State {
 		case Established:
 			hostinfo.logger(rm.l).Info("Send handshake via relay", "relay", relay.String())
-			f.SendVia(relayHostInfo, existingRelay, hostinfo.HandshakePacket[handshakePacketStage0], make([]byte, 12), make([]byte, mtu), false)
+			f.SendVia(relayHostInfo, existingRelay, stage0, make([]byte, 12), make([]byte, mtu), false)
 		case Disestablished:
 			// Mark this relay as 'requested'
 			relayHostInfo.relayState.UpdateRelayForByIpState(vpnIp, Requested)

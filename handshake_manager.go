@@ -323,7 +323,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		)
 	}
 
-	hm.f.relayManager.StartRelays(hm.f, vpnIp, hostinfo)
+	hm.f.relayManager.StartRelays(hm.f, vpnIp, hostinfo, stage0)
 
 	// If a lighthouse triggered this attempt then we are still in the timer wheel and do not need to re-add
 	if !lighthouseTriggered {
