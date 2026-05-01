@@ -28,6 +28,7 @@ func makeHandshakePacket(from, to netip.AddrPort, subtype header.MessageSubType,
 }
 
 func TestHandshakeRetransmitDuplicate(t *testing.T) {
+	t.Parallel()
 	// Verify the responder correctly handles receiving the same msg1 multiple times
 	// (retransmission). The duplicate goes through CheckAndComplete -> ErrAlreadySeen
 	// and the cached response is resent.
@@ -78,6 +79,7 @@ func TestHandshakeRetransmitDuplicate(t *testing.T) {
 }
 
 func TestHandshakeTruncatedPacketRecovery(t *testing.T) {
+	t.Parallel()
 	// Verify that a truncated handshake packet is ignored and the real
 	// packet can still complete the handshake.
 
@@ -126,6 +128,7 @@ func TestHandshakeTruncatedPacketRecovery(t *testing.T) {
 }
 
 func TestHandshakeOrphanedMsg2Dropped(t *testing.T) {
+	t.Parallel()
 	// A msg2 arriving with no matching pending index should be silently dropped
 	// with no response sent and no state changes.
 
@@ -168,6 +171,7 @@ func TestHandshakeOrphanedMsg2Dropped(t *testing.T) {
 }
 
 func TestHandshakeUnknownMessageCounter(t *testing.T) {
+	t.Parallel()
 	// A handshake packet with an unexpected message counter should be silently
 	// dropped with no side effects and no UDP response.
 
@@ -199,6 +203,7 @@ func TestHandshakeUnknownMessageCounter(t *testing.T) {
 }
 
 func TestHandshakeUnknownSubtype(t *testing.T) {
+	t.Parallel()
 	// A handshake packet with an unknown subtype should be silently dropped.
 
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
@@ -224,6 +229,7 @@ func TestHandshakeUnknownSubtype(t *testing.T) {
 }
 
 func TestHandshakeLateResponse(t *testing.T) {
+	t.Parallel()
 	// After a handshake times out, a late response should be silently ignored
 	// with no new tunnels created.
 
@@ -273,6 +279,7 @@ func TestHandshakeLateResponse(t *testing.T) {
 }
 
 func TestHandshakeSelfConnectionRejected(t *testing.T) {
+	t.Parallel()
 	// Verify that a node rejects a handshake containing its own VPN IP in the
 	// peer cert. We do this by sending the initiator's own msg1 back to itself.
 
@@ -321,6 +328,7 @@ func TestHandshakeSelfConnectionRejected(t *testing.T) {
 }
 
 func TestHandshakeMessageCounter0Dropped(t *testing.T) {
+	t.Parallel()
 	// MessageCounter=0 is not a valid handshake message and should be dropped.
 
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
@@ -341,6 +349,7 @@ func TestHandshakeMessageCounter0Dropped(t *testing.T) {
 }
 
 func TestHandshakeRemoteAllowList(t *testing.T) {
+	t.Parallel()
 	// Verify that a handshake from a blocked underlay IP is dropped with no
 	// response and no state changes. Then verify the same packet from an
 	// allowed IP succeeds.
@@ -399,6 +408,7 @@ func TestHandshakeRemoteAllowList(t *testing.T) {
 }
 
 func TestHandshakeAlreadySeenPreferredRemote(t *testing.T) {
+	t.Parallel()
 	// When a duplicate msg1 arrives via ErrAlreadySeen, verify the tunnel
 	// remains functional and hostmap index count is stable.
 
@@ -445,6 +455,7 @@ func TestHandshakeAlreadySeenPreferredRemote(t *testing.T) {
 }
 
 func TestHandshakeWrongResponderPacketStore(t *testing.T) {
+	t.Parallel()
 	// Verify that when the wrong host responds, the cached packets are
 	// transferred to the new handshake, the evil tunnel is closed, evil's
 	// address is blocked, and the correct tunnel is eventually established.
@@ -508,6 +519,7 @@ func TestHandshakeWrongResponderPacketStore(t *testing.T) {
 }
 
 func TestHandshakeRelayComplete(t *testing.T) {
+	t.Parallel()
 	// Verify that a relay handshake completes correctly and relay state is
 	// properly maintained on all three nodes.
 

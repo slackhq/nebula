@@ -1,0 +1,29 @@
+// This file documents the wire format the nebula handshake speaks. It is
+// not run through protoc; the encoder/decoder in payload.go is hand-written
+// against this shape directly to keep the parser narrow and panic-free.
+//
+// Any change to the wire format must be reflected here, and adding a new
+// field requires updating MarshalPayload / unmarshalPayloadDetails together
+// with the field-uniqueness and wire-type checks in those functions.
+
+syntax = "proto3";
+package nebula.handshake;
+
+message NebulaHandshake {
+  NebulaHandshakeDetails Details = 1;
+  bytes Hmac = 2;
+}
+
+message NebulaHandshakeDetails {
+  bytes Cert = 1;
+  uint32 InitiatorIndex = 2;
+  uint32 ResponderIndex = 3;
+  // Cookie was reserved for an anti-DoS mechanism that was never
+  // implemented. No released version of nebula has ever populated it; the
+  // hand-written parser silently skips it on read.
+  uint64 Cookie = 4 [deprecated = true];
+  uint64 Time = 5;
+  uint32 CertVersion = 8;
+  // reserved for WIP multiport
+  reserved 6, 7;
+}
