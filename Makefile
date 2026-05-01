@@ -229,7 +229,7 @@ bin-docker: bin build/linux-amd64/nebula build/linux-amd64/nebula-cert
 
 smoke-docker: bin-docker
 	cd .github/workflows/smoke/ && $(GOENV) ./build.sh
-	cd .github/workflows/smoke/ && $(GOENV)./smoke.sh
+	cd .github/workflows/smoke/ && $(GOENV) ./smoke.sh
 	cd .github/workflows/smoke/ && $(GOENV) NAME="smoke-p256" CURVE="P256" ./build.sh
 	cd .github/workflows/smoke/ && $(GOENV) NAME="smoke-p256" ./smoke.sh
 
