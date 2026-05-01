@@ -96,6 +96,8 @@ release-netbsd: $(ALL_NETBSD:%=build/nebula-%.tar.gz)
 
 release-boringcrypto: build/nebula-linux-$(shell go env GOARCH)-boringcrypto.tar.gz
 
+release-fips140: build/nebula-linux-$(shell go env GOARCH)-fips140.tar.gz
+
 BUILD_ARGS += -trimpath
 
 bin-windows: build/windows-amd64/nebula.exe build/windows-amd64/nebula-cert.exe
@@ -114,6 +116,9 @@ bin-freebsd-arm64: build/freebsd-arm64/nebula build/freebsd-arm64/nebula-cert
 	mv $? .
 
 bin-boringcrypto: build/linux-$(shell go env GOARCH)-boringcrypto/nebula build/linux-$(shell go env GOARCH)-boringcrypto/nebula-cert
+	mv $? .
+
+bin-fips140: build/linux-$(shell go env GOARCH)-fips140/nebula build/linux-$(shell go env GOARCH)-fips140/nebula-cert
 	mv $? .
 
 bin-pkcs11: BUILD_ARGS += -tags pkcs11
@@ -139,6 +144,18 @@ build/linux-amd64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED
 build/linux-arm64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
 build/linux-amd64-boringcrypto/%: LDFLAGS += -checklinkname=0
 build/linux-arm64-boringcrypto/%: LDFLAGS += -checklinkname=0
+
+# fips140
+build/linux-amd64-fips140/%: GOENV += GOFIPS140=v1.0.0
+build/linux-amd64-fips140/%: LDFLAGS += -checklinkname=0
+build/linux-arm64-fips140/%: GOENV += GOFIPS140=v1.0.0
+build/linux-arm64-fips140/%: LDFLAGS += -checklinkname=0
+build/darwin-arm64-fips140/%: GOENV += GOFIPS140=v1.0.0
+build/darwin-arm64-fips140/%: LDFLAGS += -checklinkname=0
+build/windows-amd64-fips140/%: GOENV += GOFIPS140=v1.0.0
+build/windows-amd64-fips140/%: LDFLAGS += -checklinkname=0
+build/windows-arm64-fips140/%: GOENV += GOFIPS140=v1.0.0
+build/windows-arm64-fips140/%: LDFLAGS += -checklinkname=0
 
 build/%/nebula: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
@@ -215,6 +232,10 @@ ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) service ${.DEFAULT_GOAL} --no-print-directory
 endif
 
+# Useful to chain together, like:
+# - make fips140 e2evv
+# - make fips140 smoke-docker
+# Use `release-fips140` or `bin-fips140` to build release binaries
 fips140:
 	@echo > $(NULL_FILE)
 	$(eval GOENV += GOFIPS140=v1.0.0)
