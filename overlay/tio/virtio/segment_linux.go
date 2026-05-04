@@ -1,5 +1,5 @@
-//go:build linux && !android && !e2e_testing
-// +build linux,!android,!e2e_testing
+//go:build linux && !android
+// +build linux,!android
 
 // Package virtio implements the pure validation, header-correction, and
 // per-segment slicing logic for kernel-supplied TSO/USO superpackets on
