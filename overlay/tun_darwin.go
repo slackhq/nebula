@@ -31,6 +31,16 @@ type tun struct {
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	linkAddr    *netroute.LinkAddr
 	l           *slog.Logger
+
+	// readBuf is the per-tun read scratch reused across calls so we don't allocate per Read.
+	// We could call readv via syscall.Syscall(SYS_READV, ...), but on darwin/arm64 that path emits
+	// a raw SVC #0x80 trap (see $GOROOT/src/syscall/asm_darwin_arm64.s) rather than going through
+	// libSystem. Apple has been signaling for years that direct syscalls are deprecated, so we
+	// stick to libc-pinned writev via linkname (see tunWritev) and use plain f.Read for the read
+	// path. Stdlib doesn't keep syscall.readv alive for external linkname (only writev gets that
+	// treatment via linkname_libc.go), so the read path can't use readv and has to do the
+	// prefix-skip copy.
+	readBuf []byte
 }
 
 type ifReq struct {
@@ -120,12 +130,14 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		return nil, fmt.Errorf("SetNonblock: %v", err)
 	}
 
+	mtu := c.GetInt("tun.mtu", DefaultMTU)
 	t := &tun{
 		f:           os.NewFile(uintptr(fd), ""),
 		Device:      name,
 		vpnNetworks: vpnNetworks,
-		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
+		DefaultMTU:  mtu,
 		l:           l,
+		readBuf:     make([]byte, mtu+4),
 	}
 
 	err = t.reload(c, true)
@@ -499,45 +511,34 @@ func delRoute(prefix netip.Prefix, gateway netroute.Addr) error {
 	return nil
 }
 
+// tunWritev is linkname'd from the standard library so the writev call goes through libSystem's
+// pinned trampoline. syscall.Syscall(SYS_WRITEV, ...) on darwin/arm64 emits a raw SVC #0x80 trap
+// (see $GOROOT/src/syscall/asm_darwin_arm64.s), which is the path Apple has signaled they will
+// eventually disallow. Stdlib's $GOROOT/src/syscall/linkname_libc.go has a bare
+// `//go:linkname writev` directive that opts in external linkname and keeps the symbol alive for
+// the linker on darwin (and openbsd). There is no equivalent for readv, which is why Read uses
+// f.Read with a prefix-skip copy instead.
+
+//go:linkname tunWritev syscall.writev
+//go:noescape
+func tunWritev(fd int, iovecs []syscall.Iovec) (n uintptr, err error)
+
 // Read pulls one IP packet off the utun device.
 func (t *tun) Read(to []byte) (int, error) {
-	// Grab rc as a local so the compiler can devirtualize the call and keep the closure on the stack.
-	rc, err := t.f.SyscallConn()
+	if cap(t.readBuf) < len(to)+4 {
+		t.readBuf = make([]byte, len(to)+4)
+	}
+	buf := t.readBuf[:len(to)+4]
+
+	n, err := t.f.Read(buf)
 	if err != nil {
 		return 0, err
 	}
-
-	var errno syscall.Errno
-	var n uintptr
-	err = rc.Read(func(fd uintptr) bool {
-		var head [4]byte
-		iovecs := [2]syscall.Iovec{
-			{Base: &head[0], Len: 4},
-			{Base: &to[0], Len: uint64(len(to))},
-		}
-		n, _, errno = syscall.Syscall(syscall.SYS_READV, fd, uintptr(unsafe.Pointer(&iovecs[0])), 2)
-		// EAGAIN/EWOULDBLOCK: tell the runtime to wait for the fd to be
-		// readable and call us again.
-		if errno.Temporary() {
-			return false
-		}
-		return true
-	})
-	if err != nil {
-		if err == syscall.EBADF || err.Error() == "use of closed file" {
-			return 0, os.ErrClosed
-		}
-		return 0, err
-	}
-	if errno != 0 {
-		return 0, errno
-	}
-
-	bytesRead := int(n)
-	if bytesRead < 4 {
+	if n < 4 {
 		return 0, nil
 	}
-	return bytesRead - 4, nil
+	copy(to, buf[4:n])
+	return n - 4, nil
 }
 
 // Write pushes one IP packet onto the utun device.
@@ -557,20 +558,23 @@ func (t *tun) Write(from []byte) (int, error) {
 		return 0, fmt.Errorf("unable to determine IP version from packet")
 	}
 
+	// Grab rc as a local so the compiler can devirtualize the call and keep the closure on the stack.
 	rc, err := t.f.SyscallConn()
 	if err != nil {
 		return 0, err
 	}
 
-	var errno syscall.Errno
 	var n uintptr
+	var callErr error
 	err = rc.Write(func(fd uintptr) bool {
-		iovecs := [2]syscall.Iovec{
+		iovecs := []syscall.Iovec{
 			{Base: &head[0], Len: 4},
 			{Base: &from[0], Len: uint64(len(from))},
 		}
-		n, _, errno = syscall.Syscall(syscall.SYS_WRITEV, fd, uintptr(unsafe.Pointer(&iovecs[0])), 2)
-		if errno.Temporary() {
+		n, callErr = tunWritev(int(fd), iovecs)
+		// Type-assert to syscall.Errno so the EAGAIN/EWOULDBLOCK/EINTR check doesn't box the errno
+		// constants into error interfaces on every call.
+		if errno, ok := callErr.(syscall.Errno); ok && errno.Temporary() {
 			return false
 		}
 		return true
@@ -578,8 +582,8 @@ func (t *tun) Write(from []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if errno != 0 {
-		return 0, errno
+	if callErr != nil {
+		return 0, callErr
 	}
 
 	return int(n) - 4, nil
