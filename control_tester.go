@@ -5,8 +5,6 @@ package nebula
 import (
 	"net/netip"
 
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/udp"
@@ -22,7 +20,9 @@ func (c *Control) WaitForType(msgType header.MessageType, subType header.Message
 			panic(err)
 		}
 		pipeTo.InjectUDPPacket(p)
-		if h.Type == msgType && h.Subtype == subType {
+		match := h.Type == msgType && h.Subtype == subType
+		p.Release()
+		if match {
 			return
 		}
 	}
@@ -38,7 +38,9 @@ func (c *Control) WaitForTypeByIndex(toIndex uint32, msgType header.MessageType,
 			panic(err)
 		}
 		pipeTo.InjectUDPPacket(p)
-		if h.RemoteIndex == toIndex && h.Type == msgType && h.Subtype == subType {
+		match := h.RemoteIndex == toIndex && h.Type == msgType && h.Subtype == subType
+		p.Release()
+		if match {
 			return
 		}
 	}
@@ -90,65 +92,15 @@ func (c *Control) GetTunTxChan() <-chan []byte {
 	return c.f.inside.(*overlay.TestTun).TxPackets
 }
 
-// InjectUDPPacket will inject a packet into the udp side of nebula
+// InjectUDPPacket injects a packet into the udp side. We copy internally so the caller keeps ownership of p.
+// The copy comes from the freelist so steady-state alloc is zero.
 func (c *Control) InjectUDPPacket(p *udp.Packet) {
-	c.f.outside.(*udp.TesterConn).Send(p)
+	c.f.outside.(*udp.TesterConn).Send(p.Copy())
 }
 
-// InjectTunUDPPacket puts a udp packet on the tun interface. Using UDP here because it's a simpler protocol
-func (c *Control) InjectTunUDPPacket(toAddr netip.Addr, toPort uint16, fromAddr netip.Addr, fromPort uint16, data []byte) {
-	serialize := make([]gopacket.SerializableLayer, 0)
-	var netLayer gopacket.NetworkLayer
-	if toAddr.Is6() {
-		if !fromAddr.Is6() {
-			panic("Cant send ipv6 to ipv4")
-		}
-		ip := &layers.IPv6{
-			Version:    6,
-			NextHeader: layers.IPProtocolUDP,
-			SrcIP:      fromAddr.Unmap().AsSlice(),
-			DstIP:      toAddr.Unmap().AsSlice(),
-		}
-		serialize = append(serialize, ip)
-		netLayer = ip
-	} else {
-		if !fromAddr.Is4() {
-			panic("Cant send ipv4 to ipv6")
-		}
-
-		ip := &layers.IPv4{
-			Version:  4,
-			TTL:      64,
-			Protocol: layers.IPProtocolUDP,
-			SrcIP:    fromAddr.Unmap().AsSlice(),
-			DstIP:    toAddr.Unmap().AsSlice(),
-		}
-		serialize = append(serialize, ip)
-		netLayer = ip
-	}
-
-	udp := layers.UDP{
-		SrcPort: layers.UDPPort(fromPort),
-		DstPort: layers.UDPPort(toPort),
-	}
-	err := udp.SetNetworkLayerForChecksum(netLayer)
-	if err != nil {
-		panic(err)
-	}
-
-	buffer := gopacket.NewSerializeBuffer()
-	opt := gopacket.SerializeOptions{
-		ComputeChecksums: true,
-		FixLengths:       true,
-	}
-
-	serialize = append(serialize, &udp, gopacket.Payload(data))
-	err = gopacket.SerializeLayers(buffer, opt, serialize...)
-	if err != nil {
-		panic(err)
-	}
-
-	c.f.inside.(*overlay.TestTun).Send(buffer.Bytes())
+// InjectTunPacket pushes an IP packet onto the tun interface.
+func (c *Control) InjectTunPacket(packet []byte) {
+	c.f.inside.(*overlay.TestTun).Send(packet)
 }
 
 func (c *Control) GetVpnAddrs() []netip.Addr {

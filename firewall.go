@@ -1,11 +1,13 @@
 package nebula
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -16,7 +18,6 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
@@ -67,7 +68,7 @@ type Firewall struct {
 	incomingMetrics     firewallMetrics
 	outgoingMetrics     firewallMetrics
 
-	l *logrus.Logger
+	l *slog.Logger
 }
 
 type firewallMetrics struct {
@@ -131,7 +132,7 @@ type firewallLocalCIDR struct {
 
 // NewFirewall creates a new Firewall object. A TimerWheel is created for you from the provided timeouts.
 // The certificate provided should be the highest version loaded in memory.
-func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Duration, c cert.Certificate) *Firewall {
+func NewFirewall(l *slog.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Duration, c cert.Certificate) *Firewall {
 	//TODO: error on 0 duration
 	var tmin, tmax time.Duration
 
@@ -191,7 +192,7 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 	}
 }
 
-func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firewall, error) {
+func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewall, error) {
 	certificate := cs.getCertificate(cert.Version2)
 	if certificate == nil {
 		certificate = cs.getCertificate(cert.Version1)
@@ -219,7 +220,7 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 	case "drop":
 		fw.InSendReject = false
 	default:
-		l.WithField("action", inboundAction).Warn("invalid firewall.inbound_action, defaulting to `drop`")
+		l.Warn("invalid firewall.inbound_action, defaulting to `drop`", "action", inboundAction)
 		fw.InSendReject = false
 	}
 
@@ -230,7 +231,7 @@ func NewFirewallFromConfig(l *logrus.Logger, cs *CertState, c *config.C) (*Firew
 	case "drop":
 		fw.OutSendReject = false
 	default:
-		l.WithField("action", outboundAction).Warn("invalid firewall.outbound_action, defaulting to `drop`")
+		l.Warn("invalid firewall.outbound_action, defaulting to `drop`", "action", outboundAction)
 		fw.OutSendReject = false
 	}
 
@@ -268,7 +269,7 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 	case firewall.ProtoICMP, firewall.ProtoICMPv6:
 		//ICMP traffic doesn't have ports, so we always coerce to "any", even if a value is provided
 		if startPort != firewall.PortAny {
-			f.l.WithField("startPort", startPort).Warn("ignoring port specification for ICMP firewall rule")
+			f.l.Warn("ignoring port specification for ICMP firewall rule", "startPort", startPort)
 		}
 		startPort = firewall.PortAny
 		endPort = firewall.PortAny
@@ -290,8 +291,9 @@ func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort 
 	if !incoming {
 		direction = "outgoing"
 	}
-	f.l.WithField("firewallRule", m{"direction": direction, "proto": proto, "startPort": startPort, "endPort": endPort, "groups": groups, "host": host, "cidr": cidr, "localCidr": localCidr, "caName": caName, "caSha": caSha}).
-		Info("Firewall rule added")
+	f.l.Info("Firewall rule added",
+		"firewallRule", m{"direction": direction, "proto": proto, "startPort": startPort, "endPort": endPort, "groups": groups, "host": host, "cidr": cidr, "localCidr": localCidr, "caName": caName, "caSha": caSha},
+	)
 
 	return fp.addRule(f, startPort, endPort, groups, host, cidr, localCidr, caName, caSha)
 }
@@ -314,7 +316,7 @@ func (f *Firewall) GetRuleHashes() string {
 	return "SHA:" + f.GetRuleHash() + ",FNV:" + strconv.FormatUint(uint64(f.GetRuleHashFNV()), 10)
 }
 
-func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw FirewallInterface) error {
+func AddFirewallRulesFromConfig(l *slog.Logger, inbound bool, c *config.C, fw FirewallInterface) error {
 	var table string
 	if inbound {
 		table = "firewall.inbound"
@@ -372,7 +374,7 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			startPort = firewall.PortAny
 			endPort = firewall.PortAny
 			if sPort != "" {
-				l.WithField("port", sPort).Warn("ignoring port specification for ICMP firewall rule")
+				l.Warn("ignoring port specification for ICMP firewall rule", "port", sPort)
 			}
 		default:
 			return fmt.Errorf("%s rule #%v; proto was not understood; `%s`", table, i, r.Proto)
@@ -396,7 +398,11 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 		}
 
 		if warning := r.sanity(); warning != nil {
-			l.Warnf("%s rule #%v; %s", table, i, warning)
+			l.Warn("firewall rule sanity check",
+				"table", table,
+				"rule", i,
+				"warning", warning,
+			)
 		}
 
 		err = fw.AddRule(inbound, proto, startPort, endPort, r.Groups, r.Host, r.Cidr, r.LocalCidr, r.CAName, r.CASha)
@@ -528,26 +534,26 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 
 		// We now know which firewall table to check against
 		if !table.match(fp, c.incoming, h.ConnectionState.peerCert, caPool) {
-			if f.l.Level >= logrus.DebugLevel {
-				h.logger(f.l).
-					WithField("fwPacket", fp).
-					WithField("incoming", c.incoming).
-					WithField("rulesVersion", f.rulesVersion).
-					WithField("oldRulesVersion", c.rulesVersion).
-					Debugln("dropping old conntrack entry, does not match new ruleset")
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				h.logger(f.l).Debug("dropping old conntrack entry, does not match new ruleset",
+					"fwPacket", fp,
+					"incoming", c.incoming,
+					"rulesVersion", f.rulesVersion,
+					"oldRulesVersion", c.rulesVersion,
+				)
 			}
 			delete(conntrack.Conns, fp)
 			conntrack.Unlock()
 			return false
 		}
 
-		if f.l.Level >= logrus.DebugLevel {
-			h.logger(f.l).
-				WithField("fwPacket", fp).
-				WithField("incoming", c.incoming).
-				WithField("rulesVersion", f.rulesVersion).
-				WithField("oldRulesVersion", c.rulesVersion).
-				Debugln("keeping old conntrack entry, does match new ruleset")
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			h.logger(f.l).Debug("keeping old conntrack entry, does match new ruleset",
+				"fwPacket", fp,
+				"incoming", c.incoming,
+				"rulesVersion", f.rulesVersion,
+				"oldRulesVersion", c.rulesVersion,
+			)
 		}
 
 		c.rulesVersion = f.rulesVersion
@@ -935,7 +941,7 @@ type rule struct {
 	CASha     string
 }
 
-func convertRule(l *logrus.Logger, p any, table string, i int) (rule, error) {
+func convertRule(l *slog.Logger, p any, table string, i int) (rule, error) {
 	r := rule{}
 
 	m, ok := p.(map[string]any)
@@ -966,7 +972,10 @@ func convertRule(l *logrus.Logger, p any, table string, i int) (rule, error) {
 			return r, errors.New("group should contain a single value, an array with more than one entry was provided")
 		}
 
-		l.Warnf("%s rule #%v; group was an array with a single value, converting to simple value", table, i)
+		l.Warn("group was an array with a single value, converting to simple value",
+			"table", table,
+			"rule", i,
+		)
 		m["group"] = v[0]
 	}
 

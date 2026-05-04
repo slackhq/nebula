@@ -204,6 +204,12 @@ punchy:
   # Trusted SSH CA public keys. These are the public keys of the CAs that are allowed to sign SSH keys for access.
   #trusted_cas:
     #- "ssh public key string"
+  # sandbox_dir restricts file paths for profiling commands (start-cpu-profile, save-heap-profile,
+  # save-mutex-profile) to the specified directory. Relative paths will be resolved within this directory,
+  # and absolute paths outside of it will be rejected. Default is $TMP/nebula-debug.
+  # The directory is NOT automatically created.
+  # Overriding this to "" is the same as "/" and will allow overwriting any path on the host.
+  #sandbox_dir: /var/tmp/nebula-debug
 
 # EXPERIMENTAL: relay support for networks that can't establish direct connections.
 relay:
@@ -286,24 +292,21 @@ tun:
 
 # Configure logging level
 logging:
-  # panic, fatal, error, warning, info, or debug. Default is info and is reloadable.
-  #NOTE: Debug mode can log remotely controlled/untrusted data which can quickly fill a disk in some
-  # scenarios. Debug logging is also CPU intensive and will decrease performance overall.
-  # Only enable debug logging while actively investigating an issue.
+  # trace, debug, info, warn, or error. Default is info and is reloadable.
+  # fatal and panic are accepted for backwards compatibility and map to error.
+  #NOTE: Debug and trace modes can log remotely controlled/untrusted data which can quickly fill a disk in some
+  # scenarios. Debug and trace logging are also CPU intensive and will decrease performance overall.
+  # Only enable debug or trace logging while actively investigating an issue.
   level: info
-  # json or text formats currently available. Default is text
+  # json or text formats currently available. Default is text.
   format: text
-  # Disable timestamp logging. useful when output is redirected to logging system that already adds timestamps. Default is false
+  # Disable timestamp logging. Useful when output is redirected to a logging system that already adds timestamps. Default is false.
   #disable_timestamp: true
-  # timestamp format is specified in Go time format, see:
-  #     https://golang.org/pkg/time/#pkg-constants
-  # default when `format: json`: "2006-01-02T15:04:05Z07:00" (RFC3339)
-  # default when `format: text`:
-  #     when TTY attached: seconds since beginning of execution
-  #     otherwise: "2006-01-02T15:04:05Z07:00" (RFC3339)
-  # As an example, to log as RFC3339 with millisecond precision, set to:
-  #timestamp_format: "2006-01-02T15:04:05.000Z07:00"
+  # Timestamps use RFC3339Nano ("2006-01-02T15:04:05.999999999Z07:00") and are not configurable.
 
+# The stats section is reloadable. A HUP may change the backend, toggle stats
+# on or off, switch the listen/host address, or pick up new DNS for the
+# configured graphite host.
 #stats:
   #type: graphite
   #prefix: nebula
@@ -321,10 +324,12 @@ logging:
   # enables counter metrics for meta packets
   #   e.g.: `messages.tx.handshake`
   # NOTE: `message.{tx,rx}.recv_error` is always emitted
+  # Not reloadable.
   #message_metrics: false
 
   # enables detailed counter metrics for lighthouse packets
   #   e.g.: `lighthouse.rx.HostQuery`
+  # Not reloadable.
   #lighthouse_metrics: false
 
 # Handshake Manager Settings

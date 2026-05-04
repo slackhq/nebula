@@ -8,12 +8,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"syscall"
 	"unsafe"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"golang.org/x/sys/unix"
 )
@@ -22,12 +22,12 @@ type StdConn struct {
 	*net.UDPConn
 	isV4  bool
 	sysFd uintptr
-	l     *logrus.Logger
+	l     *slog.Logger
 }
 
 var _ Conn = &StdConn{}
 
-func NewListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
+func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
 	lc := NewListenConfig(multi)
 	pc, err := lc.ListenPacket(context.TODO(), "udp", net.JoinHostPort(ip.String(), fmt.Sprintf("%v", port)))
 	if err != nil {
@@ -165,7 +165,7 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 	return func() {}
 }
 
-func (u *StdConn) ListenOut(r EncReader) {
+func (u *StdConn) ListenOut(r EncReader) error {
 	buffer := make([]byte, MTU)
 
 	for {
@@ -173,11 +173,10 @@ func (u *StdConn) ListenOut(r EncReader) {
 		n, rua, err := u.ReadFromUDPAddrPort(buffer)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
-				u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
-				return
+				return err
 			}
 
-			u.l.WithError(err).Error("unexpected udp socket receive error")
+			u.l.Error("unexpected udp socket receive error", "error", err)
 		}
 
 		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])
@@ -197,7 +196,7 @@ func (u *StdConn) Rebind() error {
 	}
 
 	if err != nil {
-		u.l.WithError(err).Error("Failed to rebind udp socket")
+		u.l.Error("Failed to rebind udp socket", "error", err)
 	}
 
 	return nil

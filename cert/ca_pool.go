@@ -1,11 +1,14 @@
 package cert
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net/netip"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -29,21 +32,45 @@ func NewCAPool() *CAPool {
 // If the pool contains any expired certificates, an ErrExpired will be
 // returned along with the pool. The caller must handle any such errors.
 func NewCAPoolFromPEM(caPEMs []byte) (*CAPool, error) {
+	return NewCAPoolFromPEMReader(bytes.NewReader(caPEMs))
+}
+
+// NewCAPoolFromPEMReader will create a new CA pool from the provided reader.
+// The reader must contain a PEM-encoded set of nebula certificates.
+func NewCAPoolFromPEMReader(r io.Reader) (*CAPool, error) {
 	pool := NewCAPool()
-	var err error
+
 	var expired bool
-	for {
-		caPEMs, err = pool.AddCAFromPEM(caPEMs)
-		if errors.Is(err, ErrExpired) {
-			expired = true
-			err = nil
+
+	scanner := bufio.NewScanner(r)
+	scanner.Split(SplitPEM)
+
+	for scanner.Scan() {
+		pemBytes := scanner.Bytes()
+
+		block, rest := pem.Decode(pemBytes)
+		if len(bytes.TrimSpace(rest)) > 0 {
+			return nil, ErrInvalidPEMBlock
 		}
+		if block == nil {
+			return nil, ErrInvalidPEMBlock
+		}
+
+		c, err := unmarshalCertificateBlock(block)
 		if err != nil {
 			return nil, err
 		}
-		if len(caPEMs) == 0 || strings.TrimSpace(string(caPEMs)) == "" {
-			break
+
+		err = pool.AddCA(c)
+		if errors.Is(err, ErrExpired) {
+			expired = true
+			continue
+		} else if err != nil {
+			return nil, err
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, ErrInvalidPEMBlock
 	}
 
 	if expired {

@@ -1,10 +1,10 @@
 package nebula
 
 import (
+	"log/slog"
 	"sync/atomic"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 )
 
@@ -14,10 +14,10 @@ type Punchy struct {
 	delay           atomic.Int64
 	respondDelay    atomic.Int64
 	punchEverything atomic.Bool
-	l               *logrus.Logger
+	l               *slog.Logger
 }
 
-func NewPunchyFromConfig(l *logrus.Logger, c *config.C) *Punchy {
+func NewPunchyFromConfig(l *slog.Logger, c *config.C) *Punchy {
 	p := &Punchy{l: l}
 
 	p.reload(c, true)
@@ -62,7 +62,7 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 		p.respond.Store(yes)
 
 		if !initial {
-			p.l.Infof("punchy.respond changed to %v", p.GetRespond())
+			p.l.Info("punchy.respond changed", "respond", p.GetRespond())
 		}
 	}
 
@@ -70,21 +70,21 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 	if initial || c.HasChanged("punchy.delay") {
 		p.delay.Store((int64)(c.GetDuration("punchy.delay", time.Second)))
 		if !initial {
-			p.l.Infof("punchy.delay changed to %s", p.GetDelay())
+			p.l.Info("punchy.delay changed", "delay", p.GetDelay())
 		}
 	}
 
 	if initial || c.HasChanged("punchy.target_all_remotes") {
 		p.punchEverything.Store(c.GetBool("punchy.target_all_remotes", false))
 		if !initial {
-			p.l.WithField("target_all_remotes", p.GetTargetEverything()).Info("punchy.target_all_remotes changed")
+			p.l.Info("punchy.target_all_remotes changed", "target_all_remotes", p.GetTargetEverything())
 		}
 	}
 
 	if initial || c.HasChanged("punchy.respond_delay") {
 		p.respondDelay.Store((int64)(c.GetDuration("punchy.respond_delay", 5*time.Second)))
 		if !initial {
-			p.l.Infof("punchy.respond_delay changed to %s", p.GetRespondDelay())
+			p.l.Info("punchy.respond_delay changed", "respond_delay", p.GetRespondDelay())
 		}
 	}
 }

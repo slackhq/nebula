@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/slackhq/nebula/cert"
@@ -40,21 +39,15 @@ func verify(args []string, out io.Writer, errOut io.Writer) error {
 		return err
 	}
 
-	rawCACert, err := os.ReadFile(*vf.caPath)
+	caFile, err := os.Open(*vf.caPath)
 	if err != nil {
 		return fmt.Errorf("error while reading ca: %w", err)
 	}
+	defer caFile.Close()
 
-	caPool := cert.NewCAPool()
-	for {
-		rawCACert, err = caPool.AddCAFromPEM(rawCACert)
-		if err != nil {
-			return fmt.Errorf("error while adding ca cert to pool: %w", err)
-		}
-
-		if rawCACert == nil || len(rawCACert) == 0 || strings.TrimSpace(string(rawCACert)) == "" {
-			break
-		}
+	caPool, err := cert.NewCAPoolFromPEMReader(caFile)
+	if err != nil && !errors.Is(err, cert.ErrExpired) {
+		return fmt.Errorf("error while adding ca cert to pool: %w", err)
 	}
 
 	rawCert, err := os.ReadFile(*vf.certPath)

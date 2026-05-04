@@ -4,7 +4,6 @@
 package e2e
 
 import (
-	"fmt"
 	"io"
 	"net/netip"
 	"os"
@@ -12,15 +11,18 @@ import (
 	"testing"
 	"time"
 
+	"log/slog"
+
 	"dario.cat/mergo"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
-	"github.com/sirupsen/logrus"
+
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/e2e/router"
+	"github.com/slackhq/nebula/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.yaml.in/yaml/v3"
@@ -132,8 +134,7 @@ func newSimpleServerWithUdpAndUnsafeNetworks(v cert.Version, caCrt cert.Certific
 			"port": udpAddr.Port(),
 		},
 		"logging": m{
-			"timestamp_format": fmt.Sprintf("%v 15:04:05.000000", name),
-			"level":            l.Level.String(),
+			"level": testLogLevelName(),
 		},
 		"timers": m{
 			"pending_deletion_interval": 2,
@@ -234,8 +235,7 @@ func newServer(caCrt []cert.Certificate, certs []cert.Certificate, key []byte, o
 			"port": udpAddr.Port(),
 		},
 		"logging": m{
-			"timestamp_format": fmt.Sprintf("%v 15:04:05.000000", certs[0].Name()),
-			"level":            l.Level.String(),
+			"level": testLogLevelName(),
 		},
 		"timers": m{
 			"pending_deletion_interval": 2,
@@ -294,12 +294,12 @@ func deadline(t *testing.T, seconds time.Duration) doneCb {
 
 func assertTunnel(t testing.TB, vpnIpA, vpnIpB netip.Addr, controlA, controlB *nebula.Control, r *router.R) {
 	// Send a packet from them to me
-	controlB.InjectTunUDPPacket(vpnIpA, 80, vpnIpB, 90, []byte("Hi from B"))
+	controlB.InjectTunPacket(BuildTunUDPPacket(vpnIpA, 80, vpnIpB, 90, []byte("Hi from B")))
 	bPacket := r.RouteForAllUntilTxTun(controlA)
 	assertUdpPacket(t, []byte("Hi from B"), bPacket, vpnIpB, vpnIpA, 90, 80)
 
 	// And once more from me to them
-	controlA.InjectTunUDPPacket(vpnIpB, 80, vpnIpA, 90, []byte("Hello from A"))
+	controlA.InjectTunPacket(BuildTunUDPPacket(vpnIpB, 80, vpnIpA, 90, []byte("Hello from A")))
 	aPacket := r.RouteForAllUntilTxTun(controlB)
 	assertUdpPacket(t, []byte("Hello from A"), aPacket, vpnIpA, vpnIpB, 90, 80)
 }
@@ -379,24 +379,87 @@ func getAddrs(ns []netip.Prefix) []netip.Addr {
 	return a
 }
 
-func NewTestLogger() *logrus.Logger {
-	l := logrus.New()
-
+func NewTestLogger() *slog.Logger {
 	v := os.Getenv("TEST_LOGS")
 	if v == "" {
-		l.SetOutput(io.Discard)
-		l.SetLevel(logrus.PanicLevel)
-		return l
+		return slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
+	level := slog.LevelInfo
 	switch v {
 	case "2":
-		l.SetLevel(logrus.DebugLevel)
+		level = slog.LevelDebug
 	case "3":
-		l.SetLevel(logrus.TraceLevel)
-	default:
-		l.SetLevel(logrus.InfoLevel)
+		level = logging.LevelTrace
+	}
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+}
+
+// testLogLevelName returns the level name string accepted by logging.ApplyConfig
+// for the current TEST_LOGS setting. Kept in sync with NewTestLogger.
+func testLogLevelName() string {
+	switch os.Getenv("TEST_LOGS") {
+	case "2":
+		return "debug"
+	case "3":
+		return "trace"
+	case "":
+		return "info"
+	}
+	return "info"
+}
+
+// BuildTunUDPPacket assembles an IP+UDP packet suitable for Control.InjectTunPacket.
+// Using UDP here because it's a simpler protocol.
+func BuildTunUDPPacket(toAddr netip.Addr, toPort uint16, fromAddr netip.Addr, fromPort uint16, data []byte) []byte {
+	serialize := make([]gopacket.SerializableLayer, 0)
+	var netLayer gopacket.NetworkLayer
+	if toAddr.Is6() {
+		if !fromAddr.Is6() {
+			panic("Cant send ipv6 to ipv4")
+		}
+		ip := &layers.IPv6{
+			Version:    6,
+			NextHeader: layers.IPProtocolUDP,
+			SrcIP:      fromAddr.Unmap().AsSlice(),
+			DstIP:      toAddr.Unmap().AsSlice(),
+		}
+		serialize = append(serialize, ip)
+		netLayer = ip
+	} else {
+		if !fromAddr.Is4() {
+			panic("Cant send ipv4 to ipv6")
+		}
+
+		ip := &layers.IPv4{
+			Version:  4,
+			TTL:      64,
+			Protocol: layers.IPProtocolUDP,
+			SrcIP:    fromAddr.Unmap().AsSlice(),
+			DstIP:    toAddr.Unmap().AsSlice(),
+		}
+		serialize = append(serialize, ip)
+		netLayer = ip
 	}
 
-	return l
+	udp := layers.UDP{
+		SrcPort: layers.UDPPort(fromPort),
+		DstPort: layers.UDPPort(toPort),
+	}
+	if err := udp.SetNetworkLayerForChecksum(netLayer); err != nil {
+		panic(err)
+	}
+
+	buffer := gopacket.NewSerializeBuffer()
+	opt := gopacket.SerializeOptions{
+		ComputeChecksums: true,
+		FixLengths:       true,
+	}
+
+	serialize = append(serialize, &udp, gopacket.Payload(data))
+	if err := gopacket.SerializeLayers(buffer, opt, serialize...); err != nil {
+		panic(err)
+	}
+
+	return buffer.Bytes()
 }

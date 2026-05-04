@@ -2,16 +2,32 @@ package nebula
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/netip"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
 )
+
+type RunState int
+
+const (
+	StateUnknown RunState = iota
+	StateReady
+	StateStarted
+	StateStopping
+	StateStopped
+)
+
+var ErrAlreadyStarted = errors.New("nebula is already started")
+var ErrAlreadyStopped = errors.New("nebula cannot be restarted")
+var ErrUnknownState = errors.New("nebula state is invalid")
 
 // Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
 // core. This means copying IP objects, slices, de-referencing pointers and taking the actual value, etc
@@ -26,8 +42,11 @@ type controlHostLister interface {
 }
 
 type Control struct {
+	stateLock sync.Mutex
+	state     RunState
+
 	f                      *Interface
-	l                      *logrus.Logger
+	l                      *slog.Logger
 	ctx                    context.Context
 	cancel                 context.CancelFunc
 	sshStart               func()
@@ -49,10 +68,31 @@ type ControlHostInfo struct {
 	CurrentRelaysThroughMe []netip.Addr     `json:"currentRelaysThroughMe"`
 }
 
-// Start actually runs nebula, this is a nonblocking call. To block use Control.ShutdownBlock()
-func (c *Control) Start() {
+// Start actually runs nebula, this is a nonblocking call.
+// The returned function blocks until nebula has fully stopped and returns the
+// first fatal reader error (if any). A nil error means nebula shut down
+// gracefully; a non-nil error means a reader hit an unexpected failure that
+// triggered the shutdown.
+func (c *Control) Start() (func() error, error) {
+	c.stateLock.Lock()
+	defer c.stateLock.Unlock()
+	switch c.state {
+	case StateReady:
+		//yay!
+	case StateStopped, StateStopping:
+		return nil, ErrAlreadyStopped
+	case StateStarted:
+		return nil, ErrAlreadyStarted
+	default:
+		return nil, ErrUnknownState
+	}
+
 	// Activate the interface
-	c.f.activate()
+	err := c.f.activate()
+	if err != nil {
+		c.state = StateStopped
+		return nil, err
+	}
 
 	// Call all the delayed funcs that waited patiently for the interface to be created.
 	if c.sshStart != nil {
@@ -71,25 +111,51 @@ func (c *Control) Start() {
 		c.lighthouseStart()
 	}
 
+	c.f.triggerShutdown = c.Stop
+
 	// Start reading packets.
-	c.f.run()
+	out, err := c.f.run()
+	if err != nil {
+		c.state = StateStopped
+		return nil, err
+	}
+	c.state = StateStarted
+	return out, nil
+}
+
+func (c *Control) State() RunState {
+	c.stateLock.Lock()
+	defer c.stateLock.Unlock()
+	return c.state
 }
 
 func (c *Control) Context() context.Context {
 	return c.ctx
 }
 
-// Stop signals nebula to shutdown and close all tunnels, returns after the shutdown is complete
+// Stop is a non-blocking call that signals nebula to close all tunnels and shut down
 func (c *Control) Stop() {
+	c.stateLock.Lock()
+	if c.state != StateStarted {
+		c.stateLock.Unlock()
+		// We are stopping or stopped already
+		return
+	}
+
+	c.state = StateStopping
+	c.stateLock.Unlock()
+
 	// Stop the handshakeManager (and other services), to prevent new tunnels from
 	// being created while we're shutting them all down.
 	c.cancel()
 
 	c.CloseAllTunnels(false)
 	if err := c.f.Close(); err != nil {
-		c.l.WithError(err).Error("Close interface failed")
+		c.l.Error("Close interface failed", "error", err)
 	}
-	c.l.Info("Goodbye")
+	c.stateLock.Lock()
+	c.state = StateStopped
+	c.stateLock.Unlock()
 }
 
 // ShutdownBlock will listen for and block on term and interrupt signals, calling Control.Stop() once signalled
@@ -100,7 +166,7 @@ func (c *Control) ShutdownBlock() {
 
 	rawSig := <-sigChan
 	sig := rawSig.String()
-	c.l.WithField("signal", sig).Info("Caught signal, shutting down")
+	c.l.Info("Caught signal, shutting down", "signal", sig)
 	c.Stop()
 }
 
@@ -237,8 +303,10 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 		c.f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 		c.f.closeTunnel(h)
 
-		c.l.WithField("vpnAddrs", h.vpnAddrs).WithField("udpAddr", h.remote).
-			Debug("Sending close tunnel message")
+		c.l.Debug("Sending close tunnel message",
+			"vpnAddrs", h.vpnAddrs,
+			"udpAddr", h.remote,
+		)
 		closed++
 	}
 

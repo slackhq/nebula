@@ -1,15 +1,16 @@
 package nebula
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
+	"log/slog"
 	"net/netip"
 	"time"
 
 	"github.com/google/gopacket/layers"
 	"golang.org/x/net/ipv6"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"golang.org/x/net/ipv4"
@@ -24,7 +25,11 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	if err != nil {
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
 		if len(packet) > 1 {
-			f.l.WithField("packet", packet).Infof("Error while parsing inbound packet from %s: %s", via, err)
+			f.l.Info("Error while parsing inbound packet",
+				"from", via,
+				"error", err,
+				"packet", packet,
+			)
 		}
 		return
 	}
@@ -32,8 +37,8 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	//l.Error("in packet ", header, packet[HeaderLen:])
 	if !via.IsRelayed {
 		if f.myVpnNetworksTable.Contains(via.UdpAddr.Addr()) {
-			if f.l.Level >= logrus.DebugLevel {
-				f.l.WithField("from", via).Debug("Refusing to process double encrypted packet")
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				f.l.Debug("Refusing to process double encrypted packet", "from", via)
 			}
 			return
 		}
@@ -88,7 +93,10 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 			if !ok {
 				// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
 				// its internal mapping. This should never happen.
-				hostinfo.logger(f.l).WithFields(logrus.Fields{"vpnAddrs": hostinfo.vpnAddrs, "remoteIndex": h.RemoteIndex}).Error("HostInfo missing remote relay index")
+				hostinfo.logger(f.l).Error("HostInfo missing remote relay index",
+					"vpnAddrs", hostinfo.vpnAddrs,
+					"remoteIndex", h.RemoteIndex,
+				)
 				return
 			}
 
@@ -108,7 +116,11 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 				// Find the target HostInfo relay object
 				targetHI, targetRelay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relay.PeerAddr)
 				if err != nil {
-					hostinfo.logger(f.l).WithField("relayTo", relay.PeerAddr).WithError(err).WithField("hostinfo.vpnAddrs", hostinfo.vpnAddrs).Info("Failed to find target host info by ip")
+					hostinfo.logger(f.l).Info("Failed to find target host info by ip",
+						"relayTo", relay.PeerAddr,
+						"error", err,
+						"hostinfo.vpnAddrs", hostinfo.vpnAddrs,
+					)
 					return
 				}
 
@@ -123,7 +135,11 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 						hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 					}
 				} else {
-					hostinfo.logger(f.l).WithFields(logrus.Fields{"relayTo": relay.PeerAddr, "relayFrom": hostinfo.vpnAddrs[0], "targetRelayState": targetRelay.State}).Info("Unexpected target relay state")
+					hostinfo.logger(f.l).Info("Unexpected target relay state",
+						"relayTo", relay.PeerAddr,
+						"relayFrom", hostinfo.vpnAddrs[0],
+						"targetRelayState", targetRelay.State,
+					)
 				}
 			}
 
@@ -145,9 +161,11 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	out, err = f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 	if err != nil {
-		hostinfo.logger(f.l).WithError(err).WithField("from", via).
-			WithField("packet", packet).
-			Error("Failed to decrypt packet")
+		hostinfo.logger(f.l).Error("Failed to decrypt packet",
+			"error", err,
+			"from", via,
+			"packet", packet,
+		)
 		return
 	}
 
@@ -159,7 +177,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 				return
 			}
 		default:
-			hostinfo.logger(f.l).Debugf("Unexpected message subtype received from %s", via)
+			hostinfo.logger(f.l).Debug("Unexpected message subtype received", "from", via)
 			return
 		}
 
@@ -176,8 +194,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		}
 
 	case header.CloseTunnel:
-		hostinfo.logger(f.l).WithField("from", via).
-			Info("Close tunnel received, tearing down.")
+		hostinfo.logger(f.l).Info("Close tunnel received, tearing down.", "from", via)
 
 		f.closeTunnel(hostinfo)
 		return
@@ -186,7 +203,9 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		f.relayManager.HandleControlMsg(hostinfo, out, f)
 
 	default:
-		hostinfo.logger(f.l).Debugf("Unexpected packet received from %s", via)
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("Unexpected packet received", "from", via)
+		}
 		return
 	}
 
@@ -211,20 +230,27 @@ func (f *Interface) sendCloseTunnel(h *HostInfo) {
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
 	if !via.IsRelayed && hostinfo.remote != via.UdpAddr {
 		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, via.UdpAddr.Addr()) {
-			hostinfo.logger(f.l).WithField("newAddr", via.UdpAddr).Debug("lighthouse.remote_allow_list denied roaming")
-			return
-		}
-
-		if !hostinfo.lastRoam.IsZero() && via.UdpAddr == hostinfo.lastRoamRemote && time.Since(hostinfo.lastRoam) < RoamingSuppressSeconds*time.Second {
-			if f.l.Level >= logrus.DebugLevel {
-				hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", via.UdpAddr).
-					Debugf("Suppressing roam back to previous remote for %d seconds", RoamingSuppressSeconds)
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				hostinfo.logger(f.l).Debug("lighthouse.remote_allow_list denied roaming", "newAddr", via.UdpAddr)
 			}
 			return
 		}
 
-		hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", via.UdpAddr).
-			Info("Host roamed to new udp ip/port.")
+		if !hostinfo.lastRoam.IsZero() && via.UdpAddr == hostinfo.lastRoamRemote && time.Since(hostinfo.lastRoam) < RoamingSuppressSeconds*time.Second {
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				hostinfo.logger(f.l).Debug("Suppressing roam back to previous remote",
+					"suppressSeconds", RoamingSuppressSeconds,
+					"udpAddr", hostinfo.remote,
+					"newAddr", via.UdpAddr,
+				)
+			}
+			return
+		}
+
+		hostinfo.logger(f.l).Info("Host roamed to new udp ip/port.",
+			"udpAddr", hostinfo.remote,
+			"newAddr", via.UdpAddr,
+		)
 		hostinfo.lastRoam = time.Now()
 		hostinfo.lastRoamRemote = hostinfo.remote
 		hostinfo.SetRemote(via.UdpAddr)
@@ -455,8 +481,9 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	}
 
 	if !hostinfo.ConnectionState.window.Update(f.l, mc) {
-		hostinfo.logger(f.l).WithField("header", h).
-			Debugln("dropping out of window packet")
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("dropping out of window packet", "header", h)
+		}
 		return nil, errors.New("out of window packet")
 	}
 
@@ -468,8 +495,10 @@ func (f *Interface) sendDecryptToTun(hostinfo *HostInfo, messageCounter uint64, 
 
 	err = newPacket(out, true, fwPacket)
 	if err != nil {
-		hostinfo.logger(f.l).WithError(err).WithField("packet", out).
-			Warnf("Error while validating inbound packet")
+		hostinfo.logger(f.l).Warn("Error while validating inbound packet",
+			"error", err,
+			"packet", out,
+		)
 		return false
 	}
 
@@ -478,10 +507,11 @@ func (f *Interface) sendDecryptToTun(hostinfo *HostInfo, messageCounter uint64, 
 		// NOTE: We give `packet` as the `out` here since we already decrypted from it and we don't need it anymore
 		// This gives us a buffer to build the reject packet in
 		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, packet, q)
-		if f.l.Level >= logrus.DebugLevel {
-			hostinfo.logger(f.l).WithField("fwPacket", fwPacket).
-				WithField("reason", dropReason).
-				Debugln("dropping inbound packet")
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("dropping inbound packet",
+				"fwPacket", fwPacket,
+				"reason", dropReason,
+			)
 		}
 		return false
 	}
@@ -489,7 +519,7 @@ func (f *Interface) sendDecryptToTun(hostinfo *HostInfo, messageCounter uint64, 
 	f.connectionManager.In(hostinfo)
 	_, err = f.readers[q].Write(out)
 	if err != nil {
-		f.l.WithError(err).Error("Failed to write to tun")
+		f.l.Error("Failed to write to tun", "error", err)
 	}
 	return true
 }
@@ -505,35 +535,41 @@ func (f *Interface) sendRecvError(endpoint netip.AddrPort, index uint32) {
 
 	b := header.Encode(make([]byte, header.Len), header.Version, header.RecvError, 0, index, 0)
 	_ = f.outside.WriteTo(b, endpoint)
-	if f.l.Level >= logrus.DebugLevel {
-		f.l.WithField("index", index).
-			WithField("udpAddr", endpoint).
-			Debug("Recv error sent")
+	if f.l.Enabled(context.Background(), slog.LevelDebug) {
+		f.l.Debug("Recv error sent",
+			"index", index,
+			"udpAddr", endpoint,
+		)
 	}
 }
 
 func (f *Interface) handleRecvError(addr netip.AddrPort, h *header.H) {
 	if !f.acceptRecvErrorConfig.ShouldRecvError(addr) {
-		f.l.WithField("index", h.RemoteIndex).
-			WithField("udpAddr", addr).
-			Debug("Recv error received, ignoring")
+		f.l.Debug("Recv error received, ignoring",
+			"index", h.RemoteIndex,
+			"udpAddr", addr,
+		)
 		return
 	}
 
-	if f.l.Level >= logrus.DebugLevel {
-		f.l.WithField("index", h.RemoteIndex).
-			WithField("udpAddr", addr).
-			Debug("Recv error received")
+	if f.l.Enabled(context.Background(), slog.LevelDebug) {
+		f.l.Debug("Recv error received",
+			"index", h.RemoteIndex,
+			"udpAddr", addr,
+		)
 	}
 
 	hostinfo := f.hostMap.QueryReverseIndex(h.RemoteIndex)
 	if hostinfo == nil {
-		f.l.WithField("remoteIndex", h.RemoteIndex).Debugln("Did not find remote index in main hostmap")
+		f.l.Debug("Did not find remote index in main hostmap", "remoteIndex", h.RemoteIndex)
 		return
 	}
 
 	if hostinfo.remote.IsValid() && hostinfo.remote != addr {
-		f.l.Infoln("Someone spoofing recv_errors? ", addr, hostinfo.remote)
+		f.l.Info("Someone spoofing recv_errors?",
+			"addr", addr,
+			"hostinfoRemote", hostinfo.remote,
+		)
 		return
 	}
 
