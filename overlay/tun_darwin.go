@@ -23,7 +23,8 @@ import (
 )
 
 type tun struct {
-	io.ReadWriteCloser
+	f           *os.File
+	rc          syscall.RawConn
 	Device      string
 	vpnNetworks []netip.Prefix
 	DefaultMTU  int
@@ -31,9 +32,6 @@ type tun struct {
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	linkAddr    *netroute.LinkAddr
 	l           *slog.Logger
-
-	// cache out buffer since we need to prepend 4 bytes for tun metadata
-	out []byte
 }
 
 type ifReq struct {
@@ -123,12 +121,19 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		return nil, fmt.Errorf("SetNonblock: %v", err)
 	}
 
+	f := os.NewFile(uintptr(fd), "")
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get syscall conn for tun: %w", err)
+	}
+
 	t := &tun{
-		ReadWriteCloser: os.NewFile(uintptr(fd), ""),
-		Device:          name,
-		vpnNetworks:     vpnNetworks,
-		DefaultMTU:      c.GetInt("tun.mtu", DefaultMTU),
-		l:               l,
+		f:           f,
+		rc:          rc,
+		Device:      name,
+		vpnNetworks: vpnNetworks,
+		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
+		l:           l,
 	}
 
 	err = t.reload(c, true)
@@ -158,8 +163,8 @@ func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*tun, e
 }
 
 func (t *tun) Close() error {
-	if t.ReadWriteCloser != nil {
-		return t.ReadWriteCloser.Close()
+	if t.f != nil {
+		return t.f.Close()
 	}
 	return nil
 }
@@ -502,42 +507,79 @@ func delRoute(prefix netip.Prefix, gateway netroute.Addr) error {
 	return nil
 }
 
+// Read pulls one IP packet off the utun device.
 func (t *tun) Read(to []byte) (int, error) {
-	buf := make([]byte, len(to)+4)
+	var errno syscall.Errno
+	var n uintptr
+	err := t.rc.Read(func(fd uintptr) bool {
+		var head [4]byte
+		iovecs := [2]syscall.Iovec{
+			{Base: &head[0], Len: 4},
+			{Base: &to[0], Len: uint64(len(to))},
+		}
+		n, _, errno = syscall.Syscall(syscall.SYS_READV, fd, uintptr(unsafe.Pointer(&iovecs[0])), 2)
+		// EAGAIN/EWOULDBLOCK: tell the runtime to wait for the fd to be
+		// readable and call us again.
+		if errno.Temporary() {
+			return false
+		}
+		return true
+	})
+	if err != nil {
+		if err == syscall.EBADF || err.Error() == "use of closed file" {
+			return 0, os.ErrClosed
+		}
+		return 0, fmt.Errorf("failed to make read call for tun: %w", err)
+	}
+	if errno != 0 {
+		return 0, fmt.Errorf("failed to make inner read call for tun: %w", errno)
+	}
 
-	n, err := t.ReadWriteCloser.Read(buf)
-
-	copy(to, buf[4:])
-	return n - 4, err
+	bytesRead := int(n)
+	if bytesRead < 4 {
+		return 0, nil
+	}
+	return bytesRead - 4, nil
 }
 
-// Write is only valid for single threaded use
+// Write pushes one IP packet onto the utun device.
 func (t *tun) Write(from []byte) (int, error) {
-	buf := t.out
-	if cap(buf) < len(from)+4 {
-		buf = make([]byte, len(from)+4)
-		t.out = buf
-	}
-	buf = buf[:len(from)+4]
-
 	if len(from) == 0 {
 		return 0, syscall.EIO
 	}
 
-	// Determine the IP Family for the NULL L2 Header
 	ipVer := from[0] >> 4
-	if ipVer == 4 {
-		buf[3] = syscall.AF_INET
-	} else if ipVer == 6 {
-		buf[3] = syscall.AF_INET6
-	} else {
+	var head [4]byte
+	switch ipVer {
+	case 4:
+		head[3] = syscall.AF_INET
+	case 6:
+		head[3] = syscall.AF_INET6
+	default:
 		return 0, fmt.Errorf("unable to determine IP version from packet")
 	}
 
-	copy(buf[4:], from)
+	var errno syscall.Errno
+	var n uintptr
+	err := t.rc.Write(func(fd uintptr) bool {
+		iovecs := [2]syscall.Iovec{
+			{Base: &head[0], Len: 4},
+			{Base: &from[0], Len: uint64(len(from))},
+		}
+		n, _, errno = syscall.Syscall(syscall.SYS_WRITEV, fd, uintptr(unsafe.Pointer(&iovecs[0])), 2)
+		if errno.Temporary() {
+			return false
+		}
+		return true
+	})
+	if err != nil {
+		return 0, err
+	}
+	if errno != 0 {
+		return 0, errno
+	}
 
-	n, err := t.ReadWriteCloser.Write(buf)
-	return n - 4, err
+	return int(n) - 4, nil
 }
 
 func (t *tun) Networks() []netip.Prefix {
