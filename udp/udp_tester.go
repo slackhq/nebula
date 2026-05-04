@@ -21,15 +21,46 @@ type Packet struct {
 	Data []byte
 }
 
+// Copy returns a fresh *Packet (from the freelist) with a duplicate Data buffer.
 func (u *Packet) Copy() *Packet {
-	n := &Packet{
-		To:   u.To,
-		From: u.From,
-		Data: make([]byte, len(u.Data)),
+	n := acquirePacket()
+	n.To = u.To
+	n.From = u.From
+	if cap(n.Data) < len(u.Data) {
+		n.Data = make([]byte, len(u.Data))
+	} else {
+		n.Data = n.Data[:len(u.Data)]
 	}
-
 	copy(n.Data, u.Data)
 	return n
+}
+
+// Release returns p to the harness packet freelist.
+// Callers that pull a *Packet from Get / TxPackets must Release when done.
+// Channel-backed instead of sync.Pool because sync.Pool's per-P caches drain badly under cross-goroutine Get/Put,
+// and putting a []byte in a Pool escapes the slice header to heap.
+func (p *Packet) Release() {
+	if p == nil {
+		return
+	}
+	p.Data = p.Data[:0]
+	select {
+	case packetFreelist <- p:
+	default:
+		// Freelist full; drop the *Packet for the GC.
+	}
+}
+
+// packetFreelist retains *Packet structs (and their backing Data arrays) so steady-state allocation drops to zero.
+var packetFreelist = make(chan *Packet, 64)
+
+func acquirePacket() *Packet {
+	select {
+	case p := <-packetFreelist:
+		return p
+	default:
+		return &Packet{}
+	}
 }
 
 type TesterConn struct {
@@ -64,13 +95,15 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, _ bool, _ int) (Conn, 
 // this is an encrypted packet or a handshake message in most cases
 // packets were transmitted from another nebula node, you can send them with Tun.Send
 func (u *TesterConn) Send(packet *Packet) {
-	h := &header.H{}
-	if err := h.Parse(packet.Data); err != nil {
-		panic(err)
-	}
 	if u.l.Enabled(context.Background(), slog.LevelDebug) {
+		// Parse the header only under debug logging, otherwise the
+		// allocation would show up in every Send call.
+		var h header.H
+		if err := h.Parse(packet.Data); err != nil {
+			panic(err)
+		}
 		u.l.Debug("UDP receiving injected packet",
-			"header", h,
+			"header", &h,
 			"udpAddr", packet.From,
 			"dataLen", len(packet.Data),
 		)
@@ -107,15 +140,18 @@ func (u *TesterConn) Get(block bool) *Packet {
 //********************************************************************************************************************//
 
 func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
-	p := &Packet{
-		Data: make([]byte, len(b), len(b)),
-		From: u.Addr,
-		To:   addr,
+	p := acquirePacket()
+	if cap(p.Data) < len(b) {
+		p.Data = make([]byte, len(b))
+	} else {
+		p.Data = p.Data[:len(b)]
 	}
-
 	copy(p.Data, b)
+	p.From = u.Addr
+	p.To = addr
 	select {
 	case <-u.done:
+		p.Release()
 		return io.ErrClosedPipe
 	case u.TxPackets <- p:
 		return nil
@@ -129,6 +165,7 @@ func (u *TesterConn) ListenOut(r EncReader) error {
 			return os.ErrClosed
 		case p := <-u.RxPackets:
 			r(p.From, p.Data)
+			p.Release()
 		}
 	}
 }
