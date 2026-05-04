@@ -24,7 +24,6 @@ import (
 
 type tun struct {
 	f           *os.File
-	rc          syscall.RawConn
 	Device      string
 	vpnNetworks []netip.Prefix
 	DefaultMTU  int
@@ -121,15 +120,8 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		return nil, fmt.Errorf("SetNonblock: %v", err)
 	}
 
-	f := os.NewFile(uintptr(fd), "")
-	rc, err := f.SyscallConn()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get syscall conn for tun: %w", err)
-	}
-
 	t := &tun{
-		f:           f,
-		rc:          rc,
+		f:           os.NewFile(uintptr(fd), ""),
 		Device:      name,
 		vpnNetworks: vpnNetworks,
 		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
@@ -509,9 +501,15 @@ func delRoute(prefix netip.Prefix, gateway netroute.Addr) error {
 
 // Read pulls one IP packet off the utun device.
 func (t *tun) Read(to []byte) (int, error) {
+	// Grab rc as a local so the compiler can devirtualize the call and keep the closure on the stack.
+	rc, err := t.f.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+
 	var errno syscall.Errno
 	var n uintptr
-	err := t.rc.Read(func(fd uintptr) bool {
+	err = rc.Read(func(fd uintptr) bool {
 		var head [4]byte
 		iovecs := [2]syscall.Iovec{
 			{Base: &head[0], Len: 4},
@@ -529,10 +527,10 @@ func (t *tun) Read(to []byte) (int, error) {
 		if err == syscall.EBADF || err.Error() == "use of closed file" {
 			return 0, os.ErrClosed
 		}
-		return 0, fmt.Errorf("failed to make read call for tun: %w", err)
+		return 0, err
 	}
 	if errno != 0 {
-		return 0, fmt.Errorf("failed to make inner read call for tun: %w", errno)
+		return 0, errno
 	}
 
 	bytesRead := int(n)
@@ -559,9 +557,14 @@ func (t *tun) Write(from []byte) (int, error) {
 		return 0, fmt.Errorf("unable to determine IP version from packet")
 	}
 
+	rc, err := t.f.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+
 	var errno syscall.Errno
 	var n uintptr
-	err := t.rc.Write(func(fd uintptr) bool {
+	err = rc.Write(func(fd uintptr) bool {
 		iovecs := [2]syscall.Iovec{
 			{Base: &head[0], Len: 4},
 			{Base: &from[0], Len: uint64(len(from))},
