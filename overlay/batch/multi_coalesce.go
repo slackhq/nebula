@@ -1,6 +1,7 @@
 package batch
 
 import (
+	"errors"
 	"io"
 )
 
@@ -60,16 +61,12 @@ func (m *MultiCoalescer) Reserve(sz int) []byte {
 }
 
 // Commit dispatches pkt to the appropriate lane based on IP version + L4
-// proto. Borrowed slice contract is identical to the single-lane batchers
-// — pkt must remain valid until the next Flush.
+// proto. Borrowed slice contract is identical to the single-lane batchers,
+// pkt must remain valid until the next Flush.
 //
 // On the success path the IP/TCP-or-UDP parse happens here once and the
 // parsed struct is handed to the lane via commitParsed so the lane doesn't
-// re-walk the header. On a parse failure we fall through to the lane's
-// public Commit, which re-runs the parse before passthrough — that path
-// only fires for malformed/unsupported packets so the duplicated parse is
-// not on the hot path. The lane's public Commit still works for direct
-// callers.
+// re-walk the header.
 func (m *MultiCoalescer) Commit(pkt []byte) error {
 	if len(pkt) < 20 {
 		return m.pt.Commit(pkt)
@@ -92,9 +89,10 @@ func (m *MultiCoalescer) Commit(pkt []byte) error {
 		if m.tcp != nil {
 			info, ok := parseTCPBase(pkt)
 			if !ok {
-				// Malformed/unsupported TCP shape (IP options, fragments, ...)
-				// — the TCP lane handles this as passthrough.
-				return m.tcp.Commit(pkt)
+				// Malformed/unsupported TCP shape (IP options, fragments, ...).
+				// Handle this via passthrough support in the TCP coalescer, to attempt to preserve flow order.
+				m.tcp.addPassthrough(pkt)
+				return nil
 			}
 			return m.tcp.commitParsed(pkt, info)
 		}
@@ -102,7 +100,8 @@ func (m *MultiCoalescer) Commit(pkt []byte) error {
 		if m.udp != nil {
 			info, ok := parseUDP(pkt)
 			if !ok {
-				return m.udp.Commit(pkt)
+				m.udp.addPassthrough(pkt) //we could also m.pt.Commit() here I guess?
+				return nil
 			}
 			return m.udp.commitParsed(pkt, info)
 		}
@@ -111,23 +110,24 @@ func (m *MultiCoalescer) Commit(pkt []byte) error {
 }
 
 // Flush drains every lane in a fixed order: TCP, UDP, passthrough. Errors
-// from a lane do not stop subsequent lanes from flushing — we keep
+// from a lane do not stop subsequent lanes from flushing, we keep
 // draining and return the first observed error so a single bad packet
 // doesn't strand the others.
 func (m *MultiCoalescer) Flush() error {
-	var first error
-	keep := func(err error) {
-		if err != nil && first == nil {
-			first = err
+	var errs []error
+	if m.tcp != nil {
+		if err := m.tcp.Flush(); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	if m.tcp != nil {
-		keep(m.tcp.Flush())
-	}
 	if m.udp != nil {
-		keep(m.udp.Flush())
+		if err := m.udp.Flush(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	keep(m.pt.Flush())
+	if err := m.pt.Flush(); err != nil {
+		errs = append(errs, err)
+	}
 	m.backing = m.backing[:0]
-	return first
+	return errors.Join(errs...)
 }
