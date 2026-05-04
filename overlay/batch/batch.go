@@ -22,7 +22,7 @@ type TxBatcher interface {
 	// to leave the outer ECN field unset.
 	Commit(pkt []byte, dst netip.AddrPort, outerECN byte)
 	// Flush emits every queued packet via the underlying batch writer in
-	// arrival order. Returns the first error observed. After Flush returns,
+	// arrival order. Returns an errors.Join of one or more errors. After Flush returns,
 	// borrowed payload slices may be recycled.
 	Flush() error
 }
