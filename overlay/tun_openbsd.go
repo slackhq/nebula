@@ -57,7 +57,6 @@ type tun struct {
 	l           *slog.Logger
 	f           *os.File
 	fd          int
-	rc          syscall.RawConn
 
 	// readBuf is the per-tun read scratch reused across calls so we don't allocate per Read.
 	// OpenBSD's pinsyscall protection forbids raw syscall.Syscall(SYS_READV, ...) and stdlib doesn't keep syscall.readv
@@ -95,16 +94,9 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 	}
 
 	mtu := c.GetInt("tun.mtu", DefaultMTU)
-	f := os.NewFile(uintptr(fd), "")
-	rc, err := f.SyscallConn()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get syscall conn for tun: %w", err)
-	}
-
 	t := &tun{
-		f:           f,
+		f:           os.NewFile(uintptr(fd), ""),
 		fd:          fd,
-		rc:          rc,
 		Device:      deviceName,
 		vpnNetworks: vpnNetworks,
 		MTU:         mtu,
@@ -186,15 +178,23 @@ func (t *tun) Write(from []byte) (int, error) {
 		return 0, fmt.Errorf("unable to determine IP version from packet")
 	}
 
+	// Grab rc as a local so the compiler can devirtualize the call and keep the closure on the stack.
+	rc, err := t.f.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+
 	var n uintptr
 	var callErr error
-	err := t.rc.Write(func(fd uintptr) bool {
+	err = rc.Write(func(fd uintptr) bool {
 		iovecs := []syscall.Iovec{
 			{Base: &head[0], Len: 4},
 			{Base: &from[0], Len: uint64(len(from))},
 		}
 		n, callErr = tunWritev(int(fd), iovecs)
-		if errors.Is(callErr, syscall.EAGAIN) || errors.Is(callErr, syscall.EWOULDBLOCK) || errors.Is(callErr, syscall.EINTR) {
+		// Type-assert to syscall.Errno so the EAGAIN/EWOULDBLOCK/EINTR check doesn't box the errno
+		// constants into error interfaces on every call.
+		if errno, ok := callErr.(syscall.Errno); ok && errno.Temporary() {
 			return false
 		}
 		return true
