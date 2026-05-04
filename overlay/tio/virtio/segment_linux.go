@@ -14,7 +14,8 @@ import (
 	"fmt"
 
 	"golang.org/x/sys/unix"
-	"gvisor.dev/gvisor/pkg/tcpip/checksum"
+
+	"github.com/slackhq/nebula/overlay/checksum"
 )
 
 // Protocol header size bounds used to validate / cap kernel-supplied offsets.
