@@ -111,7 +111,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		hostinfo.logger(f.l).Error("Failed to decrypt packet",
 			"error", err,
 			"from", via,
-			"packet", packet,
+			"header", h,
 		)
 		return
 	}
