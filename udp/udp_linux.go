@@ -73,6 +73,21 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 	return out, nil
 }
 
+// EnablePathMTUDiscovery sets IP_MTU_DISCOVER=IP_PMTUDISC_PROBE (IPV6 equivalent
+// for v6 sockets). This sets the don't-fragment bit on every outbound packet but
+// tells the kernel not to consume incoming ICMP frag-needed for its own PMTU
+// cache; we drive PMTU discovery from the application via authenticated probes
+// (RFC 8899). Called by the pmtud manager when PMTUD is enabled. Without this
+// call the socket retains nebula's historical behavior (no DF, kernel may
+// fragment), preserving compatibility with deployments that depend on UDP
+// fragmentation.
+func (u *StdConn) EnablePathMTUDiscovery() error {
+	if u.isV4 {
+		return u.setSockOptIPInt(unix.IPPROTO_IP, unix.IP_MTU_DISCOVER, unix.IP_PMTUDISC_PROBE)
+	}
+	return u.setSockOptIPInt(unix.IPPROTO_IPV6, unix.IPV6_MTU_DISCOVER, unix.IPV6_PMTUDISC_PROBE)
+}
+
 func (u *StdConn) SupportsMultipleReaders() bool {
 	return true
 }
@@ -103,6 +118,21 @@ func (u *StdConn) setSockOptInt(opt int, n int) error {
 	var opErr error
 	err := u.rawConn.Control(func(fd uintptr) {
 		opErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, opt, n)
+	})
+	if err != nil {
+		return err
+	}
+	return opErr
+}
+
+// setSockOptIPInt sets a socket option at a non-SOL_SOCKET level (e.g. IPPROTO_IP).
+func (u *StdConn) setSockOptIPInt(level, opt, n int) error {
+	if u.rawConn == nil {
+		return fmt.Errorf("no UDP connection")
+	}
+	var opErr error
+	err := u.rawConn.Control(func(fd uintptr) {
+		opErr = unix.SetsockoptInt(int(fd), level, opt, n)
 	})
 	if err != nil {
 		return err

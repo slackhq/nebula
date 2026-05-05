@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/netip"
 	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
 func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
@@ -43,4 +45,28 @@ func NewListenConfig(multi bool) net.ListenConfig {
 
 func (u *GenericConn) Rebind() error {
 	return nil
+}
+
+// Windows IP_DONTFRAGMENT and IPV6_DONTFRAG are not exposed in the
+// golang.org/x/sys/windows package. Defined locally per the values in
+// ws2ipdef.h / ws2tcpip.h. These are stable Win32 constants that have not
+// changed since at least Windows Vista.
+const (
+	winIPDontFragment = 14
+	winIPv6DontFrag   = 14
+)
+
+// EnablePathMTUDiscovery sets the don't-fragment bit on outbound packets.
+// Windows uses IP_DONTFRAGMENT (v4) and IPV6_DONTFRAG (v6) at IPPROTO_IP /
+// IPPROTO_IPV6 respectively. Note: this only enables DF on the GenericConn
+// fallback path. The RIO path (RIOConn) has its own EnablePathMTUDiscovery
+// in udp_rio_windows.go and is currently a no-op pending RIO-specific work.
+func (u *GenericConn) EnablePathMTUDiscovery() error {
+	v4 := u.isV4Socket()
+	return u.controlFD(func(fd uintptr) error {
+		if v4 {
+			return windows.SetsockoptInt(windows.Handle(fd), windows.IPPROTO_IP, winIPDontFragment, 1)
+		}
+		return windows.SetsockoptInt(windows.Handle(fd), windows.IPPROTO_IPV6, winIPv6DontFrag, 1)
+	})
 }

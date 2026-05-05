@@ -47,3 +47,8 @@ func NewListenConfig(multi bool) net.ListenConfig {
 func (u *GenericConn) Rebind() error {
 	return nil
 }
+
+// EnablePathMTUDiscovery is split into per-OS files: udp_freebsd.go handles
+// FreeBSD (which has both IP_DONTFRAG and IPV6_DONTFRAG in the unix package);
+// udp_openbsd.go handles OpenBSD (v6 only; the kernel doesn't expose a v4 DF
+// sockopt).

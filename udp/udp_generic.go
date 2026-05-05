@@ -100,3 +100,41 @@ func (u *GenericConn) ListenOut(r EncReader) error {
 func (u *GenericConn) SupportsMultipleReaders() bool {
 	return false
 }
+
+// EnablePathMTUDiscovery is implemented per-platform alongside Rebind, in
+// udp_android.go / udp_bsd.go / udp_netbsd.go / udp_windows.go.
+
+// controlFD invokes f with the underlying UDP socket file descriptor (or
+// handle, on Windows). Used by platform files for setsockopt calls that the
+// stdlib net.UDPConn does not expose directly.
+func (u *GenericConn) controlFD(f func(fd uintptr) error) error {
+	rc, err := u.UDPConn.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var sockErr error
+	err = rc.Control(func(fd uintptr) {
+		sockErr = f(fd)
+	})
+	if err != nil {
+		return err
+	}
+	return sockErr
+}
+
+// isV4Socket reports whether the local bind address looks like an IPv4 socket.
+// Used by EnablePathMTUDiscovery to pick IPPROTO_IP vs IPPROTO_IPV6 socket
+// options. Assumes pure-v4 or pure-v6 sockets; a dual-stack v6 socket bound to
+// :: will be treated as v6 (correct: setting IPV6_DONTFRAG covers v4-mapped
+// traffic too on most stacks).
+func (u *GenericConn) isV4Socket() bool {
+	la := u.UDPConn.LocalAddr()
+	if la == nil {
+		return false
+	}
+	ua, ok := la.(*net.UDPAddr)
+	if !ok {
+		return false
+	}
+	return ua.IP.To4() != nil
+}

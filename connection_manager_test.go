@@ -67,6 +67,8 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	punchy := NewPunchyFromConfig(test.NewLogger(), conf)
 	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
 	nc.intf = ifce
+	ifce.pmtudManager = newPMTUDManagerFromConfig(test.NewLogger(), conf, ifce.inside)
+	ifce.pmtudManager.intf = ifce
 	p := []byte("")
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)
@@ -149,6 +151,8 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	punchy := NewPunchyFromConfig(test.NewLogger(), conf)
 	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
 	nc.intf = ifce
+	ifce.pmtudManager = newPMTUDManagerFromConfig(test.NewLogger(), conf, ifce.inside)
+	ifce.pmtudManager.intf = ifce
 	p := []byte("")
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)
@@ -361,6 +365,8 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	punchy := NewPunchyFromConfig(test.NewLogger(), conf)
 	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
 	nc.intf = ifce
+	ifce.pmtudManager = newPMTUDManagerFromConfig(test.NewLogger(), conf, ifce.inside)
+	ifce.pmtudManager.intf = ifce
 	ifce.connectionManager = nc
 
 	hostinfo := &HostInfo{

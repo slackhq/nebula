@@ -106,6 +106,14 @@ func (t *disabledTun) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
+func (t *disabledTun) SupportsPerPeerMTU() bool {
+	return false
+}
+
+func (t *disabledTun) SetPeerMTU(addr netip.Addr, mtu int) error {
+	return nil
+}
+
 func (t *disabledTun) SupportsMultiqueue() bool {
 	return true
 }

@@ -34,6 +34,7 @@ type InterfaceConfig struct {
 	HandshakeManager   *HandshakeManager
 	lightHouse         *LightHouse
 	connectionManager  *connectionManager
+	pmtudManager       *pmtudManager
 	DropLocalBroadcast bool
 	DropMulticast      bool
 	routines           int
@@ -57,6 +58,7 @@ type Interface struct {
 	pki                   *PKI
 	firewall              *Firewall
 	connectionManager     *connectionManager
+	pmtudManager          *pmtudManager
 	handshakeManager      *HandshakeManager
 	dnsServer             *dnsServer
 	createTime            time.Time
@@ -195,6 +197,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		myBroadcastAddrsTable: cs.myVpnBroadcastAddrsTable,
 		relayManager:          c.relayManager,
 		connectionManager:     c.connectionManager,
+		pmtudManager:          c.pmtudManager,
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
@@ -212,6 +215,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 	ifce.reQueryWait.Store(int64(c.reQueryWait))
 
 	ifce.connectionManager.intf = ifce
+	ifce.pmtudManager.intf = ifce
 
 	return ifce, nil
 }

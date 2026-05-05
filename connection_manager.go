@@ -145,6 +145,7 @@ func (cm *connectionManager) getAndResetTrafficCheck(h *HostInfo, now time.Time)
 func (cm *connectionManager) AddTrafficWatch(h *HostInfo) {
 	if h.out.Swap(true) == false {
 		cm.trafficTimer.Add(h.localIndexId, cm.checkInterval)
+		cm.intf.pmtudManager.OnTunnelUp(h)
 	}
 }
 
@@ -180,6 +181,7 @@ func (cm *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte
 
 	switch decision {
 	case deleteTunnel:
+		cm.intf.pmtudManager.OnTunnelDown(hostinfo)
 		if cm.hostMap.DeleteHostInfo(hostinfo) {
 			// Only clearing the lighthouse cache if this is the last hostinfo for this vpn ip in the hostmap
 			cm.intf.lightHouse.DeleteVpnAddrs(hostinfo.vpnAddrs)
@@ -199,7 +201,14 @@ func (cm *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte
 		cm.tryRehandshake(hostinfo)
 
 	case sendTestPacket:
-		cm.intf.SendMessageToHostInfo(header.Test, header.TestRequest, hostinfo, p, nb, out)
+		// Defer to pmtud if it has a confirmed PMTU > floor for this peer:
+		// the probe at the confirmed size verifies both liveness AND that
+		// the discovered PMTU still fits, so we don't burn a separate test
+		// packet on top of it. If pmtud declines (disabled, peer unsupported,
+		// or no confirmed size yet) we fall back to the regular test.
+		if !cm.intf.pmtudManager.MaybeProbeAsTest(hostinfo) {
+			cm.intf.SendMessageToHostInfo(header.Test, header.TestRequest, hostinfo, p, nb, out)
+		}
 	}
 
 	cm.resetRelayTrafficCheck(hostinfo)

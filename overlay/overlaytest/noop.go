@@ -39,6 +39,14 @@ func (NoopTun) Write([]byte) (int, error) {
 	return 0, nil
 }
 
+func (NoopTun) SupportsPerPeerMTU() bool {
+	return false
+}
+
+func (NoopTun) SetPeerMTU(addr netip.Addr, mtu int) error {
+	return nil
+}
+
 func (NoopTun) SupportsMultiqueue() bool {
 	return false
 }

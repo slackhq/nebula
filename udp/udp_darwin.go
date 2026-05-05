@@ -187,6 +187,17 @@ func (u *StdConn) SupportsMultipleReaders() bool {
 	return false
 }
 
+// EnablePathMTUDiscovery sets the don't-fragment bit on every outbound packet.
+// On darwin we use IP_DONTFRAG (v4) / IPV6_DONTFRAG (v6). The kernel will return
+// EMSGSIZE for sends that exceed the local interface MTU; ICMP-driven PMTU
+// updates from upstream routers are processed by the kernel as usual.
+func (u *StdConn) EnablePathMTUDiscovery() error {
+	if u.isV4 {
+		return syscall.SetsockoptInt(int(u.sysFd), syscall.IPPROTO_IP, unix.IP_DONTFRAG, 1)
+	}
+	return syscall.SetsockoptInt(int(u.sysFd), syscall.IPPROTO_IPV6, unix.IPV6_DONTFRAG, 1)
+}
+
 func (u *StdConn) Rebind() error {
 	var err error
 	if u.isV4 {
