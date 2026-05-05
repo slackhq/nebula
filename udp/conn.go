@@ -20,6 +20,12 @@ type Conn interface {
 	WriteTo(b []byte, addr netip.AddrPort) error
 	ReloadConfig(c *config.C)
 	SupportsMultipleReaders() bool
+	// EnablePathMTUDiscovery sets the don't-fragment bit on outgoing packets for
+	// this socket. Called by the pmtud manager when PMTUD is enabled. A no-op on
+	// platforms that don't support it; nebula's default behavior (no DF, kernel
+	// fragmentation allowed) is preserved on those platforms and on this one when
+	// PMTUD is disabled.
+	EnablePathMTUDiscovery() error
 	Close() error
 }
 
@@ -42,6 +48,9 @@ func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {
 }
 func (NoopConn) ReloadConfig(_ *config.C) {
 	return
+}
+func (NoopConn) EnablePathMTUDiscovery() error {
+	return nil
 }
 func (NoopConn) Close() error {
 	return nil

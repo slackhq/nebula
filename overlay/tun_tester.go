@@ -111,6 +111,14 @@ func (t *TestTun) Name() string {
 	return t.Device
 }
 
+func (t *TestTun) SupportsPerPeerMTU() bool {
+	return false
+}
+
+func (t *TestTun) SetPeerMTU(addr netip.Addr, mtu int) error {
+	return nil
+}
+
 func (t *TestTun) Write(b []byte) (n int, err error) {
 	if t.closed.Load() {
 		return 0, io.ErrClosedPipe

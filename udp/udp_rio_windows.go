@@ -335,6 +335,12 @@ func (u *RIOConn) Rebind() error {
 	return nil
 }
 
+// EnablePathMTUDiscovery is a no-op on Windows for now. PMTUD is Linux-only in
+// the initial PoC; Windows support would set IP_DONTFRAGMENT here.
+func (u *RIOConn) EnablePathMTUDiscovery() error {
+	return nil
+}
+
 func (u *RIOConn) ReloadConfig(*config.C) {}
 
 func (u *RIOConn) Close() error {

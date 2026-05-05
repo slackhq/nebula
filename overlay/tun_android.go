@@ -95,6 +95,14 @@ func (t *tun) Name() string {
 	return "android"
 }
 
+func (t *tun) SupportsPerPeerMTU() bool {
+	return false
+}
+
+func (t *tun) SetPeerMTU(addr netip.Addr, mtu int) error {
+	return nil
+}
+
 func (t *tun) SupportsMultiqueue() bool {
 	return false
 }

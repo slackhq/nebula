@@ -368,6 +368,13 @@ func (t *tun) reload(c *config.C, initial bool) error {
 		}
 	}
 
+	// tun.max_mtu raises the device MTU above tun.mtu so PMTUD has headroom to
+	// install per-peer routes between tun.mtu (floor) and tun.max_mtu (ceiling).
+	// When unset (default 0) the device MTU is unchanged from existing behavior.
+	if pmtudCeiling := c.GetInt("tun.max_mtu", 0); pmtudCeiling > newMaxMTU {
+		newMaxMTU = pmtudCeiling
+	}
+
 	t.MaxMTU = newMaxMTU
 	t.DefaultMTU = newDefaultMTU
 
@@ -596,7 +603,7 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 		LinkIndex: t.deviceIndex,
 		Dst:       dr,
 		MTU:       t.DefaultMTU,
-		AdvMSS:    t.advMSS(Route{}),
+		AdvMSS:    t.advMSS(Route{Cidr: cidr}),
 		Scope:     unix.RT_SCOPE_LINK,
 		Src:       net.IP(cidr.Addr().AsSlice()),
 		Protocol:  unix.RTPROT_KERNEL,
@@ -705,17 +712,68 @@ func (t *tun) Name() string {
 	return t.Device
 }
 
+func (t *tun) SupportsPerPeerMTU() bool {
+	return true
+}
+
+// SetPeerMTU installs a host route (/32 for an IPv4 vpn address, /128 for an IPv6
+// vpn address) to addr through this tun device with the given MTU. This causes
+// the kernel to reject (or surface PTB to apps for) inside packets to addr that
+// would exceed mtu. Pass mtu=0 to remove the override and let the per-vpn-network
+// route apply again. PoC: assumes addr is reachable directly via this device.
+func (t *tun) SetPeerMTU(addr netip.Addr, mtu int) error {
+	bits := addr.BitLen()
+	prefix := netip.PrefixFrom(addr, bits)
+
+	dr := &net.IPNet{
+		IP:   addr.AsSlice(),
+		Mask: net.CIDRMask(bits, bits),
+	}
+
+	if mtu == 0 {
+		nr := netlink.Route{
+			LinkIndex: t.deviceIndex,
+			Dst:       dr,
+			Scope:     unix.RT_SCOPE_LINK,
+		}
+		if err := netlink.RouteDel(&nr); err != nil {
+			return fmt.Errorf("failed to remove per-peer mtu route %v: %w", prefix, err)
+		}
+		return nil
+	}
+
+	nr := netlink.Route{
+		LinkIndex: t.deviceIndex,
+		Dst:       dr,
+		MTU:       mtu,
+		AdvMSS:    t.advMSS(Route{Cidr: prefix, MTU: mtu}),
+		Scope:     unix.RT_SCOPE_LINK,
+	}
+	if err := netlink.RouteReplace(&nr); err != nil {
+		return fmt.Errorf("failed to set per-peer mtu route %v mtu=%d: %w", prefix, mtu, err)
+	}
+	return nil
+}
+
 func (t *tun) advMSS(r Route) int {
 	mtu := r.MTU
 	if r.MTU == 0 {
 		mtu = t.DefaultMTU
 	}
 
-	// We only need to set advmss if the route MTU does not match the device MTU
-	if mtu != t.MaxMTU {
-		return mtu - 40
+	// We only need to set advmss if the route MTU does not match the device MTU.
+	if mtu == t.MaxMTU {
+		return 0
 	}
-	return 0
+
+	// MSS = MTU - (IP header + TCP header). TCP is always 20 bytes; IP is 20 for
+	// v4 and 40 for v6. r.Cidr is the route destination so it tells us which
+	// family this route is in. If Cidr is unset (empty Route) we default to v4.
+	addr := r.Cidr.Addr()
+	if addr.Is6() && !addr.Is4In6() {
+		return mtu - 60
+	}
+	return mtu - 40
 }
 
 func (t *tun) watchRoutes() {

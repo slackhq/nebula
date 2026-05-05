@@ -189,6 +189,10 @@ func (u *TesterConn) Rebind() error {
 	return nil
 }
 
+func (u *TesterConn) EnablePathMTUDiscovery() error {
+	return nil
+}
+
 func (u *TesterConn) Close() error {
 	u.closeOnce.Do(func() {
 		close(u.done)

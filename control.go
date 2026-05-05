@@ -54,6 +54,7 @@ type Control struct {
 	dnsStart               func()
 	lighthouseStart        func()
 	connectionManagerStart func(context.Context)
+	pmtudManagerStart      func(context.Context)
 }
 
 type ControlHostInfo struct {
@@ -106,6 +107,9 @@ func (c *Control) Start() (func() error, error) {
 	}
 	if c.connectionManagerStart != nil {
 		go c.connectionManagerStart(c.ctx)
+	}
+	if c.pmtudManagerStart != nil {
+		go c.pmtudManagerStart(c.ctx)
 	}
 	if c.lighthouseStart != nil {
 		c.lighthouseStart()

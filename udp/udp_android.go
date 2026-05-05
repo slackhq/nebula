@@ -44,3 +44,17 @@ func NewListenConfig(multi bool) net.ListenConfig {
 func (u *GenericConn) Rebind() error {
 	return nil
 }
+
+// EnablePathMTUDiscovery sets the don't-fragment bit on outbound packets.
+// Android is Linux underneath, so we use IP_PMTUDISC_PROBE (kernel sets DF but
+// does not consume incoming ICMP frag-needed for its PMTU cache; the manager
+// drives discovery via authenticated probes).
+func (u *GenericConn) EnablePathMTUDiscovery() error {
+	v4 := u.isV4Socket()
+	return u.controlFD(func(fd uintptr) error {
+		if v4 {
+			return unix.SetsockoptInt(int(fd), unix.IPPROTO_IP, unix.IP_MTU_DISCOVER, unix.IP_PMTUDISC_PROBE)
+		}
+		return unix.SetsockoptInt(int(fd), unix.IPPROTO_IPV6, unix.IPV6_MTU_DISCOVER, unix.IPV6_PMTUDISC_PROBE)
+	})
+}

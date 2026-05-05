@@ -172,6 +172,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	hostMap := NewHostMapFromConfig(l, c)
 	punchy := NewPunchyFromConfig(l, c)
 	connManager := newConnectionManagerFromConfig(l, c, hostMap, punchy)
+	pmtudMgr := newPMTUDManagerFromConfig(l, c, tun)
 	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, pki.getCertState(), udpConns[0], punchy)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to initialize lighthouse handler", err)
@@ -208,6 +209,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		DnsServer:             ds,
 		HandshakeManager:      handshakeManager,
 		connectionManager:     connManager,
+		pmtudManager:          pmtudMgr,
 		lightHouse:            lightHouse,
 		tryPromoteEvery:       c.GetUint32("counters.try_promote", defaultPromoteEvery),
 		reQueryEvery:          c.GetUint32("counters.requery_every_packets", defaultReQueryEvery),
@@ -266,6 +268,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		dnsStart:               ds.Start,
 		lighthouseStart:        lightHouse.StartUpdateWorker,
 		connectionManagerStart: connManager.Start,
+		pmtudManagerStart:      pmtudMgr.Start,
 	}, nil
 }
 

@@ -229,6 +229,14 @@ func (t *winTun) Name() string {
 	return t.Device
 }
 
+func (t *winTun) SupportsPerPeerMTU() bool {
+	return false
+}
+
+func (t *winTun) SetPeerMTU(addr netip.Addr, mtu int) error {
+	return nil
+}
+
 func (t *winTun) Read(b []byte) (int, error) {
 	return t.tun.Read(b, 0)
 }

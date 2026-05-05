@@ -183,11 +183,20 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 			return
 		}
 
-		if h.Subtype == header.TestRequest {
+		switch h.Subtype {
+		case header.TestRequest:
 			// This testRequest might be from TryPromoteBest, so we should roam
 			// to the new IP address before responding
 			f.handleHostRoaming(hostinfo, via)
 			f.send(header.Test, header.TestReply, ci, hostinfo, d, nb, out)
+		case header.MTUDProbeRequest:
+			// Reply with just the 8-byte ack header so the reverse path doesn't have to
+			// carry the full probe size; we only verify the forward direction.
+			if len(d) >= 8 {
+				f.send(header.Test, header.MTUDProbeReply, ci, hostinfo, d[:8], nb, out)
+			}
+		case header.MTUDProbeReply:
+			f.pmtudManager.HandleReply(hostinfo.localIndexId, d)
 		}
 
 		// Fallthrough to the bottom to record incoming traffic
@@ -257,6 +266,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 // closeTunnel closes a tunnel locally, it does not send a closeTunnel packet to the remote
 func (f *Interface) closeTunnel(hostInfo *HostInfo) {
+	f.pmtudManager.OnTunnelDown(hostInfo)
 	final := f.hostMap.DeleteHostInfo(hostInfo)
 	if final {
 		// We no longer have any tunnels with this vpn addr, clear learned lighthouse state to lower memory usage
@@ -296,6 +306,7 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
 		hostinfo.lastRoam = time.Now()
 		hostinfo.lastRoamRemote = hostinfo.remote
 		hostinfo.SetRemote(via.UdpAddr)
+		f.pmtudManager.OnRoam(hostinfo)
 	}
 
 }
