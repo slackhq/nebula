@@ -136,6 +136,8 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	case header.Test:
 		switch h.Subtype {
+		case header.TestReply:
+			f.handledEncryptedPacket(hostinfo, via)
 		case header.TestRequest:
 			// This testRequest might be from TryPromoteBest, so we should roam
 			// to the new IP address before responding
