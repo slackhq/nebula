@@ -166,20 +166,27 @@ func (b *Bits) Check(l *slog.Logger, i uint64) bool {
 // consulted. The marker prevents a fictitious "lost" hit on the first real
 // counter.
 func (b *Bits) Update(l *slog.Logger, i uint64) bool {
-	// If i is the next number, return true and update current.
+	// Fast path: i is the next expected counter. Split out so the function
+	// stays small and avoids paying for the slow paths' slog argument-build
+	// stack frame on every call. The bit read/test/write is inlined to
+	// touch the backing word once.
 	if i == b.current+1 {
-		// We are about to occupy the slot whose previous tenant was the bit
-		// for packet (i - length). If that bit was unset and we are past the
-		// warmup window, the previous packet was lost.
-		x := b.get(i)
-		if (i > b.length) && (x == false) {
+		pos := i & b.lengthMask
+		word := pos >> 6
+		mask := uint64(1) << (pos & 63)
+		w := b.bits[word]
+		if i > b.length && w&mask == 0 {
 			b.lostCounter.Inc(1)
 		}
-		b.set(i)
+		b.bits[word] = w | mask
 		b.current = i
 		return true
 	}
+	return b.updateSlow(l, i)
+}
 
+// updateSlow handles jumps, in-window backfill, dupes, and out-of-window.
+func (b *Bits) updateSlow(l *slog.Logger, i uint64) bool {
 	// If i is a jump, adjust the window, record lost, update current, and return true
 	if i > b.current {
 		end := i
@@ -221,7 +228,11 @@ func (b *Bits) Update(l *slog.Logger, i uint64) bool {
 
 	// If i is within the current window but below the current counter, check to see if it's a duplicate
 	if b.strictlyWithinWindow(i) {
-		if b.current == i || b.get(i) {
+		pos := i & b.lengthMask
+		word := pos >> 6
+		mask := uint64(1) << (pos & 63)
+		w := b.bits[word]
+		if b.current == i || w&mask != 0 {
 			if l.Enabled(context.Background(), slog.LevelDebug) {
 				l.Debug("Receive window",
 					"accepted", false,
@@ -234,7 +245,7 @@ func (b *Bits) Update(l *slog.Logger, i uint64) bool {
 			return false
 		}
 
-		b.set(i)
+		b.bits[word] = w | mask
 		return true
 	}
 
