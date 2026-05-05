@@ -174,6 +174,10 @@ func (h *H) SubTypeName() string {
 	return SubTypeName(h.Type, h.Subtype)
 }
 
+func (h *H) IsValidSubType() bool {
+	return IsValidSubType(h.Type, h.Subtype)
+}
+
 // SubTypeName will transform a nebula message sub type into a human string
 func SubTypeName(t MessageType, s MessageSubType) string {
 	if n, ok := subTypeMap[t]; ok {
@@ -183,6 +187,16 @@ func SubTypeName(t MessageType, s MessageSubType) string {
 	}
 
 	return "unknown"
+}
+
+func IsValidSubType(t MessageType, s MessageSubType) bool {
+	if n, ok := subTypeMap[t]; ok {
+		if _, ok := (*n)[s]; ok {
+			return true
+		}
+	}
+
+	return false
 }
 
 // NewHeader turns bytes into a header
