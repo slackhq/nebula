@@ -116,14 +116,15 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		return
 	}
 
+	// Roam before we respond
+	f.handleHostRoaming(hostinfo, via)
+	f.connectionManager.In(hostinfo)
+
 	switch h.Type {
 	case header.Message:
 		switch h.Subtype {
 		case header.MessageNone:
-			if !f.handleOutsideMessagePacket(hostinfo, out, packet, fwPacket, nb, q, localCache) {
-				return
-			}
-			f.handledEncryptedPacket(hostinfo, via)
+			f.handleOutsideMessagePacket(hostinfo, out, packet, fwPacket, nb, q, localCache)
 		default:
 			hostinfo.logger(f.l).Debug("Unexpected message subtype received", "from", via)
 			return
@@ -132,18 +133,16 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	case header.LightHouse:
 		//TODO: assert via is not relayed
 		lhf.HandleRequest(via.UdpAddr, hostinfo.vpnAddrs, out, f)
-		f.handledEncryptedPacket(hostinfo, via)
 
 	case header.Test:
 		switch h.Subtype {
 		case header.TestReply:
-			f.handledEncryptedPacket(hostinfo, via)
+			// No-op, useful for the Roaming and connectionManager side-effects above
 		case header.TestRequest:
 			// This testRequest might be from TryPromoteBest, so we should roam
 			// to the new IP address before responding
 			f.handleHostRoaming(hostinfo, via)
 			f.send(header.Test, header.TestReply, ci, hostinfo, out, nb, out)
-			f.handledEncryptedPacket(hostinfo, via)
 		default:
 			hostinfo.logger(f.l).Debug("Unexpected test subtype received", "from", via)
 			return
@@ -151,24 +150,16 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	case header.CloseTunnel:
 		hostinfo.logger(f.l).Info("Close tunnel received, tearing down.", "from", via)
-
 		f.closeTunnel(hostinfo)
-		f.handledEncryptedPacket(hostinfo, via)
 
 	case header.Control:
 		f.relayManager.HandleControlMsg(hostinfo, out, f)
-		f.handledEncryptedPacket(hostinfo, via)
 
 	default:
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("Unexpected packet received", "from", via)
 		}
 	}
-}
-
-func (f *Interface) handledEncryptedPacket(hostinfo *HostInfo, via ViaSender) {
-	f.handleHostRoaming(hostinfo, via)
-	f.connectionManager.In(hostinfo)
 }
 
 func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
@@ -514,14 +505,14 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	return out, nil
 }
 
-func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) bool {
+func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) {
 	err := newPacket(out, true, fwPacket)
 	if err != nil {
 		hostinfo.logger(f.l).Warn("Error while validating inbound packet",
 			"error", err,
 			"packet", out,
 		)
-		return false
+		return
 	}
 
 	dropReason := f.firewall.Drop(*fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
@@ -535,16 +526,13 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, p
 				"reason", dropReason,
 			)
 		}
-		// Return true because the packet was valid, we just blocked it at the
-		// firewall
-		return true
+		return
 	}
 
 	_, err = f.readers[q].Write(out)
 	if err != nil {
 		f.l.Error("Failed to write to tun", "error", err)
 	}
-	return true
 }
 
 func (f *Interface) maybeSendRecvError(endpoint netip.AddrPort, index uint32) {
