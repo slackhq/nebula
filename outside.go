@@ -139,9 +139,6 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		case header.TestReply:
 			// No-op, useful for the Roaming and connectionManager side-effects above
 		case header.TestRequest:
-			// This testRequest might be from TryPromoteBest, so we should roam
-			// to the new IP address before responding
-			f.handleHostRoaming(hostinfo, via)
 			f.send(header.Test, header.TestReply, ci, hostinfo, out, nb, out)
 		default:
 			hostinfo.logger(f.l).Debug("Unexpected test subtype received", "from", via)
