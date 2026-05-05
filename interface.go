@@ -13,6 +13,7 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
+	"github.com/slackhq/nebula/util"
 
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
@@ -387,7 +388,7 @@ func (f *Interface) listenIn(reader tio.Queue, i int) {
 	if n := len(f.cpuAffinity); n > 0 {
 		cpu = f.cpuAffinity[i%n]
 	}
-	if err := pinThreadToCPU(cpu); err != nil {
+	if err := util.PinThreadToCPU(cpu); err != nil {
 		f.l.Warn("failed to pin tun reader to CPU", "queue", i, "cpu", cpu, "err", err)
 	}
 	rejectBuf := make([]byte, mtu)
