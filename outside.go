@@ -34,6 +34,13 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		return
 	}
 
+	if h.Version != header.Version {
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			f.l.Debug("Unexpected header version received", "from", via)
+		}
+		return
+	}
+
 	// Check before processing to see if this is a expected type/subtype
 	if !h.IsValidSubType() {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
