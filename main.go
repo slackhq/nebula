@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"time"
