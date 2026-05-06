@@ -115,11 +115,13 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	out, err = f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 	if err != nil {
-		hostinfo.logger(f.l).Debug("Failed to decrypt packet",
-			"error", err,
-			"from", via,
-			"header", h,
-		)
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("Failed to decrypt packet",
+				"error", err,
+				"from", via,
+				"header", h,
+			)
+		}
 		return
 	}
 

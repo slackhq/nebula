@@ -13,6 +13,8 @@ type MessageMetrics struct {
 
 	rxUnknown metrics.Counter
 	txUnknown metrics.Counter
+
+	rxInvalid metrics.Counter
 }
 
 func (m *MessageMetrics) Rx(t header.MessageType, s header.MessageSubType, i int64) {
@@ -34,8 +36,8 @@ func (m *MessageMetrics) Tx(t header.MessageType, s header.MessageSubType, i int
 	}
 }
 func (m *MessageMetrics) RxInvalid(i int64) {
-	if m != nil && m.rxUnknown != nil {
-		m.rxUnknown.Inc(i)
+	if m != nil && m.rxInvalid != nil {
+		m.rxInvalid.Inc(i)
 	}
 }
 
@@ -61,6 +63,7 @@ func newMessageMetrics() *MessageMetrics {
 
 		rxUnknown: metrics.GetOrRegisterCounter("messages.rx.other", nil),
 		txUnknown: metrics.GetOrRegisterCounter("messages.tx.other", nil),
+		rxInvalid: metrics.GetOrRegisterCounter("messages.rx.invalid", nil),
 	}
 }
 
