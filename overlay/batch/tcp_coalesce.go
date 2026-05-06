@@ -266,13 +266,9 @@ func (c *TCPCoalescer) Flush() error {
 		}
 		c.release(s)
 	}
-	for i := range c.slots {
-		c.slots[i] = nil
-	}
+	clear(c.slots)
 	c.slots = c.slots[:0]
-	for k := range c.openSlots {
-		delete(c.openSlots, k)
-	}
+	clear(c.openSlots)
 	c.lastSlot = nil
 
 	c.backing = c.backing[:0]
@@ -383,9 +379,7 @@ func (c *TCPCoalescer) take() *coalesceSlot {
 func (c *TCPCoalescer) release(s *coalesceSlot) {
 	s.passthrough = false
 	s.rawPkt = nil
-	for i := range s.payIovs {
-		s.payIovs[i] = nil
-	}
+	clear(s.payIovs)
 	s.payIovs = s.payIovs[:0]
 	s.numSeg = 0
 	s.totalPay = 0
