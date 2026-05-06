@@ -20,6 +20,8 @@ const (
 	minFwPacketLen = 4
 )
 
+var ErrOutOfWindow = errors.New("out of window packet")
+
 func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
 	err := h.Parse(packet)
 	if err != nil {
@@ -504,10 +506,7 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	}
 
 	if !hostinfo.ConnectionState.window.Update(f.l, mc) {
-		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("dropping out of window packet", "header", h)
-		}
-		return nil, errors.New("out of window packet")
+		return nil, ErrOutOfWindow
 	}
 
 	return out, nil
