@@ -233,7 +233,9 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 				hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 				return
 			default:
-				hostinfo.logger(f.l).Debug("Unexpected targetRelay Type", "from", via, "relayType", targetRelay.Type)
+				if f.l.Enabled(context.Background(), slog.LevelDebug) {
+					hostinfo.logger(f.l).Debug("Unexpected targetRelay Type", "from", via, "relayType", targetRelay.Type)
+				}
 				return
 			}
 		} else {
@@ -245,7 +247,9 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 			return
 		}
 	default:
-		hostinfo.logger(f.l).Debug("Unexpected relay type", "from", via, "relayType", relay.Type)
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("Unexpected relay type", "from", via, "relayType", relay.Type)
+		}
 	}
 }
 
