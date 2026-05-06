@@ -8,6 +8,23 @@ import (
 // How many timer objects should be cached
 const timerCacheMax = 50000
 
+// TimerWheel is a hashed timing wheel: a fixed slot array indexed by (now + delay) % wheelLen,
+// with each slot a singly linked list of items due in that bucket.
+// Adds are O(1), Purges return items in arrival-within-slot order, and an internal cache of TimeoutItems
+// keeps steady-state inserts allocation-free.
+//
+// The TimerWheel does not handle concurrency or lifecycle on its own.
+// Callers drive Advance/Purge from their own ticker loop, take their own locks (or use LockingTimerWheel),
+// and decide whether to keep ticking when the wheel is empty.
+//
+// Pick a TimerWheel when scheduling is high-rate and uniform: line-rate conntrack inserts,
+// per-tunnel traffic checks at fixed intervals. O(1) insert plus the item cache means the hot path doesn't allocate.
+// Items added in the same tick are dispatched together when that slot rotates current,
+// which amortizes the cost of waking the worker.
+//
+// Pick a Scheduler when delay precision matters or scheduling is sparse or uneven.
+// The wheel rounds requested timeouts up to its tick resolution and clamps anything beyond its wheel duration;
+// both are silent in this implementation.
 type TimerWheel[T any] struct {
 	// Current tick
 	current int

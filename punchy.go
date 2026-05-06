@@ -13,12 +13,10 @@ import (
 	"github.com/slackhq/nebula/udp"
 )
 
-const (
-	holepunchTickDuration  = 250 * time.Millisecond
-	holepunchWheelDuration = 60 * time.Second
-)
+// holepunchQueueSize buffers the channel that pending holepunchJobs land on after their delay timer fires.
+const holepunchQueueSize = 64
 
-// holepunchJob is one scheduled item on the holepunch timer wheel.
+// holepunchJob is one scheduled item delivered to the worker goroutine.
 //   - target valid -> send a UDP punch to target. vpnAddr, if set, is the peer's vpn addr carried for log context.
 //   - target invalid, vpnAddr valid -> send an encrypted test packet to vpnAddr (a "punchback").
 type holepunchJob struct {
@@ -41,12 +39,12 @@ type Punchy struct {
 	respondDelay    atomic.Int64
 	punchEverything atomic.Bool
 
-	holepunchTimer    *LockingTimerWheel[holepunchJob]
+	sched             *Scheduler[holepunchJob]
 	punchConn         udp.Conn
 	metricHolepunchTx metrics.Counter
 	metricPunchyTx    metrics.Counter
 
-	// Wired by Start, before any SendPunch* path can run.
+	ctx  context.Context
 	ifce EncWriter
 	hm   *HostMap
 	lh   lighthouseChecker
@@ -58,7 +56,7 @@ func NewPunchyFromConfig(l *slog.Logger, c *config.C, punchConn udp.Conn) *Punch
 	p := &Punchy{
 		l:              l,
 		punchConn:      punchConn,
-		holepunchTimer: NewLockingTimerWheel[holepunchJob](holepunchTickDuration, holepunchWheelDuration),
+		sched:          NewScheduler[holepunchJob](holepunchQueueSize),
 		metricPunchyTx: metrics.GetOrRegisterCounter("messages.tx.punchy", nil),
 	}
 
@@ -139,22 +137,28 @@ func (p *Punchy) reload(c *config.C, initial bool) {
 }
 
 // Schedule queues a punch packet to target, to be sent after the configured delay.
-// vpnAddr is the peer's vpn addr, carried through for log context when the packet actually fires.
-// No-op if target is not a valid AddrPort. Safe to call from any goroutine.
+// vpnAddr is the peer's vpn addr, used for log context when the packet actually fires.
+// No-op if target is not a valid AddrPort or if Start has not yet been called. Safe to call from any goroutine.
 func (p *Punchy) Schedule(target netip.AddrPort, vpnAddr netip.Addr) {
-	if !target.IsValid() {
+	if !target.IsValid() || p.ctx == nil {
 		return
 	}
-	p.holepunchTimer.Add(holepunchJob{target: target, vpnAddr: vpnAddr}, time.Duration(p.delay.Load()))
+	p.scheduleJob(holepunchJob{target: target, vpnAddr: vpnAddr}, time.Duration(p.delay.Load()))
 }
 
 // ScheduleRespond queues a punchback test packet to vpnAddr after the configured respond delay,
-// gated on punchy.respond. No-op when respond is disabled.
+// gated on punchy.respond. No-op when respond is disabled or before Start has been called.
 func (p *Punchy) ScheduleRespond(vpnAddr netip.Addr) {
-	if !p.respond.Load() {
+	if !p.respond.Load() || p.ctx == nil {
 		return
 	}
-	p.holepunchTimer.Add(holepunchJob{vpnAddr: vpnAddr}, time.Duration(p.respondDelay.Load()))
+	p.scheduleJob(holepunchJob{vpnAddr: vpnAddr}, time.Duration(p.respondDelay.Load()))
+}
+
+// scheduleJob delegates to the pooled Scheduler.
+// The callback observes p.ctx so a job that becomes due after Stop is dropped instead of queued.
+func (p *Punchy) scheduleJob(job holepunchJob, delay time.Duration) {
+	p.sched.Schedule(p.ctx, job, delay)
 }
 
 // SendPunch sends an immediate keepalive punch for an idle hostinfo.
@@ -200,49 +204,32 @@ func (p *Punchy) sendPunchToAllRemotes(hostinfo *HostInfo) {
 	})
 }
 
-// Start wires the runtime dependencies and runs a single goroutine that drains the holepunch timer wheel.
-// Must be called after the interface is up. Exits when ctx is cancelled.
+// Start wires the runtime dependencies and spawns the scheduler worker.
 func (p *Punchy) Start(ctx context.Context, ifce EncWriter, hm *HostMap, lh lighthouseChecker) {
+	p.ctx = ctx
 	p.ifce = ifce
 	p.hm = hm
 	p.lh = lh
 
-	go func() {
-		clockSource := time.NewTicker(holepunchTickDuration)
-		defer clockSource.Stop()
+	nb := make([]byte, 12, 12)
+	out := make([]byte, mtu)
+	empty := []byte{0}
 
-		nb := make([]byte, 12, 12)
-		out := make([]byte, mtu)
-		empty := []byte{0}
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case now := <-clockSource.C:
-				p.holepunchTimer.Advance(now)
-				for {
-					job, has := p.holepunchTimer.Purge()
-					if !has {
-						break
-					}
-					switch {
-					case job.target.IsValid():
-						if p.l.Enabled(context.Background(), slog.LevelDebug) {
-							p.l.Debug("Punching", "target", job.target, "vpnAddr", job.vpnAddr)
-						}
-						p.metricHolepunchTx.Inc(1)
-						p.punchConn.WriteTo(empty, job.target)
-					case job.vpnAddr.IsValid():
-						// A nebula test packet to the host trying to contact us. In the case of a double nat or other
-						// difficult scenario, this may help establish a tunnel.
-						if p.l.Enabled(context.Background(), slog.LevelDebug) {
-							p.l.Debug("Sending a nebula test packet", "vpnAddr", job.vpnAddr)
-						}
-						p.ifce.SendMessageToVpnAddr(header.Test, header.TestRequest, job.vpnAddr, []byte(""), nb, out)
-					}
-				}
+	go p.sched.Run(ctx, func(job holepunchJob) {
+		switch {
+		case job.target.IsValid():
+			if p.l.Enabled(context.Background(), slog.LevelDebug) {
+				p.l.Debug("Punching", "target", job.target, "vpnAddr", job.vpnAddr)
 			}
+			p.metricHolepunchTx.Inc(1)
+			p.punchConn.WriteTo(empty, job.target)
+		case job.vpnAddr.IsValid():
+			// A nebula test packet to the host trying to contact us.
+			// In the case of a double nat or other difficult scenario, this may help establish a tunnel.
+			if p.l.Enabled(context.Background(), slog.LevelDebug) {
+				p.l.Debug("Sending a nebula test packet", "vpnAddr", job.vpnAddr)
+			}
+			p.ifce.SendMessageToVpnAddr(header.Test, header.TestRequest, job.vpnAddr, []byte(""), nb, out)
 		}
-	}()
+	})
 }
