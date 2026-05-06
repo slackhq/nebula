@@ -69,13 +69,6 @@ type StdConn struct {
 	// each arriving datagram as a per-slot cmsg, and listenOutBatch passes
 	// the parsed value to the EncReader callback for RFC 6040 combine.
 	ecnRecvSupported bool
-
-	// rxOrder is the per-batch scratch listenOutBatch uses to gather every
-	// segment in a recvmmsg call (after splitting GRO superpackets) and
-	// stable-sort by (source, message-counter) before delivery. Reordering
-	// fits within the receiver's replay window so briefly out-of-order
-	// arrivals do not get rejected as replays.
-	rxOrder *rxReorderBuffer
 }
 
 func setReusePort(network, address string, c syscall.RawConn) error {
@@ -459,10 +452,6 @@ func (u *StdConn) listenOutBatch(r EncReader, flush func()) error {
 	}
 	msgs, buffers, names, _ := u.PrepareRawMessages(u.batch, bufSize, cmsgSpace)
 
-	if u.rxOrder == nil {
-		u.rxOrder = newRxReorderBuffer(u.batch * 64)
-	}
-
 	//reader needs to capture variables from this function, since it's used as a lambda with rawConn.Read
 	//defining it outside the loop so it gets re-used
 	reader := func(fd uintptr) (done bool) {
@@ -484,9 +473,6 @@ func (u *StdConn) listenOutBatch(r EncReader, flush func()) error {
 			return operr
 		}
 
-		// Phase 1: gather every segment from this recvmmsg into rxOrder,
-		// splitting GRO superpackets into their constituent segments.
-		//todo u.rxOrder.reset()
 		for i := 0; i < n; i++ {
 			from := getFrom(names, i, u.isV4)
 			payload := buffers[i][:msgs[i].Len]
@@ -509,15 +495,8 @@ func (u *StdConn) listenOutBatch(r EncReader, flush func()) error {
 					r(from, seg, RxMeta{OuterECN: outerECN})
 				}
 			}
-
-			//todo u.rxOrder.addEntry(from, payload, segSize, outerECN)
 		}
 
-		// stable-sort by (src, port, counter), then deliver in order.
-		// this is on top of the sort performed before decrypt
-		//todo u.rxOrder.sortStable()
-		//todo u.rxOrder.deliver(r)
-		// let callers (e.g. TUN write coalescer) flush any state they accumulated across this batch.
 		flush()
 	}
 }
