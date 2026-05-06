@@ -12,22 +12,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 )
 
 type GenericConn struct {
 	*net.UDPConn
-	l *logrus.Logger
+	l *slog.Logger
 }
 
 var _ Conn = &GenericConn{}
 
-func NewGenericListener(l *logrus.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
+func NewGenericListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
 	lc := NewListenConfig(multi)
 	pc, err := lc.ListenPacket(context.TODO(), "udp", net.JoinHostPort(ip.String(), fmt.Sprintf("%v", port)))
 	if err != nil {
@@ -73,7 +73,7 @@ type rawMessage struct {
 	Len uint32
 }
 
-func (u *GenericConn) ListenOut(r EncReader) {
+func (u *GenericConn) ListenOut(r EncReader) error {
 	buffer := make([]byte, MTU)
 
 	var lastRecvErr time.Time
@@ -83,13 +83,12 @@ func (u *GenericConn) ListenOut(r EncReader) {
 		n, rua, err := u.ReadFromUDPAddrPort(buffer)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
-				u.l.WithError(err).Debug("udp socket is closed, exiting read loop")
-				return
+				return err
 			}
 			// Dampen unexpected message warns to once per minute
 			if lastRecvErr.IsZero() || time.Since(lastRecvErr) > time.Minute {
 				lastRecvErr = time.Now()
-				u.l.WithError(err).Warn("unexpected udp socket receive error")
+				u.l.Warn("unexpected udp socket receive error", "error", err)
 			}
 			continue
 		}

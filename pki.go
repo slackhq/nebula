@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"os"
@@ -13,25 +15,27 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/flynn/noise"
 	"github.com/gaissmai/bart"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/handshake"
+	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/util"
 )
 
 type PKI struct {
 	cs     atomic.Pointer[CertState]
 	caPool atomic.Pointer[cert.CAPool]
-	l      *logrus.Logger
+	l      *slog.Logger
 }
 
 type CertState struct {
-	v1Cert           cert.Certificate
-	v1HandshakeBytes []byte
+	v1Cert       cert.Certificate
+	v1Credential *handshake.Credential
 
-	v2Cert           cert.Certificate
-	v2HandshakeBytes []byte
+	v2Cert       cert.Certificate
+	v2Credential *handshake.Credential
 
 	initiatingVersion cert.Version
 	privateKey        []byte
@@ -45,7 +49,7 @@ type CertState struct {
 	myVpnBroadcastAddrsTable *bart.Lite
 }
 
-func NewPKIFromConfig(l *logrus.Logger, c *config.C) (*PKI, error) {
+func NewPKIFromConfig(l *slog.Logger, c *config.C) (*PKI, error) {
 	pki := &PKI{l: l}
 	err := pki.reload(c, true)
 	if err != nil {
@@ -91,13 +95,35 @@ func (p *PKI) reload(c *config.C, initial bool) error {
 }
 
 func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
-	newState, err := newCertStateFromConfig(c)
+	var cipher string
+	var currentState *CertState
+	if initial {
+		cipher = c.GetString("cipher", "aes")
+		//TODO: this sucks and we should make it not a global
+		switch cipher {
+		case "aes":
+			noiseEndianness = binary.BigEndian
+		case "chachapoly":
+			noiseEndianness = binary.LittleEndian
+		default:
+			return util.NewContextualError(
+				"unknown cipher",
+				m{"cipher": cipher},
+				nil,
+			)
+		}
+	} else {
+		// Cipher cant be hot swapped so just leave it at what it was before
+		currentState = p.cs.Load()
+		cipher = currentState.cipher
+	}
+
+	newState, err := newCertStateFromConfig(c, cipher)
 	if err != nil {
 		return util.NewContextualError("Could not load client cert", nil, err)
 	}
 
-	if !initial {
-		currentState := p.cs.Load()
+	if currentState != nil {
 		if newState.v1Cert != nil {
 			if currentState.v1Cert == nil {
 				//adding certs is fine, actually. Networks-in-common confirmed in newCertState().
@@ -157,33 +183,14 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 				)
 			}
 		}
-
-		// Cipher cant be hot swapped so just leave it at what it was before
-		newState.cipher = currentState.cipher
-
-	} else {
-		newState.cipher = c.GetString("cipher", "aes")
-		//TODO: this sucks and we should make it not a global
-		switch newState.cipher {
-		case "aes":
-			noiseEndianness = binary.BigEndian
-		case "chachapoly":
-			noiseEndianness = binary.LittleEndian
-		default:
-			return util.NewContextualError(
-				"unknown cipher",
-				m{"cipher": newState.cipher},
-				nil,
-			)
-		}
 	}
 
 	p.cs.Store(newState)
 
 	if initial {
-		p.l.WithField("cert", newState).Debug("Client nebula certificate(s)")
+		p.l.Debug("Client nebula certificate(s)", "cert", newState)
 	} else {
-		p.l.WithField("cert", newState).Info("Client certificate(s) refreshed from disk")
+		p.l.Info("Client certificate(s) refreshed from disk", "cert", newState)
 	}
 	return nil
 }
@@ -195,7 +202,7 @@ func (p *PKI) reloadCAPool(c *config.C) *util.ContextualError {
 	}
 
 	p.caPool.Store(caPool)
-	p.l.WithField("fingerprints", caPool.GetFingerprints()).Debug("Trusted CA fingerprints")
+	p.l.Debug("Trusted CA fingerprints", "fingerprints", caPool.GetFingerprints())
 	return nil
 }
 
@@ -205,6 +212,20 @@ func (cs *CertState) GetDefaultCertificate() cert.Certificate {
 		panic("No default certificate found")
 	}
 	return c
+}
+
+// DefaultVersion returns the preferred cert version for initiating handshakes.
+func (cs *CertState) DefaultVersion() cert.Version { return cs.initiatingVersion }
+
+// GetCredential returns the pre-computed handshake credential for the given version, or nil.
+func (cs *CertState) GetCredential(v cert.Version) *handshake.Credential {
+	switch v {
+	case cert.Version1:
+		return cs.v1Credential
+	case cert.Version2:
+		return cs.v2Credential
+	}
+	return nil
 }
 
 func (cs *CertState) getCertificate(v cert.Version) cert.Certificate {
@@ -218,17 +239,25 @@ func (cs *CertState) getCertificate(v cert.Version) cert.Certificate {
 	return nil
 }
 
-// getHandshakeBytes returns the cached bytes to be used in a handshake message for the requested version.
-// Callers must check if the return []byte is nil.
-func (cs *CertState) getHandshakeBytes(v cert.Version) []byte {
-	switch v {
-	case cert.Version1:
-		return cs.v1HandshakeBytes
-	case cert.Version2:
-		return cs.v2HandshakeBytes
+func newCipherSuite(curve cert.Curve, pkcs11backed bool, cipher string) (noise.CipherSuite, error) {
+	var dhFunc noise.DHFunc
+	switch curve {
+	case cert.Curve_CURVE25519:
+		dhFunc = noise.DH25519
+	case cert.Curve_P256:
+		if pkcs11backed {
+			dhFunc = noiseutil.DHP256PKCS11
+		} else {
+			dhFunc = noiseutil.DHP256
+		}
 	default:
-		return nil
+		return nil, fmt.Errorf("unsupported curve: %s", curve)
 	}
+
+	if cipher == "chachapoly" {
+		return noise.NewCipherSuite(dhFunc, noise.CipherChaChaPoly, noise.HashSHA256), nil
+	}
+	return noise.NewCipherSuite(dhFunc, noiseutil.CipherAESGCM, noise.HashSHA256), nil
 }
 
 func (cs *CertState) String() string {
@@ -260,7 +289,7 @@ func (cs *CertState) MarshalJSON() ([]byte, error) {
 	return json.Marshal(msg)
 }
 
-func newCertStateFromConfig(c *config.C) (*CertState, error) {
+func newCertStateFromConfig(c *config.C, cipher string) (*CertState, error) {
 	var err error
 
 	privPathOrPEM := c.GetString("pki.key", "")
@@ -344,13 +373,14 @@ func newCertStateFromConfig(c *config.C) (*CertState, error) {
 		return nil, fmt.Errorf("unknown pki.initiating_version: %v", rawInitiatingVersion)
 	}
 
-	return newCertState(initiatingVersion, v1, v2, isPkcs11, curve, rawKey)
+	return newCertState(initiatingVersion, v1, v2, isPkcs11, curve, rawKey, cipher)
 }
 
-func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, privateKeyCurve cert.Curve, privateKey []byte) (*CertState, error) {
+func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, privateKeyCurve cert.Curve, privateKey []byte, cipher string) (*CertState, error) {
 	cs := CertState{
 		privateKey:               privateKey,
 		pkcs11Backed:             pkcs11backed,
+		cipher:                   cipher,
 		myVpnNetworksTable:       new(bart.Lite),
 		myVpnAddrsTable:          new(bart.Lite),
 		myVpnBroadcastAddrsTable: new(bart.Lite),
@@ -383,10 +413,14 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 
 		v1hs, err := v1.MarshalForHandshakes()
 		if err != nil {
-			return nil, fmt.Errorf("error marshalling certificate for handshake: %w", err)
+			return nil, fmt.Errorf("error marshalling v1 certificate for handshake: %w", err)
+		}
+		ncs, err := newCipherSuite(v1.Curve(), pkcs11backed, cipher)
+		if err != nil {
+			return nil, err
 		}
 		cs.v1Cert = v1
-		cs.v1HandshakeBytes = v1hs
+		cs.v1Credential = handshake.NewCredential(v1, v1hs, privateKey, ncs)
 
 		if cs.initiatingVersion == 0 {
 			cs.initiatingVersion = cert.Version1
@@ -404,10 +438,14 @@ func newCertState(dv cert.Version, v1, v2 cert.Certificate, pkcs11backed bool, p
 
 		v2hs, err := v2.MarshalForHandshakes()
 		if err != nil {
-			return nil, fmt.Errorf("error marshalling certificate for handshake: %w", err)
+			return nil, fmt.Errorf("error marshalling v2 certificate for handshake: %w", err)
+		}
+		ncs, err := newCipherSuite(v2.Curve(), pkcs11backed, cipher)
+		if err != nil {
+			return nil, err
 		}
 		cs.v2Cert = v2
-		cs.v2HandshakeBytes = v2hs
+		cs.v2Credential = handshake.NewCredential(v2, v2hs, privateKey, ncs)
 
 		if cs.initiatingVersion == 0 {
 			cs.initiatingVersion = cert.Version2
@@ -486,32 +524,32 @@ func loadCertificate(b []byte) (cert.Certificate, []byte, error) {
 	return c, b, nil
 }
 
-func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.CAPool, error) {
-	var rawCA []byte
-	var err error
-
+func loadCAPoolFromConfig(l *slog.Logger, c *config.C) (*cert.CAPool, error) {
 	caPathOrPEM := c.GetString("pki.ca", "")
 	if caPathOrPEM == "" {
 		return nil, errors.New("no pki.ca path or PEM data provided")
 	}
 
-	if strings.Contains(caPathOrPEM, "-----BEGIN") {
-		rawCA = []byte(caPathOrPEM)
+	var caReader io.ReadCloser
+	var err error
 
+	if strings.Contains(caPathOrPEM, "-----BEGIN") {
+		caReader = io.NopCloser(strings.NewReader(caPathOrPEM))
 	} else {
-		rawCA, err = os.ReadFile(caPathOrPEM)
+		caReader, err = os.Open(caPathOrPEM)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read pki.ca file %s: %s", caPathOrPEM, err)
 		}
 	}
+	defer caReader.Close()
 
-	caPool, err := cert.NewCAPoolFromPEM(rawCA)
+	caPool, err := cert.NewCAPoolFromPEMReader(caReader)
 	if errors.Is(err, cert.ErrExpired) {
 		var expired int
 		for _, crt := range caPool.CAs {
 			if crt.Certificate.Expired(time.Now()) {
 				expired++
-				l.WithField("cert", crt).Warn("expired certificate present in CA pool")
+				l.Warn("expired certificate present in CA pool", "cert", crt)
 			}
 		}
 
@@ -529,7 +567,7 @@ func loadCAPoolFromConfig(l *logrus.Logger, c *config.C) (*cert.CAPool, error) {
 			caPool.BlocklistFingerprint(fp)
 		}
 
-		l.WithField("fingerprintCount", len(bl)).Info("Blocklisted certificates")
+		l.Info("Blocklisted certificates", "fingerprintCount", len(bl))
 	}
 
 	return caPool, nil

@@ -6,19 +6,21 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
-	"reflect"
+	"path/filepath"
 	"runtime"
 	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/sshd"
 )
 
@@ -55,12 +57,12 @@ type sshDeviceInfoFlags struct {
 	Pretty bool
 }
 
-func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) {
+func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 	c.RegisterReloadCallback(func(c *config.C) {
 		if c.GetBool("sshd.enabled", false) {
 			sshRun, err := configSSH(l, ssh, c)
 			if err != nil {
-				l.WithError(err).Error("Failed to reconfigure the sshd")
+				l.Error("Failed to reconfigure the sshd", "error", err)
 				ssh.Stop()
 			}
 			if sshRun != nil {
@@ -76,7 +78,7 @@ func wireSSHReload(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) {
 // updates the passed-in SSHServer. On success, it returns a function
 // that callers may invoke to run the configured ssh server. On
 // failure, it returns nil, error.
-func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error) {
+func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error) {
 	listen := c.GetString("sshd.listen", "")
 	if listen == "" {
 		return nil, fmt.Errorf("sshd.listen must be provided")
@@ -118,7 +120,7 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 	for _, caAuthorizedKey := range rawCAs {
 		err := ssh.AddTrustedCA(caAuthorizedKey)
 		if err != nil {
-			l.WithError(err).WithField("sshCA", caAuthorizedKey).Warn("SSH CA had an error, ignoring")
+			l.Warn("SSH CA had an error, ignoring", "error", err, "sshCA", caAuthorizedKey)
 			continue
 		}
 	}
@@ -129,13 +131,13 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 		for _, rk := range keys {
 			kDef, ok := rk.(map[string]any)
 			if !ok {
-				l.WithField("sshKeyConfig", rk).Warn("Authorized user had an error, ignoring")
+				l.Warn("Authorized user had an error, ignoring", "sshKeyConfig", rk)
 				continue
 			}
 
 			user, ok := kDef["user"].(string)
 			if !ok {
-				l.WithField("sshKeyConfig", rk).Warn("Authorized user is missing the user field")
+				l.Warn("Authorized user is missing the user field", "sshKeyConfig", rk)
 				continue
 			}
 
@@ -144,7 +146,11 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 			case string:
 				err := ssh.AddAuthorizedKey(user, v)
 				if err != nil {
-					l.WithError(err).WithField("sshKeyConfig", rk).WithField("sshKey", v).Warn("Failed to authorize key")
+					l.Warn("Failed to authorize key",
+						"error", err,
+						"sshKeyConfig", rk,
+						"sshKey", v,
+					)
 					continue
 				}
 
@@ -152,19 +158,25 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 				for _, subK := range v {
 					sk, ok := subK.(string)
 					if !ok {
-						l.WithField("sshKeyConfig", rk).WithField("sshKey", subK).Warn("Did not understand ssh key")
+						l.Warn("Did not understand ssh key",
+							"sshKeyConfig", rk,
+							"sshKey", subK,
+						)
 						continue
 					}
 
 					err := ssh.AddAuthorizedKey(user, sk)
 					if err != nil {
-						l.WithError(err).WithField("sshKeyConfig", sk).Warn("Failed to authorize key")
+						l.Warn("Failed to authorize key",
+							"error", err,
+							"sshKeyConfig", sk,
+						)
 						continue
 					}
 				}
 
 			default:
-				l.WithField("sshKeyConfig", rk).Warn("Authorized user is missing the keys field or was not understood")
+				l.Warn("Authorized user is missing the keys field or was not understood", "sshKeyConfig", rk)
 			}
 		}
 	} else {
@@ -176,7 +188,7 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 		ssh.Stop()
 		runner = func() {
 			if err := ssh.Run(listen); err != nil {
-				l.WithField("err", err).Warn("Failed to run the SSH server")
+				l.Warn("Failed to run the SSH server", "error", err)
 			}
 		}
 	} else {
@@ -186,7 +198,13 @@ func configSSH(l *logrus.Logger, ssh *sshd.SSHServer, c *config.C) (func(), erro
 	return runner, nil
 }
 
-func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Interface) {
+func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interface) {
+	// sandboxDir defaults to a dir in temp. The intention is that end user will
+	// create this dir as needed. Overriding this config value to "" allows
+	// writing to anywhere in the system.
+	defaultDir := filepath.Join(os.TempDir(), "nebula-debug")
+	sandboxDir := c.GetString("sshd.sandbox_dir", defaultDir)
+
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "list-hostmap",
 		ShortDescription: "List all known previously connected hosts",
@@ -245,7 +263,9 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Inter
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "start-cpu-profile",
 		ShortDescription: "Starts a cpu profile and write output to the provided file, ex: `cpu-profile.pb.gz`",
-		Callback:         sshStartCpuProfile,
+		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+			return sshStartCpuProfile(sandboxDir, fs, a, w)
+		},
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
@@ -260,7 +280,9 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Inter
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "save-heap-profile",
 		ShortDescription: "Saves a heap profile to the provided path, ex: `heap-profile.pb.gz`",
-		Callback:         sshGetHeapProfile,
+		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+			return sshGetHeapProfile(sandboxDir, fs, a, w)
+		},
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
@@ -272,7 +294,9 @@ func attachCommands(l *logrus.Logger, c *config.C, ssh *sshd.SSHServer, f *Inter
 	ssh.RegisterCommand(&sshd.Command{
 		Name:             "save-mutex-profile",
 		ShortDescription: "Saves a mutex profile to the provided path, ex: `mutex-profile.pb.gz`",
-		Callback:         sshGetMutexProfile,
+		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+			return sshGetMutexProfile(sandboxDir, fs, a, w)
+		},
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
@@ -505,13 +529,43 @@ func sshListLighthouseMap(lightHouse *LightHouse, a any, w sshd.StringWriter) er
 	return nil
 }
 
-func sshStartCpuProfile(fs any, a []string, w sshd.StringWriter) error {
+// sshSanitizeFilePath validates that the given file path is within the sandbox directory.
+// If sandboxDir is empty, the path is returned as-is for backwards compatibility.
+func sshSanitizeFilePath(sandboxDir, filePath string) (string, error) {
+	if sandboxDir == "" {
+		return filePath, nil
+	}
+
+	// Clean and resolve the path relative to the sandbox directory
+	if !filepath.IsAbs(filePath) {
+		filePath = filepath.Join(sandboxDir, filePath)
+	}
+	cleaned := filepath.Clean(filePath)
+
+	// Ensure the resolved path is within the sandbox directory
+	cleanedSandbox := filepath.Clean(sandboxDir)
+	if cleaned == cleanedSandbox {
+		return "", fmt.Errorf("path %q resolves to the sandbox directory itself %q", filePath, sandboxDir)
+	}
+	if !strings.HasPrefix(cleaned, cleanedSandbox+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q is outside the sandbox directory %q", filePath, sandboxDir)
+	}
+
+	return cleaned, nil
+}
+
+func sshStartCpuProfile(sandboxDir string, fs any, a []string, w sshd.StringWriter) error {
 	if len(a) == 0 {
 		err := w.WriteLine("No path to write profile provided")
 		return err
 	}
 
-	file, err := os.Create(a[0])
+	filePath, err := sshSanitizeFilePath(sandboxDir, a[0])
+	if err != nil {
+		return w.WriteLine(err.Error())
+	}
+
+	file, err := os.Create(filePath)
 	if err != nil {
 		err = w.WriteLine(fmt.Sprintf("Unable to create profile file: %s", err))
 		return err
@@ -675,12 +729,17 @@ func sshChangeRemote(ifce *Interface, fs any, a []string, w sshd.StringWriter) e
 	return w.WriteLine("Changed")
 }
 
-func sshGetHeapProfile(fs any, a []string, w sshd.StringWriter) error {
+func sshGetHeapProfile(sandboxDir string, fs any, a []string, w sshd.StringWriter) error {
 	if len(a) == 0 {
 		return w.WriteLine("No path to write profile provided")
 	}
 
-	file, err := os.Create(a[0])
+	filePath, err := sshSanitizeFilePath(sandboxDir, a[0])
+	if err != nil {
+		return w.WriteLine(err.Error())
+	}
+
+	file, err := os.Create(filePath)
 	if err != nil {
 		err = w.WriteLine(fmt.Sprintf("Unable to create profile file: %s", err))
 		return err
@@ -711,12 +770,17 @@ func sshMutexProfileFraction(fs any, a []string, w sshd.StringWriter) error {
 	return w.WriteLine(fmt.Sprintf("New value: %d. Old value: %d", newRate, oldRate))
 }
 
-func sshGetMutexProfile(fs any, a []string, w sshd.StringWriter) error {
+func sshGetMutexProfile(sandboxDir string, fs any, a []string, w sshd.StringWriter) error {
 	if len(a) == 0 {
 		return w.WriteLine("No path to write profile provided")
 	}
 
-	file, err := os.Create(a[0])
+	filePath, err := sshSanitizeFilePath(sandboxDir, a[0])
+	if err != nil {
+		return w.WriteLine(err.Error())
+	}
+
+	file, err := os.Create(filePath)
 	if err != nil {
 		return w.WriteLine(fmt.Sprintf("Unable to create profile file: %s", err))
 	}
@@ -735,36 +799,45 @@ func sshGetMutexProfile(fs any, a []string, w sshd.StringWriter) error {
 	return w.WriteLine(fmt.Sprintf("Mutex profile created at %s", a))
 }
 
-func sshLogLevel(l *logrus.Logger, fs any, a []string, w sshd.StringWriter) error {
+func sshLogLevel(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error {
+	ctrl, ok := l.Handler().(interface {
+		GetLevel() slog.Level
+		SetLevel(slog.Level)
+	})
+	if !ok {
+		return w.WriteLine("Log level is not reconfigurable on this logger")
+	}
+
 	if len(a) == 0 {
-		return w.WriteLine(fmt.Sprintf("Log level is: %s", l.Level))
+		return w.WriteLine(fmt.Sprintf("Log level is: %s", logging.LevelName(ctrl.GetLevel())))
 	}
 
-	level, err := logrus.ParseLevel(a[0])
+	level, err := logging.ParseLevel(strings.ToLower(a[0]))
 	if err != nil {
-		return w.WriteLine(fmt.Sprintf("Unknown log level %s. Possible log levels: %s", a, logrus.AllLevels))
+		return w.WriteLine(fmt.Sprintf("Unknown log level %s. Possible log levels: trace, debug, info, warn, error", a))
 	}
 
-	l.SetLevel(level)
-	return w.WriteLine(fmt.Sprintf("Log level is: %s", l.Level))
+	ctrl.SetLevel(level)
+	return w.WriteLine(fmt.Sprintf("Log level is: %s", logging.LevelName(ctrl.GetLevel())))
 }
 
-func sshLogFormat(l *logrus.Logger, fs any, a []string, w sshd.StringWriter) error {
+func sshLogFormat(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error {
+	ctrl, ok := l.Handler().(interface {
+		GetFormat() string
+		SetFormat(string) error
+	})
+	if !ok {
+		return w.WriteLine("Log format is not reconfigurable on this logger")
+	}
+
 	if len(a) == 0 {
-		return w.WriteLine(fmt.Sprintf("Log format is: %s", reflect.TypeOf(l.Formatter)))
+		return w.WriteLine(fmt.Sprintf("Log format is: %s", ctrl.GetFormat()))
 	}
 
-	logFormat := strings.ToLower(a[0])
-	switch logFormat {
-	case "text":
-		l.Formatter = &logrus.TextFormatter{}
-	case "json":
-		l.Formatter = &logrus.JSONFormatter{}
-	default:
-		return fmt.Errorf("unknown log format `%s`. possible formats: %s", logFormat, []string{"text", "json"})
+	if err := ctrl.SetFormat(strings.ToLower(a[0])); err != nil {
+		return err
 	}
-
-	return w.WriteLine(fmt.Sprintf("Log format is: %s", reflect.TypeOf(l.Formatter)))
+	return w.WriteLine(fmt.Sprintf("Log format is: %s", ctrl.GetFormat()))
 }
 
 func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
@@ -831,9 +904,7 @@ func sshPrintRelays(ifce *Interface, fs any, a []string, w sshd.StringWriter) er
 
 	relays := map[uint32]*HostInfo{}
 	ifce.hostMap.Lock()
-	for k, v := range ifce.hostMap.Relays {
-		relays[k] = v
-	}
+	maps.Copy(relays, ifce.hostMap.Relays)
 	ifce.hostMap.Unlock()
 
 	type RelayFor struct {

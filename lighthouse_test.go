@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"context"
 	"encoding/binary"
 	"fmt"
 	"net/netip"
@@ -42,14 +41,14 @@ func Test_lhStaticMapping(t *testing.T) {
 	c := config.NewC(l)
 	c.Settings["lighthouse"] = map[string]any{"hosts": []any{lh1}}
 	c.Settings["static_host_map"] = map[string]any{lh1: []any{"1.1.1.1:4242"}}
-	_, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	_, err := NewLightHouseFromConfig(t.Context(), l, c, cs, nil, nil)
 	require.NoError(t, err)
 
 	lh2 := "10.128.0.3"
 	c = config.NewC(l)
 	c.Settings["lighthouse"] = map[string]any{"hosts": []any{lh1, lh2}}
 	c.Settings["static_host_map"] = map[string]any{lh1: []any{"100.1.1.1:4242"}}
-	_, err = NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	_, err = NewLightHouseFromConfig(t.Context(), l, c, cs, nil, nil)
 	require.EqualError(t, err, "lighthouse 10.128.0.3 does not have a static_host_map entry")
 }
 
@@ -71,7 +70,7 @@ func TestReloadLighthouseInterval(t *testing.T) {
 	}
 
 	c.Settings["static_host_map"] = map[string]any{lh1: []any{"1.1.1.1:4242"}}
-	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, cs, nil, nil)
 	require.NoError(t, err)
 	lh.ifce = &mockEncWriter{}
 
@@ -99,7 +98,7 @@ func BenchmarkLighthouseHandleRequest(b *testing.B) {
 	}
 
 	c := config.NewC(l)
-	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	lh, err := NewLightHouseFromConfig(b.Context(), l, c, cs, nil, nil)
 	require.NoError(b, err)
 
 	hAddr := netip.MustParseAddrPort("4.5.6.7:12345")
@@ -202,7 +201,7 @@ func TestLighthouse_Memory(t *testing.T) {
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
 	}
-	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, cs, nil, nil)
 	lh.ifce = &mockEncWriter{}
 	require.NoError(t, err)
 	lhh := lh.NewRequestHandler()
@@ -288,7 +287,7 @@ func TestLighthouse_reload(t *testing.T) {
 		myVpnNetworksTable: nt,
 	}
 
-	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, cs, nil, nil)
 	require.NoError(t, err)
 
 	nc := map[string]any{
@@ -523,7 +522,7 @@ func TestLighthouse_Dont_Delete_Static_Hosts(t *testing.T) {
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
 	}
-	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, cs, nil, nil)
 	require.NoError(t, err)
 	lh.ifce = &mockEncWriter{}
 
@@ -589,7 +588,7 @@ func TestLighthouse_DeletesWork(t *testing.T) {
 		myVpnNetworks:      []netip.Prefix{myVpnNet},
 		myVpnNetworksTable: nt,
 	}
-	lh, err := NewLightHouseFromConfig(context.Background(), l, c, cs, nil, nil)
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, cs, nil, nil)
 	require.NoError(t, err)
 	lh.ifce = &mockEncWriter{}
 

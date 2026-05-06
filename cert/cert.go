@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/netip"
 	"time"
+
+	"github.com/slackhq/nebula/cert/p256"
 )
 
 type Version uint8
@@ -110,6 +112,9 @@ type CachedCertificate struct {
 	InvertedGroups    map[string]struct{}
 	Fingerprint       string
 	signerFingerprint string
+
+	// A place to store a 2nd fingerprint if the certificate could have one, such as with P256
+	fingerprint2 string
 }
 
 func (cc *CachedCertificate) String() string {
@@ -151,4 +156,32 @@ func Recombine(v Version, rawCertBytes, publicKey []byte, curve Curve) (Certific
 	}
 
 	return c, nil
+}
+
+// CalculateAlternateFingerprint calculates a 2nd fingerprint representation for P256 certificates
+// CAPool blocklist testing through `VerifyCertificate` and `VerifyCachedCertificate` automatically performs this step.
+func CalculateAlternateFingerprint(c Certificate) (string, error) {
+	if c.Curve() != Curve_P256 {
+		return "", nil
+	}
+
+	nc := c.Copy()
+	b, err := p256.Swap(nc.Signature())
+	if err != nil {
+		return "", err
+	}
+
+	switch v := nc.(type) {
+	case *certificateV1:
+		err = v.setSignature(b)
+	case *certificateV2:
+		err = v.setSignature(b)
+	default:
+		return "", ErrUnknownVersion
+	}
+
+	if err != nil {
+		return "", err
+	}
+	return nc.Fingerprint()
 }

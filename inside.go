@@ -1,9 +1,10 @@
 package nebula
 
 import (
+	"context"
+	"log/slog"
 	"net/netip"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
@@ -15,8 +16,11 @@ import (
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
-		if f.l.Level >= logrus.DebugLevel {
-			f.l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			f.l.Debug("Error while validating outbound packet",
+				"packet", packet,
+				"error", err,
+			)
 		}
 		return
 	}
@@ -36,7 +40,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		if immediatelyForwardToSelf {
 			_, err := f.readers[q].Write(packet)
 			if err != nil {
-				f.l.WithError(err).Error("Failed to forward to tun")
+				f.l.Error("Failed to forward to tun", "error", err)
 			}
 		}
 		// Otherwise, drop. On linux, we should never see these packets - Linux
@@ -55,10 +59,11 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	if hostinfo == nil {
 		f.rejectInside(packet, out, q)
-		if f.l.Level >= logrus.DebugLevel {
-			f.l.WithField("vpnAddr", fwPacket.RemoteAddr).
-				WithField("fwPacket", fwPacket).
-				Debugln("dropping outbound packet, vpnAddr not in our vpn networks or in unsafe networks")
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			f.l.Debug("dropping outbound packet, vpnAddr not in our vpn networks or in unsafe networks",
+				"vpnAddr", fwPacket.RemoteAddr,
+				"fwPacket", fwPacket,
+			)
 		}
 		return
 	}
@@ -73,11 +78,11 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	} else {
 		f.rejectInside(packet, out, q)
-		if f.l.Level >= logrus.DebugLevel {
-			hostinfo.logger(f.l).
-				WithField("fwPacket", fwPacket).
-				WithField("reason", dropReason).
-				Debugln("dropping outbound packet")
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("dropping outbound packet",
+				"fwPacket", fwPacket,
+				"reason", dropReason,
+			)
 		}
 	}
 }
@@ -94,7 +99,7 @@ func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
 
 	_, err := f.readers[q].Write(out)
 	if err != nil {
-		f.l.WithError(err).Error("Failed to write to tun")
+		f.l.Error("Failed to write to tun", "error", err)
 	}
 }
 
@@ -109,11 +114,11 @@ func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *
 	}
 
 	if len(out) > iputil.MaxRejectPacketSize {
-		if f.l.GetLevel() >= logrus.InfoLevel {
-			f.l.
-				WithField("packet", packet).
-				WithField("outPacket", out).
-				Info("rejectOutside: packet too big, not sending")
+		if f.l.Enabled(context.Background(), slog.LevelInfo) {
+			f.l.Info("rejectOutside: packet too big, not sending",
+				"packet", packet,
+				"outPacket", out,
+			)
 		}
 		return
 	}
@@ -185,10 +190,11 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 		// This would also need to interact with unsafe_route updates through reloading the config or
 		// use of the use_system_route_table option
 
-		if f.l.Level >= logrus.DebugLevel {
-			f.l.WithField("destination", destinationAddr).
-				WithField("originalGateway", gatewayAddr).
-				Debugln("Calculated gateway for ECMP not available, attempting other gateways")
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			f.l.Debug("Calculated gateway for ECMP not available, attempting other gateways",
+				"destination", destinationAddr,
+				"originalGateway", gatewayAddr,
+			)
 		}
 
 		for i := range gateways {
@@ -214,17 +220,18 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 	fp := &firewall.Packet{}
 	err := newPacket(p, false, fp)
 	if err != nil {
-		f.l.Warnf("error while parsing outgoing packet for firewall check; %v", err)
+		f.l.Warn("error while parsing outgoing packet for firewall check", "error", err)
 		return
 	}
 
 	// check if packet is in outbound fw rules
 	dropReason := f.firewall.Drop(*fp, false, hostinfo, f.pki.GetCAPool(), nil)
 	if dropReason != nil {
-		if f.l.Level >= logrus.DebugLevel {
-			f.l.WithField("fwPacket", fp).
-				WithField("reason", dropReason).
-				Debugln("dropping cached packet")
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			f.l.Debug("dropping cached packet",
+				"fwPacket", fp,
+				"reason", dropReason,
+			)
 		}
 		return
 	}
@@ -240,9 +247,10 @@ func (f *Interface) SendMessageToVpnAddr(t header.MessageType, st header.Message
 	})
 
 	if hostInfo == nil {
-		if f.l.Level >= logrus.DebugLevel {
-			f.l.WithField("vpnAddr", vpnAddr).
-				Debugln("dropping SendMessageToVpnAddr, vpnAddr not in our vpn networks or in unsafe routes")
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			f.l.Debug("dropping SendMessageToVpnAddr, vpnAddr not in our vpn networks or in unsafe routes",
+				"vpnAddr", vpnAddr,
+			)
 		}
 		return
 	}
@@ -298,12 +306,12 @@ func (f *Interface) SendVia(via *HostInfo,
 		if noiseutil.EncryptLockNeeded {
 			via.ConnectionState.writeLock.Unlock()
 		}
-		via.logger(f.l).
-			WithField("outCap", cap(out)).
-			WithField("payloadLen", len(ad)).
-			WithField("headerLen", len(out)).
-			WithField("cipherOverhead", via.ConnectionState.eKey.Overhead()).
-			Error("SendVia out buffer not large enough for relay")
+		via.logger(f.l).Error("SendVia out buffer not large enough for relay",
+			"outCap", cap(out),
+			"payloadLen", len(ad),
+			"headerLen", len(out),
+			"cipherOverhead", via.ConnectionState.eKey.Overhead(),
+		)
 		return
 	}
 
@@ -323,12 +331,12 @@ func (f *Interface) SendVia(via *HostInfo,
 		via.ConnectionState.writeLock.Unlock()
 	}
 	if err != nil {
-		via.logger(f.l).WithError(err).Info("Failed to EncryptDanger in sendVia")
+		via.logger(f.l).Info("Failed to EncryptDanger in sendVia", "error", err)
 		return
 	}
 	err = f.writers[0].WriteTo(out, via.remote)
 	if err != nil {
-		via.logger(f.l).WithError(err).Info("Failed to WriteTo in sendVia")
+		via.logger(f.l).Info("Failed to WriteTo in sendVia", "error", err)
 	}
 	f.connectionManager.RelayUsed(relay.LocalIndex)
 }
@@ -384,8 +392,10 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		// finally used again. This tunnel would eventually be torn down and recreated if this action didn't help.
 		f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
 		hostinfo.lastRebindCount = f.rebindCount
-		if f.l.Level >= logrus.DebugLevel {
-			f.l.WithField("vpnAddrs", hostinfo.vpnAddrs).Debug("Lighthouse update triggered for punch due to rebind counter")
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			f.l.Debug("Lighthouse update triggered for punch due to rebind counter",
+				"vpnAddrs", hostinfo.vpnAddrs,
+			)
 		}
 	}
 
@@ -395,10 +405,12 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		ci.writeLock.Unlock()
 	}
 	if err != nil {
-		hostinfo.logger(f.l).WithError(err).
-			WithField("udpAddr", remote).WithField("counter", c).
-			WithField("attemptedCounter", c).
-			Error("Failed to encrypt outgoing packet")
+		hostinfo.logger(f.l).Error("Failed to encrypt outgoing packet",
+			"error", err,
+			"udpAddr", remote,
+			"counter", c,
+			"attemptedCounter", c,
+		)
 		return
 	}
 
@@ -411,8 +423,10 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 			err = f.writers[q].WriteTo(out, remote)
 		}
 		if err != nil {
-			hostinfo.logger(f.l).WithError(err).
-				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
+			hostinfo.logger(f.l).Error("Failed to write outgoing packet",
+				"error", err,
+				"udpAddr", remote,
+			)
 		}
 	} else if hostinfo.remote.IsValid() {
 		if multiport {
@@ -423,8 +437,10 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 			err = f.writers[q].WriteTo(out, hostinfo.remote)
 		}
 		if err != nil {
-			hostinfo.logger(f.l).WithError(err).
-				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
+			hostinfo.logger(f.l).Error("Failed to write outgoing packet",
+				"error", err,
+				"udpAddr", remote,
+			)
 		}
 	} else {
 		// Try to send via a relay
@@ -432,7 +448,10 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 			relayHostInfo, relay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relayIP)
 			if err != nil {
 				hostinfo.relayState.DeleteRelay(relayIP)
-				hostinfo.logger(f.l).WithField("relay", relayIP).WithError(err).Info("sendNoMetrics failed to find HostInfo")
+				hostinfo.logger(f.l).Info("sendNoMetrics failed to find HostInfo",
+					"relay", relayIP,
+					"error", err,
+				)
 				continue
 			}
 			f.SendVia(relayHostInfo, relay, out, nb, fullOut[:header.Len+len(out)], true)

@@ -60,29 +60,9 @@ message NebulaPing {
 	uint64 Time = 2;
 }
 
-message NebulaHandshake {
-  NebulaHandshakeDetails Details = 1;
-  bytes Hmac = 2;
-}
-
-message MultiPortDetails {
-  bool RxSupported = 1;
-  bool TxSupported = 2;
-  uint32 BasePort = 3;
-  uint32 TotalPorts = 4;
-}
-
-message NebulaHandshakeDetails {
-  bytes Cert = 1;
-  uint32 InitiatorIndex = 2;
-  uint32 ResponderIndex = 3;
-  uint64 Cookie = 4;
-  uint64 Time = 5;
-  uint32 CertVersion = 8;
-
-  MultiPortDetails InitiatorMultiPort = 6;
-  MultiPortDetails ResponderMultiPort = 7;
-}
+// NebulaHandshake / NebulaHandshakeDetails moved to
+// handshake/handshake.proto. The handshake package speaks that wire format
+// directly via a hand-written encoder/decoder.
 
 message NebulaControl {
   enum MessageType {
