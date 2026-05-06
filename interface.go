@@ -232,7 +232,7 @@ func (f *Interface) activate() error {
 		"networks", f.myVpnNetworks,
 		"build", f.version,
 		"udpAddr", addr,
-		"boringcrypto", boringEnabled(),
+		"fips140", getFIPS140(),
 	)
 
 	if f.routines > 1 {

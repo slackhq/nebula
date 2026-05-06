@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"runtime"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -288,9 +287,9 @@ func (s *statsServer) buildRuntime(cfg statsConfig) ([]func(), *http.Server) {
 			Name:      "info",
 			Help:      "Version information for the Nebula binary",
 			ConstLabels: prometheus.Labels{
-				"version":      s.buildVersion,
-				"goversion":    runtime.Version(),
-				"boringcrypto": strconv.FormatBool(boringEnabled()),
+				"version":   s.buildVersion,
+				"goversion": runtime.Version(),
+				"fips140":   getFIPS140(),
 			},
 		})
 		pr.MustRegister(g)

@@ -1,5 +1,4 @@
-//go:build !boringcrypto
-// +build !boringcrypto
+//go:build !boringcrypto && !fips140v1.0 && !fips140v1.26
 
 package noiseutil
 
