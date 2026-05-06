@@ -1020,3 +1020,31 @@ func TestCoalescerIPv6MergesCEMark(t *testing.T) {
 		t.Errorf("seed v6 ECN=0x%02x want CE 0x%02x", got, ecnCE)
 	}
 }
+
+func TestSortRunZeroAllocs(t *testing.T) {
+	c := &TCPCoalescer{}
+	mk := func(srcByte byte, seq uint32, pay int) *coalesceSlot {
+		s := &coalesceSlot{nextSeq: seq + uint32(pay), totalPay: pay}
+		s.fk.src[0] = srcByte
+		return s
+	}
+	run := []*coalesceSlot{
+		mk(3, 5000, 100),
+		mk(1, 1000, 50),
+		mk(2, 2000, 75),
+		mk(1, 900, 50),
+		mk(3, 4900, 100),
+		mk(2, 1925, 75),
+		mk(1, 1050, 50),
+		mk(3, 5100, 100),
+	}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		// Re-shuffle so each run actually does sorting work.
+		run[0], run[1], run[2], run[3] = run[3], run[2], run[1], run[0]
+		c.sortRun(run)
+	})
+	if allocs != 0 {
+		t.Fatalf("sortRun allocates %v times per run; want 0", allocs)
+	}
+}
