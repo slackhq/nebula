@@ -18,14 +18,10 @@ import (
 // retry mechanism gives the wg.Wait()-driven goroutines a moment to drain
 // before failing the assertion.
 //
-// IgnoreCurrent is necessary in the parallelized suite: other tests can
-// leave goroutines mid-shutdown when this one runs (Stop is async, the
-// wg.Wait() drain is not blocking on test return). We're checking that
-// *this* test's setup tears down cleanly, not that the whole suite is
-// idle at this moment. Intentionally NOT t.Parallel()'d for the same
-// reason — concurrent test goroutines would always show up.
+// Intentionally NOT t.Parallel()'d: concurrent tests would have their own
+// goroutines running and trip the assertion.
 func TestNoGoroutineLeaks(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	defer goleak.VerifyNone(t)
 
 	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
 	myControl, myVpnIpNet, myUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "me", "10.128.0.1/24", nil)

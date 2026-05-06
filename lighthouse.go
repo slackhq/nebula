@@ -1413,7 +1413,13 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 		}
 
 		go func() {
-			time.Sleep(lhh.lh.punchy.GetDelay())
+			t := time.NewTimer(lhh.lh.punchy.GetDelay())
+			defer t.Stop()
+			select {
+			case <-lhh.lh.ctx.Done():
+				return
+			case <-t.C:
+			}
 			lhh.lh.metricHolepunchTx.Inc(1)
 			lhh.lh.punchConn.WriteTo(empty, vpnPeer)
 		}()
@@ -1446,7 +1452,13 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 	// a tunnel.
 	if lhh.lh.punchy.GetRespond() {
 		go func() {
-			time.Sleep(lhh.lh.punchy.GetRespondDelay())
+			t := time.NewTimer(lhh.lh.punchy.GetRespondDelay())
+			defer t.Stop()
+			select {
+			case <-lhh.lh.ctx.Done():
+				return
+			case <-t.C:
+			}
 			if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
 				lhh.l.Debug("Sending a nebula test packet",
 					"vpnAddr", detailsVpnAddr,
