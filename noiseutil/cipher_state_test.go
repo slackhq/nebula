@@ -83,7 +83,7 @@ func roundtrip(t *testing.T, enc, dec CipherState) {
 
 	// Wrong nonce must fail authentication.
 	_, err = dec.DecryptDanger(nil, ad, ct, 2, nb)
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	assert.Equal(t, enc.Overhead(), dec.Overhead())
 	assert.Equal(t, 16, enc.Overhead())
@@ -150,17 +150,17 @@ func buildCipherStatesB(b *testing.B, c noise.CipherFunc) (*noise.CipherState, *
 func TestCipherStateNilSafety(t *testing.T) {
 	var aes *CipherStateAESGCM
 	_, err := aes.EncryptDanger(nil, nil, nil, 0, make([]byte, 12))
-	assert.Error(t, err)
+	require.Error(t, err)
 	out, err := aes.DecryptDanger(nil, nil, nil, 0, make([]byte, 12))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Empty(t, out)
 	assert.Equal(t, 0, aes.Overhead())
 
 	var cc *CipherStateChaChaPoly
 	_, err = cc.EncryptDanger(nil, nil, nil, 0, make([]byte, 12))
-	assert.Error(t, err)
+	require.Error(t, err)
 	out, err = cc.DecryptDanger(nil, nil, nil, 0, make([]byte, 12))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Empty(t, out)
 	assert.Equal(t, 0, cc.Overhead())
 }
