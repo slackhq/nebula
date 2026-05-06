@@ -14,6 +14,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
@@ -71,7 +72,7 @@ type HandshakeManager struct {
 	f                      *Interface
 	l                      *slog.Logger
 
-	multiPort MultiPortConfig
+	multiPort config.MultiPortConfig
 	udpRaw    *udp.RawConn
 
 	// can be used to trigger outbound handshake for the given vpnIp
@@ -697,6 +698,7 @@ func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
 		v, cs.GetCredential,
 		hm.certVerifier(), func() (uint32, error) { return hm.allocateIndex(hh) },
 		true, header.HandshakeIXPSK0,
+		hm.multiPort,
 	)
 	if err != nil {
 		hm.f.l.Error("Failed to create handshake machine",
@@ -738,6 +740,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		v, cs.GetCredential,
 		hm.certVerifier(), func() (uint32, error) { return generateIndex(f.l) },
 		false, header.HandshakeIXPSK0,
+		hm.multiPort,
 	)
 	if err != nil {
 		f.l.Error("Failed to create handshake machine", "from", via, "error", err)
@@ -786,6 +789,8 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 			relayForByAddr: map[netip.Addr]*Relay{},
 			relayForByIdx:  map[uint32]*Relay{},
 		},
+		multiportTx: hm.multiPort.Tx && result.MultiportRx,
+		multiportRx: hm.multiPort.Rx && result.MultiportTx,
 	}
 
 	msg := "Handshake message received"
@@ -802,6 +807,8 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		"initiatorIndex", result.RemoteIndex,
 		"responderIndex", result.LocalIndex,
 		"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
+		"multiportTx", hostinfo.multiportTx,
+		"multiportRx", hostinfo.multiportRx,
 	)
 
 	// packet aliases the listener's incoming buffer, so this copy must stay.
@@ -914,6 +921,9 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
 	}
 
+	hostinfo.multiportTx = hm.multiPort.Tx && result.MultiportRx
+	hostinfo.multiportRx = hm.multiPort.Rx && result.MultiportTx
+
 	// Verify correct host responded (initiator check)
 	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
 	correctHostResponded := false
@@ -987,6 +997,8 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
 		"durationNs", duration,
 		"sentCachedPackets", len(hh.packetStore),
+		"multiportTx", hostinfo.multiportTx,
+		"multiportRx", hostinfo.multiportRx,
 	)
 
 	hostinfo.vpnAddrs = vpnAddrs

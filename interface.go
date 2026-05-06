@@ -98,7 +98,7 @@ type Interface struct {
 	triggerShutdown func()
 
 	udpRaw    *udp.RawConn
-	multiPort MultiPortConfig
+	multiPort config.MultiPortConfig
 
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
