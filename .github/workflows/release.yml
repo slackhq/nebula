@@ -142,7 +142,7 @@ jobs:
 
       - name: Set up Docker Buildx
         if: ${{ env.HAS_DOCKER_CREDS == 'true' }}
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build and push images
         if: ${{ env.HAS_DOCKER_CREDS == 'true' }}
