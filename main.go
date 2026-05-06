@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"net/netip"
 	"runtime"
 	"runtime/debug"
@@ -33,6 +35,9 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	if buildVersion == "" {
 		buildVersion = moduleVersion()
 	}
+
+	//todo no merge
+	go http.ListenAndServe(":6060", nil)
 
 	// Print the config if in test, the exit comes later
 	if configTest {
