@@ -236,7 +236,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 			switch targetRelay.Type {
 			case ForwardingType:
 				// Forward this packet through the relay tunnel
-				// Find the target HostInfo
+				// Find the target HostInfo //todo it would potentially be nice to batch these
 				f.SendVia(targetHI, targetRelay, signedPayload, nb, out, false)
 			case TerminalType:
 				hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
