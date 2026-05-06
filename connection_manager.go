@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
@@ -45,19 +44,16 @@ type connectionManager struct {
 	inactivityTimeout       atomic.Int64
 	dropInactive            atomic.Bool
 
-	metricsTxPunchy metrics.Counter
-
 	l *slog.Logger
 }
 
 func newConnectionManagerFromConfig(l *slog.Logger, c *config.C, hm *HostMap, p *Punchy) *connectionManager {
 	cm := &connectionManager{
-		hostMap:         hm,
-		l:               l,
-		punchy:          p,
-		relayUsed:       make(map[uint32]struct{}),
-		relayUsedLock:   &sync.RWMutex{},
-		metricsTxPunchy: metrics.GetOrRegisterCounter("messages.tx.punchy", nil),
+		hostMap:       hm,
+		l:             l,
+		punchy:        p,
+		relayUsed:     make(map[uint32]struct{}),
+		relayUsedLock: &sync.RWMutex{},
 	}
 
 	cm.reload(c, true)
@@ -369,7 +365,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 
 		if !outTraffic {
 			// Send a punch packet to keep the NAT state alive
-			cm.sendPunch(hostinfo)
+			cm.punchy.SendPunch(hostinfo)
 		}
 
 		return decision, hostinfo, primary
@@ -400,17 +396,16 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 
 			// If we aren't sending or receiving traffic then its an unused tunnel and we don't to test the tunnel.
 			// Just maintain NAT state if configured to do so.
-			cm.sendPunch(hostinfo)
+			cm.punchy.SendPunch(hostinfo)
 			cm.trafficTimer.Add(hostinfo.localIndexId, cm.checkInterval)
 			return doNothing, nil, nil
 		}
 
-		if cm.punchy.GetTargetEverything() {
-			// This is similar to the old punchy behavior with a slight optimization.
-			// We aren't receiving traffic but we are sending it, punch on all known
-			// ips in case we need to re-prime NAT state
-			cm.sendPunch(hostinfo)
-		}
+		// We aren't receiving traffic but we are sending it. The outbound
+		// traffic itself refreshes the primary remote's NAT state; this
+		// fans out to non-primary remotes, but only if target_all_remotes
+		// is configured.
+		cm.punchy.SendPunchToAll(hostinfo)
 
 		if cm.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(cm.l).Debug("Tunnel status",
@@ -509,31 +504,6 @@ func (cm *connectionManager) isInvalidCertificate(now time.Time, hostinfo *HostI
 	} else {
 		//if we reach here, the cert is no longer valid, but we're configured to keep tunnels from now-invalid certs open
 		return false
-	}
-}
-
-func (cm *connectionManager) sendPunch(hostinfo *HostInfo) {
-	if !cm.punchy.GetPunch() {
-		// Punching is disabled
-		return
-	}
-
-	if cm.intf.lightHouse.IsAnyLighthouseAddr(hostinfo.vpnAddrs) {
-		// Do not punch to lighthouses, we assume our lighthouse update interval is good enough.
-		// In the event the update interval is not sufficient to maintain NAT state then a publicly available lighthouse
-		// would lose the ability to notify us and punchy.respond would become unreliable.
-		return
-	}
-
-	if cm.punchy.GetTargetEverything() {
-		hostinfo.remotes.ForEach(cm.hostMap.GetPreferredRanges(), func(addr netip.AddrPort, preferred bool) {
-			cm.metricsTxPunchy.Inc(1)
-			cm.intf.outside.WriteTo([]byte{1}, addr)
-		})
-
-	} else if hostinfo.remote.IsValid() {
-		cm.metricsTxPunchy.Inc(1)
-		cm.intf.outside.WriteTo([]byte{1}, hostinfo.remote)
 	}
 }
 

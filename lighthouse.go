@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/gaissmai/bart"
-	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
@@ -35,7 +34,6 @@ type LightHouse struct {
 
 	myVpnNetworks      []netip.Prefix
 	myVpnNetworksTable *bart.Lite
-	punchConn          udp.Conn
 	punchy             *Punchy
 
 	// Local cache of answers from light houses
@@ -75,9 +73,8 @@ type LightHouse struct {
 
 	calculatedRemotes atomic.Pointer[bart.Table[[]*calculatedRemote]] // Maps VpnAddr to []*calculatedRemote
 
-	metrics           *MessageMetrics
-	metricHolepunchTx metrics.Counter
-	l                 *slog.Logger
+	metrics *MessageMetrics
+	l       *slog.Logger
 }
 
 // NewLightHouseFromConfig will build a Lighthouse struct from the values provided in the config object
@@ -105,7 +102,6 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		myVpnNetworksTable: cs.myVpnNetworksTable,
 		addrMap:            make(map[netip.Addr]*RemoteList),
 		nebulaPort:         nebulaPort,
-		punchConn:          pc,
 		punchy:             p,
 		updateTrigger:      make(chan struct{}, 1),
 		queryChan:          make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 64)),
@@ -118,9 +114,6 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 
 	if c.GetBool("stats.lighthouse_metrics", false) {
 		h.metrics = newLighthouseMetrics()
-		h.metricHolepunchTx = metrics.GetOrRegisterCounter("messages.tx.holepunch", nil)
-	} else {
-		h.metricHolepunchTx = metrics.NilCounter{}
 	}
 
 	err := h.reload(c, true)
@@ -1406,58 +1399,25 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 		return
 	}
 
-	empty := []byte{0}
-	punch := func(vpnPeer netip.AddrPort, logVpnAddr netip.Addr) {
-		if !vpnPeer.IsValid() {
-			return
-		}
-
-		go func() {
-			time.Sleep(lhh.lh.punchy.GetDelay())
-			lhh.lh.metricHolepunchTx.Inc(1)
-			lhh.lh.punchConn.WriteTo(empty, vpnPeer)
-		}()
-
-		if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
-			lhh.l.Debug("Punching",
-				"vpnPeer", vpnPeer,
-				"logVpnAddr", logVpnAddr,
-			)
-		}
-	}
-
 	remoteAllowList := lhh.lh.GetRemoteAllowList()
 	for _, a := range n.Details.V4AddrPorts {
 		b := protoV4AddrPortToNetAddrPort(a)
 		if remoteAllowList.Allow(detailsVpnAddr, b.Addr()) {
-			punch(b, detailsVpnAddr)
+			lhh.lh.punchy.Schedule(b, detailsVpnAddr)
 		}
 	}
 
 	for _, a := range n.Details.V6AddrPorts {
 		b := protoV6AddrPortToNetAddrPort(a)
 		if remoteAllowList.Allow(detailsVpnAddr, b.Addr()) {
-			punch(b, detailsVpnAddr)
+			lhh.lh.punchy.Schedule(b, detailsVpnAddr)
 		}
 	}
 
 	// This sends a nebula test packet to the host trying to contact us. In the case
 	// of a double nat or other difficult scenario, this may help establish
-	// a tunnel.
-	if lhh.lh.punchy.GetRespond() {
-		go func() {
-			time.Sleep(lhh.lh.punchy.GetRespondDelay())
-			if lhh.l.Enabled(context.Background(), slog.LevelDebug) {
-				lhh.l.Debug("Sending a nebula test packet",
-					"vpnAddr", detailsVpnAddr,
-				)
-			}
-			//NOTE: we have to allocate a new output buffer here since we are spawning a new goroutine
-			// for each punchBack packet. We should move this into a timerwheel or a single goroutine
-			// managed by a channel.
-			w.SendMessageToVpnAddr(header.Test, header.TestRequest, detailsVpnAddr, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
-		}()
-	}
+	// a tunnel. ScheduleRespond is a no-op when punchy.respond is disabled.
+	lhh.lh.punchy.ScheduleRespond(detailsVpnAddr)
 }
 
 func protoAddrToNetAddr(addr *Addr) netip.Addr {

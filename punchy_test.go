@@ -17,42 +17,42 @@ func TestNewPunchyFromConfig(t *testing.T) {
 	c := config.NewC(l)
 
 	// Test defaults
-	p := NewPunchyFromConfig(test.NewLogger(), c)
-	assert.False(t, p.GetPunch())
-	assert.False(t, p.GetRespond())
-	assert.Equal(t, time.Second, p.GetDelay())
-	assert.Equal(t, 5*time.Second, p.GetRespondDelay())
+	p := NewPunchyFromConfig(test.NewLogger(), c, nil)
+	assert.False(t, p.punch.Load())
+	assert.False(t, p.respond.Load())
+	assert.Equal(t, time.Second, time.Duration(p.delay.Load()))
+	assert.Equal(t, 5*time.Second, time.Duration(p.respondDelay.Load()))
 
 	// punchy deprecation
 	c.Settings["punchy"] = true
-	p = NewPunchyFromConfig(test.NewLogger(), c)
-	assert.True(t, p.GetPunch())
+	p = NewPunchyFromConfig(test.NewLogger(), c, nil)
+	assert.True(t, p.punch.Load())
 
 	// punchy.punch
 	c.Settings["punchy"] = map[string]any{"punch": true}
-	p = NewPunchyFromConfig(test.NewLogger(), c)
-	assert.True(t, p.GetPunch())
+	p = NewPunchyFromConfig(test.NewLogger(), c, nil)
+	assert.True(t, p.punch.Load())
 
 	// punch_back deprecation
 	c.Settings["punch_back"] = true
-	p = NewPunchyFromConfig(test.NewLogger(), c)
-	assert.True(t, p.GetRespond())
+	p = NewPunchyFromConfig(test.NewLogger(), c, nil)
+	assert.True(t, p.respond.Load())
 
 	// punchy.respond
 	c.Settings["punchy"] = map[string]any{"respond": true}
 	c.Settings["punch_back"] = false
-	p = NewPunchyFromConfig(test.NewLogger(), c)
-	assert.True(t, p.GetRespond())
+	p = NewPunchyFromConfig(test.NewLogger(), c, nil)
+	assert.True(t, p.respond.Load())
 
 	// punchy.delay
 	c.Settings["punchy"] = map[string]any{"delay": "1m"}
-	p = NewPunchyFromConfig(test.NewLogger(), c)
-	assert.Equal(t, time.Minute, p.GetDelay())
+	p = NewPunchyFromConfig(test.NewLogger(), c, nil)
+	assert.Equal(t, time.Minute, time.Duration(p.delay.Load()))
 
 	// punchy.respond_delay
 	c.Settings["punchy"] = map[string]any{"respond_delay": "1m"}
-	p = NewPunchyFromConfig(test.NewLogger(), c)
-	assert.Equal(t, time.Minute, p.GetRespondDelay())
+	p = NewPunchyFromConfig(test.NewLogger(), c, nil)
+	assert.Equal(t, time.Minute, time.Duration(p.respondDelay.Load()))
 }
 
 func TestPunchy_reload(t *testing.T) {
@@ -61,35 +61,34 @@ func TestPunchy_reload(t *testing.T) {
 	delay, _ := time.ParseDuration("1m")
 	require.NoError(t, c.LoadString(`
 punchy:
+  punch: false
   delay: 1m
   respond: false
 `))
-	p := NewPunchyFromConfig(test.NewLogger(), c)
-	assert.Equal(t, delay, p.GetDelay())
-	assert.False(t, p.GetRespond())
+	p := NewPunchyFromConfig(test.NewLogger(), c, nil)
+	assert.False(t, p.punch.Load())
+	assert.Equal(t, delay, time.Duration(p.delay.Load()))
+	assert.False(t, p.respond.Load())
 
 	newDelay, _ := time.ParseDuration("10m")
 	require.NoError(t, c.ReloadConfigString(`
 punchy:
+  punch: true
   delay: 10m
   respond: true
 `))
 	p.reload(c, false)
-	assert.Equal(t, newDelay, p.GetDelay())
-	assert.True(t, p.GetRespond())
+	assert.True(t, p.punch.Load())
+	assert.Equal(t, newDelay, time.Duration(p.delay.Load()))
+	assert.True(t, p.respond.Load())
 }
 
 // The tests below pin the shape of each log line Punchy produces so changes
 // cannot silently break whatever operators are grepping for. The assertions
 // are on the structured message + attrs (e.g. "punchy.respond changed" with
-// a respond=true field) rather than a formatted string.
-//
-// Punchy.reload also emits a spurious "Changing punchy.punch with reload is
-// not supported" warning whenever any key under punchy changes, because of
-// the c.HasChanged("punchy") fallback kept for the deprecated top-level
-// punchy form. The tests filter by message rather than asserting total
-// entry counts so that warning is tolerated without being locked into
-// the format.
+// a respond=true field) rather than a formatted string. Tests filter by
+// message rather than asserting total entry counts so unrelated info lines
+// are tolerated without being locked into the format.
 
 type capturedEntry struct {
 	Level slog.Level
@@ -145,7 +144,7 @@ func TestPunchy_LogFormat_InitialEnabled(t *testing.T) {
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(`punchy: {punch: true}`))
 
-	NewPunchyFromConfig(l, c)
+	NewPunchyFromConfig(l, c, nil)
 
 	entry := findEntry(t, hook.entries, "punchy enabled")
 	assert.Equal(t, slog.LevelInfo, entry.Level)
@@ -157,32 +156,32 @@ func TestPunchy_LogFormat_InitialDisabled(t *testing.T) {
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(`punchy: {punch: false}`))
 
-	NewPunchyFromConfig(l, c)
+	NewPunchyFromConfig(l, c, nil)
 
 	entry := findEntry(t, hook.entries, "punchy disabled")
 	assert.Equal(t, slog.LevelInfo, entry.Level)
 	assert.Empty(t, entry.Attrs)
 }
 
-func TestPunchy_LogFormat_ReloadPunchUnsupported(t *testing.T) {
+func TestPunchy_LogFormat_ReloadPunch(t *testing.T) {
 	l, hook := newCapturingPunchyLogger(t)
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(`punchy: {punch: false}`))
-	NewPunchyFromConfig(l, c)
+	NewPunchyFromConfig(l, c, nil)
 	hook.entries = nil
 
 	require.NoError(t, c.ReloadConfigString(`punchy: {punch: true}`))
 
-	entry := findEntry(t, hook.entries, "Changing punchy.punch with reload is not supported, ignoring.")
-	assert.Equal(t, slog.LevelWarn, entry.Level)
-	assert.Empty(t, entry.Attrs)
+	entry := findEntry(t, hook.entries, "punchy.punch changed")
+	assert.Equal(t, slog.LevelInfo, entry.Level)
+	assert.Equal(t, map[string]any{"punch": true}, entry.Attrs)
 }
 
 func TestPunchy_LogFormat_ReloadRespond(t *testing.T) {
 	l, hook := newCapturingPunchyLogger(t)
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(`punchy: {respond: false}`))
-	NewPunchyFromConfig(l, c)
+	NewPunchyFromConfig(l, c, nil)
 	hook.entries = nil
 
 	require.NoError(t, c.ReloadConfigString(`punchy: {respond: true}`))
@@ -196,7 +195,7 @@ func TestPunchy_LogFormat_ReloadDelay(t *testing.T) {
 	l, hook := newCapturingPunchyLogger(t)
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(`punchy: {delay: 1s}`))
-	NewPunchyFromConfig(l, c)
+	NewPunchyFromConfig(l, c, nil)
 	hook.entries = nil
 
 	require.NoError(t, c.ReloadConfigString(`punchy: {delay: 10s}`))
@@ -210,7 +209,7 @@ func TestPunchy_LogFormat_ReloadTargetAllRemotes(t *testing.T) {
 	l, hook := newCapturingPunchyLogger(t)
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(`punchy: {target_all_remotes: false}`))
-	NewPunchyFromConfig(l, c)
+	NewPunchyFromConfig(l, c, nil)
 	hook.entries = nil
 
 	require.NoError(t, c.ReloadConfigString(`punchy: {target_all_remotes: true}`))
@@ -224,7 +223,7 @@ func TestPunchy_LogFormat_ReloadRespondDelay(t *testing.T) {
 	l, hook := newCapturingPunchyLogger(t)
 	c := config.NewC(test.NewLogger())
 	require.NoError(t, c.LoadString(`punchy: {respond_delay: 5s}`))
-	NewPunchyFromConfig(l, c)
+	NewPunchyFromConfig(l, c, nil)
 	hook.entries = nil
 
 	require.NoError(t, c.ReloadConfigString(`punchy: {respond_delay: 15s}`))

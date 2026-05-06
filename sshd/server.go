@@ -32,10 +32,12 @@ type SSHServer struct {
 	cancel func()
 }
 
-// NewSSHServer creates a new ssh server rigged with default commands and prepares to listen
-func NewSSHServer(l *slog.Logger) (*SSHServer, error) {
+// NewSSHServer creates a new ssh server rigged with default commands and prepares to listen.
+// The ssh server's context is parented off the supplied ctx so cancelling it
+// (e.g. on Control.Stop) tears down active sessions and closes the listener.
+func NewSSHServer(ctx context.Context, l *slog.Logger) (*SSHServer, error) {
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	s := &SSHServer{
 		trustedKeys: make(map[string]map[string]bool),
 		l:           l,
@@ -153,6 +155,10 @@ func (s *SSHServer) RegisterCommand(c *Command) {
 
 // Run begins listening and accepting connections
 func (s *SSHServer) Run(addr string) error {
+	if s.ctx.Err() != nil {
+		return s.ctx.Err()
+	}
+
 	var err error
 	s.listener, err = net.Listen("tcp", addr)
 	if err != nil {
@@ -161,8 +167,21 @@ func (s *SSHServer) Run(addr string) error {
 
 	s.l.Info("SSH server is listening", "sshListener", addr)
 
+	// Per-invocation watcher: cancellation of the parent context (e.g.
+	// Control.Stop) closes the listener so Accept unblocks and run returns.
+	// Closing `done` on exit keeps the watcher from outliving this Run call.
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-s.ctx.Done():
+			s.Stop()
+		case <-done:
+		}
+	}()
+
 	// Run loops until there is an error
 	s.run()
+	close(done)
 	s.closeSessions()
 
 	s.l.Info("SSH server stopped listening")
