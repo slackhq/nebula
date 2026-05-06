@@ -6,7 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
-	"sort"
+	"slices"
 
 	"github.com/slackhq/nebula/overlay/tio"
 )
@@ -543,13 +543,23 @@ func (c *TCPCoalescer) sortRun(run []*coalesceSlot) {
 	if len(run) <= 1 {
 		return
 	}
-	sort.SliceStable(run, func(i, j int) bool {
-		a, b := run[i], run[j]
-		if cmp := flowKeyCompare(a.fk, b.fk); cmp != 0 {
-			return cmp < 0
-		}
-		return tcpSeqLess(slotSeedSeq(a), slotSeedSeq(b))
-	})
+	// slices.SortStableFunc with a free, non-capturing comparator avoids the
+	// reflection + closure-escape allocations that sort.SliceStable forces.
+	slices.SortStableFunc(run, compareCoalesceSlots)
+}
+
+func compareCoalesceSlots(a, b *coalesceSlot) int {
+	if cmp := flowKeyCompare(a.fk, b.fk); cmp != 0 {
+		return cmp
+	}
+	aSeq, bSeq := slotSeedSeq(a), slotSeedSeq(b)
+	if aSeq == bSeq {
+		return 0
+	}
+	if tcpSeqLess(aSeq, bSeq) {
+		return -1
+	}
+	return 1
 }
 
 // slotSeedSeq returns the TCP seq of the slot's seed (first segment).
@@ -571,12 +581,11 @@ func tcpSeqLess(a, b uint32) bool {
 // is irrelevant — only that same-flow slots cluster together so the
 // post-sort sweep can merge contiguous pairs.
 func flowKeyCompare(a, b flowKey) int {
-	if c := bytes.Compare(a.src[:], b.src[:]); c != 0 {
-		return c
-	}
-	if c := bytes.Compare(a.dst[:], b.dst[:]); c != 0 {
-		return c
-	}
+	// Cheap scalar fields first so most non-matching keys short-circuit
+	// without ever calling bytes.Compare. sport is the ephemeral port on
+	// egress flows and discriminates fastest. For matching keys (same
+	// flow), array equality on src/dst inlines to word-sized compares,
+	// so we only pay bytes.Compare when the arrays actually differ.
 	if a.sport != b.sport {
 		if a.sport < b.sport {
 			return -1
@@ -588,6 +597,12 @@ func flowKeyCompare(a, b flowKey) int {
 			return -1
 		}
 		return 1
+	}
+	if a.dst != b.dst {
+		return bytes.Compare(a.dst[:], b.dst[:])
+	}
+	if a.src != b.src {
+		return bytes.Compare(a.src[:], b.src[:])
 	}
 	if a.isV6 != b.isV6 {
 		if !a.isV6 {
