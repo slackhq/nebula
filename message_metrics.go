@@ -33,6 +33,11 @@ func (m *MessageMetrics) Tx(t header.MessageType, s header.MessageSubType, i int
 		}
 	}
 }
+func (m *MessageMetrics) RxInvalid(i int64) {
+	if m != nil && m.rxUnknown != nil {
+		m.rxUnknown.Inc(i)
+	}
+}
 
 func newMessageMetrics() *MessageMetrics {
 	gen := func(t string) [][]metrics.Counter {

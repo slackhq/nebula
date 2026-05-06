@@ -24,17 +24,22 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	err := h.Parse(packet)
 	if err != nil {
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
+		// TODO: record metrics for rx holepunch/punchy packets?
 		if len(packet) > 1 {
-			f.l.Info("Error while parsing inbound packet",
-				"from", via,
-				"error", err,
-				"packet", packet,
-			)
+			f.messageMetrics.RxInvalid(1)
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				f.l.Debug("Error while parsing inbound packet",
+					"from", via,
+					"error", err,
+					"packet", packet,
+				)
+			}
 		}
 		return
 	}
 
 	if h.Version != header.Version {
+		f.messageMetrics.RxInvalid(1)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			f.l.Debug("Unexpected header version received", "from", via)
 		}
@@ -43,6 +48,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	// Check before processing to see if this is a expected type/subtype
 	if !h.IsValidSubType() {
+		f.messageMetrics.RxInvalid(1)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			f.l.Debug("Unexpected packet received", "from", via)
 		}
@@ -51,6 +57,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	if !via.IsRelayed {
 		if f.myVpnNetworksTable.Contains(via.UdpAddr.Addr()) {
+			f.messageMetrics.RxInvalid(1)
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				f.l.Debug("Refusing to process double encrypted packet", "from", via)
 			}
@@ -108,7 +115,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	out, err = f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 	if err != nil {
-		hostinfo.logger(f.l).Error("Failed to decrypt packet",
+		hostinfo.logger(f.l).Debug("Failed to decrypt packet",
 			"error", err,
 			"from", via,
 			"header", h,
@@ -126,7 +133,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		case header.MessageNone:
 			f.handleOutsideMessagePacket(hostinfo, out, packet, fwPacket, nb, q, localCache)
 		default:
-			hostinfo.logger(f.l).Debug("Unexpected message subtype received", "from", via)
+			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected message subtype seen", "from", via, "header", h)
 			return
 		}
 
@@ -141,7 +148,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		case header.TestRequest:
 			f.send(header.Test, header.TestReply, ci, hostinfo, out, nb, out)
 		default:
-			hostinfo.logger(f.l).Debug("Unexpected test subtype received", "from", via)
+			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected test subtype seen", "from", via, "header", h)
 			return
 		}
 
@@ -153,9 +160,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		f.relayManager.HandleControlMsg(hostinfo, out, f)
 
 	default:
-		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("Unexpected packet received", "from", via)
-		}
+		hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected message type seen", "from", via, "header", h)
 	}
 }
 
