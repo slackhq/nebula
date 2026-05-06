@@ -31,6 +31,7 @@ type CertVerifier func(cert.Certificate) (*cert.CachedCertificate, error)
 type Result struct {
 	EKey          *noise.CipherState
 	DKey          *noise.CipherState
+	Cipher        noise.CipherFunc // identifies which post-handshake CipherState the data plane should wrap EKey/DKey in
 	MyCert        cert.Certificate
 	RemoteCert    *cert.CachedCertificate
 	RemoteIndex   uint32
@@ -105,6 +106,7 @@ func NewMachine(
 		myVersion:  version,
 		result: &Result{
 			Initiator: initiator,
+			Cipher:    cred.cipherSuite,
 		},
 	}, nil
 }
