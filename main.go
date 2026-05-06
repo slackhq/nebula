@@ -241,7 +241,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 			if tx && ifce.udpRaw == nil {
 				ifce.udpRaw, err = udp.NewRawConn(l, c.GetString("listen.host", "0.0.0.0"), port, uint16(port))
 				if err != nil {
-					l.WithError(err).Error("Failed to get raw socket for tun.multiport.tx_enabled")
+					l.Error("Failed to get raw socket for tun.multiport.tx_enabled", "error", err)
 					ifce.udpRaw = nil
 					tx = false
 				}
@@ -260,7 +260,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 			handshakeManager.udpRaw = ifce.udpRaw
 			handshakeManager.multiPort = ifce.multiPort
 
-			l.WithField("multiPort", ifce.multiPort).Info("Multiport configured")
+			l.Info("Multiport configured", "multiPort", ifce.multiPort)
 		}
 
 		loadMultiPortConfig(c)

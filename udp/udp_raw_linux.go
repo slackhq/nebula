@@ -6,13 +6,13 @@ package udp
 import (
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"syscall"
 	"unsafe"
 
 	"github.com/rcrowley/go-metrics"
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/sys/unix"
@@ -26,10 +26,10 @@ const RawOverhead = 28
 type RawConn struct {
 	sysFd    int
 	basePort uint16
-	l        *logrus.Logger
+	l        *slog.Logger
 }
 
-func NewRawConn(l *logrus.Logger, ip string, port int, basePort uint16) (*RawConn, error) {
+func NewRawConn(l *slog.Logger, ip string, port int, basePort uint16) (*RawConn, error) {
 	syscall.ForkLock.RLock()
 	// With IPPROTO_UDP, the linux kernel tries to deliver every UDP packet
 	// received in the system to our socket. This constantly overflows our
@@ -130,17 +130,17 @@ func (u *RawConn) ReloadConfig(c *config.C) {
 	}
 
 	if err := u.SetSendBuffer(b); err != nil {
-		u.l.WithError(err).Error("Failed to set listen.write_buffer")
+		u.l.Error("Failed to set listen.write_buffer", "error", err)
 		return
 	}
 
 	s, err := u.GetSendBuffer()
 	if err != nil {
-		u.l.WithError(err).Warn("Failed to get listen.write_buffer")
+		u.l.Warn("Failed to get listen.write_buffer", "error", err)
 		return
 	}
 
-	u.l.WithField("size", s).Info("listen.write_buffer was set")
+	u.l.Info("listen.write_buffer was set", "size", s)
 }
 
 func (u *RawConn) SetSendBuffer(n int) error {

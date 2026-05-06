@@ -324,10 +324,12 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 			hm.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
 			err = hm.udpRaw.WriteTo(raw, udp.RandomSendPort.UDPSendPort(hm.multiPort.TxPorts), addr)
 			if err != nil {
-				hostinfo.logger(hm.l).WithField("udpAddr", addr).
-					WithField("initiatorIndex", hostinfo.localIndexId).
-					WithField("handshake", m{"stage": 1, "style": "ix_psk0"}).
-					WithError(err).Error("Failed to send handshake message")
+				hostinfo.logger(hm.l).Error("Failed to send handshake message",
+					"error", err,
+					"udpAddr", addr,
+					"initiatorIndex", hostinfo.localIndexId,
+					"handshake", hsFields,
+				)
 			}
 		}
 	})
