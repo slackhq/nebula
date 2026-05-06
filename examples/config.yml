@@ -163,17 +163,21 @@ listen:
 
 punchy:
   # Continues to punch inbound/outbound at a regular interval to avoid expiration of firewall nat mappings
+  # This setting is reloadable.
   punch: true
 
   # respond means that a node you are trying to reach will connect back out to you if your hole punching fails
   # this is extremely useful if one node is behind a difficult nat, such as a symmetric NAT
   # Default is false
+  # This setting is reloadable.
   #respond: true
 
   # delays a punch response for misbehaving NATs, default is 1 second.
+  # This setting is reloadable.
   #delay: 1s
 
   # set the delay before attempting punchy.respond. Default is 5 seconds. respond must be true to take effect.
+  # This setting is reloadable.
   #respond_delay: 5s
 
 # Cipher allows you to choose between the available ciphers for your network. Options are chachapoly or aes
