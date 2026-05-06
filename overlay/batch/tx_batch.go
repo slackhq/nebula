@@ -55,9 +55,7 @@ func (b *SendBatch) Flush() error {
 	if len(b.bufs) > 0 {
 		err = b.out.WriteBatch(b.bufs, b.dsts, b.ecns)
 	}
-	for i := range b.bufs {
-		b.bufs[i] = nil
-	}
+	clear(b.bufs)
 	b.bufs = b.bufs[:0]
 	b.dsts = b.dsts[:0]
 	b.ecns = b.ecns[:0]

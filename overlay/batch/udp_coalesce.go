@@ -180,13 +180,9 @@ func (c *UDPCoalescer) Flush() error {
 		}
 		c.release(s)
 	}
-	for i := range c.slots {
-		c.slots[i] = nil
-	}
+	clear(c.slots)
 	c.slots = c.slots[:0]
-	for k := range c.openSlots {
-		delete(c.openSlots, k)
-	}
+	clear(c.openSlots)
 	c.backing = c.backing[:0]
 	return first
 }
@@ -270,9 +266,7 @@ func (c *UDPCoalescer) take() *udpSlot {
 func (c *UDPCoalescer) release(s *udpSlot) {
 	s.passthrough = false
 	s.rawPkt = nil
-	for i := range s.payIovs {
-		s.payIovs[i] = nil
-	}
+	clear(s.payIovs)
 	s.payIovs = s.payIovs[:0]
 	s.numSeg = 0
 	s.totalPay = 0
