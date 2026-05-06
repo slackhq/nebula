@@ -2,6 +2,7 @@ package batch
 
 import (
 	"encoding/binary"
+	"runtime"
 	"testing"
 
 	"github.com/slackhq/nebula/overlay/tio"
@@ -170,4 +171,69 @@ func BenchmarkMultiCommitSingleFlow(b *testing.B) {
 func BenchmarkMultiCommitInterleaved4(b *testing.B) {
 	pkts := buildTCPv4Interleaved(4, tcpCoalesceMaxSegs, 1200)
 	runMultiCommitBench(b, pkts, len(pkts))
+}
+
+// flowKeyPair is one comparison input for the flowKeyCompare bench.
+type flowKeyPair struct{ a, b flowKey }
+
+// makeFlowKey builds an IPv4 flowKey from compact inputs.
+func makeFlowKey(srcLow, dstLow uint32, sport, dport uint16) flowKey {
+	var fk flowKey
+	binary.BigEndian.PutUint32(fk.src[12:16], srcLow)
+	binary.BigEndian.PutUint32(fk.dst[12:16], dstLow)
+	fk.sport = sport
+	fk.dport = dport
+	return fk
+}
+
+// flowKeyCases are the workload mixes flowKeyCompare sees in practice.
+//   - sameFlow: equal keys; tests the equal-path cost (sort runs hit this
+//     repeatedly when many segments share a flow).
+//   - sportDiffers: same src/dst/dport, different sport — the typical
+//     "sibling flows from one host to one server" pattern.
+//   - dstDiffers: same src/sport/dport, different dst — outbound to many
+//     servers from a fixed local port.
+//   - allDiffer: every field differs; worst case for short-circuiting.
+func flowKeyCases() map[string][]flowKeyPair {
+	const n = 64
+	cases := map[string][]flowKeyPair{
+		"sameFlow":     make([]flowKeyPair, n),
+		"sportDiffers": make([]flowKeyPair, n),
+		"dstDiffers":   make([]flowKeyPair, n),
+		"allDiffer":    make([]flowKeyPair, n),
+	}
+	for i := range n {
+		base := makeFlowKey(0x0a000001, 0x0a000002, 40000, 443)
+		cases["sameFlow"][i] = flowKeyPair{a: base, b: base}
+		cases["sportDiffers"][i] = flowKeyPair{
+			a: base,
+			b: makeFlowKey(0x0a000001, 0x0a000002, uint16(40001+i), 443),
+		}
+		cases["dstDiffers"][i] = flowKeyPair{
+			a: base,
+			b: makeFlowKey(0x0a000001, uint32(0x0a000002+i+1), 40000, 443),
+		}
+		cases["allDiffer"][i] = flowKeyPair{
+			a: makeFlowKey(uint32(0x0a000001+i), uint32(0x0a000002+i), uint16(40000+i), uint16(80+i)),
+			b: makeFlowKey(uint32(0x0b000001+i), uint32(0x0b000002+i), uint16(50000+i), uint16(443+i)),
+		}
+	}
+	return cases
+}
+
+// BenchmarkFlowKeyCompare measures flowKeyCompare across the workloads
+// the sort step actually sees. Use this to compare reorderings.
+func BenchmarkFlowKeyCompare(b *testing.B) {
+	for name, pairs := range flowKeyCases() {
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			var sink int
+			for i := 0; i < b.N; i++ {
+				p := pairs[i&(len(pairs)-1)]
+				sink += flowKeyCompare(p.a, p.b)
+			}
+			runtime.KeepAlive(sink)
+		})
+	}
 }
