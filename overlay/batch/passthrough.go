@@ -48,9 +48,7 @@ func (p *Passthrough) Flush() error {
 			firstErr = err
 		}
 	}
-	for i := range p.slots {
-		p.slots[i] = nil
-	}
+	clear(p.slots)
 	p.slots = p.slots[:0]
 	p.backing = p.backing[:0]
 	return firstErr
