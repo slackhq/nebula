@@ -3,6 +3,7 @@ package handshake
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"slices"
 	"time"
 
@@ -40,8 +41,9 @@ type Result struct {
 	MessageIndex  uint64 // number of messages exchanged during the handshake
 	Initiator     bool
 
-	MultiportRx bool
-	MultiportTx bool
+	MultiportRx       bool
+	MultiportTx       bool
+	MultiportBasePort uint16
 }
 
 // Machine drives a Noise handshake through N messages. It handles Noise
@@ -324,12 +326,18 @@ func (m *Machine) processPayload(msg []byte, flags msgFlags) error {
 			if payload.ResponderMultiPort != nil {
 				m.result.MultiportRx = payload.ResponderMultiPort.RxSupported
 				m.result.MultiportTx = payload.ResponderMultiPort.TxSupported
+				if payload.ResponderMultiPort.BasePort <= math.MaxUint16 {
+					m.result.MultiportBasePort = uint16(payload.ResponderMultiPort.BasePort)
+				}
 			}
 		} else {
 			m.result.RemoteIndex = payload.InitiatorIndex
 			if payload.InitiatorMultiPort != nil {
 				m.result.MultiportRx = payload.InitiatorMultiPort.RxSupported
 				m.result.MultiportTx = payload.InitiatorMultiPort.TxSupported
+				if payload.InitiatorMultiPort.BasePort <= math.MaxUint16 {
+					m.result.MultiportBasePort = uint16(payload.InitiatorMultiPort.BasePort)
+				}
 			}
 		}
 		m.result.HandshakeTime = payload.Time

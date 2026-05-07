@@ -765,6 +765,12 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		return
 	}
 
+	if !via.IsRelayed && result.MultiportTx && result.MultiportBasePort != via.UdpAddr.Port() {
+		// The other side sent us a handshake from a different port, make sure
+		// we send responses back to the BasePort
+		via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), result.MultiportBasePort)
+	}
+
 	remoteCert := result.RemoteCert
 	if remoteCert == nil {
 		f.l.Error("Handshake did not produce a peer certificate", "from", via)
@@ -900,6 +906,14 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		return
 	}
 
+	if !via.IsRelayed && result.MultiportTx && result.MultiportBasePort != via.UdpAddr.Port() {
+		// The other side sent us a handshake from a different port, make sure
+		// we send responses back to the BasePort
+		via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), result.MultiportBasePort)
+	}
+	hostinfo.multiportTx = hm.multiPort.Tx && result.MultiportRx
+	hostinfo.multiportRx = hm.multiPort.Rx && result.MultiportTx
+
 	// Handshake complete; build the ConnectionState now that we have keys and a verified peer cert.
 	hostinfo.ConnectionState = newConnectionStateFromResult(result)
 
@@ -920,9 +934,6 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	} else {
 		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
 	}
-
-	hostinfo.multiportTx = hm.multiPort.Tx && result.MultiportRx
-	hostinfo.multiportRx = hm.multiPort.Rx && result.MultiportTx
 
 	// Verify correct host responded (initiator check)
 	vpnAddrs := make([]netip.Addr, len(vpnNetworks))
@@ -1141,6 +1152,10 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 
 	switch err {
 	case ErrAlreadySeen:
+		if hostinfo.multiportRx {
+			// The other host is sending to us with multiport, so only grab the IP
+			via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), hostinfo.remote.Port())
+		}
 		if existing.SetRemoteIfPreferred(f.hostMap, via) {
 			f.SendMessageToVpnAddr(header.Test, header.TestRequest, hostinfo.vpnAddrs[0], []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 		}
