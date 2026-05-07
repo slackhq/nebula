@@ -13,6 +13,7 @@ import (
 
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/udp"
 	"golang.org/x/net/ipv4"
 )
@@ -23,7 +24,7 @@ const (
 
 var ErrOutOfWindow = errors.New("out of window packet")
 
-func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
+func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, parsedRx *batch.RxParsed, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
 	err := h.Parse(packet)
 	if err != nil {
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
@@ -136,7 +137,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	case header.Message:
 		switch h.Subtype {
 		case header.MessageNone:
-			f.handleOutsideMessagePacket(hostinfo, out, packet, fwPacket, nb, q, localCache, meta)
+			f.handleOutsideMessagePacket(hostinfo, out, packet, fwPacket, parsedRx, nb, q, localCache, meta)
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected message subtype seen", "from", via, "header", h)
 			return
@@ -169,7 +170,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	}
 }
 
-func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
+func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, parsedRx *batch.RxParsed,  lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
 	// The entire body is sent as AD, not encrypted.
 	// The packet consists of a 16-byte parsed Nebula header, Associated Data-protected payload, and a trailing 16-byte AEAD signature value.
 	// The packet is guaranteed to be at least 16 bytes at this point, b/c it got past the h.Parse() call above. If it's
@@ -212,7 +213,8 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 			relay:     relay,
 			IsRelayed: true,
 		}
-		f.readOutsidePackets(via, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache, meta)
+		f.readOutsidePackets(via, out[:0], signedPayload, h, fwPacket, parsedRx, lhf, nb, q, localCache, meta)
+		return
 	case ForwardingType:
 		// Find the target HostInfo relay object
 		targetHI, targetRelay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relay.PeerAddr)
@@ -560,7 +562,7 @@ func applyOuterECN(pkt []byte, outerECN byte, hostinfo *HostInfo, l *slog.Logger
 	}
 }
 
-func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
+func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, packet []byte, fwPacket *firewall.Packet, parsedRx *batch.RxParsed, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
 	// RFC 6040 normal-mode combine: fold any outer CE mark stamped by the
 	// underlay into the inner header before firewall + TUN write. Other
 	// outer codepoints are advisory only — we keep the inner unchanged.
@@ -568,7 +570,10 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, p
 		applyOuterECN(out, meta.OuterECN, hostinfo, f.l)
 	}
 
-	err := newPacket(out, true, fwPacket)
+	// Single IP+L4 walk feeds both the firewall (via fwPacket) and the
+	// batcher (via parsedRx). Replaces newPacket — the batcher's CommitInbound
+	// uses parsedRx instead of re-walking the headers.
+	err := batch.ParseInbound(out, fwPacket, parsedRx)
 	if err != nil {
 		hostinfo.logger(f.l).Warn("Error while validating inbound packet",
 			"error", err,
@@ -591,7 +596,7 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, p
 		return
 	}
 
-	err = f.batchers[q].Commit(out)
+	err = f.batchers[q].CommitInbound(out, parsedRx)
 	if err != nil {
 		f.l.Error("Failed to write to tun", "error", err)
 	}

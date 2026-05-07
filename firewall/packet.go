@@ -19,6 +19,14 @@ const (
 	PortFragment = -1 // Special value for matching `port: fragment`
 )
 
+type TransportTuple struct {
+	FirstAddr  [16]byte
+	SecondAddr [16]byte
+	FirstPort  uint16
+	SecondPort uint16
+	IsV6       bool
+}
+
 type Packet struct {
 	LocalAddr  netip.Addr
 	RemoteAddr netip.Addr

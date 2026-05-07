@@ -40,6 +40,13 @@ func (p *Passthrough) Commit(pkt []byte) error {
 	return nil
 }
 
+// CommitInbound ignores the hint — Passthrough never coalesces, so there's
+// no IP/L4 re-parse to skip. Present so Passthrough satisfies the RxBatcher
+// interface alongside MultiCoalescer.
+func (p *Passthrough) CommitInbound(pkt []byte, _ *RxParsed) error {
+	return p.Commit(pkt)
+}
+
 func (p *Passthrough) Flush() error {
 	var firstErr error
 	for _, s := range p.slots {
