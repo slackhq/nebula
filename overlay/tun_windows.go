@@ -156,11 +156,8 @@ func (t *winTun) addRoutes(logErrors bool) error {
 			continue
 		}
 
-		// Add our unsafe route
-		// Windows does not support multipath routes natively, so we install only a single route.
-		// This is not a problem as traffic will always be sent to Nebula which handles the multipath routing internally.
-		// In effect this provides multipath routing support to windows supporting loadbalancing and redundancy.
-		err := luid.AddRoute(r.Cidr, r.Via[0].Addr(), uint32(r.Metric))
+		// Add our unsafe route as an on-link route to the nebula tun device.
+		err := luid.AddRoute(r.Cidr, unspecifiedNextHop(r.Cidr), uint32(r.Metric))
 		if err != nil {
 			retErr := util.NewContextualError("Failed to add route", map[string]any{"route": r}, err)
 			if logErrors {
@@ -206,7 +203,7 @@ func (t *winTun) removeRoutes(routes []Route) error {
 		}
 
 		// See comment on luid.AddRoute
-		err := luid.DeleteRoute(r.Cidr, r.Via[0].Addr())
+		err := luid.DeleteRoute(r.Cidr, unspecifiedNextHop(r.Cidr))
 		if err != nil {
 			t.l.Error("Failed to remove route", "error", err, "route", r)
 		} else {
@@ -259,6 +256,13 @@ func (t *winTun) Close() error {
 	_ = luid.FlushDNS(windows.AF_INET6)
 
 	return t.tun.Close()
+}
+
+func unspecifiedNextHop(p netip.Prefix) netip.Addr {
+	if p.Addr().Is4() {
+		return netip.IPv4Unspecified()
+	}
+	return netip.IPv6Unspecified()
 }
 
 func generateGUIDByDeviceName(name string) (*windows.GUID, error) {
