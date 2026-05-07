@@ -570,10 +570,13 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, p
 		applyOuterECN(out, meta.OuterECN, hostinfo, f.l)
 	}
 
-	// Single IP+L4 walk feeds both the firewall (via fwPacket) and the
-	// batcher (via parsedRx). Replaces newPacket — the batcher's CommitInbound
-	// uses parsedRx instead of re-walking the headers.
-	err := batch.ParseInbound(out, fwPacket, parsedRx)
+	// Single IP+L4 walk feeds the firewall conntrack key (parsedRx.Key)
+	// and the batcher hint (parsedRx.tcp/udp). Replaces newPacket — and
+	// pointedly does NOT fill fwPacket.LocalAddr/RemoteAddr, since
+	// firewall.Drop's fast path uses Key alone and only hydrates fwPacket
+	// from Key on the slow path.
+	*fwPacket = firewall.Packet{}
+	err := batch.ParseInbound(out, parsedRx)
 	if err != nil {
 		hostinfo.logger(f.l).Warn("Error while validating inbound packet",
 			"error", err,
@@ -582,7 +585,7 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, p
 		return
 	}
 
-	dropReason := f.firewall.Drop(*fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(parsedRx.Key, fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason != nil {
 		// NOTE: We give `packet` as the `out` here since we already decrypted from it and we don't need it anymore
 		// This gives us a buffer to build the reject packet in

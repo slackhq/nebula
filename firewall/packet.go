@@ -19,12 +19,32 @@ const (
 	PortFragment = -1 // Special value for matching `port: fragment`
 )
 
+// TransportTuple is the dense 5-tuple shape shared between the coalescer's
+// flowKey-equivalent and the firewall's PacketKey. Stored in Local/Remote
+// orientation so a flow's incoming and outgoing packets share the same
+// tuple identity. v4 addresses occupy the low 4 bytes of LocalAddr/
+// RemoteAddr (NOT v4-mapped form) so v4 vs v6 tuples never collide.
 type TransportTuple struct {
-	FirstAddr  [16]byte
-	SecondAddr [16]byte
-	FirstPort  uint16
-	SecondPort uint16
+	LocalAddr  [16]byte
+	RemoteAddr [16]byte
+	LocalPort  uint16
+	RemotePort uint16
 	IsV6       bool
+}
+
+// PacketKey is the firewall's conntrack and ConntrackCache map key — the
+// dense form of the 5-tuple plus the protocol and fragment flag the
+// firewall actually discriminates flows on. Kept separate from Packet so
+// the conntrack-hit fast path doesn't pay for hashing the unique.Handle
+// each netip.Addr carries, and so the inbound parser can skip the
+// AddrFrom4/AddrFrom16 calls until rule matching actually needs them.
+//
+// Superset of the coalescer's flowKey shape (same 5-tuple, just in
+// Local/Remote orientation rather than wire src/dst).
+type PacketKey struct {
+	TransportTuple
+	Protocol uint8
+	Fragment bool
 }
 
 type Packet struct {
@@ -37,6 +57,51 @@ type Packet struct {
 	RemotePort uint16
 	Protocol   uint8
 	Fragment   bool
+}
+
+// Key derives a PacketKey from a populated Packet. Used by the outgoing
+// path (inside.go) which still parses into a full Packet via newPacket
+// before the firewall check; the inbound path skips this hop entirely by
+// having its parser write straight into the PacketKey.
+func (fp *Packet) Key() PacketKey {
+	k := PacketKey{
+		Protocol: fp.Protocol,
+		Fragment: fp.Fragment,
+	}
+	k.LocalPort = fp.LocalPort
+	k.RemotePort = fp.RemotePort
+	k.IsV6 = !fp.LocalAddr.Is4()
+	if k.IsV6 {
+		k.LocalAddr = fp.LocalAddr.As16()
+		k.RemoteAddr = fp.RemoteAddr.As16()
+	} else {
+		v4 := fp.LocalAddr.As4()
+		copy(k.LocalAddr[:4], v4[:])
+		v4 = fp.RemoteAddr.As4()
+		copy(k.RemoteAddr[:4], v4[:])
+	}
+	return k
+}
+
+// Hydrate fills fp's netip.Addr fields and copies the rest from k. Called
+// by the firewall slow path when conntrack misses and rule matching needs
+// the rich Packet form (CIDR lookups, family checks). The fast path skips
+// this entirely.
+func (k *PacketKey) Hydrate(fp *Packet) {
+	fp.LocalPort = k.LocalPort
+	fp.RemotePort = k.RemotePort
+	fp.Protocol = k.Protocol
+	fp.Fragment = k.Fragment
+	if k.IsV6 {
+		fp.LocalAddr = netip.AddrFrom16(k.LocalAddr)
+		fp.RemoteAddr = netip.AddrFrom16(k.RemoteAddr)
+	} else {
+		var v4 [4]byte
+		copy(v4[:], k.LocalAddr[:4])
+		fp.LocalAddr = netip.AddrFrom4(v4)
+		copy(v4[:], k.RemoteAddr[:4])
+		fp.RemoteAddr = netip.AddrFrom4(v4)
+	}
 }
 
 func (fp *Packet) Copy() *Packet {

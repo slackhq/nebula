@@ -10,8 +10,10 @@ import (
 )
 
 // ConntrackCache is used as a local routine cache to know if a given flow
-// has been seen in the conntrack table.
-type ConntrackCache map[Packet]struct{}
+// has been seen in the conntrack table. Keyed on PacketKey (dense form)
+// rather than Packet so the lookup hashes raw bytes instead of the
+// unique.Handle each netip.Addr in Packet carries.
+type ConntrackCache map[PacketKey]struct{}
 
 type ConntrackCacheTicker struct {
 	cacheV    uint64
