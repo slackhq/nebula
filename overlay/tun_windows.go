@@ -25,6 +25,10 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
+type closer interface {
+	Close()
+}
+
 const tunGUIDLabel = "Fixed Nebula Windows GUID v1"
 
 type winTun struct {
@@ -36,6 +40,8 @@ type winTun struct {
 	guid            windows.GUID
 	networkCategory networkCategory
 	setCategory     bool
+	bypassWDF       bool
+	wdfBypass       closer
 	l               *slog.Logger
 
 	tun *wintun.NativeTun
@@ -69,6 +75,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 		guid:            *guid,
 		networkCategory: cat,
 		setCategory:     setCat,
+		bypassWDF:       c.GetBool("tun.windows_bypass_wdf", true),
 		l:               l,
 	}
 
@@ -158,6 +165,10 @@ func (t *winTun) Activate() error {
 		// Manager, so we apply the category in the background and retry until
 		// it shows up.
 		go applyNetworkCategory(t.l, t.guid, t.networkCategory)
+	}
+
+	if t.bypassWDF {
+		t.wdfBypass = installInterfaceBypass(t.l, uint64(t.tun.LUID()))
 	}
 
 	return nil
@@ -272,6 +283,11 @@ func (t *winTun) Close() error {
 
 	_ = luid.FlushDNS(windows.AF_INET)
 	_ = luid.FlushDNS(windows.AF_INET6)
+
+	if t.wdfBypass != nil {
+		t.wdfBypass.Close()
+		t.wdfBypass = nil
+	}
 
 	return t.tun.Close()
 }
