@@ -7,11 +7,10 @@ package udp
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"syscall"
-
-	"log/slog"
 
 	"golang.org/x/sys/unix"
 )
