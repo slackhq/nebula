@@ -19,19 +19,6 @@ const (
 	PortFragment = -1 // Special value for matching `port: fragment`
 )
 
-// TransportTuple is the dense 5-tuple shape shared between the coalescer's
-// flowKey-equivalent and the firewall's PacketKey. Stored in Local/Remote
-// orientation so a flow's incoming and outgoing packets share the same
-// tuple identity. v4 addresses occupy the low 4 bytes of LocalAddr/
-// RemoteAddr (NOT v4-mapped form) so v4 vs v6 tuples never collide.
-type TransportTuple struct {
-	LocalAddr  [16]byte
-	RemoteAddr [16]byte
-	LocalPort  uint16
-	RemotePort uint16
-	IsV6       bool
-}
-
 // PacketKey is the firewall's conntrack and ConntrackCache map key — the
 // dense form of the 5-tuple plus the protocol and fragment flag the
 // firewall actually discriminates flows on. Kept separate from Packet so
@@ -42,9 +29,13 @@ type TransportTuple struct {
 // Superset of the coalescer's flowKey shape (same 5-tuple, just in
 // Local/Remote orientation rather than wire src/dst).
 type PacketKey struct {
-	TransportTuple
-	Protocol uint8
-	Fragment bool
+	LocalAddr  [16]byte
+	RemoteAddr [16]byte
+	LocalPort  uint16
+	RemotePort uint16
+	IsV6       bool
+	Protocol   uint8
+	Fragment   bool
 }
 
 type Packet struct {
@@ -101,6 +92,16 @@ func (k *PacketKey) Hydrate(fp *Packet) {
 		fp.LocalAddr = netip.AddrFrom4(v4)
 		copy(v4[:], k.RemoteAddr[:4])
 		fp.RemoteAddr = netip.AddrFrom4(v4)
+	}
+}
+
+func (k *PacketKey) GetRemoteAddr() netip.Addr {
+	if k.IsV6 {
+		return netip.AddrFrom16(k.RemoteAddr)
+	} else {
+		var v4 [4]byte
+		copy(v4[:], k.RemoteAddr[:4])
+		return netip.AddrFrom4(v4)
 	}
 }
 

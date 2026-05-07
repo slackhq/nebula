@@ -28,7 +28,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 	// the same 5-tuple every segment will share, so a single newPacket /
 	// firewall check covers the whole superpacket.
 	packet := pkt.Bytes
-	err := newPacket(packet, false, fwPacket)
+	key, err := newPacketKey(packet, false)
 	if err != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			f.l.Debug("Error while validating outbound packet",
@@ -38,6 +38,8 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 		}
 		return
 	}
+
+	key.Hydrate(fwPacket)
 
 	// Ignore local broadcast packets
 	if f.dropLocalBroadcast {
@@ -105,7 +107,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 		return
 	}
 
-	dropReason := f.firewall.Drop(fwPacket.Key(), fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(key, fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
 		f.sendInsideMessage(hostinfo, pkt, nb, sendBatch, rejectBuf, q)
 	} else {
@@ -392,15 +394,16 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 }
 
 func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte) {
-	fp := &firewall.Packet{}
-	err := newPacket(p, false, fp)
+	key, err := newPacketKey(p, false)
 	if err != nil {
 		f.l.Warn("error while parsing outgoing packet for firewall check", "error", err)
 		return
 	}
+	fp := &firewall.Packet{}
+	key.Hydrate(fp)
 
 	// check if packet is in outbound fw rules
-	dropReason := f.firewall.Drop(fp.Key(), fp, false, hostinfo, f.pki.GetCAPool(), nil)
+	dropReason := f.firewall.Drop(key, fp, false, hostinfo, f.pki.GetCAPool(), nil)
 	if dropReason != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			f.l.Debug("dropping cached packet",

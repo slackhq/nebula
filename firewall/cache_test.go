@@ -23,7 +23,7 @@ func newFixedTicker(t *testing.T, l *slog.Logger, cacheLen int) *ConntrackCacheT
 		cache: make(ConntrackCache, cacheLen),
 	}
 	for i := 0; i < cacheLen; i++ {
-		c.cache[PacketKey{TransportTuple: TransportTuple{LocalPort: uint16(i) + 1}}] = struct{}{}
+		c.cache[PacketKey{LocalPort: uint16(i) + 1}] = struct{}{}
 	}
 	c.cacheTick.Store(1) // cacheV starts at 0, so Get() takes the reset path
 	return c

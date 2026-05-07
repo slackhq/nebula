@@ -529,7 +529,7 @@ func BenchmarkParseV6(b *testing.B) {
 
 	b.Run("Normal", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			if err = parseV6(normalPacket, true, fp); err != nil {
+			if err = newPacket(normalPacket, true, fp); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -537,7 +537,7 @@ func BenchmarkParseV6(b *testing.B) {
 
 	b.Run("FirstFragment", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			if err = parseV6(firstFrag, true, fp); err != nil {
+			if err = newPacket(firstFrag, true, fp); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -545,7 +545,7 @@ func BenchmarkParseV6(b *testing.B) {
 
 	b.Run("SecondFragment", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			if err = parseV6(secondFrag, true, fp); err != nil {
+			if err = newPacket(secondFrag, true, fp); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -590,7 +590,7 @@ func BenchmarkParseV6(b *testing.B) {
 
 	b.Run("200 HopByHop headers", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			if err = parseV6(evilBytes, false, fp); err != nil {
+			if err = newPacket(evilBytes, false, fp); err != nil {
 				b.Fatal(err)
 			}
 		}
