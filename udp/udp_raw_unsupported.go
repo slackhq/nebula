@@ -5,10 +5,10 @@ package udp
 
 import (
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"runtime"
 
-	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
 )
 
@@ -16,7 +16,7 @@ const RawOverhead = 0
 
 type RawConn struct{}
 
-func NewRawConn(l *logrus.Logger, ip string, port int, basePort uint16) (*RawConn, error) {
+func NewRawConn(l *slog.Logger, ip string, port int, basePort uint16) (*RawConn, error) {
 	return nil, fmt.Errorf("multiport tx is not supported on %s", runtime.GOOS)
 }
 

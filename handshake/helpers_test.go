@@ -8,6 +8,7 @@ import (
 	"github.com/flynn/noise"
 	"github.com/slackhq/nebula/cert"
 	ct "github.com/slackhq/nebula/cert_test"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/stretchr/testify/require"
 )
@@ -71,6 +72,7 @@ func newTestMachine(
 		cs.version, cs.getCredential,
 		verifier, func() (uint32, error) { return localIndex, nil },
 		initiator, header.HandshakeIXPSK0,
+		config.MultiPortConfig{},
 	)
 	require.NoError(t, err)
 	return m
