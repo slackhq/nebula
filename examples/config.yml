@@ -286,6 +286,16 @@ tun:
     #  metric: 100
     #  install: true
 
+  # On Windows only, sets the network category of the nebula interface. Without this, Windows often
+  # leaves the network as "Unidentified" and treats it as Public, which makes the host firewall more
+  # restrictive than you usually want for an overlay between trusted peers. Valid values:
+  #   private             - treat the nebula network as a private/trusted network (default)
+  #   public              - treat it as a public/untrusted network
+  #   domain              - treat it as a domain-authenticated network
+  #   unset               - leave whatever Windows decided alone
+  # Not reloadable.
+  #network_category: private
+
   # On linux only, set to true to manage unsafe routes directly on the system route table with gateway routes instead of
   # in nebula configuration files. Default false, not reloadable.
   #use_system_route_table: false

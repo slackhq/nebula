@@ -81,3 +81,26 @@ jobs:
       run: make smoke-vagrant/linux-386
 
     timeout-minutes: 30
+
+  smoke-windows:
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'smoke-test-extra')
+    name: Run windows smoke test
+    runs-on: windows-latest
+    steps:
+
+    - uses: actions/checkout@v6
+
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.25'
+        check-latest: true
+
+    - name: build
+      run: make bin-windows
+
+    - name: run smoke-windows
+      shell: pwsh
+      working-directory: ./.github/workflows/smoke
+      run: ./smoke-windows.ps1
+
+    timeout-minutes: 10
