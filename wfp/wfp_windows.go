@@ -73,8 +73,15 @@ const fwpMatchEqual uint32 = 0
 // FWPM_SESSION flags.
 const fwpmSessionFlagDynamic uint32 = 0x1
 
+// FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT prevents lower-priority filters in other sublayers,
+// notably Windows Defender Firewall's MPSSVC_WF sublayer, which shares our 0xFFFF weight from overriding this PERMIT.
+// Without it, a default WDF block at the same sublayer weight can still win arbitration.
+const fwpmFilterFlagClearActionRight uint32 = 0x8
+
 // RPC authentication.
-const rpcCAuthnDefault uint32 = 0xFFFFFFFF
+// RPC_C_AUTHN_WINNT works on workgroup machines with no domain context
+// RPC_C_AUTHN_DEFAULT falls back through a chain that can land on something WFP doesn't accept on a fresh box.
+const rpcCAuthnWinNT uint32 = 10
 
 // fwpByteBlob (FWP_BYTE_BLOB). 16 bytes on 64-bit.
 type fwpByteBlob struct {
@@ -245,7 +252,7 @@ func openDynamicEngine() (uintptr, error) {
 	var engine uintptr
 	r1, _, _ := procFwpmEngineOpen0.Call(
 		0, // serverName == NULL (local)
-		uintptr(rpcCAuthnDefault),
+		uintptr(rpcCAuthnWinNT),
 		0, // authIdentity == NULL
 		uintptr(unsafe.Pointer(&session)),
 		uintptr(unsafe.Pointer(&engine)),
@@ -300,6 +307,7 @@ func addInterfaceFilter(engine uintptr, sublayerKey, layer windows.GUID, luid ui
 	filter := fwpmFilter0{
 		// filterKey left zero: WFP assigns one when the filter is added.
 		displayData:         fwpmDisplayData0{name: name, description: desc},
+		flags:               fwpmFilterFlagClearActionRight,
 		layerKey:            layer,
 		subLayerKey:         sublayerKey,
 		weight:              fwpValue0{type_: fwpUint8, value: uintptr(15)},
@@ -347,6 +355,7 @@ func addUDPPortFilter(engine uintptr, sublayerKey, layer windows.GUID, port uint
 
 	filter := fwpmFilter0{
 		displayData:         fwpmDisplayData0{name: name, description: desc},
+		flags:               fwpmFilterFlagClearActionRight,
 		layerKey:            layer,
 		subLayerKey:         sublayerKey,
 		weight:              fwpValue0{type_: fwpUint8, value: uintptr(15)},

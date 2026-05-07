@@ -247,6 +247,14 @@ catch {
     Get-Content $peerOut -ErrorAction SilentlyContinue | Out-Host
     Write-Host '=== peer stderr ==='
     Get-Content $peerErr -ErrorAction SilentlyContinue | Out-Host
+    Write-Host '=== nebula WFP filters ==='
+    # Dump nebula-installed filters so we can verify they got registered with
+    # the conditions we expect.
+    $wfpDump = Join-Path $WorkDir 'wfp.xml'
+    netsh wfp show filters file=$wfpDump 2>&1 | Out-Null
+    if (Test-Path $wfpDump) {
+        Select-String -Path $wfpDump -Pattern 'Nebula' -Context 0,80 -ErrorAction SilentlyContinue | Out-Host
+    }
     throw
 }
 finally {
