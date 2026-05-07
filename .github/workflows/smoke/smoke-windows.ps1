@@ -172,10 +172,10 @@ wsl -d $Distro -u root -- uname -a | Out-Host
 wsl -d $Distro -u root -- bash -c "modprobe tun 2>&1 || true; mkdir -p /dev/net; [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200; chmod 600 /dev/net/tun; ls -l /dev/net/tun"
 if ($LASTEXITCODE -ne 0) { throw "failed to prepare /dev/net/tun in WSL (TUN support missing?)" }
 
-# Allow inbound nebula UDP from WSL, plus inbound ICMPv4 echo so the kernel
-# actually responds to overlay pings rather than silently dropping them.
-New-NetFirewallRule -DisplayName 'Nebula smoke inbound UDP' -Direction Inbound -Protocol UDP -LocalPort $Port -Action Allow -ErrorAction SilentlyContinue | Out-Null
-New-NetFirewallRule -DisplayName 'Nebula smoke inbound ICMPv4 echo' -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow -Profile Any -ErrorAction SilentlyContinue | Out-Null
+# Deliberately no New-NetFirewallRule calls here -- nebula's windows_bypass_wdf
+# feature is supposed to install WFP permit filters that let inbound traffic
+# through Windows Defender Firewall on its own. If this smoke regresses, that
+# feature regressed.
 
 $lhOut = Join-Path $WorkDir 'lighthouse.out.log'
 $lhErr = Join-Path $WorkDir 'lighthouse.err.log'
