@@ -7,9 +7,9 @@ type RxBatcher interface {
 	Reserve(sz int) []byte
 	// Commit borrows pkt. The caller must keep pkt valid until the next Flush.
 	// Walks IP+L4 headers itself; prefer CommitInbound when the caller already
-	// has an RxParsed in hand from ParseInbound.
+	// has an RxParsed in hand from ParsePacket.
 	Commit(pkt []byte) error
-	// CommitInbound is Commit with a hint produced by ParseInbound, so the
+	// CommitInbound is Commit with a hint produced by ParsePacket, so the
 	// batcher can skip the IP+L4 re-parse. Borrowed slice contract is the
 	// same as Commit. Implementations that don't coalesce may delegate to
 	// Commit.

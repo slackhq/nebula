@@ -11,6 +11,7 @@ import (
 	"github.com/google/gopacket/layers"
 
 	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/ipv4"
@@ -21,13 +22,13 @@ func Test_newPacket(t *testing.T) {
 
 	// length fails
 	err := newPacket([]byte{}, true, p)
-	require.ErrorIs(t, err, ErrPacketTooShort)
+	require.ErrorIs(t, err, batch.ErrPacketTooShort)
 
 	err = newPacket([]byte{0x40}, true, p)
-	require.ErrorIs(t, err, ErrIPv4PacketTooShort)
+	require.ErrorIs(t, err, batch.ErrIPv4PacketTooShort)
 
 	err = newPacket([]byte{0x60}, true, p)
-	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, batch.ErrIPv6PacketTooShort)
 
 	// length fail with ip options
 	h := ipv4.Header{
@@ -40,15 +41,15 @@ func Test_newPacket(t *testing.T) {
 
 	b, _ := h.Marshal()
 	err = newPacket(b, true, p)
-	require.ErrorIs(t, err, ErrIPv4InvalidHeaderLength)
+	require.ErrorIs(t, err, batch.ErrIPv4InvalidHeaderLength)
 
 	// not an ipv4 packet
 	err = newPacket([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, true, p)
-	require.ErrorIs(t, err, ErrUnknownIPVersion)
+	require.ErrorIs(t, err, batch.ErrUnknownIPVersion)
 
 	// invalid ihl
 	err = newPacket([]byte{4<<4 | (8 >> 2 & 0x0f), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, true, p)
-	require.ErrorIs(t, err, ErrIPv4InvalidHeaderLength)
+	require.ErrorIs(t, err, batch.ErrIPv4InvalidHeaderLength)
 
 	// account for variable ip header length - incoming
 	h = ipv4.Header{
@@ -115,7 +116,7 @@ func Test_newPacket_v6(t *testing.T) {
 	require.NoError(t, err)
 
 	err = newPacket(buffer.Bytes(), true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, batch.ErrIPv6CouldNotFindPayload)
 
 	// A v6 packet with a hop-by-hop extension
 	// ICMPv6 Payload (Echo Request)
@@ -149,12 +150,12 @@ func Test_newPacket_v6(t *testing.T) {
 	// A full IPv6 header and 1 byte in the first extension, but missing
 	// the length byte.
 	err = newPacket(buffer.Bytes()[:41], true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, batch.ErrIPv6CouldNotFindPayload)
 
 	// A full IPv6 header plus 1 full extension, but only 1 byte of the
 	// next layer, missing length byte
 	err = newPacket(buffer.Bytes()[:49], true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, batch.ErrIPv6CouldNotFindPayload)
 	err = nil
 
 	// A good ICMP packet
@@ -217,7 +218,7 @@ func Test_newPacket_v6(t *testing.T) {
 	b = buffer.Bytes()
 	b[6] = 255 // 255 is a reserved protocol number
 	err = newPacket(b, true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, batch.ErrIPv6CouldNotFindPayload)
 
 	// A good UDP packet
 	ip = layers.IPv6{
@@ -264,7 +265,7 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// Too short UDP packet
 	err = newPacket(b[:len(b)-10], false, p) // pull off the last 10 bytes
-	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, batch.ErrIPv6PacketTooShort)
 
 	// A good TCP packet
 	b[6] = byte(layers.IPProtocolTCP)
@@ -291,7 +292,7 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// Too short TCP packet
 	err = newPacket(b[:len(b)-10], false, p) // pull off the last 10 bytes
-	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, batch.ErrIPv6PacketTooShort)
 
 	// A good UDP packet with an AH header
 	ip = layers.IPv6{
@@ -336,12 +337,12 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// Ensure buffer bounds checking during processing
 	err = newPacket(b[:41], true, p)
-	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, batch.ErrIPv6PacketTooShort)
 
 	// Invalid AH header
 	b = buffer.Bytes()
 	err = newPacket(b, true, p)
-	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
+	require.ErrorIs(t, err, batch.ErrIPv6CouldNotFindPayload)
 }
 
 func Test_newPacket_ipv6Fragment(t *testing.T) {
@@ -448,7 +449,7 @@ func Test_newPacket_ipv6Fragment(t *testing.T) {
 
 	// Too short of a fragment packet
 	err = newPacket(secondFrag[:len(secondFrag)-10], false, p)
-	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
+	require.ErrorIs(t, err, batch.ErrIPv6PacketTooShort)
 }
 
 func BenchmarkParseV6(b *testing.B) {

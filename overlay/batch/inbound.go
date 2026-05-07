@@ -22,16 +22,16 @@ const (
 	icmpv6TypeEchoReply   = 129
 )
 
-// Inbound parse errors. Match outside.go's sentinel set so the unified
-// parser can drop in as a replacement for newPacket without callers
-// noticing a behavior change.
+// Packet parse errors — the canonical sentinel set for IP+L4 parsing.
+// Both inbound and outbound callers share this surface, so any code path
+// that ends up at firewall.PacketKey reports drops with the same errors.
 var (
-	ErrInboundPacketTooShort    = errors.New("packet is too short")
-	ErrInboundUnknownIPVersion  = errors.New("packet is an unknown ip version")
-	ErrInboundIPv4InvalidHdrLen = errors.New("invalid ipv4 header length")
-	ErrInboundIPv4TooShort      = errors.New("ipv4 packet is too short")
-	ErrInboundIPv6TooShort      = errors.New("ipv6 packet is too short")
-	ErrInboundIPv6NoPayload     = errors.New("could not find payload in ipv6 packet")
+	ErrPacketTooShort          = errors.New("packet is too short")
+	ErrUnknownIPVersion        = errors.New("packet is an unknown ip version")
+	ErrIPv4InvalidHeaderLength = errors.New("invalid ipv4 header length")
+	ErrIPv4PacketTooShort      = errors.New("ipv4 packet is too short")
+	ErrIPv6PacketTooShort      = errors.New("ipv6 packet is too short")
+	ErrIPv6CouldNotFindPayload = errors.New("could not find payload in ipv6 packet")
 )
 
 // RxKind discriminates how an inbound plaintext packet should be committed
@@ -61,19 +61,27 @@ type RxParsed struct {
 	udp  parsedUDP
 }
 
-// ParseInbound walks an inbound plaintext packet once and fills:
-//   - parsed.Key with the dense, Local/Remote-oriented conntrack key the
-//     firewall uses (replaces the netip.Addr-rich path through newPacket).
-//   - parsed.{tcp,udp} with the coalescer hint, when the shape is
-//     coalesce-eligible.
+// ParsePacket walks an IP packet once and fills parsed.Key. When incoming
+// is true and the L4 shape is coalesce-eligible, also fills parsed.tcp /
+// parsed.udp so CommitInbound can dispatch into the coalescer without
+// re-walking the headers.
 //
-// Eligibility rules match the coalescer's own parseTCPBase/parseUDP:
+// Direction selects the Key orientation:
+//
+//	incoming=true  → wire src → Key.RemoteAddr/Port, wire dst → Key.LocalAddr/Port
+//	incoming=false → wire src → Key.LocalAddr/Port,  wire dst → Key.RemoteAddr/Port
+//
+// ICMP always lands the identifier in Key.RemotePort, regardless of direction.
+//
+// Eligibility rules for the coalescer hint match the coalescer's own
+// parseTCPBase/parseUDP:
 //   - IPv4 strict: IHL == 20, no fragmentation (MF or offset), proto TCP/UDP.
 //   - IPv6 strict: NextHeader is directly TCP or UDP (no extension headers).
 //
-// Returns the same set of errors newPacket returns for malformed input —
-// callers can treat those as drop.
-func ParseInbound(pkt []byte, parsed *RxParsed) error {
+// The hint is only filled for incoming packets, since the outbound path
+// does not feed an inbound coalescer. Outbound callers see Kind stay at
+// RxKindPassthrough and parsed.tcp/udp stay zero.
+func ParsePacket(pkt []byte, incoming bool, parsed *RxParsed) error {
 	parsed.Kind = RxKindPassthrough
 	// Reset Key in full: v4 only writes the low 4 bytes of each address
 	// field, so without this a v6 call followed by a v4 reusing the same
@@ -81,26 +89,27 @@ func ParseInbound(pkt []byte, parsed *RxParsed) error {
 	// map equality for v4 flows.
 	parsed.Key = firewall.PacketKey{}
 	if len(pkt) < 1 {
-		return ErrInboundPacketTooShort
+		return ErrPacketTooShort
 	}
 	switch pkt[0] >> 4 {
 	case 4:
-		return parseInboundV4(pkt, parsed)
+		return parsePacketV4(pkt, incoming, parsed)
 	case 6:
-		return parseInboundV6(pkt, parsed)
+		return parsePacketV6(pkt, incoming, parsed)
 	}
-	return ErrInboundUnknownIPVersion
+	return ErrUnknownIPVersion
 }
 
-// parseInboundV4 mirrors parseV4(incoming=true) for the firewall side and
-// also fills the coalescer hint when the shape is strict.
-func parseInboundV4(pkt []byte, parsed *RxParsed) error {
+// parsePacketV4 fills parsed.Key from an IPv4 packet. Direction selects
+// Local/Remote orientation. When incoming and the shape is strict, also
+// fills the coalescer hint.
+func parsePacketV4(pkt []byte, incoming bool, parsed *RxParsed) error {
 	if len(pkt) < 20 {
-		return ErrInboundIPv4TooShort
+		return ErrIPv4PacketTooShort
 	}
 	ihl := int(pkt[0]&0x0f) << 2
 	if ihl < 20 {
-		return ErrInboundIPv4InvalidHdrLen
+		return ErrIPv4InvalidHeaderLength
 	}
 	flagsfrags := binary.BigEndian.Uint16(pkt[6:8])
 	parsed.Key.Fragment = (flagsfrags & 0x1FFF) != 0
@@ -118,12 +127,16 @@ func parseInboundV4(pkt []byte, parsed *RxParsed) error {
 		}
 	}
 	if len(pkt) < minLen {
-		return ErrInboundIPv4InvalidHdrLen
+		return ErrIPv4InvalidHeaderLength
 	}
 
-	// Inbound orientation: wire src → Remote, wire dst → Local.
-	copy(parsed.Key.RemoteAddr[:4], pkt[12:16])
-	copy(parsed.Key.LocalAddr[:4], pkt[16:20])
+	if incoming {
+		copy(parsed.Key.RemoteAddr[:4], pkt[12:16])
+		copy(parsed.Key.LocalAddr[:4], pkt[16:20])
+	} else {
+		copy(parsed.Key.LocalAddr[:4], pkt[12:16])
+		copy(parsed.Key.RemoteAddr[:4], pkt[16:20])
+	}
 
 	switch {
 	case parsed.Key.Fragment:
@@ -132,11 +145,18 @@ func parseInboundV4(pkt []byte, parsed *RxParsed) error {
 	case parsed.Key.Protocol == firewall.ProtoICMP:
 		parsed.Key.RemotePort = binary.BigEndian.Uint16(pkt[ihl+4 : ihl+6])
 		parsed.Key.LocalPort = 0
-	default:
+	case incoming:
 		parsed.Key.RemotePort = binary.BigEndian.Uint16(pkt[ihl : ihl+2])
 		parsed.Key.LocalPort = binary.BigEndian.Uint16(pkt[ihl+2 : ihl+4])
+	default:
+		parsed.Key.LocalPort = binary.BigEndian.Uint16(pkt[ihl : ihl+2])
+		parsed.Key.RemotePort = binary.BigEndian.Uint16(pkt[ihl+2 : ihl+4])
 	}
 
+	// Coalescer hint is inbound-only: no inbound coalescer fires on outgoing.
+	if !incoming {
+		return nil
+	}
 	// Coalescer-eligible? Strict shape: IHL==20, no MF/offset, TCP or UDP.
 	if ihl != 20 || (flagsfrags&0x3FFF) != 0 {
 		return nil
@@ -208,28 +228,43 @@ func fillParsedUDPv4(pkt []byte, parsed *RxParsed) {
 	parsed.Kind = RxKindUDP
 }
 
-// parseInboundV6 mirrors parseV6(incoming=true). The coalescer-eligible
-// fast path triggers only when NextHeader is directly TCP or UDP — any
-// extension header chain falls into the lenient walk below.
-func parseInboundV6(pkt []byte, parsed *RxParsed) error {
+// parsePacketV6 fills parsed.Key from an IPv6 packet. Direction selects
+// Local/Remote orientation. The coalescer hint fast path only triggers
+// when NextHeader is directly TCP or UDP — any extension header chain
+// falls into the lenient walk below, and the hint stays unfilled.
+func parsePacketV6(pkt []byte, incoming bool, parsed *RxParsed) error {
 	if len(pkt) < 40 {
-		return ErrInboundIPv6TooShort
+		return ErrIPv6PacketTooShort
 	}
 	parsed.Key.IsV6 = true
-	copy(parsed.Key.RemoteAddr[:], pkt[8:24])
-	copy(parsed.Key.LocalAddr[:], pkt[24:40])
+	if incoming {
+		copy(parsed.Key.RemoteAddr[:], pkt[8:24])
+		copy(parsed.Key.LocalAddr[:], pkt[24:40])
+	} else {
+		copy(parsed.Key.LocalAddr[:], pkt[8:24])
+		copy(parsed.Key.RemoteAddr[:], pkt[24:40])
+	}
 
 	if proto := pkt[6]; proto == ipProtoTCP || proto == ipProtoUDP {
 		// Strict v6: ports are at the IP header end. Always fill key; only
 		// fill the coalescer hint if the L4 shape passes.
 		if len(pkt) < 44 {
-			return ErrInboundIPv6TooShort
+			return ErrIPv6PacketTooShort
 		}
 		parsed.Key.Protocol = proto
 		parsed.Key.Fragment = false
-		parsed.Key.RemotePort = binary.BigEndian.Uint16(pkt[40:42])
-		parsed.Key.LocalPort = binary.BigEndian.Uint16(pkt[42:44])
+		if incoming {
+			parsed.Key.RemotePort = binary.BigEndian.Uint16(pkt[40:42])
+			parsed.Key.LocalPort = binary.BigEndian.Uint16(pkt[42:44])
+		} else {
+			parsed.Key.LocalPort = binary.BigEndian.Uint16(pkt[40:42])
+			parsed.Key.RemotePort = binary.BigEndian.Uint16(pkt[42:44])
+		}
 
+		// Coalescer hint is inbound-only.
+		if !incoming {
+			return nil
+		}
 		payloadLen := int(binary.BigEndian.Uint16(pkt[4:6]))
 		if 40+payloadLen > len(pkt) {
 			return nil
@@ -245,8 +280,9 @@ func parseInboundV6(pkt []byte, parsed *RxParsed) error {
 		return nil
 	}
 
-	// Slow path: walk extension header chain just like parseV6 does.
-	return walkInboundV6Headers(pkt, parsed)
+	// Slow path: walk extension header chain. Coalescer hint never fires
+	// here, so direction only matters for L4 port orientation.
+	return walkV6Headers(pkt, incoming, parsed)
 }
 
 func fillParsedTCPv6(pkt []byte, parsed *RxParsed) {
@@ -295,12 +331,13 @@ func fillParsedUDPv6(pkt []byte, parsed *RxParsed) {
 	parsed.Kind = RxKindUDP
 }
 
-// walkInboundV6Headers handles every IPv6 case parseV6 handles that isn't
-// the strict "NextHeader == TCP/UDP" fast path: ESP, NoNextHeader, ICMPv6,
-// fragment headers (first vs later), AH, generic extension headers.
-// Coalescer eligibility is always RxKindPassthrough on this path (parsed
-// already initialised that way).
-func walkInboundV6Headers(pkt []byte, parsed *RxParsed) error {
+// walkV6Headers handles every IPv6 case the strict "NextHeader == TCP/UDP"
+// fast path doesn't: ESP, NoNextHeader, ICMPv6, fragment headers (first vs
+// later), AH, generic extension headers. Coalescer eligibility is always
+// RxKindPassthrough on this path (parsed already initialised that way).
+// Direction matters only for the L4 port orientation when the chain
+// terminates at TCP/UDP.
+func walkV6Headers(pkt []byte, incoming bool, parsed *RxParsed) error {
 	dataLen := len(pkt)
 	protoAt := 6
 	offset := 40
@@ -320,7 +357,7 @@ func walkInboundV6Headers(pkt []byte, parsed *RxParsed) error {
 
 		case ipProtoICMPv6:
 			if dataLen < offset+6 {
-				return ErrInboundIPv6TooShort
+				return ErrIPv6PacketTooShort
 			}
 			parsed.Key.Protocol = proto
 			parsed.Key.LocalPort = 0
@@ -338,17 +375,22 @@ func walkInboundV6Headers(pkt []byte, parsed *RxParsed) error {
 			// strict-eligible fast path above already handled the no-extension
 			// case; here we only fill firewall ports and stay passthrough.
 			if dataLen < offset+4 {
-				return ErrInboundIPv6TooShort
+				return ErrIPv6PacketTooShort
 			}
 			parsed.Key.Protocol = proto
-			parsed.Key.RemotePort = binary.BigEndian.Uint16(pkt[offset : offset+2])
-			parsed.Key.LocalPort = binary.BigEndian.Uint16(pkt[offset+2 : offset+4])
+			if incoming {
+				parsed.Key.RemotePort = binary.BigEndian.Uint16(pkt[offset : offset+2])
+				parsed.Key.LocalPort = binary.BigEndian.Uint16(pkt[offset+2 : offset+4])
+			} else {
+				parsed.Key.LocalPort = binary.BigEndian.Uint16(pkt[offset : offset+2])
+				parsed.Key.RemotePort = binary.BigEndian.Uint16(pkt[offset+2 : offset+4])
+			}
 			parsed.Key.Fragment = false
 			return nil
 
 		case ipProtoIPv6Fragment:
 			if dataLen < offset+8 {
-				return ErrInboundIPv6TooShort
+				return ErrIPv6PacketTooShort
 			}
 			fragmentOffset := binary.BigEndian.Uint16(pkt[offset+2:offset+4]) &^ uint16(0x7)
 			if fragmentOffset != 0 {
@@ -380,7 +422,7 @@ func walkInboundV6Headers(pkt []byte, parsed *RxParsed) error {
 		protoAt = offset
 		offset = offset + next
 	}
-	return ErrInboundIPv6NoPayload
+	return ErrIPv6CouldNotFindPayload
 }
 
 // CommitInbound dispatches pkt to the appropriate lane using parsed.Kind,

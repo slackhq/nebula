@@ -2,24 +2,15 @@ package nebula
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"log/slog"
 	"net/netip"
 	"time"
 
-	"github.com/google/gopacket/layers"
-	"golang.org/x/net/ipv6"
-
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/udp"
-	"golang.org/x/net/ipv4"
-)
-
-const (
-	minFwPacketLen = 4
 )
 
 var ErrOutOfWindow = errors.New("out of window packet")
@@ -318,181 +309,11 @@ var (
 // parse logic. Callers that don't need the netip.Addr-rich form (e.g.
 // conntrack-only paths) should use newPacketKey directly.
 func newPacket(data []byte, incoming bool, fp *firewall.Packet) error {
-	key, err := newPacketKey(data, incoming)
-	if err != nil {
+	var parsed batch.RxParsed
+	if err := batch.ParsePacket(data, incoming, &parsed); err != nil {
 		return err
 	}
-	key.Hydrate(fp)
-	return nil
-}
-
-// newPacketKey parses data into a dense firewall.PacketKey. Hot path: no
-// netip.Addr construction, no unique.Handle interning. Caller decides
-// whether to also Hydrate to a Packet (for rule matching) or pass the key
-// straight to conntrack.
-func newPacketKey(data []byte, incoming bool) (firewall.PacketKey, error) {
-	var k firewall.PacketKey
-	if len(data) < 1 {
-		return k, ErrPacketTooShort
-	}
-	switch int((data[0] >> 4) & 0x0f) {
-	case ipv4.Version:
-		return k, parseV4Key(data, incoming, &k)
-	case ipv6.Version:
-		k.IsV6 = true
-		return k, parseV6Key(data, incoming, &k)
-	}
-	return k, ErrUnknownIPVersion
-}
-
-func parseV6Key(data []byte, incoming bool, k *firewall.PacketKey) error {
-	dataLen := len(data)
-	if dataLen < ipv6.HeaderLen {
-		return ErrIPv6PacketTooShort
-	}
-
-	if incoming {
-		copy(k.RemoteAddr[:], data[8:24])
-		copy(k.LocalAddr[:], data[24:40])
-	} else {
-		copy(k.LocalAddr[:], data[8:24])
-		copy(k.RemoteAddr[:], data[24:40])
-	}
-
-	protoAt := 6
-	offset := ipv6.HeaderLen
-	next := 0
-	for {
-		if protoAt >= dataLen {
-			break
-		}
-		proto := layers.IPProtocol(data[protoAt])
-
-		switch proto {
-		case layers.IPProtocolESP, layers.IPProtocolNoNextHeader:
-			k.Protocol = uint8(proto)
-			k.RemotePort = 0
-			k.LocalPort = 0
-			k.Fragment = false
-			return nil
-
-		case layers.IPProtocolICMPv6:
-			if dataLen < offset+6 {
-				return ErrIPv6PacketTooShort
-			}
-			k.Protocol = uint8(proto)
-			k.LocalPort = 0
-			switch data[offset+1] {
-			case layers.ICMPv6TypeEchoRequest, layers.ICMPv6TypeEchoReply:
-				k.RemotePort = binary.BigEndian.Uint16(data[offset+4 : offset+6])
-			default:
-				k.RemotePort = 0
-			}
-			k.Fragment = false
-			return nil
-
-		case layers.IPProtocolTCP, layers.IPProtocolUDP:
-			if dataLen < offset+4 {
-				return ErrIPv6PacketTooShort
-			}
-			k.Protocol = uint8(proto)
-			if incoming {
-				k.RemotePort = binary.BigEndian.Uint16(data[offset : offset+2])
-				k.LocalPort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
-			} else {
-				k.LocalPort = binary.BigEndian.Uint16(data[offset : offset+2])
-				k.RemotePort = binary.BigEndian.Uint16(data[offset+2 : offset+4])
-			}
-			k.Fragment = false
-			return nil
-
-		case layers.IPProtocolIPv6Fragment:
-			if dataLen < offset+8 {
-				return ErrIPv6PacketTooShort
-			}
-			fragmentOffset := binary.BigEndian.Uint16(data[offset+2:offset+4]) &^ uint16(0x7)
-			if fragmentOffset != 0 {
-				k.Protocol = data[offset]
-				k.Fragment = true
-				k.RemotePort = 0
-				k.LocalPort = 0
-				return nil
-			}
-			next = 8
-
-		case layers.IPProtocolAH:
-			if dataLen <= offset+1 {
-				break
-			}
-			next = int(data[offset+1]+2) << 2
-
-		default:
-			if dataLen <= offset+1 {
-				break
-			}
-			next = int(data[offset+1]+1) << 3
-		}
-
-		if next <= 0 {
-			next = 8
-		}
-		protoAt = offset
-		offset = offset + next
-	}
-
-	return ErrIPv6CouldNotFindPayload
-}
-
-func parseV4Key(data []byte, incoming bool, k *firewall.PacketKey) error {
-	if len(data) < ipv4.HeaderLen {
-		return ErrIPv4PacketTooShort
-	}
-	ihl := int(data[0]&0x0f) << 2
-	if ihl < ipv4.HeaderLen {
-		return ErrIPv4InvalidHeaderLength
-	}
-
-	flagsfrags := binary.BigEndian.Uint16(data[6:8])
-	k.Fragment = (flagsfrags & 0x1FFF) != 0
-	k.Protocol = data[9]
-
-	minLen := ihl
-	if !k.Fragment {
-		if k.Protocol == firewall.ProtoICMP {
-			minLen += minFwPacketLen + 2
-		} else {
-			minLen += minFwPacketLen
-		}
-	}
-	if len(data) < minLen {
-		return ErrIPv4InvalidHeaderLength
-	}
-
-	// Dense form: v4 in low 4 bytes, rest zero. Matches the coalescer's
-	// flowKey convention so the two stay byte-identical for the same flow.
-	if incoming {
-		copy(k.RemoteAddr[:4], data[12:16])
-		copy(k.LocalAddr[:4], data[16:20])
-	} else {
-		copy(k.LocalAddr[:4], data[12:16])
-		copy(k.RemoteAddr[:4], data[16:20])
-	}
-
-	switch {
-	case k.Fragment:
-		k.RemotePort = 0
-		k.LocalPort = 0
-	case k.Protocol == firewall.ProtoICMP:
-		k.RemotePort = binary.BigEndian.Uint16(data[ihl+4 : ihl+6])
-		k.LocalPort = 0
-	case incoming:
-		k.RemotePort = binary.BigEndian.Uint16(data[ihl : ihl+2])
-		k.LocalPort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4])
-	default:
-		k.LocalPort = binary.BigEndian.Uint16(data[ihl : ihl+2])
-		k.RemotePort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4])
-	}
-
+	parsed.Key.Hydrate(fp)
 	return nil
 }
 
@@ -571,7 +392,7 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, p
 	// firewall.Drop's fast path uses Key alone and only hydrates fwPacket
 	// from Key on the slow path.
 	*fwPacket = firewall.Packet{}
-	err := batch.ParseInbound(out, parsedRx)
+	err := batch.ParsePacket(out, true, parsedRx)
 	if err != nil {
 		hostinfo.logger(f.l).Warn("Error while validating inbound packet",
 			"error", err,

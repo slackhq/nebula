@@ -50,10 +50,10 @@ type Packet struct {
 	Fragment   bool
 }
 
-// Key derives a PacketKey from a populated Packet. Used by the outgoing
-// path (inside.go) which still parses into a full Packet via newPacket
-// before the firewall check; the inbound path skips this hop entirely by
-// having its parser write straight into the PacketKey.
+// Key derives a PacketKey from a populated Packet. Used by the few code
+// paths that have a Packet but no Key in hand (e.g. tests). Both inbound
+// and outbound production parsers write straight into a PacketKey via
+// batch.ParsePacket, so this function is rarely on the hot path.
 func (fp *Packet) Key() PacketKey {
 	k := PacketKey{
 		Protocol: fp.Protocol,

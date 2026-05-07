@@ -32,8 +32,8 @@ func TestParseInboundParity(t *testing.T) {
 			var fpUnified, fpBaseline firewall.Packet
 			var parsed RxParsed
 
-			if err := ParseInbound(tc.pkt, &parsed); err != nil {
-				t.Fatalf("ParseInbound: %v", err)
+			if err := ParsePacket(tc.pkt, true, &parsed); err != nil {
+				t.Fatalf("ParsePacket: %v", err)
 			}
 			parsed.Key.Hydrate(&fpUnified)
 			var ok bool
@@ -61,7 +61,7 @@ func TestParseInboundFlowKey(t *testing.T) {
 	t.Run("tcp_v4", func(t *testing.T) {
 		pkt := buildTCPv4Ports(1234, 443, 5000, tcpAck, make([]byte, 800))
 		var parsed RxParsed
-		if err := ParseInbound(pkt, &parsed); err != nil {
+		if err := ParsePacket(pkt, true, &parsed); err != nil {
 			t.Fatal(err)
 		}
 		if parsed.Kind != RxKindTCP {
@@ -79,7 +79,7 @@ func TestParseInboundFlowKey(t *testing.T) {
 	t.Run("udp_v4", func(t *testing.T) {
 		pkt := buildUDPv4(40000, 53, []byte("dnsquery"))
 		var parsed RxParsed
-		if err := ParseInbound(pkt, &parsed); err != nil {
+		if err := ParsePacket(pkt, true, &parsed); err != nil {
 			t.Fatal(err)
 		}
 		if parsed.Kind != RxKindUDP {
@@ -97,7 +97,7 @@ func TestParseInboundFlowKey(t *testing.T) {
 	t.Run("tcp_v6", func(t *testing.T) {
 		pkt := buildTCPv6(0, 9000, tcpAck, make([]byte, 800))
 		var parsed RxParsed
-		if err := ParseInbound(pkt, &parsed); err != nil {
+		if err := ParsePacket(pkt, true, &parsed); err != nil {
 			t.Fatal(err)
 		}
 		if parsed.Kind != RxKindTCP {
@@ -126,7 +126,7 @@ func TestParseInboundICMPPassthrough(t *testing.T) {
 	pkt[25] = 0xcd
 
 	var parsed RxParsed
-	if err := ParseInbound(pkt, &parsed); err != nil {
+	if err := ParsePacket(pkt, true, &parsed); err != nil {
 		t.Fatal(err)
 	}
 	if parsed.Kind != RxKindPassthrough {
@@ -162,7 +162,7 @@ func TestParseInboundV4Fragment(t *testing.T) {
 	pkt[7] = 0x10 // offset = 16 (in 8-byte units)
 
 	var parsed RxParsed
-	if err := ParseInbound(pkt, &parsed); err != nil {
+	if err := ParsePacket(pkt, true, &parsed); err != nil {
 		t.Fatal(err)
 	}
 	if !parsed.Key.Fragment {

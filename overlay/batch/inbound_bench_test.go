@@ -176,7 +176,7 @@ func runRxUnified(b *testing.B, pkts [][]byte, batchSize int) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		pkt := pkts[i%len(pkts)]
-		if err := ParseInbound(pkt, &parsed); err != nil {
+		if err := ParsePacket(pkt, true, &parsed); err != nil {
 			b.Fatal(err)
 		}
 		if err := m.CommitInbound(pkt, &parsed); err != nil {
@@ -344,7 +344,7 @@ func runRxUnifiedWithCache(b *testing.B, pkts [][]byte, batchSize int) {
 	cache := make(firewall.ConntrackCache, len(pkts))
 	for _, pkt := range pkts {
 		var seed RxParsed
-		if err := ParseInbound(pkt, &seed); err != nil {
+		if err := ParsePacket(pkt, true, &seed); err != nil {
 			b.Fatal(err)
 		}
 		cache[seed.Key] = struct{}{}
@@ -355,7 +355,7 @@ func runRxUnifiedWithCache(b *testing.B, pkts [][]byte, batchSize int) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		pkt := pkts[i%len(pkts)]
-		if err := ParseInbound(pkt, &parsed); err != nil {
+		if err := ParsePacket(pkt, true, &parsed); err != nil {
 			b.Fatal(err)
 		}
 		if _, ok := cache[parsed.Key]; !ok {

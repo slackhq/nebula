@@ -25,11 +25,11 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 	//
 	// pkt.Bytes is either one IP datagram (GSO zero) or a TSO/USO
 	// superpacket. In both cases the L3+L4 headers at the start describe
-	// the same 5-tuple every segment will share, so a single newPacket /
+	// the same 5-tuple every segment will share, so a single parse +
 	// firewall check covers the whole superpacket.
 	packet := pkt.Bytes
-	key, err := newPacketKey(packet, false)
-	if err != nil {
+	var parsed batch.RxParsed
+	if err := batch.ParsePacket(packet, false, &parsed); err != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			f.l.Debug("Error while validating outbound packet",
 				"packet", packet,
@@ -39,7 +39,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 		return
 	}
 
-	key.Hydrate(fwPacket)
+	parsed.Key.Hydrate(fwPacket)
 
 	// Ignore local broadcast packets
 	if f.dropLocalBroadcast {
@@ -107,7 +107,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 		return
 	}
 
-	dropReason := f.firewall.Drop(key, fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(parsed.Key, fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
 		f.sendInsideMessage(hostinfo, pkt, nb, sendBatch, rejectBuf, q)
 	} else {
@@ -394,16 +394,16 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 }
 
 func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte) {
-	key, err := newPacketKey(p, false)
-	if err != nil {
+	var parsed batch.RxParsed
+	if err := batch.ParsePacket(p, false, &parsed); err != nil {
 		f.l.Warn("error while parsing outgoing packet for firewall check", "error", err)
 		return
 	}
 	fp := &firewall.Packet{}
-	key.Hydrate(fp)
+	parsed.Key.Hydrate(fp)
 
 	// check if packet is in outbound fw rules
-	dropReason := f.firewall.Drop(key, fp, false, hostinfo, f.pki.GetCAPool(), nil)
+	dropReason := f.firewall.Drop(parsed.Key, fp, false, hostinfo, f.pki.GetCAPool(), nil)
 	if dropReason != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			f.l.Debug("dropping cached packet",

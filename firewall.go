@@ -437,8 +437,8 @@ func (f *Firewall) Drop(key firewall.PacketKey, fp *firewall.Packet, incoming bo
 
 	// Conntrack miss → rule matching needs the rich Packet form. Hydrate
 	// from the key if the caller passed a zero-valued fp (the inbound path
-	// after ParseInbound). Outbound callers fill fp via newPacket and skip
-	// this hop.
+	// after batch.ParsePacket). Outbound callers Hydrate themselves and
+	// skip this hop.
 	if !fp.LocalAddr.IsValid() {
 		key.Hydrate(fp)
 	}
