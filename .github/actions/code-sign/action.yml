@@ -98,6 +98,16 @@ runs:
             aws s3 rm "s3://${BUCKET}/${src}" >/dev/null 2>&1 || true
             aws s3 rm "s3://${BUCKET}/${dst}" >/dev/null 2>&1 || true
 
-            echo "Signed ${rel} (sha256=$(jq -r '.sha256' /tmp/sign-resp.json))"
+            # Sanity-check the bytes we got back actually carry an Authenticode
+            # signature that this machine can validate end to end.
+            status=$(powershell -NoProfile -Command "(Get-AuthenticodeSignature -FilePath '$path').Status" | tr -d '\r')
+            if [ "$status" != "Valid" ]
+            then
+                echo "::endgroup::"
+                echo "::error::${rel} signature status: ${status} (expected Valid)"
+                exit 1
+            fi
+
+            echo "Signed ${rel} (sha256=$(jq -r '.sha256' /tmp/sign-resp.json), status=${status})"
             echo "::endgroup::"
         done
