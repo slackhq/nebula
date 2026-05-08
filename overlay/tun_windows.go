@@ -25,15 +25,24 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
+type closer interface {
+	Close()
+}
+
 const tunGUIDLabel = "Fixed Nebula Windows GUID v1"
 
 type winTun struct {
-	Device      string
-	vpnNetworks []netip.Prefix
-	MTU         int
-	Routes      atomic.Pointer[[]Route]
-	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
-	l           *slog.Logger
+	Device          string
+	vpnNetworks     []netip.Prefix
+	MTU             int
+	Routes          atomic.Pointer[[]Route]
+	routeTree       atomic.Pointer[bart.Table[routing.Gateways]]
+	guid            windows.GUID
+	networkCategory networkCategory
+	setCategory     bool
+	bypassWDF       bool
+	wdfBypass       closer
+	l               *slog.Logger
 
 	tun *wintun.NativeTun
 }
@@ -54,11 +63,20 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 		return nil, fmt.Errorf("generate GUID failed: %w", err)
 	}
 
+	cat, setCat, err := parseNetworkCategory(c.GetString("tun.network_category", "private"))
+	if err != nil {
+		return nil, err
+	}
+
 	t := &winTun{
-		Device:      deviceName,
-		vpnNetworks: vpnNetworks,
-		MTU:         c.GetInt("tun.mtu", DefaultMTU),
-		l:           l,
+		Device:          deviceName,
+		vpnNetworks:     vpnNetworks,
+		MTU:             c.GetInt("tun.mtu", DefaultMTU),
+		guid:            *guid,
+		networkCategory: cat,
+		setCategory:     setCat,
+		bypassWDF:       c.GetBool("tun.windows_bypass_wdf", true),
+		l:               l,
 	}
 
 	err = t.reload(c, true)
@@ -140,6 +158,17 @@ func (t *winTun) Activate() error {
 	err = t.addRoutes(false)
 	if err != nil {
 		return err
+	}
+
+	if t.setCategory {
+		// The wintun adapter takes a moment to register with the Network List
+		// Manager, so we apply the category in the background and retry until
+		// it shows up.
+		go applyNetworkCategory(t.l, t.guid, t.networkCategory)
+	}
+
+	if t.bypassWDF {
+		t.wdfBypass = installInterfaceBypass(t.l, uint64(t.tun.LUID()))
 	}
 
 	return nil
@@ -254,6 +283,11 @@ func (t *winTun) Close() error {
 
 	_ = luid.FlushDNS(windows.AF_INET)
 	_ = luid.FlushDNS(windows.AF_INET6)
+
+	if t.wdfBypass != nil {
+		t.wdfBypass.Close()
+		t.wdfBypass = nil
+	}
 
 	return t.tun.Close()
 }

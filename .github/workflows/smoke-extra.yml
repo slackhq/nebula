@@ -81,3 +81,52 @@ jobs:
       run: make smoke-vagrant/linux-386
 
     timeout-minutes: 30
+
+  smoke-windows:
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'smoke-test-extra')
+    name: Run windows smoke test
+    runs-on: windows-latest
+    steps:
+
+    - uses: actions/checkout@v6
+
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.25'
+        check-latest: true
+
+    # WSL2 + Ubuntu so the smoke can run a real linux peer with its own
+    # netns. iputils-ping is needed for the in-WSL ping check. WSL1 has no
+    # real kernel and would lack /dev/net/tun, so we have to force WSL2.
+    - uses: Vampire/setup-wsl@v3
+      with:
+        distribution: Ubuntu-24.04
+        additional-packages: iputils-ping iproute2
+
+    # Vampire/setup-wsl provisions WSL1 even when the WSL2 platform is present.
+    # Convert the distro to WSL2 explicitly before we try to use /dev/net/tun.
+    - name: convert distro to WSL2
+      shell: pwsh
+      run: |
+        wsl --set-version Ubuntu-24.04 2
+        wsl --shutdown
+        wsl --list --verbose
+
+    - name: build windows nebula
+      run: make bin-windows
+
+    - name: build linux nebula for WSL
+      shell: bash
+      env:
+        GOOS: linux
+        GOARCH: amd64
+      run: |
+        mkdir -p build/linux-amd64
+        go build -o build/linux-amd64/nebula ./cmd/nebula
+
+    - name: run smoke-windows
+      shell: pwsh
+      working-directory: ./.github/workflows/smoke
+      run: ./smoke-windows.ps1
+
+    timeout-minutes: 15
