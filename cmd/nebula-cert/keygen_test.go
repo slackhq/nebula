@@ -20,6 +20,7 @@ func Test_keygenHelp(t *testing.T) {
 	assert.Equal(
 		t,
 		"Usage of "+os.Args[0]+" keygen <flags>: create a public/private key pair. the public key can be passed to `nebula-cert sign`\n"+
+			"  Pass \"-\" to any path flag to read from stdin or write to stdout.\n"+
 			"  -curve string\n"+
 			"    \tECDH Curve (25519, P256) (default \"25519\")\n"+
 			"  -out-key string\n"+
@@ -92,4 +93,44 @@ func Test_keygen(t *testing.T) {
 	assert.Empty(t, b)
 	require.NoError(t, err)
 	assert.Len(t, lPub, 32)
+}
+
+func Test_keygen_stdio(t *testing.T) {
+	keyF, err := os.CreateTemp("", "test.key")
+	require.NoError(t, err)
+	os.Remove(keyF.Name())
+	defer os.Remove(keyF.Name())
+
+	pubF, err := os.CreateTemp("", "test.pub")
+	require.NoError(t, err)
+	os.Remove(pubF.Name())
+	defer os.Remove(pubF.Name())
+
+	// out-pub on stdout, out-key on disk
+	ob := &bytes.Buffer{}
+	eb := &bytes.Buffer{}
+	require.NoError(t, keygen([]string{"-out-pub", "-", "-out-key", keyF.Name()}, ob, eb))
+	assert.Empty(t, eb.String())
+	lPub, _, curve, err := cert.UnmarshalPublicKeyFromPEM(ob.Bytes())
+	require.NoError(t, err)
+	assert.Equal(t, cert.Curve_CURVE25519, curve)
+	assert.Len(t, lPub, 32)
+
+	// out-key on stdout, out-pub on disk
+	os.Remove(keyF.Name())
+	ob.Reset()
+	eb.Reset()
+	require.NoError(t, keygen([]string{"-out-pub", pubF.Name(), "-out-key", "-"}, ob, eb))
+	assert.Empty(t, eb.String())
+	lKey, _, curve, err := cert.UnmarshalPrivateKeyFromPEM(ob.Bytes())
+	require.NoError(t, err)
+	assert.Equal(t, cert.Curve_CURVE25519, curve)
+	assert.Len(t, lKey, 32)
+
+	// both on stdout is a conflict caught up front
+	ob.Reset()
+	eb.Reset()
+	require.EqualError(t, keygen([]string{"-out-pub", "-", "-out-key", "-"}, ob, eb),
+		`-out-key and -out-pub both set to "-", only one output may write to stdout`)
+	assert.Empty(t, ob.String())
 }

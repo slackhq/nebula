@@ -85,6 +85,9 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	if !isP11 && *sf.inPubPath != "" && *sf.outKeyPath != "" {
 		return newHelpErrorf("cannot set both -in-pub and -out-key")
 	}
+	if isP11 && *sf.outKeyPath != "" {
+		return newHelpErrorf("cannot set -out-key with -pkcs11")
+	}
 
 	var v4Networks []netip.Prefix
 	var v6Networks []netip.Prefix
@@ -102,13 +105,35 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		return newHelpErrorf("-version must be either %v or %v", cert.Version1, cert.Version2)
 	}
 
+	if *sf.outKeyPath == "" {
+		*sf.outKeyPath = *sf.name + ".key"
+	}
+	if *sf.outCertPath == "" {
+		*sf.outCertPath = *sf.name + ".crt"
+	}
+
+	var claims ioClaims
+	if err := reserveInputs(&claims,
+		"ca-key", *sf.caKeyPath,
+		"ca-crt", *sf.caCertPath,
+		"in-pub", *sf.inPubPath,
+	); err != nil {
+		return err
+	}
+	if err := reserveOutputs(&claims,
+		"out-key", *sf.outKeyPath,
+		"out-crt", *sf.outCertPath,
+		"out-qr", *sf.outQRPath,
+	); err != nil {
+		return err
+	}
+
 	var curve cert.Curve
 	var caKey []byte
 
 	if !isP11 {
 		var rawCAKey []byte
-		rawCAKey, err := os.ReadFile(*sf.caKeyPath)
-
+		rawCAKey, err = readInput("ca-key", *sf.caKeyPath, &claims)
 		if err != nil {
 			return fmt.Errorf("error while reading ca-key: %s", err)
 		}
@@ -121,7 +146,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			if len(passphrase) == 0 {
 				// ask for a passphrase until we get one
 				for i := 0; i < 5; i++ {
-					out.Write([]byte("Enter passphrase: "))
+					errOut.Write([]byte("Enter passphrase: "))
 					passphrase, err = pr.ReadPassword()
 
 					if errors.Is(err, ErrNoTerminal) {
@@ -147,7 +172,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 	}
 
-	rawCACert, err := os.ReadFile(*sf.caCertPath)
+	rawCACert, err := readInput("ca-crt", *sf.caCertPath, &claims)
 	if err != nil {
 		return fmt.Errorf("error while reading ca-crt: %s", err)
 	}
@@ -245,7 +270,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 
 	if *sf.inPubPath != "" {
 		var pubCurve cert.Curve
-		rawPub, err := os.ReadFile(*sf.inPubPath)
+		rawPub, err := readInput("in-pub", *sf.inPubPath, &claims)
 		if err != nil {
 			return fmt.Errorf("error while reading in-pub: %s", err)
 		}
@@ -266,16 +291,10 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		pub, rawPriv = newKeypair(curve)
 	}
 
-	if *sf.outKeyPath == "" {
-		*sf.outKeyPath = *sf.name + ".key"
-	}
-
-	if *sf.outCertPath == "" {
-		*sf.outCertPath = *sf.name + ".crt"
-	}
-
-	if _, err := os.Stat(*sf.outCertPath); err == nil {
-		return fmt.Errorf("refusing to overwrite existing cert: %s", *sf.outCertPath)
+	if !isStdio(*sf.outCertPath) {
+		if _, err := os.Stat(*sf.outCertPath); err == nil {
+			return fmt.Errorf("refusing to overwrite existing cert: %s", *sf.outCertPath)
+		}
 	}
 
 	var crts []cert.Certificate
@@ -360,11 +379,13 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 	}
 
 	if !isP11 && *sf.inPubPath == "" {
-		if _, err := os.Stat(*sf.outKeyPath); err == nil {
-			return fmt.Errorf("refusing to overwrite existing key: %s", *sf.outKeyPath)
+		if !isStdio(*sf.outKeyPath) {
+			if _, err := os.Stat(*sf.outKeyPath); err == nil {
+				return fmt.Errorf("refusing to overwrite existing key: %s", *sf.outKeyPath)
+			}
 		}
 
-		err = os.WriteFile(*sf.outKeyPath, cert.MarshalPrivateKeyToPEM(curve, rawPriv), 0600)
+		err = writeOutput(*sf.outKeyPath, cert.MarshalPrivateKeyToPEM(curve, rawPriv), 0600, out)
 		if err != nil {
 			return fmt.Errorf("error while writing out-key: %s", err)
 		}
@@ -379,7 +400,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		b = append(b, sb...)
 	}
 
-	err = os.WriteFile(*sf.outCertPath, b, 0600)
+	err = writeOutput(*sf.outCertPath, b, 0600, out)
 	if err != nil {
 		return fmt.Errorf("error while writing out-crt: %s", err)
 	}
@@ -390,7 +411,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			return fmt.Errorf("error while generating qr code: %s", err)
 		}
 
-		err = os.WriteFile(*sf.outQRPath, b, 0600)
+		err = writeOutput(*sf.outQRPath, b, 0600, out)
 		if err != nil {
 			return fmt.Errorf("error while writing out-qr: %s", err)
 		}
@@ -440,6 +461,7 @@ func signSummary() string {
 func signHelp(out io.Writer) {
 	sf := newSignFlags()
 	out.Write([]byte("Usage of " + os.Args[0] + " " + signSummary() + "\n"))
+	out.Write([]byte(stdioHelpText))
 	sf.set.SetOutput(out)
 	sf.set.PrintDefaults()
 }
