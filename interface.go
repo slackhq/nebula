@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
 
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
@@ -375,13 +377,22 @@ func (f *Interface) reloadDisconnectInvalid(c *config.C) {
 }
 
 func (f *Interface) reloadFirewall(c *config.C) {
-	//TODO: need to trigger/detect if the certificate changed too
-	if c.HasChanged("firewall") == false {
+	cs := f.pki.getCertState()
+	curCert := cs.getCertificate(cert.Version2)
+	if curCert == nil {
+		curCert = cs.getCertificate(cert.Version1)
+	}
+
+	// The firewall builds its routableNetworks set from the certificate's UnsafeNetworks at construction.
+	// Check to see if that set has changed, and if so, rebuild the firewall.
+	certUnsafeChanged := curCert != nil && !slices.Equal(curCert.UnsafeNetworks(), f.firewall.unsafeNetworks)
+
+	if !c.HasChanged("firewall") && !certUnsafeChanged {
 		f.l.Debug("No firewall config change detected")
 		return
 	}
 
-	fw, err := NewFirewallFromConfig(f.l, f.pki.getCertState(), c)
+	fw, err := NewFirewallFromConfig(f.l, cs, c)
 	if err != nil {
 		f.l.Error("Error while creating firewall during reload", "error", err)
 		return
