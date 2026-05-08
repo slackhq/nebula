@@ -12,34 +12,34 @@ import (
 func TestDefaultPathInDir(t *testing.T) {
 	t.Run("prefers config.yaml when both exist", func(t *testing.T) {
 		dir := t.TempDir()
-		yaml := filepath.Join(dir, "config.yaml")
-		yml := filepath.Join(dir, "config.yml")
-		require.NoError(t, os.WriteFile(yaml, []byte("a: 1"), 0644))
-		require.NoError(t, os.WriteFile(yml, []byte("a: 2"), 0644))
+		want := filepath.Join(dir, "config.yaml")
+		other := filepath.Join(dir, "config.yml")
+		require.NoError(t, os.WriteFile(want, []byte("a: 1"), 0644))
+		require.NoError(t, os.WriteFile(other, []byte("a: 2"), 0644))
 
 		got, err := defaultPathInDir(dir)
 		require.NoError(t, err)
-		assert.Equal(t, yaml, got)
+		assert.Equal(t, want, got)
 	})
 
 	t.Run("returns config.yaml when only it exists", func(t *testing.T) {
 		dir := t.TempDir()
-		yaml := filepath.Join(dir, "config.yaml")
-		require.NoError(t, os.WriteFile(yaml, []byte("a: 1"), 0644))
+		want := filepath.Join(dir, "config.yaml")
+		require.NoError(t, os.WriteFile(want, []byte("a: 1"), 0644))
 
 		got, err := defaultPathInDir(dir)
 		require.NoError(t, err)
-		assert.Equal(t, yaml, got)
+		assert.Equal(t, want, got)
 	})
 
 	t.Run("falls back to config.yml when only it exists", func(t *testing.T) {
 		dir := t.TempDir()
-		yml := filepath.Join(dir, "config.yml")
-		require.NoError(t, os.WriteFile(yml, []byte("a: 1"), 0644))
+		want := filepath.Join(dir, "config.yml")
+		require.NoError(t, os.WriteFile(want, []byte("a: 1"), 0644))
 
 		got, err := defaultPathInDir(dir)
 		require.NoError(t, err)
-		assert.Equal(t, yml, got)
+		assert.Equal(t, want, got)
 	})
 
 	t.Run("errors when neither exists and names both paths", func(t *testing.T) {
