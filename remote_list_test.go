@@ -6,7 +6,21 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// trackedHostnameResults builds a *hostnamesResults with a known cancel function and a
+// pre-populated ips map so tests can assert cancellation and verify previously-resolved
+// IPs survive a cancel without spinning up a real DNS resolver.
+func trackedHostnameResults(cancelFn func(), addrs ...string) *hostnamesResults {
+	hr := &hostnamesResults{cancelFn: cancelFn}
+	ips := map[netip.AddrPort]struct{}{}
+	for _, a := range addrs {
+		ips[netip.MustParseAddrPort(a)] = struct{}{}
+	}
+	hr.ips.Store(&ips)
+	return hr
+}
 
 func TestRemoteList_Rebuild(t *testing.T) {
 	rl := NewRemoteList([]netip.Addr{netip.MustParseAddr("0.0.0.0")}, nil)
@@ -110,6 +124,81 @@ func TestRemoteList_Rebuild(t *testing.T) {
 	assert.Equal(t, "172.18.0.1:10101", rl.addrs[7].String())
 	assert.Equal(t, "172.19.0.1:10101", rl.addrs[8].String())
 	assert.Equal(t, "172.31.0.1:10101", rl.addrs[9].String())
+}
+
+func TestRemoteList_ResetForOwner(t *testing.T) {
+	ourselves := netip.MustParseAddr("10.0.0.1")
+	otherOwner := netip.MustParseAddr("10.0.0.2")
+	vpnAddr := netip.MustParseAddr("10.0.0.99")
+
+	rl := NewRemoteList([]netip.Addr{vpnAddr}, nil)
+	rl.unlockedSetV4(ourselves, vpnAddr,
+		[]*V4AddrPort{newIp4AndPortFromString("1.1.1.1:4242")},
+		func(netip.Addr, *V4AddrPort) bool { return true },
+	)
+	rl.unlockedSetV6(ourselves, vpnAddr,
+		[]*V6AddrPort{newIp6AndPortFromString("[1::1]:4242")},
+		func(netip.Addr, *V6AddrPort) bool { return true },
+	)
+	rl.unlockedSetV4(otherOwner, vpnAddr,
+		[]*V4AddrPort{newIp4AndPortFromString("2.2.2.2:4242")},
+		func(netip.Addr, *V4AddrPort) bool { return true },
+	)
+
+	canceled := 0
+	hr := trackedHostnameResults(func() { canceled++ }, "3.3.3.3:4242")
+	rl.Lock()
+	rl.unlockedSetHostnamesResults(hr)
+	rl.Unlock()
+
+	rl.ResetForOwner(ourselves)
+
+	rl.RLock()
+	defer rl.RUnlock()
+	assert.Empty(t, rl.cache[ourselves].v4.reported, "our v4 reported should be cleared")
+	assert.Empty(t, rl.cache[ourselves].v6.reported, "our v6 reported should be cleared")
+	assert.Len(t, rl.cache[otherOwner].v4.reported, 1, "other owner's contribution must be preserved")
+	assert.Equal(t, "2.2.2.2:4242", protoV4AddrPortToNetAddrPort(rl.cache[otherOwner].v4.reported[0]).String())
+	assert.Equal(t, 1, canceled, "DNS resolution goroutine should be canceled")
+	assert.Same(t, hr, rl.hr, "hostnamesResults must be preserved so DNS-resolved IPs keep feeding addrs until replaced")
+	assert.NotEmpty(t, rl.hr.GetAddrs(), "previously-resolved IPs should still be readable after cancel")
+	assert.True(t, rl.shouldRebuild, "shouldRebuild must be set so the next Rebuild recomputes addrs")
+}
+
+func TestRemoteList_ResetForOwner_NoEntry(t *testing.T) {
+	// An owner with no cache entry must not panic; shouldRebuild is still set and any
+	// existing hostnamesResults is canceled.
+	rl := NewRemoteList([]netip.Addr{netip.MustParseAddr("10.0.0.99")}, nil)
+	canceled := 0
+	rl.Lock()
+	rl.unlockedSetHostnamesResults(trackedHostnameResults(func() { canceled++ }, "3.3.3.3:4242"))
+	rl.Unlock()
+
+	rl.ResetForOwner(netip.MustParseAddr("10.0.0.1"))
+
+	rl.RLock()
+	defer rl.RUnlock()
+	assert.Equal(t, 1, canceled)
+	assert.True(t, rl.shouldRebuild)
+}
+
+func TestRemoteList_ClearHostnameResults(t *testing.T) {
+	rl := NewRemoteList([]netip.Addr{netip.MustParseAddr("10.0.0.99")}, nil)
+
+	canceled := 0
+	hr := trackedHostnameResults(func() { canceled++ }, "3.3.3.3:4242")
+	rl.Lock()
+	rl.unlockedSetHostnamesResults(hr)
+	rl.Unlock()
+	require.NotEmpty(t, hr.GetAddrs(), "hostnamesResults should have its fastrack IPs populated")
+
+	rl.ClearHostnameResults()
+
+	rl.RLock()
+	defer rl.RUnlock()
+	assert.Equal(t, 1, canceled, "DNS resolution goroutine should be canceled")
+	assert.Nil(t, rl.hr, "hostnamesResults should be dropped")
+	assert.True(t, rl.shouldRebuild)
 }
 
 func BenchmarkFullRebuild(b *testing.B) {

@@ -239,6 +239,31 @@ func (r *RemoteList) unlockedSetHostnamesResults(hr *hostnamesResults) {
 	r.hr = hr
 }
 
+// ResetForOwner zeros the reported address slices for the given owner and marks the addrs list dirty.
+// Any pending hostname resolution will be canceled.
+func (r *RemoteList) ResetForOwner(ownerVpnAddr netip.Addr) {
+	r.Lock()
+	defer r.Unlock()
+	r.hr.Cancel()
+	if c, ok := r.cache[ownerVpnAddr]; ok {
+		if c.v4 != nil {
+			c.v4.reported = c.v4.reported[:0]
+		}
+		if c.v6 != nil {
+			c.v6.reported = c.v6.reported[:0]
+		}
+	}
+	r.shouldRebuild = true
+}
+
+// ClearHostnameResults cancels the in-flight DNS resolver goroutine (if any) and drops the resolved IP cache.
+func (r *RemoteList) ClearHostnameResults() {
+	r.Lock()
+	defer r.Unlock()
+	r.unlockedSetHostnamesResults(nil)
+	r.shouldRebuild = true
+}
+
 // Len locks and reports the size of the deduplicated address list
 // The deduplication work may need to occur here, so you must pass preferredRanges
 func (r *RemoteList) Len(preferredRanges []netip.Prefix) int {
