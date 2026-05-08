@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package nebula
 
 import (
@@ -13,12 +15,13 @@ import (
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// Test_emitStats_primesGauges verifies issue #907: certificate gauges should
-// not read 0 between goroutine launch and the first ticker fire. The ticker
-// interval here is set far longer than the test runtime so that any non-zero
-// reading must come from the synchronous prime call, not a tick.
+// Test_emitStats_primesGauges covers issue #907: a Prometheus scrape that
+// landed before the first ticker fire used to read 0 for the cert gauges.
+// emitStats now primes the gauges before entering the ticker loop. We assert
+// the gauge is zero before the first call and non-zero after.
 func Test_emitStats_primesGauges(t *testing.T) {
 	defer metrics.DefaultRegistry.UnregisterAll()
 
@@ -45,29 +48,26 @@ func Test_emitStats_primesGauges(t *testing.T) {
 		pki:              &PKI{},
 		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
 		l:                l,
+		// On linux, udp.NewUDPStatsEmitter indexes writers[0] and asserts to
+		// *udp.StdConn. A zero value works: getMemInfo sees a nil rawConn,
+		// returns an error, and the emitter falls through to a no-op.
+		writers: []udp.Conn{&udp.StdConn{}},
 	}
 	ifce.pki.cs.Store(cs)
 
+	ttlGauge := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil)
+	require.Zero(t, ttlGauge.Value(), "gauge should be zero before emitStats runs")
+
+	// Pre-cancel the context so emitStats returns after priming the gauges
+	// without ever reading from ticker.C. The one hour interval is just a
+	// belt-and-suspenders, the test does not expect the ticker to fire.
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		ifce.emitStats(ctx, time.Hour) // ticker interval that will never fire
-		close(done)
-	}()
+	cancel()
+	ifce.emitStats(ctx, time.Hour)
 
-	// Give the goroutine a beat to run the synchronous prime call. This is
-	// generous: emit() is microseconds of work in practice.
-	assert.Eventually(t, func() bool {
-		return metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil).Value() > 0
-	}, time.Second, 10*time.Millisecond, "certificate.ttl_seconds should be primed before first tick")
-
-	ttl := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil).Value()
-	assert.Positive(t, ttl, int64(0))
+	ttl := ttlGauge.Value()
+	assert.Positive(t, ttl, "ttl gauge should be primed by emitStats before its first tick")
 	assert.LessOrEqual(t, ttl, int64(3600))
-
 	assert.Equal(t, int64(cert.Version1), metrics.GetOrRegisterGauge("certificate.initiating_version", nil).Value())
 	assert.Equal(t, int64(cert.Version1), metrics.GetOrRegisterGauge("certificate.max_version", nil).Value())
-
-	cancel()
-	<-done
 }
