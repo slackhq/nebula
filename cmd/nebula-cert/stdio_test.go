@@ -38,7 +38,7 @@ func Test_readInput_file(t *testing.T) {
 	got, err := readInput("path", p, &claims)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("file"), got)
-	assert.Equal(t, "", claims.in)
+	assert.Empty(t, claims.in)
 }
 
 func Test_readInput_doubleStdinErrors(t *testing.T) {
