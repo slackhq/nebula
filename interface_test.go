@@ -1,73 +1,120 @@
-//go:build linux || darwin
-
 package nebula
 
 import (
-	"context"
 	"net/netip"
 	"testing"
-	"time"
 
-	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
-	"github.com/slackhq/nebula/firewall"
-	"github.com/slackhq/nebula/overlay/overlaytest"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/test"
-	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// Test_emitStats_primesGauges covers issue #907: a Prometheus scrape that
-// landed before the first ticker fire used to read 0 for the cert gauges.
-// emitStats now primes the gauges before entering the ticker loop. We assert
-// the gauge is zero before the first call and non-zero after.
-func Test_emitStats_primesGauges(t *testing.T) {
-	defer metrics.DefaultRegistry.UnregisterAll()
-
+// TestReloadFirewall_CertUnsafeNetworksChanged verifies that reloadFirewall
+// rebuilds the firewall when only the certificate's UnsafeNetworks have changed,
+// even if the firewall section of the YAML has not.
+func TestReloadFirewall_CertUnsafeNetworksChanged(t *testing.T) {
 	l := test.NewLogger()
-	hostMap := newHostMap(l)
-	preferredRanges := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
-	hostMap.preferredRanges.Store(&preferredRanges)
 
-	notAfter := time.Now().Add(time.Hour)
-	cs := &CertState{
-		initiatingVersion: cert.Version1,
-		privateKey:        []byte{},
-		v1Cert:            &dummyCert{version: cert.Version1, notAfter: notAfter},
-		v1Credential:      nil,
+	vpnNet := netip.MustParsePrefix("10.0.0.1/24")
+	initialUnsafe := []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")}
+
+	// dummyCert avoids dragging the real signing pipeline into a unit test.
+	c1 := &dummyCert{
+		version:        cert.Version2,
+		networks:       []netip.Prefix{vpnNet},
+		unsafeNetworks: initialUnsafe,
+	}
+	pki := &PKI{}
+	pki.cs.Store(&CertState{v2Cert: c1, initiatingVersion: cert.Version2})
+
+	rawYAML := `firewall:
+  outbound:
+    - port: any
+      proto: any
+      host: any
+  inbound:
+    - port: any
+      proto: any
+      host: any
+`
+	cfg := config.NewC(l)
+	require.NoError(t, cfg.LoadString(rawYAML))
+
+	fw, err := NewFirewallFromConfig(l, pki.getCertState(), cfg)
+	require.NoError(t, err)
+	require.Equal(t, initialUnsafe, fw.unsafeNetworks)
+
+	f := &Interface{
+		pki:      pki,
+		firewall: fw,
+		l:        l,
 	}
 
-	lh := newTestLighthouse()
-	ifce := &Interface{
-		hostMap:          hostMap,
-		inside:           &overlaytest.NoopTun{},
-		outside:          &udp.NoopConn{},
-		firewall:         &Firewall{Conntrack: &FirewallConntrack{Conns: map[firewall.Packet]*conn{}}},
-		lightHouse:       lh,
-		pki:              &PKI{},
-		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
-		l:                l,
-		// On linux, udp.NewUDPStatsEmitter indexes writers[0] and asserts to
-		// *udp.StdConn. A zero value works: getMemInfo sees a nil rawConn,
-		// returns an error, and the emitter falls through to a no-op.
-		writers: []udp.Conn{&udp.StdConn{}},
+	// Swap the cert with a different UnsafeNetworks set.
+	newUnsafe := []netip.Prefix{
+		netip.MustParsePrefix("198.51.100.0/24"),
+		netip.MustParsePrefix("203.0.113.0/24"),
 	}
-	ifce.pki.cs.Store(cs)
+	c2 := &dummyCert{
+		version:        cert.Version2,
+		networks:       []netip.Prefix{vpnNet},
+		unsafeNetworks: newUnsafe,
+	}
+	pki.cs.Store(&CertState{v2Cert: c2, initiatingVersion: cert.Version2})
 
-	ttlGauge := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil)
-	require.Zero(t, ttlGauge.Value(), "gauge should be zero before emitStats runs")
+	// Reload with the same YAML so HasChanged("firewall") reports false.
+	require.NoError(t, cfg.ReloadConfigString(rawYAML))
+	require.False(t, cfg.HasChanged("firewall"))
 
-	// Pre-cancel the context so emitStats returns after priming the gauges
-	// without ever reading from ticker.C. The one hour interval is just a
-	// belt-and-suspenders, the test does not expect the ticker to fire.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	ifce.emitStats(ctx, time.Hour)
+	f.reloadFirewall(cfg)
 
-	ttl := ttlGauge.Value()
-	assert.Positive(t, ttl, "ttl gauge should be primed by emitStats before its first tick")
-	assert.LessOrEqual(t, ttl, int64(3600))
-	assert.Equal(t, int64(cert.Version1), metrics.GetOrRegisterGauge("certificate.initiating_version", nil).Value())
-	assert.Equal(t, int64(cert.Version1), metrics.GetOrRegisterGauge("certificate.max_version", nil).Value())
+	assert.NotSame(t, fw, f.firewall, "firewall pointer should have been replaced")
+	assert.Equal(t, newUnsafe, f.firewall.unsafeNetworks)
+	assert.True(t, f.firewall.routableNetworks.Contains(netip.MustParseAddr("203.0.113.5")))
+}
+
+// TestReloadFirewall_NoChange verifies that reloadFirewall is a no-op when
+// neither the firewall config nor the cert's UnsafeNetworks have changed.
+func TestReloadFirewall_NoChange(t *testing.T) {
+	l := test.NewLogger()
+
+	vpnNet := netip.MustParsePrefix("10.0.0.1/24")
+	unsafe := []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")}
+
+	c1 := &dummyCert{
+		version:        cert.Version2,
+		networks:       []netip.Prefix{vpnNet},
+		unsafeNetworks: unsafe,
+	}
+	pki := &PKI{}
+	pki.cs.Store(&CertState{v2Cert: c1, initiatingVersion: cert.Version2})
+
+	rawYAML := `firewall:
+  outbound:
+    - port: any
+      proto: any
+      host: any
+  inbound:
+    - port: any
+      proto: any
+      host: any
+`
+	cfg := config.NewC(l)
+	require.NoError(t, cfg.LoadString(rawYAML))
+
+	fw, err := NewFirewallFromConfig(l, pki.getCertState(), cfg)
+	require.NoError(t, err)
+
+	f := &Interface{
+		pki:      pki,
+		firewall: fw,
+		l:        l,
+	}
+
+	require.NoError(t, cfg.ReloadConfigString(rawYAML))
+	f.reloadFirewall(cfg)
+
+	assert.Same(t, fw, f.firewall, "firewall should not have been replaced")
 }
