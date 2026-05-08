@@ -62,7 +62,7 @@ func Test_emitStats_primesGauges(t *testing.T) {
 	}, time.Second, 10*time.Millisecond, "certificate.ttl_seconds should be primed before first tick")
 
 	ttl := metrics.GetOrRegisterGauge("certificate.ttl_seconds", nil).Value()
-	assert.Greater(t, ttl, int64(0))
+	assert.Positive(t, ttl, int64(0))
 	assert.LessOrEqual(t, ttl, int64(3600))
 
 	assert.Equal(t, int64(cert.Version1), metrics.GetOrRegisterGauge("certificate.initiating_version", nil).Value())
