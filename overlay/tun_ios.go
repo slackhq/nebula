@@ -4,15 +4,12 @@
 package overlay
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/netip"
 	"os"
-	"sync"
 	"sync/atomic"
-	"syscall"
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
@@ -36,7 +33,7 @@ func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip
 	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
 	t := &tun{
 		vpnNetworks:     vpnNetworks,
-		ReadWriteCloser: &tunReadCloser{f: file},
+		ReadWriteCloser: file,
 		l:               l,
 	}
 
@@ -85,64 +82,6 @@ func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 	return r
 }
 
-// The following is hoisted up from water, we do this so we can inject our own fd on iOS
-type tunReadCloser struct {
-	f io.ReadWriteCloser
-
-	rMu  sync.Mutex
-	rBuf []byte
-
-	wMu  sync.Mutex
-	wBuf []byte
-}
-
-func (tr *tunReadCloser) Read(to []byte) (int, error) {
-	tr.rMu.Lock()
-	defer tr.rMu.Unlock()
-
-	if cap(tr.rBuf) < len(to)+4 {
-		tr.rBuf = make([]byte, len(to)+4)
-	}
-	tr.rBuf = tr.rBuf[:len(to)+4]
-
-	n, err := tr.f.Read(tr.rBuf)
-	copy(to, tr.rBuf[4:])
-	return n - 4, err
-}
-
-func (tr *tunReadCloser) Write(from []byte) (int, error) {
-	if len(from) == 0 {
-		return 0, syscall.EIO
-	}
-
-	tr.wMu.Lock()
-	defer tr.wMu.Unlock()
-
-	if cap(tr.wBuf) < len(from)+4 {
-		tr.wBuf = make([]byte, len(from)+4)
-	}
-	tr.wBuf = tr.wBuf[:len(from)+4]
-
-	// Determine the IP Family for the NULL L2 Header
-	ipVer := from[0] >> 4
-	if ipVer == 4 {
-		tr.wBuf[3] = syscall.AF_INET
-	} else if ipVer == 6 {
-		tr.wBuf[3] = syscall.AF_INET6
-	} else {
-		return 0, errors.New("unable to determine IP version from packet")
-	}
-
-	copy(tr.wBuf[4:], from)
-
-	n, err := tr.f.Write(tr.wBuf)
-	return n - 4, err
-}
-
-func (tr *tunReadCloser) Close() error {
-	return tr.f.Close()
-}
-
 func (t *tun) Networks() []netip.Prefix {
 	return t.vpnNetworks
 }
@@ -158,3 +97,7 @@ func (t *tun) SupportsMultiqueue() bool {
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for ios")
 }
+
+// TunPrefixLen reports the 4-byte BSD AF_INET / AF_INET6 protocol-family
+// marker the kernel prepends on read and expects on write.
+func (t *tun) TunPrefixLen() int { return 4 }

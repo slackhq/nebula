@@ -232,6 +232,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 		ifce.writers = udpConns
 		lightHouse.ifce = ifce
+		lightHouse.bufAlloc = ifce.bufAlloc
 
 		ifce.RegisterConfigChangeCallbacks(c)
 		ifce.reloadDisconnectInvalid(c)

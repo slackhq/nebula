@@ -20,7 +20,8 @@ const (
 	minFwPacketLen = 4
 )
 
-func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) readOutsidePackets(via ViaSender, buf *WireBuffer, packet []byte, lhf *LightHouseHandler, q int, localCache firewall.ConntrackCache) {
+	h := buf.H
 	err := h.Parse(packet)
 	if err != nil {
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
@@ -65,7 +66,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 		switch h.Subtype {
 		case header.MessageNone:
-			if !f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache) {
+			if !f.decryptToTun(hostinfo, h.MessageCounter, buf, packet, q, localCache) {
 				return
 			}
 		case header.MessageRelay:
@@ -76,8 +77,9 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 			// which will gracefully fail in the DecryptDanger call.
 			signedPayload := packet[:len(packet)-hostinfo.ConnectionState.dKey.Overhead()]
 			signatureValue := packet[len(packet)-hostinfo.ConnectionState.dKey.Overhead():]
-			out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, signedPayload, signatureValue, h.MessageCounter, nb)
-			if err != nil {
+			// AAD-only validation: passing dst=nil since there's no plaintext
+			// to recover (ciphertext is just the trailing AEAD tag).
+			if _, err = hostinfo.ConnectionState.dKey.DecryptDanger(nil, signedPayload, signatureValue, h.MessageCounter, buf.NB); err != nil {
 				return
 			}
 			// Successfully validated the thing. Get rid of the Relay header.
@@ -110,7 +112,8 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 					relay:     relay,
 					IsRelayed: true,
 				}
-				f.readOutsidePackets(via, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
+				buf.Reset()
+				f.readOutsidePackets(via, buf, signedPayload, lhf, q, localCache)
 				return
 			case ForwardingType:
 				// Find the target HostInfo relay object
@@ -130,7 +133,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 					case ForwardingType:
 						// Forward this packet through the relay tunnel
 						// Find the target HostInfo
-						f.SendVia(targetHI, targetRelay, signedPayload, nb, out, false)
+						f.SendVia(targetHI, targetRelay, signedPayload, buf)
 						return
 					case TerminalType:
 						hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
@@ -152,7 +155,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 			return
 		}
 
-		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
+		d, err := f.decrypt(hostinfo, h.MessageCounter, buf, packet, h)
 		if err != nil {
 			hostinfo.logger(f.l).Error("Failed to decrypt lighthouse packet",
 				"error", err,
@@ -173,7 +176,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 			return
 		}
 
-		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
+		d, err := f.decrypt(hostinfo, h.MessageCounter, buf, packet, h)
 		if err != nil {
 			hostinfo.logger(f.l).Error("Failed to decrypt test packet",
 				"error", err,
@@ -185,9 +188,9 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 		if h.Subtype == header.TestRequest {
 			// This testRequest might be from TryPromoteBest, so we should roam
-			// to the new IP address before responding
+			// to the new IP address before responding.
 			f.handleHostRoaming(hostinfo, via)
-			f.send(header.Test, header.TestReply, ci, hostinfo, d, nb, out)
+			f.send(header.Test, header.TestReply, ci, hostinfo, d, buf)
 		}
 
 		// Fallthrough to the bottom to record incoming traffic
@@ -210,7 +213,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		if !f.handleEncrypted(ci, via, h) {
 			return
 		}
-		_, err = f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
+		_, err = f.decrypt(hostinfo, h.MessageCounter, buf, packet, h)
 		if err != nil {
 			hostinfo.logger(f.l).Error("Failed to decrypt CloseTunnel packet",
 				"error", err,
@@ -230,7 +233,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 			return
 		}
 
-		d, err := f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
+		d, err := f.decrypt(hostinfo, h.MessageCounter, buf, packet, h)
 		if err != nil {
 			hostinfo.logger(f.l).Error("Failed to decrypt Control packet",
 				"error", err,
@@ -266,7 +269,9 @@ func (f *Interface) closeTunnel(hostInfo *HostInfo) {
 
 // sendCloseTunnel is a helper function to send a proper close tunnel packet to a remote
 func (f *Interface) sendCloseTunnel(h *HostInfo) {
-	f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+	buf := f.bufAlloc.Acquire()
+	defer f.bufAlloc.Release(buf)
+	f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, buf)
 }
 
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
@@ -515,9 +520,8 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 	return nil
 }
 
-func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []byte, h *header.H, nb []byte) ([]byte, error) {
-	var err error
-	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], mc, nb)
+func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, buf *WireBuffer, packet []byte, h *header.H) ([]byte, error) {
+	plaintext, err := buf.DecryptForHandler(hostinfo.ConnectionState, packet, mc)
 	if err != nil {
 		return nil, err
 	}
@@ -529,42 +533,41 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 		return nil, errors.New("out of window packet")
 	}
 
-	return out, nil
+	return plaintext, nil
 }
 
-func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) bool {
-	var err error
-
-	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], messageCounter, nb)
-	if err != nil {
+func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, buf *WireBuffer, packet []byte, q int, localCache firewall.ConntrackCache) bool {
+	if err := buf.DecryptDatagram(hostinfo.ConnectionState, packet, messageCounter); err != nil {
 		hostinfo.logger(f.l).Error("Failed to decrypt packet", "error", err)
 		return false
 	}
 
-	err = newPacket(out, true, fwPacket)
-	if err != nil {
+	ipPacket := buf.IPPacket()
+	if err := newPacket(ipPacket, true, buf.FwPacket); err != nil {
 		hostinfo.logger(f.l).Warn("Error while validating inbound packet",
 			"error", err,
-			"packet", out,
+			"packet", ipPacket,
 		)
 		return false
 	}
 
 	if !hostinfo.ConnectionState.window.Update(f.l, messageCounter) {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("dropping out of window packet", "fwPacket", fwPacket)
+			hostinfo.logger(f.l).Debug("dropping out of window packet", "fwPacket", buf.FwPacket)
 		}
 		return false
 	}
 
-	dropReason := f.firewall.Drop(*fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(*buf.FwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason != nil {
-		// NOTE: We give `packet` as the `out` here since we already decrypted from it and we don't need it anymore
-		// This gives us a buffer to build the reject packet in
-		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, packet, q)
+		// NOTE: We hand `packet` (the original UDP ciphertext we already
+		// decrypted from) as the reject-IP scratch since we no longer
+		// need its ciphertext, and it's disjoint from buf.Out where
+		// sendNoMetrics will encrypt the wire packet.
+		f.rejectOutside(ipPacket, hostinfo.ConnectionState, hostinfo, packet, buf, q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("dropping inbound packet",
-				"fwPacket", fwPacket,
+				"fwPacket", buf.FwPacket,
 				"reason", dropReason,
 			)
 		}
@@ -572,8 +575,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	}
 
 	f.connectionManager.In(hostinfo)
-	_, err = f.readers[q].Write(out)
-	if err != nil {
+	if _, err := buf.WriteIPToTUN(f.readers[q]); err != nil {
 		f.l.Error("Failed to write to tun", "error", err)
 	}
 	return true

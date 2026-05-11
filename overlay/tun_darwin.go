@@ -11,7 +11,6 @@ import (
 	"net/netip"
 	"os"
 	"sync/atomic"
-	"syscall"
 	"unsafe"
 
 	"github.com/gaissmai/bart"
@@ -31,9 +30,6 @@ type tun struct {
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	linkAddr    *netroute.LinkAddr
 	l           *slog.Logger
-
-	// cache out buffer since we need to prepend 4 bytes for tun metadata
-	out []byte
 }
 
 type ifReq struct {
@@ -502,44 +498,6 @@ func delRoute(prefix netip.Prefix, gateway netroute.Addr) error {
 	return nil
 }
 
-func (t *tun) Read(to []byte) (int, error) {
-	buf := make([]byte, len(to)+4)
-
-	n, err := t.ReadWriteCloser.Read(buf)
-
-	copy(to, buf[4:])
-	return n - 4, err
-}
-
-// Write is only valid for single threaded use
-func (t *tun) Write(from []byte) (int, error) {
-	buf := t.out
-	if cap(buf) < len(from)+4 {
-		buf = make([]byte, len(from)+4)
-		t.out = buf
-	}
-	buf = buf[:len(from)+4]
-
-	if len(from) == 0 {
-		return 0, syscall.EIO
-	}
-
-	// Determine the IP Family for the NULL L2 Header
-	ipVer := from[0] >> 4
-	if ipVer == 4 {
-		buf[3] = syscall.AF_INET
-	} else if ipVer == 6 {
-		buf[3] = syscall.AF_INET6
-	} else {
-		return 0, fmt.Errorf("unable to determine IP version from packet")
-	}
-
-	copy(buf[4:], from)
-
-	n, err := t.ReadWriteCloser.Write(buf)
-	return n - 4, err
-}
-
 func (t *tun) Networks() []netip.Prefix {
 	return t.vpnNetworks
 }
@@ -555,3 +513,7 @@ func (t *tun) SupportsMultiqueue() bool {
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
 }
+
+// TunPrefixLen reports the 4-byte BSD AF_INET / AF_INET6 protocol-family
+// marker the kernel prepends on read and expects on write.
+func (t *tun) TunPrefixLen() int { return 4 }

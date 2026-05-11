@@ -50,3 +50,5 @@ func (NoopTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 func (NoopTun) Close() error {
 	return nil
 }
+
+func (NoopTun) TunPrefixLen() int { return 0 }

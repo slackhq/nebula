@@ -165,7 +165,7 @@ func TestGoodHandshakeNoOverlap(t *testing.T) {
 
 	empty := []byte{}
 	t.Log("do something to cause a handshake")
-	myControl.GetF().SendMessageToVpnAddr(header.Test, header.MessageNone, theirVpnIpNet[0].Addr(), empty, empty, empty)
+	myControl.GetF().SendMessageToVpnAddr(header.Test, header.MessageNone, theirVpnIpNet[0].Addr(), empty, nebula.NewWireBuffer(9001, 0))
 
 	t.Log("Have them consume my stage 0 packet. They have a tunnel now")
 	theirControl.InjectUDPPacket(myControl.GetFromUDP(true))

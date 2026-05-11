@@ -63,6 +63,9 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hostinfo *Ho
 	}
 
 	hostinfo.logger(rm.l).Info("Attempt to relay through hosts", "relays", hostinfo.remotes.relays)
+	// One WireBuffer for the whole relay-fanout loop.
+	buf := f.bufAlloc.Acquire()
+	defer f.bufAlloc.Release(buf)
 	// Send a RelayRequest to all known Relay IP's
 	for _, relay := range hostinfo.remotes.relays {
 		// Don't relay through the host I'm trying to connect to
@@ -124,7 +127,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hostinfo *Ho
 				if err != nil {
 					hostinfo.logger(rm.l).Error("Failed to marshal Control message to create relay", "error", err)
 				} else {
-					f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, make([]byte, 12), make([]byte, mtu))
+					f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, buf)
 					rm.l.Info("send CreateRelayRequest",
 						"relayFrom", f.myVpnAddrs[0],
 						"relayTo", vpnIp,
@@ -139,7 +142,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hostinfo *Ho
 		switch existingRelay.State {
 		case Established:
 			hostinfo.logger(rm.l).Info("Send handshake via relay", "relay", relay.String())
-			f.SendVia(relayHostInfo, existingRelay, stage0, make([]byte, 12), make([]byte, mtu), false)
+			f.SendVia(relayHostInfo, existingRelay, stage0, buf)
 		case Disestablished:
 			// Mark this relay as 'requested'
 			relayHostInfo.relayState.UpdateRelayForByIpState(vpnIp, Requested)
@@ -180,7 +183,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hostinfo *Ho
 				hostinfo.logger(rm.l).Error("Failed to marshal Control message to create relay", "error", err)
 			} else {
 				// This must send over the hostinfo, not over hm.Hosts[ip]
-				f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, make([]byte, 12), make([]byte, mtu))
+				f.SendMessageToHostInfo(header.Control, 0, relayHostInfo, msg, buf)
 				rm.l.Info("send CreateRelayRequest",
 					"relayFrom", f.myVpnAddrs[0],
 					"relayTo", vpnIp,
@@ -368,7 +371,9 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 		if err != nil {
 			rm.l.Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay", "error", err)
 		} else {
-			f.SendMessageToHostInfo(header.Control, 0, peerHostInfo, msg, make([]byte, 12), make([]byte, mtu))
+			buf := f.bufAlloc.Acquire()
+			f.SendMessageToHostInfo(header.Control, 0, peerHostInfo, msg, buf)
+			f.bufAlloc.Release(buf)
 			rm.l.Info("send CreateRelayResponse",
 				"relayFrom", resp.RelayFromAddr,
 				"relayTo", resp.RelayToAddr,
@@ -468,7 +473,9 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 		if err != nil {
 			logMsg.Error("relayManager Failed to marshal Control CreateRelayResponse message to create relay", "error", err)
 		} else {
-			f.SendMessageToHostInfo(header.Control, 0, h, msg, make([]byte, 12), make([]byte, mtu))
+			buf := f.bufAlloc.Acquire()
+			f.SendMessageToHostInfo(header.Control, 0, h, msg, buf)
+			f.bufAlloc.Release(buf)
 			rm.l.Info("send CreateRelayResponse",
 				"relayFrom", from,
 				"relayTo", target,
@@ -538,7 +545,9 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 		if err != nil {
 			logMsg.Error("relayManager Failed to marshal Control message to create relay", "error", err)
 		} else {
-			f.SendMessageToHostInfo(header.Control, 0, peer, msg, make([]byte, 12), make([]byte, mtu))
+			buf := f.bufAlloc.Acquire()
+			f.SendMessageToHostInfo(header.Control, 0, peer, msg, buf)
+			f.bufAlloc.Release(buf)
 			rm.l.Info("send CreateRelayRequest",
 				"relayFrom", h.vpnAddrs[0],
 				"relayTo", target,

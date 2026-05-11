@@ -632,15 +632,9 @@ func sshCloseTunnel(ifce *Interface, fs any, a []string, w sshd.StringWriter) er
 	}
 
 	if !flags.LocalOnly {
-		ifce.send(
-			header.CloseTunnel,
-			0,
-			hostInfo.ConnectionState,
-			hostInfo,
-			[]byte{},
-			make([]byte, 12, 12),
-			make([]byte, mtu),
-		)
+		buf := ifce.bufAlloc.Acquire()
+		ifce.send(header.CloseTunnel, 0, hostInfo.ConnectionState, hostInfo, []byte{}, buf)
+		ifce.bufAlloc.Release(buf)
 	}
 
 	ifce.closeTunnel(hostInfo)

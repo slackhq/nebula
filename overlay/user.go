@@ -69,3 +69,5 @@ func (d *UserDevice) Close() error {
 	d.outboundWriter.Close()
 	return nil
 }
+
+func (d *UserDevice) TunPrefixLen() int { return 0 }

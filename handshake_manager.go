@@ -971,11 +971,11 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("Sending stored packets", "count", len(hh.packetStore))
 		}
-		nb := make([]byte, 12, 12)
-		out := make([]byte, mtu)
+		buf := f.bufAlloc.Acquire()
 		for _, cp := range hh.packetStore {
-			cp.callback(cp.messageType, cp.messageSubType, hostinfo, cp.packet, nb, out)
+			cp.callback(cp.messageType, cp.messageSubType, hostinfo, cp.packet, buf)
 		}
+		f.bufAlloc.Release(buf)
 		f.cachedPacketMetrics.sent.Inc(int64(len(hh.packetStore)))
 	}
 
@@ -1085,7 +1085,9 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		// We received a valid handshake on this relay, so make sure the relay
 		// state reflects that, in case it had been marked Disestablished.
 		via.relayHI.relayState.UpdateRelayForByIdxState(via.remoteIdx, Established)
-		f.SendVia(via.relayHI, via.relay, msg, make([]byte, 12), make([]byte, mtu), false)
+		buf := f.bufAlloc.Acquire()
+		f.SendVia(via.relayHI, via.relay, msg, buf)
+		f.bufAlloc.Release(buf)
 		f.l.Info("Handshake message sent", append(logFields, "relay", via.relayHI.vpnAddrs[0])...)
 	}
 }
@@ -1102,7 +1104,9 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 	switch err {
 	case ErrAlreadySeen:
 		if existing.SetRemoteIfPreferred(f.hostMap, via) {
-			f.SendMessageToVpnAddr(header.Test, header.TestRequest, hostinfo.vpnAddrs[0], []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			buf := f.bufAlloc.Acquire()
+			f.SendMessageToVpnAddr(header.Test, header.TestRequest, hostinfo.vpnAddrs[0], []byte(""), buf)
+			f.bufAlloc.Release(buf)
 		}
 		// Resend the original response. The peer is committed to that response's
 		// ephemeral keys; a freshly-built one would have different keys and break
@@ -1125,7 +1129,9 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 			"responderIndex", hostinfo.localIndexId,
 			"handshake", hsFields,
 		)
-		f.SendMessageToVpnAddr(header.Test, header.TestRequest, hostinfo.vpnAddrs[0], []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+		buf := f.bufAlloc.Acquire()
+		f.SendMessageToVpnAddr(header.Test, header.TestRequest, hostinfo.vpnAddrs[0], []byte(""), buf)
+		f.bufAlloc.Release(buf)
 
 	case ErrLocalIndexCollision:
 		f.l.Error("Failed to add HostInfo due to localIndex collision",

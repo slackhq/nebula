@@ -153,8 +153,8 @@ func (cm *connectionManager) Start(ctx context.Context) {
 	defer clockSource.Stop()
 
 	p := []byte("")
-	nb := make([]byte, 12, 12)
-	out := make([]byte, mtu)
+	// Long-lived buf for the traffic-check goroutine; never released.
+	buf := cm.intf.bufAlloc.Acquire()
 
 	for {
 		select {
@@ -169,13 +169,13 @@ func (cm *connectionManager) Start(ctx context.Context) {
 					break
 				}
 
-				cm.doTrafficCheck(localIndex, p, nb, out, now)
+				cm.doTrafficCheck(localIndex, p, buf, now)
 			}
 		}
 	}
 }
 
-func (cm *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte, now time.Time) {
+func (cm *connectionManager) doTrafficCheck(localIndex uint32, p []byte, buf *WireBuffer, now time.Time) {
 	decision, hostinfo, primary := cm.makeTrafficDecision(localIndex, now)
 
 	switch decision {
@@ -199,7 +199,7 @@ func (cm *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte
 		cm.tryRehandshake(hostinfo)
 
 	case sendTestPacket:
-		cm.intf.SendMessageToHostInfo(header.Test, header.TestRequest, hostinfo, p, nb, out)
+		cm.intf.SendMessageToHostInfo(header.Test, header.TestRequest, hostinfo, p, buf)
 	}
 
 	cm.resetRelayTrafficCheck(hostinfo)
@@ -308,7 +308,9 @@ func (cm *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo
 		if err != nil {
 			cm.l.Error("failed to marshal Control message to migrate relay", "error", err)
 		} else {
-			cm.intf.SendMessageToHostInfo(header.Control, 0, newhostinfo, msg, make([]byte, 12), make([]byte, mtu))
+			migBuf := cm.intf.bufAlloc.Acquire()
+			cm.intf.SendMessageToHostInfo(header.Control, 0, newhostinfo, msg, migBuf)
+			cm.intf.bufAlloc.Release(migBuf)
 			cm.l.Info("send CreateRelayRequest",
 				"relayFrom", req.RelayFromAddr,
 				"relayTo", req.RelayToAddr,

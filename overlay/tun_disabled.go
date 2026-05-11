@@ -136,3 +136,5 @@ func (p prettyPacket) String() string {
 
 	return s.String()
 }
+
+func (t *disabledTun) TunPrefixLen() int { return 0 }

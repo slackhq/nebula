@@ -278,15 +278,9 @@ func (c *Control) CloseTunnel(vpnIp netip.Addr, localOnly bool) bool {
 	}
 
 	if !localOnly {
-		c.f.send(
-			header.CloseTunnel,
-			0,
-			hostInfo.ConnectionState,
-			hostInfo,
-			[]byte{},
-			make([]byte, 12, 12),
-			make([]byte, mtu),
-		)
+		buf := c.f.bufAlloc.Acquire()
+		c.f.send(header.CloseTunnel, 0, hostInfo.ConnectionState, hostInfo, []byte{}, buf)
+		c.f.bufAlloc.Release(buf)
 	}
 
 	c.f.closeTunnel(hostInfo)
@@ -296,11 +290,14 @@ func (c *Control) CloseTunnel(vpnIp netip.Addr, localOnly bool) bool {
 // CloseAllTunnels is just like CloseTunnel except it goes through and shuts them all down, optionally you can avoid shutting down lighthouse tunnels
 // the int returned is a count of tunnels closed
 func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
+	// One WireBuffer for the whole shutdown loop.
+	buf := c.f.bufAlloc.Acquire()
+	defer c.f.bufAlloc.Release(buf)
 	shutdown := func(h *HostInfo) {
 		if excludeLighthouses && c.f.lightHouse.IsAnyLighthouseAddr(h.vpnAddrs) {
 			return
 		}
-		c.f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
+		c.f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, buf)
 		c.f.closeTunnel(h)
 
 		c.l.Debug("Sending close tunnel message",

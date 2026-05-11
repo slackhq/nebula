@@ -184,3 +184,5 @@ func (t *TestTun) SupportsMultiqueue() bool {
 func (t *TestTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented")
 }
+
+func (t *TestTun) TunPrefixLen() int { return 0 }

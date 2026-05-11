@@ -49,16 +49,14 @@ type ifreq struct {
 }
 
 type tun struct {
+	io.ReadWriteCloser
 	Device      string
 	vpnNetworks []netip.Prefix
 	MTU         int
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *slog.Logger
-	f           *os.File
 	fd          int
-	// cache out buffer since we need to prepend 4 bytes for tun metadata
-	out []byte
 }
 
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
@@ -89,12 +87,12 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 	}
 
 	t := &tun{
-		f:           os.NewFile(uintptr(fd), ""),
-		fd:          fd,
-		Device:      deviceName,
-		vpnNetworks: vpnNetworks,
-		MTU:         c.GetInt("tun.mtu", DefaultMTU),
-		l:           l,
+		ReadWriteCloser: os.NewFile(uintptr(fd), ""),
+		fd:              fd,
+		Device:          deviceName,
+		vpnNetworks:     vpnNetworks,
+		MTU:             c.GetInt("tun.mtu", DefaultMTU),
+		l:               l,
 	}
 
 	err = t.reload(c, true)
@@ -113,53 +111,15 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 }
 
 func (t *tun) Close() error {
-	if t.f != nil {
-		if err := t.f.Close(); err != nil {
+	if t.ReadWriteCloser != nil {
+		if err := t.ReadWriteCloser.Close(); err != nil {
 			return fmt.Errorf("error closing tun file: %w", err)
 		}
 
-		// t.f.Close should have handled it for us but let's be extra sure
+		// Close on the os.File should have handled the fd for us but let's be extra sure
 		_ = unix.Close(t.fd)
 	}
 	return nil
-}
-
-func (t *tun) Read(to []byte) (int, error) {
-	buf := make([]byte, len(to)+4)
-
-	n, err := t.f.Read(buf)
-
-	copy(to, buf[4:])
-	return n - 4, err
-}
-
-// Write is only valid for single threaded use
-func (t *tun) Write(from []byte) (int, error) {
-	buf := t.out
-	if cap(buf) < len(from)+4 {
-		buf = make([]byte, len(from)+4)
-		t.out = buf
-	}
-	buf = buf[:len(from)+4]
-
-	if len(from) == 0 {
-		return 0, syscall.EIO
-	}
-
-	// Determine the IP Family for the NULL L2 Header
-	ipVer := from[0] >> 4
-	if ipVer == 4 {
-		buf[3] = syscall.AF_INET
-	} else if ipVer == 6 {
-		buf[3] = syscall.AF_INET6
-	} else {
-		return 0, fmt.Errorf("unable to determine IP version from packet")
-	}
-
-	copy(buf[4:], from)
-
-	n, err := t.f.Write(buf)
-	return n - 4, err
 }
 
 func (t *tun) addIp(cidr netip.Prefix) error {
@@ -471,3 +431,7 @@ func delRoute(prefix netip.Prefix, gateways []netip.Prefix) error {
 
 	return nil
 }
+
+// TunPrefixLen reports the 4-byte BSD AF_INET / AF_INET6 protocol-family
+// marker the kernel prepends on read and expects on write.
+func (t *tun) TunPrefixLen() int { return 4 }

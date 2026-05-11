@@ -58,13 +58,13 @@ type addrLifetime struct {
 }
 
 type tun struct {
+	io.ReadWriteCloser
 	Device      string
 	vpnNetworks []netip.Prefix
 	MTU         int
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *slog.Logger
-	f           *os.File
 	fd          int
 }
 
@@ -96,12 +96,12 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 	}
 
 	t := &tun{
-		f:           os.NewFile(uintptr(fd), ""),
-		fd:          fd,
-		Device:      deviceName,
-		vpnNetworks: vpnNetworks,
-		MTU:         c.GetInt("tun.mtu", DefaultMTU),
-		l:           l,
+		ReadWriteCloser: os.NewFile(uintptr(fd), ""),
+		fd:              fd,
+		Device:          deviceName,
+		vpnNetworks:     vpnNetworks,
+		MTU:             c.GetInt("tun.mtu", DefaultMTU),
+		l:               l,
 	}
 
 	err = t.reload(c, true)
@@ -120,12 +120,12 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 }
 
 func (t *tun) Close() error {
-	if t.f != nil {
-		if err := t.f.Close(); err != nil {
+	if t.ReadWriteCloser != nil {
+		if err := t.ReadWriteCloser.Close(); err != nil {
 			return fmt.Errorf("error closing tun file: %w", err)
 		}
 
-		// t.f.Close should have handled it for us but let's be extra sure
+		// Close on the os.File should have handled the fd for us but let's be extra sure
 		_ = unix.Close(t.fd)
 
 		s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_IP)
@@ -139,99 +139,6 @@ func (t *tun) Close() error {
 		return err
 	}
 	return nil
-}
-
-func (t *tun) Read(to []byte) (int, error) {
-	rc, err := t.f.SyscallConn()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get syscall conn for tun: %w", err)
-	}
-
-	var errno syscall.Errno
-	var n uintptr
-	err = rc.Read(func(fd uintptr) bool {
-		// first 4 bytes is protocol family, in network byte order
-		head := [4]byte{}
-		iovecs := []syscall.Iovec{
-			{&head[0], 4},
-			{&to[0], uint64(len(to))},
-		}
-
-		n, _, errno = syscall.Syscall(syscall.SYS_READV, fd, uintptr(unsafe.Pointer(&iovecs[0])), uintptr(2))
-		if errno.Temporary() {
-			// We got an EAGAIN, EINTR, or EWOULDBLOCK, go again
-			return false
-		}
-		return true
-	})
-	if err != nil {
-		if err == syscall.EBADF || err.Error() == "use of closed file" {
-			// Go doesn't export poll.ErrFileClosing but happily reports it to us so here we are
-			// https://github.com/golang/go/blob/master/src/internal/poll/fd_poll_runtime.go#L121
-			return 0, os.ErrClosed
-		}
-		return 0, fmt.Errorf("failed to make read call for tun: %w", err)
-	}
-
-	if errno != 0 {
-		return 0, fmt.Errorf("failed to make inner read call for tun: %w", errno)
-	}
-
-	// fix bytes read number to exclude header
-	bytesRead := int(n)
-	if bytesRead < 0 {
-		return bytesRead, nil
-	} else if bytesRead < 4 {
-		return 0, nil
-	} else {
-		return bytesRead - 4, nil
-	}
-}
-
-// Write is only valid for single threaded use
-func (t *tun) Write(from []byte) (int, error) {
-	if len(from) <= 1 {
-		return 0, syscall.EIO
-	}
-
-	ipVer := from[0] >> 4
-	var head [4]byte
-	// first 4 bytes is protocol family, in network byte order
-	if ipVer == 4 {
-		head[3] = syscall.AF_INET
-	} else if ipVer == 6 {
-		head[3] = syscall.AF_INET6
-	} else {
-		return 0, fmt.Errorf("unable to determine IP version from packet")
-	}
-
-	rc, err := t.f.SyscallConn()
-	if err != nil {
-		return 0, err
-	}
-
-	var errno syscall.Errno
-	var n uintptr
-	err = rc.Write(func(fd uintptr) bool {
-		iovecs := []syscall.Iovec{
-			{&head[0], 4},
-			{&from[0], uint64(len(from))},
-		}
-
-		n, _, errno = syscall.Syscall(syscall.SYS_WRITEV, fd, uintptr(unsafe.Pointer(&iovecs[0])), uintptr(2))
-		// According to NetBSD documentation for TUN, writes will only return errors in which
-		// this packet will never be delivered so just go on living life.
-		return true
-	})
-	if err != nil {
-		return 0, err
-	}
-
-	if errno != 0 {
-		return 0, errno
-	}
-
-	return int(n) - 4, err
 }
 
 func (t *tun) addIp(cidr netip.Prefix) error {
@@ -551,3 +458,7 @@ func delRoute(prefix netip.Prefix, gateways []netip.Prefix) error {
 
 	return nil
 }
+
+// TunPrefixLen reports the 4-byte BSD AF_INET / AF_INET6 protocol-family
+// marker the kernel prepends on read and expects on write.
+func (t *tun) TunPrefixLen() int { return 4 }

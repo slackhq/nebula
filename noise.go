@@ -14,6 +14,19 @@ type endianness interface {
 
 var noiseEndianness endianness = binary.BigEndian
 
+// NonceSize is the AEAD nonce length used by all ciphers nebula supports
+// today (AES-GCM and ChaCha20-Poly1305 both use 96-bit nonces). Encrypt-
+// and DecryptDanger lay out the nonce as 4 zero bytes followed by an 8-byte
+// big-endian counter; if a future cipher with a different nonce size is
+// added, this constant and those layouts must change together.
+const NonceSize = 12
+
+// AEADOverhead is the AEAD authentication tag length the ciphers nebula
+// supports append to ciphertext. Both AES-GCM and ChaCha20-Poly1305 use
+// 128-bit tags. NebulaCipherState.Overhead() returns this dynamically from
+// the cipher; the constant is for sizing buffers at construction time.
+const AEADOverhead = 16
+
 type NebulaCipherState struct {
 	c cipher.AEAD
 }

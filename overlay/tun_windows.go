@@ -296,3 +296,5 @@ func checkWinTunExists() error {
 	_, err = syscall.LoadDLL(filepath.Join(filepath.Dir(myPath), "dist", "windows", "wintun", "bin", arch, "wintun.dll"))
 	return err
 }
+
+func (t *winTun) TunPrefixLen() int { return 0 }

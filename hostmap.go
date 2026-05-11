@@ -308,7 +308,7 @@ type cachedPacket struct {
 	packet         []byte
 }
 
-type packetCallback func(t header.MessageType, st header.MessageSubType, h *HostInfo, p, nb, out []byte)
+type packetCallback func(t header.MessageType, st header.MessageSubType, h *HostInfo, p []byte, buf *WireBuffer)
 
 type cachedPacketMetrics struct {
 	sent    metrics.Counter
@@ -691,6 +691,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []netip.Prefix, ifce *Interfac
 			}
 		}
 
+		buf := ifce.bufAlloc.Acquire()
 		i.remotes.ForEach(preferredRanges, func(addr netip.AddrPort, preferred bool) {
 			if remote.IsValid() && (!addr.IsValid() || !preferred) {
 				return
@@ -698,8 +699,9 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []netip.Prefix, ifce *Interfac
 
 			// Try to send a test packet to that host, this should
 			// cause it to detect a roaming event and switch remotes
-			ifce.sendTo(header.Test, header.TestRequest, i.ConnectionState, i, addr, []byte(""), make([]byte, 12, 12), make([]byte, mtu))
+			ifce.sendTo(header.Test, header.TestRequest, i.ConnectionState, i, addr, []byte(""), buf)
 		})
+		ifce.bufAlloc.Release(buf)
 	}
 
 	// Re query our lighthouses for new remotes occasionally

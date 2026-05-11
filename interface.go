@@ -101,19 +101,19 @@ type Interface struct {
 	messageMetrics      *MessageMetrics
 	cachedPacketMetrics *cachedPacketMetrics
 
+	// bufAlloc hands out reusable WireBuffers sized for this interface's
+	// inside Device. All buf consumers (hot-path data-plane goroutines,
+	// long-lived workers, and cold callers) acquire from here so sizing
+	// is centralized and consistent. Long-lived owners just don't release.
+	bufAlloc WireBufferAllocator
+
 	l *slog.Logger
 }
 
 type EncWriter interface {
-	SendVia(via *HostInfo,
-		relay *Relay,
-		ad,
-		nb,
-		out []byte,
-		nocopy bool,
-	)
-	SendMessageToVpnAddr(t header.MessageType, st header.MessageSubType, vpnAddr netip.Addr, p, nb, out []byte)
-	SendMessageToHostInfo(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte)
+	SendVia(via *HostInfo, relay *Relay, ad []byte, buf *WireBuffer)
+	SendMessageToVpnAddr(t header.MessageType, st header.MessageSubType, vpnAddr netip.Addr, p []byte, buf *WireBuffer)
+	SendMessageToHostInfo(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p []byte, buf *WireBuffer)
 	Handshake(vpnAddr netip.Addr)
 	GetHostInfo(vpnAddr netip.Addr) *HostInfo
 	GetCertState() *CertState
@@ -203,6 +203,8 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 			sent:    metrics.GetOrRegisterCounter("hostinfo.cached_packets.sent", nil),
 			dropped: metrics.GetOrRegisterCounter("hostinfo.cached_packets.dropped", nil),
 		},
+
+		bufAlloc: NewWireBufferPool(mtu, c.Inside.TunPrefixLen()),
 
 		l: c.l,
 	}
@@ -311,13 +313,11 @@ func (f *Interface) listenOut(i int) {
 
 	ctCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
 	lhh := f.lightHouse.NewRequestHandler()
-	plaintext := make([]byte, udp.MTU)
-	h := &header.H{}
-	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
+	// Long-lived per-receive-goroutine buf; never released back to the pool.
+	buf := f.bufAlloc.Acquire()
 
 	err := li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get())
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, buf, payload, lhh, i, ctCache.Get())
 	})
 
 	if err != nil && !f.closed.Load() {
@@ -329,15 +329,12 @@ func (f *Interface) listenOut(i int) {
 }
 
 func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
-	packet := make([]byte, mtu)
-	out := make([]byte, mtu)
-	fwPacket := &firewall.Packet{}
-	nb := make([]byte, 12, 12)
-
+	// Long-lived per-tun-reader buf; never released back to the pool.
+	buf := f.bufAlloc.Acquire()
 	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
 
 	for {
-		n, err := reader.Read(packet)
+		_, err := buf.ReadIPFromTUN(reader)
 		if err != nil {
 			if !f.closed.Load() {
 				f.l.Error("Error while reading outbound packet, closing", "error", err, "reader", i)
@@ -346,7 +343,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 			break
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get())
+		f.consumeInsidePacket(buf, i, conntrackCache.Get())
 	}
 
 	f.l.Debug("overlay reader is done", "reader", i)

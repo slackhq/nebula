@@ -67,9 +67,9 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	punchy := NewPunchyFromConfig(test.NewLogger(), conf)
 	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
 	nc.intf = ifce
+
 	p := []byte("")
-	nb := make([]byte, 12, 12)
-	out := make([]byte, mtu)
+	buf := NewWireBuffer(mtu, 0)
 
 	// Add an ip we have established a connection w/ to hostmap
 	hostinfo := &HostInfo{
@@ -92,7 +92,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	assert.True(t, hostinfo.in.Load())
 
 	// Do a traffic check tick, should not be pending deletion but should not have any in/out packets recorded
-	nc.doTrafficCheck(hostinfo.localIndexId, p, nb, out, time.Now())
+	nc.doTrafficCheck(hostinfo.localIndexId, p, buf, time.Now())
 	assert.False(t, hostinfo.pendingDeletion.Load())
 	assert.False(t, hostinfo.out.Load())
 	assert.False(t, hostinfo.in.Load())
@@ -100,7 +100,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	// Do another traffic check tick, this host should be pending deletion now
 	nc.Out(hostinfo)
 	assert.True(t, hostinfo.out.Load())
-	nc.doTrafficCheck(hostinfo.localIndexId, p, nb, out, time.Now())
+	nc.doTrafficCheck(hostinfo.localIndexId, p, buf, time.Now())
 	assert.True(t, hostinfo.pendingDeletion.Load())
 	assert.False(t, hostinfo.out.Load())
 	assert.False(t, hostinfo.in.Load())
@@ -108,7 +108,7 @@ func Test_NewConnectionManagerTest(t *testing.T) {
 	assert.Contains(t, nc.hostMap.Hosts, hostinfo.vpnAddrs[0])
 
 	// Do a final traffic check tick, the host should now be removed
-	nc.doTrafficCheck(hostinfo.localIndexId, p, nb, out, time.Now())
+	nc.doTrafficCheck(hostinfo.localIndexId, p, buf, time.Now())
 	assert.NotContains(t, nc.hostMap.Hosts, hostinfo.vpnAddrs)
 	assert.NotContains(t, nc.hostMap.Indexes, hostinfo.localIndexId)
 }
@@ -149,9 +149,9 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	punchy := NewPunchyFromConfig(test.NewLogger(), conf)
 	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
 	nc.intf = ifce
+
 	p := []byte("")
-	nb := make([]byte, 12, 12)
-	out := make([]byte, mtu)
+	buf := NewWireBuffer(mtu, 0)
 
 	// Add an ip we have established a connection w/ to hostmap
 	hostinfo := &HostInfo{
@@ -174,14 +174,14 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 	assert.Contains(t, nc.hostMap.Indexes, hostinfo.localIndexId)
 
 	// Do a traffic check tick, should not be pending deletion but should not have any in/out packets recorded
-	nc.doTrafficCheck(hostinfo.localIndexId, p, nb, out, time.Now())
+	nc.doTrafficCheck(hostinfo.localIndexId, p, buf, time.Now())
 	assert.False(t, hostinfo.pendingDeletion.Load())
 	assert.False(t, hostinfo.out.Load())
 	assert.False(t, hostinfo.in.Load())
 
 	// Do another traffic check tick, this host should be pending deletion now
 	nc.Out(hostinfo)
-	nc.doTrafficCheck(hostinfo.localIndexId, p, nb, out, time.Now())
+	nc.doTrafficCheck(hostinfo.localIndexId, p, buf, time.Now())
 	assert.True(t, hostinfo.pendingDeletion.Load())
 	assert.False(t, hostinfo.out.Load())
 	assert.False(t, hostinfo.in.Load())
@@ -190,7 +190,7 @@ func Test_NewConnectionManagerTest2(t *testing.T) {
 
 	// We saw traffic, should no longer be pending deletion
 	nc.In(hostinfo)
-	nc.doTrafficCheck(hostinfo.localIndexId, p, nb, out, time.Now())
+	nc.doTrafficCheck(hostinfo.localIndexId, p, buf, time.Now())
 	assert.False(t, hostinfo.pendingDeletion.Load())
 	assert.False(t, hostinfo.out.Load())
 	assert.False(t, hostinfo.in.Load())

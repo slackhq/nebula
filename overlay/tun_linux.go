@@ -907,3 +907,5 @@ func (t *tun) Close() error {
 	}
 	return err
 }
+
+func (t *tun) TunPrefixLen() int { return 0 }

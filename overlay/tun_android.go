@@ -102,3 +102,5 @@ func (t *tun) SupportsMultiqueue() bool {
 func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for android")
 }
+
+func (t *tun) TunPrefixLen() int { return 0 }
