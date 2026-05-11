@@ -84,17 +84,21 @@ type TCPCoalescer struct {
 	lastSlot *coalesceSlot
 	pool     []*coalesceSlot // free list for reuse
 
-	backing []byte
-	l       *slog.Logger
+	// arena is injected; the coalescer borrows slices from it via Reserve
+	// and tells it to release them via Reset on Flush. When wrapped in
+	// MultiCoalescer the same *Arena is shared with the other lanes so
+	// there's exactly one backing slab per Multi instance.
+	arena *Arena
+	l     *slog.Logger
 }
 
-func NewTCPCoalescer(w io.Writer, l *slog.Logger) *TCPCoalescer {
+func NewTCPCoalescer(w io.Writer, l *slog.Logger, arena *Arena) *TCPCoalescer {
 	c := &TCPCoalescer{
 		plainW:    w,
 		slots:     make([]*coalesceSlot, 0, initialSlots),
 		openSlots: make(map[flowKey]*coalesceSlot, initialSlots),
 		pool:      make([]*coalesceSlot, 0, initialSlots),
-		backing:   make([]byte, 0, initialSlots*65535),
+		arena:     arena,
 		l:         l,
 	}
 	if gw, ok := tio.SupportsGSO(w, tio.GSOProtoTCP); ok {
@@ -174,7 +178,7 @@ func (p parsedTCP) coalesceable() bool {
 }
 
 func (c *TCPCoalescer) Reserve(sz int) []byte {
-	return reserveFromBacking(&c.backing, sz)
+	return c.arena.Reserve(sz)
 }
 
 // Commit borrows pkt. The caller must keep pkt valid until the next Flush,
@@ -274,7 +278,7 @@ func (c *TCPCoalescer) Flush() error {
 	clear(c.openSlots)
 	c.lastSlot = nil
 
-	c.backing = c.backing[:0]
+	c.arena.Reset()
 	return first
 }
 

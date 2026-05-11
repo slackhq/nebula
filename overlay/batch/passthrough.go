@@ -8,31 +8,29 @@ import (
 
 // Passthrough is a RxBatcher that doesn't batch anything, it just accumulates and then sends packets.
 type Passthrough struct {
-	out     io.Writer
-	slots   [][]byte
-	backing []byte
-	cursor  int
+	out   io.Writer
+	slots [][]byte
+	// arena is injected; see TCPCoalescer.arena for the contract.
+	arena  *Arena
+	cursor int
 }
 
-func NewPassthrough(w io.Writer) *Passthrough {
-	const baseNumSlots = 128
+const passthroughBaseNumSlots = 128
+
+// DefaultPassthroughArenaCap is the recommended arena capacity for a
+// standalone Passthrough batcher: 128 slots × udp.MTU ≈ 1.1 MiB.
+const DefaultPassthroughArenaCap = passthroughBaseNumSlots * udp.MTU
+
+func NewPassthrough(w io.Writer, arena *Arena) *Passthrough {
 	return &Passthrough{
-		out:     w,
-		slots:   make([][]byte, 0, baseNumSlots),
-		backing: make([]byte, 0, baseNumSlots*udp.MTU),
+		out:   w,
+		slots: make([][]byte, 0, passthroughBaseNumSlots),
+		arena: arena,
 	}
 }
 
 func (p *Passthrough) Reserve(sz int) []byte {
-	if len(p.backing)+sz > cap(p.backing) {
-		// Grow: allocate a fresh backing. Already-committed slices still
-		// reference the old array and remain valid until Flush drops them.
-		newCap := max(cap(p.backing)*2, sz)
-		p.backing = make([]byte, 0, newCap)
-	}
-	start := len(p.backing)
-	p.backing = p.backing[:start+sz]
-	return p.backing[start : start+sz : start+sz] //return zero length, sz-cap slice
+	return p.arena.Reserve(sz)
 }
 
 func (p *Passthrough) Commit(pkt []byte) error {
@@ -50,6 +48,6 @@ func (p *Passthrough) Flush() error {
 	}
 	clear(p.slots)
 	p.slots = p.slots[:0]
-	p.backing = p.backing[:0]
+	p.arena.Reset()
 	return firstErr
 }
