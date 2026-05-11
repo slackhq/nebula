@@ -15,6 +15,7 @@ type keygenFlags struct {
 	set        *flag.FlagSet
 	outKeyPath *string
 	outPubPath *string
+	inKeyPath  *string
 	curve      *string
 	p11url     *string
 }
@@ -24,6 +25,7 @@ func newKeygenFlags() *keygenFlags {
 	cf.set.Usage = func() {}
 	cf.outPubPath = cf.set.String("out-pub", "", "Required: path to write the public key to")
 	cf.outKeyPath = cf.set.String("out-key", "", "Required: path to write the private key to")
+	cf.inKeyPath = cf.set.String("in-key", "", "Optional: Path to existing private key")
 	cf.curve = cf.set.String("curve", "25519", "ECDH Curve (25519, P256)")
 	cf.p11url = p11Flag(cf.set)
 	return &cf
@@ -40,7 +42,9 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 
 	if !isP11 {
 		if err = mustFlagString("out-key", cf.outKeyPath); err != nil {
-			return err
+			if *cf.inKeyPath == "" {
+				return err
+			}
 		}
 	}
 	if err = mustFlagString("out-pub", cf.outPubPath); err != nil {
@@ -59,8 +63,22 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 	} else {
 		switch *cf.curve {
 		case "25519", "X25519", "Curve25519", "CURVE25519":
-			pub, rawPriv = x25519Keypair()
-			curve = cert.Curve_CURVE25519
+			if *cf.inKeyPath == "" {
+				pub, rawPriv = x25519Keypair()
+				curve = cert.Curve_CURVE25519
+			} else {
+				rawBytes, err := os.ReadFile(*cf.inKeyPath)
+				if err != nil {
+					return err
+				}
+
+				rawPriv, _, _, err = cert.UnmarshalPrivateKeyFromPEM(rawBytes)
+				if err != nil {
+					return err
+				}
+				pub, _ = x25519KeyFromPriv(rawPriv)
+
+			}
 		case "P256":
 			pub, rawPriv = p256Keypair()
 			curve = cert.Curve_P256
@@ -81,7 +99,7 @@ func keygen(args []string, out io.Writer, errOut io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("error while getting public key: %w", err)
 		}
-	} else {
+	} else if *cf.inKeyPath == "" {
 		err = os.WriteFile(*cf.outKeyPath, cert.MarshalPrivateKeyToPEM(curve, rawPriv), 0600)
 		if err != nil {
 			return fmt.Errorf("error while writing out-key: %s", err)
