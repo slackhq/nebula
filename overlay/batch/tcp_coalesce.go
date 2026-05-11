@@ -2,6 +2,7 @@ package batch
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"io"
 	"log/slog"
@@ -84,15 +85,17 @@ type TCPCoalescer struct {
 	pool     []*coalesceSlot // free list for reuse
 
 	backing []byte
+	l       *slog.Logger
 }
 
-func NewTCPCoalescer(w io.Writer) *TCPCoalescer {
+func NewTCPCoalescer(w io.Writer, l *slog.Logger) *TCPCoalescer {
 	c := &TCPCoalescer{
 		plainW:    w,
 		slots:     make([]*coalesceSlot, 0, initialSlots),
 		openSlots: make(map[flowKey]*coalesceSlot, initialSlots),
 		pool:      make([]*coalesceSlot, 0, initialSlots),
 		backing:   make([]byte, 0, initialSlots*65535),
+		l:         l,
 	}
 	if gw, ok := tio.SupportsGSO(w, tio.GSOProtoTCP); ok {
 		c.gsoW = gw
@@ -488,22 +491,25 @@ func (c *TCPCoalescer) reorderForFlush() {
 				// the operator can quantify how often it happens; the data
 				// itself still emits in seq order, kernel TCP handles the
 				// gap via its OOO queue.
-				if prev.nextSeq != slotSeedSeq(s) {
-					logged = true
-					gap := int64(slotSeedSeq(s)) - int64(prev.nextSeq)
-					slog.Default().Warn("tcp coalesce: cross-slot seq gap",
-						"src", flowKeyAddr(s.fk, false),
-						"dst", flowKeyAddr(s.fk, true),
-						"sport", s.fk.sport,
-						"dport", s.fk.dport,
-						"prev_seed_seq", slotSeedSeq(prev),
-						"prev_next_seq", prev.nextSeq,
-						"this_seed_seq", slotSeedSeq(s),
-						"gap_bytes", gap,
-						"prev_seg_count", prev.numSeg,
-						"prev_total_pay", prev.totalPay,
-					)
+				if c.l.Enabled(context.Background(), slog.LevelDebug) {
+					if prev.nextSeq != slotSeedSeq(s) {
+						logged = true
+						gap := int64(slotSeedSeq(s)) - int64(prev.nextSeq)
+						c.l.Debug("tcp coalesce: cross-slot seq gap",
+							"src", flowKeyAddr(s.fk, false),
+							"dst", flowKeyAddr(s.fk, true),
+							"sport", s.fk.sport,
+							"dport", s.fk.dport,
+							"prev_seed_seq", slotSeedSeq(prev),
+							"prev_next_seq", prev.nextSeq,
+							"this_seed_seq", slotSeedSeq(s),
+							"gap_bytes", gap,
+							"prev_seg_count", prev.numSeg,
+							"prev_total_pay", prev.totalPay,
+						)
+					}
 				}
+
 				if canMergeSlots(prev, s) {
 					mergeSlots(prev, s)
 					c.release(s)
@@ -514,7 +520,7 @@ func (c *TCPCoalescer) reorderForFlush() {
 		out = append(out, s)
 	}
 	if logged {
-		slog.Default().Warn("==== end of batch ====")
+		c.l.Warn("==== end of batch ====")
 	}
 	c.slots = out
 }

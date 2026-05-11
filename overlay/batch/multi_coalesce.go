@@ -3,6 +3,7 @@ package batch
 import (
 	"errors"
 	"io"
+	"log/slog"
 )
 
 // MultiCoalescer fans plaintext packets out to lane-specific batchers based
@@ -36,13 +37,13 @@ type MultiCoalescer struct {
 // opt out of TCP coalescing (e.g. when the queue can't do TSO); udpEnabled
 // likewise gates UDP coalescing (only enable when USO was negotiated).
 // Either lane disabled redirects its traffic into the passthrough lane.
-func NewMultiCoalescer(w io.Writer, tcpEnabled, udpEnabled bool) *MultiCoalescer {
+func NewMultiCoalescer(w io.Writer, l *slog.Logger, tcpEnabled, udpEnabled bool) *MultiCoalescer {
 	m := &MultiCoalescer{
 		pt:      NewPassthrough(w),
 		backing: make([]byte, 0, initialSlots*65535),
 	}
 	if tcpEnabled {
-		m.tcp = NewTCPCoalescer(w)
+		m.tcp = NewTCPCoalescer(w, l)
 	}
 	if udpEnabled {
 		m.udp = NewUDPCoalescer(w)
