@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"io"
 	"log/slog"
 	"testing"
 )
@@ -50,7 +49,7 @@ func v6WithTC(tc byte) []byte {
 }
 
 func TestApplyOuterECN(t *testing.T) {
-	silent := slog.New(slog.NewTextHandler(io.Discard, nil))
+	silent := slog.New(slog.DiscardHandler)
 	hi := &HostInfo{}
 
 	// Build a v4 packet helper with a given inner ECN field.
