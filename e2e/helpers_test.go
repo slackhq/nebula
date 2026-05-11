@@ -4,14 +4,12 @@
 package e2e
 
 import (
-	"io"
+	"log/slog"
 	"net/netip"
 	"os"
 	"strings"
 	"testing"
 	"time"
-
-	"log/slog"
 
 	"dario.cat/mergo"
 	"github.com/google/gopacket"
@@ -382,7 +380,7 @@ func getAddrs(ns []netip.Prefix) []netip.Addr {
 func NewTestLogger() *slog.Logger {
 	v := os.Getenv("TEST_LOGS")
 	if v == "" {
-		return slog.New(slog.NewTextHandler(io.Discard, nil))
+		return slog.New(slog.DiscardHandler)
 	}
 
 	level := slog.LevelInfo
