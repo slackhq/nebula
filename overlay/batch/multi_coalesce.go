@@ -28,37 +28,43 @@ type MultiCoalescer struct {
 	udp *UDPCoalescer
 	pt  *Passthrough
 
-	// arena shared across all lanes so a single Reserve grows one backing
-	// slice; lane Commit calls borrow into this same arena.
-	backing []byte
+	// arena is shared across every lane (constructor hands the same
+	// *Arena to TCP, UDP, and Passthrough), so there's exactly one
+	// backing slab per MultiCoalescer instance. Each lane's Flush calls
+	// Reset; the resets are idempotent because Multi.Flush drains lanes
+	// sequentially and never Reserves in between, so a later lane's
+	// slots stay readable across an earlier lane's Reset (the underlying
+	// bytes are still alive — Reset only re-slices len to 0).
+	arena *Arena
 }
+
+// DefaultMultiArenaCap is the recommended arena capacity for a Multi-lane
+// batcher: 64 slots × 65535 bytes ≈ 4 MiB, enough to hold one recvmmsg
+// burst worth of MTU-sized packets without the arena growing.
+const DefaultMultiArenaCap = initialSlots * 65535
 
 // NewMultiCoalescer builds a multi-lane batcher. tcpEnabled lets the caller
 // opt out of TCP coalescing (e.g. when the queue can't do TSO); udpEnabled
 // likewise gates UDP coalescing (only enable when USO was negotiated).
 // Either lane disabled redirects its traffic into the passthrough lane.
-func NewMultiCoalescer(w io.Writer, l *slog.Logger, tcpEnabled, udpEnabled bool) *MultiCoalescer {
+// arena is the single backing slab shared across every lane; the caller
+// pre-sizes it via NewArena so the hot path never allocates.
+func NewMultiCoalescer(w io.Writer, l *slog.Logger, arena *Arena, tcpEnabled, udpEnabled bool) *MultiCoalescer {
 	m := &MultiCoalescer{
-		pt:      NewPassthrough(w),
-		backing: make([]byte, 0, initialSlots*65535),
+		pt:    NewPassthrough(w, arena),
+		arena: arena,
 	}
 	if tcpEnabled {
-		m.tcp = NewTCPCoalescer(w, l)
+		m.tcp = NewTCPCoalescer(w, l, arena)
 	}
 	if udpEnabled {
-		m.udp = NewUDPCoalescer(w)
+		m.udp = NewUDPCoalescer(w, arena)
 	}
 	return m
 }
 
 func (m *MultiCoalescer) Reserve(sz int) []byte {
-	if len(m.backing)+sz > cap(m.backing) {
-		newCap := max(cap(m.backing)*2, sz)
-		m.backing = make([]byte, 0, newCap)
-	}
-	start := len(m.backing)
-	m.backing = m.backing[:start+sz]
-	return m.backing[start : start+sz : start+sz]
+	return m.arena.Reserve(sz)
 }
 
 // Commit dispatches pkt to the appropriate lane based on IP version + L4
@@ -129,6 +135,5 @@ func (m *MultiCoalescer) Flush() error {
 	if err := m.pt.Flush(); err != nil {
 		errs = append(errs, err)
 	}
-	m.backing = m.backing[:0]
 	return errors.Join(errs...)
 }

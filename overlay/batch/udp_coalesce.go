@@ -66,7 +66,8 @@ type UDPCoalescer struct {
 	openSlots map[flowKey]*udpSlot
 	pool      []*udpSlot
 
-	backing []byte
+	// arena is injected; see TCPCoalescer.arena for the contract.
+	arena *Arena
 }
 
 // NewUDPCoalescer wraps w. The caller is responsible for only constructing
@@ -74,13 +75,13 @@ type UDPCoalescer struct {
 // the kernel may reject GSO_UDP_L4 writes. If w does not implement
 // tio.GSOWriter at all (single-packet Queue), the coalescer degrades to
 // plain Writes — same defensive shape as the TCP coalescer.
-func NewUDPCoalescer(w io.Writer) *UDPCoalescer {
+func NewUDPCoalescer(w io.Writer, arena *Arena) *UDPCoalescer {
 	c := &UDPCoalescer{
 		plainW:    w,
 		slots:     make([]*udpSlot, 0, initialSlots),
 		openSlots: make(map[flowKey]*udpSlot, initialSlots),
 		pool:      make([]*udpSlot, 0, initialSlots),
-		backing:   make([]byte, 0, initialSlots*udpCoalesceBufSize),
+		arena:     arena,
 	}
 	if gw, ok := tio.SupportsGSO(w, tio.GSOProtoUDP); ok {
 		c.gsoW = gw
@@ -126,7 +127,7 @@ func parseUDP(pkt []byte) (parsedUDP, bool) {
 }
 
 func (c *UDPCoalescer) Reserve(sz int) []byte {
-	return reserveFromBacking(&c.backing, sz)
+	return c.arena.Reserve(sz)
 }
 
 // Commit borrows pkt. The caller must keep pkt valid until the next Flush.
@@ -183,7 +184,7 @@ func (c *UDPCoalescer) Flush() error {
 	clear(c.slots)
 	c.slots = c.slots[:0]
 	clear(c.openSlots)
-	c.backing = c.backing[:0]
+	c.arena.Reset()
 	return first
 }
 

@@ -11,7 +11,7 @@ import (
 // else (ICMP here) falls through to plain Write.
 func TestMultiCoalescerRoutesByProto(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	m := NewMultiCoalescer(w, test.NewLogger(), true, true)
+	m := NewMultiCoalescer(w, test.NewLogger(), NewArena(0), true, true)
 
 	tcpPay := make([]byte, 1200)
 	udpPay := make([]byte, 1200)
@@ -53,7 +53,7 @@ func TestMultiCoalescerRoutesByProto(t *testing.T) {
 // the kernel via the passthrough lane rather than being lost.
 func TestMultiCoalescerDisabledUDPFallsThrough(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	m := NewMultiCoalescer(w, test.NewLogger(), true, false) // TSO on, USO off
+	m := NewMultiCoalescer(w, test.NewLogger(), NewArena(0), true, false) // TSO on, USO off
 
 	if err := m.Commit(buildUDPv4(1000, 53, make([]byte, 800))); err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestMultiCoalescerDisabledUDPFallsThrough(t *testing.T) {
 // TestMultiCoalescerDisabledTCPFallsThrough mirrors the TSO=off case.
 func TestMultiCoalescerDisabledTCPFallsThrough(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	m := NewMultiCoalescer(w, test.NewLogger(), false, true) // TSO off, USO on
+	m := NewMultiCoalescer(w, test.NewLogger(), NewArena(0), false, true) // TSO off, USO on
 
 	pay := make([]byte, 1200)
 	if err := m.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
