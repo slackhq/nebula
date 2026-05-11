@@ -103,7 +103,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	// Relay packets are special
 	if isMessageRelay {
-		f.handleOutsideRelayPacket(hostinfo, via, out, packet, h, fwPacket, lhf, nb, q, localCache)
+		f.handleOutsideRelayPacket(hostinfo, via, out, packet, h, fwPacket, parsedRx, lhf, nb, q, localCache, meta)
 
 		return
 	}
@@ -161,7 +161,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	}
 }
 
-func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, parsedRx *batch.RxParsed,  lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
+func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, parsedRx *batch.RxParsed, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
 	// The entire body is sent as AD, not encrypted.
 	// The packet consists of a 16-byte parsed Nebula header, Associated Data-protected payload, and a trailing 16-byte AEAD signature value.
 	// The packet is guaranteed to be at least 16 bytes at this point, b/c it got past the h.Parse() call above. If it's
