@@ -22,13 +22,14 @@ type SendBatch struct {
 	backing []byte
 }
 
-func NewSendBatch(out batchWriter, batchCap, slotCap int) *SendBatch {
+// NewSendBatch makes a SendBatch with batchCap slots and an arenaSize byte buffer for slices to back those slots
+func NewSendBatch(out batchWriter, batchCap, arenaSize int) *SendBatch {
 	return &SendBatch{
 		out:     out,
 		bufs:    make([][]byte, 0, batchCap),
 		dsts:    make([]netip.AddrPort, 0, batchCap),
 		ecns:    make([]byte, 0, batchCap),
-		backing: make([]byte, 0, batchCap*slotCap),
+		backing: make([]byte, 0, arenaSize),
 	}
 }
 
