@@ -120,7 +120,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 			}
 			return
 		}
-		f.handleOutsideRelayPacket(hostinfo, via, out, packet, h, fwPacket, lhf, nb, q, localCache)
+		f.handleOutsideRelayPacket(hostinfo, via, out, packet, h, fwPacket, lhf, nb, q, localCache, meta)
 		return
 	}
 
