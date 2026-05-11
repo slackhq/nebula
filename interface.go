@@ -285,9 +285,11 @@ func (f *Interface) activate() error {
 			// is on, everything else (and either lane disabled) falls
 			// through to passthrough so non-IP / non-TCP-UDP traffic still
 			// reaches the TUN.
-			f.batchers[i] = batch.NewMultiCoalescer(f.readers[i], f.l, caps.TSO, caps.USO)
+			arena := batch.NewArena(batch.DefaultMultiArenaCap)
+			f.batchers[i] = batch.NewMultiCoalescer(f.readers[i], f.l, arena, caps.TSO, caps.USO)
 		} else {
-			f.batchers[i] = batch.NewPassthrough(f.readers[i])
+			arena := batch.NewArena(batch.DefaultPassthroughArenaCap)
+			f.batchers[i] = batch.NewPassthrough(f.readers[i], arena)
 		}
 	}
 
