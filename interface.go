@@ -285,7 +285,7 @@ func (f *Interface) activate() error {
 			// is on, everything else (and either lane disabled) falls
 			// through to passthrough so non-IP / non-TCP-UDP traffic still
 			// reaches the TUN.
-			f.batchers[i] = batch.NewMultiCoalescer(f.readers[i], caps.TSO, caps.USO)
+			f.batchers[i] = batch.NewMultiCoalescer(f.readers[i], f.l, caps.TSO, caps.USO)
 		} else {
 			f.batchers[i] = batch.NewPassthrough(f.readers[i])
 		}
@@ -372,18 +372,8 @@ func (f *Interface) listenOut(i int) {
 }
 
 func (f *Interface) listenIn(reader tio.Queue, i int) {
-	// Pin this goroutine to one CPU. LockOSThread alone keeps the goroutine
-	// on a single OS thread but the kernel can still migrate that thread
-	// across CPUs — XPS reads smp_processor_id() at sendmmsg time and picks
-	// the TX ring from the current CPU's xps_cpus map, so an unpinned
-	// thread bouncing between CPUs spreads one nebula flow's packets across
-	// multiple TX rings, which the rings then drain at independent rates
-	// and the wire delivers reordered.
-	//
-	// Pinning keeps every sendmmsg from this goroutine going through the
-	// same TX ring, so the wire sees per-flow order. Cost: less scheduler
-	// flexibility — if i % NumCPU collides between two TUN reader
-	// goroutines they share a CPU.
+	// Pinning this thread (and goroutine) to a single CPU keeps every sendmmsg from this goroutine going through the
+	// same TX ring on the nic, so the wire sees per-flow order.
 	cpu := i % runtime.NumCPU()
 	if n := len(f.cpuAffinity); n > 0 {
 		cpu = f.cpuAffinity[i%n]
@@ -391,8 +381,10 @@ func (f *Interface) listenIn(reader tio.Queue, i int) {
 	if err := util.PinThreadToCPU(cpu); err != nil {
 		f.l.Warn("failed to pin tun reader to CPU", "queue", i, "cpu", cpu, "err", err)
 	}
+
 	rejectBuf := make([]byte, mtu)
-	sb := batch.NewSendBatch(f.writers[i], batch.SendBatchCap, udp.MTU+32)
+	arenaSize := batch.SendBatchCap * (udp.MTU + 32)
+	sb := batch.NewSendBatch(f.writers[i], batch.SendBatchCap, arenaSize)
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
