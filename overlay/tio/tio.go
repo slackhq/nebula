@@ -117,7 +117,8 @@ func QueueCapabilities(q Queue) Capabilities {
 type GSOProto uint8
 
 const (
-	GSOProtoTCP GSOProto = iota
+	GSOProtoNone GSOProto = iota
+	GSOProtoTCP
 	GSOProtoUDP
 )
 
@@ -165,6 +166,7 @@ func SupportsGSO(w any, want GSOProto) (GSOWriter, bool) {
 		return gw, caps.TSO
 	case GSOProtoUDP:
 		return gw, caps.USO
+	default:
+		return gw, false
 	}
-	return gw, false
 }
