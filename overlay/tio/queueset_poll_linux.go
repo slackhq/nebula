@@ -48,11 +48,15 @@ func (c *pollQueueSet) Add(fd int) error {
 func (c *pollQueueSet) wakeForShutdown() error {
 	var buf [8]byte
 	binary.NativeEndian.PutUint64(buf[:], 1)
-	_, err := unix.Write(int(c.shutdownFd), buf[:])
+	_, err := unix.Write(c.shutdownFd, buf[:])
 	return err
 }
 
 func (c *pollQueueSet) Close() error {
+	if c.shutdownFd < 0 {
+		return nil
+	}
+
 	errs := []error{}
 
 	if err := c.wakeForShutdown(); err != nil {
@@ -64,6 +68,13 @@ func (c *pollQueueSet) Close() error {
 			errs = append(errs, err)
 		}
 	}
+
+	// All Polls reference shutdownFd in their pollfd arrays, so close it
+	// only after every Poll.Close has returned.
+	if err := unix.Close(c.shutdownFd); err != nil {
+		errs = append(errs, err)
+	}
+	c.shutdownFd = -1
 
 	return errors.Join(errs...)
 }

@@ -80,3 +80,24 @@ func TestPoll_Close_Idempotent(t *testing.T) {
 		t.Fatalf("second Close should be a no-op, got %v", err)
 	}
 }
+
+func TestPollQueueSet_Close_ClosesEventfd(t *testing.T) {
+	qs, err := NewPollQueueSet()
+	require.NoError(t, err)
+	require.NoError(t, qs.Add(newReadPipe(t)))
+
+	fd := qs.(*pollQueueSet).shutdownFd
+	require.NoError(t, qs.Close())
+
+	// Closing the eventfd again should fail with EBADF, proving Close
+	// actually released it.
+	if err := unix.Close(fd); err == nil {
+		t.Fatalf("eventfd %d still open after QueueSet.Close", fd)
+	}
+
+	// Second Close must be a no-op (and must not double-close the eventfd
+	// in case the kernel handed it out to another caller in the meantime).
+	if err := qs.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
