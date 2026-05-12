@@ -346,8 +346,7 @@ func (f *Interface) listenOut(i int) {
 
 func (f *Interface) listenIn(reader tio.Queue, i int) {
 	rejectBuf := make([]byte, mtu)
-	arenaSize := batch.SendBatchCap * (udp.MTU + 32)
-	sb := batch.NewSendBatch(f.writers[i], batch.SendBatchCap, arenaSize)
+	sb := batch.NewSendBatch(f.writers[i], batch.SendBatchCap, batch.NewArena(batch.DefaultSendBatchArenaCap))
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
