@@ -12,7 +12,7 @@ import (
 // kernel stamps one outer codepoint per entry, so a run that straddled the
 // boundary would silently lose information).
 func TestPlanRunBreaksOnECNChange(t *testing.T) {
-	u := &StdConn{gsoSupported: true}
+	u := &StdConn{gsoSupported: true, maxGSOSegments: 63}
 	dst := netip.MustParseAddrPort("10.0.0.1:4242")
 
 	bufs := [][]byte{
