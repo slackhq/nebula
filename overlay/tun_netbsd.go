@@ -6,7 +6,6 @@ package overlay
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	netroute "golang.org/x/net/route"
@@ -66,6 +66,22 @@ type tun struct {
 	l           *slog.Logger
 	f           *os.File
 	fd          int
+
+	readBuf  []byte
+	batchRet [1]tio.Packet
+}
+
+func (t *tun) Read() ([]tio.Packet, error) {
+	n, err := t.readOne(t.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	t.batchRet[0] = tio.Packet{Bytes: t.readBuf[:n]}
+	return t.batchRet[:], nil
+}
+
+func (t *tun) Readers() []tio.Queue {
+	return []tio.Queue{t}
 }
 
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
@@ -102,6 +118,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		vpnNetworks: vpnNetworks,
 		MTU:         c.GetInt("tun.mtu", DefaultMTU),
 		l:           l,
+		readBuf:     make([]byte, defaultBatchBufSize),
 	}
 
 	err = t.reload(c, true)
@@ -141,7 +158,7 @@ func (t *tun) Close() error {
 	return nil
 }
 
-func (t *tun) Read(to []byte) (int, error) {
+func (t *tun) readOne(to []byte) (int, error) {
 	rc, err := t.f.SyscallConn()
 	if err != nil {
 		return 0, fmt.Errorf("failed to get syscall conn for tun: %w", err)
@@ -394,8 +411,8 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for netbsd")
+func (t *tun) NewMultiQueueReader() error {
+	return fmt.Errorf("TODO: multiqueue not implemented for netbsd")
 }
 
 func (t *tun) addRoutes(logErrors bool) error {

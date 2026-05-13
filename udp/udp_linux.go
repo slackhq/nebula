@@ -24,6 +24,22 @@ type StdConn struct {
 	isV4    bool
 	l       *slog.Logger
 	batch   int
+
+	// sendmmsg scratch. Each queue has its own StdConn, so no locking is
+	// needed. Sized to MaxWriteBatch at construction; WriteBatch chunks
+	// larger inputs.
+	writeMsgs  []rawMessage
+	writeIovs  []iovec
+	writeNames [][]byte
+
+	// sendmmsg(2) callback state. sendmmsgCB is bound once in NewListener
+	// to the sendmmsgRun method value so passing it to rawConn.Write does
+	// not allocate a fresh closure per send; sendmmsgN/Sent/Errno carry
+	// the inputs and outputs across the call without escaping locals.
+	sendmmsgCB    func(fd uintptr) bool
+	sendmmsgN     int
+	sendmmsgSent  int
+	sendmmsgErrno syscall.Errno
 }
 
 func setReusePort(network, address string, c syscall.RawConn) error {
@@ -70,7 +86,21 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 	}
 	out.isV4 = af == unix.AF_INET
 
+	out.prepareWriteMessages(MaxWriteBatch)
+	out.sendmmsgCB = out.sendmmsgRun
+
 	return out, nil
+}
+
+func (u *StdConn) prepareWriteMessages(n int) {
+	u.writeMsgs = make([]rawMessage, n)
+	u.writeIovs = make([]iovec, n)
+	u.writeNames = make([][]byte, n)
+
+	for i := range u.writeMsgs {
+		u.writeNames[i] = make([]byte, unix.SizeofSockaddrInet6)
+		u.writeMsgs[i].Hdr.Name = &u.writeNames[i][0]
+	}
 }
 
 func (u *StdConn) SupportsMultipleReaders() bool {
@@ -171,7 +201,7 @@ func recvmmsg(fd uintptr, msgs []rawMessage) (int, bool, error) {
 	return int(n), true, nil
 }
 
-func (u *StdConn) listenOutSingle(r EncReader) error {
+func (u *StdConn) listenOutSingle(r EncReader, flush func()) error {
 	var err error
 	var n int
 	var from netip.AddrPort
@@ -183,16 +213,33 @@ func (u *StdConn) listenOutSingle(r EncReader) error {
 			return err
 		}
 		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
-		r(from, buffer[:n])
+		// listenOutSingle uses ReadFromUDPAddrPort which discards cmsgs,
+		// so the outer ECN field is not visible on this path. Zero RxMeta
+		// (Not-ECT) means RFC 6040 combine is a no-op.
+		r(from, buffer[:n], RxMeta{})
+		flush()
 	}
 }
 
-func (u *StdConn) listenOutBatch(r EncReader) error {
+// readSockaddr decodes the source address out of a recvmmsg name buffer
+func (u *StdConn) readSockaddr(name []byte) netip.AddrPort {
 	var ip netip.Addr
+	// It's ok to skip the ok check here, the slicing is the only error that can occur and it will panic
+	if u.isV4 {
+		ip, _ = netip.AddrFromSlice(name[4:8])
+	} else {
+		ip, _ = netip.AddrFromSlice(name[8:24])
+	}
+	return netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(name[2:4]))
+}
+
+func (u *StdConn) listenOutBatch(r EncReader, flush func()) error {
 	var n int
 	var operr error
 
-	msgs, buffers, names := u.PrepareRawMessages(u.batch)
+	bufSize := MTU
+	cmsgSpace := 0
+	msgs, buffers, names, _ := u.PrepareRawMessages(u.batch, bufSize, cmsgSpace)
 
 	//reader needs to capture variables from this function, since it's used as a lambda with rawConn.Read
 	//defining it outside the loop so it gets re-used
@@ -211,28 +258,138 @@ func (u *StdConn) listenOutBatch(r EncReader) error {
 		}
 
 		for i := 0; i < n; i++ {
-			// Its ok to skip the ok check here, the slicing is the only error that can occur and it will panic
-			if u.isV4 {
-				ip, _ = netip.AddrFromSlice(names[i][4:8])
-			} else {
-				ip, _ = netip.AddrFromSlice(names[i][8:24])
-			}
-			r(netip.AddrPortFrom(ip.Unmap(), binary.BigEndian.Uint16(names[i][2:4])), buffers[i][:msgs[i].Len])
+			r(u.readSockaddr(names[i]), buffers[i][:msgs[i].Len], RxMeta{})
 		}
+
+		flush()
 	}
 }
 
-func (u *StdConn) ListenOut(r EncReader) error {
+func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 	if u.batch == 1 {
-		return u.listenOutSingle(r)
+		return u.listenOutSingle(r, flush)
 	} else {
-		return u.listenOutBatch(r)
+		return u.listenOutBatch(r, flush)
 	}
 }
 
 func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
 	_, err := u.udpConn.WriteToUDPAddrPort(b, ip)
 	return err
+}
+
+// WriteBatch sends bufs via sendmmsg(2) using the preallocated scratch on
+// StdConn. If supported, consecutive packets to the same destination with
+// matching segment sizes (all but possibly the last) are coalesced into a
+// single mmsghdr entry
+//
+// If sendmmsg returns an error and zero entries went out, we fall back to
+// per-packet WriteTo for that chunk so the caller still gets best-effort
+// delivery. On a partial send we resume at the first un-acked entry on
+// the next iteration.
+func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) error {
+	for i := 0; i < len(bufs); {
+		chunk := min(len(bufs)-i, len(u.writeMsgs))
+
+		for k := 0; k < chunk; k++ {
+			u.writeIovs[k].Base = &bufs[i+k][0]
+			setIovLen(&u.writeIovs[k], len(bufs[i+k]))
+
+			nlen, err := writeSockaddr(u.writeNames[k], addrs[i+k], u.isV4)
+			if err != nil {
+				return err
+			}
+
+			hdr := &u.writeMsgs[k].Hdr
+			hdr.Iov = &u.writeIovs[k]
+			setMsgIovlen(hdr, 1)
+			hdr.Namelen = uint32(nlen)
+		}
+
+		sent, serr := u.sendmmsg(chunk)
+		if serr != nil && sent <= 0 {
+			// sendmmsg returns -1 / sent=0 when entry 0 itself failed; log
+			// that entry's destination and fall back to per-packet WriteTo
+			// for the whole chunk so the caller still gets best-effort
+			// delivery without duplicating packets the kernel accepted.
+			u.l.Warn("sendmmsg failed, falling back to per-packet WriteTo",
+				"err", serr,
+				"entries", chunk,
+				"entry0_dst", addrs[i],
+				"isV4", u.isV4,
+			)
+			for k := 0; k < chunk; k++ {
+				if werr := u.WriteTo(bufs[i+k], addrs[i+k]); werr != nil {
+					return werr
+				}
+			}
+			i += chunk
+			continue
+		}
+		i += sent
+	}
+	return nil
+}
+
+// sendmmsg issues sendmmsg(2) against the first n entries of u.writeMsgs.
+// The bound u.sendmmsgCB is passed to rawConn.Write so no closure is
+// allocated per call; inputs and outputs ride on the StdConn fields.
+func (u *StdConn) sendmmsg(n int) (int, error) {
+	u.sendmmsgN = n
+	u.sendmmsgSent = 0
+	u.sendmmsgErrno = 0
+	if err := u.rawConn.Write(u.sendmmsgCB); err != nil {
+		return u.sendmmsgSent, err
+	}
+	if u.sendmmsgErrno != 0 {
+		return u.sendmmsgSent, &net.OpError{Op: "sendmmsg", Err: u.sendmmsgErrno}
+	}
+	return u.sendmmsgSent, nil
+}
+
+// sendmmsgRun is the rawConn.Write callback. It is bound once into
+// u.sendmmsgCB at construction so it stays alloc-free in the hot path;
+// inputs (sendmmsgN) and outputs (sendmmsgSent, sendmmsgErrno) ride on
+// the receiver rather than escaping locals.
+func (u *StdConn) sendmmsgRun(fd uintptr) bool {
+	r1, _, errno := unix.Syscall6(unix.SYS_SENDMMSG, fd,
+		uintptr(unsafe.Pointer(&u.writeMsgs[0])), uintptr(u.sendmmsgN),
+		0, 0, 0,
+	)
+	if errno == syscall.EAGAIN || errno == syscall.EWOULDBLOCK {
+		return false
+	}
+	u.sendmmsgSent = int(r1)
+	u.sendmmsgErrno = errno
+	return true
+}
+
+// writeSockaddr encodes addr into buf (which must be at least
+// SizeofSockaddrInet6 bytes). Returns the number of bytes used. If isV4 is
+// true and addr is not a v4 (or v4-in-v6) address, returns an error.
+func writeSockaddr(buf []byte, addr netip.AddrPort, isV4 bool) (int, error) {
+	ap := addr.Addr().Unmap()
+	if isV4 {
+		if !ap.Is4() {
+			return 0, ErrInvalidIPv6RemoteForSocket
+		}
+		// struct sockaddr_in: { sa_family_t(2), in_port_t(2, BE), in_addr(4), zero(8) }
+		// sa_family is host endian.
+		binary.NativeEndian.PutUint16(buf[0:2], unix.AF_INET)
+		binary.BigEndian.PutUint16(buf[2:4], addr.Port())
+		ip4 := ap.As4()
+		copy(buf[4:8], ip4[:])
+		clear(buf[8:16])
+		return unix.SizeofSockaddrInet4, nil
+	}
+	// struct sockaddr_in6: { sa_family_t(2), in_port_t(2, BE), flowinfo(4), in6_addr(16), scope_id(4) }
+	binary.NativeEndian.PutUint16(buf[0:2], unix.AF_INET6)
+	binary.BigEndian.PutUint16(buf[2:4], addr.Port())
+	binary.NativeEndian.PutUint32(buf[4:8], 0)
+	ip6 := addr.Addr().As16()
+	copy(buf[8:24], ip6[:])
+	binary.NativeEndian.PutUint32(buf[24:28], 0)
+	return unix.SizeofSockaddrInet6, nil
 }
 
 func (u *StdConn) ReloadConfig(c *config.C) {
