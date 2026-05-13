@@ -41,6 +41,7 @@ type InterfaceConfig struct {
 	DropLocalBroadcast bool
 	DropMulticast      bool
 	routines           int
+	batchSize          int
 	MessageMetrics     *MessageMetrics
 	version            string
 	relayManager       *relayManager
@@ -80,6 +81,7 @@ type Interface struct {
 	dropLocalBroadcast    bool
 	dropMulticast         bool
 	routines              int
+	batchSize             int
 	disconnectInvalid     atomic.Bool
 	closed                atomic.Bool
 	// cpuAffinity, when non-empty, names the CPUs each TUN reader goroutine
@@ -209,6 +211,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		dropLocalBroadcast:    c.DropLocalBroadcast,
 		dropMulticast:         c.DropMulticast,
 		routines:              c.routines,
+		batchSize:             c.batchSize,
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
 		readers:               make([]tio.Queue, c.routines),
@@ -286,11 +289,11 @@ func (f *Interface) activate() error {
 			// is on, everything else (and either lane disabled) falls
 			// through to passthrough so non-IP / non-TCP-UDP traffic still
 			// reaches the TUN.
-			arena := batch.NewArena(batch.DefaultMultiArenaCap)
+			arena := batch.NewArena(max(f.batchSize, 1) * 65535)
 			f.batchers[i] = batch.NewMultiCoalescer(f.readers[i], f.l, arena, caps.TSO, caps.USO)
 		} else {
-			arena := batch.NewArena(batch.DefaultPassthroughArenaCap)
-			f.batchers[i] = batch.NewPassthrough(f.readers[i], arena)
+			arena := batch.NewArena(max(f.batchSize, 1) * udp.MTU)
+			f.batchers[i] = batch.NewPassthrough(f.readers[i], f.batchSize, arena)
 		}
 	}
 

@@ -21,10 +21,10 @@ const passthroughBaseNumSlots = 128
 // standalone Passthrough batcher: 128 slots × udp.MTU ≈ 1.1 MiB.
 const DefaultPassthroughArenaCap = passthroughBaseNumSlots * udp.MTU
 
-func NewPassthrough(w io.Writer, arena *Arena) *Passthrough {
+func NewPassthrough(w io.Writer, slots int, arena *Arena) *Passthrough {
 	return &Passthrough{
 		out:   w,
-		slots: make([][]byte, 0, passthroughBaseNumSlots),
+		slots: make([][]byte, 0, slots),
 		arena: arena,
 	}
 }

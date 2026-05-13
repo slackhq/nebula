@@ -221,6 +221,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		DropLocalBroadcast:    c.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:         c.GetBool("tun.drop_multicast", false),
 		routines:              routines,
+		batchSize:             c.GetInt("listen.batch", 64),
 		MessageMetrics:        messageMetrics,
 		version:               buildVersion,
 		relayManager:          NewRelayManager(ctx, l, hostMap, c),
