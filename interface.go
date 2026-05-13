@@ -39,6 +39,7 @@ type InterfaceConfig struct {
 	DropLocalBroadcast bool
 	DropMulticast      bool
 	routines           int
+	batchSize          int
 	MessageMetrics     *MessageMetrics
 	version            string
 	relayManager       *relayManager
@@ -71,6 +72,7 @@ type Interface struct {
 	dropLocalBroadcast    bool
 	dropMulticast         bool
 	routines              int
+	batchSize             int
 	disconnectInvalid     atomic.Bool
 	closed                atomic.Bool
 	relayManager          *relayManager
@@ -191,6 +193,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		dropLocalBroadcast:    c.DropLocalBroadcast,
 		dropMulticast:         c.DropMulticast,
 		routines:              c.routines,
+		batchSize:             c.batchSize,
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
 		readers:               make([]tio.Queue, c.routines),
@@ -261,8 +264,8 @@ func (f *Interface) activate() error {
 	}
 	f.readers = f.inside.Readers()
 	for i := range f.readers {
-		arena := batch.NewArena(batch.DefaultPassthroughArenaCap)
-		f.batchers[i] = batch.NewPassthrough(f.readers[i], arena)
+		arena := batch.NewArena(max(f.batchSize, 1) * udp.MTU)
+		f.batchers[i] = batch.NewPassthrough(f.readers[i], f.batchSize, arena)
 	}
 
 	f.wg.Add(1) // for us to wait on Close() to return
