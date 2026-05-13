@@ -127,7 +127,6 @@ func (t *Poll) readOne(to []byte) (int, error) {
 	}
 }
 
-// Write is only valid for single threaded use
 func (t *Poll) Write(from []byte) (int, error) {
 	for {
 		n, errno := unix.Write(t.fd, from)
