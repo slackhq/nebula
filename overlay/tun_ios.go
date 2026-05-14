@@ -19,6 +19,7 @@ import (
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/wire"
 )
 
 type tun struct {
@@ -27,18 +28,19 @@ type tun struct {
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *slog.Logger
-
-	readBuf  []byte
-	batchRet [1]tio.Packet
 }
 
-func (t *tun) Read() ([]tio.Packet, error) {
-	n, err := t.rwc.Read(t.readBuf)
-	if err != nil {
-		return nil, err
+func (t *tun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) <= 4 {
+		return 0, nil //todo should this be an err?
 	}
-	t.batchRet[0] = tio.Packet{Bytes: t.readBuf[:n]}
-	return t.batchRet[:], nil
+	p[0].Meta = struct{}{}
+	n, err := t.rwc.Read(mem)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[4:n]
+	return 1, nil
 }
 
 func (t *tun) Write(p []byte) (int, error) {
@@ -59,7 +61,6 @@ func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip
 		vpnNetworks: vpnNetworks,
 		rwc:         &tunReadCloser{f: file},
 		l:           l,
-		readBuf:     make([]byte, defaultBatchBufSize),
 	}
 
 	err := t.reload(c, true)
@@ -118,18 +119,9 @@ type tunReadCloser struct {
 	wBuf []byte
 }
 
+// Read returns a packet with the BSD 4-byte header, watch out!
 func (tr *tunReadCloser) Read(to []byte) (int, error) {
-	tr.rMu.Lock()
-	defer tr.rMu.Unlock()
-
-	if cap(tr.rBuf) < len(to)+4 {
-		tr.rBuf = make([]byte, len(to)+4)
-	}
-	tr.rBuf = tr.rBuf[:len(to)+4]
-
-	n, err := tr.f.Read(tr.rBuf)
-	copy(to, tr.rBuf[4:])
-	return n - 4, err
+	return tr.f.Read(to)
 }
 
 func (tr *tunReadCloser) Write(from []byte) (int, error) {

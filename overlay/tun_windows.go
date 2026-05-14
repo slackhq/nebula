@@ -21,6 +21,7 @@ import (
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"github.com/slackhq/nebula/wintun"
+	"github.com/slackhq/nebula/wire"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
@@ -45,18 +46,19 @@ type winTun struct {
 	l               *slog.Logger
 
 	tun *wintun.NativeTun
-
-	readBuf  []byte
-	batchRet [1]tio.Packet
 }
 
-func (t *winTun) Read() ([]tio.Packet, error) {
-	n, err := t.tun.Read(t.readBuf, 0)
-	if err != nil {
-		return nil, err
+func (t *winTun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) == 0 {
+		return 0, nil //todo should this be an err?
 	}
-	t.batchRet[0] = tio.Packet{Bytes: t.readBuf[:n]}
-	return t.batchRet[:], nil
+	p[0].Meta = struct{}{}
+	n, err := t.tun.Read(mem, 0)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[:n]
+	return 1, nil
 }
 
 func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (Device, error) {
@@ -81,7 +83,6 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 	}
 
 	t := &winTun{
-		readBuf:         make([]byte, defaultBatchBufSize),
 		Device:          deviceName,
 		vpnNetworks:     vpnNetworks,
 		MTU:             c.GetInt("tun.mtu", DefaultMTU),

@@ -2,6 +2,8 @@ package tio
 
 import (
 	"io"
+
+	"github.com/slackhq/nebula/wire"
 )
 
 // QueueSet holds one or many Queue objects and helps close them in an orderly way.
@@ -13,10 +15,8 @@ type QueueSet interface {
 	Add(fd int) error
 }
 
-// Capabilities advertises which kernel offload features a Queue
-// successfully negotiated. Callers consult this to decide which coalescers
-// to wire onto the write path — a Queue without TSO can't usefully accept a
-// TCPCoalescer, and a Queue without USO can't accept a UDPCoalescer.
+// Capabilities advertises which kernel offload features a Queue successfully negotiated.
+// Callers consult this to decide which coalescers to wire onto the write path.
 type Capabilities struct {
 	// TSO means the FD was opened with IFF_VNET_HDR and the kernel agreed
 	// to TUN_F_TSO4|TSO6 — i.e. WriteGSO with GSOProtoTCP is safe.
@@ -31,14 +31,13 @@ type Capabilities struct {
 type Queue interface {
 	io.Closer
 
-	// Read returns one or more packets. The returned Packet.Bytes slices
-	// are borrowed from the Queue's internal buffer and are only valid
-	// until the next Read or Close on this Queue - callers must encrypt
-	// or copy each slice before the next call.
-	Read() ([]Packet, error)
+	// Read will read at least 1 packet from the tun (up to len(p))
+	// mem will be used to provide the backing for each of p[n].Bytes
+	// Returns the number of packets actually read, or error
+	Read(p []wire.TunPacket, mem []byte) (int, error)
 
 	// Write emits a single packet on the plaintext (outside→inside)
-	// delivery path. Not safe for concurrent Writes.
+	// delivery path.
 	Write(p []byte) (int, error)
 
 	// Capabilities returns the Queue's negotiated offload capabilities,
@@ -46,15 +45,6 @@ type Queue interface {
 	Capabilities() Capabilities
 }
 
-// Packet is the unit Queue.Read returns. Bytes points into the queue's
-// internal buffer and is only valid until the next Read or Close on the
-// queue that produced it. GSO is the zero value for an already-segmented
-// IP datagram; when non-zero it describes a kernel-supplied TSO/USO
-// superpacket the caller must segment before consuming.
-type Packet struct {
-	Bytes []byte
-	GSO   GSOInfo
-}
 
 // GSOInfo describes a kernel-supplied superpacket sitting in Packet.Bytes.
 // The zero value means "not a superpacket" — Bytes is one regular IP
@@ -120,16 +110,12 @@ type GSOWriter interface {
 // queue advertises the negotiated capability for `want`. A writer that
 // implements GSOWriter but not CapsProvider is treated as permissive
 // (used by tests and fakes that don't negotiate).
-func SupportsGSO(w any, want GSOProto) (GSOWriter, bool) {
+func SupportsGSO(w Queue, want GSOProto) (GSOWriter, bool) {
 	gw, ok := w.(GSOWriter)
 	if !ok {
 		return nil, false
 	}
-	cp, ok := w.(CapsProvider)
-	if !ok {
-		return gw, true
-	}
-	caps := cp.Capabilities()
+	caps := w.Capabilities()
 	switch want {
 	case GSOProtoTCP:
 		return gw, caps.TSO

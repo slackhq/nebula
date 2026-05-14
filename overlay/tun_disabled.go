@@ -12,6 +12,7 @@ import (
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
+	"github.com/slackhq/nebula/wire"
 )
 
 type disabledTun struct {
@@ -21,47 +22,8 @@ type disabledTun struct {
 	// Track these metrics since we don't have the tun device to do it for us
 	tx         metrics.Counter
 	rx         metrics.Counter
-	l          *slog.Logger
 	numReaders int
-}
-
-// disabledQueue is one tio.Queue view onto a shared disabledTun. Each queue
-// owns a private batchRet so concurrent Read calls from different reader
-// goroutines do not race on the returned slice.
-type disabledQueue struct {
-	parent   *disabledTun
-	batchRet [1]tio.Packet
-}
-
-func (q *disabledQueue) Capabilities() tio.Capabilities {
-	return tio.Capabilities{}
-}
-
-func (q *disabledQueue) Read() ([]tio.Packet, error) {
-	r, ok := <-q.parent.read
-	if !ok {
-		return nil, io.EOF
-	}
-
-	q.parent.tx.Inc(1)
-	if q.parent.l.Enabled(context.Background(), slog.LevelDebug) {
-		q.parent.l.Debug("Write payload", "raw", prettyPacket(r))
-	}
-
-	q.batchRet[0] = tio.Packet{Bytes: r}
-	return q.batchRet[:], nil
-}
-
-// Write on a queue forwards to the underlying disabledTun. All queues share
-// one ICMP-handling/log path so this is a thin pass-through.
-func (q *disabledQueue) Write(b []byte) (int, error) {
-	return q.parent.Write(b)
-}
-
-// Close on a queue is a no-op. The shared channel and metrics are owned by
-// the disabledTun; Close on the device tears them down once for everybody.
-func (q *disabledQueue) Close() error {
-	return nil
+	l          *slog.Logger
 }
 
 func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled bool, l *slog.Logger) *disabledTun {
@@ -97,6 +59,37 @@ func (t *disabledTun) Networks() []netip.Prefix {
 
 func (*disabledTun) Name() string {
 	return "disabled"
+}
+
+func (t *disabledTun) readOne(b []byte) (int, error) {
+	r, ok := <-t.read
+	if !ok {
+		return 0, io.EOF
+	}
+
+	if len(r) > len(b) {
+		return 0, fmt.Errorf("packet larger than mtu: %d > %d bytes", len(r), len(b))
+	}
+
+	t.tx.Inc(1)
+	if t.l.Enabled(context.Background(), slog.LevelDebug) {
+		t.l.Debug("Write payload", "raw", prettyPacket(r))
+	}
+
+	return copy(b, r), nil
+}
+
+func (t *disabledTun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) == 0 {
+		return 0, nil //todo should this be an err?
+	}
+	p[0].Meta = struct{}{}
+	n, err := t.readOne(mem)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[:n]
+	return 1, nil
 }
 
 func (t *disabledTun) handleICMPEchoRequest(b []byte) bool {
@@ -142,9 +135,13 @@ func (t *disabledTun) NewMultiQueueReader() error {
 func (t *disabledTun) Readers() []tio.Queue {
 	out := make([]tio.Queue, t.numReaders)
 	for i := range t.numReaders {
-		out[i] = &disabledQueue{parent: t}
+		out[i] = t
 	}
 	return out
+}
+
+func (t *disabledTun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
 }
 
 func (t *disabledTun) Close() error {

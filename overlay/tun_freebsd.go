@@ -17,6 +17,7 @@ import (
 	"unsafe"
 
 	"github.com/gaissmai/bart"
+	"github.com/slackhq/nebula/wire"
 
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay/tio"
@@ -102,9 +103,6 @@ type tun struct {
 	readPoll  [2]unix.PollFd
 	writePoll [2]unix.PollFd
 	closed    atomic.Bool
-
-	readBuf  []byte
-	batchRet [1]tio.Packet
 }
 
 // blockOnRead waits until the tun fd is readable or shutdown has been signaled.
@@ -159,13 +157,17 @@ func (t *tun) blockOnWrite() error {
 	return nil
 }
 
-func (t *tun) Read() ([]tio.Packet, error) {
-	n, err := t.readOne(t.readBuf)
-	if err != nil {
-		return nil, err
+func (t *tun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) == 0 {
+		return 0, nil //todo should this be an err?
 	}
-	t.batchRet[0] = tio.Packet{Bytes: t.readBuf[:n]}
-	return t.batchRet[:], nil
+	p[0].Meta = struct{}{}
+	n, err := t.readOne(mem)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[4:n]
+	return 1, nil
 }
 
 func (t *tun) readOne(to []byte) (int, error) {
@@ -386,7 +388,6 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		MTU:         c.GetInt("tun.mtu", DefaultMTU),
 		l:           l,
 		fd:          fd,
-		readBuf:     make([]byte, defaultBatchBufSize),
 		shutdownR:   shutdownR,
 		shutdownW:   shutdownW,
 		readPoll: [2]unix.PollFd{
