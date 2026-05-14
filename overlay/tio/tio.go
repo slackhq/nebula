@@ -26,9 +26,10 @@ type Capabilities struct {
 type Queue interface {
 	io.Closer
 
-	// Read will read at least 1 packet from the tun (up to len(p))
-	// mem will be used to provide the backing for each of p[n].Bytes
-	// Returns the number of packets actually read, or error
+	// Read will read at least 1 packet from the tun (up to len(p)).
+	// mem will be used to provide the backing for each of p[n].Bytes.
+	// Callers should size mem and p to avoid exhausting mem before p.
+	// Returns the number of packets actually read, or error.
 	Read(p []wire.TunPacket, mem []byte) (int, error)
 
 	// Write emits a single packet on the plaintext (outside→inside)
