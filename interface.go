@@ -401,8 +401,9 @@ func (f *Interface) listenIn(reader tio.Queue, i int) {
 			break
 		}
 
+		ctCache := conntrackCache.Get()
 		for _, pkt := range pkts {
-			f.consumeInsidePacket(pkt, fwPacket, nb, sb, rejectBuf, i, conntrackCache.Get())
+			f.consumeInsidePacket(pkt, fwPacket, nb, sb, rejectBuf, i, ctCache)
 		}
 		if err := sb.Flush(); err != nil {
 			f.l.Error("Failed to write outgoing batch", "error", err, "writer", i)
