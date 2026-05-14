@@ -197,6 +197,10 @@ func (t *TestTun) Readers() []tio.Queue {
 	return []tio.Queue{t}
 }
 
+func (t *TestTun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
+}
+
 func (t *TestTun) SupportsMultiqueue() bool {
 	return false
 }

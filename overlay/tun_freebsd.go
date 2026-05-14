@@ -609,6 +609,10 @@ func (t *tun) Readers() []tio.Queue {
 	return []tio.Queue{t}
 }
 
+func (t *tun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
+}
+
 func (t *tun) removeRoutes(routes []Route) error {
 	for _, r := range routes {
 		if !r.Install {

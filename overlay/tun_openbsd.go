@@ -383,6 +383,10 @@ func (t *tun) Readers() []tio.Queue {
 	return []tio.Queue{t}
 }
 
+func (t *tun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
+}
+
 func addRoute(prefix netip.Prefix, gateways []netip.Prefix) error {
 	sock, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, unix.AF_UNSPEC)
 	if err != nil {

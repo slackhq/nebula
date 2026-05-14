@@ -34,15 +34,16 @@ type Queue interface {
 	// Read returns one or more packets. The returned Packet.Bytes slices
 	// are borrowed from the Queue's internal buffer and are only valid
 	// until the next Read or Close on this Queue - callers must encrypt
-	// or copy each slice before the next call. A Packet may carry a
-	// GSO/USO superpacket (see GSOInfo); when GSO.IsSuperpacket() is
-	// true the caller must segment Bytes before treating it as a single
-	// IP datagram. Not safe for concurrent Reads.
+	// or copy each slice before the next call.
 	Read() ([]Packet, error)
 
 	// Write emits a single packet on the plaintext (outside→inside)
 	// delivery path. Not safe for concurrent Writes.
 	Write(p []byte) (int, error)
+
+	// Capabilities returns the Queue's negotiated offload capabilities,
+	// or the zero value when q does not advertise any.
+	Capabilities() Capabilities
 }
 
 // Packet is the unit Queue.Read returns. Bytes points into the queue's
@@ -78,38 +79,6 @@ type GSOInfo struct {
 // superpacket that needs segmentation before its bytes can be encrypted
 // and sent on the wire.
 func (g GSOInfo) IsSuperpacket() bool { return g.Size > 0 }
-
-// Clone returns a Packet whose Bytes is a freshly allocated copy of p.Bytes,
-// safe to retain past the next Read or Close on the originating Queue.
-// GSO metadata is copied verbatim. Use this only when a caller genuinely
-// needs to outlive the borrowed-slice contract — the hot path reads should
-// continue to consume the borrow synchronously to avoid the allocation.
-func (p Packet) Clone() Packet {
-	if p.Bytes == nil {
-		return p
-	}
-	cp := make([]byte, len(p.Bytes))
-	copy(cp, p.Bytes)
-	return Packet{Bytes: cp, GSO: p.GSO}
-}
-
-// CapsProvider is an optional interface implemented by Queues that
-// successfully negotiated kernel offload features at open time. Callers
-// pick a write-path coalescer based on the result. Queues that don't
-// implement it are treated as having no offload capability — callers must
-// fall back to plain per-packet writes.
-type CapsProvider interface {
-	Capabilities() Capabilities
-}
-
-// QueueCapabilities returns q's negotiated offload capabilities, or the
-// zero value when q does not advertise any.
-func QueueCapabilities(q Queue) Capabilities {
-	if cp, ok := q.(CapsProvider); ok {
-		return cp.Capabilities()
-	}
-	return Capabilities{}
-}
 
 // GSOProto selects the L4 protocol for a GSO superpacket. Determines which
 // VIRTIO_NET_HDR_GSO_* type the writer stamps and which checksum offset

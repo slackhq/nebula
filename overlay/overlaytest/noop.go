@@ -15,6 +15,10 @@ import (
 // exercise the datapath.
 type NoopTun struct{}
 
+func (NoopTun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
+}
+
 func (NoopTun) RoutesFor(addr netip.Addr) routing.Gateways {
 	return routing.Gateways{}
 }
