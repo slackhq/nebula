@@ -268,7 +268,7 @@ func (r *Offload) Read(p []wire.TunPacket, mem []byte) (int, error) {
 		if n <= 0 {
 			break
 		}
-		if p, err = r.decodeRead(p, mem, n); err != nil {
+		if p, err = r.decodeRead(p, mem[rxOff:], n); err != nil {
 			// Drop this packet and stop the drain; we'd rather hand off
 			// what we have than keep spinning here.
 			break
