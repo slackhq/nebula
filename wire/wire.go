@@ -9,3 +9,9 @@ type TunPacket struct {
 	// Fields in Meta should be as portable/platform-agnostic as possible.
 	Meta struct{}
 }
+
+// PerSegment invokes fn once per segment of pkt.
+// This is a stub implementation that does not actually support segmentation
+func (t *TunPacket) PerSegment(fn func(seg []byte) error) error {
+	return fn(t.Bytes)
+}

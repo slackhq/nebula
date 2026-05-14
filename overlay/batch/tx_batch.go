@@ -3,15 +3,10 @@ package batch
 import (
 	"net/netip"
 
-	"github.com/slackhq/nebula/udp"
+	"github.com/slackhq/nebula/util"
 )
 
 const SendBatchCap = 128
-
-// DefaultSendBatchArenaCap is the recommended arena capacity for a
-// standalone SendBatch: 128 slots × (udp.MTU + 32) ≈ 1.1 MiB. The +32 covers
-// the nebula header + AEAD tag tacked onto each plaintext segment.
-const DefaultSendBatchArenaCap = SendBatchCap * (udp.MTU + 32)
 
 // batchWriter is the minimal subset of udp.Conn needed by SendBatch to flush.
 type batchWriter interface {
@@ -27,11 +22,11 @@ type SendBatch struct {
 	bufs  [][]byte
 	dsts  []netip.AddrPort
 	ecns  []byte
-	arena *Arena
+	arena *util.Arena
 }
 
 // NewSendBatch makes a SendBatch with batchCap slots backed by arena.
-func NewSendBatch(out batchWriter, batchCap int, arena *Arena) *SendBatch {
+func NewSendBatch(out batchWriter, batchCap int, arena *util.Arena) *SendBatch {
 	return &SendBatch{
 		out:   out,
 		bufs:  make([][]byte, 0, batchCap),

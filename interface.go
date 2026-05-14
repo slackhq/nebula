@@ -289,10 +289,10 @@ func (f *Interface) activate() error {
 			// is on, everything else (and either lane disabled) falls
 			// through to passthrough so non-IP / non-TCP-UDP traffic still
 			// reaches the TUN.
-			arena := batch.NewArena(max(f.batchSize, 1) * 65535)
+			arena := util.NewArena(max(f.batchSize, 1) * 65535)
 			f.batchers[i] = batch.NewMultiCoalescer(f.readers[i], f.l, arena, caps.TSO, caps.USO)
 		} else {
-			arena := batch.NewArena(max(f.batchSize, 1) * udp.MTU)
+			arena := util.NewArena(max(f.batchSize, 1) * udp.MTU)
 			f.batchers[i] = batch.NewPassthrough(f.readers[i], f.batchSize, arena)
 		}
 	}
@@ -389,7 +389,7 @@ func (f *Interface) listenIn(reader tio.Queue, q int) {
 
 	rejectBuf := make([]byte, mtu)
 	arenaSize := batch.SendBatchCap * (udp.MTU + 32)
-	sb := batch.NewSendBatch(f.writers[q], batch.SendBatchCap, arenaSize)
+	sb := batch.NewSendBatch(f.writers[q], batch.SendBatchCap, util.NewArena(arenaSize))
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
