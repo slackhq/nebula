@@ -12,6 +12,7 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
+	"github.com/slackhq/nebula/util"
 	"github.com/slackhq/nebula/wire"
 
 	"github.com/slackhq/nebula/config"
@@ -264,7 +265,7 @@ func (f *Interface) activate() error {
 	}
 	f.readers = f.inside.Readers()
 	for i := range f.readers {
-		arena := batch.NewArena(max(f.batchSize, 1) * udp.MTU)
+		arena := util.NewArena(max(f.batchSize, 1) * udp.MTU)
 		f.batchers[i] = batch.NewPassthrough(f.readers[i], f.batchSize, arena)
 	}
 
@@ -329,7 +330,7 @@ func (f *Interface) listenOut(i int) {
 
 	listener := func(fromUdpAddr netip.AddrPort, payload []byte, meta udp.RxMeta) {
 		plaintext := f.batchers[i].Reserve(len(payload))
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(), meta)
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get())
 	}
 
 	flusher := func() {
@@ -352,10 +353,9 @@ func (f *Interface) listenIn(reader tio.Queue, q int) {
 	packetMem := make([]byte, mtu+16) //MTU + some leading slack space for platforms that return "bonus info"
 	// TODO get the amount of bonus info from the reader
 	packets := make([]wire.TunPacket, 1)
-	out := make([]byte, mtu)
 	rejectBuf := make([]byte, mtu)
 	arenaSize := batch.SendBatchCap * (udp.MTU + 32)
-	sb := batch.NewSendBatch(f.writers[q], batch.SendBatchCap, batch.NewArena(arenaSize))
+	sb := batch.NewSendBatch(f.writers[q], batch.SendBatchCap, util.NewArena(arenaSize))
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
@@ -372,7 +372,7 @@ func (f *Interface) listenIn(reader tio.Queue, q int) {
 		}
 
 		ctCache := conntrackCache.Get()
-		for i := range n{
+		for i := range n {
 			f.consumeInsidePacket(packets[i], fwPacket, nb, sb, rejectBuf, q, ctCache)
 		}
 		if err := sb.Flush(); err != nil {

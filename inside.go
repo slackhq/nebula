@@ -11,11 +11,11 @@ import (
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/slackhq/nebula/overlay/batch"
-	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
+	"github.com/slackhq/nebula/wire"
 )
 
-func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packet, nb []byte, sendBatch batch.TxBatcher, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) consumeInsidePacket(pkt wire.TunPacket, fwPacket *firewall.Packet, nb []byte, sendBatch *batch.SendBatch, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
 	// borrowed: pkt.Bytes is owned by the originating tio.Queue and is
 	// only valid until the next Read on that queue. If you must keep
 	// the packet, use pkt.Clone() to detach it
@@ -44,7 +44,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 		// routes packets from the Nebula addr to the Nebula addr through the Nebula
 		// TUN device.
 		if immediatelyForwardToSelf {
-			err := tio.SegmentSuperpacket(pkt, func(seg []byte) error {
+			err := pkt.PerSegment(func(seg []byte) error {
 				_, werr := f.readers[q].Write(seg)
 				return werr
 			})
@@ -66,7 +66,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 		// borrowed: SegmentSuperpacket builds each segment in the kernel-supplied pkt
 		// bytes underneath. cachePacket explicitly copies its argument (handshake_manager.go cachePacket),
 		// so retaining segments past the loop is safe.
-		err := tio.SegmentSuperpacket(pkt, func(seg []byte) error {
+		err := pkt.PerSegment(func(seg []byte) error {
 			hh.cachePacket(f.l, header.Message, 0, seg, f.sendMessageNow, f.cachedPacketMetrics)
 			return nil
 		})
@@ -138,10 +138,10 @@ func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, s
 // segment of a TSO/USO superpacket) into the caller's batch slot for
 // later sendmmsg flush. Segmentation is fused with encryption here so the
 // kernel-supplied superpacket bytes never get written into a separate
-// scratch arena: SegmentSuperpacket builds each segment's plaintext in
+// scratch arena: PerSegment builds each segment's plaintext in
 // segScratch[:segLen] in turn, and we encrypt directly into a fresh
 // SendBatch slot.
-func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []byte, sendBatch batch.TxBatcher) {
+func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt wire.TunPacket, nb []byte, sendBatch *batch.SendBatch) {
 	ci := hostinfo.ConnectionState
 	if ci.eKey == nil {
 		return
@@ -181,7 +181,7 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 			return
 		}
 
-		err = tio.SegmentSuperpacket(pkt, func(seg []byte) error {
+		err = pkt.PerSegment(func(seg []byte) error {
 			//relay header + header + plaintext + AEAD tag (16 bytes for both AES-GCM and ChaCha20-Poly1305) + relay tag
 			scratch := sendBatch.Reserve(header.Len + header.Len + len(seg) + 16 + 16)
 
@@ -206,7 +206,7 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 		return
 	}
 
-	err := tio.SegmentSuperpacket(pkt, func(seg []byte) error {
+	err := pkt.PerSegment(func(seg []byte) error {
 		// header + plaintext + AEAD tag (16 bytes for both AES-GCM and ChaCha20-Poly1305)
 		scratch := sendBatch.Reserve(header.Len + len(seg) + 16)
 
