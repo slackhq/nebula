@@ -166,7 +166,7 @@ func (t *tun) Read(p []wire.TunPacket, mem []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	p[0].Bytes = mem[4:n]
+	p[0].Bytes = mem[:n]
 	return 1, nil
 }
 

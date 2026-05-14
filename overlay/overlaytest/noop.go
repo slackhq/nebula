@@ -8,6 +8,7 @@ import (
 
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
+	"github.com/slackhq/nebula/wire"
 )
 
 // NoopTun is an overlay.Device that silently discards every read and write.
@@ -35,8 +36,8 @@ func (NoopTun) Name() string {
 	return "noop"
 }
 
-func (NoopTun) Read() ([]tio.Packet, error) {
-	return nil, nil
+func (NoopTun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	return 0, nil
 }
 
 func (NoopTun) Write([]byte) (int, error) {
