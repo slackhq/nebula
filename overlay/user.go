@@ -1,7 +1,6 @@
 package overlay
 
 import (
-	"errors"
 	"io"
 	"log/slog"
 	"net/netip"
@@ -26,6 +25,7 @@ func NewUserDevice(vpnNetworks []netip.Prefix) (Device, error) {
 		outboundWriter: ow,
 		inboundReader:  ir,
 		inboundWriter:  iw,
+		numReaders:     1,
 	}, nil
 }
 
@@ -68,15 +68,20 @@ func (d *UserDevice) RoutesFor(ip netip.Addr) routing.Gateways {
 }
 
 func (d *UserDevice) SupportsMultiqueue() bool {
-	return false
+	return true
 }
 
 func (d *UserDevice) NewMultiQueueReader() error {
-	return errors.New("not implemented")
+	d.numReaders++
+	return nil
 }
 
 func (d *UserDevice) Readers() []tio.Queue {
-	return []tio.Queue{d}
+	out := make([]tio.Queue, d.numReaders)
+	for i := range d.numReaders {
+		out[i] = d
+	}
+	return out
 }
 
 func (d *UserDevice) Pipe() (*io.PipeReader, *io.PipeWriter) {
