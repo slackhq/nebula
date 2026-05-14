@@ -5,6 +5,8 @@ import (
 	"io"
 
 	"github.com/slackhq/nebula/overlay/tio"
+	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/wire"
 )
 
 // ipProtoUDP is the IANA protocol number for UDP.
@@ -67,7 +69,7 @@ type UDPCoalescer struct {
 	pool      []*udpSlot
 
 	// arena is injected; see TCPCoalescer.arena for the contract.
-	arena *Arena
+	arena *util.Arena
 }
 
 // NewUDPCoalescer wraps w. The caller is responsible for only constructing
@@ -75,7 +77,7 @@ type UDPCoalescer struct {
 // the kernel may reject GSO_UDP_L4 writes. If w does not implement
 // tio.GSOWriter at all (single-packet Queue), the coalescer degrades to
 // plain Writes — same defensive shape as the TCP coalescer.
-func NewUDPCoalescer(w io.Writer, arena *Arena) *UDPCoalescer {
+func NewUDPCoalescer(w tio.Queue, arena *util.Arena) *UDPCoalescer {
 	c := &UDPCoalescer{
 		plainW:    w,
 		slots:     make([]*udpSlot, 0, initialSlots),
@@ -83,7 +85,7 @@ func NewUDPCoalescer(w io.Writer, arena *Arena) *UDPCoalescer {
 		pool:      make([]*udpSlot, 0, initialSlots),
 		arena:     arena,
 	}
-	if gw, ok := tio.SupportsGSO(w, tio.GSOProtoUDP); ok {
+	if gw, ok := tio.SupportsGSO(w, wire.GSOProtoUDP); ok {
 		c.gsoW = gw
 	}
 	return c
@@ -313,7 +315,7 @@ func (c *UDPCoalescer) flushSlot(s *udpSlot) error {
 	udpCsumOff := s.ipHdrLen + 6
 	binary.BigEndian.PutUint16(hdr[udpCsumOff:udpCsumOff+2], foldOnceNoInvert(psum))
 
-	return c.gsoW.WriteGSO(hdr[:s.ipHdrLen], hdr[s.ipHdrLen:], s.payIovs, tio.GSOProtoUDP)
+	return c.gsoW.WriteGSO(hdr[:s.ipHdrLen], hdr[s.ipHdrLen:], s.payIovs, wire.GSOProtoUDP)
 }
 
 // udpHeadersMatch compares two IP+UDP header prefixes for byte-equality on

@@ -2,8 +2,10 @@ package batch
 
 import (
 	"errors"
-	"io"
 	"log/slog"
+
+	"github.com/slackhq/nebula/overlay/tio"
+	"github.com/slackhq/nebula/util"
 )
 
 // MultiCoalescer fans plaintext packets out to lane-specific batchers based
@@ -35,7 +37,7 @@ type MultiCoalescer struct {
 	// sequentially and never Reserves in between, so a later lane's
 	// slots stay readable across an earlier lane's Reset (the underlying
 	// bytes are still alive — Reset only re-slices len to 0).
-	arena *Arena
+	arena *util.Arena
 }
 
 // DefaultMultiArenaCap is the recommended arena capacity for a Multi-lane
@@ -49,9 +51,9 @@ const DefaultMultiArenaCap = initialSlots * 65535
 // Either lane disabled redirects its traffic into the passthrough lane.
 // arena is the single backing slab shared across every lane; the caller
 // pre-sizes it via NewArena so the hot path never allocates.
-func NewMultiCoalescer(w io.Writer, l *slog.Logger, arena *Arena, tcpEnabled, udpEnabled bool) *MultiCoalescer {
+func NewMultiCoalescer(w tio.Queue, l *slog.Logger, arena *util.Arena, tcpEnabled, udpEnabled bool) *MultiCoalescer {
 	m := &MultiCoalescer{
-		pt:    NewPassthrough(w, arena),
+		pt:    NewPassthrough(w, initialSlots, arena),
 		arena: arena,
 	}
 	if tcpEnabled {

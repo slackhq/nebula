@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/slackhq/nebula/wire"
 	"golang.org/x/sys/unix"
 
 	"github.com/slackhq/nebula/overlay/tio/virtio"
@@ -67,9 +68,6 @@ type Offload struct {
 	// events.
 	writeLock sync.Mutex
 	closed    atomic.Bool
-	rxBuf     []byte   // backing store for kernel-handed packets read this drain
-	rxOff     int      // cursor into rxBuf for the current Read drain
-	pending   []Packet // packets returned from the most recent Read
 
 	// readVnetScratch holds the 10-byte virtio_net_hdr split off the front of
 	// every TUN read via readv(2). Decoupling the header from the packet body
@@ -115,9 +113,7 @@ func newOffload(fd int, shutdownFd int, usoEnabled bool) (*Offload, error) {
 			{Fd: int32(shutdownFd), Events: unix.POLLIN},
 		},
 		writeLock: sync.Mutex{},
-
-		rxBuf:   make([]byte, tunRxBufCap),
-		gsoIovs: make([]unix.Iovec, 2, gsoMaxIovs),
+		gsoIovs:   make([]unix.Iovec, 2, gsoMaxIovs),
 	}
 
 	out.gsoIovs[0].Base = &out.gsoHdrBuf[0]
@@ -197,9 +193,9 @@ func (r *Offload) blockOnWrite() error {
 // hold one worst-case kernel-supplied packet body. Without that gate the
 // body iovec could be smaller than the next inbound packet and the
 // kernel would truncate.
-func (r *Offload) readPacket(block bool) (int, error) {
+func (r *Offload) readPacket(mem []byte, block bool) (int, error) {
 	for {
-		r.readIovs[1].Base = &r.rxBuf[r.rxOff]
+		r.readIovs[1].Base = &mem[0]
 		r.readIovs[1].SetLen(tunReadBufSize)
 		n, _, errno := syscall.Syscall(unix.SYS_READV, uintptr(r.fd), uintptr(unsafe.Pointer(&r.readIovs[0])), uintptr(len(r.readIovs)))
 		if errno == 0 {
@@ -237,29 +233,33 @@ func (r *Offload) readPacket(block bool) (int, error) {
 // bursts of small packets (e.g. TCP ACKs). Packet.Bytes slices point
 // into the Offload's internal buffer and are only valid until the next
 // Read or Close on this Queue.
-func (r *Offload) Read() ([]Packet, error) {
-	r.pending = r.pending[:0]
-	r.rxOff = 0
+func (r *Offload) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	maxP := len(p)
+	maxM := len(mem)
+	p = p[:0]
+	rxOff := 0
 
 	// Initial (blocking) read. Retry on decode errors so a single bad
 	// packet does not stall the reader.
 	for {
-		n, err := r.readPacket(true)
+		n, err := r.readPacket(mem, true)
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
-		if err := r.decodeRead(n); err != nil {
+		if p, err = r.decodeRead(p, mem, n); err != nil {
 			// Drop and read again — a bad packet should not kill the reader.
 			continue
 		}
+
+		rxOff += n
 		break
 	}
 
 	// Drain: non-blocking reads until the kernel queue is empty, the drain
 	// cap is reached, or rxBuf no longer has room for another worst-case
 	// kernel-supplied packet (tunRxBufSize).
-	for len(r.pending) < tunDrainCap && tunRxBufCap-r.rxOff >= tunRxBufSize {
-		n, err := r.readPacket(false)
+	for len(p) < maxP && maxM-rxOff >= tunRxBufSize {
+		n, err := r.readPacket(mem[rxOff:], false)
 		if err != nil {
 			// EAGAIN / EINTR / anything else: stop draining. We already
 			// have a valid batch from the first read.
@@ -268,14 +268,15 @@ func (r *Offload) Read() ([]Packet, error) {
 		if n <= 0 {
 			break
 		}
-		if err := r.decodeRead(n); err != nil {
+		if p, err = r.decodeRead(p, mem, n); err != nil {
 			// Drop this packet and stop the drain; we'd rather hand off
 			// what we have than keep spinning here.
 			break
 		}
+		rxOff += n
 	}
 
-	return r.pending, nil
+	return len(p), nil
 }
 
 // decodeRead processes the packet sitting in rxBuf at rxOff (length
@@ -285,24 +286,23 @@ func (r *Offload) Read() ([]Packet, error) {
 // caller can segment lazily at encrypt time. rxOff advances past the
 // kernel-supplied body and nothing else, since segmentation no longer
 // writes back into rxBuf.
-func (r *Offload) decodeRead(pktLen int) error {
+func (r *Offload) decodeRead(p []wire.TunPacket, mem []byte, pktLen int) ([]wire.TunPacket, error) {
 	if pktLen <= 0 {
-		return fmt.Errorf("short tun read: %d", pktLen)
+		return p, fmt.Errorf("short tun read: %d", pktLen)
 	}
 	var hdr virtio.Hdr
 	hdr.Decode(r.readVnetScratch[:])
 
-	body := r.rxBuf[r.rxOff : r.rxOff+pktLen]
+	body := mem[:pktLen]
 
 	if hdr.GSOType == unix.VIRTIO_NET_HDR_GSO_NONE {
 		if hdr.Flags&unix.VIRTIO_NET_HDR_F_NEEDS_CSUM != 0 {
 			if err := virtio.FinishChecksum(body, hdr); err != nil {
-				return err
+				return p, err
 			}
 		}
-		r.pending = append(r.pending, Packet{Bytes: body})
-		r.rxOff += pktLen
-		return nil
+		p = append(p, wire.TunPacket{Bytes: body})
+		return p, nil
 	}
 
 	// GSO superpacket: validate, fix the kernel-supplied HdrLen on the
@@ -310,26 +310,25 @@ func (r *Offload) decodeRead(pktLen int) error {
 	// the metadata. The bytes stay in rxBuf untouched, segmentation
 	// happens in SegmentSuperpacket at encrypt time.
 	if err := virtio.CheckValid(body, hdr); err != nil {
-		return err
+		return p, err
 	}
 	if err := virtio.CorrectHdrLen(body, &hdr); err != nil {
-		return err
+		return p, err
 	}
 	proto, err := protoFromGSOType(hdr.GSOType)
 	if err != nil {
-		return err
+		return p, err
 	}
-	r.pending = append(r.pending, Packet{
+	p = append(p, wire.TunPacket{
 		Bytes: body,
-		GSO: GSOInfo{
+		Meta: wire.GSOInfo{
 			Size:      hdr.GSOSize,
 			HdrLen:    hdr.HdrLen,
 			CsumStart: hdr.CsumStart,
 			Proto:     proto,
 		},
 	})
-	r.rxOff += pktLen
-	return nil
+	return p, nil
 }
 
 func (r *Offload) Write(buf []byte) (int, error) {
@@ -384,7 +383,7 @@ func (r *Offload) Capabilities() Capabilities {
 	return Capabilities{TSO: true, USO: r.usoEnabled}
 }
 
-func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto GSOProto) error {
+func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto wire.GSOProto) error {
 	if len(hdr) == 0 || len(pays) == 0 || len(transportHdr) == 0 {
 		return nil
 	}
@@ -392,7 +391,7 @@ func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto
 	// seq/ack/dataoff/flags/window), UDP=6 (after sport/dport/length).
 	var csumOff uint16
 	switch proto {
-	case GSOProtoUDP:
+	case wire.GSOProtoUDP:
 		csumOff = 6
 	default:
 		csumOff = 16
@@ -407,7 +406,7 @@ func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto
 	if len(pays) > 1 {
 		ipVer := hdr[0] >> 4
 		switch {
-		case proto == GSOProtoUDP && (ipVer == 4 || ipVer == 6):
+		case proto == wire.GSOProtoUDP && (ipVer == 4 || ipVer == 6):
 			vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_UDP_L4
 		case ipVer == 6:
 			vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_TCPV6

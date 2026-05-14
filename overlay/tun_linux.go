@@ -146,6 +146,11 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 	}
 	nameStr := c.GetString("tun.dev", "")
 
+	// First try to enable IFF_VNET_HDR via TUNSETIFF and negotiate TUN_F_*
+	// offloads via TUNSETOFFLOAD so we can receive TSO/USO superpackets.
+	// We try TSO+USO first, fall back to TSO-only on kernels without USO
+	// (Linux < 6.2), and finally give up on virtio headers entirely and
+	// reopen as a plain TUN if neither offload mask is accepted.
 	fd, err := openTunDev()
 	if err != nil {
 		return nil, err

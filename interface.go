@@ -283,7 +283,7 @@ func (f *Interface) activate() error {
 	}
 	f.readers = f.inside.Readers()
 	for i := range f.readers {
-		caps := tio.QueueCapabilities(f.readers[i])
+		caps := f.readers[i].Capabilities()
 		if caps.TSO || caps.USO {
 			// Multi-lane: TCP gets coalesced when TSO is on, UDP when USO
 			// is on, everything else (and either lane disabled) falls
@@ -387,7 +387,19 @@ func (f *Interface) listenIn(reader tio.Queue, q int) {
 		f.l.Warn("failed to pin tun reader to CPU", "queue", q, "cpu", cpu, "err", err)
 	}
 
+	const bonusInfo = 16
+	bufferScale := udp.MTU + bonusInfo
+	numTunPackets := 1
+	caps := reader.Capabilities()
+	if caps.TSO || caps.USO {
+		bufferScale = 65535 + bonusInfo
+		numTunPackets = f.batchSize
+	}
+
 	rejectBuf := make([]byte, mtu)
+	tunPackets := make([]wire.TunPacket, numTunPackets)
+	packetMem := make([]byte, bufferScale*numTunPackets)
+
 	arenaSize := batch.SendBatchCap * (udp.MTU + 32)
 	sb := batch.NewSendBatch(f.writers[q], batch.SendBatchCap, util.NewArena(arenaSize))
 	fwPacket := &firewall.Packet{}
@@ -396,7 +408,7 @@ func (f *Interface) listenIn(reader tio.Queue, q int) {
 	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
 
 	for {
-		n, err := reader.Read(packets, packetMem)
+		n, err := reader.Read(tunPackets, packetMem)
 		if err != nil {
 			if !f.closed.Load() {
 				f.l.Error("Error while reading outbound packet, closing", "error", err, "reader", q)
@@ -407,7 +419,7 @@ func (f *Interface) listenIn(reader tio.Queue, q int) {
 
 		ctCache := conntrackCache.Get()
 		for i := range n {
-			f.consumeInsidePacket(packets[i], fwPacket, nb, sb, rejectBuf, q, ctCache)
+			f.consumeInsidePacket(tunPackets[i], fwPacket, nb, sb, rejectBuf, q, ctCache)
 		}
 		if err := sb.Flush(); err != nil {
 			f.l.Error("Failed to write outgoing batch", "error", err, "writer", q)

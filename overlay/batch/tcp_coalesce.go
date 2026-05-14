@@ -10,6 +10,8 @@ import (
 	"slices"
 
 	"github.com/slackhq/nebula/overlay/tio"
+	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/wire"
 )
 
 // ipProtoTCP is the IANA protocol number for TCP. Hardcoded instead of
@@ -88,11 +90,11 @@ type TCPCoalescer struct {
 	// and tells it to release them via Reset on Flush. When wrapped in
 	// MultiCoalescer the same *Arena is shared with the other lanes so
 	// there's exactly one backing slab per Multi instance.
-	arena *Arena
+	arena *util.Arena
 	l     *slog.Logger
 }
 
-func NewTCPCoalescer(w io.Writer, l *slog.Logger, arena *Arena) *TCPCoalescer {
+func NewTCPCoalescer(w tio.Queue, l *slog.Logger, arena *util.Arena) *TCPCoalescer {
 	c := &TCPCoalescer{
 		plainW:    w,
 		slots:     make([]*coalesceSlot, 0, initialSlots),
@@ -101,7 +103,7 @@ func NewTCPCoalescer(w io.Writer, l *slog.Logger, arena *Arena) *TCPCoalescer {
 		arena:     arena,
 		l:         l,
 	}
-	if gw, ok := tio.SupportsGSO(w, tio.GSOProtoTCP); ok {
+	if gw, ok := tio.SupportsGSO(w, wire.GSOProtoTCP); ok {
 		c.gsoW = gw
 	}
 	return c
@@ -419,7 +421,7 @@ func (c *TCPCoalescer) flushSlot(s *coalesceSlot) error {
 	tcsum := s.ipHdrLen + 16
 	binary.BigEndian.PutUint16(hdr[tcsum:tcsum+2], foldOnceNoInvert(psum))
 
-	return c.gsoW.WriteGSO(hdr[:s.ipHdrLen], hdr[s.ipHdrLen:], s.payIovs, tio.GSOProtoTCP)
+	return c.gsoW.WriteGSO(hdr[:s.ipHdrLen], hdr[s.ipHdrLen:], s.payIovs, wire.GSOProtoTCP)
 }
 
 // headersMatch compares two IP+TCP header prefixes for byte-for-byte

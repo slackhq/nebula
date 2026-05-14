@@ -48,7 +48,7 @@ func (d *UserDevice) Read(p []wire.TunPacket, mem []byte) (int, error) {
 	if len(p) == 0 || len(mem) == 0 {
 		return 0, nil //todo should this be an err?
 	}
-	p[0].Meta = struct{}{}
+	p[0].Meta = wire.GSOInfo{}
 	n, err := d.outboundReader.Read(mem)
 	if err != nil {
 		return 0, err
