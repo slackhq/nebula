@@ -147,6 +147,62 @@ func buildCipherStatesB(b *testing.B, c noise.CipherFunc) (*noise.CipherState, *
 	return eI, dR
 }
 
+// TestDecryptDangerRelayShapeNoAlloc covers the AD-only relay path used in
+// outside.go's handleOutsideRelayPacket: the body is AD, the trailing 16 bytes
+// are the AEAD tag, the plaintext is empty, and the caller passes nil as the
+// destination because it only needs the auth side-effect. The call must
+// succeed, return an empty plaintext, and not allocate on the hot path.
+func TestDecryptDangerRelayShapeNoAlloc(t *testing.T) {
+	cases := []struct {
+		name string
+		c    noise.CipherFunc
+		wrap func(*noise.CipherState) CipherState
+	}{
+		{"AESGCM", CipherAESGCM, func(cs *noise.CipherState) CipherState { return NewCipherStateAESGCM(cs) }},
+		{"ChaChaPoly", noise.CipherChaChaPoly, func(cs *noise.CipherState) CipherState { return NewCipherStateChaChaPoly(cs) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			encCS, decCS := buildCipherStates(t, tc.c)
+			enc, dec := tc.wrap(encCS), tc.wrap(decCS)
+
+			ad := make([]byte, 1200) // typical relay packet body size
+			for i := range ad {
+				ad[i] = byte(i)
+			}
+			nb := make([]byte, 12)
+
+			// Build the "signature value" the way handleOutsideRelayPacket sees it:
+			// empty plaintext encrypted with the body as AD yields just the 16-byte tag.
+			tag, err := enc.EncryptDanger(nil, ad, nil, 1, nb)
+			require.NoError(t, err)
+			require.Len(t, tag, dec.Overhead())
+
+			// Sanity: the relay-shaped call returns empty plaintext, no error.
+			out, err := dec.DecryptDanger(nil, ad, tag, 1, nb)
+			require.NoError(t, err)
+			assert.Empty(t, out)
+
+			// Tampering with the AD must fail authentication.
+			ad[0] ^= 0xff
+			_, err = dec.DecryptDanger(nil, ad, tag, 1, nb)
+			require.Error(t, err)
+			ad[0] ^= 0xff
+
+			// The hot path must not allocate. AllocsPerRun does a warm-up run, so any
+			// one-time setup is excluded. Counter has to advance so the AEAD nonce is
+			// unique per call, but we don't care whether the auth succeeds — we only
+			// care about whether the call path allocates.
+			var counter uint64 = 2
+			allocs := testing.AllocsPerRun(100, func() {
+				_, _ = dec.DecryptDanger(nil, ad, tag, counter, nb)
+				counter++
+			})
+			assert.Equal(t, 0.0, allocs, "DecryptDanger(nil, ...) must not allocate")
+		})
+	}
+}
+
 func TestCipherStateNilSafety(t *testing.T) {
 	var aes *CipherStateAESGCM
 	_, err := aes.EncryptDanger(nil, nil, nil, 0, make([]byte, 12))
