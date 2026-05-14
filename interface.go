@@ -13,6 +13,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/overlay/tio"
+	"github.com/slackhq/nebula/wire"
 
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
@@ -326,7 +327,10 @@ func (f *Interface) listenOut(i int) {
 	f.l.Debug("underlay reader is done", "reader", i)
 }
 
-func (f *Interface) listenIn(reader tio.Queue, i int) {
+func (f *Interface) listenIn(reader tio.Queue, q int) {
+	packetMem := make([]byte, mtu+16) //MTU + some leading slack space for platforms that return "bonus info"
+	// TODO get the amount of bonus info from the reader
+	packets := make([]wire.TunPacket, 1)
 	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
@@ -334,22 +338,21 @@ func (f *Interface) listenIn(reader tio.Queue, i int) {
 	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
 
 	for {
-		pkts, err := reader.Read()
+		n, err := reader.Read(packets, packetMem)
 		if err != nil {
 			if !f.closed.Load() {
-				f.l.Error("Error while reading outbound packet, closing", "error", err, "reader", i)
+				f.l.Error("Error while reading outbound packet, closing", "error", err, "reader", q)
 				f.onFatal(err)
 			}
 			break
 		}
 		ctCache := conntrackCache.Get()
-		for _, pkt := range pkts {
-			f.consumeInsidePacket(pkt.Bytes, fwPacket, nb, out, i, ctCache)
+		for i := range n {
+			f.consumeInsidePacket(packets[i].Bytes, fwPacket, nb, out, q, ctCache)
 		}
-
 	}
 
-	f.l.Debug("overlay reader is done", "reader", i)
+	f.l.Debug("overlay reader is done", "reader", q)
 }
 
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {

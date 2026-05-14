@@ -16,6 +16,7 @@ import (
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/wire"
 )
 
 type tun struct {
@@ -25,18 +26,19 @@ type tun struct {
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *slog.Logger
-
-	readBuf  []byte
-	batchRet [1]tio.Packet
 }
 
-func (t *tun) Read() ([]tio.Packet, error) {
-	n, err := t.rwc.Read(t.readBuf)
-	if err != nil {
-		return nil, err
+func (t *tun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) == 0 {
+		return 0, nil //todo should this be an err?
 	}
-	t.batchRet[0] = tio.Packet{Bytes: t.readBuf[:n]}
-	return t.batchRet[:], nil
+	p[0].Meta = struct{}{}
+	n, err := t.rwc.Read(mem)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[:n]
+	return 1, nil
 }
 
 func (t *tun) Write(p []byte) (int, error) {
@@ -57,7 +59,6 @@ func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip
 		fd:          deviceFd,
 		vpnNetworks: vpnNetworks,
 		l:           l,
-		readBuf:     make([]byte, defaultBatchBufSize),
 	}
 
 	err := t.reload(c, true)

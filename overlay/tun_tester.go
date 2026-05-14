@@ -17,6 +17,7 @@ import (
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/udp"
+	"github.com/slackhq/nebula/wire"
 )
 
 type TestTun struct {
@@ -29,8 +30,6 @@ type TestTun struct {
 	closed    atomic.Bool
 	rxPackets chan []byte // Packets to receive into nebula
 	TxPackets chan []byte // Packets transmitted outside by nebula
-
-	batchRet [1]tio.Packet
 }
 
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*TestTun, error) {
@@ -51,9 +50,6 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*T
 		l:           l,
 		rxPackets:   make(chan []byte, 10),
 		TxPackets:   make(chan []byte, 10),
-		batchRet: [1]tio.Packet{
-			tio.Packet{Bytes: make([]byte, udp.MTU)},
-		},
 	}, nil
 }
 
@@ -168,14 +164,17 @@ func (t *TestTun) Close() error {
 	return nil
 }
 
-func (t *TestTun) Read() ([]tio.Packet, error) {
-	t.batchRet[0].Bytes = t.batchRet[0].Bytes[:udp.MTU]
-	n, err := t.read(t.batchRet[0].Bytes)
-	if err != nil {
-		return nil, err
+func (t *TestTun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) == 0 {
+		return 0, nil //todo should this be an err?
 	}
-	t.batchRet[0].Bytes = t.batchRet[0].Bytes[:n]
-	return t.batchRet[:], nil
+	p[0].Meta = struct{}{}
+	n, err := t.read(mem)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[:n]
+	return 1, nil
 }
 
 func (t *TestTun) read(b []byte) (int, error) {

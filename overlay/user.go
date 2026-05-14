@@ -9,6 +9,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
+	"github.com/slackhq/nebula/wire"
 )
 
 func NewUserDeviceFromConfig(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, routines int) (Device, error) {
@@ -37,25 +38,23 @@ type UserDevice struct {
 
 	inboundReader *io.PipeReader
 	inboundWriter *io.PipeWriter
-
-	readBuf  []byte
-	batchRet [1]tio.Packet
 }
 
 func (d *UserDevice) Capabilities() tio.Capabilities {
 	return tio.Capabilities{}
 }
 
-func (d *UserDevice) Read() ([]tio.Packet, error) {
-	if d.readBuf == nil {
-		d.readBuf = make([]byte, defaultBatchBufSize)
+func (d *UserDevice) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) == 0 {
+		return 0, nil //todo should this be an err?
 	}
-	n, err := d.outboundReader.Read(d.readBuf)
+	p[0].Meta = struct{}{}
+	n, err := d.outboundReader.Read(mem)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	d.batchRet[0] = tio.Packet{Bytes: d.readBuf[:n]}
-	return d.batchRet[:], nil
+	p[0].Bytes = mem[:n]
+	return 1, nil
 }
 
 func (d *UserDevice) Activate() error {

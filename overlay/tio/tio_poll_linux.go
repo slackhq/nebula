@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/slackhq/nebula/wire"
 	"golang.org/x/sys/unix"
 )
 
@@ -16,9 +17,6 @@ type Poll struct {
 	writePoll [2]unix.PollFd
 	writeLock sync.Mutex
 	closed    atomic.Bool
-
-	readBuf  []byte
-	batchRet [1]Packet
 }
 
 func newPoll(fd int, shutdownFd int) (*Poll, error) {
@@ -28,8 +26,7 @@ func newPoll(fd int, shutdownFd int) (*Poll, error) {
 	}
 
 	out := &Poll{
-		fd:      fd,
-		readBuf: make([]byte, 65535),
+		fd: fd,
 		readPoll: [2]unix.PollFd{
 			{Fd: int32(fd), Events: unix.POLLIN},
 			{Fd: int32(shutdownFd), Events: unix.POLLIN},
@@ -97,13 +94,17 @@ func (t *Poll) blockOnWrite() error {
 	return nil
 }
 
-func (t *Poll) Read() ([]Packet, error) {
-	n, err := t.readOne(t.readBuf)
-	if err != nil {
-		return nil, err
+func (t *Poll) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) == 0 {
+		return 0, nil //todo should this be an err?
 	}
-	t.batchRet[0] = Packet{Bytes: t.readBuf[:n]}
-	return t.batchRet[:], nil
+	p[0].Meta = struct{}{}
+	n, err := t.readOne(mem)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[:n]
+	return 1, nil
 }
 
 func (t *Poll) readOne(to []byte) (int, error) {
@@ -163,5 +164,5 @@ func (t *Poll) Close() error {
 }
 
 func (t *Poll) Capabilities() Capabilities {
-	return Capabilities{TSO: false, USO: false}
+	return Capabilities{}
 }

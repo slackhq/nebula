@@ -19,6 +19,7 @@ import (
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/wire"
 	netroute "golang.org/x/net/route"
 	"golang.org/x/sys/unix"
 )
@@ -35,9 +36,6 @@ type tun struct {
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
 	out []byte
-
-	readBuf  []byte
-	batchRet [1]tio.Packet
 }
 
 type ifReq struct {
@@ -133,7 +131,6 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		vpnNetworks: vpnNetworks,
 		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
 		l:           l,
-		readBuf:     make([]byte, defaultBatchBufSize),
 	}
 
 	err = t.reload(c, true)
@@ -507,22 +504,17 @@ func delRoute(prefix netip.Prefix, gateway netroute.Addr) error {
 	return nil
 }
 
-func (t *tun) readOne(to []byte) (int, error) {
-	buf := make([]byte, len(to)+4)
-
-	n, err := t.rwc.Read(buf)
-
-	copy(to, buf[4:])
-	return n - 4, err
-}
-
-func (t *tun) Read() ([]tio.Packet, error) {
-	n, err := t.readOne(t.readBuf)
-	if err != nil {
-		return nil, err
+func (t *tun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) <= 4 {
+		return 0, nil //todo should this be an err?
 	}
-	t.batchRet[0] = tio.Packet{Bytes: t.readBuf[:n]}
-	return t.batchRet[:], nil
+	p[0].Meta = struct{}{}
+	n, err := t.rwc.Read(mem)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[4:n]
+	return 1, nil
 }
 
 // Write is only valid for single threaded use
