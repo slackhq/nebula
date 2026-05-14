@@ -114,7 +114,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, packet []byte, h *header.H
 		return
 	}
 
-	out := f.batchers[q].Reserve(len(packet))
+	out := f.batchers[q].Reserve(len(packet))[:0]
 	out, err = f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
 	if err != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
