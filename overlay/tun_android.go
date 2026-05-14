@@ -128,3 +128,7 @@ func (t *tun) NewMultiQueueReader() error {
 func (t *tun) Readers() []tio.Queue {
 	return []tio.Queue{t}
 }
+
+func (t *tun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
+}

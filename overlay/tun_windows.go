@@ -284,6 +284,10 @@ func (t *winTun) Readers() []tio.Queue {
 	return []tio.Queue{t}
 }
 
+func (t *winTun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
+}
+
 func (t *winTun) Close() error {
 	// It seems that the Windows networking stack doesn't like it when we destroy interfaces that have active routes,
 	// so to be certain, just remove everything before destroying.

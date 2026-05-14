@@ -84,6 +84,10 @@ func (t *tun) Readers() []tio.Queue {
 	return []tio.Queue{t}
 }
 
+func (t *tun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
+}
+
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
 
 func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*tun, error) {

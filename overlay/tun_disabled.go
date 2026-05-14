@@ -33,6 +33,10 @@ type disabledQueue struct {
 	batchRet [1]tio.Packet
 }
 
+func (q *disabledQueue) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
+}
+
 func (q *disabledQueue) Read() ([]tio.Packet, error) {
 	r, ok := <-q.parent.read
 	if !ok {

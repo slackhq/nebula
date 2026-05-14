@@ -42,6 +42,10 @@ type UserDevice struct {
 	batchRet [1]tio.Packet
 }
 
+func (d *UserDevice) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
+}
+
 func (d *UserDevice) Read() ([]tio.Packet, error) {
 	if d.readBuf == nil {
 		d.readBuf = make([]byte, defaultBatchBufSize)
