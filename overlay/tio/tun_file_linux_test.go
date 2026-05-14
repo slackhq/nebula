@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slackhq/nebula/wire"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
@@ -27,16 +28,13 @@ func newReadPipe(t *testing.T) int {
 }
 
 func TestPoll_WakeForShutdown_WakesFriends(t *testing.T) {
-	pipe1 := newReadPipe(t)
-	pipe2 := newReadPipe(t)
 	parent, err := NewPollQueueSet()
 	require.NoError(t, err)
-	require.NoError(t, parent.Add(pipe1))
-	require.NoError(t, parent.Add(pipe2))
-	t.Cleanup(func() {
-		_ = unix.Close(pipe1)
-		_ = unix.Close(pipe2)
-	})
+	require.NoError(t, parent.Add(newReadPipe(t)))
+	require.NoError(t, parent.Add(newReadPipe(t)))
+	// QueueSet.Close owns the read fds we Added — don't register a separate
+	// Cleanup to close them or we'll double-close whatever fd the kernel
+	// has since reused.
 
 	readers := parent.Queues()
 	errs := make([]error, len(readers))
@@ -45,7 +43,8 @@ func TestPoll_WakeForShutdown_WakesFriends(t *testing.T) {
 		wg.Add(1)
 		go func(i int, r Queue) {
 			defer wg.Done()
-			_, errs[i] = r.Read()
+			pkts := make([]wire.TunPacket, 1)
+			_, errs[i] = r.Read(pkts, make([]byte, 64))
 		}(i, r)
 	}
 
@@ -71,7 +70,11 @@ func TestPoll_WakeForShutdown_WakesFriends(t *testing.T) {
 }
 
 func TestPoll_Close_Idempotent(t *testing.T) {
-	tf, err := newPoll(newReadPipe(t), 1)
+	shutdownFd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = unix.Close(shutdownFd) })
+
+	tf, err := newPoll(newReadPipe(t), shutdownFd)
 	require.NoError(t, err)
 	if err := tf.Close(); err != nil {
 		t.Fatalf("first Close: %v", err)
