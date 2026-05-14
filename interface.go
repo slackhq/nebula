@@ -342,8 +342,9 @@ func (f *Interface) listenIn(reader tio.Queue, i int) {
 			}
 			break
 		}
+		ctCache := conntrackCache.Get()
 		for _, pkt := range pkts {
-			f.consumeInsidePacket(pkt.Bytes, fwPacket, nb, out, i, conntrackCache.Get())
+			f.consumeInsidePacket(pkt.Bytes, fwPacket, nb, out, i, ctCache)
 		}
 
 	}
