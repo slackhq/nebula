@@ -27,6 +27,7 @@ func Test_signHelp(t *testing.T) {
 	assert.Equal(
 		t,
 		"Usage of "+os.Args[0]+" sign <flags>: create and sign a certificate\n"+
+			"  Pass \"-\" to any path flag to read from stdin or write to stdout.\n"+
 			"  -ca-crt string\n"+
 			"    \tOptional: path to the signing CA cert (default \"ca.crt\")\n"+
 			"  -ca-key string\n"+
@@ -376,15 +377,18 @@ func Test_signCert(t *testing.T) {
 	// test with the proper password
 	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", crtF.Name(), "-out-key", keyF.Name(), "-duration", "100m", "-subnets", "10.1.1.1/32, ,   10.2.2.2/32   ,   ,  ,, 10.5.5.5/32", "-groups", "1,,   2    ,        ,,,3,4,5"}
 	require.NoError(t, signCert(args, ob, eb, testpw))
-	assert.Equal(t, "Enter passphrase: ", ob.String())
-	assert.Empty(t, eb.String())
+	assert.Empty(t, ob.String())
+	assert.Equal(t, "Enter passphrase: ", eb.String())
 
 	// test with the proper password in the environment
 	os.Remove(crtF.Name())
 	os.Remove(keyF.Name())
 	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", crtF.Name(), "-out-key", keyF.Name(), "-duration", "100m", "-subnets", "10.1.1.1/32, ,   10.2.2.2/32   ,   ,  ,, 10.5.5.5/32", "-groups", "1,,   2    ,        ,,,3,4,5"}
 	os.Setenv("NEBULA_CA_PASSPHRASE", string(passphrase))
+	ob.Reset()
+	eb.Reset()
 	require.NoError(t, signCert(args, ob, eb, testpw))
+	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 	os.Setenv("NEBULA_CA_PASSPHRASE", "")
 
@@ -395,8 +399,8 @@ func Test_signCert(t *testing.T) {
 	testpw.password = []byte("invalid password")
 	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", crtF.Name(), "-out-key", keyF.Name(), "-duration", "100m", "-subnets", "10.1.1.1/32, ,   10.2.2.2/32   ,   ,  ,, 10.5.5.5/32", "-groups", "1,,   2    ,        ,,,3,4,5"}
 	require.Error(t, signCert(args, ob, eb, testpw))
-	assert.Equal(t, "Enter passphrase: ", ob.String())
-	assert.Empty(t, eb.String())
+	assert.Empty(t, ob.String())
+	assert.Equal(t, "Enter passphrase: ", eb.String())
 
 	// test with the wrong password in environment
 	ob.Reset()
@@ -416,8 +420,8 @@ func Test_signCert(t *testing.T) {
 	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", crtF.Name(), "-out-key", keyF.Name(), "-duration", "100m", "-subnets", "10.1.1.1/32, ,   10.2.2.2/32   ,   ,  ,, 10.5.5.5/32", "-groups", "1,,   2    ,        ,,,3,4,5"}
 	require.Error(t, signCert(args, ob, eb, nopw))
 	// normally the user hitting enter on the prompt would add newlines between these
-	assert.Equal(t, "Enter passphrase: Enter passphrase: Enter passphrase: Enter passphrase: Enter passphrase: ", ob.String())
-	assert.Empty(t, eb.String())
+	assert.Empty(t, ob.String())
+	assert.Equal(t, "Enter passphrase: Enter passphrase: Enter passphrase: Enter passphrase: Enter passphrase: ", eb.String())
 
 	// test an error condition
 	ob.Reset()
@@ -425,6 +429,106 @@ func Test_signCert(t *testing.T) {
 
 	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "test", "-ip", "1.1.1.1/24", "-out-crt", crtF.Name(), "-out-key", keyF.Name(), "-duration", "100m", "-subnets", "10.1.1.1/32, ,   10.2.2.2/32   ,   ,  ,, 10.5.5.5/32", "-groups", "1,,   2    ,        ,,,3,4,5"}
 	require.Error(t, signCert(args, ob, eb, errpw))
-	assert.Equal(t, "Enter passphrase: ", ob.String())
+	assert.Empty(t, ob.String())
+	assert.Equal(t, "Enter passphrase: ", eb.String())
+}
+
+func Test_signCert_stdio(t *testing.T) {
+	nopw := &StubPasswordReader{
+		password: []byte(""),
+		err:      nil,
+	}
+
+	caPub, caPriv, _ := ed25519.GenerateKey(rand.Reader)
+	rawCAKey := cert.MarshalSigningPrivateKeyToPEM(cert.Curve_CURVE25519, caPriv)
+
+	ca, _ := NewTestCaCert("ca", caPub, caPriv, time.Now(), time.Now().Add(time.Minute*200), nil, nil, nil)
+	rawCACrt, _ := ca.MarshalPEM()
+
+	caCrtF, err := os.CreateTemp("", "sign-cert.crt")
+	require.NoError(t, err)
+	defer os.Remove(caCrtF.Name())
+	caCrtF.Write(rawCACrt)
+
+	caKeyF, err := os.CreateTemp("", "sign-cert.key")
+	require.NoError(t, err)
+	defer os.Remove(caKeyF.Name())
+	caKeyF.Write(rawCAKey)
+
+	keyF, err := os.CreateTemp("", "sign.key")
+	require.NoError(t, err)
+	os.Remove(keyF.Name())
+	defer os.Remove(keyF.Name())
+
+	// ca-key on stdin, cert to stdout
+	withStdin(t, bytes.NewReader(rawCAKey))
+	ob := &bytes.Buffer{}
+	eb := &bytes.Buffer{}
+	args := []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", "-", "-name", "stdin-test", "-ip", "1.1.1.1/24", "-out-crt", "-", "-out-key", keyF.Name(), "-duration", "100m"}
+	require.NoError(t, signCert(args, ob, eb, nopw))
 	assert.Empty(t, eb.String())
+
+	lCrt, _, err := cert.UnmarshalCertificateFromPEM(ob.Bytes())
+	require.NoError(t, err)
+	assert.Equal(t, "stdin-test", lCrt.Name())
+	assert.True(t, lCrt.CheckSignature(caPub))
+
+	// two flags reading from stdin should error before any read attempt;
+	// otherwise an interactive shell would hang on io.ReadAll
+	stdinIn := bytes.NewReader(rawCAKey)
+	withStdin(t, stdinIn)
+	ob.Reset()
+	eb.Reset()
+	args = []string{"-version", "1", "-ca-crt", "-", "-ca-key", "-", "-name", "stdin-test", "-ip", "1.1.1.1/24", "-out-crt", "nope", "-out-key", "nope", "-duration", "100m"}
+	require.EqualError(t, signCert(args, ob, eb, nopw),
+		`-ca-key and -ca-crt both set to "-", only one input may read from stdin`)
+	assert.Equal(t, len(rawCAKey), stdinIn.Len(), "stdin should be untouched when conflict is caught up front")
+
+	// two flags writing to stdout should error before any output is written
+	// AND before stdin is consumed
+	stdinR := bytes.NewReader(rawCAKey)
+	withStdin(t, stdinR)
+	ob.Reset()
+	eb.Reset()
+	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", "-", "-name", "stdin-test", "-ip", "1.1.1.1/24", "-out-crt", "-", "-out-key", "-", "-duration", "100m"}
+	require.EqualError(t, signCert(args, ob, eb, nopw),
+		`-out-key and -out-crt both set to "-", only one output may write to stdout`)
+	assert.Empty(t, ob.String())
+	// stdin should be untouched because the conflict was caught up front
+	assert.Equal(t, len(rawCAKey), stdinR.Len())
+
+	// out-key on stdout, cert on disk
+	keyF2, err := os.CreateTemp("", "sign.key")
+	require.NoError(t, err)
+	os.Remove(keyF2.Name())
+	defer os.Remove(keyF2.Name())
+	crtF, err := os.CreateTemp("", "sign.crt")
+	require.NoError(t, err)
+	os.Remove(crtF.Name())
+	defer os.Remove(crtF.Name())
+
+	ob.Reset()
+	eb.Reset()
+	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "stdin-test", "-ip", "1.1.1.1/24", "-out-crt", crtF.Name(), "-out-key", "-", "-duration", "100m"}
+	require.NoError(t, signCert(args, ob, eb, nopw))
+	assert.Empty(t, eb.String())
+	_, _, curve, err := cert.UnmarshalPrivateKeyFromPEM(ob.Bytes())
+	require.NoError(t, err)
+	assert.Equal(t, cert.Curve_CURVE25519, curve)
+
+	// in-pub on stdin (caller already has a keypair, only the cert is generated)
+	inPub, _ := x25519Keypair()
+	rawInPub := cert.MarshalPublicKeyToPEM(cert.Curve_CURVE25519, inPub)
+
+	withStdin(t, bytes.NewReader(rawInPub))
+	os.Remove(crtF.Name())
+	ob.Reset()
+	eb.Reset()
+	args = []string{"-version", "1", "-ca-crt", caCrtF.Name(), "-ca-key", caKeyF.Name(), "-name", "in-pub-test", "-ip", "1.1.1.1/24", "-in-pub", "-", "-out-crt", "-", "-duration", "100m"}
+	require.NoError(t, signCert(args, ob, eb, nopw))
+	assert.Empty(t, eb.String())
+	stdinCrt, _, err := cert.UnmarshalCertificateFromPEM(ob.Bytes())
+	require.NoError(t, err)
+	assert.Equal(t, "in-pub-test", stdinCrt.Name())
+	assert.Equal(t, inPub, stdinCrt.PublicKey())
 }

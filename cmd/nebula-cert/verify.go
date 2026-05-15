@@ -39,18 +39,26 @@ func verify(args []string, out io.Writer, errOut io.Writer) error {
 		return err
 	}
 
-	caFile, err := os.Open(*vf.caPath)
+	var claims ioClaims
+	if err := reserveInputs(&claims,
+		"ca", *vf.caPath,
+		"crt", *vf.certPath,
+	); err != nil {
+		return err
+	}
+
+	caReader, err := openInput("ca", *vf.caPath, &claims)
 	if err != nil {
 		return fmt.Errorf("error while reading ca: %w", err)
 	}
-	defer caFile.Close()
+	defer caReader.Close()
 
-	caPool, err := cert.NewCAPoolFromPEMReader(caFile)
+	caPool, err := cert.NewCAPoolFromPEMReader(caReader)
 	if err != nil && !errors.Is(err, cert.ErrExpired) {
 		return fmt.Errorf("error while adding ca cert to pool: %w", err)
 	}
 
-	rawCert, err := os.ReadFile(*vf.certPath)
+	rawCert, err := readInput("crt", *vf.certPath, &claims)
 	if err != nil {
 		return fmt.Errorf("unable to read crt: %w", err)
 	}
@@ -85,6 +93,7 @@ func verifySummary() string {
 func verifyHelp(out io.Writer) {
 	vf := newVerifyFlags()
 	_, _ = out.Write([]byte("Usage of " + os.Args[0] + " " + verifySummary() + "\n"))
+	_, _ = out.Write([]byte(stdioHelpText))
 	vf.set.SetOutput(out)
 	vf.set.PrintDefaults()
 }
