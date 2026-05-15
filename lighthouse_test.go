@@ -303,6 +303,132 @@ func TestLighthouse_reload(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestLighthouse_reloadStaticHostMap verifies that reloading static_host_map applies the new
+// config rather than appending to it. See issue #718.
+func TestLighthouse_reloadStaticHostMap(t *testing.T) {
+	l := test.NewLogger()
+	c := config.NewC(l)
+	c.Settings["lighthouse"] = map[string]any{"am_lighthouse": true}
+	c.Settings["listen"] = map[string]any{"port": 4242}
+	c.Settings["static_host_map"] = map[string]any{
+		"10.128.0.2": []any{"1.1.1.1:4242"},
+	}
+
+	myVpnNet := netip.MustParsePrefix("10.128.0.1/24")
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
+	cs := &CertState{
+		myVpnNetworks:      []netip.Prefix{myVpnNet},
+		myVpnNetworksTable: nt,
+	}
+
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, cs, nil, nil)
+	require.NoError(t, err)
+
+	staticHost := netip.MustParseAddr("10.128.0.2")
+	otherHost := netip.MustParseAddr("10.128.0.3")
+
+	// Capture the RemoteList pointer up front; an in-flight handshake would hold the same one
+	// on hostinfo.remotes, so it must reflect every reload below.
+	pinned := lh.Query(staticHost)
+	require.NotNil(t, pinned)
+	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("1.1.1.1:4242")}, pinned.CopyAddrs([]netip.Prefix{}))
+
+	// Replace the remote address. The new address should be the only entry.
+	nc := map[string]any{
+		"static_host_map": map[string]any{
+			"10.128.0.2": []any{"2.2.2.2:4242"},
+		},
+	}
+	rc, err := yaml.Marshal(nc)
+	require.NoError(t, err)
+	require.NoError(t, c.ReloadConfigString(string(rc)))
+
+	rl := lh.Query(staticHost)
+	require.NotNil(t, rl)
+	assert.Same(t, pinned, rl, "RemoteList pointer must stay stable so in-flight handshakes pick up the change")
+	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("2.2.2.2:4242")}, rl.CopyAddrs([]netip.Prefix{}))
+
+	// Reload back to the original IP. Mirrors the round-trip in issue #718 step 6-8 where
+	// the buggy reload produced [1.1.1.1, 2.2.2.2, 1.1.1.1] instead of [1.1.1.1].
+	nc = map[string]any{
+		"static_host_map": map[string]any{
+			"10.128.0.2": []any{"1.1.1.1:4242"},
+		},
+	}
+	rc, err = yaml.Marshal(nc)
+	require.NoError(t, err)
+	require.NoError(t, c.ReloadConfigString(string(rc)))
+
+	rl = lh.Query(staticHost)
+	require.NotNil(t, rl)
+	assert.Same(t, pinned, rl)
+	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("1.1.1.1:4242")}, rl.CopyAddrs([]netip.Prefix{}))
+
+	// Reload with the same config. An unchanged entry must not duplicate.
+	require.NoError(t, c.ReloadConfigString(string(rc)))
+
+	rl = lh.Query(staticHost)
+	require.NotNil(t, rl)
+	assert.Same(t, pinned, rl)
+	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("1.1.1.1:4242")}, rl.CopyAddrs([]netip.Prefix{}))
+
+	// Switch back to 2.2.2.2 so the rest of the test continues against a known address.
+	nc = map[string]any{
+		"static_host_map": map[string]any{
+			"10.128.0.2": []any{"2.2.2.2:4242"},
+		},
+	}
+	rc, err = yaml.Marshal(nc)
+	require.NoError(t, err)
+	require.NoError(t, c.ReloadConfigString(string(rc)))
+
+	// Add a second host alongside the first. Both should be present, neither duplicated.
+	nc = map[string]any{
+		"static_host_map": map[string]any{
+			"10.128.0.2": []any{"2.2.2.2:4242"},
+			"10.128.0.3": []any{"3.3.3.3:4242"},
+		},
+	}
+	rc, err = yaml.Marshal(nc)
+	require.NoError(t, err)
+	require.NoError(t, c.ReloadConfigString(string(rc)))
+
+	rl = lh.Query(staticHost)
+	require.NotNil(t, rl)
+	assert.Same(t, pinned, rl, "adding a sibling entry must not displace the existing RemoteList")
+	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("2.2.2.2:4242")}, rl.CopyAddrs([]netip.Prefix{}))
+
+	rl = lh.Query(otherHost)
+	require.NotNil(t, rl)
+	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("3.3.3.3:4242")}, rl.CopyAddrs([]netip.Prefix{}))
+
+	// Drop the first host entirely. The vpnAddr is no longer marked static, our owner
+	// contribution is cleared, but the addrMap entry stays in place so non-static cache
+	// data (from lighthouse queries) on the same RemoteList isn't lost. In-flight handshakes
+	// that already had the pointer see an empty address list rather than retrying stale ones.
+	nc = map[string]any{
+		"static_host_map": map[string]any{
+			"10.128.0.3": []any{"3.3.3.3:4242"},
+		},
+	}
+	rc, err = yaml.Marshal(nc)
+	require.NoError(t, err)
+	require.NoError(t, c.ReloadConfigString(string(rc)))
+
+	_, isStatic := lh.GetStaticHostList()[staticHost]
+	assert.False(t, isStatic)
+
+	rl = lh.Query(staticHost)
+	require.NotNil(t, rl)
+	assert.Same(t, pinned, rl)
+	assert.Empty(t, rl.CopyAddrs([]netip.Prefix{}))
+
+	rl = lh.Query(otherHost)
+	require.NotNil(t, rl)
+	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("3.3.3.3:4242")}, rl.CopyAddrs([]netip.Prefix{}))
+}
+
 func newLHHostRequest(fromAddr netip.AddrPort, myVpnIp, queryVpnIp netip.Addr, lhh *LightHouseHandler) testLhReply {
 	req := &NebulaMeta{
 		Type:    NebulaMeta_HostQuery,

@@ -272,21 +272,38 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 	//NOTE: many things will get much simpler when we combine static_host_map and lighthouse.hosts in config
 	if initial || c.HasChanged("static_host_map") || c.HasChanged("static_map.cadence") || c.HasChanged("static_map.network") || c.HasChanged("static_map.lookup_timeout") {
 		// Clean up. Entries still in the static_host_map will be re-built.
-		// Entries no longer present must have their (possible) background DNS goroutines stopped.
-		if existingStaticList := lh.staticList.Load(); existingStaticList != nil {
+		ourselves := lh.myVpnNetworks[0].Addr()
+		oldStaticList := lh.staticList.Load()
+		if oldStaticList != nil {
 			lh.RLock()
-			for staticVpnAddr := range *existingStaticList {
+			for staticVpnAddr := range *oldStaticList {
 				if am, ok := lh.addrMap[staticVpnAddr]; ok && am != nil {
-					am.hr.Cancel()
+					am.ResetForOwner(ourselves)
 				}
 			}
 			lh.RUnlock()
 		}
+
 		// Build a new list based on current config.
 		staticList := make(map[netip.Addr]struct{})
 		err := lh.loadStaticMap(c, staticList)
 		if err != nil {
 			return err
+		}
+
+		// For entries removed from static_host_map, stop the DNS goroutine and drop the cached addrs.
+		// All addrs must come from the lighthouses now that it's no longer a static host.
+		if oldStaticList != nil {
+			lh.RLock()
+			for staticVpnAddr := range *oldStaticList {
+				if _, stillStatic := staticList[staticVpnAddr]; stillStatic {
+					continue
+				}
+				if am, ok := lh.addrMap[staticVpnAddr]; ok && am != nil {
+					am.ClearHostnameResults()
+				}
+			}
+			lh.RUnlock()
 		}
 
 		lh.staticList.Store(&staticList)
