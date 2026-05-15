@@ -491,26 +491,34 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 	certInitiatingVersion := metrics.GetOrRegisterGauge("certificate.initiating_version", nil)
 	certMaxVersion := metrics.GetOrRegisterGauge("certificate.max_version", nil)
 
+	emit := func() {
+		f.firewall.EmitStats()
+		f.handshakeManager.EmitStats()
+		udpStats()
+
+		certState := f.pki.getCertState()
+		defaultCrt := certState.GetDefaultCertificate()
+		certExpirationGauge.Update(int64(defaultCrt.NotAfter().Sub(time.Now()) / time.Second))
+		certInitiatingVersion.Update(int64(defaultCrt.Version()))
+
+		// Report the max certificate version we are capable of using
+		if certState.v2Cert != nil {
+			certMaxVersion.Update(int64(certState.v2Cert.Version()))
+		} else {
+			certMaxVersion.Update(int64(certState.v1Cert.Version()))
+		}
+	}
+
+	// Prime gauges so a Prometheus scrape that lands before the first tick
+	// sees real values instead of the zero defaults (issue #907).
+	emit()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			f.firewall.EmitStats()
-			f.handshakeManager.EmitStats()
-			udpStats()
-
-			certState := f.pki.getCertState()
-			defaultCrt := certState.GetDefaultCertificate()
-			certExpirationGauge.Update(int64(defaultCrt.NotAfter().Sub(time.Now()) / time.Second))
-			certInitiatingVersion.Update(int64(defaultCrt.Version()))
-
-			// Report the max certificate version we are capable of using
-			if certState.v2Cert != nil {
-				certMaxVersion.Update(int64(certState.v2Cert.Version()))
-			} else {
-				certMaxVersion.Update(int64(certState.v1Cert.Version()))
-			}
+			emit()
 		}
 	}
 }
