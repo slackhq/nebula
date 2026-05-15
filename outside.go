@@ -13,6 +13,7 @@ import (
 
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/udp"
 	"golang.org/x/net/ipv4"
 )
 
@@ -22,7 +23,7 @@ const (
 
 var ErrOutOfWindow = errors.New("out of window packet")
 
-func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
 	err := h.Parse(packet)
 	if err != nil {
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
@@ -110,8 +111,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	// Relay packets are special
 	if isMessageRelay {
-		f.handleOutsideRelayPacket(hostinfo, via, out, packet, h, fwPacket, lhf, nb, q, localCache)
-
+		f.handleOutsideRelayPacket(hostinfo, via, out, packet, h, fwPacket, lhf, nb, q, localCache, meta)
 		return
 	}
 
@@ -135,7 +135,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	case header.Message:
 		switch h.Subtype {
 		case header.MessageNone:
-			f.handleOutsideMessagePacket(hostinfo, out, packet, fwPacket, nb, q, localCache)
+			f.handleOutsideMessagePacket(hostinfo, out, packet, fwPacket, nb, q, localCache, meta)
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected message subtype seen", "from", via, "header", h)
 			return
@@ -168,7 +168,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	}
 }
 
-func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
 	// The entire body is sent as AD, not encrypted.
 	// The packet consists of a 16-byte parsed Nebula header, Associated Data-protected payload, and a trailing 16-byte AEAD signature value.
 	// The packet is guaranteed to be at least 16 bytes at this point, b/c it got past the h.Parse() call above. If it's
@@ -211,7 +211,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 			relay:     relay,
 			IsRelayed: true,
 		}
-		f.readOutsidePackets(via, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
+		f.readOutsidePackets(via, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache, meta)
 	case ForwardingType:
 		// Find the target HostInfo relay object
 		targetHI, targetRelay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relay.PeerAddr)
@@ -229,7 +229,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 			switch targetRelay.Type {
 			case ForwardingType:
 				// Forward this packet through the relay tunnel
-				// Find the target HostInfo
+				// Find the target HostInfo //todo it would potentially be nice to batch these
 				f.SendVia(targetHI, targetRelay, signedPayload, nb, out, false)
 			case TerminalType:
 				hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
@@ -512,7 +512,61 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	return out, nil
 }
 
-func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) {
+// 2-bit IP-level ECN codepoints (lower bits of IPv4 ToS / IPv6 TC).
+const (
+	ecnNotECT = 0x00
+	ecnECT1   = 0x01
+	ecnECT0   = 0x02
+	ecnCE     = 0x03
+)
+
+// applyOuterECN folds an outer CE mark from the underlay into the inner
+// IP header per RFC 6040 normal mode. It mutates pkt[1] in place. Other
+// codepoints are advisory only and leave the inner unchanged.
+//
+// Merge cases (outer × inner → action):
+//
+//	outer != CE                : no-op (inner is authoritative)
+//	outer == CE, inner Not-ECT : log; cannot propagate to a non-ECN host
+//	outer == CE, inner ECT/CE  : rewrite inner ECN to CE
+func applyOuterECN(pkt []byte, outerECN byte, hostinfo *HostInfo, l *slog.Logger) {
+	if outerECN&ecnCE != ecnCE || len(pkt) < 2 {
+		return
+	}
+	switch pkt[0] >> 4 {
+	case 4:
+		switch pkt[1] & 0x03 {
+		case ecnNotECT:
+			if l.Enabled(context.Background(), slog.LevelDebug) {
+				hostinfo.logger(l).Debug("RFC 6040: outer CE on inner Not-ECT, leaving inner unchanged")
+			}
+		case ecnCE:
+			// Already CE.
+		default:
+			pkt[1] = (pkt[1] &^ 0x03) | ecnCE
+		}
+	case 6:
+		switch (pkt[1] >> 4) & 0x03 {
+		case ecnNotECT:
+			if l.Enabled(context.Background(), slog.LevelDebug) {
+				hostinfo.logger(l).Debug("RFC 6040: outer CE on inner Not-ECT, leaving inner unchanged")
+			}
+		case ecnCE:
+			// Already CE.
+		default:
+			pkt[1] = (pkt[1] &^ 0x30) | (ecnCE << 4)
+		}
+	}
+}
+
+func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
+	// RFC 6040 normal-mode combine: fold any outer CE mark stamped by the
+	// underlay into the inner header before firewall + TUN write. Other
+	// outer codepoints are advisory only — we keep the inner unchanged.
+	if f.ecnEnabled.Load() {
+		applyOuterECN(out, meta.OuterECN, hostinfo, f.l)
+	}
+
 	err := newPacket(out, true, fwPacket)
 	if err != nil {
 		hostinfo.logger(f.l).Warn("Error while validating inbound packet",
@@ -536,7 +590,7 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, p
 		return
 	}
 
-	_, err = f.readers[q].Write(out)
+	err = f.batchers[q].Commit(out)
 	if err != nil {
 		f.l.Error("Failed to write to tun", "error", err)
 	}

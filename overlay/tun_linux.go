@@ -4,9 +4,7 @@
 package overlay
 
 import (
-	"encoding/binary"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -19,180 +17,15 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
 
-// tunFile wraps a TUN file descriptor with poll-based reads. The FD provided will be changed to non-blocking.
-// A shared eventfd allows Close to wake all readers blocked in poll.
-type tunFile struct {
-	fd         int
-	shutdownFd int
-	lastOne    bool
-	readPoll   [2]unix.PollFd
-	writePoll  [2]unix.PollFd
-	closed     bool
-}
-
-// newFriend makes a tunFile for a MultiQueueReader that copies the shutdown eventfd from the parent tun
-func (r *tunFile) newFriend(fd int) (*tunFile, error) {
-	if err := unix.SetNonblock(fd, true); err != nil {
-		return nil, fmt.Errorf("failed to set tun fd non-blocking: %w", err)
-	}
-	return &tunFile{
-		fd:         fd,
-		shutdownFd: r.shutdownFd,
-		readPoll: [2]unix.PollFd{
-			{Fd: int32(fd), Events: unix.POLLIN},
-			{Fd: int32(r.shutdownFd), Events: unix.POLLIN},
-		},
-		writePoll: [2]unix.PollFd{
-			{Fd: int32(fd), Events: unix.POLLOUT},
-			{Fd: int32(r.shutdownFd), Events: unix.POLLIN},
-		},
-	}, nil
-}
-
-func newTunFd(fd int) (*tunFile, error) {
-	if err := unix.SetNonblock(fd, true); err != nil {
-		return nil, fmt.Errorf("failed to set tun fd non-blocking: %w", err)
-	}
-
-	shutdownFd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create eventfd: %w", err)
-	}
-
-	out := &tunFile{
-		fd:         fd,
-		shutdownFd: shutdownFd,
-		lastOne:    true,
-		readPoll: [2]unix.PollFd{
-			{Fd: int32(fd), Events: unix.POLLIN},
-			{Fd: int32(shutdownFd), Events: unix.POLLIN},
-		},
-		writePoll: [2]unix.PollFd{
-			{Fd: int32(fd), Events: unix.POLLOUT},
-			{Fd: int32(shutdownFd), Events: unix.POLLIN},
-		},
-	}
-
-	return out, nil
-}
-
-func (r *tunFile) blockOnRead() error {
-	const problemFlags = unix.POLLHUP | unix.POLLNVAL | unix.POLLERR
-	var err error
-	for {
-		_, err = unix.Poll(r.readPoll[:], -1)
-		if err != unix.EINTR {
-			break
-		}
-	}
-	//always reset these!
-	tunEvents := r.readPoll[0].Revents
-	shutdownEvents := r.readPoll[1].Revents
-	r.readPoll[0].Revents = 0
-	r.readPoll[1].Revents = 0
-	//do the err check before trusting the potentially bogus bits we just got
-	if err != nil {
-		return err
-	}
-	if shutdownEvents&(unix.POLLIN|problemFlags) != 0 {
-		return os.ErrClosed
-	} else if tunEvents&problemFlags != 0 {
-		return os.ErrClosed
-	}
-	return nil
-}
-
-func (r *tunFile) blockOnWrite() error {
-	const problemFlags = unix.POLLHUP | unix.POLLNVAL | unix.POLLERR
-	var err error
-	for {
-		_, err = unix.Poll(r.writePoll[:], -1)
-		if err != unix.EINTR {
-			break
-		}
-	}
-	//always reset these!
-	tunEvents := r.writePoll[0].Revents
-	shutdownEvents := r.writePoll[1].Revents
-	r.writePoll[0].Revents = 0
-	r.writePoll[1].Revents = 0
-	//do the err check before trusting the potentially bogus bits we just got
-	if err != nil {
-		return err
-	}
-	if shutdownEvents&(unix.POLLIN|problemFlags) != 0 {
-		return os.ErrClosed
-	} else if tunEvents&problemFlags != 0 {
-		return os.ErrClosed
-	}
-	return nil
-}
-
-func (r *tunFile) Read(buf []byte) (int, error) {
-	for {
-		if n, err := unix.Read(r.fd, buf); err == nil {
-			return n, nil
-		} else if err == unix.EAGAIN {
-			if err = r.blockOnRead(); err != nil {
-				return 0, err
-			}
-			continue
-		} else if err == unix.EINTR {
-			continue
-		} else if err == unix.EBADF {
-			return 0, os.ErrClosed
-		} else {
-			return 0, err
-		}
-	}
-}
-
-func (r *tunFile) Write(buf []byte) (int, error) {
-	for {
-		if n, err := unix.Write(r.fd, buf); err == nil {
-			return n, nil
-		} else if err == unix.EAGAIN {
-			if err = r.blockOnWrite(); err != nil {
-				return 0, err
-			}
-			continue
-		} else if err == unix.EINTR {
-			continue
-		} else if err == unix.EBADF {
-			return 0, os.ErrClosed
-		} else {
-			return 0, err
-		}
-	}
-}
-
-func (r *tunFile) wakeForShutdown() error {
-	var buf [8]byte
-	binary.NativeEndian.PutUint64(buf[:], 1)
-	_, err := unix.Write(int(r.readPoll[1].Fd), buf[:])
-	return err
-}
-
-func (r *tunFile) Close() error {
-	if r.closed { // avoid closing more than once. Technically a fd could get re-used, which would be a problem
-		return nil
-	}
-	r.closed = true
-	if r.lastOne {
-		_ = unix.Close(r.shutdownFd)
-	}
-	return unix.Close(r.fd)
-}
-
 type tun struct {
-	*tunFile
-	readers     []*tunFile
+	readers     tio.QueueSet
 	closeLock   sync.Mutex
 	Device      string
 	vpnNetworks []netip.Prefix
@@ -201,6 +34,14 @@ type tun struct {
 	TXQueueLen  int
 	deviceIndex int
 	ioctlFd     uintptr
+	vnetHdr     bool
+	// routeFeatureECN, when true, sets RTAX_FEATURE_ECN on every route we
+	// install for the tun. The kernel then actively negotiates ECN for
+	// connections destined to those prefixes (equivalent to `ip route
+	// change ... features ecn`) regardless of net.ipv4.tcp_ecn, so flows
+	// across the nebula mesh use ECN even when the host default is the
+	// passive setting (=2). Disable via tunnels.ecn=false.
+	routeFeatureECN bool
 
 	Routes                    atomic.Pointer[[]Route]
 	routeTree                 atomic.Pointer[bart.Table[routing.Gateways]]
@@ -239,7 +80,9 @@ type ifreqQLEN struct {
 }
 
 func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
-	t, err := newTunGeneric(c, l, deviceFd, vpnNetworks)
+	// We don't know what flags the caller opened this fd with and can't turn
+	// on IFF_VNET_HDR after TUNSETIFF, so skip offload on inherited fds.
+	t, err := newTunGeneric(c, l, deviceFd, false, false, vpnNetworks)
 	if err != nil {
 		return nil, err
 	}
@@ -249,46 +92,105 @@ func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip
 	return t, nil
 }
 
-func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue bool) (*tun, error) {
+// openTunDev opens /dev/net/tun, creating the device node first if it's
+// missing (docker containers occasionally omit it).
+func openTunDev() (int, error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
-	if err != nil {
-		// If /dev/net/tun doesn't exist, try to create it (will happen in docker)
-		if os.IsNotExist(err) {
-			err = os.MkdirAll("/dev/net", 0755)
-			if err != nil {
-				return nil, fmt.Errorf("/dev/net/tun doesn't exist, failed to mkdir -p /dev/net: %w", err)
-			}
-			err = unix.Mknod("/dev/net/tun", unix.S_IFCHR|0600, int(unix.Mkdev(10, 200)))
-			if err != nil {
-				return nil, fmt.Errorf("failed to create /dev/net/tun: %w", err)
-			}
-
-			fd, err = unix.Open("/dev/net/tun", os.O_RDWR, 0)
-			if err != nil {
-				return nil, fmt.Errorf("created /dev/net/tun, but still failed: %w", err)
-			}
-		} else {
-			return nil, err
-		}
+	if err == nil {
+		return fd, nil
 	}
+	if !os.IsNotExist(err) {
+		return -1, err
+	}
+	if err = os.MkdirAll("/dev/net", 0755); err != nil {
+		return -1, fmt.Errorf("/dev/net/tun doesn't exist, failed to mkdir -p /dev/net: %w", err)
+	}
+	if err = unix.Mknod("/dev/net/tun", unix.S_IFCHR|0600, int(unix.Mkdev(10, 200))); err != nil {
+		return -1, fmt.Errorf("failed to create /dev/net/tun: %w", err)
+	}
+	fd, err = unix.Open("/dev/net/tun", os.O_RDWR, 0)
+	if err != nil {
+		return -1, fmt.Errorf("created /dev/net/tun, but still failed: %w", err)
+	}
+	return fd, nil
+}
 
+// tunSetIff runs TUNSETIFF with the given flags and returns the kernel-chosen
+// device name on success.
+func tunSetIff(fd int, name string, flags uint16) (string, error) {
 	var req ifReq
-	req.Flags = uint16(unix.IFF_TUN | unix.IFF_NO_PI)
+	req.Flags = flags
+	copy(req.Name[:], name)
+	if err := ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
+		return "", err
+	}
+	return strings.Trim(string(req.Name[:]), "\x00"), nil
+}
+
+// tsoOffloadFlags are the TUN_F_* bits we ask the kernel to enable when a
+// TSO-capable TUN is available. CSUM is required as a prerequisite for TSO.
+// TSO_ECN tells the kernel we propagate ECN correctly through coalesce and
+// segmentation, so it can deliver superpackets whose seed has CWR/ECE set
+// or whose IP-level codepoint is CE.
+const tsoOffloadFlags = unix.TUN_F_CSUM | unix.TUN_F_TSO4 | unix.TUN_F_TSO6 | unix.TUN_F_TSO_ECN
+
+// usoOffloadFlags adds UDP Segmentation Offload to tsoOffloadFlags. Requires
+// Linux ≥ 6.2; older kernels reject it and we fall back to TCP-only TSO via
+// tsoOffloadFlags.
+const usoOffloadFlags = tsoOffloadFlags | unix.TUN_F_USO4 | unix.TUN_F_USO6
+
+func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue bool) (*tun, error) {
+	baseFlags := uint16(unix.IFF_TUN | unix.IFF_NO_PI)
 	if multiqueue {
-		req.Flags |= unix.IFF_MULTI_QUEUE
+		baseFlags |= unix.IFF_MULTI_QUEUE
 	}
 	nameStr := c.GetString("tun.dev", "")
-	copy(req.Name[:], nameStr)
-	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
+
+	// First try to enable IFF_VNET_HDR via TUNSETIFF and negotiate TUN_F_*
+	// offloads via TUNSETOFFLOAD so we can receive TSO/USO superpackets.
+	// We try TSO+USO first, fall back to TSO-only on kernels without USO
+	// (Linux < 6.2), and finally give up on virtio headers entirely and
+	// reopen as a plain TUN if neither offload mask is accepted.
+	fd, err := openTunDev()
+	if err != nil {
+		return nil, err
+	}
+	vnetHdr := true
+	usoEnabled := false
+	name, err := tunSetIff(fd, nameStr, baseFlags|unix.IFF_VNET_HDR)
+	if err != nil {
 		_ = unix.Close(fd)
-		return nil, &NameError{
-			Name:       nameStr,
-			Underlying: err,
+		vnetHdr = false
+	} else {
+		// Try TSO+USO first. On kernels without USO support (Linux < 6.2)
+		// the ioctl returns EINVAL; fall back to the TCP-only mask before
+		// giving up on VNET_HDR entirely.
+		if err = ioctl(uintptr(fd), unix.TUNSETOFFLOAD, uintptr(usoOffloadFlags)); err == nil {
+			usoEnabled = true
+		} else if err = ioctl(uintptr(fd), unix.TUNSETOFFLOAD, uintptr(tsoOffloadFlags)); err != nil {
+			l.Warn("Failed to enable TUN offload (TSO); proceeding without virtio headers", "error", err)
+			_ = unix.Close(fd)
+			vnetHdr = false
 		}
 	}
-	name := strings.Trim(string(req.Name[:]), "\x00")
 
-	t, err := newTunGeneric(c, l, fd, vpnNetworks)
+	if !vnetHdr {
+		fd, err = openTunDev()
+		if err != nil {
+			return nil, err
+		}
+		name, err = tunSetIff(fd, nameStr, baseFlags)
+		if err != nil {
+			_ = unix.Close(fd)
+			return nil, &NameError{Name: nameStr, Underlying: err}
+		}
+	}
+
+	if vnetHdr {
+		l.Info("TUN offload enabled", "tso", true, "uso", usoEnabled)
+	}
+
+	t, err := newTunGeneric(c, l, fd, vnetHdr, usoEnabled, vpnNetworks)
 	if err != nil {
 		return nil, err
 	}
@@ -299,20 +201,34 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 }
 
 // newTunGeneric does all the stuff common to different tun initialization paths. It will close your files on error.
-func newTunGeneric(c *config.C, l *slog.Logger, fd int, vpnNetworks []netip.Prefix) (*tun, error) {
-	tfd, err := newTunFd(fd)
+func newTunGeneric(c *config.C, l *slog.Logger, fd int, vnetHdr, usoEnabled bool, vpnNetworks []netip.Prefix) (*tun, error) {
+	var qs tio.QueueSet
+	var err error
+	if vnetHdr {
+		qs, err = tio.NewOffloadQueueSet(usoEnabled)
+	} else {
+		qs, err = tio.NewPollQueueSet()
+	}
+
 	if err != nil {
 		_ = unix.Close(fd)
 		return nil, err
 	}
+	err = qs.Add(fd)
+	if err != nil {
+		_ = unix.Close(fd)
+		return nil, err
+	}
+
 	t := &tun{
-		tunFile:                   tfd,
-		readers:                   []*tunFile{tfd},
+		readers:                   qs,
 		closeLock:                 sync.Mutex{},
+		vnetHdr:                   vnetHdr,
 		vpnNetworks:               vpnNetworks,
 		TXQueueLen:                c.GetInt("tun.tx_queue", 500),
 		useSystemRoutes:           c.GetBool("tun.use_system_route_table", false),
 		useSystemRoutesBufferSize: c.GetInt("tun.use_system_route_table_buffer_size", 0),
+		routeFeatureECN:           c.GetBool("tunnels.ecn", true),
 		routesFromSystem:          map[netip.Prefix]routing.Gateways{},
 		l:                         l,
 	}
@@ -410,32 +326,38 @@ func (t *tun) SupportsMultiqueue() bool {
 	return true
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *tun) NewMultiQueueReader() error {
 	t.closeLock.Lock()
 	defer t.closeLock.Unlock()
 
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	var req ifReq
-	req.Flags = uint16(unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_MULTI_QUEUE)
-	copy(req.Name[:], t.Device)
-	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
+	flags := uint16(unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_MULTI_QUEUE)
+	if t.vnetHdr {
+		flags |= unix.IFF_VNET_HDR
+	}
+	if _, err = tunSetIff(fd, t.Device, flags); err != nil {
 		_ = unix.Close(fd)
-		return nil, err
+		return err
 	}
 
-	out, err := t.tunFile.newFriend(fd)
+	if t.vnetHdr {
+		if err = ioctl(uintptr(fd), unix.TUNSETOFFLOAD, uintptr(tsoOffloadFlags)); err != nil {
+			_ = unix.Close(fd)
+			return fmt.Errorf("failed to enable offload on multiqueue tun fd: %w", err)
+		}
+	}
+
+	err = t.readers.Add(fd)
 	if err != nil {
 		_ = unix.Close(fd)
-		return nil, err
+		return err
 	}
 
-	t.readers = append(t.readers, out)
-
-	return out, nil
+	return nil
 }
 
 func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
@@ -603,6 +525,18 @@ func (t *tun) setDefaultRoute(cidr netip.Prefix) error {
 		Table:     unix.RT_TABLE_MAIN,
 		Type:      unix.RTN_UNICAST,
 	}
+	// Match the metric the kernel uses for its auto-installed connected
+	// route, so RouteReplace overwrites it in place instead of adding a
+	// second route at a worse metric. IPv6 connected routes are installed
+	// at metric 256 (IP6_RT_PRIO_KERN); IPv4 uses 0. Without this, the
+	// kernel route wins lookups and our MTU / AdvMSS / Features never
+	// apply on v6.
+	if cidr.Addr().Is6() {
+		nr.Priority = 256
+	}
+	if t.routeFeatureECN {
+		nr.Features |= unix.RTAX_FEATURE_ECN
+	}
 	err := netlink.RouteReplace(&nr)
 	if err != nil {
 		t.l.Warn("Failed to set default route MTU, retrying", "error", err, "cidr", cidr)
@@ -651,6 +585,9 @@ func (t *tun) addRoutes(logErrors bool) error {
 
 		if r.Metric > 0 {
 			nr.Priority = r.Metric
+		}
+		if t.routeFeatureECN {
+			nr.Features |= unix.RTAX_FEATURE_ECN
 		}
 
 		err := netlink.RouteReplace(&nr)
@@ -869,6 +806,10 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 	t.routeTree.Store(newTree)
 }
 
+func (t *tun) Readers() []tio.Queue {
+	return t.readers.Queues()
+}
+
 func (t *tun) Close() error {
 	t.closeLock.Lock()
 	defer t.closeLock.Unlock()
@@ -878,32 +819,10 @@ func (t *tun) Close() error {
 		t.routeChan = nil
 	}
 
-	// Signal all readers blocked in poll to wake up and exit
-	_ = t.tunFile.wakeForShutdown()
-
 	if t.ioctlFd > 0 {
 		_ = unix.Close(int(t.ioctlFd))
 		t.ioctlFd = 0
 	}
 
-	for i := range t.readers {
-		if i == 0 {
-			continue //we want to close the zeroth reader last
-		}
-		err := t.readers[i].Close()
-		if err != nil {
-			t.l.Error("error closing tun reader", "reader", i, "error", err)
-		} else {
-			t.l.Info("closed tun reader", "reader", i)
-		}
-	}
-
-	//this is t.readers[0] too
-	err := t.tunFile.Close()
-	if err != nil {
-		t.l.Error("error closing tun reader", "reader", 0, "error", err)
-	} else {
-		t.l.Info("closed tun reader", "reader", 0)
-	}
-	return err
+	return t.readers.Close()
 }

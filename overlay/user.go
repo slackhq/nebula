@@ -6,6 +6,7 @@ import (
 	"net/netip"
 
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 )
 
@@ -23,17 +24,34 @@ func NewUserDevice(vpnNetworks []netip.Prefix) (Device, error) {
 		outboundWriter: ow,
 		inboundReader:  ir,
 		inboundWriter:  iw,
+		numReaders:     1,
 	}, nil
 }
 
 type UserDevice struct {
 	vpnNetworks []netip.Prefix
+	numReaders  int
 
 	outboundReader *io.PipeReader
 	outboundWriter *io.PipeWriter
 
 	inboundReader *io.PipeReader
 	inboundWriter *io.PipeWriter
+
+	readBuf  []byte
+	batchRet [1]tio.Packet
+}
+
+func (d *UserDevice) Read() ([]tio.Packet, error) {
+	if d.readBuf == nil {
+		d.readBuf = make([]byte, defaultBatchBufSize)
+	}
+	n, err := d.outboundReader.Read(d.readBuf)
+	if err != nil {
+		return nil, err
+	}
+	d.batchRet[0] = tio.Packet{Bytes: d.readBuf[:n]}
+	return d.batchRet[:], nil
 }
 
 func (d *UserDevice) Activate() error {
@@ -50,20 +68,27 @@ func (d *UserDevice) SupportsMultiqueue() bool {
 	return true
 }
 
-func (d *UserDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return d, nil
+func (d *UserDevice) NewMultiQueueReader() error {
+	d.numReaders++
+	return nil
+}
+
+func (d *UserDevice) Readers() []tio.Queue {
+	out := make([]tio.Queue, d.numReaders)
+	for i := range d.numReaders {
+		out[i] = d
+	}
+	return out
 }
 
 func (d *UserDevice) Pipe() (*io.PipeReader, *io.PipeWriter) {
 	return d.inboundReader, d.outboundWriter
 }
 
-func (d *UserDevice) Read(p []byte) (n int, err error) {
-	return d.outboundReader.Read(p)
-}
 func (d *UserDevice) Write(p []byte) (n int, err error) {
 	return d.inboundWriter.Write(p)
 }
+
 func (d *UserDevice) Close() error {
 	d.inboundWriter.Close()
 	d.outboundWriter.Close()

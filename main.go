@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"net/netip"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -32,6 +35,9 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	if buildVersion == "" {
 		buildVersion = moduleVersion()
 	}
+
+	//todo no merge
+	go http.ListenAndServe(":6060", nil)
 
 	// Print the config if in test, the exit comes later
 	if configTest {
@@ -220,6 +226,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		relayManager:          NewRelayManager(ctx, l, hostMap, c),
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
+		CpuAffinity:           parseCpuAffinity(c, l, routines),
 		l:                     l,
 	}
 
@@ -237,6 +244,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		ifce.reloadDisconnectInvalid(c)
 		ifce.reloadSendRecvError(c)
 		ifce.reloadAcceptRecvError(c)
+		ifce.reloadEcn(c)
 
 		handshakeManager.f = ifce
 		go handshakeManager.Run(ctx)
@@ -269,6 +277,53 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		lighthouseStart:        lightHouse.StartUpdateWorker,
 		connectionManagerStart: connManager.Start,
 	}, nil
+}
+
+// parseCpuAffinity reads `tun.cpu_affinity` from the config — a list of
+// integer CPU IDs, one per TUN reader goroutine. Empty / unset returns nil
+// (listenIn falls back to its default `i % NumCPU` pinning). Length
+// mismatch with `routines` is a warning, not an error: shorter lists are
+// modulo-cycled across queues, longer lists' tail is ignored. Invalid
+// entries (non-integer, out of range) are also a warning and disable the
+// override entirely so we don't silently pin to the wrong CPU.
+func parseCpuAffinity(c *config.C, l *slog.Logger, routines int) []int {
+	raw := c.Get("tun.cpu_affinity")
+	if raw == nil {
+		return nil
+	}
+	rv, ok := raw.([]any)
+	if !ok {
+		l.Warn("tun.cpu_affinity must be a list of integers; ignoring", "value", raw)
+		return nil
+	}
+	nCPU := runtime.NumCPU()
+	cpus := make([]int, 0, len(rv))
+	for i, e := range rv {
+		var cpu int
+		switch v := e.(type) {
+		case int:
+			cpu = v
+		case int64:
+			cpu = int(v)
+		case float64:
+			cpu = int(v)
+		default:
+			l.Warn("tun.cpu_affinity entry not an integer; ignoring affinity",
+				"index", i, "value", e)
+			return nil
+		}
+		if cpu < 0 || cpu >= nCPU {
+			l.Warn("tun.cpu_affinity entry out of range; ignoring affinity",
+				"index", i, "cpu", cpu, "num_cpu", nCPU)
+			return nil
+		}
+		cpus = append(cpus, cpu)
+	}
+	if len(cpus) != routines {
+		l.Warn("tun.cpu_affinity length doesn't match routines; queues will modulo-cycle through the list",
+			"affinity_len", len(cpus), "routines", routines)
+	}
+	return cpus
 }
 
 func moduleVersion() string {
