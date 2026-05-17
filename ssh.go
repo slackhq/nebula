@@ -24,6 +24,20 @@ import (
 	"github.com/slackhq/nebula/sshd"
 )
 
+// jsonIndentLinePrefix is prepended to every output line when the ssh
+// handlers in this file pretty-print JSON. The handlers always use no
+// per-line prefix; this constant exists so the call sites (json.Indent
+// and json.Encoder.SetIndent) name what each argument means rather than
+// passing a bare empty string literal.
+const jsonIndentLinePrefix = ""
+
+// jsonIndentUnit is the per-level indentation used by the ssh handlers
+// when pretty-printing JSON. Four spaces are chosen to match the
+// historical wire format expected by interactive SSH clients reading
+// `host-map`, `lighthouse-map`, `print-cert`, etc. — the cert package
+// uses a tab separately for on-disk certificate JSON, which is unrelated.
+const jsonIndentUnit = "    "
+
 type sshListHostMapFlags struct {
 	Json    bool
 	Pretty  bool
@@ -455,7 +469,7 @@ func sshListHostMap(hl controlHostLister, a any, w sshd.StringWriter) error {
 	if fs.Json || fs.Pretty {
 		js := json.NewEncoder(w.GetWriter())
 		if fs.Pretty {
-			js.SetIndent("", "    ")
+			js.SetIndent(jsonIndentLinePrefix, jsonIndentUnit)
 		}
 
 		if err := js.Encode(hm); err != nil {
@@ -504,7 +518,7 @@ func sshListLighthouseMap(lightHouse *LightHouse, a any, w sshd.StringWriter) er
 	if fs.Json || fs.Pretty {
 		js := json.NewEncoder(w.GetWriter())
 		if fs.Pretty {
-			js.SetIndent("", "    ")
+			js.SetIndent(jsonIndentLinePrefix, jsonIndentUnit)
 		}
 
 		if err := js.Encode(addrMap); err != nil {
@@ -871,11 +885,10 @@ func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) erro
 
 		if args.Pretty {
 			buf := new(bytes.Buffer)
-			err := json.Indent(buf, b, "", "    ")
-			b = buf.Bytes()
-			if err != nil {
-				return nil
+			if err := json.Indent(buf, b, jsonIndentLinePrefix, jsonIndentUnit); err != nil {
+				return fmt.Errorf("indent cert json: %w", err)
 			}
+			b = buf.Bytes()
 		}
 
 		return w.WriteBytes(b)
@@ -929,7 +942,7 @@ func sshPrintRelays(ifce *Interface, fs any, a []string, w sshd.StringWriter) er
 	enc := json.NewEncoder(w.GetWriter())
 
 	if args.Pretty {
-		enc.SetIndent("", "    ")
+		enc.SetIndent(jsonIndentLinePrefix, jsonIndentUnit)
 	}
 
 	for k, v := range relays {
@@ -1014,7 +1027,7 @@ func sshPrintTunnel(ifce *Interface, fs any, a []string, w sshd.StringWriter) er
 
 	enc := json.NewEncoder(w.GetWriter())
 	if args.Pretty {
-		enc.SetIndent("", "    ")
+		enc.SetIndent(jsonIndentLinePrefix, jsonIndentUnit)
 	}
 
 	return enc.Encode(copyHostInfo(hostInfo, ifce.hostMap.GetPreferredRanges()))
@@ -1040,7 +1053,7 @@ func sshDeviceInfo(ifce *Interface, fs any, w sshd.StringWriter) error {
 	if flags.Json || flags.Pretty {
 		js := json.NewEncoder(w.GetWriter())
 		if flags.Pretty {
-			js.SetIndent("", "    ")
+			js.SetIndent(jsonIndentLinePrefix, jsonIndentUnit)
 		}
 
 		return js.Encode(data)

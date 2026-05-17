@@ -97,6 +97,18 @@ type brokenJSONCert struct{ cert.Certificate }
 
 func (brokenJSONCert) MarshalJSON() ([]byte, error) { return nil, errInjectedCert }
 
+// invalidJSONCert succeeds at MarshalJSON but returns syntactically
+// invalid JSON. This forces json.Indent (used by the -pretty path in
+// sshPrintCert) to error while the surrounding MarshalJSON call appears
+// to have succeeded — the exact shape needed to test the json.Indent
+// error-handling branch and the latent "b = buf.Bytes() before err
+// check" reorder hazard.
+type invalidJSONCert struct{ cert.Certificate }
+
+func (invalidJSONCert) MarshalJSON() ([]byte, error) {
+	return []byte("{not valid json"), nil
+}
+
 // newTestInterfaceWithHostCert returns a minimal *Interface with hostMap
 // containing one HostInfo at vpnAddr whose ConnectionState.peerCert wraps
 // the provided cert.Certificate. The pki field is wired with a CertState
@@ -206,6 +218,57 @@ func TestSshPrintCert_MarshalJSONFails_PropagatesError(t *testing.T) {
 			require.Error(t, err, "MarshalJSON failure must propagate; got nil")
 			require.ErrorIs(t, err, errInjectedCert,
 				"propagated error must wrap errInjectedCert so callers can errors.Is the cause")
+		})
+	}
+}
+
+// TestSshPrintCert_IndentError covers two intertwined hazards in the
+// -pretty branch of sshPrintCert:
+//
+//  1. json.Indent errors were swallowed (return nil), so operators saw an
+//     empty successful response when a cert's MarshalJSON returned bytes
+//     that did not round-trip through Indent.
+//
+//  2. The buggy code assigned `b = buf.Bytes()` *before* checking the
+//     Indent error. Today the assignment is masked by the immediate
+//     `return nil`, but any future refactor that converted the swallow to
+//     `return err` while leaving the reorder intact would emit a partially
+//     indented buffer to the SSH client. The "no partial buffer written"
+//     row locks the invariant down so that refactor can't quietly happen.
+func TestSshPrintCert_IndentError(t *testing.T) {
+	vpnAddr := netip.MustParseAddr("10.0.0.1")
+	tests := []struct {
+		name  string
+		check func(t *testing.T, err error, written []byte)
+	}{
+		{
+			name: "indent error propagates",
+			check: func(t *testing.T, err error, _ []byte) {
+				require.Error(t, err, "json.Indent failure must propagate; got nil")
+				require.ErrorContains(t, err, "indent cert json",
+					"error message must identify the indent layer for operators")
+			},
+		},
+		{
+			name: "indent error does not write partial buffer",
+			check: func(t *testing.T, _ error, written []byte) {
+				require.Empty(t, written,
+					"handler must not emit partially-indented bytes when "+
+						"json.Indent fails — protects against future refactors "+
+						"that remove the swallow without fixing the reorder")
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ifce := newTestInterfaceWithHostCert(t, vpnAddr, invalidJSONCert{})
+			buf := &bytes.Buffer{}
+			sw := &recordingStringWriter{w: buf}
+
+			err := sshPrintCert(ifce, &sshPrintCertFlags{Pretty: true},
+				[]string{vpnAddr.String()}, sw)
+
+			tc.check(t, err, buf.Bytes())
 		})
 	}
 }
