@@ -507,9 +507,8 @@ func sshListLighthouseMap(lightHouse *LightHouse, a any, w sshd.StringWriter) er
 			js.SetIndent("", "    ")
 		}
 
-		err := js.Encode(addrMap)
-		if err != nil {
-			return nil
+		if err := js.Encode(addrMap); err != nil {
+			return fmt.Errorf("encode lighthouse-map json: %w", err)
 		}
 
 	} else {

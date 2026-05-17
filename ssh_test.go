@@ -73,6 +73,20 @@ func newTestHostMapWithEntries(t *testing.T, n int) *HostMap {
 	return hm
 }
 
+// newTestLighthouseWithEntries returns a *LightHouse pre-populated with n
+// entries in addrMap. Reuses newTestLighthouse from connection_manager_test.go
+// (same package) for the surrounding initialization, then adds RemoteList
+// entries spread across 192.168.0.0/16 so the JSON output is non-trivial.
+func newTestLighthouseWithEntries(t *testing.T, n int) *LightHouse {
+	t.Helper()
+	lh := newTestLighthouse()
+	for i := 0; i < n; i++ {
+		addr := netip.AddrFrom4([4]byte{192, 168, byte(i / 256), byte(i % 256)})
+		lh.addrMap[addr] = NewRemoteList([]netip.Addr{addr}, nil)
+	}
+	return lh
+}
+
 // TestSshListHostMap_WriteFailure_PropagatesError exercises the JSON-output
 // path of sshListHostMap with a writer that fails after a configurable byte
 // budget. The handler today returns nil on json.Encoder.Encode failure,
@@ -104,3 +118,34 @@ func TestSshListHostMap_WriteFailure_PropagatesError(t *testing.T) {
 	}
 }
 
+// TestSshListLighthouseMap_WriteFailure_PropagatesError mirrors the
+// sshListHostMap test against sshListLighthouseMap, which has the same
+// json.Encoder.Encode swallow bug a few hundred lines further down in
+// ssh.go. The handler shares the same set of failure shapes — both flag
+// modes and both immediate / mid-stream failure points — because the
+// underlying encoder behavior is identical.
+func TestSshListLighthouseMap_WriteFailure_PropagatesError(t *testing.T) {
+	tests := []struct {
+		name       string
+		flags      *sshListHostMapFlags
+		afterBytes int
+	}{
+		{"json mode, immediate writer failure", &sshListHostMapFlags{Json: true}, 0},
+		{"json mode, mid-stream failure", &sshListHostMapFlags{Json: true}, 16},
+		{"pretty mode, immediate writer failure", &sshListHostMapFlags{Pretty: true}, 0},
+		{"pretty mode, mid-stream failure", &sshListHostMapFlags{Pretty: true}, 16},
+		{"pretty mode, late failure", &sshListHostMapFlags{Pretty: true}, 256},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			lh := newTestLighthouseWithEntries(t, 50)
+			sw := &recordingStringWriter{w: &failingWriter{afterBytes: tc.afterBytes}}
+
+			err := sshListLighthouseMap(lh, tc.flags, sw)
+
+			require.Error(t, err, "writer failure must propagate; got nil")
+			require.ErrorIs(t, err, errInjected,
+				"propagated error must wrap errInjected so callers can errors.Is the cause")
+		})
+	}
+}
