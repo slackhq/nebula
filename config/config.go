@@ -331,6 +331,19 @@ func (c *C) get(k string, v any) any {
 func (c *C) resolve(path string, direct bool) error {
 	i, err := os.Stat(path)
 	if err != nil {
+		if direct {
+			// The user-specified path itself could not be stat'd. Surface
+			// the underlying ENOENT/EACCES/ELOOP error so the operator
+			// sees a useful diagnostic instead of the generic
+			// "no config files found at %s" that Load would otherwise
+			// return when c.files ends up empty.
+			return fmt.Errorf("stat %s: %w", path, err)
+		}
+		// A descendant of a user-specified directory could not be stat'd
+		// (typically a dangling symlink or an unreadable entry inside an
+		// otherwise-readable directory). Log and skip so one bad entry
+		// does not abort a multi-file config reload.
+		c.l.Warn("skipping config entry", "path", path, "error", err)
 		return nil
 	}
 
