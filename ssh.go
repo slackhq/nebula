@@ -458,9 +458,8 @@ func sshListHostMap(hl controlHostLister, a any, w sshd.StringWriter) error {
 			js.SetIndent("", "    ")
 		}
 
-		err := js.Encode(hm)
-		if err != nil {
-			return nil
+		if err := js.Encode(hm); err != nil {
+			return fmt.Errorf("encode host-map json: %w", err)
 		}
 
 	} else {
