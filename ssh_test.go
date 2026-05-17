@@ -109,6 +109,15 @@ func (invalidJSONCert) MarshalJSON() ([]byte, error) {
 	return []byte("{not valid json"), nil
 }
 
+// brokenPEMCert is a cert.Certificate whose MarshalPEM always errors.
+// Used to exercise the -raw branch of sshPrintCert. Like brokenJSONCert,
+// the embedded cert.Certificate is nil; tests using this double MUST set
+// sshPrintCertFlags.Raw so the handler only calls MarshalPEM and never
+// reaches the MarshalJSON or String() paths.
+type brokenPEMCert struct{ cert.Certificate }
+
+func (brokenPEMCert) MarshalPEM() ([]byte, error) { return nil, errInjectedCert }
+
 // newTestInterfaceWithHostCert returns a minimal *Interface with hostMap
 // containing one HostInfo at vpnAddr whose ConnectionState.peerCert wraps
 // the provided cert.Certificate. The pki field is wired with a CertState
@@ -269,6 +278,34 @@ func TestSshPrintCert_IndentError(t *testing.T) {
 				[]string{vpnAddr.String()}, sw)
 
 			tc.check(t, err, buf.Bytes())
+		})
+	}
+}
+
+// TestSshPrintCert_MarshalPEMFails_PropagatesError exercises the -raw
+// output path of sshPrintCert with a cert.Certificate whose MarshalPEM
+// always returns an error. The handler today returns nil on MarshalPEM
+// failure, so an operator running `print-cert <addr> -raw` against a
+// host with an unmarshallable cert sees an empty successful response.
+// Wrapping the error preserves errors.Is on the underlying cause.
+func TestSshPrintCert_MarshalPEMFails_PropagatesError(t *testing.T) {
+	vpnAddr := netip.MustParseAddr("10.0.0.1")
+	tests := []struct {
+		name  string
+		flags *sshPrintCertFlags
+	}{
+		{"raw flag", &sshPrintCertFlags{Raw: true}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ifce := newTestInterfaceWithHostCert(t, vpnAddr, brokenPEMCert{})
+			sw := &recordingStringWriter{w: &bytes.Buffer{}}
+
+			err := sshPrintCert(ifce, tc.flags, []string{vpnAddr.String()}, sw)
+
+			require.Error(t, err, "MarshalPEM failure must propagate; got nil")
+			require.ErrorIs(t, err, errInjectedCert,
+				"propagated error must wrap errInjectedCert so callers can errors.Is the cause")
 		})
 	}
 }
