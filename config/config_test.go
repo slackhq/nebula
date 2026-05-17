@@ -40,6 +40,69 @@ func TestConfig_Load(t *testing.T) {
 	assert.Equal(t, expected, c.Settings)
 }
 
+// TestC_Load_PropagatesStatErrors exercises the directly-specified path
+// of c.Load and asserts that filesystem errors from the initial os.Stat
+// reach the caller. The pre-fix behavior swallowed any stat error in
+// resolve() and let Load fall through to its generic "no config files
+// found at %s" branch, masking ENOENT/EACCES/ELOOP/etc with a less
+// informative diagnostic.
+//
+// Each row carries a name describing the failure shape and a setupPath
+// closure that returns the path Load should be called with. wantErrContains
+// is matched against the returned error with require.ErrorContains; rows
+// flagged skipAsRoot are skipped when the test binary runs as uid 0
+// (typical for CI containers) because chmod-based permission tests have
+// no meaning when the caller can bypass file permissions.
+func TestC_Load_PropagatesStatErrors(t *testing.T) {
+	tests := []struct {
+		name            string
+		setupPath       func(t *testing.T) string
+		wantErrContains string
+		skipAsRoot      bool
+	}{
+		{
+			name: "nonexistent path returns the stat error not a generic message",
+			setupPath: func(t *testing.T) string {
+				return filepath.Join(t.TempDir(), "no", "such", "file")
+			},
+			wantErrContains: "no such file or directory",
+		},
+		{
+			name: "permission denied on parent dir returns EACCES from stat",
+			setupPath: func(t *testing.T) string {
+				// chmod the *parent* directory to 0o000 so the os.Stat
+				// call inside resolve fails with EACCES. (chmodding the
+				// target directory itself to 0o000 lets os.Stat succeed
+				// and only fails the later readDirNames call, which
+				// has its own error path — that's not the swallow we're
+				// testing here.)
+				parent := t.TempDir()
+				target := filepath.Join(parent, "cfg")
+				require.NoError(t, os.Mkdir(target, 0o755))
+				require.NoError(t, os.Chmod(parent, 0o000))
+				t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+				return target
+			},
+			wantErrContains: "permission denied",
+			skipAsRoot:      true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.skipAsRoot && os.Getuid() == 0 {
+				t.Skip("test is meaningless as root")
+			}
+			c := NewC(test.NewLogger())
+			err := c.Load(tc.setupPath(t))
+
+			require.Error(t, err)
+			require.ErrorContains(t, err, tc.wantErrContains,
+				"user should see the underlying stat error, "+
+					"not just 'no config files found'")
+		})
+	}
+}
+
 func TestConfig_Get(t *testing.T) {
 	l := test.NewLogger()
 	// test simple type
