@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -38,6 +39,34 @@ func TestConfig_Load(t *testing.T) {
 		"new": "hi",
 	}
 	assert.Equal(t, expected, c.Settings)
+}
+
+// TestConfig_Resolve_AddFileErrorPropagates exercises the previously-
+// swallowed addFile error path inside (*C).resolve. With a real
+// filesystem we cannot easily make filepath.Abs error (it only fails
+// when os.Getwd does, which requires deleted-cwd manipulation that is
+// platform-fragile), so we follow the same pattern as
+// cmd/nebula-cert/stdio.go's stdinReader: swap the package-level
+// filepathAbs func for one that always returns an error.
+//
+// Cannot run with t.Parallel() — mutates the package-level
+// filepathAbs var.
+func TestConfig_Resolve_AddFileErrorPropagates(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "x.yml")
+	require.NoError(t, os.WriteFile(target, []byte("k: v\n"), 0o644))
+
+	injected := errors.New("injected filepath.Abs failure")
+	origAbs := filepathAbs
+	t.Cleanup(func() { filepathAbs = origAbs })
+	filepathAbs = func(string) (string, error) { return "", injected }
+
+	c := NewC(test.NewLogger())
+	err := c.Load(target)
+
+	require.Error(t, err, "addFile error must propagate from resolve via Load")
+	require.ErrorIs(t, err, injected,
+		"propagated error must wrap the underlying cause so callers can errors.Is")
 }
 
 func TestConfig_Get(t *testing.T) {
