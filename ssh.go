@@ -866,7 +866,7 @@ func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) erro
 	if args.Json || args.Pretty {
 		b, err := cert.MarshalJSON()
 		if err != nil {
-			return nil
+			return fmt.Errorf("marshal cert json: %w", err)
 		}
 
 		if args.Pretty {
