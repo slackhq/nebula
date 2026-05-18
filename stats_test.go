@@ -409,20 +409,22 @@ func freeTCPPort(t *testing.T) string {
 	return strconv.Itoa(port)
 }
 
-// TestStatsServer_buildRuntime_AppliesDefaultTimeouts pins the four
-// http.Server timeout fields to their default constants, so a future
-// edit that drops a field is caught at the source rather than only
-// surfacing as a missing slowloris defense in production.
+// TestStatsServer_buildRuntime_AppliesDefaultTimeouts asserts the full
+// pipeline: with no timeout keys set, loadStatsConfig substitutes the
+// default constants, and buildRuntime forwards them onto the
+// *http.Server. A future edit that drops a field is caught at the
+// source rather than only surfacing as a missing slowloris defense in
+// production.
 func TestStatsServer_buildRuntime_AppliesDefaultTimeouts(t *testing.T) {
-	s, _ := newTestStatsServer(t)
-	cfg := statsConfig{
-		typ:      "prometheus",
-		interval: time.Second,
-		prom: promConfig{
-			listen: "127.0.0.1:0",
-			path:   "/metrics",
-		},
-	}
+	s, c := newTestStatsServer(t)
+	setStatsConfig(c, map[string]any{
+		"type":     "prometheus",
+		"interval": "1s",
+		"listen":   "127.0.0.1:0",
+		"path":     "/metrics",
+	})
+	cfg, err := loadStatsConfig(c)
+	require.NoError(t, err)
 
 	_, server := s.buildRuntime(cfg)
 	require.NotNil(t, server, "prometheus config must produce an *http.Server")
@@ -441,6 +443,148 @@ func TestStatsServer_buildRuntime_AppliesDefaultTimeouts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, tc.got,
 				"%s must be set to its default constant", tc.name)
+		})
+	}
+	assert.Equal(t, defaultStatsHandlerTimeout, cfg.prom.handlerTimeout,
+		"cfg.prom.handlerTimeout must default to defaultStatsHandlerTimeout")
+}
+
+// TestLoadStatsConfig_PromTimeouts_Overrides asserts that each
+// stats.*_timeout YAML key overrides the corresponding default. One
+// row per key plus a final row asserting all keys overridden together,
+// which catches plumbing mistakes where one key's value silently lands
+// in another field.
+func TestLoadStatsConfig_PromTimeouts_Overrides(t *testing.T) {
+	tests := []struct {
+		name     string
+		override map[string]any
+		want     promConfig
+	}{
+		{
+			name:     "read_header_timeout only",
+			override: map[string]any{"read_header_timeout": "3s"},
+			want: promConfig{
+				readHeaderTimeout: 3 * time.Second,
+				readTimeout:       defaultStatsReadTimeout,
+				writeTimeout:      defaultStatsWriteTimeout,
+				idleTimeout:       defaultStatsIdleTimeout,
+				handlerTimeout:    defaultStatsHandlerTimeout,
+			},
+		},
+		{
+			name:     "read_timeout only",
+			override: map[string]any{"read_timeout": "7s"},
+			want: promConfig{
+				readHeaderTimeout: defaultStatsReadHeaderTimeout,
+				readTimeout:       7 * time.Second,
+				writeTimeout:      defaultStatsWriteTimeout,
+				idleTimeout:       defaultStatsIdleTimeout,
+				handlerTimeout:    defaultStatsHandlerTimeout,
+			},
+		},
+		{
+			name:     "write_timeout only",
+			override: map[string]any{"write_timeout": "45s"},
+			want: promConfig{
+				readHeaderTimeout: defaultStatsReadHeaderTimeout,
+				readTimeout:       defaultStatsReadTimeout,
+				writeTimeout:      45 * time.Second,
+				idleTimeout:       defaultStatsIdleTimeout,
+				handlerTimeout:    defaultStatsHandlerTimeout,
+			},
+		},
+		{
+			name:     "idle_timeout only",
+			override: map[string]any{"idle_timeout": "200s"},
+			want: promConfig{
+				readHeaderTimeout: defaultStatsReadHeaderTimeout,
+				readTimeout:       defaultStatsReadTimeout,
+				writeTimeout:      defaultStatsWriteTimeout,
+				idleTimeout:       200 * time.Second,
+				handlerTimeout:    defaultStatsHandlerTimeout,
+			},
+		},
+		{
+			name:     "handler_timeout zero disables the wrap",
+			override: map[string]any{"handler_timeout": "0s"},
+			want: promConfig{
+				readHeaderTimeout: defaultStatsReadHeaderTimeout,
+				readTimeout:       defaultStatsReadTimeout,
+				writeTimeout:      defaultStatsWriteTimeout,
+				idleTimeout:       defaultStatsIdleTimeout,
+				handlerTimeout:    0,
+			},
+		},
+		{
+			name: "all five overridden together",
+			override: map[string]any{
+				"read_header_timeout": "1s",
+				"read_timeout":        "2s",
+				"write_timeout":       "3s",
+				"idle_timeout":        "4s",
+				"handler_timeout":     "5s",
+			},
+			want: promConfig{
+				readHeaderTimeout: 1 * time.Second,
+				readTimeout:       2 * time.Second,
+				writeTimeout:      3 * time.Second,
+				idleTimeout:       4 * time.Second,
+				handlerTimeout:    5 * time.Second,
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, c := newTestStatsServer(t)
+			base := map[string]any{
+				"type":     "prometheus",
+				"interval": "1s",
+				"listen":   "127.0.0.1:0",
+				"path":     "/metrics",
+			}
+			for k, v := range tc.override {
+				base[k] = v
+			}
+			setStatsConfig(c, base)
+
+			cfg, err := loadStatsConfig(c)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want.readHeaderTimeout, cfg.prom.readHeaderTimeout, "readHeaderTimeout")
+			assert.Equal(t, tc.want.readTimeout, cfg.prom.readTimeout, "readTimeout")
+			assert.Equal(t, tc.want.writeTimeout, cfg.prom.writeTimeout, "writeTimeout")
+			assert.Equal(t, tc.want.idleTimeout, cfg.prom.idleTimeout, "idleTimeout")
+			assert.Equal(t, tc.want.handlerTimeout, cfg.prom.handlerTimeout, "handlerTimeout")
+		})
+	}
+}
+
+// TestLoadStatsConfig_PromTimeouts_NegativeRejected verifies that a
+// negative duration on any of the five timeout keys is rejected at
+// config-load time. A negative net/http timeout silently breaks the
+// server in non-obvious ways (zero would be the safer "no limit"
+// interpretation), so we reject rather than silently substitute.
+func TestLoadStatsConfig_PromTimeouts_NegativeRejected(t *testing.T) {
+	tests := []string{
+		"read_header_timeout",
+		"read_timeout",
+		"write_timeout",
+		"idle_timeout",
+		"handler_timeout",
+	}
+	for _, key := range tests {
+		t.Run(key, func(t *testing.T) {
+			_, c := newTestStatsServer(t)
+			setStatsConfig(c, map[string]any{
+				"type":     "prometheus",
+				"interval": "1s",
+				"listen":   "127.0.0.1:0",
+				"path":     "/metrics",
+				key:        "-5s",
+			})
+			_, err := loadStatsConfig(c)
+			require.Error(t, err, "negative %s must be rejected", key)
+			require.Contains(t, err.Error(), "stats."+key,
+				"error must name the offending key so the operator can find it")
 		})
 	}
 }

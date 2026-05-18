@@ -45,6 +45,12 @@ const (
 	// server closes the connection. Sized to span ~8 scrapes at a 15s
 	// interval so a steady scrape cadence reuses one TCP/TLS handshake.
 	defaultStatsIdleTimeout = 120 * time.Second
+
+	// defaultStatsHandlerTimeout bounds a single Prometheus scrape via
+	// http.TimeoutHandler so a slow registry surfaces as a clean 503
+	// rather than an abrupt connection close. A zero config value
+	// disables the wrap entirely.
+	defaultStatsHandlerTimeout = 30 * time.Second
 )
 
 // statsServer owns nebula's stats subsystem: the periodic metric capture
@@ -99,6 +105,18 @@ type promConfig struct {
 	path      string
 	namespace string
 	subsystem string
+
+	// HTTP server timeouts. See the default* constants for the meaning
+	// of each field; zero means "no limit" per net/http semantics, but
+	// loadStatsConfig substitutes the default when a key is absent.
+	readHeaderTimeout time.Duration
+	readTimeout       time.Duration
+	writeTimeout      time.Duration
+	idleTimeout       time.Duration
+	// handlerTimeout drives the optional http.TimeoutHandler wrap.
+	// A zero value disables the wrap; non-zero installs it with this
+	// budget.
+	handlerTimeout time.Duration
 }
 
 // newStatsServerFromConfig builds a statsServer, applies the initial config,
@@ -330,10 +348,10 @@ func (s *statsServer) buildRuntime(cfg statsConfig) ([]func(), *http.Server) {
 		return captureFns, &http.Server{
 			Addr:              cfg.prom.listen,
 			Handler:           mux,
-			ReadHeaderTimeout: defaultStatsReadHeaderTimeout,
-			ReadTimeout:       defaultStatsReadTimeout,
-			WriteTimeout:      defaultStatsWriteTimeout,
-			IdleTimeout:       defaultStatsIdleTimeout,
+			ReadHeaderTimeout: cfg.prom.readHeaderTimeout,
+			ReadTimeout:       cfg.prom.readTimeout,
+			WriteTimeout:      cfg.prom.writeTimeout,
+			IdleTimeout:       cfg.prom.idleTimeout,
 		}
 	}
 	return captureFns, nil
@@ -392,6 +410,25 @@ func loadStatsConfig(c *config.C) (statsConfig, error) {
 		}
 		cfg.prom.namespace = c.GetString("stats.namespace", "")
 		cfg.prom.subsystem = c.GetString("stats.subsystem", "")
+		cfg.prom.readHeaderTimeout = c.GetDuration("stats.read_header_timeout", defaultStatsReadHeaderTimeout)
+		cfg.prom.readTimeout = c.GetDuration("stats.read_timeout", defaultStatsReadTimeout)
+		cfg.prom.writeTimeout = c.GetDuration("stats.write_timeout", defaultStatsWriteTimeout)
+		cfg.prom.idleTimeout = c.GetDuration("stats.idle_timeout", defaultStatsIdleTimeout)
+		cfg.prom.handlerTimeout = c.GetDuration("stats.handler_timeout", defaultStatsHandlerTimeout)
+		for _, e := range []struct {
+			key string
+			v   time.Duration
+		}{
+			{"stats.read_header_timeout", cfg.prom.readHeaderTimeout},
+			{"stats.read_timeout", cfg.prom.readTimeout},
+			{"stats.write_timeout", cfg.prom.writeTimeout},
+			{"stats.idle_timeout", cfg.prom.idleTimeout},
+			{"stats.handler_timeout", cfg.prom.handlerTimeout},
+		} {
+			if e.v < 0 {
+				return cfg, fmt.Errorf("%s must be >= 0, got %s", e.key, e.v)
+			}
+		}
 	default:
 		return cfg, fmt.Errorf("stats.type was not understood: %s", cfg.typ)
 	}
