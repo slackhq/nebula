@@ -82,7 +82,7 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			var payload = struct{ Value string }{}
 			cErr := ssh.Unmarshal(req.Payload, &payload)
 			if cErr != nil {
-				req.Reply(false, nil)
+				_ = replyAndLog(req, false, nil, s.l)
 				return
 			}
 
