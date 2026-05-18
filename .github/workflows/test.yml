@@ -13,9 +13,13 @@ on:
       - 'go.sum'
 jobs:
 
-  test-linux:
-    name: Build all and test on ubuntu-linux
+  cross-build:
+    name: Cross-build ${{ matrix.target }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux, freebsd, openbsd, netbsd, darwin, windows]
     steps:
 
     - uses: actions/checkout@v6
@@ -25,8 +29,20 @@ jobs:
         go-version: '1.25'
         check-latest: true
 
-    - name: Build
-      run: make all
+    - name: Build all ${{ matrix.target }}
+      run: make -j"$(nproc)" all-${{ matrix.target }}
+
+  test-linux:
+    name: Build and test on ubuntu-linux
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/checkout@v6
+
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.25'
+        check-latest: true
 
     - name: Vet
       run: make vet
