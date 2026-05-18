@@ -342,7 +342,6 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 
 	// A hostinfo is determined alive if there is incoming traffic
 	if inTraffic {
-		decision := doNothing
 		if cm.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(cm.l).Debug("Tunnel status",
 				"tunnelCheck", m{"state": "alive", "method": "passive"},
@@ -350,16 +349,11 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 		}
 		hostinfo.pendingDeletion.Store(false)
 
-		if mainHostInfo {
-			decision = tryRehandshake
-		} else {
-			if cm.shouldSwapPrimary(hostinfo) {
-				decision = swapPrimary
-			} else {
-				// migrate the relays to the primary, if in use.
-				decision = migrateRelays
-			}
-		}
+		// shouldSwapPrimary is only consulted when this is not the primary
+		// tunnel; preserve the original short-circuit so it is not called
+		// in the mainHostInfo path.
+		shouldSwap := !mainHostInfo && cm.shouldSwapPrimary(hostinfo)
+		decision := decideTrafficAction(mainHostInfo, shouldSwap)
 
 		cm.trafficTimer.Add(hostinfo.localIndexId, cm.checkInterval)
 
@@ -441,6 +435,23 @@ func (cm *connectionManager) isInactive(hostinfo *HostInfo, now time.Time) (time
 
 	// The tunnel is inactive
 	return inactiveDuration, true
+}
+
+// decideTrafficAction picks the in-traffic trafficDecision based on
+// whether this hostinfo is the current primary and (for non-primary
+// hostinfos) whether shouldSwapPrimary returned true. Extracted from
+// makeTrafficDecision so the branch selection is testable without
+// the surrounding connectionManager / hostMap fixture.
+func decideTrafficAction(mainHostInfo, shouldSwap bool) trafficDecision {
+	switch {
+	case mainHostInfo:
+		return tryRehandshake
+	case shouldSwap:
+		return swapPrimary
+	default:
+		// migrate the relays to the primary, if in use.
+		return migrateRelays
+	}
 }
 
 func (cm *connectionManager) shouldSwapPrimary(current *HostInfo) bool {
