@@ -5,6 +5,9 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -599,4 +602,135 @@ func TestStatsTimeoutDefaults_AreConsistent(t *testing.T) {
 	require.GreaterOrEqual(t,
 		defaultStatsReadTimeout, defaultStatsReadHeaderTimeout,
 		"defaultStatsReadTimeout must be >= defaultStatsReadHeaderTimeout")
+}
+
+// TestWrapPromHandler_ZeroTimeoutPassesThrough asserts that the wrap
+// is truly a noop when handlerTimeout is 0 - the returned handler is
+// the same function value as the input, so a future edit that
+// accidentally wraps with a zero timeout is caught.
+func TestWrapPromHandler_ZeroTimeoutPassesThrough(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	innerPC := reflect.ValueOf(inner).Pointer()
+
+	got := wrapPromHandler(inner, 0)
+	gotFn, ok := got.(http.HandlerFunc)
+	require.True(t, ok, "wrapPromHandler with handlerTimeout=0 must return the input handler type")
+	require.Equal(t, innerPC, reflect.ValueOf(gotFn).Pointer(),
+		"wrapPromHandler must return its input unchanged when handlerTimeout is 0")
+
+	gotNeg := wrapPromHandler(inner, -1*time.Second)
+	gotNegFn, ok := gotNeg.(http.HandlerFunc)
+	require.True(t, ok, "wrapPromHandler with negative handlerTimeout must return the input handler type")
+	require.Equal(t, innerPC, reflect.ValueOf(gotNegFn).Pointer(),
+		"wrapPromHandler must return its input unchanged when handlerTimeout is negative")
+}
+
+// TestWrapPromHandler_FiresOn503 asserts the integration: a real
+// httptest listener, a deliberately slow handler, GET via the standard
+// HTTP client, and a 503 + the canned timeout body. Gated by
+// testing.Short because it sleeps ~150ms total.
+func TestWrapPromHandler_FiresOn503(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real listener + 150ms wait for timeout handler to fire")
+	}
+	slow := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Sleep well past the handlerTimeout to guarantee the wrap fires.
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("would-have-been-the-real-body"))
+	})
+	wrapped := wrapPromHandler(slow, 50*time.Millisecond)
+	srv := httptest.NewServer(wrapped)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
+		"a slow handler must surface as 503 via TimeoutHandler")
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), promScrapeTimeoutBody,
+		"the canned timeout body must reach the client")
+	assert.NotContains(t, string(body), "would-have-been-the-real-body",
+		"the slow handler's body must NOT leak through the wrap")
+}
+
+// TestWrapPromHandler_NoWrap_ResponseFlowsThrough asserts that when
+// handlerTimeout is 0 the real response body reaches the client even
+// when the handler is slightly slow. Cheap (no sleep needed) and proves
+// the conditional in wrapPromHandler did the right thing end-to-end.
+func TestWrapPromHandler_NoWrap_ResponseFlowsThrough(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("real-body"))
+	})
+	wrapped := wrapPromHandler(inner, 0)
+	srv := httptest.NewServer(wrapped)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "real-body", string(body),
+		"with handlerTimeout=0 the real response body must reach the client")
+}
+
+// TestStatsServer_Slowloris_ReadHeaderTimeout proves the slowloris
+// defense end-to-end: configure a tight ReadHeaderTimeout, start the
+// real listener, open a raw TCP connection, write a partial header
+// line, and assert the server closes the connection before our read
+// deadline. Gated by testing.Short because it waits ~250ms for the
+// server-side timeout to fire.
+func TestStatsServer_Slowloris_ReadHeaderTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: real listener + 250ms wait for ReadHeaderTimeout to fire")
+	}
+	port := freeTCPPort(t)
+	s, c := newTestStatsServer(t)
+	setStatsConfig(c, map[string]any{
+		"type":                "prometheus",
+		"interval":            "1s",
+		"listen":              "127.0.0.1:" + port,
+		"path":                "/metrics",
+		"read_header_timeout": "200ms",
+	})
+	require.NoError(t, s.reload(c, true))
+
+	done := make(chan struct{})
+	go func() {
+		s.Start()
+		close(done)
+	}()
+	t.Cleanup(func() {
+		s.Stop()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("stats server did not stop")
+		}
+	})
+	waitForListening(t, "127.0.0.1:"+port)
+
+	conn, err := net.Dial("tcp", "127.0.0.1:"+port)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Write a request line + one header but no terminating CRLF, then
+	// stop. A non-defended server would block here forever; this server
+	// must tear down the connection within ReadHeaderTimeout (200ms).
+	_, err = conn.Write([]byte("GET /metrics HTTP/1.1\r\nHost: localhost"))
+	require.NoError(t, err)
+
+	// Give the server slightly more than ReadHeaderTimeout to react.
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(1*time.Second)))
+	buf := make([]byte, 1)
+	_, readErr := conn.Read(buf)
+	require.Error(t, readErr,
+		"server must close the partial-header connection within ReadHeaderTimeout")
 }

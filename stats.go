@@ -344,7 +344,8 @@ func (s *statsServer) buildRuntime(cfg statsConfig) ([]func(), *http.Server) {
 		// so bridge our slog.Logger back to a *log.Logger that emits at Error.
 		errLog := slog.NewLogLogger(s.l.Handler(), slog.LevelError)
 		mux := http.NewServeMux()
-		mux.Handle(cfg.prom.path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: errLog}))
+		prom := promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: errLog})
+		mux.Handle(cfg.prom.path, wrapPromHandler(prom, cfg.prom.handlerTimeout))
 		return captureFns, &http.Server{
 			Addr:              cfg.prom.listen,
 			Handler:           mux,
@@ -355,6 +356,20 @@ func (s *statsServer) buildRuntime(cfg statsConfig) ([]func(), *http.Server) {
 		}
 	}
 	return captureFns, nil
+}
+
+// promScrapeTimeoutBody is the response body http.TimeoutHandler emits
+// when a prometheus scrape exceeds its handlerTimeout budget.
+const promScrapeTimeoutBody = "prometheus scrape timeout"
+
+// wrapPromHandler conditionally wraps h with http.TimeoutHandler. A
+// non-positive handlerTimeout returns h unchanged so the wrap can be
+// disabled by configuring stats.handler_timeout: 0.
+func wrapPromHandler(h http.Handler, handlerTimeout time.Duration) http.Handler {
+	if handlerTimeout <= 0 {
+		return h
+	}
+	return http.TimeoutHandler(h, handlerTimeout, promScrapeTimeoutBody)
 }
 
 // captureStatsLoop runs each fn on every tick of d until ctx is cancelled.
