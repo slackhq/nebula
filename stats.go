@@ -21,6 +21,38 @@ import (
 	"github.com/slackhq/nebula/config"
 )
 
+// Default timeouts for the Prometheus stats HTTP listener. Each one
+// defends against a specific class of slow-client / slow-network
+// failure that would otherwise tie up server resources indefinitely.
+const (
+	// defaultStatsReadHeaderTimeout bounds the time spent reading the
+	// HTTP request line and all headers. This is the primary slowloris
+	// defense - it fires before the application handler runs, so it
+	// protects the pre-handler read phase that no request context can
+	// reach.
+	defaultStatsReadHeaderTimeout = 10 * time.Second
+
+	// defaultStatsReadTimeout bounds the entire request read (headers
+	// plus body). Must be >= defaultStatsReadHeaderTimeout.
+	defaultStatsReadTimeout = 15 * time.Second
+
+	// defaultStatsWriteTimeout bounds the time from end-of-headers-read
+	// to end-of-response-write. Sized for large Prometheus registries
+	// behind slow scrapers.
+	defaultStatsWriteTimeout = 30 * time.Second
+
+	// defaultStatsIdleTimeout bounds keep-alive idle time before the
+	// server closes the connection. Sized to span ~8 scrapes at a 15s
+	// interval so a steady scrape cadence reuses one TCP/TLS handshake.
+	defaultStatsIdleTimeout = 120 * time.Second
+
+	// defaultStatsHandlerTimeout bounds a single Prometheus scrape via
+	// http.TimeoutHandler so a slow registry surfaces as a clean 503
+	// rather than an abrupt connection close. A zero config value
+	// disables the wrap entirely.
+	defaultStatsHandlerTimeout = 30 * time.Second
+)
+
 // statsServer owns nebula's stats subsystem: the periodic metric capture
 // goroutine and (for prometheus) an HTTP listener. It mirrors the lifecycle
 // shape of dnsServer: constructor wires the reload callback, reload records
@@ -73,6 +105,18 @@ type promConfig struct {
 	path      string
 	namespace string
 	subsystem string
+
+	// HTTP server timeouts. See the default* constants for the meaning
+	// of each field; zero means "no limit" per net/http semantics, but
+	// loadStatsConfig substitutes the default when a key is absent.
+	readHeaderTimeout time.Duration
+	readTimeout       time.Duration
+	writeTimeout      time.Duration
+	idleTimeout       time.Duration
+	// handlerTimeout drives the optional http.TimeoutHandler wrap.
+	// A zero value disables the wrap; non-zero installs it with this
+	// budget.
+	handlerTimeout time.Duration
 }
 
 // newStatsServerFromConfig builds a statsServer, applies the initial config,
@@ -300,10 +344,32 @@ func (s *statsServer) buildRuntime(cfg statsConfig) ([]func(), *http.Server) {
 		// so bridge our slog.Logger back to a *log.Logger that emits at Error.
 		errLog := slog.NewLogLogger(s.l.Handler(), slog.LevelError)
 		mux := http.NewServeMux()
-		mux.Handle(cfg.prom.path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: errLog}))
-		return captureFns, &http.Server{Addr: cfg.prom.listen, Handler: mux}
+		prom := promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: errLog})
+		mux.Handle(cfg.prom.path, wrapPromHandler(prom, cfg.prom.handlerTimeout))
+		return captureFns, &http.Server{
+			Addr:              cfg.prom.listen,
+			Handler:           mux,
+			ReadHeaderTimeout: cfg.prom.readHeaderTimeout,
+			ReadTimeout:       cfg.prom.readTimeout,
+			WriteTimeout:      cfg.prom.writeTimeout,
+			IdleTimeout:       cfg.prom.idleTimeout,
+		}
 	}
 	return captureFns, nil
+}
+
+// promScrapeTimeoutBody is the response body http.TimeoutHandler emits
+// when a prometheus scrape exceeds its handlerTimeout budget.
+const promScrapeTimeoutBody = "prometheus scrape timeout"
+
+// wrapPromHandler conditionally wraps h with http.TimeoutHandler. A
+// non-positive handlerTimeout returns h unchanged so the wrap can be
+// disabled by configuring stats.handler_timeout: 0.
+func wrapPromHandler(h http.Handler, handlerTimeout time.Duration) http.Handler {
+	if handlerTimeout <= 0 {
+		return h
+	}
+	return http.TimeoutHandler(h, handlerTimeout, promScrapeTimeoutBody)
 }
 
 // captureStatsLoop runs each fn on every tick of d until ctx is cancelled.
@@ -359,6 +425,25 @@ func loadStatsConfig(c *config.C) (statsConfig, error) {
 		}
 		cfg.prom.namespace = c.GetString("stats.namespace", "")
 		cfg.prom.subsystem = c.GetString("stats.subsystem", "")
+		cfg.prom.readHeaderTimeout = c.GetDuration("stats.read_header_timeout", defaultStatsReadHeaderTimeout)
+		cfg.prom.readTimeout = c.GetDuration("stats.read_timeout", defaultStatsReadTimeout)
+		cfg.prom.writeTimeout = c.GetDuration("stats.write_timeout", defaultStatsWriteTimeout)
+		cfg.prom.idleTimeout = c.GetDuration("stats.idle_timeout", defaultStatsIdleTimeout)
+		cfg.prom.handlerTimeout = c.GetDuration("stats.handler_timeout", defaultStatsHandlerTimeout)
+		for _, e := range []struct {
+			key string
+			v   time.Duration
+		}{
+			{"stats.read_header_timeout", cfg.prom.readHeaderTimeout},
+			{"stats.read_timeout", cfg.prom.readTimeout},
+			{"stats.write_timeout", cfg.prom.writeTimeout},
+			{"stats.idle_timeout", cfg.prom.idleTimeout},
+			{"stats.handler_timeout", cfg.prom.handlerTimeout},
+		} {
+			if e.v < 0 {
+				return cfg, fmt.Errorf("%s must be >= 0, got %s", e.key, e.v)
+			}
+		}
 	default:
 		return cfg, fmt.Errorf("stats.type was not understood: %s", cfg.typ)
 	}
