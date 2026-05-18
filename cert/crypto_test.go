@@ -1,6 +1,8 @@
 package cert
 
 import (
+	"math"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -110,4 +112,108 @@ func TestEncryptAndMarshalSigningPrivateKey(t *testing.T) {
 	require.NoError(t, err)
 
 	// EncryptAndMarshalEd25519PrivateKey does not create any errors itself
+}
+
+func TestUnmarshalArgon2Parameters_Validation(t *testing.T) {
+	salt := []byte{1, 2, 3, 4}
+
+	tests := []struct {
+		name             string
+		params           *RawNebulaArgon2Parameters
+		wantErr          bool
+		wantErrSubstring string
+		wantOut          *Argon2Parameters
+	}{
+		{
+			name: "memory == 0 is rejected",
+			params: &RawNebulaArgon2Parameters{
+				Version: 0x13, Memory: 0, Parallelism: 4, Iterations: 3, Salt: salt,
+			},
+			wantErr:          true,
+			wantErrSubstring: "memory",
+		},
+		{
+			name: "parallelism == 0 is rejected",
+			params: &RawNebulaArgon2Parameters{
+				Version: 0x13, Memory: 65536, Parallelism: 0, Iterations: 3, Salt: salt,
+			},
+			wantErr:          true,
+			wantErrSubstring: "parallelism",
+		},
+		{
+			name: "parallelism > MaxUint8 is rejected (proto field is uint32, struct field is uint8)",
+			params: &RawNebulaArgon2Parameters{
+				Version: 0x13, Memory: 65536, Parallelism: 256, Iterations: 3, Salt: salt,
+			},
+			wantErr:          true,
+			wantErrSubstring: "parallelism",
+		},
+		{
+			name: "parallelism = 1000 is rejected (mid-range silent-truncation hazard if bounds check were weakened)",
+			params: &RawNebulaArgon2Parameters{
+				Version: 0x13, Memory: 65536, Parallelism: 1000, Iterations: 3, Salt: salt,
+			},
+			wantErr:          true,
+			wantErrSubstring: "parallelism",
+		},
+		{
+			name: "parallelism = MaxUint32 is rejected (extreme overflow case)",
+			params: &RawNebulaArgon2Parameters{
+				Version: 0x13, Memory: 65536, Parallelism: math.MaxUint32, Iterations: 3, Salt: salt,
+			},
+			wantErr:          true,
+			wantErrSubstring: "parallelism",
+		},
+		{
+			name: "iterations == 0 is rejected",
+			params: &RawNebulaArgon2Parameters{
+				Version: 0x13, Memory: 65536, Parallelism: 4, Iterations: 0, Salt: salt,
+			},
+			wantErr:          true,
+			wantErrSubstring: "iterations",
+		},
+		{
+			name: "valid params forward every field through to the Argon2Parameters struct",
+			params: &RawNebulaArgon2Parameters{
+				Version: 0x13, Memory: 65536, Parallelism: 4, Iterations: 3, Salt: salt,
+			},
+			wantErr: false,
+			wantOut: &Argon2Parameters{
+				version:     0x13,
+				Memory:      65536,
+				Parallelism: 4,
+				Iterations:  3,
+				salt:        salt,
+			},
+		},
+		{
+			name: "max-uint8 parallelism is accepted (boundary just below the rejection threshold)",
+			params: &RawNebulaArgon2Parameters{
+				Version: 0x13, Memory: 65536, Parallelism: 255, Iterations: 3, Salt: salt,
+			},
+			wantErr: false,
+			wantOut: &Argon2Parameters{
+				version:     0x13,
+				Memory:      65536,
+				Parallelism: 255,
+				Iterations:  3,
+				salt:        salt,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := unmarshalArgon2Parameters(tc.params)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, strings.ToLower(err.Error()), tc.wantErrSubstring,
+					"error message must name the offending field so operators can find it")
+				require.Nil(t, got)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantOut, got)
+		})
+	}
 }
