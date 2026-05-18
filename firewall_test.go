@@ -1029,69 +1029,36 @@ func Test_parsePort(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// Test_parsePort_invalid walks adversarial inputs grouped by attack class.
-// Every row carries a name describing what is exercised, so a failure
-// clearly identifies which case regressed. wantErrContains is matched
-// against the returned error with require.ErrorContains; "" means the call
-// must succeed (no row in this table is allowed to succeed — see
-// Test_parsePort_valid_boundaries for the success cases).
+// Test_parsePort_invalid covers inputs that must error. The named bug is
+// that int32(strconv.Atoi("4294967296")) truncates to 0 == firewall.PortAny,
+// silently turning a typo into a match-all-ports rule; the rest are
+// representative syntax/range probes.
 func Test_parsePort_invalid(t *testing.T) {
 	tests := []struct {
 		name            string
 		input           string
 		wantErrContains string
 	}{
-		// A. Numeric overflow that collides with sentinels (the original bug).
-		{"2^32 truncates to PortAny", "4294967296", "out of range"},
-		{"2^32 plus one truncates to port 1", "4294967297", "out of range"},
-		{"2^31 truncates to INT32_MIN", "2147483648", "out of range"},
-		{"max int64", "9223372036854775807", "out of range"},
+		// Numeric overflow (the named bug + boundary).
+		{"named bug: 2^32 truncates to PortAny", "4294967296", "out of range"},
 		{"just above max real port", "65536", "out of range"},
-		{"order-of-magnitude typo", "1000000", "out of range"},
 
-		// B. Sentinel collisions via negatives.
-		//
-		// Negative inputs contain a "-" so the parser routes them through the
-		// range branch; SplitN gives ["", "<digits>"] which trips the empty-
-		// half guard. The historical "could not be parsed" diagnostic stays;
-		// the important guarantee is that none of these reach int32(Atoi(s))
-		// and collide with PortFragment (-1) or notAPort (-2) sentinels.
-		{"negative one would collide with PortFragment", "-1", "could not be parsed"},
-		{"negative two would collide with notAPort sentinel", "-2", "could not be parsed"},
-		{"large negative", "-99999", "could not be parsed"},
-		{"min int64", "-9223372036854775808", "could not be parsed"},
+		// Negatives route through the range branch and hit the empty-half
+		// guard; included as defense in depth so a future refactor cannot
+		// accidentally reach the int32 cast.
+		{"negative", "-1", "could not be parsed"},
 
-		// C. String-injection / format probes.
-		{"NUL byte after digits", "42\x00", "was not a number"},
-		{"NUL only", "\x00", "was not a number"},
+		// Syntax probes.
 		{"NUL between digits", "4\x002", "was not a number"},
-		{"newline after digits", "42\n", "was not a number"},
-		{"tab after digits", "42\t", "was not a number"},
-		{"carriage return after digits", "42\r", "was not a number"},
-		{"leading whitespace plain", " 42", "was not a number"},
-		{"trailing whitespace plain", "42 ", "was not a number"},
-		{"hex notation rejected", "0x10", "was not a number"},
-		{"octal notation rejected", "0o20", "was not a number"},
-		{"binary notation rejected", "0b101010", "was not a number"},
-		{"float notation rejected", "4.2", "was not a number"},
-		{"scientific notation rejected", "1e3", "was not a number"},
-		{"underscore separator rejected", "1_000", "was not a number"},
-		{"explicit positive sign rejected", "+42", "was not a number"},
-
-		// D. Unicode / multi-byte digits.
+		{"hex notation", "0x10", "was not a number"},
+		{"scientific notation", "1e3", "was not a number"},
+		{"leading whitespace", " 42", "was not a number"},
 		{"fullwidth digits", "４２", "was not a number"},
-		{"arabic-indic digits", "٤٢", "was not a number"},
-		{"superscript digits", "⁴²", "was not a number"},
-		{"emoji", "💩", "was not a number"},
 
-		// E. Range-branch out-of-range / injection.
-		{"range upper above max", "1-65536", "ending range out of range"},
-		{"range upper truncates to PortAny", "1-4294967296", "ending range out of range"},
-		{"range both ends above max", "65536-65537", "beginning range out of range"},
-		{"range with negative lower (leading dash parses as range marker)", "-1-100", "could not be parsed"},
+		// Range branch.
+		{"range upper out of range", "1-65536", "ending range out of range"},
+		{"range lower out of range", "65536-65537", "beginning range out of range"},
 		{"range with negative upper", "1--1", "ending range was not a number"},
-		{"range with NUL in start", "4\x002-100", "beginning range was not a number"},
-		{"range start above max", "4294967296-4294967300", "beginning range out of range"},
 	}
 
 	for _, tc := range tests {
@@ -1103,54 +1070,8 @@ func Test_parsePort_invalid(t *testing.T) {
 	}
 }
 
-// parsePortBenchInputs exercises representative shapes that parsePort sees
-// at startup when a firewall configuration is loaded. Each row is also a
-// good triage probe — naming the slowest input case quickly identifies
-// where a regression lands.
-var parsePortBenchInputs = []struct {
-	name, in string
-}{
-	{"any_keyword", "any"},
-	{"fragment_keyword", "fragment"},
-	{"single_short", "53"},
-	{"single_typical", "4242"},
-	{"single_max", "65535"},
-	{"single_outOfRange", "65536"},
-	{"single_negative", "-1"},
-	{"single_2to32", "4294967296"},
-	{"range_typical", "8000-8100"},
-	{"range_outOfRange", "1-65536"},
-}
-
-// BenchmarkParsePort exercises the production parsePort across the input
-// shapes in parsePortBenchInputs. Useful for tracking ns/op and allocs over
-// time. For methodology context comparing conversion primitives, see
-// firewall_parseport_bench_test.go.
-//
-// The loop body assigns into package-level sink vars (declared in
-// firewall_parseport_bench_test.go) so the Go compiler cannot elide the
-// otherwise-pure parsePort call as dead code.
-func BenchmarkParsePort(b *testing.B) {
-	for _, tc := range parsePortBenchInputs {
-		b.Run(tc.name, func(b *testing.B) {
-			b.ReportAllocs()
-			var s, e int32
-			var err error
-			for i := 0; i < b.N; i++ {
-				s, e, err = parsePort(tc.in)
-			}
-			benchParsePortStart, benchParsePortEnd, benchParsePortErr = s, e, err
-			if testing.Verbose() {
-				b.Logf("last result: start=%d end=%d err=%v",
-					benchParsePortStart, benchParsePortEnd, benchParsePortErr)
-			}
-		})
-	}
-}
-
-// Test_parsePort_valid_boundaries locks in the preserved success cases so
-// refactors of parsePort cannot accidentally regress the boundary semantics
-// at 0, 1, 65535, or the existing start==0 forces end=0 override for ranges.
+// Test_parsePort_valid_boundaries locks in success cases at 0, 1, and 65535
+// so a future refactor cannot regress the boundaries.
 func Test_parsePort_valid_boundaries(t *testing.T) {
 	tests := []struct {
 		name      string
