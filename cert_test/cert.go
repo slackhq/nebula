@@ -14,6 +14,12 @@ import (
 	"golang.org/x/crypto/ed25519"
 )
 
+// testCertNow is the reference "now" used to derive default before/after times
+// in NewTestCaCert and NewTestCert. Holding it fixed for the lifetime of the
+// test binary keeps CA and leaf defaults aligned at the same second, so a leaf
+// signed with default times can never expire after its CA on a rounding race.
+var testCertNow = time.Now().Round(time.Second)
+
 // NewTestCaCert will create a new ca certificate
 func NewTestCaCert(version cert.Version, curve cert.Curve, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string) (cert.Certificate, []byte, []byte, []byte) {
 	var err error
@@ -35,10 +41,10 @@ func NewTestCaCert(version cert.Version, curve cert.Curve, before, after time.Ti
 	}
 
 	if before.IsZero() {
-		before = time.Now().Add(time.Second * -60).Round(time.Second)
+		before = testCertNow.Add(time.Second * -60)
 	}
 	if after.IsZero() {
-		after = time.Now().Add(time.Second * 60).Round(time.Second)
+		after = testCertNow.Add(time.Second * 60)
 	}
 
 	t := &cert.TBSCertificate{
@@ -71,11 +77,11 @@ func NewTestCaCert(version cert.Version, curve cert.Curve, before, after time.Ti
 // Expiry times are defaulted if you do not pass them in
 func NewTestCert(v cert.Version, curve cert.Curve, ca cert.Certificate, key []byte, name string, before, after time.Time, networks, unsafeNetworks []netip.Prefix, groups []string) (cert.Certificate, []byte, []byte, []byte) {
 	if before.IsZero() {
-		before = time.Now().Add(time.Second * -60).Round(time.Second)
+		before = testCertNow.Add(time.Second * -60)
 	}
 
 	if after.IsZero() {
-		after = time.Now().Add(time.Second * 60).Round(time.Second)
+		after = testCertNow.Add(time.Second * 60)
 	}
 
 	var pub, priv []byte
