@@ -408,3 +408,51 @@ func freeTCPPort(t *testing.T) string {
 	require.NoError(t, ln.Close())
 	return strconv.Itoa(port)
 }
+
+// TestStatsServer_buildRuntime_AppliesDefaultTimeouts pins the four
+// http.Server timeout fields to their default constants, so a future
+// edit that drops a field is caught at the source rather than only
+// surfacing as a missing slowloris defense in production.
+func TestStatsServer_buildRuntime_AppliesDefaultTimeouts(t *testing.T) {
+	s, _ := newTestStatsServer(t)
+	cfg := statsConfig{
+		typ:      "prometheus",
+		interval: time.Second,
+		prom: promConfig{
+			listen: "127.0.0.1:0",
+			path:   "/metrics",
+		},
+	}
+
+	_, server := s.buildRuntime(cfg)
+	require.NotNil(t, server, "prometheus config must produce an *http.Server")
+
+	tests := []struct {
+		name string
+		got  time.Duration
+		want time.Duration
+	}{
+		{"ReadHeaderTimeout", server.ReadHeaderTimeout, defaultStatsReadHeaderTimeout},
+		{"ReadTimeout", server.ReadTimeout, defaultStatsReadTimeout},
+		{"WriteTimeout", server.WriteTimeout, defaultStatsWriteTimeout},
+		{"IdleTimeout", server.IdleTimeout, defaultStatsIdleTimeout},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.got,
+				"%s must be set to its default constant", tc.name)
+		})
+	}
+}
+
+// TestStatsTimeoutDefaults_AreConsistent guards the invariant that
+// ReadTimeout must be at least as large as ReadHeaderTimeout. If a
+// future edit shortens ReadTimeout below ReadHeaderTimeout, the read
+// phase would terminate before headers had a chance to finish - giving
+// a generic i/o-timeout instead of the more useful slowloris-shaped
+// failure.
+func TestStatsTimeoutDefaults_AreConsistent(t *testing.T) {
+	require.GreaterOrEqual(t,
+		defaultStatsReadTimeout, defaultStatsReadHeaderTimeout,
+		"defaultStatsReadTimeout must be >= defaultStatsReadHeaderTimeout")
+}

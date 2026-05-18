@@ -21,6 +21,32 @@ import (
 	"github.com/slackhq/nebula/config"
 )
 
+// Default timeouts for the Prometheus stats HTTP listener. Each one
+// defends against a specific class of slow-client / slow-network
+// failure that would otherwise tie up server resources indefinitely.
+const (
+	// defaultStatsReadHeaderTimeout bounds the time spent reading the
+	// HTTP request line and all headers. This is the primary slowloris
+	// defense - it fires before the application handler runs, so it
+	// protects the pre-handler read phase that no request context can
+	// reach.
+	defaultStatsReadHeaderTimeout = 10 * time.Second
+
+	// defaultStatsReadTimeout bounds the entire request read (headers
+	// plus body). Must be >= defaultStatsReadHeaderTimeout.
+	defaultStatsReadTimeout = 15 * time.Second
+
+	// defaultStatsWriteTimeout bounds the time from end-of-headers-read
+	// to end-of-response-write. Sized for large Prometheus registries
+	// behind slow scrapers.
+	defaultStatsWriteTimeout = 30 * time.Second
+
+	// defaultStatsIdleTimeout bounds keep-alive idle time before the
+	// server closes the connection. Sized to span ~8 scrapes at a 15s
+	// interval so a steady scrape cadence reuses one TCP/TLS handshake.
+	defaultStatsIdleTimeout = 120 * time.Second
+)
+
 // statsServer owns nebula's stats subsystem: the periodic metric capture
 // goroutine and (for prometheus) an HTTP listener. It mirrors the lifecycle
 // shape of dnsServer: constructor wires the reload callback, reload records
@@ -301,7 +327,14 @@ func (s *statsServer) buildRuntime(cfg statsConfig) ([]func(), *http.Server) {
 		errLog := slog.NewLogLogger(s.l.Handler(), slog.LevelError)
 		mux := http.NewServeMux()
 		mux.Handle(cfg.prom.path, promhttp.HandlerFor(pr, promhttp.HandlerOpts{ErrorLog: errLog}))
-		return captureFns, &http.Server{Addr: cfg.prom.listen, Handler: mux}
+		return captureFns, &http.Server{
+			Addr:              cfg.prom.listen,
+			Handler:           mux,
+			ReadHeaderTimeout: defaultStatsReadHeaderTimeout,
+			ReadTimeout:       defaultStatsReadTimeout,
+			WriteTimeout:      defaultStatsWriteTimeout,
+			IdleTimeout:       defaultStatsIdleTimeout,
+		}
 	}
 	return captureFns, nil
 }
