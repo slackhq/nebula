@@ -335,8 +335,7 @@ func (c *C) resolve(path string, direct bool) error {
 	}
 
 	if !i.IsDir() {
-		c.addFile(path, direct)
-		return nil
+		return c.addFile(path, direct)
 	}
 
 	paths, err := readDirNames(path)
@@ -354,6 +353,13 @@ func (c *C) resolve(path string, direct bool) error {
 	return nil
 }
 
+// filepathAbs is the abs-path resolver used by addFile. It is a package
+// level var so tests can swap in a function that errors to exercise the
+// previously-swallowed propagation path. Production always uses
+// filepath.Abs. Tests that mutate filepathAbs cannot run with
+// t.Parallel().
+var filepathAbs = filepath.Abs
+
 func (c *C) addFile(path string, direct bool) error {
 	ext := filepath.Ext(path)
 
@@ -361,7 +367,7 @@ func (c *C) addFile(path string, direct bool) error {
 		return nil
 	}
 
-	ap, err := filepath.Abs(path)
+	ap, err := filepathAbs(path)
 	if err != nil {
 		return err
 	}

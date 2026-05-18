@@ -1,7 +1,9 @@
 package nebula
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -11,12 +13,24 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/miekg/dns"
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// errInjectedWriteMsg is the sentinel returned by failingDNSWriter.WriteMsg
+// so tests can errors.Is the wrapped cause.
+var errInjectedWriteMsg = errors.New("injected WriteMsg failure")
+
+// failingDNSWriter wraps stubDNSWriter and returns errInjectedWriteMsg from
+// WriteMsg. Used to exercise the previously-swallowed error branch in
+// dnsServer.handleDnsRequest without standing up a real DNS listener.
+type failingDNSWriter struct{ stubDNSWriter }
+
+func (failingDNSWriter) WriteMsg(*dns.Msg) error { return errInjectedWriteMsg }
 
 type stubDNSWriter struct{}
 
@@ -30,6 +44,115 @@ func (stubDNSWriter) Close() error              { return nil }
 func (stubDNSWriter) TsigStatus() error         { return nil }
 func (stubDNSWriter) TsigTimersOnly(bool)       {}
 func (stubDNSWriter) Hijack()                   {}
+
+// TestDNSWriteWarnLimiter walks the rate-limiter's state machine
+// deterministically by passing explicit unix-nano timestamps in place of a
+// real clock. Each row carries a name describing what is exercised; a
+// failure clearly identifies which case regressed.
+func TestDNSWriteWarnLimiter(t *testing.T) {
+	const sec = int64(time.Second)
+	tests := []struct {
+		name        string
+		windowNs    int64
+		calls       []int64 // simulated `now` passed to shouldLog
+		wantLogged  []bool  // expected shouldLog return value, per call
+		wantPrevSup []int64 // expected suppressed count, per call (meaningful only when logged=true)
+	}{
+		{
+			name:        "first call always logs with zero suppressed",
+			windowNs:    10 * sec,
+			calls:       []int64{1},
+			wantLogged:  []bool{true},
+			wantPrevSup: []int64{0},
+		},
+		{
+			name:        "second call inside window is suppressed",
+			windowNs:    10 * sec,
+			calls:       []int64{1, 1 + 5*sec},
+			wantLogged:  []bool{true, false},
+			wantPrevSup: []int64{0, 0},
+		},
+		{
+			name:        "call past window emits with the suppressed count",
+			windowNs:    10 * sec,
+			calls:       []int64{1, 1 + 5*sec, 1 + 11*sec},
+			wantLogged:  []bool{true, false, true},
+			wantPrevSup: []int64{0, 0, 1},
+		},
+		{
+			name:        "tied exactly at the window edge logs",
+			windowNs:    10 * sec,
+			calls:       []int64{1, 1 + 10*sec},
+			wantLogged:  []bool{true, true},
+			wantPrevSup: []int64{0, 0},
+		},
+		{
+			name:        "many suppressed in a row then one log gets accumulated count",
+			windowNs:    10 * sec,
+			calls:       []int64{1, 2, 3, 4, 5, 1 + 11*sec},
+			wantLogged:  []bool{true, false, false, false, false, true},
+			wantPrevSup: []int64{0, 0, 0, 0, 0, 4},
+		},
+		{
+			name:        "non-monotonic clock (defensive: now < lastLogged) keeps suppressing",
+			windowNs:    10 * sec,
+			calls:       []int64{1 + 100*sec, 50 * sec},
+			wantLogged:  []bool{true, false},
+			wantPrevSup: []int64{0, 0},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			lim := newDNSWriteWarnLimiter(time.Duration(tc.windowNs))
+			require.Len(t, tc.wantLogged, len(tc.calls), "table row consistency")
+			require.Len(t, tc.wantPrevSup, len(tc.calls), "table row consistency")
+			for i, now := range tc.calls {
+				gotLog, gotSup := lim.shouldLog(now)
+				assert.Equal(t, tc.wantLogged[i], gotLog,
+					"call %d at now=%d: log decision", i, now)
+				if tc.wantLogged[i] {
+					assert.Equal(t, tc.wantPrevSup[i], gotSup,
+						"call %d at now=%d: suppressed count returned", i, now)
+				}
+			}
+		})
+	}
+}
+
+// TestDnsServer_HandleDnsRequest_WriteMsgFailure_LogsAndMeters wires
+// handleDnsRequest against a failingDNSWriter and asserts that the
+// WriteMsg error is now (a) counted in dns.responses.write_failures,
+// (b) emitted as a Warn log line that includes the injected error and
+// the suppressed-since-last-log attr.
+func TestDnsServer_HandleDnsRequest_WriteMsgFailure_LogsAndMeters(t *testing.T) {
+	var logBuf bytes.Buffer
+	l := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	counter := metrics.NewCounter() // a fresh counter so other tests do not pollute our delta
+	ds := &dnsServer{
+		l:                   l,
+		dnsMap4:             make(map[string]netip.Addr),
+		dnsMap6:             make(map[string]netip.Addr),
+		hostMap:             &HostMap{},
+		metricWriteFailures: counter,
+		warnLimiter:         newDNSWriteWarnLimiter(dnsWriteWarnLogWindow),
+	}
+	ds.enabled.Store(true)
+
+	q := new(dns.Msg)
+	q.SetQuestion("example.test.", dns.TypeA)
+
+	ds.handleDnsRequest(failingDNSWriter{}, q)
+
+	assert.Equal(t, int64(1), counter.Count(),
+		"metricWriteFailures must increment on WriteMsg error")
+	logged := logBuf.String()
+	assert.Contains(t, logged, "dns: failed to write response",
+		"Warn message must identify the dns/WriteMsg layer")
+	assert.Contains(t, logged, errInjectedWriteMsg.Error(),
+		"Warn must include the underlying error so operators can correlate")
+	assert.Contains(t, logged, "suppressed_since_last_log=0",
+		"first failure must report zero suppressed entries")
+}
 
 func TestParsequery(t *testing.T) {
 	l := slog.New(slog.DiscardHandler)
