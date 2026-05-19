@@ -83,6 +83,7 @@ type HandshakeHostInfo struct {
 	initiatingVersionOverride cert.Version     // Should we use a non-default cert version for this handshake?
 	counter                   int64            // How many attempts have we made so far
 	lastRemotes               []netip.AddrPort // Remotes that we sent to during the previous attempt
+	lastRelays                []netip.Addr     // Relays we attempted to use during the previous attempt
 	packetStore               []*cachedPacket  // A set of packets to be transmitted once the handshake completes
 
 	hostinfo *HostInfo
@@ -323,7 +324,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		)
 	}
 
-	hm.f.relayManager.StartRelays(hm.f, vpnIp, hostinfo, stage0)
+	hm.f.relayManager.StartRelays(hm.f, vpnIp, hh, stage0)
 
 	// If a lighthouse triggered this attempt then we are still in the timer wheel and do not need to re-add
 	if !lighthouseTriggered {
