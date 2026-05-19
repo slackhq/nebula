@@ -60,6 +60,18 @@ ALL = $(ALL_LINUX) \
 	windows-amd64 \
 	windows-arm64
 
+# Cross-build shards used by .github/workflows/test.yml — same as ALL_*
+# but with the arch that has a native CI runner removed, so the cross-build
+# job is not duplicating coverage the native test jobs already give.
+ALL_CROSS_LINUX = $(filter-out linux-amd64,$(ALL_LINUX))
+
+# ALL_CROSS_LINUX further split into family sub-shards so each can run on
+# its own CI runner in parallel. Union of the three must equal
+# ALL_CROSS_LINUX; adding a new linux arch goes into the matching family.
+ALL_CROSS_LINUX_ARM   = linux-arm-5 linux-arm-6 linux-arm-7 linux-arm64
+ALL_CROSS_LINUX_MIPS  = linux-mips linux-mipsle linux-mips64 linux-mips64le linux-mips-softfloat
+ALL_CROSS_LINUX_OTHER = linux-386 linux-ppc64le linux-riscv64 linux-loong64
+
 e2e:
 	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
 
@@ -81,6 +93,35 @@ e2e-bench: e2e
 DOCKER_BIN = build/linux-amd64/nebula build/linux-amd64/nebula-cert
 
 all: $(ALL:%=build/%/nebula) $(ALL:%=build/%/nebula-cert)
+
+all-linux: $(ALL_LINUX:%=build/%/nebula) $(ALL_LINUX:%=build/%/nebula-cert)
+
+all-freebsd: $(ALL_FREEBSD:%=build/%/nebula) $(ALL_FREEBSD:%=build/%/nebula-cert)
+
+all-openbsd: $(ALL_OPENBSD:%=build/%/nebula) $(ALL_OPENBSD:%=build/%/nebula-cert)
+
+all-netbsd: $(ALL_NETBSD:%=build/%/nebula) $(ALL_NETBSD:%=build/%/nebula-cert)
+
+all-darwin: build/darwin-amd64/nebula build/darwin-amd64/nebula-cert build/darwin-arm64/nebula build/darwin-arm64/nebula-cert
+
+all-windows: build/windows-amd64/nebula.exe build/windows-amd64/nebula-cert.exe build/windows-arm64/nebula.exe build/windows-arm64/nebula-cert.exe
+
+# CI cross-build shards. darwin-arm64 is covered by the native macos-latest
+# job; windows-amd64 is covered by the native windows-latest job; both are
+# omitted here to avoid building them a second time. darwin-amd64 stays in
+# all-cross-darwin because intel mac is only a labeled/master-time native
+# job, so PRs still need cross-build coverage for it.
+all-cross-linux: $(ALL_CROSS_LINUX:%=build/%/nebula) $(ALL_CROSS_LINUX:%=build/%/nebula-cert)
+
+all-cross-linux-arm:   $(ALL_CROSS_LINUX_ARM:%=build/%/nebula)   $(ALL_CROSS_LINUX_ARM:%=build/%/nebula-cert)
+
+all-cross-linux-mips:  $(ALL_CROSS_LINUX_MIPS:%=build/%/nebula)  $(ALL_CROSS_LINUX_MIPS:%=build/%/nebula-cert)
+
+all-cross-linux-other: $(ALL_CROSS_LINUX_OTHER:%=build/%/nebula) $(ALL_CROSS_LINUX_OTHER:%=build/%/nebula-cert)
+
+all-cross-darwin: build/darwin-amd64/nebula build/darwin-amd64/nebula-cert
+
+all-cross-windows: build/windows-arm64/nebula.exe build/windows-arm64/nebula-cert.exe
 
 docker: docker/linux-$(shell go env GOARCH)
 
@@ -236,5 +277,5 @@ smoke-vagrant/%: bin-docker build/%/nebula
 	cd .github/workflows/smoke/ && ./smoke-vagrant.sh $*
 
 .FORCE:
-.PHONY: bench bench-cpu bench-cpu-long bin build-test-mobile e2e e2ev e2evv e2evvv e2evvvv proto release service smoke-docker smoke-docker-race test test-cov-html smoke-vagrant/%
+.PHONY: all all-linux all-freebsd all-openbsd all-netbsd all-darwin all-windows all-cross-linux all-cross-linux-arm all-cross-linux-mips all-cross-linux-other all-cross-darwin all-cross-windows bench bench-cpu bench-cpu-long bin build-test-mobile e2e e2ev e2evv e2evvv e2evvvv proto release service smoke-docker smoke-docker-race test test-cov-html smoke-vagrant/%
 .DEFAULT_GOAL := bin
