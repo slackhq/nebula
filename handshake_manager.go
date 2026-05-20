@@ -217,7 +217,6 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		fields := []any{
 			"udpAddrs", hh.hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges()),
 			"initiatorIndex", hh.hostinfo.localIndexId,
-			"remoteIndex", hh.hostinfo.remoteIndexId,
 			"durationNs", time.Since(hh.startTime).Nanoseconds(),
 		}
 		// hh.machine can be nil here if buildStage0Packet never succeeded
@@ -465,7 +464,6 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
 		hostinfo.logger(hm.l).Info("New host shadows existing host remoteIndex",
-			"remoteIndex", hostinfo.remoteIndexId,
 			"collision", existingRemoteIndex.vpnAddrs,
 		)
 	}
@@ -488,7 +486,6 @@ func (hm *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
 		hostinfo.logger(hm.l).Info("New host shadows existing host remoteIndex",
-			"remoteIndex", hostinfo.remoteIndexId,
 			"collision", existingRemoteIndex.vpnAddrs,
 		)
 	}
