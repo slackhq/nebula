@@ -12,6 +12,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/checksum"
 
 	"github.com/slackhq/nebula/overlay/tio/virtio"
+	"github.com/slackhq/nebula/wire"
 )
 
 // testSegScratchSize is a generous segmentation scratch sized to fit any
@@ -26,12 +27,11 @@ func verifyChecksum(b []byte, pseudo uint16) bool {
 }
 
 // segmentForTest is the test-only counterpart to the production
-// SegmentSuperpacket path. It handles GSO_NONE (with optional
+// wire.TunPacket.PerSegment path. It handles GSO_NONE (with optional
 // finishChecksum) inline and dispatches GSO superpackets through
-// SegmentSuperpacket, draining each yielded segment into a
-// freshly-copied [][]byte slot so callers can iterate after the call
-// returns. Tests pre-set hdr.HdrLen correctly, so correctHdrLen is not
-// invoked here.
+// PerSegment, draining each yielded segment into a freshly-copied [][]byte
+// slot so callers can iterate after the call returns. Tests pre-set
+// hdr.HdrLen correctly, so correctHdrLen is not invoked here.
 func segmentForTest(pkt []byte, hdr virtio.Hdr, out *[][]byte, scratch []byte) error {
 	if hdr.GSOType == unix.VIRTIO_NET_HDR_GSO_NONE {
 		cp := append([]byte(nil), pkt...)
@@ -47,13 +47,16 @@ func segmentForTest(pkt []byte, hdr virtio.Hdr, out *[][]byte, scratch []byte) e
 	if err != nil {
 		return err
 	}
-	gso := GSOInfo{
-		Size:      hdr.GSOSize,
-		HdrLen:    hdr.HdrLen,
-		CsumStart: hdr.CsumStart,
-		Proto:     proto,
+	p := wire.TunPacket{
+		Bytes: pkt,
+		Meta: wire.GSOInfo{
+			Size:      hdr.GSOSize,
+			HdrLen:    hdr.HdrLen,
+			CsumStart: hdr.CsumStart,
+			Proto:     proto,
+		},
 	}
-	return SegmentSuperpacket(Packet{Bytes: pkt, GSO: gso}, func(seg []byte) error {
+	return p.PerSegment(func(seg []byte) error {
 		*out = append(*out, append([]byte(nil), seg...))
 		return nil
 	})
@@ -592,8 +595,8 @@ func BenchmarkSegmentTCPv4(b *testing.B) {
 			scratch := make([]byte, testSegScratchSize)
 			out := make([][]byte, 0, 64)
 
-			// SegmentSuperpacket consumes its input destructively; restore
-			// pkt from a master copy each iteration. The restore mirrors the
+			// PerSegment consumes its input destructively; restore pkt from
+			// a master copy each iteration. The restore mirrors the
 			// kernel→userspace copy that hands a fresh GSO blob to the
 			// segmenter in production, so it's representative cost rather
 			// than bench overhead.
@@ -673,24 +676,21 @@ func buildTSOv6(payLen, gso int) []byte {
 	return pkt
 }
 
-// TestDecodeReadFitsMaxTSOAtDrainThreshold proves the rxBuf sizing is
-// correct: when rxOff is at the maximum value the drain headroom check
-// allows, decodeRead must still be able to absorb a worst-case 64KiB
-// TSO superpacket without dropping the burst. With segmentation deferred
-// to encrypt time, decodeRead writes only the kernel-supplied bytes into
-// rxBuf, so the size requirement is just "fit one worst-case input."
+// TestDecodeReadFitsMaxTSO proves decodeRead can absorb a worst-case
+// 64KiB TSO superpacket without dropping it. With segmentation deferred to
+// encrypt time, decodeRead writes nothing — it just slices the
+// caller-supplied mem and attaches GSO metadata — so the size requirement
+// is just "fit one worst-case input."
 //
 // Regression history: in a prior layout the rx buffer doubled as the
 // segmentation output, a near-threshold drain read returned "scratch too
 // small", the whole 45-segment TSO burst was dropped, and the remote's TCP
-// fast-retransmit collapsed cwnd. Keeping this test in the new layout
-// guards against re-introducing a drain headroom shortfall.
-func TestDecodeReadFitsMaxTSOAtDrainThreshold(t *testing.T) {
+// fast-retransmit collapsed cwnd. Keeping this test guards against
+// re-introducing per-call sizing assumptions inside decodeRead.
+func TestDecodeReadFitsMaxTSO(t *testing.T) {
 	const ipv6HdrLen = 40
 	const tcpHdrLen = 20
 	const headerLen = ipv6HdrLen + tcpHdrLen
-	// Maximum TUN read body. The tunReadBufSize cap on readv's body iovec
-	// is what bounds the kernel's superpacket length.
 	pktLen := tunReadBufSize
 	payLen := pktLen - headerLen
 	const targetSegs = 64
@@ -701,16 +701,12 @@ func TestDecodeReadFitsMaxTSOAtDrainThreshold(t *testing.T) {
 		t.Fatalf("buildTSOv6 produced %d bytes, want %d", len(pkt), pktLen)
 	}
 
-	o := &Offload{
-		rxBuf: make([]byte, tunRxBufCap),
-	}
-	// rxOff at the maximum value the drain headroom check permits before
-	// it would refuse another read. Any drain-time read up to this
-	// threshold MUST still process correctly.
-	o.rxOff = tunRxBufCap - tunRxBufSize
-
-	// Stage the body in rxBuf as if readv(2) just placed it there.
-	copy(o.rxBuf[o.rxOff:], pkt)
+	o := &Offload{}
+	// mem is sized exactly to one worst-case packet — the caller-side
+	// invariant the drain loop in Read enforces. decodeRead must process
+	// the burst within that window.
+	mem := make([]byte, pktLen)
+	copy(mem, pkt)
 
 	// Encode the matching virtio_net_hdr.
 	hdr := virtio.Hdr{
@@ -723,50 +719,42 @@ func TestDecodeReadFitsMaxTSOAtDrainThreshold(t *testing.T) {
 	}
 	hdr.Encode(o.readVnetScratch[:])
 
-	startRxOff := o.rxOff
-	if err := o.decodeRead(pktLen); err != nil {
-		t.Fatalf("decodeRead at drain threshold returned %v — rxBuf sizing regression: "+
+	var pkts []wire.TunPacket
+	pkts, err := o.decodeRead(pkts, mem, pktLen)
+	if err != nil {
+		t.Fatalf("decodeRead returned %v — sizing regression: "+
 			"tunRxBufSize=%d must hold one worst-case input (%d)",
 			err, tunRxBufSize, pktLen)
 	}
 
-	if len(o.pending) != 1 {
-		t.Fatalf("got %d packets, want 1 superpacket entry", len(o.pending))
+	if len(pkts) != 1 {
+		t.Fatalf("got %d packets, want 1 superpacket entry", len(pkts))
 	}
-	got := o.pending[0]
-	if !got.GSO.IsSuperpacket() {
-		t.Fatalf("expected superpacket GSO metadata, got %+v", got.GSO)
+	got := pkts[0]
+	if !got.Meta.IsSuperpacket() {
+		t.Fatalf("expected superpacket GSO metadata, got %+v", got.Meta)
 	}
-	if got.GSO.Proto != GSOProtoTCP {
-		t.Errorf("GSO.Proto=%d want TCP", got.GSO.Proto)
+	if got.Meta.Proto != wire.GSOProtoTCP {
+		t.Errorf("Meta.Proto=%d want TCP", got.Meta.Proto)
 	}
-	if got.GSO.Size != uint16(gsoSize) {
-		t.Errorf("GSO.Size=%d want %d", got.GSO.Size, gsoSize)
+	if got.Meta.Size != uint16(gsoSize) {
+		t.Errorf("Meta.Size=%d want %d", got.Meta.Size, gsoSize)
 	}
-	if got.GSO.HdrLen != uint16(headerLen) {
-		t.Errorf("GSO.HdrLen=%d want %d", got.GSO.HdrLen, headerLen)
+	if got.Meta.HdrLen != uint16(headerLen) {
+		t.Errorf("Meta.HdrLen=%d want %d", got.Meta.HdrLen, headerLen)
 	}
-	if got.GSO.CsumStart != uint16(ipv6HdrLen) {
-		t.Errorf("GSO.CsumStart=%d want %d", got.GSO.CsumStart, ipv6HdrLen)
+	if got.Meta.CsumStart != uint16(ipv6HdrLen) {
+		t.Errorf("Meta.CsumStart=%d want %d", got.Meta.CsumStart, ipv6HdrLen)
 	}
 	if len(got.Bytes) != pktLen {
 		t.Errorf("len(Bytes)=%d want %d", len(got.Bytes), pktLen)
-	}
-
-	// rxOff advances exactly by the kernel-supplied body length — no
-	// segmentation output to account for any more.
-	if o.rxOff != startRxOff+pktLen {
-		t.Errorf("rxOff=%d want %d", o.rxOff, startRxOff+pktLen)
-	}
-	if o.rxOff > tunRxBufCap {
-		t.Fatalf("rxOff=%d overran rxBuf (cap=%d)", o.rxOff, tunRxBufCap)
 	}
 
 	// Validate that segmenting the returned superpacket reproduces the
 	// expected per-segment IPv6 payload length and TCP checksum.
 	wantSegs := (payLen + gsoSize - 1) / gsoSize
 	gotSegs := 0
-	if err := SegmentSuperpacket(got, func(seg []byte) error {
+	if err := got.PerSegment(func(seg []byte) error {
 		defer func() { gotSegs++ }()
 		if len(seg) < headerLen+1 {
 			t.Errorf("seg %d too short: %d", gotSegs, len(seg))
@@ -786,7 +774,7 @@ func TestDecodeReadFitsMaxTSOAtDrainThreshold(t *testing.T) {
 		}
 		return nil
 	}); err != nil {
-		t.Fatalf("SegmentSuperpacket: %v", err)
+		t.Fatalf("PerSegment: %v", err)
 	}
 	if gotSegs != wantSegs {
 		t.Fatalf("got %d segments, want %d", gotSegs, wantSegs)

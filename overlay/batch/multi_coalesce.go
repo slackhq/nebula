@@ -40,11 +40,6 @@ type MultiCoalescer struct {
 	arena *util.Arena
 }
 
-// DefaultMultiArenaCap is the recommended arena capacity for a Multi-lane
-// batcher: 64 slots × 65535 bytes ≈ 4 MiB, enough to hold one recvmmsg
-// burst worth of MTU-sized packets without the arena growing.
-const DefaultMultiArenaCap = initialSlots * 65535
-
 // NewMultiCoalescer builds a multi-lane batcher. tcpEnabled lets the caller
 // opt out of TCP coalescing (e.g. when the queue can't do TSO); udpEnabled
 // likewise gates UDP coalescing (only enable when USO was negotiated).

@@ -16,25 +16,13 @@ import (
 	"github.com/slackhq/nebula/overlay/tio/virtio"
 )
 
-// tunRxBufSize is the per-Read worst-case footprint inside rxBuf: one
-// kernel-supplied packet body, which is at most ~64 KiB (tunReadBufSize).
-// Segmentation happens at encrypt time on a per-routine MTU-sized scratch
-// (see SegmentSuperpacket), so rxBuf only holds raw kernel-supplied bytes.
-// We round up to give comfortable margin for the drain headroom check
-// below.
+// tunRxBufSize is the per-Read worst-case footprint for one kernel-supplied
+// packet body, which is at most ~64 KiB (tunReadBufSize). Segmentation
+// happens at encrypt time via wire.TunPacket.PerSegment on a per-routine
+// MTU-sized scratch, so the caller-supplied read buffer only holds raw
+// kernel-supplied bytes. Used by Read's drain loop to gate further reads
+// on whether the remaining buffer can still hold one worst-case packet.
 const tunRxBufSize = 64 * 1024
-
-// tunRxBufCap is the total size we allocate for the per-reader rx
-// buffer. With reads landing directly in rxBuf, each drain iteration
-// consumes up to tunRxBufSize of headroom for the kernel-supplied bytes.
-// Sized to two such iterations so the initial blocking read plus one
-// drain read both fit without partial-drop.
-const tunRxBufCap = tunRxBufSize * 2
-
-// tunDrainCap caps how many packets a single Read will accumulate via
-// the post-wake drain loop. Sized to soak up a burst of small ACKs while
-// bounding how much work a single caller holds before handing off.
-const tunDrainCap = 64
 
 // gsoMaxIovs caps the iovec budget WriteGSO assembles per call: 3 fixed
 // entries (virtio_net_hdr, IP hdr, transport hdr) plus up to gsoMaxIovs-3
@@ -50,7 +38,7 @@ const gsoMaxIovs = 256
 // CHECKSUM_UNNECESSARY so the receiving network stack skips L4 checksum
 // verification. All packets that reach the plain Write paths already carry
 // a valid L4 checksum (either supplied by a remote peer whose ciphertext we
-// AEAD-authenticated, produced by segmentTCPYield/segmentUDPYield during
+// AEAD-authenticated, produced by virtio.SegmentTCP/SegmentUDP during
 // superpacket segmentation, or built locally by CreateRejectPacket), so
 // trusting them is safe.
 var validVnetHdr = [virtio.Size]byte{unix.VIRTIO_NET_HDR_F_DATA_VALID}
@@ -71,12 +59,12 @@ type Offload struct {
 
 	// readVnetScratch holds the 10-byte virtio_net_hdr split off the front of
 	// every TUN read via readv(2). Decoupling the header from the packet body
-	// lets us read the body directly into rxBuf at the current rxOff with
-	// no userspace copy on the GSO_NONE fast path.
+	// lets us read the body directly into the caller-supplied mem at the
+	// current rxOff with no userspace copy on the GSO_NONE fast path.
 	readVnetScratch [virtio.Size]byte
 	// readIovs is the readv(2) iovec scratch wired once at construction —
 	// iovec[0] points at readVnetScratch; iovec[1].Base/Len is updated per
-	// read to address the current rxBuf slot.
+	// read to address the caller-supplied mem slot.
 	readIovs [2]unix.Iovec
 
 	// usoEnabled records whether the kernel agreed to TUN_F_USO* on this FD,
@@ -120,7 +108,8 @@ func newOffload(fd int, shutdownFd int, usoEnabled bool) (*Offload, error) {
 	out.gsoIovs[0].SetLen(virtio.Size)
 
 	// readIovs[0] is wired once to the virtio_net_hdr scratch; per-read we
-	// only repoint readIovs[1] at the next rxBuf slot (see readPacket).
+	// only repoint readIovs[1] at the next caller-supplied mem slot
+	// (see readPacket).
 	out.readIovs[0].Base = &out.readVnetScratch[0]
 	out.readIovs[0].SetLen(virtio.Size)
 
@@ -182,17 +171,16 @@ func (r *Offload) blockOnWrite() error {
 }
 
 // readPacket issues a single readv(2) splitting the virtio_net_hdr off
-// into readVnetScratch and reading the packet body directly into rxBuf at
-// the current rxOff. Returns the body length (zero virtio header bytes,
-// just the IP packet/superpacket). block controls whether EAGAIN is
-// retried via poll: the initial read of a drain blocks; subsequent drain
-// reads do not.
+// into readVnetScratch and reading the packet body directly into mem.
+// Returns the body length (zero virtio header bytes, just the IP
+// packet/superpacket). block controls whether EAGAIN is retried via poll:
+// the initial read of a drain blocks; subsequent drain reads do not.
 //
-// The body iovec capacity is always tunReadBufSize; callers (the Read
-// drain loop) gate entry on tunRxBufCap-rxOff >= tunRxBufSize, sized to
-// hold one worst-case kernel-supplied packet body. Without that gate the
-// body iovec could be smaller than the next inbound packet and the
-// kernel would truncate.
+// The body iovec capacity is always tunReadBufSize; the Read drain loop
+// gates entry on len(mem)-rxOff >= tunRxBufSize, sized to hold one
+// worst-case kernel-supplied packet body. Without that gate the body
+// iovec could be smaller than the next inbound packet and the kernel
+// would truncate.
 func (r *Offload) readPacket(mem []byte, block bool) (int, error) {
 	for {
 		r.readIovs[1].Base = &mem[0]
@@ -223,16 +211,16 @@ func (r *Offload) readPacket(mem []byte, block bool) (int, error) {
 	}
 }
 
-// Read returns one or more packets from the tun. Each Packet either
-// carries a single ready-to-use IP datagram (GSO zero) or a TSO/USO
-// superpacket plus the GSOInfo a caller needs to segment it (see
-// SegmentSuperpacket). The first read blocks via poll; once the fd is
-// known readable we drain additional packets non-blocking until the
-// kernel queue is empty (EAGAIN), we've collected tunDrainCap packets,
-// or we're out of rxBuf headroom. This amortizes the poll wake over
-// bursts of small packets (e.g. TCP ACKs). Packet.Bytes slices point
-// into the Offload's internal buffer and are only valid until the next
-// Read or Close on this Queue.
+// Read returns one or more packets from the tun. Each wire.TunPacket
+// either carries a single ready-to-use IP datagram (GSO zero) or a TSO/USO
+// superpacket plus the wire.GSOInfo a caller needs to segment it (see
+// wire.TunPacket.PerSegment). The first read blocks via poll; once the fd
+// is known readable we drain additional packets non-blocking until the
+// kernel queue is empty (EAGAIN), p is full, or mem no longer has room
+// for another worst-case packet (tunRxBufSize). This amortizes the poll
+// wake over bursts of small packets (e.g. TCP ACKs). The Bytes slices on
+// returned packets point into the caller-supplied mem and are only valid
+// until the next Read or Close on this Queue.
 func (r *Offload) Read(p []wire.TunPacket, mem []byte) (int, error) {
 	maxP := len(p)
 	maxM := len(mem)
@@ -255,9 +243,9 @@ func (r *Offload) Read(p []wire.TunPacket, mem []byte) (int, error) {
 		break
 	}
 
-	// Drain: non-blocking reads until the kernel queue is empty, the drain
-	// cap is reached, or rxBuf no longer has room for another worst-case
-	// kernel-supplied packet (tunRxBufSize).
+	// Drain: non-blocking reads until the kernel queue is empty, p is full,
+	// or mem no longer has room for another worst-case kernel-supplied
+	// packet (tunRxBufSize).
 	for len(p) < maxP && maxM-rxOff >= tunRxBufSize {
 		n, err := r.readPacket(mem[rxOff:], false)
 		if err != nil {
@@ -279,13 +267,12 @@ func (r *Offload) Read(p []wire.TunPacket, mem []byte) (int, error) {
 	return len(p), nil
 }
 
-// decodeRead processes the packet sitting in rxBuf at rxOff (length
-// pktLen). The bytes stay in rxBuf — for GSO_NONE we slice them as a
-// regular IP datagram (running finishChecksum if NEEDS_CSUM is set);
-// for TSO/USO superpackets we attach the corrected GSO metadata so the
-// caller can segment lazily at encrypt time. rxOff advances past the
-// kernel-supplied body and nothing else, since segmentation no longer
-// writes back into rxBuf.
+// decodeRead processes the packet sitting at mem[:pktLen]. The bytes stay
+// in mem — for GSO_NONE we slice them as a regular IP datagram (running
+// finishChecksum if NEEDS_CSUM is set); for TSO/USO superpackets we attach
+// the corrected GSO metadata so the caller can segment lazily at encrypt
+// time. The caller advances its own rxOff past the kernel-supplied body
+// and nothing else, since segmentation no longer writes back into mem.
 func (r *Offload) decodeRead(p []wire.TunPacket, mem []byte, pktLen int) ([]wire.TunPacket, error) {
 	if pktLen <= 0 {
 		return p, fmt.Errorf("short tun read: %d", pktLen)
@@ -307,8 +294,8 @@ func (r *Offload) decodeRead(p []wire.TunPacket, mem []byte, pktLen int) ([]wire
 
 	// GSO superpacket: validate, fix the kernel-supplied HdrLen on the
 	// FORWARD path (CorrectHdrLen), pick the L4 protocol, and attach
-	// the metadata. The bytes stay in rxBuf untouched, segmentation
-	// happens in SegmentSuperpacket at encrypt time.
+	// the metadata. The bytes stay in mem untouched; segmentation
+	// happens in wire.TunPacket.PerSegment at encrypt time.
 	if err := virtio.CheckValid(body, hdr); err != nil {
 		return p, err
 	}

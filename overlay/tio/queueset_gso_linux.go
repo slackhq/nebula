@@ -62,6 +62,10 @@ func (c *offloadQueueSet) wakeForShutdown() error {
 }
 
 func (c *offloadQueueSet) Close() error {
+	if c.shutdownFd < 0 {
+		return nil
+	}
+
 	errs := []error{}
 
 	// Signal all readers blocked in poll to wake up and exit
@@ -74,6 +78,13 @@ func (c *offloadQueueSet) Close() error {
 			errs = append(errs, err)
 		}
 	}
+
+	// All Offloads reference shutdownFd in their pollfd arrays, so close it
+	// only after every Offload.Close has returned.
+	if err := unix.Close(c.shutdownFd); err != nil {
+		errs = append(errs, err)
+	}
+	c.shutdownFd = -1
 
 	return errors.Join(errs...)
 }

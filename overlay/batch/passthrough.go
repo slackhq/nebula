@@ -3,7 +3,6 @@ package batch
 import (
 	"io"
 
-	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 )
 
@@ -15,12 +14,6 @@ type Passthrough struct {
 	arena  *util.Arena
 	cursor int
 }
-
-const passthroughBaseNumSlots = 128
-
-// DefaultPassthroughArenaCap is the recommended arena capacity for a
-// standalone Passthrough batcher: 128 slots × udp.MTU ≈ 1.1 MiB.
-const DefaultPassthroughArenaCap = passthroughBaseNumSlots * udp.MTU
 
 func NewPassthrough(w io.Writer, slots int, arena *util.Arena) *Passthrough {
 	return &Passthrough{

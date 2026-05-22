@@ -63,18 +63,16 @@ type Queue interface {
 // in pays except possibly the last is exactly the same size. proto picks
 // the L4 protocol so the writer knows which GSOType / CsumOffset to set.
 //
-// Callers should also consult CapsProvider (via SupportsGSO or
-// QueueCapabilities) for the per-protocol negotiated capability; an
-// implementation of GSOWriter is necessary but not sufficient since USO
-// may not have been negotiated even when TSO was.
+// Callers should also consult Queue.Capabilities (via SupportsGSO) for
+// the per-protocol negotiated capability; an implementation of GSOWriter
+// is necessary but not sufficient since USO may not have been negotiated
+// even when TSO was.
 type GSOWriter interface {
 	WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto wire.GSOProto) error
 }
 
 // SupportsGSO reports whether w implements GSOWriter and the underlying
-// queue advertises the negotiated capability for `want`. A writer that
-// implements GSOWriter but not CapsProvider is treated as permissive
-// (used by tests and fakes that don't negotiate).
+// queue advertises the negotiated capability for `want` via Capabilities.
 func SupportsGSO(w Queue, want wire.GSOProto) (GSOWriter, bool) {
 	gw, ok := w.(GSOWriter)
 	if !ok {

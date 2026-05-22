@@ -64,7 +64,7 @@ func (f *Interface) consumeInsidePacket(pkt wire.TunPacket, fwPacket *firewall.P
 	}
 
 	hostinfo, ready := f.getOrHandshakeConsiderRouting(fwPacket, func(hh *HandshakeHostInfo) {
-		// borrowed: SegmentSuperpacket builds each segment in the kernel-supplied pkt
+		// borrowed: PerSegment builds each segment in the kernel-supplied pkt
 		// bytes underneath. cachePacket explicitly copies its argument (handshake_manager.go cachePacket),
 		// so retaining segments past the loop is safe.
 		err := pkt.PerSegment(func(seg []byte) error {
@@ -500,8 +500,9 @@ func (f *Interface) prepareSendVia(via *HostInfo,
 // via is the HostInfo through which the message is relayed.
 // ad is the plaintext data to authenticate, but not encrypt
 // nb is a buffer used to store the nonce value, re-used for performance reasons.
-// out is a buffer used to store the result of the Encrypt operation
-// q indicates which writer to use to send the packet.
+// out is a buffer used to store the result of the Encrypt operation.
+// The write goes through writers[0] — SendVia is called from contexts
+// without a per-queue index (handshake, async control paths).
 func (f *Interface) SendVia(via *HostInfo,
 	relay *Relay,
 	ad,

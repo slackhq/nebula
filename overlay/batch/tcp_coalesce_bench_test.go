@@ -7,14 +7,18 @@ import (
 
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/test"
+	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/wire"
 )
 
 // nopTunWriter is a zero-alloc tio.GSOWriter for benchmarks. Discards
 // everything but satisfies the interface the coalescer detects.
 type nopTunWriter struct{}
 
-func (nopTunWriter) Write(p []byte) (int, error) { return len(p), nil }
-func (nopTunWriter) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, _ tio.GSOProto) error {
+func (nopTunWriter) Write(p []byte) (int, error)                    { return len(p), nil }
+func (nopTunWriter) Read(_ []wire.TunPacket, _ []byte) (int, error) { return 0, nil }
+func (nopTunWriter) Close() error                                   { return nil }
+func (nopTunWriter) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, _ wire.GSOProto) error {
 	return nil
 }
 func (nopTunWriter) Capabilities() tio.Capabilities {
@@ -71,7 +75,7 @@ func buildICMPv4() []byte {
 // between batches, and reports per-packet cost.
 func runCommitBench(b *testing.B, pkts [][]byte, batchSize int) {
 	b.Helper()
-	c := NewTCPCoalescer(nopTunWriter{}, test.NewLogger(), NewArena(0))
+	c := NewTCPCoalescer(nopTunWriter{}, test.NewLogger(), util.NewArena(0))
 	b.ReportAllocs()
 	b.SetBytes(int64(len(pkts[0])))
 	b.ResetTimer()
@@ -140,7 +144,7 @@ func BenchmarkCommitNonCoalesceableTCP(b *testing.B) {
 // is the bench that shows the savings of skipping the lane's re-parse.
 func runMultiCommitBench(b *testing.B, pkts [][]byte, batchSize int) {
 	b.Helper()
-	m := NewMultiCoalescer(nopTunWriter{}, test.NewLogger(), NewArena(0), true, true)
+	m := NewMultiCoalescer(nopTunWriter{}, test.NewLogger(), util.NewArena(0), true, true)
 	b.ReportAllocs()
 	b.SetBytes(int64(len(pkts[0])))
 	b.ResetTimer()

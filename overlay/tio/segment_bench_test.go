@@ -2,7 +2,11 @@
 
 package tio
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/slackhq/nebula/wire"
+)
 
 // fakeBatch stands in for batch.TxBatcher inside the bench — same shape
 // of pointer-capturing closure that sendInsideMessage builds.
@@ -21,27 +25,27 @@ type fakeIface struct {
 }
 
 // BenchmarkSegmentSuperpacketAllocsTSO measures allocation per
-// SegmentSuperpacket call when a closure captures pointer-bearing
-// receivers — the realistic shape of sendInsideMessage's closure.
+// PerSegment call when a closure captures pointer-bearing receivers — the
+// realistic shape of sendInsideMessage's closure.
 func BenchmarkSegmentSuperpacketAllocsTSO(b *testing.B) {
 	const mss = 1400
 	const numSeg = 32
 	pkt := buildTSOv6(mss*numSeg, mss)
-	gso := GSOInfo{
+	gso := wire.GSOInfo{
 		Size:      mss,
 		HdrLen:    60, // 40 (IPv6) + 20 (TCP)
 		CsumStart: 40,
-		Proto:     GSOProtoTCP,
+		Proto:     wire.GSOProtoTCP,
 	}
-	p := Packet{Bytes: pkt, GSO: gso}
+	p := wire.TunPacket{Bytes: pkt, Meta: gso}
 
 	hi := &fakeHostInfo{remoteIndexId: 0xdeadbeef}
 	f := &fakeIface{rebindCount: 7, hi: hi}
 	fb := &fakeBatch{}
 
-	// SegmentSuperpacket consumes pkt destructively; refresh from a master
-	// copy each iter (matches the production pattern where every TUN read
-	// hands the segmenter a fresh kernel-supplied buffer).
+	// PerSegment consumes pkt destructively; refresh from a master copy
+	// each iter (matches the production pattern where every TUN read hands
+	// the segmenter a fresh kernel-supplied buffer).
 	master := append([]byte(nil), pkt...)
 	work := make([]byte, len(pkt))
 	p.Bytes = work
@@ -50,7 +54,7 @@ func BenchmarkSegmentSuperpacketAllocsTSO(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		copy(work, master)
-		err := SegmentSuperpacket(p, func(seg []byte) error {
+		err := p.PerSegment(func(seg []byte) error {
 			out := fb.Reserve(16 + len(seg) + 16)
 			out[0] = byte(f.rebindCount)
 			out[1] = byte(hi.counter)
@@ -59,7 +63,7 @@ func BenchmarkSegmentSuperpacketAllocsTSO(b *testing.B) {
 			return nil
 		})
 		if err != nil {
-			b.Fatalf("SegmentSuperpacket: %v", err)
+			b.Fatalf("PerSegment: %v", err)
 		}
 	}
 }
