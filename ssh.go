@@ -18,11 +18,16 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/logging"
 	"github.com/slackhq/nebula/sshd"
 )
+
+// metricSshEncodeErrors counts ssh command output encode/marshal failures.
+// Callers log+meter at the swallow site; the dispatcher discards returns.
+var metricSshEncodeErrors = metrics.GetOrRegisterCounter("ssh.encode.errors", nil)
 
 type sshListHostMapFlags struct {
 	Json    bool
@@ -217,7 +222,7 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w sshd.StringWriter) error {
-			return sshListHostMap(f.hostMap, fs, w)
+			return sshListHostMap(l, f.hostMap, fs, w)
 		},
 	})
 
@@ -233,7 +238,7 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w sshd.StringWriter) error {
-			return sshListHostMap(f.handshakeManager, fs, w)
+			return sshListHostMap(l, f.handshakeManager, fs, w)
 		},
 	})
 
@@ -435,7 +440,7 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 	})
 }
 
-func sshListHostMap(hl controlHostLister, a any, w sshd.StringWriter) error {
+func sshListHostMap(l *slog.Logger, hl controlHostLister, a any, w sshd.StringWriter) error {
 	fs, ok := a.(*sshListHostMapFlags)
 	if !ok {
 		return nil
@@ -460,6 +465,8 @@ func sshListHostMap(hl controlHostLister, a any, w sshd.StringWriter) error {
 
 		err := js.Encode(hm)
 		if err != nil {
+			metricSshEncodeErrors.Inc(1)
+			l.Warn("ssh: failed to encode host-map output", "error", err)
 			return nil
 		}
 
