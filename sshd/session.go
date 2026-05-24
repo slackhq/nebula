@@ -122,7 +122,7 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			if err != nil {
 				status.Status = 1
 			}
-			channel.SendRequest("exit-status", false, ssh.Marshal(status))
+			_, _ = sendRequestAndLog(channel, "exit-status", false, ssh.Marshal(status), s.l)
 			channel.Close()
 			return
 
