@@ -86,7 +86,11 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 				return
 			}
 
-			req.Reply(true, nil)
+			if replyErr := replyAndLog(req, true, nil, s.l); replyErr != nil {
+				// Accept never reached the client; skip dispatch.
+				channel.Close()
+				return
+			}
 			s.dispatchCommand(payload.Value, &stringWriter{channel})
 
 			status := struct{ Status uint32 }{uint32(0)}
