@@ -402,8 +402,7 @@ func (c *C) resolve(path string, direct bool) error {
 	}
 
 	if !i.IsDir() {
-		c.addFile(path, direct)
-		return nil
+		return c.addFile(path, direct)
 	}
 
 	paths, err := readDirNames(path)
@@ -428,7 +427,7 @@ func (c *C) addFile(path string, direct bool) error {
 		return nil
 	}
 
-	ap, err := filepath.Abs(path)
+	ap, err := filepathAbs(path)
 	if err != nil {
 		return err
 	}
@@ -436,6 +435,9 @@ func (c *C) addFile(path string, direct bool) error {
 	c.files = append(c.files, ap)
 	return nil
 }
+
+// filepathAbs is swappable so tests can exercise the addFile error path.
+var filepathAbs = filepath.Abs
 
 func (c *C) parseRaw(b []byte) error {
 	var m map[string]any
