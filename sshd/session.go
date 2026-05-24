@@ -94,7 +94,7 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 			s.dispatchCommand(payload.Value, &stringWriter{channel})
 
 			status := struct{ Status uint32 }{uint32(0)}
-			channel.SendRequest("exit-status", false, ssh.Marshal(status))
+			_, _ = sendRequestAndLog(channel, "exit-status", false, ssh.Marshal(status), s.l)
 			channel.Close()
 			return
 
