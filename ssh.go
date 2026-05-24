@@ -253,7 +253,7 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w sshd.StringWriter) error {
-			return sshListLighthouseMap(f.lightHouse, fs, w)
+			return sshListLighthouseMap(l, f.lightHouse, fs, w)
 		},
 	})
 
@@ -482,7 +482,7 @@ func sshListHostMap(l *slog.Logger, hl controlHostLister, a any, w sshd.StringWr
 	return nil
 }
 
-func sshListLighthouseMap(lightHouse *LightHouse, a any, w sshd.StringWriter) error {
+func sshListLighthouseMap(l *slog.Logger, lightHouse *LightHouse, a any, w sshd.StringWriter) error {
 	fs, ok := a.(*sshListHostMapFlags)
 	if !ok {
 		return nil
@@ -517,6 +517,8 @@ func sshListLighthouseMap(lightHouse *LightHouse, a any, w sshd.StringWriter) er
 
 		err := js.Encode(addrMap)
 		if err != nil {
+			metricSshEncodeErrors.Inc(1)
+			l.Warn("ssh: failed to encode lighthouse-map output", "error", err)
 			return nil
 		}
 

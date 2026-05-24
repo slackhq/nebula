@@ -45,3 +45,18 @@ func TestSshListHostMap_EncodeFailure_LogsAndMeters(t *testing.T) {
 	assert.Equal(t, int64(1), metricSshEncodeErrors.Count()-counterBefore)
 	assert.Contains(t, logBuf.String(), "ssh: failed to encode host-map output")
 }
+
+func TestSshListLighthouseMap_EncodeFailure_LogsAndMeters(t *testing.T) {
+	var logBuf bytes.Buffer
+	l := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	counterBefore := metricSshEncodeErrors.Count()
+
+	sw := stringWriterOver{w: alwaysFailWriter{}}
+	lh := newTestLighthouse()
+
+	err := sshListLighthouseMap(l, lh, &sshListHostMapFlags{Json: true}, sw)
+
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), metricSshEncodeErrors.Count()-counterBefore)
+	assert.Contains(t, logBuf.String(), "ssh: failed to encode lighthouse-map output")
+}
