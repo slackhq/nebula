@@ -355,7 +355,7 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 			return fl, &s
 		},
 		Callback: func(fs any, a []string, w sshd.StringWriter) error {
-			return sshPrintCert(f, fs, a, w)
+			return sshPrintCert(l, f, fs, a, w)
 		},
 	})
 
@@ -849,7 +849,7 @@ func sshLogFormat(l *slog.Logger, fs any, a []string, w sshd.StringWriter) error
 	return w.WriteLine(fmt.Sprintf("Log format is: %s", ctrl.GetFormat()))
 }
 
-func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
+func sshPrintCert(l *slog.Logger, ifce *Interface, fs any, a []string, w sshd.StringWriter) error {
 	args, ok := fs.(*sshPrintCertFlags)
 	if !ok {
 		return nil
@@ -877,16 +877,19 @@ func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) erro
 	if args.Json || args.Pretty {
 		b, err := cert.MarshalJSON()
 		if err != nil {
+			metricSshEncodeErrors.Inc(1)
+			l.Warn("ssh: failed to marshal print-cert json", "error", err)
 			return nil
 		}
 
 		if args.Pretty {
 			buf := new(bytes.Buffer)
-			err := json.Indent(buf, b, "", "    ")
-			b = buf.Bytes()
-			if err != nil {
+			if err := json.Indent(buf, b, "", "    "); err != nil {
+				metricSshEncodeErrors.Inc(1)
+				l.Warn("ssh: failed to indent print-cert json", "error", err)
 				return nil
 			}
+			b = buf.Bytes()
 		}
 
 		return w.WriteBytes(b)
@@ -895,6 +898,8 @@ func sshPrintCert(ifce *Interface, fs any, a []string, w sshd.StringWriter) erro
 	if args.Raw {
 		b, err := cert.MarshalPEM()
 		if err != nil {
+			metricSshEncodeErrors.Inc(1)
+			l.Warn("ssh: failed to marshal print-cert pem", "error", err)
 			return nil
 		}
 
