@@ -1,7 +1,9 @@
 package nebula
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/miekg/dns"
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
@@ -426,4 +429,100 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for condition")
+}
+
+// failingDNSWriter wraps stubDNSWriter and always errors from WriteMsg.
+type failingDNSWriter struct{ stubDNSWriter }
+
+func (failingDNSWriter) WriteMsg(*dns.Msg) error { return errors.New("injected WriteMsg failure") }
+
+func TestDNSWriteWarnLimiter(t *testing.T) {
+	const sec = int64(time.Second)
+	tests := []struct {
+		name        string
+		windowNs    int64
+		calls       []int64
+		wantLogged  []bool
+		wantPrevSup []int64
+	}{
+		{
+			name:        "first call always logs with zero suppressed",
+			windowNs:    10 * sec,
+			calls:       []int64{1},
+			wantLogged:  []bool{true},
+			wantPrevSup: []int64{0},
+		},
+		{
+			name:        "second call inside window is suppressed",
+			windowNs:    10 * sec,
+			calls:       []int64{1, 1 + 5*sec},
+			wantLogged:  []bool{true, false},
+			wantPrevSup: []int64{0, 0},
+		},
+		{
+			name:        "call past window emits with the suppressed count",
+			windowNs:    10 * sec,
+			calls:       []int64{1, 1 + 5*sec, 1 + 11*sec},
+			wantLogged:  []bool{true, false, true},
+			wantPrevSup: []int64{0, 0, 1},
+		},
+		{
+			name:        "tied exactly at the window edge logs",
+			windowNs:    10 * sec,
+			calls:       []int64{1, 1 + 10*sec},
+			wantLogged:  []bool{true, true},
+			wantPrevSup: []int64{0, 0},
+		},
+		{
+			name:        "many suppressed in a row then one log gets accumulated count",
+			windowNs:    10 * sec,
+			calls:       []int64{1, 2, 3, 4, 5, 1 + 11*sec},
+			wantLogged:  []bool{true, false, false, false, false, true},
+			wantPrevSup: []int64{0, 0, 0, 0, 0, 4},
+		},
+		{
+			name:        "non-monotonic clock keeps suppressing",
+			windowNs:    10 * sec,
+			calls:       []int64{1 + 100*sec, 50 * sec},
+			wantLogged:  []bool{true, false},
+			wantPrevSup: []int64{0, 0},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			lim := newDNSWriteWarnLimiter(time.Duration(tc.windowNs))
+			require.Len(t, tc.wantLogged, len(tc.calls))
+			require.Len(t, tc.wantPrevSup, len(tc.calls))
+			for i, now := range tc.calls {
+				gotLog, gotSup := lim.shouldLog(now)
+				assert.Equal(t, tc.wantLogged[i], gotLog, "call %d at now=%d", i, now)
+				if tc.wantLogged[i] {
+					assert.Equal(t, tc.wantPrevSup[i], gotSup, "call %d at now=%d", i, now)
+				}
+			}
+		})
+	}
+}
+
+func TestDnsServer_HandleDnsRequest_WriteMsgFailure_LogsAndMeters(t *testing.T) {
+	var logBuf bytes.Buffer
+	l := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	counter := metrics.NewCounter()
+	ds := &dnsServer{
+		l:                   l,
+		dnsMap4:             make(map[string]netip.Addr),
+		dnsMap6:             make(map[string]netip.Addr),
+		hostMap:             &HostMap{},
+		metricWriteFailures: counter,
+		warnLimiter:         newDNSWriteWarnLimiter(dnsWriteWarnLogWindow),
+	}
+	ds.enabled.Store(true)
+
+	q := new(dns.Msg)
+	q.SetQuestion("example.test.", dns.TypeA)
+
+	ds.handleDnsRequest(failingDNSWriter{}, q)
+
+	assert.Equal(t, int64(1), counter.Count())
+	assert.Contains(t, logBuf.String(), "dns: failed to write response")
 }
