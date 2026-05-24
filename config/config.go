@@ -331,6 +331,11 @@ func (c *C) get(k string, v any) any {
 func (c *C) resolve(path string, direct bool) error {
 	i, err := os.Stat(path)
 	if err != nil {
+		if direct {
+			return fmt.Errorf("failed to stat config file at %s: %w", path, err)
+		}
+		// log and skip so one bad entry does not abort a multi-file config reload.
+		c.l.Warn("failed to stat config entry, skipping", "path", path, "error", err)
 		return nil
 	}
 

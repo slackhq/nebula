@@ -40,6 +40,15 @@ func TestConfig_Load(t *testing.T) {
 	assert.Equal(t, expected, c.Settings)
 }
 
+func TestC_Load_StatErrorReturned(t *testing.T) {
+	l := test.NewLogger()
+	c := NewC(l)
+	dir := filepath.Join(os.TempDir(), "nebula-config-does-not-exist-1bf6f0a0")
+	_ = os.RemoveAll(dir)
+
+	require.Error(t, c.Load(dir))
+}
+
 func TestConfig_Get(t *testing.T) {
 	l := test.NewLogger()
 	// test simple type
