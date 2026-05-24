@@ -110,7 +110,11 @@ func (s *session) handleRequests(in <-chan *ssh.Request, channel ssh.Channel) {
 				return
 			}
 
-			req.Reply(true, nil)
+			if replyErr := replyAndLog(req, true, nil, s.l); replyErr != nil {
+				// Accept never reached the client; skip dispatch.
+				channel.Close()
+				return
+			}
 			err := s.dispatchCommand(payload.Value, commands.MergedOutput(channel))
 
 			// A command that failed exits 1, so `ssh host cmd` callers can tell.
