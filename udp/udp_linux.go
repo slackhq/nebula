@@ -79,7 +79,7 @@ func setReusePort(network, address string, c syscall.RawConn) error {
 	var opErr error
 	err := c.Control(func(fd uintptr) {
 		opErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
-		//CloseOnExec already set by the runtime
+		// CloseOnExec already set by the runtime
 	})
 	if err != nil {
 		return err
@@ -93,10 +93,10 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 	if multi {
 		lc.Control = setReusePort
 	}
-	//this context is only used during the bind operation, you can't cancel it to kill the socket
+	// this context is only used during the bind operation, you can't cancel it to kill the socket
 	pc, err := lc.ListenPacket(context.Background(), "udp", listen.String())
 	if err != nil {
-		return nil, fmt.Errorf("unable to open socket: %s", err)
+		return nil, fmt.Errorf("unable to open socket: %w", err)
 	}
 	udpConn := pc.(*net.UDPConn)
 	rawConn, err := udpConn.SyscallConn()
@@ -104,7 +104,7 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 		_ = udpConn.Close()
 		return nil, err
 	}
-	//gotta find out if we got an AF_INET6 socket or not:
+	// gotta find out if we got an AF_INET6 socket or not:
 	out := &StdConn{
 		udpConn:        udpConn,
 		rawConn:        rawConn,
@@ -174,7 +174,7 @@ func (u *StdConn) prepareWriteMessages(n int) {
 		ecnType = unix.IPV6_TCLASS
 	}
 
-	for k := 0; k < n; k++ {
+	for k := range n {
 		base := k * u.writeCmsgSpace
 		seg := (*unix.Cmsghdr)(unsafe.Pointer(&u.writeCmsg[base]))
 		seg.Level = unix.SOL_UDP
@@ -203,7 +203,7 @@ const maxGSOBytes = 65000
 // prepareGSO probes UDP_SEGMENT support and sets u.gsoSupported on success.
 // Best-effort; failure leaves it false.
 func (u *StdConn) prepareGSO() {
-	u.maxGSOSegments = 63 //gotta be one less than the max so we can still attach a header
+	u.maxGSOSegments = 63 // gotta be one less than the max so we can still attach a header
 
 	var probeErr error
 	if err := u.rawConn.Control(func(fd uintptr) {
@@ -286,7 +286,7 @@ func (u *StdConn) prepareECNRecv() {
 		recordCapability("udp.ecn_rx.enabled", false)
 		return
 	}
-	if u.isV4 { //only check the V4 attempt
+	if u.isV4 { // only check the V4 attempt
 		if v4err != nil {
 			u.l.Info("udp: outer-ECN RX disabled", "reason", "kernel rejected probe", "error", v4err)
 			recordCapability("udp.ecn_rx.enabled", false)
@@ -296,20 +296,19 @@ func (u *StdConn) prepareECNRecv() {
 			recordCapability("udp.ecn_rx.enabled", true)
 		}
 		return
-	} else {
-		if v6err != nil { //no V6 ECN? disable it.
-			u.l.Info("udp: outer-ECN RX disabled", "reason", "kernel rejected probe", "error", errors.Join(v4err, v6err))
-			recordCapability("udp.ecn_rx.enabled", false)
-			return
-		} else if v4err != nil { //no V4, but yes V6? Low level warning. Could be a V6-specific bind.
-			u.l.Debug("udp: outer-ECN RX degraded", "reason", "kernel rejected probe on IPv4", "error", v4err)
-		}
-		// all good
-		u.ecnRecvSupported = true
-		u.l.Info("udp: outer-ECN RX enabled")
-		recordCapability("udp.ecn_rx.enabled", true)
+	}
+	if v6err != nil { // no V6 ECN? disable it.
+		u.l.Info("udp: outer-ECN RX disabled", "reason", "kernel rejected probe", "error", errors.Join(v4err, v6err))
+		recordCapability("udp.ecn_rx.enabled", false)
 		return
 	}
+	if v4err != nil { // no V4, but yes V6? Low level warning. Could be a V6-specific bind.
+		u.l.Debug("udp: outer-ECN RX degraded", "reason", "kernel rejected probe on IPv4", "error", v4err)
+	}
+	// all good
+	u.ecnRecvSupported = true
+	u.l.Info("udp: outer-ECN RX enabled")
+	recordCapability("udp.ecn_rx.enabled", true)
 }
 
 // recordCapability registers (or updates) a boolean gauge for one of the
@@ -336,7 +335,7 @@ func (u *StdConn) Rebind() error {
 
 func (u *StdConn) getSockOptInt(opt int) (int, error) {
 	if u.rawConn == nil {
-		return 0, fmt.Errorf("no UDP connection")
+		return 0, errors.New("no UDP connection")
 	}
 	var out int
 	var opErr error
@@ -351,7 +350,7 @@ func (u *StdConn) getSockOptInt(opt int) (int, error) {
 
 func (u *StdConn) setSockOptInt(opt int, n int) error {
 	if u.rawConn == nil {
-		return fmt.Errorf("no UDP connection")
+		return errors.New("no UDP connection")
 	}
 	var opErr error
 	err := u.rawConn.Control(func(fd uintptr) {
@@ -473,8 +472,8 @@ func (u *StdConn) listenOutBatch(r EncReader, flush func()) error {
 	}
 	msgs, buffers, names, _ := u.PrepareRawMessages(u.batch, bufSize, cmsgSpace)
 
-	//reader needs to capture variables from this function, since it's used as a lambda with rawConn.Read
-	//defining it outside the loop so it gets re-used
+	// reader needs to capture variables from this function, since it's used as a lambda with rawConn.Read
+	// defining it outside the loop so it gets re-used
 	reader := func(fd uintptr) (done bool) {
 		n, done, operr = recvmmsg(fd, msgs)
 		return done
@@ -494,7 +493,7 @@ func (u *StdConn) listenOutBatch(r EncReader, flush func()) error {
 			return operr
 		}
 
-		for i := 0; i < n; i++ {
+		for i := range n {
 			from := getFrom(names, i, u.isV4)
 			payload := buffers[i][:msgs[i].Len]
 
@@ -520,15 +519,6 @@ func (u *StdConn) listenOutBatch(r EncReader, flush func()) error {
 
 		flush()
 	}
-}
-
-// headerCounter returns the big-endian uint64 message counter at bytes
-// [8:16] of a nebula packet, or 0 if the buffer is too short.
-func headerCounter(buf []byte) uint64 {
-	if len(buf) < 16 {
-		return 0
-	}
-	return binary.BigEndian.Uint64(buf[8:16])
 }
 
 // parseRecvCmsg walks the per-slot ancillary buffer once and extracts up to
@@ -576,9 +566,8 @@ func parseRecvCmsg(hdr *msghdr, wantGRO, wantECN bool, isV4 bool) (gso int, ecn 
 func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 	if u.batch == 1 {
 		return u.listenOutSingle(r, flush)
-	} else {
-		return u.listenOutBatch(r, flush)
 	}
+	return u.listenOutBatch(r, flush)
 }
 
 func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
@@ -625,7 +614,7 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte)
 				break
 			}
 
-			for k := 0; k < runLen; k++ {
+			for k := range runLen {
 				b := bufs[i+k]
 				if len(b) == 0 {
 					u.writeIovs[iovIdx+k].Base = nil
@@ -659,7 +648,7 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte)
 		}
 
 		if entry == 0 {
-			return fmt.Errorf("sendmmsg: no progress")
+			return errors.New("sendmmsg: no progress")
 		}
 
 		sent, serr := u.sendmmsg(entry)
@@ -702,7 +691,7 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte)
 			continue
 		}
 		if sent == 0 {
-			return fmt.Errorf("sendmmsg made no progress")
+			return errors.New("sendmmsg made no progress")
 		}
 		// Rewind i to the end of the last successfully sent entry. For a
 		// full-success send this leaves i unchanged; for a partial send it
@@ -887,7 +876,7 @@ func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
 	var vallen uint32 = 4 * unix.SK_MEMINFO_VARS
 
 	if u.rawConn == nil {
-		return fmt.Errorf("no UDP connection")
+		return errors.New("no UDP connection")
 	}
 	var opErr error
 	err := u.rawConn.Control(func(fd uintptr) {
@@ -933,7 +922,7 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 	return func() {
 		for i, gauges := range udpGauges {
 			if err := udpConns[i].(*StdConn).getMemInfo(&meminfo); err == nil {
-				for j := 0; j < unix.SK_MEMINFO_VARS; j++ {
+				for j := range unix.SK_MEMINFO_VARS {
 					gauges[j].Update(int64(meminfo[j]))
 				}
 			}

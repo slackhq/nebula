@@ -77,7 +77,6 @@ func (NoopConn) WriteBatch(_ [][]byte, _ []netip.AddrPort, _ []byte) error {
 	return nil
 }
 func (NoopConn) ReloadConfig(_ *config.C) {
-	return
 }
 func (NoopConn) Close() error {
 	return nil
