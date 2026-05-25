@@ -156,7 +156,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 		for i := range routines {
 			l.Info("listening", "addr", netip.AddrPortFrom(listenHost, uint16(port)))
-			udpServer, err := udp.NewListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
+			udpServer, err := udp.NewListenerSelector(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64), udp.IoUringOptionsFromConfig(c))
 			if err != nil {
 				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
 			}

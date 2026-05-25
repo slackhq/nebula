@@ -132,6 +132,42 @@ listen:
   # Sets the max number of packets to pull from the kernel for each syscall (under systems that support recvmmsg)
   # default is 64, does not support reload
   #batch: 64
+  # Drive the UDP socket via io_uring instead of recvmmsg/sendmmsg. Requires
+  # Linux 5.6+ and a binary built with `-tags iouring`. If either prerequisite
+  # is missing, this flag is logged and the recvmmsg path is used as a fallback.
+  # Default is false. Does not support reload.
+  #io_uring: false
+  # io_uring tuning knobs. All four are read once at startup; reloads are
+  # ignored (the rings are sized at kernel-side setup time). Defaults match
+  # gosrt's proven defaults and give comfortable headroom for batch=64 with
+  # UDP_GRO. Only consulted when listen.io_uring is true and the binary
+  # supports it.
+  #
+  # *_ring_size is the SQE/CQE depth of each ring. Must be a power of two in
+  # [1, 32768]; non-power-of-two values are rounded up at startup with a
+  # warning. Larger rings let more SQEs sit in flight before userland needs
+  # to drain completions. Tune up for high-pps; tune down to save memory.
+  #
+  # *_slots is the number of pre-armed recv SQEs / concurrent in-flight send
+  # SQEs the Conn maintains. Must be <= the matching ring_size (capped with
+  # a warning otherwise). Higher slot counts absorb larger bursts at the
+  # cost of resident buffer memory (each slot owns a 65 KiB rx buffer).
+  # send_slots is per send ring, not total — total send-slot memory scales
+  # as io_uring_send_rings * io_uring_send_slots * 65 KiB.
+  #io_uring_recv_ring_size: 512
+  #io_uring_send_ring_size: 512
+  #io_uring_recv_slots: 256
+  #io_uring_send_slots: 256
+  # io_uring_send_rings shards the send path across N independent rings so
+  # concurrent senders (handshake mgr, lighthouse, punchy, relay, etc. all
+  # hitting the outside Conn) contend roughly 1/N on average instead of
+  # queuing on a single mutex. WriteTo/WriteBatch pick a ring via an atomic
+  # round-robin counter with a TryLock scan — uncontended cost is one CAS.
+  # Default 4 covers typical deployments; raise to 8 or 16 on lighthouse or
+  # relay-heavy hosts. Max is 32. Other (single-writer) Conns use these
+  # rings too but see no contention either way, so the cost is purely the
+  # extra memory per ring.
+  #io_uring_send_rings: 4
   # Configure socket buffers for the udp side (outside), leave unset to use the system defaults. Values will be doubled by the kernel
   # Default is net.core.rmem_default and net.core.wmem_default (/proc/sys/net/core/rmem_default and /proc/sys/net/core/rmem_default)
   # Maximum is limited by memory in the system, SO_RCVBUFFORCE and SO_SNDBUFFORCE is used to avoid having to raise the system wide

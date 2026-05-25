@@ -17,6 +17,7 @@ require (
 	github.com/miekg/pkcs11 v1.1.2
 	github.com/nbrownus/go-metrics-prometheus v0.0.0-20210712211119-974a6260965f
 	github.com/prometheus/client_golang v1.23.2
+	github.com/randomizedcoder/giouring v1.0.1
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/stefanberger/go-pkcs11uri v0.0.0-20230803200340-78284954bff6
