@@ -134,7 +134,8 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 	// Best-effort: ask the kernel to deliver outer IP-ECN as ancillary data
 	// on every recvmmsg slot so the decap side can apply RFC 6040 combine.
 	// On older kernels these may not exist; failing here just means we get
-	// 0 (Not-ECT) on every slot, which is the same as ecn_mode=disable.
+	// 0 (Not-ECT, i.e. Not ECN-Capable Transport per RFC 3168) on every
+	// slot, which is the same as ecn_mode=disable.
 	out.prepareECNRecv()
 
 	return out, nil
