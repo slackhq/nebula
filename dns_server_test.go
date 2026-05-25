@@ -15,6 +15,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// currentServer returns d.server under d.serverMu. Tests that inspect the
+// server field need this accessor — d.server is written by reload-spawned
+// Start goroutines under the mutex, so direct field reads would race.
+// Production callers already read d.server inside their own critical
+// sections (see dns_server.go: Start, Stop, shutdownServer).
+func (d *dnsServer) currentServer() *dns.Server {
+	d.serverMu.Lock()
+	defer d.serverMu.Unlock()
+	return d.server
+}
+
 type stubDNSWriter struct{}
 
 func (stubDNSWriter) LocalAddr() net.Addr { return &net.UDPAddr{} }
@@ -167,7 +178,7 @@ func TestDnsServer_reload_initial_disabled(t *testing.T) {
 	require.NoError(t, ds.reload(c, true))
 	assert.False(t, ds.enabled.Load())
 	assert.Equal(t, "127.0.0.1:0", ds.addr)
-	assert.Nil(t, ds.server)
+	assert.Nil(t, ds.currentServer())
 }
 
 func TestDnsServer_reload_initial_enabled(t *testing.T) {
@@ -178,7 +189,7 @@ func TestDnsServer_reload_initial_enabled(t *testing.T) {
 	assert.True(t, ds.enabled.Load())
 	assert.Equal(t, "127.0.0.1:0", ds.addr)
 	// initial never starts a runner; that's Control.Start's job
-	assert.Nil(t, ds.server)
+	assert.Nil(t, ds.currentServer())
 }
 
 func TestDnsServer_reload_initial_serveDnsWithoutLighthouse(t *testing.T) {
@@ -198,7 +209,7 @@ func TestDnsServer_reload_sameAddr_noOp(t *testing.T) {
 	// No server running yet, no addr change. Reload should not spawn anything.
 	require.NoError(t, ds.reload(c, false))
 	assert.True(t, ds.enabled.Load())
-	assert.Nil(t, ds.server)
+	assert.Nil(t, ds.currentServer())
 }
 
 func TestDnsServer_StartStop_lifecycle(t *testing.T) {
