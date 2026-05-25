@@ -20,8 +20,9 @@ const MaxWriteBatch = 128
 //
 // OuterECN is the 2-bit IP-level ECN codepoint stamped on the carrier
 // datagram (extracted from IP_TOS / IPV6_TCLASS cmsg on Linux). Zero
-// means Not-ECT, which is also the value backends without ECN RX support
-// supply on every packet.
+// means Not-ECT (Not ECN-Capable Transport, per RFC 3168) — i.e. the
+// sender is not participating in ECN — which is also the value backends
+// without ECN RX support supply on every packet.
 type RxMeta struct {
 	OuterECN byte
 }
@@ -44,7 +45,8 @@ type Conn interface {
 	WriteTo(b []byte, addr netip.AddrPort) error
 	// WriteBatch sends a contiguous batch of packets, each with its own
 	// destination. bufs and addrs must have the same length. outerECNs may
-	// be nil (treated as all-zero / Not-ECT); when non-nil it must have the
+	// be nil (treated as all-zero / Not-ECT, i.e. Not ECN-Capable Transport);
+	// when non-nil it must have the
 	// same length as bufs, and outerECNs[i] is the 2-bit IP-level ECN
 	// codepoint to set on packet i's outer header. Linux uses sendmmsg(2)
 	// for a single syscall and attaches the value as IP_TOS / IPV6_TCLASS
@@ -77,7 +79,6 @@ func (NoopConn) WriteBatch(_ [][]byte, _ []netip.AddrPort, _ []byte) error {
 	return nil
 }
 func (NoopConn) ReloadConfig(_ *config.C) {
-	return
 }
 func (NoopConn) Close() error {
 	return nil

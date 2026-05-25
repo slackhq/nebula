@@ -524,6 +524,12 @@ const (
 // IP header per RFC 6040 normal mode. It mutates pkt[1] in place. Other
 // codepoints are advisory only and leave the inner unchanged.
 //
+// ECN terminology (per RFC 3168):
+//   - Not-ECT: Not ECN-Capable Transport — endpoints don't speak ECN.
+//   - ECT(0)/ECT(1): ECN-Capable Transport — endpoints do speak ECN.
+//   - CE: Congestion Experienced — a router marked this packet to signal
+//     congestion instead of dropping it.
+//
 // Merge cases (outer × inner → action):
 //
 //	outer != CE                : no-op (inner is authoritative)

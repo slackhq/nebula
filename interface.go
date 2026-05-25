@@ -270,7 +270,7 @@ func (f *Interface) activate() error {
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
 
 	// Prepare n tun queues
-	for i := 0; i < f.routines; i++ {
+	for i := range f.routines {
 		if i > 0 {
 			if err = f.inside.NewMultiQueueReader(); err != nil {
 				return err
@@ -305,14 +305,14 @@ func (f *Interface) activate() error {
 
 func (f *Interface) run() (func() error, error) {
 	// Launch n queues to read packets from udp
-	for i := 0; i < f.routines; i++ {
+	for i := range f.routines {
 		f.wg.Go(func() {
 			f.listenOut(i)
 		})
 	}
 
 	// Launch n queues to read packets from tun dev
-	for i := 0; i < f.routines; i++ {
+	for i := range f.routines {
 		f.wg.Go(func() {
 			f.listenIn(f.readers[i], i)
 		})

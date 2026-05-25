@@ -153,12 +153,14 @@ func (t *Poll) Close() error {
 	if t.closed.Swap(true) {
 		return nil
 	}
-	//shutdownFd is owned by the container, so we should not close it
-	var err error
-	if t.fd >= 0 {
-		err = unix.Close(t.fd)
-		t.fd = -1
-	}
-
-	return err
+	// shutdownFd is owned by the container, so we should not close it.
+	//
+	// We intentionally do NOT set t.fd = -1 after closing: t.closed
+	// is the source of truth for idempotency, and writing t.fd would
+	// race with concurrent readers reading it inside readOne/Write
+	// (see TestPoll_WakeForShutdown_WakesFriends under -race). The
+	// kernel returns EBADF on any in-flight syscall against the now-
+	// closed fd, which readOne and Write already translate to
+	// os.ErrClosed.
+	return unix.Close(t.fd)
 }

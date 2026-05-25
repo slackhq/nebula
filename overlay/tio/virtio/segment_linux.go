@@ -205,7 +205,7 @@ func SegmentTCP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg
 		baseIPHdrSum = uint32(checksum.Checksum(ipTmp[:ihl], 0))
 	}
 
-	for i := 0; i < numSeg; i++ {
+	for i := range numSeg {
 		segStart := i * gsoSize
 		segEnd := segStart + gsoSize
 		if segEnd > payLen {
@@ -327,7 +327,7 @@ func SegmentUDP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg
 		baseIPHdrSum = uint32(checksum.Checksum(ipTmp[:ihl], 0))
 	}
 
-	for i := 0; i < numSeg; i++ {
+	for i := range numSeg {
 		segStart := i * gsoSize
 		segEnd := segStart + gsoSize
 		if segEnd > payLen {

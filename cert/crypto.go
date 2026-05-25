@@ -51,7 +51,7 @@ func aes256Encrypt(passphrase []byte, kdfParams *Argon2Parameters, data []byte) 
 	}
 
 	// this should never happen, but since this dictates how our calls into the
-	// aes package behave and could be catastraphic, let's sanity check this
+	// aes package behave and could be catastrophic, let's sanity check this
 	if len(key) != 32 {
 		return nil, fmt.Errorf("invalid AES-256 key length (%d) - cowardly refusing to encrypt", len(key))
 	}
