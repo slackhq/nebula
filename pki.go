@@ -99,12 +99,10 @@ func (p *PKI) reloadCerts(c *config.C, initial bool) *util.ContextualError {
 	var currentState *CertState
 	if initial {
 		cipher = c.GetString("cipher", "aes")
-		//TODO: this sucks and we should make it not a global
 		switch cipher {
-		case "aes":
-			noiseEndianness = binary.BigEndian
-		case "chachapoly":
-			noiseEndianness = binary.LittleEndian
+		case "aes", "chachapoly":
+			// Each post-handshake CipherState in noiseutil hardcodes its own
+			// nonce endianness now, so there's nothing to set up here.
 		default:
 			return util.NewContextualError(
 				"unknown cipher",

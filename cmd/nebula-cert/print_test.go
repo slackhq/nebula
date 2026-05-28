@@ -25,6 +25,7 @@ func Test_printHelp(t *testing.T) {
 	assert.Equal(
 		t,
 		"Usage of "+os.Args[0]+" print <flags>: prints details about a certificate\n"+
+			"  Pass \"-\" to any path flag to read from stdin or write to stdout.\n"+
 			"  -json\n"+
 			"    \tOptional: outputs certificates in json format\n"+
 			"  -out-qr string\n"+
@@ -178,6 +179,44 @@ func Test_printCert(t *testing.T) {
 		ob.String(),
 	)
 	assert.Empty(t, eb.String())
+
+	// read cert from stdin
+	ob.Reset()
+	eb.Reset()
+	withStdin(t, bytes.NewReader(p))
+	err = printCert([]string{"-json", "-path", "-"}, ob, eb)
+	require.NoError(t, err)
+	assert.Equal(
+		t,
+		`[{"details":{"curve":"CURVE25519","groups":["hi"],"isCa":false,"issuer":"`+c.Issuer()+`","name":"test","networks":["10.0.0.123/8"],"notAfter":"0001-01-01T00:00:00Z","notBefore":"0001-01-01T00:00:00Z","publicKey":"`+pk+`","unsafeNetworks":[]},"fingerprint":"`+fp+`","signature":"`+sig+`","version":1}]
+`,
+		ob.String(),
+	)
+	assert.Empty(t, eb.String())
+
+	// -out-qr - sends only the PNG to stdout, suppressing the cert dump
+	ob.Reset()
+	eb.Reset()
+	withStdin(t, bytes.NewReader(p))
+	err = printCert([]string{"-path", "-", "-out-qr", "-"}, ob, eb)
+	require.NoError(t, err)
+	assert.Empty(t, eb.String())
+	stdout := ob.Bytes()
+	require.NotEmpty(t, stdout)
+	// PNG magic, no PEM/JSON noise prepended
+	assert.Equal(t, []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}, stdout[:8])
+	assert.NotContains(t, string(stdout), "NebulaCertificate")
+	assert.NotContains(t, string(stdout), `"details"`)
+
+	// json + out-qr - still suppresses json
+	ob.Reset()
+	eb.Reset()
+	withStdin(t, bytes.NewReader(p))
+	err = printCert([]string{"-json", "-path", "-", "-out-qr", "-"}, ob, eb)
+	require.NoError(t, err)
+	assert.Empty(t, eb.String())
+	assert.Equal(t, []byte{0x89, 'P', 'N', 'G'}, ob.Bytes()[:4])
+	assert.NotContains(t, ob.String(), `"details"`)
 }
 
 // NewTestCaCert will generate a CA cert

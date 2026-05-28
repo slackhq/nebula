@@ -151,6 +151,9 @@ func (c *certificateV2) CheckSignature(key []byte) bool {
 
 	switch c.curve {
 	case Curve_CURVE25519:
+		if len(key) != ed25519.PublicKeySize {
+			return false //avoids a panic internal to ed25519
+		}
 		return ed25519.Verify(key, b, c.signature)
 	case Curve_P256:
 		pubKey, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), key)

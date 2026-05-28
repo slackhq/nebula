@@ -27,21 +27,20 @@ type SSHServer struct {
 	commands    *radix.Tree
 	listener    net.Listener
 
-	// Call the cancel() function to stop all active sessions
-	ctx    context.Context
-	cancel func()
+	// ctx parents per-Run contexts. Cancelling it (e.g. via Control.Stop) tears the server down even
+	// across reloads, since each Run derives a fresh child rather than reusing this one directly.
+	ctx context.Context
 }
 
-// NewSSHServer creates a new ssh server rigged with default commands and prepares to listen
-func NewSSHServer(l *slog.Logger) (*SSHServer, error) {
-
-	ctx, cancel := context.WithCancel(context.Background())
+// NewSSHServer creates a new ssh server rigged with default commands and prepares to listen.
+// The ssh server's context is parented off the supplied ctx so cancelling it
+// (e.g. on Control.Stop) tears down active sessions and closes the listener.
+func NewSSHServer(ctx context.Context, l *slog.Logger) (*SSHServer, error) {
 	s := &SSHServer{
 		trustedKeys: make(map[string]map[string]bool),
 		l:           l,
 		commands:    radix.New(),
 		ctx:         ctx,
-		cancel:      cancel,
 	}
 
 	cc := ssh.CertChecker{
@@ -151,28 +150,51 @@ func (s *SSHServer) RegisterCommand(c *Command) {
 	s.commands.Insert(c.Name, c)
 }
 
-// Run begins listening and accepting connections
+// Run begins listening and accepting connections. Each invocation derives a fresh per-Run context
+// from the constructor-supplied ctx so a Stop+Run sequence (used by config reload) starts clean
+// rather than carrying a permanently-cancelled context across runs.
 func (s *SSHServer) Run(addr string) error {
-	var err error
-	s.listener, err = net.Listen("tcp", addr)
+	if s.ctx.Err() != nil {
+		return s.ctx.Err()
+	}
+
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
+	// s.listener is the public handle Stop uses to interrupt the active run; listener (the local) is what
+	// this run owns. They start equal but a fast reload may overwrite s.listener with the next run's
+	// listener before this run's watcher fires, so each run must close its own listener via the local
+	// reference.
+	s.listener = listener
+
+	runCtx, cancel := context.WithCancel(s.ctx)
+	defer cancel()
+
+	// Close the listener when this run's context is cancelled. That can come from the parent
+	// (Control.Stop), from Run returning normally (defer cancel above), or transitively when a sibling
+	// run cancels through Stop closing the listener. net.Listener.Close is idempotent so a duplicate
+	// close from Stop is benign.
+	go func() {
+		<-runCtx.Done()
+		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			s.l.Warn("Failed to close the sshd listener", "error", err)
+		}
+	}()
 
 	s.l.Info("SSH server is listening", "sshListener", addr)
 
 	// Run loops until there is an error
-	s.run()
-	s.closeSessions()
+	s.run(runCtx, listener)
 
 	s.l.Info("SSH server stopped listening")
 	// We don't return an error because run logs for us
 	return nil
 }
 
-func (s *SSHServer) run() {
+func (s *SSHServer) run(ctx context.Context, listener net.Listener) {
 	for {
-		c, err := s.listener.Accept()
+		c, err := listener.Accept()
 		if err != nil {
 			if !errors.Is(err, net.ErrClosed) {
 				s.l.Warn("Error in listener, shutting down", "error", err)
@@ -184,7 +206,7 @@ func (s *SSHServer) run() {
 			// Ensure that a bad client doesn't hurt us by checking for the parent context
 			// cancellation before calling NewServerConn, and forcing the socket to close when
 			// the context is cancelled.
-			sessionContext, sessionCancel := context.WithCancel(s.ctx)
+			sessionContext, sessionCancel := context.WithCancel(ctx)
 			go func() {
 				<-sessionContext.Done()
 				c.Close()
@@ -227,14 +249,9 @@ func (s *SSHServer) run() {
 }
 
 func (s *SSHServer) Stop() {
-	// Close the listener, this will cause all session to terminate as well, see SSHServer.Run
 	if s.listener != nil {
 		if err := s.listener.Close(); err != nil {
 			s.l.Warn("Failed to close the sshd listener", "error", err)
 		}
 	}
-}
-
-func (s *SSHServer) closeSessions() {
-	s.cancel()
 }

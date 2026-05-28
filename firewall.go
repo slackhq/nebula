@@ -58,8 +58,9 @@ type Firewall struct {
 	routableNetworks *bart.Lite
 
 	// assignedNetworks is a list of vpn networks assigned to us in the certificate.
-	assignedNetworks  []netip.Prefix
-	hasUnsafeNetworks bool
+	assignedNetworks []netip.Prefix
+	// unsafeNetworks is the list of unsafe networks issued to us in the certificate
+	unsafeNetworks []netip.Prefix
 
 	rules        string
 	rulesVersion uint16
@@ -158,10 +159,9 @@ func NewFirewall(l *slog.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Dur
 		assignedNetworks = append(assignedNetworks, network)
 	}
 
-	hasUnsafeNetworks := false
-	for _, n := range c.UnsafeNetworks() {
+	unsafeNetworks := c.UnsafeNetworks()
+	for _, n := range unsafeNetworks {
 		routableNetworks.Insert(n)
-		hasUnsafeNetworks = true
 	}
 
 	return &Firewall{
@@ -169,15 +169,15 @@ func NewFirewall(l *slog.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.Dur
 			Conns:      make(map[firewall.Packet]*conn),
 			TimerWheel: NewTimerWheel[firewall.Packet](tmin, tmax),
 		},
-		InRules:           newFirewallTable(),
-		OutRules:          newFirewallTable(),
-		TCPTimeout:        tcpTimeout,
-		UDPTimeout:        UDPTimeout,
-		DefaultTimeout:    defaultTimeout,
-		routableNetworks:  routableNetworks,
-		assignedNetworks:  assignedNetworks,
-		hasUnsafeNetworks: hasUnsafeNetworks,
-		l:                 l,
+		InRules:          newFirewallTable(),
+		OutRules:         newFirewallTable(),
+		TCPTimeout:       tcpTimeout,
+		UDPTimeout:       UDPTimeout,
+		DefaultTimeout:   defaultTimeout,
+		routableNetworks: routableNetworks,
+		assignedNetworks: assignedNetworks,
+		unsafeNetworks:   unsafeNetworks,
+		l:                l,
 
 		incomingMetrics: firewallMetrics{
 			droppedLocalAddr:  metrics.GetOrRegisterCounter("firewall.incoming.dropped.local_addr", nil),
@@ -897,7 +897,7 @@ func (flc *firewallLocalCIDR) addRule(f *Firewall, localCidr string) error {
 	}
 
 	if localCidr == "" {
-		if !f.hasUnsafeNetworks || f.defaultLocalCIDRAny {
+		if len(f.unsafeNetworks) == 0 || f.defaultLocalCIDRAny {
 			flc.Any = true
 			return nil
 		}
@@ -1055,7 +1055,6 @@ func (r *rule) sanity() error {
 }
 
 func parsePort(s string) (int32, int32, error) {
-	var err error
 	const notAPort int32 = -2
 	if s == "any" {
 		return firewall.PortAny, firewall.PortAny, nil
@@ -1064,11 +1063,11 @@ func parsePort(s string) (int32, int32, error) {
 		return firewall.PortFragment, firewall.PortFragment, nil
 	}
 	if !strings.Contains(s, `-`) {
-		rPort, err := strconv.Atoi(s)
+		rPort, err := parsePortValue("", s)
 		if err != nil {
-			return notAPort, notAPort, fmt.Errorf("was not a number; `%s`", s)
+			return notAPort, notAPort, err
 		}
-		return int32(rPort), int32(rPort), nil
+		return rPort, rPort, nil
 	}
 
 	sPorts := strings.SplitN(s, `-`, 2)
@@ -1079,22 +1078,40 @@ func parsePort(s string) (int32, int32, error) {
 		return notAPort, notAPort, fmt.Errorf("appears to be a range but could not be parsed; `%s`", s)
 	}
 
-	rStartPort, err := strconv.Atoi(sPorts[0])
+	startPort, err := parsePortValue("beginning range ", sPorts[0])
 	if err != nil {
-		return notAPort, notAPort, fmt.Errorf("beginning range was not a number; `%s`", sPorts[0])
+		return notAPort, notAPort, err
 	}
 
-	rEndPort, err := strconv.Atoi(sPorts[1])
+	endPort, err := parsePortValue("ending range ", sPorts[1])
 	if err != nil {
-		return notAPort, notAPort, fmt.Errorf("ending range was not a number; `%s`", sPorts[1])
+		return notAPort, notAPort, err
 	}
-
-	startPort := int32(rStartPort)
-	endPort := int32(rEndPort)
 
 	if startPort == firewall.PortAny {
 		endPort = firewall.PortAny
 	}
 
 	return startPort, endPort, nil
+}
+
+// parsePortValue accepts a base-10 decimal in [0, 65535] and returns it
+// widened to int32. Using strconv.ParseUint with bitSize 16 rejects
+// negative input, out-of-range input (>65535), and any non-decimal byte
+// by construction, so the int32 widening that follows is provably safe
+// and cannot collide with firewall.PortAny (0) or firewall.PortFragment
+// (-1) via integer truncation.
+//
+// prefix is prepended to both error messages so callers can disambiguate
+// the single-port path (prefix="") from the range bounds (prefix="beginning
+// range " / "ending range "), preserving the historical error strings.
+func parsePortValue(prefix, s string) (int32, error) {
+	n, err := strconv.ParseUint(s, 10, 16)
+	if err == nil {
+		return int32(n), nil
+	}
+	if errors.Is(err, strconv.ErrRange) {
+		return 0, fmt.Errorf("%sout of range [0,65535]; `%s`", prefix, s)
+	}
+	return 0, fmt.Errorf("%swas not a number; `%s`", prefix, s)
 }

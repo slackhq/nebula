@@ -22,7 +22,9 @@ func (pr StdinPasswordReader) ReadPassword() ([]byte, error) {
 	}
 
 	password, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Println()
+	// Terminal echo is off while reading, so the user's Enter key does not
+	// produce a visible newline. Emit one on stderr to match the prompt.
+	fmt.Fprintln(os.Stderr)
 
 	return password, err
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
 
+	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
@@ -389,13 +391,22 @@ func (f *Interface) reloadDisconnectInvalid(c *config.C) {
 }
 
 func (f *Interface) reloadFirewall(c *config.C) {
-	//TODO: need to trigger/detect if the certificate changed too
-	if c.HasChanged("firewall") == false {
+	cs := f.pki.getCertState()
+	curCert := cs.getCertificate(cert.Version2)
+	if curCert == nil {
+		curCert = cs.getCertificate(cert.Version1)
+	}
+
+	// The firewall builds its routableNetworks set from the certificate's UnsafeNetworks at construction.
+	// Check to see if that set has changed, and if so, rebuild the firewall.
+	certUnsafeChanged := curCert != nil && !slices.Equal(curCert.UnsafeNetworks(), f.firewall.unsafeNetworks)
+
+	if !c.HasChanged("firewall") && !certUnsafeChanged {
 		f.l.Debug("No firewall config change detected")
 		return
 	}
 
-	fw, err := NewFirewallFromConfig(f.l, f.pki.getCertState(), c)
+	fw, err := NewFirewallFromConfig(f.l, cs, c)
 	if err != nil {
 		f.l.Error("Error while creating firewall during reload", "error", err)
 		return
@@ -507,33 +518,41 @@ func (f *Interface) emitStats(ctx context.Context, i time.Duration) {
 	certInitiatingVersion := metrics.GetOrRegisterGauge("certificate.initiating_version", nil)
 	certMaxVersion := metrics.GetOrRegisterGauge("certificate.max_version", nil)
 
+	emit := func() {
+		f.firewall.EmitStats()
+		f.handshakeManager.EmitStats()
+		udpStats()
+
+		certState := f.pki.getCertState()
+		defaultCrt := certState.GetDefaultCertificate()
+		certExpirationGauge.Update(int64(defaultCrt.NotAfter().Sub(time.Now()) / time.Second))
+		certInitiatingVersion.Update(int64(defaultCrt.Version()))
+
+		if f.udpRaw != nil {
+			if rawStats == nil {
+				rawStats = udp.NewRawStatsEmitter(f.udpRaw)
+			}
+			rawStats()
+		}
+
+		// Report the max certificate version we are capable of using
+		if certState.v2Cert != nil {
+			certMaxVersion.Update(int64(certState.v2Cert.Version()))
+		} else {
+			certMaxVersion.Update(int64(certState.v1Cert.Version()))
+		}
+	}
+
+	// Prime gauges so a Prometheus scrape that lands before the first tick
+	// sees real values instead of the zero defaults (issue #907).
+	emit()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			f.firewall.EmitStats()
-			f.handshakeManager.EmitStats()
-			udpStats()
-
-			certState := f.pki.getCertState()
-			defaultCrt := certState.GetDefaultCertificate()
-			certExpirationGauge.Update(int64(defaultCrt.NotAfter().Sub(time.Now()) / time.Second))
-			certInitiatingVersion.Update(int64(defaultCrt.Version()))
-
-			if f.udpRaw != nil {
-				if rawStats == nil {
-					rawStats = udp.NewRawStatsEmitter(f.udpRaw)
-				}
-				rawStats()
-			}
-
-			// Report the max certificate version we are capable of using
-			if certState.v2Cert != nil {
-				certMaxVersion.Update(int64(certState.v2Cert.Version()))
-			} else {
-				certMaxVersion.Update(int64(certState.v1Cert.Version()))
-			}
+			emit()
 		}
 	}
 }

@@ -87,6 +87,7 @@ type HandshakeHostInfo struct {
 	initiatingVersionOverride cert.Version     // Should we use a non-default cert version for this handshake?
 	counter                   int64            // How many attempts have we made so far
 	lastRemotes               []netip.AddrPort // Remotes that we sent to during the previous attempt
+	lastRelays                []netip.Addr     // Relays we attempted to use during the previous attempt
 	packetStore               []*cachedPacket  // A set of packets to be transmitted once the handshake completes
 
 	hostinfo *HostInfo
@@ -221,7 +222,6 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		fields := []any{
 			"udpAddrs", hh.hostinfo.remotes.CopyAddrs(hm.mainHostMap.GetPreferredRanges()),
 			"initiatorIndex", hh.hostinfo.localIndexId,
-			"remoteIndex", hh.hostinfo.remoteIndexId,
 			"durationNs", time.Since(hh.startTime).Nanoseconds(),
 		}
 		// hh.machine can be nil here if buildStage0Packet never succeeded
@@ -352,7 +352,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		)
 	}
 
-	hm.f.relayManager.StartRelays(hm.f, vpnIp, hostinfo, stage0)
+	hm.f.relayManager.StartRelays(hm.f, vpnIp, hh, stage0)
 
 	// If a lighthouse triggered this attempt then we are still in the timer wheel and do not need to re-add
 	if !lighthouseTriggered {
@@ -494,7 +494,6 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
 		hostinfo.logger(hm.l).Info("New host shadows existing host remoteIndex",
-			"remoteIndex", hostinfo.remoteIndexId,
 			"collision", existingRemoteIndex.vpnAddrs,
 		)
 	}
@@ -517,7 +516,6 @@ func (hm *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 		// We have a collision, but this can happen since we can't control
 		// the remote ID. Just log about the situation as a note.
 		hostinfo.logger(hm.l).Info("New host shadows existing host remoteIndex",
-			"remoteIndex", hostinfo.remoteIndexId,
 			"collision", existingRemoteIndex.vpnAddrs,
 		)
 	}

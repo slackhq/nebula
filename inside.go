@@ -409,7 +409,6 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 			"error", err,
 			"udpAddr", remote,
 			"counter", c,
-			"attemptedCounter", c,
 		)
 		return
 	}

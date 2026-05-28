@@ -194,8 +194,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 		// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
 		// its internal mapping. This should never happen.
 		hostinfo.logger(f.l).Error("HostInfo missing remote relay index",
-			"vpnAddrs", hostinfo.vpnAddrs,
-			"remoteIndex", h.RemoteIndex,
+			"relayRemoteIndex", h.RemoteIndex,
 		)
 		return
 	}
@@ -218,8 +217,8 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 		if err != nil {
 			hostinfo.logger(f.l).Info("Failed to find target host info by ip",
 				"relayTo", relay.PeerAddr,
+				"relayFrom", hostinfo.vpnAddrs[0],
 				"error", err,
-				"hostinfo.vpnAddrs", hostinfo.vpnAddrs,
 			)
 			return
 		}

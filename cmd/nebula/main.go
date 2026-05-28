@@ -50,9 +50,12 @@ func main() {
 	}
 
 	if *configPath == "" {
-		fmt.Println("-config flag must be set")
-		flag.Usage()
-		os.Exit(1)
+		p, err := config.DefaultPath()
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		*configPath = p
 	}
 
 	l := logging.NewLogger(os.Stdout)
