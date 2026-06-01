@@ -11,19 +11,21 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/gaissmai/bart"
 	"github.com/miekg/dns"
 	"github.com/slackhq/nebula/config"
 )
 
 type dnsServer struct {
 	sync.RWMutex
-	l               *slog.Logger
-	ctx             context.Context
-	dnsMap4         map[string]netip.Addr
-	dnsMap6         map[string]netip.Addr
-	hostMap         *HostMap
-	myVpnAddrsTable *bart.Lite
+	l       *slog.Logger
+	ctx     context.Context
+	dnsMap4 map[string]netip.Addr
+	dnsMap6 map[string]netip.Addr
+	hostMap *HostMap
+	pki     *PKI
+
+	// selfHost is the cached FQDN we last seeded for ourselves
+	selfHost string
 
 	mux *dns.ServeMux
 
@@ -55,14 +57,14 @@ type dnsServer struct {
 // they no-op when DNS isn't enabled. Each Start invocation owns a ctx-cancel
 // watcher that tears the listener down on nebula shutdown. The returned
 // pointer is always non-nil, even on error.
-func newDnsServerFromConfig(ctx context.Context, l *slog.Logger, cs *CertState, hostMap *HostMap, c *config.C) (*dnsServer, error) {
+func newDnsServerFromConfig(ctx context.Context, l *slog.Logger, pki *PKI, hostMap *HostMap, c *config.C) (*dnsServer, error) {
 	ds := &dnsServer{
-		l:               l,
-		ctx:             ctx,
-		dnsMap4:         make(map[string]netip.Addr),
-		dnsMap6:         make(map[string]netip.Addr),
-		hostMap:         hostMap,
-		myVpnAddrsTable: cs.myVpnAddrsTable,
+		l:       l,
+		ctx:     ctx,
+		dnsMap4: make(map[string]netip.Addr),
+		dnsMap6: make(map[string]netip.Addr),
+		hostMap: hostMap,
+		pki:     pki,
 	}
 	ds.mux = dns.NewServeMux()
 	ds.mux.HandleFunc(".", ds.handleDnsRequest)
@@ -76,6 +78,7 @@ func newDnsServerFromConfig(ctx context.Context, l *slog.Logger, cs *CertState, 
 	if err := ds.reload(c, true); err != nil {
 		return ds, err
 	}
+	ds.seedSelf()
 	return ds, nil
 }
 
@@ -113,7 +116,7 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 			d.Stop()
 		}
 		// Drop any records that accumulated while enabled; a later re-enable
-		// will repopulate from fresh handshakes.
+		// will repopulate from fresh handshakes and a fresh seedSelf.
 		d.clearRecords()
 		return nil
 	}
@@ -121,17 +124,14 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 	if running == nil {
 		// Was disabled (or never started); bring it up now.
 		go d.Start()
-		return nil
+	} else if !sameAddr {
+		d.shutdownServer(running, runningStarted, "reload")
+		// Old Start goroutine has now exited; bring up a fresh listener on the new address.
+		go d.Start()
 	}
 
-	if sameAddr {
-		return nil
-	}
-
-	d.shutdownServer(running, runningStarted, "reload")
-	// Old Start goroutine has now exited; bring up a fresh listener on the
-	// new address.
-	go d.Start()
+	// Refresh the self entry every enabled reload so cert renewals that change our name or VPN addresses are picked up.
+	d.seedSelf()
 	return nil
 }
 
@@ -249,6 +249,20 @@ func (d *dnsServer) QueryCert(data string) string {
 		return ""
 	}
 
+	// The hostmap only ever contains peers we have handshaked with, so it never carries an entry for ourselves.
+	// Answer self lookups straight from the local cert state.
+	if cs := d.certState(); cs != nil && cs.myVpnAddrsTable != nil && cs.myVpnAddrsTable.Contains(ip) {
+		c := cs.GetDefaultCertificate()
+		if c == nil {
+			return ""
+		}
+		b, err := c.MarshalJSON()
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}
+
 	hostinfo := d.hostMap.QueryVpnAddr(ip)
 	if hostinfo == nil {
 		return ""
@@ -266,12 +280,60 @@ func (d *dnsServer) QueryCert(data string) string {
 	return string(b)
 }
 
-// clearRecords drops all DNS records.
+// clearRecords drops all DNS records, including the self entry.
 func (d *dnsServer) clearRecords() {
 	d.Lock()
 	defer d.Unlock()
 	clear(d.dnsMap4)
 	clear(d.dnsMap6)
+	d.selfHost = ""
+}
+
+// seedSelf inserts (or refreshes) a record for our own cert name pointing at our VPN addresses,
+// so a single-lighthouse network can resolve the lighthouse's own hostname without the two-process workaround.
+func (d *dnsServer) seedSelf() {
+	if !d.enabled.Load() {
+		return
+	}
+	cs := d.certState()
+	if cs == nil {
+		return
+	}
+	c := cs.GetDefaultCertificate()
+	if c == nil {
+		return
+	}
+	newHost := strings.ToLower(c.Name()) + "."
+
+	d.Lock()
+	defer d.Unlock()
+	if d.selfHost != "" && d.selfHost != newHost {
+		delete(d.dnsMap4, d.selfHost)
+		delete(d.dnsMap6, d.selfHost)
+	}
+	d.selfHost = newHost
+	delete(d.dnsMap4, newHost)
+	delete(d.dnsMap6, newHost)
+	haveV4, haveV6 := false, false
+	for _, addr := range cs.myVpnAddrs {
+		if addr.Is4() && !haveV4 {
+			d.dnsMap4[newHost] = addr
+			haveV4 = true
+		} else if addr.Is6() && !haveV6 {
+			d.dnsMap6[newHost] = addr
+			haveV6 = true
+		}
+		if haveV4 && haveV6 {
+			break
+		}
+	}
+}
+
+func (d *dnsServer) certState() *CertState {
+	if d.pki == nil {
+		return nil
+	}
+	return d.pki.getCertState()
 }
 
 // Add adds the first IPv4 and IPv6 address that appears in `addresses` as the record for `host`
@@ -309,8 +371,12 @@ func (d *dnsServer) isSelfNebulaOrLocalhost(addr string) bool {
 		return true
 	}
 
+	cs := d.certState()
+	if cs == nil || cs.myVpnAddrsTable == nil {
+		return false
+	}
 	//if we found it in this table, it's good
-	return d.myVpnAddrsTable.Contains(b)
+	return cs.myVpnAddrsTable.Contains(b)
 }
 
 func (d *dnsServer) parseQuery(m *dns.Msg, w dns.ResponseWriter) {

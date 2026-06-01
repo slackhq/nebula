@@ -47,7 +47,7 @@ func TestHandshakeRetransmitDuplicate(t *testing.T) {
 	defer r.RenderFlow()
 
 	t.Log("Trigger handshake from me to them")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi"))
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi")))
 
 	t.Log("Grab my msg1")
 	msg1 := myControl.GetFromUDP(true)
@@ -97,7 +97,7 @@ func TestHandshakeTruncatedPacketRecovery(t *testing.T) {
 	defer r.RenderFlow()
 
 	t.Log("Trigger handshake")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi"))
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi")))
 
 	t.Log("Get msg1 and deliver to responder")
 	msg1 := myControl.GetFromUDP(true)
@@ -146,7 +146,7 @@ func TestHandshakeOrphanedMsg2Dropped(t *testing.T) {
 	defer r.RenderFlow()
 
 	t.Log("Complete a normal handshake")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi"))
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi")))
 	r.RouteForAllUntilTxTun(theirControl)
 	assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 
@@ -248,7 +248,7 @@ func TestHandshakeLateResponse(t *testing.T) {
 	theirControl.Start()
 
 	t.Log("Trigger handshake from me")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi"))
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi")))
 
 	t.Log("Grab msg1 but don't deliver")
 	msg1 := myControl.GetFromUDP(true)
@@ -292,7 +292,7 @@ func TestHandshakeSelfConnectionRejected(t *testing.T) {
 	myControl.Start()
 
 	t.Log("Trigger handshake from me")
-	myControl.InjectTunUDPPacket(netip.MustParseAddr("10.128.0.2"), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi"))
+	myControl.InjectTunPacket(BuildTunUDPPacket(netip.MustParseAddr("10.128.0.2"), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi")))
 	msg1 := myControl.GetFromUDP(true)
 
 	t.Log("Drain any handshake retransmits before injecting")
@@ -375,7 +375,7 @@ func TestHandshakeRemoteAllowList(t *testing.T) {
 	defer r.RenderFlow()
 
 	t.Log("Trigger handshake from them")
-	theirControl.InjectTunUDPPacket(myVpnIpNet[0].Addr(), 80, theirVpnIpNet[0].Addr(), 80, []byte("Hi"))
+	theirControl.InjectTunPacket(BuildTunUDPPacket(myVpnIpNet[0].Addr(), 80, theirVpnIpNet[0].Addr(), 80, []byte("Hi")))
 	msg1 := theirControl.GetFromUDP(true)
 
 	t.Log("Rewrite the source to a blocked IP and inject")
@@ -426,7 +426,7 @@ func TestHandshakeAlreadySeenPreferredRemote(t *testing.T) {
 	defer r.RenderFlow()
 
 	t.Log("Complete a normal handshake via the router")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi"))
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi")))
 	r.RouteForAllUntilTxTun(theirControl)
 	assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 
@@ -437,7 +437,7 @@ func TestHandshakeAlreadySeenPreferredRemote(t *testing.T) {
 	originalRemote := hi.CurrentRemote
 
 	t.Log("Re-trigger traffic to cause a new handshake attempt (ErrAlreadySeen)")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("roam"))
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("roam")))
 	r.RouteForAllUntilTxTun(theirControl)
 
 	t.Log("Verify tunnel still works")
@@ -475,8 +475,8 @@ func TestHandshakeWrongResponderPacketStore(t *testing.T) {
 	evilControl.Start()
 
 	t.Log("Send multiple packets to them (cached during handshake)")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("packet1"))
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("packet2"))
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("packet1")))
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("packet2")))
 
 	t.Log("Route until evil tunnel is closed")
 	h := &header.H{}
@@ -540,7 +540,7 @@ func TestHandshakeRelayComplete(t *testing.T) {
 	theirControl.Start()
 
 	t.Log("Trigger handshake via relay")
-	myControl.InjectTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi via relay"))
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi via relay")))
 
 	p := r.RouteForAllUntilTxTun(theirControl)
 	assertUdpPacket(t, []byte("Hi via relay"), p, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), 80, 80)
@@ -568,7 +568,7 @@ func TestHandshakeRelayComplete(t *testing.T) {
 }
 
 // NOTE: Relay V1 cert + IPv6 rejection is not tested here because
-// InjectTunUDPPacket from a V4 node to a V6 address panics in the test
+// BuildTunUDPPacket from a V4 node to a V6 address panics in the test
 // framework. The check is in handshake_manager.go handleOutbound relay
 // logic (lines ~304-313): if the relay host has a V1 cert and either
 // address is IPv6, the relay is skipped.

@@ -19,13 +19,18 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 		return nil, fmt.Errorf("multiple udp listeners not supported on windows")
 	}
 
+	var conn Conn
 	rc, err := NewRIOListener(l, ip, port)
 	if err == nil {
-		return rc, nil
+		conn = rc
+	} else {
+		l.Error("Falling back to standard udp sockets", "error", err)
+		conn, err = NewGenericListener(l, ip, port, multi, batch)
+		if err != nil {
+			return nil, err
+		}
 	}
-
-	l.Error("Falling back to standard udp sockets", "error", err)
-	return NewGenericListener(l, ip, port, multi, batch)
+	return wrapWithWDFBypass(l, conn), nil
 }
 
 func NewListenConfig(multi bool) net.ListenConfig {

@@ -1,0 +1,113 @@
+name: Code-sign Windows binaries
+description: >
+  Sign every .exe under a given path in place via the DefinedNet code-signer
+  Lambda. If `role` or `bucket` is empty, logs a notice and skips signing so
+  forks and dev branches without AWS access still produce usable builds.
+
+inputs:
+  path:
+    description: "Directory whose .exe files should be signed in place"
+    required: true
+  role:
+    description: "IAM role ARN to assume via OIDC; empty disables signing"
+    required: false
+    default: ""
+  bucket:
+    description: "S3 staging bucket the code-signer Lambda reads from; empty disables signing"
+    required: false
+    default: ""
+  region:
+    description: "AWS region for the role and Lambda"
+    required: false
+    default: "us-east-2"
+  function-name:
+    description: "Code-signer Lambda function name"
+    required: false
+    default: "code-signer"
+  key-prefix:
+    description: "S3 key prefix the caller is authorized to write under"
+    required: false
+    default: "code-signing/slackhq/nebula"
+
+runs:
+  using: composite
+  steps:
+    - name: Skip notice
+      if: inputs.role == '' || inputs.bucket == ''
+      shell: sh
+      run: echo "::notice::code-signer role or bucket not set; skipping code signing."
+
+    - name: Configure AWS credentials
+      if: inputs.role != '' && inputs.bucket != ''
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: ${{ inputs.role }}
+        aws-region: ${{ inputs.region }}
+        # Default is 12 retries to ride out IAM trust-policy propagation; once
+        # the role is stable we want a real misconfiguration to fail fast.
+        retry-max-attempts: 5
+
+    - name: Sign .exe files
+      if: inputs.role != '' && inputs.bucket != ''
+      shell: sh
+      env:
+        SIGN_PATH: ${{ inputs.path }}
+        BUCKET: ${{ inputs.bucket }}
+        FUNCTION_NAME: ${{ inputs.function-name }}
+        KEY_PREFIX: ${{ inputs.key-prefix }}
+      run: |
+        set -eu
+        RUN="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+        find "$SIGN_PATH" -name '*.exe' -print | while read -r path
+        do
+            rel=${path#"$SIGN_PATH"/}
+            file=$(basename "$path")
+            name=${file%.exe}
+            prefix="${KEY_PREFIX}/${RUN}"
+            src="${prefix}/unsigned/${rel}"
+            dst="${prefix}/signed/${rel}"
+
+            echo "::group::Sign ${rel}"
+            echo "Uploading unsigned to s3://${BUCKET}/${src}"
+            aws s3 cp --no-progress "$path" "s3://${BUCKET}/${src}" >/dev/null
+
+            echo "Invoking ${FUNCTION_NAME} Lambda"
+            payload=$(jq -nc \
+                --arg s "$src" \
+                --arg d "$dst" \
+                --arg p "$name" \
+                '{source_key: $s, dest_key: $d, program_name: $p}')
+            meta=$(aws lambda invoke \
+                --function-name "$FUNCTION_NAME" \
+                --cli-binary-format raw-in-base64-out \
+                --payload "$payload" \
+                --output json \
+                /tmp/sign-resp.json)
+            if echo "$meta" | jq -e '.FunctionError != null' >/dev/null
+            then
+                echo "::endgroup::"
+                echo "::error::code-signer Lambda failed for ${rel}"
+                cat /tmp/sign-resp.json >&2
+                exit 1
+            fi
+
+            echo "Downloading signed back to ${path}"
+            aws s3 cp --no-progress "s3://${BUCKET}/${dst}" "$path" >/dev/null
+
+            aws s3 rm "s3://${BUCKET}/${src}" >/dev/null 2>&1 || true
+            aws s3 rm "s3://${BUCKET}/${dst}" >/dev/null 2>&1 || true
+
+            # Sanity-check the bytes we got back actually carry an Authenticode
+            # signature that this machine can validate end to end.
+            status=$(powershell -NoProfile -Command "(Get-AuthenticodeSignature -FilePath '$path').Status" | tr -d '\r')
+            if [ "$status" != "Valid" ]
+            then
+                echo "::endgroup::"
+                echo "::error::${rel} signature status: ${status} (expected Valid)"
+                exit 1
+            fi
+
+            echo "Signed ${rel} (sha256=$(jq -r '.sha256' /tmp/sign-resp.json), status=${status})"
+            echo "::endgroup::"
+        done

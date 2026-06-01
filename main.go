@@ -55,7 +55,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	}
 	l.Info("Firewall started", "firewallHashes", fw.GetRuleHashes())
 
-	ssh, err := sshd.NewSSHServer(l.With("subsystem", "sshd"))
+	ssh, err := sshd.NewSSHServer(ctx, l.With("subsystem", "sshd"))
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while creating SSH server", err)
 	}
@@ -170,7 +170,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	}
 
 	hostMap := NewHostMapFromConfig(l, c)
-	punchy := NewPunchyFromConfig(l, c)
+	punchy := NewPunchyFromConfig(l, c, udpConns[0])
 	connManager := newConnectionManagerFromConfig(l, c, hostMap, punchy)
 	lightHouse, err := NewLightHouseFromConfig(ctx, l, c, pki.getCertState(), udpConns[0], punchy)
 	if err != nil {
@@ -184,21 +184,17 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		messageMetrics = newMessageMetricsOnlyRecvError()
 	}
 
-	useRelays := c.GetBool("relay.use_relays", DefaultUseRelays) && !c.GetBool("relay.am_relay", false)
-
 	handshakeConfig := HandshakeConfig{
-		tryInterval:   c.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
-		retries:       int64(c.GetInt("handshakes.retries", DefaultHandshakeRetries)),
-		triggerBuffer: c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
-		useRelays:     useRelays,
-
+		tryInterval:    c.GetDuration("handshakes.try_interval", DefaultHandshakeTryInterval),
+		retries:        int64(c.GetInt("handshakes.retries", DefaultHandshakeRetries)),
+		triggerBuffer:  c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
 		messageMetrics: messageMetrics,
 	}
 
 	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
 	lightHouse.handshakeTrigger = handshakeManager.trigger
 
-	ds, err := newDnsServerFromConfig(ctx, l, pki.getCertState(), hostMap, c)
+	ds, err := newDnsServerFromConfig(ctx, l, pki, hostMap, c)
 	if err != nil {
 		l.Warn("Failed to start DNS responder", "error", err)
 	}
@@ -244,6 +240,8 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 		handshakeManager.f = ifce
 		go handshakeManager.Run(ctx)
+
+		punchy.Start(ctx, ifce, hostMap, lightHouse)
 	}
 
 	stats, err := newStatsServerFromConfig(ctx, l, c, buildVersion, configTest)

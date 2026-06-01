@@ -9,7 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gaissmai/bart"
 	"github.com/miekg/dns"
+	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/cert_test"
 	"github.com/slackhq/nebula/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -274,6 +277,92 @@ func TestDnsServer_Stop_beforeBind_doesNotHang(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Stop hung after a failed bind")
 	}
+}
+
+// newTestPKI builds a minimal *PKI with a single v1 cert whose name and
+// VPN addresses are caller-provided, suitable for exercising seedSelf and
+// QueryCert self handling.
+func newTestPKI(t *testing.T, name string, addrs []netip.Addr) *PKI {
+	t.Helper()
+	networks := make([]netip.Prefix, 0, len(addrs))
+	for _, a := range addrs {
+		bits := 32
+		if a.Is6() {
+			bits = 128
+		}
+		networks = append(networks, netip.PrefixFrom(a, bits))
+	}
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil)
+	c, _, _, _ := cert_test.NewTestCert(cert.Version2, cert.Curve_CURVE25519, ca, caKey, name, time.Time{}, time.Time{}, networks, nil, nil)
+
+	addrsTable := new(bart.Lite)
+	for _, a := range addrs {
+		addrsTable.Insert(netip.PrefixFrom(a, a.BitLen()))
+	}
+
+	cs := &CertState{
+		v2Cert:            c,
+		initiatingVersion: cert.Version2,
+		myVpnAddrs:        addrs,
+		myVpnAddrsTable:   addrsTable,
+	}
+	pki := &PKI{}
+	pki.cs.Store(cs)
+	return pki
+}
+
+func TestDnsServer_seedSelf_addsOwnRecord(t *testing.T) {
+	ds, c := newTestDnsServer(t)
+	myV4 := netip.MustParseAddr("10.0.0.1")
+	myV6 := netip.MustParseAddr("fd00::1")
+	ds.pki = newTestPKI(t, "lighthouse", []netip.Addr{myV4, myV6})
+	setDnsConfig(c, "127.0.0.1", "0", true, true)
+	require.NoError(t, ds.reload(c, true))
+
+	ds.seedSelf()
+	got4, exists := ds.Query(dns.TypeA, "lighthouse.")
+	assert.True(t, exists)
+	assert.Equal(t, myV4, got4)
+	got6, exists := ds.Query(dns.TypeAAAA, "lighthouse.")
+	assert.True(t, exists)
+	assert.Equal(t, myV6, got6)
+}
+
+func TestDnsServer_seedSelf_disabled_noOp(t *testing.T) {
+	ds, c := newTestDnsServer(t)
+	ds.pki = newTestPKI(t, "lighthouse", []netip.Addr{netip.MustParseAddr("10.0.0.1")})
+	setDnsConfig(c, "127.0.0.1", "0", true, false)
+	require.NoError(t, ds.reload(c, true))
+
+	ds.seedSelf()
+	_, exists := ds.Query(dns.TypeA, "lighthouse.")
+	assert.False(t, exists)
+}
+
+func TestDnsServer_clearRecords_dropsSelfHost(t *testing.T) {
+	ds, c := newTestDnsServer(t)
+	ds.pki = newTestPKI(t, "lighthouse", []netip.Addr{netip.MustParseAddr("10.0.0.1")})
+	setDnsConfig(c, "127.0.0.1", "0", true, true)
+	require.NoError(t, ds.reload(c, true))
+	ds.seedSelf()
+	require.NotEmpty(t, ds.selfHost)
+
+	ds.clearRecords()
+	assert.Empty(t, ds.selfHost)
+	_, exists := ds.Query(dns.TypeA, "lighthouse.")
+	assert.False(t, exists)
+}
+
+func TestDnsServer_QueryCert_returnsOwnCert(t *testing.T) {
+	ds, _ := newTestDnsServer(t)
+	myV4 := netip.MustParseAddr("10.0.0.1")
+	ds.pki = newTestPKI(t, "lighthouse", []netip.Addr{myV4})
+
+	got := ds.QueryCert(myV4.String() + ".")
+	assert.NotEmpty(t, got, "TXT lookup of our own VPN address should return our cert")
+
+	other := netip.MustParseAddr("10.0.0.99")
+	assert.Empty(t, ds.QueryCert(other.String()+"."), "unknown peer IP should return nothing")
 }
 
 func TestDnsServer_reload_disable_stopsRunningServer(t *testing.T) {

@@ -1029,6 +1029,75 @@ func Test_parsePort(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Test_parsePort_invalid covers inputs that must error. The named bug is
+// that int32(strconv.Atoi("4294967296")) truncates to 0 == firewall.PortAny,
+// silently turning a typo into a match-all-ports rule; the rest are
+// representative syntax/range probes.
+func Test_parsePort_invalid(t *testing.T) {
+	tests := []struct {
+		name            string
+		input           string
+		wantErrContains string
+	}{
+		// Numeric overflow (the named bug + boundary).
+		{"named bug: 2^32 truncates to PortAny", "4294967296", "out of range"},
+		{"just above max real port", "65536", "out of range"},
+
+		// Negatives route through the range branch and hit the empty-half
+		// guard; included as defense in depth so a future refactor cannot
+		// accidentally reach the int32 cast.
+		{"negative", "-1", "could not be parsed"},
+
+		// Syntax probes.
+		{"NUL between digits", "4\x002", "was not a number"},
+		{"hex notation", "0x10", "was not a number"},
+		{"scientific notation", "1e3", "was not a number"},
+		{"leading whitespace", " 42", "was not a number"},
+		{"fullwidth digits", "４２", "was not a number"},
+
+		// Range branch.
+		{"range upper out of range", "1-65536", "ending range out of range"},
+		{"range lower out of range", "65536-65537", "beginning range out of range"},
+		{"range with negative upper", "1--1", "ending range was not a number"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := parsePort(tc.input)
+			require.Error(t, err, "input %q must error", tc.input)
+			require.ErrorContains(t, err, tc.wantErrContains)
+		})
+	}
+}
+
+// Test_parsePort_valid_boundaries locks in success cases at 0, 1, and 65535
+// so a future refactor cannot regress the boundaries.
+func Test_parsePort_valid_boundaries(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantStart int32
+		wantEnd   int32
+	}{
+		{"zero is PortAny", "0", 0, 0},
+		{"min real port", "1", 1, 1},
+		{"max real port", "65535", 65535, 65535},
+		{"range zero to max forces end to zero", "0-65535", 0, 0},
+		{"range max to max", "65535-65535", 65535, 65535},
+		{"range one to max", "1-65535", 1, 65535},
+		{"range with whitespace inside", " 1 - 2    ", 1, 2},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, e, err := parsePort(tc.input)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantStart, s, "start port")
+			assert.Equal(t, tc.wantEnd, e, "end port")
+		})
+	}
+}
+
 func TestNewFirewallFromConfig(t *testing.T) {
 	l := test.NewLogger()
 	// Test a bad rule definition

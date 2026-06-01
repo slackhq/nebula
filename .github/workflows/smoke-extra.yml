@@ -14,10 +14,18 @@ on:
       - 'go.sum'
 jobs:
 
-  smoke-extra:
+  smoke-extra-libvirt:
     if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'smoke-test-extra')
-    name: Run extra smoke tests
+    name: ${{ matrix.target }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - freebsd-amd64
+          - openbsd-amd64
+          - netbsd-amd64
+          - linux-amd64-ipv6disable
     env:
       VAGRANT_DEFAULT_PROVIDER: libvirt
     steps:
@@ -40,28 +48,85 @@ jobs:
         sudo chmod 666 /var/run/libvirt/libvirt-sock
         vagrant plugin install vagrant-libvirt
 
-    - name: freebsd-amd64
-      run: make smoke-vagrant/freebsd-amd64
+    - name: ${{ matrix.target }}
+      run: make smoke-vagrant/${{ matrix.target }}
 
-    - name: openbsd-amd64
-      run: make smoke-vagrant/openbsd-amd64
+    timeout-minutes: 30
 
-    - name: netbsd-amd64
-      run: make smoke-vagrant/netbsd-amd64
+  # linux-386 needs VirtualBox, which conflicts with KVM/libvirt -- isolated job.
+  smoke-extra-virtualbox:
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'smoke-test-extra')
+    name: linux-386
+    runs-on: ubuntu-latest
+    env:
+      VAGRANT_DEFAULT_PROVIDER: virtualbox
+    steps:
 
-    - name: linux-amd64-ipv6disable
-      run: make smoke-vagrant/linux-amd64-ipv6disable
+    - uses: actions/checkout@v6
 
-    # linux-386 runs last because it requires disabling KVM to use VirtualBox,
-    # which prevents libvirt (used by the other tests) from working after this point.
-    - name: install virtualbox for i386 test
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.25'
+        check-latest: true
+
+    - name: add hashicorp source
+      run: wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg && echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+
+    - name: install vagrant and virtualbox
       run: |
-        sudo apt-get install -y virtualbox
+        sudo apt-get update && sudo apt-get install -y vagrant virtualbox
         sudo rmmod kvm_amd kvm_intel kvm 2>/dev/null || true
 
     - name: linux-386
-      env:
-        VAGRANT_DEFAULT_PROVIDER: virtualbox
       run: make smoke-vagrant/linux-386
 
     timeout-minutes: 30
+
+  smoke-windows:
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'smoke-test-extra')
+    name: Run windows smoke test
+    runs-on: windows-latest
+    steps:
+
+    - uses: actions/checkout@v6
+
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.25'
+        check-latest: true
+
+    # WSL2 + Ubuntu so the smoke can run a real linux peer with its own
+    # netns. iputils-ping is needed for the in-WSL ping check. WSL1 has no
+    # real kernel and would lack /dev/net/tun, so we have to force WSL2.
+    - uses: Vampire/setup-wsl@v3
+      with:
+        distribution: Ubuntu-24.04
+        additional-packages: iputils-ping iproute2
+
+    # Vampire/setup-wsl provisions WSL1 even when the WSL2 platform is present.
+    # Convert the distro to WSL2 explicitly before we try to use /dev/net/tun.
+    - name: convert distro to WSL2
+      shell: pwsh
+      run: |
+        wsl --set-version Ubuntu-24.04 2
+        wsl --shutdown
+        wsl --list --verbose
+
+    - name: build windows nebula
+      run: make bin-windows
+
+    - name: build linux nebula for WSL
+      shell: bash
+      env:
+        GOOS: linux
+        GOARCH: amd64
+      run: |
+        mkdir -p build/linux-amd64
+        go build -o build/linux-amd64/nebula ./cmd/nebula
+
+    - name: run smoke-windows
+      shell: pwsh
+      working-directory: ./.github/workflows/smoke
+      run: ./smoke-windows.ps1
+
+    timeout-minutes: 15

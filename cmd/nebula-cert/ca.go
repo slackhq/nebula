@@ -97,6 +97,19 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		if err = mustFlagString("out-key", cf.outKeyPath); err != nil {
 			return err
 		}
+	} else {
+		// out-key is meaningless under PKCS#11 because the private key never
+		// leaves the HSM; reject it so we never silently accept or claim a
+		// stdout slot for it.
+		outKeySet := false
+		cf.set.Visit(func(f *flag.Flag) {
+			if f.Name == "out-key" {
+				outKeySet = true
+			}
+		})
+		if outKeySet {
+			return newHelpErrorf("cannot set -out-key with -pkcs11")
+		}
 	}
 	if err := mustFlagString("out-crt", cf.outCertPath); err != nil {
 		return err
@@ -171,12 +184,21 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		}
 	}
 
+	var claims ioClaims
+	if err := reserveOutputs(&claims,
+		"out-key", *cf.outKeyPath,
+		"out-crt", *cf.outCertPath,
+		"out-qr", *cf.outQRPath,
+	); err != nil {
+		return err
+	}
+
 	var passphrase []byte
 	if !isP11 && *cf.encryption {
 		passphrase = []byte(os.Getenv("NEBULA_CA_PASSPHRASE"))
 		if len(passphrase) == 0 {
 			for i := 0; i < 5; i++ {
-				out.Write([]byte("Enter passphrase: "))
+				errOut.Write([]byte("Enter passphrase: "))
 				passphrase, err = pr.ReadPassword()
 
 				if err == ErrNoTerminal {
@@ -261,14 +283,16 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		Curve:          curve,
 	}
 
-	if !isP11 {
+	if !isP11 && !isStdio(*cf.outKeyPath) {
 		if _, err := os.Stat(*cf.outKeyPath); err == nil {
 			return fmt.Errorf("refusing to overwrite existing CA key: %s", *cf.outKeyPath)
 		}
 	}
 
-	if _, err := os.Stat(*cf.outCertPath); err == nil {
-		return fmt.Errorf("refusing to overwrite existing CA cert: %s", *cf.outCertPath)
+	if !isStdio(*cf.outCertPath) {
+		if _, err := os.Stat(*cf.outCertPath); err == nil {
+			return fmt.Errorf("refusing to overwrite existing CA cert: %s", *cf.outCertPath)
+		}
 	}
 
 	var c cert.Certificate
@@ -294,7 +318,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 			b = cert.MarshalSigningPrivateKeyToPEM(curve, rawPriv)
 		}
 
-		err = os.WriteFile(*cf.outKeyPath, b, 0600)
+		err = writeOutput(*cf.outKeyPath, b, 0600, out)
 		if err != nil {
 			return fmt.Errorf("error while writing out-key: %s", err)
 		}
@@ -305,7 +329,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 		return fmt.Errorf("error while marshalling certificate: %s", err)
 	}
 
-	err = os.WriteFile(*cf.outCertPath, b, 0600)
+	err = writeOutput(*cf.outCertPath, b, 0600, out)
 	if err != nil {
 		return fmt.Errorf("error while writing out-crt: %s", err)
 	}
@@ -316,7 +340,7 @@ func ca(args []string, out io.Writer, errOut io.Writer, pr PasswordReader) error
 			return fmt.Errorf("error while generating qr code: %s", err)
 		}
 
-		err = os.WriteFile(*cf.outQRPath, b, 0600)
+		err = writeOutput(*cf.outQRPath, b, 0600, out)
 		if err != nil {
 			return fmt.Errorf("error while writing out-qr: %s", err)
 		}
@@ -332,6 +356,7 @@ func caSummary() string {
 func caHelp(out io.Writer) {
 	cf := newCaFlags()
 	out.Write([]byte("Usage of " + os.Args[0] + " " + caSummary() + "\n"))
+	out.Write([]byte(stdioHelpText))
 	cf.set.SetOutput(out)
 	cf.set.PrintDefaults()
 }

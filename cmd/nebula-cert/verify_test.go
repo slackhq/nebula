@@ -23,6 +23,7 @@ func Test_verifyHelp(t *testing.T) {
 	assert.Equal(
 		t,
 		"Usage of "+os.Args[0]+" verify <flags>: verifies a certificate isn't expired and was signed by a trusted authority.\n"+
+			"  Pass \"-\" to any path flag to read from stdin or write to stdout.\n"+
 			"  -ca string\n"+
 			"    \tRequired: path to a file containing one or more ca certificates\n"+
 			"  -crt string\n"+
@@ -121,4 +122,47 @@ func Test_verify(t *testing.T) {
 	assert.Empty(t, ob.String())
 	assert.Empty(t, eb.String())
 	require.NoError(t, err)
+}
+
+func Test_verify_stdio(t *testing.T) {
+	ob := &bytes.Buffer{}
+	eb := &bytes.Buffer{}
+
+	caPub, caPriv, _ := ed25519.GenerateKey(rand.Reader)
+	ca, _ := NewTestCaCert("test-ca", caPub, caPriv, time.Now().Add(time.Hour*-1), time.Now().Add(time.Hour*2), nil, nil, nil)
+	caPEM, _ := ca.MarshalPEM()
+
+	crt, _ := NewTestCert(ca, caPriv, "test-cert", time.Now().Add(time.Hour*-1), time.Now().Add(time.Hour), nil, nil, nil)
+	crtPEM, _ := crt.MarshalPEM()
+
+	caFile, err := os.CreateTemp("", "verify-ca")
+	require.NoError(t, err)
+	defer os.Remove(caFile.Name())
+	caFile.Write(caPEM)
+
+	// crt on stdin, ca on disk
+	withStdin(t, bytes.NewReader(crtPEM))
+	require.NoError(t, verify([]string{"-ca", caFile.Name(), "-crt", "-"}, ob, eb))
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
+
+	// ca on stdin, crt on disk
+	certFile, err := os.CreateTemp("", "verify-cert")
+	require.NoError(t, err)
+	defer os.Remove(certFile.Name())
+	certFile.Write(crtPEM)
+
+	withStdin(t, bytes.NewReader(caPEM))
+	ob.Reset()
+	eb.Reset()
+	require.NoError(t, verify([]string{"-ca", "-", "-crt", certFile.Name()}, ob, eb))
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
+
+	// both flags on stdin should error
+	withStdin(t, bytes.NewReader(caPEM))
+	ob.Reset()
+	eb.Reset()
+	require.EqualError(t, verify([]string{"-ca", "-", "-crt", "-"}, ob, eb),
+		`-ca and -crt both set to "-", only one input may read from stdin`)
 }

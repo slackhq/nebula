@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 
 	"github.com/kardianos/service"
 	"github.com/slackhq/nebula"
@@ -57,24 +55,13 @@ func (p *program) Stop(s service.Service) error {
 	return nil
 }
 
-func fileExists(filename string) bool {
-	_, err := os.Stat(filename)
-	if os.IsNotExist(err) {
-		return false
-	}
-	return true
-}
-
 func doService(configPath *string, configTest *bool, build string, serviceFlag *string) error {
 	if *configPath == "" {
-		ex, err := os.Executable()
+		p, err := config.DefaultPath()
 		if err != nil {
 			return err
 		}
-		*configPath = filepath.Dir(ex) + "/config.yaml"
-		if !fileExists(*configPath) {
-			*configPath = filepath.Dir(ex) + "/config.yml"
-		}
+		*configPath = p
 	}
 
 	svcConfig := &service.Config{

@@ -27,6 +27,7 @@ func Test_caHelp(t *testing.T) {
 	assert.Equal(
 		t,
 		"Usage of "+os.Args[0]+" ca <flags>: create a self signed certificate authority\n"+
+			"  Pass \"-\" to any path flag to read from stdin or write to stdout.\n"+
 			"  -argon-iterations uint\n"+
 			"    \tOptional: Argon2 iterations parameter used for encrypted private key passphrase (default 1)\n"+
 			"  -argon-memory uint\n"+
@@ -84,7 +85,7 @@ func Test_ca(t *testing.T) {
 		err:      nil,
 	}
 
-	pwPromptOb := "Enter passphrase: "
+	pwPromptEB := "Enter passphrase: "
 
 	// required args
 	assertHelpError(t, ca(
@@ -168,8 +169,8 @@ func Test_ca(t *testing.T) {
 	eb.Reset()
 	args = []string{"-version", "1", "-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
 	require.NoError(t, ca(args, ob, eb, testpw))
-	assert.Equal(t, pwPromptOb, ob.String())
-	assert.Empty(t, eb.String())
+	assert.Empty(t, ob.String())
+	assert.Equal(t, pwPromptEB, eb.String())
 
 	// test encrypted key with passphrase environment variable
 	os.Remove(keyF.Name())
@@ -207,8 +208,8 @@ func Test_ca(t *testing.T) {
 	eb.Reset()
 	args = []string{"-version", "1", "-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
 	require.Error(t, ca(args, ob, eb, errpw))
-	assert.Equal(t, pwPromptOb, ob.String())
-	assert.Empty(t, eb.String())
+	assert.Empty(t, ob.String())
+	assert.Equal(t, pwPromptEB, eb.String())
 
 	// test when user fails to enter a password
 	os.Remove(keyF.Name())
@@ -217,8 +218,8 @@ func Test_ca(t *testing.T) {
 	eb.Reset()
 	args = []string{"-version", "1", "-encrypt", "-name", "test", "-duration", "100m", "-groups", "1,2,3,4,5", "-out-crt", crtF.Name(), "-out-key", keyF.Name()}
 	require.EqualError(t, ca(args, ob, eb, nopw), "no passphrase specified, remove -encrypt flag to write out-key in plaintext")
-	assert.Equal(t, strings.Repeat(pwPromptOb, 5), ob.String()) // prompts 5 times before giving up
-	assert.Empty(t, eb.String())
+	assert.Empty(t, ob.String())
+	assert.Equal(t, strings.Repeat(pwPromptEB, 5), eb.String()) // prompts 5 times before giving up
 
 	// create valid cert/key for overwrite tests
 	os.Remove(keyF.Name())
@@ -246,4 +247,68 @@ func Test_ca(t *testing.T) {
 	assert.Empty(t, eb.String())
 	os.Remove(keyF.Name())
 
+}
+
+func Test_ca_stdio(t *testing.T) {
+	nopw := &StubPasswordReader{}
+
+	keyF, err := os.CreateTemp("", "ca.key")
+	require.NoError(t, err)
+	os.Remove(keyF.Name())
+	defer os.Remove(keyF.Name())
+
+	crtF, err := os.CreateTemp("", "ca.crt")
+	require.NoError(t, err)
+	os.Remove(crtF.Name())
+	defer os.Remove(crtF.Name())
+
+	// out-crt on stdout, out-key on disk
+	ob := &bytes.Buffer{}
+	eb := &bytes.Buffer{}
+	require.NoError(t, ca([]string{"-name", "test-ca", "-duration", "1h", "-out-crt", "-", "-out-key", keyF.Name()}, ob, eb, nopw))
+	assert.Empty(t, eb.String())
+	c, _, err := cert.UnmarshalCertificateFromPEM(ob.Bytes())
+	require.NoError(t, err)
+	assert.True(t, c.IsCA())
+	assert.Equal(t, "test-ca", c.Name())
+
+	// out-key on stdout, out-crt on disk
+	os.Remove(keyF.Name())
+	ob.Reset()
+	eb.Reset()
+	require.NoError(t, ca([]string{"-name", "test-ca", "-duration", "1h", "-out-crt", crtF.Name(), "-out-key", "-"}, ob, eb, nopw))
+	assert.Empty(t, eb.String())
+	_, _, curve, err := cert.UnmarshalSigningPrivateKeyFromPEM(ob.Bytes())
+	require.NoError(t, err)
+	assert.Equal(t, cert.Curve_CURVE25519, curve)
+
+	// dual stdout is rejected up front
+	os.Remove(crtF.Name())
+	ob.Reset()
+	eb.Reset()
+	require.EqualError(t,
+		ca([]string{"-name", "test-ca", "-duration", "1h", "-out-crt", "-", "-out-key", "-"}, ob, eb, nopw),
+		`-out-key and -out-crt both set to "-", only one output may write to stdout`)
+	assert.Empty(t, ob.String())
+
+	// an output conflict combined with -encrypt must error BEFORE prompting
+	// for a passphrase; pr would record any read attempt
+	tracker := &trackingPasswordReader{}
+	ob.Reset()
+	eb.Reset()
+	require.EqualError(t,
+		ca([]string{"-name", "test-ca", "-duration", "1h", "-encrypt", "-out-crt", "-", "-out-key", "-"}, ob, eb, tracker),
+		`-out-key and -out-crt both set to "-", only one output may write to stdout`)
+	assert.Empty(t, ob.String())
+	assert.Empty(t, eb.String())
+	assert.Zero(t, tracker.calls, "passphrase prompt should not have been called")
+}
+
+type trackingPasswordReader struct {
+	calls int
+}
+
+func (pr *trackingPasswordReader) ReadPassword() ([]byte, error) {
+	pr.calls++
+	return []byte(""), nil
 }

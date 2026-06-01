@@ -13,8 +13,8 @@ on:
       - 'go.sum'
 jobs:
 
-  test-linux:
-    name: Build all and test on ubuntu-linux
+  static:
+    name: Static checks
     runs-on: ubuntu-latest
     steps:
 
@@ -25,8 +25,16 @@ jobs:
         go-version: '1.25'
         check-latest: true
 
-    - name: Build
-      run: make all
+    - name: Install goimports
+      run: go install golang.org/x/tools/cmd/goimports@latest
+
+    - name: gofmt
+      run: |
+        if [ "$(find . -iname '*.go' | grep -v '\.pb\.go$' | xargs goimports -l)" ]
+        then
+          find . -iname '*.go' | grep -v '\.pb\.go$' | xargs goimports -d
+          exit 1
+        fi
 
     - name: Vet
       run: make vet
@@ -35,88 +43,44 @@ jobs:
       uses: golangci/golangci-lint-action@v9
       with:
         version: v2.5
-
-    - name: Test
-      run: make test
-
-    - name: End 2 end
-      run: make e2evv
-
-    - name: Build test mobile
-      run: make build-test-mobile
-
-    - uses: actions/upload-artifact@v6
-      with:
-        name: e2e packet flow linux-latest
-        path: e2e/mermaid/linux-latest
-        if-no-files-found: warn
-
-  test-linux-boringcrypto:
-    name: Build and test on linux with boringcrypto
-    runs-on: ubuntu-latest
-    steps:
-
-    - uses: actions/checkout@v6
-
-    - uses: actions/setup-go@v6
-      with:
-        go-version: '1.25'
-        check-latest: true
-
-    - name: Build
-      run: make bin-boringcrypto
-
-    - name: Test
-      run: make test-boringcrypto
-
-    - name: End 2 end
-      run: make e2e GOEXPERIMENT=boringcrypto CGO_ENABLED=1 TEST_ENV="TEST_LOGS=1" TEST_FLAGS="-v -ldflags -checklinkname=0"
-
-  test-linux-fips140:
-    name: Build and test on linux with fips140=on
-    runs-on: ubuntu-latest
-    steps:
-
-    - uses: actions/checkout@v6
-
-    - uses: actions/setup-go@v6
-      with:
-        go-version: '1.25'
-        check-latest: true
-
-    - name: Build
-      run: make fips140
-
-    - name: Test
-      run: make fips140 test
-
-    - name: End 2 end
-      run: make fips140 e2evv
-
-  test-linux-pkcs11:
-    name: Build and test on linux with pkcs11
-    runs-on: ubuntu-latest
-    steps:
-
-    - uses: actions/checkout@v6
-
-    - uses: actions/setup-go@v6
-      with:
-        go-version: '1.25'
-        check-latest: true
-
-    - name: Build
-      run: make bin-pkcs11
-
-    - name: Test
-      run: make test-pkcs11
 
   test:
-    name: Build and test on ${{ matrix.os }}
+    name: Test ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        include:
+        - name: linux
+          os: ubuntu-latest
+          build-cmd: go build ./cmd/nebula ./cmd/nebula-cert
+          test-cmd: make test
+          e2e-cmd: make e2evv
+        - name: linux-boringcrypto
+          os: ubuntu-latest
+          build-cmd: make bin-boringcrypto
+          test-cmd: make test-boringcrypto
+          e2e-cmd: make e2e GOEXPERIMENT=boringcrypto CGO_ENABLED=1 TEST_ENV="TEST_LOGS=1" TEST_FLAGS="-v -ldflags -checklinkname=0"
+        - name: linux-fips140
+          os: ubuntu-latest
+          build-cmd: make fips140
+          test-cmd: make fips140 test
+          e2e-cmd: make fips140 e2evv
+        - name: linux-pkcs11
+          os: ubuntu-latest
+          build-cmd: make bin-pkcs11
+          test-cmd: make test-pkcs11
+          e2e-cmd: ''
+        - name: macos
+          os: macos-latest
+          build-cmd: go build ./cmd/nebula ./cmd/nebula-cert
+          test-cmd: make test
+          e2e-cmd: make e2evv
+        - name: windows
+          os: windows-latest
+          build-cmd: go build ./cmd/nebula ./cmd/nebula-cert
+          test-cmd: make test
+          e2e-cmd: make e2evv
     steps:
 
     - uses: actions/checkout@v6
@@ -126,28 +90,66 @@ jobs:
         go-version: '1.25'
         check-latest: true
 
-    - name: Build nebula
-      run: go build ./cmd/nebula
+    - name: Build
+      run: ${{ matrix.build-cmd }}
 
-    - name: Build nebula-cert
-      run: go build ./cmd/nebula-cert
-
-    - name: Vet
-      run: make vet
-
-    - name: golangci-lint
-      uses: golangci/golangci-lint-action@v9
-      with:
-        version: v2.5
+    - name: Cross-build darwin-amd64
+      if: matrix.name == 'macos'
+      run: GOARCH=amd64 go build -o /tmp/nebula-amd64 ./cmd/nebula && GOARCH=amd64 go build -o /tmp/nebula-cert-amd64 ./cmd/nebula-cert
 
     - name: Test
-      run: make test
+      run: ${{ matrix.test-cmd }}
 
     - name: End 2 end
-      run: make e2evv
+      if: matrix.e2e-cmd != ''
+      run: ${{ matrix.e2e-cmd }}
 
-    - uses: actions/upload-artifact@v6
+    - uses: actions/upload-artifact@v7
+      if: matrix.e2e-cmd != '' && always()
       with:
-        name: e2e packet flow ${{ matrix.os }}
-        path: e2e/mermaid/${{ matrix.os }}
+        name: e2e packet flow ${{ matrix.name }}
+        path: e2e/mermaid/
         if-no-files-found: warn
+
+  cross-build:
+    name: Cross-build ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - {name: linux-arm,   make-target: all-cross-linux-arm}
+        - {name: linux-mips,  make-target: all-cross-linux-mips}
+        - {name: linux-other, make-target: all-cross-linux-other}
+        - {name: freebsd,     make-target: all-freebsd}
+        - {name: openbsd,     make-target: all-openbsd}
+        - {name: netbsd,      make-target: all-netbsd}
+        - {name: windows,     make-target: all-cross-windows}
+        - {name: mobile,      make-target: build-test-mobile}
+    steps:
+
+    - uses: actions/checkout@v6
+
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.25'
+        check-latest: true
+
+    - name: Build ${{ matrix.name }}
+      run: make -j"$(nproc)" ${{ matrix.make-target }}
+
+  finish:
+    name: CI status
+    if: always()
+    needs: [static, test, cross-build]
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Fail if any upstream job failed
+      if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+      run: |
+        echo "upstream results: ${{ toJSON(needs) }}"
+        exit 1
+
+    - name: All upstream jobs passed
+      run: echo "ok"

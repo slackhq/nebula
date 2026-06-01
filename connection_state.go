@@ -7,13 +7,14 @@ import (
 
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/handshake"
+	"github.com/slackhq/nebula/noiseutil"
 )
 
 const ReplayWindow = 1024
 
 type ConnectionState struct {
-	eKey           *NebulaCipherState
-	dKey           *NebulaCipherState
+	eKey           noiseutil.CipherState
+	dKey           noiseutil.CipherState
 	myCert         cert.Certificate
 	peerCert       *cert.CachedCertificate
 	initiator      bool
@@ -31,8 +32,8 @@ func newConnectionStateFromResult(r *handshake.Result) *ConnectionState {
 		myCert:    r.MyCert,
 		initiator: r.Initiator,
 		peerCert:  r.RemoteCert,
-		eKey:      NewNebulaCipherState(r.EKey),
-		dKey:      NewNebulaCipherState(r.DKey),
+		eKey:      noiseutil.NewCipherState(r.EKey, r.Cipher),
+		dKey:      noiseutil.NewCipherState(r.DKey, r.Cipher),
 		window:    NewBits(ReplayWindow),
 	}
 	ci.messageCounter.Add(r.MessageIndex)
