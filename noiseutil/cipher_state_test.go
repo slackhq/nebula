@@ -11,12 +11,12 @@ import (
 
 func TestCipherStateAESGCMRoundtrip(t *testing.T) {
 	enc, dec := buildCipherStates(t, CipherAESGCM)
-	roundtrip(t, NewCipherStateAESGCM(enc), NewCipherStateAESGCM(dec))
+	roundtrip(t, NewCipherState(enc, CipherAESGCM), NewCipherState(dec, CipherAESGCM))
 }
 
 func TestCipherStateChaChaPolyRoundtrip(t *testing.T) {
 	enc, dec := buildCipherStates(t, noise.CipherChaChaPoly)
-	roundtrip(t, NewCipherStateChaChaPoly(enc), NewCipherStateChaChaPoly(dec))
+	roundtrip(t, NewCipherState(enc, noise.CipherChaChaPoly), NewCipherState(dec, noise.CipherChaChaPoly))
 }
 
 func TestNewCipherStateDispatch(t *testing.T) {
