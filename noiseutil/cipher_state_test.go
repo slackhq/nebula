@@ -22,7 +22,7 @@ func TestNewCipherStateDispatch(t *testing.T) {
 	encA, _ := buildCipherStates(t, CipherAESGCM)
 	encC, _ := buildCipherStates(t, noise.CipherChaChaPoly)
 
-	if CipherAESGCM == noise.CipherAESGCM {
+	if !EncryptLockNeeded {
 		assert.IsType(t, &CipherStateAESGCM{}, NewCipherState(encA, CipherAESGCM))
 	} else {
 		// fips140
