@@ -287,6 +287,20 @@ ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) fips140 ${.DEFAULT_GOAL} --no-print-directory
 endif
 
+# Useful to chain together, like:
+# - make boringcrypto e2evv
+# - make boringcrypto smoke-docker
+# Use `release-boringcrypto` or `bin-boringcrypto` to build release binaries
+boringcrypto:
+	@echo > $(NULL_FILE)
+	$(eval GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1)
+	$(eval LDFLAGS += -checklinkname=0)
+	$(eval TEST_FLAGS += -ldflags -checklinkname=0)
+	$(eval TEST_ENV += $(GOENV))
+ifeq ($(words $(MAKECMDGOALS)),1)
+	@$(MAKE) boringcrypto ${.DEFAULT_GOAL} --no-print-directory
+endif
+
 bin-docker: bin build/linux-amd64/nebula build/linux-amd64/nebula-cert
 
 smoke-docker: bin-docker

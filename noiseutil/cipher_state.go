@@ -29,6 +29,9 @@ type CipherState interface {
 // NewCipherState wraps the post-handshake noise.CipherState in the per-cipher type that matches cipherFunc.
 // cipherFunc must be the same cipher used to build the noise CipherSuite that produced s.
 func NewCipherState(s *noise.CipherState, cipherFunc noise.CipherFunc) CipherState {
+	if cs, ok := s.Cipher().(CipherState); ok {
+		return cs
+	}
 	switch cipherFunc.CipherName() {
 	case CipherAESGCM.CipherName():
 		return NewCipherStateAESGCM(s)

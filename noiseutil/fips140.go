@@ -34,12 +34,12 @@ func (c cipherFn) Cipher(k [32]byte) noise.Cipher { return c.fn(k) }
 func (c cipherFn) CipherName() string             { return c.name }
 
 // CipherAESGCM is the AES256-GCM AEAD cipher (using aeadAESGCM when fips140 is enabled)
-var CipherAESGCM noise.CipherFunc = cipherFn{cipherAESGCM, "AESGCM"}
+var CipherAESGCM noise.CipherFunc = cipherFn{cipherAESGCMFIPS140, "AESGCM"}
 
 // tls.aeadAESGCM uses a 4 byte static prefix and an 8 byte nonce
 var emptyPrefix = []byte{0, 0, 0, 0}
 
-func cipherAESGCM(k [32]byte) noise.Cipher {
+func cipherAESGCMFIPS140(k [32]byte) noise.Cipher {
 	gcm := aeadAESGCM(k[:], emptyPrefix)
 	return aeadCipher{
 		gcm,
