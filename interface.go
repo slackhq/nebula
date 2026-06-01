@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"context"
+	"crypto/fips140"
 	"errors"
 	"fmt"
 	"io"
@@ -234,7 +235,10 @@ func (f *Interface) activate() error {
 		"networks", f.myVpnNetworks,
 		"build", f.version,
 		"udpAddr", addr,
-		"fips140", getFIPS140(),
+		"boringcrypto", boringEnabled(),
+		"fips140Version", fips140.Version(),
+		"fips140Enabled", fips140.Enabled(),
+		"fips140Enforced", fips140.Enforced(),
 	)
 
 	if f.routines > 1 {
