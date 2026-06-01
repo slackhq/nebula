@@ -52,9 +52,17 @@ jobs:
       working-directory: ./.github/workflows/smoke
       run: NAME="smoke-p256" ./smoke.sh
 
+    - name: setup docker image for boringcrypto
+      working-directory: ./.github/workflows/smoke
+      run: NAME="smoke-boringcrypto" CURVE=P256 CGO_ENABLED=1 GOEXPERIMENT=boringcrypto LDFLAGS="-checklinkname=0" ./build.sh
+
+    - name: run smoke-boringcrypto
+      working-directory: ./.github/workflows/smoke
+      run: NAME="smoke-boringcrypto" ./smoke.sh
+
     - name: setup docker image for fips140
       working-directory: ./.github/workflows/smoke
-      run: NAME="smoke-fips140" CURVE=P256 GOFIPS140=v1.0.0 LDFLAGS=-checklinkname=0 ./build.sh
+      run: NAME="smoke-fips140" CURVE=P256 GOFIPS140=v1.0.0 LDFLAGS="-checklinkname=0 -X runtime.godebugDefault=fips140=only" ./build.sh
 
     - name: run smoke-fips140
       working-directory: ./.github/workflows/smoke
