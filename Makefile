@@ -188,15 +188,15 @@ build/linux-arm64-boringcrypto/%: LDFLAGS += -checklinkname=0
 
 # fips140
 build/linux-amd64-fips140/%: GOENV += GOFIPS140=v1.0.0
-build/linux-amd64-fips140/%: LDFLAGS += -checklinkname=0
+build/linux-amd64-fips140/%: LDFLAGS += -checklinkname=0 -X runtime.godebugDefault=fips140=only
 build/linux-arm64-fips140/%: GOENV += GOFIPS140=v1.0.0
-build/linux-arm64-fips140/%: LDFLAGS += -checklinkname=0
+build/linux-arm64-fips140/%: LDFLAGS += -checklinkname=0 -X runtime.godebugDefault=fips140=only
 build/darwin-arm64-fips140/%: GOENV += GOFIPS140=v1.0.0
-build/darwin-arm64-fips140/%: LDFLAGS += -checklinkname=0
+build/darwin-arm64-fips140/%: LDFLAGS += -checklinkname=0 -X runtime.godebugDefault=fips140=only
 build/windows-amd64-fips140/%: GOENV += GOFIPS140=v1.0.0
-build/windows-amd64-fips140/%: LDFLAGS += -checklinkname=0
+build/windows-amd64-fips140/%: LDFLAGS += -checklinkname=0 -X runtime.godebugDefault=fips140=only
 build/windows-arm64-fips140/%: GOENV += GOFIPS140=v1.0.0
-build/windows-arm64-fips140/%: LDFLAGS += -checklinkname=0
+build/windows-arm64-fips140/%: LDFLAGS += -checklinkname=0 -X runtime.godebugDefault=fips140=only
 
 build/%/nebula: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
@@ -280,7 +280,7 @@ endif
 fips140:
 	@echo > $(NULL_FILE)
 	$(eval GOENV += GOFIPS140=v1.0.0)
-	$(eval LDFLAGS += -checklinkname=0)
+	$(eval LDFLAGS += -checklinkname=0 -X runtime.godebugDefault=fips140=only)
 	$(eval TEST_FLAGS += -ldflags -checklinkname=0)
 	$(eval TEST_ENV += $(GOENV))
 ifeq ($(words $(MAKECMDGOALS)),1)
