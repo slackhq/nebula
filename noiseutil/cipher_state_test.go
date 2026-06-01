@@ -1,6 +1,7 @@
 package noiseutil
 
 import (
+	"crypto/fips140"
 	"testing"
 
 	"github.com/flynn/noise"
@@ -22,7 +23,7 @@ func TestNewCipherStateDispatch(t *testing.T) {
 	encA, _ := buildCipherStates(t, CipherAESGCM)
 	encC, _ := buildCipherStates(t, noise.CipherChaChaPoly)
 
-	if !EncryptLockNeeded {
+	if !fips140.Enabled() {
 		assert.IsType(t, &CipherStateAESGCM{}, NewCipherState(encA, CipherAESGCM))
 	} else {
 		// fips140
