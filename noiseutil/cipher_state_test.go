@@ -22,12 +22,18 @@ func TestNewCipherStateDispatch(t *testing.T) {
 	encA, _ := buildCipherStates(t, CipherAESGCM)
 	encC, _ := buildCipherStates(t, noise.CipherChaChaPoly)
 
-	assert.IsType(t, &CipherStateAESGCM{}, NewCipherState(encA, CipherAESGCM))
+	if CipherAESGCM == noise.CipherAESGCM {
+		assert.IsType(t, &CipherStateAESGCM{}, NewCipherState(encA, CipherAESGCM))
+	} else {
+		// fips140
+		assert.IsType(t, encA.Cipher(), NewCipherState(encA, CipherAESGCM))
+	}
+
 	assert.IsType(t, &CipherStateChaChaPoly{}, NewCipherState(encC, noise.CipherChaChaPoly))
 }
 
 func TestNewCipherStateUnsupportedPanics(t *testing.T) {
-	enc, _ := buildCipherStates(t, CipherAESGCM)
+	enc, _ := buildCipherStates(t, noise.CipherChaChaPoly)
 	assert.Panics(t, func() {
 		NewCipherState(enc, fakeCipher{})
 	})
