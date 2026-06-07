@@ -14,6 +14,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
@@ -70,6 +71,9 @@ type HandshakeManager struct {
 	metricTimedOut         metrics.Counter
 	f                      *Interface
 	l                      *slog.Logger
+
+	multiPort config.MultiPortConfig
+	udpRaw    *udp.RawConn
 
 	// can be used to trigger outbound handshake for the given vpnIp
 	trigger chan netip.Addr
@@ -291,6 +295,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 
 	// Send the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
 	var sentTo []netip.AddrPort
+	var sentMultiport bool
 	hostinfo.remotes.ForEach(hm.mainHostMap.GetPreferredRanges(), func(addr netip.AddrPort, _ bool) {
 		hm.messageMetrics.Tx(header.Handshake, hh.machine.Subtype(), 1)
 		err := hm.outside.WriteTo(stage0, addr)
@@ -305,6 +310,29 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		} else {
 			sentTo = append(sentTo, addr)
 		}
+
+		// Attempt a multiport handshake if we are past the TxHandshakeDelay attempts
+		if hm.multiPort.TxHandshake && hm.udpRaw != nil && hh.counter >= hm.multiPort.TxHandshakeDelay {
+			sentMultiport = true
+			// We need to re-allocate with 8 bytes at the start of SOCK_RAW
+			raw := hostinfo.HandshakePacket[0x80]
+			if raw == nil {
+				raw = make([]byte, len(hostinfo.HandshakePacket[0])+udp.RawOverhead)
+				copy(raw[udp.RawOverhead:], hostinfo.HandshakePacket[0])
+				hostinfo.HandshakePacket[0x80] = raw
+			}
+
+			hm.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
+			err = hm.udpRaw.WriteTo(raw, udp.RandomSendPort.UDPSendPort(hm.multiPort.TxPorts), addr)
+			if err != nil {
+				hostinfo.logger(hm.l).Error("Failed to send handshake message",
+					"error", err,
+					"udpAddr", addr,
+					"initiatorIndex", hostinfo.localIndexId,
+					"handshake", hsFields,
+				)
+			}
+		}
 	})
 
 	// Don't be too noisy or confusing if we fail to send a handshake - if we don't get through we'll eventually log a timeout,
@@ -314,6 +342,7 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 			"udpAddrs", sentTo,
 			"initiatorIndex", hostinfo.localIndexId,
 			"handshake", hsFields,
+			"multiportHandshake", sentMultiport,
 		)
 	} else if hm.l.Enabled(context.Background(), slog.LevelDebug) {
 		hostinfo.logger(hm.l).Debug("Handshake message sent",
@@ -667,6 +696,7 @@ func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
 		v, cs.GetCredential,
 		hm.certVerifier(), func() (uint32, error) { return hm.allocateIndex(hh) },
 		true, header.HandshakeIXPSK0,
+		hm.multiPort,
 	)
 	if err != nil {
 		hm.f.l.Error("Failed to create handshake machine",
@@ -708,6 +738,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		v, cs.GetCredential,
 		hm.certVerifier(), func() (uint32, error) { return generateIndex(f.l) },
 		false, header.HandshakeIXPSK0,
+		hm.multiPort,
 	)
 	if err != nil {
 		f.l.Error("Failed to create handshake machine", "from", via, "error", err)
@@ -730,6 +761,12 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		f.l.Error("multi-message handshake responder is not supported",
 			"from", via, "error", handshake.ErrMultiMessageUnsupported)
 		return
+	}
+
+	if !via.IsRelayed && result.MultiportTx && result.MultiportBasePort != via.UdpAddr.Port() {
+		// The other side sent us a handshake from a different port, make sure
+		// we send responses back to the BasePort
+		via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), result.MultiportBasePort)
 	}
 
 	remoteCert := result.RemoteCert
@@ -756,6 +793,8 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 			relayForByAddr: map[netip.Addr]*Relay{},
 			relayForByIdx:  map[uint32]*Relay{},
 		},
+		multiportTx: hm.multiPort.Tx && result.MultiportRx,
+		multiportRx: hm.multiPort.Rx && result.MultiportTx,
 	}
 
 	msg := "Handshake message received"
@@ -772,6 +811,8 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		"initiatorIndex", result.RemoteIndex,
 		"responderIndex", result.LocalIndex,
 		"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
+		"multiportTx", hostinfo.multiportTx,
+		"multiportRx", hostinfo.multiportRx,
 	)
 
 	// packet aliases the listener's incoming buffer, so this copy must stay.
@@ -862,6 +903,14 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	if result == nil {
 		return
 	}
+
+	if !via.IsRelayed && result.MultiportTx && result.MultiportBasePort != via.UdpAddr.Port() {
+		// The other side sent us a handshake from a different port, make sure
+		// we send responses back to the BasePort
+		via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), result.MultiportBasePort)
+	}
+	hostinfo.multiportTx = hm.multiPort.Tx && result.MultiportRx
+	hostinfo.multiportRx = hm.multiPort.Rx && result.MultiportTx
 
 	// Handshake complete; build the ConnectionState now that we have keys and a verified peer cert.
 	hostinfo.ConnectionState = newConnectionStateFromResult(result)
@@ -957,6 +1006,8 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
 		"durationNs", duration,
 		"sentCachedPackets", len(hh.packetStore),
+		"multiportTx", hostinfo.multiportTx,
+		"multiportRx", hostinfo.multiportRx,
 	)
 
 	hostinfo.vpnAddrs = vpnAddrs
@@ -1099,6 +1150,10 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 
 	switch err {
 	case ErrAlreadySeen:
+		if hostinfo.multiportRx {
+			// The other host is sending to us with multiport, so only grab the IP
+			via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), hostinfo.remote.Port())
+		}
 		if existing.SetRemoteIfPreferred(f.hostMap, via) {
 			f.SendMessageToVpnAddr(header.Test, header.TestRequest, hostinfo.vpnAddrs[0], []byte(""), make([]byte, 12, 12), make([]byte, mtu))
 		}
