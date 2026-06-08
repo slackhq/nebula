@@ -1,6 +1,7 @@
 package noiseutil
 
 import (
+	"bytes"
 	"crypto/cipher"
 	"encoding/binary"
 
@@ -15,8 +16,8 @@ import (
 // Using tls.aeadAESGCM gives us the TLS 1.2 GCM, which also verifies
 // that the nonce is strictly increasing.
 //
-//go:linkname aeadAESGCM crypto/tls.aeadAESGCMTLS13
-func aeadAESGCM(key, noncePrefix []byte) cipher.AEAD
+//go:linkname aeadAESGCMTLS13 crypto/tls.aeadAESGCMTLS13
+func aeadAESGCMTLS13(key, noncePrefix []byte) cipher.AEAD
 
 type cipherFn struct {
 	fn   func([32]byte) noise.Cipher
@@ -29,16 +30,15 @@ func (c cipherFn) CipherName() string             { return c.name }
 // CipherAESGCM is the AES256-GCM AEAD cipher (using aeadAESGCM when fips140 is enabled)
 var CipherAESGCM noise.CipherFunc = cipherFn{cipherAESGCMFIPS140, "AESGCM"}
 
-// tls.aeadAESGCM uses a 4 byte static prefix and an 8 byte nonce
-var emptyPrefix = []byte{0, 0, 0, 0,
-	0, 0, 0, 0,
-	0, 0, 0, 0}
+// tls.aeadAESGCMTLS13 uses a 4 byte static prefix and an 8 byte XOR mask
+var emptyPrefix = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+var emptyNonce = []byte{0, 0, 0, 0, 0, 0, 0, 0}
 
 func cipherAESGCMFIPS140(k [32]byte) noise.Cipher {
-	gcm := aeadAESGCM(k[:], emptyPrefix)
-	gcm.Seal([]byte{}, []byte{0, 0, 0, 0, 0, 0, 0, 0}, []byte{}, []byte{})
+	gcm := aeadAESGCMTLS13(k[:], emptyPrefix)
 	return aeadCipher{
 		gcm,
+		false,
 		func(n uint64) []byte {
 			// tls.aeadAESGCM uses a 4 byte static prefix and an 8 byte nonce
 			var nonce [8]byte
@@ -50,7 +50,18 @@ func cipherAESGCMFIPS140(k [32]byte) noise.Cipher {
 
 type aeadCipher struct {
 	cipher.AEAD
-	nonce func(uint64) []byte
+	initialized bool
+	nonce       func(uint64) []byte
+}
+
+func (c aeadCipher) Seal(dst, nonce, plaintext, additionalData []byte) []byte {
+	if !c.initialized {
+		if !bytes.Equal(emptyNonce, nonce) {
+			c.AEAD.Seal([]byte{}, emptyNonce, []byte{}, []byte{})
+		}
+		c.initialized = true
+	}
+	return c.AEAD.Seal(dst, nonce, plaintext, additionalData)
 }
 
 func (c aeadCipher) Encrypt(out []byte, n uint64, ad, plaintext []byte) []byte {

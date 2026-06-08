@@ -1,6 +1,7 @@
 package noiseutil
 
 import (
+	"crypto/cipher"
 	"crypto/fips140"
 	"encoding/hex"
 	"log"
@@ -25,14 +26,14 @@ func TestNewAESGCM(t *testing.T) {
 	var keyArray [32]byte
 	copy(keyArray[:], key)
 	c := CipherAESGCM.Cipher(keyArray)
-	aead := c.(aeadCipher).AEAD
+	aead := c.(cipher.AEAD)
 
 	dst := aead.Seal([]byte{}, iv, plaintext, aad)
 	log.Printf("%x", dst)
 	assert.Equal(t, expected, dst)
 
 	// We expect this to fail since we are re-encrypting with a repeat IV
-	assert.PanicsWithValue(t, "crypto/cipher: counter decreased", func() {
+	assert.PanicsWithValue(t, "crypto/cipher: counter decreased or remained the same", func() {
 		dst = aead.Seal([]byte{}, iv, plaintext, aad)
 	})
 }
