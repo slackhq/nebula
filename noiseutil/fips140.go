@@ -1,5 +1,3 @@
-//go:build fips140v1.0 || fips140v1.26
-
 package noiseutil
 
 import (
@@ -12,17 +10,12 @@ import (
 	"github.com/flynn/noise"
 )
 
-// EncryptLockNeeded indicates if calls to Encrypt need a lock
-// This is true for fips140 because the Seal function verifies that the
-// nonce is strictly increasing.
-const EncryptLockNeeded = true
-
 // TODO: Use NewGCMWithCounterNonce once available:
 // - https://github.com/golang/go/issues/73110
 // Using tls.aeadAESGCM gives us the TLS 1.2 GCM, which also verifies
 // that the nonce is strictly increasing.
 //
-//go:linkname aeadAESGCM crypto/tls.aeadAESGCM
+//go:linkname aeadAESGCM crypto/tls.aeadAESGCMTLS13
 func aeadAESGCM(key, noncePrefix []byte) cipher.AEAD
 
 type cipherFn struct {
@@ -37,10 +30,13 @@ func (c cipherFn) CipherName() string             { return c.name }
 var CipherAESGCM noise.CipherFunc = cipherFn{cipherAESGCMFIPS140, "AESGCM"}
 
 // tls.aeadAESGCM uses a 4 byte static prefix and an 8 byte nonce
-var emptyPrefix = []byte{0, 0, 0, 0}
+var emptyPrefix = []byte{0, 0, 0, 0,
+	0, 0, 0, 0,
+	0, 0, 0, 0}
 
 func cipherAESGCMFIPS140(k [32]byte) noise.Cipher {
 	gcm := aeadAESGCM(k[:], emptyPrefix)
+	gcm.Seal([]byte{}, []byte{0, 0, 0, 0, 0, 0, 0, 0}, []byte{}, []byte{})
 	return aeadCipher{
 		gcm,
 		func(n uint64) []byte {

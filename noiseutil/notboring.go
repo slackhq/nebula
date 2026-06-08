@@ -1,13 +1,13 @@
-//go:build !boringcrypto && !fips140v1.0 && !fips140v1.26
+//go:build !boringcrypto
 
 package noiseutil
 
 import (
-	"github.com/flynn/noise"
+	"crypto/fips140"
 )
 
 // EncryptLockNeeded indicates if calls to Encrypt need a lock
-const EncryptLockNeeded = false
+var EncryptLockNeeded = fips140.Enabled()
 
 // CipherAESGCM is the standard noise.CipherAESGCM when boringcrypto is not enabled
-var CipherAESGCM noise.CipherFunc = noise.CipherAESGCM
+// var CipherAESGCM noise.CipherFunc = noise.CipherAESGCM
