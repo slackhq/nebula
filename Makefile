@@ -187,19 +187,19 @@ build/linux-arm64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED
 # fips140
 build/linux-amd64-fips140/%: GOENV += GOFIPS140=v1.0.0
 build/linux-amd64-fips140/%: LDFLAGS += -X runtime.godebugDefault=fips140=only
-build/linux-amd64-fips140/%: BUILD_ARGS += -tags fips140
+build/linux-amd64-fips140/%: BUILD_ARGS += -tags fips140-enforce
 build/linux-arm64-fips140/%: GOENV += GOFIPS140=v1.0.0
 build/linux-arm64-fips140/%: LDFLAGS += -X runtime.godebugDefault=fips140=only
-build/linux-arm64-fips140/%: BUILD_ARGS += -tags fips140
+build/linux-arm64-fips140/%: BUILD_ARGS += -tags fips140-enforce
 build/darwin-arm64-fips140/%: GOENV += GOFIPS140=v1.0.0
 build/darwin-arm64-fips140/%: LDFLAGS += -X runtime.godebugDefault=fips140=only
-build/darwin-arm64-fips140/%: BUILD_ARGS += -tags fips140
+build/darwin-arm64-fips140/%: BUILD_ARGS += -tags fips140-enforce
 build/windows-amd64-fips140/%: GOENV += GOFIPS140=v1.0.0
 build/windows-amd64-fips140/%: LDFLAGS += -X runtime.godebugDefault=fips140=only
-build/windows-amd64-fips140/%: BUILD_ARGS += -tags fips140
+build/windows-amd64-fips140/%: BUILD_ARGS += -tags fips140-enforce
 build/windows-arm64-fips140/%: GOENV += GOFIPS140=v1.0.0
 build/windows-arm64-fips140/%: LDFLAGS += -X runtime.godebugDefault=fips140=only
-build/windows-arm64-fips140/%: BUILD_ARGS += -tags fips140
+build/windows-arm64-fips140/%: BUILD_ARGS += -tags fips140-enforce
 
 build/%/nebula: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
@@ -284,7 +284,7 @@ ifeq ($(strip $(GOFIPS140)),)
 endif
 	$(eval GOENV += GOFIPS140=$(GOFIPS140))
 	$(eval LDFLAGS += -X runtime.godebugDefault=fips140=only)
-	$(eval BUILD_ARGS += -tags fips140)
+	$(eval BUILD_ARGS += -tags fips140-enforce)
 	$(eval TEST_ENV += $(GOENV))
 	$(eval CURVE = P256)
 ifeq ($(words $(MAKECMDGOALS)),1)

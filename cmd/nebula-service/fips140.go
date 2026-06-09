@@ -1,4 +1,4 @@
-//go:build fips140
+//go:build fips140-enforce
 
 package main
 
