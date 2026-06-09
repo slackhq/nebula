@@ -1,4 +1,4 @@
-//go:build fips140v1.0 || fips140v1.26
+//go:build fips140
 
 package main
 

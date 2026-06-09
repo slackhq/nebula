@@ -33,7 +33,7 @@ func NewCipherState(s *noise.CipherState, cipherFunc noise.CipherFunc) CipherSta
 		return cs
 	}
 	switch cipherFunc.CipherName() {
-	case CipherAESGCM.CipherName():
+	case noise.CipherAESGCM.CipherName():
 		return NewCipherStateAESGCM(s)
 	case noise.CipherChaChaPoly.CipherName():
 		return NewCipherStateChaChaPoly(s)

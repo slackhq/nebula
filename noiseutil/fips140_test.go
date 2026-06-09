@@ -33,7 +33,10 @@ func TestNewAESGCM(t *testing.T) {
 	assert.Equal(t, expected, dst)
 
 	// We expect this to fail since we are re-encrypting with a repeat IV
-	assert.PanicsWithValue(t, "crypto/cipher: counter decreased or remained the same", func() {
+	// TODO: the error message has changed between fips module versions, best way to verify it?
+	// assert.PanicsWithValue(t, "crypto/cipher: counter decreased", func() {
+	// assert.PanicsWithValue(t, "crypto/cipher: counter decreased or remained the same", func() {
+	assert.Panics(t, func() {
 		dst = aead.Seal([]byte{}, iv, plaintext, aad)
 	})
 }
