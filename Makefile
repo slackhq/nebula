@@ -289,10 +289,8 @@ ifeq ($(strip $(GOFIPS140)),)
 endif
 	$(eval GOENV += GOFIPS140=$(GOFIPS140))
 	$(eval LDFLAGS += -X runtime.godebugDefault=fips140=only)
-	# To enforce fips140.Enforced()
 	$(eval BUILD_ARGS += -tags fips140)
 	$(eval TEST_ENV += $(GOENV))
-	# For smoke-docker
 	$(eval CURVE = P256)
 ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) fips140 GOFIPS140=$(GOFIPS140) ${.DEFAULT_GOAL} --no-print-directory
@@ -314,6 +312,7 @@ boringcrypto:
 	$(eval LDFLAGS += -checklinkname=0)
 	$(eval TEST_FLAGS += -ldflags -checklinkname=0)
 	$(eval TEST_ENV += $(GOENV))
+	$(eval CURVE = P256)
 ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) boringcrypto ${.DEFAULT_GOAL} --no-print-directory
 endif
