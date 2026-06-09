@@ -284,7 +284,10 @@ endif
 # Use `release-fips140` or `bin-fips140` to build release binaries
 fips140:
 	@echo > $(NULL_FILE)
-	$(eval GOENV += GOFIPS140=v1.0.0)
+ifeq ($(strip $(GOFIPS140)),)
+	$(eval GOFIPS140 = v1.0.0)
+endif
+	$(eval GOENV += GOFIPS140=$(GOFIPS140))
 	$(eval LDFLAGS += -X runtime.godebugDefault=fips140=only)
 	# To enforce fips140.Enforced()
 	$(eval BUILD_ARGS += -tags fips140)
@@ -292,8 +295,14 @@ fips140:
 	# For smoke-docker
 	$(eval CURVE = P256)
 ifeq ($(words $(MAKECMDGOALS)),1)
-	@$(MAKE) fips140 ${.DEFAULT_GOAL} --no-print-directory
+	@$(MAKE) fips140 GOFIPS140=$(GOFIPS140) ${.DEFAULT_GOAL} --no-print-directory
 endif
+
+# To test the future pending module
+fips140-v1.26.0: GOFIPS140 = v1.26.0
+fips140-v1.26.0: fips140
+fips140-latest: GOFIPS140 = latest
+fips140-latest: fips140
 
 # Useful to chain together, like:
 # - make boringcrypto e2evv
