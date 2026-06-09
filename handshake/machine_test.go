@@ -229,6 +229,24 @@ func TestMachineProcessPayload(t *testing.T) {
 		require.ErrorIs(t, err, ErrUnexpectedContent)
 		assert.True(t, m.Failed())
 	})
+
+	t.Run("zero initiator index on responder is fatal", func(t *testing.T) {
+		m := newTestMachine(t, cs, v, false, 100)
+		bytes := MarshalPayload(nil, Payload{InitiatorIndex: 0, Time: 1})
+		err := m.processPayload(bytes, msgFlags{expectsPayload: true})
+		require.ErrorIs(t, err, ErrInvalidRemoteIndex)
+		assert.True(t, m.Failed())
+		assert.Zero(t, m.result.RemoteIndex)
+	})
+
+	t.Run("zero responder index on initiator is fatal", func(t *testing.T) {
+		m := newTestMachine(t, cs, v, true, 100)
+		bytes := MarshalPayload(nil, Payload{InitiatorIndex: 100, ResponderIndex: 0, Time: 1})
+		err := m.processPayload(bytes, msgFlags{expectsPayload: true})
+		require.ErrorIs(t, err, ErrInvalidRemoteIndex)
+		assert.True(t, m.Failed())
+		assert.Zero(t, m.result.RemoteIndex)
+	})
 }
 
 // TestMachineRequireComplete checks the fail-on-incomplete-handshake path

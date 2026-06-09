@@ -312,11 +312,19 @@ func (m *Machine) processPayload(msg []byte, flags msgFlags) error {
 
 	// Process payload
 	if flags.expectsPayload {
+		var remoteIndex uint32
 		if m.result.Initiator {
-			m.result.RemoteIndex = payload.ResponderIndex
+			remoteIndex = payload.ResponderIndex
 		} else {
-			m.result.RemoteIndex = payload.InitiatorIndex
+			remoteIndex = payload.InitiatorIndex
 		}
+		// The payload presence check above can be satisfied by Time alone, so a payload
+		// could still carry a zero index here. We need to reject it.
+		if remoteIndex == 0 {
+			m.failed = true
+			return ErrInvalidRemoteIndex
+		}
+		m.result.RemoteIndex = remoteIndex
 		m.result.HandshakeTime = payload.Time
 		m.payloadSet = true
 	}
