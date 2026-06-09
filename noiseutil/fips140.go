@@ -38,7 +38,7 @@ var emptyNonce = []byte{0, 0, 0, 0, 0, 0, 0, 0}
 
 func cipherAESGCMFIPS140(k [32]byte) noise.Cipher {
 	gcm := aeadAESGCMTLS13(k[:], emptyPrefix)
-	return &aeadCipher{
+	return &aeadGCMFIPS140Cipher{
 		AEAD:  gcm,
 		ready: false,
 		nonce: func(n uint64) []byte {
@@ -50,41 +50,45 @@ func cipherAESGCMFIPS140(k [32]byte) noise.Cipher {
 	}
 }
 
-func (c *aeadCipher) Seal(dst, nonce, plaintext, additionalData []byte) []byte {
-	if !c.ready {
-		// crypto/tls.aeadAESGCMTLS13 expected that the first call to Seal
-		// is with a counter of `0`, this is how it extracts the nonce mask.
-		// We can clean this up in the future when NewGCMWithCounterNonce or
-		// NewGCMForQUIC are available:
-		if !bytes.Equal(emptyNonce, nonce) {
-			c.AEAD.Seal([]byte{}, emptyNonce, []byte{}, []byte{})
-		}
-		c.ready = true
-	}
-	return c.AEAD.Seal(dst, nonce, plaintext, additionalData)
-}
-
-type aeadCipher struct {
+type aeadGCMFIPS140Cipher struct {
 	cipher.AEAD
 	ready bool
 	nonce func(uint64) []byte
 }
 
-func (c *aeadCipher) Encrypt(out []byte, n uint64, ad, plaintext []byte) []byte {
+func (c *aeadGCMFIPS140Cipher) init(nonce []byte) {
+	// crypto/tls.aeadAESGCMTLS13 expects that the first call to Seal
+	// is with a counter of `0`, this is how it extracts the nonce mask.
+	// We can clean this up in the future when NewGCMWithCounterNonce or
+	// NewGCMForQUIC are available:
+	if !bytes.Equal(emptyNonce, nonce) {
+		c.AEAD.Seal([]byte{}, emptyNonce, []byte{}, []byte{})
+	}
+	c.ready = true
+}
+
+func (c *aeadGCMFIPS140Cipher) Seal(dst, nonce, plaintext, additionalData []byte) []byte {
+	if !c.ready {
+		c.init(nonce)
+	}
+	return c.AEAD.Seal(dst, nonce, plaintext, additionalData)
+}
+
+func (c *aeadGCMFIPS140Cipher) Encrypt(out []byte, n uint64, ad, plaintext []byte) []byte {
 	return c.Seal(out, c.nonce(n), plaintext, ad)
 }
 
-func (c *aeadCipher) Decrypt(out []byte, n uint64, ad, ciphertext []byte) ([]byte, error) {
+func (c *aeadGCMFIPS140Cipher) Decrypt(out []byte, n uint64, ad, ciphertext []byte) ([]byte, error) {
 	return c.Open(out, c.nonce(n), ciphertext, ad)
 }
 
-func (c *aeadCipher) EncryptDanger(out, ad, plaintext []byte, n uint64, nb []byte) ([]byte, error) {
+func (c *aeadGCMFIPS140Cipher) EncryptDanger(out, ad, plaintext []byte, n uint64, nb []byte) ([]byte, error) {
 	binary.BigEndian.PutUint64(nb[4:], n)
 	out = c.Seal(out, nb[4:], plaintext, ad)
 	return out, nil
 }
 
-func (c *aeadCipher) DecryptDanger(out, ad, ciphertext []byte, n uint64, nb []byte) ([]byte, error) {
+func (c *aeadGCMFIPS140Cipher) DecryptDanger(out, ad, ciphertext []byte, n uint64, nb []byte) ([]byte, error) {
 	binary.BigEndian.PutUint64(nb[4:], n)
 	return c.Open(out, nb[4:], ciphertext, ad)
 }
