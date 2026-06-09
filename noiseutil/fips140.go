@@ -52,7 +52,6 @@ func cipherAESGCMFIPS140(k [32]byte) noise.Cipher {
 }
 
 func (c *aeadCipher) Seal(dst, nonce, plaintext, additionalData []byte) []byte {
-	// runtime.Breakpoint()
 	if !c.ready {
 		// crypto/tls.aeadAESGCMTLS13 expected that the first call to Seal
 		// is with a counter of `0`, this is how it extracts the nonce mask.
