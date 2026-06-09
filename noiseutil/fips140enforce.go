@@ -1,6 +1,6 @@
 //go:build fips140enforce
 
-package main
+package noiseutil
 
 import (
 	"crypto/fips140"
