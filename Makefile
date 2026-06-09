@@ -286,8 +286,11 @@ fips140:
 	@echo > $(NULL_FILE)
 	$(eval GOENV += GOFIPS140=v1.0.0)
 	$(eval LDFLAGS += -X runtime.godebugDefault=fips140=only)
+	# To enforce fips140.Enforced()
 	$(eval BUILD_ARGS += -tags fips140)
 	$(eval TEST_ENV += $(GOENV))
+	# For smoke-docker
+	$(eval CURVE = P256)
 ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) fips140 ${.DEFAULT_GOAL} --no-print-directory
 endif
@@ -309,8 +312,9 @@ endif
 bin-docker: bin build/linux-amd64/nebula build/linux-amd64/nebula-cert
 
 smoke-docker: bin-docker
-	cd .github/workflows/smoke/ && $(GOENV) ./build.sh
-	cd .github/workflows/smoke/ && $(GOENV) ./smoke.sh
+	# This is so we can limit `fips140` smoke test to just P256 curve.
+	if [ "$(CURVE)" != "P256" ]; then cd .github/workflows/smoke/ && $(GOENV) ./build.sh; fi
+	if [ "$(CURVE)" != "P256" ]; then cd .github/workflows/smoke/ && $(GOENV) ./smoke.sh; fi
 	cd .github/workflows/smoke/ && $(GOENV) NAME="smoke-p256" CURVE="P256" ./build.sh
 	cd .github/workflows/smoke/ && $(GOENV) NAME="smoke-p256" ./smoke.sh
 
@@ -318,7 +322,7 @@ smoke-relay-docker: bin-docker
 	cd .github/workflows/smoke/ && $(GOENV) ./build-relay.sh
 	cd .github/workflows/smoke/ && $(GOENV) ./smoke-relay.sh
 
-smoke-docker-race: BUILD_ARGS = -race
+smoke-docker-race: BUILD_ARGS += -race
 smoke-docker-race: CGO_ENABLED = 1
 smoke-docker-race: smoke-docker
 
