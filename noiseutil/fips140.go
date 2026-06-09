@@ -1,5 +1,3 @@
-//go:build !boringcrypto
-
 package noiseutil
 
 import (
@@ -17,7 +15,8 @@ import (
 // - https://github.com/golang/go/issues/73110
 // - https://github.com/golang/go/issues/79219
 // Using tls.aeadAESGCMTLS13 gives us the TLS 1.3 GCM, which also verifies
-// that the nonce is strictly increasing.
+// that the nonce is strictly increasing. This works for both boringcrypto
+// and fips140.
 //
 //go:linkname aeadAESGCMTLS13 crypto/tls.aeadAESGCMTLS13
 func aeadAESGCMTLS13(key, noncePrefix []byte) cipher.AEAD

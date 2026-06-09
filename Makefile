@@ -183,8 +183,6 @@ build/linux-mips-softfloat/%: LDFLAGS += -s -w
 # boringcrypto
 build/linux-amd64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
 build/linux-arm64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
-build/linux-amd64-boringcrypto/%: LDFLAGS += -checklinkname=0
-build/linux-arm64-boringcrypto/%: LDFLAGS += -checklinkname=0
 
 # fips140
 build/linux-amd64-fips140/%: GOENV += GOFIPS140=v1.0.0
@@ -233,9 +231,6 @@ vet:
 
 test:
 	$(TEST_ENV) go test $(TEST_FLAGS) -v ./...
-
-test-boringcrypto:
-	GOEXPERIMENT=boringcrypto CGO_ENABLED=1 go test -ldflags "-checklinkname=0" -v ./...
 
 test-pkcs11:
 	CGO_ENABLED=1 go test -v -tags pkcs11 ./...
@@ -309,8 +304,6 @@ fips140-latest: fips140
 boringcrypto:
 	@echo > $(NULL_FILE)
 	$(eval GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1)
-	$(eval LDFLAGS += -checklinkname=0)
-	$(eval TEST_FLAGS += -ldflags -checklinkname=0)
 	$(eval TEST_ENV += $(GOENV))
 	$(eval CURVE = P256)
 ifeq ($(words $(MAKECMDGOALS)),1)

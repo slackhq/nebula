@@ -11,7 +11,7 @@ import (
 
 // Ensure NewAESGCM validates the nonce is non-repeating
 func TestNewAESGCM(t *testing.T) {
-	if !fips140.Enabled() {
+	if !boringEnabled && !fips140.Enabled() {
 		t.Skip()
 		return
 	}
@@ -32,11 +32,16 @@ func TestNewAESGCM(t *testing.T) {
 	assert.Equal(t, expected, dst)
 
 	// We expect this to fail since we are re-encrypting with a repeat IV
-	if fips140.Version() == "v1.0.0" {
+	switch {
+	case boringEnabled:
+		assert.PanicsWithError(t, "boringcrypto: EVP_AEAD_CTX_seal failed", func() {
+			dst = aead.Seal([]byte{}, iv, plaintext, aad)
+		})
+	case fips140.Version() == "v1.0.0":
 		assert.PanicsWithValue(t, "crypto/cipher: counter decreased", func() {
 			dst = aead.Seal([]byte{}, iv, plaintext, aad)
 		})
-	} else {
+	default:
 		assert.PanicsWithValue(t, "crypto/cipher: counter decreased or remained the same", func() {
 			dst = aead.Seal([]byte{}, iv, plaintext, aad)
 		})

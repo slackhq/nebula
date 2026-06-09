@@ -21,3 +21,5 @@ func initAESGCM() noise.CipherFunc {
 	}
 
 }
+
+var boringEnabled = false
