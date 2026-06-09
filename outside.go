@@ -181,6 +181,13 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 	if err != nil {
 		return
 	}
+	// Advance the replay window now that the frame is authenticated
+	if !hostinfo.ConnectionState.window.Update(f.l, h.MessageCounter) {
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("dropping out of window relay packet", "header", h)
+		}
+		return
+	}
 	// Successfully validated the thing. Get rid of the Relay header.
 	signedPayload = signedPayload[header.Len:]
 	// Pull the Roaming parts up here, and return in all call paths.
