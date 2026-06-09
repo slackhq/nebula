@@ -138,9 +138,9 @@ func (rs *RelayState) InsertRelayTo(ip netip.Addr) {
 }
 
 func (rs *RelayState) CopyRelayIps() []netip.Addr {
-	ret := make([]netip.Addr, len(rs.relays))
 	rs.RLock()
 	defer rs.RUnlock()
+	ret := make([]netip.Addr, len(rs.relays))
 	copy(ret, rs.relays)
 	return ret
 }
