@@ -4,7 +4,6 @@ import (
 	"crypto/cipher"
 	"crypto/fips140"
 	"encoding/hex"
-	"log"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,7 +28,7 @@ func TestNewAESGCM(t *testing.T) {
 	aead := c.(cipher.AEAD)
 
 	dst := aead.Seal([]byte{}, iv, plaintext, aad)
-	log.Printf("%x", dst)
+	t.Logf("%x", dst)
 	assert.Equal(t, expected, dst)
 
 	// We expect this to fail since we are re-encrypting with a repeat IV
