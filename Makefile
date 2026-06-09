@@ -72,6 +72,17 @@ ALL_CROSS_LINUX_ARM   = linux-arm-5 linux-arm-6 linux-arm-7 linux-arm64
 ALL_CROSS_LINUX_MIPS  = linux-mips linux-mipsle linux-mips64 linux-mips64le linux-mips-softfloat
 ALL_CROSS_LINUX_OTHER = linux-386 linux-ppc64le linux-riscv64 linux-loong64
 
+ALL_FIPS140 = linux-amd64-fips140 \
+	linux-arm64-fips140 \
+	windows-amd64-fips140 \
+	windows-arm64-fips140 \
+	darwin-arm64-fips140 \
+	freebsd-amd64-fips140 \
+	linux-arm-7-fips140 \
+	linux-mips64-fips140 \
+	linux-mips64le-fips140 \
+	linux-ppc64le-fips140
+
 e2e:
 	$(TEST_ENV) go test -tags=e2e_testing -count=1 $(TEST_FLAGS) ./e2e
 
@@ -137,7 +148,7 @@ release-netbsd: $(ALL_NETBSD:%=build/nebula-%.tar.gz)
 
 release-boringcrypto: build/nebula-linux-$(shell go env GOARCH)-boringcrypto.tar.gz
 
-release-fips140: build/nebula-linux-$(shell go env GOARCH)-fips140.tar.gz
+release-fips140: $(ALL_FIPS140:%=build/nebula-%.tar.gz)
 
 BUILD_ARGS += -trimpath
 
@@ -185,21 +196,9 @@ build/linux-amd64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED
 build/linux-arm64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED=1
 
 # fips140
-build/linux-amd64-fips140/%: GOENV += GOFIPS140=v1.0.0
-build/linux-amd64-fips140/%: LDFLAGS += -X runtime.godebugDefault=fips140=only
-build/linux-amd64-fips140/%: BUILD_ARGS += -tags fips140enforce
-build/linux-arm64-fips140/%: GOENV += GOFIPS140=v1.0.0
-build/linux-arm64-fips140/%: LDFLAGS += -X runtime.godebugDefault=fips140=only
-build/linux-arm64-fips140/%: BUILD_ARGS += -tags fips140enforce
-build/darwin-arm64-fips140/%: GOENV += GOFIPS140=v1.0.0
-build/darwin-arm64-fips140/%: LDFLAGS += -X runtime.godebugDefault=fips140=only
-build/darwin-arm64-fips140/%: BUILD_ARGS += -tags fips140enforce
-build/windows-amd64-fips140/%: GOENV += GOFIPS140=v1.0.0
-build/windows-amd64-fips140/%: LDFLAGS += -X runtime.godebugDefault=fips140=only
-build/windows-amd64-fips140/%: BUILD_ARGS += -tags fips140enforce
-build/windows-arm64-fips140/%: GOENV += GOFIPS140=v1.0.0
-build/windows-arm64-fips140/%: LDFLAGS += -X runtime.godebugDefault=fips140=only
-build/windows-arm64-fips140/%: BUILD_ARGS += -tags fips140enforce
+$(foreach _rule, $(ALL_FIPS140), build/$(_rule)/%): GOENV += GOFIPS140=v1.0.0
+$(foreach _rule, $(ALL_FIPS140), build/$(_rule)/%): LDFLAGS += -X runtime.godebugDefault=fips140=only
+$(foreach _rule, $(ALL_FIPS140), build/$(_rule)/%): BUILD_ARGS += -tags fips140enforce
 
 build/%/nebula: .FORCE
 	GOOS=$(firstword $(subst -, , $*)) \
