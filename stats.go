@@ -331,7 +331,7 @@ func loadStatsConfig(c *config.C) (statsConfig, error) {
 	}
 
 	cfg.interval = c.GetDuration("stats.interval", 0)
-	if cfg.interval == 0 {
+	if cfg.interval <= 0 {
 		return cfg, fmt.Errorf("stats.interval was an invalid duration: %s", c.GetString("stats.interval", ""))
 	}
 
