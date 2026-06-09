@@ -72,6 +72,7 @@ ALL_CROSS_LINUX_ARM   = linux-arm-5 linux-arm-6 linux-arm-7 linux-arm64
 ALL_CROSS_LINUX_MIPS  = linux-mips linux-mipsle linux-mips64 linux-mips64le linux-mips-softfloat
 ALL_CROSS_LINUX_OTHER = linux-386 linux-ppc64le linux-riscv64 linux-loong64
 
+# Based on section 2.2 of the Go Cryptographic Module CVMP Security Policy #5247
 ALL_FIPS140 = linux-amd64-fips140 \
 	linux-arm64-fips140 \
 	windows-amd64-fips140 \
@@ -80,7 +81,6 @@ ALL_FIPS140 = linux-amd64-fips140 \
 	freebsd-amd64-fips140 \
 	linux-arm-7-fips140 \
 	linux-mips64-fips140 \
-	linux-mips64le-fips140 \
 	linux-ppc64le-fips140
 
 e2e:
