@@ -63,9 +63,9 @@ jobs:
           e2e-cmd: make boringcrypto e2evv
         - name: linux-fips140
           os: ubuntu-latest
-          build-cmd: make fips140
-          test-cmd: make fips140 test
-          e2e-cmd: make fips140 e2evv
+          build-cmd: make fips140-all
+          test-cmd: make fips140-all test
+          e2e-cmd: make fips140-all e2evv
         - name: linux-pkcs11
           os: ubuntu-latest
           build-cmd: make bin-pkcs11

@@ -329,7 +329,7 @@ smoke-relay-docker: bin-docker
 	cd .github/workflows/smoke/ && $(GOENV) ./smoke-relay.sh
 
 smoke-docker-race: BUILD_ARGS += -race
-smoke-docker-race: CGO_ENABLED = 1
+smoke-docker-race: GOENV += CGO_ENABLED=1
 smoke-docker-race: smoke-docker
 
 smoke-vagrant/%: bin-docker build/%/nebula
