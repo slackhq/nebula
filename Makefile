@@ -290,11 +290,17 @@ ifeq ($(words $(MAKECMDGOALS)),1)
 	@$(MAKE) fips140 GOFIPS140=$(GOFIPS140) ${.DEFAULT_GOAL} --no-print-directory
 endif
 
-# To test the future pending module
-fips140-v1.26.0: GOFIPS140 = v1.26.0
-fips140-v1.26.0: fips140
-fips140-latest: GOFIPS140 = latest
-fips140-latest: fips140
+# To test the future pending module, use like `make fips140-latest test`
+ALL_GOFIPS140 = v1.0.0 v1.26.0 latest
+define FIPS140_rule
+fips140-$(1): GOFIPS140 = $(1)
+fips140-$(1): fips140
+endef
+$(foreach _rule, $(ALL_GOFIPS140), $(eval $(call FIPS140_rule,$(_rule))))
+
+# Iterate and tun the goals for all fips versions, like `make fips140-all test`
+fips140-all:
+	@$(foreach _v,$(ALL_GOFIPS140),$(MAKE) fips140-$(_v) $(filter-out fips140-all,$(MAKECMDGOALS)) &&) true
 
 # Useful to chain together, like:
 # - make boringcrypto e2evv
