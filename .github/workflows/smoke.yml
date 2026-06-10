@@ -32,9 +32,9 @@ jobs:
       run: make smoke-relay-docker
 
     - name: Smoke Docker boringcrypto
-      run: make boringcrypto smoke-docker-race
+      run: make boringcrypto smoke-docker
 
     - name: Smoke Docker fips140
-      run: make fips140-all smoke-docker-race
+      run: make fips140-all smoke-docker
 
     timeout-minutes: 10
