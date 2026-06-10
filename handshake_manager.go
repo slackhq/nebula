@@ -796,7 +796,6 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 	}
 
 	hm.sendHandshakeResponse(via, response, hostinfo, false)
-	f.connectionManager.AddTrafficWatch(hostinfo)
 	hostinfo.remotes.RefreshFromHandshake(vpnAddrs)
 
 	// Don't wait for UpdateWorker
@@ -963,7 +962,6 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
 
 	hm.Complete(hostinfo, f)
-	f.connectionManager.AddTrafficWatch(hostinfo)
 
 	if len(hh.packetStore) > 0 {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
