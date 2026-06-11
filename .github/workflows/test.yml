@@ -22,7 +22,7 @@ jobs:
 
     - uses: actions/setup-go@v6
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         check-latest: true
 
     - name: Install goimports
@@ -42,7 +42,7 @@ jobs:
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v9
       with:
-        version: v2.5
+        version: v2.12
 
   test:
     name: Test ${{ matrix.name }}
@@ -58,9 +58,14 @@ jobs:
           e2e-cmd: make e2evv
         - name: linux-boringcrypto
           os: ubuntu-latest
-          build-cmd: make bin-boringcrypto
-          test-cmd: make test-boringcrypto
-          e2e-cmd: make e2e GOEXPERIMENT=boringcrypto CGO_ENABLED=1 TEST_ENV="TEST_LOGS=1" TEST_FLAGS="-v -ldflags -checklinkname=0"
+          build-cmd: make boringcrypto
+          test-cmd: make boringcrypto test
+          e2e-cmd: make boringcrypto e2evv
+        - name: linux-fips140
+          os: ubuntu-latest
+          build-cmd: make fips140-all
+          test-cmd: make fips140-all test
+          e2e-cmd: make fips140-all e2evv
         - name: linux-pkcs11
           os: ubuntu-latest
           build-cmd: make bin-pkcs11
@@ -82,7 +87,7 @@ jobs:
 
     - uses: actions/setup-go@v6
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         check-latest: true
 
     - name: Build
@@ -127,7 +132,7 @@ jobs:
 
     - uses: actions/setup-go@v6
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         check-latest: true
 
     - name: Build ${{ matrix.name }}

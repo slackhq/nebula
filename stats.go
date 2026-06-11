@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"context"
+	"crypto/fips140"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -288,9 +289,12 @@ func (s *statsServer) buildRuntime(cfg statsConfig) ([]func(), *http.Server) {
 			Name:      "info",
 			Help:      "Version information for the Nebula binary",
 			ConstLabels: prometheus.Labels{
-				"version":      s.buildVersion,
-				"goversion":    runtime.Version(),
-				"boringcrypto": strconv.FormatBool(boringEnabled()),
+				"version":         s.buildVersion,
+				"goversion":       runtime.Version(),
+				"boringcrypto":    strconv.FormatBool(boringEnabled()),
+				"fips140Version":  fips140.Version(),
+				"fips140Enabled":  strconv.FormatBool(fips140.Enabled()),
+				"fips140Enforced": strconv.FormatBool(fips140.Enforced()),
 			},
 		})
 		pr.MustRegister(g)

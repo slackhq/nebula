@@ -22,34 +22,19 @@ jobs:
 
     - uses: actions/setup-go@v6
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         check-latest: true
 
-    - name: build
-      run: make bin-docker CGO_ENABLED=1 BUILD_ARGS=-race
+    - name: Smoke Docker
+      run: make smoke-docker-race
 
-    - name: setup docker image
-      working-directory: ./.github/workflows/smoke
-      run: ./build.sh
+    - name: Smoke Relay Docker
+      run: make smoke-relay-docker
 
-    - name: run smoke
-      working-directory: ./.github/workflows/smoke
-      run: ./smoke.sh
+    - name: Smoke Docker boringcrypto
+      run: make boringcrypto smoke-docker
 
-    - name: setup relay docker image
-      working-directory: ./.github/workflows/smoke
-      run: ./build-relay.sh
-
-    - name: run smoke relay
-      working-directory: ./.github/workflows/smoke
-      run: ./smoke-relay.sh
-
-    - name: setup docker image for P256
-      working-directory: ./.github/workflows/smoke
-      run: NAME="smoke-p256" CURVE=P256 ./build.sh
-
-    - name: run smoke-p256
-      working-directory: ./.github/workflows/smoke
-      run: NAME="smoke-p256" ./smoke.sh
+    - name: Smoke Docker fips140
+      run: make fips140-all smoke-docker
 
     timeout-minutes: 10
