@@ -812,22 +812,23 @@ func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 }
 
 func getGatewayAddr(gw net.IP, via netlink.Destination) (netip.Addr, bool) {
-	// Try to use the old RTA_GATEWAY first
-	gwAddr, ok := netip.AddrFromSlice(gw)
-	if !ok {
-		// Fallback to the new RTA_VIA
-		rVia, ok := via.(*netlink.Via)
-		if ok {
-			gwAddr, ok = netip.AddrFromSlice(rVia.Addr)
-		}
+	// Try the old RTA_GATEWAY first.
+	gwAddr, okG := netip.AddrFromSlice(gw)
+	if okG && gwAddr.IsValid() {
+		return gwAddr.Unmap(), true
 	}
 
-	if gwAddr.IsValid() {
-		gwAddr = gwAddr.Unmap()
-		return gwAddr, true
+	// Fallback to the new RTA_VIA.
+	rVia, okV := via.(*netlink.Via)
+	if !okV {
+		return netip.Addr{}, false
 	}
 
-	return netip.Addr{}, false
+	viaAddr, okV2 := netip.AddrFromSlice(rVia.Addr)
+	if !okV2 || !viaAddr.IsValid() {
+		return netip.Addr{}, false
+	}
+	return viaAddr.Unmap(), true
 }
 
 func (t *tun) updateRoutes(r netlink.RouteUpdate) {
