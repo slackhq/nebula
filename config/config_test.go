@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -38,6 +39,27 @@ func TestConfig_Load(t *testing.T) {
 		"new": "hi",
 	}
 	assert.Equal(t, expected, c.Settings)
+}
+
+func TestC_Load_StatErrorReturned(t *testing.T) {
+	l := test.NewLogger()
+	c := NewC(l)
+	dir := filepath.Join(os.TempDir(), "nebula-config-does-not-exist-1bf6f0a0")
+	_ = os.RemoveAll(dir)
+
+	require.Error(t, c.Load(dir))
+}
+
+func TestC_Load_AddFileErrorPropagates(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "x.yml")
+	require.NoError(t, os.WriteFile(target, []byte("k: v\n"), 0o644))
+
+	origAbs := filepathAbs
+	t.Cleanup(func() { filepathAbs = origAbs })
+	filepathAbs = func(string) (string, error) { return "", errors.New("injected") }
+
+	require.Error(t, NewC(test.NewLogger()).Load(target))
 }
 
 func TestConfig_Get(t *testing.T) {
