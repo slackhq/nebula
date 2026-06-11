@@ -13,17 +13,40 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/wire"
 )
 
 type tun struct {
-	io.ReadWriteCloser
+	rwc         io.ReadWriteCloser
 	fd          int
 	vpnNetworks []netip.Prefix
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *slog.Logger
+}
+
+func (t *tun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) == 0 {
+		return 0, nil //todo should this be an err?
+	}
+	p[0].Meta = struct{}{}
+	n, err := t.rwc.Read(mem)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[:n]
+	return 1, nil
+}
+
+func (t *tun) Write(p []byte) (int, error) {
+	return t.rwc.Write(p)
+}
+
+func (t *tun) Close() error {
+	return t.rwc.Close()
 }
 
 func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
@@ -32,10 +55,10 @@ func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
 
 	t := &tun{
-		ReadWriteCloser: file,
-		fd:              deviceFd,
-		vpnNetworks:     vpnNetworks,
-		l:               l,
+		rwc:         file,
+		fd:          deviceFd,
+		vpnNetworks: vpnNetworks,
+		l:           l,
 	}
 
 	err := t.reload(c, true)
@@ -62,7 +85,7 @@ func (t *tun) RoutesFor(ip netip.Addr) routing.Gateways {
 	return r
 }
 
-func (t tun) Activate() error {
+func (t *tun) Activate() error {
 	return nil
 }
 
@@ -99,6 +122,14 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for android")
+func (t *tun) NewMultiQueueReader() error {
+	return fmt.Errorf("TODO: multiqueue not implemented for android")
+}
+
+func (t *tun) Readers() []tio.Queue {
+	return []tio.Queue{t}
+}
+
+func (t *tun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
 }

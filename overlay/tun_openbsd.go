@@ -6,7 +6,6 @@ package overlay
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -17,8 +16,10 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/wire"
 	netroute "golang.org/x/net/route"
 	"golang.org/x/sys/unix"
 )
@@ -59,6 +60,19 @@ type tun struct {
 	fd          int
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
 	out []byte
+}
+
+func (t *tun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) <= 4 {
+		return 0, nil //todo should this be an err?
+	}
+	p[0].Meta = struct{}{}
+	n, err := t.f.Read(mem)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[4:n]
+	return 1, nil
 }
 
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
@@ -122,15 +136,6 @@ func (t *tun) Close() error {
 		_ = unix.Close(t.fd)
 	}
 	return nil
-}
-
-func (t *tun) Read(to []byte) (int, error) {
-	buf := make([]byte, len(to)+4)
-
-	n, err := t.f.Read(buf)
-
-	copy(to, buf[4:])
-	return n - 4, err
 }
 
 // Write is only valid for single threaded use
@@ -314,8 +319,8 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for openbsd")
+func (t *tun) NewMultiQueueReader() error {
+	return fmt.Errorf("TODO: multiqueue not implemented for openbsd")
 }
 
 func (t *tun) addRoutes(logErrors bool) error {
@@ -364,6 +369,14 @@ func (t *tun) deviceBytes() (o [16]byte) {
 		o[i] = byte(c)
 	}
 	return
+}
+
+func (t *tun) Readers() []tio.Queue {
+	return []tio.Queue{t}
+}
+
+func (t *tun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
 }
 
 func addRoute(prefix netip.Prefix, gateways []netip.Prefix) error {

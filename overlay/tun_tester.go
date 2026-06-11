@@ -14,8 +14,10 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/udp"
+	"github.com/slackhq/nebula/wire"
 )
 
 type TestTun struct {
@@ -162,7 +164,20 @@ func (t *TestTun) Close() error {
 	return nil
 }
 
-func (t *TestTun) Read(b []byte) (int, error) {
+func (t *TestTun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) == 0 {
+		return 0, nil //todo should this be an err?
+	}
+	p[0].Meta = struct{}{}
+	n, err := t.read(mem)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[:n]
+	return 1, nil
+}
+
+func (t *TestTun) read(b []byte) (int, error) {
 	p, ok := <-t.rxPackets
 	if !ok {
 		return 0, os.ErrClosed
@@ -177,10 +192,18 @@ func (t *TestTun) Read(b []byte) (int, error) {
 	return n, nil
 }
 
+func (t *TestTun) Readers() []tio.Queue {
+	return []tio.Queue{t}
+}
+
+func (t *TestTun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
+}
+
 func (t *TestTun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *TestTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented")
+func (t *TestTun) NewMultiQueueReader() error {
+	return fmt.Errorf("TODO: multiqueue not implemented")
 }

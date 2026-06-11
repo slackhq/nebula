@@ -6,7 +6,6 @@ package overlay
 import (
 	"crypto"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -18,9 +17,11 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"github.com/slackhq/nebula/wintun"
+	"github.com/slackhq/nebula/wire"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
@@ -45,6 +46,19 @@ type winTun struct {
 	l               *slog.Logger
 
 	tun *wintun.NativeTun
+}
+
+func (t *winTun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) == 0 {
+		return 0, nil //todo should this be an err?
+	}
+	p[0].Meta = struct{}{}
+	n, err := t.tun.Read(mem, 0)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[:n]
+	return 1, nil
 }
 
 func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (Device, error) {
@@ -255,10 +269,6 @@ func (t *winTun) Name() string {
 	return t.Device
 }
 
-func (t *winTun) Read(b []byte) (int, error) {
-	return t.tun.Read(b, 0)
-}
-
 func (t *winTun) Write(b []byte) (int, error) {
 	return t.tun.Write(b, 0)
 }
@@ -267,8 +277,16 @@ func (t *winTun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *winTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
+func (t *winTun) NewMultiQueueReader() error {
+	return fmt.Errorf("TODO: multiqueue not implemented for windows")
+}
+
+func (t *winTun) Readers() []tio.Queue {
+	return []tio.Queue{t}
+}
+
+func (t *winTun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
 }
 
 func (t *winTun) Close() error {

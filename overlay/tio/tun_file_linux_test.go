@@ -1,0 +1,106 @@
+//go:build linux && !android && !e2e_testing
+// +build linux,!android,!e2e_testing
+
+package tio
+
+import (
+	"errors"
+	"os"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/slackhq/nebula/wire"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
+)
+
+// newReadPipe returns a read fd. The matching write fd is registered for cleanup.
+// The caller takes ownership of the read fd (pass it into a QueueSet).
+func newReadPipe(t *testing.T) int {
+	t.Helper()
+	var fds [2]int
+	if err := unix.Pipe2(fds[:], unix.O_CLOEXEC); err != nil {
+		t.Fatalf("pipe2: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Close(fds[1]) })
+	return fds[0]
+}
+
+func TestPoll_WakeForShutdown_WakesFriends(t *testing.T) {
+	parent, err := NewPollQueueSet()
+	require.NoError(t, err)
+	require.NoError(t, parent.Add(newReadPipe(t)))
+	require.NoError(t, parent.Add(newReadPipe(t)))
+	// QueueSet.Close owns the read fds we Added — don't register a separate
+	// Cleanup to close them or we'll double-close whatever fd the kernel
+	// has since reused.
+
+	readers := parent.Queues()
+	errs := make([]error, len(readers))
+	var wg sync.WaitGroup
+	for i, r := range readers {
+		wg.Add(1)
+		go func(i int, r Queue) {
+			defer wg.Done()
+			pkts := make([]wire.TunPacket, 1)
+			_, errs[i] = r.Read(pkts, make([]byte, 64))
+		}(i, r)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	if err := parent.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readers did not wake")
+	}
+
+	for i, err := range errs {
+		if !errors.Is(err, os.ErrClosed) {
+			t.Errorf("reader %d: expected os.ErrClosed, got %v", i, err)
+		}
+	}
+}
+
+func TestPoll_Close_Idempotent(t *testing.T) {
+	shutdownFd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = unix.Close(shutdownFd) })
+
+	tf, err := newPoll(newReadPipe(t), shutdownFd)
+	require.NoError(t, err)
+	if err := tf.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := tf.Close(); err != nil {
+		t.Fatalf("second Close should be a no-op, got %v", err)
+	}
+}
+
+func TestPollQueueSet_Close_ClosesEventfd(t *testing.T) {
+	qs, err := NewPollQueueSet()
+	require.NoError(t, err)
+	require.NoError(t, qs.Add(newReadPipe(t)))
+
+	fd := qs.(*pollQueueSet).shutdownFd
+	require.NoError(t, qs.Close())
+
+	// Closing the eventfd again should fail with EBADF, proving Close
+	// actually released it.
+	if err := unix.Close(fd); err == nil {
+		t.Fatalf("eventfd %d still open after QueueSet.Close", fd)
+	}
+
+	// Second Close must be a no-op (and must not double-close the eventfd
+	// in case the kernel handed it out to another caller in the meantime).
+	if err := qs.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
