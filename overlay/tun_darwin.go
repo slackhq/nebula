@@ -23,7 +23,7 @@ import (
 )
 
 type tun struct {
-	io.ReadWriteCloser
+	f           *os.File
 	Device      string
 	vpnNetworks []netip.Prefix
 	DefaultMTU  int
@@ -32,8 +32,15 @@ type tun struct {
 	linkAddr    *netroute.LinkAddr
 	l           *slog.Logger
 
-	// cache out buffer since we need to prepend 4 bytes for tun metadata
-	out []byte
+	// readBuf is the per-tun read scratch reused across calls so we don't allocate per Read.
+	// We could call readv via syscall.Syscall(SYS_READV, ...), but on darwin/arm64 that path emits
+	// a raw SVC #0x80 trap (see $GOROOT/src/syscall/asm_darwin_arm64.s) rather than going through
+	// libSystem. Apple has been signaling for years that direct syscalls are deprecated, so we
+	// stick to libc-pinned writev via linkname (see tunWritev) and use plain f.Read for the read
+	// path. Stdlib doesn't keep syscall.readv alive for external linkname (only writev gets that
+	// treatment via linkname_libc.go), so the read path can't use readv and has to do the
+	// prefix-skip copy.
+	readBuf []byte
 }
 
 type ifReq struct {
@@ -123,12 +130,14 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		return nil, fmt.Errorf("SetNonblock: %v", err)
 	}
 
+	mtu := c.GetInt("tun.mtu", DefaultMTU)
 	t := &tun{
-		ReadWriteCloser: os.NewFile(uintptr(fd), ""),
-		Device:          name,
-		vpnNetworks:     vpnNetworks,
-		DefaultMTU:      c.GetInt("tun.mtu", DefaultMTU),
-		l:               l,
+		f:           os.NewFile(uintptr(fd), ""),
+		Device:      name,
+		vpnNetworks: vpnNetworks,
+		DefaultMTU:  mtu,
+		l:           l,
+		readBuf:     make([]byte, mtu+4),
 	}
 
 	err = t.reload(c, true)
@@ -158,8 +167,8 @@ func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*tun, e
 }
 
 func (t *tun) Close() error {
-	if t.ReadWriteCloser != nil {
-		return t.ReadWriteCloser.Close()
+	if t.f != nil {
+		return t.f.Close()
 	}
 	return nil
 }
@@ -502,42 +511,82 @@ func delRoute(prefix netip.Prefix, gateway netroute.Addr) error {
 	return nil
 }
 
+// tunWritev is linkname'd from the standard library so the writev call goes through libSystem's
+// pinned trampoline. syscall.Syscall(SYS_WRITEV, ...) on darwin/arm64 emits a raw SVC #0x80 trap
+// (see $GOROOT/src/syscall/asm_darwin_arm64.s), which is the path Apple has signaled they will
+// eventually disallow. Stdlib's $GOROOT/src/syscall/linkname_libc.go has a bare
+// `//go:linkname writev` directive that opts in external linkname and keeps the symbol alive for
+// the linker on darwin (and openbsd). There is no equivalent for readv, which is why Read uses
+// f.Read with a prefix-skip copy instead.
+
+//go:linkname tunWritev syscall.writev
+//go:noescape
+func tunWritev(fd int, iovecs []syscall.Iovec) (n uintptr, err error)
+
+// Read pulls one IP packet off the utun device.
 func (t *tun) Read(to []byte) (int, error) {
-	buf := make([]byte, len(to)+4)
+	if cap(t.readBuf) < len(to)+4 {
+		t.readBuf = make([]byte, len(to)+4)
+	}
+	buf := t.readBuf[:len(to)+4]
 
-	n, err := t.ReadWriteCloser.Read(buf)
-
-	copy(to, buf[4:])
-	return n - 4, err
+	n, err := t.f.Read(buf)
+	if err != nil {
+		return 0, err
+	}
+	if n < 4 {
+		return 0, nil
+	}
+	copy(to, buf[4:n])
+	return n - 4, nil
 }
 
-// Write is only valid for single threaded use
+// Write pushes one IP packet onto the utun device.
 func (t *tun) Write(from []byte) (int, error) {
-	buf := t.out
-	if cap(buf) < len(from)+4 {
-		buf = make([]byte, len(from)+4)
-		t.out = buf
-	}
-	buf = buf[:len(from)+4]
-
 	if len(from) == 0 {
 		return 0, syscall.EIO
 	}
 
-	// Determine the IP Family for the NULL L2 Header
 	ipVer := from[0] >> 4
-	if ipVer == 4 {
-		buf[3] = syscall.AF_INET
-	} else if ipVer == 6 {
-		buf[3] = syscall.AF_INET6
-	} else {
+	var head [4]byte
+	switch ipVer {
+	case 4:
+		head[3] = syscall.AF_INET
+	case 6:
+		head[3] = syscall.AF_INET6
+	default:
 		return 0, fmt.Errorf("unable to determine IP version from packet")
 	}
 
-	copy(buf[4:], from)
+	// Grab rc as a local so the compiler can devirtualize the call and keep the closure on the stack.
+	rc, err := t.f.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
 
-	n, err := t.ReadWriteCloser.Write(buf)
-	return n - 4, err
+	var n uintptr
+	var callErr error
+	err = rc.Write(func(fd uintptr) bool {
+		iovecs := []syscall.Iovec{
+			{Base: &head[0], Len: 4},
+			{Base: &from[0], Len: uint64(len(from))},
+		}
+		n, callErr = tunWritev(int(fd), iovecs)
+		// Type-assert to syscall.Errno so the EAGAIN/EWOULDBLOCK/EINTR check doesn't box the errno
+		// constants into error interfaces on every call.
+		if errno, ok := callErr.(syscall.Errno); ok && errno.Temporary() {
+			return false
+		}
+		return true
+	})
+	if err != nil {
+		return 0, err
+	}
+	if callErr != nil {
+		return 0, callErr
+	}
+
+	return int(n) - 4, nil
 }
 
 func (t *tun) Networks() []netip.Prefix {
