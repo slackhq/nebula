@@ -249,6 +249,11 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		return nil, util.ContextualizeIfNeeded("Failed to start stats emitter", err)
 	}
 
+	hostQuery, err := newHostQueryServerFromConfig(ctx, l, pki, hostMap, c)
+	if err != nil {
+		return nil, util.ContextualizeIfNeeded("Failed to configure the host query API", err)
+	}
+
 	if configTest {
 		return nil, nil
 	}
@@ -266,6 +271,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		sshStart:               sshStart,
 		statsStart:             stats.Start,
 		dnsStart:               ds.Start,
+		hostQueryStart:         hostQuery.Start,
 		lighthouseStart:        lightHouse.StartUpdateWorker,
 		connectionManagerStart: connManager.Start,
 	}, nil
