@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- New experimental `host_query` config section exposing a local HTTP+JSON API
+  (`GET /v1/host?addr=...`, `GET /v1/self`) over a unix socket or loopback tcp
+  listener, so programs on the same host can resolve a vpn address to its
+  certificate identity (name, groups, networks) for authorization decisions.
+  Disabled by default.
+
 ## [1.10.3] - 2026-02-06
 
 ### Security

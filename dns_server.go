@@ -249,31 +249,12 @@ func (d *dnsServer) QueryCert(data string) string {
 		return ""
 	}
 
-	// The hostmap only ever contains peers we have handshaked with, so it never carries an entry for ourselves.
-	// Answer self lookups straight from the local cert state.
-	if cs := d.certState(); cs != nil && cs.myVpnAddrsTable != nil && cs.myVpnAddrsTable.Contains(ip) {
-		c := cs.GetDefaultCertificate()
-		if c == nil {
-			return ""
-		}
-		b, err := c.MarshalJSON()
-		if err != nil {
-			return ""
-		}
-		return string(b)
-	}
-
-	hostinfo := d.hostMap.QueryVpnAddr(ip)
-	if hostinfo == nil {
+	crt := findCertificateForVpnAddr(d.certState(), d.hostMap, ip)
+	if crt == nil {
 		return ""
 	}
 
-	q := hostinfo.GetCert()
-	if q == nil {
-		return ""
-	}
-
-	b, err := q.Certificate.MarshalJSON()
+	b, err := crt.MarshalJSON()
 	if err != nil {
 		return ""
 	}
