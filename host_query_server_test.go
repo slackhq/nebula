@@ -56,17 +56,17 @@ func Test_parseHostQueryListen(t *testing.T) {
 func Test_loadHostQueryConfig(t *testing.T) {
 	c := config.NewC(nil)
 
-	// Absent section: disabled, no error.
+	// absent section means disabled, no error
 	cfg, err := loadHostQueryConfig(c)
 	require.NoError(t, err)
 	assert.False(t, cfg.enabled)
 
-	// Enabled without a listen address is an error.
+	// enabled without a listen address is an error
 	setHostQueryConfig(c, true, "", "")
 	_, err = loadHostQueryConfig(c)
 	require.Error(t, err)
 
-	// Unix socket gets the default mode.
+	// a unix socket gets the default mode
 	setHostQueryConfig(c, true, "unix:///tmp/hq.sock", "")
 	cfg, err = loadHostQueryConfig(c)
 	require.NoError(t, err)
@@ -83,7 +83,7 @@ func Test_loadHostQueryConfig(t *testing.T) {
 	_, err = loadHostQueryConfig(c)
 	require.Error(t, err)
 
-	// Mode bits beyond the permission bits are rejected.
+	// mode bits beyond the permission bits are rejected
 	setHostQueryConfig(c, true, "unix:///tmp/hq.sock", "10600")
 	_, err = loadHostQueryConfig(c)
 	require.Error(t, err)
@@ -117,8 +117,8 @@ func newTestHostQueryServer(t *testing.T) (*hostQueryServer, *config.C) {
 	return h, config.NewC(nil)
 }
 
-// addTestPeer creates a certificate for a peer owning each addr (as a /24 or
-// /64) and inserts it into the hostmap as an established tunnel.
+// addTestPeer creates a certificate for a peer owning each addr (as a /24 or /64) and inserts it
+// into the hostmap as an established tunnel
 func addTestPeer(t *testing.T, hm *HostMap, name string, addrs []netip.Addr, unsafeNetworks []netip.Prefix, groups []string) cert.Certificate {
 	t.Helper()
 	networks := make([]netip.Prefix, 0, len(addrs))
@@ -173,7 +173,7 @@ func TestHostQueryServer_handleHost(t *testing.T) {
 		[]netip.Prefix{netip.MustParsePrefix("192.168.50.0/24")}, []string{"eng", "ssh"})
 	addTestPeer(t, h.hostMap, "groupless", []netip.Addr{netip.MustParseAddr("10.0.0.77")}, nil, nil)
 
-	// An established peer comes back with its full identity.
+	// an established peer comes back with its full identity
 	code, body := getHost(t, h, "10.0.0.99")
 	require.Equal(t, http.StatusOK, code)
 	assert.Equal(t, "laptop-alice", body["name"])
@@ -186,7 +186,7 @@ func TestHostQueryServer_handleHost(t *testing.T) {
 	assert.NotEmpty(t, body["notBefore"])
 	assert.NotEmpty(t, body["notAfter"])
 
-	// Empty cert slices marshal as [] rather than null.
+	// empty cert slices marshal as [] rather than null
 	code, body = getHost(t, h, "10.0.0.77")
 	require.Equal(t, http.StatusOK, code)
 	require.NotNil(t, body["groups"])
@@ -194,15 +194,15 @@ func TestHostQueryServer_handleHost(t *testing.T) {
 	require.NotNil(t, body["unsafeNetworks"])
 	assert.Empty(t, body["unsafeNetworks"])
 
-	// A port in addr is ignored so RemoteAddr can be passed through directly,
-	// including the bracketed v6 and 4in6 forms.
+	// a port in addr is ignored so RemoteAddr can be passed through directly, including the
+	// bracketed v6 and 4in6 forms
 	for _, q := range []string{"10.0.0.99:54321", "[fd00::99]:443", "::ffff:10.0.0.99"} {
 		code, body = getHost(t, h, q)
 		require.Equal(t, http.StatusOK, code, "addr=%q", q)
 		assert.Equal(t, "laptop-alice", body["name"], "addr=%q", q)
 	}
 
-	// Our own address answers from the local cert state.
+	// our own address answers from the local cert state
 	code, body = getHost(t, h, "10.0.0.1")
 	require.Equal(t, http.StatusOK, code)
 	assert.Equal(t, "self", body["name"])
@@ -211,7 +211,7 @@ func TestHostQueryServer_handleHost(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, code)
 	assert.NotEmpty(t, body["error"])
 
-	// A tunnel mid-teardown (no peer cert) is treated as unknown.
+	// a tunnel mid-teardown (no peer cert) is treated as unknown
 	h.hostMap.unlockedAddHostInfo(&HostInfo{
 		ConnectionState: &ConnectionState{},
 		vpnAddrs:        []netip.Addr{netip.MustParseAddr("10.0.0.66")},
@@ -247,7 +247,7 @@ func TestHostQueryServer_handleSelf(t *testing.T) {
 	assert.Equal(t, "lighthouse", body["name"])
 	assert.Equal(t, []any{"10.0.0.1"}, body["vpnAddrs"])
 
-	// No cert state available should be an error, not a panic.
+	// no cert state available should be an error, not a panic
 	h.pki = nil
 	w = httptest.NewRecorder()
 	h.handleSelf(w, r)
@@ -267,7 +267,7 @@ func unixHTTPClient(path string) *http.Client {
 	}
 }
 
-// waitForServe polls until a GET /v1/self through client succeeds.
+// waitForServe polls until a GET /v1/self through client succeeds
 func waitForServe(t *testing.T, client *http.Client) {
 	t.Helper()
 	waitFor(t, func() bool {
@@ -370,7 +370,7 @@ func TestHostQueryServer_staleSocket(t *testing.T) {
 	h, _ := newTestHostQueryServer(t)
 	sock := filepath.Join(t.TempDir(), "hq.sock")
 
-	// Simulate an unclean exit: a leftover socket file with no listener.
+	// simulate an unclean exit, a leftover socket file with no listener
 	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
 	require.NoError(t, err)
 	stale.SetUnlinkOnClose(false)
@@ -407,7 +407,7 @@ func TestHostQueryServer_reload(t *testing.T) {
 	sock1 := filepath.Join(dir, "hq1.sock")
 	sock2 := filepath.Join(dir, "hq2.sock")
 
-	// Initial reload only records config; Control.Start launches the runtime.
+	// initial reload only records config, Control.Start is what launches the runtime
 	setHostQueryConfig(c, false, "unix://"+sock1, "")
 	require.NoError(t, h.reload(c, true))
 	assert.False(t, h.enabled.Load())
@@ -415,12 +415,12 @@ func TestHostQueryServer_reload(t *testing.T) {
 	assert.Nil(t, h.run)
 	h.runMu.Unlock()
 
-	// Enabling via reload spawns the listener.
+	// enabling via reload spawns the listener
 	setHostQueryConfig(c, true, "unix://"+sock1, "")
 	require.NoError(t, h.reload(c, false))
 	waitForServe(t, unixHTTPClient(sock1))
 
-	// Changing the listen path restarts on the new address.
+	// changing the listen path restarts on the new address
 	setHostQueryConfig(c, true, "unix://"+sock2, "")
 	require.NoError(t, h.reload(c, false))
 	waitForServe(t, unixHTTPClient(sock2))
@@ -429,7 +429,7 @@ func TestHostQueryServer_reload(t *testing.T) {
 		return os.IsNotExist(err)
 	})
 
-	// Reloading an unchanged config does not restart the runtime.
+	// reloading an unchanged config does not restart the runtime
 	h.runMu.Lock()
 	rt := h.run
 	h.runMu.Unlock()
@@ -438,7 +438,7 @@ func TestHostQueryServer_reload(t *testing.T) {
 	assert.Same(t, rt, h.run)
 	h.runMu.Unlock()
 
-	// Disabling stops the listener.
+	// disabling stops the listener
 	setHostQueryConfig(c, false, "unix://"+sock2, "")
 	require.NoError(t, h.reload(c, false))
 	assert.False(t, h.enabled.Load())
