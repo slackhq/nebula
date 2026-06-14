@@ -1102,7 +1102,7 @@ func TestNewFirewallFromConfig(t *testing.T) {
 	l := test.NewLogger()
 	// Test a bad rule definition
 	c := &dummyCert{}
-	cs, err := newCertState(cert.Version2, nil, c, false, cert.Curve_CURVE25519, nil, "aes")
+	cs, err := newCertState(cert.Version2, nil, c, false, cert.Curve_CURVE25519, nil, "aes", nil, nil)
 	require.NoError(t, err)
 
 	conf := config.NewC(test.NewLogger())

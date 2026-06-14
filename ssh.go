@@ -238,6 +238,25 @@ func attachCommands(l *slog.Logger, c *config.C, ssh *sshd.SSHServer, f *Interfa
 	})
 
 	ssh.RegisterCommand(&sshd.Command{
+		Name:             "pq-status",
+		ShortDescription: "Per-peer post-quantum PSK status (provider, epochs, binding, failures)",
+		Flags: func() (*flag.FlagSet, any) {
+			fl := flag.NewFlagSet("", flag.ContinueOnError)
+			s := sshListHostMapFlags{}
+			fl.BoolVar(&s.Json, "json", false, "outputs as json with more information")
+			fl.BoolVar(&s.Pretty, "pretty", false, "pretty prints json, assumes -json")
+			return fl, &s
+		},
+		Callback: func(fs any, a []string, w sshd.StringWriter) error {
+			flags, ok := fs.(*sshListHostMapFlags)
+			if !ok {
+				return nil
+			}
+			return sshPQStatus(f, flags, w)
+		},
+	})
+
+	ssh.RegisterCommand(&sshd.Command{
 		Name:             "list-lighthouse-addrmap",
 		ShortDescription: "List all lighthouse map entries",
 		Flags: func() (*flag.FlagSet, any) {

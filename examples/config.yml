@@ -19,6 +19,207 @@ pki:
   # After all hosts in the mesh are using a v2 certificate then v1 certificates are no longer needed.
   # initiating_version: 1
 
+  # PQ PSK material. Two mutually-exclusive modes are supported. Both add
+  # harvest-now-decrypt-later (HNDL) resistance by mixing a
+  # post-quantum-derived 32-byte secret into the Noise handshake;
+  # authentication remains classical, so this only protects recorded
+  # ciphertext, not against an active CRQC adversary impersonating peers.
+  #
+  # PSKs are produced by an external PQ key-exchange daemon. The default
+  # nebula build expects a sidecar process (e.g. the Rust reference
+  # rosenpass daemon from https://rosenpass.eu) writing PSK files into
+  # `pq_psk_dir`. See `docs/operator-sidecar-rosenpass.md` for a full
+  # setup walkthrough including a systemd unit and a rosenpass.toml
+  # template.
+  #
+  # The alternative is to build nebula with `-tags rosenpass_embedded`,
+  # which links the `cunicu.li/go-rosenpass` Go implementation directly
+  # into the nebula binary and exposes the `pq.embedded_rosenpass`
+  # config block below. The go-rosenpass port has not been audited; the
+  # Rust reference implementation and underlying Rosenpass protocol have
+  # been audited by Cure53 (funded via NLnet). Prefer the sidecar path
+  # when audit posture matters.
+  #
+  # pq_psk_path: a single 32-byte file with a mesh-wide PSK shared by all
+  # peers. Mixed at Noise placement 0 (psk0). Simple to deploy but a leak
+  # from any node breaks HNDL protection for the entire mesh retroactively
+  # until rotation. Reread on SIGHUP.
+  #pq_psk_path: /var/lib/nebula/pq.psk
+  #
+  # pq_psk_dir: a directory of per-peer PSK files, mixed at Noise placement
+  # 2 (psk2) using the new IXPSK2 handshake subtype. Each file is named
+  # "<sha256-hex>.psk" where <sha256-hex> is the lowercase SHA-256 of the
+  # peer's static public key, and contains exactly 32 bytes. Compromise of
+  # one node only exposes its own pairs, not the whole mesh. The directory
+  # is watched live via fsnotify; rotations (e.g. by a rosenpass sidecar)
+  # are picked up automatically without SIGHUP and trigger an immediate
+  # rekey for affected peers. This is the directory the sidecar daemon
+  # should target with its `key_out` (Rust) / `--key-out` directive.
+  # Recommended: put this directory on tmpfs/ramfs so PSK material never
+  # touches persistent disk (it survives imaging otherwise, re-opening the
+  # harvest-now-decrypt-later window). Nebula logs an advisory at startup
+  # if it is not. Rotation skew between the two sides is healed
+  # automatically (in-memory window of 2 epochs, no config). See the
+  # disk-hygiene and rotation-skew sections of
+  # docs/operator-sidecar-rosenpass.md.
+  #pq_psk_dir: /var/lib/nebula/pq_psk
+  #
+  # pq_psk_stale_warn: optional staleness watchdog for pq_psk_dir. If the
+  # directory content stops changing for this long while PSKs are loaded,
+  # nebula logs a Warn and bumps the pq.file.snapshot_stale counter — the
+  # nebula-side signal that a rotating sidecar died (or its peer key
+  # exchange stopped completing) while its last-written files still look
+  # healthy on disk. Set to roughly 3-5x the sidecar's rekey interval
+  # (rosenpass default rekey is ~2 minutes, so 10m is a sane start).
+  # Leave unset for statically provisioned directories that never rotate.
+  # The pq.file.snapshot_age_seconds gauge is exported regardless, for
+  # alerting without log scraping.
+  #pq_psk_stale_warn: 10m
+
+# pq controls the post-quantum security policy that gates per-peer PSK
+# usage. The handshake mechanism (IXPSK0/IXPSK2) is the same in all
+# modes; what differs is when the policy will accept downgrade or
+# require upgrade.
+#
+# PQ support has two deployment paths:
+#   - Default (sidecar): an external rosenpass daemon writes per-peer
+#     PSK files into pki.pq_psk_dir. Recommended for production.
+#   - `-tags rosenpass_embedded` (opt-in build flag): cunicu.li/
+#     go-rosenpass linked in-process. Convenience / lab path; the Go
+#     port is unaudited.
+# See docs/operator-sidecar-rosenpass.md for the full walkthrough.
+#pq:
+#  # mode is one of:
+#  #   opportunistic (default): use IXPSK2 if a PSK is resolvable for
+#  #     the destination peer, otherwise fall back to IXPSK0. No
+#  #     downgrade prevention; suitable for bootstrap and gradual
+#  #     rollout.
+#  #   required: refuse any IXPSK0 with peers that have PSK material
+#  #     configured. Use after PSK distribution is mesh-complete.
+#  #
+#  # The legacy "tofu" mode was removed once cert-v2 added the
+#  # CA-signed rosenpassPubKeySha256 extension that binds each peer's
+#  # rosenpass identity to its nebula cert. The cert extension is now
+#  # the sole trust binding; per-peer TOFU pinning is redundant. The
+#  # config schema rejects "tofu" at parse time with a remediation
+#  # hint pointing operators at this section.
+#  mode: opportunistic
+#  # state_path holds the boot-path identity cache (cert + pubkey +
+#  # vpn addrs + groups for peers we've completed at least one IXPSK2
+#  # handshake with). Used by DefaultPolicy on cold boot to apply
+#  # per-group mode overrides without waiting for a fresh handshake
+#  # first. Default empty disables persistence; an in-memory store is
+#  # still built so policy decisions work for the lifetime of the
+#  # process.
+#  state_path: /var/lib/nebula/pq-state.json
+#
+#  # group_overrides applies a different mode to peers whose nebula
+#  # certificate asserts one of the listed groups. The peer's groups
+#  # are CA-signed (same field firewall rules consume), so an
+#  # adversary can't spoof their way into a stricter or looser bucket.
+#  # Modes accepted here include all of pq.mode plus "disabled" to
+#  # exempt peers from PQ entirely (e.g. legacy stock-nebula peers
+#  # mid-migration). Peers in no overridden group fall through to
+#  # pq.mode.
+#  group_overrides:
+#    lighthouses: required
+#    legacy:      disabled
+#
+#  # group_order is the operator's stated priority when a peer is in
+#  # multiple overridden groups: first match wins. Without this, the
+#  # group-override matcher walks groups in alphabetical order, which
+#  # is deterministic but rarely what you want for layered policy.
+#  group_order:
+#    - lighthouses
+#    - admins
+#    - legacy
+#
+#  # provider_port / discovery_port advertise this node's PQ provider
+#  # UDP and discovery-TCP ports to peers via lighthouse HostUpdate
+#  # gossip, so heterogeneous fleets (peers configured with different
+#  # ports) can still locate each other's PQ provider daemons. Useful
+#  # for sidecar deployments that bind the provider to a non-default
+#  # port. Defaults: fall back to pq.embedded_rosenpass.port /
+#  # .discovery_port when set, otherwise 0 = don't gossip the field.
+#  #
+#  # provider_port / discovery_port are the canonical keys. The legacy
+#  # key pq.rosenpass_port is still accepted as a deprecated alias for
+#  # pq.provider_port.
+#  #provider_port: 51821
+#  #discovery_port: 51820
+#  # Deprecated alias for provider_port (still honoured):
+#  #rosenpass_port: 51821
+#
+#  # psk_binding controls how nebula validates PQ-provider-derived PSKs
+#  # against the peer's CA-signed cert v2 PQ-PSK-binding extension
+#  # (emitted in cert JSON as both pqPskBinding and the legacy
+#  # rosenpassPubKeySha256 key). Used by the default (sidecar) build to
+#  # detect a PSK / provider-pubkey mismatch (eg sidecar re-keyed since
+#  # the cert was signed) without requiring trust in any non-CA source.
+#  #
+#  # Pairs with optional "<peer-hash>.rpinfo" companion files in
+#  # pki.pq_psk_dir containing the lowercase hex SHA-256 of the peer's
+#  # PQ provider pubkey. The Rust rosenpass sidecar can emit these
+#  # alongside its key_out PSK files (operator's provisioning script
+#  # writes them — see docs/operator-sidecar-rosenpass.md).
+#  #
+#  # Modes:
+#  #   off     - ignore both cert extension and .rpinfo files entirely
+#  #   warn    - log mismatches but use the PSK anyway (default; safe)
+#  #   enforce - refuse the PSK on mismatch, or when cert extension
+#  #             claims a binding but no .rpinfo is present
+#  #
+#  # psk_binding.mode is the canonical key. The legacy key
+#  # pq.rp_binding.mode is still accepted as a deprecated alias.
+#  #
+#  # Backwards compat: default is warn. Operators with no .rpinfo
+#  # files and certs without the PQ-PSK-binding extension see no
+#  # behaviour change.
+#  psk_binding:
+#    mode: warn
+#  # Deprecated alias for psk_binding (still honoured):
+#  #rp_binding:
+#  #  mode: warn
+#
+#  # embedded_rosenpass runs go-rosenpass in-process. PSKs are derived
+#  # by the embedded daemon and delivered straight to nebula via an
+#  # in-memory provider — no PSK files on disk required. Peers
+#  # discover each other's Rosenpass static public keys lazily over
+#  # the nebula tunnel after the first IXPSK0 handshake; once a PSK
+#  # is derived (~RP rekey interval) nebula upgrades the tunnel to
+#  # IXPSK2 automatically.
+#  #
+#  # IMPORTANT: this block only takes effect when nebula is built with
+#  # `go build -tags rosenpass_embedded`. The default build omits the
+#  # `cunicu.li/go-rosenpass` dependency (unaudited Go port) and ignores
+#  # these keys with a warning; use a rosenpass sidecar + pki.pq_psk_dir
+#  # instead. See docs/operator-sidecar-rosenpass.md.
+#  embedded_rosenpass:
+#    enabled: false
+#    # state_dir persists the local Rosenpass keypair (rp.pub + rp.sk)
+#    # across nebula restarts. Created on first start.
+#    state_dir: /var/lib/nebula/rosenpass
+#    # port is the UDP port Rosenpass listens on inside the tunnel.
+#    # Peers reach this node at <my-vpn-ip>:<port>. Default 51821.
+#    port: 51821
+#    # discovery_port is the TCP port the local pubkey-serving HTTP
+#    # service binds to inside the tunnel. Peers fetch our Rosenpass
+#    # public key from http://<my-vpn-ip>:<discovery_port>/. Default 51820.
+#    discovery_port: 51820
+#    # listen_host overrides the bind address for the UDP rosenpass
+#    # listener. Default: the cert's primary nebula tun IP, so peers
+#    # reach this listener inside the encrypted overlay. Set to
+#    # 127.0.0.1 (or any other locally-assigned address) for smoke
+#    # tests or non-tun deployments. Setting tun.disabled: true with
+#    # embedded_rosenpass.enabled: true REQUIRES this override —
+#    # nebula refuses to start otherwise, since the tun IP is never
+#    # bindable without the tun.
+#    #listen_host: ""
+#    # discovery_listen_host overrides the bind address for the TCP
+#    # pubkey discovery service. Defaults to listen_host (or the tun
+#    # IP) — typically you want both on the same interface.
+#    #discovery_listen_host: ""
+
 # The static host map defines a set of hosts with fixed IP addresses on the internet (or any network).
 # A host can have multiple fixed IP addresses defined here, and nebula will try each when establishing a tunnel.
 # The syntax is:

@@ -11,9 +11,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/pq"
 )
 
 type trafficDecision int
@@ -140,6 +142,21 @@ func (cm *connectionManager) Start(ctx context.Context) {
 	clockSource := time.NewTicker(cm.trafficTimer.t.tickDuration)
 	defer clockSource.Stop()
 
+	// pqRotation fires whenever the active PQ Provider believes its
+	// material may have changed (file rotation, socket update, etc.).
+	// We coalesce these into hostmap walks that re-evaluate each
+	// peer's desired subtype and trigger upgrade rekeys without
+	// waiting for the next traffic tick.
+	//
+	// Subscribe to the PKI's stable rotation channel, NOT the
+	// underlying provider's Subscribe(): the underlying provider is
+	// replaced on every config reload, so a direct Subscribe()
+	// would silently stop receiving events after the first reload.
+	// PKI.PQRotation() returns a process-lifetime-stable channel
+	// that the PKI internally re-binds to whichever composed
+	// provider is currently installed.
+	pqRotation := cm.intf.pki.PQRotation()
+
 	p := []byte("")
 	nb := make([]byte, 12, 12)
 	out := make([]byte, mtu)
@@ -159,6 +176,122 @@ func (cm *connectionManager) Start(ctx context.Context) {
 
 				cm.doTrafficCheck(localIndex, p, nb, out, now)
 			}
+
+		case _, ok := <-pqRotation:
+			if !ok {
+				// Provider closed; stop listening but keep ticking.
+				pqRotation = nil
+				continue
+			}
+			cm.onPQRotation()
+		}
+	}
+}
+
+// pqRekeyMinInterval bounds how often a single peer can be re-handshaked
+// in response to PSK rotation events. A typical PQ-PSK provider's default
+// rekey interval is ~120s; at 90s here we trigger a refresh on every rotation while
+// preventing a misbehaving provider (or coalesced notify burst) from
+// pinning the handshake_manager with back-to-back rekeys.
+const pqRekeyMinInterval = 90 * time.Second
+
+// pqRequiredCloseThreshold is the hysteresis gate for ModeRequired
+// teardown. When the PQ policy refuses to re-handshake a peer (PSK
+// absent in required/enforce mode), the ConnectionManager does NOT tear
+// the tunnel down on the first miss — a single missed FileProvider
+// rescan or a transient provider blip should not blackout a working
+// tunnel. The tunnel is only closed once the policy has refused on this
+// many consecutive traffic-check ticks. With the default
+// timers.connection_alive_interval of 5s, three misses is ~15s of
+// sustained PSK absence before teardown. The counter resets to zero the
+// moment the policy is satisfied again.
+const pqRequiredCloseThreshold = 3
+
+// metricPQTunnelClosedPolicy counts tunnels torn down by the
+// ConnectionManager because the PQ policy refused to keep them up
+// (ModeRequired with the peer's PSK absent past the hysteresis gate).
+// Registered lazily on the default registry to match nebula's existing
+// go-metrics convention; lives in the nebula package (not pq) because
+// the teardown decision and the HostInfo it acts on are nebula-internal.
+const metricPQTunnelClosedPolicy = "pq.tunnel_closed_policy"
+
+// onPQRotation is invoked when the PQ Provider reports new PSK
+// material. We walk the main hostmap and ask the policy whether each
+// peer now wants a different subtype than the one currently in force.
+//
+// Two cases trigger a re-handshake:
+//
+//  1. Upgrade (NoPSK → PerPeer): the peer's PSK just became available,
+//     promote the tunnel from IXPSK0 to IXPSK2 without waiting for the
+//     next traffic-check tick.
+//
+//  2. Steady-state refresh (PerPeer → PerPeer): the tunnel is already
+//     IXPSK2 but the PSK material backing it rotated. Re-handshake so
+//     the new PSK is mixed into a fresh noise state and derived into
+//     new eKey/dKey. Without this branch, the provider's periodic rekey
+//     never reaches nebula's traffic encryption; the symmetric keys
+//     stay fixed from the original handshake until something else
+//     forces a re-handshake (cert change, etc.). Gated per-peer by
+//     pqRekeyMinInterval to bound churn.
+func (cm *connectionManager) onPQRotation() {
+	policy := cm.intf.pki.PQPolicy()
+	cm.hostMap.RLock()
+	hosts := make([]*HostInfo, 0, len(cm.hostMap.Hosts))
+	for _, h := range cm.hostMap.Hosts {
+		hosts = append(hosts, h)
+	}
+	cm.hostMap.RUnlock()
+
+	nowNanos := uint64(time.Now().UnixNano())
+	for _, h := range hosts {
+		if h.ConnectionState == nil {
+			continue
+		}
+		peerCrt := h.ConnectionState.peerCert
+		if peerCrt == nil {
+			continue
+		}
+		current := pq.SubtypeNoPSK
+		if h.ConnectionState.subtype == header.HandshakeIXPSK2 {
+			current = pq.SubtypePerPeer
+		}
+		desired, err := policy.InitiatorSubtype(pq.PeerInfo{
+			StaticPubKey: peerCrt.Certificate.PublicKey(),
+			Fingerprint:  peerCrt.Fingerprint,
+			Groups:       peerCrt.Certificate.Groups(),
+		})
+		if err != nil {
+			// Policy refuses to handshake; let the next traffic-check
+			// tick close the tunnel via tryRehandshake's policy gate.
+			continue
+		}
+		if desired == pq.SubtypePerPeer && current != pq.SubtypePerPeer {
+			cm.l.Info("Re-handshaking with remote",
+				"vpnAddrs", h.vpnAddrs,
+				"reason", "PQ material rotated; upgrading to IXPSK2",
+			)
+			cm.intf.handshakeManager.StartHandshake(h.vpnAddrs[0], nil)
+			continue
+		}
+		if desired == pq.SubtypePerPeer && current == pq.SubtypePerPeer {
+			// lastHandshakeTime is remote-reported unix nanos at handshake
+			// completion (anti-replay anchor). Close enough to "wall time
+			// of last handshake" given normal NTP-bounded skew. A zero
+			// value (handshake in progress) is treated as recent and
+			// suppresses the trigger. A remote clock ahead of ours would
+			// underflow the uint64 subtraction and defeat the throttle
+			// (rekey on every rotation event), so treat future timestamps
+			// as "recent" too — the throttle then errs toward suppression,
+			// never toward a rekey storm.
+			if h.lastHandshakeTime == 0 || nowNanos < h.lastHandshakeTime ||
+				nowNanos-h.lastHandshakeTime < uint64(pqRekeyMinInterval) {
+				continue
+			}
+			cm.l.Info("Re-handshaking with remote",
+				"vpnAddrs", h.vpnAddrs,
+				"reason", "PQ PSK rotated; refreshing derived keys",
+			)
+			cm.intf.handshakeManager.StartHandshake(h.vpnAddrs[0], nil)
 		}
 	}
 }
@@ -546,5 +679,82 @@ func (cm *connectionManager) tryRehandshake(hostinfo *HostInfo) {
 
 		cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)
 		return
+	}
+
+	// PQ policy check: ask the active policy whether the peer's current
+	// state is acceptable. This is opportunistic encryption and must
+	// stay backwards compatible, so PSK loss is handled per the
+	// degradation principle:
+	//
+	//   - ModeOpportunistic: never returns an error. If a peer's PSK
+	//     disappears we degrade DOWN to IXPSK0 (re-handshake without the
+	//     PSK) and KEEP the tunnel — loudly (Warn + metric). We never
+	//     tear an opportunistic tunnel down on PSK loss.
+	//   - ModeRequired: the policy returns ErrPolicyDenied when the PSK
+	//     is absent. Tearing down is the operator's explicit choice, but
+	//     we gate it behind pqRequiredCloseThreshold consecutive misses
+	//     so a transient provider blip (one missed rescan) can't blackout
+	//     a working tunnel. On the actual close we emit a Warn + bump the
+	//     pq.tunnel_closed_policy metric.
+	if peerCrt != nil {
+		pi := pq.PeerInfo{
+			StaticPubKey: peerCrt.Certificate.PublicKey(),
+			Fingerprint:  peerCrt.Fingerprint,
+			Groups:       peerCrt.Certificate.Groups(),
+		}
+		desired, err := cm.intf.pki.PQPolicy().InitiatorSubtype(pi)
+		if err != nil {
+			// Required/enforce mode with the PSK absent. Hysteresis-gate
+			// the teardown: only close once the policy has refused on
+			// pqRequiredCloseThreshold consecutive checks.
+			hostinfo.pqPolicyMisses++
+			if hostinfo.pqPolicyMisses < pqRequiredCloseThreshold {
+				cm.l.Warn("PQ policy refuses re-handshake (required mode, PSK absent); holding tunnel pending hysteresis",
+					"vpnAddrs", hostinfo.vpnAddrs,
+					"error", err,
+					"consecutiveMisses", hostinfo.pqPolicyMisses,
+					"closeThreshold", pqRequiredCloseThreshold,
+				)
+				return
+			}
+			cm.l.Warn("Closing tunnel (PQ policy refuses re-handshake, required mode, PSK absent past hysteresis)",
+				"vpnAddrs", hostinfo.vpnAddrs,
+				"error", err,
+				"consecutiveMisses", hostinfo.pqPolicyMisses,
+			)
+			metrics.GetOrRegisterCounter(metricPQTunnelClosedPolicy, nil).Inc(1)
+			cm.intf.sendCloseTunnel(hostinfo)
+			cm.intf.closeTunnel(hostinfo)
+			return
+		}
+		// Policy is satisfied (or opportunistically tolerant): clear any
+		// accrued required-mode miss count.
+		hostinfo.pqPolicyMisses = 0
+
+		current := pq.SubtypeNoPSK
+		if hostinfo.ConnectionState.subtype == header.HandshakeIXPSK2 {
+			current = pq.SubtypePerPeer
+		}
+		if desired == pq.SubtypePerPeer && current != pq.SubtypePerPeer {
+			cm.l.Info("Re-handshaking with remote",
+				"vpnAddrs", hostinfo.vpnAddrs,
+				"reason", "upgrading to IXPSK2 (PQ policy)",
+			)
+			cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)
+			return
+		}
+		if desired == pq.SubtypeNoPSK && current == pq.SubtypePerPeer {
+			// Opportunistic PSK loss: the peer's PSK disappeared while we
+			// were running IXPSK2. DEGRADE to IXPSK0 by re-handshaking
+			// without the PSK — keep connectivity rather than tearing the
+			// tunnel down or running indefinitely on now-orphaned IXPSK2
+			// keys. Surfaced loudly so the downgrade is observable.
+			cm.l.Warn("Re-handshaking with remote (degrading IXPSK2 -> IXPSK0)",
+				"vpnAddrs", hostinfo.vpnAddrs,
+				"reason", "PQ PSK no longer available for peer; opportunistic downgrade",
+			)
+			cm.intf.handshakeManager.StartHandshake(hostinfo.vpnAddrs[0], nil)
+			return
+		}
 	}
 }

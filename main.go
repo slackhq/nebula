@@ -12,6 +12,7 @@ import (
 
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/overlay"
+	"github.com/slackhq/nebula/pq/rpidentity"
 	"github.com/slackhq/nebula/sshd"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
@@ -177,6 +178,40 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		return nil, util.ContextualizeIfNeeded("Failed to initialize lighthouse handler", err)
 	}
 
+	// Inject the provider-backed identity codec so the lighthouse can
+	// pack/unpack the opaque PqPskIdentity blob gossiped in HostUpdate.
+	// The rpidentity codec is the active PQ-PSK provider codec today;
+	// without this the lighthouse keeps its default NoopIdentityCodec
+	// and gossips nothing.
+	lightHouse.SetPQIdentityCodec(rpidentity.Codec{})
+
+	// Wire the lighthouse gossip table into the PSK binding wrapper.
+	// Peers learn each other's PQ-PSK binding hashes at runtime via
+	// HostUpdate; this gives the binding wrapper a third trust source
+	// (in addition to the CA-signed cert v2 extension and the
+	// operator-controlled binding-hint sidecar). Cert extension remains
+	// authoritative; gossip is supporting evidence.
+	pki.SetGossipedPQBindingHashLookup(lightHouse.LookupGossipedPQBindingHash)
+
+	// Wire the gossiped provider UDP port resolver. The embedded PQ-PSK
+	// provider consults this on every peer registration to route the
+	// peer's endpoint at the port the peer actually listens on
+	// (heterogeneous-port deployments where every node runs with the
+	// same local provider port are no longer required). 0 means "peer
+	// didn't gossip a port" and the provider falls back to its own
+	// local port — same behaviour as before this hook existed.
+	pki.SetGossipedPQProviderPortLookup(lightHouse.LookupGossipedPQProviderPort)
+
+	// Wire the gossiped provider discovery TCP port resolver. Mirror
+	// of SetGossipedPQProviderPortLookup, but covers the HTTP pubkey-fetch
+	// side of the heterogeneous-port problem: nodes running different
+	// discovery_port values would otherwise have the provider fail
+	// with "connection refused" on first contact. 0 means "peer didn't
+	// gossip a port" and the provider falls back to its own local
+	// discovery port, preserving pre-gossip behaviour for homogeneous
+	// fleets.
+	pki.SetGossipedDiscoveryPortLookup(lightHouse.LookupGossipedDiscoveryPort)
+
 	var messageMetrics *MessageMetrics
 	if c.GetBool("stats.message_metrics", false) {
 		messageMetrics = newMessageMetrics()
@@ -233,6 +268,23 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		ifce.writers = udpConns
 		lightHouse.ifce = ifce
 
+		// Wire the gossip-changed re-notify chain. The lighthouse
+		// receive path fires gossipChangedCB whenever a fresh provider
+		// UDP port arrives for a peer; that callback hops through
+		// PKI.GossipedBindingChanged into the build-tag-gated
+		// handleGossipChanged handler, which (in the embedded build)
+		// re-runs the provider notify path so it re-registers the peer
+		// at the corrected port. This closes the race where HostUpdate
+		// arrives AFTER handshake completion — without the re-notify
+		// trigger the provider's first registration would stay pinned
+		// to the local provider port for the lifetime of the tunnel.
+		// Default build's handler is a no-op so the wire-up itself
+		// stays build-tag agnostic.
+		pki.SetGossipedBindingChangeCallback(func(vpnAddr netip.Addr) {
+			handleGossipChanged(ifce, vpnAddr)
+		})
+		lightHouse.SetGossipChangedCallback(pki.GossipedBindingChanged)
+
 		ifce.RegisterConfigChangeCallbacks(c)
 		ifce.reloadDisconnectInvalid(c)
 		ifce.reloadSendRecvError(c)
@@ -242,6 +294,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		go handshakeManager.Run(ctx)
 
 		punchy.Start(ctx, ifce, hostMap, lightHouse)
+
 	}
 
 	stats, err := newStatsServerFromConfig(ctx, l, c, buildVersion, configTest)
@@ -257,6 +310,20 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 	attachCommands(l, c, ssh, ifce)
 
+	// Optional: an embedded PQ-PSK provider for self-bootstrapping PSK
+	// derivation. Stored as a deferred closure so the provider's
+	// listeners bind after Control.Start() has activated the tun and
+	// the local VPN address is assignable; binding before activate()
+	// races EADDRNOTAVAIL on platforms with slow tun-address assignment
+	// (Ubuntu 24.04 / systemd-networkd).
+	//
+	// Provider selection + provider-specific config keys live in the
+	// provider layer (buildPQProviderStart) so this composition path
+	// stays provider-agnostic. nil means no embedded provider is
+	// enabled — PSKs then arrive from an external sidecar via
+	// pki.pq_psk_dir.
+	pqProviderStart := buildPQProviderStart(ctx, l, c, ifce)
+
 	return &Control{
 		state:                  StateReady,
 		f:                      ifce,
@@ -268,6 +335,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		dnsStart:               ds.Start,
 		lighthouseStart:        lightHouse.StartUpdateWorker,
 		connectionManagerStart: connManager.Start,
+		pqProviderStart:        pqProviderStart,
 	}, nil
 }
 

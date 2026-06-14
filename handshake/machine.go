@@ -39,6 +39,7 @@ type Result struct {
 	HandshakeTime uint64
 	MessageIndex  uint64 // number of messages exchanged during the handshake
 	Initiator     bool
+	Subtype       header.MessageSubType // IXPSK0 or IXPSK2; lets ConnectionState know whether a PQ PSK was mixed in
 }
 
 // Machine drives a Noise handshake through N messages. It handles Noise
@@ -56,6 +57,7 @@ type Result struct {
 // true the Machine is unrecoverable and the caller must abandon it.
 type Machine struct {
 	hs             *noise.HandshakeState
+	cred           *Credential // bound credential, kept for PSK lookup on responder side
 	getCred        GetCredentialFunc
 	allocIndex     IndexAllocator
 	verifier       CertVerifier
@@ -63,16 +65,44 @@ type Machine struct {
 	msgs           []msgFlags
 	myVersion      cert.Version
 	subtype        header.MessageSubType
+	pskPlacement   int
+	pskInjected    bool // responder: true once SetPresharedKey has been called for psk2
 	indexAllocated bool
 	remoteCertSet  bool
 	payloadSet     bool
 	failed         bool
+	// pskChooser, when set on a responder at psk placement 2, is
+	// consulted at inject time with the initiator's static key; a true
+	// return makes injectResponderPSK prefer the previous-epoch PSK
+	// (falling back to current when no previous exists). Set by the
+	// handshake manager from its epoch-skew hint cache.
+	pskChooser func(peerStaticPubKey []byte) bool
+	// usedPrevPSK records that the responder injected the previous-
+	// epoch PSK (epoch-skew healing path).
+	usedPrevPSK bool
+	// pskSwapped marks that SwapPSK has been used; one swap per machine.
+	pskSwapped bool
 }
 
 // NewMachine creates a handshake state machine. The subtype determines both
 // the noise pattern and the per-message content layout. The credential for
 // `version` is fetched via getCred and used to seed the noise.HandshakeState.
 // IndexAllocator is called lazily when the first outgoing payload is built.
+//
+// peerStaticPubKey is required when the subtype's PSK placement is >= 2 and
+// this Machine is an initiator: the PSK is preset in the noise config so it
+// can be mixed when the initiator processes msg2. Responders pass nil; they
+// learn the peer's static from msg1 and mix the PSK before producing msg2.
+//
+// peerCert is the cached peer certificate for the initiator at PSK
+// placement 2, used by the underlying PSKLookupFunc to validate the
+// peer's PQ-PSK binding cert extension against any per-PSK origin
+// claim (e.g. FileProvider binding hint) before mixing the PSK into
+// the noise state. Pass nil if no cached cert is available (first
+// contact, or non-PSK subtypes); a nil cert behaves identically to
+// the pre-validation lookup. Responder Machines ignore peerCert at
+// NewMachine time — their cert validation runs out of the cert in
+// msg1's payload, fed back to the lookup via injectResponderPSK.
 func NewMachine(
 	version cert.Version,
 	getCred GetCredentialFunc,
@@ -80,6 +110,8 @@ func NewMachine(
 	allocIndex IndexAllocator,
 	initiator bool,
 	subtype header.MessageSubType,
+	peerStaticPubKey []byte,
+	peerCert cert.Certificate,
 ) (*Machine, error) {
 	info, err := subtypeInfoFor(subtype)
 	if err != nil {
@@ -91,22 +123,25 @@ func NewMachine(
 		return nil, fmt.Errorf("%w: %v", ErrNoCredential, version)
 	}
 
-	hs, err := cred.buildHandshakeState(initiator, info.pattern)
+	hs, err := cred.buildHandshakeState(initiator, info.pattern, info.presharedKeyPlacement, peerStaticPubKey, peerCert)
 	if err != nil {
 		return nil, fmt.Errorf("build noise state: %w", err)
 	}
 
 	return &Machine{
-		hs:         hs,
-		subtype:    subtype,
-		msgs:       info.msgs,
-		getCred:    getCred,
-		allocIndex: allocIndex,
-		verifier:   verifier,
-		myVersion:  version,
+		hs:           hs,
+		subtype:      subtype,
+		msgs:         info.msgs,
+		pskPlacement: info.presharedKeyPlacement,
+		cred:         cred,
+		getCred:      getCred,
+		allocIndex:   allocIndex,
+		verifier:     verifier,
+		myVersion:    version,
 		result: &Result{
 			Initiator: initiator,
 			Cipher:    cred.cipherSuite,
+			Subtype:   subtype,
 		},
 	}, nil
 }
@@ -125,6 +160,50 @@ func (m *Machine) Subtype() header.MessageSubType {
 // wire counter of the most recently sent or received message.
 func (m *Machine) MessageIndex() int {
 	return m.hs.MessageIndex()
+}
+
+// SetResponderPSKChooser installs the previous-epoch preference
+// callback. Responder-side only; on an initiator the chooser is never
+// consulted. Must be called before ProcessPacket.
+func (m *Machine) SetResponderPSKChooser(fn func(peerStaticPubKey []byte) bool) {
+	m.pskChooser = fn
+}
+
+// UsedPreviousPSK reports whether the responder injected the
+// previous-epoch PSK (epoch-skew healing path).
+func (m *Machine) UsedPreviousPSK() bool { return m.usedPrevPSK }
+
+// SwapPSK replaces the preshared key on a live initiator machine that
+// is waiting for msg2. flynn/noise checkpoints and rolls back the
+// symmetric state on a failed ReadMessage and SetPresharedKey copies
+// its input, so after a msg2 AEAD failure the caller may SwapPSK and
+// re-feed the SAME msg2 packet — a zero-round-trip retry under a
+// different PSK epoch. One swap per machine. The caller retains
+// ownership of psk and should wipe it after the call.
+func (m *Machine) SwapPSK(psk []byte) error {
+	if m.failed {
+		return ErrMachineFailed
+	}
+	if !m.result.Initiator {
+		return fmt.Errorf("SwapPSK: initiator only")
+	}
+	if m.pskPlacement != 2 {
+		return fmt.Errorf("SwapPSK: psk placement %d, want 2", m.pskPlacement)
+	}
+	if m.hs.MessageIndex() != 1 {
+		return fmt.Errorf("SwapPSK: machine not waiting for msg2 (index %d)", m.hs.MessageIndex())
+	}
+	if m.pskSwapped {
+		return fmt.Errorf("SwapPSK: already swapped once")
+	}
+	if len(psk) != 32 {
+		return fmt.Errorf("SwapPSK: psk is %d bytes, want 32", len(psk))
+	}
+	if err := m.hs.SetPresharedKey(psk); err != nil {
+		return fmt.Errorf("SwapPSK: %w", err)
+	}
+	m.pskSwapped = true
+	return nil
 }
 
 // requireComplete checks that both a peer cert and payload have been received.
@@ -254,6 +333,18 @@ func (m *Machine) ProcessPacket(out, packet []byte) ([]byte, *Result, error) {
 		return nil, m.completed(eKey, dKey), nil
 	}
 
+	// Responder side, psk2: ReadMessage on msg1 has populated hs with the
+	// initiator's static public key. Look up the matching per-peer PSK and
+	// inject it before building msg2 so the psk token at the end of msg2
+	// has key material to mix. A missing PSK is fatal — falling back to a
+	// no-PSK msg2 would silently downgrade the handshake.
+	if !m.result.Initiator && m.pskPlacement == 2 && !m.pskInjected {
+		if err := m.injectResponderPSK(); err != nil {
+			m.failed = true
+			return nil, nil, err
+		}
+	}
+
 	// ReadMessage didn't complete, produce the next outgoing message
 	out, dk, ek, err := m.buildResponse(out)
 	if err != nil {
@@ -273,6 +364,55 @@ func (m *Machine) ProcessPacket(out, packet []byte) ([]byte, *Result, error) {
 	}
 
 	return out, nil, nil
+}
+
+// injectResponderPSK looks up the per-peer PSK for the initiator's static
+// public key (just learned from msg1) and installs it on the noise state so
+// the psk token at the end of msg2 has key material to mix. Called only on
+// the responder side at psk placement 2; idempotent.
+//
+// processPayload has already validated the peer's certificate by the time
+// we get here (the IXPSK2 layout puts the cert on msg1, and ProcessPacket
+// calls processPayload before injectResponderPSK), so m.result.RemoteCert
+// is non-nil and safe to pass through to LookupPSK for cert-extension
+// binding checks. If validation refuses the PSK (returning nil under
+// enforce mode), we fail closed here — there's no fallback path from
+// "responder has decided to do IXPSK2" back down to IXPSK0 mid-flight.
+func (m *Machine) injectResponderPSK() error {
+	peerStatic := m.hs.PeerStatic()
+	if len(peerStatic) == 0 {
+		return fmt.Errorf("psk2 responder: no peer static after msg1 read")
+	}
+	var peerCert cert.Certificate
+	if m.result != nil && m.result.RemoteCert != nil {
+		peerCert = m.result.RemoteCert.Certificate
+	}
+	var psk []byte
+	if m.pskChooser != nil && m.pskChooser(peerStatic) {
+		// Epoch-skew hint: the initiator likely holds our previous
+		// epoch (it just rejected a current-epoch msg2). Prefer the
+		// previous PSK; fall back to current when no rotation has been
+		// observed for this peer.
+		psk = m.cred.LookupPSKPrev(peerStatic, peerCert)
+		m.usedPrevPSK = psk != nil
+	}
+	if psk == nil {
+		psk = m.cred.LookupPSK(peerStatic, peerCert)
+	}
+	if psk == nil {
+		return fmt.Errorf("%w %x", ErrResponderPSKMissing, peerStatic)
+	}
+	// SetPresharedKey enforces 32 bytes anyway; pre-check so the error
+	// names the lookup as the source of the bad material.
+	if len(psk) != 32 {
+		return fmt.Errorf("psk2 responder: psk lookup for peer %x returned %d bytes, want 32", peerStatic, len(psk))
+	}
+	if err := m.hs.SetPresharedKey(psk); err != nil {
+		return fmt.Errorf("psk2 responder: SetPresharedKey: %w", err)
+	}
+	wipeBytes(psk)
+	m.pskInjected = true
+	return nil
 }
 
 func (m *Machine) completed(eKey, dKey *noise.CipherState) *Result {

@@ -37,7 +37,14 @@ const (
 	TagDetailsNotBefore      = 5 | classContextSpecific
 	TagDetailsNotAfter       = 6 | classContextSpecific
 	TagDetailsIssuer         = 7 | classContextSpecific
+	TagDetailsPqPskBinding   = 8 | classContextSpecific
 )
+
+// PqPskBindingLen is the length in bytes of the opaque PQ-PSK binding
+// (currently a 32-byte provider key digest) carried in cert v2 details.
+// The extension is rejected at unmarshal time if the field is present
+// with any other length.
+const PqPskBindingLen = 32
 
 const (
 	// MaxCertificateSize is the maximum length a valid certificate can be
@@ -72,6 +79,15 @@ type detailsV2 struct {
 	notBefore      time.Time
 	notAfter       time.Time
 	issuer         string
+
+	// pqPskBinding, if non-empty, is the opaque PQ-PSK binding (currently
+	// a 32-byte provider key digest) bound into the cert by the CA. When
+	// the CA includes it in a signed cert, peers can use it to validate a
+	// discovered PQ-PSK provider key against this CA-signed digest. Must
+	// be exactly 32 bytes when present. Optional; certs without the
+	// extension cannot participate in PQ (the extension is the sole trust
+	// binding) and fall through to non-PQ (IXPSK0) handshakes.
+	pqPskBinding []byte
 }
 
 func (c *certificateV2) Version() Version {
@@ -124,6 +140,16 @@ func (c *certificateV2) Signature() []byte {
 
 func (c *certificateV2) UnsafeNetworks() []netip.Prefix {
 	return c.details.unsafeNetworks
+}
+
+// PqPskBinding returns the optional opaque PQ-PSK binding (currently a
+// 32-byte provider key digest) as bound into the cert by the CA. Returns
+// nil when the extension is absent; such peers cannot participate in PQ
+// and downstream consumers skip PQ-PSK registration for them. The
+// returned slice shares storage with the underlying cert; callers must
+// not mutate it.
+func (c *certificateV2) PqPskBinding() []byte {
+	return c.details.pqPskBinding
 }
 
 func (c *certificateV2) Fingerprint() (string, error) {
@@ -316,17 +342,26 @@ func (c *certificateV2) marshalJSON() (m, error) {
 		return nil, err
 	}
 
+	details := m{
+		"name":           c.details.name,
+		"networks":       c.details.networks,
+		"unsafeNetworks": c.details.unsafeNetworks,
+		"groups":         c.details.groups,
+		"notBefore":      c.details.notBefore,
+		"notAfter":       c.details.notAfter,
+		"isCa":           c.details.isCA,
+		"issuer":         c.details.issuer,
+	}
+	if len(c.details.pqPskBinding) > 0 {
+		bindingHex := hex.EncodeToString(c.details.pqPskBinding)
+		// pqPskBinding is the canonical (provider-neutral) key. rosenpassPubKeySha256
+		// is kept as a backwards-compatible alias for existing parsers that consume
+		// `nebula-cert print -json`; both carry the same hex value.
+		details["pqPskBinding"] = bindingHex
+		details["rosenpassPubKeySha256"] = bindingHex
+	}
 	return m{
-		"details": m{
-			"name":           c.details.name,
-			"networks":       c.details.networks,
-			"unsafeNetworks": c.details.unsafeNetworks,
-			"groups":         c.details.groups,
-			"notBefore":      c.details.notBefore,
-			"notAfter":       c.details.notAfter,
-			"isCa":           c.details.isCA,
-			"issuer":         c.details.issuer,
-		},
+		"details":     details,
 		"version":     Version2,
 		"publicKey":   fmt.Sprintf("%x", c.publicKey),
 		"curve":       c.curve.String(),
@@ -348,6 +383,11 @@ func (c *certificateV2) Copy() Certificate {
 		publicKey:  make([]byte, len(c.publicKey)),
 		signature:  make([]byte, len(c.signature)),
 		rawDetails: make([]byte, len(c.rawDetails)),
+	}
+
+	if c.details.pqPskBinding != nil {
+		nc.details.pqPskBinding = make([]byte, len(c.details.pqPskBinding))
+		copy(nc.details.pqPskBinding, c.details.pqPskBinding)
 	}
 
 	if c.details.groups != nil {
@@ -382,6 +422,7 @@ func (c *certificateV2) fromTBSCertificate(t *TBSCertificate) error {
 		notBefore:      t.NotBefore,
 		notAfter:       t.NotAfter,
 		issuer:         t.issuer,
+		pqPskBinding:   append([]byte(nil), t.PqPskBinding...),
 	}
 	c.curve = t.Curve
 	c.publicKey = t.PublicKey
@@ -454,6 +495,10 @@ func (c *certificateV2) validate() error {
 	err = findDuplicatePrefix(c.details.unsafeNetworks)
 	if err != nil {
 		return err
+	}
+
+	if len(c.details.pqPskBinding) != 0 && len(c.details.pqPskBinding) != PqPskBindingLen {
+		return NewErrInvalidCertificateProperties("pqPskBinding must be exactly %d bytes when present, got %d", PqPskBindingLen, len(c.details.pqPskBinding))
 	}
 
 	return nil
@@ -556,6 +601,15 @@ func (d *detailsV2) Marshal() ([]byte, error) {
 			}
 			b.AddASN1(TagDetailsIssuer, func(b *cryptobyte.Builder) {
 				b.AddBytes(issuerBytes)
+			})
+		}
+
+		// Add the PQ-PSK binding if present. Optional: absent in legacy
+		// certs and in CAs that do not bind a PQ-PSK provider key to host
+		// certs.
+		if len(d.pqPskBinding) > 0 {
+			b.AddASN1(TagDetailsPqPskBinding, func(b *cryptobyte.Builder) {
+				b.AddBytes(d.pqPskBinding)
 			})
 		}
 	})
@@ -732,6 +786,22 @@ func unmarshalDetails(b cryptobyte.String) (detailsV2, error) {
 		return detailsV2{}, ErrBadFormat
 	}
 
+	// Read optional PQ-PSK binding. Forwards-compatible: any additional
+	// fields appearing after this one are ignored so older builds can
+	// still parse certs signed by newer CAs.
+	var pqPskBinding cryptobyte.String
+	var pqPskBindingPresent bool
+	if !b.ReadOptionalASN1(&pqPskBinding, &pqPskBindingPresent, TagDetailsPqPskBinding) {
+		return detailsV2{}, ErrBadFormat
+	}
+	var pqPskBindingBytes []byte
+	if pqPskBindingPresent {
+		if len(pqPskBinding) != PqPskBindingLen {
+			return detailsV2{}, ErrBadFormat
+		}
+		pqPskBindingBytes = append([]byte(nil), pqPskBinding...)
+	}
+
 	return detailsV2{
 		name:           string(name),
 		networks:       networks,
@@ -741,5 +811,6 @@ func unmarshalDetails(b cryptobyte.String) (detailsV2, error) {
 		notBefore:      time.Unix(notBefore, 0),
 		notAfter:       time.Unix(notAfter, 0),
 		issuer:         hex.EncodeToString(issuer),
+		pqPskBinding:   pqPskBindingBytes,
 	}, nil
 }

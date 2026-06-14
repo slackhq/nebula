@@ -54,6 +54,13 @@ type Control struct {
 	dnsStart               func()
 	lighthouseStart        func()
 	connectionManagerStart func(context.Context)
+	// pqProviderStart, when non-nil, brings up the embedded PQ-PSK
+	// provider (UDP server + discovery HTTP listener + coordinator).
+	// Deferred until Start so the listeners bind after f.activate()
+	// has assigned the local VPN address to the tun; binding earlier
+	// races EADDRNOTAVAIL on platforms where tun address assignment
+	// lags (Ubuntu 24.04 / systemd-networkd).
+	pqProviderStart func() error
 }
 
 type ControlHostInfo struct {
@@ -92,6 +99,20 @@ func (c *Control) Start() (func() error, error) {
 	if err != nil {
 		c.state = StateStopped
 		return nil, err
+	}
+
+	// Bring up the embedded PQ-PSK provider now that the tun is active
+	// and its IP is assigned. Done synchronously and before the
+	// dataplane reader so that the first inbound handshake the provider
+	// sees already has its service + discovery listener ready to derive
+	// PSKs. Operator explicitly opted in, so a startup failure here is
+	// fatal — falling back to a missing-PQ posture silently would be
+	// worse than refusing to come up.
+	if c.pqProviderStart != nil {
+		if err := c.pqProviderStart(); err != nil {
+			c.state = StateStopped
+			return nil, err
+		}
 	}
 
 	// Call all the delayed funcs that waited patiently for the interface to be created.

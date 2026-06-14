@@ -3,6 +3,8 @@ package main
 import (
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,19 +21,22 @@ import (
 )
 
 type signFlags struct {
-	set            *flag.FlagSet
-	version        *uint
-	caKeyPath      *string
-	caCertPath     *string
-	name           *string
-	networks       *string
-	unsafeNetworks *string
-	duration       *time.Duration
-	inPubPath      *string
-	outKeyPath     *string
-	outCertPath    *string
-	outQRPath      *string
-	groups         *string
+	set              *flag.FlagSet
+	version          *uint
+	caKeyPath        *string
+	caCertPath       *string
+	name             *string
+	networks         *string
+	unsafeNetworks   *string
+	duration         *time.Duration
+	inPubPath        *string
+	outKeyPath       *string
+	outCertPath      *string
+	outQRPath        *string
+	groups           *string
+	pqPskBinding     *string
+	rpPubKeySha256   *string
+	rpPubKeyFromPath *string
 
 	p11url *string
 
@@ -55,6 +60,9 @@ func newSignFlags() *signFlags {
 	sf.outCertPath = sf.set.String("out-crt", "", "Optional: path to write the certificate to")
 	sf.outQRPath = sf.set.String("out-qr", "", "Optional: output a qr code image (png) of the certificate")
 	sf.groups = sf.set.String("groups", "", "Optional: comma separated list of groups")
+	sf.pqPskBinding = sf.set.String("pq-psk-binding", "", "Optional: hex-encoded SHA-256 (64 hex chars / 32 bytes) PQ PSK binding for the holder's post-quantum provider public key. Binds the PQ keypair to this cert (the sole trust binding for PQ). v2 certs only. Canonical alias for -rp-pubkey-sha256.")
+	sf.rpPubKeySha256 = sf.set.String("rp-pubkey-sha256", "", "Optional: deprecated alias for -pq-psk-binding; hex-encoded SHA-256 (64 hex chars / 32 bytes) of the holder's Rosenpass public key. v2 certs only.")
+	sf.rpPubKeyFromPath = sf.set.String("rp-pubkey-from", "", "Optional: path to a rosenpass public key file (e.g. the rp.pub written by 'rosenpass gen-keys' or by the embedded rosenpass state_dir). Its SHA-256 is computed and stored in the cert as the PQ PSK binding. Mutually exclusive with -pq-psk-binding / -rp-pubkey-sha256. v2 certs only.")
 	sf.p11url = p11Flag(sf.set)
 
 	sf.ip = sf.set.String("ip", "", "Deprecated, see -networks")
@@ -254,6 +262,42 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 		}
 	}
 
+	var rpPubKeySha256 []byte
+	// -pq-psk-binding is the canonical flag; -rp-pubkey-sha256 is the
+	// deprecated alias. The generic flag takes precedence when both are
+	// set; otherwise fall back to the legacy one. Use whichever flag the
+	// operator supplied for error-message context.
+	bindingFlagName := "-pq-psk-binding"
+	bindingHex := strings.TrimSpace(*sf.pqPskBinding)
+	if bindingHex == "" {
+		bindingHex = strings.TrimSpace(*sf.rpPubKeySha256)
+		bindingFlagName = "-rp-pubkey-sha256"
+	}
+	if bindingHex != "" {
+		if len(bindingHex) != cert.PqPskBindingLen*2 {
+			return newHelpErrorf("%s must be exactly %d hex characters (got %d)", bindingFlagName, cert.PqPskBindingLen*2, len(bindingHex))
+		}
+		b, err := hex.DecodeString(bindingHex)
+		if err != nil {
+			return newHelpErrorf("%s is not valid hex: %s", bindingFlagName, err)
+		}
+		rpPubKeySha256 = b
+	}
+	if rpPath := strings.TrimSpace(*sf.rpPubKeyFromPath); rpPath != "" {
+		if rpPubKeySha256 != nil {
+			return newHelpErrorf("-rp-pubkey-from and -pq-psk-binding/-rp-pubkey-sha256 are mutually exclusive")
+		}
+		raw, err := os.ReadFile(rpPath)
+		if err != nil {
+			return fmt.Errorf("error while reading rp-pubkey-from: %s", err)
+		}
+		if len(raw) == 0 {
+			return fmt.Errorf("rp-pubkey-from file is empty: %s", rpPath)
+		}
+		sum := sha256.Sum256(raw)
+		rpPubKeySha256 = sum[:]
+	}
+
 	var pub, rawPriv []byte
 	var p11Client *pkclient.PKClient
 
@@ -317,6 +361,10 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			return newHelpErrorf("invalid -unsafe-networks definition: v1 certificates can only contain ipv4 addresses")
 		}
 
+		if rpPubKeySha256 != nil {
+			return newHelpErrorf("-pq-psk-binding / -rp-pubkey-sha256 / -rp-pubkey-from requires a v2 certificate; v1 certificates have no extension area")
+		}
+
 		t := &cert.TBSCertificate{
 			Version:        cert.Version1,
 			Name:           *sf.name,
@@ -357,6 +405,7 @@ func signCert(args []string, out io.Writer, errOut io.Writer, pr PasswordReader)
 			PublicKey:      pub,
 			IsCA:           false,
 			Curve:          curve,
+			PqPskBinding:   rpPubKeySha256,
 		}
 
 		var nc cert.Certificate

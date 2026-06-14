@@ -30,6 +30,12 @@ Details ::= SEQUENCE {
 
     -- issuer is only required if isCA is false, if isCA is true then it must not be present
     issuer OCTET STRING OPTIONAL,
+
+    -- pqPskBinding, if present, is the opaque PQ-PSK binding (exactly 32
+    -- bytes, currently a provider key digest) bound in by the CA. Peers
+    -- use it to validate a discovered PQ-PSK provider key without TOFU
+    -- pinning.
+    pqPskBinding OCTET STRING (SIZE (32)) OPTIONAL,
     ...
     -- New fields can be added below here
 }

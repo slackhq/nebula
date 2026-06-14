@@ -7,9 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay/overlaytest"
+	"github.com/slackhq/nebula/pq"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
@@ -454,6 +457,10 @@ func (d *dummyCert) UnsafeNetworks() []netip.Prefix {
 	return d.unsafeNetworks
 }
 
+func (d *dummyCert) PqPskBinding() []byte {
+	return nil
+}
+
 func (d *dummyCert) MarshalForHandshakes() ([]byte, error) {
 	return nil, nil
 }
@@ -500,4 +507,146 @@ func (d *dummyCert) MarshalJSON() ([]byte, error) {
 
 func (d *dummyCert) Copy() cert.Certificate {
 	return d
+}
+
+// stubPQPolicy lets the connection_manager tests inject a deterministic
+// InitiatorSubtype answer (subtype + error) without standing up a real
+// pq.DefaultPolicy + Provider.
+type stubPQPolicy struct {
+	subtype pq.Subtype
+	err     error
+}
+
+func (s stubPQPolicy) InitiatorSubtype(pq.PeerInfo) (pq.Subtype, error) {
+	return s.subtype, s.err
+}
+func (s stubPQPolicy) AcceptResponderSubtype(pq.PeerInfo, pq.Subtype) error { return nil }
+func (s stubPQPolicy) OnHandshakeComplete(pq.PeerInfo, pq.Subtype)          {}
+func (s stubPQPolicy) OnHandshakeFailed(pq.PeerInfo, pq.Subtype, error)     {}
+
+// newCMForPQTest builds the minimal ConnectionManager + Interface + a
+// single established hostinfo wired so tryRehandshake reaches the PQ
+// policy block (all earlier cert checks pass). The peer cert is set to
+// the given subtype's wire form. Returns the manager and the hostinfo.
+func newCMForPQTest(t *testing.T, policy pq.Policy, currentSubtype header.MessageSubType) (*connectionManager, *HostInfo) {
+	t.Helper()
+	l := test.NewLogger()
+	vpnIp := netip.MustParseAddr("172.1.1.2")
+	preferredRanges := []netip.Prefix{netip.MustParsePrefix("10.1.1.1/24")}
+	hostMap := newHostMap(l)
+	hostMap.preferredRanges.Store(&preferredRanges)
+
+	// Same dummyCert instance for cs.v1Cert and hostinfo.myCert so the
+	// signature-equality check in tryRehandshake passes and we fall
+	// through to the PQ policy block.
+	myCert := &dummyCert{version: cert.Version1, signature: []byte{0x01, 0x02, 0x03}}
+	cs := &CertState{
+		initiatingVersion: cert.Version1,
+		privateKey:        []byte{},
+		v1Cert:            myCert,
+	}
+
+	lh := newTestLighthouse()
+	pki := &PKI{}
+	pki.cs.Store(cs)
+	pki.pqPolicy.Store(&pqPolicyHolder{p: policy})
+
+	ifce := &Interface{
+		hostMap:          hostMap,
+		inside:           &overlaytest.NoopTun{},
+		outside:          &udp.NoopConn{},
+		firewall:         &Firewall{},
+		lightHouse:       lh,
+		pki:              pki,
+		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
+		l:                l,
+	}
+
+	conf := config.NewC(test.NewLogger())
+	punchy := NewPunchyFromConfig(test.NewLogger(), conf, nil)
+	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
+	nc.intf = ifce
+	ifce.connectionManager = nc
+
+	peerCrt := &cert.CachedCertificate{
+		Certificate: &dummyCert{version: cert.Version1, publicKey: make([]byte, 32)},
+		Fingerprint: "peerfp",
+	}
+	hostinfo := &HostInfo{
+		vpnAddrs:      []netip.Addr{vpnIp},
+		localIndexId:  42,
+		remoteIndexId: 24,
+		ConnectionState: &ConnectionState{
+			myCert:   myCert,
+			peerCert: peerCrt,
+			subtype:  currentSubtype,
+			// eKey left nil so sendCloseTunnel is a safe no-op.
+		},
+	}
+	nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
+	return nc, hostinfo
+}
+
+// D1: opportunistic-mode PSK loss must DEGRADE (re-handshake down to
+// IXPSK0) rather than tear the tunnel down. The policy returns
+// SubtypeNoPSK while the tunnel is currently IXPSK2.
+func Test_tryRehandshake_OpportunisticPSKLossDegrades(t *testing.T) {
+	policy := stubPQPolicy{subtype: pq.SubtypeNoPSK, err: nil}
+	nc, hostinfo := newCMForPQTest(t, policy, header.HandshakeIXPSK2)
+
+	nc.tryRehandshake(hostinfo)
+
+	// Tunnel must NOT be torn down.
+	assert.Contains(t, nc.hostMap.Hosts, hostinfo.vpnAddrs[0],
+		"opportunistic PSK loss must not close the tunnel")
+	// A downgrade re-handshake must have been kicked off.
+	nc.intf.handshakeManager.Lock()
+	_, handshaking := nc.intf.handshakeManager.vpnIps[hostinfo.vpnAddrs[0]]
+	nc.intf.handshakeManager.Unlock()
+	assert.True(t, handshaking, "opportunistic PSK loss must trigger a downgrade re-handshake")
+}
+
+// D1: required-mode PSK loss must be gated by hysteresis — the tunnel is
+// held for the first (threshold-1) consecutive misses and only torn down
+// on the threshold-th miss, bumping pq.tunnel_closed_policy.
+func Test_tryRehandshake_RequiredPSKLossHysteresisGatedClose(t *testing.T) {
+	policy := stubPQPolicy{err: pq.ErrPolicyDenied}
+	nc, hostinfo := newCMForPQTest(t, policy, header.HandshakeIXPSK2)
+
+	before := metrics.GetOrRegisterCounter(metricPQTunnelClosedPolicy, nil).Count()
+
+	// First threshold-1 ticks: tunnel held, counter accrues.
+	for i := 1; i < pqRequiredCloseThreshold; i++ {
+		nc.tryRehandshake(hostinfo)
+		assert.Contains(t, nc.hostMap.Hosts, hostinfo.vpnAddrs[0],
+			"tunnel must be held before hysteresis threshold (miss %d)", i)
+		assert.Equal(t, i, hostinfo.pqPolicyMisses)
+	}
+	assert.Equal(t, before, metrics.GetOrRegisterCounter(metricPQTunnelClosedPolicy, nil).Count(),
+		"no close metric before threshold")
+
+	// Threshold-th tick: tunnel torn down + metric bumped.
+	nc.tryRehandshake(hostinfo)
+	assert.NotContains(t, nc.hostMap.Hosts, hostinfo.vpnAddrs[0],
+		"tunnel must be closed once the hysteresis threshold is reached")
+	assert.Equal(t, before+1, metrics.GetOrRegisterCounter(metricPQTunnelClosedPolicy, nil).Count(),
+		"pq.tunnel_closed_policy must increment on the gated close")
+}
+
+// D1: a transient required-mode miss that recovers before the threshold
+// must reset the hysteresis counter (no blackout on a single blip).
+func Test_tryRehandshake_RequiredMissResetsOnRecovery(t *testing.T) {
+	denied := stubPQPolicy{err: pq.ErrPolicyDenied}
+	nc, hostinfo := newCMForPQTest(t, denied, header.HandshakeIXPSK2)
+
+	// One miss (below threshold): tunnel held, counter at 1.
+	nc.tryRehandshake(hostinfo)
+	require.Equal(t, 1, hostinfo.pqPolicyMisses)
+	require.Contains(t, nc.hostMap.Hosts, hostinfo.vpnAddrs[0])
+
+	// PSK comes back: policy now satisfied (IXPSK2). Counter resets.
+	nc.intf.pki.pqPolicy.Store(&pqPolicyHolder{p: stubPQPolicy{subtype: pq.SubtypePerPeer}})
+	nc.tryRehandshake(hostinfo)
+	assert.Equal(t, 0, hostinfo.pqPolicyMisses, "satisfied policy must reset the miss counter")
+	assert.Contains(t, nc.hostMap.Hosts, hostinfo.vpnAddrs[0], "tunnel stays up after recovery")
 }

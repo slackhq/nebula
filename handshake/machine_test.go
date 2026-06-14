@@ -1,6 +1,7 @@
 package handshake
 
 import (
+	"bytes"
 	"net/netip"
 	"testing"
 	"time"
@@ -443,7 +444,7 @@ func TestMachineThreeMessagePattern(t *testing.T) {
 		cert.Version2,
 		initCS.getCredential, v,
 		func() (uint32, error) { return 1000, nil },
-		true, header.HandshakeXXPSK0,
+		true, header.HandshakeXXPSK0, nil, nil,
 	)
 	require.NoError(t, err)
 
@@ -451,7 +452,7 @@ func TestMachineThreeMessagePattern(t *testing.T) {
 		cert.Version2,
 		respCS.getCredential, v,
 		func() (uint32, error) { return 2000, nil },
-		false, header.HandshakeXXPSK0,
+		false, header.HandshakeXXPSK0, nil, nil,
 	)
 	require.NoError(t, err)
 
@@ -518,7 +519,7 @@ func TestMachineExpiredCert(t *testing.T) {
 	expiredCS := &testCertState{
 		version: cert.Version2,
 		creds: map[cert.Version]*Credential{
-			cert.Version2: NewCredential(expCert, expHsBytes, expKey, ncs),
+			cert.Version2: NewCredential(expCert, expHsBytes, expKey, ncs, nil),
 		},
 	}
 
@@ -548,7 +549,7 @@ func TestMachineNoCertNetworks(t *testing.T) {
 	noNetCS := &testCertState{
 		version: cert.Version2,
 		creds: map[cert.Version]*Credential{
-			cert.Version2: NewCredential(ca, caHsBytes, caKey, ncs),
+			cert.Version2: NewCredential(ca, caHsBytes, caKey, ncs, nil),
 		},
 	}
 
@@ -614,8 +615,8 @@ func TestMachineVersionNegotiation(t *testing.T) {
 		return &testCertState{
 			version: cert.Version1,
 			creds: map[cert.Version]*Credential{
-				cert.Version1: NewCredential(respCertV1, respHsV1, respKey, ncs),
-				cert.Version2: NewCredential(respCertV2, respHsV2, respKey, ncs),
+				cert.Version1: NewCredential(respCertV1, respHsV1, respKey, ncs, nil),
+				cert.Version2: NewCredential(respCertV2, respHsV2, respKey, ncs, nil),
 			},
 		}
 	}
@@ -662,7 +663,7 @@ func TestMachineVersionNegotiation(t *testing.T) {
 		respCS := &testCertState{
 			version: cert.Version1,
 			creds: map[cert.Version]*Credential{
-				cert.Version1: NewCredential(respCert, respHs, respKey, ncs),
+				cert.Version1: NewCredential(respCert, respHs, respKey, ncs, nil),
 			},
 		}
 
@@ -677,4 +678,421 @@ func TestMachineVersionNegotiation(t *testing.T) {
 		assert.Equal(t, cert.Version1, respResult.MyCert.Version(),
 			"responder should keep V1 when V2 not available")
 	})
+}
+
+// TestMachineIXPSK_HappyPath verifies that when both peers carry the same
+// 32-byte PQ PSK, the IX handshake completes and produces working session
+// keys. flynn/noise rewrites the protocol_name from Noise_IX_... to
+// Noise_IXpsk0_... when PresharedKey is non-empty, but the wire format that
+// nebula cares about (subtype byte, packet sizes) is unchanged.
+func TestMachineIXPSK_HappyPath(t *testing.T) {
+	ca, _, caKey, _ := ct.NewTestCaCert(
+		cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil,
+	)
+	caPool := ct.NewTestCAPool(ca)
+
+	psk := make([]byte, 32)
+	for i := range psk {
+		psk[i] = byte(i)
+	}
+
+	initCS := newTestCertStateWithPSK(t, ca, caKey, "initiator",
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")},
+		noise.CipherChaChaPoly, psk)
+	respCS := newTestCertStateWithPSK(t, ca, caKey, "responder",
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")},
+		noise.CipherChaChaPoly, psk)
+
+	initR, respR := doFullHandshake(t, initCS, respCS, caPool)
+
+	assert.Equal(t, "responder", initR.RemoteCert.Certificate.Name())
+	assert.Equal(t, "initiator", respR.RemoteCert.Certificate.Name())
+
+	ct1, err := initR.EKey.Encrypt(nil, nil, []byte("hello-pq"))
+	require.NoError(t, err)
+	pt1, err := respR.DKey.Decrypt(nil, nil, ct1)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("hello-pq"), pt1)
+}
+
+// TestMachineIXPSK_Mismatch verifies that if the two peers disagree on the
+// PSK (or one has it and the other does not), the handshake fails before
+// any session keys are produced. This is the safety net for a misconfigured
+// or partially-rolled-out mesh.
+func TestMachineIXPSK_Mismatch(t *testing.T) {
+	ca, _, caKey, _ := ct.NewTestCaCert(
+		cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil,
+	)
+	caPool := ct.NewTestCAPool(ca)
+	v := testVerifier(caPool)
+
+	pskA := make([]byte, 32)
+	for i := range pskA {
+		pskA[i] = 0xAA
+	}
+	pskB := make([]byte, 32)
+	for i := range pskB {
+		pskB[i] = 0xBB
+	}
+
+	// wantErr pins each failure to the layer it must surface at. When
+	// both sides run psk0 (or only the responder does), the responder
+	// decrypts msg1 with a PSK-derived key and the disagreement is an
+	// AEAD failure inside noise. When only the initiator has a PSK the
+	// responder runs plain IX — msg1's payload reads as undecrypted
+	// garbage and fails at payload unmarshal instead. Either way the
+	// handshake must die before key derivation; these substrings catch
+	// a regression that silently moves (or removes) the failure.
+	cases := []struct {
+		name             string
+		initPSK, respPSK []byte
+		wantErr          string
+	}{
+		{"different PSKs", pskA, pskB, "noise ReadMessage"},
+		{"only initiator has PSK", pskA, nil, "unmarshal handshake"},
+		{"only responder has PSK", nil, pskA, "noise ReadMessage"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			initCS := newTestCertStateWithPSK(t, ca, caKey, "initiator",
+				[]netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")},
+				noise.CipherChaChaPoly, tc.initPSK)
+			respCS := newTestCertStateWithPSK(t, ca, caKey, "responder",
+				[]netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")},
+				noise.CipherChaChaPoly, tc.respPSK)
+
+			initM := newTestMachine(t, initCS, v, true, 1000)
+			respM := newTestMachine(t, respCS, v, false, 2000)
+
+			msg1, err := initM.Initiate(nil)
+			require.NoError(t, err)
+
+			_, _, err = respM.ProcessPacket(nil, msg1)
+			require.Error(t, err, "responder must reject msg1 when PSKs disagree")
+			assert.Contains(t, err.Error(), tc.wantErr,
+				"PSK disagreement must fail at the expected layer")
+		})
+	}
+
+	_ = noiseutil.CipherAESGCM // keep import alive for future PSK+AES test
+}
+
+// TestMachineIXPSK2_HappyPath exercises the per-peer PSK path. Initiator
+// presets the PSK keyed by the responder's static; responder learns the
+// initiator's static from msg1 and looks up the matching PSK before
+// producing msg2.
+func TestMachineIXPSK2_HappyPath(t *testing.T) {
+	ca, _, caKey, _ := ct.NewTestCaCert(
+		cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil,
+	)
+	caPool := ct.NewTestCAPool(ca)
+	v := testVerifier(caPool)
+
+	psk := make([]byte, 32)
+	for i := range psk {
+		psk[i] = 0x42
+	}
+
+	// Both sides share the same lookup func: any peer-static -> the test
+	// PSK. Real deployments key by SHA-256(peer-static); this stub is
+	// sufficient to exercise the placement-2 wiring. The peer-cert arg
+	// is ignored at this layer of the test.
+	// Returns a copy so that wipeBytes in buildHandshakeState / injectResponderPSK
+	// does not zero the test's underlying psk variable (mirroring real providers
+	// which always return freshly-allocated copies).
+	lookup := func([]byte, cert.Certificate) []byte { return append([]byte{}, psk...) }
+
+	initCS := newTestCertStateWithPSKLookup(t, ca, caKey, "init",
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")},
+		noise.CipherChaChaPoly, lookup)
+	respCS := newTestCertStateWithPSKLookup(t, ca, caKey, "resp",
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")},
+		noise.CipherChaChaPoly, lookup)
+
+	respStatic := respCS.creds[cert.Version2].Cert.PublicKey()
+
+	initM := newTestMachineWithSubtype(t, initCS, v, true, 1000, header.HandshakeIXPSK2, respStatic)
+	respM := newTestMachineWithSubtype(t, respCS, v, false, 2000, header.HandshakeIXPSK2, nil)
+
+	msg1, err := initM.Initiate(nil)
+	require.NoError(t, err)
+
+	resp, respResult, err := respM.ProcessPacket(nil, msg1)
+	require.NoError(t, err)
+	require.NotNil(t, respResult, "responder should complete on msg2 send")
+	require.NotEmpty(t, resp)
+
+	_, initResult, err := initM.ProcessPacket(nil, resp)
+	require.NoError(t, err)
+	require.NotNil(t, initResult, "initiator should complete on msg2 read")
+
+	// Verify session keys actually work end-to-end with the PSK mixed in.
+	ct1, err := initResult.EKey.Encrypt(nil, nil, []byte("psk2-hello"))
+	require.NoError(t, err)
+	pt1, err := respResult.DKey.Decrypt(nil, nil, ct1)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("psk2-hello"), pt1)
+}
+
+// TestMachineIXPSK2_ResponderMissingPSK confirms that a responder which has
+// no PSK configured for the calling peer rejects the handshake rather than
+// silently downgrading.
+func TestMachineIXPSK2_ResponderMissingPSK(t *testing.T) {
+	ca, _, caKey, _ := ct.NewTestCaCert(
+		cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil,
+	)
+	caPool := ct.NewTestCAPool(ca)
+	v := testVerifier(caPool)
+
+	psk := make([]byte, 32)
+	// Initiator has a PSK keyed by responder static.
+	initLookup := func([]byte, cert.Certificate) []byte { return append([]byte{}, psk...) }
+	// Responder lookup returns nil for all peers — simulating "no PSK file
+	// matched the initiator's static fingerprint".
+	respLookup := func([]byte, cert.Certificate) []byte { return nil }
+
+	initCS := newTestCertStateWithPSKLookup(t, ca, caKey, "init",
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")},
+		noise.CipherChaChaPoly, initLookup)
+	respCS := newTestCertStateWithPSKLookup(t, ca, caKey, "resp",
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")},
+		noise.CipherChaChaPoly, respLookup)
+
+	respStatic := respCS.creds[cert.Version2].Cert.PublicKey()
+	initM := newTestMachineWithSubtype(t, initCS, v, true, 1000, header.HandshakeIXPSK2, respStatic)
+	respM := newTestMachineWithSubtype(t, respCS, v, false, 2000, header.HandshakeIXPSK2, nil)
+
+	msg1, err := initM.Initiate(nil)
+	require.NoError(t, err)
+
+	_, _, err = respM.ProcessPacket(nil, msg1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no psk configured")
+}
+
+// TestMachineIXPSK2_PSKMismatch confirms that two peers carrying different
+// PSKs for each other still produce an authentication failure on msg2 read,
+// not silently completing.
+func TestMachineIXPSK2_PSKMismatch(t *testing.T) {
+	ca, _, caKey, _ := ct.NewTestCaCert(
+		cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil,
+	)
+	caPool := ct.NewTestCAPool(ca)
+	v := testVerifier(caPool)
+
+	pskA := make([]byte, 32)
+	pskB := make([]byte, 32)
+	for i := range pskA {
+		pskA[i] = 0xAA
+		pskB[i] = 0xBB
+	}
+
+	initCS := newTestCertStateWithPSKLookup(t, ca, caKey, "init",
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")},
+		noise.CipherChaChaPoly, func([]byte, cert.Certificate) []byte { return append([]byte{}, pskA...) })
+	respCS := newTestCertStateWithPSKLookup(t, ca, caKey, "resp",
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")},
+		noise.CipherChaChaPoly, func([]byte, cert.Certificate) []byte { return append([]byte{}, pskB...) })
+
+	respStatic := respCS.creds[cert.Version2].Cert.PublicKey()
+	initM := newTestMachineWithSubtype(t, initCS, v, true, 1000, header.HandshakeIXPSK2, respStatic)
+	respM := newTestMachineWithSubtype(t, respCS, v, false, 2000, header.HandshakeIXPSK2, nil)
+
+	msg1, err := initM.Initiate(nil)
+	require.NoError(t, err)
+
+	// msg1 has no PSK token (placement 2 puts it on msg2), so responder
+	// reads msg1 + injects its own (wrong) PSK + writes msg2 successfully.
+	resp, _, err := respM.ProcessPacket(nil, msg1)
+	require.NoError(t, err)
+	require.NotEmpty(t, resp)
+
+	// Initiator hits the PSK mismatch when it processes msg2: the PSK
+	// token at the end mixes pskA on initiator's side, pskB on responder's
+	// side, so the AEAD tag on msg2's payload fails.
+	_, _, err = initM.ProcessPacket(nil, resp)
+	require.Error(t, err)
+}
+
+// newPSK2TestPair builds a matched IXPSK2 initiator/responder pair where
+// the initiator is pre-seeded with initiatorPSK and the responder's lookup
+// returns responderPSK. The two PSKs may differ (epoch-skew scenarios).
+func newPSK2TestPair(t *testing.T, initiatorPSK, responderPSK []byte) (init, resp *Machine) {
+	t.Helper()
+	ca, _, caKey, _ := ct.NewTestCaCert(
+		cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil,
+	)
+	caPool := ct.NewTestCAPool(ca)
+	v := testVerifier(caPool)
+
+	// Return copies so wipeBytes does not zero the caller's psk slices
+	// (mirroring real providers which always return freshly-allocated copies).
+	initLookup := func([]byte, cert.Certificate) []byte { return append([]byte{}, initiatorPSK...) }
+	respLookup := func([]byte, cert.Certificate) []byte { return append([]byte{}, responderPSK...) }
+
+	initCS := newTestCertStateWithPSKLookup(t, ca, caKey, "init",
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")},
+		noise.CipherChaChaPoly, initLookup)
+	respCS := newTestCertStateWithPSKLookup(t, ca, caKey, "resp",
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")},
+		noise.CipherChaChaPoly, respLookup)
+
+	respStatic := respCS.creds[cert.Version2].Cert.PublicKey()
+
+	init = newTestMachineWithSubtype(t, initCS, v, true, 1000, header.HandshakeIXPSK2, respStatic)
+	resp = newTestMachineWithSubtype(t, respCS, v, false, 2000, header.HandshakeIXPSK2, nil)
+	return
+}
+
+// newPSK2TestPairWithPrev is like newPSK2TestPair but also installs a
+// previous-epoch PSK lookup on the responder's credential. The initiator's
+// PSK and the responder's current and previous PSKs may all differ.
+func newPSK2TestPairWithPrev(t *testing.T, initiatorPSK, respCurrentPSK, respPrevPSK []byte) (init, resp *Machine) {
+	t.Helper()
+	ca, _, caKey, _ := ct.NewTestCaCert(
+		cert.Version2, cert.Curve_CURVE25519, time.Time{}, time.Time{}, nil, nil, nil,
+	)
+	caPool := ct.NewTestCAPool(ca)
+	v := testVerifier(caPool)
+
+	// Return copies so wipeBytes does not zero the caller's psk slices
+	// (mirroring real providers which always return freshly-allocated copies).
+	initLookup := func([]byte, cert.Certificate) []byte { return append([]byte{}, initiatorPSK...) }
+	respLookup := func([]byte, cert.Certificate) []byte { return append([]byte{}, respCurrentPSK...) }
+	respPrevLookup := func([]byte, cert.Certificate) []byte { return append([]byte{}, respPrevPSK...) }
+
+	initCS := newTestCertStateWithPSKLookup(t, ca, caKey, "init",
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.1/24")},
+		noise.CipherChaChaPoly, initLookup)
+	respCS := newTestCertStateWithPSKLookup(t, ca, caKey, "resp",
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")},
+		noise.CipherChaChaPoly, respLookup)
+
+	// Install prev lookup on the responder's credential.
+	respCS.creds[cert.Version2].SetPSKLookupPrev(respPrevLookup)
+
+	respStatic := respCS.creds[cert.Version2].Cert.PublicKey()
+
+	init = newTestMachineWithSubtype(t, initCS, v, true, 1000, header.HandshakeIXPSK2, respStatic)
+	resp = newTestMachineWithSubtype(t, respCS, v, false, 2000, header.HandshakeIXPSK2, nil)
+	return
+}
+
+func TestMachine_SwapPSKHealsInitiator(t *testing.T) {
+	// Initiator configured with WRONG psk (epoch B), responder with
+	// epoch A. msg2 must fail, then succeed after SwapPSK(epochA) on
+	// the SAME msg2 bytes — proving noise rollback + swap works.
+	pskA := bytes.Repeat([]byte{0xA1}, 32)
+	pskB := bytes.Repeat([]byte{0xB2}, 32)
+
+	init, resp := newPSK2TestPair(t, pskB, pskA)
+
+	msg1, err := init.Initiate(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg2, result, err := resp.ProcessPacket(nil, msg1)
+	if err != nil || result == nil {
+		t.Fatalf("responder: %v", err)
+	}
+
+	_, _, err = init.ProcessPacket(nil, msg2)
+	if err == nil {
+		t.Fatal("expected msg2 AEAD failure with mismatched PSK")
+	}
+	if init.Failed() {
+		t.Fatal("machine must survive a msg2 AEAD failure (noise rolls back)")
+	}
+
+	if err := init.SwapPSK(pskA); err != nil {
+		t.Fatal(err)
+	}
+	_, result, err = init.ProcessPacket(nil, msg2)
+	if err != nil || result == nil {
+		t.Fatalf("after SwapPSK, same msg2 must complete: %v", err)
+	}
+}
+
+func TestMachine_SwapPSKGuards(t *testing.T) {
+	pskA := bytes.Repeat([]byte{0xA1}, 32)
+	init, resp := newPSK2TestPair(t, pskA, pskA)
+	if err := resp.SwapPSK(pskA); err == nil {
+		t.Fatal("SwapPSK on responder must error")
+	}
+	if err := init.SwapPSK(pskA); err == nil {
+		t.Fatal("SwapPSK before Initiate must error")
+	}
+	// After a successful swap, a second swap must error (one per machine).
+	msg1, _ := init.Initiate(nil)
+	_ = msg1
+	if err := init.SwapPSK(pskA); err != nil {
+		t.Fatalf("first swap while waiting for msg2: %v", err)
+	}
+	if err := init.SwapPSK(pskA); err == nil {
+		t.Fatal("second SwapPSK must error")
+	}
+
+	// Post-completion: run a full successful IXPSK2 handshake, then verify
+	// that SwapPSK on the completed initiator errors (MessageIndex is 2,
+	// not 1, so the machine is no longer waiting for msg2).
+	init2, resp2 := newPSK2TestPair(t, pskA, pskA)
+	msg1b, err := init2.Initiate(nil)
+	if err != nil {
+		t.Fatalf("Initiate: %v", err)
+	}
+	msg2b, respResult, err := resp2.ProcessPacket(nil, msg1b)
+	if err != nil || respResult == nil {
+		t.Fatalf("responder ProcessPacket: %v", err)
+	}
+	_, initResult, err := init2.ProcessPacket(nil, msg2b)
+	if err != nil || initResult == nil {
+		t.Fatalf("initiator ProcessPacket: %v", err)
+	}
+	// Handshake is complete; MessageIndex is 2. SwapPSK must now reject.
+	if err := init2.SwapPSK(pskA); err == nil {
+		t.Fatal("SwapPSK after completion must error (MessageIndex is 2, not 1)")
+	}
+}
+
+func TestMachine_ResponderPrefersPreviousPSK(t *testing.T) {
+	pskOld := bytes.Repeat([]byte{0x01}, 32)
+	pskNew := bytes.Repeat([]byte{0x02}, 32)
+	// Initiator holds OLD epoch; responder current=NEW, prev=OLD.
+	init, resp := newPSK2TestPairWithPrev(t, pskOld, pskNew, pskOld)
+	resp.SetResponderPSKChooser(func(peerStatic []byte) bool { return true })
+
+	msg1, err := init.Initiate(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg2, result, err := resp.ProcessPacket(nil, msg1)
+	if err != nil || result == nil {
+		t.Fatalf("responder with prev-chooser: %v", err)
+	}
+	if !resp.UsedPreviousPSK() {
+		t.Fatal("UsedPreviousPSK must report true")
+	}
+	if _, result, err = init.ProcessPacket(nil, msg2); err != nil || result == nil {
+		t.Fatalf("initiator must accept msg2 mixed with previous epoch: %v", err)
+	}
+}
+
+func TestMachine_ResponderChooserFallsBackToCurrent(t *testing.T) {
+	psk := bytes.Repeat([]byte{0x03}, 32)
+	// Chooser says "use previous" but responder cred has NO prev lookup:
+	// must fall back to current and complete normally.
+	init, resp := newPSK2TestPair(t, psk, psk)
+	resp.SetResponderPSKChooser(func([]byte) bool { return true })
+	msg1, _ := init.Initiate(nil)
+	msg2, result, err := resp.ProcessPacket(nil, msg1)
+	if err != nil || result == nil {
+		t.Fatalf("responder must fall back to current psk: %v", err)
+	}
+	if resp.UsedPreviousPSK() {
+		t.Fatal("fallback to current must not report UsedPreviousPSK")
+	}
+	if _, result, err = init.ProcessPacket(nil, msg2); err != nil || result == nil {
+		t.Fatalf("handshake must complete: %v", err)
+	}
 }

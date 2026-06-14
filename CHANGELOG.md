@@ -7,6 +7,166 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- PQ: post-quantum PSK handshake (IXPSK2) that mixes a 32-byte
+  rosenpass-derived PSK into the Noise key schedule for
+  harvest-now-decrypt-later (HNDL) resistance. Two deployment paths:
+  the default build expects an external rosenpass sidecar (the Rust
+  reference daemon from https://rosenpass.eu, the protocol and
+  implementation have been audited by Cure53 via NLnet) writing
+  PSKs into `pki.pq_psk_dir`; the unaudited Go port
+  (`cunicu.li/go-rosenpass`) is available behind the
+  `rosenpass_embedded` build tag for labs and CI. See
+  `docs/operator-sidecar-rosenpass.md` for the operator walkthrough.
+- PQ: cert v2 `rosenpassPubKeySha256` extension binds a peer's
+  rosenpass public key to its nebula identity at the CA. New
+  `nebula-cert sign` flags `-rp-pubkey-sha256` (raw hex) and
+  `-rp-pubkey-from <path>` (computes the hash from a public-key
+  file). The extension is the sole trust binding for the rosenpass
+  identity.
+- PQ: `pq.rp_binding.mode` tri-state (`off`/`warn`/`enforce`,
+  default `warn`) cross-checks the cert extension against optional
+  `<peer-hash>.rpinfo` companion files in `pki.pq_psk_dir` at PSK
+  lookup time. Hot-reloadable on SIGHUP. Default `warn` is fully
+  backwards compatible.
+- PQ: lighthouse `HostUpdateNotification` carries optional
+  `RosenpassPubkeySha256`, `RosenpassPort`, and `DiscoveryPort`
+  fields so peers can learn each other's rosenpass identity and
+  endpoint over the existing lighthouse channel, enabling live PQ
+  upgrade in heterogeneous-port fleets without operator
+  pre-distribution. New top-level keys `pq.rosenpass_port` and
+  `pq.discovery_port` set the advertised values. Gossip is a
+  routing convenience plus secondary identity hint; the CA-signed
+  cert extension remains authoritative — gossip that disagrees
+  with the cert is refused under `pq.rp_binding.mode=enforce`. Old
+  peers omit and ignore the new fields.
+- PQ: per-cert-group policy overrides via `pq.group_overrides` and
+  `pq.group_order`. Groups are CA-signed (the same field firewall
+  rules consume), so an adversary cannot spoof their way into a
+  stricter or looser bucket. Per-group `disabled` is accepted for
+  legacy / upstream-vanilla peers mid-migration; the mesh-wide
+  `pq.mode` does not.
+- PQ: `pq.embedded_rosenpass.listen_host` and
+  `pq.embedded_rosenpass.discovery_listen_host` override the bind
+  address for the embedded UDP and TCP discovery listeners. Default
+  (bind to the cert's primary nebula tun IP) is unchanged; nebula
+  refuses to start with `tun.disabled: true` +
+  `embedded_rosenpass.enabled: true` unless `listen_host` is set.
+- PQ: `pq.embedded_rosenpass.strict_identity` (default off) and PQ
+  failure metrics for observability of PSK lookup/binding failures.
+- PQ: sidecar staleness watchdog. `pki.pq_psk_stale_warn` (duration,
+  default off) warns when `pki.pq_psk_dir` content stops changing
+  while PSKs are loaded — the nebula-side signal for a dead rosenpass
+  sidecar whose last-written files still look healthy. New
+  `pq.file.snapshot_age_seconds` gauge (always exported) and
+  `pq.file.snapshot_stale` counter.
+- PQ: IXPSK2 handshake timeouts are now counted separately
+  (`pq.handshake_ixpsk2_timed_out`) and the timeout log carries a
+  `pqHint` pointing at PSK epoch mismatch, since a mismatched-PSK
+  wedge is indistinguishable from a dead peer at the initiator.
+- PQ: multi-epoch PSK tolerance heals rosenpass rotation skew
+  automatically, with no configuration. The `FileProvider` retains the
+  previous epoch's PSK per peer in memory (fixed window of 2). The
+  initiator heals a behind responder by swapping in the previous-epoch
+  PSK and re-processing the same msg2 packet (zero extra round trip);
+  the responder heals a behind initiator via a bounded timing-hint
+  cache that answers a rapid msg1 retransmit with its previous epoch.
+  Healing never downgrades to a non-PQ handshake. New counters
+  `pq.handshake_ixpsk2_msg2_reject` and `pq.psk_prev_epoch_recovered`.
+  Cost: a compromised PSK stays acceptable for one extra rotation
+  period (dies at k+2 instead of k+1). See the operator guide's
+  "Rotation skew and multi-epoch tolerance" section.
+- PQ: `pq-status` built-in ssh command reports per-peer PQ state —
+  handshake subtype, PSK / previous-epoch presence, the live binding
+  verdict (cert extension vs local hint), and per-peer IXPSK2
+  reject/timeout counts. `-json`/`-pretty` add a provider-level view.
+- PQ: transient PSK copies are zeroed (best-effort) immediately after
+  installation into the Noise handshake state. Nebula also logs an Info
+  advisory at startup when `pki.pq_psk_dir` is not on a tmpfs/ramfs,
+  since PSK files on persistent media survive disk imaging and re-open
+  the harvest-now-decrypt-later window.
+
+### Changed
+
+- PQ: embedded rosenpass support is now gated behind the
+  `rosenpass_embedded` build tag. Default builds ship without the
+  unaudited `cunicu.li/go-rosenpass` dependency; rebuild with
+  `go build -tags rosenpass_embedded ./cmd/nebula` to keep the
+  embedded path. Setting `pq.embedded_rosenpass.enabled: true` on a
+  default-build binary logs a warning at startup and continues —
+  PSKs still flow through `pki.pq_psk_dir` if configured.
+- PQ: embedded rosenpass startup is deferred until after the tun is
+  up and listener bind probes are now cheap (`net.ListenUDP` +
+  immediate close), so the ~1 MB Classic McEliece keypair is loaded
+  exactly once instead of on every bind retry.
+- PQ: the embedded coordinator dropped its
+  generation-counter/cooldown/backoff state machine in favour of
+  eager fire-and-forget Notify handling with bounded pending-replay
+  (capped at 10 per fetch goroutine) and re-registration on
+  gossiped endpoint or port changes.
+- PQ: internal refactors — `composedProvider` rewritten on a
+  single-goroutine `reflect.Select` loop, `GroupPolicy` folded into
+  `DefaultPolicy.Overrides`, `pq/rposvc.ServiceAPI` extracted for
+  testability, and a slog/godoc consistency sweep across `pq` and
+  `pq/rposvc`.
+- PQ: gossip wire — the peer's PQ identity (binding hash, provider
+  port, discovery port) now travels in `HostUpdateNotification`
+  protobuf field 11. The legacy fields 8/9/10 are still emitted and
+  read for one release for mixed-version interop, so rolling upgrades
+  across the fleet are safe in either direction.
+- PQ: config — new canonical keys `pq.provider_port`,
+  `pq.discovery_port`, and `pq.psk_binding.mode`. The previous keys
+  `pq.rosenpass_port` and `pq.rp_binding.mode` are still accepted as
+  deprecated aliases.
+- PQ: `nebula-cert print -json` now emits the cert binding under both
+  `pqPskBinding` (new canonical) and `rosenpassPubKeySha256` (kept for
+  existing parsers); same hex value. `nebula-cert sign` gains the
+  canonical `-pq-psk-binding` flag aliasing `-rp-pubkey-sha256`.
+
+### Removed
+
+- PQ: `pq.mode: tofu` and the per-peer rosenpass-pubkey TOFU pin in
+  `pq.Store`. The cert-v2 `rosenpassPubKeySha256` extension is now
+  the sole trust binding. Operators with `pq.mode: tofu` in config
+  must switch to `opportunistic` (or `required` if every peer has
+  PSK material) — the parser rejects `tofu` with a remediation
+  hint. Peers whose certs lack the extension fall through to
+  IXPSK0 / non-PQ handshakes until their certs are rotated.
+
+### Security
+
+- PQ: `FileProvider` PSK rescan path closed an
+  `Lstat`-then-`ReadFile` TOCTOU by opening with `O_NOFOLLOW` and
+  skipping non-regular files; symlinks pointing outside the
+  configured directory are rejected.
+- PQ: `pq.rp_binding.mode=enforce` decision tree hardened against
+  peer-gossip DoS — a gossiped hash never causes a binding to be
+  accepted or refused; only the CA-signed cert and the on-disk
+  `.rpinfo` participate in the enforcement decision. Gossip is
+  consulted only as a secondary identity hint when cert extension
+  and `.rpinfo` already agree.
+- handshake: demoted the address-family mismatch log from ERROR to
+  Debug to stop a remote peer triggering log-volume amplification
+  by sending v6 packets to a v4-only listener (or vice versa).
+
+### Fixed
+
+- PQ: the PSK-lookup closure is now installed on the handshake
+  layer unconditionally, not gated on `HasPSK()` at construction
+  time, so a sidecar that comes up after nebula start is honoured
+  on the next handshake instead of requiring a HUP.
+- PQ: gossiped peer endpoints/ports trigger re-registration of the
+  rosenpass coordinator entry, so a peer that moves between
+  addresses (or that comes up after us with corrected port
+  config) is paired up on the next HostUpdate rather than waiting
+  for the next manual rekey.
+- PQ: `pq/rposvc` Coordinator queues a single pending `Notify` while
+  a fetch is in-flight and replays it when the fetch completes,
+  bounded by `pendingReplayCap=10`, so a peer whose gossip churns
+  rapidly cannot pin a fetch goroutine indefinitely while still
+  guaranteeing the latest gossip is honoured.
+
 ## [1.10.3] - 2026-02-06
 
 ### Security
