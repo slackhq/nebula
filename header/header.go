@@ -62,6 +62,12 @@ const (
 const (
 	HandshakeIXPSK0 MessageSubType = 0
 	HandshakeXXPSK0 MessageSubType = 1
+	// HandshakeIXPSK2 is Noise IX with the preshared-key token at placement
+	// 2 (end of msg2). Unlike psk0, this does not require either party to
+	// know the peer's identity at handshake start — the responder reads
+	// msg1, identifies the peer from the static key it carries, and looks
+	// up the matching per-peer PSK before producing msg2.
+	HandshakeIXPSK2 MessageSubType = 2
 )
 
 var ErrHeaderTooShort = errors.New("header is too short")
@@ -84,6 +90,7 @@ var subTypeMap = map[MessageType]*map[MessageSubType]string{
 	CloseTunnel: &subTypeNoneMap,
 	Handshake: {
 		HandshakeIXPSK0: "ix_psk0",
+		HandshakeIXPSK2: "ix_psk2",
 	},
 	Control: &subTypeNoneMap,
 }

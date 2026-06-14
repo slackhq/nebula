@@ -19,6 +19,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/logging"
+	"github.com/slackhq/nebula/pq"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
 )
@@ -63,6 +64,23 @@ type LightHouse struct {
 	ifce         EncWriter
 	nebulaPort   uint32 // 32 bits because protobuf does not have a uint16
 
+	// rpPort is the UDP port the local PQ-PSK provider instance
+	// listens on, gossiped to peers in HostUpdate so they can
+	// (eventually) auto-peer the provider without out-of-band port
+	// distribution. 0 disables the gossip field — old peers and
+	// nodes without a provider set up will simply not advertise.
+	// 32 bits to match the proto wire type.
+	rpPort uint32
+
+	// discoveryPort is the TCP port the local provider discovery HTTP
+	// service listens on, gossiped to peers in HostUpdate alongside
+	// rpPort so heterogeneous-port deployments (peers running
+	// different discovery_port values) can fetch each other's provider
+	// pubkey. 0 disables the gossip field. Consumed by the embedded
+	// provider's fetchAndRegister via PKI.GossipedDiscoveryPortFor —
+	// see LookupGossipedDiscoveryPort.
+	discoveryPort uint32
+
 	advertiseAddrs atomic.Pointer[[]netip.AddrPort]
 
 	// Addr's of relays that can be used by peers to access me
@@ -72,6 +90,27 @@ type LightHouse struct {
 	queryChan     chan netip.Addr
 
 	calculatedRemotes atomic.Pointer[bart.Table[[]*calculatedRemote]] // Maps VpnAddr to []*calculatedRemote
+
+	// gossipChangedCB is fired when an inbound HostUpdate stores a
+	// freshly-changed provider routing field for a peer (today: the
+	// UDP port). The embedded provider build wires this to PKI.
+	// GossipedBindingChanged so the provider can re-register the
+	// peer at the corrected port. Atomic pointer so the callback can
+	// be installed/cleared from outside the lighthouse lock; the
+	// handleHostUpdateNotification path loads it after releasing all
+	// inner locks to keep the callback off any lighthouse mutex.
+	gossipChangedCB atomic.Pointer[func(netip.Addr)]
+
+	// pqIdentity encodes/decodes the opaque PqPskIdentity blob gossiped
+	// in HostUpdate. Core ferries the bytes verbatim and never parses
+	// the layout; the active PQ-PSK provider's codec gives them meaning.
+	// Atomic pointer (mirroring gossipChangedCB) so the codec can be
+	// installed from outside the lighthouse lock at any time without
+	// racing the SendUpdate (Encode) / HandleRequest (Decode) read
+	// paths. Stores the address of an interface value. A nil/unset
+	// pointer is read as pq.NoopIdentityCodec{} (advertise/parse
+	// nothing); main() injects the provider-backed codec.
+	pqIdentity atomic.Pointer[pq.IdentityCodec]
 
 	metrics *MessageMetrics
 	l       *slog.Logger
@@ -95,6 +134,17 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		nebulaPort = uint32(uPort.Port())
 	}
 
+	// The two PQ-PSK provider ports gossiped to peers in HostUpdate:
+	// the provider UDP port (so a gossiped hash can later be paired
+	// with a known port for auto-peering) and the discovery HTTP port
+	// (so the receive-side provider can fetch our pubkey at the right
+	// port in heterogeneous-port fleets). 0 disables either gossip
+	// field; the receive side treats 0 as "fall back to the local
+	// port" (homogeneous-fleet behaviour). The provider-specific
+	// config keys (and their legacy aliases) are resolved in the
+	// provider layer so core stays provider-agnostic.
+	rpPort, discPort := pqGossipPorts(l, c)
+
 	h := LightHouse{
 		ctx:                ctx,
 		amLighthouse:       amLighthouse,
@@ -102,6 +152,8 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		myVpnNetworksTable: cs.myVpnNetworksTable,
 		addrMap:            make(map[netip.Addr]*RemoteList),
 		nebulaPort:         nebulaPort,
+		rpPort:             rpPort,
+		discoveryPort:      discPort,
 		punchy:             p,
 		updateTrigger:      make(chan struct{}, 1),
 		queryChan:          make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 64)),
@@ -166,6 +218,214 @@ func (lh *LightHouse) getCalculatedRemotes() *bart.Table[[]*calculatedRemote] {
 
 func (lh *LightHouse) GetUpdateInterval() int64 {
 	return lh.interval.Load()
+}
+
+// LookupGossipedPQBindingHash returns the peer's most-recently-gossiped
+// PQ-PSK binding hash (lowercase hex), or "" if no claim has been
+// received for any address in the peer's cert. Used by the PSK
+// binding wrapper as a secondary trust source (the cert v2 PQ-PSK
+// binding extension remains the authoritative anchor).
+//
+// The cert may assert multiple VPN addresses; this function walks
+// them in cert order and returns the first non-empty claim. The
+// addrMap stores one RemoteList per peer (shared across all
+// VPN-addresses owned by that peer), so the order rarely matters,
+// but checking all addresses is robust against asymmetric
+// lighthouse caches where one address has been observed but a
+// secondary hasn't.
+func (lh *LightHouse) LookupGossipedPQBindingHash(peerCert cert.Certificate) string {
+	if lh == nil || peerCert == nil {
+		return ""
+	}
+	prefixes := peerCert.Networks()
+	if len(prefixes) == 0 {
+		return ""
+	}
+	lh.RLock()
+	defer lh.RUnlock()
+	for _, p := range prefixes {
+		if rl, ok := lh.addrMap[p.Addr()]; ok && rl != nil {
+			if h := rl.GossipedPQBindingHashHex(); h != "" {
+				return h
+			}
+		}
+	}
+	return ""
+}
+
+// LookupGossipedPQProviderPort returns the peer's most-recently-gossiped
+// provider UDP port for vpnAddr, or 0 if no claim has been
+// received (or the peer is gossiping with port unset). Used by the
+// embedded PQ-PSK provider to route the peer's endpoint at the
+// port the peer actually listens on rather than blindly assuming
+// our local provider port — peers may legitimately run with
+// different ports and gossip is the only conduit for that fact.
+//
+// Unlike LookupGossipedPQBindingHash, this is keyed by a single vpnAddr
+// (the address the provider is registering the peer at) rather
+// than by cert, because the provider already has the vpnAddr in
+// hand from the PeerObserved event and does not need cert-multi-
+// network resolution: the gossiped port is for routing only, and
+// the addrMap's per-peer aliasing means any vpnAddr owned by the
+// peer resolves to the same RemoteList anyway.
+func (lh *LightHouse) LookupGossipedPQProviderPort(vpnAddr netip.Addr) uint16 {
+	if lh == nil || !vpnAddr.IsValid() {
+		return 0
+	}
+	lh.RLock()
+	defer lh.RUnlock()
+	rl, ok := lh.addrMap[vpnAddr]
+	if !ok || rl == nil {
+		return 0
+	}
+	return rl.GossipedPQProviderPort()
+}
+
+// LookupGossipedDiscoveryPort returns the peer's most-recently-
+// gossiped provider discovery TCP port for vpnAddr, or 0 if no claim
+// has been received. Mirrors LookupGossipedPQProviderPort exactly; used by
+// the embedded PQ-PSK provider to route the HTTP pubkey-fetch
+// at the port the peer actually serves on rather than blindly
+// assuming our own local discovery port. Per-vpnAddr keying matches the
+// addrMap's per-peer aliasing (all of a peer's addresses resolve to
+// the same RemoteList), same rationale as LookupGossipedPQProviderPort.
+func (lh *LightHouse) LookupGossipedDiscoveryPort(vpnAddr netip.Addr) uint16 {
+	if lh == nil || !vpnAddr.IsValid() {
+		return 0
+	}
+	lh.RLock()
+	defer lh.RUnlock()
+	rl, ok := lh.addrMap[vpnAddr]
+	if !ok || rl == nil {
+		return 0
+	}
+	return rl.GossipedDiscoveryPort()
+}
+
+// SetGossipChangedCallback installs a callback fired on the
+// HostUpdate receive path whenever a peer's gossiped provider UDP
+// port just took a new value (different from the cached one). Wired
+// by the main bootstrap to PKI.GossipedBindingChanged so the embedded
+// PQ-PSK provider can react to gossip arriving after the
+// handshake has already completed. Passing nil clears the callback.
+//
+// The callback fires AFTER the lighthouse releases all inner locks
+// (am.Unlock, lh.Unlock) so implementations may freely acquire the
+// HostMap lock or call back into the lighthouse without risking
+// recursion. nil receiver is a no-op for symmetry with the other
+// lighthouse APIs.
+func (lh *LightHouse) SetGossipChangedCallback(cb func(netip.Addr)) {
+	if lh == nil {
+		return
+	}
+	if cb == nil {
+		lh.gossipChangedCB.Store(nil)
+		return
+	}
+	lh.gossipChangedCB.Store(&cb)
+}
+
+// SetPQIdentityCodec installs the codec used to encode/decode the opaque
+// PqPskIdentity blob gossiped in HostUpdate. Wired by main() to the active
+// PQ-PSK provider's codec; when unset the read paths default to
+// pq.NoopIdentityCodec (advertise and parse nothing). nil is ignored so the
+// stored codec is never nil.
+//
+// lh.pqIdentity is an atomic.Pointer (like gossipChangedCB), so this setter is
+// safe to call at any time — including concurrently with the SendUpdate
+// (Encode) and HandleRequest (Decode) read paths, e.g. from a config-reload
+// callback after the update worker has already started.
+func (lh *LightHouse) SetPQIdentityCodec(c pq.IdentityCodec) {
+	if lh == nil || c == nil {
+		return
+	}
+	lh.pqIdentity.Store(&c)
+}
+
+// loadPQIdentity atomically loads the installed PqPskIdentity codec, falling
+// back to pq.NoopIdentityCodec{} when none has been set so the Encode/Decode
+// read paths never panic on an unset codec.
+func (lh *LightHouse) loadPQIdentity() pq.IdentityCodec {
+	if cPtr := lh.pqIdentity.Load(); cPtr != nil {
+		return *cPtr
+	}
+	return pq.NoopIdentityCodec{}
+}
+
+// myPQGossip returns our own PQ-PSK binding hash (from the v2 cert,
+// when well-formed), PQ-PSK UDP port, and PQ-PSK discovery TCP port.
+// Used by both SendUpdate (so non-lighthouse peers can announce
+// themselves) and the lighthouse's HostUpdateNotificationAck path (so
+// clients learn the LIGHTHOUSE's PQ-PSK gossip — without this
+// back-channel, non-lighthouse peers have no way to learn the
+// lighthouse's PQ-PSK ports, leaving them pinned to their own cfg
+// fallbacks for the lifetime of the tunnel and breaking ix_psk2 in
+// heterogeneous-port deployments).
+//
+// The hash is returned as nil (and ports are returned independently
+// of hash availability) when the cert lacks the PQ-PSK binding
+// extension or when no v2 cert is available; the receive side treats
+// nil hash + non-zero ports as a valid routing-only gossip update
+// (port fields can be honoured without a hash binding).
+func (lh *LightHouse) myPQGossip() (hash []byte, rpPort, discPort uint32) {
+	if lh == nil {
+		return nil, 0, 0
+	}
+	rpPort = lh.rpPort
+	discPort = lh.discoveryPort
+	if lh.ifce == nil {
+		return nil, rpPort, discPort
+	}
+	cs := lh.ifce.GetCertState()
+	if cs == nil {
+		return nil, rpPort, discPort
+	}
+	myCert := cs.getCertificate(cert.Version2)
+	if myCert == nil {
+		return nil, rpPort, discPort
+	}
+	h := myCert.PqPskBinding()
+	if len(h) != cert.PqPskBindingLen {
+		return nil, rpPort, discPort
+	}
+	return h, rpPort, discPort
+}
+
+// pqIdentityFromDetails extracts the peer's gossiped PQ-PSK binding hash
+// and the two provider ports from a received NebulaMetaDetails, preferring
+// the canonical opaque PqPskIdentity blob (field 11) when present and
+// decodable, and falling back to the deprecated legacy 8/9/10 fields
+// otherwise. This is the backward-compatible read seam: new nodes still
+// understand pre-opaque-blob (master-format) peers that only populate the
+// legacy fields.
+//
+// apply tells the caller whether to forward the result to
+// unlockedSetPQGossip:
+//   - true  for a decodable blob, for the legacy fields, and for a fully
+//     empty update (which is a legitimate retraction the setter must honor
+//     via its clear-on-empty branch).
+//   - false ONLY when a non-empty blob fails to decode AND there are no
+//     legacy fields to fall back to: a corrupt/garbage blob must NOT clear a
+//     valid prior claim, so the caller leaves the per-peer slot untouched.
+//
+// unlockedSetPQGossip itself still validates the hash length and port ranges.
+func pqIdentityFromDetails(codec pq.IdentityCodec, d *NebulaMetaDetails) (hash []byte, rpPort, discPort uint32, apply bool) {
+	if d == nil {
+		return nil, 0, 0, true
+	}
+	if len(d.PqPskIdentity) > 0 {
+		if h, a, b, ok := codec.Decode(d.PqPskIdentity); ok {
+			return h, uint32(a), uint32(b), true
+		}
+		// Non-decodable blob. Fall back to the legacy fields if the peer
+		// also populated them; otherwise treat the garbage as "no usable
+		// info" and leave any prior claim intact (apply=false) rather than
+		// letting corruption masquerade as a retraction.
+		if len(d.RosenpassPubkeySha256) == 0 && d.RosenpassPort == 0 && d.DiscoveryPort == 0 {
+			return nil, 0, 0, false
+		}
+	}
+	return d.RosenpassPubkeySha256, d.RosenpassPort, d.DiscoveryPort, true
 }
 
 func (lh *LightHouse) reload(c *config.C, initial bool) error {
@@ -994,12 +1254,36 @@ func (lh *LightHouse) SendUpdate() {
 					relays = append(relays, netAddrToProtoAddr(r))
 				}
 
+				// Optional PQ-PSK identity gossip. Pulled from our own
+				// cert binding if it's present + well-formed; nil
+				// otherwise so old peers and nodes without PQ-aware
+				// certs simply omit the field (proto3 default). The
+				// codec packs the binding hash plus the two provider
+				// ports into the opaque PqPskIdentity blob; core never
+				// parses the layout. NoopIdentityCodec returns nil so
+				// non-PQ deployments keep the empty-field-8 wire shape.
+				// myPQGossip is the nil-safe extraction shared with the
+				// HostUpdateNotificationAck path.
+				rpHash, rpPort, discPort := lh.myPQGossip()
+
 				msg := NebulaMeta{
 					Type: NebulaMeta_HostUpdateNotification,
 					Details: &NebulaMetaDetails{
 						V4AddrPorts:   v4,
 						V6AddrPorts:   v6,
 						RelayVpnAddrs: relays,
+						// Legacy (deprecated) representation — emitted
+						// unconditionally for pre-opaque-blob peers AND
+						// for ports-only nodes whose cert lacks a binding
+						// (rpHash nil). This is what carries the ports out
+						// when there is no hash, fixing the dropped-ports
+						// regression.
+						RosenpassPubkeySha256: rpHash,
+						RosenpassPort:         rpPort,
+						DiscoveryPort:         discPort,
+						// Canonical opaque blob — preferred by new peers
+						// and future providers.
+						PqPskIdentity: lh.loadPQIdentity().Encode(rpHash, uint16(rpPort), uint16(discPort)),
 					},
 				}
 
@@ -1074,6 +1358,14 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	details.OldRelayVpnAddrs = details.OldRelayVpnAddrs[:0]
 	details.OldVpnAddr = 0
 	details.VpnAddr = nil
+	// Gossip-related fields are populated only on the SEND side by
+	// SendUpdate and the ack piggyback, never on the rest of the
+	// LightHouseHandler reuse path; resetMeta is shared, so be
+	// defensive and clear all of them before the meta is reused.
+	details.RosenpassPubkeySha256 = nil
+	details.RosenpassPort = 0
+	details.DiscoveryPort = 0
+	details.PqPskIdentity = nil
 	lhh.meta.Details = details
 
 	return lhh.meta
@@ -1116,7 +1408,71 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, fromVpnAddrs [
 		lhh.handleHostPunchNotification(n, fromVpnAddrs, w)
 
 	case NebulaMeta_HostUpdateNotificationAck:
-		// noop
+		lhh.handleHostUpdateNotificationAck(n, fromVpnAddrs)
+	}
+}
+
+// handleHostUpdateNotificationAck consumes the lighthouse-side
+// piggyback gossip: the v2 ack now carries the lighthouse's own
+// opaque PqPskIdentity blob, which is the only conduit a
+// non-lighthouse peer has for learning a lighthouse's provider UDP
+// port. Without storing this, the peer's embedded PQ-PSK provider
+// falls back to its own local provider port when registering the
+// lighthouse as a provider peer, leaving the outbound provider
+// handshake driven at the wrong UDP destination for the lifetime of
+// the tunnel — ix_psk2 then never completes in asymmetric-port
+// deployments.
+//
+// fromVpnAddrs comes from the receive envelope's verified peer cert,
+// so it identifies the LIGHTHOUSE that sent us the ack; we key the
+// gossip storage on fromVpnAddrs[0] — same convention as the
+// lighthouse-side handleHostUpdateNotification, so the downstream
+// gossipChangedCB consumers (PKI -> handleGossipChanged -> provider
+// notify) see the same address space they always have.
+//
+// The function is a no-op when:
+//   - the ack carries no gossip fields (old lighthouse, or one whose
+//     cert lacks the PQ-PSK binding extension)
+//   - the source isn't actually a lighthouse we know about (defence-
+//     in-depth — we should only receive HostUpdateNotificationAck in
+//     response to a HostUpdate we sent, but check anyway)
+func (lhh *LightHouseHandler) handleHostUpdateNotificationAck(n *NebulaMeta, fromVpnAddrs []netip.Addr) {
+	if len(fromVpnAddrs) == 0 {
+		return
+	}
+	// We only initiate HostUpdate to configured lighthouses, so any
+	// ack we receive ought to come from one. This check is a sanity
+	// guard, not a security boundary — the source is already
+	// cert-verified by the time we get here.
+	if !lhh.lh.IsAnyLighthouseAddr(fromVpnAddrs) {
+		return
+	}
+	// Prefer the canonical opaque blob (field 11), fall back to the
+	// deprecated legacy 8/9/10 fields so we still understand a
+	// pre-opaque-blob (master-format) lighthouse. Nothing to store if the
+	// lighthouse didn't include any gossip at all (old binary, or a v2
+	// lighthouse whose cert lacks the PQ-PSK binding extension and runs
+	// with no provider-related ports configured) — keep the fast no-op
+	// for that common case rather than touching the per-peer claim.
+	hash, rpPort, discPort, apply := pqIdentityFromDetails(lhh.lh.loadPQIdentity(), n.Details)
+	// On the ack path there is no prior claim worth protecting via a
+	// retraction, so treat an empty/garbage result as simply "nothing to
+	// store" and bail without touching the per-peer slot.
+	if !apply || (len(hash) == 0 && rpPort == 0 && discPort == 0) {
+		return
+	}
+
+	lhh.lh.Lock()
+	am := lhh.lh.unlockedGetRemoteList(fromVpnAddrs)
+	am.Lock()
+	lhh.lh.Unlock()
+	changed := am.unlockedSetPQGossip(lhh.l, hash, rpPort, discPort)
+	am.Unlock()
+
+	if changed {
+		if cbPtr := lhh.lh.gossipChangedCB.Load(); cbPtr != nil {
+			(*cbPtr)(fromVpnAddrs[0])
+		}
 	}
 }
 
@@ -1364,7 +1720,33 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 	am.unlockedSetV4(fromVpnAddrs[0], fromVpnAddrs[0], n.Details.V4AddrPorts, lhh.lh.unlockedShouldAddV4)
 	am.unlockedSetV6(fromVpnAddrs[0], fromVpnAddrs[0], n.Details.V6AddrPorts, lhh.lh.unlockedShouldAddV6)
 	am.unlockedSetRelay(fromVpnAddrs[0], relays)
+	// Optional PQ-PSK identity gossip. Prefer the canonical opaque blob
+	// (field 11), fall back to the deprecated legacy 8/9/10 fields so we
+	// still understand pre-opaque-blob (master-format) peers. Old peers
+	// that send nothing pass nil/0 here; the setter is called
+	// UNCONDITIONALLY (even when everything is empty) so its
+	// clear-on-empty branch stays reachable and a peer can retract a
+	// prior claim. changed is true iff the gossipedPQProviderPort or
+	// gossipedDiscoveryPort just took a new in-range value; we fire the
+	// gossip-changed callback (if any) AFTER releasing the inner lock so
+	// the callback is free to acquire other locks (HostMap, PQ-PSK
+	// provider) without risking inversion against the per-peer am lock we
+	// hold here.
+	var changed bool
+	if hash, rpPort, discPort, apply := pqIdentityFromDetails(lhh.lh.loadPQIdentity(), n.Details); apply {
+		changed = am.unlockedSetPQGossip(lhh.l, hash, rpPort, discPort)
+	}
 	am.Unlock()
+
+	if changed {
+		if cbPtr := lhh.lh.gossipChangedCB.Load(); cbPtr != nil {
+			// The peer identity is fromVpnAddrs[0] (the
+			// addrMap-keying address for this RemoteList); the
+			// callback's downstream consumers index off the same
+			// address space.
+			(*cbPtr)(fromVpnAddrs[0])
+		}
+	}
 
 	n = lhh.resetMeta()
 	n.Type = NebulaMeta_HostUpdateNotificationAck
@@ -1379,7 +1761,24 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, fromVp
 		vpnAddrB := fromVpnAddrs[0].As4()
 		n.Details.OldVpnAddr = binary.BigEndian.Uint32(vpnAddrB[:])
 	case cert.Version2:
-		// do nothing, we want to send a blank message
+		// Piggyback the lighthouse's own PQ-PSK gossip on the ack.
+		// Non-lighthouse peers don't receive HostUpdate (they only
+		// SEND them) and aren't answered with the gossip fields in
+		// HostQueryReply, so this is the only conduit through which a
+		// client learns the LIGHTHOUSE's provider ports. Without
+		// it, heterogeneous-port fleets stay pinned to client-side
+		// cfg fallbacks and ix_psk2 never completes (the client
+		// drives provider handshakes / HTTP fetches at its own
+		// ports, not the lighthouse's). Receive side:
+		// handleHostUpdateNotificationAck.
+		rpHash, rpPort, discPort := lhh.lh.myPQGossip()
+		// Legacy (deprecated) — emitted unconditionally so old peers and
+		// ports-only nodes (nil rpHash) still learn the lighthouse's ports.
+		n.Details.RosenpassPubkeySha256 = rpHash
+		n.Details.RosenpassPort = rpPort
+		n.Details.DiscoveryPort = discPort
+		// Canonical opaque blob for new peers / future providers.
+		n.Details.PqPskIdentity = lhh.lh.loadPQIdentity().Encode(rpHash, uint16(rpPort), uint16(discPort))
 	default:
 		lhh.l.Error("invalid protocol version", "useVersion", useVersion)
 		return

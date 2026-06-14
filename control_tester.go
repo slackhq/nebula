@@ -7,6 +7,7 @@ import (
 
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
+	"github.com/slackhq/nebula/pq"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -135,4 +136,13 @@ func (c *Control) GetCertState() *CertState {
 
 func (c *Control) ReHandshake(vpnIp netip.Addr) {
 	c.f.handshakeManager.StartHandshake(vpnIp, nil)
+}
+
+// GetPQSource returns the raw per-peer PQ PSK source provider (the
+// FileProvider / StaticProvider behind the composed lookup), or nil if
+// none is configured. Test-only: lets e2e tests drive a synchronous
+// FileProvider.Rescan to simulate a sidecar PSK drop-in without racing
+// the fsnotify debounce.
+func (c *Control) GetPQSource() pq.Provider {
+	return c.f.pki.pqSource
 }

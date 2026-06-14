@@ -44,6 +44,32 @@ jobs:
       with:
         version: v2.5
 
+  test-linux-rosenpass-embedded:
+    name: Build and test on linux with rosenpass_embedded
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/checkout@v6
+
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.25'
+        check-latest: true
+
+    - name: Build
+      run: go build -tags rosenpass_embedded ./...
+
+    - name: Vet
+      run: go vet -tags rosenpass_embedded ./...
+
+    - name: Test
+      run: go test -tags rosenpass_embedded -v ./...
+
+    - name: End 2 end
+      run: go test -tags "rosenpass_embedded,e2e_testing" -count=1 -v ./e2e
+      env:
+        TEST_LOGS: '1'
+
   test:
     name: Test ${{ matrix.name }}
     runs-on: ${{ matrix.os }}

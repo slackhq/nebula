@@ -95,6 +95,14 @@ func (c *certificateV1) UnsafeNetworks() []netip.Prefix {
 	return c.details.unsafeNetworks
 }
 
+// PqPskBinding always returns nil for v1 certificates. The v1 schema is
+// protobuf with a fixed field set; the PQ-PSK binding is a v2-only
+// extension. Operators wanting cert-bound PQ-PSK keys must issue v2
+// certs.
+func (c *certificateV1) PqPskBinding() []byte {
+	return nil
+}
+
 func (c *certificateV1) Fingerprint() (string, error) {
 	b, err := c.Marshal()
 	if err != nil {

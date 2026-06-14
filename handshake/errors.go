@@ -19,4 +19,9 @@ var (
 	ErrAsymmetricCipherKeys    = errors.New("noise produced only one cipher key")
 	ErrMultiMessageUnsupported = errors.New("multi-message handshake patterns are not yet supported by the manager")
 	ErrSubtypeMismatch         = errors.New("packet subtype does not match handshake machine subtype")
+	// ErrResponderPSKMissing is returned by the IXPSK2 responder when the PSK
+	// lookup yields nothing for the initiator's static key. Callers can
+	// distinguish a cold-start race (provider not yet populated by sidecar /
+	// embedded provider) from a real misconfig by inspecting the provider.
+	ErrResponderPSKMissing = errors.New("psk2 responder: no psk configured for peer")
 )

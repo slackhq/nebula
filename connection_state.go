@@ -7,6 +7,7 @@ import (
 
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/handshake"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/noiseutil"
 )
 
@@ -18,6 +19,7 @@ type ConnectionState struct {
 	myCert         cert.Certificate
 	peerCert       *cert.CachedCertificate
 	initiator      bool
+	subtype        header.MessageSubType // handshake subtype that produced this state; used to decide PQ rekey eligibility
 	messageCounter atomic.Uint64
 	window         *Bits
 	writeLock      sync.Mutex
@@ -32,6 +34,7 @@ func newConnectionStateFromResult(r *handshake.Result) *ConnectionState {
 		myCert:    r.MyCert,
 		initiator: r.Initiator,
 		peerCert:  r.RemoteCert,
+		subtype:   r.Subtype,
 		eKey:      noiseutil.NewCipherState(r.EKey, r.Cipher),
 		dKey:      noiseutil.NewCipherState(r.DKey, r.Cipher),
 		window:    NewBits(ReplayWindow),

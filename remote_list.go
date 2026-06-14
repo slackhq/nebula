@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"context"
+	"encoding/hex"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -11,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/slackhq/nebula/cert"
 )
 
 // forEachFunc is used to benefit folks that want to do work inside the lock
@@ -218,6 +221,26 @@ type RemoteList struct {
 
 	// A flag that the cache may have changed and addrs needs to be rebuilt
 	shouldRebuild bool
+
+	// gossipedPQBindingHex is the peer's most-recently-advertised PQ-PSK
+	// binding hash (lowercase hex) decoded from the opaque
+	// PqPskIdentity blob in a HostUpdate. Empty when the peer has not
+	// yet sent a gossip update (old binary, or new binary without a
+	// PQ-PSK identity wired up). Read by the PSK binding wrapper as a
+	// supporting source of trust.
+	gossipedPQBindingHex string
+
+	// gossipedPQProviderPort is the UDP port the peer claims its provider
+	// listens on. 0 when unset. Informational only today.
+	gossipedPQProviderPort uint16
+
+	// gossipedDiscoveryPort is the TCP port the peer claims its
+	// provider discovery HTTP service listens on. 0 when unset.
+	// Consumed by the embedded PQ-PSK provider's fetchAndRegister so
+	// heterogeneous-port deployments (peers running different
+	// discovery_port values) correctly hit the peer's discovery
+	// endpoint rather than blindly using our own local discovery port.
+	gossipedDiscoveryPort uint16
 }
 
 // NewRemoteList creates a new empty RemoteList
@@ -471,6 +494,116 @@ func (r *RemoteList) unlockedSetRelay(ownerVpnIp netip.Addr, to []netip.Addr) {
 
 	// We can't take their array but we can take their pointers
 	c.relay = append(c.relay, to[:minInt(len(to), MaxRemotes)]...)
+}
+
+// unlockedSetPQGossip assumes you have the write lock and stores
+// the peer's most-recent gossiped PQ-PSK identity claim (32-byte
+// binding hash + UDP port). hashBytes is stored as lowercase hex; empty
+// hashBytes clears the cached claim. Called from the lighthouse
+// receive paths (HostUpdate and HostQueryReply) so the per-peer claim
+// stays current as the peer rotates keys.
+//
+// Old peers that don't send the field still pass nil/0 here; this
+// method must remain idempotent + safe to call with an empty hash, so
+// the receive side can call it unconditionally without first checking
+// whether the wire fields were populated.
+//
+// Returns portChanged=true iff EITHER the gossipedPQProviderPort or the
+// gossipedDiscoveryPort just took a new in-range value (port > 0 &&
+// port <= 0xFFFF && != prior). The caller uses this to wake the
+// embedded PQ-PSK provider and re-register the peer at the
+// freshly-gossiped ports — the receive path of HostUpdate frequently
+// arrives AFTER the handshake has already completed and the provider
+// has already registered the peer at the wrong (fallback) ports, so
+// the change-detection signal is load-bearing for the
+// heterogeneous-port path. A single boolean covers both ports because
+// the downstream provider re-notify is idempotent and does a fresh
+// lookup of both gossiped values, so distinguishing which port
+// changed buys nothing.
+//
+// Combined setter (rather than one-per-field) avoids API churn each
+// time a new gossip field gets added; callers always pass the full
+// proto message's payload in one shot.
+func (r *RemoteList) unlockedSetPQGossip(l *slog.Logger, hashBytes []byte, rpPort, discPort uint32) (changed bool) {
+	if len(hashBytes) == cert.PqPskBindingLen {
+		r.gossipedPQBindingHex = hex.EncodeToString(hashBytes)
+	} else if len(hashBytes) > 0 {
+		// Malformed length — refuse rather than store garbage. The
+		// previous claim (if any) stays. Defence-in-depth: the wire
+		// format permits any byte length, but ValidatePSKBinding only
+		// looks at PqPskBindingLen-byte hashes, so storing a non-32 value
+		// would silently never validate. Warn so an interop mismatch is
+		// visible rather than a silent drop.
+		if l != nil {
+			l.Warn("Dropping gossiped PQ-PSK binding hash with unexpected length",
+				"gotLen", len(hashBytes), "wantLen", cert.PqPskBindingLen)
+		}
+	} else {
+		// Empty: clear any prior claim. Lets a peer effectively
+		// retract a gossiped hash by sending an update with the
+		// field absent (proto3 default), although today no nebula
+		// code path produces such a retraction.
+		r.gossipedPQBindingHex = ""
+	}
+	if rpPort > 0 && rpPort <= 0xFFFF {
+		newPort := uint16(rpPort)
+		if r.gossipedPQProviderPort != newPort {
+			r.gossipedPQProviderPort = newPort
+			changed = true
+		}
+	} else if rpPort == 0 {
+		// Treat 0 as "unset" — leaves the previously-known port
+		// intact rather than wiping it on every keepalive.
+	}
+	if discPort > 0 && discPort <= 0xFFFF {
+		newPort := uint16(discPort)
+		if r.gossipedDiscoveryPort != newPort {
+			r.gossipedDiscoveryPort = newPort
+			changed = true
+		}
+	} else if discPort == 0 {
+		// Same "0 = unset" convention as gossipedPQProviderPort.
+	}
+	return changed
+}
+
+// GossipedPQBindingHashHex returns the peer's most-recently-advertised
+// PQ-PSK binding hash (lowercase hex), or "" if no gossip claim has
+// been received. Safe for concurrent use: locks internally.
+func (r *RemoteList) GossipedPQBindingHashHex() string {
+	if r == nil {
+		return ""
+	}
+	r.RLock()
+	defer r.RUnlock()
+	return r.gossipedPQBindingHex
+}
+
+// GossipedPQProviderPort returns the peer's most-recently-advertised provider
+// UDP port, or 0 if no gossip claim has been received (or the peer is
+// gossiping with port unset).
+func (r *RemoteList) GossipedPQProviderPort() uint16 {
+	if r == nil {
+		return 0
+	}
+	r.RLock()
+	defer r.RUnlock()
+	return r.gossipedPQProviderPort
+}
+
+// GossipedDiscoveryPort returns the peer's most-recently-advertised
+// provider discovery TCP port (the port nebula's embedded provider
+// will HTTP-fetch the peer's pubkey from), or 0 if no gossip
+// claim has been received. Consumed by the provider's
+// fetchAndRegister via PKI.GossipedDiscoveryPortFor; 0 means "fall
+// back to our own local discovery port" (homogeneous-fleet behaviour).
+func (r *RemoteList) GossipedDiscoveryPort() uint16 {
+	if r == nil {
+		return 0
+	}
+	r.RLock()
+	defer r.RUnlock()
+	return r.gossipedDiscoveryPort
 }
 
 // unlockedPrependV4 assumes you have the write lock and prepends the address in the reported list for this owner

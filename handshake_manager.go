@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
+	"github.com/slackhq/nebula/pq"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -68,8 +70,22 @@ type HandshakeManager struct {
 	messageMetrics         *MessageMetrics
 	metricInitiated        metrics.Counter
 	metricTimedOut         metrics.Counter
+	metricPQTimedOut       metrics.Counter
 	f                      *Interface
 	l                      *slog.Logger
+
+	// pqPeerStats tracks per-peer IXPSK2 failure counts for the
+	// pq-status ssh command. Bounded; eviction is arbitrary via map
+	// iteration, acceptable for a diagnostic surface.
+	pqStatsLock sync.Mutex
+	pqPeerStats map[netip.Addr]*pqPeerStat
+
+	// pqAltEpoch is the responder-side hint cache for epoch-skew
+	// healing. When the initiator sends a rapid re-msg1 shortly after
+	// we answered with a current-epoch msg2, the strong inference is
+	// that the initiator rejected our PSK — so we try our previous
+	// epoch once (mirroring the initiator's SwapPSK retry).
+	pqAltEpoch *pq.AltEpochHint
 
 	// can be used to trigger outbound handshake for the given vpnIp
 	trigger chan netip.Addr
@@ -85,6 +101,7 @@ type HandshakeHostInfo struct {
 	lastRemotes               []netip.AddrPort // Remotes that we sent to during the previous attempt
 	lastRelays                []netip.Addr     // Relays we attempted to use during the previous attempt
 	packetStore               []*cachedPacket  // A set of packets to be transmitted once the handshake completes
+	triedPrevPSK              bool             // initiator: previous-epoch swap already attempted for this handshake
 
 	hostinfo *HostInfo
 	machine  *handshake.Machine // The handshake state machine, set during stage 0 (initiator) or beginHandshake (responder multi-message)
@@ -115,6 +132,28 @@ func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, s
 	}
 }
 
+// isAddressFamilyMismatch reports whether err is the well-known
+// "tried to send a v6 packet on a v4-only UDP socket" (or vice-
+// versa) error from the kernel. We see this on handshake send paths
+// whenever a peer's HostInfo carries both v4 and v6 remotes but the
+// local listener is single-family. The handshake still completes
+// over the matching-family address(es) in the same remotes set, so
+// this is operationally noise rather than a failure. Demoting the
+// per-attempt log line keeps prod logs clean without losing real
+// errors.
+//
+// Detection is string-based because the underlying errors come from
+// net.UDPConn.WriteToUDPAddrPort and are not wrapped in a typed
+// sentinel. Both "non-IPv4 address" and "non-IPv6 address" patterns
+// occur, depending on which way the mismatch goes.
+func isAddressFamilyMismatch(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "non-IPv4 address") || strings.Contains(s, "non-IPv6 address")
+}
+
 func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *LightHouse, outside udp.Conn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
 		vpnIps:                 map[netip.Addr]*HandshakeHostInfo{},
@@ -128,6 +167,9 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 		messageMetrics:         config.messageMetrics,
 		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
 		metricTimedOut:         metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),
+		metricPQTimedOut:       metrics.GetOrRegisterCounter("pq.handshake_ixpsk2_timed_out", nil),
+		pqPeerStats:            make(map[netip.Addr]*pqPeerStat),
+		pqAltEpoch:             pq.NewAltEpochHint(),
 		l:                      l,
 	}
 }
@@ -153,7 +195,7 @@ func (hm *HandshakeManager) HandleIncoming(via ViaSender, packet []byte, h *head
 	// don't yet support) are dropped here rather than silently routed through
 	// the IX path. Add a case when introducing a new pattern.
 	switch h.Subtype {
-	case header.HandshakeIXPSK0:
+	case header.HandshakeIXPSK0, header.HandshakeIXPSK2:
 		// supported
 	default:
 		hm.l.Debug("dropping handshake with unsupported subtype",
@@ -228,6 +270,25 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 				"stage": uint64(hh.machine.MessageIndex()),
 				"style": header.SubTypeName(header.Handshake, hh.machine.Subtype()),
 			})
+			// An IXPSK2 timeout has one cause a plain timeout doesn't:
+			// both sides hold a PSK for each other but the bytes differ
+			// (rosenpass epoch mismatch, broken pairing), which makes the
+			// responder's msg2 undecryptable here and looks identical to
+			// a dead peer. Count it separately and hint, so an operator
+			// staring at a reachable-but-unconnectable pair has a thread
+			// to pull instead of just "timed out".
+			if hh.machine.Subtype() == header.HandshakeIXPSK2 {
+				hm.metricPQTimedOut.Inc(1)
+				// NB: a plain timeout does NOT arm the IXPSK0 degrade.
+				// Timeouts are ambiguous (dead peer, packet loss, or an
+				// attacker dropping handshake packets) — degrading on
+				// them lets a packet-dropper cheaply strip PQ to
+				// classical. The degrade is armed only on repeated msg2
+				// AEAD rejects (proven PSK desync) in continueHandshake.
+				hm.bumpPQStat(vpnIp, func(s *pqPeerStat) { s.Timeouts++ })
+				fields = append(fields, "pqHint",
+					"IXPSK2 timeout: if the peer is otherwise reachable, compare both sides' PQ PSK material (possible epoch mismatch / broken rosenpass pairing); see pq.handshake_ixpsk2_msg2_reject")
+			}
 		}
 		hh.hostinfo.logger(hm.l).Info("Handshake timed out", fields...)
 		hm.metricTimedOut.Inc(1)
@@ -295,13 +356,23 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		hm.messageMetrics.Tx(header.Handshake, hh.machine.Subtype(), 1)
 		err := hm.outside.WriteTo(stage0, addr)
 		if err != nil {
-			hostinfo.logger(hm.l).Error("Failed to send handshake message",
-				"udpAddr", addr,
-				"initiatorIndex", hostinfo.localIndexId,
-				"handshake", hsFields,
-				"error", err,
-			)
-
+			// Listener-family / dest-family mismatch (e.g. v4-only
+			// listener but a v6 remote in our cert-asserted list) is
+			// an EXPECTED non-error — handshake completes via the
+			// other-family fallback addresses in the same remotes
+			// slice. Demoting to Debug avoids polluting prod logs
+			// with one ERROR per send attempt per mismatched address.
+			if isAddressFamilyMismatch(err) {
+				hostinfo.logger(hm.l).Debug("skipping handshake address (listener family mismatch)",
+					"udpAddr", addr, "err", err)
+			} else {
+				hostinfo.logger(hm.l).Error("Failed to send handshake message",
+					"udpAddr", addr,
+					"initiatorIndex", hostinfo.localIndexId,
+					"handshake", hsFields,
+					"error", err,
+				)
+			}
 		} else {
 			sentTo = append(sentTo, addr)
 		}
@@ -641,6 +712,141 @@ func hsTimeout(tries int64, interval time.Duration) time.Duration {
 	return time.Duration(tries / 2 * ((2 * int64(interval)) + (tries-1)*int64(interval)))
 }
 
+// notifyPQProvider is defined twice in the provider layer: an embedded
+// build behind a build tag, and a default-build stub. Both declare the
+// same function signature; the stub version is a no-op so handshake
+// completion paths can call into it unconditionally without dragging
+// the embedded provider package into the default build.
+
+// vpnAddrsToStrings is a small helper for the pq.Store API, which
+// keys its secondary index by VPN address string form.
+func vpnAddrsToStrings(addrs []netip.Addr) []string {
+	if len(addrs) == 0 {
+		return nil
+	}
+	out := make([]string, len(addrs))
+	for i, a := range addrs {
+		out[i] = a.String()
+	}
+	return out
+}
+
+type pqPeerStat struct {
+	Msg2Rejects uint64
+	Timeouts    uint64
+	// degradeUntilNanos: while now < this, the initiator bootstraps with
+	// IXPSK0 instead of IXPSK2 for this peer. Set after repeated IXPSK2
+	// timeouts. Breaks the deadlock where two peers each hold a PSK for
+	// the other but the bytes differ (rosenpass epoch desync): IXPSK2
+	// can't complete, so the rosenpass KEX that would re-sync the PSK
+	// can't travel over the (never-formed) tunnel. Falling back to
+	// IXPSK0 forms the classical tunnel, rosenpass re-keys over it, and
+	// the next post-cooldown attempt upgrades to IXPSK2 cleanly.
+	degradeUntilNanos int64
+	// DegradeEpisodes is the cumulative count of degrade windows armed
+	// for this peer — one per cooldown window, NOT re-counted on a
+	// mid-cooldown re-arm. Forensic: it SURVIVES a successful IXPSK2
+	// (unlike the transient counters above, which reset) so an operator
+	// querying pq-status after a downgrade incident still sees it
+	// happened. A non-zero value is the durable record that this link was
+	// stripped to classical at least once.
+	DegradeEpisodes uint64
+	// consecutiveDegrades counts degrade windows since the last clean
+	// IXPSK2 completion (which resets it to 0). A run of these means the
+	// degrade is NOT self-healing — rosenpass never re-synced over the
+	// classical fallback — i.e. a dead/misconfigured sidecar or an active
+	// attacker sustaining the strip. Crossing pqDegradeWarnConsecutive
+	// emits a WARN.
+	consecutiveDegrades uint64
+}
+
+const pqPeerStatsCap = 1024
+
+const (
+	// pqIXPSK2DegradeThreshold is how many IXPSK2 msg2 AEAD rejects to a
+	// peer (after the previous-epoch SwapPSK heal also failed, i.e. a
+	// genuine multi-epoch-unrecoverable PSK desync) before the initiator
+	// degrades to IXPSK0. Rejects accrue across handshake cycles, so this
+	// requires a persistent desync, not a one-off blip.
+	pqIXPSK2DegradeThreshold = 2
+	// pqIXPSK2DegradeCooldown is how long to stay on IXPSK0 after
+	// degrading — long enough for rosenpass to complete a fresh KEX over
+	// the now-classical tunnel (rekey is ~tens of seconds) before we
+	// retry IXPSK2. A successful IXPSK2 completion clears it early.
+	pqIXPSK2DegradeCooldown = 60 * time.Second
+	// pqDegradeWarnConsecutive is how many consecutive degrade windows
+	// (no clean IXPSK2 in between) trigger a WARN. A self-healing desync
+	// resolves in one window (rosenpass re-keys, IXPSK2 succeeds, the run
+	// resets), so a run this long means the heal is NOT working: dead
+	// sidecar, or an attacker sustaining a downgrade strip.
+	pqDegradeWarnConsecutive = 3
+)
+
+// pqInDegradeCooldown reports whether the initiator should currently
+// bootstrap this peer with IXPSK0 because recent IXPSK2 attempts kept
+// timing out (see degradeUntilNanos).
+func (hm *HandshakeManager) pqInDegradeCooldown(addr netip.Addr) bool {
+	hm.pqStatsLock.Lock()
+	defer hm.pqStatsLock.Unlock()
+	s, ok := hm.pqPeerStats[addr]
+	if !ok || s.degradeUntilNanos == 0 {
+		return false
+	}
+	return time.Now().UnixNano() < s.degradeUntilNanos
+}
+
+// PQPeerStats returns a copy of the per-peer IXPSK2 failure counters
+// for the pq-status command.
+func (hm *HandshakeManager) PQPeerStats() map[netip.Addr]pqPeerStat {
+	hm.pqStatsLock.Lock()
+	defer hm.pqStatsLock.Unlock()
+	out := make(map[netip.Addr]pqPeerStat, len(hm.pqPeerStats))
+	for k, v := range hm.pqPeerStats {
+		out[k] = *v
+	}
+	return out
+}
+
+func (hm *HandshakeManager) bumpPQStat(addr netip.Addr, f func(*pqPeerStat)) {
+	hm.pqStatsLock.Lock()
+	defer hm.pqStatsLock.Unlock()
+	s, ok := hm.pqPeerStats[addr]
+	if !ok {
+		if len(hm.pqPeerStats) >= pqPeerStatsCap {
+			for k := range hm.pqPeerStats {
+				delete(hm.pqPeerStats, k)
+				break
+			}
+		}
+		s = &pqPeerStat{}
+		hm.pqPeerStats[addr] = s
+	}
+	f(s)
+}
+
+// lookupPrevPSKFor resolves the previous-epoch PSK for the peer of a
+// pending initiator handshake, reusing the same identity-resolution
+// order as buildStage0Packet (live cert, then main hostmap cert).
+// Returns nil when no previous epoch is retained or no identity is
+// resolvable — callers treat nil as "healing unavailable".
+func (hm *HandshakeManager) lookupPrevPSKFor(hh *HandshakeHostInfo) []byte {
+	cs := hm.f.pki.getCertState()
+	var cachedCert *cert.CachedCertificate
+	if c := hh.hostinfo.GetCert(); c != nil {
+		cachedCert = c
+	} else if len(hh.hostinfo.vpnAddrs) > 0 {
+		hm.mainHostMap.RLock()
+		if primary, ok := hm.mainHostMap.Hosts[hh.hostinfo.vpnAddrs[0]]; ok && primary != nil {
+			cachedCert = primary.GetCert()
+		}
+		hm.mainHostMap.RUnlock()
+	}
+	if cachedCert == nil {
+		return nil
+	}
+	return cs.LookupPQPSKPrev(cachedCert.Certificate.PublicKey(), cachedCert.Certificate)
+}
+
 // buildStage0Packet creates the initial handshake packet for the initiator.
 func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
 	cs := hm.f.pki.getCertState()
@@ -663,10 +869,104 @@ func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
 		return false
 	}
 
+	// Resolve handshake subtype via the PQ policy. The policy answers
+	// based on Provider availability + per-peer history; this code
+	// path no longer makes its own decisions.
+	//
+	// Identity resolution priority for the initiator:
+	//   1. ConnectionState on the freshly-allocated hh.hostinfo (rare;
+	//      only set after a previous completed handshake on this slot).
+	//   2. Cert cached on the primary HostInfo in the main hostmap (a
+	//      live tunnel exists; this is the rekey-upgrade case).
+	//   3. pq.Policy's persistent identity cache, looked up by VPN
+	//      addr. Powers the cold-boot story for per-group overrides:
+	//      after a process restart, in-memory state is empty but the
+	//      on-disk Store still knows who lives at this VPN addr and
+	//      which CA-signed groups they assert, so the boot initiator
+	//      can apply DefaultPolicy.Overrides without first waiting
+	//      for a fresh handshake to deliver the cert.
+	pqPolicy := hm.f.pki.PQPolicy()
+	var cachedCert *cert.CachedCertificate
+	if c := hh.hostinfo.GetCert(); c != nil {
+		cachedCert = c
+	} else if len(hh.hostinfo.vpnAddrs) > 0 {
+		hm.mainHostMap.RLock()
+		if primary, ok := hm.mainHostMap.Hosts[hh.hostinfo.vpnAddrs[0]]; ok && primary != nil {
+			cachedCert = primary.GetCert()
+		}
+		hm.mainHostMap.RUnlock()
+	}
+
+	pi := pq.PeerInfo{}
+	if cachedCert != nil {
+		pi.StaticPubKey = cachedCert.Certificate.PublicKey()
+		pi.Fingerprint = cachedCert.Fingerprint
+		pi.Groups = cachedCert.Certificate.Groups()
+	} else if len(hh.hostinfo.vpnAddrs) > 0 {
+		// Boot path: ask the policy's identity cache. If the policy
+		// implementation doesn't expose a boot lookup, this is a
+		// no-op and we fall through with empty PeerInfo, which the
+		// policy translates into an IXPSK0 bootstrap.
+		if booter, ok := pqPolicy.(interface {
+			LookupBootIdentity(string) (pq.PeerInfo, bool)
+		}); ok {
+			if booted, hit := booter.LookupBootIdentity(hh.hostinfo.vpnAddrs[0].String()); hit {
+				pi = booted
+				hm.f.l.Debug("PQ identity resolved from on-disk cache",
+					"vpnAddr", hh.hostinfo.vpnAddrs[0], "fingerprint", booted.Fingerprint)
+			}
+		}
+	}
+	pqSub, err := pqPolicy.InitiatorSubtype(pi)
+	if err != nil {
+		// Policy refuses to handshake with this peer at all.
+		hm.f.l.Info("Refusing to initiate handshake (PQ policy)",
+			"vpnAddrs", hh.hostinfo.vpnAddrs, "error", err)
+		return false
+	}
+	// Opportunistic degrade: if IXPSK2 to this peer has been timing out
+	// (PSK epoch desync that IXPSK2 itself can't recover from), bootstrap
+	// IXPSK0 for a cooldown so the classical tunnel forms and rosenpass
+	// can re-key over it. The post-cooldown attempt upgrades to IXPSK2.
+	// Never applies under required mode (InitiatorSubtype errors above if
+	// the PSK is mandatory and absent).
+	if pqSub == pq.SubtypePerPeer && len(hh.hostinfo.vpnAddrs) > 0 &&
+		hm.pqInDegradeCooldown(hh.hostinfo.vpnAddrs[0]) {
+		// Never degrade under required mode — that mode demands PQ and
+		// the responder would reject IXPSK0 anyway.
+		opportunistic := true
+		if mp, ok := pqPolicy.(interface {
+			ResolvedMode(pq.PeerInfo) pq.Mode
+		}); ok {
+			opportunistic = mp.ResolvedMode(pi) == pq.ModeOpportunistic
+		}
+		if opportunistic {
+			hm.f.l.Warn("Degrading initiator to IXPSK0 (repeated IXPSK2 timeouts; letting classical bootstrap so rosenpass can re-key)",
+				"vpnAddrs", hh.hostinfo.vpnAddrs)
+			pqSub = pq.SubtypeNoPSK
+		}
+	}
+	subtype := header.HandshakeIXPSK0
+	var peerStatic []byte
+	var peerCert cert.Certificate
+	if pqSub == pq.SubtypePerPeer {
+		subtype = header.HandshakeIXPSK2
+		peerStatic = pi.StaticPubKey
+		// Hand the cached cert to NewMachine so the PSK lookup can
+		// run the PQ-PSK binding check before the
+		// PSK is preset into the noise state. cachedCert may be nil
+		// on a fresh boot when the only identity hint came from the
+		// pq.Store; in that case the lookup wrapper treats nil as
+		// "no claim to verify" and falls through to use-PSK.
+		if cachedCert != nil {
+			peerCert = cachedCert.Certificate
+		}
+	}
+
 	machine, err := handshake.NewMachine(
 		v, cs.GetCredential,
 		hm.certVerifier(), func() (uint32, error) { return hm.allocateIndex(hh) },
-		true, header.HandshakeIXPSK0,
+		true, subtype, peerStatic, peerCert,
 	)
 	if err != nil {
 		hm.f.l.Error("Failed to create handshake machine",
@@ -707,15 +1007,36 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 	machine, err := handshake.NewMachine(
 		v, cs.GetCredential,
 		hm.certVerifier(), func() (uint32, error) { return generateIndex(f.l) },
-		false, header.HandshakeIXPSK0,
+		false, h.Subtype, nil, nil,
 	)
 	if err != nil {
 		f.l.Error("Failed to create handshake machine", "from", via, "error", err)
 		return
 	}
 
+	if h.Subtype == header.HandshakeIXPSK2 {
+		machine.SetResponderPSKChooser(func(peerStatic []byte) bool {
+			return hm.pqAltEpoch.ChoosePrev(string(peerStatic), time.Now())
+		})
+	}
+
 	response, result, err := machine.ProcessPacket(nil, packet)
 	if err != nil {
+		// Cold-start race: the PSK provider hasn't been populated yet
+		// (sidecar provider mid-first-KEX, or embedded service still
+		// warming up). The initiator will retry on its next interval
+		// and succeed once the provider has the peer's PSK, so this is
+		// expected noise on fresh boot — log at Debug. Once the
+		// provider holds at least one PSK, a missing peer is a real
+		// misconfig and stays at Error.
+		if errors.Is(err, handshake.ErrResponderPSKMissing) && !pq.HasPSK(f.pki.PQProvider()) {
+			// Counted so a provider that never populates (broken sidecar,
+			// dead keyer) is visible to monitoring even though each
+			// individual deferral only logs at Debug.
+			metrics.GetOrRegisterCounter("pq.responder_psk_deferred", nil).Inc(1)
+			f.l.Debug("Deferring handshake: PSK provider not yet populated", "from", via, "error", err)
+			return
+		}
 		f.l.Error("Failed to process handshake packet", "from", via, "error", err)
 		return
 	}
@@ -735,6 +1056,37 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 	remoteCert := result.RemoteCert
 	if remoteCert == nil {
 		f.l.Error("Handshake did not produce a peer certificate", "from", via)
+		return
+	}
+
+	// PQ policy gate: now that we know the peer, decide whether the
+	// subtype the initiator chose is acceptable. Refusing here drops
+	// the in-flight handshake without sending msg2 contents downstream.
+	//
+	// Ordering note: ProcessPacket has already advanced the noise state
+	// and derived session keys by the time this gate runs — the peer
+	// identity the policy needs only exists after msg1 is processed (IX
+	// carries the cert in msg1, and producing msg2 is part of the same
+	// machine step). On rejection those keys are simply discarded with
+	// `result`; nothing derived ever touches the wire or a hostinfo.
+	// The cost is one wasted WriteMessage per rejected attempt, not a
+	// security exposure.
+	pqPolicy := f.pki.PQPolicy()
+	pqPeer := pq.PeerInfo{
+		StaticPubKey: remoteCert.Certificate.PublicKey(),
+		Fingerprint:  remoteCert.Fingerprint,
+		Groups:       remoteCert.Certificate.Groups(),
+	}
+	pqIncoming := pq.SubtypeNoPSK
+	if h.Subtype == header.HandshakeIXPSK2 {
+		pqIncoming = pq.SubtypePerPeer
+	}
+	if err := pqPolicy.AcceptResponderSubtype(pqPeer, pqIncoming); err != nil {
+		f.l.Info("Rejecting handshake (PQ policy)",
+			"from", via, "certName", remoteCert.Certificate.Name(),
+			"fingerprint", remoteCert.Fingerprint, "subtype", header.SubTypeName(header.Handshake, h.Subtype),
+			"error", err)
+		pqPolicy.OnHandshakeFailed(pqPeer, pqIncoming, err)
 		return
 	}
 
@@ -758,6 +1110,18 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		},
 	}
 
+	// Record successful handshake outcome with the policy. For
+	// IXPSK2 this captures the peer's identity (cert + pubkey + vpn
+	// addrs + groups) in the boot-path identity cache so a future
+	// cold boot can resolve this peer's per-group overrides without
+	// needing a fresh handshake first.
+	if certBytes, err := remoteCert.Certificate.Marshal(); err == nil {
+		pqPeer.CertBytes = certBytes
+	}
+	pqPeer.VpnAddrs = vpnAddrsToStrings(vpnAddrs)
+	pqPolicy.OnHandshakeComplete(pqPeer, pqIncoming)
+	notifyPQProvider(f, remoteCert, vpnAddrs)
+
 	msg := "Handshake message received"
 	if !anyVpnAddrsInCommon {
 		msg = "Handshake message received, but no vpnNetworks in common."
@@ -773,6 +1137,16 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		"responderIndex", result.LocalIndex,
 		"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
 	)
+
+	if machine.Subtype() == header.HandshakeIXPSK2 {
+		peerKey := string(remoteCert.Certificate.PublicKey())
+		hm.pqAltEpoch.NoteMsg2(peerKey, time.Now(), machine.UsedPreviousPSK())
+		if machine.UsedPreviousPSK() {
+			pq.IncCounter(pq.MetricPrevEpochRecovered)
+			f.l.Info("IXPSK2 msg2 sent under previous PSK epoch (rotation skew healing)",
+				"vpnAddrs", vpnAddrs, "from", via)
+		}
+	}
 
 	// packet aliases the listener's incoming buffer, so this copy must stay.
 	hostinfo.HandshakePacket[handshakePacketStage0] = make([]byte, len(packet[header.Len:]))
@@ -842,16 +1216,92 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 
 	response, result, err := machine.ProcessPacket(nil, packet)
 	if err != nil {
-		// Recoverable errors are routine noise, log at Debug. Fatal errors get a Warn.
-		if machine.Failed() {
-			f.l.Warn("Failed to process handshake packet, abandoning",
-				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
-			hm.DeleteHostInfo(hostinfo)
-		} else {
-			f.l.Debug("Failed to process handshake packet",
-				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
+		// IXPSK2 epoch-skew healing: a non-fatal ReadMessage failure on
+		// an initiator waiting for msg2 means the peer is alive but the
+		// PSK bytes differ (AEAD reject) — the epoch-mismatch signature.
+		// noise rolled back, so swap in the previous-epoch PSK (if the
+		// provider retained one) and re-process the SAME packet: a
+		// zero-round-trip retry. One attempt per handshake.
+		if !machine.Failed() &&
+			machine.Subtype() == header.HandshakeIXPSK2 &&
+			machine.MessageIndex() == 1 &&
+			!hh.triedPrevPSK {
+			pq.IncCounter(pq.MetricHandshakeMsg2Reject)
+			if len(hostinfo.vpnAddrs) > 0 {
+				hm.bumpPQStat(hostinfo.vpnAddrs[0], func(s *pqPeerStat) { s.Msg2Rejects++ })
+			}
+			hh.triedPrevPSK = true
+			if prev := hm.lookupPrevPSKFor(hh); prev != nil {
+				if swapErr := machine.SwapPSK(prev); swapErr == nil {
+					response, result, err = machine.ProcessPacket(nil, packet)
+					if err == nil {
+						pq.IncCounter(pq.MetricPrevEpochRecovered)
+						f.l.Info("IXPSK2 msg2 accepted under previous PSK epoch (rotation skew healed)",
+							"vpnAddrs", hostinfo.vpnAddrs, "from", via)
+					}
+				}
+				pq.Wipe(prev)
+			}
+			// Genuine, multi-epoch-unrecoverable PSK desync: the responder
+			// replied but neither the current nor previous epoch PSK
+			// decrypts its msg2 (err still set). This is the deadlock
+			// signature — IXPSK2 can't complete, so the rosenpass KEX that
+			// would re-sync the PSK can't travel over the never-formed
+			// tunnel. After pqIXPSK2DegradeThreshold such rejects (across
+			// handshake cycles), drop to IXPSK0 for a cooldown so the
+			// classical tunnel forms and rosenpass re-keys over it; the
+			// post-cooldown attempt then upgrades to IXPSK2.
+			//
+			// Armed ONLY here (proven AEAD reject), never on a plain
+			// timeout — a packet-dropping attacker produces timeouts, not
+			// rejects, so they cannot use this to strip PQ to classical.
+			if err != nil && len(hostinfo.vpnAddrs) > 0 {
+				var armedEpisode bool
+				var consec, episodes uint64
+				hm.bumpPQStat(hostinfo.vpnAddrs[0], func(s *pqPeerStat) {
+					if s.Msg2Rejects >= pqIXPSK2DegradeThreshold {
+						nowNanos := time.Now().UnixNano()
+						// Count a fresh episode only on the transition into
+						// a degrade window — a re-arm while a cooldown is
+						// still active just extends it, it is not a new
+						// downgrade event.
+						wasActive := s.degradeUntilNanos > nowNanos
+						s.degradeUntilNanos = nowNanos + int64(pqIXPSK2DegradeCooldown)
+						if !wasActive {
+							s.DegradeEpisodes++
+							s.consecutiveDegrades++
+							armedEpisode = true
+							consec = s.consecutiveDegrades
+							episodes = s.DegradeEpisodes
+						}
+					}
+				})
+				if armedEpisode {
+					// Loud, observable record of a PQ->classical strip.
+					// Passive HNDL is unaffected (it can't force this);
+					// a climbing count is a persistent desync or an active
+					// downgrade attacker — investigate, and consider
+					// pq.mode=required on the link if it is the latter.
+					pq.IncCounter(pq.MetricForcedDegrade)
+					if consec >= pqDegradeWarnConsecutive {
+						f.l.Warn("IXPSK2 repeatedly degraded to IXPSK0 for peer — heal is not working (dead rosenpass sidecar or active downgrade attacker)",
+							"vpnAddrs", hostinfo.vpnAddrs, "from", via,
+							"consecutiveDegrades", consec, "totalDegradeEpisodes", episodes)
+					}
+				}
+			}
 		}
-		return
+		if err != nil {
+			if machine.Failed() {
+				f.l.Warn("Failed to process handshake packet, abandoning",
+					"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
+				hm.DeleteHostInfo(hostinfo)
+			} else {
+				f.l.Debug("Failed to process handshake packet",
+					"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
+			}
+			return
+		}
 	}
 
 	if response != nil {
@@ -871,6 +1321,34 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 			"vpnAddrs", hostinfo.vpnAddrs, "from", via)
 		hm.DeleteHostInfo(hostinfo)
 		return
+	}
+
+	pqResultSubtype := pq.SubtypeNoPSK
+	if result.Subtype == header.HandshakeIXPSK2 {
+		pqResultSubtype = pq.SubtypePerPeer
+	}
+
+	if result.Subtype == header.HandshakeIXPSK2 && len(hostinfo.vpnAddrs) > 0 {
+		hm.pqStatsLock.Lock()
+		addr := hostinfo.vpnAddrs[0]
+		if s, ok := hm.pqPeerStats[addr]; ok {
+			if s.DegradeEpisodes > 0 {
+				// This link was stripped before. Clear the transient
+				// failure state and the consecutive run (a clean IXPSK2
+				// means the heal worked / the strip ended), but PRESERVE
+				// the cumulative DegradeEpisodes so the incident remains
+				// visible in pq-status after recovery.
+				s.Msg2Rejects = 0
+				s.Timeouts = 0
+				s.degradeUntilNanos = 0
+				s.consecutiveDegrades = 0
+			} else {
+				// Never degraded — nothing worth retaining; drop the
+				// entry so the stats map stays small.
+				delete(hm.pqPeerStats, addr)
+			}
+		}
+		hm.pqStatsLock.Unlock()
 	}
 
 	vpnNetworks := remoteCert.Certificate.Networks()
@@ -913,6 +1391,25 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		if f.myVpnNetworksTable.Contains(network.Addr()) {
 			anyVpnAddrsInCommon = true
 		}
+	}
+
+	// Record initiator-side handshake outcome with the policy. The
+	// responder records its own outcome from beginHandshake; doing it
+	// on both sides keeps the per-peer state symmetric. We pass the
+	// full cert + vpn addrs so the Store can persist the identity for
+	// future cold-boot lookups (boot-path per-group overrides).
+	{
+		pqPeer := pq.PeerInfo{
+			StaticPubKey: remoteCert.Certificate.PublicKey(),
+			Fingerprint:  remoteCert.Fingerprint,
+			VpnAddrs:     vpnAddrsToStrings(vpnAddrs),
+			Groups:       remoteCert.Certificate.Groups(),
+		}
+		if certBytes, err := remoteCert.Certificate.Marshal(); err == nil {
+			pqPeer.CertBytes = certBytes
+		}
+		f.pki.PQPolicy().OnHandshakeComplete(pqPeer, pqResultSubtype)
+		notifyPQProvider(f, remoteCert, vpnAddrs)
 	}
 
 	if !correctHostResponded {
@@ -1050,7 +1547,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 	// block if so.
 	logFields := []any{
 		"vpnAddrs", hostinfo.vpnAddrs,
-		"handshake", m{"stage": uint64(2), "style": header.SubTypeName(header.Handshake, header.HandshakeIXPSK0)},
+		"handshake", m{"stage": uint64(2), "style": header.SubTypeName(header.Handshake, header.MessageSubType(msg[1]))},
 		"cached", cached,
 		"initiatorIndex", hostinfo.remoteIndexId,
 		"responderIndex", hostinfo.localIndexId,
@@ -1093,7 +1590,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hostinfo *HostInfo, via ViaSender) {
 	f := hm.f
 	peerCert := hostinfo.ConnectionState.peerCert
-	hsFields := m{"stage": uint64(1), "style": header.SubTypeName(header.Handshake, header.HandshakeIXPSK0)}
+	hsFields := m{"stage": uint64(1), "style": header.SubTypeName(header.Handshake, hostinfo.ConnectionState.subtype)}
 
 	switch err {
 	case ErrAlreadySeen:

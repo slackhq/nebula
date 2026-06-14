@@ -66,6 +66,12 @@ type Certificate interface {
 	// Curve identifies which curve was used for the PublicKey and Signature.
 	Curve() Curve
 
+	// PqPskBinding returns the opaque PQ-PSK binding (currently a 32-byte
+	// provider key digest) as bound into the cert by the CA, or nil if
+	// absent. Only Version2 certs carry this; Version1 certs always
+	// return nil. Callers must not mutate the returned slice.
+	PqPskBinding() []byte
+
 	// Signature is the cryptographic seal for all the details of this certificate.
 	// CheckSignature can be used to verify that the details of this certificate are valid.
 	Signature() []byte

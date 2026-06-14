@@ -184,6 +184,7 @@ type DummyCert struct {
 	PublicKey_      []byte
 	Signature_      []byte
 	UnsafeNetworks_ []netip.Prefix
+	PqPskBinding_   []byte
 }
 
 func (d *DummyCert) Version() cert.Version                         { return d.Version_ }
@@ -198,6 +199,7 @@ func (d *DummyCert) NotBefore() time.Time                          { return d.No
 func (d *DummyCert) PublicKey() []byte                             { return d.PublicKey_ }
 func (d *DummyCert) Signature() []byte                             { return d.Signature_ }
 func (d *DummyCert) UnsafeNetworks() []netip.Prefix                { return d.UnsafeNetworks_ }
+func (d *DummyCert) PqPskBinding() []byte                          { return d.PqPskBinding_ }
 func (d *DummyCert) Fingerprint() (string, error)                  { return "", nil }
 func (d *DummyCert) CheckSignature(key []byte) bool                { return false }
 func (d *DummyCert) MarshalForHandshakes() ([]byte, error)         { return nil, nil }

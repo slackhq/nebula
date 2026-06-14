@@ -26,7 +26,16 @@ type TBSCertificate struct {
 	NotAfter       time.Time
 	PublicKey      []byte
 	Curve          Curve
-	issuer         string
+
+	// PqPskBinding, when non-empty, is bound into the signed cert v2
+	// details as the opaque PQ-PSK binding (currently a 32-byte provider
+	// key digest). Must be exactly 32 bytes when set. Ignored for v1
+	// certs (the v1 schema has no extension area). Optional; certs
+	// signed without it cannot participate in PQ and their holders
+	// fall through to non-PQ (IXPSK0) handshakes.
+	PqPskBinding []byte
+
+	issuer string
 }
 
 type beingSignedCertificate interface {

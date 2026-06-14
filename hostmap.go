@@ -277,6 +277,16 @@ type HostInfo struct {
 	// This value will be behind against actual tunnel utilization in the hot path.
 	// This should only be used by the ConnectionManagers ticker routine.
 	lastUsed time.Time
+
+	// pqPolicyMisses counts consecutive ConnectionManager traffic-check
+	// ticks on which the PQ policy refused to (re)handshake with this
+	// peer in ModeRequired (PSK absent). Used as hysteresis so a brief
+	// provider blip (a single missed rescan) does not blackout a working
+	// required-mode tunnel: the tunnel is only torn down once the PSK has
+	// been absent for pqRequiredCloseThreshold consecutive checks. Reset
+	// to zero as soon as the policy is satisfied again. Only touched by
+	// the ConnectionManager ticker goroutine, so it needs no locking.
+	pqPolicyMisses int
 }
 
 type ViaSender struct {

@@ -235,3 +235,85 @@ func TestHandleIncomingDispatch(t *testing.T) {
 		assert.Empty(t, hm.indexes, "orphan stage-2 must not create state")
 	})
 }
+
+func TestBumpPQStatCaps(t *testing.T) {
+	hm := &HandshakeManager{pqPeerStats: make(map[netip.Addr]*pqPeerStat)}
+	for i := 0; i < pqPeerStatsCap+10; i++ {
+		a := netip.AddrFrom4([4]byte{10, 0, byte(i >> 8), byte(i)})
+		hm.bumpPQStat(a, func(s *pqPeerStat) { s.Timeouts++ })
+	}
+	if len(hm.pqPeerStats) > pqPeerStatsCap {
+		t.Fatalf("stats map grew to %d, cap is %d", len(hm.pqPeerStats), pqPeerStatsCap)
+	}
+}
+
+func TestPQDegradeCooldown(t *testing.T) {
+	hm := &HandshakeManager{pqPeerStats: make(map[netip.Addr]*pqPeerStat)}
+	a := netip.MustParseAddr("192.0.2.1")
+
+	// No stats yet -> not in cooldown.
+	if hm.pqInDegradeCooldown(a) {
+		t.Fatal("unknown peer must not be in degrade cooldown")
+	}
+
+	// arm mirrors the production trigger: degrade arms on msg2 REJECTS
+	// (proven PSK desync), NOT on plain timeouts, and counts a fresh
+	// episode only on the transition into a cooldown window.
+	arm := func(s *pqPeerStat) {
+		if s.Msg2Rejects >= pqIXPSK2DegradeThreshold {
+			nowNanos := time.Now().UnixNano()
+			wasActive := s.degradeUntilNanos > nowNanos
+			s.degradeUntilNanos = nowNanos + int64(pqIXPSK2DegradeCooldown)
+			if !wasActive {
+				s.DegradeEpisodes++
+				s.consecutiveDegrades++
+			}
+		}
+	}
+
+	// Plain timeouts must NEVER arm the degrade (packet-drop attacker).
+	for i := 0; i < pqIXPSK2DegradeThreshold+3; i++ {
+		hm.bumpPQStat(a, func(s *pqPeerStat) { s.Timeouts++; arm(s) })
+	}
+	if hm.pqInDegradeCooldown(a) {
+		t.Fatal("timeouts alone must not arm degrade (only msg2 rejects do)")
+	}
+
+	// One msg2 reject: below threshold, no degrade.
+	hm.bumpPQStat(a, func(s *pqPeerStat) { s.Msg2Rejects++; arm(s) })
+	if pqIXPSK2DegradeThreshold > 1 && hm.pqInDegradeCooldown(a) {
+		t.Fatal("one msg2 reject (below threshold) must not arm degrade")
+	}
+
+	// Reach the reject threshold -> degrade armed, cooldown active.
+	for hm.pqPeerStats[a].Msg2Rejects < pqIXPSK2DegradeThreshold {
+		hm.bumpPQStat(a, func(s *pqPeerStat) { s.Msg2Rejects++; arm(s) })
+	}
+	if !hm.pqInDegradeCooldown(a) {
+		t.Fatal("at/after threshold the peer must be in degrade cooldown")
+	}
+
+	// Arming the threshold above counted exactly ONE episode (the rejects
+	// climbed within a single cooldown window, so re-arms must not
+	// re-count).
+	if got := hm.pqPeerStats[a].DegradeEpisodes; got != 1 {
+		t.Fatalf("expected 1 degrade episode after one cooldown window, got %d", got)
+	}
+
+	// Expired cooldown -> no longer degrading (retry IXPSK2).
+	hm.pqPeerStats[a].degradeUntilNanos = time.Now().Add(-time.Second).UnixNano()
+	if hm.pqInDegradeCooldown(a) {
+		t.Fatal("expired cooldown must not keep degrading")
+	}
+
+	// A reject AFTER the cooldown expired is a NEW episode (the transition
+	// guard sees no active window), incrementing both the cumulative total
+	// and the consecutive run.
+	hm.bumpPQStat(a, func(s *pqPeerStat) { s.Msg2Rejects++; arm(s) })
+	if got := hm.pqPeerStats[a].DegradeEpisodes; got != 2 {
+		t.Fatalf("expected 2 degrade episodes after a post-cooldown reject, got %d", got)
+	}
+	if got := hm.pqPeerStats[a].consecutiveDegrades; got != 2 {
+		t.Fatalf("expected consecutiveDegrades=2, got %d", got)
+	}
+}

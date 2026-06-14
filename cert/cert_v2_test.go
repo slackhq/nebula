@@ -1,9 +1,11 @@
 package cert
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"net/netip"
 	"slices"
 	"testing"
@@ -376,4 +378,229 @@ func TestCertificateV2_marshalForSigningStability(t *testing.T) {
 	b, err := nc.marshalForSigning()
 	require.NoError(t, err)
 	assert.Equal(t, expectedForSigning, b)
+}
+
+// TestCertificateV2_marshalForSigningStability_WithPqPskBinding pins the
+// exact DER bytes of the signed TBS region when the optional tag-8
+// PQ-PSK binding is present, mirroring
+// TestCertificateV2_marshalForSigningStability. The hard-coded hex is
+// both a regression guard (any accidental change to the tag-8 encoding
+// or field ordering breaks CA signatures fleet-wide) and on-wire
+// documentation of the canonical encoding.
+func TestCertificateV2_marshalForSigningStability_WithPqPskBinding(t *testing.T) {
+	before := time.Date(1996, time.May, 5, 0, 0, 0, 0, time.UTC)
+	after := before.Add(time.Second * 60).Round(time.Second)
+	pubKey := []byte("1234567890abcedfghij1234567890ab")
+	binding := make([]byte, PqPskBindingLen)
+	for i := range binding {
+		binding[i] = byte(i)
+	}
+
+	nc := certificateV2{
+		details: detailsV2{
+			name: "testing",
+			networks: []netip.Prefix{
+				mustParsePrefixUnmapped("10.1.1.2/16"),
+				mustParsePrefixUnmapped("10.1.1.1/24"),
+			},
+			unsafeNetworks: []netip.Prefix{
+				mustParsePrefixUnmapped("9.1.1.3/16"),
+				mustParsePrefixUnmapped("9.1.1.2/24"),
+			},
+			groups:       []string{"test-group1", "test-group2", "test-group3"},
+			notBefore:    before,
+			notAfter:     after,
+			isCA:         false,
+			issuer:       "1234567890abcdef1234567890abcdef",
+			pqPskBinding: binding,
+		},
+		signature: []byte("1234567890abcdef1234567890abcdef"),
+		publicKey: pubKey,
+	}
+
+	// Identical to the no-binding fixture's DER except: the outer
+	// EXPLICIT [0] length grows past 0x7f (long-form "8192"), and the
+	// binding is appended after issuer as tag [8] primitive, length
+	// 0x20, value 00..1f.
+	const expectedRawDetailsStr = "a08192800774657374696e67a10e04050a0101021004050a01010118a20e0405090101031004050901010218a3270c0b746573742d67726f7570310c0b746573742d67726f7570320c0b746573742d67726f7570338504318bef808604318befbc87101234567890abcdef1234567890abcdef8820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+	expectedRawDetails, err := hex.DecodeString(expectedRawDetailsStr)
+	require.NoError(t, err)
+
+	db, err := nc.details.Marshal()
+	require.NoError(t, err)
+	assert.Equal(t, expectedRawDetails, db)
+
+	expectedForSigning, err := hex.DecodeString(expectedRawDetailsStr + "00313233343536373839306162636564666768696a313233343536373839306162")
+	require.NoError(t, err)
+	b, err := nc.marshalForSigning()
+	require.NoError(t, err)
+	assert.Equal(t, expectedForSigning, b)
+}
+
+// TestCertificateV2_PqPskBinding_RoundTrip verifies the new optional
+// details extension survives marshal -> unmarshal unchanged. Also
+// asserts the PqPskBinding() accessor exposes the value for downstream
+// consumers.
+func TestCertificateV2_PqPskBinding_RoundTrip(t *testing.T) {
+	t.Parallel()
+	before := time.Now().Add(time.Second * -60).Round(time.Second)
+	after := time.Now().Add(time.Second * 60).Round(time.Second)
+	pubKey := []byte("1234567890abcedfghij1234567890ab")
+	binding := make([]byte, PqPskBindingLen)
+	for i := range binding {
+		binding[i] = byte(i)
+	}
+
+	nc := certificateV2{
+		details: detailsV2{
+			name: "testing",
+			networks: []netip.Prefix{
+				mustParsePrefixUnmapped("10.1.1.1/24"),
+			},
+			notBefore:    before,
+			notAfter:     after,
+			isCA:         false,
+			issuer:       "1234567890abcdef1234567890abcdef",
+			pqPskBinding: binding,
+		},
+		signature: []byte("1234567890abcdef1234567890abcdef"),
+		publicKey: pubKey,
+	}
+
+	db, err := nc.details.Marshal()
+	require.NoError(t, err)
+	nc.rawDetails = db
+
+	b, err := nc.Marshal()
+	require.NoError(t, err)
+
+	nc2, err := unmarshalCertificateV2(b, nil, Curve_CURVE25519)
+	require.NoError(t, err)
+
+	assert.Equal(t, binding, nc2.PqPskBinding())
+}
+
+// TestCertificateV2_MarshalJSON_LegacyBindingKey guards the backwards-compatible
+// JSON contract: `nebula-cert print -json` must keep emitting the historical
+// rosenpassPubKeySha256 key (consumed by existing parsers) alongside the new
+// canonical pqPskBinding key, both carrying the same hex value.
+func TestCertificateV2_MarshalJSON_LegacyBindingKey(t *testing.T) {
+	t.Parallel()
+	binding := make([]byte, PqPskBindingLen)
+	for i := range binding {
+		binding[i] = byte(i)
+	}
+	wantHex := hex.EncodeToString(binding)
+
+	nc := certificateV2{
+		details: detailsV2{
+			name:         "testing",
+			networks:     []netip.Prefix{mustParsePrefixUnmapped("10.1.1.1/24")},
+			notBefore:    time.Date(1, 0, 0, 1, 0, 0, 0, time.UTC),
+			notAfter:     time.Date(1, 0, 0, 2, 0, 0, 0, time.UTC),
+			issuer:       "1234567890abcedf1234567890abcedf",
+			pqPskBinding: binding,
+		},
+		publicKey: []byte("1234567890abcedf1234567890abcedf"),
+		signature: []byte("1234567890abcedf1234567890abcedf"),
+	}
+
+	rd, err := nc.details.Marshal()
+	require.NoError(t, err)
+	nc.rawDetails = rd
+
+	b, err := nc.MarshalJSON()
+	require.NoError(t, err)
+
+	var parsed struct {
+		Details struct {
+			PqPskBinding          string `json:"pqPskBinding"`
+			RosenpassPubKeySha256 string `json:"rosenpassPubKeySha256"`
+		} `json:"details"`
+	}
+	require.NoError(t, json.Unmarshal(b, &parsed))
+
+	assert.Equal(t, wantHex, parsed.Details.RosenpassPubKeySha256, "legacy rosenpassPubKeySha256 key must remain present")
+	assert.Equal(t, wantHex, parsed.Details.PqPskBinding, "canonical pqPskBinding key must be present")
+}
+
+// TestCertificateV2_PqPskBinding_AbsentBackwardsCompat verifies the
+// unmarshal path tolerates a cert lacking the optional extension —
+// i.e. existing certs signed before the field was added still parse and
+// expose a nil PqPskBinding(). This is the migration-safety contract:
+// TOFU fallback must remain reachable for legacy certs.
+func TestCertificateV2_PqPskBinding_AbsentBackwardsCompat(t *testing.T) {
+	t.Parallel()
+	before := time.Now().Add(time.Second * -60).Round(time.Second)
+	after := time.Now().Add(time.Second * 60).Round(time.Second)
+	pubKey := []byte("1234567890abcedfghij1234567890ab")
+
+	nc := certificateV2{
+		details: detailsV2{
+			name: "testing-no-rp",
+			networks: []netip.Prefix{
+				mustParsePrefixUnmapped("10.1.1.1/24"),
+			},
+			notBefore: before,
+			notAfter:  after,
+			isCA:      false,
+			issuer:    "1234567890abcdef1234567890abcdef",
+		},
+		signature: []byte("1234567890abcdef1234567890abcdef"),
+		publicKey: pubKey,
+	}
+
+	db, err := nc.details.Marshal()
+	require.NoError(t, err)
+	nc.rawDetails = db
+
+	b, err := nc.Marshal()
+	require.NoError(t, err)
+
+	nc2, err := unmarshalCertificateV2(b, nil, Curve_CURVE25519)
+	require.NoError(t, err)
+	assert.Nil(t, nc2.PqPskBinding(), "absent extension must round-trip to nil")
+}
+
+// TestCertificateV2_PqPskBinding_InvalidLengthRejected pins down the
+// validate() check: a non-empty binding whose length is anything other
+// than 32 bytes must be rejected at sign time. This guards against
+// operator typos (e.g. half-hex paste) — better to fail loudly at cert
+// issuance than to ship a cert that downstream parsers refuse.
+func TestCertificateV2_PqPskBinding_InvalidLengthRejected(t *testing.T) {
+	t.Parallel()
+	c := &certificateV2{
+		details: detailsV2{
+			name: "bad",
+			networks: []netip.Prefix{
+				mustParsePrefixUnmapped("10.1.1.1/24"),
+			},
+			notBefore:    time.Now(),
+			notAfter:     time.Now().Add(time.Hour),
+			pqPskBinding: []byte("too-short"),
+		},
+		publicKey: []byte("1234567890abcedfghij1234567890ab"),
+	}
+	err := c.validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pqPskBinding")
+}
+
+func TestPqPskBindingTagUnchanged(t *testing.T) {
+	// Wire-compat guard: the cert v2 extension tag MUST stay 8 forever.
+	if TagDetailsPqPskBinding != (8 | classContextSpecific) {
+		t.Fatalf("PqPskBinding tag changed: got %d, want %d (breaks existing certs)",
+			TagDetailsPqPskBinding, 8|classContextSpecific)
+	}
+}
+
+func TestPqPskBindingRoundTrip(t *testing.T) {
+	bind := make([]byte, 32)
+	for i := range bind {
+		bind[i] = byte(i)
+	}
+	c := &certificateV2{details: detailsV2{pqPskBinding: bind}}
+	if got := c.PqPskBinding(); !bytes.Equal(got, bind) {
+		t.Fatalf("PqPskBinding() round-trip mismatch")
+	}
 }

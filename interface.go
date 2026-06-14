@@ -75,6 +75,17 @@ type Interface struct {
 	closed                atomic.Bool
 	relayManager          *relayManager
 
+	// pqProvider is the embedded PQ-PSK provider instance. nil when
+	// no embedded provider is enabled (the default build, where PSKs
+	// come from an external sidecar via pki.pq_psk_dir) or when the
+	// embedded provider is disabled in config. When non-nil it is
+	// owned by the provider build's notify path, which type-asserts
+	// it back to its concrete provider type to drive peer
+	// registration. Held here as io.Closer so the field type does not
+	// pull the provider package into the default-build dependency
+	// graph.
+	pqProvider io.Closer
+
 	tryPromoteEvery atomic.Uint32
 	reQueryEvery    atomic.Uint32
 	reQueryWait     atomic.Int64
@@ -560,6 +571,15 @@ func (f *Interface) Close() error {
 	if closeErr != nil {
 		errs = append(errs, closeErr)
 	}
+
+	// Stop the PKI's background goroutines (pqRotateForwarder + the
+	// composed PQ provider's fanIn workers). Done after the UDP +
+	// tun readers are torn down so nothing is still calling into
+	// the PKI when its provider is drained.
+	if f.pki != nil {
+		f.pki.Close()
+	}
+
 	f.wg.Done()
 	return errors.Join(errs...)
 }

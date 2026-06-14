@@ -32,6 +32,26 @@ func newTestCertStateWithCipher(
 	t *testing.T, ca cert.Certificate, caKey []byte, name string, networks []netip.Prefix,
 	cipher noise.CipherFunc,
 ) *testCertState {
+	return newTestCertStateWithPSK(t, ca, caKey, name, networks, cipher, nil)
+}
+
+func newTestCertStateWithPSK(
+	t *testing.T, ca cert.Certificate, caKey []byte, name string, networks []netip.Prefix,
+	cipher noise.CipherFunc, pqPSK []byte,
+) *testCertState {
+	var lookup PSKLookupFunc
+	if pqPSK != nil {
+		// Mesh-wide PSK semantics: ignore peer-static and peer-cert,
+		// return same bytes.
+		lookup = func([]byte, cert.Certificate) []byte { return pqPSK }
+	}
+	return newTestCertStateWithPSKLookup(t, ca, caKey, name, networks, cipher, lookup)
+}
+
+func newTestCertStateWithPSKLookup(
+	t *testing.T, ca cert.Certificate, caKey []byte, name string, networks []netip.Prefix,
+	cipher noise.CipherFunc, lookup PSKLookupFunc,
+) *testCertState {
 	t.Helper()
 	c, _, rawPrivKey, _ := ct.NewTestCert(
 		cert.Version2, cert.Curve_CURVE25519, ca, caKey,
@@ -48,7 +68,7 @@ func newTestCertStateWithCipher(
 	return &testCertState{
 		version: cert.Version2,
 		creds: map[cert.Version]*Credential{
-			cert.Version2: NewCredential(c, hsBytes, priv, ncs),
+			cert.Version2: NewCredential(c, hsBytes, priv, ncs, lookup),
 		},
 	}
 }
@@ -66,11 +86,23 @@ func newTestMachine(
 	initiator bool,
 	localIndex uint32,
 ) *Machine {
+	return newTestMachineWithSubtype(t, cs, verifier, initiator, localIndex, header.HandshakeIXPSK0, nil)
+}
+
+func newTestMachineWithSubtype(
+	t *testing.T,
+	cs *testCertState,
+	verifier CertVerifier,
+	initiator bool,
+	localIndex uint32,
+	subtype header.MessageSubType,
+	peerStatic []byte,
+) *Machine {
 	t.Helper()
 	m, err := NewMachine(
 		cs.version, cs.getCredential,
 		verifier, func() (uint32, error) { return localIndex, nil },
-		initiator, header.HandshakeIXPSK0,
+		initiator, subtype, peerStatic, nil,
 	)
 	require.NoError(t, err)
 	return m

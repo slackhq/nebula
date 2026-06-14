@@ -32,6 +32,18 @@ message NebulaMetaDetails {
   repeated V4AddrPort V4AddrPorts = 2;
   repeated V6AddrPort V6AddrPorts = 4;
   uint32 counter = 3;
+
+  // DEPRECATED legacy PQ gossip (raw hash + ports). Emitted AND read for
+  // one release for interop with pre-opaque-blob peers. Superseded by
+  // PqPskIdentity (field 11). Remove after the fleet has upgraded.
+  bytes RosenpassPubkeySha256 = 8 [deprecated = true];
+  uint32 RosenpassPort = 9 [deprecated = true];
+  uint32 DiscoveryPort = 10 [deprecated = true];
+
+  // Canonical opaque PQ-PSK provider identity blob. Provider-defined bytes
+  // (see pq.IdentityCodec); core ferries them verbatim. Preferred over the
+  // legacy 8/9/10 fields when present.
+  bytes PqPskIdentity = 11;
 }
 
 message Addr {
