@@ -17,9 +17,8 @@ const (
 	// MaxRejectPacketSize is sized for the largest possible reject packet (IPv6):
 	// - 40 byte ipv6 header
 	// - 8 byte icmpv6 header
-	// - up to 1240 byte body (as much of the original packet as possible without
-	//   exceeding the IPv6 minimum MTU of 1280)
-	MaxRejectPacketSize = ipv6.HeaderLen + 8 + 1240
+	// - up to 1000 byte body (original packet, possibly truncated)
+	MaxRejectPacketSize = ipv6.HeaderLen + 8 + 1000
 )
 
 func CreateRejectPacket(packet []byte, out []byte) []byte {
@@ -231,9 +230,9 @@ func ipv6FindUpperProtocol(packet []byte) uint8 {
 }
 
 func ipv6CreateRejectICMPPacket(packet []byte, out []byte) []byte {
-	// ICMPv6 Destination Unreachable includes as much of the original packet
-	// as possible without exceeding the IPv6 minimum MTU of 1280 bytes
-	packetLen := min(len(packet), 1280-ipv6.HeaderLen-8)
+	// Include as much of the original packet as possible, up to 1000 bytes,
+	// so the response fits comfortably within any tunnel MTU.
+	packetLen := min(len(packet), 1000)
 
 	outLen := ipv6.HeaderLen + 8 + packetLen
 	if outLen > cap(out) {
@@ -261,7 +260,7 @@ func ipv6CreateRejectICMPPacket(packet []byte, out []byte) []byte {
 	// ICMPv6 Destination Unreachable
 	icmpOut := out[ipv6.HeaderLen:]
 	icmpOut[0] = 1 // type (Destination Unreachable)
-	icmpOut[1] = 4 // code (Port unreachable)
+	icmpOut[1] = 1 // code (Communication with destination administratively prohibited)
 	icmpOut[2] = 0 // checksum
 	icmpOut[3] = 0 //  .
 	icmpOut[4] = 0 // unused

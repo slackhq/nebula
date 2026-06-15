@@ -90,7 +90,7 @@ func Test_CreateRejectPacketIPv6_ICMP(t *testing.T) {
 	src := net.ParseIP("fd00::1")
 	dst := net.ParseIP("fd00::2")
 
-	// UDP packet (next header 17), should produce ICMPv6 Destination Unreachable
+	// Small UDP packet: entire original included in body
 	udpPayload := make([]byte, 20)
 	udpPayload[0] = 0x00 // src port high
 	udpPayload[1] = 0x50 // src port low (80)
@@ -102,7 +102,7 @@ func Test_CreateRejectPacketIPv6_ICMP(t *testing.T) {
 	rejectPacket := CreateRejectPacket(packet, out)
 	assert.NotNil(t, rejectPacket)
 
-	// Expected: 40 (ipv6 hdr) + 8 (icmpv6 hdr) + 60 (original packet)
+	// Small packet fits entirely: 40 (ipv6 hdr) + 8 (icmpv6 hdr) + 60 (original)
 	expectedLen := ipv6.HeaderLen + 8 + len(packet)
 	assert.Len(t, rejectPacket, expectedLen)
 
@@ -113,11 +113,18 @@ func Test_CreateRejectPacketIPv6_ICMP(t *testing.T) {
 	// Verify src/dst are swapped
 	assert.Equal(t, dst.To16(), net.IP(rejectPacket[8:24]))
 	assert.Equal(t, src.To16(), net.IP(rejectPacket[24:40]))
-	// Verify ICMPv6 type=1 (Dest Unreachable), code=4 (Port Unreachable)
+	// Verify ICMPv6 type=1 (Dest Unreachable), code=1 (Administratively prohibited)
 	assert.Equal(t, byte(1), rejectPacket[ipv6.HeaderLen])
-	assert.Equal(t, byte(4), rejectPacket[ipv6.HeaderLen+1])
-	// Verify original packet is included in body
+	assert.Equal(t, byte(1), rejectPacket[ipv6.HeaderLen+1])
+	// Verify entire original packet is included in body
 	assert.Equal(t, packet, rejectPacket[ipv6.HeaderLen+8:])
+
+	// Large packet: body is truncated to 1000 bytes
+	largePkt := makeIPv6Packet(src, dst, 17, make([]byte, 1200))
+	rejectPacket = CreateRejectPacket(largePkt, out)
+	assert.NotNil(t, rejectPacket)
+	assert.Len(t, rejectPacket, ipv6.HeaderLen+8+1000)
+	assert.Equal(t, largePkt[:1000], rejectPacket[ipv6.HeaderLen+8:])
 }
 
 func Test_CreateRejectPacketIPv6_TCP(t *testing.T) {
