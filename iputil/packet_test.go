@@ -45,7 +45,7 @@ func Test_CreateRejectPacket(t *testing.T) {
 	}
 	b = append(b, []byte{0, 3, 0, 4, 0, 0, 0, 0}...)
 
-	expectedLen = MaxIPv4RejectPacketSize
+	expectedLen = maxIPv4RejectPacketSize
 	out = make([]byte, MaxRejectPacketSize)
 	rejectPacket = CreateRejectPacket(b, out)
 	assert.NotNil(t, rejectPacket)
@@ -133,10 +133,10 @@ func Test_CreateRejectPacketIPv6_TCP(t *testing.T) {
 
 	// TCP SYN packet (next header 6)
 	tcpPayload := make([]byte, 20)
-	tcpPayload[0] = 0x00 // src port high
-	tcpPayload[1] = 0x50 // src port low (80)
-	tcpPayload[2] = 0x01 // dst port high
-	tcpPayload[3] = 0xBB // dst port low (443)
+	tcpPayload[0] = 0x00                             // src port high
+	tcpPayload[1] = 0x50                             // src port low (80)
+	tcpPayload[2] = 0x01                             // dst port high
+	tcpPayload[3] = 0xBB                             // dst port low (443)
 	binary.BigEndian.PutUint32(tcpPayload[4:], 1000) // seq
 	binary.BigEndian.PutUint32(tcpPayload[8:], 0)    // ack seq
 	tcpPayload[12] = (20 >> 2) << 4                  // data offset

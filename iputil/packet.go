@@ -12,13 +12,16 @@ const (
 	// - 20 byte ipv4 header
 	// - 8 byte icmpv4 header
 	// - 68 byte body (60 byte max orig ipv4 header + 8 byte orig icmpv4 header)
-	MaxIPv4RejectPacketSize = ipv4.HeaderLen + 8 + 60 + 8
+	maxIPv4RejectPacketSize = ipv4.HeaderLen + 8 + 60 + 8
 
 	// MaxRejectPacketSize is sized for the largest possible reject packet (IPv6):
 	// - 40 byte ipv6 header
 	// - 8 byte icmpv6 header
-	// - up to 1000 byte body (original packet, possibly truncated)
-	MaxRejectPacketSize = ipv6.HeaderLen + 8 + 1000
+	// - up to 1000 byte body (original packet, possibly truncated. We want to stay
+	//   under the MTU with Nebula overhead included)
+	maxIPv6RejectPacketSize = ipv6.HeaderLen + 8 + 1000
+
+	MaxRejectPacketSize = maxIPv6RejectPacketSize
 )
 
 func CreateRejectPacket(packet []byte, out []byte) []byte {
@@ -57,10 +60,7 @@ func ipv4CreateRejectICMPPacket(packet []byte, out []byte) []byte {
 	}
 
 	// ICMP reply includes original header and first 8 bytes of the packet
-	packetLen := len(packet)
-	if packetLen > ihl+8 {
-		packetLen = ihl + 8
-	}
+	packetLen := min(len(packet), ihl+8)
 
 	outLen := ipv4.HeaderLen + 8 + packetLen
 	if outLen > cap(out) {
@@ -92,14 +92,14 @@ func ipv4CreateRejectICMPPacket(packet []byte, out []byte) []byte {
 
 	// ICMP Destination Unreachable
 	icmpOut := out[ipv4.HeaderLen:]
-	icmpOut[0] = 3 // type (Destination unreachable)
-	icmpOut[1] = 3 // code (Port unreachable error)
-	icmpOut[2] = 0 // checksum
-	icmpOut[3] = 0 //  .
-	icmpOut[4] = 0 // unused
-	icmpOut[5] = 0 //  .
-	icmpOut[6] = 0 //  .
-	icmpOut[7] = 0 //  .
+	icmpOut[0] = 3  // type (Destination unreachable)
+	icmpOut[1] = 13 // code (Communication administratively prohibited)
+	icmpOut[2] = 0  // checksum
+	icmpOut[3] = 0  //  .
+	icmpOut[4] = 0  // unused
+	icmpOut[5] = 0  //  .
+	icmpOut[6] = 0  //  .
+	icmpOut[7] = 0  //  .
 
 	// Copy original IP header and first 8 bytes as body
 	copy(icmpOut[8:], packet[:packetLen])
