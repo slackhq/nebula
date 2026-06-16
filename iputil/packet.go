@@ -36,8 +36,7 @@ func CreateRejectPacket(packet []byte, out []byte) []byte {
 			return nil
 		}
 		// Do not send reject packets for non-first fragments
-		fragmentOffset := uint16(packet[6]&0x1F)<<8 | uint16(packet[7])
-		if fragmentOffset > 0 {
+		if packet[6]&0x1f != 0 || packet[7] != 0 {
 			return nil
 		}
 		switch packet[9] {
@@ -351,8 +350,7 @@ func ipv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int, isFragm
 			if len(packet) < offset+8 {
 				return nextHeader, offset, isFragment
 			}
-			fragOffset := binary.BigEndian.Uint16(packet[offset+2:]) >> 3
-			if fragOffset != 0 {
+			if packet[offset+2] != 0 || packet[offset+3]&0xf8 != 0 {
 				isFragment = true
 			}
 			nextHeader = packet[offset]
