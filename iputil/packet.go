@@ -378,6 +378,21 @@ func ipv6FindUpperProtocolOffset(packet []byte) int {
 }
 
 func CreateICMPEchoResponse(packet, out []byte) []byte {
+	if len(packet) < 1 {
+		return nil
+	}
+
+	switch packet[0] >> 4 {
+	case 4:
+		return createICMPv4EchoResponse(packet, out)
+	case 6:
+		return createICMPv6EchoResponse(packet, out)
+	default:
+		return nil
+	}
+}
+
+func createICMPv4EchoResponse(packet, out []byte) []byte {
 	// Return early if this is not a simple ICMP Echo Request
 	//TODO: make constants out of these
 	if !(len(packet) >= 28 && len(packet) <= 9001 && packet[0] == 0x45 && packet[9] == 0x01 && packet[20] == 0x08) {
@@ -407,6 +422,43 @@ func CreateICMPEchoResponse(packet, out []byte) []byte {
 	icmp[2] = 0
 	icmp[3] = 0
 	binary.BigEndian.PutUint16(icmp[2:], tcpipChecksum(icmp, 0))
+
+	return out
+}
+
+func createICMPv6EchoResponse(packet, out []byte) []byte {
+	// IPv6 header (40 bytes) + ICMPv6 header (8 bytes minimum)
+	if len(packet) < ipv6.HeaderLen+8 || len(packet) > 9001 {
+		return nil
+	}
+
+	// Next Header must be ICMPv6 (58)
+	if packet[6] != 58 {
+		return nil
+	}
+
+	// ICMPv6 type must be Echo Request (128)
+	if packet[ipv6.HeaderLen] != 128 {
+		return nil
+	}
+
+	out = out[:len(packet)]
+	copy(out, packet)
+
+	// Swap src/dst addresses (bytes 8-23 and 24-39)
+	copy(out[8:24], packet[24:40])
+	copy(out[24:40], packet[8:24])
+
+	// Change ICMPv6 type to Echo Reply (129)
+	icmp := out[ipv6.HeaderLen:]
+	icmp[0] = 129
+	icmp[2] = 0
+	icmp[3] = 0
+
+	// ICMPv6 checksum uses a pseudo-header with src, dst, length, and next header
+	payloadLen := uint32(len(icmp))
+	csum := ipv6PseudoheaderChecksum(out[8:24], out[24:40], 58, payloadLen)
+	binary.BigEndian.PutUint16(icmp[2:], tcpipChecksum(icmp, csum))
 
 	return out
 }

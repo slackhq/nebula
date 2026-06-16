@@ -239,3 +239,106 @@ func Test_CreateRejectPacketIPv6_ExtensionHeaders(t *testing.T) {
 	tcpOut := rejectPacket[ipv6.HeaderLen:]
 	assert.Equal(t, byte(0b00000100), tcpOut[13]) // RST only
 }
+
+func TestCreateICMPEchoResponse_IPv4(t *testing.T) {
+	// Build a simple IPv4 ICMP Echo Request
+	packet := make([]byte, 28)
+	packet[0] = 0x45                                   // version 4, IHL 5
+	binary.BigEndian.PutUint16(packet[2:], uint16(28)) // total length
+	packet[8] = 64                                     // TTL
+	packet[9] = 1                                      // protocol ICMP
+	copy(packet[12:16], net.IPv4(10, 0, 0, 1).To4())   // src
+	copy(packet[16:20], net.IPv4(10, 0, 0, 2).To4())   // dst
+	packet[20] = 8                                     // ICMP Echo Request
+
+	out := make([]byte, len(packet))
+	result := CreateICMPEchoResponse(packet, out)
+	assert.NotNil(t, result)
+	assert.Equal(t, byte(0x45), result[0])
+	// src/dst swapped
+	assert.Equal(t, net.IPv4(10, 0, 0, 2).To4(), net.IP(result[12:16]))
+	assert.Equal(t, net.IPv4(10, 0, 0, 1).To4(), net.IP(result[16:20]))
+	// ICMP Echo Reply
+	assert.Equal(t, byte(0), result[20])
+}
+
+func TestCreateICMPEchoResponse_IPv6(t *testing.T) {
+	src := net.ParseIP("fd00::1").To16()
+	dst := net.ParseIP("fd00::2").To16()
+
+	// Build an IPv6 ICMPv6 Echo Request packet
+	// IPv6 header (40 bytes) + ICMPv6 (8 bytes)
+	packet := make([]byte, 48)
+	packet[0] = 0x60        // version 6
+	payloadLen := uint16(8) // ICMPv6 header only
+	binary.BigEndian.PutUint16(packet[4:], payloadLen)
+	packet[6] = 58           // Next Header: ICMPv6
+	packet[7] = 64           // Hop Limit
+	copy(packet[8:24], src)  // src address
+	copy(packet[24:40], dst) // dst address
+
+	// ICMPv6 Echo Request
+	icmp := packet[40:]
+	icmp[0] = 128                           // type: Echo Request
+	icmp[1] = 0                             // code
+	binary.BigEndian.PutUint16(icmp[4:], 1) // identifier
+	binary.BigEndian.PutUint16(icmp[6:], 1) // sequence number
+
+	// Compute correct checksum for the request
+	csum := ipv6PseudoheaderChecksum(src, dst, 58, uint32(payloadLen))
+	binary.BigEndian.PutUint16(icmp[2:], tcpipChecksum(icmp, csum))
+
+	out := make([]byte, len(packet))
+	result := CreateICMPEchoResponse(packet, out)
+	assert.NotNil(t, result)
+
+	// Version should still be 6
+	assert.Equal(t, byte(6), result[0]>>4)
+	// src/dst swapped
+	assert.Equal(t, dst, net.IP(result[8:24]))
+	assert.Equal(t, src, net.IP(result[24:40]))
+	// ICMPv6 Echo Reply type
+	assert.Equal(t, byte(129), result[40])
+
+	// Verify checksum is valid (tcpipChecksum returns 0 when data+checksum is correct)
+	respIcmp := result[40:]
+	verifyCsum := ipv6PseudoheaderChecksum(result[8:24], result[24:40], 58, uint32(payloadLen))
+	assert.Equal(t, uint16(0), tcpipChecksum(respIcmp, verifyCsum))
+}
+
+func TestCreateICMPEchoResponse_IPv6_NotEchoRequest(t *testing.T) {
+	src := net.ParseIP("fd00::1").To16()
+	dst := net.ParseIP("fd00::2").To16()
+
+	packet := make([]byte, 48)
+	packet[0] = 0x60
+	binary.BigEndian.PutUint16(packet[4:], 8)
+	packet[6] = 58
+	packet[7] = 64
+	copy(packet[8:24], src)
+	copy(packet[24:40], dst)
+
+	// ICMPv6 type 1 (Destination Unreachable) - not Echo Request
+	packet[40] = 1
+
+	out := make([]byte, len(packet))
+	result := CreateICMPEchoResponse(packet, out)
+	assert.Nil(t, result)
+}
+
+func TestCreateICMPEchoResponse_IPv6_NotICMPv6(t *testing.T) {
+	src := net.ParseIP("fd00::1").To16()
+	dst := net.ParseIP("fd00::2").To16()
+
+	packet := make([]byte, 48)
+	packet[0] = 0x60
+	binary.BigEndian.PutUint16(packet[4:], 8)
+	packet[6] = 6 // TCP, not ICMPv6
+	packet[7] = 64
+	copy(packet[8:24], src)
+	copy(packet[24:40], dst)
+
+	out := make([]byte, len(packet))
+	result := CreateICMPEchoResponse(packet, out)
+	assert.Nil(t, result)
+}
