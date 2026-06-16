@@ -36,6 +36,14 @@ jobs:
       working-directory: ./.github/workflows/smoke
       run: ./smoke.sh
 
+    - name: setup docker image ipv6
+      working-directory: ./.github/workflows/smoke
+      run: SMOKE_OVERLAY_IPV6=1 ./build.sh
+
+    - name: run smoke ipv6
+      working-directory: ./.github/workflows/smoke
+      run: SMOKE_OVERLAY_IPV6=1 ./smoke.sh
+
     - name: setup relay docker image
       working-directory: ./.github/workflows/smoke
       run: ./build-relay.sh
