@@ -35,6 +35,12 @@ func CreateRejectPacket(packet []byte, out []byte) []byte {
 		if len(packet) < ipv4.HeaderLen {
 			return nil
 		}
+		// Do not send reject packets for fragments
+		moreFragments := (packet[6] & 0x20) != 0
+		fragmentOffset := uint16(packet[6]&0x1F)<<8 | uint16(packet[7])
+		if fragmentOffset > 0 || moreFragments {
+			return nil
+		}
 		switch packet[9] {
 		case 6: // tcp
 			return ipv4CreateRejectTCPPacket(packet, out)
@@ -57,6 +63,14 @@ func ipv4CreateRejectICMPPacket(packet []byte, out []byte) []byte {
 	if len(packet) < ihl {
 		// We need at least this many bytes for this to be a valid packet
 		return nil
+	}
+
+	// Do not generate ICMP errors in response to ICMP error packets
+	if packet[9] == 1 && len(packet) > ihl {
+		icmpType := packet[ihl]
+		if icmpType == 3 || icmpType == 4 || icmpType == 5 || icmpType == 11 || icmpType == 12 {
+			return nil
+		}
 	}
 
 	// ICMP reply includes original header and first 8 bytes of the packet
@@ -187,16 +201,27 @@ func ipv4CreateRejectTCPPacket(packet []byte, out []byte) []byte {
 }
 
 func ipv6CreateRejectPacket(packet []byte, out []byte) []byte {
-	proto, offset := ipv6FindUpperProtocol(packet)
+	proto, offset, isFragment := ipv6FindUpperProtocol(packet)
+	if isFragment {
+		return nil
+	}
 	switch proto {
 	case 6: // tcp
 		return ipv6CreateRejectTCPPacket(packet, out, offset)
 	default:
-		return ipv6CreateRejectICMPPacket(packet, out)
+		return ipv6CreateRejectICMPPacket(packet, out, proto, offset)
 	}
 }
 
-func ipv6CreateRejectICMPPacket(packet []byte, out []byte) []byte {
+func ipv6CreateRejectICMPPacket(packet []byte, out []byte, proto uint8, offset int) []byte {
+	// Do not generate ICMPv6 errors in response to ICMPv6 error packets
+	if proto == 58 && len(packet) > offset {
+		icmpType := packet[offset]
+		if icmpType >= 1 && icmpType <= 4 {
+			return nil
+		}
+	}
+
 	// Include as much of the original packet as possible, up to 1000 bytes,
 	// so the response fits comfortably within any tunnel MTU.
 	packetLen := min(len(packet), 1000)
@@ -310,7 +335,7 @@ func ipv6CreateRejectTCPPacket(packet []byte, out []byte, offset int) []byte {
 	return out
 }
 
-func ipv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int) {
+func ipv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int, isFragment bool) {
 	nextHeader = packet[6]
 	offset = ipv6.HeaderLen
 
@@ -318,27 +343,31 @@ func ipv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int) {
 		switch nextHeader {
 		case 0, 43, 60: // Hop-by-Hop, Routing, Destination
 			if len(packet) < offset+2 {
-				return nextHeader, offset
+				return nextHeader, offset, isFragment
 			}
 			nextHeader = packet[offset]
 			offset += int(packet[offset+1]+1) << 3
 
 		case 44: // Fragment
 			if len(packet) < offset+8 {
-				return nextHeader, offset
+				return nextHeader, offset, isFragment
+			}
+			fragOffset := binary.BigEndian.Uint16(packet[offset+2:]) >> 3
+			if fragOffset != 0 {
+				isFragment = true
 			}
 			nextHeader = packet[offset]
 			offset += 8
 
 		case 51: // AH
 			if len(packet) < offset+2 {
-				return nextHeader, offset
+				return nextHeader, offset, isFragment
 			}
 			nextHeader = packet[offset]
 			offset += int(packet[offset+1]+2) << 2
 
 		default:
-			return nextHeader, offset
+			return nextHeader, offset, isFragment
 		}
 	}
 }
