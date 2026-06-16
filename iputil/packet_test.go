@@ -74,6 +74,111 @@ func Test_CreateRejectPacket(t *testing.T) {
 	assert.Len(t, rejectPacket, expectedLen)
 }
 
+func Test_CreateRejectPacket_NoFragment(t *testing.T) {
+	out := make([]byte, MaxRejectPacketSize)
+
+	// IPv4: non-zero fragment offset should not generate reject packet
+	h := ipv4.Header{
+		Len:      20,
+		Src:      net.IPv4(10, 0, 0, 1),
+		Dst:      net.IPv4(10, 0, 0, 2),
+		Protocol: 17, // UDP
+	}
+	b, err := h.Marshal()
+	if err != nil {
+		t.Fatalf("h.Marshal: %v", err)
+	}
+	b = append(b, make([]byte, 8)...)
+	// Set fragment offset to non-zero (byte 6-7, offset in 8-byte units)
+	b[6] = 0x00
+	b[7] = 0x01
+	assert.Nil(t, CreateRejectPacket(b, out))
+
+	// MF flag with zero offset (first fragment) should still generate reject
+	b[6] = 0x20 // MF flag set
+	b[7] = 0x00
+	assert.NotNil(t, CreateRejectPacket(b, out))
+
+	// Non-fragment should still generate reject packet
+	b[6] = 0x00
+	b[7] = 0x00
+	assert.NotNil(t, CreateRejectPacket(b, out))
+
+	// DF flag only (not a fragment) should still generate reject packet
+	b[6] = 0x40
+	b[7] = 0x00
+	assert.NotNil(t, CreateRejectPacket(b, out))
+}
+
+func Test_CreateRejectPacketIPv6_NoFragment(t *testing.T) {
+	src := net.ParseIP("fd00::1")
+	dst := net.ParseIP("fd00::2")
+	out := make([]byte, MaxRejectPacketSize)
+
+	// IPv6 with Fragment header and non-zero offset should not generate reject
+	fragHeader := []byte{
+		17,   // next header: UDP
+		0,    // reserved
+		0, 9, // fragment offset=1 (shifted left 3), M=1
+		0, 0, 0, 1, // identification
+	}
+	udpPayload := make([]byte, 8)
+	payload := append(fragHeader, udpPayload...)
+	packet := makeIPv6Packet(src, dst, 44, payload) // next header 44 = Fragment
+	assert.Nil(t, CreateRejectPacket(packet, out))
+
+	// Fragment header with zero offset (first fragment) should still generate reject
+	fragHeader[2] = 0
+	fragHeader[3] = 1 // offset=0, M=1
+	payload = append(fragHeader, udpPayload...)
+	packet = makeIPv6Packet(src, dst, 44, payload)
+	assert.NotNil(t, CreateRejectPacket(packet, out))
+}
+
+func Test_CreateRejectPacket_NoICMPError(t *testing.T) {
+	out := make([]byte, MaxRejectPacketSize)
+
+	// ICMP error types should not generate reject packets
+	icmpErrorTypes := []byte{3, 4, 5, 11, 12}
+	for _, icmpType := range icmpErrorTypes {
+		h := ipv4.Header{
+			Len:      20,
+			Src:      net.IPv4(10, 0, 0, 1),
+			Dst:      net.IPv4(10, 0, 0, 2),
+			Protocol: 1, // ICMP
+		}
+
+		b, err := h.Marshal()
+		if err != nil {
+			t.Fatalf("h.Marshal: %v", err)
+		}
+		b = append(b, icmpType, 0, 0, 0, 0, 0, 0, 0)
+
+		rejectPacket := CreateRejectPacket(b, out)
+		assert.Nil(t, rejectPacket, "ICMP type %d should not generate a reject packet", icmpType)
+	}
+
+	// ICMP non-error types should still generate reject packets
+	icmpNonErrorTypes := []byte{0, 8, 13, 14}
+	for _, icmpType := range icmpNonErrorTypes {
+		h := ipv4.Header{
+			Len:      20,
+			Src:      net.IPv4(10, 0, 0, 1),
+			Dst:      net.IPv4(10, 0, 0, 2),
+			Protocol: 1, // ICMP
+		}
+
+		b, err := h.Marshal()
+		if err != nil {
+			t.Fatalf("h.Marshal: %v", err)
+		}
+		b = append(b, icmpType, 0, 0, 0, 0, 0, 0, 0)
+
+		rejectPacket := CreateRejectPacket(b, out)
+		assert.NotNil(t, rejectPacket, "ICMP type %d should generate a reject packet", icmpType)
+	}
+}
+
 func makeIPv6Packet(src, dst net.IP, nextHeader uint8, payload []byte) []byte {
 	b := make([]byte, ipv6.HeaderLen+len(payload))
 	b[0] = ipv6.Version << 4
@@ -195,6 +300,33 @@ func Test_CreateRejectPacketIPv6_TCPWithACK(t *testing.T) {
 	assert.Equal(t, byte(0b00000100), tcpOut[13])
 	// seq = original ack_seq
 	assert.Equal(t, uint32(2000), binary.BigEndian.Uint32(tcpOut[4:]))
+}
+
+func Test_CreateRejectPacketIPv6_NoICMPError(t *testing.T) {
+	src := net.ParseIP("fd00::1")
+	dst := net.ParseIP("fd00::2")
+	out := make([]byte, MaxRejectPacketSize)
+
+	// ICMPv6 error types (1-4) should not generate reject packets
+	for icmpType := byte(1); icmpType <= 4; icmpType++ {
+		payload := make([]byte, 8)
+		payload[0] = icmpType
+		packet := makeIPv6Packet(src, dst, 58, payload)
+
+		rejectPacket := CreateRejectPacket(packet, out)
+		assert.Nil(t, rejectPacket, "ICMPv6 type %d should not generate a reject packet", icmpType)
+	}
+
+	// ICMPv6 non-error types should still generate reject packets
+	nonErrorTypes := []byte{128, 129, 133, 134}
+	for _, icmpType := range nonErrorTypes {
+		payload := make([]byte, 8)
+		payload[0] = icmpType
+		packet := makeIPv6Packet(src, dst, 58, payload)
+
+		rejectPacket := CreateRejectPacket(packet, out)
+		assert.NotNil(t, rejectPacket, "ICMPv6 type %d should generate a reject packet", icmpType)
+	}
 }
 
 func Test_CreateRejectPacketIPv6_TooShort(t *testing.T) {
