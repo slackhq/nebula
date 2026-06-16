@@ -187,45 +187,12 @@ func ipv4CreateRejectTCPPacket(packet []byte, out []byte) []byte {
 }
 
 func ipv6CreateRejectPacket(packet []byte, out []byte) []byte {
-	proto := ipv6FindUpperProtocol(packet)
+	proto, offset := ipv6FindUpperProtocol(packet)
 	switch proto {
 	case 6: // tcp
-		return ipv6CreateRejectTCPPacket(packet, out)
+		return ipv6CreateRejectTCPPacket(packet, out, offset)
 	default:
 		return ipv6CreateRejectICMPPacket(packet, out)
-	}
-}
-
-func ipv6FindUpperProtocol(packet []byte) uint8 {
-	nextHeader := packet[6]
-	offset := ipv6.HeaderLen
-
-	for {
-		switch nextHeader {
-		case 0, 43, 60: // Hop-by-Hop, Routing, Destination
-			if len(packet) < offset+2 {
-				return nextHeader
-			}
-			nextHeader = packet[offset]
-			offset += int(packet[offset+1]+1) << 3
-
-		case 44: // Fragment
-			if len(packet) < offset+8 {
-				return nextHeader
-			}
-			nextHeader = packet[offset]
-			offset += 8
-
-		case 51: // AH
-			if len(packet) < offset+2 {
-				return nextHeader
-			}
-			nextHeader = packet[offset]
-			offset += int(packet[offset+1]+2) << 2
-
-		default:
-			return nextHeader
-		}
 	}
 }
 
@@ -277,10 +244,9 @@ func ipv6CreateRejectICMPPacket(packet []byte, out []byte) []byte {
 	return out
 }
 
-func ipv6CreateRejectTCPPacket(packet []byte, out []byte) []byte {
+func ipv6CreateRejectTCPPacket(packet []byte, out []byte, offset int) []byte {
 	const tcpLen = 20
 
-	offset := ipv6FindUpperProtocolOffset(packet)
 	if len(packet) < offset+tcpLen {
 		return nil
 	}
@@ -344,35 +310,35 @@ func ipv6CreateRejectTCPPacket(packet []byte, out []byte) []byte {
 	return out
 }
 
-func ipv6FindUpperProtocolOffset(packet []byte) int {
-	nextHeader := packet[6]
-	offset := ipv6.HeaderLen
+func ipv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int) {
+	nextHeader = packet[6]
+	offset = ipv6.HeaderLen
 
 	for {
 		switch nextHeader {
 		case 0, 43, 60: // Hop-by-Hop, Routing, Destination
 			if len(packet) < offset+2 {
-				return offset
+				return nextHeader, offset
 			}
 			nextHeader = packet[offset]
 			offset += int(packet[offset+1]+1) << 3
 
 		case 44: // Fragment
 			if len(packet) < offset+8 {
-				return offset
+				return nextHeader, offset
 			}
 			nextHeader = packet[offset]
 			offset += 8
 
 		case 51: // AH
 			if len(packet) < offset+2 {
-				return offset
+				return nextHeader, offset
 			}
 			nextHeader = packet[offset]
 			offset += int(packet[offset+1]+2) << 2
 
 		default:
-			return offset
+			return nextHeader, offset
 		}
 	}
 }
