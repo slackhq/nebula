@@ -377,19 +377,6 @@ func ipv6FindUpperProtocolOffset(packet []byte) int {
 	}
 }
 
-func ipv6PseudoheaderChecksum(src, dst []byte, proto, length uint32) (csum uint32) {
-	for i := 0; i < 16; i += 2 {
-		csum += uint32(src[i]) << 8
-		csum += uint32(src[i+1])
-		csum += uint32(dst[i]) << 8
-		csum += uint32(dst[i+1])
-	}
-	csum += proto
-	csum += length & 0xffff
-	csum += length >> 16
-	return csum
-}
-
 func CreateICMPEchoResponse(packet, out []byte) []byte {
 	// Return early if this is not a simple ICMP Echo Request
 	//TODO: make constants out of these
@@ -456,6 +443,21 @@ func ipv4PseudoheaderChecksum(src, dst []byte, proto, length uint32) (csum uint3
 	csum += uint32(src[1]) + uint32(src[3])
 	csum += (uint32(dst[0]) + uint32(dst[2])) << 8
 	csum += uint32(dst[1]) + uint32(dst[3])
+	csum += proto
+	csum += length & 0xffff
+	csum += length >> 16
+	return csum
+}
+
+// based on:
+// - https://github.com/google/gopacket/blob/v1.1.19/layers/tcpip.go#L37-L48
+func ipv6PseudoheaderChecksum(src, dst []byte, proto, length uint32) (csum uint32) {
+	for i := 0; i < 16; i += 2 {
+		csum += uint32(src[i]) << 8
+		csum += uint32(src[i+1])
+		csum += uint32(dst[i]) << 8
+		csum += uint32(dst[i+1])
+	}
 	csum += proto
 	csum += length & 0xffff
 	csum += length >> 16
