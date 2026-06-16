@@ -93,11 +93,11 @@ docker exec host3 tcpdump -i eth0 -q -w - -U 2>logs/host3.outside.log >logs/host
 docker exec host4 tcpdump -i tun0 -q -w - -U 2>logs/host4.inside.log >logs/host4.inside.pcap &
 docker exec host4 tcpdump -i eth0 -q -w - -U 2>logs/host4.outside.log >logs/host4.outside.pcap &
 
-docker exec host2 ncat -nklv 0.0.0.0 2000 &
-docker exec host3 ncat -nklv 0.0.0.0 2000 &
-docker exec host4 ncat -e '/usr/bin/echo helloagainfromhost4' -nkluv 0.0.0.0 4000 &
-docker exec host2 ncat -e '/usr/bin/echo host2' -nkluv 0.0.0.0 3000 &
-docker exec host3 ncat -e '/usr/bin/echo host3' -nkluv 0.0.0.0 3000 &
+docker exec host2 ncat -nklv 2000 &
+docker exec host3 ncat -nklv 2000 &
+docker exec host4 ncat -e '/usr/bin/echo helloagainfromhost4' -nkluv 4000 &
+docker exec host2 ncat -e '/usr/bin/echo host2' -nkluv 3000 &
+docker exec host3 ncat -e '/usr/bin/echo host3' -nkluv 3000 &
 
 set +x
 echo
