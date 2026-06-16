@@ -298,8 +298,8 @@ func (cm *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo
 		} else {
 			cm.intf.SendMessageToHostInfo(header.Control, 0, newhostinfo, msg, make([]byte, 12), make([]byte, mtu))
 			cm.l.Info("send CreateRelayRequest",
-				"relayFrom", req.RelayFromAddr,
-				"relayTo", req.RelayToAddr,
+				"relayFrom", relayFrom,
+				"relayTo", relayTo,
 				"initiatorRelayIndex", req.InitiatorRelayIndex,
 				"responderRelayIndex", req.ResponderRelayIndex,
 				"vpnAddrs", newhostinfo.vpnAddrs,
