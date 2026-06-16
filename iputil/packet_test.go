@@ -94,10 +94,10 @@ func Test_CreateRejectPacket_NoFragment(t *testing.T) {
 	b[7] = 0x01
 	assert.Nil(t, CreateRejectPacket(b, out))
 
-	// MF flag with zero offset (first fragment) should also be skipped
+	// MF flag with zero offset (first fragment) should still generate reject
 	b[6] = 0x20 // MF flag set
 	b[7] = 0x00
-	assert.Nil(t, CreateRejectPacket(b, out))
+	assert.NotNil(t, CreateRejectPacket(b, out))
 
 	// Non-fragment should still generate reject packet
 	b[6] = 0x00

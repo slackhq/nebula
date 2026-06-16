@@ -35,10 +35,9 @@ func CreateRejectPacket(packet []byte, out []byte) []byte {
 		if len(packet) < ipv4.HeaderLen {
 			return nil
 		}
-		// Do not send reject packets for fragments
-		moreFragments := (packet[6] & 0x20) != 0
+		// Do not send reject packets for non-first fragments
 		fragmentOffset := uint16(packet[6]&0x1F)<<8 | uint16(packet[7])
-		if fragmentOffset > 0 || moreFragments {
+		if fragmentOffset > 0 {
 			return nil
 		}
 		switch packet[9] {
