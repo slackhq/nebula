@@ -268,6 +268,9 @@ smoke-relay-docker: bin-docker
 	cd .github/workflows/smoke/ && ./build-relay.sh
 	cd .github/workflows/smoke/ && ./smoke-relay.sh
 
+smoke-docker-ipv6: export SMOKE_OVERLAY_IPV6 = 1
+smoke-docker-ipv6: smoke-docker
+
 smoke-docker-race: BUILD_ARGS = -race
 smoke-docker-race: CGO_ENABLED = 1
 smoke-docker-race: smoke-docker
