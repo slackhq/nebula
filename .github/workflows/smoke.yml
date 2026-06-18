@@ -28,6 +28,9 @@ jobs:
     - name: Smoke Docker
       run: make smoke-docker-race
 
+    - name: Smoke Docker IPv6 overlay
+      run: make smoke-docker-ipv6
+
     - name: Smoke Relay Docker
       run: make smoke-relay-docker
 

@@ -136,14 +136,6 @@ func (cm *connectionManager) getAndResetTrafficCheck(h *HostInfo, now time.Time)
 	return in, out
 }
 
-// AddTrafficWatch must be called for every new HostInfo.
-// We will continue to monitor the HostInfo until the tunnel is dropped.
-func (cm *connectionManager) AddTrafficWatch(h *HostInfo) {
-	if h.out.Swap(true) == false {
-		cm.trafficTimer.Add(h.localIndexId, cm.checkInterval)
-	}
-}
-
 func (cm *connectionManager) Start(ctx context.Context) {
 	clockSource := time.NewTicker(cm.trafficTimer.t.tickDuration)
 	defer clockSource.Stop()
@@ -306,8 +298,8 @@ func (cm *connectionManager) migrateRelayUsed(oldhostinfo, newhostinfo *HostInfo
 		} else {
 			cm.intf.SendMessageToHostInfo(header.Control, 0, newhostinfo, msg, make([]byte, 12), make([]byte, mtu))
 			cm.l.Info("send CreateRelayRequest",
-				"relayFrom", req.RelayFromAddr,
-				"relayTo", req.RelayToAddr,
+				"relayFrom", relayFrom,
+				"relayTo", relayTo,
 				"initiatorRelayIndex", req.InitiatorRelayIndex,
 				"responderRelayIndex", req.ResponderRelayIndex,
 				"vpnAddrs", newhostinfo.vpnAddrs,

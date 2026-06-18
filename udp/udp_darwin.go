@@ -175,8 +175,8 @@ func (u *StdConn) ListenOut(r EncReader) error {
 			if errors.Is(err, net.ErrClosed) {
 				return err
 			}
-
 			u.l.Error("unexpected udp socket receive error", "error", err)
+			continue
 		}
 
 		r(netip.AddrPortFrom(rua.Addr().Unmap(), rua.Port()), buffer[:n])

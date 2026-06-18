@@ -138,9 +138,9 @@ func (rs *RelayState) InsertRelayTo(ip netip.Addr) {
 }
 
 func (rs *RelayState) CopyRelayIps() []netip.Addr {
-	ret := make([]netip.Addr, len(rs.relays))
 	rs.RLock()
 	defer rs.RUnlock()
+	ret := make([]netip.Addr, len(rs.relays))
 	copy(ret, rs.relays)
 	return ret
 }
@@ -622,6 +622,11 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 
 	hm.Indexes[hostinfo.localIndexId] = hostinfo
 	hm.RemoteIndexes[hostinfo.remoteIndexId] = hostinfo
+
+	hostinfo.out.Store(true)
+	if f.connectionManager != nil { // f.connectionManager is only nil in some unit tests
+		f.connectionManager.trafficTimer.Add(hostinfo.localIndexId, f.connectionManager.checkInterval)
+	}
 
 	if hm.l.Enabled(context.Background(), slog.LevelDebug) {
 		hm.l.Debug("Hostmap vpnIp added",

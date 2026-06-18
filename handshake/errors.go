@@ -13,6 +13,7 @@ var (
 	ErrUnknownSubtype          = errors.New("unknown handshake subtype")
 	ErrMissingContent          = errors.New("expected handshake content but message was empty")
 	ErrUnexpectedContent       = errors.New("received unexpected handshake content")
+	ErrInvalidRemoteIndex      = errors.New("peer sent an invalid index in handshake payload")
 	ErrIndexAllocation         = errors.New("failed to allocate local index")
 	ErrNoCredential            = errors.New("no handshake credential available for cert version")
 	ErrAsymmetricCipherKeys    = errors.New("noise produced only one cipher key")
