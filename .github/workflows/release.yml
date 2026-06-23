@@ -163,7 +163,10 @@ jobs:
           mkdir -p build/linux-{amd64,arm64}
           tar -zxvf artifacts/nebula-linux-amd64.tar.gz -C build/linux-amd64/
           tar -zxvf artifacts/nebula-linux-arm64.tar.gz -C build/linux-arm64/
-          docker buildx build . --push -f docker/Dockerfile --platform linux/amd64,linux/arm64 --tag "${DOCKER_IMAGE_REPO}:${DOCKER_IMAGE_TAG}" --tag "${DOCKER_IMAGE_REPO}:${GITHUB_REF#refs/tags/v}"
+          docker buildx build . --push -f docker/Dockerfile --platform linux/amd64,linux/arm64 \
+            --build-arg VERSION="${GITHUB_REF#refs/tags/v}" \
+            --build-arg REVISION="${GITHUB_SHA}" \
+            --tag "${DOCKER_IMAGE_REPO}:${DOCKER_IMAGE_TAG}" --tag "${DOCKER_IMAGE_REPO}:${GITHUB_REF#refs/tags/v}"
 
   release:
     name: Create and Upload Release
