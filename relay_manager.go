@@ -94,7 +94,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 		}
 
 		relayHostInfo := rm.hostmap.QueryVpnAddr(relay)
-		if relayHostInfo == nil || !relayHostInfo.remote.IsValid() {
+		if relayHostInfo == nil || !relayHostInfo.GetRemote().IsValid() {
 			hl.Log(context.Background(), level, "Establish tunnel to relay target", "relay", relay.String())
 			f.Handshake(relay)
 			continue
@@ -104,7 +104,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 		existingRelay, ok := relayHostInfo.relayState.QueryRelayForByIp(vpnIp)
 		if !ok {
 			// No relays exist or requested yet.
-			if relayHostInfo.remote.IsValid() {
+			if relayHostInfo.GetRemote().IsValid() {
 				idx, err := AddRelay(rm.l, relayHostInfo, rm.hostmap, vpnIp, nil, TerminalType, Requested)
 				if err != nil {
 					hl.Info("Failed to add relay to hostmap", "relay", relay.String(), "error", err)
@@ -508,7 +508,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 			f.Handshake(target)
 			return
 		}
-		if !peer.remote.IsValid() {
+		if !peer.GetRemote().IsValid() {
 			// Only create relays to peers for whom I have a direct connection
 			return
 		}

@@ -229,7 +229,7 @@ const (
 )
 
 type HostInfo struct {
-	remote          netip.AddrPort
+	remote          atomic.Pointer[netip.AddrPort]
 	remotes         *RemoteList
 	promoteCounter  atomic.Uint32
 	ConnectionState *ConnectionState
@@ -684,7 +684,7 @@ func (hm *HostMap) ForEachIndex(f controlEach) {
 func (i *HostInfo) TryPromoteBest(preferredRanges []netip.Prefix, ifce *Interface) {
 	c := i.promoteCounter.Add(1)
 	if c%ifce.tryPromoteEvery.Load() == 0 {
-		remote := i.remote
+		remote := i.GetRemote()
 
 		// return early if we are already on a preferred remote
 		if remote.IsValid() {
@@ -726,11 +726,18 @@ func (i *HostInfo) GetCert() *cert.CachedCertificate {
 	return nil
 }
 
+func (i *HostInfo) GetRemote() netip.AddrPort {
+	if p := i.remote.Load(); p != nil {
+		return *p
+	}
+	return netip.AddrPort{}
+}
+
 // TODO: Maybe use ViaSender here?
 func (i *HostInfo) SetRemote(remote netip.AddrPort) {
 	// We copy here because we likely got this remote from a source that reuses the object
-	if i.remote != remote {
-		i.remote = remote
+	if i.GetRemote() != remote {
+		i.remote.Store(&remote)
 		i.remotes.LearnRemote(i.vpnAddrs[0], remote)
 	}
 }
@@ -742,7 +749,7 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, via ViaSender) bool {
 		return false
 	}
 
-	currentRemote := i.remote
+	currentRemote := i.GetRemote()
 	if !currentRemote.IsValid() {
 		i.SetRemote(via.UdpAddr)
 		return true
