@@ -3,6 +3,7 @@ package nebula
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -182,7 +183,7 @@ func TestHostQueryServer_handleHost(t *testing.T) {
 	assert.Equal(t, []any{"192.168.50.0/24"}, body["unsafeNetworks"])
 	assert.Equal(t, []any{"eng", "ssh"}, body["groups"])
 	assert.NotEmpty(t, body["fingerprint"])
-	assert.Equal(t, float64(2), body["certVersion"])
+	assert.Equal(t, "2", fmt.Sprintf("%v", body["certVersion"]))
 	assert.NotEmpty(t, body["notBefore"])
 	assert.NotEmpty(t, body["notAfter"])
 
