@@ -42,8 +42,7 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 	assert.True(t, ok)
 
 	crt := &dummyCert{}
-	hm.unlockedAddHostInfo(&HostInfo{
-		remote:  remote1,
+	hi := &HostInfo{
 		remotes: remotes,
 		ConnectionState: &ConnectionState{
 			peerCert: &cert.CachedCertificate{Certificate: crt},
@@ -56,13 +55,14 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 			relayForByAddr: map[netip.Addr]*Relay{},
 			relayForByIdx:  map[uint32]*Relay{},
 		},
-	}, &Interface{})
+	}
+	hi.remote.Store(&remote1)
+	hm.unlockedAddHostInfo(hi, &Interface{})
 
 	vpnIp2, ok := netip.AddrFromSlice(ipNet2.IP)
 	assert.True(t, ok)
 
-	hm.unlockedAddHostInfo(&HostInfo{
-		remote:  remote1,
+	hi2 := &HostInfo{
 		remotes: remotes,
 		ConnectionState: &ConnectionState{
 			peerCert: nil,
@@ -75,7 +75,9 @@ func TestControl_GetHostInfoByVpnIp(t *testing.T) {
 			relayForByAddr: map[netip.Addr]*Relay{},
 			relayForByIdx:  map[uint32]*Relay{},
 		},
-	}, &Interface{})
+	}
+	hi2.remote.Store(&remote1)
+	hm.unlockedAddHostInfo(hi2, &Interface{})
 
 	c := Control{
 		state: StateReady,
