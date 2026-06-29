@@ -10,10 +10,45 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/miekg/dns"
+	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/config"
 )
+
+// dnsWriteWarnLogWindow rate-limits the WriteMsg-failure Warn so a
+// network-wide problem cannot flood the log. The counter is always
+// incremented; only the log emission is throttled.
+const dnsWriteWarnLogWindow = 10 * time.Second
+
+// dnsWriteWarnLimiter logs the first failure in each window and counts
+// the rest. Concurrent-safe via CompareAndSwap on lastLogged.
+type dnsWriteWarnLimiter struct {
+	suppressed atomic.Int64
+	lastLogged atomic.Int64
+	windowNs   int64
+}
+
+func newDNSWriteWarnLimiter(window time.Duration) *dnsWriteWarnLimiter {
+	l := &dnsWriteWarnLimiter{windowNs: window.Nanoseconds()}
+	// Seed lastLogged so the first call always logs regardless of clock value.
+	l.lastLogged.Store(-l.windowNs)
+	return l
+}
+
+// shouldLog reports whether the caller should emit a Warn now, and the
+// number of failures that were suppressed since the previous log.
+func (l *dnsWriteWarnLimiter) shouldLog(now int64) (bool, int64) {
+	last := l.lastLogged.Load()
+	if now-last >= l.windowNs {
+		if l.lastLogged.CompareAndSwap(last, now) {
+			return true, l.suppressed.Swap(0)
+		}
+	}
+	l.suppressed.Add(1)
+	return false, 0
+}
 
 type dnsServer struct {
 	sync.RWMutex
@@ -45,6 +80,11 @@ type dnsServer struct {
 	// ignored, leaving the listener running forever.
 	started chan struct{}
 	addr    string
+
+	// metricWriteFailures counts every dns.ResponseWriter.WriteMsg error.
+	metricWriteFailures metrics.Counter
+	// warnLimiter throttles the WriteMsg-failure Warn log.
+	warnLimiter *dnsWriteWarnLimiter
 }
 
 // newDnsServerFromConfig builds a dnsServer, applies the initial config, and
@@ -59,12 +99,14 @@ type dnsServer struct {
 // pointer is always non-nil, even on error.
 func newDnsServerFromConfig(ctx context.Context, l *slog.Logger, pki *PKI, hostMap *HostMap, c *config.C) (*dnsServer, error) {
 	ds := &dnsServer{
-		l:       l,
-		ctx:     ctx,
-		dnsMap4: make(map[string]netip.Addr),
-		dnsMap6: make(map[string]netip.Addr),
-		hostMap: hostMap,
-		pki:     pki,
+		l:                   l,
+		ctx:                 ctx,
+		dnsMap4:             make(map[string]netip.Addr),
+		dnsMap6:             make(map[string]netip.Addr),
+		hostMap:             hostMap,
+		pki:                 pki,
+		metricWriteFailures: metrics.GetOrRegisterCounter("dns.responses.write_failures", nil),
+		warnLimiter:         newDNSWriteWarnLimiter(dnsWriteWarnLogWindow),
 	}
 	ds.mux = dns.NewServeMux()
 	ds.mux.HandleFunc(".", ds.handleDnsRequest)
@@ -436,7 +478,15 @@ func (d *dnsServer) handleDnsRequest(w dns.ResponseWriter, r *dns.Msg) {
 		d.parseQuery(m, w)
 	}
 
-	w.WriteMsg(m)
+	if err := w.WriteMsg(m); err != nil {
+		d.metricWriteFailures.Inc(1)
+		if log, suppressed := d.warnLimiter.shouldLog(time.Now().UnixNano()); log {
+			d.l.Warn("dns: failed to write response",
+				"error", err,
+				"client", w.RemoteAddr().String(),
+				"suppressed_since_last_log", suppressed)
+		}
+	}
 }
 
 func getDnsServerAddr(c *config.C) string {
