@@ -98,7 +98,7 @@ jobs:
     # WSL2 + Ubuntu so the smoke can run a real linux peer with its own
     # netns. iputils-ping is needed for the in-WSL ping check. WSL1 has no
     # real kernel and would lack /dev/net/tun, so we have to force WSL2.
-    - uses: Vampire/setup-wsl@v3
+    - uses: Vampire/setup-wsl@v7
       with:
         distribution: Ubuntu-24.04
         additional-packages: iputils-ping iproute2
