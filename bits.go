@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	mathbits "math/bits"
+	"sync"
 
 	"github.com/rcrowley/go-metrics"
 )
@@ -15,7 +16,17 @@ const bitsPerWord = 64
 // Bits is a sliding-window anti-replay tracker. The window is stored as a
 // circular bitmap packed into uint64 words (8x denser than a []bool), so a
 // length-N window costs N/8 bytes. length must be a power of two.
+//
+// Bits is safe for concurrent use. mu is a read-write mutex: Check holds a
+// read lock (allowing multiple concurrent pre-flight checks) while Update
+// holds a write lock (serialising all state mutations). Because there is a
+// gap between Check returning true and the caller later calling Update, two
+// goroutines may both pass Check for the same counter; the first Update wins
+// and the second returns false, causing the caller to discard the duplicate
+// packet after decryption. This is correct – no packet is delivered twice –
+// at the cost of one redundant decryption in the unlikely concurrent case.
 type Bits struct {
+	mu                 sync.RWMutex
 	length             uint64
 	lengthMask         uint64
 	current            uint64
@@ -131,8 +142,14 @@ func (b *Bits) strictlyWithinWindow(i uint64) bool {
 	return false //not within window!
 }
 
-// Check returns true if i is within (or way out in front of) the window, and not a replay
+// Check returns true if i is within (or way out in front of) the window, and not a replay.
+// It is a non-authoritative pre-filter: callers must still call Update after
+// decryption to atomically claim the slot. Under concurrent use two goroutines
+// may both pass Check for the same counter; Update resolves the race.
 func (b *Bits) Check(l *slog.Logger, i uint64) bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	// If i is the next number, return true.
 	if i > b.current {
 		return true
@@ -166,6 +183,9 @@ func (b *Bits) Check(l *slog.Logger, i uint64) bool {
 // consulted. The marker prevents a fictitious "lost" hit on the first real
 // counter.
 func (b *Bits) Update(l *slog.Logger, i uint64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	// Fast path: i is the next expected counter. Split out so the function
 	// stays small and avoids paying for the slow paths' slog argument-build
 	// stack frame on every call. The bit read/test/write is inlined to
@@ -186,6 +206,7 @@ func (b *Bits) Update(l *slog.Logger, i uint64) bool {
 }
 
 // updateSlow handles jumps, in-window backfill, dupes, and out-of-window.
+// Must be called with b.mu write-locked (held by Update).
 func (b *Bits) updateSlow(l *slog.Logger, i uint64) bool {
 	// If i is a jump, adjust the window, record lost, update current, and return true
 	if i > b.current {
