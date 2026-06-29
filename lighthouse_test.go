@@ -738,3 +738,11 @@ func TestLighthouse_DeletesWork(t *testing.T) {
 	out = lh.Query(testHost)
 	assert.Nil(t, out)
 }
+
+func TestProtoAddrToNetAddr_NilReturnsInvalid(t *testing.T) {
+	var addr *Addr
+	got := protoAddrToNetAddr(addr)
+	if got.IsValid() {
+		t.Fatalf("expected invalid Addr for nil input, got %v", got)
+	}
+}

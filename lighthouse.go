@@ -1438,6 +1438,9 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 }
 
 func protoAddrToNetAddr(addr *Addr) netip.Addr {
+	if addr == nil {
+		return netip.Addr{}
+	}
 	b := [16]byte{}
 	binary.BigEndian.PutUint64(b[:8], addr.Hi)
 	binary.BigEndian.PutUint64(b[8:], addr.Lo)
