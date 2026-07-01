@@ -6,7 +6,6 @@ package overlay
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -17,8 +16,10 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/wire"
 	netroute "golang.org/x/net/route"
 	"golang.org/x/sys/unix"
 )
@@ -66,6 +67,27 @@ type tun struct {
 	l           *slog.Logger
 	f           *os.File
 	fd          int
+}
+
+func (t *tun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) == 0 {
+		return 0, nil //todo should this be an err?
+	}
+	p[0].Meta = struct{}{}
+	n, err := t.readOne(mem)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[:n]
+	return 1, nil
+}
+
+func (t *tun) Readers() []tio.Queue {
+	return []tio.Queue{t}
+}
+
+func (t *tun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
 }
 
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
@@ -141,7 +163,7 @@ func (t *tun) Close() error {
 	return nil
 }
 
-func (t *tun) Read(to []byte) (int, error) {
+func (t *tun) readOne(to []byte) (int, error) {
 	rc, err := t.f.SyscallConn()
 	if err != nil {
 		return 0, fmt.Errorf("failed to get syscall conn for tun: %w", err)
@@ -394,8 +416,8 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for netbsd")
+func (t *tun) NewMultiQueueReader() error {
+	return fmt.Errorf("TODO: multiqueue not implemented for netbsd")
 }
 
 func (t *tun) addRoutes(logErrors bool) error {

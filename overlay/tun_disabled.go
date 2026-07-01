@@ -10,7 +10,9 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/slackhq/nebula/iputil"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
+	"github.com/slackhq/nebula/wire"
 )
 
 type disabledTun struct {
@@ -18,9 +20,10 @@ type disabledTun struct {
 	vpnNetworks []netip.Prefix
 
 	// Track these metrics since we don't have the tun device to do it for us
-	tx metrics.Counter
-	rx metrics.Counter
-	l  *slog.Logger
+	tx         metrics.Counter
+	rx         metrics.Counter
+	numReaders int
+	l          *slog.Logger
 }
 
 func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled bool, l *slog.Logger) *disabledTun {
@@ -28,6 +31,7 @@ func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled boo
 		vpnNetworks: vpnNetworks,
 		read:        make(chan []byte, queueLen),
 		l:           l,
+		numReaders:  1,
 	}
 
 	if metricsEnabled {
@@ -57,7 +61,7 @@ func (*disabledTun) Name() string {
 	return "disabled"
 }
 
-func (t *disabledTun) Read(b []byte) (int, error) {
+func (t *disabledTun) readOne(b []byte) (int, error) {
 	r, ok := <-t.read
 	if !ok {
 		return 0, io.EOF
@@ -73,6 +77,19 @@ func (t *disabledTun) Read(b []byte) (int, error) {
 	}
 
 	return copy(b, r), nil
+}
+
+func (t *disabledTun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) == 0 {
+		return 0, nil //todo should this be an err?
+	}
+	p[0].Meta = struct{}{}
+	n, err := t.readOne(mem)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[:n]
+	return 1, nil
 }
 
 func (t *disabledTun) handleICMPEchoRequest(b []byte) bool {
@@ -110,8 +127,21 @@ func (t *disabledTun) SupportsMultiqueue() bool {
 	return true
 }
 
-func (t *disabledTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return t, nil
+func (t *disabledTun) NewMultiQueueReader() error {
+	t.numReaders++
+	return nil
+}
+
+func (t *disabledTun) Readers() []tio.Queue {
+	out := make([]tio.Queue, t.numReaders)
+	for i := range t.numReaders {
+		out[i] = t
+	}
+	return out
+}
+
+func (t *disabledTun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
 }
 
 func (t *disabledTun) Close() error {

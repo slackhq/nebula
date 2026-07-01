@@ -16,14 +16,16 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/wire"
 	netroute "golang.org/x/net/route"
 	"golang.org/x/sys/unix"
 )
 
 type tun struct {
-	io.ReadWriteCloser
+	rwc         io.ReadWriteCloser
 	Device      string
 	vpnNetworks []netip.Prefix
 	DefaultMTU  int
@@ -124,11 +126,11 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 	}
 
 	t := &tun{
-		ReadWriteCloser: os.NewFile(uintptr(fd), ""),
-		Device:          name,
-		vpnNetworks:     vpnNetworks,
-		DefaultMTU:      c.GetInt("tun.mtu", DefaultMTU),
-		l:               l,
+		rwc:         os.NewFile(uintptr(fd), ""),
+		Device:      name,
+		vpnNetworks: vpnNetworks,
+		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
+		l:           l,
 	}
 
 	err = t.reload(c, true)
@@ -158,8 +160,8 @@ func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*tun, e
 }
 
 func (t *tun) Close() error {
-	if t.ReadWriteCloser != nil {
-		return t.ReadWriteCloser.Close()
+	if t.rwc != nil {
+		return t.rwc.Close()
 	}
 	return nil
 }
@@ -502,13 +504,17 @@ func delRoute(prefix netip.Prefix, gateway netroute.Addr) error {
 	return nil
 }
 
-func (t *tun) Read(to []byte) (int, error) {
-	buf := make([]byte, len(to)+4)
-
-	n, err := t.ReadWriteCloser.Read(buf)
-
-	copy(to, buf[4:])
-	return n - 4, err
+func (t *tun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) <= 4 {
+		return 0, nil //todo should this be an err?
+	}
+	p[0].Meta = struct{}{}
+	n, err := t.rwc.Read(mem)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[4:n]
+	return 1, nil
 }
 
 // Write is only valid for single threaded use
@@ -536,7 +542,7 @@ func (t *tun) Write(from []byte) (int, error) {
 
 	copy(buf[4:], from)
 
-	n, err := t.ReadWriteCloser.Write(buf)
+	n, err := t.rwc.Write(buf)
 	return n - 4, err
 }
 
@@ -552,6 +558,14 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
+func (t *tun) NewMultiQueueReader() error {
+	return fmt.Errorf("TODO: multiqueue not implemented for darwin")
+}
+
+func (t *tun) Readers() []tio.Queue {
+	return []tio.Queue{t}
+}
+
+func (t *tun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
 }

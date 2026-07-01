@@ -16,16 +16,39 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/wire"
 )
 
 type tun struct {
-	io.ReadWriteCloser
+	rwc         io.ReadWriteCloser
 	vpnNetworks []netip.Prefix
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *slog.Logger
+}
+
+func (t *tun) Read(p []wire.TunPacket, mem []byte) (int, error) {
+	if len(p) == 0 || len(mem) <= 4 {
+		return 0, nil //todo should this be an err?
+	}
+	p[0].Meta = struct{}{}
+	n, err := t.rwc.Read(mem)
+	if err != nil {
+		return 0, err
+	}
+	p[0].Bytes = mem[4:n]
+	return 1, nil
+}
+
+func (t *tun) Write(p []byte) (int, error) {
+	return t.rwc.Write(p)
+}
+
+func (t *tun) Close() error {
+	return t.rwc.Close()
 }
 
 func newTun(_ *config.C, _ *slog.Logger, _ []netip.Prefix, _ bool) (*tun, error) {
@@ -35,9 +58,9 @@ func newTun(_ *config.C, _ *slog.Logger, _ []netip.Prefix, _ bool) (*tun, error)
 func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
 	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
 	t := &tun{
-		vpnNetworks:     vpnNetworks,
-		ReadWriteCloser: &tunReadCloser{f: file},
-		l:               l,
+		vpnNetworks: vpnNetworks,
+		rwc:         &tunReadCloser{f: file},
+		l:           l,
 	}
 
 	err := t.reload(c, true)
@@ -96,18 +119,9 @@ type tunReadCloser struct {
 	wBuf []byte
 }
 
+// Read returns a packet with the BSD 4-byte header, watch out!
 func (tr *tunReadCloser) Read(to []byte) (int, error) {
-	tr.rMu.Lock()
-	defer tr.rMu.Unlock()
-
-	if cap(tr.rBuf) < len(to)+4 {
-		tr.rBuf = make([]byte, len(to)+4)
-	}
-	tr.rBuf = tr.rBuf[:len(to)+4]
-
-	n, err := tr.f.Read(tr.rBuf)
-	copy(to, tr.rBuf[4:])
-	return n - 4, err
+	return tr.f.Read(to)
 }
 
 func (tr *tunReadCloser) Write(from []byte) (int, error) {
@@ -155,6 +169,14 @@ func (t *tun) SupportsMultiqueue() bool {
 	return false
 }
 
-func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for ios")
+func (t *tun) NewMultiQueueReader() error {
+	return fmt.Errorf("TODO: multiqueue not implemented for ios")
+}
+
+func (t *tun) Readers() []tio.Queue {
+	return []tio.Queue{t}
+}
+
+func (t *tun) Capabilities() tio.Capabilities {
+	return tio.Capabilities{}
 }
