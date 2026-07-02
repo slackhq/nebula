@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/slackhq/nebula/test"
@@ -435,4 +436,24 @@ func BenchmarkBitsUpdateLargeJumps(b *testing.B) {
 	for n := 0; n < b.N; n++ {
 		z.Update(l, uint64(n+1)*1000)
 	}
+}
+
+func TestBitsConcurrentCheckUpdate(t *testing.T) {
+	// Regression test: Bits.Check and Bits.Update must be safe under concurrent
+	// access (multiple goroutines, as used when routines > 1). Run with -race.
+	l := test.NewLogger()
+	b := NewBits(1024)
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(offset uint64) {
+			defer wg.Done()
+			for i := uint64(1); i <= 512; i++ {
+				mc := i + offset*512
+				b.Check(l, mc)
+				b.Update(l, mc)
+			}
+		}(uint64(g))
+	}
+	wg.Wait()
 }
