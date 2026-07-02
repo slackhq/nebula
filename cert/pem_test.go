@@ -255,60 +255,6 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 func TestUnmarshalPublicKeyFromPEM(t *testing.T) {
 	t.Parallel()
 	pubKey := []byte(`# A good key
------BEGIN NEBULA ED25519 PUBLIC KEY-----
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
------END NEBULA ED25519 PUBLIC KEY-----
-`)
-	shortKey := []byte(`# A short key
------BEGIN NEBULA ED25519 PUBLIC KEY-----
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
------END NEBULA ED25519 PUBLIC KEY-----
-`)
-	invalidBanner := []byte(`# Invalid banner
------BEGIN NOT A NEBULA PUBLIC KEY-----
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
------END NOT A NEBULA PUBLIC KEY-----
-`)
-	invalidPem := []byte(`# Not a valid PEM format
--BEGIN NEBULA ED25519 PUBLIC KEY-----
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
--END NEBULA ED25519 PUBLIC KEY-----`)
-
-	keyBundle := appendByteSlices(pubKey, shortKey, invalidBanner, invalidPem)
-
-	// Success test case
-	k, rest, curve, err := UnmarshalPublicKeyFromPEM(keyBundle)
-	assert.Len(t, k, 32)
-	assert.Equal(t, Curve_CURVE25519, curve)
-	require.NoError(t, err)
-	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
-
-	// Fail due to short key
-	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
-	assert.Nil(t, k)
-	assert.Equal(t, Curve_CURVE25519, curve)
-	assert.Equal(t, rest, appendByteSlices(invalidBanner, invalidPem))
-	require.EqualError(t, err, "key was not 32 bytes, is invalid CURVE25519 public key")
-
-	// Fail due to invalid banner
-	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
-	assert.Nil(t, k)
-	assert.Equal(t, Curve_CURVE25519, curve)
-	require.EqualError(t, err, "bytes did not contain a proper public key banner")
-	assert.Equal(t, rest, invalidPem)
-
-	// Fail due to invalid PEM format, because
-	// it's missing the requisite pre-encapsulation boundary.
-	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
-	assert.Nil(t, k)
-	assert.Equal(t, Curve_CURVE25519, curve)
-	assert.Equal(t, rest, invalidPem)
-	require.EqualError(t, err, "input did not contain a valid PEM encoded block")
-}
-
-func TestUnmarshalX25519PublicKey(t *testing.T) {
-	t.Parallel()
-	pubKey := []byte(`# A good key
 -----BEGIN NEBULA X25519 PUBLIC KEY-----
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 -----END NEBULA X25519 PUBLIC KEY-----
@@ -319,7 +265,7 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 AAAAAAAAAAAAAAAAAAAAAAA=
 -----END NEBULA P256 PUBLIC KEY-----
 `)
-	oldPubP256Key := []byte(`# A good key
+	signingKey := []byte(`# A signing key has the wrong scope for this function
 -----BEGIN NEBULA ECDSA P256 PUBLIC KEY-----
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 AAAAAAAAAAAAAAAAAAAAAAA=
@@ -340,44 +286,118 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 -END NEBULA X25519 PUBLIC KEY-----`)
 
-	keyBundle := appendByteSlices(pubKey, pubP256Key, oldPubP256Key, shortKey, invalidBanner, invalidPem)
+	keyBundle := appendByteSlices(pubKey, pubP256Key, signingKey, shortKey, invalidBanner, invalidPem)
 
-	// Success test case
+	// X25519 key
 	k, rest, curve, err := UnmarshalPublicKeyFromPEM(keyBundle)
 	assert.Len(t, k, 32)
 	require.NoError(t, err)
-	assert.Equal(t, rest, appendByteSlices(pubP256Key, oldPubP256Key, shortKey, invalidBanner, invalidPem))
+	assert.Equal(t, rest, appendByteSlices(pubP256Key, signingKey, shortKey, invalidBanner, invalidPem))
 	assert.Equal(t, Curve_CURVE25519, curve)
 
-	// Success test case
+	// P256 key
 	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
 	assert.Len(t, k, 65)
 	require.NoError(t, err)
-	assert.Equal(t, rest, appendByteSlices(oldPubP256Key, shortKey, invalidBanner, invalidPem))
+	assert.Equal(t, rest, appendByteSlices(signingKey, shortKey, invalidBanner, invalidPem))
 	assert.Equal(t, Curve_P256, curve)
 
-	// Success test case
-	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
-	assert.Len(t, k, 65)
-	require.NoError(t, err)
+	// Reject a signing public key (Ed25519/ECDSA banner)
+	k, rest, _, err = UnmarshalPublicKeyFromPEM(rest)
+	assert.Nil(t, k)
 	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
-	assert.Equal(t, Curve_P256, curve)
+	require.EqualError(t, err, "bytes did not contain a proper public key banner")
 
 	// Fail due to short key
-	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
+	k, rest, _, err = UnmarshalPublicKeyFromPEM(rest)
 	assert.Nil(t, k)
 	assert.Equal(t, rest, appendByteSlices(invalidBanner, invalidPem))
 	require.EqualError(t, err, "key was not 32 bytes, is invalid CURVE25519 public key")
 
 	// Fail due to invalid banner
-	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
+	k, rest, _, err = UnmarshalPublicKeyFromPEM(rest)
 	assert.Nil(t, k)
 	require.EqualError(t, err, "bytes did not contain a proper public key banner")
 	assert.Equal(t, rest, invalidPem)
 
 	// Fail due to invalid PEM format, because
 	// it's missing the requisite pre-encapsulation boundary.
-	k, rest, curve, err = UnmarshalPublicKeyFromPEM(rest)
+	k, rest, _, err = UnmarshalPublicKeyFromPEM(rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, invalidPem)
+	require.EqualError(t, err, "input did not contain a valid PEM encoded block")
+}
+
+func TestUnmarshalSigningPublicKeyFromPEM(t *testing.T) {
+	t.Parallel()
+	pubKey := []byte(`# A good key
+-----BEGIN NEBULA ED25519 PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+-----END NEBULA ED25519 PUBLIC KEY-----
+`)
+	pubP256Key := []byte(`# A good key
+-----BEGIN NEBULA ECDSA P256 PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAA=
+-----END NEBULA ECDSA P256 PUBLIC KEY-----
+`)
+	ecdhKey := []byte(`# A key-agreement key has the wrong scope for this function
+-----BEGIN NEBULA X25519 PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+-----END NEBULA X25519 PUBLIC KEY-----
+`)
+	shortKey := []byte(`# A short key
+-----BEGIN NEBULA ED25519 PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+-----END NEBULA ED25519 PUBLIC KEY-----
+`)
+	invalidBanner := []byte(`# Invalid banner
+-----BEGIN NOT A NEBULA PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+-----END NOT A NEBULA PUBLIC KEY-----
+`)
+	invalidPem := []byte(`# Not a valid PEM format
+-BEGIN NEBULA ED25519 PUBLIC KEY-----
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+-END NEBULA ED25519 PUBLIC KEY-----`)
+
+	keyBundle := appendByteSlices(pubKey, pubP256Key, ecdhKey, shortKey, invalidBanner, invalidPem)
+
+	// Ed25519 key
+	k, rest, curve, err := UnmarshalSigningPublicKeyFromPEM(keyBundle)
+	assert.Len(t, k, 32)
+	require.NoError(t, err)
+	assert.Equal(t, rest, appendByteSlices(pubP256Key, ecdhKey, shortKey, invalidBanner, invalidPem))
+	assert.Equal(t, Curve_CURVE25519, curve)
+
+	// ECDSA P256 key
+	k, rest, curve, err = UnmarshalSigningPublicKeyFromPEM(rest)
+	assert.Len(t, k, 65)
+	require.NoError(t, err)
+	assert.Equal(t, rest, appendByteSlices(ecdhKey, shortKey, invalidBanner, invalidPem))
+	assert.Equal(t, Curve_P256, curve)
+
+	// Reject a key-agreement public key (X25519/P256 banner)
+	k, rest, _, err = UnmarshalSigningPublicKeyFromPEM(rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, appendByteSlices(shortKey, invalidBanner, invalidPem))
+	require.EqualError(t, err, "bytes did not contain a proper Ed25519/ECDSA public key banner")
+
+	// Fail due to short key
+	k, rest, _, err = UnmarshalSigningPublicKeyFromPEM(rest)
+	assert.Nil(t, k)
+	assert.Equal(t, rest, appendByteSlices(invalidBanner, invalidPem))
+	require.EqualError(t, err, "key was not 32 bytes, is invalid CURVE25519 public key")
+
+	// Fail due to invalid banner
+	k, rest, _, err = UnmarshalSigningPublicKeyFromPEM(rest)
+	assert.Nil(t, k)
+	require.EqualError(t, err, "bytes did not contain a proper Ed25519/ECDSA public key banner")
+	assert.Equal(t, rest, invalidPem)
+
+	// Fail due to invalid PEM format, because
+	// it's missing the requisite pre-encapsulation boundary.
+	k, rest, _, err = UnmarshalSigningPublicKeyFromPEM(rest)
 	assert.Nil(t, k)
 	assert.Equal(t, rest, invalidPem)
 	require.EqualError(t, err, "input did not contain a valid PEM encoded block")
