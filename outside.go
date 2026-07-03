@@ -150,7 +150,8 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		case header.TestReply:
 			// No-op, useful for the Roaming and connectionManager side-effects above
 		case header.TestRequest:
-			f.send(header.Test, header.TestReply, ci, hostinfo, out, nb, out)
+			//recycle the input packet ciphertext as our output buffer
+			f.send(header.Test, header.TestReply, ci, hostinfo, out, nb, packet)
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected test subtype seen", "from", via, "header", h)
 			return
