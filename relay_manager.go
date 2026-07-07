@@ -309,6 +309,22 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, d []byte, f *Interface) {
 		v = cert.Version2
 	}
 
+	// validate:
+	switch msg.Type {
+	case NebulaControl_CreateRelayRequest, NebulaControl_CreateRelayResponse:
+		if msg.RelayFromAddr == nil {
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				h.logger(f.l).Debug("Control message received with nil RelayFromAddr", "type", msg.Type)
+			}
+			return
+		} else if msg.RelayToAddr == nil {
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				h.logger(f.l).Debug("Control message received with nil RelayToAddr", "type", msg.Type)
+			}
+			return
+		}
+	}
+
 	switch msg.Type {
 	case NebulaControl_CreateRelayRequest:
 		rm.handleCreateRelayRequest(v, h, f, msg)
@@ -318,6 +334,7 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, d []byte, f *Interface) {
 }
 
 func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f *Interface, m *NebulaControl) {
+	//nil-checks for protoAddrToNetAddr handled by caller
 	relayFrom := protoAddrToNetAddr(m.RelayFromAddr)
 	relayTo := protoAddrToNetAddr(m.RelayToAddr)
 	rm.l.Info("handleCreateRelayResponse",
@@ -399,6 +416,7 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 }
 
 func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f *Interface, m *NebulaControl) {
+	//nil-checks for protoAddrToNetAddr handled by caller
 	from := protoAddrToNetAddr(m.RelayFromAddr)
 	target := protoAddrToNetAddr(m.RelayToAddr)
 

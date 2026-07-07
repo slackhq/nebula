@@ -344,6 +344,9 @@ func (r *RemoteList) CopyCache() *CacheMap {
 			}
 
 			for _, a := range mc.v4.reported {
+				if a == nil {
+					continue
+				}
 				c.Reported = append(c.Reported, protoV4AddrPortToNetAddrPort(a))
 			}
 		}
@@ -354,6 +357,9 @@ func (r *RemoteList) CopyCache() *CacheMap {
 			}
 
 			for _, a := range mc.v6.reported {
+				if a == nil {
+					continue
+				}
 				c.Reported = append(c.Reported, protoV6AddrPortToNetAddrPort(a))
 			}
 		}
@@ -582,6 +588,9 @@ func (r *RemoteList) unlockedCollect() {
 			}
 
 			for _, v := range c.v4.reported {
+				if v == nil {
+					continue
+				}
 				u := protoV4AddrPortToNetAddrPort(v)
 				if !r.unlockedIsBad(u) {
 					addrs = append(addrs, u)
@@ -598,6 +607,9 @@ func (r *RemoteList) unlockedCollect() {
 			}
 
 			for _, v := range c.v6.reported {
+				if v == nil {
+					continue
+				}
 				u := protoV6AddrPortToNetAddrPort(v)
 				if !r.unlockedIsBad(u) {
 					addrs = append(addrs, u)
