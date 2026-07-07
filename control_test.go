@@ -1,6 +1,8 @@
 package nebula
 
 import (
+	"bytes"
+	"log/slog"
 	"net"
 	"net/netip"
 	"reflect"
@@ -9,6 +11,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestControl_GetHostInfoByVpnIp(t *testing.T) {
@@ -120,4 +123,154 @@ func assertFields(t *testing.T, expected []string, actualStruct any) {
 	}
 
 	assert.Equal(t, expected, fields)
+}
+
+// alwaysAllowV4/V6 are check funcs that accept every entry (including nil pointers),
+// letting us inject a nil *V4AddrPort/*V6AddrPort into a RemoteList's reported cache
+// the same way a malformed proto message off the wire could.
+func alwaysAllowV4(netip.Addr, *V4AddrPort) bool { return true }
+func alwaysAllowV6(netip.Addr, *V6AddrPort) bool { return true }
+
+// TestGetRelays_SkipsNilRelayAddrs proves GetRelays tolerates nil entries in the
+// RelayVpnAddrs proto slice (which protoAddrToNetAddr would nil-deref on) and still
+// returns the valid relays, including the legacy OldRelayVpnAddrs.
+func TestGetRelays_SkipsNilRelayAddrs(t *testing.T) {
+	good := netip.MustParseAddr("10.0.0.9")
+
+	d := &NebulaMetaDetails{
+		OldRelayVpnAddrs: []uint32{0x0a000001}, // 10.0.0.1
+		RelayVpnAddrs: []*Addr{
+			nil,
+			netAddrToProtoAddr(good),
+			nil,
+		},
+	}
+
+	var relays []netip.Addr
+	require.NotPanics(t, func() { relays = d.GetRelays() })
+
+	assert.Equal(t, []netip.Addr{
+		netip.MustParseAddr("10.0.0.1"),
+		good,
+	}, relays)
+}
+
+// TestGetRelays_AllNil ensures an all-nil RelayVpnAddrs slice yields no relays and no panic.
+func TestGetRelays_AllNil(t *testing.T) {
+	d := &NebulaMetaDetails{RelayVpnAddrs: []*Addr{nil, nil}}
+	var relays []netip.Addr
+	require.NotPanics(t, func() { relays = d.GetRelays() })
+	assert.Empty(t, relays)
+}
+
+// TestRemoteList_CopyCache_SkipsNilReported proves CopyCache skips nil reported
+// pointers (v4 and v6) instead of nil-dereferencing them in protoV*AddrPortToNetAddrPort.
+func TestRemoteList_CopyCache_SkipsNilReported(t *testing.T) {
+	owner := netip.MustParseAddr("10.0.0.1")
+	rl := NewRemoteList([]netip.Addr{owner}, nil)
+
+	rl.unlockedSetV4(owner, owner, []*V4AddrPort{
+		nil,
+		newIp4AndPortFromString("1.2.3.4:5"),
+		nil,
+	}, alwaysAllowV4)
+
+	rl.unlockedSetV6(owner, owner, []*V6AddrPort{
+		nil,
+		newIp6AndPortFromString("[1::1]:6"),
+		nil,
+	}, alwaysAllowV6)
+
+	var cm *CacheMap
+	require.NotPanics(t, func() { cm = rl.CopyCache() })
+
+	c := (*cm)[owner.String()]
+	require.NotNil(t, c)
+	assert.ElementsMatch(t, []netip.AddrPort{
+		netip.MustParseAddrPort("1.2.3.4:5"),
+		netip.MustParseAddrPort("[1::1]:6"),
+	}, c.Reported)
+}
+
+// TestRemoteList_Rebuild_SkipsNilReported drives unlockedCollect (via Rebuild) with
+// nil reported entries and confirms only the valid addresses survive, with no panic.
+func TestRemoteList_Rebuild_SkipsNilReported(t *testing.T) {
+	owner := netip.MustParseAddr("10.0.0.1")
+	rl := NewRemoteList([]netip.Addr{owner}, nil)
+
+	rl.unlockedSetV4(owner, owner, []*V4AddrPort{
+		nil,
+		newIp4AndPortFromString("1.2.3.4:5"),
+	}, alwaysAllowV4)
+	rl.unlockedSetV6(owner, owner, []*V6AddrPort{
+		newIp6AndPortFromString("[1::1]:6"),
+		nil,
+	}, alwaysAllowV6)
+
+	require.NotPanics(t, func() { rl.Rebuild([]netip.Prefix{}) })
+
+	assert.ElementsMatch(t, []netip.AddrPort{
+		netip.MustParseAddrPort("1.2.3.4:5"),
+		netip.MustParseAddrPort("[1::1]:6"),
+	}, rl.addrs)
+}
+
+// newRelayControl marshals a NebulaControl the way it arrives on the wire so we can feed
+// it through HandleControlMsg's unmarshal + validate path.
+func newRelayControl(t *testing.T, typ NebulaControl_MessageType, from, to *Addr) []byte {
+	t.Helper()
+	msg := &NebulaControl{
+		Type:          typ,
+		RelayFromAddr: from,
+		RelayToAddr:   to,
+	}
+	b, err := msg.Marshal()
+	require.NoError(t, err)
+	return b
+}
+
+// TestRelayManager_HandleControlMsg_NilRelayAddrs verifies the validation block added to
+// HandleControlMsg: CreateRelay{Request,Response} carrying a nil RelayFromAddr or
+// RelayToAddr are dropped with a debug log rather than nil-dereferencing downstream.
+func TestRelayManager_HandleControlMsg_NilRelayAddrs(t *testing.T) {
+	good := netAddrToProtoAddr(netip.MustParseAddr("10.0.0.9"))
+
+	cases := []struct {
+		name    string
+		typ     NebulaControl_MessageType
+		from    *Addr
+		to      *Addr
+		wantLog string // debug substring expected, "" == expect no drop log
+	}{
+		{"request nil from", NebulaControl_CreateRelayRequest, nil, good, "nil RelayFromAddr"},
+		{"request nil to", NebulaControl_CreateRelayRequest, good, nil, "nil RelayToAddr"},
+		{"request both nil", NebulaControl_CreateRelayRequest, nil, nil, "nil RelayFromAddr"},
+		{"response nil from", NebulaControl_CreateRelayResponse, nil, good, "nil RelayFromAddr"},
+		{"response nil to", NebulaControl_CreateRelayResponse, good, nil, "nil RelayToAddr"},
+		// A non-relay control type is not subject to the relay-addr validation and must
+		// pass through it untouched (the final switch simply no-ops on it).
+		{"unrelated type nil addrs", NebulaControl_None, nil, nil, ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			l := test.NewLoggerWithOutputAndLevel(&buf, slog.LevelDebug)
+			rm := &relayManager{l: l, hostmap: newHostMap(l)}
+			rm.useRelays.Store(true)
+
+			f := &Interface{l: l}
+			h := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("10.0.0.2")}, localIndexId: 1}
+
+			d := newRelayControl(t, tc.typ, tc.from, tc.to)
+
+			require.NotPanics(t, func() { rm.HandleControlMsg(h, d, f) })
+
+			if tc.wantLog == "" {
+				assert.NotContains(t, buf.String(), "nil Relay")
+			} else {
+				assert.Contains(t, buf.String(), tc.wantLog)
+			}
+		})
+	}
 }
