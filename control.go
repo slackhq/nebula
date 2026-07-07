@@ -11,6 +11,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cert"
+	"github.com/slackhq/nebula/firewall/events"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
 )
@@ -338,6 +339,36 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 
 func (c *Control) Device() overlay.Device {
 	return c.f.inside
+}
+
+// SetFirewallEventReporter installs an event reporter on the current firewall.
+// Passing nil clears any installed reporter. The reporter is carried across
+// firewall rule reloads. Report* methods are invoked while nebula holds
+// internal locks and must be non-blocking; in particular they must not call
+// back into *Control methods that touch the firewall, or deadlock will
+// result.
+//
+// Installation is performed by shallow-copying the current *Firewall,
+// setting the reporter field on the copy, and swapping the pointer under
+// the conntrack lock. Every Firewall the data path sees therefore has an
+// immutable reporter slot, and emit sites can read it without any
+// synchronization of their own.
+func (c *Control) SetFirewallEventReporter(r events.Reporter) {
+	old := c.f.firewall
+	if old == nil {
+		return
+	}
+	old.Conntrack.Lock()
+	defer old.Conntrack.Unlock()
+
+	// Re-read under the lock in case a concurrent reload swapped in a new
+	// Firewall between the unlocked load above and here. Both Firewalls share
+	// the same Conntrack pointer in the normal (non-overflow) reload path,
+	// so the lock we hold is the right one for whichever we see now.
+	current := c.f.firewall
+	fw := *current
+	fw.reporter = r
+	c.f.firewall = &fw
 }
 
 func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {

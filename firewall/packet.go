@@ -31,6 +31,27 @@ type Packet struct {
 	Fragment   bool
 }
 
+// PacketContext carries additional parsed details about a packet that are
+// useful for event reporting but deliberately kept out of Packet so Packet
+// can keep being used as a conntrack map key. Populated alongside Packet by
+// newPacket.
+//
+// Fields are interpreted based on Packet.Protocol:
+//   - ProtoTCP: TCPFlags is meaningful; ICMPType / ICMPCode are zero
+//   - ProtoICMP, ProtoICMPv6: ICMPType / ICMPCode are meaningful; TCPFlags is zero
+//   - ProtoUDP and others: only Length is meaningful
+type PacketContext struct {
+	// Length is the total IP packet length in bytes, including headers.
+	Length uint16
+	// TCPFlags is the flag byte from the TCP header (bits for FIN, SYN, RST,
+	// PSH, ACK, URG, ECE, CWR).
+	TCPFlags uint8
+	// ICMPType is the type field of the ICMP / ICMPv6 header.
+	ICMPType uint8
+	// ICMPCode is the code field of the ICMP / ICMPv6 header.
+	ICMPCode uint8
+}
+
 func (fp *Packet) Copy() *Packet {
 	return &Packet{
 		LocalAddr:  fp.LocalAddr,

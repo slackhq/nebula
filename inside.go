@@ -11,8 +11,8 @@ import (
 	"github.com/slackhq/nebula/routing"
 )
 
-func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
-	err := newPacket(packet, false, fwPacket)
+func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, fwCtx *firewall.PacketContext, nb, out []byte, q int, localCache firewall.ConntrackCache) {
+	err := newPacket(packet, false, fwPacket, fwCtx)
 	if err != nil {
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
@@ -66,7 +66,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 		return
 	}
 
-	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(*fwPacket, *fwCtx, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
 		f.sendNoMetrics(header.Message, 0, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, packet, nb, out, q)
 
@@ -211,14 +211,15 @@ func (f *Interface) getOrHandshakeConsiderRouting(fwPacket *firewall.Packet, cac
 
 func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubType, hostinfo *HostInfo, p, nb, out []byte) {
 	fp := &firewall.Packet{}
-	err := newPacket(p, false, fp)
+	ctx := &firewall.PacketContext{}
+	err := newPacket(p, false, fp, ctx)
 	if err != nil {
 		f.l.Warnf("error while parsing outgoing packet for firewall check; %v", err)
 		return
 	}
 
 	// check if packet is in outbound fw rules
-	dropReason := f.firewall.Drop(*fp, false, hostinfo, f.pki.GetCAPool(), nil)
+	dropReason := f.firewall.Drop(*fp, *ctx, false, hostinfo, f.pki.GetCAPool(), nil)
 	if dropReason != nil {
 		if f.l.Level >= logrus.DebugLevel {
 			f.l.WithField("fwPacket", fp).

@@ -310,10 +310,11 @@ func (f *Interface) listenOut(i int) {
 	plaintext := make([]byte, udp.MTU)
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
+	fwCtx := &firewall.PacketContext{}
 	nb := make([]byte, 12, 12)
 
 	err := li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(f.l))
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, fwCtx, lhh, nb, i, ctCache.Get(f.l))
 	})
 
 	if err != nil && !f.closed.Load() {
@@ -328,6 +329,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	packet := make([]byte, mtu)
 	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
+	fwCtx := &firewall.PacketContext{}
 	nb := make([]byte, 12, 12)
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, f.conntrackCacheTimeout)
@@ -342,7 +344,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 			break
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get(f.l))
+		f.consumeInsidePacket(packet[:n], fwPacket, fwCtx, nb, out, i, conntrackCache.Get(f.l))
 	}
 
 	f.l.Debugf("overlay reader %v is done", i)
@@ -400,7 +402,14 @@ func (f *Interface) reloadFirewall(c *config.C) {
 		fw.Conntrack = conntrack
 	}
 
+	fw.reporter = oldFw.reporter
+
 	f.firewall = fw
+
+	// Fire ReportRulesReload under the conntrack lock so the reporter cannot
+	// observe a FlowCreate/FlowEvict for the new rulesVersion before it
+	// observes the reload marker. Report* must be non-blocking.
+	fw.reportRulesReload(oldFw.rulesVersion, fw.rulesVersion)
 
 	oldFw.Destroy()
 	f.l.WithField("firewallHashes", fw.GetRuleHashes()).

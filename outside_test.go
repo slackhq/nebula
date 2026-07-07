@@ -20,13 +20,13 @@ func Test_newPacket(t *testing.T) {
 	p := &firewall.Packet{}
 
 	// length fails
-	err := newPacket([]byte{}, true, p)
+	err := newPacket([]byte{}, true, p, nil)
 	require.ErrorIs(t, err, ErrPacketTooShort)
 
-	err = newPacket([]byte{0x40}, true, p)
+	err = newPacket([]byte{0x40}, true, p, nil)
 	require.ErrorIs(t, err, ErrIPv4PacketTooShort)
 
-	err = newPacket([]byte{0x60}, true, p)
+	err = newPacket([]byte{0x60}, true, p, nil)
 	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 
 	// length fail with ip options
@@ -39,15 +39,15 @@ func Test_newPacket(t *testing.T) {
 	}
 
 	b, _ := h.Marshal()
-	err = newPacket(b, true, p)
+	err = newPacket(b, true, p, nil)
 	require.ErrorIs(t, err, ErrIPv4InvalidHeaderLength)
 
 	// not an ipv4 packet
-	err = newPacket([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, true, p)
+	err = newPacket([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, true, p, nil)
 	require.ErrorIs(t, err, ErrUnknownIPVersion)
 
 	// invalid ihl
-	err = newPacket([]byte{4<<4 | (8 >> 2 & 0x0f), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, true, p)
+	err = newPacket([]byte{4<<4 | (8 >> 2 & 0x0f), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, true, p, nil)
 	require.ErrorIs(t, err, ErrIPv4InvalidHeaderLength)
 
 	// account for variable ip header length - incoming
@@ -62,7 +62,7 @@ func Test_newPacket(t *testing.T) {
 
 	b, _ = h.Marshal()
 	b = append(b, []byte{0, 3, 0, 4}...)
-	err = newPacket(b, true, p)
+	err = newPacket(b, true, p, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
@@ -84,7 +84,7 @@ func Test_newPacket(t *testing.T) {
 
 	b, _ = h.Marshal()
 	b = append(b, []byte{0, 5, 0, 6}...)
-	err = newPacket(b, false, p)
+	err = newPacket(b, false, p, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, uint8(2), p.Protocol)
@@ -114,7 +114,7 @@ func Test_newPacket_v6(t *testing.T) {
 	err := gopacket.SerializeLayers(buffer, opt, &ip)
 	require.NoError(t, err)
 
-	err = newPacket(buffer.Bytes(), true, p)
+	err = newPacket(buffer.Bytes(), true, p, nil)
 	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
 
 	// A v6 packet with a hop-by-hop extension
@@ -148,12 +148,12 @@ func Test_newPacket_v6(t *testing.T) {
 
 	// A full IPv6 header and 1 byte in the first extension, but missing
 	// the length byte.
-	err = newPacket(buffer.Bytes()[:41], true, p)
+	err = newPacket(buffer.Bytes()[:41], true, p, nil)
 	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
 
 	// A full IPv6 header plus 1 full extension, but only 1 byte of the
 	// next layer, missing length byte
-	err = newPacket(buffer.Bytes()[:49], true, p)
+	err = newPacket(buffer.Bytes()[:49], true, p, nil)
 	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
 	err = nil
 
@@ -173,7 +173,7 @@ func Test_newPacket_v6(t *testing.T) {
 
 	buffer.Clear()
 	require.NoError(t, gopacket.SerializeLayers(buffer, opt, &ip, &icmp))
-	require.Error(t, newPacket(buffer.Bytes(), true, p))
+	require.Error(t, newPacket(buffer.Bytes(), true, p, nil))
 
 	buffer.Clear()
 	echo := layers.ICMPv6Echo{
@@ -181,7 +181,7 @@ func Test_newPacket_v6(t *testing.T) {
 		SeqNumber:  1234,
 	}
 	require.NoError(t, gopacket.SerializeLayers(buffer, opt, &ip, &icmp, &echo))
-	require.NoError(t, newPacket(buffer.Bytes(), true, p))
+	require.NoError(t, newPacket(buffer.Bytes(), true, p, nil))
 	assert.Equal(t, uint8(layers.IPProtocolICMPv6), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
@@ -192,7 +192,7 @@ func Test_newPacket_v6(t *testing.T) {
 	// A good ESP packet
 	b := buffer.Bytes()
 	b[6] = byte(layers.IPProtocolESP)
-	err = newPacket(b, true, p)
+	err = newPacket(b, true, p, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint8(layers.IPProtocolESP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
@@ -204,7 +204,7 @@ func Test_newPacket_v6(t *testing.T) {
 	// A good None packet
 	b = buffer.Bytes()
 	b[6] = byte(layers.IPProtocolNoNextHeader)
-	err = newPacket(b, true, p)
+	err = newPacket(b, true, p, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint8(layers.IPProtocolNoNextHeader), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
@@ -216,7 +216,7 @@ func Test_newPacket_v6(t *testing.T) {
 	// An unknown protocol packet
 	b = buffer.Bytes()
 	b[6] = 255 // 255 is a reserved protocol number
-	err = newPacket(b, true, p)
+	err = newPacket(b, true, p, nil)
 	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
 
 	// A good UDP packet
@@ -243,7 +243,7 @@ func Test_newPacket_v6(t *testing.T) {
 	b = buffer.Bytes()
 
 	// incoming
-	err = newPacket(b, true, p)
+	err = newPacket(b, true, p, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
@@ -253,7 +253,7 @@ func Test_newPacket_v6(t *testing.T) {
 	assert.False(t, p.Fragment)
 
 	// outgoing
-	err = newPacket(b, false, p)
+	err = newPacket(b, false, p, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.LocalAddr)
@@ -263,14 +263,14 @@ func Test_newPacket_v6(t *testing.T) {
 	assert.False(t, p.Fragment)
 
 	// Too short UDP packet
-	err = newPacket(b[:len(b)-10], false, p) // pull off the last 10 bytes
+	err = newPacket(b[:len(b)-10], false, p, nil) // pull off the last 10 bytes
 	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 
 	// A good TCP packet
 	b[6] = byte(layers.IPProtocolTCP)
 
 	// incoming
-	err = newPacket(b, true, p)
+	err = newPacket(b, true, p, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
@@ -280,7 +280,7 @@ func Test_newPacket_v6(t *testing.T) {
 	assert.False(t, p.Fragment)
 
 	// outgoing
-	err = newPacket(b, false, p)
+	err = newPacket(b, false, p, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.LocalAddr)
@@ -290,7 +290,7 @@ func Test_newPacket_v6(t *testing.T) {
 	assert.False(t, p.Fragment)
 
 	// Too short TCP packet
-	err = newPacket(b[:len(b)-10], false, p) // pull off the last 10 bytes
+	err = newPacket(b[:len(b)-10], false, p, nil) // pull off the last 10 bytes
 	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 
 	// A good UDP packet with an AH header
@@ -325,7 +325,7 @@ func Test_newPacket_v6(t *testing.T) {
 	b = append(b, ahb...)
 	b = append(b, udpHeader...)
 
-	err = newPacket(b, true, p)
+	err = newPacket(b, true, p, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint8(firewall.ProtoUDP), p.Protocol)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
@@ -335,12 +335,12 @@ func Test_newPacket_v6(t *testing.T) {
 	assert.False(t, p.Fragment)
 
 	// Ensure buffer bounds checking during processing
-	err = newPacket(b[:41], true, p)
+	err = newPacket(b[:41], true, p, nil)
 	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 
 	// Invalid AH header
 	b = buffer.Bytes()
-	err = newPacket(b, true, p)
+	err = newPacket(b, true, p, nil)
 	require.ErrorIs(t, err, ErrIPv6CouldNotFindPayload)
 }
 
@@ -388,7 +388,7 @@ func Test_newPacket_ipv6Fragment(t *testing.T) {
 	firstFrag = append(firstFrag, []byte{0xde, 0xad, 0xbe, 0xef}...)
 
 	// Test first fragment incoming
-	err = newPacket(firstFrag, true, p)
+	err = newPacket(firstFrag, true, p, nil)
 	require.NoError(t, err)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
@@ -398,7 +398,7 @@ func Test_newPacket_ipv6Fragment(t *testing.T) {
 	assert.False(t, p.Fragment)
 
 	// Test first fragment outgoing
-	err = newPacket(firstFrag, false, p)
+	err = newPacket(firstFrag, false, p, nil)
 	require.NoError(t, err)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.RemoteAddr)
@@ -427,7 +427,7 @@ func Test_newPacket_ipv6Fragment(t *testing.T) {
 	secondFrag = append(secondFrag, []byte{0xde, 0xad, 0xbe, 0xef}...)
 
 	// Test second fragment incoming
-	err = newPacket(secondFrag, true, p)
+	err = newPacket(secondFrag, true, p, nil)
 	require.NoError(t, err)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.RemoteAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.LocalAddr)
@@ -437,7 +437,7 @@ func Test_newPacket_ipv6Fragment(t *testing.T) {
 	assert.True(t, p.Fragment)
 
 	// Test second fragment outgoing
-	err = newPacket(secondFrag, false, p)
+	err = newPacket(secondFrag, false, p, nil)
 	require.NoError(t, err)
 	assert.Equal(t, netip.MustParseAddr("ff02::2"), p.LocalAddr)
 	assert.Equal(t, netip.MustParseAddr("ff02::1"), p.RemoteAddr)
@@ -447,7 +447,7 @@ func Test_newPacket_ipv6Fragment(t *testing.T) {
 	assert.True(t, p.Fragment)
 
 	// Too short of a fragment packet
-	err = newPacket(secondFrag[:len(secondFrag)-10], false, p)
+	err = newPacket(secondFrag[:len(secondFrag)-10], false, p, nil)
 	require.ErrorIs(t, err, ErrIPv6PacketTooShort)
 }
 
@@ -529,7 +529,7 @@ func BenchmarkParseV6(b *testing.B) {
 
 	b.Run("Normal", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			if err = parseV6(normalPacket, true, fp); err != nil {
+			if err = parseV6(normalPacket, true, fp, nil); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -537,7 +537,7 @@ func BenchmarkParseV6(b *testing.B) {
 
 	b.Run("FirstFragment", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			if err = parseV6(firstFrag, true, fp); err != nil {
+			if err = parseV6(firstFrag, true, fp, nil); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -545,7 +545,7 @@ func BenchmarkParseV6(b *testing.B) {
 
 	b.Run("SecondFragment", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			if err = parseV6(secondFrag, true, fp); err != nil {
+			if err = parseV6(secondFrag, true, fp, nil); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -590,7 +590,7 @@ func BenchmarkParseV6(b *testing.B) {
 
 	b.Run("200 HopByHop headers", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			if err = parseV6(evilBytes, false, fp); err != nil {
+			if err = parseV6(evilBytes, false, fp, nil); err != nil {
 				b.Fatal(err)
 			}
 		}

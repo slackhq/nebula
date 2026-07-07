@@ -20,6 +20,7 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/firewall/events"
 )
 
 type FirewallInterface interface {
@@ -66,6 +67,14 @@ type Firewall struct {
 	defaultLocalCIDRAny bool
 	incomingMetrics     firewallMetrics
 	outgoingMetrics     firewallMetrics
+
+	// reporter is the optional embedder-supplied event sink. Immutable for
+	// the lifetime of this Firewall; Control.SetFirewallEventReporter
+	// installs it by shallow-copying the Firewall under the conntrack lock
+	// and swapping the pointer, and reloadFirewall carries it forward.
+	// Read unsynchronized on the data path: the preceding Firewall-pointer
+	// read pins the field's value for the duration of that call.
+	reporter events.Reporter
 
 	l *logrus.Logger
 }
@@ -416,23 +425,27 @@ var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
 // Drop returns an error if the packet should be dropped, explaining why. It
 // returns nil if the packet should not be dropped.
-func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) error {
+func (f *Firewall) Drop(fp firewall.Packet, ctx firewall.PacketContext, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) error {
 	// Check if we spoke to this tuple, if we did then allow this packet
 	if f.inConns(fp, h, caPool, localCache) {
 		return nil
 	}
+
+	peerCert := h.ConnectionState.peerCert
 
 	// Make sure remote address matches nebula certificate, and determine how to treat it
 	if h.networks == nil {
 		// Simple case: Certificate has one address and no unsafe networks
 		if h.vpnAddrs[0] != fp.RemoteAddr {
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
+			f.reportDrop(incoming, events.DropInvalidRemoteIP, fp, ctx, peerCert)
 			return ErrInvalidRemoteIP
 		}
 	} else {
 		nwType, ok := h.networks.Lookup(fp.RemoteAddr)
 		if !ok {
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
+			f.reportDrop(incoming, events.DropInvalidRemoteIP, fp, ctx, peerCert)
 			return ErrInvalidRemoteIP
 		}
 		switch nwType {
@@ -440,11 +453,13 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 			break // nothing special
 		case NetworkTypeVPNPeer:
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
+			f.reportDrop(incoming, events.DropPeerRejected, fp, ctx, peerCert)
 			return ErrPeerRejected // reject for now, one day this may have different FW rules
 		case NetworkTypeUnsafe:
 			break // nothing special, one day this may have different FW rules
 		default:
 			f.metrics(incoming).droppedRemoteAddr.Inc(1)
+			f.reportDrop(incoming, events.DropUnknownNetwork, fp, ctx, peerCert)
 			return ErrUnknownNetworkType //should never happen
 		}
 	}
@@ -452,6 +467,7 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	// Make sure we are supposed to be handling this local ip address
 	if !f.routableNetworks.Contains(fp.LocalAddr) {
 		f.metrics(incoming).droppedLocalAddr.Inc(1)
+		f.reportDrop(incoming, events.DropInvalidLocalIP, fp, ctx, peerCert)
 		return ErrInvalidLocalIP
 	}
 
@@ -461,13 +477,14 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	}
 
 	// We now know which firewall table to check against
-	if !table.match(fp, incoming, h.ConnectionState.peerCert, caPool) {
+	if !table.match(fp, incoming, peerCert, caPool) {
 		f.metrics(incoming).droppedNoRule.Inc(1)
+		f.reportDrop(incoming, events.DropNoMatchingRule, fp, ctx, peerCert)
 		return ErrNoMatchingRule
 	}
 
 	// We always want to conntrack since it is a faster operation
-	f.addConn(fp, incoming)
+	f.addConn(fp, ctx, incoming, peerCert)
 
 	return nil
 }
@@ -484,6 +501,59 @@ func (f *Firewall) metrics(incoming bool) firewallMetrics {
 // firewall object is created
 func (f *Firewall) Destroy() {
 	//TODO: clean references if/when needed
+}
+
+func (f *Firewall) reportDrop(incoming bool, reason events.DropReason, fp firewall.Packet, ctx firewall.PacketContext, peerCert *cert.CachedCertificate) {
+	r := f.reporter
+	if r == nil {
+		return
+	}
+	r.ReportDrop(events.DropEvent{
+		Incoming:     incoming,
+		Reason:       reason,
+		Packet:       fp,
+		Context:      ctx,
+		PeerCert:     peerCert,
+		RulesVersion: f.rulesVersion,
+	})
+}
+
+func (f *Firewall) reportFlowCreate(incoming bool, fp firewall.Packet, ctx firewall.PacketContext, peerCert *cert.CachedCertificate) {
+	r := f.reporter
+	if r == nil {
+		return
+	}
+	r.ReportFlowCreate(events.FlowCreateEvent{
+		Incoming:     incoming,
+		Packet:       fp,
+		Context:      ctx,
+		PeerCert:     peerCert,
+		RulesVersion: f.rulesVersion,
+	})
+}
+
+func (f *Firewall) reportFlowEvict(incoming bool, fp firewall.Packet, rulesVersion uint16, expired bool) {
+	r := f.reporter
+	if r == nil {
+		return
+	}
+	r.ReportFlowEvict(events.FlowEvictEvent{
+		Incoming:     incoming,
+		Packet:       fp,
+		RulesVersion: rulesVersion,
+		Expired:      expired,
+	})
+}
+
+func (f *Firewall) reportRulesReload(oldVersion, newVersion uint16) {
+	r := f.reporter
+	if r == nil {
+		return
+	}
+	r.ReportRulesReload(events.RulesReloadEvent{
+		OldVersion: oldVersion,
+		NewVersion: newVersion,
+	})
 }
 
 func (f *Firewall) EmitStats() {
@@ -536,7 +606,9 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 					WithField("oldRulesVersion", c.rulesVersion).
 					Debugln("dropping old conntrack entry, does not match new ruleset")
 			}
+			oldRulesVersion := c.rulesVersion
 			delete(conntrack.Conns, fp)
+			f.reportFlowEvict(c.incoming, fp, oldRulesVersion, false)
 			conntrack.Unlock()
 			return false
 		}
@@ -571,7 +643,7 @@ func (f *Firewall) inConns(fp firewall.Packet, h *HostInfo, caPool *cert.CAPool,
 	return true
 }
 
-func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
+func (f *Firewall) addConn(fp firewall.Packet, ctx firewall.PacketContext, incoming bool, peerCert *cert.CachedCertificate) {
 	var timeout time.Duration
 	c := &conn{}
 
@@ -586,7 +658,8 @@ func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
 
 	conntrack := f.Conntrack
 	conntrack.Lock()
-	if _, ok := conntrack.Conns[fp]; !ok {
+	_, existing := conntrack.Conns[fp]
+	if !existing {
 		conntrack.TimerWheel.Advance(time.Now())
 		conntrack.TimerWheel.Add(fp, timeout)
 	}
@@ -597,6 +670,13 @@ func (f *Firewall) addConn(fp firewall.Packet, incoming bool) {
 	c.rulesVersion = f.rulesVersion
 	c.Expires = time.Now().Add(timeout)
 	conntrack.Conns[fp] = c
+
+	// Report only when this represents a genuinely new flow. Fires under the
+	// conntrack lock so FlowCreate/FlowEvict events stay ordered relative to
+	// RulesReloadEvent, which also fires under this lock.
+	if !existing {
+		f.reportFlowCreate(incoming, fp, ctx, peerCert)
+	}
 	conntrack.Unlock()
 }
 
@@ -620,7 +700,10 @@ func (f *Firewall) evict(p firewall.Packet) {
 	}
 
 	// This conn is done
+	rulesVersion := t.rulesVersion
+	incoming := t.incoming
 	delete(conntrack.Conns, p)
+	f.reportFlowEvict(incoming, p, rulesVersion, true)
 }
 
 func (ft *FirewallTable) match(p firewall.Packet, incoming bool, c *cert.CachedCertificate, caPool *cert.CAPool) bool {

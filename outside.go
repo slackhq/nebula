@@ -19,7 +19,7 @@ const (
 	minFwPacketLen = 4
 )
 
-func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, fwCtx *firewall.PacketContext, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
 	err := h.Parse(packet)
 	if err != nil {
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
@@ -60,7 +60,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 		switch h.Subtype {
 		case header.MessageNone:
-			if !f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, nb, q, localCache) {
+			if !f.decryptToTun(hostinfo, h.MessageCounter, out, packet, fwPacket, fwCtx, nb, q, localCache) {
 				return
 			}
 		case header.MessageRelay:
@@ -102,7 +102,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 					relay:     relay,
 					IsRelayed: true,
 				}
-				f.readOutsidePackets(via, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
+				f.readOutsidePackets(via, out[:0], signedPayload, h, fwPacket, fwCtx, lhf, nb, q, localCache)
 				return
 			case ForwardingType:
 				// Find the target HostInfo relay object
@@ -295,7 +295,10 @@ var (
 )
 
 // newPacket validates and parses the interesting bits for the firewall out of the ip and sub protocol headers
-func newPacket(data []byte, incoming bool, fp *firewall.Packet) error {
+func newPacket(data []byte, incoming bool, fp *firewall.Packet, ctx *firewall.PacketContext) error {
+	if ctx != nil {
+		*ctx = firewall.PacketContext{}
+	}
 	if len(data) < 1 {
 		return ErrPacketTooShort
 	}
@@ -303,14 +306,14 @@ func newPacket(data []byte, incoming bool, fp *firewall.Packet) error {
 	version := int((data[0] >> 4) & 0x0f)
 	switch version {
 	case ipv4.Version:
-		return parseV4(data, incoming, fp)
+		return parseV4(data, incoming, fp, ctx)
 	case ipv6.Version:
-		return parseV6(data, incoming, fp)
+		return parseV6(data, incoming, fp, ctx)
 	}
 	return ErrUnknownIPVersion
 }
 
-func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
+func parseV6(data []byte, incoming bool, fp *firewall.Packet, ctx *firewall.PacketContext) error {
 	dataLen := len(data)
 	if dataLen < ipv6.HeaderLen {
 		return ErrIPv6PacketTooShort
@@ -355,6 +358,11 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 				fp.RemotePort = 0
 			}
 			fp.Fragment = false
+			if ctx != nil {
+				ctx.Length = binary.BigEndian.Uint16(data[4:6]) + uint16(ipv6.HeaderLen)
+				ctx.ICMPType = data[offset]
+				ctx.ICMPCode = data[offset+1]
+			}
 			return nil
 
 		case layers.IPProtocolTCP, layers.IPProtocolUDP:
@@ -372,6 +380,12 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 			}
 
 			fp.Fragment = false
+			if ctx != nil {
+				ctx.Length = binary.BigEndian.Uint16(data[4:6]) + uint16(ipv6.HeaderLen)
+				if proto == layers.IPProtocolTCP && dataLen >= offset+14 {
+					ctx.TCPFlags = data[offset+13]
+				}
+			}
 			return nil
 
 		case layers.IPProtocolIPv6Fragment:
@@ -423,7 +437,7 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 	return ErrIPv6CouldNotFindPayload
 }
 
-func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
+func parseV4(data []byte, incoming bool, fp *firewall.Packet, ctx *firewall.PacketContext) error {
 	// Do we at least have an ipv4 header worth of data?
 	if len(data) < ipv4.HeaderLen {
 		return ErrIPv4PacketTooShort
@@ -480,6 +494,21 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 		fp.RemotePort = binary.BigEndian.Uint16(data[ihl+2 : ihl+4]) //dst port
 	}
 
+	if ctx != nil {
+		ctx.Length = binary.BigEndian.Uint16(data[2:4])
+		if !fp.Fragment {
+			switch fp.Protocol {
+			case firewall.ProtoICMP:
+				ctx.ICMPType = data[ihl]
+				ctx.ICMPCode = data[ihl+1]
+			case firewall.ProtoTCP:
+				if len(data) >= ihl+14 {
+					ctx.TCPFlags = data[ihl+13]
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -499,7 +528,7 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	return out, nil
 }
 
-func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) bool {
+func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *firewall.Packet, fwCtx *firewall.PacketContext, nb []byte, q int, localCache firewall.ConntrackCache) bool {
 	var err error
 
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], messageCounter, nb)
@@ -508,7 +537,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return false
 	}
 
-	err = newPacket(out, true, fwPacket)
+	err = newPacket(out, true, fwPacket, fwCtx)
 	if err != nil {
 		hostinfo.logger(f.l).WithError(err).WithField("packet", out).
 			Warnf("Error while validating inbound packet")
@@ -521,7 +550,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return false
 	}
 
-	dropReason := f.firewall.Drop(*fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
+	dropReason := f.firewall.Drop(*fwPacket, *fwCtx, true, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason != nil {
 		// NOTE: We give `packet` as the `out` here since we already decrypted from it and we don't need it anymore
 		// This gives us a buffer to build the reject packet in
