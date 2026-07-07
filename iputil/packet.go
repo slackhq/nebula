@@ -344,7 +344,7 @@ func ipv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int, isFragm
 				return nextHeader, offset, isFragment
 			}
 			nextHeader = packet[offset]
-			offset += int(packet[offset+1]+1) << 3
+			offset += (int(packet[offset+1]) + 1) << 3
 
 		case 44: // Fragment
 			if len(packet) < offset+8 {
@@ -361,7 +361,7 @@ func ipv6FindUpperProtocol(packet []byte) (nextHeader uint8, offset int, isFragm
 				return nextHeader, offset, isFragment
 			}
 			nextHeader = packet[offset]
-			offset += int(packet[offset+1]+2) << 2
+			offset += (int(packet[offset+1]) + 2) << 2
 
 		default:
 			return nextHeader, offset, isFragment
