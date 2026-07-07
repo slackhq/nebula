@@ -916,6 +916,159 @@ func TestFirewall_DropIPSpoofing(t *testing.T) {
 	assert.Equal(t, fw.Drop(p, true, &h1, cp, nil), ErrInvalidRemoteIP)
 }
 
+func TestFirewall_ConntrackSourceSpoofingAcrossPeers(t *testing.T) {
+	l := test.NewLoggerWithOutput(&bytes.Buffer{})
+
+	myVpnNetworksTable := new(bart.Lite)
+	myVpnNetworksTable.Insert(netip.MustParsePrefix("192.0.2.1/24"))
+
+	owner := &dummyCert{
+		name:     "owner",
+		networks: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/24")},
+	}
+
+	victim := &cert.CachedCertificate{
+		Certificate: &dummyCert{
+			name:     "victim",
+			networks: []netip.Prefix{netip.MustParsePrefix("192.0.2.2/24")},
+		},
+	}
+	victimHI := HostInfo{
+		ConnectionState: &ConnectionState{peerCert: victim},
+		vpnAddrs:        []netip.Addr{netip.MustParseAddr("192.0.2.2")},
+	}
+	victimHI.buildNetworks(myVpnNetworksTable, victim.Certificate)
+
+	attacker := &cert.CachedCertificate{
+		Certificate: &dummyCert{
+			name:     "attacker",
+			networks: []netip.Prefix{netip.MustParsePrefix("192.0.2.3/24")},
+		},
+	}
+	attackerHI := HostInfo{
+		ConnectionState: &ConnectionState{peerCert: attacker},
+		vpnAddrs:        []netip.Addr{netip.MustParseAddr("192.0.2.3")},
+	}
+	attackerHI.buildNetworks(myVpnNetworksTable, attacker.Certificate)
+
+	fw := NewFirewall(l, time.Second, time.Minute, time.Hour, owner)
+	// Allow any inbound traffic that passes the cert / source-IP checks.
+	require.NoError(t, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "", "", ""))
+	cp := cert.NewCAPool()
+
+	flow := firewall.Packet{
+		LocalAddr:  netip.MustParseAddr("192.0.2.1"),
+		RemoteAddr: netip.MustParseAddr("192.0.2.2"),
+		LocalPort:  443,
+		RemotePort: 55000,
+		Protocol:   firewall.ProtoUDP,
+	}
+
+	require.NoError(t, fw.Drop(flow, true, &victimHI, cp, nil),
+		"victim's own traffic from its own overlay IP must be allowed")
+
+	unseen := flow
+	unseen.RemotePort = 55001
+	assert.Equal(t, ErrInvalidRemoteIP, fw.Drop(unseen, true, &attackerHI, cp, nil),
+		"sanity: attacker forging victim's source IP must be rejected when no conntrack entry exists")
+
+	got := fw.Drop(flow, true, &attackerHI, cp, nil)
+	t.Logf("attacker replaying victim's 4-tuple: Drop returned %v (nil == packet ALLOWED == spoof succeeded)", got)
+	assert.Equal(t, ErrInvalidRemoteIP, got,
+		"SECURITY: attacker spoofed victim's overlay source IP (192.0.2.2) by reusing an existing conntrack 4-tuple; Drop returned %v instead of rejecting", got)
+}
+
+// BenchmarkFirewallDropConntrackHit measures Drop on an already-established flow
+// (a conntrack hit). This is the fast path that the source-IP<->cert binding
+// reordering adds work to, so it quantifies the cost of moving the address checks
+// ahead of the conntrack lookup. Cases:
+//   - simple:  peer cert has one address, no unsafe networks (h.networks == nil),
+//     so the remote-address check is a single netip.Addr compare.
+//   - complex: peer cert has unsafe networks (h.networks populated), so the
+//     remote-address check is a BART lookup.
+//   - noCache/localCache: whether a per-batch ConntrackCache is supplied, which in
+//     the original code let the fast path skip straight past the address checks.
+func BenchmarkFirewallDropConntrackHit(b *testing.B) {
+	l := test.NewLoggerWithOutput(&bytes.Buffer{})
+
+	myVpnNetworksTable := new(bart.Lite)
+	myVpnNetworksTable.Insert(netip.MustParsePrefix("192.0.2.1/24"))
+
+	owner := &dummyCert{
+		name:     "owner",
+		networks: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/24")},
+	}
+
+	simpleCert := &cert.CachedCertificate{
+		Certificate: &dummyCert{
+			name:     "simple",
+			networks: []netip.Prefix{netip.MustParsePrefix("192.0.2.2/24")},
+		},
+	}
+	simpleHost := &HostInfo{
+		ConnectionState: &ConnectionState{peerCert: simpleCert},
+		vpnAddrs:        []netip.Addr{netip.MustParseAddr("192.0.2.2")},
+	}
+	simpleHost.buildNetworks(myVpnNetworksTable, simpleCert.Certificate)
+
+	complexCert := &cert.CachedCertificate{
+		Certificate: &dummyCert{
+			name:           "complex",
+			networks:       []netip.Prefix{netip.MustParsePrefix("192.0.2.2/24")},
+			unsafeNetworks: []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")},
+		},
+	}
+	complexHost := &HostInfo{
+		ConnectionState: &ConnectionState{peerCert: complexCert},
+		vpnAddrs:        []netip.Addr{netip.MustParseAddr("192.0.2.2")},
+	}
+	complexHost.buildNetworks(myVpnNetworksTable, complexCert.Certificate)
+
+	cp := cert.NewCAPool()
+
+	flow := firewall.Packet{
+		LocalAddr:  netip.MustParseAddr("192.0.2.1"),
+		RemoteAddr: netip.MustParseAddr("192.0.2.2"),
+		LocalPort:  443,
+		RemotePort: 55000,
+		Protocol:   firewall.ProtoUDP,
+	}
+
+	cases := []struct {
+		name     string
+		host     *HostInfo
+		useCache bool
+	}{
+		{"simple/noCache", simpleHost, false},
+		{"simple/localCache", simpleHost, true},
+		{"complex/noCache", complexHost, false},
+		{"complex/localCache", complexHost, true},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			fw := NewFirewall(l, time.Second, time.Minute, time.Hour, owner)
+			require.NoError(b, fw.AddRule(true, firewall.ProtoAny, 0, 0, []string{"any"}, "", "", "", "", ""))
+
+			// Establish the conntrack entry so every benchmarked Drop is a hit.
+			require.NoError(b, fw.Drop(flow, true, tc.host, cp, nil))
+
+			var cache firewall.ConntrackCache
+			if tc.useCache {
+				cache = firewall.ConntrackCache{}
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := fw.Drop(flow, true, tc.host, cp, cache); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkLookup(b *testing.B) {
 	ml := func(m map[string]struct{}, a [][]string) {
 		for n := 0; n < b.N; n++ {
