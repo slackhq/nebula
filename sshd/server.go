@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 
 	"github.com/armon/go-radix"
 	"golang.org/x/crypto/ssh"
@@ -18,6 +19,8 @@ type SSHServer struct {
 
 	certChecker *ssh.CertChecker
 
+	// authLock guards trustedKeys and trustedCAs
+	authLock sync.RWMutex
 	// Map of user -> authorized keys
 	trustedKeys map[string]map[string]bool
 	trustedCAs  []ssh.PublicKey
@@ -45,6 +48,8 @@ func NewSSHServer(ctx context.Context, l *slog.Logger) (*SSHServer, error) {
 
 	cc := ssh.CertChecker{
 		IsUserAuthority: func(auth ssh.PublicKey) bool {
+			s.authLock.RLock()
+			defer s.authLock.RUnlock()
 			for _, ca := range s.trustedCAs {
 				if bytes.Equal(ca.Marshal(), auth.Marshal()) {
 					return true
@@ -57,6 +62,8 @@ func NewSSHServer(ctx context.Context, l *slog.Logger) (*SSHServer, error) {
 			pk := string(pubKey.Marshal())
 			fp := ssh.FingerprintSHA256(pubKey)
 
+			s.authLock.RLock()
+			defer s.authLock.RUnlock()
 			tk, ok := s.trustedKeys[c.User()]
 			if !ok {
 				return nil, fmt.Errorf("unknown user %s", c.User())
@@ -105,11 +112,15 @@ func (s *SSHServer) SetHostKey(hostPrivateKey []byte) error {
 }
 
 func (s *SSHServer) ClearTrustedCAs() {
+	s.authLock.Lock()
 	s.trustedCAs = []ssh.PublicKey{}
+	s.authLock.Unlock()
 }
 
 func (s *SSHServer) ClearAuthorizedKeys() {
+	s.authLock.Lock()
 	s.trustedKeys = make(map[string]map[string]bool)
+	s.authLock.Unlock()
 }
 
 // AddTrustedCA adds a trusted CA for user certificates
@@ -119,7 +130,9 @@ func (s *SSHServer) AddTrustedCA(pubKey string) error {
 		return err
 	}
 
+	s.authLock.Lock()
 	s.trustedCAs = append(s.trustedCAs, pk)
+	s.authLock.Unlock()
 	s.l.Info("Trusted CA key", "sshKey", pubKey)
 	return nil
 }
@@ -131,6 +144,7 @@ func (s *SSHServer) AddAuthorizedKey(user, pubKey string) error {
 		return err
 	}
 
+	s.authLock.Lock()
 	tk, ok := s.trustedKeys[user]
 	if !ok {
 		tk = make(map[string]bool)
@@ -138,6 +152,7 @@ func (s *SSHServer) AddAuthorizedKey(user, pubKey string) error {
 	}
 
 	tk[string(pk.Marshal())] = true
+	s.authLock.Unlock()
 	s.l.Info("Authorized ssh key",
 		"sshKey", pubKey,
 		"sshUser", user,
