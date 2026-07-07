@@ -1460,7 +1460,7 @@ func protoV6AddrPortToNetAddrPort(ap *V6AddrPort) netip.AddrPort {
 	b := [16]byte{}
 	binary.BigEndian.PutUint64(b[:8], ap.Hi)
 	binary.BigEndian.PutUint64(b[8:], ap.Lo)
-	return netip.AddrPortFrom(netip.AddrFrom16(b), uint16(ap.Port))
+	return netip.AddrPortFrom(netip.AddrFrom16(b).Unmap(), uint16(ap.Port))
 }
 
 func netAddrToProtoAddr(addr netip.Addr) *Addr {
