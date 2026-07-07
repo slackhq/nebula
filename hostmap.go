@@ -438,43 +438,29 @@ func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) {
 }
 
 func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
+	isLastHostinfo := hostinfo.next == nil && hostinfo.prev == nil
+
 	for _, addr := range hostinfo.vpnAddrs {
-		h := hm.Hosts[addr]
-		for h != nil {
-			if h == hostinfo {
-				hm.unlockedInnerDeleteHostInfo(h, addr)
-			}
-			h = h.next
+		if hm.Hosts[addr] != hostinfo {
+			continue
+		}
+		if hostinfo.next != nil {
+			// Promote the next hostinfo in the shared chain to primary for this address
+			hm.Hosts[addr] = hostinfo.next
+		} else {
+			delete(hm.Hosts, addr)
 		}
 	}
-}
+	if len(hm.Hosts) == 0 {
+		hm.Hosts = map[netip.Addr]*HostInfo{}
+	}
 
-func (hm *HostMap) unlockedInnerDeleteHostInfo(hostinfo *HostInfo, addr netip.Addr) {
-	primary, ok := hm.Hosts[addr]
-	isLastHostinfo := hostinfo.next == nil && hostinfo.prev == nil
-	if ok && primary == hostinfo {
-		// The vpn addr pointer points to the same hostinfo as the local index id, we can remove it
-		delete(hm.Hosts, addr)
-		if len(hm.Hosts) == 0 {
-			hm.Hosts = map[netip.Addr]*HostInfo{}
-		}
-
-		if hostinfo.next != nil {
-			// We had more than 1 hostinfo at this vpn addr, promote the next in the list to primary
-			hm.Hosts[addr] = hostinfo.next
-			// It is primary, there is no previous hostinfo now
-			hostinfo.next.prev = nil
-		}
-
-	} else {
-		// Relink if we were in the middle of multiple hostinfos for this vpn addr
-		if hostinfo.prev != nil {
-			hostinfo.prev.next = hostinfo.next
-		}
-
-		if hostinfo.next != nil {
-			hostinfo.next.prev = hostinfo.prev
-		}
+	// Splice this hostinfo out of the shared chain exactly once
+	if hostinfo.prev != nil {
+		hostinfo.prev.next = hostinfo.next
+	}
+	if hostinfo.next != nil {
+		hostinfo.next.prev = hostinfo.prev
 	}
 
 	hostinfo.next = nil
