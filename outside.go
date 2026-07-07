@@ -277,7 +277,8 @@ func (f *Interface) sendCloseTunnel(h *HostInfo) {
 }
 
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
-	if !via.IsRelayed && hostinfo.remote != via.UdpAddr {
+	curRemote := hostinfo.GetRemote()
+	if !via.IsRelayed && curRemote != via.UdpAddr {
 		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, via.UdpAddr.Addr()) {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				hostinfo.logger(f.l).Debug("lighthouse.remote_allow_list denied roaming", "newAddr", via.UdpAddr)
@@ -289,7 +290,7 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				hostinfo.logger(f.l).Debug("Suppressing roam back to previous remote",
 					"suppressSeconds", RoamingSuppressSeconds,
-					"udpAddr", hostinfo.remote,
+					"udpAddr", curRemote,
 					"newAddr", via.UdpAddr,
 				)
 			}
@@ -297,11 +298,11 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
 		}
 
 		hostinfo.logger(f.l).Info("Host roamed to new udp ip/port.",
-			"udpAddr", hostinfo.remote,
+			"udpAddr", curRemote,
 			"newAddr", via.UdpAddr,
 		)
 		hostinfo.lastRoam = time.Now()
-		hostinfo.lastRoamRemote = hostinfo.remote
+		hostinfo.lastRoamRemote = curRemote
 		hostinfo.SetRemote(via.UdpAddr)
 	}
 
@@ -590,10 +591,11 @@ func (f *Interface) handleRecvError(addr netip.AddrPort, h *header.H) {
 		return
 	}
 
-	if hostinfo.remote.IsValid() && hostinfo.remote != addr {
+	hr := hostinfo.GetRemote()
+	if hr.IsValid() && hr != addr {
 		f.l.Info("Someone spoofing recv_errors?",
 			"addr", addr,
-			"hostinfoRemote", hostinfo.remote,
+			"hostinfoRemote", hr,
 		)
 		return
 	}

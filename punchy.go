@@ -174,9 +174,9 @@ func (p *Punchy) SendPunch(hostinfo *HostInfo) {
 
 	if p.punchEverything.Load() {
 		p.sendPunchToAllRemotes(hostinfo)
-	} else if hostinfo.remote.IsValid() {
+	} else if hr := hostinfo.GetRemote(); hr.IsValid() {
 		p.metricPunchyTx.Inc(1)
-		p.punchConn.WriteTo([]byte{1}, hostinfo.remote)
+		p.punchConn.WriteTo([]byte{1}, hr)
 	}
 }
 
