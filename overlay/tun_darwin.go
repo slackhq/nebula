@@ -31,16 +31,6 @@ type tun struct {
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	linkAddr    *netroute.LinkAddr
 	l           *slog.Logger
-
-	// readBuf is the per-tun read scratch reused across calls so we don't allocate per Read.
-	// We could call readv via syscall.Syscall(SYS_READV, ...), but on darwin/arm64 that path emits
-	// a raw SVC #0x80 trap (see $GOROOT/src/syscall/asm_darwin_arm64.s) rather than going through
-	// libSystem. Apple has been signaling for years that direct syscalls are deprecated, so we
-	// stick to libc-pinned writev via linkname (see tunWritev) and use plain f.Read for the read
-	// path. Stdlib doesn't keep syscall.readv alive for external linkname (only writev gets that
-	// treatment via linkname_libc.go), so the read path can't use readv and has to do the
-	// prefix-skip copy.
-	readBuf []byte
 }
 
 type ifReq struct {
@@ -130,14 +120,12 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		return nil, fmt.Errorf("SetNonblock: %v", err)
 	}
 
-	mtu := c.GetInt("tun.mtu", DefaultMTU)
 	t := &tun{
 		f:           os.NewFile(uintptr(fd), ""),
 		Device:      name,
 		vpnNetworks: vpnNetworks,
-		DefaultMTU:  mtu,
+		DefaultMTU:  c.GetInt("tun.mtu", DefaultMTU),
 		l:           l,
-		readBuf:     make([]byte, mtu+4),
 	}
 
 	err = t.reload(c, true)
@@ -511,33 +499,54 @@ func delRoute(prefix netip.Prefix, gateway netroute.Addr) error {
 	return nil
 }
 
-// tunWritev is linkname'd from the standard library so the writev call goes through libSystem's
-// pinned trampoline. syscall.Syscall(SYS_WRITEV, ...) on darwin/arm64 emits a raw SVC #0x80 trap
-// (see $GOROOT/src/syscall/asm_darwin_arm64.s), which is the path Apple has signaled they will
-// eventually disallow. Stdlib's $GOROOT/src/syscall/linkname_libc.go has a bare
-// `//go:linkname writev` directive that opts in external linkname and keeps the symbol alive for
-// the linker on darwin (and openbsd). There is no equivalent for readv, which is why Read uses
-// f.Read with a prefix-skip copy instead.
+// tunWritev and tunReadv are linkname'd to x/sys/unix's libc-routed writev/readv stubs so the
+// calls go through libSystem's pinned trampoline. A raw syscall.Syscall(SYS_WRITEV/SYS_READV, ...)
+// on darwin/arm64 emits an SVC #0x80 trap (see $GOROOT/src/syscall/asm_darwin_arm64.s), the path
+// Apple keeps warning they will eventually disallow. We pull the low-level stubs instead of calling
+// unix.Writev/unix.Readv because those take [][]byte and rebuild the []Iovec every call, which
+// heap-allocates the header; linkname'ing the stubs lets us hand them our own stack-allocated
+// iovecs. See golang/go#78049.
 
-//go:linkname tunWritev syscall.writev
+//go:linkname tunWritev golang.org/x/sys/unix.writev
 //go:noescape
-func tunWritev(fd int, iovecs []syscall.Iovec) (n uintptr, err error)
+func tunWritev(fd int, iovecs []unix.Iovec) (n int, err error)
 
-// Read pulls one IP packet off the utun device.
+//go:linkname tunReadv golang.org/x/sys/unix.readv
+//go:noescape
+func tunReadv(fd int, iovecs []unix.Iovec) (n int, err error)
+
+// Read pulls one IP packet off the utun device, scattering the 4 byte protocol header away from
+// the packet so the payload lands directly in to.
 func (t *tun) Read(to []byte) (int, error) {
-	if cap(t.readBuf) < len(to)+4 {
-		t.readBuf = make([]byte, len(to)+4)
-	}
-	buf := t.readBuf[:len(to)+4]
+	var head [4]byte
 
-	n, err := t.f.Read(buf)
+	rc, err := t.f.SyscallConn()
 	if err != nil {
 		return 0, err
+	}
+
+	var n int
+	var callErr error
+	err = rc.Read(func(fd uintptr) bool {
+		iovecs := []unix.Iovec{
+			{Base: &head[0], Len: 4},
+			{Base: &to[0], Len: uint64(len(to))},
+		}
+		n, callErr = tunReadv(int(fd), iovecs)
+		if errno, ok := callErr.(syscall.Errno); ok && errno.Temporary() {
+			return false
+		}
+		return true
+	})
+	if err != nil {
+		return 0, err
+	}
+	if callErr != nil {
+		return 0, callErr
 	}
 	if n < 4 {
 		return 0, nil
 	}
-	copy(to, buf[4:n])
 	return n - 4, nil
 }
 
@@ -564,10 +573,10 @@ func (t *tun) Write(from []byte) (int, error) {
 		return 0, err
 	}
 
-	var n uintptr
+	var n int
 	var callErr error
 	err = rc.Write(func(fd uintptr) bool {
-		iovecs := []syscall.Iovec{
+		iovecs := []unix.Iovec{
 			{Base: &head[0], Len: 4},
 			{Base: &from[0], Len: uint64(len(from))},
 		}
@@ -586,7 +595,7 @@ func (t *tun) Write(from []byte) (int, error) {
 		return 0, callErr
 	}
 
-	return int(n) - 4, nil
+	return n - 4, nil
 }
 
 func (t *tun) Networks() []netip.Prefix {

@@ -57,13 +57,6 @@ type tun struct {
 	l           *slog.Logger
 	f           *os.File
 	fd          int
-
-	// readBuf is the per-tun read scratch reused across calls so we don't allocate per Read.
-	// OpenBSD's pinsyscall protection forbids raw syscall.Syscall(SYS_READV, ...) and stdlib doesn't keep syscall.readv
-	// alive for external linkname (only writev gets that treatment via linkname_libc.go)
-	// so the read path can't use readv and has to do the prefix-skip copy.
-	// https://github.com/golang/go/issues/78049
-	readBuf []byte
 }
 
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
@@ -93,15 +86,13 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		l.Warn("Failed to set the tun device as nonblocking", "error", err)
 	}
 
-	mtu := c.GetInt("tun.mtu", DefaultMTU)
 	t := &tun{
 		f:           os.NewFile(uintptr(fd), ""),
 		fd:          fd,
 		Device:      deviceName,
 		vpnNetworks: vpnNetworks,
-		MTU:         mtu,
+		MTU:         c.GetInt("tun.mtu", DefaultMTU),
 		l:           l,
-		readBuf:     make([]byte, mtu+4),
 	}
 
 	err = t.reload(c, true)
@@ -131,33 +122,54 @@ func (t *tun) Close() error {
 	return nil
 }
 
-// tunWritev is linkname'd from the standard library so the writev call goes through libc's pinned syscall trampoline.
-// OpenBSD's pinsyscall protection rejects raw syscall.Syscall(SYS_WRITEV, ...) calls because they don't originate from
-// the libc-pinned addresses, so we can't use the same syscall.Syscall pattern that freebsd / netbsd use.
-// Stdlib's $GOROOT/src/syscall/linkname_libc.go has a bare `//go:linkname writev` directive that both opt-ins external
-// linkname and keeps the symbol alive for the linker.
-// There is no equivalent for readv, which is why Read still uses a copy-based path.
-// https://github.com/golang/go/issues/78049
+// tunWritev and tunReadv are linkname'd to x/sys/unix's libc-routed writev/readv stubs so the
+// calls go through libc's pinned trampoline. OpenBSD's pinsyscall protection rejects a raw
+// syscall.Syscall(SYS_WRITEV/SYS_READV, ...) because it doesn't originate from a libc-pinned
+// address, so we can't use the syscall.Syscall pattern that freebsd / netbsd use. We pull the
+// low-level stubs instead of calling unix.Writev/unix.Readv because those take [][]byte and rebuild
+// the []Iovec every call, which heap-allocates the header; linkname'ing the stubs lets us hand them
+// our own stack-allocated iovecs. See golang/go#78049.
 
-//go:linkname tunWritev syscall.writev
+//go:linkname tunWritev golang.org/x/sys/unix.writev
 //go:noescape
-func tunWritev(fd int, iovecs []syscall.Iovec) (n uintptr, err error)
+func tunWritev(fd int, iovecs []unix.Iovec) (n int, err error)
 
-// Read pulls one IP packet off the tun device.
+//go:linkname tunReadv golang.org/x/sys/unix.readv
+//go:noescape
+func tunReadv(fd int, iovecs []unix.Iovec) (n int, err error)
+
+// Read pulls one IP packet off the tun device, scattering the 4 byte protocol header away from the
+// packet so the payload lands directly in to.
 func (t *tun) Read(to []byte) (int, error) {
-	if cap(t.readBuf) < len(to)+4 {
-		t.readBuf = make([]byte, len(to)+4)
-	}
-	buf := t.readBuf[:len(to)+4]
+	var head [4]byte
 
-	n, err := t.f.Read(buf)
+	rc, err := t.f.SyscallConn()
 	if err != nil {
 		return 0, err
+	}
+
+	var n int
+	var callErr error
+	err = rc.Read(func(fd uintptr) bool {
+		iovecs := []unix.Iovec{
+			{Base: &head[0], Len: 4},
+			{Base: &to[0], Len: uint64(len(to))},
+		}
+		n, callErr = tunReadv(int(fd), iovecs)
+		if errno, ok := callErr.(syscall.Errno); ok && errno.Temporary() {
+			return false
+		}
+		return true
+	})
+	if err != nil {
+		return 0, err
+	}
+	if callErr != nil {
+		return 0, callErr
 	}
 	if n < 4 {
 		return 0, nil
 	}
-	copy(to, buf[4:n])
 	return n - 4, nil
 }
 
@@ -184,10 +196,10 @@ func (t *tun) Write(from []byte) (int, error) {
 		return 0, err
 	}
 
-	var n uintptr
+	var n int
 	var callErr error
 	err = rc.Write(func(fd uintptr) bool {
-		iovecs := []syscall.Iovec{
+		iovecs := []unix.Iovec{
 			{Base: &head[0], Len: 4},
 			{Base: &from[0], Len: uint64(len(from))},
 		}
@@ -206,7 +218,7 @@ func (t *tun) Write(from []byte) (int, error) {
 		return 0, callErr
 	}
 
-	return int(n) - 4, nil
+	return n - 4, nil
 }
 
 func (t *tun) addIp(cidr netip.Prefix) error {
