@@ -422,16 +422,14 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 			if dataLen <= offset+1 {
 				break
 			}
-
-			next = int(data[offset+1]+2) << 2
+			next = (int(data[offset+1]) + 2) << 2
 
 		default:
 			// Normal ipv6 header length processing
 			if dataLen <= offset+1 {
 				break
 			}
-
-			next = int(data[offset+1]+1) << 3
+			next = (int(data[offset+1]) + 1) << 3
 		}
 
 		if next <= 0 {
