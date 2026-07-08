@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - unreleased
+
+See the [v1.11.0](https://github.com/slackhq/nebula/milestone/25?closed=1) milestone for a complete list of changes.
+
+### Added
+
+- Set the network category of the nebula device on Windows so the host firewall no longer treats it as `Public`,
+  with an option (default `true`) to bypass Windows Defender Firewall on the nebula adapter. (#1710)
+- Sign the Windows release binaries. (#1718)
+- Generate IPv6 reject packets, matching the existing IPv4 behavior. (#1766, #1767, #1768)
+- Accept `-` in `nebula-cert` to read from stdin or write to stdout. (#1714)
+- Search for both `config.yml` and `config.yaml` in service and command line modes. (#1717)
+- Add version labels to the Docker/OCI images. (#1772)
+- Add an `sshd.sandbox_dir` option to confine the SSH debug server's file writes to a directory. (#1622)
+
+### Changed
+
+- **NOTE**: Logging has switched from logrus to Go's structured `slog`. Log output changes: levels are upper case
+  (`level=INFO`), trace prints as `level=DEBUG-4`, timestamps are always RFC3339Nano and `logging.timestamp_format`
+  is ignored, and some messages were reworded. Review any log parsing before upgrading. This is also an API break
+  for embedders, as constructors now take a `*slog.Logger`. (#1672, #1734, #1621)
+- Reload the firewall when the unsafe networks in the certificate change. (#1719)
+- Reconfigure, start, and stop the stats listener on a config reload instead of requiring a restart. (#1670)
+- Update a static host's addresses when they change on reload. (#1713)
+- Don't require a port on ICMP firewall rules. (#1609)
+- Connection track ICMP traffic. (#1602)
+- Return `NODATA` instead of `NXDOMAIN` from the DNS server for a name that exists but has no record of the
+  requested type, so clients that query `AAAA` first (busybox/Alpine) fall through to `A`. (#1668)
+- Record the local host's details in the DNS server. (#1716)
+- Install Windows unsafe routes as link routes. (#1709)
+- Reduce relay handshake log spam. (#1733, #1765)
+- Start, stop, and reload subsystems (DNS, stats, conntrack, ssh, punchy) cleanly without leaking goroutines. (#1640, #1661, #1667, #1669, #1708)
+- Trigger an immediate lighthouse update when reconnecting to or adding a lighthouse instead of waiting for the next update tick. (#1645)
+- Bring the Darwin and OpenBSD tun implementations in line with the other BSDs. (#1703)
+- Various dependency updates. (#1604, #1617, #1618, #1627, #1628, #1652, #1664, #1665, #1697, #1721, #1732, #1742, #1743, #1750, #1763, #1771, #1782)
+
+### Fixed
+
+- Fix a data race on a host's remote address that could send packets to the wrong address during a roam. (#1773)
+- Fix tunnels that could permanently escape connection manager monitoring. (#1752)
+- Fix a crash when reloading the SSH server's trusted keys. (#1787)
+- Fix hostmap corruption when deleting a host with multiple overlay addresses. (#1788)
+- Apply `remote_allow_list` IPv4 rules to 4-in-6 mapped addresses. (#1786)
+- Don't panic in the DNS server on a short or empty query name. (#1635)
+- Advance the replay window on relayed packets so a relay drops replayed frames instead of re-forwarding them. (#1751)
+- Fix a race in relay state handling. (#1753)
+- Reject malformed handshakes more reliably, including invalid ed25519 key lengths. (#1601, #1756)
+- Properly handle `closetunnel` packets. (#1638)
+- Fix an IPv6 extension-header length overflow that could make the firewall parse the wrong protocol and ports. (#1789)
+- Don't call the packet reader after a UDP error on Darwin. (#1755)
+- Open the FreeBSD tun device non blocking. (#1666)
+
 ## [1.10.3] - 2026-02-06
 
 ### Security
