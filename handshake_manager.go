@@ -837,7 +837,6 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 	}
 
 	hm.sendHandshakeResponse(via, response, hostinfo, false)
-	f.connectionManager.AddTrafficWatch(hostinfo)
 	hostinfo.remotes.RefreshFromHandshake(vpnAddrs)
 
 	// Don't wait for UpdateWorker
@@ -1014,7 +1013,6 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
 
 	hm.Complete(hostinfo, f)
-	f.connectionManager.AddTrafficWatch(hostinfo)
 
 	if len(hh.packetStore) > 0 {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
@@ -1152,7 +1150,7 @@ func (hm *HandshakeManager) handleCheckAndCompleteError(err error, existing, hos
 	case ErrAlreadySeen:
 		if hostinfo.multiportRx {
 			// The other host is sending to us with multiport, so only grab the IP
-			via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), hostinfo.remote.Port())
+			via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), hostinfo.GetRemote().Port())
 		}
 		if existing.SetRemoteIfPreferred(f.hostMap, via) {
 			f.SendMessageToVpnAddr(header.Test, header.TestRequest, hostinfo.vpnAddrs[0], []byte(""), make([]byte, 12, 12), make([]byte, mtu))

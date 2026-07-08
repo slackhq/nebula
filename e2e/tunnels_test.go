@@ -15,6 +15,7 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/udp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
 
@@ -371,6 +372,100 @@ func TestCrossStackRelaysWork(t *testing.T) {
 	//myControl.Stop()
 	//theirControl.Stop()
 	//relayControl.Stop()
+}
+
+// TestRelayReplayProtection asserts that a relay (forwarding-type) node rejects
+// replayed relay frames. A captured relay frame, re-injected with the same
+// message counter, must be dropped by the replay window rather than re-forwarded
+// to the relay target. Before the fix, handleOutsideRelayPacket authenticated the
+// frame but never advanced the replay window, so every replay was re-forwarded.
+func TestRelayReplayProtection(t *testing.T) {
+	t.Parallel()
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	myControl, myVpnIpNet, _, _ := newSimpleServer(cert.Version2, ca, caKey, "me     ", "10.128.0.1/24,fc00::1/64", m{"relay": m{"use_relays": true}})
+	relayControl, relayVpnIpNet, relayUdpAddr, _ := newSimpleServer(cert.Version2, ca, caKey, "relay  ", "10.128.0.128/24,fc00::128/64", m{"relay": m{"am_relay": true}})
+	theirUdp := netip.MustParseAddrPort("10.0.0.2:4242")
+	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServerWithUdp(cert.Version2, ca, caKey, "them   ", "fc00::2/64", theirUdp, m{"relay": m{"use_relays": true}})
+
+	myVpnV6 := myVpnIpNet[1]
+	relayVpnV4 := relayVpnIpNet[0]
+	relayVpnV6 := relayVpnIpNet[1]
+	theirVpnV6 := theirVpnIpNet[0]
+
+	// Teach me how to reach the relay and that them is reachable via the relay
+	myControl.InjectLightHouseAddr(relayVpnV4.Addr(), relayUdpAddr)
+	myControl.InjectLightHouseAddr(relayVpnV6.Addr(), relayUdpAddr)
+	myControl.InjectRelays(theirVpnV6.Addr(), []netip.Addr{relayVpnV6.Addr()})
+	relayControl.InjectLightHouseAddr(theirVpnV6.Addr(), theirUdpAddr)
+
+	r := router.NewR(t, myControl, relayControl, theirControl)
+	defer r.RenderFlow()
+
+	myControl.Start()
+	relayControl.Start()
+	theirControl.Start()
+
+	// Establish the relayed tunnel in both directions so all handshakes complete.
+	t.Log("Establish the relayed tunnel")
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnV6.Addr(), 80, myVpnV6.Addr(), 80, []byte("Hi from me")))
+	p := r.RouteForAllUntilTxTun(theirControl)
+	assertUdpPacket(t, []byte("Hi from me"), p, myVpnV6.Addr(), theirVpnV6.Addr(), 80, 80)
+	theirControl.InjectTunPacket(BuildTunUDPPacket(myVpnV6.Addr(), 80, theirVpnV6.Addr(), 80, []byte("Hi from them")))
+	p = r.RouteForAllUntilTxTun(myControl)
+	assertUdpPacket(t, []byte("Hi from them"), p, theirVpnV6.Addr(), myVpnV6.Addr(), 80, 80)
+
+	// Drain anything still queued on me's UDP tx so the next packet we pull is the
+	// relay frame we are about to generate.
+	for myControl.GetFromUDP(false) != nil {
+	}
+
+	// Capture a single legitimate relay frame that me transmits toward the relay.
+	t.Log("Capture a relay frame from me -> relay")
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnV6.Addr(), 80, myVpnV6.Addr(), 80, []byte("replay me")))
+	relayFrame := myControl.GetFromUDP(true)
+	require.Equal(t, relayUdpAddr, relayFrame.To, "captured frame should be addressed to the relay")
+	var fh header.H
+	require.NoError(t, fh.Parse(relayFrame.Data))
+	require.Equal(t, header.Message, fh.Type)
+	require.Equal(t, header.MessageRelay, fh.Subtype)
+
+	// drainForwards counts relay frames the relay forwards toward them within the
+	// settle window. We match on destination + (Message, MessageRelay) so the
+	// relay's own direct traffic to them can't be miscounted.
+	drainForwards := func(settle time.Duration) int {
+		ch := relayControl.GetUDPTxChan()
+		count := 0
+		for {
+			select {
+			case pkt := <-ch:
+				var ph header.H
+				if pkt.To == theirUdpAddr && ph.Parse(pkt.Data) == nil &&
+					ph.Type == header.Message && ph.Subtype == header.MessageRelay {
+					count++
+				}
+				pkt.Release()
+			case <-time.After(settle):
+				return count
+			}
+		}
+	}
+
+	// First delivery of the captured frame: the relay should forward it once.
+	t.Log("Deliver the captured frame once; relay forwards it to them")
+	relayControl.InjectUDPPacket(relayFrame)
+	require.Equal(t, 1, drainForwards(200*time.Millisecond), "relay should forward the first, legitimate copy")
+
+	// Replay the exact same frame several times. A correct replay window rejects
+	// these duplicates so the relay forwards none of them.
+	t.Log("Replay the captured frame; relay must drop the duplicates")
+	const replays = 3
+	for i := 0; i < replays; i++ {
+		relayControl.InjectUDPPacket(relayFrame)
+	}
+	forwarded := drainForwards(200 * time.Millisecond)
+	assert.Equal(t, 0, forwarded, "relay re-forwarded %d/%d replayed relay frames; replay protection is ineffective on relay tunnels", forwarded, replays)
+
+	r.RenderHostmaps("Final hostmaps", myControl, relayControl, theirControl)
 }
 
 func TestCloseTunnelAuthenticated(t *testing.T) {

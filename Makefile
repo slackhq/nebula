@@ -272,6 +272,9 @@ smoke-multiport-docker: bin-docker
 	cd .github/workflows/smoke/ && NAME="smoke-multiport" MULTIPORT_TX=true MULTIPORT_RX=true MULTIPORT_HANDSHAKE=true ./build.sh
 	cd .github/workflows/smoke/ && NAME="smoke-multiport" ./smoke.sh
 
+smoke-docker-ipv6: export SMOKE_OVERLAY_IPV6 = 1
+smoke-docker-ipv6: smoke-docker
+
 smoke-docker-race: BUILD_ARGS = -race
 smoke-docker-race: CGO_ENABLED = 1
 smoke-docker-race: smoke-docker

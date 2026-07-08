@@ -1418,6 +1418,9 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 
 	remoteAllowList := lhh.lh.GetRemoteAllowList()
 	for _, a := range n.Details.V4AddrPorts {
+		if a == nil {
+			continue
+		}
 		b := protoV4AddrPortToNetAddrPort(a)
 		if remoteAllowList.Allow(detailsVpnAddr, b.Addr()) {
 			lhh.lh.punchy.Schedule(b, detailsVpnAddr)
@@ -1425,6 +1428,9 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, fromVpn
 	}
 
 	for _, a := range n.Details.V6AddrPorts {
+		if a == nil {
+			continue
+		}
 		b := protoV6AddrPortToNetAddrPort(a)
 		if remoteAllowList.Allow(detailsVpnAddr, b.Addr()) {
 			lhh.lh.punchy.Schedule(b, detailsVpnAddr)
@@ -1454,7 +1460,7 @@ func protoV6AddrPortToNetAddrPort(ap *V6AddrPort) netip.AddrPort {
 	b := [16]byte{}
 	binary.BigEndian.PutUint64(b[:8], ap.Hi)
 	binary.BigEndian.PutUint64(b[8:], ap.Lo)
-	return netip.AddrPortFrom(netip.AddrFrom16(b), uint16(ap.Port))
+	return netip.AddrPortFrom(netip.AddrFrom16(b).Unmap(), uint16(ap.Port))
 }
 
 func netAddrToProtoAddr(addr netip.Addr) *Addr {
@@ -1494,7 +1500,9 @@ func (d *NebulaMetaDetails) GetRelays() []netip.Addr {
 
 	if len(d.RelayVpnAddrs) > 0 {
 		for _, r := range d.RelayVpnAddrs {
-			relays = append(relays, protoAddrToNetAddr(r))
+			if r != nil {
+				relays = append(relays, protoAddrToNetAddr(r))
+			}
 		}
 	}
 	return relays

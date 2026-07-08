@@ -47,6 +47,19 @@ HOST2_IP="$PREFIX.3"
 HOST3_IP="$PREFIX.4"
 HOST4_IP="$PREFIX.5"
 
+if [ "$SMOKE_OVERLAY_IPV6" ]
+then
+    LIGHTHOUSE_NIP="fd00:4242:0:0:0:ffff:c0a8:6401"
+    HOST2_NIP="fd00:4242:0:0:0:ffff:c0a8:6402"
+    HOST3_NIP="fd00:4242:0:0:0:ffff:c0a8:6403"
+    HOST4_NIP="fd00:4242:0:0:0:ffff:c0a8:6404"
+else
+    LIGHTHOUSE_NIP="192.168.100.1"
+    HOST2_NIP="192.168.100.2"
+    HOST3_NIP="192.168.100.3"
+    HOST4_NIP="192.168.100.4"
+fi
+
 # Sed the placeholder TEST-NET-3 IPs in the host configs to the real ones.
 # build/lighthouse1.yml has no IPs to rewrite so it's skipped.
 for f in build/host2.yml build/host3.yml build/host4.yml; do
@@ -80,28 +93,28 @@ docker exec host3 tcpdump -i eth0 -q -w - -U 2>logs/host3.outside.log >logs/host
 docker exec host4 tcpdump -i tun0 -q -w - -U 2>logs/host4.inside.log >logs/host4.inside.pcap &
 docker exec host4 tcpdump -i eth0 -q -w - -U 2>logs/host4.outside.log >logs/host4.outside.pcap &
 
-docker exec host2 ncat -nklv 0.0.0.0 2000 &
-docker exec host3 ncat -nklv 0.0.0.0 2000 &
-docker exec host4 ncat -e '/usr/bin/echo helloagainfromhost4' -nkluv 0.0.0.0 4000 &
-docker exec host2 ncat -e '/usr/bin/echo host2' -nkluv 0.0.0.0 3000 &
-docker exec host3 ncat -e '/usr/bin/echo host3' -nkluv 0.0.0.0 3000 &
+docker exec host2 ncat -nklv 2000 &
+docker exec host3 ncat -nklv 2000 &
+docker exec host4 ncat -e '/usr/bin/echo helloagainfromhost4' -nkluv 4000 &
+docker exec host2 ncat -e '/usr/bin/echo host2' -nkluv 3000 &
+docker exec host3 ncat -e '/usr/bin/echo host3' -nkluv 3000 &
 
 set +x
 echo
 echo " *** Testing ping from lighthouse1"
 echo
 set -x
-docker exec lighthouse1 ping -c1 192.168.100.2
-docker exec lighthouse1 ping -c1 192.168.100.3
+docker exec lighthouse1 ping -c1 $HOST2_NIP
+docker exec lighthouse1 ping -c1 $HOST3_NIP
 
 set +x
 echo
 echo " *** Testing ping from host2"
 echo
 set -x
-docker exec host2 ping -c1 192.168.100.1
+docker exec host2 ping -c1 $LIGHTHOUSE_NIP
 # Should fail because not allowed by host3 inbound firewall
-! docker exec host2 ping -c1 192.168.100.3 -w5 || exit 1
+! docker exec host2 ping -c1 $HOST3_NIP -w5 || exit 1
 
 set +x
 echo
@@ -109,34 +122,34 @@ echo " *** Testing ncat from host2"
 echo
 set -x
 # Should fail because not allowed by host3 inbound firewall
-! docker exec host2 ncat -nzv -w5 192.168.100.3 2000 || exit 1
-! docker exec host2 ncat -nzuv -w5 192.168.100.3 3000 | grep -q host3 || exit 1
+! docker exec host2 ncat -nzv -w5 $HOST3_NIP 2000 || exit 1
+! docker exec host2 ncat -nzuv -w5 $HOST3_NIP 3000 | grep -q host3 || exit 1
 
 set +x
 echo
 echo " *** Testing ping from host3"
 echo
 set -x
-docker exec host3 ping -c1 192.168.100.1
-docker exec host3 ping -c1 192.168.100.2
+docker exec host3 ping -c1 $LIGHTHOUSE_NIP
+docker exec host3 ping -c1 $HOST2_NIP
 
 set +x
 echo
 echo " *** Testing ncat from host3"
 echo
 set -x
-docker exec host3 ncat -nzv -w5 192.168.100.2 2000
-docker exec host3 ncat -nzuv -w5 192.168.100.2 3000 | grep -q host2
+docker exec host3 ncat -nzv -w5 $HOST2_NIP 2000
+docker exec host3 ncat -nzuv -w5 $HOST2_NIP 3000 | grep -q host2
 
 set +x
 echo
 echo " *** Testing ping from host4"
 echo
 set -x
-docker exec host4 ping -c1 192.168.100.1
+docker exec host4 ping -c1 $LIGHTHOUSE_NIP
 # Should fail because not allowed by host4 outbound firewall
-! docker exec host4 ping -c1 192.168.100.2 -w5 || exit 1
-! docker exec host4 ping -c1 192.168.100.3 -w5 || exit 1
+! docker exec host4 ping -c1 $HOST2_NIP -w5 || exit 1
+! docker exec host4 ping -c1 $HOST3_NIP -w5 || exit 1
 
 set +x
 echo
@@ -144,10 +157,10 @@ echo " *** Testing ncat from host4"
 echo
 set -x
 # Should fail because not allowed by host4 outbound firewall
-! docker exec host4 ncat -nzv -w5 192.168.100.2 2000 || exit 1
-! docker exec host4 ncat -nzv -w5 192.168.100.3 2000 || exit 1
-! docker exec host4 ncat -nzuv -w5 192.168.100.2 3000 | grep -q host2 || exit 1
-! docker exec host4 ncat -nzuv -w5 192.168.100.3 3000 | grep -q host3 || exit 1
+! docker exec host4 ncat -nzv -w5 $HOST2_NIP 2000 || exit 1
+! docker exec host4 ncat -nzv -w5 $HOST3_NIP 2000 || exit 1
+! docker exec host4 ncat -nzuv -w5 $HOST2_NIP 3000 | grep -q host2 || exit 1
+! docker exec host4 ncat -nzuv -w5 $HOST3_NIP 3000 | grep -q host3 || exit 1
 
 set +x
 echo
@@ -159,7 +172,7 @@ set -x
 # cannot initiate UDP to host2. Once host2 initiates a flow to host4:4000,
 # conntrack must let host4's listener reply on that flow. If it doesn't,
 # the echo back from host4 never reaches host2.
-docker exec host2 sh -c "(/usr/bin/echo host2; sleep 2) | ncat -nuv 192.168.100.4 4000" | grep -q helloagainfromhost4
+docker exec host2 sh -c "(/usr/bin/echo host2; sleep 2) | ncat -nuv $HOST4_NIP 4000" | grep -q helloagainfromhost4
 
 docker exec host4 sh -c 'kill 1'
 docker exec host3 sh -c 'kill 1'

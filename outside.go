@@ -150,7 +150,8 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		case header.TestReply:
 			// No-op, useful for the Roaming and connectionManager side-effects above
 		case header.TestRequest:
-			f.send(header.Test, header.TestReply, ci, hostinfo, out, nb, out)
+			//recycle the input packet ciphertext as our output buffer
+			f.send(header.Test, header.TestReply, ci, hostinfo, out, nb, packet)
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected test subtype seen", "from", via, "header", h)
 			return
@@ -179,6 +180,13 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 	var err error
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, signedPayload, signatureValue, h.MessageCounter, nb)
 	if err != nil {
+		return
+	}
+	// Advance the replay window now that the frame is authenticated
+	if !hostinfo.ConnectionState.window.Update(f.l, h.MessageCounter) {
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(f.l).Debug("dropping out of window relay packet", "header", h)
+		}
 		return
 	}
 	// Successfully validated the thing. Get rid of the Relay header.
@@ -269,15 +277,16 @@ func (f *Interface) sendCloseTunnel(h *HostInfo) {
 }
 
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
-	if !via.IsRelayed && hostinfo.remote != via.UdpAddr {
+	curRemote := hostinfo.GetRemote()
+	if !via.IsRelayed && curRemote != via.UdpAddr {
 		if hostinfo.multiportRx {
 			// If the remote is sending with multiport, we aren't roaming unless
 			// the IP has changed
-			if hostinfo.remote.Addr().Compare(via.UdpAddr.Addr()) == 0 {
+			if curRemote.Addr().Compare(via.UdpAddr.Addr()) == 0 {
 				return
 			}
 			// Keep the port from the original hostinfo, because the remote is transmitting from multiport ports
-			via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), hostinfo.remote.Port())
+			via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), curRemote.Port())
 		}
 		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, via.UdpAddr.Addr()) {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
@@ -290,7 +299,7 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				hostinfo.logger(f.l).Debug("Suppressing roam back to previous remote",
 					"suppressSeconds", RoamingSuppressSeconds,
-					"udpAddr", hostinfo.remote,
+					"udpAddr", curRemote,
 					"newAddr", via.UdpAddr,
 				)
 			}
@@ -298,11 +307,11 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
 		}
 
 		hostinfo.logger(f.l).Info("Host roamed to new udp ip/port.",
-			"udpAddr", hostinfo.remote,
+			"udpAddr", curRemote,
 			"newAddr", via.UdpAddr,
 		)
 		hostinfo.lastRoam = time.Now()
-		hostinfo.lastRoamRemote = hostinfo.remote
+		hostinfo.lastRoamRemote = curRemote
 		hostinfo.SetRemote(via.UdpAddr)
 	}
 
@@ -422,16 +431,14 @@ func parseV6(data []byte, incoming bool, fp *firewall.Packet) error {
 			if dataLen <= offset+1 {
 				break
 			}
-
-			next = int(data[offset+1]+2) << 2
+			next = (int(data[offset+1]) + 2) << 2
 
 		default:
 			// Normal ipv6 header length processing
 			if dataLen <= offset+1 {
 				break
 			}
-
-			next = int(data[offset+1]+1) << 3
+			next = (int(data[offset+1]) + 1) << 3
 		}
 
 		if next <= 0 {
@@ -591,10 +598,11 @@ func (f *Interface) handleRecvError(addr netip.AddrPort, h *header.H) {
 		return
 	}
 
-	if hostinfo.remote.IsValid() && hostinfo.remote != addr {
+	hr := hostinfo.GetRemote()
+	if hr.IsValid() && hr != addr {
 		f.l.Info("Someone spoofing recv_errors?",
 			"addr", addr,
-			"hostinfoRemote", hostinfo.remote,
+			"hostinfoRemote", hr,
 		)
 		return
 	}

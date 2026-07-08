@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
 
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - uses: actions/setup-go@v6
       with:
@@ -35,6 +35,14 @@ jobs:
     - name: run smoke
       working-directory: ./.github/workflows/smoke
       run: ./smoke.sh
+
+    - name: setup docker image ipv6
+      working-directory: ./.github/workflows/smoke
+      run: SMOKE_OVERLAY_IPV6=1 ./build.sh
+
+    - name: run smoke ipv6
+      working-directory: ./.github/workflows/smoke
+      run: SMOKE_OVERLAY_IPV6=1 ./smoke.sh
 
     - name: setup relay docker image
       working-directory: ./.github/workflows/smoke

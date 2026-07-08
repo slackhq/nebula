@@ -10,7 +10,7 @@ jobs:
     name: Build Linux/BSD All
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -36,7 +36,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -76,7 +76,7 @@ jobs:
       HAS_SIGNING_CREDS: ${{ secrets.AC_USERNAME != '' }}
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -134,7 +134,7 @@ jobs:
       # be overwritten
       - name: Checkout code
         if: ${{ env.HAS_DOCKER_CREDS == 'true' }}
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download artifacts
         if: ${{ env.HAS_DOCKER_CREDS == 'true' }}
@@ -163,14 +163,17 @@ jobs:
           mkdir -p build/linux-{amd64,arm64}
           tar -zxvf artifacts/nebula-linux-amd64.tar.gz -C build/linux-amd64/
           tar -zxvf artifacts/nebula-linux-arm64.tar.gz -C build/linux-arm64/
-          docker buildx build . --push -f docker/Dockerfile --platform linux/amd64,linux/arm64 --tag "${DOCKER_IMAGE_REPO}:${DOCKER_IMAGE_TAG}" --tag "${DOCKER_IMAGE_REPO}:${GITHUB_REF#refs/tags/v}"
+          docker buildx build . --push -f docker/Dockerfile --platform linux/amd64,linux/arm64 \
+            --build-arg VERSION="${GITHUB_REF#refs/tags/v}" \
+            --build-arg REVISION="${GITHUB_SHA}" \
+            --tag "${DOCKER_IMAGE_REPO}:${DOCKER_IMAGE_TAG}" --tag "${DOCKER_IMAGE_REPO}:${GITHUB_REF#refs/tags/v}"
 
   release:
     name: Create and Upload Release
     needs: [build-linux, build-darwin, build-windows]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download artifacts
         uses: actions/download-artifact@v8

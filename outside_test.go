@@ -640,3 +640,38 @@ func serializeAH(ah *layers.IPSecAH) []byte {
 
 	return buf.Bytes()
 }
+
+// Test_newPacket_v6ExtHeaderOverflow is a regression test for the IPv6 extension-header
+// length uint8 overflow in parseV6. A Destination-Options header with HdrExtLen=255 spans
+// (255+1)*8 = 2048 bytes, so the real transport header sits at offset 2088. Before the fix
+// the advance was computed in uint8 and wrapped to 0 (then clamped to 8), so the firewall
+// read the transport header ~2KB too early from attacker-controlled option bytes while the
+// host OS parses the real header, a firewall port/proto bypass. The fix makes parseV6 land
+// on the same offset the host does.
+func Test_newPacket_v6ExtHeaderOverflow(t *testing.T) {
+	p := &firewall.Packet{}
+
+	const (
+		hdrLen      = 40              // IPv6 header
+		extLen      = 2048            // (255+1)*8, the true Destination-Options header size
+		realTCPAt   = hdrLen + extLen // 2088, where the host reads the transport header
+		forgedTCPAt = hdrLen + 8      // 48, where the pre-fix wrapped+clamped walk landed
+	)
+
+	pkt := make([]byte, realTCPAt+4)
+	pkt[0] = 0x60                                   // version 6
+	pkt[6] = byte(layers.IPProtocolIPv6Destination) // NextHeader -> Destination Options
+	pkt[40] = byte(firewall.ProtoTCP)               // Dest-Options NextHeader -> TCP
+	pkt[41] = 255                                   // HdrExtLen = 255
+
+	// Forged transport header at the pre-fix (wrong) offset: dst port 443.
+	binary.BigEndian.PutUint16(pkt[forgedTCPAt+2:forgedTCPAt+4], 443)
+	// Real transport header at the offset the host actually uses: dst port 22.
+	binary.BigEndian.PutUint16(pkt[realTCPAt+2:realTCPAt+4], 22)
+
+	require.NoError(t, newPacket(pkt, true, p))
+	assert.Equal(t, uint8(firewall.ProtoTCP), p.Protocol)
+	// LocalPort is the destination port for incoming traffic. It must be the real port (22)
+	// the host delivers to, not the forged 443 at the overflowed offset.
+	assert.Equal(t, uint16(22), p.LocalPort, "firewall must parse the real transport header, not the overflowed offset")
+}

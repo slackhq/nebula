@@ -423,11 +423,6 @@ var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 // Drop returns an error if the packet should be dropped, explaining why. It
 // returns nil if the packet should not be dropped.
 func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) error {
-	// Check if we spoke to this tuple, if we did then allow this packet
-	if f.inConns(fp, h, caPool, localCache) {
-		return nil
-	}
-
 	// Make sure remote address matches nebula certificate, and determine how to treat it
 	if h.networks == nil {
 		// Simple case: Certificate has one address and no unsafe networks
@@ -459,6 +454,11 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	if !f.routableNetworks.Contains(fp.LocalAddr) {
 		f.metrics(incoming).droppedLocalAddr.Inc(1)
 		return ErrInvalidLocalIP
+	}
+
+	// Check if we spoke to this tuple, if we did then allow this packet
+	if f.inConns(fp, h, caPool, localCache) {
+		return nil
 	}
 
 	table := f.OutRules

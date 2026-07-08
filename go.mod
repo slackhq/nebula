@@ -9,10 +9,10 @@ require (
 	github.com/armon/go-radix v1.0.0
 	github.com/cyberdelia/go-metrics-graphite v0.0.0-20161219230853-39f87cc3b432
 	github.com/flynn/noise v1.1.0
-	github.com/gaissmai/bart v0.27.1
+	github.com/gaissmai/bart v0.28.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/google/gopacket v1.1.19
-	github.com/kardianos/service v1.2.4
+	github.com/kardianos/service v1.3.0
 	github.com/miekg/dns v1.1.72
 	github.com/miekg/pkcs11 v1.1.2
 	github.com/nbrownus/go-metrics-prometheus v0.0.0-20210712211119-974a6260965f
@@ -24,15 +24,15 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	go.uber.org/goleak v1.3.0
 	go.yaml.in/yaml/v3 v3.0.4
-	golang.org/x/crypto v0.51.0
+	golang.org/x/crypto v0.53.0
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090
-	golang.org/x/net v0.54.0
-	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.44.0
-	golang.org/x/term v0.43.0
+	golang.org/x/net v0.56.0
+	golang.org/x/sync v0.21.0
+	golang.org/x/sys v0.46.0
+	golang.org/x/term v0.44.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard v0.0.0-20230325221338-052af4a8072b
-	golang.zx2c4.com/wireguard/windows v0.6.1
+	golang.zx2c4.com/wireguard/windows v1.0.1
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	gvisor.dev/gvisor v0.0.0-20240423190808-9d7a357edefe
@@ -50,7 +50,7 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/mod v0.34.0 // indirect
+	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
-	golang.org/x/tools v0.43.0 // indirect
+	golang.org/x/tools v0.45.0 // indirect
 )

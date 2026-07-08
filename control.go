@@ -305,7 +305,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 
 		c.l.Debug("Sending close tunnel message",
 			"vpnAddrs", h.vpnAddrs,
-			"udpAddr", h.remote,
+			"udpAddr", h.GetRemote(),
 		)
 		closed++
 	}
@@ -350,7 +350,7 @@ func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {
 		RemoteAddrs:            h.remotes.CopyAddrs(preferredRanges),
 		CurrentRelaysToMe:      h.relayState.CopyRelayIps(),
 		CurrentRelaysThroughMe: h.relayState.CopyRelayForIps(),
-		CurrentRemote:          h.remote,
+		CurrentRemote:          h.GetRemote(),
 	}
 
 	for i, a := range h.vpnAddrs {
