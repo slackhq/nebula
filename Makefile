@@ -274,7 +274,7 @@ endif
 # Useful to chain together, like:
 # - make fips140 e2evv
 # - make fips140 smoke-docker
-# Use `release-fips140` or `bin-fips140` to build release binaries
+# Use `release-fips140` to build release binaries
 fips140:
 	@echo > $(NULL_FILE)
 ifeq ($(strip $(GOFIPS140)),)

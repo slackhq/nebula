@@ -161,7 +161,8 @@ which must be done at compile time so that the correct AES-GCM can be used for F
 
 ```sh
 make fips140
-make fips140 release
+make fips140 test
+make release-fips140
 ```
 
 This is not the recommended default deployment, but may be useful based on your compliance requirements.
