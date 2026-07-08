@@ -315,6 +315,8 @@ endif
 
 bin-docker: bin build/linux-amd64/nebula build/linux-amd64/nebula-cert
 
+smoke-docker: BUILD_ARGS += -race
+smoke-docker: GOENV += CGO_ENABLED=1
 smoke-docker: bin-docker
 	# This is so we can limit `fips140` smoke test to just P256 curve.
 	if [ "$(CURVE)" != "P256" ]; then cd .github/workflows/smoke/ && $(GOENV) ./build.sh; fi
@@ -322,6 +324,8 @@ smoke-docker: bin-docker
 	cd .github/workflows/smoke/ && $(GOENV) NAME="smoke-p256" CURVE="P256" ./build.sh
 	cd .github/workflows/smoke/ && $(GOENV) NAME="smoke-p256" ./smoke.sh
 
+smoke-relay-docker: BUILD_ARGS += -race
+smoke-relay-docker: GOENV += CGO_ENABLED=1
 smoke-relay-docker: bin-docker
 	cd .github/workflows/smoke/ && $(GOENV) ./build-relay.sh
 	cd .github/workflows/smoke/ && $(GOENV) ./smoke-relay.sh
@@ -329,14 +333,10 @@ smoke-relay-docker: bin-docker
 smoke-docker-ipv6: export SMOKE_OVERLAY_IPV6 = 1
 smoke-docker-ipv6: smoke-docker
 
-smoke-docker-race: BUILD_ARGS += -race
-smoke-docker-race: GOENV += CGO_ENABLED=1
-smoke-docker-race: smoke-docker
-
 smoke-vagrant/%: bin-docker build/%/nebula
 	cd .github/workflows/smoke/ && ./build.sh $*
 	cd .github/workflows/smoke/ && ./smoke-vagrant.sh $*
 
 .FORCE:
-.PHONY: all all-linux all-freebsd all-openbsd all-netbsd all-darwin all-windows all-cross-linux all-cross-linux-arm all-cross-linux-mips all-cross-linux-other all-cross-darwin all-cross-windows bench bench-cpu bench-cpu-long bin build-test-mobile e2e e2ev e2evv e2evvv e2evvvv fips140 proto release service smoke-docker smoke-docker-race test test-cov-html smoke-vagrant/%
+.PHONY: all all-linux all-freebsd all-openbsd all-netbsd all-darwin all-windows all-cross-linux all-cross-linux-arm all-cross-linux-mips all-cross-linux-other all-cross-darwin all-cross-windows bench bench-cpu bench-cpu-long bin build-test-mobile e2e e2ev e2evv e2evvv e2evvvv fips140 proto release service smoke-docker test test-cov-html smoke-vagrant/%
 .DEFAULT_GOAL := bin

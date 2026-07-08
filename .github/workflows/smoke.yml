@@ -26,7 +26,7 @@ jobs:
         check-latest: true
 
     - name: Smoke Docker
-      run: make smoke-docker-race
+      run: make smoke-docker
 
     - name: Smoke Docker IPv6 overlay
       run: make smoke-docker-ipv6
