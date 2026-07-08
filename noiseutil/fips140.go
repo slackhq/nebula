@@ -32,7 +32,7 @@ type cipherFn struct {
 func (c cipherFn) Cipher(k [32]byte) noise.Cipher { return c.fn(k) }
 func (c cipherFn) CipherName() string             { return c.name }
 
-// CipherAESGCM is the AES256-GCM AEAD cipher (using aeadAESGCM when fips140 is enabled)
+// CipherAESGCMFIPS140 is the AES256-GCM AEAD cipher (using aeadAESGCM when fips140 is enabled)
 var CipherAESGCMFIPS140 noise.CipherFunc = cipherFn{cipherAESGCMFIPS140, "AESGCM"}
 
 // tls.aeadAESGCMTLS13 uses a 4 byte static prefix and an 8 byte XOR mask

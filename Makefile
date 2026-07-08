@@ -296,7 +296,7 @@ fips140-$(1): fips140
 endef
 $(foreach _rule, $(ALL_GOFIPS140), $(eval $(call FIPS140_rule,$(_rule))))
 
-# Iterate and tun the goals for all fips versions, like `make fips140-all test`
+# Iterate and run the goals for all fips versions, like `make fips140-all test`
 fips140-all:
 	@$(foreach _v,$(ALL_GOFIPS140),$(MAKE) fips140-$(_v) $(filter-out fips140-all,$(MAKECMDGOALS)) &&) true
 
