@@ -103,26 +103,24 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	}
 
 	// All remaining packets are encrypted
-	ci := hostinfo.ConnectionState
-	if !ci.window.Check(f.l, h.MessageCounter) {
-		return
-	}
-
-	// Relay packets are special
 	if isMessageRelay {
-		f.handleOutsideRelayPacket(hostinfo, via, out, packet, h, fwPacket, lhf, nb, q, localCache)
-
+		var signedPayload []byte
+		// Relay packets are special, this branch should always early-return
+		signedPayload, err = hostinfo.ConnectionState.VerifyRelay(f.l, h.MessageCounter, out, packet, nb)
+		if err != nil {
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				hostinfo.logger(f.l).Debug("Failed to verify relay packet", "error", err, "from", via, "header", h)
+			}
+			return
+		}
+		f.handleOutsideRelayPacket(hostinfo, via, out, signedPayload, h, fwPacket, lhf, nb, q, localCache)
 		return
 	}
 
-	out, err = f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
+	out, err = hostinfo.ConnectionState.Decrypt(f.l, h.MessageCounter, out, packet, nb)
 	if err != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("Failed to decrypt packet",
-				"error", err,
-				"from", via,
-				"header", h,
-			)
+			hostinfo.logger(f.l).Debug("Failed to decrypt packet", "error", err, "from", via, "header", h)
 		}
 		return
 	}
@@ -151,7 +149,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 			// No-op, useful for the Roaming and connectionManager side-effects above
 		case header.TestRequest:
 			//recycle the input packet ciphertext as our output buffer
-			f.send(header.Test, header.TestReply, ci, hostinfo, out, nb, packet)
+			f.send(header.Test, header.TestReply, hostinfo.ConnectionState, hostinfo, out, nb, packet)
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected test subtype seen", "from", via, "header", h)
 			return
@@ -169,28 +167,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	}
 }
 
-func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
-	// The entire body is sent as AD, not encrypted.
-	// The packet consists of a 16-byte parsed Nebula header, Associated Data-protected payload, and a trailing 16-byte AEAD signature value.
-	// The packet is guaranteed to be at least 16 bytes at this point, b/c it got past the h.Parse() call above. If it's
-	// otherwise malformed (meaning, there is no trailing 16 byte AEAD value), then this will result in at worst a 0-length slice
-	// which will gracefully fail in the DecryptDanger call.
-	signedPayload := packet[:len(packet)-hostinfo.ConnectionState.dKey.Overhead()]
-	signatureValue := packet[len(packet)-hostinfo.ConnectionState.dKey.Overhead():]
-	var err error
-	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, signedPayload, signatureValue, h.MessageCounter, nb)
-	if err != nil {
-		return
-	}
-	// Advance the replay window now that the frame is authenticated
-	if !hostinfo.ConnectionState.window.Update(f.l, h.MessageCounter) {
-		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("dropping out of window relay packet", "header", h)
-		}
-		return
-	}
-	// Successfully validated the thing. Get rid of the Relay header.
-	signedPayload = signedPayload[header.Len:]
+func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, out []byte, signedPayload []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
 	// Pull the Roaming parts up here, and return in all call paths.
 	f.handleHostRoaming(hostinfo, via)
 	// Track usage of both the HostInfo and the Relay for the received & authenticated packet
@@ -502,20 +479,6 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 	}
 
 	return nil
-}
-
-func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []byte, h *header.H, nb []byte) ([]byte, error) {
-	var err error
-	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], mc, nb)
-	if err != nil {
-		return nil, err
-	}
-
-	if !hostinfo.ConnectionState.window.Update(f.l, mc) {
-		return nil, ErrOutOfWindow
-	}
-
-	return out, nil
 }
 
 func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache) {
