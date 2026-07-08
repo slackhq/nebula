@@ -197,7 +197,6 @@ build/linux-arm64-boringcrypto/%: GOENV += GOEXPERIMENT=boringcrypto CGO_ENABLED
 
 # fips140
 $(foreach _rule, $(ALL_FIPS140), build/$(_rule)/%): GOENV += GOFIPS140=v1.0.0
-$(foreach _rule, $(ALL_FIPS140), build/$(_rule)/%): LDFLAGS += -X runtime.godebugDefault=fips140=only
 $(foreach _rule, $(ALL_FIPS140), build/$(_rule)/%): BUILD_ARGS += -tags fips140enforce
 
 build/%/nebula: .FORCE
@@ -282,7 +281,6 @@ ifeq ($(strip $(GOFIPS140)),)
 	$(eval GOFIPS140 = v1.0.0)
 endif
 	$(eval GOENV += GOFIPS140=$(GOFIPS140))
-	$(eval LDFLAGS += -X runtime.godebugDefault=fips140=only)
 	$(eval BUILD_ARGS += -tags fips140enforce)
 	$(eval TEST_ENV += $(GOENV))
 	$(eval CURVE = P256)
