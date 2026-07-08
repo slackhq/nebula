@@ -430,14 +430,11 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 	// Check if we already have a tunnel with this vpn ip
 	existingHostInfo, found := hm.mainHostMap.Hosts[hostinfo.vpnAddrs[0]]
 	if found && existingHostInfo != nil {
-		testHostInfo := existingHostInfo
-		for testHostInfo != nil {
-			// Is it just a delayed handshake packet?
+		// Is it just a delayed handshake packet? Check every hostinfo we hold for this address.
+		for _, testHostInfo := range hm.mainHostMap.unlockedGetHostList(hostinfo.vpnAddrs[0]) {
 			if bytes.Equal(hostinfo.HandshakePacket[handshakePacket], testHostInfo.HandshakePacket[handshakePacket]) {
 				return testHostInfo, ErrAlreadySeen
 			}
-
-			testHostInfo = testHostInfo.next
 		}
 
 		// Is this a newer handshake?

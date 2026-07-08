@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"net/netip"
+	"slices"
 	"testing"
 
 	"github.com/slackhq/nebula/config"
@@ -10,78 +11,84 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// chainIds returns the localIndexIds of the hostinfos holding addr, primary (index 0) first. It
+// also validates the Hosts/moreHosts sync contract on every call so a mutation that broke it
+// fails fast.
+func chainIds(t *testing.T, hm *HostMap, addr netip.Addr) []uint32 {
+	t.Helper()
+	assertHostMapInvariants(t, hm)
+	list := hm.unlockedGetHostList(addr)
+	ids := make([]uint32, len(list))
+	for i, h := range list {
+		ids[i] = h.localIndexId
+	}
+	return ids
+}
+
+// assertHostMapInvariants checks the Hosts/moreHosts contract: moreHosts only holds addresses
+// with 2 or more hostinfos, its first entry is always the primary in Hosts, lists never hold
+// duplicates, every hostinfo in a list owns the address and is registered in Indexes, and every
+// indexed hostinfo is reachable through each of its addresses.
+func assertHostMapInvariants(t *testing.T, hm *HostMap) {
+	t.Helper()
+	for addr, list := range hm.moreHosts {
+		require.GreaterOrEqualf(t, len(list), 2, "moreHosts[%s] must hold at least 2 hostinfos", addr)
+		require.Samef(t, hm.Hosts[addr], list[0], "moreHosts[%s][0] must match the primary in Hosts", addr)
+		seen := map[*HostInfo]bool{}
+		for _, h := range list {
+			require.NotNilf(t, h, "moreHosts[%s] must never hold a nil hostinfo", addr)
+			require.Falsef(t, seen[h], "moreHosts[%s] holds hostinfo %d twice", addr, h.localIndexId)
+			seen[h] = true
+			require.Samef(t, hm.Indexes[h.localIndexId], h, "moreHosts[%s] member %d is not registered in Indexes", addr, h.localIndexId)
+			require.Truef(t, slices.Contains(h.vpnAddrs, addr), "moreHosts[%s] member %d does not own the address", addr, h.localIndexId)
+		}
+	}
+	for addr, h := range hm.Hosts {
+		require.NotNilf(t, h, "Hosts[%s] must never be nil", addr)
+		require.Samef(t, hm.Indexes[h.localIndexId], h, "Hosts[%s] primary %d is not registered in Indexes", addr, h.localIndexId)
+		require.Truef(t, slices.Contains(h.vpnAddrs, addr), "Hosts[%s] primary (index %d) does not own the address", addr, h.localIndexId)
+	}
+	for idx, h := range hm.Indexes {
+		require.Equalf(t, idx, h.localIndexId, "Indexes[%d] holds hostinfo with localIndexId %d", idx, h.localIndexId)
+		for _, va := range h.vpnAddrs {
+			require.Truef(t, slices.Contains(hm.unlockedGetHostList(va), h), "indexed hostinfo %d is missing from the list for %s", idx, va)
+		}
+	}
+}
+
 func TestHostMap_MakePrimary(t *testing.T) {
 	l := test.NewLogger()
 	hm := newHostMap(l)
 
 	f := &Interface{}
+	a := netip.MustParseAddr("0.0.0.1")
 
-	h1 := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("0.0.0.1")}, localIndexId: 1}
-	h2 := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("0.0.0.1")}, localIndexId: 2}
-	h3 := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("0.0.0.1")}, localIndexId: 3}
-	h4 := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("0.0.0.1")}, localIndexId: 4}
+	h1 := &HostInfo{vpnAddrs: []netip.Addr{a}, localIndexId: 1}
+	h2 := &HostInfo{vpnAddrs: []netip.Addr{a}, localIndexId: 2}
+	h3 := &HostInfo{vpnAddrs: []netip.Addr{a}, localIndexId: 3}
+	h4 := &HostInfo{vpnAddrs: []netip.Addr{a}, localIndexId: 4}
 
 	hm.unlockedAddHostInfo(h4, f)
 	hm.unlockedAddHostInfo(h3, f)
 	hm.unlockedAddHostInfo(h2, f)
 	hm.unlockedAddHostInfo(h1, f)
 
-	// Make sure we go h1 -> h2 -> h3 -> h4
-	prim := hm.QueryVpnAddr(netip.MustParseAddr("0.0.0.1"))
-	assert.Equal(t, h1.localIndexId, prim.localIndexId)
-	assert.Equal(t, h2.localIndexId, prim.next.localIndexId)
-	assert.Nil(t, prim.prev)
-	assert.Equal(t, h1.localIndexId, h2.prev.localIndexId)
-	assert.Equal(t, h3.localIndexId, h2.next.localIndexId)
-	assert.Equal(t, h2.localIndexId, h3.prev.localIndexId)
-	assert.Equal(t, h4.localIndexId, h3.next.localIndexId)
-	assert.Equal(t, h3.localIndexId, h4.prev.localIndexId)
-	assert.Nil(t, h4.next)
+	// Most-recently-added is primary: h1, h2, h3, h4
+	assert.Equal(t, []uint32{1, 2, 3, 4}, chainIds(t, hm, a))
+	assert.Equal(t, h1, hm.QueryVpnAddr(a))
 
-	// Swap h3/middle to primary
+	// Swap the middle to primary: h3, h1, h2, h4
 	hm.MakePrimary(h3)
+	assert.Equal(t, []uint32{3, 1, 2, 4}, chainIds(t, hm, a))
+	assert.Equal(t, h3, hm.QueryVpnAddr(a))
 
-	// Make sure we go h3 -> h1 -> h2 -> h4
-	prim = hm.QueryVpnAddr(netip.MustParseAddr("0.0.0.1"))
-	assert.Equal(t, h3.localIndexId, prim.localIndexId)
-	assert.Equal(t, h1.localIndexId, prim.next.localIndexId)
-	assert.Nil(t, prim.prev)
-	assert.Equal(t, h2.localIndexId, h1.next.localIndexId)
-	assert.Equal(t, h3.localIndexId, h1.prev.localIndexId)
-	assert.Equal(t, h4.localIndexId, h2.next.localIndexId)
-	assert.Equal(t, h1.localIndexId, h2.prev.localIndexId)
-	assert.Equal(t, h2.localIndexId, h4.prev.localIndexId)
-	assert.Nil(t, h4.next)
-
-	// Swap h4/tail to primary
+	// Swap the tail to primary: h4, h3, h1, h2
 	hm.MakePrimary(h4)
+	assert.Equal(t, []uint32{4, 3, 1, 2}, chainIds(t, hm, a))
 
-	// Make sure we go h4 -> h3 -> h1 -> h2
-	prim = hm.QueryVpnAddr(netip.MustParseAddr("0.0.0.1"))
-	assert.Equal(t, h4.localIndexId, prim.localIndexId)
-	assert.Equal(t, h3.localIndexId, prim.next.localIndexId)
-	assert.Nil(t, prim.prev)
-	assert.Equal(t, h1.localIndexId, h3.next.localIndexId)
-	assert.Equal(t, h4.localIndexId, h3.prev.localIndexId)
-	assert.Equal(t, h2.localIndexId, h1.next.localIndexId)
-	assert.Equal(t, h3.localIndexId, h1.prev.localIndexId)
-	assert.Equal(t, h1.localIndexId, h2.prev.localIndexId)
-	assert.Nil(t, h2.next)
-
-	// Swap h4 again should be no-op
+	// Swapping the current primary again is a no-op
 	hm.MakePrimary(h4)
-
-	// Make sure we go h4 -> h3 -> h1 -> h2
-	prim = hm.QueryVpnAddr(netip.MustParseAddr("0.0.0.1"))
-	assert.Equal(t, h4.localIndexId, prim.localIndexId)
-	assert.Equal(t, h3.localIndexId, prim.next.localIndexId)
-	assert.Nil(t, prim.prev)
-	assert.Equal(t, h1.localIndexId, h3.next.localIndexId)
-	assert.Equal(t, h4.localIndexId, h3.prev.localIndexId)
-	assert.Equal(t, h2.localIndexId, h1.next.localIndexId)
-	assert.Equal(t, h3.localIndexId, h1.prev.localIndexId)
-	assert.Equal(t, h1.localIndexId, h2.prev.localIndexId)
-	assert.Nil(t, h2.next)
+	assert.Equal(t, []uint32{4, 3, 1, 2}, chainIds(t, hm, a))
 }
 
 func TestHostMap_DeleteHostInfo(t *testing.T) {
@@ -89,13 +96,14 @@ func TestHostMap_DeleteHostInfo(t *testing.T) {
 	hm := newHostMap(l)
 
 	f := &Interface{}
+	a := netip.MustParseAddr("0.0.0.1")
 
-	h1 := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("0.0.0.1")}, localIndexId: 1}
-	h2 := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("0.0.0.1")}, localIndexId: 2}
-	h3 := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("0.0.0.1")}, localIndexId: 3}
-	h4 := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("0.0.0.1")}, localIndexId: 4}
-	h5 := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("0.0.0.1")}, localIndexId: 5}
-	h6 := &HostInfo{vpnAddrs: []netip.Addr{netip.MustParseAddr("0.0.0.1")}, localIndexId: 6}
+	h1 := &HostInfo{vpnAddrs: []netip.Addr{a}, localIndexId: 1}
+	h2 := &HostInfo{vpnAddrs: []netip.Addr{a}, localIndexId: 2}
+	h3 := &HostInfo{vpnAddrs: []netip.Addr{a}, localIndexId: 3}
+	h4 := &HostInfo{vpnAddrs: []netip.Addr{a}, localIndexId: 4}
+	h5 := &HostInfo{vpnAddrs: []netip.Addr{a}, localIndexId: 5}
+	h6 := &HostInfo{vpnAddrs: []netip.Addr{a}, localIndexId: 6}
 
 	hm.unlockedAddHostInfo(h6, f)
 	hm.unlockedAddHostInfo(h5, f)
@@ -104,94 +112,110 @@ func TestHostMap_DeleteHostInfo(t *testing.T) {
 	hm.unlockedAddHostInfo(h2, f)
 	hm.unlockedAddHostInfo(h1, f)
 
-	// h6 should be deleted
-	assert.Nil(t, h6.next)
-	assert.Nil(t, h6.prev)
-	h := hm.QueryIndex(h6.localIndexId)
-	assert.Nil(t, h)
+	// h6 is evicted by the MaxHostInfosPerVpnIp cap; the rest are newest-first.
+	assert.Nil(t, hm.QueryIndex(h6.localIndexId))
+	assert.Equal(t, []uint32{1, 2, 3, 4, 5}, chainIds(t, hm, a))
 
-	// Make sure we go h1 -> h2 -> h3 -> h4 -> h5
-	prim := hm.QueryVpnAddr(netip.MustParseAddr("0.0.0.1"))
-	assert.Equal(t, h1.localIndexId, prim.localIndexId)
-	assert.Equal(t, h2.localIndexId, prim.next.localIndexId)
-	assert.Nil(t, prim.prev)
-	assert.Equal(t, h1.localIndexId, h2.prev.localIndexId)
-	assert.Equal(t, h3.localIndexId, h2.next.localIndexId)
-	assert.Equal(t, h2.localIndexId, h3.prev.localIndexId)
-	assert.Equal(t, h4.localIndexId, h3.next.localIndexId)
-	assert.Equal(t, h3.localIndexId, h4.prev.localIndexId)
-	assert.Equal(t, h5.localIndexId, h4.next.localIndexId)
-	assert.Equal(t, h4.localIndexId, h5.prev.localIndexId)
-	assert.Nil(t, h5.next)
+	// Delete primary; not final since siblings remain.
+	assert.False(t, hm.DeleteHostInfo(h1))
+	assert.Equal(t, []uint32{2, 3, 4, 5}, chainIds(t, hm, a))
 
-	// Delete primary
-	hm.DeleteHostInfo(h1)
-	assert.Nil(t, h1.prev)
-	assert.Nil(t, h1.next)
+	// Deleting the same hostinfo again must not report final while siblings remain and must not
+	// disturb the list. The old chain code got this wrong: the first delete nil'd next/prev, so a
+	// second delete looked final and wiped lighthouse state out from under the live sibling.
+	assert.False(t, hm.DeleteHostInfo(h1))
+	assert.Equal(t, []uint32{2, 3, 4, 5}, chainIds(t, hm, a))
 
-	// Make sure we go h2 -> h3 -> h4 -> h5
-	prim = hm.QueryVpnAddr(netip.MustParseAddr("0.0.0.1"))
-	assert.Equal(t, h2.localIndexId, prim.localIndexId)
-	assert.Equal(t, h3.localIndexId, prim.next.localIndexId)
-	assert.Nil(t, prim.prev)
-	assert.Equal(t, h3.localIndexId, h2.next.localIndexId)
-	assert.Equal(t, h2.localIndexId, h3.prev.localIndexId)
-	assert.Equal(t, h4.localIndexId, h3.next.localIndexId)
-	assert.Equal(t, h3.localIndexId, h4.prev.localIndexId)
-	assert.Equal(t, h5.localIndexId, h4.next.localIndexId)
-	assert.Equal(t, h4.localIndexId, h5.prev.localIndexId)
-	assert.Nil(t, h5.next)
+	// Delete a middle node.
+	assert.False(t, hm.DeleteHostInfo(h3))
+	assert.Equal(t, []uint32{2, 4, 5}, chainIds(t, hm, a))
 
-	// Delete in the middle
-	hm.DeleteHostInfo(h3)
-	assert.Nil(t, h3.prev)
-	assert.Nil(t, h3.next)
+	// Delete the tail.
+	assert.False(t, hm.DeleteHostInfo(h5))
+	assert.Equal(t, []uint32{2, 4}, chainIds(t, hm, a))
 
-	// Make sure we go h2 -> h4 -> h5
-	prim = hm.QueryVpnAddr(netip.MustParseAddr("0.0.0.1"))
-	assert.Equal(t, h2.localIndexId, prim.localIndexId)
-	assert.Equal(t, h4.localIndexId, prim.next.localIndexId)
-	assert.Nil(t, prim.prev)
-	assert.Equal(t, h4.localIndexId, h2.next.localIndexId)
-	assert.Equal(t, h2.localIndexId, h4.prev.localIndexId)
-	assert.Equal(t, h5.localIndexId, h4.next.localIndexId)
-	assert.Equal(t, h4.localIndexId, h5.prev.localIndexId)
-	assert.Nil(t, h5.next)
+	// Delete the head; h4 remains and becomes primary.
+	assert.False(t, hm.DeleteHostInfo(h2))
+	assert.Equal(t, []uint32{4}, chainIds(t, hm, a))
+	assert.Equal(t, h4, hm.QueryVpnAddr(a))
 
-	// Delete the tail
-	hm.DeleteHostInfo(h5)
-	assert.Nil(t, h5.prev)
-	assert.Nil(t, h5.next)
+	// Delete the only remaining item; final is true and the address is gone.
+	assert.True(t, hm.DeleteHostInfo(h4))
+	assert.Empty(t, chainIds(t, hm, a))
+	assert.Nil(t, hm.QueryVpnAddr(a))
 
-	// Make sure we go h2 -> h4
-	prim = hm.QueryVpnAddr(netip.MustParseAddr("0.0.0.1"))
-	assert.Equal(t, h2.localIndexId, prim.localIndexId)
-	assert.Equal(t, h4.localIndexId, prim.next.localIndexId)
-	assert.Nil(t, prim.prev)
-	assert.Equal(t, h4.localIndexId, h2.next.localIndexId)
-	assert.Equal(t, h2.localIndexId, h4.prev.localIndexId)
-	assert.Nil(t, h4.next)
+	// Deleting an already-gone hostinfo is still final; nothing holds the address anymore.
+	assert.True(t, hm.DeleteHostInfo(h4))
+	assert.Empty(t, chainIds(t, hm, a))
+}
 
-	// Delete the head
-	hm.DeleteHostInfo(h2)
-	assert.Nil(t, h2.prev)
-	assert.Nil(t, h2.next)
+// TestHostMap_MakePrimary_DeletedHostInfo covers promoting a hostinfo that lost a race with
+// tunnel teardown: swapPrimary and AddRelay decide to promote while holding a stale pointer and
+// only take the write lock after a delete fully unlinked the hostinfo. MakePrimary must be a
+// no-op, not a resurrection that installs an unmanaged primary.
+func TestHostMap_MakePrimary_DeletedHostInfo(t *testing.T) {
+	l := test.NewLogger()
+	hm := newHostMap(l)
+	f := &Interface{}
+	a := netip.MustParseAddr("0.0.0.1")
 
-	// Make sure we only have h4
-	prim = hm.QueryVpnAddr(netip.MustParseAddr("0.0.0.1"))
-	assert.Equal(t, h4.localIndexId, prim.localIndexId)
-	assert.Nil(t, prim.prev)
-	assert.Nil(t, prim.next)
-	assert.Nil(t, h4.next)
+	h1 := &HostInfo{vpnAddrs: []netip.Addr{a}, localIndexId: 1}
+	h2 := &HostInfo{vpnAddrs: []netip.Addr{a}, localIndexId: 2}
+	hm.unlockedAddHostInfo(h1, f)
+	hm.unlockedAddHostInfo(h2, f)
 
-	// Delete the only item
-	hm.DeleteHostInfo(h4)
-	assert.Nil(t, h4.prev)
-	assert.Nil(t, h4.next)
+	// h1 is fully deleted while another goroutine still holds a pointer to it.
+	assert.False(t, hm.DeleteHostInfo(h1))
+	assert.Equal(t, []uint32{2}, chainIds(t, hm, a))
 
-	// Make sure we have nil
-	prim = hm.QueryVpnAddr(netip.MustParseAddr("0.0.0.1"))
-	assert.Nil(t, prim)
+	// The stale promote must not bring it back.
+	hm.MakePrimary(h1)
+	assert.Equal(t, []uint32{2}, chainIds(t, hm, a))
+	assert.Equal(t, h2, hm.QueryVpnAddr(a))
+	assert.Nil(t, hm.QueryIndex(h1.localIndexId))
+}
+
+// TestHostMap_QueryVpnAddrsRelayFor_NonPrimary makes sure a relay established on an older
+// hostinfo is still found after a newer tunnel without relay state takes primary for the same
+// address. The lookup checks the primary first and falls back to the rest of the list.
+func TestHostMap_QueryVpnAddrsRelayFor_NonPrimary(t *testing.T) {
+	l := test.NewLogger()
+	hm := newHostMap(l)
+	f := &Interface{}
+	relayAddr := netip.MustParseAddr("0.0.0.9")
+	target := netip.MustParseAddr("0.0.0.1")
+
+	older := &HostInfo{
+		vpnAddrs:     []netip.Addr{relayAddr},
+		localIndexId: 1,
+		relayState: RelayState{
+			relayForByAddr: map[netip.Addr]*Relay{},
+			relayForByIdx:  map[uint32]*Relay{},
+		},
+	}
+	older.relayState.InsertRelay(target, 100, &Relay{Type: ForwardingType, State: Established, LocalIndex: 100, PeerAddr: target})
+	hm.unlockedAddHostInfo(older, f)
+
+	// The relay is found on the primary.
+	h, r, err := hm.QueryVpnAddrsRelayFor([]netip.Addr{target}, relayAddr)
+	require.NoError(t, err)
+	assert.Equal(t, older, h)
+	assert.Equal(t, uint32(100), r.LocalIndex)
+
+	// A re-handshake with no relay state takes primary; the established relay on the older
+	// hostinfo must still be found through the fallback.
+	newer := &HostInfo{vpnAddrs: []netip.Addr{relayAddr}, localIndexId: 2}
+	hm.unlockedAddHostInfo(newer, f)
+	assert.Equal(t, []uint32{2, 1}, chainIds(t, hm, relayAddr))
+
+	h, r, err = hm.QueryVpnAddrsRelayFor([]netip.Addr{target}, relayAddr)
+	require.NoError(t, err)
+	assert.Equal(t, older, h)
+	assert.Equal(t, uint32(100), r.LocalIndex)
+
+	// No hostinfo at all is a plain miss.
+	_, _, err = hm.QueryVpnAddrsRelayFor([]netip.Addr{target}, netip.MustParseAddr("0.0.0.42"))
+	require.Error(t, err)
 }
 
 // TestHostMap_DeleteHostInfo_MultipleVpnAddrs exercises the case where a hostinfo carries more than one
@@ -216,30 +240,80 @@ func TestHostMap_DeleteHostInfo_MultipleVpnAddrs(t *testing.T) {
 	hm.unlockedAddHostInfo(other, f)
 	hm.unlockedAddHostInfo(head, f)
 
-	// head is primary for both addresses, other is next in the shared chain
-	assert.Equal(t, head.localIndexId, hm.QueryVpnAddr(a).localIndexId)
-	assert.Equal(t, head.localIndexId, hm.QueryVpnAddr(b).localIndexId)
-	assert.Equal(t, other.localIndexId, head.next.localIndexId)
-	assert.Equal(t, head.localIndexId, other.prev.localIndexId)
+	// head is primary for both addresses, other is next in each address's list.
+	assert.Equal(t, head, hm.QueryVpnAddr(a))
+	assert.Equal(t, head, hm.QueryVpnAddr(b))
+	assert.Equal(t, []uint32{2, 1}, chainIds(t, hm, a))
+	assert.Equal(t, []uint32{2, 1}, chainIds(t, hm, b))
 
 	// Delete the head. other is still live, so it must become primary for BOTH addresses.
-	hm.DeleteHostInfo(head)
+	assert.False(t, hm.DeleteHostInfo(head))
+	assert.Equal(t, other, hm.QueryVpnAddr(a))
+	assert.Equal(t, other, hm.QueryVpnAddr(b))
+	assert.Equal(t, []uint32{1}, chainIds(t, hm, a))
+	assert.Equal(t, []uint32{1}, chainIds(t, hm, b))
 
-	// Pre-fix: QueryVpnAddr(b) came back nil here because the second address was deleted rather than
-	// promoted, leaving other unreachable at b.
-	require.NotNil(t, hm.QueryVpnAddr(a))
-	require.NotNil(t, hm.QueryVpnAddr(b))
-	assert.Equal(t, other.localIndexId, hm.QueryVpnAddr(a).localIndexId)
-	assert.Equal(t, other.localIndexId, hm.QueryVpnAddr(b).localIndexId)
-
-	// other is now the only hostinfo in the chain
-	assert.Nil(t, other.prev)
-	assert.Nil(t, other.next)
-
-	// head is fully detached
-	assert.Nil(t, head.prev)
-	assert.Nil(t, head.next)
+	// head is fully removed from the index map.
 	assert.Nil(t, hm.QueryIndex(head.localIndexId))
+}
+
+// TestHostMap_DeleteHostInfo_DivergentVpnAddrs covers chained hostinfos for the same peer whose
+// vpnAddrs sets differ (a re-handshake cert added a second address). Deleting the superset node
+// must not promote a sibling to an address it does not own.
+func TestHostMap_DeleteHostInfo_DivergentVpnAddrs(t *testing.T) {
+	l := test.NewLogger()
+	hm := newHostMap(l)
+	f := &Interface{}
+	a := netip.MustParseAddr("0.0.0.1")
+	b := netip.MustParseAddr("0.0.0.2")
+
+	// sub owns only a; super (a newer handshake) owns a and b.
+	sub := &HostInfo{vpnAddrs: []netip.Addr{a}, localIndexId: 1}
+	super := &HostInfo{vpnAddrs: []netip.Addr{a, b}, localIndexId: 2}
+	hm.unlockedAddHostInfo(sub, f)
+	hm.unlockedAddHostInfo(super, f)
+
+	assert.Equal(t, []uint32{2, 1}, chainIds(t, hm, a))
+	assert.Equal(t, []uint32{2}, chainIds(t, hm, b))
+
+	// Delete super: a promotes to sub (which owns it); b has no remaining owner and must be
+	// removed, not dangled at sub (which does not own b).
+	assert.False(t, hm.DeleteHostInfo(super))
+	assert.Equal(t, []uint32{1}, chainIds(t, hm, a))
+	assert.Empty(t, chainIds(t, hm, b))
+	assert.Equal(t, sub, hm.QueryVpnAddr(a))
+	assert.Nil(t, hm.QueryVpnAddr(b))
+	assert.Nil(t, hm.QueryIndex(super.localIndexId))
+
+	// Deleting sub cleans up fully.
+	assert.True(t, hm.DeleteHostInfo(sub))
+	assert.Nil(t, hm.QueryVpnAddr(a))
+	assertHostMapInvariants(t, hm)
+}
+
+// TestHostMap_AddDivergentOverlap covers a new hostinfo claiming addresses currently owned by two
+// DIFFERENT hostinfos. The old single shared next/prev chain overwrote a pointer and orphaned one
+// of them (in Indexes but unreachable via its address); independent per-address lists cannot.
+func TestHostMap_AddDivergentOverlap(t *testing.T) {
+	l := test.NewLogger()
+	hm := newHostMap(l)
+	f := &Interface{}
+	a := netip.MustParseAddr("0.0.0.1")
+	b := netip.MustParseAddr("0.0.0.2")
+
+	hiA := &HostInfo{vpnAddrs: []netip.Addr{a}, localIndexId: 1}
+	hiP := &HostInfo{vpnAddrs: []netip.Addr{b}, localIndexId: 2}
+	hm.unlockedAddHostInfo(hiA, f)
+	hm.unlockedAddHostInfo(hiP, f)
+
+	hiB := &HostInfo{vpnAddrs: []netip.Addr{a, b}, localIndexId: 3}
+	hm.unlockedAddHostInfo(hiB, f)
+
+	assert.Equal(t, []uint32{3, 1}, chainIds(t, hm, a))
+	assert.Equal(t, []uint32{3, 2}, chainIds(t, hm, b))
+	// hiA is still reachable via its address (not orphaned) and still indexed.
+	assert.Contains(t, chainIds(t, hm, a), hiA.localIndexId)
+	assert.NotNil(t, hm.QueryIndex(hiA.localIndexId))
 }
 
 // TestHostMap_MaxHostInfosPerVpnIp_MultipleVpnAddrs verifies the MaxHostInfosPerVpnIp overflow prune
@@ -267,32 +341,14 @@ func TestHostMap_MaxHostInfosPerVpnIp_MultipleVpnAddrs(t *testing.T) {
 
 	oldest := hostinfos[len(hostinfos)-1]
 
-	// The oldest hostinfo should have been pruned and fully detached
-	assert.Nil(t, oldest.next)
-	assert.Nil(t, oldest.prev)
+	// The oldest hostinfo was pruned from both lists and the index map.
 	assert.Nil(t, hm.QueryIndex(oldest.localIndexId))
 
-	// Both addresses resolve to the same head, and that head is one of the survivors (not the pruned one)
-	primA := hm.QueryVpnAddr(a)
-	primB := hm.QueryVpnAddr(b)
-	require.NotNil(t, primA)
-	require.NotNil(t, primB)
-	assert.Equal(t, primA.localIndexId, primB.localIndexId)
-	assert.NotEqual(t, oldest.localIndexId, primA.localIndexId)
-
-	// Walk the shared chain: exactly MaxHostInfosPerVpnIp survivors, no cycles, oldest absent
-	seen := map[uint32]struct{}{}
-	for h := primA; h != nil; h = h.next {
-		_, dup := seen[h.localIndexId]
-		require.False(t, dup, "cycle detected in hostinfo chain")
-		seen[h.localIndexId] = struct{}{}
-		if h.next != nil {
-			assert.Equal(t, h.localIndexId, h.next.prev.localIndexId, "prev pointer must mirror next")
-		}
-	}
-	assert.Len(t, seen, MaxHostInfosPerVpnIp)
-	_, prunedStillPresent := seen[oldest.localIndexId]
-	assert.False(t, prunedStillPresent)
+	// Both addresses hold exactly MaxHostInfosPerVpnIp survivors in the same order; oldest is absent.
+	require.Len(t, chainIds(t, hm, a), MaxHostInfosPerVpnIp)
+	assert.Equal(t, chainIds(t, hm, a), chainIds(t, hm, b), "both addresses must list the same survivors in the same order")
+	assert.NotContains(t, chainIds(t, hm, a), oldest.localIndexId)
+	assert.Equal(t, hm.QueryVpnAddr(a), hm.QueryVpnAddr(b))
 }
 
 func TestHostMap_reload(t *testing.T) {

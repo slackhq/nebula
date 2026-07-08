@@ -56,11 +56,20 @@ type Relay struct {
 }
 
 type HostMap struct {
-	sync.RWMutex    //Because we concurrently read and write to our maps
-	Indexes         map[uint32]*HostInfo
-	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a Relay HostInfo object
-	RemoteIndexes   map[uint32]*HostInfo
+	sync.RWMutex  //Because we concurrently read and write to our maps
+	Indexes       map[uint32]*HostInfo
+	Relays        map[uint32]*HostInfo // Maps a Relay IDX to a Relay HostInfo object
+	RemoteIndexes map[uint32]*HostInfo
+	// Hosts maps a vpn address to its primary hostinfo, one entry per address we hold a tunnel
+	// for. moreHosts only has an entry while an address is held by 2 or more hostinfos and stores
+	// the full most-recent-first list; moreHosts[a][0] is always the same hostinfo as Hosts[a].
+	// Each address gets its own independent list, so a hostinfo owning multiple addresses can
+	// never corrupt another address's ordering the way the old shared next/prev chain could.
+	// Entries in moreHosts are only ever written by unlockedSetHostsForAddr; Hosts is written
+	// directly only in the single-hostinfo fast paths where moreHosts is known to have no entry,
+	// and unlockedDeleteHostInfo swaps either map for a fresh one when it fully drains.
 	Hosts           map[netip.Addr]*HostInfo
+	moreHosts       map[netip.Addr][]*HostInfo
 	preferredRanges atomic.Pointer[[]netip.Prefix]
 	l               *slog.Logger
 }
@@ -266,10 +275,6 @@ type HostInfo struct {
 	lastRoam       time.Time
 	lastRoamRemote netip.AddrPort
 
-	// Used to track other hostinfos for this vpn ip since only 1 can be primary
-	// Synchronised via hostmap lock and not the hostinfo lock.
-	next, prev *HostInfo
-
 	//TODO: in, out, and others might benefit from being an atomic.Int32. We could collapse connectionManager pendingDeletion, relayUsed, and in/out into this 1 thing
 	in, out, pendingDeletion atomic.Bool
 
@@ -334,6 +339,7 @@ func newHostMap(l *slog.Logger) *HostMap {
 		Relays:        map[uint32]*HostInfo{},
 		RemoteIndexes: map[uint32]*HostInfo{},
 		Hosts:         map[netip.Addr]*HostInfo{},
+		moreHosts:     map[netip.Addr][]*HostInfo{},
 		l:             l,
 	}
 }
@@ -382,13 +388,55 @@ func (hm *HostMap) EmitStats() {
 	metrics.GetOrRegisterGauge("hostmap.main.relayIndexes", nil).Update(int64(relaysLen))
 }
 
-// DeleteHostInfo will fully unlink the hostinfo and return true if it was the final hostinfo for this vpn ip
+// unlockedSetHostsForAddr stores the per-address hostinfo list (list[0] is the primary). An empty
+// list removes the address. This is the one place Hosts and moreHosts are written together, keep
+// it that way. Callers must hold the write lock.
+func (hm *HostMap) unlockedSetHostsForAddr(addr netip.Addr, list []*HostInfo) {
+	if len(list) == 0 {
+		delete(hm.Hosts, addr)
+		delete(hm.moreHosts, addr)
+		return
+	}
+	hm.Hosts[addr] = list[0]
+	if len(list) > 1 {
+		hm.moreHosts[addr] = list
+	} else {
+		delete(hm.moreHosts, addr)
+	}
+}
+
+// unlockedGetHostList returns every hostinfo holding addr, primary first, or nil if we have no
+// tunnel for addr. The common single-hostinfo case builds a fresh one element list, so keep this
+// off the packet hot path; the primary is a direct Hosts read. Callers must hold the lock (read
+// or write).
+func (hm *HostMap) unlockedGetHostList(addr netip.Addr) []*HostInfo {
+	if list, ok := hm.moreHosts[addr]; ok {
+		return list
+	}
+	if h, ok := hm.Hosts[addr]; ok {
+		return []*HostInfo{h}
+	}
+	return nil
+}
+
+// removeHostInfo returns list with hi removed (order preserved), or list unchanged if hi is
+// absent. It deletes in place: every mutator holds the hostmap write lock and no reader ever
+// retains a slice across a mutation (readers iterate under RLock), so there is no snapshot to
+// invalidate.
+func removeHostInfo(list []*HostInfo, hi *HostInfo) []*HostInfo {
+	idx := slices.Index(list, hi)
+	if idx < 0 {
+		return list
+	}
+	return slices.Delete(list, idx, idx+1)
+}
+
+// DeleteHostInfo will fully unlink the hostinfo and return true if no other hostinfo still holds
+// any of its vpn addrs, meaning we no longer have a tunnel to the peer
 func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) bool {
 	// Delete the host itself, ensuring it's not modified anymore
 	hm.Lock()
-	// If we have a previous or next hostinfo then we are not the last one for this vpn ip
-	final := (hostinfo.next == nil && hostinfo.prev == nil)
-	hm.unlockedDeleteHostInfo(hostinfo)
+	final := hm.unlockedDeleteHostInfo(hostinfo)
 	hm.Unlock()
 
 	return final
@@ -401,70 +449,62 @@ func (hm *HostMap) MakePrimary(hostinfo *HostInfo) {
 }
 
 func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) {
-	// Get the current primary, if it exists
-	oldHostinfo := hm.Hosts[hostinfo.vpnAddrs[0]]
-
-	// Every address in the hostinfo gets elevated to primary
-	for _, vpnAddr := range hostinfo.vpnAddrs {
-		//NOTE: It is possible that we leave a dangling hostinfo here but connection manager works on
-		// indexes so it should be fine.
-		hm.Hosts[vpnAddr] = hostinfo
-	}
-
-	// If we are already primary then we won't bother re-linking
-	if oldHostinfo == hostinfo {
+	// A hostinfo that is no longer in the hostmap must not be re-inserted here. Callers can race
+	// tunnel teardown, deciding to promote under the read lock and only taking the write lock
+	// after a delete fully unlinked the hostinfo (connection manager swapPrimary, AddRelay). Every
+	// live hostinfo is registered in Indexes by unlockedAddHostInfo, so this is a membership test.
+	if hm.Indexes[hostinfo.localIndexId] != hostinfo {
 		return
 	}
 
-	// Unlink this hostinfo
-	if hostinfo.prev != nil {
-		hostinfo.prev.next = hostinfo.next
-	}
-	if hostinfo.next != nil {
-		hostinfo.next.prev = hostinfo.prev
-	}
-
-	// If there wasn't a previous primary then clear out any links
-	if oldHostinfo == nil {
-		hostinfo.next = nil
-		hostinfo.prev = nil
-		return
-	}
-
-	// Relink the hostinfo as primary
-	hostinfo.next = oldHostinfo
-	oldHostinfo.prev = hostinfo
-	hostinfo.prev = nil
-}
-
-func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
-	isLastHostinfo := hostinfo.next == nil && hostinfo.prev == nil
-
+	// Move hostinfo to the front (primary) of each of its address lists. The lists are
+	// independent per address, so this can never leave a dangling entry the way promoting
+	// against a single shared chain could.
 	for _, addr := range hostinfo.vpnAddrs {
-		if hm.Hosts[addr] != hostinfo {
+		if hm.Hosts[addr] == hostinfo {
+			// Already primary for this address, the list is already in the right order
 			continue
 		}
-		if hostinfo.next != nil {
-			// Promote the next hostinfo in the shared chain to primary for this address
-			hm.Hosts[addr] = hostinfo.next
-		} else {
-			delete(hm.Hosts, addr)
+		list := removeHostInfo(hm.unlockedGetHostList(addr), hostinfo)
+		list = append([]*HostInfo{hostinfo}, list...)
+		hm.unlockedSetHostsForAddr(addr, list)
+	}
+}
+
+// unlockedDeleteHostInfo removes hostinfo from every one of its address lists and from the index
+// maps. It returns true if this was the last hostinfo for all of its addresses (we no longer have
+// any tunnel to the peer), which the caller uses to decide whether to clear learned lighthouse
+// state and disestablish relays.
+func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) bool {
+	// Remove this hostinfo from each of its address lists. The lists are independent, so a
+	// sibling is never promoted to an address it does not own and no other list is touched.
+	final := true
+	for _, addr := range hostinfo.vpnAddrs {
+		if list, ok := hm.moreHosts[addr]; ok {
+			list = removeHostInfo(list, hostinfo)
+			hm.unlockedSetHostsForAddr(addr, list)
+			if len(list) > 0 {
+				final = false
+			}
+		} else if existing, ok := hm.Hosts[addr]; ok {
+			if existing == hostinfo {
+				// Common case, the only hostinfo for this address. moreHosts has no entry to clean up.
+				delete(hm.Hosts, addr)
+			} else {
+				// We don't hold this address but another hostinfo does, we still have a tunnel to the peer
+				final = false
+			}
 		}
 	}
+
+	// Go maps never shrink their buckets, replace fully drained maps so a node that churned
+	// through a large peer count gives the memory back. Same idiom as the index maps below.
 	if len(hm.Hosts) == 0 {
 		hm.Hosts = map[netip.Addr]*HostInfo{}
 	}
-
-	// Splice this hostinfo out of the shared chain exactly once
-	if hostinfo.prev != nil {
-		hostinfo.prev.next = hostinfo.next
+	if len(hm.moreHosts) == 0 {
+		hm.moreHosts = map[netip.Addr][]*HostInfo{}
 	}
-	if hostinfo.next != nil {
-		hostinfo.next.prev = hostinfo.prev
-	}
-
-	hostinfo.next = nil
-	hostinfo.prev = nil
 
 	// The remote index uses index ids outside our control so lets make sure we are only removing
 	// the remote index pointer here if it points to the hostinfo we are deleting
@@ -488,7 +528,7 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 		)
 	}
 
-	if isLastHostinfo {
+	if final {
 		// I have lost connectivity to my peers. My relay tunnel is likely broken. Mark the next
 		// hops as 'Requested' so that new relay tunnels are created in the future.
 		hm.unlockedDisestablishVpnAddrRelayFor(hostinfo)
@@ -497,6 +537,8 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 	for _, localRelayIdx := range hostinfo.relayState.CopyRelayForIdxs() {
 		delete(hm.Relays, localRelayIdx)
 	}
+
+	return final
 }
 
 func (hm *HostMap) QueryIndex(index uint32) *HostInfo {
@@ -540,19 +582,30 @@ func (hm *HostMap) QueryVpnAddrsRelayFor(targetIps []netip.Addr, relayHostIp net
 	hm.RLock()
 	defer hm.RUnlock()
 
+	// This runs per relayed packet, so check the primary with a single map probe and only consult
+	// moreHosts when the primary can't relay for us.
 	h, ok := hm.Hosts[relayHostIp]
 	if !ok {
 		return nil, nil, errors.New("unable to find host")
 	}
 
-	for h != nil {
-		for _, targetIp := range targetIps {
-			r, ok := h.relayState.QueryRelayForByIp(targetIp)
-			if ok && r.State == Established {
-				return h, r, nil
+	for _, targetIp := range targetIps {
+		r, ok := h.relayState.QueryRelayForByIp(targetIp)
+		if ok && r.State == Established {
+			return h, r, nil
+		}
+	}
+
+	if list, ok := hm.moreHosts[relayHostIp]; ok {
+		// list[0] is the primary we already checked
+		for _, h := range list[1:] {
+			for _, targetIp := range targetIps {
+				r, ok := h.relayState.QueryRelayForByIp(targetIp)
+				if ok && r.State == Established {
+					return h, r, nil
+				}
 			}
 		}
-		h = h.next
 	}
 
 	return nil, nil, errors.New("unable to find host with relay")
@@ -560,20 +613,14 @@ func (hm *HostMap) QueryVpnAddrsRelayFor(targetIps []netip.Addr, relayHostIp net
 
 func (hm *HostMap) unlockedDisestablishVpnAddrRelayFor(hi *HostInfo) {
 	for _, relayHostIp := range hi.relayState.CopyRelayIps() {
-		if h, ok := hm.Hosts[relayHostIp]; ok {
-			for h != nil {
-				h.relayState.UpdateRelayForByIpState(hi.vpnAddrs[0], Disestablished)
-				h = h.next
-			}
+		for _, h := range hm.unlockedGetHostList(relayHostIp) {
+			h.relayState.UpdateRelayForByIpState(hi.vpnAddrs[0], Disestablished)
 		}
 	}
 	for _, rs := range hi.relayState.CopyAllRelayFor() {
 		if rs.Type == ForwardingType {
-			if h, ok := hm.Hosts[rs.PeerAddr]; ok {
-				for h != nil {
-					h.relayState.UpdateRelayForByIpState(hi.vpnAddrs[0], Disestablished)
-					h = h.next
-				}
+			for _, h := range hm.unlockedGetHostList(rs.PeerAddr) {
+				h.relayState.UpdateRelayForByIpState(hi.vpnAddrs[0], Disestablished)
 			}
 		}
 	}
@@ -623,22 +670,27 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 }
 
 func (hm *HostMap) unlockedInnerAddHostInfo(vpnAddr netip.Addr, hostinfo *HostInfo, f *Interface) {
-	existing := hm.Hosts[vpnAddr]
-	hm.Hosts[vpnAddr] = hostinfo
-
-	if existing != nil && existing != hostinfo {
-		hostinfo.next = existing
-		existing.prev = hostinfo
+	existing, ok := hm.Hosts[vpnAddr]
+	if !ok {
+		// Common case, the first hostinfo for this address. moreHosts stays empty.
+		hm.Hosts[vpnAddr] = hostinfo
+		return
 	}
 
-	i := 1
-	check := hostinfo
-	for check != nil {
-		if i > MaxHostInfosPerVpnIp {
-			hm.unlockedDeleteHostInfo(check)
-		}
-		check = check.next
-		i++
+	// The new hostinfo becomes the primary for this address. Remove any stale copy of it first so
+	// we never hold a duplicate, then prepend.
+	list, ok := hm.moreHosts[vpnAddr]
+	if !ok {
+		list = []*HostInfo{existing}
+	}
+	list = removeHostInfo(list, hostinfo)
+	list = append([]*HostInfo{hostinfo}, list...)
+	hm.unlockedSetHostsForAddr(vpnAddr, list)
+
+	// Enforce the per-address cap by fully retiring the oldest hostinfo once we exceed it.
+	// Deleting it removes it from all of its addresses and the index maps, matching prior behavior.
+	if len(list) > MaxHostInfosPerVpnIp {
+		hm.unlockedDeleteHostInfo(list[len(list)-1])
 	}
 }
 
