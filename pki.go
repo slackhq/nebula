@@ -1,6 +1,7 @@
 package nebula
 
 import (
+	"crypto/fips140"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -241,6 +242,9 @@ func newCipherSuite(curve cert.Curve, pkcs11backed bool, cipher string) (noise.C
 	var dhFunc noise.DHFunc
 	switch curve {
 	case cert.Curve_CURVE25519:
+		if fips140.Enforced() {
+			panic("pki: use of Curve25519 is not allowed in FIPS 140-only mode")
+		}
 		dhFunc = noise.DH25519
 	case cert.Curve_P256:
 		if pkcs11backed {
@@ -253,6 +257,9 @@ func newCipherSuite(curve cert.Curve, pkcs11backed bool, cipher string) (noise.C
 	}
 
 	if cipher == "chachapoly" {
+		if fips140.Enforced() {
+			panic("pki: use of ChaChaPoly is not allowed in FIPS 140-only mode")
+		}
 		return noise.NewCipherSuite(dhFunc, noise.CipherChaChaPoly, noise.HashSHA256), nil
 	}
 	return noise.NewCipherSuite(dhFunc, noiseutil.CipherAESGCM, noise.HashSHA256), nil
