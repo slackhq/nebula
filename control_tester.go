@@ -125,6 +125,14 @@ func (c *Control) GetHostmap() *HostMap {
 	return c.f.hostMap
 }
 
+// GetHostmapIndexCount returns the number of entries in the main hostmap Indexes table, holding
+// the hostmap read lock so tests can poll it while connection manager churns tunnels.
+func (c *Control) GetHostmapIndexCount() int {
+	c.f.hostMap.RLock()
+	defer c.f.hostMap.RUnlock()
+	return len(c.f.hostMap.Indexes)
+}
+
 func (c *Control) GetF() *Interface {
 	return c.f
 }

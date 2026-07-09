@@ -43,8 +43,8 @@ func TestDropInactiveTunnels(t *testing.T) {
 	r.Log("Go inactive and wait for the tunnels to get dropped")
 	waitStart := time.Now()
 	for {
-		myIndexes := len(myControl.GetHostmap().Indexes)
-		theirIndexes := len(theirControl.GetHostmap().Indexes)
+		myIndexes := myControl.GetHostmapIndexCount()
+		theirIndexes := theirControl.GetHostmapIndexCount()
 		if myIndexes == 0 && theirIndexes == 0 {
 			break
 		}
@@ -493,8 +493,8 @@ func TestCloseTunnelAuthenticated(t *testing.T) {
 
 	waitStart := time.Now()
 	for {
-		myIndexes := len(myControl.GetHostmap().Indexes)
-		theirIndexes := len(theirControl.GetHostmap().Indexes)
+		myIndexes := myControl.GetHostmapIndexCount()
+		theirIndexes := theirControl.GetHostmapIndexCount()
 		if myIndexes == 0 && theirIndexes == 0 {
 			break
 		}
@@ -548,8 +548,8 @@ func TestCloseTunnelAuthenticated(t *testing.T) {
 	r.Log("Injected bogus close tunnel. Let's see!")
 	waitStart = time.Now()
 	for {
-		myIndexes := len(myControl.GetHostmap().Indexes)
-		theirIndexes := len(theirControl.GetHostmap().Indexes)
+		myIndexes := myControl.GetHostmapIndexCount()
+		theirIndexes := theirControl.GetHostmapIndexCount()
 		if myIndexes == 0 {
 			t.Fatal("myIndexes should not be 0")
 		}

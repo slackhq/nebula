@@ -405,7 +405,7 @@ func TestStage1Race(t *testing.T) {
 
 	r.Log("Spin until connection manager tears down a tunnel")
 
-	for len(myControl.GetHostmap().Indexes)+len(theirControl.GetHostmap().Indexes) > 2 {
+	for myControl.GetHostmapIndexCount()+theirControl.GetHostmapIndexCount() > 2 {
 		assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 		t.Log("Connection manager hasn't ticked yet")
 		time.Sleep(time.Second)
@@ -453,9 +453,11 @@ func TestUncleanShutdownRaceLoser(t *testing.T) {
 
 	r.Log("Nuke my hostmap")
 	myHostmap := myControl.GetHostmap()
+	myHostmap.Lock()
 	myHostmap.Hosts = map[netip.Addr]*nebula.HostInfo{}
 	myHostmap.Indexes = map[uint32]*nebula.HostInfo{}
 	myHostmap.RemoteIndexes = map[uint32]*nebula.HostInfo{}
+	myHostmap.Unlock()
 
 	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me again")))
 	p = r.RouteForAllUntilTxTun(theirControl)
@@ -465,10 +467,10 @@ func TestUncleanShutdownRaceLoser(t *testing.T) {
 	assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 
 	r.Log("Wait for the dead index to go away")
-	start := len(theirControl.GetHostmap().Indexes)
+	start := theirControl.GetHostmapIndexCount()
 	for {
 		assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
-		if len(theirControl.GetHostmap().Indexes) < start {
+		if theirControl.GetHostmapIndexCount() < start {
 			break
 		}
 		time.Sleep(time.Second)
@@ -504,9 +506,11 @@ func TestUncleanShutdownRaceWinner(t *testing.T) {
 
 	r.Log("Nuke my hostmap")
 	theirHostmap := theirControl.GetHostmap()
+	theirHostmap.Lock()
 	theirHostmap.Hosts = map[netip.Addr]*nebula.HostInfo{}
 	theirHostmap.Indexes = map[uint32]*nebula.HostInfo{}
 	theirHostmap.RemoteIndexes = map[uint32]*nebula.HostInfo{}
+	theirHostmap.Unlock()
 
 	theirControl.InjectTunPacket(BuildTunUDPPacket(myVpnIpNet[0].Addr(), 80, theirVpnIpNet[0].Addr(), 80, []byte("Hi from them again")))
 	p = r.RouteForAllUntilTxTun(myControl)
@@ -517,10 +521,10 @@ func TestUncleanShutdownRaceWinner(t *testing.T) {
 	assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 
 	r.Log("Wait for the dead index to go away")
-	start := len(myControl.GetHostmap().Indexes)
+	start := myControl.GetHostmapIndexCount()
 	for {
 		assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
-		if len(myControl.GetHostmap().Indexes) < start {
+		if myControl.GetHostmapIndexCount() < start {
 			break
 		}
 		time.Sleep(time.Second)
@@ -628,10 +632,10 @@ func TestReestablishRelays(t *testing.T) {
 	r.Log("Close the tunnel")
 	relayControl.CloseTunnel(theirVpnIpNet[0].Addr(), true)
 
-	start := len(myControl.GetHostmap().Indexes)
-	curIndexes := len(myControl.GetHostmap().Indexes)
+	start := myControl.GetHostmapIndexCount()
+	curIndexes := myControl.GetHostmapIndexCount()
 	for curIndexes >= start {
-		curIndexes = len(myControl.GetHostmap().Indexes)
+		curIndexes = myControl.GetHostmapIndexCount()
 		r.Logf("Wait for the dead index to go away:start=%v indexes, current=%v indexes", start, curIndexes)
 		myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me should fail")))
 
@@ -819,18 +823,18 @@ func TestStage1RaceRelays2(t *testing.T) {
 
 	t.Log("Wait until we remove extra tunnels")
 	t.Logf("Waiting for hostinfos to be removed... myControl=%d theirControl=%d relayControl=%d",
-		len(myControl.GetHostmap().Indexes),
-		len(theirControl.GetHostmap().Indexes),
-		len(relayControl.GetHostmap().Indexes),
+		myControl.GetHostmapIndexCount(),
+		theirControl.GetHostmapIndexCount(),
+		relayControl.GetHostmapIndexCount(),
 	)
-	hostInfos := len(myControl.GetHostmap().Indexes) + len(theirControl.GetHostmap().Indexes) + len(relayControl.GetHostmap().Indexes)
+	hostInfos := myControl.GetHostmapIndexCount() + theirControl.GetHostmapIndexCount() + relayControl.GetHostmapIndexCount()
 	retries := 60
 	for hostInfos > 6 && retries > 0 {
-		hostInfos = len(myControl.GetHostmap().Indexes) + len(theirControl.GetHostmap().Indexes) + len(relayControl.GetHostmap().Indexes)
+		hostInfos = myControl.GetHostmapIndexCount() + theirControl.GetHostmapIndexCount() + relayControl.GetHostmapIndexCount()
 		t.Logf("Waiting for hostinfos to be removed... myControl=%d theirControl=%d relayControl=%d",
-			len(myControl.GetHostmap().Indexes),
-			len(theirControl.GetHostmap().Indexes),
-			len(relayControl.GetHostmap().Indexes),
+			myControl.GetHostmapIndexCount(),
+			theirControl.GetHostmapIndexCount(),
+			relayControl.GetHostmapIndexCount(),
 		)
 		assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 		t.Log("Connection manager hasn't ticked yet")
@@ -924,24 +928,24 @@ func TestRehandshakingRelays(t *testing.T) {
 	assertTunnel(t, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), theirControl, myControl, r)
 	r.RenderHostmaps("working hostmaps", myControl, relayControl, theirControl)
 	// We should have two hostinfos on all sides
-	for len(myControl.GetHostmap().Indexes) != 2 {
-		t.Logf("Waiting for myControl hostinfos (%v != 2) to get cleaned up from lack of use...", len(myControl.GetHostmap().Indexes))
+	for myControl.GetHostmapIndexCount() != 2 {
+		t.Logf("Waiting for myControl hostinfos (%v != 2) to get cleaned up from lack of use...", myControl.GetHostmapIndexCount())
 		r.Log("Assert the relay tunnel still works")
 		assertTunnel(t, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), theirControl, myControl, r)
 		r.Log("yupitdoes")
 		time.Sleep(time.Second)
 	}
 	t.Logf("myControl hostinfos got cleaned up!")
-	for len(theirControl.GetHostmap().Indexes) != 2 {
-		t.Logf("Waiting for theirControl hostinfos (%v != 2) to get cleaned up from lack of use...", len(theirControl.GetHostmap().Indexes))
+	for theirControl.GetHostmapIndexCount() != 2 {
+		t.Logf("Waiting for theirControl hostinfos (%v != 2) to get cleaned up from lack of use...", theirControl.GetHostmapIndexCount())
 		r.Log("Assert the relay tunnel still works")
 		assertTunnel(t, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), theirControl, myControl, r)
 		r.Log("yupitdoes")
 		time.Sleep(time.Second)
 	}
 	t.Logf("theirControl hostinfos got cleaned up!")
-	for len(relayControl.GetHostmap().Indexes) != 2 {
-		t.Logf("Waiting for relayControl hostinfos (%v != 2) to get cleaned up from lack of use...", len(relayControl.GetHostmap().Indexes))
+	for relayControl.GetHostmapIndexCount() != 2 {
+		t.Logf("Waiting for relayControl hostinfos (%v != 2) to get cleaned up from lack of use...", relayControl.GetHostmapIndexCount())
 		r.Log("Assert the relay tunnel still works")
 		assertTunnel(t, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), theirControl, myControl, r)
 		r.Log("yupitdoes")
@@ -1029,24 +1033,24 @@ func TestRehandshakingRelaysPrimary(t *testing.T) {
 	assertTunnel(t, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), theirControl, myControl, r)
 	r.RenderHostmaps("working hostmaps", myControl, relayControl, theirControl)
 	// We should have two hostinfos on all sides
-	for len(myControl.GetHostmap().Indexes) != 2 {
-		t.Logf("Waiting for myControl hostinfos (%v != 2) to get cleaned up from lack of use...", len(myControl.GetHostmap().Indexes))
+	for myControl.GetHostmapIndexCount() != 2 {
+		t.Logf("Waiting for myControl hostinfos (%v != 2) to get cleaned up from lack of use...", myControl.GetHostmapIndexCount())
 		r.Log("Assert the relay tunnel still works")
 		assertTunnel(t, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), theirControl, myControl, r)
 		r.Log("yupitdoes")
 		time.Sleep(time.Second)
 	}
 	t.Logf("myControl hostinfos got cleaned up!")
-	for len(theirControl.GetHostmap().Indexes) != 2 {
-		t.Logf("Waiting for theirControl hostinfos (%v != 2) to get cleaned up from lack of use...", len(theirControl.GetHostmap().Indexes))
+	for theirControl.GetHostmapIndexCount() != 2 {
+		t.Logf("Waiting for theirControl hostinfos (%v != 2) to get cleaned up from lack of use...", theirControl.GetHostmapIndexCount())
 		r.Log("Assert the relay tunnel still works")
 		assertTunnel(t, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), theirControl, myControl, r)
 		r.Log("yupitdoes")
 		time.Sleep(time.Second)
 	}
 	t.Logf("theirControl hostinfos got cleaned up!")
-	for len(relayControl.GetHostmap().Indexes) != 2 {
-		t.Logf("Waiting for relayControl hostinfos (%v != 2) to get cleaned up from lack of use...", len(relayControl.GetHostmap().Indexes))
+	for relayControl.GetHostmapIndexCount() != 2 {
+		t.Logf("Waiting for relayControl hostinfos (%v != 2) to get cleaned up from lack of use...", relayControl.GetHostmapIndexCount())
 		r.Log("Assert the relay tunnel still works")
 		assertTunnel(t, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), theirControl, myControl, r)
 		r.Log("yupitdoes")
@@ -1123,7 +1127,7 @@ func TestRehandshaking(t *testing.T) {
 	theirConfig.ReloadConfigString(string(rc))
 
 	r.Log("Spin until there is only 1 tunnel")
-	for len(myControl.GetHostmap().Indexes)+len(theirControl.GetHostmap().Indexes) > 2 {
+	for myControl.GetHostmapIndexCount()+theirControl.GetHostmapIndexCount() > 2 {
 		assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 		t.Log("Connection manager hasn't ticked yet")
 		time.Sleep(time.Second)
@@ -1223,7 +1227,7 @@ func TestRehandshakingLoser(t *testing.T) {
 	myConfig.ReloadConfigString(string(rc))
 
 	r.Log("Spin until there is only 1 tunnel")
-	for len(myControl.GetHostmap().Indexes)+len(theirControl.GetHostmap().Indexes) > 2 {
+	for myControl.GetHostmapIndexCount()+theirControl.GetHostmapIndexCount() > 2 {
 		assertTunnel(t, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), myControl, theirControl, r)
 		t.Log("Connection manager hasn't ticked yet")
 		time.Sleep(time.Second)
