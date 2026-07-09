@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/kardianos/service"
 	"github.com/slackhq/nebula"
@@ -14,7 +15,6 @@ var logger service.Logger
 
 type program struct {
 	configPath *string
-	configTest *bool
 	build      string
 	control    *nebula.Control
 }
@@ -40,22 +40,38 @@ func (p *program) Start(s service.Service) error {
 		}
 	})
 
-	p.control, err = nebula.Main(c, *p.configTest, Build, l, nil)
+	p.control, err = nebula.Main(c, false, Build, l, nil)
 	if err != nil {
 		return err
 	}
 
-	p.control.Start()
+	if err := p.control.Start(); err != nil {
+		return err
+	}
+
+	// Nebula can stop itself on a fatal packet reader error, make sure to log it if it happens.
+	go func() {
+		if err := p.control.Wait(); err != nil {
+			logger.Error(fmt.Sprintf("Nebula stopped due to fatal error: %v", err))
+			os.Exit(2)
+		}
+	}()
+
 	return nil
 }
 
 func (p *program) Stop(s service.Service) error {
 	logger.Info("Nebula service stopping.")
+	if p.control == nil {
+		return nil
+	}
+
 	p.control.Stop()
+	_ = p.control.Wait()
 	return nil
 }
 
-func doService(configPath *string, configTest *bool, build string, serviceFlag *string) error {
+func doService(configPath *string, build string, serviceFlag *string) error {
 	if *configPath == "" {
 		p, err := config.DefaultPath()
 		if err != nil {
@@ -73,7 +89,6 @@ func doService(configPath *string, configTest *bool, build string, serviceFlag *
 
 	prg := &program{
 		configPath: configPath,
-		configTest: configTest,
 		build:      build,
 	}
 
@@ -105,8 +120,9 @@ func doService(configPath *string, configTest *bool, build string, serviceFlag *
 	switch *serviceFlag {
 	case "run":
 		if err := s.Run(); err != nil {
-			// Route any errors to the system logger
+			// Route any errors to the system logger and report the failure
 			logger.Error(err)
+			return err
 		}
 	default:
 		if err := service.Control(s, *serviceFlag); err != nil {
