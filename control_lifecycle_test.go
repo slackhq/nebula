@@ -103,13 +103,13 @@ func TestControl_StopBeforeStart(t *testing.T) {
 	assert.Equal(t, StateStopped, c.State())
 	assert.True(t, dev.closed, "the tun device should have been closed")
 	assert.True(t, conn.closed, "the udp socket should have been closed")
-	assert.ErrorIs(t, c.ctx.Err(), context.Canceled, "the service context should have been cancelled")
+	require.ErrorIs(t, c.ctx.Err(), context.Canceled, "the service context should have been cancelled")
 
 	// Wait must return promptly now that the resources are released
 	require.NoError(t, c.Wait())
 
 	// A stopped control can never be started
-	assert.ErrorIs(t, c.Start(), ErrAlreadyStopped)
+	require.ErrorIs(t, c.Start(), ErrAlreadyStopped)
 
 	// A second Stop is a harmless no-op
 	c.Stop()
@@ -185,7 +185,7 @@ func TestControl_StartMultiqueueFailureReleases(t *testing.T) {
 	assert.Equal(t, StateStopped, c.State())
 	assert.True(t, dev.closed, "the tun device should have been closed")
 	assert.True(t, conn.closed, "the udp socket should have been closed")
-	assert.ErrorIs(t, c.ctx.Err(), context.Canceled)
+	require.ErrorIs(t, c.ctx.Err(), context.Canceled)
 
 	// And Wait must not hang on the construction token
 	require.NoError(t, c.Wait())
@@ -217,18 +217,18 @@ func TestControl_FatalErrorReportsThroughWait(t *testing.T) {
 	boom := errors.New("boom")
 	c.f.onFatal(boom)
 
-	assert.ErrorIs(t, c.Wait(), boom)
+	require.ErrorIs(t, c.Wait(), boom)
 	assert.Equal(t, StateStopped, c.State())
 	assert.True(t, dev.closed)
 	assert.True(t, conn.closed)
 
 	// A second fatal error must not fire the shutdown again or replace the first
 	c.f.onFatal(errors.New("later"))
-	assert.ErrorIs(t, c.Wait(), boom)
+	require.ErrorIs(t, c.Wait(), boom)
 
 	// Wait stays factual, a Stop after the death does not mask the error
 	c.Stop()
-	assert.ErrorIs(t, c.Wait(), boom)
+	require.ErrorIs(t, c.Wait(), boom)
 }
 
 func TestControl_ConcurrentStopAndStart(t *testing.T) {
@@ -251,7 +251,7 @@ func TestControl_ConcurrentStopAndStart(t *testing.T) {
 	// panic and Wait must observe the final state
 	require.NoError(t, c.Wait())
 	assert.Equal(t, StateStopped, c.State())
-	assert.ErrorIs(t, c.Start(), ErrAlreadyStopped)
+	require.ErrorIs(t, c.Start(), ErrAlreadyStopped)
 }
 
 func TestControl_StartStopLifecycle(t *testing.T) {
@@ -259,18 +259,18 @@ func TestControl_StartStopLifecycle(t *testing.T) {
 
 	require.NoError(t, c.Start())
 	assert.Equal(t, StateStarted, c.State())
-	assert.ErrorIs(t, c.Start(), ErrAlreadyStarted)
+	require.ErrorIs(t, c.Start(), ErrAlreadyStarted)
 
 	// Stop must unpark the reader blocked in the device and release everything
 	c.Stop()
 	assert.Equal(t, StateStopped, c.State())
 	assert.True(t, dev.closed, "the tun device should have been closed")
 	assert.True(t, conn.closed, "the udp socket should have been closed")
-	assert.ErrorIs(t, c.ctx.Err(), context.Canceled)
+	require.ErrorIs(t, c.ctx.Err(), context.Canceled)
 
 	// The reader drained off a closed device, that is not a fatal error
 	require.NoError(t, c.Wait())
-	assert.ErrorIs(t, c.Start(), ErrAlreadyStopped)
+	require.ErrorIs(t, c.Start(), ErrAlreadyStopped)
 }
 
 func TestControl_RebindIsGatedByState(t *testing.T) {
