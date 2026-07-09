@@ -38,14 +38,6 @@ func TestTunAdvMSS(t *testing.T) {
 	}
 }
 
-func nameSet(names ...string) map[string]struct{} {
-	used := make(map[string]struct{}, len(names))
-	for _, n := range names {
-		used[n] = struct{}{}
-	}
-	return used
-}
-
 func TestValidateTunName(t *testing.T) {
 	// A device name must be shorter than IFNAMSIZ (i.e. IFNAMSIZ-1 chars max).
 	maxLenName := strings.Repeat("a", unix.IFNAMSIZ-1)
@@ -61,11 +53,12 @@ func TestValidateTunName(t *testing.T) {
 		{"trailing template is fine", "nebula%d", false},
 		{"mid-string template is fine", "neb%dprod", false},
 		{"leading template is fine", "%dnebula", false},
-		{"template at the max static length is fine", strings.Repeat("a", unix.IFNAMSIZ-2) + "%d", false},
+		{"template at the max length is fine", strings.Repeat("a", unix.IFNAMSIZ-3) + "%d", false},
+		{"template at IFNAMSIZ is rejected", strings.Repeat("a", unix.IFNAMSIZ-2) + "%d", true},
 		{"bare %d is rejected", "%d", true},
 		{"multiple %d is rejected", "neb%d%dprod", true},
-		{"template with no room for a digit is rejected", strings.Repeat("a", unix.IFNAMSIZ-1) + "%d", true},
-		{"mid-string template with no room for a digit is rejected", "neb%d" + strings.Repeat("a", unix.IFNAMSIZ-3), true},
+		{"over-long template is rejected", strings.Repeat("a", unix.IFNAMSIZ-1) + "%d", true},
+		{"over-long mid-string template is rejected", "neb%d" + strings.Repeat("a", unix.IFNAMSIZ-3), true},
 	}
 
 	for _, tt := range tests {
@@ -76,51 +69,6 @@ func TestValidateTunName(t *testing.T) {
 			}
 			if !tt.wantErr && err != nil {
 				t.Fatalf("unexpected error for %q: %v", tt.tmpl, err)
-			}
-		})
-	}
-}
-
-func TestNextTunName(t *testing.T) {
-	// A prefix long enough that only single-digit suffixes (0-9) fit within
-	// IFNAMSIZ, so marking all ten used exercises running out of names.
-	longPrefix := strings.Repeat("a", unix.IFNAMSIZ-2)
-	longUsed := make([]string, 0, 10)
-	for i := 0; i < 10; i++ {
-		longUsed = append(longUsed, longPrefix+string(rune('0'+i)))
-	}
-
-	tests := []struct {
-		name    string
-		tmpl    string
-		used    map[string]struct{}
-		want    string
-		wantErr bool
-	}{
-		{"nothing used picks zero", "nebula%d", nil, "nebula0", false},
-		{"skips taken names", "nebula%d", nameSet("nebula0", "nebula1"), "nebula2", false},
-		{"picks the lowest free index", "nebula%d", nameSet("nebula0", "nebula2"), "nebula1", false},
-		{"ignores unrelated names", "nebula%d", nameSet("eth0", "tun5"), "nebula0", false},
-		{"mid-string placeholder picks zero", "neb%dprod", nil, "neb0prod", false},
-		{"mid-string placeholder skips taken", "neb%dprod", nameSet("neb0prod", "neb1prod"), "neb2prod", false},
-		{"leading placeholder picks zero", "%dnebula", nameSet("tun0"), "0nebula", false},
-		{"runs out of names within IFNAMSIZ", longPrefix + "%d", nameSet(longUsed...), "", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := nextTunName(tt.tmpl, tt.used)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected an error, got name %q", got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
 	}

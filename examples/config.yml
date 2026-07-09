@@ -245,7 +245,7 @@ tun:
   # For Linux: a single `%d` anywhere in the name is treated as a template and replaced with the
   #   lowest number that yields an unused device name (e.g. `nebula%d` becomes `nebula0`, then `nebula1`, and so on, `neb%dprod` becomes `neb0prod`).
   #   Only on Linux: `nebula%d` is the default if tun.dev is unset.
-  #   The resulting name must be shorter than the kernel limit of 16 characters.
+  #   The name, both before and after %d substitution, must be shorter than the kernel limit of 16 characters.
   # For macOS: if set, must be in the form `utun[0-9]+`.
   # For NetBSD: Required to be set, must be in the form `tun[0-9]+`
   dev: nebula1
