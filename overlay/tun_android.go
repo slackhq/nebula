@@ -40,6 +40,7 @@ func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip
 
 	err := t.reload(c, true)
 	if err != nil {
+		_ = file.Close()
 		return nil, err
 	}
 
