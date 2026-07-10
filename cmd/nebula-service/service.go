@@ -67,6 +67,9 @@ func (p *program) Stop(s service.Service) error {
 	}
 
 	p.control.Stop()
+
+	// block until nebula has fully drained before reporting stopped.
+	// error logging is handled by Start.
 	_ = p.control.Wait()
 	return nil
 }
