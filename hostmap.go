@@ -448,13 +448,15 @@ func (hm *HostMap) MakePrimary(hostinfo *HostInfo) {
 	hm.unlockedMakePrimary(hostinfo)
 }
 
-func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) {
+// unlockedMakePrimary reports whether hostinfo is (now) the primary for each of its addresses,
+// false only when it is no longer in the hostmap at all.
+func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) bool {
 	// A hostinfo that is no longer in the hostmap must not be re-inserted here. Callers can race
 	// tunnel teardown, deciding to promote under the read lock and only taking the write lock
 	// after a delete fully unlinked the hostinfo (connection manager swapPrimary, AddRelay). Every
 	// live hostinfo is registered in Indexes by unlockedAddHostInfo, so this is a membership test.
 	if hm.Indexes[hostinfo.localIndexId] != hostinfo {
-		return
+		return false
 	}
 
 	// Move hostinfo to the front (primary) of each of its address lists. The lists are
@@ -469,6 +471,7 @@ func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) {
 		list = append([]*HostInfo{hostinfo}, list...)
 		hm.unlockedSetHostsForAddr(addr, list)
 	}
+	return true
 }
 
 // unlockedDeleteHostInfo removes hostinfo from every one of its address lists and from the index
