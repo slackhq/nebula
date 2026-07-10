@@ -107,7 +107,10 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 			if relayHostInfo.GetRemote().IsValid() {
 				idx, err := AddRelay(rm.l, relayHostInfo, rm.hostmap, vpnIp, nil, TerminalType, Requested)
 				if err != nil {
+					// No local relay state was installed, so a CreateRelayRequest would hand the
+					// peer an index we could never resolve. Skip it.
 					hl.Info("Failed to add relay to hostmap", "relay", relay.String(), "error", err)
+					continue
 				}
 
 				m := NebulaControl{
@@ -237,7 +240,12 @@ func AddRelay(l *slog.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp netip.
 			// Avoid standing up a relay that can't be used since only the primary hostinfo
 			// will be pointed to by the relay logic
 			//TODO: if there was an existing primary and it had relay state, should we merge?
-			hm.unlockedMakePrimary(relayHostInfo)
+			if !hm.unlockedMakePrimary(relayHostInfo) {
+				// The tunnel was torn down after the caller grabbed relayHostInfo. A relay standing
+				// on an unlinked hostinfo would never carry traffic, and its Relays entry could
+				// never be reclaimed since the delete-time cleanup has already run.
+				return 0, errors.New("relay hostinfo is no longer in the hostmap")
+			}
 
 			hm.Relays[index] = relayHostInfo
 			newRelay := Relay{
