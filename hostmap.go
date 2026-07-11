@@ -869,9 +869,17 @@ func (i *HostInfo) logger(l *slog.Logger) *slog.Logger {
 
 // Utility functions
 
-func localAddrs(l *slog.Logger, allowList *LocalAllowList) []netip.Addr {
+// localAddr is a locally discovered address candidate for lighthouse
+// advertisement, along with details about the link it was found on.
+type localAddr struct {
+	addr    netip.Addr
+	ifName  string
+	linkMTU int // MTU reported for the link, or <= 0 if unknown
+}
+
+func localAddrs(l *slog.Logger, allowList *LocalAllowList) []localAddr {
 	//FIXME: This function is pretty garbage
-	var finalAddrs []netip.Addr
+	var finalAddrs []localAddr
 	ifaces, _ := net.Interfaces()
 	for _, i := range ifaces {
 		allow := allowList.AllowName(i.Name)
@@ -916,7 +924,7 @@ func localAddrs(l *slog.Logger, allowList *LocalAllowList) []netip.Addr {
 					continue
 				}
 
-				finalAddrs = append(finalAddrs, addr)
+				finalAddrs = append(finalAddrs, localAddr{addr: addr, ifName: i.Name, linkMTU: i.MTU})
 			}
 		}
 	}

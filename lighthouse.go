@@ -19,8 +19,11 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/logging"
+	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/udp"
 	"github.com/slackhq/nebula/util"
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 var ErrHostNotKnown = errors.New("host not known")
@@ -65,6 +68,18 @@ type LightHouse struct {
 
 	advertiseAddrs atomic.Pointer[[]netip.AddrPort]
 
+	// tunMTU mirrors tun.mtu so locally discovered addrs can be checked for
+	// links too small to carry a full-size nebula packet without fragmenting.
+	tunMTU atomic.Int64
+	// omitLowMTUAddrs drops such addrs from lighthouse updates (and demotes
+	// the associated warnings to debug logs) instead of advertising them.
+	omitLowMTUAddrs atomic.Bool
+	// mtuWarned tracks the last classification logged per local addr so a
+	// warning is only emitted when the classification changes, not on every
+	// periodic update.
+	mtuWarnLock sync.Mutex
+	mtuWarned   map[mtuWarnKey]linkMTUTier
+
 	// Addr's of relays that can be used by peers to access me
 	relaysForMe atomic.Pointer[[]netip.Addr]
 
@@ -105,6 +120,7 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		punchy:             p,
 		updateTrigger:      make(chan struct{}, 1),
 		queryChan:          make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 64)),
+		mtuWarned:          make(map[mtuWarnKey]linkMTUTier),
 		l:                  l,
 	}
 	lighthouses := make([]netip.Addr, 0)
@@ -213,6 +229,23 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 
 		if !initial {
 			lh.l.Info("lighthouse.advertise_addrs has changed")
+		}
+	}
+
+	if initial || c.HasChanged("tun.mtu") || c.HasChanged("lighthouse.omit_low_mtu_addrs") {
+		lh.tunMTU.Store(int64(c.GetInt("tun.mtu", overlay.DefaultMTU)))
+		lh.omitLowMTUAddrs.Store(c.GetBool("lighthouse.omit_low_mtu_addrs", false))
+
+		// Re-log any addrs whose links are still too small under the new values
+		lh.mtuWarnLock.Lock()
+		clear(lh.mtuWarned)
+		lh.mtuWarnLock.Unlock()
+
+		if !initial {
+			lh.l.Info("tun.mtu and/or lighthouse.omit_low_mtu_addrs has changed",
+				"tunMTU", lh.tunMTU.Load(),
+				"omitLowMTUAddrs", lh.omitLowMTUAddrs.Load(),
+			)
 		}
 	}
 
@@ -905,6 +938,108 @@ func (lh *LightHouse) TriggerUpdate() {
 	}
 }
 
+// linkMTUTier classifies how well a local addr's link MTU can carry
+// full-size nebula packets built from a tun packet of tun.mtu bytes.
+type linkMTUTier uint8
+
+// mtuWarnKey identifies a local addr for MTU warning dedup purposes. The
+// interface name is included because the same addr can exist on multiple
+// links with different MTUs.
+type mtuWarnKey struct {
+	ifName string
+	addr   netip.Addr
+}
+
+const (
+	// The link can carry both normal and relayed nebula traffic
+	linkMTUOk linkMTUTier = iota
+	// The link can carry normal nebula traffic, but relayed traffic (which
+	// adds a second layer of encapsulation) will not fit
+	linkMTUTooSmallForRelay
+	// Even normal nebula traffic will not fit
+	linkMTUTooSmall
+)
+
+const (
+	// Both AES-256-GCM and ChaCha20-Poly1305 append a 16 byte AEAD tag
+	cipherTagLen = 16
+	udpHeaderLen = 8
+)
+
+// requiredLinkMTU returns the minimum underlay link MTU that can carry a
+// full-size tun packet to an addr of the given family without fragmentation,
+// both directly and via a relay (which wraps the packet in a second nebula
+// header and AEAD tag).
+func requiredLinkMTU(tunMTU int, is4 bool) (direct, relayed int) {
+	ipHeaderLen := ipv6.HeaderLen
+	if is4 {
+		ipHeaderLen = ipv4.HeaderLen
+	}
+
+	direct = tunMTU + header.Len + cipherTagLen + udpHeaderLen + ipHeaderLen
+	relayed = direct + header.Len + cipherTagLen
+	return direct, relayed
+}
+
+// checkLocalLinkMTU classifies e's link MTU, logs when the classification
+// changes, and reports whether e should be advertised to lighthouses.
+func (lh *LightHouse) checkLocalLinkMTU(e localAddr) bool {
+	tunMTU := int(lh.tunMTU.Load())
+	omit := lh.omitLowMTUAddrs.Load()
+
+	tier := linkMTUOk
+	direct, relayed := requiredLinkMTU(tunMTU, e.addr.Is4())
+	if e.linkMTU > 0 { // links with an unknown MTU are advertised as-is
+		if e.linkMTU < direct {
+			tier = linkMTUTooSmall
+		} else if e.linkMTU < relayed {
+			tier = linkMTUTooSmallForRelay
+		}
+	}
+	advertise := tier != linkMTUTooSmall || !omit
+
+	key := mtuWarnKey{ifName: e.ifName, addr: e.addr}
+	lh.mtuWarnLock.Lock()
+	changed := lh.mtuWarned[key] != tier
+	if changed {
+		if tier == linkMTUOk {
+			delete(lh.mtuWarned, key)
+		} else {
+			lh.mtuWarned[key] = tier
+		}
+	}
+	lh.mtuWarnLock.Unlock()
+
+	if !changed || tier == linkMTUOk {
+		return advertise
+	}
+
+	level := slog.LevelWarn
+	if omit {
+		level = slog.LevelDebug
+	}
+
+	if lh.l.Enabled(context.Background(), level) {
+		msg := "Link MTU too small for nebula traffic, expect fragmentation or drops"
+		if !advertise {
+			msg = "Omitting addr with too-small link MTU from lighthouse report"
+		} else if tier == linkMTUTooSmallForRelay {
+			msg = "Link MTU too small for relayed nebula traffic"
+		}
+
+		lh.l.Log(context.Background(), level, msg,
+			"localAddr", e.addr,
+			"interface", e.ifName,
+			"linkMTU", e.linkMTU,
+			"requiredMTU", direct,
+			"requiredRelayMTU", relayed,
+			"tunMTU", tunMTU,
+		)
+	}
+
+	return advertise
+}
+
 func (lh *LightHouse) SendUpdate() {
 	var v4 []*V4AddrPort
 	var v6 []*V6AddrPort
@@ -919,15 +1054,19 @@ func (lh *LightHouse) SendUpdate() {
 
 	lal := lh.GetLocalAllowList()
 	for _, e := range localAddrs(lh.l, lal) {
-		if lh.myVpnNetworksTable.Contains(e) {
+		if lh.myVpnNetworksTable.Contains(e.addr) {
+			continue
+		}
+
+		if !lh.checkLocalLinkMTU(e) {
 			continue
 		}
 
 		// Only add addrs that aren't my VPN/tun networks
-		if e.Is4() {
-			v4 = append(v4, netAddrToProtoV4AddrPort(e, uint16(lh.nebulaPort)))
+		if e.addr.Is4() {
+			v4 = append(v4, netAddrToProtoV4AddrPort(e.addr, uint16(lh.nebulaPort)))
 		} else {
-			v6 = append(v6, netAddrToProtoV6AddrPort(e, uint16(lh.nebulaPort)))
+			v6 = append(v6, netAddrToProtoV6AddrPort(e.addr, uint16(lh.nebulaPort)))
 		}
 	}
 
