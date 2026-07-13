@@ -11,6 +11,8 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/batch"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
@@ -30,9 +32,9 @@ func newFakeDevice() *fakeDevice {
 
 // Read blocks until Close like a real tun with no traffic, then reports EOF
 // the same way a closed device does
-func (d *fakeDevice) Read(p []byte) (int, error) {
+func (d *fakeDevice) Read() ([]tio.Packet, error) {
 	<-d.closedCh
-	return 0, io.EOF
+	return nil, io.EOF
 }
 
 func (d *fakeDevice) Write(p []byte) (int, error) { return len(p), nil }
@@ -50,9 +52,11 @@ func (d *fakeDevice) Networks() []netip.Prefix              { return nil }
 func (d *fakeDevice) Name() string                          { return "fake" }
 func (d *fakeDevice) RoutesFor(netip.Addr) routing.Gateways { return nil }
 func (d *fakeDevice) SupportsMultiqueue() bool              { return false }
-func (d *fakeDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, errors.New("unsupported")
+func (d *fakeDevice) NewMultiQueueReader() error {
+	return errors.New("unsupported")
 }
+
+func (d *fakeDevice) Readers() []tio.Queue { return []tio.Queue{d} }
 
 // newReadyControl hand-builds the minimum Control that Main would have
 // produced right before Start, including the construction token NewInterface
@@ -78,7 +82,8 @@ func newReadyControl(t *testing.T) (*Control, *fakeDevice, *fakeConn) {
 		inside:     dev,
 		outside:    conn,
 		writers:    []udp.Conn{conn},
-		readers:    make([]io.ReadWriteCloser, 1),
+		readers:    make([]tio.Queue, 1),
+		batchers:   make([]batch.RxBatcher, 1),
 		routines:   1,
 		hostMap:    newHostMap(l),
 		lightHouse: lh,
@@ -143,13 +148,16 @@ type fakeConn struct {
 	rebinds int
 }
 
-func (c *fakeConn) Rebind() error                            { c.rebinds++; return nil }
-func (c *fakeConn) LocalAddr() (netip.AddrPort, error)       { return netip.AddrPort{}, nil }
-func (c *fakeConn) ListenOut(_ udp.EncReader) error          { return nil }
-func (c *fakeConn) WriteTo(_ []byte, _ netip.AddrPort) error { return nil }
-func (c *fakeConn) ReloadConfig(_ *config.C)                 {}
-func (c *fakeConn) SupportsMultipleReaders() bool            { return true }
-func (c *fakeConn) Close() error                             { c.closed = true; return nil }
+func (c *fakeConn) Rebind() error                             { c.rebinds++; return nil }
+func (c *fakeConn) LocalAddr() (netip.AddrPort, error)        { return netip.AddrPort{}, nil }
+func (c *fakeConn) ListenOut(_ udp.EncReader, _ func()) error { return nil }
+func (c *fakeConn) WriteTo(_ []byte, _ netip.AddrPort) error  { return nil }
+func (c *fakeConn) WriteBatch(_ [][]byte, _ []netip.AddrPort, _ []byte) error {
+	return nil
+}
+func (c *fakeConn) ReloadConfig(_ *config.C)      {}
+func (c *fakeConn) SupportsMultipleReaders() bool { return true }
+func (c *fakeConn) Close() error                  { c.closed = true; return nil }
 
 type multiqueueDevice struct {
 	*fakeDevice
@@ -166,7 +174,8 @@ func TestControl_StartMultiqueueFailureReleases(t *testing.T) {
 		inside:   dev,
 		outside:  conn,
 		writers:  []udp.Conn{conn},
-		readers:  make([]io.ReadWriteCloser, 2),
+		readers:  make([]tio.Queue, 2),
+		batchers: make([]batch.RxBatcher, 2),
 		routines: 2,
 		l:        test.NewLogger(),
 	}
