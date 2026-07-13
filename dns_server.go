@@ -43,6 +43,12 @@ type dnsServer struct {
 	// sameAddr comparison is unaffected by expansion.
 	listeners []*dnsListener
 	addr      string
+	// startGen tags each Start attempt so the one that stops serving (or bails
+	// before binding) only clears d.listeners if a newer Start hasn't taken
+	// over. Without this, a Start that fails to bind (or expands to zero VPN
+	// addrs) would leave stale dead listeners in d.listeners, making reload see
+	// running==true and no-op every same-addr SIGHUP, wedging DNS permanently.
+	startGen uint64
 }
 
 // dnsListener pairs a dns.Server with its started channel. The channel is
@@ -185,14 +191,30 @@ func (d *dnsServer) Start() {
 		return
 	}
 	rawAddr := d.addr
+	d.startGen++
+	myGen := d.startGen
 	d.serverMu.Unlock()
 
 	addrs, err := resolveSelfListenAddrs(rawAddr, d.pki.vpnAddrs())
 	if err != nil {
 		d.l.Warn("Failed to run the DNS responder", "error", err)
+		// Drop the now-defunct listeners a prior reload shut down, so a later
+		// same-addr SIGHUP retries instead of no-oping on stale state.
+		d.clearListenersIfCurrent(myGen)
 		return
 	}
-	d.startListeners(addrs)
+	d.startListeners(addrs, myGen)
+}
+
+// clearListenersIfCurrent nils out d.listeners, but only if no newer Start has
+// superseded this one (identified by gen). This lets the Start that stopped
+// serving reset the running state without clobbering a concurrent restart.
+func (d *dnsServer) clearListenersIfCurrent(gen uint64) {
+	d.serverMu.Lock()
+	if d.startGen == gen {
+		d.listeners = nil
+	}
+	d.serverMu.Unlock()
 }
 
 // startListeners binds and serves one dns.Server per already-expanded address,
@@ -200,7 +222,7 @@ func (d *dnsServer) Start() {
 // multi-listener machinery with concrete addresses. A bind failure on one
 // address is logged and the remaining listeners keep serving (log-and-continue,
 // matching the single-listener behavior this refactor grew out of).
-func (d *dnsServer) startListeners(addrs []string) {
+func (d *dnsServer) startListeners(addrs []string, myGen uint64) {
 	listeners := make([]*dnsListener, len(addrs))
 	for i, a := range addrs {
 		started := make(chan struct{})
@@ -216,7 +238,8 @@ func (d *dnsServer) startListeners(addrs []string) {
 	}
 
 	d.serverMu.Lock()
-	if d.ctx.Err() != nil {
+	if d.ctx.Err() != nil || d.startGen != myGen {
+		// Shutting down, or a newer Start has superseded us; don't install.
 		d.serverMu.Unlock()
 		return
 	}
@@ -257,6 +280,11 @@ func (d *dnsServer) startListeners(addrs []string) {
 	}
 	wg.Wait()
 	close(done)
+
+	// All listeners have stopped serving. Clear the running state (unless a
+	// newer Start took over) so a same-addr reload re-runs Start instead of
+	// treating the dead listeners as live. Matches stats' retry-on-unclean-exit.
+	d.clearListenersIfCurrent(myGen)
 }
 
 // Stop shuts down all active listeners, if any. Idempotent.

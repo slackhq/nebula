@@ -419,9 +419,13 @@ func TestDnsServer_reload_tokenHost_sameAddr(t *testing.T) {
 	// never confuses reload's change detection.
 	assert.Equal(t, "<nebula>:53", ds.addr)
 
-	// An identical reload is a no-op: no restart, nothing bound.
+	// An identical reload binds nothing here (nil pki => the token can't expand),
+	// and reload's Start attempt runs in a goroutine, so read under the lock.
 	require.NoError(t, ds.reload(c, false))
-	assert.Empty(t, ds.listeners)
+	ds.serverMu.Lock()
+	got := len(ds.listeners)
+	ds.serverMu.Unlock()
+	assert.Zero(t, got)
 }
 
 func TestDnsServer_Start_tokenNoVpnAddrs_noListeners(t *testing.T) {
@@ -451,9 +455,11 @@ func TestDnsServer_startListeners_multiAddr(t *testing.T) {
 		addrs = append(addrs, freeUDPPortOn(t, "::1"))
 	}
 
+	ds.startGen++
+	gen := ds.startGen
 	done := make(chan struct{})
 	go func() {
-		ds.startListeners(addrs)
+		ds.startListeners(addrs, gen)
 		close(done)
 	}()
 	waitForBind(t, ds)
@@ -471,6 +477,53 @@ func TestDnsServer_startListeners_multiAddr(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("startListeners did not return after Stop")
 	}
+}
+
+// TestDnsServer_Start_resolveError_clearsListeners is the regression test for
+// the reload-wedge: a Start that bails before binding (here, "<nebula>" with no
+// VPN addresses) must clear the defunct listeners a prior reload left behind,
+// otherwise reload sees running==true and no-ops every subsequent same-addr
+// SIGHUP, leaving DNS dead forever.
+func TestDnsServer_Start_resolveError_clearsListeners(t *testing.T) {
+	ds, _ := newTestDnsServer(t)
+	ds.enabled.Store(true)
+	// nil pki => vpnAddrs() is empty => "<nebula>" expansion errors.
+	ds.addr = nebulaSelfToken + ":53"
+	// Simulate the stale state a prior reload's shutdownListeners leaves: the
+	// slice still references now-defunct listeners.
+	ds.listeners = []*dnsListener{{server: &dns.Server{}, started: make(chan struct{})}}
+
+	ds.Start()
+
+	require.Nil(t, ds.listeners, "resolve-error Start must clear stale listeners so reload retries")
+}
+
+// TestDnsServer_startListeners_allBindsFail_clearsListeners covers the other
+// staleness path: when every expanded address fails to bind, startListeners
+// must not leave the dead listeners installed.
+func TestDnsServer_startListeners_allBindsFail_clearsListeners(t *testing.T) {
+	ds, _ := newTestDnsServer(t)
+	ds.enabled.Store(true)
+
+	// Occupy a UDP port, then try to bind it so ListenAndServe fails.
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer conn.Close()
+	busy := conn.LocalAddr().String()
+
+	ds.startGen++
+	gen := ds.startGen
+	done := make(chan struct{})
+	go func() {
+		ds.startListeners([]string{busy}, gen)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("startListeners did not return after all binds failed")
+	}
+	require.Nil(t, ds.listeners, "all-binds-failed must clear listeners so reload retries")
 }
 
 func queryDNS(t *testing.T, addr, name string, qtype uint16) *dns.Msg {

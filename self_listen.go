@@ -40,10 +40,23 @@ func resolveSelfListenAddrs(listenAddr string, vpnAddrs []netip.Addr) ([]string,
 	}
 
 	if host != nebulaSelfToken {
+		// The token as a substring of a larger host (e.g. "<nebula>.corp") is
+		// almost certainly a typo. It can't resolve ("<"/">" are illegal in
+		// hostnames) so it would fail loud at bind anyway, but erroring here
+		// gives a clear message instead of an opaque resolver failure.
+		if strings.Contains(host, nebulaSelfToken) {
+			return nil, fmt.Errorf("%q must be the entire host to expand, got host %q in %q", nebulaSelfToken, host, listenAddr)
+		}
 		// Return the original string byte-for-byte so every existing config
 		// behaves exactly as before, including the "[::]" special cases that
 		// callers handle independently of this helper.
 		return []string{listenAddr}, nil
+	}
+
+	if port == "" {
+		// SplitHostPort accepts an empty port (binding an ephemeral port), but
+		// for the token that is never intended, so require one explicitly.
+		return nil, fmt.Errorf("%q requires an explicit port, got %q", nebulaSelfToken, listenAddr)
 	}
 
 	if len(vpnAddrs) == 0 {

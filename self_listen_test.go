@@ -84,3 +84,27 @@ func TestResolveSelfListenAddrs_TokenNoVpnAddrsErrors(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no VPN addresses")
 }
+
+func TestResolveSelfListenAddrs_TokenSubstringErrors(t *testing.T) {
+	// The token embedded in a larger host is a typo, not passthrough: it can't
+	// resolve, so we error clearly instead of letting it hit the resolver.
+	vpnAddrs := []netip.Addr{netip.MustParseAddr("100.64.0.5")}
+	cases := []string{
+		"<nebula>.corp:8080",
+		"x<nebula>:2222",
+		"my-<nebula>-host:53",
+	}
+	for _, in := range cases {
+		_, err := resolveSelfListenAddrs(in, vpnAddrs)
+		require.Error(t, err, in)
+		assert.Contains(t, err.Error(), "entire host", in)
+	}
+}
+
+func TestResolveSelfListenAddrs_TokenEmptyPortErrors(t *testing.T) {
+	// "<nebula>:" parses (empty port) but binding ephemeral ports is never the
+	// intent for the token, so require an explicit port.
+	_, err := resolveSelfListenAddrs("<nebula>:", []netip.Addr{netip.MustParseAddr("100.64.0.5")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "explicit port")
+}
