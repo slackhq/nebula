@@ -45,6 +45,11 @@ func (b *SendBatch) Reserve(sz int) []byte {
 	return b.backing[start : start+sz : start+sz]
 }
 
+// Len reports how many packets are queued for the next Flush. Callers use
+// it to flush incrementally once a full sendmmsg batch has accumulated,
+// bounding how long the first packet of a large read batch waits.
+func (b *SendBatch) Len() int { return len(b.bufs) }
+
 func (b *SendBatch) Commit(pkt []byte, dst netip.AddrPort, outerECN byte) {
 	b.bufs = append(b.bufs, pkt)
 	b.dsts = append(b.dsts, dst)
