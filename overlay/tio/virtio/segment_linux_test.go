@@ -211,6 +211,55 @@ func TestSegmentTCPHeaderNotCorrupted(t *testing.T) {
 	}
 }
 
+// TestCorrectHdrLenChecksumBound guards the checksum-field bounds check in
+// CorrectHdrLen. The checksum field sits at CsumStart+CsumOffset, so the check
+// must be computed from CsumStart+CsumOffset — NOT CsumStart+CsumStart, a
+// regression that doubled CsumStart and thus over-tightened the bound (since
+// CsumOffset, 6 for UDP / 16 for TCP, is always < CsumStart >= 20). That bogus
+// bound spuriously rejected valid small USO superpackets in decodeRead.
+func TestCorrectHdrLenChecksumBound(t *testing.T) {
+	// A valid IPv4 USO superpacket: 20B IPv4 + 8B UDP + two 6-byte segments
+	// (payload 12) = 40 bytes total. CsumStart=20, CsumOffset=6, so the UDP
+	// checksum field lives at bytes 26..27, comfortably inside the 40-byte
+	// packet. The OLD formula computed cSumAt = CsumStart+CsumStart = 40 and
+	// rejected on cSumAt+1 (41) >= len(pkt) (40); the fix (CsumStart+CsumOffset
+	// = 26) accepts. This case FAILS against the CsumStart+CsumStart regression.
+	t.Run("valid-small-uso-accepted", func(t *testing.T) {
+		pkt, _, csumStart := buildUDPv4Super(12) // total len 40
+		hdr := Hdr{
+			Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
+			GSOType:    unix.VIRTIO_NET_HDR_GSO_UDP_L4,
+			GSOSize:    6, // two 6-byte segments
+			CsumStart:  csumStart,
+			CsumOffset: 6,
+		}
+		if err := CorrectHdrLen(pkt, &hdr); err != nil {
+			t.Fatalf("CorrectHdrLen rejected a valid 40-byte USO superpacket: %v", err)
+		}
+		if hdr.HdrLen != csumStart+udpHeaderLen {
+			t.Errorf("HdrLen = %d, want %d", hdr.HdrLen, csumStart+udpHeaderLen)
+		}
+	})
+
+	// A genuinely-too-short packet: CsumStart=20, CsumOffset=6 means the
+	// checksum field would end at byte 27, but the packet is only 25 bytes
+	// (CsumStart+CsumOffset+2 = 28 > 25). CorrectHdrLen must still reject it.
+	t.Run("too-short-rejected", func(t *testing.T) {
+		pkt := make([]byte, 25)
+		pkt[0] = 0x45 // IPv4, IHL 5
+		hdr := Hdr{
+			Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
+			GSOType:    unix.VIRTIO_NET_HDR_GSO_UDP_L4,
+			GSOSize:    6,
+			CsumStart:  20,
+			CsumOffset: 6,
+		}
+		if err := CorrectHdrLen(pkt, &hdr); err == nil {
+			t.Fatalf("CorrectHdrLen accepted a too-short (25-byte) packet")
+		}
+	})
+}
+
 // TestSegmentUDPHeaderNotCorrupted is the USO counterpart: SegmentUDP performs
 // the same header stamp and must be correct when gsoSize < headerLen.
 func TestSegmentUDPHeaderNotCorrupted(t *testing.T) {

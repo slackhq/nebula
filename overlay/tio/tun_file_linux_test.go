@@ -70,6 +70,76 @@ func TestPoll_WakeForShutdown_WakesFriends(t *testing.T) {
 	}
 }
 
+// TestPoll_ConcurrentWrite_NoRace hammers a single Poll queue from two writer
+// goroutines while a reader drains the other end of the pipe. The writers
+// overflow the pipe buffer, so both repeatedly park in blockOnWrite at the same
+// time — the exact scenario that raced on the old shared writePoll member
+// array. Run under -race; a shared-array regression trips the detector here.
+func TestPoll_ConcurrentWrite_NoRace(t *testing.T) {
+	var fds [2]int
+	require.NoError(t, unix.Pipe2(fds[:], unix.O_CLOEXEC))
+	readFd, writeFd := fds[0], fds[1]
+
+	shutdownFd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = unix.Close(shutdownFd) })
+
+	p, err := newPoll(writeFd, shutdownFd)
+	require.NoError(t, err)
+
+	const writers = 2
+	const perWriter = 4000
+	payload := make([]byte, 100)
+	total := writers * perWriter * len(payload)
+
+	// Reader: drain the read end (blocking) until every writer's bytes are
+	// consumed, so the writers keep making progress rather than wedging on a
+	// permanently full pipe.
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		buf := make([]byte, 4096)
+		got := 0
+		for got < total {
+			n, rerr := unix.Read(readFd, buf)
+			got += n
+			if rerr != nil {
+				if rerr == unix.EINTR {
+					continue
+				}
+				return
+			}
+			if n == 0 { // EOF
+				return
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	for w := 0; w < writers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perWriter; i++ {
+				if _, werr := p.Write(payload); werr != nil {
+					t.Errorf("write: %v", werr)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	select {
+	case <-readDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("reader did not drain")
+	}
+
+	require.NoError(t, p.Close())
+	_ = unix.Close(readFd)
+}
+
 // TestPoll_NewPoll_DoesNotCloseFdOnFailure pins the ownership rule: when
 // newPoll fails, it must leave fd open so the caller (pollQueueSet.Add's
 // callers in tun_linux.go) is the sole closer. If newPoll also closed fd,

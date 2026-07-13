@@ -762,39 +762,88 @@ func TestCoalescerEceMismatchReseeds(t *testing.T) {
 	}
 }
 
-// TestCoalescerMergesCEMark confirms that an ECT(0) burst with a single
-// CE-marked packet still coalesces, and the merged superpacket carries CE.
-func TestCoalescerMergesCEMark(t *testing.T) {
+// TestCoalescerDifferingECNReseeds confirms that segments with differing IP
+// ECN codepoints do NOT coalesce: headersMatch compares the full ToS byte,
+// matching kernel GRO. Two ECT(0) segments merge; a CE stamp mid-run seals
+// the ECT(0) chain and starts a fresh superpacket that keeps CE; a trailing
+// ECT(0) starts yet another. Each superpacket keeps its own codepoint —
+// ORing the marks (the old buggy behavior) would have fabricated a false CE
+// across the whole burst.
+func TestCoalescerDifferingECNReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
 	pay := make([]byte, 1200)
 	if err := c.Commit(buildTCPv4WithToS(ecnECT0, 1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	// Router along the path stamped CE on this one.
-	if err := c.Commit(buildTCPv4WithToS(ecnCE, 2200, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv4WithToS(ecnECT0, 2200, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Commit(buildTCPv4WithToS(ecnECT0, 3400, tcpAck, pay)); err != nil {
+	// Router along the path stamped CE on this one.
+	if err := c.Commit(buildTCPv4WithToS(ecnCE, 3400, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv4WithToS(ecnECT0, 4600, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 1 {
-		t.Fatalf("want 1 merged gso write, got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
+	if len(w.gsoWrites) != 3 {
+		t.Fatalf("want 3 superpackets (ECN split), got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
 	}
-	g := w.gsoWrites[0]
-	if len(g.pays) != 3 {
-		t.Errorf("pay count=%d want 3", len(g.pays))
+	// gso[0]: the two ECT(0) segments merged; gso[1]: CE alone; gso[2]:
+	// trailing ECT(0) alone. Emitted in seq order.
+	type want struct {
+		pays int
+		ecn  byte
 	}
-	if got := g.hdr[1] & 0x03; got != ecnCE {
-		t.Errorf("seed ECN=0x%02x want CE 0x%02x", got, ecnCE)
+	wants := []want{{2, ecnECT0}, {1, ecnCE}, {1, ecnECT0}}
+	for i, wnt := range wants {
+		g := w.gsoWrites[i]
+		if len(g.pays) != wnt.pays {
+			t.Errorf("gso %d pay count=%d want %d", i, len(g.pays), wnt.pays)
+		}
+		if got := g.hdr[1] & 0x03; got != wnt.ecn {
+			t.Errorf("gso %d ECN=0x%02x want 0x%02x", i, got, wnt.ecn)
+		}
 	}
 }
 
-// TestCoalescerDscpMismatchReseeds confirms that the new ECN-mask in
-// headersMatch did not also relax DSCP — different DSCP must still split.
+// TestCoalescerECT0ThenECT1NoCE is the core regression for the ECN merge
+// bug: ORing ECT(0)=0b10 with ECT(1)=0b01 fabricates CE=0b11. The two
+// segments must land in separate superpackets, each preserving its own
+// codepoint, and neither may end up CE-marked.
+func TestCoalescerECT0ThenECT1NoCE(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	pay := make([]byte, 1200)
+	if err := c.Commit(buildTCPv4WithToS(ecnECT0, 1000, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv4WithToS(ecnECT1, 2200, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 2 {
+		t.Fatalf("want 2 separate superpackets (ECT0 vs ECT1), got %d", len(w.gsoWrites))
+	}
+	wantECN := []byte{ecnECT0, ecnECT1}
+	for i, g := range w.gsoWrites {
+		if got := g.hdr[1] & 0x03; got != wantECN[i] {
+			t.Errorf("gso %d ECN=0x%02x want 0x%02x", i, got, wantECN[i])
+		}
+		if got := g.hdr[1] & 0x03; got == ecnCE {
+			t.Errorf("gso %d fabricated CE from ECT merge", i)
+		}
+	}
+}
+
+// TestCoalescerDscpMismatchReseeds confirms that a DSCP difference (same
+// ECN) still splits — headersMatch compares the full ToS byte, so the upper
+// six DSCP bits must match too.
 func TestCoalescerDscpMismatchReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
@@ -995,9 +1044,10 @@ func TestCoalescerSortKeepsPassthroughBarrier(t *testing.T) {
 	}
 }
 
-// TestCoalescerIPv6MergesCEMark is the IPv6 analogue of
-// TestCoalescerMergesCEMark. ECN bits live in TC[1:0] = byte 1 mask 0x30.
-func TestCoalescerIPv6MergesCEMark(t *testing.T) {
+// TestCoalescerIPv6DifferingECNReseeds is the IPv6 analogue of
+// TestCoalescerDifferingECNReseeds. ECN bits live in TC[1:0] = byte 1 mask
+// 0x30, so ipHeadersMatch (comparing byte 1 fully) still splits them.
+func TestCoalescerIPv6DifferingECNReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
 	pay := make([]byte, 1200)
@@ -1005,20 +1055,36 @@ func TestCoalescerIPv6MergesCEMark(t *testing.T) {
 	if err := c.Commit(buildTCPv6(ecnECT0, 1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Commit(buildTCPv6(ecnCE, 2200, tcpAck, pay)); err != nil {
+	if err := c.Commit(buildTCPv6(ecnECT0, 2200, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv6(ecnCE, 3400, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv6(ecnECT0, 4600, tcpAck, pay)); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 1 {
-		t.Fatalf("want 1 merged gso write, got %d", len(w.gsoWrites))
+	if len(w.gsoWrites) != 3 {
+		t.Fatalf("want 3 superpackets (ECN split), got %d", len(w.gsoWrites))
 	}
-	g := w.gsoWrites[0]
 	// Byte 1 high nibble holds TC[3:0]; ECN is the low 2 bits of that nibble,
 	// which appears in byte 1 mask 0x30 (>>4 to read the codepoint value).
-	if got := (g.hdr[1] >> 4) & 0x03; got != ecnCE {
-		t.Errorf("seed v6 ECN=0x%02x want CE 0x%02x", got, ecnCE)
+	type want struct {
+		pays int
+		ecn  byte
+	}
+	wants := []want{{2, ecnECT0}, {1, ecnCE}, {1, ecnECT0}}
+	for i, wnt := range wants {
+		g := w.gsoWrites[i]
+		if len(g.pays) != wnt.pays {
+			t.Errorf("gso %d pay count=%d want %d", i, len(g.pays), wnt.pays)
+		}
+		if got := (g.hdr[1] >> 4) & 0x03; got != wnt.ecn {
+			t.Errorf("gso %d v6 ECN=0x%02x want 0x%02x", i, got, wnt.ecn)
+		}
 	}
 }
 

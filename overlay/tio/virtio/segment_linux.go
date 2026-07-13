@@ -143,7 +143,7 @@ func CorrectHdrLen(pkt []byte, hdr *Hdr) error {
 	if hdr.HdrLen < hdr.CsumStart {
 		return fmt.Errorf("virtioNetHdr.HdrLen (%d) < virtioNetHdr.CsumStart (%d)", hdr.HdrLen, hdr.CsumStart)
 	}
-	cSumAt := int(hdr.CsumStart + hdr.CsumStart)
+	cSumAt := int(hdr.CsumStart + hdr.CsumOffset)
 	if cSumAt+1 >= len(pkt) {
 		return fmt.Errorf("end of checksum offset (%d) exceeds packet length (%d)", cSumAt+1, len(pkt))
 	}
