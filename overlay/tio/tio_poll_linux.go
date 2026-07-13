@@ -27,9 +27,12 @@ type Poll struct {
 	batchRet [1]Packet
 }
 
+// newPoll wraps an existing tun fd. On failure it does NOT close fd: the
+// caller owns fd and is the sole closer (see pollQueueSet.Add callers in
+// overlay/tun_linux.go, which unix.Close on Add error). This matches the
+// newOffload convention and keeps closes at exactly one on every path.
 func newPoll(fd int, shutdownFd int) (*Poll, error) {
 	if err := unix.SetNonblock(fd, true); err != nil {
-		_ = unix.Close(fd)
 		return nil, fmt.Errorf("failed to set Poll device as nonblocking: %w", err)
 	}
 
@@ -157,11 +160,9 @@ func (t *Poll) Close() error {
 		return nil
 	}
 	//shutdownFd is owned by the container, so we should not close it
-	var err error
-	if t.fd >= 0 {
-		err = unix.Close(t.fd)
-		t.fd = -1
-	}
-
-	return err
+	// Close the underlying fd but do NOT null t.fd: a reader may still be
+	// loading it in readOne, and mutating the field would race that load.
+	// It gets EBADF -> os.ErrClosed (or wakes via the shutdown eventfd's
+	// ppoll first). closed.Swap already guarantees we only close once.
+	return unix.Close(t.fd)
 }

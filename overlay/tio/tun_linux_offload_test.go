@@ -640,6 +640,38 @@ func TestTunFileWriteVnetHdrNoAlloc(t *testing.T) {
 	}
 }
 
+// TestWriteGSOSkipsEmptyPayloads is the defense-in-depth guard for the
+// zero-length UDP DoS: a payload fragment of length zero would make &p[0]
+// panic (index-out-of-range) when building the iovec array. WriteGSO must
+// skip empties instead. We write to /dev/null so the writev always succeeds
+// synchronously; the point is simply that neither call panics.
+func TestWriteGSOSkipsEmptyPayloads(t *testing.T) {
+	fd, err := unix.Open("/dev/null", os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open /dev/null: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Close(fd) })
+
+	o := &Offload{fd: fd, gsoIovs: make([]unix.Iovec, 2, gsoMaxIovs)}
+	o.gsoIovs[0].Base = &o.gsoHdrBuf[0]
+	o.gsoIovs[0].SetLen(virtio.Size)
+
+	ipHdr := make([]byte, 20)
+	ipHdr[0] = 0x45 // IPv4, IHL 5
+	udpHdr := make([]byte, 8)
+
+	// Sole payload empty: exercises the all-empty skip (n stays at 3).
+	if err := o.WriteGSO(ipHdr, udpHdr, [][]byte{{}}, GSOProtoUDP); err != nil {
+		t.Fatalf("WriteGSO with a single empty payload: %v", err)
+	}
+	// Empty mixed with a real fragment: exercises the index-drift skip so a
+	// later non-empty payload still lands in the right iovec slot.
+	real := make([]byte, 1200)
+	if err := o.WriteGSO(ipHdr, udpHdr, [][]byte{real, {}}, GSOProtoUDP); err != nil {
+		t.Fatalf("WriteGSO with a trailing empty payload: %v", err)
+	}
+}
+
 // buildTSOv6 builds a synthetic IPv6/TCP TSO superpacket with payLen bytes
 // of payload, segmented at gso. Returns the packet bytes only; the
 // virtio_net_hdr is the caller's responsibility.

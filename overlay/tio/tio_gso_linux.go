@@ -439,10 +439,22 @@ func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto
 	r.gsoIovs[1].SetLen(len(hdr))
 	r.gsoIovs[2].Base = &transportHdr[0]
 	r.gsoIovs[2].SetLen(len(transportHdr))
-	for i, p := range pays {
-		r.gsoIovs[3+i].Base = &p[0]
-		r.gsoIovs[3+i].SetLen(len(p))
+	// Defense in depth: an empty payload fragment can't be a valid GSO
+	// segment and &p[0] would panic on it. Callers route zero-length
+	// datagrams through the plain path (see UDPCoalescer.commitParsed), so
+	// this should never fire, but skip empties rather than index into one.
+	// `n` tracks where the next payload iovec lands, since skips make it
+	// drift from 3+i.
+	n := 3
+	for _, p := range pays {
+		if len(p) == 0 {
+			continue
+		}
+		r.gsoIovs[n].Base = &p[0]
+		r.gsoIovs[n].SetLen(len(p))
+		n++
 	}
+	r.gsoIovs = r.gsoIovs[:n]
 
 	_, err := r.rawWrite(r.gsoIovs)
 	return err
@@ -454,11 +466,9 @@ func (r *Offload) Close() error {
 	}
 
 	//shutdownFd is owned by the container, so we should not close it
-	var err error
-	if r.fd >= 0 {
-		err = unix.Close(r.fd)
-		r.fd = -1
-	}
-
-	return err
+	// Close the underlying fd but do NOT null r.fd: a reader may still be
+	// loading it in readOne, and mutating the field would race that load.
+	// It gets EBADF -> os.ErrClosed (or wakes via the shutdown eventfd's
+	// ppoll first). closed.Swap already guarantees we only close once.
+	return unix.Close(r.fd)
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"golang.org/x/sys/unix"
 )
@@ -20,6 +21,7 @@ type offloadQueueSet struct {
 	// with the kernel. Queues created by Add inherit this and surface it
 	// via Offload.USOSupported so coalescers can gate USO emission.
 	usoEnabled bool
+	closed     atomic.Bool
 }
 
 // NewOffloadQueueSet creates a QueueSet that uses virtio_net_hdr to do
@@ -65,18 +67,33 @@ func (c *offloadQueueSet) wakeForShutdown() error {
 }
 
 func (c *offloadQueueSet) Close() error {
+	if c.closed.Swap(true) {
+		return nil
+	}
+
 	errs := []error{}
 
-	// Signal all readers blocked in poll to wake up and exit
+	// Signal all readers blocked in poll to wake up and exit. They observe
+	// POLLIN on the shutdown eventfd and return os.ErrClosed.
 	if err := c.wakeForShutdown(); err != nil {
 		errs = append(errs, err)
 	}
 
+	// Close the per-queue tun fds; this also unblocks any in-flight reads.
+	// The per-queue Close deliberately leaves shutdownFd alone - it belongs
+	// to this container.
 	for _, x := range c.pq {
 		if err := x.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
+
+	// Close the shutdown eventfd last: every reader's pollfd set references
+	// it, so it must outlive the wake + per-queue teardown above.
+	if err := unix.Close(c.shutdownFd); err != nil {
+		errs = append(errs, err)
+	}
+	c.shutdownFd = -1
 
 	return errors.Join(errs...)
 }

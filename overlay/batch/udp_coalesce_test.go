@@ -365,6 +365,74 @@ func TestUDPCoalescerFragmentedIPv4PassesThrough(t *testing.T) {
 	}
 }
 
+// A zero-length UDP datagram (UDP length == 8, no payload) is legal and
+// must be delivered as a plain single datagram — never coalesced. Seeding
+// it into a GSO slot stores an empty payload iovec that panics WriteGSO
+// (index-out-of-range on &pay[0]); this is a remote DoS if we ever let it
+// reach the GSO path. Regression: must not panic and must be written.
+func TestUDPCoalescerZeroLengthPayloadPassesThrough(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := NewUDPCoalescer(w, NewArena(0))
+	pkt := buildUDPv4(1000, 53, nil) // UDP length 8, zero payload
+	if err := c.Commit(pkt); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.writes) != 1 || len(w.gsoWrites) != 0 {
+		t.Fatalf("zero-length UDP must pass through plain, got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
+	}
+	if len(w.writes[0]) != len(pkt) {
+		t.Errorf("delivered %d bytes, want the whole %d-byte datagram", len(w.writes[0]), len(pkt))
+	}
+}
+
+// IPv6 zero-length UDP datagram: same passthrough contract as v4.
+func TestUDPCoalescerZeroLengthPayloadIPv6PassesThrough(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := NewUDPCoalescer(w, NewArena(0))
+	pkt := buildUDPv6(1000, 53, nil) // UDP length 8, zero payload
+	if err := c.Commit(pkt); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.writes) != 1 || len(w.gsoWrites) != 0 {
+		t.Fatalf("zero-length IPv6 UDP must pass through plain, got writes=%d gso=%d", len(w.writes), len(w.gsoWrites))
+	}
+	if len(w.writes[0]) != len(pkt) {
+		t.Errorf("delivered %d bytes, want the whole %d-byte datagram", len(w.writes[0]), len(pkt))
+	}
+}
+
+// A zero-length datagram arriving mid-flow must seal the open chain so the
+// datagram after it seeds a fresh superpacket *after* the empty one on the
+// wire — per-flow arrival order (full, empty, full) must be preserved.
+func TestUDPCoalescerZeroLengthMidFlowSealsAndPreservesOrder(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := NewUDPCoalescer(w, NewArena(0))
+	full := make([]byte, 800)
+	if err := c.Commit(buildUDPv4(1000, 53, full)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildUDPv4(1000, 53, nil)); err != nil { // zero-length
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildUDPv4(1000, 53, full)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	// The empty datagram sealed the first slot, so the trailing full packet
+	// can't join it: two single-segment superpackets bracket one plain write.
+	if len(w.gsoWrites) != 2 || len(w.writes) != 1 {
+		t.Fatalf("want 2 gso writes + 1 plain, got gso=%d plain=%d", len(w.gsoWrites), len(w.writes))
+	}
+}
+
 // IPv4 with options is not admissible (we require IHL=5).
 func TestUDPCoalescerIPv4WithOptionsPassesThrough(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
