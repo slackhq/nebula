@@ -37,21 +37,40 @@ type UserDevice struct {
 
 	inboundReader *io.PipeReader
 	inboundWriter *io.PipeWriter
+}
+
+// userDeviceQueue is a single tio.Queue over a UserDevice's shared pipes.
+// One is handed to each tun read goroutine by Readers(). All queues delegate
+// reads to the same outboundReader and writes to the same inboundWriter (the
+// io.Pipe serializes concurrent callers), but every queue owns a private
+// readBuf/batchRet so the borrowed Packet.Bytes slice one goroutine returns is
+// never clobbered by another goroutine's concurrent Read.
+type userDeviceQueue struct {
+	outboundReader *io.PipeReader
+	inboundWriter  *io.PipeWriter
 
 	readBuf  []byte
 	batchRet [1]tio.Packet
 }
 
-func (d *UserDevice) Read() ([]tio.Packet, error) {
-	if d.readBuf == nil {
-		d.readBuf = make([]byte, defaultBatchBufSize)
-	}
-	n, err := d.outboundReader.Read(d.readBuf)
+func (q *userDeviceQueue) Read() ([]tio.Packet, error) {
+	n, err := q.outboundReader.Read(q.readBuf)
 	if err != nil {
 		return nil, err
 	}
-	d.batchRet[0] = tio.Packet{Bytes: d.readBuf[:n]}
-	return d.batchRet[:], nil
+	q.batchRet[0] = tio.Packet{Bytes: q.readBuf[:n]}
+	return q.batchRet[:], nil
+}
+
+func (q *userDeviceQueue) Write(p []byte) (int, error) {
+	return q.inboundWriter.Write(p)
+}
+
+// Close is a no-op: the shared pipes are owned by the UserDevice and torn
+// down by UserDevice.Close, so an individual queue must not close them out
+// from under its siblings.
+func (q *userDeviceQueue) Close() error {
+	return nil
 }
 
 func (d *UserDevice) Activate() error {
@@ -76,7 +95,13 @@ func (d *UserDevice) NewMultiQueueReader() error {
 func (d *UserDevice) Readers() []tio.Queue {
 	out := make([]tio.Queue, d.numReaders)
 	for i := range d.numReaders {
-		out[i] = d
+		// Each queue shares the underlying pipes but owns its own scratch
+		// buffer so concurrent Reads across queues never alias.
+		out[i] = &userDeviceQueue{
+			outboundReader: d.outboundReader,
+			inboundWriter:  d.inboundWriter,
+			readBuf:        make([]byte, defaultBatchBufSize),
+		}
 	}
 	return out
 }

@@ -549,7 +549,23 @@ func applyOuterECN(pkt []byte, outerECN byte, hostinfo *HostInfo, l *slog.Logger
 		case ecnCE:
 			// Already CE.
 		default:
+			// Rewriting the ToS byte invalidates the IPv4 header checksum, so
+			// patch it incrementally per RFC 1624 (HC' = ~(~HC + ~m + m')). The
+			// ToS is the low byte of the 16-bit word at pkt[0:2]; the header
+			// checksum lives at pkt[10:12]. A header too short to carry a
+			// checksum can't be fixed up here, so leave it for newPacket to
+			// reject rather than emit a mangled packet.
+			if len(pkt) < ipv4.HeaderLen {
+				return
+			}
+			m := binary.BigEndian.Uint16(pkt[0:2])
 			pkt[1] = (pkt[1] &^ 0x03) | ecnCE
+			mNew := binary.BigEndian.Uint16(pkt[0:2])
+			sum := uint32(^binary.BigEndian.Uint16(pkt[10:12])) + uint32(^m) + uint32(mNew)
+			for sum > 0xffff {
+				sum = (sum >> 16) + (sum & 0xffff)
+			}
+			binary.BigEndian.PutUint16(pkt[10:12], ^uint16(sum))
 		}
 	case 6:
 		switch (pkt[1] >> 4) & 0x03 {
@@ -585,8 +601,10 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, p
 	dropReason := f.firewall.Drop(*fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason != nil {
 		// NOTE: We give `packet` as the `out` here since we already decrypted from it and we don't need it anymore
-		// This gives us a buffer to build the reject packet in
-		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, packet, q)
+		// This gives us a buffer to build the reject packet in. With UDP GRO this is a single segment of a shared
+		// recvmmsg row whose capacity runs to the end of the whole row, so cap it to its own length (cap==len) to
+		// keep the reject builder from writing past this segment into the next, not-yet-processed coalesced segment.
+		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, packet[:len(packet):len(packet)], q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("dropping inbound packet",
 				"fwPacket", fwPacket,
