@@ -4,7 +4,6 @@ package udp
 
 import (
 	"encoding/binary"
-	"io"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -89,7 +88,7 @@ func TestParseRecvCmsgOuterECNFamily(t *testing.T) {
 }
 
 func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return slog.New(slog.DiscardHandler)
 }
 
 // TestWriteBatchBadFamilyDeliversOthers is the H3 regression: a batch that
