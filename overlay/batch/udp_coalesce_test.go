@@ -261,32 +261,37 @@ func TestUDPCoalescerCapsAtMaxSegs(t *testing.T) {
 	}
 }
 
-// CE marks on appended segments must be merged into the seed's IP TOS.
-func TestUDPCoalescerMergesCEMark(t *testing.T) {
+// Differing IP ECN codepoints must not coalesce: udpHeadersMatch compares
+// the full ToS byte (matching kernel GRO). A CE-marked datagram mid-run
+// seals the Not-ECT chain and seeds a fresh superpacket that keeps CE; the
+// trailing Not-ECT datagram seeds another.
+func TestUDPCoalescerDifferingECNReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := NewUDPCoalescer(w, NewArena(0))
 	pay := make([]byte, 800)
-	pkt0 := buildUDPv4(1000, 53, pay) // ECN=00
+	pkt0 := buildUDPv4(1000, 53, pay) // ECN=00 (Not-ECT)
 	pkt1 := buildUDPv4(1000, 53, pay)
-	pkt1[1] = 0x03 // CE
-	pkt2 := buildUDPv4(1000, 53, pay)
-	if err := c.Commit(pkt0); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Commit(pkt1); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Commit(pkt2); err != nil {
-		t.Fatal(err)
+	pkt1[1] = 0x03                    // CE
+	pkt2 := buildUDPv4(1000, 53, pay) // ECN=00 again
+	for _, p := range [][]byte{pkt0, pkt1, pkt2} {
+		if err := c.Commit(p); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := c.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.gsoWrites) != 1 {
-		t.Fatalf("want 1 merged gso write, got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
+	if len(w.gsoWrites) != 3 {
+		t.Fatalf("want 3 separate seeds (differing ECN), got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
 	}
-	if w.gsoWrites[0].hdr[1]&0x03 != 0x03 {
-		t.Errorf("CE not merged into seed (tos=%#x)", w.gsoWrites[0].hdr[1])
+	wantECN := []byte{0x00, 0x03, 0x00}
+	for i, g := range w.gsoWrites {
+		if len(g.pays) != 1 {
+			t.Errorf("gso %d pay count=%d want 1", i, len(g.pays))
+		}
+		if got := g.hdr[1] & 0x03; got != wantECN[i] {
+			t.Errorf("gso %d ECN=%#x want %#x", i, got, wantECN[i])
+		}
 	}
 }
 
@@ -326,7 +331,7 @@ func TestUDPCoalescerIPv6Coalesces(t *testing.T) {
 	}
 }
 
-// DSCP differences must reseed (headers don't match outside ECN).
+// DSCP differences must reseed: udpHeadersMatch compares the full ToS byte.
 func TestUDPCoalescerDSCPMismatchReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
 	c := NewUDPCoalescer(w, NewArena(0))

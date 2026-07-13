@@ -9,3 +9,10 @@ package util
 func PinThreadToCPU(_ int) error {
 	return nil
 }
+
+// AllowedCPUs has no meaningful answer off Linux (no sched_getaffinity), so it
+// reports "unknown" by returning a nil slice and nil error. Callers treat an
+// empty result as "fall back to the default CPU choice".
+func AllowedCPUs() ([]int, error) {
+	return nil, nil
+}

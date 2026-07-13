@@ -5,11 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
-	_ "net/http/pprof"
 	"net/netip"
-	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,17 +34,8 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		buildVersion = moduleVersion()
 	}
 
-	//todo no merge
-	pprofServer := &http.Server{Addr: ":6060", Handler: nil}
-	go func() {
-		pprofServer.ListenAndServe()
-	}()
-
-	// Shut down the server when context is cancelled
-	go func() {
-		<-ctx.Done()
-		pprofServer.Shutdown(context.Background())
-	}()
+	// Debug builds (-tags debug) serve pprof on :6060; a no-op otherwise.
+	startPprofServer(ctx, l)
 
 	// Print the config if in test, the exit comes later
 	if configTest {
@@ -247,6 +236,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		CpuAffinity:           parseCpuAffinity(c, l, routines),
+		PinThreads:            c.GetBool("tun.pin_threads", true),
 		l:                     l,
 	}
 
@@ -301,11 +291,16 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 // parseCpuAffinity reads `tun.cpu_affinity` from the config — a list of
 // integer CPU IDs, one per TUN reader goroutine. Empty / unset returns nil
-// (listenIn falls back to its default `i % NumCPU` pinning). Length
-// mismatch with `routines` is a warning, not an error: shorter lists are
-// modulo-cycled across queues, longer lists' tail is ignored. Invalid
-// entries (non-integer, out of range) are also a warning and disable the
-// override entirely so we don't silently pin to the wrong CPU.
+// (listenIn falls back to spreading queues across the allowed CPU set).
+// Length mismatch with `routines` is a warning, not an error: shorter lists
+// are modulo-cycled across queues, longer lists' tail is ignored. Invalid
+// entries (non-integer, or a CPU ID we're not allowed to run on) are also a
+// warning and disable the override entirely so we don't silently pin to the
+// wrong CPU. Entries are validated against the process's current affinity
+// mask (util.AllowedCPUs) rather than 0..NumCPU-1: under a cgroup cpuset or
+// taskset the runnable IDs are frequently not that contiguous range, and
+// pinning to an unrunnable ID always fails. If the allowed set can't be
+// determined we fall back to a plain non-negative check.
 func parseCpuAffinity(c *config.C, l *slog.Logger, routines int) []int {
 	raw := c.Get("tun.cpu_affinity")
 	if raw == nil {
@@ -316,7 +311,14 @@ func parseCpuAffinity(c *config.C, l *slog.Logger, routines int) []int {
 		l.Warn("tun.cpu_affinity must be a list of integers; ignoring", "value", raw)
 		return nil
 	}
-	nCPU := runtime.NumCPU()
+	// allowed is the set of CPU IDs we're actually permitted to run on. A nil
+	// slice (unsupported platform or lookup error) means "can't tell", so we
+	// only apply the weaker non-negative check in that case.
+	allowed, err := util.AllowedCPUs()
+	if err != nil {
+		l.Warn("could not determine allowed CPUs; validating tun.cpu_affinity against non-negative only", "error", err)
+		allowed = nil
+	}
 	cpus := make([]int, 0, len(rv))
 	for i, e := range rv {
 		var cpu int
@@ -332,9 +334,14 @@ func parseCpuAffinity(c *config.C, l *slog.Logger, routines int) []int {
 				"index", i, "value", e)
 			return nil
 		}
-		if cpu < 0 || cpu >= nCPU {
+		if cpu < 0 {
 			l.Warn("tun.cpu_affinity entry out of range; ignoring affinity",
-				"index", i, "cpu", cpu, "num_cpu", nCPU)
+				"index", i, "cpu", cpu)
+			return nil
+		}
+		if len(allowed) > 0 && !slices.Contains(allowed, cpu) {
+			l.Warn("tun.cpu_affinity entry not in allowed CPU set; ignoring affinity",
+				"index", i, "cpu", cpu, "allowed", allowed)
 			return nil
 		}
 		cpus = append(cpus, cpu)

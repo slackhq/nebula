@@ -365,9 +365,6 @@ func (c *TCPCoalescer) appendPayload(s *coalesceSlot, pkt []byte, info parsedTCP
 		// last segment. Without this the sender's push signal is dropped.
 		s.hdrBuf[s.ipHdrLen+13] |= tcpFlagPsh
 	}
-	// Merge IP-level CE marks into the seed: headersMatch ignores ECN, so
-	// this is the one place the signal is preserved.
-	mergeECNIntoSeed(s.hdrBuf[:s.ipHdrLen], pkt[:s.ipHdrLen], s.isV6)
 	if info.payLen < s.gsoSize || info.flags&tcpFlagPsh != 0 {
 		s.psh = true
 	}
@@ -424,8 +421,9 @@ func (c *TCPCoalescer) flushSlot(s *coalesceSlot) error {
 
 // headersMatch compares two IP+TCP header prefixes for byte-for-byte
 // equality on every field that must be identical across coalesced
-// segments. Size/IPID/IPCsum/seq/flags/tcpCsum are masked out, as is the
-// 2-bit IP-level ECN field — appendPayload merges CE into the seed.
+// segments. Size/IPID/IPCsum/seq/flags/tcpCsum are masked out. The IP-level
+// ECN codepoint is compared (via ipHeadersMatch) so segments with differing
+// ECN don't coalesce, matching kernel GRO.
 func headersMatch(a, b []byte, isV6 bool, ipHdrLen int) bool {
 	if len(a) != len(b) {
 		return false
@@ -632,6 +630,9 @@ func flowKeyCompare(a, b flowKey) int {
 // ECE state must agree across both slots: PSH is a semantic delimiter
 // (preserving the sender's push boundary) and ECE state must be uniform
 // across a window (the same rule canAppend enforces for in-flow appends).
+// The IP-level ECN codepoint must also match: this check calls headersMatch
+// → ipHeadersMatch, which compares the full DSCP/ECN byte, so two slots with
+// differing ECN marks stay separate superpackets, each keeping its own mark.
 //
 // Note: a slot sealed by reorder (canAppend returned false on seq
 // mismatch) keeps psh=false, so this restriction does not block the
@@ -670,10 +671,9 @@ func canMergeSlots(prev, s *coalesceSlot) bool {
 }
 
 // mergeSlots folds src into dst in place: payIovs concatenated, counters
-// and totals updated, PSH and IP-level CE bits OR'd into the seed header
-// so neither the push signal nor a CE mark is lost. The seed header's
-// seq, gsoSize, and fk are unchanged. Caller is responsible for releasing
-// src (it's no longer in c.slots after this call).
+// and totals updated, PSH OR'd into the seed header so the push signal is
+// not lost. The seed header's seq, gsoSize, and fk are unchanged. Caller
+// is responsible for releasing src (it's no longer in c.slots after this call).
 func mergeSlots(dst, src *coalesceSlot) {
 	dst.payIovs = append(dst.payIovs, src.payIovs...)
 	dst.numSeg += src.numSeg
@@ -683,7 +683,6 @@ func mergeSlots(dst, src *coalesceSlot) {
 		dst.psh = true
 		dst.hdrBuf[dst.ipHdrLen+13] |= tcpFlagPsh
 	}
-	mergeECNIntoSeed(dst.hdrBuf[:dst.ipHdrLen], src.hdrBuf[:src.ipHdrLen], dst.isV6)
 }
 
 // ipv4HdrChecksum computes the IPv4 header checksum over hdr (which must

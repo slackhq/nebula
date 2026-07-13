@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
@@ -62,17 +61,10 @@ var validVnetHdr = [virtio.Size]byte{unix.VIRTIO_NET_HDR_F_DATA_VALID}
 type Offload struct {
 	fd         int
 	shutdownFd int
-	readPoll   [2]unix.PollFd
-	writePoll  [2]unix.PollFd
-	// writeLock serializes blockOnWrite's read+clear of writePoll[*].Revents.
-	// Any goroutine that calls Write may end up parked in poll(2); without
-	// the lock concurrent waiters could race the Revents reset and lose
-	// events.
-	writeLock sync.Mutex
-	closed    atomic.Bool
-	rxBuf     []byte   // backing store for kernel-handed packets read this drain
-	rxOff     int      // cursor into rxBuf for the current Read drain
-	pending   []Packet // packets returned from the most recent Read
+	closed     atomic.Bool
+	rxBuf      []byte   // backing store for kernel-handed packets read this drain
+	rxOff      int      // cursor into rxBuf for the current Read drain
+	pending    []Packet // packets returned from the most recent Read
 
 	// readVnetScratch holds the 10-byte virtio_net_hdr split off the front of
 	// every TUN read via readv(2). Decoupling the header from the packet body
@@ -109,15 +101,6 @@ func newOffload(fd int, shutdownFd int, usoEnabled bool) (*Offload, error) {
 		shutdownFd: shutdownFd,
 		usoEnabled: usoEnabled,
 		closed:     atomic.Bool{},
-		readPoll: [2]unix.PollFd{
-			{Fd: int32(fd), Events: unix.POLLIN},
-			{Fd: int32(shutdownFd), Events: unix.POLLIN},
-		},
-		writePoll: [2]unix.PollFd{
-			{Fd: int32(fd), Events: unix.POLLOUT},
-			{Fd: int32(shutdownFd), Events: unix.POLLIN},
-		},
-		writeLock: sync.Mutex{},
 
 		rxBuf:   make([]byte, tunRxBufCap),
 		gsoIovs: make([]unix.Iovec, 2, gsoMaxIovs),
@@ -135,57 +118,11 @@ func newOffload(fd int, shutdownFd int, usoEnabled bool) (*Offload, error) {
 }
 
 func (r *Offload) blockOnRead() error {
-	const problemFlags = unix.POLLHUP | unix.POLLNVAL | unix.POLLERR
-	var err error
-	for {
-		_, err = unix.Poll(r.readPoll[:], -1)
-		if err != unix.EINTR {
-			break
-		}
-	}
-	//always reset these!
-	tunEvents := r.readPoll[0].Revents
-	shutdownEvents := r.readPoll[1].Revents
-	r.readPoll[0].Revents = 0
-	r.readPoll[1].Revents = 0
-	//do the err check before trusting the potentially bogus bits we just got
-	if err != nil {
-		return err
-	}
-	if shutdownEvents&(unix.POLLIN|problemFlags) != 0 {
-		return os.ErrClosed
-	} else if tunEvents&problemFlags != 0 {
-		return os.ErrClosed
-	}
-	return nil
+	return blockOn(int32(r.fd), int32(r.shutdownFd), unix.POLLIN)
 }
 
 func (r *Offload) blockOnWrite() error {
-	const problemFlags = unix.POLLHUP | unix.POLLNVAL | unix.POLLERR
-	var err error
-	for {
-		_, err = unix.Poll(r.writePoll[:], -1)
-		if err != unix.EINTR {
-			break
-		}
-	}
-	//always reset these!
-	r.writeLock.Lock()
-	tunEvents := r.writePoll[0].Revents
-	shutdownEvents := r.writePoll[1].Revents
-	r.writePoll[0].Revents = 0
-	r.writePoll[1].Revents = 0
-	r.writeLock.Unlock()
-	//do the err check before trusting the potentially bogus bits we just got
-	if err != nil {
-		return err
-	}
-	if shutdownEvents&(unix.POLLIN|problemFlags) != 0 {
-		return os.ErrClosed
-	} else if tunEvents&problemFlags != 0 {
-		return os.ErrClosed
-	}
-	return nil
+	return blockOn(int32(r.fd), int32(r.shutdownFd), unix.POLLOUT)
 }
 
 // readPacket issues a single readv(2) splitting the virtio_net_hdr off
