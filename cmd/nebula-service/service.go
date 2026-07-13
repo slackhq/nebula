@@ -45,13 +45,14 @@ func (p *program) Start(s service.Service) error {
 		return err
 	}
 
-	if err := p.control.Start(); err != nil {
+	wait, err := p.control.Start()
+	if err != nil {
 		return err
 	}
 
 	// Nebula can stop itself on a fatal packet reader error, make sure to log it if it happens.
 	go func() {
-		if err := p.control.Wait(); err != nil {
+		if err := wait(); err != nil {
 			logger.Error(fmt.Sprintf("Nebula stopped due to fatal error: %v", err))
 			os.Exit(2)
 		}
