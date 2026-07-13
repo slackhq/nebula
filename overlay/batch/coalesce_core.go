@@ -93,8 +93,11 @@ func parseIPPrologue(pkt []byte, wantProto byte) (parsedIP, bool) {
 
 // ipHeadersMatch compares the IP portion of two packet header prefixes for
 // byte-for-byte equality on every field that must be identical across
-// coalesced segments. Size/IPID/IPCsum and the 2-bit IP-level ECN field are
-// masked out — the appendPayload step merges CE into the seed.
+// coalesced segments. Size/IPID/IPCsum are masked out. The full DSCP/ECN
+// byte (IPv4 ToS / IPv6 traffic class) is compared, matching Linux kernel
+// GRO: segments with differing ECN codepoints must not coalesce, otherwise
+// ORing e.g. ECT(0) with ECT(1) would fabricate a false CE (congestion)
+// mark or mark a Not-ECT flow as ECN-capable.
 //
 // The transport (L4) portion of the header is checked separately by the
 // per-protocol matcher.
@@ -102,11 +105,11 @@ func ipHeadersMatch(a, b []byte, isV6 bool) bool {
 	if isV6 {
 		// IPv6: byte 0 = version/TC[7:4], byte 1 = TC[3:0]/flow[19:16],
 		// bytes [2:4] = flow[15:0], [6:8] = next_hdr/hop, [8:40] = src+dst.
-		// ECN lives in TC[1:0] = byte 1 mask 0x30. Skip [4:6] payload_len.
+		// Compare byte 1 fully so ECN (TC[1:0]) must match. Skip [4:6] payload_len.
 		if a[0] != b[0] {
 			return false
 		}
-		if a[1]&^0x30 != b[1]&^0x30 {
+		if a[1] != b[1] {
 			return false
 		}
 		if !bytes.Equal(a[2:4], b[2:4]) {
@@ -119,11 +122,12 @@ func ipHeadersMatch(a, b []byte, isV6 bool) bool {
 	}
 	// IPv4: byte 0 = version/IHL, byte 1 = DSCP(6)|ECN(2),
 	// [6:10] flags/fragoff/TTL/proto, [12:20] src+dst.
+	// Compare byte 1 fully so ECN must match.
 	// Skip [2:4] total len, [4:6] id, [10:12] csum.
 	if a[0] != b[0] {
 		return false
 	}
-	if a[1]&^0x03 != b[1]&^0x03 {
+	if a[1] != b[1] {
 		return false
 	}
 	if !bytes.Equal(a[6:10], b[6:10]) {
@@ -133,19 +137,6 @@ func ipHeadersMatch(a, b []byte, isV6 bool) bool {
 		return false
 	}
 	return true
-}
-
-// mergeECNIntoSeed ORs the 2-bit IP-level ECN field of pkt's IP header
-// onto the seed's IP header, so a CE mark on any coalesced segment
-// propagates to the final superpacket. (CE is 0b11; ORing yields CE if
-// any segment carried it.) Used by both TCP and UDP coalescers, so the
-// invariant lives in one place.
-func mergeECNIntoSeed(seedHdr, pktHdr []byte, isV6 bool) {
-	if isV6 {
-		seedHdr[1] |= pktHdr[1] & 0x30
-	} else {
-		seedHdr[1] |= pktHdr[1] & 0x03
-	}
 }
 
 // Arena is an injectable byte-slab that hands out non-overlapping borrowed
