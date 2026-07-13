@@ -37,7 +37,16 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	}
 
 	//todo no merge
-	go http.ListenAndServe(":6060", nil)
+	pprofServer := &http.Server{Addr: ":6060", Handler: nil}
+	go func() {
+		pprofServer.ListenAndServe()
+	}()
+
+	// Shut down the server when context is cancelled
+	go func() {
+		<-ctx.Done()
+		pprofServer.Shutdown(context.Background())
+	}()
 
 	// Print the config if in test, the exit comes later
 	if configTest {
