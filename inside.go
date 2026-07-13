@@ -87,7 +87,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 }
 
 func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
-	if !f.firewall.InSendReject {
+	if !f.firewall.OutboundSendReject {
 		return
 	}
 
@@ -103,7 +103,7 @@ func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
 }
 
 func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *HostInfo, nb, out []byte, q int) {
-	if !f.firewall.OutSendReject {
+	if !f.firewall.InboundSendReject {
 		return
 	}
 

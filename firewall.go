@@ -44,8 +44,8 @@ type Firewall struct {
 	InRules  *FirewallTable
 	OutRules *FirewallTable
 
-	InSendReject  bool
-	OutSendReject bool
+	InboundSendReject  bool
+	OutboundSendReject bool
 
 	//TODO: we should have many more options for TCP, an option for ICMP, and mimic the kernel a bit better
 	// https://www.kernel.org/doc/Documentation/networking/nf_conntrack-sysctl.txt
@@ -216,23 +216,23 @@ func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewal
 	inboundAction := c.GetString("firewall.inbound_action", "drop")
 	switch inboundAction {
 	case "reject":
-		fw.InSendReject = true
+		fw.InboundSendReject = true
 	case "drop":
-		fw.InSendReject = false
+		fw.InboundSendReject = false
 	default:
 		l.Warn("invalid firewall.inbound_action, defaulting to `drop`", "action", inboundAction)
-		fw.InSendReject = false
+		fw.InboundSendReject = false
 	}
 
 	outboundAction := c.GetString("firewall.outbound_action", "drop")
 	switch outboundAction {
 	case "reject":
-		fw.OutSendReject = true
+		fw.OutboundSendReject = true
 	case "drop":
-		fw.OutSendReject = false
+		fw.OutboundSendReject = false
 	default:
 		l.Warn("invalid firewall.outbound_action, defaulting to `drop`", "action", outboundAction)
-		fw.OutSendReject = false
+		fw.OutboundSendReject = false
 	}
 
 	err := AddFirewallRulesFromConfig(l, false, c, fw)
