@@ -522,6 +522,11 @@ func (f *Interface) SendVia(via *HostInfo,
 	nocopy bool,
 ) {
 	toSend, err := f.prepareSendVia(via, relay, ad, nb, out, nocopy)
+	if err != nil {
+		// already logged by prepareSendVia
+		return
+	}
+
 	err = f.writers[0].WriteTo(toSend, via.GetRemote())
 	if err != nil {
 		via.logger(f.l).Info("Failed to WriteTo in sendVia", "error", err)
