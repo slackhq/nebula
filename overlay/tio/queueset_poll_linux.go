@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"golang.org/x/sys/unix"
 )
@@ -16,6 +17,7 @@ type pollQueueSet struct {
 	// pqi is exactly the same as pq, but stored as the interface type
 	pqi        []Queue
 	shutdownFd int
+	closed     atomic.Bool
 }
 
 func NewPollQueueSet() (QueueSet, error) {
@@ -56,17 +58,33 @@ func (c *pollQueueSet) wakeForShutdown() error {
 }
 
 func (c *pollQueueSet) Close() error {
+	if c.closed.Swap(true) {
+		return nil
+	}
+
 	errs := []error{}
 
+	// Wake any reader blocked in poll so it observes POLLIN on the shutdown
+	// eventfd and returns os.ErrClosed.
 	if err := c.wakeForShutdown(); err != nil {
 		errs = append(errs, err)
 	}
 
+	// Close the per-queue tun fds; this also unblocks any in-flight reads.
+	// The per-queue Close deliberately leaves shutdownFd alone - it belongs
+	// to this container.
 	for _, x := range c.pq {
 		if err := x.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
+
+	// Close the shutdown eventfd last: every reader's pollfd set references
+	// it, so it must outlive the wake + per-queue teardown above.
+	if err := unix.Close(c.shutdownFd); err != nil {
+		errs = append(errs, err)
+	}
+	c.shutdownFd = -1
 
 	return errors.Join(errs...)
 }

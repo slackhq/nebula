@@ -161,6 +161,10 @@ func (u *StdConn) prepareWriteMessages(n int) {
 	u.writeCmsgSpace = u.writeCmsgSegSpace + u.writeCmsgEcnSpace
 	u.writeCmsg = make([]byte, n*u.writeCmsgSpace)
 
+	// Default the ECN header to the socket's own family. writeEntryCmsg
+	// finalizes Level/Type per entry from the destination address (a v4-mapped
+	// dst on a dual-stack v6 socket needs IP_TOS, not IPV6_TCLASS), so this is
+	// only the value used before the first per-entry rewrite.
 	ecnLevel := int32(unix.IPPROTO_IP)
 	ecnType := int32(unix.IP_TOS)
 	if !u.isV4 {
@@ -219,14 +223,27 @@ func (u *StdConn) prepareGSO() {
 		recordCapability("udp.gso.enabled", false)
 		return
 	}
-	major, minor := parseRelease(string(un.Release[:]))
-	if major > 5 || (major == 5 && minor >= 5) {
-		u.maxGSOSegments = 127
-	}
+	u.maxGSOSegments = gsoMaxSegments(string(un.Release[:]))
 
 	u.gsoSupported = true
 	u.l.Info("udp: GSO enabled", "maxGSOSegments", u.maxGSOSegments)
 	recordCapability("udp.gso.enabled", true)
+}
+
+// gsoMaxSegments returns the largest number of UDP_SEGMENT segments a single
+// sendmsg may carry on the running kernel, reserving one segment for the
+// header. UDP_MAX_SEGMENTS was 64 until Linux v6.9 (commit 1382e3b6a350,
+// "udp: change maximum number of UDP segments to 128") raised it to 128;
+// nothing about this changed in 5.5. On kernels older than 6.9 packing more
+// than 64 segments gets the sendmsg rejected with EINVAL, so cap at 63 there
+// and only use 127 from 6.9 on. (Maintainer stance: update your kernel if you
+// want to go fast — this is a plain version gate, not a runtime probe.)
+func gsoMaxSegments(release string) int {
+	major, minor := parseRelease(release)
+	if major > 6 || (major == 6 && minor >= 9) {
+		return 127
+	}
+	return 63
 }
 
 // udpGROBufferSize sizes the per-entry recvmmsg buffer when UDP_GRO is on.
@@ -469,7 +486,7 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 			segSize := 0
 			outerECN := byte(0)
 			if cmsgSpace > 0 {
-				segSize, outerECN = parseRecvCmsg(&msgs[i].Hdr, u.groSupported, u.ecnRecvSupported, u.isV4)
+				segSize, outerECN = parseRecvCmsg(&msgs[i].Hdr, u.groSupported, u.ecnRecvSupported)
 			}
 
 			if segSize <= 0 || segSize >= len(payload) {
@@ -503,9 +520,14 @@ func headerCounter(buf []byte) uint64 {
 // two values of interest in a single pass: the UDP_GRO gso_size (when
 // wantGRO is true) and the outer IP-level ECN codepoint stamped on the
 // carrier (when wantECN is true). Returns zeros for whichever field is not
-// requested or not present. isV4 selects between IP_TOS (1-byte) and
-// IPV6_TCLASS (4-byte int) cmsg payloads.
-func parseRecvCmsg(hdr *msghdr, wantGRO, wantECN bool, isV4 bool) (gso int, ecn byte) {
+// requested or not present.
+//
+// The outer ECN is accepted from EITHER an IP_TOS (IPPROTO_IP, 1-byte) or an
+// IPV6_TCLASS (IPPROTO_IPV6, 4-byte int) cmsg, regardless of the socket's
+// family: a dual-stack v6 socket (isV4 == false) delivers IPv4 peers' outer
+// ECN as an IP_TOS cmsg — gating on socket family here dropped v4-underlay
+// ECN entirely. Whichever cmsg the kernel delivered carries the value.
+func parseRecvCmsg(hdr *msghdr, wantGRO, wantECN bool) (gso int, ecn byte) {
 	controllen := int(hdr.Controllen)
 	if controllen < unix.SizeofCmsghdr || hdr.Control == nil {
 		return 0, 0
@@ -524,12 +546,13 @@ func parseRecvCmsg(hdr *msghdr, wantGRO, wantECN bool, isV4 bool) (gso int, ecn 
 			if dataOff+udpGROCmsgPayload <= len(ctrl) {
 				gso = int(int32(binary.NativeEndian.Uint32(ctrl[dataOff : dataOff+udpGROCmsgPayload])))
 			}
-		case wantECN && isV4 && ch.Level == unix.IPPROTO_IP && ch.Type == unix.IP_TOS:
+		case wantECN && ch.Level == unix.IPPROTO_IP && ch.Type == unix.IP_TOS:
 			// IP_TOS arrives as a single byte; only the low 2 bits are ECN.
+			// A dual-stack v6 socket carries v4 peers' outer ECN here.
 			if dataOff+1 <= len(ctrl) {
 				ecn = ctrl[dataOff] & 0x03
 			}
-		case wantECN && !isV4 && ch.Level == unix.IPPROTO_IPV6 && ch.Type == unix.IPV6_TCLASS:
+		case wantECN && ch.Level == unix.IPPROTO_IPV6 && ch.Type == unix.IPV6_TCLASS:
 			// IPV6_TCLASS arrives as a 4-byte int; ECN is the low 2 bits.
 			if dataOff+4 <= len(ctrl) {
 				ecn = byte(binary.NativeEndian.Uint32(ctrl[dataOff:dataOff+4])) & 0x03
@@ -623,6 +646,7 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte)
 	// providing no observed reordering benefit.
 
 	i := 0
+sendChunks:
 	for i < len(bufs) {
 		baseI := i
 		entry := 0
@@ -650,7 +674,24 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte)
 
 			nlen, err := writeSockaddr(u.writeNames[entry], addrs[i], u.isV4)
 			if err != nil {
-				return err
+				// One destination in this chunk has an address family the
+				// socket can't send to (e.g. an IPv6 remote on a v4-bound
+				// socket → ErrInvalidIPv6RemoteForSocket). Abandoning the whole
+				// sendmmsg here would drop every packet already packed for this
+				// chunk plus every packet still ahead of us in bufs. Instead
+				// fall back to per-packet WriteTo for the packets packed so far
+				// in this chunk and the offending one: WriteTo delivers each
+				// good destination and only errors on the bad one, which we
+				// drop and keep going. One bad destination costs one packet,
+				// never the batch. (Same fallback the zero-sent sendmmsg path
+				// below uses, extended to cover the misaddressed packet.)
+				for k := baseI; k <= i; k++ {
+					if werr := u.WriteTo(bufs[k], addrs[k]); werr != nil && k != i {
+						return werr
+					}
+				}
+				i++
+				continue sendChunks
 			}
 
 			hdr := &u.writeMsgs[entry].Hdr
@@ -662,7 +703,11 @@ func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte)
 			if ecns != nil {
 				ecn = ecns[i]
 			}
-			u.writeEntryCmsg(entry, runLen, segSize, ecn)
+			// ECN cmsg family follows the destination, not the socket: a
+			// v4-mapped dst on a dual-stack v6 socket must be stamped via
+			// IP_TOS. addrs[i] is this run's destination (i advances below).
+			dstIsV4 := addrs[i].Addr().Unmap().Is4()
+			u.writeEntryCmsg(entry, runLen, segSize, ecn, dstIsV4)
 
 			i += runLen
 			iovIdx += runLen
@@ -779,7 +824,15 @@ func (u *StdConn) planRun(bufs [][]byte, addrs []netip.AddrPort, ecns []byte, st
 // entry. It writes the UDP_SEGMENT payload when runLen >= 2 and the
 // IP_TOS/IPV6_TCLASS payload when ecn != 0, then points hdr.Control at the
 // smallest contiguous span that covers whichever cmsg(s) actually apply.
-func (u *StdConn) writeEntryCmsg(entry, runLen, segSize int, ecn byte) {
+//
+// The outer-ECN cmsg family must match the *destination*, not the socket: on
+// the default dual-stack v6 bind, a v4-mapped destination is routed through
+// the kernel's IPv4 path, which parses IP_TOS (IPPROTO_IP) and ignores an
+// IPV6_TCLASS cmsg. prepareWriteMessages pre-fills a default header; here we
+// rewrite its Level/Type (and Len) per entry from dstIsV4 so v4 peers get
+// IP_TOS and v6 peers get IPV6_TCLASS. The data payload is a 4-byte int for
+// both families, so the pre-computed cmsg space is unchanged.
+func (u *StdConn) writeEntryCmsg(entry, runLen, segSize int, ecn byte, dstIsV4 bool) {
 	hdr := &u.writeMsgs[entry].Hdr
 	useSeg := runLen >= 2
 	useEcn := ecn != 0
@@ -790,6 +843,15 @@ func (u *StdConn) writeEntryCmsg(entry, runLen, segSize int, ecn byte) {
 		binary.NativeEndian.PutUint16(u.writeCmsg[dataOff:dataOff+2], uint16(segSize))
 	}
 	if useEcn {
+		ecnHdr := (*unix.Cmsghdr)(unsafe.Pointer(&u.writeCmsg[base+u.writeCmsgSegSpace]))
+		if dstIsV4 {
+			ecnHdr.Level = int32(unix.IPPROTO_IP)
+			ecnHdr.Type = int32(unix.IP_TOS)
+		} else {
+			ecnHdr.Level = int32(unix.IPPROTO_IPV6)
+			ecnHdr.Type = int32(unix.IPV6_TCLASS)
+		}
+		setCmsgLen(ecnHdr, unix.CmsgLen(4))
 		dataOff := base + u.writeCmsgSegSpace + unix.CmsgLen(0)
 		binary.NativeEndian.PutUint32(u.writeCmsg[dataOff:dataOff+4], uint32(ecn))
 	}

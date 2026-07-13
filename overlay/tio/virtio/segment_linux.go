@@ -27,6 +27,13 @@ const (
 	tcpHeaderMaxLen  = 60 // data-offset=15, max options
 )
 
+// maxSegHdrLen bounds the L3+L4 header we snapshot before stamping each
+// segment. The largest header the segmenter supports is IPv4 (max IHL 60)
+// plus TCP (max data-offset 60) = 120 bytes; the array is sized to that
+// worst case so the snapshot lives on the stack with no per-call heap
+// allocation.
+const maxSegHdrLen = ipv4HeaderMaxLen + tcpHeaderMaxLen // 120
+
 // Byte offsets inside an IPv4 header.
 const (
 	ipv4TotalLenOff = 2
@@ -144,13 +151,18 @@ func CorrectHdrLen(pkt []byte, hdr *Hdr) error {
 }
 
 // SegmentTCP walks a TSO superpacket pkt, yielding each segment as a
-// slice into pkt itself. Per-segment plaintext is laid out by sliding a
-// freshly-patched copy of the L3+L4 header into pkt at offset i*gsoSize,
-// where it sits immediately before that segment's payload chunk in the
-// original buffer. The slide is destructive: iter i's header write overwrites
-// the last hdrLen bytes of seg_{i-1}'s payload, which is dead by the time
-// the next iteration begins. pkt is consumed by this call and must not be
-// inspected by the caller after the final yield.
+// slice into pkt itself. Per-segment plaintext is laid out by stamping a
+// copy of the original L3+L4 header into pkt at offset i*gsoSize, where it
+// sits immediately before that segment's payload chunk in the original
+// buffer. The stamp is destructive but harmless: iter i's header write lands
+// on pkt[i*G : i*G+hdrLen], which is the tail of seg_{i-1}'s payload (already
+// consumed) and ends exactly where seg_i's payload begins, so it never clobbers
+// live payload — this holds even when gsoSize < hdrLen. The header bytes are
+// sourced from a pristine snapshot taken before the loop (savedHdr), NOT from
+// pkt[:hdrLen], because when gsoSize < hdrLen the stamps would otherwise
+// overwrite the leading header in place and every stamp after the first would
+// copy corrupted bytes. pkt is consumed by this call and must not be inspected
+// by the caller after the final yield.
 func SegmentTCP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg []byte) error) error {
 	if gsoSizeU == 0 {
 		return fmt.Errorf("gso_size is zero")
@@ -161,6 +173,9 @@ func SegmentTCP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg
 
 	headerLen := int(hdrLenU)
 	csumStart := int(csumStartU)
+	if headerLen > maxSegHdrLen {
+		return fmt.Errorf("header len %d exceeds max %d", headerLen, maxSegHdrLen)
+	}
 	isV4 := pkt[0]>>4 == 4
 
 	tcpHdrLen := int(pkt[csumStart+tcpDataOffOff]>>4) * 4
@@ -205,6 +220,13 @@ func SegmentTCP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg
 		baseIPHdrSum = uint32(checksum.Checksum(ipTmp[:ihl], 0))
 	}
 
+	// Snapshot the pristine L3+L4 header once. Every segment's header is
+	// stamped from this copy, so overlapping stamps (gsoSize < headerLen)
+	// can never corrupt the source. The variable fields (seq/flags/cksum/
+	// totalLen/id) captured here are stale but are overwritten per segment.
+	var savedHdr [maxSegHdrLen]byte
+	copy(savedHdr[:headerLen], pkt[:headerLen])
+
 	for i := 0; i < numSeg; i++ {
 		segStart := i * gsoSize
 		segEnd := segStart + gsoSize
@@ -215,14 +237,13 @@ func SegmentTCP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg
 		segLen := headerLen + segPayLen
 		headerOff := i * gsoSize
 
-		// Slide the header into place immediately before this segment's
-		// payload. Iter 0's header is already at pkt[:headerLen]; for
-		// i ≥ 1 we copy from there. The constant-byte fields of pkt[:headerLen]
-		// survive iter 0's in-place patches (only seq/flags/cksum/totalLen/id
-		// are touched), and iter 0's stale variable-field values are
-		// overwritten by the per-segment patches below.
+		// Stamp the header into place immediately before this segment's
+		// payload, sourced from the pristine snapshot. Iter 0's header is
+		// already at pkt[:headerLen] (identical to savedHdr), so only i ≥ 1
+		// needs the stamp. The per-segment patches below overwrite the
+		// variable fields.
 		if i > 0 {
-			copy(pkt[headerOff:headerOff+headerLen], pkt[:headerLen])
+			copy(pkt[headerOff:headerOff+headerLen], savedHdr[:headerLen])
 		}
 		seg := pkt[headerOff : headerOff+segLen]
 
@@ -269,11 +290,13 @@ func SegmentTCP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg
 	return nil
 }
 
-// SegmentUDP walks a USO superpacket, sliding a per-segment-patched
-// L3+L4 header into pkt at offset i*gsoSize and yielding pkt[i*G:i*G+segLen]
-// to the caller. Per-segment patches are total_len + IPv4 csum (or IPv6
-// payload_len) plus the UDP length and checksum. pkt is consumed
-// destructively; see SegmentTCP for the layout reasoning.
+// SegmentUDP walks a USO superpacket, stamping a per-segment-patched copy of
+// the original L3+L4 header into pkt at offset i*gsoSize and yielding
+// pkt[i*G:i*G+segLen] to the caller. Per-segment patches are total_len +
+// IPv4 csum (or IPv6 payload_len) plus the UDP length and checksum. pkt is
+// consumed destructively; see SegmentTCP for the layout reasoning, including
+// why the header is stamped from a pristine snapshot rather than pkt[:hdrLen]
+// (correctness when gsoSize < hdrLen).
 //
 // UDP-GSO leaves the IPv4 ID identical across segments (the kernel does not
 // bump it), which is why the IP-level per-segment work is limited to
@@ -289,6 +312,9 @@ func SegmentUDP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg
 	isV4 := pkt[0]>>4 == 4
 	headerLen := int(hdrLenU)
 	csumStart := int(csumStartU)
+	if headerLen > maxSegHdrLen {
+		return fmt.Errorf("header len %d exceeds max %d", headerLen, maxSegHdrLen)
+	}
 	if headerLen-csumStart != udpHeaderLen {
 		return fmt.Errorf("udp header len mismatch: %d", headerLen-csumStart)
 	}
@@ -327,6 +353,12 @@ func SegmentUDP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg
 		baseIPHdrSum = uint32(checksum.Checksum(ipTmp[:ihl], 0))
 	}
 
+	// Snapshot the pristine L3+L4 header once and stamp every segment from
+	// it; see SegmentTCP for why sourcing from pkt[:headerLen] corrupts
+	// segments when gsoSize < headerLen.
+	var savedHdr [maxSegHdrLen]byte
+	copy(savedHdr[:headerLen], pkt[:headerLen])
+
 	for i := 0; i < numSeg; i++ {
 		segStart := i * gsoSize
 		segEnd := segStart + gsoSize
@@ -338,7 +370,7 @@ func SegmentUDP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg
 		headerOff := i * gsoSize
 
 		if i > 0 {
-			copy(pkt[headerOff:headerOff+headerLen], pkt[:headerLen])
+			copy(pkt[headerOff:headerOff+headerLen], savedHdr[:headerLen])
 		}
 		seg := pkt[headerOff : headerOff+segLen]
 
