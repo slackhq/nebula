@@ -28,9 +28,12 @@ const tunRxBufSize = 64 * 1024
 // tunRxBufCap is the total size we allocate for the per-reader rx
 // buffer. With reads landing directly in rxBuf, each drain iteration
 // consumes up to tunRxBufSize of headroom for the kernel-supplied bytes.
-// Sized to two such iterations so the initial blocking read plus one
-// drain read both fit without partial-drop.
-const tunRxBufCap = tunRxBufSize * 2
+// Sized to eight such iterations so a single poll wake can drain several
+// TSO/USO superpackets under bulk load, amortizing the wake and giving
+// the sendmmsg planner longer same-destination runs. Hold latency stays
+// bounded because listenIn flushes its send batch incrementally rather
+// than only at end-of-drain.
+const tunRxBufCap = tunRxBufSize * 8
 
 // tunDrainCap caps how many packets a single Read will accumulate via
 // the post-wake drain loop. Sized to soak up a burst of small ACKs while

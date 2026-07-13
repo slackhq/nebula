@@ -435,6 +435,14 @@ func (f *Interface) listenIn(reader tio.Queue, i int) {
 
 		for _, pkt := range pkts {
 			f.consumeInsidePacket(pkt, fwPacket, nb, sb, rejectBuf, i, conntrackCache.Get())
+			// Flush incrementally once a full sendmmsg batch has
+			// accumulated so the first packets of a deep read drain
+			// hit the wire while the rest are still being encrypted.
+			if sb.Len() >= batch.SendBatchCap {
+				if err := sb.Flush(); err != nil {
+					f.l.Error("Failed to write outgoing batch", "error", err, "writer", i)
+				}
+			}
 		}
 		if err := sb.Flush(); err != nil {
 			f.l.Error("Failed to write outgoing batch", "error", err, "writer", i)
