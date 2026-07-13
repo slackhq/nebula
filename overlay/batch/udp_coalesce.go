@@ -257,8 +257,6 @@ func (c *UDPCoalescer) appendPayload(s *udpSlot, pkt []byte, info parsedUDP) {
 	s.payIovs = append(s.payIovs, pkt[info.hdrLen:info.hdrLen+info.payLen])
 	s.numSeg++
 	s.totalPay += info.payLen
-	// Merge IP-level CE marks into the seed (same trick TCP coalescer uses).
-	mergeECNIntoSeed(s.hdrBuf[:s.ipHdrLen], pkt[:s.ipHdrLen], s.isV6)
 	if info.payLen < s.gsoSize {
 		// Last-segment-can-be-shorter: this seals the chain.
 		s.sealed = true
@@ -329,8 +327,9 @@ func (c *UDPCoalescer) flushSlot(s *udpSlot) error {
 
 // udpHeadersMatch compares two IP+UDP header prefixes for byte-equality on
 // every field that must be identical across coalesced segments. Length
-// fields and the ECN bits in IP TOS/TC are masked out — appendPayload
-// merges CE into the seed; flushSlot rewrites lengths.
+// fields are masked out (flushSlot rewrites them), but the IP-level ECN
+// codepoint is compared (via ipHeadersMatch) so segments with differing ECN
+// don't coalesce, matching kernel GRO.
 func udpHeadersMatch(a, b []byte, isV6 bool, ipHdrLen int) bool {
 	if len(a) != len(b) {
 		return false

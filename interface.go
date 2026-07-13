@@ -56,8 +56,13 @@ type InterfaceConfig struct {
 	// CpuAffinity, when non-empty, names the CPUs each TUN reader goroutine
 	// should pin to. Queue i pins to CpuAffinity[i % len(CpuAffinity)] —
 	// shorter lists than `routines` cycle. Empty list keeps the default
-	// pin-to-(i % NumCPU) behavior.
+	// pin-to-(i % NumCPU) behavior. Only consulted when PinThreads is true.
 	CpuAffinity []int
+	// PinThreads controls whether each TUN reader OS thread is pinned to a
+	// single CPU (via tun.pin_threads, default true). Pinning keeps each
+	// goroutine's sendmmsg on one XPS-selected NIC TX ring so per-flow
+	// packets stay ordered on the wire.
+	PinThreads bool
 
 	l *slog.Logger
 }
@@ -85,8 +90,13 @@ type Interface struct {
 	closed                atomic.Bool
 	// cpuAffinity, when non-empty, names the CPUs each TUN reader goroutine
 	// should pin to. Queue i pins to cpuAffinity[i % len(cpuAffinity)].
-	// Empty falls back to the default pin-to-(i % NumCPU) behavior.
+	// Empty falls back to the default pin-to-(allowed CPU) behavior.
+	// Only consulted when pinThreads is true.
 	cpuAffinity []int
+	// pinThreads controls whether listenIn pins each TUN reader OS thread to
+	// a CPU at all (tun.pin_threads, default true). When false, threads are
+	// left free to migrate as on stock nebula.
+	pinThreads bool
 	// ecnEnabled gates RFC 6040 underlay ECN propagation. When true,
 	// inside.go copies the inner ECN onto the outer carrier on encap and
 	// decryptToTun folds outer CE into the inner header on decap. Toggle
@@ -223,6 +233,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		connectionManager:     c.connectionManager,
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
 		cpuAffinity:           c.CpuAffinity,
+		pinThreads:            c.PinThreads,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -383,13 +394,24 @@ func (f *Interface) listenOut(i int) {
 
 func (f *Interface) listenIn(reader tio.Queue, i int) {
 	// Pinning this thread (and goroutine) to a single CPU keeps every sendmmsg from this goroutine going through the
-	// same TX ring on the nic, so the wire sees per-flow order.
-	cpu := i % runtime.NumCPU()
-	if n := len(f.cpuAffinity); n > 0 {
-		cpu = f.cpuAffinity[i%n]
-	}
-	if err := util.PinThreadToCPU(cpu); err != nil {
-		f.l.Warn("failed to pin tun reader to CPU", "queue", i, "cpu", cpu, "err", err)
+	// same TX ring on the nic, so the wire sees per-flow order. Skip entirely when tun.pin_threads is false.
+	if f.pinThreads {
+		var cpu int
+		if n := len(f.cpuAffinity); n > 0 {
+			// Explicit tun.cpu_affinity list wins; parseCpuAffinity already
+			// validated the entries against the allowed CPU set.
+			cpu = f.cpuAffinity[i%n]
+		} else if allowed, err := util.AllowedCPUs(); err == nil && len(allowed) > 0 {
+			// Default: spread queues across the CPUs we're actually allowed to
+			// run on. Under a cpuset/taskset mask these aren't 0..NumCPU-1, so
+			// i % NumCPU would pick unrunnable IDs and every pin would fail.
+			cpu = allowed[i%len(allowed)]
+		} else {
+			cpu = i % runtime.NumCPU()
+		}
+		if err := util.PinThreadToCPU(cpu); err != nil {
+			f.l.Warn("failed to pin tun reader to CPU", "queue", i, "cpu", cpu, "err", err)
+		}
 	}
 
 	rejectBuf := make([]byte, mtu)
@@ -568,9 +590,12 @@ func (f *Interface) reloadEcn(c *config.C) {
 	initial := c.InitialLoad()
 	if initial || c.HasChanged("tunnels.ecn") {
 		v := c.GetBool("tunnels.ecn", true)
-		f.ecnEnabled.Store(v)
+		changed := f.ecnEnabled.Swap(v) != v
 		if !initial {
 			f.l.Info("tunnels.ecn changed", "enabled", v)
+			if changed {
+				f.l.Warn("tunnels.ecn datapath toggled, but route-level ECN negotiation (RTAX_FEATURE_ECN) retains its previous state until nebula is restarted", "enabled", v)
+			}
 		}
 	}
 }

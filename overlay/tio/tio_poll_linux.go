@@ -17,11 +17,9 @@ import (
 const tunReadBufSize = 65535
 
 type Poll struct {
-	fd int
-
-	readPoll  [2]unix.PollFd
-	writePoll [2]unix.PollFd
-	closed    atomic.Bool
+	fd         int
+	shutdownFd int
+	closed     atomic.Bool
 
 	readBuf  []byte
 	batchRet [1]Packet
@@ -37,16 +35,9 @@ func newPoll(fd int, shutdownFd int) (*Poll, error) {
 	}
 
 	out := &Poll{
-		fd:      fd,
-		readBuf: make([]byte, tunReadBufSize),
-		readPoll: [2]unix.PollFd{
-			{Fd: int32(fd), Events: unix.POLLIN},
-			{Fd: int32(shutdownFd), Events: unix.POLLIN},
-		},
-		writePoll: [2]unix.PollFd{
-			{Fd: int32(fd), Events: unix.POLLOUT},
-			{Fd: int32(shutdownFd), Events: unix.POLLIN},
-		},
+		fd:         fd,
+		shutdownFd: shutdownFd,
+		readBuf:    make([]byte, tunReadBufSize),
 	}
 	return out, nil
 }
@@ -54,53 +45,11 @@ func newPoll(fd int, shutdownFd int) (*Poll, error) {
 // blockOnRead waits until the Poll fd is readable or shutdown has been signaled.
 // Returns os.ErrClosed if Close was called.
 func (t *Poll) blockOnRead() error {
-	const problemFlags = unix.POLLHUP | unix.POLLNVAL | unix.POLLERR
-	var err error
-	for {
-		_, err = unix.Poll(t.readPoll[:], -1)
-		if err != unix.EINTR {
-			break
-		}
-	}
-	tunEvents := t.readPoll[0].Revents
-	shutdownEvents := t.readPoll[1].Revents
-	t.readPoll[0].Revents = 0
-	t.readPoll[1].Revents = 0
-	if err != nil {
-		return err
-	}
-	if shutdownEvents&(unix.POLLIN|problemFlags) != 0 {
-		return os.ErrClosed
-	}
-	if tunEvents&problemFlags != 0 {
-		return os.ErrClosed
-	}
-	return nil
+	return blockOn(int32(t.fd), int32(t.shutdownFd), unix.POLLIN)
 }
 
 func (t *Poll) blockOnWrite() error {
-	const problemFlags = unix.POLLHUP | unix.POLLNVAL | unix.POLLERR
-	var err error
-	for {
-		_, err = unix.Poll(t.writePoll[:], -1)
-		if err != unix.EINTR {
-			break
-		}
-	}
-	tunEvents := t.writePoll[0].Revents
-	shutdownEvents := t.writePoll[1].Revents
-	t.writePoll[0].Revents = 0
-	t.writePoll[1].Revents = 0
-	if err != nil {
-		return err
-	}
-	if shutdownEvents&(unix.POLLIN|problemFlags) != 0 {
-		return os.ErrClosed
-	}
-	if tunEvents&problemFlags != 0 {
-		return os.ErrClosed
-	}
-	return nil
+	return blockOn(int32(t.fd), int32(t.shutdownFd), unix.POLLOUT)
 }
 
 func (t *Poll) Read() ([]Packet, error) {
@@ -133,7 +82,7 @@ func (t *Poll) readOne(to []byte) (int, error) {
 	}
 }
 
-// Write is only valid for single threaded use
+// Write is safe for concurrent use
 func (t *Poll) Write(from []byte) (int, error) {
 	for {
 		n, errno := unix.Write(t.fd, from)

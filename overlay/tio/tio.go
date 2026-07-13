@@ -26,8 +26,9 @@ type Capabilities struct {
 	USO bool
 }
 
-// Queue is a readable/writable Poll queue. One Queue is driven by a single
-// read goroutine plus a single writer (see Write below).
+// Queue is a readable/writable Poll queue. Concurrency contract: a single
+// read goroutine drives Read; plain Write is safe for concurrent callers;
+// WriteGSO (on Queues that implement GSOWriter) is single-writer per queue.
 type Queue interface {
 	io.Closer
 
@@ -37,11 +38,12 @@ type Queue interface {
 	// or copy each slice before the next call. A Packet may carry a
 	// GSO/USO superpacket (see GSOInfo); when GSO.IsSuperpacket() is
 	// true the caller must segment Bytes before treating it as a single
-	// IP datagram. Not safe for concurrent Reads.
+	// IP datagram. Single-reader only: not safe for concurrent Reads (it
+	// reuses per-queue rx scratch each call).
 	Read() ([]Packet, error)
 
 	// Write emits a single packet on the plaintext (outside→inside)
-	// delivery path. Not safe for concurrent Writes.
+	// delivery path. Safe for concurrent use.
 	Write(p []byte) (int, error)
 }
 
