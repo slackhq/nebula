@@ -152,6 +152,17 @@ func (c *UDPCoalescer) commitParsed(pkt []byte, info parsedUDP) error {
 		c.addPassthrough(pkt)
 		return nil
 	}
+	// A zero-length UDP datagram (UDP `length` == 8) is legal and must still
+	// reach the TUN, but it can't be coalesced: a GSO slot would store an
+	// empty payload iovec and the kernel has nothing to segment. Seal any
+	// open chain for this flow (so a later, non-empty datagram seeds fresh
+	// *after* this one and per-flow arrival order is preserved) and deliver
+	// it as a plain single datagram.
+	if info.payLen == 0 {
+		delete(c.openSlots, info.fk)
+		c.addPassthrough(pkt)
+		return nil
+	}
 	if open := c.openSlots[info.fk]; open != nil {
 		if c.canAppend(open, pkt, info) {
 			c.appendPayload(open, pkt, info)
