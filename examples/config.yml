@@ -345,6 +345,7 @@ logging:
   #interval: 10s
 
   #type: prometheus
+  # listen may also be a list of "host:port" addresses to bind several listeners (e.g. this node's nebula IPs).
   #listen: 127.0.0.1:8080
   #path: /metrics
   #namespace: prometheusns

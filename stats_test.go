@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"strconv"
 	"testing"
 	"time"
@@ -357,6 +358,127 @@ func TestStatsServer_listenerBindFailure_sameCfgReloadRetries(t *testing.T) {
 	require.NotNil(t, currentRuntime(s))
 
 	s.Stop()
+}
+
+// TestStatsServer_singleListener verifies a single configured listen address
+// binds and serves through the serveListeners path.
+func TestStatsServer_singleListener(t *testing.T) {
+	port := freeTCPPort(t)
+	s, c := newTestStatsServer(t)
+	setStatsConfig(c, map[string]any{
+		"type":     "prometheus",
+		"interval": "1s",
+		"listen":   "127.0.0.1:" + port,
+		"path":     "/metrics",
+	})
+	require.NoError(t, s.reload(c, true))
+
+	done := make(chan struct{})
+	go func() {
+		s.Start()
+		close(done)
+	}()
+	waitForListening(t, "127.0.0.1:"+port)
+
+	rt := currentRuntime(s)
+	require.NotNil(t, rt)
+	require.NotNil(t, rt.listener)
+
+	s.Stop()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after Stop")
+	}
+}
+
+// TestStatsServer_serveListeners_multiBind drives the multi-listener path
+// directly: every configured address binds and answers the handler, and ctx
+// cancellation unblocks the call.
+func TestStatsServer_serveListeners_multiBind(t *testing.T) {
+	l := slog.New(slog.DiscardHandler)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &statsServer{l: l, ctx: ctx}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	})
+	srv := &http.Server{Handler: mux}
+
+	addrs := []string{reserveTCPAddr(t, "127.0.0.1")}
+	if v6, ok := tryReserveTCPAddr(t, "[::1]"); ok {
+		addrs = append(addrs, v6)
+	}
+
+	result := make(chan bool, 1)
+	go func() { result <- s.serveListeners(srv, addrs) }()
+
+	for _, a := range addrs {
+		waitForListening(t, a)
+		resp, err := http.Get("http://" + a + "/metrics")
+		require.NoError(t, err)
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		assert.Equal(t, "ok", string(body))
+	}
+
+	cancel()
+	select {
+	case clean := <-result:
+		assert.True(t, clean, "serveListeners should report a clean exit on ctx cancel")
+	case <-time.After(5 * time.Second):
+		t.Fatal("serveListeners did not return after ctx cancel")
+	}
+}
+
+// TestStatsServer_serveListeners_partialBindFailure ensures a failed bind on
+// one address closes the already-bound listeners (no leak) and reports an
+// unclean exit.
+func TestStatsServer_serveListeners_partialBindFailure(t *testing.T) {
+	l := slog.New(slog.DiscardHandler)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &statsServer{l: l, ctx: ctx}
+
+	// Hold a port so the second bind fails; the first (ephemeral) succeeds.
+	blocker, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer blocker.Close()
+	taken := blocker.Addr().String()
+
+	free := reserveTCPAddr(t, "127.0.0.1")
+
+	srv := &http.Server{Handler: http.NewServeMux()}
+	clean := s.serveListeners(srv, []string{free, taken})
+	assert.False(t, clean, "partial bind failure should be an unclean exit")
+
+	// The first listener must have been closed: its address is bindable again.
+	ln, err := net.Listen("tcp", free)
+	require.NoError(t, err, "first listener was not closed on partial bind failure")
+	require.NoError(t, ln.Close())
+}
+
+// reserveTCPAddr returns a free host:port on the given host by briefly binding
+// and releasing an ephemeral port.
+func reserveTCPAddr(t *testing.T, host string) string {
+	t.Helper()
+	addr, ok := tryReserveTCPAddr(t, host)
+	require.True(t, ok, "could not reserve a TCP address on %s", host)
+	return addr
+}
+
+func tryReserveTCPAddr(t *testing.T, host string) (string, bool) {
+	t.Helper()
+	ln, err := net.Listen("tcp", host+":0")
+	if err != nil {
+		return "", false
+	}
+	addr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+	return addr, true
 }
 
 func waitForListening(t *testing.T, addr string) {
