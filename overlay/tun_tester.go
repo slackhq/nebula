@@ -29,8 +29,6 @@ type TestTun struct {
 	closed    atomic.Bool
 	rxPackets chan []byte // Packets to receive into nebula
 	TxPackets chan []byte // Packets transmitted outside by nebula
-
-	batchRet [1]tio.Packet
 }
 
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*TestTun, error) {
@@ -51,9 +49,6 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*T
 		l:           l,
 		rxPackets:   make(chan []byte, 10),
 		TxPackets:   make(chan []byte, 10),
-		batchRet: [1]tio.Packet{
-			tio.Packet{Bytes: make([]byte, udp.MTU)},
-		},
 	}, nil
 }
 
@@ -168,17 +163,7 @@ func (t *TestTun) Close() error {
 	return nil
 }
 
-func (t *TestTun) Read() ([]tio.Packet, error) {
-	t.batchRet[0].Bytes = t.batchRet[0].Bytes[:udp.MTU]
-	n, err := t.read(t.batchRet[0].Bytes)
-	if err != nil {
-		return nil, err
-	}
-	t.batchRet[0].Bytes = t.batchRet[0].Bytes[:n]
-	return t.batchRet[:], nil
-}
-
-func (t *TestTun) read(b []byte) (int, error) {
+func (t *TestTun) Read(b []byte) (int, error) {
 	p, ok := <-t.rxPackets
 	if !ok {
 		return 0, os.ErrClosed
@@ -194,7 +179,7 @@ func (t *TestTun) read(b []byte) (int, error) {
 }
 
 func (t *TestTun) Readers() []tio.Queue {
-	return []tio.Queue{t}
+	return []tio.Queue{tio.NewSingleQueue(t, udp.MTU)}
 }
 
 func (t *TestTun) SupportsMultiqueue() bool {

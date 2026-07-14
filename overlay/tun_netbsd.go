@@ -66,22 +66,10 @@ type tun struct {
 	l           *slog.Logger
 	f           *os.File
 	fd          int
-
-	readBuf  []byte
-	batchRet [1]tio.Packet
-}
-
-func (t *tun) Read() ([]tio.Packet, error) {
-	n, err := t.readOne(t.readBuf)
-	if err != nil {
-		return nil, err
-	}
-	t.batchRet[0] = tio.Packet{Bytes: t.readBuf[:n]}
-	return t.batchRet[:], nil
 }
 
 func (t *tun) Readers() []tio.Queue {
-	return []tio.Queue{t}
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}
 }
 
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
@@ -118,7 +106,6 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		vpnNetworks: vpnNetworks,
 		MTU:         c.GetInt("tun.mtu", DefaultMTU),
 		l:           l,
-		readBuf:     make([]byte, defaultBatchBufSize),
 	}
 
 	err = t.reload(c, true)
@@ -158,7 +145,7 @@ func (t *tun) Close() error {
 	return nil
 }
 
-func (t *tun) readOne(to []byte) (int, error) {
+func (t *tun) Read(to []byte) (int, error) {
 	rc, err := t.f.SyscallConn()
 	if err != nil {
 		return 0, fmt.Errorf("failed to get syscall conn for tun: %w", err)
