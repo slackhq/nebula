@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/netip"
+	"strconv"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
@@ -43,6 +45,13 @@ type StdConn struct {
 	// each arriving datagram as a per-slot cmsg, and ListenOut passes
 	// the parsed value to the EncReader callback for RFC 6040 combine.
 	ecnRecvSupported bool
+
+	// ecnMarkThreshold holds tunnels.ecn_mark_threshold as float64 bits: the
+	// fraction of the socket receive buffer above which listenOutBatch flags
+	// the batch QueueCongested (decap then CE-marks ECT inner packets). Zero
+	// disables sampling entirely. Atomic because ReloadConfig may update it
+	// while the reader runs.
+	ecnMarkThreshold atomic.Uint64
 }
 
 func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
@@ -320,6 +329,24 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 				setMsgControllen(&msgs[i].Hdr, cmsgSpace)
 			}
 		}
+
+		// AQM sample: one getsockopt per recvmmsg batch (skipped entirely at
+		// threshold 0). Sampled BEFORE the read: a single recvmmsg can drain
+		// more than the whole receive buffer (64 GRO superpackets ≈ 4MB), so
+		// post-read residue is ~always zero; the pre-read depth is the
+		// backlog that accumulated while the previous batch was processed —
+		// the actual standing-queue signal. Depth beyond the configured
+		// fraction of the receive buffer flags every packet in the batch so
+		// decap CE-marks ECT inner packets: the ECN substitute for the
+		// tail-drop this queue otherwise regulates with.
+		congested := false
+		if frac := math.Float64frombits(u.ecnMarkThreshold.Load()); frac > 0 {
+			var mi [unix.SK_MEMINFO_VARS]uint32
+			if err := u.getMemInfo(&mi); err == nil {
+				congested = float64(mi[unix.SK_MEMINFO_RMEM_ALLOC]) >= frac*float64(mi[unix.SK_MEMINFO_RCVBUF])
+			}
+		}
+
 		n, err := u.recvmmsg(msgs)
 		if err != nil {
 			if errors.Is(err, unix.EINTR) {
@@ -340,7 +367,7 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 				segSize, outerECN = parseRecvCmsg(&msgs[i].Hdr, u.groSupported, u.ecnRecvSupported)
 			}
 
-			deliverSegments(r, from, payload, segSize, RxMeta{OuterECN: outerECN})
+			deliverSegments(r, from, payload, segSize, RxMeta{OuterECN: outerECN, QueueCongested: congested})
 		}
 
 		flush()
@@ -495,6 +522,8 @@ func writeSockaddr(buf []byte, addr netip.AddrPort, isV4 bool) (int, error) {
 }
 
 func (u *StdConn) ReloadConfig(c *config.C) {
+	u.reloadECNMarkThreshold(c)
+
 	b := c.GetInt("listen.read_buffer", 0)
 	if b > 0 {
 		if err := u.SetRecvBuffer(b); err == nil {
@@ -533,6 +562,37 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 		} else {
 			u.l.Error("Failed to set listen.so_mark", "error", err)
 		}
+	}
+}
+
+// reloadECNMarkThreshold parses tunnels.ecn_mark_threshold: the fraction
+// (0..1] of the receive buffer above which decap CE-marks ECT inner packets.
+// 0 (the default) disables the AQM sampling. Reloadable.
+func (u *StdConn) reloadECNMarkThreshold(c *config.C) {
+	var frac float64
+	switch v := c.Get("tunnels.ecn_mark_threshold").(type) {
+	case nil:
+	case float64:
+		frac = v
+	case int:
+		frac = float64(v)
+	case string:
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			u.l.Warn("tunnels.ecn_mark_threshold is not a number; disabling", "value", v)
+		} else {
+			frac = f
+		}
+	default:
+		u.l.Warn("tunnels.ecn_mark_threshold is not a number; disabling", "value", v)
+	}
+	if frac < 0 || frac > 1 {
+		u.l.Warn("tunnels.ecn_mark_threshold must be within [0, 1]; disabling", "value", frac)
+		frac = 0
+	}
+	old := math.Float64frombits(u.ecnMarkThreshold.Swap(math.Float64bits(frac)))
+	if old != frac {
+		u.l.Info("tunnels.ecn_mark_threshold set", "fraction", frac)
 	}
 }
 

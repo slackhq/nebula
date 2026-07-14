@@ -24,6 +24,13 @@ const MaxWriteBatch = 128
 // supply on every packet.
 type RxMeta struct {
 	OuterECN byte
+	// QueueCongested is set when the receiving socket's kernel queue depth
+	// exceeded the configured AQM marking threshold (tunnels.ecn_mark_threshold)
+	// when this batch was pulled. The decap path treats it like an outer CE
+	// mark on ECT inner packets — nebula acting as the AQM for the one queue
+	// on the tunnel path no kernel AQM can see. Backends without queue
+	// introspection leave it false.
+	QueueCongested bool
 }
 
 type EncReader func(

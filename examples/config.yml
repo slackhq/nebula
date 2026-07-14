@@ -425,6 +425,13 @@ logging:
   # the route half of this setting to take effect.
   #ecn: true
 
+  # EXPERIMENTAL, Linux only. ecn_mark_threshold turns nebula into the AQM for its own receive queue — the one
+  # congested hop on a tunnel path that no kernel AQM can see. When the UDP receive queue's depth exceeds this
+  # fraction of the receive buffer (see listen.read_buffer), decapsulated ECT packets are CE-marked so ECN-capable
+  # senders back off before the queue overflows and regulates by tail-drop (loss) instead. 0 disables (default).
+  # Requires `ecn: true` end to end. Sampled once per receive batch. Reloadable.
+  #ecn_mark_threshold: 0.05
+
 # Nebula security group configuration
 firewall:
   # Action to take when a packet is not allowed by the firewall rules.

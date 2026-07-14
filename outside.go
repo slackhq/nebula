@@ -531,7 +531,15 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, s
 	// underlay into the inner header before firewall + TUN write. Other
 	// outer codepoints are advisory only — we keep the inner unchanged.
 	if f.ecnEnabled.Load() {
-		applyOuterECN(out, meta.OuterECN, hostinfo, f.l)
+		outerECN := meta.OuterECN
+		if meta.QueueCongested {
+			// nebula-as-AQM: our own receive queue is the congested hop on
+			// this path and no kernel AQM can see it. Depth beyond the
+			// marking threshold is treated as CE so ECT senders back off
+			// before the queue regulates by tail-drop instead.
+			outerECN = ecnCE
+		}
+		applyOuterECN(out, outerECN, hostinfo, f.l)
 	}
 
 	err := newPacket(out, true, fwPacket)

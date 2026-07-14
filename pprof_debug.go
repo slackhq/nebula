@@ -10,11 +10,13 @@ import (
 	_ "net/http/pprof" // registers pprof handlers on http.DefaultServeMux
 )
 
-// startPprofServer serves net/http/pprof on :6060 for the life of ctx. It is
-// only compiled into debug builds (`-tags debug`, `make debug`), so a debug
-// build announces itself with the Info line below.
+// startPprofServer serves net/http/pprof on localhost:6060 for the life of
+// ctx. It is only compiled into debug builds (`-tags debug`, `make debug`),
+// so a debug build announces itself with the Info line below. Loopback only:
+// a wildcard bind would expose profiles (peer addresses, config-derived
+// state) to anything that can reach the host, the overlay included.
 func startPprofServer(ctx context.Context, l *slog.Logger) {
-	server := &http.Server{Addr: ":6060", Handler: nil}
+	server := &http.Server{Addr: "localhost:6060", Handler: nil}
 	l.Info("Starting pprof debug server (debug build)", "addr", server.Addr)
 
 	go func() {
