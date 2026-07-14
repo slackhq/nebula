@@ -109,7 +109,7 @@ func TestControl_StopBeforeStart(t *testing.T) {
 	require.NoError(t, c.Wait())
 
 	// A stopped control can never be started
-	_, err := c.Start()
+	err := c.Start()
 	require.ErrorIs(t, err, ErrAlreadyStopped)
 
 	// A second Stop is a harmless no-op
@@ -192,7 +192,7 @@ func TestControl_StartMultiqueueFailureReleases(t *testing.T) {
 	}
 
 	// The second reader fails to open, everything must be released
-	_, err := c.Start()
+	err := c.Start()
 	require.Error(t, err)
 	assert.Equal(t, StateStopped, c.State())
 	assert.True(t, dev.closed, "the tun device should have been closed")
@@ -250,7 +250,7 @@ func TestControl_ConcurrentStopAndStart(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		wg.Go(func() { c.Stop() })
 	}
-	wg.Go(func() { _, _ = c.Start() })
+	wg.Go(func() { _ = c.Start() })
 	wg.Go(func() {
 		_ = c.Wait()
 		// A returned Wait must always observe the final state, no matter how
@@ -263,18 +263,17 @@ func TestControl_ConcurrentStopAndStart(t *testing.T) {
 	// panic and Wait must observe the final state
 	require.NoError(t, c.Wait())
 	assert.Equal(t, StateStopped, c.State())
-	_, err := c.Start()
+	err := c.Start()
 	require.ErrorIs(t, err, ErrAlreadyStopped)
 }
 
 func TestControl_StartStopLifecycle(t *testing.T) {
 	c, dev, conn := newReadyControl(t)
 
-	wait, err := c.Start()
+	err := c.Start()
 	require.NoError(t, err)
-	require.NotNil(t, wait, "a successful Start must return a block function")
 	assert.Equal(t, StateStarted, c.State())
-	_, err = c.Start()
+	err = c.Start()
 	require.ErrorIs(t, err, ErrAlreadyStarted)
 
 	// Stop must unpark the reader blocked in the device and release everything
@@ -286,7 +285,7 @@ func TestControl_StartStopLifecycle(t *testing.T) {
 
 	// The reader drained off a closed device, that is not a fatal error
 	require.NoError(t, c.Wait())
-	_, err = c.Start()
+	err = c.Start()
 	require.ErrorIs(t, err, ErrAlreadyStopped)
 }
 
@@ -297,9 +296,8 @@ func TestControl_RebindIsGatedByState(t *testing.T) {
 	c.RebindUDPServer()
 	assert.Equal(t, 0, conn.rebinds, "rebind before start must be a no-op")
 
-	wait, err := c.Start()
+	err := c.Start()
 	require.NoError(t, err)
-	require.NotNil(t, wait, "a successful Start must return a block function")
 	c.RebindUDPServer()
 	assert.Equal(t, 1, conn.rebinds, "rebind while started must reach the conn")
 

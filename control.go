@@ -69,21 +69,19 @@ type ControlHostInfo struct {
 }
 
 // Start actually runs nebula, this is a nonblocking call.
-// The returned function blocks until nebula has fully stopped and reports the
-// fatal reader error (nil on a clean shutdown). Calling it is equivalent to
-// calling Wait.
-func (c *Control) Start() (func() error, error) {
+// Use Wait to block until nebula has fully stopped and to learn whether a fatal reader error caused the shutdown.
+func (c *Control) Start() error {
 	c.stateLock.Lock()
 	defer c.stateLock.Unlock()
 	switch c.state {
 	case StateReady:
 		//yay!
 	case StateStopped, StateStopping:
-		return nil, ErrAlreadyStopped
+		return ErrAlreadyStopped
 	case StateStarted:
-		return nil, ErrAlreadyStarted
+		return ErrAlreadyStarted
 	default:
-		return nil, ErrUnknownState
+		return ErrUnknownState
 	}
 
 	// Activate the interface
@@ -93,7 +91,7 @@ func (c *Control) Start() (func() error, error) {
 		c.cancel()
 		_ = c.f.Close()
 		c.state = StateStopped
-		return nil, err
+		return err
 	}
 
 	// Call all the delayed funcs that waited patiently for the interface to be created.
@@ -118,7 +116,7 @@ func (c *Control) Start() (func() error, error) {
 	// Start reading packets.
 	c.f.run()
 	c.state = StateStarted
-	return c.Wait, nil
+	return nil
 }
 
 func (c *Control) State() RunState {
