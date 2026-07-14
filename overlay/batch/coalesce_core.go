@@ -179,3 +179,10 @@ func (a *Arena) Reserve(sz int) []byte {
 func (a *Arena) Reset() {
 	a.buf = a.buf[:0]
 }
+
+// Reserver hands out an sz-byte slice valid until its Resetter runs.
+type Reserver func(sz int) []byte
+
+// Resetter clears all reservations held by a Reserver. Only the arena's
+// owner holds one; lanes inside a MultiCoalescer get nil.
+type Resetter func()

@@ -27,14 +27,8 @@ type MultiCoalescer struct {
 	tcp *TCPCoalescer
 	udp *UDPCoalescer
 	pt  *Passthrough
-
-	// arena is shared across every lane (constructor hands the same
-	// *Arena to TCP, UDP, and Passthrough), so there's exactly one
-	// backing slab per MultiCoalescer instance. Each lane's Flush calls
-	// Reset; the resets are idempotent because Multi.Flush drains lanes
-	// sequentially and never Reserves in between, so a later lane's
-	// slots stay readable across an earlier lane's Reset (the underlying
-	// bytes are still alive — Reset only re-slices len to 0).
+	// arena is owned by the Multi: lanes get only its Reserve (nil Resetter)
+	// and Flush resets it exactly once after every lane has drained.
 	arena *Arena
 }
 
@@ -51,14 +45,14 @@ const DefaultMultiArenaCap = initialSlots * 65535
 // pre-sizes it via NewArena so the hot path never allocates.
 func NewMultiCoalescer(w io.Writer, l *slog.Logger, arena *Arena, tcpEnabled, udpEnabled bool) *MultiCoalescer {
 	m := &MultiCoalescer{
-		pt:    NewPassthrough(w, arena),
+		pt:    NewPassthrough(w, arena.Reserve, nil),
 		arena: arena,
 	}
 	if tcpEnabled {
-		m.tcp = NewTCPCoalescer(w, l, arena)
+		m.tcp = NewTCPCoalescer(w, l, arena.Reserve, nil)
 	}
 	if udpEnabled {
-		m.udp = NewUDPCoalescer(w, arena)
+		m.udp = NewUDPCoalescer(w, arena.Reserve, nil)
 	}
 	return m
 }
@@ -116,10 +110,9 @@ func (m *MultiCoalescer) Commit(pkt []byte) error {
 	return m.pt.Commit(pkt)
 }
 
-// Flush drains every lane in a fixed order: TCP, UDP, passthrough. Errors
-// from a lane do not stop subsequent lanes from flushing, we keep
-// draining and return the first observed error so a single bad packet
-// doesn't strand the others.
+// Flush drains every lane in a fixed order — TCP, UDP, passthrough — then
+// resets the shared arena once. A lane error doesn't stop the remaining
+// lanes; the joined errors are returned.
 func (m *MultiCoalescer) Flush() error {
 	var errs []error
 	if m.tcp != nil {
@@ -135,5 +128,6 @@ func (m *MultiCoalescer) Flush() error {
 	if err := m.pt.Flush(); err != nil {
 		errs = append(errs, err)
 	}
+	m.arena.Reset()
 	return errors.Join(errs...)
 }
