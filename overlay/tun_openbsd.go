@@ -57,18 +57,6 @@ type tun struct {
 	l           *slog.Logger
 	f           *os.File
 	fd          int
-
-	readBuf  []byte
-	batchRet [1]tio.Packet
-}
-
-func (t *tun) Read() ([]tio.Packet, error) {
-	n, err := t.readOne(t.readBuf)
-	if err != nil {
-		return nil, err
-	}
-	t.batchRet[0] = tio.Packet{Bytes: t.readBuf[:n]}
-	return t.batchRet[:], nil
 }
 
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
@@ -105,7 +93,6 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*t
 		vpnNetworks: vpnNetworks,
 		MTU:         c.GetInt("tun.mtu", DefaultMTU),
 		l:           l,
-		readBuf:     make([]byte, defaultBatchBufSize),
 	}
 
 	err = t.reload(c, true)
@@ -151,9 +138,9 @@ func tunWritev(fd int, iovecs []unix.Iovec) (n int, err error)
 //go:noescape
 func tunReadv(fd int, iovecs []unix.Iovec) (n int, err error)
 
-// readOne pulls one IP packet off the tun device, scattering the 4 byte protocol header away from
+// Read pulls one IP packet off the tun device, scattering the 4 byte protocol header away from
 // the packet so the payload lands directly in to.
-func (t *tun) readOne(to []byte) (int, error) {
+func (t *tun) Read(to []byte) (int, error) {
 	var head [4]byte
 
 	rc, err := t.f.SyscallConn()
@@ -439,7 +426,7 @@ func (t *tun) deviceBytes() (o [16]byte) {
 }
 
 func (t *tun) Readers() []tio.Queue {
-	return []tio.Queue{t}
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}
 }
 
 func addRoute(prefix netip.Prefix, gateways []netip.Prefix) error {

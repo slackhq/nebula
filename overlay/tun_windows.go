@@ -45,18 +45,10 @@ type winTun struct {
 	l               *slog.Logger
 
 	tun *wintun.NativeTun
-
-	readBuf  []byte
-	batchRet [1]tio.Packet
 }
 
-func (t *winTun) Read() ([]tio.Packet, error) {
-	n, err := t.tun.Read(t.readBuf, 0)
-	if err != nil {
-		return nil, err
-	}
-	t.batchRet[0] = tio.Packet{Bytes: t.readBuf[:n]}
-	return t.batchRet[:], nil
+func (t *winTun) Read(b []byte) (int, error) {
+	return t.tun.Read(b, 0)
 }
 
 func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (Device, error) {
@@ -81,7 +73,6 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, _ bool) (*w
 	}
 
 	t := &winTun{
-		readBuf:         make([]byte, defaultBatchBufSize),
 		Device:          deviceName,
 		vpnNetworks:     vpnNetworks,
 		MTU:             c.GetInt("tun.mtu", DefaultMTU),
@@ -281,7 +272,7 @@ func (t *winTun) NewMultiQueueReader() error {
 }
 
 func (t *winTun) Readers() []tio.Queue {
-	return []tio.Queue{t}
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}
 }
 
 func (t *winTun) Close() error {
