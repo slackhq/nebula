@@ -74,21 +74,6 @@ func resolveSelfListenAddrs(listenAddr string, vpnAddrs []netip.Addr) ([]string,
 	return addrs, nil
 }
 
-// vpnAddrs returns this host's overlay/VPN addresses for expanding the
-// "<nebula>" self-token, or nil when the PKI or its cert state isn't available
-// yet. Nil-safe on the receiver so every listener call site (and tests that
-// build a server without a PKI) can call it without its own guard.
-func (p *PKI) vpnAddrs() []netip.Addr {
-	if p == nil {
-		return nil
-	}
-	cs := p.getCertState()
-	if cs == nil {
-		return nil
-	}
-	return cs.myVpnAddrs
-}
-
 // warnSelfTokenWithTunDisabled logs a warning for each listener whose config
 // uses the "<nebula>" self-token while tun.disabled is set. The token expands
 // to this host's overlay addresses, which no interface carries when the tun is

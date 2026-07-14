@@ -74,6 +74,22 @@ func (p *PKI) getCertState() *CertState {
 	return p.cs.Load()
 }
 
+// vpnAddrs returns this host's overlay/VPN addresses, used to expand the
+// "<nebula>" self-token in listener configs (see resolveSelfListenAddrs), or
+// nil when the PKI or its cert state isn't available yet. Nil-safe on the
+// receiver so every listener call site (and tests that build a server without a
+// PKI) can call it without its own guard.
+func (p *PKI) vpnAddrs() []netip.Addr {
+	if p == nil {
+		return nil
+	}
+	cs := p.getCertState()
+	if cs == nil {
+		return nil
+	}
+	return cs.myVpnAddrs
+}
+
 func (p *PKI) reload(c *config.C, initial bool) error {
 	err := p.reloadCerts(c, initial)
 	if err != nil {
