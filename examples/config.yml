@@ -257,13 +257,21 @@ tun:
   # Linux only. pin_threads pins each tun reader/encrypt OS thread to a single CPU. This keeps every goroutine's
   # batched sends flowing through one XPS-selected NIC TX ring, so packets within a flow stay ordered on the wire
   # instead of being sprayed across multiple TX rings and reordered. Not reloadable.
+  #
+  # When cpu_affinity is unset, nebula picks CPUs that do NOT service any physical NIC's interrupts (read from
+  # /sys/class/net/*/device/msi_irqs and /proc/irq/*/effective_affinity_list): an encrypt thread pinned onto a core
+  # that also runs NAPI for a NIC RX queue fights the softirq for the core and collapses throughput for flows hashed
+  # to that queue. If the NIC's vectors blanket every allowed CPU (many drivers default to one queue per core) the
+  # avoidance logs and falls back to the old spread; narrow the NIC's queue/IRQ spread (e.g. `ethtool -X <dev>
+  # equal N`) or set cpu_affinity explicitly to benefit.
   #pin_threads: true
 
   # Linux only. cpu_affinity overrides which CPUs the tun reader threads pin to: a list of CPU IDs, one per routine
   # (see the top-level `routines` setting). Lists shorter than `routines` are modulo-cycled across the queues; extra
   # entries are ignored. IDs must be within the process's allowed CPU set, so this respects taskset / cgroup cpusets;
   # a non-integer or not-allowed entry disables the override and falls back to spreading queues across the allowed
-  # CPUs. Only meaningful while pin_threads is true. Not reloadable.
+  # CPUs. Setting this disables the automatic NIC-IRQ avoidance described under pin_threads — prefer CPUs that don't
+  # service your underlay NIC's RX queue IRQs. Only meaningful while pin_threads is true. Not reloadable.
   #cpu_affinity:
   #  - 2
   #  - 4

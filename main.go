@@ -214,6 +214,12 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		l.Warn("Failed to start DNS responder", "error", err)
 	}
 
+	pinThreads := c.GetBool("tun.pin_threads", true)
+	cpuAffinity := parseCpuAffinity(c, l, routines)
+	if pinThreads && len(cpuAffinity) == 0 && !configTest {
+		cpuAffinity = defaultCPUAffinityAvoidingIRQs(l, routines)
+	}
+
 	ifConfig := &InterfaceConfig{
 		HostMap:               hostMap,
 		Inside:                tun,
@@ -235,8 +241,8 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		relayManager:          NewRelayManager(ctx, l, hostMap, c),
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
-		CpuAffinity:           parseCpuAffinity(c, l, routines),
-		PinThreads:            c.GetBool("tun.pin_threads", true),
+		CpuAffinity:           cpuAffinity,
+		PinThreads:            pinThreads,
 		l:                     l,
 	}
 
@@ -351,6 +357,57 @@ func parseCpuAffinity(c *config.C, l *slog.Logger, routines int) []int {
 			"affinity_len", len(cpus), "routines", routines)
 	}
 	return cpus
+}
+
+// defaultCPUAffinityAvoidingIRQs picks the default pin set for the tun
+// readers when tun.cpu_affinity is unset: allowed CPUs that do NOT service
+// any physical NIC's interrupts. The stock allowed[i] spread pins the
+// encrypt threads onto exactly the cores most drivers affine their first RX
+// queue IRQs to, so whenever a flow's RSS queue fires on a core hosting a
+// tun reader, NAPI and encrypt fight for the core and per-flow throughput
+// drops (measured: REV 8.4 vs 10.2 Gbps on the same hardware, 2026-07-14).
+//
+// Returns nil — keeping the old allowed[i] fallback in listenIn — when IRQ
+// info is unavailable or when there aren't enough IRQ-free CPUs to give
+// every routine its own core: silently doubling readers up on fewer cores
+// is worse than the occasional IRQ collision. NICs whose vectors blanket
+// every CPU (e.g. mlx5 defaults to one queue per core) make avoidance
+// impossible; narrowing the NIC's spread (ethtool -X <dev> equal N, or
+// /proc/irq/*/smp_affinity) or setting tun.cpu_affinity explicitly makes it
+// effective.
+func defaultCPUAffinityAvoidingIRQs(l *slog.Logger, routines int) []int {
+	irq, err := util.NICIRQCPUs()
+	if err != nil || len(irq) == 0 {
+		return nil
+	}
+	allowed, err := util.AllowedCPUs()
+	if err != nil {
+		return nil
+	}
+	cpus := chooseIRQFreeCPUs(allowed, irq, routines)
+	if cpus == nil {
+		l.Info("not enough CPUs are free of NIC IRQs to give every tun reader its own; using the default spread",
+			"routines", routines, "allowed", len(allowed), "irqCPUs", len(irq))
+		return nil
+	}
+	l.Info("pinning tun readers to CPUs clear of NIC IRQs", "cpus", cpus)
+	return cpus
+}
+
+// chooseIRQFreeCPUs returns the first `routines` allowed CPUs not present in
+// irq, or nil if fewer than `routines` qualify.
+func chooseIRQFreeCPUs(allowed []int, irq map[int]bool, routines int) []int {
+	free := make([]int, 0, routines)
+	for _, cpu := range allowed {
+		if irq[cpu] {
+			continue
+		}
+		free = append(free, cpu)
+		if len(free) == routines {
+			return free
+		}
+	}
+	return nil
 }
 
 func moduleVersion() string {

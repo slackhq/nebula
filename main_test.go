@@ -9,6 +9,26 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestChooseIRQFreeCPUs(t *testing.T) {
+	irq := map[int]bool{0: true, 1: true, 2: true, 3: true}
+
+	// Plenty of IRQ-free CPUs: take the first `routines` of them in order.
+	assert.Equal(t, []int{4, 5}, chooseIRQFreeCPUs([]int{0, 1, 2, 3, 4, 5, 6}, irq, 2))
+
+	// Exactly enough.
+	assert.Equal(t, []int{4, 5, 6}, chooseIRQFreeCPUs([]int{0, 1, 2, 3, 4, 5, 6}, irq, 3))
+
+	// Not enough IRQ-free CPUs: nil, caller keeps the old default rather
+	// than doubling readers up on shared cores.
+	assert.Nil(t, chooseIRQFreeCPUs([]int{0, 1, 2, 3, 4}, irq, 2))
+
+	// No IRQ info at all behaves like a plain prefix of allowed.
+	assert.Equal(t, []int{0, 1}, chooseIRQFreeCPUs([]int{0, 1, 2}, map[int]bool{}, 2))
+
+	// Non-contiguous allowed set (cgroup cpuset) with holes.
+	assert.Equal(t, []int{9, 12}, chooseIRQFreeCPUs([]int{1, 3, 9, 12}, map[int]bool{1: true, 3: true}, 2))
+}
+
 func TestParseCpuAffinity(t *testing.T) {
 	l := test.NewLogger()
 
