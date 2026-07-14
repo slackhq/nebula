@@ -255,7 +255,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		punchy.Start(ctx, ifce, hostMap, lightHouse)
 	}
 
-	stats, err := newStatsServerFromConfig(ctx, l, c, buildVersion, configTest)
+	stats, err := newStatsServerFromConfig(ctx, l, c, pki, buildVersion, configTest)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to start stats emitter", err)
 	}

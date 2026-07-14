@@ -1,0 +1,74 @@
+package nebula
+
+import (
+	"fmt"
+	"net"
+	"net/netip"
+	"strings"
+)
+
+// nebulaSelfToken is a magic host value usable in the host position of a
+// listener config (e.g. "<nebula>:8080"). It expands to every one of this
+// host's overlay/VPN addresses, giving bind-ALL semantics across the VPN.
+//
+// "<" and ">" are illegal in hostnames, so the token is safe by construction:
+// it must be intercepted and expanded before any resolver call, and if a call
+// site ever forgets to expand it, name resolution fails loud rather than
+// silently resolving to something unexpected.
+const nebulaSelfToken = "<nebula>"
+
+// resolveSelfListenAddrs expands the "<nebula>" self-token in a listener
+// address into one host:port string per VPN address, or returns the original
+// address unchanged when the token is absent.
+//
+// Callers pass the current set of VPN addresses at LISTENER-START time, read
+// reload-safe from pki.getCertState().myVpnAddrs. Note that because expansion
+// happens when a listener starts, a cert reload that changes myVpnAddrs does
+// NOT by itself rebind an already-bound listener; the previously expanded
+// addresses stay bound until that listener restarts (its config section
+// changes, its feature toggles, or the process restarts).
+func resolveSelfListenAddrs(listenAddr string, vpnAddrs []netip.Addr) ([]string, error) {
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		// If the token is present but the value isn't host:port form, the user
+		// clearly meant to use it, so fail loud. Otherwise defer to the bind,
+		// matching today's behavior for malformed values.
+		if strings.Contains(listenAddr, nebulaSelfToken) {
+			return nil, fmt.Errorf("%q must be used in host:port form, got %q", nebulaSelfToken, listenAddr)
+		}
+		return []string{listenAddr}, nil
+	}
+
+	if host != nebulaSelfToken {
+		// Return the original string byte-for-byte so every existing config
+		// behaves exactly as before, including the "[::]" special cases that
+		// callers handle independently of this helper.
+		return []string{listenAddr}, nil
+	}
+
+	if len(vpnAddrs) == 0 {
+		return nil, fmt.Errorf("cannot expand %q in listen address %q: host has no VPN addresses", nebulaSelfToken, listenAddr)
+	}
+
+	addrs := make([]string, len(vpnAddrs))
+	for i, a := range vpnAddrs {
+		// JoinHostPort brackets IPv6 automatically.
+		addrs[i] = net.JoinHostPort(a.Unmap().String(), port)
+	}
+	return addrs, nil
+}
+
+// vpnAddrs returns this host's overlay/VPN addresses for expanding the
+// "<nebula>" self-token, or nil when the PKI or its cert state isn't available
+// yet. Nil-safe on the receiver so every listener call site (and tests that
+// build a server without a PKI) can call it without its own guard.
+func (p *PKI) vpnAddrs() []netip.Addr {
+	if p == nil {
+		return nil
+	}
+	cs := p.getCertState()
+	if cs == nil {
+		return nil
+	}
+	return cs.myVpnAddrs
+}

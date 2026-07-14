@@ -345,6 +345,7 @@ logging:
   #interval: 10s
 
   #type: prometheus
+  # Use "<nebula>" as the host to bind every one of this node's nebula (overlay) addresses, e.g. "<nebula>:8080".
   #listen: 127.0.0.1:8080
   #path: /metrics
   #namespace: prometheusns
