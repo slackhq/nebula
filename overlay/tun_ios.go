@@ -23,31 +23,11 @@ import (
 )
 
 type tun struct {
-	rwc         io.ReadWriteCloser
+	io.ReadWriteCloser
 	vpnNetworks []netip.Prefix
 	Routes      atomic.Pointer[[]Route]
 	routeTree   atomic.Pointer[bart.Table[routing.Gateways]]
 	l           *slog.Logger
-
-	readBuf  []byte
-	batchRet [1]tio.Packet
-}
-
-func (t *tun) Read() ([]tio.Packet, error) {
-	n, err := t.rwc.Read(t.readBuf)
-	if err != nil {
-		return nil, err
-	}
-	t.batchRet[0] = tio.Packet{Bytes: t.readBuf[:n]}
-	return t.batchRet[:], nil
-}
-
-func (t *tun) Write(p []byte) (int, error) {
-	return t.rwc.Write(p)
-}
-
-func (t *tun) Close() error {
-	return t.rwc.Close()
 }
 
 func newTun(_ *config.C, _ *slog.Logger, _ []netip.Prefix, _ bool) (*tun, error) {
@@ -63,10 +43,9 @@ func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip
 
 	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
 	t := &tun{
-		vpnNetworks: vpnNetworks,
-		rwc:         &tunReadCloser{f: file},
-		l:           l,
-		readBuf:     make([]byte, defaultBatchBufSize),
+		vpnNetworks:     vpnNetworks,
+		ReadWriteCloser: &tunReadCloser{f: file},
+		l:               l,
 	}
 
 	err := t.reload(c, true)
@@ -190,5 +169,5 @@ func (t *tun) NewMultiQueueReader() error {
 }
 
 func (t *tun) Readers() []tio.Queue {
-	return []tio.Queue{t}
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}
 }
