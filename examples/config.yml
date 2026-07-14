@@ -50,6 +50,8 @@ lighthouse:
   #serve_dns: false
   #dns:
     # The DNS host defines the IP to bind the dns listener to. This also allows binding to the nebula node IP.
+    # host may also be a list of IPs to bind the listener to several addresses (e.g. this node's nebula IPs),
+    # each combined with the port below.
     #host: 0.0.0.0
     #port: 53
   # interval is the number of seconds between updates from this node to a lighthouse.
