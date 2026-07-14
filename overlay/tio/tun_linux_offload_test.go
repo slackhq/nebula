@@ -19,6 +19,36 @@ import (
 // worst-case 64 KiB superpacket plus replicated per-segment headers).
 const testSegScratchSize = 192 * 1024
 
+// TestProtoFromGSOTypeMasksECN guards the CWR-superpacket drop bug: the
+// kernel qualifies a TSO superpacket whose TCP header carries CWR with
+// VIRTIO_NET_HDR_GSO_ECN (we negotiate TUN_F_TSO_ECN, so it WILL send
+// them once ECN feedback flows), and the decoder must mask that bit
+// rather than reject the packet as an unknown type.
+func TestProtoFromGSOTypeMasksECN(t *testing.T) {
+	cases := []struct {
+		typ  uint8
+		want GSOProto
+	}{
+		{unix.VIRTIO_NET_HDR_GSO_TCPV4, GSOProtoTCP},
+		{unix.VIRTIO_NET_HDR_GSO_TCPV4 | unix.VIRTIO_NET_HDR_GSO_ECN, GSOProtoTCP},
+		{unix.VIRTIO_NET_HDR_GSO_TCPV6, GSOProtoTCP},
+		{unix.VIRTIO_NET_HDR_GSO_TCPV6 | unix.VIRTIO_NET_HDR_GSO_ECN, GSOProtoTCP},
+		{unix.VIRTIO_NET_HDR_GSO_UDP_L4, GSOProtoUDP},
+	}
+	for _, c := range cases {
+		got, err := protoFromGSOType(c.typ)
+		if err != nil || got != c.want {
+			t.Errorf("protoFromGSOType(%#x) = (%v, %v), want (%v, nil)", c.typ, got, err, c.want)
+		}
+	}
+	if _, err := protoFromGSOType(unix.VIRTIO_NET_HDR_GSO_NONE); err == nil {
+		t.Error("GSO_NONE must still be rejected")
+	}
+	if _, err := protoFromGSOType(unix.VIRTIO_NET_HDR_GSO_ECN); err == nil {
+		t.Error("a bare ECN bit with no base type must still be rejected")
+	}
+}
+
 // verifyChecksum confirms that the one's-complement sum across `b`, seeded
 // with a folded pseudo-header sum, equals all-ones (valid).
 func verifyChecksum(b []byte, pseudo uint16) bool {
