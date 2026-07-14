@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,14 +38,28 @@ type dnsServer struct {
 	enabled atomic.Bool
 
 	serverMu sync.Mutex
-	server   *dns.Server
-	// started is closed once `server` has finished binding (or after
-	// ListenAndServe returns on a bind failure). Stop waits on it before
-	// calling Shutdown to avoid the miekg/dns "server not started" race
-	// where a Shutdown that arrives before bind completes is silently
-	// ignored, leaving the listener running forever.
+	// listeners holds one entry per bound address; addrs holds the configured
+	// "host:port" bind addresses (one per lighthouse.dns.host entry, joined with
+	// the shared port). reload compares addrs to detect a listen-address change.
+	listeners []*dnsListener
+	addrs     []string
+	// startGen tags each Start attempt so the one that stops serving (or bails
+	// before binding) only clears d.listeners if a newer Start hasn't taken
+	// over. Without this, a Start that fails to bind would leave stale dead
+	// listeners in d.listeners, making reload see running==true and no-op every
+	// same-addr SIGHUP, wedging DNS permanently.
+	startGen uint64
+}
+
+// dnsListener pairs a dns.Server with its started channel. The channel is
+// closed once the server has finished binding (or after ListenAndServe returns
+// on a bind failure). Stop waits on it before calling Shutdown to avoid the
+// miekg/dns "server not started" race where a Shutdown that arrives before bind
+// completes is silently ignored, leaving the listener running forever. Each
+// listener carries its own channel so the race fix holds per bound address.
+type dnsListener struct {
+	server  *dns.Server
 	started chan struct{}
-	addr    string
 }
 
 // newDnsServerFromConfig builds a dnsServer, applies the initial config, and
@@ -94,13 +109,13 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 	wantsDns := c.GetBool("lighthouse.serve_dns", false)
 	amLighthouse := c.GetBool("lighthouse.am_lighthouse", false)
 	enabled := wantsDns && amLighthouse
-	newAddr := getDnsServerAddr(c)
+	newAddrs := getDnsServerAddrs(c)
 
 	d.serverMu.Lock()
-	running := d.server
-	runningStarted := d.started
-	sameAddr := d.addr == newAddr
-	d.addr = newAddr
+	runningListeners := d.listeners
+	running := len(runningListeners) > 0
+	sameAddr := slices.Equal(d.addrs, newAddrs)
+	d.addrs = newAddrs
 	d.enabled.Store(enabled)
 	d.serverMu.Unlock()
 
@@ -112,7 +127,7 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 	}
 
 	if !enabled {
-		if running != nil {
+		if running {
 			d.Stop()
 		}
 		// Drop any records that accumulated while enabled; a later re-enable
@@ -121,11 +136,11 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 		return nil
 	}
 
-	if running == nil {
+	if !running {
 		// Was disabled (or never started); bring it up now.
 		go d.Start()
 	} else if !sameAddr {
-		d.shutdownServer(running, runningStarted, "reload")
+		d.shutdownListeners(runningListeners, "reload")
 		// Old Start goroutine has now exited; bring up a fresh listener on the new address.
 		go d.Start()
 	}
@@ -133,6 +148,14 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 	// Refresh the self entry every enabled reload so cert renewals that change our name or VPN addresses are picked up.
 	d.seedSelf()
 	return nil
+}
+
+// shutdownListeners shuts down every listener in the slice, waiting for each to
+// finish binding first so Shutdown actually stops it rather than no-oping.
+func (d *dnsServer) shutdownListeners(listeners []*dnsListener, reason string) {
+	for _, ln := range listeners {
+		d.shutdownServer(ln.server, ln.started, reason)
+	}
 }
 
 // shutdownServer waits for the server to finish binding (so Shutdown actually
@@ -149,71 +172,125 @@ func (d *dnsServer) shutdownServer(srv *dns.Server, started chan struct{}, reaso
 	}
 }
 
-// Start binds and serves the DNS responder. Blocks until Stop is called or
-// the listener errors. Safe to call when DNS is disabled (returns
-// immediately). This is what Control.dnsStart points at.
+// Start binds and serves the DNS responder. Blocks until Stop is called or the
+// listeners error. Safe to call when DNS is disabled (returns immediately).
+// This is what Control.dnsStart points at.
 //
-// Must be invoked after the tun device is active so that lighthouse.dns.host
-// may bind to a nebula IP.
+// Must be invoked after the tun device is active so that a lighthouse.dns.host
+// pointed at a nebula IP can bind it.
 func (d *dnsServer) Start() {
 	if !d.enabled.Load() {
 		return
 	}
 
-	started := make(chan struct{})
 	d.serverMu.Lock()
 	if d.ctx.Err() != nil {
 		d.serverMu.Unlock()
 		return
 	}
-	addr := d.addr
-	server := &dns.Server{
-		Addr:              addr,
-		Net:               "udp",
-		Handler:           d.mux,
-		NotifyStartedFunc: func() { close(started) },
-	}
-	d.server = server
-	d.started = started
+	addrs := d.addrs
+	d.startGen++
+	myGen := d.startGen
 	d.serverMu.Unlock()
 
-	// Per-invocation ctx watcher. Exits when Start does, so we don't leak a
-	// watcher per reload-driven restart.
+	if len(addrs) == 0 {
+		d.l.Warn("Failed to run the DNS responder: no listen address configured")
+		// Drop any now-defunct listeners a prior reload shut down, so a later
+		// reload retries instead of no-oping on stale state.
+		d.clearListenersIfCurrent(myGen)
+		return
+	}
+	d.startListeners(addrs, myGen)
+}
+
+// clearListenersIfCurrent nils out d.listeners, but only if no newer Start has
+// superseded this one (identified by gen). This lets the Start that stopped
+// serving reset the running state without clobbering a concurrent restart.
+func (d *dnsServer) clearListenersIfCurrent(gen uint64) {
+	d.serverMu.Lock()
+	if d.startGen == gen {
+		d.listeners = nil
+	}
+	d.serverMu.Unlock()
+}
+
+// startListeners binds and serves one dns.Server per already-expanded address,
+// blocking until all of them return. Split from Start so tests can drive the
+// multi-listener machinery with concrete addresses. A bind failure on one
+// address is logged and the remaining listeners keep serving (log-and-continue,
+// matching the single-listener behavior this refactor grew out of).
+func (d *dnsServer) startListeners(addrs []string, myGen uint64) {
+	listeners := make([]*dnsListener, len(addrs))
+	for i, a := range addrs {
+		started := make(chan struct{})
+		listeners[i] = &dnsListener{
+			started: started,
+			server: &dns.Server{
+				Addr:              a,
+				Net:               "udp",
+				Handler:           d.mux,
+				NotifyStartedFunc: func() { close(started) },
+			},
+		}
+	}
+
+	d.serverMu.Lock()
+	if d.ctx.Err() != nil || d.startGen != myGen {
+		// Shutting down, or a newer Start has superseded us; don't install.
+		d.serverMu.Unlock()
+		return
+	}
+	d.listeners = listeners
+	d.serverMu.Unlock()
+
+	// Per-invocation ctx watcher. Exits when startListeners does, so we don't
+	// leak a watcher per reload-driven restart.
 	done := make(chan struct{})
 	go func() {
 		select {
 		case <-d.ctx.Done():
-			d.shutdownServer(server, started, "shutdown")
+			d.shutdownListeners(listeners, "shutdown")
 		case <-done:
 		}
 	}()
 
-	d.l.Info("Starting DNS responder", "dnsListener", addr)
-	err := server.ListenAndServe()
+	var wg sync.WaitGroup
+	for _, ln := range listeners {
+		wg.Add(1)
+		go func(ln *dnsListener) {
+			defer wg.Done()
+			d.l.Info("Starting DNS responder", "dnsListener", ln.server.Addr)
+			err := ln.server.ListenAndServe()
+
+			// If the listener never bound (bind error) NotifyStartedFunc never
+			// fires, so close started here to release any waiter on it.
+			select {
+			case <-ln.started:
+			default:
+				close(ln.started)
+			}
+
+			if err != nil {
+				d.l.Warn("Failed to run the DNS responder", "error", err, "dnsListener", ln.server.Addr)
+			}
+		}(ln)
+	}
+	wg.Wait()
 	close(done)
 
-	// If the listener never bound (bind error) NotifyStartedFunc never fires,
-	// so close started here to release any Stop caller waiting on it.
-	select {
-	case <-started:
-	default:
-		close(started)
-	}
-
-	if err != nil {
-		d.l.Warn("Failed to run the DNS responder", "error", err)
-	}
+	// All listeners have stopped serving. Clear the running state (unless a
+	// newer Start took over) so a same-addr reload re-runs Start instead of
+	// treating the dead listeners as live. Matches stats' retry-on-unclean-exit.
+	d.clearListenersIfCurrent(myGen)
 }
 
-// Stop shuts down the active server, if any. Idempotent.
+// Stop shuts down all active listeners, if any. Idempotent.
 func (d *dnsServer) Stop() {
 	d.serverMu.Lock()
-	srv := d.server
-	started := d.started
-	d.server = nil
-	d.started = nil
+	listeners := d.listeners
+	d.listeners = nil
 	d.serverMu.Unlock()
-	d.shutdownServer(srv, started, "stop")
+	d.shutdownListeners(listeners, "stop")
 }
 
 // Query returns the address for the given name and query type. The second
@@ -439,11 +516,25 @@ func (d *dnsServer) handleDnsRequest(w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func getDnsServerAddr(c *config.C) string {
-	dnsHost := strings.TrimSpace(c.GetString("lighthouse.dns.host", ""))
-	// Old guidance was to provide the literal `[::]` in `lighthouse.dns.host` but that won't resolve.
-	if dnsHost == "[::]" {
-		dnsHost = "::"
+// getDnsServerAddrs returns the DNS responder bind addresses: each configured
+// lighthouse.dns.host (a single string or a list of them) joined with the
+// shared lighthouse.dns.port. A host list lets the responder bind several
+// addresses, e.g. this node's nebula IPs.
+func getDnsServerAddrs(c *config.C) []string {
+	port := strconv.Itoa(c.GetInt("lighthouse.dns.port", 53))
+	hosts := getListenAddrs(c, "lighthouse.dns.host")
+	if len(hosts) == 0 {
+		// Preserve the historical default of binding every interface.
+		hosts = []string{""}
 	}
-	return net.JoinHostPort(dnsHost, strconv.Itoa(c.GetInt("lighthouse.dns.port", 53)))
+	addrs := make([]string, 0, len(hosts))
+	for _, dnsHost := range hosts {
+		dnsHost = strings.TrimSpace(dnsHost)
+		// Old guidance was to provide the literal `[::]` in `lighthouse.dns.host` but that won't resolve.
+		if dnsHost == "[::]" {
+			dnsHost = "::"
+		}
+		addrs = append(addrs, net.JoinHostPort(dnsHost, port))
+	}
+	return addrs
 }
