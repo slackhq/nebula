@@ -128,7 +128,8 @@ const (
 
 func TestCoalescerPassthroughWhenGSOUnavailable(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: false}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pkt := buildTCPv4(1000, tcpAck, []byte("hello"))
 	if err := c.Commit(pkt); err != nil {
 		t.Fatal(err)
@@ -147,7 +148,8 @@ func TestCoalescerPassthroughWhenGSOUnavailable(t *testing.T) {
 
 func TestCoalescerNonTCPPassthrough(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pkt := make([]byte, 28)
 	pkt[0] = 0x45
 	binary.BigEndian.PutUint16(pkt[2:4], 28)
@@ -167,7 +169,8 @@ func TestCoalescerNonTCPPassthrough(t *testing.T) {
 
 func TestCoalescerSeedThenFlushAlone(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pkt := buildTCPv4(1000, tcpAck, make([]byte, 1000))
 	if err := c.Commit(pkt); err != nil {
 		t.Fatal(err)
@@ -194,7 +197,8 @@ func TestCoalescerSeedThenFlushAlone(t *testing.T) {
 
 func TestCoalescerCoalescesAdjacentACKs(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
@@ -234,7 +238,8 @@ func TestCoalescerCoalescesAdjacentACKs(t *testing.T) {
 
 func TestCoalescerRejectsSeqGap(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
@@ -253,7 +258,8 @@ func TestCoalescerRejectsSeqGap(t *testing.T) {
 
 func TestCoalescerRejectsFlagMismatch(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
@@ -274,7 +280,8 @@ func TestCoalescerRejectsFlagMismatch(t *testing.T) {
 
 func TestCoalescerRejectsFIN(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	fin := buildTCPv4(1000, tcpAck|tcpFin, []byte("x"))
 	if err := c.Commit(fin); err != nil {
 		t.Fatal(err)
@@ -290,7 +297,8 @@ func TestCoalescerRejectsFIN(t *testing.T) {
 
 func TestCoalescerShortLastSegmentClosesChain(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	full := make([]byte, 1200)
 	half := make([]byte, 500)
 	if err := c.Commit(buildTCPv4(1000, tcpAck, full)); err != nil {
@@ -325,7 +333,8 @@ func TestCoalescerShortLastSegmentClosesChain(t *testing.T) {
 
 func TestCoalescerPSHFinalizesChain(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
@@ -355,7 +364,8 @@ func TestCoalescerPSHFinalizesChain(t *testing.T) {
 // coalescer drops it the sender's push signal never reaches the receiver.
 func TestCoalescerPropagatesPSHFromAppended(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	// Seed has no PSH; second segment carries PSH and seals the chain.
 	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
@@ -383,7 +393,8 @@ func TestCoalescerPropagatesPSHFromAppended(t *testing.T) {
 
 func TestCoalescerRejectsDifferentFlow(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	p1 := buildTCPv4(1000, tcpAck, pay)
 	p2 := buildTCPv4(2200, tcpAck, pay)
@@ -405,7 +416,8 @@ func TestCoalescerRejectsDifferentFlow(t *testing.T) {
 
 func TestCoalescerRejectsIPOptions(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 500)
 	pkt := buildTCPv4(1000, tcpAck, pay)
 	// Bump IHL to 6 to simulate 4 bytes of IP options. Don't actually add
@@ -425,7 +437,8 @@ func TestCoalescerRejectsIPOptions(t *testing.T) {
 
 func TestCoalescerCapBySegments(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 512)
 	seq := uint32(1000)
 	for i := 0; i < tcpCoalesceMaxSegs+5; i++ {
@@ -449,7 +462,8 @@ func TestCoalescerCapBySegments(t *testing.T) {
 // flows coalesce independently in a single Flush.
 func TestCoalescerMultipleFlowsInSameBatch(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 
 	// Flow A: sport 1000. Flow B: sport 3000.
@@ -506,7 +520,8 @@ func TestCoalescerMultipleFlowsInSameBatch(t *testing.T) {
 // writing passthrough packets synchronously.
 func TestCoalescerPreservesArrivalOrder(t *testing.T) {
 	w := &orderedFakeWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	// Sequence: coalesceable TCP, ICMP (passthrough), coalesceable TCP on
 	// a different flow. Expected emit order: gso(X), plain(ICMP), gso(Y).
 	pay := make([]byte, 1200)
@@ -574,7 +589,8 @@ func stringSliceEq(a, b []string) bool {
 // packet (SYN) mid-flow only flushes its own flow, not others.
 func TestCoalescerInterleavedFlowsPreserveOrdering(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 
 	// Flow A two segments.
@@ -679,7 +695,8 @@ func buildTCPv6(tcLow byte, seq uint32, flags byte, payload []byte) []byte {
 // retains ECE on the wire.
 func TestCoalescerCoalescesEceFlow(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	flags := byte(tcpAck | tcpEce)
 	if err := c.Commit(buildTCPv4(1000, flags, pay)); err != nil {
@@ -708,7 +725,8 @@ func TestCoalescerCoalescesEceFlow(t *testing.T) {
 // in-flow segment seeds a new slot rather than extending the prior burst.
 func TestCoalescerCwrSealsFlow(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
@@ -741,7 +759,8 @@ func TestCoalescerCwrSealsFlow(t *testing.T) {
 // a CE-echoing window or none.
 func TestCoalescerEceMismatchReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	if err := c.Commit(buildTCPv4(1000, tcpAck|tcpEce, pay)); err != nil {
 		t.Fatal(err)
@@ -771,7 +790,8 @@ func TestCoalescerEceMismatchReseeds(t *testing.T) {
 // across the whole burst.
 func TestCoalescerDifferingECNReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	if err := c.Commit(buildTCPv4WithToS(ecnECT0, 1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
@@ -816,7 +836,8 @@ func TestCoalescerDifferingECNReseeds(t *testing.T) {
 // codepoint, and neither may end up CE-marked.
 func TestCoalescerECT0ThenECT1NoCE(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	if err := c.Commit(buildTCPv4WithToS(ecnECT0, 1000, tcpAck, pay)); err != nil {
 		t.Fatal(err)
@@ -846,7 +867,8 @@ func TestCoalescerECT0ThenECT1NoCE(t *testing.T) {
 // six DSCP bits must match too.
 func TestCoalescerDscpMismatchReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	// Same ECN (Not-ECT), different DSCP (0x10 vs 0x20 in upper 6 bits).
 	tosA := byte(0x10<<2) | ecnNotECT
@@ -869,7 +891,8 @@ func TestCoalescerDscpMismatchReseeds(t *testing.T) {
 // TestCoalescerCoalescesEceFlow.
 func TestCoalescerIPv6CoalescesEceFlow(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	flags := byte(tcpAck | tcpEce)
 	if err := c.Commit(buildTCPv6(0, 1000, flags, pay)); err != nil {
@@ -900,7 +923,8 @@ func TestCoalescerIPv6CoalescesEceFlow(t *testing.T) {
 // seen had the wire never reordered.
 func TestCoalescerSortsReorderedSeedsAndMerges(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	// Arrival order: seq 1000, 3400, 2200. The 3400 seeds a separate slot
 	// because 3400 != nextSeq=2200, then 2200 fails to extend the 3400 slot
@@ -936,7 +960,8 @@ func TestCoalescerSortsReorderedSeedsAndMerges(t *testing.T) {
 // without any cross-flow contamination.
 func TestCoalescerSortAcrossFlowsMergesEachIndependently(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	// Flow A (sport 1000) seq 100, 1300; flow B (sport 3000) seq 500, 1700.
 	// Arrival: A.1300, B.1700, A.100, B.500 — every flow reordered.
@@ -987,7 +1012,8 @@ func TestCoalescerSortAcrossFlowsMergesEachIndependently(t *testing.T) {
 // boundary by an arbitrary number of segments.
 func TestCoalescerSortKeepsPSHBoundary(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	// Seq 1000 (no PSH) + 2200 (PSH) → seal one slot with PSH set.
 	// Seq 3400 (no PSH) is contiguous to 3400 from seq 2200+1200; without
@@ -1015,7 +1041,8 @@ func TestCoalescerSortKeepsPSHBoundary(t *testing.T) {
 // is sorted/merged independently.
 func TestCoalescerSortKeepsPassthroughBarrier(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	// First two segments seed S1 (then a 3400 reorder seeds S2).
 	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
@@ -1049,7 +1076,8 @@ func TestCoalescerSortKeepsPassthroughBarrier(t *testing.T) {
 // 0x30, so ipHeadersMatch (comparing byte 1 fully) still splits them.
 func TestCoalescerIPv6DifferingECNReseeds(t *testing.T) {
 	w := &fakeTunWriter{gsoEnabled: true}
-	c := NewTCPCoalescer(w, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(w, test.NewLogger(), arena.Reserve, arena.Reset)
 	pay := make([]byte, 1200)
 	// tcLow is the low 4 bits of TC; ECN occupies the bottom 2 of those.
 	if err := c.Commit(buildTCPv6(ecnECT0, 1000, tcpAck, pay)); err != nil {
