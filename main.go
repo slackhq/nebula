@@ -59,10 +59,10 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Error while creating SSH server", err)
 	}
-	wireSSHReload(l, ssh, c)
+	wireSSHReload(l, ssh, c, pki)
 	var sshStart func()
 	if c.GetBool("sshd.enabled", false) {
-		sshStart, err = configSSH(l, ssh, c)
+		sshStart, err = configSSH(l, ssh, c, pki)
 		if err != nil {
 			l.Warn("Failed to configure sshd, ssh debugging will not be available", "error", err)
 			sshStart = nil

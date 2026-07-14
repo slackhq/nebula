@@ -57,10 +57,10 @@ type sshDeviceInfoFlags struct {
 	Pretty bool
 }
 
-func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
+func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C, pki *PKI) {
 	c.RegisterReloadCallback(func(c *config.C) {
 		if c.GetBool("sshd.enabled", false) {
-			sshRun, err := configSSH(l, ssh, c)
+			sshRun, err := configSSH(l, ssh, c, pki)
 			if err != nil {
 				l.Error("Failed to reconfigure the sshd", "error", err)
 				ssh.Stop()
@@ -78,7 +78,7 @@ func wireSSHReload(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) {
 // updates the passed-in SSHServer. On success, it returns a function
 // that callers may invoke to run the configured ssh server. On
 // failure, it returns nil, error.
-func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error) {
+func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C, pki *PKI) (func(), error) {
 	listen := c.GetString("sshd.listen", "")
 	if listen == "" {
 		return nil, fmt.Errorf("sshd.listen must be provided")
@@ -187,7 +187,15 @@ func configSSH(l *slog.Logger, ssh *sshd.SSHServer, c *config.C) (func(), error)
 	if c.GetBool("sshd.enabled", false) {
 		ssh.Stop()
 		runner = func() {
-			if err := ssh.Run(listen); err != nil {
+			// Expand at run time so the "<nebula>" self-token binds this host's
+			// current VPN addresses (present once the tun is up). wireSSHReload
+			// restarts the server on every reload, so this re-expands each SIGHUP.
+			addrs, err := resolveSelfListenAddrs(listen, pki.vpnAddrs())
+			if err != nil {
+				l.Warn("Failed to run the SSH server", "error", err)
+				return
+			}
+			if err := ssh.Run(addrs); err != nil {
 				l.Warn("Failed to run the SSH server", "error", err)
 			}
 		}
