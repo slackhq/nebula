@@ -119,8 +119,8 @@ type Interface struct {
 
 	ctx     context.Context
 	writers []udp.Conn
-	readers []tio.Queue
-	// batchers is one per tun queue, wrapping readers[i].
+	queues  []tio.Queue
+	// batchers is one per tun queue, wrapping queues[i].
 	// decryptToTun sends plaintext into the batch.RxBatcher;
 	// listenOut calls its Flush at the end of each UDP recvmmsg batch.
 	batchers []batch.RxBatcher
@@ -222,7 +222,6 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		routines:              c.routines,
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
-		readers:               make([]tio.Queue, c.routines),
 		batchers:              make([]batch.RxBatcher, c.routines),
 		myVpnNetworks:         cs.myVpnNetworks,
 		myVpnNetworksTable:    cs.myVpnNetworksTable,
@@ -276,36 +275,39 @@ func (f *Interface) activate() error {
 		"boringcrypto", boringEnabled(),
 	)
 
-	if f.routines > 1 {
-		if !f.inside.SupportsMultiqueue() || !f.outside.SupportsMultipleReaders() {
-			f.routines = 1
-			f.l.Warn("routines is not supported on this platform, falling back to a single routine")
-		}
+	if f.routines > 1 && !f.outside.SupportsMultipleReaders() {
+		f.routines = 1
+		f.l.Warn("multiple udp readers are not supported on this platform, falling back to a single routine")
 	}
+
+	// Prepare the tun queues. A device that can't open that many hands back
+	// fewer (a single queue on platforms without multiqueue support) and we
+	// size the reader routines to what we actually got.
+	queues, err := f.inside.Queues(f.routines)
+	if err != nil {
+		return err
+	}
+	if len(queues) < f.routines {
+		f.l.Warn("tun multiqueue is not supported on this platform, falling back to fewer routines",
+			"requested", f.routines, "opened", len(queues))
+		f.routines = len(queues)
+	}
+	f.queues = queues
 
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
 
-	// Prepare n tun queues
-	for i := 0; i < f.routines; i++ {
-		if i > 0 {
-			if err = f.inside.NewMultiQueueReader(); err != nil {
-				return err
-			}
-		}
-	}
-	f.readers = f.inside.Readers()
-	for i := range f.readers {
-		caps := tio.QueueCapabilities(f.readers[i])
+	for i := range f.queues {
+		caps := tio.QueueCapabilities(f.queues[i])
 		if caps.TSO || caps.USO {
 			// Multi-lane: TCP gets coalesced when TSO is on, UDP when USO
 			// is on, everything else (and either lane disabled) falls
 			// through to passthrough so non-IP / non-TCP-UDP traffic still
 			// reaches the TUN.
 			arena := batch.NewArena(batch.DefaultMultiArenaCap)
-			f.batchers[i] = batch.NewMultiCoalescer(f.readers[i], f.l, arena, caps.TSO, caps.USO)
+			f.batchers[i] = batch.NewMultiCoalescer(f.queues[i], f.l, arena, caps.TSO, caps.USO)
 		} else {
 			arena := batch.NewArena(batch.DefaultPassthroughArenaCap)
-			f.batchers[i] = batch.NewPassthrough(f.readers[i], arena)
+			f.batchers[i] = batch.NewPassthrough(f.queues[i], arena)
 		}
 	}
 
@@ -329,7 +331,7 @@ func (f *Interface) run() {
 	// Launch n queues to read packets from tun dev
 	for i := 0; i < f.routines; i++ {
 		f.wg.Go(func() {
-			f.listenIn(f.readers[i], i)
+			f.listenIn(f.queues[i], i)
 		})
 	}
 
@@ -392,7 +394,7 @@ func (f *Interface) listenOut(i int) {
 	f.l.Debug("underlay reader is done", "reader", i)
 }
 
-func (f *Interface) listenIn(reader tio.Queue, i int) {
+func (f *Interface) listenIn(queue tio.Queue, i int) {
 	// Pinning this thread (and goroutine) to a single CPU keeps every sendmmsg from this goroutine going through the
 	// same TX ring on the nic, so the wire sees per-flow order. Skip entirely when tun.pin_threads is false.
 	if f.pinThreads {
@@ -423,7 +425,7 @@ func (f *Interface) listenIn(reader tio.Queue, i int) {
 	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
 
 	for {
-		pkts, err := reader.Read()
+		pkts, err := queue.Read()
 		if err != nil {
 			// Same shutdown noise handling as listenOut
 			if !f.closed.Load() && f.ctx.Err() == nil {

@@ -369,12 +369,8 @@ func (t *tun) Name() string {
 	return t.Device
 }
 
-func (t *tun) SupportsMultiqueue() bool {
-	return false
-}
-
-func (t *tun) NewMultiQueueReader() error {
-	return fmt.Errorf("TODO: multiqueue not implemented for openbsd")
+func (t *tun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}, nil
 }
 
 func (t *tun) addRoutes(logErrors bool) error {
@@ -423,10 +419,6 @@ func (t *tun) deviceBytes() (o [16]byte) {
 		o[i] = byte(c)
 	}
 	return
-}
-
-func (t *tun) Readers() []tio.Queue {
-	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}
 }
 
 func addRoute(prefix netip.Prefix, gateways []netip.Prefix) error {

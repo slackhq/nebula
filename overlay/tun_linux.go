@@ -39,7 +39,7 @@ type tun struct {
 	// the kernel: usoOffloadFlags when USO was accepted, tsoOffloadFlags on
 	// the TSO-only fallback, or 0 when vnetHdr is off. TUNSETOFFLOAD is
 	// device-wide (drivers/net/tun.c set_offload updates tun->set_features
-	// for the whole netdev), so NewMultiQueueReader must replay this exact
+	// for the whole netdev), so addQueue must replay this exact
 	// mask on every added queue — issuing a narrower mask there would
 	// silently downgrade offloads (e.g. disable USO) for all queues while
 	// they still advertise the stale capability.
@@ -174,7 +174,7 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 	}
 	vnetHdr := true
 	// offloadFlags is the exact TUN_F_* mask the kernel accepted. We remember
-	// it (rather than a plain bool) so NewMultiQueueReader can replay the
+	// it (rather than a plain bool) so addQueue can replay the
 	// identical device-wide mask on added queues instead of downgrading them.
 	var offloadFlags uint
 	name, err := tunSetIff(fd, nameStr, baseFlags|unix.IFF_VNET_HDR)
@@ -349,11 +349,21 @@ func (t *tun) reload(c *config.C, initial bool) error {
 	return nil
 }
 
-func (t *tun) SupportsMultiqueue() bool {
-	return true
+// Queues opens additional kernel multiqueue fds until the device has n
+// queues, then returns them all. The first queue was opened by newTun; each
+// extra fd replays the negotiated offload state (see addQueue).
+func (t *tun) Queues(n int) ([]tio.Queue, error) {
+	for len(t.readers.Queues()) < n {
+		if err := t.addQueue(); err != nil {
+			return nil, err
+		}
+	}
+	return t.readers.Queues(), nil
 }
 
-func (t *tun) NewMultiQueueReader() error {
+// addQueue opens one more IFF_MULTI_QUEUE fd on the device and adds it to
+// the queue set.
+func (t *tun) addQueue() error {
 	t.closeLock.Lock()
 	defer t.closeLock.Unlock()
 
@@ -835,10 +845,6 @@ func (t *tun) updateRoutes(r netlink.RouteUpdate) {
 	}
 	t.routesFromSystemLock.Unlock()
 	t.routeTree.Store(newTree)
-}
-
-func (t *tun) Readers() []tio.Queue {
-	return t.readers.Queues()
 }
 
 func (t *tun) Close() error {

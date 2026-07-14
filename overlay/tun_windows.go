@@ -263,16 +263,8 @@ func (t *winTun) Write(b []byte) (int, error) {
 	return t.tun.Write(b, 0)
 }
 
-func (t *winTun) SupportsMultiqueue() bool {
-	return false
-}
-
-func (t *winTun) NewMultiQueueReader() error {
-	return fmt.Errorf("TODO: multiqueue not implemented for windows")
-}
-
-func (t *winTun) Readers() []tio.Queue {
-	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}
+func (t *winTun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}, nil
 }
 
 func (t *winTun) Close() error {

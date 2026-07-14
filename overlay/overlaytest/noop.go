@@ -3,7 +3,6 @@
 package overlaytest
 
 import (
-	"errors"
 	"net/netip"
 
 	"github.com/slackhq/nebula/overlay/tio"
@@ -39,16 +38,8 @@ func (NoopTun) Write([]byte) (int, error) {
 	return 0, nil
 }
 
-func (NoopTun) SupportsMultiqueue() bool {
-	return false
-}
-
-func (NoopTun) NewMultiQueueReader() error {
-	return errors.New("unsupported")
-}
-
-func (NoopTun) Readers() []tio.Queue {
-	return []tio.Queue{NoopTun{}}
+func (NoopTun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{NoopTun{}}, nil
 }
 
 func (NoopTun) Close() error {

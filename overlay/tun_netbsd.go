@@ -68,10 +68,6 @@ type tun struct {
 	fd          int
 }
 
-func (t *tun) Readers() []tio.Queue {
-	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}
-}
-
 var deviceNameRE = regexp.MustCompile(`^tun[0-9]+$`)
 
 func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (*tun, error) {
@@ -394,12 +390,8 @@ func (t *tun) Name() string {
 	return t.Device
 }
 
-func (t *tun) SupportsMultiqueue() bool {
-	return false
-}
-
-func (t *tun) NewMultiQueueReader() error {
-	return fmt.Errorf("TODO: multiqueue not implemented for netbsd")
+func (t *tun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}, nil
 }
 
 func (t *tun) addRoutes(logErrors bool) error {

@@ -24,13 +24,11 @@ func NewUserDevice(vpnNetworks []netip.Prefix) (Device, error) {
 		outboundWriter: ow,
 		inboundReader:  ir,
 		inboundWriter:  iw,
-		numReaders:     1,
 	}, nil
 }
 
 type UserDevice struct {
 	vpnNetworks []netip.Prefix
-	numReaders  int
 
 	outboundReader *io.PipeReader
 	outboundWriter *io.PipeWriter
@@ -49,25 +47,16 @@ func (d *UserDevice) RoutesFor(ip netip.Addr) routing.Gateways {
 	return routing.Gateways{routing.NewGateway(ip, 1)}
 }
 
-func (d *UserDevice) SupportsMultiqueue() bool {
-	return true
-}
-
-func (d *UserDevice) NewMultiQueueReader() error {
-	d.numReaders++
-	return nil
-}
-
-func (d *UserDevice) Readers() []tio.Queue {
-	out := make([]tio.Queue, d.numReaders)
-	for i := range d.numReaders {
+func (d *UserDevice) Queues(n int) ([]tio.Queue, error) {
+	out := make([]tio.Queue, n)
+	for i := range out {
 		// All queues share the underlying pipes (the io.Pipe serializes
 		// concurrent callers) but each owns a private scratch buffer so
 		// concurrent Reads across queues never alias. NoClose: the pipes are
 		// owned by the UserDevice and torn down once by UserDevice.Close.
 		out[i] = tio.NewSingleQueueNoClose(d, defaultBatchBufSize)
 	}
-	return out
+	return out, nil
 }
 
 func (d *UserDevice) Pipe() (*io.PipeReader, *io.PipeWriter) {
