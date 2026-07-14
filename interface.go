@@ -307,7 +307,7 @@ func (f *Interface) activate() error {
 			f.batchers[i] = batch.NewMultiCoalescer(f.queues[i], f.l, arena, caps.TSO, caps.USO)
 		} else {
 			arena := batch.NewArena(batch.DefaultPassthroughArenaCap)
-			f.batchers[i] = batch.NewPassthrough(f.queues[i], arena)
+			f.batchers[i] = batch.NewPassthrough(f.queues[i], arena.Reserve, arena.Reset)
 		}
 	}
 

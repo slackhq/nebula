@@ -83,22 +83,19 @@ type TCPCoalescer struct {
 	// at is removed/sealed.
 	lastSlot *coalesceSlot
 	pool     []*coalesceSlot // free list for reuse
-
-	// arena is injected; the coalescer borrows slices from it via Reserve
-	// and tells it to release them via Reset on Flush. When wrapped in
-	// MultiCoalescer the same *Arena is shared with the other lanes so
-	// there's exactly one backing slab per Multi instance.
-	arena *Arena
-	l     *slog.Logger
+	reserver Reserver
+	resetter Resetter
+	l        *slog.Logger
 }
 
-func NewTCPCoalescer(w io.Writer, l *slog.Logger, arena *Arena) *TCPCoalescer {
+func NewTCPCoalescer(w io.Writer, l *slog.Logger, reserver Reserver, resetter Resetter) *TCPCoalescer {
 	c := &TCPCoalescer{
 		plainW:    w,
 		slots:     make([]*coalesceSlot, 0, initialSlots),
 		openSlots: make(map[flowKey]*coalesceSlot, initialSlots),
 		pool:      make([]*coalesceSlot, 0, initialSlots),
-		arena:     arena,
+		reserver:  reserver,
+		resetter:  resetter,
 		l:         l,
 	}
 	if gw, ok := tio.SupportsGSO(w, tio.GSOProtoTCP); ok {
@@ -178,7 +175,7 @@ func (p parsedTCP) coalesceable() bool {
 }
 
 func (c *TCPCoalescer) Reserve(sz int) []byte {
-	return c.arena.Reserve(sz)
+	return c.reserver(sz)
 }
 
 // Commit borrows pkt. The caller must keep pkt valid until the next Flush,
@@ -259,6 +256,16 @@ func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
 // doesn't hold up the rest. After Flush returns, borrowed payload slices
 // may be recycled.
 func (c *TCPCoalescer) Flush() error {
+	first := c.drain()
+	if c.resetter != nil {
+		c.resetter()
+	}
+	return first
+}
+
+// drain emits every queued slot (reordering/merging coalesced runs first)
+// and clears the slot state.
+func (c *TCPCoalescer) drain() error {
 	c.reorderForFlush()
 	var first error
 	for _, s := range c.slots {
@@ -278,7 +285,6 @@ func (c *TCPCoalescer) Flush() error {
 	clear(c.openSlots)
 	c.lastSlot = nil
 
-	c.arena.Reset()
 	return first
 }
 

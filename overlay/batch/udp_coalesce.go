@@ -65,9 +65,8 @@ type UDPCoalescer struct {
 	slots     []*udpSlot
 	openSlots map[flowKey]*udpSlot
 	pool      []*udpSlot
-
-	// arena is injected; see TCPCoalescer.arena for the contract.
-	arena *Arena
+	reserver  Reserver
+	resetter  Resetter
 }
 
 // NewUDPCoalescer wraps w. The caller is responsible for only constructing
@@ -75,13 +74,14 @@ type UDPCoalescer struct {
 // the kernel may reject GSO_UDP_L4 writes. If w does not implement
 // tio.GSOWriter at all (single-packet Queue), the coalescer degrades to
 // plain Writes — same defensive shape as the TCP coalescer.
-func NewUDPCoalescer(w io.Writer, arena *Arena) *UDPCoalescer {
+func NewUDPCoalescer(w io.Writer, reserver Reserver, resetter Resetter) *UDPCoalescer {
 	c := &UDPCoalescer{
 		plainW:    w,
 		slots:     make([]*udpSlot, 0, initialSlots),
 		openSlots: make(map[flowKey]*udpSlot, initialSlots),
 		pool:      make([]*udpSlot, 0, initialSlots),
-		arena:     arena,
+		reserver:  reserver,
+		resetter:  resetter,
 	}
 	if gw, ok := tio.SupportsGSO(w, tio.GSOProtoUDP); ok {
 		c.gsoW = gw
@@ -127,7 +127,7 @@ func parseUDP(pkt []byte) (parsedUDP, bool) {
 }
 
 func (c *UDPCoalescer) Reserve(sz int) []byte {
-	return c.arena.Reserve(sz)
+	return c.reserver(sz)
 }
 
 // Commit borrows pkt. The caller must keep pkt valid until the next Flush.
@@ -178,7 +178,19 @@ func (c *UDPCoalescer) commitParsed(pkt []byte, info parsedUDP) error {
 	return nil
 }
 
+// Flush drains every queued slot and calls the configured Resetter.
 func (c *UDPCoalescer) Flush() error {
+	first := c.drain()
+	if c.resetter != nil {
+		c.resetter()
+	}
+	return first
+}
+
+// drain emits every queued slot in arrival order and clears the slot state.
+// It does NOT reset the arena: borrowed payload slices stay valid until the
+// arena's owner recycles it.
+func (c *UDPCoalescer) drain() error {
 	var first error
 	for _, s := range c.slots {
 		var err error
@@ -195,7 +207,6 @@ func (c *UDPCoalescer) Flush() error {
 	clear(c.slots)
 	c.slots = c.slots[:0]
 	clear(c.openSlots)
-	c.arena.Reset()
 	return first
 }
 
