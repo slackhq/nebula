@@ -202,7 +202,8 @@ punchy:
 #sshd:
   # Toggles the feature
   #enabled: true
-  # Host and port to listen on, port 22 is not allowed for your safety
+  # Host and port to listen on, port 22 is not allowed for your safety.
+  # listen may also be a list of "host:port" addresses to bind several listeners (e.g. this node's nebula IPs).
   #listen: 127.0.0.1:2222
   # A file containing the ssh host private key to use
   # A decent way to generate one: ssh-keygen -t ed25519 -f ssh_host_ed25519_key -N "" < /dev/null
