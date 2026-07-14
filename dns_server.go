@@ -37,14 +37,23 @@ type dnsServer struct {
 	enabled atomic.Bool
 
 	serverMu sync.Mutex
-	server   *dns.Server
-	// started is closed once `server` has finished binding (or after
-	// ListenAndServe returns on a bind failure). Stop waits on it before
-	// calling Shutdown to avoid the miekg/dns "server not started" race
-	// where a Shutdown that arrives before bind completes is silently
-	// ignored, leaving the listener running forever.
+	// listeners holds one entry per bound address. A single listen address
+	// yields one entry; a "<nebula>" self-token expands to one per VPN
+	// address (bind-ALL). addr keeps the RAW joined config string so reload's
+	// sameAddr comparison is unaffected by expansion.
+	listeners []*dnsListener
+	addr      string
+}
+
+// dnsListener pairs a dns.Server with its started channel. The channel is
+// closed once the server has finished binding (or after ListenAndServe returns
+// on a bind failure). Stop waits on it before calling Shutdown to avoid the
+// miekg/dns "server not started" race where a Shutdown that arrives before bind
+// completes is silently ignored, leaving the listener running forever. Each
+// listener carries its own channel so the race fix holds per bound address.
+type dnsListener struct {
+	server  *dns.Server
 	started chan struct{}
-	addr    string
 }
 
 // newDnsServerFromConfig builds a dnsServer, applies the initial config, and
@@ -97,8 +106,8 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 	newAddr := getDnsServerAddr(c)
 
 	d.serverMu.Lock()
-	running := d.server
-	runningStarted := d.started
+	runningListeners := d.listeners
+	running := len(runningListeners) > 0
 	sameAddr := d.addr == newAddr
 	d.addr = newAddr
 	d.enabled.Store(enabled)
@@ -112,7 +121,7 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 	}
 
 	if !enabled {
-		if running != nil {
+		if running {
 			d.Stop()
 		}
 		// Drop any records that accumulated while enabled; a later re-enable
@@ -121,11 +130,11 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 		return nil
 	}
 
-	if running == nil {
+	if !running {
 		// Was disabled (or never started); bring it up now.
 		go d.Start()
 	} else if !sameAddr {
-		d.shutdownServer(running, runningStarted, "reload")
+		d.shutdownListeners(runningListeners, "reload")
 		// Old Start goroutine has now exited; bring up a fresh listener on the new address.
 		go d.Start()
 	}
@@ -133,6 +142,14 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 	// Refresh the self entry every enabled reload so cert renewals that change our name or VPN addresses are picked up.
 	d.seedSelf()
 	return nil
+}
+
+// shutdownListeners shuts down every listener in the slice, waiting for each to
+// finish binding first so Shutdown actually stops it rather than no-oping.
+func (d *dnsServer) shutdownListeners(listeners []*dnsListener, reason string) {
+	for _, ln := range listeners {
+		d.shutdownServer(ln.server, ln.started, reason)
+	}
 }
 
 // shutdownServer waits for the server to finish binding (so Shutdown actually
@@ -149,71 +166,106 @@ func (d *dnsServer) shutdownServer(srv *dns.Server, started chan struct{}, reaso
 	}
 }
 
-// Start binds and serves the DNS responder. Blocks until Stop is called or
-// the listener errors. Safe to call when DNS is disabled (returns
-// immediately). This is what Control.dnsStart points at.
+// Start binds and serves the DNS responder. Blocks until Stop is called or the
+// listeners error. Safe to call when DNS is disabled (returns immediately).
+// This is what Control.dnsStart points at.
 //
 // Must be invoked after the tun device is active so that lighthouse.dns.host
-// may bind to a nebula IP.
+// may bind to a nebula IP. That timing is also what lets the "<nebula>"
+// self-token expand to this host's VPN addresses (bind-ALL): expansion happens
+// here, at listener-start, reading the reload-safe cert state.
 func (d *dnsServer) Start() {
 	if !d.enabled.Load() {
 		return
 	}
 
-	started := make(chan struct{})
 	d.serverMu.Lock()
 	if d.ctx.Err() != nil {
 		d.serverMu.Unlock()
 		return
 	}
-	addr := d.addr
-	server := &dns.Server{
-		Addr:              addr,
-		Net:               "udp",
-		Handler:           d.mux,
-		NotifyStartedFunc: func() { close(started) },
-	}
-	d.server = server
-	d.started = started
+	rawAddr := d.addr
 	d.serverMu.Unlock()
 
-	// Per-invocation ctx watcher. Exits when Start does, so we don't leak a
-	// watcher per reload-driven restart.
+	addrs, err := resolveSelfListenAddrs(rawAddr, d.pki.vpnAddrs())
+	if err != nil {
+		d.l.Warn("Failed to run the DNS responder", "error", err)
+		return
+	}
+	d.startListeners(addrs)
+}
+
+// startListeners binds and serves one dns.Server per already-expanded address,
+// blocking until all of them return. Split from Start so tests can drive the
+// multi-listener machinery with concrete addresses. A bind failure on one
+// address is logged and the remaining listeners keep serving (log-and-continue,
+// matching the single-listener behavior this refactor grew out of).
+func (d *dnsServer) startListeners(addrs []string) {
+	listeners := make([]*dnsListener, len(addrs))
+	for i, a := range addrs {
+		started := make(chan struct{})
+		listeners[i] = &dnsListener{
+			started: started,
+			server: &dns.Server{
+				Addr:              a,
+				Net:               "udp",
+				Handler:           d.mux,
+				NotifyStartedFunc: func() { close(started) },
+			},
+		}
+	}
+
+	d.serverMu.Lock()
+	if d.ctx.Err() != nil {
+		d.serverMu.Unlock()
+		return
+	}
+	d.listeners = listeners
+	d.serverMu.Unlock()
+
+	// Per-invocation ctx watcher. Exits when startListeners does, so we don't
+	// leak a watcher per reload-driven restart.
 	done := make(chan struct{})
 	go func() {
 		select {
 		case <-d.ctx.Done():
-			d.shutdownServer(server, started, "shutdown")
+			d.shutdownListeners(listeners, "shutdown")
 		case <-done:
 		}
 	}()
 
-	d.l.Info("Starting DNS responder", "dnsListener", addr)
-	err := server.ListenAndServe()
+	var wg sync.WaitGroup
+	for _, ln := range listeners {
+		wg.Add(1)
+		go func(ln *dnsListener) {
+			defer wg.Done()
+			d.l.Info("Starting DNS responder", "dnsListener", ln.server.Addr)
+			err := ln.server.ListenAndServe()
+
+			// If the listener never bound (bind error) NotifyStartedFunc never
+			// fires, so close started here to release any waiter on it.
+			select {
+			case <-ln.started:
+			default:
+				close(ln.started)
+			}
+
+			if err != nil {
+				d.l.Warn("Failed to run the DNS responder", "error", err, "dnsListener", ln.server.Addr)
+			}
+		}(ln)
+	}
+	wg.Wait()
 	close(done)
-
-	// If the listener never bound (bind error) NotifyStartedFunc never fires,
-	// so close started here to release any Stop caller waiting on it.
-	select {
-	case <-started:
-	default:
-		close(started)
-	}
-
-	if err != nil {
-		d.l.Warn("Failed to run the DNS responder", "error", err)
-	}
 }
 
-// Stop shuts down the active server, if any. Idempotent.
+// Stop shuts down all active listeners, if any. Idempotent.
 func (d *dnsServer) Stop() {
 	d.serverMu.Lock()
-	srv := d.server
-	started := d.started
-	d.server = nil
-	d.started = nil
+	listeners := d.listeners
+	d.listeners = nil
 	d.serverMu.Unlock()
-	d.shutdownServer(srv, started, "stop")
+	d.shutdownListeners(listeners, "stop")
 }
 
 // Query returns the address for the given name and query type. The second

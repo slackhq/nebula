@@ -135,6 +135,16 @@ func Test_getDnsServerAddr(t *testing.T) {
 		},
 	}
 	assert.Equal(t, "[::]:1", getDnsServerAddr(c))
+
+	// The "<nebula>" self-token must pass through raw here; expansion happens
+	// later at listener start, not during addr construction.
+	c.Settings["lighthouse"] = map[string]any{
+		"dns": map[string]any{
+			"host": "<nebula>",
+			"port": "53",
+		},
+	}
+	assert.Equal(t, "<nebula>:53", getDnsServerAddr(c))
 }
 
 func newTestDnsServer(t *testing.T) (*dnsServer, *config.C) {
@@ -170,7 +180,7 @@ func TestDnsServer_reload_initial_disabled(t *testing.T) {
 	require.NoError(t, ds.reload(c, true))
 	assert.False(t, ds.enabled.Load())
 	assert.Equal(t, "127.0.0.1:0", ds.addr)
-	assert.Nil(t, ds.server)
+	assert.Empty(t, ds.listeners)
 }
 
 func TestDnsServer_reload_initial_enabled(t *testing.T) {
@@ -181,7 +191,7 @@ func TestDnsServer_reload_initial_enabled(t *testing.T) {
 	assert.True(t, ds.enabled.Load())
 	assert.Equal(t, "127.0.0.1:0", ds.addr)
 	// initial never starts a runner; that's Control.Start's job
-	assert.Nil(t, ds.server)
+	assert.Empty(t, ds.listeners)
 }
 
 func TestDnsServer_reload_initial_serveDnsWithoutLighthouse(t *testing.T) {
@@ -194,14 +204,39 @@ func TestDnsServer_reload_initial_serveDnsWithoutLighthouse(t *testing.T) {
 }
 
 func TestDnsServer_reload_sameAddr_noOp(t *testing.T) {
+	port := freeUDPPort(t)
 	ds, c := newTestDnsServer(t)
-	setDnsConfig(c, "127.0.0.1", "0", true, true)
-
+	setDnsConfig(c, "127.0.0.1", port, true, true)
 	require.NoError(t, ds.reload(c, true))
-	// No server running yet, no addr change. Reload should not spawn anything.
+
+	done := make(chan struct{})
+	go func() {
+		ds.Start()
+		close(done)
+	}()
+	waitForBind(t, ds)
+
+	ds.serverMu.Lock()
+	before := ds.listeners
+	ds.serverMu.Unlock()
+	require.Len(t, before, 1)
+
+	// Same address: reload must not tear down and rebuild the listener.
 	require.NoError(t, ds.reload(c, false))
 	assert.True(t, ds.enabled.Load())
-	assert.Nil(t, ds.server)
+
+	ds.serverMu.Lock()
+	after := ds.listeners
+	ds.serverMu.Unlock()
+	require.Len(t, after, 1)
+	assert.Same(t, before[0], after[0], "same-addr reload should not restart the listener")
+
+	ds.Stop()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after Stop")
+	}
 }
 
 func TestDnsServer_StartStop_lifecycle(t *testing.T) {
@@ -219,20 +254,7 @@ func TestDnsServer_StartStop_lifecycle(t *testing.T) {
 		close(done)
 	}()
 
-	waitFor(t, func() bool {
-		ds.serverMu.Lock()
-		started := ds.started
-		ds.serverMu.Unlock()
-		if started == nil {
-			return false
-		}
-		select {
-		case <-started:
-			return true
-		default:
-			return false
-		}
-	})
+	waitForBind(t, ds)
 
 	ds.Stop()
 	select {
@@ -389,6 +411,96 @@ func TestDnsServer_reload_disable_stopsRunningServer(t *testing.T) {
 	assert.False(t, ds.enabled.Load())
 }
 
+func TestDnsServer_reload_tokenHost_sameAddr(t *testing.T) {
+	ds, c := newTestDnsServer(t)
+	setDnsConfig(c, "<nebula>", "53", true, true)
+	require.NoError(t, ds.reload(c, true))
+	// The raw token string is what gets stored and compared, so expansion
+	// never confuses reload's change detection.
+	assert.Equal(t, "<nebula>:53", ds.addr)
+
+	// An identical reload is a no-op: no restart, nothing bound.
+	require.NoError(t, ds.reload(c, false))
+	assert.Empty(t, ds.listeners)
+}
+
+func TestDnsServer_Start_tokenNoVpnAddrs_noListeners(t *testing.T) {
+	ds, c := newTestDnsServer(t)
+	// No pki -> nil cert state -> nil VPN addrs, so the token cannot expand and
+	// Start must log-and-return without binding anything.
+	setDnsConfig(c, "<nebula>", "0", true, true)
+	require.NoError(t, ds.reload(c, true))
+	ds.enabled.Store(true)
+
+	ds.Start()
+	assert.Empty(t, ds.listeners)
+}
+
+// TestDnsServer_startListeners_multiAddr is the regression test for the
+// per-listener started-chan machinery: several servers bind, each answers
+// queries via the shared mux, and Stop tears all of them down without hanging.
+func TestDnsServer_startListeners_multiAddr(t *testing.T) {
+	ds, _ := newTestDnsServer(t)
+	ds.enabled.Store(true)
+	ds.Add("multi.example.", []netip.Addr{netip.MustParseAddr("10.9.8.7")})
+
+	addrs := []string{freeUDPPortOn(t, "127.0.0.1")}
+	if v6LoopbackAvailable() {
+		// Exercises IPv6 bracketing end-to-end (the bind-ALL shape a token
+		// with a v6 VPN address produces).
+		addrs = append(addrs, freeUDPPortOn(t, "::1"))
+	}
+
+	done := make(chan struct{})
+	go func() {
+		ds.startListeners(addrs)
+		close(done)
+	}()
+	waitForBind(t, ds)
+	require.Len(t, ds.listeners, len(addrs))
+
+	for _, a := range addrs {
+		resp := queryDNS(t, a, "multi.example.", dns.TypeA)
+		require.NotEmpty(t, resp.Answer, "listener %s should answer", a)
+		assert.Equal(t, "10.9.8.7", resp.Answer[0].(*dns.A).A.String())
+	}
+
+	ds.Stop()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("startListeners did not return after Stop")
+	}
+}
+
+func queryDNS(t *testing.T, addr, name string, qtype uint16) *dns.Msg {
+	t.Helper()
+	m := new(dns.Msg)
+	m.SetQuestion(name, qtype)
+	c := &dns.Client{Net: "udp", Timeout: 2 * time.Second}
+	resp, _, err := c.Exchange(m, addr)
+	require.NoError(t, err)
+	return resp
+}
+
+func v6LoopbackAvailable() bool {
+	conn, err := net.ListenPacket("udp", "[::1]:0")
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+func freeUDPPortOn(t *testing.T, host string) string {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", net.JoinHostPort(host, "0"))
+	require.NoError(t, err)
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	require.NoError(t, conn.Close())
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
 func freeUDPPort(t *testing.T) string {
 	t.Helper()
 	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -402,17 +514,19 @@ func waitForBind(t *testing.T, ds *dnsServer) {
 	t.Helper()
 	waitFor(t, func() bool {
 		ds.serverMu.Lock()
-		started := ds.started
+		listeners := ds.listeners
 		ds.serverMu.Unlock()
-		if started == nil {
+		if len(listeners) == 0 {
 			return false
 		}
-		select {
-		case <-started:
-			return true
-		default:
-			return false
+		for _, ln := range listeners {
+			select {
+			case <-ln.started:
+			default:
+				return false
+			}
 		}
+		return true
 	})
 }
 
