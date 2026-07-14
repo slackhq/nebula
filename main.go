@@ -44,6 +44,8 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		l.Info(string(b))
 	}
 
+	warnSelfTokenWithTunDisabled(l, c)
+
 	pki, err := NewPKIFromConfig(l, c)
 	if err != nil {
 		return nil, util.ContextualizeIfNeeded("Failed to load PKI from config", err)

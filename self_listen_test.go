@@ -1,9 +1,12 @@
 package nebula
 
 import (
+	"bytes"
+	"log/slog"
 	"net/netip"
 	"testing"
 
+	"github.com/slackhq/nebula/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -107,4 +110,30 @@ func TestResolveSelfListenAddrs_TokenEmptyPortErrors(t *testing.T) {
 	_, err := resolveSelfListenAddrs("<nebula>:", []netip.Addr{netip.MustParseAddr("100.64.0.5")})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "explicit port")
+}
+
+func TestWarnSelfTokenWithTunDisabled(t *testing.T) {
+	warnings := func(c *config.C) string {
+		var buf bytes.Buffer
+		l := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		warnSelfTokenWithTunDisabled(l, c)
+		return buf.String()
+	}
+
+	// tun.disabled + token: warn per token-using key, and only those.
+	c := config.NewC(nil)
+	c.Settings["tun"] = map[string]any{"disabled": true}
+	c.Settings["lighthouse"] = map[string]any{"dns": map[string]any{"host": "<nebula>"}}
+	c.Settings["stats"] = map[string]any{"listen": "<nebula>:8080"}
+	c.Settings["sshd"] = map[string]any{"listen": "127.0.0.1:2222"} // no token
+	out := warnings(c)
+	assert.Contains(t, out, "configKey=lighthouse.dns.host")
+	assert.Contains(t, out, "configKey=stats.listen")
+	assert.NotContains(t, out, "configKey=sshd.listen")
+
+	// tun enabled: never warn, even with the token present.
+	c2 := config.NewC(nil)
+	c2.Settings["tun"] = map[string]any{"disabled": false}
+	c2.Settings["stats"] = map[string]any{"listen": "<nebula>:8080"}
+	assert.Empty(t, warnings(c2))
 }

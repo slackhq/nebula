@@ -2,9 +2,12 @@ package nebula
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"strings"
+
+	"github.com/slackhq/nebula/config"
 )
 
 // nebulaSelfToken is a magic host value usable in the host position of a
@@ -84,4 +87,21 @@ func (p *PKI) vpnAddrs() []netip.Addr {
 		return nil
 	}
 	return cs.myVpnAddrs
+}
+
+// warnSelfTokenWithTunDisabled logs a warning for each listener whose config
+// uses the "<nebula>" self-token while tun.disabled is set. The token expands
+// to this host's overlay addresses, which no interface carries when the tun is
+// disabled, so those listeners cannot bind. The common footgun is enabling DNS
+// with "<nebula>" on a tun-disabled lighthouse.
+func warnSelfTokenWithTunDisabled(l *slog.Logger, c *config.C) {
+	if !c.GetBool("tun.disabled", false) {
+		return
+	}
+	for _, key := range []string{"lighthouse.dns.host", "sshd.listen", "stats.listen"} {
+		if strings.Contains(c.GetString(key, ""), nebulaSelfToken) {
+			l.Warn(`Listener uses the "<nebula>" self-token but tun.disabled is set; overlay addresses are not bindable without a tun interface, so this listener will fail to bind`,
+				"configKey", key)
+		}
+	}
 }
