@@ -71,7 +71,8 @@ func buildICMPv4() []byte {
 // between batches, and reports per-packet cost.
 func runCommitBench(b *testing.B, pkts [][]byte, batchSize int) {
 	b.Helper()
-	c := NewTCPCoalescer(nopTunWriter{}, test.NewLogger(), NewArena(0))
+	arena := NewArena(0)
+	c := NewTCPCoalescer(nopTunWriter{}, test.NewLogger(), arena.Reserve, arena.Reset)
 	b.ReportAllocs()
 	b.SetBytes(int64(len(pkts[0])))
 	b.ResetTimer()
