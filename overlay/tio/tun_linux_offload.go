@@ -14,8 +14,15 @@ import (
 // protoFromGSOType maps a virtio_net_hdr GSOType to the GSOProto value the
 // segment-time helpers use. Returns an error for GSO_NONE or any unknown
 // value — the caller should only invoke this on a confirmed superpacket.
+//
+// VIRTIO_NET_HDR_GSO_ECN is a qualifier bit, not a type: it marks a TSO
+// superpacket whose TCP header has CWR set (SKB_GSO_TCP_ECN) — we asked for
+// these via TUN_F_TSO_ECN. The segmenter already emits CWR on the first
+// segment only, so the bit just needs masking here. It only appears when
+// ECN feedback is actually flowing (a congested hop CE-marked the flow),
+// which is precisely when dropping the sender's superpackets hurts most.
 func protoFromGSOType(t uint8) (GSOProto, error) {
-	switch t {
+	switch t &^ unix.VIRTIO_NET_HDR_GSO_ECN {
 	case unix.VIRTIO_NET_HDR_GSO_TCPV4, unix.VIRTIO_NET_HDR_GSO_TCPV6:
 		return GSOProtoTCP, nil
 	case unix.VIRTIO_NET_HDR_GSO_UDP_L4:
