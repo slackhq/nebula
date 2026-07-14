@@ -110,9 +110,8 @@ func (m *MultiCoalescer) Commit(pkt []byte) error {
 	return m.pt.Commit(pkt)
 }
 
-// Flush drains every lane in a fixed order — TCP, UDP, passthrough — then
-// resets the shared arena once. A lane error doesn't stop the remaining
-// lanes; the joined errors are returned.
+// Flush drains every lane in a fixed order, then resets the shared arena once.
+// A lane error doesn't stop the remaining lanes; the joined errors are returned.
 func (m *MultiCoalescer) Flush() error {
 	var errs []error
 	if m.tcp != nil {

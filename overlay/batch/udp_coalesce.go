@@ -22,10 +22,7 @@ const udpCoalesceMaxSegs = 64
 // into. IPv6 (40) + UDP (8) = 48; round up for safety.
 const udpCoalesceHdrCap = 64
 
-// udpSlot is one entry in the UDPCoalescer's ordered event queue. Same
-// passthrough-vs-coalesced shape as the TCP coalescer's slot, but no
-// seq/PSH/CWR bookkeeping — UDP segments only need 5-tuple + length
-// matching to coalesce.
+// udpSlot is one entry in the UDPCoalescer's ordered event queue.
 type udpSlot struct {
 	passthrough bool
 	rawPkt      []byte // borrowed when passthrough
