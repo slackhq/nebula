@@ -12,10 +12,7 @@ import (
 	"github.com/slackhq/nebula/overlay/tio"
 )
 
-// ipProtoTCP is the IANA protocol number for TCP. Hardcoded instead of
-// reaching for golang.org/x/sys/unix — that package doesn't define the
-// constant on Windows, which would break cross-compiles even though this
-// file runs unchanged on every platform.
+// ipProtoTCP is the IANA protocol number for TCP. Defined here to help Windows out.
 const ipProtoTCP = 6
 
 // tcpCoalesceBufSize caps total bytes per superpacket. Mirrors the kernel's
@@ -23,8 +20,7 @@ const ipProtoTCP = 6
 const tcpCoalesceBufSize = 65535
 
 // tcpCoalesceMaxSegs caps how many segments we'll coalesce into a single
-// superpacket. Keeping this well below the kernel's TSO ceiling bounds
-// latency.
+// superpacket. Keeping this well below the kernel's TSO ceiling bounds latency.
 const tcpCoalesceMaxSegs = 64
 
 // tcpCoalesceHdrCap is the scratch space we copy a seed's IP+TCP header
@@ -118,8 +114,8 @@ type parsedTCP struct {
 
 // parseTCPBase extracts the flow key and IP/TCP offsets for any TCP packet,
 // regardless of whether it's admissible for coalescing. Returns ok=false
-// for non-TCP or malformed input. Accepts IPv4 (no options, no fragmentation)
-// and IPv6 (no extension headers).
+// for non-TCP or malformed input.
+// Accepts IPv4 (no options or fragmentation) and IPv6 (no extension headers).
 func parseTCPBase(pkt []byte) (parsedTCP, bool) {
 	var p parsedTCP
 	ip, ok := parseIPPrologue(pkt, ipProtoTCP)
@@ -178,9 +174,7 @@ func (c *TCPCoalescer) Reserve(sz int) []byte {
 	return c.reserver(sz)
 }
 
-// Commit borrows pkt. The caller must keep pkt valid until the next Flush,
-// whether or not the packet was coalesced — passthrough (non-admissible)
-// packets are queued and written at Flush time, not synchronously.
+// Commit borrows pkt. The caller must keep pkt valid until the next Flush.
 func (c *TCPCoalescer) Commit(pkt []byte) error {
 	if c.gsoW == nil {
 		c.addPassthrough(pkt)
@@ -246,15 +240,7 @@ func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
 	return nil
 }
 
-// Flush emits every queued event in (per-flow) seq order. Coalesced slots
-// go out via WriteGSO; passthrough slots go out via plainW.Write.
-// reorderForFlush first sorts each flow's slots into TCP-seq order within
-// passthrough-bounded segments and merges contiguous adjacent slots, so
-// any wire-side reorder that crossed an rxOrder batch boundary doesn't
-// get amplified into kernel-visible reorder by the slot machinery.
-// Returns the first error observed; keeps draining so one bad packet
-// doesn't hold up the rest. After Flush returns, borrowed payload slices
-// may be recycled.
+// Flush emits every queued event in (per-flow) seq order.
 func (c *TCPCoalescer) Flush() error {
 	first := c.drain()
 	if c.resetter != nil {
@@ -328,8 +314,7 @@ func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 }
 
 // canAppend reports whether info's packet extends the slot's seed: same
-// header shape and stable contents, adjacent seq, not oversized, chain not
-// closed.
+// header shape and stable contents, adjacent seq, not oversized, chain not closed.
 func (c *TCPCoalescer) canAppend(s *coalesceSlot, pkt []byte, info parsedTCP) bool {
 	if s.psh {
 		return false
@@ -397,8 +382,7 @@ func (c *TCPCoalescer) release(s *coalesceSlot) {
 	c.pool = append(c.pool, s)
 }
 
-// flushSlot patches the header and calls WriteGSO. Does not remove the
-// slot from c.slots.
+// flushSlot patches the header and calls WriteGSO. Does not remove the slot from c.slots.
 func (c *TCPCoalescer) flushSlot(s *coalesceSlot) error {
 	total := s.hdrLen + s.totalPay
 	l4Len := total - s.ipHdrLen
@@ -427,9 +411,7 @@ func (c *TCPCoalescer) flushSlot(s *coalesceSlot) error {
 
 // headersMatch compares two IP+TCP header prefixes for byte-for-byte
 // equality on every field that must be identical across coalesced
-// segments. Size/IPID/IPCsum/seq/flags/tcpCsum are masked out. The IP-level
-// ECN codepoint is compared (via ipHeadersMatch) so segments with differing
-// ECN don't coalesce, matching kernel GRO.
+// segments. Size/IPID/IPCsum/seq/flags/tcpCsum are masked out.
 func headersMatch(a, b []byte, isV6 bool, ipHdrLen int) bool {
 	if len(a) != len(b) {
 		return false

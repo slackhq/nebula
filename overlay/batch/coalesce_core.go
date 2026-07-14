@@ -140,14 +140,7 @@ func ipHeadersMatch(a, b []byte, isV6 bool) bool {
 }
 
 // Arena is an injectable byte-slab that hands out non-overlapping borrowed
-// slices via Reserve and releases them in bulk via Reset. Coalescers take
-// an *Arena at construction so the caller controls the slab lifetime and
-// can share one slab across multiple coalescers (MultiCoalescer hands the
-// same *Arena to every lane so the lanes don't carry their own backings).
-//
-// Reserve borrows; the slice is valid until the next Reset. The slab grows
-// (by allocating a fresh, larger backing array) if a Reserve doesn't fit;
-// pre-size the arena via NewArena to avoid that path on the hot path.
+// slices via Reserve and releases them in bulk via Reset.
 type Arena struct {
 	buf []byte
 }
