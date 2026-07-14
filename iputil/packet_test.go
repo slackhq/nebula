@@ -180,13 +180,8 @@ func Test_CreateRejectPacket_NoICMPError(t *testing.T) {
 	}
 }
 
-// Test_CreateRejectPacket_RespectsCap guards against H2: with UDP GRO the
-// scratch buffer reused to build a reject is a single coalesced segment inside
-// a shared recvmmsg row. Its length covers just that segment, but an uncapped
-// slice's capacity runs on into the next, not-yet-processed segment. Because
-// CreateRejectPacket honors cap, capping the borrowed segment to its own length
-// (cap==len) makes it physically impossible for an oversized ICMPv6 reject to
-// overwrite the neighbor segment's bytes.
+// Test_CreateRejectPacket_RespectsCap ensures it is impossible for
+// an oversized ICMPv6 reject to overwrite the neighbor segment's bytes.
 func Test_CreateRejectPacket_RespectsCap(t *testing.T) {
 	src := net.ParseIP("fd00::1")
 	dst := net.ParseIP("fd00::2")
