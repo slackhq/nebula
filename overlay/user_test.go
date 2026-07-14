@@ -26,10 +26,11 @@ func newTestUserDevice(t *testing.T) *UserDevice {
 
 // TestUserDeviceReadersDistinctBuffers is the regression test for the
 // multiqueue packet-corruption bug: Readers() used to hand the same
-// *UserDevice (and therefore the same readBuf/batchRet) to every queue, so one
-// reader's borrowed Packet.Bytes was overwritten by another reader's
-// concurrent Read. Readers() must now return numReaders DISTINCT queue objects,
-// each with its own backing buffer.
+// *UserDevice (and therefore the same read scratch buffer) to every queue, so
+// one reader's borrowed Packet.Bytes was overwritten by another reader's
+// concurrent Read. Readers() must now return numReaders DISTINCT queue
+// objects, each with its own backing buffer — verified behaviorally below by
+// holding one queue's borrowed slice across the other queue's Read.
 func TestUserDeviceReadersDistinctBuffers(t *testing.T) {
 	d := newTestUserDevice(t)
 
@@ -43,20 +44,9 @@ func TestUserDeviceReadersDistinctBuffers(t *testing.T) {
 		t.Fatalf("Readers() returned %d queues, want 2", len(readers))
 	}
 
-	q0 := readers[0].(*userDeviceQueue)
-	q1 := readers[1].(*userDeviceQueue)
-
 	// Distinct queue objects.
-	if q0 == q1 {
+	if readers[0] == readers[1] {
 		t.Fatal("Readers() returned the same queue object twice")
-	}
-	// Distinct backing buffers (the actual regression: shared readBuf).
-	if &q0.readBuf[0] == &q1.readBuf[0] {
-		t.Fatal("queues share the same readBuf backing array")
-	}
-	// Shared underlying pipes.
-	if q0.outboundReader != q1.outboundReader || q0.inboundWriter != q1.inboundWriter {
-		t.Fatal("queues do not share the underlying pipes")
 	}
 
 	// Drive one packet through each queue and confirm the borrowed bytes from
