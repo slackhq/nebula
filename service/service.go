@@ -50,7 +50,7 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 		return nil, errors.New("must be using user device")
 	}
 
-	wait, err := control.Start()
+	err := control.Start()
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +155,7 @@ func New(control *nebula.Control) (_ *Service, reterr error) {
 	// Add the nebula wait function to the group so a fatal reader error
 	// propagates out through errgroup.Wait().
 	eg.Go(func() error {
-		return wait()
+		return control.Wait()
 	})
 
 	return &s, nil
