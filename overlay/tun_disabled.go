@@ -19,10 +19,9 @@ type disabledTun struct {
 	vpnNetworks []netip.Prefix
 
 	// Track these metrics since we don't have the tun device to do it for us
-	tx         metrics.Counter
-	rx         metrics.Counter
-	l          *slog.Logger
-	numReaders int
+	tx metrics.Counter
+	rx metrics.Counter
+	l  *slog.Logger
 }
 
 // Read hands the next queued packet to a reader, copying it into b. Reads
@@ -47,7 +46,6 @@ func newDisabledTun(vpnNetworks []netip.Prefix, queueLen int, metricsEnabled boo
 		vpnNetworks: vpnNetworks,
 		read:        make(chan []byte, queueLen),
 		l:           l,
-		numReaders:  1,
 	}
 
 	if metricsEnabled {
@@ -108,23 +106,14 @@ func (t *disabledTun) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func (t *disabledTun) SupportsMultiqueue() bool {
-	return true
-}
-
-func (t *disabledTun) NewMultiQueueReader() error {
-	t.numReaders++
-	return nil
-}
-
-func (t *disabledTun) Readers() []tio.Queue {
-	out := make([]tio.Queue, t.numReaders)
-	for i := range t.numReaders {
+func (t *disabledTun) Queues(n int) ([]tio.Queue, error) {
+	out := make([]tio.Queue, n)
+	for i := range out {
 		// NoClose: the shared channel and metrics are owned by the
 		// disabledTun; Close on the device tears them down once for everybody.
 		out[i] = tio.NewSingleQueueNoClose(t, defaultBatchBufSize)
 	}
-	return out
+	return out, nil
 }
 
 func (t *disabledTun) Close() error {

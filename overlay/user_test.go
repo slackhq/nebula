@@ -24,29 +24,21 @@ func newTestUserDevice(t *testing.T) *UserDevice {
 	return ud
 }
 
-// TestUserDeviceReadersDistinctBuffers is the regression test for the
-// multiqueue packet-corruption bug: Readers() used to hand the same
-// *UserDevice (and therefore the same read scratch buffer) to every queue, so
-// one reader's borrowed Packet.Bytes was overwritten by another reader's
-// concurrent Read. Readers() must now return numReaders DISTINCT queue
-// objects, each with its own backing buffer — verified behaviorally below by
-// holding one queue's borrowed slice across the other queue's Read.
+// TestUserDeviceReadersDistinctBuffers ensures each Queue is actually different
 func TestUserDeviceReadersDistinctBuffers(t *testing.T) {
 	d := newTestUserDevice(t)
 
-	// One extra reader => two queues total.
-	if err := d.NewMultiQueueReader(); err != nil {
-		t.Fatalf("NewMultiQueueReader: %v", err)
+	readers, err := d.Queues(2)
+	if err != nil {
+		t.Fatalf("Queues: %v", err)
 	}
-
-	readers := d.Readers()
 	if len(readers) != 2 {
-		t.Fatalf("Readers() returned %d queues, want 2", len(readers))
+		t.Fatalf("Queues(2) returned %d queues, want 2", len(readers))
 	}
 
 	// Distinct queue objects.
 	if readers[0] == readers[1] {
-		t.Fatal("Readers() returned the same queue object twice")
+		t.Fatal("Queues(2) returned the same queue object twice")
 	}
 
 	// Drive one packet through each queue and confirm the borrowed bytes from
@@ -99,10 +91,10 @@ func TestUserDeviceReadersDistinctBuffers(t *testing.T) {
 // and corrupted each other's returned slices.
 func TestUserDeviceReadersConcurrentRace(t *testing.T) {
 	d := newTestUserDevice(t)
-	if err := d.NewMultiQueueReader(); err != nil {
-		t.Fatalf("NewMultiQueueReader: %v", err)
+	readers, err := d.Queues(2)
+	if err != nil {
+		t.Fatalf("Queues: %v", err)
 	}
-	readers := d.Readers()
 	_, ow := d.Pipe()
 
 	const iterations = 200
