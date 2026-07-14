@@ -11,38 +11,28 @@ type batchWriter interface {
 
 // SendBatch accumulates encrypted UDP packets and flushes them via WriteBatch.
 // One SendBatch is owned by each listenIn goroutine; no locking is needed.
-// The backing arena grows on demand: when there isn't room for the next slot
-// we allocate a fresh backing array. Already-committed slices keep referencing
-// the old array and remain valid until Flush drops them.
+// Slots are backed by an Arena (see its docs)
 type SendBatch struct {
-	out     batchWriter
-	bufs    [][]byte
-	dsts    []netip.AddrPort
-	ecns    []byte
-	backing []byte
+	out   batchWriter
+	bufs  [][]byte
+	dsts  []netip.AddrPort
+	ecns  []byte
+	arena *Arena
 }
 
 // NewSendBatch makes a SendBatch with batchCap slots and an arenaSize byte buffer for slices to back those slots
 func NewSendBatch(out batchWriter, batchCap, arenaSize int) *SendBatch {
 	return &SendBatch{
-		out:     out,
-		bufs:    make([][]byte, 0, batchCap),
-		dsts:    make([]netip.AddrPort, 0, batchCap),
-		ecns:    make([]byte, 0, batchCap),
-		backing: make([]byte, 0, arenaSize),
+		out:   out,
+		bufs:  make([][]byte, 0, batchCap),
+		dsts:  make([]netip.AddrPort, 0, batchCap),
+		ecns:  make([]byte, 0, batchCap),
+		arena: NewArena(arenaSize),
 	}
 }
 
 func (b *SendBatch) Reserve(sz int) []byte {
-	if len(b.backing)+sz > cap(b.backing) {
-		// Grow: allocate a fresh backing. Already-committed slices still
-		// reference the old array and remain valid until Flush drops them.
-		newCap := max(cap(b.backing)*2, sz)
-		b.backing = make([]byte, 0, newCap)
-	}
-	start := len(b.backing)
-	b.backing = b.backing[:start+sz]
-	return b.backing[start : start+sz : start+sz]
+	return b.arena.Reserve(sz)
 }
 
 // Len reports how many packets are queued for the next Flush. Callers use
@@ -65,6 +55,6 @@ func (b *SendBatch) Flush() error {
 	b.bufs = b.bufs[:0]
 	b.dsts = b.dsts[:0]
 	b.ecns = b.ecns[:0]
-	b.backing = b.backing[:0]
+	b.arena.Reset()
 	return err
 }
