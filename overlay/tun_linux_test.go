@@ -41,7 +41,7 @@ func TestTunAdvMSS(t *testing.T) {
 func TestOffloadUSOEnabled(t *testing.T) {
 	// usoOffloadFlags must be a strict superset of tsoOffloadFlags. Otherwise
 	// the TSO-only fallback (and the historic hardcoded-mask bug in
-	// NewMultiQueueReader) would not actually be a downgrade.
+	// addQueue) would not actually be a downgrade.
 	if usoOffloadFlags&tsoOffloadFlags != tsoOffloadFlags {
 		t.Fatalf("usoOffloadFlags (%#x) is not a superset of tsoOffloadFlags (%#x)", usoOffloadFlags, tsoOffloadFlags)
 	}
@@ -67,20 +67,19 @@ func TestOffloadUSOEnabled(t *testing.T) {
 	}
 }
 
-// TestNewMultiQueueReaderReplaysNegotiatedMask guards the device-wide
-// TUNSETOFFLOAD downgrade bug: NewMultiQueueReader must issue the exact mask
-// newTun negotiated (t.offloadFlags), not a hardcoded TSO-only mask. Because
-// TUNSETOFFLOAD is per-netdev, a narrower mask on an added queue silently
-// disables USO for every queue on a USO-capable kernel while the queues keep
-// advertising it.
+// TestAddQueueReplaysNegotiatedMask guards the device-wide TUNSETOFFLOAD
+// downgrade bug: addQueue must issue the exact mask newTun negotiated
+// (t.offloadFlags), not a hardcoded TSO-only mask. Because TUNSETOFFLOAD is
+// per-netdev, a narrower mask on an added queue silently disables USO for
+// every queue on a USO-capable kernel while the queues keep advertising it.
 //
 // A full multi-queue exercise needs /dev/net/tun and CAP_NET_ADMIN, which are
 // not available in CI/sandbox, so this asserts on the struct field that the
 // TUNSETOFFLOAD argument is read from.
-func TestNewMultiQueueReaderReplaysNegotiatedMask(t *testing.T) {
+func TestAddQueueReplaysNegotiatedMask(t *testing.T) {
 	t.Run("uso-negotiated", func(t *testing.T) {
 		tn := &tun{vnetHdr: true, offloadFlags: usoOffloadFlags}
-		// The ioctl argument in NewMultiQueueReader is uintptr(t.offloadFlags);
+		// The ioctl argument in addQueue is uintptr(t.offloadFlags);
 		// it must equal the negotiated USO mask, and must NOT be the TSO-only
 		// mask (the original bug).
 		if tn.offloadFlags != usoOffloadFlags {

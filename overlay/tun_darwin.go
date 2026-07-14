@@ -606,14 +606,6 @@ func (t *tun) Name() string {
 	return t.Device
 }
 
-func (t *tun) SupportsMultiqueue() bool {
-	return false
-}
-
-func (t *tun) NewMultiQueueReader() error {
-	return fmt.Errorf("TODO: multiqueue not implemented for darwin")
-}
-
-func (t *tun) Readers() []tio.Queue {
-	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}
+func (t *tun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}, nil
 }

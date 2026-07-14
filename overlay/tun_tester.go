@@ -178,14 +178,6 @@ func (t *TestTun) Read(b []byte) (int, error) {
 	return n, nil
 }
 
-func (t *TestTun) Readers() []tio.Queue {
-	return []tio.Queue{tio.NewSingleQueue(t, udp.MTU)}
-}
-
-func (t *TestTun) SupportsMultiqueue() bool {
-	return false
-}
-
-func (t *TestTun) NewMultiQueueReader() error {
-	return fmt.Errorf("TODO: multiqueue not implemented")
+func (t *TestTun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{tio.NewSingleQueue(t, udp.MTU)}, nil
 }
