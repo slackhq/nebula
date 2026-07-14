@@ -57,7 +57,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 			// kernel as one giant blob; segment first so the loopback
 			// path sees one IP datagram per Write.
 			err := tio.SegmentSuperpacket(pkt, func(seg []byte) error {
-				_, werr := f.readers[q].Write(seg)
+				_, werr := f.queues[q].Write(seg)
 				return werr
 			})
 			if err != nil {
@@ -273,7 +273,7 @@ func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
 		return
 	}
 
-	_, err := f.readers[q].Write(out)
+	_, err := f.queues[q].Write(out)
 	if err != nil {
 		f.l.Error("Failed to write to tun", "error", err)
 	}

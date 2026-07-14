@@ -18,7 +18,11 @@ type Device interface {
 	Networks() []netip.Prefix
 	Name() string
 	RoutesFor(netip.Addr) routing.Gateways
-	SupportsMultiqueue() bool
-	NewMultiQueueReader() error
-	Readers() []tio.Queue
+	// Queues returns the device's packet queues, opening additional ones as
+	// needed until there are n. Platforms without multiqueue support return
+	// their single queue regardless of n, so callers must size reader loops
+	// to len(result), not n; implementations never return more than n. An
+	// error means a queue that should have opened could not; the caller owns
+	// cleanup via Close. Called once, during interface activation.
+	Queues(n int) ([]tio.Queue, error)
 }

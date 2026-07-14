@@ -560,12 +560,8 @@ func (t *tun) Name() string {
 	return t.Device
 }
 
-func (t *tun) SupportsMultiqueue() bool {
-	return false
-}
-
-func (t *tun) NewMultiQueueReader() error {
-	return fmt.Errorf("TODO: multiqueue not implemented for freebsd")
+func (t *tun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}, nil
 }
 
 func (t *tun) addRoutes(logErrors bool) error {
@@ -590,10 +586,6 @@ func (t *tun) addRoutes(logErrors bool) error {
 	}
 
 	return nil
-}
-
-func (t *tun) Readers() []tio.Queue {
-	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}
 }
 
 func (t *tun) removeRoutes(routes []Route) error {

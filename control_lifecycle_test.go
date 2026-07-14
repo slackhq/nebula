@@ -51,12 +51,8 @@ func (d *fakeDevice) Activate() error                       { return nil }
 func (d *fakeDevice) Networks() []netip.Prefix              { return nil }
 func (d *fakeDevice) Name() string                          { return "fake" }
 func (d *fakeDevice) RoutesFor(netip.Addr) routing.Gateways { return nil }
-func (d *fakeDevice) SupportsMultiqueue() bool              { return false }
-func (d *fakeDevice) NewMultiQueueReader() error {
-	return errors.New("unsupported")
-}
 
-func (d *fakeDevice) Readers() []tio.Queue { return []tio.Queue{d} }
+func (d *fakeDevice) Queues(int) ([]tio.Queue, error) { return []tio.Queue{d}, nil }
 
 // newReadyControl hand-builds the minimum Control that Main would have
 // produced right before Start, including the construction token NewInterface
@@ -82,7 +78,6 @@ func newReadyControl(t *testing.T) (*Control, *fakeDevice, *fakeConn) {
 		inside:     dev,
 		outside:    conn,
 		writers:    []udp.Conn{conn},
-		readers:    make([]tio.Queue, 1),
 		batchers:   make([]batch.RxBatcher, 1),
 		routines:   1,
 		hostMap:    newHostMap(l),
@@ -164,7 +159,14 @@ type multiqueueDevice struct {
 	*fakeDevice
 }
 
-func (d *multiqueueDevice) SupportsMultiqueue() bool { return true }
+// Queues claims multiqueue support but fails to open the second queue,
+// exercising the activation error path.
+func (d *multiqueueDevice) Queues(n int) ([]tio.Queue, error) {
+	if n > 1 {
+		return nil, errors.New("second queue failed to open")
+	}
+	return d.fakeDevice.Queues(n)
+}
 
 func TestControl_StartMultiqueueFailureReleases(t *testing.T) {
 	dev := &multiqueueDevice{fakeDevice: newFakeDevice()}
@@ -175,7 +177,6 @@ func TestControl_StartMultiqueueFailureReleases(t *testing.T) {
 		inside:   dev,
 		outside:  conn,
 		writers:  []udp.Conn{conn},
-		readers:  make([]tio.Queue, 2),
 		batchers: make([]batch.RxBatcher, 2),
 		routines: 2,
 		l:        test.NewLogger(),
