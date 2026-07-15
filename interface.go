@@ -120,9 +120,11 @@ type Interface struct {
 	ctx     context.Context
 	writers []udp.Conn
 	queues  []tio.Queue
-	// batchers is one per tun queue, wrapping queues[i].
-	// decryptToTun sends plaintext into the batch.RxBatcher;
-	// listenOut calls its Flush at the end of each UDP recvmmsg batch.
+	// batchers is one per tun queue, wrapping queues[i]. readOutsidePackets
+	// commits plaintext into the batch.RxBatcher; the plaintext is decrypted
+	// in place inside the UDP receive buffers, so listenOut must call Flush
+	// at the end of each UDP recvmmsg batch, before those buffers are
+	// reused (every udp.Conn ListenOut guarantees that ordering).
 	batchers []batch.RxBatcher
 	wg       sync.WaitGroup
 
@@ -303,11 +305,9 @@ func (f *Interface) activate() error {
 			// is on, everything else (and either lane disabled) falls
 			// through to passthrough so non-IP / non-TCP-UDP traffic still
 			// reaches the TUN.
-			arena := batch.NewArena(batch.DefaultMultiArenaCap)
-			f.batchers[i] = batch.NewMultiCoalescer(f.queues[i], f.l, arena, caps.TSO, caps.USO)
+			f.batchers[i] = batch.NewMultiCoalescer(f.queues[i], f.l, caps.TSO, caps.USO)
 		} else {
-			arena := batch.NewArena(batch.DefaultPassthroughArenaCap)
-			f.batchers[i] = batch.NewPassthrough(f.queues[i], arena.Reserve, arena.Reset)
+			f.batchers[i] = batch.NewPassthrough(f.queues[i])
 		}
 	}
 
@@ -369,10 +369,10 @@ func (f *Interface) listenOut(i int) {
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
+	scratch := make([]byte, mtu)
 
 	listener := func(fromUdpAddr netip.AddrPort, payload []byte, meta udp.RxMeta) {
-		plaintext := f.batchers[i].Reserve(len(payload))
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get(), meta)
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, scratch, payload, h, fwPacket, lhh, nb, i, ctCache.Get(), meta)
 	}
 
 	flusher := func() {

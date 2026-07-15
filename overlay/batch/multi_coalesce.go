@@ -7,8 +7,7 @@ import (
 )
 
 // MultiCoalescer fans plaintext packets out to lane-specific batchers based
-// on the IP/L4 protocol of the packet, sharing a single Reserve arena
-// across lanes so the caller's allocation pattern is unchanged.
+// on the IP/L4 protocol of the packet.
 //
 // Lanes are processed independently: the TCP coalescer only sees TCP, the
 // UDP coalescer only sees UDP, and the passthrough lane handles everything
@@ -19,7 +18,7 @@ import (
 // This is acceptable because the carrier-side recvmmsg path already
 // stable-sorts by (peer, message counter) before delivering plaintext
 // here, so replay-window invariants are unaffected, and apps observe
-// correct per-flow ordering — which is all the IP layer guarantees anyway.
+// correct per-flow ordering; which is all the IP layer guarantees anyway.
 // Do not "fix" this by interleaving lane outputs at flush time; that
 // negates the entire point of coalescing (each lane needs to see runs of
 // adjacent same-flow packets to coalesce them).
@@ -27,43 +26,26 @@ type MultiCoalescer struct {
 	tcp *TCPCoalescer
 	udp *UDPCoalescer
 	pt  *Passthrough
-	// arena is owned by the Multi: lanes get only its Reserve (nil Resetter)
-	// and Flush resets it exactly once after every lane has drained.
-	arena *Arena
 }
-
-// DefaultMultiArenaCap is the recommended arena capacity for a Multi-lane
-// batcher: 64 slots × 65535 bytes ≈ 4 MiB, enough to hold one recvmmsg
-// burst worth of MTU-sized packets without the arena growing.
-const DefaultMultiArenaCap = initialSlots * 65535
 
 // NewMultiCoalescer builds a multi-lane batcher. tcpEnabled lets the caller
 // opt out of TCP coalescing (e.g. when the queue can't do TSO); udpEnabled
 // likewise gates UDP coalescing (only enable when USO was negotiated).
 // Either lane disabled redirects its traffic into the passthrough lane.
-// arena is the single backing slab shared across every lane; the caller
-// pre-sizes it via NewArena so the hot path never allocates.
-func NewMultiCoalescer(w io.Writer, l *slog.Logger, arena *Arena, tcpEnabled, udpEnabled bool) *MultiCoalescer {
+func NewMultiCoalescer(w io.Writer, l *slog.Logger, tcpEnabled, udpEnabled bool) *MultiCoalescer {
 	m := &MultiCoalescer{
-		pt:    NewPassthrough(w, arena.Reserve, nil),
-		arena: arena,
+		pt: NewPassthrough(w),
 	}
 	if tcpEnabled {
-		m.tcp = NewTCPCoalescer(w, l, arena.Reserve, nil)
+		m.tcp = NewTCPCoalescer(w, l)
 	}
 	if udpEnabled {
-		m.udp = NewUDPCoalescer(w, arena.Reserve, nil)
+		m.udp = NewUDPCoalescer(w)
 	}
 	return m
 }
 
-func (m *MultiCoalescer) Reserve(sz int) []byte {
-	return m.arena.Reserve(sz)
-}
-
-// Commit dispatches pkt to the appropriate lane based on IP version + L4
-// proto. Borrowed slice contract is identical to the single-lane batchers,
-// pkt must remain valid until the next Flush.
+// Commit dispatches pkt to the appropriate lane based on IP version + L4 proto.
 //
 // On the success path the IP/TCP-or-UDP parse happens here once and the
 // parsed struct is handed to the lane via commitParsed so the lane doesn't
@@ -110,8 +92,6 @@ func (m *MultiCoalescer) Commit(pkt []byte) error {
 	return m.pt.Commit(pkt)
 }
 
-// Flush drains every lane in a fixed order, then resets the shared arena once.
-// A lane error doesn't stop the remaining lanes; the joined errors are returned.
 func (m *MultiCoalescer) Flush() error {
 	var errs []error
 	if m.tcp != nil {
@@ -127,6 +107,5 @@ func (m *MultiCoalescer) Flush() error {
 	if err := m.pt.Flush(); err != nil {
 		errs = append(errs, err)
 	}
-	m.arena.Reset()
 	return errors.Join(errs...)
 }
