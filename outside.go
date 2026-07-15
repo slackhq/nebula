@@ -23,7 +23,10 @@ const (
 
 var ErrOutOfWindow = errors.New("out of window packet")
 
-func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
+// readOutsidePackets processes one received underlay packet.
+// Message payloads are decrypted IN PLACE, so packet must stay untouched
+// by the caller until the batcher for queue q has been flushed
+func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
 	err := h.Parse(packet)
 	if err != nil {
 		// Hole punch packets are 0 or 1 byte big, so lets ignore printing those errors
@@ -111,11 +114,11 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	// Relay packets are special
 	if isMessageRelay {
-		f.handleOutsideRelayPacket(hostinfo, via, out, packet, h, fwPacket, lhf, nb, q, localCache, meta)
+		f.handleOutsideRelayPacket(hostinfo, via, scratch, packet, h, fwPacket, lhf, nb, q, localCache, meta)
 		return
 	}
 
-	out, err = f.decrypt(hostinfo, h.MessageCounter, out, packet, h, nb)
+	out, err := f.decrypt(hostinfo, h.MessageCounter, packet, nb)
 	if err != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("Failed to decrypt packet",
@@ -135,7 +138,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	case header.Message:
 		switch h.Subtype {
 		case header.MessageNone:
-			f.handleOutsideMessagePacket(hostinfo, out, packet, fwPacket, nb, q, localCache, meta)
+			f.handleOutsideMessagePacket(hostinfo, out, scratch, fwPacket, nb, q, localCache, meta)
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected message subtype seen", "from", via, "header", h)
 			return
@@ -150,8 +153,15 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		case header.TestReply:
 			// No-op, useful for the Roaming and connectionManager side-effects above
 		case header.TestRequest:
-			//recycle the input packet ciphertext as our output buffer
-			f.send(header.Test, header.TestReply, ci, hostinfo, out, nb, packet)
+			const maxCipherOverhead = 16 //todo we use this too often, needs a real importable const
+			const maxOverhead = header.Len + header.Len + maxCipherOverhead + maxCipherOverhead
+			if maxOverhead+len(out) <= len(scratch) {
+				f.send(header.Test, header.TestReply, ci, hostinfo, out, nb, scratch[:0])
+				return
+			} else if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				hostinfo.logger(f.l).Debug("dropping oversized test request", "payloadLen", len(out), "from", via)
+				return
+			}
 		default:
 			hostinfo.logger(f.l).Error("IsValidSubType was true, but unexpected test subtype seen", "from", via, "header", h)
 			return
@@ -169,7 +179,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	}
 }
 
-func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
+func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, scratch []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
 	// The entire body is sent as AD, not encrypted.
 	// The packet consists of a 16-byte parsed Nebula header, Associated Data-protected payload, and a trailing 16-byte AEAD signature value.
 	// The packet is guaranteed to be at least 16 bytes at this point, b/c it got past the h.Parse() call above. If it's
@@ -177,9 +187,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 	// which will gracefully fail in the DecryptDanger call.
 	signedPayload := packet[:len(packet)-hostinfo.ConnectionState.dKey.Overhead()]
 	signatureValue := packet[len(packet)-hostinfo.ConnectionState.dKey.Overhead():]
-	var err error
-	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, signedPayload, signatureValue, h.MessageCounter, nb)
-	if err != nil {
+	if _, err := hostinfo.ConnectionState.dKey.DecryptDanger(nil, signedPayload, signatureValue, h.MessageCounter, nb); err != nil {
 		return
 	}
 	// Advance the replay window now that the frame is authenticated
@@ -217,7 +225,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 			relay:     relay,
 			IsRelayed: true,
 		}
-		f.readOutsidePackets(via, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache, meta)
+		f.readOutsidePackets(via, scratch, signedPayload, h, fwPacket, lhf, nb, q, localCache, meta)
 	case ForwardingType:
 		// Find the target HostInfo relay object
 		targetHI, targetRelay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relay.PeerAddr)
@@ -234,9 +242,11 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 		if targetRelay.State == Established {
 			switch targetRelay.Type {
 			case ForwardingType:
-				// Forward this packet through the relay tunnel
-				// Find the target HostInfo //todo it would potentially be nice to batch these
-				f.SendVia(targetHI, targetRelay, signedPayload, nb, out, false)
+				// Forward this packet through the relay tunnel, rebuilding it in place.
+				// Encode overwrites the old outer header, and the new AEAD tag lands where the old one was
+				fwdBuf := packet[:0:len(packet)] // Cap to len(packet) to protect memory from a larger parent buffer
+				//todo it would potentially be nice to batch these
+				f.SendVia(targetHI, targetRelay, signedPayload, nb, fwdBuf, true)
 			case TerminalType:
 				hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 				return
@@ -503,9 +513,16 @@ func parseV4(data []byte, incoming bool, fp *firewall.Packet) error {
 	return nil
 }
 
-func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []byte, h *header.H, nb []byte) ([]byte, error) {
-	var err error
-	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], mc, nb)
+// decrypt authenticates and decrypts a Message packet IN PLACE: the dst is
+// packet[header.Len:header.Len], the exact-alias append pattern
+// (ciphertext[:0]) that crypto/cipher.AEAD.Open documents, so the plaintext
+// lands where the ciphertext sat and no separate plaintext buffer exists.
+// On a failed auth the AEAD zeroes the would-be plaintext region (both
+// AES-GCM and ChaCha20-Poly1305 do) but never writes outside it, so the
+// other segments of a shared GRO receive row stay intact; nothing reads a
+// packet after its decrypt fails. The returned slice aliases packet.
+func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, packet []byte, nb []byte) ([]byte, error) {
+	out, err := hostinfo.ConnectionState.dKey.DecryptDanger(packet[header.Len:header.Len], packet[:header.Len], packet[header.Len:], mc, nb)
 	if err != nil {
 		return nil, err
 	}
@@ -580,7 +597,7 @@ func applyOuterECN(pkt []byte, outerECN byte, hostinfo *HostInfo, l *slog.Logger
 	}
 }
 
-func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, packet []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
+func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, scratch []byte, fwPacket *firewall.Packet, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
 	// RFC 6040 normal-mode combine: fold any outer CE mark stamped by the
 	// underlay into the inner header before firewall + TUN write. Other
 	// outer codepoints are advisory only — we keep the inner unchanged.
@@ -599,11 +616,7 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, p
 
 	dropReason := f.firewall.Drop(*fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason != nil {
-		// NOTE: We give `packet` as the `out` here since we already decrypted from it and we don't need it anymore
-		// This gives us a buffer to build the reject packet in. With UDP GRO this is a single segment of a shared
-		// recvmmsg row whose capacity runs to the end of the whole row, so cap it to its own length (cap==len) to
-		// keep the reject builder from writing past this segment into the next, not-yet-processed coalesced segment.
-		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, packet[:len(packet):len(packet)], q)
+		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, scratch, q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("dropping inbound packet",
 				"fwPacket", fwPacket,

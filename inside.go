@@ -279,27 +279,30 @@ func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
 	}
 }
 
-func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *HostInfo, nb, out []byte, q int) {
+func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *HostInfo, nb, rejectBuf []byte, q int) {
 	if !f.firewall.InboundSendReject {
 		return
 	}
 
-	out = iputil.CreateRejectPacket(packet, out)
+	// split rejectBuf to make sure we have room to write the plaintext rejection, then encrypt it, without trampling anything
+	// we can't re-use packet, if we need to send an icmp reject, it won't be long enough.
+	half := len(rejectBuf) / 2
+	encryptBuf := rejectBuf[0:0:half] //the first half of rejectBuf's capacity, len set to 0
+	buildBuf := rejectBuf[half:]
+
+	out := iputil.CreateRejectPacket(packet, buildBuf)
 	if len(out) == 0 {
 		return
 	}
 
 	if len(out) > iputil.MaxRejectPacketSize {
 		if f.l.Enabled(context.Background(), slog.LevelInfo) {
-			f.l.Info("rejectOutside: packet too big, not sending",
-				"packet", packet,
-				"outPacket", out,
-			)
+			f.l.Info("rejectOutside: packet too big, not sending", "packet", packet, "outPacket", out)
 		}
 		return
 	}
 
-	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, out, nb, packet, q)
+	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, out, nb, encryptBuf, q)
 }
 
 // Handshake will attempt to initiate a tunnel with the provided vpn address. This is a no-op if the tunnel is already established or being established

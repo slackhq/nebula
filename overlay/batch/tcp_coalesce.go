@@ -79,19 +79,15 @@ type TCPCoalescer struct {
 	// at is removed/sealed.
 	lastSlot *coalesceSlot
 	pool     []*coalesceSlot // free list for reuse
-	reserver Reserver
-	resetter Resetter
 	l        *slog.Logger
 }
 
-func NewTCPCoalescer(w io.Writer, l *slog.Logger, reserver Reserver, resetter Resetter) *TCPCoalescer {
+func NewTCPCoalescer(w io.Writer, l *slog.Logger) *TCPCoalescer {
 	c := &TCPCoalescer{
 		plainW:    w,
 		slots:     make([]*coalesceSlot, 0, initialSlots),
 		openSlots: make(map[flowKey]*coalesceSlot, initialSlots),
 		pool:      make([]*coalesceSlot, 0, initialSlots),
-		reserver:  reserver,
-		resetter:  resetter,
 		l:         l,
 	}
 	if gw, ok := tio.SupportsGSO(w, tio.GSOProtoTCP); ok {
@@ -170,11 +166,6 @@ func (p parsedTCP) coalesceable() bool {
 	return p.payLen > 0
 }
 
-func (c *TCPCoalescer) Reserve(sz int) []byte {
-	return c.reserver(sz)
-}
-
-// Commit borrows pkt. The caller must keep pkt valid until the next Flush.
 func (c *TCPCoalescer) Commit(pkt []byte) error {
 	if c.gsoW == nil {
 		c.addPassthrough(pkt)
@@ -240,18 +231,7 @@ func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
 	return nil
 }
 
-// Flush emits every queued event in (per-flow) seq order.
 func (c *TCPCoalescer) Flush() error {
-	first := c.drain()
-	if c.resetter != nil {
-		c.resetter()
-	}
-	return first
-}
-
-// drain emits every queued slot (reordering/merging coalesced runs first)
-// and clears the slot state.
-func (c *TCPCoalescer) drain() error {
 	c.reorderForFlush()
 	var first error
 	for _, s := range c.slots {

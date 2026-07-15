@@ -164,3 +164,48 @@ func TestCipherStateNilSafety(t *testing.T) {
 	assert.Empty(t, out)
 	assert.Equal(t, 0, cc.Overhead())
 }
+
+func TestCipherStateAESGCMInPlaceDecrypt(t *testing.T) {
+	enc, dec := buildCipherStates(t, CipherAESGCM)
+	inPlaceDecrypt(t, NewCipherStateAESGCM(enc), NewCipherStateAESGCM(dec))
+}
+
+func TestCipherStateChaChaPolyInPlaceDecrypt(t *testing.T) {
+	enc, dec := buildCipherStates(t, noise.CipherChaChaPoly)
+	inPlaceDecrypt(t, NewCipherStateChaChaPoly(enc), NewCipherStateChaChaPoly(dec))
+}
+
+func inPlaceDecrypt(t *testing.T, enc, dec CipherState) {
+	t.Helper()
+	const hdrLen = 16
+	plaintext := []byte("in-place decrypt should replace the ciphertext bytes")
+	nb := make([]byte, 12)
+
+	// packet = [16-byte header | ciphertext+tag], like a nebula Message.
+	packet := make([]byte, hdrLen, hdrLen+len(plaintext)+enc.Overhead())
+	for i := range packet {
+		packet[i] = byte(i)
+	}
+	packet, err := enc.EncryptDanger(packet, packet[:hdrLen], plaintext, 1, nb)
+	require.NoError(t, err)
+
+	// Simulate a GRO row: [packet | next segment]. A failed auth on packet
+	// may zero packet's plaintext region but must not touch the header, the
+	// tag, or the neighboring segment.
+	neighbor := []byte("next coalesced segment, must stay intact")
+	row := append(append([]byte(nil), packet...), neighbor...)
+	tampered := row[:len(packet)]
+	tampered[hdrLen] ^= 0x01
+	_, err = dec.DecryptDanger(tampered[hdrLen:hdrLen], tampered[:hdrLen], tampered[hdrLen:], 1, nb)
+	require.Error(t, err)
+	assert.Equal(t, packet[:hdrLen], tampered[:hdrLen], "failed auth must not touch the header")
+	assert.Equal(t, packet[len(packet)-dec.Overhead():], tampered[len(tampered)-dec.Overhead():],
+		"failed auth must not touch the tag")
+	assert.Equal(t, neighbor, row[len(packet):], "failed auth must not touch the next segment")
+
+	out, err := dec.DecryptDanger(packet[hdrLen:hdrLen], packet[:hdrLen], packet[hdrLen:], 1, nb)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, out)
+	// The plaintext must be IN the packet buffer, not a fresh allocation.
+	assert.Equal(t, &packet[hdrLen], &out[0], "plaintext must alias the packet buffer")
+}
