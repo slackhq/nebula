@@ -107,25 +107,23 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 	}
 
 	// All remaining packets are encrypted
-	ci := hostinfo.ConnectionState
-	if !ci.window.Check(f.l, h.MessageCounter) {
-		return
-	}
-
-	// Relay packets are special
 	if isMessageRelay {
+		// Relay packets are special, this branch should always early-return
+		err = hostinfo.ConnectionState.VerifyRelay(f.l, h.MessageCounter, packet, nb)
+		if err != nil {
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				hostinfo.logger(f.l).Debug("Failed to verify relay packet", "error", err, "from", via, "header", h)
+			}
+			return
+		}
 		f.handleOutsideRelayPacket(hostinfo, via, scratch, packet, h, fwPacket, lhf, nb, q, localCache, meta)
 		return
 	}
 
-	out, err := f.decrypt(hostinfo, h.MessageCounter, packet, nb)
+	out, err := hostinfo.ConnectionState.Decrypt(f.l, h.MessageCounter, packet, nb)
 	if err != nil {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("Failed to decrypt packet",
-				"error", err,
-				"from", via,
-				"header", h,
-			)
+			hostinfo.logger(f.l).Debug("Failed to decrypt packet", "error", err, "from", via, "header", h)
 		}
 		return
 	}
@@ -156,7 +154,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 			const maxCipherOverhead = 16 //todo we use this too often, needs a real importable const
 			const maxOverhead = header.Len + header.Len + maxCipherOverhead + maxCipherOverhead
 			if maxOverhead+len(out) <= len(scratch) {
-				f.send(header.Test, header.TestReply, ci, hostinfo, out, nb, scratch[:0])
+				f.send(header.Test, header.TestReply, hostinfo.ConnectionState, hostinfo, out, nb, scratch[:0])
 				return
 			} else if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				hostinfo.logger(f.l).Debug("dropping oversized test request", "payloadLen", len(out), "from", via)
@@ -180,25 +178,8 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 }
 
 func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, scratch []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache, meta udp.RxMeta) {
-	// The entire body is sent as AD, not encrypted.
-	// The packet consists of a 16-byte parsed Nebula header, Associated Data-protected payload, and a trailing 16-byte AEAD signature value.
-	// The packet is guaranteed to be at least 16 bytes at this point, b/c it got past the h.Parse() call above. If it's
-	// otherwise malformed (meaning, there is no trailing 16 byte AEAD value), then this will result in at worst a 0-length slice
-	// which will gracefully fail in the DecryptDanger call.
-	signedPayload := packet[:len(packet)-hostinfo.ConnectionState.dKey.Overhead()]
-	signatureValue := packet[len(packet)-hostinfo.ConnectionState.dKey.Overhead():]
-	if _, err := hostinfo.ConnectionState.dKey.DecryptDanger(nil, signedPayload, signatureValue, h.MessageCounter, nb); err != nil {
-		return
-	}
-	// Advance the replay window now that the frame is authenticated
-	if !hostinfo.ConnectionState.window.Update(f.l, h.MessageCounter) {
-		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			hostinfo.logger(f.l).Debug("dropping out of window relay packet", "header", h)
-		}
-		return
-	}
-	// Successfully validated the thing. Get rid of the Relay header.
-	signedPayload = signedPayload[header.Len:]
+	// Successfully validated the thing. Get rid of the Relay header and the AEAD tag
+	signedPayload := packet[header.Len : len(packet)-hostinfo.ConnectionState.dKey.Overhead()]
 	// Pull the Roaming parts up here, and return in all call paths.
 	f.handleHostRoaming(hostinfo, via)
 	// Track usage of both the HostInfo and the Relay for the received & authenticated packet
@@ -209,9 +190,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 	if !ok {
 		// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
 		// its internal mapping. This should never happen.
-		hostinfo.logger(f.l).Error("HostInfo missing remote relay index",
-			"relayRemoteIndex", h.RemoteIndex,
-		)
+		hostinfo.logger(f.l).Error("HostInfo missing remote relay index", "relayRemoteIndex", h.RemoteIndex)
 		return
 	}
 
