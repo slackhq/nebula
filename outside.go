@@ -117,7 +117,8 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 	// All remaining packets are encrypted
 	if isMessageRelay {
 		// Relay packets are special, this branch should always early-return
-		if err = hostinfo.ConnectionState.VerifyRelay(f.l, h.MessageCounter, packet, nb); err != nil {
+		err = hostinfo.ConnectionState.VerifyRelay(f.l, h.MessageCounter, packet, nb)
+		if err != nil {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				hostinfo.logger(f.l).Debug("Failed to verify relay packet", "error", err, "from", via, "header", h)
 			}
@@ -197,9 +198,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 	if !ok {
 		// The only way this happens is if hostmap has an index to the correct HostInfo, but the HostInfo is missing
 		// its internal mapping. This should never happen.
-		hostinfo.logger(f.l).Error("HostInfo missing remote relay index",
-			"relayRemoteIndex", h.RemoteIndex,
-		)
+		hostinfo.logger(f.l).Error("HostInfo missing remote relay index", "relayRemoteIndex", h.RemoteIndex)
 		return
 	}
 
