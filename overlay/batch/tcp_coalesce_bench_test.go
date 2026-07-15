@@ -71,8 +71,7 @@ func buildICMPv4() []byte {
 // between batches, and reports per-packet cost.
 func runCommitBench(b *testing.B, pkts [][]byte, batchSize int) {
 	b.Helper()
-	arena := NewArena(0)
-	c := NewTCPCoalescer(nopTunWriter{}, test.NewLogger(), arena.Reserve, arena.Reset)
+	c := NewTCPCoalescer(nopTunWriter{}, test.NewLogger())
 	b.ReportAllocs()
 	b.SetBytes(int64(len(pkts[0])))
 	b.ResetTimer()
@@ -141,7 +140,7 @@ func BenchmarkCommitNonCoalesceableTCP(b *testing.B) {
 // is the bench that shows the savings of skipping the lane's re-parse.
 func runMultiCommitBench(b *testing.B, pkts [][]byte, batchSize int) {
 	b.Helper()
-	m := NewMultiCoalescer(nopTunWriter{}, test.NewLogger(), NewArena(0), true, true)
+	m := NewMultiCoalescer(nopTunWriter{}, test.NewLogger(), true, true)
 	b.ReportAllocs()
 	b.SetBytes(int64(len(pkts[0])))
 	b.ResetTimer()

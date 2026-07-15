@@ -46,13 +46,7 @@ type udpSlot struct {
 // concurrent flows and emits each flow's run as a single GSO_UDP_L4
 // superpacket via tio.GSOWriter. Falls back to per-packet writes when the
 // underlying writer doesn't support USO.
-//
-// All output — coalesced or not — is deferred until Flush so per-flow
-// arrival order is preserved on the wire. Cross-flow order is NOT preserved
-// across the TCP/UDP/passthrough split when this coalescer runs alongside
-// others — see multi_coalesce.go. Per-flow order is preserved because a
-// single 5-tuple only ever lands in one lane and each lane preserves its
-// own slot order.
+// Preserves the in-flow order of packets as they are Commit-ed
 //
 // Owns no locks; one coalescer per TUN write queue.
 type UDPCoalescer struct {
@@ -62,8 +56,6 @@ type UDPCoalescer struct {
 	slots     []*udpSlot
 	openSlots map[flowKey]*udpSlot
 	pool      []*udpSlot
-	reserver  Reserver
-	resetter  Resetter
 }
 
 // NewUDPCoalescer wraps w. The caller is responsible for only constructing
@@ -71,14 +63,12 @@ type UDPCoalescer struct {
 // the kernel may reject GSO_UDP_L4 writes. If w does not implement
 // tio.GSOWriter at all (single-packet Queue), the coalescer degrades to
 // plain Writes — same defensive shape as the TCP coalescer.
-func NewUDPCoalescer(w io.Writer, reserver Reserver, resetter Resetter) *UDPCoalescer {
+func NewUDPCoalescer(w io.Writer) *UDPCoalescer {
 	c := &UDPCoalescer{
 		plainW:    w,
 		slots:     make([]*udpSlot, 0, initialSlots),
 		openSlots: make(map[flowKey]*udpSlot, initialSlots),
 		pool:      make([]*udpSlot, 0, initialSlots),
-		reserver:  reserver,
-		resetter:  resetter,
 	}
 	if gw, ok := tio.SupportsGSO(w, tio.GSOProtoUDP); ok {
 		c.gsoW = gw
@@ -121,10 +111,6 @@ func parseUDP(pkt []byte) (parsedUDP, bool) {
 	p.fk.sport = binary.BigEndian.Uint16(pkt[p.ipHdrLen : p.ipHdrLen+2])
 	p.fk.dport = binary.BigEndian.Uint16(pkt[p.ipHdrLen+2 : p.ipHdrLen+4])
 	return p, true
-}
-
-func (c *UDPCoalescer) Reserve(sz int) []byte {
-	return c.reserver(sz)
 }
 
 // Commit borrows pkt. The caller must keep pkt valid until the next Flush.
@@ -175,19 +161,7 @@ func (c *UDPCoalescer) commitParsed(pkt []byte, info parsedUDP) error {
 	return nil
 }
 
-// Flush drains every queued slot and calls the configured Resetter.
 func (c *UDPCoalescer) Flush() error {
-	first := c.drain()
-	if c.resetter != nil {
-		c.resetter()
-	}
-	return first
-}
-
-// drain emits every queued slot in arrival order and clears the slot state.
-// It does NOT reset the arena: borrowed payload slices stay valid until the
-// arena's owner recycles it.
-func (c *UDPCoalescer) drain() error {
 	var first error
 	for _, s := range c.slots {
 		var err error
@@ -295,15 +269,7 @@ func (c *UDPCoalescer) release(s *udpSlot) {
 // flushSlot patches the IP header total length / IPv6 payload length and
 // the UDP length to the *total* across all coalesced segments, then seeds
 // the UDP checksum field with the pseudo-header partial (single-fold, not
-// inverted) per virtio NEEDS_CSUM. The kernel's ip_rcv_core (v4) and
-// ip6_rcv_core (v6) trim the skb to those length fields, so per-segment
-// values would silently drop everything but the first segment. The kernel
-// then walks each segment in __udp_gso_segment, recomputing per-segment
-// uh->len / iph->tot_len / IPv6 plen and adjusting the checksum via
-// `check = csum16_add(csum16_sub(uh->check, uh->len), newlen)` — meaning
-// our seed's uh->check must be consistent with the seed's uh->len, which
-// is what passing the total to both pseudoSum and the UDP length field
-// guarantees.
+// inverted) per virtio NEEDS_CSUM.
 func (c *UDPCoalescer) flushSlot(s *udpSlot) error {
 	hdr := s.hdrBuf[:s.hdrLen]
 	total := s.hdrLen + s.totalPay // full IP+UDP+all_payloads bytes
@@ -334,10 +300,7 @@ func (c *UDPCoalescer) flushSlot(s *udpSlot) error {
 }
 
 // udpHeadersMatch compares two IP+UDP header prefixes for byte-equality on
-// every field that must be identical across coalesced segments. Length
-// fields are masked out (flushSlot rewrites them), but the IP-level ECN
-// codepoint is compared (via ipHeadersMatch) so segments with differing ECN
-// don't coalesce, matching kernel GRO.
+// every field that must be identical across coalesced segments
 func udpHeadersMatch(a, b []byte, isV6 bool, ipHdrLen int) bool {
 	if len(a) != len(b) {
 		return false
