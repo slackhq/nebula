@@ -254,6 +254,20 @@ tun:
   # Default MTU for every packet, safe setting is (and the default) 1300 for internet based traffic
   mtu: 1300
 
+  # Linux only. pin_threads pins each tun reader/encrypt OS thread to a single CPU. This keeps every goroutine's
+  # sends flowing through one XPS-selected NIC TX ring, so packets within a flow stay ordered on the wire
+  # instead of being sprayed across multiple TX rings and reordered. Not reloadable.
+  #pin_threads: true
+
+  # Linux only. cpu_affinity overrides which CPUs the tun reader threads pin to: a list of CPU IDs, one per routine
+  # (see the top-level `routines` setting). Lists shorter than `routines` are modulo-cycled across the queues; extra
+  # entries are ignored. IDs must be within the process's allowed CPU set, so this respects taskset / cgroup cpusets;
+  # a non-integer or not-allowed entry disables the override and falls back to spreading queues across the allowed
+  # CPUs. Only meaningful while pin_threads is true. Not reloadable.
+  #cpu_affinity:
+  #  - 2
+  #  - 4
+
   # Route based MTU overrides, you have known vpn ip paths that can support larger MTUs you can increase/decrease them here
   routes:
     #- mtu: 8800

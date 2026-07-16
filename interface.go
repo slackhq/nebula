@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 	"github.com/slackhq/nebula/overlay"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/udp"
+	"github.com/slackhq/nebula/util"
 )
 
 const mtu = 9001
@@ -49,7 +51,19 @@ type InterfaceConfig struct {
 	reQueryWait     time.Duration
 
 	ConntrackCacheTimeout time.Duration
-	l                     *slog.Logger
+
+	// CpuAffinity, when non-empty, names the CPUs each TUN reader goroutine
+	// should pin to. Queue i pins to CpuAffinity[i % len(CpuAffinity)] —
+	// shorter lists than `routines` cycle. Empty list keeps the default
+	// pin-to-(i % NumCPU) behavior. Only consulted when PinThreads is true.
+	CpuAffinity []int
+	// PinThreads controls whether each TUN reader OS thread is pinned to a
+	// single CPU (via tun.pin_threads, default true). Pinning keeps each
+	// goroutine's UDP sends on one XPS-selected NIC TX ring so per-flow
+	// packets stay ordered on the wire.
+	PinThreads bool
+
+	l *slog.Logger
 }
 
 type Interface struct {
@@ -73,7 +87,16 @@ type Interface struct {
 	routines              int
 	disconnectInvalid     atomic.Bool
 	closed                atomic.Bool
-	relayManager          *relayManager
+	// cpuAffinity, when non-empty, names the CPUs each TUN reader goroutine
+	// should pin to. Queue i pins to cpuAffinity[i % len(cpuAffinity)].
+	// Empty falls back to the default pin-to-(allowed CPU) behavior.
+	// Only consulted when pinThreads is true.
+	cpuAffinity []int
+	// pinThreads controls whether listenIn pins each TUN reader OS thread to
+	// a CPU at all (tun.pin_threads, default true). When false, threads are
+	// left free to migrate as on stock nebula.
+	pinThreads   bool
+	relayManager *relayManager
 
 	tryPromoteEvery atomic.Uint32
 	reQueryEvery    atomic.Uint32
@@ -197,6 +220,8 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		relayManager:          c.relayManager,
 		connectionManager:     c.connectionManager,
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
+		cpuAffinity:           c.CpuAffinity,
+		pinThreads:            c.PinThreads,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -336,6 +361,28 @@ func (f *Interface) listenOut(i int) {
 }
 
 func (f *Interface) listenIn(queue tio.Queue, i int) {
+	// Pinning this thread (and goroutine) to a single CPU keeps every UDP send from this goroutine going through
+	// the same TX ring on the nic (XPS selects the ring by CPU), so the wire sees per-flow order. Skip entirely
+	// when tun.pin_threads is false.
+	if f.pinThreads {
+		var cpu int
+		if n := len(f.cpuAffinity); n > 0 {
+			// Explicit tun.cpu_affinity list wins; parseCpuAffinity already
+			// validated the entries against the allowed CPU set.
+			cpu = f.cpuAffinity[i%n]
+		} else if allowed, err := util.AllowedCPUs(); err == nil && len(allowed) > 0 {
+			// Default: spread queues across the CPUs we're actually allowed to
+			// run on. Under a cpuset/taskset mask these aren't 0..NumCPU-1, so
+			// i % NumCPU would pick unrunnable IDs and every pin would fail.
+			cpu = allowed[i%len(allowed)]
+		} else {
+			cpu = i % runtime.NumCPU()
+		}
+		if err := util.PinThreadToCPU(cpu); err != nil {
+			f.l.Warn("failed to pin tun reader to CPU", "queue", i, "cpu", cpu, "err", err)
+		}
+	}
+
 	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
