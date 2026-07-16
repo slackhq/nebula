@@ -111,7 +111,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 			}
 			return
 		}
-		f.handleOutsideRelayPacket(hostinfo, via, out, packet[header.Len:], h, fwPacket, lhf, nb, q, localCache)
+		f.handleOutsideRelayPacket(hostinfo, via, out, packet, h, fwPacket, lhf, nb, q, localCache)
 		return
 	}
 
@@ -165,7 +165,9 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 	}
 }
 
-func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, out []byte, signedPayload []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf *LightHouseHandler, nb []byte, q int, localCache firewall.ConntrackCache) {
+	// Successfully validated the thing. Get rid of the Relay header and the AEAD tag
+	signedPayload := packet[header.Len : len(packet)-hostinfo.ConnectionState.dKey.Overhead()]
 	// Pull the Roaming parts up here, and return in all call paths.
 	f.handleHostRoaming(hostinfo, via)
 	// Track usage of both the HostInfo and the Relay for the received & authenticated packet
@@ -209,9 +211,10 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 		if targetRelay.State == Established {
 			switch targetRelay.Type {
 			case ForwardingType:
-				// Forward this packet through the relay tunnel
-				// Find the target HostInfo
-				f.SendVia(targetHI, targetRelay, signedPayload, nb, out, false)
+				// Forward this packet through the relay tunnel, rebuilding it in place.
+				// Encode overwrites the old outer header, and the new AEAD tag lands where the old one was
+				fwdBuf := packet[:0:len(packet)] // Cap to len(packet) to protect memory from a larger parent buffer
+				f.SendVia(targetHI, targetRelay, signedPayload, nb, fwdBuf, true)
 			case TerminalType:
 				hostinfo.logger(f.l).Error("Unexpected Relay Type of Terminal")
 				return
