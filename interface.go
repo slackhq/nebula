@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/netip"
 	"slices"
@@ -20,6 +19,7 @@ import (
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -90,7 +90,7 @@ type Interface struct {
 
 	ctx     context.Context
 	writers []udp.Conn
-	readers []io.ReadWriteCloser
+	queues  []tio.Queue
 	wg      sync.WaitGroup
 
 	// fatalErr holds the first unexpected reader error that caused shutdown.
@@ -189,7 +189,6 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		routines:              c.routines,
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
-		readers:               make([]io.ReadWriteCloser, c.routines),
 		myVpnNetworks:         cs.myVpnNetworks,
 		myVpnNetworksTable:    cs.myVpnNetworksTable,
 		myVpnAddrs:            cs.myVpnAddrs,
@@ -240,26 +239,26 @@ func (f *Interface) activate() error {
 		"boringcrypto", boringEnabled(),
 	)
 
-	if f.routines > 1 {
-		if !f.inside.SupportsMultiqueue() || !f.outside.SupportsMultipleReaders() {
-			f.routines = 1
-			f.l.Warn("routines is not supported on this platform, falling back to a single routine")
-		}
+	if f.routines > 1 && !f.outside.SupportsMultipleReaders() {
+		f.routines = 1
+		f.l.Warn("multiple udp readers are not supported on this platform, falling back to a single routine")
 	}
+
+	// Prepare the tun queues. A device that can't open that many hands back
+	// fewer (a single queue on platforms without multiqueue support) and we
+	// size the reader routines to what we actually got.
+	queues, err := f.inside.Queues(f.routines)
+	if err != nil {
+		return err
+	}
+	if len(queues) < f.routines {
+		f.l.Warn("tun multiqueue is not supported on this platform, falling back to fewer routines",
+			"requested", f.routines, "opened", len(queues))
+		f.routines = len(queues)
+	}
+	f.queues = queues
 
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
-
-	// Prepare n tun queues
-	var reader io.ReadWriteCloser = f.inside
-	for i := 0; i < f.routines; i++ {
-		if i > 0 {
-			reader, err = f.inside.NewMultiQueueReader()
-			if err != nil {
-				return err
-			}
-		}
-		f.readers[i] = reader
-	}
 
 	// On error the caller owns the cleanup, Control.Start cancels the service context
 	// before releasing our resources so a waiter never observes a live context
@@ -281,7 +280,7 @@ func (f *Interface) run() {
 	// Launch n queues to read packets from tun dev
 	for i := 0; i < f.routines; i++ {
 		f.wg.Go(func() {
-			f.listenIn(f.readers[i], i)
+			f.listenIn(f.queues[i], i)
 		})
 	}
 
@@ -336,8 +335,7 @@ func (f *Interface) listenOut(i int) {
 	f.l.Debug("underlay reader is done", "reader", i)
 }
 
-func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
-	packet := make([]byte, mtu)
+func (f *Interface) listenIn(queue tio.Queue, i int) {
 	out := make([]byte, mtu)
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
@@ -345,7 +343,7 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
 
 	for {
-		n, err := reader.Read(packet)
+		pkts, err := queue.Read()
 		if err != nil {
 			// Same shutdown noise handling as listenOut
 			if !f.closed.Load() && f.ctx.Err() == nil {
@@ -355,7 +353,11 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 			break
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get())
+		for _, pkt := range pkts {
+			// borrowed: pkt.Bytes is owned by the queue and only valid until
+			// the next Read; consumeInsidePacket reads it synchronously.
+			f.consumeInsidePacket(pkt.Bytes, fwPacket, nb, out, i, conntrackCache.Get())
+		}
 	}
 
 	f.l.Debug("overlay reader is done", "reader", i)
