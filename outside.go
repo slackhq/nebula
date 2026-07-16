@@ -214,7 +214,6 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 		via = ViaSender{
 			UdpAddr:   via.UdpAddr,
 			relayHI:   hostinfo,
-			remoteIdx: relay.RemoteIndex,
 			relay:     relay,
 			IsRelayed: true,
 		}
