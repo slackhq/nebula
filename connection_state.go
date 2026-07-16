@@ -81,12 +81,12 @@ func (cs *ConnectionState) Decrypt(l *slog.Logger, messageCounter uint64, out []
 	return out, nil
 }
 
-func (cs *ConnectionState) VerifyRelay(l *slog.Logger, messageCounter uint64, out []byte, packet []byte, nb []byte) ([]byte, error) {
+func (cs *ConnectionState) VerifyRelay(l *slog.Logger, messageCounter uint64, packet []byte, nb []byte) error {
 	cs.decryptLock.Lock()
 	result := cs.window.Check(l, messageCounter)
 	cs.decryptLock.Unlock()
 	if !result {
-		return nil, ErrAlreadySeen
+		return ErrAlreadySeen
 	}
 
 	// The entire body is sent as AD, not encrypted.
@@ -97,19 +97,17 @@ func (cs *ConnectionState) VerifyRelay(l *slog.Logger, messageCounter uint64, ou
 	signedPayload := packet[:len(packet)-cs.dKey.Overhead()]
 	signatureValue := packet[len(packet)-cs.dKey.Overhead():]
 	var err error
-	out, err = cs.dKey.DecryptDanger(out, signedPayload, signatureValue, messageCounter, nb)
+	_, err = cs.dKey.DecryptDanger(nil, signedPayload, signatureValue, messageCounter, nb)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	cs.decryptLock.Lock()
 	result = cs.window.Update(l, messageCounter)
 	cs.decryptLock.Unlock()
 	if !result {
-		return nil, ErrAlreadySeen
+		return ErrAlreadySeen
 	}
 
-	// Successfully validated the thing. Get rid of the Relay header.
-	signedPayload = signedPayload[header.Len:]
-	return signedPayload, nil
+	return nil
 }

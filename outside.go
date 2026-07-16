@@ -104,16 +104,14 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 
 	// All remaining packets are encrypted
 	if isMessageRelay {
-		var signedPayload []byte
 		// Relay packets are special, this branch should always early-return
-		signedPayload, err = hostinfo.ConnectionState.VerifyRelay(f.l, h.MessageCounter, out, packet, nb)
-		if err != nil {
+		if err = hostinfo.ConnectionState.VerifyRelay(f.l, h.MessageCounter, packet, nb); err != nil {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				hostinfo.logger(f.l).Debug("Failed to verify relay packet", "error", err, "from", via, "header", h)
 			}
 			return
 		}
-		f.handleOutsideRelayPacket(hostinfo, via, out, signedPayload, h, fwPacket, lhf, nb, q, localCache)
+		f.handleOutsideRelayPacket(hostinfo, via, out, packet[header.Len:], h, fwPacket, lhf, nb, q, localCache)
 		return
 	}
 
