@@ -102,6 +102,14 @@ func (f *Interface) readOutsidePackets(via ViaSender, out []byte, packet []byte,
 		return
 	}
 
+	if len(packet) < header.Len+hostinfo.ConnectionState.dKey.Overhead() {
+		f.messageMetrics.RxInvalid(1)
+		if f.l.Enabled(context.Background(), slog.LevelDebug) {
+			f.l.Debug("packet too small", "from", via, "length", len(packet))
+		}
+		return
+	}
+
 	// All remaining packets are encrypted
 	if isMessageRelay {
 		// Relay packets are special, this branch should always early-return
