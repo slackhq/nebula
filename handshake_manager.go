@@ -1077,7 +1077,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
 		// We received a valid handshake on this relay, so make sure the relay
 		// state reflects that, in case it had been marked Disestablished.
-		via.relayHI.relayState.UpdateRelayForByIdxState(via.remoteIdx, Established)
+		via.relayHI.relayState.UpdateRelayForByIdxState(via.relay.LocalIndex, Established)
 		f.SendVia(via.relayHI, via.relay, msg, make([]byte, 12), make([]byte, mtu), false)
 		f.l.Info("Handshake message sent", append(logFields, "relay", via.relayHI.vpnAddrs[0])...)
 	}

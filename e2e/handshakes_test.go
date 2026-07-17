@@ -725,6 +725,70 @@ func TestReestablishRelays(t *testing.T) {
 
 }
 
+func TestRelayHandshakeOverDisestablishedEntry(t *testing.T) {
+	t.Parallel()
+	// If them tears down the tunnel while me keeps Established relay state, me's next
+	// handshake flows through the relay with no fresh CreateRelayRequest and lands on
+	// them's Disestablished terminal relay entry. them must re-establish that entry, or
+	// its first transmit deletes its only relay and the tunnel is born transmit-dead:
+	// them can receive but every send is silently dropped.
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version1, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+	myControl, myVpnIpNet, _, _ := newSimpleServer(cert.Version1, ca, caKey, "me     ", "10.128.0.1/24", m{"relay": m{"use_relays": true}})
+	relayControl, relayVpnIpNet, relayUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "relay  ", "10.128.0.128/24", m{"relay": m{"am_relay": true}})
+	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServer(cert.Version1, ca, caKey, "them   ", "10.128.0.2/24", m{"relay": m{"use_relays": true}})
+
+	// Teach my how to get to the relay and that their can be reached via the relay
+	myControl.InjectLightHouseAddr(relayVpnIpNet[0].Addr(), relayUdpAddr)
+	myControl.InjectRelays(theirVpnIpNet[0].Addr(), []netip.Addr{relayVpnIpNet[0].Addr()})
+	relayControl.InjectLightHouseAddr(theirVpnIpNet[0].Addr(), theirUdpAddr)
+
+	// Build a router so we don't have to reason who gets which packet
+	r := router.NewR(t, myControl, relayControl, theirControl)
+	defer r.RenderFlow()
+
+	// Start the servers
+	myControl.Start()
+	relayControl.Start()
+	theirControl.Start()
+
+	t.Log("Trigger a handshake from me to them via the relay")
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("Hi from me")))
+
+	p := r.RouteForAllUntilTxTun(theirControl)
+	assertUdpPacket(t, []byte("Hi from me"), p, myVpnIpNet[0].Addr(), theirVpnIpNet[0].Addr(), 80, 80)
+	oldIdx := myControl.GetHostInfoByVpnAddr(theirVpnIpNet[0].Addr(), false).LocalIndex
+
+	t.Log("Close the tunnel on them only, marking their relay entry Disestablished")
+	theirControl.CloseTunnel(myVpnIpNet[0].Addr(), true)
+
+	t.Log("Re-handshake from me, riding the still-Established relay state")
+	myControl.ReHandshake(theirVpnIpNet[0].Addr())
+	for {
+		h := myControl.GetHostInfoByVpnAddr(theirVpnIpNet[0].Addr(), false)
+		if h != nil && h.LocalIndex != oldIdx && h.RemoteIndex != 0 {
+			break
+		}
+		r.RouteForAllExitFunc(func(*udp.Packet, *nebula.Control) router.ExitType {
+			return router.RouteAndExit
+		})
+	}
+
+	hAtThem := theirControl.GetHostInfoByVpnAddr(myVpnIpNet[0].Addr(), false)
+	require.NotNil(t, hAtThem, "them should have completed the relayed handshake")
+	require.Equal(t, []netip.Addr{relayVpnIpNet[0].Addr()}, hAtThem.CurrentRelaysToMe, "them should know a relay for the new tunnel")
+
+	t.Log("Send from them to me; their only relay entry must survive the transmit")
+	theirControl.InjectTunPacket(BuildTunUDPPacket(myVpnIpNet[0].Addr(), 80, theirVpnIpNet[0].Addr(), 80, []byte("Hi from them")))
+	require.Never(t, func() bool {
+		h := theirControl.GetHostInfoByVpnAddr(myVpnIpNet[0].Addr(), false)
+		return h == nil || len(h.CurrentRelaysToMe) == 0
+	}, time.Second, 10*time.Millisecond, "them deleted its only relay entry; the tunnel is permanently transmit-dead")
+
+	p = r.RouteForAllUntilTxTun(myControl)
+	assertUdpPacket(t, []byte("Hi from them"), p, theirVpnIpNet[0].Addr(), myVpnIpNet[0].Addr(), 80, 80)
+	r.RenderHostmaps("Final hostmaps", myControl, relayControl, theirControl)
+}
+
 func TestStage1RaceRelays(t *testing.T) {
 	t.Parallel()
 	//NOTE: this is a race between me and relay resulting in a full tunnel from me to them via relay
