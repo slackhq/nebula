@@ -5,10 +5,8 @@ package udp
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/netip"
-	"os"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -16,10 +14,6 @@ import (
 
 	"golang.org/x/sys/unix"
 )
-
-func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-}
 
 // TestShutdownWakesAfterRx_Mechanism exercises the kernel quirk our teardown
 // relies on: once a socket has received a packet, shutdown(2) wakes a blocked
@@ -35,7 +29,7 @@ func TestShutdownWakesAfterRx_Mechanism(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LocalAddr: %v", err)
 	}
-	msgs, _, _ := sc.PrepareRawMessages(sc.batch)
+	msgs, _, _, _ := sc.PrepareRawMessages(sc.batch, 0xffff, 16)
 
 	// Receive a real packet so the socket has carried data.
 	send, err := net.Dial("udp", addr.String())
@@ -134,9 +128,9 @@ func runTeardownCase(t *testing.T, batch int, name string, traffic func(send net
 	var received atomic.Int64
 	loopDone := make(chan error, 1)
 	go func() {
-		loopDone <- sc.ListenOut(func(netip.AddrPort, []byte) {
+		loopDone <- sc.ListenOut(func(netip.AddrPort, []byte, RxMeta) {
 			received.Add(1)
-		})
+		}, func() {})
 	}()
 
 	send, err := net.Dial("udp", addr.String())
