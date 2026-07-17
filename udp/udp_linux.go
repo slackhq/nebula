@@ -167,7 +167,7 @@ func (u *StdConn) ListenOut(r EncReader) error {
 	msgs, buffers, names := u.PrepareRawMessages(u.batch)
 	read := u.recvmmsg
 	if u.batch == 1 {
-		read = u.recvmsg // recvmmsg needs Linux 2.6.33+
+		read = u.recvmsg
 	}
 
 	for {
