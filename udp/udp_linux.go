@@ -50,10 +50,6 @@ type StdConn struct {
 	// into mmsghdr entry e. Used to rewind `i` on partial sendmmsg success.
 	writeEntryEnd []int
 
-	// rawSend wraps the sendmmsg(2) callback in a closure-free helper so
-	// the hot path doesn't heap-allocate a fresh closure per call.
-	rawSend rawSendmmsg
-
 	// UDP GSO (sendmsg with UDP_SEGMENT cmsg) support. gsoSupported is
 	// probed once at socket creation. When true, WriteBatch packs same-
 	// destination consecutive packets into a single sendmmsg entry with a
@@ -115,8 +111,6 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 	out := &StdConn{sysFd: fd, isV4: ip.Is4(), l: l, batch: batch}
 
 	out.prepareWriteMessages(MaxWriteBatch)
-	out.rawSend.msgs = out.writeMsgs
-	out.rawSend.bind()
 
 	out.prepareGSO()
 	// GRO delivers coalesced superpackets that need a cmsg to split back
@@ -203,16 +197,8 @@ const maxGSOBytes = 65000
 func (u *StdConn) prepareGSO() {
 	u.maxGSOSegments = 63 //gotta be one less than the max so we can still attach a header
 
-	var probeErr error
-	if err := u.rawConn.Control(func(fd uintptr) {
-		probeErr = unix.SetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_SEGMENT, 0)
-	}); err != nil {
+	if err := unix.SetsockoptInt(u.sysFd, unix.IPPROTO_UDP, unix.UDP_SEGMENT, 0); err != nil {
 		u.l.Info("udp: GSO disabled", "reason", "rawconn control failed", "error", err)
-		recordCapability("udp.gso.enabled", false)
-		return
-	}
-	if probeErr != nil {
-		u.l.Info("udp: GSO disabled", "reason", "kernel rejected probe", "error", probeErr)
 		recordCapability("udp.gso.enabled", false)
 		return
 	}
@@ -262,16 +248,9 @@ const udpGROCmsgPayload = 4
 // datagrams into one recvmmsg entry, with a cmsg carrying the gso_size used
 // to split them back apart on the application side.
 func (u *StdConn) prepareGRO() {
-	var probeErr error
-	if err := u.rawConn.Control(func(fd uintptr) {
-		probeErr = unix.SetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_GRO, 1)
-	}); err != nil {
-		u.l.Info("udp: GRO disabled", "reason", "rawconn control failed", "error", err)
-		recordCapability("udp.gro.enabled", false)
-		return
-	}
-	if probeErr != nil {
-		u.l.Info("udp: GRO disabled", "reason", "kernel rejected probe", "error", probeErr)
+	err := unix.SetsockoptInt(u.sysFd, unix.IPPROTO_UDP, unix.UDP_GRO, 1)
+	if err != nil {
+		u.l.Info("udp: GRO disabled", "reason", "kernel rejected probe", "error", err)
 		recordCapability("udp.gro.enabled", false)
 		return
 	}
@@ -287,15 +266,10 @@ func (u *StdConn) prepareGRO() {
 // Best-effort: we keep going on failure.
 func (u *StdConn) prepareECNRecv() {
 	var v4err, v6err error
-	if err := u.rawConn.Control(func(fd uintptr) {
-		v4err = unix.SetsockoptInt(int(fd), unix.IPPROTO_IP, unix.IP_RECVTOS, 1)
-		if !u.isV4 {
-			v6err = unix.SetsockoptInt(int(fd), unix.IPPROTO_IPV6, unix.IPV6_RECVTCLASS, 1)
-		}
-	}); err != nil {
-		u.l.Info("udp: outer-ECN RX disabled", "reason", "rawconn control failed", "error", err)
-		recordCapability("udp.ecn_rx.enabled", false)
-		return
+
+	v4err = unix.SetsockoptInt(u.sysFd, unix.IPPROTO_IP, unix.IP_RECVTOS, 1)
+	if !u.isV4 {
+		v6err = unix.SetsockoptInt(u.sysFd, unix.IPPROTO_IPV6, unix.IPV6_RECVTCLASS, 1)
 	}
 	if u.isV4 { //only check the V4 attempt
 		if v4err != nil {
@@ -505,15 +479,6 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 
 		flush()
 	}
-}
-
-// headerCounter returns the big-endian uint64 message counter at bytes
-// [8:16] of a nebula packet, or 0 if the buffer is too short.
-func headerCounter(buf []byte) uint64 {
-	if len(buf) < 16 {
-		return 0
-	}
-	return binary.BigEndian.Uint64(buf[8:16])
 }
 
 // parseRecvCmsg walks the per-slot ancillary buffer once and extracts up to
@@ -873,10 +838,18 @@ func (u *StdConn) writeEntryCmsg(entry, runLen, segSize int, ecn byte, dstIsV4 b
 }
 
 // sendmmsg issues sendmmsg(2) over u.rawConn against the first n entries
-// of u.writeMsgs. Routes through u.rawSend so the per-call kernel callback
-// stays alloc-free.
+// of u.writeMsgs.
 func (u *StdConn) sendmmsg(n int) (int, error) {
-	return u.rawSend.send(u.rawConn, n)
+	r1, _, errno := unix.Syscall6(unix.SYS_SENDMMSG, uintptr(u.sysFd),
+		uintptr(unsafe.Pointer(&u.writeMsgs[0])), uintptr(n),
+		0, 0, 0,
+	)
+	sent := int(r1)
+
+	if errno != 0 {
+		return sent, &net.OpError{Op: "sendmmsg", Err: errno}
+	}
+	return sent, nil
 }
 
 // writeSockaddr encodes addr into buf (which must be at least
