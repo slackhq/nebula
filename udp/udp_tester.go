@@ -157,14 +157,25 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 		return nil
 	}
 }
+func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) error {
+	for i, b := range bufs {
+		if err := u.WriteTo(b, addrs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-func (u *TesterConn) ListenOut(r EncReader) error {
+func (u *TesterConn) ListenOut(r EncReader, flush func()) error {
 	for {
 		select {
 		case <-u.done:
 			return os.ErrClosed
 		case p := <-u.RxPackets:
-			r(p.From, p.Data)
+			r(p.From, p.Data, RxMeta{})
+			// The batcher borrows plaintext decrypted in place inside p.Data
+			// until Flush, so the packet must stay alive across flush()
+			flush()
 			p.Release()
 		}
 	}

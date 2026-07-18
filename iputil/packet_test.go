@@ -1,6 +1,7 @@
 package iputil
 
 import (
+	"bytes"
 	"encoding/binary"
 	"net"
 	"testing"
@@ -177,6 +178,46 @@ func Test_CreateRejectPacket_NoICMPError(t *testing.T) {
 		rejectPacket := CreateRejectPacket(b, out)
 		assert.NotNil(t, rejectPacket, "ICMP type %d should generate a reject packet", icmpType)
 	}
+}
+
+// Test_CreateRejectPacket_RespectsCap ensures it is impossible for
+// an oversized ICMPv6 reject to overwrite the neighbor segment's bytes.
+func Test_CreateRejectPacket_RespectsCap(t *testing.T) {
+	src := net.ParseIP("fd00::1")
+	dst := net.ParseIP("fd00::2")
+
+	// Inner IPv6 UDP packet. An ICMPv6 reject copies the whole inner packet
+	// plus a 48-byte header (40 IPv6 + 8 ICMPv6), so it needs 48 more bytes
+	// than the inner packet length.
+	inner := makeIPv6Packet(src, dst, 17, make([]byte, 20))
+
+	// The ciphertext scratch reused as the reject buffer is the received
+	// datagram: 16-byte Nebula header + inner + 16-byte AEAD tag. That is only
+	// 32 bytes of slack, so a full ICMPv6 reject overruns it by 16 bytes.
+	const nebulaOverhead = 32
+	segLen := len(inner) + nebulaOverhead
+
+	// Shared backing row laid out as [segment][neighbor's 16-byte Nebula header].
+	const neighborHdr = 16
+	sentinel := bytes.Repeat([]byte{0xAB}, neighborHdr)
+
+	// Uncapped: the slice's capacity reaches into the neighbor, reproducing
+	// the overrun that silently drops the neighbor packet.
+	backing := make([]byte, segLen+neighborHdr)
+	copy(backing[segLen:], sentinel)
+	reject := CreateRejectPacket(inner, backing[:segLen])
+	assert.NotNil(t, reject, "uncapped buffer reaches into the neighbor, so the reject is built")
+	assert.NotEqual(t, sentinel, backing[segLen:segLen+neighborHdr],
+		"without the cap the oversized reject overruns into the neighbor segment")
+
+	// Capped (the fix): cap==len, so the builder cannot exceed the segment. The
+	// reject does not fit, so it is refused rather than corrupting the neighbor.
+	backing = make([]byte, segLen+neighborHdr)
+	copy(backing[segLen:], sentinel)
+	reject = CreateRejectPacket(inner, backing[:segLen:segLen])
+	assert.Nil(t, reject, "capped segment is 16 bytes too small for a full ICMPv6 reject, so it is refused")
+	assert.Equal(t, sentinel, backing[segLen:segLen+neighborHdr],
+		"capped segment must leave the neighbor untouched")
 }
 
 func makeIPv6Packet(src, dst net.IP, nextHeader uint8, payload []byte) []byte {

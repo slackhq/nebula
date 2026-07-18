@@ -6,7 +6,6 @@ package overlay
 import (
 	"crypto"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
 	"github.com/slackhq/nebula/wintun"
@@ -45,6 +45,10 @@ type winTun struct {
 	l               *slog.Logger
 
 	tun *wintun.NativeTun
+}
+
+func (t *winTun) Read(b []byte) (int, error) {
+	return t.tun.Read(b, 0)
 }
 
 func newTunFromFd(_ *config.C, _ *slog.Logger, _ int, _ []netip.Prefix) (Device, error) {
@@ -255,20 +259,12 @@ func (t *winTun) Name() string {
 	return t.Device
 }
 
-func (t *winTun) Read(b []byte) (int, error) {
-	return t.tun.Read(b, 0)
-}
-
 func (t *winTun) Write(b []byte) (int, error) {
 	return t.tun.Write(b, 0)
 }
 
-func (t *winTun) SupportsMultiqueue() bool {
-	return false
-}
-
-func (t *winTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
+func (t *winTun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{tio.NewSingleQueue(t, defaultBatchBufSize)}, nil
 }
 
 func (t *winTun) Close() error {

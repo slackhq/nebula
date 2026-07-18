@@ -14,6 +14,7 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/udp"
 )
@@ -177,10 +178,6 @@ func (t *TestTun) Read(b []byte) (int, error) {
 	return n, nil
 }
 
-func (t *TestTun) SupportsMultiqueue() bool {
-	return false
-}
-
-func (t *TestTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, fmt.Errorf("TODO: multiqueue not implemented")
+func (t *TestTun) Queues(int) ([]tio.Queue, error) {
+	return []tio.Queue{tio.NewSingleQueue(t, udp.MTU)}, nil
 }

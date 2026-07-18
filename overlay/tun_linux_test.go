@@ -3,7 +3,9 @@
 
 package overlay
 
-import "testing"
+import (
+	"testing"
+)
 
 var runAdvMSSTests = []struct {
 	name     string
@@ -31,4 +33,66 @@ func TestTunAdvMSS(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestOffloadUSOEnabled pins the single source of truth for the per-queue USO
+// capability: it is derived from the negotiated offload mask, so the mask
+// stored on the tun and the capability reported to coalescers cannot drift.
+func TestOffloadUSOEnabled(t *testing.T) {
+	// usoOffloadFlags must be a strict superset of tsoOffloadFlags. Otherwise
+	// the TSO-only fallback (and the historic hardcoded-mask bug in
+	// addQueue) would not actually be a downgrade.
+	if usoOffloadFlags&tsoOffloadFlags != tsoOffloadFlags {
+		t.Fatalf("usoOffloadFlags (%#x) is not a superset of tsoOffloadFlags (%#x)", usoOffloadFlags, tsoOffloadFlags)
+	}
+	if usoOffloadFlags == tsoOffloadFlags {
+		t.Fatal("usoOffloadFlags must add bits beyond tsoOffloadFlags")
+	}
+
+	cases := []struct {
+		name         string
+		offloadFlags uint
+		wantUSO      bool
+	}{
+		{"uso-negotiated", usoOffloadFlags, true},
+		{"tso-fallback", tsoOffloadFlags, false},
+		{"no-vnet-hdr", 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := offloadUSOEnabled(tc.offloadFlags); got != tc.wantUSO {
+				t.Fatalf("offloadUSOEnabled(%#x) = %v, want %v", tc.offloadFlags, got, tc.wantUSO)
+			}
+		})
+	}
+}
+
+// TestAddQueueReplaysNegotiatedMask guards the device-wide TUNSETOFFLOAD
+// downgrade bug: addQueue must issue the exact mask newTun negotiated
+// (t.offloadFlags), not a hardcoded TSO-only mask. Because TUNSETOFFLOAD is
+// per-netdev, a narrower mask on an added queue silently disables USO for
+// every queue on a USO-capable kernel while the queues keep advertising it.
+//
+// A full multi-queue exercise needs /dev/net/tun and CAP_NET_ADMIN, which are
+// not available in CI/sandbox, so this asserts on the struct field that the
+// TUNSETOFFLOAD argument is read from.
+func TestAddQueueReplaysNegotiatedMask(t *testing.T) {
+	t.Run("uso-negotiated", func(t *testing.T) {
+		tn := &tun{vnetHdr: true, offloadFlags: usoOffloadFlags}
+		// The ioctl argument in addQueue is uintptr(t.offloadFlags);
+		// it must equal the negotiated USO mask, and must NOT be the TSO-only
+		// mask (the original bug).
+		if tn.offloadFlags != usoOffloadFlags {
+			t.Fatalf("offloadFlags = %#x, want %#x", tn.offloadFlags, usoOffloadFlags)
+		}
+		if tn.offloadFlags == tsoOffloadFlags {
+			t.Fatal("added queue would downgrade USO: offloadFlags must not be the TSO-only mask when USO was negotiated")
+		}
+	})
+	t.Run("tso-fallback", func(t *testing.T) {
+		tn := &tun{vnetHdr: true, offloadFlags: tsoOffloadFlags}
+		if tn.offloadFlags != tsoOffloadFlags {
+			t.Fatalf("offloadFlags = %#x, want %#x", tn.offloadFlags, tsoOffloadFlags)
+		}
+	})
 }

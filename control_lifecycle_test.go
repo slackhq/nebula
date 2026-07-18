@@ -11,6 +11,8 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/overlay/batch"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/test"
 	"github.com/slackhq/nebula/udp"
@@ -30,9 +32,9 @@ func newFakeDevice() *fakeDevice {
 
 // Read blocks until Close like a real tun with no traffic, then reports EOF
 // the same way a closed device does
-func (d *fakeDevice) Read(p []byte) (int, error) {
+func (d *fakeDevice) Read() ([]tio.Packet, error) {
 	<-d.closedCh
-	return 0, io.EOF
+	return nil, io.EOF
 }
 
 func (d *fakeDevice) Write(p []byte) (int, error) { return len(p), nil }
@@ -49,10 +51,8 @@ func (d *fakeDevice) Activate() error                       { return nil }
 func (d *fakeDevice) Networks() []netip.Prefix              { return nil }
 func (d *fakeDevice) Name() string                          { return "fake" }
 func (d *fakeDevice) RoutesFor(netip.Addr) routing.Gateways { return nil }
-func (d *fakeDevice) SupportsMultiqueue() bool              { return false }
-func (d *fakeDevice) NewMultiQueueReader() (io.ReadWriteCloser, error) {
-	return nil, errors.New("unsupported")
-}
+
+func (d *fakeDevice) Queues(int) ([]tio.Queue, error) { return []tio.Queue{d}, nil }
 
 // newReadyControl hand-builds the minimum Control that Main would have
 // produced right before Start, including the construction token NewInterface
@@ -78,7 +78,7 @@ func newReadyControl(t *testing.T) (*Control, *fakeDevice, *fakeConn) {
 		inside:     dev,
 		outside:    conn,
 		writers:    []udp.Conn{conn},
-		readers:    make([]io.ReadWriteCloser, 1),
+		batchers:   make([]batch.RxBatcher, 1),
 		routines:   1,
 		hostMap:    newHostMap(l),
 		lightHouse: lh,
@@ -109,7 +109,8 @@ func TestControl_StopBeforeStart(t *testing.T) {
 	require.NoError(t, c.Wait())
 
 	// A stopped control can never be started
-	require.ErrorIs(t, c.Start(), ErrAlreadyStopped)
+	err := c.Start()
+	require.ErrorIs(t, err, ErrAlreadyStopped)
 
 	// A second Stop is a harmless no-op
 	c.Stop()
@@ -143,19 +144,29 @@ type fakeConn struct {
 	rebinds int
 }
 
-func (c *fakeConn) Rebind() error                            { c.rebinds++; return nil }
-func (c *fakeConn) LocalAddr() (netip.AddrPort, error)       { return netip.AddrPort{}, nil }
-func (c *fakeConn) ListenOut(_ udp.EncReader) error          { return nil }
-func (c *fakeConn) WriteTo(_ []byte, _ netip.AddrPort) error { return nil }
-func (c *fakeConn) ReloadConfig(_ *config.C)                 {}
-func (c *fakeConn) SupportsMultipleReaders() bool            { return true }
-func (c *fakeConn) Close() error                             { c.closed = true; return nil }
+func (c *fakeConn) Rebind() error                             { c.rebinds++; return nil }
+func (c *fakeConn) LocalAddr() (netip.AddrPort, error)        { return netip.AddrPort{}, nil }
+func (c *fakeConn) ListenOut(_ udp.EncReader, _ func()) error { return nil }
+func (c *fakeConn) WriteTo(_ []byte, _ netip.AddrPort) error  { return nil }
+func (c *fakeConn) WriteBatch(_ [][]byte, _ []netip.AddrPort, _ []byte) error {
+	return nil
+}
+func (c *fakeConn) ReloadConfig(_ *config.C)      {}
+func (c *fakeConn) SupportsMultipleReaders() bool { return true }
+func (c *fakeConn) Close() error                  { c.closed = true; return nil }
 
 type multiqueueDevice struct {
 	*fakeDevice
 }
 
-func (d *multiqueueDevice) SupportsMultiqueue() bool { return true }
+// Queues claims multiqueue support but fails to open the second queue,
+// exercising the activation error path.
+func (d *multiqueueDevice) Queues(n int) ([]tio.Queue, error) {
+	if n > 1 {
+		return nil, errors.New("second queue failed to open")
+	}
+	return d.fakeDevice.Queues(n)
+}
 
 func TestControl_StartMultiqueueFailureReleases(t *testing.T) {
 	dev := &multiqueueDevice{fakeDevice: newFakeDevice()}
@@ -166,7 +177,7 @@ func TestControl_StartMultiqueueFailureReleases(t *testing.T) {
 		inside:   dev,
 		outside:  conn,
 		writers:  []udp.Conn{conn},
-		readers:  make([]io.ReadWriteCloser, 2),
+		batchers: make([]batch.RxBatcher, 2),
 		routines: 2,
 		l:        test.NewLogger(),
 	}
@@ -181,7 +192,8 @@ func TestControl_StartMultiqueueFailureReleases(t *testing.T) {
 	}
 
 	// The second reader fails to open, everything must be released
-	require.Error(t, c.Start())
+	err := c.Start()
+	require.Error(t, err)
 	assert.Equal(t, StateStopped, c.State())
 	assert.True(t, dev.closed, "the tun device should have been closed")
 	assert.True(t, conn.closed, "the udp socket should have been closed")
@@ -251,15 +263,18 @@ func TestControl_ConcurrentStopAndStart(t *testing.T) {
 	// panic and Wait must observe the final state
 	require.NoError(t, c.Wait())
 	assert.Equal(t, StateStopped, c.State())
-	require.ErrorIs(t, c.Start(), ErrAlreadyStopped)
+	err := c.Start()
+	require.ErrorIs(t, err, ErrAlreadyStopped)
 }
 
 func TestControl_StartStopLifecycle(t *testing.T) {
 	c, dev, conn := newReadyControl(t)
 
-	require.NoError(t, c.Start())
+	err := c.Start()
+	require.NoError(t, err)
 	assert.Equal(t, StateStarted, c.State())
-	require.ErrorIs(t, c.Start(), ErrAlreadyStarted)
+	err = c.Start()
+	require.ErrorIs(t, err, ErrAlreadyStarted)
 
 	// Stop must unpark the reader blocked in the device and release everything
 	c.Stop()
@@ -270,7 +285,8 @@ func TestControl_StartStopLifecycle(t *testing.T) {
 
 	// The reader drained off a closed device, that is not a fatal error
 	require.NoError(t, c.Wait())
-	require.ErrorIs(t, c.Start(), ErrAlreadyStopped)
+	err = c.Start()
+	require.ErrorIs(t, err, ErrAlreadyStopped)
 }
 
 func TestControl_RebindIsGatedByState(t *testing.T) {
@@ -280,7 +296,8 @@ func TestControl_RebindIsGatedByState(t *testing.T) {
 	c.RebindUDPServer()
 	assert.Equal(t, 0, conn.rebinds, "rebind before start must be a no-op")
 
-	require.NoError(t, c.Start())
+	err := c.Start()
+	require.NoError(t, err)
 	c.RebindUDPServer()
 	assert.Equal(t, 1, conn.rebinds, "rebind while started must reach the conn")
 

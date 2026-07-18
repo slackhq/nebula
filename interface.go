@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/netip"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -14,12 +14,15 @@ import (
 
 	"github.com/gaissmai/bart"
 	"github.com/rcrowley/go-metrics"
+	"github.com/slackhq/nebula/util"
 
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/overlay"
+	"github.com/slackhq/nebula/overlay/batch"
+	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/udp"
 )
 
@@ -49,7 +52,19 @@ type InterfaceConfig struct {
 	reQueryWait     time.Duration
 
 	ConntrackCacheTimeout time.Duration
-	l                     *slog.Logger
+
+	// CpuAffinity, when non-empty, names the CPUs each TUN reader goroutine
+	// should pin to. Queue i pins to CpuAffinity[i % len(CpuAffinity)] —
+	// shorter lists than `routines` cycle. Empty list keeps the default
+	// pin-to-(i % NumCPU) behavior. Only consulted when PinThreads is true.
+	CpuAffinity []int
+	// PinThreads controls whether each TUN reader OS thread is pinned to a
+	// single CPU (via tun.pin_threads, default true). Pinning keeps each
+	// goroutine's sendmmsg on one XPS-selected NIC TX ring so per-flow
+	// packets stay ordered on the wire.
+	PinThreads bool
+
+	l *slog.Logger
 }
 
 type Interface struct {
@@ -73,7 +88,21 @@ type Interface struct {
 	routines              int
 	disconnectInvalid     atomic.Bool
 	closed                atomic.Bool
-	relayManager          *relayManager
+	// cpuAffinity, when non-empty, names the CPUs each TUN reader goroutine
+	// should pin to. Queue i pins to cpuAffinity[i % len(cpuAffinity)].
+	// Empty falls back to the default pin-to-(allowed CPU) behavior.
+	// Only consulted when pinThreads is true.
+	cpuAffinity []int
+	// pinThreads controls whether listenIn pins each TUN reader OS thread to
+	// a CPU at all (tun.pin_threads, default true). When false, threads are
+	// left free to migrate as on stock nebula.
+	pinThreads bool
+	// ecnEnabled gates RFC 6040 underlay ECN propagation. When true,
+	// inside.go copies the inner ECN onto the outer carrier on encap and
+	// decryptToTun folds outer CE into the inner header on decap. Toggle
+	// via tunnels.ecn (default true).
+	ecnEnabled   atomic.Bool
+	relayManager *relayManager
 
 	tryPromoteEvery atomic.Uint32
 	reQueryEvery    atomic.Uint32
@@ -90,8 +119,14 @@ type Interface struct {
 
 	ctx     context.Context
 	writers []udp.Conn
-	readers []io.ReadWriteCloser
-	wg      sync.WaitGroup
+	queues  []tio.Queue
+	// batchers is one per tun queue, wrapping queues[i]. readOutsidePackets
+	// commits plaintext into the batch.RxBatcher; the plaintext is decrypted
+	// in place inside the UDP receive buffers, so listenOut must call Flush
+	// at the end of each UDP recvmmsg batch, before those buffers are
+	// reused (every udp.Conn ListenOut guarantees that ordering).
+	batchers []batch.RxBatcher
+	wg       sync.WaitGroup
 
 	// fatalErr holds the first unexpected reader error that caused shutdown.
 	// nil means "no fatal error" (yet)
@@ -189,7 +224,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		routines:              c.routines,
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
-		readers:               make([]io.ReadWriteCloser, c.routines),
+		batchers:              make([]batch.RxBatcher, c.routines),
 		myVpnNetworks:         cs.myVpnNetworks,
 		myVpnNetworksTable:    cs.myVpnNetworksTable,
 		myVpnAddrs:            cs.myVpnAddrs,
@@ -198,6 +233,8 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		relayManager:          c.relayManager,
 		connectionManager:     c.connectionManager,
 		conntrackCacheTimeout: c.ConntrackCacheTimeout,
+		cpuAffinity:           c.CpuAffinity,
+		pinThreads:            c.PinThreads,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
 		messageMetrics:   c.MessageMetrics,
@@ -240,25 +277,38 @@ func (f *Interface) activate() error {
 		"boringcrypto", boringEnabled(),
 	)
 
-	if f.routines > 1 {
-		if !f.inside.SupportsMultiqueue() || !f.outside.SupportsMultipleReaders() {
-			f.routines = 1
-			f.l.Warn("routines is not supported on this platform, falling back to a single routine")
-		}
+	if f.routines > 1 && !f.outside.SupportsMultipleReaders() {
+		f.routines = 1
+		f.l.Warn("multiple udp readers are not supported on this platform, falling back to a single routine")
 	}
+
+	// Prepare the tun queues. A device that can't open that many hands back
+	// fewer (a single queue on platforms without multiqueue support) and we
+	// size the reader routines to what we actually got.
+	queues, err := f.inside.Queues(f.routines)
+	if err != nil {
+		return err
+	}
+	if len(queues) < f.routines {
+		f.l.Warn("tun multiqueue is not supported on this platform, falling back to fewer routines",
+			"requested", f.routines, "opened", len(queues))
+		f.routines = len(queues)
+	}
+	f.queues = queues
 
 	metrics.GetOrRegisterGauge("routines", nil).Update(int64(f.routines))
 
-	// Prepare n tun queues
-	var reader io.ReadWriteCloser = f.inside
-	for i := 0; i < f.routines; i++ {
-		if i > 0 {
-			reader, err = f.inside.NewMultiQueueReader()
-			if err != nil {
-				return err
-			}
+	for i := range f.queues {
+		caps := tio.QueueCapabilities(f.queues[i])
+		if caps.TSO || caps.USO {
+			// Multi-lane: TCP gets coalesced when TSO is on, UDP when USO
+			// is on, everything else (and either lane disabled) falls
+			// through to passthrough so non-IP / non-TCP-UDP traffic still
+			// reaches the TUN.
+			f.batchers[i] = batch.NewMultiCoalescer(f.queues[i], f.l, caps.TSO, caps.USO)
+		} else {
+			f.batchers[i] = batch.NewPassthrough(f.queues[i])
 		}
-		f.readers[i] = reader
 	}
 
 	// On error the caller owns the cleanup, Control.Start cancels the service context
@@ -281,7 +331,7 @@ func (f *Interface) run() {
 	// Launch n queues to read packets from tun dev
 	for i := 0; i < f.routines; i++ {
 		f.wg.Go(func() {
-			f.listenIn(f.readers[i], i)
+			f.listenIn(f.queues[i], i)
 		})
 	}
 
@@ -316,14 +366,22 @@ func (f *Interface) listenOut(i int) {
 
 	ctCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
 	lhh := f.lightHouse.NewRequestHandler()
-	plaintext := make([]byte, udp.MTU)
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
+	scratch := make([]byte, mtu)
 
-	err := li.ListenOut(func(fromUdpAddr netip.AddrPort, payload []byte) {
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get())
-	})
+	listener := func(fromUdpAddr netip.AddrPort, payload []byte, meta udp.RxMeta) {
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, scratch, payload, h, fwPacket, lhh, nb, i, ctCache.Get(), meta)
+	}
+
+	flusher := func() {
+		if err := f.batchers[i].Flush(); err != nil {
+			f.l.Error("Failed to flush tun coalescer", "error", err)
+		}
+	}
+
+	err := li.ListenOut(listener, flusher)
 
 	// An error after teardown began is shutdown noise, the closed flag covers resources
 	// Close releases itself and the cancelled ctx covers ones torn down by their owners
@@ -336,16 +394,38 @@ func (f *Interface) listenOut(i int) {
 	f.l.Debug("underlay reader is done", "reader", i)
 }
 
-func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
-	packet := make([]byte, mtu)
-	out := make([]byte, mtu)
+func (f *Interface) listenIn(queue tio.Queue, i int) {
+	// Pinning this thread (and goroutine) to a single CPU keeps every sendmmsg from this goroutine going through the
+	// same TX ring on the nic, so the wire sees per-flow order. Skip entirely when tun.pin_threads is false.
+	if f.pinThreads {
+		var cpu int
+		if n := len(f.cpuAffinity); n > 0 {
+			// Explicit tun.cpu_affinity list wins; parseCpuAffinity already
+			// validated the entries against the allowed CPU set.
+			cpu = f.cpuAffinity[i%n]
+		} else if allowed, err := util.AllowedCPUs(); err == nil && len(allowed) > 0 {
+			// Default: spread queues across the CPUs we're actually allowed to
+			// run on. Under a cpuset/taskset mask these aren't 0..NumCPU-1, so
+			// i % NumCPU would pick unrunnable IDs and every pin would fail.
+			cpu = allowed[i%len(allowed)]
+		} else {
+			cpu = i % runtime.NumCPU()
+		}
+		if err := util.PinThreadToCPU(cpu); err != nil {
+			f.l.Warn("failed to pin tun reader to CPU", "queue", i, "cpu", cpu, "err", err)
+		}
+	}
+
+	rejectBuf := make([]byte, mtu)
+	arenaSize := batch.SendBatchCap * (udp.MTU + 32)
+	sb := batch.NewSendBatch(f.writers[i], batch.SendBatchCap, arenaSize)
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
 	conntrackCache := firewall.NewConntrackCacheTicker(f.ctx, f.l, f.conntrackCacheTimeout)
 
 	for {
-		n, err := reader.Read(packet)
+		pkts, err := queue.Read()
 		if err != nil {
 			// Same shutdown noise handling as listenOut
 			if !f.closed.Load() && f.ctx.Err() == nil {
@@ -355,7 +435,20 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 			break
 		}
 
-		f.consumeInsidePacket(packet[:n], fwPacket, nb, out, i, conntrackCache.Get())
+		for _, pkt := range pkts {
+			f.consumeInsidePacket(pkt, fwPacket, nb, sb, rejectBuf, i, conntrackCache.Get())
+			// Flush incrementally once a full sendmmsg batch has
+			// accumulated so the first packets of a deep read drain
+			// hit the wire while the rest are still being encrypted.
+			if sb.Len() >= batch.SendBatchCap {
+				if err := sb.Flush(); err != nil {
+					f.l.Error("Failed to write outgoing batch", "error", err, "writer", i)
+				}
+			}
+		}
+		if err := sb.Flush(); err != nil {
+			f.l.Error("Failed to write outgoing batch", "error", err, "writer", i)
+		}
 	}
 
 	f.l.Debug("overlay reader is done", "reader", i)
@@ -367,6 +460,7 @@ func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {
 	c.RegisterReloadCallback(f.reloadAcceptRecvError)
 	c.RegisterReloadCallback(f.reloadDisconnectInvalid)
 	c.RegisterReloadCallback(f.reloadMisc)
+	c.RegisterReloadCallback(f.reloadEcn)
 
 	for _, udpConn := range f.writers {
 		c.RegisterReloadCallback(udpConn.ReloadConfig)
@@ -496,6 +590,23 @@ func (f *Interface) reloadMisc(c *config.C) {
 		n := c.GetDuration("timers.requery_wait_duration", defaultReQueryWait)
 		f.reQueryWait.Store(int64(n))
 		f.l.Info("timers.requery_wait_duration has changed")
+	}
+}
+
+// reloadEcn syncs Interface.ecnEnabled with the tunnels.ecn config knob.
+// Default is enabled (RFC 6040 normal mode); set false on the rare path
+// where an underlay middlebox rewrites or drops ECN bits unpredictably.
+func (f *Interface) reloadEcn(c *config.C) {
+	initial := c.InitialLoad()
+	if initial || c.HasChanged("tunnels.ecn") {
+		v := c.GetBool("tunnels.ecn", true)
+		changed := f.ecnEnabled.Swap(v) != v
+		if !initial {
+			f.l.Info("tunnels.ecn changed", "enabled", v)
+			if changed {
+				f.l.Warn("tunnels.ecn datapath toggled, but route-level ECN negotiation (RTAX_FEATURE_ECN) retains its previous state until nebula is restarted", "enabled", v)
+			}
+		}
 	}
 }
 

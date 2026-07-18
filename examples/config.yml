@@ -254,6 +254,20 @@ tun:
   # Default MTU for every packet, safe setting is (and the default) 1300 for internet based traffic
   mtu: 1300
 
+  # Linux only. pin_threads pins each tun reader/encrypt OS thread to a single CPU. This keeps every goroutine's
+  # batched sends flowing through one XPS-selected NIC TX ring, so packets within a flow stay ordered on the wire
+  # instead of being sprayed across multiple TX rings and reordered. Not reloadable.
+  #pin_threads: true
+
+  # Linux only. cpu_affinity overrides which CPUs the tun reader threads pin to: a list of CPU IDs, one per routine
+  # (see the top-level `routines` setting). Lists shorter than `routines` are modulo-cycled across the queues; extra
+  # entries are ignored. IDs must be within the process's allowed CPU set, so this respects taskset / cgroup cpusets;
+  # a non-integer or not-allowed entry disables the override and falls back to spreading queues across the allowed
+  # CPUs. Only meaningful while pin_threads is true. Not reloadable.
+  #cpu_affinity:
+  #  - 2
+  #  - 4
+
   # Route based MTU overrides, you have known vpn ip paths that can support larger MTUs you can increase/decrease them here
   routes:
     #- mtu: 8800
@@ -389,6 +403,16 @@ logging:
   # inactive and eligible to be dropped.
   # This setting is reloadable
   #inactivity_timeout: 10m
+
+  # ecn (default true) propagates ECN (Explicit Congestion Notification) across the tunnel per RFC 6040: the inner
+  # packet's ECN codepoint is copied onto the outer carrier header on encapsulation, and an outer CE ("congestion
+  # experienced") mark is folded back into the inner header on decapsulation. On linux it additionally stamps
+  # RTAX_FEATURE_ECN on the routes nebula installs, so the kernel actively negotiates ECN for connections to mesh
+  # prefixes. Disable this only when an underlay middlebox mangles or clears ECN bits unpredictably.
+  # This setting is reloadable, BUT flipping it at runtime only updates the datapath (the inner<->outer copy/combine).
+  # The RTAX_FEATURE_ECN flag on already-installed routes is NOT revisited on reload, so nebula must be restarted for
+  # the route half of this setting to take effect.
+  #ecn: true
 
 # Nebula security group configuration
 firewall:
