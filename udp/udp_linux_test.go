@@ -29,7 +29,7 @@ func TestShutdownWakesAfterRx_Mechanism(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LocalAddr: %v", err)
 	}
-	msgs, _, _, _ := sc.PrepareRawMessages(sc.batch, 0xffff, 16)
+	msgs, _, _, _ := prepareRawMessages(sc.batch, 0xffff, 16)
 
 	// Receive a real packet so the socket has carried data.
 	send, err := net.Dial("udp", addr.String())
@@ -103,8 +103,8 @@ func TestListenOutTeardown_TrafficPatterns(t *testing.T) {
 		}},
 	}
 
-	// batch 1 exercises the recvmsg path, batch 64 the recvmmsg path; both must
-	// tear down cleanly.
+	// batch 1 exercises single-message reads, batch 64 a full recvmmsg batch;
+	// both must tear down cleanly.
 	for _, batch := range []int{1, 64} {
 		for _, tc := range cases {
 			t.Run(fmt.Sprintf("batch%d/%s", batch, tc.name), func(t *testing.T) {

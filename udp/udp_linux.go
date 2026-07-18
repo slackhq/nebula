@@ -10,8 +10,6 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
-	"strconv"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
@@ -28,37 +26,13 @@ type StdConn struct {
 	l      *slog.Logger
 	batch  int
 
-	// sendmmsg scratch. Each queue has its own StdConn, so no locking is
-	// needed. Sized to MaxWriteBatch at construction; WriteBatch chunks
-	// larger inputs.
-	writeMsgs  []rawMessage
-	writeIovs  []iovec
-	writeNames [][]byte
-
-	// Per-entry cmsg scratch. writeCmsg is one contiguous slab of
-	// MaxWriteBatch * writeCmsgSpace bytes; each entry holds two cmsg
-	// headers (UDP_SEGMENT then IP_TOS / IPV6_TCLASS) pre-filled once in
-	// prepareWriteMessages. WriteBatch only rewrites the per-call data
-	// payloads and toggles Hdr.Control / Hdr.Controllen to point at
-	// whichever subset of the two cmsgs applies.
-	writeCmsg         []byte
-	writeCmsgSpace    int
-	writeCmsgSegSpace int
-	writeCmsgEcnSpace int
-
-	// writeEntryEnd[e] is the bufs index *after* the last packet packed
-	// into mmsghdr entry e. Used to rewind `i` on partial sendmmsg success.
-	writeEntryEnd []int
-
-	// UDP GSO (sendmsg with UDP_SEGMENT cmsg) support. gsoSupported is
-	// probed once at socket creation. When true, WriteBatch packs same-
-	// destination consecutive packets into a single sendmmsg entry with a
-	// UDP_SEGMENT cmsg; otherwise each packet is its own entry.
-	gsoSupported   bool
-	maxGSOSegments int
+	// bw owns the sendmmsg/UDP-GSO transmit path: the per-queue write
+	// scratch and the GSO capability state probed at socket creation. See
+	// udp_linux_writebatch.go.
+	bw *batchWriter
 
 	// UDP GRO (recvmsg with UDP_GRO cmsg) support. groSupported is probed
-	// once at socket creation. When true, listenOutBatch allocates larger
+	// once at socket creation. When true, ListenOut allocates larger
 	// RX buffers and a per-entry cmsg slot so the kernel can coalesce
 	// consecutive same-flow datagrams into a single recvmmsg entry; the
 	// delivered cmsg carries the gso_size used to split them back apart.
@@ -66,7 +40,7 @@ type StdConn struct {
 
 	// ecnRecvSupported is true when IP_RECVTOS / IPV6_RECVTCLASS was
 	// successfully enabled — the kernel will deliver the outer IP-ECN of
-	// each arriving datagram as a per-slot cmsg, and listenOutBatch passes
+	// each arriving datagram as a per-slot cmsg, and ListenOut passes
 	// the parsed value to the EncReader callback for RFC 6040 combine.
 	ecnRecvSupported bool
 }
@@ -110,12 +84,12 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 
 	out := &StdConn{sysFd: fd, isV4: ip.Is4(), l: l, batch: batch}
 
-	out.prepareWriteMessages(MaxWriteBatch)
+	out.bw = newBatchWriter(fd, out.isV4, l)
 
-	out.prepareGSO()
-	// GRO delivers coalesced superpackets that need a cmsg to split back
-	// into segments. The single-packet RX path uses ReadFromUDPAddrPort
-	// and cannot see that cmsg, so only enable GRO for the batch path.
+	// GRO coalesces same-flow datagrams into superpackets that must be split
+	// back apart via the delivered gso_size cmsg. batch == 1 means the caller
+	// wants plain single-datagram reads with MTU-sized buffers, so leave it
+	// off there.
 	if batch > 1 {
 		out.prepareGRO()
 	}
@@ -126,110 +100,6 @@ func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int)
 	out.prepareECNRecv()
 
 	return out, nil
-}
-
-// prepareWriteMessages allocates one mmsghdr/iovec/sockaddr/cmsg scratch
-// slot per sendmmsg entry. The iovec slab is sized to n so all entries'
-// iovecs share one allocation; per-entry fan-out is further capped at
-// maxGSOSegments. Hdr.Iov / Hdr.Iovlen / Hdr.Control / Hdr.Controllen are
-// wired per call since each entry can span a variable number of iovecs
-// and may or may not carry a cmsg.
-//
-// Per-mmsghdr cmsg layout. Each entry's slot of length writeCmsgSpace holds
-// up to two cmsg headers placed at fixed offsets:
-//
-//	[0 .. writeCmsgSegSpace)              UDP_SEGMENT (gso_size, uint16)
-//	[writeCmsgSegSpace .. writeCmsgSpace) IP_TOS or IPV6_TCLASS (int32)
-//
-// Both headers are pre-filled once here; per-call we only rewrite the data
-// payload and toggle Hdr.Control / Hdr.Controllen to point at whichever
-// subset applies (none / segment-only / ecn-only / both).
-func (u *StdConn) prepareWriteMessages(n int) {
-	u.writeMsgs = make([]rawMessage, n)
-	u.writeIovs = make([]iovec, n)
-	u.writeNames = make([][]byte, n)
-	u.writeEntryEnd = make([]int, n)
-
-	u.writeCmsgSegSpace = unix.CmsgSpace(2)
-	u.writeCmsgEcnSpace = unix.CmsgSpace(4)
-	u.writeCmsgSpace = u.writeCmsgSegSpace + u.writeCmsgEcnSpace
-	u.writeCmsg = make([]byte, n*u.writeCmsgSpace)
-
-	// Default the ECN header to the socket's own family. writeEntryCmsg
-	// finalizes Level/Type per entry from the destination address (a v4-mapped
-	// dst on a dual-stack v6 socket needs IP_TOS, not IPV6_TCLASS), so this is
-	// only the value used before the first per-entry rewrite.
-	ecnLevel := int32(unix.IPPROTO_IP)
-	ecnType := int32(unix.IP_TOS)
-	if !u.isV4 {
-		ecnLevel = unix.IPPROTO_IPV6
-		ecnType = unix.IPV6_TCLASS
-	}
-
-	for k := 0; k < n; k++ {
-		base := k * u.writeCmsgSpace
-		seg := (*unix.Cmsghdr)(unsafe.Pointer(&u.writeCmsg[base]))
-		seg.Level = unix.SOL_UDP
-		seg.Type = unix.UDP_SEGMENT
-		setCmsgLen(seg, unix.CmsgLen(2))
-
-		ecn := (*unix.Cmsghdr)(unsafe.Pointer(&u.writeCmsg[base+u.writeCmsgSegSpace]))
-		ecn.Level = ecnLevel
-		ecn.Type = ecnType
-		setCmsgLen(ecn, unix.CmsgLen(4))
-	}
-
-	for i := range u.writeMsgs {
-		u.writeNames[i] = make([]byte, unix.SizeofSockaddrInet6)
-		u.writeMsgs[i].Hdr.Name = &u.writeNames[i][0]
-	}
-}
-
-// maxGSOBytes bounds the total payload per sendmsg() when UDP_SEGMENT is
-// set. The kernel stitches all iovecs into a single skb whose length the
-// UDP length field can represent, and also enforces sk_gso_max_size (which
-// on most devices is 65536). We use 65000 to leave headroom under the
-// 65535 UDP-length cap, avoiding EMSGSIZE on large TSO superpackets.
-const maxGSOBytes = 65000
-
-// prepareGSO probes UDP_SEGMENT support and sets u.gsoSupported on success.
-// Best-effort; failure leaves it false.
-func (u *StdConn) prepareGSO() {
-	u.maxGSOSegments = 63 //gotta be one less than the max so we can still attach a header
-
-	if err := unix.SetsockoptInt(u.sysFd, unix.IPPROTO_UDP, unix.UDP_SEGMENT, 0); err != nil {
-		u.l.Info("udp: GSO disabled", "reason", "rawconn control failed", "error", err)
-		recordCapability("udp.gso.enabled", false)
-		return
-	}
-
-	var un unix.Utsname
-	if err := unix.Uname(&un); err != nil {
-		u.l.Info("udp: GSO disabled", "reason", "kernel uname probe failed", "error", err)
-		recordCapability("udp.gso.enabled", false)
-		return
-	}
-	u.maxGSOSegments = gsoMaxSegments(string(un.Release[:]))
-
-	u.gsoSupported = true
-	u.l.Info("udp: GSO enabled", "maxGSOSegments", u.maxGSOSegments)
-	recordCapability("udp.gso.enabled", true)
-}
-
-// gsoMaxSegments returns the largest number of UDP_SEGMENT segments a single
-// sendmsg may carry on the running kernel, reserving one segment for the
-// header. UDP_MAX_SEGMENTS was 64 until Linux v6.9 (commit 1382e3b6a350,
-// "udp: change maximum number of UDP segments to 128") raised it to 128;
-// nothing about this changed in 5.5. On kernels older than 6.9 packing more
-// than 64 segments gets the sendmsg rejected with EINVAL, so cap at 63 there
-// and only use 127 from 6.9 on. (Maintainer stance: update your kernel if you
-// want to go fast — this is a plain version gate, not a runtime probe.)
-func gsoMaxSegments(release string) int {
-	major, minor := parseRelease(release)
-	if major > 6 || (major == 6 && minor >= 9) {
-		return 127
-	}
-	return 63
 }
 
 // udpGROBufferSize sizes the per-entry recvmmsg buffer when UDP_GRO is on.
@@ -261,40 +131,30 @@ func (u *StdConn) prepareGRO() {
 
 // prepareECNRecv turns on IP_RECVTOS / IPV6_RECVTCLASS so the outer IP-ECN
 // field of each arriving datagram is delivered as ancillary data alongside
-// the payload. listenOutBatch reads it via parseRecvCmsg and passes the
-// codepoint through the EncReader for RFC 6040 combine on the decap side.
-// Best-effort: we keep going on failure.
+// the payload. ListenOut reads it via parseRecvCmsg and passes the codepoint
+// through the EncReader for RFC 6040 combine on the decap side. Best-effort:
+// we keep going on failure. Only the socket's own family gates support; on a
+// dual-stack v6 socket a failed IPv4 probe just degrades v4 peers to Not-ECT
+// (could be a v6-specific bind).
 func (u *StdConn) prepareECNRecv() {
-	var v4err, v6err error
-
-	v4err = unix.SetsockoptInt(u.sysFd, unix.IPPROTO_IP, unix.IP_RECVTOS, 1)
+	v4err := unix.SetsockoptInt(u.sysFd, unix.IPPROTO_IP, unix.IP_RECVTOS, 1)
+	err := v4err
 	if !u.isV4 {
-		v6err = unix.SetsockoptInt(u.sysFd, unix.IPPROTO_IPV6, unix.IPV6_RECVTCLASS, 1)
-	}
-	if u.isV4 { //only check the V4 attempt
-		if v4err != nil {
-			u.l.Info("udp: outer-ECN RX disabled", "reason", "kernel rejected probe", "error", v4err)
-			recordCapability("udp.ecn_rx.enabled", false)
-		} else {
-			u.ecnRecvSupported = true
-			u.l.Info("udp: outer-ECN RX enabled")
-			recordCapability("udp.ecn_rx.enabled", true)
-		}
-		return
-	} else {
-		if v6err != nil { //no V6 ECN? disable it.
-			u.l.Info("udp: outer-ECN RX disabled", "reason", "kernel rejected probe", "error", errors.Join(v4err, v6err))
-			recordCapability("udp.ecn_rx.enabled", false)
-			return
-		} else if v4err != nil { //no V4, but yes V6? Low level warning. Could be a V6-specific bind.
+		err = unix.SetsockoptInt(u.sysFd, unix.IPPROTO_IPV6, unix.IPV6_RECVTCLASS, 1)
+		if err != nil {
+			err = errors.Join(v4err, err)
+		} else if v4err != nil {
 			u.l.Debug("udp: outer-ECN RX degraded", "reason", "kernel rejected probe on IPv4", "error", v4err)
 		}
-		// all good
-		u.ecnRecvSupported = true
-		u.l.Info("udp: outer-ECN RX enabled")
-		recordCapability("udp.ecn_rx.enabled", true)
+	}
+	if err != nil {
+		u.l.Info("udp: outer-ECN RX disabled", "reason", "kernel rejected probe", "error", err)
+		recordCapability("udp.ecn_rx.enabled", false)
 		return
 	}
+	u.ecnRecvSupported = true
+	u.l.Info("udp: outer-ECN RX enabled")
+	recordCapability("udp.ecn_rx.enabled", true)
 }
 
 // recordCapability registers (or updates) a boolean gauge for one of the
@@ -358,7 +218,9 @@ func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
 	}
 }
 
-// recvmmsg does one blocking recvmmsg (MSG_WAITFORONE), reading up to len(msgs) datagrams
+// recvmmsg does one blocking recvmmsg (MSG_WAITFORONE), reading up to len(msgs)
+// datagrams. With len(msgs) == 1 it degenerates to a plain single-datagram
+// read (the kernel implements recvmmsg as a recvmsg loop).
 func (u *StdConn) recvmmsg(msgs []rawMessage) (int, error) {
 	r, _, errno := unix.Syscall6(
 		unix.SYS_RECVMMSG,
@@ -382,28 +244,40 @@ func (u *StdConn) recvmmsg(msgs []rawMessage) (int, error) {
 	return n, nil
 }
 
-// recvmsg does one blocking recvmsg into msgs[0]
-func (u *StdConn) recvmsg(msgs []rawMessage) (int, error) {
-	r, _, errno := unix.Syscall6(
-		unix.SYS_RECVMSG,
-		uintptr(u.sysFd),
-		uintptr(unsafe.Pointer(&msgs[0].Hdr)),
-		0,
-		0,
-		0,
-		0,
-	)
-	if errno != 0 {
-		if u.closed.Load() {
-			return 0, net.ErrClosed
+// prepareRawMessages allocates the recvmmsg scratch: n rawMessages, each
+// wired to its own bufSize receive buffer, sockaddr name slot and — when
+// cmsgSpace > 0 — a slice of one contiguous ancillary-data slab. All iovecs
+// share a single slab kept alive by the msghdrs that point into it.
+func prepareRawMessages(n, bufSize, cmsgSpace int) ([]rawMessage, [][]byte, [][]byte, []byte) {
+	msgs := make([]rawMessage, n)
+	buffers := make([][]byte, n)
+	names := make([][]byte, n)
+	iovs := make([]iovec, n)
+
+	var cmsgs []byte
+	if cmsgSpace > 0 {
+		cmsgs = make([]byte, n*cmsgSpace)
+	}
+
+	for i := range msgs {
+		buffers[i] = make([]byte, bufSize)
+		names[i] = make([]byte, unix.SizeofSockaddrInet6)
+
+		iovs[i].Base = &buffers[i][0]
+		setIovLen(&iovs[i], bufSize)
+		msgs[i].Hdr.Iov = &iovs[i]
+		setMsgIovlen(&msgs[i].Hdr, 1)
+
+		msgs[i].Hdr.Name = &names[i][0]
+		msgs[i].Hdr.Namelen = uint32(len(names[i]))
+
+		if cmsgSpace > 0 {
+			msgs[i].Hdr.Control = &cmsgs[i*cmsgSpace]
+			setMsgControllen(&msgs[i].Hdr, cmsgSpace)
 		}
-		return 0, &net.OpError{Op: "recvmsg", Err: errno}
 	}
-	if r == 0 && u.closed.Load() {
-		return 0, net.ErrClosed
-	}
-	msgs[0].Len = uint32(r)
-	return 1, nil
+
+	return msgs, buffers, names, cmsgs
 }
 
 func getFrom(names [][]byte, i int, isV4 bool) netip.AddrPort {
@@ -430,12 +304,7 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 		// either family alongside any UDP_GRO cmsg.
 		cmsgSpace += unix.CmsgSpace(4)
 	}
-	msgs, buffers, names, _ := u.PrepareRawMessages(u.batch, bufSize, cmsgSpace)
-
-	read := u.recvmmsg
-	if u.batch == 1 {
-		read = u.recvmsg
-	}
+	msgs, buffers, names, _ := prepareRawMessages(u.batch, bufSize, cmsgSpace)
 
 	for {
 		if cmsgSpace > 0 {
@@ -443,7 +312,7 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 				setMsgControllen(&msgs[i].Hdr, cmsgSpace)
 			}
 		}
-		n, err := read(msgs)
+		n, err := u.recvmmsg(msgs)
 		if err != nil {
 			if errors.Is(err, unix.EINTR) {
 				continue // interrupted by a signal, retry the read
@@ -530,326 +399,39 @@ func parseRecvCmsg(hdr *msghdr, wantGRO, wantECN bool) (gso int, ecn byte) {
 }
 
 func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
-	if u.isV4 {
-		return u.writeTo4(b, ip)
-	}
-	return u.writeTo6(b, ip)
+	return sendto(u.sysFd, b, ip, u.isV4)
 }
 
-func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
-	var rsa unix.RawSockaddrInet6
-	rsa.Family = unix.AF_INET6
-	rsa.Addr = ip.Addr().As16()
-	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ip.Port())
-
-	for {
-		_, _, err := unix.Syscall6(
-			unix.SYS_SENDTO,
-			uintptr(u.sysFd),
-			uintptr(unsafe.Pointer(&b[0])),
-			uintptr(len(b)),
-			uintptr(0),
-			uintptr(unsafe.Pointer(&rsa)),
-			uintptr(unix.SizeofSockaddrInet6),
-		)
-		if err != 0 {
-			return &net.OpError{Op: "sendto", Err: err}
-		}
-		return nil
+func sendto(fd int, b []byte, addr netip.AddrPort, isV4 bool) error {
+	var rsa [unix.SizeofSockaddrInet6]byte
+	nlen, err := writeSockaddr(rsa[:], addr, isV4)
+	if err != nil {
+		return err
 	}
-}
-
-func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
-	if !ip.Addr().Is4() {
-		return ErrInvalidIPv6RemoteForSocket
+	var base *byte
+	if len(b) > 0 {
+		base = &b[0]
 	}
-
-	var rsa unix.RawSockaddrInet4
-	rsa.Family = unix.AF_INET
-	rsa.Addr = ip.Addr().As4()
-	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ip.Port())
-
-	for {
-		_, _, err := unix.Syscall6(
-			unix.SYS_SENDTO,
-			uintptr(u.sysFd),
-			uintptr(unsafe.Pointer(&b[0])),
-			uintptr(len(b)),
-			uintptr(0),
-			uintptr(unsafe.Pointer(&rsa)),
-			uintptr(unix.SizeofSockaddrInet4),
-		)
-		if err != 0 {
-			return &net.OpError{Op: "sendto", Err: err}
-		}
-		return nil
-	}
-}
-
-// WriteBatch sends bufs via sendmmsg(2) using the preallocated scratch on
-// StdConn. Consecutive packets to the same destination with matching segment
-// sizes (all but possibly the last) are coalesced into a single mmsghdr entry
-// carrying a UDP_SEGMENT cmsg, so one syscall can mix runs of GSO superpackets
-// with plain one-off datagrams. Without GSO support every packet is its own
-// entry, matching the prior behaviour.
-//
-// Chunks larger than the scratch are processed across multiple syscalls. If
-// sendmmsg returns an error AND zero entries went out we fall back to
-// per-packet WriteTo for that chunk so the caller still gets best-effort
-// delivery; on a partial-success error we just replay the remainder.
-func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte) error {
-	if len(bufs) != len(addrs) {
-		return fmt.Errorf("WriteBatch: len(bufs)=%d != len(addrs)=%d", len(bufs), len(addrs))
-	}
-	if ecns != nil && len(ecns) != len(bufs) {
-		return fmt.Errorf("WriteBatch: len(ecns)=%d != len(bufs)=%d", len(ecns), len(bufs))
-	}
-
-	// Callers deliver same-destination packets contiguously and in counter
-	// order, so we run the GSO planner directly without a pre-sort. A
-	// sorting pass measurably hurt throughput in microbenchmarks while
-	// providing no observed reordering benefit.
-
-	i := 0
-sendChunks:
-	for i < len(bufs) {
-		baseI := i
-		entry := 0
-		iovIdx := 0
-		for entry < len(u.writeMsgs) && i < len(bufs) {
-			iovBudget := len(u.writeIovs) - iovIdx
-			if iovBudget < 1 {
-				break
-			}
-			runLen, segSize := u.planRun(bufs, addrs, ecns, i, iovBudget)
-			if runLen == 0 {
-				break
-			}
-
-			for k := 0; k < runLen; k++ {
-				b := bufs[i+k]
-				if len(b) == 0 {
-					u.writeIovs[iovIdx+k].Base = nil
-					setIovLen(&u.writeIovs[iovIdx+k], 0)
-				} else {
-					u.writeIovs[iovIdx+k].Base = &b[0]
-					setIovLen(&u.writeIovs[iovIdx+k], len(b))
-				}
-			}
-
-			nlen, err := writeSockaddr(u.writeNames[entry], addrs[i], u.isV4)
-			if err != nil {
-				// One destination in this chunk has an address family the
-				// socket can't send to (e.g. an IPv6 remote on a v4-bound
-				// socket → ErrInvalidIPv6RemoteForSocket). Abandoning the whole
-				// sendmmsg here would drop every packet already packed for this
-				// chunk plus every packet still ahead of us in bufs. Instead
-				// fall back to per-packet WriteTo for the packets packed so far
-				// in this chunk and the offending one: WriteTo delivers each
-				// good destination and only errors on the bad one, which we
-				// drop and keep going. One bad destination costs one packet,
-				// never the batch. (Same fallback the zero-sent sendmmsg path
-				// below uses, extended to cover the misaddressed packet.)
-				for k := baseI; k <= i; k++ {
-					if werr := u.WriteTo(bufs[k], addrs[k]); werr != nil && k != i {
-						return werr
-					}
-				}
-				i++
-				continue sendChunks
-			}
-
-			hdr := &u.writeMsgs[entry].Hdr
-			hdr.Iov = &u.writeIovs[iovIdx]
-			setMsgIovlen(hdr, runLen)
-			hdr.Namelen = uint32(nlen)
-
-			var ecn byte
-			if ecns != nil {
-				ecn = ecns[i]
-			}
-			// ECN cmsg family follows the destination, not the socket: a
-			// v4-mapped dst on a dual-stack v6 socket must be stamped via
-			// IP_TOS. addrs[i] is this run's destination (i advances below).
-			dstIsV4 := addrs[i].Addr().Unmap().Is4()
-			u.writeEntryCmsg(entry, runLen, segSize, ecn, dstIsV4)
-
-			i += runLen
-			iovIdx += runLen
-			u.writeEntryEnd[entry] = i
-			entry++
-		}
-
-		if entry == 0 {
-			return fmt.Errorf("sendmmsg: no progress")
-		}
-
-		sent, serr := u.sendmmsg(entry)
-		if serr != nil && sent <= 0 {
-			// Nothing went out for this chunk; fall back to WriteTo for each
-			// packet that was queued this iteration. We only enter this path
-			// when sendmmsg returned an error AND zero entries succeeded —
-			// otherwise the partial-success advance below replays only the
-			// remainder, avoiding duplicates of already-sent packets.
-			//
-			// sent=-1 from sendmmsg means message 0 itself failed (partial
-			// success returns the count instead), so log entry 0's parameters
-			// — that's the entry the kernel rejected.
-			hdr0 := &u.writeMsgs[0].Hdr
-			runLen0 := u.writeEntryEnd[0] - baseI
-			seg0 := len(bufs[baseI])
-			ecn0 := byte(0)
-			if ecns != nil {
-				ecn0 = ecns[baseI]
-			}
-			u.l.Warn("sendmmsg had problem",
-				"sent", sent, "err", serr,
-				"entries", entry,
-				"entry0_runLen", runLen0,
-				"entry0_segSize", seg0,
-				"entry0_iovlen", hdr0.Iovlen,
-				"entry0_controllen", hdr0.Controllen,
-				"entry0_namelen", hdr0.Namelen,
-				"entry0_ecn", ecn0,
-				"entry0_dst", addrs[baseI],
-				"isV4", u.isV4,
-				"gso", u.gsoSupported,
-				"gro", u.groSupported,
-			)
-			for k := baseI; k < i; k++ {
-				if werr := u.WriteTo(bufs[k], addrs[k]); werr != nil {
-					return werr
-				}
-			}
-			continue
-		}
-		if sent == 0 {
-			return fmt.Errorf("sendmmsg made no progress")
-		}
-		// Rewind i to the end of the last successfully sent entry. For a
-		// full-success send this leaves i unchanged; for a partial send it
-		// replays the remainder on the next outer-loop iteration.
-		i = u.writeEntryEnd[sent-1]
+	_, _, errno := unix.Syscall6(
+		unix.SYS_SENDTO,
+		uintptr(fd),
+		uintptr(unsafe.Pointer(base)),
+		uintptr(len(b)),
+		0,
+		uintptr(unsafe.Pointer(&rsa[0])),
+		uintptr(nlen),
+	)
+	if errno != 0 {
+		return &net.OpError{Op: "sendto", Err: errno}
 	}
 	return nil
 }
 
-// planRun groups consecutive packets starting at `start` that can be sent as
-// a single UDP GSO superpacket (one sendmmsg entry with UDP_SEGMENT cmsg).
-// A run of length 1 means the entry carries no UDP_SEGMENT cmsg and the
-// kernel treats it as a plain datagram. Returns the run length and the
-// per-segment size (which equals len(bufs[start])). Without GSO support
-// every call returns runLen=1. Outer ECN (when ecns != nil) is also a run
-// boundary — the kernel stamps one outer codepoint per sendmsg entry, so
-// mixing values inside a run would lose information.
-func (u *StdConn) planRun(bufs [][]byte, addrs []netip.AddrPort, ecns []byte, start, iovBudget int) (int, int) {
-	if start >= len(bufs) || iovBudget < 1 {
-		return 0, 0
-	}
-	segSize := len(bufs[start])
-	if !u.gsoSupported || segSize == 0 || segSize > maxGSOBytes {
-		return 1, segSize
-	}
-	dst := addrs[start]
-	var ecn byte
-	if ecns != nil {
-		ecn = ecns[start]
-	}
-	maxLen := u.maxGSOSegments
-	if iovBudget < maxLen {
-		maxLen = iovBudget
-	}
-	runLen := 1
-	total := segSize
-	for runLen < maxLen && start+runLen < len(bufs) {
-		nextLen := len(bufs[start+runLen])
-		if nextLen == 0 || nextLen > segSize {
-			break
-		}
-		if addrs[start+runLen] != dst {
-			break
-		}
-		if ecns != nil && ecns[start+runLen] != ecn {
-			break
-		}
-		if total+nextLen > maxGSOBytes {
-			break
-		}
-		total += nextLen
-		runLen++
-		if nextLen < segSize {
-			// A short packet must be the last in the run.
-			break
-		}
-	}
-	return runLen, segSize
-}
-
-// writeEntryCmsg sets up the per-mmsghdr Hdr.Control / Hdr.Controllen for one
-// entry. It writes the UDP_SEGMENT payload when runLen >= 2 and the
-// IP_TOS/IPV6_TCLASS payload when ecn != 0, then points hdr.Control at the
-// smallest contiguous span that covers whichever cmsg(s) actually apply.
-//
-// The outer-ECN cmsg family must match the *destination*, not the socket: on
-// the default dual-stack v6 bind, a v4-mapped destination is routed through
-// the kernel's IPv4 path, which parses IP_TOS (IPPROTO_IP) and ignores an
-// IPV6_TCLASS cmsg. prepareWriteMessages pre-fills a default header; here we
-// rewrite its Level/Type (and Len) per entry from dstIsV4 so v4 peers get
-// IP_TOS and v6 peers get IPV6_TCLASS. The data payload is a 4-byte int for
-// both families, so the pre-computed cmsg space is unchanged.
-func (u *StdConn) writeEntryCmsg(entry, runLen, segSize int, ecn byte, dstIsV4 bool) {
-	hdr := &u.writeMsgs[entry].Hdr
-	useSeg := runLen >= 2
-	useEcn := ecn != 0
-	base := entry * u.writeCmsgSpace
-
-	if useSeg {
-		dataOff := base + unix.CmsgLen(0)
-		binary.NativeEndian.PutUint16(u.writeCmsg[dataOff:dataOff+2], uint16(segSize))
-	}
-	if useEcn {
-		ecnHdr := (*unix.Cmsghdr)(unsafe.Pointer(&u.writeCmsg[base+u.writeCmsgSegSpace]))
-		if dstIsV4 {
-			ecnHdr.Level = int32(unix.IPPROTO_IP)
-			ecnHdr.Type = int32(unix.IP_TOS)
-		} else {
-			ecnHdr.Level = int32(unix.IPPROTO_IPV6)
-			ecnHdr.Type = int32(unix.IPV6_TCLASS)
-		}
-		setCmsgLen(ecnHdr, unix.CmsgLen(4))
-		dataOff := base + u.writeCmsgSegSpace + unix.CmsgLen(0)
-		binary.NativeEndian.PutUint32(u.writeCmsg[dataOff:dataOff+4], uint32(ecn))
-	}
-
-	switch {
-	case useSeg && useEcn:
-		hdr.Control = &u.writeCmsg[base]
-		setMsgControllen(hdr, u.writeCmsgSpace)
-	case useSeg:
-		hdr.Control = &u.writeCmsg[base]
-		setMsgControllen(hdr, u.writeCmsgSegSpace)
-	case useEcn:
-		hdr.Control = &u.writeCmsg[base+u.writeCmsgSegSpace]
-		setMsgControllen(hdr, u.writeCmsgEcnSpace)
-	default:
-		hdr.Control = nil
-		setMsgControllen(hdr, 0)
-	}
-}
-
-// sendmmsg issues sendmmsg(2) over u.rawConn against the first n entries
-// of u.writeMsgs.
-func (u *StdConn) sendmmsg(n int) (int, error) {
-	r1, _, errno := unix.Syscall6(unix.SYS_SENDMMSG, uintptr(u.sysFd),
-		uintptr(unsafe.Pointer(&u.writeMsgs[0])), uintptr(n),
-		0, 0, 0,
-	)
-	sent := int(r1)
-
-	if errno != 0 {
-		return sent, &net.OpError{Op: "sendmmsg", Err: errno}
-	}
-	return sent, nil
+// WriteBatch sends bufs via sendmmsg(2), coalescing same-destination runs
+// into UDP-GSO superpackets when supported. See batchWriter in
+// udp_linux_writebatch.go for the mechanics.
+func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte) error {
+	return u.bw.WriteBatch(bufs, addrs, ecns)
 }
 
 // writeSockaddr encodes addr into buf (which must be at least
@@ -935,7 +517,7 @@ func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
 
 func (u *StdConn) Close() error {
 	u.closed.Store(true)
-	// Wake the reader parked in recvmmsg/recvmsg. shutdown(2) on an unconnected socket
+	// Wake the reader parked in recvmmsg. shutdown(2) on an unconnected socket
 	// returns ENOTCONN but still wakes it, so ignore the error.
 	// The reader then sees closed and stops touching the fd, making the Close below safe.
 	_ = unix.Shutdown(u.sysFd, unix.SHUT_RDWR)
@@ -972,23 +554,4 @@ func NewUDPStatsEmitter(udpConns []Conn) func() {
 			}
 		}
 	}
-}
-
-func parseRelease(r string) (major, minor int) {
-	// strip anything after the second dot or any non-digit
-	parts := strings.SplitN(r, ".", 3)
-	if len(parts) < 2 {
-		return 0, 0
-	}
-	major, _ = strconv.Atoi(parts[0])
-	// minor may have trailing junk like "15-generic"
-	mp := parts[1]
-	for i, c := range mp {
-		if c < '0' || c > '9' {
-			mp = mp[:i]
-			break
-		}
-	}
-	minor, _ = strconv.Atoi(mp)
-	return
 }
