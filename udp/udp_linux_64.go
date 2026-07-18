@@ -33,39 +33,6 @@ type rawMessage struct {
 	Pad0 [4]byte
 }
 
-func (u *StdConn) PrepareRawMessages(n, bufSize, cmsgSpace int) ([]rawMessage, [][]byte, [][]byte, []byte) {
-	msgs := make([]rawMessage, n)
-	buffers := make([][]byte, n)
-	names := make([][]byte, n)
-
-	var cmsgs []byte
-	if cmsgSpace > 0 {
-		cmsgs = make([]byte, n*cmsgSpace)
-	}
-
-	for i := range msgs {
-		buffers[i] = make([]byte, bufSize)
-		names[i] = make([]byte, unix.SizeofSockaddrInet6)
-
-		vs := []iovec{
-			{Base: &buffers[i][0], Len: uint64(len(buffers[i]))},
-		}
-
-		msgs[i].Hdr.Iov = &vs[0]
-		msgs[i].Hdr.Iovlen = uint64(len(vs))
-
-		msgs[i].Hdr.Name = &names[i][0]
-		msgs[i].Hdr.Namelen = uint32(len(names[i]))
-
-		if cmsgSpace > 0 {
-			msgs[i].Hdr.Control = &cmsgs[i*cmsgSpace]
-			msgs[i].Hdr.Controllen = uint64(cmsgSpace)
-		}
-	}
-
-	return msgs, buffers, names, cmsgs
-}
-
 func setIovLen(v *iovec, n int) {
 	v.Len = uint64(n)
 }
