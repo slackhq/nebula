@@ -42,21 +42,13 @@ func cipherAESGCMFIPS140(k [32]byte) noise.Cipher {
 	gcm := aeadAESGCMTLS13(k[:], emptyNonce)
 	gcm = extractFIPSAEAD(gcm)
 	return &aeadGCMFIPS140Cipher{
-		AEAD:  gcm,
-		ready: false,
-		nonce: func(n uint64) []byte {
-			// tls.aeadAESGCMTLS13 uses a 4 byte static prefix and an 8 byte nonce
-			var nonce [12]byte
-			binary.BigEndian.PutUint64(nonce[4:], n)
-			return nonce[:]
-		},
+		AEAD: gcm,
 	}
 }
 
 type aeadGCMFIPS140Cipher struct {
 	cipher.AEAD
 	ready bool
-	nonce func(uint64) []byte
 }
 
 // Extract the internal FIPS GCM implementation from the tls wrapper. The TLS
@@ -99,11 +91,11 @@ func (c *aeadGCMFIPS140Cipher) Seal(dst, nonce, plaintext, additionalData []byte
 }
 
 func (c *aeadGCMFIPS140Cipher) Encrypt(out []byte, n uint64, ad, plaintext []byte) []byte {
-	return c.Seal(out, c.nonce(n), plaintext, ad)
+	return c.Seal(out, aeadGCMFIPS140CipherNonce(n), plaintext, ad)
 }
 
 func (c *aeadGCMFIPS140Cipher) Decrypt(out []byte, n uint64, ad, ciphertext []byte) ([]byte, error) {
-	return c.Open(out, c.nonce(n), ciphertext, ad)
+	return c.Open(out, aeadGCMFIPS140CipherNonce(n), ciphertext, ad)
 }
 
 func (c *aeadGCMFIPS140Cipher) EncryptDanger(out, ad, plaintext []byte, n uint64, nb []byte) ([]byte, error) {
@@ -115,4 +107,11 @@ func (c *aeadGCMFIPS140Cipher) EncryptDanger(out, ad, plaintext []byte, n uint64
 func (c *aeadGCMFIPS140Cipher) DecryptDanger(out, ad, ciphertext []byte, n uint64, nb []byte) ([]byte, error) {
 	binary.BigEndian.PutUint64(nb[4:], n)
 	return c.Open(out, nb, ciphertext, ad)
+}
+
+func aeadGCMFIPS140CipherNonce(n uint64) []byte {
+	// GCMWithXORCounterNonce uses a 4 byte static prefix and an 8 byte nonce
+	var nonce [12]byte
+	binary.BigEndian.PutUint64(nonce[4:], n)
+	return nonce[:]
 }
