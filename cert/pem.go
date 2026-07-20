@@ -148,6 +148,9 @@ func MarshalSigningPublicKeyToPEM(curve Curve, b []byte) []byte {
 	}
 }
 
+// UnmarshalPublicKeyFromPEM will try to unmarshal the first pem block in a byte array, returning any non
+// consumed data or an error on failure. Only key-agreement (ECDH) public key banners are accepted.
+// Use UnmarshalSigningPublicKeyFromPEM for Ed25519/ECDSA banners.
 func UnmarshalPublicKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) {
 	k, r := pem.Decode(b)
 	if k == nil {
@@ -156,15 +159,42 @@ func UnmarshalPublicKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) {
 	var expectedLen int
 	var curve Curve
 	switch k.Type {
-	case X25519PublicKeyBanner, Ed25519PublicKeyBanner:
+	case X25519PublicKeyBanner:
 		expectedLen = 32
 		curve = Curve_CURVE25519
-	case P256PublicKeyBanner, ECDSAP256PublicKeyBanner:
+	case P256PublicKeyBanner:
 		// Uncompressed
 		expectedLen = 65
 		curve = Curve_P256
 	default:
 		return nil, r, 0, fmt.Errorf("bytes did not contain a proper public key banner")
+	}
+	if len(k.Bytes) != expectedLen {
+		return nil, r, 0, fmt.Errorf("key was not %d bytes, is invalid %s public key", expectedLen, curve)
+	}
+	return k.Bytes, r, curve, nil
+}
+
+// UnmarshalSigningPublicKeyFromPEM will try to unmarshal the first pem block in a byte array, returning any non
+// consumed data or an error on failure. Only Ed25519/ECDSA public key banners are accepted.
+// Use UnmarshalPublicKeyFromPEM for X25519/P256 (ECDH) banners.
+func UnmarshalSigningPublicKeyFromPEM(b []byte) ([]byte, []byte, Curve, error) {
+	k, r := pem.Decode(b)
+	if k == nil {
+		return nil, r, 0, fmt.Errorf("input did not contain a valid PEM encoded block")
+	}
+	var expectedLen int
+	var curve Curve
+	switch k.Type {
+	case Ed25519PublicKeyBanner:
+		expectedLen = 32
+		curve = Curve_CURVE25519
+	case ECDSAP256PublicKeyBanner:
+		// Uncompressed
+		expectedLen = 65
+		curve = Curve_P256
+	default:
+		return nil, r, 0, fmt.Errorf("bytes did not contain a proper Ed25519/ECDSA public key banner")
 	}
 	if len(k.Bytes) != expectedLen {
 		return nil, r, 0, fmt.Errorf("key was not %d bytes, is invalid %s public key", expectedLen, curve)

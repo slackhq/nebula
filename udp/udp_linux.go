@@ -4,12 +4,13 @@
 package udp
 
 import (
-	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
@@ -19,58 +20,51 @@ import (
 )
 
 type StdConn struct {
-	udpConn *net.UDPConn
-	rawConn syscall.RawConn
-	isV4    bool
-	l       *slog.Logger
-	batch   int
-}
-
-func setReusePort(network, address string, c syscall.RawConn) error {
-	var opErr error
-	err := c.Control(func(fd uintptr) {
-		opErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
-		//CloseOnExec already set by the runtime
-	})
-	if err != nil {
-		return err
-	}
-	return opErr
+	sysFd  int
+	closed atomic.Bool
+	isV4   bool
+	l      *slog.Logger
+	batch  int
 }
 
 func NewListener(l *slog.Logger, ip netip.Addr, port int, multi bool, batch int) (Conn, error) {
-	listen := netip.AddrPortFrom(ip, uint16(port))
-	lc := net.ListenConfig{}
+	af := unix.AF_INET6
+	if ip.Is4() {
+		af = unix.AF_INET
+	}
+	syscall.ForkLock.RLock()
+	fd, err := unix.Socket(af, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
+	if err == nil {
+		unix.CloseOnExec(fd)
+	}
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		return nil, fmt.Errorf("unable to open socket: %w", err)
+	}
+
 	if multi {
-		lc.Control = setReusePort
-	}
-	//this context is only used during the bind operation, you can't cancel it to kill the socket
-	pc, err := lc.ListenPacket(context.Background(), "udp", listen.String())
-	if err != nil {
-		return nil, fmt.Errorf("unable to open socket: %s", err)
-	}
-	udpConn := pc.(*net.UDPConn)
-	rawConn, err := udpConn.SyscallConn()
-	if err != nil {
-		_ = udpConn.Close()
-		return nil, err
-	}
-	//gotta find out if we got an AF_INET6 socket or not:
-	out := &StdConn{
-		udpConn: udpConn,
-		rawConn: rawConn,
-		l:       l,
-		batch:   batch,
+		if err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
+			_ = unix.Close(fd)
+			return nil, fmt.Errorf("unable to set SO_REUSEPORT: %w", err)
+		}
 	}
 
-	af, err := out.getSockOptInt(unix.SO_DOMAIN)
-	if err != nil {
-		_ = out.Close()
-		return nil, err
+	var sa unix.Sockaddr
+	if ip.Is4() {
+		sa4 := &unix.SockaddrInet4{Port: port}
+		sa4.Addr = ip.As4()
+		sa = sa4
+	} else {
+		sa6 := &unix.SockaddrInet6{Port: port}
+		sa6.Addr = ip.As16()
+		sa = sa6
 	}
-	out.isV4 = af == unix.AF_INET
+	if err = unix.Bind(fd, sa); err != nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("unable to bind to socket: %w", err)
+	}
 
-	return out, nil
+	return &StdConn{sysFd: fd, isV4: ip.Is4(), l: l, batch: batch}, nil
 }
 
 func (u *StdConn) SupportsMultipleReaders() bool {
@@ -81,133 +75,110 @@ func (u *StdConn) Rebind() error {
 	return nil
 }
 
-func (u *StdConn) getSockOptInt(opt int) (int, error) {
-	if u.rawConn == nil {
-		return 0, fmt.Errorf("no UDP connection")
-	}
-	var out int
-	var opErr error
-	err := u.rawConn.Control(func(fd uintptr) {
-		out, opErr = unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, opt)
-	})
-	if err != nil {
-		return 0, err
-	}
-	return out, opErr
-}
-
-func (u *StdConn) setSockOptInt(opt int, n int) error {
-	if u.rawConn == nil {
-		return fmt.Errorf("no UDP connection")
-	}
-	var opErr error
-	err := u.rawConn.Control(func(fd uintptr) {
-		opErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, opt, n)
-	})
-	if err != nil {
-		return err
-	}
-	return opErr
-}
-
 func (u *StdConn) SetRecvBuffer(n int) error {
-	return u.setSockOptInt(unix.SO_RCVBUFFORCE, n)
+	return unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_RCVBUFFORCE, n)
 }
 
 func (u *StdConn) SetSendBuffer(n int) error {
-	return u.setSockOptInt(unix.SO_SNDBUFFORCE, n)
+	return unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_SNDBUFFORCE, n)
 }
 
 func (u *StdConn) SetSoMark(mark int) error {
-	return u.setSockOptInt(unix.SO_MARK, mark)
+	return unix.SetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_MARK, mark)
 }
 
 func (u *StdConn) GetRecvBuffer() (int, error) {
-	return u.getSockOptInt(unix.SO_RCVBUF)
+	return unix.GetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_RCVBUF)
 }
 
 func (u *StdConn) GetSendBuffer() (int, error) {
-	return u.getSockOptInt(unix.SO_SNDBUF)
+	return unix.GetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_SNDBUF)
 }
 
 func (u *StdConn) GetSoMark() (int, error) {
-	return u.getSockOptInt(unix.SO_MARK)
+	return unix.GetsockoptInt(u.sysFd, unix.SOL_SOCKET, unix.SO_MARK)
 }
 
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {
-	a := u.udpConn.LocalAddr()
-
-	switch v := a.(type) {
-	case *net.UDPAddr:
-		addr, ok := netip.AddrFromSlice(v.IP)
-		if !ok {
-			return netip.AddrPort{}, fmt.Errorf("LocalAddr returned invalid IP address: %s", v.IP)
-		}
-		return netip.AddrPortFrom(addr, uint16(v.Port)), nil
-
+	sa, err := unix.Getsockname(u.sysFd)
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	switch sa := sa.(type) {
+	case *unix.SockaddrInet4:
+		return netip.AddrPortFrom(netip.AddrFrom4(sa.Addr), uint16(sa.Port)), nil
+	case *unix.SockaddrInet6:
+		return netip.AddrPortFrom(netip.AddrFrom16(sa.Addr), uint16(sa.Port)), nil
 	default:
-		return netip.AddrPort{}, fmt.Errorf("LocalAddr returned: %#v", a)
+		return netip.AddrPort{}, fmt.Errorf("unsupported sock type: %T", sa)
 	}
 }
 
-func recvmmsg(fd uintptr, msgs []rawMessage) (int, bool, error) {
-	var errno syscall.Errno
-	n, _, errno := unix.Syscall6(
+// recvmmsg does one blocking recvmmsg (MSG_WAITFORONE), reading up to len(msgs) datagrams
+func (u *StdConn) recvmmsg(msgs []rawMessage) (int, error) {
+	r, _, errno := unix.Syscall6(
 		unix.SYS_RECVMMSG,
-		fd,
+		uintptr(u.sysFd),
 		uintptr(unsafe.Pointer(&msgs[0])),
 		uintptr(len(msgs)),
 		unix.MSG_WAITFORONE,
 		0,
 		0,
 	)
-	if errno == syscall.EAGAIN || errno == syscall.EWOULDBLOCK {
-		// No data available, block for I/O and try again.
-		return int(n), false, nil
-	}
 	if errno != 0 {
-		return int(n), true, &net.OpError{Op: "recvmmsg", Err: errno}
-	}
-	return int(n), true, nil
-}
-
-func (u *StdConn) listenOutSingle(r EncReader) error {
-	var err error
-	var n int
-	var from netip.AddrPort
-	buffer := make([]byte, MTU)
-
-	for {
-		n, from, err = u.udpConn.ReadFromUDPAddrPort(buffer)
-		if err != nil {
-			return err
+		if u.closed.Load() {
+			return 0, net.ErrClosed
 		}
-		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
-		r(from, buffer[:n])
+		return 0, &net.OpError{Op: "recvmmsg", Err: errno}
 	}
+	n := int(r)
+	if (n == 0 || msgs[0].Len == 0) && u.closed.Load() {
+		return 0, net.ErrClosed
+	}
+	return n, nil
 }
 
-func (u *StdConn) listenOutBatch(r EncReader) error {
+// recvmsg does one blocking recvmsg into msgs[0]
+func (u *StdConn) recvmsg(msgs []rawMessage) (int, error) {
+	r, _, errno := unix.Syscall6(
+		unix.SYS_RECVMSG,
+		uintptr(u.sysFd),
+		uintptr(unsafe.Pointer(&msgs[0].Hdr)),
+		0,
+		0,
+		0,
+		0,
+	)
+	if errno != 0 {
+		if u.closed.Load() {
+			return 0, net.ErrClosed
+		}
+		return 0, &net.OpError{Op: "recvmsg", Err: errno}
+	}
+	if r == 0 && u.closed.Load() {
+		return 0, net.ErrClosed
+	}
+	msgs[0].Len = uint32(r)
+	return 1, nil
+}
+
+func (u *StdConn) ListenOut(r EncReader) error {
 	var ip netip.Addr
-	var n int
-	var operr error
-
 	msgs, buffers, names := u.PrepareRawMessages(u.batch)
-
-	//reader needs to capture variables from this function, since it's used as a lambda with rawConn.Read
-	//defining it outside the loop so it gets re-used
-	reader := func(fd uintptr) (done bool) {
-		n, done, operr = recvmmsg(fd, msgs)
-		return done
+	read := u.recvmmsg
+	if u.batch == 1 {
+		read = u.recvmsg
 	}
 
 	for {
-		err := u.rawConn.Read(reader)
+		n, err := read(msgs)
 		if err != nil {
+			if errors.Is(err, unix.EINTR) {
+				continue // interrupted by a signal, retry the read
+			}
+			// net.ErrClosed after Close() is teardown, absorbed by the caller's
+			// closed flag like the other platforms; anything else is a real error.
 			return err
-		}
-		if operr != nil {
-			return operr
 		}
 
 		for i := 0; i < n; i++ {
@@ -222,26 +193,68 @@ func (u *StdConn) listenOutBatch(r EncReader) error {
 	}
 }
 
-func (u *StdConn) ListenOut(r EncReader) error {
-	if u.batch == 1 {
-		return u.listenOutSingle(r)
-	} else {
-		return u.listenOutBatch(r)
+func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
+	if u.isV4 {
+		return u.writeTo4(b, ip)
+	}
+	return u.writeTo6(b, ip)
+}
+
+func (u *StdConn) writeTo6(b []byte, ip netip.AddrPort) error {
+	var rsa unix.RawSockaddrInet6
+	rsa.Family = unix.AF_INET6
+	rsa.Addr = ip.Addr().As16()
+	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ip.Port())
+
+	for {
+		_, _, err := unix.Syscall6(
+			unix.SYS_SENDTO,
+			uintptr(u.sysFd),
+			uintptr(unsafe.Pointer(&b[0])),
+			uintptr(len(b)),
+			uintptr(0),
+			uintptr(unsafe.Pointer(&rsa)),
+			uintptr(unix.SizeofSockaddrInet6),
+		)
+		if err != 0 {
+			return &net.OpError{Op: "sendto", Err: err}
+		}
+		return nil
 	}
 }
 
-func (u *StdConn) WriteTo(b []byte, ip netip.AddrPort) error {
-	_, err := u.udpConn.WriteToUDPAddrPort(b, ip)
-	return err
+func (u *StdConn) writeTo4(b []byte, ip netip.AddrPort) error {
+	if !ip.Addr().Is4() {
+		return ErrInvalidIPv6RemoteForSocket
+	}
+
+	var rsa unix.RawSockaddrInet4
+	rsa.Family = unix.AF_INET
+	rsa.Addr = ip.Addr().As4()
+	binary.BigEndian.PutUint16((*[2]byte)(unsafe.Pointer(&rsa.Port))[:], ip.Port())
+
+	for {
+		_, _, err := unix.Syscall6(
+			unix.SYS_SENDTO,
+			uintptr(u.sysFd),
+			uintptr(unsafe.Pointer(&b[0])),
+			uintptr(len(b)),
+			uintptr(0),
+			uintptr(unsafe.Pointer(&rsa)),
+			uintptr(unix.SizeofSockaddrInet4),
+		)
+		if err != 0 {
+			return &net.OpError{Op: "sendto", Err: err}
+		}
+		return nil
+	}
 }
 
 func (u *StdConn) ReloadConfig(c *config.C) {
 	b := c.GetInt("listen.read_buffer", 0)
 	if b > 0 {
-		err := u.SetRecvBuffer(b)
-		if err == nil {
-			s, err := u.GetRecvBuffer()
-			if err == nil {
+		if err := u.SetRecvBuffer(b); err == nil {
+			if s, err := u.GetRecvBuffer(); err == nil {
 				u.l.Info("listen.read_buffer was set", "size", s)
 			} else {
 				u.l.Warn("Failed to get listen.read_buffer", "error", err)
@@ -253,10 +266,8 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 
 	b = c.GetInt("listen.write_buffer", 0)
 	if b > 0 {
-		err := u.SetSendBuffer(b)
-		if err == nil {
-			s, err := u.GetSendBuffer()
-			if err == nil {
+		if err := u.SetSendBuffer(b); err == nil {
+			if s, err := u.GetSendBuffer(); err == nil {
 				u.l.Info("listen.write_buffer was set", "size", s)
 			} else {
 				u.l.Warn("Failed to get listen.write_buffer", "error", err)
@@ -269,10 +280,8 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 	b = c.GetInt("listen.so_mark", 0)
 	s, err := u.GetSoMark()
 	if b > 0 || (err == nil && s != 0) {
-		err := u.SetSoMark(b)
-		if err == nil {
-			s, err := u.GetSoMark()
-			if err == nil {
+		if err := u.SetSoMark(b); err == nil {
+			if s, err := u.GetSoMark(); err == nil {
 				u.l.Info("listen.so_mark was set", "mark", s)
 			} else {
 				u.l.Warn("Failed to get listen.so_mark", "error", err)
@@ -285,28 +294,20 @@ func (u *StdConn) ReloadConfig(c *config.C) {
 
 func (u *StdConn) getMemInfo(meminfo *[unix.SK_MEMINFO_VARS]uint32) error {
 	var vallen uint32 = 4 * unix.SK_MEMINFO_VARS
-
-	if u.rawConn == nil {
-		return fmt.Errorf("no UDP connection")
-	}
-	var opErr error
-	err := u.rawConn.Control(func(fd uintptr) {
-		_, _, syserr := unix.Syscall6(unix.SYS_GETSOCKOPT, fd, uintptr(unix.SOL_SOCKET), uintptr(unix.SO_MEMINFO), uintptr(unsafe.Pointer(meminfo)), uintptr(unsafe.Pointer(&vallen)), 0)
-		if syserr != 0 {
-			opErr = syserr
-		}
-	})
-	if err != nil {
+	_, _, err := unix.Syscall6(unix.SYS_GETSOCKOPT, uintptr(u.sysFd), uintptr(unix.SOL_SOCKET), uintptr(unix.SO_MEMINFO), uintptr(unsafe.Pointer(meminfo)), uintptr(unsafe.Pointer(&vallen)), 0)
+	if err != 0 {
 		return err
 	}
-	return opErr
+	return nil
 }
 
 func (u *StdConn) Close() error {
-	if u.udpConn != nil {
-		return u.udpConn.Close()
-	}
-	return nil
+	u.closed.Store(true)
+	// Wake the reader parked in recvmmsg/recvmsg. shutdown(2) on an unconnected socket
+	// returns ENOTCONN but still wakes it, so ignore the error.
+	// The reader then sees closed and stops touching the fd, making the Close below safe.
+	_ = unix.Shutdown(u.sysFd, unix.SHUT_RDWR)
+	return unix.Close(u.sysFd)
 }
 
 func NewUDPStatsEmitter(udpConns []Conn) func() {

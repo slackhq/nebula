@@ -69,29 +69,29 @@ type ControlHostInfo struct {
 }
 
 // Start actually runs nebula, this is a nonblocking call.
-// The returned function blocks until nebula has fully stopped and returns the
-// first fatal reader error (if any). A nil error means nebula shut down
-// gracefully; a non-nil error means a reader hit an unexpected failure that
-// triggered the shutdown.
-func (c *Control) Start() (func() error, error) {
+// Use Wait to block until nebula has fully stopped and to learn whether a fatal reader error caused the shutdown.
+func (c *Control) Start() error {
 	c.stateLock.Lock()
 	defer c.stateLock.Unlock()
 	switch c.state {
 	case StateReady:
 		//yay!
 	case StateStopped, StateStopping:
-		return nil, ErrAlreadyStopped
+		return ErrAlreadyStopped
 	case StateStarted:
-		return nil, ErrAlreadyStarted
+		return ErrAlreadyStarted
 	default:
-		return nil, ErrUnknownState
+		return ErrUnknownState
 	}
 
 	// Activate the interface
 	err := c.f.activate()
 	if err != nil {
+		// Cancel before Close so a caller returning from Wait always observes a dead Context
+		c.cancel()
+		_ = c.f.Close()
 		c.state = StateStopped
-		return nil, err
+		return err
 	}
 
 	// Call all the delayed funcs that waited patiently for the interface to be created.
@@ -114,13 +114,9 @@ func (c *Control) Start() (func() error, error) {
 	c.f.triggerShutdown = c.Stop
 
 	// Start reading packets.
-	out, err := c.f.run()
-	if err != nil {
-		c.state = StateStopped
-		return nil, err
-	}
+	c.f.run()
 	c.state = StateStarted
-	return out, nil
+	return nil
 }
 
 func (c *Control) State() RunState {
@@ -133,10 +129,26 @@ func (c *Control) Context() context.Context {
 	return c.ctx
 }
 
-// Stop is a non-blocking call that signals nebula to close all tunnels and shut down
+// Stop tears nebula down, closing all tunnels and releasing everything it holds.
+// Use Wait to block until the shutdown has completed.
+// A Control that has been stopped cannot be started again, Start will return ErrAlreadyStopped.
 func (c *Control) Stop() {
 	c.stateLock.Lock()
-	if c.state != StateStarted {
+	switch c.state {
+	case StateStarted:
+		// Fall through to the full teardown below
+
+	case StateReady:
+		// Never started
+		c.cancel()
+		c.state = StateStopped
+		if err := c.f.Close(); err != nil {
+			c.l.Error("Close interface failed", "error", err)
+		}
+		c.stateLock.Unlock()
+		return
+
+	default:
 		c.stateLock.Unlock()
 		// We are stopping or stopped already
 		return
@@ -145,17 +157,24 @@ func (c *Control) Stop() {
 	c.state = StateStopping
 	c.stateLock.Unlock()
 
-	// Stop the handshakeManager (and other services), to prevent new tunnels from
-	// being created while we're shutting them all down.
+	// Closing tunnels can be slow with a large hostmap, don't hold the lock for it
 	c.cancel()
-
 	c.CloseAllTunnels(false)
+
+	c.stateLock.Lock()
+	c.state = StateStopped
 	if err := c.f.Close(); err != nil {
 		c.l.Error("Close interface failed", "error", err)
 	}
-	c.stateLock.Lock()
-	c.state = StateStopped
 	c.stateLock.Unlock()
+}
+
+// Wait blocks until nebula has fully stopped, either via Stop or an internal fatal error,
+// and returns the first fatal packet reader error if there was one.
+// It is safe to call from multiple goroutines and at any point in the lifecycle,
+// but a Wait on a Control that is never started and never stopped will block forever.
+func (c *Control) Wait() error {
+	return c.f.wait()
 }
 
 // ShutdownBlock will listen for and block on term and interrupt signals, calling Control.Stop() once signalled
@@ -170,8 +189,15 @@ func (c *Control) ShutdownBlock() {
 	c.Stop()
 }
 
-// RebindUDPServer asks the UDP listener to rebind it's listener. Mainly used on mobile clients when interfaces change
+// RebindUDPServer asks the UDP listener to rebind it's listener. Mainly used on mobile clients when interfaces change.
 func (c *Control) RebindUDPServer() {
+	c.stateLock.Lock()
+	defer c.stateLock.Unlock()
+
+	if c.state != StateStarted {
+		return
+	}
+
 	_ = c.f.outside.Rebind()
 
 	// Trigger a lighthouse update, useful for mobile clients that should have an update interval of 0
@@ -305,7 +331,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 
 		c.l.Debug("Sending close tunnel message",
 			"vpnAddrs", h.vpnAddrs,
-			"udpAddr", h.remote,
+			"udpAddr", h.GetRemote(),
 		)
 		closed++
 	}
@@ -350,7 +376,7 @@ func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {
 		RemoteAddrs:            h.remotes.CopyAddrs(preferredRanges),
 		CurrentRelaysToMe:      h.relayState.CopyRelayIps(),
 		CurrentRelaysThroughMe: h.relayState.CopyRelayForIps(),
-		CurrentRemote:          h.remote,
+		CurrentRemote:          h.GetRemote(),
 	}
 
 	for i, a := range h.vpnAddrs {

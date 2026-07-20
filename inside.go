@@ -87,7 +87,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 }
 
 func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
-	if !f.firewall.InSendReject {
+	if !f.firewall.OutboundSendReject {
 		return
 	}
 
@@ -103,7 +103,7 @@ func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
 }
 
 func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *HostInfo, nb, out []byte, q int) {
-	if !f.firewall.OutSendReject {
+	if !f.firewall.InboundSendReject {
 		return
 	}
 
@@ -333,7 +333,7 @@ func (f *Interface) SendVia(via *HostInfo,
 		via.logger(f.l).Info("Failed to EncryptDanger in sendVia", "error", err)
 		return
 	}
-	err = f.writers[0].WriteTo(out, via.remote)
+	err = f.writers[0].WriteTo(out, via.GetRemote())
 	if err != nil {
 		via.logger(f.l).Info("Failed to WriteTo in sendVia", "error", err)
 	}
@@ -344,7 +344,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	if ci.eKey == nil {
 		return
 	}
-	useRelay := !remote.IsValid() && !hostinfo.remote.IsValid()
+	useRelay := !remote.IsValid() && !hostinfo.GetRemote().IsValid()
 	fullOut := out
 
 	if useRelay {
@@ -403,8 +403,8 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 				"udpAddr", remote,
 			)
 		}
-	} else if hostinfo.remote.IsValid() {
-		err = f.writers[q].WriteTo(out, hostinfo.remote)
+	} else if hr := hostinfo.GetRemote(); hr.IsValid() {
+		err = f.writers[q].WriteTo(out, hr)
 		if err != nil {
 			hostinfo.logger(f.l).Error("Failed to write outgoing packet",
 				"error", err,

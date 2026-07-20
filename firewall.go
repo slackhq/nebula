@@ -44,8 +44,8 @@ type Firewall struct {
 	InRules  *FirewallTable
 	OutRules *FirewallTable
 
-	InSendReject  bool
-	OutSendReject bool
+	InboundSendReject  bool
+	OutboundSendReject bool
 
 	//TODO: we should have many more options for TCP, an option for ICMP, and mimic the kernel a bit better
 	// https://www.kernel.org/doc/Documentation/networking/nf_conntrack-sysctl.txt
@@ -216,23 +216,23 @@ func NewFirewallFromConfig(l *slog.Logger, cs *CertState, c *config.C) (*Firewal
 	inboundAction := c.GetString("firewall.inbound_action", "drop")
 	switch inboundAction {
 	case "reject":
-		fw.InSendReject = true
+		fw.InboundSendReject = true
 	case "drop":
-		fw.InSendReject = false
+		fw.InboundSendReject = false
 	default:
 		l.Warn("invalid firewall.inbound_action, defaulting to `drop`", "action", inboundAction)
-		fw.InSendReject = false
+		fw.InboundSendReject = false
 	}
 
 	outboundAction := c.GetString("firewall.outbound_action", "drop")
 	switch outboundAction {
 	case "reject":
-		fw.OutSendReject = true
+		fw.OutboundSendReject = true
 	case "drop":
-		fw.OutSendReject = false
+		fw.OutboundSendReject = false
 	default:
 		l.Warn("invalid firewall.outbound_action, defaulting to `drop`", "action", outboundAction)
-		fw.OutSendReject = false
+		fw.OutboundSendReject = false
 	}
 
 	err := AddFirewallRulesFromConfig(l, false, c, fw)
@@ -423,11 +423,6 @@ var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 // Drop returns an error if the packet should be dropped, explaining why. It
 // returns nil if the packet should not be dropped.
 func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *cert.CAPool, localCache firewall.ConntrackCache) error {
-	// Check if we spoke to this tuple, if we did then allow this packet
-	if f.inConns(fp, h, caPool, localCache) {
-		return nil
-	}
-
 	// Make sure remote address matches nebula certificate, and determine how to treat it
 	if h.networks == nil {
 		// Simple case: Certificate has one address and no unsafe networks
@@ -459,6 +454,11 @@ func (f *Firewall) Drop(fp firewall.Packet, incoming bool, h *HostInfo, caPool *
 	if !f.routableNetworks.Contains(fp.LocalAddr) {
 		f.metrics(incoming).droppedLocalAddr.Inc(1)
 		return ErrInvalidLocalIP
+	}
+
+	// Check if we spoke to this tuple, if we did then allow this packet
+	if f.inConns(fp, h, caPool, localCache) {
+		return nil
 	}
 
 	table := f.OutRules

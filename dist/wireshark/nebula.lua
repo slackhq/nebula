@@ -62,7 +62,7 @@ function nebula.dissector(tvbuf, pktinfo, root)
     tree:add(pf_version, tvbuf:range(0,1))
     local type = tree:add(pf_type,    tvbuf:range(0,1))
 
-    local nebula_type = bit32.band(tvbuf:range(0,1):uint(), 0x0F)
+    local nebula_type = bit.band(tvbuf:range(0,1):uint(), 0x0F)
     if nebula_type == 0 then
         local stage = tvbuf(8,8):uint64()
         tree:add(pf_subtype_handshake, tvbuf:range(1,1))

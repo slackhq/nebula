@@ -53,7 +53,12 @@ func main() {
 	l := logging.NewLogger(os.Stdout)
 
 	if *serviceFlag != "" {
-		if err := doService(configPath, configTest, Build, serviceFlag); err != nil {
+		if *configTest {
+			fmt.Println("-test is not supported with -service, run the config test without -service")
+			os.Exit(1)
+		}
+
+		if err := doService(configPath, Build, serviceFlag); err != nil {
 			l.Error("Service command failed", "error", err)
 			os.Exit(1)
 		}
@@ -93,15 +98,14 @@ func main() {
 	}
 
 	if !*configTest {
-		wait, err := ctrl.Start()
-		if err != nil {
+		if err := ctrl.Start(); err != nil {
 			util.LogWithContextIfNeeded("Error while running", err, l)
 			os.Exit(1)
 		}
 
 		go ctrl.ShutdownBlock()
 
-		if err := wait(); err != nil {
+		if err := ctrl.Wait(); err != nil {
 			l.Error("Nebula stopped due to fatal error", "error", err)
 			os.Exit(2)
 		}

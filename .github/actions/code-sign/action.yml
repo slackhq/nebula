@@ -25,9 +25,9 @@ inputs:
     required: false
     default: "code-signer"
   key-prefix:
-    description: "S3 key prefix the caller is authorized to write under"
+    description: "S3 key prefix to write under; defaults to code-signing/<owner>/<repo> of the calling repo"
     required: false
-    default: "code-signing/slackhq/nebula"
+    default: ""
 
 runs:
   using: composite
@@ -57,6 +57,9 @@ runs:
         KEY_PREFIX: ${{ inputs.key-prefix }}
       run: |
         set -eu
+        # Default the prefix to this repo so the S3 key attributes the sign correctly.
+        # nebula-nightly runs this same action but writes under its own repo's prefix.
+        KEY_PREFIX="${KEY_PREFIX:-code-signing/$GITHUB_REPOSITORY}"
         RUN="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
         find "$SIGN_PATH" -name '*.exe' -print | while read -r path

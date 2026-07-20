@@ -430,14 +430,11 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 	// Check if we already have a tunnel with this vpn ip
 	existingHostInfo, found := hm.mainHostMap.Hosts[hostinfo.vpnAddrs[0]]
 	if found && existingHostInfo != nil {
-		testHostInfo := existingHostInfo
-		for testHostInfo != nil {
-			// Is it just a delayed handshake packet?
+		// Is it just a delayed handshake packet? Check every hostinfo we hold for this address.
+		for _, testHostInfo := range hm.mainHostMap.unlockedGetHostList(hostinfo.vpnAddrs[0]) {
 			if bytes.Equal(hostinfo.HandshakePacket[handshakePacket], testHostInfo.HandshakePacket[handshakePacket]) {
 				return testHostInfo, ErrAlreadySeen
 			}
-
-			testHostInfo = testHostInfo.next
 		}
 
 		// Is this a newer handshake?
@@ -1080,7 +1077,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
 		// We received a valid handshake on this relay, so make sure the relay
 		// state reflects that, in case it had been marked Disestablished.
-		via.relayHI.relayState.UpdateRelayForByIdxState(via.remoteIdx, Established)
+		via.relayHI.relayState.UpdateRelayForByIdxState(via.relay.LocalIndex, Established)
 		f.SendVia(via.relayHI, via.relay, msg, make([]byte, 12), make([]byte, mtu), false)
 		f.l.Info("Handshake message sent", append(logFields, "relay", via.relayHI.vpnAddrs[0])...)
 	}

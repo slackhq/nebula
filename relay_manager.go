@@ -94,7 +94,7 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 		}
 
 		relayHostInfo := rm.hostmap.QueryVpnAddr(relay)
-		if relayHostInfo == nil || !relayHostInfo.remote.IsValid() {
+		if relayHostInfo == nil || !relayHostInfo.GetRemote().IsValid() {
 			hl.Log(context.Background(), level, "Establish tunnel to relay target", "relay", relay.String())
 			f.Handshake(relay)
 			continue
@@ -104,10 +104,13 @@ func (rm *relayManager) StartRelays(f *Interface, vpnIp netip.Addr, hh *Handshak
 		existingRelay, ok := relayHostInfo.relayState.QueryRelayForByIp(vpnIp)
 		if !ok {
 			// No relays exist or requested yet.
-			if relayHostInfo.remote.IsValid() {
+			if relayHostInfo.GetRemote().IsValid() {
 				idx, err := AddRelay(rm.l, relayHostInfo, rm.hostmap, vpnIp, nil, TerminalType, Requested)
 				if err != nil {
+					// No local relay state was installed, so a CreateRelayRequest would hand the
+					// peer an index we could never resolve. Skip it.
 					hl.Info("Failed to add relay to hostmap", "relay", relay.String(), "error", err)
+					continue
 				}
 
 				m := NebulaControl{
@@ -237,7 +240,12 @@ func AddRelay(l *slog.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp netip.
 			// Avoid standing up a relay that can't be used since only the primary hostinfo
 			// will be pointed to by the relay logic
 			//TODO: if there was an existing primary and it had relay state, should we merge?
-			hm.unlockedMakePrimary(relayHostInfo)
+			if !hm.unlockedMakePrimary(relayHostInfo) {
+				// The tunnel was torn down after the caller grabbed relayHostInfo. A relay standing
+				// on an unlinked hostinfo would never carry traffic, and its Relays entry could
+				// never be reclaimed since the delete-time cleanup has already run.
+				return 0, errors.New("relay hostinfo is no longer in the hostmap")
+			}
 
 			hm.Relays[index] = relayHostInfo
 			newRelay := Relay{
@@ -309,6 +317,22 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, d []byte, f *Interface) {
 		v = cert.Version2
 	}
 
+	// validate:
+	switch msg.Type {
+	case NebulaControl_CreateRelayRequest, NebulaControl_CreateRelayResponse:
+		if msg.RelayFromAddr == nil {
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				h.logger(f.l).Debug("Control message received with nil RelayFromAddr", "type", msg.Type)
+			}
+			return
+		} else if msg.RelayToAddr == nil {
+			if f.l.Enabled(context.Background(), slog.LevelDebug) {
+				h.logger(f.l).Debug("Control message received with nil RelayToAddr", "type", msg.Type)
+			}
+			return
+		}
+	}
+
 	switch msg.Type {
 	case NebulaControl_CreateRelayRequest:
 		rm.handleCreateRelayRequest(v, h, f, msg)
@@ -318,6 +342,7 @@ func (rm *relayManager) HandleControlMsg(h *HostInfo, d []byte, f *Interface) {
 }
 
 func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f *Interface, m *NebulaControl) {
+	//nil-checks for protoAddrToNetAddr handled by caller
 	relayFrom := protoAddrToNetAddr(m.RelayFromAddr)
 	relayTo := protoAddrToNetAddr(m.RelayToAddr)
 	rm.l.Info("handleCreateRelayResponse",
@@ -399,6 +424,7 @@ func (rm *relayManager) handleCreateRelayResponse(v cert.Version, h *HostInfo, f
 }
 
 func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f *Interface, m *NebulaControl) {
+	//nil-checks for protoAddrToNetAddr handled by caller
 	from := protoAddrToNetAddr(m.RelayFromAddr)
 	target := protoAddrToNetAddr(m.RelayToAddr)
 
@@ -508,7 +534,7 @@ func (rm *relayManager) handleCreateRelayRequest(v cert.Version, h *HostInfo, f 
 			f.Handshake(target)
 			return
 		}
-		if !peer.remote.IsValid() {
+		if !peer.GetRemote().IsValid() {
 			// Only create relays to peers for whom I have a direct connection
 			return
 		}

@@ -659,7 +659,6 @@ func addRoute(prefix netip.Prefix, gateway netroute.Addr) error {
 				return fmt.Errorf("failed to create route.RouteMessage for change: %w", err)
 			}
 			_, err = unix.Write(sock, data[:])
-			fmt.Println("DOING CHANGE")
 			return err
 		}
 		return fmt.Errorf("failed to write route.RouteMessage to socket: %w", err)
