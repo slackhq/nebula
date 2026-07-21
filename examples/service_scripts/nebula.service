@@ -8,6 +8,15 @@ Before=sshd.service
 Type=notify
 NotifyAccess=main
 SyslogIdentifier=nebula
+
+# Uncomment to run as an unprivileged user with only CAP_NET_ADMIN. Requires a
+# nebula user that owns the config directory. Add CAP_NET_BIND_SERVICE to both
+# lines if any listener (lighthouse DNS, listen.port, stats, sshd) binds <1024.
+#User=nebula
+#Group=nebula
+#CapabilityBoundingSet=CAP_NET_ADMIN
+#AmbientCapabilities=CAP_NET_ADMIN
+
 ExecReload=/bin/kill -HUP $MAINPID
 ExecStart=/usr/local/bin/nebula -config /etc/nebula/config.yml
 Restart=always
