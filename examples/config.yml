@@ -175,7 +175,9 @@ listen:
 # listen.port+i instead of sharing one port via SO_REUSEPORT, and one extra
 # tunnel ("lane") per routine is negotiated with capable peers: lane i
 # handshakes from local port listen.port+i to the peer's advertised
-# base+(i mod peer_ports). Each lane is a full Noise session with its own
+# base+((i + pair_offset) mod peer_ports), where pair_offset is a per-pair
+# hash that spreads many small peers across a big peer's whole port range.
+# Each lane is a full Noise session with its own
 # keys, nonce counter and replay window, so flows taking different paths
 # never fight over shared replay state.
 #

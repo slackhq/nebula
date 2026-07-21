@@ -740,7 +740,11 @@ func (hm *HandshakeManager) maybeAllocLaneState(hostinfo *HostInfo, result *hand
 		// A certified-but-hostile peer doesn't get to size our state.
 		peerPorts = 256
 	}
-	hostinfo.lanes = newLaneState(hm.f.routines, uint16(peerPorts), uint16(result.PeerBasePort))
+	var offset uint16
+	if len(hm.f.myVpnAddrs) > 0 && len(hostinfo.vpnAddrs) > 0 {
+		offset = lanePortOffset(hm.f.myVpnAddrs[0], hostinfo.vpnAddrs[0], uint16(peerPorts))
+	}
+	hostinfo.lanes = newLaneState(hm.f.routines, uint16(peerPorts), uint16(result.PeerBasePort), offset)
 }
 
 // EnsureLanes starts lane handshakes for every empty, non-pending, retry-due
@@ -785,7 +789,7 @@ func (hm *HandshakeManager) startLaneHandshake(base *HostInfo, i int) {
 		ls.noteLaneFailure(i)
 		return
 	}
-	target := netip.AddrPortFrom(remote.Addr(), ls.peerBasePort+uint16(i%int(ls.peerPortCount)))
+	target := netip.AddrPortFrom(remote.Addr(), ls.laneTargetPort(i))
 
 	hostinfo := &HostInfo{
 		vpnAddrs:        slices.Clone(base.vpnAddrs),

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -316,9 +317,11 @@ type laneState struct {
 	sync.Mutex
 
 	// peerPortCount/peerBasePort are the peer's advert from the base
-	// handshake; lane i targets peerBasePort + (i % peerPortCount).
+	// handshake; portOffset is the per-pair rotation from lanePortOffset.
+	// Lane i targets peerBasePort + ((i + portOffset) % peerPortCount).
 	peerPortCount uint16
 	peerBasePort  uint16
+	portOffset    uint16
 
 	// txLanes[i] is our established, initiator-owned lane for routine i, or
 	// nil. Index 0 is always nil — the base tunnel is lane 0. A pointer is
@@ -337,15 +340,55 @@ type laneState struct {
 	peerLanes []*HostInfo
 }
 
-func newLaneState(laneCount int, peerPortCount, peerBasePort uint16) *laneState {
+func newLaneState(laneCount int, peerPortCount, peerBasePort, portOffset uint16) *laneState {
 	return &laneState{
 		peerPortCount: peerPortCount,
 		peerBasePort:  peerBasePort,
+		portOffset:    portOffset,
 		txLanes:       make([]atomic.Pointer[HostInfo], laneCount),
 		txPending:     make([]bool, laneCount),
 		txFails:       make([]uint8, laneCount),
 		txRetryAt:     make([]time.Time, laneCount),
 	}
+}
+
+// laneTargetPort returns the peer port that owned lane i handshakes to and
+// egresses toward. The caller must ensure peerPortCount != 0.
+func (ls *laneState) laneTargetPort(i int) uint16 {
+	return ls.peerBasePort + uint16((i+int(ls.portOffset))%int(ls.peerPortCount))
+}
+
+// lanePortOffset returns the rotation applied to this pair's lane target
+// ports, in [0, peerPortCount). Without it every low-routine peer would aim
+// its few lanes at a big peer's first few ports, concentrating the big
+// peer's receive work on a couple of sockets; the hash spreads pairs across
+// the whole advertised range.
+//
+// Both sides hash the same sorted vpn-address pair and the higher address
+// negates the result, so when port counts match the two sides' rotations
+// cancel: our lane i's 4-tuple is still the reverse of a peer-owned lane's,
+// and each outbound lane handshake opens the conntrack entry its partner
+// arrives through. (The one lane a nonzero rotation lands on the peer's base
+// port has no partner lane; behind a port-restricted NAT it may not form and
+// its routine rides the base tunnel — the standard lane fallback.)
+func lanePortOffset(myAddr, peerAddr netip.Addr, peerPortCount uint16) uint16 {
+	if peerPortCount == 0 {
+		return 0
+	}
+	lo, hi := myAddr, peerAddr
+	if hi.Less(lo) {
+		lo, hi = hi, lo
+	}
+	h := fnv.New32a()
+	b := lo.As16()
+	h.Write(b[:])
+	b = hi.As16()
+	h.Write(b[:])
+	o := uint16(h.Sum32() % uint32(peerPortCount))
+	if myAddr == hi {
+		o = (peerPortCount - o) % peerPortCount
+	}
+	return o
 }
 
 const (
