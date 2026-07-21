@@ -529,7 +529,9 @@ func (hm *HandshakeManager) DeleteHostInfo(hostinfo *HostInfo) {
 
 func (hm *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 	for _, addr := range hostinfo.vpnAddrs {
-		delete(hm.vpnIps, addr)
+		if cur, ok := hm.vpnIps[addr]; ok && cur.hostinfo == hostinfo {
+			delete(hm.vpnIps, addr)
+		}
 	}
 
 	if len(hm.vpnIps) == 0 {
