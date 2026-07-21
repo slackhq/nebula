@@ -282,6 +282,135 @@ type HostInfo struct {
 	// This value will be behind against actual tunnel utilization in the hot path.
 	// This should only be used by the ConnectionManagers ticker routine.
 	lastUsed time.Time
+
+	// sockIdx is the index into Interface.writers of the socket every packet
+	// on this tunnel egresses from (and, for lanes, arrives on). 0 for base
+	// and vanilla tunnels — the zero value preserves stock behavior.
+	sockIdx int
+
+	// laneIndex is the owner's lane number for a lane tunnel; 0 for base.
+	laneIndex uint16
+
+	// laneOwned is true when we initiated this lane (it carries our TX data).
+	laneOwned bool
+
+	// parent points at the base tunnel a lane hangs off of; nil for base and
+	// vanilla tunnels. Set before the lane is registered in hostmap.Indexes.
+	parent *HostInfo
+
+	// lanes is allocated on a base tunnel when multiport is enabled and the
+	// peer advertised lane support; nil otherwise.
+	lanes *laneState
+}
+
+// isLane reports whether this HostInfo is a lane tunnel rather than a base
+// (or vanilla) tunnel.
+func (i *HostInfo) isLane() bool {
+	return i.parent != nil
+}
+
+// laneState hangs off a base HostInfo and tracks the multiport lane tunnels
+// associated with it. txLanes is read lock-free on the TX hot path; the Mutex
+// guards everything else.
+type laneState struct {
+	sync.Mutex
+
+	// peerPortCount/peerBasePort are the peer's advert from the base
+	// handshake; lane i targets peerBasePort + (i % peerPortCount).
+	peerPortCount uint16
+	peerBasePort  uint16
+
+	// txLanes[i] is our established, initiator-owned lane for routine i, or
+	// nil. Index 0 is always nil — the base tunnel is lane 0. A pointer is
+	// only Stored once the lane's ConnectionState is fully populated, so a
+	// data-plane routine that Loads non-nil always sees a usable tunnel.
+	txLanes []atomic.Pointer[HostInfo]
+
+	// Under Mutex: per-slot handshake-in-flight flag, consecutive failure
+	// count, and earliest next attempt, driving ensureLanes' backoff.
+	txPending []bool
+	txFails   []uint8
+	txRetryAt []time.Time
+
+	// Under Mutex: responder-side records of peer-owned lanes, capped by
+	// same-laneIndex replacement.
+	peerLanes []*HostInfo
+}
+
+func newLaneState(laneCount int, peerPortCount, peerBasePort uint16) *laneState {
+	return &laneState{
+		peerPortCount: peerPortCount,
+		peerBasePort:  peerBasePort,
+		txLanes:       make([]atomic.Pointer[HostInfo], laneCount),
+		txPending:     make([]bool, laneCount),
+		txFails:       make([]uint8, laneCount),
+		txRetryAt:     make([]time.Time, laneCount),
+	}
+}
+
+const (
+	laneRetryBase = 5 * time.Second
+	laneRetryMax  = 60 * time.Second
+)
+
+// noteLaneFailure marks lane slot i as empty and pushes the next attempt out
+// with exponential backoff. Called when an owned lane dies or its handshake
+// times out.
+func (ls *laneState) noteLaneFailure(i int) {
+	if i < 0 || i >= len(ls.txPending) {
+		return
+	}
+	ls.Lock()
+	ls.txPending[i] = false
+	if ls.txFails[i] < 200 { // just avoid wrapping; the delay caps far earlier
+		ls.txFails[i]++
+	}
+	d := laneRetryBase << min(ls.txFails[i], 4)
+	if d > laneRetryMax {
+		d = laneRetryMax
+	}
+	ls.txRetryAt[i] = time.Now().Add(d)
+	ls.Unlock()
+}
+
+// noteOwnedLaneDeath detaches an established owned lane from its slot
+// (identity-checked, so a raced re-establishment is never clobbered) and
+// applies failure backoff.
+func (ls *laneState) noteOwnedLaneDeath(lane *HostInfo) {
+	i := int(lane.laneIndex)
+	if i >= len(ls.txLanes) {
+		return
+	}
+	ls.txLanes[i].CompareAndSwap(lane, nil)
+	ls.noteLaneFailure(i)
+}
+
+// removePeerLane drops a responder-side lane record by identity.
+func (ls *laneState) removePeerLane(lane *HostInfo) {
+	ls.Lock()
+	for n, h := range ls.peerLanes {
+		if h == lane {
+			ls.peerLanes = append(ls.peerLanes[:n], ls.peerLanes[n+1:]...)
+			break
+		}
+	}
+	ls.Unlock()
+}
+
+// snapshotLanes returns every lane hostinfo currently attached, used by the
+// base-delete cascade. Taken under the lock and returned as a copy so the
+// caller can delete without holding it.
+func (ls *laneState) snapshotLanes() []*HostInfo {
+	ls.Lock()
+	defer ls.Unlock()
+	out := make([]*HostInfo, 0, len(ls.txLanes)+len(ls.peerLanes))
+	for n := range ls.txLanes {
+		if h := ls.txLanes[n].Load(); h != nil {
+			out = append(out, h)
+		}
+	}
+	out = append(out, ls.peerLanes...)
+	return out
 }
 
 type ViaSender struct {
@@ -289,6 +418,11 @@ type ViaSender struct {
 	relayHI   *HostInfo // relayHI is the host info object of the relay
 	relay     *Relay    // relay contains the rest of the relay information, including the PeerIP of the host trying to communicate with us.
 	IsRelayed bool      // IsRelayed is true if the packet was sent through a relay
+
+	// SockIdx is the local socket (Interface.writers index) the packet
+	// arrived on. Replies that must originate from the same 4-tuple egress
+	// f.writers[SockIdx].
+	SockIdx int
 }
 
 func (v ViaSender) String() string {
@@ -450,6 +584,12 @@ func (hm *HostMap) MakePrimary(hostinfo *HostInfo) {
 // unlockedMakePrimary reports whether hostinfo is (now) the primary for each of its addresses,
 // false only when it is no longer in the hostmap at all.
 func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) bool {
+	// A lane must never become a Hosts primary: it would start carrying all
+	// traffic for the peer and become a relay candidate.
+	if hostinfo.isLane() {
+		return false
+	}
+
 	// A hostinfo that is no longer in the hostmap must not be re-inserted here. Callers can race
 	// tunnel teardown, deciding to promote under the read lock and only taking the write lock
 	// after a delete fully unlinked the hostinfo (connection manager swapPrimary, AddRelay). Every
@@ -478,6 +618,19 @@ func (hm *HostMap) unlockedMakePrimary(hostinfo *HostInfo) bool {
 // any tunnel to the peer), which the caller uses to decide whether to clear learned lighthouse
 // state and disestablish relays.
 func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) bool {
+	if hostinfo.isLane() {
+		return hm.unlockedDeleteLane(hostinfo)
+	}
+
+	// A dying base takes its lanes with it. The peer converges symmetrically
+	// when it processes the base's CloseTunnel, so lanes need no signaling of
+	// their own. Depth-1 recursion: lanes have no children.
+	if hostinfo.lanes != nil {
+		for _, lane := range hostinfo.lanes.snapshotLanes() {
+			hm.unlockedDeleteLane(lane)
+		}
+	}
+
 	// Remove this hostinfo from each of its address lists. The lists are independent, so a
 	// sibling is never promoted to an address it does not own and no other list is touched.
 	final := true
@@ -541,6 +694,35 @@ func (hm *HostMap) unlockedDeleteHostInfo(hostinfo *HostInfo) bool {
 	}
 
 	return final
+}
+
+// unlockedDeleteLane removes a lane tunnel from the index maps and detaches it
+// from its base. Lanes never live in Hosts and their death never means "no
+// tunnel to the peer", so the return is always false (the lighthouse cache and
+// relays stay untouched). Idempotent: every step is identity-checked.
+func (hm *HostMap) unlockedDeleteLane(lane *HostInfo) bool {
+	if ls := lane.parent.lanes; ls != nil {
+		if lane.laneOwned {
+			ls.noteOwnedLaneDeath(lane)
+		} else {
+			ls.removePeerLane(lane)
+		}
+	}
+
+	if hostinfo2, ok := hm.RemoteIndexes[lane.remoteIndexId]; ok && hostinfo2 == lane {
+		delete(hm.RemoteIndexes, lane.remoteIndexId)
+	}
+	if hostinfo2, ok := hm.Indexes[lane.localIndexId]; ok && hostinfo2 == lane {
+		delete(hm.Indexes, lane.localIndexId)
+	}
+
+	if hm.l.Enabled(context.Background(), slog.LevelDebug) {
+		hm.l.Debug("Hostmap lane deleted",
+			"hostMap", m{"vpnAddrs": lane.vpnAddrs, "laneIndex": lane.laneIndex,
+				"indexNumber": lane.localIndexId, "remoteIndexNumber": lane.remoteIndexId},
+		)
+	}
+	return false
 }
 
 func (hm *HostMap) QueryIndex(index uint32) *HostInfo {
@@ -667,6 +849,27 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 		hm.l.Debug("Hostmap vpnIp added",
 			"hostMap", m{"vpnAddrs": hostinfo.vpnAddrs, "mapTotalSize": len(hm.Hosts),
 				"hostinfo": m{"existing": true, "localIndexId": hostinfo.localIndexId, "vpnAddrs": hostinfo.vpnAddrs}},
+		)
+	}
+}
+
+// unlockedAddLane registers a lane tunnel in the index maps (RX demux and
+// recv_error need it there) without touching Hosts: lanes are never primary,
+// never dns-visible, and never subject to the MaxHostInfosPerVpnIp eviction.
+// The connection manager still tracks it for keepalive/death.
+func (hm *HostMap) unlockedAddLane(lane *HostInfo, f *Interface) {
+	hm.Indexes[lane.localIndexId] = lane
+	hm.RemoteIndexes[lane.remoteIndexId] = lane
+
+	lane.out.Store(true)
+	if f.connectionManager != nil { // f.connectionManager is only nil in some unit tests
+		f.connectionManager.trafficTimer.Add(lane.localIndexId, f.connectionManager.checkInterval)
+	}
+
+	if hm.l.Enabled(context.Background(), slog.LevelDebug) {
+		hm.l.Debug("Hostmap lane added",
+			"hostMap", m{"vpnAddrs": lane.vpnAddrs, "laneIndex": lane.laneIndex,
+				"indexNumber": lane.localIndexId, "remoteIndexNumber": lane.remoteIndexId},
 		)
 	}
 }

@@ -117,23 +117,134 @@ func TestPayloadUnknownFields(t *testing.T) {
 		assert.Equal(t, uint32(88), got.ResponderIndex)
 	})
 
-	t.Run("reserved fields 6 and 7 are skipped", func(t *testing.T) {
-		// Fields 6 and 7 are reserved in the proto definition
+	t.Run("unknown field inside LaneDetails is skipped", func(t *testing.T) {
+		var lane []byte
+		lane = protowire.AppendTag(lane, fieldLanePortCount, protowire.VarintType)
+		lane = protowire.AppendVarint(lane, 4)
+		lane = protowire.AppendTag(lane, 50, protowire.VarintType) // unknown subfield
+		lane = protowire.AppendVarint(lane, 9999)
+		lane = protowire.AppendTag(lane, fieldLaneBasePort, protowire.VarintType)
+		lane = protowire.AppendVarint(lane, 4242)
+
 		var details []byte
 		details = protowire.AppendTag(details, fieldInitiatorIndex, protowire.VarintType)
 		details = protowire.AppendVarint(details, 100)
-		details = protowire.AppendTag(details, 6, protowire.VarintType)
-		details = protowire.AppendVarint(details, 1)
-		details = protowire.AppendTag(details, 7, protowire.VarintType)
-		details = protowire.AppendVarint(details, 2)
+		details = protowire.AppendTag(details, fieldInitiatorLanes, protowire.BytesType)
+		details = protowire.AppendBytes(details, lane)
 
-		var data []byte
-		data = protowire.AppendTag(data, 1, protowire.BytesType)
-		data = protowire.AppendBytes(data, details)
+		got, err := UnmarshalPayload(wrapDetails(details))
+		require.NoError(t, err)
+		assert.Equal(t, uint32(100), got.InitiatorIndex)
+		require.NotNil(t, got.InitiatorLanes)
+		assert.Equal(t, uint32(4), got.InitiatorLanes.PortCount)
+		assert.Equal(t, uint32(4242), got.InitiatorLanes.BasePort)
+	})
+}
+
+func TestPayloadLaneDetails(t *testing.T) {
+	t.Run("round trip both sides", func(t *testing.T) {
+		data := MarshalPayload(nil, Payload{
+			InitiatorIndex: 12345,
+			Time:           999,
+			InitiatorLanes: &LaneDetails{PortCount: 8, BasePort: 4242, LaneIndex: 3},
+			ResponderLanes: &LaneDetails{PortCount: 4, BasePort: 5353},
+		})
 
 		got, err := UnmarshalPayload(data)
 		require.NoError(t, err)
-		assert.Equal(t, uint32(100), got.InitiatorIndex)
+		require.NotNil(t, got.InitiatorLanes)
+		assert.Equal(t, LaneDetails{PortCount: 8, BasePort: 4242, LaneIndex: 3}, *got.InitiatorLanes)
+		require.NotNil(t, got.ResponderLanes)
+		assert.Equal(t, LaneDetails{PortCount: 4, BasePort: 5353}, *got.ResponderLanes)
+	})
+
+	t.Run("zero-valued LaneDetails survives the round trip", func(t *testing.T) {
+		// Presence is what negotiation keys on; an all-zero advert must not
+		// decay to nil.
+		data := MarshalPayload(nil, Payload{
+			InitiatorIndex: 1,
+			InitiatorLanes: &LaneDetails{},
+		})
+		got, err := UnmarshalPayload(data)
+		require.NoError(t, err)
+		require.NotNil(t, got.InitiatorLanes)
+		assert.Equal(t, LaneDetails{}, *got.InitiatorLanes)
+		assert.Nil(t, got.ResponderLanes)
+	})
+
+	t.Run("nil lanes marshal byte-identical to a vanilla payload", func(t *testing.T) {
+		p := Payload{
+			Cert:           []byte("cert"),
+			CertVersion:    2,
+			InitiatorIndex: 100,
+			Time:           999,
+		}
+		// The vanilla encoding of the same fields, built by hand in field order.
+		var details []byte
+		details = protowire.AppendTag(details, fieldCert, protowire.BytesType)
+		details = protowire.AppendBytes(details, p.Cert)
+		details = protowire.AppendTag(details, fieldInitiatorIndex, protowire.VarintType)
+		details = protowire.AppendVarint(details, uint64(p.InitiatorIndex))
+		details = protowire.AppendTag(details, fieldTime, protowire.VarintType)
+		details = protowire.AppendVarint(details, p.Time)
+		details = protowire.AppendTag(details, fieldCertVersion, protowire.VarintType)
+		details = protowire.AppendVarint(details, uint64(p.CertVersion))
+
+		assert.Equal(t, wrapDetails(details), MarshalPayload(nil, p))
+	})
+
+	t.Run("lane field with wrong wire type rejected", func(t *testing.T) {
+		for _, field := range []protowire.Number{fieldInitiatorLanes, fieldResponderLanes} {
+			var details []byte
+			details = protowire.AppendTag(details, field, protowire.VarintType)
+			details = protowire.AppendVarint(details, 1)
+			_, err := UnmarshalPayload(wrapDetails(details))
+			assert.Error(t, err)
+		}
+	})
+
+	t.Run("lane subfield with wrong wire type rejected", func(t *testing.T) {
+		var lane []byte
+		lane = protowire.AppendTag(lane, fieldLanePortCount, protowire.BytesType)
+		lane = protowire.AppendBytes(lane, []byte{1, 2, 3})
+
+		var details []byte
+		details = protowire.AppendTag(details, fieldInitiatorLanes, protowire.BytesType)
+		details = protowire.AppendBytes(details, lane)
+		_, err := UnmarshalPayload(wrapDetails(details))
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated LaneDetails submessage rejected", func(t *testing.T) {
+		var details []byte
+		details = protowire.AppendTag(details, fieldInitiatorLanes, protowire.BytesType)
+		details = append(details, 0x0a, 0x01, 0x02) // length 10, only 2 bytes
+		_, err := UnmarshalPayload(wrapDetails(details))
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated varint inside LaneDetails rejected", func(t *testing.T) {
+		var lane []byte
+		lane = protowire.AppendTag(lane, fieldLaneBasePort, protowire.VarintType)
+		lane = append(lane, 0x80) // incomplete varint
+
+		var details []byte
+		details = protowire.AppendTag(details, fieldResponderLanes, protowire.BytesType)
+		details = protowire.AppendBytes(details, lane)
+		_, err := UnmarshalPayload(wrapDetails(details))
+		assert.Error(t, err)
+	})
+
+	t.Run("lane subfield varint overflow rejected", func(t *testing.T) {
+		var lane []byte
+		lane = protowire.AppendTag(lane, fieldLaneLaneIndex, protowire.VarintType)
+		lane = protowire.AppendVarint(lane, math.MaxUint32+1)
+
+		var details []byte
+		details = protowire.AppendTag(details, fieldInitiatorLanes, protowire.BytesType)
+		details = protowire.AppendBytes(details, lane)
+		_, err := UnmarshalPayload(wrapDetails(details))
+		assert.Error(t, err)
 	})
 }
 
@@ -328,6 +439,12 @@ func FuzzPayload(f *testing.F) {
 		Time:           3,
 		CertVersion:    2,
 	}))
+	f.Add(MarshalPayload(nil, Payload{
+		InitiatorIndex: 1,
+		Time:           3,
+		InitiatorLanes: &LaneDetails{PortCount: 8, BasePort: 4242, LaneIndex: 2},
+		ResponderLanes: &LaneDetails{PortCount: 4, BasePort: 5353},
+	}))
 	f.Add([]byte{})
 	f.Add([]byte{0xff})
 
@@ -357,5 +474,14 @@ func payloadsEqual(a, b Payload) bool {
 		a.InitiatorIndex == b.InitiatorIndex &&
 		a.ResponderIndex == b.ResponderIndex &&
 		a.Time == b.Time &&
-		a.CertVersion == b.CertVersion
+		a.CertVersion == b.CertVersion &&
+		laneDetailsEqual(a.InitiatorLanes, b.InitiatorLanes) &&
+		laneDetailsEqual(a.ResponderLanes, b.ResponderLanes)
+}
+
+func laneDetailsEqual(a, b *LaneDetails) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

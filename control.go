@@ -66,6 +66,9 @@ type ControlHostInfo struct {
 	CurrentRemote          netip.AddrPort   `json:"currentRemote"`
 	CurrentRelaysToMe      []netip.Addr     `json:"currentRelaysToMe"`
 	CurrentRelaysThroughMe []netip.Addr     `json:"currentRelaysThroughMe"`
+	IsLane                 bool             `json:"isLane,omitempty"`
+	LaneIndex              uint16           `json:"laneIndex,omitempty"`
+	SockIdx                int              `json:"sockIdx,omitempty"`
 }
 
 // Start actually runs nebula, this is a nonblocking call.
@@ -198,7 +201,9 @@ func (c *Control) RebindUDPServer() {
 		return
 	}
 
-	_ = c.f.outside.Rebind()
+	for _, w := range c.f.writers {
+		_ = w.Rebind()
+	}
 
 	// Trigger a lighthouse update, useful for mobile clients that should have an update interval of 0
 	c.f.lightHouse.SendUpdate()
@@ -349,6 +354,11 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	// Grab the hostMap lock to access the Hosts map
 	c.f.hostMap.Lock()
 	for _, relayHost := range c.f.hostMap.Indexes {
+		// Lanes ride along with their base tunnel's shutdown cascade; closing
+		// them individually would race the cascade's identity-checked deletes.
+		if relayHost.isLane() {
+			continue
+		}
 		if _, ok := relayingHosts[relayHost.vpnAddrs[0]]; !ok {
 			hostInfos = append(hostInfos, relayHost)
 		}
@@ -377,6 +387,9 @@ func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {
 		CurrentRelaysToMe:      h.relayState.CopyRelayIps(),
 		CurrentRelaysThroughMe: h.relayState.CopyRelayForIps(),
 		CurrentRemote:          h.GetRemote(),
+		IsLane:                 h.isLane(),
+		LaneIndex:              h.laneIndex,
+		SockIdx:                h.sockIdx,
 	}
 
 	for i, a := range h.vpnAddrs {
