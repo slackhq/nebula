@@ -27,7 +27,7 @@ func newTestBaseHostInfo(vpnIp netip.Addr, localIdx, remoteIdx uint32, laneCount
 		HandshakePacket: map[uint8][]byte{},
 	}
 	base.SetRemote(netip.MustParseAddrPort("192.0.2.1:4242"))
-	base.lanes = newLaneState(laneCount, uint16(laneCount), 4242)
+	base.lanes = newLaneState(laneCount, uint16(laneCount), 4242, 0)
 	return base
 }
 
@@ -45,6 +45,62 @@ func newTestLaneHostInfo(base *HostInfo, laneIndex uint16, localIdx, remoteIdx u
 	}
 	lane.SetRemote(netip.MustParseAddrPort("192.0.2.1:4243"))
 	return lane
+}
+
+func TestLanePortOffset(t *testing.T) {
+	a := netip.MustParseAddr("10.0.0.1")
+	b := netip.MustParseAddr("10.0.0.2")
+
+	// Deterministic and in range.
+	for _, count := range []uint16{1, 2, 3, 4, 16, 256} {
+		o := lanePortOffset(a, b, count)
+		assert.Equal(t, o, lanePortOffset(a, b, count), "count %d not deterministic", count)
+		assert.Less(t, o, count, "count %d out of range", count)
+	}
+	assert.Equal(t, uint16(0), lanePortOffset(a, b, 0), "zero port count")
+
+	// The two sides' rotations cancel when port counts match, preserving the
+	// lane-i-reverses-lane-j conntrack pairing.
+	for _, count := range []uint16{2, 3, 4, 7, 16} {
+		for i := range 32 {
+			peer := netip.AddrFrom4([4]byte{192, 0, 2, byte(i)})
+			oA := lanePortOffset(a, peer, count)
+			oB := lanePortOffset(peer, a, count)
+			assert.Equal(t, uint16(0), (oA+oB)%count,
+				"offsets don't cancel for peer %s count %d", peer, count)
+		}
+	}
+
+	// Distinct small peers land on distinct rotations of a big peer's range,
+	// not all on the same first ports.
+	const bigPeerPorts = 16
+	distinct := map[uint16]struct{}{}
+	for i := range 64 {
+		client := netip.AddrFrom4([4]byte{192, 0, 2, byte(i)})
+		distinct[lanePortOffset(client, a, bigPeerPorts)] = struct{}{}
+	}
+	assert.GreaterOrEqual(t, len(distinct), 8, "64 clients only produced %d distinct offsets", len(distinct))
+}
+
+func TestLaneTargetPort(t *testing.T) {
+	// No rotation: lane i targets base+i, wrapping past the peer's range.
+	ls := newLaneState(4, 4, 4242, 0)
+	for i, want := range map[int]uint16{1: 4243, 2: 4244, 3: 4245, 5: 4243} {
+		assert.Equal(t, want, ls.laneTargetPort(i), "lane %d", i)
+	}
+
+	// Rotation shifts the whole mapping; the wrapped lane lands on the base
+	// port itself, which is a valid distinct 4-tuple (our source port differs).
+	ls = newLaneState(4, 4, 4242, 3)
+	for i, want := range map[int]uint16{1: 4242, 2: 4243, 3: 4244} {
+		assert.Equal(t, want, ls.laneTargetPort(i), "rotated lane %d", i)
+	}
+
+	// Fewer peer ports than local lanes: rotation still spreads across all of
+	// the peer's ports.
+	ls = newLaneState(16, 2, 4242, 1)
+	assert.Equal(t, uint16(4242), ls.laneTargetPort(1))
+	assert.Equal(t, uint16(4243), ls.laneTargetPort(2))
 }
 
 func TestLaneHostmapLifecycle(t *testing.T) {
