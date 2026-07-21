@@ -191,6 +191,28 @@ func (cm *connectionManager) doTrafficCheck(localIndex uint32, p, nb, out []byte
 	}
 
 	cm.resetRelayTrafficCheck(hostinfo)
+	cm.ensureLanes(localIndex, decision, hostinfo)
+}
+
+// ensureLanes piggybacks lane re-establishment on the per-tunnel traffic
+// tick: any live base with lane state gets its empty slots retried (subject to
+// the per-slot backoff). makeTrafficDecision returns a nil hostinfo on some
+// keep-alive paths, so re-resolve the index in that case — an idle base must
+// still restart lanes that died while it was quiet.
+func (cm *connectionManager) ensureLanes(localIndex uint32, decision trafficDecision, hostinfo *HostInfo) {
+	if decision == deleteTunnel || decision == closeTunnel {
+		return
+	}
+	if hostinfo == nil {
+		hostinfo = cm.hostMap.QueryIndex(localIndex)
+		if hostinfo == nil {
+			return
+		}
+	}
+	if hostinfo.isLane() || hostinfo.lanes == nil {
+		return
+	}
+	cm.intf.handshakeManager.EnsureLanes(hostinfo)
 }
 
 func (cm *connectionManager) resetRelayTrafficCheck(hostinfo *HostInfo) {
@@ -323,6 +345,10 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 		return closeTunnel, hostinfo, nil
 	}
 
+	if hostinfo.isLane() {
+		return cm.makeLaneTrafficDecision(hostinfo, now)
+	}
+
 	primary := cm.hostMap.Hosts[hostinfo.vpnAddrs[0]]
 	mainHostInfo := true
 	if primary != nil && primary != hostinfo {
@@ -419,13 +445,72 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 	return decision, hostinfo, nil
 }
 
+// makeLaneTrafficDecision is the lane-tunnel subset of makeTrafficDecision:
+// no primary/swap/rehandshake logic (lanes are never primary), no punches
+// (lane keepalives egress the lane's own socket and are its NAT keepalive),
+// just alive / test / dead. A dead lane's DeleteHostInfo clears its base slot
+// with backoff, and ensureLanes re-establishes it.
+func (cm *connectionManager) makeLaneTrafficDecision(hostinfo *HostInfo, now time.Time) (trafficDecision, *HostInfo, *HostInfo) {
+	inTraffic, _ := cm.getAndResetTrafficCheck(hostinfo, now)
+
+	if inTraffic {
+		if cm.l.Enabled(context.Background(), slog.LevelDebug) {
+			hostinfo.logger(cm.l).Debug("Tunnel status",
+				"tunnelCheck", m{"state": "alive", "method": "passive"},
+				"laneIndex", hostinfo.laneIndex,
+			)
+		}
+		hostinfo.pendingDeletion.Store(false)
+		cm.trafficTimer.Add(hostinfo.localIndexId, cm.checkInterval)
+		return doNothing, hostinfo, nil
+	}
+
+	if hostinfo.pendingDeletion.Load() {
+		hostinfo.logger(cm.l).Info("Tunnel status",
+			"tunnelCheck", m{"state": "dead", "method": "active"},
+			"laneIndex", hostinfo.laneIndex,
+		)
+		return deleteTunnel, hostinfo, nil
+	}
+
+	// Idle lanes are actively kept alive (unlike idle base tunnels, which
+	// just get punches): a lane is datapath infrastructure and its keepalive
+	// doubles as the per-path death detector.
+	decision := doNothing
+	if hostinfo.ConnectionState != nil {
+		decision = sendTestPacket
+	}
+	hostinfo.pendingDeletion.Store(true)
+	cm.trafficTimer.Add(hostinfo.localIndexId, cm.pendingDeletionInterval)
+	return decision, hostinfo, nil
+}
+
 func (cm *connectionManager) isInactive(hostinfo *HostInfo, now time.Time) (time.Duration, bool) {
 	if cm.dropInactive.Load() == false {
 		// We aren't configured to drop inactive tunnels
 		return 0, false
 	}
 
-	inactiveDuration := now.Sub(hostinfo.lastUsed)
+	// With multiport the data rides the lanes and the base may look idle;
+	// a base is only inactive if its whole lane family is. lastUsed is only
+	// written by this ticker goroutine, so these reads are safe.
+	lastUsed := hostinfo.lastUsed
+	if ls := hostinfo.lanes; ls != nil {
+		for i := range ls.txLanes {
+			if lane := ls.txLanes[i].Load(); lane != nil && lane.lastUsed.After(lastUsed) {
+				lastUsed = lane.lastUsed
+			}
+		}
+		ls.Lock()
+		for _, lane := range ls.peerLanes {
+			if lane.lastUsed.After(lastUsed) {
+				lastUsed = lane.lastUsed
+			}
+		}
+		ls.Unlock()
+	}
+
+	inactiveDuration := now.Sub(lastUsed)
 	if inactiveDuration < cm.getInactivityTimeout() {
 		// It's not considered inactive
 		return inactiveDuration, false

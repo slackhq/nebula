@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/netip"
 	"runtime/debug"
@@ -134,6 +135,22 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	udpConns := make([]udp.Conn, routines)
 	port := c.GetInt("listen.port", 0)
 
+	// Multiport lanes: bind `routines` consecutive UDP ports (listen.port+i)
+	// instead of SO_REUSEPORT sharing one, and negotiate one extra tunnel per
+	// routine with capable peers so each routine's traffic rides its own
+	// underlay 5-tuple. Defaults on, degrading gracefully when preconditions
+	// aren't met — managed deployments (dnclient) can't be hard-errored on
+	// config they don't control.
+	multiport := c.GetBool("multiport.enabled", true)
+	if multiport && routines < 2 {
+		l.Info("multiport disabled: requires routines > 1")
+		multiport = false
+	}
+	if multiport && port != 0 && port+routines-1 > math.MaxUint16 {
+		l.Warn("multiport disabled: would bind ports beyond 65535", "listen.port", port, "routines", routines)
+		multiport = false
+	}
+
 	// Callers get no handle to these until the Control is returned, release them on any error.
 	defer func() {
 		if reterr != nil {
@@ -163,24 +180,76 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 			listenHost = ips[0].Unmap()
 		}
 
-		for i := 0; i < routines; i++ {
-			l.Info("listening", "addr", netip.AddrPortFrom(listenHost, uint16(port)))
-			udpServer, err := udp.NewListener(l, listenHost, port, routines > 1, c.GetInt("listen.batch", 64))
-			if err != nil {
-				return nil, util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
-			}
-			udpServer.ReloadConfig(c)
-			udpConns[i] = udpServer
-
-			// If port is dynamic, discover it before the next pass through the for loop
-			// This way all routines will use the same port correctly
-			if port == 0 {
-				uPort, err := udpServer.LocalAddr()
-				if err != nil {
-					return nil, util.NewContextualError("Failed to get listening port", nil, err)
+		// Every lane socket needs its own reader; a platform that can't run
+		// multiple readers would silently strand sockets 1..n-1 as blackholes.
+		// Probe capability before committing to per-port binds.
+		if multiport {
+			probe, err := udp.NewListener(l, listenHost, 0, false, 1)
+			if err == nil {
+				if !probe.SupportsMultipleReaders() {
+					l.Warn("multiport disabled: this platform does not support multiple udp readers")
+					multiport = false
 				}
-				port = int(uPort.Port())
+				_ = probe.Close()
 			}
+		}
+
+		// With a dynamic listen.port, multiport binds socket 0 dynamically and
+		// then claims the next routines-1 ports above it; if that range turns
+		// out to be partially occupied, re-roll with a fresh dynamic port.
+		dynamic := port == 0
+		var bindErr error
+		for attempt := 0; attempt < 6; attempt++ {
+			bindErr = nil
+			for i := 0; i < routines; i++ {
+				lPort := port
+				if multiport {
+					lPort = port + i
+				}
+				udpServer, err := udp.NewListener(l, listenHost, lPort, routines > 1 && !multiport, c.GetInt("listen.batch", 64))
+				if err != nil {
+					bindErr = util.NewContextualError("Failed to open udp listener", m{"queue": i}, err)
+					break
+				}
+				udpServer.ReloadConfig(c)
+				udpConns[i] = udpServer
+
+				// If port is dynamic, discover it before the next pass through the for loop
+				// This way all routines will use the same port correctly
+				if port == 0 {
+					uPort, err := udpServer.LocalAddr()
+					if err != nil {
+						return nil, util.NewContextualError("Failed to get listening port", nil, err)
+					}
+					port = int(uPort.Port())
+					if multiport && port+routines-1 > math.MaxUint16 {
+						bindErr = util.NewContextualError("multiport dynamic port too close to 65535", m{"port": port}, nil)
+						break
+					}
+				}
+				bound := port
+				if multiport {
+					bound = port + i
+				}
+				l.Info("listening", "addr", netip.AddrPortFrom(listenHost, uint16(bound)), "socket", i)
+			}
+			if bindErr == nil {
+				break
+			}
+			if !(multiport && dynamic) {
+				return nil, bindErr
+			}
+			for i := range udpConns {
+				if udpConns[i] != nil {
+					_ = udpConns[i].Close()
+					udpConns[i] = nil
+				}
+			}
+			port = 0
+			l.Debug("multiport dynamic port range collided, retrying", "attempt", attempt+1)
+		}
+		if bindErr != nil {
+			return nil, bindErr
 		}
 	}
 
@@ -204,6 +273,16 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		retries:        int64(c.GetInt("handshakes.retries", DefaultHandshakeRetries)),
 		triggerBuffer:  c.GetInt("handshakes.trigger_buffer", DefaultHandshakeTriggerBuffer),
 		messageMetrics: messageMetrics,
+	}
+
+	if multiport {
+		lanes := c.GetInt("multiport.lanes", 0)
+		if lanes <= 0 || lanes > routines {
+			lanes = routines
+		}
+		handshakeConfig.laneCount = lanes
+		handshakeConfig.lanePortCount = uint16(routines)
+		handshakeConfig.laneBasePort = uint16(port)
 	}
 
 	handshakeManager := NewHandshakeManager(l, hostMap, lightHouse, udpConns[0], handshakeConfig)
@@ -230,6 +309,8 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		DropLocalBroadcast:    c.GetBool("tun.drop_local_broadcast", false),
 		DropMulticast:         c.GetBool("tun.drop_multicast", false),
 		routines:              routines,
+		Multiport:             multiport,
+		LaneCount:             handshakeConfig.laneCount,
 		MessageMetrics:        messageMetrics,
 		version:               buildVersion,
 		relayManager:          NewRelayManager(ctx, l, hostMap, c),

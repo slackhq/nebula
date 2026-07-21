@@ -101,7 +101,7 @@ func (f *Interface) readOutsidePackets(via ViaSender, scratch []byte, packet []b
 	// recvError if necessary
 	if hostinfo == nil || hostinfo.ConnectionState == nil {
 		if !via.IsRelayed {
-			f.maybeSendRecvError(via.UdpAddr, h.RemoteIndex)
+			f.maybeSendRecvError(via.UdpAddr, h.RemoteIndex, q)
 		}
 		return
 	}
@@ -203,6 +203,7 @@ func (f *Interface) handleOutsideRelayPacket(hostinfo *HostInfo, via ViaSender, 
 			relayHI:   hostinfo,
 			relay:     relay,
 			IsRelayed: true,
+			SockIdx:   via.SockIdx,
 		}
 		f.readOutsidePackets(via, scratch, signedPayload, h, fwPacket, lhf, nb, q, localCache, meta)
 	case ForwardingType:
@@ -595,7 +596,7 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, s
 
 	dropReason := f.firewall.Drop(*fwPacket, true, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason != nil {
-		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, scratch, q)
+		f.rejectOutside(out, hostinfo.ConnectionState, hostinfo, nb, scratch)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			hostinfo.logger(f.l).Debug("dropping inbound packet",
 				"fwPacket", fwPacket,
@@ -611,17 +612,20 @@ func (f *Interface) handleOutsideMessagePacket(hostinfo *HostInfo, out []byte, s
 	}
 }
 
-func (f *Interface) maybeSendRecvError(endpoint netip.AddrPort, index uint32) {
+func (f *Interface) maybeSendRecvError(endpoint netip.AddrPort, index uint32, q int) {
 	if f.sendRecvErrorConfig.ShouldRecvError(endpoint) {
-		f.sendRecvError(endpoint, index)
+		f.sendRecvError(endpoint, index, q)
 	}
 }
 
-func (f *Interface) sendRecvError(endpoint netip.AddrPort, index uint32) {
+// sendRecvError replies from the socket the offending packet arrived on (q).
+// A lane peer's spoof guard compares our source addr against the lane's
+// remote, so a reply from the base port would be discarded.
+func (f *Interface) sendRecvError(endpoint netip.AddrPort, index uint32, q int) {
 	f.messageMetrics.Tx(header.RecvError, 0, 1)
 
 	b := header.Encode(make([]byte, header.Len), header.Version, header.RecvError, 0, index, 0)
-	_ = f.outside.WriteTo(b, endpoint)
+	_ = f.writers[q].WriteTo(b, endpoint)
 	if f.l.Enabled(context.Background(), slog.LevelDebug) {
 		f.l.Debug("Recv error sent",
 			"index", index,

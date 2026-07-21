@@ -42,10 +42,17 @@ type InterfaceConfig struct {
 	DropLocalBroadcast bool
 	DropMulticast      bool
 	routines           int
-	MessageMetrics     *MessageMetrics
-	version            string
-	relayManager       *relayManager
-	punchy             *Punchy
+	// Multiport means writers[i] is bound to listen.port+i (not a shared
+	// SO_REUSEPORT port) and lane tunnels are negotiated with capable peers.
+	Multiport bool
+	// LaneCount is the number of lanes counting the base tunnel as lane 0
+	// (multiport.lanes, clamped to routines). Routines at or beyond it share
+	// the configured lanes round-robin.
+	LaneCount      int
+	MessageMetrics *MessageMetrics
+	version        string
+	relayManager   *relayManager
+	punchy         *Punchy
 
 	tryPromoteEvery uint32
 	reQueryEvery    uint32
@@ -86,6 +93,8 @@ type Interface struct {
 	dropLocalBroadcast    bool
 	dropMulticast         bool
 	routines              int
+	multiport             bool
+	laneCount             int
 	disconnectInvalid     atomic.Bool
 	closed                atomic.Bool
 	// cpuAffinity, when non-empty, names the CPUs each TUN reader goroutine
@@ -222,6 +231,8 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		dropLocalBroadcast:    c.DropLocalBroadcast,
 		dropMulticast:         c.DropMulticast,
 		routines:              c.routines,
+		multiport:             c.Multiport,
+		laneCount:             c.LaneCount,
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
 		batchers:              make([]batch.RxBatcher, c.routines),
@@ -277,7 +288,10 @@ func (f *Interface) activate() error {
 		"boringcrypto", boringEnabled(),
 	)
 
-	if f.routines > 1 && !f.outside.SupportsMultipleReaders() {
+	// Under multiport each socket has exactly one reader on its own port, so
+	// the shared-port multi-reader capability is irrelevant (and main.go
+	// already hard-errored on unsupported platforms).
+	if f.routines > 1 && !f.multiport && !f.outside.SupportsMultipleReaders() {
 		f.routines = 1
 		f.l.Warn("multiple udp readers are not supported on this platform, falling back to a single routine")
 	}
@@ -290,6 +304,11 @@ func (f *Interface) activate() error {
 		return err
 	}
 	if len(queues) < f.routines {
+		if f.multiport {
+			// The lane sockets are already bound one-per-routine; shrinking
+			// the routine count would leave bound ports with no reader.
+			return fmt.Errorf("multiport requires %d tun queues, device provided %d", f.routines, len(queues))
+		}
 		f.l.Warn("tun multiqueue is not supported on this platform, falling back to fewer routines",
 			"requested", f.routines, "opened", len(queues))
 		f.routines = len(queues)
@@ -372,7 +391,7 @@ func (f *Interface) listenOut(i int) {
 	scratch := make([]byte, mtu)
 
 	listener := func(fromUdpAddr netip.AddrPort, payload []byte, meta udp.RxMeta) {
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, scratch, payload, h, fwPacket, lhh, nb, i, ctCache.Get(), meta)
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr, SockIdx: i}, scratch, payload, h, fwPacket, lhh, nb, i, ctCache.Get(), meta)
 	}
 
 	flusher := func() {
@@ -392,6 +411,55 @@ func (f *Interface) listenOut(i int) {
 	}
 
 	f.l.Debug("underlay reader is done", "reader", i)
+}
+
+// txQueue is the per-routine TX state owned by one listenIn goroutine.
+// laneSlot is the lane this routine's traffic rides (laneSlotFor); lane is
+// bound to that slot's socket and carries lane-tunnel data; base is bound to
+// socket 0 and carries base-tunnel and relay data, which must keep the base
+// source port (a vanilla peer would otherwise see per-routine source ports
+// and roam-thrash). The two alias when multiport is off or laneSlot is 0.
+// Concurrent sendmmsg on a shared fd (socket 0, or a lane socket shared by
+// overflow routines) is safe: a flow is pinned to one routine by tun
+// steering, so per-flow wire order still holds.
+type txQueue struct {
+	laneSlot int
+	lane     *batch.SendBatch
+	base     *batch.SendBatch
+}
+
+func (tx *txQueue) full() bool {
+	if tx.lane.Len() >= batch.SendBatchCap {
+		return true
+	}
+	return tx.base != tx.lane && tx.base.Len() >= batch.SendBatchCap
+}
+
+// flush drains base before lane so that when a flow moves from the base
+// tunnel onto a freshly established lane mid-window, its packets still leave
+// this host in encryption order.
+func (tx *txQueue) flush(l *slog.Logger) {
+	if tx.base != tx.lane {
+		if err := tx.base.Flush(); err != nil {
+			l.Error("Failed to write outgoing batch", "error", err, "writer", 0)
+		}
+	}
+	if err := tx.lane.Flush(); err != nil {
+		l.Error("Failed to write outgoing batch", "error", err, "writer", tx.laneSlot)
+	}
+}
+
+// laneSlotFor maps a routine index to the lane its traffic rides. When
+// multiport.lanes is below routines, overflow routines share the configured
+// lanes round-robin instead of all falling back onto the base tunnel's
+// single underlay flow. Sharers use the lane's own socket and 4-tuple, so
+// this is vanilla-style same-flow sharing: no cross-path replay skew, and
+// per-flow ordering still holds (a flow stays pinned to one routine).
+func (f *Interface) laneSlotFor(i int) int {
+	if f.multiport && f.laneCount > 0 {
+		return i % f.laneCount
+	}
+	return i
 }
 
 func (f *Interface) listenIn(queue tio.Queue, i int) {
@@ -418,7 +486,12 @@ func (f *Interface) listenIn(queue tio.Queue, i int) {
 
 	rejectBuf := make([]byte, mtu)
 	arenaSize := batch.SendBatchCap * (udp.MTU + 32)
-	sb := batch.NewSendBatch(f.writers[i], batch.SendBatchCap, arenaSize)
+	laneSlot := f.laneSlotFor(i)
+	sb := batch.NewSendBatch(f.writers[laneSlot], batch.SendBatchCap, arenaSize)
+	tx := &txQueue{laneSlot: laneSlot, lane: sb, base: sb}
+	if f.multiport && laneSlot != 0 {
+		tx.base = batch.NewSendBatch(f.writers[0], batch.SendBatchCap, arenaSize)
+	}
 	fwPacket := &firewall.Packet{}
 	nb := make([]byte, 12, 12)
 
@@ -436,19 +509,15 @@ func (f *Interface) listenIn(queue tio.Queue, i int) {
 		}
 
 		for _, pkt := range pkts {
-			f.consumeInsidePacket(pkt, fwPacket, nb, sb, rejectBuf, i, conntrackCache.Get())
+			f.consumeInsidePacket(pkt, fwPacket, nb, tx, rejectBuf, i, conntrackCache.Get())
 			// Flush incrementally once a full sendmmsg batch has
 			// accumulated so the first packets of a deep read drain
 			// hit the wire while the rest are still being encrypted.
-			if sb.Len() >= batch.SendBatchCap {
-				if err := sb.Flush(); err != nil {
-					f.l.Error("Failed to write outgoing batch", "error", err, "writer", i)
-				}
+			if tx.full() {
+				tx.flush(f.l)
 			}
 		}
-		if err := sb.Flush(); err != nil {
-			f.l.Error("Failed to write outgoing batch", "error", err, "writer", i)
-		}
+		tx.flush(f.l)
 	}
 
 	f.l.Debug("overlay reader is done", "reader", i)

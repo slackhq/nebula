@@ -50,6 +50,14 @@ type HandshakeConfig struct {
 	retries       int64
 	triggerBuffer int
 
+	// Multiport lane parameters; laneCount == 0 means multiport is disabled.
+	// laneCount includes implicit lane 0 (the base tunnel), so lanes
+	// 1..laneCount-1 are initiated. lanePortCount/laneBasePort describe our
+	// own bound port range and are advertised in every handshake payload.
+	laneCount     int
+	lanePortCount uint16
+	laneBasePort  uint16
+
 	messageMetrics *MessageMetrics
 }
 
@@ -65,11 +73,15 @@ type HandshakeManager struct {
 	outside                udp.Conn
 	config                 HandshakeConfig
 	OutboundHandshakeTimer *LockingTimerWheel[netip.Addr]
-	messageMetrics         *MessageMetrics
-	metricInitiated        metrics.Counter
-	metricTimedOut         metrics.Counter
-	f                      *Interface
-	l                      *slog.Logger
+	// OutboundLaneTimer drives lane handshake retries. Lanes never enter
+	// vpnIps (they would collide with base handshakes for the same address),
+	// so their wheel is keyed by pending localIndexId instead.
+	OutboundLaneTimer *LockingTimerWheel[uint32]
+	messageMetrics    *MessageMetrics
+	metricInitiated   metrics.Counter
+	metricTimedOut    metrics.Counter
+	f                 *Interface
+	l                 *slog.Logger
 
 	// can be used to trigger outbound handshake for the given vpnIp
 	trigger chan netip.Addr
@@ -88,6 +100,11 @@ type HandshakeHostInfo struct {
 
 	hostinfo *HostInfo
 	machine  *handshake.Machine // The handshake state machine, set during stage 0 (initiator) or beginHandshake (responder multi-message)
+
+	// laneTarget is the single pinned destination for a lane handshake
+	// (base-tunnel remote IP at the peer's lane port). Lane handshakes never
+	// broadcast to the RemoteList.
+	laneTarget netip.AddrPort
 }
 
 func (hh *HandshakeHostInfo) cachePacket(l *slog.Logger, t header.MessageType, st header.MessageSubType, packet []byte, f packetCallback, m *cachedPacketMetrics) {
@@ -125,6 +142,7 @@ func NewHandshakeManager(l *slog.Logger, mainHostMap *HostMap, lightHouse *Light
 		config:                 config,
 		trigger:                make(chan netip.Addr, config.triggerBuffer),
 		OutboundHandshakeTimer: NewLockingTimerWheel[netip.Addr](config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
+		OutboundLaneTimer:      NewLockingTimerWheel[uint32](config.tryInterval, hsTimeout(config.retries, config.tryInterval)),
 		messageMetrics:         config.messageMetrics,
 		metricInitiated:        metrics.GetOrRegisterCounter("handshake_manager.initiated", nil),
 		metricTimedOut:         metrics.GetOrRegisterCounter("handshake_manager.timed_out", nil),
@@ -144,6 +162,7 @@ func (hm *HandshakeManager) Run(ctx context.Context) {
 			hm.handleOutbound(vpnIP, true)
 		case now := <-clockSource.C:
 			hm.NextOutboundHandshakeTimerTick(now)
+			hm.NextOutboundLaneTimerTick(now)
 		}
 	}
 }
@@ -529,7 +548,13 @@ func (hm *HandshakeManager) DeleteHostInfo(hostinfo *HostInfo) {
 
 func (hm *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 	for _, addr := range hostinfo.vpnAddrs {
-		delete(hm.vpnIps, addr)
+		// Only delete the pending entry if it is actually ours. Lane
+		// handshakes never live in vpnIps, and an unconditional delete here
+		// could evict a concurrently pending base handshake for the same
+		// address.
+		if cur, ok := hm.vpnIps[addr]; ok && cur.hostinfo == hostinfo {
+			delete(hm.vpnIps, addr)
+		}
 	}
 
 	if len(hm.vpnIps) == 0 {
@@ -664,6 +689,7 @@ func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
 		v, cs.GetCredential,
 		hm.certVerifier(), func() (uint32, error) { return hm.allocateIndex(hh) },
 		true, header.HandshakeIXPSK0,
+		hm.laneAdvert(uint32(hh.hostinfo.laneIndex)),
 	)
 	if err != nil {
 		hm.f.l.Error("Failed to create handshake machine",
@@ -687,6 +713,219 @@ func (hm *HandshakeManager) buildStage0Packet(hh *HandshakeHostInfo) bool {
 	return true
 }
 
+// laneAdvert returns our multiport advert for a handshake payload, or nil
+// when multiport is disabled (which keeps the payload byte-identical to
+// vanilla). laneIndex is 0 for base handshakes and our lane number for lane
+// handshakes.
+func (hm *HandshakeManager) laneAdvert(laneIndex uint32) *handshake.LaneDetails {
+	if hm.config.laneCount == 0 {
+		return nil
+	}
+	return &handshake.LaneDetails{
+		PortCount: uint32(hm.config.lanePortCount),
+		BasePort:  uint32(hm.config.laneBasePort),
+		LaneIndex: laneIndex,
+	}
+}
+
+// maybeAllocLaneState attaches a laneState to a just-completed base tunnel
+// when both sides advertised multiport. Must run before the hostinfo becomes
+// visible in the hostmap: the data plane reads base.lanes lock-free.
+func (hm *HandshakeManager) maybeAllocLaneState(hostinfo *HostInfo, result *handshake.Result) {
+	if hm.config.laneCount == 0 || result.PeerPortCount == 0 || result.PeerLaneIndex != 0 {
+		return
+	}
+	peerPorts := result.PeerPortCount
+	if peerPorts > 256 {
+		// A certified-but-hostile peer doesn't get to size our state.
+		peerPorts = 256
+	}
+	var offset uint16
+	if len(hm.f.myVpnAddrs) > 0 && len(hostinfo.vpnAddrs) > 0 {
+		offset = lanePortOffset(hm.f.myVpnAddrs[0], hostinfo.vpnAddrs[0], uint16(peerPorts))
+	}
+	hostinfo.lanes = newLaneState(hm.config.laneCount, uint16(peerPorts), uint16(result.PeerBasePort), offset)
+}
+
+// EnsureLanes starts lane handshakes for every empty, non-pending, retry-due
+// slot of a base tunnel. Called on base handshake completion (both sides) and
+// from the connection manager's per-tunnel tick, so a dead lane re-establishes
+// within one check interval, subject to per-slot backoff.
+func (hm *HandshakeManager) EnsureLanes(base *HostInfo) {
+	ls := base.lanes
+	if ls == nil || hm.config.laneCount <= 1 {
+		return
+	}
+
+	now := time.Now()
+	var starts []int
+	ls.Lock()
+	n := min(len(ls.txLanes), hm.config.laneCount)
+	for i := 1; i < n; i++ {
+		if ls.txLanes[i].Load() != nil || ls.txPending[i] || now.Before(ls.txRetryAt[i]) {
+			continue
+		}
+		ls.txPending[i] = true
+		starts = append(starts, i)
+	}
+	ls.Unlock()
+
+	for _, i := range starts {
+		hm.startLaneHandshake(base, i)
+	}
+}
+
+// startLaneHandshake initiates lane i of base: a full Noise handshake from
+// local socket i to the peer's advertised lane port. The caller has already
+// claimed the slot (txPending[i] = true); every failure path must release it
+// via noteLaneFailure.
+func (hm *HandshakeManager) startLaneHandshake(base *HostInfo, i int) {
+	ls := base.lanes
+
+	remote := base.GetRemote()
+	if !remote.IsValid() || ls.peerPortCount == 0 {
+		// Relay-only peer (or a zero advert that should not have allocated
+		// lanes). Retried if a direct path shows up later.
+		ls.noteLaneFailure(i)
+		return
+	}
+	target := netip.AddrPortFrom(remote.Addr(), ls.laneTargetPort(i))
+
+	hostinfo := &HostInfo{
+		vpnAddrs:        slices.Clone(base.vpnAddrs),
+		HandshakePacket: make(map[uint8][]byte, 0),
+		relayState: RelayState{
+			relays:         nil,
+			relayForByAddr: map[netip.Addr]*Relay{},
+			relayForByIdx:  map[uint32]*Relay{},
+		},
+		// A private RemoteList: SetRemote must never leak lane ports into the
+		// shared lighthouse-learned cache that base handshakes broadcast to.
+		remotes:   NewRemoteList(base.vpnAddrs, nil),
+		sockIdx:   i,
+		laneIndex: uint16(i),
+		laneOwned: true,
+		parent:    base,
+	}
+
+	hh := &HandshakeHostInfo{
+		hostinfo:   hostinfo,
+		startTime:  time.Now(),
+		laneTarget: target,
+	}
+	if cs := base.ConnectionState; cs != nil && cs.myCert != nil {
+		// Pin the lane to the base tunnel's negotiated cert version rather
+		// than re-running version selection.
+		hh.initiatingVersionOverride = cs.myCert.Version()
+	}
+
+	// Build stage 0 eagerly: allocateIndex registers hh in hm.indexes so
+	// continueHandshake can find it, and gives us the key for the lane timer.
+	hh.Lock()
+	ok := hm.buildStage0Packet(hh)
+	hh.Unlock()
+	if !ok {
+		ls.noteLaneFailure(i)
+		return
+	}
+
+	hostinfo.logger(hm.l).Info("Lane handshake started",
+		"laneIndex", i,
+		"udpAddr", target,
+		"initiatorIndex", hostinfo.localIndexId,
+	)
+	hm.metricInitiated.Inc(1)
+	hm.OutboundLaneTimer.Add(hostinfo.localIndexId, hm.config.tryInterval)
+	hm.handleOutboundLane(hostinfo.localIndexId)
+}
+
+func (hm *HandshakeManager) NextOutboundLaneTimerTick(now time.Time) {
+	hm.OutboundLaneTimer.Advance(now)
+	for {
+		idx, has := hm.OutboundLaneTimer.Purge()
+		if !has {
+			break
+		}
+		hm.handleOutboundLane(idx)
+	}
+}
+
+// handleOutboundLane is handleOutbound for lane handshakes: single pinned
+// target, egress via the lane's own socket, no lighthouse and no relays.
+func (hm *HandshakeManager) handleOutboundLane(localIndex uint32) {
+	hh := hm.queryIndex(localIndex)
+	if hh == nil || !hh.hostinfo.isLane() {
+		return
+	}
+	hh.Lock()
+	defer hh.Unlock()
+
+	hostinfo := hh.hostinfo
+	if hh.counter >= hm.config.retries {
+		hostinfo.logger(hm.l).Info("Lane handshake timed out",
+			"laneIndex", hostinfo.laneIndex,
+			"udpAddr", hh.laneTarget,
+			"initiatorIndex", hostinfo.localIndexId,
+			"durationNs", time.Since(hh.startTime).Nanoseconds(),
+		)
+		hm.metricTimedOut.Inc(1)
+		hm.DeleteHostInfo(hostinfo)
+		hostinfo.parent.lanes.noteLaneFailure(int(hostinfo.laneIndex))
+		return
+	}
+	hh.counter++
+
+	stage0 := hostinfo.HandshakePacket[handshakePacketStage0]
+	hm.messageMetrics.Tx(header.Handshake, hh.machine.Subtype(), 1)
+	err := hm.f.writers[hostinfo.sockIdx].WriteTo(stage0, hh.laneTarget)
+	if err != nil {
+		hostinfo.logger(hm.l).Error("Failed to send lane handshake message",
+			"laneIndex", hostinfo.laneIndex,
+			"udpAddr", hh.laneTarget,
+			"initiatorIndex", hostinfo.localIndexId,
+			"error", err,
+		)
+	} else if hm.l.Enabled(context.Background(), slog.LevelDebug) {
+		hostinfo.logger(hm.l).Debug("Lane handshake message sent",
+			"laneIndex", hostinfo.laneIndex,
+			"udpAddr", hh.laneTarget,
+			"initiatorIndex", hostinfo.localIndexId,
+		)
+	}
+
+	hm.OutboundLaneTimer.Add(localIndex, hm.config.tryInterval*time.Duration(hh.counter))
+}
+
+// deletePendingHostInfo abandons a pending handshake. For lanes it also
+// releases the base's slot claim with failure backoff so ensureLanes can
+// retry later.
+func (hm *HandshakeManager) deletePendingHostInfo(hostinfo *HostInfo) {
+	hm.DeleteHostInfo(hostinfo)
+	if hostinfo.isLane() {
+		hostinfo.parent.lanes.noteLaneFailure(int(hostinfo.laneIndex))
+	}
+}
+
+// completeLane moves a finished lane out of the pending map and registers it
+// in the main hostmap's index maps (never Hosts). The caller publishes it to
+// the base's txLanes/peerLanes afterwards.
+func (hm *HandshakeManager) completeLane(hostinfo *HostInfo, f *Interface) {
+	hm.mainHostMap.Lock()
+	defer hm.mainHostMap.Unlock()
+	hm.Lock()
+	defer hm.Unlock()
+
+	existingRemoteIndex, found := hm.mainHostMap.RemoteIndexes[hostinfo.remoteIndexId]
+	if found && existingRemoteIndex != nil {
+		hostinfo.logger(hm.l).Info("New lane shadows existing host remoteIndex",
+			"collision", existingRemoteIndex.vpnAddrs,
+		)
+	}
+
+	hm.unlockedDeleteHostInfo(hostinfo)
+	hm.mainHostMap.unlockedAddLane(hostinfo, f)
+}
+
 // beginHandshake handles an incoming handshake packet that doesn't match any
 // existing pending handshake. It creates a new responder Machine and processes
 // the first message.
@@ -705,6 +944,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		v, cs.GetCredential,
 		hm.certVerifier(), func() (uint32, error) { return generateIndex(f.l) },
 		false, header.HandshakeIXPSK0,
+		hm.laneAdvert(0),
 	)
 	if err != nil {
 		f.l.Error("Failed to create handshake machine", "from", via, "error", err)
@@ -738,6 +978,13 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 	// Validate peer identity
 	vpnAddrs, anyVpnAddrsInCommon, ok := hm.validatePeerCert(via, remoteCert)
 	if !ok {
+		return
+	}
+
+	// A nonzero lane tag makes this a lane handshake for an existing base
+	// tunnel rather than a (possibly duplicate) tunnel of its own.
+	if result.PeerLaneIndex > 0 {
+		hm.completeLaneResponder(via, packet, response, result, vpnAddrs)
 		return
 	}
 
@@ -785,6 +1032,7 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 		hostinfo.SetRemote(via.UdpAddr)
 	}
 	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
+	hm.maybeAllocLaneState(hostinfo, result)
 
 	existing, err := hm.CheckAndComplete(hostinfo, handshakePacketStage0, f)
 	if err != nil {
@@ -794,11 +1042,145 @@ func (hm *HandshakeManager) beginHandshake(via ViaSender, packet []byte, h *head
 
 	hm.sendHandshakeResponse(via, response, hostinfo, false)
 	hostinfo.remotes.RefreshFromHandshake(vpnAddrs)
+	hm.EnsureLanes(hostinfo)
 
 	// Don't wait for UpdateWorker
 	if f.lightHouse.IsAnyLighthouseAddr(vpnAddrs) {
 		f.lightHouse.TriggerUpdate()
 	}
+}
+
+// completeLaneResponder finishes the responder side of a lane handshake:
+// associate with the base tunnel by the peer's certified vpn address, dedup
+// replays per lane, register the lane in the index maps, and reply from the
+// arrival socket. Handshakes with no live base are dropped — the initiator's
+// retry loop converges once the base exists.
+func (hm *HandshakeManager) completeLaneResponder(via ViaSender, packet, response []byte, result *handshake.Result, vpnAddrs []netip.Addr) {
+	f := hm.f
+
+	if via.IsRelayed {
+		hm.l.Debug("dropping relayed lane handshake", "vpnAddrs", vpnAddrs, "from", via)
+		return
+	}
+	if hm.config.laneCount == 0 {
+		hm.l.Debug("dropping lane handshake, multiport is disabled", "vpnAddrs", vpnAddrs, "from", via)
+		return
+	}
+
+	base := hm.mainHostMap.QueryVpnAddr(vpnAddrs[0])
+	if base == nil || base.ConnectionState == nil || base.lanes == nil {
+		hm.l.Debug("dropping lane handshake with no base tunnel",
+			"vpnAddrs", vpnAddrs, "from", via, "laneIndex", result.PeerLaneIndex)
+		return
+	}
+	ls := base.lanes
+
+	// The owner's lane index is bounded by its own advertised port count
+	// (lanes are one-per-routine and PortCount == routines on the owner).
+	laneIndex := result.PeerLaneIndex
+	if laneIndex >= uint32(ls.peerPortCount) || laneIndex > 256 {
+		hm.l.Debug("dropping lane handshake with out-of-range lane index",
+			"vpnAddrs", vpnAddrs, "from", via, "laneIndex", laneIndex)
+		return
+	}
+
+	// Per-lane replay dedup against the existing lane with the same index.
+	stage0 := packet[header.Len:]
+	var existing *HostInfo
+	ls.Lock()
+	for _, h := range ls.peerLanes {
+		if h.laneIndex == uint16(laneIndex) {
+			existing = h
+			break
+		}
+	}
+	ls.Unlock()
+	if existing != nil {
+		if bytes.Equal(stage0, existing.HandshakePacket[handshakePacketStage0]) {
+			// Stage-0 retransmit: the peer is committed to the original
+			// response's ephemeral keys, resend it from the arrival socket.
+			if msg := existing.HandshakePacket[handshakePacketStage2]; msg != nil {
+				hm.sendHandshakeResponse(via, msg, existing, true)
+			}
+			return
+		}
+		if existing.lastHandshakeTime >= result.HandshakeTime {
+			existing.logger(hm.l).Debug("dropping stale lane handshake",
+				"laneIndex", laneIndex, "from", via)
+			return
+		}
+		// Newer handshake wins; the initiator only re-initiates after it
+		// declared the old lane dead. Silent local teardown.
+		hm.mainHostMap.DeleteHostInfo(existing)
+	}
+
+	hostinfo := &HostInfo{
+		ConnectionState:   newConnectionStateFromResult(result),
+		localIndexId:      result.LocalIndex,
+		remoteIndexId:     result.RemoteIndex,
+		vpnAddrs:          vpnAddrs,
+		HandshakePacket:   make(map[uint8][]byte, 0),
+		lastHandshakeTime: result.HandshakeTime,
+		relayState: RelayState{
+			relays:         nil,
+			relayForByAddr: map[netip.Addr]*Relay{},
+			relayForByIdx:  map[uint32]*Relay{},
+		},
+		// Private RemoteList: lane roaming must not touch the shared
+		// lighthouse-learned cache.
+		remotes:   NewRemoteList(vpnAddrs, nil),
+		sockIdx:   via.SockIdx,
+		laneIndex: uint16(laneIndex),
+		laneOwned: false,
+		parent:    base,
+	}
+
+	// packet aliases the listener's incoming buffer, so this copy must stay.
+	hostinfo.HandshakePacket[handshakePacketStage0] = make([]byte, len(stage0))
+	copy(hostinfo.HandshakePacket[handshakePacketStage0], stage0)
+	if response != nil {
+		hostinfo.HandshakePacket[handshakePacketStage2] = response
+	}
+	hostinfo.SetRemote(via.UdpAddr)
+	hostinfo.buildNetworks(f.myVpnNetworksTable, result.RemoteCert.Certificate)
+
+	// Index-collision checks, mirroring CheckAndComplete minus the Hosts
+	// dedup (lanes are keyed by (base, laneIndex), not by address).
+	hm.mainHostMap.Lock()
+	hm.Lock()
+	if existingIndex, found := hm.mainHostMap.Indexes[hostinfo.localIndexId]; found && existingIndex != hostinfo {
+		hm.Unlock()
+		hm.mainHostMap.Unlock()
+		hostinfo.logger(hm.l).Error("Failed to add lane due to localIndex collision", "laneIndex", laneIndex)
+		return
+	}
+	if existingPendingIndex, found := hm.indexes[hostinfo.localIndexId]; found && existingPendingIndex.hostinfo != hostinfo {
+		hm.Unlock()
+		hm.mainHostMap.Unlock()
+		hostinfo.logger(hm.l).Error("Failed to add lane due to pending localIndex collision", "laneIndex", laneIndex)
+		return
+	}
+	if existingRemoteIndex, found := hm.mainHostMap.RemoteIndexes[hostinfo.remoteIndexId]; found && existingRemoteIndex != nil {
+		hostinfo.logger(hm.l).Info("New lane shadows existing host remoteIndex",
+			"collision", existingRemoteIndex.vpnAddrs,
+		)
+	}
+	hm.mainHostMap.unlockedAddLane(hostinfo, f)
+	hm.Unlock()
+	hm.mainHostMap.Unlock()
+
+	ls.Lock()
+	ls.peerLanes = append(ls.peerLanes, hostinfo)
+	ls.Unlock()
+
+	hostinfo.logger(hm.l).Info("Lane handshake received",
+		"laneIndex", laneIndex,
+		"from", via,
+		"initiatorIndex", result.RemoteIndex,
+		"responderIndex", result.LocalIndex,
+	)
+
+	hm.sendHandshakeResponse(via, response, hostinfo, false)
 }
 
 // continueHandshake feeds an incoming packet to an existing pending handshake Machine.
@@ -821,6 +1203,14 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	}
 
 	hostinfo := hh.hostinfo
+	if hostinfo.isLane() && via.IsRelayed {
+		// Lane handshakes are direct-only; a relayed continuation is a stray
+		// or a protocol violation. Drop without failing the machine so the
+		// direct stage-2 can still land.
+		f.l.Debug("dropping relayed lane handshake continuation",
+			"vpnAddrs", hostinfo.vpnAddrs, "from", via)
+		return
+	}
 	if !via.IsRelayed {
 		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, via.UdpAddr.Addr()) {
 			f.l.Debug("lighthouse.remote_allow_list denied incoming handshake",
@@ -833,7 +1223,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	if machine == nil {
 		f.l.Error("No handshake machine available for continuation",
 			"vpnAddrs", hostinfo.vpnAddrs, "from", via)
-		hm.DeleteHostInfo(hostinfo)
+		hm.deletePendingHostInfo(hostinfo)
 		return
 	}
 
@@ -843,7 +1233,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 		if machine.Failed() {
 			f.l.Warn("Failed to process handshake packet, abandoning",
 				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
-			hm.DeleteHostInfo(hostinfo)
+			hm.deletePendingHostInfo(hostinfo)
 		} else {
 			f.l.Debug("Failed to process handshake packet",
 				"vpnAddrs", hostinfo.vpnAddrs, "from", via, "error", err)
@@ -866,7 +1256,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	if remoteCert == nil {
 		f.l.Error("Handshake completed without peer certificate",
 			"vpnAddrs", hostinfo.vpnAddrs, "from", via)
-		hm.DeleteHostInfo(hostinfo)
+		hm.deletePendingHostInfo(hostinfo)
 		return
 	}
 
@@ -900,7 +1290,7 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 				"issuer", remoteCert.Certificate.Issuer(),
 				"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
 			)
-			hm.DeleteHostInfo(hostinfo)
+			hm.deletePendingHostInfo(hostinfo)
 			return
 		}
 		vpnAddrs[i] = network.Addr()
@@ -923,6 +1313,15 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 			"issuer", remoteCert.Certificate.Issuer(),
 			"handshake", m{"stage": uint64(machine.MessageIndex()), "style": header.SubTypeName(header.Handshake, machine.Subtype())},
 		)
+
+		if hostinfo.isLane() {
+			// No restart dance for lanes: close what the peer completed,
+			// release the slot with backoff, and let ensureLanes retry.
+			hm.deletePendingHostInfo(hostinfo)
+			hostinfo.vpnAddrs = vpnAddrs
+			f.sendCloseTunnel(hostinfo)
+			return
+		}
 
 		hm.DeleteHostInfo(hostinfo)
 		hm.StartHandshake(hostinfo.vpnAddrs[0], func(newHH *HandshakeHostInfo) {
@@ -958,7 +1357,31 @@ func (hm *HandshakeManager) continueHandshake(via ViaSender, hh *HandshakeHostIn
 	hostinfo.vpnAddrs = vpnAddrs
 	hostinfo.buildNetworks(f.myVpnNetworksTable, remoteCert.Certificate)
 
+	if hostinfo.isLane() {
+		hm.completeLane(hostinfo, f)
+
+		// Publish to the data plane only after the lane is registered and its
+		// ConnectionState is fully populated; a routine that Loads non-nil
+		// must always see a usable tunnel.
+		ls := hostinfo.parent.lanes
+		i := int(hostinfo.laneIndex)
+		ls.Lock()
+		if i < len(ls.txPending) {
+			ls.txPending[i] = false
+			ls.txFails[i] = 0
+		}
+		ls.Unlock()
+		if i < len(ls.txLanes) {
+			ls.txLanes[i].Store(hostinfo)
+		}
+
+		f.metricHandshakes.Update(duration)
+		return
+	}
+
+	hm.maybeAllocLaneState(hostinfo, result)
 	hm.Complete(hostinfo, f)
+	hm.EnsureLanes(hostinfo)
 
 	if len(hh.packetStore) > 0 {
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
@@ -1064,7 +1487,10 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 
 	if !via.IsRelayed {
 		fields := append(logFields, "from", via)
-		err := f.outside.WriteTo(msg, via.UdpAddr)
+		// Reply from the socket the handshake arrived on so the initiator sees
+		// the source port it targeted. Identical to f.outside under vanilla
+		// config (all writers share one port); required for multiport lanes.
+		err := f.writers[via.SockIdx].WriteTo(msg, via.UdpAddr)
 		if err != nil {
 			f.l.Error("Failed to send handshake message", append(fields, "error", err)...)
 		} else {

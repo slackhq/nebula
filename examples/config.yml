@@ -169,6 +169,40 @@ listen:
 # This option is only supported on Linux.
 #routines: 1
 
+# EXPERIMENTAL: multiport lanes give each pair of hosts multiple underlay UDP
+# flows so overlay traffic is no longer bottlenecked by a single 5-tuple
+# (one ECMP path, one NIC RSS queue, one per-flow policer). Socket i binds
+# listen.port+i instead of sharing one port via SO_REUSEPORT, and one extra
+# tunnel ("lane") per routine is negotiated with capable peers: lane i
+# handshakes from local port listen.port+i to the peer's advertised
+# base+((i + pair_offset) mod peer_ports), where pair_offset is a per-pair
+# hash that spreads many small peers across a big peer's whole port range.
+# Each lane is a full Noise session with its own
+# keys, nonce counter and replay window, so flows taking different paths
+# never fight over shared replay state.
+#
+# Peers negotiate lanes in the handshake; vanilla peers get a single normal
+# tunnel. All control traffic (handshakes, lighthouse, punching, relays) and
+# the data fallback stay on the base tunnel/port. Lanes are established after
+# the base tunnel comes up, are kept alive with their own keepalives, and
+# traffic falls back to the base tunnel while a lane is down.
+#
+# Requirements: routines > 1, Linux, and the port range
+# [listen.port, listen.port+routines-1] reachable through firewalls on both
+# sides (peers behind NAT fall back to the base tunnel). With listen.port 0
+# the base port is dynamic and the next routines-1 ports above it are
+# claimed. Enabled by default when the requirements hold; degrades to a
+# single port otherwise. Not reloadable.
+#multiport:
+  # Bind `routines` consecutive UDP ports and negotiate lanes with peers.
+  #enabled: true
+  # How many lanes to run, counting the base tunnel as lane 0. 0 (default)
+  # means one per routine. Lowering this bounds how many extra tunnels each
+  # peer pair maintains (useful on a big server with many peers); routines
+  # beyond the lane count share the configured lanes round-robin, so TX still
+  # spreads across `lanes` underlay flows rather than piling onto the base.
+  #lanes: 0
+
 punchy:
   # Continues to punch inbound/outbound at a regular interval to avoid expiration of firewall nat mappings
   # This setting is reloadable.

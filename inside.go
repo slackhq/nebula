@@ -10,12 +10,11 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/noiseutil"
-	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 )
 
-func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packet, nb []byte, sendBatch batch.TxBatcher, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packet, nb []byte, tx *txQueue, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
 	// borrowed: pkt.Bytes is owned by the originating tio.Queue and is
 	// only valid until the next Read on that queue. Every consumer below
 	// (parse, self-forward, handshake cache, sendInsideMessage) reads it
@@ -107,7 +106,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 
 	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
-		f.sendInsideMessage(hostinfo, pkt, nb, sendBatch, rejectBuf, q)
+		f.sendInsideMessage(hostinfo, pkt, nb, tx)
 	} else {
 		f.rejectInside(packet, rejectBuf, q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
@@ -153,12 +152,18 @@ func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, s
 // scratch arena: SegmentSuperpacket builds each segment's plaintext in
 // segScratch[:segLen] in turn, and we encrypt directly into a fresh
 // SendBatch slot.
-func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []byte, sendBatch batch.TxBatcher, rejectBuf []byte, q int) {
+//
+// hostinfo is always the base tunnel (the hostmap resolves by vpn address);
+// when routine q has an established lane to this peer, the direct path swaps
+// to the lane's session and socket below. Relay and base traffic stays on
+// tx.base (socket 0).
+func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []byte, tx *txQueue) {
 	ci := hostinfo.ConnectionState
 	if ci.eKey == nil {
 		return
 	}
 
+	sendBatch := tx.base
 	remote := hostinfo.GetRemote()
 	ecnEnabled := f.ecnEnabled.Load()
 	if hostinfo.lastRebindCount != f.rebindCount {
@@ -224,6 +229,21 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 		return
 	}
 
+	// Direct path: prefer this routine's lane tunnel when it is established.
+	// The pointer is only published once the lane's ConnectionState is fully
+	// populated, so a non-nil Load is always usable. On lane death the slot
+	// CAS-clears and traffic falls back to the base tunnel instantly.
+	if ls := hostinfo.lanes; ls != nil && tx.laneSlot < len(ls.txLanes) {
+		if lane := ls.txLanes[tx.laneSlot].Load(); lane != nil {
+			if lci := lane.ConnectionState; lci != nil && lci.eKey != nil {
+				hostinfo = lane
+				ci = lci
+				remote = lane.GetRemote()
+				sendBatch = tx.lane
+			}
+		}
+	}
+
 	err := tio.SegmentSuperpacket(pkt, func(seg []byte) error {
 		// header + plaintext + AEAD tag (16 bytes for both AES-GCM and ChaCha20-Poly1305)
 		scratch := sendBatch.Reserve(header.Len + len(seg) + 16)
@@ -279,7 +299,7 @@ func (f *Interface) rejectInside(packet []byte, out []byte, q int) {
 	}
 }
 
-func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *HostInfo, nb, rejectBuf []byte, q int) {
+func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *HostInfo, nb, rejectBuf []byte) {
 	if !f.firewall.InboundSendReject {
 		return
 	}
@@ -302,7 +322,7 @@ func (f *Interface) rejectOutside(packet []byte, ci *ConnectionState, hostinfo *
 		return
 	}
 
-	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, out, nb, encryptBuf, q)
+	f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, out, nb, encryptBuf)
 }
 
 // Handshake will attempt to initiate a tunnel with the provided vpn address. This is a no-op if the tunnel is already established or being established
@@ -415,7 +435,7 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 		return
 	}
 
-	f.sendNoMetrics(header.Message, st, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, p, nb, out, 0)
+	f.sendNoMetrics(header.Message, st, hostinfo.ConnectionState, hostinfo, netip.AddrPort{}, p, nb, out)
 }
 
 // SendMessageToVpnAddr handles real addr:port lookup and sends to the current best known address for vpnAddr.
@@ -447,12 +467,12 @@ func (f *Interface) SendMessageToHostInfo(t header.MessageType, st header.Messag
 
 func (f *Interface) send(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, p, nb, out []byte) {
 	f.messageMetrics.Tx(t, st, 1)
-	f.sendNoMetrics(t, st, ci, hostinfo, netip.AddrPort{}, p, nb, out, 0)
+	f.sendNoMetrics(t, st, ci, hostinfo, netip.AddrPort{}, p, nb, out)
 }
 
 func (f *Interface) sendTo(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte) {
 	f.messageMetrics.Tx(t, st, 1)
-	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
+	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out)
 }
 
 func (f *Interface) prepareSendVia(via *HostInfo,
@@ -530,16 +550,23 @@ func (f *Interface) SendVia(via *HostInfo,
 		return
 	}
 
-	err = f.writers[0].WriteTo(toSend, via.GetRemote())
+	// Relay carriers are base tunnels (sockIdx 0); indexing through the
+	// carrier keeps the invariant explicit.
+	err = f.writers[via.sockIdx].WriteTo(toSend, via.GetRemote())
 	if err != nil {
 		via.logger(f.l).Info("Failed to WriteTo in sendVia", "error", err)
 	}
 }
 
-func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte, q int) {
+func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte) {
 	if ci.eKey == nil {
 		return
 	}
+	// Every packet on a tunnel egresses the tunnel's own socket. For base and
+	// vanilla tunnels sockIdx is 0 (stock behavior); for lanes it keeps
+	// keepalives, close packets and rejects on the lane's 4-tuple so the
+	// peer's spoof/roam checks accept them and the NAT entry stays warm.
+	q := hostinfo.sockIdx
 	useRelay := !remote.IsValid() && !hostinfo.GetRemote().IsValid()
 	fullOut := out
 
@@ -565,7 +592,8 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 
 	// Query our LH if we haven't since the last time we've been rebound, this will cause the remote to punch against
 	// all our addrs and enable a faster roaming.
-	if t != header.CloseTunnel && hostinfo.lastRebindCount != f.rebindCount {
+	// Lanes skip this: the base tunnel issues the one query for the peer.
+	if t != header.CloseTunnel && !hostinfo.isLane() && hostinfo.lastRebindCount != f.rebindCount {
 		//NOTE: there is an update hole if a tunnel isn't used and exactly 256 rebinds occur before the tunnel is
 		// finally used again. This tunnel would eventually be torn down and recreated if this action didn't help.
 		f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
@@ -608,6 +636,13 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 			)
 		}
 	} else {
+		if hostinfo.isLane() {
+			// A lane always has a valid remote (set from its own handshake);
+			// reaching here means the lane is broken, and lane ciphertext must
+			// never ride a relay (relays are base-tunnel-only).
+			hostinfo.logger(f.l).Error("Dropping lane packet with no valid remote")
+			return
+		}
 		// Try to send via a relay
 		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
 			relayHostInfo, relay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relayIP)
