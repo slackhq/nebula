@@ -100,7 +100,7 @@ func TestParsequery(t *testing.T) {
 	assert.Equal(t, dns.RcodeNameError, m.Rcode)
 }
 
-func Test_getDnsServerAddr(t *testing.T) {
+func Test_getDnsServerAddrs(t *testing.T) {
 	c := config.NewC(nil)
 
 	c.Settings["lighthouse"] = map[string]any{
@@ -109,7 +109,7 @@ func Test_getDnsServerAddr(t *testing.T) {
 			"port": "1",
 		},
 	}
-	assert.Equal(t, "0.0.0.0:1", getDnsServerAddr(c))
+	assert.Equal(t, []string{"0.0.0.0:1"}, getDnsServerAddrs(c))
 
 	c.Settings["lighthouse"] = map[string]any{
 		"dns": map[string]any{
@@ -117,7 +117,7 @@ func Test_getDnsServerAddr(t *testing.T) {
 			"port": "1",
 		},
 	}
-	assert.Equal(t, "[::]:1", getDnsServerAddr(c))
+	assert.Equal(t, []string{"[::]:1"}, getDnsServerAddrs(c))
 
 	c.Settings["lighthouse"] = map[string]any{
 		"dns": map[string]any{
@@ -125,7 +125,7 @@ func Test_getDnsServerAddr(t *testing.T) {
 			"port": "1",
 		},
 	}
-	assert.Equal(t, "[::]:1", getDnsServerAddr(c))
+	assert.Equal(t, []string{"[::]:1"}, getDnsServerAddrs(c))
 
 	// Make sure whitespace doesn't mess us up
 	c.Settings["lighthouse"] = map[string]any{
@@ -134,7 +134,16 @@ func Test_getDnsServerAddr(t *testing.T) {
 			"port": "1",
 		},
 	}
-	assert.Equal(t, "[::]:1", getDnsServerAddr(c))
+	assert.Equal(t, []string{"[::]:1"}, getDnsServerAddrs(c))
+
+	// A list of hosts each gets joined with the shared port, in order.
+	c.Settings["lighthouse"] = map[string]any{
+		"dns": map[string]any{
+			"host": []any{"0.0.0.0", "10.0.0.1", "fd00::1"},
+			"port": "53",
+		},
+	}
+	assert.Equal(t, []string{"0.0.0.0:53", "10.0.0.1:53", "[fd00::1]:53"}, getDnsServerAddrs(c))
 }
 
 func newTestDnsServer(t *testing.T) (*dnsServer, *config.C) {
@@ -169,8 +178,8 @@ func TestDnsServer_reload_initial_disabled(t *testing.T) {
 
 	require.NoError(t, ds.reload(c, true))
 	assert.False(t, ds.enabled.Load())
-	assert.Equal(t, "127.0.0.1:0", ds.addr)
-	assert.Nil(t, ds.server)
+	assert.Equal(t, []string{"127.0.0.1:0"}, ds.addrs)
+	assert.Empty(t, ds.listeners)
 }
 
 func TestDnsServer_reload_initial_enabled(t *testing.T) {
@@ -179,9 +188,9 @@ func TestDnsServer_reload_initial_enabled(t *testing.T) {
 
 	require.NoError(t, ds.reload(c, true))
 	assert.True(t, ds.enabled.Load())
-	assert.Equal(t, "127.0.0.1:0", ds.addr)
+	assert.Equal(t, []string{"127.0.0.1:0"}, ds.addrs)
 	// initial never starts a runner; that's Control.Start's job
-	assert.Nil(t, ds.server)
+	assert.Empty(t, ds.listeners)
 }
 
 func TestDnsServer_reload_initial_serveDnsWithoutLighthouse(t *testing.T) {
@@ -194,14 +203,39 @@ func TestDnsServer_reload_initial_serveDnsWithoutLighthouse(t *testing.T) {
 }
 
 func TestDnsServer_reload_sameAddr_noOp(t *testing.T) {
+	port := freeUDPPort(t)
 	ds, c := newTestDnsServer(t)
-	setDnsConfig(c, "127.0.0.1", "0", true, true)
-
+	setDnsConfig(c, "127.0.0.1", port, true, true)
 	require.NoError(t, ds.reload(c, true))
-	// No server running yet, no addr change. Reload should not spawn anything.
+
+	done := make(chan struct{})
+	go func() {
+		ds.Start()
+		close(done)
+	}()
+	waitForBind(t, ds)
+
+	ds.serverMu.Lock()
+	before := ds.listeners
+	ds.serverMu.Unlock()
+	require.Len(t, before, 1)
+
+	// Same address: reload must not tear down and rebuild the listener.
 	require.NoError(t, ds.reload(c, false))
 	assert.True(t, ds.enabled.Load())
-	assert.Nil(t, ds.server)
+
+	ds.serverMu.Lock()
+	after := ds.listeners
+	ds.serverMu.Unlock()
+	require.Len(t, after, 1)
+	assert.Same(t, before[0], after[0], "same-addr reload should not restart the listener")
+
+	ds.Stop()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after Stop")
+	}
 }
 
 func TestDnsServer_StartStop_lifecycle(t *testing.T) {
@@ -219,20 +253,7 @@ func TestDnsServer_StartStop_lifecycle(t *testing.T) {
 		close(done)
 	}()
 
-	waitFor(t, func() bool {
-		ds.serverMu.Lock()
-		started := ds.started
-		ds.serverMu.Unlock()
-		if started == nil {
-			return false
-		}
-		select {
-		case <-started:
-			return true
-		default:
-			return false
-		}
-	})
+	waitForBind(t, ds)
 
 	ds.Stop()
 	select {
@@ -389,6 +410,134 @@ func TestDnsServer_reload_disable_stopsRunningServer(t *testing.T) {
 	assert.False(t, ds.enabled.Load())
 }
 
+func TestDnsServer_reload_multiHost_recordsAllAddrs(t *testing.T) {
+	ds, c := newTestDnsServer(t)
+	c.Settings["lighthouse"] = map[string]any{
+		"am_lighthouse": true,
+		"serve_dns":     true,
+		"dns": map[string]any{
+			"host": []any{"10.0.0.1", "fd00::1"},
+			"port": "53",
+		},
+	}
+	require.NoError(t, ds.reload(c, true))
+	// Each host is joined with the shared port; IPv6 is bracketed.
+	assert.Equal(t, []string{"10.0.0.1:53", "[fd00::1]:53"}, ds.addrs)
+}
+
+// TestDnsServer_startListeners_multiAddr is the regression test for the
+// per-listener started-chan machinery: several servers bind, each answers
+// queries via the shared mux, and Stop tears all of them down without hanging.
+func TestDnsServer_startListeners_multiAddr(t *testing.T) {
+	ds, _ := newTestDnsServer(t)
+	ds.enabled.Store(true)
+	ds.Add("multi.example.", []netip.Addr{netip.MustParseAddr("10.9.8.7")})
+
+	addrs := []string{freeUDPPortOn(t, "127.0.0.1")}
+	if v6LoopbackAvailable() {
+		// Exercises IPv6 bracketing end-to-end (the bind-ALL shape a token
+		// with a v6 VPN address produces).
+		addrs = append(addrs, freeUDPPortOn(t, "::1"))
+	}
+
+	ds.startGen++
+	gen := ds.startGen
+	done := make(chan struct{})
+	go func() {
+		ds.startListeners(addrs, gen)
+		close(done)
+	}()
+	waitForBind(t, ds)
+	require.Len(t, ds.listeners, len(addrs))
+
+	for _, a := range addrs {
+		resp := queryDNS(t, a, "multi.example.", dns.TypeA)
+		require.NotEmpty(t, resp.Answer, "listener %s should answer", a)
+		assert.Equal(t, "10.9.8.7", resp.Answer[0].(*dns.A).A.String())
+	}
+
+	ds.Stop()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("startListeners did not return after Stop")
+	}
+}
+
+// TestDnsServer_Start_noAddrs_clearsListeners is the regression test for the
+// reload-wedge: a Start that bails before binding (here, no configured listen
+// address) must clear the defunct listeners a prior reload left behind,
+// otherwise reload sees running==true and no-ops every subsequent same-addr
+// SIGHUP, leaving DNS dead forever.
+func TestDnsServer_Start_noAddrs_clearsListeners(t *testing.T) {
+	ds, _ := newTestDnsServer(t)
+	ds.enabled.Store(true)
+	ds.addrs = nil
+	// Simulate the stale state a prior reload's shutdownListeners leaves: the
+	// slice still references now-defunct listeners.
+	ds.listeners = []*dnsListener{{server: &dns.Server{}, started: make(chan struct{})}}
+
+	ds.Start()
+
+	require.Nil(t, ds.listeners, "Start with no addrs must clear stale listeners so reload retries")
+}
+
+// TestDnsServer_startListeners_allBindsFail_clearsListeners covers the other
+// staleness path: when every expanded address fails to bind, startListeners
+// must not leave the dead listeners installed.
+func TestDnsServer_startListeners_allBindsFail_clearsListeners(t *testing.T) {
+	ds, _ := newTestDnsServer(t)
+	ds.enabled.Store(true)
+
+	// Occupy a UDP port, then try to bind it so ListenAndServe fails.
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer conn.Close()
+	busy := conn.LocalAddr().String()
+
+	ds.startGen++
+	gen := ds.startGen
+	done := make(chan struct{})
+	go func() {
+		ds.startListeners([]string{busy}, gen)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("startListeners did not return after all binds failed")
+	}
+	require.Nil(t, ds.listeners, "all-binds-failed must clear listeners so reload retries")
+}
+
+func queryDNS(t *testing.T, addr, name string, qtype uint16) *dns.Msg {
+	t.Helper()
+	m := new(dns.Msg)
+	m.SetQuestion(name, qtype)
+	c := &dns.Client{Net: "udp", Timeout: 2 * time.Second}
+	resp, _, err := c.Exchange(m, addr)
+	require.NoError(t, err)
+	return resp
+}
+
+func v6LoopbackAvailable() bool {
+	conn, err := net.ListenPacket("udp", "[::1]:0")
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+func freeUDPPortOn(t *testing.T, host string) string {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", net.JoinHostPort(host, "0"))
+	require.NoError(t, err)
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	require.NoError(t, conn.Close())
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
 func freeUDPPort(t *testing.T) string {
 	t.Helper()
 	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -402,17 +551,19 @@ func waitForBind(t *testing.T, ds *dnsServer) {
 	t.Helper()
 	waitFor(t, func() bool {
 		ds.serverMu.Lock()
-		started := ds.started
+		listeners := ds.listeners
 		ds.serverMu.Unlock()
-		if started == nil {
+		if len(listeners) == 0 {
 			return false
 		}
-		select {
-		case <-started:
-			return true
-		default:
-			return false
+		for _, ln := range listeners {
+			select {
+			case <-ln.started:
+			default:
+				return false
+			}
 		}
+		return true
 	})
 }
 
