@@ -738,3 +738,86 @@ func TestLighthouse_DeletesWork(t *testing.T) {
 	out = lh.Query(testHost)
 	assert.Nil(t, out)
 }
+
+func Test_requiredLinkMTU(t *testing.T) {
+	// tun packet + nebula header (16) + AEAD tag (16) + udp (8) + ip header
+	direct, relayed := requiredLinkMTU(1300, true)
+	assert.Equal(t, 1360, direct)
+	assert.Equal(t, 1392, relayed)
+
+	direct, relayed = requiredLinkMTU(1300, false)
+	assert.Equal(t, 1380, direct)
+	assert.Equal(t, 1412, relayed)
+}
+
+func Test_checkLocalLinkMTU(t *testing.T) {
+	lh := &LightHouse{l: test.NewLogger(), mtuWarned: make(map[mtuWarnKey]linkMTUTier)}
+	lh.tunMTU.Store(1300)
+
+	v4 := netip.MustParseAddr("192.168.1.2")
+	v6 := netip.MustParseAddr("fd00::2")
+	mkAddr := func(a netip.Addr, mtu int) localAddr {
+		return localAddr{addr: a, ifName: "test0", linkMTU: mtu}
+	}
+
+	// Plenty of room, no state recorded
+	assert.True(t, lh.checkLocalLinkMTU(mkAddr(v4, 1500)))
+	assert.Empty(t, lh.mtuWarned)
+
+	// Unknown link MTU is not classified
+	assert.True(t, lh.checkLocalLinkMTU(mkAddr(v4, 0)))
+	assert.Empty(t, lh.mtuWarned)
+
+	// Too small for even normal traffic, still advertised by default
+	assert.True(t, lh.checkLocalLinkMTU(mkAddr(v4, 1359)))
+	assert.Equal(t, linkMTUTooSmall, lh.mtuWarned[mtuWarnKey{ifName: "test0", addr: v4}])
+
+	// Fits normal traffic but not relayed traffic
+	assert.True(t, lh.checkLocalLinkMTU(mkAddr(v4, 1360)))
+	assert.Equal(t, linkMTUTooSmallForRelay, lh.mtuWarned[mtuWarnKey{ifName: "test0", addr: v4}])
+
+	// Exactly enough for relayed traffic clears the state
+	assert.True(t, lh.checkLocalLinkMTU(mkAddr(v4, 1392)))
+	assert.Empty(t, lh.mtuWarned)
+
+	// v6 addrs need 20 more bytes of headroom
+	assert.True(t, lh.checkLocalLinkMTU(mkAddr(v6, 1380)))
+	assert.Equal(t, linkMTUTooSmallForRelay, lh.mtuWarned[mtuWarnKey{ifName: "test0", addr: v6}])
+	assert.True(t, lh.checkLocalLinkMTU(mkAddr(v6, 1379)))
+	assert.Equal(t, linkMTUTooSmall, lh.mtuWarned[mtuWarnKey{ifName: "test0", addr: v6}])
+	assert.True(t, lh.checkLocalLinkMTU(mkAddr(v6, 1412)))
+	assert.Empty(t, lh.mtuWarned)
+
+	// With omit enabled, only addrs that can't fit normal traffic are dropped
+	lh.omitLowMTUAddrs.Store(true)
+	assert.False(t, lh.checkLocalLinkMTU(mkAddr(v4, 1359)))
+	assert.Equal(t, linkMTUTooSmall, lh.mtuWarned[mtuWarnKey{ifName: "test0", addr: v4}])
+	assert.True(t, lh.checkLocalLinkMTU(mkAddr(v4, 1360)))
+	assert.Equal(t, linkMTUTooSmallForRelay, lh.mtuWarned[mtuWarnKey{ifName: "test0", addr: v4}])
+	assert.False(t, lh.checkLocalLinkMTU(mkAddr(v4, 1359)))
+}
+
+func Test_lighthouseMTUConfig(t *testing.T) {
+	l := test.NewLogger()
+	myVpnNet := netip.MustParsePrefix("10.128.0.1/16")
+	nt := new(bart.Lite)
+	nt.Insert(myVpnNet)
+	cs := &CertState{
+		myVpnNetworks:      []netip.Prefix{myVpnNet},
+		myVpnNetworksTable: nt,
+	}
+
+	c := config.NewC(l)
+	lh, err := NewLightHouseFromConfig(t.Context(), l, c, cs, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1300), lh.tunMTU.Load())
+	assert.False(t, lh.omitLowMTUAddrs.Load())
+
+	c = config.NewC(l)
+	c.Settings["tun"] = map[string]any{"mtu": 8000}
+	c.Settings["lighthouse"] = map[string]any{"omit_low_mtu_addrs": true}
+	lh, err = NewLightHouseFromConfig(t.Context(), l, c, cs, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(8000), lh.tunMTU.Load())
+	assert.True(t, lh.omitLowMTUAddrs.Load())
+}

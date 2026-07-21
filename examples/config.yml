@@ -110,6 +110,15 @@ lighthouse:
     #- "1.1.1.1:4242"
     #- "1.2.3.4:0" # port will be replaced with the real listening port
 
+  # Locally discovered addresses are checked against the MTU of the link they were found on. If the link cannot fit
+  # a full-size packet from the nebula tun device (`tun.mtu` plus encapsulation overhead, which is larger for relayed
+  # traffic) without fragmenting, a warning is logged.
+  # When omit_low_mtu_addrs is true, addresses whose links cannot fit normal nebula traffic are dropped from
+  # lighthouse reports entirely.
+  # Addresses that can fit normal nebula traffic but not relayed traffic are always still advertised.
+  # This does not apply to addresses listed in advertise_addrs.
+  #omit_low_mtu_addrs: false
+
   # EXPERIMENTAL: This option may change or disappear in the future.
   # This setting allows us to "guess" what the remote might be for a host
   # while we wait for the lighthouse response.
