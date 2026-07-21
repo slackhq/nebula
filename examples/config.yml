@@ -146,6 +146,14 @@ listen:
   # Default true; set to false to leave WDF in charge of inbound decisions on the listener port. Not reloadable.
   #windows_bypass_wdf: true
 
+  # On macOS only
+  # macOS scopes the udp socket to the interface it was created on, so moving between networks (wifi to wired,
+  # office to home) leaves Nebula sending out an interface that no longer has a route. When true, Nebula watches
+  # the routing socket and rebinds the listener once the change settles.
+  # iOS does not use this, the host app drives the same rebind itself.
+  # Default true. This setting is reloadable.
+  #rebind_on_network_change: true
+
   # By default, Nebula replies to packets it has no tunnel for with a "recv_error" packet. This packet helps speed up reconnection
   # in the case that Nebula on either side did not shut down cleanly. This response can be abused as a way to discover if Nebula is running
   # on a host though. This option lets you configure if you want to send "recv_error" packets always, never, or only to private network remotes.
