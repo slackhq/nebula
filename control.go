@@ -52,6 +52,7 @@ type Control struct {
 	sshStart               func()
 	statsStart             func()
 	dnsStart               func()
+	hostQueryStart         func()
 	lighthouseStart        func()
 	connectionManagerStart func(context.Context)
 }
@@ -103,6 +104,9 @@ func (c *Control) Start() error {
 	}
 	if c.dnsStart != nil {
 		go c.dnsStart()
+	}
+	if c.hostQueryStart != nil {
+		go c.hostQueryStart()
 	}
 	if c.connectionManagerStart != nil {
 		go c.connectionManagerStart(c.ctx)

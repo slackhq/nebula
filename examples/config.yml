@@ -223,6 +223,38 @@ punchy:
   # Overriding this to "" is the same as "/" and will allow overwriting any path on the host.
   #sandbox_dir: /var/tmp/nebula-debug
 
+# EXPERIMENTAL: this feature may change or disappear in the future.
+# host_query exposes a small local HTTP+JSON API that lets other programs on
+# this machine resolve a vpn address to its certificate identity (name, vpn
+# addresses, groups, fingerprint, validity), e.g. for making authorization
+# decisions about an inbound connection:
+#   GET /v1/host?addr=<vpn addr>  - identity of the host owning the address: a
+#     peer with an active tunnel, or this node itself. `addr` may include a
+#     port (`192.168.100.7:54321`), which is ignored, so a connection's remote
+#     address can be passed through as is. Returns 404 when the address is
+#     unknown or has no active tunnel.
+#   GET /v1/self                  - this node's own identity.
+# Identity answers can be trusted because nebula drops inbound packets whose
+# source vpn address is not contained in the sender's certificate, so the
+# source address of a connection arriving over the nebula interface is
+# guaranteed to map to the certificate reported here.
+# There is no authentication in this API; restrict access with unix socket
+# file permissions or by listening on a loopback address. Do NOT use a
+# non-loopback tcp address unless you intend to let everything that can reach
+# it query host identities.
+# This whole section is reloadable.
+#host_query:
+  # Toggles the feature
+  #enabled: false
+  # listen accepts a unix socket path or a tcp host:port:
+  #listen: unix:///var/run/nebula-host-query.sock
+  #listen: 127.0.0.1:8085
+  # File mode for the unix socket, as an octal string. Ignored for tcp.
+  # The socket is created by nebula's user; to grant a group of local services
+  # access, place the socket in a directory with appropriate permissions
+  # (e.g. a systemd RuntimeDirectory) and relax this to "0660".
+  #socket_mode: "0600"
+
 # EXPERIMENTAL: relay support for networks that can't establish direct connections.
 relay:
   # Relays are a list of Nebula IP's that peers can use to relay packets to me.
