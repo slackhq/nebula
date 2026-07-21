@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 	"golang.org/x/sys/unix"
 )
 
@@ -177,12 +179,12 @@ func TestWatchRouteSocketDropsRatherThanBlocks(t *testing.T) {
 	assert.Len(t, changes, 1, "the pending report should have coalesced, not queued")
 }
 
-// TestWatchNetworkChangesStopsWithContext covers the exported path against a real routing socket, including that
+// TestWatchNetworkChangesStopsWithContext covers the detection path against a real routing socket, including that
 // cancelling the context closes the channel so a ranging caller falls out of its loop.
 func TestWatchNetworkChangesStopsWithContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	changes, err := WatchNetworkChanges(ctx, test.NewLogger())
+	changes, err := watchNetworkChanges(ctx, test.NewLogger())
 	require.NoError(t, err)
 	require.NotNil(t, changes, "darwin should support watching")
 
@@ -199,4 +201,44 @@ func TestWatchNetworkChangesStopsWithContext(t *testing.T) {
 	case <-time.After(time.Second * 5):
 		t.Fatal("cancelling the context should close the changes channel")
 	}
+}
+
+// TestNetworkChangeMonitorStopsWithContext drives the whole monitor against a real routing socket: Start must block
+// watching, and cancelling the context (which is all Control does on shutdown, it never stops the monitor directly)
+// must return it and clean up the watch goroutines.
+func TestNetworkChangeMonitorStopsWithContext(t *testing.T) {
+	// IgnoreCurrent because other tests in this package leave readers running; we only care about what this test
+	// leaks itself.
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	l := test.NewLogger()
+	c := config.NewC(l)
+	require.NoError(t, c.LoadString("listen:\n  rebind_on_network_change: true\n"))
+	m := NewNetworkChangeMonitor(ctx, l, c, func() {})
+
+	done := make(chan struct{})
+	go func() {
+		m.Start()
+		close(done)
+	}()
+
+	// Start should be sitting on the routing socket, not have fallen out. If it returned early it either failed to
+	// watch or no-op'd, both of which we want to catch.
+	select {
+	case <-done:
+		t.Fatal("Start returned instead of watching")
+	case <-time.After(time.Millisecond * 250):
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second * 5):
+		t.Fatal("Start did not return after the context was cancelled")
+	}
+
+	// Starting again after the context is dead must not open anything.
+	m.Start()
 }
