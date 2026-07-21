@@ -58,6 +58,7 @@ func runTestHandshake(t *testing.T) (initR, respR *handshake.Result) {
 		cert.Version2, initCreds, verifier,
 		func() (uint32, error) { return 1000, nil },
 		true, header.HandshakeIXPSK0,
+		nil,
 	)
 	require.NoError(t, err)
 
@@ -65,6 +66,7 @@ func runTestHandshake(t *testing.T) (initR, respR *handshake.Result) {
 		cert.Version2, respCreds, verifier,
 		func() (uint32, error) { return 2000, nil },
 		false, header.HandshakeIXPSK0,
+		nil,
 	)
 	require.NoError(t, err)
 

@@ -43,10 +43,13 @@ type InterfaceConfig struct {
 	DropLocalBroadcast bool
 	DropMulticast      bool
 	routines           int
-	MessageMetrics     *MessageMetrics
-	version            string
-	relayManager       *relayManager
-	punchy             *Punchy
+	// Multiport means writers[i] is bound to listen.port+i (not a shared
+	// SO_REUSEPORT port) and lane tunnels are negotiated with capable peers.
+	Multiport      bool
+	MessageMetrics *MessageMetrics
+	version        string
+	relayManager   *relayManager
+	punchy         *Punchy
 
 	tryPromoteEvery uint32
 	reQueryEvery    uint32
@@ -87,6 +90,7 @@ type Interface struct {
 	dropLocalBroadcast    bool
 	dropMulticast         bool
 	routines              int
+	multiport             bool
 	disconnectInvalid     atomic.Bool
 	closed                atomic.Bool
 	// cpuAffinity, when non-empty, names the CPUs each TUN reader goroutine
@@ -217,6 +221,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		dropLocalBroadcast:    c.DropLocalBroadcast,
 		dropMulticast:         c.DropMulticast,
 		routines:              c.routines,
+		multiport:             c.Multiport,
 		version:               c.version,
 		writers:               make([]udp.Conn, c.routines),
 		batchers:              make([]*batch.MultiCoalescer, c.routines),
@@ -276,7 +281,10 @@ func (f *Interface) activate() error {
 		"fips140Enforced", fips140.Enforced(),
 	)
 
-	if f.routines > 1 && !f.outside.SupportsMultipleReaders() {
+	// Under multiport each socket has exactly one reader on its own port, so
+	// the shared-port multi-reader capability is irrelevant (and main.go
+	// already hard-errored on unsupported platforms).
+	if f.routines > 1 && !f.multiport && !f.outside.SupportsMultipleReaders() {
 		f.routines = 1
 		f.l.Warn("multiple udp readers are not supported on this platform, falling back to a single routine")
 	}
@@ -289,6 +297,11 @@ func (f *Interface) activate() error {
 		return err
 	}
 	if len(queues) < f.routines {
+		if f.multiport {
+			// The lane sockets are already bound one-per-routine; shrinking
+			// the routine count would leave bound ports with no reader.
+			return fmt.Errorf("multiport requires %d tun queues, device provided %d", f.routines, len(queues))
+		}
 		// TODO: this clamp is only safe because it is unreachable when the
 		// udp side has multiple readers (linux Queues opens exactly n or
 		// errors; every other platform already clamped routines to 1 above).
@@ -389,7 +402,7 @@ func (f *Interface) listenOut(i int) {
 	rxc := newRxContext(f, i)
 
 	listener := func(fromUdpAddr netip.AddrPort, payload []byte) {
-		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, payload, rxc)
+		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr, SockIdx: i}, payload, rxc)
 	}
 
 	flusher := func() {
@@ -431,6 +444,35 @@ func (f *Interface) pinThisThread(i int) {
 	}
 }
 
+// txQueue is the per-routine TX state owned by one listenIn goroutine. lane
+// is bound to the routine's own socket and carries lane-tunnel data; base is
+// bound to socket 0 and carries base-tunnel and relay data, which must keep
+// the base source port (a vanilla peer would otherwise see per-routine source
+// ports and roam-thrash). The two alias when multiport is off or on routine 0.
+// Concurrent sendmmsg on the shared socket-0 fd is safe: a flow is pinned to
+// one routine by tun steering, so per-flow wire order still holds.
+type txQueue struct {
+	lane *batch.SendBatch
+	base *batch.SendBatch
+}
+
+func (tx *txQueue) full() bool {
+	if tx.lane.Len() >= batch.SendBatchCap {
+		return true
+	}
+	return tx.base != tx.lane && tx.base.Len() >= batch.SendBatchCap
+}
+
+// flush drains base before lane so that when a flow moves from the base
+// tunnel onto a freshly established lane mid-window, its packets still leave
+// this host in encryption order.
+func (tx *txQueue) flush(f *Interface, i int) {
+	if tx.base != tx.lane {
+		f.flushSendBatch(tx.base, 0)
+	}
+	f.flushSendBatch(tx.lane, i)
+}
+
 func (f *Interface) listenIn(queue tio.Queue, i int) {
 	// Pinning this thread (and goroutine) to a single CPU keeps every sendmmsg from this goroutine going through the
 	// same TX ring on the nic, so the wire sees per-flow order. Skip entirely when tun.pin_threads is false.
@@ -441,6 +483,10 @@ func (f *Interface) listenIn(queue tio.Queue, i int) {
 	rejectBuf := make([]byte, mtu)
 	arenaSize := batch.SendBatchCap * (udp.MTU + 32)
 	sb := batch.NewSendBatch(f.writers[i], batch.SendBatchCap, arenaSize)
+	tx := &txQueue{lane: sb, base: sb}
+	if f.multiport && i != 0 {
+		tx.base = batch.NewSendBatch(f.writers[0], batch.SendBatchCap, arenaSize)
+	}
 	fwPacket := &firewall.ParsedPacket{}
 	nb := make([]byte, 12, 12)
 
@@ -458,15 +504,15 @@ func (f *Interface) listenIn(queue tio.Queue, i int) {
 		}
 
 		for _, pkt := range pkts {
-			f.consumeInsidePacket(pkt, fwPacket, nb, sb, rejectBuf, i, conntrackCache.Get())
+			f.consumeInsidePacket(pkt, fwPacket, nb, tx, rejectBuf, i, conntrackCache.Get())
 			// Flush incrementally once a full sendmmsg batch has
 			// accumulated so the first packets of a deep read drain
 			// hit the wire while the rest are still being encrypted.
-			if sb.Len() >= batch.SendBatchCap {
-				f.flushSendBatch(sb, i)
+			if tx.full() {
+				tx.flush(f, i)
 			}
 		}
-		f.flushSendBatch(sb, i)
+		tx.flush(f, i)
 	}
 
 	f.l.Debug("overlay reader is done", "reader", i)

@@ -444,6 +444,7 @@ func TestMachineThreeMessagePattern(t *testing.T) {
 		initCS.getCredential, v,
 		func() (uint32, error) { return 1000, nil },
 		true, header.HandshakeXXPSK0,
+		nil,
 	)
 	require.NoError(t, err)
 
@@ -452,6 +453,7 @@ func TestMachineThreeMessagePattern(t *testing.T) {
 		respCS.getCredential, v,
 		func() (uint32, error) { return 2000, nil },
 		false, header.HandshakeXXPSK0,
+		nil,
 	)
 	require.NoError(t, err)
 

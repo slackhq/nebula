@@ -67,6 +67,9 @@ type ControlHostInfo struct {
 	CurrentRemote          netip.AddrPort   `json:"currentRemote"`
 	CurrentRelaysToMe      []netip.Addr     `json:"currentRelaysToMe"`
 	CurrentRelaysThroughMe []netip.Addr     `json:"currentRelaysThroughMe"`
+	IsLane                 bool             `json:"isLane,omitempty"`
+	LaneIndex              uint16           `json:"laneIndex,omitempty"`
+	SockIdx                int              `json:"sockIdx,omitempty"`
 }
 
 // Start actually runs nebula, this is a nonblocking call.
@@ -202,10 +205,15 @@ func (c *Control) RebindUDPServer() {
 		return
 	}
 
+	// Every socket needs rebinding, not just the base: with multiport each one is bound to its own lane port, and
+	// even without it the surplus SO_REUSEPORT sockets stay pinned to the interface we came up on otherwise.
+	//
 	// A failure here means we are likely still pinned to the interface we came up on, so the rest of this is
 	// unlikely to help. Say so instead of silently carrying on as if we rebound.
-	if err := c.f.outside.Rebind(); err != nil {
-		c.l.Error("Failed to rebind udp socket", "error", err)
+	for i, w := range c.f.writers {
+		if err := w.Rebind(); err != nil {
+			c.l.Error("Failed to rebind udp socket", "error", err, "writer", i)
+		}
 	}
 
 	// Trigger a lighthouse update, useful for mobile clients that should have an update interval of 0
@@ -357,6 +365,11 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	// Grab the hostMap lock to access the Hosts map
 	c.f.hostMap.Lock()
 	for _, relayHost := range c.f.hostMap.Indexes {
+		// Lanes ride along with their base tunnel's shutdown cascade; closing
+		// them individually would race the cascade's identity-checked deletes.
+		if relayHost.isLane() {
+			continue
+		}
 		if _, ok := relayingHosts[relayHost.vpnAddrs[0]]; !ok {
 			hostInfos = append(hostInfos, relayHost)
 		}
@@ -385,6 +398,9 @@ func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {
 		CurrentRelaysToMe:      h.relayState.CopyRelayIps(),
 		CurrentRelaysThroughMe: h.relayState.CopyRelayForIps(),
 		CurrentRemote:          h.GetRemote(),
+		IsLane:                 h.isLane(),
+		LaneIndex:              h.laneIndex,
+		SockIdx:                h.sockIdx,
 	}
 
 	for i, a := range h.vpnAddrs {

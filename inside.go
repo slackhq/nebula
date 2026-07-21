@@ -11,12 +11,11 @@ import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
 	"github.com/slackhq/nebula/noiseutil"
-	"github.com/slackhq/nebula/overlay/batch"
 	"github.com/slackhq/nebula/overlay/tio"
 	"github.com/slackhq/nebula/routing"
 )
 
-func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.ParsedPacket, nb []byte, sendBatch *batch.SendBatch, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.ParsedPacket, nb []byte, tx *txQueue, rejectBuf []byte, q int, localCache firewall.ConntrackCache) {
 	// borrowed: pkt.Bytes is owned by the originating tio.Queue and is
 	// only valid until the next Read on that queue. Every consumer below
 	// (parse, self-forward, handshake cache, sendInsideMessage) reads it
@@ -111,7 +110,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Parse
 
 	dropReason := f.firewall.Drop(fwPacket.Packet, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
-		f.sendInsideMessage(hostinfo, pkt, nb, sendBatch)
+		f.sendInsideMessage(hostinfo, pkt, nb, tx, q)
 	} else {
 		f.rejectInside(packet, rejectBuf, q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
@@ -154,11 +153,19 @@ func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, s
 // kernel-supplied superpacket bytes never get written into a separate
 // scratch arena: SegmentSuperpacket builds each segment's plaintext in
 // segScratch[:segLen] in turn, and we encrypt directly into a fresh SendBatch slot.
-func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []byte, sendBatch *batch.SendBatch) {
+//
+// hostinfo is always the base tunnel (the hostmap resolves by vpn address);
+// when routine q has an established lane to this peer, the direct path swaps
+// to the lane's session and socket below. Relay and base traffic stays on
+// tx.base (socket 0).
+func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []byte, tx *txQueue, q int) {
 	ci := hostinfo.ConnectionState
 	if ci.eKey == nil {
 		return
 	}
+
+	// Base and relay traffic stays on socket 0; the direct path may swap to tx.lane below.
+	sendBatch := tx.base
 
 	// One traffic-out mark covers every segment of the superpacket; doing it
 	// per segment in sendInsideEncrypt paid an atomic store up to ~45 extra
@@ -220,6 +227,21 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 			hostinfo.logger(f.l).Error("Failed to segment superpacket for relay send", "error", err)
 		}
 		return
+	}
+
+	// Direct path: prefer this routine's lane tunnel when it is established.
+	// The pointer is only published once the lane's ConnectionState is fully
+	// populated, so a non-nil Load is always usable. On lane death the slot
+	// CAS-clears and traffic falls back to the base tunnel instantly.
+	if ls := hostinfo.lanes; ls != nil && q < len(ls.txLanes) {
+		if lane := ls.txLanes[q].Load(); lane != nil {
+			if lci := lane.ConnectionState; lci != nil && lci.eKey != nil {
+				hostinfo = lane
+				ci = lci
+				remote = lane.GetRemote()
+				sendBatch = tx.lane
+			}
+		}
 	}
 
 	err := tio.SegmentSuperpacket(pkt, func(seg []byte) error {
@@ -515,16 +537,33 @@ func (f *Interface) SendVia(via *HostInfo, relay *Relay, ad, nb, out []byte, noc
 		return
 	}
 
-	err = f.writers[q].WriteTo(toSend, via.GetRemote())
+	// Relay carriers are base tunnels (sockIdx 0); indexing through the carrier keeps the invariant explicit.
+	err = f.writers[f.egressSock(via, q)].WriteTo(toSend, via.GetRemote())
 	if err != nil {
 		via.logger(f.l).Info("Failed to WriteTo in sendVia", "error", err)
 	}
+}
+
+// egressSock picks the socket a tunnel packet leaves from.
+//
+// With multiport the tunnel's own sockIdx is authoritative: a lane must egress the lane's 4-tuple so the peer's
+// spoof/roam checks accept keepalives, close packets and rejects and the NAT entry stays warm, and a base or relay
+// carrier must egress socket 0 so a vanilla peer never sees per-routine source ports.
+//
+// Without multiport every socket shares one port under SO_REUSEPORT, so the source address is identical either way and
+// we keep q, the socket the triggering packet arrived on, to avoid contending on socket 0's fd.
+func (f *Interface) egressSock(hostinfo *HostInfo, q int) int {
+	if f.multiport {
+		return hostinfo.sockIdx
+	}
+	return q
 }
 
 func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte, q int) {
 	if ci.eKey == nil {
 		return
 	}
+	q = f.egressSock(hostinfo, q)
 	useRelay := !remote.IsValid() && !hostinfo.GetRemote().IsValid()
 	fullOut := out
 
@@ -556,7 +595,10 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 	// A closing tunnel is torn down right after this, so skip the connection manager entirely: no point recording
 	// traffic or asking the lighthouse for a punch. Otherwise, if we rebound since this tunnel last sent, ask the
 	// lighthouse to get the far side punching at us again.
-	if t != header.CloseTunnel && f.connectionManager.Out(hostinfo) {
+	//
+	// isLane is checked last on purpose: a lane still needs its Out() traffic recorded for the liveness decision, it
+	// just shouldn't issue the lighthouse query. The base tunnel issues the one query for the peer.
+	if t != header.CloseTunnel && f.connectionManager.Out(hostinfo) && !hostinfo.isLane() {
 		f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
 			f.l.Debug("Lighthouse update triggered for punch due to rebind epoch",
@@ -596,6 +638,13 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 			)
 		}
 	} else {
+		if hostinfo.isLane() {
+			// A lane always has a valid remote (set from its own handshake);
+			// reaching here means the lane is broken, and lane ciphertext must
+			// never ride a relay (relays are base-tunnel-only).
+			hostinfo.logger(f.l).Error("Dropping lane packet with no valid remote")
+			return
+		}
 		// Try to send via a relay
 		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
 			relayHostInfo, relay, err := f.hostMap.QueryVpnAddrsRelayFor(hostinfo.vpnAddrs, relayIP)
