@@ -106,7 +106,7 @@ func (f *Interface) consumeInsidePacket(pkt tio.Packet, fwPacket *firewall.Packe
 
 	dropReason := f.firewall.Drop(*fwPacket, false, hostinfo, f.pki.GetCAPool(), localCache)
 	if dropReason == nil {
-		f.sendInsideMessage(hostinfo, pkt, nb, tx, q)
+		f.sendInsideMessage(hostinfo, pkt, nb, tx)
 	} else {
 		f.rejectInside(packet, rejectBuf, q)
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
@@ -157,7 +157,7 @@ func (f *Interface) sendInsideEncrypt(hostinfo *HostInfo, ci *ConnectionState, s
 // when routine q has an established lane to this peer, the direct path swaps
 // to the lane's session and socket below. Relay and base traffic stays on
 // tx.base (socket 0).
-func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []byte, tx *txQueue, q int) {
+func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []byte, tx *txQueue) {
 	ci := hostinfo.ConnectionState
 	if ci.eKey == nil {
 		return
@@ -233,8 +233,8 @@ func (f *Interface) sendInsideMessage(hostinfo *HostInfo, pkt tio.Packet, nb []b
 	// The pointer is only published once the lane's ConnectionState is fully
 	// populated, so a non-nil Load is always usable. On lane death the slot
 	// CAS-clears and traffic falls back to the base tunnel instantly.
-	if ls := hostinfo.lanes; ls != nil && q < len(ls.txLanes) {
-		if lane := ls.txLanes[q].Load(); lane != nil {
+	if ls := hostinfo.lanes; ls != nil && tx.laneSlot < len(ls.txLanes) {
+		if lane := ls.txLanes[tx.laneSlot].Load(); lane != nil {
 			if lci := lane.ConnectionState; lci != nil && lci.eKey != nil {
 				hostinfo = lane
 				ci = lci

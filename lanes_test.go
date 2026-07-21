@@ -340,19 +340,24 @@ func TestSendInsideMessageLaneSwap(t *testing.T) {
 
 	baseWriter := &recordingBatchWriter{}
 	laneWriter := &recordingBatchWriter{}
-	tx := &txQueue{
-		base: batch.NewSendBatch(baseWriter, batch.SendBatchCap, 1<<16),
-		lane: batch.NewSendBatch(laneWriter, batch.SendBatchCap, 1<<16),
+	newTx := func(laneSlot int) *txQueue {
+		return &txQueue{
+			laneSlot: laneSlot,
+			base:     batch.NewSendBatch(baseWriter, batch.SendBatchCap, 1<<16),
+			lane:     batch.NewSendBatch(laneWriter, batch.SendBatchCap, 1<<16),
+		}
 	}
+	tx1 := newTx(1)
+	tx2 := newTx(2)
 
 	pkt := tio.Packet{Bytes: []byte{0x45, 0, 0, 4, 1, 2, 3, 4}}
 	nb := make([]byte, 12)
 
-	// With the lane published, routine 1's traffic uses the lane session and
-	// the lane batch.
+	// With the lane published, slot-1 traffic uses the lane session and the
+	// lane batch.
 	base.lanes.txLanes[1].Store(lane)
-	ifce.sendInsideMessage(base, pkt, nb, tx, 1)
-	tx.flush(ifce.l, 1)
+	ifce.sendInsideMessage(base, pkt, nb, tx1)
+	tx1.flush(ifce.l)
 	require.Len(t, laneWriter.bufs, 1)
 	require.Empty(t, baseWriter.bufs)
 	assert.Equal(t, lane.GetRemote(), laneWriter.dsts[0])
@@ -361,9 +366,18 @@ func TestSendInsideMessageLaneSwap(t *testing.T) {
 	require.NoError(t, h.Parse(laneWriter.bufs[0]))
 	assert.Equal(t, lane.remoteIndexId, h.RemoteIndex)
 
-	// Routine 2 has no lane: base tunnel, base batch.
-	ifce.sendInsideMessage(base, pkt, nb, tx, 2)
-	tx.flush(ifce.l, 1)
+	// An overflow routine sharing slot 1 (multiport.lanes < routines) rides
+	// the same lane session.
+	tx1b := newTx(1)
+	ifce.sendInsideMessage(base, pkt, nb, tx1b)
+	tx1b.flush(ifce.l)
+	require.Len(t, laneWriter.bufs, 2)
+	require.NoError(t, h.Parse(laneWriter.bufs[1]))
+	assert.Equal(t, lane.remoteIndexId, h.RemoteIndex)
+
+	// Slot 2 has no lane: base tunnel, base batch.
+	ifce.sendInsideMessage(base, pkt, nb, tx2)
+	tx2.flush(ifce.l)
 	require.Len(t, baseWriter.bufs, 1)
 	assert.Equal(t, base.GetRemote(), baseWriter.dsts[0])
 	require.NoError(t, h.Parse(baseWriter.bufs[0]))
@@ -371,10 +385,30 @@ func TestSendInsideMessageLaneSwap(t *testing.T) {
 
 	// Lane death: slot cleared, instant fallback to base.
 	base.lanes.txLanes[1].Store(nil)
-	ifce.sendInsideMessage(base, pkt, nb, tx, 1)
-	tx.flush(ifce.l, 1)
+	ifce.sendInsideMessage(base, pkt, nb, tx1)
+	tx1.flush(ifce.l)
 	require.Len(t, baseWriter.bufs, 2)
-	require.Len(t, laneWriter.bufs, 1)
+	require.Len(t, laneWriter.bufs, 2)
+}
+
+func TestLaneSlotFor(t *testing.T) {
+	// Overflow routines wrap onto the configured lanes round-robin.
+	f := &Interface{multiport: true, laneCount: 2}
+	for i, want := range []int{0, 1, 0, 1, 0, 1} {
+		assert.Equal(t, want, f.laneSlotFor(i), "routine %d", i)
+	}
+
+	// Full lane count: identity mapping, one lane per routine.
+	f = &Interface{multiport: true, laneCount: 4}
+	for i := range 4 {
+		assert.Equal(t, i, f.laneSlotFor(i), "routine %d", i)
+	}
+
+	// Multiport off: identity, each routine keeps its own writer.
+	f = &Interface{multiport: false, laneCount: 0}
+	for i := range 4 {
+		assert.Equal(t, i, f.laneSlotFor(i), "routine %d", i)
+	}
 }
 
 func TestCompleteLaneResponder(t *testing.T) {

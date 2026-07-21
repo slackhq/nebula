@@ -310,6 +310,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		DropMulticast:         c.GetBool("tun.drop_multicast", false),
 		routines:              routines,
 		Multiport:             multiport,
+		LaneCount:             handshakeConfig.laneCount,
 		MessageMetrics:        messageMetrics,
 		version:               buildVersion,
 		relayManager:          NewRelayManager(ctx, l, hostMap, c),

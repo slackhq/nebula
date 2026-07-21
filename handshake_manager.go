@@ -744,7 +744,7 @@ func (hm *HandshakeManager) maybeAllocLaneState(hostinfo *HostInfo, result *hand
 	if len(hm.f.myVpnAddrs) > 0 && len(hostinfo.vpnAddrs) > 0 {
 		offset = lanePortOffset(hm.f.myVpnAddrs[0], hostinfo.vpnAddrs[0], uint16(peerPorts))
 	}
-	hostinfo.lanes = newLaneState(hm.f.routines, uint16(peerPorts), uint16(result.PeerBasePort), offset)
+	hostinfo.lanes = newLaneState(hm.config.laneCount, uint16(peerPorts), uint16(result.PeerBasePort), offset)
 }
 
 // EnsureLanes starts lane handshakes for every empty, non-pending, retry-due

@@ -198,7 +198,9 @@ listen:
   #enabled: true
   # How many lanes to run, counting the base tunnel as lane 0. 0 (default)
   # means one per routine. Lowering this bounds how many extra tunnels each
-  # peer pair maintains; routines without a lane use the base tunnel.
+  # peer pair maintains (useful on a big server with many peers); routines
+  # beyond the lane count share the configured lanes round-robin, so TX still
+  # spreads across `lanes` underlay flows rather than piling onto the base.
   #lanes: 0
 
 punchy:
