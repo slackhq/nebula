@@ -295,7 +295,13 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		hm.messageMetrics.Tx(header.Handshake, hh.machine.Subtype(), 1)
 		err := hm.outside.WriteTo(stage0, addr)
 		if err != nil {
-			hostinfo.logger(hm.l).Error("Failed to send handshake message",
+			// These repeat every attempt, so match the success log below and only shout when the remotes changed
+			level := slog.LevelDebug
+			if remotesHaveChanged {
+				level = slog.LevelError
+			}
+
+			hostinfo.logger(hm.l).Log(context.Background(), level, "Failed to send handshake message",
 				"udpAddr", addr,
 				"initiatorIndex", hostinfo.localIndexId,
 				"handshake", hsFields,

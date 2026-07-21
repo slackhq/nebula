@@ -408,7 +408,7 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		if err != nil {
 			hostinfo.logger(f.l).Error("Failed to write outgoing packet",
 				"error", err,
-				"udpAddr", remote,
+				"udpAddr", hr,
 			)
 		}
 	} else {
