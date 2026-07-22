@@ -194,14 +194,51 @@ func TestDnsServer_reload_initial_serveDnsWithoutLighthouse(t *testing.T) {
 }
 
 func TestDnsServer_reload_sameAddr_noOp(t *testing.T) {
+	port := freeUDPPort(t)
 	ds, c := newTestDnsServer(t)
-	setDnsConfig(c, "127.0.0.1", "0", true, true)
-
+	setDnsConfig(c, "127.0.0.1", port, true, true)
 	require.NoError(t, ds.reload(c, true))
-	// No server running yet, no addr change. Reload should not spawn anything.
+
+	go ds.Start()
+	waitForBind(t, ds)
+
+	ds.serverMu.Lock()
+	before := ds.server
+	ds.serverMu.Unlock()
+	require.NotNil(t, before)
+
+	// Same address, so the running listener must be left alone rather than rebuilt under live queries
 	require.NoError(t, ds.reload(c, false))
 	assert.True(t, ds.enabled.Load())
-	assert.Nil(t, ds.server)
+
+	ds.serverMu.Lock()
+	after := ds.server
+	ds.serverMu.Unlock()
+	assert.Same(t, before, after, "a same-address reload must not restart the listener")
+
+	ds.Stop()
+}
+
+// The branch the old sameAddr test was accidentally hitting: enabled with nothing running means reload starts it.
+func TestDnsServer_reload_whenNotRunning_starts(t *testing.T) {
+	port := freeUDPPort(t)
+	ds, c := newTestDnsServer(t)
+	setDnsConfig(c, "127.0.0.1", port, true, true)
+
+	// initial only records config, it never starts anything
+	require.NoError(t, ds.reload(c, true))
+	ds.serverMu.Lock()
+	assert.Nil(t, ds.server, "the initial reload must not start a listener")
+	ds.serverMu.Unlock()
+
+	require.NoError(t, ds.reload(c, false))
+	waitForBind(t, ds)
+
+	ds.serverMu.Lock()
+	assert.NotNil(t, ds.server, "a reload with nothing running should bring DNS up")
+	ds.serverMu.Unlock()
+
+	ds.Stop()
 }
 
 func TestDnsServer_StartStop_lifecycle(t *testing.T) {
@@ -426,4 +463,169 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for condition")
+}
+
+// Two reloads in quick succession, or a HUP before Control.Start, can race two Starts at the same listener.
+func TestDnsServer_Start_isIdempotent(t *testing.T) {
+	port := freeUDPPort(t)
+	ds, c := newTestDnsServer(t)
+	setDnsConfig(c, "127.0.0.1", port, true, true)
+	require.NoError(t, ds.reload(c, true))
+
+	go ds.Start()
+	waitForBind(t, ds)
+
+	ds.serverMu.Lock()
+	first := ds.server
+	ds.serverMu.Unlock()
+	require.NotNil(t, first)
+
+	// If the second Start replaces the tracked server, Stop kills the wrong one and the port leaks
+	done := make(chan struct{})
+	go func() {
+		ds.Start()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second * 5):
+		t.Fatal("second Start never returned")
+	}
+
+	ds.serverMu.Lock()
+	second := ds.server
+	ds.serverMu.Unlock()
+	assert.Same(t, first, second, "a second Start must not replace the running server")
+
+	// The real proof, after Stop the port must actually be free
+	ds.Stop()
+	waitFor(t, func() bool {
+		pc, err := net.ListenPacket("udp", "127.0.0.1:"+port)
+		if err != nil {
+			return false
+		}
+		_ = pc.Close()
+		return true
+	})
+}
+
+// An address change must actually end up listening on the new port. Start's guard refuses when a server is already
+// installed, so reload has to clear the slot before shutting the old one down.
+func TestDnsServer_reload_addrChange_restarts(t *testing.T) {
+	first := freeUDPPort(t)
+	second := freeUDPPort(t)
+
+	ds, c := newTestDnsServer(t)
+	setDnsConfig(c, "127.0.0.1", first, true, true)
+	require.NoError(t, ds.reload(c, true))
+
+	go ds.Start()
+	waitForBind(t, ds)
+
+	// Cycle a few times, the failure this guards against depends on which goroutine wins serverMu
+	for i := range 8 {
+		want := second
+		if i%2 == 1 {
+			want = first
+		}
+		setDnsConfig(c, "127.0.0.1", want, true, true)
+		require.NoError(t, ds.reload(c, false))
+		waitForBind(t, ds)
+
+		ds.serverMu.Lock()
+		srv := ds.server
+		ds.serverMu.Unlock()
+		require.NotNil(t, srv, "reload left DNS down instead of restarting it")
+		require.Equal(t, "127.0.0.1:"+want, srv.Addr, "reload should be serving the new address")
+	}
+
+	// Land back on second so the port assertions below are meaningful
+	setDnsConfig(c, "127.0.0.1", second, true, true)
+	require.NoError(t, ds.reload(c, false))
+	waitForBind(t, ds)
+
+	// The old port must be released and the new one actually held
+	waitFor(t, func() bool {
+		pc, err := net.ListenPacket("udp", "127.0.0.1:"+first)
+		if err != nil {
+			return false
+		}
+		_ = pc.Close()
+		return true
+	})
+	_, err := net.ListenPacket("udp", "127.0.0.1:"+second)
+	assert.Error(t, err, "the new address should be bound by the DNS responder")
+
+	ds.Stop()
+}
+
+// A listener that dies on its own must release the slot, or a later same-addr reload sees it as running and no-ops.
+func TestDnsServer_Start_bindFailure_releasesSlot(t *testing.T) {
+	port := freeUDPPort(t)
+	blocker, err := net.ListenPacket("udp", "127.0.0.1:"+port)
+	require.NoError(t, err)
+
+	ds, c := newTestDnsServer(t)
+	setDnsConfig(c, "127.0.0.1", port, true, true)
+	require.NoError(t, ds.reload(c, true))
+
+	ds.Start() // returns once the bind fails
+
+	ds.serverMu.Lock()
+	assert.Nil(t, ds.server, "a listener that failed to bind must not stay parked in the slot")
+	ds.serverMu.Unlock()
+
+	// With the slot released, a reload can retry once the port frees up
+	require.NoError(t, blocker.Close())
+	require.NoError(t, ds.reload(c, false))
+	waitForBind(t, ds)
+
+	ds.serverMu.Lock()
+	assert.NotNil(t, ds.server, "a same-addr reload should retry after a failed bind")
+	ds.serverMu.Unlock()
+
+	ds.Stop()
+}
+
+// A disable that lands while Start is between its unlocked check and the guard must not leave a listener behind.
+func TestDnsServer_Start_refusesWhenDisabledUnderLock(t *testing.T) {
+	port := freeUDPPort(t)
+	ds, c := newTestDnsServer(t)
+	setDnsConfig(c, "127.0.0.1", port, true, true)
+	require.NoError(t, ds.reload(c, true))
+	require.True(t, ds.enabled.Load())
+
+	// Holding serverMu parks Start on the lock, the only way to land the disable in that window on purpose
+	ds.serverMu.Lock()
+
+	done := make(chan struct{})
+	go func() {
+		ds.Start()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		ds.serverMu.Unlock()
+		t.Fatal("Start returned early, the test never exercised the window")
+	case <-time.After(time.Millisecond * 100):
+	}
+
+	// The disable reload's critical section. It sees nothing running, so it never calls Stop.
+	ds.enabled.Store(false)
+	ds.serverMu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second * 5):
+		t.Fatal("Start never returned")
+	}
+
+	ds.serverMu.Lock()
+	assert.Nil(t, ds.server, "Start must not install a listener a disable already cancelled")
+	ds.serverMu.Unlock()
+
+	pc, err := net.ListenPacket("udp", "127.0.0.1:"+port)
+	require.NoError(t, err, "an orphaned listener is still holding the port")
+	_ = pc.Close()
 }
