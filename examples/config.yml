@@ -151,7 +151,7 @@ listen:
   # office to home) leaves Nebula sending out an interface that no longer has a route. When true, Nebula watches
   # the routing socket and rebinds the listener once the change settles.
   # iOS does not use this, the host app drives the same rebind itself.
-  # Default true. This setting is reloadable.
+  # Default true. Not reloadable.
   #rebind_on_network_change: true
 
   # By default, Nebula replies to packets it has no tunnel for with a "recv_error" packet. This packet helps speed up reconnection

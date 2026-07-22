@@ -25,7 +25,7 @@ const (
 	netChangeReadBuffer = 4096
 )
 
-// WatchNetworkChanges reports when the local network moves out from under us, so the listener can be rebound.
+// watchNetworkChanges reports when the local network moves out from under us, so the listener can be rebound.
 //
 // Darwin scopes a udp socket to whatever interface it came up on. Move between networks and we keep sending out an
 // interface that no longer has a route, which surfaces as an instant "no route to host" with no packet ever leaving
@@ -35,7 +35,7 @@ const (
 // The returned channel is buffered and coalescing: a send is dropped if one is already pending, since both mean the
 // same thing to a reader. It is closed when ctx is cancelled or the routing socket fails, so a caller can simply
 // range over it. Platforms whose sockets do not need rebinding return a nil channel and no error.
-func WatchNetworkChanges(ctx context.Context, l *slog.Logger) (<-chan struct{}, error) {
+func watchNetworkChanges(ctx context.Context, l *slog.Logger) (<-chan struct{}, error) {
 	sock, err := openRouteSocket()
 	if err != nil {
 		return nil, err
