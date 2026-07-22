@@ -53,7 +53,7 @@ type Control struct {
 	statsStart             func()
 	dnsStart               func()
 	lighthouseStart        func()
-	networkChangeStart     func()
+	networkChangeStart     func(rebind func())
 	connectionManagerStart func(context.Context)
 }
 
@@ -106,7 +106,7 @@ func (c *Control) Start() error {
 		go c.dnsStart()
 	}
 	if c.networkChangeStart != nil {
-		go c.networkChangeStart()
+		go c.networkChangeStart(c.RebindUDPServer)
 	}
 	if c.connectionManagerStart != nil {
 		go c.connectionManagerStart(c.ctx)

@@ -268,7 +268,9 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 	attachCommands(l, c, ssh, ifce)
 
-	control := &Control{
+	networkChanges := udp.NewNetworkChangeMonitor(ctx, l, c)
+
+	return &Control{
 		state:                  StateReady,
 		f:                      ifce,
 		l:                      l,
@@ -278,15 +280,9 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		statsStart:             stats.Start,
 		dnsStart:               ds.Start,
 		lighthouseStart:        lightHouse.StartUpdateWorker,
+		networkChangeStart:     networkChanges.Start,
 		connectionManagerStart: connManager.Start,
-	}
-
-	// The monitor's whole job is to trigger a rebind, and Control is what owns rebinding and the state gating
-	// around it, so it is injected the rebind func and can only be built once Control exists.
-	networkChanges := udp.NewNetworkChangeMonitor(ctx, l, c, control.RebindUDPServer)
-	control.networkChangeStart = networkChanges.Start
-
-	return control, nil
+	}, nil
 }
 
 func moduleVersion() string {

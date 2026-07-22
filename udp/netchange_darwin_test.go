@@ -216,11 +216,11 @@ func TestNetworkChangeMonitorStopsWithContext(t *testing.T) {
 	l := test.NewLogger()
 	c := config.NewC(l)
 	require.NoError(t, c.LoadString("listen:\n  rebind_on_network_change: true\n"))
-	m := NewNetworkChangeMonitor(ctx, l, c, func() {})
+	m := NewNetworkChangeMonitor(ctx, l, c)
 
 	done := make(chan struct{})
 	go func() {
-		m.Start()
+		m.Start(func() {})
 		close(done)
 	}()
 
@@ -240,5 +240,5 @@ func TestNetworkChangeMonitorStopsWithContext(t *testing.T) {
 	}
 
 	// Starting again after the context is dead must not open anything.
-	m.Start()
+	m.Start(func() {})
 }
