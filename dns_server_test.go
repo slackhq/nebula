@@ -554,7 +554,7 @@ func TestDnsServer_reload_addrChange_restarts(t *testing.T) {
 		return true
 	})
 	_, err := net.ListenPacket("udp", "127.0.0.1:"+second)
-	assert.Error(t, err, "the new address should be bound by the DNS responder")
+	require.Error(t, err, "the new address should be bound by the DNS responder")
 
 	ds.Stop()
 }
