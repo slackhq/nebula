@@ -44,6 +44,11 @@ type connectionManager struct {
 	inactivityTimeout       atomic.Int64
 	dropInactive            atomic.Bool
 
+	// Wake-from-sleep handling, sampled once per tick in Start
+	wakeDetector       *wakeDetector
+	clearOnWake        atomic.Bool
+	wakeClearThreshold atomic.Int64
+
 	l *slog.Logger
 }
 
@@ -54,6 +59,7 @@ func newConnectionManagerFromConfig(l *slog.Logger, c *config.C, hm *HostMap, p 
 		punchy:        p,
 		relayUsed:     make(map[uint32]struct{}),
 		relayUsedLock: &sync.RWMutex{},
+		wakeDetector:  newWakeDetector(),
 	}
 
 	cm.reload(c, true)
@@ -98,10 +104,36 @@ func (cm *connectionManager) reload(c *config.C, initial bool) {
 			)
 		}
 	}
+
+	if initial || c.HasChanged("tunnels.clear_on_wake") {
+		old := cm.clearOnWake.Load()
+		cm.clearOnWake.Store(c.GetBool("tunnels.clear_on_wake", true))
+		if !initial {
+			cm.l.Info("Clear on wake setting has changed",
+				"oldBool", old,
+				"newBool", cm.clearOnWake.Load(),
+			)
+		}
+	}
+
+	if initial || c.HasChanged("tunnels.wake_clear_threshold") {
+		old := cm.getWakeClearThreshold()
+		cm.wakeClearThreshold.Store((int64)(c.GetDuration("tunnels.wake_clear_threshold", 30*time.Second)))
+		if !initial {
+			cm.l.Info("Wake clear threshold has changed",
+				"oldDuration", old,
+				"newDuration", cm.getWakeClearThreshold(),
+			)
+		}
+	}
 }
 
 func (cm *connectionManager) getInactivityTimeout() time.Duration {
 	return (time.Duration)(cm.inactivityTimeout.Load())
+}
+
+func (cm *connectionManager) getWakeClearThreshold() time.Duration {
+	return (time.Duration)(cm.wakeClearThreshold.Load())
 }
 
 func (cm *connectionManager) In(h *HostInfo) {
@@ -136,6 +168,73 @@ func (cm *connectionManager) getAndResetTrafficCheck(h *HostInfo, now time.Time)
 	return in, out
 }
 
+// checkWake runs once per tick and clears every tunnel when the machine has just returned from system sleep.
+// Tunnels rarely survive a suspend: our NAT mappings have expired and our address has usually changed, so every
+// established hostinfo is a corpse that will eat 15-20s of traffic checks before the wheel declares it dead.
+// Clearing now means the first packet after wake starts a fresh handshake immediately.
+//
+// The suspend itself costs nothing here: the ticker driving us is frozen with the rest of the process and this
+// fires within one tick of resume.
+func (cm *connectionManager) checkWake() {
+	slept, ok := cm.wakeDetector.Sample()
+	if !ok || slept == 0 {
+		return
+	}
+
+	// The clock pair is read non-atomically, so scheduling jitter shows up as tiny sub-millisecond "sleeps".
+	// Keep the floor well above that so a zero/nonsense threshold can't clear tunnels on every tick.
+	threshold := max(cm.getWakeClearThreshold(), time.Second)
+
+	if slept < threshold {
+		// Short suspends (lid closed and quickly reopened) often come back before NAT state expires; those
+		// tunnels may well be alive, leave them to the normal traffic checks.
+		if slept >= time.Second {
+			cm.l.Debug("Woke from sleep below the clear threshold, leaving tunnels alone",
+				"sleptFor", slept,
+				"threshold", threshold,
+			)
+		}
+		return
+	}
+
+	if !cm.clearOnWake.Load() {
+		cm.l.Info("Woke from sleep, tunnels.clear_on_wake is disabled so tunnels are left to the normal traffic checks", "sleptFor", slept)
+		return
+	}
+
+	closed := cm.clearAllTunnels()
+	cm.l.Info("Woke from sleep, cleared tunnels", "sleptFor", slept, "tunnelsCleared", closed)
+
+	// Our public address almost certainly changed; get it to the lighthouses as soon as possible so peers can
+	// find us again. The update rides over a fresh lighthouse handshake. If the network isn't back up yet these
+	// sends fail harmlessly and the periodic update worker retries within lighthouse.interval.
+	cm.intf.lightHouse.TriggerUpdate()
+}
+
+// clearAllTunnels closes every tunnel in the hostmap locally, without notifying the remotes. It is the wake-from-
+// sleep counterpart to Control.CloseAllTunnels: after a suspend the remotes stopped hearing from us long ago, and
+// close packets fired into a network that may not even be up yet are wasted, so we only tear down our own state
+// and let the next packet to each host start a fresh handshake.
+func (cm *connectionManager) clearAllTunnels() int {
+	cm.hostMap.RLock()
+	hostinfos := make([]*HostInfo, 0, len(cm.hostMap.Indexes))
+	for _, h := range cm.hostMap.Indexes {
+		hostinfos = append(hostinfos, h)
+	}
+	cm.hostMap.RUnlock()
+
+	for _, h := range hostinfos {
+		cm.intf.closeTunnel(h)
+	}
+
+	// With every tunnel gone no relay can be in use, drop the usage tracking wholesale.
+	cm.relayUsedLock.Lock()
+	clear(cm.relayUsed)
+	cm.relayUsedLock.Unlock()
+
+	return len(hostinfos)
+}
+
 func (cm *connectionManager) Start(ctx context.Context) {
 	clockSource := time.NewTicker(cm.trafficTimer.t.tickDuration)
 	defer clockSource.Stop()
@@ -150,6 +249,7 @@ func (cm *connectionManager) Start(ctx context.Context) {
 			return
 
 		case now := <-clockSource.C:
+			cm.checkWake()
 			cm.trafficTimer.Advance(now)
 			for {
 				localIndex, has := cm.trafficTimer.Purge()

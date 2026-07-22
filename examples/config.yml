@@ -390,6 +390,20 @@ logging:
   # This setting is reloadable
   #inactivity_timeout: 10m
 
+  # clear_on_wake controls whether all tunnels are immediately torn down (locally, without notifying the remotes)
+  # when the machine detects it has just woken from system sleep. Tunnels rarely survive a suspend: NAT mappings
+  # expire and the machine's address usually changes, so waiting for the normal liveness checks costs 15-20 seconds
+  # of black-holed traffic per tunnel after wake. Clearing them means the first packet after wake starts a fresh
+  # handshake right away.
+  # This setting is reloadable
+  #clear_on_wake: true
+
+  # wake_clear_threshold is the minimum time the machine must have been suspended for clear_on_wake to act.
+  # Suspends shorter than this often come back before NAT state expires, so those tunnels may still be alive and
+  # are left to the normal liveness checks. Values below 1s are treated as 1s.
+  # This setting is reloadable
+  #wake_clear_threshold: 30s
+
 # Nebula security group configuration
 firewall:
   # Action to take when a packet is not allowed by the firewall rules.

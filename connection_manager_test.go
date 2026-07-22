@@ -501,3 +501,85 @@ func (d *dummyCert) MarshalJSON() ([]byte, error) {
 func (d *dummyCert) Copy() cert.Certificate {
 	return d
 }
+
+func TestConnectionManager_WakeClear(t *testing.T) {
+	l := test.NewLogger()
+	localrange := netip.MustParsePrefix("10.1.1.1/24")
+	vpnIp := netip.MustParseAddr("172.1.1.2")
+	preferredRanges := []netip.Prefix{localrange}
+
+	// Very incomplete mock objects
+	hostMap := newHostMap(l)
+	hostMap.preferredRanges.Store(&preferredRanges)
+
+	cs := &CertState{
+		initiatingVersion: cert.Version1,
+		privateKey:        []byte{},
+		v1Cert:            &dummyCert{version: cert.Version1},
+		v1Credential:      nil,
+	}
+
+	lh := newTestLighthouse()
+	ifce := &Interface{
+		hostMap:          hostMap,
+		inside:           &overlaytest.NoopTun{},
+		outside:          &udp.NoopConn{},
+		firewall:         &Firewall{},
+		lightHouse:       lh,
+		pki:              &PKI{},
+		handshakeManager: NewHandshakeManager(l, hostMap, lh, &udp.NoopConn{}, defaultHandshakeConfig),
+		l:                l,
+	}
+	ifce.pki.cs.Store(cs)
+
+	// Create manager
+	conf := config.NewC(test.NewLogger())
+	punchy := NewPunchyFromConfig(test.NewLogger(), conf, nil)
+	nc := newConnectionManagerFromConfig(test.NewLogger(), conf, hostMap, punchy)
+	nc.intf = ifce
+
+	// Drive the wake detector from a fake clock pair
+	suspended := time.Duration(0)
+	nc.wakeDetector = &wakeDetector{read: func() (time.Duration, bool) { return suspended, true }}
+	nc.checkWake() // primes the baseline
+
+	addTunnel := func(localIndex uint32) *HostInfo {
+		hostinfo := &HostInfo{
+			vpnAddrs:      []netip.Addr{vpnIp},
+			localIndexId:  localIndex,
+			remoteIndexId: 9901,
+		}
+		hostinfo.ConnectionState = &ConnectionState{
+			myCert: &dummyCert{version: cert.Version1},
+		}
+		nc.hostMap.unlockedAddHostInfo(hostinfo, ifce)
+		return hostinfo
+	}
+
+	addTunnel(1099)
+	nc.RelayUsed(5000)
+
+	// No suspend, nothing happens
+	nc.checkWake()
+	assert.Contains(t, nc.hostMap.Indexes, uint32(1099))
+
+	// A suspend below the threshold leaves tunnels alone
+	suspended += 5 * time.Second
+	nc.checkWake()
+	assert.Contains(t, nc.hostMap.Indexes, uint32(1099))
+
+	// A suspend past the threshold clears everything, including relay usage tracking
+	suspended += time.Hour
+	nc.checkWake()
+	assert.Empty(t, nc.hostMap.Indexes)
+	assert.Empty(t, nc.hostMap.Hosts)
+	assert.Empty(t, nc.relayUsed)
+
+	// With clear_on_wake disabled the tunnels survive a long suspend
+	addTunnel(1100)
+	nc.clearOnWake.Store(false)
+	suspended += time.Hour
+	nc.checkWake()
+	assert.Contains(t, nc.hostMap.Indexes, uint32(1100))
+	assert.Contains(t, nc.hostMap.Hosts, vpnIp)
+}
