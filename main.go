@@ -268,6 +268,8 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 	attachCommands(l, c, ssh, ifce)
 
+	networkChanges := udp.NewNetworkChangeMonitor(ctx, l, c)
+
 	return &Control{
 		state:                  StateReady,
 		f:                      ifce,
@@ -278,6 +280,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		statsStart:             stats.Start,
 		dnsStart:               ds.Start,
 		lighthouseStart:        lightHouse.StartUpdateWorker,
+		networkChangeStart:     networkChanges.Start,
 		connectionManagerStart: connManager.Start,
 	}, nil
 }

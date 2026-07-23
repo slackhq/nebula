@@ -2,11 +2,13 @@ package nebula
 
 import (
 	"encoding/json"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/handshake"
+	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/noiseutil"
 )
 
@@ -20,6 +22,7 @@ type ConnectionState struct {
 	initiator      bool
 	messageCounter atomic.Uint64
 	window         *Bits
+	decryptLock    sync.Mutex
 	writeLock      sync.Mutex
 }
 
@@ -53,4 +56,53 @@ func (cs *ConnectionState) MarshalJSON() ([]byte, error) {
 
 func (cs *ConnectionState) Curve() cert.Curve {
 	return cs.myCert.Curve()
+}
+
+func (cs *ConnectionState) Decrypt(l *slog.Logger, messageCounter uint64, out []byte, packet []byte, nb []byte) ([]byte, error) {
+	var err error
+	cs.decryptLock.Lock()
+	result := cs.window.Check(l, messageCounter)
+	cs.decryptLock.Unlock()
+	if !result {
+		return nil, ErrAlreadySeen
+	}
+
+	out, err = cs.dKey.DecryptDanger(out, packet[:header.Len], packet[header.Len:], messageCounter, nb)
+	if err != nil {
+		return nil, err
+	}
+
+	cs.decryptLock.Lock()
+	result = cs.window.Update(l, messageCounter)
+	cs.decryptLock.Unlock()
+	if !result {
+		return nil, ErrAlreadySeen
+	}
+	return out, nil
+}
+
+// VerifyRelay verifies AEAD protected (but not encrypted) relay frames. packet must be length-checked by the caller.
+func (cs *ConnectionState) VerifyRelay(l *slog.Logger, messageCounter uint64, packet []byte, nb []byte) error {
+	cs.decryptLock.Lock()
+	result := cs.window.Check(l, messageCounter)
+	cs.decryptLock.Unlock()
+	if !result {
+		return ErrAlreadySeen
+	}
+
+	signedPayload := packet[:len(packet)-cs.dKey.Overhead()]
+	signatureValue := packet[len(packet)-cs.dKey.Overhead():]
+	_, err := cs.dKey.DecryptDanger(nil, signedPayload, signatureValue, messageCounter, nb)
+	if err != nil {
+		return err
+	}
+
+	cs.decryptLock.Lock()
+	result = cs.window.Update(l, messageCounter)
+	cs.decryptLock.Unlock()
+	if !result {
+		return ErrAlreadySeen
+	}
+
+	return nil
 }
