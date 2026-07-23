@@ -82,8 +82,10 @@ type Interface struct {
 	sendRecvErrorConfig   recvErrorConfig
 	acceptRecvErrorConfig recvErrorConfig
 
-	// rebindCount is used to decide if an active tunnel should trigger a punch notification through a lighthouse
-	rebindCount int8
+	// rebindEpoch bumps every time the udp listener is rebound, which means the local network moved. Tunnels
+	// compare it against their own copy to decide they need a punch from the far side. Read on every send, only
+	// written on a rebind, so the cache line stays shared across the routines.
+	rebindEpoch atomic.Uint32
 	version     string
 
 	conntrackCacheTimeout time.Duration

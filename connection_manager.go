@@ -105,11 +105,12 @@ func (cm *connectionManager) getInactivityTimeout() time.Duration {
 }
 
 func (cm *connectionManager) In(h *HostInfo) {
-	h.in.Store(true)
+	h.markIn()
 }
 
-func (cm *connectionManager) Out(h *HostInfo) {
-	h.out.Store(true)
+// Out records outbound traffic and reports whether the local network changed since this tunnel last sent.
+func (cm *connectionManager) Out(h *HostInfo) bool {
+	return h.markOut(cm.intf.rebindEpoch.Load())
 }
 
 func (cm *connectionManager) RelayUsed(localIndex uint32) {
@@ -128,8 +129,7 @@ func (cm *connectionManager) RelayUsed(localIndex uint32) {
 // getAndResetTrafficCheck returns if there was any inbound or outbound traffic within the last tick and
 // resets the state for this local index
 func (cm *connectionManager) getAndResetTrafficCheck(h *HostInfo, now time.Time) (bool, bool) {
-	in := h.in.Swap(false)
-	out := h.out.Swap(false)
+	in, out := h.takeTraffic()
 	if in || out {
 		h.lastUsed = now
 	}
@@ -340,7 +340,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 				"tunnelCheck", m{"state": "alive", "method": "passive"},
 			)
 		}
-		hostinfo.pendingDeletion.Store(false)
+		hostinfo.setPendingDeletion(false)
 
 		if mainHostInfo {
 			decision = tryRehandshake
@@ -363,7 +363,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 		return decision, hostinfo, primary
 	}
 
-	if hostinfo.pendingDeletion.Load() {
+	if hostinfo.isPendingDeletion() {
 		// We have already sent a test packet and nothing was returned, this hostinfo is dead
 		hostinfo.logger(cm.l).Info("Tunnel status",
 			"tunnelCheck", m{"state": "dead", "method": "active"},
@@ -414,7 +414,7 @@ func (cm *connectionManager) makeTrafficDecision(localIndex uint32, now time.Tim
 		}
 	}
 
-	hostinfo.pendingDeletion.Store(true)
+	hostinfo.setPendingDeletion(true)
 	cm.trafficTimer.Add(hostinfo.localIndexId, cm.pendingDeletionInterval)
 	return decision, hostinfo, nil
 }

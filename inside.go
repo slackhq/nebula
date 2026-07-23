@@ -365,17 +365,12 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 
 	//l.WithField("trace", string(debug.Stack())).Error("out Header ", &Header{Version, t, st, 0, hostinfo.remoteIndexId, c}, p)
 	out = header.Encode(out, header.Version, t, st, hostinfo.remoteIndexId, c)
-	f.connectionManager.Out(hostinfo)
-
-	// Query our LH if we haven't since the last time we've been rebound, this will cause the remote to punch against
-	// all our addrs and enable a faster roaming.
-	if t != header.CloseTunnel && hostinfo.lastRebindCount != f.rebindCount {
-		//NOTE: there is an update hole if a tunnel isn't used and exactly 256 rebinds occur before the tunnel is
-		// finally used again. This tunnel would eventually be torn down and recreated if this action didn't help.
+	// We rebound since this tunnel last sent, so the local network moved. Ask the lighthouse to have the far side
+	// punch at where we are now, which primes their conntrack the same way a handshake would.
+	if f.connectionManager.Out(hostinfo) && t != header.CloseTunnel {
 		f.lightHouse.QueryServer(hostinfo.vpnAddrs[0])
-		hostinfo.lastRebindCount = f.rebindCount
 		if f.l.Enabled(context.Background(), slog.LevelDebug) {
-			f.l.Debug("Lighthouse update triggered for punch due to rebind counter",
+			f.l.Debug("Lighthouse update triggered for punch due to rebind epoch",
 				"vpnAddrs", hostinfo.vpnAddrs,
 			)
 		}
