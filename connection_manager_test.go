@@ -25,6 +25,7 @@ func newTestLighthouse() *LightHouse {
 	lighthouses := []netip.Addr{}
 	staticList := map[netip.Addr]struct{}{}
 
+	lh.localAddrsFn = func(*LocalAllowList) []netip.Addr { return nil }
 	lh.lighthouses.Store(&lighthouses)
 	lh.staticList.Store(&staticList)
 

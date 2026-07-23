@@ -53,6 +53,7 @@ type Control struct {
 	statsStart             func()
 	dnsStart               func()
 	lighthouseStart        func()
+	networkChangeStart     func(rebind func())
 	connectionManagerStart func(context.Context)
 }
 
@@ -103,6 +104,9 @@ func (c *Control) Start() error {
 	}
 	if c.dnsStart != nil {
 		go c.dnsStart()
+	}
+	if c.networkChangeStart != nil {
+		go c.networkChangeStart(c.RebindUDPServer)
 	}
 	if c.connectionManagerStart != nil {
 		go c.connectionManagerStart(c.ctx)
@@ -198,7 +202,11 @@ func (c *Control) RebindUDPServer() {
 		return
 	}
 
-	_ = c.f.outside.Rebind()
+	// A failure here means we are likely still pinned to the interface we came up on, so the rest of this is
+	// unlikely to help. Say so instead of silently carrying on as if we rebound.
+	if err := c.f.outside.Rebind(); err != nil {
+		c.l.Error("Failed to rebind udp socket", "error", err)
+	}
 
 	// Trigger a lighthouse update, useful for mobile clients that should have an update interval of 0
 	c.f.lightHouse.SendUpdate()

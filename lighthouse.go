@@ -36,6 +36,10 @@ type LightHouse struct {
 	myVpnNetworksTable *bart.Lite
 	punchy             *Punchy
 
+	// localAddrsFn enumerates the underlay addresses we advertise. It is a field so tests can supply simulated
+	// addresses rather than whatever this machine's NICs happen to be. Set it before Start.
+	localAddrsFn func(*LocalAllowList) []netip.Addr
+
 	// Local cache of answers from light houses
 	// map of vpn addr to answers
 	addrMap map[netip.Addr]*RemoteList
@@ -107,6 +111,10 @@ func NewLightHouseFromConfig(ctx context.Context, l *slog.Logger, c *config.C, c
 		queryChan:          make(chan netip.Addr, c.GetUint32("handshakes.query_buffer", 64)),
 		l:                  l,
 	}
+	h.localAddrsFn = func(al *LocalAllowList) []netip.Addr {
+		return localAddrs(h.l, al)
+	}
+
 	lighthouses := make([]netip.Addr, 0)
 	h.lighthouses.Store(&lighthouses)
 	staticList := make(map[netip.Addr]struct{})
@@ -918,7 +926,7 @@ func (lh *LightHouse) SendUpdate() {
 	}
 
 	lal := lh.GetLocalAllowList()
-	for _, e := range localAddrs(lh.l, lal) {
+	for _, e := range lh.localAddrsFn(lal) {
 		if lh.myVpnNetworksTable.Contains(e) {
 			continue
 		}
