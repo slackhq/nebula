@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
@@ -64,7 +65,9 @@ func acquirePacket() *Packet {
 }
 
 type TesterConn struct {
-	Addr netip.AddrPort
+	// addr is read by nebula's own goroutines on every send and by the router's flow renderer, and a test can
+	// move it mid-run to simulate roaming, so it is atomic rather than a plain field.
+	addr atomic.Pointer[netip.AddrPort]
 
 	RxPackets chan *Packet // Packets to receive into nebula
 	TxPackets chan *Packet // Packets transmitted outside by nebula
@@ -82,13 +85,24 @@ type TesterConn struct {
 }
 
 func NewListener(l *slog.Logger, ip netip.Addr, port int, _ bool, _ int) (Conn, error) {
-	return &TesterConn{
-		Addr:      netip.AddrPortFrom(ip, uint16(port)),
+	c := &TesterConn{
 		RxPackets: make(chan *Packet, 10),
 		TxPackets: make(chan *Packet, 10),
 		done:      make(chan struct{}),
 		l:         l,
-	}, nil
+	}
+	c.SetAddr(netip.AddrPortFrom(ip, uint16(port)))
+	return c, nil
+}
+
+// GetAddr returns the underlay address this conn currently sends from.
+func (u *TesterConn) GetAddr() netip.AddrPort {
+	return *u.addr.Load()
+}
+
+// SetAddr moves this conn to a new underlay address, standing in for a host waking up on a different network.
+func (u *TesterConn) SetAddr(addr netip.AddrPort) {
+	u.addr.Store(&addr)
 }
 
 // Send will place a UdpPacket onto the receive queue for nebula to consume
@@ -147,7 +161,7 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 		p.Data = p.Data[:len(b)]
 	}
 	copy(p.Data, b)
-	p.From = u.Addr
+	p.From = u.GetAddr()
 	p.To = addr
 	select {
 	case <-u.done:
@@ -178,7 +192,7 @@ func NewUDPStatsEmitter(_ []Conn) func() {
 }
 
 func (u *TesterConn) LocalAddr() (netip.AddrPort, error) {
-	return u.Addr, nil
+	return u.GetAddr(), nil
 }
 
 func (u *TesterConn) SupportsMultipleReaders() bool {
