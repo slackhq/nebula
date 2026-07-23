@@ -17,9 +17,10 @@ See the [v1.11.0](https://github.com/slackhq/nebula/milestone/25?closed=1) miles
   (`level=INFO`), trace prints as `level=DEBUG-4`, timestamps are always RFC3339Nano and `logging.timestamp_format`
   is ignored, and some messages were reworded. Review any log parsing before upgrading. This is also an API break
   for embedders, as constructors now take a `*slog.Logger`. (#1672, #1734, #1621)
-- `firewall.inbound_action` and `firewall.outbound_action` were each being applied to the opposite direction, that
-  is now corrected. If you set either of these you are getting the behavior of the other one today and likely want
-  to swap them before upgrading. (#1798)
+- `firewall.inbound_action` and `firewall.outbound_action` (used to set reject vs. drop policy) were each being
+  applied to the opposite direction, that is now corrected. This only affects how blocked packets are answered, not
+  which packets the firewall allows or denies. If you set either of these you are getting the behavior of the other
+  one today and likely want to swap them before upgrading. (#1798)
 - On Windows, Nebula now installs WFP PERMIT filters for the nebula adapter and the listener port by default. WFP
   sits below Windows Defender Firewall, so any WDF inbound rules you rely on for either will no longer apply. Set
   `tun.windows_bypass_wdf` and `listen.windows_bypass_wdf` to false to leave WDF in charge. (#1710)
