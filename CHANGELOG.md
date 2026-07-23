@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-07-23
+
+See the [v1.11.0](https://github.com/slackhq/nebula/milestone/25?closed=1) milestone for a complete list of changes.
+
+### Breaking
+
+- Logging has switched from logrus to Go's structured `slog`. Log output changes: levels are upper case
+  (`level=INFO`), trace prints as `level=DEBUG-4`, timestamps are always RFC3339Nano and `logging.timestamp_format`
+  is ignored, and some messages were reworded. Review any log parsing before upgrading. This is also an API break
+  for embedders, as constructors now take a `*slog.Logger`. (#1672, #1734, #1621)
+- `firewall.inbound_action` and `firewall.outbound_action` (used to set reject vs. drop policy) were each being
+  applied to the opposite direction, that is now corrected. This only affects how blocked packets are answered, not
+  which packets the firewall allows or denies. If you set either of these you are getting the behavior of the other
+  one today and likely want to swap them before upgrading. (#1798)
+- On Windows, Nebula now installs WFP PERMIT filters for the nebula adapter and the listener port by default. WFP
+  sits below Windows Defender Firewall, so any WDF inbound rules you rely on for either will no longer apply. Set
+  `tun.windows_bypass_wdf` and `listen.windows_bypass_wdf` to false to leave WDF in charge. (#1710)
+- On Windows, the nebula device is now set to the `private` network category instead of whatever Windows decided,
+  which is usually `Public`. This makes the host firewall less restrictive on the overlay. Set
+  `tun.network_category` to `unset` to keep the old behavior. (#1710)
+- Reject packets for non-TCP now use ICMP code 13, communication administratively prohibited, instead of code 3,
+  port unreachable. Anything keying off the old code needs updating. (#1766, #1768)
+- The SSH debug server's profiling commands are now confined to `sshd.sandbox_dir`, which defaults to
+  `$TMP/nebula-debug`. Relative paths resolve inside it and absolute paths outside it are rejected, so anything
+  scripting `start-cpu-profile`, `save-heap-profile`, or `save-mutex-profile` with a path elsewhere needs the
+  directory set. The directory is not created for you. (#1622)
+
+### Added
+
+- Sign the Windows release binaries. (#1718)
+- Generate IPv6 reject packets, matching the existing IPv4 behavior. (#1766, #1767, #1768)
+- Accept `-` in `nebula-cert` to read from stdin or write to stdout. (#1714)
+- Search for both `config.yml` and `config.yaml` in service and command line modes. (#1717)
+- Add version labels to the Docker/OCI images. (#1772)
+- Rebind the listener and re-query lighthouses on macOS when the underlay network changes, so devices moving
+  between wifi and wired or between networks recover without waiting for dead tunnel detection. Controlled by
+  `listen.rebind_on_network_change` (default `true`, not reloadable). (#1816)
+
+### Changed
+
+- Reload the firewall when the unsafe networks in the certificate change. (#1719)
+- Reconfigure, start, and stop the stats listener on a config reload instead of requiring a restart. (#1670)
+- Update a static host's addresses when they change on reload. (#1713)
+- Don't require a port on ICMP firewall rules. (#1609)
+- Connection track ICMP traffic. (#1602)
+- Return `NODATA` instead of `NXDOMAIN` from the DNS server for a name that exists but has no record of the
+  requested type, so clients that query `AAAA` first (busybox/Alpine) fall through to `A`. (#1668)
+- Record the local host's details in the DNS server. (#1716)
+- Install Windows unsafe routes as link routes. (#1709)
+- Reduce relay handshake log spam, and only log a handshake send error at error level when the remote list
+  changes. (#1733, #1765, #1810)
+- Start, stop, and reload subsystems (DNS, stats, conntrack, ssh, punchy) cleanly without leaking goroutines. (#1640, #1654, #1661, #1667, #1669, #1708, #1806, #1815)
+- `Control` is now safe to stop and wait on from any lifecycle state, and a new `Control.Wait` blocks until nebula
+  has fully stopped and returns the first fatal reader error. Failed starts release the udp sockets and tun fd
+  instead of leaking them. (#1794)
+- Trigger an immediate lighthouse update when reconnecting to or adding a lighthouse instead of waiting for the next update tick. (#1645)
+- Bring the Darwin and OpenBSD tun implementations in line with the other BSDs. (#1703)
+- Update to build against go v1.26. (#1818)
+- Various dependency updates. (#1586, #1587, #1604, #1617, #1618, #1627, #1628, #1629, #1652, #1664, #1665, #1697, #1721, #1732, #1742, #1743, #1750, #1763, #1771, #1782, #1800, #1807)
+
+### Fixed
+
+- Fix a data race on a host's remote address that could send packets to the wrong address during a roam. (#1773)
+- Fix tunnels that could permanently escape connection manager monitoring. (#1752)
+- Fix a crash when reloading the SSH server's trusted keys. (#1787)
+- Fix hostmap corruption when a host has multiple overlay addresses. Each address now gets its own list instead of
+  a single shared chain, which also fixes two latent bugs on the add and makePrimary paths. (#1788, #1790)
+- Apply `remote_allow_list` IPv4 rules to 4-in-6 mapped addresses. (#1786)
+- Don't panic in the DNS server on a short or empty query name. (#1635)
+- Advance the replay window on relayed packets so a relay drops replayed frames instead of re-forwarding them. (#1751)
+- Fix a race in relay state handling. (#1753)
+- Lock replay window updates so concurrent readers can't corrupt it. (#1802)
+- Reject malformed handshakes more reliably, including invalid ed25519 key lengths. (#1601, #1756)
+- Properly handle `closetunnel` packets. (#1638)
+- Fix an IPv6 extension-header length overflow that could make the firewall parse the wrong protocol and ports. (#1789)
+- Fix relay re-establishment when a handshake arrives over a relay entry that a one-sided teardown left
+  `Disestablished`, which silently dropped every send until dead tunnel detection forced a re-handshake. (#1805)
+- Don't build new relay state on a tunnel that was just discarded. (#1796)
+- Don't delete the wrong pending hostinfo in the handshake manager. (#1811)
+- Don't call the packet reader after a UDP error on Darwin. (#1755)
+- Open the FreeBSD tun device non blocking. (#1666)
+
 ## [1.10.3] - 2026-02-06
 
 ### Security
