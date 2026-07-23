@@ -264,6 +264,15 @@ func (f *Interface) sendCloseTunnel(h *HostInfo) {
 func (f *Interface) handleHostRoaming(hostinfo *HostInfo, via ViaSender) {
 	curRemote := hostinfo.GetRemote()
 	if !via.IsRelayed && curRemote != via.UdpAddr {
+		if hostinfo.multiportRx {
+			// If the remote is sending with multiport, we aren't roaming unless
+			// the IP has changed
+			if curRemote.Addr().Compare(via.UdpAddr.Addr()) == 0 {
+				return
+			}
+			// Keep the port from the original hostinfo, because the remote is transmitting from multiport ports
+			via.UdpAddr = netip.AddrPortFrom(via.UdpAddr.Addr(), curRemote.Port())
+		}
 		if !f.lightHouse.GetRemoteAllowList().AllowAll(hostinfo.vpnAddrs, via.UdpAddr.Addr()) {
 			if f.l.Enabled(context.Background(), slog.LevelDebug) {
 				hostinfo.logger(f.l).Debug("lighthouse.remote_allow_list denied roaming", "newAddr", via.UdpAddr)

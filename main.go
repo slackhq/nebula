@@ -244,6 +244,39 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		ifce.writers = udpConns
 		lightHouse.ifce = ifce
 
+		loadMultiPortConfig := func(c *config.C) {
+			ifce.multiPort.Rx = c.GetBool("tun.multiport.rx_enabled", false)
+
+			tx := c.GetBool("tun.multiport.tx_enabled", false)
+
+			if tx && ifce.udpRaw == nil {
+				ifce.udpRaw, err = udp.NewRawConn(l, c.GetString("listen.host", "0.0.0.0"), port, uint16(port))
+				if err != nil {
+					l.Error("Failed to get raw socket for tun.multiport.tx_enabled", "error", err)
+					ifce.udpRaw = nil
+					tx = false
+				}
+			}
+
+			if tx {
+				ifce.multiPort.TxBasePort = uint16(port)
+				ifce.multiPort.TxPorts = c.GetInt("tun.multiport.tx_ports", 100)
+				ifce.multiPort.TxHandshake = c.GetBool("tun.multiport.tx_handshake", false)
+				ifce.multiPort.TxHandshakeDelay = int64(c.GetInt("tun.multiport.tx_handshake_delay", 2))
+				ifce.udpRaw.ReloadConfig(c)
+			}
+			ifce.multiPort.Tx = tx
+
+			// TODO: if we upstream this, make this cleaner
+			handshakeManager.udpRaw = ifce.udpRaw
+			handshakeManager.multiPort = ifce.multiPort
+
+			l.Info("Multiport configured", "multiPort", ifce.multiPort)
+		}
+
+		loadMultiPortConfig(c)
+		c.RegisterReloadCallback(loadMultiPortConfig)
+
 		ifce.RegisterConfigChangeCallbacks(c)
 		ifce.reloadDisconnectInvalid(c)
 		ifce.reloadSendRecvError(c)

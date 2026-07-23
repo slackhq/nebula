@@ -8,6 +8,7 @@ import (
 	"github.com/flynn/noise"
 	"github.com/slackhq/nebula/cert"
 	ct "github.com/slackhq/nebula/cert_test"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/noiseutil"
 	"github.com/stretchr/testify/assert"
@@ -444,6 +445,7 @@ func TestMachineThreeMessagePattern(t *testing.T) {
 		initCS.getCredential, v,
 		func() (uint32, error) { return 1000, nil },
 		true, header.HandshakeXXPSK0,
+		config.MultiPortConfig{},
 	)
 	require.NoError(t, err)
 
@@ -452,6 +454,7 @@ func TestMachineThreeMessagePattern(t *testing.T) {
 		respCS.getCredential, v,
 		func() (uint32, error) { return 2000, nil },
 		false, header.HandshakeXXPSK0,
+		config.MultiPortConfig{},
 	)
 	require.NoError(t, err)
 

@@ -8,6 +8,7 @@ import (
 	"github.com/flynn/noise"
 	"github.com/slackhq/nebula/cert"
 	ct "github.com/slackhq/nebula/cert_test"
+	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/handshake"
 	"github.com/slackhq/nebula/header"
 	"github.com/stretchr/testify/assert"
@@ -55,6 +56,7 @@ func runTestHandshake(t *testing.T) (initR, respR *handshake.Result) {
 		cert.Version2, initCreds, verifier,
 		func() (uint32, error) { return 1000, nil },
 		true, header.HandshakeIXPSK0,
+		config.MultiPortConfig{},
 	)
 	require.NoError(t, err)
 
@@ -62,6 +64,7 @@ func runTestHandshake(t *testing.T) (initR, respR *handshake.Result) {
 		cert.Version2, respCreds, verifier,
 		func() (uint32, error) { return 2000, nil },
 		false, header.HandshakeIXPSK0,
+		config.MultiPortConfig{},
 	)
 	require.NoError(t, err)
 
