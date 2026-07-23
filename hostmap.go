@@ -238,17 +238,29 @@ const (
 )
 
 type HostInfo struct {
+	// The first cache line is everything the packet paths touch. Grouping them here means a send or receive
+	// pulls in one line instead of two, which is what the layout looked like when state lived at the end.
+
 	remote          atomic.Pointer[netip.AddrPort]
-	remotes         *RemoteList
-	promoteCounter  atomic.Uint32
 	ConnectionState *ConnectionState
-	remoteIndexId   uint32
-	localIndexId    uint32
+
+	// state holds everything the hot paths need to touch per packet, in one word: whether we have seen traffic
+	// each way since the connection manager last looked, whether it has given up on us, and the
+	// Interface.rebindEpoch this tunnel last sent under. Keeping the epoch here means it survives the traffic
+	// bits being cleared, so a tunnel that has not sent since a rebind still notices when it does.
+	state atomic.Uint32
+
+	promoteCounter atomic.Uint32
+	remoteIndexId  uint32
+	localIndexId   uint32
+	remotes        *RemoteList
 
 	// vpnAddrs is a list of vpn addresses assigned to this host that are within our own vpn networks
 	// The host may have other vpn addresses that are outside our
 	// vpn networks but were removed because they are not usable
 	vpnAddrs []netip.Addr
+
+	// Everything below is off the packet path: handshakes, relays, roaming and the connection manager.
 
 	// networks is a combination of specific vpn addresses (not prefixes!) and full unsafe networks assigned to this host.
 	networks   *bart.Table[NetworkType]
@@ -269,12 +281,6 @@ type HostInfo struct {
 
 	lastRoam       time.Time
 	lastRoamRemote netip.AddrPort
-
-	// state holds everything the hot paths need to touch per packet, in one word: whether we have seen traffic
-	// each way since the connection manager last looked, whether it has given up on us, and the
-	// Interface.rebindEpoch this tunnel last sent under. Keeping the epoch here means it survives the traffic
-	// bits being cleared, so a tunnel that has not sent since a rebind still notices when it does.
-	state atomic.Uint32
 
 	// lastUsed tracks the last time ConnectionManager checked the tunnel and it was in use.
 	// This value will be behind against actual tunnel utilization in the hot path.
