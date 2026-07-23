@@ -22,7 +22,7 @@ jobs:
 
     - uses: actions/setup-go@v7
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         check-latest: true
 
     - name: Install goimports
@@ -42,7 +42,7 @@ jobs:
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v9
       with:
-        version: v2.5
+        version: v2.12
 
   test:
     name: Test ${{ matrix.name }}
@@ -82,7 +82,7 @@ jobs:
 
     - uses: actions/setup-go@v7
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         check-latest: true
 
     - name: Build
@@ -127,7 +127,7 @@ jobs:
 
     - uses: actions/setup-go@v7
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         check-latest: true
 
     - name: Build ${{ matrix.name }}
