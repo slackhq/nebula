@@ -243,7 +243,7 @@ func newCipherSuite(curve cert.Curve, pkcs11backed bool, cipher string) (noise.C
 	switch curve {
 	case cert.Curve_CURVE25519:
 		if fips140.Enforced() {
-			panic("pki: use of Curve25519 is not allowed in FIPS 140-only mode")
+			return nil, errors.New("pki: use of Curve25519 is not allowed in FIPS 140-only mode")
 		}
 		dhFunc = noise.DH25519
 	case cert.Curve_P256:
@@ -258,7 +258,7 @@ func newCipherSuite(curve cert.Curve, pkcs11backed bool, cipher string) (noise.C
 
 	if cipher == "chachapoly" {
 		if fips140.Enforced() {
-			panic("pki: use of ChaChaPoly is not allowed in FIPS 140-only mode")
+			return nil, errors.New("pki: use of ChaChaPoly is not allowed in FIPS 140-only mode")
 		}
 		return noise.NewCipherSuite(dhFunc, noise.CipherChaChaPoly, noise.HashSHA256), nil
 	}
