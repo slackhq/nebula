@@ -145,25 +145,26 @@ To build nebula for a specific platform (ex, Windows):
 
 See the [Makefile](Makefile) for more details on build targets
 
-## Curve P256, BoringCrypto and FIPS 140-3 mode
+## Curve P256 and FIPS 140-3 mode
 
 The default curve used for cryptographic handshakes and signatures is Curve25519. This is the recommended setting for most users. If your deployment has certain compliance requirements, you have the option of creating your CA using `nebula-cert ca -curve P256` to use NIST Curve P256. The CA will then sign certificates using ECDSA P256, and any hosts using these certificates will use P256 for ECDH handshakes.
 
-Nebula can be built using the [BoringCrypto GOEXPERIMENT](https://github.com/golang/go/blob/go1.20/src/crypto/internal/boring/README.md) by running either of the following make targets:
-
-```sh
-make bin-boringcrypto
-make release-boringcrypto
-```
-
-Nebula can also be built to support the [FIPS 140-3](https://go.dev/doc/security/fips140) mode of Go by running either of the following make targets. (This sets GOFIPS140=v1.0.0,
-which must be done at compile time so that the correct AES-GCM can be used for FIPS 140-3 enforcement mode).
+Nebula can be built to support the [FIPS 140-3](https://go.dev/doc/security/fips140) mode of Go by running either of the following make targets. (This sets GOFIPS140=v1.0.0, which must be done at compile time so that the correct AES-GCM can be used for FIPS 140-3 enforcement mode).
 
 ```sh
 make fips140
 make fips140 test
 make release-fips140
 ```
+
+Nebula can also be built using the [BoringCrypto GOEXPERIMENT](https://github.com/golang/go/blob/go1.20/src/crypto/internal/boring/README.md) by running either of the following make targets.
+
+```sh
+make bin-boringcrypto
+make release-boringcrypto
+```
+
+NOTE: boringcrypto support is deprecated and will be removed in the next release. Users should migrate to the native FIPS 140-3 mode described above.
 
 This is not the recommended default deployment, but may be useful based on your compliance requirements.
 
