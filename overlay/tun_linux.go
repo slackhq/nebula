@@ -5,6 +5,7 @@ package overlay
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -250,6 +251,13 @@ func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip
 }
 
 func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue bool) (*tun, error) {
+	// Resolve (and validate) the device name up front so a bad tun.dev fails
+	// fast, before we open /dev/net/tun or leak a file descriptor.
+	tunName, err := findNextTunName(c.GetString("tun.dev", "nebula%d"))
+	if err != nil {
+		return nil, err
+	}
+
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		// If /dev/net/tun doesn't exist, try to create it (will happen in docker)
@@ -277,12 +285,11 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 	if multiqueue {
 		req.Flags |= unix.IFF_MULTI_QUEUE
 	}
-	nameStr := c.GetString("tun.dev", "")
-	copy(req.Name[:], nameStr)
+	copy(req.Name[:], tunName)
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
 		_ = unix.Close(fd)
 		return nil, &NameError{
-			Name:       nameStr,
+			Name:       tunName,
 			Underlying: err,
 		}
 	}
@@ -296,6 +303,68 @@ func newTun(c *config.C, l *slog.Logger, vpnNetworks []netip.Prefix, multiqueue 
 	t.Device = name
 
 	return t, nil
+}
+
+func validateTunName(tunName string) error {
+	if !strings.Contains(tunName, "%d") {
+		if len(tunName) >= unix.IFNAMSIZ {
+			return fmt.Errorf("tun.dev %q is not shorter than the maximum device name length of %d", tunName, unix.IFNAMSIZ)
+		}
+		return nil
+	}
+	if strings.Count(tunName, "%d") > 1 {
+		return fmt.Errorf("tun.dev template %q may only contain a single %%d", tunName)
+	}
+	if tunName == "%d" {
+		return errors.New("please don't name your tun device '%d'")
+	}
+	// The shortest name a template can produce replaces %d with a single digit;
+	// if even that is not shorter than IFNAMSIZ the template can never yield a
+	// usable name.
+	if len(tunName)-len("%d")+len("0") >= unix.IFNAMSIZ {
+		return fmt.Errorf("tun.dev template %q would result in a name that is not shorter than the maximum device name length of %d", tunName, unix.IFNAMSIZ)
+	}
+	return nil
+}
+
+// findNextTunName resolves a tun.dev value into a concrete device name. A value
+// without a "%d" is returned unchanged; a "%d" placeholder (anywhere in the
+// name) has the lowest unused integer substituted in based on the devices
+// currently present.
+func findNextTunName(tunName string) (string, error) {
+	if err := validateTunName(tunName); err != nil {
+		return "", err
+	}
+	if !strings.Contains(tunName, "%d") {
+		return tunName, nil
+	}
+
+	links, err := netlink.LinkList()
+	if err != nil {
+		return "", err
+	}
+	used := make(map[string]struct{}, len(links))
+	for _, link := range links {
+		used[link.Attrs().Name] = struct{}{}
+	}
+	return nextTunName(tunName, used)
+}
+
+// nextTunName substitutes the lowest unused integer into a template's "%d"
+// placeholder, skipping any name present in used. tunName is assumed to have
+// already passed validateTunName (exactly one "%d", room for a digit). It errors
+// only if every candidate that is shorter than IFNAMSIZ is already taken.
+func nextTunName(tunName string, used map[string]struct{}) (string, error) {
+	prefix, suffix, _ := strings.Cut(tunName, "%d")
+	for i := 0; ; i++ {
+		candidateName := fmt.Sprintf("%s%d%s", prefix, i, suffix)
+		if len(candidateName) >= unix.IFNAMSIZ {
+			return "", fmt.Errorf("all device names matching template %q shorter than the maximum length of %d are already in use", tunName, unix.IFNAMSIZ)
+		}
+		if _, taken := used[candidateName]; !taken {
+			return candidateName, nil
+		}
+	}
 }
 
 // newTunGeneric does all the stuff common to different tun initialization paths. It will close your files on error.
@@ -768,7 +837,6 @@ func (t *tun) isGatewayInVpnNetworks(gwAddr netip.Addr) bool {
 
 func (t *tun) getGatewaysFromRoute(r *netlink.Route) routing.Gateways {
 	var gateways routing.Gateways
-
 	link, err := netlink.LinkByName(t.Device)
 	if err != nil {
 		t.l.Error("Ignoring route update: failed to get link by name", "deviceName", t.Device)
