@@ -20,17 +20,26 @@ See the [v1.11.0](https://github.com/slackhq/nebula/milestone/25?closed=1) miles
 - `firewall.inbound_action` and `firewall.outbound_action` were each being applied to the opposite direction, that
   is now corrected. If you set either of these you are getting the behavior of the other one today and likely want
   to swap them before upgrading. (#1798)
+- On Windows, Nebula now installs WFP PERMIT filters for the nebula adapter and the listener port by default. WFP
+  sits below Windows Defender Firewall, so any WDF inbound rules you rely on for either will no longer apply. Set
+  `tun.windows_bypass_wdf` and `listen.windows_bypass_wdf` to false to leave WDF in charge. (#1710)
+- On Windows, the nebula device is now set to the `private` network category instead of whatever Windows decided,
+  which is usually `Public`. This makes the host firewall less restrictive on the overlay. Set
+  `tun.network_category` to `unset` to keep the old behavior. (#1710)
+- Reject packets for non-TCP now use ICMP code 13, communication administratively prohibited, instead of code 3,
+  port unreachable. Anything keying off the old code needs updating. (#1766, #1768)
+- The SSH debug server's profiling commands are now confined to `sshd.sandbox_dir`, which defaults to
+  `$TMP/nebula-debug`. Relative paths resolve inside it and absolute paths outside it are rejected, so anything
+  scripting `start-cpu-profile`, `save-heap-profile`, or `save-mutex-profile` with a path elsewhere needs the
+  directory set. The directory is not created for you. (#1622)
 
 ### Added
 
-- Set the network category of the nebula device on Windows so the host firewall no longer treats it as `Public`,
-  with an option (default `true`) to bypass Windows Defender Firewall on the nebula adapter. (#1710)
 - Sign the Windows release binaries. (#1718)
 - Generate IPv6 reject packets, matching the existing IPv4 behavior. (#1766, #1767, #1768)
 - Accept `-` in `nebula-cert` to read from stdin or write to stdout. (#1714)
 - Search for both `config.yml` and `config.yaml` in service and command line modes. (#1717)
 - Add version labels to the Docker/OCI images. (#1772)
-- Add an `sshd.sandbox_dir` option to confine the SSH debug server's file writes to a directory. (#1622)
 - Rebind the listener and re-query lighthouses on macOS when the underlay network changes, so devices moving
   between wifi and wired or between networks recover without waiting for dead tunnel detection. Controlled by
   `listen.rebind_on_network_change` (default `true`, not reloadable). (#1816)
