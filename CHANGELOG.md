@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 See the [v1.11.0](https://github.com/slackhq/nebula/milestone/25?closed=1) milestone for a complete list of changes.
 
+### Breaking
+
+- Logging has switched from logrus to Go's structured `slog`. Log output changes: levels are upper case
+  (`level=INFO`), trace prints as `level=DEBUG-4`, timestamps are always RFC3339Nano and `logging.timestamp_format`
+  is ignored, and some messages were reworded. Review any log parsing before upgrading. This is also an API break
+  for embedders, as constructors now take a `*slog.Logger`. (#1672, #1734, #1621)
+- `firewall.inbound_action` and `firewall.outbound_action` were each being applied to the opposite direction, that
+  is now corrected. If you set either of these you are getting the behavior of the other one today and likely want
+  to swap them before upgrading. (#1798)
+
 ### Added
 
 - Set the network category of the nebula device on Windows so the host firewall no longer treats it as `Public`,
@@ -27,10 +37,6 @@ See the [v1.11.0](https://github.com/slackhq/nebula/milestone/25?closed=1) miles
 
 ### Changed
 
-- **NOTE**: Logging has switched from logrus to Go's structured `slog`. Log output changes: levels are upper case
-  (`level=INFO`), trace prints as `level=DEBUG-4`, timestamps are always RFC3339Nano and `logging.timestamp_format`
-  is ignored, and some messages were reworded. Review any log parsing before upgrading. This is also an API break
-  for embedders, as constructors now take a `*slog.Logger`. (#1672, #1734, #1621)
 - Reload the firewall when the unsafe networks in the certificate change. (#1719)
 - Reconfigure, start, and stop the stats listener on a config reload instead of requiring a restart. (#1670)
 - Update a static host's addresses when they change on reload. (#1713)
@@ -48,6 +54,7 @@ See the [v1.11.0](https://github.com/slackhq/nebula/milestone/25?closed=1) miles
   instead of leaking them. (#1794)
 - Trigger an immediate lighthouse update when reconnecting to or adding a lighthouse instead of waiting for the next update tick. (#1645)
 - Bring the Darwin and OpenBSD tun implementations in line with the other BSDs. (#1703)
+- Update to build against go v1.26. (#1818)
 - Various dependency updates. (#1586, #1587, #1604, #1617, #1618, #1627, #1628, #1629, #1652, #1664, #1665, #1697, #1721, #1732, #1742, #1743, #1750, #1763, #1771, #1782, #1800, #1807)
 
 ### Fixed
@@ -65,8 +72,6 @@ See the [v1.11.0](https://github.com/slackhq/nebula/milestone/25?closed=1) miles
 - Reject malformed handshakes more reliably, including invalid ed25519 key lengths. (#1601, #1756)
 - Properly handle `closetunnel` packets. (#1638)
 - Fix an IPv6 extension-header length overflow that could make the firewall parse the wrong protocol and ports. (#1789)
-- Correct the directionality of `firewall.inbound_action` and `firewall.outbound_action`, they were each applied to
-  the opposite direction. If you set either of these you likely want to swap them. (#1798)
 - Fix relay re-establishment when a handshake arrives over a relay entry that a one-sided teardown left
   `Disestablished`, which silently dropped every send until dead tunnel detection forced a re-handshake. (#1805)
 - Don't build new relay state on a tunnel that was just discarded. (#1796)
