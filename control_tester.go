@@ -123,6 +123,16 @@ func (c *Control) SetLocalAddrsFn(fn func(*LocalAllowList) []netip.Addr) {
 	c.f.lightHouse.localAddrsFn = fn
 }
 
+// GetRebindEpochFor returns the rebind epoch a tunnel last sent under, so a test can tell whether a send
+// consumed the epoch edge without having to infer it from lighthouse traffic.
+func (c *Control) GetRebindEpochFor(vpnAddr netip.Addr) (uint32, bool) {
+	h := c.f.hostMap.QueryVpnAddr(vpnAddr)
+	if h == nil {
+		return 0, false
+	}
+	return h.state.Load() >> stateEpochShift, true
+}
+
 func (c *Control) KillPendingTunnel(vpnIp netip.Addr) bool {
 	hostinfo := c.f.handshakeManager.QueryVpnAddr(vpnIp)
 	if hostinfo == nil {

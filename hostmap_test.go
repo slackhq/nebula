@@ -401,3 +401,43 @@ func TestHostMap_RelayState(t *testing.T) {
 	assert.Equal(t, []netip.Addr{}, h1.relayState.relays)
 
 }
+
+func TestHostInfo_markOut(t *testing.T) {
+	h := &HostInfo{}
+	h.markOut(5) // stamped when the tunnel was added
+
+	// A tunnel already on the current epoch has nothing to report, which is what keeps a fresh tunnel from
+	// requerying on its first packet
+	assert.False(t, h.markOut(5), "an unchanged epoch should not report a move")
+	assert.True(t, h.sentSinceCheck(), "the send is still recorded as traffic")
+
+	// A rebind is observed exactly once, so we requery once per rebind
+	assert.True(t, h.markOut(6), "a bumped epoch should report a move")
+	assert.False(t, h.markOut(6), "the epoch move should only be reported once")
+
+	// Traffic and pendingDeletion live in the same word and must survive an epoch change
+	h.setPendingDeletion(true)
+	h.markIn()
+	assert.True(t, h.markOut(7))
+	assert.True(t, h.isPendingDeletion(), "pendingDeletion must survive an epoch change")
+	in, out := h.takeTraffic()
+	assert.True(t, in, "inbound traffic must survive an epoch change")
+	assert.True(t, out)
+
+	// Clearing the traffic bits leaves the epoch alone, otherwise an idle tunnel would requery forever
+	assert.False(t, h.markOut(7), "takeTraffic must not disturb the epoch")
+}
+
+// A relayed send records traffic but must leave the rebind epoch for the direct path to consume, otherwise
+// relaying to a host swallows the requery that gets the far side punching at our new address.
+func TestHostInfo_markOutOnly(t *testing.T) {
+	h := &HostInfo{}
+	h.markOut(5)
+
+	h.markOutOnly()
+	assert.True(t, h.sentSinceCheck(), "a relayed send is still outbound traffic")
+	assert.False(t, h.markOut(5), "a relayed send must not disturb the epoch")
+
+	assert.True(t, h.markOut(6), "a relayed send must not consume the epoch edge")
+	assert.False(t, h.markOut(6))
+}

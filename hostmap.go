@@ -262,11 +262,6 @@ type HostInfo struct {
 	// This is used to limit lighthouse re-queries in chatty clients
 	nextLHQuery atomic.Int64
 
-	// lastRebindCount is the other side of Interface.rebindCount, if these values don't match then we need to ask LH
-	// for a punch from the remote end of this tunnel. The goal being to prime their conntrack for our traffic just like
-	// with a handshake
-	lastRebindCount int8
-
 	// lastHandshakeTime records the time the remote side told us about at the stage when the handshake was completed locally
 	// Stage 1 packet will contain it if I am a responder, stage 2 packet if I am an initiator
 	// This is used to avoid an attack where a handshake packet is replayed after some time
@@ -275,8 +270,8 @@ type HostInfo struct {
 	lastRoam       time.Time
 	lastRoamRemote netip.AddrPort
 
-	//TODO: in, out, and others might benefit from being an atomic.Int32. We could collapse connectionManager pendingDeletion, relayUsed, and in/out into this 1 thing
-	in, out, pendingDeletion atomic.Bool
+	// Traffic bits, pendingDeletion, and the rebind epoch we last sent under
+	state atomic.Uint32
 
 	// lastUsed tracks the last time ConnectionManager checked the tunnel and it was in use.
 	// This value will be behind against actual tunnel utilization in the hot path.
@@ -658,7 +653,7 @@ func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	hm.Indexes[hostinfo.localIndexId] = hostinfo
 	hm.RemoteIndexes[hostinfo.remoteIndexId] = hostinfo
 
-	hostinfo.out.Store(true)
+	hostinfo.markOut(f.rebindEpoch.Load())
 	if f.connectionManager != nil { // f.connectionManager is only nil in some unit tests
 		f.connectionManager.trafficTimer.Add(hostinfo.localIndexId, f.connectionManager.checkInterval)
 	}
@@ -757,6 +752,68 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []netip.Prefix, ifce *Interfac
 		i.nextLHQuery.Store(now + ifce.reQueryWait.Load())
 		ifce.lightHouse.QueryServer(i.vpnAddrs[0])
 	}
+}
+
+// Bits within HostInfo.state, everything above stateEpochShift is the epoch
+const (
+	stateIn uint32 = 1 << iota
+	stateOut
+	statePendingDeletion
+
+	stateFlags      = stateIn | stateOut | statePendingDeletion
+	stateEpochShift = 3
+)
+
+// markIn records inbound traffic
+func (i *HostInfo) markIn() {
+	if i.state.Load()&stateIn == 0 {
+		i.state.Or(stateIn)
+	}
+}
+
+// markOut records a send and reports whether the epoch moved, meaning we want a punch from the far side
+func (i *HostInfo) markOut(epoch uint32) bool {
+	e := epoch << stateEpochShift
+	for {
+		old := i.state.Load()
+		if old&stateOut != 0 && old&^stateFlags == e {
+			return false
+		}
+
+		if i.state.CompareAndSwap(old, old&stateFlags|stateOut|e) {
+			return old&^stateFlags != e
+		}
+	}
+}
+
+// markOutOnly records a send without consuming the rebind epoch, for paths that cannot act on a requery
+func (i *HostInfo) markOutOnly() {
+	if i.state.Load()&stateOut == 0 {
+		i.state.Or(stateOut)
+	}
+}
+
+// sentSinceCheck reports whether anything has been sent since the connection manager last looked
+func (i *HostInfo) sentSinceCheck() bool {
+	return i.state.Load()&stateOut != 0
+}
+
+// takeTraffic clears both traffic bits, leaving the epoch alone, and reports what they were
+func (i *HostInfo) takeTraffic() (in bool, out bool) {
+	old := i.state.And(^(stateIn | stateOut))
+	return old&stateIn != 0, old&stateOut != 0
+}
+
+func (i *HostInfo) setPendingDeletion(v bool) {
+	if v {
+		i.state.Or(statePendingDeletion)
+	} else {
+		i.state.And(^statePendingDeletion)
+	}
+}
+
+func (i *HostInfo) isPendingDeletion() bool {
+	return i.state.Load()&statePendingDeletion != 0
 }
 
 func (i *HostInfo) GetCert() *cert.CachedCertificate {
