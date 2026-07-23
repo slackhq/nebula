@@ -18,6 +18,7 @@ import (
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/routing"
 	"github.com/slackhq/nebula/util"
+	"golang.org/x/sys/unix"
 )
 
 type tun struct {
@@ -33,6 +34,12 @@ func newTun(_ *config.C, _ *slog.Logger, _ []netip.Prefix, _ bool) (*tun, error)
 }
 
 func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip.Prefix) (*tun, error) {
+	if err := unix.SetNonblock(deviceFd, true); err != nil {
+		// We own the fd from the moment it is handed to us, same as the reload error path below
+		_ = unix.Close(deviceFd)
+		return nil, fmt.Errorf("failed to set the tun fd to non-blocking mode: %w", err)
+	}
+
 	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
 	t := &tun{
 		vpnNetworks:     vpnNetworks,
@@ -42,6 +49,7 @@ func newTunFromFd(c *config.C, l *slog.Logger, deviceFd int, vpnNetworks []netip
 
 	err := t.reload(c, true)
 	if err != nil {
+		_ = file.Close()
 		return nil, err
 	}
 

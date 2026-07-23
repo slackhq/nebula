@@ -300,7 +300,13 @@ func (hm *HandshakeManager) handleOutbound(vpnIp netip.Addr, lighthouseTriggered
 		hm.messageMetrics.Tx(header.Handshake, hh.machine.Subtype(), 1)
 		err := hm.outside.WriteTo(stage0, addr)
 		if err != nil {
-			hostinfo.logger(hm.l).Error("Failed to send handshake message",
+			// These repeat every attempt, so match the success log below and only shout when the remotes changed
+			level := slog.LevelDebug
+			if remotesHaveChanged {
+				level = slog.LevelError
+			}
+
+			hostinfo.logger(hm.l).Log(context.Background(), level, "Failed to send handshake message",
 				"udpAddr", addr,
 				"initiatorIndex", hostinfo.localIndexId,
 				"handshake", hsFields,
@@ -459,14 +465,11 @@ func (hm *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket
 	// Check if we already have a tunnel with this vpn ip
 	existingHostInfo, found := hm.mainHostMap.Hosts[hostinfo.vpnAddrs[0]]
 	if found && existingHostInfo != nil {
-		testHostInfo := existingHostInfo
-		for testHostInfo != nil {
-			// Is it just a delayed handshake packet?
+		// Is it just a delayed handshake packet? Check every hostinfo we hold for this address.
+		for _, testHostInfo := range hm.mainHostMap.unlockedGetHostList(hostinfo.vpnAddrs[0]) {
 			if bytes.Equal(hostinfo.HandshakePacket[handshakePacket], testHostInfo.HandshakePacket[handshakePacket]) {
 				return testHostInfo, ErrAlreadySeen
 			}
-
-			testHostInfo = testHostInfo.next
 		}
 
 		// Is this a newer handshake?
@@ -561,7 +564,9 @@ func (hm *HandshakeManager) DeleteHostInfo(hostinfo *HostInfo) {
 
 func (hm *HandshakeManager) unlockedDeleteHostInfo(hostinfo *HostInfo) {
 	for _, addr := range hostinfo.vpnAddrs {
-		delete(hm.vpnIps, addr)
+		if cur, ok := hm.vpnIps[addr]; ok && cur.hostinfo == hostinfo {
+			delete(hm.vpnIps, addr)
+		}
 	}
 
 	if len(hm.vpnIps) == 0 {
@@ -1131,7 +1136,7 @@ func (hm *HandshakeManager) sendHandshakeResponse(via ViaSender, msg []byte, hos
 		hostinfo.relayState.InsertRelayTo(via.relayHI.vpnAddrs[0])
 		// We received a valid handshake on this relay, so make sure the relay
 		// state reflects that, in case it had been marked Disestablished.
-		via.relayHI.relayState.UpdateRelayForByIdxState(via.remoteIdx, Established)
+		via.relayHI.relayState.UpdateRelayForByIdxState(via.relay.LocalIndex, Established)
 		f.SendVia(via.relayHI, via.relay, msg, make([]byte, 12), make([]byte, mtu), false)
 		f.l.Info("Handshake message sent", append(logFields, "relay", via.relayHI.vpnAddrs[0])...)
 	}

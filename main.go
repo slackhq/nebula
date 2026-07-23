@@ -130,6 +130,17 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 	udpConns := make([]udp.Conn, routines)
 	port := c.GetInt("listen.port", 0)
 
+	// Callers get no handle to these until the Control is returned, release them on any error.
+	defer func() {
+		if reterr != nil {
+			for _, u := range udpConns {
+				if u != nil {
+					_ = u.Close()
+				}
+			}
+		}
+	}()
+
 	if !configTest {
 		rawListenHost := c.GetString("listen.host", "0.0.0.0")
 		var listenHost netip.Addr
@@ -290,6 +301,8 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 
 	attachCommands(l, c, ssh, ifce)
 
+	networkChanges := udp.NewNetworkChangeMonitor(ctx, l, c)
+
 	return &Control{
 		state:                  StateReady,
 		f:                      ifce,
@@ -300,6 +313,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		statsStart:             stats.Start,
 		dnsStart:               ds.Start,
 		lighthouseStart:        lightHouse.StartUpdateWorker,
+		networkChangeStart:     networkChanges.Start,
 		connectionManagerStart: connManager.Start,
 	}, nil
 }

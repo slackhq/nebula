@@ -114,6 +114,28 @@ type packet struct {
 	packet *udp.Packet
 	tun    bool // a packet pulled off a tun device
 	rx     bool // the packet was received by a udp device
+
+	// h is the nebula header, parsed once when the packet is recorded. parseErr says why there isn't one, which
+	// the flow log reports rather than hiding. Punchy sends a single byte, so an unparseable packet is normal.
+	h        header.H
+	parseErr error
+}
+
+// fromAddr and toAddr are the addresses this packet actually travelled between. Reading them off the control
+// instead would misreport the whole history once a test moves a node. Tun packets are synthesized without
+// addresses, so they fall back to the control.
+func (p *packet) fromAddr() netip.AddrPort {
+	if p.tun || !p.packet.From.IsValid() {
+		return p.from.GetUDPAddr()
+	}
+	return p.packet.From
+}
+
+func (p *packet) toAddr() netip.AddrPort {
+	if p.tun || !p.packet.To.IsValid() {
+		return p.to.GetUDPAddr()
+	}
+	return p.packet.To
 }
 
 func (p *packet) WasReceived() {
@@ -249,7 +271,7 @@ func (r *R) renderFlow() {
 			continue
 		}
 
-		addr := e.packet.from.GetUDPAddr()
+		addr := e.packet.fromAddr()
 		if _, ok := participants[addr]; ok {
 			continue
 		}
@@ -268,7 +290,6 @@ func (r *R) renderFlow() {
 	}
 
 	// Print packets
-	h := &header.H{}
 	for _, e := range r.flow {
 		if e.packet == nil {
 			//fmt.Fprintf(f, "    note over %s: %s\n", strings.Join(participantsVals, ", "), e.note)
@@ -280,21 +301,22 @@ func (r *R) renderFlow() {
 			fmt.Fprintln(f, r.formatUdpPacket(p))
 
 		} else {
-			if err := h.Parse(p.packet.Data); err != nil {
-				panic(err)
-			}
-
 			line := "--x"
 			if p.rx {
 				line = "->>"
 			}
 
-			fmt.Fprintf(f,
-				"    %s%s%s: %s(%s), index %v, counter: %v\n",
-				normalizeName(p.from.GetUDPAddr().String()),
+			detail := fmt.Sprintf("%s(%s), index %v, counter: %v",
+				p.h.TypeName(), p.h.SubTypeName(), p.h.RemoteIndex, p.h.MessageCounter)
+			if p.parseErr != nil {
+				detail = fmt.Sprintf("unparsed, %v (%d bytes)", p.parseErr, len(p.packet.Data))
+			}
+
+			fmt.Fprintf(f, "    %s%s%s: %s\n",
+				normalizeName(p.fromAddr().String()),
 				line,
-				normalizeName(p.to.GetUDPAddr().String()),
-				h.TypeName(), h.SubTypeName(), h.RemoteIndex, h.MessageCounter,
+				normalizeName(p.toAddr().String()),
+				detail,
 			)
 		}
 	}
@@ -408,29 +430,34 @@ func (r *R) unlockedInjectFlow(from, to *nebula.Control, p *udp.Packet, tun bool
 
 	r.renderHostmaps(fmt.Sprintf("Packet %v", len(r.flow)))
 
-	if len(r.ignoreFlows) > 0 {
-		var h header.H
-		err := h.Parse(p.Data)
-		if err != nil {
-			panic(err)
-		}
+	var h header.H
+	var parseErr error
+	if !tun {
+		parseErr = h.Parse(p.Data)
+	}
 
-		for _, i := range r.ignoreFlows {
-			if !tun {
-				if i.messageType == h.Type && i.subType == h.Subtype {
-					return nil
-				}
-			} else if i.tun.HasValue && i.tun.IsTrue {
+	// Decide before copying, the copy comes from a freelist and an ignored packet would never be released
+	for _, i := range r.ignoreFlows {
+		if tun {
+			if i.tun.HasValue && i.tun.IsTrue {
 				return nil
 			}
+			continue
+		}
+
+		// A packet we could not parse has no type to match against, so no rule can ignore it
+		if parseErr == nil && i.messageType == h.Type && i.subType == h.Subtype {
+			return nil
 		}
 	}
 
 	fp := &packet{
-		from:   from,
-		to:     to,
-		packet: p.Copy(),
-		tun:    tun,
+		from:     from,
+		to:       to,
+		packet:   p.Copy(),
+		tun:      tun,
+		h:        h,
+		parseErr: parseErr,
 	}
 
 	r.flow = append(r.flow, flowEntry{packet: fp})
@@ -688,6 +715,81 @@ func (r *R) RouteUntilAfterMsgType(sender *nebula.Control, msgType header.Messag
 
 		return KeepRouting
 	})
+}
+
+// RouteFor routes everything that shows up for the given duration and then returns. Use it to let a test settle
+// deterministically rather than sleeping and hoping: a single FlushAll races a completing handshake, which queues
+// more packets right behind it.
+func (r *R) RouteFor(d time.Duration) {
+	r.RouteForAllExitFuncOrTimeout(d, func(*udp.Packet, *nebula.Control) ExitType {
+		return KeepRouting
+	})
+}
+
+// RouteForAllExitFuncOrTimeout is RouteForAllExitFunc with a deadline, reporting whether whatDo asked to exit
+// before time ran out. The unbounded version blocks forever on a quiet network, so this is what a test needs to
+// assert that something does NOT happen, or to route for a fixed settling period.
+func (r *R) RouteForAllExitFuncOrTimeout(timeout time.Duration, whatDo ExitFunc) bool {
+	sc := make([]reflect.SelectCase, 0, len(r.controls)+1)
+	cm := make([]*nebula.Control, 0, len(r.controls))
+
+	for _, c := range r.controls {
+		sc = append(sc, reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(c.GetUDPTxChan()),
+			Send: reflect.Value{},
+		})
+		cm = append(cm, c)
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	sc = append(sc, reflect.SelectCase{
+		Dir:  reflect.SelectRecv,
+		Chan: reflect.ValueOf(timer.C),
+		Send: reflect.Value{},
+	})
+
+	for {
+		x, rx, _ := reflect.Select(sc)
+		if x == len(cm) {
+			return false
+		}
+
+		r.Lock()
+		p := rx.Interface().(*udp.Packet)
+		receiver := r.getControl(cm[x].GetUDPAddr(), p.To, p)
+		if receiver == nil {
+			r.Unlock()
+			panic("Can't RouteForAllExitFuncOrTimeout for host: " + p.To.String())
+		}
+
+		e := whatDo(p, receiver)
+		switch e {
+		case ExitNow:
+			r.Unlock()
+			p.Release()
+			return true
+
+		case RouteAndExit:
+			fp := r.unlockedInjectFlow(cm[x], receiver, p, false)
+			receiver.InjectUDPPacket(p)
+			fp.WasReceived()
+			r.Unlock()
+			p.Release()
+			return true
+
+		case KeepRouting:
+			fp := r.unlockedInjectFlow(cm[x], receiver, p, false)
+			receiver.InjectUDPPacket(p)
+			fp.WasReceived()
+
+		default:
+			panic(fmt.Sprintf("Unknown exitFunc return: %v", e))
+		}
+		r.Unlock()
+		p.Release()
+	}
 }
 
 func (r *R) RouteForAllUntilAfterMsgTypeTo(receiver *nebula.Control, msgType header.MessageType, subType header.MessageSubType) {

@@ -97,8 +97,7 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 	newAddr := getDnsServerAddr(c)
 
 	d.serverMu.Lock()
-	running := d.server
-	runningStarted := d.started
+	running := d.server != nil
 	sameAddr := d.addr == newAddr
 	d.addr = newAddr
 	d.enabled.Store(enabled)
@@ -112,7 +111,7 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 	}
 
 	if !enabled {
-		if running != nil {
+		if running {
 			d.Stop()
 		}
 		// Drop any records that accumulated while enabled; a later re-enable
@@ -121,12 +120,12 @@ func (d *dnsServer) reload(c *config.C, initial bool) error {
 		return nil
 	}
 
-	if running == nil {
+	if !running {
 		// Was disabled (or never started); bring it up now.
 		go d.Start()
 	} else if !sameAddr {
-		d.shutdownServer(running, runningStarted, "reload")
-		// Old Start goroutine has now exited; bring up a fresh listener on the new address.
+		// Stop clears the slot before shutting down, otherwise the Start below can find the dying server and refuse
+		d.Stop()
 		go d.Start()
 	}
 
@@ -162,7 +161,9 @@ func (d *dnsServer) Start() {
 
 	started := make(chan struct{})
 	d.serverMu.Lock()
-	if d.ctx.Err() != nil {
+	// Re-check enabled under the lock, a disable that raced our check above snapshots the slot under it too.
+	// Two reloads in quick succession can both spawn a Start, the loser would orphan the live listener past Stop
+	if d.ctx.Err() != nil || d.server != nil || !d.enabled.Load() {
 		d.serverMu.Unlock()
 		return
 	}
@@ -199,6 +200,14 @@ func (d *dnsServer) Start() {
 	default:
 		close(started)
 	}
+
+	// Release our slot, unless a reload already replaced us, so a dead listener can't block a future Start
+	d.serverMu.Lock()
+	if d.server == server {
+		d.server = nil
+		d.started = nil
+	}
+	d.serverMu.Unlock()
 
 	if err != nil {
 		d.l.Warn("Failed to run the DNS responder", "error", err)

@@ -108,7 +108,19 @@ func (c *Control) GetVpnAddrs() []netip.Addr {
 }
 
 func (c *Control) GetUDPAddr() netip.AddrPort {
-	return c.f.outside.(*udp.TesterConn).Addr
+	return c.f.outside.(*udp.TesterConn).GetAddr()
+}
+
+// SetUDPAddr moves this node to a new underlay address, standing in for a laptop waking up on a different
+// network. Register the new address with the router as well or nothing will route back.
+func (c *Control) SetUDPAddr(addr netip.AddrPort) {
+	c.f.outside.(*udp.TesterConn).SetAddr(addr)
+}
+
+// SetLocalAddrsFn replaces underlay address discovery so a test can advertise its simulated address instead of
+// whatever this machine's NICs happen to be. Call it before Start, SendUpdate reads it from the update worker.
+func (c *Control) SetLocalAddrsFn(fn func(*LocalAllowList) []netip.Addr) {
+	c.f.lightHouse.localAddrsFn = fn
 }
 
 func (c *Control) KillPendingTunnel(vpnIp netip.Addr) bool {
@@ -123,6 +135,14 @@ func (c *Control) KillPendingTunnel(vpnIp netip.Addr) bool {
 
 func (c *Control) GetHostmap() *HostMap {
 	return c.f.hostMap
+}
+
+// GetHostmapIndexCount returns the number of entries in the main hostmap Indexes table, holding
+// the hostmap read lock so tests can poll it while connection manager churns tunnels.
+func (c *Control) GetHostmapIndexCount() int {
+	c.f.hostMap.RLock()
+	defer c.f.hostMap.RUnlock()
+	return len(c.f.hostMap.Indexes)
 }
 
 func (c *Control) GetF() *Interface {

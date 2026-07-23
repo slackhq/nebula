@@ -187,6 +187,9 @@ func (u *StdConn) SupportsMultipleReaders() bool {
 	return false
 }
 
+// Rebind clears the interface the kernel scoped this socket to, so that sends are routed against the current
+// routing table instead of the interface we happened to be on when the socket was created. Darwin pins sockets
+// this way on its own, which is what strands us after the underlying network changes.
 func (u *StdConn) Rebind() error {
 	var err error
 	if u.isV4 {
@@ -195,9 +198,5 @@ func (u *StdConn) Rebind() error {
 		err = syscall.SetsockoptInt(int(u.sysFd), syscall.IPPROTO_IPV6, syscall.IPV6_BOUND_IF, 0)
 	}
 
-	if err != nil {
-		u.l.Error("Failed to rebind udp socket", "error", err)
-	}
-
-	return nil
+	return err
 }

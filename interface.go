@@ -227,6 +227,9 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 
 	ifce.connectionManager.intf = ifce
 
+	// Held until Close so waiting on the interface blocks until the resources are actually released
+	ifce.wg.Add(1)
+
 	return ifce, nil
 }
 
@@ -272,17 +275,16 @@ func (f *Interface) activate() error {
 		f.readers[i] = reader
 	}
 
-	f.wg.Add(1) // for us to wait on Close() to return
+	// On error the caller owns the cleanup, Control.Start cancels the service context
+	// before releasing our resources so a waiter never observes a live context
 	if err = f.inside.Activate(); err != nil {
-		f.wg.Done()
-		f.inside.Close()
 		return err
 	}
 
 	return nil
 }
 
-func (f *Interface) run() (func() error, error) {
+func (f *Interface) run() {
 	// Launch n queues to read packets from udp
 	for i := 0; i < f.routines; i++ {
 		f.wg.Go(func() {
@@ -297,13 +299,14 @@ func (f *Interface) run() (func() error, error) {
 		})
 	}
 
-	return func() error {
-		f.wg.Wait()
-		if e := f.fatalErr.Load(); e != nil {
-			return *e
-		}
-		return nil
-	}, nil
+}
+
+func (f *Interface) wait() error {
+	f.wg.Wait()
+	if e := f.fatalErr.Load(); e != nil {
+		return *e
+	}
+	return nil
 }
 
 // onFatal stores the first fatal reader error, and calls triggerShutdown if it was the first one
@@ -336,7 +339,10 @@ func (f *Interface) listenOut(i int) {
 		f.readOutsidePackets(ViaSender{UdpAddr: fromUdpAddr}, plaintext[:0], payload, h, fwPacket, lhh, nb, i, ctCache.Get())
 	})
 
-	if err != nil && !f.closed.Load() {
+	// An error after teardown began is shutdown noise, the closed flag covers resources
+	// Close releases itself and the cancelled ctx covers ones torn down by their owners
+	// reacting to it, like the user device pipes
+	if err != nil && !f.closed.Load() && f.ctx.Err() == nil {
 		f.l.Error("Error while reading inbound packet, closing", "error", err)
 		f.onFatal(err)
 	}
@@ -355,7 +361,8 @@ func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
 	for {
 		n, err := reader.Read(packet)
 		if err != nil {
-			if !f.closed.Load() {
+			// Same shutdown noise handling as listenOut
+			if !f.closed.Load() && f.ctx.Err() == nil {
 				f.l.Error("Error while reading outbound packet, closing", "error", err, "reader", i)
 				f.onFatal(err)
 			}
@@ -565,9 +572,15 @@ func (f *Interface) GetCertState() *CertState {
 	return f.pki.getCertState()
 }
 
+// Close releases the interface's resources: the udp sockets and the tun device.
+// It is idempotent and safe to call at any point in the lifecycle, including on an interface that never activated,
+// calls after the first return nil without doing anything.
 func (f *Interface) Close() error {
+	if !f.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+
 	var errs []error
-	f.closed.Store(true)
 
 	// Release the udp readers
 	for i, u := range f.writers {
@@ -583,6 +596,8 @@ func (f *Interface) Close() error {
 	if closeErr != nil {
 		errs = append(errs, closeErr)
 	}
+
+	// Release the construction token so waiters know the resources are gone
 	f.wg.Done()
 	return errors.Join(errs...)
 }
