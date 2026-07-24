@@ -3,8 +3,11 @@ package noiseutil
 import (
 	"bytes"
 	"crypto/cipher"
+	"crypto/fips140"
 	"encoding/binary"
+	"fmt"
 	"reflect"
+	"runtime"
 	"unsafe"
 
 	// unsafe needed for go:linkname
@@ -32,7 +35,7 @@ type cipherFn struct {
 func (c cipherFn) Cipher(k [32]byte) noise.Cipher { return c.fn(k) }
 func (c cipherFn) CipherName() string             { return c.name }
 
-// CipherAESGCMFIPS140 is the AES256-GCM AEAD cipher (using aeadAESGCM when fips140 is enabled)
+// CipherAESGCMFIPS140 is the AES256-GCM AEAD cipher (using tls.aeadAESGCMTLS13, for both boringcrypto and fips140)
 var CipherAESGCMFIPS140 noise.CipherFunc = cipherFn{cipherAESGCMFIPS140, "AESGCM"}
 
 // tls.aeadAESGCMTLS13 uses a 4 byte static prefix and an 8 byte XOR mask
@@ -68,8 +71,19 @@ type aeadGCMFIPS140Cipher struct {
 func extractFIPSAEAD(xorNonceAEAD cipher.AEAD) cipher.AEAD {
 	r := reflect.ValueOf(xorNonceAEAD)
 	v := r.Elem().FieldByName("aead")
+	if !v.IsValid() {
+		// The internal crypto/tls.xorNonceAEAD struct no longer has an `aead`
+		// field. This can only happen on a Go version this code was not built
+		// against; the package init() self-test guards against ever reaching
+		// this at runtime, so this is a defensive fail-fast.
+		panic(fmt.Sprintf("noiseutil: could not extract FIPS AEAD from %T on %s: no `aead` field (incompatible Go version)", xorNonceAEAD, runtime.Version()))
+	}
 	v2 := reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem()
-	return v2.Interface().(cipher.AEAD)
+	aead, ok := v2.Interface().(cipher.AEAD)
+	if !ok {
+		panic(fmt.Sprintf("noiseutil: extracted FIPS `aead` field is %s, not a cipher.AEAD, on %s (incompatible Go version)", v2.Type(), runtime.Version()))
+	}
+	return aead
 }
 
 func (c *aeadGCMFIPS140Cipher) init(nonce []byte) {
@@ -114,4 +128,52 @@ func aeadGCMFIPS140CipherNonce(n uint64) []byte {
 	var nonce [12]byte
 	binary.BigEndian.PutUint64(nonce[4:], n)
 	return nonce[:]
+}
+
+// init validates the go:linkname + reflection extraction and the nonce-reuse
+// protection at startup, in every build. cipherAESGCMFIPS140 relies on unexported
+// crypto/tls and crypto/internal/fips140 internals; if a future Go version changes
+// those, this fails fast with a clear message instead of panicking per-handshake
+// (or, worse, silently losing the strictly-increasing nonce check that is the whole
+// point of using this cipher). Because this file has no build tag, this self-test
+// runs even in non-FIPS builds, so the default CI lane catches an incompatible Go.
+func init() {
+	var key [32]byte
+	c := cipherAESGCMFIPS140(key)
+
+	// Verify the extracted AEAD produces a working encrypt/decrypt roundtrip.
+	plaintext := []byte("nebula fips140 self-test")
+	ad := []byte("ad")
+	ct := c.Encrypt(nil, 1, ad, plaintext)
+	pt, err := c.Decrypt(nil, 1, ad, ct)
+	if err != nil {
+		panic(fmt.Sprintf("noiseutil: FIPS AES-GCM self-test roundtrip failed on %s: %v", runtime.Version(), err))
+	}
+	if !bytes.Equal(pt, plaintext) {
+		panic(fmt.Sprintf("noiseutil: FIPS AES-GCM self-test roundtrip returned wrong plaintext on %s", runtime.Version()))
+	}
+
+	// Verify the nonce-reuse protection still fires: re-encrypting with the same
+	// counter must panic. This is the guarantee we depend on for nonce safety, so
+	// if the extraction ever silently yields an AEAD without it, refuse to start.
+	// The strictly-increasing nonce check only exists under boringcrypto/fips140;
+	// in a plain build aeadAESGCMTLS13 wraps a standard GCM that does not enforce
+	// it (and CipherAESGCMFIPS140 is unused there anyway), so only assert it when
+	// one of those modes is active.
+	if (boringEnabled || fips140.Enabled()) && !reusePanics(c) {
+		panic(fmt.Sprintf("noiseutil: FIPS AES-GCM self-test did not reject a reused nonce on %s; nonce-reuse protection is missing (incompatible Go version)", runtime.Version()))
+	}
+}
+
+// reusePanics reports whether re-encrypting with an already-used counter panics,
+// as GCMWithXORCounterNonce is expected to.
+func reusePanics(c noise.Cipher) (panicked bool) {
+	defer func() {
+		if recover() != nil {
+			panicked = true
+		}
+	}()
+	c.Encrypt(nil, 2, nil, nil)
+	c.Encrypt(nil, 2, nil, nil)
+	return false
 }
