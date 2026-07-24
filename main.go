@@ -260,6 +260,8 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		return nil, util.ContextualizeIfNeeded("Failed to start stats emitter", err)
 	}
 
+	infoAPI := newInfoAPIServerFromConfig(ctx, l, pki, hostMap, c)
+
 	if configTest {
 		return nil, nil
 	}
@@ -279,6 +281,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		sshStart:               sshStart,
 		statsStart:             stats.Start,
 		dnsStart:               ds.Start,
+		infoAPIStart:           infoAPI.Start,
 		lighthouseStart:        lightHouse.StartUpdateWorker,
 		networkChangeStart:     networkChanges.Start,
 		connectionManagerStart: connManager.Start,
