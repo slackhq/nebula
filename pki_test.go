@@ -16,34 +16,35 @@ func TestNewCipherSuite(t *testing.T) {
 		cipher          string
 		fips140Enforced bool
 		wantErr         string
-		// wantName is a substring expected in the resulting CipherSuite name
-		// (e.g. "P256" or "AESGCM"), only checked when wantErr is empty.
+		// wantName is the full expected CipherSuite name (<DH>_<Cipher>_<Hash>),
+		// only checked when wantErr is empty. Asserting the whole name makes both
+		// the curve and cipher selection load-bearing.
 		wantName string
 	}{
 		{
 			name:     "curve25519 aesgcm, not enforced",
 			curve:    cert.Curve_CURVE25519,
 			cipher:   "aesgcm",
-			wantName: "AESGCM",
+			wantName: "25519_AESGCM_SHA256",
 		},
 		{
 			name:     "curve25519 chachapoly, not enforced",
 			curve:    cert.Curve_CURVE25519,
 			cipher:   "chachapoly",
-			wantName: "ChaChaPoly",
+			wantName: "25519_ChaChaPoly_SHA256",
 		},
 		{
 			name:     "p256 aesgcm, not enforced",
 			curve:    cert.Curve_P256,
 			cipher:   "aesgcm",
-			wantName: "P256",
+			wantName: "P256_AESGCM_SHA256",
 		},
 		{
 			name:            "p256 aesgcm, enforced is allowed",
 			curve:           cert.Curve_P256,
 			cipher:          "aesgcm",
 			fips140Enforced: true,
-			wantName:        "P256",
+			wantName:        "P256_AESGCM_SHA256",
 		},
 		{
 			name:            "curve25519 rejected when enforced",
@@ -80,7 +81,7 @@ func TestNewCipherSuite(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.NotNil(t, cs)
-			assert.Contains(t, string(cs.Name()), tt.wantName)
+			assert.Equal(t, tt.wantName, string(cs.Name()))
 		})
 	}
 }

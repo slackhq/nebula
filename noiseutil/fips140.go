@@ -168,12 +168,12 @@ func init() {
 // reusePanics reports whether re-encrypting with an already-used counter panics,
 // as GCMWithXORCounterNonce is expected to.
 func reusePanics(c noise.Cipher) (panicked bool) {
+	c.Encrypt(nil, 2, nil, nil)
 	defer func() {
 		if recover() != nil {
 			panicked = true
 		}
 	}()
-	c.Encrypt(nil, 2, nil, nil)
 	c.Encrypt(nil, 2, nil, nil)
 	return false
 }
