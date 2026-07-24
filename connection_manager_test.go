@@ -388,6 +388,31 @@ func Test_NewConnectionManagerTest_DisconnectInvalid(t *testing.T) {
 	assert.True(t, invalid)
 }
 
+// TestDecideTrafficAction pins the three branches of the in-traffic
+// decision: the primary hostinfo path returns tryRehandshake, the
+// non-primary path returns swapPrimary or migrateRelays depending on
+// shouldSwap. Catches a regression that, before this commit, was
+// untested (only the tryRehandshake branch was exercised by the
+// existing makeTrafficDecision tests).
+func TestDecideTrafficAction(t *testing.T) {
+	tests := []struct {
+		name         string
+		mainHostInfo bool
+		shouldSwap   bool
+		want         trafficDecision
+	}{
+		{"primary hostinfo -> tryRehandshake (shouldSwap is don't-care)", true, false, tryRehandshake},
+		{"primary hostinfo with shouldSwap=true is still tryRehandshake", true, true, tryRehandshake},
+		{"non-primary with shouldSwap=true -> swapPrimary", false, true, swapPrimary},
+		{"non-primary with shouldSwap=false -> migrateRelays", false, false, migrateRelays},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, decideTrafficAction(tc.mainHostInfo, tc.shouldSwap))
+		})
+	}
+}
+
 type dummyCert struct {
 	version        cert.Version
 	curve          cert.Curve
