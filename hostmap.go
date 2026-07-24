@@ -869,9 +869,27 @@ func (i *HostInfo) logger(l *slog.Logger) *slog.Logger {
 // Utility functions
 
 func localAddrs(l *slog.Logger, allowList *LocalAllowList) []netip.Addr {
+	return collectLocalAddrs(l, allowList, localInterfaces, localInterfaceAddrs)
+}
+
+// collectLocalAddrs takes its enumerators as arguments so tests can drive the filtering and the
+// failure branches without depending on the addresses of whatever host they run on.
+func collectLocalAddrs(
+	l *slog.Logger,
+	allowList *LocalAllowList,
+	interfaces func() ([]net.Interface, error),
+	interfaceAddrs func(*net.Interface) ([]net.Addr, error),
+) []netip.Addr {
 	//FIXME: This function is pretty garbage
 	var finalAddrs []netip.Addr
-	ifaces, _ := net.Interfaces()
+	ifaces, err := interfaces()
+	if err != nil {
+		l.Warn("Failed to enumerate local interfaces, no underlay addresses will be advertised to lighthouses",
+			"error", err,
+		)
+		return nil
+	}
+
 	for _, i := range ifaces {
 		allow := allowList.AllowName(i.Name)
 		if l.Enabled(context.Background(), logging.LevelTrace) {
@@ -884,7 +902,15 @@ func localAddrs(l *slog.Logger, allowList *LocalAllowList) []netip.Addr {
 		if !allow {
 			continue
 		}
-		addrs, _ := i.Addrs()
+		addrs, err := interfaceAddrs(&i)
+		if err != nil {
+			l.Warn("Failed to get addresses for local interface",
+				"error", err,
+				"interfaceName", i.Name,
+			)
+			continue
+		}
+
 		for _, rawAddr := range addrs {
 			var addr netip.Addr
 			switch v := rawAddr.(type) {

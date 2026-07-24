@@ -1,6 +1,9 @@
 package nebula
 
 import (
+	"bytes"
+	"errors"
+	"net"
 	"net/netip"
 	"slices"
 	"testing"
@@ -400,4 +403,86 @@ func TestHostMap_RelayState(t *testing.T) {
 	h1.relayState.DeleteRelay(a1)
 	assert.Equal(t, []netip.Addr{}, h1.relayState.relays)
 
+}
+
+func TestCollectLocalAddrs(t *testing.T) {
+	ifaces := []net.Interface{
+		{Index: 1, Name: "lo"},
+		{Index: 2, Name: "eth0"},
+		{Index: 3, Name: "docker0"},
+	}
+	addrs := map[string][]net.Addr{
+		"lo": {
+			&net.IPNet{IP: net.ParseIP("127.0.0.1"), Mask: net.CIDRMask(8, 32)},
+			&net.IPNet{IP: net.ParseIP("::1"), Mask: net.CIDRMask(128, 128)},
+		},
+		"eth0": {
+			&net.IPNet{IP: net.ParseIP("10.0.0.5"), Mask: net.CIDRMask(24, 32)},
+			&net.IPNet{IP: net.ParseIP("fe80::1"), Mask: net.CIDRMask(64, 128)},
+			&net.IPAddr{IP: net.ParseIP("fd00::5")},
+		},
+		"docker0": {
+			&net.IPNet{IP: net.ParseIP("172.17.0.1"), Mask: net.CIDRMask(16, 32)},
+		},
+	}
+
+	enumerate := func() ([]net.Interface, error) { return ifaces, nil }
+	addrsFor := func(i *net.Interface) ([]net.Addr, error) { return addrs[i.Name], nil }
+
+	// Loopback and link local are dropped, everything else on every interface is kept.
+	out := collectLocalAddrs(test.NewLogger(), nil, enumerate, addrsFor)
+	assert.Equal(t, []netip.Addr{
+		netip.MustParseAddr("10.0.0.5"),
+		netip.MustParseAddr("fd00::5"),
+		netip.MustParseAddr("172.17.0.1"),
+	}, out)
+
+	// An interface the allow list rejects by name is never asked for its addresses.
+	c := config.NewC(test.NewLogger())
+	c.Settings["allowlist"] = map[string]any{
+		"interfaces": map[string]any{`docker.*`: false},
+	}
+	al, err := NewLocalAllowListFromConfig(c, "allowlist")
+	require.NoError(t, err)
+
+	asked := make(map[string]struct{})
+	countingAddrsFor := func(i *net.Interface) ([]net.Addr, error) {
+		asked[i.Name] = struct{}{}
+		return addrs[i.Name], nil
+	}
+	out = collectLocalAddrs(test.NewLogger(), al, enumerate, countingAddrsFor)
+	assert.Equal(t, []netip.Addr{
+		netip.MustParseAddr("10.0.0.5"),
+		netip.MustParseAddr("fd00::5"),
+	}, out)
+	assert.NotContains(t, asked, "docker0")
+
+	// A failure to enumerate interfaces at all is reported rather than silently advertising nothing.
+	logOut := &bytes.Buffer{}
+	out = collectLocalAddrs(
+		test.NewLoggerWithOutput(logOut),
+		nil,
+		func() ([]net.Interface, error) { return nil, errors.New("netlinkrib: permission denied") },
+		addrsFor,
+	)
+	assert.Nil(t, out)
+	assert.Contains(t, logOut.String(), "Failed to enumerate local interfaces")
+	assert.Contains(t, logOut.String(), "netlinkrib: permission denied")
+
+	// One interface failing is reported and skipped, the rest are still collected.
+	logOut.Reset()
+	out = collectLocalAddrs(
+		test.NewLoggerWithOutput(logOut),
+		nil,
+		enumerate,
+		func(i *net.Interface) ([]net.Addr, error) {
+			if i.Name == "eth0" {
+				return nil, errors.New("nope")
+			}
+			return addrs[i.Name], nil
+		},
+	)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("172.17.0.1")}, out)
+	assert.Contains(t, logOut.String(), "Failed to get addresses for local interface")
+	assert.Contains(t, logOut.String(), "eth0")
 }
