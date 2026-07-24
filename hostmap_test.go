@@ -1,7 +1,6 @@
 package nebula
 
 import (
-	"bytes"
 	"errors"
 	"net"
 	"net/netip"
@@ -430,7 +429,8 @@ func TestCollectLocalAddrs(t *testing.T) {
 	addrsFor := func(i *net.Interface) ([]net.Addr, error) { return addrs[i.Name], nil }
 
 	// Loopback and link local are dropped, everything else on every interface is kept.
-	out := collectLocalAddrs(test.NewLogger(), nil, enumerate, addrsFor)
+	out, err := collectLocalAddrs(test.NewLogger(), nil, enumerate, addrsFor)
+	require.NoError(t, err)
 	assert.Equal(t, []netip.Addr{
 		netip.MustParseAddr("10.0.0.5"),
 		netip.MustParseAddr("fd00::5"),
@@ -450,7 +450,8 @@ func TestCollectLocalAddrs(t *testing.T) {
 		asked[i.Name] = struct{}{}
 		return addrs[i.Name], nil
 	}
-	out = collectLocalAddrs(test.NewLogger(), al, enumerate, countingAddrsFor)
+	out, err = collectLocalAddrs(test.NewLogger(), al, enumerate, countingAddrsFor)
+	require.NoError(t, err)
 	assert.Equal(t, []netip.Addr{
 		netip.MustParseAddr("10.0.0.5"),
 		netip.MustParseAddr("fd00::5"),
@@ -458,21 +459,18 @@ func TestCollectLocalAddrs(t *testing.T) {
 	assert.NotContains(t, asked, "docker0")
 
 	// A failure to enumerate interfaces at all is reported rather than silently advertising nothing.
-	logOut := &bytes.Buffer{}
-	out = collectLocalAddrs(
-		test.NewLoggerWithOutput(logOut),
+	out, err = collectLocalAddrs(
+		test.NewLogger(),
 		nil,
 		func() ([]net.Interface, error) { return nil, errors.New("netlinkrib: permission denied") },
 		addrsFor,
 	)
 	assert.Nil(t, out)
-	assert.Contains(t, logOut.String(), "Failed to enumerate local interfaces")
-	assert.Contains(t, logOut.String(), "netlinkrib: permission denied")
+	require.EqualError(t, err, "failed to enumerate local interfaces: netlinkrib: permission denied")
 
 	// One interface failing is reported and skipped, the rest are still collected.
-	logOut.Reset()
-	out = collectLocalAddrs(
-		test.NewLoggerWithOutput(logOut),
+	out, err = collectLocalAddrs(
+		test.NewLogger(),
 		nil,
 		enumerate,
 		func(i *net.Interface) ([]net.Addr, error) {
@@ -483,6 +481,5 @@ func TestCollectLocalAddrs(t *testing.T) {
 		},
 	)
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("172.17.0.1")}, out)
-	assert.Contains(t, logOut.String(), "Failed to get addresses for local interface")
-	assert.Contains(t, logOut.String(), "eth0")
+	require.EqualError(t, err, "failed to get addresses for eth0: nope")
 }

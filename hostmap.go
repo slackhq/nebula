@@ -868,26 +868,26 @@ func (i *HostInfo) logger(l *slog.Logger) *slog.Logger {
 
 // Utility functions
 
-func localAddrs(l *slog.Logger, allowList *LocalAllowList) []netip.Addr {
+func localAddrs(l *slog.Logger, allowList *LocalAllowList) ([]netip.Addr, error) {
 	return collectLocalAddrs(l, allowList, localInterfaces, localInterfaceAddrs)
 }
 
 // collectLocalAddrs takes its enumerators as arguments so tests can drive the filtering and the
-// failure branches without depending on the addresses of whatever host they run on.
+// failure branches without depending on the addresses of whatever host they run on. It reports
+// failures to the caller rather than logging them, because it runs on every lighthouse update and
+// only the caller can tell a new failure from a repeat of the same one.
 func collectLocalAddrs(
 	l *slog.Logger,
 	allowList *LocalAllowList,
 	interfaces func() ([]net.Interface, error),
 	interfaceAddrs func(*net.Interface) ([]net.Addr, error),
-) []netip.Addr {
+) ([]netip.Addr, error) {
 	//FIXME: This function is pretty garbage
 	var finalAddrs []netip.Addr
+	var errs []error
 	ifaces, err := interfaces()
 	if err != nil {
-		l.Warn("Failed to enumerate local interfaces, no underlay addresses will be advertised to lighthouses",
-			"error", err,
-		)
-		return nil
+		return nil, fmt.Errorf("failed to enumerate local interfaces: %w", err)
 	}
 
 	for _, i := range ifaces {
@@ -904,10 +904,7 @@ func collectLocalAddrs(
 		}
 		addrs, err := interfaceAddrs(&i)
 		if err != nil {
-			l.Warn("Failed to get addresses for local interface",
-				"error", err,
-				"interfaceName", i.Name,
-			)
+			errs = append(errs, fmt.Errorf("failed to get addresses for %s: %w", i.Name, err))
 			continue
 		}
 
@@ -945,5 +942,5 @@ func collectLocalAddrs(
 			}
 		}
 	}
-	return finalAddrs
+	return finalAddrs, errors.Join(errs...)
 }
