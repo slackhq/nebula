@@ -12,8 +12,7 @@ import (
 // Ensure NewAESGCM validates the nonce is non-repeating
 func TestNewAESGCM(t *testing.T) {
 	if !boringEnabled && !fips140.Enabled() {
-		t.Skip()
-		return
+		t.Skip("TestNewAESGCM is only for fips140/boringcrypto")
 	}
 
 	key, _ := hex.DecodeString("feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308")
