@@ -223,3 +223,57 @@ func TestRebindAdvertisesNewAddressAfterMove(t *testing.T) {
 	lhControl.Stop()
 	myControl.Stop()
 }
+
+// A relayed send records traffic but must not consume the rebind epoch. If it does, the next direct send to the
+// relay host sees the epoch already current and never requeries, so the far side is never told to punch at our
+// new address. This pins the SendVia call site, which the unit tests cannot reach.
+func TestRebindRequeriesAfterRelayedSend(t *testing.T) {
+	t.Parallel()
+	ca, _, caKey, _ := cert_test.NewTestCaCert(cert.Version2, cert.Curve_CURVE25519, time.Now(), time.Now().Add(10*time.Minute), nil, nil, []string{})
+
+	// No lighthouse on purpose: it would hand out a direct address for them and nothing would relay.
+	myControl, myVpnIpNet, _, _ := newSimpleServer(cert.Version2, ca, caKey, "me", "10.128.0.1/24", m{"relay": m{"use_relays": true}})
+	relayControl, relayVpnIpNet, relayUdpAddr, _ := newSimpleServer(cert.Version2, ca, caKey, "relay", "10.128.0.128/24", m{"relay": m{"am_relay": true}})
+	theirControl, theirVpnIpNet, theirUdpAddr, _ := newSimpleServer(cert.Version2, ca, caKey, "them", "10.128.0.2/24", m{"relay": m{"use_relays": true}})
+
+	myControl.InjectLightHouseAddr(relayVpnIpNet[0].Addr(), relayUdpAddr)
+	myControl.InjectRelays(theirVpnIpNet[0].Addr(), []netip.Addr{relayVpnIpNet[0].Addr()})
+	relayControl.InjectLightHouseAddr(theirVpnIpNet[0].Addr(), theirUdpAddr)
+
+	r := router.NewR(t, myControl, relayControl, theirControl)
+	defer r.RenderFlow()
+
+	myControl.Start()
+	relayControl.Start()
+	theirControl.Start()
+
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("establish")))
+	r.RouteForAllUntilTxTun(theirControl)
+	r.RouteFor(time.Millisecond * 500)
+
+	hi := myControl.GetHostInfoByVpnAddr(theirVpnIpNet[0].Addr(), false)
+	require.NotNil(t, hi, "expected a tunnel to them")
+	require.NotEmpty(t, hi.CurrentRelaysToMe, "them must be reachable only via the relay for this test to mean anything")
+	// sendNoMetrics only reaches SendVia when there is no direct remote, so pin that too. Without this the test
+	// keeps passing while quietly sending direct and never exercising the relay path.
+	require.False(t, hi.CurrentRemote.IsValid(), "them must have no direct remote, otherwise SendVia is never called")
+
+	before, ok := myControl.GetRebindEpochFor(relayVpnIpNet[0].Addr())
+	require.True(t, ok, "expected a tunnel to the relay")
+
+	myControl.RebindUDPServer()
+
+	// Traffic to them goes through SendVia on the relay tunnel. That must record traffic without consuming the
+	// relay tunnel's own epoch edge, which belongs to the direct path.
+	myControl.InjectTunPacket(BuildTunUDPPacket(theirVpnIpNet[0].Addr(), 80, myVpnIpNet[0].Addr(), 80, []byte("relayed")))
+	r.RouteForAllUntilTxTun(theirControl)
+
+	after, ok := myControl.GetRebindEpochFor(relayVpnIpNet[0].Addr())
+	require.True(t, ok)
+	assert.Equal(t, before, after,
+		"a relayed send consumed the relay tunnel's rebind epoch, so the next direct send will not requery")
+
+	myControl.Stop()
+	relayControl.Stop()
+	theirControl.Stop()
+}
