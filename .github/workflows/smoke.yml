@@ -38,6 +38,6 @@ jobs:
       run: make boringcrypto smoke-docker
 
     - name: Smoke Docker fips140
-      run: make fips140-all smoke-docker
+      run: make fips140-all GOALS=smoke-docker
 
     timeout-minutes: 10
