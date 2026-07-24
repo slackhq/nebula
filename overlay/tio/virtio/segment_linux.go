@@ -421,7 +421,12 @@ func FinishChecksum(seg []byte, hdr Hdr) error {
 	partial := binary.BigEndian.Uint16(seg[cs+co : cs+co+2])
 	seg[cs+co] = 0
 	seg[cs+co+1] = 0
-	binary.BigEndian.PutUint16(seg[cs+co:cs+co+2], ^checksum.Checksum(seg[cs:], partial))
+	csum := ^checksum.Checksum(seg[cs:], partial)
+	// RFC 768: UDP transmits a computed zero as all ones, since all-zero is the reserved "no checksum" value.
+	if co == udpChecksumOff && csum == 0 {
+		csum = 0xffff
+	}
+	binary.BigEndian.PutUint16(seg[cs+co:cs+co+2], csum)
 	return nil
 }
 
