@@ -333,3 +333,100 @@ func TestSegmentUDPHeaderNotCorrupted(t *testing.T) {
 		})
 	}
 }
+
+// buildUDPv4Single constructs a single IPv4/UDP datagram with the checksum field pre-loaded with the folded
+// pseudo-header sum, which is how a NEEDS_CSUM (CHECKSUM_PARTIAL) packet arrives from the tun.
+func buildUDPv4Single(payload []byte) (pkt []byte, hdr Hdr) {
+	const ipLen, udpLen = 20, 8
+	pkt = make([]byte, ipLen+udpLen+len(payload))
+
+	pkt[0] = 0x45
+	binary.BigEndian.PutUint16(pkt[2:4], uint16(len(pkt)))
+	pkt[8] = 64
+	pkt[9] = unix.IPPROTO_UDP
+	copy(pkt[12:16], []byte{10, 0, 0, 1})
+	copy(pkt[16:20], []byte{10, 0, 0, 2})
+
+	binary.BigEndian.PutUint16(pkt[ipLen:ipLen+2], 12345)
+	binary.BigEndian.PutUint16(pkt[ipLen+2:ipLen+4], 53)
+	binary.BigEndian.PutUint16(pkt[ipLen+4:ipLen+6], uint16(udpLen+len(payload)))
+	copy(pkt[ipLen+udpLen:], payload)
+
+	pseudo := pseudoHeaderIPv4(pkt[12:16], pkt[16:20], unix.IPPROTO_UDP, udpLen+len(payload))
+	binary.BigEndian.PutUint16(pkt[ipLen+udpChecksumOff:ipLen+udpChecksumOff+2], pseudo)
+
+	return pkt, Hdr{Flags: unix.VIRTIO_NET_HDR_F_NEEDS_CSUM, CsumStart: ipLen, CsumOffset: udpChecksumOff}
+}
+
+// TestFinishChecksumUDPZeroStoresAllOnes pins RFC 768: a UDP checksum that computes to zero goes on the wire as
+// 0xffff, because all-zero is the reserved "no checksum" encoding that IPv6 rejects outright.
+func TestFinishChecksumUDPZeroStoresAllOnes(t *testing.T) {
+	var payload []byte
+	for i := 0; i < 0x10000; i++ {
+		p := []byte{byte(i >> 8), byte(i)}
+		pkt, hdr := buildUDPv4Single(p)
+		cs, co := int(hdr.CsumStart), int(hdr.CsumOffset)
+		partial := binary.BigEndian.Uint16(pkt[cs+co : cs+co+2])
+		pkt[cs+co], pkt[cs+co+1] = 0, 0
+		if ^checksum.Checksum(pkt[cs:], partial) == 0 {
+			payload = p
+			break
+		}
+	}
+	if payload == nil {
+		t.Fatal("no 2-byte payload produced a zero checksum")
+	}
+
+	pkt, hdr := buildUDPv4Single(payload)
+	if err := FinishChecksum(pkt, hdr); err != nil {
+		t.Fatalf("FinishChecksum: %v", err)
+	}
+	off := int(hdr.CsumStart) + int(hdr.CsumOffset)
+	if got := binary.BigEndian.Uint16(pkt[off : off+2]); got != 0xffff {
+		t.Fatalf("stored %#04x, want 0xffff for a UDP checksum that folds to zero", got)
+	}
+}
+
+// TestFinishChecksumTCPZeroPreserved is the other half of the protocol split: zero is a legal TCP checksum and must
+// be stored as-is, so the UDP rewrite must not fire on a TCP csum_offset.
+func TestFinishChecksumTCPZeroPreserved(t *testing.T) {
+	const cs, co = 20, tcpChecksumOff
+
+	// Seed the partial so the completed checksum lands on zero, the case the UDP path rewrites.
+	seg := make([]byte, cs+co+2)
+	for i := range seg[cs:] {
+		seg[cs+i] = byte(i * 7)
+	}
+	var partial uint16
+	for i := 0; i <= 0xffff; i++ {
+		binary.BigEndian.PutUint16(seg[cs+co:cs+co+2], uint16(i))
+		probe := append([]byte(nil), seg...)
+		probe[cs+co], probe[cs+co+1] = 0, 0
+		if ^checksum.Checksum(probe[cs:], uint16(i)) == 0 {
+			partial = uint16(i)
+			break
+		}
+	}
+	binary.BigEndian.PutUint16(seg[cs+co:cs+co+2], partial)
+
+	hdr := Hdr{Flags: unix.VIRTIO_NET_HDR_F_NEEDS_CSUM, CsumStart: cs, CsumOffset: co}
+	if err := FinishChecksum(seg, hdr); err != nil {
+		t.Fatalf("FinishChecksum: %v", err)
+	}
+	if got := binary.BigEndian.Uint16(seg[cs+co : cs+co+2]); got != 0 {
+		t.Fatalf("stored %#04x, want 0x0000 (zero is a legal TCP checksum)", got)
+	}
+}
+
+// TestFinishChecksumUDPValidates confirms the ordinary path still produces a checksum a receiver accepts.
+func TestFinishChecksumUDPValidates(t *testing.T) {
+	payload := []byte("the definitive tun offloads branch")
+	pkt, hdr := buildUDPv4Single(payload)
+	if err := FinishChecksum(pkt, hdr); err != nil {
+		t.Fatalf("FinishChecksum: %v", err)
+	}
+	pseudo := pseudoHeaderIPv4(pkt[12:16], pkt[16:20], unix.IPPROTO_UDP, 8+len(payload))
+	if !verifyChecksum(pkt[hdr.CsumStart:], pseudo) {
+		t.Fatal("completed UDP checksum does not validate")
+	}
+}
