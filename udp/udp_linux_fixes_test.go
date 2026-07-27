@@ -550,3 +550,89 @@ func TestWriteBatchEIODisablesGSOAndReplays(t *testing.T) {
 		t.Errorf("sendmmsg entry counts = %v, want %v", entryCounts, want)
 	}
 }
+
+// TestGSOEngagesOnLoopback is the offload smoke test: real sockets, real
+// UDP_SEGMENT cmsg, real kernel segmentation over loopback. It asserts
+// both that GSO *engaged* (the whole batch left in a single sendmmsg
+// entry -- a silent fallback to per-packet entries fails the test) and
+// that the kernel carved the superpacket back into the exact original
+// datagrams on the receive side. Runs in CI (make test on ubuntu-latest),
+// which is what guards against the offload path silently degrading.
+func TestGSOEngagesOnLoopback(t *testing.T) {
+	rx, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen rx: %v", err)
+	}
+	defer rx.Close()
+	dst := rx.LocalAddr().(*net.UDPAddr).AddrPort()
+
+	uc, err := NewListener(testLogger(), netip.MustParseAddr("127.0.0.1"), 0, false, 8)
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	sc := uc.(*StdConn)
+	defer sc.Close()
+
+	if !sc.bw.gsoSupported {
+		var un unix.Utsname
+		_ = unix.Uname(&un)
+		release := string(un.Release[:])
+		if major, minor := parseRelease(release); major > 4 || (major == 4 && minor >= 18) {
+			t.Fatalf("kernel %q supports UDP_SEGMENT but the GSO probe failed", release)
+		}
+		t.Skipf("kernel %q predates UDP_SEGMENT (4.18)", release)
+	}
+
+	// Spy on the real syscall to count entries per sendmmsg without
+	// changing what hits the kernel.
+	var entryCounts []int
+	real := sc.bw.sendFn
+	sc.bw.sendFn = func(n int) (int, error) {
+		entryCounts = append(entryCounts, n)
+		return real(n)
+	}
+
+	const numPkts = 8
+	const pktLen = 1200
+	bufs := make([][]byte, numPkts)
+	addrs := make([]netip.AddrPort, numPkts)
+	for i := range bufs {
+		bufs[i] = make([]byte, pktLen)
+		for j := range bufs[i] {
+			bufs[i][j] = byte(i)
+		}
+		addrs[i] = dst
+	}
+
+	written, err := sc.WriteBatch(bufs, addrs, nil)
+	if err != nil {
+		t.Fatalf("WriteBatch: %v", err)
+	}
+	if written != numPkts {
+		t.Fatalf("written = %d, want %d", written, numPkts)
+	}
+	// GSO engaged means the run went out as ONE sendmmsg entry carrying a
+	// UDP_SEGMENT superpacket. Per-packet entries mean it silently fell
+	// back -- exactly the regression this test exists to catch.
+	if len(entryCounts) != 1 || entryCounts[0] != 1 {
+		t.Fatalf("sendmmsg entry counts = %v, want [1]: GSO did not engage", entryCounts)
+	}
+
+	// The kernel must deliver the original datagram boundaries and bytes.
+	_ = rx.SetReadDeadline(time.Now().Add(5 * time.Second))
+	got := make([]byte, pktLen+1)
+	for i := 0; i < numPkts; i++ {
+		n, _, err := rx.ReadFromUDP(got)
+		if err != nil {
+			t.Fatalf("rx read %d: %v", i, err)
+		}
+		if n != pktLen {
+			t.Fatalf("rx read %d: len=%d want %d (kernel segmented at wrong boundary)", i, n, pktLen)
+		}
+		for j := 0; j < n; j++ {
+			if got[j] != byte(i) {
+				t.Fatalf("rx read %d: byte %d = %#x, want %#x", i, j, got[j], byte(i))
+			}
+		}
+	}
+}
