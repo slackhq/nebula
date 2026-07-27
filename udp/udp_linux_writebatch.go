@@ -3,6 +3,7 @@
 package udp
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -324,19 +325,21 @@ sendChunks:
 			if ecns != nil {
 				ecn0 = ecns[baseI]
 			}
-			w.l.Warn("sendmmsg had problem",
-				"sent", sent, "err", serr,
-				"entries", entry,
-				"entry0_runLen", runLen0,
-				"entry0_segSize", seg0,
-				"entry0_iovlen", hdr0.Iovlen,
-				"entry0_controllen", hdr0.Controllen,
-				"entry0_namelen", hdr0.Namelen,
-				"entry0_ecn", ecn0,
-				"entry0_dst", addrs[baseI],
-				"isV4", w.isV4,
-				"gso", w.gsoSupported,
-			)
+			if w.l.Enabled(context.Background(), slog.LevelDebug) {
+				w.l.Debug("sendmmsg had problem",
+					"sent", sent, "err", serr,
+					"entries", entry,
+					"entry0_runLen", runLen0,
+					"entry0_segSize", seg0,
+					"entry0_iovlen", hdr0.Iovlen,
+					"entry0_controllen", hdr0.Controllen,
+					"entry0_namelen", hdr0.Namelen,
+					"entry0_ecn", ecn0,
+					"entry0_dst", addrs[baseI],
+					"isV4", w.isV4,
+					"gso", w.gsoSupported,
+				)
+			}
 			for k := baseI; k < i; k++ {
 				if werr := sendto(w.fd, bufs[k], addrs[k], w.isV4); werr == nil {
 					written++
