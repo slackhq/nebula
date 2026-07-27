@@ -48,9 +48,12 @@ type Conn interface {
 	// same length as bufs, and outerECNs[i] is the 2-bit IP-level ECN
 	// codepoint to set on packet i's outer header. Linux uses sendmmsg(2)
 	// for a single syscall and attaches the value as IP_TOS / IPV6_TCLASS
-	// cmsg; other backends ignore it. Returns on the first error; callers
-	// may observe a partial send if some packets went out before the error.
-	WriteBatch(bufs [][]byte, addrs []netip.AddrPort, outerECNs []byte) error
+	// cmsg; other backends ignore it.
+	//
+	// Returns the number of packets successfully written. A destination the kernel rejects costs only
+	// its own packet, so a short count means some peers were undeliverable, not that the batch failed.
+	// Not safe for concurrent use on the same Conn.
+	WriteBatch(bufs [][]byte, addrs []netip.AddrPort, outerECNs []byte) (int, error)
 	ReloadConfig(c *config.C)
 	SupportsMultipleReaders() bool
 	Close() error
@@ -73,8 +76,8 @@ func (NoopConn) SupportsMultipleReaders() bool {
 func (NoopConn) WriteTo(_ []byte, _ netip.AddrPort) error {
 	return nil
 }
-func (NoopConn) WriteBatch(_ [][]byte, _ []netip.AddrPort, _ []byte) error {
-	return nil
+func (NoopConn) WriteBatch(bufs [][]byte, _ []netip.AddrPort, _ []byte) (int, error) {
+	return len(bufs), nil
 }
 func (NoopConn) ReloadConfig(_ *config.C) {
 	return

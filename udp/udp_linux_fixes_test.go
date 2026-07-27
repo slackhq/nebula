@@ -123,8 +123,12 @@ func TestWriteBatchBadFamilyDeliversOthers(t *testing.T) {
 	bufs := [][]byte{[]byte("AAA"), []byte("BBB"), []byte("CCC")}
 	addrs := []netip.AddrPort{good, bad, good}
 
-	if err := sender.WriteBatch(bufs, addrs, nil); err != nil {
+	n, err := sender.WriteBatch(bufs, addrs, nil)
+	if err != nil {
 		t.Fatalf("WriteBatch returned error, want nil (bad dest should be isolated): %v", err)
+	}
+	if n != 2 {
+		t.Errorf("WriteBatch wrote %d packets, want 2 of 3 (the bad-family dest is the only casualty)", n)
 	}
 
 	got := map[string]bool{}
@@ -184,7 +188,7 @@ func TestWriteBatchOuterTOSToV4Mapped(t *testing.T) {
 	dst := netip.AddrPortFrom(netip.AddrFrom4([4]byte{127, 0, 0, 1}), uint16(rxPort))
 	const wantECN = byte(0x02) // ECT(0)
 
-	if err := sender.WriteBatch([][]byte{[]byte("tos-probe")}, []netip.AddrPort{dst}, []byte{wantECN}); err != nil {
+	if _, err := sender.WriteBatch([][]byte{[]byte("tos-probe")}, []netip.AddrPort{dst}, []byte{wantECN}); err != nil {
 		t.Fatalf("WriteBatch: %v", err)
 	}
 
@@ -229,5 +233,52 @@ func TestWriteBatchOuterTOSToV4Mapped(t *testing.T) {
 		t.Errorf("received outer TOS = 0x%02x, want low-2-bits = 0x%02x", gotTOS, wantECN)
 	} else {
 		t.Logf("verified: v4 receiver saw outer TOS 0x%02x (ECN=0x%02x) from dual-stack sender", gotTOS, gotTOS&0x03)
+	}
+}
+
+// TestWriteBatchUnreachableDestDeliversOthers is the sendmmsg-fallback twin of
+// TestWriteBatchBadFamilyDeliversOthers. A destination the kernel refuses outright (240.0.0.0/4 is reserved, so
+// sendto returns EINVAL) makes sendmmsg fail for the whole chunk; the per-packet replay must then still deliver
+// every other packet rather than abandoning the batch at the first failure.
+func TestWriteBatchUnreachableDestDeliversOthers(t *testing.T) {
+	rx, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Skipf("cannot open v4 receiver (sandbox?): %v", err)
+	}
+	defer rx.Close()
+	rxPort := rx.LocalAddr().(*net.UDPAddr).Port
+
+	c, err := NewListener(testLogger(), netip.MustParseAddr("127.0.0.1"), 0, false, 1)
+	if err != nil {
+		t.Skipf("cannot open v4 sender (sandbox?): %v", err)
+	}
+	defer c.Close()
+	sender := c.(*StdConn)
+
+	good := netip.AddrPortFrom(netip.AddrFrom4([4]byte{127, 0, 0, 1}), uint16(rxPort))
+	bad := netip.MustParseAddrPort("240.0.0.1:9999") // reserved space, the kernel refuses it
+
+	bufs := [][]byte{[]byte("P0"), []byte("P1"), []byte("BAD"), []byte("P3"), []byte("P4")}
+	addrs := []netip.AddrPort{good, good, bad, good, good}
+
+	// The bad destination is reported, but only after every other packet has been attempted.
+	if _, err := sender.WriteBatch(bufs, addrs, nil); err == nil {
+		t.Log("WriteBatch returned nil; kernel accepted the reserved address, delivery assertions still apply")
+	}
+
+	got := map[string]bool{}
+	rx.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 64)
+	for i := 0; i < 4; i++ {
+		n, _, rerr := rx.ReadFromUDPAddrPort(buf)
+		if rerr != nil {
+			t.Fatalf("expected 4 delivered packets, read #%d failed: %v (got so far: %v)", i+1, rerr, got)
+		}
+		got[string(buf[:n])] = true
+	}
+	for _, want := range []string{"P0", "P1", "P3", "P4"} {
+		if !got[want] {
+			t.Errorf("packet %s was not delivered; delivered set = %v", want, got)
+		}
 	}
 }

@@ -140,13 +140,17 @@ func (u *StdConn) WriteTo(b []byte, ap netip.AddrPort) error {
 	}
 }
 
-func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) error {
+func (u *StdConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) (int, error) {
+	// An un-sendable destination costs its own packet, never the ones behind it in the batch.
+	written := 0
 	for i, b := range bufs {
-		if err := u.WriteTo(b, addrs[i]); err != nil {
-			return err
+		if err := u.WriteTo(b, addrs[i]); err == nil {
+			written++
+		} else {
+			u.l.Debug("failed to write packet in batch", "udpAddr", addrs[i], "error", err)
 		}
 	}
-	return nil
+	return written, nil
 }
 
 func (u *StdConn) LocalAddr() (netip.AddrPort, error) {

@@ -194,18 +194,25 @@ func parseRelease(r string) (major, minor int) {
 // sendmmsg returns an error AND zero entries went out we fall back to
 // per-packet sendto for that chunk so the caller still gets best-effort
 // delivery; on a partial-success error we just replay the remainder.
-func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte) error {
+//
+// Returns the number of packets that reached the wire. An error means the call
+// itself failed; a short count means specific destinations were undeliverable.
+func (w *batchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte) (int, error) {
 	if len(bufs) != len(addrs) {
-		return fmt.Errorf("WriteBatch: len(bufs)=%d != len(addrs)=%d", len(bufs), len(addrs))
+		return 0, fmt.Errorf("WriteBatch: len(bufs)=%d != len(addrs)=%d", len(bufs), len(addrs))
 	}
 	if ecns != nil && len(ecns) != len(bufs) {
-		return fmt.Errorf("WriteBatch: len(ecns)=%d != len(bufs)=%d", len(ecns), len(bufs))
+		return 0, fmt.Errorf("WriteBatch: len(ecns)=%d != len(bufs)=%d", len(ecns), len(bufs))
 	}
 
 	// Callers deliver same-destination packets contiguously and in counter
 	// order, so we run the GSO planner directly without a pre-sort. A
 	// sorting pass measurably hurt throughput in microbenchmarks while
 	// providing no observed reordering benefit.
+
+	// A destination the kernel rejects costs its own packet, never the ones around it. We count what actually made
+	// it out rather than returning an error, since the caller is the only one that knows whether a shortfall matters.
+	written := 0
 
 	i := 0
 sendChunks:
@@ -248,8 +255,10 @@ sendChunks:
 				// never the batch. (Same fallback the zero-sent sendmmsg path
 				// below uses, extended to cover the misaddressed packet.)
 				for k := baseI; k <= i; k++ {
-					if werr := sendto(w.fd, bufs[k], addrs[k], w.isV4); werr != nil && k != i {
-						return werr
+					if werr := sendto(w.fd, bufs[k], addrs[k], w.isV4); werr == nil {
+						written++
+					} else {
+						w.l.Debug("failed to write packet in batch", "udpAddr", addrs[k], "error", werr)
 					}
 				}
 				i++
@@ -278,7 +287,7 @@ sendChunks:
 		}
 
 		if entry == 0 {
-			return fmt.Errorf("sendmmsg: no progress")
+			return written, fmt.Errorf("sendmmsg: no progress")
 		}
 
 		sent, serr := w.sendmmsg(entry)
@@ -313,21 +322,25 @@ sendChunks:
 				"gso", w.gsoSupported,
 			)
 			for k := baseI; k < i; k++ {
-				if werr := sendto(w.fd, bufs[k], addrs[k], w.isV4); werr != nil {
-					return werr
+				if werr := sendto(w.fd, bufs[k], addrs[k], w.isV4); werr == nil {
+					written++
+				} else {
+					w.l.Debug("failed to write packet in batch", "udpAddr", addrs[k], "error", werr)
 				}
 			}
 			continue
 		}
 		if sent == 0 {
-			return fmt.Errorf("sendmmsg made no progress")
+			return written, fmt.Errorf("sendmmsg made no progress")
 		}
 		// Rewind i to the end of the last successfully sent entry. For a
 		// full-success send this leaves i unchanged; for a partial send it
-		// replays the remainder on the next outer-loop iteration.
+		// replays the remainder on the next outer-loop iteration. A single
+		// entry can carry a whole GSO run, so count packets, not entries.
+		written += w.entryEnd[sent-1] - baseI
 		i = w.entryEnd[sent-1]
 	}
-	return nil
+	return written, nil
 }
 
 // planRun groups consecutive packets starting at `start` that can be sent as

@@ -148,8 +148,8 @@ func (c *fakeConn) Rebind() error                             { c.rebinds++; ret
 func (c *fakeConn) LocalAddr() (netip.AddrPort, error)        { return netip.AddrPort{}, nil }
 func (c *fakeConn) ListenOut(_ udp.EncReader, _ func()) error { return nil }
 func (c *fakeConn) WriteTo(_ []byte, _ netip.AddrPort) error  { return nil }
-func (c *fakeConn) WriteBatch(_ [][]byte, _ []netip.AddrPort, _ []byte) error {
-	return nil
+func (c *fakeConn) WriteBatch(bufs [][]byte, _ []netip.AddrPort, _ []byte) (int, error) {
+	return len(bufs), nil
 }
 func (c *fakeConn) ReloadConfig(_ *config.C)      {}
 func (c *fakeConn) SupportsMultipleReaders() bool { return true }

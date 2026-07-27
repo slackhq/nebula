@@ -137,6 +137,7 @@ type Interface struct {
 	metricHandshakes    metrics.Histogram
 	messageMetrics      *MessageMetrics
 	cachedPacketMetrics *cachedPacketMetrics
+	metricTxDropped     metrics.Counter
 
 	l *slog.Logger
 }
@@ -237,6 +238,7 @@ func NewInterface(ctx context.Context, c *InterfaceConfig) (*Interface, error) {
 		pinThreads:            c.PinThreads,
 
 		metricHandshakes: metrics.GetOrRegisterHistogram("handshakes", nil, metrics.NewExpDecaySample(1028, 0.015)),
+		metricTxDropped:  metrics.GetOrRegisterCounter("udp.tx.dropped", nil),
 		messageMetrics:   c.MessageMetrics,
 		cachedPacketMetrics: &cachedPacketMetrics{
 			sent:    metrics.GetOrRegisterCounter("hostinfo.cached_packets.sent", nil),
@@ -441,17 +443,27 @@ func (f *Interface) listenIn(queue tio.Queue, i int) {
 			// accumulated so the first packets of a deep read drain
 			// hit the wire while the rest are still being encrypted.
 			if sb.Len() >= batch.SendBatchCap {
-				if err := sb.Flush(); err != nil {
-					f.l.Error("Failed to write outgoing batch", "error", err, "writer", i)
-				}
+				f.flushSendBatch(sb, i)
 			}
 		}
-		if err := sb.Flush(); err != nil {
-			f.l.Error("Failed to write outgoing batch", "error", err, "writer", i)
-		}
+		f.flushSendBatch(sb, i)
 	}
 
 	f.l.Debug("overlay reader is done", "reader", i)
+}
+
+// flushSendBatch drains sb to the underlay and accounts for anything it could not deliver. A shortfall means
+// specific destinations were undeliverable (a stale remote, a reject rule), which the backend logs per peer at
+// debug; here it is only a counter, so one unreachable peer cannot spam a log line per batch.
+func (f *Interface) flushSendBatch(sb *batch.SendBatch, q int) {
+	queued := sb.Len()
+	written, err := sb.Flush()
+	if err != nil {
+		f.l.Error("Failed to write outgoing batch", "error", err, "writer", q)
+	}
+	if dropped := queued - written; dropped > 0 {
+		f.metricTxDropped.Inc(int64(dropped))
+	}
 }
 
 func (f *Interface) RegisterConfigChangeCallbacks(c *config.C) {

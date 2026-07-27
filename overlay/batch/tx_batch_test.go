@@ -11,7 +11,7 @@ type fakeBatchWriter struct {
 	ecns  []byte
 }
 
-func (w *fakeBatchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte) error {
+func (w *fakeBatchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns []byte) (int, error) {
 	// Snapshot — SendBatch.Flush nils its slot pointers right after WriteBatch
 	// returns, so tests must capture data before that happens.
 	w.bufs = make([][]byte, len(bufs))
@@ -22,7 +22,7 @@ func (w *fakeBatchWriter) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, ecns
 	}
 	w.addrs = append(w.addrs[:0], addrs...)
 	w.ecns = append(w.ecns[:0], ecns...)
-	return nil
+	return len(bufs), nil
 }
 
 func TestSendBatchReserveCommitFlush(t *testing.T) {
@@ -38,7 +38,7 @@ func TestSendBatchReserveCommitFlush(t *testing.T) {
 		pkt := append(slot[:0], byte(i), byte(i+1), byte(i+2))
 		b.Commit(pkt, ap, 0)
 	}
-	if err := b.Flush(); err != nil {
+	if _, err := b.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
 	if len(fw.bufs) != 4 {
@@ -55,7 +55,7 @@ func TestSendBatchReserveCommitFlush(t *testing.T) {
 
 	// Flush again with nothing committed — should be a no-op.
 	fw.bufs = nil
-	if err := b.Flush(); err != nil {
+	if _, err := b.Flush(); err != nil {
 		t.Fatalf("empty Flush: %v", err)
 	}
 	if fw.bufs != nil {
@@ -79,7 +79,7 @@ func TestSendBatchSlotsDoNotOverlap(t *testing.T) {
 		pkt := append(s[:0], byte(0xA0+i), byte(0xB0+i))
 		b.Commit(pkt, ap, 0)
 	}
-	if err := b.Flush(); err != nil {
+	if _, err := b.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
 
@@ -109,7 +109,7 @@ func TestSendBatchGrowPreservesCommitted(t *testing.T) {
 		t.Fatalf("first packet corrupted by grow: %x", pkt1)
 	}
 
-	if err := b.Flush(); err != nil {
+	if _, err := b.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
 	if len(fw.bufs) != 2 {
