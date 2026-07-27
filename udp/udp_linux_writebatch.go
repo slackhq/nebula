@@ -4,6 +4,7 @@ package udp
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -25,7 +26,9 @@ type batchWriter struct {
 	l    *slog.Logger
 
 	// UDP GSO (sendmsg with UDP_SEGMENT cmsg) support. gsoSupported is
-	// probed once at socket creation. When true, WriteBatch packs same-
+	// probed once at socket creation, and cleared by WriteBatch if the
+	// kernel later rejects a GSO send outright (the setsockopt probe can't
+	// see per-device limitations). When true, WriteBatch packs same-
 	// destination consecutive packets into a single sendmmsg entry with a
 	// UDP_SEGMENT cmsg; otherwise each packet is its own entry.
 	gsoSupported   bool
@@ -292,6 +295,20 @@ sendChunks:
 
 		sent, serr := w.sendmmsg(entry)
 		if serr != nil && sent <= 0 {
+			// sent<=0 means message 0 itself failed. If that entry was a GSO
+			// superpacket and the errno is the kernel's "device can't do this"
+			// signal, the probe lied: UDP_SEGMENT is accepted by setsockopt but
+			// rejected at send time (EIO from udp_send_skb() when the egress
+			// device lacks TX checksum offload, which GSO hard-requires).
+			// This condition is per-device and persistent, so give up on GSO, and
+			// replay the chunk through the planner, which now packs one packet per entry and keeps sendmmsg batching intact.
+			if w.gsoSupported && w.entryEnd[0]-baseI >= 2 && errors.Is(serr, unix.EIO) {
+				w.gsoSupported = false
+				w.l.Warn("udp: kernel rejected GSO send, disabling GSO", "error", serr)
+				recordCapability("udp.gso.enabled", false)
+				i = baseI
+				continue
+			}
 			// Nothing went out for this chunk; fall back to sendto for each
 			// packet that was queued this iteration. We only enter this path
 			// when sendmmsg returned an error AND zero entries succeeded —
@@ -299,8 +316,7 @@ sendChunks:
 			// remainder, avoiding duplicates of already-sent packets.
 			//
 			// sent=-1 from sendmmsg means message 0 itself failed (partial
-			// success returns the count instead), so log entry 0's parameters
-			// — that's the entry the kernel rejected.
+			// success returns the count instead), so log entry 0's parameters as it's the entry the kernel rejected.
 			hdr0 := &w.msgs[0].Hdr
 			runLen0 := w.entryEnd[0] - baseI
 			seg0 := len(bufs[baseI])
