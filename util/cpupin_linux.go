@@ -19,7 +19,13 @@ func PinThreadToCPU(cpu int) error {
 	var set unix.CPUSet
 	set.Zero()
 	set.Set(cpu)
-	return unix.SchedSetaffinity(0, &set)
+	if err := unix.SchedSetaffinity(0, &set); err != nil {
+		// Without the affinity the thread lock buys no TX-ring stability;
+		// don't leave the goroutine wedded to one OS thread for nothing.
+		runtime.UnlockOSThread()
+		return err
+	}
+	return nil
 }
 
 // AllowedCPUs returns the CPU IDs the calling process is currently allowed to
