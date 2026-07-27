@@ -371,7 +371,8 @@ func parseRecvCmsg(hdr *msghdr, wantGRO, wantECN bool) (gso int, ecn byte) {
 	for off+unix.SizeofCmsghdr <= len(ctrl) {
 		ch := (*unix.Cmsghdr)(unsafe.Pointer(&ctrl[off]))
 		clen := int(ch.Len)
-		if clen < unix.SizeofCmsghdr || off+clen > len(ctrl) {
+		// Compare against the remaining bytes rather than off+clen
+		if clen < unix.SizeofCmsghdr || clen > len(ctrl)-off {
 			return gso, ecn
 		}
 		dataOff := off + unix.CmsgLen(0)

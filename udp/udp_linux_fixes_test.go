@@ -282,3 +282,45 @@ func TestWriteBatchUnreachableDestDeliversOthers(t *testing.T) {
 		}
 	}
 }
+
+// TestParseRecvCmsgCorruptLenNoPanic: a cmsg Len near max-int used to wrap
+// off+clen negative, slip past the bounds check, and drive the walk offset
+// negative -- a panic on the next ctrl[off]. The guard must compare Len
+// against the remaining bytes instead. Also pins the plain truncated-Len
+// cases (too small, larger than the buffer) to a clean early return.
+func TestParseRecvCmsgCorruptLenNoPanic(t *testing.T) {
+	// First cmsg: a valid empty one so the walk advances past off=0
+	// (off+clen can't overflow while off is still zero).
+	valid := buildCmsg(int32(unix.SOL_UDP), int32(unix.UDP_GRO), make([]byte, 4))
+
+	corrupt := func(lenVal int) []byte {
+		buf := make([]byte, len(valid)+unix.CmsgSpace(4))
+		copy(buf, valid)
+		h := (*unix.Cmsghdr)(unsafe.Pointer(&buf[len(valid)]))
+		h.Level = int32(unix.IPPROTO_IP)
+		h.Type = int32(unix.IP_TOS)
+		setCmsgLen(h, lenVal)
+		return buf
+	}
+
+	cases := []struct {
+		name string
+		ctrl []byte
+	}{
+		{"len_near_max_int", corrupt(int(^uint(0)>>1) - 8)},
+		{"len_too_small", corrupt(unix.SizeofCmsghdr - 1)},
+		{"len_past_buffer", corrupt(1 << 20)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hdr := &msghdr{Control: &c.ctrl[0]}
+			setMsgControllen(hdr, len(c.ctrl))
+			gso, ecn := parseRecvCmsg(hdr, true, true)
+			// The valid leading UDP_GRO cmsg (payload 0) must still parse;
+			// the corrupt trailer just ends the walk.
+			if gso != 0 || ecn != 0 {
+				t.Errorf("parseRecvCmsg = (%d, %#x), want (0, 0)", gso, ecn)
+			}
+		})
+	}
+}
