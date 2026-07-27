@@ -467,3 +467,28 @@ func TestCheckValidMasksGSOECN(t *testing.T) {
 		})
 	}
 }
+
+// TestFoldComplementMatchesReference checks the segmenter's fold-and-invert
+// against an independent RFC 1071 reference fold, hitting the carry edge
+// cases (values whose first fold produces another carry).
+func TestFoldComplementMatchesReference(t *testing.T) {
+	refFold := func(s uint64) uint16 {
+		for s>>16 != 0 {
+			s = s&0xffff + s>>16
+		}
+		return uint16(s)
+	}
+	cases := []uint32{
+		0, 1, 0xffff,
+		0x10000,    // single carry
+		0x1fffe,    // 0xffff + 0xffff: carry produces another 0xffff
+		0xffff0000, // high half only
+		0xfffeffff, // first fold yields another carry
+		0xffffffff, // worst case
+	}
+	for _, c := range cases {
+		if got, want := foldComplement(c), ^refFold(uint64(c)); got != want {
+			t.Errorf("foldComplement(%#x) = %#x, want %#x", c, got, want)
+		}
+	}
+}
