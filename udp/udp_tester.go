@@ -172,8 +172,6 @@ func (u *TesterConn) WriteTo(b []byte, addr netip.AddrPort) error {
 	}
 }
 func (u *TesterConn) WriteBatch(bufs [][]byte, addrs []netip.AddrPort, _ []byte) (int, error) {
-	// An un-sendable destination costs its own packet, never the ones behind it in the batch. This mirrors the
-	// real backends on purpose: e2e runs on TesterConn, so a divergence here hides the production behavior.
 	written := 0
 	for i, b := range bufs {
 		if err := u.WriteTo(b, addrs[i]); err == nil {
