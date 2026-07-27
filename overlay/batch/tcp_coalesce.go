@@ -450,7 +450,6 @@ func (c *TCPCoalescer) reorderForFlush() {
 		runStart = i + 1
 	}
 	out := c.slots[:0]
-	logged := false
 	for _, s := range c.slots {
 		if n := len(out); n > 0 {
 			prev := out[n-1]
@@ -463,7 +462,6 @@ func (c *TCPCoalescer) reorderForFlush() {
 				// gap via its OOO queue.
 				if c.l.Enabled(context.Background(), slog.LevelDebug) {
 					if prev.nextSeq != slotSeedSeq(s) {
-						logged = true
 						gap := int64(slotSeedSeq(s)) - int64(prev.nextSeq)
 						c.l.Debug("tcp coalesce: cross-slot seq gap",
 							"src", flowKeyAddr(s.fk, false),
@@ -488,9 +486,6 @@ func (c *TCPCoalescer) reorderForFlush() {
 			}
 		}
 		out = append(out, s)
-	}
-	if logged {
-		c.l.Warn("==== end of batch ====")
 	}
 	c.slots = out
 }
