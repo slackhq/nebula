@@ -8,37 +8,69 @@ import (
 	gvisorchecksum "gvisor.dev/gvisor/pkg/tcpip/checksum"
 )
 
-// TestChecksumMatchesGvisor walks lengths from 0 to 4096, with several initial
-// seeds and a handful of starting alignments, asserting that our local
-// Checksum matches gvisor's reference bit-for-bit.
-func TestChecksumMatchesGvisor(t *testing.T) {
-	rng := rand.New(rand.NewPCG(1, 2))
-	const padFront = 16
+// archImpl names one checksum function under test. The per-arch
+// export_*_test.go files enumerate the hand-written implementations so the
+// suite compares each one against gvisor directly, regardless of which one
+// the public Checksum dispatches to on the running CPU. Testing only the
+// dispatcher was tautological wherever it resolved to the gvisor fallback
+// (non-AVX2 amd64, fallback architectures) — gvisor compared with itself,
+// assembly untested, suite green.
+type archImpl struct {
+	name      string
+	fn        func([]byte, uint16) uint16
+	available bool
+}
 
-	// Random pool large enough for the longest case + alignment slop.
-	pool := make([]byte, 4096+padFront)
-	for i := range pool {
-		pool[i] = byte(rng.Uint32())
+// implsUnderTest is the public dispatcher plus every arch implementation.
+func implsUnderTest() []archImpl {
+	return append([]archImpl{{name: "dispatch", fn: Checksum, available: true}}, archImpls...)
+}
+
+// requireAvailable skips loudly when the running CPU can't execute an
+// implementation — visible in test output, unlike the old silent tautology.
+func requireAvailable(t *testing.T, impl archImpl) {
+	t.Helper()
+	if !impl.available {
+		t.Skipf("%s not supported on this CPU; its assembly is NOT tested in this run", impl.name)
 	}
+}
 
-	seeds := []uint16{0, 0x0001, 0xabcd, 0xffff, 0x1234, 0xfedc}
-	offsets := []int{0, 1, 2, 3, 4, 5, 7, 8, 15, 16}
+// TestChecksumMatchesGvisor walks lengths from 0 to 4096, with several initial
+// seeds and a handful of starting alignments, asserting that each local
+// implementation matches gvisor's reference bit-for-bit.
+func TestChecksumMatchesGvisor(t *testing.T) {
+	for _, impl := range implsUnderTest() {
+		t.Run(impl.name, func(t *testing.T) {
+			requireAvailable(t, impl)
+			rng := rand.New(rand.NewPCG(1, 2))
+			const padFront = 16
 
-	for length := 0; length <= 4096; length++ {
-		for _, seed := range seeds {
-			for _, off := range offsets {
-				if off+length > len(pool) {
-					continue
-				}
-				buf := pool[off : off+length]
-				want := gvisorchecksum.Checksum(buf, seed)
-				got := Checksum(buf, seed)
-				if got != want {
-					t.Fatalf("len=%d off=%d seed=%#x: got %#04x want %#04x",
-						length, off, seed, got, want)
+			// Random pool large enough for the longest case + alignment slop.
+			pool := make([]byte, 4096+padFront)
+			for i := range pool {
+				pool[i] = byte(rng.Uint32())
+			}
+
+			seeds := []uint16{0, 0x0001, 0xabcd, 0xffff, 0x1234, 0xfedc}
+			offsets := []int{0, 1, 2, 3, 4, 5, 7, 8, 15, 16}
+
+			for length := 0; length <= 4096; length++ {
+				for _, seed := range seeds {
+					for _, off := range offsets {
+						if off+length > len(pool) {
+							continue
+						}
+						buf := pool[off : off+length]
+						want := gvisorchecksum.Checksum(buf, seed)
+						got := impl.fn(buf, seed)
+						if got != want {
+							t.Fatalf("len=%d off=%d seed=%#x: got %#04x want %#04x",
+								length, off, seed, got, want)
+						}
+					}
 				}
 			}
-		}
+		})
 	}
 }
 
@@ -46,23 +78,28 @@ func TestChecksumMatchesGvisor(t *testing.T) {
 // historically tripped up checksum implementations: all-zero, all-0xff,
 // alternating, and ascending sequences.
 func TestChecksumPatternedBuffers(t *testing.T) {
-	for length := 0; length <= 256; length++ {
-		patterns := map[string][]byte{
-			"zeros":       make([]byte, length),
-			"ones":        bytes(length, 0xff),
-			"alternating": pattern(length, []byte{0xa5, 0x5a}),
-			"ascending":   ascending(length),
-		}
-		for name, buf := range patterns {
-			for _, seed := range []uint16{0, 0xffff, 0x8000} {
-				want := gvisorchecksum.Checksum(buf, seed)
-				got := Checksum(buf, seed)
-				if got != want {
-					t.Fatalf("%s len=%d seed=%#x: got %#04x want %#04x",
-						name, length, seed, got, want)
+	for _, impl := range implsUnderTest() {
+		t.Run(impl.name, func(t *testing.T) {
+			requireAvailable(t, impl)
+			for length := 0; length <= 256; length++ {
+				patterns := map[string][]byte{
+					"zeros":       make([]byte, length),
+					"ones":        bytes(length, 0xff),
+					"alternating": pattern(length, []byte{0xa5, 0x5a}),
+					"ascending":   ascending(length),
+				}
+				for name, buf := range patterns {
+					for _, seed := range []uint16{0, 0xffff, 0x8000} {
+						want := gvisorchecksum.Checksum(buf, seed)
+						got := impl.fn(buf, seed)
+						if got != want {
+							t.Fatalf("%s len=%d seed=%#x: got %#04x want %#04x",
+								name, length, seed, got, want)
+						}
+					}
 				}
 			}
-		}
+		})
 	}
 }
 
@@ -98,36 +135,41 @@ func ascending(n int) []byte {
 // and k=1 (one main loop iter, then tail). It's explicit coverage for
 // payload sizes that are odd, not divisible by 4, by 8, or by 32.
 func TestChecksumTailPaths(t *testing.T) {
-	rng := rand.New(rand.NewPCG(42, 17))
-	const padFront = 16
-	const maxK = 8
+	for _, impl := range implsUnderTest() {
+		t.Run(impl.name, func(t *testing.T) {
+			requireAvailable(t, impl)
+			rng := rand.New(rand.NewPCG(42, 17))
+			const padFront = 16
+			const maxK = 8
 
-	pool := make([]byte, 64*maxK+padFront+64)
-	for i := range pool {
-		pool[i] = byte(rng.Uint32())
-	}
+			pool := make([]byte, 64*maxK+padFront+64)
+			for i := range pool {
+				pool[i] = byte(rng.Uint32())
+			}
 
-	seeds := []uint16{0, 0xffff, 0xabcd}
-	offsets := []int{0, 1, 3, 7, 15} // mix of aligned and odd starts
+			seeds := []uint16{0, 0xffff, 0xabcd}
+			offsets := []int{0, 1, 3, 7, 15} // mix of aligned and odd starts
 
-	for k := 0; k <= maxK; k++ {
-		for tail := 0; tail < 64; tail++ {
-			length := 64*k + tail
-			for _, seed := range seeds {
-				for _, off := range offsets {
-					if off+length > len(pool) {
-						continue
-					}
-					buf := pool[off : off+length]
-					want := gvisorchecksum.Checksum(buf, seed)
-					got := Checksum(buf, seed)
-					if got != want {
-						t.Fatalf("k=%d tail=%d (len=%d) off=%d seed=%#x: got %#04x want %#04x",
-							k, tail, length, off, seed, got, want)
+			for k := 0; k <= maxK; k++ {
+				for tail := 0; tail < 64; tail++ {
+					length := 64*k + tail
+					for _, seed := range seeds {
+						for _, off := range offsets {
+							if off+length > len(pool) {
+								continue
+							}
+							buf := pool[off : off+length]
+							want := gvisorchecksum.Checksum(buf, seed)
+							got := impl.fn(buf, seed)
+							if got != want {
+								t.Fatalf("k=%d tail=%d (len=%d) off=%d seed=%#x: got %#04x want %#04x",
+									k, tail, length, off, seed, got, want)
+							}
+						}
 					}
 				}
 			}
-		}
+		})
 	}
 }
 
