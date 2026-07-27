@@ -48,9 +48,11 @@ type coalesceSlot struct {
 	numSeg   int
 	totalPay int
 	nextSeq  uint32
-	// psh closes the chain: set when the last-accepted segment had PSH or
-	// was sub-gsoSize. No further appends after that.
-	psh     bool
+	// sealed marks the chain permanently closed: the last-accepted segment had PSH or was sub-gsoSize,
+	// so no append or flush-time merge may follow.
+	// Distinct from mere eviction out of openSlots (e.g. on seq mismatch),
+	// which leaves sealed=false so reorderForFlush can still merge the slot.
+	sealed  bool
 	payIovs [][]byte
 }
 
@@ -213,7 +215,7 @@ func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
 	if open != nil {
 		if c.canAppend(open, pkt, info) {
 			c.appendPayload(open, pkt, info)
-			if open.psh {
+			if open.sealed {
 				delete(c.openSlots, info.fk)
 				c.lastSlot = nil
 			} else {
@@ -221,7 +223,8 @@ func (c *TCPCoalescer) commitParsed(pkt []byte, info parsedTCP) error {
 			}
 			return nil
 		}
-		// Can't extend — seal it and fall through to seed a fresh slot.
+		// Can't extend: evict it from openSlots and fall through to seed a fresh slot.
+		// The slot stays unsealed so reorderForFlush may still merge it.
 		delete(c.openSlots, info.fk)
 		if c.lastSlot == open {
 			c.lastSlot = nil
@@ -279,10 +282,10 @@ func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 	s.numSeg = 1
 	s.totalPay = info.payLen
 	s.nextSeq = info.seq + uint32(info.payLen)
-	s.psh = info.flags&tcpFlagPsh != 0
+	s.sealed = info.flags&tcpFlagPsh != 0
 	s.payIovs = append(s.payIovs[:0], pkt[info.hdrLen:info.hdrLen+info.payLen])
 	c.slots = append(c.slots, s)
-	if !s.psh {
+	if !s.sealed {
 		c.openSlots[info.fk] = s
 		c.lastSlot = s
 	} else if last := c.lastSlot; last != nil && last.fk == info.fk {
@@ -296,7 +299,7 @@ func (c *TCPCoalescer) seed(pkt []byte, info parsedTCP) {
 // canAppend reports whether info's packet extends the slot's seed: same
 // header shape and stable contents, adjacent seq, not oversized, chain not closed.
 func (c *TCPCoalescer) canAppend(s *coalesceSlot, pkt []byte, info parsedTCP) bool {
-	if s.psh {
+	if s.sealed {
 		return false
 	}
 	if info.hdrLen != s.hdrLen {
@@ -337,7 +340,7 @@ func (c *TCPCoalescer) appendPayload(s *coalesceSlot, pkt []byte, info parsedTCP
 		s.hdrBuf[s.ipHdrLen+13] |= tcpFlagPsh
 	}
 	if info.payLen < s.gsoSize || info.flags&tcpFlagPsh != 0 {
-		s.psh = true
+		s.sealed = true
 	}
 }
 
@@ -358,7 +361,7 @@ func (c *TCPCoalescer) release(s *coalesceSlot) {
 	s.payIovs = s.payIovs[:0]
 	s.numSeg = 0
 	s.totalPay = 0
-	s.psh = false
+	s.sealed = false
 	c.pool = append(c.pool, s)
 }
 
@@ -597,11 +600,11 @@ func flowKeyCompare(a, b flowKey) int {
 // → ipHeadersMatch, which compares the full DSCP/ECN byte, so two slots with
 // differing ECN marks stay separate superpackets, each keeping its own mark.
 //
-// Note: a slot sealed by reorder (canAppend returned false on seq
-// mismatch) keeps psh=false, so this restriction does not block the
-// reorder-fix merge — only legitimate PSH-set seals.
+// Note: a slot evicted on reorder (canAppend returned false on seq mismatch)
+// stays sealed=false, so this restriction does not block the reorder-fix merge,
+// only chains ended by PSH or a short tail.
 func canMergeSlots(prev, s *coalesceSlot) bool {
-	if prev.psh {
+	if prev.sealed {
 		return false
 	}
 	if prev.fk != s.fk {
@@ -634,18 +637,16 @@ func canMergeSlots(prev, s *coalesceSlot) bool {
 }
 
 // mergeSlots folds src into dst in place: payIovs concatenated, counters
-// and totals updated, PSH OR'd into the seed header so the push signal is
-// not lost. The seed header's seq, gsoSize, and fk are unchanged. Caller
-// is responsible for releasing src (it's no longer in c.slots after this call).
+// and totals updated. The seed header's seq, gsoSize, and fk are unchanged.
+// The caller must release src (it's no longer in c.slots after this call).
 func mergeSlots(dst, src *coalesceSlot) {
 	dst.payIovs = append(dst.payIovs, src.payIovs...)
 	dst.numSeg += src.numSeg
 	dst.totalPay += src.totalPay
 	dst.nextSeq = src.nextSeq
-	if src.psh {
-		dst.psh = true
-		dst.hdrBuf[dst.ipHdrLen+13] |= tcpFlagPsh
-	}
+	dst.sealed = src.sealed // dst is open — canMergeSlots rejects a sealed prev
+	// carry PSH through
+	dst.hdrBuf[dst.ipHdrLen+13] |= src.hdrBuf[src.ipHdrLen+13] & tcpFlagPsh
 }
 
 // ipv4HdrChecksum computes the IPv4 header checksum over hdr (which must

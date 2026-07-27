@@ -1115,3 +1115,80 @@ func TestSortRunZeroAllocs(t *testing.T) {
 		t.Fatalf("sortRun allocates %v times per run; want 0", allocs)
 	}
 }
+
+// TestCoalescerMergeShortTailDoesNotFabricatePSH: a slot sealed by a
+// sub-gsoSize tail segment has psh=true in the chain-closed sense but no
+// PSH flag on any of its packets. When reorderForFlush folds it into the
+// preceding slot, the merged header must not grow a PSH the sender never
+// sent — mergeSlots must copy the wire flag from the source header, not
+// synthesize it from the seal bool.
+func TestCoalescerMergeShortTailDoesNotFabricatePSH(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := NewTCPCoalescer(w, test.NewLogger())
+	pay := make([]byte, 1200)
+	short := make([]byte, 600)
+	// Arrival: seq 3400 (full), 4600 (short, seals the slot), then the
+	// reordered front of the window: 1000, 2200. Flush sorts the two slots
+	// into [1000..3400) + [3400..5200) and merges them.
+	if err := c.Commit(buildTCPv4(3400, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv4(4600, tcpAck, short)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv4(2200, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 1 {
+		t.Fatalf("want 1 merged gso write got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
+	}
+	g := w.gsoWrites[0]
+	if len(g.pays) != 4 {
+		t.Fatalf("merged segs=%d want 4", len(g.pays))
+	}
+	const ipHdrLen = 20
+	if flags := g.hdr[ipHdrLen+13]; flags&tcpPsh != 0 {
+		t.Errorf("merged header flags=%#x: PSH fabricated by short-tail merge", flags)
+	}
+}
+
+// TestCoalescerMergePreservesRealPSH is the positive companion: when the
+// source slot's tail really carried PSH, the merged header must keep it.
+func TestCoalescerMergePreservesRealPSH(t *testing.T) {
+	w := &fakeTunWriter{gsoEnabled: true}
+	c := NewTCPCoalescer(w, test.NewLogger())
+	pay := make([]byte, 1200)
+	short := make([]byte, 600)
+	if err := c.Commit(buildTCPv4(3400, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv4(4600, tcpAckPsh, short)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv4(1000, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Commit(buildTCPv4(2200, tcpAck, pay)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.gsoWrites) != 1 {
+		t.Fatalf("want 1 merged gso write got %d (plain=%d)", len(w.gsoWrites), len(w.writes))
+	}
+	g := w.gsoWrites[0]
+	if len(g.pays) != 4 {
+		t.Fatalf("merged segs=%d want 4", len(g.pays))
+	}
+	const ipHdrLen = 20
+	if flags := g.hdr[ipHdrLen+13]; flags&tcpPsh == 0 {
+		t.Errorf("merged header flags=%#x: real PSH lost in merge", flags)
+	}
+}
