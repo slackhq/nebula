@@ -321,8 +321,15 @@ func (r *Offload) Capabilities() Capabilities {
 	return Capabilities{TSO: true, USO: r.usoEnabled}
 }
 
+// maxSuperpacketLen caps a WriteGSO superpacket (headers + payload). The
+// virtio_net_hdr length fields and the IPv4 total-length / IPv6
+// payload-length stamped inside it are all 16-bit, so anything larger
+// would wrap one of them and hand the kernel corrupt geometry.
+const maxSuperpacketLen = 65535
+
 func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto GSOProto) error {
-	if len(hdr) == 0 || len(pays) == 0 || len(transportHdr) == 0 {
+	if len(pays) == 0 {
+		// No payload fragments at all: nothing to send.
 		return nil
 	}
 	// L4 checksum offset inside transportHdr: TCP=16 (the `check` field after
@@ -334,12 +341,23 @@ func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto
 	default:
 		csumOff = 16
 	}
+	// Malformed geometry must fail loudly, not vanish: the old empty-header
+	// early-out returned nil and silently dropped the payload. NEEDS_CSUM
+	// also makes the kernel write a checksum at csum_start+csum_offset, so
+	// transportHdr has to actually contain that field -- otherwise the
+	// write lands in payload bytes.
+	if len(hdr) == 0 || len(transportHdr) < int(csumOff)+2 {
+		return fmt.Errorf("tio: WriteGSO header too short: ip=%d transport=%d (csum field at %d)",
+			len(hdr), len(transportHdr), csumOff)
+	}
 	// GSO geometry comes from the non-empty fragments only: the iovec loop
 	// below skips empties, so gso_size must never be derived from one. A
 	// leading empty fragment would otherwise stamp a superpacket header
 	// with gso_size == 0, which the kernel rejects with EINVAL.
 	segSize, segCount := 0, 0
+	total := len(hdr) + len(transportHdr)
 	for _, p := range pays {
+		total += len(p)
 		if len(p) == 0 {
 			continue
 		}
@@ -347,6 +365,11 @@ func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto
 			segSize = len(p)
 		}
 		segCount++
+	}
+	// With total bounded, every uint16 conversion below (HdrLen, GSOSize,
+	// CsumStart) is exact.
+	if total > maxSuperpacketLen {
+		return fmt.Errorf("tio: WriteGSO superpacket %dB exceeds %d", total, maxSuperpacketLen)
 	}
 	vhdr := virtio.Hdr{
 		Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,

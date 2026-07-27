@@ -909,3 +909,53 @@ func TestWriteGSOLeadingEmptyFragmentGeometry(t *testing.T) {
 		t.Errorf("wrote %d bytes want %d (empty fragment must not add an iovec)", n, want)
 	}
 }
+
+// TestWriteGSORejectsBadGeometry pins the length-check contract: malformed
+// geometry must fail loudly instead of silently succeeding (the old empty-
+// header early-out returned nil and dropped the payload), and nothing may
+// reach the u16 virtio fields or the kernel's csum_start+csum_offset write
+// without covering them.
+func TestWriteGSORejectsBadGeometry(t *testing.T) {
+	fd, err := unix.Open("/dev/null", os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open /dev/null: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Close(fd) })
+
+	o := &Offload{fd: fd, gsoIovs: make([]unix.Iovec, 2, gsoMaxIovs)}
+	o.gsoIovs[0].Base = &o.gsoHdrBuf[0]
+	o.gsoIovs[0].SetLen(virtio.Size)
+
+	ipHdr := make([]byte, 20)
+	ipHdr[0] = 0x45
+	udpHdr := make([]byte, 8)
+	tcpHdr := make([]byte, 20)
+	seg := make([]byte, 1200)
+
+	cases := []struct {
+		name      string
+		hdr, thdr []byte
+		pays      [][]byte
+		proto     GSOProto
+		wantErr   bool
+	}{
+		{"empty-ip-hdr-with-payload", nil, udpHdr, [][]byte{seg}, GSOProtoUDP, true},
+		{"udp-transport-too-short-for-csum", ipHdr, udpHdr[:6], [][]byte{seg}, GSOProtoUDP, true},
+		{"tcp-transport-too-short-for-csum", ipHdr, tcpHdr[:16], [][]byte{seg}, GSOProtoTCP, true},
+		{"superpacket-over-65535", ipHdr, tcpHdr, [][]byte{make([]byte, 40000), make([]byte, 40000)}, GSOProtoTCP, true},
+		{"no-pays-noop", ipHdr, udpHdr, nil, GSOProtoUDP, false},
+		{"valid-udp", ipHdr, udpHdr, [][]byte{seg, seg}, GSOProtoUDP, false},
+		{"valid-tcp", ipHdr, tcpHdr, [][]byte{seg, seg}, GSOProtoTCP, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := o.WriteGSO(tc.hdr, tc.thdr, tc.pays, tc.proto)
+			if tc.wantErr && err == nil {
+				t.Errorf("WriteGSO = nil, want error")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("WriteGSO = %v, want nil", err)
+			}
+		})
+	}
+}
