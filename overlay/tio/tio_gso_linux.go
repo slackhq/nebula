@@ -334,14 +334,28 @@ func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto
 	default:
 		csumOff = 16
 	}
+	// GSO geometry comes from the non-empty fragments only: the iovec loop
+	// below skips empties, so gso_size must never be derived from one. A
+	// leading empty fragment would otherwise stamp a superpacket header
+	// with gso_size == 0, which the kernel rejects with EINVAL.
+	segSize, segCount := 0, 0
+	for _, p := range pays {
+		if len(p) == 0 {
+			continue
+		}
+		if segCount == 0 {
+			segSize = len(p)
+		}
+		segCount++
+	}
 	vhdr := virtio.Hdr{
 		Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
 		HdrLen:     uint16(len(hdr) + len(transportHdr)),
-		GSOSize:    uint16(len(pays[0])),
+		GSOSize:    uint16(segSize),
 		CsumStart:  uint16(len(hdr)),
 		CsumOffset: csumOff,
 	}
-	if len(pays) > 1 {
+	if segCount > 1 {
 		ipVer := hdr[0] >> 4
 		switch {
 		case proto == GSOProtoUDP && (ipVer == 4 || ipVer == 6):

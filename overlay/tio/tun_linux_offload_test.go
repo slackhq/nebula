@@ -866,3 +866,46 @@ func TestOffloadWriteZeroLength(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteGSOLeadingEmptyFragmentGeometry: gso_size must be derived from
+// the first non-empty fragment. Deriving it from pays[0] stamped a
+// superpacket header with gso_size == 0 when the leading fragment was
+// empty -- the kernel rejects that with EINVAL and the burst is lost.
+// Write through a pipe and decode the vnet header the kernel would see.
+func TestWriteGSOLeadingEmptyFragmentGeometry(t *testing.T) {
+	var pfds [2]int
+	if err := unix.Pipe(pfds[:]); err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	t.Cleanup(func() { unix.Close(pfds[0]); unix.Close(pfds[1]) })
+
+	o := &Offload{fd: pfds[1], gsoIovs: make([]unix.Iovec, 2, gsoMaxIovs)}
+	o.gsoIovs[0].Base = &o.gsoHdrBuf[0]
+	o.gsoIovs[0].SetLen(virtio.Size)
+
+	ipHdr := make([]byte, 20)
+	ipHdr[0] = 0x45
+	udpHdr := make([]byte, 8)
+	seg := make([]byte, 1200)
+
+	if err := o.WriteGSO(ipHdr, udpHdr, [][]byte{{}, seg, seg}, GSOProtoUDP); err != nil {
+		t.Fatalf("WriteGSO with leading empty fragment: %v", err)
+	}
+
+	buf := make([]byte, virtio.Size+len(ipHdr)+len(udpHdr)+2*len(seg)+64)
+	n, err := unix.Read(pfds[0], buf)
+	if err != nil {
+		t.Fatalf("read pipe: %v", err)
+	}
+	var vhdr virtio.Hdr
+	vhdr.Decode(buf[:virtio.Size])
+	if vhdr.GSOType != unix.VIRTIO_NET_HDR_GSO_UDP_L4 {
+		t.Errorf("GSOType=%d want UDP_L4", vhdr.GSOType)
+	}
+	if vhdr.GSOSize != 1200 {
+		t.Errorf("GSOSize=%d want 1200 (first non-empty fragment)", vhdr.GSOSize)
+	}
+	if want := virtio.Size + len(ipHdr) + len(udpHdr) + 2*len(seg); n != want {
+		t.Errorf("wrote %d bytes want %d (empty fragment must not add an iovec)", n, want)
+	}
+}
