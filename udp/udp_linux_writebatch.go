@@ -55,10 +55,16 @@ type batchWriter struct {
 	// entryEnd[e] is the bufs index *after* the last packet packed into
 	// mmsghdr entry e. Used to rewind `i` on partial sendmmsg success.
 	entryEnd []int
+
+	// sendFn issues the sendmmsg for the first n prepared entries. Points
+	// at the real syscall in production; tests inject partial-success and
+	// error scripts to exercise the rewind logic without a socket.
+	sendFn func(n int) (int, error)
 }
 
 func newBatchWriter(fd int, isV4 bool, l *slog.Logger) *batchWriter {
 	w := &batchWriter{fd: fd, isV4: isV4, l: l}
+	w.sendFn = w.sendmmsg
 	w.prepareWriteMessages(MaxWriteBatch)
 	w.prepareGSO()
 	return w
@@ -294,7 +300,7 @@ sendChunks:
 			return written, fmt.Errorf("sendmmsg: no progress")
 		}
 
-		sent, serr := w.sendmmsg(entry)
+		sent, serr := w.sendFn(entry)
 		if serr != nil && sent <= 0 {
 			// sent<=0 means message 0 itself failed. If that entry was a GSO
 			// superpacket and the errno is the kernel's "device can't do this"
