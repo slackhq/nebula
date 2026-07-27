@@ -131,6 +131,9 @@ listen:
   port: 4242
   # Sets the max number of packets to pull from the kernel for each syscall (under systems that support recvmmsg)
   # default is 64, does not support reload
+  # Note: on Linux with UDP GRO (kernel 5.10+), each receive slot is sized for a full 64KiB coalesced
+  # superpacket, so the receive scratch is batch * 64KiB per listening socket (~4MiB per routine at the
+  # default of 64). Lower this to trade peak per-syscall throughput for memory on constrained hosts.
   #batch: 64
   # Configure socket buffers for the udp side (outside), leave unset to use the system defaults. Values will be doubled by the kernel
   # Default is net.core.rmem_default and net.core.wmem_default (/proc/sys/net/core/rmem_default and /proc/sys/net/core/rmem_default)
