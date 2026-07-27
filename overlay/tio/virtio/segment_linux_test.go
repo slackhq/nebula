@@ -430,3 +430,40 @@ func TestFinishChecksumUDPValidates(t *testing.T) {
 		t.Fatal("completed UDP checksum does not validate")
 	}
 }
+
+// TestCheckValidMasksGSOECN: GSO_ECN is a qualifier bit the kernel ORs
+// into gso_type for TSO superpackets with CWR set. CheckValid must
+// validate an ECN-qualified type as its base type — previously TCPV4|ECN
+// fell into the default case and skipped the IP-version agreement check.
+// The qualifier is TCP-only, so it must be rejected on UDP_L4.
+func TestCheckValidMasksGSOECN(t *testing.T) {
+	v4pkt, _, _ := buildTCPv4Super(100)
+	v6pkt := make([]byte, len(v4pkt))
+	copy(v6pkt, v4pkt)
+	v6pkt[0] = 0x60 // claim IPv6
+
+	cases := []struct {
+		name    string
+		pkt     []byte
+		gsoType uint8
+		wantErr bool
+	}{
+		{"tcpv4-ecn-v4", v4pkt, unix.VIRTIO_NET_HDR_GSO_TCPV4 | unix.VIRTIO_NET_HDR_GSO_ECN, false},
+		{"tcpv4-ecn-v6-mismatch", v6pkt, unix.VIRTIO_NET_HDR_GSO_TCPV4 | unix.VIRTIO_NET_HDR_GSO_ECN, true},
+		{"tcpv6-ecn-v4-mismatch", v4pkt, unix.VIRTIO_NET_HDR_GSO_TCPV6 | unix.VIRTIO_NET_HDR_GSO_ECN, true},
+		{"udp-l4-ecn-rejected", v4pkt, unix.VIRTIO_NET_HDR_GSO_UDP_L4 | unix.VIRTIO_NET_HDR_GSO_ECN, true},
+		{"tcpv4-plain-v4", v4pkt, unix.VIRTIO_NET_HDR_GSO_TCPV4, false},
+		{"tcpv4-plain-v6-mismatch", v6pkt, unix.VIRTIO_NET_HDR_GSO_TCPV4, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckValid(tc.pkt, Hdr{GSOType: tc.gsoType})
+			if tc.wantErr && err == nil {
+				t.Errorf("CheckValid(gsoType=%#x) = nil, want error", tc.gsoType)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("CheckValid(gsoType=%#x) = %v, want nil", tc.gsoType, err)
+			}
+		})
+	}
+}

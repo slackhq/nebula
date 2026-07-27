@@ -77,10 +77,6 @@ const tcpCwrFlag = 0x80
 // cause a downstream miscompute. The TUN should never emit RSC_INFO and
 // the GSO type must agree with the IP version nibble.
 func CheckValid(pkt []byte, hdr Hdr) error {
-	// When RSC_INFO is set the csum_start/csum_offset fields are repurposed to
-	// carry coalescing info rather than checksum offsets. A TUN writing via
-	// IFF_VNET_HDR should never emit this, but if it did we would silently
-	// miscompute the segment checksums — refuse the packet instead.
 	if hdr.Flags&unix.VIRTIO_NET_HDR_F_RSC_INFO != 0 {
 		return fmt.Errorf("virtio RSC_INFO flag not supported on TUN reads")
 	}
@@ -88,7 +84,10 @@ func CheckValid(pkt []byte, hdr Hdr) error {
 		return fmt.Errorf("packet too short")
 	}
 	ipVersion := pkt[0] >> 4
-	switch hdr.GSOType {
+
+	//mask out VIRTIO_NET_HDR_GSO_ECN, it's a qualifier, not a type
+	gsoType := hdr.GSOType &^ unix.VIRTIO_NET_HDR_GSO_ECN
+	switch gsoType {
 	case unix.VIRTIO_NET_HDR_GSO_TCPV4:
 		if ipVersion != 4 {
 			return fmt.Errorf("invalid IP version %d for GSO type %d", ipVersion, hdr.GSOType)
