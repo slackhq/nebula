@@ -321,60 +321,73 @@ func (r *Offload) Capabilities() Capabilities {
 	return Capabilities{TSO: true, USO: r.usoEnabled}
 }
 
-// maxSuperpacketLen caps a WriteGSO superpacket (headers + payload). The
-// virtio_net_hdr length fields and the IPv4 total-length / IPv6
-// payload-length stamped inside it are all 16-bit, so anything larger
-// would wrap one of them and hand the kernel corrupt geometry.
+// maxSuperpacketLen is the limit for a WriteGSO superpacket (headers +
+// payload). The virtio_net_hdr length fields and the IP length fields
+// are 16-bit. A larger superpacket causes an overflow in one of these
+// fields and gives incorrect geometry to the kernel.
 const maxSuperpacketLen = 65535
 
 func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto GSOProto) error {
 	if len(pays) == 0 {
-		// No payload fragments at all: nothing to send.
+		// There are no payload fragments. There is nothing to send.
 		return nil
 	}
-	// L4 checksum offset inside transportHdr: TCP=16 (the `check` field after
-	// seq/ack/dataoff/flags/window), UDP=6 (after sport/dport/length).
-	var csumOff uint16
+	var csumOff uint16 // csumOff is the offset of the L4 checksum field in transportHdr
 	switch proto {
 	case GSOProtoUDP:
 		csumOff = 6
-	default:
+	case GSOProtoTCP:
 		csumOff = 16
+	default:
+		return fmt.Errorf("unknown GSO proto: %d", proto)
 	}
-	// Malformed geometry must fail loudly, not vanish: the old empty-header
-	// early-out returned nil and silently dropped the payload. NEEDS_CSUM
-	// also makes the kernel write a checksum at csum_start+csum_offset, so
-	// transportHdr has to actually contain that field -- otherwise the
-	// write lands in payload bytes.
+	// Incorrect geometry must cause an error, not a silent drop.
+	// No sane packet should ever make it inside this branch.
 	if len(hdr) == 0 || len(transportHdr) < int(csumOff)+2 {
 		return fmt.Errorf("tio: WriteGSO header too short: ip=%d transport=%d (csum field at %d)",
 			len(hdr), len(transportHdr), csumOff)
 	}
-	// GSO geometry comes from the non-empty fragments only: the iovec loop
-	// below skips empties, so gso_size must never be derived from one. A
-	// leading empty fragment would otherwise stamp a superpacket header
-	// with gso_size == 0, which the kernel rejects with EINVAL.
-	segSize, segCount := 0, 0
+	// Make the iovec array: [virtio_hdr, hdr, transportHdr, pays...].
+	// The constructor attaches r.gsoIovs[0] to gsoHdrBuf. That entry does not change.
+	need := 3 + len(pays)
+	if need > cap(r.gsoIovs) {
+		slog.Default().Warn("tio: WriteGSO iovec budget exceeded; dropping superpacket",
+			"need", need, "cap", cap(r.gsoIovs), "segments", len(pays))
+		return fmt.Errorf("tio: WriteGSO needs %d iovecs but cap is %d", need, cap(r.gsoIovs))
+	}
+	r.gsoIovs = r.gsoIovs[:need]
+	r.gsoIovs[1].Base = &hdr[0]
+	r.gsoIovs[1].SetLen(len(hdr))
+	r.gsoIovs[2].Base = &transportHdr[0]
+	r.gsoIovs[2].SetLen(len(transportHdr))
+
+	// Fill out the payload iovecs and find the GSO geometry:
+	segSize := 0
 	total := len(hdr) + len(transportHdr)
+	n := 3
 	for _, p := range pays {
 		total += len(p)
 		if len(p) == 0 {
-			continue
+			continue //disregard empty payloads, the kernel will reject them.
+			//callers already funnel zero-length frames via the not-GSO path, so this should never happen.
 		}
-		if segCount == 0 {
+		if n == 3 {
 			segSize = len(p)
 		}
-		segCount++
+		r.gsoIovs[n].Base = &p[0]
+		r.gsoIovs[n].SetLen(len(p))
+		n++
 	}
-	// With total bounded, every uint16 conversion below (HdrLen, GSOSize,
-	// CsumStart) is exact.
+	r.gsoIovs = r.gsoIovs[:n]
+	segCount := n - 3
+	// This check keeps `total` in the uint16 range. Anything larger would wrap around and cause trouble.
 	if total > maxSuperpacketLen {
 		return fmt.Errorf("tio: WriteGSO superpacket %dB exceeds %d", total, maxSuperpacketLen)
 	}
+	// GSOType and GSOSize stay zero (GSO_NONE, 0) for single-segment, or an unknown IP version.
 	vhdr := virtio.Hdr{
 		Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
 		HdrLen:     uint16(len(hdr) + len(transportHdr)),
-		GSOSize:    uint16(segSize),
 		CsumStart:  uint16(len(hdr)),
 		CsumOffset: csumOff,
 	}
@@ -387,45 +400,12 @@ func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto
 			vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_TCPV6
 		case ipVer == 4:
 			vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_TCPV4
-		default:
-			vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_NONE
-			vhdr.GSOSize = 0
 		}
-	} else {
-		vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_NONE
-		vhdr.GSOSize = 0
+		if vhdr.GSOType != unix.VIRTIO_NET_HDR_GSO_NONE {
+			vhdr.GSOSize = uint16(segSize)
+		}
 	}
 	vhdr.Encode(r.gsoHdrBuf[:])
-
-	// Build the iovec array: [virtio_hdr, hdr, transportHdr, pays...]. r.gsoIovs[0] is
-	// wired to gsoHdrBuf at construction and never changes.
-	need := 3 + len(pays)
-	if need > cap(r.gsoIovs) {
-		slog.Default().Warn("tio: WriteGSO iovec budget exceeded; dropping superpacket",
-			"need", need, "cap", cap(r.gsoIovs), "segments", len(pays))
-		return fmt.Errorf("tio: WriteGSO needs %d iovecs but cap is %d", need, cap(r.gsoIovs))
-	}
-	r.gsoIovs = r.gsoIovs[:need]
-	r.gsoIovs[1].Base = &hdr[0]
-	r.gsoIovs[1].SetLen(len(hdr))
-	r.gsoIovs[2].Base = &transportHdr[0]
-	r.gsoIovs[2].SetLen(len(transportHdr))
-	// Defense in depth: an empty payload fragment can't be a valid GSO
-	// segment and &p[0] would panic on it. Callers route zero-length
-	// datagrams through the plain path (see UDPCoalescer.commitParsed), so
-	// this should never fire, but skip empties rather than index into one.
-	// `n` tracks where the next payload iovec lands, since skips make it
-	// drift from 3+i.
-	n := 3
-	for _, p := range pays {
-		if len(p) == 0 {
-			continue
-		}
-		r.gsoIovs[n].Base = &p[0]
-		r.gsoIovs[n].SetLen(len(p))
-		n++
-	}
-	r.gsoIovs = r.gsoIovs[:n]
 
 	_, err := r.rawWrite(r.gsoIovs)
 	return err
