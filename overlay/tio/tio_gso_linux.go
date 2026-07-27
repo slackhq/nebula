@@ -276,22 +276,16 @@ func (r *Offload) decodeRead(pktLen int) error {
 }
 
 func (r *Offload) Write(buf []byte) (int, error) {
+	if len(buf) == 0 {
+		return 0, nil
+	}
 	iovs := [2]unix.Iovec{
 		{Base: &validVnetHdr[0]},
 		{Base: &buf[0]},
 	}
 	iovs[0].SetLen(virtio.Size)
 	iovs[1].SetLen(len(buf))
-	return r.writeWithScratch(buf, &iovs)
-}
-
-func (r *Offload) writeWithScratch(buf []byte, iovs *[2]unix.Iovec) (int, error) {
-	if len(buf) == 0 {
-		return 0, nil
-	}
-	iovs[1].Base = &buf[0]
-	iovs[1].SetLen(len(buf))
-	return r.rawWrite(unsafe.Slice(&iovs[0], len(iovs)))
+	return r.rawWrite(unsafe.Slice(&iovs[0], 2))
 }
 
 func (r *Offload) rawWrite(iovs []unix.Iovec) (int, error) {

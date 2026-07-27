@@ -854,3 +854,15 @@ func TestDecodeReadFitsMaxTSOAtDrainThreshold(t *testing.T) {
 		t.Fatalf("got %d segments, want %d", gotSegs, wantSegs)
 	}
 }
+
+// TestOffloadWriteZeroLength: a zero-length Write must be a no-op, not a
+// panic. The guard used to live below the &buf[0] that tripped on it.
+func TestOffloadWriteZeroLength(t *testing.T) {
+	tf := &Offload{fd: -1} // any write reaching the fd would fail loudly
+	for _, buf := range [][]byte{nil, {}} {
+		n, err := tf.Write(buf)
+		if n != 0 || err != nil {
+			t.Errorf("Write(len=0) = (%d, %v), want (0, nil)", n, err)
+		}
+	}
+}
