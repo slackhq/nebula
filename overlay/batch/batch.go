@@ -19,8 +19,8 @@ type TxBatcher interface {
 	// caller must keep pkt valid until the next Flush. Pass 0 (Not-ECT)
 	// to leave the outer ECN field unset.
 	Commit(pkt []byte, dst netip.AddrPort, outerECN byte)
-	// Flush emits every queued packet via the underlying batch writer in arrival order.
-	// Returns an errors.Join of one or more errors.
+	// Flush emits every queued packet via the underlying batch writer in arrival order and reports how many were
+	// actually written. A short count means some destinations were undeliverable, not that the batch failed.
 	// After Flush returns, borrowed payload slices may be recycled.
-	Flush() error
+	Flush() (int, error)
 }

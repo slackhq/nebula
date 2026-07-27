@@ -6,7 +6,7 @@ const SendBatchCap = 128
 
 // batchWriter is the minimal subset of udp.Conn needed by SendBatch to flush.
 type batchWriter interface {
-	WriteBatch(bufs [][]byte, addrs []netip.AddrPort, outerECNs []byte) error
+	WriteBatch(bufs [][]byte, addrs []netip.AddrPort, outerECNs []byte) (int, error)
 }
 
 // SendBatch accumulates encrypted UDP packets and flushes them via WriteBatch.
@@ -46,15 +46,18 @@ func (b *SendBatch) Commit(pkt []byte, dst netip.AddrPort, outerECN byte) {
 	b.ecns = append(b.ecns, outerECN)
 }
 
-func (b *SendBatch) Flush() error {
+// Flush writes every queued packet and reports how many actually went out. A short count means some destinations
+// were undeliverable; the batch is drained either way.
+func (b *SendBatch) Flush() (int, error) {
 	var err error
+	written := 0
 	if len(b.bufs) > 0 {
-		err = b.out.WriteBatch(b.bufs, b.dsts, b.ecns)
+		written, err = b.out.WriteBatch(b.bufs, b.dsts, b.ecns)
 	}
 	clear(b.bufs)
 	b.bufs = b.bufs[:0]
 	b.dsts = b.dsts[:0]
 	b.ecns = b.ecns[:0]
 	b.arena.Reset()
-	return err
+	return written, err
 }
