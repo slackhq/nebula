@@ -59,7 +59,7 @@ type InterfaceConfig struct {
 	// pin-to-(i % NumCPU) behavior. Only consulted when PinThreads is true.
 	CpuAffinity []int
 	// PinThreads controls whether each TUN reader OS thread is pinned to a
-	// single CPU (via tun.pin_threads, default false). Pinning keeps each
+	// single CPU (via tun.pin_threads, default true). Pinning keeps each
 	// goroutine's sendmmsg on one XPS-selected NIC TX ring so per-flow
 	// packets stay ordered on the wire.
 	PinThreads bool
@@ -94,7 +94,7 @@ type Interface struct {
 	// Only consulted when pinThreads is true.
 	cpuAffinity []int
 	// pinThreads controls whether listenIn pins each TUN reader OS thread to
-	// a CPU at all (tun.pin_threads, default false). When false, threads are
+	// a CPU at all (tun.pin_threads, default true). When false, threads are
 	// left free to migrate as on stock nebula.
 	pinThreads bool
 	// ecnEnabled gates RFC 6040 underlay ECN propagation. When true,

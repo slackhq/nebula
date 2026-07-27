@@ -246,7 +246,7 @@ func Main(c *config.C, configTest bool, buildVersion string, l *slog.Logger, dev
 		punchy:                punchy,
 		ConntrackCacheTimeout: conntrackCacheTimeout,
 		CpuAffinity:           parseCpuAffinity(c, l, routines),
-		PinThreads:            c.GetBool("tun.pin_threads", false),
+		PinThreads:            c.GetBool("tun.pin_threads", true),
 		l:                     l,
 	}
 
