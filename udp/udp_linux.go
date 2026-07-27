@@ -332,21 +332,25 @@ func (u *StdConn) ListenOut(r EncReader, flush func()) error {
 				segSize, outerECN = parseRecvCmsg(&msgs[i].Hdr, u.groSupported, u.ecnRecvSupported)
 			}
 
-			if segSize <= 0 || segSize >= len(payload) {
-				r(from, payload, RxMeta{OuterECN: outerECN})
-			} else {
-				for off := 0; off < len(payload); off += segSize {
-					end := off + segSize
-					if end > len(payload) {
-						end = len(payload)
-					}
-					seg := payload[off:end]
-					r(from, seg, RxMeta{OuterECN: outerECN})
-				}
-			}
+			deliverSegments(r, from, payload, segSize, RxMeta{OuterECN: outerECN})
 		}
 
 		flush()
+	}
+}
+
+// deliverSegments hands a received superdatagram to r, splitting it back into pre-coalesce packets
+func deliverSegments(r EncReader, from netip.AddrPort, payload []byte, segSize int, meta RxMeta) {
+	if segSize <= 0 || segSize >= len(payload) { //avoid bogus values
+		r(from, payload, meta)
+		return
+	}
+	for off := 0; off < len(payload); off += segSize {
+		end := off + segSize
+		if end > len(payload) {
+			end = len(payload)
+		}
+		r(from, payload[off:end], meta)
 	}
 }
 

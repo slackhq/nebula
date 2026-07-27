@@ -324,3 +324,76 @@ func TestParseRecvCmsgCorruptLenNoPanic(t *testing.T) {
 		})
 	}
 }
+
+// TestDeliverSegments pins the GRO RX splitting: a kernel-coalesced buffer
+// must come back out as the exact pre-coalesce packets -- every boundary
+// error here shreds encrypted packets and every decrypt downstream fails.
+func TestDeliverSegments(t *testing.T) {
+	from := netip.MustParseAddrPort("192.0.2.1:4242")
+	pay := func(n int) []byte {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = byte(i)
+		}
+		return b
+	}
+
+	cases := []struct {
+		name     string
+		payload  []byte
+		segSize  int
+		wantLens []int
+	}{
+		{"no-gro", pay(1400), 0, []int{1400}},
+		{"negative-segsize", pay(1400), -5, []int{1400}},
+		{"segsize-equals-payload", pay(1400), 1400, []int{1400}},
+		{"segsize-past-payload", pay(1400), 2000, []int{1400}},
+		{"even-split", pay(4200), 1400, []int{1400, 1400, 1400}},
+		{"short-tail", pay(3000), 1400, []int{1400, 1400, 200}},
+		{"single-byte-tail", pay(2801), 1400, []int{1400, 1400, 1}},
+		{"segsize-one", pay(3), 1, []int{1, 1, 1}},
+		{"empty-payload", pay(0), 1400, []int{0}},
+		{"max-coalesce", pay(65500), 1372, nil}, // lens derived below
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			wantLens := c.wantLens
+			if wantLens == nil {
+				for rem := len(c.payload); rem > 0; rem -= c.segSize {
+					wantLens = append(wantLens, min(c.segSize, rem))
+				}
+			}
+
+			var got [][]byte
+			meta := RxMeta{OuterECN: 0x2}
+			deliverSegments(func(a netip.AddrPort, seg []byte, m RxMeta) {
+				if a != from {
+					t.Errorf("from = %v, want %v", a, from)
+				}
+				if m != meta {
+					t.Errorf("meta = %+v, want %+v", m, meta)
+				}
+				got = append(got, seg)
+			}, from, c.payload, c.segSize, meta)
+
+			if len(got) != len(wantLens) {
+				t.Fatalf("delivered %d segments, want %d", len(got), len(wantLens))
+			}
+			// Segments must tile the payload in order with no gap, overlap,
+			// or copy: each must alias the payload at the right offset.
+			off := 0
+			for i, seg := range got {
+				if len(seg) != wantLens[i] {
+					t.Fatalf("segment %d len=%d want %d", i, len(seg), wantLens[i])
+				}
+				if len(seg) > 0 && &seg[0] != &c.payload[off] {
+					t.Errorf("segment %d does not alias payload at offset %d", i, off)
+				}
+				off += len(seg)
+			}
+			if off != len(c.payload) {
+				t.Errorf("segments cover %d bytes, payload has %d", off, len(c.payload))
+			}
+		})
+	}
+}
