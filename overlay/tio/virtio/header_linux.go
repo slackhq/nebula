@@ -3,7 +3,11 @@
 
 package virtio
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+
+	"golang.org/x/sys/unix"
+)
 
 // Size is the on-wire length of struct virtio_net_hdr the kernel
 // prepends/expects on a TUN opened with IFF_VNET_HDR (TUNSETVNETHDRSZ
@@ -13,18 +17,29 @@ const Size = 10
 // Hdr is the Go view of the legacy virtio_net_hdr.
 type Hdr struct {
 	Flags      uint8
-	GSOType    uint8
+	gsoType    uint8 //private to avoid mistakes wrt the 0x80 VIRTIO_NET_HDR_GSO_ECN flag, ORed with the other "GSO types"
 	HdrLen     uint16
 	GSOSize    uint16
 	CsumStart  uint16
 	CsumOffset uint16
 }
 
+func NewHeader(flags, gsoType uint8, hdrLen, gsoSize, csumStart, csumOffset uint16) Hdr {
+	return Hdr{
+		Flags:      flags,
+		gsoType:    gsoType,
+		HdrLen:     hdrLen,
+		GSOSize:    gsoSize,
+		CsumStart:  csumStart,
+		CsumOffset: csumOffset,
+	}
+}
+
 // Decode reads a virtio_net_hdr in host byte order (TUN default; we never
 // call TUNSETVNETLE so the kernel matches our endianness).
 func (h *Hdr) Decode(b []byte) {
 	h.Flags = b[0]
-	h.GSOType = b[1]
+	h.gsoType = b[1]
 	h.HdrLen = binary.NativeEndian.Uint16(b[2:4])
 	h.GSOSize = binary.NativeEndian.Uint16(b[4:6])
 	h.CsumStart = binary.NativeEndian.Uint16(b[6:8])
@@ -35,9 +50,22 @@ func (h *Hdr) Decode(b []byte) {
 // (must be at least Size bytes). Used to emit a TSO superpacket on egress.
 func (h *Hdr) Encode(b []byte) {
 	b[0] = h.Flags
-	b[1] = h.GSOType
+	b[1] = h.gsoType
 	binary.NativeEndian.PutUint16(b[2:4], h.HdrLen)
 	binary.NativeEndian.PutUint16(b[4:6], h.GSOSize)
 	binary.NativeEndian.PutUint16(b[6:8], h.CsumStart)
 	binary.NativeEndian.PutUint16(b[8:10], h.CsumOffset)
+}
+
+// GSOType returns gsoType with the ECN-flag masked out
+func (h *Hdr) GSOType() uint8 {
+	return h.gsoType &^ unix.VIRTIO_NET_HDR_GSO_ECN
+}
+
+func (h *Hdr) HasECNFlag() bool {
+	return h.gsoType&unix.VIRTIO_NET_HDR_GSO_ECN != 0
+}
+
+func (h *Hdr) SetGSOType(x uint8) {
+	h.gsoType = x
 }

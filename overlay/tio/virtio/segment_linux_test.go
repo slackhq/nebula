@@ -226,13 +226,14 @@ func TestCorrectHdrLenChecksumBound(t *testing.T) {
 	// = 26) accepts. This case FAILS against the CsumStart+CsumStart regression.
 	t.Run("valid-small-uso-accepted", func(t *testing.T) {
 		pkt, _, csumStart := buildUDPv4Super(12) // total len 40
-		hdr := Hdr{
-			Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
-			GSOType:    unix.VIRTIO_NET_HDR_GSO_UDP_L4,
-			GSOSize:    6, // two 6-byte segments
-			CsumStart:  csumStart,
-			CsumOffset: 6,
-		}
+		hdr := NewHeader(
+			unix.VIRTIO_NET_HDR_F_NEEDS_CSUM, /*flags*/
+			unix.VIRTIO_NET_HDR_GSO_UDP_L4,   /*gsoType*/
+			0,                                /*hdrLen*/
+			6,                                /*gsoSize: two 6-byte segments*/
+			csumStart,                        /*csumStart*/
+			6,                                /*csumOffset*/
+		)
 		if err := CorrectHdrLen(pkt, &hdr); err != nil {
 			t.Fatalf("CorrectHdrLen rejected a valid 40-byte USO superpacket: %v", err)
 		}
@@ -247,13 +248,14 @@ func TestCorrectHdrLenChecksumBound(t *testing.T) {
 	t.Run("too-short-rejected", func(t *testing.T) {
 		pkt := make([]byte, 25)
 		pkt[0] = 0x45 // IPv4, IHL 5
-		hdr := Hdr{
-			Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
-			GSOType:    unix.VIRTIO_NET_HDR_GSO_UDP_L4,
-			GSOSize:    6,
-			CsumStart:  20,
-			CsumOffset: 6,
-		}
+		hdr := NewHeader(
+			unix.VIRTIO_NET_HDR_F_NEEDS_CSUM, /*flags*/
+			unix.VIRTIO_NET_HDR_GSO_UDP_L4,   /*gsoType*/
+			0,                                /*hdrLen*/
+			6,                                /*gsoSize*/
+			20,                               /*csumStart*/
+			6,                                /*csumOffset*/
+		)
 		if err := CorrectHdrLen(pkt, &hdr); err == nil {
 			t.Fatalf("CorrectHdrLen accepted a too-short (25-byte) packet")
 		}
@@ -355,7 +357,7 @@ func buildUDPv4Single(payload []byte) (pkt []byte, hdr Hdr) {
 	pseudo := pseudoHeaderIPv4(pkt[12:16], pkt[16:20], unix.IPPROTO_UDP, udpLen+len(payload))
 	binary.BigEndian.PutUint16(pkt[ipLen+udpChecksumOff:ipLen+udpChecksumOff+2], pseudo)
 
-	return pkt, Hdr{Flags: unix.VIRTIO_NET_HDR_F_NEEDS_CSUM, CsumStart: ipLen, CsumOffset: udpChecksumOff}
+	return pkt, NewHeader(unix.VIRTIO_NET_HDR_F_NEEDS_CSUM, unix.VIRTIO_NET_HDR_GSO_NONE, 0, 0, ipLen, udpChecksumOff)
 }
 
 // TestFinishChecksumUDPZeroStoresAllOnes pins RFC 768: a UDP checksum that computes to zero goes on the wire as
@@ -409,7 +411,7 @@ func TestFinishChecksumTCPZeroPreserved(t *testing.T) {
 	}
 	binary.BigEndian.PutUint16(seg[cs+co:cs+co+2], partial)
 
-	hdr := Hdr{Flags: unix.VIRTIO_NET_HDR_F_NEEDS_CSUM, CsumStart: cs, CsumOffset: co}
+	hdr := NewHeader(unix.VIRTIO_NET_HDR_F_NEEDS_CSUM, unix.VIRTIO_NET_HDR_GSO_NONE, 0, 0, cs, co)
 	if err := FinishChecksum(seg, hdr); err != nil {
 		t.Fatalf("FinishChecksum: %v", err)
 	}
@@ -457,7 +459,7 @@ func TestCheckValidMasksGSOECN(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := CheckValid(tc.pkt, Hdr{GSOType: tc.gsoType})
+			err := CheckValid(tc.pkt, NewHeader(0, tc.gsoType, 0, 0, 0, 0))
 			if tc.wantErr && err == nil {
 				t.Errorf("CheckValid(gsoType=%#x) = nil, want error", tc.gsoType)
 			}

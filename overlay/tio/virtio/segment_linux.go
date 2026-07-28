@@ -85,33 +85,27 @@ func CheckValid(pkt []byte, hdr Hdr) error {
 	}
 	ipVersion := pkt[0] >> 4
 
-	//mask out VIRTIO_NET_HDR_GSO_ECN, it's a qualifier, not a type
-	gsoType := hdr.GSOType &^ unix.VIRTIO_NET_HDR_GSO_ECN
-	// The ECN qualifier means CWR was set on a TSO superpacket, so it only
-	// applies to the TCP types. The kernel's virtio_net_hdr_to_skb rejects
-	// it on anything else; mirror that instead of segmenting nonsense.
-	if hdr.GSOType&unix.VIRTIO_NET_HDR_GSO_ECN != 0 &&
-		gsoType != unix.VIRTIO_NET_HDR_GSO_TCPV4 &&
-		gsoType != unix.VIRTIO_NET_HDR_GSO_TCPV6 {
-		return fmt.Errorf("virtio GSO_ECN qualifier on non-TCP GSO type %#x", hdr.GSOType)
+	gsoType := hdr.GSOType()
+	if hdr.HasECNFlag() && !(gsoType == unix.VIRTIO_NET_HDR_GSO_TCPV4 || gsoType == unix.VIRTIO_NET_HDR_GSO_TCPV6) {
+		return fmt.Errorf("virtio GSO_ECN qualifier on non-TCP GSO type %#x", hdr.gsoType)
 	}
 	switch gsoType {
 	case unix.VIRTIO_NET_HDR_GSO_TCPV4:
 		if ipVersion != 4 {
-			return fmt.Errorf("invalid IP version %d for GSO type %d", ipVersion, hdr.GSOType)
+			return fmt.Errorf("invalid IP version %d for GSO type %d", ipVersion, hdr.gsoType)
 		}
 	case unix.VIRTIO_NET_HDR_GSO_TCPV6:
 		if ipVersion != 6 {
-			return fmt.Errorf("invalid IP version %d for GSO type %d", ipVersion, hdr.GSOType)
+			return fmt.Errorf("invalid IP version %d for GSO type %d", ipVersion, hdr.gsoType)
 		}
 	case unix.VIRTIO_NET_HDR_GSO_UDP_L4:
 		// USO carries either v4 or v6; the leading nibble disambiguates.
 		if !(ipVersion == 4 || ipVersion == 6) {
-			return fmt.Errorf("invalid IP version %d for GSO type %d", ipVersion, hdr.GSOType)
+			return fmt.Errorf("invalid IP version %d for GSO type %d", ipVersion, hdr.gsoType)
 		}
 	default:
 		if !(ipVersion == 6 || ipVersion == 4) {
-			return fmt.Errorf("invalid IP version %d for GSO type %d", ipVersion, hdr.GSOType)
+			return fmt.Errorf("invalid IP version %d for GSO type %d", ipVersion, hdr.gsoType)
 		}
 	}
 
@@ -128,7 +122,7 @@ func CorrectHdrLen(pkt []byte, hdr *Hdr) error {
 	// FORWARD path. Instead, parse the transport header length and add it onto
 	// csumStart, which is synonymous for IP header length.
 
-	if hdr.GSOType == unix.VIRTIO_NET_HDR_GSO_UDP_L4 {
+	if hdr.GSOType() == unix.VIRTIO_NET_HDR_GSO_UDP_L4 {
 		hdr.HdrLen = hdr.CsumStart + 8
 	} else {
 		if len(pkt) <= int(hdr.CsumStart+tcpDataOffOff) {
@@ -157,19 +151,15 @@ func CorrectHdrLen(pkt []byte, hdr *Hdr) error {
 	return nil
 }
 
-// SegmentTCP walks a TSO superpacket pkt, yielding each segment as a
-// slice into pkt itself. Per-segment plaintext is laid out by stamping a
-// copy of the original L3+L4 header into pkt at offset i*gsoSize, where it
-// sits immediately before that segment's payload chunk in the original
-// buffer. The stamp is destructive but harmless: iter i's header write lands
-// on pkt[i*G : i*G+hdrLen], which is the tail of seg_{i-1}'s payload (already
+// SegmentTCP walks a TSO superpacket pkt, yielding each segment as a slice into pkt.
+// Per-segment plaintext is laid out by stamping a copy of the original L3+L4 header into pkt at offset i*gsoSize,
+// where it sits immediately before that segment's payload chunk in the original buffer.
+// The stamp is destructive: iter i's header write lands on pkt[i*G : i*G+hdrLen], which is the tail of seg_{i-1}'s payload (already
 // consumed) and ends exactly where seg_i's payload begins, so it never clobbers
-// live payload — this holds even when gsoSize < hdrLen. The header bytes are
-// sourced from a pristine snapshot taken before the loop (savedHdr), NOT from
-// pkt[:hdrLen], because when gsoSize < hdrLen the stamps would otherwise
-// overwrite the leading header in place and every stamp after the first would
-// copy corrupted bytes. pkt is consumed by this call and must not be inspected
-// by the caller after the final yield.
+// live payload — this holds even when gsoSize < hdrLen.
+// The header bytes are sourced from a pristine snapshot taken before the loop (savedHdr), NOT from pkt[:hdrLen], because when gsoSize < hdrLen the stamps would otherwise
+// overwrite the leading header in place and every stamp after the first would copy corrupted bytes.
+// pkt is consumed by this call and must not be inspected by the caller after the final yield.
 func SegmentTCP(pkt []byte, hdrLenU, csumStartU, gsoSizeU uint16, yield func(seg []byte) error) error {
 	if gsoSizeU == 0 {
 		return fmt.Errorf("gso_size is zero")

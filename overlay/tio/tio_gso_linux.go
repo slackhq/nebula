@@ -221,13 +221,11 @@ func (r *Offload) Read() ([]Packet, error) {
 	return r.pending, nil
 }
 
-// decodeRead processes the packet sitting in rxBuf at rxOff (length
-// pktLen). The bytes stay in rxBuf — for GSO_NONE we slice them as a
-// regular IP datagram (running finishChecksum if NEEDS_CSUM is set);
-// for TSO/USO superpackets we attach the corrected GSO metadata so the
-// caller can segment lazily at encrypt time. rxOff advances past the
-// kernel-supplied body and nothing else, since segmentation no longer
-// writes back into rxBuf.
+// decodeRead processes the packet sitting in rxBuf at rxOff (length pktLen).
+// The bytes stay in rxBuf:
+// * for GSO_NONE we slice them as a regular IP datagram (running finishChecksum if NEEDS_CSUM is set);
+// * for TSO/USO superpackets we attach the corrected GSO metadata, so the caller can segment lazily at encrypt time.
+// rxOff advances by pktLen on success
 func (r *Offload) decodeRead(pktLen int) error {
 	if pktLen <= 0 {
 		return fmt.Errorf("short tun read: %d", pktLen)
@@ -237,7 +235,7 @@ func (r *Offload) decodeRead(pktLen int) error {
 
 	body := r.rxBuf[r.rxOff : r.rxOff+pktLen]
 
-	if hdr.GSOType == unix.VIRTIO_NET_HDR_GSO_NONE {
+	if hdr.GSOType() == unix.VIRTIO_NET_HDR_GSO_NONE {
 		if hdr.Flags&unix.VIRTIO_NET_HDR_F_NEEDS_CSUM != 0 {
 			if err := virtio.FinishChecksum(body, hdr); err != nil {
 				return err
@@ -258,7 +256,7 @@ func (r *Offload) decodeRead(pktLen int) error {
 	if err := virtio.CorrectHdrLen(body, &hdr); err != nil {
 		return err
 	}
-	proto, err := protoFromGSOType(hdr.GSOType)
+	proto, err := protoFromGSOType(hdr.GSOType())
 	if err != nil {
 		return err
 	}
@@ -384,24 +382,26 @@ func (r *Offload) WriteGSO(hdr []byte, transportHdr []byte, pays [][]byte, proto
 	if total > maxSuperpacketLen {
 		return fmt.Errorf("tio: WriteGSO superpacket %dB exceeds %d", total, maxSuperpacketLen)
 	}
-	// GSOType and GSOSize stay zero (GSO_NONE, 0) for single-segment, or an unknown IP version.
-	vhdr := virtio.Hdr{
-		Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
-		HdrLen:     uint16(len(hdr) + len(transportHdr)),
-		CsumStart:  uint16(len(hdr)),
-		CsumOffset: csumOff,
-	}
+	// gsoType and GSOSize stay zero (GSO_NONE, 0) for single-segment, or an unknown IP version.
+	vhdr := virtio.NewHeader(
+		unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,   /*flags*/
+		unix.VIRTIO_NET_HDR_GSO_NONE,       /*gsoType*/
+		uint16(len(hdr)+len(transportHdr)), /*hdrLen*/
+		0,                                  /*gsoSize*/
+		uint16(len(hdr)),                   /*csumStart*/
+		csumOff,                            /*csumOffset*/
+	)
 	if segCount > 1 {
 		ipVer := hdr[0] >> 4
 		switch {
 		case proto == GSOProtoUDP && (ipVer == 4 || ipVer == 6):
-			vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_UDP_L4
+			vhdr.SetGSOType(unix.VIRTIO_NET_HDR_GSO_UDP_L4)
 		case ipVer == 6:
-			vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_TCPV6
+			vhdr.SetGSOType(unix.VIRTIO_NET_HDR_GSO_TCPV6)
 		case ipVer == 4:
-			vhdr.GSOType = unix.VIRTIO_NET_HDR_GSO_TCPV4
+			vhdr.SetGSOType(unix.VIRTIO_NET_HDR_GSO_TCPV4)
 		}
-		if vhdr.GSOType != unix.VIRTIO_NET_HDR_GSO_NONE {
+		if vhdr.GSOType() != unix.VIRTIO_NET_HDR_GSO_NONE {
 			vhdr.GSOSize = uint16(segSize)
 		}
 	}

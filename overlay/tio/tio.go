@@ -119,7 +119,8 @@ func QueueCapabilities(q Queue) Capabilities {
 type GSOProto uint8
 
 const (
-	GSOProtoTCP GSOProto = iota
+	GSOProtoUnknown GSOProto = iota
+	GSOProtoTCP
 	GSOProtoUDP
 )
 
@@ -138,7 +139,7 @@ const (
 // full superpacket payload; they are read-only from the writer's
 // perspective and must remain valid until the call returns. Every segment
 // in pays except possibly the last is exactly the same size. proto picks
-// the L4 protocol so the writer knows which GSOType / CsumOffset to set.
+// the L4 protocol so the writer knows which gsoType / CsumOffset to set.
 //
 // Callers should also consult CapsProvider (via SupportsGSO or
 // QueueCapabilities) for the per-protocol negotiated capability; an

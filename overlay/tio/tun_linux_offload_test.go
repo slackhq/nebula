@@ -63,7 +63,7 @@ func verifyChecksum(b []byte, pseudo uint16) bool {
 // returns. Tests pre-set hdr.HdrLen correctly, so correctHdrLen is not
 // invoked here.
 func segmentForTest(pkt []byte, hdr virtio.Hdr, out *[][]byte, scratch []byte) error {
-	if hdr.GSOType == unix.VIRTIO_NET_HDR_GSO_NONE {
+	if hdr.GSOType() == unix.VIRTIO_NET_HDR_GSO_NONE {
 		cp := append([]byte(nil), pkt...)
 		if hdr.Flags&unix.VIRTIO_NET_HDR_F_NEEDS_CSUM != 0 {
 			if err := virtio.FinishChecksum(cp, hdr); err != nil {
@@ -73,7 +73,7 @@ func segmentForTest(pkt []byte, hdr virtio.Hdr, out *[][]byte, scratch []byte) e
 		*out = append(*out, cp)
 		return nil
 	}
-	proto, err := protoFromGSOType(hdr.GSOType)
+	proto, err := protoFromGSOType(hdr.GSOType())
 	if err != nil {
 		return err
 	}
@@ -140,15 +140,14 @@ func buildTSOv4(t *testing.T, payLen, mss int) ([]byte, virtio.Hdr) {
 	for i := 0; i < payLen; i++ {
 		pkt[ipLen+tcpLen+i] = byte(i & 0xff)
 	}
-
-	return pkt, virtio.Hdr{
-		Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
-		GSOType:    unix.VIRTIO_NET_HDR_GSO_TCPV4,
-		HdrLen:     uint16(ipLen + tcpLen),
-		GSOSize:    uint16(mss),
-		CsumStart:  uint16(ipLen),
-		CsumOffset: 16,
-	}
+	return pkt, virtio.NewHeader(
+		unix.VIRTIO_NET_HDR_F_NEEDS_CSUM, /*flags*/
+		unix.VIRTIO_NET_HDR_GSO_TCPV4,    /*gsoType*/
+		uint16(ipLen+tcpLen),             /*hdrLen*/
+		uint16(mss),                      /*gsoSize*/
+		uint16(ipLen),                    /*csumStart*/
+		16,                               /*csumOffset*/
+	)
 }
 
 func TestSegmentTCPv4(t *testing.T) {
@@ -262,14 +261,14 @@ func TestSegmentTCPv6(t *testing.T) {
 		pkt[ipLen+tcpLen+i] = byte(i)
 	}
 
-	hdr := virtio.Hdr{
-		Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
-		GSOType:    unix.VIRTIO_NET_HDR_GSO_TCPV6,
-		HdrLen:     uint16(ipLen + tcpLen),
-		GSOSize:    uint16(mss),
-		CsumStart:  uint16(ipLen),
-		CsumOffset: 16,
-	}
+	hdr := virtio.NewHeader(
+		unix.VIRTIO_NET_HDR_F_NEEDS_CSUM, /*flags*/
+		unix.VIRTIO_NET_HDR_GSO_TCPV6,    /*gsoType*/
+		uint16(ipLen+tcpLen),             /*hdrLen*/
+		uint16(mss),                      /*gsoSize*/
+		uint16(ipLen),                    /*csumStart*/
+		16,                               /*csumOffset*/
+	)
 
 	scratch := make([]byte, testSegScratchSize)
 	var out [][]byte
@@ -311,7 +310,7 @@ func TestSegmentTCPv6(t *testing.T) {
 
 func TestSegmentGSONonePassesThrough(t *testing.T) {
 	pkt, hdr := buildTSOv4(t, 100, 100)
-	hdr.GSOType = unix.VIRTIO_NET_HDR_GSO_NONE
+	hdr.SetGSOType(unix.VIRTIO_NET_HDR_GSO_NONE)
 	hdr.Flags = 0 // no NEEDS_CSUM, leave packet untouched
 
 	scratch := make([]byte, testSegScratchSize)
@@ -330,7 +329,7 @@ func TestSegmentGSONonePassesThrough(t *testing.T) {
 // TestSegmentRejectsLegacyUDPGSO ensures the legacy GSO_UDP (UFO) marker is
 // still rejected; only modern GSO_UDP_L4 (USO) is supported.
 func TestSegmentRejectsLegacyUDPGSO(t *testing.T) {
-	hdr := virtio.Hdr{GSOType: unix.VIRTIO_NET_HDR_GSO_UDP}
+	hdr := virtio.NewHeader(0, unix.VIRTIO_NET_HDR_GSO_UDP, 0, 0, 0, 0)
 	var out [][]byte
 	if err := segmentForTest(nil, hdr, &out, nil); err == nil {
 		t.Fatalf("expected rejection for legacy UDP GSO")
@@ -362,14 +361,14 @@ func buildUSOv4(t *testing.T, payLen, gsoSize int) ([]byte, virtio.Hdr) {
 		pkt[ipLen+udpLen+i] = byte(i & 0xff)
 	}
 
-	return pkt, virtio.Hdr{
-		Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
-		GSOType:    unix.VIRTIO_NET_HDR_GSO_UDP_L4,
-		HdrLen:     uint16(ipLen + udpLen),
-		GSOSize:    uint16(gsoSize),
-		CsumStart:  uint16(ipLen),
-		CsumOffset: 6,
-	}
+	return pkt, virtio.NewHeader(
+		unix.VIRTIO_NET_HDR_F_NEEDS_CSUM, /*flags*/
+		unix.VIRTIO_NET_HDR_GSO_UDP_L4,   /*gsoType*/
+		uint16(ipLen+udpLen),             /*hdrLen*/
+		uint16(gsoSize),                  /*gsoSize*/
+		uint16(ipLen),                    /*csumStart*/
+		6,                                /*csumOffset*/
+	)
 }
 
 func TestSegmentUDPv4(t *testing.T) {
@@ -471,14 +470,14 @@ func TestSegmentUDPv6(t *testing.T) {
 		pkt[ipLen+udpLen+i] = byte(i)
 	}
 
-	hdr := virtio.Hdr{
-		Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
-		GSOType:    unix.VIRTIO_NET_HDR_GSO_UDP_L4,
-		HdrLen:     uint16(ipLen + udpLen),
-		GSOSize:    uint16(gso),
-		CsumStart:  uint16(ipLen),
-		CsumOffset: 6,
-	}
+	hdr := virtio.NewHeader(
+		unix.VIRTIO_NET_HDR_F_NEEDS_CSUM, /*flags*/
+		unix.VIRTIO_NET_HDR_GSO_UDP_L4,   /*gsoType*/
+		uint16(ipLen+udpLen),             /*hdrLen*/
+		uint16(gso),                      /*gsoSize*/
+		uint16(ipLen),                    /*csumStart*/
+		6,                                /*csumOffset*/
+	)
 
 	scratch := make([]byte, testSegScratchSize)
 	var out [][]byte
@@ -610,14 +609,14 @@ func BenchmarkSegmentTCPv4(b *testing.B) {
 			for i := 0; i < sz.payLen; i++ {
 				pkt[ipLen+tcpLen+i] = byte(i)
 			}
-			hdr := virtio.Hdr{
-				Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
-				GSOType:    unix.VIRTIO_NET_HDR_GSO_TCPV4,
-				HdrLen:     uint16(ipLen + tcpLen),
-				GSOSize:    uint16(sz.mss),
-				CsumStart:  uint16(ipLen),
-				CsumOffset: 16,
-			}
+			hdr := virtio.NewHeader(
+				unix.VIRTIO_NET_HDR_F_NEEDS_CSUM, /*flags*/
+				unix.VIRTIO_NET_HDR_GSO_TCPV4,    /*gsoType*/
+				uint16(ipLen+tcpLen),             /*hdrLen*/
+				uint16(sz.mss),                   /*gsoSize*/
+				uint16(ipLen),                    /*csumStart*/
+				16,                               /*csumOffset*/
+			)
 
 			scratch := make([]byte, testSegScratchSize)
 			out := make([][]byte, 0, 64)
@@ -775,14 +774,14 @@ func TestDecodeReadFitsMaxTSOAtDrainThreshold(t *testing.T) {
 	copy(o.rxBuf[o.rxOff:], pkt)
 
 	// Encode the matching virtio_net_hdr.
-	hdr := virtio.Hdr{
-		Flags:      unix.VIRTIO_NET_HDR_F_NEEDS_CSUM,
-		GSOType:    unix.VIRTIO_NET_HDR_GSO_TCPV6,
-		HdrLen:     uint16(headerLen),
-		GSOSize:    uint16(gsoSize),
-		CsumStart:  uint16(ipv6HdrLen),
-		CsumOffset: 16,
-	}
+	hdr := virtio.NewHeader(
+		unix.VIRTIO_NET_HDR_F_NEEDS_CSUM, /*flags*/
+		unix.VIRTIO_NET_HDR_GSO_TCPV6,    /*gsoType*/
+		uint16(headerLen),                /*hdrLen*/
+		uint16(gsoSize),                  /*gsoSize*/
+		uint16(ipv6HdrLen),               /*csumStart*/
+		16,                               /*csumOffset*/
+	)
 	hdr.Encode(o.readVnetScratch[:])
 
 	startRxOff := o.rxOff
@@ -899,8 +898,8 @@ func TestWriteGSOLeadingEmptyFragmentGeometry(t *testing.T) {
 	}
 	var vhdr virtio.Hdr
 	vhdr.Decode(buf[:virtio.Size])
-	if vhdr.GSOType != unix.VIRTIO_NET_HDR_GSO_UDP_L4 {
-		t.Errorf("GSOType=%d want UDP_L4", vhdr.GSOType)
+	if vhdr.GSOType() != unix.VIRTIO_NET_HDR_GSO_UDP_L4 {
+		t.Errorf("gsoType=%d want UDP_L4", vhdr.GSOType())
 	}
 	if vhdr.GSOSize != 1200 {
 		t.Errorf("GSOSize=%d want 1200 (first non-empty fragment)", vhdr.GSOSize)
