@@ -87,6 +87,14 @@ func CheckValid(pkt []byte, hdr Hdr) error {
 
 	//mask out VIRTIO_NET_HDR_GSO_ECN, it's a qualifier, not a type
 	gsoType := hdr.GSOType &^ unix.VIRTIO_NET_HDR_GSO_ECN
+	// The ECN qualifier means CWR was set on a TSO superpacket, so it only
+	// applies to the TCP types. The kernel's virtio_net_hdr_to_skb rejects
+	// it on anything else; mirror that instead of segmenting nonsense.
+	if hdr.GSOType&unix.VIRTIO_NET_HDR_GSO_ECN != 0 &&
+		gsoType != unix.VIRTIO_NET_HDR_GSO_TCPV4 &&
+		gsoType != unix.VIRTIO_NET_HDR_GSO_TCPV6 {
+		return fmt.Errorf("virtio GSO_ECN qualifier on non-TCP GSO type %#x", hdr.GSOType)
+	}
 	switch gsoType {
 	case unix.VIRTIO_NET_HDR_GSO_TCPV4:
 		if ipVersion != 4 {
