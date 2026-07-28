@@ -9,10 +9,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// blockOn parks the calling goroutine until fd is ready (events is POLLIN for
-// reads, POLLOUT for writes) or shutdownFd signals teardown. It builds the
-// pollfd array on the stack every call, so concurrent callers on the same
-// Queue never share Revents storage.
+// blockOn parks the calling goroutine until fd is ready or shutdownFd signals teardown.
+// (events is POLLIN for reads, POLLOUT for writes)
+// It builds the pollfd array on the stack every call, so concurrent callers on the same Queue never share Revents storage.
 //
 // Returns os.ErrClosed when shutdown was signaled (POLLIN on shutdownFd)
 // or either fd reported a problem condition (POLLHUP|POLLNVAL|POLLERR).

@@ -17,17 +17,14 @@ type offloadQueueSet struct {
 	// pqi is exactly the same as pq, but stored as the interface type
 	pqi        []Queue
 	shutdownFd int
-	// usoEnabled is true when newTun successfully negotiated TUN_F_USO4|6
-	// with the kernel. Queues created by Add inherit this and surface it
-	// via Offload.USOSupported so coalescers can gate USO emission.
+	// usoEnabled is true when newTun successfully negotiated TUN_F_USO4|6 with the kernel.
+	// Queues created by Add inherit this and surface it via Offload.USOSupported so coalescers can gate USO emission.
 	usoEnabled bool
 	closed     atomic.Bool
 }
 
-// NewOffloadQueueSet creates a QueueSet that uses virtio_net_hdr to do
-// TSO segmentation in userspace. usoEnabled tells downstream queues whether
-// the kernel agreed to deliver/accept GSO_UDP_L4 superpackets — coalescers
-// should fall back to per-packet writes when this is false.
+// NewOffloadQueueSet creates a QueueSet that uses virtio_net_hdr to do TSO segmentation.
+// usoEnabled tells downstream queues whether the kernel agreed to deliver/accept GSO_UDP_L4 superpackets.
 func NewOffloadQueueSet(usoEnabled bool) (QueueSet, error) {
 	shutdownFd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
 	if err != nil {
@@ -73,23 +70,21 @@ func (c *offloadQueueSet) Close() error {
 
 	errs := []error{}
 
-	// Signal all readers blocked in poll to wake up and exit. They observe
-	// POLLIN on the shutdown eventfd and return os.ErrClosed.
+	// Signal all readers blocked in poll to wake up and exit.
+	// They observe POLLIN on the shutdown eventfd and return os.ErrClosed.
 	if err := c.wakeForShutdown(); err != nil {
 		errs = append(errs, err)
 	}
 
 	// Close the per-queue tun fds; this also unblocks any in-flight reads.
-	// The per-queue Close deliberately leaves shutdownFd alone - it belongs
-	// to this container.
 	for _, x := range c.pq {
 		if err := x.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
 
-	// Close the shutdown eventfd last: every reader's pollfd set references
-	// it, so it must outlive the wake + per-queue teardown above.
+	// Close the shutdown eventfd last: every reader's pollfd set references it,
+	// so it must outlive the wake + per-queue teardown above.
 	if err := unix.Close(c.shutdownFd); err != nil {
 		errs = append(errs, err)
 	}

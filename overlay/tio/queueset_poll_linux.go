@@ -64,23 +64,21 @@ func (c *pollQueueSet) Close() error {
 
 	errs := []error{}
 
-	// Wake any reader blocked in poll so it observes POLLIN on the shutdown
-	// eventfd and returns os.ErrClosed.
+	// Signal all readers blocked in poll to wake up and exit.
+	// They observe POLLIN on the shutdown eventfd and return os.ErrClosed.
 	if err := c.wakeForShutdown(); err != nil {
 		errs = append(errs, err)
 	}
 
 	// Close the per-queue tun fds; this also unblocks any in-flight reads.
-	// The per-queue Close deliberately leaves shutdownFd alone - it belongs
-	// to this container.
 	for _, x := range c.pq {
 		if err := x.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
 
-	// Close the shutdown eventfd last: every reader's pollfd set references
-	// it, so it must outlive the wake + per-queue teardown above.
+	// Close the shutdown eventfd last: every reader's pollfd set references it,
+	// so it must outlive the wake + per-queue teardown above.
 	if err := unix.Close(c.shutdownFd); err != nil {
 		errs = append(errs, err)
 	}
