@@ -825,9 +825,11 @@ func TestDecodeReadFitsMaxTSOAtDrainThreshold(t *testing.T) {
 	const ipv6HdrLen = 40
 	const tcpHdrLen = 20
 	const headerLen = ipv6HdrLen + tcpHdrLen
-	// Maximum TUN read body. The tunReadBufSize cap on readv's body iovec
-	// is what bounds the kernel's superpacket length.
-	pktLen := tunReadBufSize
+	// Maximum TUN read body at the drain threshold. readv bounds the body
+	// iovec by the space actually left in rxBuf, and the drain gate keeps that
+	// at >= tunRxBufSize, so that is the largest superpacket the kernel can
+	// hand back on the last permitted drain read.
+	pktLen := tunRxBufSize
 	payLen := pktLen - headerLen
 	const targetSegs = 64
 	gsoSize := (payLen + targetSegs - 1) / targetSegs

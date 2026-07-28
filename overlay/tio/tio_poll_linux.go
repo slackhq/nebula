@@ -11,11 +11,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Maximum size we accept for a single read from a TUN with IFF_VNET_HDR. A
-// TSO superpacket can be up to 64KiB of payload plus a single L2/L3/L4 header
-// prefix plus the virtio header.
-const tunReadBufSize = 65535
-
 type Poll struct {
 	fd         int
 	shutdownFd int
@@ -25,10 +20,10 @@ type Poll struct {
 	batchRet [1]Packet
 }
 
-// newPoll wraps an existing tun fd. On failure it does NOT close fd: the
-// caller owns fd and is the sole closer (see pollQueueSet.Add callers in
-// overlay/tun_linux.go, which unix.Close on Add error). This matches the
-// newOffload convention and keeps closes at exactly one on every path.
+// newPoll wraps an existing tun fd.
+// On failure it does NOT close fd: the caller owns fd and is the sole closer
+// (see pollQueueSet.Add callers in overlay/tun_linux.go, which unix.Close on Add error).
+// This matches the newOffload convention and keeps closes at exactly one on every path.
 func newPoll(fd int, shutdownFd int) (*Poll, error) {
 	if err := unix.SetNonblock(fd, true); err != nil {
 		return nil, fmt.Errorf("failed to set Poll device as nonblocking: %w", err)
@@ -37,7 +32,7 @@ func newPoll(fd int, shutdownFd int) (*Poll, error) {
 	out := &Poll{
 		fd:         fd,
 		shutdownFd: shutdownFd,
-		readBuf:    make([]byte, tunReadBufSize),
+		readBuf:    make([]byte, 65535), // largest possible size Linux permits
 	}
 	return out, nil
 }
@@ -108,10 +103,10 @@ func (t *Poll) Close() error {
 	if t.closed.Swap(true) {
 		return nil
 	}
-	//shutdownFd is owned by the container, so we should not close it
-	// Close the underlying fd but do NOT null t.fd: a reader may still be
-	// loading it in readOne, and mutating the field would race that load.
-	// It gets EBADF -> os.ErrClosed (or wakes via the shutdown eventfd's
-	// ppoll first). closed.Swap already guarantees we only close once.
+
+	// shutdownFd is owned by the container, so we should not close it
+	// Close the underlying fd but do NOT null r.fd: a reader may still be loading it in readOne, and mutating the field would race that load.
+	// That reader gets EBADF -> os.ErrClosed (or wakes via the shutdown eventfd's ppoll first).
+	// closed.Swap already guarantees we only close once.
 	return unix.Close(t.fd)
 }
